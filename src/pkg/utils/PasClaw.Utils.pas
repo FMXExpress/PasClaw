@@ -184,8 +184,15 @@ begin
 end;
 
 function NowIsoUtc: string;
+var
+  DT: TDateTime;
 begin
-  Result := FormatDateTime('yyyy"-"mm"-"dd"T"hh":"nn":"ss"Z"', LocalTimeToUniversal(Now));
+  {$IFDEF FPC}
+  DT := LocalTimeToUniversal(Now);
+  {$ELSE}
+  DT := TTimeZone.Local.ToUniversalTime(Now);
+  {$ENDIF}
+  Result := FormatDateTime('yyyy"-"mm"-"dd"T"hh":"nn":"ss"Z"', DT);
 end;
 
 end.
