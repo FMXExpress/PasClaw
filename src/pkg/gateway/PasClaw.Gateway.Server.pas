@@ -1026,37 +1026,69 @@ begin
     Result := Result + Alphabet[1 + Random(Length(Alphabet))];
 end;
 
-function BuildResponsesObject(const Id, Model, Status, Content: string;
-                               Usage: TUsageInfo): TJsonObject;
-{ OpenAI Responses-compatible non-streaming response.
+function FunctionCallItemJSON(const ItemId, CallId, Name, ArgsJSON, Status: string): string;
+{ One ResponseOutputItem of type function_call, serialized to a JSON
+  string so the SSE event helpers can paste it verbatim into their
+  payloads. The Responses API schema uses two ids:
 
-  The openai-python SDK's Pydantic `Response` model marks four fields
-  as required (no default) — when any of them is absent from the JSON
-  the SDK raises ValidationError and the client appears to "choke" on
-  what looks like a valid 200 response:
+    id      - opaque item id, "fc_<random>". Identifies the item
+              within the response.
+    call_id - "call_<random>". The handle the client uses to match
+              its function_call_output back to this call on the
+              next turn.
 
-    parallel_tool_calls : bool
-    tool_choice         : ToolChoice (string "auto"/"none" or object)
-    tools               : List[Tool]
-    output              : List[ResponseOutputItem]
+  Many implementations use the same value for both; we use distinct
+  prefixes so logs can tell them apart. status is "completed" once
+  the arguments are fully serialized.
 
-  The first three are emitted with safe defaults (`false`, `"auto"`,
-  `[]`) and the fourth carries the assistant message. The remaining
-  optional fields are emitted as explicit `null` rather than absent —
-  Pydantic treats both the same for `Optional[X] = None`, but newer
-  SDK versions have shipped stricter validators in the past, and
-  explicit `null` keeps the response shape stable against future
-  releases.
-
-  `text` is emitted as `{"format": {"type": "text"}}` (the Responses
-  API formatting config). `error` and `incomplete_details` are
-  explicit `null` on the success path so the SDK's branch for those
-  fields takes the success branch deterministically. The non-success
-  path (HandleResponses' RunToolLoop-failed branch) attaches a real
-  `error` object with `code` + `message` per ResponseError schema. }
+  The arguments field is a *string* (raw JSON), not a JSON object.
+  That matches OpenAI's schema and means a model that emits args
+  with escaped quotes round-trips correctly. }
 var
-  OutputArr, ContentArr, AnnotationsArr, ToolsArr: TJsonArray;
+  Obj: TJsonObject;
+begin
+  Obj := TJsonObject.Create;
+  try
+    Obj.PutStr('id',        ItemId);
+    Obj.PutStr('type',      'function_call');
+    Obj.PutStr('status',    Status);
+    Obj.PutStr('call_id',   CallId);
+    Obj.PutStr('name',      Name);
+    Obj.PutStr('arguments', ArgsJSON);
+    Result := Obj.ToJSON;
+  finally
+    Obj.Free;
+  end;
+end;
+
+function BuildResponsesObject(const Id, Model, Status, Content: string;
+                               const ToolCalls: array of TToolCall;
+                               const ToolsRawJSON: string;
+                               Usage: TUsageInfo): TJsonObject;
+{ OpenAI Responses-compatible response object.
+
+  Required Pydantic fields (parallel_tool_calls, tool_choice, tools,
+  output) are emitted with safe defaults; missing any of them makes
+  openai-python raise ValidationError on the parser, manifesting as
+  a "client chokes on the response" symptom (PR #61).
+
+  ToolCalls (Phase 2 — PR #63) appends function_call items to
+  output[] for each model tool call. Each item carries an opaque
+  fc_<...> id, the model's call_id (used by the client to match its
+  function_call_output on the next turn), the tool name, and the
+  arguments as a *string* (raw JSON, not a parsed object — that
+  matches the Responses schema and lets escaped quotes round-trip).
+
+  ToolsRawJSON, when non-empty, is the JSON-array string the caller
+  parsed out of request.tools and we echo back in the `tools` field
+  so the SDK validator sees the tools the model used. Empty string
+  falls back to "[]". }
+var
+  OutputArr, ContentArr, AnnotationsArr: TJsonArray;
+  ToolsArr: TJsonArray;
   MsgObj, TextObj, UsageObj, TextCfgObj, FormatObj: TJsonObject;
+  i: Integer;
+  ItemId, CallId: string;
 begin
   Result := TJsonObject.Create;
   Result.PutStr('id',         Id);
@@ -1068,8 +1100,13 @@ begin
   { Required by openai-python SDK Pydantic validation. }
   Result.PutBool('parallel_tool_calls', False);
   Result.PutStr ('tool_choice',         'auto');
-  ToolsArr := TJsonArray.Create;
-  Result.PutArray('tools', ToolsArr);
+  if ToolsRawJSON <> '' then
+    Result.PutRaw('tools', ToolsRawJSON)
+  else
+  begin
+    ToolsArr := TJsonArray.Create;
+    Result.PutArray('tools', ToolsArr);
+  end;
 
   { Optional but emitted as explicit null/empty so older or future
     stricter SDK versions don't trip on absent keys. }
@@ -1112,6 +1149,19 @@ begin
     MsgObj.PutArray('content', ContentArr);
     OutputArr.AddObject(MsgObj);
   end;
+  for i := 0 to High(ToolCalls) do
+  begin
+    if ToolCalls[i].Func.Name = '' then Continue;
+    ItemId := 'fc_' + Copy(Id, 6, MaxInt) + '_' + IntToStr(i);
+    if Trim(ToolCalls[i].Id) <> '' then
+      CallId := ToolCalls[i].Id
+    else
+      CallId := 'call_' + Copy(Id, 6, MaxInt) + '_' + IntToStr(i);
+    OutputArr.AddRaw(FunctionCallItemJSON(ItemId, CallId,
+                                           ToolCalls[i].Func.Name,
+                                           ToolCalls[i].Func.Arguments,
+                                           'completed'));
+  end;
   Result.PutArray('output', OutputArr);
 
   UsageObj := TJsonObject.Create;
@@ -1147,44 +1197,44 @@ procedure EmitResponsesStream(AContext: TIdContext;
                               AResp: TIdHTTPResponseInfo;
                               var AResponseStarted: Boolean;
                               const RespId, Model, Content: string;
+                              const ToolCalls: array of TToolCall;
+                              const ToolsRawJSON: string;
                               Usage: TUsageInfo;
                               DebugIO: Boolean);
-(* Phase A streaming for /v1/responses: the tool loop has already
-   finished server-side and produced its final text. Emit the
-   Responses-API SSE event sequence so a client that opened the
-   request with stream:true (Codex CLI, openai-python streaming
-   call, etc.) receives a parseable event stream rather than a 400
-   error.
+(* Streaming for /v1/responses. Emits the Responses-API SSE event
+   sequence so streaming clients (Codex CLI, openai-python streaming
+   call, etc.) receive a parseable event stream.
 
-   The event order matches what the official OpenAI SDK's streaming
-   parser expects:
+   Event order (omitting text events when Content is empty, and
+   adding one function_call sub-sequence per tool call):
 
-     event: response.created            { status: in_progress, empty output }
-     event: response.in_progress
-     event: response.output_item.added  { empty message item }
-     event: response.content_part.added { empty output_text part }
-     event: response.output_text.delta  { the full text as one delta }
-     event: response.output_text.done
-     event: response.content_part.done
-     event: response.output_item.done
-     event: response.completed          { status: completed, full output }
+     response.created                            { in_progress, empty output }
+     response.in_progress
+     [ message sub-sequence — only if Content <> '' ]
+       response.output_item.added                { message item }
+       response.content_part.added               { output_text part }
+       response.output_text.delta                { full text, one delta }
+       response.output_text.done
+       response.content_part.done
+       response.output_item.done                 { message item completed }
+     [ for each tool call — Phase 2 tool passthrough ]
+       response.output_item.added                { function_call item, args="" }
+       response.function_call_arguments.delta    { full args, one delta }
+       response.function_call_arguments.done
+       response.output_item.done                 { function_call item completed }
+     response.completed                          { full output, usage }
 
-   Single text delta is the trade-off for PR scope — the tool loop is
-   synchronous so we can't stream true partials without rewiring the
-   provider layer. The SDK accepts a single big delta just fine; the
-   user-visible difference is first-byte time matching last-byte time
-   instead of incremental display. A follow-up PR (true streaming)
-   will hook the provider's OnText callback to emit deltas as the
-   model produces them.
+   output_index increases per item; message (when present) is 0
+   and function_calls follow. Each function_call gets a unique
+   fc_<...> item id; call_id is the model's TToolCall.Id which
+   the client uses to match its function_call_output back on the
+   next turn.
 
-   Tools are NOT passed back as output items in this PR. Codex sends
-   tool definitions and expects to execute them client-side via
-   function_call output items in the stream; PasClaw still runs its
-   internal tool loop here, so the model's calls get executed
-   server-side and only the final text reaches the client. That's
-   intentional for PR scope — fixing the SSE event shape so the
-   client stops crashing — and will be lifted in the tool-passthrough
-   PR. *)
+   Single-delta caveat from Phase A still applies: text and args
+   come out as one chunk each because the tool loop / single-shot
+   provider call here is synchronous. Real partial streaming will
+   land in a follow-up that hooks the provider's OnChunk
+   callback. *)
 var
   Streamer: TSSEStreamer;
   CreatedObj, CompletedObj, ItemObj, PartObj, MsgItemObj: TJsonObject;
@@ -1193,16 +1243,17 @@ var
   MsgItemId: string;
   EmptyUsage: TUsageInfo;
   ContentArr: TJsonArray;
-  Seq: Integer;
+  Seq, MsgOutputIdx, NextOutputIdx, TcIdx: Integer;
+  FcItemId, FcCallId, FcArgs, FcEmptyJSON, FcCompletedJSON: string;
+  NoToolCalls: array of TToolCall;
 
   { Every Responses streaming event the openai-python validators
     accept carries a monotonically-increasing `sequence_number`.
-    `response.output_text.delta` / `.done` additionally require an
-    empty `logprobs: []` when no logprob data is available. Omitting
-    either makes the SDK raise ValidationError on the first event
-    that lands — exactly the "client chokes on the response" symptom
-    we set out to fix. Helpers below take Seq as the first arg so
-    the call site bumps a single local counter on every emit. }
+    Text events additionally require empty `logprobs: []` when no
+    logprob data is available. Omitting either makes the SDK raise
+    ValidationError on the first event that lands. Helpers take
+    Seq as the first arg so the caller bumps a single local
+    counter on every emit. }
 
   function CreatedEvent(SeqNum: Integer; const ResponseJSON: string): string;
   begin
@@ -1225,81 +1276,114 @@ var
       [SeqNum, ResponseJSON]);
   end;
 
-  function ItemAddedEvent(SeqNum: Integer; const ItemInProgressJSON: string): string;
+  function ItemAddedEvent(SeqNum, OutputIdx: Integer;
+                          const ItemInProgressJSON: string): string;
   begin
     Result := Format(
       '{"type":"response.output_item.added","sequence_number":%d,' +
-      '"output_index":0,"item":%s}',
-      [SeqNum, ItemInProgressJSON]);
+      '"output_index":%d,"item":%s}',
+      [SeqNum, OutputIdx, ItemInProgressJSON]);
   end;
 
-  function ContentPartAddedEvent(SeqNum: Integer; const PartJSON_: string): string;
+  function ContentPartAddedEvent(SeqNum, OutputIdx: Integer;
+                                  const ItemId, PartJSON_: string): string;
   begin
     Result := Format(
       '{"type":"response.content_part.added","sequence_number":%d,' +
-      '"item_id":%s,"output_index":0,"content_index":0,"part":%s}',
-      [SeqNum, '"' + JsonEscape(MsgItemId) + '"', PartJSON_]);
+      '"item_id":%s,"output_index":%d,"content_index":0,"part":%s}',
+      [SeqNum, '"' + JsonEscape(ItemId) + '"', OutputIdx, PartJSON_]);
   end;
 
-  function TextDeltaEvent(SeqNum: Integer; const Delta: string): string;
+  function TextDeltaEvent(SeqNum, OutputIdx: Integer;
+                          const ItemId, Delta: string): string;
   begin
     Result := Format(
       '{"type":"response.output_text.delta","sequence_number":%d,' +
-      '"item_id":%s,"output_index":0,"content_index":0,' +
+      '"item_id":%s,"output_index":%d,"content_index":0,' +
       '"delta":%s,"logprobs":[]}',
       [SeqNum,
-       '"' + JsonEscape(MsgItemId) + '"',
+       '"' + JsonEscape(ItemId) + '"',
+       OutputIdx,
        '"' + JsonEscape(Delta) + '"']);
   end;
 
-  function TextDoneEvent(SeqNum: Integer; const Text: string): string;
+  function TextDoneEvent(SeqNum, OutputIdx: Integer;
+                         const ItemId, Text: string): string;
   begin
     Result := Format(
       '{"type":"response.output_text.done","sequence_number":%d,' +
-      '"item_id":%s,"output_index":0,"content_index":0,' +
+      '"item_id":%s,"output_index":%d,"content_index":0,' +
       '"text":%s,"logprobs":[]}',
       [SeqNum,
-       '"' + JsonEscape(MsgItemId) + '"',
+       '"' + JsonEscape(ItemId) + '"',
+       OutputIdx,
        '"' + JsonEscape(Text) + '"']);
   end;
 
-  function ContentPartDoneEvent(SeqNum: Integer; const PartJSON_: string): string;
+  function ContentPartDoneEvent(SeqNum, OutputIdx: Integer;
+                                 const ItemId, PartJSON_: string): string;
   begin
     Result := Format(
       '{"type":"response.content_part.done","sequence_number":%d,' +
-      '"item_id":%s,"output_index":0,"content_index":0,"part":%s}',
-      [SeqNum, '"' + JsonEscape(MsgItemId) + '"', PartJSON_]);
+      '"item_id":%s,"output_index":%d,"content_index":0,"part":%s}',
+      [SeqNum, '"' + JsonEscape(ItemId) + '"', OutputIdx, PartJSON_]);
   end;
 
-  function ItemDoneEvent(SeqNum: Integer; const ItemFinalJSON: string): string;
+  function ItemDoneEvent(SeqNum, OutputIdx: Integer;
+                         const ItemFinalJSON: string): string;
   begin
     Result := Format(
       '{"type":"response.output_item.done","sequence_number":%d,' +
-      '"output_index":0,"item":%s}',
-      [SeqNum, ItemFinalJSON]);
+      '"output_index":%d,"item":%s}',
+      [SeqNum, OutputIdx, ItemFinalJSON]);
+  end;
+
+  function FunctionCallArgsDeltaEvent(SeqNum, OutputIdx: Integer;
+                                       const ItemId, Delta: string): string;
+  begin
+    Result := Format(
+      '{"type":"response.function_call_arguments.delta",' +
+      '"sequence_number":%d,"item_id":%s,"output_index":%d,"delta":%s}',
+      [SeqNum,
+       '"' + JsonEscape(ItemId) + '"',
+       OutputIdx,
+       '"' + JsonEscape(Delta) + '"']);
+  end;
+
+  function FunctionCallArgsDoneEvent(SeqNum, OutputIdx: Integer;
+                                      const ItemId, ArgsStr: string): string;
+  begin
+    Result := Format(
+      '{"type":"response.function_call_arguments.done",' +
+      '"sequence_number":%d,"item_id":%s,"output_index":%d,"arguments":%s}',
+      [SeqNum,
+       '"' + JsonEscape(ItemId) + '"',
+       OutputIdx,
+       '"' + JsonEscape(ArgsStr) + '"']);
   end;
 
 begin
   MsgItemId := 'msg_' + Copy(RespId, 6, MaxInt);
 
-  { Streaming-friendly response.created: in_progress + empty output +
-    zero usage. Pydantic accepts these because the required fields are
-    present (we set parallel_tool_calls / tool_choice / tools / output
-    inside BuildResponsesObject). }
   EmptyUsage.InputTokens  := 0;
   EmptyUsage.OutputTokens := 0;
 
-  CreatedObj := BuildResponsesObject(RespId, Model, 'in_progress', '', EmptyUsage);
+  { Streaming-friendly response.created carries the in_progress
+    shape with empty output / empty tool_calls / zero usage. The
+    completed object below carries the real output array and the
+    request's echoed tools. }
+  SetLength(NoToolCalls, 0);
+  CreatedObj := BuildResponsesObject(RespId, Model, 'in_progress', '',
+                                      NoToolCalls, ToolsRawJSON, EmptyUsage);
   try
     CreatedJSON := CreatedObj.ToJSON;
   finally
     CreatedObj.Free;
   end;
 
-  { Pre-build the message item shapes for added / done events. The
-    "added" shape carries an empty content array; "done" carries the
-    full output_text part. }
-
+  { Message-item shapes for the (optional) message sub-sequence.
+    Empty vs. completed differ only by content array contents and
+    status. ContentPart events use the same item_id. }
   MsgItemObj := TJsonObject.Create;
   MsgItemObj.PutStr('id',     MsgItemId);
   MsgItemObj.PutStr('type',   'message');
@@ -1349,16 +1433,15 @@ begin
     ItemObj.Free;
   end;
 
-  CompletedObj := BuildResponsesObject(RespId, Model, 'completed', Content, Usage);
+  CompletedObj := BuildResponsesObject(RespId, Model, 'completed', Content,
+                                        ToolCalls, ToolsRawJSON, Usage);
   try
     CompletedJSON := CompletedObj.ToJSON;
   finally
     CompletedObj.Free;
   end;
 
-  { Headers: same shape as the chat-completions SSE setup. Suppress
-    Indy's auto Content-Length, force chunked, and drain all nested
-    buffers so subsequent writes hit the socket immediately. }
+  { Headers: same shape as the chat-completions SSE setup. }
   AResp.ResponseNo  := 200;
   AResp.ContentType := 'text/event-stream; charset=utf-8';
   AResp.CharSet     := 'utf-8';
@@ -1373,32 +1456,62 @@ begin
 
   Streamer := TSSEStreamer.Create(AContext, RespId, Model, DebugIO);
   try
-    if DebugIO then LogDebug('responses sse: %d bytes content, item_id=%s',
-                              [Length(Content), MsgItemId]);
-    { OpenAI's Responses streaming events start sequence_number at 0
-      and increase by 1 per event. The validators reject gaps and
-      duplicates. Each emit bumps Seq and the helper for that event
-      type embeds the value in its JSON payload. }
+    if DebugIO then LogDebug('responses sse: %d bytes content, %d tool call(s), item_id=%s',
+                              [Length(Content), Length(ToolCalls), MsgItemId]);
     Seq := 0;
+    NextOutputIdx := 0;
+
     EmitResponsesEvent(Streamer, 'response.created',
       CreatedEvent(Seq, CreatedJSON)); Inc(Seq);
     EmitResponsesEvent(Streamer, 'response.in_progress',
       InProgressEvent(Seq, CreatedJSON)); Inc(Seq);
-    EmitResponsesEvent(Streamer, 'response.output_item.added',
-      ItemAddedEvent(Seq, EmptyItemJSON)); Inc(Seq);
-    EmitResponsesEvent(Streamer, 'response.content_part.added',
-      ContentPartAddedEvent(Seq, EmptyPartJSON)); Inc(Seq);
+
     if Content <> '' then
     begin
+      MsgOutputIdx := NextOutputIdx; Inc(NextOutputIdx);
+      EmitResponsesEvent(Streamer, 'response.output_item.added',
+        ItemAddedEvent(Seq, MsgOutputIdx, EmptyItemJSON)); Inc(Seq);
+      EmitResponsesEvent(Streamer, 'response.content_part.added',
+        ContentPartAddedEvent(Seq, MsgOutputIdx, MsgItemId, EmptyPartJSON)); Inc(Seq);
       EmitResponsesEvent(Streamer, 'response.output_text.delta',
-        TextDeltaEvent(Seq, Content)); Inc(Seq);
+        TextDeltaEvent(Seq, MsgOutputIdx, MsgItemId, Content)); Inc(Seq);
       EmitResponsesEvent(Streamer, 'response.output_text.done',
-        TextDoneEvent(Seq, Content)); Inc(Seq);
+        TextDoneEvent(Seq, MsgOutputIdx, MsgItemId, Content)); Inc(Seq);
+      EmitResponsesEvent(Streamer, 'response.content_part.done',
+        ContentPartDoneEvent(Seq, MsgOutputIdx, MsgItemId, PartJSON)); Inc(Seq);
+      EmitResponsesEvent(Streamer, 'response.output_item.done',
+        ItemDoneEvent(Seq, MsgOutputIdx, ItemJSON)); Inc(Seq);
     end;
-    EmitResponsesEvent(Streamer, 'response.content_part.done',
-      ContentPartDoneEvent(Seq, PartJSON)); Inc(Seq);
-    EmitResponsesEvent(Streamer, 'response.output_item.done',
-      ItemDoneEvent(Seq, ItemJSON)); Inc(Seq);
+
+    for TcIdx := 0 to High(ToolCalls) do
+    begin
+      if ToolCalls[TcIdx].Func.Name = '' then Continue;
+      FcItemId := 'fc_' + Copy(RespId, 6, MaxInt) + '_' + IntToStr(TcIdx);
+      if Trim(ToolCalls[TcIdx].Id) <> '' then
+        FcCallId := ToolCalls[TcIdx].Id
+      else
+        FcCallId := 'call_' + Copy(RespId, 6, MaxInt) + '_' + IntToStr(TcIdx);
+      FcArgs := ToolCalls[TcIdx].Func.Arguments;
+      if FcArgs = '' then FcArgs := '{}';
+
+      FcEmptyJSON     := FunctionCallItemJSON(FcItemId, FcCallId,
+                                              ToolCalls[TcIdx].Func.Name,
+                                              '', 'in_progress');
+      FcCompletedJSON := FunctionCallItemJSON(FcItemId, FcCallId,
+                                              ToolCalls[TcIdx].Func.Name,
+                                              FcArgs, 'completed');
+
+      EmitResponsesEvent(Streamer, 'response.output_item.added',
+        ItemAddedEvent(Seq, NextOutputIdx, FcEmptyJSON)); Inc(Seq);
+      EmitResponsesEvent(Streamer, 'response.function_call_arguments.delta',
+        FunctionCallArgsDeltaEvent(Seq, NextOutputIdx, FcItemId, FcArgs)); Inc(Seq);
+      EmitResponsesEvent(Streamer, 'response.function_call_arguments.done',
+        FunctionCallArgsDoneEvent(Seq, NextOutputIdx, FcItemId, FcArgs)); Inc(Seq);
+      EmitResponsesEvent(Streamer, 'response.output_item.done',
+        ItemDoneEvent(Seq, NextOutputIdx, FcCompletedJSON)); Inc(Seq);
+      Inc(NextOutputIdx);
+    end;
+
     EmitResponsesEvent(Streamer, 'response.completed',
       CompletedEvent(Seq, CompletedJSON));
     Streamer.CloseStream;
@@ -1420,22 +1533,72 @@ procedure TGatewayServer.HandleResponses(AContext: TIdContext;
    so this endpoint deliberately returns an OpenAI-shaped unsupported-streaming
    error instead of pretending chat-completion chunks are Responses events. *)
 var
-  Body, ReqModel, InputText, FinishReason, RespId: string;
+  Body, ReqModel, InputText, FinishReason, RespId, ItemType: string;
   Bytes: TBytes;
-  Req, InputObj, ReplyObj, ErrObj: TJsonObject;
-  InputArr: TJsonArray;
+  Req, InputObj, ReplyObj, ErrObj, ToolObj: TJsonObject;
+  InputArr, ToolsArrIn: TJsonArray;
   Msgs: array of TMessage;
-  i, MsgCount: Integer;
-  WantsStream: Boolean;
+  i, MsgCount, j: Integer;
+  WantsStream, HasFunctionTools: Boolean;
   Loop: TToolLoopResult;
   LoopCfg: TToolLoopConfig;
   RawTemp: Double;
+  ToolDefs: TToolDefinitionArray;
+  ToolsRawJSON: string;
+  PassthroughResp: TLLMResponse;
+  PassthroughOpts: TChatOptions;
+  OutContent: string;
+  OutToolCalls: array of TToolCall;
+  OutUsage: TUsageInfo;
+  ParamsObj: TJsonObject;
+  ParamsRaw, ToolKind: string;
+  EmptyToolCalls: array of TToolCall;
 
   procedure AppendMessage(Role: TMsgRole; const Content: string);
   begin
     if Trim(Content) = '' then Exit;
     SetLength(Msgs, MsgCount + 1);
     Msgs[MsgCount] := MakeMessage(Role, Content);
+    Inc(MsgCount);
+  end;
+
+  procedure AppendAssistantToolCall(const CallId, Name, ArgumentsJSON: string);
+  { Codex (and any Responses-API client doing multi-turn tool use)
+    sends previous-turn function_call items as separate input items
+    with no parent message. The Chat-Completions-style providers we
+    use expect each assistant turn to carry an embedded tool_calls
+    array. Synthesize one assistant message per function_call —
+    Anthropic / OpenAI both tolerate consecutive assistant messages
+    with tool_use blocks, and the per-message grouping doesn't
+    affect tool_result matching since matching is by call_id. }
+  var
+    Tc: TToolCall;
+  begin
+    Tc.Id   := CallId;
+    Tc.Kind := 'function';
+    Tc.Func.Name      := Name;
+    Tc.Func.Arguments := ArgumentsJSON;
+    SetLength(Msgs, MsgCount + 1);
+    Msgs[MsgCount].Role       := mrAssistant;
+    Msgs[MsgCount].Content    := '';
+    Msgs[MsgCount].Name       := '';
+    Msgs[MsgCount].ToolCallId := '';
+    SetLength(Msgs[MsgCount].ToolCalls, 1);
+    Msgs[MsgCount].ToolCalls[0] := Tc;
+    Inc(MsgCount);
+  end;
+
+  procedure AppendToolResult(const CallId, Output: string);
+  { function_call_output input items become mrTool messages with
+    ToolCallId matching the call_id. The Chat-Completions / Anthropic
+    request builders both key tool_result blocks by this id. }
+  begin
+    SetLength(Msgs, MsgCount + 1);
+    Msgs[MsgCount].Role       := mrTool;
+    Msgs[MsgCount].Content    := Output;
+    Msgs[MsgCount].Name       := '';
+    Msgs[MsgCount].ToolCallId := CallId;
+    SetLength(Msgs[MsgCount].ToolCalls, 0);
     Inc(MsgCount);
   end;
 
@@ -1567,8 +1730,38 @@ begin
         InputObj := InputArr.ItemObject(i);
         if InputObj <> nil then
         try
-          InputText := ExtractMessageContent(InputObj);
-          AppendMessage(MsgRoleFromString(InputObj.GetStr('role', 'user')), InputText);
+          ItemType := LowerCase(Trim(InputObj.GetStr('type', 'message')));
+          if (ItemType = '') or (ItemType = 'message') then
+          begin
+            InputText := ExtractMessageContent(InputObj);
+            AppendMessage(MsgRoleFromString(InputObj.GetStr('role', 'user')), InputText);
+          end
+          else if ItemType = 'function_call' then
+          begin
+            { Previous-turn tool call coming back in the input stream.
+              Synthesize an assistant message carrying the matching
+              TToolCall — see AppendAssistantToolCall comment. }
+            AppendAssistantToolCall(
+              InputObj.GetStr('call_id', InputObj.GetStr('id', '')),
+              InputObj.GetStr('name',      ''),
+              InputObj.GetStr('arguments', '{}'));
+          end
+          else if ItemType = 'function_call_output' then
+          begin
+            { Tool result from the client. The model needs this to
+              continue the multi-turn conversation. }
+            AppendToolResult(
+              InputObj.GetStr('call_id', ''),
+              InputObj.GetStr('output',  ''));
+          end
+          else
+          begin
+            { Unknown item type (reasoning, image, computer_call, …)
+              — log at debug and skip. Phase 2 covers function_call /
+              function_call_output; the rest are future scope. }
+            LogDebug('responses: skipping unsupported input item type "%s"',
+                     [ItemType]);
+          end;
         finally
           InputObj.Free;
         end
@@ -1588,6 +1781,64 @@ begin
       Exit;
     end;
 
+    { Tools passthrough — parse the request's tools[] array. Function-
+      type entries become TToolDefinition for the provider. The
+      verbatim array is captured in ToolsRawJSON so the response.tools
+      field can echo it (the SDK uses that for validation /
+      display). Custom-type tools (Codex's grammar-constrained
+      apply_patch) are NOT forwarded to the provider — Anthropic /
+      OpenAI Chat-Completions don't natively support Lark-grammar
+      output constraints — but they still appear in ToolsRawJSON so
+      the SDK doesn't trip on the echo. The model just won't
+      attempt to call them; Codex's UX for grammar tools degrades
+      to "model writes apply_patch text directly" in that case. }
+    SetLength(ToolDefs, 0);
+    ToolsRawJSON := '';
+    HasFunctionTools := False;
+    ToolsArrIn := Req.ChildArray('tools');
+    if ToolsArrIn <> nil then
+    try
+      ToolsRawJSON := ToolsArrIn.ToJSON;
+      for i := 0 to ToolsArrIn.Count - 1 do
+      begin
+        ToolObj := ToolsArrIn.ItemObject(i);
+        if ToolObj = nil then Continue;
+        try
+          ToolKind := LowerCase(Trim(ToolObj.GetStr('type', 'function')));
+          if ToolKind <> 'function' then
+          begin
+            LogDebug('responses: skipping non-function tool "%s" type=%s',
+                     [ToolObj.GetStr('name', '?'), ToolKind]);
+            Continue;
+          end;
+          j := Length(ToolDefs);
+          SetLength(ToolDefs, j + 1);
+          ToolDefs[j].Name        := ToolObj.GetStr('name',        '');
+          ToolDefs[j].Description := ToolObj.GetStr('description', '');
+          { parameters field is a JSON Schema object. Round-trip it
+            via the child accessor so the embedded shape stays
+            intact and the provider's request builder pastes it in
+            verbatim. Default to a permissive empty object. }
+          ParamsObj := ToolObj.ChildObject('parameters');
+          if ParamsObj <> nil then
+          try
+            ParamsRaw := ParamsObj.ToJSON;
+          finally
+            ParamsObj.Free;
+          end
+          else
+            ParamsRaw := '{"type":"object"}';
+          ToolDefs[j].Schema := ParamsRaw;
+          { The schema is required even for "no arguments" tools;
+            Anthropic in particular rejects tool defs that omit it. }
+          if ToolDefs[j].Name <> '' then HasFunctionTools := True;
+        finally
+          ToolObj.Free;
+        end;
+      end;
+    finally
+      ToolsArrIn.Free;
+    end;
     if FProvider = nil then
     begin
       WriteJSON(AResp, 503,
@@ -1595,79 +1846,143 @@ begin
       Exit;
     end;
 
-    LoopCfg.Provider      := FProvider;
-    LoopCfg.Registry      := FRegistry;
-    LoopCfg.Model         := ReqModel;
-    LoopCfg.MaxIterations := FMaxIter;
-    LoopCfg.Options       := DefaultChatOptions;
-    if not HasSystemMessage(Msgs) then
-      LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
-    RawTemp := Req.GetFloat('temperature', 0);
-    if RawTemp > 0 then LoopCfg.Options.Temperature := RawTemp;
-    if Req.Has('max_output_tokens') then
-      LoopCfg.Options.MaxTokens := Req.GetInt('max_output_tokens', LoopCfg.Options.MaxTokens)
-    else if Req.Has('max_tokens') then
-      LoopCfg.Options.MaxTokens := Req.GetInt('max_tokens', LoopCfg.Options.MaxTokens);
-    LoopCfg.OnText        := nil;
-    LoopCfg.OnToolCall    := nil;
-    LoopCfg.OnToolResult  := nil;
-
     RespId := GenResponseId;
+    SetLength(EmptyToolCalls, 0);
 
-    if not RunToolLoop(LoopCfg, Msgs, Loop) then
+    if HasFunctionTools then
     begin
-      ReplyObj := BuildResponsesObject(RespId, ReqModel, 'failed', '', Loop.LastResp.Usage);
+      { Passthrough path. The client (Codex, openai-python tool use)
+        defined its own tools and expects to execute them itself, so
+        we DON'T run PasClaw's internal tool loop — that would have
+        the model's tool calls vanish into our server-side handlers
+        instead of reaching the client. One Chat() round-trip, hand
+        back text and any tool_calls verbatim. }
+      PassthroughOpts := DefaultChatOptions;
+      { Skip BuildSystemPrompt — Codex sends its own developer
+        message + AGENTS.md; injecting a PasClaw identity preamble
+        on top of that confuses the model. }
+      RawTemp := Req.GetFloat('temperature', 0);
+      if RawTemp > 0 then PassthroughOpts.Temperature := RawTemp;
+      if Req.Has('max_output_tokens') then
+        PassthroughOpts.MaxTokens := Req.GetInt('max_output_tokens', PassthroughOpts.MaxTokens)
+      else if Req.Has('max_tokens') then
+        PassthroughOpts.MaxTokens := Req.GetInt('max_tokens', PassthroughOpts.MaxTokens);
+
+      LogDebug('responses: passthrough %d msg(s), %d tool def(s) -> %s',
+               [MsgCount, Length(ToolDefs), ReqModel]);
       try
-        { ResponseError schema is {code, message}. BuildResponsesObject
-          set error: null on the success path; overwrite with the real
-          shape here. SDK validators expect `code` to match a known
-          enum, with `server_error` covering the "tool loop blew up
-          server-side" case. }
-        ErrObj := TJsonObject.Create;
-        ErrObj.PutStr('code',    'server_error');
-        ErrObj.PutStr('message', 'tool loop failed');
-        ReplyObj.PutObject('error', ErrObj);
-        WriteJSON(AResp, 502, ReplyObj.ToJSON);
-      finally
-        ReplyObj.Free;
+        PassthroughResp := FProvider.Chat(Msgs, ToolDefs, ReqModel, PassthroughOpts);
+      except
+        on E: Exception do
+        begin
+          LogWarn('responses: passthrough Chat() failed: %s', [E.Message]);
+          ReplyObj := BuildResponsesObject(RespId, ReqModel, 'failed', '',
+                                            EmptyToolCalls, ToolsRawJSON,
+                                            PassthroughResp.Usage);
+          try
+            ErrObj := TJsonObject.Create;
+            ErrObj.PutStr('code',    'server_error');
+            ErrObj.PutStr('message', 'provider Chat() raised: ' + E.Message);
+            ReplyObj.PutObject('error', ErrObj);
+            WriteJSON(AResp, 502, ReplyObj.ToJSON);
+          finally
+            ReplyObj.Free;
+          end;
+          Exit;
+        end;
       end;
-      Exit;
-    end;
 
-    if Loop.LastResp.FinishReason <> '' then
-      FinishReason := Loop.LastResp.FinishReason
-    else
-      FinishReason := 'stop';
+      OutContent := PassthroughResp.Content;
+      SetLength(OutToolCalls, Length(PassthroughResp.ToolCalls));
+      for i := 0 to High(PassthroughResp.ToolCalls) do
+        OutToolCalls[i] := PassthroughResp.ToolCalls[i];
+      OutUsage := PassthroughResp.Usage;
 
-    if Length(Loop.LastResp.ToolCalls) > 0 then
-    begin
-      Loop.Content := Trim(Loop.Content);
-      if Loop.Content <> '' then Loop.Content := Loop.Content + #10#10;
-      Loop.Content := Loop.Content + Format(
-        '(reached MaxIterations=%d while the model was still calling tools; '+
-        'last finish_reason=%s, %d pending tool call(s) — raise the --max-iter '+
-        'cap on `pasclaw serve` or reduce the task scope.)',
-        [FMaxIter, FinishReason, Length(Loop.LastResp.ToolCalls)]);
-      FinishReason := 'length';
-      LogWarn('responses: tool loop hit MaxIterations=%d (%d pending tool call(s), %d content chars)',
-              [FMaxIter, Length(Loop.LastResp.ToolCalls), Length(Loop.Content)]);
+      { When the model emits only tool calls (no text) the client
+        still expects a parseable response; the function_call
+        output items carry the agentic signal. Don't synthesize
+        placeholder text in that case. }
     end
-    else if Loop.Content = '' then
+    else
     begin
-      Loop.Content := Format('(no content returned by the model; finish_reason=%s)',
-                              [FinishReason]);
-      LogWarn('responses: empty content with finish=%s iterations=%d',
-              [FinishReason, Loop.Iterations]);
+      { Legacy path — no client-supplied tools, so we run the
+        internal tool loop and surface its text. This keeps the
+        non-Codex flows (curl /v1/responses with just an input
+        string) working as before. }
+      LoopCfg.Provider      := FProvider;
+      LoopCfg.Registry      := FRegistry;
+      LoopCfg.Model         := ReqModel;
+      LoopCfg.MaxIterations := FMaxIter;
+      LoopCfg.Options       := DefaultChatOptions;
+      if not HasSystemMessage(Msgs) then
+        LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
+      RawTemp := Req.GetFloat('temperature', 0);
+      if RawTemp > 0 then LoopCfg.Options.Temperature := RawTemp;
+      if Req.Has('max_output_tokens') then
+        LoopCfg.Options.MaxTokens := Req.GetInt('max_output_tokens', LoopCfg.Options.MaxTokens)
+      else if Req.Has('max_tokens') then
+        LoopCfg.Options.MaxTokens := Req.GetInt('max_tokens', LoopCfg.Options.MaxTokens);
+      LoopCfg.OnText        := nil;
+      LoopCfg.OnToolCall    := nil;
+      LoopCfg.OnToolResult  := nil;
+
+      if not RunToolLoop(LoopCfg, Msgs, Loop) then
+      begin
+        ReplyObj := BuildResponsesObject(RespId, ReqModel, 'failed', '',
+                                          EmptyToolCalls, ToolsRawJSON,
+                                          Loop.LastResp.Usage);
+        try
+          ErrObj := TJsonObject.Create;
+          ErrObj.PutStr('code',    'server_error');
+          ErrObj.PutStr('message', 'tool loop failed');
+          ReplyObj.PutObject('error', ErrObj);
+          WriteJSON(AResp, 502, ReplyObj.ToJSON);
+        finally
+          ReplyObj.Free;
+        end;
+        Exit;
+      end;
+
+      if Loop.LastResp.FinishReason <> '' then
+        FinishReason := Loop.LastResp.FinishReason
+      else
+        FinishReason := 'stop';
+
+      if Length(Loop.LastResp.ToolCalls) > 0 then
+      begin
+        Loop.Content := Trim(Loop.Content);
+        if Loop.Content <> '' then Loop.Content := Loop.Content + #10#10;
+        Loop.Content := Loop.Content + Format(
+          '(reached MaxIterations=%d while the model was still calling tools; '+
+          'last finish_reason=%s, %d pending tool call(s) — raise the --max-iter '+
+          'cap on `pasclaw serve` or reduce the task scope.)',
+          [FMaxIter, FinishReason, Length(Loop.LastResp.ToolCalls)]);
+        FinishReason := 'length';
+        LogWarn('responses: tool loop hit MaxIterations=%d (%d pending tool call(s), %d content chars)',
+                [FMaxIter, Length(Loop.LastResp.ToolCalls), Length(Loop.Content)]);
+      end
+      else if Loop.Content = '' then
+      begin
+        Loop.Content := Format('(no content returned by the model; finish_reason=%s)',
+                                [FinishReason]);
+        LogWarn('responses: empty content with finish=%s iterations=%d',
+                [FinishReason, Loop.Iterations]);
+      end;
+
+      OutContent := Loop.Content;
+      SetLength(OutToolCalls, 0);   { internal loop consumed any tool calls }
+      OutUsage   := Loop.LastResp.Usage;
     end;
 
     if WantsStream then
       EmitResponsesStream(AContext, AResp, AResponseStarted,
-                          RespId, ReqModel, Loop.Content,
-                          Loop.LastResp.Usage, FDebugIO)
+                          RespId, ReqModel, OutContent,
+                          OutToolCalls, ToolsRawJSON,
+                          OutUsage, FDebugIO)
     else
     begin
-      ReplyObj := BuildResponsesObject(RespId, ReqModel, 'completed', Loop.Content,
-                                        Loop.LastResp.Usage);
+      ReplyObj := BuildResponsesObject(RespId, ReqModel, 'completed', OutContent,
+                                        OutToolCalls, ToolsRawJSON, OutUsage);
       try
         if FDebugIO then LogDebug('responses -> 200 JSON: %s', [ReplyObj.ToJSON]);
         WriteJSON(AResp, 200, ReplyObj.ToJSON);
