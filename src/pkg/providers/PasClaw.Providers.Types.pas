@@ -81,6 +81,14 @@ type
     Stream:        Boolean;
     SystemPrompt:  string;
     ThinkingLevel: string;   { "", "low", "medium", "high" }
+    ToolChoice:    string;   { "", "auto", "none", "required" — the three forms
+                               every provider can represent. Empty means "do
+                               not emit the field"; the provider's own default
+                               (typically "auto" when tools are present) applies.
+                               Object-shaped tool_choice (force a specific
+                               function by name) is not currently supported by
+                               this field — when a client sends one the
+                               gateway logs and drops it. }
     Extra:         string;   { provider-specific JSON object }
   end;
 
@@ -133,6 +141,7 @@ begin
   Result.Stream        := False;
   Result.SystemPrompt  := '';
   Result.ThinkingLevel := '';
+  Result.ToolChoice    := '';
   Result.Extra         := '';
 end;
 

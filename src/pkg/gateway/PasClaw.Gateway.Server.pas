@@ -1193,6 +1193,122 @@ begin
   Result := True;
 end;
 
+{ Module-level Responses streaming event helpers. All take a Seq
+  parameter (per openai-python validators, sequence_number is
+  required on every event and must increase monotonically); the
+  Output_index parameter on item-scoped events tracks which item
+  the event belongs to. Text events also carry an empty logprobs:
+  []. Both EmitResponsesStream (whole-text-as-one-delta) and
+  StreamResponsesViaProvider (true partial streaming via
+  ChatStream) build their events from the same helpers. }
+
+function ResCreatedEvt(Seq: Integer; const ResponseJSON: string): string;
+begin
+  Result := Format(
+    '{"type":"response.created","sequence_number":%d,"response":%s}',
+    [Seq, ResponseJSON]);
+end;
+
+function ResInProgressEvt(Seq: Integer; const ResponseJSON: string): string;
+begin
+  Result := Format(
+    '{"type":"response.in_progress","sequence_number":%d,"response":%s}',
+    [Seq, ResponseJSON]);
+end;
+
+function ResCompletedEvt(Seq: Integer; const ResponseJSON: string): string;
+begin
+  Result := Format(
+    '{"type":"response.completed","sequence_number":%d,"response":%s}',
+    [Seq, ResponseJSON]);
+end;
+
+function ResItemAddedEvt(Seq, OutputIdx: Integer;
+                         const ItemInProgressJSON: string): string;
+begin
+  Result := Format(
+    '{"type":"response.output_item.added","sequence_number":%d,' +
+    '"output_index":%d,"item":%s}',
+    [Seq, OutputIdx, ItemInProgressJSON]);
+end;
+
+function ResContentPartAddedEvt(Seq, OutputIdx: Integer;
+                                const ItemId, PartJSON_: string): string;
+begin
+  Result := Format(
+    '{"type":"response.content_part.added","sequence_number":%d,' +
+    '"item_id":%s,"output_index":%d,"content_index":0,"part":%s}',
+    [Seq, '"' + JsonEscape(ItemId) + '"', OutputIdx, PartJSON_]);
+end;
+
+function ResTextDeltaEvt(Seq, OutputIdx: Integer;
+                         const ItemId, Delta: string): string;
+begin
+  Result := Format(
+    '{"type":"response.output_text.delta","sequence_number":%d,' +
+    '"item_id":%s,"output_index":%d,"content_index":0,' +
+    '"delta":%s,"logprobs":[]}',
+    [Seq,
+     '"' + JsonEscape(ItemId) + '"',
+     OutputIdx,
+     '"' + JsonEscape(Delta) + '"']);
+end;
+
+function ResTextDoneEvt(Seq, OutputIdx: Integer;
+                        const ItemId, Text: string): string;
+begin
+  Result := Format(
+    '{"type":"response.output_text.done","sequence_number":%d,' +
+    '"item_id":%s,"output_index":%d,"content_index":0,' +
+    '"text":%s,"logprobs":[]}',
+    [Seq,
+     '"' + JsonEscape(ItemId) + '"',
+     OutputIdx,
+     '"' + JsonEscape(Text) + '"']);
+end;
+
+function ResContentPartDoneEvt(Seq, OutputIdx: Integer;
+                                const ItemId, PartJSON_: string): string;
+begin
+  Result := Format(
+    '{"type":"response.content_part.done","sequence_number":%d,' +
+    '"item_id":%s,"output_index":%d,"content_index":0,"part":%s}',
+    [Seq, '"' + JsonEscape(ItemId) + '"', OutputIdx, PartJSON_]);
+end;
+
+function ResItemDoneEvt(Seq, OutputIdx: Integer;
+                        const ItemFinalJSON: string): string;
+begin
+  Result := Format(
+    '{"type":"response.output_item.done","sequence_number":%d,' +
+    '"output_index":%d,"item":%s}',
+    [Seq, OutputIdx, ItemFinalJSON]);
+end;
+
+function ResFunctionCallArgsDeltaEvt(Seq, OutputIdx: Integer;
+                                      const ItemId, Delta: string): string;
+begin
+  Result := Format(
+    '{"type":"response.function_call_arguments.delta",' +
+    '"sequence_number":%d,"item_id":%s,"output_index":%d,"delta":%s}',
+    [Seq,
+     '"' + JsonEscape(ItemId) + '"',
+     OutputIdx,
+     '"' + JsonEscape(Delta) + '"']);
+end;
+
+function ResFunctionCallArgsDoneEvt(Seq, OutputIdx: Integer;
+                                     const ItemId, ArgsStr: string): string;
+begin
+  Result := Format(
+    '{"type":"response.function_call_arguments.done",' +
+    '"sequence_number":%d,"item_id":%s,"output_index":%d,"arguments":%s}',
+    [Seq,
+     '"' + JsonEscape(ItemId) + '"',
+     OutputIdx,
+     '"' + JsonEscape(ArgsStr) + '"']);
+end;
+
 procedure EmitResponsesStream(AContext: TIdContext;
                               AResp: TIdHTTPResponseInfo;
                               var AResponseStarted: Boolean;
@@ -1254,113 +1370,6 @@ var
     ValidationError on the first event that lands. Helpers take
     Seq as the first arg so the caller bumps a single local
     counter on every emit. }
-
-  function CreatedEvent(SeqNum: Integer; const ResponseJSON: string): string;
-  begin
-    Result := Format(
-      '{"type":"response.created","sequence_number":%d,"response":%s}',
-      [SeqNum, ResponseJSON]);
-  end;
-
-  function InProgressEvent(SeqNum: Integer; const ResponseJSON: string): string;
-  begin
-    Result := Format(
-      '{"type":"response.in_progress","sequence_number":%d,"response":%s}',
-      [SeqNum, ResponseJSON]);
-  end;
-
-  function CompletedEvent(SeqNum: Integer; const ResponseJSON: string): string;
-  begin
-    Result := Format(
-      '{"type":"response.completed","sequence_number":%d,"response":%s}',
-      [SeqNum, ResponseJSON]);
-  end;
-
-  function ItemAddedEvent(SeqNum, OutputIdx: Integer;
-                          const ItemInProgressJSON: string): string;
-  begin
-    Result := Format(
-      '{"type":"response.output_item.added","sequence_number":%d,' +
-      '"output_index":%d,"item":%s}',
-      [SeqNum, OutputIdx, ItemInProgressJSON]);
-  end;
-
-  function ContentPartAddedEvent(SeqNum, OutputIdx: Integer;
-                                  const ItemId, PartJSON_: string): string;
-  begin
-    Result := Format(
-      '{"type":"response.content_part.added","sequence_number":%d,' +
-      '"item_id":%s,"output_index":%d,"content_index":0,"part":%s}',
-      [SeqNum, '"' + JsonEscape(ItemId) + '"', OutputIdx, PartJSON_]);
-  end;
-
-  function TextDeltaEvent(SeqNum, OutputIdx: Integer;
-                          const ItemId, Delta: string): string;
-  begin
-    Result := Format(
-      '{"type":"response.output_text.delta","sequence_number":%d,' +
-      '"item_id":%s,"output_index":%d,"content_index":0,' +
-      '"delta":%s,"logprobs":[]}',
-      [SeqNum,
-       '"' + JsonEscape(ItemId) + '"',
-       OutputIdx,
-       '"' + JsonEscape(Delta) + '"']);
-  end;
-
-  function TextDoneEvent(SeqNum, OutputIdx: Integer;
-                         const ItemId, Text: string): string;
-  begin
-    Result := Format(
-      '{"type":"response.output_text.done","sequence_number":%d,' +
-      '"item_id":%s,"output_index":%d,"content_index":0,' +
-      '"text":%s,"logprobs":[]}',
-      [SeqNum,
-       '"' + JsonEscape(ItemId) + '"',
-       OutputIdx,
-       '"' + JsonEscape(Text) + '"']);
-  end;
-
-  function ContentPartDoneEvent(SeqNum, OutputIdx: Integer;
-                                 const ItemId, PartJSON_: string): string;
-  begin
-    Result := Format(
-      '{"type":"response.content_part.done","sequence_number":%d,' +
-      '"item_id":%s,"output_index":%d,"content_index":0,"part":%s}',
-      [SeqNum, '"' + JsonEscape(ItemId) + '"', OutputIdx, PartJSON_]);
-  end;
-
-  function ItemDoneEvent(SeqNum, OutputIdx: Integer;
-                         const ItemFinalJSON: string): string;
-  begin
-    Result := Format(
-      '{"type":"response.output_item.done","sequence_number":%d,' +
-      '"output_index":%d,"item":%s}',
-      [SeqNum, OutputIdx, ItemFinalJSON]);
-  end;
-
-  function FunctionCallArgsDeltaEvent(SeqNum, OutputIdx: Integer;
-                                       const ItemId, Delta: string): string;
-  begin
-    Result := Format(
-      '{"type":"response.function_call_arguments.delta",' +
-      '"sequence_number":%d,"item_id":%s,"output_index":%d,"delta":%s}',
-      [SeqNum,
-       '"' + JsonEscape(ItemId) + '"',
-       OutputIdx,
-       '"' + JsonEscape(Delta) + '"']);
-  end;
-
-  function FunctionCallArgsDoneEvent(SeqNum, OutputIdx: Integer;
-                                      const ItemId, ArgsStr: string): string;
-  begin
-    Result := Format(
-      '{"type":"response.function_call_arguments.done",' +
-      '"sequence_number":%d,"item_id":%s,"output_index":%d,"arguments":%s}',
-      [SeqNum,
-       '"' + JsonEscape(ItemId) + '"',
-       OutputIdx,
-       '"' + JsonEscape(ArgsStr) + '"']);
-  end;
 
 begin
   MsgItemId := 'msg_' + Copy(RespId, 6, MaxInt);
@@ -1462,25 +1471,25 @@ begin
     NextOutputIdx := 0;
 
     EmitResponsesEvent(Streamer, 'response.created',
-      CreatedEvent(Seq, CreatedJSON)); Inc(Seq);
+      ResCreatedEvt(Seq, CreatedJSON)); Inc(Seq);
     EmitResponsesEvent(Streamer, 'response.in_progress',
-      InProgressEvent(Seq, CreatedJSON)); Inc(Seq);
+      ResInProgressEvt(Seq, CreatedJSON)); Inc(Seq);
 
     if Content <> '' then
     begin
       MsgOutputIdx := NextOutputIdx; Inc(NextOutputIdx);
       EmitResponsesEvent(Streamer, 'response.output_item.added',
-        ItemAddedEvent(Seq, MsgOutputIdx, EmptyItemJSON)); Inc(Seq);
+        ResItemAddedEvt(Seq, MsgOutputIdx, EmptyItemJSON)); Inc(Seq);
       EmitResponsesEvent(Streamer, 'response.content_part.added',
-        ContentPartAddedEvent(Seq, MsgOutputIdx, MsgItemId, EmptyPartJSON)); Inc(Seq);
+        ResContentPartAddedEvt(Seq, MsgOutputIdx, MsgItemId, EmptyPartJSON)); Inc(Seq);
       EmitResponsesEvent(Streamer, 'response.output_text.delta',
-        TextDeltaEvent(Seq, MsgOutputIdx, MsgItemId, Content)); Inc(Seq);
+        ResTextDeltaEvt(Seq, MsgOutputIdx, MsgItemId, Content)); Inc(Seq);
       EmitResponsesEvent(Streamer, 'response.output_text.done',
-        TextDoneEvent(Seq, MsgOutputIdx, MsgItemId, Content)); Inc(Seq);
+        ResTextDoneEvt(Seq, MsgOutputIdx, MsgItemId, Content)); Inc(Seq);
       EmitResponsesEvent(Streamer, 'response.content_part.done',
-        ContentPartDoneEvent(Seq, MsgOutputIdx, MsgItemId, PartJSON)); Inc(Seq);
+        ResContentPartDoneEvt(Seq, MsgOutputIdx, MsgItemId, PartJSON)); Inc(Seq);
       EmitResponsesEvent(Streamer, 'response.output_item.done',
-        ItemDoneEvent(Seq, MsgOutputIdx, ItemJSON)); Inc(Seq);
+        ResItemDoneEvt(Seq, MsgOutputIdx, ItemJSON)); Inc(Seq);
     end;
 
     for TcIdx := 0 to High(ToolCalls) do
@@ -1502,21 +1511,282 @@ begin
                                               FcArgs, 'completed');
 
       EmitResponsesEvent(Streamer, 'response.output_item.added',
-        ItemAddedEvent(Seq, NextOutputIdx, FcEmptyJSON)); Inc(Seq);
+        ResItemAddedEvt(Seq, NextOutputIdx, FcEmptyJSON)); Inc(Seq);
       EmitResponsesEvent(Streamer, 'response.function_call_arguments.delta',
-        FunctionCallArgsDeltaEvent(Seq, NextOutputIdx, FcItemId, FcArgs)); Inc(Seq);
+        ResFunctionCallArgsDeltaEvt(Seq, NextOutputIdx, FcItemId, FcArgs)); Inc(Seq);
       EmitResponsesEvent(Streamer, 'response.function_call_arguments.done',
-        FunctionCallArgsDoneEvent(Seq, NextOutputIdx, FcItemId, FcArgs)); Inc(Seq);
+        ResFunctionCallArgsDoneEvt(Seq, NextOutputIdx, FcItemId, FcArgs)); Inc(Seq);
       EmitResponsesEvent(Streamer, 'response.output_item.done',
-        ItemDoneEvent(Seq, NextOutputIdx, FcCompletedJSON)); Inc(Seq);
+        ResItemDoneEvt(Seq, NextOutputIdx, FcCompletedJSON)); Inc(Seq);
       Inc(NextOutputIdx);
     end;
 
     EmitResponsesEvent(Streamer, 'response.completed',
-      CompletedEvent(Seq, CompletedJSON));
+      ResCompletedEvt(Seq, CompletedJSON));
     Streamer.CloseStream;
   finally
     Streamer.Free;
+  end;
+end;
+
+type
+  { State carried between the streaming-loop body and the OnChunk
+    callback that the provider invokes on every text fragment. The
+    provider's TStreamCallback is `procedure(...) of object`, so we
+    need a class to bind the state. One instance per request. }
+  TResponsesStreamState = class
+  public
+    Streamer:        TSSEStreamer;
+    MsgItemId:       string;
+    Seq:             Integer;
+    MsgOutputIdx:    Integer;
+    NextOutputIdx:   Integer;
+    TextStarted:     Boolean;
+    TextAccumulated: string;
+    EmptyItemJSON:   string;
+    EmptyPartJSON:   string;
+    DebugIO:         Boolean;
+    procedure OnChunk(const C: TStreamChunk);
+  end;
+
+procedure TResponsesStreamState.OnChunk(const C: TStreamChunk);
+{ Provider-side OnChunk. Each 'text' chunk is one or more characters
+  the model just produced; emit a response.output_text.delta for it.
+  The first text chunk also has to open the message sub-sequence
+  (output_item.added + content_part.added) because we don't know
+  in advance whether the response will have any text at all — some
+  function-call-only turns produce zero text. Tool-call deltas
+  are not emitted here; the provider returns the final TToolCall
+  list in its TLLMResponse and the calling function handles those
+  in the function_call sub-sequence after ChatStream returns. }
+var
+  Frame: string;
+begin
+  if (Streamer = nil) or Streamer.Closed then Exit;
+  if C.Kind <> 'text' then Exit;
+  if C.Text = '' then Exit;
+
+  if not TextStarted then
+  begin
+    TextStarted := True;
+    MsgOutputIdx := NextOutputIdx;
+    Inc(NextOutputIdx);
+
+    Frame := ResItemAddedEvt(Seq, MsgOutputIdx, EmptyItemJSON);
+    EmitResponsesEvent(Streamer, 'response.output_item.added', Frame);
+    Inc(Seq);
+
+    Frame := ResContentPartAddedEvt(Seq, MsgOutputIdx, MsgItemId, EmptyPartJSON);
+    EmitResponsesEvent(Streamer, 'response.content_part.added', Frame);
+    Inc(Seq);
+  end;
+
+  TextAccumulated := TextAccumulated + C.Text;
+  Frame := ResTextDeltaEvt(Seq, MsgOutputIdx, MsgItemId, C.Text);
+  EmitResponsesEvent(Streamer, 'response.output_text.delta', Frame);
+  Inc(Seq);
+end;
+
+procedure StreamResponsesViaProvider(AContext: TIdContext;
+                                      AResp: TIdHTTPResponseInfo;
+                                      var AResponseStarted: Boolean;
+                                      Provider: ILLMProvider;
+                                      const RespId, Model: string;
+                                      const Msgs: array of TMessage;
+                                      const ToolDefs: array of TToolDefinition;
+                                      const Opts: TChatOptions;
+                                      const ToolsRawJSON: string;
+                                      DebugIO: Boolean);
+(* Real partial-streaming variant of EmitResponsesStream for the
+   passthrough path. Calls Provider.ChatStream so text deltas reach
+   the client as the model produces them, then emits the
+   function_call sub-sequence for any tool calls the response
+   carried.
+
+   The non-passthrough (RunToolLoop) path stays on the
+   single-delta EmitResponsesStream — RunToolLoop is synchronous
+   so its text is only available as a whole at the end, and there
+   is no incremental data to forward. *)
+var
+  CreatedObj, CompletedObj, MsgItemObj, PartObj, FinalItemObj: TJsonObject;
+  ContentArr: TJsonArray;
+  State: TResponsesStreamState;
+  CreatedJSON, CompletedJSON, FinalPartJSON, FinalItemJSON: string;
+  EmptyUsage: TUsageInfo;
+  NoToolCalls: array of TToolCall;
+  Resp: TLLMResponse;
+  i: Integer;
+  FcItemId, FcCallId, FcArgs, FcEmptyJSON, FcCompletedJSON: string;
+  FakeChunk: TStreamChunk;
+begin
+  EmptyUsage.InputTokens  := 0;
+  EmptyUsage.OutputTokens := 0;
+  SetLength(NoToolCalls, 0);
+
+  CreatedObj := BuildResponsesObject(RespId, Model, 'in_progress', '',
+                                      NoToolCalls, ToolsRawJSON, EmptyUsage);
+  try
+    CreatedJSON := CreatedObj.ToJSON;
+  finally
+    CreatedObj.Free;
+  end;
+
+  { Item / part JSON for the lazy message-sub-sequence open. The
+    OnChunk callback uses these when the first text chunk arrives. }
+  State := TResponsesStreamState.Create;
+  try
+    State.MsgItemId       := 'msg_' + Copy(RespId, 6, MaxInt);
+    State.DebugIO         := DebugIO;
+    State.TextStarted     := False;
+    State.TextAccumulated := '';
+    State.Seq             := 0;
+    State.NextOutputIdx   := 0;
+
+    MsgItemObj := TJsonObject.Create;
+    MsgItemObj.PutStr('id',     State.MsgItemId);
+    MsgItemObj.PutStr('type',   'message');
+    MsgItemObj.PutStr('status', 'in_progress');
+    MsgItemObj.PutStr('role',   'assistant');
+    ContentArr := TJsonArray.Create;
+    MsgItemObj.PutArray('content', ContentArr);
+    try
+      State.EmptyItemJSON := MsgItemObj.ToJSON;
+    finally
+      MsgItemObj.Free;
+    end;
+
+    PartObj := TJsonObject.Create;
+    PartObj.PutStr('type', 'output_text');
+    PartObj.PutStr('text', '');
+    ContentArr := TJsonArray.Create;
+    PartObj.PutArray('annotations', ContentArr);
+    try
+      State.EmptyPartJSON := PartObj.ToJSON;
+    finally
+      PartObj.Free;
+    end;
+
+    AResp.ResponseNo  := 200;
+    AResp.ContentType := 'text/event-stream; charset=utf-8';
+    AResp.CharSet     := 'utf-8';
+    AResp.CustomHeaders.AddValue('Cache-Control', 'no-cache');
+    AResp.CustomHeaders.AddValue('X-Accel-Buffering', 'no');
+    AResp.CustomHeaders.AddValue('Transfer-Encoding', 'chunked');
+    AResp.ContentLength := -1;
+    AResp.WriteHeader;
+    AResponseStarted := True;
+    while AContext.Connection.IOHandler.WriteBufferingActive do
+      AContext.Connection.IOHandler.WriteBufferClose;
+
+    State.Streamer := TSSEStreamer.Create(AContext, RespId, Model, DebugIO);
+    try
+      EmitResponsesEvent(State.Streamer, 'response.created',
+        ResCreatedEvt(State.Seq, CreatedJSON)); Inc(State.Seq);
+      EmitResponsesEvent(State.Streamer, 'response.in_progress',
+        ResInProgressEvt(State.Seq, CreatedJSON)); Inc(State.Seq);
+
+      try
+        Resp := Provider.ChatStream(Msgs, ToolDefs, Model, Opts, State.OnChunk);
+      except
+        on E: Exception do
+        begin
+          LogWarn('responses: ChatStream raised: %s', [E.Message]);
+          Resp.Content      := '';
+          SetLength(Resp.ToolCalls, 0);
+          Resp.FinishReason := 'error';
+          Resp.Usage.InputTokens  := 0;
+          Resp.Usage.OutputTokens := 0;
+        end;
+      end;
+
+      { Providers that don't actually stream (e.g., the
+        OpenAI-compat ChatStream that just delegates to Chat) will
+        return the full text via Resp.Content with no OnChunk
+        invocations. Feed it through OnChunk so the event sequence
+        is the same shape regardless of provider streaming
+        support. }
+      if (not State.TextStarted) and (Resp.Content <> '') then
+      begin
+        FakeChunk.Kind := 'text';
+        FakeChunk.Text := Resp.Content;
+        State.OnChunk(FakeChunk);
+      end;
+
+      if State.TextStarted then
+      begin
+        FinalPartJSON :=
+          Format('{"type":"output_text","text":%s,"annotations":[]}',
+                 ['"' + JsonEscape(State.TextAccumulated) + '"']);
+        EmitResponsesEvent(State.Streamer, 'response.output_text.done',
+          ResTextDoneEvt(State.Seq, State.MsgOutputIdx, State.MsgItemId,
+                          State.TextAccumulated)); Inc(State.Seq);
+        EmitResponsesEvent(State.Streamer, 'response.content_part.done',
+          ResContentPartDoneEvt(State.Seq, State.MsgOutputIdx, State.MsgItemId,
+                                 FinalPartJSON)); Inc(State.Seq);
+
+        FinalItemObj := TJsonObject.Create;
+        FinalItemObj.PutStr('id',     State.MsgItemId);
+        FinalItemObj.PutStr('type',   'message');
+        FinalItemObj.PutStr('status', 'completed');
+        FinalItemObj.PutStr('role',   'assistant');
+        ContentArr := TJsonArray.Create;
+        ContentArr.AddRaw(FinalPartJSON);
+        FinalItemObj.PutArray('content', ContentArr);
+        try
+          FinalItemJSON := FinalItemObj.ToJSON;
+        finally
+          FinalItemObj.Free;
+        end;
+        EmitResponsesEvent(State.Streamer, 'response.output_item.done',
+          ResItemDoneEvt(State.Seq, State.MsgOutputIdx, FinalItemJSON)); Inc(State.Seq);
+      end;
+
+      for i := 0 to High(Resp.ToolCalls) do
+      begin
+        if Resp.ToolCalls[i].Func.Name = '' then Continue;
+        FcItemId := 'fc_' + Copy(RespId, 6, MaxInt) + '_' + IntToStr(i);
+        if Trim(Resp.ToolCalls[i].Id) <> '' then
+          FcCallId := Resp.ToolCalls[i].Id
+        else
+          FcCallId := 'call_' + Copy(RespId, 6, MaxInt) + '_' + IntToStr(i);
+        FcArgs := Resp.ToolCalls[i].Func.Arguments;
+        if FcArgs = '' then FcArgs := '{}';
+
+        FcEmptyJSON     := FunctionCallItemJSON(FcItemId, FcCallId,
+                                                Resp.ToolCalls[i].Func.Name,
+                                                '', 'in_progress');
+        FcCompletedJSON := FunctionCallItemJSON(FcItemId, FcCallId,
+                                                Resp.ToolCalls[i].Func.Name,
+                                                FcArgs, 'completed');
+
+        EmitResponsesEvent(State.Streamer, 'response.output_item.added',
+          ResItemAddedEvt(State.Seq, State.NextOutputIdx, FcEmptyJSON)); Inc(State.Seq);
+        EmitResponsesEvent(State.Streamer, 'response.function_call_arguments.delta',
+          ResFunctionCallArgsDeltaEvt(State.Seq, State.NextOutputIdx, FcItemId, FcArgs)); Inc(State.Seq);
+        EmitResponsesEvent(State.Streamer, 'response.function_call_arguments.done',
+          ResFunctionCallArgsDoneEvt(State.Seq, State.NextOutputIdx, FcItemId, FcArgs)); Inc(State.Seq);
+        EmitResponsesEvent(State.Streamer, 'response.output_item.done',
+          ResItemDoneEvt(State.Seq, State.NextOutputIdx, FcCompletedJSON)); Inc(State.Seq);
+        Inc(State.NextOutputIdx);
+      end;
+
+      CompletedObj := BuildResponsesObject(RespId, Model, 'completed',
+                                            State.TextAccumulated,
+                                            Resp.ToolCalls, ToolsRawJSON,
+                                            Resp.Usage);
+      try
+        CompletedJSON := CompletedObj.ToJSON;
+      finally
+        CompletedObj.Free;
+      end;
+      EmitResponsesEvent(State.Streamer, 'response.completed',
+        ResCompletedEvt(State.Seq, CompletedJSON));
+      State.Streamer.CloseStream;
+    finally
+      State.Streamer.Free;
+    end;
+  finally
+    State.Free;
   end;
 end;
 
@@ -1868,8 +2138,38 @@ begin
       else if Req.Has('max_tokens') then
         PassthroughOpts.MaxTokens := Req.GetInt('max_tokens', PassthroughOpts.MaxTokens);
 
-      LogDebug('responses: passthrough %d msg(s), %d tool def(s) -> %s',
-               [MsgCount, Length(ToolDefs), ReqModel]);
+      { tool_choice forwarding. Accept the three string forms every
+        provider understands ("auto", "none", "required"). Anything
+        else — most notably the object form
+        {"type":"function","function":{"name":"..."}}, which would
+        need per-provider translation — is logged at debug and
+        dropped; the provider's default behaviour (typically
+        "auto" when tools are present) applies. }
+      if Req.Has('tool_choice') then
+      begin
+        ToolKind := LowerCase(Trim(Req.GetStr('tool_choice', '')));
+        if (ToolKind = 'auto') or (ToolKind = 'none') or (ToolKind = 'required') then
+          PassthroughOpts.ToolChoice := ToolKind
+        else
+          LogDebug('responses: dropping tool_choice (only string forms ' +
+                   'auto/none/required supported; object form is a follow-up)', []);
+      end;
+
+      LogDebug('responses: passthrough %d msg(s), %d tool def(s), tool_choice=%s -> %s',
+               [MsgCount, Length(ToolDefs), PassthroughOpts.ToolChoice, ReqModel]);
+
+      { Streaming passthrough takes its own path: StreamResponsesViaProvider
+        calls ChatStream and emits text deltas as the model produces them.
+        The non-streaming passthrough (just below) calls Chat() so we have
+        the full response object before serializing it as JSON. }
+      if WantsStream then
+      begin
+        StreamResponsesViaProvider(AContext, AResp, AResponseStarted,
+                                    FProvider, RespId, ReqModel, Msgs, ToolDefs,
+                                    PassthroughOpts, ToolsRawJSON, FDebugIO);
+        Exit;
+      end;
+
       try
         PassthroughResp := FProvider.Chat(Msgs, ToolDefs, ReqModel, PassthroughOpts);
       except

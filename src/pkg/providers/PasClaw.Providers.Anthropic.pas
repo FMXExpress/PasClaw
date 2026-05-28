@@ -194,6 +194,29 @@ begin
         ToolArr.AddObject(ToolObj);
       end;
       Root.PutArray('tools', ToolArr);
+
+      { tool_choice mapping (Anthropic Messages API):
+          "auto"     -> {"type":"auto"}     (model decides; Anthropic default)
+          "required" -> {"type":"any"}      (must call one of the tools)
+          "none"     -> emit nothing        (Anthropic refuses to call tools
+                                              when the tools array is also
+                                              empty; the cleaner way for the
+                                              caller to express "no tools" is
+                                              to not send any tools at all,
+                                              but if they did and asked for
+                                              "none" we skip the field —
+                                              same as omitting tool_choice
+                                              with no model-side impact).
+        Empty string means "don't emit; let provider default apply". }
+      if (Options.ToolChoice = 'auto') or (Options.ToolChoice = 'required') then
+      begin
+        ToolObj := TJsonObject.Create;
+        if Options.ToolChoice = 'auto' then
+          ToolObj.PutStr('type', 'auto')
+        else
+          ToolObj.PutStr('type', 'any');
+        Root.PutObject('tool_choice', ToolObj);
+      end;
     end;
 
     Result := Root.ToJSON;

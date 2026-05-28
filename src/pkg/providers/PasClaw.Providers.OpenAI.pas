@@ -199,6 +199,15 @@ begin
         ToolArr.AddObject(ToolObj);
       end;
       Root.PutArray('tools', ToolArr);
+
+      { tool_choice maps 1:1 to the OpenAI Chat Completions schema:
+          "auto" / "none" / "required" — emitted as a string field.
+        Empty means "do not emit; provider default applies". The
+        function-by-name object form is not yet supported here;
+        TChatOptions.ToolChoice is a plain string. }
+      if (Options.ToolChoice = 'auto') or (Options.ToolChoice = 'none') or
+         (Options.ToolChoice = 'required') then
+        Root.PutStr('tool_choice', Options.ToolChoice);
     end;
 
     Result := Root.ToJSON;
