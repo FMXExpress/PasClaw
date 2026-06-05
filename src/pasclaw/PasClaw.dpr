@@ -22,6 +22,13 @@ uses
   cthreads,            { FPC/Linux: pull in pthreads so Indy can use TThread }
   cmem,
   {$ENDIF}{$ENDIF}
+  {$IFNDEF FPC}
+  FireDAC.Phys.SQLiteWrapper.Stat,  { Link sqlite3 statically into the exe so
+                                      Delphi builds don't need to ship a
+                                      sqlite3.dll alongside pasclaw.exe.
+                                      Used by PasClaw.Memory.Index (FTS5).
+                                      FPC links libsqlite3 dynamically. }
+  {$ENDIF}
   SysUtils,
   PasClaw.CliUI,
   PasClaw.Logger,
