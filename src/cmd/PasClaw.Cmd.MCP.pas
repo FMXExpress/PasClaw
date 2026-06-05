@@ -422,6 +422,30 @@ begin
   begin
     WriteLn(Ansi.Green, '✓ ', Ansi.Reset, 'authorized ', Argv[1],
             ' — tokens written to ', OAuthTokenPath(Argv[1]));
+    { Clear any pre-existing Args header on the server entry. Pre-OAuth
+      installs of the same catalog name (e.g. an old `mcp install
+      replicate` that wrote "Bearer r8_…" from REPLICATE_API_TOKEN)
+      would otherwise short-circuit the HTTP client's auth resolver and
+      send the stale token instead of the fresh OAuth one — the exact
+      symptom the user reported after a successful `mcp auth`. A
+      successful auth run is the canonical "use OAuth for this server"
+      signal, so the Args slot belongs to the OAuth token store now. }
+    Cfg := LoadConfig;
+    try
+      for i := 0 to High(Cfg.MCPServers) do
+        if SameText(Cfg.MCPServers[i].Name, Argv[1]) and
+           (Cfg.MCPServers[i].Args <> '') then
+        begin
+          Cfg.MCPServers[i].Args := '';
+          SaveConfig(Cfg);
+          WriteLn(Ansi.Dim,
+                  '  cleared stale Authorization header on the server entry',
+                  Ansi.Reset);
+          Break;
+        end;
+    finally
+      Cfg.Free;
+    end;
     WriteLn('  Try it: ', Ansi.Bold, 'pasclaw mcp test ', Argv[1], Ansi.Reset);
     Result := 0;
   end
