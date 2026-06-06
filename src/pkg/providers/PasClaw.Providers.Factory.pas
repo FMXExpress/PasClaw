@@ -105,6 +105,7 @@ var
   RequiresKey: Boolean;
   ServerTools: TAnthropicServerTools;
   OAIServerTools: TOpenAIServerTools;
+  GeminiSrvTools: TGeminiServerTools;
 begin
   Provider := nil;
   ErrMsg := '';
@@ -164,7 +165,15 @@ begin
                                             OAIServerTools);
       end;
     pfGemini:
-      Provider := TGeminiProvider.Create(APIKey, Base, Model);
+      begin
+        { google_search is Gemini-native server-side grounding —
+          emitted as a `tools[]` entry. Default-on (see
+          TGeminiServerToolsConfig). Operators on a Gemini 1.5 model
+          should flip this off in config.json since the 1.5 line uses
+          the older google_search_retrieval shape. }
+        GeminiSrvTools.GoogleSearch := Cfg.GeminiServerTools.GoogleSearch;
+        Provider := TGeminiProvider.Create(APIKey, Base, Model, GeminiSrvTools);
+      end;
     pfPlaceholder:
       begin
         ErrMsg := 'provider "' + Spec.DisplayName + '" is in the catalog but ' +

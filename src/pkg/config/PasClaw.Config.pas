@@ -248,6 +248,42 @@ type
     WebSearch: Boolean;
   end;
 
+  (* Gemini: opt-in server-side Google search grounding.
+     Emits a `google_search` entry inside the top-level `tools`
+     array with an empty config object as its value, when
+     GoogleSearch is True. Gemini executes the search server-side
+     and returns grounded text; no local web_search tool runs.
+
+     Model gating happens at the Gemini provider's BuildRequest
+     boundary (IsGemini3OrLater), so default-on is safe across
+     the model matrix:
+       Gemini 3.x+        always emitted; combines with
+                          functionDeclarations on the same request.
+       Gemini 2.x         emitted only when no local tools are
+                          registered. Mixing google_search with
+                          functionDeclarations 400s on 2.x; the
+                          provider silently suppresses the search
+                          this turn to preserve the user's tools.
+                          With no local tools, the bare
+                          google_search request works.
+       Gemini 1.5 / 1.0   `google_search` is the wrong wire shape
+                          (1.x used `google_search_retrieval`,
+                          which we don't emit). Bare google_search
+                          requests 400. Operators on 1.x should
+                          set google_search: false in config.json
+                          or move to a 2.x+ model. The catalog
+                          default is gemini-3.5-flash so the
+                          common path "just works".
+
+     On-by-default. Most operators picking Gemini want grounding;
+     leaving it off would hide a free capability. Operators who
+     embed a custom function tool named "google_search" (rare —
+     the name collides with the Anthropic/OpenAI patterns) will
+     hit a duplicate-name 400 on Gemini and should disable this. *)
+  TGeminiServerToolsConfig = record
+    GoogleSearch: Boolean;
+  end;
+
   TConfig = class
   public
     DefaultProvider: string;
@@ -300,6 +336,7 @@ type
     RenderMarkdown:    Boolean;
     AnthropicServerTools: TAnthropicServerToolsConfig;
     OpenAIServerTools:    TOpenAIServerToolsConfig;
+    GeminiServerTools:    TGeminiServerToolsConfig;
     constructor Create;
     function  ToJSON: string;
     procedure FromJSON(const S: string);
@@ -376,6 +413,11 @@ begin
     "for free" with no extra config step. Flip to False in
     config.json to suppress emitting the field entirely. }
   OpenAIServerTools.WebSearch           := True;
+  { Default-on for the same reason as OpenAI's web_search: most
+    Gemini operators want grounding and the catalog default model
+    (gemini-3.5-flash) accepts the field. See the type comment for
+    the model-compat caveat. }
+  GeminiServerTools.GoogleSearch        := True;
 end;
 
 function ProviderToJSON(const P: TProviderConfig): TJsonObject;
@@ -538,6 +580,13 @@ begin
     Tmp := TJsonObject.Create;
     Tmp.PutBool('web_search', OpenAIServerTools.WebSearch);
     Root.PutObject('openai_server_tools', Tmp);
+
+    { Same round-trip rule as the OpenAI block: the default is True,
+      so we must emit unconditionally — otherwise `google_search:
+      false` in config.json silently reverts on the next load. }
+    Tmp := TJsonObject.Create;
+    Tmp.PutBool('google_search', GeminiServerTools.GoogleSearch);
+    Root.PutObject('gemini_server_tools', Tmp);
 
     Arr := TJsonArray.Create;
     for i := 0 to High(Providers) do
@@ -712,6 +761,15 @@ begin
     try
       OpenAIServerTools.WebSearch :=
         Obj.GetBool('web_search', OpenAIServerTools.WebSearch);
+    finally
+      Obj.Free;
+    end;
+
+    Obj := Root.ChildObject('gemini_server_tools');
+    if Obj <> nil then
+    try
+      GeminiServerTools.GoogleSearch :=
+        Obj.GetBool('google_search', GeminiServerTools.GoogleSearch);
     finally
       Obj.Free;
     end;
