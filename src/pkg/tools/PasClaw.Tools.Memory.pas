@@ -44,7 +44,8 @@ uses
   PasClaw.Utils,
   PasClaw.Config,
   PasClaw.Logger,
-  PasClaw.Memory.Index;
+  PasClaw.Memory.Index,
+  PasClaw.Memory.Vector;
 
 function ParseStringArg(const ArgsJSON, Field: string; out V: string): Boolean;
 var
@@ -107,6 +108,7 @@ var
   Hits:  TMemoryHitArray;
   Lines: TStringList;
   Dir:   string;
+  Cfg:   TConfig;
 begin
   ErrMsg := '';
   Result := '';
@@ -125,13 +127,51 @@ begin
     Exit('(no memory directory yet — write to ' + JoinPath(Dir, 'MEMORY.md') +
          ' first)');
 
-  Idx := NewMemoryIndex;
+  { Backend selection — try the hybrid FTS+vector backend first when
+    the operator opted in via `pasclaw onboard` / `vector_search_enabled`
+    (default True). On any "not provisioned yet" failure (missing
+    sqlite-vec, missing ONNX Runtime, missing embedding model) Open()
+    returns False quietly and we fall through to NewMemoryIndex, which
+    is the FTS5-only path PasClaw has shipped since memory_search
+    landed. Operators on stock builds — no localvector provisioning yet
+    — get the same behaviour they did before: keyword search.
+
+    Re-opening per call (lazy) matches the existing FTS-only path. The
+    cost is one sqlite_open + schema-check round-trip per
+    memory_search; the backend keeps cached prepared statements only
+    for the lifetime of the IInterface, which is one call. If this
+    surfaces as a hot spot we can lift the index into the tool registry
+    and reuse it across calls.
+
+    Note the separate DB filenames: the vector backend writes to
+    `<dir>/.index.db.vec` so an operator who flips vector_search_enabled
+    on and off doesn't end up with cross-talk between the two schemas
+    sharing the same file. Both backends live alongside each other on
+    disk; only one is opened per call. }
+  Cfg := LoadConfig;
   try
+    if Cfg.VectorSearchEnabled then
+    begin
+      Idx := NewVectorMemoryIndex;
+      if not Idx.Open(IndexDbPath + '.vec') then
+        Idx := nil;  { releases the interface; falls through to FTS }
+    end;
+  finally
+    Cfg.Free;
+  end;
+
+  if Idx = nil then
+  begin
+    Idx := NewMemoryIndex;
     if not Idx.Open(IndexDbPath) then
     begin
+      Idx := nil;
       ErrMsg := 'memory index unavailable (libsqlite3 missing or unreadable)';
       Exit;
     end;
+  end;
+
+  try
     Idx.SyncDir(Dir);
     Hits := Idx.Search(Query, K);
   finally

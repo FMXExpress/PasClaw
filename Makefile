@@ -134,6 +134,21 @@ UNIT_DIRS = \
 	src/pkg/markdown \
 	src/cmd
 
+# localvector unit dirs — the FPC build links the IVectorStore + ONNX
+# embedder source straight into the binary. vendor/ is gitignored, so
+# `make get-localvector` must run before the first compile (the rule
+# below errors loudly if vendor/localvector is missing). The runtime
+# pieces (ONNX Runtime DLL, sqlite-vec extension, embedding model
+# weights) are NOT linked at build time — they're loaded dynamically
+# at runtime; PasClaw.Memory.Vector returns False from Open() when any
+# of them is missing and PasClaw.Tools.Memory falls back to the FTS-only
+# PasClaw.Memory.Index path. So a stock build with no provisioning still
+# runs; vector_search_enabled just doesn't kick in until phase 3
+# provisions the runtime.
+LOCALVECTOR_UNIT_DIRS = \
+	$(LOCALVECTOR_DIR) \
+	$(LOCALVECTOR_DIR)/src
+
 # Indy unit + include dirs (only used when building under FPC).
 INDY_UNIT_DIRS = \
 	$(INDY_DIR)/Lib/Core \
@@ -148,6 +163,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 	$(foreach d,$(UNIT_DIRS),-Fu$(d)) \
 	$(foreach d,$(INDY_UNIT_DIRS),-Fu$(d)) \
 	$(foreach d,$(INDY_INC_DIRS),-Fi$(d)) \
+	$(foreach d,$(LOCALVECTOR_UNIT_DIRS),-Fu$(d)) \
 	-Fu$(ICONVENC_DIR) \
 	-FE$(BUILDDIR) \
 	-FU$(BUILDDIR)/lib
@@ -166,12 +182,16 @@ webui-res: $(WEBUI_RES)
 $(WEBUI_RES): src/pkg/gateway/webui.rc src/pkg/gateway/webui.html
 	cd src/pkg/gateway && fpcres -of res -o webui.res webui.rc
 
-$(BIN): $(WEBUI_RES) | $(BUILDDIR) $(INDY_DIR)
+$(BIN): $(WEBUI_RES) | $(BUILDDIR) $(INDY_DIR) $(LOCALVECTOR_DIR)
 	@mkdir -p $(BUILDDIR)/lib
 	PASCLAW_VERSION='$(VERSION)' $(FPC) $(FPCFLAGS) src/pasclaw/PasClaw.dpr -o$(BIN)
 
 $(INDY_DIR):
 	@echo "Indy not found at $(INDY_DIR); run 'make get-indy' to clone it."
+	@false
+
+$(LOCALVECTOR_DIR):
+	@echo "localvector not found at $(LOCALVECTOR_DIR); run 'make get-localvector' to clone it."
 	@false
 
 get-indy:
