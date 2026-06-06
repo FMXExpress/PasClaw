@@ -44,7 +44,8 @@ uses
   PasClaw.Utils,
   PasClaw.Config,
   PasClaw.Logger,
-  PasClaw.Memory.Index;
+  PasClaw.Memory.Index,
+  PasClaw.Memory.Vector;
 
 function ParseStringArg(const ArgsJSON, Field: string; out V: string): Boolean;
 var
@@ -107,6 +108,7 @@ var
   Hits:  TMemoryHitArray;
   Lines: TStringList;
   Dir:   string;
+  Cfg:   TConfig;
 begin
   ErrMsg := '';
   Result := '';
@@ -125,13 +127,45 @@ begin
     Exit('(no memory directory yet — write to ' + JoinPath(Dir, 'MEMORY.md') +
          ' first)');
 
-  Idx := NewMemoryIndex;
+  { Backend selection — try the hybrid FTS+vector backend first when
+    the operator opted in via `pasclaw onboard` / `vector_search_enabled`
+    (default True). On any "not provisioned yet" failure (missing
+    sqlite-vec, missing ONNX Runtime, missing embedding model) Open()
+    returns False quietly and we fall through to NewMemoryIndex, which
+    is the FTS5-only path PasClaw has shipped since memory_search
+    landed. Operators on stock builds without the runtime artifacts
+    on disk get the same behaviour they did before: keyword search.
+
+    Separate DB filenames (.index.db vs .index.db.vec) so flipping
+    vector_search_enabled on/off doesn't cross-talk between the two
+    schemas in one file. Both backends live alongside each other on
+    disk; only one is opened per call. The vector DB file is created
+    on first SyncDir after provisioning lands; until then it doesn't
+    exist and isn't touched. }
+  Cfg := LoadConfig;
   try
+    if Cfg.VectorSearchEnabled then
+    begin
+      Idx := NewVectorMemoryIndex;
+      if not Idx.Open(IndexDbPath + '.vec') then
+        Idx := nil;  { releases the interface; falls through to FTS }
+    end;
+  finally
+    Cfg.Free;
+  end;
+
+  if Idx = nil then
+  begin
+    Idx := NewMemoryIndex;
     if not Idx.Open(IndexDbPath) then
     begin
+      Idx := nil;
       ErrMsg := 'memory index unavailable (libsqlite3 missing or unreadable)';
       Exit;
     end;
+  end;
+
+  try
     Idx.SyncDir(Dir);
     Hits := Idx.Search(Query, K);
   finally
