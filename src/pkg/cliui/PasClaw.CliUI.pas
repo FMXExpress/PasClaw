@@ -21,8 +21,13 @@ unit PasClaw.CliUI;
   use ASCII in their string literals; if more non-ASCII glyphs migrate
   into onboarding / status / vault / etc. output, add the directive
   there too. }
-{$CODEPAGE UTF8}
 {$IFDEF FPC}
+  { $CODEPAGE is an FPC-only directive — dcc64 errors out on it
+    (E1030 "Invalid compiler directive: 'CODEPAGE'"). Delphi reads
+    the source as UTF-8 via its own project-level source-codepage
+    setting (or a UTF-8 BOM at file start), so the FPC-only block
+    is sufficient. }
+  {$CODEPAGE UTF8}
   { Silence the AnsiString↔UnicodeString implicit-conversion warnings
     the directive introduces on PrintLn(Ansi.BoldBlue + L1 + ...) —
     Ansi.* fields are AnsiString CP_0, the L1 literal becomes
