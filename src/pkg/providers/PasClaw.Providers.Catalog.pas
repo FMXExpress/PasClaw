@@ -106,7 +106,7 @@ end;
   change required for OpenAI-compatible endpoints. }
 function BuildCatalog: TProviderSpecArray;
 begin
-  SetLength(Result, 19);
+  SetLength(Result, 21);
   Result[0]  := MkSpec('anthropic',  'Anthropic',
                        pfAnthropic,  'https://api.anthropic.com',
                        'claude-opus-4-7',
@@ -146,12 +146,12 @@ begin
                        pfOpenAI,     'https://api.groq.com/openai',
                        '',
                        MkAuth(asBearer),
-                       'Fast inference (Llama, Mixtral)');
+                       'Fast inference (Llama-4, Kimi K2, Qwen3, compound-beta)');
   Result[8]  := MkSpec('moonshot',   'Moonshot (Kimi)',
                        pfOpenAI,     'https://api.moonshot.cn',
-                       'moonshot-v1-32k',
+                       'kimi-k2',
                        MkAuth(asBearer),
-                       'Kimi models');
+                       'Kimi K2 / K2.5 / K2-Thinking');
   Result[9]  := MkSpec('minimax',    'MiniMax',
                        pfOpenAI,     'https://api.minimax.chat',
                        '',
@@ -161,7 +161,7 @@ begin
                        pfOpenAI,     'https://api.mistral.ai',
                        'mistral-large-latest',
                        MkAuth(asBearer),
-                       'Mistral Large, Codestral');
+                       'Mistral Large / Magistral / Devstral / Voxtral / Codestral');
   Result[11] := MkSpec('nvidia',     'NVIDIA NIM',
                        pfOpenAI,     'https://integrate.api.nvidia.com',
                        '',
@@ -201,7 +201,34 @@ begin
                        pfGemini,     'https://generativelanguage.googleapis.com',
                        'gemini-3.5-flash',
                        MkAuth(asHeader, 'x-goog-api-key'),
-                       'Gemini 1.5 / 2.0 (generateContent REST)');
+                       'Gemini 3.1 Pro / 3 Flash / 3.1 Flash Lite / 3.1 Flash Image');
+  (* xAI Grok exposes a strict OpenAI-compatible chat-completions API
+     at https://api.x.ai/v1/chat/completions, Bearer auth, identical
+     request/response shape. The pfOpenAI provider talks to it
+     unchanged. Default points at grok-4-fast — operator can override
+     to grok-3 / grok-code-fast-1 / grok-2 / etc. via config or the
+     onboarding prompt. *)
+  Result[19] := MkSpec('xai',        'xAI (Grok)',
+                       pfOpenAI,     'https://api.x.ai',
+                       'grok-4-fast',
+                       MkAuth(asBearer),
+                       'Grok 4 Fast / Grok 3 / Grok Code Fast 1');
+  (* Cohere v2 ships its chat API at https://api.cohere.com/v2/chat —
+     same Bearer auth as OpenAI but a different URL path
+     (/v2/chat vs /v1/chat/completions). The pfOpenAI provider
+     hard-codes the OpenAI path, so Cohere can't piggyback on it
+     without a path-override knob. Registered as pfPlaceholder so
+     the kind validates in config.json and shows up in
+     `pasclaw onboard`, with a clear "implementation not yet
+     bundled" error when actually selected. Future PR can add a
+     dedicated TCohereProvider that mirrors the v2 wire shape
+     (messages array, tool_calls similar to OpenAI, citations
+     surfaced on assistant turns). *)
+  Result[20] := MkSpec('cohere',     'Cohere',
+                       pfPlaceholder, 'https://api.cohere.com',
+                       'command-a-03-2025',
+                       MkAuth(asBearer),
+                       'Command A 03-2025 / Command A Reasoning / Command A Vision');
 end;
 
 function LookupProvider(const Kind: string; out Spec: TProviderSpec): Boolean;
