@@ -85,41 +85,71 @@ begin
 end;
 
 function RenderInline(const S: string): string;
-{ Apply per-line inline transforms in an order that avoids
-  collisions:
-    1. inline code first (so other markers inside stay verbatim)
-    2. bold (**) before italic (*) so we don't mis-pair the inner *
-    3. strikethrough (~~)
-    4. links [text](url) — show url after the styled text
-  Headings, bullets, blockquotes are handled at the line level by
-  RenderMarkdown before this is called. }
+{ Apply per-line inline transforms in an order that prevents nested
+  styling inside code spans (Codex P2 on PR #155).
+
+  Strategy: pull every backtick-delimited code span out FIRST, store
+  its already-rendered ANSI body in a parallel array, and leave a
+  placeholder `#1<index>#1` in the text. Subsequent transforms
+  (bold, italic, strikethrough, links) scan the placeholder-laden
+  string and can't see what was inside the code; once they're done,
+  we substitute each placeholder back with its stored body. The
+  delimiter is SOH (#1), which models virtually never emit and which
+  has no markdown meaning.
+
+  Pass order on the remaining text:
+    1. Bold (**) before italic (*) so the inner * isn't mis-paired.
+    2. Strikethrough (~~).
+    3. Links [text](url) — show URL after the styled text.
+  Headings, bullets, blockquotes are line-level — handled before
+  this is called. }
+const
+  PLACEHOLDER = #1;
 var
-  Idx, LParen, RParen, LBracket, RBracket: Integer;
-  Before, LinkText, Url, After: string;
+  CodeBodies: array of string;
+  Idx, BodyStart, EndIdx, LParen, RParen, LBracket, RBracket: Integer;
+  Before, Body, LinkText, Url, After, Tag: string;
+  i: Integer;
 begin
   Result := S;
 
-  { Inline code: `code` -> dim + reverse. Done first so other
-    markers inside backticks survive untouched. }
-  Result := ReplaceFenced(Result, '`', '`',
-                          Ansi.Dim + #27'[7m', #27'[27m' + Ansi.Reset);
+  { Pass 1: extract inline code into placeholders.
 
-  { Bold: **text** -> bold. Must precede italic. }
-  Result := ReplaceFenced(Result, '**', '**',
-                          Ansi.Bold, Ansi.Reset);
+    `code` -> #1<N>#1 in the string, and CodeBodies[N] holds the
+    already-styled "dim+reverse code reset" so later passes can't
+    walk into it. Empty body (` `) stays verbatim. }
+  SetLength(CodeBodies, 0);
+  Idx := 1;
+  while True do
+  begin
+    Idx := PosEx('`', Result, Idx);
+    if Idx <= 0 then Break;
+    BodyStart := Idx + 1;
+    EndIdx := PosEx('`', Result, BodyStart);
+    if EndIdx <= 0 then Break;
+    if EndIdx = BodyStart then
+    begin
+      Idx := EndIdx + 1;
+      Continue;
+    end;
+    Before := Copy(Result, 1, Idx - 1);
+    Body   := Copy(Result, BodyStart, EndIdx - BodyStart);
+    After  := Copy(Result, EndIdx + 1, MaxInt);
+    SetLength(CodeBodies, Length(CodeBodies) + 1);
+    CodeBodies[High(CodeBodies)] :=
+      Ansi.Dim + #27'[7m' + Body + #27'[27m' + Ansi.Reset;
+    Tag := PLACEHOLDER + IntToStr(High(CodeBodies)) + PLACEHOLDER;
+    Result := Before + Tag + After;
+    Idx := Length(Before) + Length(Tag) + 1;
+  end;
 
-  { Italic: *text* -> italic ANSI (3m). Skipped when the markers
-    are flanked by other word chars (e.g. snake_case_var) — that's
-    why we look for whitespace / start-of-string before the opener. }
-  Result := ReplaceFenced(Result, '*', '*',
-                          #27'[3m', #27'[23m');
+  { Pass 2: the rest. Placeholders are #1-delimited, contain no
+    markdown markers, and are invisible to these scans. }
+  Result := ReplaceFenced(Result, '**', '**', Ansi.Bold, Ansi.Reset);
+  Result := ReplaceFenced(Result, '*', '*', #27'[3m', #27'[23m');
+  Result := ReplaceFenced(Result, '~~', '~~', #27'[9m', #27'[29m');
 
-  { Strikethrough: ~~text~~ -> ANSI 9m. }
-  Result := ReplaceFenced(Result, '~~', '~~',
-                          #27'[9m', #27'[29m');
-
-  { Links: [text](url) -> underlined text + (url). Hand-rolled
-    because the pattern needs two adjacent markers. }
+  { Links: [text](url) -> underlined text + (url) in dim. }
   Idx := Pos('[', Result);
   while Idx > 0 do
   begin
@@ -147,6 +177,15 @@ begin
     Idx := Length(Before) + Length(LinkText) + Length(Url) + 16;
     if Idx > Length(Result) then Break;
     Idx := PosEx('[', Result, Idx);
+  end;
+
+  { Pass 3: substitute placeholders back with the stored code
+    bodies. Runs after every other transform so the styled code
+    text drops in untouched. }
+  for i := 0 to High(CodeBodies) do
+  begin
+    Tag := PLACEHOLDER + IntToStr(i) + PLACEHOLDER;
+    Result := StringReplace(Result, Tag, CodeBodies[i], []);
   end;
 end;
 

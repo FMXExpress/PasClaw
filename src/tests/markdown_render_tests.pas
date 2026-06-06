@@ -147,6 +147,54 @@ begin
     Fail('empty input returned non-empty', RenderMarkdown(''));
 end;
 
+procedure TestInlineCodeProtectsMarkdownMarkers;
+{ Codex P2 on PR #155: inline code that contains markdown-looking
+  text (`**kwargs**`, `*.pas`, `[x](y)`) must NOT have those markers
+  consumed by subsequent bold/italic/link transforms. The original
+  renderer ran bold/italic after wrapping code spans with ANSI
+  escapes, so the body chars were still visible to the later scans
+  and got eaten. The fix protects code bodies via #1-delimited
+  placeholders that subsequent transforms can't see into. }
+var
+  Got: string;
+begin
+  { **kwargs** literally inside code — must show as bold-marker
+    literals, NOT as the word "kwargs" rendered bold. }
+  Got := RenderMarkdown('use `**kwargs**` to splat');
+  AssertContains(Got, '**kwargs**',
+    '** inside `..` survives the bold transform');
+  AssertContains(Got, 'to splat',
+    'text after the code span preserved');
+
+  { *.pas — the asterisk inside the code span must not start an
+    italic. Before the fix, `*.pas` would get the * consumed and
+    the rest mangled. }
+  Got := RenderMarkdown('the `*.pas` files');
+  AssertContains(Got, '*.pas',
+    '* inside `..` survives the italic transform');
+
+  { [text](url) inside code — must not become a link. }
+  Got := RenderMarkdown('see `[x](y)` syntax');
+  AssertContains(Got, '[x](y)',
+    'link syntax inside `..` survives the link transform');
+
+  { Two adjacent code spans with markers in both — both must
+    survive intact. }
+  Got := RenderMarkdown('mix `**a**` and `**b**` here');
+  AssertContains(Got, '**a**', 'first code span markers survive');
+  AssertContains(Got, '**b**', 'second code span markers survive');
+
+  { Code followed by genuine bold — code body protected, the real
+    bold OUTSIDE the code still applies. }
+  Got := RenderMarkdown('`raw**stays**raw` then **really bold**');
+  AssertContains(Got, 'raw**stays**raw',
+    'code span body fully verbatim');
+  AssertContains(Got, Ansi.Bold,
+    'genuine bold outside still rendered');
+  AssertContains(Got, 'really bold',
+    'bold body outside preserved');
+end;
+
 procedure TestNoTrailingNewlineAdded;
 { Streaming chunks arrive without a final newline; if we add one
   the caller's next emission lands on the wrong line. }
@@ -171,5 +219,6 @@ begin
   TestBlockquote;
   TestEmpty;
   TestNoTrailingNewlineAdded;
+  TestInlineCodeProtectsMarkdownMarkers;
   WriteLn('markdown_render_tests: OK');
 end.
