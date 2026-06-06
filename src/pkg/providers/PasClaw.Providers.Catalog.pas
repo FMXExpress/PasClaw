@@ -147,11 +147,18 @@ begin
                        '',
                        MkAuth(asBearer),
                        'Fast inference (Llama-4, Kimi K2, Qwen3, compound-beta)');
+  (* Moonshot model defaults are time-sensitive — Codex P2 on PR #163
+     caught the previous catalog rolling forward to kimi-k2, which
+     Moonshot discontinued the entire k2 series on 2026-05-25
+     (per https://platform.kimi.ai/docs/models). The active line at
+     time of writing is k2.5 / k2.6 / k2-thinking; default to k2.6
+     which Moonshot lists as the current flagship. Refresh this row
+     when Moonshot rolls the next generation. *)
   Result[8]  := MkSpec('moonshot',   'Moonshot (Kimi)',
                        pfOpenAI,     'https://api.moonshot.cn',
-                       'kimi-k2',
+                       'kimi-k2.6',
                        MkAuth(asBearer),
-                       'Kimi K2 / K2.5 / K2-Thinking');
+                       'Kimi K2.6 / K2.5 / K2-Thinking');
   Result[9]  := MkSpec('minimax',    'MiniMax',
                        pfOpenAI,     'https://api.minimax.chat',
                        '',
@@ -187,17 +194,30 @@ begin
                        '',
                        MkAuth(asNone),
                        'Local models, self-hosted');
-  Result[16] := MkSpec('vllm',       'vLLM (local)',
+  (* LM Studio runs an OpenAI-compatible server on port 1234 by
+     default and emits the same /v1/chat/completions shape — same
+     pfOpenAI + asNone profile as Ollama. DefaultModel left empty
+     because the loaded model id depends on whatever the operator
+     downloaded inside the LM Studio UI; the onboarding prompt
+     surfaces the catalog default so blank picks up whichever
+     model is loaded at request time (LM Studio routes a missing
+     model id to the currently-loaded one). *)
+  Result[16] := MkSpec('lmstudio',   'LM Studio (local)',
+                       pfOpenAI,     'http://localhost:1234',
+                       '',
+                       MkAuth(asNone),
+                       'Local OpenAI-compatible server (default port 1234)');
+  Result[17] := MkSpec('vllm',       'vLLM (local)',
                        pfOpenAI,     'http://localhost:8000',
                        '',
                        MkAuth(asNone),
                        'OpenAI-compatible local deployment');
-  Result[17] := MkSpec('litellm',    'LiteLLM proxy',
+  Result[18] := MkSpec('litellm',    'LiteLLM proxy',
                        pfOpenAI,     '',
                        '',
                        MkAuth(asBearer),
                        'Proxy for 100+ providers (set api_base)');
-  Result[18] := MkSpec('gemini',     'Google Gemini',
+  Result[19] := MkSpec('gemini',     'Google Gemini',
                        pfGemini,     'https://generativelanguage.googleapis.com',
                        'gemini-3.5-flash',
                        MkAuth(asHeader, 'x-goog-api-key'),
@@ -208,27 +228,16 @@ begin
      unchanged. Default points at grok-4-fast — operator can override
      to grok-3 / grok-code-fast-1 / grok-2 / etc. via config or the
      onboarding prompt. *)
-  Result[19] := MkSpec('xai',        'xAI (Grok)',
+  Result[20] := MkSpec('xai',        'xAI (Grok)',
                        pfOpenAI,     'https://api.x.ai',
                        'grok-4-fast',
                        MkAuth(asBearer),
                        'Grok 4 Fast / Grok 3 / Grok Code Fast 1');
-  (* Cohere v2 ships its chat API at https://api.cohere.com/v2/chat —
-     same Bearer auth as OpenAI but a different URL path
-     (/v2/chat vs /v1/chat/completions). The pfOpenAI provider
-     hard-codes the OpenAI path, so Cohere can't piggyback on it
-     without a path-override knob. Registered as pfPlaceholder so
-     the kind validates in config.json and shows up in
-     `pasclaw onboard`, with a clear "implementation not yet
-     bundled" error when actually selected. Future PR can add a
-     dedicated TCohereProvider that mirrors the v2 wire shape
-     (messages array, tool_calls similar to OpenAI, citations
-     surfaced on assistant turns). *)
-  Result[20] := MkSpec('cohere',     'Cohere',
-                       pfPlaceholder, 'https://api.cohere.com',
-                       'command-a-03-2025',
-                       MkAuth(asBearer),
-                       'Command A 03-2025 / Command A Reasoning / Command A Vision');
+  (* Cohere intentionally not in this catalog: their chat API lives
+     at /v2/chat rather than /v1/chat/completions, and the pfOpenAI
+     provider hard-codes the OpenAI path. Lands when a TCohereProvider
+     gets written or when pfOpenAI grows a path-override knob; until
+     then the placeholder row was more confusing than helpful. *)
 end;
 
 function LookupProvider(const Kind: string; out Spec: TProviderSpec): Boolean;
