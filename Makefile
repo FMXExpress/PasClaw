@@ -79,9 +79,11 @@ INDY_REPO    ?= https://github.com/IndySockets/Indy.git
 # same way Indy is — clone-on-demand under vendor/ so the upstream
 # stays the source of truth and `git status` doesn't drown in vendored
 # diff noise. Pin via LOCALVECTOR_REPO=... LOCALVECTOR_REF=... env when
-# we need a specific revision.
+# we need a specific revision; an empty REF (the default) takes the
+# remote default branch HEAD.
 LOCALVECTOR_DIR  ?= vendor/localvector
 LOCALVECTOR_REPO ?= https://github.com/FMXExpress/localvector.git
+LOCALVECTOR_REF  ?=
 # iconvenc lives in fp-units-misc on Debian; FPC's default config picks it up
 # on most distros but not always.
 ICONVENC_DIR ?= $(FPC_UNITS_DIR)/iconvenc
@@ -186,11 +188,26 @@ get-indy:
 # (onnxruntime, sqlite-vec) and embedding model weights get fetched
 # by the embedder's own provisioning routines on first memory_search
 # call after the follow-up PR wires PasClaw.Memory.Vector up.
+#
+# When LOCALVECTOR_REF is empty (the default) we shallow-clone the
+# remote default-branch HEAD — fast and small. When REF is set we do
+# a full clone first, then `git -C ... checkout $(LOCALVECTOR_REF)`
+# so REF can be a branch, a tag, OR a commit SHA. `git clone --branch`
+# alone won't accept arbitrary SHAs, and `--depth 1` makes a follow-up
+# checkout fail for anything outside the latest depth-1 commit, so the
+# two-step is the only shape that handles all three forms without
+# silently ignoring the requested revision (Codex P2 on PR #164).
 get-localvector:
 	@if [ ! -d $(LOCALVECTOR_DIR) ]; then \
 	  mkdir -p $(dir $(LOCALVECTOR_DIR)); \
-	  echo "Cloning localvector into $(LOCALVECTOR_DIR)..."; \
-	  git clone --depth 1 $(LOCALVECTOR_REPO) $(LOCALVECTOR_DIR); \
+	  if [ -z "$(LOCALVECTOR_REF)" ]; then \
+	    echo "Cloning localvector into $(LOCALVECTOR_DIR) (HEAD)..."; \
+	    git clone --depth 1 $(LOCALVECTOR_REPO) $(LOCALVECTOR_DIR); \
+	  else \
+	    echo "Cloning localvector into $(LOCALVECTOR_DIR) @ $(LOCALVECTOR_REF)..."; \
+	    git clone $(LOCALVECTOR_REPO) $(LOCALVECTOR_DIR); \
+	    git -C $(LOCALVECTOR_DIR) checkout $(LOCALVECTOR_REF); \
+	  fi; \
 	else \
 	  echo "localvector already present at $(LOCALVECTOR_DIR)"; \
 	fi
