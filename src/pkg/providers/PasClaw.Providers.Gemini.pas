@@ -40,13 +40,24 @@ uses
   PasClaw.Providers.Intf;
 
 type
+  (* Opt-in toggles for Gemini-side server tools. Mirrors
+     PasClaw.Config.TGeminiServerToolsConfig — kept local to this
+     unit so the provider's tests can build the wire body without
+     importing the config unit (same shape Anthropic uses, see
+     TAnthropicServerTools). *)
+  TGeminiServerTools = record
+    GoogleSearch: Boolean;
+  end;
+
   TGeminiProvider = class(TInterfacedObject, ILLMProvider)
   private
     FAPIKey:       string;
     FAPIBase:      string;
     FDefaultModel: string;
+    FServerTools:  TGeminiServerTools;
   public
-    constructor Create(const APIKey, APIBase, DefaultModel: string);
+    constructor Create(const APIKey, APIBase, DefaultModel: string;
+                       const ServerTools: TGeminiServerTools);
     function Chat(const Messages: array of TMessage;
                   const Tools:    array of TToolDefinition;
                   const Model:    string;
@@ -63,16 +74,29 @@ type
     function SupportsStreaming: Boolean;
   end;
 
+{ Default-initialised TGeminiServerTools (everything off). Use in
+  tests / embedders that don't want server tools in the wire body. }
+function NoGeminiServerTools: TGeminiServerTools;
+
 { Exported for test fixtures — given a TLLMResponse-shaped input,
   returns the JSON body that would be POSTed to generateContent.
   Used by the Codex PR #116 review-fix test to assert SystemPrompt
   / in-history mrSystem dedup without spinning up a real HTTPS
   round-trip. Tools / ToolIds / ToolNames are normally constructed
-  inside the request flow; tests pass empty arrays. }
+  inside the request flow; tests pass empty arrays.
+
+  The 4-arg overload delegates to the 5-arg form with
+  NoGeminiServerTools — server tools off — so existing call sites
+  and tests that don't care about Google search stay untouched. }
 function BuildRequest(const Messages: array of TMessage;
                       const Tools:    array of TToolDefinition;
                       const Model:    string;
-                      const Options:  TChatOptions): string;
+                      const Options:  TChatOptions): string; overload;
+function BuildRequest(const Messages: array of TMessage;
+                      const Tools:    array of TToolDefinition;
+                      const Model:    string;
+                      const Options:  TChatOptions;
+                      const ServerTools: TGeminiServerTools): string; overload;
 
 (* Strip JSON-Schema fields Gemini's function-calling API doesn't
    accept (additionalProperties, $schema, $id, $ref, definitions,
@@ -92,7 +116,13 @@ uses
   PasClaw.Providers.HTTP,
   PasClaw.Logger;
 
-constructor TGeminiProvider.Create(const APIKey, APIBase, DefaultModel: string);
+function NoGeminiServerTools: TGeminiServerTools;
+begin
+  Result.GoogleSearch := False;
+end;
+
+constructor TGeminiProvider.Create(const APIKey, APIBase, DefaultModel: string;
+                                   const ServerTools: TGeminiServerTools);
 begin
   inherited Create;
   FAPIKey := APIKey;
@@ -100,12 +130,13 @@ begin
                    else FAPIBase := 'https://generativelanguage.googleapis.com';
   if DefaultModel <> '' then FDefaultModel := DefaultModel
                        else FDefaultModel := 'gemini-1.5-flash';
+  FServerTools := ServerTools;
 end;
 
 function TGeminiProvider.GetDefaultModel: string;     begin Result := FDefaultModel; end;
 function TGeminiProvider.GetName: string;             begin Result := 'gemini';      end;
 function TGeminiProvider.SupportsThinking: Boolean;   begin Result := False;         end;
-function TGeminiProvider.SupportsNativeSearch: Boolean; begin Result := False;       end;
+function TGeminiProvider.SupportsNativeSearch: Boolean; begin Result := FServerTools.GoogleSearch; end;
 function TGeminiProvider.SupportsStreaming: Boolean;  begin Result := False;         end;
 
 { Map TMsgRole to Gemini's content.role. Note tool/system are special
@@ -305,15 +336,28 @@ begin
   end;
 end;
 
+{ 4-arg overload — no server tools. Preserved so existing tests
+  (gemini_schema_strip_tests.pas + friends) and embedders that
+  predate the server-tool field keep compiling unchanged. }
+function BuildRequest(const Messages: array of TMessage;
+                      const Tools:    array of TToolDefinition;
+                      const Model:    string;
+                      const Options:  TChatOptions): string;
+begin
+  Result := BuildRequest(Messages, Tools, Model, Options, NoGeminiServerTools);
+end;
+
 { Builds the request body. Mirrors picoclaw's pkg/providers/httpapi
   gemini_provider.go buildRequestBody, trimmed to text + tool support. }
 function BuildRequest(const Messages: array of TMessage;
                       const Tools:    array of TToolDefinition;
                       const Model:    string;
-                      const Options:  TChatOptions): string;
+                      const Options:  TChatOptions;
+                      const ServerTools: TGeminiServerTools): string;
 var
   Root, Content, Part, ToolObj, FuncDecl, FuncCall, FuncResp,
-    FuncRespBody, EmptyObj, GenCfg, SysContent, SysPart, ToolsTop: TJsonObject;
+    FuncRespBody, EmptyObj, GenCfg, SysContent, SysPart,
+    GoogleSearchObj, GoogleSearchEntry: TJsonObject;
   Contents, Parts, ToolsArr, FuncDecls, SysParts: TJsonArray;
   i, j: Integer;
   Sys, ToolName, ArgsJSON: string;
@@ -471,32 +515,56 @@ begin
       Root.PutObject('systemInstruction', SysContent);
     end;
 
-    if Length(Tools) > 0 then
+    (* Build the tools[] array when EITHER caller tools or a server
+       tool is active. Each tool category is its own object inside
+       the array — `functionDeclarations: [...]` for our local
+       tools, `google_search: ` empty-object for Gemini's grounded
+       search. Both can coexist on Gemini 2.5+ / 3.x. On Gemini 1.5
+       the API returns 400 for `google_search`; operator's choice
+       via the config toggle. *)
+    if (Length(Tools) > 0) or ServerTools.GoogleSearch then
     begin
-      FuncDecls := TJsonArray.Create;
-      for i := 0 to High(Tools) do
-      begin
-        FuncDecl := TJsonObject.Create;
-        FuncDecl.PutStr('name', Tools[i].Name);
-        if Tools[i].Description <> '' then
-          FuncDecl.PutStr('description', Tools[i].Description);
-        if Tools[i].Schema <> '' then
-          { Strip JSON-Schema fields Gemini's function-calling API
-            doesn't accept (additionalProperties, $schema, etc.) —
-            see SanitizeSchemaForGemini for the full list and why
-            MCP / skill schemas trip into them. }
-          FuncDecl.PutRaw('parameters', SanitizeSchemaForGemini(Tools[i].Schema))
-        else
-        begin
-          EmptyObj := TJsonObject.Create;
-          FuncDecl.PutObject('parameters', EmptyObj);
-        end;
-        FuncDecls.AddObject(FuncDecl);
-      end;
-      ToolObj := TJsonObject.Create;
-      ToolObj.PutArray('functionDeclarations', FuncDecls);
       ToolsArr := TJsonArray.Create;
-      ToolsArr.AddObject(ToolObj);
+
+      if Length(Tools) > 0 then
+      begin
+        FuncDecls := TJsonArray.Create;
+        for i := 0 to High(Tools) do
+        begin
+          FuncDecl := TJsonObject.Create;
+          FuncDecl.PutStr('name', Tools[i].Name);
+          if Tools[i].Description <> '' then
+            FuncDecl.PutStr('description', Tools[i].Description);
+          if Tools[i].Schema <> '' then
+            { Strip JSON-Schema fields Gemini's function-calling API
+              doesn't accept (additionalProperties, $schema, etc.) —
+              see SanitizeSchemaForGemini for the full list and why
+              MCP / skill schemas trip into them. }
+            FuncDecl.PutRaw('parameters', SanitizeSchemaForGemini(Tools[i].Schema))
+          else
+          begin
+            EmptyObj := TJsonObject.Create;
+            FuncDecl.PutObject('parameters', EmptyObj);
+          end;
+          FuncDecls.AddObject(FuncDecl);
+        end;
+        ToolObj := TJsonObject.Create;
+        ToolObj.PutArray('functionDeclarations', FuncDecls);
+        ToolsArr.AddObject(ToolObj);
+      end;
+
+      if ServerTools.GoogleSearch then
+      begin
+        (* Wire shape: a tools-array entry whose only key is
+           "google_search" with an empty config object as its value.
+           The empty value opts into Gemini's default grounding
+           behaviour; extra keys here are rejected by the API. *)
+        GoogleSearchEntry := TJsonObject.Create;
+        GoogleSearchObj   := TJsonObject.Create;
+        GoogleSearchEntry.PutObject('google_search', GoogleSearchObj);
+        ToolsArr.AddObject(GoogleSearchEntry);
+      end;
+
       Root.PutArray('tools', ToolsArr);
     end;
 
@@ -660,7 +728,7 @@ var
 begin
   if Model <> '' then UseModel := Model else UseModel := FDefaultModel;
   URL  := FAPIBase + '/v1beta/models/' + UseModel + ':generateContent';
-  Body := BuildRequest(Messages, Tools, UseModel, Options);
+  Body := BuildRequest(Messages, Tools, UseModel, Options, FServerTools);
 
   SetLength(Headers, 1);
   Headers[0] := MakeHeader('x-goog-api-key', FAPIKey);

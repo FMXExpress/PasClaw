@@ -292,6 +292,85 @@ begin
     Fail('empty signature did not round-trip empty', Restored.ProviderSignature);
 end;
 
+procedure TestGoogleSearchEmittedWhenEnabled;
+(* ServerTools.GoogleSearch=True puts a tools[] entry whose key is
+   "google_search" with an empty-object value into the request body.
+   Coexists with the caller's functionDeclarations entry when local
+   tools are also registered. *)
+var
+  Msgs:  TMessageArray;
+  Tools: TToolDefinitionArray;
+  Opts:  TChatOptions;
+  ST:    TGeminiServerTools;
+  Body:  string;
+begin
+  SetLength(Msgs, 1);
+  Msgs[0] := MakeMessage(mrUser, 'what is the weather today');
+  SetLength(Tools, 0);
+  Opts := DefaultChatOptions;
+  ST.GoogleSearch := True;
+
+  Body := BuildRequest(Msgs, Tools, 'gemini-3.5-flash', Opts, ST);
+
+  AssertContains(Body, '"tools"',
+    'tools array emitted even when no local tools are registered');
+  AssertContains(Body, '"google_search"',
+    'google_search entry present when toggle is on');
+end;
+
+procedure TestGoogleSearchOmittedWhenDisabled;
+{ NoGeminiServerTools (or any record with GoogleSearch=False) means
+  no google_search entry, and with no local tools, no tools array
+  at all — Gemini 400s on an empty tools[]. }
+var
+  Msgs:  TMessageArray;
+  Tools: TToolDefinitionArray;
+  Opts:  TChatOptions;
+  Body:  string;
+begin
+  SetLength(Msgs, 1);
+  Msgs[0] := MakeMessage(mrUser, 'hello');
+  SetLength(Tools, 0);
+  Opts := DefaultChatOptions;
+
+  Body := BuildRequest(Msgs, Tools, 'gemini-3.5-flash', Opts,
+                       NoGeminiServerTools);
+
+  AssertMissing(Body, '"google_search"',
+    'google_search omitted when toggle is off');
+  AssertMissing(Body, '"tools"',
+    'no tools array at all when neither server nor local tools present');
+end;
+
+procedure TestGoogleSearchCoexistsWithFunctionDeclarations;
+{ Gemini 2.5+ / 3.x accept both entries in the same tools array.
+  Verify the wire body emits BOTH on the same request. }
+var
+  Msgs:  TMessageArray;
+  Tools: TToolDefinitionArray;
+  Opts:  TChatOptions;
+  ST:    TGeminiServerTools;
+  Body:  string;
+begin
+  SetLength(Msgs, 1);
+  Msgs[0] := MakeMessage(mrUser, 'list files then search');
+  SetLength(Tools, 1);
+  Tools[0].Name        := 'fs_list';
+  Tools[0].Description := 'list a directory';
+  Tools[0].Schema      := '{"type":"object","properties":{"path":{"type":"string"}}}';
+  Opts := DefaultChatOptions;
+  ST.GoogleSearch := True;
+
+  Body := BuildRequest(Msgs, Tools, 'gemini-3.5-flash', Opts, ST);
+
+  AssertContains(Body, '"functionDeclarations"',
+    'local tools still emitted under functionDeclarations');
+  AssertContains(Body, '"fs_list"',
+    'local tool name preserved');
+  AssertContains(Body, '"google_search"',
+    'google_search emitted alongside functionDeclarations');
+end;
+
 begin
   TestRejectedFieldsScrubbed;
   TestUserPropertyNamedAdditionalPropertiesSurvives;
@@ -300,5 +379,8 @@ begin
   TestNoSignatureWhenEmpty;
   TestSessionPersistenceRoundTrip;
   TestSessionPersistenceEmpty;
+  TestGoogleSearchEmittedWhenEnabled;
+  TestGoogleSearchOmittedWhenDisabled;
+  TestGoogleSearchCoexistsWithFunctionDeclarations;
   WriteLn('gemini_schema_strip_tests: OK');
 end.
