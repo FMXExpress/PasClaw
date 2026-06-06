@@ -23,11 +23,22 @@ uses
   cmem,
   {$ENDIF}{$ENDIF}
   {$IFNDEF FPC}
+  {$IFNDEF LINUX}
   FireDAC.Phys.SQLiteWrapper.Stat,  { Link sqlite3 statically into the exe so
                                       Delphi builds don't need to ship a
                                       sqlite3.dll alongside pasclaw.exe.
                                       Used by PasClaw.Memory.Index (FTS5).
-                                      FPC links libsqlite3 dynamically. }
+                                      FPC links libsqlite3 dynamically.
+
+                                      Excluded on Delphi's Linux64 target —
+                                      RAD Studio ships the static SQLite
+                                      wrapper for Windows / macOS / mobile
+                                      only; FireDAC on Linux supports just
+                                      the dynamic libsqlite3.so link path
+                                      and including the static unit there
+                                      breaks the compile.
+                                      Codex P1 on PR #135. }
+  {$ENDIF}
   {$ENDIF}
   SysUtils,
   PasClaw.CliUI,
