@@ -18,7 +18,7 @@ The main program lives at `src/pasclaw/PasClaw.dpr`. It initializes terminal col
 | `shell_exec` | `/bin/sh -c` (or `cmd.exe`), output capped at 1 MiB, denylist-gated |
 | `web_search` | DuckDuckGo / Brave / Tavily / SearXNG / Perplexity / Gemini-grounding — 6 providers |
 | `web_fetch` | HTTP GET → readable plain text (HTML stripped, entities decoded), SSRF-guarded |
-| `memory_search` | SQLite FTS5 BM25 over `workspace/memory/*.md` and `MEMORY.md` |
+| `memory_search` | SQLite FTS5 BM25 over `workspace/memory/*.md` and `MEMORY.md`; hybrid FTS + local-vector mode opt-in via `vector_search_enabled` (default yes; embedding model downloaded on first use after the runtime hookup PR lands) |
 | `vault_search` / `vault_get` | search + read pasclaw.dev Code Vault entries (Object Pascal samples + components); opt-in via `vault_tools_enabled` |
 | `skill_<name>` | Pascal-side tools registered from `kind: shell` / `kind: prompt` skills |
 | MCP-bridged | every tool a configured MCP server exports — see below |

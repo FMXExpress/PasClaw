@@ -325,6 +325,25 @@ type
        constrained shells), or where the operator wants the tracked
        web_fetch path with its size cap / save_to convenience. *)
     WebFetchEnabled:   Boolean;
+    (* On-by-default: when True, memory_search uses a hybrid keyword
+       (FTS5 BM25) + vector (sqlite-vec ANN) index over
+       workspace/memory/ files, fused via Reciprocal Rank Fusion.
+       Mirrors picoclaw/nanobot's hybrid memory store.
+
+       The vector half runs locally — an ONNX-Runtime'd embedding
+       model (e.g. all-MiniLM-L6-v2 / bge-small) embeds query text
+       and indexed chunks at write time. No outbound API calls;
+       embeddings never leave the host.
+
+       Provisioning is deferred until first use. Onboarding records
+       the operator's preference here; the runtime path (download
+       ONNX Runtime DLL, embedding model weights, sqlite-vec
+       extension) lives in PasClaw.Memory.Vector (follow-up PR).
+       When False, memory_search degrades to FTS5-only (the
+       current behaviour on main) — operators who don't want
+       300+MB of model weights on disk can flip this in
+       config.json or answer 'n' at onboarding. *)
+    VectorSearchEnabled: Boolean;
     (* Render markdown the model emits as ANSI-styled text in the
        terminal (PasClaw.Markdown.Render). On by default — terminal
        surfaces (pasclaw agent, pasclaw tui) call into it; serve /
@@ -401,6 +420,7 @@ begin
   VaultToolsEnabled    := False; { off by default; onboarding asks to opt in }
   WebFetchEnabled      := False; { off by default; the model uses shell+curl }
   RenderMarkdown       := True;  { on by default for terminal surfaces; cmd/serve flips off }
+  VectorSearchEnabled  := True;  { on by default; onboarding asks (default Y) — see TConfig comment }
   AnthropicServerTools.WebSearch        := False;
   AnthropicServerTools.WebSearchMaxUses := 0;
   AnthropicServerTools.WebFetch         := False;
@@ -559,6 +579,11 @@ begin
       and we round-trip correctly. }
     if not RenderMarkdown then
       Root.PutBool('render_markdown', False);
+    { Same round-trip rule as RenderMarkdown — default is True, only
+      emit on the explicit-off path so 'memory_search: false' sticks
+      across SaveConfig + LoadConfig. }
+    if not VectorSearchEnabled then
+      Root.PutBool('vector_search_enabled', False);
     if AnthropicServerTools.WebSearch
        or AnthropicServerTools.WebFetch
        or (AnthropicServerTools.WebSearchMaxUses > 0)
@@ -737,9 +762,10 @@ begin
       Arr.Free;
     end;
 
-    VaultToolsEnabled := Root.GetBool('vault_tools_enabled', VaultToolsEnabled);
-    WebFetchEnabled   := Root.GetBool('web_fetch_enabled',   WebFetchEnabled);
-    RenderMarkdown    := Root.GetBool('render_markdown',     RenderMarkdown);
+    VaultToolsEnabled   := Root.GetBool('vault_tools_enabled',   VaultToolsEnabled);
+    WebFetchEnabled     := Root.GetBool('web_fetch_enabled',     WebFetchEnabled);
+    RenderMarkdown      := Root.GetBool('render_markdown',       RenderMarkdown);
+    VectorSearchEnabled := Root.GetBool('vector_search_enabled', VectorSearchEnabled);
 
     Obj := Root.ChildObject('anthropic_server_tools');
     if Obj <> nil then
