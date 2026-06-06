@@ -387,7 +387,7 @@ function BuildRequest(const Messages: array of TMessage;
 var
   Root, Content, Part, ToolObj, FuncDecl, FuncCall, FuncResp,
     FuncRespBody, EmptyObj, GenCfg, SysContent, SysPart,
-    GoogleSearchObj, GoogleSearchEntry: TJsonObject;
+    GoogleSearchObj, GoogleSearchEntry, ToolCfg: TJsonObject;
   Contents, Parts, ToolsArr, FuncDecls, SysParts: TJsonArray;
   i, j: Integer;
   Sys, ToolName, ArgsJSON: string;
@@ -619,6 +619,23 @@ begin
       end;
 
       Root.PutArray('tools', ToolsArr);
+
+      (* On Gemini 3.x the combo functionDeclarations + google_search
+         additionally requires tool_config.include_server_side_tool_invocations
+         to be set, otherwise the API returns:
+
+           400: Please enable tool_config.include_server_side_tool_invocations
+                to use Built-in tools with Function calling.
+
+         Emit the field only when BOTH categories are on the wire —
+         it's a no-op (and a wire-noise warning on some endpoints)
+         when only one tool type is present. *)
+      if EmitGoogleSearch and (Length(Tools) > 0) then
+      begin
+        ToolCfg := TJsonObject.Create;
+        ToolCfg.PutBool('include_server_side_tool_invocations', True);
+        Root.PutObject('tool_config', ToolCfg);
+      end;
     end;
 
     if (Options.MaxTokens > 0) or (Options.Temperature > 0) then

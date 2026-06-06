@@ -340,6 +340,8 @@ begin
     'google_search omitted when toggle is off');
   AssertMissing(Body, '"tools"',
     'no tools array at all when neither server nor local tools present');
+  AssertMissing(Body, '"tool_config"',
+    'tool_config not emitted when there is no tool combo to gate');
 end;
 
 procedure TestGoogleSearchCoexistsWithFunctionDeclarations;
@@ -369,6 +371,13 @@ begin
     'local tool name preserved');
   AssertContains(Body, '"google_search"',
     'google_search emitted alongside functionDeclarations on 3.x');
+  (* The combo on 3.x additionally requires tool_config.include_server_side_tool_invocations
+     or the API returns 400: "Please enable tool_config.include_server_side_tool_invocations
+     to use Built-in tools with Function calling." *)
+  AssertContains(Body, '"tool_config"',
+    'tool_config block emitted when both tool categories present');
+  AssertContains(Body, '"include_server_side_tool_invocations"',
+    'include_server_side_tool_invocations field emitted for combo');
 end;
 
 procedure TestGoogleSearchSuppressedOnPreGemini3WithLocalTools;
