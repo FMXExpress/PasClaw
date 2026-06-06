@@ -87,6 +87,18 @@ begin
 end;
 
 procedure TestBulletList;
+{ Bullet glyph form depends on the compiler's `string` type — see
+  the GLYPH_* const block in PasClaw.Markdown.Render. On FPC the
+  renderer emits the raw UTF-8 bytes of U+2022; on Delphi it emits
+  the single UTF-16 code unit U+2022. Both are correct for their
+  output path; mismatching the literal here would fail the check
+  even though the runtime output is right. }
+const
+  {$IFDEF FPC}
+  BulletGlyph = #$E2#$80#$A2;
+  {$ELSE}
+  BulletGlyph = #$2022;
+  {$ENDIF}
 var
   Got: string;
 begin
@@ -97,7 +109,7 @@ begin
   AssertContains(Got, 'two',   'bullet 2 body preserved');
   AssertContains(Got, 'three', 'bullet 3 body preserved');
   AssertMissing(Got, '- one',  'bullet marker consumed');
-  AssertContains(Got, #$E2#$80#$A2, 'unicode bullet glyph emitted');
+  AssertContains(Got, BulletGlyph, 'unicode bullet glyph emitted');
 end;
 
 procedure TestFencedCode;
@@ -132,13 +144,20 @@ begin
 end;
 
 procedure TestBlockquote;
+{ Bar glyph: same compiler-split rationale as TestBulletList. }
+const
+  {$IFDEF FPC}
+  VBarGlyph = #$E2#$94#$82;
+  {$ELSE}
+  VBarGlyph = #$2502;
+  {$ENDIF}
 var
   Got: string;
 begin
   Got := RenderMarkdown('> a quoted line');
   AssertContains(Got, 'a quoted line', 'blockquote body preserved');
   AssertMissing(Got, '> a',            'leading > consumed');
-  AssertContains(Got, '│',             'blockquote bar emitted');
+  AssertContains(Got, VBarGlyph,       'blockquote bar emitted');
 end;
 
 procedure TestEmpty;

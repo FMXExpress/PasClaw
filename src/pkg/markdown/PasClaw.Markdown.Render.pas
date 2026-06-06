@@ -43,17 +43,36 @@ uses
   PasClaw.CliUI;
 
 const
-  { Glyphs as raw UTF-8 bytes so this unit compiles correctly on
-    both Delphi (which reads the .pas as system codepage unless
-    given a BOM) and FPC (where adding a BOM forces UnicodeString
-    literals and trips on AnsiString CP_UTF8 -> AnsiString CP_0
-    conversions through implicit casts, mapping U+2022 / U+2502 /
-    U+2500 to '?'). Hex byte constants are codepage-agnostic — the
-    compiler doesn't transcode them, the bytes go straight onto the
-    wire and an UTF-8-aware terminal renders them correctly. }
+  { Box-drawing / bullet glyphs encoded the way the active compiler's
+    `string` type wants them — different on FPC and Delphi, and you
+    can't paper over the difference with a shared literal.
+
+      FPC mode delphi: string = AnsiString, Char = AnsiChar. A
+      literal #$E2#$80#$A2 is three single-byte AnsiChars, i.e. the
+      raw UTF-8 byte sequence for U+2022. Write/WriteLn emit those
+      bytes verbatim to a UTF-8 terminal.
+
+      Delphi: string = UnicodeString, Char = WideChar. The same
+      literal #$E2#$80#$A2 is three UTF-16 code units U+00E2 /
+      U+0094 / U+0080 — `â` followed by two C1 control characters,
+      not the intended glyph. WriteConsoleW(PWideChar(S), Length(S))
+      ships exactly those three wide chars to the console, producing
+      mojibake. The Delphi-correct form is a single WideChar at the
+      Unicode codepoint, e.g. #$2022, which WriteConsoleW renders
+      directly and TEncoding.UTF8 encodes to the 3-byte UTF-8
+      sequence for redirected stdout.
+
+    Picking by compiler avoids both pitfalls and needs no codepage
+    directive or BOM. }
+  {$IFDEF FPC}
   GLYPH_BULLET  = #$E2#$80#$A2;                            { U+2022 BULLET         }
   GLYPH_VBAR    = #$E2#$94#$82;                            { U+2502 BOX VERTICAL   }
   GLYPH_HBAR    = #$E2#$94#$80;                            { U+2500 BOX HORIZONTAL }
+  {$ELSE}
+  GLYPH_BULLET  = #$2022;                                  { U+2022 BULLET         }
+  GLYPH_VBAR    = #$2502;                                  { U+2502 BOX VERTICAL   }
+  GLYPH_HBAR    = #$2500;                                  { U+2500 BOX HORIZONTAL }
+  {$ENDIF}
   GLYPH_DIVIDER = GLYPH_HBAR + GLYPH_HBAR +
                   GLYPH_HBAR + GLYPH_HBAR;                 { 4x ──── fence marker  }
 
