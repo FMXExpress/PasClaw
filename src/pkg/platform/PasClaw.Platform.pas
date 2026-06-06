@@ -14,9 +14,13 @@
                      much is currently in the pipe.
 
   Three implementations selected at compile time:
-    {$IFDEF FPC}                use fcl-process (works on every FPC target)
+    {$IFDEF FPC}                use fcl-process (works on every FPC target —
+                                Windows, Linux, macOS, BSD, ...)
     {$ELSE} {$IFDEF MSWINDOWS}  CreateProcess + CreatePipe + ReadFile/WriteFile
-    {$ELSE}                     Posix.Unistd pipe / fork / execvp / waitpid
+    {$ELSE}                     Posix.Unistd pipe / fork / execvp / waitpid.
+                                Covers every Delphi POSIX target: LINUX64,
+                                MACOS64 (Intel + ARM), and the mobile
+                                targets where fork is permitted.
 
   The interface is identical across all three so callers stay free of
   IFDEFs.
@@ -70,9 +74,18 @@ type
       The default (False) leaves stderr inheriting from the parent
       process so a long-lived child's log lines reach the user's
       terminal instead of polluting the JSON-RPC stream on stdout —
-      the contract MCP stdio servers expect. }
+      the contract MCP stdio servers expect.
+
+      WorkingDir, when non-empty, becomes the child's current working
+      directory. Set in the child only — the parent's cwd is never
+      touched. This matters because PasClaw's gateway may fan multiple
+      shell_exec calls out concurrently, and earlier code used a
+      parent-side ChDir + restore that raced under load. Implemented
+      as CreateProcessW's lpCurrentDirectory on Windows, chdir() in
+      the forked child on POSIX, and TProcess.CurrentDirectory on FPC. }
     function Spawn(const Cmd: string; Args: TStrings;
-                    MergeStderr: Boolean = False): Boolean;
+                    MergeStderr: Boolean = False;
+                    const WorkingDir: string = ''): Boolean;
 
     { Send Buf to child stdin. Returns the byte count written. }
     function WriteBytes(const Buf; Count: Integer): Integer;
@@ -110,7 +123,7 @@ uses
     Winapi.Windows
   {$ELSE}
     Posix.Base, Posix.Unistd, Posix.Stdlib, Posix.SysWait,
-    Posix.Fcntl, Posix.Signal, Posix.SysTypes, Posix.SysSelect
+    Posix.Signal, Posix.SysTypes, Posix.SysSelect
   {$ENDIF}{$ENDIF};
 
 {$IFDEF FPC}
@@ -133,7 +146,8 @@ begin
 end;
 
 function TStdioProcess.Spawn(const Cmd: string; Args: TStrings;
-                              MergeStderr: Boolean): Boolean;
+                              MergeStderr: Boolean;
+                              const WorkingDir: string): Boolean;
 var
   P: TInternalProcess;
   i: Integer;
@@ -142,6 +156,7 @@ begin
   P := TInternalProcess.Create(nil);
   P.Executable := Cmd;
   for i := 0 to Args.Count - 1 do P.Parameters.Add(Args[i]);
+  if WorkingDir <> '' then P.CurrentDirectory := WorkingDir;
   if MergeStderr then
     P.Options := [poUsePipes, poStderrToOutPut]
   else
@@ -292,13 +307,15 @@ begin
 end;
 
 function TStdioProcess.Spawn(const Cmd: string; Args: TStrings;
-                              MergeStderr: Boolean): Boolean;
+                              MergeStderr: Boolean;
+                              const WorkingDir: string): Boolean;
 var
   SA: TSecurityAttributes;
   SI: TStartupInfoW;
   PI: TProcessInformation;
   ChildStdinRead, ChildStdoutWrite: THandle;
-  CmdLine: string;
+  CmdLine, CurDirW: string;
+  CurDirPtr: PWideChar;
   i: Integer;
 begin
   if FStarted then Exit(False);
@@ -335,8 +352,19 @@ begin
   CmdLine := QuoteArg(Cmd);
   for i := 0 to Args.Count - 1 do CmdLine := CmdLine + ' ' + QuoteArg(Args[i]);
 
+  { Pass WorkingDir via lpCurrentDirectory so the child's cwd is set
+    by the kernel at CreateProcess time — no need for a parent-side
+    ChDir + restore, which would race under concurrent shell_exec. }
+  if WorkingDir <> '' then
+  begin
+    CurDirW := WorkingDir;
+    CurDirPtr := PWideChar(CurDirW);
+  end
+  else
+    CurDirPtr := nil;
+
   if not CreateProcessW(nil, PWideChar(CmdLine), nil, nil, True,
-                        CREATE_NO_WINDOW, nil, nil, SI, PI) then
+                        CREATE_NO_WINDOW, nil, CurDirPtr, SI, PI) then
   begin
     CloseHandle(FStdoutRead); CloseHandle(ChildStdoutWrite);
     CloseHandle(ChildStdinRead); CloseHandle(FStdinWrite);
@@ -425,34 +453,20 @@ var
   Total, N: Integer;
   Acc: TMemoryStream;
   Bytes: TBytes;
-  PrevDir: string;
-  Restored: Boolean;
 begin
   Result := -1;
   Output := '';
   P := TStdioProcess.Create;
   Args := TStringList.Create;
   Acc := TMemoryStream.Create;
-  Restored := False;
-  PrevDir := '';
   try
-    { TStdioProcess.Spawn does not accept a working directory; cmd.exe
-      inherits cwd from the parent process. Bind the parent cwd just
-      across the Spawn call. PasClaw's gateway / CLI tool path runs
-      one shell_exec at a time per request, so the race window between
-      ChDir and the child reading cwd is negligible — but if future
-      concurrent shell_exec calls land, this should move into
-      TStdioProcess.Spawn as a real CreateProcessW lpCurrentDirectory
-      argument. }
-    if WorkingDir <> '' then
-    begin
-      PrevDir := GetCurrentDir;
-      try ChDir(WorkingDir); Restored := True; except end;
-    end;
     Args.Add('/C'); Args.Add(Cmd);
-    if not P.Spawn('cmd.exe', Args, {MergeStderr=}True) then Exit;
+    { WorkingDir flows into CreateProcessW.lpCurrentDirectory inside
+      Spawn — no parent-side ChDir, so two RunOneShot calls firing in
+      parallel from the gateway can't trample each other's cwd. }
+    if not P.Spawn('cmd.exe', Args, {MergeStderr=}True, WorkingDir) then Exit;
     Total := 0;
-    while P.Running or True do
+    while True do
     begin
       N := P.ReadAvailable(Buf, SizeOf(Buf));
       if N > 0 then
@@ -474,8 +488,6 @@ begin
       Output := TEncoding.UTF8.GetString(Bytes);
     end;
   finally
-    if Restored and (PrevDir <> '') then
-      try ChDir(PrevDir); except end;
     Acc.Free;
     Args.Free;
     P.Free;
@@ -499,6 +511,8 @@ function pipe(var pipefds: TPipeFDs): Integer; cdecl;
   external libc name _PU + 'pipe';
 function execvp(const path: PAnsiChar; const argv: PPAnsiChar): Integer; cdecl;
   external libc name _PU + 'execvp';
+function chdir(const path: PAnsiChar): Integer; cdecl;
+  external libc name _PU + 'chdir';
 
 constructor TStdioProcess.Create;
 begin
@@ -517,21 +531,31 @@ begin
 end;
 
 function TStdioProcess.Spawn(const Cmd: string; Args: TStrings;
-                              MergeStderr: Boolean): Boolean;
+                              MergeStderr: Boolean;
+                              const WorkingDir: string): Boolean;
 var
   StdinPipe, StdoutPipe: TPipeFDs;
   Pid: pid_t;
   i: Integer;
   Argv: array of Pointer;
   ArgsI: array of RawByteString;
-  Path: AnsiString;
+  Path, WDPath: AnsiString;
 begin
   if FStarted then Exit(False);
   if pipe(StdinPipe)  <> 0 then Exit(False);
   if pipe(StdoutPipe) <> 0 then begin __close(StdinPipe[0]); __close(StdinPipe[1]); Exit(False); end;
 
   Pid := fork;
-  if Pid < 0 then Exit(False);
+  if Pid < 0 then
+  begin
+    { fork() failed — parent still owns both pipes' fds. Close them
+      before returning or we'd leak 4 fds per failed spawn (matters
+      under the gateway's burst-spawn pattern: a low ulimit can EMFILE
+      quickly). }
+    __close(StdinPipe[0]);  __close(StdinPipe[1]);
+    __close(StdoutPipe[0]); __close(StdoutPipe[1]);
+    Exit(False);
+  end;
 
   if Pid = 0 then
   begin
@@ -546,6 +570,18 @@ begin
       dup2(StdoutPipe[1], STDERR_FILENO);
     __close(StdinPipe[0]);  __close(StdinPipe[1]);
     __close(StdoutPipe[0]); __close(StdoutPipe[1]);
+
+    { Bind cwd in the child rather than parent-side ChDir + restore.
+      Safe for concurrent shell_exec because the parent's cwd is
+      untouched. chdir failure is non-fatal here — exec runs anyway
+      and either picks the wrong files (rare, since callers pass
+      absolute paths) or returns a non-zero status the parent will
+      surface. }
+    if WorkingDir <> '' then
+    begin
+      WDPath := UTF8Encode(WorkingDir);
+      chdir(PAnsiChar(WDPath));
+    end;
 
     Path := UTF8Encode(Cmd);
     SetLength(ArgsI, Args.Count);
@@ -643,26 +679,20 @@ var
   Total, N, Status: Integer;
   Acc: TMemoryStream;
   Bytes: TBytes;
-  PrevDir: string;
-  Restored: Boolean;
 begin
   Result := -1;
   Output := '';
   P := TStdioProcess.Create;
   Args := TStringList.Create;
   Acc := TMemoryStream.Create;
-  PrevDir := '';
-  Restored := False;
   try
-    if WorkingDir <> '' then
-    begin
-      PrevDir := GetCurrentDir;
-      try ChDir(WorkingDir); Restored := True; except end;
-    end;
     Args.Add('-c'); Args.Add(Cmd);
-    if not P.Spawn('/bin/sh', Args, {MergeStderr=}True) then Exit;
+    { WorkingDir flows into chdir() in the forked child inside Spawn —
+      no parent-side ChDir, so two RunOneShot calls firing in parallel
+      from the gateway can't trample each other's cwd. }
+    if not P.Spawn('/bin/sh', Args, {MergeStderr=}True, WorkingDir) then Exit;
     Total := 0;
-    while P.Running or True do
+    while True do
     begin
       N := P.ReadAvailable(Buf, SizeOf(Buf));
       if N > 0 then
@@ -683,8 +713,6 @@ begin
       Output := TEncoding.UTF8.GetString(Bytes);
     end;
   finally
-    if Restored and (PrevDir <> '') then
-      try ChDir(PrevDir); except end;
     Acc.Free;
     Args.Free;
     P.Free;
