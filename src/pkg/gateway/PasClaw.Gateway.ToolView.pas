@@ -30,9 +30,31 @@ interface
 const
   (* Glyphs mirror the agent CLI handlers (PasClaw.Cmd.Agent) and Claude
      Code's transcript style: a filled dot marks the call, a corner marks the
-     result line that sits under it. *)
-  TV_CALL_GLYPH   = '⏺';
-  TV_RESULT_GLYPH = '⎿';
+     result line that sits under it.
+
+     Encoded the way the active compiler's `string` type wants them, same
+     trick as PasClaw.Markdown.Render after PR #157. On FPC mode delphi
+     `string`=AnsiString, `Char`=AnsiChar (1 byte) — a literal '⏺' is a
+     3-byte UTF-8 sequence tagged with whichever codepage the source file
+     resolves to, and concatenating it with a CP_0-tagged variable can
+     drop it to '?' on a non-UTF-8 locale; raw `#$XX#$XX#$XX` byte
+     constants are codepage-agnostic. On Delphi `string`=UnicodeString,
+     `Char`=WideChar — the single WideChar form is the natural way to
+     name the codepoint and WriteConsoleW renders it directly.
+
+     Codepoints: U+23FA ⏺ BLACK CIRCLE FOR RECORD, U+23BF ⎿ LIGHT
+     LEFT TORTOISE SHELL BRACKET LOWER CORNER. *)
+  {$IFDEF FPC}
+  TV_CALL_GLYPH   = #$E2#$8F#$BA;
+  TV_RESULT_GLYPH = #$E2#$8E#$BF;
+  TV_ELLIPSIS     = #$E2#$80#$A6;        { U+2026 HORIZONTAL ELLIPSIS    }
+  TV_ERROR_GLYPH  = #$E2#$9C#$97;        { U+2717 BALLOT X               }
+  {$ELSE}
+  TV_CALL_GLYPH   = #$23FA;
+  TV_RESULT_GLYPH = #$23BF;
+  TV_ELLIPSIS     = #$2026;
+  TV_ERROR_GLYPH  = #$2717;
+  {$ENDIF}
 
 { One visible line describing a tool invocation, e.g.
     ⏺ fs_read(README.md)
@@ -89,7 +111,7 @@ end;
 function Ellipsize(const S: string; MaxLen: Integer): string;
 begin
   if Length(S) <= MaxLen then Result := S
-  else Result := Copy(S, 1, MaxLen) + '…';
+  else Result := Copy(S, 1, MaxLen) + TV_ELLIPSIS;
 end;
 
 function FirstLineOf(const S: string): string;
@@ -197,7 +219,7 @@ var
 begin
   if Err <> '' then
   begin
-    Result := '  ' + TV_RESULT_GLYPH + ' ✗ ' +
+    Result := '  ' + TV_RESULT_GLYPH + ' ' + TV_ERROR_GLYPH + ' ' +
               Ellipsize(CollapseWhitespace(Err), MaxResultWidth);
     Exit;
   end;
