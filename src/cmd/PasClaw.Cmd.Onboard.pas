@@ -183,6 +183,52 @@ begin
   end;
 end;
 
+procedure PromptVectorSearch(Cfg: TConfig);
+{ Opt-in toggle for hybrid FTS+vector memory_search. Default YES
+  because the hybrid index is what picoclaw / nanobot ship and it's
+  what memory_search "should" feel like. The vector half adds local
+  ANN search via sqlite-vec + an ONNX-runtime'd BERT embedder
+  (MiniLM / bge), fused with FTS5 BM25 through Reciprocal Rank
+  Fusion — same shape as picoclaw.
+
+  Honest disclosure: the runtime pieces (ONNX Runtime DLL, sqlite-vec
+  extension, model weights — together ~300-500MB) get downloaded on
+  first memory_search call AFTER the follow-up PR lands the
+  provisioning hooks. This pass only records the operator's
+  preference. Until then the flag is inert — memory_search keeps
+  using FTS5-only on every code path. Operators who said yes won't
+  see a download in this release and that's OK; the next pass picks
+  the flag up and does the right thing. }
+var
+  Choice: string;
+begin
+  PrintLn;
+  PrintLn(Ansi.Bold + 'Memory: hybrid FTS + vector search' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'Hybrid keyword (FTS5 BM25) + semantic (local embeddings, no API calls)' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'fused via Reciprocal Rank Fusion — matches picoclaw / nanobot memory_search.' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'A follow-up release downloads the embedding model (~300MB) on first use.' +
+    Ansi.Reset);
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Enable vector search for memory_search [Y/n]: ')));
+  if (Choice = '') or (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Cfg.VectorSearchEnabled := True;
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
+      ' vector search enabled (model download deferred until first memory_search)');
+  end
+  else
+  begin
+    Cfg.VectorSearchEnabled := False;
+    PrintLn('  ' + Ansi.Dim +
+      '(skipped — memory_search will use FTS5 keyword search only)' + Ansi.Reset);
+  end;
+end;
+
 procedure PromptMCPInstalls(Cfg: TConfig);
 var
   Entries: TMCPCatalogEntryArray;
@@ -341,6 +387,7 @@ begin
       env var is set). }
     PromptMCPInstalls(Cfg);
     PromptVaultTools(Cfg);
+    PromptVectorSearch(Cfg);
 
     SaveConfig(Cfg);
     PrintLn;

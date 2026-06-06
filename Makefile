@@ -74,6 +74,14 @@ BIN      ?= $(BUILDDIR)/pasclaw
 
 INDY_DIR     ?= vendor/Indy
 INDY_REPO    ?= https://github.com/IndySockets/Indy.git
+# localvector provides the hybrid FTS5 + sqlite-vec memory backend (and
+# the local ONNX embedder that feeds vectors into it). Vendored the
+# same way Indy is — clone-on-demand under vendor/ so the upstream
+# stays the source of truth and `git status` doesn't drown in vendored
+# diff noise. Pin via LOCALVECTOR_REPO=... LOCALVECTOR_REF=... env when
+# we need a specific revision.
+LOCALVECTOR_DIR  ?= vendor/localvector
+LOCALVECTOR_REPO ?= https://github.com/FMXExpress/localvector.git
 # iconvenc lives in fp-units-misc on Debian; FPC's default config picks it up
 # on most distros but not always.
 ICONVENC_DIR ?= $(FPC_UNITS_DIR)/iconvenc
@@ -144,7 +152,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip print-version get-indy webui-res
+.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip print-version get-indy get-localvector webui-res
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -171,6 +179,20 @@ get-indy:
 	  git clone --depth 1 $(INDY_REPO) $(INDY_DIR); \
 	else \
 	  echo "Indy already present at $(INDY_DIR)"; \
+	fi
+
+# localvector — hybrid FTS5 + sqlite-vec store + local ONNX BERT
+# embedder. Vendored on demand same way as Indy; the runtime DLLs
+# (onnxruntime, sqlite-vec) and embedding model weights get fetched
+# by the embedder's own provisioning routines on first memory_search
+# call after the follow-up PR wires PasClaw.Memory.Vector up.
+get-localvector:
+	@if [ ! -d $(LOCALVECTOR_DIR) ]; then \
+	  mkdir -p $(dir $(LOCALVECTOR_DIR)); \
+	  echo "Cloning localvector into $(LOCALVECTOR_DIR)..."; \
+	  git clone --depth 1 $(LOCALVECTOR_REPO) $(LOCALVECTOR_DIR); \
+	else \
+	  echo "localvector already present at $(LOCALVECTOR_DIR)"; \
 	fi
 
 $(BUILDDIR):
