@@ -21,6 +21,7 @@ program gemini_schema_strip_tests;
 
 uses
   SysUtils,
+  PasClaw.Providers.Types,
   PasClaw.Providers.Gemini;
 
 procedure Fail(const Msg, Body: string);
@@ -129,9 +130,89 @@ begin
          SanitizeSchemaForGemini('not json'));
 end;
 
+procedure TestThoughtSignatureRoundTrip;
+{ Gemini 3+ requires the assistant turn to carry the thoughtSignature
+  back on the part. Verify that when a TToolCall has ProviderSignature
+  set, BuildRequest emits "thoughtSignature": "<value>" as a sibling
+  of "functionCall" inside the part. Without this, Gemini 3 rejects
+  the follow-up with 400 "Function call is missing a thought_signature
+  in functionCall parts". }
+var
+  Msgs:  TMessageArray;
+  Tools: TToolDefinitionArray;
+  Opts:  TChatOptions;
+  Body:  string;
+begin
+  SetLength(Msgs, 3);
+  { user turn }
+  Msgs[0] := MakeMessage(mrUser, 'list pwd');
+  { assistant turn with a tool call carrying the signature }
+  Msgs[1].Role := mrAssistant;
+  Msgs[1].Content := '';
+  SetLength(Msgs[1].ToolCalls, 1);
+  Msgs[1].ToolCalls[0].Id   := 'gemini_call_fs_list_0';
+  Msgs[1].ToolCalls[0].Kind := 'function';
+  Msgs[1].ToolCalls[0].Func.Name      := 'fs_list';
+  Msgs[1].ToolCalls[0].Func.Arguments := '{"path":"."}';
+  Msgs[1].ToolCalls[0].ProviderSignature := 'SIG_AAA_BBB_OPAQUE_BLOB';
+  { tool result echoed back as a user/tool turn — Gemini path }
+  Msgs[2].Role       := mrTool;
+  Msgs[2].ToolCallId := 'gemini_call_fs_list_0';
+  Msgs[2].Content    := '[".", "..", "README.md"]';
+  Msgs[2].Name       := 'fs_list';
+
+  SetLength(Tools, 0);
+  Opts := DefaultChatOptions;
+  Body := BuildRequest(Msgs, Tools, 'gemini-3.5-flash', Opts);
+
+  { The signature must be on the wire body, verbatim. }
+  AssertContains(Body, '"thoughtSignature"',
+    'thoughtSignature key emitted on assistant turn');
+  AssertContains(Body, 'SIG_AAA_BBB_OPAQUE_BLOB',
+    'thoughtSignature value preserved verbatim');
+  AssertContains(Body, '"functionCall"',
+    'functionCall still emitted alongside thoughtSignature');
+  AssertContains(Body, '"fs_list"',
+    'function name preserved');
+end;
+
+procedure TestNoSignatureWhenEmpty;
+{ Gemini 2.x doesn't require thoughtSignature. When ProviderSignature
+  is empty (the common case for non-Gemini-3 paths), BuildRequest must
+  NOT emit an empty "thoughtSignature":"" field — that's invalid wire
+  shape. }
+var
+  Msgs:  TMessageArray;
+  Tools: TToolDefinitionArray;
+  Opts:  TChatOptions;
+  Body:  string;
+begin
+  SetLength(Msgs, 2);
+  Msgs[0] := MakeMessage(mrUser, 'hi');
+  Msgs[1].Role := mrAssistant;
+  Msgs[1].Content := '';
+  SetLength(Msgs[1].ToolCalls, 1);
+  Msgs[1].ToolCalls[0].Id   := 'gemini_call_x_0';
+  Msgs[1].ToolCalls[0].Kind := 'function';
+  Msgs[1].ToolCalls[0].Func.Name := 'x';
+  Msgs[1].ToolCalls[0].Func.Arguments := '{}';
+  Msgs[1].ToolCalls[0].ProviderSignature := '';   { Gemini 2 path }
+
+  SetLength(Tools, 0);
+  Opts := DefaultChatOptions;
+  Body := BuildRequest(Msgs, Tools, 'gemini-1.5-flash', Opts);
+
+  AssertMissing(Body, '"thoughtSignature"',
+    'no thoughtSignature key when ProviderSignature is empty');
+  AssertContains(Body, '"functionCall"',
+    'functionCall still emitted normally');
+end;
+
 begin
   TestRejectedFieldsScrubbed;
   TestUserPropertyNamedAdditionalPropertiesSurvives;
   TestEmptyAndMalformed;
+  TestThoughtSignatureRoundTrip;
+  TestNoSignatureWhenEmpty;
   WriteLn('gemini_schema_strip_tests: OK');
 end.
