@@ -101,7 +101,7 @@ implementation
 
 {$IFDEF FPC}
 uses
-  fpjson, jsonparser;
+  fpjson, jsonparser, jsonscanner;
 {$ELSE}
 uses
   System.JSON, System.JSON.Writers, System.JSON.Readers, System.JSON.Types;
@@ -163,15 +163,62 @@ begin
 end;
 
 class function TJsonObject.Parse(const S: string): TJsonObject;
+(* fpjson's scanner has two paths that mishandle non-ASCII when
+   DefaultSystemCodePage <> CP_UTF8:
+
+     Raw bytes  (jsonreader.pp:241)
+       tkString : if (joUTF8 in Options) and (DefaultSystemCodePage<>CP_UTF8) then
+                    StringValue(TJSONStringType(UTF8Decode(CurrentTokenString)))
+       — with joUTF8 the parsed token is re-encoded through the
+       system codepage; on a container locale with CP=0 that
+       clips every non-ASCII lead byte (¶ `C2 B6` → `B6`).
+
+     \uXXXX escapes  (jsonscanner.pp:270, :359 — Codex P2 on PR #161)
+       if (joUTF8 in Options) or (DefaultSystemCodePage=CP_UTF8) then
+         U:=Utf8Encode(WideString(WideChar(u1)))
+       else
+         U:=String(WideChar(u1));
+       — without joUTF8 the WideChar is cast through the system
+       codepage; on CP=0 that gives Latin-1 mapping (`é` → byte
+       `E9` instead of UTF-8 `C3 A9`) or `?` fallback (`中` →
+       `3F`). Producers that emit ASCII-safe JSON with `\u` escapes
+       for non-ASCII content (a common defensive default) would
+       lose their keys entirely on lookup.
+
+   Setting DefaultSystemCodePage = CP_UTF8 satisfies BOTH branches:
+   raw bytes take the unchanged-StringValue else branch (lossless),
+   and \u escapes take the Utf8Encode path (lossless). Restored on
+   exit. Concurrent Parse calls race only on the save/restore — they
+   all set the same value, so the race is benign; the window is the
+   parser pass itself, which is brief and CPU-bound. *)
 var
+  Stream: TStringStream;
+  Parser: TJSONParser;
   Data: TJSONData;
+  PrevCP: TSystemCodePage;
 begin
   Result := nil;
   if Trim(S) = '' then Exit;
+  Stream := TStringStream.Create(S);
   try
-    Data := GetJSON(S);
-  except
-    on E: Exception do raise EPasClawJSON.CreateFmt('JSON parse: %s', [E.Message]);
+    PrevCP := DefaultSystemCodePage;
+    if PrevCP <> CP_UTF8 then DefaultSystemCodePage := CP_UTF8;
+    try
+      try
+        Parser := TJSONParser.Create(Stream, [joUTF8]);
+        try
+          Data := Parser.Parse;
+        finally
+          Parser.Free;
+        end;
+      except
+        on E: Exception do raise EPasClawJSON.CreateFmt('JSON parse: %s', [E.Message]);
+      end;
+    finally
+      if PrevCP <> CP_UTF8 then DefaultSystemCodePage := PrevCP;
+    end;
+  finally
+    Stream.Free;
   end;
   if not (Data is fpjson.TJSONObject) then
   begin
@@ -341,15 +388,36 @@ begin
 end;
 
 class function TJsonArray.Parse(const S: string): TJsonArray;
+{ See TJsonObject.Parse for why we swap DefaultSystemCodePage to
+  CP_UTF8 around the parser run — same lossy-scanner interaction. }
 var
+  Stream: TStringStream;
+  Parser: TJSONParser;
   Data: TJSONData;
+  PrevCP: TSystemCodePage;
 begin
   Result := nil;
   if Trim(S) = '' then Exit;
+  Stream := TStringStream.Create(S);
   try
-    Data := GetJSON(S);
-  except
-    on E: Exception do raise EPasClawJSON.CreateFmt('JSON parse: %s', [E.Message]);
+    PrevCP := DefaultSystemCodePage;
+    if PrevCP <> CP_UTF8 then DefaultSystemCodePage := CP_UTF8;
+    try
+      try
+        Parser := TJSONParser.Create(Stream, [joUTF8]);
+        try
+          Data := Parser.Parse;
+        finally
+          Parser.Free;
+        end;
+      except
+        on E: Exception do raise EPasClawJSON.CreateFmt('JSON parse: %s', [E.Message]);
+      end;
+    finally
+      if PrevCP <> CP_UTF8 then DefaultSystemCodePage := PrevCP;
+    end;
+  finally
+    Stream.Free;
   end;
   if not (Data is fpjson.TJSONArray) then
   begin
