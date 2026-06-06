@@ -69,6 +69,15 @@ begin
 end;
 
 procedure TestArgTruncation;
+{ Glyph form depends on the compiler's `string` type — see TV_ELLIPSIS
+  in PasClaw.Gateway.ToolView. Use the same constant the renderer emits
+  so the assertion is codepage-tag-independent. }
+const
+  {$IFDEF FPC}
+  EllipsisGlyph = #$E2#$80#$A6;
+  {$ELSE}
+  EllipsisGlyph = #$2026;
+  {$ENDIF}
 var
   Big, Line: string;
   i: Integer;
@@ -76,7 +85,7 @@ begin
   Big := '';
   for i := 1 to 500 do Big := Big + 'x';
   Line := FormatToolCallLine('shell_exec', '{"command":"' + Big + '"}');
-  AssertContains(Line, '…', 'long argument is ellipsized');
+  AssertContains(Line, EllipsisGlyph, 'long argument is ellipsized');
   if Length(Line) > 220 then
     Fail('long argument not capped (len=' + IntToStr(Length(Line)) + ')');
 end;
@@ -97,9 +106,16 @@ begin
 end;
 
 procedure TestResultError;
+{ Same compiler-split rationale as TestArgTruncation. }
+const
+  {$IFDEF FPC}
+  ErrorGlyph = #$E2#$9C#$97;
+  {$ELSE}
+  ErrorGlyph = #$2717;
+  {$ENDIF}
 begin
   AssertContains(FormatToolResultLine('fs_read', '', 'file not found'),
-                 '✗', 'error result carries the failure glyph');
+                 ErrorGlyph, 'error result carries the failure glyph');
   AssertContains(FormatToolResultLine('fs_read', '', 'file not found'),
                  'file not found', 'error result carries the message');
 end;
