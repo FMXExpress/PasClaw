@@ -134,6 +134,96 @@ begin
   AssertBytesEqual(Got, 'a"b\c' + #10 + 'd', 'JSON escapes parsed correctly');
 end;
 
+procedure TestUnicodeEscapeBMP;
+(* Codex P2 on PR #161. Producers that emit ASCII-safe JSON spell
+   non-ASCII as \uXXXX escapes. The scanner's escape-handling branch
+   (jsonscanner.pp:270) goes through `String(WideChar(...))` when
+   joUTF8 is cleared AND DefaultSystemCodePage <> CP_UTF8 — which is
+   exactly our locale. Result: `é` decodes to byte `E9`
+   (Latin-1) instead of UTF-8 `C3 A9`, and `中` outright drops
+   to `?` because it's unmappable in CP_1252.
+
+   The fix is to swap DefaultSystemCodePage = CP_UTF8 across the
+   parse so the Utf8Encode branch is taken. *)
+var
+  J: TJsonObject;
+  Got: string;
+const
+  Want = 'caf' + #$C3#$A9;
+begin
+  J := TJsonObject.Parse('{"k":"café"}');
+  try
+    Got := J.GetStr('k', '');
+  finally
+    J.Free;
+  end;
+  AssertBytesEqual(Got, Want,
+    'BMP \uXXXX escape (é = é) decodes to UTF-8');
+end;
+
+procedure TestUnicodeEscapeBMP3Byte;
+{ 中 is U+4E2D (中) — outside Latin-1 so the lossy path falls
+  back to ASCII '?'. Catches the 3-byte UTF-8 escape regression. }
+var
+  J: TJsonObject;
+  Got: string;
+const
+  Want = #$E4#$B8#$AD;
+begin
+  J := TJsonObject.Parse('{"k":"中"}');
+  try
+    Got := J.GetStr('k', '');
+  finally
+    J.Free;
+  end;
+  AssertBytesEqual(Got, Want,
+    '3-byte \uXXXX escape (中 = 中) decodes to UTF-8');
+end;
+
+procedure TestUnicodeEscapeInKey;
+(* Codex P2 specifically called out object KEYS that arrive escaped.
+   The wrapper's Has / GetStr lookups compare against the caller's
+   UTF-8 form, so the stored key MUST be UTF-8 bytes too — anything
+   else makes valid JSON unfindable downstream. *)
+var
+  J: TJsonObject;
+  Got: string;
+const
+  UTF8Key = 'caf' + #$C3#$A9;
+begin
+  J := TJsonObject.Parse('{"café":"v"}');
+  try
+    if not J.Has(UTF8Key) then
+      Fail('Has() should find the escaped key under its UTF-8 spelling');
+    Got := J.GetStr(UTF8Key, '');
+  finally
+    J.Free;
+  end;
+  AssertBytesEqual(Got, 'v',
+    'GetStr finds escaped key via UTF-8 lookup');
+end;
+
+procedure TestSurrogatePairEscape;
+(* \uXXXX surrogate pairs cover U+10000 and above (emoji, supp planes).
+   The scanner's two-codepoint accumulator path (jsonscanner.pp:359)
+   shares the same lossy String() cast on non-UTF-8 locales; pin its
+   correct behaviour too. 😀 = U+1F600 (😀, UTF-8 F0 9F 98 80). *)
+var
+  J: TJsonObject;
+  Got: string;
+const
+  Want = #$F0#$9F#$98#$80;
+begin
+  J := TJsonObject.Parse('{"k":"😀"}');
+  try
+    Got := J.GetStr('k', '');
+  finally
+    J.Free;
+  end;
+  AssertBytesEqual(Got, Want,
+    'surrogate pair 😀 decodes to 4-byte UTF-8 (😀)');
+end;
+
 procedure TestArrayElementRoundTrip;
 { Symmetric coverage for TJsonArray.Parse + ItemStr — same code
   path on the lossy fpjson branch. }
@@ -159,6 +249,10 @@ begin
   TestEacuteRoundTrip;
   TestThreeByteRoundTrip;
   TestJsonEscapesPreserved;
+  TestUnicodeEscapeBMP;
+  TestUnicodeEscapeBMP3Byte;
+  TestUnicodeEscapeInKey;
+  TestSurrogatePairEscape;
   TestArrayElementRoundTrip;
   WriteLn('json_utf8_roundtrip_tests: OK');
 end.
