@@ -106,7 +106,7 @@ end;
   change required for OpenAI-compatible endpoints. }
 function BuildCatalog: TProviderSpecArray;
 begin
-  SetLength(Result, 19);
+  SetLength(Result, 21);
   Result[0]  := MkSpec('anthropic',  'Anthropic',
                        pfAnthropic,  'https://api.anthropic.com',
                        'claude-opus-4-7',
@@ -146,12 +146,19 @@ begin
                        pfOpenAI,     'https://api.groq.com/openai',
                        '',
                        MkAuth(asBearer),
-                       'Fast inference (Llama, Mixtral)');
+                       'Fast inference (Llama-4, Kimi K2, Qwen3, compound-beta)');
+  (* Moonshot model defaults are time-sensitive — Codex P2 on PR #163
+     caught the previous catalog rolling forward to kimi-k2, which
+     Moonshot discontinued the entire k2 series on 2026-05-25
+     (per https://platform.kimi.ai/docs/models). The active line at
+     time of writing is k2.5 / k2.6 / k2-thinking; default to k2.6
+     which Moonshot lists as the current flagship. Refresh this row
+     when Moonshot rolls the next generation. *)
   Result[8]  := MkSpec('moonshot',   'Moonshot (Kimi)',
                        pfOpenAI,     'https://api.moonshot.cn',
-                       'moonshot-v1-32k',
+                       'kimi-k2.6',
                        MkAuth(asBearer),
-                       'Kimi models');
+                       'Kimi K2.6 / K2.5 / K2-Thinking');
   Result[9]  := MkSpec('minimax',    'MiniMax',
                        pfOpenAI,     'https://api.minimax.chat',
                        '',
@@ -161,7 +168,7 @@ begin
                        pfOpenAI,     'https://api.mistral.ai',
                        'mistral-large-latest',
                        MkAuth(asBearer),
-                       'Mistral Large, Codestral');
+                       'Mistral Large / Magistral / Devstral / Voxtral / Codestral');
   Result[11] := MkSpec('nvidia',     'NVIDIA NIM',
                        pfOpenAI,     'https://integrate.api.nvidia.com',
                        '',
@@ -187,21 +194,50 @@ begin
                        '',
                        MkAuth(asNone),
                        'Local models, self-hosted');
-  Result[16] := MkSpec('vllm',       'vLLM (local)',
+  (* LM Studio runs an OpenAI-compatible server on port 1234 by
+     default and emits the same /v1/chat/completions shape — same
+     pfOpenAI + asNone profile as Ollama. DefaultModel left empty
+     because the loaded model id depends on whatever the operator
+     downloaded inside the LM Studio UI; the onboarding prompt
+     surfaces the catalog default so blank picks up whichever
+     model is loaded at request time (LM Studio routes a missing
+     model id to the currently-loaded one). *)
+  Result[16] := MkSpec('lmstudio',   'LM Studio (local)',
+                       pfOpenAI,     'http://localhost:1234',
+                       '',
+                       MkAuth(asNone),
+                       'Local OpenAI-compatible server (default port 1234)');
+  Result[17] := MkSpec('vllm',       'vLLM (local)',
                        pfOpenAI,     'http://localhost:8000',
                        '',
                        MkAuth(asNone),
                        'OpenAI-compatible local deployment');
-  Result[17] := MkSpec('litellm',    'LiteLLM proxy',
+  Result[18] := MkSpec('litellm',    'LiteLLM proxy',
                        pfOpenAI,     '',
                        '',
                        MkAuth(asBearer),
                        'Proxy for 100+ providers (set api_base)');
-  Result[18] := MkSpec('gemini',     'Google Gemini',
+  Result[19] := MkSpec('gemini',     'Google Gemini',
                        pfGemini,     'https://generativelanguage.googleapis.com',
                        'gemini-3.5-flash',
                        MkAuth(asHeader, 'x-goog-api-key'),
-                       'Gemini 1.5 / 2.0 (generateContent REST)');
+                       'Gemini 3.1 Pro / 3 Flash / 3.1 Flash Lite / 3.1 Flash Image');
+  (* xAI Grok exposes a strict OpenAI-compatible chat-completions API
+     at https://api.x.ai/v1/chat/completions, Bearer auth, identical
+     request/response shape. The pfOpenAI provider talks to it
+     unchanged. Default points at grok-4-fast — operator can override
+     to grok-3 / grok-code-fast-1 / grok-2 / etc. via config or the
+     onboarding prompt. *)
+  Result[20] := MkSpec('xai',        'xAI (Grok)',
+                       pfOpenAI,     'https://api.x.ai',
+                       'grok-4-fast',
+                       MkAuth(asBearer),
+                       'Grok 4 Fast / Grok 3 / Grok Code Fast 1');
+  (* Cohere intentionally not in this catalog: their chat API lives
+     at /v2/chat rather than /v1/chat/completions, and the pfOpenAI
+     provider hard-codes the OpenAI path. Lands when a TCohereProvider
+     gets written or when pfOpenAI grows a path-override knob; until
+     then the placeholder row was more confusing than helpful. *)
 end;
 
 function LookupProvider(const Kind: string; out Spec: TProviderSpec): Boolean;
