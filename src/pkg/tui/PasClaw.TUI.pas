@@ -118,6 +118,12 @@ type
        and Codex P2 on PR #118. *)
     PromptCacheEnabled: Boolean;
     PromptCacheTTL:     string;
+    (* When True, the assistant's reply is run through
+       PasClaw.Markdown.Render before being printed — headings and
+       fenced code blocks get ANSI styling, raw stars and hashes
+       disappear. On by default for the TUI; Cmd_TUI_Run forwards
+       Cfg.RenderMarkdown here. *)
+    RenderMarkdownEnabled: Boolean;
     (* Initial session to load. Empty = auto-allocate a fresh id (Delphi
        branch only; FPC branch ignores it). Cmd_TUI_Run forwards
        --session here, mirroring `pasclaw agent --session <id>`. *)
@@ -145,7 +151,8 @@ uses
   PasClaw.CliUI,
   PasClaw.Logger,
   PasClaw.Tools.ToolLoop,
-  PasClaw.Agent.Steering
+  PasClaw.Agent.Steering,
+  PasClaw.Markdown.Render
   {$IFNDEF FPC}
   , Math, StrUtils,
   MVCFramework.Console, LoggerPro.AnsiColors
@@ -226,6 +233,7 @@ begin
   FModel    := Model;
   PromptCacheEnabled := True;
   PromptCacheTTL     := '';
+  RenderMarkdownEnabled := True;
 end;
 
 function StatusLine(Provider: ILLMProvider; const Model: string;
@@ -1379,7 +1387,10 @@ begin
   W.Free;
   LogDebug('tool-loop end ok iters=%d', [Loop.Iterations]);
   Print(Ansi.BoldBlue + 'pasclaw' + Ansi.Reset + '  > ');
-  PrintLn(Loop.Content);
+  if Self.RenderMarkdownEnabled then
+    PrintLn(RenderMarkdown(Loop.Content))
+  else
+    PrintLn(Loop.Content);
   if Loop.LastResp.Usage.InputTokens + Loop.LastResp.Usage.OutputTokens > 0 then
     PrintLn(Ansi.Dim + '         ' +
       Format('[tokens in=%d out=%d, iters=%d]',

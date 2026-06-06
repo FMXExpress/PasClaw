@@ -121,6 +121,7 @@ UNIT_DIRS = \
 	src/pkg/platform \
 	src/pkg/hashline \
 	src/pkg/component \
+	src/pkg/markdown \
 	src/cmd
 
 # Indy unit + include dirs (only used when building under FPC).
@@ -244,4 +245,10 @@ test-gemini-schema-strip: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/gemini_schema_strip_tests.pas -o$(BUILDDIR)/gemini_schema_strip_tests
 	@$(BUILDDIR)/gemini_schema_strip_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip
+# Markdown -> ANSI terminal renderer.
+test-markdown-render: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/markdown_render_tests.pas -o$(BUILDDIR)/markdown_render_tests
+	@$(BUILDDIR)/markdown_render_tests
+
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render
