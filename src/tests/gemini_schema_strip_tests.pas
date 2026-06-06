@@ -343,8 +343,8 @@ begin
 end;
 
 procedure TestGoogleSearchCoexistsWithFunctionDeclarations;
-{ Gemini 2.5+ / 3.x accept both entries in the same tools array.
-  Verify the wire body emits BOTH on the same request. }
+{ Gemini 3.x accepts both entries in the same tools array. Verify
+  the wire body emits BOTH on a 3.x model. }
 var
   Msgs:  TMessageArray;
   Tools: TToolDefinitionArray;
@@ -368,7 +368,64 @@ begin
   AssertContains(Body, '"fs_list"',
     'local tool name preserved');
   AssertContains(Body, '"google_search"',
-    'google_search emitted alongside functionDeclarations');
+    'google_search emitted alongside functionDeclarations on 3.x');
+end;
+
+procedure TestGoogleSearchSuppressedOnPreGemini3WithLocalTools;
+(* Codex P2 on PR #158. Gemini 2.x rejects the
+   google_search + functionDeclarations combo with a 400. Default-on
+   would silently break every tool-using chat on a 2.x model.
+   BuildRequest must suppress google_search this turn and keep the
+   functionDeclarations the user explicitly registered. *)
+var
+  Msgs:  TMessageArray;
+  Tools: TToolDefinitionArray;
+  Opts:  TChatOptions;
+  ST:    TGeminiServerTools;
+  Body:  string;
+begin
+  SetLength(Msgs, 1);
+  Msgs[0] := MakeMessage(mrUser, 'list pwd');
+  SetLength(Tools, 1);
+  Tools[0].Name        := 'fs_list';
+  Tools[0].Description := 'list a directory';
+  Tools[0].Schema      := '{"type":"object","properties":{"path":{"type":"string"}}}';
+  Opts := DefaultChatOptions;
+  ST.GoogleSearch := True;
+
+  Body := BuildRequest(Msgs, Tools, 'gemini-2.5-flash', Opts, ST);
+
+  AssertContains(Body, '"functionDeclarations"',
+    'local tools kept on 2.x — they were the user''s explicit config');
+  AssertContains(Body, '"fs_list"',
+    'local tool name preserved on 2.x');
+  AssertMissing(Body, '"google_search"',
+    'google_search suppressed on 2.x when local tools present');
+end;
+
+procedure TestGoogleSearchEmittedOnPreGemini3WithoutLocalTools;
+(* The suppression only applies to the combo. Bare google_search on
+   2.x is a valid request — keep emitting it so default-on grounding
+   still works on 2.x for non-tool-loop conversations. *)
+var
+  Msgs:  TMessageArray;
+  Tools: TToolDefinitionArray;
+  Opts:  TChatOptions;
+  ST:    TGeminiServerTools;
+  Body:  string;
+begin
+  SetLength(Msgs, 1);
+  Msgs[0] := MakeMessage(mrUser, 'who won the world cup');
+  SetLength(Tools, 0);
+  Opts := DefaultChatOptions;
+  ST.GoogleSearch := True;
+
+  Body := BuildRequest(Msgs, Tools, 'gemini-2.5-flash', Opts, ST);
+
+  AssertContains(Body, '"google_search"',
+    'bare google_search still emitted on 2.x when no local tools present');
+  AssertMissing(Body, '"functionDeclarations"',
+    'no functionDeclarations entry when caller has no tools');
 end;
 
 begin
@@ -382,5 +439,7 @@ begin
   TestGoogleSearchEmittedWhenEnabled;
   TestGoogleSearchOmittedWhenDisabled;
   TestGoogleSearchCoexistsWithFunctionDeclarations;
+  TestGoogleSearchSuppressedOnPreGemini3WithLocalTools;
+  TestGoogleSearchEmittedOnPreGemini3WithoutLocalTools;
   WriteLn('gemini_schema_strip_tests: OK');
 end.

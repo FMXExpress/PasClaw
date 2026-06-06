@@ -249,17 +249,31 @@ type
   end;
 
   (* Gemini: opt-in server-side Google search grounding.
-     Emits a `{ "google_search": {} }` entry inside the top-level
-     `tools` array when GoogleSearch is True. Claude executes the
-     search server-side and returns grounded text; no local
-     web_search tool is invoked.
+     Emits a `google_search` entry inside the top-level `tools`
+     array with an empty config object as its value, when
+     GoogleSearch is True. Gemini executes the search server-side
+     and returns grounded text; no local web_search tool runs.
 
-     Wire shape requires Gemini 2.x or newer. Gemini 1.5 used a
-     different field (`google_search_retrieval`) we don't emit;
-     pointing the toggle at a 1.5 model yields a 400 from the
-     generateContent endpoint — flip to False in config.json or
-     pick a 2.x+ model. The catalog default is gemini-3.5-flash
-     so the common path "just works".
+     Model gating happens at the Gemini provider's BuildRequest
+     boundary (IsGemini3OrLater), so default-on is safe across
+     the model matrix:
+       Gemini 3.x+        always emitted; combines with
+                          functionDeclarations on the same request.
+       Gemini 2.x         emitted only when no local tools are
+                          registered. Mixing google_search with
+                          functionDeclarations 400s on 2.x; the
+                          provider silently suppresses the search
+                          this turn to preserve the user's tools.
+                          With no local tools, the bare
+                          google_search request works.
+       Gemini 1.5 / 1.0   `google_search` is the wrong wire shape
+                          (1.x used `google_search_retrieval`,
+                          which we don't emit). Bare google_search
+                          requests 400. Operators on 1.x should
+                          set google_search: false in config.json
+                          or move to a 2.x+ model. The catalog
+                          default is gemini-3.5-flash so the
+                          common path "just works".
 
      On-by-default. Most operators picking Gemini want grounding;
      leaving it off would hide a free capability. Operators who

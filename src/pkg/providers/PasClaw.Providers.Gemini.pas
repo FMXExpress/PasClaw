@@ -121,6 +121,36 @@ begin
   Result.GoogleSearch := False;
 end;
 
+function IsGemini3OrLater(const Model: string): Boolean;
+(* True when Model names a Gemini family at major version 3 or higher.
+   Gates the google_search + functionDeclarations combo: pre-Gemini-3
+   models (2.0, 2.5, 1.5 etc.) reject the request with 400 when both
+   are present in the same `tools[]` array — Google's current docs
+   route mixed-tool flows on those models through the Live API
+   instead. Gemini 3.x lifted the restriction and accepts both shapes
+   in a single REST call.
+
+   Detection is a deliberate cheap prefix check on the digit
+   immediately after `gemini-` — covers `gemini-3-flash`,
+   `gemini-3.5-flash`, `gemini-3.0-pro`, hypothetical `gemini-4-*`,
+   etc. Vendor-prefixed deployments (e.g. `vertex/gemini-3-...`) hit
+   the substring match. Anything that doesn't fit the pattern —
+   `gemini-pro`, `gemini-1.5-flash`, `gemini-2.5-flash`, an unknown
+   name — is conservatively treated as "cannot combine", so the
+   default-on toggle never lights a 400 on a user's tool-using
+   chat. *)
+var
+  M: string;
+  i: Integer;
+begin
+  M := LowerCase(Model);
+  i := Pos('gemini-', M);
+  if i = 0 then Exit(False);
+  i := i + Length('gemini-');
+  if i > Length(M) then Exit(False);
+  Result := (M[i] >= '3') and (M[i] <= '9');
+end;
+
 constructor TGeminiProvider.Create(const APIKey, APIBase, DefaultModel: string;
                                    const ServerTools: TGeminiServerTools);
 begin
@@ -363,6 +393,7 @@ var
   Sys, ToolName, ArgsJSON: string;
   ToolIds, ToolNames: TStringList;   { id -> name map, parallel arrays }
   Idx: Integer;
+  EmitGoogleSearch: Boolean;
 begin
   ToolIds   := TStringList.Create;
   ToolNames := TStringList.Create;
@@ -515,14 +546,36 @@ begin
       Root.PutObject('systemInstruction', SysContent);
     end;
 
-    (* Build the tools[] array when EITHER caller tools or a server
-       tool is active. Each tool category is its own object inside
-       the array — `functionDeclarations: [...]` for our local
-       tools, `google_search: ` empty-object for Gemini's grounded
-       search. Both can coexist on Gemini 2.5+ / 3.x. On Gemini 1.5
-       the API returns 400 for `google_search`; operator's choice
-       via the config toggle. *)
-    if (Length(Tools) > 0) or ServerTools.GoogleSearch then
+    (* Decide whether google_search will actually go on the wire.
+       The toggle says "the operator wants grounding when possible",
+       but Gemini's wire constraints narrow that:
+
+         - On Gemini 3.x+ we may combine google_search with
+           functionDeclarations in the same request — emit both.
+         - On Gemini 2.x and earlier, mixing the two in a single
+           REST call returns 400 ("Live API only" per Google's
+           function-calling docs). If the caller has registered
+           local tools, preserve those (they're the user's
+           explicit configuration) and suppress google_search this
+           turn — silently better than a 400 on every tool-using
+           chat. With no local tools the combo doesn't arise and
+           google_search ships.
+
+       Codex P2 on PR #158. *)
+    EmitGoogleSearch := ServerTools.GoogleSearch and
+                       ((Length(Tools) = 0) or IsGemini3OrLater(Model));
+    if ServerTools.GoogleSearch and (Length(Tools) > 0) and
+       (not IsGemini3OrLater(Model)) then
+      LogDebug('gemini: suppressing google_search for this turn — model %s ' +
+               'rejects google_search alongside functionDeclarations ' +
+               '(combo requires gemini-3.x or later)', [Model]);
+
+    (* Build the tools[] array when EITHER caller tools or the
+       effective google_search emission is active. Each tool
+       category is its own object inside the array —
+       `functionDeclarations: [...]` for our local tools,
+       `google_search: ` empty-object for Gemini's grounded search. *)
+    if (Length(Tools) > 0) or EmitGoogleSearch then
     begin
       ToolsArr := TJsonArray.Create;
 
@@ -553,7 +606,7 @@ begin
         ToolsArr.AddObject(ToolObj);
       end;
 
-      if ServerTools.GoogleSearch then
+      if EmitGoogleSearch then
       begin
         (* Wire shape: a tools-array entry whose only key is
            "google_search" with an empty config object as its value.
