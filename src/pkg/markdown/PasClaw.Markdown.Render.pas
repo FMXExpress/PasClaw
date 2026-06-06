@@ -42,6 +42,21 @@ uses
   SysUtils, StrUtils, Classes,
   PasClaw.CliUI;
 
+const
+  { Glyphs as raw UTF-8 bytes so this unit compiles correctly on
+    both Delphi (which reads the .pas as system codepage unless
+    given a BOM) and FPC (where adding a BOM forces UnicodeString
+    literals and trips on AnsiString CP_UTF8 -> AnsiString CP_0
+    conversions through implicit casts, mapping U+2022 / U+2502 /
+    U+2500 to '?'). Hex byte constants are codepage-agnostic — the
+    compiler doesn't transcode them, the bytes go straight onto the
+    wire and an UTF-8-aware terminal renders them correctly. }
+  GLYPH_BULLET  = #$E2#$80#$A2;                            { U+2022 BULLET         }
+  GLYPH_VBAR    = #$E2#$94#$82;                            { U+2502 BOX VERTICAL   }
+  GLYPH_HBAR    = #$E2#$94#$80;                            { U+2500 BOX HORIZONTAL }
+  GLYPH_DIVIDER = GLYPH_HBAR + GLYPH_HBAR +
+                  GLYPH_HBAR + GLYPH_HBAR;                 { 4x ──── fence marker  }
+
 function StartsWithStr(const S, Prefix: string): Boolean;
 begin
   Result := (Length(S) >= Length(Prefix)) and
@@ -224,7 +239,7 @@ begin
     else Break;
   end;
   Body := Copy(Trim_, 3, MaxInt);
-  Out_ := Indent + Ansi.BoldBlue + '•' + Ansi.Reset + ' ' +
+  Out_ := Indent + Ansi.BoldBlue + GLYPH_BULLET + Ansi.Reset + ' ' +
           RenderInline(Body);
   Result := True;
 end;
@@ -237,7 +252,7 @@ begin
   Result := False;
   if not StartsWithStr(Line, '> ') then Exit;
   Body := Copy(Line, 3, MaxInt);
-  Out_ := Ansi.Dim + '│ ' + Ansi.Reset +
+  Out_ := Ansi.Dim + GLYPH_VBAR + ' ' + Ansi.Reset +
           #27'[3m' + RenderInline(Body) + #27'[23m';
   Result := True;
 end;
@@ -272,7 +287,7 @@ begin
       if StartsWithStr(TrimLeft(Line), '```') then
       begin
         InCode := not InCode;
-        SB.AppendLine(Ansi.Dim + '────' + Ansi.Reset);
+        SB.AppendLine(Ansi.Dim + GLYPH_DIVIDER + Ansi.Reset);
         Continue;
       end;
       if InCode then
