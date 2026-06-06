@@ -26,6 +26,13 @@ type
     Id:       string;
     Kind:     string;    { "function" for now }
     Func:     TFunctionCall;
+    { Opaque provider-specific blob the assistant must echo back
+      when sending the matching function/tool result. Currently used
+      only by Gemini 3+ (the `thoughtSignature` on functionCall
+      parts) — Gemini 3 rejects the follow-up request with a 400
+      "Function call is missing a thought_signature" if it's
+      dropped. Empty for other providers and for Gemini 2.x. }
+    ProviderSignature: string;
   end;
 
   { A chat message. The Content field holds plain text; ToolCalls and

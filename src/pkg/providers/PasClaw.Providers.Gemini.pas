@@ -421,6 +421,15 @@ begin
           else
             FuncCall.PutRaw('args', ArgsJSON);
           Part.PutObject('functionCall', FuncCall);
+          { Gemini 3+: echo back the thoughtSignature on the part
+            (sibling of functionCall) verbatim. Mandatory on Gemini
+            3 function calling; absent / empty on Gemini 2.x and
+            earlier. Without this, Gemini 3 rejects the next request
+            with 400 "Function call is missing a thought_signature
+            in functionCall parts". }
+          if Messages[i].ToolCalls[j].ProviderSignature <> '' then
+            Part.PutStr('thoughtSignature',
+                        Messages[i].ToolCalls[j].ProviderSignature);
           Parts.AddObject(Part);
         end;
 
@@ -560,6 +569,14 @@ begin
                   try
                     TC.Kind      := 'function';
                     TC.Func.Name := FuncCall.GetStr('name', '');
+                    { Gemini 3+: thoughtSignature is a sibling of
+                      functionCall on the part. Must be echoed back
+                      verbatim when we send the matching
+                      functionResponse, or the next request 400s
+                      with "Function call is missing a
+                      thought_signature". Empty for Gemini 2.x where
+                      it's not required. }
+                    TC.ProviderSignature := Part.GetStr('thoughtSignature', '');
                     { Gemini's functionCall has name + args but no
                       OpenAI-style id. The tool loop later records this
                       id on the mrTool result, and BuildRequest above
