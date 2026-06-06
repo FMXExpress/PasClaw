@@ -289,6 +289,15 @@ type
        constrained shells), or where the operator wants the tracked
        web_fetch path with its size cap / save_to convenience. *)
     WebFetchEnabled:   Boolean;
+    (* Render markdown the model emits as ANSI-styled text in the
+       terminal (PasClaw.Markdown.Render). On by default — terminal
+       surfaces (pasclaw agent, pasclaw tui) call into it; serve /
+       gateway leave it off because they return JSON to clients
+       where ANSI escapes would be wrong. Flip in config.json or
+       via --no-render-markdown on the agent command. picoclaw
+       doesn't render markdown at all and emits raw stars / hashes;
+       nanobot gets it for free via Python's rich library. *)
+    RenderMarkdown:    Boolean;
     AnthropicServerTools: TAnthropicServerToolsConfig;
     OpenAIServerTools:    TOpenAIServerToolsConfig;
     constructor Create;
@@ -354,6 +363,7 @@ begin
   PromptCache.TTL      := '';    { default 5m via empty }
   VaultToolsEnabled    := False; { off by default; onboarding asks to opt in }
   WebFetchEnabled      := False; { off by default; the model uses shell+curl }
+  RenderMarkdown       := True;  { on by default for terminal surfaces; cmd/serve flips off }
   AnthropicServerTools.WebSearch        := False;
   AnthropicServerTools.WebSearchMaxUses := 0;
   AnthropicServerTools.WebFetch         := False;
@@ -502,6 +512,11 @@ begin
       Root.PutBool('vault_tools_enabled', True);
     if WebFetchEnabled then
       Root.PutBool('web_fetch_enabled', True);
+    { RenderMarkdown defaults to True; emit only when operator
+      explicitly disabled it so they can flip it back via config.json
+      and we round-trip correctly. }
+    if not RenderMarkdown then
+      Root.PutBool('render_markdown', False);
     if AnthropicServerTools.WebSearch
        or AnthropicServerTools.WebFetch
        or (AnthropicServerTools.WebSearchMaxUses > 0)
@@ -675,6 +690,7 @@ begin
 
     VaultToolsEnabled := Root.GetBool('vault_tools_enabled', VaultToolsEnabled);
     WebFetchEnabled   := Root.GetBool('web_fetch_enabled',   WebFetchEnabled);
+    RenderMarkdown    := Root.GetBool('render_markdown',     RenderMarkdown);
 
     Obj := Root.ChildObject('anthropic_server_tools');
     if Obj <> nil then

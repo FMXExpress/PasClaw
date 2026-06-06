@@ -46,7 +46,8 @@ uses
   PasClaw.Session.Store,
   PasClaw.Tools.Sandbox,
   PasClaw.Identity,
-  PasClaw.Agent.Steering;
+  PasClaw.Agent.Steering,
+  PasClaw.Markdown.Render;
 
 type
   TAgentArgs = record
@@ -290,6 +291,17 @@ begin
     Result := U.InputTokens;
 end;
 
+function MaybeRender(const Cfg: TConfig; const S: string): string; inline;
+{ Wraps the LLM's output in PasClaw.Markdown.Render when the
+  operator hasn't turned it off (Cfg.RenderMarkdown, default True).
+  Markdown rendering targets terminal surfaces — pasclaw agent and
+  pasclaw tui — and is opt-out for operators who pipe the output
+  through other tools that want the raw markdown. }
+begin
+  if Cfg.RenderMarkdown then Result := RenderMarkdown(S)
+  else                       Result := S;
+end;
+
 procedure RunSingleTurn(const Cfg: TConfig; const A: TAgentArgs; const Prompt: string);
 var
   Provider: ILLMProvider;
@@ -335,7 +347,7 @@ begin
 
     PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ' (' + Provider.GetName + '/' + Model + '):');
     if RunToolLoop(LoopCfg, Msgs, Loop) then
-      PrintLn(Loop.Content)
+      PrintLn(MaybeRender(Cfg, Loop.Content))
     else
       PrintLn('(loop failed)');
     if Loop.TotalUsage.InputTokens + Loop.TotalUsage.OutputTokens > 0 then
@@ -631,7 +643,7 @@ begin
       if RunToolLoop(LoopCfg, Msgs, Loop) then
       begin
         PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ' (' + Provider.GetName + '/' + Model + '):');
-        PrintLn(Loop.Content);
+        PrintLn(MaybeRender(Cfg, Loop.Content));
         if Loop.TotalUsage.InputTokens + Loop.TotalUsage.OutputTokens > 0 then
         begin
           { Surface aggregate usage across every provider call in the

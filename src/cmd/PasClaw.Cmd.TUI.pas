@@ -113,6 +113,7 @@ begin
     TUIInst.PromptCacheTTL     := Cfg.PromptCache.TTL;
     TUIInst.SessionId          := A.Session;
     TUIInst.ThemeName          := A.Theme;
+    TUIInst.RenderMarkdownEnabled := Cfg.RenderMarkdown;
     try
       TUIInst.Run;
     finally
