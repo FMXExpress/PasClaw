@@ -163,15 +163,54 @@ begin
 end;
 
 class function TJsonObject.Parse(const S: string): TJsonObject;
+(* Bypass fpjson's GetJSON wrapper and drive TJSONParser directly
+   with EMPTY options — specifically, NO `joUTF8` flag. That looks
+   counter-intuitive (PasClaw is a UTF-8 codebase end-to-end) but
+   it's the only way to keep non-ASCII bytes intact under FPC 3.2.
+
+   What goes wrong with the default GetJSON path: jsonreader.pp
+   has the branch
+
+     tkString : if (joUTF8 in Options) and (DefaultSystemCodePage<>CP_UTF8) then
+                  StringValue(TJSONStringType(UTF8Decode(CurrentTokenString)))
+
+   On a container with DefaultSystemCodePage=0 the `<>CP_UTF8`
+   guard is true, and the UTF8Decode + cast round-trip silently
+   re-encodes the parsed token through the system codepage. The
+   AnsiString result tag ends up at whatever CP_ACP resolves to,
+   and any codepoint that CP can't represent gets clipped to a
+   single byte (or replaced with `?` on a strict-ASCII fallback).
+   `¶` (UTF-8 `C2 B6`) arrives here as a single `B6`; `é`
+   (`C3 A9`) as `A9`. Wire-visible mojibake downstream — the
+   exact symptom toolview_tests.TestEditHashlineCall surfaces.
+
+   Without `joUTF8`, the scanner does a plain `Move` of the raw
+   bytes into the token string (jsonscanner.pp:405) and skips the
+   round-trip. The token AnsiString carries the original UTF-8
+   bytes, AsString returns them unchanged, and PasClaw — which
+   already treats every string at every boundary as UTF-8 — sees
+   the wire bytes it actually parsed. *)
 var
+  Stream: TStringStream;
+  Parser: TJSONParser;
   Data: TJSONData;
 begin
   Result := nil;
   if Trim(S) = '' then Exit;
+  Stream := TStringStream.Create(S);
   try
-    Data := GetJSON(S);
-  except
-    on E: Exception do raise EPasClawJSON.CreateFmt('JSON parse: %s', [E.Message]);
+    try
+      Parser := TJSONParser.Create(Stream, []);
+      try
+        Data := Parser.Parse;
+      finally
+        Parser.Free;
+      end;
+    except
+      on E: Exception do raise EPasClawJSON.CreateFmt('JSON parse: %s', [E.Message]);
+    end;
+  finally
+    Stream.Free;
   end;
   if not (Data is fpjson.TJSONObject) then
   begin
@@ -341,15 +380,30 @@ begin
 end;
 
 class function TJsonArray.Parse(const S: string): TJsonArray;
+{ See TJsonObject.Parse for why we drive TJSONParser directly with
+  empty options — the same joUTF8 + DefaultSystemCodePage interaction
+  applies to root-level arrays. }
 var
+  Stream: TStringStream;
+  Parser: TJSONParser;
   Data: TJSONData;
 begin
   Result := nil;
   if Trim(S) = '' then Exit;
+  Stream := TStringStream.Create(S);
   try
-    Data := GetJSON(S);
-  except
-    on E: Exception do raise EPasClawJSON.CreateFmt('JSON parse: %s', [E.Message]);
+    try
+      Parser := TJSONParser.Create(Stream, []);
+      try
+        Data := Parser.Parse;
+      finally
+        Parser.Free;
+      end;
+    except
+      on E: Exception do raise EPasClawJSON.CreateFmt('JSON parse: %s', [E.Message]);
+    end;
+  finally
+    Stream.Free;
   end;
   if not (Data is fpjson.TJSONArray) then
   begin
