@@ -70,7 +70,7 @@
         <Manifest_File>None</Manifest_File>
         <DCC_UsePackage>$(DCC_UsePackage)</DCC_UsePackage>
         <!-- Every src/pkg/* directory + src/cmd, relative to src/pasclaw/ -->
-        <DCC_UnitSearchPath>..\cmd;..\pkg\cliui;..\pkg\utils;..\pkg\logger;..\pkg\config;..\pkg\json;..\pkg\providers;..\pkg\tokenizer;..\pkg\tools;..\pkg\mcp;..\pkg\gateway;..\pkg\channels;..\pkg\crypto;..\pkg\net;..\pkg\search;..\pkg\cron;..\pkg\skills;..\pkg\session;..\pkg\identity;..\pkg\agent;..\pkg\memory;..\pkg\updater;..\pkg\membench;..\pkg\tui;..\pkg\platform;..\pkg\hashline;..\pkg\component;..\pkg\vendor\dmvcframework;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+        <DCC_UnitSearchPath>..\cmd;..\pkg\cliui;..\pkg\utils;..\pkg\logger;..\pkg\config;..\pkg\json;..\pkg\providers;..\pkg\tokenizer;..\pkg\tools;..\pkg\mcp;..\pkg\gateway;..\pkg\channels;..\pkg\crypto;..\pkg\net;..\pkg\search;..\pkg\cron;..\pkg\skills;..\pkg\session;..\pkg\identity;..\pkg\agent;..\pkg\memory;..\pkg\updater;..\pkg\membench;..\pkg\tui;..\pkg\platform;..\pkg\hashline;..\pkg\component;..\pkg\markdown;..\pkg\vendor\dmvcframework;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
         <!--
           DCC_Namespace lets dcc32/dcc64 resolve bare unit names ("SysUtils",
           "Classes", "Windows") back to their fully qualified modern names
@@ -285,6 +285,9 @@
         <!-- pkg/agent (TPasClawAgent component lives here; PasClaw.Component is a back-compat shim) -->
         <DCCReference Include="..\pkg\agent\PasClaw.Agent.pas"/>
         <DCCReference Include="..\pkg\component\PasClaw.Component.pas"/>
+
+        <!-- pkg/markdown (markdown -> ANSI terminal renderer) -->
+        <DCCReference Include="..\pkg\markdown\PasClaw.Markdown.Render.pas"/>
 
         <!-- pkg/vendor/dmvcframework (Apache-2.0, Delphi-only) -->
         <DCCReference Include="..\pkg\vendor\dmvcframework\LoggerPro.AnsiColors.pas"/>
