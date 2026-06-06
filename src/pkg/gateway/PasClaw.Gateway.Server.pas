@@ -1779,7 +1779,8 @@ begin
     Result := Result + Alphabet[1 + Random(Length(Alphabet))];
 end;
 
-function FunctionCallItemJSON(const ItemId, CallId, Name, ArgsJSON, Status: string): string;
+function FunctionCallItemJSON(const ItemId, CallId, Name, ArgsJSON, Status,
+                              Signature: string): string;
 { One ResponseOutputItem of type function_call, serialized to a JSON
   string so the SSE event helpers can paste it verbatim into their
   payloads. The Responses API schema uses two ids:
@@ -1796,7 +1797,15 @@ function FunctionCallItemJSON(const ItemId, CallId, Name, ArgsJSON, Status: stri
 
   The arguments field is a *string* (raw JSON), not a JSON object.
   That matches OpenAI's schema and means a model that emits args
-  with escaped quotes round-trips correctly. }
+  with escaped quotes round-trips correctly.
+
+  Signature: provider-specific opaque blob the gateway must echo
+  back on the next turn (Gemini 3+'s thoughtSignature). Emitted as a
+  custom "provider_signature" extension; the OpenAI Responses spec
+  permits unknown fields, and PasClaw's own Codex client knows to
+  echo this back on the function_call_output input item. Empty
+  string -> field omitted so stock /v1/responses traffic stays clean.
+  Codex P1 on PR #154. }
 var
   Obj: TJsonObject;
 begin
@@ -1808,6 +1817,8 @@ begin
     Obj.PutStr('call_id',   CallId);
     Obj.PutStr('name',      Name);
     Obj.PutStr('arguments', ArgsJSON);
+    if Signature <> '' then
+      Obj.PutStr('provider_signature', Signature);
     Result := Obj.ToJSON;
   finally
     Obj.Free;
@@ -1913,7 +1924,8 @@ begin
     OutputArr.AddRaw(FunctionCallItemJSON(ItemId, CallId,
                                            ToolCalls[i].Func.Name,
                                            ToolCalls[i].Func.Arguments,
-                                           'completed'));
+                                           'completed',
+                                           ToolCalls[i].ProviderSignature));
   end;
   Result.PutArray('output', OutputArr);
 
@@ -2270,10 +2282,12 @@ begin
 
       FcEmptyJSON     := FunctionCallItemJSON(FcItemId, FcCallId,
                                               ToolCalls[TcIdx].Func.Name,
-                                              '', 'in_progress');
+                                              '', 'in_progress',
+                                              ToolCalls[TcIdx].ProviderSignature);
       FcCompletedJSON := FunctionCallItemJSON(FcItemId, FcCallId,
                                               ToolCalls[TcIdx].Func.Name,
-                                              FcArgs, 'completed');
+                                              FcArgs, 'completed',
+                                              ToolCalls[TcIdx].ProviderSignature);
 
       EmitResponsesEvent(Streamer, 'response.output_item.added',
         ResItemAddedEvt(Seq, NextOutputIdx, FcEmptyJSON)); Inc(Seq);
@@ -2540,10 +2554,12 @@ begin
 
         FcEmptyJSON     := FunctionCallItemJSON(FcItemId, FcCallId,
                                                 Resp.ToolCalls[i].Func.Name,
-                                                '', 'in_progress');
+                                                '', 'in_progress',
+                                                Resp.ToolCalls[i].ProviderSignature);
         FcCompletedJSON := FunctionCallItemJSON(FcItemId, FcCallId,
                                                 Resp.ToolCalls[i].Func.Name,
-                                                FcArgs, 'completed');
+                                                FcArgs, 'completed',
+                                                Resp.ToolCalls[i].ProviderSignature);
 
         EmitResponsesEvent(State.Streamer, 'response.output_item.added',
           ResItemAddedEvt(State.Seq, State.NextOutputIdx, FcEmptyJSON)); Inc(State.Seq);
@@ -2639,7 +2655,8 @@ var
     Inc(MsgCount);
   end;
 
-  procedure AppendAssistantToolCall(const CallId, Name, ArgumentsJSON: string);
+  procedure AppendAssistantToolCall(const CallId, Name, ArgumentsJSON,
+                                    Signature: string);
   { Codex (and any Responses-API client doing multi-turn tool use)
     sends previous-turn function_call items as separate input items
     with no parent message. The Chat-Completions-style providers we
@@ -2651,7 +2668,14 @@ var
     rejects request shapes where a tool_use block appears in a turn
     whose preceding turn already produced tool_use blocks without
     intervening tool_result blocks. Matching with the corresponding
-    function_call_output is still by call_id regardless of grouping. }
+    function_call_output is still by call_id regardless of grouping.
+
+    Signature: the provider_signature extension we emit when shipping
+    function_call items downstream. Codex (or any PasClaw-aware
+    client) echoes it back on the input function_call item so this
+    side can stuff it back onto the TToolCall — required for Gemini
+    3+ thoughtSignature round-trips through /v1/responses. Codex P1
+    on PR #154. }
   var
     Tc: TToolCall;
     Last: Integer;
@@ -2660,6 +2684,7 @@ var
     Tc.Kind := 'function';
     Tc.Func.Name      := Name;
     Tc.Func.Arguments := ArgumentsJSON;
+    Tc.ProviderSignature := Signature;
 
     if (MsgCount > 0)
        and (Msgs[MsgCount - 1].Role = mrAssistant)
@@ -2838,7 +2863,8 @@ begin
             AppendAssistantToolCall(
               InputObj.GetStr('call_id', InputObj.GetStr('id', '')),
               InputObj.GetStr('name',      ''),
-              InputObj.GetStr('arguments', '{}'));
+              InputObj.GetStr('arguments', '{}'),
+              InputObj.GetStr('provider_signature', ''));
           end
           else if ItemType = 'function_call_output' then
           begin

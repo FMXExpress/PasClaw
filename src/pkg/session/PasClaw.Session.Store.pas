@@ -45,7 +45,8 @@ interface
 
 uses
   SysUtils, Classes,
-  PasClaw.Providers.Types;
+  PasClaw.Providers.Types,
+  PasClaw.JSON;
 
 type
   TSessionMeta = record
@@ -99,13 +100,18 @@ function SessionPath(const Id: string): string;
 function ListSessions: TSessionMetaArray;
 function DeleteSession(const Id: string): Boolean;
 
+(* Exposed for tests: TToolCall <-> JSON conversion used by TSession.
+   Round-trip preserves Id, Kind, Func.Name, Func.Arguments, and
+   (when non-empty) Gemini 3+'s ProviderSignature. *)
+function ToolCallToJSON(const TC: TToolCall): TJsonObject;
+procedure ToolCallFromJSON(const Obj: TJsonObject; out TC: TToolCall);
+
 implementation
 
 uses
   DateUtils,
   PasClaw.Config,
   PasClaw.Utils,
-  PasClaw.JSON,
   PasClaw.Logger;
 
 function NowUnix: Int64;
@@ -183,6 +189,14 @@ begin
   Func.PutStr('name',      TC.Func.Name);
   Func.PutStr('arguments', TC.Func.Arguments);
   Result.PutObject('function', Func);
+  { Persist Gemini 3+'s thoughtSignature so a session saved mid-loop
+    survives /quit + resume. Without this the resumed assistant turn
+    drops the signature and Gemini's next request 400s with
+    "Function call is missing a thought_signature". Omitted from
+    JSON when empty — that's the common case (other providers / older
+    Gemini) and keeps stock session files tidy. Codex P2 on PR #154. }
+  if TC.ProviderSignature <> '' then
+    Result.PutStr('provider_signature', TC.ProviderSignature);
 end;
 
 procedure ToolCallFromJSON(const Obj: TJsonObject; out TC: TToolCall);
@@ -191,6 +205,7 @@ var
 begin
   TC.Id   := Obj.GetStr('id',   '');
   TC.Kind := Obj.GetStr('type', 'function');
+  TC.ProviderSignature := Obj.GetStr('provider_signature', '');
   TC.Func.Name      := '';
   TC.Func.Arguments := '';
   Func := Obj.ChildObject('function');

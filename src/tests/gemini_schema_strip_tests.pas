@@ -22,7 +22,9 @@ program gemini_schema_strip_tests;
 uses
   SysUtils,
   PasClaw.Providers.Types,
-  PasClaw.Providers.Gemini;
+  PasClaw.Providers.Gemini,
+  PasClaw.Session.Store,
+  PasClaw.JSON;
 
 procedure Fail(const Msg, Body: string);
 begin
@@ -208,11 +210,95 @@ begin
     'functionCall still emitted normally');
 end;
 
+procedure TestSessionPersistenceRoundTrip;
+{ Codex P2 on PR #154: a session saved mid-Gemini-3-tool-loop must
+  keep the thoughtSignature on disk, otherwise resume drops it and
+  the next provider request 400s. Round-trip a TToolCall through
+  ToolCallToJSON / ToolCallFromJSON and assert ProviderSignature
+  survives. }
+var
+  TC, Restored: TToolCall;
+  Obj, Reparsed: TJsonObject;
+  Body: string;
+begin
+  TC.Id   := 'gemini_call_fs_list_0';
+  TC.Kind := 'function';
+  TC.Func.Name      := 'fs_list';
+  TC.Func.Arguments := '{"path":"."}';
+  TC.ProviderSignature := 'SIG_PERSIST_THIS_BLOB';
+
+  Obj := ToolCallToJSON(TC);
+  try
+    Body := Obj.ToJSON;
+    AssertContains(Body, '"provider_signature"',
+      'session writer emits provider_signature key');
+    AssertContains(Body, 'SIG_PERSIST_THIS_BLOB',
+      'session writer preserves the blob verbatim');
+  finally
+    Obj.Free;
+  end;
+
+  Reparsed := TJsonObject.Parse(Body);
+  if Reparsed = nil then
+    Fail('reparse of session JSON failed', Body);
+  try
+    ToolCallFromJSON(Reparsed, Restored);
+  finally
+    Reparsed.Free;
+  end;
+
+  if Restored.ProviderSignature <> TC.ProviderSignature then
+    Fail('session reader did NOT restore ProviderSignature',
+         'got "' + Restored.ProviderSignature +
+         '", want "' + TC.ProviderSignature + '"');
+  if Restored.Id <> TC.Id then
+    Fail('Id did not round-trip', Restored.Id);
+  if Restored.Func.Name <> TC.Func.Name then
+    Fail('Func.Name did not round-trip', Restored.Func.Name);
+end;
+
+procedure TestSessionPersistenceEmpty;
+{ Empty ProviderSignature must NOT add an empty key to the session
+  file — keeps stock session JSON tidy for non-Gemini-3 sessions
+  (the common case) and round-trips back to empty. }
+var
+  TC, Restored: TToolCall;
+  Obj, Reparsed: TJsonObject;
+  Body: string;
+begin
+  TC.Id   := 'call_x';
+  TC.Kind := 'function';
+  TC.Func.Name      := 'x';
+  TC.Func.Arguments := '{}';
+  TC.ProviderSignature := '';
+
+  Obj := ToolCallToJSON(TC);
+  try
+    Body := Obj.ToJSON;
+    AssertMissing(Body, 'provider_signature',
+      'empty ProviderSignature omitted from session JSON');
+  finally
+    Obj.Free;
+  end;
+
+  Reparsed := TJsonObject.Parse(Body);
+  if Reparsed = nil then Fail('reparse failed', Body);
+  try
+    ToolCallFromJSON(Reparsed, Restored);
+  finally
+    Reparsed.Free;
+  end;
+  if Restored.ProviderSignature <> '' then
+    Fail('empty signature did not round-trip empty', Restored.ProviderSignature);
+end;
+
 begin
   TestRejectedFieldsScrubbed;
   TestUserPropertyNamedAdditionalPropertiesSurvives;
   TestEmptyAndMalformed;
   TestThoughtSignatureRoundTrip;
   TestNoSignatureWhenEmpty;
+  TestSessionPersistenceRoundTrip;
+  TestSessionPersistenceEmpty;
   WriteLn('gemini_schema_strip_tests: OK');
 end.
