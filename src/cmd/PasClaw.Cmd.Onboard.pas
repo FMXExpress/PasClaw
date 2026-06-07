@@ -29,6 +29,7 @@ uses
   PasClaw.CliUI,
   PasClaw.Logger,
   PasClaw.Providers.Catalog,
+  PasClaw.Providers.Models,
   PasClaw.MCP.Catalog,
   PasClaw.Cmd.Memory;
 
@@ -78,6 +79,150 @@ begin
   if (Idx < 1) or (Idx > Length(Catalog)) then Exit;
   Spec := Catalog[Idx - 1];
   Result := True;
+end;
+
+function CompareModelsByDate(const A, B: TModelInfo): Integer;
+{ Sort newest first (CreatedAt desc). When neither model exposes a
+  creation time the sort collapses to no-op which preserves the
+  /models response order — that's what the provider considered
+  "natural" so it's a fine fallback. }
+begin
+  if A.CreatedAt = B.CreatedAt then Exit(0);
+  if A.CreatedAt < B.CreatedAt then Exit(1);
+  Result := -1;
+end;
+
+procedure SortModelsByDate(var M: TModelInfoArray);
+{ Insertion sort — N is small (typically <50), avoids dragging in
+  Generics.Defaults just to compare two Int64s. }
+var
+  i, j: Integer;
+  Tmp: TModelInfo;
+begin
+  for i := 1 to High(M) do
+  begin
+    Tmp := M[i];
+    j := i - 1;
+    while (j >= 0) and (CompareModelsByDate(Tmp, M[j]) < 0) do
+    begin
+      M[j + 1] := M[j];
+      Dec(j);
+    end;
+    M[j + 1] := Tmp;
+  end;
+end;
+
+function PickModelInteractive(const Spec: TProviderSpec;
+                              const APIKey: string): string;
+{ Strategy:
+    1. Try a live fetch against /v1/models (or /v1beta/models for
+       Gemini). Bounded at 8s — onboarding is interactive and a
+       provider with a slow status page shouldn't make the user
+       wait 30s before they can pick a model.
+    2. If discovery succeeds with >0 models, save the cache + show
+       a numbered picker over the top N. Default selection keeps the
+       catalog's static DefaultModel.
+    3. If discovery fails (no key, network down, provider 5xx) or
+       the list is empty, fall through to the pre-PR-#171 text input
+       so onboarding never gets stuck behind a broken /models
+       endpoint.
+  Returns the model id the user picked, or the catalog default when
+  the user just hit Enter. }
+const
+  TIMEOUT_SEC    = 8;
+  VISIBLE_TOP_N  = 12;     { mirror what ChatGPT / Claude do on their
+                             pickers — long enough to cover the
+                             useful tier, short enough to fit on a
+                             single screen }
+var
+  R: TModelDiscoveryResult;
+  i, N, Pick: Integer;
+  Label_, Input, Default: string;
+begin
+  Default := Spec.DefaultModel;
+
+  { Caller may pass Key='' for asNone providers. Those still have
+    /v1/models endpoints (Ollama serves it without auth) so we try
+    anyway; DiscoverModels short-circuits Key-required providers and
+    we'll fall through to the text input. }
+  if (Spec.Family = pfPlaceholder) or
+     ((Spec.Auth.Kind <> asNone) and (Trim(APIKey) = '')) then
+  begin
+    if Default <> '' then
+      Result := ReadLineEcho(Format('Default model [%s]: ', [Default]))
+    else
+      repeat
+        Result := ReadLineEcho('Default model (provider does not advertise one — required): ');
+      until Trim(Result) <> '';
+    if Trim(Result) = '' then Result := Default;
+    Exit;
+  end;
+
+  PrintLn(Ansi.Dim + 'Fetching available models from ' + Spec.DisplayName +
+          ' ...' + Ansi.Reset);
+  R := DiscoverModels(Spec, Spec.DefaultBase, APIKey, TIMEOUT_SEC);
+
+  if (not R.Ok) or (Length(R.Models) = 0) then
+  begin
+    if R.ErrMsg <> '' then
+      PrintLn(Ansi.Dim + '  (live fetch failed: ' + R.ErrMsg +
+              ' — falling back to text input)' + Ansi.Reset);
+    if Default <> '' then
+      Result := ReadLineEcho(Format('Default model [%s]: ', [Default]))
+    else
+      repeat
+        Result := ReadLineEcho('Default model (provider does not advertise one — required): ');
+      until Trim(Result) <> '';
+    if Trim(Result) = '' then Result := Default;
+    Exit;
+  end;
+
+  { Cache the full result, keyed on Spec.Kind because that's the
+    Provider Name UpsertProvider is about to set on the new config
+    entry (Name := Spec.Kind for both the upsert and insert paths
+    in this file). Same key future `pasclaw model refresh` and
+    `model list` invocations against this provider will use,
+    keeping the cache addressable from any of those sites. Codex
+    P2 on PR #171 — see PasClaw.Cmd.Model for the corresponding
+    cache-key shift on the refresh side. }
+  SaveCachedModels(Spec.Kind, R);
+  SortModelsByDate(R.Models);
+
+  N := Length(R.Models);
+  if N > VISIBLE_TOP_N then N := VISIBLE_TOP_N;
+
+  PrintLn(Format('Available models (showing %d of %d, newest first):',
+                 [N, Length(R.Models)]));
+  for i := 0 to N - 1 do
+  begin
+    Label_ := R.Models[i].Id;
+    if (R.Models[i].Display <> '') and (R.Models[i].Display <> R.Models[i].Id) then
+      Label_ := Label_ + Ansi.Dim + '  (' + R.Models[i].Display + ')' + Ansi.Reset;
+    PrintLn(Format('  %d) %s', [i + 1, Label_]));
+  end;
+  if Length(R.Models) > N then
+    PrintLn(Ansi.Dim +
+            Format('  (+ %d more — see `pasclaw model list %s`)',
+                   [Length(R.Models) - N, Spec.Kind]) +
+            Ansi.Reset);
+
+  if Default <> '' then
+    Input := ReadLineEcho(Format(
+      'Pick a number, type a name, or Enter for default [%s]: ', [Default]))
+  else
+    Input := ReadLineEcho('Pick a number or type a name: ');
+
+  Input := Trim(Input);
+  if (Input = '') and (Default <> '') then
+    Exit(Default);
+
+  Pick := StrToIntDef(Input, 0);
+  if (Pick >= 1) and (Pick <= N) then
+    Exit(R.Models[Pick - 1].Id);
+
+  { Anything else gets taken as a free-form model id — operator may
+    know about a model the cache doesn't list yet. }
+  Result := Input;
 end;
 
 procedure UpsertProvider(Cfg: TConfig; const Spec: TProviderSpec;
@@ -381,14 +526,11 @@ begin
       Exit(1);
     end;
 
-    if Spec.DefaultModel <> '' then
-      Model := ReadLineEcho(Format('Default model [%s]: ', [Spec.DefaultModel]))
-    else
-      repeat
-        Model := ReadLineEcho('Default model (provider does not advertise one — required): ');
-      until Trim(Model) <> '';
-    if Trim(Model) = '' then Model := Spec.DefaultModel;
-
+    { Auth FIRST so we can use the key to fetch the live model list.
+      Pre-PR-#171 the order was model → key, which made `/v1/models`
+      discovery impossible without a second prompt loop. The key is
+      still required only when the catalog spec says so (Ollama /
+      vLLM / LM Studio sit at asNone and skip this step). }
     case Spec.Auth.Kind of
       asNone:
         Key := '';
@@ -399,6 +541,8 @@ begin
         in terminal scrollback / screen recordings). }
       Key := ReadSecretLine(Spec.DisplayName + ' API key (leave blank to skip): ');
     end;
+
+    Model := PickModelInteractive(Spec, Key);
 
     Cfg.DefaultProvider := Spec.Kind;
     if Model <> '' then Cfg.DefaultModel := Model;
