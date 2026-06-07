@@ -338,9 +338,12 @@ pasclaw auth weixin
 pasclaw model show
 pasclaw model set claude-opus-4-7
 pasclaw model add openai gpt-4o-mini
+pasclaw model refresh anthropic              # GET /v1/models → cache under $PASCLAW_HOME/cache/models/anthropic.json
+pasclaw model refresh --all                  # refresh every configured provider in one shot
+pasclaw model list openai                    # show the cached roster, newest first
 ```
 
-`auth login` prompts for an API key and stores it in the matching provider entry. `model set` changes `default_model`; `model add` upserts a provider entry and records a model for that provider.
+`auth login` prompts for an API key and stores it in the matching provider entry. `model set` changes `default_model`; `model add` upserts a provider entry and records a model for that provider. `model refresh` hits the provider's live `/v1/models` endpoint (Anthropic / OpenAI / Gemini / xAI / Groq / OpenRouter / DeepSeek / Mistral / Moonshot / Cerebras / Ollama / vLLM / LM Studio — anything in the catalog), caches the result, and shows the count. `pasclaw onboard` runs the same fetch automatically once you've entered the API key and presents a numbered picker over the top 12 newest models — type a number, type a free-form name, or hit Enter for the catalog default. Discovery fails gracefully when the endpoint is unreachable (offline, behind a proxy, provider 5xx) and the onboarding flow falls back to the existing text input.
 
 ### MCP servers
 

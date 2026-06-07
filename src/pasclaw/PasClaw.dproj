@@ -171,6 +171,7 @@
         <DCCReference Include="..\pkg\providers\PasClaw.Providers.OpenAI.pas"/>
         <DCCReference Include="..\pkg\providers\PasClaw.Providers.Gemini.pas"/>
         <DCCReference Include="..\pkg\providers\PasClaw.Providers.Factory.pas"/>
+        <DCCReference Include="..\pkg\providers\PasClaw.Providers.Models.pas"/>
         <DCCReference Include="..\pkg\providers\PasClaw.Providers.Stream.pas"/>
 
         <!-- pkg/tokenizer -->
