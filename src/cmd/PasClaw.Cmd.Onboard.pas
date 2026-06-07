@@ -112,38 +112,47 @@ begin
   end;
 end;
 
-procedure ShowPicker(const Models: TModelInfoArray;
-                     const ProviderName: string;
-                     SourceLabel: string;
-                     FetchedAt: Int64);
-{ Print the numbered picker over the top N models. SourceLabel is the
+function ShowPicker(const Models: TModelInfoArray;
+                    const ProviderName: string;
+                    SourceLabel: string;
+                    FetchedAt: Int64): Integer;
+{ Prints the numbered picker over the top N models. SourceLabel is the
   one-liner above the list ('Fetched live from ...', 'From cache
   (refreshed 3 days ago)', etc.) so the user knows where the list came
-  from and whether it might be stale. }
+  from and whether it might be stale.
+
+  Returns the number of rows actually printed (the visible count, N).
+  Caller MUST validate any typed numeric pick against this returned
+  value, NOT Length(Models) — typing 47 against a 12-row visible list
+  would otherwise silently pick a model the user can't see. Codex P2
+  on PR #172. }
 const
-  VISIBLE_TOP_N = 12;
+  VISIBLE_TOP_N = 12;     { mirror what ChatGPT / Claude do on their
+                            pickers — long enough to cover the
+                            useful tier, short enough to fit on a
+                            single screen }
 var
-  i, N: Integer;
+  i: Integer;
   Label_: string;
 begin
-  N := Length(Models);
-  if N > VISIBLE_TOP_N then N := VISIBLE_TOP_N;
+  Result := Length(Models);
+  if Result > VISIBLE_TOP_N then Result := VISIBLE_TOP_N;
 
   if SourceLabel <> '' then
     PrintLn(Ansi.Dim + SourceLabel + Ansi.Reset);
   PrintLn(Format('Available models (showing %d of %d, newest first):',
-                 [N, Length(Models)]));
-  for i := 0 to N - 1 do
+                 [Result, Length(Models)]));
+  for i := 0 to Result - 1 do
   begin
     Label_ := Models[i].Id;
     if (Models[i].Display <> '') and (Models[i].Display <> Models[i].Id) then
       Label_ := Label_ + Ansi.Dim + '  (' + Models[i].Display + ')' + Ansi.Reset;
     PrintLn(Format('  %d) %s', [i + 1, Label_]));
   end;
-  if Length(Models) > N then
+  if Length(Models) > Result then
     PrintLn(Ansi.Dim +
             Format('  (+ %d more — see `pasclaw model list %s`)',
-                   [Length(Models) - N, ProviderName]) +
+                   [Length(Models) - Result, ProviderName]) +
             Ansi.Reset);
 end;
 
@@ -184,7 +193,7 @@ var
   HaveCache, HaveLive, HaveKey: Boolean;
   Models: TModelInfoArray;
   ProviderName, SourceLabel, Input, Default: string;
-  Pick: Integer;
+  Pick, VisibleN: Integer;
 begin
   Default      := Spec.DefaultModel;
   ProviderName := Spec.Kind;     { same Name UpsertProvider will set;
@@ -252,9 +261,10 @@ begin
   end;
 
   SortModelsByDate(Models);
-  ShowPicker(Models, ProviderName, SourceLabel,
-             { FetchedAt unused by ShowPicker — kept on the signature for
-               future "stale by N days, refresh?" prompts } 0);
+  VisibleN := ShowPicker(Models, ProviderName, SourceLabel,
+                         { FetchedAt unused by ShowPicker — kept on the
+                           signature for future "stale by N days,
+                           refresh?" prompts } 0);
 
   if Default <> '' then
     Input := ReadLineEcho(Format(
@@ -266,8 +276,13 @@ begin
   if (Input = '') and (Default <> '') then
     Exit(Default);
 
+  { Validate against VisibleN (the count ShowPicker actually printed),
+    NOT Length(Models). Typing 47 against a 12-row visible list used
+    to silently pick an off-screen model — Codex P2 on PR #172. Numbers
+    outside the visible range fall through to the free-form-id branch
+    below, same as any non-numeric input. }
   Pick := StrToIntDef(Input, 0);
-  if (Pick >= 1) and (Pick <= Length(Models)) then
+  if (Pick >= 1) and (Pick <= VisibleN) then
     Exit(Models[Pick - 1].Id);
 
   { Anything else gets taken as a free-form model id — operator may
