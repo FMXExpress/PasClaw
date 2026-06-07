@@ -327,6 +327,8 @@ The **Delphi build** of `pasclaw tui` paints a positioned two-pane layout (`MVCF
 
 **Theme switcher** — `--theme <name>` picks the initial colour theme; type `/theme` inside the TUI to open a modal menu with **Up/Down** live-preview, **Enter** to apply, **Escape** to revert. Themes are the ones DMVCFramework ships: `default` (default), `navy`, `matrix`, `sunset`, `ocean`, `midnight`, `classic`. Unknown names fall back to `default` silently. Changes don't persist across runs — pass `--theme` next time, or wire a config field in a follow-up.
 
+**Model switcher** — type `/model` inside the TUI to open a modal picker of the cached `/v1/models` roster for the session's provider (falls back to `Cfg.DefaultProvider`). **Up/Down** navigates, **Enter** applies, **Escape** cancels. There's no live HTTP fetch on the UI thread — the picker reads the cache file populated by `pasclaw model refresh <provider>` / `pasclaw onboard`, and the modal's subtitle shows how stale that cache is so the operator knows whether to drop out and refresh. Picking a model updates the active session's `meta.model` (persisted on the next turn's auto-save) but does **not** touch `config.json` — use `pasclaw model set` for that. When the cache is empty for the provider, the TUI flashes a hint instead of opening an empty picker. The **FPC build** exposes `/model` as a line-based command: bare `/model` prints the cached list and the current selection; `/model <id>` switches the active model for the running TUI (no cache validation — the operator might know about a model the cache hasn't seen yet).
+
 ### Provider authentication and model selection
 
 ```sh
