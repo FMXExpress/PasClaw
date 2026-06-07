@@ -100,6 +100,99 @@ The running `pasclaw agent --session <id>` drains the queue at the top of its NE
 
 **Cross-platform** — Linux x86_64 + aarch64 under FPC 3.2+; macOS x86_64 + arm64 under FPC (Homebrew unit paths autodetected); Windows x64 + Linux + macOS under Delphi 12 / RAD Studio. Windows-on-ARM64 builds via FPC are supported through the Makefile's `CROSS_TARGET=aarch64-win64` override (pair with `FPC_UNITS_DIR` pointing at the cross-build's unit tree); the updater emits `windows_arm64.exe` as the release-asset suffix on those builds. The `Delphi 13 WinArm64EC` target isn't wired into `PasClaw.dproj` yet — add the platform via the IDE's Project Manager when you're ready to ship for it. Three sample binaries under `samples/component-console/` plus matching `.dproj` files for RAD Studio and `dcc32.cfg` / `dcc64.cfg` for cmdline Delphi builds.
 
+## Changelog
+
+Notable feature additions, newest first. Bug fixes and review follow-ups are in the [full git log](https://github.com/FMXExpress/PasClaw/commits/main).
+
+- **2026-06-06** — Hybrid FTS5 + local-vector `memory_search` backend with in-tree localvector port and a `pasclaw memory provision` command that fetches sqlite-vec, ONNX Runtime, and the MiniLM embedder. ([#165], [#166])
+- **2026-06-06** — Catalog adds xAI (Grok) + LM Studio entries; Moonshot default bumped to `kimi-k2.6`. ([#163])
+- **2026-06-06** — `vector_search_enabled` config flag + onboarding question for the hybrid memory backend. ([#164])
+- **2026-06-05** — Gemini server-side `google_search` grounding, default-on with Gemini-3-or-later gating for the function-calling combo. ([#158])
+- **2026-06-05** — Gemini 3 `thoughtSignature` round-trip on `functionCall` parts for tool-use continuations. ([#154])
+- **2026-06-05** — Markdown rendered as ANSI-styled text in the terminal for agent + TUI surfaces. ([#155])
+- **2026-06-05** — OpenAI server-side `web_search_options` support, default-on for genuine OpenAI endpoints only. ([#146])
+- **2026-06-05** — `web_fetch` tool gated behind explicit `web_fetch_enabled` opt-in. ([#144])
+- **2026-06-04** — pasclaw.dev Code Vault tools (`vault_search` / `vault_get`) for Object Pascal sample discovery. ([#130])
+- **2026-06-04** — MCP catalog + hub with one-command built-in server installs. ([#131], [#134])
+- **2026-06-04** — Onboarding prompt for built-in MCP servers. ([#126])
+- **2026-06-01** — TUI themes, widgets, and chat layout polish. ([#122], [#123], [#124])
+- **2026-06-01** — Docker image and Dockerfile for containerised deployment. ([#121])
+- **2026-06-01** — Persistent sessions, resume, and mid-loop `steer` follow-ups. ([#117], [#120])
+- **2026-06-01** — Anthropic prompt-caching toggle with TTL config. ([#118])
+- **2026-06-01** — Channel sender identity + allowlist gating. ([#119])
+- **2026-06-01** — Windows ARM64 cross-build target. ([#115])
+- **2026-06-01** — Agent hooks and steering API. ([#113])
+- **2026-05-30** — Tier-1 features: parallel tool dispatch, code-driven provider config, Delphi sample projects. ([#98], [#96], [#95], [#101])
+- **2026-05-30** — MCP catalog of built-in servers. ([#91])
+- **2026-05-30** — Web UI with chat / sessions / memory / MCP / skills / vault tabs. ([#88])
+- **2026-05-29** — Channels: Matrix + IRC + WhatsApp + LINE bots in addition to Telegram. ([#75], [#76], [#77], [#86])
+- **2026-05-29** — Web search across DuckDuckGo / Brave / Tavily / SearXNG / Perplexity / Gemini. ([#80], [#81], [#82])
+- **2026-05-29** — SSRF guard blocking cloud-metadata + RFC1918 + loopback in `web_fetch`. ([#85])
+- **2026-05-29** — Workspace sandbox with `cd`-gating and shell denylist. ([#84])
+- **2026-05-29** — Cron persistent state + per-job channel sinks. ([#79])
+- **2026-05-29** — FTS5-backed `memory_search` tool. ([#74])
+- **2026-05-28** — OpenAI Responses API on the gateway. ([#62])
+- **2026-05-28** — Skills system: `SKILL.md` manifests, GitHub install, ClawHub install. ([#55], [#56], [#59])
+- **2026-05-28** — Gemini provider (generateContent REST). ([#48])
+- **2026-05-27** — `pasclaw serve` — OpenAI-compatible HTTP server with SSE streaming. ([#20])
+- **2026-05-27** — Provider catalog (19+ kinds: Anthropic, OpenAI, Groq, OpenRouter, Mistral, ...). ([#40])
+- **2026-05-27** — Delphi visual component (`TPasClawAgent`). ([#37])
+- **2026-05-27** — Hashline diff format port for `fs_edit_hashline`. ([#26])
+- **2026-05-27** — TUI (full-screen interactive console). ([#24])
+- **2026-05-26** — Initial Delphi/FPC port of picoclaw. ([#2])
+
+[#2]:   https://github.com/FMXExpress/PasClaw/pull/2
+[#20]:  https://github.com/FMXExpress/PasClaw/pull/20
+[#24]:  https://github.com/FMXExpress/PasClaw/pull/24
+[#26]:  https://github.com/FMXExpress/PasClaw/pull/26
+[#37]:  https://github.com/FMXExpress/PasClaw/pull/37
+[#40]:  https://github.com/FMXExpress/PasClaw/pull/40
+[#48]:  https://github.com/FMXExpress/PasClaw/pull/48
+[#55]:  https://github.com/FMXExpress/PasClaw/pull/55
+[#56]:  https://github.com/FMXExpress/PasClaw/pull/56
+[#59]:  https://github.com/FMXExpress/PasClaw/pull/59
+[#62]:  https://github.com/FMXExpress/PasClaw/pull/62
+[#74]:  https://github.com/FMXExpress/PasClaw/pull/74
+[#75]:  https://github.com/FMXExpress/PasClaw/pull/75
+[#76]:  https://github.com/FMXExpress/PasClaw/pull/76
+[#77]:  https://github.com/FMXExpress/PasClaw/pull/77
+[#79]:  https://github.com/FMXExpress/PasClaw/pull/79
+[#80]:  https://github.com/FMXExpress/PasClaw/pull/80
+[#81]:  https://github.com/FMXExpress/PasClaw/pull/81
+[#82]:  https://github.com/FMXExpress/PasClaw/pull/82
+[#84]:  https://github.com/FMXExpress/PasClaw/pull/84
+[#85]:  https://github.com/FMXExpress/PasClaw/pull/85
+[#86]:  https://github.com/FMXExpress/PasClaw/pull/86
+[#88]:  https://github.com/FMXExpress/PasClaw/pull/88
+[#91]:  https://github.com/FMXExpress/PasClaw/pull/91
+[#95]:  https://github.com/FMXExpress/PasClaw/pull/95
+[#96]:  https://github.com/FMXExpress/PasClaw/pull/96
+[#98]:  https://github.com/FMXExpress/PasClaw/pull/98
+[#101]: https://github.com/FMXExpress/PasClaw/pull/101
+[#113]: https://github.com/FMXExpress/PasClaw/pull/113
+[#115]: https://github.com/FMXExpress/PasClaw/pull/115
+[#117]: https://github.com/FMXExpress/PasClaw/pull/117
+[#118]: https://github.com/FMXExpress/PasClaw/pull/118
+[#119]: https://github.com/FMXExpress/PasClaw/pull/119
+[#120]: https://github.com/FMXExpress/PasClaw/pull/120
+[#121]: https://github.com/FMXExpress/PasClaw/pull/121
+[#122]: https://github.com/FMXExpress/PasClaw/pull/122
+[#123]: https://github.com/FMXExpress/PasClaw/pull/123
+[#124]: https://github.com/FMXExpress/PasClaw/pull/124
+[#126]: https://github.com/FMXExpress/PasClaw/pull/126
+[#130]: https://github.com/FMXExpress/PasClaw/pull/130
+[#131]: https://github.com/FMXExpress/PasClaw/pull/131
+[#134]: https://github.com/FMXExpress/PasClaw/pull/134
+[#144]: https://github.com/FMXExpress/PasClaw/pull/144
+[#146]: https://github.com/FMXExpress/PasClaw/pull/146
+[#154]: https://github.com/FMXExpress/PasClaw/pull/154
+[#155]: https://github.com/FMXExpress/PasClaw/pull/155
+[#158]: https://github.com/FMXExpress/PasClaw/pull/158
+[#163]: https://github.com/FMXExpress/PasClaw/pull/163
+[#164]: https://github.com/FMXExpress/PasClaw/pull/164
+[#165]: https://github.com/FMXExpress/PasClaw/pull/165
+[#166]: https://github.com/FMXExpress/PasClaw/pull/166
+
 ## Requirements
 
 - Free Pascal 3.2+ in Delphi mode, or Delphi/RAD Studio.
