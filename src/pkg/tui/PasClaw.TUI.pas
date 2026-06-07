@@ -82,12 +82,32 @@ type
     FMenuSelIdx:        Integer;       { highlighted theme in the menu }
     FMenuOrigTheme:     string;        { theme name to revert to on Escape }
     FCurrentTheme:      string;        { last-applied theme name (committed) }
+    { Model picker overlay — opens on `/model`. Parallel state to the
+      theme menu rather than refactoring `FMenuOpen` into a kind enum.
+      Only one menu is open at a time; OpenModelMenu / OpenThemeMenu
+      assert that and close the other if needed. }
+    FModelMenuOpen:     Boolean;
+    FModelMenuSelIdx:   Integer;
+    FModelMenuModels:   TModelInfoArray;
+    FModelMenuProvider: string;        { provider name for cache lookup +
+                                         the "no cache — run refresh" hint }
+    FModelMenuSource:   string;        { one-liner under the title, e.g.
+                                         "cached 3 days ago" }
+    FModelMenuOrigModel: string;       { revert to on Esc }
+    FModelMenuVisibleN: Integer;       { rows actually printed —
+                                         validation cap, same shape as
+                                         the onboard picker's PR #172
+                                         Codex P2 fix }
     procedure DrawFrame;
     procedure DrawHeaderBar(W: Integer);
     procedure DrawSessionPane(X, Y, W, H: Integer);
     procedure DrawChatPane(X, Y, W, H: Integer);
     procedure DrawFooterBar(Y, W: Integer);
     procedure DrawThemeMenu;
+    procedure DrawModelMenu;
+    procedure OpenModelMenu;
+    procedure HandleModelMenuKey(Key: Integer);
+    procedure ApplyModelSelection(const ModelId: string);
     procedure HandleKey(Key: Integer);
     procedure HandleSessionKey(Key: Integer);
     procedure HandleChatKey(Key: Integer);
@@ -152,7 +172,9 @@ uses
   PasClaw.Logger,
   PasClaw.Tools.ToolLoop,
   PasClaw.Agent.Steering,
-  PasClaw.Markdown.Render
+  PasClaw.Markdown.Render,
+  PasClaw.Config,
+  PasClaw.Providers.Models
   {$IFNDEF FPC}
   , Math, StrUtils,
   MVCFramework.Console, LoggerPro.AnsiColors
@@ -328,6 +350,8 @@ procedure TTUI.OpenThemeMenu;
 var
   i: Integer;
 begin
+  { Mutual exclusion: only one overlay at a time. }
+  FModelMenuOpen := False;
   FMenuOrigTheme := FCurrentTheme;
   FMenuSelIdx := 0;
   for i := 0 to High(THEME_NAMES) do
@@ -337,6 +361,85 @@ begin
       Break;
     end;
   FMenuOpen := True;
+end;
+
+procedure TTUI.OpenModelMenu;
+{ Loads the cached /v1/models roster for the session's provider and
+  opens the picker overlay. Source data is the cache file populated
+  by `pasclaw model refresh <provider>` / `pasclaw onboard` — we
+  deliberately don't trigger a live fetch inline (HTTP from inside
+  a TUI event loop would freeze the UI thread). The picker says how
+  fresh the cache is so the operator knows whether to drop out and
+  refresh. Empty cache → flash a hint instead of opening an empty
+  picker. }
+var
+  Cfg: TConfig;
+  R: TModelDiscoveryResult;
+  Provider: string;
+  i: Integer;
+begin
+  { Provider lookup: prefer the active session's recorded provider, else
+    the global default from config. The cache file is keyed on the
+    operator-facing Name (PR #171 Codex P2 contract). }
+  Provider := '';
+  if (FSession <> nil) and (FSession.Meta.Provider <> '') then
+    Provider := FSession.Meta.Provider
+  else
+  begin
+    Cfg := LoadConfig;
+    try
+      Provider := Cfg.DefaultProvider;
+    finally
+      Cfg.Free;
+    end;
+  end;
+
+  if Provider = '' then
+  begin
+    Flash('no provider configured — run `pasclaw onboard` first');
+    Exit;
+  end;
+
+  if not LoadCachedModels(Provider, R) or (Length(R.Models) = 0) then
+  begin
+    Flash('no cached models for ' + Provider +
+          ' — run `pasclaw model refresh ' + Provider + '`');
+    Exit;
+  end;
+
+  FMenuOpen           := False;          { close any theme menu first }
+  FModelMenuModels    := R.Models;
+  FModelMenuProvider  := Provider;
+  FModelMenuSource    := Format('cached %d models (refreshed %s)',
+                                [Length(R.Models), HumanAge(R.FetchedAt)]);
+  FModelMenuOrigModel := FModel;
+
+  { Highlight the currently-active model when it's in the list, so the
+    overlay opens with "where you are now" preselected. }
+  FModelMenuSelIdx := 0;
+  for i := 0 to High(FModelMenuModels) do
+    if SameText(FModelMenuModels[i].Id, FModel) then
+    begin
+      FModelMenuSelIdx := i;
+      Break;
+    end;
+
+  FModelMenuOpen := True;
+end;
+
+procedure TTUI.ApplyModelSelection(const ModelId: string);
+{ Switches the active model for the running TUI. Updates FModel (used
+  by StartTurn) and FSession.Meta.Model (persisted on the next turn's
+  PersistSession so a /quit-after-/model survives). Does NOT touch
+  config.json — that's `pasclaw model set` from the CLI. }
+begin
+  if ModelId = '' then Exit;
+  FModel := ModelId;
+  if FSession <> nil then
+  begin
+    FSession.Meta.Model := ModelId;
+    PersistSession;
+  end;
 end;
 
 function TTUI.CurrentSpinnerChar: Char;
@@ -624,11 +727,13 @@ begin
       end;
     end
     else if Text = '/help' then
-      Flash('keys: Tab swap pane | N new | D del | Q quit | /theme')
+      Flash('keys: Tab swap pane | N new | D del | Q quit | /theme | /model')
     else if (Text = '/tools') and (FRegistry <> nil) then
       Flash(Format('registered tools: %d', [FRegistry.Count]))
     else if Text = '/theme' then
       OpenThemeMenu
+    else if Text = '/model' then
+      OpenModelMenu
     else
       Flash('unknown: ' + Text);
     FInputBuf := '';
@@ -780,13 +885,52 @@ begin
   end;
 end;
 
+procedure TTUI.HandleModelMenuKey(Key: Integer);
+{ Same shape as the theme menu but no "live preview" — switching the
+  model in-flight on each arrow press would re-bake the running
+  session's provider state, which is the wrong moment for that. Apply
+  on Enter only; Esc cancels and leaves FModel unchanged. }
+begin
+  case Key of
+    KEY_UP:
+      if FModelMenuSelIdx > 0 then
+        Dec(FModelMenuSelIdx);
+    KEY_DOWN:
+      if FModelMenuSelIdx < FModelMenuVisibleN - 1 then
+        Inc(FModelMenuSelIdx);
+    KEY_ENTER:
+      begin
+        if (FModelMenuSelIdx >= 0) and
+           (FModelMenuSelIdx < Length(FModelMenuModels)) then
+        begin
+          ApplyModelSelection(FModelMenuModels[FModelMenuSelIdx].Id);
+          Flash('model: ' + FModel);
+        end;
+        FModelMenuOpen := False;
+      end;
+    KEY_ESCAPE:
+      begin
+        { ApplyModelSelection wasn't called on the navigation path, so
+          there's nothing to revert — just close the overlay. }
+        FModelMenuOpen := False;
+      end;
+  end;
+end;
+
 procedure TTUI.HandleKey(Key: Integer);
 const
   KEY_TAB = 9;
 begin
   { Menu intercepts first — Esc cancels the menu (reverts theme)
     instead of quitting the TUI, Up/Down navigates with live
-    preview, Enter commits the selection. }
+    preview, Enter commits the selection. Model menu intercept piggybacks
+    on the same gate; only one overlay can be open per the mutual-exclusion
+    contract enforced in OpenThemeMenu / OpenModelMenu. }
+  if FModelMenuOpen then
+  begin
+    HandleModelMenuKey(Key);
+    Exit;
+  end;
   if FMenuOpen then
   begin
     HandleMenuKey(Key);
@@ -1117,8 +1261,10 @@ begin
   DrawChatPane(ChatX, 1, ChatW, PaneH);
   DrawFooterBar(H - 2, W);
 
-  { Modal overlay drawn last so it sits on top of both panes. }
-  if FMenuOpen then DrawThemeMenu;
+  { Modal overlay drawn last so it sits on top of both panes. Only one
+    can be open at a time (the Open* methods enforce mutual exclusion). }
+  if FMenuOpen      then DrawThemeMenu;
+  if FModelMenuOpen then DrawModelMenu;
 end;
 
 procedure TTUI.DrawThemeMenu;
@@ -1175,6 +1321,100 @@ begin
   WriteAnsiText(ConsoleTheme.HighlightText, Bottom);
 end;
 
+procedure TTUI.DrawModelMenu;
+{ Model picker overlay. Vertical list of cached model IDs centred on
+  screen; subtitle line shows cache freshness so the operator knows
+  whether to drop out and run `pasclaw model refresh`. The list is
+  windowed when it's longer than the visible box — Up/Dn step by one,
+  so a simple "scroll when the cursor falls off the edge" suffices.
+  FModelMenuVisibleN is set here (not OpenModelMenu) because the cap
+  depends on the live terminal height — HandleModelMenuKey validates
+  the pick against the count actually printed, same shape as the
+  onboard picker fix on PR #172. }
+const
+  BoxW       = 64;
+  MaxBoxRows = 20;
+var
+  Size: TMVCConsoleSize;
+  W, H, BoxX, BoxY, BoxH, AvailRows, VisibleCount, Start, i, Row: Integer;
+  Label_, Top, Bottom, Side, IdText, DispText, RowText: string;
+begin
+  Size := GetConsoleSize;
+  W := Integer(Size.Columns);
+  H := Integer(Size.Rows);
+
+  { Frame is 5 rows (top border, title, subtitle, separator, bottom
+    border) + VisibleCount data rows. Cap so BoxH fits in H. }
+  AvailRows := H - 5 - 2;
+  if AvailRows < 1 then AvailRows := 1;
+  if AvailRows > MaxBoxRows then AvailRows := MaxBoxRows;
+  VisibleCount := Length(FModelMenuModels);
+  if VisibleCount > AvailRows then VisibleCount := AvailRows;
+  FModelMenuVisibleN := VisibleCount;
+
+  { Window the list so the selected row stays in view. }
+  Start := 0;
+  if FModelMenuSelIdx >= VisibleCount then
+    Start := FModelMenuSelIdx - VisibleCount + 1;
+  if Start + VisibleCount > Length(FModelMenuModels) then
+    Start := Length(FModelMenuModels) - VisibleCount;
+  if Start < 0 then Start := 0;
+
+  BoxH := VisibleCount + 5;
+  BoxX := (W - BoxW) div 2;
+  BoxY := (H - BoxH) div 2;
+  if BoxX < 0 then BoxX := 0;
+  if BoxY < 0 then BoxY := 0;
+
+  Top    := '+' + StringOfChar('-', BoxW - 2) + '+';
+  Bottom := Top;
+  Side   := '|';
+
+  GotoXY(BoxX, BoxY);
+  WriteAnsiText(ConsoleTheme.HighlightText, Top);
+
+  GotoXY(BoxX, BoxY + 1);
+  Label_ := ' model -- Up/Dn  Enter to apply  Esc to cancel ';
+  if Length(Label_) > BoxW - 2 then Label_ := Copy(Label_, 1, BoxW - 2);
+  while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+  WriteAnsiText(ConsoleTheme.HighlightText, Side + Label_ + Side);
+
+  GotoXY(BoxX, BoxY + 2);
+  Label_ := ' ' + FModelMenuSource;
+  if Length(Label_) > BoxW - 2 then Label_ := Copy(Label_, 1, BoxW - 2);
+  while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+  WriteAnsiText(ConsoleTheme.HighlightText, Side + Label_ + Side);
+
+  GotoXY(BoxX, BoxY + 3);
+  WriteAnsiText(ConsoleTheme.HighlightText,
+                Side + StringOfChar('-', BoxW - 2) + Side);
+
+  for i := 0 to VisibleCount - 1 do
+  begin
+    Row := BoxY + 4 + i;
+    if Row >= H - 1 then Break;
+    GotoXY(BoxX, Row);
+
+    IdText   := FModelMenuModels[Start + i].Id;
+    DispText := FModelMenuModels[Start + i].Display;
+    if (DispText = '') or SameText(DispText, IdText) then
+      RowText := '   ' + IdText
+    else
+      RowText := '   ' + IdText + '   (' + DispText + ')';
+    if Length(RowText) > BoxW - 2 then
+      RowText := Copy(RowText, 1, BoxW - 2);
+    while Length(RowText) < BoxW - 2 do RowText := RowText + ' ';
+
+    if (Start + i) = FModelMenuSelIdx then
+      WriteAnsiText(ConsoleTheme.Highlight, Side + RowText + Side)
+    else
+      WriteAnsiText(ConsoleTheme.Text, Side + RowText + Side);
+  end;
+
+  GotoXY(BoxX, BoxY + BoxH - 1);
+  WriteAnsiText(ConsoleTheme.HighlightText, Bottom);
+end;
+
 procedure TTUI.Run;
 var
   Key: Integer;
@@ -1194,6 +1434,9 @@ begin
   FStatusFlash := '';
   FMenuOpen := False;
   FMenuSelIdx := 0;
+  FModelMenuOpen := False;
+  FModelMenuSelIdx := 0;
+  FModelMenuVisibleN := 0;
   FLastResizeW := -1; FLastResizeH := -1;
 
   { Always allocate a session (PR #117 default-persist semantics).
@@ -1300,10 +1543,69 @@ end;
 procedure TTUI.ShowHelp;
 begin
   PrintLn(Ansi.Bold + 'TUI commands:' + Ansi.Reset);
-  PrintLn('  /help    show this');
-  PrintLn('  /tools   list registered tools');
-  PrintLn('  /clear   clear the screen');
-  PrintLn('  /quit    exit');
+  PrintLn('  /help          show this');
+  PrintLn('  /tools         list registered tools');
+  PrintLn('  /clear         clear the screen');
+  PrintLn('  /model         list cached models for the default provider');
+  PrintLn('  /model <id>    switch the active model for this session');
+  PrintLn('  /quit          exit');
+end;
+
+procedure ShowCachedModelsFPC(var FModel: string; const Arg: string);
+{ Line-based equivalent of the Delphi DrawModelMenu overlay. With no
+  argument: print the cached roster + the currently-selected model so
+  the operator can pick one. With an `<id>` argument: switch FModel
+  immediately (no validation against the cache — the user might know
+  about a model the cache hasn't seen yet). Cache lookup keys on the
+  operator-facing provider Name, same as the Delphi path. }
+var
+  Cfg: TConfig;
+  R: TModelDiscoveryResult;
+  Provider: string;
+  i: Integer;
+  IdText, DispText: string;
+begin
+  if Arg <> '' then
+  begin
+    FModel := Arg;
+    PrintLn(Ansi.Green + 'model: ' + Ansi.Reset + FModel);
+    Exit;
+  end;
+
+  Cfg := LoadConfig;
+  try
+    Provider := Cfg.DefaultProvider;
+  finally
+    Cfg.Free;
+  end;
+
+  if Provider = '' then
+  begin
+    PrintLn(Ansi.Yellow + 'no provider configured -- run `pasclaw onboard` first' + Ansi.Reset);
+    Exit;
+  end;
+
+  if not LoadCachedModels(Provider, R) or (Length(R.Models) = 0) then
+  begin
+    PrintLn(Ansi.Yellow + 'no cached models for ' + Provider +
+            ' -- run `pasclaw model refresh ' + Provider + '`' + Ansi.Reset);
+    Exit;
+  end;
+
+  PrintLn(Ansi.Bold + Provider + Ansi.Reset + Ansi.Dim +
+          ' (' + IntToStr(Length(R.Models)) + ' cached, refreshed ' +
+          HumanAge(R.FetchedAt) + ')' + Ansi.Reset);
+  for i := 0 to High(R.Models) do
+  begin
+    IdText   := R.Models[i].Id;
+    DispText := R.Models[i].Display;
+    if (DispText = '') or SameText(DispText, IdText) then
+      PrintLn('  ' + IdText)
+    else
+      PrintLn('  ' + IdText + Ansi.Dim + '   (' + DispText + ')' + Ansi.Reset);
+  end;
+  PrintLn(Ansi.Dim + 'current: ' + FModel +
+          ' -- type `/model <id>` to switch' + Ansi.Reset);
 end;
 
 procedure TTUI.ShowTools;
@@ -1322,11 +1624,20 @@ begin
 end;
 
 procedure TTUI.HandleSlashCommand(const Cmd: string);
+var
+  Arg: string;
 begin
   if (Cmd = '/quit') or (Cmd = '/exit') or (Cmd = '/q') then begin FQuit := True; Exit; end;
   if Cmd = '/clear' then begin Print(#27'[2J' + #27'[H'); DrawHeader; Exit; end;
   if Cmd = '/tools' then begin ShowTools; Exit; end;
   if Cmd = '/help'  then begin ShowHelp;  Exit; end;
+  if Cmd = '/model' then begin ShowCachedModelsFPC(FModel, ''); Exit; end;
+  if (Length(Cmd) > 7) and (Copy(Cmd, 1, 7) = '/model ') then
+  begin
+    Arg := Trim(Copy(Cmd, 8, Length(Cmd) - 7));
+    ShowCachedModelsFPC(FModel, Arg);
+    Exit;
+  end;
   PrintLn(Ansi.Yellow + 'unknown command: ' + Cmd + Ansi.Reset);
 end;
 
