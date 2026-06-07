@@ -94,10 +94,6 @@ type
     FModelMenuSource:   string;        { one-liner under the title, e.g.
                                          "cached 3 days ago" }
     FModelMenuOrigModel: string;       { revert to on Esc }
-    FModelMenuVisibleN: Integer;       { rows actually printed —
-                                         validation cap, same shape as
-                                         the onboard picker's PR #172
-                                         Codex P2 fix }
     procedure DrawFrame;
     procedure DrawHeaderBar(W: Integer);
     procedure DrawSessionPane(X, Y, W, H: Integer);
@@ -889,14 +885,21 @@ procedure TTUI.HandleModelMenuKey(Key: Integer);
 { Same shape as the theme menu but no "live preview" — switching the
   model in-flight on each arrow press would re-bake the running
   session's provider state, which is the wrong moment for that. Apply
-  on Enter only; Esc cancels and leaves FModel unchanged. }
+  on Enter only; Esc cancels and leaves FModel unchanged.
+
+  Down-key bound is the FULL roster length, not the visible window —
+  DrawModelMenu windows the printed rows around FModelMenuSelIdx, so
+  the user can scroll into models past the first page. (Codex P2 on
+  this PR. The earlier "visible cap" mirrored the onboard picker's PR
+  #172 fix, but that picker is line-based and never scrolls; this one
+  re-paints every frame and does.) }
 begin
   case Key of
     KEY_UP:
       if FModelMenuSelIdx > 0 then
         Dec(FModelMenuSelIdx);
     KEY_DOWN:
-      if FModelMenuSelIdx < FModelMenuVisibleN - 1 then
+      if FModelMenuSelIdx < Length(FModelMenuModels) - 1 then
         Inc(FModelMenuSelIdx);
     KEY_ENTER:
       begin
@@ -1327,10 +1330,9 @@ procedure TTUI.DrawModelMenu;
   whether to drop out and run `pasclaw model refresh`. The list is
   windowed when it's longer than the visible box — Up/Dn step by one,
   so a simple "scroll when the cursor falls off the edge" suffices.
-  FModelMenuVisibleN is set here (not OpenModelMenu) because the cap
-  depends on the live terminal height — HandleModelMenuKey validates
-  the pick against the count actually printed, same shape as the
-  onboard picker fix on PR #172. }
+  HandleModelMenuKey's down-bound is the full roster length (not the
+  visible window count) so the user can scroll into rows past the
+  first page. }
 const
   BoxW       = 64;
   MaxBoxRows = 20;
@@ -1350,8 +1352,6 @@ begin
   if AvailRows > MaxBoxRows then AvailRows := MaxBoxRows;
   VisibleCount := Length(FModelMenuModels);
   if VisibleCount > AvailRows then VisibleCount := AvailRows;
-  FModelMenuVisibleN := VisibleCount;
-
   { Window the list so the selected row stays in view. }
   Start := 0;
   if FModelMenuSelIdx >= VisibleCount then
@@ -1436,7 +1436,6 @@ begin
   FMenuSelIdx := 0;
   FModelMenuOpen := False;
   FModelMenuSelIdx := 0;
-  FModelMenuVisibleN := 0;
   FLastResizeW := -1; FLastResizeH := -1;
 
   { Always allocate a session (PR #117 default-persist semantics).
