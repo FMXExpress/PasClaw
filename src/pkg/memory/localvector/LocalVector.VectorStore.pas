@@ -18,6 +18,16 @@ unit LocalVector.VectorStore;
 
 {$IFDEF FPC}{$mode delphi}{$H+}{$ENDIF}
 
+{ PasClaw modification: force the portable sqlite backend on Delphi Linux64.
+  The FireDAC backend pulls in FireDAC.Phys.SQLiteWrapper.Stat, which RAD
+  Studio ships only for Windows / macOS / mobile — exactly the same
+  constraint PasClaw.dpr already gates around (PR #135). Without this guard,
+  registering LocalVector.VectorStore.FireDAC in PasClaw.dproj breaks the
+  Delphi Linux64 build. (Codex P1 on PR #167.) }
+{$IF DEFINED(LINUX) AND NOT DEFINED(FPC)}
+  {$DEFINE LV_PORTABLE_SQLITE}
+{$IFEND}
+
 interface
 
 uses

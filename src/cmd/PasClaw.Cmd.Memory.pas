@@ -297,6 +297,42 @@ begin
       PrintCheckMark(Ansi.Yellow, '·', 'vocab missing at ' + VocabP);
   end;
 
+  { ONNX Runtime — same gate TVectorMemoryIndex.Open calls before
+    enabling the hybrid backend. Codex P2 on PR #166: on Linux/macOS a
+    host with vec0 + model + vocab on disk but no system libonnxruntime
+    will see every file-based check go green here even though
+    memory_search keeps falling back to FTS, because Open() bails on
+    EnsureOnnxRuntime first. Run the same check (AllowDownload=False
+    so this stays read-only) and surface the result so the status
+    output mirrors what the backend gate actually decides. }
+  try
+    EnsureOnnxRuntime(CacheDir,
+                      {AAllowDownload=} False,
+                      {AVerbose=}        False);
+    PrintCheckMark(Ansi.Green, '✓', 'ONNX Runtime is loadable');
+  except
+    on E: Exception do
+    begin
+      PrintCheckMark(Ansi.Yellow, '·',
+        'ONNX Runtime not loadable — ' + E.Message);
+      if not CanAutoProvisionRuntime then
+      begin
+        PrintLn('    ' + Ansi.Dim +
+          'auto-download is win-x64 only on this build; install via:' +
+          Ansi.Reset);
+        PrintLn('    ' + Ansi.Dim +
+          '  Debian / Ubuntu:  apt install libonnxruntime-dev' +
+          Ansi.Reset);
+        PrintLn('    ' + Ansi.Dim +
+          '  macOS (Homebrew): brew install onnxruntime' +
+          Ansi.Reset);
+        PrintLn('    ' + Ansi.Dim +
+          '  Other Linux:      see https://onnxruntime.ai/docs/install/' +
+          Ansi.Reset);
+      end;
+    end;
+  end;
+
   PrintLn;
   PrintLn(Ansi.Dim +
     'Run `pasclaw memory provision` to download missing artifacts.' + Ansi.Reset);
