@@ -70,7 +70,7 @@
         <Manifest_File>None</Manifest_File>
         <DCC_UsePackage>$(DCC_UsePackage)</DCC_UsePackage>
         <!-- Every src/pkg/* directory + src/cmd, relative to src/pasclaw/ -->
-        <DCC_UnitSearchPath>..\cmd;..\pkg\cliui;..\pkg\utils;..\pkg\logger;..\pkg\config;..\pkg\json;..\pkg\providers;..\pkg\tokenizer;..\pkg\tools;..\pkg\mcp;..\pkg\gateway;..\pkg\channels;..\pkg\crypto;..\pkg\net;..\pkg\search;..\pkg\cron;..\pkg\skills;..\pkg\session;..\pkg\identity;..\pkg\agent;..\pkg\memory;..\pkg\updater;..\pkg\membench;..\pkg\tui;..\pkg\platform;..\pkg\hashline;..\pkg\component;..\pkg\markdown;..\pkg\vendor\dmvcframework;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+        <DCC_UnitSearchPath>..\cmd;..\pkg\cliui;..\pkg\utils;..\pkg\logger;..\pkg\config;..\pkg\json;..\pkg\providers;..\pkg\tokenizer;..\pkg\tools;..\pkg\mcp;..\pkg\gateway;..\pkg\channels;..\pkg\crypto;..\pkg\net;..\pkg\search;..\pkg\cron;..\pkg\skills;..\pkg\session;..\pkg\identity;..\pkg\agent;..\pkg\memory;..\pkg\memory\localvector;..\pkg\updater;..\pkg\membench;..\pkg\tui;..\pkg\platform;..\pkg\hashline;..\pkg\component;..\pkg\markdown;..\pkg\vendor\dmvcframework;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
         <!--
           DCC_Namespace lets dcc32/dcc64 resolve bare unit names ("SysUtils",
           "Classes", "Windows") back to their fully qualified modern names
@@ -144,6 +144,7 @@
         <DCCReference Include="..\cmd\PasClaw.Cmd.Update.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Post.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Membench.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Memory.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.TUI.pas"/>
 
         <!-- pkg/cliui -->
@@ -266,6 +267,26 @@
         <!-- pkg/memory -->
         <DCCReference Include="..\pkg\memory\PasClaw.Memory.pas"/>
         <DCCReference Include="..\pkg\memory\PasClaw.Memory.Index.pas"/>
+        <DCCReference Include="..\pkg\memory\PasClaw.Memory.Vector.pas"/>
+
+        <!-- pkg/memory/localvector — in-tree port of FMXExpress/localvector
+             (MIT, src/pkg/memory/localvector/LICENSE). Used by
+             PasClaw.Memory.Vector for the hybrid FTS5 + sqlite-vec
+             backend; provisioning surface lives in
+             PasClaw.Cmd.Memory.pas. -->
+        <DCCReference Include="..\pkg\memory\localvector\LocalVector.Models.pas"/>
+        <DCCReference Include="..\pkg\memory\localvector\LocalVector.Runtime.pas"/>
+        <DCCReference Include="..\pkg\memory\localvector\LocalVector.Sqlite3.pas"/>
+        <DCCReference Include="..\pkg\memory\localvector\LocalVector.Tokenizer.pas"/>
+        <DCCReference Include="..\pkg\memory\localvector\LocalVector.Embedder.pas"/>
+        <DCCReference Include="..\pkg\memory\localvector\LocalVector.VectorStore.pas"/>
+        <DCCReference Include="..\pkg\memory\localvector\LocalVector.VectorStore.Sqlite.pas"/>
+        <DCCReference Include="..\pkg\memory\localvector\LocalVector.VectorStore.FireDAC.pas"/>
+        <DCCReference Include="..\pkg\memory\localvector\LocalVector.Downloader.pas"/>
+        <DCCReference Include="..\pkg\memory\localvector\LocalVector.OrtProvision.pas"/>
+        <DCCReference Include="..\pkg\memory\localvector\LocalVector.VecProvision.pas"/>
+        <DCCReference Include="..\pkg\memory\localvector\onnxruntime.pas"/>
+        <DCCReference Include="..\pkg\memory\localvector\onnxruntime_pas_api.pas"/>
 
         <!-- pkg/updater -->
         <DCCReference Include="..\pkg\updater\PasClaw.Updater.pas"/>
