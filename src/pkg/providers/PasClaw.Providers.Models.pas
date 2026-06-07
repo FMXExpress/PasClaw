@@ -28,10 +28,16 @@
                  catalog rows like embedding-only or counter-only
                  models would 404 the chat path anyway.
 
-  Cache lives at $PASCLAW_HOME/cache/models/<provider>.json with a
-  fetched_at timestamp; LoadCachedModels signals staleness so
+  Cache lives at $PASCLAW_HOME/cache/models/<provider-name>.json with
+  a fetched_at timestamp; LoadCachedModels signals staleness so
   `pasclaw model show` can suggest a refresh and onboarding can decide
   whether to refetch silently in the background.
+
+  Cache key is the operator-facing TProviderConfig.Name (NOT the
+  catalog Spec.Kind), so two named providers sharing one Kind but
+  pointing at different APIBase/keys — supported by
+  NewProviderFromConfig — each get their own roster file and don't
+  clobber one another (Codex P2 on PR #171).
 
   Discovery never raises. Failure modes:
     - HTTP non-2xx          Ok=False, Source='', ErrMsg=<status>

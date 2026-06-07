@@ -19,6 +19,7 @@ uses
   PasClaw.Config,
   PasClaw.CliUI,
   PasClaw.Providers.Catalog,
+  PasClaw.Providers.Factory,
   PasClaw.Providers.Models;
 
 procedure Help;
@@ -50,14 +51,13 @@ end;
 function DoShow: Integer;
 { Adds a "cache freshness" annotation for the default provider's
   /models cache when one exists, plus a hint to refresh when nothing
-  is cached. The actual cached model body lives in
-  $PASCLAW_HOME/cache/models/<kind>.json; `pasclaw model list`
-  surfaces it in full. }
+  is cached. The cached body lives in
+  $PASCLAW_HOME/cache/models/<provider-name>.json — keyed on the
+  Provider Name (Cfg.DefaultProvider is a Name reference, not a
+  catalog Kind), so two configs sharing a Kind don't collide. }
 var
   Cfg: TConfig;
-  Idx: Integer;
   R:   TModelDiscoveryResult;
-  Kind: string;
 begin
   Cfg := LoadConfig;
   try
@@ -66,21 +66,13 @@ begin
 
     if Cfg.DefaultProvider <> '' then
     begin
-      if FindProviderConfig(Cfg, Cfg.DefaultProvider, Idx) then
-        Kind := Cfg.Providers[Idx].Kind
+      if LoadCachedModels(Cfg.DefaultProvider, R) then
+        PrintLn(Format('models cached:    %d (refreshed %s)',
+                       [Length(R.Models), HumanAge(R.FetchedAt)]))
       else
-        Kind := Cfg.DefaultProvider;
-
-      if Kind <> '' then
-      begin
-        if LoadCachedModels(Kind, R) then
-          PrintLn(Format('models cached:    %d (refreshed %s)',
-                         [Length(R.Models), HumanAge(R.FetchedAt)]))
-        else
-          PrintLn('models cached:    ' + Ansi.Dim +
-                  '(none — run `pasclaw model refresh ' + Cfg.DefaultProvider +
-                  '` to populate)' + Ansi.Reset);
-      end;
+        PrintLn('models cached:    ' + Ansi.Dim +
+                '(none — run `pasclaw model refresh ' + Cfg.DefaultProvider +
+                '` to populate)' + Ansi.Reset);
     end;
     Result := 0;
   finally
@@ -93,11 +85,15 @@ function ResolveSpecForName(Cfg: TConfig; const Name: string;
                             out Base, Key: string;
                             out ErrMsg: string): Boolean;
 { Walks the same path NewProviderFromConfig walks — find the config
-  entry by Name, look its Kind up in the catalog, resolve base / key
-  via catalog defaults. Centralises the lookup so refresh + list both
-  fail with the same operator-facing wording. }
+  entry by Name, NORMALISE the Kind (lowercase / trim / "openai-compat"
+  → "openai"), fall back to Name when Kind is blank, then look up the
+  catalog. Codex P2 on PR #171: without the normalisation + name
+  fallback this path rejected providers that NewProviderFromConfig
+  resolves cleanly, so `pasclaw model refresh openai-compat-thing`
+  said "unknown kind" even when the provider could chat. }
 var
   Idx: Integer;
+  Kind: string;
 begin
   Result := False;
   ErrMsg := '';
@@ -107,7 +103,9 @@ begin
               '" — run `pasclaw auth login ' + Name + '` first';
     Exit;
   end;
-  if not LookupProvider(Cfg.Providers[Idx].Kind, Spec) then
+  Kind := NormalizeProviderKind(Cfg.Providers[Idx].Kind);
+  if Kind = '' then Kind := NormalizeProviderKind(Cfg.Providers[Idx].Name);
+  if not LookupProvider(Kind, Spec) then
   begin
     ErrMsg := 'provider "' + Name + '" has unknown kind "' +
               Cfg.Providers[Idx].Kind + '"';
@@ -139,7 +137,11 @@ begin
     PrintLn('  ' + Ansi.Red + '✗ ' + Ansi.Reset + Name + ': ' + R.ErrMsg);
     Exit;
   end;
-  SaveCachedModels(Spec.Kind, R);
+  { Cache keyed on the operator-facing Provider Name (NOT Spec.Kind)
+    so two Cfg.Providers[] rows that share a Kind but point at
+    different APIBase/keys — supported by NewProviderFromConfig —
+    don't clobber each other's roster. Codex P2 on PR #171. }
+  SaveCachedModels(Name, R);
   PrintLn(Format('  %s✓ %s%s: %d model(s) cached',
                  [Ansi.Green, Ansi.Reset, Name, Length(R.Models)]));
   Result := True;
@@ -189,9 +191,8 @@ end;
 
 function DoList(const Argv: array of string): Integer;
 var
-  Cfg: TConfig;
-  Idx, i, Cap: Integer;
-  Kind, Label_: string;
+  i, Cap: Integer;
+  Name, Label_: string;
   R: TModelDiscoveryResult;
 begin
   if Length(Argv) < 2 then
@@ -199,43 +200,37 @@ begin
     PrintLn('Usage: pasclaw model list <provider>');
     Exit(1);
   end;
-  Cfg := LoadConfig;
-  try
-    if FindProviderConfig(Cfg, Argv[1], Idx) then
-      Kind := Cfg.Providers[Idx].Kind
-    else
-      Kind := Argv[1];
-
-    if not LoadCachedModels(Kind, R) then
-    begin
-      PrintLn('No cache for "' + Argv[1] +
-              '". Run `pasclaw model refresh ' + Argv[1] + '` first.');
-      Exit(1);
-    end;
-    PrintLn(Format('%s (%d cached, refreshed %s)',
-                   [Argv[1], Length(R.Models), HumanAge(R.FetchedAt)]));
-
-    Cap := Length(R.Models);
-    if Cap > 100 then Cap := 100;   { keep the printout readable; the
-                                      JSON file holds the full list }
-    for i := 0 to Cap - 1 do
-    begin
-      Label_ := R.Models[i].Display;
-      if Label_ = R.Models[i].Id then
-        PrintLn('  ' + Ansi.Dim + '·' + Ansi.Reset + ' ' + R.Models[i].Id)
-      else
-        PrintLn('  ' + Ansi.Dim + '·' + Ansi.Reset + ' ' + R.Models[i].Id +
-                Ansi.Dim + '   (' + Label_ + ')' + Ansi.Reset);
-    end;
-    if Length(R.Models) > Cap then
-      PrintLn(Ansi.Dim +
-              Format('  … and %d more in %s',
-                     [Length(R.Models) - Cap, ModelCachePath(Kind)]) +
-              Ansi.Reset);
-    Result := 0;
-  finally
-    Cfg.Free;
+  { Cache lookup keys directly on the operator-facing Name — same
+    key RefreshOne writes to. Two configs sharing a Kind but with
+    different APIBase keys each get their own roster file. }
+  Name := Argv[1];
+  if not LoadCachedModels(Name, R) then
+  begin
+    PrintLn('No cache for "' + Name +
+            '". Run `pasclaw model refresh ' + Name + '` first.');
+    Exit(1);
   end;
+  PrintLn(Format('%s (%d cached, refreshed %s)',
+                 [Name, Length(R.Models), HumanAge(R.FetchedAt)]));
+
+  Cap := Length(R.Models);
+  if Cap > 100 then Cap := 100;   { keep the printout readable; the
+                                    JSON file holds the full list }
+  for i := 0 to Cap - 1 do
+  begin
+    Label_ := R.Models[i].Display;
+    if Label_ = R.Models[i].Id then
+      PrintLn('  ' + Ansi.Dim + '·' + Ansi.Reset + ' ' + R.Models[i].Id)
+    else
+      PrintLn('  ' + Ansi.Dim + '·' + Ansi.Reset + ' ' + R.Models[i].Id +
+              Ansi.Dim + '   (' + Label_ + ')' + Ansi.Reset);
+  end;
+  if Length(R.Models) > Cap then
+    PrintLn(Ansi.Dim +
+            Format('  … and %d more in %s',
+                   [Length(R.Models) - Cap, ModelCachePath(Name)]) +
+            Ansi.Reset);
+  Result := 0;
 end;
 
 function DoSet(const Argv: array of string): Integer;

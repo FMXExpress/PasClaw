@@ -41,6 +41,14 @@ function ResolveFallbacks(Cfg: TConfig): TLLMProviderArray;
    direct test coverage. *)
 function IsGenuineOpenAI(const RawKind, RawName: string): Boolean;
 
+(* Apply the same normalisation NewProviderFromConfig uses before
+   the catalog lookup: lowercase + trim, and collapse the legacy
+   "openai-compat" alias to "openai". Exposed so other call paths
+   (PasClaw.Cmd.Model.refresh / list — Codex P2 on PR #171) hit the
+   catalog the same way the factory does and don't reject a
+   normally-chat-capable provider with "unknown kind". *)
+function NormalizeProviderKind(const Kind: string): string;
+
 implementation
 
 uses

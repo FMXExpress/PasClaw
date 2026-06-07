@@ -177,9 +177,14 @@ begin
     Exit;
   end;
 
-  { Cache the full result; the onboarding picker only shows the top
-    VISIBLE_TOP_N rows but `pasclaw model list <provider>` will
-    surface the whole roster from disk. }
+  { Cache the full result, keyed on Spec.Kind because that's the
+    Provider Name UpsertProvider is about to set on the new config
+    entry (Name := Spec.Kind for both the upsert and insert paths
+    in this file). Same key future `pasclaw model refresh` and
+    `model list` invocations against this provider will use,
+    keeping the cache addressable from any of those sites. Codex
+    P2 on PR #171 — see PasClaw.Cmd.Model for the corresponding
+    cache-key shift on the refresh side. }
   SaveCachedModels(Spec.Kind, R);
   SortModelsByDate(R.Models);
 

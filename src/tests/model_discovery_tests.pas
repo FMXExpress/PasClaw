@@ -21,6 +21,7 @@ program model_discovery_tests;
 
 uses
   SysUtils, DateUtils,
+  PasClaw.Providers.Factory,
   PasClaw.Providers.Models;
 
 procedure Fail(const Msg: string);
@@ -161,10 +162,75 @@ begin
   AssertEqStr(A, B, 'ModelCachePath case-insensitive');
 end;
 
+procedure TestCacheKeysDontCollideAcrossNames;
+(* Codex P2 on PR #171. Two config providers with the same Kind
+   (both 'openai') but different Names (the operator-facing alias)
+   must each have their own cache file. If they collide, refreshing
+   one would silently overwrite the other's roster. *)
+var
+  A, B: TModelDiscoveryResult;
+  Loaded: TModelDiscoveryResult;
+  PathA, PathB: string;
+begin
+  PathA := ModelCachePath('openai-primary');
+  PathB := ModelCachePath('openai-backup');
+  if FileExists(PathA) then DeleteFile(PathA);
+  if FileExists(PathB) then DeleteFile(PathB);
+
+  if SameText(PathA, PathB) then
+    Fail('cache paths collapse across different Names — keying is broken');
+
+  A := Default(TModelDiscoveryResult);
+  A.Ok := True; A.FetchedAt := 1717000000;
+  SetLength(A.Models, 1);
+  A.Models[0].Id := 'gpt-4o-primary';
+
+  B := Default(TModelDiscoveryResult);
+  B.Ok := True; B.FetchedAt := 1717000000;
+  SetLength(B.Models, 1);
+  B.Models[0].Id := 'gpt-4o-backup';
+
+  SaveCachedModels('openai-primary', A);
+  SaveCachedModels('openai-backup',  B);
+
+  if not LoadCachedModels('openai-primary', Loaded) then
+    Fail('primary cache missing after save');
+  AssertEqStr(Loaded.Models[0].Id, 'gpt-4o-primary',
+              'primary cache preserved when sibling Name is also written');
+
+  if not LoadCachedModels('openai-backup', Loaded) then
+    Fail('backup cache missing after save');
+  AssertEqStr(Loaded.Models[0].Id, 'gpt-4o-backup',
+              'backup cache preserved when sibling Name is also written');
+
+  if FileExists(PathA) then DeleteFile(PathA);
+  if FileExists(PathB) then DeleteFile(PathB);
+end;
+
+procedure TestKindNormalisationMatchesFactory;
+(* Codex P2 on PR #171. The model-refresh path looks the kind up via
+   LookupProvider — but a config carrying Kind='openai-compat' or
+   blank Kind only resolves through NewProviderFromConfig's
+   normalisation. NormalizeProviderKind is exposed from the factory
+   for exactly this reason; pin its behaviour so the contract
+   doesn't drift. *)
+begin
+  AssertEqStr(NormalizeProviderKind('openai-compat'), 'openai',
+              'openai-compat collapses to openai');
+  AssertEqStr(NormalizeProviderKind('OpenAI'), 'openai',
+              'lowercase normalisation');
+  AssertEqStr(NormalizeProviderKind('  groq  '), 'groq',
+              'whitespace trimmed');
+  AssertEqStr(NormalizeProviderKind(''), '',
+              'empty stays empty so callers can fall back to Name');
+end;
+
 begin
   TestLoadMissingCacheReturnsFalse;
   TestCacheRoundTrip;
   TestHumanAgeBuckets;
   TestCachePathCanonicalisation;
+  TestCacheKeysDontCollideAcrossNames;
+  TestKindNormalisationMatchesFactory;
   WriteLn('model_discovery_tests: OK');
 end.
