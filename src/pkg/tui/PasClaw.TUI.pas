@@ -121,6 +121,7 @@ type
                                const R: TModelDiscoveryResult);
     procedure StartModelRefresh(const Provider: string);
     procedure PollModelRefresh;
+    function  ActiveProviderName: string;
     procedure HandleModelMenuKey(Key: Integer);
     procedure ApplyModelSelection(const ModelId: string);
     procedure HandleKey(Key: Integer);
@@ -450,19 +451,40 @@ begin
   FMenuOpen := True;
 end;
 
+function TTUI.ActiveProviderName: string;
+{ Provider name used for /model cache lookup and post-refresh apply
+  decisions: prefer the active session's recorded provider, else
+  the global default from config.json. Empty string when nothing
+  is configured anywhere — callers flash an onboard hint in that
+  case. Shared between OpenModelMenu (entry) and PollModelRefresh
+  (completion) so they agree on "is this the same context the
+  refresh started against". }
+var
+  Cfg: TConfig;
+begin
+  Result := '';
+  if (FSession <> nil) and (FSession.Meta.Provider <> '') then
+    Result := FSession.Meta.Provider
+  else
+  begin
+    Cfg := LoadConfig;
+    try
+      Result := Cfg.DefaultProvider;
+    finally
+      Cfg.Free;
+    end;
+  end;
+end;
+
 procedure TTUI.OpenModelMenu;
 { Entry point for the /model slash command. Cache-first: if the
   on-disk roster has models, populate the overlay and open it
   immediately. Empty / missing cache → kick off an async refresh
   (TModelRefreshThread) so the operator no longer has to quit the
   TUI, run `pasclaw model refresh`, and restart. Completion is
-  picked up by PollModelRefresh in the Run() loop.
-
-  Provider lookup: prefer the active session's recorded provider,
-  else the global default from config. The cache file is keyed on
-  the operator-facing Name (PR #171 Codex P2 contract). }
+  picked up by PollModelRefresh in the Run() loop. The cache file
+  is keyed on the operator-facing Name (PR #171 Codex P2). }
 var
-  Cfg: TConfig;
   R: TModelDiscoveryResult;
   Provider: string;
 begin
@@ -472,19 +494,7 @@ begin
     Exit;
   end;
 
-  Provider := '';
-  if (FSession <> nil) and (FSession.Meta.Provider <> '') then
-    Provider := FSession.Meta.Provider
-  else
-  begin
-    Cfg := LoadConfig;
-    try
-      Provider := Cfg.DefaultProvider;
-    finally
-      Cfg.Free;
-    end;
-  end;
-
+  Provider := ActiveProviderName;
   if Provider = '' then
   begin
     Flash('no provider configured -- run `pasclaw onboard` first');
@@ -608,8 +618,24 @@ begin
     Exit;
   end;
 
+  { Always save the cache — the HTTP succeeded, the roster is now
+    authoritative for this provider regardless of what the operator
+    is currently looking at. }
   SaveCachedModels(Provider, R);
-  OpenModelOverlay(Provider, R);
+
+  { Only raise the picker overlay if the active session's provider
+    still matches the one we refreshed. If the operator swapped
+    sessions mid-fetch (A using openai → B using anthropic), the
+    overlay would show openai's roster, ApplyModelSelection would
+    write the pick into B's Meta.Model, and B silently ends up
+    talking to its anthropic provider with an openai model id.
+    Codex P2 on this PR — same shape as the FLoopSessionId fix
+    from PR #122. Cache is safe to keep; the open is what's not. }
+  if SameText(ActiveProviderName, Provider) then
+    OpenModelOverlay(Provider, R)
+  else
+    Flash(Format('%s models refreshed (%d) -- switch to a session using %s to pick',
+                 [Provider, Length(R.Models), Provider]));
 end;
 
 procedure TTUI.ApplyModelSelection(const ModelId: string);
