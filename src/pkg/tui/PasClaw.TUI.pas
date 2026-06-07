@@ -40,6 +40,12 @@ uses
   SysUtils,
   PasClaw.Providers.Intf,
   PasClaw.Providers.Types,
+  PasClaw.Providers.Models,        { TModelInfoArray is referenced from the
+                                     TTUI class declaration (FModelMenuModels);
+                                     Delphi requires the type to be visible
+                                     from the interface section's uses, not
+                                     just the implementation's. FPC was
+                                     permissive about this; dcc64 is not. }
   PasClaw.Tools.Registry,
   PasClaw.Session.Store;
 
@@ -169,8 +175,10 @@ uses
   PasClaw.Tools.ToolLoop,
   PasClaw.Agent.Steering,
   PasClaw.Markdown.Render,
-  PasClaw.Config,
-  PasClaw.Providers.Models
+  PasClaw.Config
+  { PasClaw.Providers.Models is in the interface uses already — needed
+    from there so dcc64 can see TModelInfoArray when it compiles the
+    TTUI class declaration. }
   {$IFNDEF FPC}
   , Math, StrUtils,
   MVCFramework.Console, LoggerPro.AnsiColors
