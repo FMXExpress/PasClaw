@@ -52,6 +52,7 @@ uses
   PasClaw.Cmd.Update,
   PasClaw.Cmd.Post,
   PasClaw.Cmd.Membench,
+  PasClaw.Cmd.Memory,
   PasClaw.Cmd.TUI;
 
 type
@@ -106,7 +107,7 @@ const
 var
   Sub, Fl: array of string;
 begin
-  SetLength(Sub, 21);
+  SetLength(Sub, 22);
   Sub[0]  := 'config       View/edit configuration';
   Sub[1]  := 'onboard      Initialize config & workspace';
   Sub[2]  := 'agent        Chat with the assistant (line-by-line)';
@@ -127,7 +128,8 @@ begin
   Sub[17] := 'resume       Resume a saved session (alias for agent --session)';
   Sub[18] := 'steer        Push a mid-loop follow-up into a running agent';
   Sub[19] := 'update       Self-update PasClaw';
-  Sub[20] := 'version      Show version info';
+  Sub[20] := 'memory       Provision the hybrid memory_search runtime';
+  Sub[21] := 'version      Show version info';
 
   SetLength(Fl, 2);
   Fl[0] := '--no-color   Disable colored output (also: NO_COLOR env)';
@@ -174,6 +176,7 @@ begin
   else if Cmd = 'model'    then Result := Cmd_Model_Run(Argv)
   else if Cmd = 'post'     then Result := Cmd_Post_Run(Argv)
   else if Cmd = 'membench' then Result := Cmd_Membench_Run(Argv)
+  else if Cmd = 'memory'   then Result := Cmd_Memory_Run(Argv)
   else if Cmd = 'tui'      then Result := Cmd_TUI_Run(Argv)
   else if Cmd = 'update'   then Result := Cmd_Update_Run(Argv)
   else if Cmd = 'version'  then Result := Cmd_Version_Run(Argv)

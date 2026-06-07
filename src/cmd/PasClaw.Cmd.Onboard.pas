@@ -29,7 +29,8 @@ uses
   PasClaw.CliUI,
   PasClaw.Logger,
   PasClaw.Providers.Catalog,
-  PasClaw.MCP.Catalog;
+  PasClaw.MCP.Catalog,
+  PasClaw.Cmd.Memory;
 
 function ReadLineEcho(const Prompt: string): string;
 begin
@@ -188,17 +189,16 @@ procedure PromptVectorSearch(Cfg: TConfig);
   because the hybrid index is what picoclaw / nanobot ship and it's
   what memory_search "should" feel like. The vector half adds local
   ANN search via sqlite-vec + an ONNX-runtime'd BERT embedder
-  (MiniLM / bge), fused with FTS5 BM25 through Reciprocal Rank
+  (MiniLM by default), fused with FTS5 BM25 through Reciprocal Rank
   Fusion — same shape as picoclaw.
 
-  Honest disclosure: the runtime pieces (ONNX Runtime DLL, sqlite-vec
-  extension, model weights — together ~300-500MB) get downloaded on
-  first memory_search call AFTER the follow-up PR lands the
-  provisioning hooks. This pass only records the operator's
-  preference. Until then the flag is inert — memory_search keeps
-  using FTS5-only on every code path. Operators who said yes won't
-  see a download in this release and that's OK; the next pass picks
-  the flag up and does the right thing. }
+  After the user opts in we offer to provision the runtime artifacts
+  (sqlite-vec extension, ONNX Runtime, MiniLM weights ~91 MB) right
+  now via `pasclaw memory provision`. Default NO on that follow-up
+  question because (a) the download is fat enough to deserve an
+  explicit "yes" and (b) a user with no internet at onboard time can
+  defer it. When they decline, memory_search still works — it falls
+  back to the FTS-only path until the artifacts arrive. }
 var
   Choice: string;
 begin
@@ -210,23 +210,50 @@ begin
   PrintLn(Ansi.Dim +
     'fused via Reciprocal Rank Fusion — matches picoclaw / nanobot memory_search.' +
     Ansi.Reset);
-  PrintLn(Ansi.Dim +
-    'A follow-up release downloads the embedding model (~300MB) on first use.' +
-    Ansi.Reset);
   PrintLn;
   Choice := Trim(LowerCase(ReadLineEcho('  Enable vector search for memory_search [Y/n]: ')));
-  if (Choice = '') or (Choice = 'y') or (Choice = 'yes') then
-  begin
-    Cfg.VectorSearchEnabled := True;
-    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
-      ' vector search enabled (model download deferred until first memory_search)');
-  end
-  else
+  if not ((Choice = '') or (Choice = 'y') or (Choice = 'yes')) then
   begin
     Cfg.VectorSearchEnabled := False;
     PrintLn('  ' + Ansi.Dim +
       '(skipped — memory_search will use FTS5 keyword search only)' + Ansi.Reset);
+    Exit;
   end;
+
+  Cfg.VectorSearchEnabled := True;
+  PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' vector search enabled');
+
+  { Offer to fetch the runtime artifacts immediately. Default NO so a
+    user hitting Enter through the onboard doesn't get hit by a
+    91 MB download they didn't expect. If they decline, the same
+    download fires lazily on the first memory_search after they run
+    `pasclaw memory provision` themselves. }
+  PrintLn;
+  PrintLn(Ansi.Dim +
+    '  The hybrid backend needs three artifacts (~91 MB total):' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    '    sqlite-vec extension     (asg017/sqlite-vec, ~150 KB)' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    '    MiniLM model + vocab     (HuggingFace, ~90 MB)' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    '    ONNX Runtime             (auto-download win-x64 only;' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    '                              elsewhere install via system pkg mgr)' +
+    Ansi.Reset);
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Download now? [y/N]: ')));
+  if (Choice = 'y') or (Choice = 'yes') then
+  begin
+    PrintLn;
+    Cmd_Memory_Run(['provision']);
+  end
+  else
+    PrintLn('  ' + Ansi.Dim +
+      '(deferred — run `pasclaw memory provision` when ready)' + Ansi.Reset);
 end;
 
 procedure PromptMCPInstalls(Cfg: TConfig);
