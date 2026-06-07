@@ -100,6 +100,15 @@ type
     FModelMenuSource:   string;        { one-liner under the title, e.g.
                                          "cached 3 days ago" }
     FModelMenuOrigModel: string;       { revert to on Esc }
+    { Async /v1/models refresh kicked off by /model when the cache
+      is empty / missing. Spec/Base/Key were already resolved when
+      the thread was spawned — we just hold them long enough to
+      finish on the main thread (SaveCachedModels + open overlay).
+      Polling lives in Run() right next to PollLoopWorker. }
+    FModelRefreshThread:   TObject;    { TModelRefreshThread; opaque to
+                                         avoid forward decls }
+    FModelRefreshProvider: string;
+    FModelRefreshStartedAt: TDateTime;
     procedure DrawFrame;
     procedure DrawHeaderBar(W: Integer);
     procedure DrawSessionPane(X, Y, W, H: Integer);
@@ -108,6 +117,11 @@ type
     procedure DrawThemeMenu;
     procedure DrawModelMenu;
     procedure OpenModelMenu;
+    procedure OpenModelOverlay(const Provider: string;
+                               const R: TModelDiscoveryResult);
+    procedure StartModelRefresh(const Provider: string);
+    procedure PollModelRefresh;
+    function  ActiveProviderName: string;
     procedure HandleModelMenuKey(Key: Integer);
     procedure ApplyModelSelection(const ModelId: string);
     procedure HandleKey(Key: Integer);
@@ -175,6 +189,7 @@ uses
   PasClaw.Tools.ToolLoop,
   PasClaw.Agent.Steering,
   PasClaw.Markdown.Render,
+  PasClaw.Providers.Catalog,       { TProviderSpec — for TModelRefreshThread }
   PasClaw.Config
   { PasClaw.Providers.Models is in the interface uses already — needed
     from there so dcc64 can see TModelInfoArray when it compiles the
@@ -202,6 +217,27 @@ type
     property LoopResult: TToolLoopResult read FLoop;
     property Ok: Boolean read FOk;
     property Err: string read FErr;
+    property DoneEvent: TEvent read FDone;
+  end;
+
+  { Background /v1/models discovery for the TUI's `/model` overlay.
+    Same shape as TRunToolLoopThread — Execute drives a single
+    synchronous call (DiscoverModels), TEvent signals completion,
+    the main Run() loop polls every frame. Lets us auto-refresh the
+    cache when /model is hit with an empty / missing cache without
+    freezing the UI thread on the HTTP round-trip. }
+  TModelRefreshThread = class(TThread)
+  private
+    FSpec: TProviderSpec;
+    FBase, FKey: string;
+    FResult: TModelDiscoveryResult;
+    FDone: TEvent;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const ASpec: TProviderSpec; const ABase, AKey: string);
+    destructor Destroy; override;
+    property DiscoveryResult: TModelDiscoveryResult read FResult;
     property DoneEvent: TEvent read FDone;
   end;
 
@@ -250,6 +286,37 @@ begin
   FDone.SetEvent;
 end;
 
+constructor TModelRefreshThread.Create(const ASpec: TProviderSpec;
+                                       const ABase, AKey: string);
+begin
+  inherited Create(True);
+  FreeOnTerminate := False;
+  FSpec := ASpec;
+  FBase := ABase;
+  FKey  := AKey;
+  FDone := TEvent.Create(nil, True, False, '');
+end;
+
+destructor TModelRefreshThread.Destroy;
+begin
+  FDone.Free;
+  inherited Destroy;
+end;
+
+procedure TModelRefreshThread.Execute;
+begin
+  try
+    FResult := DiscoverModels(FSpec, FBase, FKey);
+  except
+    on E: Exception do
+    begin
+      FResult.Ok     := False;
+      FResult.ErrMsg := E.Message;
+    end;
+  end;
+  FDone.SetEvent;
+end;
+
 
 constructor TTUI.Create(Provider: ILLMProvider; Registry: TToolRegistry; const Model: string);
 begin
@@ -281,6 +348,7 @@ const
   CleanupWaitMs = 250;
 var
   Worker: TRunToolLoopThread;
+  RefreshWorker: TModelRefreshThread;
 begin
   if FLoopThread <> nil then
   begin
@@ -299,6 +367,22 @@ begin
     else
       Worker.FreeOnTerminate := True;
     FLoopThread := nil;
+  end;
+  { Same bounded-wait pattern for the /model refresh worker. The
+    HTTP client there can also block past Terminate, so hand off to
+    the OS on timeout. }
+  if FModelRefreshThread <> nil then
+  begin
+    RefreshWorker := TModelRefreshThread(FModelRefreshThread);
+    RefreshWorker.Terminate;
+    if RefreshWorker.DoneEvent.WaitFor(CleanupWaitMs) = wrSignaled then
+    begin
+      RefreshWorker.WaitFor;
+      RefreshWorker.Free;
+    end
+    else
+      RefreshWorker.FreeOnTerminate := True;
+    FModelRefreshThread := nil;
   end;
   FSession.Free;
   inherited Destroy;
@@ -367,50 +451,76 @@ begin
   FMenuOpen := True;
 end;
 
-procedure TTUI.OpenModelMenu;
-{ Loads the cached /v1/models roster for the session's provider and
-  opens the picker overlay. Source data is the cache file populated
-  by `pasclaw model refresh <provider>` / `pasclaw onboard` — we
-  deliberately don't trigger a live fetch inline (HTTP from inside
-  a TUI event loop would freeze the UI thread). The picker says how
-  fresh the cache is so the operator knows whether to drop out and
-  refresh. Empty cache → flash a hint instead of opening an empty
-  picker. }
+function TTUI.ActiveProviderName: string;
+{ Provider name used for /model cache lookup and post-refresh apply
+  decisions: prefer the active session's recorded provider, else
+  the global default from config.json. Empty string when nothing
+  is configured anywhere — callers flash an onboard hint in that
+  case. Shared between OpenModelMenu (entry) and PollModelRefresh
+  (completion) so they agree on "is this the same context the
+  refresh started against". }
 var
   Cfg: TConfig;
-  R: TModelDiscoveryResult;
-  Provider: string;
-  i: Integer;
 begin
-  { Provider lookup: prefer the active session's recorded provider, else
-    the global default from config. The cache file is keyed on the
-    operator-facing Name (PR #171 Codex P2 contract). }
-  Provider := '';
+  Result := '';
   if (FSession <> nil) and (FSession.Meta.Provider <> '') then
-    Provider := FSession.Meta.Provider
+    Result := FSession.Meta.Provider
   else
   begin
     Cfg := LoadConfig;
     try
-      Provider := Cfg.DefaultProvider;
+      Result := Cfg.DefaultProvider;
     finally
       Cfg.Free;
     end;
   end;
+end;
 
+procedure TTUI.OpenModelMenu;
+{ Entry point for the /model slash command. Cache-first: if the
+  on-disk roster has models, populate the overlay and open it
+  immediately. Empty / missing cache → kick off an async refresh
+  (TModelRefreshThread) so the operator no longer has to quit the
+  TUI, run `pasclaw model refresh`, and restart. Completion is
+  picked up by PollModelRefresh in the Run() loop. The cache file
+  is keyed on the operator-facing Name (PR #171 Codex P2). }
+var
+  R: TModelDiscoveryResult;
+  Provider: string;
+begin
+  if FModelRefreshThread <> nil then
+  begin
+    Flash('still fetching models for ' + FModelRefreshProvider + '...');
+    Exit;
+  end;
+
+  Provider := ActiveProviderName;
   if Provider = '' then
   begin
-    Flash('no provider configured — run `pasclaw onboard` first');
+    Flash('no provider configured -- run `pasclaw onboard` first');
     Exit;
   end;
 
-  if not LoadCachedModels(Provider, R) or (Length(R.Models) = 0) then
+  if LoadCachedModels(Provider, R) and (Length(R.Models) > 0) then
   begin
-    Flash('no cached models for ' + Provider +
-          ' — run `pasclaw model refresh ' + Provider + '`');
+    OpenModelOverlay(Provider, R);
     Exit;
   end;
 
+  { Empty / missing cache. Kick off a background fetch instead of
+    making the operator bounce out to the CLI. }
+  StartModelRefresh(Provider);
+end;
+
+procedure TTUI.OpenModelOverlay(const Provider: string;
+                                const R: TModelDiscoveryResult);
+{ Populate the overlay state from a discovery result (cache or
+  freshly fetched) and raise it. Pulled out of OpenModelMenu so the
+  async PollModelRefresh path can call the same body when the
+  worker thread completes. }
+var
+  i: Integer;
+begin
   FMenuOpen           := False;          { close any theme menu first }
   FModelMenuModels    := R.Models;
   FModelMenuProvider  := Provider;
@@ -418,8 +528,6 @@ begin
                                 [Length(R.Models), HumanAge(R.FetchedAt)]);
   FModelMenuOrigModel := FModel;
 
-  { Highlight the currently-active model when it's in the list, so the
-    overlay opens with "where you are now" preselected. }
   FModelMenuSelIdx := 0;
   for i := 0 to High(FModelMenuModels) do
     if SameText(FModelMenuModels[i].Id, FModel) then
@@ -429,6 +537,105 @@ begin
     end;
 
   FModelMenuOpen := True;
+end;
+
+procedure TTUI.StartModelRefresh(const Provider: string);
+{ Resolve the provider's catalog spec + APIBase + APIKey from
+  config.json (same path `pasclaw model refresh` walks) and spawn
+  a background worker that hits /v1/models. The overlay does NOT
+  open here — PollModelRefresh raises it once the worker completes
+  successfully. Failures flash an error and leave the operator in
+  the existing TUI screen. }
+var
+  Cfg: TConfig;
+  Spec: TProviderSpec;
+  Base, Key, Err: string;
+  Worker: TModelRefreshThread;
+begin
+  Cfg := LoadConfig;
+  try
+    if not ResolveProviderSpecForName(Cfg, Provider, Spec, Base, Key, Err) then
+    begin
+      Flash(Err);
+      Exit;
+    end;
+  finally
+    Cfg.Free;
+  end;
+
+  Worker := TModelRefreshThread.Create(Spec, Base, Key);
+  Worker.Start;
+  FModelRefreshThread    := Worker;
+  FModelRefreshProvider  := Provider;
+  FModelRefreshStartedAt := Now;
+  Flash('fetching models from ' + Spec.DisplayName + '...');
+end;
+
+procedure TTUI.PollModelRefresh;
+{ Called every Run() tick. Picks up the TModelRefreshThread result
+  when it's ready, writes the cache file, and opens the overlay
+  (same shape as if the cache had been warm to begin with). Also
+  enforces an 15-second wall clock so a stuck HTTP doesn't pin the
+  refresh slot forever. }
+const
+  REFRESH_TIMEOUT_SEC = 15;
+var
+  Worker: TModelRefreshThread;
+  R: TModelDiscoveryResult;
+  Provider: string;
+begin
+  if FModelRefreshThread = nil then Exit;
+  Worker := TModelRefreshThread(FModelRefreshThread);
+
+  if (SecondsBetween(Now, FModelRefreshStartedAt) >= REFRESH_TIMEOUT_SEC)
+     and (Worker.DoneEvent.WaitFor(0) <> wrSignaled) then
+  begin
+    LogWarn('tui /model refresh timeout after %ds (provider=%s)',
+            [REFRESH_TIMEOUT_SEC, FModelRefreshProvider]);
+    Worker.Terminate;
+    Worker.FreeOnTerminate := True;
+    FModelRefreshThread   := nil;
+    Flash('models refresh timed out -- check connectivity');
+    FModelRefreshProvider := '';
+    Exit;
+  end;
+
+  if Worker.DoneEvent.WaitFor(0) <> wrSignaled then Exit;
+  Worker.WaitFor;
+
+  R        := Worker.DiscoveryResult;
+  Provider := FModelRefreshProvider;
+  Worker.Free;
+  FModelRefreshThread   := nil;
+  FModelRefreshProvider := '';
+
+  if (not R.Ok) or (Length(R.Models) = 0) then
+  begin
+    if R.ErrMsg <> '' then
+      Flash('refresh failed: ' + R.ErrMsg)
+    else
+      Flash('refresh returned no models for ' + Provider);
+    Exit;
+  end;
+
+  { Always save the cache — the HTTP succeeded, the roster is now
+    authoritative for this provider regardless of what the operator
+    is currently looking at. }
+  SaveCachedModels(Provider, R);
+
+  { Only raise the picker overlay if the active session's provider
+    still matches the one we refreshed. If the operator swapped
+    sessions mid-fetch (A using openai → B using anthropic), the
+    overlay would show openai's roster, ApplyModelSelection would
+    write the pick into B's Meta.Model, and B silently ends up
+    talking to its anthropic provider with an openai model id.
+    Codex P2 on this PR — same shape as the FLoopSessionId fix
+    from PR #122. Cache is safe to keep; the open is what's not. }
+  if SameText(ActiveProviderName, Provider) then
+    OpenModelOverlay(Provider, R)
+  else
+    Flash(Format('%s models refreshed (%d) -- switch to a session using %s to pick',
+                 [Provider, Length(R.Models), Provider]));
 end;
 
 procedure TTUI.ApplyModelSelection(const ModelId: string);
@@ -1444,6 +1651,8 @@ begin
   FMenuSelIdx := 0;
   FModelMenuOpen := False;
   FModelMenuSelIdx := 0;
+  FModelRefreshThread   := nil;
+  FModelRefreshProvider := '';
   FLastResizeW := -1; FLastResizeH := -1;
 
   { Always allocate a session (PR #117 default-persist semantics).
@@ -1458,6 +1667,7 @@ begin
     while not FQuit do
     begin
       PollLoopWorker;
+      PollModelRefresh;
 
       { Periodic ListSessions refresh so cron-side / parallel-CLI
         session changes show up without keystrokes. 3s cadence. }
@@ -1564,11 +1774,18 @@ procedure ShowCachedModelsFPC(var FModel: string; const Arg: string);
   the operator can pick one. With an `<id>` argument: switch FModel
   immediately (no validation against the cache — the user might know
   about a model the cache hasn't seen yet). Cache lookup keys on the
-  operator-facing provider Name, same as the Delphi path. }
+  operator-facing provider Name, same as the Delphi path.
+
+  Cache miss → synchronous DiscoverModels right here. The FPC build
+  is line-based (blocking ReadLn loop), so a few seconds of HTTP
+  doesn't fight a render thread the way it would on the Delphi
+  positioned UI; sync is the right shape for this surface. }
 var
   Cfg: TConfig;
   R: TModelDiscoveryResult;
   Provider: string;
+  Spec: TProviderSpec;
+  Base, Key, Err: string;
   i: Integer;
   IdText, DispText: string;
 begin
@@ -1582,21 +1799,34 @@ begin
   Cfg := LoadConfig;
   try
     Provider := Cfg.DefaultProvider;
+
+    if Provider = '' then
+    begin
+      PrintLn(Ansi.Yellow + 'no provider configured -- run `pasclaw onboard` first' + Ansi.Reset);
+      Exit;
+    end;
+
+    if not LoadCachedModels(Provider, R) or (Length(R.Models) = 0) then
+    begin
+      if not ResolveProviderSpecForName(Cfg, Provider, Spec, Base, Key, Err) then
+      begin
+        PrintLn(Ansi.Yellow + Err + Ansi.Reset);
+        Exit;
+      end;
+      PrintLn(Ansi.Dim + 'fetching /models from ' + Spec.DisplayName + '...' + Ansi.Reset);
+      R := DiscoverModels(Spec, Base, Key);
+      if (not R.Ok) or (Length(R.Models) = 0) then
+      begin
+        if R.ErrMsg <> '' then
+          PrintLn(Ansi.Yellow + 'refresh failed: ' + R.ErrMsg + Ansi.Reset)
+        else
+          PrintLn(Ansi.Yellow + 'refresh returned no models for ' + Provider + Ansi.Reset);
+        Exit;
+      end;
+      SaveCachedModels(Provider, R);
+    end;
   finally
     Cfg.Free;
-  end;
-
-  if Provider = '' then
-  begin
-    PrintLn(Ansi.Yellow + 'no provider configured -- run `pasclaw onboard` first' + Ansi.Reset);
-    Exit;
-  end;
-
-  if not LoadCachedModels(Provider, R) or (Length(R.Models) = 0) then
-  begin
-    PrintLn(Ansi.Yellow + 'no cached models for ' + Provider +
-            ' -- run `pasclaw model refresh ' + Provider + '`' + Ansi.Reset);
-    Exit;
   end;
 
   PrintLn(Ansi.Bold + Provider + Ansi.Reset + Ansi.Dim +

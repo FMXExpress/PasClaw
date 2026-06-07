@@ -21,6 +21,8 @@ program model_discovery_tests;
 
 uses
   SysUtils, DateUtils,
+  PasClaw.Config,
+  PasClaw.Providers.Catalog,
   PasClaw.Providers.Factory,
   PasClaw.Providers.Models;
 
@@ -225,6 +227,53 @@ begin
               'empty stays empty so callers can fall back to Name');
 end;
 
+procedure TestResolveProviderSpecForName;
+(* ResolveProviderSpecForName is shared between Cmd.Model (CLI
+   `model refresh`) and TUI (inline /model auto-refresh). Pin its
+   contract: missing-config-entry returns an actionable error,
+   blank-Kind falls back to Name, APIBase defaults to Spec.DefaultBase
+   when the config doesn't override. *)
+var
+  Cfg: TConfig;
+  Spec: TProviderSpec;
+  Base, Key, Err: string;
+begin
+  Cfg := TConfig.Create;
+  try
+    if ResolveProviderSpecForName(Cfg, 'nope', Spec, Base, Key, Err) then
+      Fail('unknown provider should not resolve');
+    if Err = '' then
+      Fail('resolve failure should populate ErrMsg');
+
+    SetLength(Cfg.Providers, 1);
+    Cfg.Providers[0].Name    := 'openai';            { Name = catalog Kind so
+                                                       the blank-Kind fallback
+                                                       lands on a real spec }
+    Cfg.Providers[0].Kind    := '';                  { exercise Name fallback }
+    Cfg.Providers[0].APIBase := '';                  { exercise DefaultBase fallback }
+    Cfg.Providers[0].APIKey  := 'sk-test';
+
+    if not ResolveProviderSpecForName(Cfg, 'openai', Spec, Base, Key, Err) then
+      Fail('name-fallback resolution should succeed (err=' + Err + ')');
+    AssertEqStr(Key, 'sk-test', 'APIKey passed through');
+    if Base = '' then
+      Fail('blank APIBase should fall back to Spec.DefaultBase');
+    if Spec.DefaultBase = '' then
+      Fail('catalog spec has no DefaultBase -- test assumption broken');
+    AssertEqStr(Base, Spec.DefaultBase,
+                'blank APIBase falls back to catalog DefaultBase');
+
+    Cfg.Providers[0].Kind    := 'openai-compat';     { Codex P2 PR #171 }
+    Cfg.Providers[0].APIBase := 'https://example.test/v1';
+    if not ResolveProviderSpecForName(Cfg, 'openai', Spec, Base, Key, Err) then
+      Fail('openai-compat should normalise to openai (err=' + Err + ')');
+    AssertEqStr(Base, 'https://example.test/v1',
+                'explicit APIBase wins over DefaultBase');
+  finally
+    Cfg.Free;
+  end;
+end;
+
 begin
   TestLoadMissingCacheReturnsFalse;
   TestCacheRoundTrip;
@@ -232,5 +281,6 @@ begin
   TestCachePathCanonicalisation;
   TestCacheKeysDontCollideAcrossNames;
   TestKindNormalisationMatchesFactory;
+  TestResolveProviderSpecForName;
   WriteLn('model_discovery_tests: OK');
 end.

@@ -58,6 +58,7 @@ interface
 
 uses
   SysUtils, Classes,
+  PasClaw.Config,
   PasClaw.Providers.Catalog;
 
 type
@@ -106,6 +107,19 @@ function DiscoverModels(const Spec: TProviderSpec;
                         const APIBase, APIKey: string;
                         TimeoutSec: Integer = 10): TModelDiscoveryResult;
 
+(* Resolve an operator-facing Provider Name (from Cfg.Providers[]) into
+   (catalog Spec, effective APIBase, APIKey) for /v1/models discovery.
+   Mirrors the path NewProviderFromConfig walks — normalises Kind
+   ("openai-compat" → "openai" / lowercase / trim), falls back to Name
+   when Kind is blank, looks up the catalog. Same resolution
+   `pasclaw model refresh` uses; exposed here so the TUI's inline
+   /model auto-refresh stays consistent with the CLI without
+   duplicating the Codex P2 normalisation logic from PR #171. *)
+function ResolveProviderSpecForName(const Cfg: TConfig; const Name: string;
+                                    out Spec: TProviderSpec;
+                                    out Base, Key: string;
+                                    out ErrMsg: string): Boolean;
+
 (* Human-readable "5 days ago" / "23 minutes ago" / "just now" for
    the cache freshness annotation. Caps at "1+ year ago" so old
    caches don't get a misleading huge number. *)
@@ -115,12 +129,13 @@ implementation
 
 uses
   DateUtils,
-  PasClaw.Config,
   PasClaw.Utils,
   PasClaw.Logger,
   PasClaw.JSON,
   PasClaw.Providers.HTTP,
-  PasClaw.Providers.Types;
+  PasClaw.Providers.Types,
+  PasClaw.Providers.Factory;       { NormalizeProviderKind for the
+                                     ResolveProviderSpecForName helper }
 
 const
   CACHE_SUBDIR = 'cache';          { two-segment subpath so JoinPath gets
@@ -655,6 +670,51 @@ begin
     Exit(Format('%d day(s) ago', [Delta div 86400]))
   else
     Exit('over a year ago');
+end;
+
+function FindProviderConfigIdx(const Cfg: TConfig; const Name: string;
+                               out Idx: Integer): Boolean;
+var
+  i: Integer;
+begin
+  for i := 0 to High(Cfg.Providers) do
+    if SameText(Cfg.Providers[i].Name, Name) then
+    begin
+      Idx := i;
+      Exit(True);
+    end;
+  Idx := -1;
+  Result := False;
+end;
+
+function ResolveProviderSpecForName(const Cfg: TConfig; const Name: string;
+                                    out Spec: TProviderSpec;
+                                    out Base, Key: string;
+                                    out ErrMsg: string): Boolean;
+var
+  Idx: Integer;
+  Kind: string;
+begin
+  Result := False;
+  ErrMsg := '';
+  if not FindProviderConfigIdx(Cfg, Name, Idx) then
+  begin
+    ErrMsg := 'no provider entry for "' + Name +
+              '" -- run `pasclaw auth login ' + Name + '` first';
+    Exit;
+  end;
+  Kind := NormalizeProviderKind(Cfg.Providers[Idx].Kind);
+  if Kind = '' then Kind := NormalizeProviderKind(Cfg.Providers[Idx].Name);
+  if not LookupProvider(Kind, Spec) then
+  begin
+    ErrMsg := 'provider "' + Name + '" has unknown kind "' +
+              Cfg.Providers[Idx].Kind + '"';
+    Exit;
+  end;
+  Base := Cfg.Providers[Idx].APIBase;
+  if Base = '' then Base := Spec.DefaultBase;
+  Key := Cfg.Providers[Idx].APIKey;
+  Result := True;
 end;
 
 end.

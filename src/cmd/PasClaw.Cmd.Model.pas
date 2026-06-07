@@ -19,7 +19,6 @@ uses
   PasClaw.Config,
   PasClaw.CliUI,
   PasClaw.Providers.Catalog,
-  PasClaw.Providers.Factory,
   PasClaw.Providers.Models;
 
 procedure Help;
@@ -31,21 +30,6 @@ begin
   PrintLn('  pasclaw model list <provider>         Show the cached model list for a provider');
   PrintLn('  pasclaw model refresh <provider>      Hit /v1/models and refresh the cache');
   PrintLn('  pasclaw model refresh --all           Refresh every configured provider');
-end;
-
-function FindProviderConfig(Cfg: TConfig; const Name: string;
-                            out Idx: Integer): Boolean;
-var
-  i: Integer;
-begin
-  for i := 0 to High(Cfg.Providers) do
-    if SameText(Cfg.Providers[i].Name, Name) then
-    begin
-      Idx := i;
-      Exit(True);
-    end;
-  Idx := -1;
-  Result := False;
 end;
 
 function DoShow: Integer;
@@ -104,51 +88,17 @@ begin
   end;
 end;
 
-function ResolveSpecForName(Cfg: TConfig; const Name: string;
-                            out Spec: TProviderSpec;
-                            out Base, Key: string;
-                            out ErrMsg: string): Boolean;
-{ Walks the same path NewProviderFromConfig walks — find the config
-  entry by Name, NORMALISE the Kind (lowercase / trim / "openai-compat"
-  → "openai"), fall back to Name when Kind is blank, then look up the
-  catalog. Codex P2 on PR #171: without the normalisation + name
-  fallback this path rejected providers that NewProviderFromConfig
-  resolves cleanly, so `pasclaw model refresh openai-compat-thing`
-  said "unknown kind" even when the provider could chat. }
-var
-  Idx: Integer;
-  Kind: string;
-begin
-  Result := False;
-  ErrMsg := '';
-  if not FindProviderConfig(Cfg, Name, Idx) then
-  begin
-    ErrMsg := 'no provider entry for "' + Name +
-              '" — run `pasclaw auth login ' + Name + '` first';
-    Exit;
-  end;
-  Kind := NormalizeProviderKind(Cfg.Providers[Idx].Kind);
-  if Kind = '' then Kind := NormalizeProviderKind(Cfg.Providers[Idx].Name);
-  if not LookupProvider(Kind, Spec) then
-  begin
-    ErrMsg := 'provider "' + Name + '" has unknown kind "' +
-              Cfg.Providers[Idx].Kind + '"';
-    Exit;
-  end;
-  Base := Cfg.Providers[Idx].APIBase;
-  if Base = '' then Base := Spec.DefaultBase;
-  Key := Cfg.Providers[Idx].APIKey;
-  Result := True;
-end;
-
 function RefreshOne(Cfg: TConfig; const Name: string): Boolean;
+{ Spec lookup lives in PasClaw.Providers.Models so the TUI's inline
+  /model auto-refresh path can reuse it without duplicating the
+  PR #171 Codex P2 Kind-normalisation logic. }
 var
   Spec: TProviderSpec;
   Base, Key, Err: string;
   R: TModelDiscoveryResult;
 begin
   Result := False;
-  if not ResolveSpecForName(Cfg, Name, Spec, Base, Key, Err) then
+  if not ResolveProviderSpecForName(Cfg, Name, Spec, Base, Key, Err) then
   begin
     PrintLn('  ' + Ansi.Red + '✗ ' + Ansi.Reset + Name + ': ' + Err);
     Exit;
