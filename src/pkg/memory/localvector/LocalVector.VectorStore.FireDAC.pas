@@ -22,21 +22,29 @@ unit LocalVector.VectorStore.FireDAC;
 
 {$IFDEF FPC}{$mode delphi}{$H+}{$ENDIF}
 
-{ PasClaw modification: stub on Delphi Linux64.
+(* PasClaw modification: stub on Delphi Linux64.
 
   FireDAC.Phys.SQLiteWrapper.Stat (the static SQLite link) ships only
   for Windows / macOS / mobile in RAD Studio — Linux64 has no static
   build, only the dynamic libsqlite3.so path. PasClaw.dpr already
-  routes around this constraint (PR #135 added the {$IFNDEF LINUX}
-  guard there); we extend the same routing here so registering this
-  unit in PasClaw.dproj doesn't break the Delphi Linux64 build.
+  routes around this constraint, and we extend the same routing here
+  so registering this unit in PasClaw.dproj doesn't break the Delphi
+  Linux64 build.
 
   On Linux64 we compile to an empty unit and let
   LocalVector.VectorStore force LV_PORTABLE_SQLITE on — the factory
   then routes through the portable backend (dynamic libsqlite3.so),
   which Linux64 supports fine.
 
-  Codex P1 on PR #167. }
+  Note this comment uses paren-star delimiters rather than the
+  curly-brace ones the rest of this file uses. The text below
+  references the source-level platform guard via its bare name
+  rather than spelling out the directive verbatim, because curly-
+  brace comments DO NOT NEST in Pascal, and a literal directive
+  expression inside a curly-brace comment would be parsed as a real
+  directive by dcc64.
+
+  Codex P1 on PR #167. *)
 {$IF DEFINED(LINUX) AND NOT DEFINED(FPC)}
 interface
 implementation

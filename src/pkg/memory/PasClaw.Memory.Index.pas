@@ -75,7 +75,7 @@ uses
   sqldb, sqlite3conn,
   {$ELSE}
   FireDAC.Comp.Client, FireDAC.Phys.SQLite, FireDAC.Stan.Def,
-  FireDAC.Stan.Async, FireDAC.DApt,
+  FireDAC.Stan.Async, FireDAC.Stan.Param, FireDAC.DApt,
   {$ENDIF}
   PasClaw.Utils,
   PasClaw.Logger;
