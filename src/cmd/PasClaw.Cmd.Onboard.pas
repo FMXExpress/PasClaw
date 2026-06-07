@@ -112,99 +112,149 @@ begin
   end;
 end;
 
-function PickModelInteractive(const Spec: TProviderSpec;
-                              const APIKey: string): string;
-{ Strategy:
-    1. Try a live fetch against /v1/models (or /v1beta/models for
-       Gemini). Bounded at 8s — onboarding is interactive and a
-       provider with a slow status page shouldn't make the user
-       wait 30s before they can pick a model.
-    2. If discovery succeeds with >0 models, save the cache + show
-       a numbered picker over the top N. Default selection keeps the
-       catalog's static DefaultModel.
-    3. If discovery fails (no key, network down, provider 5xx) or
-       the list is empty, fall through to the pre-PR-#171 text input
-       so onboarding never gets stuck behind a broken /models
-       endpoint.
-  Returns the model id the user picked, or the catalog default when
-  the user just hit Enter. }
+procedure ShowPicker(const Models: TModelInfoArray;
+                     const ProviderName: string;
+                     SourceLabel: string;
+                     FetchedAt: Int64);
+{ Print the numbered picker over the top N models. SourceLabel is the
+  one-liner above the list ('Fetched live from ...', 'From cache
+  (refreshed 3 days ago)', etc.) so the user knows where the list came
+  from and whether it might be stale. }
 const
-  TIMEOUT_SEC    = 8;
-  VISIBLE_TOP_N  = 12;     { mirror what ChatGPT / Claude do on their
-                             pickers — long enough to cover the
-                             useful tier, short enough to fit on a
-                             single screen }
+  VISIBLE_TOP_N = 12;
 var
-  R: TModelDiscoveryResult;
-  i, N, Pick: Integer;
-  Label_, Input, Default: string;
+  i, N: Integer;
+  Label_: string;
 begin
-  Default := Spec.DefaultModel;
-
-  { Caller may pass Key='' for asNone providers. Those still have
-    /v1/models endpoints (Ollama serves it without auth) so we try
-    anyway; DiscoverModels short-circuits Key-required providers and
-    we'll fall through to the text input. }
-  if (Spec.Family = pfPlaceholder) or
-     ((Spec.Auth.Kind <> asNone) and (Trim(APIKey) = '')) then
-  begin
-    if Default <> '' then
-      Result := ReadLineEcho(Format('Default model [%s]: ', [Default]))
-    else
-      repeat
-        Result := ReadLineEcho('Default model (provider does not advertise one — required): ');
-      until Trim(Result) <> '';
-    if Trim(Result) = '' then Result := Default;
-    Exit;
-  end;
-
-  PrintLn(Ansi.Dim + 'Fetching available models from ' + Spec.DisplayName +
-          ' ...' + Ansi.Reset);
-  R := DiscoverModels(Spec, Spec.DefaultBase, APIKey, TIMEOUT_SEC);
-
-  if (not R.Ok) or (Length(R.Models) = 0) then
-  begin
-    if R.ErrMsg <> '' then
-      PrintLn(Ansi.Dim + '  (live fetch failed: ' + R.ErrMsg +
-              ' — falling back to text input)' + Ansi.Reset);
-    if Default <> '' then
-      Result := ReadLineEcho(Format('Default model [%s]: ', [Default]))
-    else
-      repeat
-        Result := ReadLineEcho('Default model (provider does not advertise one — required): ');
-      until Trim(Result) <> '';
-    if Trim(Result) = '' then Result := Default;
-    Exit;
-  end;
-
-  { Cache the full result, keyed on Spec.Kind because that's the
-    Provider Name UpsertProvider is about to set on the new config
-    entry (Name := Spec.Kind for both the upsert and insert paths
-    in this file). Same key future `pasclaw model refresh` and
-    `model list` invocations against this provider will use,
-    keeping the cache addressable from any of those sites. Codex
-    P2 on PR #171 — see PasClaw.Cmd.Model for the corresponding
-    cache-key shift on the refresh side. }
-  SaveCachedModels(Spec.Kind, R);
-  SortModelsByDate(R.Models);
-
-  N := Length(R.Models);
+  N := Length(Models);
   if N > VISIBLE_TOP_N then N := VISIBLE_TOP_N;
 
+  if SourceLabel <> '' then
+    PrintLn(Ansi.Dim + SourceLabel + Ansi.Reset);
   PrintLn(Format('Available models (showing %d of %d, newest first):',
-                 [N, Length(R.Models)]));
+                 [N, Length(Models)]));
   for i := 0 to N - 1 do
   begin
-    Label_ := R.Models[i].Id;
-    if (R.Models[i].Display <> '') and (R.Models[i].Display <> R.Models[i].Id) then
-      Label_ := Label_ + Ansi.Dim + '  (' + R.Models[i].Display + ')' + Ansi.Reset;
+    Label_ := Models[i].Id;
+    if (Models[i].Display <> '') and (Models[i].Display <> Models[i].Id) then
+      Label_ := Label_ + Ansi.Dim + '  (' + Models[i].Display + ')' + Ansi.Reset;
     PrintLn(Format('  %d) %s', [i + 1, Label_]));
   end;
-  if Length(R.Models) > N then
+  if Length(Models) > N then
     PrintLn(Ansi.Dim +
             Format('  (+ %d more — see `pasclaw model list %s`)',
-                   [Length(R.Models) - N, Spec.Kind]) +
+                   [Length(Models) - N, ProviderName]) +
             Ansi.Reset);
+end;
+
+function PickModelInteractive(const Spec: TProviderSpec;
+                              const APIKey: string): string;
+{ Strategy (revised after first-user feedback that the picker silently
+  disappeared when the API key prompt was skipped):
+
+    1. Load the cached model roster up-front. If a previous onboard /
+       `pasclaw model refresh` populated one, we have a list whether
+       or not the operator just entered a fresh key.
+
+    2. When the operator entered an API key, attempt the live fetch
+       too. Success → save cache + present picker over the LIVE
+       list. Failure → fall back to the cache (if any) with a clear
+       "live fetch failed, showing cache from N days ago" note. The
+       cache file is never overwritten by a failed live fetch.
+
+    3. When the operator left the key blank AND a cache exists, show
+       the cached list with a one-liner explaining why we didn't
+       refresh ("API key not entered — showing the cached roster.
+       Re-run with a key to refresh"). Better than silently dropping
+       to the text-input prompt which is what tripped up the first
+       user.
+
+    4. Only when there's no key AND no cache do we fall through to
+       the original text-input prompt, with an explicit note that
+       no list is available so the operator knows what's happening
+       rather than wondering why the picker they expected isn't
+       there.
+
+  Returns the model id the operator picked, or the catalog default
+  when they just hit Enter. }
+const
+  TIMEOUT_SEC = 8;
+var
+  Live, Cached: TModelDiscoveryResult;
+  HaveCache, HaveLive, HaveKey: Boolean;
+  Models: TModelInfoArray;
+  ProviderName, SourceLabel, Input, Default: string;
+  Pick: Integer;
+begin
+  Default      := Spec.DefaultModel;
+  ProviderName := Spec.Kind;     { same Name UpsertProvider will set;
+                                   see comment further down for the
+                                   PR #171 cache-key invariant }
+  HaveKey      := (Spec.Auth.Kind = asNone) or (Trim(APIKey) <> '');
+
+  { Step 1: see if a cached roster exists. Keyed on Spec.Kind for the
+    same reason as below — onboarding's Name == Spec.Kind invariant. }
+  HaveCache := LoadCachedModels(Spec.Kind, Cached) and (Length(Cached.Models) > 0);
+
+  { Step 2: live fetch when a key is available. Placeholder kinds and
+    keyless providers without a /models endpoint silently skip live
+    discovery; the cache is still our fallback. }
+  HaveLive := False;
+  if HaveKey and (Spec.Family <> pfPlaceholder) then
+  begin
+    PrintLn(Ansi.Dim + 'Fetching available models from ' + Spec.DisplayName +
+            ' ...' + Ansi.Reset);
+    Live := DiscoverModels(Spec, Spec.DefaultBase, APIKey, TIMEOUT_SEC);
+    if Live.Ok and (Length(Live.Models) > 0) then
+    begin
+      SaveCachedModels(Spec.Kind, Live);
+      HaveLive := True;
+    end
+    else if Live.ErrMsg <> '' then
+      PrintLn(Ansi.Dim + '  (live fetch failed: ' + Live.ErrMsg + ')' +
+              Ansi.Reset);
+  end;
+
+  { Step 3 / 4: pick the data source for the picker. Live wins over
+    cache; cache wins over no-data. }
+  if HaveLive then
+  begin
+    Models      := Live.Models;
+    SourceLabel := 'Fetched live from ' + Spec.DisplayName + '.';
+  end
+  else if HaveCache then
+  begin
+    Models := Cached.Models;
+    if HaveKey then
+      SourceLabel := 'Showing the cached roster (refreshed ' +
+                     HumanAge(Cached.FetchedAt) + ').'
+    else
+      SourceLabel := 'API key not entered — showing the cached roster (refreshed ' +
+                     HumanAge(Cached.FetchedAt) + '). Re-run with a key to refresh.';
+  end
+  else
+  begin
+    { No live, no cache → original text-input prompt. Make the lack
+      of picker explicit so the operator isn't left wondering. }
+    if not HaveKey then
+      PrintLn(Ansi.Dim +
+              'API key not entered — using the catalog default. ' +
+              'Run `pasclaw model refresh ' + ProviderName +
+              '` later to populate the picker for next time.' + Ansi.Reset);
+    if Default <> '' then
+      Result := ReadLineEcho(Format('Default model [%s]: ', [Default]))
+    else
+      repeat
+        Result := ReadLineEcho('Default model (provider does not advertise one — required): ');
+      until Trim(Result) <> '';
+    if Trim(Result) = '' then Result := Default;
+    Exit;
+  end;
+
+  SortModelsByDate(Models);
+  ShowPicker(Models, ProviderName, SourceLabel,
+             { FetchedAt unused by ShowPicker — kept on the signature for
+               future "stale by N days, refresh?" prompts } 0);
 
   if Default <> '' then
     Input := ReadLineEcho(Format(
@@ -217,8 +267,8 @@ begin
     Exit(Default);
 
   Pick := StrToIntDef(Input, 0);
-  if (Pick >= 1) and (Pick <= N) then
-    Exit(R.Models[Pick - 1].Id);
+  if (Pick >= 1) and (Pick <= Length(Models)) then
+    Exit(Models[Pick - 1].Id);
 
   { Anything else gets taken as a free-form model id — operator may
     know about a model the cache doesn't list yet. }
@@ -488,9 +538,10 @@ function Cmd_Onboard_Run(const Argv: array of string): Integer;
 var
   Cfg: TConfig;
   Home, CfgPath: string;
-  Key, Model: string;
+  Key, EffectiveKey, Model: string;
   Catalog: TProviderSpecArray;
   Spec: TProviderSpec;
+  ExistingIdx, i: Integer;
 begin
   Home    := GetHome;
   CfgPath := GetConfigPath;
@@ -539,10 +590,33 @@ begin
         Codex P2 on PR #126 was scoped to MCP but the provider-key
         prompt has the identical exposure (pasted credential lands
         in terminal scrollback / screen recordings). }
-      Key := ReadSecretLine(Spec.DisplayName + ' API key (leave blank to skip): ');
+      Key := ReadSecretLine(Spec.DisplayName +
+        ' API key (leave blank to keep existing): ');
     end;
 
-    Model := PickModelInteractive(Spec, Key);
+    { Re-onboard case: when the operator leaves the prompt blank they
+      almost always mean "keep my existing key" — they're re-running
+      onboard to tweak something else, not to wipe their auth. Pull
+      the existing key out of Cfg.Providers so PickModelInteractive
+      can still do a live /v1/models fetch with it. UpsertProvider
+      already treats Key='' as "preserve existing" further down, so
+      we don't need to copy this back into the saved Key variable —
+      just feed the picker the effective key. }
+    EffectiveKey := Key;
+    if (EffectiveKey = '') and (Spec.Auth.Kind <> asNone) then
+    begin
+      ExistingIdx := -1;
+      for i := 0 to High(Cfg.Providers) do
+        if SameText(Cfg.Providers[i].Name, Spec.Kind) then
+        begin
+          ExistingIdx := i;
+          Break;
+        end;
+      if (ExistingIdx >= 0) and (Cfg.Providers[ExistingIdx].APIKey <> '') then
+        EffectiveKey := Cfg.Providers[ExistingIdx].APIKey;
+    end;
+
+    Model := PickModelInteractive(Spec, EffectiveKey);
 
     Cfg.DefaultProvider := Spec.Kind;
     if Model <> '' then Cfg.DefaultModel := Model;
