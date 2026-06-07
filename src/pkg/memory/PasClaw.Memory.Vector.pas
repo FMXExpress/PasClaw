@@ -73,8 +73,6 @@ const
     and matches localvector's own default. }
   MAX_SEQ_LEN = 256;
 
-  CACHE_SUBDIR = 'cache/localvector';
-
 type
   TVectorMemoryIndex = class(TInterfacedObject, IMemoryIndex)
   private
@@ -116,8 +114,14 @@ begin
 end;
 
 function TVectorMemoryIndex.CacheDir: string;
+{ Two JoinPath calls (not a single `'cache/localvector'` literal)
+  because on Windows JoinPath only inserts a PathDelim BETWEEN the
+  two args; an embedded `/` inside one of them survives, producing
+  mixed-separator paths like `C:\...\.pasclaw\cache/localvector` that
+  ForceDirectories and CreateFile then disagree about. Same root
+  cause Codex / user reported on PR #168's provisioning trace. }
 begin
-  Result := JoinPath(GetHome, CACHE_SUBDIR);
+  Result := JoinPath(JoinPath(GetHome, 'cache'), 'localvector');
 end;
 
 function TVectorMemoryIndex.VecExtPath: string;

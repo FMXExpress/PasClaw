@@ -51,8 +51,19 @@ uses
   LocalVector.VecProvision,
   LocalVector.Downloader;
 
-const
-  CACHE_SUBDIR = 'cache/localvector';
+{ Cache directory under PASCLAW_HOME. Built up via nested JoinPath
+  calls — NOT as a single `'cache/localvector'` const — because on
+  Windows JoinPath only inserts a PathDelim BETWEEN the two args; an
+  embedded `/` inside one of them survives, producing mixed-separator
+  paths like `C:\Users\anony\.pasclaw\cache/localvector`. ForceDirectories
+  and the downstream CreateFile calls in the localvector downloaders
+  then disagree about where the directory actually lives, and the
+  whole provisioning step fails with "system cannot find the path
+  specified" on every artifact (Codex / user report on PR #168). }
+function CacheDir: string;
+begin
+  Result := JoinPath(JoinPath(GetHome, 'cache'), 'localvector');
+end;
 
 procedure Help;
 begin
@@ -63,11 +74,6 @@ begin
   PrintLn('              embedding model into $PASCLAW_HOME/cache/localvector/');
   PrintLn('  status      Show which runtime artifacts are present and which');
   PrintLn('              backend memory_search would pick on the next call');
-end;
-
-function CacheDir: string;
-begin
-  Result := JoinPath(GetHome, CACHE_SUBDIR);
 end;
 
 function ModelDir(const SubDir: string): string;
