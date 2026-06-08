@@ -26,7 +26,8 @@ So the closest thing to "just open it":
 - **Publish once to a free static host** (GitHub Pages / Netlify / Cloudflare
   Pages). Then anyone opens the URL — nothing installed, no backend. This is
   the real "serverless" deployment.
-- **Locally**, run one command (`serve.py`) and open `http://localhost`.
+- **Locally**, serve `browser/site/` with any static file server and open
+  `http://localhost` (the bundled service worker supplies the headers).
 
 `coi-serviceworker.js` is included so even a header-less host (GitHub Pages)
 becomes cross-origin isolated after the first load.
@@ -57,13 +58,17 @@ Manually deploy it as-is. It's heavy/slow the first time and the `.wasm` is
 
 ## Try it locally
 
+Serve `browser/site/` with any static file server over `http://localhost`
+(`localhost` is a secure context, so the included `coi-serviceworker.js` can
+add the COOP/COEP headers — a `file://` double-click cannot). For example:
+
 ```sh
-python3 browser/serve.py            # serves browser/site on http://localhost:8080
+npx http-server browser/site -p 8080      # or any static server
 ```
 
-Open the printed URL. A terminal boots in the tab running the container's
-default command. Set that command to `agent` or `tui` (override `CMD` when you
-build the image) so the user lands straight in the agent.
+Open `http://localhost:8080`. A terminal boots in the tab running the
+container's default command. Set that command to `agent` or `tui` (override
+`CMD` when you build the image) so the user lands straight in the agent.
 
 ## Deploy
 
@@ -92,8 +97,7 @@ worker.
 | File | Purpose |
 |------|---------|
 | `build.sh` | One-shot: image (C2W=1) → `c2w --to-js` → webpack harness → static `site/`. |
-| `serve.py` | Local static server with the required COOP/COEP headers. |
-| `coi-serviceworker.js` | Adds COOP/COEP on header-less hosts (e.g. GitHub Pages). |
+| `coi-serviceworker.js` | Adds the COOP/COEP headers (cross-origin isolation) the emulator needs, so any static server/host works. |
 | `site/` | Generated, manually-deployable bundle (git-ignored — large). |
 
 > Status: `build.sh` follows container2wasm's documented emscripten "on

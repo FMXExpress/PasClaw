@@ -90,5 +90,5 @@ fi
 
 echo
 echo "Done -> $OUT/   (static, manually deployable)"
-echo "Local : python3 browser/serve.py $OUT     # open the printed http://localhost URL"
+echo "Local : npx http-server $OUT -p 8080      # or any static server; open http://localhost:8080"
 echo "Deploy: upload the CONTENTS of $OUT/ to any static host (keep the .wasm next to index.html)"

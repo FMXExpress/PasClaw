@@ -5,7 +5,7 @@
  * The container2wasm emulator needs SharedArrayBuffer, which browsers only
  * expose when the page is "cross-origin isolated" (COOP: same-origin +
  * COEP: require-corp). On a host where you control headers you don't need
- * this file — set those headers directly (see ../serve.py for local use).
+ * this file — set those headers directly on the host instead.
  * On a header-less host, including this script re-fetches responses through
  * a service worker that adds the headers, then reloads once so isolation
  * takes effect.
