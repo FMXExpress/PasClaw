@@ -706,6 +706,67 @@ begin
   if Result then ErrMsg := '' else ErrMsg := OpenSSLHelpMessage;
 end;
 
+{$IFDEF PASCLAW_C2W}
+procedure ApplyBrowserProxy(Http: TIdHTTP; HTTPS: Boolean);
+(* container2wasm in-browser deployment only (compiled with -dPASCLAW_C2W).
+
+   When PasClaw runs inside a c2w guest with the serverless `c2w-net-proxy`
+   network stack, that proxy injects HTTP_PROXY / HTTPS_PROXY (e.g.
+   http://192.168.127.253:80) into the environment, TLS-terminates HTTPS with
+   its own CA, and re-issues each request through the browser's Fetch API.
+   Indy's TIdHTTP does NOT read those env vars on its own, so without this it
+   would try a direct socket — which has no egress in the browser. Route the
+   client through the proxy here.
+
+   No CA wiring is needed: Indy does not verify the server certificate by
+   default, so the proxy's MITM cert is accepted. (If a future change turns on
+   peer verification, load /.wasmenv/proxy.crt — c2w sets SSL_CERT_FILE.)
+
+   Off by default: this whole procedure is excluded from normal builds, which
+   keep going direct to the provider. *)
+var
+  Raw, Host: string;
+  P, Port: Integer;
+begin
+  if HTTPS then
+  begin
+    Raw := GetEnvironmentVariable('HTTPS_PROXY');
+    if Raw = '' then Raw := GetEnvironmentVariable('https_proxy');
+  end
+  else
+  begin
+    Raw := GetEnvironmentVariable('HTTP_PROXY');
+    if Raw = '' then Raw := GetEnvironmentVariable('http_proxy');
+  end;
+  if Raw = '' then Exit;
+
+  { Strip scheme://, any userinfo@, and trailing /path so only host[:port]
+    remains. The proxy URL c2w injects is a plain http://host:port. }
+  P := Pos('://', Raw);
+  if P > 0 then Raw := Copy(Raw, P + 3, MaxInt);
+  P := Pos('/', Raw);
+  if P > 0 then Raw := Copy(Raw, 1, P - 1);
+  P := Pos('@', Raw);
+  if P > 0 then Raw := Copy(Raw, P + 1, MaxInt);
+
+  P := Pos(':', Raw);
+  if P > 0 then
+  begin
+    Host := Copy(Raw, 1, P - 1);
+    Port := StrToIntDef(Copy(Raw, P + 1, MaxInt), 0);
+  end
+  else
+  begin
+    Host := Raw;
+    Port := 80;
+  end;
+  if (Host = '') or (Port <= 0) then Exit;
+
+  Http.ProxyParams.ProxyServer := Host;
+  Http.ProxyParams.ProxyPort   := Port;
+end;
+{$ENDIF}
+
 function NewClient(TimeoutSeconds: Integer; HTTPS: Boolean;
                    out ErrMsg: string): TIdHTTP;
 var
@@ -717,6 +778,9 @@ begin
   Result.ReadTimeout    := TimeoutSeconds * 1000;
   Result.HandleRedirects := True;
   Result.Request.UserAgent := 'PasClaw/0.1 (+https://github.com/FMXExpress/PasClaw)';
+  {$IFDEF PASCLAW_C2W}
+  ApplyBrowserProxy(Result, HTTPS);
+  {$ENDIF}
   if HTTPS then
   begin
     if not EnsureOpenSSL(ErrMsg) then Exit;

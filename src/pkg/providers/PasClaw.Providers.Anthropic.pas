@@ -579,9 +579,20 @@ begin
   URL  := FAPIBase + '/v1/messages';
   Body := BuildRequest(Messages, Tools, UseModel, Options, FServerTools);
 
+  {$IFDEF PASCLAW_C2W}
+  SetLength(Headers, 3);
+  {$ELSE}
   SetLength(Headers, 2);
+  {$ENDIF}
   Headers[0] := MakeHeader('x-api-key',          FAPIKey);
   Headers[1] := MakeHeader('anthropic-version', '2023-06-01');
+  {$IFDEF PASCLAW_C2W}
+  { Browser (container2wasm) deployment only: Anthropic returns the CORS
+    headers the in-browser Fetch proxy needs only when the caller opts in via
+    this header. Excluded from normal builds so the server-side wire is
+    byte-identical to before. }
+  Headers[2] := MakeHeader('anthropic-dangerous-direct-browser-access', 'true');
+  {$ENDIF}
 
   Result.Content := '';
   Result.StatusCode := 0;
@@ -819,9 +830,18 @@ begin
     Root.Free;
   end;
 
+  {$IFDEF PASCLAW_C2W}
+  SetLength(Headers, 3);
+  {$ELSE}
   SetLength(Headers, 2);
+  {$ENDIF}
   Headers[0] := MakeHeader('x-api-key',         FAPIKey);
   Headers[1] := MakeHeader('anthropic-version', '2023-06-01');
+  {$IFDEF PASCLAW_C2W}
+  { See the non-streaming path: opt into Anthropic's browser/CORS mode for the
+    c2w Fetch-proxy deployment only. }
+  Headers[2] := MakeHeader('anthropic-dangerous-direct-browser-access', 'true');
+  {$ENDIF}
 
   GStreamCB  := OnChunk;
   GStreamAcc := '';

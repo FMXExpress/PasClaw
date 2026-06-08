@@ -133,7 +133,15 @@ INDY_UNIT_DIRS = \
 
 INDY_INC_DIRS = $(INDY_UNIT_DIRS)
 
+# C2W=1 turns on the container2wasm in-browser deployment path: PasClaw's HTTP
+# layer routes through the c2w-net-proxy (HTTP_PROXY/HTTPS_PROXY env) and opts
+# into Anthropic's browser/CORS mode. Off by default — only set it when
+# producing the wasm/browser image. See docs/c2w.md.
+C2W ?=
+C2W_DEFINE = $(if $(C2W),-dPASCLAW_C2W)
+
 FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
+	$(C2W_DEFINE) \
 	-Fu$(FCLDB_DIR) -Fu$(SQLITE_DIR) \
 	$(if $(LAZUTILS_DIR),-Fu$(LAZUTILS_DIR)) \
 	$(foreach d,$(UNIT_DIRS),-Fu$(d)) \
