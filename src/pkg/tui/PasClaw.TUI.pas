@@ -214,6 +214,14 @@ uses
   SyncObjs,
   DateUtils,
   PasClaw.CliUI,
+  PasClaw.Utils,                   { VisibleLength + PadVisibleRight +
+                                     TruncateVisible -- the ANSI-aware
+                                     width helpers RenderMsgLines and
+                                     DrawChatPane use. FPC happened to
+                                     resolve them through a transitive
+                                     import chain (CliUI's impl uses
+                                     Utils); dcc64 doesn't, so the
+                                     import has to be explicit here. }
   PasClaw.Logger,
   { PasClaw.Tools.ToolLoop now lives in the interface uses (above) so
     dcc64 can see TToolLoopResult from the TTUI class declaration. }
