@@ -104,7 +104,25 @@ worker.
 |------|---------|
 | `build.sh` | One-shot: image (C2W=1) → `c2w --to-js` → webpack harness → static `site/`. |
 | `coi-serviceworker.js` | Adds the COOP/COEP headers (cross-origin isolation) the emulator needs, so any static server/host works. |
+| `web/pasclaw.css`, `web/pasclaw.js` | PasClaw page chrome injected over the upstream xterm page (see below). |
 | `site/` | Generated, manually-deployable bundle (git-ignored — large). |
+
+## The page UI
+
+The page is the real `pasclaw` CLI running in an **xterm terminal** inside the
+emulated Linux — it is not a chat UI (that would require parsing the terminal
+stream). `build.sh` layers a thin, framework-free chrome over the upstream
+container2wasm example (`web/pasclaw.css` + `web/pasclaw.js`):
+
+- **Auto `?net=browser`** — redirects to add the query if missing, so the
+  in-browser fetch proxy always activates (otherwise the agent has no network).
+- **Header bar** with PasClaw branding + a GitHub link, and a favicon.
+- **Boot screen** while the runtime downloads/boots, auto-dismissed on the
+  terminal's first output (with click-to-skip and a timeout fallback).
+
+It's purely additive: remove the two injected `<link>`/`<script>` tags (or the
+`web/` copy step in `build.sh`) and the upstream terminal still works. To
+customize branding/colors, edit `web/pasclaw.css`/`web/pasclaw.js` and rebuild.
 
 > Status: `build.sh` follows container2wasm's documented emscripten "on
 > browser" pipeline (pinned to `v0.8.4`), pointed at the pasclaw image. The

@@ -1,0 +1,83 @@
+/* PasClaw browser-bundle UI — chrome around the container2wasm xterm terminal.
+   Purely additive: injected into the upstream example index.html by
+   browser/build.sh. Targets only the page chrome and standard xterm.js
+   classes; it does not touch how the emulator/terminal boots. */
+
+:root {
+  --pc-bg:  #0e1014;
+  --pc-fg:  #e8e8e8;
+  --pc-mut: #7e858f;
+  --pc-blue:#3e5db9;
+  --pc-red: #d54646;
+  --pc-line:#20242c;
+}
+
+html, body { height: 100%; }
+
+body {
+  margin: 0;
+  background: var(--pc-bg);
+  color: var(--pc-fg);
+  font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* top bar */
+.pc-header {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: .75rem;
+  padding: .5rem .9rem;
+  background: #15171c;
+  border-bottom: 1px solid var(--pc-line);
+}
+.pc-logo { font-weight: 700; letter-spacing: .5px; }
+.pc-blue { color: var(--pc-blue); }
+.pc-red  { color: var(--pc-red); }
+.pc-tag  { color: var(--pc-mut); font-size: 12px; }
+.pc-spacer { margin-left: auto; }
+.pc-link {
+  color: var(--pc-mut);
+  text-decoration: none;
+  font-size: 12px;
+}
+.pc-link:hover { color: var(--pc-fg); }
+
+/* terminal fills the rest */
+#terminal {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: .5rem .6rem;
+  background: var(--pc-bg);
+}
+
+/* boot/loading overlay (auto-dismisses on first terminal output) */
+.pc-boot {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--pc-bg);
+  transition: opacity .35s ease;
+  cursor: pointer;
+}
+.pc-boot.pc-hide { opacity: 0; pointer-events: none; }
+.pc-boot-inner { text-align: center; max-width: 32rem; padding: 1rem; }
+.pc-boot-logo  { font-weight: 700; letter-spacing: 1px; font-size: 20px; }
+.pc-boot-msg   { margin-top: 1.1rem; font-weight: 700; }
+.pc-boot-sub   { margin-top: .4rem; color: var(--pc-mut); font-size: 12px; }
+.pc-boot-skip  { margin-top: 1rem; color: var(--pc-mut); font-size: 11px; }
+.pc-spin {
+  width: 34px; height: 34px;
+  margin: 1.4rem auto 0;
+  border: 3px solid #2a2d34;
+  border-top-color: var(--pc-blue);
+  border-radius: 50%;
+  animation: pc-rot .9s linear infinite;
+}
+@keyframes pc-rot { to { transform: rotate(360deg); } }
