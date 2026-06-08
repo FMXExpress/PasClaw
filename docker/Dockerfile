@@ -71,8 +71,13 @@ COPY . .
 # PR #121. When Debian trixie ships lazarus 3.x, bump this in lock-
 # step with DEBIAN_VERSION.
 ARG LAZUTILS_DIR=/usr/lib/lazarus/2.2.6/components/lazutils
+# C2W: set to 1 (--build-arg C2W=1) to compile the container2wasm in-browser
+# networking path (-dPASCLAW_C2W) so the binary routes HTTP through the
+# c2w-net-proxy Fetch bridge. Off by default for normal native/container
+# images. See docs/c2w.md.
+ARG C2W=
 RUN make get-indy \
-    && make LAZUTILS_DIR="${LAZUTILS_DIR}" \
+    && make LAZUTILS_DIR="${LAZUTILS_DIR}" C2W="${C2W}" \
     && test -x build/pasclaw \
     && build/pasclaw version
 
