@@ -397,6 +397,7 @@ var
   MCPClients: TMCPClientList;
   Spawn: TSpawnTool;
   SystemPromptOverride: string;   { tracks the compacted system prompt across turns }
+  WorkingStateBlock: string;       { per-turn prefix from Session.Meta.WorkingState }
   ThinkingOn: Boolean;             { toggled by /think; cleared each turn after sending }
   CompactOptsLocal: TCompactOptions;
   CompactedLiveOpts: TChatOptions;
@@ -636,6 +637,15 @@ begin
         compacted summary leaks out of the conversation. }
       if SystemPromptOverride <> '' then
         LoopCfg.Options.SystemPrompt := SystemPromptOverride;
+      { Working-state snapshot from prior turns goes BEFORE the
+        compacted summary (or the freshly-built default system
+        prompt) so the model sees structured edit/shell/error
+        context at the top of every turn. Empty string when the
+        snapshot is empty -- pre-feature sessions stay verbatim. }
+      WorkingStateBlock := FormatWorkingStateBlock(Session.Meta);
+      if WorkingStateBlock <> '' then
+        LoopCfg.Options.SystemPrompt :=
+          WorkingStateBlock + sLineBreak + LoopCfg.Options.SystemPrompt;
       { Anchor OpenAI's prompt_cache_key to the persistent session
         id so the cache bucket lines up across turns of THIS chat
         (not someone else's parallel session that happens to share a
@@ -697,6 +707,14 @@ begin
           Msgs[High(Msgs)] := MakeMessage(mrAssistant, Loop.Content);
         end;
         SystemPromptOverride := Loop.FinalSystemPrompt;
+
+        { Refresh the working-state snapshot from this turn's final
+          history (fs_write/fs_edit paths, shell commands, tool
+          errors). Updates Session.Meta.WorkingState in place;
+          PersistSession below writes it out so a /quit-then-resume
+          picks up the same context next time. }
+        if Length(Loop.FinalMessages) > 0 then
+          UpdateWorkingStateAfterTurn(Session.Meta, Loop.FinalMessages);
 
         { Persist after every successful turn — crash / Ctrl-C in
           the middle of the NEXT user prompt only loses what they
