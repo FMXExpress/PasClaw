@@ -941,9 +941,23 @@ procedure TTUI.SelectSession(Id: string);
   the truncate. Pure navigation has nothing to save, but the call
   unconditionally bumped Meta.UpdatedAt via Touch -- so leaving
   session A to peek at session B re-promoted A to the top of the
-  newest-first list. Codex / user-reported "sort drift" on PR
-  #182's sort change. }
+  newest-first list. User-reported sort drift after PR #182.
+
+  Exception: when a tool loop is in flight against the outgoing
+  session, StartTurn has appended the user's prompt to in-memory
+  FSession.Messages but the loop hasn't returned yet so the
+  prompt isn't on disk. PollLoopWorker's eventual
+  ApplyLoopResultTo / AppendErrorTo reloads the session from disk
+  by id -- so without a save here, a timeout / failure on a turn
+  the user has already navigated away from would land only the
+  error text in the saved transcript with no record of the
+  prompt that triggered it. Persist that specific case (it bumps
+  UpdatedAt, which is correct -- there IS new content). Codex P2
+  on PR #184. }
 begin
+  if (FSession <> nil) and (FLoopThread <> nil) and
+     (FLoopSessionId = FSession.Meta.Id) then
+    PersistSession;
   FSession.Free;
   if Id = '' then Id := NewSessionId;
   FSession := TSession.Create(Id);
@@ -1588,6 +1602,16 @@ begin
   Body := Msg.Content;
   if RenderMd and (Msg.Role = mrAssistant) and (Trim(Body) <> '') then
     Body := RenderMarkdown(Body);
+  { Tabs cause the chat pane to overflow: VisibleLength counts a
+    tab as one column, but the terminal expands it to the next
+    8-column tab stop (1-7 extra columns depending on position).
+    Long markdown code blocks routinely include tab-indented
+    content from the model. Expanding to 4 spaces ahead of the
+    wrap pass keeps the visible-width math honest at the cost of
+    a slightly wider code block; for content that's already
+    space-indented this is a no-op. User-reported "1-2 chars
+    bleed onto the next line" on PR #184. }
+  Body := StringReplace(Body, #9, '    ', [rfReplaceAll]);
   if Trim(Body) = '' then
   begin
     if Length(Msg.ToolCalls) > 0 then
