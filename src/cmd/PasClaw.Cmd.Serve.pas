@@ -48,6 +48,7 @@ uses
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
+  PasClaw.Tools.MemoryFetch,
   PasClaw.Tools.Vault,
   PasClaw.Tools.OutputCache,
   PasClaw.Tools.Sandbox,
@@ -133,6 +134,7 @@ begin
       else
         LogWebSearchSkipOnce;
       if Cfg.WebFetchEnabled then RegisterWebFetchTool(Reg);
+      if Cfg.WebFetchEnabled then RegisterMemoryFetchTool(Reg);
       { Off by default — onboarding opt-in flips Cfg.VaultToolsEnabled.
         Without this branch, `pasclaw onboard` could report
         "vault_search / vault_get enabled" but the gateway / serve

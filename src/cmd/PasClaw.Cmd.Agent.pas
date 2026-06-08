@@ -36,6 +36,7 @@ uses
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
+  PasClaw.Tools.MemoryFetch,
   PasClaw.Tools.Vault,
   PasClaw.Tools.OutputCache,
   PasClaw.Tools.ToolLoop,
@@ -179,6 +180,11 @@ begin
     container/sandboxed deploys without curl can flip this in
     config.json. }
   if EnableWebFetch then RegisterWebFetchTool(Result);
+  { memory_fetch piggybacks on the same WebFetch enable: it uses
+    the same HTTP machinery + SSRF gate, and an operator who's
+    declined to enable URL fetching shouldn't get a second tool
+    that also fetches URLs. }
+  if EnableWebFetch then RegisterMemoryFetchTool(Result);
   { Vault tools register only when explicitly enabled — callers pass
     Cfg.VaultToolsEnabled. Off-by-default per the onboarding opt-in
     flow; flipping the config flag (or re-running `pasclaw onboard`)
