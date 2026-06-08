@@ -8,9 +8,9 @@
 #
 # RUN THIS ON A REAL MACHINE — not a TLS-intercepting sandbox. Needs:
 #   - docker (daemon running)
-#   - the `c2w` CLI on PATH  (https://github.com/container2wasm/container2wasm/releases)
 #   - node + npm (npx)       (webpack bundles the xterm harness)
 #   - git, curl, gzip
+# The `c2w` CLI is auto-downloaded into browser/.bin if not on PATH (set C2W=).
 #
 # Heavy + slow the first time (c2w compiles its emulator from source; the
 # output .wasm is ~100 MB+). Env overrides: IMAGE, C2W, C2W_VERSION.
@@ -57,32 +57,44 @@ ensure_c2w() {
 ensure_c2w
 echo "    using c2w: $C2W"
 
-echo "==> 1/6  build the image with browser networking compiled in (C2W=1)"
+echo "==> 1/7  build the image with browser networking compiled in (C2W=1)"
 docker build -f docker/Dockerfile --build-arg C2W=1 -t "$IMAGE" .
 
-echo "==> 2/6  c2w --to-js : emscripten wasm + js into $OUT/"
-rm -rf "$OUT"; mkdir -p "$OUT"
-"$C2W" --to-js "$IMAGE" "$OUT/"
+echo "==> 2/7  derive a browser image: onboard (BYO API key) then run the agent"
+# The normal image runs the gateway SERVER (no use in a single-user tab). For
+# the browser, prompt for the provider + API key on first launch, then drop
+# into the interactive chat agent. Both read the xterm's stdin. Override the
+# command per-image here so docker/Dockerfile's default stays gateway.
+BROWSER_IMAGE="${IMAGE}-browser"
+docker build -t "$BROWSER_IMAGE" -f - . <<DOCKERFILE
+FROM $IMAGE
+ENTRYPOINT []
+CMD ["/bin/sh", "-lc", "pasclaw onboard && exec pasclaw agent"]
+DOCKERFILE
 
-echo "==> 3/6  fetch the container2wasm example harness ($C2W_VERSION)"
+echo "==> 3/7  c2w --to-js : emscripten wasm + js into $OUT/"
+rm -rf "$OUT"; mkdir -p "$OUT"
+"$C2W" --to-js "$BROWSER_IMAGE" "$OUT/"
+
+echo "==> 4/7  fetch the container2wasm example harness ($C2W_VERSION)"
 git clone --depth 1 -b "$C2W_VERSION" \
   https://github.com/container2wasm/container2wasm.git "$WORK/c2w" 2>/dev/null \
   || git clone --depth 1 https://github.com/container2wasm/container2wasm.git "$WORK/c2w"
 HT="$WORK/c2w/examples/emscripten/htdocs"
 [ -d "$HT" ] || { echo "ERROR: examples/emscripten/htdocs missing in container2wasm $C2W_VERSION"; exit 1; }
 
-echo "==> 4/6  webpack the harness and copy index.html + dist + xterm.css into $OUT/"
+echo "==> 5/7  webpack the harness and copy index.html + dist + xterm.css into $OUT/"
 ( cd "$HT" && { npm ci >/dev/null 2>&1 || npm install >/dev/null 2>&1; } && npx webpack )
 cp "$HT/index.html" "$OUT/"
 cp -R "$HT/dist" "$OUT/"
 mkdir -p "$OUT/vendor"; cp "$HT/vendor/xterm.css" "$OUT/vendor/" 2>/dev/null || true
 
-echo "==> 5/6  in-browser fetch() network stack (gzip'd next to the page)"
+echo "==> 6/7  in-browser fetch() network stack (gzip'd next to the page)"
 curl -fsSL -o "$WORK/np.wasm" \
   "https://github.com/container2wasm/container2wasm/releases/download/${C2W_VERSION}/c2w-net-proxy.wasm"
 gzip -c "$WORK/np.wasm" > "$OUT/c2w-net-proxy.wasm.gzip"
 
-echo "==> 6/6  enable cross-origin isolation on header-less static hosts"
+echo "==> 7/7  enable cross-origin isolation on header-less static hosts"
 cp browser/coi-serviceworker.js "$OUT/"
 if ! grep -q coi-serviceworker "$OUT/index.html"; then
   sed -i 's#<head>#<head><script src="coi-serviceworker.js"></script>#' "$OUT/index.html"
@@ -90,5 +102,9 @@ fi
 
 echo
 echo "Done -> $OUT/   (static, manually deployable)"
-echo "Local : npx http-server $OUT -p 8080      # or any static server; open http://localhost:8080"
+echo "Local : npx http-server $OUT -p 8080   # then open  http://localhost:8080/?net=browser"
 echo "Deploy: upload the CONTENTS of $OUT/ to any static host (keep the .wasm next to index.html)"
+echo
+echo "IMPORTANT: open the page with the  ?net=browser  query — it activates the"
+echo "in-browser fetch() proxy that sets HTTP_PROXY/HTTPS_PROXY in the guest."
+echo "Without it the agent's Anthropic calls have no network egress."

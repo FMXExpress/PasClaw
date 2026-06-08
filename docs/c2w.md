@@ -50,9 +50,13 @@ and the extra header are excluded by `{$IFDEF}`).
    docker build -f docker/Dockerfile --build-arg C2W=1 -t pasclaw:c2w .
    ```
 
-   Consider overriding the default `CMD` to `agent`/`tui`, and trimming the
-   heavy features for an emulated guest (vector/ONNX memory, MCP, cron,
-   channels) via config.
+   The normal image's `CMD` is the gateway *server*, which is pointless in a
+   single-user tab. For the browser, run the interactive flow instead —
+   `pasclaw onboard` (prompts for provider + API key, since each user brings
+   their own) then `pasclaw agent`. `browser/build.sh` does this by deriving a
+   `*-browser` image with `CMD ["/bin/sh","-lc","pasclaw onboard && exec
+   pasclaw agent"]`. Consider also trimming heavy features (vector/ONNX
+   memory, MCP, cron, channels) via config.
 
 2. **Convert the image to wasm** with the `c2w` CLI
    (https://github.com/container2wasm/container2wasm):
@@ -68,11 +72,13 @@ and the extra header are excluded by `{$IFDEF}`).
    the in-build HTTPS fetches). Server-side runs use `wasmtime pasclaw.wasm`.
 
 3. **For the browser**, build with `--to-js` (emscripten output) and serve the
-   resulting bundle from any HTTP server that supports byte-range requests.
-   Drop in the released **`c2w-net-proxy.wasm`** — that's the serverless
-   in-browser Fetch network stack PasClaw's `HTTP_PROXY`/`HTTPS_PROXY` routing
-   (this change) targets. Opening the page boots Linux in the tab and renders
-   `pasclaw agent` / `tui` in an xterm.
+   resulting bundle from any HTTP server. Drop in the released
+   **`c2w-net-proxy.wasm`** (gzip'd) — the serverless in-browser Fetch network
+   stack PasClaw's `HTTP_PROXY`/`HTTPS_PROXY` routing (this change) targets —
+   and open the page with **`?net=browser`** to activate it (without that query
+   the proxy env vars are never set and the agent has no egress). Opening the
+   page boots Linux in the tab and runs `pasclaw onboard` → `pasclaw agent` in
+   an xterm. `browser/build.sh` automates all of this end to end.
 
 ## Hard constraints (inherent to the browser, not to PasClaw)
 

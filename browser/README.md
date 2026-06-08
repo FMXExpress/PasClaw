@@ -66,15 +66,21 @@ add the COOP/COEP headers — a `file://` double-click cannot). For example:
 npx http-server browser/site -p 8080      # or any static server
 ```
 
-Open `http://localhost:8080`. A terminal boots in the tab running the
-container's default command. Set that command to `agent` or `tui` (override
-`CMD` when you build the image) so the user lands straight in the agent.
+Open **`http://localhost:8080/?net=browser`** — the `?net=browser` query is
+required: it activates the in-browser `fetch()` network stack that sets
+`HTTP_PROXY`/`HTTPS_PROXY` in the guest. Without it the agent's Anthropic
+calls have no network egress.
+
+A terminal boots in the tab and `build.sh` has set the image to run
+`pasclaw onboard && pasclaw agent`: the user is prompted for their provider +
+API key (BYO key), then lands in the interactive chat agent.
 
 ## Deploy
 
-Upload the **contents** of `browser/site/` to any static host. On hosts where
-you control headers, set `Cross-Origin-Opener-Policy: same-origin` and
-`Cross-Origin-Embedder-Policy: require-corp` and you can drop
+Upload the **contents** of `browser/site/` to any static host, and link users
+to the page **with `?net=browser`** (e.g. `https://you.example/?net=browser`).
+On hosts where you control headers, set `Cross-Origin-Opener-Policy:
+same-origin` and `Cross-Origin-Embedder-Policy: require-corp` and you can drop
 `coi-serviceworker.js`. On GitHub Pages (no header control), keep the service
 worker.
 
