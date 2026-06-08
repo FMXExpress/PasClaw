@@ -1,0 +1,4 @@
+# Generated / fetched by build.sh — not committed.
+site/
+.bin/
+*.wasm

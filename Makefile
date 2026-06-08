@@ -133,7 +133,15 @@ INDY_UNIT_DIRS = \
 
 INDY_INC_DIRS = $(INDY_UNIT_DIRS)
 
+# C2W=1 turns on the container2wasm in-browser deployment path: PasClaw's HTTP
+# layer routes through the c2w-net-proxy (HTTP_PROXY/HTTPS_PROXY env) and opts
+# into Anthropic's browser/CORS mode. Off by default — only set it when
+# producing the wasm/browser image. See docs/c2w.md.
+C2W ?=
+C2W_DEFINE = $(if $(C2W),-dPASCLAW_C2W)
+
 FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
+	$(C2W_DEFINE) \
 	-Fu$(FCLDB_DIR) -Fu$(SQLITE_DIR) \
 	$(if $(LAZUTILS_DIR),-Fu$(LAZUTILS_DIR)) \
 	$(foreach d,$(UNIT_DIRS),-Fu$(d)) \
@@ -145,7 +153,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width print-version get-indy webui-res
+.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width print-version get-indy webui-res browser
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -182,6 +190,13 @@ clean:
 
 run: $(BIN)
 	@$(BIN)
+
+# One command to produce the static in-browser bundle under browser/site/:
+# builds the pasclaw image with C2W=1, converts it with container2wasm
+# (c2w --to-js), and assembles the webpack harness + fetch network stack.
+# Needs docker + node/npm (the c2w CLI is auto-fetched). See browser/README.md.
+browser:
+	./browser/build.sh
 
 print-version:
 	@echo $(VERSION)
