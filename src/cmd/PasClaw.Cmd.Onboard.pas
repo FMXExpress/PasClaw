@@ -652,7 +652,7 @@ begin
     SaveConfig(Cfg);
     PrintLn;
     PrintLn(Ansi.Green + '✓' + Ansi.Reset + ' wrote ' + CfgPath);
-    PrintLn('Next: ' + Ansi.Bold + 'pasclaw agent "hello"' + Ansi.Reset);
+    PrintLn('Next: ' + Ansi.Bold + 'pasclaw agent -m "hello"' + Ansi.Reset);
     Result := 0;
   finally
     Cfg.Free;
