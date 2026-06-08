@@ -931,10 +931,19 @@ begin
 end;
 
 procedure TTUI.SelectSession(Id: string);
+{ Navigation only: free the in-memory session object and load a
+  different one off disk. Used to PersistSession on the outgoing
+  session here -- the rationale was "flush anything pending before
+  the swap" -- but in practice every meaningful state change on
+  the outgoing session has ALREADY been persisted by the time we
+  get here: PollLoopWorker's ApplyLoopResultTo saves after each
+  turn, ApplyModelSelection saves after /model, /clear saves on
+  the truncate. Pure navigation has nothing to save, but the call
+  unconditionally bumped Meta.UpdatedAt via Touch -- so leaving
+  session A to peek at session B re-promoted A to the top of the
+  newest-first list. Codex / user-reported "sort drift" on PR
+  #182's sort change. }
 begin
-  { Persist anything pending on the current session before swapping. }
-  if (FSession <> nil) and (Length(FSession.Messages) > 0) then
-    PersistSession;
   FSession.Free;
   if Id = '' then Id := NewSessionId;
   FSession := TSession.Create(Id);
@@ -1952,8 +1961,22 @@ begin
   FLastResizeW := -1; FLastResizeH := -1;
 
   { Always allocate a session (PR #117 default-persist semantics).
-    SessionId from --session is honoured: empty = fresh id; existing
-    on disk = resume; missing on disk = pre-seed at that id. }
+    SessionId resolution:
+      - non-empty (from --session): honour as-is; missing on disk
+        pre-seeds at that id, existing on disk resumes.
+      - empty AND there's an existing session on disk: resume the
+        newest by UpdatedAt -- so `pasclaw tui` with no args picks
+        up where the operator left off and the left-pane highlight
+        agrees with the loaded chat. Press N to start a fresh
+        session instead.
+      - empty AND no sessions on disk: allocate a fresh id (the
+        original PR #117 behavior). }
+  if SessionId = '' then
+  begin
+    FSessions := ListSessions;            { newest-first }
+    if Length(FSessions) > 0 then
+      SessionId := FSessions[0].Id;
+  end;
   FSession := TSession.Create(SessionId);
   RefreshSessions;
 
