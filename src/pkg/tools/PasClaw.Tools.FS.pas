@@ -351,7 +351,7 @@ var
   var
     Body, Header: string;
     Lines: TStringList;
-    j, MatchCount: Integer;
+    j: Integer;
     Cmp: string;
     Wrote: Boolean;
   begin
@@ -368,7 +368,11 @@ var
       Lines.StrictDelimiter := True;
       Lines.Text := StringReplace(Body, #13, '', [rfReplaceAll]);
       Wrote := False;
-      MatchCount := 0;
+      { Removed MatchCount local — it was incremented per match but
+        never read; the per-file scope made it look like a counter
+        but only TotalMatches actually gates the loop. dcc64 H2077
+        flagged the dead writes; removing the var keeps the code
+        honest about what's being tracked. }
       for j := 0 to Lines.Count - 1 do
       begin
         if TotalMatches >= MaxMatches then Break;
@@ -382,7 +386,6 @@ var
             Wrote := True;
           end;
           Sb.Append(FormatNumberedLine(j + 1, Lines[j])).Append(#10);
-          Inc(MatchCount);
           Inc(TotalMatches);
         end;
       end;

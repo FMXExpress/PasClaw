@@ -480,7 +480,11 @@ begin
       end;
     until FindNext(SR) <> 0;
   finally
-    FindClose(SR);
+    { Fully-qualified to disambiguate from Winapi.Windows.FindClose
+      (which takes a Handle, not a TSearchRec) — the impl uses now
+      pulls Winapi.Windows in for the RenameFile inline expansion,
+      and Delphi's name lookup picks the last-in-uses wins. }
+    SysUtils.FindClose(SR);
   end;
 end;
 
@@ -492,7 +496,9 @@ begin
   Path := SessionPath(Id);
   if Path = '' then Exit;                 { unsafe id }
   if not FileExists(Path) then Exit;
-  Result := DeleteFile(Path);
+  { SysUtils.DeleteFile takes a string; Winapi.Windows.DeleteFile
+    takes a PWideChar. Same shadowing as FindClose above. }
+  Result := SysUtils.DeleteFile(Path);
   if Result then
     LogInfo('session %s deleted', [Id]);
 end;

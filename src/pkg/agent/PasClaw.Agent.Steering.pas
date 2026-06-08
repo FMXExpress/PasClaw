@@ -150,7 +150,10 @@ begin
         Continue;
       end;
     finally
-      FindClose(Info);
+      { SysUtils.FindClose takes a TSearchRec; the Winapi.Windows
+        version pulled in for RenameFile-inline takes a Handle.
+        Fully-qualify so dcc64 picks the right overload. }
+      SysUtils.FindClose(Info);
     end;
     Sleep(LOCK_SPIN_MS);
     Inc(Waited, LOCK_SPIN_MS);

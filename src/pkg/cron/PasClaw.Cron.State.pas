@@ -193,15 +193,18 @@ begin
       If a crash happens between steps 2 and 3, the next Load notices
       FPath is missing and recovers from .bak.
       If RenameFile in step 3 fails, restore .bak so the previous
-      state survives — never leave the user with no state at all. }
-    if FileExists(Bak) then DeleteFile(Bak);
+      state survives — never leave the user with no state at all.
+      DeleteFile is SysUtils-qualified because Winapi.Windows is in
+      the impl uses for the RenameFile inline expansion, and the
+      Win32 DeleteFile takes a PWideChar instead of a Pascal string. }
+    if FileExists(Bak) then SysUtils.DeleteFile(Bak);
 
     HadPrev := FileExists(FPath);
     if HadPrev and not RenameFile(FPath, Bak) then
     begin
       LogWarn('cron.state: backup rename %s -> %s failed; aborting save',
               [FPath, Bak]);
-      DeleteFile(Tmp);
+      SysUtils.DeleteFile(Tmp);
       Exit;
     end;
 
@@ -210,11 +213,11 @@ begin
       LogWarn('cron.state: install rename %s -> %s failed; restoring previous',
               [Tmp, FPath]);
       if HadPrev then RenameFile(Bak, FPath);
-      DeleteFile(Tmp);
+      SysUtils.DeleteFile(Tmp);
       Exit;
     end;
 
-    if FileExists(Bak) then DeleteFile(Bak);
+    if FileExists(Bak) then SysUtils.DeleteFile(Bak);
   finally
     Root.Free;
   end;

@@ -277,13 +277,16 @@ end;
 
 function TMemoryIndexImpl.FileMtime(const Path: string): Int64;
 var
-  Age: Integer;
-  Dt:  TDateTime;
+  Dt: TDateTime;
 begin
   Result := 0;
-  Age := FileAge(Path);
-  if Age = -1 then Exit;
-  Dt := FileDateToDateTime(Age);
+  { Modern FileAge overload (FPC 3.0+ and Delphi for years) returns
+    the mtime as a TDateTime via the out parameter and signals
+    success/failure via Boolean. The legacy `FileAge(s): Integer`
+    form is deprecated on dcc64 (W1000) because it returns a
+    DOS-format integer that needs FileDateToDateTime. Same value
+    either way; this form just skips the conversion. }
+  if not FileAge(Path, Dt) then Exit;
   Result := DateTimeToUnix(Dt, False);
 end;
 
