@@ -319,7 +319,16 @@ begin
     '/{today}.md (e.g. ' + FormatDateTime('yyyy-mm-dd', Now) +
     '.md) for episodic context. Use `memory_search` before answering ' +
     'questions about prior conversations or project facts you might ' +
-    'have written down on an earlier turn.';
+    'have written down on an earlier turn.' + sLineBreak +
+    sLineBreak +
+    '6. **Think in code, not in transcripts** — when a question needs ' +
+    'numbers, summaries, or filtered results across many files, prefer ' +
+    'writing a short shell or Python script that computes the answer and ' +
+    'prints only the result, rather than reading dozens of files into ' +
+    'context. Example: "how many `procedure` definitions are in src/?" ' +
+    'is one `grep -c ''^procedure'' src/**/*.pas` + a sum, not a tour ' +
+    'of every .pas file. The script''s stdout becomes your evidence; ' +
+    'the raw file bodies do not need to enter the conversation.';
 end;
 
 function AppendSection(const Acc, Section: string): string;
