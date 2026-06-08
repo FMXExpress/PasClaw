@@ -314,6 +314,7 @@ uses
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
+  PasClaw.Tools.MemoryFetch,
   PasClaw.Tools.OutputCache,
   PasClaw.Tools.Sandbox,
   PasClaw.Skills.Loader,
@@ -484,6 +485,7 @@ begin
   else
     LogWebSearchSkipOnce;
   if FConfig.WebFetchEnabled then RegisterWebFetchTool(FRegistry);
+  if FConfig.WebFetchEnabled then RegisterMemoryFetchTool(FRegistry);
   { tool_output_get is only useful when truncation is on — the
     Gateway/TPasClawAgent paths set Cfg.ToolOutputCap from
     FConfig.ToolOutputCap, so if we skip this branch the model
@@ -886,6 +888,7 @@ begin
     else
       LogWebSearchSkipOnce;
     if FConfig.WebFetchEnabled then RegisterWebFetchTool(FRegistry);
+    if FConfig.WebFetchEnabled then RegisterMemoryFetchTool(FRegistry);
     { Same gate as EnsureRegistry above — without this, TPasClawServer
       builds a registry that's missing tool_output_get even though
       Gateway.Server forwards FCfg.ToolOutputCap into its LoopCfg.

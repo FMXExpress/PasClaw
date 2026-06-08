@@ -997,6 +997,11 @@ begin
   begin
     Cfg.Options.CacheKey := FSession.Meta.Id;
     Cfg.SteeringKey      := FSession.Meta.Id;
+    { Inject the working-state snapshot built up over previous
+      turns. Empty string when the snapshot is empty so the system
+      prompt stays clean for fresh sessions. Helper lives in
+      PasClaw.Session.Store. }
+    Cfg.Options.SystemPrompt := FormatWorkingStateBlock(FSession.Meta);
   end;
   Cfg.OnText        := nil;
   Cfg.OnToolCall    := nil;
@@ -1050,6 +1055,12 @@ begin
       Target.Messages[High(Target.Messages)] :=
         MakeMessage(mrAssistant, Loop.Content);
     end;
+    { Working-state snapshot: refresh from this loop's final message
+      history (edits / shell commands / errors) so the next turn can
+      pick up structured context after compaction or a /quit-then-
+      resume. Helper lives in PasClaw.Session.Store. }
+    if Length(Loop.FinalMessages) > 0 then
+      UpdateWorkingStateAfterTurn(Target.Meta, Loop.FinalMessages);
     Target.AutoTitle;
     Target.Touch;
     Target.Save;
