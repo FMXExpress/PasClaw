@@ -68,8 +68,16 @@ type
      Persisted under the 'working_state' object inside session
      JSON. Empty defaults: no fields emitted unless populated, so
      pre-existing session files round-trip without bloat. *)
+  { Named alias so PushEditedFile (and any future caller that
+    builds the array fresh) can assign back into the record's
+    field without dcc64 raising E2008 "Incompatible types" on the
+    anonymous `array of string` vs the field's anonymous type.
+    Same pattern PasClaw uses elsewhere for TLLMProviderArray /
+    TSubagentSpecArray / TStringArray. }
+  TEditedFilesArray = array of string;
+
   TWorkingState = record
-    EditedFiles: array of string;
+    EditedFiles: TEditedFilesArray;
     LastShell:   string;
     LastError:   string;
     Updated:     Int64;
@@ -440,7 +448,9 @@ procedure PushEditedFile(var W: TWorkingState; const Path: string);
   first so the formatted block reads chronologically backward. }
 var
   i: Integer;
-  Tmp: array of string;
+  Tmp: TEditedFilesArray;     { named-type alias so the W.EditedFiles
+                                assignment below doesn't trip dcc64's
+                                strict-array E2008. }
 begin
   if Path = '' then Exit;
   SetLength(Tmp, 1);
