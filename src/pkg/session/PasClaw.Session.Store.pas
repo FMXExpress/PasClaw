@@ -110,6 +110,12 @@ implementation
 
 uses
   DateUtils,
+  {$IFDEF MSWINDOWS}
+  { Lets dcc64 inline SysUtils.RenameFile (used by Save's atomic
+    write) — without this it falls back to a regular call and emits
+    H2443. Mirrors the pattern used in PasClaw.CliUI / PasClaw.Crypto.Random. }
+  {$IFDEF FPC}Windows,{$ELSE}Winapi.Windows,{$ENDIF}
+  {$ENDIF}
   PasClaw.Config,
   PasClaw.Utils,
   PasClaw.Logger;

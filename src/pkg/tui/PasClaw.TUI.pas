@@ -163,11 +163,18 @@ type
     procedure Flash(const Msg: string);
     function CurrentSpinnerChar: Char;
     {$ENDIF}
+    {$IFDEF FPC}
+    { Legacy line-based REPL surface, used by the FPC build only.
+      The Delphi build's positioned TUI handles slash commands
+      inline inside SubmitInput, so these methods would never be
+      called — declaring them on the Delphi side just triggered
+      H2219 "unused private symbol". }
     procedure DrawHeader;
     procedure ShowHelp;
     procedure ShowTools;
     procedure HandleSlashCommand(const Cmd: string);
     procedure HandleUserInput(const Text: string);
+    {$ENDIF}
   public
     (* Operator's prompt-cache settings. Defaults to default-on (matches
        DefaultChatOptions). Cmd_TUI_Run copies Cfg.PromptCache into this
@@ -840,7 +847,9 @@ begin
     Label_ := '   (none yet)';
     while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
     WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);
-    Inc(Row);
+    { Row no longer read after this — bottom border is positioned
+      via BoxY + BoxH - 1 below. Dropping the trailing Inc to
+      silence dcc64 H2077. }
   end
   else
   begin
@@ -861,7 +870,7 @@ begin
                        [Length(FStatsToolCallNames) - ToolRows]);
       while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
       WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);
-      Inc(Row);
+      { Same reason: Row not read after — see comment above. }
     end;
   end;
 
@@ -1927,17 +1936,13 @@ begin
   end;
 end;
 
-{ The slash-command + Help/Tools surface from the old REPL stays
-  available — but it's invoked from inside the input buffer now
-  (typing "/help" + Enter) so users don't have to learn a new
-  dispatch model. Empty stubs here keep the FPC-shared interface
-  happy without re-implementing the legacy box renderer. }
-
-procedure TTUI.DrawHeader;     begin end;
-procedure TTUI.ShowHelp;       begin end;
-procedure TTUI.ShowTools;      begin end;
-procedure TTUI.HandleSlashCommand(const Cmd: string); begin end;
-procedure TTUI.HandleUserInput(const Text: string);   begin end;
+{ Slash commands / help / tools are handled inline by SubmitInput
+  in the Delphi positioned-TUI path above (see /help, /theme,
+  /model, /stats dispatching there). The legacy REPL-style methods
+  (DrawHeader / ShowHelp / ShowTools / HandleSlashCommand /
+  HandleUserInput) live in the FPC branch below — their
+  declarations are also gated on FPC in the class section so dcc64
+  doesn't emit H2219 for unused private symbols. }
 
 {$ELSE}
 { ============================= FPC (line-based) ============================ }
