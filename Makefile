@@ -145,7 +145,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state print-version get-indy webui-res
+.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width print-version get-indy webui-res
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -276,4 +276,12 @@ test-working-state: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/working_state_tests.pas -o$(BUILDDIR)/working_state_tests
 	@$(BUILDDIR)/working_state_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state
+# PasClaw.Utils — ANSI-aware width helpers (VisibleLength / PadVisibleRight /
+# TruncateVisible). The TUI chat pane relies on these to render markdown
+# without breaking the wrap math.
+test-ansi-width: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/ansi_width_tests.pas -o$(BUILDDIR)/ansi_width_tests
+	@$(BUILDDIR)/ansi_width_tests
+
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width
