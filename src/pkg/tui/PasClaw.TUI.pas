@@ -1552,6 +1552,7 @@ var
   Header, Body, Line: string;
   Lines: TArray<string>;
   i: Integer;
+  WrapPart, WrapRest, NextRest: string;
 begin
   case Msg.Role of
     mrUser:      Header := 'user';
@@ -1587,19 +1588,30 @@ begin
     Lines := Body.Split([sLineBreak, #10, #13], TStringSplitOptions.None);
     for Line in Lines do
     begin
-      if Length(Line) <= W - 2 then
+      { Width check uses VisibleLength so ANSI escape sequences
+        from RenderMarkdown don't inflate the byte count past the
+        wrap threshold. When wrap IS needed, TruncateVisible
+        carves the prefix without splitting a CSI sequence, then
+        feeds the remainder back through itself. Codex P2 on
+        PR #182. }
+      if VisibleLength(Line) <= W - 2 then
       begin
         SetLength(Acc, Length(Acc) + 1);
         Acc[High(Acc)] := '  ' + Line;
       end
       else
       begin
-        i := 1;
-        while i <= Length(Line) do
+        WrapRest := Line;
+        while WrapRest <> '' do
         begin
+          { Use a separate NextRest temporary -- aliasing the same
+            string for both `const S` and `out Remainder` would let
+            TruncateVisible zero S out via Remainder := '' before
+            it read a single byte. }
+          WrapPart := TruncateVisible(WrapRest, W - 2, NextRest);
           SetLength(Acc, Length(Acc) + 1);
-          Acc[High(Acc)] := '  ' + Copy(Line, i, W - 2);
-          Inc(i, W - 2);
+          Acc[High(Acc)] := '  ' + WrapPart;
+          WrapRest := NextRest;
         end;
       end;
     end;
@@ -1616,7 +1628,7 @@ var
   ChatTop, ChatH, ChatBottom: Integer;
   Lines: TArray<string>;
   i, Row, Pending: Integer;
-  Line, RoleColor, InputLine, DividerLine: string;
+  Line, RoleColor, InputLine, DividerLine, Discard: string;
   ShownFrom: Integer;
 begin
   ChatTop := Y;
@@ -1664,8 +1676,15 @@ begin
     end
     else
       RoleColor := ConsoleTheme.Text;
-    if Length(Line) > W then Line := Copy(Line, 1, W);
-    while Length(Line) < W do Line := Line + ' ';
+    { VisibleLength-aware truncation + pad so ANSI escape sequences
+      from RenderMarkdown don't make the line under-pad (leaving
+      stale chars on the right edge) or get sliced mid-CSI. The
+      Discard local just captures TruncateVisible's mandatory
+      Remainder out-param -- the pane row is single-line, anything
+      past column W gets dropped. Codex P2 on PR #182. }
+    if VisibleLength(Line) > W then
+      Line := TruncateVisible(Line, W, Discard);
+    Line := PadVisibleRight(Line, W);
     WriteAnsiText(RoleColor, Line);
   end;
 
