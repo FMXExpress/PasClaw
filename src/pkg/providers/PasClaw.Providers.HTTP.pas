@@ -812,8 +812,7 @@ begin
     JSON values (user names, system prompts, content blocks). }
   Req  := TStringStream.Create(JSON, TEncoding.UTF8);
   try
-    Http.Request.ContentType    := 'application/json';
-    Http.Request.ContentEncoding := 'utf-8';
+    Http.Request.ContentType    := 'application/json; charset=utf-8';
     Http.Request.Accept         := 'application/json';
     ApplyHeaders(Http, Headers);
     Result := DoRequest(Http, URL, Req, True);
@@ -843,8 +842,7 @@ begin
   Req  := TStringStream.Create(JSON, TEncoding.UTF8);
   Resp := TStringStream.Create('', TEncoding.UTF8);
   try
-    Http.Request.ContentType    := 'application/json';
-    Http.Request.ContentEncoding := 'utf-8';
+    Http.Request.ContentType    := 'application/json; charset=utf-8';
     Http.Request.Accept         := 'application/json';
     ApplyHeaders(Http, Headers);
     Result.StatusCode := 0;
@@ -1002,8 +1000,7 @@ begin
   Req := TStringStream.Create(Body, TEncoding.UTF8);
   try
     if UserAgent <> '' then Http.Request.UserAgent := UserAgent;
-    Http.Request.ContentType     := ContentType;
-    Http.Request.ContentEncoding := 'utf-8';
+    Http.Request.ContentType     := ContentType + '; charset=utf-8';
     if Accept <> '' then Http.Request.Accept := Accept
     else                 Http.Request.Accept := '*/*';
     ApplyHeaders(Http, Headers);
@@ -1041,8 +1038,7 @@ begin
   Req := TStringStream.Create(JSON, TEncoding.UTF8);
   try
     if UserAgent <> '' then Http.Request.UserAgent := UserAgent;
-    Http.Request.ContentType     := 'application/json';
-    Http.Request.ContentEncoding := 'utf-8';
+    Http.Request.ContentType     := 'application/json; charset=utf-8';
     if Accept <> '' then Http.Request.Accept := Accept
     else                 Http.Request.Accept := 'application/json';
     ApplyHeaders(Http, Headers);
