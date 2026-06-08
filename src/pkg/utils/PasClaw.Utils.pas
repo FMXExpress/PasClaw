@@ -14,6 +14,23 @@ uses
 
 function DupStr(const S: string; Count: Integer): string;
 function VisibleLength(const S: string): Integer;
+(* Right-pad S with spaces until its visible length reaches W. Same
+   shape as PasClaw.CliUI.PadRight, but exposed from Utils so the
+   positioned TUI's chat pane can use it without dragging in the
+   CliUI dependency. ANSI escape sequences in S contribute zero to
+   the visible length, so a styled line still pads correctly. *)
+function PadVisibleRight(const S: string; W: Integer): string;
+(* Carve a visible-width-bounded prefix off S. Returns the prefix
+   whose visible length is <= MaxVis, with all ANSI escape
+   sequences encountered in that span emitted intact (escapes
+   contribute zero visible width). Remainder is whatever bytes
+   remain in S beyond the prefix; the caller iterates by feeding
+   Remainder back in until it's empty. A trailing ANSI reset is
+   appended to the prefix when any escape was emitted, so the
+   prefix is self-contained -- subsequent output doesn't inherit
+   leftover styling from a mid-line wrap. *)
+function TruncateVisible(const S: string; MaxVis: Integer;
+                         out Remainder: string): string;
 function HasPrefix(const S, Prefix: string): Boolean;
 function HasSuffix(const S, Suffix: string): Boolean;
 function TrimQuotes(const S: string): string;
@@ -107,6 +124,64 @@ begin
     Inc(i);
   end;
   Result := n;
+end;
+
+function PadVisibleRight(const S: string; W: Integer): string;
+var
+  Vis: Integer;
+begin
+  Vis := VisibleLength(S);
+  if Vis >= W then Result := S
+  else             Result := S + StringOfChar(' ', W - Vis);
+end;
+
+function TruncateVisible(const S: string; MaxVis: Integer;
+                         out Remainder: string): string;
+var
+  i, n: Integer;
+  c: Byte;
+  inEsc, anyEsc: Boolean;
+begin
+  Result    := '';
+  Remainder := '';
+  n         := 0;
+  inEsc     := False;
+  anyEsc    := False;
+  i         := 1;
+  while i <= Length(S) do
+  begin
+    c := Byte(S[i]);
+    if inEsc then
+    begin
+      Result := Result + S[i];
+      if c = Ord('m') then inEsc := False;
+      Inc(i);
+      Continue;
+    end;
+    if c = 27 then
+    begin
+      Result := Result + S[i];
+      inEsc  := True;
+      anyEsc := True;
+      Inc(i);
+      Continue;
+    end;
+    { Count lead bytes (visible chars); continuation bytes
+      (10xxxxxx) ride along with their lead. }
+    if (c and $C0) <> $80 then
+    begin
+      if n >= MaxVis then Break;
+      Inc(n);
+    end;
+    Result := Result + S[i];
+    Inc(i);
+  end;
+  { Emit a final ANSI reset on the prefix when we opened any
+    escapes -- otherwise a wrap mid-styled-run would carry the
+    color into the padding / next pane row. Cheap and idempotent. }
+  if anyEsc then Result := Result + #27 + '[0m';
+  if i <= Length(S) then
+    Remainder := Copy(S, i, MaxInt);
 end;
 
 function HasPrefix(const S, Prefix: string): Boolean;

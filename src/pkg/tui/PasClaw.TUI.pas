@@ -46,6 +46,10 @@ uses
                                      from the interface section's uses, not
                                      just the implementation's. FPC was
                                      permissive about this; dcc64 is not. }
+  PasClaw.Tools.ToolLoop,          { TToolLoopResult — referenced by the
+                                     AccumulateLoopStats method declaration
+                                     in the TTUI class; same dcc64
+                                     visibility rule as the line above. }
   PasClaw.Tools.Registry,
   PasClaw.Session.Store;
 
@@ -109,6 +113,20 @@ type
                                          avoid forward decls }
     FModelRefreshProvider: string;
     FModelRefreshStartedAt: TDateTime;
+    { Per-session accumulators surfaced by the /stats overlay. Token
+      and tool counters roll up TToolLoopResult.TotalUsage +
+      Loop.Truncations as turns complete in PollLoopWorker; tool
+      call counts come from the OnToolCall hook plumbed onto every
+      LoopCfg the TUI builds. FStatsStartedAt is the wall-clock
+      start of the TUI session, used for the "elapsed" line. }
+    FStatsStartedAt:     TDateTime;
+    FStatsUsage:         TUsageInfo;
+    FStatsTurns:         Integer;
+    FStatsTruncations:   Integer;
+    FStatsBytesSaved:    Int64;
+    FStatsToolCallNames: array of string;
+    FStatsToolCallCount: array of Integer;
+    FStatsOpen:          Boolean;
     procedure DrawFrame;
     procedure DrawHeaderBar(W: Integer);
     procedure DrawSessionPane(X, Y, W, H: Integer);
@@ -124,6 +142,10 @@ type
     function  ActiveProviderName: string;
     procedure HandleModelMenuKey(Key: Integer);
     procedure ApplyModelSelection(const ModelId: string);
+    procedure DrawStatsOverlay;
+    procedure OpenStatsOverlay;
+    procedure RecordToolCall(const Name: string);
+    procedure AccumulateLoopStats(const Loop: TToolLoopResult);
     procedure HandleKey(Key: Integer);
     procedure HandleSessionKey(Key: Integer);
     procedure HandleChatKey(Key: Integer);
@@ -141,11 +163,18 @@ type
     procedure Flash(const Msg: string);
     function CurrentSpinnerChar: Char;
     {$ENDIF}
+    {$IFDEF FPC}
+    { Legacy line-based REPL surface, used by the FPC build only.
+      The Delphi build's positioned TUI handles slash commands
+      inline inside SubmitInput, so these methods would never be
+      called — declaring them on the Delphi side just triggered
+      H2219 "unused private symbol". }
     procedure DrawHeader;
     procedure ShowHelp;
     procedure ShowTools;
     procedure HandleSlashCommand(const Cmd: string);
     procedure HandleUserInput(const Text: string);
+    {$ENDIF}
   public
     (* Operator's prompt-cache settings. Defaults to default-on (matches
        DefaultChatOptions). Cmd_TUI_Run copies Cfg.PromptCache into this
@@ -185,8 +214,19 @@ uses
   SyncObjs,
   DateUtils,
   PasClaw.CliUI,
+  PasClaw.Utils,                   { VisibleLength + PadVisibleRight +
+                                     TruncateVisible -- the ANSI-aware
+                                     width helpers RenderMsgLines and
+                                     DrawChatPane use. FPC happened to
+                                     resolve them through a transitive
+                                     import chain (CliUI's impl uses
+                                     Utils); dcc64 doesn't, so the
+                                     import has to be explicit here. }
   PasClaw.Logger,
-  PasClaw.Tools.ToolLoop,
+  { PasClaw.Tools.ToolLoop now lives in the interface uses (above) so
+    dcc64 can see TToolLoopResult from the TTUI class declaration. }
+  PasClaw.Tools.OutputCache,       { GetOutputCacheStats — surfaced
+                                     in /stats overlay }
   PasClaw.Agent.Steering,
   PasClaw.Markdown.Render,
   PasClaw.Providers.Catalog,       { TProviderSpec — for TModelRefreshThread }
@@ -653,6 +693,199 @@ begin
   end;
 end;
 
+procedure TTUI.RecordToolCall(const Name: string);
+{ Bump the per-tool counter. Walks the (small) parallel arrays
+  linearly — a hash map would be overkill for the tool counts a
+  TUI session accumulates (low double-digits at most). Caller
+  must run on the main thread (AccumulateLoopStats does). }
+var
+  i: Integer;
+begin
+  for i := 0 to High(FStatsToolCallNames) do
+    if FStatsToolCallNames[i] = Name then
+    begin
+      Inc(FStatsToolCallCount[i]);
+      Exit;
+    end;
+  SetLength(FStatsToolCallNames, Length(FStatsToolCallNames) + 1);
+  SetLength(FStatsToolCallCount, Length(FStatsToolCallCount) + 1);
+  FStatsToolCallNames[High(FStatsToolCallNames)] := Name;
+  FStatsToolCallCount[High(FStatsToolCallCount)] := 1;
+end;
+
+procedure TTUI.AccumulateLoopStats(const Loop: TToolLoopResult);
+{ Run on the main thread by PollLoopWorker after each successful
+  turn. Token + truncation totals come straight off the loop
+  result; tool-call names come from walking Loop.FinalMessages
+  for assistant turns that emitted tool_calls. We don't dedup
+  against earlier turns — calling the same tool twice across
+  two turns shows up as 2 in /stats, which is what the operator
+  wants to see. }
+var
+  i, k: Integer;
+begin
+  Inc(FStatsTurns);
+  Inc(FStatsUsage.InputTokens,        Loop.TotalUsage.InputTokens);
+  Inc(FStatsUsage.OutputTokens,       Loop.TotalUsage.OutputTokens);
+  Inc(FStatsUsage.CacheReadTokens,    Loop.TotalUsage.CacheReadTokens);
+  Inc(FStatsUsage.CacheCreatedTokens, Loop.TotalUsage.CacheCreatedTokens);
+  Inc(FStatsTruncations, Loop.Truncations);
+  Inc(FStatsBytesSaved,  Loop.TruncatedBytesSaved);
+
+  { Tool calls live on assistant messages with non-empty ToolCalls.
+    Walking FinalMessages catches every call from this loop's turns
+    in order, including the ones the final assistant message
+    emitted. }
+  for i := 0 to High(Loop.FinalMessages) do
+    if Loop.FinalMessages[i].Role = mrAssistant then
+      for k := 0 to High(Loop.FinalMessages[i].ToolCalls) do
+        RecordToolCall(Loop.FinalMessages[i].ToolCalls[k].Func.Name);
+end;
+
+procedure TTUI.OpenStatsOverlay;
+{ Mutual exclusion with the theme/model overlays so we never paint
+  two modal boxes on top of each other. The stats overlay is
+  read-only — any key dismisses it, no Up/Dn selection. }
+begin
+  FMenuOpen      := False;
+  FModelMenuOpen := False;
+  FStatsOpen     := True;
+end;
+
+procedure TTUI.DrawStatsOverlay;
+{ Read-only info modal showing the per-session accumulators rolled
+  up across every successful tool loop this TUI session has run.
+  Modeled on DrawThemeMenu but no highlight cursor — caller
+  dismisses with any key (HandleKey checks FStatsOpen first). }
+const
+  BoxW = 56;
+var
+  Size: TMVCConsoleSize;
+  W, H, BoxX, BoxY, BoxH, Row, ToolRows, i, EntryCount: Integer;
+  TotalBytes: Int64;
+  Label_, Top, Bottom, Side: string;
+  ElapsedSec: Int64;
+  Tokens, ToolLine: string;
+begin
+  Size := GetConsoleSize;
+  W := Integer(Size.Columns);
+  H := Integer(Size.Rows);
+
+  ToolRows := Length(FStatsToolCallNames);
+  if ToolRows > 8 then ToolRows := 8;       { cap rendered rows; full
+                                              list still in memory }
+  BoxH := 9 + ToolRows;                     { frame + 7 stat rows +
+                                              tool-call rows + footer }
+  BoxX := (W - BoxW) div 2;
+  BoxY := (H - BoxH) div 2;
+  if BoxX < 0 then BoxX := 0;
+  if BoxY < 0 then BoxY := 0;
+
+  Top    := '+' + StringOfChar('-', BoxW - 2) + '+';
+  Bottom := Top;
+  Side   := '|';
+
+  GotoXY(BoxX, BoxY);
+  WriteAnsiText(ConsoleTheme.HighlightText, Top);
+
+  GotoXY(BoxX, BoxY + 1);
+  Label_ := ' stats -- press any key to dismiss ';
+  while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+  if Length(Label_) > BoxW - 2 then Label_ := Copy(Label_, 1, BoxW - 2);
+  WriteAnsiText(ConsoleTheme.HighlightText, Side + Label_ + Side);
+
+  GotoXY(BoxX, BoxY + 2);
+  WriteAnsiText(ConsoleTheme.HighlightText,
+                Side + StringOfChar('-', BoxW - 2) + Side);
+
+  Row := BoxY + 3;
+
+  ElapsedSec := SecondsBetween(Now, FStatsStartedAt);
+
+  GotoXY(BoxX, Row);
+  Label_ := Format(' session    %d turn(s), %ds elapsed',
+                   [FStatsTurns, ElapsedSec]);
+  while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+  if Length(Label_) > BoxW - 2 then Label_ := Copy(Label_, 1, BoxW - 2);
+  WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);
+  Inc(Row);
+
+  Tokens := Format(' tokens     in=%d out=%d',
+                   [FStatsUsage.InputTokens, FStatsUsage.OutputTokens]);
+  if FStatsUsage.CacheReadTokens + FStatsUsage.CacheCreatedTokens > 0 then
+    Tokens := Tokens +
+              Format(' (cache r=%d w=%d)',
+                     [FStatsUsage.CacheReadTokens,
+                      FStatsUsage.CacheCreatedTokens]);
+  GotoXY(BoxX, Row);
+  while Length(Tokens) < BoxW - 2 do Tokens := Tokens + ' ';
+  if Length(Tokens) > BoxW - 2 then Tokens := Copy(Tokens, 1, BoxW - 2);
+  WriteAnsiText(ConsoleTheme.Text, Side + Tokens + Side);
+  Inc(Row);
+
+  GetOutputCacheStats(EntryCount, TotalBytes);
+  GotoXY(BoxX, Row);
+  if FStatsTruncations > 0 then
+    Label_ := Format(' truncated  %d output(s), saved %d bytes',
+                     [FStatsTruncations, FStatsBytesSaved])
+  else
+    Label_ := ' truncated  none (set tool_output_cap to enable)';
+  while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+  if Length(Label_) > BoxW - 2 then Label_ := Copy(Label_, 1, BoxW - 2);
+  WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);
+  Inc(Row);
+
+  GotoXY(BoxX, Row);
+  Label_ := Format(' cache      %d handle(s) held, %d bytes',
+                   [EntryCount, TotalBytes]);
+  while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+  if Length(Label_) > BoxW - 2 then Label_ := Copy(Label_, 1, BoxW - 2);
+  WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);
+  Inc(Row);
+
+  GotoXY(BoxX, Row);
+  Label_ := ' tool calls';
+  while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+  WriteAnsiText(ConsoleTheme.HighlightText, Side + Label_ + Side);
+  Inc(Row);
+
+  if ToolRows = 0 then
+  begin
+    GotoXY(BoxX, Row);
+    Label_ := '   (none yet)';
+    while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+    WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);
+    { Row no longer read after this — bottom border is positioned
+      via BoxY + BoxH - 1 below. Dropping the trailing Inc to
+      silence dcc64 H2077. }
+  end
+  else
+  begin
+    for i := 0 to ToolRows - 1 do
+    begin
+      GotoXY(BoxX, Row);
+      ToolLine := Format('   %-32s %d',
+                         [FStatsToolCallNames[i], FStatsToolCallCount[i]]);
+      while Length(ToolLine) < BoxW - 2 do ToolLine := ToolLine + ' ';
+      if Length(ToolLine) > BoxW - 2 then ToolLine := Copy(ToolLine, 1, BoxW - 2);
+      WriteAnsiText(ConsoleTheme.Text, Side + ToolLine + Side);
+      Inc(Row);
+    end;
+    if Length(FStatsToolCallNames) > ToolRows then
+    begin
+      GotoXY(BoxX, Row);
+      Label_ := Format('   ... and %d more',
+                       [Length(FStatsToolCallNames) - ToolRows]);
+      while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+      WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);
+      { Same reason: Row not read after — see comment above. }
+    end;
+  end;
+
+  GotoXY(BoxX, BoxY + BoxH - 1);
+  WriteAnsiText(ConsoleTheme.HighlightText, Bottom);
+end;
+
 function TTUI.CurrentSpinnerChar: Char;
 const
   Frames: array[0..3] of Char = ('|', '/', '-', '\');
@@ -698,9 +931,32 @@ begin
 end;
 
 procedure TTUI.SelectSession(Id: string);
+{ Navigation only: free the in-memory session object and load a
+  different one off disk. Used to PersistSession on the outgoing
+  session here -- the rationale was "flush anything pending before
+  the swap" -- but in practice every meaningful state change on
+  the outgoing session has ALREADY been persisted by the time we
+  get here: PollLoopWorker's ApplyLoopResultTo saves after each
+  turn, ApplyModelSelection saves after /model, /clear saves on
+  the truncate. Pure navigation has nothing to save, but the call
+  unconditionally bumped Meta.UpdatedAt via Touch -- so leaving
+  session A to peek at session B re-promoted A to the top of the
+  newest-first list. User-reported sort drift after PR #182.
+
+  Exception: when a tool loop is in flight against the outgoing
+  session, StartTurn has appended the user's prompt to in-memory
+  FSession.Messages but the loop hasn't returned yet so the
+  prompt isn't on disk. PollLoopWorker's eventual
+  ApplyLoopResultTo / AppendErrorTo reloads the session from disk
+  by id -- so without a save here, a timeout / failure on a turn
+  the user has already navigated away from would land only the
+  error text in the saved transcript with no record of the
+  prompt that triggered it. Persist that specific case (it bumps
+  UpdatedAt, which is correct -- there IS new content). Codex P2
+  on PR #184. }
 begin
-  { Persist anything pending on the current session before swapping. }
-  if (FSession <> nil) and (Length(FSession.Messages) > 0) then
+  if (FSession <> nil) and (FLoopThread <> nil) and
+     (FLoopSessionId = FSession.Meta.Id) then
     PersistSession;
   FSession.Free;
   if Id = '' then Id := NewSessionId;
@@ -772,6 +1028,11 @@ begin
   begin
     Cfg.Options.CacheKey := FSession.Meta.Id;
     Cfg.SteeringKey      := FSession.Meta.Id;
+    { Inject the working-state snapshot built up over previous
+      turns. Empty string when the snapshot is empty so the system
+      prompt stays clean for fresh sessions. Helper lives in
+      PasClaw.Session.Store. }
+    Cfg.Options.SystemPrompt := FormatWorkingStateBlock(FSession.Meta);
   end;
   Cfg.OnText        := nil;
   Cfg.OnToolCall    := nil;
@@ -825,6 +1086,12 @@ begin
       Target.Messages[High(Target.Messages)] :=
         MakeMessage(mrAssistant, Loop.Content);
     end;
+    { Working-state snapshot: refresh from this loop's final message
+      history (edits / shell commands / errors) so the next turn can
+      pick up structured context after compaction or a /quit-then-
+      resume. Helper lives in PasClaw.Session.Store. }
+    if Length(Loop.FinalMessages) > 0 then
+      UpdateWorkingStateAfterTurn(Target.Meta, Loop.FinalMessages);
     Target.AutoTitle;
     Target.Touch;
     Target.Save;
@@ -894,6 +1161,7 @@ begin
   begin
     Loop := Worker.LoopResult;
     ApplyLoopResultTo(FLoopSessionId, Loop, FSession);
+    AccumulateLoopStats(Loop);
     if FLoopSessionId <> FSession.Meta.Id then
       Flash('result -> ' + FLoopSessionId);
     RefreshSessions;
@@ -938,13 +1206,15 @@ begin
       end;
     end
     else if Text = '/help' then
-      Flash('keys: Tab swap pane | N new | D del | Q quit | /theme | /model')
+      Flash('keys: Tab swap pane | N new | D del | Q quit | /theme | /model | /stats')
     else if (Text = '/tools') and (FRegistry <> nil) then
       Flash(Format('registered tools: %d', [FRegistry.Count]))
     else if Text = '/theme' then
       OpenThemeMenu
     else if Text = '/model' then
       OpenModelMenu
+    else if Text = '/stats' then
+      OpenStatsOverlay
     else
       Flash('unknown: ' + Text);
     FInputBuf := '';
@@ -1144,6 +1414,13 @@ begin
     preview, Enter commits the selection. Model menu intercept piggybacks
     on the same gate; only one overlay can be open per the mutual-exclusion
     contract enforced in OpenThemeMenu / OpenModelMenu. }
+  if FStatsOpen then
+  begin
+    { Any key dismisses the read-only stats overlay. No selection
+      to commit; no preview to revert. }
+    FStatsOpen := False;
+    Exit;
+  end;
   if FModelMenuOpen then
   begin
     HandleModelMenuKey(Key);
@@ -1290,11 +1567,23 @@ begin
   WriteAnsiText(ConsoleTheme.Symbols, Line);
 end;
 
-procedure RenderMsgLines(const Msg: TMessage; W: Integer; var Acc: TArray<string>);
+procedure RenderMsgLines(const Msg: TMessage; W: Integer;
+                         RenderMd: Boolean;
+                         var Acc: TArray<string>);
+{ Build the chat-pane representation of a single message. Lines are
+  pushed into Acc; the caller windows that into the visible pane.
+  When RenderMd is True AND the message is from the assistant, the
+  body flows through PasClaw.Markdown.Render.RenderMarkdown first
+  -- same pipeline the agent CLI uses on its terminal output, just
+  routed into the positioned TUI's chat pane. User/system/tool
+  messages stay verbatim: their content is either typed by the
+  operator (markdown would surprise them) or a structured payload
+  (rendering would mangle JSON / hashline / shell output). }
 var
   Header, Body, Line: string;
   Lines: TArray<string>;
   i: Integer;
+  WrapPart, WrapRest, NextRest: string;
 begin
   case Msg.Role of
     mrUser:      Header := 'user';
@@ -1311,6 +1600,18 @@ begin
   Acc[High(Acc)] := '__HDR__' + Header;
 
   Body := Msg.Content;
+  if RenderMd and (Msg.Role = mrAssistant) and (Trim(Body) <> '') then
+    Body := RenderMarkdown(Body);
+  { Tabs cause the chat pane to overflow: VisibleLength counts a
+    tab as one column, but the terminal expands it to the next
+    8-column tab stop (1-7 extra columns depending on position).
+    Long markdown code blocks routinely include tab-indented
+    content from the model. Expanding to 4 spaces ahead of the
+    wrap pass keeps the visible-width math honest at the cost of
+    a slightly wider code block; for content that's already
+    space-indented this is a no-op. User-reported "1-2 chars
+    bleed onto the next line" on PR #184. }
+  Body := StringReplace(Body, #9, '    ', [rfReplaceAll]);
   if Trim(Body) = '' then
   begin
     if Length(Msg.ToolCalls) > 0 then
@@ -1328,19 +1629,30 @@ begin
     Lines := Body.Split([sLineBreak, #10, #13], TStringSplitOptions.None);
     for Line in Lines do
     begin
-      if Length(Line) <= W - 2 then
+      { Width check uses VisibleLength so ANSI escape sequences
+        from RenderMarkdown don't inflate the byte count past the
+        wrap threshold. When wrap IS needed, TruncateVisible
+        carves the prefix without splitting a CSI sequence, then
+        feeds the remainder back through itself. Codex P2 on
+        PR #182. }
+      if VisibleLength(Line) <= W - 2 then
       begin
         SetLength(Acc, Length(Acc) + 1);
         Acc[High(Acc)] := '  ' + Line;
       end
       else
       begin
-        i := 1;
-        while i <= Length(Line) do
+        WrapRest := Line;
+        while WrapRest <> '' do
         begin
+          { Use a separate NextRest temporary -- aliasing the same
+            string for both `const S` and `out Remainder` would let
+            TruncateVisible zero S out via Remainder := '' before
+            it read a single byte. }
+          WrapPart := TruncateVisible(WrapRest, W - 2, NextRest);
           SetLength(Acc, Length(Acc) + 1);
-          Acc[High(Acc)] := '  ' + Copy(Line, i, W - 2);
-          Inc(i, W - 2);
+          Acc[High(Acc)] := '  ' + WrapPart;
+          WrapRest := NextRest;
         end;
       end;
     end;
@@ -1357,7 +1669,7 @@ var
   ChatTop, ChatH, ChatBottom: Integer;
   Lines: TArray<string>;
   i, Row, Pending: Integer;
-  Line, RoleColor, InputLine, DividerLine: string;
+  Line, RoleColor, InputLine, DividerLine, Discard: string;
   ShownFrom: Integer;
 begin
   ChatTop := Y;
@@ -1369,7 +1681,8 @@ begin
   SetLength(Lines, 0);
   if FSession <> nil then
     for i := 0 to High(FSession.Messages) do
-      RenderMsgLines(FSession.Messages[i], W, Lines);
+      RenderMsgLines(FSession.Messages[i], W,
+                     Self.RenderMarkdownEnabled, Lines);
 
   { Clip scroll to valid range. }
   if FChatScroll < 0 then FChatScroll := 0;
@@ -1404,8 +1717,15 @@ begin
     end
     else
       RoleColor := ConsoleTheme.Text;
-    if Length(Line) > W then Line := Copy(Line, 1, W);
-    while Length(Line) < W do Line := Line + ' ';
+    { VisibleLength-aware truncation + pad so ANSI escape sequences
+      from RenderMarkdown don't make the line under-pad (leaving
+      stale chars on the right edge) or get sliced mid-CSI. The
+      Discard local just captures TruncateVisible's mandatory
+      Remainder out-param -- the pane row is single-line, anything
+      past column W gets dropped. Codex P2 on PR #182. }
+    if VisibleLength(Line) > W then
+      Line := TruncateVisible(Line, W, Discard);
+    Line := PadVisibleRight(Line, W);
     WriteAnsiText(RoleColor, Line);
   end;
 
@@ -1483,6 +1803,7 @@ begin
     can be open at a time (the Open* methods enforce mutual exclusion). }
   if FMenuOpen      then DrawThemeMenu;
   if FModelMenuOpen then DrawModelMenu;
+  if FStatsOpen     then DrawStatsOverlay;
 end;
 
 procedure TTUI.DrawThemeMenu;
@@ -1653,11 +1974,33 @@ begin
   FModelMenuSelIdx := 0;
   FModelRefreshThread   := nil;
   FModelRefreshProvider := '';
+  FStatsStartedAt   := Now;
+  FStatsUsage       := Default(TUsageInfo);
+  FStatsTurns       := 0;
+  FStatsTruncations := 0;
+  FStatsBytesSaved  := 0;
+  SetLength(FStatsToolCallNames, 0);
+  SetLength(FStatsToolCallCount, 0);
+  FStatsOpen        := False;
   FLastResizeW := -1; FLastResizeH := -1;
 
   { Always allocate a session (PR #117 default-persist semantics).
-    SessionId from --session is honoured: empty = fresh id; existing
-    on disk = resume; missing on disk = pre-seed at that id. }
+    SessionId resolution:
+      - non-empty (from --session): honour as-is; missing on disk
+        pre-seeds at that id, existing on disk resumes.
+      - empty AND there's an existing session on disk: resume the
+        newest by UpdatedAt -- so `pasclaw tui` with no args picks
+        up where the operator left off and the left-pane highlight
+        agrees with the loaded chat. Press N to start a fresh
+        session instead.
+      - empty AND no sessions on disk: allocate a fresh id (the
+        original PR #117 behavior). }
+  if SessionId = '' then
+  begin
+    FSessions := ListSessions;            { newest-first }
+    if Length(FSessions) > 0 then
+      SessionId := FSessions[0].Id;
+  end;
   FSession := TSession.Create(SessionId);
   RefreshSessions;
 
@@ -1692,17 +2035,13 @@ begin
   end;
 end;
 
-{ The slash-command + Help/Tools surface from the old REPL stays
-  available — but it's invoked from inside the input buffer now
-  (typing "/help" + Enter) so users don't have to learn a new
-  dispatch model. Empty stubs here keep the FPC-shared interface
-  happy without re-implementing the legacy box renderer. }
-
-procedure TTUI.DrawHeader;     begin end;
-procedure TTUI.ShowHelp;       begin end;
-procedure TTUI.ShowTools;      begin end;
-procedure TTUI.HandleSlashCommand(const Cmd: string); begin end;
-procedure TTUI.HandleUserInput(const Text: string);   begin end;
+{ Slash commands / help / tools are handled inline by SubmitInput
+  in the Delphi positioned-TUI path above (see /help, /theme,
+  /model, /stats dispatching there). The legacy REPL-style methods
+  (DrawHeader / ShowHelp / ShowTools / HandleSlashCommand /
+  HandleUserInput) live in the FPC branch below — their
+  declarations are also gated on FPC in the class section so dcc64
+  doesn't emit H2219 for unused private symbols. }
 
 {$ELSE}
 { ============================= FPC (line-based) ============================ }

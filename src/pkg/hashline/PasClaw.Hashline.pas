@@ -645,7 +645,11 @@ begin
         Match := HL_PAYLOAD_REPLACE;
       if Match = '' then Continue;
       j := p - 1;
-      while (j >= 1) and (L[j] in ['0'..'9']) do Dec(j);
+      { CharInSet vs bare `in [...]` silences dcc64 W1050: on the
+        modern Delphi compiler L[j] is WideChar and the byte-char
+        set literal narrows implicitly. Same fix shape as PR #177
+        applied to Channels.Email. }
+      while (j >= 1) and CharInSet(L[j], ['0'..'9']) do Dec(j);
       if (j = 0) or ((j >= 1) and (L[j] = '-')) then
       begin
         ErrMsg := Format('line %d: unsupported inline payload token near "%s"; use canonical grammar with anchor on its own line and payload lines beginning with %s/%s/%s',

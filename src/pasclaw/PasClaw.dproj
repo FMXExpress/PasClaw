@@ -187,7 +187,9 @@
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Memory.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.WebSearch.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.WebFetch.pas"/>
+        <DCCReference Include="..\pkg\tools\PasClaw.Tools.MemoryFetch.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Vault.pas"/>
+        <DCCReference Include="..\pkg\tools\PasClaw.Tools.OutputCache.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.ToolLoop.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Obj.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.pas"/>

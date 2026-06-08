@@ -76,6 +76,11 @@ implementation
 
 uses
   Classes, DateUtils,
+  {$IFDEF MSWINDOWS}
+  { Lets dcc64 inline SysUtils.RenameFile (used by the .drain
+    handoff in Drain) instead of falling back and emitting H2443. }
+  {$IFDEF FPC}Windows,{$ELSE}Winapi.Windows,{$ENDIF}
+  {$ENDIF}
   PasClaw.Utils,
   PasClaw.Config,
   PasClaw.Session.Store,
@@ -133,7 +138,11 @@ begin
       directory itself gives us its mtime via SR.Time. }
     if FindFirst(LockDir, faDirectory, Info) = 0 then
     try
-      Age := DateTimeToUnix(Now, False) - DateTimeToUnix(FileDateToDateTime(Info.Time), False);
+      { Info.TimeStamp is the modern TDateTime field — the legacy
+        Info.Time + FileDateToDateTime pair is deprecated on dcc64
+        (W1000) and flagged platform-specific (W1002). TimeStamp
+        has shipped on both FPC 3.0+ and Delphi for years. }
+      Age := DateTimeToUnix(Now, False) - DateTimeToUnix(Info.TimeStamp, False);
       if Age > STALE_LOCK_SECS then
       begin
         LogWarn('steering: reclaiming stale lock %s (age=%ds)', [LockDir, Age]);
@@ -141,7 +150,10 @@ begin
         Continue;
       end;
     finally
-      FindClose(Info);
+      { SysUtils.FindClose takes a TSearchRec; the Winapi.Windows
+        version pulled in for RenameFile-inline takes a Handle.
+        Fully-qualify so dcc64 picks the right overload. }
+      SysUtils.FindClose(Info);
     end;
     Sleep(LOCK_SPIN_MS);
     Inc(Waited, LOCK_SPIN_MS);

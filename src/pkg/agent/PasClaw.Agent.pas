@@ -314,6 +314,8 @@ uses
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
+  PasClaw.Tools.MemoryFetch,
+  PasClaw.Tools.OutputCache,
   PasClaw.Tools.Sandbox,
   PasClaw.Skills.Loader,
   PasClaw.Agent.Prompt,
@@ -483,6 +485,13 @@ begin
   else
     LogWebSearchSkipOnce;
   if FConfig.WebFetchEnabled then RegisterWebFetchTool(FRegistry);
+  if FConfig.WebFetchEnabled then RegisterMemoryFetchTool(FRegistry);
+  { tool_output_get is only useful when truncation is on — the
+    Gateway/TPasClawAgent paths set Cfg.ToolOutputCap from
+    FConfig.ToolOutputCap, so if we skip this branch the model
+    sees handles in truncated tool results with no way to
+    dereference them. Codex P2 on PR #176. }
+  if FConfig.ToolOutputCap > 0 then RegisterOutputCacheTool(FRegistry);
   Skills := LoadSkillManifests(GetHome);
   RegisterSkills(FRegistry, Skills);
   if FUseMCP then
@@ -879,6 +888,12 @@ begin
     else
       LogWebSearchSkipOnce;
     if FConfig.WebFetchEnabled then RegisterWebFetchTool(FRegistry);
+    if FConfig.WebFetchEnabled then RegisterMemoryFetchTool(FRegistry);
+    { Same gate as EnsureRegistry above — without this, TPasClawServer
+      builds a registry that's missing tool_output_get even though
+      Gateway.Server forwards FCfg.ToolOutputCap into its LoopCfg.
+      Codex P2 on PR #176. }
+    if FConfig.ToolOutputCap > 0 then RegisterOutputCacheTool(FRegistry);
     Skills := LoadSkillManifests(GetHome);
     RegisterSkills(FRegistry, Skills);
   end;

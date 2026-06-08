@@ -194,7 +194,11 @@ var
   ArgArr: TArray<string>;
   Cfg: TConfig;
 begin
-  Result := 0;
+  { Result := 0 removed — dead write per dcc64 H2077. Every exit
+    path assigns Result before returning: Exit(0) for the help
+    branch, Result := DispatchCommand(...) for the dispatch
+    branch (which itself always assigns Result, including the
+    unknown-command else clause). }
   Args := CollectArgs;
   try
     StripGlobalFlags(Args);

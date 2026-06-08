@@ -164,8 +164,10 @@ begin
   Result := 30;
   T := Trim(S);
   if T = '' then Exit;
-  { Strip trailing s/m/h }
-  if (Length(T) > 1) and (T[Length(T)] in ['s', 'm', 'h', 'S', 'M', 'H']) then
+  { Strip trailing s/m/h. CharInSet (vs `in [...]`) silences dcc64
+    W1050: on the modern compiler Char is WideChar and a bare set
+    membership test against byte-char literals narrows implicitly. }
+  if (Length(T) > 1) and CharInSet(T[Length(T)], ['s', 'm', 'h', 'S', 'M', 'H']) then
   begin
     case T[Length(T)] of
       's', 'S': N := 1;

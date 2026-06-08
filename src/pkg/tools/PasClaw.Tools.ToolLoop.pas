@@ -98,6 +98,16 @@ type
        PR #117); channels can set their own per-conversation key
        when wiring concurrent polling. *)
     SteeringKey:    string;
+    (* Tool output truncation cap in bytes. When > 0, RunToolLoop
+       runs each tool's ResultText through StashAndMaybeTruncate
+       (PasClaw.Tools.OutputCache) before appending it to history:
+       results exceeding the cap get replaced with a head + tail
+       snippet and a handle the model can dereference via the
+       `tool_output_get` tool. 0 (default) leaves output verbatim —
+       same as the pre-PR behaviour. Callers wanting the savings
+       set this to ~8192 and register the OutputCache tool on the
+       same registry. *)
+    ToolOutputCap:  Integer;
   end;
 
   TToolLoopResult = record
@@ -112,6 +122,13 @@ type
        block) should read TotalUsage, not LastResp.Usage. Codex P2 on
        PR #118. *)
     TotalUsage:  TUsageInfo;
+    (* How many tool results were diverted into the OutputCache during
+       this loop, plus the total bytes saved (sum of original sizes
+       minus the in-context replacement sizes). Surfaced by the TUI's
+       /stats overlay so the operator can see the savings; zero when
+       Cfg.ToolOutputCap = 0. *)
+    Truncations:        Integer;
+    TruncatedBytesSaved: Int64;
     (* The final history at the moment RunToolLoop returns, with all
        in-flight compactions applied. Interactive callers (Cmd.Agent's
        RunInteractive, the TUI) read this back into their own message
@@ -134,7 +151,8 @@ uses
   PasClaw.Logger,
   PasClaw.JSON,
   PasClaw.Hashline,
-  PasClaw.Tools.Types;
+  PasClaw.Tools.Types,
+  PasClaw.Tools.OutputCache;
 
 type
   { Per-call work unit. The same record is filled in by a worker thread
@@ -511,10 +529,17 @@ var
   Workers: array of TToolCallWorker;
   Steering, BatchSteering, HistSystem, LastProviderErrText: string;
   Steers: TSteeringMessageArray;
+  InContext: string;       { tool output cap (#PR new): in-context
+                             body that lands in Hist after the
+                             optional StashAndMaybeTruncate pass }
+  OrigLen:   Integer;
+  Truncated: Boolean;
 begin
   Loop.Content    := '';
   Loop.Iterations := 0;
   Loop.TotalUsage := Default(TUsageInfo);
+  Loop.Truncations         := 0;
+  Loop.TruncatedBytesSaved := 0;
 
   if Cfg.Provider = nil then Exit(False);
 
@@ -874,8 +899,30 @@ begin
           Hist[High(Hist)] := MakeToolResult(Dispatches[Batch[j]].Call.Id,
                                               'ERROR: ' + Dispatches[Batch[j]].Err)
         else
-          Hist[High(Hist)] := MakeToolResult(Dispatches[Batch[j]].Call.Id,
-                                              Dispatches[Batch[j]].ResultText);
+        begin
+          { Cap large successful tool outputs (errors stay verbatim —
+            they're already short and the head/tail split would just
+            obscure the actual failure). The handle goes into the
+            in-context replacement; the full bytes live in the
+            process-lifetime OutputCache for tool_output_get to
+            dereference. Cap = 0 disables (legacy behaviour). }
+          if (Cfg.ToolOutputCap > 0)
+             and (Length(Dispatches[Batch[j]].ResultText) > Cfg.ToolOutputCap) then
+          begin
+            OrigLen := Length(Dispatches[Batch[j]].ResultText);
+            InContext := StashAndMaybeTruncate(Dispatches[Batch[j]].ResultText,
+                                               Cfg.ToolOutputCap, Truncated);
+            if Truncated then
+            begin
+              Inc(Loop.Truncations);
+              Inc(Loop.TruncatedBytesSaved, OrigLen - Length(InContext));
+            end;
+            Hist[High(Hist)] := MakeToolResult(Dispatches[Batch[j]].Call.Id, InContext);
+          end
+          else
+            Hist[High(Hist)] := MakeToolResult(Dispatches[Batch[j]].Call.Id,
+                                                Dispatches[Batch[j]].ResultText);
+        end;
       end;
 
       { Phase 3: if any hook contributed a steering note, fold it

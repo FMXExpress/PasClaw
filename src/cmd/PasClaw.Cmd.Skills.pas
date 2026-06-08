@@ -361,7 +361,10 @@ begin
   end;
 
   PrintLn(Ansi.Dim + '  not on pasclaw.dev — trying ClawHub …' + Ansi.Reset);
-  ClawNotFound := False;
+  { Pre-call `ClawNotFound := False` removed — dead write per dcc64
+    H2077. The only read is at the `if not ClawNotFound` below, and
+    we unconditionally reassign on line `ClawNotFound := SameText(...)`
+    before that read. }
   if InstallFromClawHub(Slug, Version, DestRoot, Installed, ErrMsg) then
   begin
     PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'installed as ' +

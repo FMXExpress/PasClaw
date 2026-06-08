@@ -36,7 +36,9 @@ uses
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
+  PasClaw.Tools.MemoryFetch,
   PasClaw.Tools.Vault,
+  PasClaw.Tools.OutputCache,
   PasClaw.Tools.ToolLoop,
   PasClaw.Agent.Compact,
   PasClaw.MCP.Bridge,
@@ -155,7 +157,8 @@ end;
 function NewBuiltinRegistry(UseHashline: Boolean = True;
                             EnableVault: Boolean = False;
                             EnableWebSearch: Boolean = False;
-                            EnableWebFetch: Boolean = False): TToolRegistry;
+                            EnableWebFetch: Boolean = False;
+                            EnableOutputCache: Boolean = False): TToolRegistry;
 var
   Skills: TSkillSpecArray;
 begin
@@ -177,11 +180,20 @@ begin
     container/sandboxed deploys without curl can flip this in
     config.json. }
   if EnableWebFetch then RegisterWebFetchTool(Result);
+  { memory_fetch piggybacks on the same WebFetch enable: it uses
+    the same HTTP machinery + SSRF gate, and an operator who's
+    declined to enable URL fetching shouldn't get a second tool
+    that also fetches URLs. }
+  if EnableWebFetch then RegisterMemoryFetchTool(Result);
   { Vault tools register only when explicitly enabled — callers pass
     Cfg.VaultToolsEnabled. Off-by-default per the onboarding opt-in
     flow; flipping the config flag (or re-running `pasclaw onboard`)
     is the way to turn it on. }
   if EnableVault then RegisterVaultTools(Result);
+  { tool_output_get gets registered alongside the rest when the
+    operator has flipped on Cfg.ToolOutputCap. The tool's only
+    useful while truncation is active, so the flag gates both. }
+  if EnableOutputCache then RegisterOutputCacheTool(Result);
   Skills := LoadSkillManifests(GetHome);
   RegisterSkills(Result, Skills);
 end;
@@ -259,6 +271,13 @@ begin
     config can opt in the same way. }
   Result.CompactEnabled := True;
   Result.CompactOpts    := DefaultCompactOptions;
+  { Forward the tool-output truncation cap (per-tool-result bytes)
+    from config. 0 = off (legacy verbatim behaviour); when an
+    operator sets it, RunToolLoop diverts oversize results to the
+    OutputCache and replaces them with head+tail+handle. The
+    `tool_output_get` tool is registered alongside the other core
+    tools in RegisterFSTools' caller (Cmd.Agent / Cmd.TUI). }
+  Result.ToolOutputCap := Cfg.ToolOutputCap;
 end;
 
 { One-line per-turn token summary. Cache fields only appear when
@@ -335,7 +354,8 @@ begin
   if not A.NoTools then
     Reg := NewBuiltinRegistry(not A.NoHashline, Cfg.VaultToolsEnabled,
                               HasConfiguredWebSearchProvider(Cfg),
-                              Cfg.WebFetchEnabled);
+                              Cfg.WebFetchEnabled,
+                              Cfg.ToolOutputCap > 0);
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   Handlers := TLoopHandlers.Create;
@@ -377,6 +397,7 @@ var
   MCPClients: TMCPClientList;
   Spawn: TSpawnTool;
   SystemPromptOverride: string;   { tracks the compacted system prompt across turns }
+  WorkingStateBlock: string;       { per-turn prefix from Session.Meta.WorkingState }
   ThinkingOn: Boolean;             { toggled by /think; cleared each turn after sending }
   CompactOptsLocal: TCompactOptions;
   CompactedLiveOpts: TChatOptions;
@@ -413,7 +434,8 @@ begin
   if not A.NoTools then
     Reg := NewBuiltinRegistry(not A.NoHashline, Cfg.VaultToolsEnabled,
                               HasConfiguredWebSearchProvider(Cfg),
-                              Cfg.WebFetchEnabled);
+                              Cfg.WebFetchEnabled,
+                              Cfg.ToolOutputCap > 0);
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   Handlers := TLoopHandlers.Create;
@@ -615,6 +637,15 @@ begin
         compacted summary leaks out of the conversation. }
       if SystemPromptOverride <> '' then
         LoopCfg.Options.SystemPrompt := SystemPromptOverride;
+      { Working-state snapshot from prior turns goes BEFORE the
+        compacted summary (or the freshly-built default system
+        prompt) so the model sees structured edit/shell/error
+        context at the top of every turn. Empty string when the
+        snapshot is empty -- pre-feature sessions stay verbatim. }
+      WorkingStateBlock := FormatWorkingStateBlock(Session.Meta);
+      if WorkingStateBlock <> '' then
+        LoopCfg.Options.SystemPrompt :=
+          WorkingStateBlock + sLineBreak + LoopCfg.Options.SystemPrompt;
       { Anchor OpenAI's prompt_cache_key to the persistent session
         id so the cache bucket lines up across turns of THIS chat
         (not someone else's parallel session that happens to share a
@@ -676,6 +707,33 @@ begin
           Msgs[High(Msgs)] := MakeMessage(mrAssistant, Loop.Content);
         end;
         SystemPromptOverride := Loop.FinalSystemPrompt;
+        { Strip the per-turn working-state prefix we prepended in
+          BuildLoopConfig — if compaction didn't fire, the prefix
+          comes back verbatim and persisting it would re-prepend
+          on every subsequent turn, accumulating stale snapshots.
+          When compaction DID fire, the summariser may have
+          rewritten the whole prompt; in that case the prefix
+          comparison fails and we keep the compacted text as-is.
+          Codex P2 on PR #180. }
+        if WorkingStateBlock <> '' then
+        begin
+          if (Length(SystemPromptOverride) >
+              Length(WorkingStateBlock) + Length(sLineBreak))
+             and (Copy(SystemPromptOverride, 1,
+                       Length(WorkingStateBlock) + Length(sLineBreak)) =
+                  WorkingStateBlock + sLineBreak) then
+            SystemPromptOverride := Copy(SystemPromptOverride,
+              Length(WorkingStateBlock) + Length(sLineBreak) + 1,
+              MaxInt);
+        end;
+
+        { Refresh the working-state snapshot from this turn's final
+          history (fs_write/fs_edit paths, shell commands, tool
+          errors). Updates Session.Meta.WorkingState in place;
+          PersistSession below writes it out so a /quit-then-resume
+          picks up the same context next time. }
+        if Length(Loop.FinalMessages) > 0 then
+          UpdateWorkingStateAfterTurn(Session.Meta, Loop.FinalMessages);
 
         { Persist after every successful turn — crash / Ctrl-C in
           the middle of the NEXT user prompt only loses what they
