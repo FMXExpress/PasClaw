@@ -297,9 +297,15 @@ begin
   begin
     if not EnsureParentDir(SaveTo, ErrMsg) then Exit;
     RedirectGuard := TWebFetchRedirectGuard.Create;
-    FS := nil;
-    WrittenBytes := 0;
     try
+      { TFileStream.Create lives OUTSIDE the inner try-finally so its
+        FS.Free only runs when Create actually succeeded. The previous
+        shape pre-init'd FS := nil + WrittenBytes := 0 to protect a
+        single outer try-finally that wrapped both branches — dcc64
+        flagged both inits as H2077 because the assignments after
+        TFileStream.Create dominate every flow path it traces. The
+        restructure makes the lifetimes match the control flow and
+        silences the hint without weakening the safety. }
       try
         FS := TFileStream.Create(SaveTo, fmCreate);
       except
