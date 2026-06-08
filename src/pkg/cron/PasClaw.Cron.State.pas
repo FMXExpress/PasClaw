@@ -55,6 +55,12 @@ implementation
 
 uses
   DateUtils,
+  {$IFDEF MSWINDOWS}
+  { Lets dcc64 inline SysUtils.RenameFile — 4 RenameFile calls in
+    this unit's Load + Save paths all triggered H2443 without this.
+    Same pattern as PasClaw.Session.Store / PasClaw.Agent.Steering. }
+  {$IFDEF FPC}Windows,{$ELSE}Winapi.Windows,{$ENDIF}
+  {$ENDIF}
   PasClaw.JSON,
   PasClaw.Config,
   PasClaw.Utils,
