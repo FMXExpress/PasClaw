@@ -69,7 +69,10 @@ BROWSER_IMAGE="${IMAGE}-browser"
 docker build -t "$BROWSER_IMAGE" -f - . <<DOCKERFILE
 FROM $IMAGE
 ENTRYPOINT []
-CMD ["/bin/sh", "-lc", "pasclaw onboard && exec pasclaw agent"]
+# Use a non-login shell + absolute paths: a login shell (sh -l) re-reads
+# /etc/profile and resets PATH, dropping /opt/pasclaw, so bare "pasclaw"
+# would be "not found".
+CMD ["/bin/sh", "-c", "/opt/pasclaw/pasclaw onboard && exec /opt/pasclaw/pasclaw agent"]
 DOCKERFILE
 
 echo "==> 3/7  c2w --to-js : emscripten wasm + js into $OUT/"
