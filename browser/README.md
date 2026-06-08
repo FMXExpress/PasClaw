@@ -33,10 +33,11 @@ becomes cross-origin isolated after the first load.
 
 ## Build the bundle
 
-Run on a real machine with `docker`, the `c2w` CLI, **node + npm** (the
-upstream harness is webpack-bundled), `git`, `curl`, `gzip` — and **not**
-behind a TLS-intercepting proxy (c2w compiles its emulator from source and
-fetches a lot over HTTPS):
+Run on a real machine with `docker`, **node + npm** (the upstream harness is
+webpack-bundled), `git`, `curl`, `gzip` — and **not** behind a TLS-intercepting
+proxy (c2w compiles its emulator from source and fetches a lot over HTTPS).
+The `c2w` CLI is **auto-downloaded** into `browser/.bin/` if it isn't already
+on your `PATH` (override with `C2W=/path/to/c2w`):
 
 ```sh
 ./browser/build.sh

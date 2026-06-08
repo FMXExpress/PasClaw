@@ -23,15 +23,39 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 IMAGE="${IMAGE:-pasclaw:c2w}"
-C2W="${C2W:-c2w}"
+C2W="${C2W:-}"
 C2W_VERSION="${C2W_VERSION:-v0.8.4}"
 OUT="browser/site"
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
 
 command -v docker >/dev/null || { echo "need docker on PATH"; exit 1; }
-command -v "$C2W" >/dev/null || { echo "need the c2w CLI on PATH (or set C2W=/path/to/c2w)"; exit 1; }
 command -v npx    >/dev/null || { echo "need node + npm (npx) for the webpack bundle"; exit 1; }
+command -v git    >/dev/null || { echo "need git on PATH"; exit 1; }
+command -v curl   >/dev/null || { echo "need curl on PATH"; exit 1; }
+command -v gzip   >/dev/null || { echo "need gzip on PATH"; exit 1; }
+
+# Resolve a c2w CLI: honour $C2W / PATH, else auto-download the pinned release
+# into browser/.bin (git-ignored) so this stays a true one-shot.
+ensure_c2w() {
+  if [ -n "$C2W" ] && command -v "$C2W" >/dev/null 2>&1; then return; fi
+  if command -v c2w >/dev/null 2>&1; then C2W=c2w; return; fi
+  if [ -x "$REPO_ROOT/browser/.bin/c2w" ]; then C2W="$REPO_ROOT/browser/.bin/c2w"; return; fi
+  local arch
+  case "$(uname -m)" in
+    x86_64|amd64)  arch=amd64 ;;
+    aarch64|arm64) arch=arm64 ;;
+    *) echo "unsupported arch $(uname -m); install c2w manually and re-run with C2W=/path/to/c2w"; exit 1 ;;
+  esac
+  echo "    c2w not found — downloading ${C2W_VERSION} (linux-${arch})"
+  mkdir -p "$REPO_ROOT/browser/.bin"
+  curl -fsSL "https://github.com/container2wasm/container2wasm/releases/download/${C2W_VERSION}/container2wasm-${C2W_VERSION}-linux-${arch}.tar.gz" \
+    | tar xz -C "$REPO_ROOT/browser/.bin" c2w
+  chmod +x "$REPO_ROOT/browser/.bin/c2w"
+  C2W="$REPO_ROOT/browser/.bin/c2w"
+}
+ensure_c2w
+echo "    using c2w: $C2W"
 
 echo "==> 1/6  build the image with browser networking compiled in (C2W=1)"
 docker build -f docker/Dockerfile --build-arg C2W=1 -t "$IMAGE" .
