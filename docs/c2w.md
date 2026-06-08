@@ -40,19 +40,39 @@ make C2W=1
 Without `C2W=1` the wire behaviour is byte-identical to before (the proxy code
 and the extra header are excluded by `{$IFDEF}`).
 
-## Packaging (outline)
+## Packaging
 
-1. Build the container image (the existing `docker/Dockerfile` produces the
-   x86-64 binary + bundled OpenSSL + libsqlite3). Build it with `C2W=1` so the
-   proxy support is compiled in, and set its default command to `agent` (or
-   `tui`). Trim/disable the heavy features for an emulated guest: vector/ONNX
-   memory, MCP, cron, channels.
-2. Convert the image to a wasm bundle with the `c2w` CLI, selecting the
-   **fetch** networking assets (`examples/networking/fetch/`), which bundle
-   `c2w-net-proxy`. (Check current c2w docs for exact flags.)
-3. Serve the static bundle from any HTTP server that supports byte-range
-   requests. Opening it boots Linux in the tab and renders `pasclaw agent` /
-   `tui` in an xterm.
+1. **Build the image with the C2W networking compiled in.** The existing
+   `docker/Dockerfile` produces the x86-64 binary + bundled OpenSSL 1.0.2 +
+   libsqlite3; pass `--build-arg C2W=1` to thread `-dPASCLAW_C2W` through:
+
+   ```sh
+   docker build -f docker/Dockerfile --build-arg C2W=1 -t pasclaw:c2w .
+   ```
+
+   Consider overriding the default `CMD` to `agent`/`tui`, and trimming the
+   heavy features for an emulated guest (vector/ONNX memory, MCP, cron,
+   channels) via config.
+
+2. **Convert the image to wasm** with the `c2w` CLI
+   (https://github.com/container2wasm/container2wasm):
+
+   ```sh
+   c2w --target-arch=amd64 pasclaw:c2w pasclaw.wasm
+   ```
+
+   `c2w` compiles its emulator (Bochs for x86-64) from source on first run, so
+   it pulls several base images (`rust`, `gcc`, `golang`, `ubuntu`,
+   `emscripten/emsdk`) and fetches build deps — it needs an environment with
+   container-registry access and **no TLS interception** (a MITM proxy breaks
+   the in-build HTTPS fetches). Server-side runs use `wasmtime pasclaw.wasm`.
+
+3. **For the browser**, build with `--to-js` (emscripten output) and serve the
+   resulting bundle from any HTTP server that supports byte-range requests.
+   Drop in the released **`c2w-net-proxy.wasm`** — that's the serverless
+   in-browser Fetch network stack PasClaw's `HTTP_PROXY`/`HTTPS_PROXY` routing
+   (this change) targets. Opening the page boots Linux in the tab and renders
+   `pasclaw agent` / `tui` in an xterm.
 
 ## Hard constraints (inherent to the browser, not to PasClaw)
 
@@ -70,7 +90,17 @@ and the extra header are excluded by `{$IFDEF}`).
 
 ## Status
 
-The `PASCLAW_C2W` code paths compile cleanly under FPC 3.2.2 in both modes
-(default and `-dPASCLAW_C2W`). The end-to-end browser run (c2w packaging +
-`c2w-net-proxy` + a live Anthropic call) has **not** been exercised in CI and
-should be validated manually before relying on it.
+Verified:
+
+- Full `make` and `make C2W=1` both build a working `pasclaw` under FPC 3.2.2
+  (zero new warnings from the gated code); `make test` passes.
+- The proxy routing is behaviourally confirmed: a `C2W=1` binary with
+  `HTTP_PROXY` set sends its request through the proxy (observed as an
+  absolute-URI `GET` / `CONNECT` at a local listener); a default binary with
+  the same env ignores it and goes direct.
+- `docker build --build-arg C2W=1 -t pasclaw:c2w .` produces a working image
+  and `docker run --rm pasclaw:c2w version` runs, with OpenSSL 1.0.2 bundled.
+
+Not yet exercised end to end: the `c2w` image→wasm conversion and a live
+in-browser Anthropic call through `c2w-net-proxy`. The conversion needs an
+environment with registry access and no TLS-intercepting proxy (see step 2).
