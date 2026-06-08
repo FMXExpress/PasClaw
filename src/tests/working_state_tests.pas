@@ -230,6 +230,29 @@ begin
   end;
 end;
 
+procedure TestSortNewestFirst;
+{ The sort underpins the TUI session pane and `pasclaw session list`
+  -- both surfaces want the freshest session at index 0. Pin the
+  primary key (UpdatedAt desc) and the tiebreakers (CreatedAt
+  desc, then Id desc) so a regression here doesn't silently
+  reshuffle the lists. }
+var
+  Arr: TSessionMetaArray;
+begin
+  SetLength(Arr, 4);
+  Arr[0].Id := 'a'; Arr[0].CreatedAt := 100; Arr[0].UpdatedAt := 500;
+  Arr[1].Id := 'b'; Arr[1].CreatedAt := 200; Arr[1].UpdatedAt := 700;
+  Arr[2].Id := 'c'; Arr[2].CreatedAt := 300; Arr[2].UpdatedAt := 700;  { tie with b on Updated; newer CreatedAt }
+  Arr[3].Id := 'd'; Arr[3].CreatedAt := 150; Arr[3].UpdatedAt := 600;
+
+  SortSessionsNewestFirst(Arr);
+
+  AssertEqStr(Arr[0].Id, 'c', 'newest UpdatedAt+CreatedAt at index 0');
+  AssertEqStr(Arr[1].Id, 'b', 'tie on UpdatedAt broken by CreatedAt');
+  AssertEqStr(Arr[2].Id, 'd', 'next-newest UpdatedAt at index 2');
+  AssertEqStr(Arr[3].Id, 'a', 'oldest at index 3');
+end;
+
 begin
   TestExtractsFsWritePaths;
   TestExtractsFsEditPathsAndDedupes;
@@ -238,5 +261,6 @@ begin
   TestFormatBlockRendersFields;
   TestSaveLoadRoundTrip;
   TestEmptyWorkingStateNotEmitted;
+  TestSortNewestFirst;
   WriteLn('working_state_tests: OK');
 end.

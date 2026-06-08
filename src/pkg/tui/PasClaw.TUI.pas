@@ -1536,7 +1536,18 @@ begin
   WriteAnsiText(ConsoleTheme.Symbols, Line);
 end;
 
-procedure RenderMsgLines(const Msg: TMessage; W: Integer; var Acc: TArray<string>);
+procedure RenderMsgLines(const Msg: TMessage; W: Integer;
+                         RenderMd: Boolean;
+                         var Acc: TArray<string>);
+{ Build the chat-pane representation of a single message. Lines are
+  pushed into Acc; the caller windows that into the visible pane.
+  When RenderMd is True AND the message is from the assistant, the
+  body flows through PasClaw.Markdown.Render.RenderMarkdown first
+  -- same pipeline the agent CLI uses on its terminal output, just
+  routed into the positioned TUI's chat pane. User/system/tool
+  messages stay verbatim: their content is either typed by the
+  operator (markdown would surprise them) or a structured payload
+  (rendering would mangle JSON / hashline / shell output). }
 var
   Header, Body, Line: string;
   Lines: TArray<string>;
@@ -1557,6 +1568,8 @@ begin
   Acc[High(Acc)] := '__HDR__' + Header;
 
   Body := Msg.Content;
+  if RenderMd and (Msg.Role = mrAssistant) and (Trim(Body) <> '') then
+    Body := RenderMarkdown(Body);
   if Trim(Body) = '' then
   begin
     if Length(Msg.ToolCalls) > 0 then
@@ -1615,7 +1628,8 @@ begin
   SetLength(Lines, 0);
   if FSession <> nil then
     for i := 0 to High(FSession.Messages) do
-      RenderMsgLines(FSession.Messages[i], W, Lines);
+      RenderMsgLines(FSession.Messages[i], W,
+                     Self.RenderMarkdownEnabled, Lines);
 
   { Clip scroll to valid range. }
   if FChatScroll < 0 then FChatScroll := 0;

@@ -135,6 +135,13 @@ function SessionPath(const Id: string): string;
 function ListSessions: TSessionMetaArray;
 function DeleteSession(const Id: string): Boolean;
 
+(* Sort a TSessionMetaArray in place, newest-first by UpdatedAt with
+   CreatedAt and Id as deterministic tiebreakers. Exposed for tests
+   that pin the ordering; ListSessions calls this internally so
+   every surface that reads session metadata (TUI session pane,
+   `pasclaw session list`) sees freshest-at-top. *)
+procedure SortSessionsNewestFirst(var Sessions: TSessionMetaArray);
+
 (* Exposed for tests: TToolCall <-> JSON conversion used by TSession.
    Round-trip preserves Id, Kind, Func.Name, Func.Arguments, and
    (when non-empty) Gemini 3+'s ProviderSignature. *)
@@ -709,6 +716,36 @@ begin
     end;
 end;
 
+procedure SortSessionsNewestFirst(var Sessions: TSessionMetaArray);
+{ Insertion sort, in-place, newest-first by UpdatedAt with
+  CreatedAt and Id as secondary keys for stable tie-breaking.
+  Insertion sort over an N-of-dozens array is plenty fast and
+  keeps the implementation self-contained (no Generics.Defaults). }
+var
+  i, j: Integer;
+  Pivot: TSessionMeta;
+
+  function NewerThan(const A, B: TSessionMeta): Boolean;
+  begin
+    if A.UpdatedAt <> B.UpdatedAt then Exit(A.UpdatedAt > B.UpdatedAt);
+    if A.CreatedAt <> B.CreatedAt then Exit(A.CreatedAt > B.CreatedAt);
+    Result := A.Id > B.Id;
+  end;
+
+begin
+  for i := 1 to High(Sessions) do
+  begin
+    Pivot := Sessions[i];
+    j := i - 1;
+    while (j >= 0) and NewerThan(Pivot, Sessions[j]) do
+    begin
+      Sessions[j + 1] := Sessions[j];
+      Dec(j);
+    end;
+    Sessions[j + 1] := Pivot;
+  end;
+end;
+
 function ListSessions: TSessionMetaArray;
 var
   SR: TSearchRec;
@@ -748,6 +785,16 @@ begin
       and Delphi's name lookup picks the last-in-uses wins. }
     SysUtils.FindClose(SR);
   end;
+
+  { Sort newest-first by UpdatedAt so the TUI session pane and the
+    CLI `pasclaw session list` both surface the freshest session at
+    the top -- which is almost always the one the operator wants to
+    resume. Insertion sort: the list is small (10s to low 100s of
+    sessions in practice) so the O(N^2) cost is irrelevant. Ties on
+    UpdatedAt fall back to CreatedAt, then Id, so the order is
+    deterministic even for sessions created and saved in the same
+    second (e.g., the cron-side mass-spawn case). }
+  SortSessionsNewestFirst(Result);
 end;
 
 function DeleteSession(const Id: string): Boolean;
