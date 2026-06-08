@@ -296,7 +296,13 @@ begin
     ErrMsg := 'memory_fetch: url must be http:// or https://';
     Exit;
   end;
-  if URLIsLocal(URL, SsrfWhy) then
+  { Gate on NetworkBlockingActive so operators who flip
+    sandbox.block_private_networks=false get the same escape
+    hatch web_fetch already exposes (and the redirect guard
+    here already honours). Codex P2 on PR #180 -- without this
+    gate, memory_fetch refused localhost/RFC1918 URLs even when
+    web_fetch was happily reaching them in the same session. }
+  if NetworkBlockingActive and URLIsLocal(URL, SsrfWhy) then
   begin
     ErrMsg := 'memory_fetch: SSRF block: ' + SsrfWhy;
     Exit;

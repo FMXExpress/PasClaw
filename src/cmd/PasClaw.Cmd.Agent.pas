@@ -707,6 +707,25 @@ begin
           Msgs[High(Msgs)] := MakeMessage(mrAssistant, Loop.Content);
         end;
         SystemPromptOverride := Loop.FinalSystemPrompt;
+        { Strip the per-turn working-state prefix we prepended in
+          BuildLoopConfig — if compaction didn't fire, the prefix
+          comes back verbatim and persisting it would re-prepend
+          on every subsequent turn, accumulating stale snapshots.
+          When compaction DID fire, the summariser may have
+          rewritten the whole prompt; in that case the prefix
+          comparison fails and we keep the compacted text as-is.
+          Codex P2 on PR #180. }
+        if WorkingStateBlock <> '' then
+        begin
+          if (Length(SystemPromptOverride) >
+              Length(WorkingStateBlock) + Length(sLineBreak))
+             and (Copy(SystemPromptOverride, 1,
+                       Length(WorkingStateBlock) + Length(sLineBreak)) =
+                  WorkingStateBlock + sLineBreak) then
+            SystemPromptOverride := Copy(SystemPromptOverride,
+              Length(WorkingStateBlock) + Length(sLineBreak) + 1,
+              MaxInt);
+        end;
 
         { Refresh the working-state snapshot from this turn's final
           history (fs_write/fs_edit paths, shell commands, tool
