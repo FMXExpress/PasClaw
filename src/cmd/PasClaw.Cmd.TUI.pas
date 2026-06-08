@@ -28,6 +28,7 @@ uses
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
+  PasClaw.Tools.OutputCache,
   PasClaw.Tools.Sandbox,
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
@@ -99,6 +100,10 @@ begin
       else
         LogWebSearchSkipOnce;
       if Cfg.WebFetchEnabled then RegisterWebFetchTool(Reg);
+      { tool_output_get is only useful when the truncation feature is
+        on — otherwise the model sees a tool it'd only call against
+        non-existent handles. Pair the registration with the cap. }
+      if Cfg.ToolOutputCap > 0 then RegisterOutputCacheTool(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
     end;

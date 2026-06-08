@@ -49,6 +49,7 @@ uses
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
   PasClaw.Tools.Vault,
+  PasClaw.Tools.OutputCache,
   PasClaw.Tools.Sandbox,
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
@@ -137,6 +138,7 @@ begin
         "vault_search / vault_get enabled" but the gateway / serve
         chat surface would still tell the user "no Code Vault tool". }
       if Cfg.VaultToolsEnabled then RegisterVaultTools(Reg);
+      if Cfg.ToolOutputCap > 0 then RegisterOutputCacheTool(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
       if Length(Skills) > 0 then

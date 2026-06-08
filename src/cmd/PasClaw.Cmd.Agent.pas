@@ -37,6 +37,7 @@ uses
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
   PasClaw.Tools.Vault,
+  PasClaw.Tools.OutputCache,
   PasClaw.Tools.ToolLoop,
   PasClaw.Agent.Compact,
   PasClaw.MCP.Bridge,
@@ -155,7 +156,8 @@ end;
 function NewBuiltinRegistry(UseHashline: Boolean = True;
                             EnableVault: Boolean = False;
                             EnableWebSearch: Boolean = False;
-                            EnableWebFetch: Boolean = False): TToolRegistry;
+                            EnableWebFetch: Boolean = False;
+                            EnableOutputCache: Boolean = False): TToolRegistry;
 var
   Skills: TSkillSpecArray;
 begin
@@ -182,6 +184,10 @@ begin
     flow; flipping the config flag (or re-running `pasclaw onboard`)
     is the way to turn it on. }
   if EnableVault then RegisterVaultTools(Result);
+  { tool_output_get gets registered alongside the rest when the
+    operator has flipped on Cfg.ToolOutputCap. The tool's only
+    useful while truncation is active, so the flag gates both. }
+  if EnableOutputCache then RegisterOutputCacheTool(Result);
   Skills := LoadSkillManifests(GetHome);
   RegisterSkills(Result, Skills);
 end;
@@ -259,6 +265,13 @@ begin
     config can opt in the same way. }
   Result.CompactEnabled := True;
   Result.CompactOpts    := DefaultCompactOptions;
+  { Forward the tool-output truncation cap (per-tool-result bytes)
+    from config. 0 = off (legacy verbatim behaviour); when an
+    operator sets it, RunToolLoop diverts oversize results to the
+    OutputCache and replaces them with head+tail+handle. The
+    `tool_output_get` tool is registered alongside the other core
+    tools in RegisterFSTools' caller (Cmd.Agent / Cmd.TUI). }
+  Result.ToolOutputCap := Cfg.ToolOutputCap;
 end;
 
 { One-line per-turn token summary. Cache fields only appear when
@@ -335,7 +348,8 @@ begin
   if not A.NoTools then
     Reg := NewBuiltinRegistry(not A.NoHashline, Cfg.VaultToolsEnabled,
                               HasConfiguredWebSearchProvider(Cfg),
-                              Cfg.WebFetchEnabled);
+                              Cfg.WebFetchEnabled,
+                              Cfg.ToolOutputCap > 0);
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   Handlers := TLoopHandlers.Create;
@@ -413,7 +427,8 @@ begin
   if not A.NoTools then
     Reg := NewBuiltinRegistry(not A.NoHashline, Cfg.VaultToolsEnabled,
                               HasConfiguredWebSearchProvider(Cfg),
-                              Cfg.WebFetchEnabled);
+                              Cfg.WebFetchEnabled,
+                              Cfg.ToolOutputCap > 0);
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   Handlers := TLoopHandlers.Create;

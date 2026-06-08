@@ -109,6 +109,20 @@ type
                                          avoid forward decls }
     FModelRefreshProvider: string;
     FModelRefreshStartedAt: TDateTime;
+    { Per-session accumulators surfaced by the /stats overlay. Token
+      and tool counters roll up TToolLoopResult.TotalUsage +
+      Loop.Truncations as turns complete in PollLoopWorker; tool
+      call counts come from the OnToolCall hook plumbed onto every
+      LoopCfg the TUI builds. FStatsStartedAt is the wall-clock
+      start of the TUI session, used for the "elapsed" line. }
+    FStatsStartedAt:     TDateTime;
+    FStatsUsage:         TUsageInfo;
+    FStatsTurns:         Integer;
+    FStatsTruncations:   Integer;
+    FStatsBytesSaved:    Int64;
+    FStatsToolCallNames: array of string;
+    FStatsToolCallCount: array of Integer;
+    FStatsOpen:          Boolean;
     procedure DrawFrame;
     procedure DrawHeaderBar(W: Integer);
     procedure DrawSessionPane(X, Y, W, H: Integer);
@@ -124,6 +138,10 @@ type
     function  ActiveProviderName: string;
     procedure HandleModelMenuKey(Key: Integer);
     procedure ApplyModelSelection(const ModelId: string);
+    procedure DrawStatsOverlay;
+    procedure OpenStatsOverlay;
+    procedure RecordToolCall(const Name: string);
+    procedure AccumulateLoopStats(const Loop: TToolLoopResult);
     procedure HandleKey(Key: Integer);
     procedure HandleSessionKey(Key: Integer);
     procedure HandleChatKey(Key: Integer);
@@ -187,6 +205,8 @@ uses
   PasClaw.CliUI,
   PasClaw.Logger,
   PasClaw.Tools.ToolLoop,
+  PasClaw.Tools.OutputCache,       { GetOutputCacheStats — surfaced
+                                     in /stats overlay }
   PasClaw.Agent.Steering,
   PasClaw.Markdown.Render,
   PasClaw.Providers.Catalog,       { TProviderSpec — for TModelRefreshThread }
@@ -653,6 +673,197 @@ begin
   end;
 end;
 
+procedure TTUI.RecordToolCall(const Name: string);
+{ Bump the per-tool counter. Walks the (small) parallel arrays
+  linearly — a hash map would be overkill for the tool counts a
+  TUI session accumulates (low double-digits at most). Caller
+  must run on the main thread (AccumulateLoopStats does). }
+var
+  i: Integer;
+begin
+  for i := 0 to High(FStatsToolCallNames) do
+    if FStatsToolCallNames[i] = Name then
+    begin
+      Inc(FStatsToolCallCount[i]);
+      Exit;
+    end;
+  SetLength(FStatsToolCallNames, Length(FStatsToolCallNames) + 1);
+  SetLength(FStatsToolCallCount, Length(FStatsToolCallCount) + 1);
+  FStatsToolCallNames[High(FStatsToolCallNames)] := Name;
+  FStatsToolCallCount[High(FStatsToolCallCount)] := 1;
+end;
+
+procedure TTUI.AccumulateLoopStats(const Loop: TToolLoopResult);
+{ Run on the main thread by PollLoopWorker after each successful
+  turn. Token + truncation totals come straight off the loop
+  result; tool-call names come from walking Loop.FinalMessages
+  for assistant turns that emitted tool_calls. We don't dedup
+  against earlier turns — calling the same tool twice across
+  two turns shows up as 2 in /stats, which is what the operator
+  wants to see. }
+var
+  i, k: Integer;
+begin
+  Inc(FStatsTurns);
+  Inc(FStatsUsage.InputTokens,        Loop.TotalUsage.InputTokens);
+  Inc(FStatsUsage.OutputTokens,       Loop.TotalUsage.OutputTokens);
+  Inc(FStatsUsage.CacheReadTokens,    Loop.TotalUsage.CacheReadTokens);
+  Inc(FStatsUsage.CacheCreatedTokens, Loop.TotalUsage.CacheCreatedTokens);
+  Inc(FStatsTruncations, Loop.Truncations);
+  Inc(FStatsBytesSaved,  Loop.TruncatedBytesSaved);
+
+  { Tool calls live on assistant messages with non-empty ToolCalls.
+    Walking FinalMessages catches every call from this loop's turns
+    in order, including the ones the final assistant message
+    emitted. }
+  for i := 0 to High(Loop.FinalMessages) do
+    if Loop.FinalMessages[i].Role = mrAssistant then
+      for k := 0 to High(Loop.FinalMessages[i].ToolCalls) do
+        RecordToolCall(Loop.FinalMessages[i].ToolCalls[k].Func.Name);
+end;
+
+procedure TTUI.OpenStatsOverlay;
+{ Mutual exclusion with the theme/model overlays so we never paint
+  two modal boxes on top of each other. The stats overlay is
+  read-only — any key dismisses it, no Up/Dn selection. }
+begin
+  FMenuOpen      := False;
+  FModelMenuOpen := False;
+  FStatsOpen     := True;
+end;
+
+procedure TTUI.DrawStatsOverlay;
+{ Read-only info modal showing the per-session accumulators rolled
+  up across every successful tool loop this TUI session has run.
+  Modeled on DrawThemeMenu but no highlight cursor — caller
+  dismisses with any key (HandleKey checks FStatsOpen first). }
+const
+  BoxW = 56;
+var
+  Size: TMVCConsoleSize;
+  W, H, BoxX, BoxY, BoxH, Row, ToolRows, i, EntryCount: Integer;
+  TotalBytes: Int64;
+  Label_, Top, Bottom, Side: string;
+  ElapsedSec: Int64;
+  Tokens, ToolLine: string;
+begin
+  Size := GetConsoleSize;
+  W := Integer(Size.Columns);
+  H := Integer(Size.Rows);
+
+  ToolRows := Length(FStatsToolCallNames);
+  if ToolRows > 8 then ToolRows := 8;       { cap rendered rows; full
+                                              list still in memory }
+  BoxH := 9 + ToolRows;                     { frame + 7 stat rows +
+                                              tool-call rows + footer }
+  BoxX := (W - BoxW) div 2;
+  BoxY := (H - BoxH) div 2;
+  if BoxX < 0 then BoxX := 0;
+  if BoxY < 0 then BoxY := 0;
+
+  Top    := '+' + StringOfChar('-', BoxW - 2) + '+';
+  Bottom := Top;
+  Side   := '|';
+
+  GotoXY(BoxX, BoxY);
+  WriteAnsiText(ConsoleTheme.HighlightText, Top);
+
+  GotoXY(BoxX, BoxY + 1);
+  Label_ := ' stats -- press any key to dismiss ';
+  while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+  if Length(Label_) > BoxW - 2 then Label_ := Copy(Label_, 1, BoxW - 2);
+  WriteAnsiText(ConsoleTheme.HighlightText, Side + Label_ + Side);
+
+  GotoXY(BoxX, BoxY + 2);
+  WriteAnsiText(ConsoleTheme.HighlightText,
+                Side + StringOfChar('-', BoxW - 2) + Side);
+
+  Row := BoxY + 3;
+
+  ElapsedSec := SecondsBetween(Now, FStatsStartedAt);
+
+  GotoXY(BoxX, Row);
+  Label_ := Format(' session    %d turn(s), %ds elapsed',
+                   [FStatsTurns, ElapsedSec]);
+  while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+  if Length(Label_) > BoxW - 2 then Label_ := Copy(Label_, 1, BoxW - 2);
+  WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);
+  Inc(Row);
+
+  Tokens := Format(' tokens     in=%d out=%d',
+                   [FStatsUsage.InputTokens, FStatsUsage.OutputTokens]);
+  if FStatsUsage.CacheReadTokens + FStatsUsage.CacheCreatedTokens > 0 then
+    Tokens := Tokens +
+              Format(' (cache r=%d w=%d)',
+                     [FStatsUsage.CacheReadTokens,
+                      FStatsUsage.CacheCreatedTokens]);
+  GotoXY(BoxX, Row);
+  while Length(Tokens) < BoxW - 2 do Tokens := Tokens + ' ';
+  if Length(Tokens) > BoxW - 2 then Tokens := Copy(Tokens, 1, BoxW - 2);
+  WriteAnsiText(ConsoleTheme.Text, Side + Tokens + Side);
+  Inc(Row);
+
+  GetOutputCacheStats(EntryCount, TotalBytes);
+  GotoXY(BoxX, Row);
+  if FStatsTruncations > 0 then
+    Label_ := Format(' truncated  %d output(s), saved %d bytes',
+                     [FStatsTruncations, FStatsBytesSaved])
+  else
+    Label_ := ' truncated  none (set tool_output_cap to enable)';
+  while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+  if Length(Label_) > BoxW - 2 then Label_ := Copy(Label_, 1, BoxW - 2);
+  WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);
+  Inc(Row);
+
+  GotoXY(BoxX, Row);
+  Label_ := Format(' cache      %d handle(s) held, %d bytes',
+                   [EntryCount, TotalBytes]);
+  while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+  if Length(Label_) > BoxW - 2 then Label_ := Copy(Label_, 1, BoxW - 2);
+  WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);
+  Inc(Row);
+
+  GotoXY(BoxX, Row);
+  Label_ := ' tool calls';
+  while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+  WriteAnsiText(ConsoleTheme.HighlightText, Side + Label_ + Side);
+  Inc(Row);
+
+  if ToolRows = 0 then
+  begin
+    GotoXY(BoxX, Row);
+    Label_ := '   (none yet)';
+    while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+    WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);
+    Inc(Row);
+  end
+  else
+  begin
+    for i := 0 to ToolRows - 1 do
+    begin
+      GotoXY(BoxX, Row);
+      ToolLine := Format('   %-32s %d',
+                         [FStatsToolCallNames[i], FStatsToolCallCount[i]]);
+      while Length(ToolLine) < BoxW - 2 do ToolLine := ToolLine + ' ';
+      if Length(ToolLine) > BoxW - 2 then ToolLine := Copy(ToolLine, 1, BoxW - 2);
+      WriteAnsiText(ConsoleTheme.Text, Side + ToolLine + Side);
+      Inc(Row);
+    end;
+    if Length(FStatsToolCallNames) > ToolRows then
+    begin
+      GotoXY(BoxX, Row);
+      Label_ := Format('   ... and %d more',
+                       [Length(FStatsToolCallNames) - ToolRows]);
+      while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+      WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);
+      Inc(Row);
+    end;
+  end;
+
+  GotoXY(BoxX, BoxY + BoxH - 1);
+  WriteAnsiText(ConsoleTheme.HighlightText, Bottom);
+end;
+
 function TTUI.CurrentSpinnerChar: Char;
 const
   Frames: array[0..3] of Char = ('|', '/', '-', '\');
@@ -894,6 +1105,7 @@ begin
   begin
     Loop := Worker.LoopResult;
     ApplyLoopResultTo(FLoopSessionId, Loop, FSession);
+    AccumulateLoopStats(Loop);
     if FLoopSessionId <> FSession.Meta.Id then
       Flash('result -> ' + FLoopSessionId);
     RefreshSessions;
@@ -938,13 +1150,15 @@ begin
       end;
     end
     else if Text = '/help' then
-      Flash('keys: Tab swap pane | N new | D del | Q quit | /theme | /model')
+      Flash('keys: Tab swap pane | N new | D del | Q quit | /theme | /model | /stats')
     else if (Text = '/tools') and (FRegistry <> nil) then
       Flash(Format('registered tools: %d', [FRegistry.Count]))
     else if Text = '/theme' then
       OpenThemeMenu
     else if Text = '/model' then
       OpenModelMenu
+    else if Text = '/stats' then
+      OpenStatsOverlay
     else
       Flash('unknown: ' + Text);
     FInputBuf := '';
@@ -1144,6 +1358,13 @@ begin
     preview, Enter commits the selection. Model menu intercept piggybacks
     on the same gate; only one overlay can be open per the mutual-exclusion
     contract enforced in OpenThemeMenu / OpenModelMenu. }
+  if FStatsOpen then
+  begin
+    { Any key dismisses the read-only stats overlay. No selection
+      to commit; no preview to revert. }
+    FStatsOpen := False;
+    Exit;
+  end;
   if FModelMenuOpen then
   begin
     HandleModelMenuKey(Key);
@@ -1483,6 +1704,7 @@ begin
     can be open at a time (the Open* methods enforce mutual exclusion). }
   if FMenuOpen      then DrawThemeMenu;
   if FModelMenuOpen then DrawModelMenu;
+  if FStatsOpen     then DrawStatsOverlay;
 end;
 
 procedure TTUI.DrawThemeMenu;
@@ -1653,6 +1875,14 @@ begin
   FModelMenuSelIdx := 0;
   FModelRefreshThread   := nil;
   FModelRefreshProvider := '';
+  FStatsStartedAt   := Now;
+  FStatsUsage       := Default(TUsageInfo);
+  FStatsTurns       := 0;
+  FStatsTruncations := 0;
+  FStatsBytesSaved  := 0;
+  SetLength(FStatsToolCallNames, 0);
+  SetLength(FStatsToolCallCount, 0);
+  FStatsOpen        := False;
   FLastResizeW := -1; FLastResizeH := -1;
 
   { Always allocate a session (PR #117 default-persist semantics).
