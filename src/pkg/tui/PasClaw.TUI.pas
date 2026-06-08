@@ -931,9 +931,32 @@ begin
 end;
 
 procedure TTUI.SelectSession(Id: string);
+{ Navigation only: free the in-memory session object and load a
+  different one off disk. Used to PersistSession on the outgoing
+  session here -- the rationale was "flush anything pending before
+  the swap" -- but in practice every meaningful state change on
+  the outgoing session has ALREADY been persisted by the time we
+  get here: PollLoopWorker's ApplyLoopResultTo saves after each
+  turn, ApplyModelSelection saves after /model, /clear saves on
+  the truncate. Pure navigation has nothing to save, but the call
+  unconditionally bumped Meta.UpdatedAt via Touch -- so leaving
+  session A to peek at session B re-promoted A to the top of the
+  newest-first list. User-reported sort drift after PR #182.
+
+  Exception: when a tool loop is in flight against the outgoing
+  session, StartTurn has appended the user's prompt to in-memory
+  FSession.Messages but the loop hasn't returned yet so the
+  prompt isn't on disk. PollLoopWorker's eventual
+  ApplyLoopResultTo / AppendErrorTo reloads the session from disk
+  by id -- so without a save here, a timeout / failure on a turn
+  the user has already navigated away from would land only the
+  error text in the saved transcript with no record of the
+  prompt that triggered it. Persist that specific case (it bumps
+  UpdatedAt, which is correct -- there IS new content). Codex P2
+  on PR #184. }
 begin
-  { Persist anything pending on the current session before swapping. }
-  if (FSession <> nil) and (Length(FSession.Messages) > 0) then
+  if (FSession <> nil) and (FLoopThread <> nil) and
+     (FLoopSessionId = FSession.Meta.Id) then
     PersistSession;
   FSession.Free;
   if Id = '' then Id := NewSessionId;
@@ -1579,6 +1602,16 @@ begin
   Body := Msg.Content;
   if RenderMd and (Msg.Role = mrAssistant) and (Trim(Body) <> '') then
     Body := RenderMarkdown(Body);
+  { Tabs cause the chat pane to overflow: VisibleLength counts a
+    tab as one column, but the terminal expands it to the next
+    8-column tab stop (1-7 extra columns depending on position).
+    Long markdown code blocks routinely include tab-indented
+    content from the model. Expanding to 4 spaces ahead of the
+    wrap pass keeps the visible-width math honest at the cost of
+    a slightly wider code block; for content that's already
+    space-indented this is a no-op. User-reported "1-2 chars
+    bleed onto the next line" on PR #184. }
+  Body := StringReplace(Body, #9, '    ', [rfReplaceAll]);
   if Trim(Body) = '' then
   begin
     if Length(Msg.ToolCalls) > 0 then
@@ -1952,8 +1985,22 @@ begin
   FLastResizeW := -1; FLastResizeH := -1;
 
   { Always allocate a session (PR #117 default-persist semantics).
-    SessionId from --session is honoured: empty = fresh id; existing
-    on disk = resume; missing on disk = pre-seed at that id. }
+    SessionId resolution:
+      - non-empty (from --session): honour as-is; missing on disk
+        pre-seeds at that id, existing on disk resumes.
+      - empty AND there's an existing session on disk: resume the
+        newest by UpdatedAt -- so `pasclaw tui` with no args picks
+        up where the operator left off and the left-pane highlight
+        agrees with the loaded chat. Press N to start a fresh
+        session instead.
+      - empty AND no sessions on disk: allocate a fresh id (the
+        original PR #117 behavior). }
+  if SessionId = '' then
+  begin
+    FSessions := ListSessions;            { newest-first }
+    if Length(FSessions) > 0 then
+      SessionId := FSessions[0].Id;
+  end;
   FSession := TSession.Create(SessionId);
   RefreshSessions;
 
