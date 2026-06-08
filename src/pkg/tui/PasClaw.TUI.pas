@@ -46,6 +46,10 @@ uses
                                      from the interface section's uses, not
                                      just the implementation's. FPC was
                                      permissive about this; dcc64 is not. }
+  PasClaw.Tools.ToolLoop,          { TToolLoopResult — referenced by the
+                                     AccumulateLoopStats method declaration
+                                     in the TTUI class; same dcc64
+                                     visibility rule as the line above. }
   PasClaw.Tools.Registry,
   PasClaw.Session.Store;
 
@@ -204,7 +208,8 @@ uses
   DateUtils,
   PasClaw.CliUI,
   PasClaw.Logger,
-  PasClaw.Tools.ToolLoop,
+  { PasClaw.Tools.ToolLoop now lives in the interface uses (above) so
+    dcc64 can see TToolLoopResult from the TTUI class declaration. }
   PasClaw.Tools.OutputCache,       { GetOutputCacheStats — surfaced
                                      in /stats overlay }
   PasClaw.Agent.Steering,
