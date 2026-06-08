@@ -102,7 +102,10 @@ type
                               out AResponseStarted: Boolean);
     procedure HandleModels(AResp: TIdHTTPResponseInfo);
     procedure WriteJSON(AResp: TIdHTTPResponseInfo; Code: Integer; const Body: string);
-    procedure WriteSSE(AResp: TIdHTTPResponseInfo; const Body: string);
+    { TGatewayServer.WriteSSE removed — never called. The streaming
+      response paths build their SSE frames via TSSEStreamer +
+      TLogStreamWriter (which has its own WriteSSE on a different
+      class). Codex dcc64 H2219 cleanup. }
   public
     constructor Create(Cfg: TConfig; Provider: ILLMProvider; Registry: TToolRegistry);
     destructor  Destroy; override;
@@ -275,15 +278,8 @@ begin
   WriteBodyStream(AResp, Body);
 end;
 
-procedure TGatewayServer.WriteSSE(AResp: TIdHTTPResponseInfo; const Body: string);
-begin
-  AResp.ResponseNo := 200;
-  AResp.ContentType := 'text/event-stream; charset=utf-8';
-  AResp.CharSet     := 'utf-8';
-  AResp.CustomHeaders.AddValue('Cache-Control', 'no-cache');
-  AResp.CustomHeaders.AddValue('X-Accel-Buffering', 'no');
-  WriteBodyStream(AResp, Body);
-end;
+{ TGatewayServer.WriteSSE removed — dead method, see class
+  declaration. dcc64 H2219 cleanup. }
 
 procedure TGatewayServer.OnCommandGet(AContext: TIdContext;
                                      ARequest: TIdHTTPRequestInfo;
@@ -543,7 +539,6 @@ procedure TGatewayServer.HandleMemoryRead(const Doc: string;
 var
   Name, Path, Body: string;
   Root: TJsonObject;
-  i: Integer;
 begin
   Name := Copy(Doc, Length('/v1/memory/') + 1, MaxInt);
   { Refuse any path-traversal — only bare filenames inside the
@@ -577,7 +572,6 @@ begin
   finally
     Root.Free;
   end;
-  if i = 0 then;   { silence unused-var warning }
 end;
 
 procedure TGatewayServer.HandleConfig(AResp: TIdHTTPResponseInfo);
@@ -1673,7 +1667,9 @@ begin
           begin
             try
               Streamer.WriteError('internal error: ' + SanitizeStreamError(E.Message));
-              StreamClosed := Streamer.Closed;
+              { Previously assigned StreamClosed := Streamer.Closed here;
+                dropped — `raise;` below unwinds the stack so the value
+                is never read. dcc64 H2077 cleanup. }
             except
               if (AContext <> nil) and (AContext.Connection <> nil) then
                 AContext.Connection.Disconnect;

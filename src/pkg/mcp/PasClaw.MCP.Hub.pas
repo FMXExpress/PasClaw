@@ -370,7 +370,10 @@ var
   Entry: TMCPCatalogEntry;
   ProjectErr: string;
 begin
-  Result := False;
+  { Result := False removed — dead write per dcc64 H2077. The two
+    success exits (hub fetch produced entries; builtin fallback) both
+    explicitly set Result := True before returning. No code path
+    leaves the function without one of those assignments. }
   Source := '';
   HubSkipped := 0;
   HubErr := '';

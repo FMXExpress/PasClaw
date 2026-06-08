@@ -374,7 +374,9 @@ begin
   AResponse.ContentText := '{}';
   AResponse.ContentType := 'application/json';
 
-  Root := nil;
+  { Pre-try `Root := nil` removed — dead write per dcc64 H2077. The
+    except branch always Exits, so Root is either assigned by Parse
+    on the success path or we never reach the post-try-except code. }
   try
     Root := TJsonObject.Parse(Body);
   except
