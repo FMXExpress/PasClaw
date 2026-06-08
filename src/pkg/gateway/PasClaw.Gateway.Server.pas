@@ -1017,6 +1017,7 @@ begin
   LoopCfg.OnToolResult  := nil;
   LoopCfg.CompactEnabled := True;
   LoopCfg.CompactOpts    := DefaultCompactOptions;
+  LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
 
   if not RunToolLoop(LoopCfg, Msgs, Loop) then
   begin
@@ -1569,6 +1570,7 @@ begin
     LoopCfg.OnToolResult  := nil;
     LoopCfg.CompactEnabled := True;
     LoopCfg.CompactOpts    := DefaultCompactOptions;
+    LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
 
     CompId := GenChatCompletionId;
 
@@ -3080,6 +3082,7 @@ begin
       LoopCfg.OnText        := nil;
       LoopCfg.OnToolCall    := nil;
       LoopCfg.OnToolResult  := nil;
+      LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
 
       if not RunToolLoop(LoopCfg, Msgs, Loop) then
       begin

@@ -145,7 +145,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-model-discovery print-version get-indy webui-res
+.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-model-discovery test-output-cache print-version get-indy webui-res
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -264,4 +264,10 @@ test-model-discovery: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/model_discovery_tests.pas -o$(BUILDDIR)/model_discovery_tests
 	@$(BUILDDIR)/model_discovery_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery
+# PasClaw.Tools.OutputCache — truncation thresholds + handle round-trip.
+test-output-cache: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/output_cache_tests.pas -o$(BUILDDIR)/output_cache_tests
+	@$(BUILDDIR)/output_cache_tests
+
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache

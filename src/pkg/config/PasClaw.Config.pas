@@ -353,6 +353,15 @@ type
        doesn't render markdown at all and emits raw stars / hashes;
        nanobot gets it for free via Python's rich library. *)
     RenderMarkdown:    Boolean;
+    (* Cap on per-tool-result bytes that enter the LLM context window.
+       When > 0, RunToolLoop diverts overlong tool outputs into the
+       process-lifetime PasClaw.Tools.OutputCache and replaces the
+       in-context body with a head + tail snippet plus a handle the
+       model can dereference via `tool_output_get`. Default 0 = off
+       (legacy verbatim behaviour). Operators flip it on in
+       config.json under "tool_output_cap" — 8192 is a reasonable
+       starting cap (≈ 2K tokens). *)
+    ToolOutputCap:     Integer;
     AnthropicServerTools: TAnthropicServerToolsConfig;
     OpenAIServerTools:    TOpenAIServerToolsConfig;
     GeminiServerTools:    TGeminiServerToolsConfig;
@@ -420,6 +429,7 @@ begin
   VaultToolsEnabled    := False; { off by default; onboarding asks to opt in }
   WebFetchEnabled      := False; { off by default; the model uses shell+curl }
   RenderMarkdown       := True;  { on by default for terminal surfaces; cmd/serve flips off }
+  ToolOutputCap        := 0;     { off by default; operators opt in. See TConfig.ToolOutputCap. }
   VectorSearchEnabled  := True;  { on by default; onboarding asks (default Y) — see TConfig comment }
   AnthropicServerTools.WebSearch        := False;
   AnthropicServerTools.WebSearchMaxUses := 0;
@@ -584,6 +594,11 @@ begin
       across SaveConfig + LoadConfig. }
     if not VectorSearchEnabled then
       Root.PutBool('vector_search_enabled', False);
+    { Tool output cap: emit only when an operator has explicitly
+      opted in. 0 (off) is the default; suppressing it from the
+      JSON keeps fresh config files clean. }
+    if ToolOutputCap > 0 then
+      Root.PutInt('tool_output_cap', ToolOutputCap);
     if AnthropicServerTools.WebSearch
        or AnthropicServerTools.WebFetch
        or (AnthropicServerTools.WebSearchMaxUses > 0)
@@ -766,6 +781,7 @@ begin
     WebFetchEnabled     := Root.GetBool('web_fetch_enabled',     WebFetchEnabled);
     RenderMarkdown      := Root.GetBool('render_markdown',       RenderMarkdown);
     VectorSearchEnabled := Root.GetBool('vector_search_enabled', VectorSearchEnabled);
+    ToolOutputCap       := Integer(Root.GetInt('tool_output_cap', ToolOutputCap));
 
     Obj := Root.ChildObject('anthropic_server_tools');
     if Obj <> nil then
