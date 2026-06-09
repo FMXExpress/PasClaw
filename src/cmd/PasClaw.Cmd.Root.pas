@@ -55,6 +55,7 @@ uses
   PasClaw.Cmd.Membench,
   PasClaw.Cmd.Memory,
   PasClaw.Cmd.Export,
+  PasClaw.Cmd.Runbook,
   PasClaw.Cmd.TUI;
 
 type
@@ -109,7 +110,7 @@ const
 var
   Sub, Fl: array of string;
 begin
-  SetLength(Sub, 24);
+  SetLength(Sub, 25);
   Sub[0]  := 'config       View/edit configuration';
   Sub[1]  := 'onboard      Initialize config & workspace';
   Sub[2]  := 'agent        Chat with the assistant (line-by-line)';
@@ -133,7 +134,8 @@ begin
   Sub[20] := 'memory       Provision the hybrid memory_search runtime';
   Sub[21] := 'learn        Mine sessions for recurring tool failures';
   Sub[22] := 'export       Render memory/skills/sandbox into AGENTS.md / CLAUDE.md / Cursor / Gemini / Zed';
-  Sub[23] := 'version      Show version info';
+  Sub[23] := 'runbook      Ask the model to probe the project and write a starter AGENTS.md';
+  Sub[24] := 'version      Show version info';
 
   SetLength(Fl, 2);
   Fl[0] := '--no-color   Disable colored output (also: NO_COLOR env)';
@@ -161,6 +163,7 @@ begin
   else if Cmd = 'session'  then Result := Cmd_Session_Run(Argv)
   else if Cmd = 'learn'    then Result := Cmd_Learn_Run(Argv)
   else if Cmd = 'export'   then Result := Cmd_Export_Run(Argv)
+  else if Cmd = 'runbook'  then Result := Cmd_Runbook_Run(Argv)
   { resume <id> is shorthand for `agent --session <id>` -- wire it
     here so `pasclaw resume foo` works as a top-level shortcut. }
   else if Cmd = 'resume'   then

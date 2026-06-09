@@ -321,4 +321,12 @@ test-export: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/export_tests.pas -o$(BUILDDIR)/export_tests
 	@PASCLAW_HOME=$(BUILDDIR)/export-test-home $(BUILDDIR)/export_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export
+# PasClaw.Tools.ExecuteCode — bash / PowerShell script runner. End-to-end run
+# spawns bash on this Linux host; the BuildArgv tests pin the PowerShell shape
+# without needing pwsh installed.
+test-execute-code: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/execute_code_tests.pas -o$(BUILDDIR)/execute_code_tests
+	@PASCLAW_HOME=$(BUILDDIR)/execute-code-test-home $(BUILDDIR)/execute_code_tests
+
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code

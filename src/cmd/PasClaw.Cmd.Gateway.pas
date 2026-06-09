@@ -31,6 +31,7 @@ uses
   PasClaw.Tools.Registry,
   PasClaw.Tools.FS,
   PasClaw.Tools.Shell,
+  PasClaw.Tools.ExecuteCode,
   PasClaw.Tools.Memory,
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
@@ -174,6 +175,7 @@ begin
       Reg := TToolRegistry.Create;
       RegisterFSTools(Reg, not Args.NoHashline);
       RegisterShellTool(Reg);
+      RegisterExecuteCodeTool(Reg);
       RegisterMemoryTools(Reg);
       if HasConfiguredWebSearchProvider(Cfg) then
         RegisterWebSearchTool(Reg)

@@ -147,6 +147,7 @@
         <DCCReference Include="..\cmd\PasClaw.Cmd.Membench.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Memory.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Export.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Runbook.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.TUI.pas"/>
 
         <!-- pkg/cliui -->
@@ -187,6 +188,7 @@
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.FS.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Shell.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Shell.Filters.pas"/>
+        <DCCReference Include="..\pkg\tools\PasClaw.Tools.ExecuteCode.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Memory.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.WebSearch.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.WebFetch.pas"/>
