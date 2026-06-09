@@ -106,6 +106,15 @@ The running `pasclaw agent --session <id>` drains the queue at the top of its NE
 
 Notable feature additions, newest first. Bug fixes and review follow-ups are in the [full git log](https://github.com/FMXExpress/PasClaw/commits/main).
 
+- **2026-06-08** — Server-side `call_id` → `thoughtSignature` cache on `/v1/responses` so stock OpenAI-Responses clients (Codex CLI etc.) round-trip Gemini 3's signed function calls across turns even when they strip PasClaw's `provider_signature` extension. ([#194])
+- **2026-06-08** — `memory_fetch` URL auto-dedup: a second fetch against the same URL inside 24h short-circuits the HTTP and returns the cached path. ([#192])
+- **2026-06-08** — `pasclaw learn` mines session transcripts for recurring tool failures, normalises into clustering signatures (paths/pids/hashes stripped), reports patterns above `--min-sessions`, optionally appends a dated block to `MEMORY.md`. ([#190])
+- **2026-06-08** — Per-command shell output filters with tee-on-failure: `git status/diff/log`, `pytest`/`cargo test`/`npm test`, `grep`/`Select-String`/`findstr`, `ls -R`/`Get-ChildItem`/`dir /s`. Cross-shell dispatch normalises PowerShell / cmd.exe / shell wrappers. Counters surface in TUI `/stats`. ([#189])
+- **2026-06-08** — In-browser wasm build via container2wasm: `make C2W=1 browser` produces a single-page agent UI with fetch-proxy networking, onboarding and chat run inline in the tab. ([#185], [#186], [#187], [#188])
+- **2026-06-08** — TUI session pane sorted newest-first by `UpdatedAt`, assistant markdown rendered as ANSI in the chat pane, `pasclaw tui` resumes the newest session on launch, no sort drift on session-pane navigation. ([#182], [#184])
+- **2026-06-08** — Context-mode follow-ups: `memory_fetch` tool (writes URL bodies to `workspace/memory/fetched-*.md`, body never enters context), per-session working-state snapshot (recent edits / shell / errors) re-injected as system-prompt prefix after compaction, think-in-code steering rule. ([#180])
+- **2026-06-08** — Per-tool-result output truncation cache (`tool_output_cap` config) with `tool_output_get(handle, offset, len)` retrieval; TUI `/stats` overlay shows token totals, truncation savings, per-tool call counts. ([#176])
+- **2026-06-07** — Live `/v1/models` discovery with on-disk cache keyed on operator-facing provider name, onboarding picker, TUI `/model` modal switcher (Up/Down/Enter, FPC line-based fallback) with inline auto-refresh when the cache is empty. ([#171], [#173], [#175])
 - **2026-06-06** — Hybrid FTS5 + local-vector `memory_search` backend with in-tree localvector port and a `pasclaw memory provision` command that fetches sqlite-vec, ONNX Runtime, and the MiniLM embedder. ([#165], [#166])
 - **2026-06-06** — Catalog adds xAI (Grok) + LM Studio entries; Moonshot default bumped to `kimi-k2.6`. ([#163])
 - **2026-06-06** — `vector_search_enabled` config flag + onboarding question for the hybrid memory backend. ([#164])
@@ -194,6 +203,21 @@ Notable feature additions, newest first. Bug fixes and review follow-ups are in 
 [#164]: https://github.com/FMXExpress/PasClaw/pull/164
 [#165]: https://github.com/FMXExpress/PasClaw/pull/165
 [#166]: https://github.com/FMXExpress/PasClaw/pull/166
+[#171]: https://github.com/FMXExpress/PasClaw/pull/171
+[#173]: https://github.com/FMXExpress/PasClaw/pull/173
+[#175]: https://github.com/FMXExpress/PasClaw/pull/175
+[#176]: https://github.com/FMXExpress/PasClaw/pull/176
+[#180]: https://github.com/FMXExpress/PasClaw/pull/180
+[#182]: https://github.com/FMXExpress/PasClaw/pull/182
+[#184]: https://github.com/FMXExpress/PasClaw/pull/184
+[#185]: https://github.com/FMXExpress/PasClaw/pull/185
+[#186]: https://github.com/FMXExpress/PasClaw/pull/186
+[#187]: https://github.com/FMXExpress/PasClaw/pull/187
+[#188]: https://github.com/FMXExpress/PasClaw/pull/188
+[#189]: https://github.com/FMXExpress/PasClaw/pull/189
+[#190]: https://github.com/FMXExpress/PasClaw/pull/190
+[#192]: https://github.com/FMXExpress/PasClaw/pull/192
+[#194]: https://github.com/FMXExpress/PasClaw/pull/194
 
 ## Requirements
 
