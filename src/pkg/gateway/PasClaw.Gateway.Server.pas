@@ -82,6 +82,7 @@ type
                                 ARequest: TIdHTTPRequestInfo;
                                 AResp: TIdHTTPResponseInfo);
     procedure HandleConfig(AResp: TIdHTTPResponseInfo);
+    procedure HandleStats(AResp: TIdHTTPResponseInfo);
     procedure HandleFSList(ARequest: TIdHTTPRequestInfo;
                             AResp: TIdHTTPResponseInfo);
     procedure HandleFSRead(ARequest: TIdHTTPRequestInfo;
@@ -144,8 +145,25 @@ uses
   PasClaw.Agent.Compact,
   PasClaw.Agent.Prompt,
   PasClaw.Identity,
+  PasClaw.Session.Store,
   PasClaw.Gateway.ToolView,
   PasClaw.Gateway.WebUI;
+
+var
+  { Process-wide cache for the /v1/stats response. Walking the
+    sessions directory + summing the per-session counters is fine
+    for "low hundreds" of sessions, expensive for thousands.
+    Five-second TTL keeps the UI's auto-refresh free while still
+    surfacing fresh numbers when the operator hits /stats directly
+    after a turn. Reset to (0, '') on first call.
+
+    No lock: the gateway's request handling is single-threaded
+    through OnCommandGet, so reads and writes here are serialised.
+    A future async refactor would need to wrap this in a critical
+    section. }
+  GStatsCacheUntil:    TDateTime = 0;
+  GStatsCacheBody:     string    = '';
+  GStatsCacheTtlSecs:  Integer   = 5;
 
 constructor TGatewayServer.Create(Cfg: TConfig; Provider: ILLMProvider; Registry: TToolRegistry);
 begin
@@ -312,6 +330,7 @@ begin
     else if (ARequest.Command = 'GET')  and (Copy(Doc, 1, 11) = '/v1/memory/') then
       HandleMemoryRead(Doc, ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/config')  then HandleConfig(AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/stats')   then HandleStats(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs')      then HandleFSList(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs/read') then HandleFSRead(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/logs')    then HandleLogs(AContext, ARequest, AResponse)
@@ -638,6 +657,136 @@ begin
     WriteJSON(AResp, 200, Root.ToJSON);
   finally
     Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleStats(AResp: TIdHTTPResponseInfo);
+{ Aggregate per-session stats across every session under
+  workspace/sessions/ plus a few rollups (by provider, by model)
+  that are useful server-wide. Cheap to compute on a personal
+  gateway; the 5-second cache hides the cost when the web UI
+  auto-refreshes.
+
+  When Cfg.StatsCollectionEnabled is False the rollups will all
+  read zero (the per-session counters were never incremented), so
+  the response is still valid JSON -- the web UI shows zeros with
+  a "stats collection is off" hint instead of breaking. }
+var
+  Sessions: TSessionMetaArray;
+  i: Integer;
+  TotalIn, TotalOut, CacheRead, CacheWrite, Turns, ToolCalls, BytesSaved: Int64;
+  ByProvider, ByModel: TStringList;
+  Idx: Integer;
+  Key: string;
+  Cur: Int64;
+  Root, ProviderObj, ModelObj: TJsonObject;
+  ProviderArr, ModelArr: TJsonArray;
+
+  procedure BumpMap(M: TStringList; const K: string; Delta: Int64);
+  var
+    J: Integer;
+    Existing: Int64;
+  begin
+    if K = '' then Exit;
+    J := M.IndexOf(K);
+    if J < 0 then M.AddObject(K, TObject(NativeInt(Delta)))
+    else
+    begin
+      Existing := Int64(NativeInt(M.Objects[J]));
+      M.Objects[J] := TObject(NativeInt(Existing + Delta));
+    end;
+  end;
+
+begin
+  if Now < GStatsCacheUntil then
+  begin
+    WriteJSON(AResp, 200, GStatsCacheBody);
+    Exit;
+  end;
+
+  Sessions := ListSessions;
+  TotalIn := 0; TotalOut := 0; CacheRead := 0; CacheWrite := 0;
+  Turns := 0; ToolCalls := 0; BytesSaved := 0;
+  ByProvider := TStringList.Create;
+  ByModel    := TStringList.Create;
+  try
+    for i := 0 to High(Sessions) do
+    begin
+      Inc(TotalIn,    Sessions[i].Stats.InputTokens);
+      Inc(TotalOut,   Sessions[i].Stats.OutputTokens);
+      Inc(CacheRead,  Sessions[i].Stats.CacheReadTokens);
+      Inc(CacheWrite, Sessions[i].Stats.CacheCreatedTokens);
+      Inc(Turns,      Sessions[i].Stats.Turns);
+      Inc(ToolCalls,  Sessions[i].Stats.ToolCalls);
+      Inc(BytesSaved, Sessions[i].Stats.TruncationBytesSaved);
+      { Bucket "tokens spent" -- in + out -- by provider + model so
+        the operator can see which provider is eating the budget. }
+      Cur := Sessions[i].Stats.InputTokens + Sessions[i].Stats.OutputTokens;
+      BumpMap(ByProvider, Sessions[i].Provider, Cur);
+      BumpMap(ByModel,    Sessions[i].Model,    Cur);
+    end;
+
+    Root := TJsonObject.Create;
+    try
+      Root.PutBool('stats_collection_enabled', FCfg.StatsCollectionEnabled);
+      Root.PutInt ('sessions',                 Length(Sessions));
+      Root.PutInt ('input_tokens',             TotalIn);
+      Root.PutInt ('output_tokens',            TotalOut);
+      Root.PutInt ('cache_read_tokens',        CacheRead);
+      Root.PutInt ('cache_created_tokens',     CacheWrite);
+      Root.PutInt ('turns',                    Turns);
+      Root.PutInt ('tool_calls',               ToolCalls);
+      Root.PutInt ('truncation_bytes_saved',   BytesSaved);
+
+      ProviderArr := TJsonArray.Create;
+      try
+        for Idx := 0 to ByProvider.Count - 1 do
+        begin
+          ProviderObj := TJsonObject.Create;
+          try
+            Key := ByProvider[Idx];
+            Cur := Int64(NativeInt(ByProvider.Objects[Idx]));
+            ProviderObj.PutStr('provider', Key);
+            ProviderObj.PutInt('tokens',   Cur);
+            ProviderArr.AddObject(ProviderObj);
+          except
+            ProviderObj.Free; raise;
+          end;
+        end;
+        Root.PutArray('by_provider', ProviderArr);
+      except
+        ProviderArr.Free; raise;
+      end;
+
+      ModelArr := TJsonArray.Create;
+      try
+        for Idx := 0 to ByModel.Count - 1 do
+        begin
+          ModelObj := TJsonObject.Create;
+          try
+            Key := ByModel[Idx];
+            Cur := Int64(NativeInt(ByModel.Objects[Idx]));
+            ModelObj.PutStr('model',  Key);
+            ModelObj.PutInt('tokens', Cur);
+            ModelArr.AddObject(ModelObj);
+          except
+            ModelObj.Free; raise;
+          end;
+        end;
+        Root.PutArray('by_model', ModelArr);
+      except
+        ModelArr.Free; raise;
+      end;
+
+      GStatsCacheBody  := Root.ToJSON;
+      GStatsCacheUntil := IncSecond(Now, GStatsCacheTtlSecs);
+      WriteJSON(AResp, 200, GStatsCacheBody);
+    finally
+      Root.Free;
+    end;
+  finally
+    ByProvider.Free;
+    ByModel.Free;
   end;
 end;
 
