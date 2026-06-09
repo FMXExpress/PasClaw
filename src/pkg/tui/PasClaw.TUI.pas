@@ -717,15 +717,23 @@ end;
 
 procedure TTUI.AccumulateLoopStats(const Loop: TToolLoopResult);
 { Run on the main thread by PollLoopWorker after each successful
-  turn. Token + truncation totals come straight off the loop
-  result; tool-call names come from walking Loop.FinalMessages
-  for assistant turns that emitted tool_calls. We don't dedup
-  against earlier turns -- calling the same tool twice across
-  two turns shows up as 2 in /stats, which is what the operator
-  wants to see. }
+  turn. Updates the IN-MEMORY counters that the TUI /stats overlay
+  reads (FStatsUsage / FStatsTurns / FStatsTruncations /
+  FStatsBytesSaved / FStatsToolCall*). Token + truncation totals
+  come straight off the loop result; tool-call names come from
+  walking Loop.FinalMessages for assistant turns that emitted
+  tool_calls. We don't dedup against earlier turns -- calling the
+  same tool twice across two turns shows up as 2 in /stats, which
+  is what the operator wants to see.
+
+  Persistent on-disk stats (Meta.Stats, gated by
+  Cfg.StatsCollectionEnabled) are bumped INSIDE ApplyLoopResultTo
+  so they land in the same Save call and on the originating
+  session (the one identified by FLoopSessionId), not on whatever
+  FSession happens to point at by the time the worker completes.
+  See Codex P2 on PR #202. }
 var
   i, k: Integer;
-  Cfg: TConfig;
 begin
   Inc(FStatsTurns);
   Inc(FStatsUsage.InputTokens,        Loop.TotalUsage.InputTokens);
@@ -734,33 +742,6 @@ begin
   Inc(FStatsUsage.CacheCreatedTokens, Loop.TotalUsage.CacheCreatedTokens);
   Inc(FStatsTruncations, Loop.Truncations);
   Inc(FStatsBytesSaved,  Loop.TruncatedBytesSaved);
-  { Persist into the session JSON as well, so /v1/stats can aggregate
-    across sessions without re-parsing the message log. Gated on the
-    config flag (default off, opt-in via onboarding) -- when off, the
-    on-disk schema is byte-identical to the pre-feature shape. The
-    in-memory FStats* counters above stay live regardless of the flag
-    so the /stats overlay still works on flag-off sessions.
-
-    Re-reading TConfig per turn is cheap (one ReadFileText + JSON parse
-    over a small file) and avoids threading a new field through every
-    TTUI.Create / FCfg-touching call site. If this shows up in a
-    profile, cache it on the TTUI instance. }
-  if FSession <> nil then
-  begin
-    Cfg := LoadConfig;
-    try
-      if Cfg.StatsCollectionEnabled then
-        AccumulateTurnStats(FSession.Meta,
-                            Loop.TotalUsage.InputTokens,
-                            Loop.TotalUsage.OutputTokens,
-                            Loop.TotalUsage.CacheReadTokens,
-                            Loop.TotalUsage.CacheCreatedTokens,
-                            Loop.ToolCallsDispatched,
-                            Loop.TruncatedBytesSaved);
-    finally
-      Cfg.Free;
-    end;
-  end;
 
   { Tool calls live on assistant messages with non-empty ToolCalls.
     Walking FinalMessages catches every call from this loop's turns
@@ -1107,6 +1088,7 @@ var
   Target: TSession;
   i: Integer;
   OwnsTarget: Boolean;
+  Cfg: TConfig;
 begin
   if (CurrentSession <> nil) and (CurrentSession.Meta.Id = SessionId) then
   begin
@@ -1139,6 +1121,30 @@ begin
       resume. Helper lives in PasClaw.Session.Store. }
     if Length(Loop.FinalMessages) > 0 then
       UpdateWorkingStateAfterTurn(Target.Meta, Loop.FinalMessages);
+
+    { Stats accumulation: bump Target.Meta.Stats here, before the
+      Save below, so the on-disk JSON picks up the counters in the
+      same write. Doing this in AccumulateLoopStats after Save (the
+      pre-fix path) was a write-then-discard -- /v1/stats stayed at
+      zero for TUI sessions. Codex P2 on PR #202. Using Target (the
+      originating session looked up by SessionId), not FSession (the
+      currently-selected session) also fixes the cross-session race:
+      if the operator switched sessions while the loop was running,
+      pre-fix stats landed on the new session; now they land on the
+      session that actually ran the turn. }
+    Cfg := LoadConfig;
+    try
+      if Cfg.StatsCollectionEnabled then
+        AccumulateTurnStats(Target.Meta,
+                            Loop.TotalUsage.InputTokens,
+                            Loop.TotalUsage.OutputTokens,
+                            Loop.TotalUsage.CacheReadTokens,
+                            Loop.TotalUsage.CacheCreatedTokens,
+                            Loop.ToolCallsDispatched,
+                            Loop.TruncatedBytesSaved);
+    finally
+      Cfg.Free;
+    end;
     Target.AutoTitle;
     Target.Touch;
     Target.Save;

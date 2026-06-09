@@ -169,6 +169,93 @@ begin
   AssertEqInt(M.Stats.TruncationBytesSaved, 8192,  'after two calls: bytes doubled');
 end;
 
+procedure TestAccumulateThenSavePersistsCounters;
+(* Codex P2 on PR #202. The original wiring incremented Meta.Stats
+   AFTER ApplyLoopResultTo had already saved the session, so the
+   counters were never written to disk -- /v1/stats stayed at zero
+   for TUI sessions even with the flag on. This pins the corrected
+   ordering: bump first, save second, reload, read the counters
+   back. If a future refactor reverses the order this test fails
+   instead of silently losing data. *)
+var
+  Id: string;
+  S1, S2: TSession;
+begin
+  Id := 'stats-order-test-' + IntToStr(Random(MaxInt));
+  S1 := TSession.Create(Id);
+  try
+    AccumulateTurnStats(S1.Meta, 100, 200, 50, 25, 3, 4096);
+    S1.Save;  { the order under test: accumulate THEN save }
+  finally
+    S1.Free;
+  end;
+
+  S2 := TSession.Create(Id);
+  try
+    AssertTrue(S2.MetaExists, 'session present after accumulate-then-save');
+    AssertEqInt(S2.Meta.Stats.InputTokens,          100,  'on-disk input survives');
+    AssertEqInt(S2.Meta.Stats.OutputTokens,         200,  'on-disk output survives');
+    AssertEqInt(S2.Meta.Stats.Turns,                1,    'on-disk turns survives');
+    AssertEqInt(S2.Meta.Stats.ToolCalls,            3,    'on-disk tool_calls survives');
+    AssertEqInt(S2.Meta.Stats.TruncationBytesSaved, 4096, 'on-disk bytes survives');
+  finally
+    S2.Free;
+    DeleteFile(SessionPath(Id));
+  end;
+end;
+
+procedure TestAccumulateRoutesToOriginatingSession;
+(* Codex P2 on PR #202: in the TUI, the worker thread can complete
+   while the operator has already switched to a different session.
+   AccumulateTurnStats must apply to the ORIGINATING session
+   (looked up by id), not whatever's currently selected. We
+   simulate the race by creating two sessions, accumulating into
+   the FIRST one's Meta, switching the "current" reference to the
+   second one, saving the first, and asserting the second is
+   untouched. *)
+var
+  IdA, IdB: string;
+  SA, SB, Reload: TSession;
+begin
+  IdA := 'stats-orig-A-' + IntToStr(Random(MaxInt));
+  IdB := 'stats-orig-B-' + IntToStr(Random(MaxInt));
+  SA := TSession.Create(IdA);
+  SB := TSession.Create(IdB);
+  try
+    { Both sessions exist; both start with zero stats. }
+    SA.Save;
+    SB.Save;
+    { Simulate "loop originated on SA". }
+    AccumulateTurnStats(SA.Meta, 500, 1000, 0, 0, 7, 0);
+    SA.Save;
+    { SB is the "currently selected" session per the race scenario.
+      It must NOT pick up SA's counters. }
+  finally
+    SA.Free;
+    SB.Free;
+  end;
+
+  Reload := TSession.Create(IdA);
+  try
+    AssertEqInt(Reload.Meta.Stats.InputTokens, 500,
+                'originating session got the counters');
+  finally
+    Reload.Free;
+    DeleteFile(SessionPath(IdA));
+  end;
+
+  Reload := TSession.Create(IdB);
+  try
+    AssertEqInt(Reload.Meta.Stats.InputTokens, 0,
+                'sibling session stayed clean (no cross-session leak)');
+    AssertEqInt(Reload.Meta.Stats.Turns, 0,
+                'sibling session turns stayed zero');
+  finally
+    Reload.Free;
+    DeleteFile(SessionPath(IdB));
+  end;
+end;
+
 procedure TestStatsCollectionEnabledRoundTrip;
 { Default False; explicit True survives a JSON Save / Load. We
   pin both halves because the persistence helper for boolean
@@ -216,6 +303,8 @@ begin
   TestStatsRoundTrip;
   TestEmptyStatsOmitted;
   TestAccumulateTurnStatsAddsCorrectly;
+  TestAccumulateThenSavePersistsCounters;
+  TestAccumulateRoutesToOriginatingSession;
   TestStatsCollectionEnabledRoundTrip;
   WriteLn('session_stats_tests: OK');
 end.
