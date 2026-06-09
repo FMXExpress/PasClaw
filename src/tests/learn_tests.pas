@@ -137,6 +137,34 @@ begin
              'connection refused');
 end;
 
+procedure TestMakeAnchorName;
+{ The anchor is the SCARS join point ("fixes §FOO-BAR" in a commit
+  message). Pin the derivation so a later refactor of MakeAnchorName
+  doesn't silently rename every anchor in the operator's checked-in
+  SCARS.md. }
+begin
+  AssertEqStr(
+    MakeAnchorName('shell_exec failed: <path>: <n>: foo: command not found'),
+    'SHELL-EXEC-FAILED-FOO-COMMAND',
+    'placeholders drop, underscores split, first 5 tokens win');
+  AssertEqStr(
+    MakeAnchorName('permission denied <path>'),
+    'PERMISSION-DENIED',
+    'placeholders strip cleanly');
+  AssertEqStr(
+    MakeAnchorName('<n> <path> <hash>'),
+    'PATTERN',
+    'all-placeholder signature falls back to PATTERN');
+  AssertEqStr(
+    MakeAnchorName('the a an the to of from'),
+    'PATTERN',
+    'all-stopword signature falls back to PATTERN');
+  AssertEqStr(
+    MakeAnchorName('Cannot Find Module foo'),
+    'CANNOT-FIND-MODULE-FOO',
+    'casing normalises to upper, dashes between tokens');
+end;
+
 procedure TestLooksLikeFailureNegatives;
 { Precision matters: ordinary output lines must not match. The
   cost of a false positive is a noisy report the operator has to
@@ -160,5 +188,6 @@ begin
   TestClusteringContract;
   TestLooksLikeFailurePositives;
   TestLooksLikeFailureNegatives;
+  TestMakeAnchorName;
   WriteLn('learn_tests: OK');
 end.

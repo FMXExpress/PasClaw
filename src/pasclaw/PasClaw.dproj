@@ -146,6 +146,7 @@
         <DCCReference Include="..\cmd\PasClaw.Cmd.Post.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Membench.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Memory.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Export.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.TUI.pas"/>
 
         <!-- pkg/cliui -->

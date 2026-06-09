@@ -312,4 +312,13 @@ test-learn: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/learn_tests.pas -o$(BUILDDIR)/learn_tests
 	@$(BUILDDIR)/learn_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn
+# PasClaw.Cmd.Export — canonical body + format-specific framing for AGENTS.md /
+# CLAUDE.md / Cursor / Gemini / Zed adapter exports. PASCLAW_HOME is pointed at
+# a build-dir scratchspace so the test fixtures don't pollute the operator's
+# real ~/.pasclaw — see export_tests.pas FixtureHome for the contract.
+test-export: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/export_tests.pas -o$(BUILDDIR)/export_tests
+	@PASCLAW_HOME=$(BUILDDIR)/export-test-home $(BUILDDIR)/export_tests
+
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export
