@@ -18,9 +18,15 @@ program learn_tests;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}    { The TestReadExistingScars* fixtures embed `§`
+                        in string literals; without this directive
+                        FPC reinterprets the UTF-8 bytes through the
+                        host codepage and the round-trip drifts. }
+{$ENDIF}
 
 uses
-  SysUtils,
+  SysUtils, Classes,
   PasClaw.Cmd.Learn;
 
 procedure Fail(const Msg: string);
@@ -137,6 +143,92 @@ begin
              'connection refused');
 end;
 
+procedure TestReadExistingScarsRecognisesRenamedAnchors;
+{ Codex P2 on PR #197: the promise in MakeAnchorName's docstring
+  ("operators can rename anchors freely; pasclaw learn matches
+  patterns by signature, not by anchor name") is only kept if the
+  emitter actually persists a signature alongside each anchor and
+  the reader picks it up. Without this regression test the
+  contract drifts silently -- the rename-and-rerun path is rare
+  enough on any one operator's machine that the symptom (duplicate
+  block) would only surface once someone curates SCARS for a
+  while. Pin it now.
+
+  Fixture mimics three on-disk states in one file: a stock
+  emitter-produced block, an operator-renamed block (anchor
+  changed, signature marker preserved), and an entirely
+  hand-written block (no signature marker -- legacy / external).
+  Each case feeds a different branch of the skip logic. }
+const
+  FixturePath = '/tmp/pasclaw-learn-scars-fixture.md';
+var
+  Sl, Anchors, Signatures: TStringList;
+begin
+  Sl := TStringList.Create;
+  try
+    Sl.Add('# SCARS');
+    Sl.Add('');
+    Sl.Add('## §STOCK-ANCHOR');
+    Sl.Add('<!-- signature: stock signature stays put -->');
+    Sl.Add('**Symptom:** stock');
+    Sl.Add('');
+    Sl.Add('## §OPERATOR-RENAMED-THIS');
+    Sl.Add('<!-- signature: renamed entry keeps signature -->');
+    Sl.Add('**Symptom:** renamed');
+    Sl.Add('');
+    Sl.Add('## §HAND-WRITTEN');
+    Sl.Add('**Symptom:** no signature marker');
+    Sl.Add('');
+    Sl.SaveToFile(FixturePath);
+  finally
+    Sl.Free;
+  end;
+
+  Anchors := nil; Signatures := nil;
+  try
+    ReadExistingScars(FixturePath, Anchors, Signatures);
+
+    AssertTrue(Anchors.IndexOf('STOCK-ANCHOR') >= 0,
+               'reader picks up the stock anchor name');
+    AssertTrue(Anchors.IndexOf('OPERATOR-RENAMED-THIS') >= 0,
+               'reader picks up renamed anchor');
+    AssertTrue(Anchors.IndexOf('HAND-WRITTEN') >= 0,
+               'reader picks up signature-less anchor');
+
+    AssertTrue(Signatures.IndexOf('stock signature stays put') >= 0,
+               'reader extracts stock signature marker');
+    AssertTrue(Signatures.IndexOf('renamed entry keeps signature') >= 0,
+               'reader extracts signature even when anchor was renamed');
+    AssertTrue(Signatures.IndexOf('no signature marker') < 0,
+               'reader does NOT invent a signature where none was emitted');
+  finally
+    Anchors.Free;
+    Signatures.Free;
+    if FileExists(FixturePath) then DeleteFile(FixturePath);
+  end;
+end;
+
+procedure TestReadExistingScarsMissingFile;
+{ Missing file is not an error -- AppendToScarsMd leans on this to
+  treat first-run as "no existing anchors, write the header". Both
+  lists must come back empty rather than nil. }
+var
+  Anchors, Signatures: TStringList;
+begin
+  Anchors := nil; Signatures := nil;
+  try
+    ReadExistingScars('/tmp/pasclaw-does-not-exist-' + IntToStr(Random(MaxInt)),
+                      Anchors, Signatures);
+    AssertTrue(Anchors    <> nil, 'Anchors list returned even when file is missing');
+    AssertTrue(Signatures <> nil, 'Signatures list returned even when file is missing');
+    AssertTrue(Anchors.Count = 0,    'missing-file Anchors is empty');
+    AssertTrue(Signatures.Count = 0, 'missing-file Signatures is empty');
+  finally
+    Anchors.Free;
+    Signatures.Free;
+  end;
+end;
+
 procedure TestMakeAnchorName;
 { The anchor is the SCARS join point ("fixes §FOO-BAR" in a commit
   message). Pin the derivation so a later refactor of MakeAnchorName
@@ -189,5 +281,7 @@ begin
   TestLooksLikeFailurePositives;
   TestLooksLikeFailureNegatives;
   TestMakeAnchorName;
+  TestReadExistingScarsRecognisesRenamedAnchors;
+  TestReadExistingScarsMissingFile;
   WriteLn('learn_tests: OK');
 end.

@@ -47,6 +47,10 @@ unit PasClaw.Cmd.Learn;
 
 interface
 
+uses
+  Classes;    { TStringList -- needed for the ReadExistingScars
+                signature below. }
+
 function Cmd_Learn_Run(const Argv: array of string): Integer;
 
 (* Normalise a failure-shaped line into a clustering key. Strips
@@ -68,10 +72,25 @@ function LooksLikeFailure(const Line: string): Boolean;
    drifts, the link rots silently. *)
 function MakeAnchorName(const Signature: string): string;
 
+(* Parse an existing SCARS.md and return the set of anchor names
+   AND the set of signature markers found in `<!-- signature: ...
+   -->` lines. Re-runs of `learn --write-scars` skip a pattern
+   whose anchor OR signature is already present; the signature
+   path is the rename-survival promise from MakeAnchorName's
+   docstring. Exposed so a regression test can pin that
+   promise -- without it, renaming an anchor would silently
+   duplicate the block on the next run. (Codex P2 on PR #197.)
+   Both lists are caller-owned. *)
+procedure ReadExistingScars(const Path: string;
+                            out Anchors, Signatures: TStringList);
+
 implementation
 
 uses
-  SysUtils, Classes, DateUtils,
+  SysUtils, DateUtils,                { Classes already in interface uses
+                                        for TStringList in the ReadExistingScars
+                                        signature; pulling it in again here
+                                        triggers FPC "Duplicate identifier". }
   PasClaw.CliUI,
   PasClaw.Config,
   PasClaw.Utils,
@@ -671,43 +690,72 @@ begin
   Result := Result_;
 end;
 
-function ReadExistingAnchors(const Path: string): TStringList;
-{ Parse existing SCARS.md for anchor names so re-runs don't
-  duplicate or clobber. Returns a fresh sorted TStringList of every
-  `## §NAME` heading found; caller owns it. }
+procedure ReadExistingScars(const Path: string;
+                            out Anchors, Signatures: TStringList);
+{ Parse existing SCARS.md for anchor names AND the per-block
+  `<!-- signature: ... -->` markers we emit alongside them, so
+  re-runs don't duplicate even when the operator has renamed a
+  `## §ANCHOR` heading. Both lists are fresh sorted dupIgnore
+  TStringLists; caller owns them. Codex P2 on PR #197: the rename
+  promise in MakeAnchorName's docstring is only credible if we
+  actually persist the signature; reading by anchor alone meant a
+  renamed entry got duplicated on the next learn run. }
+const
+  SigMarker    = '<!-- signature:';
+  { #$C2#$A7 is the UTF-8 byte sequence for U+00A7 SECTION SIGN.
+    Spelling it out as escapes (rather than the literal `§` glyph)
+    pins the bytes regardless of the unit's source-codepage
+    handling -- FPC was implicitly transcoding the inline glyph
+    through the system codepage which left a different byte
+    sequence in the constant than what TStringList.LoadFromFile
+    returned, so the matcher silently failed. Pin once here. }
+  AnchorPrefix = '## ' + #$C2#$A7;
 var
-  Sl, Out_: TStringList;
+  Sl: TStringList;
   i: Integer;
-  Line, Name: string;
+  Line, Name, Sig: string;
+  EndPos: Integer;
 begin
-  Out_ := TStringList.Create;
-  Out_.Sorted     := True;
-  Out_.Duplicates := dupIgnore;
-  if not FileExists(Path) then Exit(Out_);
+  Anchors    := TStringList.Create;
+  Anchors.Sorted     := True;
+  Anchors.Duplicates := dupIgnore;
+  Signatures := TStringList.Create;
+  Signatures.Sorted     := True;
+  Signatures.Duplicates := dupIgnore;
+  if not FileExists(Path) then Exit;
   Sl := TStringList.Create;
   try
     try
       Sl.LoadFromFile(Path);
     except
-      Exit(Out_);
+      Exit;
     end;
     for i := 0 to Sl.Count - 1 do
     begin
       Line := Trim(Sl[i]);
-      { Match `## §NAME ...` -- the §...whitespace tail. }
-      if (Pos('## §', Line) = 1) then
+      { Match `## §NAME ...` -- the §...whitespace tail. The §
+        prefix is declared as a const at the top of this function
+        using #$C2#$A7 byte escapes so FPC can't transcode the
+        literal through a non-UTF-8 codepage at runtime. }
+      if (Pos(AnchorPrefix, Line) = 1) then
       begin
-        Name := Trim(Copy(Line, Length('## §') + 1, MaxInt));
+        Name := Trim(Copy(Line, Length(AnchorPrefix) + 1, MaxInt));
         { Drop any trailing description / annotation after the name. }
         if Pos(' ', Name) > 0 then
           Name := Copy(Name, 1, Pos(' ', Name) - 1);
-        if Name <> '' then Out_.Add(Name);
+        if Name <> '' then Anchors.Add(Name);
+      end
+      else if Pos(SigMarker, Line) = 1 then
+      begin
+        Sig := Trim(Copy(Line, Length(SigMarker) + 1, MaxInt));
+        EndPos := Pos('-->', Sig);
+        if EndPos > 0 then Sig := Trim(Copy(Sig, 1, EndPos - 1));
+        if Sig <> '' then Signatures.Add(Sig);
       end;
     end;
   finally
     Sl.Free;
   end;
-  Result := Out_;
 end;
 
 procedure AppendToScarsMd(const Patterns: TErrorPatternArray;
@@ -716,22 +764,25 @@ procedure AppendToScarsMd(const Patterns: TErrorPatternArray;
   §ANCHOR ids per pattern. Re-running does NOT clobber existing
   anchors -- operators routinely fill in Root cause / Do / Do NOT
   with hand-written rationale, and we'd be unfriendly to overwrite
-  that work. New patterns get a fresh anchor + boilerplate; known
-  patterns get skipped silently. (Refresh of See: counts on
-  existing anchors is a follow-up; for v1 the operator can drop
-  the file and re-run for full re-extraction.) }
+  that work. New patterns get a fresh anchor + boilerplate + an
+  embedded `<!-- signature: ... -->` marker; known patterns get
+  skipped silently (matched on either the anchor name OR the
+  persisted signature, so renamed-by-operator entries still match).
+  (Refresh of See: counts on existing anchors is a follow-up; for
+  v1 the operator can drop the file and re-run for full
+  re-extraction.) }
 var
   Path: string;
   Sl: TStringList;
-  Existing: TStringList;
+  ExistingAnchors, ExistingSignatures: TStringList;
   i, FreshCount, SkippedCount: Integer;
-  Anchor: string;
+  Anchor, Sig: string;
 begin
   Path := JoinPath(JoinPath(GetHome, 'workspace/memory'), 'SCARS.md');
   if not DirectoryExists(ExtractFilePath(Path)) then
     ForceDirectories(ExtractFilePath(Path));
 
-  Existing := ReadExistingAnchors(Path);
+  ReadExistingScars(Path, ExistingAnchors, ExistingSignatures);
   Sl := TStringList.Create;
   try
     if FileExists(Path) then
@@ -747,8 +798,11 @@ begin
       Sl.Add('failure surfaced by `pasclaw learn`. Anchor names are stable --');
       Sl.Add('cite them in commit messages and PRs (`git log --grep "§"`)');
       Sl.Add('to link a fix back to the failure it addresses. Operators');
-      Sl.Add('rename anchors freely; pasclaw learn matches patterns by');
-      Sl.Add('signature, not by anchor name.');
+      Sl.Add('rename anchors freely; pasclaw learn matches patterns by the');
+      Sl.Add('embedded `<!-- signature: ... -->` marker, not by anchor');
+      Sl.Add('name, so renames survive re-runs. Do not edit the signature');
+      Sl.Add('marker -- it is how we know we have already cataloged this');
+      Sl.Add('pattern.');
       Sl.Add('');
     end;
     if (Sl.Count > 0) and (Trim(Sl[Sl.Count - 1]) <> '') then
@@ -760,18 +814,28 @@ begin
     begin
       if Patterns[i].Sessions.Count < MinSessions then Continue;
       Anchor := MakeAnchorName(Patterns[i].Signature);
+      Sig    := Patterns[i].Signature;
 
-      { Re-runs leave operator-edited anchors alone. Same pattern
-        appearing in fresh sessions still bumps Cmd.Learn's
-        in-memory counts and reports back to stdout, but it
-        doesn't overwrite the on-disk SCARS entry. }
-      if Existing.IndexOf(Anchor) >= 0 then
+      { Re-runs leave operator-edited anchors alone. Match on
+        anchor OR signature -- the signature check is the one that
+        catches a renamed `## §FOO-BAR` heading whose underlying
+        pattern we'd otherwise duplicate. Same pattern appearing
+        in fresh sessions still bumps Cmd.Learn's in-memory counts
+        and reports back to stdout, but it doesn't overwrite the
+        on-disk SCARS entry. }
+      if (ExistingAnchors.IndexOf(Anchor) >= 0) or
+         (ExistingSignatures.IndexOf(Sig) >= 0) then
       begin
         Inc(SkippedCount);
         Continue;
       end;
 
-      Sl.Add(Format('## §%s', [Anchor]));
+      { #$C2#$A7 = U+00A7 SECTION SIGN. Spelled out as a byte
+        escape so the bytes we emit here match the bytes
+        ReadExistingScars looks for via AnchorPrefix -- see the
+        const block in that function for the why. }
+      Sl.Add(Format('## ' + #$C2#$A7 + '%s', [Anchor]));
+      Sl.Add(Format('<!-- signature: %s -->', [Sig]));
       Sl.Add('');
       Sl.Add(Format('**Symptom:** %s', [Patterns[i].Sample]));
       Sl.Add('');
@@ -792,8 +856,12 @@ begin
       Sl.Add('');
 
       Inc(FreshCount);
-      Existing.Add(Anchor);    { in-run dedup against later patterns
-                                 that collapse to the same anchor }
+      ExistingAnchors.Add(Anchor);       { in-run dedup against later
+                                           patterns that collapse to
+                                           the same anchor }
+      ExistingSignatures.Add(Sig);       { and against later
+                                           patterns with the same
+                                           normalised signature }
     end;
 
     if FreshCount = 0 then
@@ -810,7 +878,8 @@ begin
                    [FreshCount, Path, SkippedCount]));
   finally
     Sl.Free;
-    Existing.Free;
+    ExistingAnchors.Free;
+    ExistingSignatures.Free;
   end;
 end;
 
