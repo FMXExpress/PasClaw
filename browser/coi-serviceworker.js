@@ -20,21 +20,36 @@ if (typeof window === 'undefined') {
   self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
   self.addEventListener('fetch', (event) => {
     const req = event.request;
+    // Only GETs need the isolation headers. Leave POSTs and other methods
+    // (e.g. Cloudflare's /cdn-cgi/rum analytics beacon) completely alone —
+    // their responses often have null-body statuses that can't be rewrapped.
+    if (req.method !== 'GET') return;
     if (req.cache === 'only-if-cached' && req.mode !== 'same-origin') return;
     event.respondWith(
       fetch(req)
         .then((res) => {
-          if (res.status === 0) return res; // opaque — leave as-is
+          // Don't rebuild responses that legally can't carry a body
+          // (1xx / 204 / 205 / 304) or opaque/redirect (status 0) —
+          // constructing a new Response with a body for those throws
+          // "Response with null body status cannot have body".
+          if (res.status === 0 || res.type === 'opaqueredirect' ||
+              res.status === 101 || res.status === 103 ||
+              res.status === 204 || res.status === 205 || res.status === 304) {
+            return res;
+          }
           const headers = new Headers(res.headers);
           headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
           headers.set('Cross-Origin-Opener-Policy', 'same-origin');
+          headers.set('Cross-Origin-Resource-Policy', 'cross-origin');
           return new Response(res.body, {
             status: res.status,
             statusText: res.statusText,
             headers,
           });
         })
-        .catch((e) => console.error(e))
+        // Never resolve respondWith with undefined (that throws "Failed to
+        // convert value to 'Response'"); surface a network error instead.
+        .catch((e) => { console.error('[coi]', e); return Response.error(); })
     );
   });
 } else {
