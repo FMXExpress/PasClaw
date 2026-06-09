@@ -7,7 +7,7 @@
     3. Pick the asset matching the host OS+CPU (naming convention:
        pasclaw_<os>_<cpu>[.exe]).
     4. Download to <binary>.new alongside the current binary.
-    5. On POSIX, rename(<binary>.new, <binary>) — replacing an executable
+    5. On POSIX, rename(<binary>.new, <binary>) -- replacing an executable
        while it runs is legal on Linux/macOS.
     6. On Windows, leave <binary>.new in place and print instructions; an
        upgrade helper or restart script does the actual swap. (Phase 10
@@ -261,7 +261,7 @@ begin
   ErrMsg := '';
   {$IFDEF MSWINDOWS}
   { Windows can't replace a running .exe; leave the .new file in place. }
-  LogInfo('updater: new binary at %s — restart pasclaw and move it over.', [DownloadedPath]);
+  LogInfo('updater: new binary at %s -- restart pasclaw and move it over.', [DownloadedPath]);
   Result := True;
   {$ELSE}
   if not RenameFile(DownloadedPath, TargetBinary) then

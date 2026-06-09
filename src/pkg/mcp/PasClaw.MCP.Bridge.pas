@@ -28,7 +28,7 @@
        forever.
 
   Dispatch uses TTool.HandlerObj (method-of-object) so each registered
-  tool carries its server+tool context implicitly — no fixed slot table,
+  tool carries its server+tool context implicitly -- no fixed slot table,
   no per-slot handler boilerplate, no MaxBindings cap. Replicate's
   catalog can be as big as it wants.
 
@@ -62,7 +62,7 @@ type
 
 { Connect every enabled MCP server from the config and register their tools
   into Reg. Cached tools become visible immediately; live connects happen
-  in background threads. Returns the list of loader threads — pass it back
+  in background threads. Returns the list of loader threads -- pass it back
   to FreeMCPClients to drain on shutdown. }
 function ConnectMCPServers(Cfg: TConfig; Reg: TToolRegistry): TMCPClientList;
 procedure FreeMCPClients(var Clients: TMCPClientList);
@@ -94,7 +94,7 @@ type
   { Per-server shared state. One instance per MCP server entry; every
     tool dispatched for that server reads its live Client + State from
     here. Also owns the list of TMCPToolDispatch instances created on
-    its behalf — they outlive any single tools/list call so the
+    its behalf -- they outlive any single tools/list call so the
     registry's HandlerObj pointers stay valid for the process lifetime. }
   TMCPServerState = class
   private
@@ -104,7 +104,7 @@ type
     FState:      TMCPLoadState;
     FError:       string;
     FDispatchLock: TCriticalSection;  { guards FDispatches concurrent grow/scan }
-    FDispatches:  TList;              { TList of TMCPToolDispatch — owned }
+    FDispatches:  TList;              { TList of TMCPToolDispatch -- owned }
   public
     constructor Create(const AName: string);
     destructor  Destroy; override;
@@ -132,7 +132,7 @@ type
   end;
 
 var
-  GStates: TList;  { TList of TMCPServerState — owned; freed in FreeMCPClients }
+  GStates: TList;  { TList of TMCPServerState -- owned; freed in FreeMCPClients }
 
 constructor TMCPServerState.Create(const AName: string);
 begin
@@ -177,7 +177,7 @@ begin
   try
     FState := lsFailed;
     FError := Err;
-    { Keep FClient as-is — if a prior connect had succeeded and the
+    { Keep FClient as-is -- if a prior connect had succeeded and the
       refresh subsequently failed, calls can still go through the old
       session until the next FreeMCPClients. The MCP HTTP client will
       surface its own error if the session has gone stale. }
@@ -207,7 +207,7 @@ begin
   case S of
     lsLoading:
       begin
-        ErrMsg := Format('mcp[%s] still connecting — retry in a moment', [FName]);
+        ErrMsg := Format('mcp[%s] still connecting -- retry in a moment', [FName]);
         Exit;
       end;
     lsFailed:
@@ -288,7 +288,7 @@ begin
   Entry.Name        := NamespacedToolName(Server, Tool.Name);
   Entry.Description := '[mcp:' + Server + '] ' + Tool.Description;
   Entry.Schema      := Tool.Schema;
-  { Object-method dispatch — no static slot indirection, no MaxBindings
+  { Object-method dispatch -- no static slot indirection, no MaxBindings
     cap. The registry zeros Handler when HandlerObj is set elsewhere;
     here we point Handler at nil and rely on RunTool's "if Assigned
     HandlerObj" branch. }
@@ -299,7 +299,7 @@ begin
 end;
 
 { ============================================================
-  TMCPLoader — one per MCP server, runs Connect+ListTools async.
+  TMCPLoader -- one per MCP server, runs Connect+ListTools async.
   ============================================================ }
 
 constructor TMCPLoader.Create(const ServerCfg: TMCPServer; Reg: TToolRegistry;
@@ -316,17 +316,17 @@ end;
 destructor TMCPLoader.Destroy;
 begin
   { Execute either transferred FClient to FState (and nulled FClient
-    here) or failed before reaching that point — in which case the
+    here) or failed before reaching that point -- in which case the
     client is still ours to free. }
   if FClient <> nil then begin FClient.Free; FClient := nil; end;
   inherited Destroy;
 end;
 
 {$IFDEF MSWINDOWS}
-{ ole32 imports — declared locally instead of pulling in Windows /
+{ ole32 imports -- declared locally instead of pulling in Windows /
   Winapi.ActiveX so the bridge stays cross-compiler-friendly. WinHTTP
   (which System.Net.HttpClient uses under PASCLAW_NETHTTP) needs COM
-  initialised on any thread that issues a request — without it the
+  initialised on any thread that issues a request -- without it the
   WinHTTP proxy/cert/cred plumbing can't talk to the OS providers and
   every request fails with WINHTTP_NAME_NOT_RESOLVED (12007) even
   though main-thread requests against the same host succeed fine.
@@ -372,7 +372,7 @@ begin
 
     { Always re-register every live tool. Reuse the existing
       dispatch object (created in the cache pass) when one is
-      present so HandlerObj pointer stability holds — only the
+      present so HandlerObj pointer stability holds -- only the
       description and schema on the TTool entry change. Skipping
       re-registration when a cached entry exists would leave the
       registry stuck on yesterday's (possibly stale) description
@@ -380,7 +380,7 @@ begin
       the (live, working) dispatch object. Codex P2 on PR #141.
       FindDispatchFor + Register are both O(N); for several
       thousand tools that's an O(N²) one-time cost in the loader
-      thread — acceptable, but if it ever becomes noticeable
+      thread -- acceptable, but if it ever becomes noticeable
       promote FDispatches to a sorted TStringList. }
     for i := 0 to High(Tools) do
     begin

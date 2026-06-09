@@ -15,7 +15,7 @@
   surfacing the raw Indy / TZipFile exception text.
 
   We deliberately do not pre-validate the archive (size limit, file
-  count, etc.) — the install layer in PasClaw.Skills.GitHub already
+  count, etc.) -- the install layer in PasClaw.Skills.GitHub already
   bounds the download to a sensible cap and validates the final tree
   by looking for SKILL.md. Anything weirder (zip-slip, encrypted
   archives, etc.) should be checked there, not here.

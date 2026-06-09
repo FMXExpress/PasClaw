@@ -38,7 +38,7 @@ type
     Fallbacks and PasClaw.Providers.Factory.ResolveFallbacks. Declared
     here (not in Factory) so PasClaw.Tools.ToolLoop can reference the
     named type without picking up the whole factory dependency, which
-    matters under dcc64 — Delphi 12 enforces strict named-type matching
+    matters under dcc64 -- Delphi 12 enforces strict named-type matching
     on dynamic-array assignments, so an inline `array of ILLMProvider`
     on TToolLoopConfig.Fallbacks would reject the named-type return of
     ResolveFallbacks with E2010. }

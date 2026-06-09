@@ -7,7 +7,7 @@
   configured adapter via PasClaw.Search.Factory, so adding a new
   provider is a single new unit plus a case-branch in the factory.
 
-  Result records are flat — title + URL + snippet. picoclaw's richer
+  Result records are flat -- title + URL + snippet. picoclaw's richer
   shape (favicons, dates, scores) is provider-specific and not worth
   the abstraction tax for what the model actually reads.
 *)

@@ -1,5 +1,5 @@
 program markdown_render_tests;
-{ Covers PasClaw.Markdown.Render — the ANSI styler for LLM output
+{ Covers PasClaw.Markdown.Render -- the ANSI styler for LLM output
   in the terminal. We don't assert on exact escape codes because
   Ansi.* fields are configurable; instead, prove the structural
   transformations happened: marker chars consumed, content
@@ -87,7 +87,7 @@ begin
 end;
 
 procedure TestBulletList;
-{ Bullet glyph form depends on the compiler's `string` type — see
+{ Bullet glyph form depends on the compiler's `string` type -- see
   the GLYPH_* const block in PasClaw.Markdown.Render. On FPC the
   renderer emits the raw UTF-8 bytes of U+2022; on Delphi it emits
   the single UTF-16 code unit U+2022. Both are correct for their
@@ -123,7 +123,7 @@ begin
                         '```' + sLineBreak +
                         'after');
   AssertContains(Got, 'x := 1;', 'fenced code body preserved');
-  { Bold markers inside a fenced block must NOT be transformed —
+  { Bold markers inside a fenced block must NOT be transformed --
     that's the model's literal code, not styling. }
   AssertContains(Got, '**not bold inside**',
     'bold inside fenced block stays verbatim');
@@ -177,7 +177,7 @@ procedure TestInlineCodeProtectsMarkdownMarkers;
 var
   Got: string;
 begin
-  { **kwargs** literally inside code — must show as bold-marker
+  { **kwargs** literally inside code -- must show as bold-marker
     literals, NOT as the word "kwargs" rendered bold. }
   Got := RenderMarkdown('use `**kwargs**` to splat');
   AssertContains(Got, '**kwargs**',
@@ -185,25 +185,25 @@ begin
   AssertContains(Got, 'to splat',
     'text after the code span preserved');
 
-  { *.pas — the asterisk inside the code span must not start an
+  { *.pas -- the asterisk inside the code span must not start an
     italic. Before the fix, `*.pas` would get the * consumed and
     the rest mangled. }
   Got := RenderMarkdown('the `*.pas` files');
   AssertContains(Got, '*.pas',
     '* inside `..` survives the italic transform');
 
-  { [text](url) inside code — must not become a link. }
+  { [text](url) inside code -- must not become a link. }
   Got := RenderMarkdown('see `[x](y)` syntax');
   AssertContains(Got, '[x](y)',
     'link syntax inside `..` survives the link transform');
 
-  { Two adjacent code spans with markers in both — both must
+  { Two adjacent code spans with markers in both -- both must
     survive intact. }
   Got := RenderMarkdown('mix `**a**` and `**b**` here');
   AssertContains(Got, '**a**', 'first code span markers survive');
   AssertContains(Got, '**b**', 'second code span markers survive');
 
-  { Code followed by genuine bold — code body protected, the real
+  { Code followed by genuine bold -- code body protected, the real
     bold OUTSIDE the code still applies. }
   Got := RenderMarkdown('`raw**stays**raw` then **really bold**');
   AssertContains(Got, 'raw**stays**raw',

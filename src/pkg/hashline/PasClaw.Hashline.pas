@@ -609,13 +609,13 @@ function ValidateHashlinePatchGrammar(const PatchText: string;
 { HL_PAYLOAD_ABOVE / HL_PAYLOAD_BELOW are multi-byte UTF-8 sequences
   in FPC mode delphi (where Char = AnsiChar, single byte) and single
   WideChars in Delphi. `L[p+1] = HL_PAYLOAD_BELOW` compares one
-  AnsiChar against a 3-byte string under FPC and never matches —
+  AnsiChar against a 3-byte string under FPC and never matches --
   the validator silently accepted "60:↓bad inline payload" instead
   of flagging it, and the canonical inline-payload check became
   Delphi-only. Use Copy(L, p+1, Length(MARKER)) so the comparison
   works in byte units on FPC and char units on Delphi without
   changing semantics on either side. Same reason the error-message
-  Copy uses Length(Match) instead of a hard-coded 2 — under FPC
+  Copy uses Length(Match) instead of a hard-coded 2 -- under FPC
   Copy(L, p, 2) only catches `:` plus the first byte of `↓`, so
   the reported snippet would be a truncated mojibake. }
 var

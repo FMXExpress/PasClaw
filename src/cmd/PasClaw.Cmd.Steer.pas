@@ -1,5 +1,5 @@
 ﻿(*
-  PasClaw.Cmd.Steer — push a follow-up message into a running
+  PasClaw.Cmd.Steer -- push a follow-up message into a running
   agent's mid-loop steering queue. Mirrors picoclaw's `steer`
   subcommand and nanobot's _inject_pending side-channel.
 
@@ -98,7 +98,7 @@ begin
   end
   else
   begin
-    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'push failed — invalid session id "' + Id + '" or write error');
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'push failed -- invalid session id "' + Id + '" or write error');
     Exit(1);
   end;
 end;

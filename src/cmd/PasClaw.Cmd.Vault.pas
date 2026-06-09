@@ -1,12 +1,12 @@
 ﻿(*
-  PasClaw.Cmd.Vault — `pasclaw vault <search|show|install>`.
+  PasClaw.Cmd.Vault -- `pasclaw vault <search|show|install>`.
 
     pasclaw vault search <query> [--limit N]
         Search the pasclaw.dev Code Vault. Prints a table of
         matching entries (slug + version + name + summary).
 
     pasclaw vault show <slug>
-        Print full entry detail — description, repo URL, license,
+        Print full entry detail -- description, repo URL, license,
         Delphi versions, install snippet.
 
     pasclaw vault install <slug> [<dest-path>]
@@ -14,7 +14,7 @@
         $PASCLAW_HOME/workspace/vault/<slug> if not given).
         Refuses if the destination already exists.
 
-  Vault entries are GitHub repos — there's no zip / download step
+  Vault entries are GitHub repos -- there's no zip / download step
   the way Skills + ClawHub have. The install path shells out to
   `git clone` and inherits whatever git auth the user already has.
 *)
@@ -153,7 +153,7 @@ function RunGitClone(const RepoURL, DestDir: string; out ErrMsg: string): Boolea
   TStdioProcess (fcl-process on FPC; CreateProcess / fork+execvp on
   Delphi) so both compilers can drain output the same way. Inherits
   whatever git auth the user already has (SSH keys, credential
-  helper, etc.) — we don't handle private-repo auth ourselves.
+  helper, etc.) -- we don't handle private-repo auth ourselves.
   Output is streamed to stdout so the user sees clone progress in
   real time. }
 var
@@ -172,7 +172,7 @@ begin
     Args.Add('--');
     Args.Add(RepoURL);
     Args.Add(DestDir);
-    { git writes progress and most fatal messages to stderr — merge it
+    { git writes progress and most fatal messages to stderr -- merge it
       into stdout so users see clone progress and so a chatty failure
       can't block the child on a full stderr pipe. }
     if not P.Spawn('git', Args, {MergeStderr=}True) then
@@ -232,12 +232,12 @@ begin
   if Detail.Blocked then
   begin
     PrintLn(Ansi.Red + '✗ ' + Ansi.Reset +
-            'pasclaw.dev flagged "' + Slug + '" as malware — refusing install');
+            'pasclaw.dev flagged "' + Slug + '" as malware -- refusing install');
     Exit(1);
   end;
   if Detail.Suspicious then
     PrintLn(Ansi.Yellow + '! ' + Ansi.Reset +
-            'pasclaw.dev flagged "' + Slug + '" as suspicious — proceeding anyway');
+            'pasclaw.dev flagged "' + Slug + '" as suspicious -- proceeding anyway');
   if Detail.RepoURL = '' then
   begin
     PrintLn(Ansi.Red + '✗ ' + Ansi.Reset +

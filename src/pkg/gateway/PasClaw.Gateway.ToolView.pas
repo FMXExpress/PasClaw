@@ -34,12 +34,12 @@ const
 
      Encoded the way the active compiler's `string` type wants them, same
      trick as PasClaw.Markdown.Render after PR #157. On FPC mode delphi
-     `string`=AnsiString, `Char`=AnsiChar (1 byte) — a literal '⏺' is a
+     `string`=AnsiString, `Char`=AnsiChar (1 byte) -- a literal '⏺' is a
      3-byte UTF-8 sequence tagged with whichever codepage the source file
      resolves to, and concatenating it with a CP_0-tagged variable can
      drop it to '?' on a non-UTF-8 locale; raw `#$XX#$XX#$XX` byte
      constants are codepage-agnostic. On Delphi `string`=UnicodeString,
-     `Char`=WideChar — the single WideChar form is the natural way to
+     `Char`=WideChar -- the single WideChar form is the natural way to
      name the codepoint and WriteConsoleW renders it directly.
 
      Codepoints: U+23FA ⏺ BLACK CIRCLE FOR RECORD, U+23BF ⎿ LIGHT
@@ -62,12 +62,12 @@ const
     ⏺ fs_grep("TODO" in src)
   Known tools surface their most meaningful argument; unknown / MCP tools fall
   back to a compact single-line dump of the raw arguments. The result has no
-  surrounding newlines — the caller frames it for the stream. }
+  surrounding newlines -- the caller frames it for the stream. }
 function FormatToolCallLine(const Name, ArgsJSON: string): string;
 
 { One visible line summarizing a tool result, indented two spaces to sit under
   its call line, e.g.
-    ⎿ 312 lines, 12044 bytes — ¶README.md#a1b2
+    ⎿ 312 lines, 12044 bytes -- ¶README.md#a1b2
     ⎿ exit=0
     ⎿ ✗ file not found
   No trailing newline. }
@@ -165,7 +165,7 @@ var
   Obj: TJsonObject;
   Summary, Pattern, Path, Inc_: string;
 begin
-  { TJsonObject.Parse raises EPasClawJSON on malformed input — providers
+  { TJsonObject.Parse raises EPasClawJSON on malformed input -- providers
     occasionally stream truncated `arguments` (the tool loop tolerates
     this and surfaces a per-tool error). Swallow the parse failure here
     and treat Obj as nil so the unknown-tool branch echoes the raw
@@ -242,7 +242,7 @@ begin
       fs_read/fs_grep, "exit=N" on shell_exec, etc.). }
     Preview := Ellipsize(CollapseWhitespace(FirstLineOf(ResultText)), MaxPreviewWidth);
     if Preview <> '' then
-      Body := Format('%d lines, %d bytes — %s', [Lines, Bytes, Preview])
+      Body := Format('%d lines, %d bytes -- %s', [Lines, Bytes, Preview])
     else
       Body := Format('%d lines, %d bytes', [Lines, Bytes]);
   end;

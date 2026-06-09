@@ -5,14 +5,14 @@
 
   The previous shell tool shipped six substring checks (rm -rf /,
   mkfs, dd if=, fork bomb, shutdown -h) and the FS tools had no path
-  check at all — the unit header in PasClaw.Tools.FS.pas said
+  check at all -- the unit header in PasClaw.Tools.FS.pas said
   "Paths are not sandboxed by default; the gateway will install a
   workspace-restricted variant in Phase 4" and that variant was
   never written. This unit is that variant.
 
   Architecture: module-level GPolicy / GWorkspace, set once via
   Configure() from each command's startup. Tool handlers receive
-  only an ArgsJSON string — there is no provider context to plumb a
+  only an ArgsJSON string -- there is no provider context to plumb a
   policy through, so a module-level singleton is the only option.
   Configure() is idempotent and may be called repeatedly; the most
   recent call wins.
@@ -33,7 +33,7 @@
   regex patterns. PasClaw.Tools.Regex wraps FPC's RegExpr and
   Delphi's System.RegularExpressions behind one call so config.json
   takes the same syntax as picoclaw's tools.allow_read_paths /
-  tools.allow_write_paths — anchors (^ $), character classes,
+  tools.allow_write_paths -- anchors (^ $), character classes,
   alternation, etc. Empty / invalid patterns fall through to the
   workspace boundary instead of crashing the agent.
 
@@ -50,7 +50,7 @@
   passes CurrentWorkspace into RunOneShot so the child shell starts
   inside the workspace. Combined with the cd / chdir / pushd / popd
   token denylist and the '..' traversal check, this closes the
-  relative-path bypass — a model that says "cat ../secret" hits the
+  relative-path bypass -- a model that says "cat ../secret" hits the
   refusal before the process spawns, and even if a pattern slips
   through the denylist, the shell's cwd is the workspace, not
   whatever directory the user happened to invoke pasclaw from.
@@ -58,7 +58,7 @@
   Canonicalization: ExpandFileName resolves '..' and relative
   references against the current working directory. Symlinks
   pointing outside the workspace can still escape on platforms
-  where the OS does not normalize them at the syscall layer —
+  where the OS does not normalize them at the syscall layer --
   picoclaw avoids that via Go 1.24's os.OpenRoot, which we do not
   have an equivalent for in FPC/Delphi RTL. The README's Security
   section flags this as a known limitation.
@@ -158,7 +158,7 @@ function PathsEqual(const A, B: string): Boolean; inline;
 begin
   { On case-sensitive filesystems (Linux, macOS with HFS+ case-sensitive,
     most BSDs) "/tmp/workspace" and "/tmp/Workspace" are different
-    directories — using SameText here would treat them as one and let
+    directories -- using SameText here would treat them as one and let
     the model escape the boundary by varying the case of a path that
     happens to also exist with a different casing. On Windows
     filesystems are case-insensitive at the OS level, so SameText is
@@ -192,7 +192,7 @@ function AnyRegexMatches(const S: string; const Patterns: array of string): Bool
     allow_read_paths:  ["^/tmp/.*", "^/usr/(include|share)/.*"]
 
   Compared with the earlier glob matcher (just '*' and '?'), this
-  gives users character classes, anchors, alternation, etc. — the
+  gives users character classes, anchors, alternation, etc. -- the
   set picoclaw's `allow_read_paths` accepts, since picoclaw is also
   PCRE-style. Migration note for any config that used the old
   globs: '/tmp/*' becomes '^/tmp/.*' (anchor the prefix, replace
@@ -242,7 +242,7 @@ end;
 
 const
   { Tokens that, when found as a whitespace-separated word in the
-    command, abort the call. The denylist tries to be conservative —
+    command, abort the call. The denylist tries to be conservative --
     these are commands the model has no business running from a
     chat session even on a developer workstation.
 
@@ -260,18 +260,18 @@ const
       tokenizer splits on whitespace + shell metacharacters, so only
       stand-alone tokens trigger the match.
 
-      cd / chdir / pushd / popd are NOT in here — they live in
+      cd / chdir / pushd / popd are NOT in here -- they live in
       WorkspaceEscapeTokens below, which is checked only when the
       workspace restriction is active. Banning the cd-family
       unconditionally broke legitimate compile-and-build flows
       ("cmd /c cd <proj> && dcc32 …") in unrestricted mode for no
-      additional safety — the workspace boundary is what they were
+      additional safety -- the workspace boundary is what they were
       ever meant to protect, so they only matter when that boundary
       exists. *)
   ForbiddenTokens: array[0..23] of string = (
     'sudo',
     'su',
-    'rm',          { all rm — too easy to escape -rf detection }
+    'rm',          { all rm -- too easy to escape -rf detection }
     'chmod',
     'chown',
     'pkill',
@@ -295,7 +295,7 @@ const
     'runas'
   );
 
-  (*  Tokens that would let the model escape the workspace cwd pin —
+  (*  Tokens that would let the model escape the workspace cwd pin --
       the workspace restriction binds the shell's cwd to GWorkspace
       and runs the abs-path scanner on the rest of the command;
       letting the model chdir would defeat both. Only enforced when
@@ -311,7 +311,7 @@ const
 
   { Substrings that, when present anywhere in the lowercased command,
     abort the call. Covers picoclaw's regex patterns expressed as
-    plain literals — adequate because the patterns themselves are
+    plain literals -- adequate because the patterns themselves are
     just punctuation runs ($(...), `...`, etc.) or fixed token
     sequences (apt install, npm install -g, etc.). }
   ForbiddenSubstrings: array[0..43] of string = (
@@ -328,7 +328,7 @@ const
     '|bash',
     '|/bin/sh',
     '|/bin/bash',
-    { curl and wget are intentionally NOT denied — they're the
+    { curl and wget are intentionally NOT denied -- they're the
       conventional way the model fetches arbitrary URLs from the
       shell, and we already provide web_fetch as the tracked-tool
       alternative. Denying them put PasClaw strictly behind picoclaw
@@ -348,7 +348,7 @@ const
     'git push',
     'git force',
     'format c:',
-    { Windows-specific patterns — picoclaw lists these in its
+    { Windows-specific patterns -- picoclaw lists these in its
       windowsDenyPatterns group. They are checked unconditionally
       since shell_exec on Windows pipes through cmd.exe /C, and
       letting them through "because we are on Linux right now"
@@ -507,7 +507,7 @@ function HasTraversalToken(const Cmd: string; out OffendingToken: string): Boole
   though no '/' token shows up.
 
   We flag any token containing '..' anywhere. False positives like
-  `git log v1.0..v2.0` (a git range) get rejected too — that is an
+  `git log v1.0..v2.0` (a git range) get rejected too -- that is an
   acceptable trade-off; a sandboxed agent should be writing absolute
   paths or relative paths that stay inside the workspace, and the
   rare git-range case can be replaced by something else or run with
@@ -552,7 +552,7 @@ begin
       while (i <= Length(Cmd)) and not IsPathBreak(Cmd[i]) do
         Inc(i);
       Token := Copy(Cmd, Start, i - Start);
-      { Kernel pseudo-devices are always safe — picoclaw's safePaths. }
+      { Kernel pseudo-devices are always safe -- picoclaw's safePaths. }
       IsSafeDev := SameText(Token, '/dev/null')    or SameText(Token, '/dev/zero')   or
                    SameText(Token, '/dev/random')  or SameText(Token, '/dev/urandom') or
                    SameText(Token, '/dev/stdin')   or SameText(Token, '/dev/stdout') or
@@ -587,7 +587,7 @@ begin
     begin
       Reason := 'refused: command contains forbidden token "' + Hit +
                 '" (built-in shell denylist; toggle off via sandbox.shell_deny_enabled=false ' +
-                'in config.json — strongly discouraged)';
+                'in config.json -- strongly discouraged)';
       Exit(False);
     end;
     if MatchesAnySubstring(Cmd, Hit) then
@@ -600,7 +600,7 @@ begin
 
   if GPolicy.RestrictToWorkspace then
   begin
-    { cd / chdir / pushd / popd only matter when restriction is on —
+    { cd / chdir / pushd / popd only matter when restriction is on --
       they'd let the model escape the workspace cwd pin. In
       unrestricted mode the model can chdir freely (regular CLI use,
       no cwd to pin). Gating these here, rather than in the
@@ -638,7 +638,7 @@ begin
 end;
 
 initialization
-  { Defaults match TConfig.Create — sandbox is off, denylist is on.
+  { Defaults match TConfig.Create -- sandbox is off, denylist is on.
     Real values land via Configure() during command startup. }
   GPolicy.RestrictToWorkspace       := False;
   GPolicy.AllowReadOutsideWorkspace := False;

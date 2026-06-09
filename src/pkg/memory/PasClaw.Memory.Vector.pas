@@ -9,14 +9,14 @@
       parallel FTS5 (BM25) and vec0 (sqlite-vec / KNN) tables sharing
       the same row ids.
     - TEmbedder + TBertTokenizer run a sentence-transformer ONNX model
-      locally — MiniLM by default, ~90 MB of weights, 384-d output. No
+      locally -- MiniLM by default, ~90 MB of weights, 384-d output. No
       outbound API calls; embeddings never leave the host.
     - Search fuses the FTS5 and vec0 ranked id lists via Reciprocal
       Rank Fusion before returning hits.
 
   Open() returns False when any runtime piece is missing (sqlite-vec
-  extension, ONNX Runtime DLL, model weights, vocab.txt). The caller —
-  PasClaw.Tools.Memory — falls back to the FTS-only NewMemoryIndex on
+  extension, ONNX Runtime DLL, model weights, vocab.txt). The caller --
+  PasClaw.Tools.Memory -- falls back to the FTS-only NewMemoryIndex on
   False so missing provisioning never breaks memory_search, just
   degrades it. Provisioning itself lives in a future phase.
 
@@ -24,7 +24,7 @@
   will write the auto-downloaded artifacts):
 
     <home>/cache/localvector/
-      onnxruntime.{so,dll,dylib}   ONNX Runtime — Linux/macOS users
+      onnxruntime.{so,dll,dylib}   ONNX Runtime -- Linux/macOS users
                                    install via system pkg manager
                                    until the auto-downloader extends
                                    beyond win-x64 (LocalVector.OrtProvision
@@ -50,7 +50,7 @@ uses
   PasClaw.Memory.Index;
 
 (* Construct an IMemoryIndex backed by the in-tree localvector hybrid
-   store. Open() returns False if any provisioning piece is missing —
+   store. Open() returns False if any provisioning piece is missing --
    callers should fall back to PasClaw.Memory.Index.NewMemoryIndex on
    False. *)
 function NewVectorMemoryIndex: IMemoryIndex;
@@ -99,7 +99,7 @@ constructor TVectorMemoryIndex.Create;
 begin
   inherited Create;
   if not FindModelSpec(DEFAULT_MODEL, FModelSpec) then
-    { Should never happen — DEFAULT_MODEL is hard-coded in the registry.
+    { Should never happen -- DEFAULT_MODEL is hard-coded in the registry.
       If localvector ever drops the default we'd want loud failure. }
     raise Exception.CreateFmt(
       'localvector default model "%s" not in registry', [DEFAULT_MODEL]);
@@ -168,32 +168,32 @@ function TVectorMemoryIndex.Open(const DbPath: string): Boolean;
   piece) rather than raising so PasClaw.Tools.Memory can degrade to
   the FTS-only path without a stack trace landing in the agent
   transcript. Every failure mode here is "operator hasn't provisioned
-  the runtime artifacts yet" — expected for now. }
+  the runtime artifacts yet" -- expected for now. }
 begin
   Result := False;
   if FOpen then Exit(True);
   if not FileExists(VecExtPath) then
   begin
-    LogDebug('vector memory: sqlite-vec extension not found at %s — ' +
+    LogDebug('vector memory: sqlite-vec extension not found at %s -- ' +
              'falling back to FTS5-only', [VecExtPath]);
     Exit;
   end;
   if not FileExists(ModelOnnxPath) then
   begin
-    LogDebug('vector memory: embedding model not found at %s — ' +
+    LogDebug('vector memory: embedding model not found at %s -- ' +
              'falling back to FTS5-only', [ModelOnnxPath]);
     Exit;
   end;
   if not FileExists(VocabPath) then
   begin
-    LogDebug('vector memory: tokenizer vocab not found at %s — ' +
+    LogDebug('vector memory: tokenizer vocab not found at %s -- ' +
              'falling back to FTS5-only', [VocabPath]);
     Exit;
   end;
   try
     { ONNX Runtime: try the cache dir first (where provisioning will
       drop it), then let the system loader try (LD_LIBRARY_PATH /
-      system libonnxruntime). AAllowDownload stays False here — the
+      system libonnxruntime). AAllowDownload stays False here -- the
       agent transcript is the wrong place to surface a multi-hundred-MB
       download.
 
@@ -216,7 +216,7 @@ begin
   except
     on E: Exception do
     begin
-      LogDebug('vector memory open failed: %s — falling back to FTS5-only',
+      LogDebug('vector memory open failed: %s -- falling back to FTS5-only',
                [E.Message]);
       Close;
       Result := False;
@@ -235,7 +235,7 @@ begin
 end;
 
 procedure InternalFindMdFiles(L: TStringList; const Dir: string);
-{ Recursively collect *.md files. Standalone inside this unit —
+{ Recursively collect *.md files. Standalone inside this unit --
   PasClaw.Memory.Index doesn't expose its own walker and reusing it
   would tighten the unit-dependency direction we don't want yet. }
 var
@@ -260,7 +260,7 @@ end;
 procedure TVectorMemoryIndex.SyncDir(const Dir: string);
 { Walk *.md files in Dir; chunk, embed, batch-add into the store.
 
-  Phase 2 takes the simple sledgehammer approach — wipe + rebuild on
+  Phase 2 takes the simple sledgehammer approach -- wipe + rebuild on
   every SyncDir. Embedding is slow (MiniLM is ~5 ms/chunk on a modern
   CPU; a memory dir with hundreds of small notes is still well under
   a second) so this is acceptable short-term. A future pass adds an
@@ -286,12 +286,12 @@ begin
         try
           Body := ReadFileText(Files[i]);
         except
-          { Unreadable file — log and skip rather than tear down the
+          { Unreadable file -- log and skip rather than tear down the
             whole sync (one borked memory note shouldn't break
             search). }
           on E: Exception do
           begin
-            LogDebug('vector memory: skipping %s — %s',
+            LogDebug('vector memory: skipping %s -- %s',
                      [Files[i], E.Message]);
             Continue;
           end;
@@ -304,7 +304,7 @@ begin
             FStore.AddChunk(Files[i], j, Chunks[j], Emb);
           except
             on E: Exception do
-              LogDebug('vector memory: skipping chunk %d of %s — %s',
+              LogDebug('vector memory: skipping chunk %d of %s -- %s',
                        [j, Files[i], E.Message]);
           end;
         end;
@@ -313,7 +313,7 @@ begin
     except
       on E: Exception do
       begin
-        LogDebug('vector memory: SyncDir failed mid-batch — %s', [E.Message]);
+        LogDebug('vector memory: SyncDir failed mid-batch -- %s', [E.Message]);
         try FStore.CommitBatch; except end;
       end;
     end;
@@ -335,7 +335,7 @@ begin
   except
     on E: Exception do
     begin
-      LogDebug('vector memory: query embedding failed — %s', [E.Message]);
+      LogDebug('vector memory: query embedding failed -- %s', [E.Message]);
       Exit;
     end;
   end;

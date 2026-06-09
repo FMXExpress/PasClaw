@@ -14,7 +14,7 @@
                      much is currently in the pipe.
 
   Three implementations selected at compile time:
-    {$IFDEF FPC}                use fcl-process (works on every FPC target —
+    {$IFDEF FPC}                use fcl-process (works on every FPC target --
                                 Windows, Linux, macOS, BSD, ...)
     {$ELSE} {$IFDEF MSWINDOWS}  CreateProcess + CreatePipe + ReadFile/WriteFile
     {$ELSE}                     Posix.Unistd pipe / fork / execvp / waitpid.
@@ -69,15 +69,15 @@ type
 
       When MergeStderr is True the child's stderr is redirected into the
       same pipe as stdout, so ReadAvailable surfaces both streams. This
-      is what shell-style "capture combined output" callers want — git
+      is what shell-style "capture combined output" callers want -- git
       clone (progress + fatals on stderr) and RunOneShot rely on it.
       The default (False) leaves stderr inheriting from the parent
       process so a long-lived child's log lines reach the user's
-      terminal instead of polluting the JSON-RPC stream on stdout —
+      terminal instead of polluting the JSON-RPC stream on stdout --
       the contract MCP stdio servers expect.
 
       WorkingDir, when non-empty, becomes the child's current working
-      directory. Set in the child only — the parent's cwd is never
+      directory. Set in the child only -- the parent's cwd is never
       touched. This matters because PasClaw's gateway may fan multiple
       shell_exec calls out concurrently, and earlier code used a
       parent-side ChDir + restore that raced under load. Implemented
@@ -108,7 +108,7 @@ type
 
    WorkingDir is the directory the child process starts in. Pass an
    empty string to inherit the parent's cwd (legacy behaviour); pass
-   an absolute path to bind the shell there — Tool_Shell uses this
+   an absolute path to bind the shell there -- Tool_Shell uses this
    to pin the shell to the sandbox workspace so a command can't
    reference relative paths above the boundary. *)
 function RunOneShot   (const Cmd: string;                  out Output: string): Integer; overload;
@@ -353,7 +353,7 @@ begin
   for i := 0 to Args.Count - 1 do CmdLine := CmdLine + ' ' + QuoteArg(Args[i]);
 
   { Pass WorkingDir via lpCurrentDirectory so the child's cwd is set
-    by the kernel at CreateProcess time — no need for a parent-side
+    by the kernel at CreateProcess time -- no need for a parent-side
     ChDir + restore, which would race under concurrent shell_exec. }
   if WorkingDir <> '' then
   begin
@@ -462,7 +462,7 @@ begin
   try
     Args.Add('/C'); Args.Add(Cmd);
     { WorkingDir flows into CreateProcessW.lpCurrentDirectory inside
-      Spawn — no parent-side ChDir, so two RunOneShot calls firing in
+      Spawn -- no parent-side ChDir, so two RunOneShot calls firing in
       parallel from the gateway can't trample each other's cwd. }
     if not P.Spawn('cmd.exe', Args, {MergeStderr=}True, WorkingDir) then Exit;
     Total := 0;
@@ -548,7 +548,7 @@ begin
   Pid := fork;
   if Pid < 0 then
   begin
-    { fork() failed — parent still owns both pipes' fds. Close them
+    { fork() failed -- parent still owns both pipes' fds. Close them
       before returning or we'd leak 4 fds per failed spawn (matters
       under the gateway's burst-spawn pattern: a low ulimit can EMFILE
       quickly). }
@@ -573,7 +573,7 @@ begin
 
     { Bind cwd in the child rather than parent-side ChDir + restore.
       Safe for concurrent shell_exec because the parent's cwd is
-      untouched. chdir failure is non-fatal here — exec runs anyway
+      untouched. chdir failure is non-fatal here -- exec runs anyway
       and either picks the wrong files (rare, since callers pass
       absolute paths) or returns a non-zero status the parent will
       surface. }
@@ -687,7 +687,7 @@ begin
   Acc := TMemoryStream.Create;
   try
     Args.Add('-c'); Args.Add(Cmd);
-    { WorkingDir flows into chdir() in the forked child inside Spawn —
+    { WorkingDir flows into chdir() in the forked child inside Spawn --
       no parent-side ChDir, so two RunOneShot calls firing in parallel
       from the gateway can't trample each other's cwd. }
     if not P.Spawn('/bin/sh', Args, {MergeStderr=}True, WorkingDir) then Exit;

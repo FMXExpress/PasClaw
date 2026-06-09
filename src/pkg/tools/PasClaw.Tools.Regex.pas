@@ -8,7 +8,7 @@
 
     RegexMatch(const Pattern, S: string): Boolean
 
-  PCRE-style syntax — anchors (^ $), character classes ([...]),
+  PCRE-style syntax -- anchors (^ $), character classes ([...]),
   quantifiers (* + ? {n,m}), groups, alternation. Patterns are
   compiled fresh on each call; if the sandbox's match rate ever
   becomes a hot path the implementation should grow a per-pattern

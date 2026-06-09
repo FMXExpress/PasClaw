@@ -2,7 +2,7 @@
   PasClaw.Agent.Compact - conversation-history compaction.
 
   When the tool loop's running history grows past a token budget, the
-  next provider call risks overflowing the model's context window —
+  next provider call risks overflowing the model's context window --
   rejected outright (Anthropic / OpenAI 400) or burning quota for
   diminishing returns. Compaction replaces the older portion of the
   history with a summarised system note, keeping the most recent N
@@ -25,7 +25,7 @@
     always drops system-role history after preferring
     Options.SystemPrompt. If we stored the summary as
     mrSystem in the returned messages, both default-path providers
-    would silently throw it away after compaction — the model
+    would silently throw it away after compaction -- the model
     would see only the recent tail with no record of what came
     before. So CompactMessages takes Options as var and folds the
     summary INTO Options.SystemPrompt where both builders honour
@@ -34,7 +34,7 @@
   Caller-supplied system messages (PR #87 Codex P1):
     For /v1/chat/completions, the gateway intentionally leaves
     Options.SystemPrompt empty when the caller's request already
-    contains a leading mrSystem message — Messages[0] is then
+    contains a leading mrSystem message -- Messages[0] is then
     the authoritative system policy. If we summarised that policy
     along with the rest of the prefix, the summariser could
     distort, omit, or be influenced by untrusted user turns mixed
@@ -47,7 +47,7 @@
     A single assistant turn can carry N tool_calls followed by N
     tool_result messages. If KeepRecentTurns lands the cut in the
     middle of that group, the tail starts with an orphaned
-    tool_result — Anthropic and OpenAI 400 with "no matching
+    tool_result -- Anthropic and OpenAI 400 with "no matching
     tool_use" and Gemini can't resolve the function name. The
     cut walks BACKWARD past any leading mrTool messages in the
     tail until the boundary lands on a clean turn.
@@ -93,7 +93,7 @@ type
 function DefaultCompactOptions: TCompactOptions;
 
 (* True iff the combined message bodies estimate above
-   ThresholdTokens. Cheap — uses the existing 4-chars-per-token
+   ThresholdTokens. Cheap -- uses the existing 4-chars-per-token
    heuristic from PasClaw.Tokenizer. Returns False unconditionally
    if Threshold <= 0 so a misconfigured threshold disables the
    feature instead of compacting on every call. *)
@@ -112,7 +112,7 @@ function NeedsCompact(const Messages: array of TMessage;
         mrTool messages in the tail so a tool_call/tool_result
         pair is never split.
      4. Cap the prefix at SUMMARY_INPUT_CAP_TOKENS by dropping
-        oldest messages until under cap — prevents the summariser
+        oldest messages until under cap -- prevents the summariser
         from inheriting the same context-overflow we're trying to
         prevent.
      5. Fire OnBefore (if set) with the full original list so the
@@ -126,7 +126,7 @@ function NeedsCompact(const Messages: array of TMessage;
           [Conversation summary so far]
           [summary text]
         Empty sections are skipped.
-     8. Result Messages = preserved tail only — no mrSystem
+     8. Result Messages = preserved tail only -- no mrSystem
         entries (they all moved into Options.SystemPrompt).
 *)
 function CompactMessages(Provider: ILLMProvider; const Model: string;
@@ -141,7 +141,7 @@ uses
   PasClaw.Logger;
 
 const
-  (* Hard cap on the summariser's input — well below most model
+  (* Hard cap on the summariser's input -- well below most model
      context limits, so even when the conversation that triggered
      compaction was itself oversized (one giant fs_read result), the
      summariser call still fits. *)
@@ -219,7 +219,7 @@ begin
   { Inc past tool_results means the prefix grew, the tail shrank.
     Net effect: assistant tool_call + all its tool_results stay
     together in the prefix (and get summarised together) or in the
-    tail (and survive verbatim) — never split. }
+    tail (and survive verbatim) -- never split. }
 end;
 
 (* Drop oldest messages from Prefix until the estimated token total
@@ -301,7 +301,7 @@ begin
 
   if Provider = nil then
   begin
-    LogWarn('compact: no provider — skipping compaction, returning verbatim', []);
+    LogWarn('compact: no provider -- skipping compaction, returning verbatim', []);
     Exit(ReturnVerbatim(Messages));
   end;
 
@@ -318,17 +318,17 @@ begin
     Opts.OnBefore(Messages);
   except
     on E: Exception do
-      LogWarn('compact: OnBefore raised %s: %s — continuing', [E.ClassName, E.Message]);
+      LogWarn('compact: OnBefore raised %s: %s -- continuing', [E.ClassName, E.Message]);
   end;
 
   Cut := Length(Body) - KeepLen;
   Cut := ShiftCutPastToolResults(Body, Cut);
   if Cut <= 0 then
   begin
-    { After tool-boundary adjustment we have nothing to summarise —
+    { After tool-boundary adjustment we have nothing to summarise --
       the whole body is a single tool-exchange group. Return
       verbatim; trying to split it would orphan tool results. }
-    LogDebug('compact: cut shifted to 0 (single tool-call group covers full body) — verbatim', []);
+    LogDebug('compact: cut shifted to 0 (single tool-call group covers full body) -- verbatim', []);
     Exit(ReturnVerbatim(Messages));
   end;
 
@@ -337,7 +337,7 @@ begin
   CappedPrefix := CapPrefix(Prefix);
   if Length(CappedPrefix) = 0 then
   begin
-    { Prefix entirely dropped to fit the cap — nothing to summarise. }
+    { Prefix entirely dropped to fit the cap -- nothing to summarise. }
     LogWarn('compact: prefix capped to empty; returning verbatim', []);
     Exit(ReturnVerbatim(Messages));
   end;
@@ -347,7 +347,7 @@ begin
                             BuildSummaryPrompt(CappedPrefix, Opts.SummaryBudget));
 
   CallOptions := DefaultChatOptions;
-  { Inherit cache policy from the caller's Options — caller already
+  { Inherit cache policy from the caller's Options -- caller already
     applied Cfg.PromptCache; the summariser call should follow the
     same policy. (Codex P2 on PR #118: don't unconditionally cache
     just because DefaultChatOptions does.) }
@@ -362,7 +362,7 @@ begin
   except
     on E: Exception do
     begin
-      LogWarn('compact: summary call raised %s: %s — returning verbatim',
+      LogWarn('compact: summary call raised %s: %s -- returning verbatim',
               [E.ClassName, E.Message]);
       Exit(ReturnVerbatim(Messages));
     end;
@@ -371,7 +371,7 @@ begin
   Summary := Trim(Resp.Content);
   if Summary = '' then
   begin
-    LogWarn('compact: empty summary — returning verbatim', []);
+    LogWarn('compact: empty summary -- returning verbatim', []);
     Exit(ReturnVerbatim(Messages));
   end;
 
@@ -396,7 +396,7 @@ begin
   NewSystem := NewSystem + '[Conversation summary so far]' + sLineBreak + Summary;
   Options.SystemPrompt := NewSystem;
 
-  { New body = preserved tail only (no system messages — they live
+  { New body = preserved tail only (no system messages -- they live
     in Options.SystemPrompt now). }
   SetLength(Result, Length(Body) - Cut);
   OutIdx := 0;

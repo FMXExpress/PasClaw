@@ -93,7 +93,7 @@ type
      dispatcher thread. HandleWebhook spawns one of these per event and
      returns; Indy then flushes the 200 ack within milliseconds instead
      of holding it open while RunToolLoop chases tools. LINE's webhook
-     timeout is 1s — without async, a slow turn (long tool loop, large
+     timeout is 1s -- without async, a slow turn (long tool loop, large
      model response) blows past it and LINE retries the event up to 3
      more times, generating 4× duplicate replies even though we set
      ResponseNo := 200 early. FreeOnTerminate := True so the worker
@@ -111,7 +111,7 @@ constructor TLineEventWorker.Create(Bot: TLineBot; const EventJSON: string);
 begin
   { Construct SUSPENDED, assign state, then Start. With Create(False)
     the kernel can schedule Execute before the field assignments below
-    finish — FBot would be nil and FEventJSON would be empty when the
+    finish -- FBot would be nil and FEventJSON would be empty when the
     worker ran. Codex flagged this on PR #78; the cron scheduler's
     TCronThread uses the same suspended-then-start pattern. }
   inherited Create(True);
@@ -278,7 +278,7 @@ begin
 
   if FProvider = nil then
   begin
-    Response := '(no provider configured — run `pasclaw onboard`)';
+    Response := '(no provider configured -- run `pasclaw onboard`)';
     if not Reply(ReplyToken, Response) and (SourceId <> '') then
       FPush.Push(SourceId, Response);
     Exit;
@@ -309,9 +309,9 @@ begin
   if RunToolLoop(LoopCfg, Msgs, Loop) and (Loop.Content <> '') then
     Response := Loop.Content
   else
-    Response := '(sorry — model returned no content)';
+    Response := '(sorry -- model returned no content)';
 
-  { Try Reply first — free, fast, single-use. If the token expired or
+  { Try Reply first -- free, fast, single-use. If the token expired or
     was already consumed (RunToolLoop took >30 s) fall back to Push so
     the user still gets the answer. }
   if not Reply(ReplyToken, Response) then
@@ -368,13 +368,13 @@ begin
   end;
 
   { LINE retries up to 3 times when we return non-2xx, so respond 200
-    even if dispatch fails internally — the retries would only make
+    even if dispatch fails internally -- the retries would only make
     duplicate replies. }
   AResponse.ResponseNo  := 200;
   AResponse.ContentText := '{}';
   AResponse.ContentType := 'application/json';
 
-  { Pre-try `Root := nil` removed — dead write per dcc64 H2077. The
+  { Pre-try `Root := nil` removed -- dead write per dcc64 H2077. The
     except branch always Exits, so Root is either assigned by Parse
     on the success path or we never reach the post-try-except code. }
   try

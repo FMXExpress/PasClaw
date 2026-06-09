@@ -3,8 +3,8 @@
 
   Picoclaw's membench evaluates retrieval quality on a recall dataset
   (LoCoMo). That's a substantial port; the Pascal version here focuses on
-  the raw I/O fundamentals — write throughput and load throughput of the
-  NDJSON memory log — because those are the bits the rest of the agent
+  the raw I/O fundamentals -- write throughput and load throughput of the
+  NDJSON memory log -- because those are the bits the rest of the agent
   builds on.
 
   Usage:
@@ -119,7 +119,7 @@ begin
 
   SessionId := 'membench-' + FormatDateTime('yyyymmdd-hhnnsszzz', Now);
   Log := NewMemoryLog(Home, SessionId);
-  { Match the path NewMemoryLog actually wrote — native separators throughout. }
+  { Match the path NewMemoryLog actually wrote -- native separators throughout. }
   Path := JoinPath(JoinPath(JoinPath(Home, 'workspace'), 'memory'), SessionId + '.ndjson');
   Result.Path := Path;
 

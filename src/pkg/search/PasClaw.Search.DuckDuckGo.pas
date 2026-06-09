@@ -5,7 +5,7 @@
   DuckDuckGo doesn't ship a public API so picoclaw scrapes the no-JS
   "html" endpoint and pulls results out of the rendered HTML. Same
   approach here, with the substring/Pos parsing kept deliberately
-  conservative — we look for the well-known result block markers
+  conservative -- we look for the well-known result block markers
   ("result__a" anchor class, "result__snippet" snippet div) and
   extract title / URL / snippet. Failed parsing returns whatever
   block did extract cleanly instead of erroring; partial results
@@ -20,7 +20,7 @@
     href="//duckduckgo.com/l/?uddg=<percent-encoded-real-url>&..."
   We unwrap the uddg param and percent-decode it so the model gets
   the real URL it'd recognize. If the wrapper shape changes the
-  unwrap is a best-effort — we return whatever's in href as a
+  unwrap is a best-effort -- we return whatever's in href as a
   fallback.
 *)
 unit PasClaw.Search.DuckDuckGo;
@@ -220,7 +220,7 @@ begin
     BlockStart := PosEx(AnchorOpen, HTML, Cursor);
     if BlockStart = 0 then Break;
 
-    { Extract href first — bound to the same anchor open tag. }
+    { Extract href first -- bound to the same anchor open tag. }
     HrefStart := PosEx(HrefOpen, HTML, BlockStart);
     if HrefStart = 0 then Break;
     Inc(HrefStart, Length(HrefOpen));
@@ -236,7 +236,7 @@ begin
     if Cursor = MaxInt then Break;
     RawTitle := Copy(HTML, TitleClose + 1, Cursor - Length(AnchorEnd) - (TitleClose + 1));
 
-    { Snippet: the next result__snippet block — best-effort. If we
+    { Snippet: the next result__snippet block -- best-effort. If we
       can't find one, leave Snippet empty rather than skipping the
       whole result. }
     RawSnippet := ExtractBetween(HTML, SnippetOpen, SnippetEnd, Cursor);

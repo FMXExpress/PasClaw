@@ -5,13 +5,13 @@
   expects "sha256=" + lowercase hex in X-Hub-Signature-256).
 
   Pure Pascal implementation of FIPS 180-4 SHA-256 and RFC 2104 HMAC.
-  No OpenSSL, no Indy hash dependency, no platform-specific units —
+  No OpenSSL, no Indy hash dependency, no platform-specific units --
   same code path under FPC ({$MODE DELPHI}) and Delphi 12. The Indy
   HMAC classes are tied to OpenSSL's EVP function pointers and the
   OpenSSL 3 export changes are flaky to detect at load time; doing the
   primitive ourselves removes that whole class of failure mode.
 
-  ConstantTimeEqual is a length-checked byte-by-byte XOR — never
+  ConstantTimeEqual is a length-checked byte-by-byte XOR -- never
   compare signatures with `=`, the early-out timing leaks one byte at
   a time.
 *)

@@ -1,5 +1,5 @@
 ﻿(*
-  PasClaw.Skills.PasClawHub — install / search skills from the
+  PasClaw.Skills.PasClawHub -- install / search skills from the
   pasclaw.dev hub, the first-party registry that PasClaw checks
   before falling through to clawhub.ai.
 
@@ -23,7 +23,7 @@
 
   Difference vs ClawHub: pasclaw.dev's /download returns a JSON
   envelope with a SIGNED URL to the zip, not the zip itself. The
-  installer does two hops — GET /download → parse url → fetch url.
+  installer does two hops -- GET /download → parse url → fetch url.
 
   Helper duplication: this unit copies UrlEncode / IsValidSlug /
   DownloadZip / CopyTree / RemoveTree / FindSkillRoot from
@@ -237,7 +237,7 @@ procedure FetchMetadata(const Slug: string; out LatestVersion: string;
                        out Blocked, Suspicious: Boolean);
 { Best-effort. Failure to fetch (network, 404, malformed JSON) leaves
   the out values at defaults: LatestVersion = '', Blocked = False,
-  Suspicious = False — same advisory semantics as ClawHub.FetchMetadata. }
+  Suspicious = False -- same advisory semantics as ClawHub.FetchMetadata. }
 var
   URL, Body, Err: string;
   Root, ModObj, VerObj: TJsonObject;
@@ -250,7 +250,7 @@ begin
   LogDebug('pasclaw-hub: GET %s', [URL]);
   if not DoGetJSON(URL, Body, Err) then
   begin
-    LogDebug('pasclaw-hub: metadata fetch failed (%s) — proceeding without it', [Err]);
+    LogDebug('pasclaw-hub: metadata fetch failed (%s) -- proceeding without it', [Err]);
     Exit;
   end;
 
@@ -259,7 +259,7 @@ begin
     try
       Root := TJsonObject.Parse(Body);
     except
-      LogDebug('pasclaw-hub: metadata parse failed — proceeding without it', []);
+      LogDebug('pasclaw-hub: metadata parse failed -- proceeding without it', []);
       Exit;
     end;
     if Root = nil then Exit;
@@ -334,7 +334,7 @@ end;
 
 function DownloadZip(const URL, DestPath: string; out ErrMsg: string): Boolean;
 { Streams the response straight into a TFileStream. The signed URL
-  returns the actual zip bytes — routing it through GetJSONURL
+  returns the actual zip bytes -- routing it through GetJSONURL
   would decode the body as UTF-8 and corrupt arbitrary binary, so
   use the dedicated GetURLToStream path (same approach ClawHub
   takes for its raw-bytes /download endpoint). Codex P1 on PR #129. }
@@ -485,7 +485,7 @@ begin
   DstDir := JoinPath(DestRoot, Slug);
   if DirectoryExists(DstDir) then
   begin
-    ErrMsg := Format('"%s" already installed at %s — run `pasclaw skills remove %s` first',
+    ErrMsg := Format('"%s" already installed at %s -- run `pasclaw skills remove %s` first',
                      [Slug, DstDir, Slug]);
     Exit;
   end;
@@ -497,16 +497,16 @@ begin
 
   { Advisory metadata: lets us refuse malware-flagged installs and
     pick up `latestVersion` when the caller didn't pin one. Network
-    failure here is not fatal — we proceed with whatever the caller
+    failure here is not fatal -- we proceed with whatever the caller
     asked for. }
   FetchMetadata(Slug, LatestVersion, Blocked, Suspicious);
   if Blocked then
   begin
-    ErrMsg := Format('pasclaw-hub flagged "%s" as malware — refusing install', [Slug]);
+    ErrMsg := Format('pasclaw-hub flagged "%s" as malware -- refusing install', [Slug]);
     Exit;
   end;
   if Suspicious then
-    LogWarn('pasclaw-hub: "%s" is flagged as suspicious — proceeding anyway', [Slug]);
+    LogWarn('pasclaw-hub: "%s" is flagged as suspicious -- proceeding anyway', [Slug]);
 
   EffectiveVersion := Version;
   if (EffectiveVersion = '') and (LatestVersion <> '') then

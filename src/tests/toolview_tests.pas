@@ -69,7 +69,7 @@ begin
 end;
 
 procedure TestArgTruncation;
-{ Glyph form depends on the compiler's `string` type — see TV_ELLIPSIS
+{ Glyph form depends on the compiler's `string` type -- see TV_ELLIPSIS
   in PasClaw.Gateway.ToolView. Use the same constant the renderer emits
   so the assertion is codepage-tag-independent. }
 const
@@ -136,7 +136,7 @@ end;
 procedure TestMalformedArgsDoesNotRaise;
 { Providers occasionally stream truncated `arguments` (think mid-token
   cut-off in a tool_use block). TJsonObject.Parse raises EPasClawJSON on
-  that input, and FormatToolCallLine sits on the SSE-streamer hot path —
+  that input, and FormatToolCallLine sits on the SSE-streamer hot path --
   if it lets the exception escape, the whole stream tears down with no
   terminal event. Verify the helper handles malformed JSON by falling
   back to the raw-args echo. }

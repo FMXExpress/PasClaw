@@ -1,7 +1,7 @@
 ﻿(*
   PasClaw.Channels.Email - bidirectional email channel.
 
-  Outbound: TIdSMTP — sends a text/plain message to a recipient with
+  Outbound: TIdSMTP -- sends a text/plain message to a recipient with
   the configured From address. Uses STARTTLS by default; explicit TLS
   on port 465 is the alternative when SMTPSSLMode = sslmTLS.
 
@@ -29,7 +29,7 @@
 
   The bot only auto-replies when the inbound From address matches the
   allowlist (substring). Without an allowlist, every UNSEEN message is
-  answered — fine for a personal mailbox, dangerous for a shared one.
+  answered -- fine for a personal mailbox, dangerous for a shared one.
 *)
 unit PasClaw.Channels.Email;
 
@@ -70,7 +70,7 @@ type
     FFrom:      string;
     FAllow:     TStringArray;   { named type, not `array of string`, so Delphi 12
                                   dcc64 accepts the SplitCSV(...) assignment
-                                  result without an E2010 — same pattern as
+                                  result without an E2010 -- same pattern as
                                   PR #104 fixed for TLLMProviderArray. }
     FPollSec:   Integer;
     FStop:      Boolean;
@@ -105,7 +105,7 @@ uses
   DateUtils,
   IdSMTP, IdIMAP4, IdMessage, IdSSLOpenSSL, IdExplicitTLSClientServerBase,
   IdMessageBuilder, IdMessageParts, IdAttachmentFile,
-  IdMailBox,  { TUInt32Array — needed for the Unseen local in ProcessInbox
+  IdMailBox,  { TUInt32Array -- needed for the Unseen local in ProcessInbox
                 because IMAP.MailBox.SearchResult is declared as
                 TUInt32Array; dcc64 won't assign it into an inline
                 `array of UInt32` (PR #104 same pattern). }
@@ -125,7 +125,7 @@ const
     your environment legitimately needs more. }
   EmailIOTimeoutMS = 30000;
 
-{ TThread.WaitFor blocks indefinitely — Indy doesn't ship a
+{ TThread.WaitFor blocks indefinitely -- Indy doesn't ship a
   timeout-aware variant. Poll Finished at 50ms granularity for up
   to TimeoutMS, return True if the thread exited in time. }
 function WaitForWorkerWithTimeout(W: TThread; TimeoutMS: Cardinal): Boolean;
@@ -329,7 +329,7 @@ var
 begin
   if (FIMAP.Host = '') or (FIMAP.User = '') then
   begin
-    LogWarn('email IMAP config incomplete — inbound disabled');
+    LogWarn('email IMAP config incomplete -- inbound disabled');
     Exit;
   end;
   IMAP := TIdIMAP4.Create(nil);
@@ -355,7 +355,7 @@ begin
       try
         IMAP.Login;
         IMAP.SelectMailBox('INBOX');
-        { Server-side filter for unread messages — iterating
+        { Server-side filter for unread messages -- iterating
           1..TotalMsgs and checking flags client-side would still
           re-Retrieve already-seen messages every poll, growing
           linearly with mailbox size. SEARCH UNSEEN returns only
@@ -378,7 +378,7 @@ begin
           Msg := TIdMessage.Create(nil);
           try
             { Peek (BODY.PEEK[]) doesn't set \Seen as a side effect
-              the way Retrieve does — so when SMTP delivery fails
+              the way Retrieve does -- so when SMTP delivery fails
               below and we skip StoreFlags, the next SEARCH UNSEEN
               still returns this message and we retry. Retrieve would
               silently mark Seen on fetch, draining the message from
@@ -391,7 +391,7 @@ begin
             begin
               LogDebug('email %d: skipping %s (not in allowlist)', [SeqNum, FromAddr]);
               { Mark non-allowed messages Seen so we never re-process
-                them — otherwise the allowlist would force a per-poll
+                them -- otherwise the allowlist would force a per-poll
                 Retrieve of every junk message in the inbox. }
               IMAP.StoreFlags([SeqNum], sdAdd, [mfSeen]);
               Continue;
@@ -406,7 +406,7 @@ begin
               LogInfo('email: sender %s rejected by allow_senders',
                       [FormatIdentity(LoopCfg.Identity)]);
               { Mark seen so this rejected message doesn't get re-fetched
-                via RetrievePeek on every poll forever — same pattern the
+                via RetrievePeek on every poll forever -- same pattern the
                 channel-specific MatchesAllow rejection above uses.
                 Codex P2 on PR #119. }
               IMAP.StoreFlags([SeqNum], sdAdd, [mfSeen]);
@@ -439,14 +439,14 @@ begin
 
             { Mark Seen only when the reply landed, OR when the agent
               loop produced no reply at all (failed or empty content
-              — a poison message we don't want to loop on forever).
+              -- a poison message we don't want to loop on forever).
               Failed SMTP transport leaves the message Unseen so the
               next poll retries.
 
                 ReplyAttempted   ReplySent   StoreFlags?
-                False (no reply)  -          Yes — don't loop on poison
-                True              True       Yes — delivered
-                True              False      No  — transient SMTP, retry }
+                False (no reply)  -          Yes -- don't loop on poison
+                True              True       Yes -- delivered
+                True              False      No  -- transient SMTP, retry }
             if (not ReplyAttempted) or ReplySent then
               IMAP.StoreFlags([SeqNum], sdAdd, [mfSeen]);
           finally
@@ -479,7 +479,7 @@ const
 begin
   if FIMAP.Host = '' then
   begin
-    LogWarn('email: PASCLAW_EMAIL_IMAP_HOST not set — bot mode disabled, push only');
+    LogWarn('email: PASCLAW_EMAIL_IMAP_HOST not set -- bot mode disabled, push only');
     Exit;
   end;
   LogInfo('email channel: polling %s every %ds', [FIMAP.Host, FPollSec]);
@@ -513,7 +513,7 @@ type
 constructor TEmailWorker.Create(AChan: TEmailChannel);
 begin
   inherited Create(True);
-  FreeOnTerminate := False;  { Stop / Destroy joins us — see TEmailChannel.Stop }
+  FreeOnTerminate := False;  { Stop / Destroy joins us -- see TEmailChannel.Stop }
   FChan := AChan;
 end;
 
@@ -529,7 +529,7 @@ end;
 
 procedure TEmailChannel.Spawn;
 begin
-  if FWorker <> nil then Exit;  { idempotent — already spawned }
+  if FWorker <> nil then Exit;  { idempotent -- already spawned }
   FWorker := TEmailWorker.Create(Self);
   FWorker.Start;
 end;
@@ -539,7 +539,7 @@ const
   { Worst-case shutdown latency the gateway is willing to absorb.
     The worker may currently be blocked in IMAP.Retrieve or
     SMTP.Send, both of which now carry EmailIOTimeoutMS read
-    timeouts — so the actual wait is bounded by one ReadTimeout
+    timeouts -- so the actual wait is bounded by one ReadTimeout
     plus the post-op return path. EmailStopWatchdogMS gives that
     a generous ceiling; the WaitFor fallback below catches the
     pathological "server stops responding mid-TLS handshake"
@@ -549,17 +549,17 @@ begin
   if FWorker = nil then Exit;
   FStop := True;
   { Indy's TThread.WaitFor doesn't take a timeout argument, so we
-    poll. Cheap — Sleep(50ms) until Finished or timeout. The
+    poll. Cheap -- Sleep(50ms) until Finished or timeout. The
     worker sets Finished := True the moment Execute returns. }
   if not WaitForWorkerWithTimeout(FWorker, EmailStopWatchdogMS) then
   begin
-    LogWarn('email worker did not exit within %d ms — leaking thread (IMAP/SMTP socket likely wedged)',
+    LogWarn('email worker did not exit within %d ms -- leaking thread (IMAP/SMTP socket likely wedged)',
             [EmailStopWatchdogMS]);
     { Detach: set FreeOnTerminate so the thread cleans itself up
       whenever it does eventually exit. Better than blocking the
       gateway shutdown forever. NB: if FProvider / FRegistry /
       FCfg get torn down before the thread exits the worker may
-      hit a UAF on its next access — that's the lesser evil vs.
+      hit a UAF on its next access -- that's the lesser evil vs.
       a wedged gateway. }
     FWorker.FreeOnTerminate := True;
     FWorker := nil;

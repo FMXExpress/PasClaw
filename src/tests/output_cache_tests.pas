@@ -1,6 +1,6 @@
 program output_cache_tests;
 (*
-  Covers PasClaw.Tools.OutputCache — the truncation + handle layer
+  Covers PasClaw.Tools.OutputCache -- the truncation + handle layer
   RunToolLoop calls into when Cfg.ToolOutputCap > 0.
 
   We pin:
@@ -12,7 +12,7 @@ program output_cache_tests;
 
   Tests run with ClearOutputCache between cases so they don't see
   each other's handles; the cache is a process-lifetime singleton
-  (it has to be — the tool_output_get handler can only reach it
+  (it has to be -- the tool_output_get handler can only reach it
   that way).
 *)
 
@@ -65,7 +65,7 @@ begin
 end;
 
 procedure TestPassThroughOnCapZero;
-{ Cap = 0 means "feature off" — even huge outputs go through
+{ Cap = 0 means "feature off" -- even huge outputs go through
   verbatim. Important so the default config keeps the legacy
   behaviour until the operator opts in. }
 var
@@ -83,7 +83,7 @@ procedure TestTruncateAboveCap;
 { Output above the cap should be replaced with a multi-line notice
   containing the handle, byte count, head, elision, tail. The
   in-context replacement length must actually be smaller than the
-  original — otherwise we'd be making context usage worse. }
+  original -- otherwise we'd be making context usage worse. }
 var
   Big, Out_, Bytes, Err: string;
   Trunc: Boolean;
@@ -146,7 +146,7 @@ begin
     Fail('mid-range fetch failed: ' + Err);
   AssertEqInt(Length(Bytes), 50, 'mid-range returns requested length');
 
-  { offset past end is not an error — returns empty so the model
+  { offset past end is not an error -- returns empty so the model
     can probe without crashing the tool. }
   if not FetchStashedOutput(Handle, 100000, 10, Bytes, Err) then
     Fail('past-end fetch should succeed with empty bytes');

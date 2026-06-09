@@ -1,4 +1,4 @@
-﻿{ Auth — login/logout/status for configured providers. }
+﻿{ Auth -- login/logout/status for configured providers. }
 unit PasClaw.Cmd.Auth;
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
@@ -31,7 +31,7 @@ begin
   try
     if Length(Cfg.Providers) = 0 then
     begin
-      PrintLn('(no providers configured — run `pasclaw onboard`)');
+      PrintLn('(no providers configured -- run `pasclaw onboard`)');
       Exit(0);
     end;
     for i := 0 to High(Cfg.Providers) do

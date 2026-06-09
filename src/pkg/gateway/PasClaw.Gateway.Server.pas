@@ -9,7 +9,7 @@
     POST /v1/chat/completions      -> OpenAI Chat Completions-compatible
                                       (request: {model, messages, ...},
                                        response: {id, choices[{message}], usage}
-                                       — SSE if stream:true is set)
+                                       -- SSE if stream:true is set)
     POST /v1/responses             -> OpenAI Responses-compatible
                                       (request: {model, input, ...},
                                        response: {id, output[{content}], usage})
@@ -102,7 +102,7 @@ type
                               out AResponseStarted: Boolean);
     procedure HandleModels(AResp: TIdHTTPResponseInfo);
     procedure WriteJSON(AResp: TIdHTTPResponseInfo; Code: Integer; const Body: string);
-    { TGatewayServer.WriteSSE removed — never called. The streaming
+    { TGatewayServer.WriteSSE removed -- never called. The streaming
       response paths build their SSE frames via TSSEStreamer +
       TLogStreamWriter (which has its own WriteSSE on a different
       class). Codex dcc64 H2219 cleanup. }
@@ -197,9 +197,9 @@ var
   Handler: TWebhookHandler;
 begin
   { Dispatch on path only. Handlers self-check the verb because some
-    channels (WhatsApp Cloud) bind both GET — subscription
-    verification with hub.challenge echo — and POST — event delivery
-    — to the same URL. Handlers MUST emit 405 for verbs they don't
+    channels (WhatsApp Cloud) bind both GET -- subscription
+    verification with hub.challenge echo -- and POST -- event delivery
+    -- to the same URL. Handlers MUST emit 405 for verbs they don't
     accept so the dispatcher doesn't silently 404 a legitimate
     request. LINE's HandleWebhook does that; so does WhatsApp's. }
   Result := False;
@@ -278,7 +278,7 @@ begin
   WriteBodyStream(AResp, Body);
 end;
 
-{ TGatewayServer.WriteSSE removed — dead method, see class
+{ TGatewayServer.WriteSSE removed -- dead method, see class
   declaration. dcc64 H2219 cleanup. }
 
 procedure TGatewayServer.OnCommandGet(AContext: TIdContext;
@@ -320,7 +320,7 @@ begin
       AResponse.ResponseNo  := 200;
       AResponse.ContentType := 'text/html; charset=utf-8';
       AResponse.CharSet     := 'utf-8';
-      { Hand Indy a raw byte stream loaded from the embedded resource — no
+      { Hand Indy a raw byte stream loaded from the embedded resource -- no
         string encoding involved. }
       AResponse.ContentStream     := WebUIStream;
       AResponse.FreeContentStream := True;
@@ -541,7 +541,7 @@ var
   Root: TJsonObject;
 begin
   Name := Copy(Doc, Length('/v1/memory/') + 1, MaxInt);
-  { Refuse any path-traversal — only bare filenames inside the
+  { Refuse any path-traversal -- only bare filenames inside the
     memory directory are addressable through this endpoint. }
   if (Name = '') or (Pos('..', Name) > 0) or (Pos('/', Name) > 0) or
      (Pos('\', Name) > 0) then
@@ -583,7 +583,7 @@ var
 begin
   { Mask secret-bearing fields. PR #88 Codex P1 caught that the
     original implementation only masked providers[].api_key and
-    left mcp_servers[].env exposed — which typically contains
+    left mcp_servers[].env exposed -- which typically contains
     OPENAI_API_KEY=, GITHUB_TOKEN=, etc. for stdio MCP servers.
     Mask any non-empty secret field with "•••" so the UI can show
     "set vs unset" without leaking the value. }
@@ -622,7 +622,7 @@ begin
         if Item = nil then Continue;
         try
           { env strings are typically KEY=value pairs separated by
-            newlines or semicolons — anything from "OPENAI_API_KEY=sk-…"
+            newlines or semicolons -- anything from "OPENAI_API_KEY=sk-…"
             to bearer tokens. Mask the whole string when non-empty;
             the UI just needs "is configured" signal, not the literal. }
           if Item.GetStr('env', '') <> '' then
@@ -711,7 +711,7 @@ begin
     WriteJSON(AResp, 400, '{"error":"bad path"}');
     Exit;
   end;
-  { Same sandbox gate as HandleFSList — fs_read's policy applies
+  { Same sandbox gate as HandleFSList -- fs_read's policy applies
     here too. PR #88 Codex P1 caught the original "reject `..`"
     check that let /etc/passwd through. }
   if not CanReadPath(Path, Reason) then
@@ -774,7 +774,7 @@ procedure TLogStreamWriter.WriteSSE(const Payload: string);
    chunk. Match the manual framing TSSEStreamer in this same file
    does for /v1/chat/completions.
 
-   Frame holds the bytes as TIdBytes (NOT TBytes) — Delphi's
+   Frame holds the bytes as TIdBytes (NOT TBytes) -- Delphi's
    dcc64 enforces the distinction at the Write() call site and
    refuses TBytes there, while FPC accepts either. Build TIdBytes
    from the start; the copy loop converts the TEncoding output
@@ -805,7 +805,7 @@ begin
     while Conn.IOHandler.WriteBufferingActive do
       Conn.IOHandler.WriteBufferClose;
   except
-    { Connection dropped — the unsubscribe in HandleLogs's finally
+    { Connection dropped -- the unsubscribe in HandleLogs's finally
       will tear us down on its next iteration. }
   end;
 end;
@@ -828,7 +828,7 @@ var
   HeaderTmp: TBytes;
   HeaderIdBytes: TIdBytes;
 begin
-  { SSE stream — emit the recent buffer up front, then subscribe
+  { SSE stream -- emit the recent buffer up front, then subscribe
     for live tail. The handler doesn't return until the client
     disconnects (or we throw); on either path the listener gets
     unsubscribed.
@@ -840,7 +840,7 @@ begin
       to "text/html; charset=utf-8" under conditions that are
       hard to fully unset from outside the unit (around
       Content-Length / Transfer-Encoding / ContentText interplay
-      — see IdCustomHTTPServer.pas line ~"if ContentType = ''"
+      -- see IdCustomHTTPServer.pas line ~"if ContentType = ''"
       block). The result: the response header line said
       "Content-Type: text/html" even though we set
       text/event-stream. Strict EventSource implementations
@@ -866,10 +866,10 @@ begin
     #13#10;
   try
     { Convert string -> TBytes (TEncoding) -> TIdBytes (Indy
-      Write expects this exact type — Delphi dcc64 enforces it;
+      Write expects this exact type -- Delphi dcc64 enforces it;
       FPC happens to accept TBytes here too. Same one-byte-at-a-
       time copy idiom as TLogStreamWriter.WriteSSE.). }
-    SetLength(HeaderTmp, Length(HeaderStr));   { ASCII safe — header line is ascii-only }
+    SetLength(HeaderTmp, Length(HeaderStr));   { ASCII safe -- header line is ascii-only }
     HeaderTmp := TEncoding.ASCII.GetBytes(HeaderStr);
     SetLength(HeaderIdBytes, Length(HeaderTmp));
     for i := 0 to High(HeaderTmp) do HeaderIdBytes[i] := HeaderTmp[i];
@@ -925,7 +925,7 @@ begin
     UnsubscribeLog(Token);
     { Best-effort terminator chunk so the client sees a clean
       end-of-stream. Same TBytes→TIdBytes conversion as the header
-      write above — Delphi dcc64 enforces the type match. }
+      write above -- Delphi dcc64 enforces the type match. }
     try
       HeaderTmp := TEncoding.ASCII.GetBytes('0'#13#10#13#10);
       SetLength(HeaderIdBytes, Length(HeaderTmp));
@@ -1000,7 +1000,7 @@ begin
   LoopCfg.Options       := DefaultChatOptions;
   ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
   LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
-  { No HTTP-header-derived identity yet — the gateway terminates an
+  { No HTTP-header-derived identity yet -- the gateway terminates an
     unauthenticated TCP socket, so any header value would be
     client-asserted and unsafe to gate on. Stamp 'gateway:anon' so
     downstream hooks/logs see SOMETHING; tightening this is a
@@ -1033,7 +1033,7 @@ end;
 
 function GenChatCompletionId: string;
 { Mirror OpenAI's "chatcmpl-<random>" id convention. The exact value is
-  opaque to clients — what matters is that it's unique per call. We seed
+  opaque to clients -- what matters is that it's unique per call. We seed
   from Random + a millisecond timestamp; sufficient for log correlation. }
 const
   Alphabet = 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
@@ -1048,7 +1048,7 @@ end;
 function BuildOpenAICompletion(const Id, Model, Content: string;
                                 Usage: TUsageInfo;
                                 const FinishReason: string): TJsonObject;
-{ Construct an OpenAI Chat Completions response object — the non-streaming
+{ Construct an OpenAI Chat Completions response object -- the non-streaming
   shape that the OpenAI SDK / LangChain / autogen / etc. all parse. }
 var
   Choice, Msg, UsageObj: TJsonObject;
@@ -1118,7 +1118,7 @@ type
   (* Helper that streams SSE chunks directly to the TCP connection
      while the tool loop is still running. Indy's TIdHTTPResponseInfo
      normally buffers the entire body into a ContentStream and flushes
-     at the end of the handler — that's fine for /v1/chat (one
+     at the end of the handler -- that's fine for /v1/chat (one
      response per call) but with /v1/chat/completions stream:true and
      a long tool loop the client sees no bytes for many seconds. We
      issue WriteHeader once up front so the headers go on the wire,
@@ -1137,7 +1137,7 @@ type
     constructor Create(AContext: TIdContext; const Id, Model: string;
                        DebugIO: Boolean);
     { Emits Data as a single HTTP/1.1 chunked-encoding chunk. Use this
-      for SSE event payloads — every WriteChunk / WriteComment goes
+      for SSE event payloads -- every WriteChunk / WriteComment goes
       through here. }
     procedure WriteRaw(const Data: string);
     procedure WriteChunk(const DeltaContent, FinishReason: string);
@@ -1181,7 +1181,7 @@ begin
   try
     FContext.Connection.IOHandler.Write(Bytes);
     (* TIdHTTPServer's request handler runs inside WriteBufferOpen so
-       it can compute Content-Length. We don't want that — every byte
+       it can compute Content-Length. We don't want that -- every byte
        has to land on the wire as soon as we emit it. Loop
        WriteBufferClose until WriteBufferingActive is False to drain
        the nested server + WriteHeader buffer stack. After the first
@@ -1202,7 +1202,7 @@ var
   HeaderStr, Tagged: string;
   i, Offset: Integer;
 begin
-  { Same FPC retag the body writer does — without it, a CP_0-tagged
+  { Same FPC retag the body writer does -- without it, a CP_0-tagged
     Data string (e.g. literal SSE control text like 'data: [DONE]'
     or fragments built across mixed-codepage concatenations) goes
     through TEncoding.UTF8.GetBytes assuming system codepage and
@@ -1249,7 +1249,7 @@ procedure TSSEStreamer.WriteComment(const Note: string);
 var
   Clean: string;
 begin
-  (* Lines starting with `:` are SSE comments per the spec — every
+  (* Lines starting with `:` are SSE comments per the spec -- every
      compliant client (openai-python, anthropic-sdk, langchain,
      autogen) skips them silently.
 
@@ -1323,7 +1323,7 @@ begin
   end;
   (* Visible delta summarizing the outcome (line/byte counts with a first-line
      peek, a short echo, or the error) on its own indented line under the call
-     — previously this went only to the dropped SSE comment, so the client saw
+     -- previously this went only to the dropped SSE comment, so the client saw
      the call but never its result. *)
   WriteChunk(FormatToolResultLine(Name, ResultText, Err) + #10, '');
   WriteComment('tool_result name=' + Name + ' ' + Status);
@@ -1341,7 +1341,7 @@ type
   { Per-request collector that hooks LoopCfg.OnToolCall/OnToolResult on the
     non-streaming chat-completions path. RunToolLoop runs tools server-side
     and the buffered Chat Completions response shape has no standard slot
-    for "tools that already ran" — so we collect ToolView's friendly per-
+    for "tools that already ran" -- so we collect ToolView's friendly per-
     tool lines here (the same ones the streaming path emits as visible
     deltas via TSSEStreamer.NoteToolCall/NoteToolResult) and the handler
     prepends them above the model's content. Both delivery modes now show
@@ -1421,7 +1421,7 @@ procedure TGatewayServer.HandleChatCompletions(AContext: TIdContext;
    max_tokens, stream, tools) and routes through the existing tool loop.
 
    When stream:true is set we flush response headers immediately, then
-   write SSE chunks to the connection as the tool loop progresses —
+   write SSE chunks to the connection as the tool loop progresses --
    one visible delta per tool call so the client renders activity in
    real time, plus structured SSE comments any consumer can log. After
    the loop completes we write the final content delta, a finish-reason
@@ -1545,7 +1545,7 @@ begin
     LoopCfg.Options       := DefaultChatOptions;
     ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
     LoopCfg.Identity      := MakeIdentity('gateway', 'anon');
-    { Inject the composed PasClaw system prompt — but only if the client
+    { Inject the composed PasClaw system prompt -- but only if the client
       didn't already supply one of their own. Third-party tooling calling
       /v1/chat/completions with its own persona/system message should win;
       bare-bones clients that send only a user message get our identity
@@ -1589,7 +1589,7 @@ begin
         Content-Length, Indy was emitting `Content-Length: 0` +
         `Connection: close`, and OpenAI clients (nanobot, etc.) read
         the zero-byte body, marked the response complete, and closed
-        the socket immediately — which is why every subsequent SSE
+        the socket immediately -- which is why every subsequent SSE
         chunk hit `connection already closed` in the debug log.
         Chunked transfer encoding tells the client to keep reading
         until a zero-length terminator chunk arrives, which
@@ -1607,7 +1607,7 @@ begin
         connection-level buffer per request to compute Content-Length;
         WriteHeader opens another inside that to write its own bytes.
         WriteBufferFlush only flushes one level at a time and is a no-op
-        when no buffer is open — so loop until WriteBufferingActive is
+        when no buffer is open -- so loop until WriteBufferingActive is
         False. After this, subsequent IOHandler.Write calls hit the
         socket immediately. }
       while AContext.Connection.IOHandler.WriteBufferingActive do
@@ -1637,7 +1637,7 @@ begin
         if Loop.Content <> '' then Loop.Content := Loop.Content + #10#10;
         Loop.Content := Loop.Content + Format(
           '(reached MaxIterations=%d while the model was still calling tools; '+
-          'last finish_reason=%s, %d pending tool call(s) — raise the --max-iter '+
+          'last finish_reason=%s, %d pending tool call(s) -- raise the --max-iter '+
           'cap on `pasclaw serve` or reduce the task scope.)',
           [FMaxIter, FinishReason, Length(Loop.LastResp.ToolCalls)]);
         FinishReason := 'length';
@@ -1668,7 +1668,7 @@ begin
             try
               Streamer.WriteError('internal error: ' + SanitizeStreamError(E.Message));
               { Previously assigned StreamClosed := Streamer.Closed here;
-                dropped — `raise;` below unwinds the stack so the value
+                dropped -- `raise;` below unwinds the stack so the value
                 is never read. dcc64 H2077 cleanup. }
             except
               if (AContext <> nil) and (AContext.Connection <> nil) then
@@ -1685,7 +1685,7 @@ begin
 
     { The non-streaming path collects ToolView-formatted activity lines via
       OnToolCall/OnToolResult and prepends them above the model's content
-      below — so frontends that buffer the whole JSON reply see the same
+      below -- so frontends that buffer the whole JSON reply see the same
       transcript the streaming path emits as visible deltas through
       TSSEStreamer. }
     ActivityCollector := TToolActivityCollector.Create;
@@ -1724,7 +1724,7 @@ begin
       if Loop.Content <> '' then Loop.Content := Loop.Content + #10#10;
       Loop.Content := Loop.Content + Format(
         '(reached MaxIterations=%d while the model was still calling tools; '+
-        'last finish_reason=%s, %d pending tool call(s) — raise the --max-iter '+
+        'last finish_reason=%s, %d pending tool call(s) -- raise the --max-iter '+
         'cap on `pasclaw serve` or reduce the task scope.)',
         [FMaxIter, FinishReason, Length(Loop.LastResp.ToolCalls)]);
       FinishReason := 'length';
@@ -1834,11 +1834,11 @@ function BuildResponsesObject(const Id, Model, Status, Content: string;
   openai-python raise ValidationError on the parser, manifesting as
   a "client chokes on the response" symptom (PR #61).
 
-  ToolCalls (Phase 2 — PR #63) appends function_call items to
+  ToolCalls (Phase 2 -- PR #63) appends function_call items to
   output[] for each model tool call. Each item carries an opaque
   fc_<...> id, the model's call_id (used by the client to match its
   function_call_output on the next turn), the tool name, and the
-  arguments as a *string* (raw JSON, not a parsed object — that
+  arguments as a *string* (raw JSON, not a parsed object -- that
   matches the Responses schema and lets escaped quotes round-trip).
 
   ToolsRawJSON, when non-empty, is the JSON-array string the caller
@@ -1943,7 +1943,7 @@ function EmitResponsesEvent(Streamer: TSSEStreamer;
     \n
 
   Returns False if the streamer's underlying connection is already
-  closed — callers can short-circuit further emission when the
+  closed -- callers can short-circuit further emission when the
   client disconnected mid-stream. }
 var
   Frame: string;
@@ -2101,14 +2101,14 @@ procedure EmitResponsesStream(AContext: TIdContext;
 
      response.created                            { in_progress, empty output }
      response.in_progress
-     [ message sub-sequence — only if Content <> '' ]
+     [ message sub-sequence -- only if Content <> '' ]
        response.output_item.added                { message item }
        response.content_part.added               { output_text part }
        response.output_text.delta                { full text, one delta }
        response.output_text.done
        response.content_part.done
        response.output_item.done                 { message item completed }
-     [ for each tool call — Phase 2 tool passthrough ]
+     [ for each tool call -- Phase 2 tool passthrough ]
        response.output_item.added                { function_call item, args="" }
        response.function_call_arguments.delta    { full args, one delta }
        response.function_call_arguments.done
@@ -2331,7 +2331,7 @@ procedure TResponsesStreamState.OnChunk(const C: TStreamChunk);
   the model just produced; emit a response.output_text.delta for it.
   The first text chunk also has to open the message sub-sequence
   (output_item.added + content_part.added) because we don't know
-  in advance whether the response will have any text at all — some
+  in advance whether the response will have any text at all -- some
   function-call-only turns produce zero text. Tool-call deltas
   are not emitted here; the provider returns the final TToolCall
   list in its TLLMResponse and the calling function handles those
@@ -2381,7 +2381,7 @@ procedure StreamResponsesViaProvider(AContext: TIdContext;
    carried.
 
    The non-passthrough (RunToolLoop) path stays on the
-   single-delta EmitResponsesStream — RunToolLoop is synchronous
+   single-delta EmitResponsesStream -- RunToolLoop is synchronous
    so its text is only available as a whole at the end, and there
    is no incremental data to forward. *)
 var
@@ -2499,7 +2499,7 @@ begin
         return the full text via Resp.Content with no OnChunk
         invocations. Feed it through OnChunk so the event sequence
         is the same shape regardless of provider streaming
-        support. Skip on the failure path — Resp.Content carries the
+        support. Skip on the failure path -- Resp.Content carries the
         provider error string, not a real assistant turn, so it
         belongs in the response.failed error.message instead of being
         streamed back as fake text deltas. }
@@ -2642,7 +2642,7 @@ var
   OutToolCalls: array of TToolCall;
   OutUsage: TUsageInfo;
   ParamsObj: TJsonObject;
-  ParamsRaw, ToolKind: string;
+  ParamsRaw, ToolKind, ToolDisplayName: string;
   EmptyToolCalls: array of TToolCall;
 
   procedure AppendMessage(Role: TMsgRole; const Content: string);
@@ -2671,7 +2671,7 @@ var
     Signature: the provider_signature extension we emit when shipping
     function_call items downstream. Codex (or any PasClaw-aware
     client) echoes it back on the input function_call item so this
-    side can stuff it back onto the TToolCall — required for Gemini
+    side can stuff it back onto the TToolCall -- required for Gemini
     3+ thoughtSignature round-trips through /v1/responses. Codex P1
     on PR #154. }
   var
@@ -2857,7 +2857,7 @@ begin
           begin
             { Previous-turn tool call coming back in the input stream.
               Synthesize an assistant message carrying the matching
-              TToolCall — see AppendAssistantToolCall comment. }
+              TToolCall -- see AppendAssistantToolCall comment. }
             AppendAssistantToolCall(
               InputObj.GetStr('call_id', InputObj.GetStr('id', '')),
               InputObj.GetStr('name',      ''),
@@ -2875,7 +2875,7 @@ begin
           else
           begin
             { Unknown item type (reasoning, image, computer_call, …)
-              — log at debug and skip. Phase 2 covers function_call /
+              -- log at debug and skip. Phase 2 covers function_call /
               function_call_output; the rest are future scope. }
             LogDebug('responses: skipping unsupported input item type "%s"',
                      [ItemType]);
@@ -2899,14 +2899,14 @@ begin
       Exit;
     end;
 
-    { Tools passthrough — parse the request's tools[] array. Function-
+    { Tools passthrough -- parse the request's tools[] array. Function-
       type entries become TToolDefinition for the provider. The
       verbatim array is captured in ToolsRawJSON so the response.tools
       field can echo it (the SDK uses that for validation /
       display). Custom-type tools (Codex's grammar-constrained
-      apply_patch) are NOT forwarded to the provider — Anthropic /
+      apply_patch) are NOT forwarded to the provider -- Anthropic /
       OpenAI Chat-Completions don't natively support Lark-grammar
-      output constraints — but they still appear in ToolsRawJSON so
+      output constraints -- but they still appear in ToolsRawJSON so
       the SDK doesn't trip on the echo. The model just won't
       attempt to call them; Codex's UX for grammar tools degrades
       to "model writes apply_patch text directly" in that case. }
@@ -2925,8 +2925,18 @@ begin
           ToolKind := LowerCase(Trim(ToolObj.GetStr('type', 'function')));
           if ToolKind <> 'function' then
           begin
-            LogDebug('responses: skipping non-function tool "%s" type=%s',
-                     [ToolObj.GetStr('name', '?'), ToolKind]);
+            { Name is optional on some Responses-API tool shapes -- OpenAI's
+              built-in `web_search` / `web_search_preview` carry only a
+              `type` field, so the previous '?' default looked like garbage
+              in the debug log. Surface the type explicitly when the name's
+              absent; that's the only useful identifier we have. }
+            ToolDisplayName := ToolObj.GetStr('name', '');
+            if ToolDisplayName = '' then
+              LogDebug('responses: skipping non-function tool type=%s',
+                       [ToolKind])
+            else
+              LogDebug('responses: skipping non-function tool "%s" type=%s',
+                       [ToolDisplayName, ToolKind]);
             Continue;
           end;
           j := Length(ToolDefs);
@@ -2971,13 +2981,13 @@ begin
     begin
       { Passthrough path. The client (Codex, openai-python tool use)
         defined its own tools and expects to execute them itself, so
-        we DON'T run PasClaw's internal tool loop — that would have
+        we DON'T run PasClaw's internal tool loop -- that would have
         the model's tool calls vanish into our server-side handlers
         instead of reaching the client. One Chat() round-trip, hand
         back text and any tool_calls verbatim. }
       PassthroughOpts := DefaultChatOptions;
       ApplyPromptCacheConfig(PassthroughOpts, FCfg.PromptCache);
-      { Skip BuildSystemPrompt — Codex sends its own developer
+      { Skip BuildSystemPrompt -- Codex sends its own developer
         message + AGENTS.md; injecting a PasClaw identity preamble
         on top of that confuses the model. }
       RawTemp := Req.GetFloat('temperature', 0);
@@ -2989,9 +2999,9 @@ begin
 
       (* tool_choice forwarding. Accept the three string forms every
         provider understands ("auto", "none", "required"). Anything
-        else — most notably the object form
+        else -- most notably the object form
         {"type":"function","function":{"name":"..."}}, which would
-        need per-provider translation — is logged at debug and
+        need per-provider translation -- is logged at debug and
         dropped; the provider's default behaviour (typically
         "auto" when tools are present) applies. *)
       if Req.Has('tool_choice') then
@@ -3054,7 +3064,7 @@ begin
     end
     else
     begin
-      { Legacy path — no client-supplied tools, so we run the
+      { Legacy path -- no client-supplied tools, so we run the
         internal tool loop and surface its text. This keeps the
         non-Codex flows (curl /v1/responses with just an input
         string) working as before. }
@@ -3108,7 +3118,7 @@ begin
         if Loop.Content <> '' then Loop.Content := Loop.Content + #10#10;
         Loop.Content := Loop.Content + Format(
           '(reached MaxIterations=%d while the model was still calling tools; '+
-          'last finish_reason=%s, %d pending tool call(s) — raise the --max-iter '+
+          'last finish_reason=%s, %d pending tool call(s) -- raise the --max-iter '+
           'cap on `pasclaw serve` or reduce the task scope.)',
           [FMaxIter, FinishReason, Length(Loop.LastResp.ToolCalls)]);
         FinishReason := 'length';

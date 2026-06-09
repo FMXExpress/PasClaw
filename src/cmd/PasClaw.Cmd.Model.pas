@@ -1,4 +1,4 @@
-﻿{ Model — view or switch the default model. }
+﻿{ Model -- view or switch the default model. }
 unit PasClaw.Cmd.Model;
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
@@ -36,7 +36,7 @@ function DoShow: Integer;
 { Adds a "cache freshness" annotation for the default provider's
   /models cache, plus a top-N inline preview when a cache exists so
   `pasclaw model` is actually informative without a follow-up
-  `model list` call — user feedback on the first cut was that the
+  `model list` call -- user feedback on the first cut was that the
   list "wasn't there" because we only surfaced a count. The cached
   body lives in $PASCLAW_HOME/cache/models/<provider-name>.json
   keyed on the Provider Name (PR #171 Codex P2). }
@@ -59,7 +59,7 @@ begin
     if not LoadCachedModels(Cfg.DefaultProvider, R) then
     begin
       PrintLn('models cached:    ' + Ansi.Dim +
-              '(none — run `pasclaw model refresh ' + Cfg.DefaultProvider +
+              '(none -- run `pasclaw model refresh ' + Cfg.DefaultProvider +
               '` to populate)' + Ansi.Reset);
       Exit(0);
     end;
@@ -79,7 +79,7 @@ begin
     end;
     if Length(R.Models) > N then
       PrintLn(Ansi.Dim +
-              Format('  (+ %d more — run `pasclaw model list %s` for the full roster)',
+              Format('  (+ %d more -- run `pasclaw model list %s` for the full roster)',
                      [Length(R.Models) - N, Cfg.DefaultProvider]) +
               Ansi.Reset);
     Result := 0;
@@ -113,7 +113,7 @@ begin
   end;
   { Cache keyed on the operator-facing Provider Name (NOT Spec.Kind)
     so two Cfg.Providers[] rows that share a Kind but point at
-    different APIBase/keys — supported by NewProviderFromConfig —
+    different APIBase/keys -- supported by NewProviderFromConfig --
     don't clobber each other's roster. Codex P2 on PR #171. }
   SaveCachedModels(Name, R);
   PrintLn(Format('  %s✓ %s%s: %d model(s) cached',
@@ -174,7 +174,7 @@ begin
     PrintLn('Usage: pasclaw model list <provider>');
     Exit(1);
   end;
-  { Cache lookup keys directly on the operator-facing Name — same
+  { Cache lookup keys directly on the operator-facing Name -- same
     key RefreshOne writes to. Two configs sharing a Kind but with
     different APIBase keys each get their own roster file. }
   Name := Argv[1];

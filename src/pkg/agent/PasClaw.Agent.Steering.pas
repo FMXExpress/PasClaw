@@ -1,8 +1,8 @@
 (*
-  PasClaw.Agent.Steering — mid-loop interrupt queue.
+  PasClaw.Agent.Steering -- mid-loop interrupt queue.
 
   Today a user mid-conversation can't course-correct while a tool loop
-  is running — their next message is processed AFTER the loop returns.
+  is running -- their next message is processed AFTER the loop returns.
   picoclaw's pkg/agent/steering.go and nanobot's _inject_pending path
   both let the user push a follow-up into a queue that the loop drains
   between iterations and folds into the next LLM round-trip as a
@@ -16,10 +16,10 @@
   Cmd.Agent uses Session.Meta.Id (always present since PR #117);
   channels can pass their own stable per-conversation key (Telegram
   chat id, Slack channel, etc.) when they wire concurrent polling
-  (currently CLI-only — see README for the per-channel follow-up).
+  (currently CLI-only -- see README for the per-channel follow-up).
 
   Concurrency model: every push AND drain acquires a directory-
-  based mutex first (mkdir of <key>.jsonl.lock — atomic on both
+  based mutex first (mkdir of <key>.jsonl.lock -- atomic on both
   POSIX and Windows). A stale lock from a crashed process is auto-
   recovered after STALE_LOCK_SECS. Inside the mutex a drain renames
   the queue file to <key>.jsonl.draining, then reads and deletes,
@@ -30,7 +30,7 @@
 
   Cap: caller decides via MaxPerTurn (RunToolLoop passes a small
   fixed cap so a runaway pusher can't grow Hist unbounded). Drained
-  messages beyond the cap are logged + dropped — picoclaw's
+  messages beyond the cap are logged + dropped -- picoclaw's
   MaxInjections behaves the same.
 *)
 unit PasClaw.Agent.Steering;
@@ -56,7 +56,7 @@ type
   traversal, NULs, leading dot, length cap) or write fails. }
 function PushSteering(const SessionKey, Text: string): Boolean;
 
-{ Drain up to MaxMessages from the queue (rest are LOST — caller
+{ Drain up to MaxMessages from the queue (rest are LOST -- caller
   picked the cap). Empty array when no messages or unsafe key.
   Atomic across concurrent drains via rename. }
 function DrainSteering(const SessionKey: string; MaxMessages: Integer): TSteeringMessageArray;
@@ -64,7 +64,7 @@ function DrainSteering(const SessionKey: string; MaxMessages: Integer): TSteerin
 { Erase the queue entirely. Called by /reset, /new, session delete. }
 procedure ClearSteering(const SessionKey: string);
 
-{ Inspect without consuming — list / show / debug. }
+{ Inspect without consuming -- list / show / debug. }
 function PendingSteeringCount(const SessionKey: string): Integer;
 
 { Absolute path of the on-disk queue file (or '' for an unsafe key).
@@ -111,7 +111,7 @@ end;
 
 const
   { A process that crashed mid-push leaves the lock dir behind. After
-    this many seconds we treat it as orphaned and reclaim — small
+    this many seconds we treat it as orphaned and reclaim -- small
     enough that an interrupted user CLI doesn't permanently wedge
     the queue, large enough that a normal push/drain (millisecond
     scale) never trips it. }
@@ -134,11 +134,11 @@ begin
   while Waited < LOCK_MAX_WAIT_MS do
   begin
     if CreateDir(LockDir) then Exit(True);
-    { Already exists — check whether it's stale. FindFirst on the
+    { Already exists -- check whether it's stale. FindFirst on the
       directory itself gives us its mtime via SR.Time. }
     if FindFirst(LockDir, faDirectory, Info) = 0 then
     try
-      { Info.TimeStamp is the modern TDateTime field — the legacy
+      { Info.TimeStamp is the modern TDateTime field -- the legacy
         Info.Time + FileDateToDateTime pair is deprecated on dcc64
         (W1000) and flagged platform-specific (W1002). TimeStamp
         has shipped on both FPC 3.0+ and Delphi for years. }
@@ -286,7 +286,7 @@ begin
   try
     if not FileExists(Path) then Exit;
     DrainPath := Path + '.draining';
-    { Inside the lock the rename is uncontended — but keep the
+    { Inside the lock the rename is uncontended -- but keep the
       rename anyway so a stale-lock reclaim mid-drain doesn't
       surprise a concurrent reader with mid-read deletion. }
     if FileExists(DrainPath) then SysUtils.DeleteFile(DrainPath);
@@ -308,7 +308,7 @@ begin
       begin
         if Kept >= MaxMessages then
         begin
-          LogWarn('steering[%s]: %d pending exceeded cap of %d — dropping rest',
+          LogWarn('steering[%s]: %d pending exceeded cap of %d -- dropping rest',
                   [SessionKey, S.Count - Kept, MaxMessages]);
           Break;
         end;
@@ -335,7 +335,7 @@ begin
   Path := SteeringPath(SessionKey);
   if Path = '' then Exit;
   Lock := LockPath(SessionKey);
-  if not AcquireLock(Lock) then Exit;   { best-effort — no log spam }
+  if not AcquireLock(Lock) then Exit;   { best-effort -- no log spam }
   try
     if FileExists(Path) then SysUtils.DeleteFile(Path);
   finally

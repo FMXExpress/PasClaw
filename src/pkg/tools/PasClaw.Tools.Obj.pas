@@ -1,5 +1,5 @@
 (*
-  PasClaw.Tools.Obj — abstract base class for OOP tool authoring.
+  PasClaw.Tools.Obj -- abstract base class for OOP tool authoring.
 
   This is the friendly side of the record-based registry. The legacy
   TTool record + plain function pointer in PasClaw.Tools.Types still
@@ -61,7 +61,7 @@ type
     function Run(const ArgsJSON: string; out ErrMsg: string): string; virtual;
 
     { Override to tcReadOnly if your Run does no shared-state mutation
-      — that lets the agent loop fan out concurrent calls to your tool
+      -- that lets the agent loop fan out concurrent calls to your tool
       alongside other read-only tools in the same model turn. Default is
       tcMutating for safety: a custom tool author who forgets to set
       Category gets serial dispatch, never an accidental race. }

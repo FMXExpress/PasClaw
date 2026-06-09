@@ -1,4 +1,4 @@
-﻿{ Skills — list / install / remove / search skill extensions.
+﻿{ Skills -- list / install / remove / search skill extensions.
 
   install accepts three target shapes (in this dispatch order):
 
@@ -8,13 +8,13 @@
 
     pasclaw skills install clawhub:<slug>[@<version>]
         Resolve <slug> on ClawHub (https://clawhub.ai). Picoclaw and
-        nanobot's default registry — slug syntax is lowercase
+        nanobot's default registry -- slug syntax is lowercase
         alphanumerics, '-', and '_'. `@<version>` pins; omitting it
         uses the slug's latestVersion if metadata is available,
         otherwise 'latest'. The explicit `clawhub:` prefix is
         required so a slug-shaped bare name like `my-skill` does
         not silently swap places with a same-named registry entry
-        — see the docstring on IsClawHubTarget for the backwards
+        -- see the docstring on IsClawHubTarget for the backwards
         compat rationale.
 
     pasclaw skills search <query>
@@ -84,7 +84,7 @@ function IsClawHubTarget(const Target: string; out Slug: string): Boolean;
   prefix. Bare slug-shaped names ('my-skill', 'code-review' etc.)
   stay on the legacy config-only path so pre-existing scripts that
   used `pasclaw skills install <name>` to record an entry in
-  config.json keep working — they'd otherwise either 404 on
+  config.json keep working -- they'd otherwise either 404 on
   ClawHub or, worse, silently install an unrelated registry skill
   that happened to share the slug.
 
@@ -121,7 +121,7 @@ const
   HubPrefix = 'hub:';
 
 function IsPasClawHubTarget(const Target: string; out Slug: string): Boolean;
-{ Parallel to IsClawHubTarget — `hub:<slug>[@version]` forces routing
+{ Parallel to IsClawHubTarget -- `hub:<slug>[@version]` forces routing
   through the pasclaw.dev hub. Same slug constraints (lowercase
   alphanumeric + dash + underscore, ≤128 chars). Used to bypass the
   bare-slug hub-then-clawhub fallback when the caller explicitly
@@ -249,7 +249,7 @@ begin
     Cfg.Skills[n].Enabled := True;
     SaveConfig(Cfg);
     PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'recorded ' + Argv[1] + ' in config.json');
-    PrintLn(Ansi.Dim + '  (no files downloaded — for a GitHub install use ' +
+    PrintLn(Ansi.Dim + '  (no files downloaded -- for a GitHub install use ' +
             'owner/repo syntax)' + Ansi.Reset);
     Result := 0;
   finally
@@ -313,7 +313,7 @@ function TryInstallFromHub(const Slug, Version, DestRoot: string;
 { Thin wrapper around InstallFromPasClawHub that splits "not found"
   (the hub doesn't carry this slug) from other failures (network /
   TLS / parse error). Only `not found` lets the bare-slug dispatcher
-  fall through to ClawHub — a network blip pinned on pasclaw.dev
+  fall through to ClawHub -- a network blip pinned on pasclaw.dev
   should surface as an error rather than silently retrying against
   a different hub the user may not have intended. }
 begin
@@ -328,7 +328,7 @@ function DoInstallBareSlug(const Argv: array of string): Integer;
   'not found', fall back to the legacy "just record in config.json"
   path only when BOTH hubs report not-found. Network errors on the
   first hop surface as failures rather than silently demoting to
-  ClawHub — that way an unreachable pasclaw.dev (cached DNS, mid-
+  ClawHub -- that way an unreachable pasclaw.dev (cached DNS, mid-
   flight TLS rotation, etc.) is visible to the operator instead of
   being papered over. }
 var
@@ -353,15 +353,15 @@ begin
   end;
   if not HubNotFound then
   begin
-    { Real error, not a miss — surface and stop. }
+    { Real error, not a miss -- surface and stop. }
     PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'pasclaw.dev install failed: ' + ErrMsg);
     PrintLn(Ansi.Dim + '  retry with ' + Ansi.Reset + '`pasclaw skills install clawhub:' + Slug + '`' +
             Ansi.Dim + ' to force ClawHub.' + Ansi.Reset);
     Exit(1);
   end;
 
-  PrintLn(Ansi.Dim + '  not on pasclaw.dev — trying ClawHub …' + Ansi.Reset);
-  { Pre-call `ClawNotFound := False` removed — dead write per dcc64
+  PrintLn(Ansi.Dim + '  not on pasclaw.dev -- trying ClawHub …' + Ansi.Reset);
+  { Pre-call `ClawNotFound := False` removed -- dead write per dcc64
     H2077. The only read is at the `if not ClawNotFound` below, and
     we unconditionally reassign on line `ClawNotFound := SameText(...)`
     before that read. }
@@ -383,10 +383,10 @@ begin
 
   { Both hubs say "not found". Fall through to legacy record-only
     behaviour so existing user scripts that did
-    `pasclaw skills install my-local-name` keep working — with a
+    `pasclaw skills install my-local-name` keep working -- with a
     note that nothing was downloaded. }
   PrintLn(Ansi.Yellow + '! ' + Ansi.Reset +
-          'no hub entry for "' + Slug + '" — recording in config.json only.');
+          'no hub entry for "' + Slug + '" -- recording in config.json only.');
   Result := DoInstallLegacy(Argv);
 end;
 
@@ -437,7 +437,7 @@ begin
   { Query both hubs. pasclaw.dev results render first; ClawHub
     results follow, with slugs already seen on pasclaw.dev dropped
     (the local hub wins the dedup). Either hub being unreachable
-    is recoverable — we degrade to whatever did respond. }
+    is recoverable -- we degrade to whatever did respond. }
   PrintLn('Searching pasclaw.dev + ClawHub: ' + Query + ' …');
   HubOk := SearchPasClawHub(Query, 20, HubResults, HubErr);
   ClawOk := SearchClawHub(Query, 20, ClawResults, ClawErr);
@@ -450,10 +450,10 @@ begin
   end;
   if not HubOk then
     PrintLn(Ansi.Yellow + '! ' + Ansi.Reset +
-            'pasclaw.dev unreachable (' + HubErr + ') — showing ClawHub only');
+            'pasclaw.dev unreachable (' + HubErr + ') -- showing ClawHub only');
   if not ClawOk then
     PrintLn(Ansi.Yellow + '! ' + Ansi.Reset +
-            'clawhub unreachable (' + ClawErr + ') — showing pasclaw.dev only');
+            'clawhub unreachable (' + ClawErr + ') -- showing pasclaw.dev only');
 
   if (Length(HubResults) = 0) and (Length(ClawResults) = 0) then
   begin
@@ -543,8 +543,8 @@ function IsSafeSkillName(const Name: string): Boolean;
   `pasclaw skills remove ../memory` recursively delete an unrelated
   workspace subtree. Only single-segment ASCII-ish names are
   accepted on the remove path. Names that came from
-  InstallFromGitHub are derived from URL path segments — none of
-  the rejected characters can appear there — so legitimate
+  InstallFromGitHub are derived from URL path segments -- none of
+  the rejected characters can appear there -- so legitimate
   installs always pass. }
 var
   i: Integer;
@@ -570,7 +570,7 @@ begin
   if not IsSafeSkillName(Argv[1]) then
   begin
     PrintLn(Ansi.Red + '✗ ' + Ansi.Reset +
-            'unsafe skill name "' + Argv[1] + '" — skill names must be a single ' +
+            'unsafe skill name "' + Argv[1] + '" -- skill names must be a single ' +
             'path segment with no /, \, :, or ".." sequence');
     Exit(1);
   end;

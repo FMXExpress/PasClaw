@@ -1,5 +1,5 @@
 (*
-  PasClaw.Cmd.Learn — mine session transcripts for recurring tool
+  PasClaw.Cmd.Learn -- mine session transcripts for recurring tool
   failures so the operator can promote them into MEMORY.md as
   durable hints.
 
@@ -487,7 +487,7 @@ var
   Shown: Integer;
 begin
   PrintLn(Ansi.Bold + 'pasclaw learn' + Ansi.Reset +
-          Format(' — scanned %d session(s), found %d unique pattern(s)',
+          Format(' -- scanned %d session(s), found %d unique pattern(s)',
                  [ScannedSessions, Length(Patterns)]));
   PrintLn('');
 

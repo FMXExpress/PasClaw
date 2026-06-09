@@ -11,9 +11,9 @@
   access tokens issued by its own /authorize → /token flow with PKCE.
 
   Flow:
-    1. GET <mcp-url>/.well-known/oauth-protected-resource — find the
+    1. GET <mcp-url>/.well-known/oauth-protected-resource -- find the
        authorization_servers list.
-    2. GET <auth-server>/.well-known/oauth-authorization-server —
+    2. GET <auth-server>/.well-known/oauth-authorization-server --
        discover the authorization, token, and (optional) registration
        endpoints.
     3. If no client_id stored, POST to registration_endpoint as a
@@ -70,7 +70,7 @@ type
       and /token call so the issued access token is audience-scoped
       to the MCP server. Without it Replicate's auth server hands
       back a token whose MCP endpoint rejects as "Invalid token
-      format" — the symptom that motivated PR #138. }
+      format" -- the symptom that motivated PR #138. }
     Resource:     string;
   end;
 
@@ -91,7 +91,7 @@ function GetAccessToken(const ServerName: string;
                         RefreshSlackSeconds: Integer = 60): string;
 
 { Force a refresh regardless of expiry. Used by the HTTP client when
-  it sees a 401 with `WWW-Authenticate: Bearer` — the stored token
+  it sees a 401 with `WWW-Authenticate: Bearer` -- the stored token
   may have been revoked or scope-rotated server-side. }
 function ForceRefresh(const ServerName: string; out ErrMsg: string): Boolean;
 
@@ -305,7 +305,7 @@ begin
   if i > 0 then
   begin
     Origin := Scheme + Copy(Rest, 1, i - 1);
-    { Drop a lone "/" — RFC 9728 treats no path the same as path "/",
+    { Drop a lone "/" -- RFC 9728 treats no path the same as path "/",
       and the well-known URL omits the trailing slash in both cases. }
     if (i < Length(Rest)) or False then
       ResourcePath := Copy(Rest, i, MaxInt)
@@ -393,7 +393,7 @@ begin
     Exit;
   end;
   try
-    { Canonical resource URI — RFC 9728 §3.2. Fall back to the
+    { Canonical resource URI -- RFC 9728 §3.2. Fall back to the
       MCP server URL if absent so we always have something to feed
       RFC 8707; Replicate populates it as e.g. "https://mcp.replicate.com/". }
     Resource := Obj.GetStr('resource', ServerURL);
@@ -605,7 +605,7 @@ begin
   end;
   if State <> ExpectedState then
   begin
-    FResult.Error := 'state mismatch — possible CSRF; refusing';
+    FResult.Error := 'state mismatch -- possible CSRF; refusing';
     AResponse.ResponseNo  := 400;
     AResponse.ContentType := 'text/plain; charset=utf-8';
     AResponse.ContentText := FResult.Error;
@@ -640,7 +640,7 @@ end;
 { ---------- Browser open ------------------------------------------ }
 
 {$IFDEF MSWINDOWS}
-{ Direct ShellExecuteW import — going through `cmd /C start ...`
+{ Direct ShellExecuteW import -- going through `cmd /C start ...`
   mangles every percent-encoded character in the authorize URL
   because cmd interprets `%NAME%` (and even partial `%NN` runs in
   some parsing modes) as environment-variable expansion. Codex
@@ -773,7 +773,7 @@ begin
       RFC 7591 public clients (no secret, anonymous identity). }
     if RegEp = '' then
     begin
-      ErrMsg := 'no client_id available — auth server does not expose registration_endpoint';
+      ErrMsg := 'no client_id available -- auth server does not expose registration_endpoint';
       Exit;
     end;
     if not RegisterClient(RegEp, RedirectURI, ClientId, ErrMsg) then Exit;
@@ -860,12 +860,12 @@ begin
   if not LoadTokens(ServerName, Tok, ErrMsg) then Exit;
   if Tok.RefreshToken = '' then
   begin
-    ErrMsg := 'no refresh_token stored — re-run `pasclaw mcp auth ' + ServerName + '`';
+    ErrMsg := 'no refresh_token stored -- re-run `pasclaw mcp auth ' + ServerName + '`';
     Exit;
   end;
   if Tok.TokenEndpoint = '' then
   begin
-    ErrMsg := 'no token_endpoint cached — re-run `pasclaw mcp auth ' + ServerName + '`';
+    ErrMsg := 'no token_endpoint cached -- re-run `pasclaw mcp auth ' + ServerName + '`';
     Exit;
   end;
   Form :=
@@ -873,7 +873,7 @@ begin
     '&refresh_token=' + FormEncode(Tok.RefreshToken) +
     '&client_id='     + FormEncode(Tok.ClientId);
   { Keep the refreshed token scoped to the same resource as the
-    original — same RFC 8707 requirement applies. }
+    original -- same RFC 8707 requirement applies. }
   if Tok.Resource <> '' then
     Form := Form + '&resource=' + FormEncode(Tok.Resource);
   if not PostToken(Tok.TokenEndpoint, Form, RespBody, Status, ErrMsg) then
@@ -901,7 +901,7 @@ begin
   begin
     if not ForceRefresh(ServerName, Err) then
     begin
-      LogWarn('OAuth[%s]: refresh failed (%s) — returning expired token; caller will see 401',
+      LogWarn('OAuth[%s]: refresh failed (%s) -- returning expired token; caller will see 401',
               [ServerName, Err]);
     end
     else

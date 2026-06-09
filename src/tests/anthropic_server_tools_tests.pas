@@ -123,7 +123,7 @@ begin
                        Opts, ST);
   { fs_read survives, the colliders are dropped, the server entries
     take their place. The "should be dropped" description proves the
-    user entry was removed — Anthropic would otherwise see two tools
+    user entry was removed -- Anthropic would otherwise see two tools
     named "web_search" and 400. }
   AssertContains(Body, '"name" : "fs_read"',           'non-colliding user tool kept');
   AssertContains(Body, '"type" : "web_search_20260209"', 'server web_search emitted');
@@ -153,8 +153,8 @@ begin
   AssertContains(Next, '"role" : "user"', 'user turn preserved');
   AssertContains(Next, '"text" : "hi"',   'user text preserved');
 
-  { New assistant turn carries the response content verbatim — both the
-    text block and the server_tool_use block — so Anthropic's server-
+  { New assistant turn carries the response content verbatim -- both the
+    text block and the server_tool_use block -- so Anthropic's server-
     side loop sees the trailing server_tool_use and resumes. }
   AssertContains(Next, '"role" : "assistant"', 'assistant turn appended');
   AssertContains(Next, '"server_tool_use"',    'server_tool_use preserved verbatim');

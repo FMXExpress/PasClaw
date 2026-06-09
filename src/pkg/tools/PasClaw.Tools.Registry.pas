@@ -70,7 +70,7 @@ begin
     leaves it pointing at stack garbage. RunTool's
     `if Assigned(T.HandlerObj)` then either misroutes the call or
     crashes. If Handler is set, the caller intended function-pointer
-    dispatch — clear HandlerObj. TPasClawTool installs always set
+    dispatch -- clear HandlerObj. TPasClawTool installs always set
     Handler := nil first, so this branch doesn't fire for them. }
   if Assigned(Stored.Handler) then
   begin

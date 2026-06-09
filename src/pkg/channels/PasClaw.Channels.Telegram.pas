@@ -141,7 +141,7 @@ begin
         Chat.Free;
       end;
       { Sender identity for allow_senders gating. In group chats
-        message.chat.id is the GROUP, not the user — using it as the
+        message.chat.id is the GROUP, not the user -- using it as the
         canonical id would let every group member through a single
         allowlist entry. message.from.id is the actual sender;
         chat.id rides along as RoomId so a hook can still filter
@@ -171,7 +171,7 @@ begin
 
   if FProvider = nil then
   begin
-    SendMessage(ChatId, '(no provider configured — run `pasclaw onboard`)');
+    SendMessage(ChatId, '(no provider configured -- run `pasclaw onboard`)');
     Exit;
   end;
 
@@ -200,7 +200,7 @@ begin
   if RunToolLoop(LoopCfg, Msgs, Loop) and (Loop.Content <> '') then
     SendMessage(ChatId, Loop.Content)
   else
-    SendMessage(ChatId, '(sorry — model returned no content)');
+    SendMessage(ChatId, '(sorry -- model returned no content)');
 end;
 
 procedure TTelegramChannel.Run;

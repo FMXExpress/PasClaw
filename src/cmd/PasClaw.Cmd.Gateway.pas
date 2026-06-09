@@ -166,7 +166,7 @@ begin
     Provider := nil;
     if Cfg.DefaultProvider <> '' then
       if not NewDefaultProvider(Cfg, Provider, Err) then
-        LogWarn('gateway: no provider — /v1/chat will return 503 (%s)', [Err]);
+        LogWarn('gateway: no provider -- /v1/chat will return 503 (%s)', [Err]);
 
     Reg := nil;
     if not Args.NoTools then
@@ -181,7 +181,7 @@ begin
         LogWebSearchSkipOnce;
       if Cfg.WebFetchEnabled then RegisterWebFetchTool(Reg);
       if Cfg.WebFetchEnabled then RegisterMemoryFetchTool(Reg);
-      { Off by default — onboarding opt-in flips Cfg.VaultToolsEnabled.
+      { Off by default -- onboarding opt-in flips Cfg.VaultToolsEnabled.
         Without this branch, `pasclaw onboard` could report
         "vault_search / vault_get enabled" but the gateway / web UI
         chat surface would still tell the user "no Code Vault tool". }
@@ -230,7 +230,7 @@ begin
         if (Args.WAToken = '') or (Args.WAPhoneId = '') or
            (Args.WAVerify = '') or (Args.WASecret = '') then
         begin
-          LogError('whatsapp: need all four — --whatsapp-token / ' +
+          LogError('whatsapp: need all four -- --whatsapp-token / ' +
                    '$PASCLAW_WHATSAPP_TOKEN, --whatsapp-phone / ' +
                    '$PASCLAW_WHATSAPP_PHONE_ID, --whatsapp-verify / ' +
                    '$PASCLAW_WHATSAPP_VERIFY_TOKEN, --whatsapp-secret / ' +

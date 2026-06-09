@@ -4,7 +4,7 @@
   Workflow (openclaw-style):
     - The model writes durable notes by editing MEMORY.md or a daily
       file workspace/memory/YYYY-MM-DD.md with the existing fs_write
-      tool. There is intentionally NO memory_add tool — files are the
+      tool. There is intentionally NO memory_add tool -- files are the
       source of truth, the index follows.
     - memory_search opens the lazy FTS5 index over workspace/memory/,
       syncs it against the current files (rebuilding rows for any file
@@ -15,7 +15,7 @@
 
   The DB lives at <home>/workspace/memory/.index.db. Missing / corrupt
   / unloadable libsqlite3 degrades to "memory_search: index
-  unavailable" — the rest of the agent continues to function.
+  unavailable" -- the rest of the agent continues to function.
 *)
 unit PasClaw.Tools.Memory;
 
@@ -124,10 +124,10 @@ begin
 
   Dir := MemoryDir;
   if not DirectoryExists(Dir) then
-    Exit('(no memory directory yet — write to ' + JoinPath(Dir, 'MEMORY.md') +
+    Exit('(no memory directory yet -- write to ' + JoinPath(Dir, 'MEMORY.md') +
          ' first)');
 
-  { Backend selection — try the hybrid FTS+vector backend first when
+  { Backend selection -- try the hybrid FTS+vector backend first when
     the operator opted in via `pasclaw onboard` / `vector_search_enabled`
     (default True). On any "not provisioned yet" failure (missing
     sqlite-vec, missing ONNX Runtime, missing embedding model) Open()

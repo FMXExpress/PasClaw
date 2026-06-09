@@ -114,7 +114,7 @@ type
      and returns; Indy then flushes the 200 ack right away instead of
      holding it open while RunToolLoop chases tools. Meta's webhook
      ingestion times out around 20s and backs off exponentially on
-     retry — without async, a long tool loop tips the request past the
+     retry -- without async, a long tool loop tips the request past the
      timeout and the same event gets re-delivered, duplicating replies.
      FreeOnTerminate so the worker cleans up after Execute returns. *)
   TWhatsAppMessageWorker = class(TThread)
@@ -132,7 +132,7 @@ constructor TWhatsAppMessageWorker.Create(Bot: TWhatsAppBot;
 begin
   { Construct SUSPENDED, assign state, then Start. With Create(False)
     the kernel can schedule Execute before the field assignments below
-    finish — FBot would be nil and FFromNumber/FText would be empty
+    finish -- FBot would be nil and FFromNumber/FText would be empty
     when the worker ran. Codex flagged this on PR #78; the cron
     scheduler's TCronThread uses the same suspended-then-start
     pattern. }
@@ -272,7 +272,7 @@ begin
     "subscribe" AND hub.verify_token matches what we configured, echo
     hub.challenge back as plain text with 200. Anything else is 403.
     The challenge body MUST be the raw value (no JSON wrapping) per
-    Meta's docs — they parse it as text. }
+    Meta's docs -- they parse it as text. }
   Mode      := ARequest.Params.Values['hub.mode'];
   Token     := ARequest.Params.Values['hub.verify_token'];
   Challenge := ARequest.Params.Values['hub.challenge'];
@@ -305,7 +305,7 @@ begin
   if FProvider = nil then
   begin
     FPush.Push(FromNumber,
-               '(no provider configured — run `pasclaw onboard`)');
+               '(no provider configured -- run `pasclaw onboard`)');
     Exit;
   end;
 
@@ -334,7 +334,7 @@ begin
   if RunToolLoop(LoopCfg, Msgs, Loop) and (Loop.Content <> '') then
     Response := Loop.Content
   else
-    Response := '(sorry — model returned no content)';
+    Response := '(sorry -- model returned no content)';
 
   FPush.Push(FromNumber, Response);
 end;
@@ -375,13 +375,13 @@ begin
     Exit;
   end;
 
-  { Meta retries with backoff on non-2xx, so always ack 200 — dispatch
+  { Meta retries with backoff on non-2xx, so always ack 200 -- dispatch
     errors get logged but don't trigger duplicate-delivery storms. }
   AResponse.ResponseNo  := 200;
   AResponse.ContentText := '{}';
   AResponse.ContentType := 'application/json';
 
-  { Pre-try `Root := nil` removed — dead write per dcc64 H2077. The
+  { Pre-try `Root := nil` removed -- dead write per dcc64 H2077. The
     except branch always Exits, so Root is either assigned by Parse
     on the success path or we never reach the post-try-except code. }
   try

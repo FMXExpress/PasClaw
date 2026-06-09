@@ -1,5 +1,5 @@
 (*
-  PasClaw.Session.Store — durable conversation sessions.
+  PasClaw.Session.Store -- durable conversation sessions.
 
   Today `pasclaw agent` keeps its message history in process memory; a
   Ctrl-C / `/quit` / crash drops the whole conversation. Openclaw's
@@ -8,7 +8,7 @@
 
   Storage layout: one JSON file per session under
   $PASCLAW_HOME/workspace/sessions/<id>.json. The JSON carries
-  everything RunToolLoop needs to continue the conversation —
+  everything RunToolLoop needs to continue the conversation --
   message history (user / assistant / tool with their tool_call
   pairings preserved), the compacted SystemPrompt override that
   PasClaw.Agent.Compact emits, the last provider/model the
@@ -102,27 +102,27 @@ type
     Meta:     TSessionMeta;
     Messages: TMessageArray;
     { Create a session handle. When AId is empty, generates a new id
-      and leaves FExists False — caller decides whether to persist
+      and leaves FExists False -- caller decides whether to persist
       via Save. When AId is non-empty, attempts to load the file;
       MetaExists reflects whether the load found anything. }
     constructor Create(const AId: string = '');
     function MetaExists: Boolean;
     procedure Save;
     procedure Load(const AId: string);
-    { Refresh UpdatedAt to now. Doesn't write — caller decides when. }
+    { Refresh UpdatedAt to now. Doesn't write -- caller decides when. }
     procedure Touch;
     { Empty Messages, keep Meta (id/title/etc.). Caller decides whether
-      to persist. Doesn't reset SystemPromptOverride — embedders that
+      to persist. Doesn't reset SystemPromptOverride -- embedders that
       want a hard reset should set it to '' explicitly. }
     procedure ClearMessages;
     { Derive a title from the first mrUser message when Meta.Title is
-      empty. Idempotent — does nothing when Title is already set or
+      empty. Idempotent -- does nothing when Title is already set or
       Messages has no user turn. }
     procedure AutoTitle;
   end;
 
 function NewSessionId: string;
-{ True when Id is a safe filename component for a session file — see
+{ True when Id is a safe filename component for a session file -- see
   IsSafeSessionId in the implementation for the exact rules. Exposed
   so CLI callers (cmd/session, cmd/agent) can surface a clear error
   before invoking Save/Load/Delete with a hostile id. }
@@ -171,7 +171,7 @@ uses
   DateUtils,
   {$IFDEF MSWINDOWS}
   { Lets dcc64 inline SysUtils.RenameFile (used by Save's atomic
-    write) — without this it falls back to a regular call and emits
+    write) -- without this it falls back to a regular call and emits
     H2443. Mirrors the pattern used in PasClaw.CliUI / PasClaw.Crypto.Random. }
   {$IFDEF FPC}Windows,{$ELSE}Winapi.Windows,{$ENDIF}
   {$ENDIF}
@@ -202,7 +202,7 @@ end;
   NULs, leading `.`) or surprise the FS (overlong names). Allowed
   charset is the superset of NewSessionId's output plus the things a
   human is likely to want for hand-picked ids (`-`, `_`, `.` mid-name)
-  — Codex P1 on PR #117. Keep this strict; widening the charset
+  -- Codex P1 on PR #117. Keep this strict; widening the charset
   later is easy, narrowing it after files exist on disk is not. }
 function IsSafeSessionId(const Id: string): Boolean;
 var
@@ -258,7 +258,7 @@ begin
     survives /quit + resume. Without this the resumed assistant turn
     drops the signature and Gemini's next request 400s with
     "Function call is missing a thought_signature". Omitted from
-    JSON when empty — that's the common case (other providers / older
+    JSON when empty -- that's the common case (other providers / older
     Gemini) and keeps stock session files tidy. Codex P2 on PR #154. }
   if TC.ProviderSignature <> '' then
     Result.PutStr('provider_signature', TC.ProviderSignature);
@@ -601,7 +601,7 @@ begin
       SaveToFile would otherwise leave a half-written JSON that Load
       can't parse, defeating the "your conversation survives Ctrl-C"
       promise. POSIX rename(2) is atomic and overwrites; Windows
-      MoveFile requires the destination not exist — delete first.
+      MoveFile requires the destination not exist -- delete first.
       Codex P2 on PR #117. }
     TmpPath := Path + '.tmp';
     S := TStringList.Create;
@@ -638,7 +638,7 @@ begin
   Meta := Default(TSessionMeta);
   Meta.Id := AId;
   Path := SessionPath(AId);
-  if Path = '' then Exit;          { unsafe id — treat as not found }
+  if Path = '' then Exit;          { unsafe id -- treat as not found }
   if not FileExists(Path) then Exit;
 
   S := TStringList.Create;
@@ -760,7 +760,7 @@ begin
       if (SR.Attr and faDirectory) <> 0 then Continue;
       Id := ChangeFileExt(SR.Name, '');
       { Skip stray files (.tmp leftovers from a crashed Save, or
-        anything a human dropped in here) — only ids that round-trip
+        anything a human dropped in here) -- only ids that round-trip
         through IsSafeSessionId are real sessions. }
       if not IsSafeSessionId(Id) then Continue;
       { Load only the meta; this is wasteful but the sessions tree is
@@ -780,7 +780,7 @@ begin
     until FindNext(SR) <> 0;
   finally
     { Fully-qualified to disambiguate from Winapi.Windows.FindClose
-      (which takes a Handle, not a TSearchRec) — the impl uses now
+      (which takes a Handle, not a TSearchRec) -- the impl uses now
       pulls Winapi.Windows in for the RenameFile inline expansion,
       and Delphi's name lookup picks the last-in-uses wins. }
     SysUtils.FindClose(SR);

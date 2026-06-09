@@ -3,7 +3,7 @@
   alongside this file). Upstream commit: 0f00eece553da47e83169ddc8d72965c0dc40bcc.
   https://github.com/FMXExpress/localvector
 
-  Modifications kept to a minimum — PasClaw uses these units verbatim
+  Modifications kept to a minimum -- PasClaw uses these units verbatim
   as the in-tree implementation of the hybrid FTS5+vector memory backend
   (PasClaw.Memory.Vector). Diff against upstream for change tracking.
 }

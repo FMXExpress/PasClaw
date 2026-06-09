@@ -75,7 +75,7 @@ type
     Body:        string;   { markdown body after YAML frontmatter, if any }
     Dir:         string;   { absolute path to the skill's directory (SKILL.md
                              layout) or the file's directory (.json layout) }
-    Source:      string;   { absolute path to SKILL.md or the .json file —
+    Source:      string;   { absolute path to SKILL.md or the .json file --
                              used by the system prompt so the model can
                              fs_read for the full body }
   end;
@@ -119,7 +119,7 @@ begin
   Result := -1;
 end;
 
-(* Forward-declared handlers — one per slot. Same approach as MCP bridge. *)
+(* Forward-declared handlers -- one per slot. Same approach as MCP bridge. *)
 function H_0  (const A: string; out E: string): string; forward;
 function H_1  (const A: string; out E: string): string; forward;
 function H_2  (const A: string; out E: string): string; forward;
@@ -158,7 +158,7 @@ function H_15 (const A: string; out E: string): string; begin Result := RunShell
 
 { Delphi rejects @FunctionName as a constant expression in typed-constant
   array initializers; populate the first 16 slots in the initialization
-  section below. Slots 16..63 stay nil — RunShellSkill guards against that. }
+  section below. Slots 16..63 stay nil -- RunShellSkill guards against that. }
 var
   SkillHandlers: array[0..MaxSkills - 1] of TToolHandler;
 
@@ -279,7 +279,7 @@ end;
 
 (* Split a line at the first ':' and return (key, value) with both sides
    trimmed. Strips surrounding single or double quotes from value if
-   present — common in YAML for values that contain colons or other
+   present -- common in YAML for values that contain colons or other
    metacharacters. Returns False if there is no ':' on the line. *)
 function SplitYAMLEntry(const Line: string; out Key, Value: string): Boolean;
 var
@@ -320,7 +320,7 @@ begin
     (* Locate the frontmatter block. The first non-empty line must be `---`;
        the closing `---` marks the end. We allow leading blank lines to
        tolerate editors that prepend stray whitespace, and explicitly
-       strip a UTF-8 BOM at the start of the first line — Trim only
+       strip a UTF-8 BOM at the start of the first line -- Trim only
        handles ASCII whitespace, so a SKILL.md saved by a Windows editor
        with BOM would otherwise be rejected here with `no YAML
        frontmatter`. ReadFileText returns AnsiString-UTF8 under FPC and
@@ -501,7 +501,7 @@ begin
   SetLength(Result, 0);
   Root := JoinPath(HomeDir, 'workspace/skills');
   if not DirectoryExists(Root) then Exit;
-  { Per-directory SKILL.md takes priority — that is the format every new
+  { Per-directory SKILL.md takes priority -- that is the format every new
     skill (picoclaw, nanobot, ClawHub, Anthropic agent-skills) ships in. }
   ScanSkillDirs(Root, Result);
   ScanJsonSkills(Root, Result);
@@ -519,7 +519,7 @@ begin
     K := LowerCase(Trim(Skills[i].Kind));
     { Pure-knowledge skills (no kind set; SKILL.md is just a markdown
       body the model reads via fs_read) get advertised in the system
-      prompt's SKILLS section but skip tool registration — there is no
+      prompt's SKILLS section but skip tool registration -- there is no
       callable tool to attach a handler to, and registering a no-op
       stub would mislead the model into calling it. The catalog listing
       in the system prompt is the contract. }

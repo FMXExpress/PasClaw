@@ -6,8 +6,8 @@
     {$IFNDEF FPC}  Delphi build: positioned full-screen TUI built on
                    MVCFramework.Console (vendored in
                    src/pkg/vendor/dmvcframework/, Apache-2.0). Two
-                   panes — session list on the left, chat scrollback +
-                   input on the right — themed via ConsoleThemeDefault.
+                   panes -- session list on the left, chat scrollback +
+                   input on the right -- themed via ConsoleThemeDefault.
                    Per-frame redraw (~30 fps), KeyPressed/GetKey loop,
                    background TRunToolLoopThread for the LLM call so
                    the chat pane stays responsive (spinner + steering
@@ -16,7 +16,7 @@
     {$IFDEF FPC}   FPC build: original line-based ANSI renderer.
                    Works in any vt100-class terminal including
                    tmux/screen scrollback. No external deps. Session
-                   integration not wired here — `pasclaw tui` on FPC
+                   integration not wired here -- `pasclaw tui` on FPC
                    stays in-memory; Delphi build gets the full session
                    list / persistence. (Cmd_TUI_Run sets SessionId
                    regardless; the FPC branch ignores it.)
@@ -46,7 +46,7 @@ uses
                                      from the interface section's uses, not
                                      just the implementation's. FPC was
                                      permissive about this; dcc64 is not. }
-  PasClaw.Tools.ToolLoop,          { TToolLoopResult — referenced by the
+  PasClaw.Tools.ToolLoop,          { TToolLoopResult -- referenced by the
                                      AccumulateLoopStats method declaration
                                      in the TTUI class; same dcc64
                                      visibility rule as the line above. }
@@ -65,7 +65,7 @@ type
     FModel:    string;
     FQuit:     Boolean;
     {$IFNDEF FPC}
-    { positioned-TUI state — see Run() for the per-frame loop }
+    { positioned-TUI state -- see Run() for the per-frame loop }
     FFocus:             TFocus;
     FSession:           TSession;
     FSessions:          TSessionMetaArray;
@@ -73,7 +73,7 @@ type
     FSessScroll:        Integer;
     FChatScroll:        Integer;       { lines back from the bottom; 0 = pinned to latest }
     FInputBuf:          string;
-    FLoopThread:        TObject;       { TRunToolLoopThread — opaque here to avoid forward-decl gymnastics }
+    FLoopThread:        TObject;       { TRunToolLoopThread -- opaque here to avoid forward-decl gymnastics }
     FLoopStartedAt:     TDateTime;
     FSpinnerFrame:      Integer;
     FConfirmDelete:     Boolean;
@@ -83,7 +83,7 @@ type
     FStatusFlash:       string;        { one-line transient message shown in footer }
     FStatusFlashUntil:  TDateTime;
     FLoopSessionId:     string;        { id of the session that originated the
-                                         in-flight loop — Codex P1 on PR #122:
+                                         in-flight loop -- Codex P1 on PR #122:
                                          if the user swaps sessions while a
                                          loop is running, the result must land
                                          in the ORIGINATING session, never in
@@ -92,7 +92,7 @@ type
     FMenuSelIdx:        Integer;       { highlighted theme in the menu }
     FMenuOrigTheme:     string;        { theme name to revert to on Escape }
     FCurrentTheme:      string;        { last-applied theme name (committed) }
-    { Model picker overlay — opens on `/model`. Parallel state to the
+    { Model picker overlay -- opens on `/model`. Parallel state to the
       theme menu rather than refactoring `FMenuOpen` into a kind enum.
       Only one menu is open at a time; OpenModelMenu / OpenThemeMenu
       assert that and close the other if needed. }
@@ -100,13 +100,13 @@ type
     FModelMenuSelIdx:   Integer;
     FModelMenuModels:   TModelInfoArray;
     FModelMenuProvider: string;        { provider name for cache lookup +
-                                         the "no cache — run refresh" hint }
+                                         the "no cache -- run refresh" hint }
     FModelMenuSource:   string;        { one-liner under the title, e.g.
                                          "cached 3 days ago" }
     FModelMenuOrigModel: string;       { revert to on Esc }
     { Async /v1/models refresh kicked off by /model when the cache
       is empty / missing. Spec/Base/Key were already resolved when
-      the thread was spawned — we just hold them long enough to
+      the thread was spawned -- we just hold them long enough to
       finish on the main thread (SaveCachedModels + open overlay).
       Polling lives in Run() right next to PollLoopWorker. }
     FModelRefreshThread:   TObject;    { TModelRefreshThread; opaque to
@@ -167,7 +167,7 @@ type
     { Legacy line-based REPL surface, used by the FPC build only.
       The Delphi build's positioned TUI handles slash commands
       inline inside SubmitInput, so these methods would never be
-      called — declaring them on the Delphi side just triggered
+      called -- declaring them on the Delphi side just triggered
       H2219 "unused private symbol". }
     procedure DrawHeader;
     procedure ShowHelp;
@@ -179,12 +179,12 @@ type
     (* Operator's prompt-cache settings. Defaults to default-on (matches
        DefaultChatOptions). Cmd_TUI_Run copies Cfg.PromptCache into this
        after construction so `prompt_cache.enabled: false` in config.json
-       turns caching off here too — see PasClaw.Config.ApplyPromptCacheConfig
+       turns caching off here too -- see PasClaw.Config.ApplyPromptCacheConfig
        and Codex P2 on PR #118. *)
     PromptCacheEnabled: Boolean;
     PromptCacheTTL:     string;
     (* When True, the assistant's reply is run through
-       PasClaw.Markdown.Render before being printed — headings and
+       PasClaw.Markdown.Render before being printed -- headings and
        fenced code blocks get ANSI styling, raw stars and hashes
        disappear. On by default for the TUI; Cmd_TUI_Run forwards
        Cfg.RenderMarkdown here. *)
@@ -198,7 +198,7 @@ type
          'midnight' | 'classic'
        Unknown names fall back silently to 'default'. Cmd_TUI_Run
        forwards --theme here. Live switching via the in-TUI menu
-       (/theme) does NOT persist back — this PR is the picker UX
+       (/theme) does NOT persist back -- this PR is the picker UX
        only; durable per-user theme config is a follow-up. FPC branch
        ignores. *)
     ThemeName:          string;
@@ -225,15 +225,15 @@ uses
   PasClaw.Logger,
   { PasClaw.Tools.ToolLoop now lives in the interface uses (above) so
     dcc64 can see TToolLoopResult from the TTUI class declaration. }
-  PasClaw.Tools.OutputCache,       { GetOutputCacheStats — surfaced
+  PasClaw.Tools.OutputCache,       { GetOutputCacheStats -- surfaced
                                      in /stats overlay }
   PasClaw.Tools.Shell.Filters,     { ShellFilterCalls / BytesSaved
-                                     — also surfaced in /stats }
+                                     -- also surfaced in /stats }
   PasClaw.Agent.Steering,
   PasClaw.Markdown.Render,
-  PasClaw.Providers.Catalog,       { TProviderSpec — for TModelRefreshThread }
+  PasClaw.Providers.Catalog,       { TProviderSpec -- for TModelRefreshThread }
   PasClaw.Config
-  { PasClaw.Providers.Models is in the interface uses already — needed
+  { PasClaw.Providers.Models is in the interface uses already -- needed
     from there so dcc64 can see TModelInfoArray when it compiles the
     TTUI class declaration. }
   {$IFNDEF FPC}
@@ -263,7 +263,7 @@ type
   end;
 
   { Background /v1/models discovery for the TUI's `/model` overlay.
-    Same shape as TRunToolLoopThread — Execute drives a single
+    Same shape as TRunToolLoopThread -- Execute drives a single
     synchronous call (DiscoverModels), TEvent signals completion,
     the main Run() loop polls every frame. Lets us auto-refresh the
     cache when /model is hit with an empty / missing cache without
@@ -396,7 +396,7 @@ begin
   begin
     Worker := TRunToolLoopThread(FLoopThread);
     Worker.Terminate;
-    { Bounded wait — RunToolLoop doesn't poll Terminated, so a slow
+    { Bounded wait -- RunToolLoop doesn't poll Terminated, so a slow
       provider HTTP call or hung shell-tool can block WaitFor
       indefinitely. Give it a quarter second to wrap up cleanly,
       otherwise hand ownership to the OS via FreeOnTerminate and
@@ -467,9 +467,9 @@ end;
 procedure TTUI.ApplyTheme(const Name: string; ForcePreview: Boolean);
 begin
   SetConsoleTheme(ResolveTheme(Name));
-  { Force a full repaint — old theme's background fill might leave
+  { Force a full repaint -- old theme's background fill might leave
     ink in cells the new theme doesn't overwrite. Same trick as the
-    resize path. The ForcePreview flag is purely documentation —
+    resize path. The ForcePreview flag is purely documentation --
     every call needs the repaint, but separating "commit" vs
     "preview" callers makes the intent clearer at the call site. }
   ClrScr;
@@ -497,7 +497,7 @@ function TTUI.ActiveProviderName: string;
 { Provider name used for /model cache lookup and post-refresh apply
   decisions: prefer the active session's recorded provider, else
   the global default from config.json. Empty string when nothing
-  is configured anywhere — callers flash an onboard hint in that
+  is configured anywhere -- callers flash an onboard hint in that
   case. Shared between OpenModelMenu (entry) and PollModelRefresh
   (completion) so they agree on "is this the same context the
   refresh started against". }
@@ -585,7 +585,7 @@ procedure TTUI.StartModelRefresh(const Provider: string);
 { Resolve the provider's catalog spec + APIBase + APIKey from
   config.json (same path `pasclaw model refresh` walks) and spawn
   a background worker that hits /v1/models. The overlay does NOT
-  open here — PollModelRefresh raises it once the worker completes
+  open here -- PollModelRefresh raises it once the worker completes
   successfully. Failures flash an error and leave the operator in
   the existing TUI screen. }
 var
@@ -660,7 +660,7 @@ begin
     Exit;
   end;
 
-  { Always save the cache — the HTTP succeeded, the roster is now
+  { Always save the cache -- the HTTP succeeded, the roster is now
     authoritative for this provider regardless of what the operator
     is currently looking at. }
   SaveCachedModels(Provider, R);
@@ -671,7 +671,7 @@ begin
     overlay would show openai's roster, ApplyModelSelection would
     write the pick into B's Meta.Model, and B silently ends up
     talking to its anthropic provider with an openai model id.
-    Codex P2 on this PR — same shape as the FLoopSessionId fix
+    Codex P2 on this PR -- same shape as the FLoopSessionId fix
     from PR #122. Cache is safe to keep; the open is what's not. }
   if SameText(ActiveProviderName, Provider) then
     OpenModelOverlay(Provider, R)
@@ -684,7 +684,7 @@ procedure TTUI.ApplyModelSelection(const ModelId: string);
 { Switches the active model for the running TUI. Updates FModel (used
   by StartTurn) and FSession.Meta.Model (persisted on the next turn's
   PersistSession so a /quit-after-/model survives). Does NOT touch
-  config.json — that's `pasclaw model set` from the CLI. }
+  config.json -- that's `pasclaw model set` from the CLI. }
 begin
   if ModelId = '' then Exit;
   FModel := ModelId;
@@ -697,7 +697,7 @@ end;
 
 procedure TTUI.RecordToolCall(const Name: string);
 { Bump the per-tool counter. Walks the (small) parallel arrays
-  linearly — a hash map would be overkill for the tool counts a
+  linearly -- a hash map would be overkill for the tool counts a
   TUI session accumulates (low double-digits at most). Caller
   must run on the main thread (AccumulateLoopStats does). }
 var
@@ -720,7 +720,7 @@ procedure TTUI.AccumulateLoopStats(const Loop: TToolLoopResult);
   turn. Token + truncation totals come straight off the loop
   result; tool-call names come from walking Loop.FinalMessages
   for assistant turns that emitted tool_calls. We don't dedup
-  against earlier turns — calling the same tool twice across
+  against earlier turns -- calling the same tool twice across
   two turns shows up as 2 in /stats, which is what the operator
   wants to see. }
 var
@@ -747,7 +747,7 @@ end;
 procedure TTUI.OpenStatsOverlay;
 { Mutual exclusion with the theme/model overlays so we never paint
   two modal boxes on top of each other. The stats overlay is
-  read-only — any key dismisses it, no Up/Dn selection. }
+  read-only -- any key dismisses it, no Up/Dn selection. }
 begin
   FMenuOpen      := False;
   FModelMenuOpen := False;
@@ -757,7 +757,7 @@ end;
 procedure TTUI.DrawStatsOverlay;
 { Read-only info modal showing the per-session accumulators rolled
   up across every successful tool loop this TUI session has run.
-  Modeled on DrawThemeMenu but no highlight cursor — caller
+  Modeled on DrawThemeMenu but no highlight cursor -- caller
   dismisses with any key (HandleKey checks FStatsOpen first). }
 const
   BoxW = 56;
@@ -874,7 +874,7 @@ begin
     Label_ := '   (none yet)';
     while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
     WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);
-    { Row no longer read after this — bottom border is positioned
+    { Row no longer read after this -- bottom border is positioned
       via BoxY + BoxH - 1 below. Dropping the trailing Inc to
       silence dcc64 H2077. }
   end
@@ -897,7 +897,7 @@ begin
                        [Length(FStatsToolCallNames) - ToolRows]);
       while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
       WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);
-      { Same reason: Row not read after — see comment above. }
+      { Same reason: Row not read after -- see comment above. }
     end;
   end;
 
@@ -1069,7 +1069,7 @@ end;
   When the originating session is still the currently-loaded one
   (FSession.Meta.Id matches), update FSession in place and persist.
   When the user has swapped sessions while the loop was in flight,
-  open the originating session by id, append + persist, free —
+  open the originating session by id, append + persist, free --
   the currently-loaded FSession is never touched. Codex P1 on PR
   #122: without this gate a parallel turn would overwrite a fresh
   conversation with another session's history. }
@@ -1204,7 +1204,7 @@ begin
   Text := Trim(FInputBuf);
   if Text = '' then Exit;
 
-  { Slash-command shortcuts — without these the model gets "/quit"
+  { Slash-command shortcuts -- without these the model gets "/quit"
     as a literal user message because StartTurn doesn't filter. The
     new TUI exposes most of these as dedicated keys (Q for quit,
     N for new session) but users coming from `pasclaw agent` reach
@@ -1242,8 +1242,8 @@ begin
 
   { When a loop is already running, queue the input as steering so
     the running loop can pick it up at the top of its next iteration
-    (PR #120 mechanism). Route to FLoopSessionId — the originating
-    session — not FSession.Meta.Id, in case the user swapped panes
+    (PR #120 mechanism). Route to FLoopSessionId -- the originating
+    session -- not FSession.Meta.Id, in case the user swapped panes
     while the loop was in flight. Same Codex P1 fix as PollLoopWorker. }
   if FLoopThread <> nil then
   begin
@@ -1261,7 +1261,7 @@ end;
 
 procedure TTUI.HandleSessionKey(Key: Integer);
 begin
-  { Delete-confirm mode short-circuits — Y deletes, anything else
+  { Delete-confirm mode short-circuits -- Y deletes, anything else
     (including N from the [Y]es/[N]o footer hint) just dismisses
     the prompt. Without this gate, N would dismiss AND start a new
     session, which contradicts the advertised "N cancel" footer.
@@ -1279,7 +1279,7 @@ begin
 
   case Key of
     Ord('q'), Ord('Q'):
-      { Q only quits from the session pane — chat-pane input must
+      { Q only quits from the session pane -- chat-pane input must
         be able to contain the letter (Codex P1 on PR #122). }
       FQuit := True;
     KEY_UP:
@@ -1308,7 +1308,7 @@ procedure TTUI.HandleChatKey(Key: Integer);
 var
   Ch: Char;
 begin
-  { Q with an empty input buffer quits — discoverability path so
+  { Q with an empty input buffer quits -- discoverability path so
     users coming from the session pane don't have to learn that
     Escape is the universal quit. With any input typed, Q falls
     through to the default-char branch so words like "question"
@@ -1327,19 +1327,19 @@ begin
         repurpose them as chat-scrollback paging. PgUp/PgDn aren't
         wired because DMVCFramework returns 33/34 for them on
         Windows, colliding with the printable '!' and '"' input
-        bytes returned on Linux — no portable disambiguation. }
+        bytes returned on Linux -- no portable disambiguation. }
       Inc(FChatScroll, 5);
     KEY_DOWN:
       begin
         Dec(FChatScroll, 5);
         if FChatScroll < 0 then FChatScroll := 0;
       end;
-    8, 127:   { Backspace — code differs by terminal; accept both }
+    8, 127:   { Backspace -- code differs by terminal; accept both }
       if Length(FInputBuf) > 0 then
         SetLength(FInputBuf, Length(FInputBuf) - 1);
   else
     { Printable ASCII / latin-1: append. We don't try to handle
-      escape sequences or multi-byte UTF-8 here — DMVCFramework's
+      escape sequences or multi-byte UTF-8 here -- DMVCFramework's
       GetKey on Linux returns the raw byte for printable chars, on
       Windows the VK_ codes for special keys; the printable range
       32..126 is safe everywhere. Higher bytes pass through and
@@ -1359,7 +1359,7 @@ begin
       if FMenuSelIdx > 0 then
       begin
         Dec(FMenuSelIdx);
-        { Live preview — apply the highlighted theme as the user
+        { Live preview -- apply the highlighted theme as the user
           arrows through. Esc reverts to FMenuOrigTheme; Enter
           commits whatever's currently applied. }
         ApplyTheme(THEME_NAMES[FMenuSelIdx], True);
@@ -1386,12 +1386,12 @@ begin
 end;
 
 procedure TTUI.HandleModelMenuKey(Key: Integer);
-{ Same shape as the theme menu but no "live preview" — switching the
+{ Same shape as the theme menu but no "live preview" -- switching the
   model in-flight on each arrow press would re-bake the running
   session's provider state, which is the wrong moment for that. Apply
   on Enter only; Esc cancels and leaves FModel unchanged.
 
-  Down-key bound is the FULL roster length, not the visible window —
+  Down-key bound is the FULL roster length, not the visible window --
   DrawModelMenu windows the printed rows around FModelMenuSelIdx, so
   the user can scroll into models past the first page. (Codex P2 on
   this PR. The earlier "visible cap" mirrored the onboard picker's PR
@@ -1418,7 +1418,7 @@ begin
     KEY_ESCAPE:
       begin
         { ApplyModelSelection wasn't called on the navigation path, so
-          there's nothing to revert — just close the overlay. }
+          there's nothing to revert -- just close the overlay. }
         FModelMenuOpen := False;
       end;
   end;
@@ -1428,7 +1428,7 @@ procedure TTUI.HandleKey(Key: Integer);
 const
   KEY_TAB = 9;
 begin
-  { Menu intercepts first — Esc cancels the menu (reverts theme)
+  { Menu intercepts first -- Esc cancels the menu (reverts theme)
     instead of quitting the TUI, Up/Down navigates with live
     preview, Enter commits the selection. Model menu intercept piggybacks
     on the same gate; only one overlay can be open per the mutual-exclusion
@@ -1450,7 +1450,7 @@ begin
     HandleMenuKey(Key);
     Exit;
   end;
-  { Escape is the only global quit — Q/q reach the focused pane so
+  { Escape is the only global quit -- Q/q reach the focused pane so
     the chat input can include the letter (typing "question" used
     to immediately quit the TUI). Codex P1 on PR #122. }
   if Key = KEY_ESCAPE then
@@ -1551,7 +1551,7 @@ begin
     Sess := FSessions[i];
     IsSelected := (i = FSelSessIdx);
 
-    { Compact id — yyyymmddTHHMMSS is 14 chars; show the date portion
+    { Compact id -- yyyymmddTHHMMSS is 14 chars; show the date portion
       mm-dd plus the random tail. }
     IdShort := Copy(Sess.Id, 5, 4);
     if Length(IdShort) = 4 then
@@ -1852,7 +1852,7 @@ begin
 
   { Title row. }
   GotoXY(BoxX, BoxY + 1);
-  Label_ := ' theme — Up/Dn  Enter to apply  Esc to cancel ';
+  Label_ := ' theme -- Up/Dn  Enter to apply  Esc to cancel ';
   if Length(Label_) > BoxW - 2 then Label_ := Copy(Label_, 1, BoxW - 2);
   while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
   WriteAnsiText(ConsoleTheme.HighlightText, Side + Label_ + Side);
@@ -1883,7 +1883,7 @@ procedure TTUI.DrawModelMenu;
 { Model picker overlay. Vertical list of cached model IDs centred on
   screen; subtitle line shows cache freshness so the operator knows
   whether to drop out and run `pasclaw model refresh`. The list is
-  windowed when it's longer than the visible box — Up/Dn step by one,
+  windowed when it's longer than the visible box -- Up/Dn step by one,
   so a simple "scroll when the cursor falls off the edge" suffices.
   HandleModelMenuKey's down-bound is the full roster length (not the
   visible window count) so the user can scroll into rows past the
@@ -2058,7 +2058,7 @@ end;
   in the Delphi positioned-TUI path above (see /help, /theme,
   /model, /stats dispatching there). The legacy REPL-style methods
   (DrawHeader / ShowHelp / ShowTools / HandleSlashCommand /
-  HandleUserInput) live in the FPC branch below — their
+  HandleUserInput) live in the FPC branch below -- their
   declarations are also gated on FPC in the class section so dcc64
   doesn't emit H2219 for unused private symbols. }
 
@@ -2071,7 +2071,7 @@ const
     in the legacy unencoded range; Darwin/BSD use the IOCTL macro
     encoding _IOR('t', 104, struct winsize) = 0x40087468. Passing
     the wrong magic to ioctl() returns -1 and we silently fall
-    back to the default 80-column width — which is what was
+    back to the default 80-column width -- which is what was
     happening on macOS before this gate landed. }
   {$IFDEF DARWIN}
   TIOCGWINSZ = $40087468;
@@ -2130,7 +2130,7 @@ procedure ShowCachedModelsFPC(var FModel: string; const Arg: string);
 { Line-based equivalent of the Delphi DrawModelMenu overlay. With no
   argument: print the cached roster + the currently-selected model so
   the operator can pick one. With an `<id>` argument: switch FModel
-  immediately (no validation against the cache — the user might know
+  immediately (no validation against the cache -- the user might know
   about a model the cache hasn't seen yet). Cache lookup keys on the
   operator-facing provider Name, same as the Delphi path.
 

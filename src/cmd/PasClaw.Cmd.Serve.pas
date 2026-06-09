@@ -18,7 +18,7 @@
     api_key  = anything-nonempty       (the server doesn't enforce auth yet)
 
   Internally this is the same TGatewayServer the `gateway` subcommand
-  uses — `serve` just trims the surface to the OpenAI endpoints and
+  uses -- `serve` just trims the surface to the OpenAI endpoints and
   prints copy-pasteable client config.
 *)
 unit PasClaw.Cmd.Serve;
@@ -120,7 +120,7 @@ begin
     Provider := nil;
     if Cfg.DefaultProvider <> '' then
       if not NewDefaultProvider(Cfg, Provider, Err) then
-        LogWarn('serve: no provider — /v1/chat/completions will return 503 (%s)', [Err]);
+        LogWarn('serve: no provider -- /v1/chat/completions will return 503 (%s)', [Err]);
 
     Reg := nil;
     if not Args.NoTools then
@@ -135,7 +135,7 @@ begin
         LogWebSearchSkipOnce;
       if Cfg.WebFetchEnabled then RegisterWebFetchTool(Reg);
       if Cfg.WebFetchEnabled then RegisterMemoryFetchTool(Reg);
-      { Off by default — onboarding opt-in flips Cfg.VaultToolsEnabled.
+      { Off by default -- onboarding opt-in flips Cfg.VaultToolsEnabled.
         Without this branch, `pasclaw onboard` could report
         "vault_search / vault_get enabled" but the gateway / serve
         chat surface would still tell the user "no Code Vault tool". }

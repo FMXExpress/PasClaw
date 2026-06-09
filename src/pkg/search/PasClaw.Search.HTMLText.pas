@@ -5,8 +5,8 @@
   Strip <script> and <style> bodies entirely, drop every other tag,
   decode the common entities, collapse whitespace runs to single
   spaces, normalise line breaks. The output isn't pretty-printed
-  Markdown — picoclaw bothers with that for human display, the
-  model doesn't need it — but it preserves the readable text from
+  Markdown -- picoclaw bothers with that for human display, the
+  model doesn't need it -- but it preserves the readable text from
   most modern HTML pages without dragging in a real HTML parser.
 
   Limited intentionally:

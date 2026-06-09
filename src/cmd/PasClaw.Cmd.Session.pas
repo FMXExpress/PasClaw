@@ -1,5 +1,5 @@
 ﻿(*
-  PasClaw.Cmd.Session — list / show / delete / export persistent
+  PasClaw.Cmd.Session -- list / show / delete / export persistent
   conversation sessions stored under
   $PASCLAW_HOME/workspace/sessions/.
 
@@ -130,7 +130,7 @@ begin
   if DeleteSession(Id) then
   begin
     { Stray steering messages for the just-deleted session would
-      otherwise sit on disk forever — clear them too. }
+      otherwise sit on disk forever -- clear them too. }
     ClearSteering(Id);
     PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'deleted session ' + Id);
     Result := 0;

@@ -1,5 +1,5 @@
 (*
-  PasClaw.Identity — canonical sender identity propagated from each
+  PasClaw.Identity -- canonical sender identity propagated from each
   channel's inbound boundary down through the agent loop, hooks, and
   audit logs. Ports picoclaw's pkg/identity/identity.go pattern: every
   message gets tagged with `<platform>:<id>` (e.g. "slack:U12345",
@@ -17,7 +17,7 @@
     "slack:*"             every Slack user
     "*"                   anyone (effectively allow-all)
     "matrix:@eli:*"       wildcard suffix on a single platform
-  No regex — keep this dumb. Allowlist empty means "no gate"; an
+  No regex -- keep this dumb. Allowlist empty means "no gate"; an
   embedder who wants to deny-all configures `["nobody"]` or sets
   IsAllowedSender's result to False manually.
 *)
@@ -37,18 +37,18 @@ type
                           'telegram' | 'discord' | 'line' | 'whatsapp' |
                           'matrix' | 'irc' | 'email' | 'webhook' | ''
                           ('' = unknown / not propagated) }
-    UserId:   string;   { platform-native id — Telegram chat id as string,
+    UserId:   string;   { platform-native id -- Telegram chat id as string,
                           Slack U..., Matrix @eli:server, email From,
                           IRC nick, etc. Empty for sources like 'cron'. }
     UserName: string;   { display name when the inbound payload carries one;
-                          empty otherwise. Never used as a key — log/UI only. }
-    RoomId:   string;   { channel / room / group id when applicable —
+                          empty otherwise. Never used as a key -- log/UI only. }
+    RoomId:   string;   { channel / room / group id when applicable --
                           Slack channel, Matrix room, Telegram chat for
                           group messages. Empty for 1:1. }
   end;
 
 { Build the canonical "<platform>:<id>" string for hashing / logging /
-  allowlist matching. Returns '' when either component is empty —
+  allowlist matching. Returns '' when either component is empty --
   callers can check for the empty case to handle "no identity known". }
 function BuildCanonicalID(const Platform, Id: string): string;
 
@@ -69,7 +69,7 @@ function MakeIdentity(const Source, UserId, UserName, RoomId: string): TIdentity
    wildcards; the wildcard form matches every user on that platform.
    The single `*` pattern matches anything (escape hatch for `cron`
    tasks where there is no human sender). Empty allowlist returns
-   True — caller decides whether absence-of-rule means allow or deny
+   True -- caller decides whether absence-of-rule means allow or deny
    (channel.IsAllowedSender treats empty as allow, matching picoclaw). *)
 function IsAllowedSender(const Identity: TIdentity;
                          const Allowlist: array of string): Boolean;
@@ -129,7 +129,7 @@ begin
   if Pattern = Canon then Exit(True);
   StarPos := Pos('*', Pattern);
   if StarPos = 0 then Exit(False);
-  { Suffix wildcards only — the star MUST be the last character of
+  { Suffix wildcards only -- the star MUST be the last character of
     the pattern. A malformed entry like "telegram:*admin" would
     otherwise extract prefix "telegram:" and silently broaden to
     every Telegram user. Fail closed: any star not at the end is a
@@ -151,7 +151,7 @@ begin
   Canon := CanonicalOf(Identity);
   if Canon = '' then
   begin
-    { No identity known — only an explicit '*' pattern lets these
+    { No identity known -- only an explicit '*' pattern lets these
       through. Anything more specific implies the operator wants
       to gate by identity, and an unknown sender doesn't meet
       that bar. }

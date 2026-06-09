@@ -1,7 +1,7 @@
 (*
   PasClaw.Channels.Webhook - generic outbound webhook sender.
 
-  Sometimes the target service doesn't fit any specific adapter — a
+  Sometimes the target service doesn't fit any specific adapter -- a
   Zapier hook, an in-house notification endpoint, an n8n workflow, a
   Discord-but-via-DM-relay, etc. This adapter just POSTs a JSON body
   to a URL the caller provides:
@@ -10,7 +10,7 @@
 
   Auth: callers can supply an Authorization header value as a string
   (e.g. "Bearer xyz" or "Basic …"). Empty means no auth header.
-  Anything richer — HMAC signing, OAuth refresh, multipart — belongs
+  Anything richer -- HMAC signing, OAuth refresh, multipart -- belongs
   in a dedicated adapter, not here.
 
   Useful for cron skills:

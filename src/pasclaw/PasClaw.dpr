@@ -30,7 +30,7 @@ uses
                                       Used by PasClaw.Memory.Index (FTS5).
                                       FPC links libsqlite3 dynamically.
 
-                                      Excluded on Delphi's Linux64 target —
+                                      Excluded on Delphi's Linux64 target --
                                       RAD Studio ships the static SQLite
                                       wrapper for Windows / macOS / mobile
                                       only; FireDAC on Linux supports just

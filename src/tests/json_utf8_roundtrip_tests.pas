@@ -9,7 +9,7 @@ program json_utf8_roundtrip_tests;
                    StringValue(TJSONStringType(UTF8Decode(CurrentTokenString)))
 
   On a container locale with DefaultSystemCodePage=0 the round-trip
-  clips every non-ASCII UTF-8 lead byte — `¶` (`C2 B6`) arrives as
+  clips every non-ASCII UTF-8 lead byte -- `¶` (`C2 B6`) arrives as
   bare `B6`, `é` (`C3 A9`) as `A9`, etc. PasClaw.JSON.Parse sidesteps
   the branch by driving TJSONParser directly with no joUTF8 in
   options; this test pins that behaviour.
@@ -79,7 +79,7 @@ begin
     J.Free;
   end;
   AssertBytesEqual(Got, Want,
-    'U+00E9 (UTF-8 C3 A9) round-trips — covers `é` in HTTP / file paths');
+    'U+00E9 (UTF-8 C3 A9) round-trips -- covers `é` in HTTP / file paths');
 end;
 
 procedure TestThreeByteRoundTrip;
@@ -138,7 +138,7 @@ procedure TestUnicodeEscapeBMP;
 (* Codex P2 on PR #161. Producers that emit ASCII-safe JSON spell
    non-ASCII as \uXXXX escapes. The scanner's escape-handling branch
    (jsonscanner.pp:270) goes through `String(WideChar(...))` when
-   joUTF8 is cleared AND DefaultSystemCodePage <> CP_UTF8 — which is
+   joUTF8 is cleared AND DefaultSystemCodePage <> CP_UTF8 -- which is
    exactly our locale. Result: `é` decodes to byte `E9`
    (Latin-1) instead of UTF-8 `C3 A9`, and `中` outright drops
    to `?` because it's unmappable in CP_1252.
@@ -162,7 +162,7 @@ begin
 end;
 
 procedure TestUnicodeEscapeBMP3Byte;
-{ 中 is U+4E2D (中) — outside Latin-1 so the lossy path falls
+{ 中 is U+4E2D (中) -- outside Latin-1 so the lossy path falls
   back to ASCII '?'. Catches the 3-byte UTF-8 escape regression. }
 var
   J: TJsonObject;
@@ -183,7 +183,7 @@ end;
 procedure TestUnicodeEscapeInKey;
 (* Codex P2 specifically called out object KEYS that arrive escaped.
    The wrapper's Has / GetStr lookups compare against the caller's
-   UTF-8 form, so the stored key MUST be UTF-8 bytes too — anything
+   UTF-8 form, so the stored key MUST be UTF-8 bytes too -- anything
    else makes valid JSON unfindable downstream. *)
 var
   J: TJsonObject;
@@ -225,7 +225,7 @@ begin
 end;
 
 procedure TestArrayElementRoundTrip;
-{ Symmetric coverage for TJsonArray.Parse + ItemStr — same code
+{ Symmetric coverage for TJsonArray.Parse + ItemStr -- same code
   path on the lossy fpjson branch. }
 var
   A: TJsonArray;

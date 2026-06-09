@@ -15,12 +15,12 @@
 
   Safety: refuses non-http/https schemes (no file://, ftp://,
   data://) so a misbehaving model can't read local files via this
-  path — it would have to go through fs_read which is sandbox-
+  path -- it would have to go through fs_read which is sandbox-
   governed.
 
   Out of scope for Wave 1 (deferred to a later PR):
     - SSRF protection (block requests to RFC1918 / loopback /
-      link-local) — picoclaw does this; PasClaw will when somebody
+      link-local) -- picoclaw does this; PasClaw will when somebody
       actually deploys a public-facing agent.
     - Markdown conversion. The current strip-tags output is enough
       for the model to read.
@@ -60,7 +60,7 @@ type
   (* Redirect guard hooked into PasClaw.Providers.HTTP. Runs URLIsLocal
      on every 3xx target so a public→private redirect can't smuggle a
      request past the pre-check. Setting Allow := False aborts the
-     redirect chain — the wrapper raises with Reason, and the outer
+     redirect chain -- the wrapper raises with Reason, and the outer
      try/except in Tool_WebFetch surfaces it as the same "SSRF
      blocked" string a direct hit would produce. *)
   TWebFetchRedirectGuard = class
@@ -73,7 +73,7 @@ function IsAbsoluteHttpURL(const S: string): Boolean;
 { True iff S has an http:// or https:// scheme. Anything else is
   either path-relative ("/login", "next.html") or protocol-relative
   ("//cdn.example.com/a"). The wrapper hands OnRedirect whatever the
-  server's Location header said — which is frequently a bare path,
+  server's Location header said -- which is frequently a bare path,
   NOT a full URL. Codex PR #85 P2 caught that we were rejecting
   "/login" as malformed. }
 begin
@@ -93,10 +93,10 @@ begin
 
   { Same-origin redirects retain the host that already passed the
     pre-check. Two flavours:
-      "/path/next"     — path-relative; same scheme, host, port.
-      "next.html"      — path-relative without leading slash; same.
+      "/path/next"     -- path-relative; same scheme, host, port.
+      "next.html"      -- path-relative without leading slash; same.
     A protocol-relative URL ("//cdn.example.com/a") DOES change
-    host so we still pass it through URLIsLocal — ExtractHost
+    host so we still pass it through URLIsLocal -- ExtractHost
     handles those since "//" parses as an authority without a
     scheme, and a bare authority is enough to read the host. }
   if not IsAbsoluteHttpURL(Dest) then
@@ -104,7 +104,7 @@ begin
     if (Length(Dest) >= 2) and (Dest[1] = '/') and (Dest[2] = '/') then
     begin
       { Protocol-relative. Synthesise an http:// prefix purely for
-        the parse — the underlying client will re-prefix with the
+        the parse -- the underlying client will re-prefix with the
         current URL's scheme before connecting. }
       if URLIsLocal('http:' + Dest, Why) then
       begin
@@ -116,7 +116,7 @@ begin
       end;
       Exit;
     end;
-    { Path-relative — same host as the request that just passed
+    { Path-relative -- same host as the request that just passed
       the check. Let the request proceed. }
     Exit;
   end;
@@ -290,7 +290,7 @@ begin
   { save_to: stream bytes straight to disk via the binary-safe wrapper.
     GetURL returns a UTF-8-decoded string, which mangles non-text
     payloads (PDFs, images, archives) on the round trip back through
-    TEncoding.UTF8.GetBytes — losing precisely the use case save_to
+    TEncoding.UTF8.GetBytes -- losing precisely the use case save_to
     advertises. The receipt + preview are reconstructed from the file
     so the model still gets a sniffable hint. }
   if SaveTo <> '' then
@@ -301,7 +301,7 @@ begin
       { TFileStream.Create lives OUTSIDE the inner try-finally so its
         FS.Free only runs when Create actually succeeded. The previous
         shape pre-init'd FS := nil + WrittenBytes := 0 to protect a
-        single outer try-finally that wrapped both branches — dcc64
+        single outer try-finally that wrapped both branches -- dcc64
         flagged both inits as H2077 because the assignments after
         TFileStream.Create dominate every flow path it traces. The
         restructure makes the lifetimes match the control flow and
@@ -398,7 +398,7 @@ begin
     'Fetch the contents of an HTTP/HTTPS URL. By default returns ' +
     'readable plain text (strips HTML tags, decodes entities) capped at ' +
     'max_chars (default 50000). Pass save_to to write the full body to a ' +
-    'file under the workspace instead — useful for large pages, binary ' +
+    'file under the workspace instead -- useful for large pages, binary ' +
     'downloads, or anything that would blow the model''s context. When ' +
     'save_to is set, the tool result is a short receipt + preview, and ' +
     'the model uses fs_read / fs_grep on the saved file.';

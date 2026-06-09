@@ -67,7 +67,7 @@ uses
   PasClaw.Providers.HTTP,
   PasClaw.Search.HTMLText,
   PasClaw.Net.SSRF,
-  PasClaw.Tools.Sandbox;       { NetworkBlockingActive — same SSRF
+  PasClaw.Tools.Sandbox;       { NetworkBlockingActive -- same SSRF
                                  gate web_fetch uses }
 
 const

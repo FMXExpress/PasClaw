@@ -10,7 +10,7 @@
   and isn't suitable. The /dev/urandom and CryptGenRandom calls are
   the conventional choices on every modern OS, both available without
   any extra dependency. Raises EOSRandomFailure on hard failure (e.g.
-  /dev/urandom missing from a minimal chroot) — let the caller decide
+  /dev/urandom missing from a minimal chroot) -- let the caller decide
   whether to abort the OAuth flow or fall back to a downgraded mode.
 *)
 unit PasClaw.Crypto.Random;

@@ -1,4 +1,4 @@
-﻿{ MCP — list/add/remove/edit/test/show MCP server entries in config. }
+﻿{ MCP -- list/add/remove/edit/test/show MCP server entries in config. }
 unit PasClaw.Cmd.MCP;
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
@@ -217,7 +217,7 @@ var
 begin
   if not ResolveMCPCatalog(Entries, Source, Skipped, HubErr) then
   begin
-    { ResolveMCPCatalog always returns True today — it falls back to
+    { ResolveMCPCatalog always returns True today -- it falls back to
       KnownMCPServers on hub failure. Defensive branch for the
       future case where it might fail outright. }
     PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'catalog unavailable: ' + HubErr);
@@ -229,12 +229,12 @@ begin
   else if HubErr <> '' then
     PrintLn(Ansi.Yellow + '! ' + Ansi.Reset +
             'hub unreachable (' + HubErr +
-            ') — showing built-in ' + IntToStr(Length(Entries)) + ' entries')
+            ') -- showing built-in ' + IntToStr(Length(Entries)) + ' entries')
   else
     PrintLn(Ansi.Dim + '(showing built-in ' + IntToStr(Length(Entries)) + ' entries)' + Ansi.Reset);
   if Skipped > 0 then
     PrintLn(Ansi.Dim + '  (' + IntToStr(Skipped) +
-            ' hub entry/entries skipped — non-HTTP transports not supported yet)' +
+            ' hub entry/entries skipped -- non-HTTP transports not supported yet)' +
             Ansi.Reset);
   PrintLn;
   if Length(Entries) = 0 then
@@ -302,7 +302,7 @@ begin
   if Length(Argv) < 2 then begin Help; Exit(1); end;
   { Try the pasclaw.dev hub first so any registered server is
     installable, not just the bundled 5. Fall back to the built-in
-    catalog when the hub returns not-found OR is unreachable —
+    catalog when the hub returns not-found OR is unreachable --
     network errors don't deny a built-in install that would
     otherwise work. }
   HubFound := GetMCPHubEntry(Argv[1], Entry, HubErr);
@@ -323,7 +323,7 @@ begin
   else
     PrintLn(Ansi.Dim + '  resolved from pasclaw.dev hub' + Ansi.Reset);
 
-  { OAuth-only servers (Replicate today) install with no header — the
+  { OAuth-only servers (Replicate today) install with no header -- the
     HTTP client reads the on-disk token store at request time. Prompt
     the user to run `mcp auth` so the next test/serve has a token. }
   if Entry.RequiresOAuth then
@@ -334,7 +334,7 @@ begin
               OAuthTokenPath(Entry.Name) + Ansi.Reset)
     else
       PrintLn(Ansi.Yellow + '! ' + Ansi.Reset +
-              'OAuth required — run `pasclaw mcp auth ' + Entry.Name +
+              'OAuth required -- run `pasclaw mcp auth ' + Entry.Name +
               '` to authorize.');
   end
   else
@@ -344,7 +344,7 @@ begin
     begin
       PrintLn(Ansi.Yellow + '! ' + Ansi.Reset + 'env var ' + Entry.EnvVar +
               ' is not set. Installing anyway with an empty Authorization');
-      PrintLn('  header — set ' + Entry.EnvVar +
+      PrintLn('  header -- set ' + Entry.EnvVar +
               ' and re-run `pasclaw mcp install ' + Entry.Name + '` to refresh it,');
       PrintLn('  or run `pasclaw mcp edit` to drop in the token by hand.');
       HeaderVal := '';
@@ -386,7 +386,7 @@ begin
 end;
 
 function DoAuth(const Argv: array of string): Integer;
-{ pasclaw mcp auth <name>  — run OAuth 2.1 + PKCE against the
+{ pasclaw mcp auth <name>  -- run OAuth 2.1 + PKCE against the
   authorization server the configured MCP server advertises. The
   resulting tokens land in <home>/oauth/<name>.json; the HTTP MCP
   client picks them up automatically on the next request. }
@@ -426,12 +426,12 @@ begin
   if RunOAuthFlow(Argv[1], URL, ErrMsg) then
   begin
     PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'authorized ' + Argv[1] +
-            ' — tokens written to ' + OAuthTokenPath(Argv[1]));
+            ' -- tokens written to ' + OAuthTokenPath(Argv[1]));
     { Clear any pre-existing Args header on the server entry. Pre-OAuth
       installs of the same catalog name (e.g. an old `mcp install
       replicate` that wrote "Bearer r8_…" from REPLICATE_API_TOKEN)
       would otherwise short-circuit the HTTP client's auth resolver and
-      send the stale token instead of the fresh OAuth one — the exact
+      send the stale token instead of the fresh OAuth one -- the exact
       symptom the user reported after a successful `mcp auth`. A
       successful auth run is the canonical "use OAuth for this server"
       signal, so the Args slot belongs to the OAuth token store now. }

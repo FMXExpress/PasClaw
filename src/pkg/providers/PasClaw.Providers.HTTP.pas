@@ -8,7 +8,7 @@
       - HTTPS needs OpenSSL DLLs: libssl-dev / libssl.so.3 on Linux;
         libeay32.dll + ssleay32.dll next to pasclaw.exe on Windows
         (or under $PASCLAW_OPENSSL_DIR). EnsureOpenSSL probes both.
-      - Works on FPC and Delphi — the only path FPC supports.
+      - Works on FPC and Delphi -- the only path FPC supports.
 
     TNetHTTPClient (Delphi-only, opt-in)
       - THTTPClient via System.Net.HttpClient.
@@ -16,12 +16,12 @@
         so no OpenSSL DLLs are needed at all.
       - Enable with -DPASCLAW_NETHTTP on the dcc32/dcc64 command line,
         or by adding the symbol to the project's conditional defines.
-        Ignored under FPC since TNetHTTPClient doesn't exist there —
+        Ignored under FPC since TNetHTTPClient doesn't exist there --
         FPC stays on Indy regardless.
 
   The public interface is library-neutral; callers see neither Indy
   nor TNetHTTPClient types. EnsureOpenSSL stays in the interface for
-  both backends — it's a no-op success under TNetHTTPClient so an
+  both backends -- it's a no-op success under TNetHTTPClient so an
   onboarding precheck can call it uniformly.
 *)
 unit PasClaw.Providers.HTTP;
@@ -99,7 +99,7 @@ function PostRaw(const URL, ContentType, Body: string;
                  const Accept: string): THTTPResult;
 
 { POST JSON and write the response body into RespStream instead of
-  returning it as a string. The SSE provider uses this — it asks for
+  returning it as a string. The SSE provider uses this -- it asks for
   text/event-stream and parses the buffered response after the call
   completes. Returns False on transport error with ErrMsg populated;
   StatusCode is always set to what Indy saw (0 if the request never
@@ -114,7 +114,7 @@ function PostJSONToStream(const URL, JSON: string;
                           out ErrMsg: string): Boolean;
 
 { Binary HTTP GET into a caller-owned stream. Use this for zip
-  downloads, embedding fetches, etc. — anything where TStringStream's
+  downloads, embedding fetches, etc. -- anything where TStringStream's
   UTF-8 decoding would corrupt the payload. Caller positions and
   sizes Stream however they need afterward.
 
@@ -143,7 +143,7 @@ function MakeHeader(const Name, Value: string): THeaderPair;
 
 { Returns True if Indy can load OpenSSL; otherwise False and ErrMsg
   contains an actionable message naming the DLLs and the override env
-  var. Safe to call multiple times — probing happens once and caches. }
+  var. Safe to call multiple times -- probing happens once and caches. }
 function EnsureOpenSSL(out ErrMsg: string): Boolean;
 
 implementation
@@ -170,7 +170,7 @@ end;
 
 {$IF Defined(PASCLAW_NETHTTP) and not Defined(FPC)}
 (* ============================================================
-   TNetHTTPClient backend — Delphi only, opt-in via -DPASCLAW_NETHTTP.
+   TNetHTTPClient backend -- Delphi only, opt-in via -DPASCLAW_NETHTTP.
    TLS via the OS (SChannel on Windows, Secure Transport on macOS,
    OpenSSL via NSURLSession-equivalent on Linux), so no OpenSSL DLL
    shipping requirement. EnsureOpenSSL is a no-op success here for
@@ -209,8 +209,8 @@ end;
 
 type
   { Bridges THTTPRedirectGuard to THTTPClient.OnRedirect (typed as
-    THTTPRedirectEvent). The event can't raise to abort — it cancels
-    the follow by setting AAllow := False — so we record the refusal
+    THTTPRedirectEvent). The event can't raise to abort -- it cancels
+    the follow by setting AAllow := False -- so we record the refusal
     on this adapter and the caller promotes it to THTTPResult.ErrorMsg
     after the request returns. ARequest.URL is mutable through the
     interface even though ARequest itself is const, so the guard can
@@ -574,7 +574,7 @@ end;
 
 {$ELSE}
 (* ============================================================
-   Indy backend — default on both Delphi and FPC.
+   Indy backend -- default on both Delphi and FPC.
    ============================================================ *)
 
 procedure ApplyHeaders(Http: TIdHTTP; const Headers: array of THeaderPair);
@@ -588,7 +588,7 @@ end;
 procedure CaptureIndyHeaders(Http: TIdHTTP; var Out_: THeaderPairs);
 { Snapshot Http.Response.RawHeaders into the result record's
   RespHeaders field. Indy's RawHeaders is a TStringList where
-  Strings[i] is "Name: Value" — split on the first colon so values
+  Strings[i] is "Name: Value" -- split on the first colon so values
   containing further colons (e.g. URLs in Location, timestamps)
   survive intact. }
 var
@@ -715,12 +715,12 @@ procedure ApplyBrowserProxy(Http: TIdHTTP; HTTPS: Boolean);
    http://192.168.127.253:80) into the environment, TLS-terminates HTTPS with
    its own CA, and re-issues each request through the browser's Fetch API.
    Indy's TIdHTTP does NOT read those env vars on its own, so without this it
-   would try a direct socket — which has no egress in the browser. Route the
+   would try a direct socket -- which has no egress in the browser. Route the
    client through the proxy here.
 
    No CA wiring is needed: Indy does not verify the server certificate by
    default, so the proxy's MITM cert is accepted. (If a future change turns on
-   peer verification, load /.wasmenv/proxy.crt — c2w sets SSL_CERT_FILE.)
+   peer verification, load /.wasmenv/proxy.crt -- c2w sets SSL_CERT_FILE.)
 
    Off by default: this whole procedure is excluded from normal builds, which
    keep going direct to the provider. *)
@@ -1050,7 +1050,7 @@ begin
       begin
         StatusCode := E.ErrorCode;
         ErrMsg     := E.Message;
-        { fall through — caller may still want to parse what we got }
+        { fall through -- caller may still want to parse what we got }
       end;
       on E: Exception do
       begin

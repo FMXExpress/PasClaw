@@ -34,7 +34,7 @@ type
   (* TJsonObject: build, parse, mutate JSON objects.
      Get* methods return the supplied Default when the key is missing or has
      the wrong type. ChildObject / ChildArray return live references owned by
-     this object — do NOT free them yourself. *)
+     this object -- do NOT free them yourself. *)
   TJsonObject = class
   private
     FBacking: TObject;   { wraps the backend's object type }
@@ -169,16 +169,16 @@ class function TJsonObject.Parse(const S: string): TJsonObject;
      Raw bytes  (jsonreader.pp:241)
        tkString : if (joUTF8 in Options) and (DefaultSystemCodePage<>CP_UTF8) then
                     StringValue(TJSONStringType(UTF8Decode(CurrentTokenString)))
-       — with joUTF8 the parsed token is re-encoded through the
+       -- with joUTF8 the parsed token is re-encoded through the
        system codepage; on a container locale with CP=0 that
        clips every non-ASCII lead byte (¶ `C2 B6` → `B6`).
 
-     \uXXXX escapes  (jsonscanner.pp:270, :359 — Codex P2 on PR #161)
+     \uXXXX escapes  (jsonscanner.pp:270, :359 -- Codex P2 on PR #161)
        if (joUTF8 in Options) or (DefaultSystemCodePage=CP_UTF8) then
          U:=Utf8Encode(WideString(WideChar(u1)))
        else
          U:=String(WideChar(u1));
-       — without joUTF8 the WideChar is cast through the system
+       -- without joUTF8 the WideChar is cast through the system
        codepage; on CP=0 that gives Latin-1 mapping (`é` → byte
        `E9` instead of UTF-8 `C3 A9`) or `?` fallback (`中` →
        `3F`). Producers that emit ASCII-safe JSON with `\u` escapes
@@ -188,7 +188,7 @@ class function TJsonObject.Parse(const S: string): TJsonObject;
    Setting DefaultSystemCodePage = CP_UTF8 satisfies BOTH branches:
    raw bytes take the unchanged-StringValue else branch (lossless),
    and \u escapes take the Utf8Encode path (lossless). Restored on
-   exit. Concurrent Parse calls race only on the save/restore — they
+   exit. Concurrent Parse calls race only on the save/restore -- they
    all set the same value, so the race is benign; the window is the
    parser pass itself, which is brief and CPU-bound. *)
 var
@@ -286,7 +286,7 @@ begin
     Result := TJsonArray.CreateWrapping(D, False);
 end;
 
-{ fpjson's Add() appends without checking — repeated writes to the same
+{ fpjson's Add() appends without checking -- repeated writes to the same
   key would emit a duplicate-keyed JSON object that downstream parsers
   treat ambiguously. Strip any existing entry with this key first so
   Put* has clean "last write wins" semantics. }
@@ -389,7 +389,7 @@ end;
 
 class function TJsonArray.Parse(const S: string): TJsonArray;
 { See TJsonObject.Parse for why we swap DefaultSystemCodePage to
-  CP_UTF8 around the parser run — same lossy-scanner interaction. }
+  CP_UTF8 around the parser run -- same lossy-scanner interaction. }
 var
   Stream: TStringStream;
   Parser: TJSONParser;
@@ -898,7 +898,7 @@ begin
     V := System.JSON.TJSONObject.ParseJSONValue(RawJSON);
     if V <> nil then System.JSON.TJSONArray(FBacking).AddElement(V);
   except
-    { swallow malformed JSON — call site can detect via Count }
+    { swallow malformed JSON -- call site can detect via Count }
   end;
 end;
 

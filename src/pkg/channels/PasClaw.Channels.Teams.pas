@@ -4,7 +4,7 @@
   Microsoft Teams' "Incoming Webhook" connector gives the user a URL like
     https://<tenant>.webhook.office.com/webhookb2/<id>@<tenant>/IncomingWebhook/<conn>/<obj>
   POSTing a JSON {"text": "..."} body to that URL renders as a card in
-  the configured Teams channel. No auth header — the secret is the URL
+  the configured Teams channel. No auth header -- the secret is the URL
   itself, so treat it like the Slack incoming webhook URL.
 
   This unit only ships the outbound sender. Two-way conversations (the

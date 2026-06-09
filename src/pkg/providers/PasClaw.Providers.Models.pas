@@ -1,5 +1,5 @@
 (*
-  PasClaw.Providers.Models — live `/v1/models` discovery + on-disk cache.
+  PasClaw.Providers.Models -- live `/v1/models` discovery + on-disk cache.
 
   Three providers / one shape, all driven off TProviderSpec.Family:
 
@@ -9,7 +9,7 @@
                                "owned_by":"openai" }, ... ] }
                  Used by openai, openrouter, groq, deepseek, mistral,
                  xai, qwen, zhipu, cerebras, moonshot, ollama, vllm,
-                 lmstudio, litellm — anything pfOpenAI-family. Each row
+                 lmstudio, litellm -- anything pfOpenAI-family. Each row
                  in the catalog shares this parser.
 
     pfAnthropic  GET <base>/v1/models with x-api-key auth +
@@ -24,7 +24,7 @@
                                  "supportedGenerationMethods":["generateContent",...] },
                                ... ] }
                  We strip the "models/" prefix to get the wire id, and
-                 filter out entries that don't list "generateContent" —
+                 filter out entries that don't list "generateContent" --
                  catalog rows like embedding-only or counter-only
                  models would 404 the chat path anyway.
 
@@ -35,8 +35,8 @@
 
   Cache key is the operator-facing TProviderConfig.Name (NOT the
   catalog Spec.Kind), so two named providers sharing one Kind but
-  pointing at different APIBase/keys — supported by
-  NewProviderFromConfig — each get their own roster file and don't
+  pointing at different APIBase/keys -- supported by
+  NewProviderFromConfig -- each get their own roster file and don't
   clobber one another (Codex P2 on PR #171).
 
   Discovery never raises. Failure modes:
@@ -45,7 +45,7 @@
     - Empty model list      Ok=True with Length=0 (caller's choice)
     - Placeholder family    Ok=False, ErrMsg='not supported'
 
-  The catalog's static DefaultModel still wins when discovery fails —
+  The catalog's static DefaultModel still wins when discovery fails --
   Tools.Memory's "fall back to FTS5" pattern, applied to onboarding's
   model picker.
 *)
@@ -68,15 +68,15 @@ type
                                else Id verbatim }
     CreatedAt: Int64;        { unix seconds; 0 when the provider doesn't
                                expose creation time. Used for sort order
-                               in the onboarding picker — newest first. }
+                               in the onboarding picker -- newest first. }
   end;
   TModelInfoArray = array of TModelInfo;
 
   TModelDiscoveryResult = record
     Ok:        Boolean;       { True iff Models is the authoritative list
-                                from the provider — even if Length=0 }
+                                from the provider -- even if Length=0 }
     Models:    TModelInfoArray;
-    Source:    string;        { 'live' / 'cache' / 'fallback' — used for
+    Source:    string;        { 'live' / 'cache' / 'fallback' -- used for
                                 the show command's "(cached 3 days ago)"
                                 style annotation }
     ErrMsg:    string;        { populated when Ok=False; safe to surface
@@ -99,7 +99,7 @@ procedure SaveCachedModels(const Provider: string;
                            const R: TModelDiscoveryResult);
 
 (* Live discovery against the provider's /v1/models (or equivalent).
-   Pass the resolved APIBase + APIKey from the operator's TConfig —
+   Pass the resolved APIBase + APIKey from the operator's TConfig --
    the catalog default is fine when the operator hasn't overridden.
    Times out after TimeoutSec seconds; returns Ok=False with ErrMsg
    populated on any failure. *)
@@ -109,7 +109,7 @@ function DiscoverModels(const Spec: TProviderSpec;
 
 (* Resolve an operator-facing Provider Name (from Cfg.Providers[]) into
    (catalog Spec, effective APIBase, APIKey) for /v1/models discovery.
-   Mirrors the path NewProviderFromConfig walks — normalises Kind
+   Mirrors the path NewProviderFromConfig walks -- normalises Kind
    ("openai-compat" → "openai" / lowercase / trim), falls back to Name
    when Kind is blank, looks up the catalog. Same resolution
    `pasclaw model refresh` uses; exposed here so the TUI's inline
@@ -139,7 +139,7 @@ uses
 
 const
   CACHE_SUBDIR = 'cache';          { two-segment subpath so JoinPath gets
-                                     the host PathDelim right — same trap
+                                     the host PathDelim right -- same trap
                                      PR #169 fixed elsewhere }
   CACHE_LEAF   = 'models';
   ANTHROPIC_VERSION_HEADER_VALUE = '2023-06-01';
@@ -243,7 +243,7 @@ begin
   except
     on E: Exception do
     begin
-      LogDebug('model cache: read failed for %s — %s', [Path, E.Message]);
+      LogDebug('model cache: read failed for %s -- %s', [Path, E.Message]);
       Exit(False);
     end;
   end;
@@ -261,7 +261,7 @@ begin
     WriteFileText(Path, SerializeCache(R));
   except
     on E: Exception do
-      LogDebug('model cache: write failed for %s — %s', [Path, E.Message]);
+      LogDebug('model cache: write failed for %s -- %s', [Path, E.Message]);
   end;
 end;
 
@@ -298,7 +298,7 @@ begin
 end;
 
 { Parse an ISO-8601 timestamp to unix seconds. Returns 0 on any failure
-  — the caller treats 0 as "no creation time" which is the same fallback
+  -- the caller treats 0 as "no creation time" which is the same fallback
   used by providers that don't surface created_at at all. We don't need
   millisecond accuracy; the field is only used for picker sort order. }
 function ParseISO8601(const S: string): Int64;
@@ -595,7 +595,7 @@ var
   Status: Integer;
   Headers: array of THeaderPair;
 begin
-  { Gemini takes the key via x-goog-api-key header — same shape as the
+  { Gemini takes the key via x-goog-api-key header -- same shape as the
     chat path so the Auth.HeaderName from the catalog applies. Path
     is /v1beta/models, NOT /v1/models. }
   URL := StripTrailingSlash(APIBase) + '/v1beta/models';
@@ -638,7 +638,7 @@ begin
   if Base = '' then Base := Spec.DefaultBase;
   if Base = '' then
   begin
-    Result.ErrMsg := 'no API base — set Cfg.Providers[].APIBase or the catalog DefaultBase';
+    Result.ErrMsg := 'no API base -- set Cfg.Providers[].APIBase or the catalog DefaultBase';
     Exit;
   end;
 

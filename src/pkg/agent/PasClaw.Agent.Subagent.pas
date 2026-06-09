@@ -1,5 +1,5 @@
 (*
-  PasClaw.Agent.Subagent — `spawn` tool for fan-out to specialist
+  PasClaw.Agent.Subagent -- `spawn` tool for fan-out to specialist
   subagents.
 
   When the model calls `spawn(agent="researcher", prompt="...")`,
@@ -8,7 +8,7 @@
     * the parent's provider + fallback chain (no new HTTPS handshake
       to a different API)
     * a filtered registry holding only the tools the named subagent
-      is allowed to use (per TSubagentSpec.Tools — and never the
+      is allowed to use (per TSubagentSpec.Tools -- and never the
       `spawn` tool itself, so nested sub-subagents aren't a thing
       in v1)
     * the subagent's specialisation system prompt instead of the
@@ -16,7 +16,7 @@
     * the subagent's model override or, when empty, the parent's
       default
 
-  This is intentionally NOT a child TPasClawAgent instance — the
+  This is intentionally NOT a child TPasClawAgent instance -- the
   parent's "single live instance per process" constraint (rooted in
   PasClaw.MCP.Bridge / PasClaw.Skills.Loader holding their state
   in module-level arrays) would otherwise have to be lifted. By
@@ -25,7 +25,7 @@
   parent's already-built provider + registry foundations.
 
   Mirrors picoclaw's SubTurn coordination, nanobot's subagent
-  module, and openclaw's multi-agent routing — same "planner agent
+  module, and openclaw's multi-agent routing -- same "planner agent
   fans out to specialists" pattern, smaller surface.
 
   Configuration: TConfig.Subagents (config.json "subagents": [...]).
@@ -48,10 +48,10 @@ uses
 
 type
   { TSubagentSpecArray now lives in PasClaw.Config alongside
-    TSubagentSpec — see comment there for the dcc64 named-type
+    TSubagentSpec -- see comment there for the dcc64 named-type
     rationale. The use clause above pulls it in. }
 
-  { Everything the spawn tool needs from its parent — captured at
+  { Everything the spawn tool needs from its parent -- captured at
     registration time so the tool handler can run a child loop
     without reaching back into the parent's TPasClawAgent state. }
   TSubagentContext = record
@@ -61,7 +61,7 @@ type
     DefaultModel:   string;
     (* Operator's prompt-cache config propagated from the parent so
        `prompt_cache.enabled: false` reaches subagents too. Codex P2
-       on PR #118 — see PasClaw.Config.ApplyPromptCacheConfig. *)
+       on PR #118 -- see PasClaw.Config.ApplyPromptCacheConfig. *)
     PromptCache:    TPromptCacheConfig;
   end;
 
@@ -88,7 +88,7 @@ type
     { Refresh the captured TSubagentContext. Embedders that swap
       providers mid-session (TPasClawAgent.SetProvider after the
       first Chat) call this so the next spawn() dispatch picks up
-      the new ILLMProvider / Fallbacks / DefaultModel — without it
+      the new ILLMProvider / Fallbacks / DefaultModel -- without it
       the spawn tool would keep using the stale provider that was
       live when the registry was first installed. (Codex P2 on
       PR #107.) }
@@ -148,7 +148,7 @@ begin
     if Names[i] = 'spawn' then Continue;  { no nested sub-subagents }
     if not Source.Find(Names[i], T) then
     begin
-      LogWarn('subagent: source registry has no tool named "%s" — skipping', [Names[i]]);
+      LogWarn('subagent: source registry has no tool named "%s" -- skipping', [Names[i]]);
       Continue;
     end;
     Result.Register(T);
@@ -188,7 +188,7 @@ end;
 
 function TSpawnTool.Category: TToolCategory;
 begin
-  { Mutating in the parallel-batching sense — a spawn call drives
+  { Mutating in the parallel-batching sense -- a spawn call drives
     another LLM round trip + tool dispatch, has its own side
     effects, and shouldn't run in parallel with the parent's other
     tool calls. The agent loop treats it as a batch of one. }
@@ -317,7 +317,7 @@ begin
   end;
   if not FindSpec(AgentName, Spec) then
   begin
-    ErrMsg := Format('spawn: no subagent named "%s" — available: %s',
+    ErrMsg := Format('spawn: no subagent named "%s" -- available: %s',
                      [AgentName, JoinSpecNames]);
     Exit;
   end;

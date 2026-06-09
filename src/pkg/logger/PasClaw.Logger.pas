@@ -17,7 +17,7 @@ type
 
   (* Subscriber callback for live log streaming. Fires from inside
      Emit on whatever thread the log call ran on. Subscribers must
-     NOT block — Indy listener threads or the cron scheduler thread
+     NOT block -- Indy listener threads or the cron scheduler thread
      own that call stack. The web UI's /v1/logs SSE handler is the
      primary consumer; it buffers locally and ships to the browser
      on its own writer thread. *)
@@ -101,14 +101,14 @@ begin
     handler call UnsubscribeLog + free the TLogStreamWriter while
     another thread was mid-fanout holding a stale method pointer,
     classic use-after-free. Holding the lock during dispatch
-    eliminates that race — UnsubscribeLog can't free anything
+    eliminates that race -- UnsubscribeLog can't free anything
     while a fanout is in flight, and the in-flight fanout always
     sees a still-live listener.
 
     Trade-off: a slow listener (HTTP-write blocking on a slow
     network client) now pins GBufferLock and throttles every
     log call until it returns. Listeners are supposed to write
-    to a buffered IOHandler and return immediately — if one is
+    to a buffered IOHandler and return immediately -- if one is
     legitimately slow, the fix is to make IT async, not to
     re-introduce the use-after-free window. }
   GBufferLock.Acquire;
@@ -119,7 +119,7 @@ begin
       try
         GListeners[i].Listener(Tag, Msg);
       except
-        { Swallow — a misbehaving listener must NOT abort the log. }
+        { Swallow -- a misbehaving listener must NOT abort the log. }
       end;
     end;
   finally

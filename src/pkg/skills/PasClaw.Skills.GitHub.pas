@@ -12,7 +12,7 @@
     owner/repo@branch           Pin to a branch / tag / commit instead
     owner/repo/sub/path@ref     of trying main then master.
 
-  How it works (no clone / no git binary required — PasClaw stays an
+  How it works (no clone / no git binary required -- PasClaw stays an
   Indy-only HTTP client):
 
     1. Parse Target into (Owner, Repo, SubPath, Ref).
@@ -24,7 +24,7 @@
        would also work but the disk path is simpler and the zips are
        small enough that the I/O is invisible).
     4. Extract through PasClaw.Skills.Zip (FPC: Zipper, Delphi:
-       System.Zip — both natively ship a zip implementation; no tar
+       System.Zip -- both natively ship a zip implementation; no tar
        dependency).
     5. GitHub's zip wraps everything in a `<repo>-<ref>/` directory.
        Strip that prefix; locate the SKILL.md at the requested
@@ -36,7 +36,7 @@
 
   Naming: InstalledName defaults to the last segment of SubPath, or
   the repo name when SubPath is empty. The skill's own `name:`
-  frontmatter is not used for the directory — directory name is what
+  frontmatter is not used for the directory -- directory name is what
   the model sees in the system prompt's SKILLS section path, and
   matching the GitHub layout makes it easier for users to find the
   source.
@@ -48,7 +48,7 @@
   demand.
 
   Not in scope here (Phase 3+):
-    - ClawHub registry — separate HTTP API + slug resolution
+    - ClawHub registry -- separate HTTP API + slug resolution
     - Multiple registries in one install command
     - Lockfile / version pinning per skill
     - Signed downloads
@@ -162,7 +162,7 @@ begin
 
   if (T.Owner = '') or (T.Repo = '') then
   begin
-    ErrMsg := 'malformed target — both owner and repo are required';
+    ErrMsg := 'malformed target -- both owner and repo are required';
     Exit;
   end;
   Result := True;
@@ -183,7 +183,7 @@ end;
 
 function CodeloadBranchURL(const Owner, Repo, Branch: string): string;
 { Specific to branches. Used for the implicit `main` then `master`
-  fallback when the user did not pin a ref — `refs/heads/<branch>`
+  fallback when the user did not pin a ref -- `refs/heads/<branch>`
   forces a branch lookup so a tag or PR-branch with the same name
   as a default branch never wins by accident. }
 begin
@@ -193,7 +193,7 @@ end;
 
 function CodeloadAnyRefURL(const Owner, Repo, Ref: string): string;
 { Short codeload form. Accepts branches, tags, and commit SHAs
-  uniformly — used when the user pinned an explicit ref via the
+  uniformly -- used when the user pinned an explicit ref via the
   `@v1.2.3` / `@sha` syntax. The previous hardcoded
   `refs/heads/<ref>` only worked for branches and 404'd on tags
   and SHAs even though the archives existed. }
@@ -309,7 +309,7 @@ begin
 end;
 
 procedure RemoveTree(const Dir: string);
-{ Recursive delete. Failures swallowed — used in the cleanup path
+{ Recursive delete. Failures swallowed -- used in the cleanup path
   where partial state is better than a stuck install. }
 var
   SR: TSearchRec;
@@ -355,7 +355,7 @@ begin
   DstDir := JoinPath(DestRoot, InstalledName);
   if DirectoryExists(DstDir) then
   begin
-    ErrMsg := Format('skill "%s" already exists at %s — remove it or pick a different target',
+    ErrMsg := Format('skill "%s" already exists at %s -- remove it or pick a different target',
                      [InstalledName, DstDir]);
     Exit;
   end;
@@ -379,7 +379,7 @@ begin
   try
     if T.Ref <> '' then
     begin
-      { Explicit ref — use the short codeload form that accepts
+      { Explicit ref -- use the short codeload form that accepts
         branches, tags, and commit SHAs alike. One attempt only;
         a 404 here means the ref does not exist, not that we should
         try a default branch. }
@@ -393,7 +393,7 @@ begin
     end
     else
     begin
-      { Implicit ref — try main then master. Use refs/heads/<branch>
+      { Implicit ref -- try main then master. Use refs/heads/<branch>
         explicitly so a tag or unrelated ref with the same name does
         not slip in via the short form. }
       SetLength(Refs, 2);
@@ -432,7 +432,7 @@ begin
     if not FileExists(JoinPath(SrcDir, 'SKILL.md')) then
     begin
       if T.SubPath = '' then
-        ErrMsg := Format('repo %s/%s @ %s has no SKILL.md at the root — ' +
+        ErrMsg := Format('repo %s/%s @ %s has no SKILL.md at the root -- ' +
                          'specify a subpath, e.g. owner/repo/path-to-skill',
                          [T.Owner, T.Repo, T.Ref])
       else
@@ -441,7 +441,7 @@ begin
       Exit;
     end;
 
-    { Validate by parsing — refusing here is friendlier than letting a
+    { Validate by parsing -- refusing here is friendlier than letting a
       malformed skill land on disk and show up in `pasclaw skills list`
       with a warn-but-keep behaviour. }
     if not ParseSkillMD(JoinPath(SrcDir, 'SKILL.md'), Spec, ParseErr) then
