@@ -47,6 +47,10 @@ unit PasClaw.Cmd.Learn;
 
 interface
 
+uses
+  Classes;    { TStringList -- needed for the ReadExistingScars
+                signature below. }
+
 function Cmd_Learn_Run(const Argv: array of string): Integer;
 
 (* Normalise a failure-shaped line into a clustering key. Strips
@@ -61,10 +65,32 @@ function NormalizeErrorSignature(const Raw: string): string;
    here so the matchers stay together with the rules they imply. *)
 function LooksLikeFailure(const Line: string): Boolean;
 
+(* Derive a stable SCARS §ANCHOR-NAME from a normalised pattern
+   signature. Exposed so a regression test can pin the contract --
+   the anchor is the join point between a learn-run today and a
+   commit message tomorrow ("fixes §FOO-BAR"); if the derivation
+   drifts, the link rots silently. *)
+function MakeAnchorName(const Signature: string): string;
+
+(* Parse an existing SCARS.md and return the set of anchor names
+   AND the set of signature markers found in `<!-- signature: ...
+   -->` lines. Re-runs of `learn --write-scars` skip a pattern
+   whose anchor OR signature is already present; the signature
+   path is the rename-survival promise from MakeAnchorName's
+   docstring. Exposed so a regression test can pin that
+   promise -- without it, renaming an anchor would silently
+   duplicate the block on the next run. (Codex P2 on PR #197.)
+   Both lists are caller-owned. *)
+procedure ReadExistingScars(const Path: string;
+                            out Anchors, Signatures: TStringList);
+
 implementation
 
 uses
-  SysUtils, Classes, DateUtils,
+  SysUtils, DateUtils,                { Classes already in interface uses
+                                        for TStringList in the ReadExistingScars
+                                        signature; pulling it in again here
+                                        triggers FPC "Duplicate identifier". }
   PasClaw.CliUI,
   PasClaw.Config,
   PasClaw.Utils,
@@ -87,6 +113,11 @@ type
   TLearnArgs = record
     SinceDays:   Integer;     { 0 = no window }
     Write_:      Boolean;     { --write -> append to MEMORY.md }
+    WriteScars:  Boolean;     { --write-scars -> emit / refresh
+                                workspace/memory/SCARS.md (stable
+                                §ANCHOR-NAME ids citable from
+                                commits/PRs, format borrowed from
+                                Abbasi-Alain/atlas). }
     MinSessions: Integer;     { drop patterns with fewer DISTINCT
                                 sessions; default 2. Codex P2 #1 on
                                 PR #190: was MinCount over total
@@ -106,6 +137,8 @@ begin
   PrintLn('  --since <days>           Only consider sessions newer than N days (default: all)');
   PrintLn('  --min-sessions <count>   Drop patterns seen in fewer distinct sessions (default: 2)');
   PrintLn('  --write                  Append a Patterns block to workspace/memory/MEMORY.md');
+  PrintLn('  --write-scars            Emit / refresh workspace/memory/SCARS.md (stable §ANCHOR ids');
+  PrintLn('                           per pattern, citable from commits + PRs via `git log --grep "§"`)');
   PrintLn('  --verbose                Print scan progress per session');
 end;
 
@@ -115,6 +148,7 @@ var
 begin
   A.SinceDays   := 0;
   A.Write_      := False;
+  A.WriteScars  := False;
   A.MinSessions := 2;
   A.Verbose     := False;
   Result := True;
@@ -137,8 +171,9 @@ begin
       Inc(i, 2);
       Continue;
     end;
-    if Argv[i] = '--write'   then begin A.Write_  := True; Inc(i); Continue; end;
-    if Argv[i] = '--verbose' then begin A.Verbose := True; Inc(i); Continue; end;
+    if Argv[i] = '--write'       then begin A.Write_     := True; Inc(i); Continue; end;
+    if Argv[i] = '--write-scars' then begin A.WriteScars := True; Inc(i); Continue; end;
+    if Argv[i] = '--verbose'     then begin A.Verbose    := True; Inc(i); Continue; end;
     if (Argv[i] = '-h') or (Argv[i] = '--help') then
     begin
       PrintHelp;
@@ -570,6 +605,284 @@ begin
   end;
 end;
 
+{ ============================ SCARS.md emitter ============================ }
+
+const
+  SCARS_HEADER_MARKER = '<!-- pasclaw scars vN: stable §ANCHOR ids; ' +
+                        'operator-edited rationale survives re-runs -->';
+
+function MakeAnchorName(const Signature: string): string;
+{ Derive a stable §ANCHOR-NAME from a normalised pattern signature.
+  Strategy: drop our own placeholders (`<n>`, `<path>`, `<hash>`),
+  uppercase, split on non-alphanumeric, drop English stopwords + the
+  most generic failure words, keep the first ~5 distinctive tokens,
+  join with `-`, cap at 50 chars. Operators can rename the anchor
+  in SCARS.md freely -- pasclaw learn looks patterns up by
+  Signature, not by anchor name, so renames don't break the
+  duplicate-detection on re-runs. }
+const
+  MAX_TOKENS = 5;
+  MAX_LEN    = 50;
+  Stopwords: array[0..15] of string = (
+    'a', 'an', 'the', 'in', 'on', 'with', 'for', 'at', 'to', 'by',
+    'of', 'from', 'or', 'and', 'is', 'was');
+var
+  S, Tok, Result_: string;
+  Sl: TStringList;
+  i, j, k: Integer;
+  IsStop: Boolean;
+  c: Char;
+begin
+  { Strip placeholders. }
+  S := Signature;
+  S := StringReplace(S, '<n>',    ' ', [rfReplaceAll]);
+  S := StringReplace(S, '<path>', ' ', [rfReplaceAll]);
+  S := StringReplace(S, '<hash>', ' ', [rfReplaceAll]);
+
+  { Tokenise on any non-alphanumeric. Build word list. }
+  Sl := TStringList.Create;
+  try
+    Tok := '';
+    for i := 1 to Length(S) do
+    begin
+      c := S[i];
+      if ((c >= 'a') and (c <= 'z')) or ((c >= 'A') and (c <= 'Z')) or
+         ((c >= '0') and (c <= '9')) then
+        Tok := Tok + UpCase(c)
+      else
+      begin
+        if Tok <> '' then Sl.Add(Tok);
+        Tok := '';
+      end;
+    end;
+    if Tok <> '' then Sl.Add(Tok);
+
+    { Drop stopwords. Keep first MAX_TOKENS distinctive tokens. }
+    Result_ := '';
+    for i := 0 to Sl.Count - 1 do
+    begin
+      IsStop := False;
+      for j := Low(Stopwords) to High(Stopwords) do
+        if SameText(Sl[i], Stopwords[j]) then
+        begin
+          IsStop := True;
+          Break;
+        end;
+      if IsStop then Continue;
+      if Result_ = '' then Result_ := Sl[i]
+      else                 Result_ := Result_ + '-' + Sl[i];
+      if Length(Result_) >= MAX_LEN then Break;
+      { Count tokens emitted, cap at MAX_TOKENS. }
+      if Length(Result_) > 0 then
+      begin
+        j := 1;
+        for k := 1 to Length(Result_) do
+          if Result_[k] = '-' then Inc(j);
+        if j >= MAX_TOKENS then Break;
+      end;
+    end;
+  finally
+    Sl.Free;
+  end;
+
+  if Length(Result_) > MAX_LEN then SetLength(Result_, MAX_LEN);
+  if Result_ = '' then Result_ := 'PATTERN';
+  Result := Result_;
+end;
+
+procedure ReadExistingScars(const Path: string;
+                            out Anchors, Signatures: TStringList);
+{ Parse existing SCARS.md for anchor names AND the per-block
+  `<!-- signature: ... -->` markers we emit alongside them, so
+  re-runs don't duplicate even when the operator has renamed a
+  `## §ANCHOR` heading. Both lists are fresh sorted dupIgnore
+  TStringLists; caller owns them. Codex P2 on PR #197: the rename
+  promise in MakeAnchorName's docstring is only credible if we
+  actually persist the signature; reading by anchor alone meant a
+  renamed entry got duplicated on the next learn run. }
+const
+  SigMarker    = '<!-- signature:';
+  { #$C2#$A7 is the UTF-8 byte sequence for U+00A7 SECTION SIGN.
+    Spelling it out as escapes (rather than the literal `§` glyph)
+    pins the bytes regardless of the unit's source-codepage
+    handling -- FPC was implicitly transcoding the inline glyph
+    through the system codepage which left a different byte
+    sequence in the constant than what TStringList.LoadFromFile
+    returned, so the matcher silently failed. Pin once here. }
+  AnchorPrefix = '## ' + #$C2#$A7;
+var
+  Sl: TStringList;
+  i: Integer;
+  Line, Name, Sig: string;
+  EndPos: Integer;
+begin
+  Anchors    := TStringList.Create;
+  Anchors.Sorted     := True;
+  Anchors.Duplicates := dupIgnore;
+  Signatures := TStringList.Create;
+  Signatures.Sorted     := True;
+  Signatures.Duplicates := dupIgnore;
+  if not FileExists(Path) then Exit;
+  Sl := TStringList.Create;
+  try
+    try
+      Sl.LoadFromFile(Path);
+    except
+      Exit;
+    end;
+    for i := 0 to Sl.Count - 1 do
+    begin
+      Line := Trim(Sl[i]);
+      { Match `## §NAME ...` -- the §...whitespace tail. The §
+        prefix is declared as a const at the top of this function
+        using #$C2#$A7 byte escapes so FPC can't transcode the
+        literal through a non-UTF-8 codepage at runtime. }
+      if (Pos(AnchorPrefix, Line) = 1) then
+      begin
+        Name := Trim(Copy(Line, Length(AnchorPrefix) + 1, MaxInt));
+        { Drop any trailing description / annotation after the name. }
+        if Pos(' ', Name) > 0 then
+          Name := Copy(Name, 1, Pos(' ', Name) - 1);
+        if Name <> '' then Anchors.Add(Name);
+      end
+      else if Pos(SigMarker, Line) = 1 then
+      begin
+        Sig := Trim(Copy(Line, Length(SigMarker) + 1, MaxInt));
+        EndPos := Pos('-->', Sig);
+        if EndPos > 0 then Sig := Trim(Copy(Sig, 1, EndPos - 1));
+        if Sig <> '' then Signatures.Add(Sig);
+      end;
+    end;
+  finally
+    Sl.Free;
+  end;
+end;
+
+procedure AppendToScarsMd(const Patterns: TErrorPatternArray;
+                          MinSessions: Integer);
+{ Emit / refresh workspace/memory/SCARS.md with Atlas-style stable
+  §ANCHOR ids per pattern. Re-running does NOT clobber existing
+  anchors -- operators routinely fill in Root cause / Do / Do NOT
+  with hand-written rationale, and we'd be unfriendly to overwrite
+  that work. New patterns get a fresh anchor + boilerplate + an
+  embedded `<!-- signature: ... -->` marker; known patterns get
+  skipped silently (matched on either the anchor name OR the
+  persisted signature, so renamed-by-operator entries still match).
+  (Refresh of See: counts on existing anchors is a follow-up; for
+  v1 the operator can drop the file and re-run for full
+  re-extraction.) }
+var
+  Path: string;
+  Sl: TStringList;
+  ExistingAnchors, ExistingSignatures: TStringList;
+  i, FreshCount, SkippedCount: Integer;
+  Anchor, Sig: string;
+begin
+  Path := JoinPath(JoinPath(GetHome, 'workspace/memory'), 'SCARS.md');
+  if not DirectoryExists(ExtractFilePath(Path)) then
+    ForceDirectories(ExtractFilePath(Path));
+
+  ReadExistingScars(Path, ExistingAnchors, ExistingSignatures);
+  Sl := TStringList.Create;
+  try
+    if FileExists(Path) then
+      Sl.LoadFromFile(Path)
+    else
+    begin
+      { Fresh file -- write the header preamble. }
+      Sl.Add('# SCARS -- recurring failures the operator has codified');
+      Sl.Add('');
+      Sl.Add(SCARS_HEADER_MARKER);
+      Sl.Add('');
+      Sl.Add('Each `## §ANCHOR-NAME` block describes one recurring tool');
+      Sl.Add('failure surfaced by `pasclaw learn`. Anchor names are stable --');
+      Sl.Add('cite them in commit messages and PRs (`git log --grep "§"`)');
+      Sl.Add('to link a fix back to the failure it addresses. Operators');
+      Sl.Add('rename anchors freely; pasclaw learn matches patterns by the');
+      Sl.Add('embedded `<!-- signature: ... -->` marker, not by anchor');
+      Sl.Add('name, so renames survive re-runs. Do not edit the signature');
+      Sl.Add('marker -- it is how we know we have already cataloged this');
+      Sl.Add('pattern.');
+      Sl.Add('');
+    end;
+    if (Sl.Count > 0) and (Trim(Sl[Sl.Count - 1]) <> '') then
+      Sl.Add('');
+
+    FreshCount   := 0;
+    SkippedCount := 0;
+    for i := 0 to High(Patterns) do
+    begin
+      if Patterns[i].Sessions.Count < MinSessions then Continue;
+      Anchor := MakeAnchorName(Patterns[i].Signature);
+      Sig    := Patterns[i].Signature;
+
+      { Re-runs leave operator-edited anchors alone. Match on
+        anchor OR signature -- the signature check is the one that
+        catches a renamed `## §FOO-BAR` heading whose underlying
+        pattern we'd otherwise duplicate. Same pattern appearing
+        in fresh sessions still bumps Cmd.Learn's in-memory counts
+        and reports back to stdout, but it doesn't overwrite the
+        on-disk SCARS entry. }
+      if (ExistingAnchors.IndexOf(Anchor) >= 0) or
+         (ExistingSignatures.IndexOf(Sig) >= 0) then
+      begin
+        Inc(SkippedCount);
+        Continue;
+      end;
+
+      { #$C2#$A7 = U+00A7 SECTION SIGN. Spelled out as a byte
+        escape so the bytes we emit here match the bytes
+        ReadExistingScars looks for via AnchorPrefix -- see the
+        const block in that function for the why. }
+      Sl.Add(Format('## ' + #$C2#$A7 + '%s', [Anchor]));
+      Sl.Add(Format('<!-- signature: %s -->', [Sig]));
+      Sl.Add('');
+      Sl.Add(Format('**Symptom:** %s', [Patterns[i].Sample]));
+      Sl.Add('');
+      Sl.Add('**Root cause:** _operator: fill in -- what was the underlying problem?_');
+      Sl.Add('');
+      Sl.Add('**Do NOT:** _operator: fill in -- what shouldn''t we try again?_');
+      Sl.Add('');
+      Sl.Add('**Do:** _operator: fill in -- the working remedy._');
+      Sl.Add('');
+      if Patterns[i].Context <> '' then
+        Sl.Add(Format('**Where:** tool `%s`', [Patterns[i].Context]))
+      else
+        Sl.Add('**Where:** _multiple tools or none surfaced via Context_');
+      Sl.Add('');
+      Sl.Add(Format(
+        '**See:** %d occurrence(s) across %d session(s)',
+        [Patterns[i].Count, Patterns[i].Sessions.Count]));
+      Sl.Add('');
+
+      Inc(FreshCount);
+      ExistingAnchors.Add(Anchor);       { in-run dedup against later
+                                           patterns that collapse to
+                                           the same anchor }
+      ExistingSignatures.Add(Sig);       { and against later
+                                           patterns with the same
+                                           normalised signature }
+    end;
+
+    if FreshCount = 0 then
+    begin
+      PrintLn(Ansi.Dim +
+              Format('(no new SCARS to write; %d existing anchor(s) already cover the patterns)',
+                     [SkippedCount]) +
+              Ansi.Reset);
+      Exit;
+    end;
+    Sl.SaveToFile(Path);
+    PrintLn(Ansi.Green + '✓ ' + Ansi.Reset +
+            Format('wrote %d new SCARS anchor(s) to %s (%d existing skipped)',
+                   [FreshCount, Path, SkippedCount]));
+  finally
+    Sl.Free;
+    ExistingAnchors.Free;
+    ExistingSignatures.Free;
+  end;
+end;
+
 function Cmd_Learn_Run(const Argv: array of string): Integer;
 var
   A:         TLearnArgs;
@@ -615,7 +928,8 @@ begin
 
     SortPatternsByCount(Patterns);
     PrintReport(Patterns, A.MinSessions, Scanned);
-    if A.Write_ then AppendToMemoryMd(Patterns, A.MinSessions);
+    if A.Write_      then AppendToMemoryMd(Patterns, A.MinSessions);
+    if A.WriteScars  then AppendToScarsMd(Patterns, A.MinSessions);
   finally
     for i := 0 to High(Patterns) do Patterns[i].Sessions.Free;
   end;
