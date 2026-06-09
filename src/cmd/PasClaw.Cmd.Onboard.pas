@@ -430,6 +430,131 @@ begin
   end;
 end;
 
+function FilterCatalogExcluding(const Catalog: TProviderSpecArray;
+                                const ExcludeKind: string): TProviderSpecArray;
+{ Drop the primary provider from the picker we show for the cheap
+  fallback -- the operator already picked it once and a same-as-
+  primary fallback wouldn't do anything useful. }
+var
+  i, n: Integer;
+begin
+  SetLength(Result, Length(Catalog));
+  n := 0;
+  for i := 0 to High(Catalog) do
+    if not SameText(Catalog[i].Kind, ExcludeKind) then
+    begin
+      Result[n] := Catalog[i];
+      Inc(n);
+    end;
+  SetLength(Result, n);
+end;
+
+procedure PromptAutoRouter(Cfg: TConfig);
+{ Configure a cheap-tier fallback + the auto-router (UltraCode-Shim
+  shape). Two-question flow so the operator can opt into the
+  fallback without opting into the router (handy if they just want
+  retry-on-error coverage without per-message routing). Default NO
+  to both -- the router is a "yes I understand this trades cost
+  for occasional fumble" feature, not a default-on optimisation.
+
+  The fallback we add here goes into BOTH Cfg.Fallbacks (so existing
+  retry-on-error chains pick it up) AND Cfg.AutoRouter.EasyProvider
+  (so the router knows which one to route easy tasks to). Skipping
+  the router question still leaves a useful retry chain. }
+var
+  Choice, Key, Model, EffectiveKey: string;
+  Catalog, Pool: TProviderSpecArray;
+  Spec: TProviderSpec;
+  i: Integer;
+  AlreadyInFallbacks: Boolean;
+begin
+  PrintLn;
+  PrintLn(Ansi.Bold + 'Cheap fallback provider' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'Optional: add a second provider PasClaw retries on if the primary fails,' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'and optionally route simple questions to it to save cost on cheap-tier models.' +
+    Ansi.Reset);
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Set up a cheap fallback now [y/N]: ')));
+  if (Choice <> 'y') and (Choice <> 'yes') then
+  begin
+    PrintLn('  ' + Ansi.Dim +
+            '(skipped -- `pasclaw auth fallback <name>` or re-run onboard later)' +
+            Ansi.Reset);
+    Exit;
+  end;
+
+  Catalog := AllProviderSpecs;
+  Pool := FilterCatalogExcluding(Catalog, Cfg.DefaultProvider);
+  if Length(Pool) = 0 then
+  begin
+    PrintLn('  ' + Ansi.Yellow +
+            'no other provider in the catalog; skipping' + Ansi.Reset);
+    Exit;
+  end;
+
+  PrintLn;
+  if not PickFromCatalog(Pool, '', Spec) then
+  begin
+    PrintLn('  ' + Ansi.Dim + '(no selection -- skipped)' + Ansi.Reset);
+    Exit;
+  end;
+
+  Key := '';
+  if Spec.Auth.Kind <> asNone then
+    Key := Trim(ReadLineEcho('  ' + Spec.DisplayName +
+                              ' API key (leave blank to keep existing): '));
+
+  EffectiveKey := Key;
+  if (EffectiveKey = '') and (Spec.Auth.Kind <> asNone) then
+    for i := 0 to High(Cfg.Providers) do
+      if SameText(Cfg.Providers[i].Name, Spec.Kind) and
+         (Cfg.Providers[i].APIKey <> '') then
+      begin
+        EffectiveKey := Cfg.Providers[i].APIKey;
+        Break;
+      end;
+
+  Model := PickModelInteractive(Spec, EffectiveKey);
+  UpsertProvider(Cfg, Spec, Model, Key);
+
+  { Append to Cfg.Fallbacks unless it's already there. The retry
+    chain is keyed on Name == Spec.Kind by NewProviderFromConfig,
+    so we de-dupe by Kind. }
+  AlreadyInFallbacks := False;
+  for i := 0 to High(Cfg.Fallbacks) do
+    if SameText(Cfg.Fallbacks[i], Spec.Kind) then
+    begin
+      AlreadyInFallbacks := True;
+      Break;
+    end;
+  if not AlreadyInFallbacks then
+  begin
+    SetLength(Cfg.Fallbacks, Length(Cfg.Fallbacks) + 1);
+    Cfg.Fallbacks[High(Cfg.Fallbacks)] := Spec.Kind;
+  end;
+  PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
+          ' added ' + Spec.DisplayName + ' to fallback chain');
+
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho(
+    '  Auto-route simple tasks (summarise / list / explain) to this fallback [y/N]: ')));
+  if (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Cfg.AutoRouter.Enabled       := True;
+    Cfg.AutoRouter.EasyProvider  := Spec.Kind;
+    if Model <> '' then Cfg.AutoRouter.EasyModel := Model;
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
+            ' auto-router on; easy turns route to ' + Spec.Kind);
+  end
+  else
+    PrintLn('  ' + Ansi.Dim +
+            '(router off -- fallback still used on primary errors. ' +
+            'Flip auto_router.enabled in config.json to enable.)' + Ansi.Reset);
+end;
+
 procedure PromptVectorSearch(Cfg: TConfig);
 { Opt-in toggle for hybrid FTS+vector memory_search. Default YES
   because the hybrid index is what picoclaw / nanobot ship and it's
@@ -685,6 +810,7 @@ begin
     PromptVaultTools(Cfg);
     PromptVectorSearch(Cfg);
     PromptStatsCollection(Cfg);
+    PromptAutoRouter(Cfg);
 
     SaveConfig(Cfg);
     PrintLn;

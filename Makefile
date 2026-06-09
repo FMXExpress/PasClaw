@@ -329,6 +329,12 @@ test-execute-code: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/execute_code_tests.pas -o$(BUILDDIR)/execute_code_tests
 	@PASCLAW_HOME=$(BUILDDIR)/execute-code-test-home $(BUILDDIR)/execute_code_tests
 
+# Auto-router heuristic + RouteProvider gating contract.
+test-auto-router: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/auto_router_tests.pas -o$(BUILDDIR)/auto_router_tests
+	@$(BUILDDIR)/auto_router_tests
+
 # Per-session stats schema + accumulator + config flag round-trip.
 # PASCLAW_HOME isolated so test sessions don't pollute the operator's
 # real ~/.pasclaw/workspace/sessions/.
@@ -337,4 +343,4 @@ test-session-stats: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/session_stats_tests.pas -o$(BUILDDIR)/session_stats_tests
 	@PASCLAW_HOME=$(BUILDDIR)/session-stats-test-home $(BUILDDIR)/session_stats_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router

@@ -188,6 +188,33 @@ type
     MaxResults: Integer;
   end;
 
+  (* TAutoRouterConfig -- task-difficulty router (UltraCode-Shim
+     shape). When Enabled and EasyProvider names a configured
+     provider, the agent classifies each user message as
+     easy / abstain / hard and routes the easy ones to
+     EasyProvider for this turn; everything else stays on the
+     primary. The existing Cfg.Fallbacks chain still applies on
+     error -- the router only picks which provider gets called
+     FIRST.
+       Enabled:        master switch, default False.
+       EasyProvider:   name of a configured provider (must appear
+                       in Cfg.Providers[].Name). Operators picking
+                       a fallback during onboarding land here.
+       EasyModel:      optional model override on EasyProvider;
+                       empty = use that provider's catalog default
+                       (resolved by NewProviderFromConfig).
+       EasyMaxTokens:  messages above this token estimate are
+                       never routed easy. Default 500. Operators
+                       working on prose-heavy projects can raise
+                       this; coding-heavy work usually wants the
+                       default. *)
+  TAutoRouterConfig = record
+    Enabled:       Boolean;
+    EasyProvider:  string;
+    EasyModel:     string;
+    EasyMaxTokens: Integer;
+  end;
+
   (* TPromptCacheConfig -- provider-side prompt caching.
        Enabled: gate; when False, no cache_control breakpoints are
                 emitted and no prompt_cache_key is sent. Default True.
@@ -371,6 +398,7 @@ type
        this flag (it keeps an in-memory accumulator), so flipping
        it off doesn't disable the in-process view. *)
     StatsCollectionEnabled: Boolean;
+    AutoRouter:           TAutoRouterConfig;
     AnthropicServerTools: TAnthropicServerToolsConfig;
     OpenAIServerTools:    TOpenAIServerToolsConfig;
     GeminiServerTools:    TGeminiServerToolsConfig;
@@ -440,6 +468,10 @@ begin
   RenderMarkdown       := True;  { on by default for terminal surfaces; cmd/serve flips off }
   ToolOutputCap        := 0;     { off by default; operators opt in. See TConfig.ToolOutputCap. }
   StatsCollectionEnabled := False; { opt-in via onboarding; see TConfig.StatsCollectionEnabled. }
+  AutoRouter.Enabled        := False;  { opt-in via onboarding; see TAutoRouterConfig. }
+  AutoRouter.EasyProvider   := '';
+  AutoRouter.EasyModel      := '';
+  AutoRouter.EasyMaxTokens  := 500;
   VectorSearchEnabled  := True;  { on by default; onboarding asks (default Y) -- see TConfig comment }
   AnthropicServerTools.WebSearch        := False;
   AnthropicServerTools.WebSearchMaxUses := 0;
@@ -611,6 +643,22 @@ begin
       Root.PutInt('tool_output_cap', ToolOutputCap);
     if StatsCollectionEnabled then
       Root.PutBool('stats_collection_enabled', True);
+    if AutoRouter.Enabled
+       or (AutoRouter.EasyProvider <> '')
+       or (AutoRouter.EasyModel <> '')
+       or (AutoRouter.EasyMaxTokens <> 500) then
+    begin
+      Tmp := TJsonObject.Create;
+      try
+        Tmp.PutBool('enabled',         AutoRouter.Enabled);
+        Tmp.PutStr ('easy_provider',   AutoRouter.EasyProvider);
+        Tmp.PutStr ('easy_model',      AutoRouter.EasyModel);
+        Tmp.PutInt ('easy_max_tokens', AutoRouter.EasyMaxTokens);
+        Root.PutObject('auto_router', Tmp);
+      except
+        Tmp.Free; raise;
+      end;
+    end;
     if AnthropicServerTools.WebSearch
        or AnthropicServerTools.WebFetch
        or (AnthropicServerTools.WebSearchMaxUses > 0)
@@ -796,6 +844,18 @@ begin
     ToolOutputCap       := Integer(Root.GetInt('tool_output_cap', ToolOutputCap));
     StatsCollectionEnabled := Root.GetBool('stats_collection_enabled',
                                            StatsCollectionEnabled);
+
+    Obj := Root.ChildObject('auto_router');
+    if Obj <> nil then
+    try
+      AutoRouter.Enabled       := Obj.GetBool('enabled',         AutoRouter.Enabled);
+      AutoRouter.EasyProvider  := Obj.GetStr ('easy_provider',   AutoRouter.EasyProvider);
+      AutoRouter.EasyModel     := Obj.GetStr ('easy_model',      AutoRouter.EasyModel);
+      AutoRouter.EasyMaxTokens := Integer(Obj.GetInt('easy_max_tokens',
+                                          AutoRouter.EasyMaxTokens));
+    finally
+      Obj.Free;
+    end;
 
     Obj := Root.ChildObject('anthropic_server_tools');
     if Obj <> nil then
