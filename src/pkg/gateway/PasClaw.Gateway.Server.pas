@@ -1808,11 +1808,28 @@ var
   GProviderSignatureCache:     TStringList;
 
 procedure RememberProviderSignature(const CallId, Signature: string);
+var
+  Idx: Integer;
 begin
   if (CallId = '') or (Signature = '') then Exit;
   GProviderSignatureCacheLock.Enter;
   try
-    if GProviderSignatureCache.IndexOfName(CallId) >= 0 then Exit;
+    { Codex P1 on PR #194: when the call_id is already present we
+      MUST overwrite, not skip. Gemini synthesises ids like
+      `gemini_call_<name>_<index>` when the original assistant
+      turn didn't carry one (PasClaw.Providers.Gemini), so two
+      conversations that both call the same tool first end up
+      with identical call_ids. Early-exiting would keep the
+      FIRST conversation's signature forever and serve it back
+      to the SECOND conversation -- the next turn there replays
+      a stale thought_signature and Gemini rejects it.
+
+      Delete-then-Add (vs. updating in place via Values[]) is
+      deliberate: it ALSO refreshes the FIFO eviction position,
+      so a tool call that just got reused isn't the next to be
+      evicted when the cap is reached. }
+    Idx := GProviderSignatureCache.IndexOfName(CallId);
+    if Idx >= 0 then GProviderSignatureCache.Delete(Idx);
     if GProviderSignatureCache.Count >= PROVIDER_SIGNATURE_CACHE_MAX then
       GProviderSignatureCache.Delete(0);    { FIFO eviction }
     GProviderSignatureCache.Add(CallId + '=' + Signature);
