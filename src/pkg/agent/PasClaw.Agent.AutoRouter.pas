@@ -87,7 +87,8 @@ implementation
 
 uses
   SysUtils,
-  PasClaw.Tokenizer;
+  PasClaw.Tokenizer,
+  PasClaw.Providers.Catalog;
 
 const
   DefaultEasyMaxTokens = 500;
@@ -180,6 +181,36 @@ begin
   Result := False;
 end;
 
+function ResolveEasyModel(const Cfg: TConfig): string;
+{ Three-step resolution. The router must NEVER hand the caller an
+  empty Model that gets passed to e.g. Groq.Chat -- the primary's
+  model (still sitting on LoopCfg.Model from BuildLoopConfig) would
+  silently leak through and we'd ship `claude-opus-4-8` to Groq,
+  which fails. So: explicit override wins; else the per-provider
+  config's stored Model (what onboarding wrote when the operator
+  picked a model from the picker); else the catalog default for
+  that Kind. Empty result = "we can't resolve a safe model, refuse
+  to route." (Codex P2 on PR #203.) }
+var
+  i: Integer;
+  Spec: TProviderSpec;
+begin
+  if Cfg.AutoRouter.EasyModel <> '' then Exit(Cfg.AutoRouter.EasyModel);
+  for i := 0 to High(Cfg.Providers) do
+    if SameText(Cfg.Providers[i].Name, Cfg.AutoRouter.EasyProvider) then
+    begin
+      if Cfg.Providers[i].Model <> '' then Exit(Cfg.Providers[i].Model);
+      { Per-provider stored model is blank -- fall through to the
+        catalog default keyed on Kind (which onboarding sets equal
+        to Name for the providers it creates). }
+      if Cfg.Providers[i].Kind <> '' then
+        if LookupProvider(Cfg.Providers[i].Kind, Spec) then
+          Exit(Spec.DefaultModel);
+      Break;
+    end;
+  Result := '';
+end;
+
 function RouteProvider(const Cfg: TConfig;
                        const UserMessage: string;
                        const ToolNamesInUse: array of string;
@@ -207,9 +238,16 @@ begin
   if Difficulty <> tdEasy then Exit(False);
 
   RoutedProvider := Cfg.AutoRouter.EasyProvider;
-  RoutedModel    := Cfg.AutoRouter.EasyModel;  { '' = use that provider's
-                                                 catalog default; resolved
-                                                 by NewProviderFromConfig }
+  RoutedModel    := ResolveEasyModel(Cfg);
+  if RoutedModel = '' then
+  begin
+    { Couldn't pin a safe model for the easy provider. Refuse to
+      route rather than hand the loop a primary-tier model the
+      cheap provider can't serve. Caller stays on the primary
+      via the existing default. }
+    RoutedProvider := '';
+    Exit(False);
+  end;
   Result := True;
 end;
 

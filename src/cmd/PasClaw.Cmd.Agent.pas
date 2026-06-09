@@ -699,9 +699,10 @@ begin
         falls back cleanly without operator intervention. See
         PasClaw.Agent.AutoRouter for the heuristic. }
       RoutedThisTurn := False;
+      if Reg <> nil then Names := Reg.Names else Names := nil;
       if (not Offline) and (PrimaryProvider <> nil) then
         if RouteProvider(Cfg, Line,
-                         Reg.Names,
+                         Names,
                          RoutedProviderNm, RoutedModelOverride) then
         begin
           { Lazy-build the easy provider on first routing. Cached
@@ -729,12 +730,15 @@ begin
             LoopCfg.Fallbacks[0] := PrimaryProvider;
             for i := 0 to High(PrimaryFallbacks) do
               LoopCfg.Fallbacks[i + 1] := PrimaryFallbacks[i];
-            { Override model only if the operator set one
-              explicitly; empty = let NewProviderFromConfig +
-              the loop's defaults pick the easy provider's
-              catalog default. }
-            if RoutedModelOverride <> '' then
-              LoopCfg.Model := RoutedModelOverride;
+            { RouteProvider resolved the model for us (explicit
+              EasyModel -> per-provider stored Model -> catalog
+              default) and refused to route if none of those
+              produced a value -- so RoutedModelOverride is
+              guaranteed non-empty when we're here. Overriding
+              LoopCfg.Model is mandatory: BuildLoopConfig set it
+              to the primary's model and passing claude-* to a
+              Groq endpoint (etc.) just fails. Codex P2 #203. }
+            LoopCfg.Model := RoutedModelOverride;
             RoutedThisTurn := True;
             PrintLn(Ansi.Dim + '(routed -> ' + RoutedProviderNm + ')' + Ansi.Reset);
           end;
@@ -743,15 +747,9 @@ begin
       if RunToolLoop(LoopCfg, Msgs, Loop) then
       begin
         if RoutedThisTurn then
-        begin
-          if RoutedModelOverride <> '' then
-            PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ' (' +
-                    RoutedProviderNm + '/' + RoutedModelOverride +
-                    ', auto-routed):')
-          else
-            PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ' (' +
-                    RoutedProviderNm + ', auto-routed):');
-        end
+          PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ' (' +
+                  RoutedProviderNm + '/' + RoutedModelOverride +
+                  ', auto-routed):')
         else
           PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ' (' + Provider.GetName + '/' + Model + '):');
         PrintLn(MaybeRender(Cfg, Loop.Content));

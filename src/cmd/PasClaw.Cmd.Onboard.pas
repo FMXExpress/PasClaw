@@ -504,8 +504,12 @@ begin
 
   Key := '';
   if Spec.Auth.Kind <> asNone then
-    Key := Trim(ReadLineEcho('  ' + Spec.DisplayName +
-                              ' API key (leave blank to keep existing): '));
+    { No-echo: pasted credentials land in terminal scrollback / screen
+      recordings otherwise. Codex P2 on PR #203 -- the primary
+      provider path uses ReadSecretLine for the identical prompt; the
+      fallback prompt needs the same treatment. }
+    Key := Trim(ReadSecretLine('  ' + Spec.DisplayName +
+                                ' API key (leave blank to keep existing): '));
 
   EffectiveKey := Key;
   if (EffectiveKey = '') and (Spec.Auth.Kind <> asNone) then

@@ -218,12 +218,13 @@ begin
   end;
 end;
 
-procedure TestRouteProviderEmptyModelOverride;
-{ Operator set EasyProvider but left EasyModel blank -- caller
-  should get an empty Model so it falls through to that
-  provider's catalog default via NewProviderFromConfig. Pinned
-  because earlier drafts accidentally echoed back the primary's
-  model. }
+procedure TestRouteProviderFallsBackToProviderStoredModel;
+(* Codex P2 on PR #203: an empty EasyModel must NOT leave the
+   caller passing the primary's model name to the cheap
+   provider's chat endpoint (claude-* to Groq fails). The router
+   now resolves the model itself: explicit EasyModel ->
+   per-provider stored Model -> catalog DefaultModel. This case
+   exercises the middle step. *)
 var
   Cfg: TConfig;
   Provider, Model: string;
@@ -232,20 +233,99 @@ begin
   try
     Cfg.AutoRouter.Enabled        := True;
     Cfg.AutoRouter.EasyProvider   := 'groq';
-    Cfg.AutoRouter.EasyModel      := '';
+    Cfg.AutoRouter.EasyModel      := '';   { no explicit override }
     Cfg.AutoRouter.EasyMaxTokens  := 500;
     Cfg.DefaultProvider := 'anthropic';
     Cfg.DefaultModel    := 'claude-opus-4-8';
     SetLength(Cfg.Providers, 1);
-    Cfg.Providers[0].Name := 'groq';
-    Cfg.Providers[0].Kind := 'groq';
+    Cfg.Providers[0].Name  := 'groq';
+    Cfg.Providers[0].Kind  := 'groq';
+    Cfg.Providers[0].Model := 'llama-3.3-70b-stored-by-onboard';
+
     AssertTrue(RouteProvider(Cfg, 'summarize this',
                               ReadOnlyTools, Provider, Model),
                'happy path resolves');
-    AssertEqStr(Model, '', 'empty EasyModel means "use catalog default"');
+    AssertEqStr(Model, 'llama-3.3-70b-stored-by-onboard',
+                'empty EasyModel falls back to provider config Model');
+    AssertTrue(Model <> 'claude-opus-4-8',
+               'primary model never leaks into the routed Model');
   finally
     Cfg.Free;
   end;
+end;
+
+procedure TestRouteProviderResolvesCatalogDefault;
+(* Third step of the model resolution chain: explicit EasyModel
+   blank, per-provider Model blank, but Kind points at a catalog
+   entry with a non-empty DefaultModel. The router picks up the
+   catalog value. Anthropic is a stable test target -- its
+   catalog spec has carried a non-empty DefaultModel across
+   every release. *)
+var
+  Cfg: TConfig;
+  Provider, Model: string;
+begin
+  Cfg := TConfig.Create;
+  try
+    Cfg.AutoRouter.Enabled        := True;
+    Cfg.AutoRouter.EasyProvider   := 'anthropic';
+    Cfg.AutoRouter.EasyMaxTokens  := 500;
+    SetLength(Cfg.Providers, 1);
+    Cfg.Providers[0].Name  := 'anthropic';
+    Cfg.Providers[0].Kind  := 'anthropic';
+    Cfg.Providers[0].Model := '';        { force catalog-default fall-through }
+    AssertTrue(RouteProvider(Cfg, 'summarize this',
+                              ReadOnlyTools, Provider, Model),
+               'catalog-default fall-through resolves');
+    AssertTrue(Model <> '', 'catalog default produced a non-empty model');
+  finally
+    Cfg.Free;
+  end;
+end;
+
+procedure TestRouteProviderRefusesWithoutResolvableModel;
+(* Sibling of the test above: when EasyModel is empty, the
+   per-provider Model is empty, AND the catalog lookup misses
+   (Kind = '' or unknown), refuse to route rather than hand the
+   loop an empty model name. Caller stays on the primary. *)
+var
+  Cfg: TConfig;
+  Provider, Model: string;
+begin
+  Cfg := TConfig.Create;
+  try
+    Cfg.AutoRouter.Enabled        := True;
+    Cfg.AutoRouter.EasyProvider   := 'mystery';
+    Cfg.AutoRouter.EasyMaxTokens  := 500;
+    SetLength(Cfg.Providers, 1);
+    Cfg.Providers[0].Name  := 'mystery';
+    Cfg.Providers[0].Kind  := '';        { won't match any catalog entry }
+    Cfg.Providers[0].Model := '';
+    AssertTrue(not RouteProvider(Cfg, 'summarize this',
+                                  ReadOnlyTools, Provider, Model),
+               'no resolvable model -> refuse to route');
+    AssertEqStr(Provider, '', 'no Provider leaks on refusal');
+    AssertEqStr(Model,    '', 'no Model leaks on refusal');
+  finally
+    Cfg.Free;
+  end;
+end;
+
+procedure TestNilToolsArraySafe;
+(* Codex P2 on PR #203: --no-tools mode leaves the registry nil.
+   The agent loop now passes a nil/empty tool list to
+   ClassifyTask -- pin that this doesn't crash and routes the
+   same as "read-only tools" (no write/run gate fires). *)
+var
+  Empty: array of string;
+begin
+  SetLength(Empty, 0);
+  AssertEqDiff(ClassifyTask('summarize this', Empty, 500),
+               tdEasy,
+               'nil/empty tool list + easy marker -> easy');
+  AssertEqDiff(ClassifyTask('yes', Empty, 500),
+               tdAbstain,
+               'nil/empty tool list + ambiguous -> abstain (not crash)');
 end;
 
 begin
@@ -257,6 +337,9 @@ begin
   TestRouteProviderRespectsDisabledFlag;
   TestRouteProviderRefusesUnconfiguredEasyProvider;
   TestRouteProviderHappyPath;
-  TestRouteProviderEmptyModelOverride;
+  TestRouteProviderFallsBackToProviderStoredModel;
+  TestRouteProviderResolvesCatalogDefault;
+  TestRouteProviderRefusesWithoutResolvableModel;
+  TestNilToolsArraySafe;
   WriteLn('auto_router_tests: OK');
 end.
