@@ -79,6 +79,19 @@ function ResolveExecuteCodeLang(const Requested: string): string;
 function BuildExecuteCodeArgv(const Lang, ScriptPath: string;
                               out Argv: TStringArray): Boolean;
 
+(* Pick the PowerShell binary to spawn. Prefers `pwsh` (PowerShell
+   7+, cross-platform via dotnet) when it's on PATH; falls back to
+   `powershell` (Windows PowerShell 5.1, in-box on every supported
+   Windows version) on Windows when pwsh isn't installed. On unix
+   without pwsh returns `pwsh` anyway so the spawn fails with a
+   clean "command not found" -- inventing a unix-side fallback
+   would just delay the failure to a less actionable error.
+
+   Exposed so a regression test can pin the lookup contract --
+   Codex P2 on PR #199 caught the original implementation
+   hardcoding pwsh and silently breaking on stock Windows. *)
+function ResolvePowerShellExe: string;
+
 (* The tool handler itself. Exposed (rather than only registered)
    so a regression test can drive it without standing up a full
    agent + provider. Same calling convention as every other
@@ -164,6 +177,41 @@ begin
   Result := HostDefaultLang;
 end;
 
+function FindOnPath(const Exe: string): Boolean;
+{ Best-effort PATH lookup. FileSearch returns '' when no match. On
+  Windows we also try the .exe-suffixed name because that's what
+  PATH actually contains; on unix the plain name is canonical. }
+{$IFDEF MSWINDOWS}
+var
+  WithExt: string;
+{$ENDIF}
+begin
+  if FileSearch(Exe, GetEnvironmentVariable('PATH')) <> '' then Exit(True);
+  {$IFDEF MSWINDOWS}
+  WithExt := Exe;
+  if Pos('.', WithExt) = 0 then WithExt := WithExt + '.exe';
+  if FileSearch(WithExt, GetEnvironmentVariable('PATH')) <> '' then Exit(True);
+  {$ENDIF}
+  Result := False;
+end;
+
+function ResolvePowerShellExe: string;
+begin
+  if FindOnPath('pwsh') then Exit('pwsh');
+  {$IFDEF MSWINDOWS}
+  { Windows PowerShell 5.1 ships in-box on every supported Windows
+    version, so this fallback is essentially guaranteed to spawn.
+    Codex P2 on PR #199: hardcoding `pwsh` here was a silent break
+    on stock Windows where 7+ is an optional install. }
+  Exit('powershell');
+  {$ELSE}
+  { On unix without pwsh, return `pwsh` anyway so RunOneShot's
+    spawn surfaces a clean "pwsh: command not found" rather than us
+    spawning some unrelated binary the operator happens to have. }
+  Exit('pwsh');
+  {$ENDIF}
+end;
+
 function BuildExecuteCodeArgv(const Lang, ScriptPath: string;
                               out Argv: TStringArray): Boolean;
 begin
@@ -183,14 +231,16 @@ begin
       thing that works. -NoProfile keeps the operator's
       $PROFILE.ps1 out of the picture so the script behaves the
       same regardless of whose box it ran on. -File runs the
-      script and exits. We prefer `pwsh` (PowerShell 7+, available
-      cross-platform via dotnet) when present; `powershell.exe`
-      (Windows PowerShell 5.1) is the Windows fallback. The
-      executable resolution is done by the platform spawn -- we
-      pass `pwsh` here and let PATH lookup fail through to
-      `powershell` if needed. }
+      script and exits.
+
+      Executable name comes from ResolvePowerShellExe: pwsh when
+      it's on PATH (preferred on unix and on Windows boxes with
+      PowerShell 7 installed), `powershell` otherwise (Windows
+      PowerShell 5.1 fallback for stock Windows). Don't hardcode
+      `pwsh` here -- stock Windows ships only 5.1 and the spawn
+      would fail. }
     SetLength(Argv, 6);
-    Argv[0] := 'pwsh';
+    Argv[0] := ResolvePowerShellExe;
     Argv[1] := '-NoProfile';
     Argv[2] := '-ExecutionPolicy';
     Argv[3] := 'Bypass';

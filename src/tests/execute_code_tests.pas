@@ -118,7 +118,13 @@ procedure TestBuildArgvPowerShell;
   without Bypass; -NoProfile keeps the operator's $PROFILE.ps1
   out of the picture so the script runs the same regardless of
   whose box it's on. A reorder here (dropping any flag) silently
-  changes execution behaviour on Windows. }
+  changes execution behaviour on Windows.
+
+  argv[0] is whatever ResolvePowerShellExe returned -- either
+  'pwsh' (when PowerShell 7 is installed; common on unix dev
+  boxes via dotnet) or 'powershell' (the Windows 5.1 fallback).
+  Both are valid; pin the set rather than the exact value because
+  CI hosts differ in which they have installed. }
 var
   Argv: TStringArray;
 begin
@@ -126,12 +132,35 @@ begin
   AssertTrue(BuildExecuteCodeArgv('powershell', '/tmp/x.ps1', Argv),
              'powershell argv builds');
   AssertTrue(Length(Argv) = 6, 'powershell argv has 6 elements');
-  AssertEqStr(Argv[0], 'pwsh',              'argv[0] is pwsh');
+  AssertTrue((Argv[0] = 'pwsh') or (Argv[0] = 'powershell'),
+             'argv[0] is pwsh or powershell (got "' + Argv[0] + '")');
   AssertEqStr(Argv[1], '-NoProfile',        'argv[1] is -NoProfile');
   AssertEqStr(Argv[2], '-ExecutionPolicy',  'argv[2] is -ExecutionPolicy');
   AssertEqStr(Argv[3], 'Bypass',            'argv[3] is Bypass');
   AssertEqStr(Argv[4], '-File',             'argv[4] is -File');
   AssertEqStr(Argv[5], '/tmp/x.ps1',        'argv[5] is the script path');
+end;
+
+procedure TestResolvePowerShellExeFallback;
+(* Codex P2 on PR #199: the original implementation hardcoded
+   pwsh, which silently breaks on stock Windows (Windows
+   PowerShell 5.1 only -- `pwsh` requires the optional
+   PowerShell 7+ install). ResolvePowerShellExe now picks pwsh
+   when it's on PATH and falls back to `powershell` on Windows.
+
+   We can only pin the unix half of the contract directly from
+   this test (the Windows fallback fires only when MSWINDOWS is
+   defined). On unix, the test box typically does NOT have pwsh,
+   so we expect 'pwsh' -- but if a contributor's box does have
+   pwsh installed, that's also valid. Either way the result must
+   be non-empty and must be one of the two known values. *)
+var
+  Exe: string;
+begin
+  Exe := ResolvePowerShellExe;
+  AssertTrue(Exe <> '', 'ResolvePowerShellExe is never empty');
+  AssertTrue((Exe = 'pwsh') or (Exe = 'powershell'),
+             'ResolvePowerShellExe returns a known binary (got "' + Exe + '")');
 end;
 
 procedure TestBuildArgvUnknownLang;
@@ -203,6 +232,7 @@ begin
   TestResolveLangDispatch;
   TestBuildArgvBash;
   TestBuildArgvPowerShell;
+  TestResolvePowerShellExeFallback;
   TestBuildArgvUnknownLang;
   TestEndToEndRoundTrip;
   TestDenylistRejectsScriptBody;
