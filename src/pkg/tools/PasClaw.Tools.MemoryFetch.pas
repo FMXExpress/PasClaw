@@ -316,6 +316,30 @@ begin
     Result := IntToStr(Round(Hours / 24)) + 'd';
 end;
 
+function CanonicalizeURLForDedup(const URL: string): string;
+{ Lowercase ONLY the scheme + host portion (everything up to but
+  not including the first '/' after '://') and leave path/query
+  case-sensitive. Per RFC 3986, scheme and host are case-
+  insensitive but path and query commonly aren't -- /API and /api
+  are routinely distinct resources. The previous SameText
+  comparison over the full URL collided those two together and
+  would have served stale content. Codex P2 on PR #192.
+
+  Returns URL unchanged when the structure isn't recognisable so
+  a malformed URL never gets a false cache hit. }
+var
+  SchemeMark, PathStart: Integer;
+begin
+  SchemeMark := Pos('://', URL);
+  if SchemeMark <= 0 then Exit(URL);
+  PathStart := PosEx('/', URL, SchemeMark + 3);
+  if PathStart <= 0 then
+    { No path -- whole URL is scheme+host. }
+    Exit(LowerCase(URL));
+  Result := LowerCase(Copy(URL, 1, PathStart - 1)) +
+            Copy(URL, PathStart, MaxInt);
+end;
+
 function BuildBodyWithHeader(const URL, ContentType, Body: string): string;
 begin
   Result :=
@@ -404,7 +428,8 @@ begin
     which is a legitimate overwrite. }
   if FileExists(FullPath) and
      ReadCachedHeader(FullPath, CachedURL, CachedAt) and
-     SameText(CachedURL, URL) then
+     (CanonicalizeURLForDedup(CachedURL) =
+      CanonicalizeURLForDedup(URL)) then
   begin
     {$IFDEF FPC}
     NowUtc := LocalTimeToUniversal(Now);
