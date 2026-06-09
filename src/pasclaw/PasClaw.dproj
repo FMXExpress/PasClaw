@@ -184,6 +184,7 @@
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Sandbox.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.FS.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Shell.pas"/>
+        <DCCReference Include="..\pkg\tools\PasClaw.Tools.Shell.Filters.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Memory.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.WebSearch.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.WebFetch.pas"/>
