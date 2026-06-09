@@ -67,10 +67,20 @@ procedure TestListSessionsFiltersBuckets;
   default ListSessions returns only the regular one, while
   ListSessions(True) returns both. The PASCLAW_HOME the Makefile
   exports for this target is isolated so the fixture doesn't
-  collide with the operator's real session store. }
+  collide with the operator's real session store.
+
+  IMPORTANT: the bucket id is a TEST-ONLY id, not the real
+  '_gateway_v1_chat_completions' production bucket name. Codex P2
+  on PR #205: an earlier draft used the production id, which
+  meant running build/session_list_filter_tests directly (without
+  the Makefile's isolated PASCLAW_HOME) would unconditionally
+  DeleteFile the operator's real bucket. The test-only id still
+  satisfies IsGatewayBucketSessionId (the prefix matches) so the
+  filter contract still gets exercised, but cannot collide with
+  any bucket the gateway writes. }
 const
   RegularId = 'list-filter-test-regular';
-  BucketId  = '_gateway_v1_chat_completions';
+  BucketId  = '_gateway_v1_listfilter_test_only';
 var
   S: TSession;
   ListedDefault, ListedIncluding: TSessionMetaArray;
@@ -127,7 +137,32 @@ begin
   DeleteFile(SessionPath(BucketId));
 end;
 
+function HomeLooksIsolated: Boolean;
+{ Belt-and-braces gate on top of the test-only bucket id. The
+  bucket id alone makes a collision impossible, but a contributor
+  who's manually invoking this binary on their dev box probably
+  doesn't expect it to drop files into the live session store
+  either. Pass if the operator opted in by pointing PASCLAW_HOME
+  at a scratch directory; otherwise bail with a clear message.
+
+  Detection rule: PASCLAW_HOME is set AND not equal to the
+  default user-home location. The Makefile target sets
+  PASCLAW_HOME explicitly so CI runs are unaffected. }
+var
+  Home: string;
 begin
+  Home := GetEnvironmentVariable('PASCLAW_HOME');
+  Result := (Home <> '') and (Pos('.pasclaw', LowerCase(Home)) = 0);
+end;
+
+begin
+  if not HomeLooksIsolated then
+  begin
+    WriteLn('session_list_filter_tests: SKIP -- set PASCLAW_HOME to an');
+    WriteLn('  isolated scratch directory before running this binary directly');
+    WriteLn('  (the Makefile target ''make test-session-list-filter'' does this).');
+    Halt(0);
+  end;
   TestPredicate;
   TestListSessionsFiltersBuckets;
   WriteLn('session_list_filter_tests: OK');
