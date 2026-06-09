@@ -102,6 +102,12 @@ function Tool_ExecuteCode(const ArgsJSON: string; out ErrMsg: string): string;
 implementation
 
 uses
+  DateUtils,    { MilliSecondsBetween / EncodeDate -- the FPC+Delphi-portable
+                  way to get a millisecond timestamp. GetTickCount64 is FPC
+                  RTL only; Delphi dcc64 errors with E2003 unless we pull
+                  in System.SysUtils.GetTickCount64 explicitly, which is
+                  itself a Windows-only wrapper. MilliSecondsBetween skips
+                  the platform mess. }
   PasClaw.JSON,
   PasClaw.Logger,
   PasClaw.Config,
@@ -275,12 +281,16 @@ begin
       ErrMsg := 'execute_code: failed to create temp dir ' + Dir;
       Exit;
     end;
-  { GetTickCount64 + Random gives enough uniqueness for a
-    single-process tool that runs sequentially. No locking needed
-    because the registry serialises tool dispatch. }
+  { MilliSecondsBetween(Now, 1970-01-01) + Random gives enough
+    uniqueness for a single-process tool that runs sequentially.
+    No locking needed because the registry serialises tool
+    dispatch. Same pattern as PasClaw.Skills.GitHub.UniqueSuffix;
+    avoids the FPC-only GetTickCount64 that Delphi dcc64 refuses
+    to resolve. }
   Path := JoinPath(Dir,
                    Format('exec-%d-%d%s',
-                          [Int64(GetTickCount64), Random(1000000),
+                          [Int64(MilliSecondsBetween(Now, EncodeDate(1970, 1, 1))),
+                           Random(1000000),
                            ScriptExtension(Lang)]));
   Sl := TStringList.Create;
   try
