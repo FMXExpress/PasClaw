@@ -138,6 +138,7 @@
         <DCCReference Include="..\cmd\PasClaw.Cmd.Skills.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Vault.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Session.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Learn.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Steer.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Model.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Config_.pas"/>

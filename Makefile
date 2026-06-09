@@ -153,7 +153,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters print-version get-indy webui-res browser
+.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn print-version get-indy webui-res browser
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -217,6 +217,7 @@ smoke: $(BIN)
 	NO_COLOR=1 $(BIN) migrate                  >/dev/null && echo "  migrate   OK" ; \
 	NO_COLOR=1 $(BIN) update --check           >/dev/null && echo "  update    OK" ; \
 	NO_COLOR=1 $(BIN) membench --records 100   >/dev/null && echo "  membench  OK" ; \
+	NO_COLOR=1 $(BIN) learn                    >/dev/null && echo "  learn     OK" ; \
 	echo "smoke: all commands OK"
 
 test-hashline: $(WEBUI_RES) | $(BUILDDIR) $(INDY_DIR)
@@ -305,4 +306,10 @@ test-shell-filters: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/shell_filters_tests.pas -o$(BUILDDIR)/shell_filters_tests
 	@$(BUILDDIR)/shell_filters_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters
+# PasClaw.Cmd.Learn — session-failure normaliser + LooksLikeFailure pre-filter.
+test-learn: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/learn_tests.pas -o$(BUILDDIR)/learn_tests
+	@$(BUILDDIR)/learn_tests
+
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn
