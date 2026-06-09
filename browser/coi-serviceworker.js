@@ -37,15 +37,22 @@ if (typeof window === 'undefined') {
               res.status === 204 || res.status === 205 || res.status === 304) {
             return res;
           }
-          const headers = new Headers(res.headers);
-          headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
-          headers.set('Cross-Origin-Opener-Policy', 'same-origin');
-          headers.set('Cross-Origin-Resource-Policy', 'cross-origin');
-          return new Response(res.body, {
-            status: res.status,
-            statusText: res.statusText,
-            headers,
-          });
+          try {
+            const headers = new Headers(res.headers);
+            headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
+            headers.set('Cross-Origin-Opener-Policy', 'same-origin');
+            headers.set('Cross-Origin-Resource-Policy', 'cross-origin');
+            return new Response(res.body, {
+              status: res.status,
+              statusText: res.statusText,
+              headers,
+            });
+          } catch (e) {
+            // Any unexpected body/status combo: never throw — fall back to
+            // the untouched response so the stream is never torn down.
+            console.warn('[coi] passthrough:', e);
+            return res;
+          }
         })
         // Never resolve respondWith with undefined (that throws "Failed to
         // convert value to 'Response'"); surface a network error instead.

@@ -92,12 +92,12 @@ cp "$HT/index.html" "$OUT/"
 cp -R "$HT/dist" "$OUT/"
 mkdir -p "$OUT/vendor"; cp "$HT/vendor/xterm.css" "$OUT/vendor/" 2>/dev/null || true
 
-echo "==> 6/8  in-browser fetch() network stack (gzip'd next to the page)"
+echo "==> 6/7  in-browser fetch() network stack (gzip'd next to the page)"
 curl -fsSL -o "$WORK/np.wasm" \
   "https://github.com/container2wasm/container2wasm/releases/download/${C2W_VERSION}/c2w-net-proxy.wasm"
 gzip -c "$WORK/np.wasm" > "$OUT/c2w-net-proxy.wasm.gzip"
 
-echo "==> 7/8  cross-origin isolation shim + PasClaw UI chrome"
+echo "==> 7/7  cross-origin isolation shim + PasClaw UI chrome"
 cp browser/coi-serviceworker.js "$OUT/"
 if ! grep -q coi-serviceworker "$OUT/index.html"; then
   sed -i 's#<head>#<head><script src="coi-serviceworker.js"></script>#' "$OUT/index.html"
@@ -108,17 +108,6 @@ cp browser/web/pasclaw.css browser/web/pasclaw.js "$OUT/"
 if ! grep -q pasclaw.js "$OUT/index.html"; then
   sed -i 's#<head>#<head>\n  <link rel="stylesheet" href="pasclaw.css">\n  <script src="pasclaw.js"></script>#' "$OUT/index.html"
 fi
-
-echo "==> 8/8  precompressed .gz siblings for gzip_static / precompressed-static hosts"
-# emscripten loads the .wasm/.data by exact name, so keep the originals and emit
-# .gz siblings next to them. Servers with gzip_static (nginx) or precompressed
-# handling (Apache) then serve the .gz transparently under the original URL.
-# On Cloudflare this is largely redundant (the edge compresses already).
-# c2w-net-proxy.wasm.gzip is already compressed — skip it.
-find "$OUT" -maxdepth 2 -type f \( -name '*.wasm' -o -name '*.data' -o -name '*.js' \) \
-  ! -name '*.gz' ! -name '*.gzip' -print0 | while IFS= read -r -d '' f; do
-    gzip -kf "$f"
-done
 
 echo
 echo "Done -> $OUT/   (static, manually deployable)"

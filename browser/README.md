@@ -98,6 +98,21 @@ worker.
 - Token **streaming** may buffer through the fetch proxy; the final answer
   still arrives.
 
+## Troubleshooting
+
+- **VM: "Not a migration stream / load of migration failed: Invalid
+  argument".** The `.data` (or `.wasm`) is reaching the emulator corrupted —
+  almost always because it was served **pre-gzipped under its real name**.
+  Don't ship `*.data.gz`/`*.wasm.gz` that a server hands back for the plain
+  URL, and don't let a proxy gzip it *without* a `Content-Encoding: gzip`
+  header (the browser only auto-decompresses when that header is present).
+  Serve `.data`/`.wasm` as raw bytes; any compression must be transparent.
+- **`coi-serviceworker.js` errors after a redeploy.** Service workers are
+  cached hard — the browser keeps running the *old* one. Hard-reload, or
+  DevTools → Application → Service Workers → **Unregister**, then reload.
+  Behind a CDN, also **purge the cache** for `coi-serviceworker.js`. (Serving
+  the SW with a short/no-cache header avoids this.)
+
 ## Files here
 
 | File | Purpose |
