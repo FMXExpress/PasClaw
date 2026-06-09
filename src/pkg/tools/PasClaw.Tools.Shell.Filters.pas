@@ -72,6 +72,16 @@ implementation
 uses
   Classes, StrUtils;
 
+{$IFNDEF FPC}
+type
+  { FPC's SysUtils declares TStringArray; Delphi's RTL doesn't,
+    so dcc64 errors on the SplitTokens return type and every
+    downstream LowerCase(Tokens[i]) call below. Declare it
+    locally for the Delphi build only -- same pattern PasClaw
+    uses in PasClaw.Tools.Registry. }
+  TStringArray = array of string;
+{$ENDIF}
+
 var
   GCalls:      Int64;
   GBytesSaved: Int64;
