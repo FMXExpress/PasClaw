@@ -335,6 +335,14 @@ test-auto-router: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/auto_router_tests.pas -o$(BUILDDIR)/auto_router_tests
 	@$(BUILDDIR)/auto_router_tests
 
+# Per-endpoint stats buckets the gateway writes for stateless requests.
+# PASCLAW_HOME isolated so the synthetic bucket files don't pollute the
+# operator's real ~/.pasclaw.
+test-gateway-stats-buckets: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/gateway_stats_buckets_tests.pas -o$(BUILDDIR)/gateway_stats_buckets_tests
+	@PASCLAW_HOME=$(BUILDDIR)/gateway-stats-buckets-test-home $(BUILDDIR)/gateway_stats_buckets_tests
+
 # Per-session stats schema + accumulator + config flag round-trip.
 # PASCLAW_HOME isolated so test sessions don't pollute the operator's
 # real ~/.pasclaw/workspace/sessions/.
@@ -343,4 +351,4 @@ test-session-stats: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/session_stats_tests.pas -o$(BUILDDIR)/session_stats_tests
 	@PASCLAW_HOME=$(BUILDDIR)/session-stats-test-home $(BUILDDIR)/session_stats_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets
