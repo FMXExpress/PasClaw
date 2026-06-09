@@ -99,7 +99,7 @@ function SanitizeFtsQuery(const Raw: string): string;
    require every token to match and silently return zero hits the
    moment any filler is missing. OR returns matches as soon as ANY
    token lands, and BM25 ranks documents that match more tokens
-   higher — so the top-K results are still the most relevant ones,
+   higher -- so the top-K results are still the most relevant ones,
    and "what did we discuss authentication?" still finds the note
    that mentions "discussed authentication tokens".
 
@@ -108,7 +108,7 @@ function SanitizeFtsQuery(const Raw: string): string;
      C++                   ->  "C"
      foo/bar baz           ->  "foo" OR "bar" OR "baz"
      authentication        ->  "authentication"
-     ?!?                   ->  (empty — all-separator input)
+     ?!?                   ->  (empty -- all-separator input)
 *)
 
   function IsTokenByte(B: Byte): Boolean;
@@ -242,7 +242,7 @@ begin
   except
     on E: Exception do
     begin
-      LogWarn('memory.index: failed to open %s (%s) — memory_search disabled',
+      LogWarn('memory.index: failed to open %s (%s) -- memory_search disabled',
               [DbPath, E.Message]);
       {$IFDEF FPC}
       FreeAndNil(FTx);
@@ -352,7 +352,7 @@ begin
   except
     on E: Exception do
     begin
-      LogWarn('memory.index: read %s failed (%s) — skipping', [Path, E.Message]);
+      LogWarn('memory.index: read %s failed (%s) -- skipping', [Path, E.Message]);
       Exit;
     end;
   end;
@@ -524,11 +524,11 @@ begin
   try
     Known.Sorted := False;
 
-    { workspace/memory/MEMORY.md — durable note, top-of-tree. }
+    { workspace/memory/MEMORY.md -- durable note, top-of-tree. }
     MemoryMd := JoinPath(Dir, 'MEMORY.md');
     if FileExists(MemoryMd) then Known.Add(MemoryMd);
 
-    { workspace/memory/*.md — daily notes and ad-hoc files. }
+    { workspace/memory/*.md -- daily notes and ad-hoc files. }
     if FindFirst(JoinPath(Dir, '*.md'), faAnyFile, Sr) = 0 then
     try
       repeat

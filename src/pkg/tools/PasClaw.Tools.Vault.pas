@@ -1,10 +1,10 @@
 ﻿(*
-  PasClaw.Tools.Vault — registers the vault_search and vault_get
+  PasClaw.Tools.Vault -- registers the vault_search and vault_get
   tools, which let the agent discover Object Pascal source code
   (samples, components, libraries) in the pasclaw.dev Code Vault.
 
   Both tools are tcReadOnly (HTTP GETs against the vault registry,
-  no shared state). Off by default — Cmd.Agent.NewBuiltinRegistry
+  no shared state). Off by default -- Cmd.Agent.NewBuiltinRegistry
   registers them only when the EnableVault flag is set, which
   Cmd.Agent reads from Cfg.VaultToolsEnabled. The onboarding flow
   asks the user to opt in (default yes); operators who skip the
@@ -205,7 +205,7 @@ begin
 
   T.Name        := 'vault_search';
   T.Description :=
-    'Search the pasclaw.dev Code Vault for Object Pascal source — ' +
+    'Search the pasclaw.dev Code Vault for Object Pascal source -- ' +
     'sample programs, reusable components, libraries. Returns up to ' +
     'k entries as a list of {slug, displayName, summary, category, ' +
     'tags, repoUrl, version}. Use vault_get(slug) to read full ' +

@@ -1,5 +1,5 @@
 (*
-  PasClaw.Component — legacy unit name retained for back-compat.
+  PasClaw.Component -- legacy unit name retained for back-compat.
 
   The implementation moved to PasClaw.Agent (src/pkg/agent/) so the
   unit name matches the type it exposes. This shim re-exports every

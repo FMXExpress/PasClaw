@@ -33,7 +33,7 @@
                 }
               } ] }
 
-  Model: hardcoded to gemini-1.5-flash — free-tier-friendly, supports
+  Model: hardcoded to gemini-1.5-flash -- free-tier-friendly, supports
   google_search grounding, fast. Users wanting 1.5-pro or 2.0-flash
   can patch this constant; we don't add another config field for one
   provider.
@@ -107,7 +107,7 @@ begin
 
     ToolsArr := TJsonArray.Create;
     Tool     := TJsonObject.Create;
-    GS       := TJsonObject.Create;   { empty object — the tool config }
+    GS       := TJsonObject.Create;   { empty object -- the tool config }
     Tool.PutObject('google_search', GS);
     ToolsArr.AddObject(Tool);
     Root.PutArray('tools', ToolsArr);

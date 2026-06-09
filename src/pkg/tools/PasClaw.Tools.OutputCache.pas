@@ -16,7 +16,7 @@
 
   The `tool_output_get` tool registered here reads from the same
   process-lifetime in-memory store. Handles are valid until the
-  pasclaw process exits — long enough for the agent loop to decide
+  pasclaw process exits -- long enough for the agent loop to decide
   whether to dereference, short enough that we don't grow unbounded
   across runs. (A future PR can persist to $PASCLAW_HOME/cache/ if
   resume-across-restart matters.)
@@ -44,7 +44,7 @@ uses
 { If Length(Body) <= Cap (or Cap <= 0), returns Body unchanged and
   Truncated = False. Otherwise stashes Body under a fresh handle and
   returns a multi-line message containing the head + tail of the
-  output plus "use tool_output_get(handle=...)" — Truncated = True.
+  output plus "use tool_output_get(handle=...)" -- Truncated = True.
 
   HeadBytes / TailBytes are caps on the visible head and tail slices;
   defaults pick a reasonable split when callers don't care. }
@@ -61,7 +61,7 @@ function FetchStashedOutput(const Handle: string;
                             out Bytes: string;
                             out ErrMsg: string): Boolean;
 
-{ How many entries are currently held + total bytes — surfaced by
+{ How many entries are currently held + total bytes -- surfaced by
   /stats. Cheap to call; takes the lock for the snapshot. }
 procedure GetOutputCacheStats(out EntryCount: Integer;
                               out TotalBytes: Int64);
@@ -71,7 +71,7 @@ procedure GetOutputCacheStats(out EntryCount: Integer;
 procedure ClearOutputCache;
 
 { Adds the `tool_output_get` tool to the registry. Callers only invoke
-  this when the truncation feature is on (Cfg.ToolOutputCap > 0) — no
+  this when the truncation feature is on (Cfg.ToolOutputCap > 0) -- no
   point advertising a tool that always returns "no handle". }
 procedure RegisterOutputCacheTool(R: TToolRegistry);
 
@@ -98,7 +98,7 @@ var
                                   randomness for the handle id }
 
 function IndexOfHandle(const Handle: string): Integer;
-{ Caller holds GLock. Linear scan — entry count rarely exceeds the
+{ Caller holds GLock. Linear scan -- entry count rarely exceeds the
   dozens, so a hash map's overhead would dominate. }
 var
   i: Integer;

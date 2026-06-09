@@ -48,7 +48,7 @@ begin
   Opts := DefaultChatOptions;
   Body := BuildOAIRequest(OneUserMessage('hi'), NoUserTools, 'gpt-4o',
                           Opts, NoOpenAIServerTools);
-  { Default flipped to True in #146, but BuildOAIRequest is pure —
+  { Default flipped to True in #146, but BuildOAIRequest is pure --
     it emits exactly what the caller asks for. NoOpenAIServerTools
     is the "off" sentinel, so the field must not appear. }
   AssertMissing(Body, 'web_search_options', 'no web_search_options when off');
@@ -108,17 +108,17 @@ end;
 
 procedure TestIsGenuineOpenAI;
 begin
-  { Catalog OpenAI entry — gate ON. }
+  { Catalog OpenAI entry -- gate ON. }
   AssertTrue(IsGenuineOpenAI('openai', 'openai'), 'kind=openai, name=openai');
   AssertTrue(IsGenuineOpenAI('OpenAI', ''),       'kind=OpenAI (case-insens)');
   AssertTrue(IsGenuineOpenAI('  openai  ', ''),   'kind with whitespace');
 
-  { Kind blank — fall back to Name. }
+  { Kind blank -- fall back to Name. }
   AssertTrue(IsGenuineOpenAI('', 'openai'),       'kind empty, name=openai');
   AssertFalse(IsGenuineOpenAI('', 'groq'),        'kind empty, name=groq');
   AssertFalse(IsGenuineOpenAI('', ''),            'kind+name both empty');
 
-  { Everything else in the pfOpenAI family — gate OFF. The
+  { Everything else in the pfOpenAI family -- gate OFF. The
     openai-compat case is the one that NormalizeProviderKind
     collapses to "openai" for spec lookup; IsGenuineOpenAI must
     NOT collapse it, since openai-compat backends are intentionally
@@ -133,7 +133,7 @@ begin
   AssertFalse(IsGenuineOpenAI('mistral', ''),       'kind=mistral');
   AssertFalse(IsGenuineOpenAI('together', ''),      'kind=together');
 
-  { Explicit Kind always wins over Name fallback — operator with
+  { Explicit Kind always wins over Name fallback -- operator with
     kind=groq, name=openai (unusual but possible) must NOT get
     web_search_options. }
   AssertFalse(IsGenuineOpenAI('groq', 'openai'),

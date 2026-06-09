@@ -8,13 +8,13 @@
   that matter for the tool loop:
 
     1. Roles: messages use "user" / "model" (not "assistant"). System
-       prompts do not go in the messages array — they live in a
+       prompts do not go in the messages array -- they live in a
        top-level `systemInstruction` field.
 
     2. Tool calls live inside `parts[].functionCall`, and tool results
        come back via `parts[].functionResponse` (sent with role "user"
        per Google's spec). Function responses are keyed by tool NAME,
-       not by ID — we build an id->name map on the fly when scanning
+       not by ID -- we build an id->name map on the fly when scanning
        earlier assistant turns.
 
     3. Tools are sent at the top level as
@@ -23,7 +23,7 @@
   Scope of this initial cut: text + tool calls + tool results, plus
   basic generationConfig (max_tokens, temperature) and usage parsing.
   Streaming, thinkingConfig, image attachments, and proxy / extraBody
-  knobs are deferred — ChatStream falls back to a synchronous Chat()
+  knobs are deferred -- ChatStream falls back to a synchronous Chat()
   call and emits the result as one text chunk, matching what
   TOpenAIProvider does for its non-streaming providers.
 *)
@@ -41,7 +41,7 @@ uses
 
 type
   (* Opt-in toggles for Gemini-side server tools. Mirrors
-     PasClaw.Config.TGeminiServerToolsConfig — kept local to this
+     PasClaw.Config.TGeminiServerToolsConfig -- kept local to this
      unit so the provider's tests can build the wire body without
      importing the config unit (same shape Anthropic uses, see
      TAnthropicServerTools). *)
@@ -78,7 +78,7 @@ type
   tests / embedders that don't want server tools in the wire body. }
 function NoGeminiServerTools: TGeminiServerTools;
 
-{ Exported for test fixtures — given a TLLMResponse-shaped input,
+{ Exported for test fixtures -- given a TLLMResponse-shaped input,
   returns the JSON body that would be POSTed to generateContent.
   Used by the Codex PR #116 review-fix test to assert SystemPrompt
   / in-history mrSystem dedup without spinning up a real HTTPS
@@ -86,7 +86,7 @@ function NoGeminiServerTools: TGeminiServerTools;
   inside the request flow; tests pass empty arrays.
 
   The 4-arg overload delegates to the 5-arg form with
-  NoGeminiServerTools — server tools off — so existing call sites
+  NoGeminiServerTools -- server tools off -- so existing call sites
   and tests that don't care about Google search stay untouched. }
 function BuildRequest(const Messages: array of TMessage;
                       const Tools:    array of TToolDefinition;
@@ -101,7 +101,7 @@ function BuildRequest(const Messages: array of TMessage;
 (* Strip JSON-Schema fields Gemini's function-calling API doesn't
    accept (additionalProperties, $schema, $id, $ref, definitions,
    $defs, patternProperties, unevaluatedProperties, propertyNames)
-   from a tool parameter schema. Walker is schema-aware — only
+   from a tool parameter schema. Walker is schema-aware -- only
    strips on schema nodes, never on the user-property name map
    under `properties`, so a tool parameter literally named
    "additionalProperties" survives. Returns the input verbatim on
@@ -125,18 +125,18 @@ function IsGemini3OrLater(const Model: string): Boolean;
 (* True when Model names a Gemini family at major version 3 or higher.
    Gates the google_search + functionDeclarations combo: pre-Gemini-3
    models (2.0, 2.5, 1.5 etc.) reject the request with 400 when both
-   are present in the same `tools[]` array — Google's current docs
+   are present in the same `tools[]` array -- Google's current docs
    route mixed-tool flows on those models through the Live API
    instead. Gemini 3.x lifted the restriction and accepts both shapes
    in a single REST call.
 
    Detection is a deliberate cheap prefix check on the digit
-   immediately after `gemini-` — covers `gemini-3-flash`,
+   immediately after `gemini-` -- covers `gemini-3-flash`,
    `gemini-3.5-flash`, `gemini-3.0-pro`, hypothetical `gemini-4-*`,
    etc. Vendor-prefixed deployments (e.g. `vertex/gemini-3-...`) hit
-   the substring match. Anything that doesn't fit the pattern —
+   the substring match. Anything that doesn't fit the pattern --
    `gemini-pro`, `gemini-1.5-flash`, `gemini-2.5-flash`, an unknown
-   name — is conservatively treated as "cannot combine", so the
+   name -- is conservatively treated as "cannot combine", so the
    default-on toggle never lights a 400 on a user's tool-using
    chat. *)
 var
@@ -170,7 +170,7 @@ function TGeminiProvider.SupportsNativeSearch: Boolean; begin Result := FServerT
 function TGeminiProvider.SupportsStreaming: Boolean;  begin Result := False;         end;
 
 { Map TMsgRole to Gemini's content.role. Note tool/system are special
-  cases handled by the caller — system goes in systemInstruction,
+  cases handled by the caller -- system goes in systemInstruction,
   tool result content is wrapped with role "user" + functionResponse
   part. This helper only matters for plain user / assistant turns. }
 function RoleForGemini(R: TMsgRole): string;
@@ -190,16 +190,16 @@ procedure StripUnsupportedSchemaFields(Obj: TJsonObject);
 { Recursively remove JSON-Schema fields that Gemini's
   function-calling API rejects. Currently:
 
-    additionalProperties   — error: "Unknown name 'additionalProperties'
+    additionalProperties   -- error: "Unknown name 'additionalProperties'
                               at tools[0].function_declarations[N].
                               parameters.properties[M].value: Cannot
                               find field"
-    $schema, $id, $ref     — meta fields Gemini doesn't model
-    definitions, $defs     — JSON Schema 2019-09+ — Gemini takes
+    $schema, $id, $ref     -- meta fields Gemini doesn't model
+    definitions, $defs     -- JSON Schema 2019-09+ -- Gemini takes
                               OpenAPI 3.0 schema subset only
-    patternProperties      — not in OpenAPI 3.0
-    unevaluatedProperties  — JSON Schema 2019-09+
-    propertyNames          — JSON Schema 2019-09+
+    patternProperties      -- not in OpenAPI 3.0
+    unevaluatedProperties  -- JSON Schema 2019-09+
+    propertyNames          -- JSON Schema 2019-09+
 
   MCP servers and external skill manifests frequently emit
   additionalProperties: false on their tool schemas (it's the JSON
@@ -215,7 +215,7 @@ procedure StripUnsupportedSchemaFields(Obj: TJsonObject);
   subschemas (`properties`). Codex P2 on PR #153: the original
   blind recursion treated the `properties` map as a schema node and
   would drop a tool parameter literally named "additionalProperties"
-  (or any other stripped keyword). Rare but legitimately broken —
+  (or any other stripped keyword). Rare but legitimately broken --
   user property names share a namespace with schema keywords. }
 var
   Sub: TJsonObject;
@@ -235,7 +235,7 @@ begin
   Obj.Remove('propertyNames');
 
   { Recurse into name->subschema maps. The map's KEYS are arbitrary
-    user-supplied names — never strip keywords on the map itself. }
+    user-supplied names -- never strip keywords on the map itself. }
   Sub := Obj.ChildObject('properties');
   if Sub <> nil then
   try
@@ -297,7 +297,7 @@ end;
 procedure WalkPropertyMap(Map: TJsonObject);
 { The `properties` field is a map from arbitrary user property name
   to subschema. Iterate the values (each IS a schema, recurse with
-  the full strip pass) but never strip on Map itself — Map's keys
+  the full strip pass) but never strip on Map itself -- Map's keys
   are user data, not schema keywords. }
 var
   Keys: TStringList;
@@ -345,7 +345,7 @@ end;
 
 function SanitizeSchemaForGemini(const RawSchema: string): string;
 { Parse, scrub, re-serialise. Returns the original string verbatim on
-  parse failure so a malformed schema doesn't silently disappear —
+  parse failure so a malformed schema doesn't silently disappear --
   the API will surface its own 400 with a clearer pointer. }
 var
   Root: TJsonObject;
@@ -366,7 +366,7 @@ begin
   end;
 end;
 
-{ 4-arg overload — no server tools. Preserved so existing tests
+{ 4-arg overload -- no server tools. Preserved so existing tests
   (gemini_schema_strip_tests.pas + friends) and embedders that
   predate the server-tool field keep compiling unchanged. }
 function BuildRequest(const Messages: array of TMessage;
@@ -410,7 +410,7 @@ begin
       builder concatenated BOTH, which double-shipped the policy
       when the ToolLoop's steering fold copied in-history
       mrSystem into LiveOptions.SystemPrompt (the original entries
-      stay in Hist for ephemeral-reset recovery — see
+      stay in Hist for ephemeral-reset recovery -- see
       CopyHistorySystem in PasClaw.Tools.ToolLoop). Codex P2 on
       PR #116. }
     Sys := Options.SystemPrompt;
@@ -515,7 +515,7 @@ begin
         end
         else
         begin
-          { Drop the empty assistant turn — Gemini rejects empty parts. }
+          { Drop the empty assistant turn -- Gemini rejects empty parts. }
           Parts.Free;
           Content.Free;
         end;
@@ -551,13 +551,13 @@ begin
        but Gemini's wire constraints narrow that:
 
          - On Gemini 3.x+ we may combine google_search with
-           functionDeclarations in the same request — emit both.
+           functionDeclarations in the same request -- emit both.
          - On Gemini 2.x and earlier, mixing the two in a single
            REST call returns 400 ("Live API only" per Google's
            function-calling docs). If the caller has registered
            local tools, preserve those (they're the user's
            explicit configuration) and suppress google_search this
-           turn — silently better than a 400 on every tool-using
+           turn -- silently better than a 400 on every tool-using
            chat. With no local tools the combo doesn't arise and
            google_search ships.
 
@@ -566,13 +566,13 @@ begin
                        ((Length(Tools) = 0) or IsGemini3OrLater(Model));
     if ServerTools.GoogleSearch and (Length(Tools) > 0) and
        (not IsGemini3OrLater(Model)) then
-      LogDebug('gemini: suppressing google_search for this turn — model %s ' +
+      LogDebug('gemini: suppressing google_search for this turn -- model %s ' +
                'rejects google_search alongside functionDeclarations ' +
                '(combo requires gemini-3.x or later)', [Model]);
 
     (* Build the tools[] array when EITHER caller tools or the
        effective google_search emission is active. Each tool
-       category is its own object inside the array —
+       category is its own object inside the array --
        `functionDeclarations: [...]` for our local tools,
        `google_search: ` empty-object for Gemini's grounded search. *)
     if (Length(Tools) > 0) or EmitGoogleSearch then
@@ -590,7 +590,7 @@ begin
             FuncDecl.PutStr('description', Tools[i].Description);
           if Tools[i].Schema <> '' then
             { Strip JSON-Schema fields Gemini's function-calling API
-              doesn't accept (additionalProperties, $schema, etc.) —
+              doesn't accept (additionalProperties, $schema, etc.) --
               see SanitizeSchemaForGemini for the full list and why
               MCP / skill schemas trip into them. }
             FuncDecl.PutRaw('parameters', SanitizeSchemaForGemini(Tools[i].Schema))
@@ -627,7 +627,7 @@ begin
            400: Please enable tool_config.include_server_side_tool_invocations
                 to use Built-in tools with Function calling.
 
-         Emit the field only when BOTH categories are on the wire —
+         Emit the field only when BOTH categories are on the wire --
          it's a no-op (and a wire-noise warning on some endpoints)
          when only one tool type is present. *)
       if EmitGoogleSearch and (Length(Tools) > 0) then
@@ -719,7 +719,7 @@ begin
                       OpenAI-style id. The tool loop later records this
                       id on the mrTool result, and BuildRequest above
                       needs a non-empty id to resolve the call->name
-                      map for functionResponse — leaving Id empty
+                      map for functionResponse -- leaving Id empty
                       makes the tool result go back with name: "" and
                       the model can't associate it with the requested
                       call. Synthesize a deterministic local id from

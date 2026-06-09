@@ -6,7 +6,7 @@
   writes outside the workspace (modulo allow_read_paths /
   allow_write_paths) are refused with a Reason the model sees.
 
-  fs_read emits hashline-prefixed output by default — each file body is
+  fs_read emits hashline-prefixed output by default -- each file body is
   preceded by a ¶path#hash header and every line is prefixed with
   LINENO:. That format is the input contract for fs_edit_hashline, which
   applies anchored diff operations without needing the model to reproduce
@@ -174,7 +174,7 @@ begin
       was truncated mid-tool_call (Anthropic / OpenAI hit max_tokens
       during tool_use generation and returned the partial JSON). The
       old behavior dutifully treated the missing field as the empty
-      string and overwrote the file with 0 bytes — destroying the
+      string and overwrote the file with 0 bytes -- destroying the
       user''s content with no error signal to the model, which then
       retried the same truncated call in a loop. Refuse the call so
       the model gets feedback and either re-emits with full content or
@@ -189,7 +189,7 @@ begin
   ParseStringArg(ArgsJSON, 'content', Content);
   { Defensive: strip hashline LINE: prefixes if the model copied them
     in from fs_read output. Only strips when every non-empty line has
-    one — so a real ratio like "42:00" won't be mangled. }
+    one -- so a real ratio like "42:00" won't be mangled. }
   Lines := TStringList.Create;
   try
     Lines.LineBreak := #10;
@@ -221,7 +221,7 @@ function Tool_FSEditHashline(const ArgsJSON: string; out ErrMsg: string): string
   header hash matches what's on disk, apply the edits to an in-memory
   buffer, and only write any file once every section has validated and
   applied successfully. That keeps the stale-or-out-of-range abort path
-  truly all-or-nothing — a later section failing can't leave an earlier
+  truly all-or-nothing -- a later section failing can't leave an earlier
   section's file mutated. }
 type
   TPlan = record
@@ -263,7 +263,7 @@ begin
       we can verify the file hasn't drifted since the model read it.
       ParseHashlinePatch accepts hashless ¶path headers for the format
       library's other consumers (streaming previews, abbreviated diffs),
-      but at the tool layer we refuse them — applying line-anchored
+      but at the tool layer we refuse them -- applying line-anchored
       edits without verifying the file version is exactly the silent
       corruption hashline was designed to prevent. }
     if not Sections[i].HasFileHash then
@@ -287,7 +287,7 @@ begin
     CurrentHash := ComputeFileHash(FileBody);
     if CurrentHash <> Sections[i].FileHash then
     begin
-      ErrMsg := Format('section %d: stale patch for %s (header hash %s, file hash %s) — re-read and rebase',
+      ErrMsg := Format('section %d: stale patch for %s (header hash %s, file hash %s) -- re-read and rebase',
                        [i + 1, Sections[i].Path, Sections[i].FileHash, CurrentHash]);
       Exit('');
     end;
@@ -359,7 +359,7 @@ var
     try
       Body := ReadFileText(Path);
     except
-      Exit;  { binary / permissions — skip silently to keep grep tractable }
+      Exit;  { binary / permissions -- skip silently to keep grep tractable }
     end;
     Header := FormatHashlineHeader(Path, ComputeFileHash(Body));
     Lines := TStringList.Create;
@@ -368,7 +368,7 @@ var
       Lines.StrictDelimiter := True;
       Lines.Text := StringReplace(Body, #13, '', [rfReplaceAll]);
       Wrote := False;
-      { Removed MatchCount local — it was incremented per match but
+      { Removed MatchCount local -- it was incremented per match but
         never read; the per-file scope made it look like a counter
         but only TotalMatches actually gates the loop. dcc64 H2077
         flagged the dead writes; removing the var keeps the code

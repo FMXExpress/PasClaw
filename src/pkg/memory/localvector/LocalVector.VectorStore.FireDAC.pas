@@ -3,7 +3,7 @@
   alongside this file). Upstream commit: 0f00eece553da47e83169ddc8d72965c0dc40bcc.
   https://github.com/FMXExpress/localvector
 
-  Modifications kept to a minimum — PasClaw uses these units verbatim
+  Modifications kept to a minimum -- PasClaw uses these units verbatim
   as the in-tree implementation of the hybrid FTS5+vector memory backend
   (PasClaw.Memory.Vector). Diff against upstream for change tracking.
 }
@@ -25,14 +25,14 @@ unit LocalVector.VectorStore.FireDAC;
 (* PasClaw modification: stub on Delphi Linux64.
 
   FireDAC.Phys.SQLiteWrapper.Stat (the static SQLite link) ships only
-  for Windows / macOS / mobile in RAD Studio — Linux64 has no static
+  for Windows / macOS / mobile in RAD Studio -- Linux64 has no static
   build, only the dynamic libsqlite3.so path. PasClaw.dpr already
   routes around this constraint, and we extend the same routing here
   so registering this unit in PasClaw.dproj doesn't break the Delphi
   Linux64 build.
 
   On Linux64 we compile to an empty unit and let
-  LocalVector.VectorStore force LV_PORTABLE_SQLITE on — the factory
+  LocalVector.VectorStore force LV_PORTABLE_SQLITE on -- the factory
   then routes through the portable backend (dynamic libsqlite3.so),
   which Linux64 supports fine.
 

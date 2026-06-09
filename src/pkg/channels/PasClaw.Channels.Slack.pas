@@ -2,7 +2,7 @@
   PasClaw.Channels.Slack - Slack adapter.
 
   Outbound: Incoming Webhook URLs (https://hooks.slack.com/services/...).
-  Inbound:  Events API webhook receiver — registered as a gateway route by
+  Inbound:  Events API webhook receiver -- registered as a gateway route by
             PasClaw.Gateway.Server (Phase 8). Phase 6 ships the webhook
             sender + the verification logic for the URL-verification
             challenge so registration works.

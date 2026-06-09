@@ -86,7 +86,7 @@ begin
   begin
     PrintLn(Ansi.Yellow + '  ' + Err + Ansi.Reset);
     if Pos('404', Err) > 0 then
-      PrintLn('  (no releases published yet — this is expected for a fresh repo)');
+      PrintLn('  (no releases published yet -- this is expected for a fresh repo)');
     Exit(0);
   end;
 
@@ -102,7 +102,7 @@ begin
   if Info.AssetUrl = '' then
   begin
     PrintLn(Ansi.Yellow + '  no asset for ' + HostPlatformSuffix +
-            ' in this release — see ' + Info.HtmlUrl + Ansi.Reset);
+            ' in this release -- see ' + Info.HtmlUrl + Ansi.Reset);
     Exit(0);
   end;
   PrintLn('  asset:    ' + Info.AssetName + '  (' + IntToStr(Info.AssetSize) + ' bytes)');
@@ -122,7 +122,7 @@ begin
     PrintLn(Ansi.Red + '  install failed: ' + Err + Ansi.Reset);
     Exit(1);
   end;
-  PrintLn(Ansi.Green + '  installed ' + Info.TagName + ' — restart pasclaw.' + Ansi.Reset);
+  PrintLn(Ansi.Green + '  installed ' + Info.TagName + ' -- restart pasclaw.' + Ansi.Reset);
   Result := 0;
 end;
 

@@ -94,7 +94,7 @@
     background:linear-gradient(135deg,rgba(65,17,32,.78),rgba(37,14,25,.72));box-shadow:var(--glow-hot)}
   .toolcall{color:var(--cyan);font-weight:600}
   .toolresult{color:var(--mut);padding-left:1.2rem}
-  /* In-flight indicator inside the assistant bubble — three pulsing dots
+  /* In-flight indicator inside the assistant bubble -- three pulsing dots
      while we wait for the first SSE delta. textContent = ... naturally
      overwrites this once content arrives. */
   .typing{display:inline-flex;gap:.3rem;padding:.15rem 0;align-items:center}
@@ -398,7 +398,7 @@ f.addEventListener("submit", async e => {
     const r = await fetch("/v1/chat/completions", {
       method: "POST",
       headers: { "content-type": "application/json", "accept": "text/event-stream" },
-      /* Model omitted on purpose — gateway falls back to FCfg.DefaultModel,
+      /* Model omitted on purpose -- gateway falls back to FCfg.DefaultModel,
          which the operator set via `pasclaw model set`. Letting the
          server choose keeps the web UI from having to know provider/model
          strings ahead of time. */
@@ -438,7 +438,7 @@ f.addEventListener("submit", async e => {
     bub.textContent = String(err);
     bub.parentElement.className = "row e";
   } finally {
-    /* Safety net for streams that close without ever sending a delta —
+    /* Safety net for streams that close without ever sending a delta --
        textContent = ... above clears the typing indicator naturally on
        first content, but a content-less success would otherwise leave
        the dots pulsing forever. */
@@ -552,7 +552,7 @@ const tabLoaders = {
       }
       for (const c of j.entries) {
         const tr = document.createElement("tr");
-        const ch = c.channel_kind ? `${c.channel_kind}:${c.channel_target}` : "—";
+        const ch = c.channel_kind ? `${c.channel_kind}:${c.channel_target}` : "--";
         tr.innerHTML = `<td>${escapeHtml(c.id)}</td>`
                      + `<td>${escapeHtml(c.spec)}</td>`
                      + `<td>${escapeHtml(c.skill)}</td>`

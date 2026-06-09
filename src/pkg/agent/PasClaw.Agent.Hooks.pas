@@ -1,5 +1,5 @@
 (*
-  PasClaw.Agent.Hooks — typed hook callbacks the embedder registers
+  PasClaw.Agent.Hooks -- typed hook callbacks the embedder registers
   to observe / veto / transform agent events.
 
   Picoclaw ships a "hooks" subsystem (BeforeTurn, BeforeToolCall,
@@ -12,14 +12,14 @@
     1. Approval / safety policy. An embedder building an agent that
        runs in a sensitive context (production data, paying APIs,
        destructive shell commands) needs to gate specific tool
-       calls behind a human approval — or just outright veto. The
+       calls behind a human approval -- or just outright veto. The
        BeforeToolCall hook returns Cancel + SyntheticResult: when
        Cancel is True the tool's actual handler never fires, and
        the SyntheticResult becomes the tool_result the model sees
        ("approval denied: shell_exec rm -rf /").
 
     2. Steering. Picoclaw lets the host inject extra context
-       BETWEEN tool calls inside one turn — "based on the file you
+       BETWEEN tool calls inside one turn -- "based on the file you
        just read, also check X". AfterToolResult returns a
        SteeringMessage; whenever non-empty, ToolLoop appends it as
        a fresh mrSystem note to the history before the next LLM
@@ -43,7 +43,7 @@
       Agent.RegisterHook(TApprovalHook.Create);
 
   Hooks run on the main thread, regardless of whether the underlying
-  tool dispatch is parallel — BeforeToolCall fires before any worker
+  tool dispatch is parallel -- BeforeToolCall fires before any worker
   spawns, AfterToolResult fires after all workers in a batch have
   joined, in array order. Same ordering guarantees the existing
   OnToolCall / OnToolResult events have.
@@ -90,14 +90,14 @@ type
       Chat call. Implementers can inspect or mutate Messages in
       place (the loop hands a `var TMessageArray` so a hook can
       append a system note or rewrite the tail). Set ContinueTurn
-      to False to abort the loop gracefully — the parent's final
+      to False to abort the loop gracefully -- the parent's final
       reply will be whatever the loop has accumulated up to this
       point. Default: no-op (ContinueTurn stays True). }
     procedure BeforeTurn(var ContinueTurn: Boolean;
                          var Messages: TMessageArray); virtual;
 
     { Fired BEFORE each individual tool dispatch. Setting
-      Cancel := True skips the actual tool handler — the loop
+      Cancel := True skips the actual tool handler -- the loop
       uses SyntheticResult as the tool_result content (and pairs
       it with the original ToolCall.Id so the provider's
       tool_use/tool_result pairing stays intact). Combine with
@@ -115,7 +115,7 @@ type
       either to redact PII, truncate verbose output, or convert
       a soft error into a hard one. SteeringMessage lets the
       hook inject a system-role message into the history before
-      the NEXT iteration — picoclaw's "steering" pattern. Returns
+      the NEXT iteration -- picoclaw's "steering" pattern. Returns
       to '' between hooks so each hook decides independently. The
       loop concatenates all non-empty SteeringMessages from this
       batch into a single mrSystem entry. Default: no-op. }
@@ -125,7 +125,7 @@ type
 
     { Fired on any caught failure. Stage indicates where. Hooks
       see errors AFTER the loop has logged them and decided how
-      to surface them to the model — they're for the embedder's
+      to surface them to the model -- they're for the embedder's
       side (metrics, alerting), not for changing loop behaviour.
       Default: no-op. }
     procedure OnError(Stage: TPasClawHookStage;
@@ -144,7 +144,7 @@ function HooksBeforeTurn(const Hooks: TPasClawHookArray;
                           var Messages: TMessageArray): Boolean;
 
 { Fire BeforeToolCall on every hook in order. The first hook to
-  set Cancel := True wins — subsequent hooks still see the call
+  set Cancel := True wins -- subsequent hooks still see the call
   but their Cancel setting is ignored (an early "deny" should not
   be overridden by a later "allow"). SyntheticResult on out is the
   first non-empty value any hook set; later overwrites are
@@ -158,7 +158,7 @@ procedure HooksBeforeToolCall(const Hooks: TPasClawHookArray;
 { Fire AfterToolResult on every hook in order. ResultText and
   ErrMsg are passed by ref so each hook's rewrite is visible to
   the next. SteeringMessages from each hook are concatenated with
-  '\n\n' separators and returned — the loop wraps the result in a
+  '\n\n' separators and returned -- the loop wraps the result in a
   single mrSystem message appended to history. Returns '' when
   no hook contributed a steering note. }
 function HooksAfterToolResult(const Hooks: TPasClawHookArray;
@@ -166,7 +166,7 @@ function HooksAfterToolResult(const Hooks: TPasClawHookArray;
                                var ResultText, ErrMsg: string): string;
 
 { Fire OnError on every hook in order. Hooks can't suppress the
-  error — the loop has already decided to record it. This is the
+  error -- the loop has already decided to record it. This is the
   embedder's observation hook for metrics / alerting. }
 procedure HooksOnError(const Hooks: TPasClawHookArray;
                         Stage: TPasClawHookStage;
@@ -270,7 +270,7 @@ begin
     try
       Hooks[i].OnError(Stage, Msg);
     except
-      { Swallow — a hook crashing during error reporting shouldn't
+      { Swallow -- a hook crashing during error reporting shouldn't
         replace the real error with the hook's own exception. }
     end;
   end;

@@ -13,7 +13,7 @@
   the gateway restarted within the window, the same job could double
   fire. Persisting the last successful fire time per id lets RunOnce
   compute NextFireAfter(LastFired) and catch up exactly once on
-  startup — no silent skips, no double fires.
+  startup -- no silent skips, no double fires.
 
   Concurrency: only the single scheduler thread reads / writes this
   file, so no locking. Writes are atomic via temp + rename so a crash
@@ -56,7 +56,7 @@ implementation
 uses
   DateUtils,
   {$IFDEF MSWINDOWS}
-  { Lets dcc64 inline SysUtils.RenameFile — 4 RenameFile calls in
+  { Lets dcc64 inline SysUtils.RenameFile -- 4 RenameFile calls in
     this unit's Load + Save paths all triggered H2443 without this.
     Same pattern as PasClaw.Session.Store / PasClaw.Agent.Steering. }
   {$IFDEF FPC}Windows,{$ELSE}Winapi.Windows,{$ENDIF}
@@ -101,7 +101,7 @@ begin
     ReadFrom := FPath
   else if FileExists(Bak) then
   begin
-    { Save crashed between "move old to .bak" and "install new" —
+    { Save crashed between "move old to .bak" and "install new" --
       the previous-known-good state is the only surviving copy.
       Recover from it, then promote it back to the primary path so
       a future clean Save doesn't see a stale .bak. }
@@ -129,7 +129,7 @@ begin
   except
     on E: Exception do
     begin
-      LogWarn('cron.state: bad JSON in %s (%s) — starting fresh', [FPath, E.Message]);
+      LogWarn('cron.state: bad JSON in %s (%s) -- starting fresh', [FPath, E.Message]);
       Exit;
     end;
   end;
@@ -183,7 +183,7 @@ begin
     Bak := FPath + '.bak';
     WriteFileText(Tmp, Root.ToJSON);
 
-    { Backup-file dance — guarantees a recoverable copy exists at
+    { Backup-file dance -- guarantees a recoverable copy exists at
       every point in time, even if the process crashes mid-save or
       RenameFile fails. Sequence:
         1. Clear any stale .bak from a prior aborted save.
@@ -193,7 +193,7 @@ begin
       If a crash happens between steps 2 and 3, the next Load notices
       FPath is missing and recovers from .bak.
       If RenameFile in step 3 fails, restore .bak so the previous
-      state survives — never leave the user with no state at all.
+      state survives -- never leave the user with no state at all.
       DeleteFile is SysUtils-qualified because Winapi.Windows is in
       the impl uses for the RenameFile inline expansion, and the
       Win32 DeleteFile takes a PWideChar instead of a Pascal string. }

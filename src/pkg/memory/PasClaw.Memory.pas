@@ -4,7 +4,7 @@
   Each session writes one NDJSON file under $PASCLAW_HOME/workspace/memory/.
   Records are flushed line-by-line so a crash leaves a recoverable trail.
   This is intentionally lightweight; the picoclaw memory module includes a
-  vector store, summarisation, and retrieval — those land in later phases.
+  vector store, summarisation, and retrieval -- those land in later phases.
 
   Record shape:
     {"ts":"2026-...","session":"...","role":"user|assistant|tool","content":"...","tool":"..."}

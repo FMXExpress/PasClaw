@@ -5,7 +5,7 @@
   <home>/mcp-cache/<server>.json so subsequent boots can register
   the tools immediately without paying the network round-trip cost.
   Replicate's MCP server hands back thousands of tools and takes a
-  noticeable wall-clock chunk every cold connect — the cache lets
+  noticeable wall-clock chunk every cold connect -- the cache lets
   `pasclaw serve` / `pasclaw gateway` boot in under a second even
   with several big-catalog MCP servers configured.
 
@@ -17,7 +17,7 @@
     2. After the live tools/list returns, the bridge calls
        SaveToolsList with the fresh array. Stale entries vanish on
        next boot.
-    3. A failed connect leaves the existing cache in place — the
+    3. A failed connect leaves the existing cache in place -- the
        model keeps seeing whatever tools we last knew about, even
        though calls will surface the connect error until the server
        comes back up.
@@ -175,7 +175,7 @@ begin
     Root.PutStr('server',    ServerName);
 
     { Build the array + each item to completion FIRST. PutArray and
-      AddObject both consume their `var` argument — they take ownership
+      AddObject both consume their `var` argument -- they take ownership
       of the backing and nil the local. Using the nilled local
       afterwards crashes (Codex P1 on PR #141). Hence: build Item,
       then add to Arr; build Arr fully, then PutArray onto Root. }
@@ -214,7 +214,7 @@ begin
             raise;
           end;
         end;
-        Arr.AddObject(Item);  { consumes Item — nils it }
+        Arr.AddObject(Item);  { consumes Item -- nils it }
       end;
     except
       on E: Exception do
@@ -223,7 +223,7 @@ begin
         raise;
       end;
     end;
-    Root.PutArray('tools', Arr);  { consumes Arr — nils it }
+    Root.PutArray('tools', Arr);  { consumes Arr -- nils it }
 
     L := TStringList.Create;
     try

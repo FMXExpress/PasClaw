@@ -2,7 +2,7 @@ program println_helper_tests;
 { Light smoke test for the PasClaw.CliUI.Print* helpers. We can't easily
   assert on console rendering (the test runs as a captured subprocess in
   CI/local make), but we CAN verify that the symbols compile, link, and
-  emit output without raising — that catches dropped helpers, wrong
+  emit output without raising -- that catches dropped helpers, wrong
   signatures, or a missing platform branch. Output is funnelled through
   redirection on Linux to land in the file fallback path (UTF-8 bytes
   via Write/WriteLn on FPC), confirming the bytes round-trip. }

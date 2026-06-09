@@ -29,7 +29,7 @@
     1. Parse slug + optional @version.
     2. (Optional) fetch metadata so we can warn about
        moderation flags. Failure to fetch metadata does not block
-       the install — picoclaw treats the metadata fetch as advisory.
+       the install -- picoclaw treats the metadata fetch as advisory.
     3. Refuse if the destination directory already exists.
     4. GET the zip into a temp file (`download` endpoint).
     5. Extract through PasClaw.Skills.Zip.
@@ -258,11 +258,11 @@ begin
   URL := ClawHubBaseURL + SkillsEndpoint + '/' + UrlEncode(Slug);
   if not DoGetJSON(URL, Body, Err) then
   begin
-    LogDebug('clawhub: metadata fetch failed (%s) — proceeding without it', [Err]);
+    LogDebug('clawhub: metadata fetch failed (%s) -- proceeding without it', [Err]);
     Exit;
   end;
   { TJsonObject.Parse raises EPasClawJSON on malformed JSON rather
-    than returning nil. The metadata fetch is best-effort — a
+    than returning nil. The metadata fetch is best-effort -- a
     parsing failure should leave LatestVersion / Blocked /
     Suspicious at their defaults and let the install continue. }
   Root := nil;
@@ -272,7 +272,7 @@ begin
     except
       on E: Exception do
       begin
-        LogDebug('clawhub: metadata JSON parse failed (%s) — proceeding without it',
+        LogDebug('clawhub: metadata JSON parse failed (%s) -- proceeding without it',
                  [E.Message]);
         Exit;
       end;
@@ -440,7 +440,7 @@ begin
 
   if not IsValidSlug(Slug) then
   begin
-    ErrMsg := Format('invalid clawhub slug "%s" — expected lowercase ' +
+    ErrMsg := Format('invalid clawhub slug "%s" -- expected lowercase ' +
                      'letters, digits, "-", and "_" only', [Slug]);
     Exit;
   end;
@@ -449,7 +449,7 @@ begin
   DstDir := JoinPath(DestRoot, InstalledName);
   if DirectoryExists(DstDir) then
   begin
-    ErrMsg := Format('skill "%s" already exists at %s — remove it first',
+    ErrMsg := Format('skill "%s" already exists at %s -- remove it first',
                      [InstalledName, DstDir]);
     Exit;
   end;
@@ -459,17 +459,17 @@ begin
     Exit;
   end;
 
-  { Metadata fetch is advisory — failure does not block the install,
+  { Metadata fetch is advisory -- failure does not block the install,
     but a successful fetch lets us reject malware-flagged skills and
     surface the latest version when the caller did not pin one. }
   FetchMetadata(Slug, LatestVersion, Blocked, Suspicious);
   if Blocked then
   begin
-    ErrMsg := Format('clawhub flagged "%s" as malware — refusing install', [Slug]);
+    ErrMsg := Format('clawhub flagged "%s" as malware -- refusing install', [Slug]);
     Exit;
   end;
   if Suspicious then
-    LogWarn('clawhub: "%s" is flagged as suspicious — proceeding anyway', [Slug]);
+    LogWarn('clawhub: "%s" is flagged as suspicious -- proceeding anyway', [Slug]);
 
   EffectiveVersion := Version;
   if (EffectiveVersion = '') and (LatestVersion <> '') then

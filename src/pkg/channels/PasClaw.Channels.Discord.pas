@@ -275,7 +275,7 @@ begin
   begin
     if FetchNewMessages(RawJSON) then
       ProcessMessages(RawJSON);
-    { Discord rate-limits — keep poll interval > 1s. 3s is friendly. }
+    { Discord rate-limits -- keep poll interval > 1s. 3s is friendly. }
     Sleep(3000);
   end;
 end;

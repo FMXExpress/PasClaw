@@ -2,7 +2,7 @@
   PasClaw.Search.Perplexity - Perplexity Sonar API adapter.
 
   Perplexity is a search-grounded LLM, not a traditional results
-  endpoint — the API returns a SYNTHESISED answer plus a flat list
+  endpoint -- the API returns a SYNTHESISED answer plus a flat list
   of citation URLs. The adapter maps that into ISearchProvider's
   uniform shape by treating the answer text as the first "hit"
   (title = "Perplexity answer", URL = first citation if any,
@@ -36,7 +36,7 @@ uses
 function NewPerplexityProvider(const APIKey: string): ISearchProvider;
 
 { Exposed for smoke tests. Parses a raw Perplexity chat-completions
-  response body into the uniform ISearchProvider hit array. Pure —
+  response body into the uniform ISearchProvider hit array. Pure --
   no network. Public so tests don't have to spin up an HTTP server
   to exercise the citations-nullable branch the Codex P2 flagged. }
 function ParsePerplexityJSON(const JSONBody: string; Count: Integer;
@@ -127,7 +127,7 @@ begin
       ChoicesArr.Free;
     end;
 
-    { citations is nullable per Perplexity's schema — handle it as
+    { citations is nullable per Perplexity's schema -- handle it as
       optional rather than gating the entire hit construction on its
       presence. Pull the first citation as FirstURL if available;
       otherwise Hits[0].URL stays empty and the model still gets

@@ -1,7 +1,7 @@
 (*
   PasClaw.Search.SearXNG - SearXNG (self-hosted meta-search) adapter.
 
-  SearXNG is the privacy-focused fork of Searx — every instance is
+  SearXNG is the privacy-focused fork of Searx -- every instance is
   user-deployed, so this adapter takes a base URL (no public
   default). Endpoint:
     GET <base>/search?q=<query>&format=json&pageno=1&safesearch=1

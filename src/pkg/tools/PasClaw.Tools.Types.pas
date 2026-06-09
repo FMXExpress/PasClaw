@@ -24,11 +24,11 @@ type
     a top-level function pointer. }
   TToolHandlerObj = function(const ArgsJSON: string; out ErrMsg: string): string of object;
 
-  { Tool category — drives parallel dispatch in PasClaw.Tools.ToolLoop.
+  { Tool category -- drives parallel dispatch in PasClaw.Tools.ToolLoop.
 
     tcMutating: the tool can mutate shared state (filesystem writes,
                 shell subprocesses, MCP-stdio handshakes that share a
-                single stdin pipe, memory writes). MUST run serially —
+                single stdin pipe, memory writes). MUST run serially --
                 a batch containing one mutating call has size 1, never
                 gets parallelized with siblings.
 

@@ -8,14 +8,14 @@
     2. Empty / unset: fall back to DuckDuckGo (no key needed).
 
   Env overrides win over cfg fields, matching how `pasclaw post` and
-  the channel bots read $PASCLAW_* — keeps secrets out of
+  the channel bots read $PASCLAW_* -- keeps secrets out of
   config.json for users who'd rather not commit them.
 
   Wave 1: duckduckgo, brave, tavily.
   Wave 2: searxng, perplexity.
   Wave 3: gemini (Google Search grounding via the Gemini Generative
           Language API). GLM (Zhipu) and Baidu (Qianfan) intentionally
-          skipped — narrower Delphi/FPC audience for those auth
+          skipped -- narrower Delphi/FPC audience for those auth
           ceremonies.
 *)
 unit PasClaw.Search.Factory;
@@ -32,7 +32,7 @@ uses
 
 function NewSearchProvider(const Cfg: TConfig; out ErrMsg: string): ISearchProvider;
 
-{ True when the operator has a real (non-DDG) provider configured —
+{ True when the operator has a real (non-DDG) provider configured --
   either via Cfg.WebSearch.Provider + the required credential, or via
   a known env-var API key alone (auto-detected). The web_search tool
   gates registration on this so the model doesn't see a tool that
@@ -70,7 +70,7 @@ end;
 function AutoDetectFromEnv: string;
 { When the user set an API key but never set web_search.provider in
   config.json, pick a sensible default. Priority is "key-only
-  providers first" — operators tend to set the Brave / Tavily /
+  providers first" -- operators tend to set the Brave / Tavily /
   Perplexity / Gemini keys when they want web search, and it'd be a
   bad surprise to ignore that just because they didn't also touch
   the Provider field. SearXNG isn't auto-detected because its
@@ -95,7 +95,7 @@ begin
   begin
     { Auto-detect a real provider from env keys before falling all
       the way back to DDG. Only fires when the operator hasn't named
-      a provider — explicit "duckduckgo"/"ddg" below is respected
+      a provider -- explicit "duckduckgo"/"ddg" below is respected
       verbatim so a paid env key (left over from another tool's
       config) can't silently hijack searches the operator meant to
       send to DDG. Codex P2 on PR #143. }
@@ -147,7 +147,7 @@ begin
       Result := nil;
       Exit;
     end;
-    { Optional API key — most public instances don't need one. }
+    { Optional API key -- most public instances don't need one. }
     Key := PickKey(Cfg.WebSearch.APIKey, 'PASCLAW_SEARXNG_API_KEY');
     Result := NewSearXNGProvider(Cfg.WebSearch.BaseURL, Key);
     Exit;
@@ -185,7 +185,7 @@ begin
     Exit;
   end;
 
-  LogWarn('search.factory: unknown provider %s — falling back to duckduckgo', [Kind]);
+  LogWarn('search.factory: unknown provider %s -- falling back to duckduckgo', [Kind]);
   Result := NewDuckDuckGoProvider;
 end;
 
@@ -196,7 +196,7 @@ procedure LogSkipOnceImpl;
 { One-line info per process the first time web_search registration is
   skipped, so the operator understands why the model doesn't see the
   tool and how to flip it on. Subsequent skips during the same
-  process are silenced — multi-registry boots (cmd then component-
+  process are silenced -- multi-registry boots (cmd then component-
   embedded refresh, etc.) shouldn't spam. }
 begin
   if GLogged then Exit;
@@ -205,7 +205,7 @@ begin
           'Set $PASCLAW_BRAVE_API_KEY / $PASCLAW_TAVILY_API_KEY / ' +
           '$PASCLAW_PERPLEXITY_API_KEY / $PASCLAW_GEMINI_API_KEY, ' +
           'or set web_search.provider = "searxng" + base_url in config.json. ' +
-          '(DDG scrape fallback is disabled — its bot detection refuses non-browser ' +
+          '(DDG scrape fallback is disabled -- its bot detection refuses non-browser ' +
           'requests at the TLS-fingerprint level.)', []);
 end;
 
@@ -240,12 +240,12 @@ begin
   { Explicit 'duckduckgo'/'ddg': the operator chose the broken-
     by-bot-wall scrape backend deliberately. Don't second-guess
     them by sending requests to whatever paid key happens to be in
-    the env — and don't register the tool either, since DDG won't
+    the env -- and don't register the tool either, since DDG won't
     deliver results. Codex P2 on PR #143. }
   if (Kind = 'duckduckgo') or (Kind = 'ddg') then
     Exit(False);
 
-  { Unknown Kind — the factory logs a warning and falls back to DDG,
+  { Unknown Kind -- the factory logs a warning and falls back to DDG,
     so for the gate decision treat it as "not configured". }
   Result := False;
 end;

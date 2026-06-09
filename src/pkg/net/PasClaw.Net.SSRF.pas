@@ -43,7 +43,7 @@
     10.0.0.0/8         RFC1918 corporate LAN
     100.64.0.0/10      RFC6598 carrier-grade NAT
     127.0.0.0/8        loopback (every localhost variant)
-    169.254.0.0/16     link-local — INCLUDES 169.254.169.254 cloud metadata
+    169.254.0.0/16     link-local -- INCLUDES 169.254.169.254 cloud metadata
     172.16.0.0/12      RFC1918 corporate LAN
     192.0.0.0/24       IETF Protocol Assignments
     192.168.0.0/16     RFC1918 home LAN
@@ -64,14 +64,14 @@ uses
 (* Returns True if Host either parses as an IPv4 literal in a blocked
    range, or resolves (via DNS) to at least one such address. Reason
    carries a human-readable explanation when True. False means "safe
-   to fetch" — including the case where DNS resolution failed (the
+   to fetch" -- including the case where DNS resolution failed (the
    request will likely fail at connect time anyway with a clearer
    network error). *)
 function HostIsLocal(const Host: string; out Reason: string): Boolean;
 
 (* Extracts the host out of an http/https URL and runs HostIsLocal
    on it. Refuses (returns True) for malformed URLs, but does not
-   refuse for non-http(s) schemes — the caller (web_fetch) already
+   refuse for non-http(s) schemes -- the caller (web_fetch) already
    filters those at its own layer. *)
 function URLIsLocal(const URL: string; out Reason: string): Boolean;
 
@@ -152,7 +152,7 @@ const
     (Net: '10.0.0.0';      Prefix: 8;  Label_: 'RFC1918 private (10.0.0.0/8)'),
     (Net: '100.64.0.0';    Prefix: 10; Label_: 'RFC6598 carrier-grade NAT'),
     (Net: '127.0.0.0';     Prefix: 8;  Label_: 'loopback (127.0.0.0/8)'),
-    (Net: '169.254.0.0';   Prefix: 16; Label_: 'link-local — cloud metadata endpoint range'),
+    (Net: '169.254.0.0';   Prefix: 16; Label_: 'link-local -- cloud metadata endpoint range'),
     (Net: '172.16.0.0';    Prefix: 12; Label_: 'RFC1918 private (172.16.0.0/12)'),
     (Net: '192.0.0.0';     Prefix: 24; Label_: 'IETF Protocol Assignments'),
     (Net: '192.168.0.0';   Prefix: 16; Label_: 'RFC1918 private (192.168.0.0/16)'),
@@ -185,7 +185,7 @@ begin
     Exit(True);
   end;
 
-  { Short-circuit on the symbolic localhost names — DNS-on-some-
+  { Short-circuit on the symbolic localhost names -- DNS-on-some-
     systems returns 127.0.0.1, on others doesn't resolve at all
     (no /etc/hosts entry, ResolveHost raises). Either way we want
     to refuse. ::1 is here too because ExtractHost unwraps
@@ -204,7 +204,7 @@ begin
     Exit(IPv4Blocked(IP, Reason));
 
   { Otherwise resolve via DNS. Failures (no DNS server, NXDOMAIN,
-    timeout) return False — the request itself will fail at
+    timeout) return False -- the request itself will fail at
     connect time with a clearer network error, no need to
     pre-mask it as SSRF. }
   try
@@ -235,7 +235,7 @@ begin
   S := Copy(S, SchemeEnd + 3, MaxInt);
   if S = '' then Exit;
 
-  { Slice the authority component out FIRST — everything from the
+  { Slice the authority component out FIRST -- everything from the
     end of '://' to the first '/', '?', or '#'. Codex PR #85 P1
     caught the bug where Pos('@', S) operated on the WHOLE
     post-scheme string, so a benign-looking userinfo-shaped
@@ -264,7 +264,7 @@ begin
   if AtPos > 0 then Authority := Copy(Authority, AtPos + 1, MaxInt);
 
   { Bracketed IPv6 literal: [::1]:port → ::1 (no v6 handling in
-    HostIsLocal beyond the symbolic ::1 short-circuit — keep the
+    HostIsLocal beyond the symbolic ::1 short-circuit -- keep the
     extraction logic anyway so a caller sees the bare host). }
   if (Length(Authority) > 0) and (Authority[1] = '[') then
   begin
@@ -276,7 +276,7 @@ begin
 
   { Trim the port: host:port → host. Operates on the authority,
     so a real ':' inside the path or fragment further on can't
-    mask the boundary. Only ':' matters here — '/', '?', '#'
+    mask the boundary. Only ':' matters here -- '/', '?', '#'
     were already used to slice the authority. }
   S := Authority;
   HostEnd := Length(S) + 1;

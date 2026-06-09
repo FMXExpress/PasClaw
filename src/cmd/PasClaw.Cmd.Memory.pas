@@ -8,12 +8,12 @@
                                 and where the active backend (hybrid or
                                 FTS-only) would pick them up.
 
-  The provision command is idempotent — re-running skips anything
+  The provision command is idempotent -- re-running skips anything
   already on disk, redownloads anything suspiciously small (treated as
   a partial fetch). All artifacts land under $PASCLAW_HOME/cache/localvector/,
   which is exactly where PasClaw.Memory.Vector.Open looks. Once the
   three pieces are present, memory_search picks the hybrid backend
-  automatically on the next call — no restart required.
+  automatically on the next call -- no restart required.
 
   Cross-platform footprint:
     sqlite-vec extension       auto-downloaded from asg017/sqlite-vec
@@ -52,7 +52,7 @@ uses
   LocalVector.Downloader;
 
 { Cache directory under PASCLAW_HOME. Built up via nested JoinPath
-  calls — NOT as a single `'cache/localvector'` const — because on
+  calls -- NOT as a single `'cache/localvector'` const -- because on
   Windows JoinPath only inserts a PathDelim BETWEEN the two args; an
   embedded `/` inside one of them survives, producing mixed-separator
   paths like `C:\Users\anony\.pasclaw\cache/localvector`. ForceDirectories
@@ -82,7 +82,7 @@ begin
 end;
 
 function VecExtPath: string;
-{ Mirrors PasClaw.Memory.Vector.VecExtPath — kept in sync by hand so
+{ Mirrors PasClaw.Memory.Vector.VecExtPath -- kept in sync by hand so
   this unit doesn't have to import the IMemoryIndex type just for one
   string. If you change either, change both. }
 begin
@@ -99,14 +99,14 @@ end;
 
 procedure PrintCheckMark(const Color: string; const Glyph, Msg: string);
 { Compose a single status line: '  ' + colored glyph + ' ' + Msg.
-  Color is Ansi.Green / Ansi.Red / Ansi.Yellow / etc. — the call site
+  Color is Ansi.Green / Ansi.Red / Ansi.Yellow / etc. -- the call site
   picks. }
 begin
   PrintLn('  ' + Color + Glyph + Ansi.Reset + ' ' + Msg);
 end;
 
 function ProvisionVecExt: Boolean;
-{ Returns True on success. Always emits a status line — does not throw.
+{ Returns True on success. Always emits a status line -- does not throw.
   Idempotent: EnsureVec0 short-circuits on FileExists(Dest). }
 var
   Dest: string;
@@ -233,7 +233,7 @@ begin
   PrintLn(Ansi.Dim +
     'All artifacts land under ' + Cache + ' and are loaded' + Ansi.Reset);
   PrintLn(Ansi.Dim +
-    'on demand by PasClaw.Memory.Vector — no restart needed.' + Ansi.Reset);
+    'on demand by PasClaw.Memory.Vector -- no restart needed.' + Ansi.Reset);
   PrintLn;
 
   OkVec   := ProvisionVecExt;
@@ -244,13 +244,13 @@ begin
   if OkVec and OkOrt and OkModel then
   begin
     PrintLn(Ansi.Green + '✓' + Ansi.Reset +
-      ' hybrid backend ready — memory_search will use FTS + vector on next call');
+      ' hybrid backend ready -- memory_search will use FTS + vector on next call');
     Result := 0;
   end
   else
   begin
     PrintLn(Ansi.Yellow + '!' + Ansi.Reset +
-      ' provisioning incomplete — memory_search will fall back to FTS-only');
+      ' provisioning incomplete -- memory_search will fall back to FTS-only');
     PrintLn('  Re-run after fixing the failures above.');
     Result := 1;
   end;
@@ -303,7 +303,7 @@ begin
       PrintCheckMark(Ansi.Yellow, '·', 'vocab missing at ' + VocabP);
   end;
 
-  { ONNX Runtime — same gate TVectorMemoryIndex.Open calls before
+  { ONNX Runtime -- same gate TVectorMemoryIndex.Open calls before
     enabling the hybrid backend. Codex P2 on PR #166: on Linux/macOS a
     host with vec0 + model + vocab on disk but no system libonnxruntime
     will see every file-based check go green here even though
@@ -320,7 +320,7 @@ begin
     on E: Exception do
     begin
       PrintCheckMark(Ansi.Yellow, '·',
-        'ONNX Runtime not loadable — ' + E.Message);
+        'ONNX Runtime not loadable -- ' + E.Message);
       if not CanAutoProvisionRuntime then
       begin
         PrintLn('    ' + Ansi.Dim +

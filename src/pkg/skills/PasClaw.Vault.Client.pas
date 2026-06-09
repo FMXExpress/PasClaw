@@ -1,8 +1,8 @@
 (*
-  PasClaw.Vault.Client — search + fetch entries in the pasclaw.dev
+  PasClaw.Vault.Client -- search + fetch entries in the pasclaw.dev
   Code Vault. Vault entries are GitHub repos (Object Pascal samples,
   reusable components, libraries); the registry is search-and-get
-  only — there's no zip/download step. Use the returned `repoUrl`
+  only -- there's no zip/download step. Use the returned `repoUrl`
   with `git clone` (the `pasclaw vault install` CLI does this) or
   with the agent's `web_fetch` / `shell_exec` tools.
 
@@ -41,7 +41,7 @@ type
     DisplayName: string;
     Summary:     string;
     Category:    string;
-    Tags:        string;   { comma-joined for compactness — list rendering only }
+    Tags:        string;   { comma-joined for compactness -- list rendering only }
     RepoURL:     string;
     Version:     string;
   end;
@@ -88,7 +88,7 @@ const
   RequestTimeoutSec  = 30;
 
 function UrlEncode(const S: string): string;
-{ Duplicated from PasClaw.Skills.PasClawHub — minimal percent-encoder.
+{ Duplicated from PasClaw.Skills.PasClawHub -- minimal percent-encoder.
   The codebase has accepted this duplication across hub clients; a
   follow-up should extract to a shared util. }
 var

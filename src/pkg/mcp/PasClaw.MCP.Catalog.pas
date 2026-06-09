@@ -5,18 +5,18 @@
 
   Why this exists (vs. always letting the user `pasclaw mcp add`):
 
-    1. Discovery — the model can't read the operator's mind, but it
+    1. Discovery -- the model can't read the operator's mind, but it
        can read this catalogue. `pasclaw mcp install replicate` is
        a one-liner that pulls in the right URL and the right
        Authorization header from the right env-var.
 
-    2. Auth shape — every provider has decided on a slightly
+    2. Auth shape -- every provider has decided on a slightly
        different Bearer-token layout, and getting it wrong (forgot
        the "Bearer " prefix, used POST instead of GET, etc.) is
        the #1 way installs end up "broken-on-arrival". The
        catalogue encodes the right shape once per provider.
 
-    3. Not preloaded by default — picoclaw seeds nothing. PasClaw
+    3. Not preloaded by default -- picoclaw seeds nothing. PasClaw
        follows the same rule: no MCP server contacts a remote
        endpoint unless the operator explicitly opted in via
        `pasclaw mcp install <name>`. Entries below are inert until
@@ -26,7 +26,7 @@
   KnownMCPServers constant. The first user-visible test is
   `pasclaw mcp catalog` showing it; the second is
   `pasclaw mcp install <name>` writing a normal mcp_servers entry.
-  Nothing else in the codebase needs changing — the install path
+  Nothing else in the codebase needs changing -- the install path
   uses the same TConfig.MCPServers array every other MCP entry
   uses, so list / remove / test / show all just work.
 *)
@@ -47,14 +47,14 @@ type
     Name:          string; { kebab-case identifier; what the user types }
     URL:           string; { remote MCP endpoint (http:// or https://) }
     EnvVar:        string; { env var holding the bearer token; '' if no auth
-                             and '' for OAuth servers — see RequiresOAuth }
+                             and '' for OAuth servers -- see RequiresOAuth }
     AuthFmt:       string; { Authorization-header value template, e.g. "Bearer %s".
                              Empty when no auth. Catalog install reads
                              GetEnvironmentVariable(EnvVar) and substitutes
                              it into AuthFmt to produce the literal header
                              the HTTP MCP client stores in the args slot. }
     RequiresOAuth: Boolean;{ True when the remote uses OAuth 2.1 (MCP
-                             Authorization spec — discovery + PKCE + dynamic
+                             Authorization spec -- discovery + PKCE + dynamic
                              client registration). `mcp install` writes the
                              entry with no header and prints a hint to run
                              `pasclaw mcp auth <name>`; the HTTP client
@@ -83,7 +83,7 @@ function ResolveAuthHeader(const Entry: TMCPCatalogEntry;
 (* Format the literal Authorization header for an entry given a
    token the caller has already obtained (e.g. interactively from
    `pasclaw onboard`). Sibling to ResolveAuthHeader, which sources
-   the token from the env var — this one takes it as an argument
+   the token from the env var -- this one takes it as an argument
    so the onboarding flow can prompt the user and persist the
    resulting header into config.json without requiring the env var
    to be set. Empty Token returns '' (caller installs with no
@@ -100,7 +100,7 @@ function KnownMCPServers: TMCPCatalogEntryArray;
 begin
   SetLength(Result, 5);
 
-  { Replicate's MCP server is OAuth-only — it advertises RFC 9728
+  { Replicate's MCP server is OAuth-only -- it advertises RFC 9728
     protected-resource metadata and rejects raw REPLICATE_API_TOKEN
     with "invalid_token". `mcp install replicate` writes a no-header
     entry and prompts the user to run `mcp auth replicate`, which
@@ -110,8 +110,8 @@ begin
   Result[0].EnvVar        := '';
   Result[0].AuthFmt       := '';
   Result[0].RequiresOAuth := True;
-  Result[0].Desc          := 'Run AI models (text/image/video/audio) on Replicate — 5000+ models. ' +
-                             'OAuth-only — run `pasclaw mcp auth replicate` after install.';
+  Result[0].Desc          := 'Run AI models (text/image/video/audio) on Replicate -- 5000+ models. ' +
+                             'OAuth-only -- run `pasclaw mcp auth replicate` after install.';
   Result[0].Docs          := 'https://replicate.com/docs/reference/mcp';
 
   Result[1].Name    := 'digitalocean-apps';

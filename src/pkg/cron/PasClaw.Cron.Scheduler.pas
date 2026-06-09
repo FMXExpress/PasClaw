@@ -29,7 +29,7 @@ type
     FThread:   TThread;
     FStopEvt:  TEvent;
     FStop:     Boolean;
-    FState:    TObject;   { TCronState — opaque to avoid uses-cycle at decl time }
+    FState:    TObject;   { TCronState -- opaque to avoid uses-cycle at decl time }
     procedure RunOnce;
   public
     constructor Create(Cfg: TConfig; Registry: TToolRegistry);
@@ -158,7 +158,7 @@ begin
       this cron has never fired, anchor the search on (Now - 60s) so a
       newly-added entry doesn't backfire for every minute of history.
       If a fire was missed (downtime, restart, sleep), NextFireAfter
-      returns the earliest missed slot — we fire exactly once, then
+      returns the earliest missed slot -- we fire exactly once, then
       catch up on the next tick. }
     LastFired := State.GetLastFired(Entry.Id);
     if LastFired > 0 then
@@ -190,7 +190,7 @@ begin
       compute NextFireAfter(slot) which returns the NEXT missed slot
       (or future slot if caught up), so a long downtime catches up
       one slot per tick instead of skipping the rest. Stamp regardless
-      of skill success — a permanently-failing job would otherwise
+      of skill success -- a permanently-failing job would otherwise
       retry the same slot on every tick forever; fix the skill and the
       next due slot fires. }
     State.SetLastFired(Entry.Id, DateTimeToUnix(Next));

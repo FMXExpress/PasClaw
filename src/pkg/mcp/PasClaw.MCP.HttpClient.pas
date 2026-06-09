@@ -3,7 +3,7 @@
 
   Each call is a single POST to the configured URL with the JSON-RPC envelope.
   The same socket may be reused for the response stream (server-sent events)
-  when the server elects to stream multi-part results — we handle both:
+  when the server elects to stream multi-part results -- we handle both:
 
     * Content-Type: application/json  -> response is one JSON object
     * Content-Type: text/event-stream -> parse `data:` lines, join, decode
@@ -30,7 +30,7 @@ type
   private
     FName, FURL, FAuth: string;
     FNextId: Integer;
-    { Streamable-HTTP session id — issued by the server in the
+    { Streamable-HTTP session id -- issued by the server in the
       `Mcp-Session-Id` response header on `initialize`, and required
       back on every subsequent request per the MCP 2025-03-26 spec.
       Replicate's server returns 400 "Mcp-Session-Id header is

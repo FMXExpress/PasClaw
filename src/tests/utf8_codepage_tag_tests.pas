@@ -8,7 +8,7 @@ program utf8_codepage_tag_tests;
   carry CP_0 (system default) but their bytes are valid UTF-8. The
   bug: any downstream TEncoding.UTF8.GetBytes() on that CP_0 string
   reinterprets the bytes as the system codepage (CP1252 on Windows)
-  and re-encodes to UTF-8 — classic double-encoding mojibake
+  and re-encodes to UTF-8 -- classic double-encoding mojibake
   (`é` 2 bytes -> `Ã©` 4 bytes).
 
   TagUTF8 retags in place without rewriting bytes, so the round-trip
@@ -46,7 +46,7 @@ begin
 end;
 
 procedure TestTagOnDataString;
-{ The exact path PasClaw.Providers.HTTP.DoRequest used to take —
+{ The exact path PasClaw.Providers.HTTP.DoRequest used to take --
   TStringStream(UTF8) -> DataString -> assign to result body. The
   bytes ARE correct UTF-8 here (we wrote them), but on FPC the
   resulting string is CP_0 until TagUTF8 runs. }
@@ -73,7 +73,7 @@ begin
               'post-tag: TagUTF8 retags AnsiString to CP_UTF8');
   {$ENDIF}
 
-  { Bytes are unchanged either way — the fix is metadata-only. }
+  { Bytes are unchanged either way -- the fix is metadata-only. }
   AssertEqual(Length(Body), Length(Cafe), 'byte length preserved');
   AssertBytesEqual(BytesOf(Body), Cafe,    'byte content preserved');
 end;
@@ -82,7 +82,7 @@ procedure TestRoundTripThroughEncoding;
 { The actual bug: PasClaw.Gateway.Server.WriteBodyStream calls
   TEncoding.UTF8.GetBytes(Body) to put the bytes on the wire. With
   Body tagged CP_0 under FPC, GetBytes interprets the UTF-8 bytes as
-  CP_1252 and re-encodes — that's the double-encode that produces
+  CP_1252 and re-encodes -- that's the double-encode that produces
   Ã© on the wire. With TagUTF8 applied first, GetBytes sees the
   correct tag and returns the bytes unchanged. }
 var
@@ -96,7 +96,7 @@ begin
   TagUTF8(Body);
   Wire := TEncoding.UTF8.GetBytes(Body);
   AssertBytesEqual(Wire, Cafe,
-                   'TEncoding.UTF8.GetBytes(tagged) is lossless — no double-encoding');
+                   'TEncoding.UTF8.GetBytes(tagged) is lossless -- no double-encoding');
 end;
 
 procedure TestEmptyStringNoOp;

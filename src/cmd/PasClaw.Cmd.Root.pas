@@ -16,8 +16,8 @@ unit PasClaw.Cmd.Root;
 interface
 
 { Returns the exit code that would have been returned by the CLI for the
-  same `pasclaw Cmd Argv...` invocation. Pure dispatch — does not touch
-  ParamStr, the log level, or any global init — so embedding callers
+  same `pasclaw Cmd Argv...` invocation. Pure dispatch -- does not touch
+  ParamStr, the log level, or any global init -- so embedding callers
   (TPasClawAgent.Execute, tests) can use it without re-reading the host
   process's command line. RunRootCommand below handles CLI-only concerns
   (argv parsing, --no-color stripping, config-driven log level) then
@@ -100,7 +100,7 @@ end;
 procedure PrintRootHelp;
 const
   Use = 'pasclaw [command] [flags]';
-  Short = 'PasClaw — personal AI assistant';
+  Short = 'PasClaw -- personal AI assistant';
   Long  = 'PasClaw is a lightweight personal AI assistant.';
   Example = 'pasclaw version' + sLineBreak +
             '  pasclaw onboard' + sLineBreak +
@@ -158,7 +158,7 @@ begin
   else if Cmd = 'vault'    then Result := Cmd_Vault_Run(Argv)
   else if Cmd = 'session'  then Result := Cmd_Session_Run(Argv)
   else if Cmd = 'learn'    then Result := Cmd_Learn_Run(Argv)
-  { resume <id> is shorthand for `agent --session <id>` — wire it
+  { resume <id> is shorthand for `agent --session <id>` -- wire it
     here so `pasclaw resume foo` works as a top-level shortcut. }
   else if Cmd = 'resume'   then
   begin
@@ -197,7 +197,7 @@ var
   ArgArr: TArray<string>;
   Cfg: TConfig;
 begin
-  { Result := 0 removed — dead write per dcc64 H2077. Every exit
+  { Result := 0 removed -- dead write per dcc64 H2077. Every exit
     path assigns Result before returning: Exit(0) for the help
     branch, Result := DispatchCommand(...) for the dispatch
     branch (which itself always assigns Result, including the

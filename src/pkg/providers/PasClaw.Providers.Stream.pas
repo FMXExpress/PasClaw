@@ -64,7 +64,7 @@ var
 
 begin
   Result := False;
-  { Explicit UTF-8 — Delphi's TStringStream defaults to ANSI which
+  { Explicit UTF-8 -- Delphi's TStringStream defaults to ANSI which
     would mangle the SSE response body. }
   Resp := TStringStream.Create('', TEncoding.UTF8);
   try

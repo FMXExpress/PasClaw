@@ -8,7 +8,7 @@
               { "title": "...", "url": "...",
                 "description": "..." }, ... ] } }
 
-  Brave returns rich metadata (favicon, age, type) we don't need —
+  Brave returns rich metadata (favicon, age, type) we don't need --
   pick title / url / description and move on.
 
   Docs: https://api-dashboard.search.brave.com/app/documentation/web-search/get-started

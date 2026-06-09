@@ -29,7 +29,7 @@ type
     { Opaque provider-specific blob the assistant must echo back
       when sending the matching function/tool result. Currently used
       only by Gemini 3+ (the `thoughtSignature` on functionCall
-      parts) — Gemini 3 rejects the follow-up request with a 400
+      parts) -- Gemini 3 rejects the follow-up request with a 400
       "Function call is missing a thought_signature" if it's
       dropped. Empty for other providers and for Gemini 2.x. }
     ProviderSignature: string;
@@ -95,13 +95,13 @@ type
     Stream:        Boolean;
     SystemPrompt:  string;
     ThinkingLevel: string;   { "", "low", "medium", "high" }
-    ToolChoice:    string;   { "", "auto", "none", "required" — the three forms
+    ToolChoice:    string;   { "", "auto", "none", "required" -- the three forms
                                every provider can represent. Empty means "do
                                not emit the field"; the provider's own default
                                (typically "auto" when tools are present) applies.
                                Object-shaped tool_choice (force a specific
                                function by name) is not currently supported by
-                               this field — when a client sends one the
+                               this field -- when a client sends one the
                                gateway logs and drops it. }
     (* Prompt caching. When CacheEnabled, the Anthropic builder tags
        the system prompt and the trailing tools-array entry with an
@@ -109,7 +109,7 @@ type
        prompt_cache_key so the back-end keys its automatic cache on
        a stable session id. Defaults: enabled, default TTL, empty
        key (no key = no OpenAI cache anchor, falls back to automatic
-       prefix matching). CacheTTL accepts "" / "5m" / "1h" — "1h"
+       prefix matching). CacheTTL accepts "" / "5m" / "1h" -- "1h"
        passes through as the Anthropic extended-TTL hint; other
        values are emitted verbatim. CacheKey should be stable across
        turns of the same conversation (e.g. the session id) so the
@@ -162,7 +162,7 @@ begin
     The previous 4096 was too tight for code-writing tool calls: a
     typical Pascal/TS unit easily exceeds 4k tokens in a single
     tool_use input, and Anthropic returns the partial JSON when the
-    budget runs out — see PR #41 for the fs_write fallout that
+    budget runs out -- see PR #41 for the fs_write fallout that
     motivated this. Callers can still override per-call via
     --max-tokens or the gateway's max_tokens request field. }
   Result.MaxTokens     := 8192;
@@ -170,7 +170,7 @@ begin
   Result.SystemPrompt  := '';
   Result.ThinkingLevel := '';
   Result.ToolChoice    := '';
-  { Prompt caching on by default — Anthropic and OpenAI both no-op
+  { Prompt caching on by default -- Anthropic and OpenAI both no-op
     silently when the prefix is too short to be worth caching, so
     flipping this on costs nothing for short prompts and saves ~10x
     on long ones. Disable per-call via TPromptCacheConfig.Enabled

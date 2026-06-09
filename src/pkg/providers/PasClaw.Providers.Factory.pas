@@ -16,7 +16,7 @@ uses
   PasClaw.Providers.Intf;
 
 { TLLMProviderArray moved to PasClaw.Providers.Intf so both this unit
-  and PasClaw.Tools.ToolLoop reference the same named type — dcc64
+  and PasClaw.Tools.ToolLoop reference the same named type -- dcc64
   rejects cross-unit assignments between inline `array of ILLMProvider`
   declarations even when structurally identical. }
 
@@ -33,7 +33,7 @@ function NewDefaultProvider(Cfg: TConfig; out Provider: ILLMProvider; out ErrMsg
 function ResolveFallbacks(Cfg: TConfig): TLLMProviderArray;
 
 (* True iff RawKind/RawName identify the catalog's genuine OpenAI
-   entry — NOT "openai-compat" or any other catalog member of the
+   entry -- NOT "openai-compat" or any other catalog member of the
    pfOpenAI family (Groq, OpenRouter, Ollama, vLLM, LiteLLM,
    DeepSeek, Mistral, Together, ...). Gates OpenAI-only request
    fields (web_search_options, future Responses-API knobs) at the
@@ -44,7 +44,7 @@ function IsGenuineOpenAI(const RawKind, RawName: string): Boolean;
 (* Apply the same normalisation NewProviderFromConfig uses before
    the catalog lookup: lowercase + trim, and collapse the legacy
    "openai-compat" alias to "openai". Exposed so other call paths
-   (PasClaw.Cmd.Model.refresh / list — Codex P2 on PR #171) hit the
+   (PasClaw.Cmd.Model.refresh / list -- Codex P2 on PR #171) hit the
    catalog the same way the factory does and don't reject a
    normally-chat-capable provider with "unknown kind". *)
 function NormalizeProviderKind(const Kind: string): string;
@@ -87,7 +87,7 @@ end;
 function IsGenuineOpenAI(const RawKind, RawName: string): Boolean;
 { See interface doc. Mirrors the Kind/Name fallback in
   NewProviderFromConfig but does NOT collapse "openai-compat" →
-  "openai" the way NormalizeProviderKind does — that collapse is
+  "openai" the way NormalizeProviderKind does -- that collapse is
   correct for catalog spec lookup (an openai-compat entry inherits
   OpenAI's Bearer auth shape) but wrong for gating OpenAI-only
   request fields, because openai-compat backends are intentionally
@@ -119,7 +119,7 @@ begin
   ErrMsg := '';
   if not FindProvider(Cfg, ProviderName, Idx) then
   begin
-    ErrMsg := 'no provider entry for "' + ProviderName + '" — run `pasclaw onboard` or `pasclaw auth login ' + ProviderName + '`';
+    ErrMsg := 'no provider entry for "' + ProviderName + '" -- run `pasclaw onboard` or `pasclaw auth login ' + ProviderName + '`';
     Exit(False);
   end;
   Kind := NormalizeProviderKind(Cfg.Providers[Idx].Kind);
@@ -128,7 +128,7 @@ begin
   if not LookupProvider(Kind, Spec) then
   begin
     ErrMsg := 'unsupported provider kind "' + Cfg.Providers[Idx].Kind +
-              '" — see `pasclaw onboard` or pkg/providers/PasClaw.Providers.Catalog.pas';
+              '" -- see `pasclaw onboard` or pkg/providers/PasClaw.Providers.Catalog.pas';
     Exit(False);
   end;
 
@@ -136,7 +136,7 @@ begin
   RequiresKey := Spec.Auth.Kind <> asNone;
   if RequiresKey and (APIKey = '') then
   begin
-    ErrMsg := 'provider "' + ProviderName + '" has no API key — run `pasclaw auth login ' + ProviderName + '`';
+    ErrMsg := 'provider "' + ProviderName + '" has no API key -- run `pasclaw auth login ' + ProviderName + '`';
     Exit(False);
   end;
 
@@ -159,11 +159,11 @@ begin
       end;
     pfOpenAI:
       begin
-        { web_search_options is OpenAI-only — gate on the operator's
+        { web_search_options is OpenAI-only -- gate on the operator's
           raw config Kind/Name, not the normalised one (see
           IsGenuineOpenAI for the why). Every other catalog entry in
-          the pfOpenAI family — Groq, OpenRouter, Ollama, vLLM,
-          LiteLLM, DeepSeek, Mistral, Together, Cerebras, ... — speaks
+          the pfOpenAI family -- Groq, OpenRouter, Ollama, vLLM,
+          LiteLLM, DeepSeek, Mistral, Together, Cerebras, ... -- speaks
           the OpenAI wire shape but does not implement server-side
           web search; some reject unknown top-level fields outright. }
         OAIServerTools.WebSearch := Cfg.OpenAIServerTools.WebSearch
@@ -174,7 +174,7 @@ begin
       end;
     pfGemini:
       begin
-        { google_search is Gemini-native server-side grounding —
+        { google_search is Gemini-native server-side grounding --
           emitted as a `tools[]` entry. Default-on (see
           TGeminiServerToolsConfig). Operators on a Gemini 1.5 model
           should flip this off in config.json since the 1.5 line uses
@@ -199,7 +199,7 @@ function NewDefaultProvider(Cfg: TConfig; out Provider: ILLMProvider; out ErrMsg
 begin
   if Cfg.DefaultProvider = '' then
   begin
-    ErrMsg := 'no default provider configured — run `pasclaw onboard`';
+    ErrMsg := 'no default provider configured -- run `pasclaw onboard`';
     Provider := nil;
     Exit(False);
   end;
@@ -219,7 +219,7 @@ begin
     if Cfg.Fallbacks[i] = '' then Continue;
     if not NewProviderFromConfig(Cfg, Cfg.Fallbacks[i], P, Err) then
     begin
-      { Don't propagate — let the caller still build the loop with
+      { Don't propagate -- let the caller still build the loop with
         the providers that did resolve. The fallback chain is
         defensive; missing an entry only weakens it, never breaks
         the primary path. }

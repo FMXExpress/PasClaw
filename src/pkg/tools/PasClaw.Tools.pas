@@ -1,5 +1,5 @@
 (*
-  PasClaw.Tools — umbrella unit exposing the built-in tool capabilities
+  PasClaw.Tools -- umbrella unit exposing the built-in tool capabilities
   as concrete TPasClawTool subclasses.
 
   Each class is a thin wrapper over the existing module-level
@@ -21,7 +21,7 @@
   fs_edit_hashline as five separate tools in the agent's registry.
 
   For custom tools, subclass PasClaw.Tools.Obj.TPasClawTool directly
-  and override Name/Description/Schema/Run — see that unit's header.
+  and override Name/Description/Schema/Run -- see that unit's header.
 *)
 unit PasClaw.Tools;
 
@@ -51,7 +51,7 @@ type
   TShellTool = class(TPasClawTool)
   public
     procedure Install(R: TToolRegistry); override;
-    { Category stays tcMutating from the base class — shell spawns
+    { Category stays tcMutating from the base class -- shell spawns
       subprocesses, can't safely parallelize. }
   end;
 

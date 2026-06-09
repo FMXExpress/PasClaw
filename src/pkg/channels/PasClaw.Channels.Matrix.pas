@@ -8,7 +8,7 @@
 
   Mirrors TTelegramChannel's shape: holds Cfg / Provider / Registry,
   runs RunToolLoop inline per inbound text event. Difference from
-  Telegram is that Matrix can't block the main thread — the gateway
+  Telegram is that Matrix can't block the main thread -- the gateway
   may want to run the HTTP server alongside, so Run launches an
   internal worker thread and returns; RequestStop / WaitForStop
   drive the shutdown.
@@ -107,7 +107,7 @@ const
 
 type
   (* Drives the bot's sync loop on its own TThread. Created
-     suspended, fields populated, then Start'd — same pattern the
+     suspended, fields populated, then Start'd -- same pattern the
      LINE / WhatsApp event workers used (Codex P2 fix from PR
      #78). FreeOnTerminate is False because TMatrixBot owns the
      thread and tears it down explicitly via RequestStop +
@@ -138,7 +138,7 @@ begin
       if FBot.GetSync(RawJSON) then
         FBot.ProcessSync(RawJSON)
       else
-        { Transient network error — back off briefly before retry
+        { Transient network error -- back off briefly before retry
           so a server hiccup doesn't tight-loop. The /sync call
           itself does a 30 s long-poll under normal operation,
           so this sleep only kicks in on actual failure. }
@@ -382,7 +382,7 @@ begin
 
   if FProvider = nil then
   begin
-    PostSend(RoomId, '(no provider configured — run `pasclaw onboard`)');
+    PostSend(RoomId, '(no provider configured -- run `pasclaw onboard`)');
     Exit;
   end;
 
@@ -411,7 +411,7 @@ begin
   if RunToolLoop(LoopCfg, Msgs, Loop) and (Loop.Content <> '') then
     Response := Loop.Content
   else
-    Response := '(sorry — model returned no content)';
+    Response := '(sorry -- model returned no content)';
 
   PostSend(RoomId, Response);
 end;
@@ -424,7 +424,7 @@ var
   RoomIds: TStringList;
   RoomId: string;
 begin
-  { Pre-try `Root := nil` removed — dead write per dcc64 H2077. The
+  { Pre-try `Root := nil` removed -- dead write per dcc64 H2077. The
     except branch always Exits, so Root is either assigned by Parse
     on the success path or we never reach the post-try-except code. }
   try
@@ -501,13 +501,13 @@ begin
   if FThread <> nil then Exit;
   if (FHomeserver = '') or (FToken = '') then
   begin
-    LogError('matrix: homeserver or access token missing — bot not started', []);
+    LogError('matrix: homeserver or access token missing -- bot not started', []);
     Exit;
   end;
 
   if not WhoAmIWithRetry(FUserId, 3) then
   begin
-    LogError('matrix: /whoami failed after retries — refusing to start ' +
+    LogError('matrix: /whoami failed after retries -- refusing to start ' +
              '(without a confirmed user_id the bot would reply to its own ' +
              'echoes; check $PASCLAW_MATRIX_TOKEN and homeserver reachability)', []);
     Exit;
@@ -516,7 +516,7 @@ begin
 
   if not InitialSyncToken then
   begin
-    LogError('matrix: initial sync token fetch failed — refusing to start ' +
+    LogError('matrix: initial sync token fetch failed -- refusing to start ' +
              '(without an anchor token, the first long-poll would replay ' +
              'old timeline events and reply to each)', []);
     Exit;

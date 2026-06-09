@@ -1,5 +1,5 @@
 ﻿(*
-  PasClaw.MCP.Hub — pasclaw.dev MCP registry client + the resolver
+  PasClaw.MCP.Hub -- pasclaw.dev MCP registry client + the resolver
   that prefers hub entries over the built-in 5-entry catalog with a
   fast offline fallback.
 
@@ -21,13 +21,13 @@
   transport=="http" entries and map their fields onto that record;
   stdio-transport entries are skipped with a debug log. Adding
   stdio support means extending TMCPCatalogEntry to carry command
-  + args — separate change.
+  + args -- separate change.
 
   Offline behaviour: ResolveMCPCatalog tries the hub with a 5s
   timeout; on ANY failure (DNS, TLS, 5xx, parse error) it returns
   the bundled KnownMCPServers list with Source = 'builtin' so the
   caller can print "(offline)" / "(hub)" attribution. Search has
-  no fallback — it's an explicit hub query.
+  no fallback -- it's an explicit hub query.
 *)
 unit PasClaw.MCP.Hub;
 
@@ -59,7 +59,7 @@ type
   end;
   TMCPHubResultArray = array of TMCPHubResult;
 
-{ Search the pasclaw.dev MCP registry. Hub-only — no fallback, since
+{ Search the pasclaw.dev MCP registry. Hub-only -- no fallback, since
   search needs the live registry to be useful (the bundled 5-entry
   list is too small to be worth searching). }
 function SearchMCPHub(const Query: string; Limit: Integer;
@@ -100,7 +100,7 @@ const
   HubBaseURL        = 'https://pasclaw.dev/api/public/v1';
   ListEndpoint      = '/mcp';
   GetEndpoint       = '/mcp/';
-  CatalogTimeoutSec = 5;    { short — keep `mcp catalog` snappy }
+  CatalogTimeoutSec = 5;    { short -- keep `mcp catalog` snappy }
   SearchTimeoutSec  = 15;
   GetTimeoutSec     = 15;
 
@@ -370,7 +370,7 @@ var
   Entry: TMCPCatalogEntry;
   ProjectErr: string;
 begin
-  { Result := False removed — dead write per dcc64 H2077. The two
+  { Result := False removed -- dead write per dcc64 H2077. The two
     success exits (hub fetch produced entries; builtin fallback) both
     explicitly set Result := True before returning. No code path
     leaves the function without one of those assignments. }
@@ -413,7 +413,7 @@ begin
               else
               begin
                 Inc(HubSkipped);
-                LogDebug('mcp-hub: skipped %s — %s',
+                LogDebug('mcp-hub: skipped %s -- %s',
                          [Item.GetStr('slug', '?'), ProjectErr]);
               end;
             finally
@@ -434,7 +434,7 @@ begin
       Result := True;
       Exit;
     end;
-    { Hub responded but returned nothing usable — fall through to
+    { Hub responded but returned nothing usable -- fall through to
       builtin so the user still gets the 5 bundled entries. Keep
       HubErr empty since this isn't really an error. }
   end;

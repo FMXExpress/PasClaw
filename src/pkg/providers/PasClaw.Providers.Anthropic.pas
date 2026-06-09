@@ -19,7 +19,7 @@ uses
 
 type
   (* Opt-in toggles for Anthropic-side server tools. Mirrors
-     PasClaw.Config.TAnthropicServerToolsConfig — kept in this unit so
+     PasClaw.Config.TAnthropicServerToolsConfig -- kept in this unit so
      PasClaw.Providers.Anthropic doesn't have to USE the config unit
      (the providers/config dependency direction is currently
      config → providers, and inverting that would pull TConfig into
@@ -150,7 +150,7 @@ end;
 
 (* Build a fresh ephemeral cache_control object (with optional
    ttl="1h") for attaching to a content block / tool entry. Caller
-   takes ownership via PutObject. The TTL field is optional —
+   takes ownership via PutObject. The TTL field is optional --
    Anthropic's default cache TTL is 5 minutes and we pass that
    through implicitly by omitting the field; only "1h" (extended
    TTL beta) is recognised and emitted. *)
@@ -219,7 +219,7 @@ begin
            accepts system as either a plain string or an array of
            text blocks (each with optional cache_control). Tagging
            the system prompt caches everything up to the tools array
-           on the next turn — biggest single-breakpoint win for
+           on the next turn -- biggest single-breakpoint win for
            multi-turn chats. *)
         SysArr   := TJsonArray.Create;
         SysBlock := TJsonObject.Create;
@@ -320,7 +320,7 @@ begin
           EmptyInput := TJsonObject.Create;
           ToolObj.PutObject('input_schema', EmptyInput);
         end;
-        { Tag the LAST effective tool entry with cache_control —
+        { Tag the LAST effective tool entry with cache_control --
           Anthropic caches up to and including the tagged block, so
           a single breakpoint on the trailing tool covers the entire
           tools array as a stable prefix. Combined with the
@@ -336,7 +336,7 @@ begin
         Inc(Emitted);
       end;
 
-      { Server-side tools — Claude executes web_search / web_fetch on
+      { Server-side tools -- Claude executes web_search / web_fetch on
         Anthropic's infrastructure. The tool entries are versioned
         type strings, not the user-tool name+input_schema shape; no
         beta header is required for the _20260209 versions. Dynamic
@@ -667,7 +667,7 @@ var
     Anthropic streams tool_use blocks as: start carries id+name+(empty)
     input, delta carries partial_json fragments, stop signals end. We
     buffer the JSON and flush into GStreamLast.ToolCalls on stop so
-    the streaming path matches Chat()'s non-streaming behavior — without
+    the streaming path matches Chat()'s non-streaming behavior -- without
     this, tool-call-only assistant turns reached the gateway with no
     ToolCalls and Codex never saw its function_call output items. }
   GToolBlockActive: Boolean;

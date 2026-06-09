@@ -1,6 +1,6 @@
 program model_discovery_tests;
 (*
-  Covers PasClaw.Providers.Models — the on-disk cache layer + the
+  Covers PasClaw.Providers.Models -- the on-disk cache layer + the
   per-family JSON parsers. We can't exercise the live HTTP path in CI
   without a real provider key, so the tests focus on:
 
@@ -12,7 +12,7 @@ program model_discovery_tests;
     - HumanAge buckets behave on the boundaries
 
   When any of these break it's almost always because somebody touched
-  the parser without thinking about the cache format — exactly the
+  the parser without thinking about the cache format -- exactly the
   silent failure the test exists to catch.
 *)
 
@@ -50,7 +50,7 @@ begin
 end;
 
 function TempProvider: string;
-{ Pick a name that won't collide with a real catalog entry — the test
+{ Pick a name that won't collide with a real catalog entry -- the test
   writes/deletes a real cache file under $PASCLAW_HOME/cache/models/.
   Using a dotted name keeps it visibly synthetic in a directory
   listing. }
@@ -68,7 +68,7 @@ end;
 
 procedure TestCacheRoundTrip;
 { Save a result, load it back, verify every field survives. This is
-  the smoke test for the schema contract — if we silently drop a
+  the smoke test for the schema contract -- if we silently drop a
   field on serialise, downstream `pasclaw model list` would show
   stale data without complaining. }
 var
@@ -105,7 +105,7 @@ begin
   begin
     AssertEqStr(Loaded.Models[i].Id, Sent.Models[i].Id,
                 Format('model[%d].id round-trip', [i]));
-    { Empty display deserialises as the id itself — that's the
+    { Empty display deserialises as the id itself -- that's the
       documented "no label, use id" contract the picker relies on. }
     if Sent.Models[i].Display = '' then
       AssertEqStr(Loaded.Models[i].Display, Sent.Models[i].Id,
@@ -121,7 +121,7 @@ end;
 
 procedure TestLoadMissingCacheReturnsFalse;
 { Onboarding's picker leans on this False path to fall back to the
-  text-input prompt — if it silently returns True with an empty
+  text-input prompt -- if it silently returns True with an empty
   Models array, the picker would show "0 models available" instead. }
 var
   R: TModelDiscoveryResult;
@@ -152,7 +152,7 @@ begin
 end;
 
 procedure TestCachePathCanonicalisation;
-{ Cache key is case-insensitive — `pasclaw model list openai` should
+{ Cache key is case-insensitive -- `pasclaw model list openai` should
   hit the same file as `pasclaw model list OpenAI` so we don't end up
   with two stale caches when a user types one and the catalog has
   the other. }
@@ -180,7 +180,7 @@ begin
   if FileExists(PathB) then DeleteFile(PathB);
 
   if SameText(PathA, PathB) then
-    Fail('cache paths collapse across different Names — keying is broken');
+    Fail('cache paths collapse across different Names -- keying is broken');
 
   A := Default(TModelDiscoveryResult);
   A.Ok := True; A.FetchedAt := 1717000000;
@@ -211,7 +211,7 @@ end;
 
 procedure TestKindNormalisationMatchesFactory;
 (* Codex P2 on PR #171. The model-refresh path looks the kind up via
-   LookupProvider — but a config carrying Kind='openai-compat' or
+   LookupProvider -- but a config carrying Kind='openai-compat' or
    blank Kind only resolves through NewProviderFromConfig's
    normalisation. NormalizeProviderKind is exposed from the factory
    for exactly this reason; pin its behaviour so the contract

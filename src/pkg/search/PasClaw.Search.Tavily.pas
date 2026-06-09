@@ -1,7 +1,7 @@
 (*
   PasClaw.Search.Tavily - Tavily Search API adapter.
 
-  Tavily is purpose-built for LLM augmentation — the response is
+  Tavily is purpose-built for LLM augmentation -- the response is
   pre-summarised and short. Lower-friction than Brave for "drop
   this into the model" use cases.
 

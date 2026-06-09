@@ -21,7 +21,7 @@
                         phone number. LINE and WhatsApp read their
                         credentials from PASCLAW_LINE_TOKEN /
                         PASCLAW_WHATSAPP_TOKEN+PHONE_ID at fire time
-                        — match the existing `pasclaw post` shape so
+                        -- match the existing `pasclaw post` shape so
                         cron and CLI use the same env vars.
 
   Both sinks return Boolean; failure logs warn and continues so a
@@ -88,7 +88,7 @@ begin
   if Length(Body) > MAX_CRON_OUTPUT_TO_MEMORY then
     Body := Copy(Body, 1, MAX_CRON_OUTPUT_TO_MEMORY) +
             sLineBreak + sLineBreak +
-            '_(truncated — full output went to the gateway log)_';
+            '_(truncated -- full output went to the gateway log)_';
 
   Section :=
     sLineBreak +

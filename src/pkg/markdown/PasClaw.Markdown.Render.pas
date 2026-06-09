@@ -24,7 +24,7 @@
 
   Falls back to passthrough on anything unrecognised. Empty input
   returns empty output. Plain text (no markers) is byte-identical
-  to input — important for streaming paths where we may render
+  to input -- important for streaming paths where we may render
   partial chunks.
 *)
 unit PasClaw.Markdown.Render;
@@ -44,7 +44,7 @@ uses
 
 const
   { Box-drawing / bullet glyphs encoded the way the active compiler's
-    `string` type wants them — different on FPC and Delphi, and you
+    `string` type wants them -- different on FPC and Delphi, and you
     can't paper over the difference with a shared literal.
 
       FPC mode delphi: string = AnsiString, Char = AnsiChar. A
@@ -54,7 +54,7 @@ const
 
       Delphi: string = UnicodeString, Char = WideChar. The same
       literal #$E2#$80#$A2 is three UTF-16 code units U+00E2 /
-      U+0094 / U+0080 — `â` followed by two C1 control characters,
+      U+0094 / U+0080 -- `â` followed by two C1 control characters,
       not the intended glyph. WriteConsoleW(PWideChar(S), Length(S))
       ships exactly those three wide chars to the console, producing
       mojibake. The Delphi-correct form is a single WideChar at the
@@ -87,7 +87,7 @@ function ReplaceFenced(const S, Open, Close, Wrap1, Wrap2: string): string;
   Wrap1<body>Wrap2. Open and Close are the marker strings (e.g. '**'
   for bold, '`' for inline code). Skips an empty body so '**' alone
   with no inside content stays verbatim. Uses PosEx to advance the
-  search index — Pos always finds the first occurrence and would
+  search index -- Pos always finds the first occurrence and would
   loop forever otherwise. }
 var
   Idx, BodyStart, EndIdx: Integer;
@@ -105,7 +105,7 @@ begin
     if EndIdx <= 0 then Break;
     if EndIdx = BodyStart then
     begin
-      { Empty body — skip past both markers as literal text. }
+      { Empty body -- skip past both markers as literal text. }
       Idx := EndIdx + Length(Close);
       Continue;
     end;
@@ -134,8 +134,8 @@ function RenderInline(const S: string): string;
   Pass order on the remaining text:
     1. Bold (**) before italic (*) so the inner * isn't mis-paired.
     2. Strikethrough (~~).
-    3. Links [text](url) — show URL after the styled text.
-  Headings, bullets, blockquotes are line-level — handled before
+    3. Links [text](url) -- show URL after the styled text.
+  Headings, bullets, blockquotes are line-level -- handled before
   this is called. }
 const
   PLACEHOLDER = #1;
@@ -295,7 +295,7 @@ begin
   SB := TStringBuilder.Create;
   try
     { TStringList.Text re-splits on the platform line terminator;
-      use SetTextStr or assign Text directly — both keep blank
+      use SetTextStr or assign Text directly -- both keep blank
       lines, which markdown relies on for paragraph separation. }
     Lines.Text := S;
     InCode := False;

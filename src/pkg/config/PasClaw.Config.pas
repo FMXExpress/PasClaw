@@ -19,7 +19,7 @@ const
      it gets bumped at release time and both compilers see the same value.
      FPC additionally honors a PASCLAW_VERSION environment variable at
      compile time (used by `make` to inject the short git SHA into
-     development builds) — if set it overrides VersionFallback at runtime;
+     development builds) -- if set it overrides VersionFallback at runtime;
      if empty the fallback wins. Delphi has no env-var equivalent, so
      Delphi builds always report VersionFallback. *)
   {$IFDEF FPC}
@@ -52,7 +52,7 @@ type
       Workspace
         Absolute path of the directory the model may operate inside.
         Empty string means "use the current working directory at the
-        time tools are configured" — handy for invoking
+        time tools are configured" -- handy for invoking
         `pasclaw agent` from a project root.
 
       AllowReadPaths / AllowWritePaths
@@ -130,7 +130,7 @@ type
 
   (* TSubagentSpec - declaration of a named subagent the parent agent
      can fan out to via the `spawn` tool. Each spec is a focused
-     "specialist" — its own system prompt, an allowlist of tools
+     "specialist" -- its own system prompt, an allowlist of tools
      inherited from the parent's registry, an optional model
      override, and an iteration cap. The spawned subagent runs as a
      standalone RunToolLoop call (not a separate TPasClawAgent) so it
@@ -141,17 +141,17 @@ type
        Description  one-line summary surfaced to the parent model
                     in the `spawn` tool's description so it can pick
                     the right specialist
-       SystemPrompt the subagent's specialisation prompt — replaces
+       SystemPrompt the subagent's specialisation prompt -- replaces
                     the parent's prompt for this child turn
        Tools        names of parent-registry tools the subagent is
                     allowed to call. Empty means "no tools" (a
                     prompt-driven specialist). 'spawn' is always
-                    excluded — no nested sub-subagents in v1.
+                    excluded -- no nested sub-subagents in v1.
        Model        empty = inherit parent's model. Cross-provider
                     model names go through the fallback chain (same
                     as the parent's loop).
        MaxIter      iteration cap for the subagent's tool loop. 0
-                    means default (4). Keep this tight — the
+                    means default (4). Keep this tight -- the
                     subagent should produce a focused answer, not
                     nest into a long conversation. *)
   TSubagentSpec = record
@@ -162,21 +162,21 @@ type
     Model:         string;
     MaxIter:       Integer;
   end;
-  { Named-type alias for dcc64 strict-array compatibility — assigning
+  { Named-type alias for dcc64 strict-array compatibility -- assigning
     Cfg.Subagents into a `TSubagentSpecArray` parameter (which
     PasClaw.Agent.Subagent.RegisterSpawnTool / TSpawnTool.Create take)
     used to E2010 because TConfig.Subagents was declared as an inline
     `array of TSubagentSpec`. Same pattern as TLLMProviderArray
     (PR #104) and TStringArray / TUInt32Array (PR #106). Owning the
     alias here means callers in higher layers pick it up by importing
-    PasClaw.Config — they don't have to re-declare. }
+    PasClaw.Config -- they don't have to re-declare. }
   TSubagentSpecArray = array of TSubagentSpec;
 
   (* TWebSearchConfig - web_search tool provider selection.
        Provider:   'duckduckgo' (default, no key) | 'brave' | 'tavily' |
                    'searxng'    | 'perplexity'
        APIKey:     fallback if no $PASCLAW_<KIND>_API_KEY env var.
-       BaseURL:    instance host for 'searxng' (no default — must be
+       BaseURL:    instance host for 'searxng' (no default -- must be
                    set since SearXNG is self-hosted). Ignored by the
                    other providers.
        MaxResults: cap on hits per query; the tool caps further at 25
@@ -188,13 +188,13 @@ type
     MaxResults: Integer;
   end;
 
-  (* TPromptCacheConfig — provider-side prompt caching.
+  (* TPromptCacheConfig -- provider-side prompt caching.
        Enabled: gate; when False, no cache_control breakpoints are
                 emitted and no prompt_cache_key is sent. Default True.
        TTL:     "" (default 5m) | "1h" (extended; Anthropic only).
                 Other strings pass through verbatim on Anthropic; OpenAI
                 ignores this field (auto-managed cache TTL).
-     Cache keying for OpenAI's prompt_cache_key is automatic — Cmd.Agent
+     Cache keying for OpenAI's prompt_cache_key is automatic -- Cmd.Agent
      hands the persistent session id down through TChatOptions.CacheKey
      so each conversation gets its own cache bucket. *)
   TPromptCacheConfig = record
@@ -205,7 +205,7 @@ type
   (* Anthropic-only: register Anthropic's server-side web tools
      (web_search_20260209 / web_fetch_20260209) in the request's
      tools array. Claude runs the queries / fetches on Anthropic's
-     side and stitches the results into the final response — no
+     side and stitches the results into the final response -- no
      round-trip through PasClaw's tool loop, no SearXNG / curl on
      the operator's box.
 
@@ -228,7 +228,7 @@ type
   (* OpenAI Chat Completions: opt-in server-side web search.
      Emits "web_search_options": {} as a top-level request field
      when WebSearch is True. Only OpenAI's search-capable models
-     honour the field — currently `gpt-5-search-api` (and the
+     honour the field -- currently `gpt-5-search-api` (and the
      deprecated `gpt-4o-search-preview` / `gpt-4o-mini-search-preview`,
      shutdown 2026-07-23). The operator must set Cfg.DefaultModel
      (or per-call model) to one of those; on `gpt-4o` and friends
@@ -236,11 +236,11 @@ type
 
      Off by default. Third-party OpenAI-compatible endpoints
      (Groq, OpenRouter, Together, vLLM, Ollama) do NOT recognise
-     web_search_options — flipping this on while pointed at one
+     web_search_options -- flipping this on while pointed at one
      of them is harmless but pointless.
 
      Unlike Anthropic's tools-array entry, this is a top-level
-     parameter — it does NOT collide with a user-defined
+     parameter -- it does NOT collide with a user-defined
      `web_search` function tool. Both can be active at once.
 
      See: https://developers.openai.com/api/docs/guides/tools-web-search *)
@@ -277,7 +277,7 @@ type
 
      On-by-default. Most operators picking Gemini want grounding;
      leaving it off would hide a free capability. Operators who
-     embed a custom function tool named "google_search" (rare —
+     embed a custom function tool named "google_search" (rare --
      the name collides with the Anthropic/OpenAI patterns) will
      hit a duplicate-name 400 on Gemini and should disable this. *)
   TGeminiServerToolsConfig = record
@@ -291,7 +291,7 @@ type
     { Provider names (matching TProviderConfig.Name) to try after
       DefaultProvider when the primary returns a retryable error
       (HTTP 429 / 5xx, network/TLS failure). Walked in order. Empty
-      array (default) means no fallback — primary failure surfaces
+      array (default) means no fallback -- primary failure surfaces
       directly. Configured via `pasclaw auth fallback openai gemini`
       or by editing config.json's "fallbacks": ["openai","gemini"]. }
     Fallbacks:  array of string;
@@ -304,7 +304,7 @@ type
     Subagents:  TSubagentSpecArray;  { see comment on the type alias }
     WebSearch:  TWebSearchConfig;
     PromptCache: TPromptCacheConfig;
-    (* Sender allowlist — canonical PasClaw.Identity strings or
+    (* Sender allowlist -- canonical PasClaw.Identity strings or
        wildcards ("slack:U123", "telegram:*", "*"). Channels call
        PasClaw.Identity.IsAllowedSender(Identity, AllowSenders)
        before invoking the agent; empty array = no gate (matches
@@ -319,7 +319,7 @@ type
     VaultToolsEnabled: Boolean;
     (* Off-by-default: when True, Cmd.Agent / Cmd.Gateway / Cmd.Serve
        register the web_fetch tool. Picoclaw doesn't ship a web_fetch
-       — its model fetches arbitrary URLs through shell + curl — so
+       -- its model fetches arbitrary URLs through shell + curl -- so
        PasClaw's default posture mirrors that. Flip this on for
        deployments where curl isn't available (sandboxed containers,
        constrained shells), or where the operator wants the tracked
@@ -330,7 +330,7 @@ type
        workspace/memory/ files, fused via Reciprocal Rank Fusion.
        Mirrors picoclaw/nanobot's hybrid memory store.
 
-       The vector half runs locally — an ONNX-Runtime'd embedding
+       The vector half runs locally -- an ONNX-Runtime'd embedding
        model (e.g. all-MiniLM-L6-v2 / bge-small) embeds query text
        and indexed chunks at write time. No outbound API calls;
        embeddings never leave the host.
@@ -340,12 +340,12 @@ type
        ONNX Runtime DLL, embedding model weights, sqlite-vec
        extension) lives in PasClaw.Memory.Vector (follow-up PR).
        When False, memory_search degrades to FTS5-only (the
-       current behaviour on main) — operators who don't want
+       current behaviour on main) -- operators who don't want
        300+MB of model weights on disk can flip this in
        config.json or answer 'n' at onboarding. *)
     VectorSearchEnabled: Boolean;
     (* Render markdown the model emits as ANSI-styled text in the
-       terminal (PasClaw.Markdown.Render). On by default — terminal
+       terminal (PasClaw.Markdown.Render). On by default -- terminal
        surfaces (pasclaw agent, pasclaw tui) call into it; serve /
        gateway leave it off because they return JSON to clients
        where ANSI escapes would be wrong. Flip in config.json or
@@ -359,7 +359,7 @@ type
        in-context body with a head + tail snippet plus a handle the
        model can dereference via `tool_output_get`. Default 0 = off
        (legacy verbatim behaviour). Operators flip it on in
-       config.json under "tool_output_cap" — 8192 is a reasonable
+       config.json under "tool_output_cap" -- 8192 is a reasonable
        starting cap (≈ 2K tokens). *)
     ToolOutputCap:     Integer;
     AnthropicServerTools: TAnthropicServerToolsConfig;
@@ -381,7 +381,7 @@ function FormatBuildInfo: string;
    was just initialised from DefaultChatOptions. Call this at every
    config-backed site that builds chat options (CLI, channels, gateway,
    TUI, embedder TPasClawAgent) so `prompt_cache.enabled: false` in
-   config.json reliably turns caching off on every code path — not
+   config.json reliably turns caching off on every code path -- not
    just `pasclaw agent`. (Codex P2 on PR #118: opt-out was only wired
    through Cmd.Agent.BuildLoopConfig.) Library-level DefaultChatOptions
    stays default-on so embedders who never build a TConfig still get
@@ -430,7 +430,7 @@ begin
   WebFetchEnabled      := False; { off by default; the model uses shell+curl }
   RenderMarkdown       := True;  { on by default for terminal surfaces; cmd/serve flips off }
   ToolOutputCap        := 0;     { off by default; operators opt in. See TConfig.ToolOutputCap. }
-  VectorSearchEnabled  := True;  { on by default; onboarding asks (default Y) — see TConfig comment }
+  VectorSearchEnabled  := True;  { on by default; onboarding asks (default Y) -- see TConfig comment }
   AnthropicServerTools.WebSearch        := False;
   AnthropicServerTools.WebSearchMaxUses := 0;
   AnthropicServerTools.WebFetch         := False;
@@ -562,7 +562,7 @@ begin
       Root.PutObject('web_search', Tmp);
     end;
 
-    { Only emit prompt_cache when non-default — keeps stock configs
+    { Only emit prompt_cache when non-default -- keeps stock configs
       tidy. Reading back: missing object => defaults (enabled, 5m). }
     if (not PromptCache.Enabled) or (PromptCache.TTL <> '') then
     begin
@@ -579,7 +579,7 @@ begin
       Root.PutArray('allow_senders', Arr);
     end;
 
-    { Off-by-default — only serialise when True so stock configs stay tidy. }
+    { Off-by-default -- only serialise when True so stock configs stay tidy. }
     if VaultToolsEnabled then
       Root.PutBool('vault_tools_enabled', True);
     if WebFetchEnabled then
@@ -589,7 +589,7 @@ begin
       and we round-trip correctly. }
     if not RenderMarkdown then
       Root.PutBool('render_markdown', False);
-    { Same round-trip rule as RenderMarkdown — default is True, only
+    { Same round-trip rule as RenderMarkdown -- default is True, only
       emit on the explicit-off path so 'memory_search: false' sticks
       across SaveConfig + LoadConfig. }
     if not VectorSearchEnabled then
@@ -613,7 +613,7 @@ begin
         Tmp.PutInt('web_fetch_max_uses', AnthropicServerTools.WebFetchMaxUses);
       Root.PutObject('anthropic_server_tools', Tmp);
     end;
-    { Always emit — the default flipped to True in #146, so an
+    { Always emit -- the default flipped to True in #146, so an
       operator who sets web_search: false in config.json needs that
       setting to round-trip. Skipping the emit when False would let
       the default win on the next load. }
@@ -622,7 +622,7 @@ begin
     Root.PutObject('openai_server_tools', Tmp);
 
     { Same round-trip rule as the OpenAI block: the default is True,
-      so we must emit unconditionally — otherwise `google_search:
+      so we must emit unconditionally -- otherwise `google_search:
       false` in config.json silently reverts on the next load. }
     Tmp := TJsonObject.Create;
     Tmp.PutBool('google_search', GeminiServerTools.GoogleSearch);

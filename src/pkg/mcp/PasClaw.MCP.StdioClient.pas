@@ -85,7 +85,7 @@ begin
     try
       if FProcess.Running then FProcess.Terminate;
     except
-      { ignore — we're tearing down }
+      { ignore -- we're tearing down }
     end;
     FreeAndNil(FProcess);
   end;
@@ -96,7 +96,7 @@ function SplitArgs(const S: string): TStringList;
   TStdioProcess.Spawn (no shell is involved). Splits on unquoted
   whitespace and honors paired single/double quotes; everything else,
   including backslashes, is taken literally. That keeps Windows paths
-  intact — most importantly UNC roots like \\server\share — which a
+  intact -- most importantly UNC roots like \\server\share -- which a
   POSIX-style \\-escape rule would mangle. When richer escaping is
   needed, an array-form config will eventually replace this entirely. }
 var

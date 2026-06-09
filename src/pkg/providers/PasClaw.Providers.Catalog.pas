@@ -43,7 +43,7 @@ type
     pfOpenAI,
     pfAnthropic,
     pfGemini,
-    pfPlaceholder  { kind known, no implementation yet — Bedrock/Azure/etc. }
+    pfPlaceholder  { kind known, no implementation yet -- Bedrock/Azure/etc. }
   );
 
   TAuthSchemeKind = (asBearer, asNone, asHeader);
@@ -70,7 +70,7 @@ type
 function LookupProvider(const Kind: string; out Spec: TProviderSpec): Boolean;
 
 { Returns a copy of every catalog entry, ordered by DisplayName, suitable
-  for menus. The list is small (~19 entries) and rebuilt on each call —
+  for menus. The list is small (~19 entries) and rebuilt on each call --
   callers are not expected to call this in a hot loop. }
 function AllProviderSpecs: TProviderSpecArray;
 
@@ -102,7 +102,7 @@ begin
   Result.Notes        := Notes;
 end;
 
-{ The catalog. New providers go here — one entry per row, no other code
+{ The catalog. New providers go here -- one entry per row, no other code
   change required for OpenAI-compatible endpoints. }
 function BuildCatalog: TProviderSpecArray;
 begin
@@ -147,7 +147,7 @@ begin
                        '',
                        MkAuth(asBearer),
                        'Fast inference (Llama-4, Kimi K2, Qwen3, compound-beta)');
-  (* Moonshot model defaults are time-sensitive — Codex P2 on PR #163
+  (* Moonshot model defaults are time-sensitive -- Codex P2 on PR #163
      caught the previous catalog rolling forward to kimi-k2, which
      Moonshot discontinued the entire k2 series on 2026-05-25
      (per https://platform.kimi.ai/docs/models). The active line at
@@ -195,7 +195,7 @@ begin
                        MkAuth(asNone),
                        'Local models, self-hosted');
   (* LM Studio runs an OpenAI-compatible server on port 1234 by
-     default and emits the same /v1/chat/completions shape — same
+     default and emits the same /v1/chat/completions shape -- same
      pfOpenAI + asNone profile as Ollama. DefaultModel left empty
      because the loaded model id depends on whatever the operator
      downloaded inside the LM Studio UI; the onboarding prompt
@@ -225,7 +225,7 @@ begin
   (* xAI Grok exposes a strict OpenAI-compatible chat-completions API
      at https://api.x.ai/v1/chat/completions, Bearer auth, identical
      request/response shape. The pfOpenAI provider talks to it
-     unchanged. Default points at grok-4-fast — operator can override
+     unchanged. Default points at grok-4-fast -- operator can override
      to grok-3 / grok-code-fast-1 / grok-2 / etc. via config or the
      onboarding prompt. *)
   Result[20] := MkSpec('xai',        'xAI (Grok)',
@@ -269,7 +269,7 @@ var
   Tmp: TProviderSpec;
 begin
   Result := BuildCatalog;
-  { Simple insertion sort by DisplayName — list is small and we'd rather
+  { Simple insertion sort by DisplayName -- list is small and we'd rather
     avoid pulling in System.Generics.Collections just for this. }
   for i := 1 to High(Result) do
   begin

@@ -87,7 +87,7 @@
           so users don't need libeay32.dll / ssleay32.dll alongside the
           exe. Defined in the Base group so every Platform × Config
           inherits it. To switch back to Indy for cross-checking,
-          delete this DCC_Define line — FPC ignores PASCLAW_NETHTTP
+          delete this DCC_Define line -- FPC ignores PASCLAW_NETHTTP
           regardless (TNetHTTPClient doesn't exist there).
         -->
         <DCC_Define>PASCLAW_NETHTTP;$(DCC_Define)</DCC_Define>
@@ -274,7 +274,7 @@
         <DCCReference Include="..\pkg\memory\PasClaw.Memory.Index.pas"/>
         <DCCReference Include="..\pkg\memory\PasClaw.Memory.Vector.pas"/>
 
-        <!-- pkg/memory/localvector — in-tree port of FMXExpress/localvector
+        <!-- pkg/memory/localvector -- in-tree port of FMXExpress/localvector
              (MIT, src/pkg/memory/localvector/LICENSE). Used by
              PasClaw.Memory.Vector for the hybrid FTS5 + sqlite-vec
              backend; provisioning surface lives in

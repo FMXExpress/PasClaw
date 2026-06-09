@@ -1,6 +1,6 @@
 program gemini_schema_strip_tests;
 (*
-  Covers SanitizeSchemaForGemini — the wire-boundary scrub that lets
+  Covers SanitizeSchemaForGemini -- the wire-boundary scrub that lets
   Gemini accept tool schemas containing additionalProperties (and
   other JSON-Schema-but-not-OpenAPI-3.0 fields) that MCP servers and
   external skill manifests emit.
@@ -8,7 +8,7 @@ program gemini_schema_strip_tests;
   Test 1 reproduces the exact 400 shape the user hit and asserts
   the unsupported fields are gone while the legitimate ones survive.
 
-  Test 2 covers Codex P2 on PR #153 — a tool parameter literally
+  Test 2 covers Codex P2 on PR #153 -- a tool parameter literally
   named "additionalProperties" must NOT be dropped by the walker.
   The original blind-recursion walker treated the `properties` map
   as a schema node and would strip user-defined keys colliding with
@@ -48,7 +48,7 @@ end;
 
 procedure TestRejectedFieldsScrubbed;
 const
-  { Same shape as the user's reported 400 — additionalProperties at
+  { Same shape as the user's reported 400 -- additionalProperties at
     two nesting levels plus $schema meta. }
   Bad =
     '{' +
@@ -82,7 +82,7 @@ const
       - A schema KEYWORD additionalProperties at the top level
         (should be stripped).
       - A user PROPERTY literally named additionalProperties inside
-        the `properties` map (must NOT be stripped — it's a tool
+        the `properties` map (must NOT be stripped -- it's a tool
         parameter name).
       - Same trap for $schema and $ref as user property names. }
   Bad =
@@ -104,7 +104,7 @@ begin
 
   { The user PROPERTIES survive even though they share names with
     schema keywords. Match on the description / type tag we put
-    inside their schemas — the bare key text "additionalProperties"
+    inside their schemas -- the bare key text "additionalProperties"
     can match either the property name OR the schema keyword, so we
     pin the assertion on a sibling that only exists if the property
     schema was preserved. }
@@ -112,7 +112,7 @@ begin
     'user property named "additionalProperties" survives');
   AssertContains(Out_, '"normal"', 'normal property survives');
 
-  { Top-level schema keywords ARE stripped — we proved that in test 1.
+  { Top-level schema keywords ARE stripped -- we proved that in test 1.
     Here, prove there are no instances of additionalProperties:false
     or $schema as a URL (the keyword forms) left, while accepting
     that "additionalProperties" as a key name in the properties map
@@ -157,7 +157,7 @@ begin
   Msgs[1].ToolCalls[0].Func.Name      := 'fs_list';
   Msgs[1].ToolCalls[0].Func.Arguments := '{"path":"."}';
   Msgs[1].ToolCalls[0].ProviderSignature := 'SIG_AAA_BBB_OPAQUE_BLOB';
-  { tool result echoed back as a user/tool turn — Gemini path }
+  { tool result echoed back as a user/tool turn -- Gemini path }
   Msgs[2].Role       := mrTool;
   Msgs[2].ToolCallId := 'gemini_call_fs_list_0';
   Msgs[2].Content    := '[".", "..", "README.md"]';
@@ -181,7 +181,7 @@ end;
 procedure TestNoSignatureWhenEmpty;
 { Gemini 2.x doesn't require thoughtSignature. When ProviderSignature
   is empty (the common case for non-Gemini-3 paths), BuildRequest must
-  NOT emit an empty "thoughtSignature":"" field — that's invalid wire
+  NOT emit an empty "thoughtSignature":"" field -- that's invalid wire
   shape. }
 var
   Msgs:  TMessageArray;
@@ -259,7 +259,7 @@ end;
 
 procedure TestSessionPersistenceEmpty;
 { Empty ProviderSignature must NOT add an empty key to the session
-  file — keeps stock session JSON tidy for non-Gemini-3 sessions
+  file -- keeps stock session JSON tidy for non-Gemini-3 sessions
   (the common case) and round-trips back to empty. }
 var
   TC, Restored: TToolCall;
@@ -321,7 +321,7 @@ end;
 procedure TestGoogleSearchOmittedWhenDisabled;
 { NoGeminiServerTools (or any record with GoogleSearch=False) means
   no google_search entry, and with no local tools, no tools array
-  at all — Gemini 400s on an empty tools[]. }
+  at all -- Gemini 400s on an empty tools[]. }
 var
   Msgs:  TMessageArray;
   Tools: TToolDefinitionArray;
@@ -405,7 +405,7 @@ begin
   Body := BuildRequest(Msgs, Tools, 'gemini-2.5-flash', Opts, ST);
 
   AssertContains(Body, '"functionDeclarations"',
-    'local tools kept on 2.x — they were the user''s explicit config');
+    'local tools kept on 2.x -- they were the user''s explicit config');
   AssertContains(Body, '"fs_list"',
     'local tool name preserved on 2.x');
   AssertMissing(Body, '"google_search"',
@@ -414,7 +414,7 @@ end;
 
 procedure TestGoogleSearchEmittedOnPreGemini3WithoutLocalTools;
 (* The suppression only applies to the combo. Bare google_search on
-   2.x is a valid request — keep emitting it so default-on grounding
+   2.x is a valid request -- keep emitting it so default-on grounding
    still works on 2.x for non-tool-loop conversations. *)
 var
   Msgs:  TMessageArray;

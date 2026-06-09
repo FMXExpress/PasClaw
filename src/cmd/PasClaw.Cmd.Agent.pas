@@ -1,5 +1,5 @@
 ﻿{
-  Agent — chat with the assistant.
+  Agent -- chat with the assistant.
 
   Two modes:
     pasclaw agent -m "single query"   one-shot
@@ -70,7 +70,7 @@ type
       workspace/sessions/<id>.json. Non-empty AND missing on disk =
       create that session id with empty history (so a script can
       pre-seed an id like "daily-2026-06-01"). RunSingleTurn (one-shot
-      -m) ignores this — single turns aren't worth persisting. }
+      -m) ignores this -- single turns aren't worth persisting. }
     Session:       string;
   end;
 
@@ -105,7 +105,7 @@ begin
   Result.Provider      := '';
   Result.SystemPrompt  := '';
   Result.Thinking      := '';
-  Result.MaxTokens     := 8192;   { see DefaultChatOptions in PasClaw.Providers.Types — same rationale }
+  Result.MaxTokens     := 8192;   { see DefaultChatOptions in PasClaw.Providers.Types -- same rationale }
   Result.MaxIterations := 8;
   Result.NoTools       := False;
   Result.NoMCP         := False;
@@ -185,7 +185,7 @@ begin
     declined to enable URL fetching shouldn't get a second tool
     that also fetches URLs. }
   if EnableWebFetch then RegisterMemoryFetchTool(Result);
-  { Vault tools register only when explicitly enabled — callers pass
+  { Vault tools register only when explicitly enabled -- callers pass
     Cfg.VaultToolsEnabled. Off-by-default per the onboarding opt-in
     flow; flipping the config flag (or re-running `pasclaw onboard`)
     is the way to turn it on. }
@@ -199,7 +199,7 @@ begin
 end;
 
 { When the operator declared subagents in config.json, install the
-  `spawn` tool into the registry — once MCP tools have already been
+  `spawn` tool into the registry -- once MCP tools have already been
   bridged in so subagents can include them in their allowlist.
   Returns the created spawn tool so the caller can `Free` it during
   cleanup; nil when no subagents are configured. }
@@ -241,7 +241,7 @@ begin
   { ToolsEnabled tracks the registry we are about to hand RunToolLoop
     so the system prompt stays in sync with what the model can
     actually call. Reg is nil when --no-tools is set (RunBuilder
-    passes nil; see Run* call sites above) — deriving from the
+    passes nil; see Run* call sites above) -- deriving from the
     registry, not from A.NoTools, also handles the case where future
     callers nil out Reg for other reasons. }
   Result.Options.SystemPrompt  := BuildSystemPrompt(Cfg, A.SystemPrompt, Reg <> nil);
@@ -282,9 +282,9 @@ end;
 
 { One-line per-turn token summary. Cache fields only appear when
   non-zero so a non-Anthropic / cache-disabled run stays clean.
-  cache_w = cache_creation (a one-time write cost — 25% premium on
+  cache_w = cache_creation (a one-time write cost -- 25% premium on
   Anthropic but only on the first turn); cache_r = cache_read
-  (the win — 90% discount on Anthropic, 50% on OpenAI). }
+  (the win -- 90% discount on Anthropic, 50% on OpenAI). }
 function FormatTokenLine(const U: TUsageInfo; Iterations: Integer): string;
 begin
   Result := Format('  [tokens in=%d out=%d', [U.InputTokens, U.OutputTokens]);
@@ -297,7 +297,7 @@ end;
    and uncached portions. Anthropic reports input_tokens EXCLUDING
    cached/written tokens (those are separate fields), so a Reads +
    InputTokens denominator is needed for a correct hit-rate. OpenAI
-   reports cached_tokens as a SUBSET of prompt_tokens — InputTokens
+   reports cached_tokens as a SUBSET of prompt_tokens -- InputTokens
    alone is the right denominator. We distinguish by provider name
    because cache_creation_tokens can be zero on a pure-read turn,
    so "presence of CacheCreatedTokens" isn't a reliable Anthropic
@@ -313,8 +313,8 @@ end;
 function MaybeRender(const Cfg: TConfig; const S: string): string; inline;
 { Wraps the LLM's output in PasClaw.Markdown.Render when the
   operator hasn't turned it off (Cfg.RenderMarkdown, default True).
-  Markdown rendering targets terminal surfaces — pasclaw agent and
-  pasclaw tui — and is opt-out for operators who pipe the output
+  Markdown rendering targets terminal surfaces -- pasclaw agent and
+  pasclaw tui -- and is opt-out for operators who pipe the output
   through other tools that want the raw markdown. }
 begin
   if Cfg.RenderMarkdown then Result := RenderMarkdown(S)
@@ -336,7 +336,7 @@ var
 begin
   if not PickProvider(Cfg, A, Provider, Err) then
   begin
-    PrintLn(Ansi.Yellow + '(offline preview — ' + Err + ')' + Ansi.Reset);
+    PrintLn(Ansi.Yellow + '(offline preview -- ' + Err + ')' + Ansi.Reset);
     PrintLn('You: ' + Prompt);
     PrintLn('Assistant: <provider not configured; run `pasclaw onboard`>');
     Exit;
@@ -347,7 +347,7 @@ begin
     by value; if we hand it an empty string the child subagent loop
     will fall back to the provider's GetDefaultModel instead of the
     user's --model selection. RunInteractive already does this in the
-    right order — fixing the asymmetry here. (Codex P2 on PR #107.) }
+    right order -- fixing the asymmetry here. (Codex P2 on PR #107.) }
   if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
 
   Reg := nil;
@@ -426,7 +426,7 @@ begin
   TotalPrompt     := 0;
   Offline := not PickProvider(Cfg, A, Provider, Err);
   if Offline then
-    PrintLn(Ansi.Yellow + '(offline preview — ' + Err + ')' + Ansi.Reset);
+    PrintLn(Ansi.Yellow + '(offline preview -- ' + Err + ')' + Ansi.Reset);
   PrintLn(Ansi.Dim + 'PasClaw interactive chat. /help for commands, /quit to exit.' + Ansi.Reset);
 
   if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
@@ -443,7 +443,7 @@ begin
     SetLength(Msgs, 0);
     ThinkingOn := False;
 
-    { Persistence is on by default in interactive mode — a passed
+    { Persistence is on by default in interactive mode -- a passed
       --session resumes that id (or starts fresh under it when the
       file doesn't exist), an empty --session auto-allocates a new
       id so the conversation survives Ctrl-C / crash regardless.
@@ -456,11 +456,11 @@ begin
       for i := 0 to High(Session.Messages) do Msgs[i] := Session.Messages[i];
       SystemPromptOverride := Session.Meta.SystemPromptOverride;
       PrintLn(Ansi.Dim + '(resumed session ' + Session.Meta.Id +
-              ' — ' + IntToStr(Length(Msgs)) + ' messages)' + Ansi.Reset);
+              ' -- ' + IntToStr(Length(Msgs)) + ' messages)' + Ansi.Reset);
     end
     else
       PrintLn(Ansi.Dim + '(new session ' + Session.Meta.Id +
-              ' — pasclaw resume ' + Session.Meta.Id + ' to continue later)' + Ansi.Reset);
+              ' -- pasclaw resume ' + Session.Meta.Id + ' to continue later)' + Ansi.Reset);
 
     while True do
     begin
@@ -480,7 +480,7 @@ begin
         if Line = '/new' then
         begin
           { Old session's queue might have leftover pending steering
-            messages — drop them before re-keying so the fresh session
+            messages -- drop them before re-keying so the fresh session
             doesn't pick up the previous conversation's interrupts. }
           ClearSteering(Session.Meta.Id);
           Session.Free;
@@ -497,7 +497,7 @@ begin
       end;
       if Copy(Line, 1, 7) = '/steer ' then
       begin
-        { Same-process steering — handy for testing, but the real
+        { Same-process steering -- handy for testing, but the real
           win is `pasclaw steer <id> "..."` from another terminal
           while a long loop is mid-execution. }
         if PushSteering(Session.Meta.Id, Copy(Line, 8, MaxInt)) then
@@ -509,7 +509,7 @@ begin
       if Line = '/tools' then
       begin
         if Reg = nil then
-          PrintLn('(tools disabled — restart without --no-tools)')
+          PrintLn('(tools disabled -- restart without --no-tools)')
         else
         begin
           Names := Reg.Names;
@@ -576,7 +576,7 @@ begin
         if (Provider <> nil) and (not Provider.SupportsThinking) then
         begin
           PrintLn(Ansi.Yellow + 'provider ' + Provider.GetName +
-                  ' does not support extended thinking — flag ignored.' + Ansi.Reset);
+                  ' does not support extended thinking -- flag ignored.' + Ansi.Reset);
           Continue;
         end;
         ThinkingOn := not ThinkingOn;
@@ -607,7 +607,7 @@ begin
         Msgs := CompactMessages(Provider, Model, Msgs,
                                  CompactedLiveOpts, CompactOptsLocal);
         SystemPromptOverride := CompactedLiveOpts.SystemPrompt;
-        { Persist the compacted state immediately — otherwise a
+        { Persist the compacted state immediately -- otherwise a
           /quit or Ctrl-C before the next LLM turn loses the
           summary and resume replays the full transcript. Codex P2
           on PR #117. }
@@ -624,7 +624,7 @@ begin
       begin
         PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ' (offline): I would respond once a provider is configured.');
         SetLength(Msgs, Length(Msgs) + 1);
-        Msgs[High(Msgs)] := MakeMessage(mrAssistant, '(no response — offline)');
+        Msgs[High(Msgs)] := MakeMessage(mrAssistant, '(no response -- offline)');
         Continue;
       end;
 
@@ -654,7 +654,7 @@ begin
       if Session <> nil then
       begin
         LoopCfg.Options.CacheKey := Session.Meta.Id;
-        { Steering queue key — RunToolLoop drains it at iteration
+        { Steering queue key -- RunToolLoop drains it at iteration
           top and folds pending messages into history as
           "[user steering] ..." system notes. The other terminal's
           `pasclaw steer <session-id> "..."` writes to the same
@@ -662,7 +662,7 @@ begin
         LoopCfg.SteeringKey := Session.Meta.Id;
       end;
       { /think: apply ThinkingLevel for this turn, then clear so
-        subsequent turns reset (matches the OpenClaw /think model —
+        subsequent turns reset (matches the OpenClaw /think model --
         single-turn extended thinking). The user can /think again
         to keep it on. }
       if ThinkingOn then
@@ -690,7 +690,7 @@ begin
           interactive turn starts from the summarised state, not the
           full pre-compaction transcript (Codex PR #87 P2). If
           compaction didn't fire this turn, Loop.FinalMessages mirrors
-          Msgs + new assistant/tool entries — same growth path as
+          Msgs + new assistant/tool entries -- same growth path as
           before. If it DID fire, Msgs shrinks to the compacted view
           and SystemPromptOverride below preserves the summary across
           subsequent BuildLoopConfig calls. }
@@ -708,7 +708,7 @@ begin
         end;
         SystemPromptOverride := Loop.FinalSystemPrompt;
         { Strip the per-turn working-state prefix we prepended in
-          BuildLoopConfig — if compaction didn't fire, the prefix
+          BuildLoopConfig -- if compaction didn't fire, the prefix
           comes back verbatim and persisting it would re-prepend
           on every subsequent turn, accumulating stale snapshots.
           When compaction DID fire, the summariser may have
@@ -735,7 +735,7 @@ begin
         if Length(Loop.FinalMessages) > 0 then
           UpdateWorkingStateAfterTurn(Session.Meta, Loop.FinalMessages);
 
-        { Persist after every successful turn — crash / Ctrl-C in
+        { Persist after every successful turn -- crash / Ctrl-C in
           the middle of the NEXT user prompt only loses what they
           were typing, not the existing conversation. }
         PersistSession;

@@ -25,7 +25,7 @@ uses
 
 type
   (* Opt-in OpenAI server-side tool toggles. Mirrors
-     PasClaw.Config.TOpenAIServerToolsConfig — kept here so the
+     PasClaw.Config.TOpenAIServerToolsConfig -- kept here so the
      provider unit doesn't have to USE the config unit. *)
   TOpenAIServerTools = record
     WebSearch: Boolean;
@@ -137,7 +137,7 @@ begin
         Result[0] := MakeHeader(FAuth.HeaderName, FAPIKey);
       end;
   else
-    { asBearer is the default — and the safety net for any future enum
+    { asBearer is the default -- and the safety net for any future enum
       value we forget to handle here. Skip emitting the header when the
       key is empty (local providers misconfigured as Bearer still work). }
     if FAPIKey = '' then
@@ -177,14 +177,14 @@ begin
       don't accidentally share state and one thread's cache survives
       load-balancer reshuffles. Empty key (e.g. the one-shot path
       that doesn't have a session) falls back to OpenAI's content-
-      hash bucketing — slightly less stable but still functional. }
+      hash bucketing -- slightly less stable but still functional. }
     if Options.CacheEnabled and (Options.CacheKey <> '') then
       Root.PutStr('prompt_cache_key', Options.CacheKey);
 
     (* Server-side web search. Empty object is the documented
        "enable with defaults" form; the user_location refinement and
        Responses-API-only fields (search_context_size, domain filters,
-       etc.) aren't exposed yet — operators who need them can drop
+       etc.) aren't exposed yet -- operators who need them can drop
        to the Responses API directly. Field is a no-op on models that
        don't recognise it (everything except OpenAI's *-search-api /
        *-search-preview families).
@@ -262,7 +262,7 @@ begin
       Root.PutArray('tools', ToolArr);
 
       { tool_choice maps 1:1 to the OpenAI Chat Completions schema:
-          "auto" / "none" / "required" — emitted as a string field.
+          "auto" / "none" / "required" -- emitted as a string field.
         Empty means "do not emit; provider default applies". The
         function-by-name object form is not yet supported here;
         TChatOptions.ToolChoice is a plain string. }
@@ -350,7 +350,7 @@ begin
         inside `prompt_tokens_details`. The number is already
         included in `prompt_tokens` (cached tokens are billed
         at 50% rather than excluded), so we report it as cache
-        reads but do NOT subtract from InputTokens — the agent UI
+        reads but do NOT subtract from InputTokens -- the agent UI
         is then free to compute "uncached prompt = input - read"
         and show savings. }
       PromptDetails := Usage.ChildObject('prompt_tokens_details');

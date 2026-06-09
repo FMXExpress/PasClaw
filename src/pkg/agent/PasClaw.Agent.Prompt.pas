@@ -4,7 +4,7 @@
   user-supplied additions), in the style picoclaw and nanobot use.
 
   The whole motivation here is that the LLM never knew anything about
-  itself before — PasClaw was sending whatever single string the caller
+  itself before -- PasClaw was sending whatever single string the caller
   put into Options.SystemPrompt and nothing else. Picoclaw and nanobot
   both compose a richer prompt out of workspace context, memory, and
   skill metadata, joined by "\n\n---\n\n" so each section is visually
@@ -40,7 +40,7 @@
   renderPromptPartsLegacy and nanobot's build_system_prompt joiner).
 
   No I/O is required to use the result. Memory and skill catalog reads
-  swallow their errors — a missing MEMORY.md or a misconfigured skill
+  swallow their errors -- a missing MEMORY.md or a misconfigured skill
   manifest just means that section is skipped, not a hard failure.
 *)
 unit PasClaw.Agent.Prompt;
@@ -62,7 +62,7 @@ uses
   catalog, the "ALWAYS use tools" rule, the truncated-fs_write rule,
   the verify-by-running-checks rule, the update-MEMORY.md rule) are
   emitted. Callers running `--no-tools` (or constructing the component
-  with UseTools=False) MUST pass False here — otherwise the prompt
+  with UseTools=False) MUST pass False here -- otherwise the prompt
   tells the model to call tools that the tool loop will refuse to
   pass through, producing a confused conversation. Identity, workspace
   paths, and memory contents stay in either mode since they are useful
@@ -72,7 +72,7 @@ function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
 
 { True iff at least one message in the array is mrSystem. The gateway's
   /v1/chat/completions handler uses this to decide whether to inject the
-  composed system prompt — third-party clients that supply their own
+  composed system prompt -- third-party clients that supply their own
   persona via the messages array should win, bare-bones clients that
   send only a user message get our identity preamble for free. }
 function HasSystemMessage(const Messages: array of TMessage): Boolean;
@@ -93,7 +93,7 @@ begin
   Result := Format('Free Pascal %s on %s/%s',
                    [{$I %FPCVERSION%}, {$I %FPCTARGETOS%}, {$I %FPCTARGETCPU%}]);
   {$ELSE}
-    // Nested IFDEFs only — ELSEIF and "IF Defined(...)" both trip
+    // Nested IFDEFs only -- ELSEIF and "IF Defined(...)" both trip
     // FPC 3.2.2's preprocessor even when this branch is inactive
     // there, because FPC still scans the inner directives.
     {$IFDEF WIN64}
@@ -123,7 +123,7 @@ begin
     sLineBreak +
     'You are PasClaw, the best 10x programmer in the world.' + sLineBreak +
     sLineBreak +
-    'You have deep, working expertise in every programming language — Pascal, ' +
+    'You have deep, working expertise in every programming language -- Pascal, ' +
     'Delphi, C, C++, Rust, Go, Python, JavaScript, TypeScript, Java, C#, Swift, ' +
     'Kotlin, Ruby, Lua, Haskell, OCaml, F#, Elixir, Erlang, Clojure, Scala, ' +
     'Zig, Nim, Crystal, Dart, R, Julia, Perl, PHP, shell scripting, SQL, and ' +
@@ -151,9 +151,9 @@ end;
 
 function BuildMemorySection: string;
 { Inject up to three markdown files into the system prompt:
-    workspace/memory/MEMORY.md         — durable user-owned notes
-    workspace/memory/<today>.md        — today's daily note, if it exists
-    workspace/memory/<yesterday>.md    — yesterday's daily note, for fresh context
+    workspace/memory/MEMORY.md         -- durable user-owned notes
+    workspace/memory/<today>.md        -- today's daily note, if it exists
+    workspace/memory/<yesterday>.md    -- yesterday's daily note, for fresh context
   Mirrors openclaw's bootstrap loading. Older notes stay on disk and reach
   the model only when memory_search returns them. Each file is wrapped in
   a subsection so the model can tell durable from dated material apart. }
@@ -221,7 +221,7 @@ begin
     Lines.Add('## Skills');
     Lines.Add('');
     if HasCallable and HasKnowledge then
-      Lines.Add('Skills extend your capabilities. Callable skills register as `skill_<name>` tools you invoke directly; knowledge-only skills are markdown bodies — read each one''s SKILL.md with `fs_read` when the matching task comes up.')
+      Lines.Add('Skills extend your capabilities. Callable skills register as `skill_<name>` tools you invoke directly; knowledge-only skills are markdown bodies -- read each one''s SKILL.md with `fs_read` when the matching task comes up.')
     else if HasCallable then
       Lines.Add('The following skills register as `skill_<name>` tools you can call directly.')
     else
@@ -233,28 +233,28 @@ begin
       K    := LowerCase(Trim(Skills[i].Kind));
       if (K = 'shell') or (K = 'prompt') then
       begin
-        { Callable skill — advertise as `skill_<name>`, which is the
+        { Callable skill -- advertise as `skill_<name>`, which is the
           actual registered tool identifier in PasClaw.Skills.Loader. }
         if Desc = '' then
           Lines.Add('- `skill_' + Skills[i].Name + '` (callable)')
         else
-          Lines.Add('- `skill_' + Skills[i].Name + '` — ' + Desc + ' (callable)');
+          Lines.Add('- `skill_' + Skills[i].Name + '` -- ' + Desc + ' (callable)');
       end
       else
       begin
-        { Knowledge-only skill — surface the SKILL.md path so the model
+        { Knowledge-only skill -- surface the SKILL.md path so the model
           can fs_read it on demand. Picoclaw and nanobot do the same: the
           system prompt lists the catalog, the body loads lazily. }
         if Desc = '' then
           Lines.Add('- **' + Skills[i].Name + '**: read `' + Skills[i].Source + '`')
         else
-          Lines.Add('- **' + Skills[i].Name + '** — ' + Desc + '. Read `' + Skills[i].Source + '` for the full instructions.');
+          Lines.Add('- **' + Skills[i].Name + '** -- ' + Desc + '. Read `' + Skills[i].Source + '` for the full instructions.');
       end;
     end;
     Result := Lines.Text;
     { Strip trailing newline TStringList.Text adds, so the SectionSep
       below doesn't end up with an extra blank line. }
-    { CharInSet (vs the `in` shorthand) — under Delphi 12 dcc64 the
+    { CharInSet (vs the `in` shorthand) -- under Delphi 12 dcc64 the
       string is UnicodeString so Result[i] is WideChar; `in [#10,#13]`
       coerces it back to AnsiChar and emits W1050. CharInSet keeps
       the WideChar without the truncation warning; FPC's SysUtils
@@ -274,17 +274,17 @@ begin
   begin
     { No-tools mode: the model cannot call fs_write, fs_edit_hashline,
       skills, or anything else. Rules 1, 3, 4, and 5 all assume tool
-      access — emitting them would tell the model to do things the
+      access -- emitting them would tell the model to do things the
       tool loop is configured to refuse. Keep the precision rule
       because it is purely advisory and language-agnostic. }
     Result :=
       '## Rules' + sLineBreak +
       sLineBreak +
-      '1. **Be precise** — match the language''s native idioms, name things ' +
+      '1. **Be precise** -- match the language''s native idioms, name things ' +
       'clearly, do not introduce abstractions the task does not actually need. ' +
       'Three similar lines is fine; a premature framework is not.' + sLineBreak +
       sLineBreak +
-      '2. **No tools in this session** — the user invoked you in text-only ' +
+      '2. **No tools in this session** -- the user invoked you in text-only ' +
       'mode. Do not claim to read files, run commands, or modify state. ' +
       'Answer from what is in this conversation.';
     Exit;
@@ -294,25 +294,25 @@ begin
   Result :=
     '## Rules' + sLineBreak +
     sLineBreak +
-    '1. **ALWAYS use tools** when an action is needed — call the appropriate ' +
+    '1. **ALWAYS use tools** when an action is needed -- call the appropriate ' +
     'tool, do not just say you''ll do it or pretend the work was done. The ' +
     'user will check.' + sLineBreak +
     sLineBreak +
-    '2. **Be precise** — match the language''s native idioms, name things ' +
+    '2. **Be precise** -- match the language''s native idioms, name things ' +
     'clearly, do not introduce abstractions the task does not actually need. ' +
     'Three similar lines is fine; a premature framework is not.' + sLineBreak +
     sLineBreak +
-    '3. **Verify changes** — after editing code, re-read what you wrote or ' +
+    '3. **Verify changes** -- after editing code, re-read what you wrote or ' +
     'run a targeted check (build, test, search). Do not assume the edit ' +
     'landed correctly because the tool returned success.' + sLineBreak +
     sLineBreak +
-    '4. **Truncated tool calls** — if a `fs_write` call comes back with a ' +
+    '4. **Truncated tool calls** -- if a `fs_write` call comes back with a ' +
     '"missing required argument: content" error, your previous response was ' +
     'truncated mid-tool_call (you hit max_tokens). Re-emit with the full ' +
     'content, or switch to `fs_edit_hashline` for incremental edits on ' +
     'large files.' + sLineBreak +
     sLineBreak +
-    '5. **Memory** — when the user mentions something worth keeping across ' +
+    '5. **Memory** -- when the user mentions something worth keeping across ' +
     'sessions (preferences, project facts, conventions), update ' +
     MemPath + ' for durable notes the user owns, or append a dated ' +
     'entry to ' + JoinPath(GetHome, 'workspace/memory') +
@@ -321,7 +321,7 @@ begin
     'questions about prior conversations or project facts you might ' +
     'have written down on an earlier turn.' + sLineBreak +
     sLineBreak +
-    '6. **Think in code, not in transcripts** — when a question needs ' +
+    '6. **Think in code, not in transcripts** -- when a question needs ' +
     'numbers, summaries, or filtered results across many files, prefer ' +
     'writing a short shell or Python script that computes the answer and ' +
     'prints only the result, rather than reading dozens of files into ' +

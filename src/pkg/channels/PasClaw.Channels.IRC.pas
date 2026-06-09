@@ -3,13 +3,13 @@
 
   Connects to a single server, joins a single channel (extending to
   multi-channel is a config-loop away), and replies in-channel to
-  any message addressed to the bot — either prefixed with the bot's
+  any message addressed to the bot -- either prefixed with the bot's
   nickname (e.g. "BotName: tell me about Pascal") or via private
   message. Mirrors the Telegram/Matrix bot shape: holds Cfg /
   Provider / Registry and runs RunToolLoop inline on each match.
 
   TIdIRC handles the wire protocol on its own dispatcher thread, so
-  the bot doesn't need a worker thread of its own — Start blocks
+  the bot doesn't need a worker thread of its own -- Start blocks
   only long enough to connect + JOIN, then returns. Reply dispatch
   runs on the IRC dispatcher's context thread.
 
@@ -17,7 +17,7 @@
     Server hostname: $PASCLAW_IRC_SERVER     (e.g. irc.libera.chat)
     Port:            $PASCLAW_IRC_PORT       (default 6667 plain,
                                               6697 if TLS; this Wave 1
-                                              adapter ships plaintext —
+                                              adapter ships plaintext --
                                               users wanting TLS today
                                               can stunnel locally)
     Nickname:        $PASCLAW_IRC_NICK
@@ -28,7 +28,7 @@
   Reply addressing:
     Channel msg starting with "<nick>:" or "<nick>," → bot replies.
     Direct PM to the bot                              → bot replies.
-    Anything else in the channel is ignored — there's enough chatter
+    Anything else in the channel is ignored -- there's enough chatter
     on IRC that a code agent yelling at every line is a no-go.
 
   Out of scope for Wave 1 (documented for future work):
@@ -214,7 +214,7 @@ begin
   begin
     if FClient <> nil then
       FClient.Say(ReplyTarget,
-                   SenderNick + ': (no provider configured — run `pasclaw onboard`)');
+                   SenderNick + ': (no provider configured -- run `pasclaw onboard`)');
     Exit;
   end;
 
@@ -243,12 +243,12 @@ begin
   if RunToolLoop(LoopCfg, Msgs, Loop) and (Loop.Content <> '') then
     Response := Loop.Content
   else
-    Response := '(sorry — model returned no content)';
+    Response := '(sorry -- model returned no content)';
 
   if FClient = nil then Exit;
 
   { Channel replies prefix with the sender's nick so they know it's
-    aimed at them. PMs don't need that — the conversation context
+    aimed at them. PMs don't need that -- the conversation context
     is implicit. }
   if (Length(ReplyTarget) > 0) and (ReplyTarget[1] = '#') then
     FClient.Say(ReplyTarget, SenderNick + ': ' + Response)
@@ -264,7 +264,7 @@ var
   IsAddressed: Boolean;
   ReplyTarget: string;
 begin
-  if SameText(ANickname, FNick) then Exit;   { our own echoes — ignore }
+  if SameText(ANickname, FNick) then Exit;   { our own echoes -- ignore }
 
   if SameText(ATarget, FNick) then
   begin
@@ -298,7 +298,7 @@ begin
   if FClient <> nil then Exit;
   if (FServer = '') or (FNick = '') then
   begin
-    LogError('irc: server or nick missing — bot not started', []);
+    LogError('irc: server or nick missing -- bot not started', []);
     Exit;
   end;
 

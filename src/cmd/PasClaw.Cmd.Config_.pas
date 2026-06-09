@@ -1,4 +1,4 @@
-{ Config — view/edit raw config. }
+{ Config -- view/edit raw config. }
 unit PasClaw.Cmd.Config_;
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}

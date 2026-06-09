@@ -20,7 +20,7 @@
       PC.UseTools := True;
       if PC.Chat('hi', Reply, Err) then WriteLn(Reply);
 
-  Both styles share the same instance — RegisterTool / Run / Chat /
+  Both styles share the same instance -- RegisterTool / Run / Chat /
   ChatHistory / Execute can be mixed freely. Tools registered via
   RegisterTool are added to the same TToolRegistry the built-ins
   populate, so they're visible to the agent loop alongside web_search,
@@ -32,7 +32,7 @@
 
   Both compose the same building blocks the CLI uses (LoadConfig,
   NewProviderFromConfig, TToolRegistry, RegisterFSTools/Shell, MCP
-  bridge, TGatewayServer, RunToolLoop) — no business logic is
+  bridge, TGatewayServer, RunToolLoop) -- no business logic is
   duplicated, only adapted to TComponent property/event idioms.
 
   Single-instance contract: PasClaw.MCP.Bridge and PasClaw.Skills.Loader
@@ -46,7 +46,7 @@
   Register installs both components onto the `PasClaw` palette tab when
   this unit is included in a design-time package.
 
-  The legacy unit name PasClaw.Component still works — it is a 5-line
+  The legacy unit name PasClaw.Component still works -- it is a 5-line
   shim that re-exports everything from here, so existing code that
   uses PasClaw.Component compiles unchanged.
 *)
@@ -94,7 +94,7 @@ type
     FUseHashline:    Boolean;
     FBuiltinsInstalled: Boolean;  { tracks built-in tool / skill / MCP
                                     install separately from FRegistry's
-                                    existence — RegisterTool can create
+                                    existence -- RegisterTool can create
                                     the registry early without skipping
                                     the lazy built-in install on first
                                     Chat. }
@@ -148,13 +148,13 @@ type
       and frees it in Destroy. Tools registered this way appear in
       the same registry as the built-ins, so they're visible to the
       agent loop on the next Chat/Run call. Safe to call before or
-      after the first Chat — the registry is built lazily but
+      after the first Chat -- the registry is built lazily but
       RegisterTool ensures it exists. }
     procedure RegisterTool(ATool: TPasClawTool);
 
     { Register a TPasClawHook (PasClaw.Agent.Hooks). Hooks fire at
-      well-defined points in the agent loop — before each turn,
-      before/after each tool dispatch, on error — and can observe,
+      well-defined points in the agent loop -- before each turn,
+      before/after each tool dispatch, on error -- and can observe,
       transform, or veto. AHook becomes owned by the agent and is
       freed in Destroy. Common patterns:
 
@@ -171,7 +171,7 @@ type
 
     { Code-driven provider configuration. Builds a TProviderConfig
       in-memory from a catalog Kind ("anthropic", "openai", "gemini",
-      etc. — see PasClaw.Providers.Catalog) plus the API key the
+      etc. -- see PasClaw.Providers.Catalog) plus the API key the
       caller supplies (typically read from an env var). The catalog
       fills in DefaultBase and DefaultModel; Model/APIBase overloads
       override either default.
@@ -185,7 +185,7 @@ type
           rebuilds with the new credentials.
 
       Lets an embedded agent run without a populated
-      ~/.pasclaw/config.json — the binary ships with its own
+      ~/.pasclaw/config.json -- the binary ships with its own
       provider config and reads the API key from wherever the
       embedder chooses. Raises EPasClawRun if Kind isn't in the
       catalog. }
@@ -253,7 +253,7 @@ type
     function  Start: Boolean;
     procedure Stop;
     function  IsRunning: Boolean;
-    { Block until the server stops accepting connections — either because
+    { Block until the server stops accepting connections -- either because
       another thread (or signal handler) called Stop, or because the
       listening socket failed mid-run. No-op when IsRunning is False. }
     procedure WaitForStop;
@@ -264,7 +264,7 @@ type
       do something between binding the socket and entering the wait. }
     procedure Run;
     { Custom tool registration, mirrors TPasClawAgent.RegisterTool.
-      Must be called BEFORE Start — the registry is built once at
+      Must be called BEFORE Start -- the registry is built once at
       Start time. The server takes ownership of ATool and frees it
       in Destroy. Tools registered this way layer on top of the
       built-ins; name conflicts go to the custom tool. With
@@ -273,7 +273,7 @@ type
     procedure RegisterTool(ATool: TPasClawTool);
 
     { Code-driven provider configuration. Same shape as
-      TPasClawAgent.SetProvider — see that method's header for the
+      TPasClawAgent.SetProvider -- see that method's header for the
       contract. Must be called BEFORE Start; the override is applied
       after LoadConfig in Start. Calling after Start is a no-op
       because TGatewayServer was already constructed with the
@@ -333,7 +333,7 @@ var
 begin
   if not LookupProvider(Kind, Spec) then
     raise EPasClawRun.CreateFmt(
-      'unknown provider kind "%s" — see PasClaw.Providers.Catalog ' +
+      'unknown provider kind "%s" -- see PasClaw.Providers.Catalog ' +
       'for the canonical list (anthropic / openai / gemini / ...)',
       [Kind]);
   Result.Name    := Kind;
@@ -344,14 +344,14 @@ begin
   Result.Model   := Model;
   if Result.Model = '' then Result.Model := Spec.DefaultModel;
   { Providers like groq / ollama don't ship a catalog default
-    model — there isn't a sensible one-size-fits-all (Groq routes
+    model -- there isn't a sensible one-size-fits-all (Groq routes
     by deployment, Ollama by local pull). Fail fast with a clear
     pointer instead of silently letting TConfig.DefaultModel's
     "claude-opus-4-7" seed survive past ApplyProviderOverride and
     get sent to the wrong API. }
   if Result.Model = '' then
     raise EPasClawRun.CreateFmt(
-      'provider "%s" has no catalog default model — pass one explicitly: ' +
+      'provider "%s" has no catalog default model -- pass one explicitly: ' +
       'SetProvider(''%s'', APIKey, ''<model-name>'')',
       [Kind, Kind]);
 end;
@@ -383,7 +383,7 @@ end;
 var
   { Tracks the live instance of each component class. Set in the
     constructor, cleared in the destructor. A second create attempt
-    while one is live raises EPasClawInstance — see unit-header comment
+    while one is live raises EPasClawInstance -- see unit-header comment
     on the MCP/Skills global-state limitation. }
   GAgentInstance:  TPasClawAgent  = nil;
   GServerInstance: TPasClawServer = nil;
@@ -394,7 +394,7 @@ constructor TPasClawAgent.Create(AOwner: TComponent);
 begin
   if GAgentInstance <> nil then
     raise EPasClawInstance.Create(
-      'Only one TPasClawAgent can be live per process — PasClaw.MCP.Bridge ' +
+      'Only one TPasClawAgent can be live per process -- PasClaw.MCP.Bridge ' +
       'and PasClaw.Skills.Loader hold their state in module-level arrays. ' +
       'Free the existing instance before creating another.');
   inherited Create(AOwner);
@@ -468,7 +468,7 @@ var
   i: Integer;
 begin
   { Track the built-in install with its own flag, NOT with
-    `FRegistry <> nil` — RegisterTool can create FRegistry early
+    `FRegistry <> nil` -- RegisterTool can create FRegistry early
     (before the first Chat) to hold user-supplied OOP tools, and
     we still need to lazily layer the built-ins, skills, and MCP
     servers on first Chat in that case. }
@@ -486,7 +486,7 @@ begin
     LogWebSearchSkipOnce;
   if FConfig.WebFetchEnabled then RegisterWebFetchTool(FRegistry);
   if FConfig.WebFetchEnabled then RegisterMemoryFetchTool(FRegistry);
-  { tool_output_get is only useful when truncation is on — the
+  { tool_output_get is only useful when truncation is on -- the
     Gateway/TPasClawAgent paths set Cfg.ToolOutputCap from
     FConfig.ToolOutputCap, so if we skip this branch the model
     sees handles in truncated tool results with no way to
@@ -496,7 +496,7 @@ begin
   RegisterSkills(FRegistry, Skills);
   if FUseMCP then
     FMCPClients := ConnectMCPServers(FConfig, FRegistry);
-  { Subagent spawn tool — installs only when the operator declared
+  { Subagent spawn tool -- installs only when the operator declared
     subagents in config.json. Needs FProvider already resolved so
     the spawn tool's context captures the live ILLMProvider; in
     the ChatHistory path EnsureProvider runs before EnsureRegistry,
@@ -531,7 +531,7 @@ begin
     captured TSubagentContext reflects the live provider, fallback
     chain, and model. Without this, an embedder that calls
     SetProvider after the first Chat would leave the spawn tool
-    pointing at the old ILLMProvider — EnsureRegistry early-exits
+    pointing at the old ILLMProvider -- EnsureRegistry early-exits
     on FBuiltinsInstalled and never refreshes the tool. (Codex P2
     on PR #107.) }
   if (FSpawnTool = nil) or (FProvider = nil) then Exit;
@@ -560,15 +560,15 @@ begin
   if ATool = nil then Exit;
   { RegisterTool can run at any point in the lifecycle:
 
-    * Before the first Chat — FRegistry may not exist yet; create
+    * Before the first Chat -- FRegistry may not exist yet; create
       a bare one and install into it. EnsureRegistry will layer
       the built-ins on first Chat, then re-install every entry in
       FOwnedTools so user overrides win.
 
-    * After the first Chat — built-ins are already in FRegistry;
+    * After the first Chat -- built-ins are already in FRegistry;
       install on top so the new tool is visible immediately.
 
-    * With FUseTools := False — EnsureRegistry will skip the
+    * With FUseTools := False -- EnsureRegistry will skip the
       built-ins entirely; this RegisterTool call still creates
       the registry, populated only with OOP tools the caller
       hands us. }
@@ -609,13 +609,13 @@ begin
   FProvider := nil;
   { Don't mirror the catalog default into FModel. ApplyProviderOverride
     already sets FConfig.DefaultModel, and ChatHistory falls back to it
-    when FModel is empty — so a second SetProvider call for a different
+    when FModel is empty -- so a second SetProvider call for a different
     provider switches the model correctly. The earlier "belt and
     suspenders" assignment caused the OPPOSITE of what users expect:
     SetProvider('anthropic',k1) then SetProvider('openai',k2) used to
     keep claude-opus-4-7 as FModel, sending the Anthropic name to the
     OpenAI endpoint. FModel is reserved for the user's explicit choice
-    via Create(model) or the Model property — SetProvider stays out. }
+    via Create(model) or the Model property -- SetProvider stays out. }
 end;
 
 procedure TPasClawAgent.ForwardText(const S: string);
@@ -700,7 +700,7 @@ begin
   { Derive ToolsEnabled from the registry we are about to hand to
     RunToolLoop, NOT from FUseTools. EnsureRegistry caches FRegistry
     across calls and only checks FUseTools when the registry is
-    nil — so a component used with UseTools=True, then flipped to
+    nil -- so a component used with UseTools=True, then flipped to
     UseTools=False, would otherwise send the model a "No tools in
     this session" prompt while RunToolLoop still received the cached
     registry. The single source of truth is Cfg.Registry. }
@@ -800,7 +800,7 @@ constructor TPasClawServer.Create(AOwner: TComponent);
 begin
   if GServerInstance <> nil then
     raise EPasClawInstance.Create(
-      'Only one TPasClawServer can be live per process — PasClaw.MCP.Bridge ' +
+      'Only one TPasClawServer can be live per process -- PasClaw.MCP.Bridge ' +
       'and PasClaw.Skills.Loader hold their state in module-level arrays. ' +
       'Free the existing instance before creating another.');
   inherited Create(AOwner);
@@ -889,7 +889,7 @@ begin
       LogWebSearchSkipOnce;
     if FConfig.WebFetchEnabled then RegisterWebFetchTool(FRegistry);
     if FConfig.WebFetchEnabled then RegisterMemoryFetchTool(FRegistry);
-    { Same gate as EnsureRegistry above — without this, TPasClawServer
+    { Same gate as EnsureRegistry above -- without this, TPasClawServer
       builds a registry that's missing tool_output_get even though
       Gateway.Server forwards FCfg.ToolOutputCap into its LoopCfg.
       Codex P2 on PR #176. }
@@ -903,7 +903,7 @@ begin
     FMCPClients := ConnectMCPServers(FConfig, FRegistry);
 
   { Install OOP tools handed in via RegisterTool. Goes AFTER the
-    built-ins and MCP so user names override on conflict — same
+    built-ins and MCP so user names override on conflict -- same
     semantic as TPasClawAgent.EnsureRegistry. When EnableTools is
     False but the caller registered custom tools, create a bare
     registry just for them. }
@@ -978,7 +978,7 @@ end;
 procedure TPasClawServer.WaitForStop;
 begin
   { Wait on the TPasClawServer-owned signal, NOT on FServer's
-    internal stop flag — FServer can be freed in Stop while we're
+    internal stop flag -- FServer can be freed in Stop while we're
     still mid-return from WaitFor, which Codex flagged as a P1 on
     the original draft. FStopSignal's lifetime is tied to Self, so
     the only way Stop can free it is via Destroy (which is the
@@ -999,7 +999,7 @@ end;
 procedure TPasClawServer.RegisterTool(ATool: TPasClawTool);
 begin
   if ATool = nil then Exit;
-  { Registry doesn't exist yet — Start hasn't been called. Park the
+  { Registry doesn't exist yet -- Start hasn't been called. Park the
     tool in FOwnedTools; Start's tail loop installs every entry on
     top of the built-ins so name overrides win. Safe to call any
     time before Start; calling after Start is technically allowed
@@ -1034,7 +1034,7 @@ begin
     `if FModel = ''` check then skipped the update, and the first
     provider's model leaked into the second provider's API call.
     FModel is reserved for the embedder's explicit choice via the
-    Model property — SetProvider stays out. }
+    Model property -- SetProvider stays out. }
 end;
 
 { ============================== Registration ============================== }

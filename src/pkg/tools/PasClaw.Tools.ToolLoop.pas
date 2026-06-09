@@ -39,7 +39,7 @@ type
     (* Compaction: when the running history exceeds Compact.ThresholdTokens,
        slice off the older portion, summarise it via Provider.Chat, and
        replace it with a single system message before the next round.
-       CompactEnabled gates the whole thing — default off; the
+       CompactEnabled gates the whole thing -- default off; the
        command-layer enables it from Cfg.Compaction. CompactOpts is the
        full options struct (threshold, recent-turn count, summary budget,
        and the OnBefore memory-flush hook). *)
@@ -50,7 +50,7 @@ type
        (see PasClaw.Tools.Types.TToolCategory) form one parallel batch
        and run on dedicated worker threads; each tcMutating call is a
        batch of one and runs serially. When False, every call runs
-       serially in array order — same as the pre-parallel behaviour.
+       serially in array order -- same as the pre-parallel behaviour.
        Default False on the record (zero-init); the CLI and the
        built-in components flip it on explicitly. *)
     Parallel:       Boolean;
@@ -58,19 +58,19 @@ type
        retryable error (StatusCode = 0 / -1 / 408 / 429 / 5xx),
        RunToolLoop walks Fallbacks in order, calling Chat on each
        until one succeeds (StatusCode 2xx) or all fail. Empty
-       array — same as the old behaviour, primary failure surfaces
+       array -- same as the old behaviour, primary failure surfaces
        directly. Callers populate from TConfig.Fallbacks by
        resolving each name through NewProviderFromConfig (see
        PasClaw.Providers.Factory.ResolveFallbacks). The named
-       TLLMProviderArray type — not an inline `array of ILLMProvider`
-       — is required because dcc64 enforces strict named-type matching
+       TLLMProviderArray type -- not an inline `array of ILLMProvider`
+       -- is required because dcc64 enforces strict named-type matching
        on dynamic-array assignments. *)
     Fallbacks:      TLLMProviderArray;
     (* Hook callbacks for observe / veto / transform / steer. See
        PasClaw.Agent.Hooks for the TPasClawHook base class and the
        four virtuals embedders override (BeforeTurn, BeforeToolCall,
        AfterToolResult, OnError). Hooks fire on the main thread in
-       array order even when tool dispatch is parallel — same
+       array order even when tool dispatch is parallel -- same
        ordering guarantees the legacy OnToolCall / OnToolResult
        events have. RunToolLoop doesn't own the hooks; caller
        lifetime applies. *)
@@ -78,7 +78,7 @@ type
     (* Canonical sender identity for the turn. Channels populate this
        from the inbound payload (Slack user id, Matrix MXID, Telegram
        message.from.id, email From, etc.); the CLI sets cli:<$USER>.
-       Default zero record means "unknown / not propagated" —
+       Default zero record means "unknown / not propagated" --
        surfaces as '(unknown)' in logs. The allowlist gate
        (PasClaw.Identity.IsAllowedSender) runs at the CHANNEL
        boundary BEFORE RunToolLoop; by the time the loop is called,
@@ -103,7 +103,7 @@ type
        (PasClaw.Tools.OutputCache) before appending it to history:
        results exceeding the cap get replaced with a head + tail
        snippet and a handle the model can dereference via the
-       `tool_output_get` tool. 0 (default) leaves output verbatim —
+       `tool_output_get` tool. 0 (default) leaves output verbatim --
        same as the pre-PR behaviour. Callers wanting the savings
        set this to ~8192 and register the OutputCache tool on the
        same registry. *)
@@ -158,14 +158,14 @@ type
   { Per-call work unit. The same record is filled in by a worker thread
     (parallel) or by an inline call (serial), then read by the main
     loop to append the tool_result to history. Workers never touch the
-    history array directly — race-free by construction. }
+    history array directly -- race-free by construction. }
   TToolCallDispatch = record
     Call:       TToolCall;
     ResultText: string;
     Err:        string;
     { Set True when a BeforeToolCall hook short-circuited the tool;
       ResultText holds the synthetic answer. Workers check this and
-      skip dispatch — the synthetic result is what gets appended to
+      skip dispatch -- the synthetic result is what gets appended to
       history. }
     Cancelled:  Boolean;
   end;
@@ -173,7 +173,7 @@ type
 
   { Worker thread that runs one tool call's PreflightToolCall +
     Registry.RunTool + hashline retry logic, writes the result back
-    into a TToolCallDispatch slot, exits. FreeOnTerminate is False —
+    into a TToolCallDispatch slot, exits. FreeOnTerminate is False --
     the main thread WaitFor's then Free's each worker in array order. }
   TToolCallWorker = class(TThread)
   private
@@ -189,7 +189,7 @@ type
   TToolBatchArray = array of TToolBatch;
 
 { Provider error classes worth retrying on a fallback: network/TLS
-  errors (StatusCode <= 0 — provider couldn't talk to the upstream),
+  errors (StatusCode <= 0 -- provider couldn't talk to the upstream),
   request-timeout (408), rate-limit (429), and any 5xx. Anything
   else (4xx auth / invalid request) is a configuration bug the
   fallback wouldn't fix. }
@@ -417,21 +417,21 @@ end;
   parallel within each batch. Read-only tools (Category = tcReadOnly)
   coalesce into one batch; each mutating tool is its own batch of one.
   Tools not found in the registry are treated as tcMutating (safe
-  default — applies to skill / MCP tools and to any handler that
+  default -- applies to skill / MCP tools and to any handler that
   forgot to set the Category field). Order is preserved across
   batches, so the agent loop appends tool_results in the same order
   the model emitted tool_use blocks.
 
   Calls is declared as an open array rather than `TToolCallArray`
   because the source is `TLLMResponse.ToolCalls`, which the providers
-  record as an inline `array of TToolCall` — Delphi 12 dcc64 enforces
+  record as an inline `array of TToolCall` -- Delphi 12 dcc64 enforces
   strict named-type matching on dynamic-array parameters and rejects
   the bare-array → TToolCallArray pass-through with E2010. FPC happens
   to accept it either way, but the open-array form compiles cleanly
   under both. }
 
 { Collect every mrSystem entry's content from Hist (in array order),
-  return them concatenated with blank-line separators. Read-only —
+  return them concatenated with blank-line separators. Read-only --
   does NOT modify Hist.
 
   Used by the steering fold so an embedder's in-history system
@@ -544,10 +544,10 @@ begin
   if Cfg.Provider = nil then Exit(False);
 
   { Annotate the log stream once per turn with the canonical sender
-    id (picoclaw parity — pkg/identity). Hooks and post-hoc audit
+    id (picoclaw parity -- pkg/identity). Hooks and post-hoc audit
     tooling can grep for `identity=` to attribute actions. Empty
     canonical id means CLI / cron / embedder use without a
-    populated TIdentity — we skip the log line to keep noise low. }
+    populated TIdentity -- we skip the log line to keep noise low. }
   if CanonicalOf(Cfg.Identity) <> '' then
     LogDebug('toolloop start identity=%s', [FormatIdentity(Cfg.Identity)]);
 
@@ -570,7 +570,7 @@ begin
   { Stamp the per-turn identity onto every registered hook so
     override implementations can read `Self.Identity` from any of
     the BeforeTurn / BeforeToolCall / AfterToolResult / OnError
-    virtuals — the alternative (threading TIdentity through every
+    virtuals -- the alternative (threading TIdentity through every
     hook signature) would break every existing TPasClawHook
     subclass. Codex P2 on PR #119. Identity is per-loop, not
     per-iteration, so set once before the loop. }
@@ -588,7 +588,7 @@ begin
       SystemPrompt as a "[user steering received mid-turn]" addendum
       so the next provider call's `system` field carries them.
 
-      We CANNOT append mrSystem to Hist here — the OpenAI builder
+      We CANNOT append mrSystem to Hist here -- the OpenAI builder
       (PasClaw.Providers.OpenAI.pas:148-151) and Anthropic
       (PasClaw.Providers.Anthropic.pas:170-172) and Gemini all skip
       in-history mrSystem entries when Options.SystemPrompt is
@@ -601,7 +601,7 @@ begin
       Cap at MaxSteeringPerTurn so a runaway pusher can't grow the
       system prompt unbounded; the cap matches nanobot's
       _MAX_INJECTIONS_PER_TURN sanity bound. Cache breakpoint
-      invalidates for the steering turn — acceptable cost. }
+      invalidates for the steering turn -- acceptable cost. }
     if Cfg.SteeringKey <> '' then
     begin
       Steers := DrainSteering(Cfg.SteeringKey, MaxSteeringPerTurn);
@@ -624,7 +624,7 @@ begin
     { Pre-call compaction. NeedsCompact is a cheap token estimate;
       only when it trips do we pay for a summariser round.
       CompactMessages may rewrite Hist AND modify
-      LiveOptions.SystemPrompt — the summary folds into the system
+      LiveOptions.SystemPrompt -- the summary folds into the system
       prompt because both OpenAI and Anthropic builders silently
       drop in-message mrSystem entries when SystemPrompt is set
       (Codex PR #87 P1). Returns verbatim on summariser failure,
@@ -654,14 +654,14 @@ begin
       builder doesn't catch, Indy raising EIdSocketError on a
       torn-down TLS handshake) used to propagate out and bypass
       the OnError hook entirely. Now any raised exception turns
-      into a synthetic -1 response — the fallback walk continues
+      into a synthetic -1 response -- the fallback walk continues
       and the post-walk HooksOnError check fires with the
       diagnostic text out-of-band. (Codex P2 on PR #113.)
 
       Diagnostic text goes into LastProviderErrText (local),
       NOT into Resp.Content. If we stashed exception text in
       Resp.Content, the outer "no tool calls, exit cleanly" path
-      would surface it as Loop.Content — i.e. as the assistant's
+      would surface it as Loop.Content -- i.e. as the assistant's
       reply to the user, leaking internal parser / socket / TLS
       details through to the caller. Hook embedders that want the
       diagnostic still get it via OnError. (Codex P2 on PR #114.) }
@@ -684,7 +684,7 @@ begin
       one returns a 2xx.
 
       Model selection per fallback: ask the fallback's own
-      GetDefaultModel — anthropic-only model names ("claude-opus-4-7")
+      GetDefaultModel -- anthropic-only model names ("claude-opus-4-7")
       passed verbatim to an OpenAI fallback would fail at the remote
       API and trigger the next fallback even when the chain was
       otherwise healthy. We only fall back to Cfg.Model when the
@@ -705,7 +705,7 @@ begin
                  [fbi, Cfg.Fallbacks[fbi].GetName, FallbackModel]);
         try
           Resp := Cfg.Fallbacks[fbi].Chat(Hist, Tools, FallbackModel, LiveOptions);
-          { Successful call clears the diagnostic — only the LAST failed
+          { Successful call clears the diagnostic -- only the LAST failed
             attempt's text should surface to hooks. }
           LastProviderErrText := '';
         except
@@ -740,26 +740,26 @@ begin
 
     { Provider failure surfaces to hooks. After the fallback walk
       above, fire OnError(hsProviderCall) whenever the final status
-      isn't a 2xx — including non-positive codes (StatusCode <= 0)
+      isn't a 2xx -- including non-positive codes (StatusCode <= 0)
       which the HTTP helper uses to flag pre-HTTP failures: DNS
       lookup miss, TLS handshake refusal, socket reset, no
       OpenSSL IO handler. Earlier this guard required StatusCode > 0
-      and silently skipped exactly those cases — the ones an audit
+      and silently skipped exactly those cases -- the ones an audit
       / alerting hook most wants to see. (Codex P2 on PR #111.) }
     if (Length(Cfg.Hooks) > 0) and
        ((Resp.StatusCode < 200) or (Resp.StatusCode >= 300)) then
     begin
       { Diagnostic preference order:
-          1. LastProviderErrText  — exception text we caught above.
+          1. LastProviderErrText  -- exception text we caught above.
                                     Highest priority because we know
                                     it's our own structured failure
                                     and won't leak into Loop.Content.
-          2. Resp.Content         — typically the provider's error
+          2. Resp.Content         -- typically the provider's error
                                     JSON body on a non-2xx HTTP
                                     response. Useful telemetry; we
                                     don't filter it because the
                                     provider returned it deliberately.
-          3. Just status=%d       — nothing else available. }
+          3. Just status=%d       -- nothing else available. }
       if LastProviderErrText <> '' then
         HooksOnError(Cfg.Hooks, hsProviderCall,
                       Format('provider returned status=%d: %s',
@@ -818,7 +818,7 @@ begin
         before its matching OnToolResult and on the announcements
         appearing in the same order the model produced the tool_use
         blocks. A BeforeToolCall hook that sets Cancel := True marks
-        the slot Cancelled — workers + serial path both skip
+        the slot Cancelled -- workers + serial path both skip
         dispatch, and the synthetic result becomes the tool_result. }
       for j := 0 to High(Batch) do
       begin
@@ -836,7 +836,7 @@ begin
         { Parallel batch: spawn one TThread per call, suspended; Start
           all in array order; WaitFor all in array order; Free each
           worker after WaitFor. Cancelled slots short-circuit inside
-          the worker's Execute — see TToolCallWorker.Execute. }
+          the worker's Execute -- see TToolCallWorker.Execute. }
         SetLength(Workers, Length(Batch));
         for j := 0 to High(Batch) do
           Workers[j] := TToolCallWorker.Create(Cfg, @Dispatches[Batch[j]]);
@@ -854,7 +854,7 @@ begin
         { Serial batch (or Parallel disabled): just run inline on the
           main thread. Same DispatchOneToolCall the workers use, so
           fs_edit_hashline retry semantics are identical. Skip
-          cancelled slots — synthetic result already in ResultText. }
+          cancelled slots -- synthetic result already in ResultText. }
         for j := 0 to High(Batch) do
           if not Dispatches[Batch[j]].Cancelled then
             DispatchOneToolCall(Cfg, Dispatches[Batch[j]]);
@@ -900,7 +900,7 @@ begin
                                               'ERROR: ' + Dispatches[Batch[j]].Err)
         else
         begin
-          { Cap large successful tool outputs (errors stay verbatim —
+          { Cap large successful tool outputs (errors stay verbatim --
             they're already short and the head/tail split would just
             obscure the actual failure). The handle goes into the
             in-context replacement; the full bytes live in the
@@ -932,7 +932,7 @@ begin
         WHY THE SYSTEM PROMPT, NOT mrSystem IN HISTORY:
           The PasClaw.Providers.OpenAI / Anthropic / Gemini builders
           explicitly DROP in-history mrSystem entries whenever the
-          ChatOptions.SystemPrompt slot is non-empty — they ship one
+          ChatOptions.SystemPrompt slot is non-empty -- they ship one
           consolidated system prompt via that slot, not via the
           messages array, so an mrSystem appended to Hist gets
           silently dropped on the next provider call. TPasClawAgent.
@@ -942,7 +942,7 @@ begin
           keeps it visible on every provider. (Codex P1 on PR #110.)
 
           Side effect: steering accumulates across iterations, which
-          is the picoclaw semantic — each new tool result can add
+          is the picoclaw semantic -- each new tool result can add
           context that the model carries through to the end of the
           loop. If an embedder wants ephemeral per-batch steering
           they can reset SystemPrompt in BeforeTurn. }
@@ -960,7 +960,7 @@ begin
               SystemPrompt is non-empty and the provider builders
               drop in-history mrSystem on the next round (using
               SystemPrompt instead). The Hist mrSystem entries
-              stay PUT — non-destructive copy — so if a BeforeTurn
+              stay PUT -- non-destructive copy -- so if a BeforeTurn
               hook later resets SystemPrompt to '' for the
               ephemeral-steering pattern, the policy is still
               available in Hist and ships again via the in-history

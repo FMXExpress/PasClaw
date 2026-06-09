@@ -1,4 +1,4 @@
-{ Status — print effective config, home dir, key health checks. }
+{ Status -- print effective config, home dir, key health checks. }
 unit PasClaw.Cmd.Status;
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}

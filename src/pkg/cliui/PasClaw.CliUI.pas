@@ -9,7 +9,7 @@ unit PasClaw.CliUI;
 {$IFDEF FPC}
   { File has a UTF-8 BOM (Delphi auto-detects it). FPC also honours the
     BOM, but additionally needs $CODEPAGE UTF8 so string literals are
-    stored as AnsiString CP_UTF8 — without it FPC stores them as
+    stored as AnsiString CP_UTF8 -- without it FPC stores them as
     UnicodeString and the implicit conversions on PrintLn(Ansi.X + L +
     Ansi.Reset) become 6 warnings per banner line. dcc64 has no
     equivalent directive (E1030 "Invalid compiler directive: 'CODEPAGE'");
@@ -47,7 +47,7 @@ function  RenderCommandHelp(const Use, Short, Long, Example: string;
                             const Subcommands, Flags: array of string): string;
 
 (* Prompt for a line of input WITHOUT echoing keystrokes to the
-   terminal — for API keys, MCP auth tokens, and any other secret
+   terminal -- for API keys, MCP auth tokens, and any other secret
    credential the user pastes during onboarding. Echo is restored
    before return regardless of exception. Falls back to a plain
    ReadLn (with echo) when the terminal mode can't be queried
@@ -62,7 +62,7 @@ function ReadSecretLine(const Prompt: string): string;
    been called. Implementation per surface:
 
      Windows + Delphi   WriteConsoleW(GetStdHandle(...), PWideChar(S),
-                        Length(S), ...) — UTF-16 straight to the
+                        Length(S), ...) -- UTF-16 straight to the
                         renderer. Falls back to UTF-8 bytes + WriteFile
                         when stdout/stderr is redirected to a pipe or
                         file (WriteConsoleW returns ERROR_INVALID_HANDLE
@@ -348,7 +348,7 @@ begin
   finally
     if HaveTerm then tcsetattr(0, TCSANOW, Old);
   end;
-  { ReadLn consumed the newline silently when echo was off — emit one
+  { ReadLn consumed the newline silently when echo was off -- emit one
     so the next prompt starts on a fresh line. }
   if HaveTerm then PrintLn;
 end;
@@ -378,7 +378,7 @@ end;
 {$ENDIF}
 {$IF NOT DEFINED(UNIX) AND NOT DEFINED(MSWINDOWS)}
 begin
-  { Unknown platform — fall through to plain echoing read so the
+  { Unknown platform -- fall through to plain echoing read so the
     program still runs. }
   Print(Prompt);
   ReadLn(Result);
@@ -389,7 +389,7 @@ end;
 procedure WriteToHandle(H: THandle; const S: string);
 { Per the per-surface plan above: WriteConsoleW when H is a real
   console (UTF-16 → renderer, no codepage conversion); UTF-8 bytes
-  via WriteFile otherwise (pipe / file redirection — WriteConsoleW
+  via WriteFile otherwise (pipe / file redirection -- WriteConsoleW
   would return ERROR_INVALID_HANDLE there). Empty S is a no-op. }
 var
   Mode: DWORD;

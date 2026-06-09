@@ -1,5 +1,5 @@
 ﻿(*
-  Onboard — initialise config and workspace. Creates ~/.pasclaw, a
+  Onboard -- initialise config and workspace. Creates ~/.pasclaw, a
   starter config.json, and walks the user through picking a provider
   from the catalog (PasClaw.Providers.Catalog). Selection by number
   populates the saved TProviderConfig with the catalog's default base
@@ -84,7 +84,7 @@ end;
 function CompareModelsByDate(const A, B: TModelInfo): Integer;
 { Sort newest first (CreatedAt desc). When neither model exposes a
   creation time the sort collapses to no-op which preserves the
-  /models response order — that's what the provider considered
+  /models response order -- that's what the provider considered
   "natural" so it's a fine fallback. }
 begin
   if A.CreatedAt = B.CreatedAt then Exit(0);
@@ -93,7 +93,7 @@ begin
 end;
 
 procedure SortModelsByDate(var M: TModelInfoArray);
-{ Insertion sort — N is small (typically <50), avoids dragging in
+{ Insertion sort -- N is small (typically <50), avoids dragging in
   Generics.Defaults just to compare two Int64s. }
 var
   i, j: Integer;
@@ -123,12 +123,12 @@ function ShowPicker(const Models: TModelInfoArray;
 
   Returns the number of rows actually printed (the visible count, N).
   Caller MUST validate any typed numeric pick against this returned
-  value, NOT Length(Models) — typing 47 against a 12-row visible list
+  value, NOT Length(Models) -- typing 47 against a 12-row visible list
   would otherwise silently pick a model the user can't see. Codex P2
   on PR #172. }
 const
   VISIBLE_TOP_N = 12;     { mirror what ChatGPT / Claude do on their
-                            pickers — long enough to cover the
+                            pickers -- long enough to cover the
                             useful tier, short enough to fit on a
                             single screen }
 var
@@ -151,7 +151,7 @@ begin
   end;
   if Length(Models) > Result then
     PrintLn(Ansi.Dim +
-            Format('  (+ %d more — see `pasclaw model list %s`)',
+            Format('  (+ %d more -- see `pasclaw model list %s`)',
                    [Length(Models) - Result, ProviderName]) +
             Ansi.Reset);
 end;
@@ -173,7 +173,7 @@ function PickModelInteractive(const Spec: TProviderSpec;
 
     3. When the operator left the key blank AND a cache exists, show
        the cached list with a one-liner explaining why we didn't
-       refresh ("API key not entered — showing the cached roster.
+       refresh ("API key not entered -- showing the cached roster.
        Re-run with a key to refresh"). Better than silently dropping
        to the text-input prompt which is what tripped up the first
        user.
@@ -202,7 +202,7 @@ begin
   HaveKey      := (Spec.Auth.Kind = asNone) or (Trim(APIKey) <> '');
 
   { Step 1: see if a cached roster exists. Keyed on Spec.Kind for the
-    same reason as below — onboarding's Name == Spec.Kind invariant. }
+    same reason as below -- onboarding's Name == Spec.Kind invariant. }
   HaveCache := LoadCachedModels(Spec.Kind, Cached) and (Length(Cached.Models) > 0);
 
   { Step 2: live fetch when a key is available. Placeholder kinds and
@@ -238,7 +238,7 @@ begin
       SourceLabel := 'Showing the cached roster (refreshed ' +
                      HumanAge(Cached.FetchedAt) + ').'
     else
-      SourceLabel := 'API key not entered — showing the cached roster (refreshed ' +
+      SourceLabel := 'API key not entered -- showing the cached roster (refreshed ' +
                      HumanAge(Cached.FetchedAt) + '). Re-run with a key to refresh.';
   end
   else
@@ -247,14 +247,14 @@ begin
       of picker explicit so the operator isn't left wondering. }
     if not HaveKey then
       PrintLn(Ansi.Dim +
-              'API key not entered — using the catalog default. ' +
+              'API key not entered -- using the catalog default. ' +
               'Run `pasclaw model refresh ' + ProviderName +
               '` later to populate the picker for next time.' + Ansi.Reset);
     if Default <> '' then
       Result := ReadLineEcho(Format('Default model [%s]: ', [Default]))
     else
       repeat
-        Result := ReadLineEcho('Default model (provider does not advertise one — required): ');
+        Result := ReadLineEcho('Default model (provider does not advertise one -- required): ');
       until Trim(Result) <> '';
     if Trim(Result) = '' then Result := Default;
     Exit;
@@ -262,7 +262,7 @@ begin
 
   SortModelsByDate(Models);
   VisibleN := ShowPicker(Models, ProviderName, SourceLabel,
-                         { FetchedAt unused by ShowPicker — kept on the
+                         { FetchedAt unused by ShowPicker -- kept on the
                            signature for future "stale by N days,
                            refresh?" prompts } 0);
 
@@ -278,14 +278,14 @@ begin
 
   { Validate against VisibleN (the count ShowPicker actually printed),
     NOT Length(Models). Typing 47 against a 12-row visible list used
-    to silently pick an off-screen model — Codex P2 on PR #172. Numbers
+    to silently pick an off-screen model -- Codex P2 on PR #172. Numbers
     outside the visible range fall through to the free-form-id branch
     below, same as any non-numeric input. }
   Pick := StrToIntDef(Input, 0);
   if (Pick >= 1) and (Pick <= VisibleN) then
     Exit(Models[Pick - 1].Id);
 
-  { Anything else gets taken as a free-form model id — operator may
+  { Anything else gets taken as a free-form model id -- operator may
     know about a model the cache doesn't list yet. }
   Result := Input;
 end;
@@ -338,7 +338,7 @@ procedure UpsertCatalogMCP(Cfg: TConfig; const Entry: TMCPCatalogEntry;
 var
   i: Integer;
 begin
-  { Mirrors Cmd.MCP.DoInstall's upsert — if an entry for this catalog
+  { Mirrors Cmd.MCP.DoInstall's upsert -- if an entry for this catalog
     name already exists, refresh URL/auth/enabled in place rather than
     duplicating. The MCP Cmd field stores the URL (HTTP MCP transport
     uses it directly); Args stores the literal Authorization header
@@ -366,7 +366,7 @@ procedure PromptVaultTools(Cfg: TConfig);
 { Opt-in toggle for the agent-callable vault_search / vault_get
   tools. Default YES because pressing Enter through onboarding
   should land a useful agent, and the vault tools are read-only
-  HTTP GETs against a curated registry — no execution path. User
+  HTTP GETs against a curated registry -- no execution path. User
   can flip back later by editing config.json or re-running
   onboard. }
 var
@@ -378,7 +378,7 @@ begin
     'vault_search / vault_get let the agent discover Object Pascal source code' +
     Ansi.Reset);
   PrintLn(Ansi.Dim +
-    '(samples, components, libraries) on pasclaw.dev — read-only HTTP GETs.' +
+    '(samples, components, libraries) on pasclaw.dev -- read-only HTTP GETs.' +
     Ansi.Reset);
   PrintLn;
   Choice := Trim(LowerCase(ReadLineEcho('  Enable vault tools for the agent [Y/n]: ')));
@@ -390,7 +390,7 @@ begin
   else
   begin
     Cfg.VaultToolsEnabled := False;
-    PrintLn('  ' + Ansi.Dim + '(skipped — flip vault_tools_enabled in config.json to enable later)' + Ansi.Reset);
+    PrintLn('  ' + Ansi.Dim + '(skipped -- flip vault_tools_enabled in config.json to enable later)' + Ansi.Reset);
   end;
 end;
 
@@ -400,14 +400,14 @@ procedure PromptVectorSearch(Cfg: TConfig);
   what memory_search "should" feel like. The vector half adds local
   ANN search via sqlite-vec + an ONNX-runtime'd BERT embedder
   (MiniLM by default), fused with FTS5 BM25 through Reciprocal Rank
-  Fusion — same shape as picoclaw.
+  Fusion -- same shape as picoclaw.
 
   After the user opts in we offer to provision the runtime artifacts
   (sqlite-vec extension, ONNX Runtime, MiniLM weights ~91 MB) right
   now via `pasclaw memory provision`. Default NO on that follow-up
   question because (a) the download is fat enough to deserve an
   explicit "yes" and (b) a user with no internet at onboard time can
-  defer it. When they decline, memory_search still works — it falls
+  defer it. When they decline, memory_search still works -- it falls
   back to the FTS-only path until the artifacts arrive. }
 var
   Choice: string;
@@ -418,7 +418,7 @@ begin
     'Hybrid keyword (FTS5 BM25) + semantic (local embeddings, no API calls)' +
     Ansi.Reset);
   PrintLn(Ansi.Dim +
-    'fused via Reciprocal Rank Fusion — matches picoclaw / nanobot memory_search.' +
+    'fused via Reciprocal Rank Fusion -- matches picoclaw / nanobot memory_search.' +
     Ansi.Reset);
   PrintLn;
   Choice := Trim(LowerCase(ReadLineEcho('  Enable vector search for memory_search [Y/n]: ')));
@@ -426,7 +426,7 @@ begin
   begin
     Cfg.VectorSearchEnabled := False;
     PrintLn('  ' + Ansi.Dim +
-      '(skipped — memory_search will use FTS5 keyword search only)' + Ansi.Reset);
+      '(skipped -- memory_search will use FTS5 keyword search only)' + Ansi.Reset);
     Exit;
   end;
 
@@ -463,7 +463,7 @@ begin
   end
   else
     PrintLn('  ' + Ansi.Dim +
-      '(deferred — run `pasclaw memory provision` when ready)' + Ansi.Reset);
+      '(deferred -- run `pasclaw memory provision` when ready)' + Ansi.Reset);
 end;
 
 procedure PromptMCPInstalls(Cfg: TConfig);
@@ -483,7 +483,7 @@ begin
     'These give the agent extra capabilities via the MCP protocol.' +
     Ansi.Reset);
   PrintLn(Ansi.Dim +
-    'Skip what you don''t want — you can install later with ' +
+    'Skip what you don''t want -- you can install later with ' +
     Ansi.Reset + '`pasclaw mcp install <name>`' + Ansi.Dim + '.' + Ansi.Reset);
   PrintLn;
 
@@ -498,7 +498,7 @@ begin
       PrintLn('  ' + Ansi.Dim + Entry.Docs + Ansi.Reset);
     if AlreadyInstalled then
     begin
-      PrintLn('  ' + Ansi.Green + '(already installed — skipping)' + Ansi.Reset);
+      PrintLn('  ' + Ansi.Green + '(already installed -- skipping)' + Ansi.Reset);
       PrintLn;
       Continue;
     end;
@@ -520,7 +520,7 @@ begin
       Continue;
     end;
 
-    { Prefer the env var when it's already set — same path
+    { Prefer the env var when it's already set -- same path
       pasclaw mcp install takes today. }
     EnvTok := GetEnvironmentVariable(Entry.EnvVar);
     if EnvTok <> '' then
@@ -531,14 +531,14 @@ begin
     end
     else
     begin
-      { No-echo input — pasted tokens stay out of terminal scrollback
+      { No-echo input -- pasted tokens stay out of terminal scrollback
         and any screen recordings / shared sessions. Codex P2 on
         PR #126. }
       Token := Trim(ReadSecretLine('  ' + Entry.EnvVar + ' (paste, or blank to skip auth): '));
       HeaderVal := FormatAuthHeaderFromToken(Entry, Token);
       if HeaderVal = '' then
         PrintLn('  ' + Ansi.Yellow + '!' + Ansi.Reset +
-                ' installing with no auth header — set ' + Entry.EnvVar +
+                ' installing with no auth header -- set ' + Entry.EnvVar +
                 ' and re-run `pasclaw mcp install ' + Entry.Name +
                 '` later to refresh.');
     end;
@@ -588,7 +588,7 @@ begin
     Catalog := AllProviderSpecs;
     if not PickFromCatalog(Catalog, 'anthropic', Spec) then
     begin
-      PrintLn(Ansi.Yellow + 'no valid selection — config not changed' + Ansi.Reset);
+      PrintLn(Ansi.Yellow + 'no valid selection -- config not changed' + Ansi.Reset);
       Exit(1);
     end;
 
@@ -601,7 +601,7 @@ begin
       asNone:
         Key := '';
     else
-      { No-echo for the same reason as the MCP token path below —
+      { No-echo for the same reason as the MCP token path below --
         Codex P2 on PR #126 was scoped to MCP but the provider-key
         prompt has the identical exposure (pasted credential lands
         in terminal scrollback / screen recordings). }
@@ -610,12 +610,12 @@ begin
     end;
 
     { Re-onboard case: when the operator leaves the prompt blank they
-      almost always mean "keep my existing key" — they're re-running
+      almost always mean "keep my existing key" -- they're re-running
       onboard to tweak something else, not to wipe their auth. Pull
       the existing key out of Cfg.Providers so PickModelInteractive
       can still do a live /v1/models fetch with it. UpsertProvider
       already treats Key='' as "preserve existing" further down, so
-      we don't need to copy this back into the saved Key variable —
+      we don't need to copy this back into the saved Key variable --
       just feed the picker the effective key. }
     EffectiveKey := Key;
     if (EffectiveKey = '') and (Spec.Auth.Kind <> asNone) then
@@ -638,7 +638,7 @@ begin
 
     UpsertProvider(Cfg, Spec, Model, Key);
 
-    { Built-in MCP catalog — opt-in per entry. Picoclaw's rule is
+    { Built-in MCP catalog -- opt-in per entry. Picoclaw's rule is
       "never preloaded"; we keep the same default-off prompt so a
       user pressing Enter through onboarding doesn't install
       anything they didn't explicitly say yes to. Auth tokens
