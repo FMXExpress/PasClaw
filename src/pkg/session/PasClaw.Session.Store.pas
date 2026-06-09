@@ -158,7 +158,24 @@ function SessionsDir: string;
   path of the session file. Callers MUST handle the empty-string
   case (treat as "no session named X"). }
 function SessionPath(const Id: string): string;
-function ListSessions: TSessionMetaArray;
+
+(* List on-disk sessions. By default skips synthetic "gateway
+   bucket" sessions (ids prefixed with `_gateway_`) -- those exist
+   only to aggregate stateless gateway-endpoint stats and would
+   otherwise clutter the TUI session pane, `pasclaw session list`,
+   and `pasclaw learn`'s pattern miner with empty pseudo-sessions
+   the operator never created. Callers that DO want them (the
+   gateway's /v1/stats aggregator) pass IncludeBuckets=True. *)
+function ListSessions(IncludeBuckets: Boolean = False): TSessionMetaArray;
+
+(* Predicate: True iff Id matches the gateway's bucket-session
+   naming convention. Centralised here so the TUI / Cmd.Session
+   list filtering, the /v1/stats aggregator (which opts back in),
+   and any future consumer share one rule. The current rule is
+   "starts with `_gateway_`"; tightening this is a one-liner if
+   we ever need other prefixed-id session conventions. *)
+function IsGatewayBucketSessionId(const Id: string): Boolean;
+
 function DeleteSession(const Id: string): Boolean;
 
 (* Sort a TSessionMetaArray in place, newest-first by UpdatedAt with
@@ -847,7 +864,15 @@ begin
   end;
 end;
 
-function ListSessions: TSessionMetaArray;
+function IsGatewayBucketSessionId(const Id: string): Boolean;
+const
+  Prefix = '_gateway_';
+begin
+  Result := (Length(Id) > Length(Prefix)) and
+            (Copy(Id, 1, Length(Prefix)) = Prefix);
+end;
+
+function ListSessions(IncludeBuckets: Boolean = False): TSessionMetaArray;
 var
   SR: TSearchRec;
   Pattern, Id: string;
@@ -864,6 +889,13 @@ begin
         anything a human dropped in here) -- only ids that round-trip
         through IsSafeSessionId are real sessions. }
       if not IsSafeSessionId(Id) then Continue;
+      { Hide gateway bucket sessions from the TUI session pane and
+        the `pasclaw session list` / `pasclaw learn` paths -- they
+        are stats-only synthetic sessions, never carry messages,
+        and would otherwise pollute the operator's session view
+        with one entry per stateless gateway endpoint. The /v1/
+        stats aggregator opts back in via IncludeBuckets=True. }
+      if (not IncludeBuckets) and IsGatewayBucketSessionId(Id) then Continue;
       { Load only the meta; this is wasteful but the sessions tree is
         typically small (10s to low 100s) and ListSessions runs from
         an interactive command. If it grows: write a "headers only"

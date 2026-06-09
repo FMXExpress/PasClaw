@@ -351,4 +351,11 @@ test-session-stats: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/session_stats_tests.pas -o$(BUILDDIR)/session_stats_tests
 	@PASCLAW_HOME=$(BUILDDIR)/session-stats-test-home $(BUILDDIR)/session_stats_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets
+# ListSessions bucket-filter contract -- default call hides gateway
+# stats buckets; /v1/stats opts back in via ListSessions(True).
+test-session-list-filter: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/session_list_filter_tests.pas -o$(BUILDDIR)/session_list_filter_tests
+	@PASCLAW_HOME=$(BUILDDIR)/session-list-filter-test-home $(BUILDDIR)/session_list_filter_tests
+
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter

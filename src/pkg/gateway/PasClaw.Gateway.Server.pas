@@ -821,7 +821,11 @@ begin
     Exit;
   end;
 
-  Sessions := ListSessions;
+  { IncludeBuckets: the gateway's per-endpoint stats buckets
+    (_gateway_v1_*) are hidden from the TUI / `pasclaw session
+    list` by default. The aggregator MUST see them or the
+    Stats tab loses the entire gateway-API traffic line. }
+  Sessions := ListSessions(True);
   TotalIn := 0; TotalOut := 0; CacheRead := 0; CacheWrite := 0;
   Turns := 0; ToolCalls := 0; BytesSaved := 0;
   ByProvider := TStringList.Create;
