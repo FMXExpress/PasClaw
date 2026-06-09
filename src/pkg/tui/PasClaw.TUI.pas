@@ -227,6 +227,8 @@ uses
     dcc64 can see TToolLoopResult from the TTUI class declaration. }
   PasClaw.Tools.OutputCache,       { GetOutputCacheStats — surfaced
                                      in /stats overlay }
+  PasClaw.Tools.Shell.Filters,     { ShellFilterCalls / BytesSaved
+                                     — also surfaced in /stats }
   PasClaw.Agent.Steering,
   PasClaw.Markdown.Render,
   PasClaw.Providers.Catalog,       { TProviderSpec — for TModelRefreshThread }
@@ -774,7 +776,9 @@ begin
   ToolRows := Length(FStatsToolCallNames);
   if ToolRows > 8 then ToolRows := 8;       { cap rendered rows; full
                                               list still in memory }
-  BoxH := 9 + ToolRows;                     { frame + 7 stat rows +
+  BoxH := 10 + ToolRows;                    { frame + 8 stat rows
+                                              (session/tokens/truncated/
+                                              shell/cache/tool-call hdr) +
                                               tool-call rows + footer }
   BoxX := (W - BoxW) div 2;
   BoxY := (H - BoxH) div 2;
@@ -830,6 +834,21 @@ begin
                      [FStatsTruncations, FStatsBytesSaved])
   else
     Label_ := ' truncated  none (set tool_output_cap to enable)';
+  while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+  if Length(Label_) > BoxW - 2 then Label_ := Copy(Label_, 1, BoxW - 2);
+  WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);
+  Inc(Row);
+
+  { Shell-filter savings: per-command condensers (git status/diff/log,
+    test runners, grep, ls -R, etc.) report cumulative bytes saved
+    on the success path. Zero-call line surfaces "none" so the
+    operator knows the feature is present but hasn't fired yet. }
+  GotoXY(BoxX, Row);
+  if ShellFilterCalls > 0 then
+    Label_ := Format(' shell     %d filtered call(s), saved %d bytes',
+                     [ShellFilterCalls, ShellFilterBytesSaved])
+  else
+    Label_ := ' shell     no filtered calls yet';
   while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
   if Length(Label_) > BoxW - 2 then Label_ := Copy(Label_, 1, BoxW - 2);
   WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);

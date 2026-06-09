@@ -31,7 +31,8 @@ uses
   PasClaw.JSON,
   PasClaw.Logger,
   PasClaw.Platform,
-  PasClaw.Tools.Sandbox;
+  PasClaw.Tools.Sandbox,
+  PasClaw.Tools.Shell.Filters;
 
 function ParseStringArg(const ArgsJSON, Field: string; out V: string): Boolean;
 var
@@ -85,6 +86,14 @@ begin
     WorkDir := '';
   LogDebug('shell exec (cwd=%s): %s', [WorkDir, Cmd]);
   ExitCode := RunOneShot(Cmd, WorkDir, Out_);
+  { Per-command condenser. Tee-on-failure: ApplyShellFilter returns
+    raw output verbatim when ExitCode <> 0 so the model gets full
+    error context to debug. On the success path, known commands
+    (git status/diff/log, npm/pytest/cargo test, grep/findstr/sls,
+    ls -R / find / dir /s, with PowerShell-alias normalisation)
+    get condensed; everything else passes through and falls back
+    to the OutputCache byte cap if it's still oversize. }
+  Out_ := ApplyShellFilter(Cmd, Out_, ExitCode);
   Result := Format('exit=%d'#10'%s', [ExitCode, Out_]);
 end;
 
