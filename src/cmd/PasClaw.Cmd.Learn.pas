@@ -85,10 +85,16 @@ type
   TErrorPatternArray = array of TErrorPattern;
 
   TLearnArgs = record
-    SinceDays: Integer;       { 0 = no window }
-    Write_:    Boolean;       { --write -> append to MEMORY.md }
-    MinCount:  Integer;       { drop patterns below this; default 2 }
-    Verbose:   Boolean;
+    SinceDays:   Integer;     { 0 = no window }
+    Write_:      Boolean;     { --write -> append to MEMORY.md }
+    MinSessions: Integer;     { drop patterns with fewer DISTINCT
+                                sessions; default 2. Codex P2 #1 on
+                                PR #190: was MinCount over total
+                                occurrences, which let one noisy
+                                session that repeated a single
+                                failure twice slip past the
+                                "recurring across sessions" gate. }
+    Verbose:     Boolean;
   end;
 
 procedure PrintHelp;
@@ -97,20 +103,20 @@ begin
   PrintLn('  Mine session transcripts for recurring tool failures.');
   PrintLn('');
   PrintLn('Options:');
-  PrintLn('  --since <days>   Only consider sessions newer than N days (default: all)');
-  PrintLn('  --min <count>    Drop patterns with fewer occurrences (default: 2)');
-  PrintLn('  --write          Append a Patterns block to workspace/memory/MEMORY.md');
-  PrintLn('  --verbose        Print scan progress per session');
+  PrintLn('  --since <days>           Only consider sessions newer than N days (default: all)');
+  PrintLn('  --min-sessions <count>   Drop patterns seen in fewer distinct sessions (default: 2)');
+  PrintLn('  --write                  Append a Patterns block to workspace/memory/MEMORY.md');
+  PrintLn('  --verbose                Print scan progress per session');
 end;
 
 function ParseArgs(const Argv: array of string; out A: TLearnArgs): Boolean;
 var
   i: Integer;
 begin
-  A.SinceDays := 0;
-  A.Write_    := False;
-  A.MinCount  := 2;
-  A.Verbose   := False;
+  A.SinceDays   := 0;
+  A.Write_      := False;
+  A.MinSessions := 2;
+  A.Verbose     := False;
   Result := True;
   i := 0;
   while i <= High(Argv) do
@@ -121,10 +127,13 @@ begin
       Inc(i, 2);
       Continue;
     end;
-    if (Argv[i] = '--min') and (i < High(Argv)) then
+    if ((Argv[i] = '--min-sessions') or (Argv[i] = '--min'))
+       and (i < High(Argv)) then
     begin
-      A.MinCount := StrToIntDef(Argv[i + 1], 2);
-      if A.MinCount < 1 then A.MinCount := 1;
+      { --min kept as a deprecated alias of --min-sessions to soften
+        the rename. Help text only advertises --min-sessions. }
+      A.MinSessions := StrToIntDef(Argv[i + 1], 2);
+      if A.MinSessions < 1 then A.MinSessions := 1;
       Inc(i, 2);
       Continue;
     end;
@@ -342,64 +351,93 @@ end;
 procedure ScanSession(const Sess: TSession; SinceUnix: Int64;
                      var Patterns: TErrorPatternArray);
 var
-  i, j, Idx: Integer;
-  Line, Sig, Context: string;
+  i, j, k, Idx, NameIdx: Integer;
+  Line, Sig, Context, CallId: string;
   Lines: TArray<string>;
-  PrevAssistantTool: string;
+  ToolNamesById: TStringList;
 begin
   if (SinceUnix > 0) and (Sess.Meta.UpdatedAt > 0) and
      (Sess.Meta.UpdatedAt < SinceUnix) then
     Exit;
 
-  PrevAssistantTool := '';
-  for i := 0 to High(Sess.Messages) do
-  begin
-    if Sess.Messages[i].Role = mrAssistant then
+  { Map ToolCallId -> Func.Name across the whole session so a tool
+    result can be attributed to ITS call (not just whichever call
+    happened to be first in the last assistant turn). The tool loop
+    appends one assistant message with all parallel calls, then one
+    mrTool message per call; matching by ToolCallId is the only
+    correct attribution. Codex P2 #2 on PR #190. Sorted +
+    case-sensitive IndexOfName lookup. }
+  ToolNamesById := TStringList.Create;
+  try
+    ToolNamesById.Sorted     := True;
+    ToolNamesById.Duplicates := dupIgnore;
+    for i := 0 to High(Sess.Messages) do
     begin
-      if Length(Sess.Messages[i].ToolCalls) > 0 then
-        PrevAssistantTool :=
-          Sess.Messages[i].ToolCalls[0].Func.Name;
-      Continue;
-    end;
-    if Sess.Messages[i].Role <> mrTool then Continue;
-    if Sess.Messages[i].Content = '' then Continue;
-
-    SplitToolBody(Sess.Messages[i].Content, Lines);
-    for j := 0 to High(Lines) do
-    begin
-      Line := Trim(Lines[j]);
-      if not LooksLikeFailure(Line) then Continue;
-      Sig := NormalizeErrorSignature(Line);
-      if Sig = '' then Continue;
-
-      Idx := FindPatternIndex(Sig, Patterns);
-      if Idx < 0 then
+      if Sess.Messages[i].Role = mrAssistant then
       begin
-        SetLength(Patterns, Length(Patterns) + 1);
-        Idx := High(Patterns);
-        Patterns[Idx].Signature := Sig;
-        Patterns[Idx].Count     := 0;
-        Patterns[Idx].Sessions  := TStringList.Create;
-        Patterns[Idx].Sessions.Sorted     := True;
-        Patterns[Idx].Sessions.Duplicates := dupIgnore;
-        Patterns[Idx].Sample := Line;
-        if PrevAssistantTool <> '' then
-          Context := PrevAssistantTool
-        else
-          Context := '';
-        Patterns[Idx].Context   := Context;
-        Patterns[Idx].FirstSeen := Sess.Meta.UpdatedAt;
-        Patterns[Idx].LastSeen  := Sess.Meta.UpdatedAt;
+        for k := 0 to High(Sess.Messages[i].ToolCalls) do
+        begin
+          CallId := Sess.Messages[i].ToolCalls[k].Id;
+          if CallId <> '' then
+            ToolNamesById.Add(CallId + '=' +
+                              Sess.Messages[i].ToolCalls[k].Func.Name);
+        end;
+        Continue;
       end;
-      Inc(Patterns[Idx].Count);
-      Patterns[Idx].Sessions.Add(Sess.Meta.Id);
-      if Sess.Meta.UpdatedAt > Patterns[Idx].LastSeen then
-        Patterns[Idx].LastSeen := Sess.Meta.UpdatedAt;
-      if (Patterns[Idx].FirstSeen = 0) or
-         ((Sess.Meta.UpdatedAt > 0) and
-          (Sess.Meta.UpdatedAt < Patterns[Idx].FirstSeen)) then
-        Patterns[Idx].FirstSeen := Sess.Meta.UpdatedAt;
+      if Sess.Messages[i].Role <> mrTool then Continue;
+      if Sess.Messages[i].Content = '' then Continue;
+
+      { Per-tool-message context: look up by ToolCallId. Empty
+        when the result has no id (older session JSON, model
+        skipped the id field, etc.) -- safer to drop the tool
+        annotation than to mis-attribute. }
+      Context := '';
+      if Sess.Messages[i].ToolCallId <> '' then
+      begin
+        NameIdx := ToolNamesById.IndexOfName(Sess.Messages[i].ToolCallId);
+        if NameIdx >= 0 then
+          Context := ToolNamesById.ValueFromIndex[NameIdx];
+      end;
+
+      SplitToolBody(Sess.Messages[i].Content, Lines);
+      for j := 0 to High(Lines) do
+      begin
+        Line := Trim(Lines[j]);
+        if not LooksLikeFailure(Line) then Continue;
+        Sig := NormalizeErrorSignature(Line);
+        if Sig = '' then Continue;
+
+        Idx := FindPatternIndex(Sig, Patterns);
+        if Idx < 0 then
+        begin
+          SetLength(Patterns, Length(Patterns) + 1);
+          Idx := High(Patterns);
+          Patterns[Idx].Signature := Sig;
+          Patterns[Idx].Count     := 0;
+          Patterns[Idx].Sessions  := TStringList.Create;
+          Patterns[Idx].Sessions.Sorted     := True;
+          Patterns[Idx].Sessions.Duplicates := dupIgnore;
+          Patterns[Idx].Sample    := Line;
+          Patterns[Idx].Context   := Context;
+          Patterns[Idx].FirstSeen := Sess.Meta.UpdatedAt;
+          Patterns[Idx].LastSeen  := Sess.Meta.UpdatedAt;
+        end
+        else if (Patterns[Idx].Context = '') and (Context <> '') then
+          { Backfill the tool name if the first hit didn't have a
+            ToolCallId but a later same-signature hit does. }
+          Patterns[Idx].Context := Context;
+        Inc(Patterns[Idx].Count);
+        Patterns[Idx].Sessions.Add(Sess.Meta.Id);
+        if Sess.Meta.UpdatedAt > Patterns[Idx].LastSeen then
+          Patterns[Idx].LastSeen := Sess.Meta.UpdatedAt;
+        if (Patterns[Idx].FirstSeen = 0) or
+           ((Sess.Meta.UpdatedAt > 0) and
+            (Sess.Meta.UpdatedAt < Patterns[Idx].FirstSeen)) then
+          Patterns[Idx].FirstSeen := Sess.Meta.UpdatedAt;
+      end;
     end;
+  finally
+    ToolNamesById.Free;
   end;
 end;
 
@@ -431,8 +469,18 @@ begin
   Result := IntToStr(SecondsAgo div 86400) + 'd';
 end;
 
+function PassesThreshold(const P: TErrorPattern; MinSessions: Integer): Boolean;
+{ Codex P2 #1 on PR #190: gate on distinct session count, not total
+  occurrence count. A single session repeating the same failure
+  three times still counts as one session and shouldn't qualify as
+  "recurring across sessions" -- that contradicts the command's
+  purpose and would persist single-session noise into MEMORY.md. }
+begin
+  Result := P.Sessions.Count >= MinSessions;
+end;
+
 procedure PrintReport(const Patterns: TErrorPatternArray;
-                     MinCount, ScannedSessions: Integer);
+                     MinSessions, ScannedSessions: Integer);
 var
   Now_:  Int64;
   i:     Integer;
@@ -447,7 +495,7 @@ begin
   Now_  := DateTimeToUnix(Now, False);
   for i := 0 to High(Patterns) do
   begin
-    if Patterns[i].Count < MinCount then Continue;
+    if not PassesThreshold(Patterns[i], MinSessions) then Continue;
     Inc(Shown);
     PrintLn(Ansi.Bold +
             Format('[%d] %d occurrence(s) across %d session(s)',
@@ -463,12 +511,12 @@ begin
     PrintLn('');
   end;
   if Shown = 0 then
-    PrintLn(Ansi.Dim + '(no patterns at or above --min ' +
-            IntToStr(MinCount) + ')' + Ansi.Reset);
+    PrintLn(Ansi.Dim + '(no patterns seen in at least ' +
+            IntToStr(MinSessions) + ' session(s))' + Ansi.Reset);
 end;
 
 procedure AppendToMemoryMd(const Patterns: TErrorPatternArray;
-                           MinCount: Integer);
+                           MinSessions: Integer);
 { Append a fresh "Patterns observed" block to workspace/memory/
   MEMORY.md. Each run gets its own dated section so re-running
   doesn't clobber an earlier block; operators prune entries they've
@@ -481,7 +529,7 @@ var
 begin
   Shown := 0;
   for i := 0 to High(Patterns) do
-    if Patterns[i].Count >= MinCount then Inc(Shown);
+    if PassesThreshold(Patterns[i], MinSessions) then Inc(Shown);
   if Shown = 0 then
   begin
     PrintLn(Ansi.Dim + '(no patterns to write)' + Ansi.Reset);
@@ -506,7 +554,7 @@ begin
     Sl.Add('');
     for i := 0 to High(Patterns) do
     begin
-      if Patterns[i].Count < MinCount then Continue;
+      if not PassesThreshold(Patterns[i], MinSessions) then Continue;
       Sl.Add(Format('- **%dx across %d session(s)**: %s',
                     [Patterns[i].Count, Patterns[i].Sessions.Count,
                      Patterns[i].Sample]));
@@ -566,8 +614,8 @@ begin
     end;
 
     SortPatternsByCount(Patterns);
-    PrintReport(Patterns, A.MinCount, Scanned);
-    if A.Write_ then AppendToMemoryMd(Patterns, A.MinCount);
+    PrintReport(Patterns, A.MinSessions, Scanned);
+    if A.Write_ then AppendToMemoryMd(Patterns, A.MinSessions);
   finally
     for i := 0 to High(Patterns) do Patterns[i].Sessions.Free;
   end;
