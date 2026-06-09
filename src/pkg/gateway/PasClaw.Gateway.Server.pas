@@ -1777,6 +1777,66 @@ begin
     Result := Result + Alphabet[1 + Random(Length(Alphabet))];
 end;
 
+{ ============= provider-signature cache (Gemini 3 thoughtSignature) =============
+
+  PR #154 added a `provider_signature` extension field on /v1/responses
+  function_call output items so PasClaw could round-trip Gemini 3+'s
+  thoughtSignature across turns. That works for a PasClaw-aware client.
+  Codex CLI (and any stock OpenAI-Responses client) JSON-validates input
+  items and drops unknown fields -- so the signature is gone by the next
+  turn, and Gemini 3 returns:
+
+      400 Function call is missing a thought_signature in functionCall parts.
+
+  Belt-and-suspenders: also keep a process-wide call_id -> signature map.
+  Whenever PasClaw emits a function_call output item with a non-empty
+  signature, remember it. When an incoming function_call input item lacks
+  one but echoes a call_id we recognise, restore it before the request
+  goes back to the provider.
+
+  Bounded to PROVIDER_SIGNATURE_CACHE_MAX entries (default 1024) -- a
+  long-lived /v1/responses session has maybe dozens of tool calls; 1024
+  covers ~50 active conversations comfortably. Eviction is FIFO via
+  TStringList ordering; we delete the oldest when capacity hits.
+  Per-process, in-memory only -- restart drops the cache (consistent
+  with the rest of /v1/responses, which has no durable session). }
+const
+  PROVIDER_SIGNATURE_CACHE_MAX = 1024;
+
+var
+  GProviderSignatureCacheLock: TCriticalSection;
+  GProviderSignatureCache:     TStringList;
+
+procedure RememberProviderSignature(const CallId, Signature: string);
+begin
+  if (CallId = '') or (Signature = '') then Exit;
+  GProviderSignatureCacheLock.Enter;
+  try
+    if GProviderSignatureCache.IndexOfName(CallId) >= 0 then Exit;
+    if GProviderSignatureCache.Count >= PROVIDER_SIGNATURE_CACHE_MAX then
+      GProviderSignatureCache.Delete(0);    { FIFO eviction }
+    GProviderSignatureCache.Add(CallId + '=' + Signature);
+  finally
+    GProviderSignatureCacheLock.Leave;
+  end;
+end;
+
+function LookupProviderSignature(const CallId: string): string;
+var
+  Idx: Integer;
+begin
+  Result := '';
+  if CallId = '' then Exit;
+  GProviderSignatureCacheLock.Enter;
+  try
+    Idx := GProviderSignatureCache.IndexOfName(CallId);
+    if Idx >= 0 then
+      Result := GProviderSignatureCache.ValueFromIndex[Idx];
+  finally
+    GProviderSignatureCacheLock.Leave;
+  end;
+end;
+
 function FunctionCallItemJSON(const ItemId, CallId, Name, ArgsJSON, Status,
                               Signature: string): string;
 { One ResponseOutputItem of type function_call, serialized to a JSON
@@ -1816,7 +1876,17 @@ begin
     Obj.PutStr('name',      Name);
     Obj.PutStr('arguments', ArgsJSON);
     if Signature <> '' then
+    begin
       Obj.PutStr('provider_signature', Signature);
+      { Belt-and-suspenders: stock OpenAI-Responses clients (Codex
+        CLI, etc.) JSON-validate input items and drop unknown
+        fields, so the signature gets lost by the next turn and
+        Gemini 3 rejects with "missing thought_signature".
+        Cache (call_id -> signature) here so the input-parser path
+        can restore it from server memory even when the client
+        didn't echo it back. }
+      RememberProviderSignature(CallId, Signature);
+    end;
     Result := Obj.ToJSON;
   finally
     Obj.Free;
@@ -2644,6 +2714,7 @@ var
   ParamsObj: TJsonObject;
   ParamsRaw, ToolKind, ToolDisplayName: string;
   EmptyToolCalls: array of TToolCall;
+  FcCallIdVal, FcSignatureVal: string;
 
   procedure AppendMessage(Role: TMsgRole; const Content: string);
   begin
@@ -2857,12 +2928,28 @@ begin
           begin
             { Previous-turn tool call coming back in the input stream.
               Synthesize an assistant message carrying the matching
-              TToolCall -- see AppendAssistantToolCall comment. }
+              TToolCall -- see AppendAssistantToolCall comment.
+
+              Signature resolution order:
+                1. provider_signature field on the input item (the
+                   PasClaw-aware client path -- Codex with the PR #154
+                   extension echoed it back).
+                2. Server-side cache by call_id (the stock-client path
+                   -- Codex CLI etc. strip unknown fields, so we
+                   restore from memory).
+              Either path yields a non-empty signature when the original
+              tool call carried one, so Gemini 3's "missing
+              thought_signature" 400 stops triggering when an
+              OpenAI-Responses client doesn't preserve our extension. }
+            FcCallIdVal    := InputObj.GetStr('call_id', InputObj.GetStr('id', ''));
+            FcSignatureVal := InputObj.GetStr('provider_signature', '');
+            if FcSignatureVal = '' then
+              FcSignatureVal := LookupProviderSignature(FcCallIdVal);
             AppendAssistantToolCall(
-              InputObj.GetStr('call_id', InputObj.GetStr('id', '')),
+              FcCallIdVal,
               InputObj.GetStr('name',      ''),
               InputObj.GetStr('arguments', '{}'),
-              InputObj.GetStr('provider_signature', ''));
+              FcSignatureVal);
           end
           else if ItemType = 'function_call_output' then
           begin
@@ -3190,5 +3277,22 @@ begin
     Root.Free;
   end;
 end;
+
+initialization
+  GProviderSignatureCacheLock := TCriticalSection.Create;
+  GProviderSignatureCache     := TStringList.Create;
+  { Unsorted on purpose: insertion order doubles as FIFO so the
+    eviction in RememberProviderSignature (Delete(0)) actually drops
+    the OLDEST entry. A sorted+dupIgnore TStringList would order by
+    call_id alphabetically and Delete(0) would evict whichever
+    conversation happened to draw the lowest call_id, breaking
+    active turns unpredictably. IndexOfName scans linearly but
+    PROVIDER_SIGNATURE_CACHE_MAX is small (1024) and we only hit
+    this on tool-call boundaries -- O(n) lookups are sub-millisecond
+    and rare. }
+
+finalization
+  GProviderSignatureCache.Free;
+  GProviderSignatureCacheLock.Free;
 
 end.
