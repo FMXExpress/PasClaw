@@ -1,57 +1,84 @@
-/* PasClaw browser-bundle UI — chrome around the container2wasm xterm terminal.
-   Purely additive: injected into the upstream example index.html by
-   browser/build.sh. Targets only the page chrome and standard xterm.js
-   classes; it does not touch how the emulator/terminal boots. */
+/* PasClaw browser-bundle UI — synthwave chrome around the container2wasm
+   xterm terminal. Palette mirrors the gateway web UI (src/pkg/gateway/
+   webui.html). Purely additive: injected into the upstream example
+   index.html by browser/build.sh; targets only page chrome + standard
+   xterm.js classes, never how the emulator boots. */
 
 :root {
-  --pc-bg:  #0e1014;
-  --pc-fg:  #e8e8e8;
-  --pc-mut: #7e858f;
-  --pc-blue:#3e5db9;
-  --pc-red: #d54646;
-  --pc-line:#20242c;
+  --bg:   #050611;
+  --bg2:  #0b1026;
+  --fg:   #f5f7ff;
+  --mut:  #8f9bc6;
+  --cyan: #20f6ff;
+  --mag:  #ff37d5;
+  --violet:#8f5cff;
+  --red:  #ff4d6d;
+  --panel:rgba(12,18,43,.72);
+  --line: rgba(32,246,255,.22);
+  --glow-cyan: 0 0 18px rgba(32,246,255,.55), 0 0 42px rgba(32,246,255,.18);
+  --glow-mag:  0 0 18px rgba(255,55,213,.55), 0 0 42px rgba(255,55,213,.18);
+  --shadow: 0 18px 60px rgba(0,0,0,.45);
 }
 
 html, body { height: 100%; }
 
 body {
   margin: 0;
-  background: var(--pc-bg);
-  color: var(--pc-fg);
+  color: var(--fg);
   font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   display: flex;
   flex-direction: column;
   min-height: 100vh;
+  background:
+    radial-gradient(circle at 15% 10%, rgba(255,55,213,.22), transparent 28rem),
+    radial-gradient(circle at 85% 0%,  rgba(32,246,255,.18), transparent 26rem),
+    radial-gradient(circle at 55% 100%,rgba(255,77,109,.20), transparent 30rem),
+    linear-gradient(135deg, var(--bg), var(--bg2) 48%, #13051f);
+  background-attachment: fixed;
 }
 
-/* top bar */
+/* top bar — glassy synthwave panel */
 .pc-header {
   flex: 0 0 auto;
   display: flex;
   align-items: center;
   gap: .75rem;
-  padding: .5rem .9rem;
-  background: #15171c;
-  border-bottom: 1px solid var(--pc-line);
+  padding: .55rem 1rem;
+  background: linear-gradient(120deg, var(--panel), rgba(14,8,29,.7));
+  border-bottom: 1px solid var(--line);
+  box-shadow: var(--shadow), inset 0 1px 0 rgba(255,255,255,.08);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
 }
-.pc-logo { font-weight: 700; letter-spacing: .5px; }
-.pc-blue { color: var(--pc-blue); }
-.pc-red  { color: var(--pc-red); }
-.pc-tag  { color: var(--pc-mut); font-size: 12px; }
+.pc-logo { font-weight: 700; letter-spacing: 1px; text-shadow: var(--glow-cyan); }
+.pc-blue { color: var(--cyan); }
+.pc-red  { color: var(--mag); text-shadow: var(--glow-mag); }
+.pc-tag {
+  color: #dbe7ff;
+  font-size: 11px;
+  letter-spacing: .02em;
+  padding: .15rem .5rem;
+  border-radius: 999px;
+  background: linear-gradient(90deg, rgba(32,246,255,.12), rgba(255,55,213,.12));
+  border: 1px solid var(--line);
+}
 .pc-spacer { margin-left: auto; }
 .pc-link {
-  color: var(--pc-mut);
+  color: var(--mut);
   text-decoration: none;
   font-size: 12px;
+  padding: .2rem .55rem;
+  border-radius: 8px;
+  border: 1px solid transparent;
 }
-.pc-link:hover { color: var(--pc-fg); }
+.pc-link:hover { color: var(--fg); border-color: rgba(32,246,255,.4); box-shadow: var(--glow-cyan); }
 
-/* terminal fills the rest */
+/* terminal fills the rest; let the backdrop glow show through the padding */
 #terminal {
   flex: 1 1 auto;
   min-height: 0;
-  padding: .5rem .6rem;
-  background: var(--pc-bg);
+  padding: .6rem .7rem;
+  background: transparent;
 }
 
 /* boot/loading overlay (auto-dismisses on first terminal output) */
@@ -62,22 +89,27 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: var(--pc-bg);
-  transition: opacity .35s ease;
   cursor: pointer;
+  transition: opacity .35s ease;
+  background:
+    radial-gradient(circle at 50% 30%, rgba(255,55,213,.18), transparent 30rem),
+    radial-gradient(circle at 50% 80%, rgba(32,246,255,.16), transparent 28rem),
+    linear-gradient(135deg, var(--bg), var(--bg2) 48%, #13051f);
 }
 .pc-boot.pc-hide { opacity: 0; pointer-events: none; }
-.pc-boot-inner { text-align: center; max-width: 32rem; padding: 1rem; }
-.pc-boot-logo  { font-weight: 700; letter-spacing: 1px; font-size: 20px; }
-.pc-boot-msg   { margin-top: 1.1rem; font-weight: 700; }
-.pc-boot-sub   { margin-top: .4rem; color: var(--pc-mut); font-size: 12px; }
-.pc-boot-skip  { margin-top: 1rem; color: var(--pc-mut); font-size: 11px; }
+.pc-boot-inner { text-align: center; max-width: 34rem; padding: 1.2rem; }
+.pc-boot-logo  { font-weight: 700; letter-spacing: 2px; font-size: 22px; text-shadow: var(--glow-cyan); }
+.pc-boot-msg   { margin-top: 1.1rem; font-weight: 700; color: var(--fg); }
+.pc-boot-sub   { margin-top: .45rem; color: var(--mut); font-size: 12px; line-height: 1.5; }
+.pc-boot-skip  { margin-top: 1rem; color: var(--mut); font-size: 11px; letter-spacing: .04em; }
 .pc-spin {
-  width: 34px; height: 34px;
-  margin: 1.4rem auto 0;
-  border: 3px solid #2a2d34;
-  border-top-color: var(--pc-blue);
+  width: 36px; height: 36px;
+  margin: 1.5rem auto 0;
+  border: 3px solid rgba(143,92,255,.25);
+  border-top-color: var(--cyan);
+  border-right-color: var(--mag);
   border-radius: 50%;
+  box-shadow: var(--glow-cyan);
   animation: pc-rot .9s linear infinite;
 }
 @keyframes pc-rot { to { transform: rotate(360deg); } }

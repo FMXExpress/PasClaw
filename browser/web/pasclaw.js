@@ -34,9 +34,9 @@
     icon.rel = 'icon';
     icon.href = 'data:image/svg+xml,' + encodeURIComponent(
       '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">' +
-      '<rect width="16" height="16" rx="3" fill="#0e1014"/>' +
-      '<rect x="3" y="3" width="5" height="10" fill="#3e5db9"/>' +
-      '<rect x="8" y="3" width="5" height="10" fill="#d54646"/></svg>');
+      '<rect width="16" height="16" rx="3" fill="#050611"/>' +
+      '<rect x="3" y="3" width="5" height="10" fill="#20f6ff"/>' +
+      '<rect x="8" y="3" width="5" height="10" fill="#ff37d5"/></svg>');
     document.head.appendChild(icon);
 
     /* 2) header bar */
