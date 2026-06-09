@@ -46,6 +46,7 @@ uses
   PasClaw.Skills.Loader,
   PasClaw.Agent.Prompt,
   PasClaw.Agent.Subagent,
+  PasClaw.Agent.AutoRouter,
   PasClaw.Session.Store,
   PasClaw.Tools.Sandbox,
   PasClaw.Identity,
@@ -401,6 +402,19 @@ var
   SystemPromptOverride: string;   { tracks the compacted system prompt across turns }
   WorkingStateBlock: string;       { per-turn prefix from Session.Meta.WorkingState }
   ThinkingOn: Boolean;             { toggled by /think; cleared each turn after sending }
+  { Auto-router state. PrimaryProvider keeps the originally-picked
+    provider so we can restore after a routed turn, and so the
+    routed turn can prepend it to the fallback list. EasyProvider
+    is built lazily on first need, cached for the rest of the
+    session. PrimaryFallbacks remembers the fallback chain we'd
+    use on a non-routed turn so we can swap it out for the routed
+    chain ("original primary + original fallbacks") and back. }
+  PrimaryProvider:   ILLMProvider;
+  EasyProvider:      ILLMProvider;
+  PrimaryFallbacks:  TLLMProviderArray;
+  RoutedProviderNm:  string;
+  RoutedModelOverride: string;
+  RoutedThisTurn:    Boolean;
   CompactOptsLocal: TCompactOptions;
   CompactedLiveOpts: TChatOptions;
   Session: TSession;               { always non-nil in interactive mode }
@@ -429,6 +443,11 @@ begin
   Offline := not PickProvider(Cfg, A, Provider, Err);
   if Offline then
     PrintLn(Ansi.Yellow + '(offline preview -- ' + Err + ')' + Ansi.Reset);
+  PrimaryProvider     := Provider;
+  EasyProvider        := nil;       { lazy }
+  RoutedThisTurn      := False;
+  RoutedProviderNm    := '';
+  RoutedModelOverride := '';
   PrintLn(Ansi.Dim + 'PasClaw interactive chat. /help for commands, /quit to exit.' + Ansi.Reset);
 
   if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
@@ -673,9 +692,66 @@ begin
         ThinkingOn := False;
       end;
 
+      { Auto-router: classify the latest user message and, if it
+        looks easy enough, swap LoopCfg.Provider to the cheap
+        fallback for this turn. Keeps the primary on the fallback
+        list as the first retry target so a routing-fooled turn
+        falls back cleanly without operator intervention. See
+        PasClaw.Agent.AutoRouter for the heuristic. }
+      RoutedThisTurn := False;
+      if Reg <> nil then Names := Reg.Names else Names := nil;
+      if (not Offline) and (PrimaryProvider <> nil) then
+        if RouteProvider(Cfg, Line,
+                         Names,
+                         RoutedProviderNm, RoutedModelOverride) then
+        begin
+          { Lazy-build the easy provider on first routing. Cached
+            for the rest of the session so we don't pay the
+            construction cost per routed turn. If the build fails
+            (catalog drift, missing key) we log once and stay on
+            the primary -- never crash mid-turn for a router
+            misconfiguration. }
+          if EasyProvider = nil then
+            if not NewProviderFromConfig(Cfg, RoutedProviderNm,
+                                         EasyProvider, Err) then
+            begin
+              LogWarn('auto-router: easy provider "%s" unresolvable: %s',
+                      [RoutedProviderNm, Err]);
+              EasyProvider := nil;
+            end;
+          if EasyProvider <> nil then
+          begin
+            PrimaryFallbacks := LoopCfg.Fallbacks;
+            LoopCfg.Provider := EasyProvider;
+            { Prepend the original primary to the fallback chain
+              so a failed routed call drops cleanly back to the
+              provider the operator would have used anyway. }
+            SetLength(LoopCfg.Fallbacks, Length(PrimaryFallbacks) + 1);
+            LoopCfg.Fallbacks[0] := PrimaryProvider;
+            for i := 0 to High(PrimaryFallbacks) do
+              LoopCfg.Fallbacks[i + 1] := PrimaryFallbacks[i];
+            { RouteProvider resolved the model for us (explicit
+              EasyModel -> per-provider stored Model -> catalog
+              default) and refused to route if none of those
+              produced a value -- so RoutedModelOverride is
+              guaranteed non-empty when we're here. Overriding
+              LoopCfg.Model is mandatory: BuildLoopConfig set it
+              to the primary's model and passing claude-* to a
+              Groq endpoint (etc.) just fails. Codex P2 #203. }
+            LoopCfg.Model := RoutedModelOverride;
+            RoutedThisTurn := True;
+            PrintLn(Ansi.Dim + '(routed -> ' + RoutedProviderNm + ')' + Ansi.Reset);
+          end;
+        end;
+
       if RunToolLoop(LoopCfg, Msgs, Loop) then
       begin
-        PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ' (' + Provider.GetName + '/' + Model + '):');
+        if RoutedThisTurn then
+          PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ' (' +
+                  RoutedProviderNm + '/' + RoutedModelOverride +
+                  ', auto-routed):')
+        else
+          PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ' (' + Provider.GetName + '/' + Model + '):');
         PrintLn(MaybeRender(Cfg, Loop.Content));
         if Loop.TotalUsage.InputTokens + Loop.TotalUsage.OutputTokens > 0 then
         begin
