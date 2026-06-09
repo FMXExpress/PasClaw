@@ -97,10 +97,16 @@ curl -fsSL -o "$WORK/np.wasm" \
   "https://github.com/container2wasm/container2wasm/releases/download/${C2W_VERSION}/c2w-net-proxy.wasm"
 gzip -c "$WORK/np.wasm" > "$OUT/c2w-net-proxy.wasm.gzip"
 
-echo "==> 7/7  enable cross-origin isolation on header-less static hosts"
+echo "==> 7/7  cross-origin isolation shim + PasClaw UI chrome"
 cp browser/coi-serviceworker.js "$OUT/"
 if ! grep -q coi-serviceworker "$OUT/index.html"; then
   sed -i 's#<head>#<head><script src="coi-serviceworker.js"></script>#' "$OUT/index.html"
+fi
+# PasClaw page chrome (branding, boot screen, auto ?net=browser). Additive —
+# the upstream terminal still boots if these are removed.
+cp browser/web/pasclaw.css browser/web/pasclaw.js "$OUT/"
+if ! grep -q pasclaw.js "$OUT/index.html"; then
+  sed -i 's#<head>#<head>\n  <link rel="stylesheet" href="pasclaw.css">\n  <script src="pasclaw.js"></script>#' "$OUT/index.html"
 fi
 
 echo
