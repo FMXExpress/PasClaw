@@ -165,6 +165,87 @@ var
   GStatsCacheBody:     string    = '';
   GStatsCacheTtlSecs:  Integer   = 5;
 
+  { Mutex around the per-endpoint stats sessions
+    (_gateway_v1_chat / _gateway_v1_chat_completions /
+    _gateway_v1_responses). Each gateway request that completes
+    reads-modifies-writes its bucket's session file; without this
+    a concurrent pair of /v1/chat/completions calls could land
+    in the load-accumulate-save race and lose one turn's worth
+    of counters. Single lock is fine: the work inside is a
+    tiny TSession.Save (one fwrite of a few KB), bucket
+    contention is low, and contention across buckets is rare in
+    practice (operators tend to use one endpoint at a time). }
+  GGatewayStatsLock: TCriticalSection = nil;
+
+const
+  { Bucket session ids. These are real session JSON files written
+    under $PASCLAW_HOME/workspace/sessions/ -- HandleStats walks
+    that directory so they show up in /v1/stats totals without
+    any aggregator changes. The leading underscore is intentional
+    (IsSafeSessionId allows it) so they sort to the top of the
+    sidebar and are visually distinct from operator-named
+    sessions. The web UI shows the Title we set on first save
+    ("(gateway: /v1/chat/completions)" etc.), so even when an
+    operator clicks one in the sidebar the purpose is obvious. }
+  GW_BUCKET_V1_CHAT             = '_gateway_v1_chat';
+  GW_BUCKET_V1_CHAT_COMPLETIONS = '_gateway_v1_chat_completions';
+  GW_BUCKET_V1_RESPONSES        = '_gateway_v1_responses';
+
+procedure AccumulateGatewayStats(const Cfg: TConfig;
+                                 const BucketId, Title: string;
+                                 const ProviderName, Model: string;
+                                 const Loop: TToolLoopResult);
+{ Per-endpoint stats bucket for stateless gateway requests. The
+  gateway's chat / chat-completions / responses endpoints don't
+  carry session state across requests (OpenAI-compatible APIs
+  are stateless by convention), so we'd otherwise see no entries
+  at /v1/stats for those paths. Bucketing by endpoint folds every
+  request through that endpoint into one synthetic session whose
+  Turns / tokens / tool-calls counters accumulate across calls.
+
+  Trade-off: by_model and by_provider rollups for these bucket
+  sessions reflect the MOST RECENT request, not every request --
+  Meta.Model and Meta.Provider are scalar. A precise per-model
+  breakdown would need either (a) one bucket per (endpoint,
+  model) pair, or (b) a richer schema. The user explicitly asked
+  for the simpler aggregate-per-endpoint shape; this is that.
+
+  Thread safety: a global TCriticalSection serialises the
+  open-accumulate-save sequence. Two concurrent calls to the
+  same endpoint would otherwise race the file. Bucket
+  granularity is fine for the contention we expect (operator
+  driving one tab at a time); per-bucket locks could come later
+  if a multi-tenant deploy showed contention. }
+var
+  S: TSession;
+begin
+  if not Cfg.StatsCollectionEnabled then Exit;
+  if BucketId = '' then Exit;
+  GGatewayStatsLock.Enter;
+  try
+    S := TSession.Create(BucketId);
+    try
+      if (not S.MetaExists) and (S.Meta.Title = '') then
+        S.Meta.Title := Title;
+      if Model        <> '' then S.Meta.Model    := Model;
+      if ProviderName <> '' then S.Meta.Provider := ProviderName;
+      AccumulateTurnStats(S.Meta,
+                          Loop.TotalUsage.InputTokens,
+                          Loop.TotalUsage.OutputTokens,
+                          Loop.TotalUsage.CacheReadTokens,
+                          Loop.TotalUsage.CacheCreatedTokens,
+                          Loop.ToolCallsDispatched,
+                          Loop.TruncatedBytesSaved);
+      S.Touch;
+      S.Save;
+    finally
+      S.Free;
+    end;
+  finally
+    GGatewayStatsLock.Leave;
+  end;
+end;
+
 constructor TGatewayServer.Create(Cfg: TConfig; Provider: ILLMProvider; Registry: TToolRegistry);
 begin
   inherited Create;
@@ -1167,6 +1248,9 @@ begin
     WriteJSON(AResp, 502, '{"error":"loop failed"}');
     Exit;
   end;
+  AccumulateGatewayStats(FCfg, GW_BUCKET_V1_CHAT,
+                         '(gateway: /v1/chat)',
+                         FProvider.GetName, LoopCfg.Model, Loop);
 
   RespJ := TJsonObject.Create;
   try
@@ -1775,6 +1859,9 @@ begin
         StreamClosed := Streamer.Closed;
         Exit;
       end;
+      AccumulateGatewayStats(FCfg, GW_BUCKET_V1_CHAT_COMPLETIONS,
+                             '(gateway: /v1/chat/completions)',
+                             FProvider.GetName, ReqModel, Loop);
       if Loop.LastResp.FinishReason <> '' then
         FinishReason := Loop.LastResp.FinishReason
       else
@@ -1848,6 +1935,9 @@ begin
         '{"error":{"message":"tool loop failed","type":"server_error"}}');
       Exit;
     end;
+    AccumulateGatewayStats(FCfg, GW_BUCKET_V1_CHAT_COMPLETIONS,
+                           '(gateway: /v1/chat/completions)',
+                           FProvider.GetName, ReqModel, Loop);
 
     if Loop.LastResp.FinishReason <> '' then
       FinishReason := Loop.LastResp.FinishReason
@@ -3359,6 +3449,9 @@ begin
         end;
         Exit;
       end;
+      AccumulateGatewayStats(FCfg, GW_BUCKET_V1_RESPONSES,
+                             '(gateway: /v1/responses)',
+                             FProvider.GetName, ReqModel, Loop);
 
       if Loop.LastResp.FinishReason <> '' then
         FinishReason := Loop.LastResp.FinishReason
@@ -3447,6 +3540,7 @@ end;
 initialization
   GProviderSignatureCacheLock := TCriticalSection.Create;
   GProviderSignatureCache     := TStringList.Create;
+  GGatewayStatsLock           := TCriticalSection.Create;
   { Unsorted on purpose: insertion order doubles as FIFO so the
     eviction in RememberProviderSignature (Delete(0)) actually drops
     the OLDEST entry. A sorted+dupIgnore TStringList would order by
@@ -3460,5 +3554,6 @@ initialization
 finalization
   GProviderSignatureCache.Free;
   GProviderSignatureCacheLock.Free;
+  GGatewayStatsLock.Free;
 
 end.
