@@ -725,6 +725,7 @@ procedure TTUI.AccumulateLoopStats(const Loop: TToolLoopResult);
   wants to see. }
 var
   i, k: Integer;
+  Cfg: TConfig;
 begin
   Inc(FStatsTurns);
   Inc(FStatsUsage.InputTokens,        Loop.TotalUsage.InputTokens);
@@ -733,6 +734,33 @@ begin
   Inc(FStatsUsage.CacheCreatedTokens, Loop.TotalUsage.CacheCreatedTokens);
   Inc(FStatsTruncations, Loop.Truncations);
   Inc(FStatsBytesSaved,  Loop.TruncatedBytesSaved);
+  { Persist into the session JSON as well, so /v1/stats can aggregate
+    across sessions without re-parsing the message log. Gated on the
+    config flag (default off, opt-in via onboarding) -- when off, the
+    on-disk schema is byte-identical to the pre-feature shape. The
+    in-memory FStats* counters above stay live regardless of the flag
+    so the /stats overlay still works on flag-off sessions.
+
+    Re-reading TConfig per turn is cheap (one ReadFileText + JSON parse
+    over a small file) and avoids threading a new field through every
+    TTUI.Create / FCfg-touching call site. If this shows up in a
+    profile, cache it on the TTUI instance. }
+  if FSession <> nil then
+  begin
+    Cfg := LoadConfig;
+    try
+      if Cfg.StatsCollectionEnabled then
+        AccumulateTurnStats(FSession.Meta,
+                            Loop.TotalUsage.InputTokens,
+                            Loop.TotalUsage.OutputTokens,
+                            Loop.TotalUsage.CacheReadTokens,
+                            Loop.TotalUsage.CacheCreatedTokens,
+                            Loop.ToolCallsDispatched,
+                            Loop.TruncatedBytesSaved);
+    finally
+      Cfg.Free;
+    end;
+  end;
 
   { Tool calls live on assistant messages with non-empty ToolCalls.
     Walking FinalMessages catches every call from this loop's turns

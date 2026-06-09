@@ -83,6 +83,31 @@ type
     Updated:     Int64;
   end;
 
+  (* Persisted per-session usage counters. Populated turn-by-turn by
+     the tool loop callers when Cfg.StatsCollectionEnabled is True,
+     so /v1/stats can aggregate across sessions without re-parsing
+     the message log every refresh.
+
+     Flag-off path leaves every field at zero -- no on-disk diff
+     versus the pre-feature schema, so old sessions and stats-off
+     sessions round-trip identically.
+
+     The fields chosen mirror what the TUI /stats overlay shows:
+     usage tokens (in / out / cache_w / cache_r), iteration count,
+     total tool calls, and OutputCache truncation savings. Per-tool
+     call counts would be nice but require a string-keyed map in
+     JSON which is more bookkeeping than it earns in v1 -- the
+     aggregate ToolCalls is enough for "is the agent looping?". *)
+  TSessionStats = record
+    InputTokens:          Int64;
+    OutputTokens:         Int64;
+    CacheReadTokens:      Int64;
+    CacheCreatedTokens:   Int64;
+    Turns:                Int64;
+    ToolCalls:            Int64;
+    TruncationBytesSaved: Int64;
+  end;
+
   TSessionMeta = record
     Id:                   string;     { 20260601T134215-a3f4c2e1 }
     CreatedAt:            Int64;      { unix seconds, UTC }
@@ -92,6 +117,7 @@ type
     Provider:             string;     { last provider name }
     SystemPromptOverride: string;     { compacted system prompt across turns }
     WorkingState:         TWorkingState;
+    Stats:                TSessionStats;
   end;
   TSessionMetaArray = array of TSessionMeta;
 
@@ -164,6 +190,16 @@ procedure UpdateWorkingStateAfterTurn(var Meta: TSessionMeta;
    Returns '' when no fields are populated -- callers concat
    unconditionally and rely on the empty-string short-circuit. *)
 function FormatWorkingStateBlock(const Meta: TSessionMeta): string;
+
+(* Accumulate a turn's usage / tool-call / truncation deltas into the
+   session's persistent stats. Caller checks Cfg.StatsCollectionEnabled
+   before invoking -- this helper assumes the flag is on and just
+   does the arithmetic. Turns is incremented by 1; everything else
+   is added as-is. *)
+procedure AccumulateTurnStats(var Meta: TSessionMeta;
+                              InputTokens, OutputTokens,
+                              CacheReadTokens, CacheCreatedTokens: Int64;
+                              ToolCallsDelta, TruncationBytesDelta: Int64);
 
 implementation
 
@@ -421,6 +457,55 @@ begin
   end;
 end;
 
+procedure WriteSessionStatsJSON(MetaObj: TJsonObject;
+                                const S: TSessionStats);
+{ Persist the stats record into the session meta JSON. Skips the
+  block entirely when every counter is zero so a stats-off session
+  produces byte-identical output to the pre-feature schema -- no
+  diff to review, no migration concern. }
+var
+  Obj: TJsonObject;
+begin
+  if (S.InputTokens = 0) and (S.OutputTokens = 0) and
+     (S.CacheReadTokens = 0) and (S.CacheCreatedTokens = 0) and
+     (S.Turns = 0) and (S.ToolCalls = 0) and
+     (S.TruncationBytesSaved = 0) then
+    Exit;
+  Obj := TJsonObject.Create;
+  try
+    Obj.PutInt('input_tokens',           S.InputTokens);
+    Obj.PutInt('output_tokens',          S.OutputTokens);
+    Obj.PutInt('cache_read_tokens',      S.CacheReadTokens);
+    Obj.PutInt('cache_created_tokens',   S.CacheCreatedTokens);
+    Obj.PutInt('turns',                  S.Turns);
+    Obj.PutInt('tool_calls',             S.ToolCalls);
+    Obj.PutInt('truncation_bytes_saved', S.TruncationBytesSaved);
+    MetaObj.PutObject('stats', Obj);
+  except
+    Obj.Free; raise;
+  end;
+end;
+
+procedure ReadSessionStatsJSON(MetaObj: TJsonObject; var S: TSessionStats);
+var
+  Obj: TJsonObject;
+begin
+  S := Default(TSessionStats);
+  Obj := MetaObj.ChildObject('stats');
+  if Obj = nil then Exit;
+  try
+    S.InputTokens          := Obj.GetInt('input_tokens',           0);
+    S.OutputTokens         := Obj.GetInt('output_tokens',          0);
+    S.CacheReadTokens      := Obj.GetInt('cache_read_tokens',      0);
+    S.CacheCreatedTokens   := Obj.GetInt('cache_created_tokens',   0);
+    S.Turns                := Obj.GetInt('turns',                  0);
+    S.ToolCalls            := Obj.GetInt('tool_calls',             0);
+    S.TruncationBytesSaved := Obj.GetInt('truncation_bytes_saved', 0);
+  finally
+    Obj.Free;
+  end;
+end;
+
 function ParseFsArg(const ArgsJSON, Field: string): string;
 { Extract a string argument from a tool call's JSON args. Used to
   pull `path` out of fs_write / fs_edit_hashline calls and
@@ -535,6 +620,20 @@ begin
   if Changed then Meta.WorkingState.Updated := NowUnix;
 end;
 
+procedure AccumulateTurnStats(var Meta: TSessionMeta;
+                              InputTokens, OutputTokens,
+                              CacheReadTokens, CacheCreatedTokens: Int64;
+                              ToolCallsDelta, TruncationBytesDelta: Int64);
+begin
+  Inc(Meta.Stats.InputTokens,          InputTokens);
+  Inc(Meta.Stats.OutputTokens,         OutputTokens);
+  Inc(Meta.Stats.CacheReadTokens,      CacheReadTokens);
+  Inc(Meta.Stats.CacheCreatedTokens,   CacheCreatedTokens);
+  Inc(Meta.Stats.Turns,                1);
+  Inc(Meta.Stats.ToolCalls,            ToolCallsDelta);
+  Inc(Meta.Stats.TruncationBytesSaved, TruncationBytesDelta);
+end;
+
 function FormatWorkingStateBlock(const Meta: TSessionMeta): string;
 var
   i: Integer;
@@ -587,6 +686,7 @@ begin
     MetaObj.PutStr('provider',               Meta.Provider);
     MetaObj.PutStr('system_prompt_override', Meta.SystemPromptOverride);
     WriteWorkingStateJSON(MetaObj, Meta.WorkingState);
+    WriteSessionStatsJSON(MetaObj, Meta.Stats);
     Root.PutObject('meta', MetaObj);
 
     Arr := TJsonArray.Create;
@@ -658,6 +758,7 @@ begin
         Meta.Provider             := MetaObj.GetStr('provider',               '');
         Meta.SystemPromptOverride := MetaObj.GetStr('system_prompt_override', '');
         ReadWorkingStateJSON(MetaObj, Meta.WorkingState);
+        ReadSessionStatsJSON (MetaObj, Meta.Stats);
       finally
         MetaObj.Free;
       end;

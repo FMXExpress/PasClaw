@@ -129,6 +129,12 @@ type
        Cfg.ToolOutputCap = 0. *)
     Truncations:        Integer;
     TruncatedBytesSaved: Int64;
+    (* Aggregate count of tool calls dispatched across the loop's
+       iterations. Lets callers persisting per-session stats
+       attribute "how chatty was this turn" without re-walking the
+       message history. Zero on a single-shot response that needed
+       no tool use. *)
+    ToolCallsDispatched: Int64;
     (* The final history at the moment RunToolLoop returns, with all
        in-flight compactions applied. Interactive callers (Cmd.Agent's
        RunInteractive, the TUI) read this back into their own message
@@ -540,6 +546,7 @@ begin
   Loop.TotalUsage := Default(TUsageInfo);
   Loop.Truncations         := 0;
   Loop.TruncatedBytesSaved := 0;
+  Loop.ToolCallsDispatched := 0;
 
   if Cfg.Provider = nil then Exit(False);
 
@@ -793,6 +800,7 @@ begin
     { Allocate one dispatch slot per tool call upfront so workers can hold
       a pointer to a slot without worrying about array reallocation. }
     SetLength(Dispatches, Length(Resp.ToolCalls));
+    Inc(Loop.ToolCallsDispatched, Length(Resp.ToolCalls));
     for i := 0 to High(Resp.ToolCalls) do
     begin
       Dispatches[i].Call       := Resp.ToolCalls[i];

@@ -362,6 +362,15 @@ type
        config.json under "tool_output_cap" -- 8192 is a reasonable
        starting cap (≈ 2K tokens). *)
     ToolOutputCap:     Integer;
+    (* Persist per-session usage counters (tokens, turns, tool calls,
+       truncation savings) into the session JSON so /v1/stats can
+       aggregate across sessions for the gateway / web UI. Default
+       False (opt-in via onboarding) -- when off, the tool-loop
+       hooks short-circuit and the schema diff vs. pre-feature
+       sessions is zero. The TUI's /stats overlay is independent of
+       this flag (it keeps an in-memory accumulator), so flipping
+       it off doesn't disable the in-process view. *)
+    StatsCollectionEnabled: Boolean;
     AnthropicServerTools: TAnthropicServerToolsConfig;
     OpenAIServerTools:    TOpenAIServerToolsConfig;
     GeminiServerTools:    TGeminiServerToolsConfig;
@@ -430,6 +439,7 @@ begin
   WebFetchEnabled      := False; { off by default; the model uses shell+curl }
   RenderMarkdown       := True;  { on by default for terminal surfaces; cmd/serve flips off }
   ToolOutputCap        := 0;     { off by default; operators opt in. See TConfig.ToolOutputCap. }
+  StatsCollectionEnabled := False; { opt-in via onboarding; see TConfig.StatsCollectionEnabled. }
   VectorSearchEnabled  := True;  { on by default; onboarding asks (default Y) -- see TConfig comment }
   AnthropicServerTools.WebSearch        := False;
   AnthropicServerTools.WebSearchMaxUses := 0;
@@ -599,6 +609,8 @@ begin
       JSON keeps fresh config files clean. }
     if ToolOutputCap > 0 then
       Root.PutInt('tool_output_cap', ToolOutputCap);
+    if StatsCollectionEnabled then
+      Root.PutBool('stats_collection_enabled', True);
     if AnthropicServerTools.WebSearch
        or AnthropicServerTools.WebFetch
        or (AnthropicServerTools.WebSearchMaxUses > 0)
@@ -782,6 +794,8 @@ begin
     RenderMarkdown      := Root.GetBool('render_markdown',       RenderMarkdown);
     VectorSearchEnabled := Root.GetBool('vector_search_enabled', VectorSearchEnabled);
     ToolOutputCap       := Integer(Root.GetInt('tool_output_cap', ToolOutputCap));
+    StatsCollectionEnabled := Root.GetBool('stats_collection_enabled',
+                                           StatsCollectionEnabled);
 
     Obj := Root.ChildObject('anthropic_server_tools');
     if Obj <> nil then

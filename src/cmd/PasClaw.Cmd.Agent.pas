@@ -687,6 +687,14 @@ begin
           Inc(TotalCacheRead,  Loop.TotalUsage.CacheReadTokens);
           Inc(TotalCacheWrite, Loop.TotalUsage.CacheCreatedTokens);
         end;
+        if Cfg.StatsCollectionEnabled and (Session <> nil) then
+          AccumulateTurnStats(Session.Meta,
+                              Loop.TotalUsage.InputTokens,
+                              Loop.TotalUsage.OutputTokens,
+                              Loop.TotalUsage.CacheReadTokens,
+                              Loop.TotalUsage.CacheCreatedTokens,
+                              Loop.ToolCallsDispatched,
+                              Loop.TruncatedBytesSaved);
 
         { Pick up the compacted history from RunToolLoop so the next
           interactive turn starts from the summarised state, not the

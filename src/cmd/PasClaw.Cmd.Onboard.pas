@@ -394,6 +394,42 @@ begin
   end;
 end;
 
+procedure PromptStatsCollection(Cfg: TConfig);
+{ Opt-in toggle for persisting per-session usage stats (tokens,
+  turns, tool calls, truncation savings) into the session JSON so
+  the gateway / web UI's /v1/stats endpoint can aggregate across
+  sessions. Default NO -- some operators don't want a per-session
+  token ledger on disk (privacy, multi-tenant deploys, etc.). The
+  TUI /stats overlay is independent of this and keeps working
+  either way (it uses an in-process accumulator). }
+var
+  Choice: string;
+begin
+  PrintLn;
+  PrintLn(Ansi.Bold + 'Stats collection' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'Persist per-session token / tool-call counts into the session JSON so the' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'web UI can show "tokens by provider", "top tools", "cost trend" etc.' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    '(Off by default. The TUI /stats overlay works regardless of this flag.)' +
+    Ansi.Reset);
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Enable stats collection [y/N]: ')));
+  if (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Cfg.StatsCollectionEnabled := True;
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' stats persisted to session JSON; visible at /v1/stats');
+  end
+  else
+  begin
+    Cfg.StatsCollectionEnabled := False;
+    PrintLn('  ' + Ansi.Dim + '(skipped -- flip stats_collection_enabled in config.json to enable later)' + Ansi.Reset);
+  end;
+end;
+
 procedure PromptVectorSearch(Cfg: TConfig);
 { Opt-in toggle for hybrid FTS+vector memory_search. Default YES
   because the hybrid index is what picoclaw / nanobot ship and it's
@@ -648,6 +684,7 @@ begin
     PromptMCPInstalls(Cfg);
     PromptVaultTools(Cfg);
     PromptVectorSearch(Cfg);
+    PromptStatsCollection(Cfg);
 
     SaveConfig(Cfg);
     PrintLn;

@@ -143,6 +143,17 @@
     border-bottom:1px solid var(--line);text-transform:uppercase;font-size:10.5px;letter-spacing:.08em}
   table.data td{padding:.42rem .55rem;border-bottom:1px solid rgba(255,255,255,.05);vertical-align:top}
   table.data tr:hover td{background:rgba(32,246,255,.04)}
+  .stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+    gap:.65rem;padding:.5rem .8rem}
+  .stat-card{background:rgba(255,255,255,.03);border:1px solid var(--line);
+    border-radius:8px;padding:.65rem .8rem}
+  .stat-label{font-size:10.5px;text-transform:uppercase;letter-spacing:.08em;
+    color:var(--mut);margin-bottom:.25rem}
+  .stat-value{font-size:18px;font-weight:600;color:var(--fg);font-variant-numeric:tabular-nums}
+  .stats-tables{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));
+    gap:1rem;padding:.5rem .8rem 1rem}
+  .stats-table-wrap h3{margin:.2rem 0 .4rem;font-size:11px;color:var(--cyan);
+    text-transform:uppercase;letter-spacing:.1em;font-weight:600}
   .badge{display:inline-block;padding:.1rem .45rem;border-radius:999px;font-size:10px;
     text-transform:uppercase;letter-spacing:.06em;font-weight:700}
   .badge.on{background:rgba(61,242,129,.16);color:var(--green);border:1px solid rgba(61,242,129,.4)}
@@ -190,6 +201,7 @@
     <button data-tab="cron">Cron</button>
     <button data-tab="skills">Skills</button>
     <button data-tab="logs">Logs</button>
+    <button data-tab="stats">Stats</button>
     <button data-tab="settings">Settings</button>
   </nav>
 </header>
@@ -261,6 +273,69 @@
       <button class="icon-btn" id="logs-clear">Clear</button>
     </div>
     <pre id="logs-view"></pre>
+  </div>
+
+  <div id="tab-stats" class="tab">
+    <div class="pane" id="stats-pane">
+      <!-- Stats overview. Aggregates per-session counters across the
+           session store (the same numbers the TUI /stats overlay shows
+           for one session, but summed). Auto-refreshes every 10s while
+           the tab is active so the operator can watch live during an
+           agent loop. Empty / "stats collection off" state is rendered
+           inline so a fresh-onboarded operator sees actionable
+           guidance instead of zeros. -->
+      <div id="stats-hint" class="meta" style="padding:.5rem .8rem"></div>
+      <div class="stats-grid">
+        <div class="stat-card">
+          <div class="stat-label">Sessions</div>
+          <div class="stat-value" id="stats-sessions">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Turns</div>
+          <div class="stat-value" id="stats-turns">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Tool calls</div>
+          <div class="stat-value" id="stats-tool-calls">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Input tokens</div>
+          <div class="stat-value" id="stats-in">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Output tokens</div>
+          <div class="stat-value" id="stats-out">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Cache read tokens</div>
+          <div class="stat-value" id="stats-cache-r">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Cache created tokens</div>
+          <div class="stat-value" id="stats-cache-w">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Truncation bytes saved</div>
+          <div class="stat-value" id="stats-bytes-saved">—</div>
+        </div>
+      </div>
+      <div class="stats-tables">
+        <div class="stats-table-wrap">
+          <h3>Tokens by provider</h3>
+          <table class="data" id="stats-by-provider">
+            <thead><tr><th>Provider</th><th>Tokens</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <div class="stats-table-wrap">
+          <h3>Tokens by model</h3>
+          <table class="data" id="stats-by-model">
+            <thead><tr><th>Model</th><th>Tokens</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
   </div>
 
   <div id="tab-settings" class="tab">
@@ -608,8 +683,89 @@ const tabLoaders = {
       const j = await (await fetch("/v1/config")).json();
       view.textContent = JSON.stringify(j, null, 2);
     } catch (e) { view.textContent = String(e); }
+  },
+
+  /* Stats: aggregates per-session counters across $PASCLAW_HOME/workspace/
+     sessions/. Gateway endpoint caches the result for 5s server-side; we
+     re-poll every 10s while the tab is active so the totals tick up during
+     an agent loop. We deliberately don't render until the first fetch comes
+     back so a slow first read doesn't flash "0 / 0 / 0" in the cards. */
+  async stats() {
+    await refreshStats();
+    if (statsTimer) clearInterval(statsTimer);
+    statsTimer = setInterval(refreshStats, 10000);
   }
 };
+
+let statsTimer = null;
+
+function fmtInt(n) {
+  if (n === undefined || n === null) return "—";
+  return Number(n).toLocaleString();
+}
+
+function fmtBytes(n) {
+  if (!n) return "0 B";
+  const units = ["B", "KB", "MB", "GB"];
+  let i = 0;
+  let v = Number(n);
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+  return v.toFixed(v >= 100 || i === 0 ? 0 : 1) + " " + units[i];
+}
+
+async function refreshStats() {
+  try {
+    const j = await (await fetch("/v1/stats")).json();
+    const hint = $("#stats-hint");
+    if (!j.stats_collection_enabled) {
+      hint.innerHTML =
+        '⚠️ <strong>Stats collection is off.</strong> ' +
+        'Flip <code>stats_collection_enabled</code> in <code>config.json</code> ' +
+        'or re-run <code>pasclaw onboard</code> to enable. ' +
+        'Existing sessions stay at zero -- new turns from now on will accumulate.';
+      hint.style.color = "var(--yellow, #d8a000)";
+    } else {
+      hint.innerHTML =
+        'Aggregating ' + fmtInt(j.sessions) + ' session(s). ' +
+        'Refreshes every 10s.';
+      hint.style.color = "var(--mut)";
+    }
+    $("#stats-sessions").textContent     = fmtInt(j.sessions);
+    $("#stats-turns").textContent        = fmtInt(j.turns);
+    $("#stats-tool-calls").textContent   = fmtInt(j.tool_calls);
+    $("#stats-in").textContent           = fmtInt(j.input_tokens);
+    $("#stats-out").textContent          = fmtInt(j.output_tokens);
+    $("#stats-cache-r").textContent      = fmtInt(j.cache_read_tokens);
+    $("#stats-cache-w").textContent      = fmtInt(j.cache_created_tokens);
+    $("#stats-bytes-saved").textContent  = fmtBytes(j.truncation_bytes_saved);
+
+    const pTbody = $("#stats-by-provider tbody");
+    pTbody.innerHTML = "";
+    (j.by_provider || [])
+      .slice()
+      .sort((a, b) => b.tokens - a.tokens)
+      .forEach(row => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = "<td>" + escapeHtml(row.provider || "(unknown)") +
+                       "</td><td>" + fmtInt(row.tokens) + "</td>";
+        pTbody.appendChild(tr);
+      });
+
+    const mTbody = $("#stats-by-model tbody");
+    mTbody.innerHTML = "";
+    (j.by_model || [])
+      .slice()
+      .sort((a, b) => b.tokens - a.tokens)
+      .forEach(row => {
+        const tr = document.createElement("tr");
+        tr.innerHTML = "<td>" + escapeHtml(row.model || "(unknown)") +
+                       "</td><td>" + fmtInt(row.tokens) + "</td>";
+        mTbody.appendChild(tr);
+      });
+  } catch (e) {
+    $("#stats-hint").textContent = "stats fetch failed: " + e;
+  }
+}
 
 /* ===== Misc helpers ===== */
 function escapeHtml(s) {
