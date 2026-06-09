@@ -239,6 +239,107 @@ begin
             (Pos('application/markdown',   ContentType) > 0);
 end;
 
+const
+  { Skip the HTTP and return the cached path when an existing
+    fetched-<name>.md was written within this window. 24h covers
+    the typical "fetch this RFC / API doc once per work session"
+    case; operators wanting a refresh can rm the file or wait the
+    window out. Borrowed from chopratejas/headroom's "cross-agent
+    memory with auto-dedup" idea -- same URL fetched twice
+    doesn't get re-stored. }
+  MEMORY_FETCH_DEDUP_HOURS = 24;
+
+function ReadCachedHeader(const Path: string;
+                          out CachedURL: string;
+                          out CachedAt: TDateTime): Boolean;
+{ Parse the YAML-ish provenance header BuildBodyWithHeader writes:
+    <!-- pasclaw memory_fetch -->
+    source: <url>
+    fetched_at: <iso-utc with Z suffix>
+    content-type: ...
+  Returns False on any parse failure -- caller treats that as
+  "stale, refetch". The header lines are always near the top so
+  we scan the first ~10 lines and bail; doesn't read the body. }
+var
+  Sl: TStringList;
+  i: Integer;
+  Line, Tail: string;
+const
+  HEADER_PROBE_LINES = 10;
+begin
+  Result    := False;
+  CachedURL := '';
+  CachedAt  := 0;
+  Sl := TStringList.Create;
+  try
+    try
+      Sl.LoadFromFile(Path);
+    except
+      Exit;
+    end;
+    for i := 0 to Sl.Count - 1 do
+    begin
+      if i >= HEADER_PROBE_LINES then Break;
+      Line := Sl[i];
+      if Pos('source:', Line) = 1 then
+        CachedURL := Trim(Copy(Line, Length('source:') + 1, MaxInt))
+      else if Pos('fetched_at:', Line) = 1 then
+      begin
+        Tail := Trim(Copy(Line, Length('fetched_at:') + 1, MaxInt));
+        try
+          CachedAt := ISO8601ToDate(Tail);
+        except
+          Exit;
+        end;
+      end;
+      if (CachedURL <> '') and (CachedAt <> 0) then
+      begin
+        Result := True;
+        Exit;
+      end;
+    end;
+  finally
+    Sl.Free;
+  end;
+end;
+
+function FormatAgeHours(Hours: Double): string;
+{ Short human-readable age for the cache-hit confirmation. Matches
+  the shape of PasClaw.Providers.Models.HumanAge so operator
+  output looks consistent across the codebase. }
+begin
+  if Hours < 1 then
+    Result := IntToStr(Round(Hours * 60)) + 'm'
+  else if Hours < 24 then
+    Result := IntToStr(Round(Hours)) + 'h'
+  else
+    Result := IntToStr(Round(Hours / 24)) + 'd';
+end;
+
+function CanonicalizeURLForDedup(const URL: string): string;
+{ Lowercase ONLY the scheme + host portion (everything up to but
+  not including the first '/' after '://') and leave path/query
+  case-sensitive. Per RFC 3986, scheme and host are case-
+  insensitive but path and query commonly aren't -- /API and /api
+  are routinely distinct resources. The previous SameText
+  comparison over the full URL collided those two together and
+  would have served stale content. Codex P2 on PR #192.
+
+  Returns URL unchanged when the structure isn't recognisable so
+  a malformed URL never gets a false cache hit. }
+var
+  SchemeMark, PathStart: Integer;
+begin
+  SchemeMark := Pos('://', URL);
+  if SchemeMark <= 0 then Exit(URL);
+  PathStart := PosEx('/', URL, SchemeMark + 3);
+  if PathStart <= 0 then
+    { No path -- whole URL is scheme+host. }
+    Exit(LowerCase(URL));
+  Result := LowerCase(Copy(URL, 1, PathStart - 1)) +
+            Copy(URL, PathStart, MaxInt);
+end;
+
 function BuildBodyWithHeader(const URL, ContentType, Body: string): string;
 begin
   Result :=
@@ -258,6 +359,9 @@ var
   Resp: THTTPResult;
   Headers: array of THeaderPair;
   TextBody, ContentType, FinalBody, SsrfWhy: string;
+  CachedURL: string;
+  CachedAt, NowUtc: TDateTime;
+  AgeHours: Double;
   Sl: TStringList;
 begin
   ErrMsg := '';
@@ -313,6 +417,37 @@ begin
   if FilenameBase = '' then FilenameBase := FallbackHashName(URL);
   Filename := 'fetched-' + FilenameBase + '.md';
   FullPath := JoinPath(MemoryDir, Filename);
+
+  { Auto-dedup: if the destination file exists, was written for
+    THIS URL (not just a name-collision from a different URL), and
+    falls inside the freshness window, skip the HTTP and return
+    the cached path. Cuts a round trip + the body's token cost on
+    repeat fetches of stable references (RFCs, API docs). When the
+    cached URL doesn't match the requested one we fall through to
+    re-fetch -- the operator passed `name=` for a different URL,
+    which is a legitimate overwrite. }
+  if FileExists(FullPath) and
+     ReadCachedHeader(FullPath, CachedURL, CachedAt) and
+     (CanonicalizeURLForDedup(CachedURL) =
+      CanonicalizeURLForDedup(URL)) then
+  begin
+    {$IFDEF FPC}
+    NowUtc := LocalTimeToUniversal(Now);
+    {$ELSE}
+    NowUtc := TTimeZone.Local.ToUniversalTime(Now);
+    {$ENDIF}
+    AgeHours := (NowUtc - CachedAt) * 24.0;
+    if (AgeHours >= 0) and (AgeHours < MEMORY_FETCH_DEDUP_HOURS) then
+    begin
+      LogInfo('memory_fetch: cache hit on %s (age=%.1fh) -> %s',
+              [URL, AgeHours, Filename]);
+      Result := Format(
+        'memory_fetch: already indexed (cached %s ago) as %s. ' +
+        'Run memory_search to query.',
+        [FormatAgeHours(AgeHours), Filename]);
+      Exit;
+    end;
+  end;
 
   if not DirectoryExists(MemoryDir) then
     if not ForceDirectories(MemoryDir) then
