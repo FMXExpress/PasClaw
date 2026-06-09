@@ -36,6 +36,7 @@ uses
   SysUtils, Classes, SyncObjs,
   IdHTTPServer, IdContext, IdCustomHTTPServer, IdGlobal, IdSocketHandle,
   PasClaw.Config,
+  PasClaw.Providers.Types,
   PasClaw.Providers.Intf,
   PasClaw.Tools.Registry;
 
@@ -129,6 +130,19 @@ type
     procedure MountWebhook(const Path: string; Handler: TWebhookHandler);
   end;
 
+(* Accumulate one stateless-endpoint turn into its per-endpoint
+   stats bucket session (`_gateway_v1_chat` / `_gateway_v1_chat_
+   completions` / `_gateway_v1_responses`). Exposed via the
+   interface so a regression test can pin the contract -- the
+   helper is the only path through which the gateway's
+   stateless HTTP traffic reaches /v1/stats. *)
+procedure AccumulateGatewayStatsRaw(const Cfg: TConfig;
+                                    const BucketId, Title: string;
+                                    const ProviderName, Model: string;
+                                    const Usage: TUsageInfo;
+                                    ToolCallsDispatched: Int64;
+                                    TruncatedBytesSaved: Int64);
+
 implementation
 
 uses
@@ -139,7 +153,6 @@ uses
   PasClaw.Utils,
   PasClaw.Skills.Loader,
   PasClaw.Tools.Sandbox,
-  PasClaw.Providers.Types,
   PasClaw.Providers.Factory,
   PasClaw.Tools.ToolLoop,
   PasClaw.Agent.Compact,
@@ -191,6 +204,52 @@ const
   GW_BUCKET_V1_CHAT_COMPLETIONS = '_gateway_v1_chat_completions';
   GW_BUCKET_V1_RESPONSES        = '_gateway_v1_responses';
 
+procedure AccumulateGatewayStatsRaw(const Cfg: TConfig;
+                                    const BucketId, Title: string;
+                                    const ProviderName, Model: string;
+                                    const Usage: TUsageInfo;
+                                    ToolCallsDispatched: Int64;
+                                    TruncatedBytesSaved: Int64);
+{ Field-shape primitive. The Loop-shape overload below just unpacks
+  TToolLoopResult into these fields; passthrough call sites that
+  don't have a Loop (the /v1/responses HasFunctionTools branch
+  goes straight to FProvider.Chat / ChatStream, no RunToolLoop)
+  call this directly with the provider's own usage.
+
+  Codex P2 on PR #204 caught that the Loop-only signature meant
+  the Codex/openai-style /v1/responses traffic with client tools
+  silently bypassed accumulation, leaving the _gateway_v1_responses
+  bucket stuck at zero for that endpoint's main flow. }
+var
+  S: TSession;
+begin
+  if not Cfg.StatsCollectionEnabled then Exit;
+  if BucketId = '' then Exit;
+  GGatewayStatsLock.Enter;
+  try
+    S := TSession.Create(BucketId);
+    try
+      if (not S.MetaExists) and (S.Meta.Title = '') then
+        S.Meta.Title := Title;
+      if Model        <> '' then S.Meta.Model    := Model;
+      if ProviderName <> '' then S.Meta.Provider := ProviderName;
+      AccumulateTurnStats(S.Meta,
+                          Usage.InputTokens,
+                          Usage.OutputTokens,
+                          Usage.CacheReadTokens,
+                          Usage.CacheCreatedTokens,
+                          ToolCallsDispatched,
+                          TruncatedBytesSaved);
+      S.Touch;
+      S.Save;
+    finally
+      S.Free;
+    end;
+  finally
+    GGatewayStatsLock.Leave;
+  end;
+end;
+
 procedure AccumulateGatewayStats(const Cfg: TConfig;
                                  const BucketId, Title: string;
                                  const ProviderName, Model: string;
@@ -210,40 +269,17 @@ procedure AccumulateGatewayStats(const Cfg: TConfig;
   model) pair, or (b) a richer schema. The user explicitly asked
   for the simpler aggregate-per-endpoint shape; this is that.
 
-  Thread safety: a global TCriticalSection serialises the
-  open-accumulate-save sequence. Two concurrent calls to the
-  same endpoint would otherwise race the file. Bucket
-  granularity is fine for the contention we expect (operator
-  driving one tab at a time); per-bucket locks could come later
-  if a multi-tenant deploy showed contention. }
-var
-  S: TSession;
+  Thread safety: a global TCriticalSection (inside the Raw
+  primitive below) serialises the open-accumulate-save sequence.
+  Two concurrent calls to the same endpoint would otherwise race
+  the file. Bucket granularity is fine for the contention we
+  expect (operator driving one tab at a time); per-bucket locks
+  could come later if a multi-tenant deploy showed contention. }
 begin
-  if not Cfg.StatsCollectionEnabled then Exit;
-  if BucketId = '' then Exit;
-  GGatewayStatsLock.Enter;
-  try
-    S := TSession.Create(BucketId);
-    try
-      if (not S.MetaExists) and (S.Meta.Title = '') then
-        S.Meta.Title := Title;
-      if Model        <> '' then S.Meta.Model    := Model;
-      if ProviderName <> '' then S.Meta.Provider := ProviderName;
-      AccumulateTurnStats(S.Meta,
-                          Loop.TotalUsage.InputTokens,
-                          Loop.TotalUsage.OutputTokens,
-                          Loop.TotalUsage.CacheReadTokens,
-                          Loop.TotalUsage.CacheCreatedTokens,
-                          Loop.ToolCallsDispatched,
-                          Loop.TruncatedBytesSaved);
-      S.Touch;
-      S.Save;
-    finally
-      S.Free;
-    end;
-  finally
-    GGatewayStatsLock.Leave;
-  end;
+  AccumulateGatewayStatsRaw(Cfg, BucketId, Title, ProviderName, Model,
+                            Loop.TotalUsage,
+                            Loop.ToolCallsDispatched,
+                            Loop.TruncatedBytesSaved);
 end;
 
 constructor TGatewayServer.Create(Cfg: TConfig; Provider: ILLMProvider; Registry: TToolRegistry);
@@ -2699,7 +2735,9 @@ procedure StreamResponsesViaProvider(AContext: TIdContext;
                                       const ToolDefs: array of TToolDefinition;
                                       const Opts: TChatOptions;
                                       const ToolsRawJSON: string;
-                                      DebugIO: Boolean);
+                                      DebugIO: Boolean;
+                                      out OutUsage: TUsageInfo;
+                                      out OutToolCallCount: Integer);
 (* Real partial-streaming variant of EmitResponsesStream for the
    passthrough path. Calls Provider.ChatStream so text deltas reach
    the client as the model produces them, then emits the
@@ -2709,7 +2747,13 @@ procedure StreamResponsesViaProvider(AContext: TIdContext;
    The non-passthrough (RunToolLoop) path stays on the
    single-delta EmitResponsesStream -- RunToolLoop is synchronous
    so its text is only available as a whole at the end, and there
-   is no incremental data to forward. *)
+   is no incremental data to forward.
+
+   OutUsage / OutToolCallCount surface the totals back to the
+   caller so it can hand them to AccumulateGatewayStatsRaw for the
+   /v1/stats bucket -- Codex P2 on PR #204. Both are initialised
+   to zero up front, so callers always get safe defaults even on
+   the ChatStream error path. *)
 var
   CreatedObj, CompletedObj, MsgItemObj, PartObj, FinalItemObj,
   ErrObj: TJsonObject;
@@ -2736,6 +2780,14 @@ begin
   finally
     CreatedObj.Free;
   end;
+
+  { Initialise the out-params to safe zero defaults so callers can
+    always rely on them, even on the ChatStream-raised error path
+    where Resp.Usage may be left unset before the catch handler
+    runs. AccumulateGatewayStatsRaw against zero is a no-op other
+    than bumping Turns, which is acceptable for a failed call. }
+  OutUsage         := Default(TUsageInfo);
+  OutToolCallCount := 0;
 
   { Item / part JSON for the lazy message-sub-sequence open. The
     OnChunk callback uses these when the first text chunk arrives. }
@@ -2819,6 +2871,15 @@ begin
             StreamErr := 'provider returned finish_reason=error';
         end;
       end;
+
+      { Surface the totals to the caller's out-params. Whether the
+        call succeeded or failed, the catch-handler above leaves
+        Resp populated with sensible zeros, so an error-path
+        accumulate is a near-no-op (just bumps Turns). Done here
+        rather than only on the success path so the bucket sees
+        the existence of the call even if it failed. }
+      OutUsage         := Resp.Usage;
+      OutToolCallCount := Length(Resp.ToolCalls);
 
       { Providers that don't actually stream (e.g., the
         OpenAI-compat ChatStream that just delegates to Chat) will
@@ -2967,6 +3028,11 @@ var
   OutContent: string;
   OutToolCalls: array of TToolCall;
   OutUsage: TUsageInfo;
+  StreamToolCallCount: Integer;   { populated by StreamResponsesViaProvider
+                                    out-param; we don't carry the streamed
+                                    ToolCalls array out (deltas already
+                                    shipped to client), just the count for
+                                    the bucket-stats accumulation. }
   ParamsObj: TJsonObject;
   ParamsRaw, ToolKind, ToolDisplayName: string;
   EmptyToolCalls: array of TToolCall;
@@ -3368,7 +3434,19 @@ begin
       begin
         StreamResponsesViaProvider(AContext, AResp, AResponseStarted,
                                     FProvider, RespId, ReqModel, Msgs, ToolDefs,
-                                    PassthroughOpts, ToolsRawJSON, FDebugIO);
+                                    PassthroughOpts, ToolsRawJSON, FDebugIO,
+                                    OutUsage, StreamToolCallCount);
+        { Stats accumulation for the streaming passthrough path.
+          Mirrors the non-streaming branch below: count tokens
+          from the provider's reported usage and the model's
+          emitted tool calls (executed client-side, not by us).
+          Codex P2 on PR #204. }
+        AccumulateGatewayStatsRaw(FCfg, GW_BUCKET_V1_RESPONSES,
+                                  '(gateway: /v1/responses)',
+                                  FProvider.GetName, ReqModel,
+                                  OutUsage,
+                                  StreamToolCallCount,
+                                  0);
         Exit;
       end;
 
@@ -3399,6 +3477,21 @@ begin
       for i := 0 to High(PassthroughResp.ToolCalls) do
         OutToolCalls[i] := PassthroughResp.ToolCalls[i];
       OutUsage := PassthroughResp.Usage;
+
+      { Stats accumulation for the non-streaming passthrough path.
+        Codex P2 on PR #204: the legacy-path accumulator below
+        only fires when RunToolLoop runs -- successful
+        client-tools traffic (Codex CLI / openai-python with
+        tool use) never reaches it. Count tokens here from
+        PassthroughResp directly, and report the model's emitted
+        tool-call count even though we didn't dispatch them
+        server-side (the client did). }
+      AccumulateGatewayStatsRaw(FCfg, GW_BUCKET_V1_RESPONSES,
+                                '(gateway: /v1/responses)',
+                                FProvider.GetName, ReqModel,
+                                OutUsage,
+                                Length(OutToolCalls),
+                                0);
 
       { When the model emits only tool calls (no text) the client
         still expects a parseable response; the function_call

@@ -29,7 +29,10 @@ program gateway_stats_buckets_tests;
 
 uses
   SysUtils,
-  PasClaw.Session.Store;
+  PasClaw.Config,
+  PasClaw.Providers.Types,
+  PasClaw.Session.Store,
+  PasClaw.Gateway.Server;
 
 procedure Fail_(const Msg: string);
 begin
@@ -52,6 +55,11 @@ end;
 procedure AssertTrue(Cond: Boolean; const Msg: string);
 begin
   if not Cond then Fail_(Msg);
+end;
+
+procedure AssertFalse(Cond: Boolean; const Msg: string);
+begin
+  if Cond then Fail_(Msg);
 end;
 
 procedure TestLeadingUnderscoreIdIsSafe;
@@ -160,9 +168,106 @@ begin
   end;
 end;
 
+procedure TestRawHelperAccumulatesPassthroughTraffic;
+(* Codex P2 on PR #204. The /v1/responses HasFunctionTools branch
+   (Codex CLI's dominant flow) doesn't run RunToolLoop -- it calls
+   FProvider.Chat / ChatStream directly. The Loop-shape accumulator
+   wouldn't fire on that path, so the responses bucket stayed at
+   zero for client-tools traffic.
+
+   Fix exposes AccumulateGatewayStatsRaw in the interface so the
+   passthrough sites can hand it the provider's Usage + tool-call
+   count without faking a TToolLoopResult. We pin here that the
+   raw helper accumulates the same way the existing Loop-shape
+   helper does -- two calls sum across, the bucket title sticks,
+   the provider/model labels survive. *)
+const
+  Id = '_gateway_v1_responses';
+var
+  Cfg: TConfig;
+  U: TUsageInfo;
+  S: TSession;
+begin
+  if FileExists(SessionPath(Id)) then DeleteFile(SessionPath(Id));
+
+  Cfg := TConfig.Create;
+  try
+    Cfg.StatsCollectionEnabled := True;
+    SetLength(Cfg.Providers, 0);
+    SetLength(Cfg.Fallbacks, 0);
+
+    { First passthrough call: 500 in / 200 out, 3 tool calls
+      the model emitted (client executes them, we don't). }
+    U := Default(TUsageInfo);
+    U.InputTokens  := 500;
+    U.OutputTokens := 200;
+    AccumulateGatewayStatsRaw(Cfg, Id, '(gateway: /v1/responses)',
+                               'anthropic', 'claude-opus-4-8',
+                               U, 3, 0);
+
+    { Second passthrough call: another 700/300, 1 tool call. }
+    U := Default(TUsageInfo);
+    U.InputTokens  := 700;
+    U.OutputTokens := 300;
+    AccumulateGatewayStatsRaw(Cfg, Id, '(gateway: /v1/responses)',
+                               'anthropic', 'claude-opus-4-8',
+                               U, 1, 0);
+  finally
+    Cfg.Free;
+  end;
+
+  S := TSession.Create(Id);
+  try
+    AssertEqStr(S.Meta.Title, '(gateway: /v1/responses)',
+                'title stamped on first save');
+    AssertEqInt(S.Meta.Stats.InputTokens,  1200,
+                'input tokens summed across two passthrough turns');
+    AssertEqInt(S.Meta.Stats.OutputTokens, 500,
+                'output tokens summed');
+    AssertEqInt(S.Meta.Stats.Turns,        2,
+                'turns count = number of passthrough calls');
+    AssertEqInt(S.Meta.Stats.ToolCalls,    4,
+                'tool calls summed across both turns');
+  finally
+    S.Free;
+    DeleteFile(SessionPath(Id));
+  end;
+end;
+
+procedure TestRawHelperRespectsStatsFlag;
+{ Sanity: with stats collection off, the raw helper writes
+  nothing (no bucket file appears). Pins the early-exit so the
+  Codex review's fix doesn't accidentally always-on the
+  accumulator. }
+const
+  Id = '_gateway_v1_responses';
+var
+  Cfg: TConfig;
+  U: TUsageInfo;
+begin
+  if FileExists(SessionPath(Id)) then DeleteFile(SessionPath(Id));
+
+  Cfg := TConfig.Create;
+  try
+    Cfg.StatsCollectionEnabled := False;
+    U := Default(TUsageInfo);
+    U.InputTokens  := 100;
+    U.OutputTokens := 200;
+    AccumulateGatewayStatsRaw(Cfg, Id, '(gateway: /v1/responses)',
+                               'anthropic', 'claude-opus-4-8', U, 0, 0);
+    AssertFalse(FileExists(SessionPath(Id)),
+                'stats flag off -> no bucket file written');
+  finally
+    Cfg.Free;
+    if FileExists(SessionPath(Id)) then DeleteFile(SessionPath(Id));
+  end;
+end;
+
 begin
   TestLeadingUnderscoreIdIsSafe;
   TestBucketAccumulatesAcrossCalls;
   TestDistinctBucketsDontInterfere;
+  TestRawHelperAccumulatesPassthroughTraffic;
+  TestRawHelperRespectsStatsFlag;
   WriteLn('gateway_stats_buckets_tests: OK');
 end.
