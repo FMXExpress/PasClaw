@@ -215,7 +215,14 @@ end;
 
 procedure TToolRPCServer.DeleteInfoFile;
 begin
-  if FileExists(FInfoPath) then DeleteFile(FInfoPath);
+  { SysUtils-qualified on purpose. PR #207 added Winapi.Windows to
+    this unit's uses clause (for GetCurrentProcessId), and Delphi's
+    later-unit-wins resolution then bound the bare DeleteFile to
+    Winapi.Windows.DeleteFile(PWideChar) -- dcc64 E2010 on the
+    string argument. FPC was unaffected (no Winapi.Windows in its
+    branch of the uses clause) but the qualification is harmless
+    there. }
+  if FileExists(FInfoPath) then SysUtils.DeleteFile(FInfoPath);
 end;
 
 procedure TToolRPCServer.Start;
