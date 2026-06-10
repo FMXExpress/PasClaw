@@ -311,6 +311,7 @@ uses
   PasClaw.Tools.FS,
   PasClaw.Tools.Shell,
   PasClaw.Tools.Memory,
+  PasClaw.Tools.KB,
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
@@ -480,6 +481,7 @@ begin
   RegisterFSTools(FRegistry, FUseHashline);
   RegisterShellTool(FRegistry);
   RegisterMemoryTools(FRegistry);
+  RegisterKBTools(FRegistry);
   if HasConfiguredWebSearchProvider(FConfig) then
     RegisterWebSearchTool(FRegistry)
   else
@@ -884,6 +886,7 @@ begin
     RegisterFSTools(FRegistry, FEnableHashline);
     RegisterShellTool(FRegistry);
     RegisterMemoryTools(FRegistry);
+    RegisterKBTools(FRegistry);
     if HasConfiguredWebSearchProvider(FConfig) then
       RegisterWebSearchTool(FRegistry)
     else

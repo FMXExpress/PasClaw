@@ -82,6 +82,7 @@ uses
   PasClaw.Tools.WebFetch,
   PasClaw.Tools.Shell,
   PasClaw.Tools.Memory,
+  PasClaw.Tools.KB,
   PasClaw.Tools.FS;
 
 procedure TWebSearchTool.Install(R: TToolRegistry);
@@ -112,6 +113,7 @@ end;
 procedure TMemoryTool.Install(R: TToolRegistry);
 begin
   RegisterMemoryTools(R);
+  RegisterKBTools(R);
 end;
 
 function TMemoryTool.Category: TToolCategory;

@@ -777,6 +777,48 @@ make server     # just the server sample
 
 `PasClaw.Component` is still available as the legacy unit name — it now re-exports everything from `PasClaw.Agent`, so existing code keeps compiling.
 
+### Knowledgebase (RAG over your documents)
+
+Index reference documents — manuals, books, source trees — so the agent can
+retrieve them while answering ("Big RAG" style, but operator-curated):
+
+```sh
+pasclaw kb add ~/docs/delphi-book.md ~/projects/mylib/   # files and/or dirs
+pasclaw kb list
+pasclaw kb search "constructor constraints in generics"
+pasclaw kb sync          # after documents change
+pasclaw kb status
+pasclaw kb remove ~/projects/mylib/
+```
+
+Documents are indexed **in place** (never copied) into `workspace/kb.db`,
+chunked by paragraph (~1.6 KB target). Supported types: markdown, plain
+text, HTML (tag-stripped), and common source-code extensions (`.pas`,
+`.dpr`, `.c`, `.py`, ...). **PDFs are not supported** — convert first, e.g.
+`pdftotext book.pdf book.txt`.
+
+Once at least one source is registered, two read-only agent tools appear
+automatically (and not before, so the model never sees an empty KB):
+
+| Tool | Purpose |
+|------|---------|
+| `kb_search(query, k)` | Search the corpus; returns `path#cN` citations + snippets + scores. |
+| `kb_get(path, chunk, window)` | Expand a citation into full chunk text ± `window` neighbouring chunks. |
+
+Ranking is SQLite FTS5 BM25 out of the box. When the local embedding
+runtime is provisioned (`pasclaw memory provision` — the same sqlite-vec +
+ONNX Runtime + MiniLM artifacts `memory_search` uses, gated by the same
+`vector_search_enabled` flag), the KB automatically upgrades to **hybrid
+keyword + semantic** ranking with Reciprocal Rank Fusion; embeddings are
+computed locally and never leave the host. The vector sidecar
+(`workspace/kb.db.vec`) is rebuilt by `kb sync` when documents change.
+Unlike `memory_search`, the KB does **not** re-index on every query — `kb
+sync` is the explicit refresh, keeping `kb_search` fast on large corpora.
+
+Conversation memory (`memory_search`) and the knowledgebase are deliberately
+separate: one answers "what did we decide earlier", the other "what do my
+reference documents say".
+
 ### Maintenance and diagnostics
 
 ```sh

@@ -33,6 +33,7 @@ uses
   PasClaw.Tools.Shell,
   PasClaw.Tools.ExecuteCode,
   PasClaw.Tools.Memory,
+  PasClaw.Tools.KB,
   PasClaw.Tools.SessionSearch,
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
@@ -184,6 +185,7 @@ begin
       RegisterShellTool(Reg);
       RegisterExecuteCodeTool(Reg);
       RegisterMemoryTools(Reg);
+      RegisterKBTools(Reg);
       RegisterSessionSearchTool(Reg);
       if HasConfiguredWebSearchProvider(Cfg) then
         RegisterWebSearchTool(Reg)
