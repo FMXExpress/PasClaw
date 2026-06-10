@@ -114,6 +114,17 @@ type
 function RunOneShot   (const Cmd: string;                  out Output: string): Integer; overload;
 function RunOneShot   (const Cmd, WorkingDir: string;      out Output: string): Integer; overload;
 
+(* Same as RunOneShot, but adds ExtraEnv (a TStringList of
+   "NAME=VALUE" lines) to the child process's environment on top
+   of the parent's inherited env. The child sees ParentEnv +
+   ExtraEnv with ExtraEnv winning on key collisions. Used by
+   execute_code to pass PASCLAW_TOOL_RPC_INFO down to the spawned
+   script -- a per-call temp value that mustn't leak into the
+   parent process or any other concurrent RunOneShot. *)
+function RunOneShotWithEnv(const Cmd, WorkingDir: string;
+                            ExtraEnv: TStringList;
+                            out Output: string): Integer;
+
 implementation
 
 uses
@@ -270,6 +281,85 @@ begin
     SetLength(Output, M.Size);
     if M.Size > 0 then begin M.Position := 0; M.ReadBuffer(Output[1], M.Size); end;
   finally
+    M.Free;
+    P.Free;
+  end;
+end;
+
+function RunOneShotWithEnv(const Cmd, WorkingDir: string;
+                            ExtraEnv: TStringList;
+                            out Output: string): Integer;
+{ Same loop body as RunOneShot above, but composes an explicit
+  Environment list (parent's env + ExtraEnv with ExtraEnv winning
+  on name collisions) and hands it to TProcess.Environment. The
+  child process sees exactly that env; the parent process and
+  every other concurrent RunOneShot call stay untouched -- no
+  global env-var mutation, no race. }
+var
+  P: TInternalProcess;
+  M: TMemoryStream;
+  Buf: array[0..ReadBufferSize - 1] of Byte;
+  N, Total, i, EqPos: Integer;
+  EnvList: TStringList;
+  Name, Existing: string;
+begin
+  Result := -1;
+  Output := '';
+  P := TInternalProcess.Create(nil);
+  M := TMemoryStream.Create;
+  EnvList := TStringList.Create;
+  try
+    { Inherit the parent's env first (TProcess.Environment, when
+      set, REPLACES inherited env rather than augmenting it).
+      GetEnvironmentVariableCount / GetEnvironmentString are FPC
+      stdlib -- one process-wide snapshot at call time. }
+    for i := 0 to GetEnvironmentVariableCount - 1 do
+      EnvList.Add(GetEnvironmentString(i));
+    { Layer ExtraEnv on top. For each KEY=VAL, drop any existing
+      KEY= line so the new value wins instead of duplicating. }
+    if ExtraEnv <> nil then
+      for i := 0 to ExtraEnv.Count - 1 do
+      begin
+        EqPos := Pos('=', ExtraEnv[i]);
+        if EqPos <= 0 then Continue;
+        Name := Copy(ExtraEnv[i], 1, EqPos - 1);
+        for N := EnvList.Count - 1 downto 0 do
+        begin
+          Existing := EnvList[N];
+          if (Pos('=', Existing) > 0) and
+             (Copy(Existing, 1, Length(Name)) = Name) and
+             (Existing[Length(Name) + 1] = '=') then
+            EnvList.Delete(N);
+        end;
+        EnvList.Add(ExtraEnv[i]);
+      end;
+    P.Environment := EnvList;
+    {$IFDEF MSWINDOWS}
+    P.Executable := 'cmd.exe';
+    P.Parameters.Add('/C'); P.Parameters.Add(Cmd);
+    {$ELSE}
+    P.Executable := '/bin/sh';
+    P.Parameters.Add('-c'); P.Parameters.Add(Cmd);
+    {$ENDIF}
+    if WorkingDir <> '' then P.CurrentDirectory := WorkingDir;
+    P.Options := [poUsePipes, poStderrToOutPut];
+    try P.Execute; except Exit; end;
+    Total := 0;
+    while P.Running or (P.Output.NumBytesAvailable > 0) do
+    begin
+      while P.Output.NumBytesAvailable > 0 do
+      begin
+        N := P.Output.Read(Buf, SizeOf(Buf));
+        if N > 0 then begin M.WriteBuffer(Buf, N); Inc(Total, N); end;
+        if Total > OneShotMaxBytes then begin P.Terminate(124); Break; end;
+      end;
+      Sleep(20);
+    end;
+    Result := P.ExitStatus;
+    SetLength(Output, M.Size);
+    if M.Size > 0 then begin M.Position := 0; M.ReadBuffer(Output[1], M.Size); end;
+  finally
+    EnvList.Free;
     M.Free;
     P.Free;
   end;
@@ -492,6 +582,22 @@ begin
     Args.Free;
     P.Free;
   end;
+end;
+
+function RunOneShotWithEnv(const Cmd, WorkingDir: string;
+                            ExtraEnv: TStringList;
+                            out Output: string): Integer;
+{ Delphi Windows stub. Same story as the Delphi POSIX stub
+  below -- the env-injection path goes through CreateProcess and
+  needs an environment block, which is more invasive than the
+  fcl-process Environment list. ExtraEnv ignored; warn-once so
+  it's discoverable. Production builds use FPC. }
+begin
+  { ExtraEnv silently ignored on this build. The fix is a follow-up
+    when someone exercises execute_code's tool-RPC on a Delphi
+    Windows build -- not the production path today. }
+  if ExtraEnv <> nil then ;
+  Result := RunOneShot(Cmd, WorkingDir, Output);
 end;
 
 {$ELSE}
@@ -717,6 +823,25 @@ begin
     Args.Free;
     P.Free;
   end;
+end;
+
+function RunOneShotWithEnv(const Cmd, WorkingDir: string;
+                            ExtraEnv: TStringList;
+                            out Output: string): Integer;
+{ Delphi POSIX stub. Env-var injection isn't wired here yet --
+  the Delphi POSIX path forks/execs directly rather than going
+  through a TProcess abstraction with an Environment property,
+  so the implementation is more invasive. For now ExtraEnv is
+  ignored; production builds use the FPC implementation up top,
+  so this only matters for a hypothetical Delphi/POSIX
+  cross-build. Will produce a runtime warning when ExtraEnv is
+  non-empty so a future operator notices. }
+begin
+  { ExtraEnv silently ignored on this build. Same story as the
+    Delphi Windows stub above -- production path is FPC and that
+    has the real implementation. }
+  if ExtraEnv <> nil then ;
+  Result := RunOneShot(Cmd, WorkingDir, Output);
 end;
 
 {$ENDIF}

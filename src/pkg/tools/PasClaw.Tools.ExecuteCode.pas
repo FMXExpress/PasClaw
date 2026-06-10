@@ -113,7 +113,40 @@ uses
   PasClaw.Config,
   PasClaw.Platform,
   PasClaw.Utils,
-  PasClaw.Tools.Sandbox;
+  PasClaw.Tools.Sandbox,
+  PasClaw.Tools.RPC;
+
+type
+  (* Per-registry execute_code handler. RegisterExecuteCodeTool
+     creates one of these and registers its Execute method (a
+     TToolHandlerObj) instead of the unit-level Tool_ExecuteCode
+     function. That way each registry's execute_code carries a
+     pointer to ITS registry -- when a subagent's filtered
+     registry registers execute_code, the runner that hangs off
+     it dispatches RPC callbacks to the SUBAGENT's registry, not
+     the parent's full surface. Codex P1 on PR #206. *)
+  TExecuteCodeRunner = class
+  private
+    FRegistry: TToolRegistry;
+  public
+    constructor Create(Registry: TToolRegistry);
+    function Execute(const ArgsJSON: string; out ErrMsg: string): string;
+  end;
+
+var
+  { Anchored here so the runners outlive the registries that
+    registered them -- a registry's tool list holds the
+    method-of-object reference and would dangle if the runner
+    were freed at registry teardown. Cleared in unit
+    finalization. Small (one runner per registry that registered
+    execute_code), per-process. }
+  GRunners: TList = nil;
+
+constructor TExecuteCodeRunner.Create(Registry: TToolRegistry);
+begin
+  inherited Create;
+  FRegistry := Registry;
+end;
 
 function ParseStringArg(const ArgsJSON, Field: string; out V: string): Boolean;
 var
@@ -310,11 +343,29 @@ begin
   Result := True;
 end;
 
-function Tool_ExecuteCode(const ArgsJSON: string; out ErrMsg: string): string;
+function Tool_ExecuteCodeImpl(Registry: TToolRegistry;
+                              const ArgsJSON: string;
+                              out ErrMsg: string): string;
+{ The real handler. Takes the registry explicitly so the wrapper
+  (TExecuteCodeRunner.Execute or the registry-less Tool_ExecuteCode
+  legacy entry) can hand in the right one. Registry-aware lets
+  per-call RPC servers bind to the correct registry, satisfying
+  Codex P1 (subagent allowlist enforcement).
+
+  Per-call RPC server lifecycle is the second half of the
+  Codex-P2 fix: each invocation gets its own server, on its own
+  kernel-allocated port, with its own info file, and tells the
+  spawned script where to find it via the PASCLAW_TOOL_RPC_INFO
+  env var. No global state means two concurrent execute_codes
+  (parent + subagent, or two parallel tool calls) can't trample
+  each other's bindings. }
 var
   Lang, Code, ResolvedLang, ScriptPath, Reason, WorkDir, Cmd, Out_: string;
   Argv: TStringArray;
   ExitCode, i: Integer;
+  Server: TToolRPCServer;
+  ExtraEnv: TStringList;
+  InfoPath: string;
 begin
   ErrMsg := '';
   Result := '';
@@ -327,69 +378,130 @@ begin
   Lang         := ParseStringArgOptional(ArgsJSON, 'lang', 'auto');
   ResolvedLang := ResolveExecuteCodeLang(Lang);
 
-  { Run the body through the same denylist shell_exec uses. The
-    sandbox check is a substring sweep so it catches `rm -rf /` and
-    friends regardless of which line of the script they appear on.
-    There is no perfect defense against a determined operator-side
-    bypass (concat strings at runtime, base64 decode + eval), but
-    the floor here matches shell_exec exactly so we don't introduce
-    an easier execute_code-only escape hatch. }
   if not ShellAllowed(Code, Reason) then
   begin
     ErrMsg := Reason;
     Exit;
   end;
 
-  if not MakeTempScript(ResolvedLang, Code, ScriptPath, ErrMsg) then Exit;
+  { Per-call RPC server: bound to THIS registry only, info file
+    on a path no other concurrent execute_code call can pick. If
+    the bind fails for any reason (port exhaustion, locked-down
+    sandbox) the script still runs -- it just can't make
+    `pasclaw __tool` callbacks. Registry-less callers (standalone
+    test harnesses) skip the server entirely; there'd be nothing
+    to dispatch to. }
+  Server   := nil;
+  ExtraEnv := nil;
+  if Registry <> nil then
+    try
+      InfoPath := MakePerCallInfoPath;
+      Server   := TToolRPCServer.Create(Registry, InfoPath);
+      Server.Start;
+      ExtraEnv := TStringList.Create;
+      ExtraEnv.Add('PASCLAW_TOOL_RPC_INFO=' + InfoPath);
+    except
+      on E: Exception do
+      begin
+        LogWarn('execute_code: tool-rpc unavailable: %s', [E.Message]);
+        if Server <> nil then begin Server.Free; Server := nil; end;
+        if ExtraEnv <> nil then begin ExtraEnv.Free; ExtraEnv := nil; end;
+      end;
+    end;
+
   try
-    if not BuildExecuteCodeArgv(ResolvedLang, ScriptPath, Argv) then
-    begin
-      ErrMsg := 'execute_code: unsupported lang "' + Lang + '"';
-      Exit;
-    end;
+    if not MakeTempScript(ResolvedLang, Code, ScriptPath, ErrMsg) then Exit;
+    try
+      if not BuildExecuteCodeArgv(ResolvedLang, ScriptPath, Argv) then
+      begin
+        ErrMsg := 'execute_code: unsupported lang "' + Lang + '"';
+        Exit;
+      end;
 
-    { Compose the spawn command. RunOneShot wants a single command
-      string it can hand to /bin/sh -c (or cmd /c on Windows) --
-      we don't have a direct argv-vector API. Quote each argument
-      so spaces or special chars in $PASCLAW_HOME don't fragment
-      the script-path argument; the script body itself is in the
-      file and isn't touched by this quoting. }
-    Cmd := '';
-    for i := 0 to High(Argv) do
-    begin
-      if Cmd <> '' then Cmd := Cmd + ' ';
-      Cmd := Cmd + '"' + StringReplace(Argv[i], '"', '\"', [rfReplaceAll]) + '"';
-    end;
+      { Compose the spawn command. RunOneShotWithEnv wants a single
+        command string it can hand to /bin/sh -c (or cmd /c on
+        Windows) -- we don't have a direct argv-vector API. Quote
+        each argument so spaces or special chars in $PASCLAW_HOME
+        don't fragment the script-path argument; the script body
+        itself is in the file and isn't touched by this quoting. }
+      Cmd := '';
+      for i := 0 to High(Argv) do
+      begin
+        if Cmd <> '' then Cmd := Cmd + ' ';
+        Cmd := Cmd + '"' + StringReplace(Argv[i], '"', '\"', [rfReplaceAll]) + '"';
+      end;
 
-    if RestrictionActive then
-      WorkDir := CurrentWorkspace
-    else
-      WorkDir := '';
-    LogDebug('execute_code (lang=%s cwd=%s): %s',
-             [ResolvedLang, WorkDir, ScriptPath]);
-    ExitCode := RunOneShot(Cmd, WorkDir, Out_);
-    Result := Format('exit=%d'#10'%s', [ExitCode, Out_]);
+      if RestrictionActive then
+        WorkDir := CurrentWorkspace
+      else
+        WorkDir := '';
+      LogDebug('execute_code (lang=%s cwd=%s rpc=%s): %s',
+               [ResolvedLang, WorkDir,
+                BoolToStr(Server <> nil, True), ScriptPath]);
+      ExitCode := RunOneShotWithEnv(Cmd, WorkDir, ExtraEnv, Out_);
+      Result := Format('exit=%d'#10'%s', [ExitCode, Out_]);
+    finally
+      if (ScriptPath <> '') and FileExists(ScriptPath) then
+        DeleteFile(ScriptPath);
+    end;
   finally
-    { Best-effort cleanup. If a script self-deleted the temp file
-      (rare but possible), DeleteFile returns False; we don't
-      surface that to the model since the tool result is already
-      successful. }
-    if (ScriptPath <> '') and FileExists(ScriptPath) then
-      DeleteFile(ScriptPath);
+    { Tear the RPC server down before returning so the info file
+      goes away and the port is released. A late RPC call from a
+      script that backgrounded itself past the parent loop's
+      window will see the file gone and surface a clean
+      "tool-rpc info file is missing" error. }
+    if Server   <> nil then Server.Free;
+    if ExtraEnv <> nil then ExtraEnv.Free;
   end;
+end;
+
+function TExecuteCodeRunner.Execute(const ArgsJSON: string;
+                                    out ErrMsg: string): string;
+begin
+  Result := Tool_ExecuteCodeImpl(FRegistry, ArgsJSON, ErrMsg);
+end;
+
+function Tool_ExecuteCode(const ArgsJSON: string; out ErrMsg: string): string;
+{ Legacy entry kept for the existing execute_code_tests harness
+  -- those tests don't have a registry to bind so they run
+  execute_code without tool-RPC. Production callers go through
+  TExecuteCodeRunner.Execute via the registry. }
+begin
+  Result := Tool_ExecuteCodeImpl(nil, ArgsJSON, ErrMsg);
 end;
 
 procedure RegisterExecuteCodeTool(R: TToolRegistry);
 var
   T: TTool;
+  Runner: TExecuteCodeRunner;
 begin
+  { Per-registry runner: each TToolRegistry that registers
+    execute_code gets its own runner instance carrying a pointer
+    to THAT registry. When the model calls execute_code through a
+    subagent's filtered registry, the runner that fires sees the
+    subagent's tools -- not the parent's. RPC dispatch from the
+    spawned script lands in the same restricted registry.
+    (Codex P1 on PR #206.)
+
+    Runner outlives the registry; GRunners keeps them alive until
+    unit finalization. Memory cost is one tiny object per
+    registry-with-execute_code per process; negligible. }
+  if GRunners = nil then GRunners := TList.Create;
+  Runner := TExecuteCodeRunner.Create(R);
+  GRunners.Add(Runner);
+
   T.Name        := 'execute_code';
   T.Description := 'Run a multi-line bash or PowerShell script. Use when ' +
                    'you need a loop, heredoc, or fan-out that would be ' +
                    'awkward to express as a single shell_exec command. ' +
                    'Script body is written to a temp file then executed; ' +
                    'returns combined stdout+stderr and exit code. Subject ' +
-                   'to the same sandbox + denylist as shell_exec.';
+                   'to the same sandbox + denylist as shell_exec. ' +
+                   'INSIDE the script you can call back into any of your ' +
+                   'other tools by running `pasclaw __tool <name> ''<json-args>''` ' +
+                   '-- the call hits the same registry you''re using now. ' +
+                   'Use this to fan out: e.g. list files, then memory_search ' +
+                   'each, then fs_read the top hits, all in one script.';
   T.Schema      :=
     '{"type":"object",' +
      '"properties":{' +
@@ -401,10 +513,25 @@ begin
               'picks bash on unix / macOS, PowerShell on Windows).",' +
               '"enum":["bash","sh","powershell","pwsh","auto"]}},' +
      '"required":["code"]}';
-  T.Handler     := Tool_ExecuteCode;
+  T.Handler     := nil;
+  T.HandlerObj  := Runner.Execute;
   T.IsCore      := True;
   T.Category    := tcMutating;  { runs arbitrary code; mutating by default }
   R.Register(T);
 end;
+
+procedure FreeRunners;
+var
+  i: Integer;
+begin
+  if GRunners = nil then Exit;
+  for i := 0 to GRunners.Count - 1 do
+    TExecuteCodeRunner(GRunners[i]).Free;
+  GRunners.Free;
+  GRunners := nil;
+end;
+
+finalization
+  FreeRunners;
 
 end.

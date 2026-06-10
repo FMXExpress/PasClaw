@@ -54,6 +54,7 @@ uses
   PasClaw.Cmd.Post,
   PasClaw.Cmd.Membench,
   PasClaw.Cmd.Memory,
+  PasClaw.Cmd.ToolRPC,
   PasClaw.Cmd.Export,
   PasClaw.Cmd.Runbook,
   PasClaw.Cmd.TUI;
@@ -186,6 +187,10 @@ begin
   else if Cmd = 'post'     then Result := Cmd_Post_Run(Argv)
   else if Cmd = 'membench' then Result := Cmd_Membench_Run(Argv)
   else if Cmd = 'memory'   then Result := Cmd_Memory_Run(Argv)
+  { Internal callback channel for execute_code's tool-RPC. Not
+    listed in `pasclaw --help` -- the underscore prefix marks it
+    as not-for-humans. See PasClaw.Cmd.ToolRPC for the wire shape. }
+  else if Cmd = '__tool'   then Result := Cmd_ToolRPC_Run(Argv)
   else if Cmd = 'tui'      then Result := Cmd_TUI_Run(Argv)
   else if Cmd = 'update'   then Result := Cmd_Update_Run(Argv)
   else if Cmd = 'version'  then Result := Cmd_Version_Run(Argv)
