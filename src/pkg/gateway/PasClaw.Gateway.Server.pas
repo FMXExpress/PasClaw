@@ -155,6 +155,7 @@ uses
   PasClaw.Tools.Sandbox,
   PasClaw.Providers.Factory,
   PasClaw.Tools.ToolLoop,
+  PasClaw.Stream.Reliability,
   PasClaw.Agent.Compact,
   PasClaw.Agent.Prompt,
   PasClaw.Identity,
@@ -1213,7 +1214,7 @@ var
   Body, Prompt: string;
   Bytes: TBytes;
   Req, RespJ: TJsonObject;
-  Msgs: array of TMessage;
+  Msgs: TMessageArray;
   Loop: TToolLoopResult;
   LoopCfg: TToolLoopConfig;
 begin
@@ -1282,6 +1283,7 @@ begin
   LoopCfg.CompactEnabled := True;
   LoopCfg.CompactOpts    := DefaultCompactOptions;
   LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
+  LoopCfg.StreamReliability := FCfg.StreamReliability;
 
   if not RunToolLoop(LoopCfg, Msgs, Loop) then
   begin
@@ -1705,7 +1707,7 @@ var
   Bytes: TBytes;
   Req, MsgObj: TJsonObject;
   MsgArr: TJsonArray;
-  Msgs: array of TMessage;
+  Msgs: TMessageArray;
   i: Integer;
   WantsStream: Boolean;
   Loop: TToolLoopResult;
@@ -1838,6 +1840,18 @@ begin
     LoopCfg.CompactEnabled := True;
     LoopCfg.CompactOpts    := DefaultCompactOptions;
     LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
+    LoopCfg.StreamReliability := FCfg.StreamReliability;
+
+    { Tool-call repair: synthesize stub tool_result messages for any
+      assistant tool_call.Id in the incoming history that lacks a
+      paired mrTool. Strict OpenAI-compat backends (DeepSeek,
+      MiniMax-class) reject the request with HTTP 400 when these
+      orphans reach them. The repair runs once at the gateway
+      boundary before the tool loop -- subsequent loop-managed
+      tool_call/tool_result pairs are appended in lock-step so
+      cannot orphan. }
+    if FCfg.StreamReliability.ToolCallRepairEnabled then
+      RepairOrphanedToolCalls(Msgs);
 
     CompId := GenChatCompletionId;
 
@@ -2740,6 +2754,7 @@ procedure StreamResponsesViaProvider(AContext: TIdContext;
                                       const Opts: TChatOptions;
                                       const ToolsRawJSON: string;
                                       DebugIO: Boolean;
+                                      const Reliability: TStreamReliabilityConfig;
                                       out OutUsage: TUsageInfo;
                                       out OutToolCallCount: Integer);
 (* Real partial-streaming variant of EmitResponsesStream for the
@@ -2850,7 +2865,16 @@ begin
       StreamErr := '';
       Failed    := False;
       try
-        Resp := Provider.ChatStream(Msgs, ToolDefs, Model, Opts, State.OnChunk);
+        { ChatStreamWithReliability wraps Provider.ChatStream with an
+          idle-timeout watcher (returns synthetic empty response with
+          FinishReason='timeout' if no chunks arrive within the
+          configured window) and empty-turn retry (only when the
+          stream emitted zero chunks AND landed on the empty shape).
+          With both knobs zero the wrapper degrades to a direct
+          Provider.ChatStream call. }
+        Resp := ChatStreamWithReliability(Provider, Msgs, ToolDefs,
+                                           Model, Opts, State.OnChunk,
+                                           Reliability);
       except
         on E: Exception do
         begin
@@ -2874,6 +2898,16 @@ begin
           else
             StreamErr := 'provider returned finish_reason=error';
         end;
+      end;
+      { Idle-timeout from the reliability wrapper surfaces as
+        FinishReason='timeout'. Map to the response.failed code
+        path so the client gets a clean 502-style error instead of
+        a half-streamed response that silently never finishes. }
+      if (not Failed) and (Resp.FinishReason = 'timeout') then
+      begin
+        Failed := True;
+        if StreamErr = '' then
+          StreamErr := 'upstream stream idle-timeout';
       end;
 
       { Surface the totals to the caller's out-params. Whether the
@@ -3019,7 +3053,7 @@ var
   Bytes: TBytes;
   Req, InputObj, ReplyObj, ErrObj, ToolObj: TJsonObject;
   InputArr, ToolsArrIn: TJsonArray;
-  Msgs: array of TMessage;
+  Msgs: TMessageArray;
   i, MsgCount, j: Integer;
   WantsStream, HasFunctionTools: Boolean;
   Loop: TToolLoopResult;
@@ -3397,7 +3431,15 @@ begin
         we DON'T run PasClaw's internal tool loop -- that would have
         the model's tool calls vanish into our server-side handlers
         instead of reaching the client. One Chat() round-trip, hand
-        back text and any tool_calls verbatim. }
+        back text and any tool_calls verbatim.
+
+        Tool-call repair fires here too: the client may have aborted
+        a parallel tool mid-flight, leaving an assistant turn whose
+        tool_call.Id has no matched tool_result in the follow-up.
+        Strict OpenAI-compat backends 400 in that shape; the
+        synthesized stub keeps the request valid. }
+      if FCfg.StreamReliability.ToolCallRepairEnabled then
+        RepairOrphanedToolCalls(Msgs);
       PassthroughOpts := DefaultChatOptions;
       ApplyPromptCacheConfig(PassthroughOpts, FCfg.PromptCache);
       { Skip BuildSystemPrompt -- Codex sends its own developer
@@ -3439,6 +3481,7 @@ begin
         StreamResponsesViaProvider(AContext, AResp, AResponseStarted,
                                     FProvider, RespId, ReqModel, Msgs, ToolDefs,
                                     PassthroughOpts, ToolsRawJSON, FDebugIO,
+                                    FCfg.StreamReliability,
                                     OutUsage, StreamToolCallCount);
         { Stats accumulation for the streaming passthrough path.
           Mirrors the non-streaming branch below: count tokens
@@ -3455,7 +3498,15 @@ begin
       end;
 
       try
-        PassthroughResp := FProvider.Chat(Msgs, ToolDefs, ReqModel, PassthroughOpts);
+        { Empty-turn retry on the passthrough path -- same
+          semantics as the tool-loop site, just delivered through
+          ChatWithEmptyRetry. The passthrough has no fallback
+          chain, so retries against the primary provider are the
+          only recovery before the response goes back to the
+          client. }
+        PassthroughResp := ChatWithEmptyRetry(FProvider, Msgs, ToolDefs,
+                                               ReqModel, PassthroughOpts,
+                                               FCfg.StreamReliability);
       except
         on E: Exception do
         begin
@@ -3529,6 +3580,10 @@ begin
       LoopCfg.OnToolCall    := nil;
       LoopCfg.OnToolResult  := nil;
       LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
+      LoopCfg.StreamReliability := FCfg.StreamReliability;
+
+      if FCfg.StreamReliability.ToolCallRepairEnabled then
+        RepairOrphanedToolCalls(Msgs);
 
       if not RunToolLoop(LoopCfg, Msgs, Loop) then
       begin
