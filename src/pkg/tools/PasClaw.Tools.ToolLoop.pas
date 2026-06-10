@@ -98,6 +98,15 @@ type
        PR #117); channels can set their own per-conversation key
        when wiring concurrent polling. *)
     SteeringKey:    string;
+    (* Background-subagent drain key. Symmetric with SteeringKey:
+       PasClaw.Agent.SubagentBg registers itself in a key->coordinator
+       map under THIS string; at each iteration top RunToolLoop calls
+       GBackgroundDrainHook(BackgroundDrainKey) and folds any
+       finished-and-not-yet-delivered results into the system prompt
+       so the model sees them automatically. Empty key = no
+       background subagents installed for this session. Cmd.Agent
+       sets this to Session.Meta.Id, same as SteeringKey. *)
+    BackgroundDrainKey: string;
     (* Tool output truncation cap in bytes. When > 0, RunToolLoop
        runs each tool's ResultText through StashAndMaybeTruncate
        (PasClaw.Tools.OutputCache) before appending it to history:
@@ -150,6 +159,19 @@ type
 function RunToolLoop(const Cfg: TToolLoopConfig;
                      var Messages: array of TMessage;
                      out Loop: TToolLoopResult): Boolean;
+
+type
+  (* Late-bound hook so PasClaw.Tools.ToolLoop doesn't have to
+     `uses` PasClaw.Agent.SubagentBg (which itself calls
+     RunToolLoop -- a circular dep). The background-subagent unit
+     assigns this in its initialization. Returns a formatted
+     "[background subagent results]" block when one or more jobs
+     bound to Key have finished since the last drain, '' otherwise.
+     MaxChars bounds the total block size. *)
+  TBackgroundDrainFn = function(const Key: string; MaxChars: Integer): string;
+
+var
+  GBackgroundDrainHook: TBackgroundDrainFn = nil;
 
 implementation
 
@@ -533,7 +555,7 @@ var
   Batches: TToolBatchArray;
   Batch: TToolBatch;
   Workers: array of TToolCallWorker;
-  Steering, BatchSteering, HistSystem, LastProviderErrText: string;
+  Steering, BatchSteering, HistSystem, LastProviderErrText, BgBlock: string;
   Steers: TSteeringMessageArray;
   InContext: string;       { tool output cap (#PR new): in-context
                              body that lands in Hist after the
@@ -609,6 +631,24 @@ begin
       system prompt unbounded; the cap matches nanobot's
       _MAX_INJECTIONS_PER_TURN sanity bound. Cache breakpoint
       invalidates for the steering turn -- acceptable cost. }
+    { Background-subagent drain. Same channel as steering -- fold
+      into LiveOptions.SystemPrompt because providers skip in-
+      history mrSystem when SystemPrompt is set. Folded BEFORE
+      steering so a user steering message that mentions the result
+      arrives logically after the result the model sees. Late-bound
+      hook to break the circular dep; assigned by
+      PasClaw.Agent.SubagentBg.initialization. }
+    if (Cfg.BackgroundDrainKey <> '') and Assigned(GBackgroundDrainHook) then
+    begin
+      BgBlock := GBackgroundDrainHook(Cfg.BackgroundDrainKey, 8192);
+      if BgBlock <> '' then
+      begin
+        if LiveOptions.SystemPrompt <> '' then
+          LiveOptions.SystemPrompt := LiveOptions.SystemPrompt + sLineBreak + sLineBreak;
+        LiveOptions.SystemPrompt := LiveOptions.SystemPrompt + BgBlock;
+      end;
+    end;
+
     if Cfg.SteeringKey <> '' then
     begin
       Steers := DrainSteering(Cfg.SteeringKey, MaxSteeringPerTurn);
