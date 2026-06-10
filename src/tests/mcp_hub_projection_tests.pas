@@ -156,6 +156,25 @@ begin
   AssertTrue(CatalogEntryIsStdio(Entry), 'CatalogEntryIsStdio True for stdio');
 end;
 
+procedure TestStdioArgsWithWhitespaceRoundTripSafely;
+var
+  Entry: TMCPCatalogEntry;
+  Err: string;
+begin
+  { Defensive: a hub arg that carries embedded whitespace must
+    quote-wrap so the SplitArgs round-trip on the consuming side
+    rebuilds the original argv. Without quoting, "--prompt say hello"
+    would re-split into three slots and the spawned MCP server
+    would see a broken flag. }
+  AssertTrue(ProjectFromJSON(
+    '{"slug":"x","transport":"stdio","command":"runner",' +
+    '"args":["--mode","verbose","--prompt","say hello"]}', Entry, Err),
+    'stdio with whitespace arg projects');
+  AssertEqStr(Entry.CmdArgs,
+              '--mode verbose --prompt "say hello"',
+              'whitespace arg is quote-wrapped');
+end;
+
 procedure TestStdioEntryWithNoArgs;
 var
   Entry: TMCPCatalogEntry;
@@ -245,6 +264,8 @@ begin
   TestSseEntryProjectsAsHttpCompatible; WriteLn('  ok: sse entry projects (now accepted)');
   TestStreamableHttpProjects;        WriteLn('  ok: streamable-http projects');
   TestStdioEntryProjects;            WriteLn('  ok: stdio entry projects (now accepted)');
+  TestStdioArgsWithWhitespaceRoundTripSafely;
+                                     WriteLn('  ok: whitespace arg quoted for SplitArgs round-trip');
   TestStdioEntryWithNoArgs;          WriteLn('  ok: stdio with no args[] is ok');
   TestStdioMissingCommandRejects;    WriteLn('  ok: stdio without command rejected');
   TestHttpMissingEndpointRejects;    WriteLn('  ok: http without endpointUrl rejected');

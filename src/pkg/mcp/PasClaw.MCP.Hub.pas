@@ -283,13 +283,48 @@ begin
   end;
 end;
 
+function ContainsWhitespace(const S: string): Boolean;
+var
+  i: Integer;
+begin
+  Result := False;
+  for i := 1 to Length(S) do
+    if (S[i] = ' ') or (S[i] = #9) then Exit(True);
+end;
+
+function QuoteForSplitArgs(const S: string): string;
+{ Wrap an arg in double quotes when it carries whitespace so the
+  round-trip through PasClaw.MCP.StdioClient.SplitArgs gives the same
+  argv on the other side. SplitArgs honors paired single + double
+  quotes; if the arg itself contains double quotes we fall back to
+  single-quote wrap (and vice versa). Arg with BOTH quote kinds is
+  exotic enough that we let the worse-of-two outcomes through (double-
+  quote wrap; the inner double quote terminates early). The MCP
+  servers we route here ship short flag-shaped argv, so the both-
+  quote case never occurs in practice. }
+begin
+  if not ContainsWhitespace(S) then
+    Exit(S);
+  if Pos('"', S) = 0 then
+    Result := '"' + S + '"'
+  else if Pos('''', S) = 0 then
+    Result := '''' + S + ''''
+  else
+    Result := '"' + S + '"';
+end;
+
 function JoinHubArgs(Arr: TJsonArray): string;
 { Flatten a hub args[] string array into the space-joined form
   TMCPServer.Args stores. Hub entries spell each argv slot as its own
   string ("npx", "-y", "@modelcontextprotocol/server-github"); the
   installed config holds them as one space-separated token because
   PasClaw.Platform.TStdioProcess.Spawn re-tokenises via SplitArgs
-  (same convention the by-hand `pasclaw mcp add` path uses). }
+  (same convention the by-hand `pasclaw mcp add` path uses).
+
+  Args containing whitespace get quote-wrapped so the SplitArgs
+  round-trip rebuilds the original argv -- without that a hub
+  arg like "--prompt say hello" would re-split into three slots and
+  the spawned binary would see a broken flag. }
 var
   i: Integer;
   S: string;
@@ -301,7 +336,7 @@ begin
     S := Arr.ItemStr(i, '');
     if S = '' then Continue;
     if Result <> '' then Result := Result + ' ';
-    Result := Result + S;
+    Result := Result + QuoteForSplitArgs(S);
   end;
 end;
 
