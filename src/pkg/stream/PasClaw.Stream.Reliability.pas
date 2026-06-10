@@ -334,33 +334,39 @@ begin
 end;
 
 procedure TStreamJob.InternalOnChunk(const C: TStreamChunk);
-var
-  FireUser: Boolean;
-  Cb: TStreamCallback;
 begin
+  { Hold the lock across the user callback so Cancel cannot return
+    until any in-progress OnChunk has finished. Without that
+    guarantee the wrapper can return its synthetic timeout response,
+    the gateway tears down its TResponsesStreamState, and a stale
+    chunk arriving milliseconds later from the still-running worker
+    calls back into freed memory. Holding the lock around the call
+    serialises Cancel with in-progress OnChunks; combined with the
+    FCancelled flag (which gates entry on the next chunk) it
+    guarantees that once Cancel returns, no further user callback
+    can fire from this job. The lock is brief on the writer side
+    (Cancel / Detach just flip Booleans) so the worker-blocked-on-
+    Cancel window is bounded by the OnChunk write -- typically a
+    single socket write, well under the idle-timeout poll cadence. }
   FLock.Enter;
   try
     FLastChunkAt := Now;
     Inc(FChunkCount);
-    FireUser := (not FCancelled) and Assigned(FUserOnChunk);
-    Cb := FUserOnChunk;
-  finally
-    FLock.Leave;
-  end;
-  if FireUser then
-  begin
+    if FCancelled or (not Assigned(FUserOnChunk)) then Exit;
     { User OnChunk may write to a torn-down connection; swallow any
       exception so the worker can still drain the provider stream
       cleanly. Without this the provider would see its own callback
       raise, often classify it as a hard error, and we'd lose the
       finish_reason on the final response. }
     try
-      Cb(C);
+      FUserOnChunk(C);
     except
       on E: Exception do
         LogDebug('stream-reliability: user OnChunk raised %s: %s',
                  [E.ClassName, E.Message]);
     end;
+  finally
+    FLock.Leave;
   end;
 end;
 
