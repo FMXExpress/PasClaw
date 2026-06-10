@@ -42,8 +42,12 @@ uses
   PasClaw.Providers.Types,
   PasClaw.Tools.Types,
   PasClaw.Tools.Registry,
+  PasClaw.Tools.ToolLoop,
   PasClaw.Agent.Subagent,
   PasClaw.Agent.SubagentBg;
+
+var
+  GLastSeenSystemPrompt: string;
 
 procedure Fail_(const Msg: string);
 begin
@@ -107,6 +111,9 @@ var
   UserText: string;
 begin
   Result := Default(TLLMResponse);
+  { Record SystemPrompt so the regression test can assert what the
+    model actually saw on the wire. }
+  GLastSeenSystemPrompt := Options.SystemPrompt;
   UserText := '';
   for i := High(Messages) downto 0 do
     if Messages[i].Role = mrUser then
@@ -433,6 +440,87 @@ begin
   end;
 end;
 
+procedure TestDrainedBlockReachesModelButNotFinalSystemPrompt;
+(* Codex P2 on PR #211. Pre-fix, the drained [background subagent
+   results] block was folded into LiveOptions.SystemPrompt and
+   then propagated into Loop.FinalSystemPrompt, which RunInteractive
+   persists as Session.Meta.SystemPromptOverride. Effect: a
+   background result delivered once on turn N got REPLAYED on every
+   subsequent turn AND the prompt grew unboundedly.
+
+   Regression guard: stand up a fresh RunToolLoop with
+   BackgroundDrainKey bound to a coordinator that has one finished
+   job. Assert:
+     1. the fake provider's recorded SystemPrompt CONTAINS the
+        [background subagent results] marker (model saw it)
+     2. Loop.FinalSystemPrompt does NOT contain the marker
+        (persistence channel is clean -- the same block won't
+        replay next turn)
+
+   The fix: snapshot LiveOptions.SystemPrompt to PersistentSP
+   before folding the drain block, restore from PersistentSP after
+   Provider.Chat returns. *)
+var
+  Coord: TBackgroundSpawnCoordinator;
+  Provider: ILLMProvider;
+  ParentReg: TToolRegistry;
+  Out_, Err, Handle: string;
+  Cfg: TToolLoopConfig;
+  Loop: TToolLoopResult;
+  Hist: TMessageArray;
+  Ok: Boolean;
+  Key: string;
+begin
+  Coord := MakeCoord(Provider, ParentReg);
+  try
+    { Bind the coordinator under a key, queue + drain a job through it. }
+    Key := 'reg-test-session';
+    Coord.SetKey(Key);
+    Out_ := Coord.HandleSpawnBackground(
+      '{"agent":"researcher","prompt":"trace the persistence bug"}', Err);
+    Handle := ExtractHandle(Out_);
+    WaitForState(Coord, Handle, 'state=done', 5);
+
+    { Build a minimal loop config and let RunToolLoop pull the drain
+      block via the global hook the coordinator registered. The fake
+      provider returns a final-answer turn (no tool calls), so the
+      loop exits after one iteration. }
+    GLastSeenSystemPrompt := '';
+    Cfg := Default(TToolLoopConfig);
+    Cfg.Provider           := Provider;
+    Cfg.Registry           := ParentReg;
+    Cfg.Model              := 'fake';
+    Cfg.MaxIterations      := 2;
+    Cfg.Options            := DefaultChatOptions;
+    Cfg.Options.SystemPrompt := 'YOU-ARE-PASCLAW';
+    Cfg.BackgroundDrainKey := Key;
+
+    SetLength(Hist, 1);
+    Hist[0] := MakeMessage(mrUser, 'hi');
+
+    Ok := RunToolLoop(Cfg, Hist, Loop);
+    AssertTrue(Ok, 'RunToolLoop succeeds');
+
+    AssertContains(GLastSeenSystemPrompt, '[background subagent results]',
+                   'model SAW the drain block on the wire');
+    AssertContains(GLastSeenSystemPrompt, 'trace the persistence bug',
+                   'model saw the job result content too');
+
+    AssertNotContains(Loop.FinalSystemPrompt, '[background subagent results]',
+                      'FinalSystemPrompt does NOT carry the drain block ' +
+                      '(persistence channel clean)');
+    AssertNotContains(Loop.FinalSystemPrompt, 'trace the persistence bug',
+                      'FinalSystemPrompt does NOT carry the job result text');
+
+    { Sanity: the operator's baseline SystemPrompt is preserved. }
+    AssertContains(Loop.FinalSystemPrompt, 'YOU-ARE-PASCLAW',
+                   'baseline SystemPrompt survives');
+  finally
+    Coord.Free;
+    ParentReg.Free;
+  end;
+end;
+
 begin
   TestSpawnReturnsHandleAndJobStarts;
   TestWaitReturnsResultWhenDone;
@@ -441,5 +529,6 @@ begin
   TestConcurrencyCapRejects;
   TestDrainEmitsBlockOnceAndOnlyOnce;
   TestSpawnWaitDeliversFullEvenAfterPreviewTruncated;
+  TestDrainedBlockReachesModelButNotFinalSystemPrompt;
   WriteLn('subagent_bg_tests: OK');
 end.
