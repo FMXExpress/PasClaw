@@ -203,9 +203,11 @@ begin
     Hits := Idx.Search('caching strategies', 5);
     AssertTrue(HasHitFor(Hits, 'sess-evolve'), 'first content indexed');
 
-    { Rewrite the session with new content + a later UpdatedAt so
-      Sync detects the change and reindexes. }
-    Sleep(1100);  { ensure a distinct UpdatedAt second }
+    { Rewrite the session with new content. Post-Codex-P2 fix the
+      Sync uses (UpdatedAt OR file size) as the staleness signal,
+      so we no longer need a Sleep here -- the new transcript has
+      a different on-disk byte count which catches the change
+      even when the second hasn't ticked. }
     S := TSession.Create('sess-evolve');
     try
       S.Meta.Title := 'Evolving chat';
@@ -226,6 +228,76 @@ begin
     Hits := Idx.Search('caching strategies LRU', 5);
     AssertTrue(not HasHitFor(Hits, 'sess-evolve'),
                'stale content dropped on reindex');
+  finally
+    Idx := nil;
+  end;
+end;
+
+procedure TestReindexCatchesSameSecondSave;
+(* Codex P2 on PR #209. TSession.Touch sets Meta.UpdatedAt to
+   NowUnix (one-second resolution). Pre-fix Sync used strict
+   `IdxMtime < UpdatedAt` so two saves within the same wall-clock
+   second produced no advance, the second save's content was
+   silently ignored, and session_search returned stale snippets.
+
+   Reproduce: write a session, sync, force UpdatedAt back to the
+   indexed value (simulates the same-second collision), save new
+   content. Sync should still pick up the change via the file-size
+   tiebreaker. Without the fix this test fails. *)
+var
+  S: TSession;
+  Idx: ISessionSearchIndex;
+  Hits: TSessionHitArray;
+  PinnedTime: Int64;
+begin
+  WipeStore;
+  S := MakeSession('sess-sec', 'Same-second test',
+                   'original payload talks about quarks',
+                   'ok');
+  PinnedTime := S.Meta.UpdatedAt;
+  S.Free;
+
+  Idx := NewSessionSearchIndex;
+  AssertTrue(Idx.Open(IndexPath), 'index opens');
+  try
+    Idx.Sync;
+    Hits := Idx.Search('quarks', 5);
+    AssertTrue(HasHitFor(Hits, 'sess-sec'), 'first content indexed');
+
+    { Rewrite the session, pinning UpdatedAt to the same value the
+      index already saw -- this is what a back-to-back agent turn
+      looks like to the staleness check. Without the fix, the file
+      size tiebreaker is the only signal that catches it. The new
+      transcript is substantially longer so the size genuinely
+      differs (and ALSO matches the dominant real-world case --
+      transcripts grow, they rarely stay byte-identical). }
+    S := TSession.Create('sess-sec');
+    try
+      S.Meta.Title := 'Same-second test';
+      SetLength(S.Messages, 2);
+      S.Messages[0] := MakeMessage(mrUser,
+        'forget quarks -- now talking about gluons and the strong force ' +
+        'with extra padding to guarantee a different on-disk size');
+      S.Messages[1] := MakeMessage(mrAssistant,
+        'gluons mediate the strong nuclear interaction between quarks ' +
+        '(more padding bytes here too for size delta)');
+      S.Meta.UpdatedAt := PinnedTime;  { same wall-clock second }
+      S.Save;
+    finally
+      S.Free;
+    end;
+
+    Idx.Sync;
+    Hits := Idx.Search('gluons strong force', 5);
+    AssertTrue(HasHitFor(Hits, 'sess-sec'),
+               'new content searchable despite UpdatedAt unchanged');
+    Hits := Idx.Search('quarks', 5);
+    { Stale content might still be in the index briefly if the
+      reindex didn't fire -- pin that it DIDN'T match the new
+      transcript. Actually quarks is mentioned in the new content
+      too ("between quarks"), so this would pass for the wrong
+      reason -- skip that assertion. The positive search above is
+      the real regression guard. }
   finally
     Idx := nil;
   end;
@@ -302,6 +374,7 @@ begin
   TestHitCarriesIdAndTitle;
   TestNoMatchReturnsEmpty;
   TestReindexOnContentChange;
+  TestReindexCatchesSameSecondSave;
   TestRankingPrefersStrongerMatch;
   TestGatewayBucketsExcluded;
   WriteLn('session_search_tests: OK');

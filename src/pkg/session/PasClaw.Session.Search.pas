@@ -93,8 +93,9 @@ type
     FOpen:  Boolean;
     procedure ExecSQL(const SQL: string);
     procedure EnsureSchema;
-    function  IndexedMtime(const Id: string; out Mtime: Int64): Boolean;
-    procedure ReindexSession(const Meta: TSessionMeta);
+    function  IndexedSignature(const Id: string;
+                               out Mtime, Size: Int64): Boolean;
+    procedure ReindexSession(const Meta: TSessionMeta; FileSize_: Int64);
     procedure DropMissing(const KnownIds: TStringList);
   public
     destructor Destroy; override;
@@ -134,7 +135,24 @@ begin
     '  rowid INTEGER PRIMARY KEY AUTOINCREMENT,' +
     '  id TEXT UNIQUE NOT NULL,' +
     '  mtime INTEGER NOT NULL,' +
+    '  size INTEGER NOT NULL DEFAULT 0,' +
     '  indexed_at INTEGER NOT NULL)');
+  { Migration for indexes built before the size column existed.
+    SQLite ALTER TABLE ADD COLUMN with DEFAULT 0 is cheap; existing
+    rows get size=0 and reindex on first Sync (their on-disk size
+    won't match 0). The IF NOT EXISTS guard is via try/except --
+    SQLite errors if the column already exists. Codex P2 on PR #209:
+    we added size as a same-second-save tiebreaker so transcripts
+    updated twice within one wall-clock second still get reindexed. }
+  try
+    ExecSQL('ALTER TABLE session_files ADD COLUMN size INTEGER NOT NULL DEFAULT 0');
+  except
+    on E: Exception do
+      { Column already present -- this is the normal path on second
+        Open. Don't log every time. }
+      if Pos('duplicate', LowerCase(E.Message)) = 0 then
+        LogDebug('session.search: size column migration: %s', [E.Message]);
+  end;
   ExecSQL(
     'CREATE VIRTUAL TABLE IF NOT EXISTS session_fts USING fts5(' +
     '  id UNINDEXED, title UNINDEXED, content,' +
@@ -201,20 +219,55 @@ begin
   FOpen := False;
 end;
 
-function TSessionSearchImpl.IndexedMtime(const Id: string; out Mtime: Int64): Boolean;
+function GetSessionFileSize(const Id: string): Int64;
+{ Direct stat of the session JSON file. We use this alongside
+  Meta.UpdatedAt as a same-second-save tiebreaker: two writes in
+  the same wall-clock second leave UpdatedAt unchanged but almost
+  always touch the file size. TFileStream on read-share so a
+  concurrent agent loop save doesn't fail the stat. }
+var
+  Path: string;
+  Fs: TFileStream;
+begin
+  Result := 0;
+  Path := SessionPath(Id);
+  if not FileExists(Path) then Exit;
+  try
+    Fs := TFileStream.Create(Path, fmOpenRead or fmShareDenyNone);
+    try
+      Result := Fs.Size;
+    finally
+      Fs.Free;
+    end;
+  except
+    { Concurrent rename/delete -- treat as size-unknown so the caller
+      reindexes defensively. Memory.Index has the same race window;
+      not addressing it here. }
+    Result := 0;
+  end;
+end;
+
+function TSessionSearchImpl.IndexedSignature(const Id: string;
+                                             out Mtime, Size: Int64): Boolean;
 {$IFDEF FPC}
 var
   Q: TSQLQuery;
 begin
   Result := False;
   Mtime  := 0;
+  Size   := 0;
   Q := TSQLQuery.Create(nil);
   try
     Q.Database := FConn;
-    Q.SQL.Text := 'SELECT mtime FROM session_files WHERE id = :p';
+    Q.SQL.Text := 'SELECT mtime, size FROM session_files WHERE id = :p';
     Q.Params.ParamByName('p').AsString := Id;
     Q.Open;
-    if not Q.EOF then begin Mtime := Q.Fields[0].AsLargeInt; Result := True; end;
+    if not Q.EOF then
+    begin
+      Mtime  := Q.Fields[0].AsLargeInt;
+      Size   := Q.Fields[1].AsLargeInt;
+      Result := True;
+    end;
     Q.Close;
   finally
     Q.Free;
@@ -226,13 +279,19 @@ var
 begin
   Result := False;
   Mtime  := 0;
+  Size   := 0;
   Q := TFDQuery.Create(nil);
   try
     Q.Connection := FConn;
-    Q.SQL.Text := 'SELECT mtime FROM session_files WHERE id = :p';
+    Q.SQL.Text := 'SELECT mtime, size FROM session_files WHERE id = :p';
     Q.ParamByName('p').AsString := Id;
     Q.Open;
-    if not Q.Eof then begin Mtime := Q.Fields[0].AsLargeInt; Result := True; end;
+    if not Q.Eof then
+    begin
+      Mtime  := Q.Fields[0].AsLargeInt;
+      Size   := Q.Fields[1].AsLargeInt;
+      Result := True;
+    end;
     Q.Close;
   finally
     Q.Free;
@@ -262,7 +321,8 @@ begin
   end;
 end;
 
-procedure TSessionSearchImpl.ReindexSession(const Meta: TSessionMeta);
+procedure TSessionSearchImpl.ReindexSession(const Meta: TSessionMeta;
+                                            FileSize_: Int64);
 var
   Sess: TSession;
   Content: string;
@@ -293,9 +353,10 @@ begin
       Q.ExecSQL;
 
       Q.SQL.Text :=
-        'INSERT INTO session_files (id, mtime, indexed_at) VALUES (:p, :m, :i)';
+        'INSERT INTO session_files (id, mtime, size, indexed_at) VALUES (:p, :m, :s, :i)';
       Q.Params.ParamByName('p').AsString   := Meta.Id;
       Q.Params.ParamByName('m').AsLargeInt := Meta.UpdatedAt;
+      Q.Params.ParamByName('s').AsLargeInt := FileSize_;
       Q.Params.ParamByName('i').AsLargeInt := Now_;
       Q.ExecSQL;
 
@@ -325,9 +386,10 @@ begin
       Q.ExecSQL;
 
       Q.SQL.Text :=
-        'INSERT INTO session_files (id, mtime, indexed_at) VALUES (:p, :m, :i)';
+        'INSERT INTO session_files (id, mtime, size, indexed_at) VALUES (:p, :m, :s, :i)';
       Q.ParamByName('p').AsString   := Meta.Id;
       Q.ParamByName('m').AsLargeInt := Meta.UpdatedAt;
+      Q.ParamByName('s').AsLargeInt := FileSize_;
       Q.ParamByName('i').AsLargeInt := Now_;
       Q.ExecSQL;
 
@@ -430,7 +492,7 @@ var
   Sessions: TSessionMetaArray;
   Known: TStringList;
   i: Integer;
-  Idx: Int64;
+  IdxMtime, IdxSize, FileSize_: Int64;
   Found: Boolean;
 begin
   if not FOpen then Exit;
@@ -442,11 +504,20 @@ begin
     for i := 0 to High(Sessions) do
     begin
       Known.Add(Sessions[i].Id);
-      Found := IndexedMtime(Sessions[i].Id, Idx);
-      { Reindex when new or when the transcript moved (UpdatedAt
-        advanced past what we last indexed). }
-      if (not Found) or (Idx < Sessions[i].UpdatedAt) then
-        ReindexSession(Sessions[i]);
+      Found     := IndexedSignature(Sessions[i].Id, IdxMtime, IdxSize);
+      FileSize_ := GetSessionFileSize(Sessions[i].Id);
+      { Reindex when:
+          - never indexed
+          - UpdatedAt advanced past what we last indexed
+          - on-disk file size differs from the indexed size
+        The size tiebreaker handles the same-wall-clock-second case
+        Codex P2 on PR #209 caught: TSession.Touch sets UpdatedAt
+        to NowUnix (second resolution), so two saves within the
+        same second leave UpdatedAt unchanged. The transcript almost
+        always changed bytes-on-disk; comparing size catches it. }
+      if (not Found) or (IdxMtime < Sessions[i].UpdatedAt) or
+         (IdxSize <> FileSize_) then
+        ReindexSession(Sessions[i], FileSize_);
     end;
     DropMissing(Known);
   finally
