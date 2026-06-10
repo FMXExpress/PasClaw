@@ -101,6 +101,7 @@ UNIT_DIRS = \
 	src/pkg/config \
 	src/pkg/json \
 	src/pkg/providers \
+	src/pkg/stream \
 	src/pkg/tokenizer \
 	src/pkg/tools \
 	src/pkg/mcp \
@@ -154,7 +155,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-kb-index print-version get-indy webui-res browser
+.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index print-version get-indy webui-res browser
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -378,6 +379,14 @@ test-subagent-bg: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/subagent_bg_tests.pas -o$(BUILDDIR)/subagent_bg_tests
 	@$(BUILDDIR)/subagent_bg_tests
 
+# Stream reliability: empty-turn retry, idle-timeout, tool-call repair.
+# Uses a scripted fake provider; one test sleeps a few seconds to verify
+# the idle-timeout watcher.
+test-stream-reliability: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/stream_reliability_tests.pas -o$(BUILDDIR)/stream_reliability_tests
+	@$(BUILDDIR)/stream_reliability_tests
+
 test-session-search: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/session_search_tests.pas -o$(BUILDDIR)/session_search_tests
@@ -390,4 +399,4 @@ test-kb-index: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/kb_index_tests.pas -o$(BUILDDIR)/kb_index_tests
 	@$(BUILDDIR)/kb_index_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-kb-index
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-kb-index

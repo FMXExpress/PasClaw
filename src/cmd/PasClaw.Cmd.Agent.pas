@@ -303,6 +303,11 @@ begin
     `tool_output_get` tool is registered alongside the other core
     tools in RegisterFSTools' caller (Cmd.Agent / Cmd.TUI). }
   Result.ToolOutputCap := Cfg.ToolOutputCap;
+  { Stream-reliability: same default-shape pattern -- forwarded as
+    a struct copy so the loop's primary Provider.Chat call goes
+    through ChatWithEmptyRetry. Loop-side fallback walk is
+    unaffected; this only catches the empty-turn brownout shape. }
+  Result.StreamReliability := Cfg.StreamReliability;
 end;
 
 { One-line per-turn token summary. Cache fields only appear when

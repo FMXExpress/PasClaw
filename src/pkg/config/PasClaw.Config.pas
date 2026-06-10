@@ -12,7 +12,8 @@ interface
 
 uses
   SysUtils, Classes,
-  PasClaw.Providers.Types;
+  PasClaw.Providers.Types,
+  PasClaw.Stream.Reliability;
 
 const
   (* Single source of truth for the product version is VersionFallback below;
@@ -229,6 +230,16 @@ type
     TTL:     string;
   end;
 
+  (* TStreamReliabilityConfig is declared in PasClaw.Stream.Reliability
+     -- this unit re-exports nothing, just folds the record into
+     TConfig as the persisted operator-facing shape. See the
+     unit comment in PasClaw.Stream.Reliability for the four
+     knobs and their semantics. Operators tune via config.json
+     under "stream_reliability": {...} OR via the well-known
+     env vars (UC_EMPTY_RETRY_ATTEMPTS, UC_EMPTY_RETRY_BACKOFF_MS,
+     UC_STREAM_IDLE_TIMEOUT_SEC, UC_TOOL_CALL_REPAIR); env wins
+     over config.json. *)
+
   (* Anthropic-only: register Anthropic's server-side web tools
      (web_search_20260209 / web_fetch_20260209) in the request's
      tools array. Claude runs the queries / fetches on Anthropic's
@@ -402,6 +413,7 @@ type
     AnthropicServerTools: TAnthropicServerToolsConfig;
     OpenAIServerTools:    TOpenAIServerToolsConfig;
     GeminiServerTools:    TGeminiServerToolsConfig;
+    StreamReliability:    TStreamReliabilityConfig;
     constructor Create;
     function  ToJSON: string;
     procedure FromJSON(const S: string);
@@ -490,6 +502,15 @@ begin
     (gemini-3.5-flash) accepts the field. See the type comment for
     the model-compat caveat. }
   GeminiServerTools.GoogleSearch        := True;
+  { Stream reliability defaults match the UltraCode-Shim shipping
+    config -- conservative enough that operators on healthy
+    backends never notice, aggressive enough to recover the
+    common brownout cases (Together / OpenRouter route hiccups,
+    DeepSeek thinking-token overflow). }
+  StreamReliability.EmptyRetryAttempts    := 2;
+  StreamReliability.EmptyRetryBackoffMs   := 750;
+  StreamReliability.StreamIdleTimeoutMs   := 150 * 1000;
+  StreamReliability.ToolCallRepairEnabled := True;
 end;
 
 function ProviderToJSON(const P: TProviderConfig): TJsonObject;
@@ -687,6 +708,23 @@ begin
     Tmp := TJsonObject.Create;
     Tmp.PutBool('google_search', GeminiServerTools.GoogleSearch);
     Root.PutObject('gemini_server_tools', Tmp);
+
+    { Emit stream_reliability only when at least one knob differs
+      from the defaults -- keeps stock configs tidy. The reader
+      below initialises each field from the live default before
+      overlaying JSON values so missing keys round-trip cleanly. }
+    if (StreamReliability.EmptyRetryAttempts    <> 2)         or
+       (StreamReliability.EmptyRetryBackoffMs   <> 750)       or
+       (StreamReliability.StreamIdleTimeoutMs   <> 150 * 1000) or
+       (not StreamReliability.ToolCallRepairEnabled)          then
+    begin
+      Tmp := TJsonObject.Create;
+      Tmp.PutInt ('empty_retry_attempts',     StreamReliability.EmptyRetryAttempts);
+      Tmp.PutInt ('empty_retry_backoff_ms',   StreamReliability.EmptyRetryBackoffMs);
+      Tmp.PutInt ('stream_idle_timeout_ms',   StreamReliability.StreamIdleTimeoutMs);
+      Tmp.PutBool('tool_call_repair_enabled', StreamReliability.ToolCallRepairEnabled);
+      Root.PutObject('stream_reliability', Tmp);
+    end;
 
     Arr := TJsonArray.Create;
     for i := 0 to High(Providers) do
@@ -886,6 +924,21 @@ begin
     try
       GeminiServerTools.GoogleSearch :=
         Obj.GetBool('google_search', GeminiServerTools.GoogleSearch);
+    finally
+      Obj.Free;
+    end;
+
+    Obj := Root.ChildObject('stream_reliability');
+    if Obj <> nil then
+    try
+      StreamReliability.EmptyRetryAttempts :=
+        Integer(Obj.GetInt('empty_retry_attempts',  StreamReliability.EmptyRetryAttempts));
+      StreamReliability.EmptyRetryBackoffMs :=
+        Integer(Obj.GetInt('empty_retry_backoff_ms', StreamReliability.EmptyRetryBackoffMs));
+      StreamReliability.StreamIdleTimeoutMs :=
+        Integer(Obj.GetInt('stream_idle_timeout_ms', StreamReliability.StreamIdleTimeoutMs));
+      StreamReliability.ToolCallRepairEnabled :=
+        Obj.GetBool('tool_call_repair_enabled',     StreamReliability.ToolCallRepairEnabled);
     finally
       Obj.Free;
     end;

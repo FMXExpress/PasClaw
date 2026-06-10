@@ -45,6 +45,7 @@ uses
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
   PasClaw.Cron.Scheduler,
+  PasClaw.Stream.Reliability,
   PasClaw.Gateway.Server,
   PasClaw.Channels.Telegram,
   PasClaw.Channels.LINE,
@@ -165,6 +166,11 @@ begin
   ConfigureSandbox(Cfg.Sandbox, '');
   try
     Args := ParseGw(Argv, Cfg);
+
+    { Stream-reliability env-var overrides -- see Cmd.Serve for the
+      same shape. Env wins over config; defaults from TConfig.Create
+      win otherwise. }
+    Cfg.StreamReliability := LoadStreamReliabilityFromEnv(Cfg.StreamReliability);
 
     Provider := nil;
     if Cfg.DefaultProvider <> '' then

@@ -711,6 +711,7 @@ begin
   Cfg.OnText        := ForwardText;
   Cfg.OnToolCall    := ForwardToolCall;
   Cfg.OnToolResult  := ForwardToolResult;
+  Cfg.StreamReliability := FConfig.StreamReliability;
 
   try
     Result := RunToolLoop(Cfg, Msgs, Loop);

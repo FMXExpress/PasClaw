@@ -57,6 +57,7 @@ uses
   PasClaw.Tools.Sandbox,
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
+  PasClaw.Stream.Reliability,
   PasClaw.Gateway.Server;
 
 type
@@ -113,6 +114,13 @@ begin
   ConfigureSandbox(Cfg.Sandbox, '');
   try
     Args := ParseServe(Argv, Cfg);
+
+    { Stream-reliability env-var overrides. Lets operators tune
+      UC_EMPTY_RETRY_ATTEMPTS / UC_EMPTY_RETRY_BACKOFF_MS /
+      UC_STREAM_IDLE_TIMEOUT_SEC / UC_TOOL_CALL_REPAIR per-run
+      without rewriting config.json. Env wins over config; defaults
+      from TConfig.Create win otherwise. }
+    Cfg.StreamReliability := LoadStreamReliabilityFromEnv(Cfg.StreamReliability);
 
     if Args.Debug then
     begin
