@@ -64,6 +64,14 @@ uses
 
 procedure RegisterExecuteCodeTool(R: TToolRegistry);
 
+(* Plug the registry that should serve tool-RPC callbacks from the
+   spawned execute_code script. Loop callers (Cmd.Agent, TUI,
+   gateway) set this when they start their tool loop -- the
+   execute_code handler reads it and starts the singleton RPC
+   server on first need. Calling with nil disables tool-RPC
+   (script can still run, just without `pasclaw __tool` callbacks). *)
+procedure SetCurrentToolRegistry(R: TToolRegistry);
+
 (* Resolve `auto` to the right host-default shell. Exposed so a test
    can pin the contract -- the dispatch table changes if we ever
    add fish or nu support and a silent change would either spawn
@@ -113,7 +121,22 @@ uses
   PasClaw.Config,
   PasClaw.Platform,
   PasClaw.Utils,
-  PasClaw.Tools.Sandbox;
+  PasClaw.Tools.Sandbox,
+  PasClaw.Tools.RPC;
+
+var
+  { Set by SetCurrentToolRegistry. Loop callers plug this in at
+    loop start so a script invoking `pasclaw __tool ...` reaches
+    the same registry the model has been given. Nil means no
+    registry plugged in -- script can still run, but tool-RPC
+    callbacks will fail with "no tool-rpc info file" because we
+    don't bother starting the server. }
+  GCurrentToolRegistry: TToolRegistry = nil;
+
+procedure SetCurrentToolRegistry(R: TToolRegistry);
+begin
+  GCurrentToolRegistry := R;
+end;
 
 function ParseStringArg(const ArgsJSON, Field: string; out V: string): Boolean;
 var
@@ -340,6 +363,20 @@ begin
     Exit;
   end;
 
+  { Start (or rebind) the tool-RPC server so the script can shell
+    out to `pasclaw __tool ...`. Best-effort: if the bind fails
+    (port exhaustion, locked-down sandbox), the script still runs,
+    it just won't be able to call back. No-registry callers (e.g.
+    standalone tests that exercise ExecuteCode in isolation) skip
+    this -- no registry means nothing to dispatch to anyway. }
+  if GCurrentToolRegistry <> nil then
+    try
+      StartToolRPCIfNeeded(GCurrentToolRegistry);
+    except
+      on E: Exception do
+        LogWarn('execute_code: tool-rpc unavailable: %s', [E.Message]);
+    end;
+
   if not MakeTempScript(ResolvedLang, Code, ScriptPath, ErrMsg) then Exit;
   try
     if not BuildExecuteCodeArgv(ResolvedLang, ScriptPath, Argv) then
@@ -383,13 +420,26 @@ procedure RegisterExecuteCodeTool(R: TToolRegistry);
 var
   T: TTool;
 begin
+  { Plug this registry as the tool-RPC dispatch target. Last-set
+    wins, which is what we want: a subagent loop building its own
+    sub-registry overrides the parent's, so execute_code from
+    inside the subagent sees the subagent's tool surface. Loop
+    teardown leaves the pointer dangling but the server only
+    fires on a fresh execute_code call -- and by then the next
+    loop has already re-registered. }
+  SetCurrentToolRegistry(R);
   T.Name        := 'execute_code';
   T.Description := 'Run a multi-line bash or PowerShell script. Use when ' +
                    'you need a loop, heredoc, or fan-out that would be ' +
                    'awkward to express as a single shell_exec command. ' +
                    'Script body is written to a temp file then executed; ' +
                    'returns combined stdout+stderr and exit code. Subject ' +
-                   'to the same sandbox + denylist as shell_exec.';
+                   'to the same sandbox + denylist as shell_exec. ' +
+                   'INSIDE the script you can call back into any of your ' +
+                   'other tools by running `pasclaw __tool <name> ''<json-args>''` ' +
+                   '-- the call hits the same registry you''re using now. ' +
+                   'Use this to fan out: e.g. list files, then memory_search ' +
+                   'each, then fs_read the top hits, all in one script.';
   T.Schema      :=
     '{"type":"object",' +
      '"properties":{' +

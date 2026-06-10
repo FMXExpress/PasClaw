@@ -358,4 +358,12 @@ test-session-list-filter: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/session_list_filter_tests.pas -o$(BUILDDIR)/session_list_filter_tests
 	@PASCLAW_HOME=$(BUILDDIR)/session-list-filter-test-home $(BUILDDIR)/session_list_filter_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter
+# Tool-RPC server: the in-process callback the execute_code script uses
+# to reach back into the parent's tool registry. PASCLAW_HOME isolated so
+# the info file lands in a scratch dir.
+test-tool-rpc: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/tool_rpc_tests.pas -o$(BUILDDIR)/tool_rpc_tests
+	@PASCLAW_HOME=$(BUILDDIR)/tool-rpc-test-home $(BUILDDIR)/tool_rpc_tests
+
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc
