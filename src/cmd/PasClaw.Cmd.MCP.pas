@@ -260,7 +260,7 @@ begin
     PrintLn(Ansi.Dim + '(showing built-in ' + IntToStr(Length(Entries)) + ' entries)' + Ansi.Reset);
   if Skipped > 0 then
     PrintLn(Ansi.Dim + '  (' + IntToStr(Skipped) +
-            ' hub entry/entries skipped -- unsupported transport)' +
+            ' hub entry/entries skipped -- malformed records on the registry)' +
             Ansi.Reset);
   PrintLn;
   if Length(Entries) = 0 then
