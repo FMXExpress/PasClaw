@@ -356,60 +356,41 @@ begin
   end;
 end;
 
-function ExtractIdRaw(const Line: string): string;
-{ Walk the JSON-RPC request line and pull out the verbatim id value
-  -- a number ("42"), a quoted string ("\"req-1\""), or null. We need
-  the raw literal because numeric ids must echo back as numbers and
-  string ids as strings; round-tripping through GetInt / GetStr in
-  PasClaw.JSON would force a type choice. Returns 'null' when id is
-  missing, malformed, or explicitly null. Tolerant of whitespace and
-  works on a single-object request -- the only shape MCP allows. }
+function ExtractIdRaw(Obj: TJsonObject): string;
+{ Return the JSON literal for the request's id field so we can echo
+  it back unchanged -- a numeric id ("42") stays numeric, a string id
+  ("\"req-1\"") stays a string. Reads from the PARSED object rather
+  than the raw line, so an "id" key sitting inside a nested params
+  field can't confuse a substring scan. Returns 'null' for missing /
+  unparseable ids.
+
+  Detection trick: GetStr returns the supplied default when the field
+  exists but isn't a string -- so a sentinel default that can never
+  appear in valid JSON (a literal NUL+SOH+STX triplet -- control chars
+  must be escaped in JSON strings) lets us reliably distinguish
+  "string id" from "numeric id". }
+const
+  StringSentinel = #0#1#2;
 var
-  i, n, Start: Integer;
-  Marker, Body: string;
+  S: string;
+  I: Int64;
 begin
   Result := 'null';
-  Marker := '"id"';
-  n := Length(Line);
-  i := Pos(Marker, Line);
-  if i <= 0 then Exit;
-  i := i + Length(Marker);
-  while (i <= n) and ((Line[i] = ' ') or (Line[i] = #9)) do Inc(i);
-  if (i > n) or (Line[i] <> ':') then Exit;
-  Inc(i);
-  while (i <= n) and ((Line[i] = ' ') or (Line[i] = #9)) do Inc(i);
-  if i > n then Exit;
-  if Line[i] = '"' then
+  if (Obj = nil) or (not Obj.Has('id')) then Exit;
+  S := Obj.GetStr('id', StringSentinel);
+  if S <> StringSentinel then
   begin
-    { Quoted string id. Walk until the closing unescaped quote. }
-    Start := i;
-    Inc(i);
-    while i <= n do
-    begin
-      if (Line[i] = '\') and (i < n) then
-        Inc(i, 2)
-      else if Line[i] = '"' then
-      begin
-        Result := Copy(Line, Start, i - Start + 1);
-        Exit;
-      end
-      else
-        Inc(i);
-    end;
-    { Unterminated quoted id -- treat as null rather than risk
-      a malformed echo. }
+    Result := '"' + JsonEscape(S) + '"';
     Exit;
   end;
-  { Numeric or null literal: read until a delimiter. }
-  Start := i;
-  while (i <= n) and (not (Line[i] in [',', '}', ' ', #9, #10, #13])) do
-    Inc(i);
-  Body := Trim(Copy(Line, Start, i - Start));
-  if Body = '' then Exit;
-  if Body = 'null' then Exit;
-  { Anything else -- caller already validated this is JSON, so we
-    trust the literal as either an integer or a fraction. }
-  Result := Body;
+  { Not a string -- emit numeric form. GetInt's default is harmless
+    here because Has() already confirmed the field is present, so
+    the return value is the id itself (or 0 for an unusual null /
+    float id, which is the best we can do without round-tripping
+    floating-point literals -- the spec discourages float ids
+    anyway, hosts use ints or strings). }
+  I := Obj.GetInt('id', 0);
+  Result := IntToStr(I);
 end;
 
 function TMCPServerCore.HandleRequest(const ALine: string): string;
@@ -419,8 +400,6 @@ var
 begin
   Result := '';
   if Trim(ALine) = '' then Exit;
-
-  Id := ExtractIdRaw(ALine);
 
   Obj := nil;
   try
@@ -436,6 +415,7 @@ begin
   end;
   try
     Method := Obj.GetStr('method', '');
+    Id     := ExtractIdRaw(Obj);
     ParamsObj := Obj.ChildObject('params');
     Params := '';
     if ParamsObj <> nil then

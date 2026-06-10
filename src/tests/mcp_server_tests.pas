@@ -441,6 +441,35 @@ begin
   end;
 end;
 
+procedure TestIdNestedInParamsDoesNotConfuseEcho;
+(* Defends the id extraction against ids buried inside params -- the
+   outer id is what gets echoed back, regardless of any "id"-named
+   fields in the nested argument blob. With the old string-scanner
+   implementation a request with params arriving BEFORE the outer
+   id could echo back the inner id (Pos hit it first). The
+   parsed-object lookup picks the top-level "id" unambiguously. *)
+var
+  Reg: TToolRegistry;
+  Srv: TMCPServerCore;
+  Resp: string;
+begin
+  Reg := TToolRegistry.Create;
+  try
+    Srv := TMCPServerCore.Create(Reg, False, '');
+    try
+      Resp := Srv.HandleRequest(
+        '{"jsonrpc":"2.0","params":{"id":"inner"},"id":99,"method":"ping"}');
+      AssertContains(Resp, '"id":99', 'outer numeric id wins over nested string id');
+      AssertNotContains(Resp, '"id":"inner"',
+                        'nested id never leaks into the echo');
+    finally
+      Srv.Free;
+    end;
+  finally
+    Reg.Free;
+  end;
+end;
+
 procedure TestPingRoundTrip;
 var
   Reg: TToolRegistry;
@@ -474,6 +503,7 @@ begin
   TestUnknownMethodErrors;                  WriteLn('  ok: unknown method errors');
   TestParseErrorReturnsNullId;              WriteLn('  ok: parse error returns id=null');
   TestAllowListNarrowsSurface;              WriteLn('  ok: allowlist narrows surface');
+  TestIdNestedInParamsDoesNotConfuseEcho;   WriteLn('  ok: id-in-params does not leak into echo');
   TestPingRoundTrip;                        WriteLn('  ok: ping round-trip');
   WriteLn('PASS');
 end.

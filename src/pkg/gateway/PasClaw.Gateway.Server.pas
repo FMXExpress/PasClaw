@@ -360,8 +360,13 @@ procedure TGatewayServer.SetMCPAllowMutating(V: Boolean);
   (fs_write / shell / fs_edit_hashline) too. Off by default because
   letting a foreign MCP host call fs_write on the operator's box is
   exactly the bad outcome the sandbox layer exists to prevent.
-  Recreate the core if it already exists so the new policy applies
-  on the next /mcp request. }
+
+  Call BEFORE Start: the operator-facing wiring in Cmd.Serve /
+  Cmd.Gateway does exactly this, so the policy is locked in before
+  any /mcp request can race the setter. We invalidate any
+  pre-built core for completeness, but freeing it while a request
+  thread holds a pointer to it would be a use-after-free -- callers
+  that change the policy at runtime must serialise externally. }
 begin
   FMCPInboundLock.Acquire;
   try
