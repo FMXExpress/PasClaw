@@ -22,11 +22,16 @@ uses
   PasClaw.MCP.HttpClient,
   PasClaw.MCP.Catalog,
   PasClaw.MCP.Hub,
-  PasClaw.MCP.OAuth;
+  PasClaw.MCP.OAuth,
+  PasClaw.MCP.Server,
+  PasClaw.Tools.Registry,
+  PasClaw.Tools.Memory,
+  PasClaw.Tools.KB,
+  PasClaw.Tools.SessionSearch;
 
 procedure Help;
 begin
-  PrintLn('Usage: pasclaw mcp <list|add|remove|test|edit|show|catalog|search|install|auth> [args]');
+  PrintLn('Usage: pasclaw mcp <list|add|remove|test|edit|show|catalog|search|install|auth|stdio> [args]');
   PrintLn('  add <name> <cmd> [args]   register a new MCP server');
   PrintLn('  remove <name>             delete an MCP server entry');
   PrintLn('  list                      list configured servers');
@@ -39,6 +44,13 @@ begin
   PrintLn('  install <name>            add from hub or catalog (reads auth from env)');
   PrintLn('  auth <name>               run the OAuth 2.1 + PKCE flow for an OAuth-only');
   PrintLn('                            MCP server (opens browser, captures callback)');
+  PrintLn('  stdio [--allow-write]     run PasClaw as an MCP server over stdio.');
+  PrintLn('                            Exposes memory_search / kb_search /');
+  PrintLn('                            session_search (SCARS lives in workspace/memory)');
+  PrintLn('                            to any host that spawns MCP servers as');
+  PrintLn('                            subprocesses (Claude Desktop, Cursor, Codex CLI).');
+  PrintLn('                            Read-only by default; --allow-write opts in to');
+  PrintLn('                            mutating tools.');
 end;
 
 function DoList: Integer;
@@ -461,6 +473,68 @@ begin
   end;
 end;
 
+function DoStdio(const Argv: array of string): Integer;
+{ Run PasClaw as an inbound MCP server over stdin/stdout. Newline-
+  delimited JSON-RPC -- the same framing PasClaw.MCP.StdioClient
+  uses when consuming external MCP servers.
+
+  Loop: read one line from stdin, hand it to TMCPServerCore.HandleRequest,
+  write the non-empty response back. EOF on stdin ends the loop and the
+  process exits 0. Tool failures land as isError content (not transport
+  errors) so the host keeps the session alive. Logs go to stderr only --
+  stdout MUST stay clean JSON-RPC, otherwise the host's parser bails.
+
+  Tool surface: same read-only slice as the HTTP /mcp route --
+  memory_search / memory_get / kb_search / kb_get / session_search.
+  SCARS lives inside workspace/memory/SCARS.md so it's reachable
+  through memory_search; no separate "scars" tool to maintain.
+  --allow-write also exposes the mutating tools (off by default). }
+var
+  i: Integer;
+  AllowWrite: Boolean;
+  Reg: TToolRegistry;
+  Srv: TMCPServerCore;
+  Line, Resp: string;
+begin
+  AllowWrite := False;
+  for i := 1 to High(Argv) do
+    if (Argv[i] = '--allow-write') or (Argv[i] = '--mcp-allow-write') then
+      AllowWrite := True;
+
+  { Stdio MCP runs without a chat provider -- we never call out to an
+    LLM, we just expose corpora to the host. Register the read-only
+    data tools directly; skip RegisterFSTools / RegisterShellTool /
+    RegisterExecuteCodeTool (writes / shell-out / sandbox), keep the
+    surface scoped to the "live source of truth" data. The HTTP
+    --mcp-allow-write knob also tightens this -- but for stdio,
+    register-only-what-we-want-to-expose stays a hard wall. }
+  Reg := TToolRegistry.Create;
+  try
+    RegisterMemoryTools(Reg);
+    RegisterKBTools(Reg);
+    RegisterSessionSearchTool(Reg);
+    Srv := TMCPServerCore.Create(Reg, AllowWrite, '');
+    try
+      while not Eof(Input) do
+      begin
+        ReadLn(Input, Line);
+        if Trim(Line) = '' then Continue;
+        Resp := Srv.HandleRequest(Line);
+        if Resp <> '' then
+        begin
+          WriteLn(Output, Resp);
+          Flush(Output);
+        end;
+      end;
+    finally
+      Srv.Free;
+    end;
+  finally
+    Reg.Free;
+  end;
+  Result := 0;
+end;
+
 function Cmd_MCP_Run(const Argv: array of string): Integer;
 var
   Sub: string;
@@ -477,6 +551,7 @@ begin
   else if Sub = 'search'  then Result := DoSearch(Argv)
   else if Sub = 'install' then Result := DoInstall(Argv)
   else if Sub = 'auth'    then Result := DoAuth(Argv)
+  else if Sub = 'stdio'   then Result := DoStdio(Argv)
   else begin Help; Result := 1; end;
 end;
 
