@@ -45,25 +45,50 @@ interface
 type
   TMCPCatalogEntry = record
     Name:          string; { kebab-case identifier; what the user types }
-    URL:           string; { remote MCP endpoint (http:// or https://) }
-    EnvVar:        string; { env var holding the bearer token; '' if no auth
-                             and '' for OAuth servers -- see RequiresOAuth }
+    { Transport: '' / 'http' (default) -- the URL field carries the
+      remote endpoint. 'stdio' -- the Cmd + CmdArgs fields carry an
+      executable to spawn. Catalog entries from pasclaw.dev are the
+      common source of stdio rows; the bundled KnownMCPServers list
+      stays HTTP-only. }
+    Transport:     string;
+    URL:           string; { remote MCP endpoint (http:// or https://);
+                             empty for stdio entries }
+    Cmd:           string; { stdio: executable name (e.g. "npx",
+                             "uvx", "docker"). Empty for HTTP. }
+    CmdArgs:       string; { stdio: command-line args joined with
+                             spaces ("-y @modelcontextprotocol/server-github").
+                             Empty for HTTP. }
+    EnvVar:        string; { env var holding the bearer token (HTTP)
+                             or the first REQUIRED env var the
+                             stdio binary expects (e.g. GITHUB_TOKEN
+                             for the github stdio server). Empty
+                             when no auth is needed. }
     AuthFmt:       string; { Authorization-header value template, e.g. "Bearer %s".
                              Empty when no auth. Catalog install reads
                              GetEnvironmentVariable(EnvVar) and substitutes
                              it into AuthFmt to produce the literal header
-                             the HTTP MCP client stores in the args slot. }
+                             the HTTP MCP client stores in the args slot.
+                             Unused for stdio (the binary reads the env
+                             var itself from the spawning shell). }
     RequiresOAuth: Boolean;{ True when the remote uses OAuth 2.1 (MCP
                              Authorization spec -- discovery + PKCE + dynamic
                              client registration). `mcp install` writes the
                              entry with no header and prints a hint to run
                              `pasclaw mcp auth <name>`; the HTTP client
                              reads the resulting access token from the
-                             on-disk token store. Replicate is the v1 case. }
+                             on-disk token store. Replicate is the v1 case.
+                             Always False for stdio entries. }
     Desc:          string; { one-liner shown by `pasclaw mcp catalog` }
     Docs:          string; { url for the user to learn more }
   end;
   TMCPCatalogEntryArray = array of TMCPCatalogEntry;
+
+{ True when Entry.Transport names a stdio binary. Anything else --
+  empty, 'http', 'sse', 'streamable-http', 'stream' -- is treated as
+  a remote HTTP MCP server (TMCPHttpClient speaks Streamable HTTP and
+  accepts both JSON and SSE response bodies, so 'sse' rows from the
+  hub route through the same code path). }
+function CatalogEntryIsStdio(const Entry: TMCPCatalogEntry): Boolean;
 
 function KnownMCPServers: TMCPCatalogEntryArray;
 function FindCatalogEntry(const Name: string;
@@ -95,6 +120,11 @@ implementation
 
 uses
   SysUtils;
+
+function CatalogEntryIsStdio(const Entry: TMCPCatalogEntry): Boolean;
+begin
+  Result := SameText(Entry.Transport, 'stdio');
+end;
 
 function KnownMCPServers: TMCPCatalogEntryArray;
 begin

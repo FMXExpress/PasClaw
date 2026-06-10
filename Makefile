@@ -394,6 +394,16 @@ test-mcp-server: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/mcp_server_tests.pas -o$(BUILDDIR)/mcp_server_tests
 	@$(BUILDDIR)/mcp_server_tests
 
+# MCP hub projection: transport routing for pasclaw.dev catalog entries
+# (http / sse / streamable-http / stdio). Pure JSON-in / record-out;
+# no network. Pins the regression that "10 entries skipped -- non-HTTP
+# transports not supported yet" actually meant "SSE-tagged HTTP
+# endpoints our client already speaks were being dropped".
+test-mcp-hub-projection: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/mcp_hub_projection_tests.pas -o$(BUILDDIR)/mcp_hub_projection_tests
+	@$(BUILDDIR)/mcp_hub_projection_tests
+
 test-session-search: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/session_search_tests.pas -o$(BUILDDIR)/session_search_tests
@@ -406,4 +416,4 @@ test-kb-index: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/kb_index_tests.pas -o$(BUILDDIR)/kb_index_tests
 	@$(BUILDDIR)/kb_index_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-kb-index
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-kb-index

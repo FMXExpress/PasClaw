@@ -221,6 +221,20 @@ begin
   Result := 0;
 end;
 
+function TransportLabel(const Entry: TMCPCatalogEntry): string;
+{ Short tag for the catalog display. The bundled KnownMCPServers
+  list leaves Transport empty (HTTP-only by convention); treat that
+  as 'http' so the column never looks blank. Hub entries carry the
+  literal transport string verbatim so a hub-marked 'sse' row shows
+  up as sse -- helpful when debugging the rare older-spec server
+  that doesn't quite speak Streamable HTTP. }
+begin
+  if Entry.Transport = '' then
+    Result := 'http'
+  else
+    Result := LowerCase(Entry.Transport);
+end;
+
 function DoCatalog: Integer;
 var
   Entries: TMCPCatalogEntryArray;
@@ -246,7 +260,7 @@ begin
     PrintLn(Ansi.Dim + '(showing built-in ' + IntToStr(Length(Entries)) + ' entries)' + Ansi.Reset);
   if Skipped > 0 then
     PrintLn(Ansi.Dim + '  (' + IntToStr(Skipped) +
-            ' hub entry/entries skipped -- non-HTTP transports not supported yet)' +
+            ' hub entry/entries skipped -- unsupported transport)' +
             Ansi.Reset);
   PrintLn;
   if Length(Entries) = 0 then
@@ -254,13 +268,16 @@ begin
     PrintLn('(catalog empty)');
     Exit(0);
   end;
-  PrintLn(Ansi.Bold + 'name' + Ansi.Reset + '                       env var               status');
+  PrintLn(Ansi.Bold + 'name' + Ansi.Reset +
+          '                       transport   env var          status');
   for i := 0 to High(Entries) do
   begin
     if Entries[i].EnvVar = '' then Auth := '(no auth)'
     else if GetEnvironmentVariable(Entries[i].EnvVar) <> '' then Auth := Ansi.Green + 'set' + Ansi.Reset
     else Auth := Ansi.Yellow + 'unset' + Ansi.Reset;
-    PrintLn(Format('%24s   %18s   %s', [Entries[i].Name, Entries[i].EnvVar, Auth]));
+    PrintLn(Format('%24s   %-9s   %-15s  %s',
+                    [Entries[i].Name, TransportLabel(Entries[i]),
+                     Entries[i].EnvVar, Auth]));
     if Entries[i].Desc <> '' then
       PrintLn('                            ' + Ansi.Dim + Entries[i].Desc + Ansi.Reset);
   end;
@@ -335,12 +352,28 @@ begin
   else
     PrintLn(Ansi.Dim + '  resolved from pasclaw.dev hub' + Ansi.Reset);
 
-  { OAuth-only servers (Replicate today) install with no header -- the
-    HTTP client reads the on-disk token store at request time. Prompt
-    the user to run `mcp auth` so the next test/serve has a token. }
-  if Entry.RequiresOAuth then
+  HeaderVal := '';
+  if CatalogEntryIsStdio(Entry) then
   begin
-    HeaderVal := '';
+    { stdio binaries inherit the spawning shell's environment; if the
+      hub flagged a required env var, surface it so the operator
+      knows to set it before `pasclaw mcp test` / `serve` /
+      `gateway`. No Authorization header juggling -- the binary
+      handles auth internally. }
+    if (Entry.EnvVar <> '') and (GetEnvironmentVariable(Entry.EnvVar) = '') then
+    begin
+      PrintLn(Ansi.Yellow + '! ' + Ansi.Reset + 'env var ' + Entry.EnvVar +
+              ' is not set. Installing anyway; the stdio server may');
+      PrintLn('  reject requests until you ' +
+              Ansi.Bold + 'export ' + Entry.EnvVar + '=...' + Ansi.Reset +
+              ' and re-spawn pasclaw.');
+    end;
+  end
+  else if Entry.RequiresOAuth then
+  begin
+    { OAuth-only servers (Replicate today) install with no header -- the
+      HTTP client reads the on-disk token store at request time. Prompt
+      the user to run `mcp auth` so the next test/serve has a token. }
     if HasStoredTokens(Entry.Name) then
       PrintLn(Ansi.Dim + '  using existing OAuth tokens at ' +
               OAuthTokenPath(Entry.Name) + Ansi.Reset)
@@ -369,12 +402,24 @@ begin
   try
     { Replace any prior install of this catalog entry rather than
       creating a duplicate (idempotent refresh after the user sets
-      the env var). }
+      the env var). For stdio entries Cmd holds the executable and
+      Args holds the joined argv tail; for HTTP / SSE / Streamable
+      HTTP entries Cmd holds the URL and Args holds the Authorization
+      header value. The ://-vs-not heuristic in PasClaw.MCP.Bridge.
+      IsHttpUrl picks the right client at spawn time. }
     for i := 0 to High(Cfg.MCPServers) do
       if SameText(Cfg.MCPServers[i].Name, Entry.Name) then
       begin
-        Cfg.MCPServers[i].Cmd     := Entry.URL;
-        Cfg.MCPServers[i].Args    := HeaderVal;
+        if CatalogEntryIsStdio(Entry) then
+        begin
+          Cfg.MCPServers[i].Cmd  := Entry.Cmd;
+          Cfg.MCPServers[i].Args := Entry.CmdArgs;
+        end
+        else
+        begin
+          Cfg.MCPServers[i].Cmd  := Entry.URL;
+          Cfg.MCPServers[i].Args := HeaderVal;
+        end;
         Cfg.MCPServers[i].Enabled := True;
         SaveConfig(Cfg);
         PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'updated MCP server ' + Entry.Name);
@@ -383,9 +428,17 @@ begin
 
     n := Length(Cfg.MCPServers);
     SetLength(Cfg.MCPServers, n + 1);
-    Cfg.MCPServers[n].Name    := Entry.Name;
-    Cfg.MCPServers[n].Cmd     := Entry.URL;
-    Cfg.MCPServers[n].Args    := HeaderVal;
+    Cfg.MCPServers[n].Name := Entry.Name;
+    if CatalogEntryIsStdio(Entry) then
+    begin
+      Cfg.MCPServers[n].Cmd  := Entry.Cmd;
+      Cfg.MCPServers[n].Args := Entry.CmdArgs;
+    end
+    else
+    begin
+      Cfg.MCPServers[n].Cmd  := Entry.URL;
+      Cfg.MCPServers[n].Args := HeaderVal;
+    end;
     Cfg.MCPServers[n].Enabled := True;
     SaveConfig(Cfg);
     PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'installed MCP server ' + Entry.Name);
