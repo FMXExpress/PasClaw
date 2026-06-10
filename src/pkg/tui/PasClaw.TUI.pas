@@ -51,6 +51,10 @@ uses
                                      in the TTUI class; same dcc64
                                      visibility rule as the line above. }
   PasClaw.Tools.Registry,
+  PasClaw.Agent.SubagentBg,        { TBackgroundSpawnCoordinator -- the
+                                     BgCoordinator public field below; same
+                                     dcc64 interface-visibility rule as the
+                                     types above. }
   PasClaw.Session.Store;
 
 type
@@ -202,6 +206,17 @@ type
        only; durable per-user theme config is a follow-up. FPC branch
        ignores. *)
     ThemeName:          string;
+    (* Background-subagent coordinator created by Cmd_TUI_Run when
+       config.json declares subagents (same gate as the synchronous
+       spawn tool). Nil when no subagents configured. NOT owned by
+       the TUI -- PasClaw.Agent.SubagentBg's module finalization
+       reaps coordinators; freeing here too would double-free.
+       StartTurn binds it to the active session id each turn so
+       completed jobs deliver to whichever session the operator is
+       currently driving (jobs themselves keep running across
+       session switches -- they belong to the process, not the
+       session pane selection). *)
+    BgCoordinator:      TBackgroundSpawnCoordinator;
     constructor Create(Provider: ILLMProvider; Registry: TToolRegistry; const Model: string);
     {$IFNDEF FPC}destructor Destroy; override;{$ENDIF}
     procedure Run;
@@ -1056,6 +1071,17 @@ begin
   begin
     Cfg.Options.CacheKey := FSession.Meta.Id;
     Cfg.SteeringKey      := FSession.Meta.Id;
+    { Background subagents: rebind the coordinator to the ACTIVE
+      session before each turn (cheap; SetKey moves a map entry)
+      and point the loop's drain key at it so finished jobs fold
+      into this turn's system prompt. Operator switching sessions
+      mid-flight redirects future deliveries to the new session's
+      turns -- the jobs themselves keep running. }
+    if BgCoordinator <> nil then
+    begin
+      BgCoordinator.SetKey(FSession.Meta.Id);
+      Cfg.BackgroundDrainKey := FSession.Meta.Id;
+    end;
     { Inject the working-state snapshot built up over previous
       turns. Empty string when the snapshot is empty so the system
       prompt stays clean for fresh sessions. Helper lives in
@@ -1839,6 +1865,35 @@ begin
   PaneH := H - 3;   { header row + 2 footer rows }
   if PaneH < 4 then PaneH := 4;
 
+  { Static modal overlays: skip repainting the panes underneath.
+    DrawFrame runs every ~50ms; pre-fix each tick painted the
+    session/chat panes first and the opaque overlay box second, so
+    every cell under the box alternated pane-content -> box-content
+    within the frame -- visible as constant flicker over the left
+    session list (operator report). While the stats or model
+    overlay is up the panes are static anyway; freeze them at their
+    last pre-overlay frame and repaint only the overlay (whose
+    cells rewrite with identical glyphs -- no flicker). Panes
+    resume normal painting on dismiss since these flags gate
+    nothing else.
+
+    The THEME menu is deliberately NOT in this gate: its live
+    preview depends on the panes re-rendering in the candidate
+    theme each frame (ApplyTheme + ClrScr + full repaint).
+
+    Trade-off: a tool loop finishing while an overlay is up won't
+    update the chat pane until dismissal. Modal semantics; the
+    result is applied to the session regardless, only the paint is
+    deferred. }
+  if FStatsOpen or FModelMenuOpen then
+  begin
+    DrawHeaderBar(W);
+    DrawFooterBar(H - 2, W);
+    if FModelMenuOpen then DrawModelMenu;
+    if FStatsOpen     then DrawStatsOverlay;
+    Exit;
+  end;
+
   DrawHeaderBar(W);
   DrawSessionPane(0, 1, SessW, PaneH);
 
@@ -2300,6 +2355,19 @@ begin
   Cfg.OnText        := nil;
   Cfg.OnToolCall    := nil;
   Cfg.OnToolResult  := nil;
+  { Background subagents on the FPC line-based path. Codex on
+    PR #212: Cmd.TUI registers spawn_background for FPC builds too,
+    so without this binding a job would start but its result would
+    never drain into a later turn. The FPC TUI is a single-session
+    REPL with no FSession / per-conversation id, so we key the
+    coordinator on a fixed string -- there's only ever one
+    conversation per process here. SetKey is idempotent so
+    re-binding every turn is harmless. }
+  if BgCoordinator <> nil then
+  begin
+    BgCoordinator.SetKey('fpc-tui-session');
+    Cfg.BackgroundDrainKey := 'fpc-tui-session';
+  end;
   TimeoutSec        := ResolveRequestTimeoutSeconds;
 
   LogDebug('tool-loop start model=%s timeout=%ds', [FModel, TimeoutSec]);
