@@ -8,6 +8,15 @@
     pasclaw serve --debug                 # log every request + response body
     pasclaw serve --max-iter 40           # raise the tool-loop cap (default 25)
     pasclaw serve --no-hashline           # raw fs_read; skip fs_edit_hashline + fs_grep
+    pasclaw serve --mcp-port 8089         # also expose MCP on its own port
+                                          # (default: mounted on /mcp on the
+                                          # main port -- alongside /v1)
+    pasclaw serve --mcp-allow-write       # let MCP clients call mutating
+                                          # tools too (fs_write, shell, ...).
+                                          # OFF by default -- a foreign MCP
+                                          # host calling fs_write on the
+                                          # operator's box is exactly the
+                                          # bad outcome sandbox exists for.
 
   Exposes POST /v1/chat/completions on the configured port. Any client
   that speaks the OpenAI Chat Completions API (openai-python, openai-node,
@@ -62,26 +71,36 @@ uses
 
 type
   TServeArgs = record
-    Addr:        string;
-    Port:        Integer;
-    NoMCP:       Boolean;
-    NoTools:     Boolean;
-    Debug:       Boolean;
-    MaxIter:     Integer;
-    NoHashline:  Boolean;
+    Addr:           string;
+    Port:           Integer;
+    NoMCP:          Boolean;
+    NoTools:        Boolean;
+    Debug:          Boolean;
+    MaxIter:        Integer;
+    NoHashline:     Boolean;
+    { Inbound MCP server: when MCPPort = 0 (default) the /mcp surface
+      is mounted on the main listener at POST /mcp + POST /v1/mcp/rpc.
+      When > 0 the gateway spins up a second listener bound to that
+      port that serves /mcp ONLY -- useful when a heavy /v1/responses
+      streaming load might otherwise compete with MCP requests for
+      Indy worker threads. }
+    MCPPort:        Integer;
+    MCPAllowWrite:  Boolean;
   end;
 
 function ParseServe(const Argv: array of string; const Cfg: TConfig): TServeArgs;
 var
   i: Integer;
 begin
-  Result.Addr       := Cfg.Gateway.BindAddr;
-  Result.Port       := Cfg.Gateway.Port;
-  Result.NoMCP      := False;
-  Result.NoTools    := False;
-  Result.Debug      := False;
-  Result.MaxIter    := 25;  { matches TGatewayServer.Create default }
-  Result.NoHashline := False;
+  Result.Addr          := Cfg.Gateway.BindAddr;
+  Result.Port          := Cfg.Gateway.Port;
+  Result.NoMCP         := False;
+  Result.NoTools       := False;
+  Result.Debug         := False;
+  Result.MaxIter       := 25;  { matches TGatewayServer.Create default }
+  Result.NoHashline    := False;
+  Result.MCPPort       := 0;
+  Result.MCPAllowWrite := False;
   i := 0;
   while i <= High(Argv) do
   begin
@@ -93,6 +112,8 @@ begin
                                       begin Result.Debug       := True; Inc(i); Continue; end;
     if Argv[i] = '--max-iter'     then begin if i < High(Argv) then Result.MaxIter := StrToIntDef(Argv[i + 1], Result.MaxIter); Inc(i, 2); Continue; end;
     if Argv[i] = '--no-hashline'  then begin Result.NoHashline := True; Inc(i); Continue; end;
+    if Argv[i] = '--mcp-port'     then begin if i < High(Argv) then Result.MCPPort := StrToIntDef(Argv[i + 1], 0); Inc(i, 2); Continue; end;
+    if Argv[i] = '--mcp-allow-write' then begin Result.MCPAllowWrite := True; Inc(i); Continue; end;
     Inc(i);
   end;
   if Result.MaxIter < 1 then Result.MaxIter := 1;
@@ -106,7 +127,7 @@ var
   Err: string;
   Reg: TToolRegistry;
   MCPClients: TMCPClientList;
-  Server: TGatewayServer;
+  Server, MCPServer: TGatewayServer;
   Skills: TSkillSpecArray;
   BaseURL: string;
 begin
@@ -168,14 +189,44 @@ begin
     Server := TGatewayServer.Create(Cfg, Provider, Reg);
     Server.DebugIO := Args.Debug;
     Server.MaxIter := Args.MaxIter;
+    Server.SetMCPAllowMutating(Args.MCPAllowWrite);
+
+    { Optional companion listener dedicated to /mcp. When MCPPort is
+      0 the main listener already serves /mcp alongside /v1/* on one
+      port -- "live alongside the OpenAI-compat API". When non-zero,
+      we spin a second TGatewayServer in MCP-only mode on that port
+      so heavy /v1/responses streaming load can't compete with MCP
+      requests for Indy worker threads. Both listeners share the
+      same tool registry so they see exactly the same memory_search
+      / kb_search / session_search results -- one source of truth. }
+    MCPServer := nil;
+    if Args.MCPPort > 0 then
+    begin
+      MCPServer := TGatewayServer.Create(Cfg, Provider, Reg);
+      MCPServer.DebugIO := Args.Debug;
+      MCPServer.SetMCPAllowMutating(Args.MCPAllowWrite);
+      MCPServer.SetMCPOnly(True);
+    end;
     try
       Server.Start(Args.Addr, Args.Port);
+      if MCPServer <> nil then
+        MCPServer.Start(Args.Addr, Args.MCPPort);
 
       BaseURL := Format('http://%s:%d/v1', [Args.Addr, Args.Port]);
       PrintLn(Ansi.Bold + 'OpenAI-compatible server up.' + Ansi.Reset);
       PrintLn('  base_url: ' + BaseURL);
       PrintLn('  model:    ' + Cfg.DefaultModel);
       PrintLn(Format('  max-iter: %d', [Args.MaxIter]));
+      if MCPServer <> nil then
+        PrintLn(Format('  mcp:      http://%s:%d/mcp (dedicated listener)',
+                       [Args.Addr, Args.MCPPort]))
+      else
+        PrintLn(Format('  mcp:      http://%s:%d/mcp (mounted on main port)',
+                       [Args.Addr, Args.Port]));
+      if Args.MCPAllowWrite then
+        PrintLn('            mutating tools EXPOSED to MCP clients (--mcp-allow-write)')
+      else
+        PrintLn('            read-only tools only -- pass --mcp-allow-write to flip');
       PrintLn;
       PrintLn(Ansi.Dim + '  Example (openai-python):' + Ansi.Reset);
       PrintLn('    client = OpenAI(base_url="' + BaseURL + '", api_key="sk-pasclaw")');
@@ -192,7 +243,9 @@ begin
       Server.WaitForStop;
     finally
       Server.Stop;
+      if MCPServer <> nil then MCPServer.Stop;
       Server.Free;
+      if MCPServer <> nil then MCPServer.Free;
       FreeMCPClients(MCPClients);
       if Reg <> nil then Reg.Free;
     end;

@@ -46,13 +46,37 @@ uses
   PasClaw.Config,
   PasClaw.Cmd.Root;
 
+function IsStdioMCPInvocation: Boolean;
+{ When invoked as `pasclaw mcp stdio`, stdout MUST stay clean JSON-RPC
+  -- the host process pipes our stdout into its parser, and a banner
+  on the first read would crash it. Same goes for the legacy
+  __tool subprocess RPC. Skip the banner in those cases; the user
+  on a real terminal still gets the full visual. }
+var
+  i: Integer;
+  Cmd, Next: string;
+begin
+  Result := False;
+  if ParamCount < 1 then Exit;
+  Cmd := ParamStr(1);
+  if Cmd = '__tool' then Exit(True);
+  if Cmd <> 'mcp' then Exit;
+  for i := 2 to ParamCount do
+  begin
+    Next := ParamStr(i);
+    if (Next = '') or (Next[1] = '-') then Continue;
+    Exit(Next = 'stdio');
+  end;
+end;
+
 var
   ExitCode_: Integer;
 begin
   { Detect color support before any output so the banner respects NO_COLOR. }
   CliUI_Init(EarlyColorDisabled);
 
-  PrintBanner;
+  if not IsStdioMCPInvocation then
+    PrintBanner;
   ApplyTimezoneFromEnv;
 
   ExitCode_ := RunRootCommand;

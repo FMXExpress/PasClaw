@@ -13,6 +13,15 @@
     POST /v1/responses             -> OpenAI Responses-compatible
                                       (request: {model, input, ...},
                                        response: {id, output[{content}], usage})
+    POST /mcp                      -> inbound MCP server: JSON-RPC 2.0
+                                      over HTTP. Exposes memory_search /
+                                      kb_search / session_search / SCARS
+                                      live to external MCP hosts (Claude
+                                      Desktop, Cursor, Codex CLI). Read-
+                                      only by default; --mcp-allow-write
+                                      opts in to mutating tools. Aliased
+                                      at POST /v1/mcp/rpc so version-
+                                      prefixed deployments stay greppable.
     GET  /v1/models                -> OpenAI-compatible model list
     GET  /v1/version               -> build version
 
@@ -38,7 +47,8 @@ uses
   PasClaw.Config,
   PasClaw.Providers.Types,
   PasClaw.Providers.Intf,
-  PasClaw.Tools.Registry;
+  PasClaw.Tools.Registry,
+  PasClaw.MCP.Server;
 
 type
   { Method-of-object signature any channel (LINE, WhatsApp, Slack Events
@@ -65,6 +75,22 @@ type
     FMaxIter:  Integer;
     FWebhookPaths:    TStringList;
     FWebhookHandlers: array of TWebhookHandler;
+    { Lazily-built inbound MCP server core. Created on the first
+      POST /mcp; lifetime tracks FRegistry. Nil when the registry
+      itself is nil (no tools to expose). The gateway exposes the
+      MCP surface at /mcp (and aliased at /v1/mcp/rpc to keep
+      version-prefixed deployments grep-friendly) so other
+      runtimes can consume PasClaw's memory_search / kb_search /
+      session_search live, against the same corpus the local CLI
+      sees. See PasClaw.MCP.Server for the core. }
+    FMCPInbound:     TMCPServerCore;
+    FMCPInboundLock: TCriticalSection;
+    FMCPAllowMutating: Boolean;
+    FMCPAllowList:     array of string;
+    FMCPOnly:          Boolean;
+    function  GetOrCreateMCPInbound: TMCPServerCore;
+    procedure HandleMCPRequest(ARequest: TIdHTTPRequestInfo;
+                                AResp: TIdHTTPResponseInfo);
     function DispatchWebhook(AContext: TIdContext;
                              ARequest: TIdHTTPRequestInfo;
                              AResponse: TIdHTTPResponseInfo): Boolean;
@@ -119,6 +145,20 @@ type
       to match what typical code agents need for read-debug-edit cycles;
       legacy /v1/chat keeps its 8-iteration cap unchanged. }
     property MaxIter: Integer read FMaxIter write FMaxIter;
+    { MCP inbound server policy. SetMCPAllowMutating(True) lets the
+      inbound /mcp surface expose tcMutating tools (fs_write, shell,
+      fs_edit_hashline) too -- off by default. SetMCPAllowList
+      restricts exposure to a fixed name list (in addition to the
+      mutating gate). Both invalidate any existing core so the next
+      request sees the new policy. }
+    procedure SetMCPAllowMutating(V: Boolean);
+    procedure SetMCPAllowList(const Names: array of string);
+    { When True, this gateway responds only to /mcp / /v1/mcp/rpc
+      (and the bare GET / health probes); every other route 404s.
+      Used when --mcp-port spins up a second listener dedicated to
+      the MCP surface so a heavy /v1/responses streaming load
+      can't compete with MCP requests for Indy worker threads. }
+    procedure SetMCPOnly(V: Boolean);
     procedure Start(const BindAddr: string; Port: Integer);
     procedure Stop;
     procedure WaitForStop;
@@ -298,6 +338,10 @@ begin
   FHTTP.OnCommandGet := OnCommandGet;
   FHTTP.KeepAlive    := True;
   FHTTP.ServerSoftware := 'PasClaw/' + FormatVersion;
+  FMCPInbound       := nil;
+  FMCPInboundLock   := TCriticalSection.Create;
+  FMCPAllowMutating := False;
+  SetLength(FMCPAllowList, 0);
 end;
 
 destructor TGatewayServer.Destroy;
@@ -306,7 +350,70 @@ begin
   FHTTP.Free;
   FStopFlag.Free;
   FWebhookPaths.Free;
+  if FMCPInbound <> nil then FMCPInbound.Free;
+  FMCPInboundLock.Free;
   inherited Destroy;
+end;
+
+procedure TGatewayServer.SetMCPAllowMutating(V: Boolean);
+{ Opt-in: when True, the inbound MCP server exposes mutating tools
+  (fs_write / shell / fs_edit_hashline) too. Off by default because
+  letting a foreign MCP host call fs_write on the operator's box is
+  exactly the bad outcome the sandbox layer exists to prevent.
+  Recreate the core if it already exists so the new policy applies
+  on the next /mcp request. }
+begin
+  FMCPInboundLock.Acquire;
+  try
+    FMCPAllowMutating := V;
+    if FMCPInbound <> nil then
+    begin
+      FMCPInbound.Free;
+      FMCPInbound := nil;
+    end;
+  finally
+    FMCPInboundLock.Release;
+  end;
+end;
+
+procedure TGatewayServer.SetMCPAllowList(const Names: array of string);
+var
+  i: Integer;
+begin
+  FMCPInboundLock.Acquire;
+  try
+    SetLength(FMCPAllowList, Length(Names));
+    for i := 0 to High(Names) do FMCPAllowList[i] := Names[i];
+    if FMCPInbound <> nil then
+    begin
+      FMCPInbound.Free;
+      FMCPInbound := nil;
+    end;
+  finally
+    FMCPInboundLock.Release;
+  end;
+end;
+
+procedure TGatewayServer.SetMCPOnly(V: Boolean);
+begin
+  FMCPOnly := V;
+end;
+
+function TGatewayServer.GetOrCreateMCPInbound: TMCPServerCore;
+begin
+  FMCPInboundLock.Acquire;
+  try
+    if (FMCPInbound = nil) and (FRegistry <> nil) then
+    begin
+      FMCPInbound := TMCPServerCore.Create(FRegistry, FMCPAllowMutating,
+                                            FormatVersion);
+      if Length(FMCPAllowList) > 0 then
+        FMCPInbound.SetAllowList(FMCPAllowList);
+    end;
+    Result := FMCPInbound;
+  finally
+    FMCPInboundLock.Release;
+  end;
 end;
 
 procedure TGatewayServer.MountWebhook(const Path: string; Handler: TWebhookHandler);
@@ -414,6 +521,62 @@ begin
   WriteBodyStream(AResp, Body);
 end;
 
+procedure TGatewayServer.HandleMCPRequest(ARequest: TIdHTTPRequestInfo;
+                                           AResp: TIdHTTPResponseInfo);
+{ Inbound MCP server entry. Reads one JSON-RPC request from the POST
+  body, dispatches via TMCPServerCore, writes the response (or 204
+  for notifications). One-shot per request; no SSE / streaming -- the
+  MCP Streamable HTTP spec allows a plain JSON response, and that's
+  enough for the read-corpus surface we expose. Server-pushed
+  notifications (the optional GET /mcp side of the transport) is a
+  follow-up. }
+var
+  Body: string;
+  Bytes: TBytes;
+  Core: TMCPServerCore;
+  RespLine: string;
+begin
+  Body := '';
+  if ARequest.PostStream <> nil then
+  begin
+    ARequest.PostStream.Position := 0;
+    SetLength(Bytes, ARequest.PostStream.Size);
+    if ARequest.PostStream.Size > 0 then
+    begin
+      ARequest.PostStream.ReadBuffer(Bytes[0], ARequest.PostStream.Size);
+      Body := TEncoding.UTF8.GetString(Bytes);
+    end;
+  end;
+  if Trim(Body) = '' then
+  begin
+    WriteJSON(AResp, 400,
+      '{"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":"empty body"}}');
+    Exit;
+  end;
+  if FDebugIO then
+    LogDebug('mcp <- %s', [Copy(Body, 1, 200)]);
+
+  Core := GetOrCreateMCPInbound;
+  if Core = nil then
+  begin
+    WriteJSON(AResp, 503,
+      '{"jsonrpc":"2.0","id":null,"error":{"code":-32603,"message":"no tool registry"}}');
+    Exit;
+  end;
+
+  RespLine := Core.HandleRequest(Body);
+  if RespLine = '' then
+  begin
+    { Notification path -- spec says no body. 204 No Content. }
+    AResp.ResponseNo  := 204;
+    AResp.ContentText := '';
+    Exit;
+  end;
+  if FDebugIO then
+    LogDebug('mcp -> %s', [Copy(RespLine, 1, 200)]);
+  WriteJSON(AResp, 200, RespLine);
+end;
+
 { TGatewayServer.WriteSSE removed -- dead method, see class
   declaration. dcc64 H2219 cleanup. }
 
@@ -430,6 +593,24 @@ begin
   ResponseStarted := False;
   LogDebug('gateway: %s %s', [ARequest.Command, Doc]);
 
+  { MCP-only listener: when this gateway was spun up as the
+    --mcp-port companion, the only routes it honours are the
+    inbound MCP endpoints plus a minimal health probe. Everything
+    else 404s -- the operator wired the second listener for
+    isolation, and silently fanning out /v1/chat traffic to it
+    would defeat the purpose. }
+  if FMCPOnly then
+  begin
+    if (ARequest.Command = 'POST') and
+       ((Doc = '/mcp') or (Doc = '/v1/mcp/rpc')) then
+      HandleMCPRequest(ARequest, AResponse)
+    else if (ARequest.Command = 'GET') and (Doc = '/v1/health') then
+      HandleHealth(AResponse)
+    else
+      WriteJSON(AResponse, 404, '{"error":"mcp-only listener; route not found"}');
+    Exit;
+  end;
+
   try
     if      (ARequest.Command = 'GET')  and (Doc = '/v1/health')  then HandleHealth(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/version') then HandleVersion(AResponse)
@@ -440,6 +621,8 @@ begin
       HandleChatCompletions(AContext, ARequest, AResponse, IsChatCompletionsStream, ResponseStarted)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/responses') then
       HandleResponses(AContext, ARequest, AResponse, IsChatCompletionsStream, ResponseStarted)
+    else if (ARequest.Command = 'POST') and ((Doc = '/mcp') or (Doc = '/v1/mcp/rpc')) then
+      HandleMCPRequest(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/models')  then HandleModels(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/mcp')     then HandleMCPList(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/cron')    then HandleCronList(AResponse)

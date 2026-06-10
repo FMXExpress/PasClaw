@@ -81,6 +81,13 @@ type
     NoMCP:       Boolean;
     NoTools:     Boolean;
     NoHashline:  Boolean;
+    { Inbound MCP server. Same shape as Cmd.Serve -- 0 means /mcp is
+      mounted on the main listener alongside /v1/*; >0 spawns a
+      second listener bound to that port serving /mcp only. Both
+      share the gateway's tool registry so memory_search /
+      kb_search / session_search are one source of truth. }
+    MCPPort:        Integer;
+    MCPAllowWrite:  Boolean;
   end;
 
 function ParseGw(const Argv: array of string; const Cfg: TConfig): TGwArgs;
@@ -109,9 +116,11 @@ begin
   Result.IRCNick    := GetEnvironmentVariable('PASCLAW_IRC_NICK');
   Result.IRCChannel := GetEnvironmentVariable('PASCLAW_IRC_CHANNEL');
   Result.IRCPassword := GetEnvironmentVariable('PASCLAW_IRC_PASSWORD');
-  Result.NoMCP      := False;
-  Result.NoTools    := False;
-  Result.NoHashline := False;
+  Result.NoMCP         := False;
+  Result.NoTools       := False;
+  Result.NoHashline    := False;
+  Result.MCPPort       := 0;
+  Result.MCPAllowWrite := False;
   i := 0;
   while i <= High(Argv) do
   begin
@@ -140,6 +149,8 @@ begin
     if Argv[i] = '--no-mcp'       then begin Result.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-tools'     then begin Result.NoTools    := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline'  then begin Result.NoHashline := True; Inc(i); Continue; end;
+    if Argv[i] = '--mcp-port'     then begin if i < High(Argv) then Result.MCPPort := StrToIntDef(Argv[i + 1], 0); Inc(i, 2); Continue; end;
+    if Argv[i] = '--mcp-allow-write' then begin Result.MCPAllowWrite := True; Inc(i); Continue; end;
     Inc(i);
   end;
 end;
@@ -152,7 +163,7 @@ var
   Err: string;
   Reg: TToolRegistry;
   MCPClients: TMCPClientList;
-  Server: TGatewayServer;
+  Server, MCPServer: TGatewayServer;
   Telegram: TTelegramChannel;
   Line: TLineBot;
   WhatsApp: TWhatsAppBot;
@@ -217,6 +228,17 @@ begin
     end;
 
     Server := TGatewayServer.Create(Cfg, Provider, Reg);
+    Server.SetMCPAllowMutating(Args.MCPAllowWrite);
+    { Optional /mcp companion listener. See the long-form comment in
+      Cmd.Serve for the same wiring -- one source of truth for the
+      tool registry, two HTTP listeners when isolation matters. }
+    MCPServer := nil;
+    if Args.MCPPort > 0 then
+    begin
+      MCPServer := TGatewayServer.Create(Cfg, Provider, Reg);
+      MCPServer.SetMCPAllowMutating(Args.MCPAllowWrite);
+      MCPServer.SetMCPOnly(True);
+    end;
     Telegram := nil;
     Line     := nil;
     WhatsApp := nil;
@@ -289,12 +311,20 @@ begin
       end;
 
       Server.Start(Args.Addr, Args.Port);
+      if MCPServer <> nil then
+        MCPServer.Start(Args.Addr, Args.MCPPort);
 
       PrintLn(Ansi.Bold + 'Gateway up.' + Ansi.Reset);
       PrintLn(Format('  http://%s:%d/v1/health', [Args.Addr, Args.Port]));
       PrintLn(Format('  http://%s:%d/v1/tools',  [Args.Addr, Args.Port]));
       PrintLn(Format('  POST http://%s:%d/v1/chat   {"message":"..."}',
                      [Args.Addr, Args.Port]));
+      if MCPServer <> nil then
+        PrintLn(Format('  POST http://%s:%d/mcp   (dedicated MCP listener)',
+                       [Args.Addr, Args.MCPPort]))
+      else
+        PrintLn(Format('  POST http://%s:%d/mcp   (alongside /v1/*)',
+                       [Args.Addr, Args.Port]));
       if Args.Line then
         PrintLn(Format('  POST http://%s:%d/webhooks/line   (LINE platform)',
                        [Args.Addr, Args.Port]));
@@ -331,7 +361,9 @@ begin
       if IRC      <> nil then IRC.Free;
       if Email    <> nil then begin Email.Stop; Email.Free; end;
       Server.Stop;
+      if MCPServer <> nil then MCPServer.Stop;
       Server.Free;
+      if MCPServer <> nil then MCPServer.Free;
       if Scheduler <> nil then Scheduler.Free;
       FreeMCPClients(MCPClients);
       if Reg <> nil then Reg.Free;
