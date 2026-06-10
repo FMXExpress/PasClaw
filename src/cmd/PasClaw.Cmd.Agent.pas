@@ -34,6 +34,7 @@ uses
   PasClaw.Tools.Shell,
   PasClaw.Tools.ExecuteCode,
   PasClaw.Tools.Memory,
+  PasClaw.Tools.KB,
   PasClaw.Tools.SessionSearch,
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
@@ -171,6 +172,7 @@ begin
   RegisterShellTool(Result);
   RegisterExecuteCodeTool(Result);
   RegisterMemoryTools(Result);
+  RegisterKBTools(Result);
   RegisterSessionSearchTool(Result);
   { web_search registers only when a real provider is configured
     (Brave / Tavily / Perplexity / Gemini key, or SearXNG base URL).

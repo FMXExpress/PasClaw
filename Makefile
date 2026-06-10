@@ -116,6 +116,7 @@ UNIT_DIRS = \
 	src/pkg/agent \
 	src/pkg/memory \
 	src/pkg/memory/localvector \
+	src/pkg/kb \
 	src/pkg/updater \
 	src/pkg/membench \
 	src/pkg/tui \
@@ -153,7 +154,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn print-version get-indy webui-res browser
+.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-kb-index print-version get-indy webui-res browser
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -218,6 +219,7 @@ smoke: $(BIN)
 	NO_COLOR=1 $(BIN) update --check           >/dev/null && echo "  update    OK" ; \
 	NO_COLOR=1 $(BIN) membench --records 100   >/dev/null && echo "  membench  OK" ; \
 	NO_COLOR=1 $(BIN) learn                    >/dev/null && echo "  learn     OK" ; \
+	NO_COLOR=1 $(BIN) kb status                >/dev/null && echo "  kb        OK" ; \
 	echo "smoke: all commands OK"
 
 test-hashline: $(WEBUI_RES) | $(BUILDDIR) $(INDY_DIR)
@@ -381,4 +383,11 @@ test-session-search: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/session_search_tests.pas -o$(BUILDDIR)/session_search_tests
 	@PASCLAW_HOME=$(BUILDDIR)/session-search-test-home $(BUILDDIR)/session_search_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg
+# Knowledgebase — pure helpers (chunker, extension filter, binary sniff,
+# HTML strip). The SQLite paths are covered by `kb status` in smoke.
+test-kb-index: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/kb_index_tests.pas -o$(BUILDDIR)/kb_index_tests
+	@$(BUILDDIR)/kb_index_tests
+
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-kb-index
