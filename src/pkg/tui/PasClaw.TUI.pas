@@ -2355,6 +2355,19 @@ begin
   Cfg.OnText        := nil;
   Cfg.OnToolCall    := nil;
   Cfg.OnToolResult  := nil;
+  { Background subagents on the FPC line-based path. Codex on
+    PR #212: Cmd.TUI registers spawn_background for FPC builds too,
+    so without this binding a job would start but its result would
+    never drain into a later turn. The FPC TUI is a single-session
+    REPL with no FSession / per-conversation id, so we key the
+    coordinator on a fixed string -- there's only ever one
+    conversation per process here. SetKey is idempotent so
+    re-binding every turn is harmless. }
+  if BgCoordinator <> nil then
+  begin
+    BgCoordinator.SetKey('fpc-tui-session');
+    Cfg.BackgroundDrainKey := 'fpc-tui-session';
+  end;
   TimeoutSec        := ResolveRequestTimeoutSeconds;
 
   LogDebug('tool-loop start model=%s timeout=%ds', [FModel, TimeoutSec]);
