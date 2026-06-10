@@ -35,6 +35,8 @@ uses
   PasClaw.Tools.Sandbox,
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
+  PasClaw.Agent.Subagent,
+  PasClaw.Agent.SubagentBg,
   PasClaw.TUI;
 
 type
@@ -80,6 +82,9 @@ var
   Skills: TSkillSpecArray;
   Model, Name: string;
   TUIInst: TTUI;
+  SubCtx: TSubagentContext;
+  Spawn: TSpawnTool;
+  BgCoord: TBackgroundSpawnCoordinator;
 begin
   if not ParseArgs(Argv, A) then Exit(1);
   Cfg := LoadConfig;
@@ -121,17 +126,43 @@ begin
       MCPClients := ConnectMCPServers(Cfg, Reg);
 
     if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
+
+    { Subagents: register sync `spawn` + the background quartet
+      (spawn_background / status / wait / cancel) when config.json
+      declares any. Registered AFTER MCP connect -- same ordering
+      as Cmd.Agent -- so subagent tool allowlists can include
+      MCP-bridged tools. The TUI gets the coordinator reference so
+      StartTurn can bind it to the active session each turn. }
+    Spawn   := nil;
+    BgCoord := nil;
+    if (Reg <> nil) and (Provider <> nil) and (Length(Cfg.Subagents) > 0) then
+    begin
+      SubCtx.Provider       := Provider;
+      SubCtx.Fallbacks      := ResolveFallbacks(Cfg);
+      SubCtx.ParentRegistry := Reg;
+      SubCtx.DefaultModel   := Model;
+      SubCtx.PromptCache    := Cfg.PromptCache;
+      Spawn   := RegisterSpawnTool(Reg, SubCtx, Cfg.Subagents);
+      BgCoord := RegisterBackgroundSpawnTools(Reg, SubCtx, Cfg.Subagents);
+    end;
+
     TUIInst := TTUI.Create(Provider, Reg, Model);
     TUIInst.PromptCacheEnabled := Cfg.PromptCache.Enabled;
     TUIInst.PromptCacheTTL     := Cfg.PromptCache.TTL;
     TUIInst.SessionId          := A.Session;
     TUIInst.ThemeName          := A.Theme;
     TUIInst.RenderMarkdownEnabled := Cfg.RenderMarkdown;
+    TUIInst.BgCoordinator      := BgCoord;
     try
       TUIInst.Run;
     finally
       TUIInst.Free;
       FreeMCPClients(MCPClients);
+      { Spawn owned here (same shape as Cmd.Agent); BgCoord is NOT
+        freed here -- PasClaw.Agent.SubagentBg's finalization reaps
+        coordinators, and a double-free would race its teardown of
+        still-running job threads. }
+      if Spawn <> nil then Spawn.Free;
       if Reg <> nil then Reg.Free;
     end;
     Result := 0;
