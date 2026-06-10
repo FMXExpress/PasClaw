@@ -406,6 +406,9 @@ type
     procedure RebuildVectorSidecar;
     function  EmbedText(const T: string): TArray<Single>;
     function  ChunkCount: Int64;
+    procedure SetMeta(const Key, Val: string);
+    function  GetMetaI64(const Key: string; out Val: Int64): Boolean;
+    function  VectorInSync: Boolean;
   public
     constructor Create;
     destructor  Destroy; override;
@@ -780,7 +783,10 @@ begin
       Result[i].Root := Roots[i];
       if QueryI64('SELECT added_at FROM kb_sources WHERE root = :r',
                   ['r'], [Roots[i]], V) then Result[i].AddedAt := V;
-      if QueryI64('SELECT COUNT(*) FROM kb_files WHERE root = :r',
+      { nchunks > 0: rows with 0 chunks are skip markers (oversized /
+        binary files tracked only so sync doesn't re-read them), not
+        retrievable documents. }
+      if QueryI64('SELECT COUNT(*) FROM kb_files WHERE nchunks > 0 AND root = :r',
                   ['r'], [Roots[i]], V) then Result[i].Files := V;
       if QueryI64('SELECT COUNT(*) FROM kb_chunks WHERE path IN ' +
                   '(SELECT path FROM kb_files WHERE root = :r)',
@@ -838,29 +844,65 @@ end;
 
 procedure TKBIndexImpl.ReindexFile(const Path, Root: string; Mtime: Int64;
                                    var ChunksIndexed: Integer);
+{ Called only for files that are new or whose mtime advanced — so
+  whatever rows are currently indexed for Path are stale by
+  definition. Every early-out below must therefore DropFile first, or
+  searches keep serving the previous version of a file that is now
+  unindexable (Codex P2 on PR #214: file grew past the size cap).
+
+  Deterministic skips (oversized, binary) additionally record a
+  kb_files row with nchunks=0: the mtime gate in Sync then stops
+  re-reading the same unindexable file on every pass. Transient
+  failures (unreadable) record nothing so the next sync retries. }
+
+  function FileSizeOf(const P: string): Int64;
+  var
+    Sr: TSearchRec;
+  begin
+    Result := 0;
+    if FindFirst(P, faAnyFile, Sr) = 0 then
+    begin
+      Result := Sr.Size;
+      FindClose(Sr);
+    end;
+  end;
+
+  procedure RecordSkipped;
+  begin
+    ExecP('INSERT INTO kb_files (path, root, mtime, nchunks) VALUES (:p, :r, :m, 0)',
+          ['p', 'r'], [Path, Root], ['m'], [Mtime]);
+  end;
+
 var
   Body, Ext: string;
   Chunks: TArray<string>;
   j: Integer;
 begin
+  { Size gate BEFORE reading: rejecting a 100 MB dump shouldn't cost
+    reading 100 MB every sync. }
+  if FileSizeOf(Path) > KB_MAX_FILE_BYTES then
+  begin
+    LogWarn('kb.index: %s is %d bytes (> %d) — skipping',
+            [Path, FileSizeOf(Path), KB_MAX_FILE_BYTES]);
+    DropFile(Path);
+    RecordSkipped;
+    Exit;
+  end;
   try
     Body := ReadFileText(Path);
   except
     on E: Exception do
     begin
       LogWarn('kb.index: read %s failed (%s) — skipping', [Path, E.Message]);
+      DropFile(Path);
       Exit;
     end;
-  end;
-  if Length(Body) > KB_MAX_FILE_BYTES then
-  begin
-    LogWarn('kb.index: %s is %d bytes (> %d) — skipping',
-            [Path, Length(Body), KB_MAX_FILE_BYTES]);
-    Exit;
   end;
   if KBLooksBinary(Copy(Body, 1, 4096)) then
   begin
     LogDebug('kb.index: %s looks binary — skipping', [Path]);
+    DropFile(Path);
+    RecordSkipped;
     Exit;
   end;
 
@@ -948,8 +990,14 @@ begin
   { Vector sidecar follows the chunk population. Rebuilt wholesale on
     any change — IVectorStore has no per-source delete, and sync is an
     explicit operator action where a few extra seconds of embedding is
-    acceptable. No-op when the vector runtime isn't provisioned. }
-  if Changed and TryEnsureVector then
+    acceptable. ALSO rebuilt when the sidecar is missing or stale even
+    though no file changed: the operator may have provisioned the
+    vector runtime AFTER the corpus was indexed, and without this the
+    new sidecar would stay empty forever (Codex P1 on PR #214). The
+    ChunkCount>0 guard keeps an empty corpus from loading the ONNX
+    model on every sync just to rebuild nothing. No-op when the vector
+    runtime isn't provisioned (TryEnsureVector is the gate). }
+  if (ChunkCount > 0) and (Changed or not VectorInSync) and TryEnsureVector then
     RebuildVectorSidecar;
 end;
 
@@ -1035,6 +1083,34 @@ begin
     Result := 0;
 end;
 
+procedure TKBIndexImpl.SetMeta(const Key, Val: string);
+begin
+  ExecP('INSERT OR REPLACE INTO kb_meta (key, val) VALUES (:k, :v)',
+        ['k', 'v'], [Key, Val], [], []);
+end;
+
+function TKBIndexImpl.GetMetaI64(const Key: string; out Val: Int64): Boolean;
+begin
+  Result := QueryI64('SELECT CAST(val AS INTEGER) FROM kb_meta WHERE key = :k',
+                     ['k'], [Key], Val);
+end;
+
+function TKBIndexImpl.VectorInSync: Boolean;
+{ True iff the vector sidecar exists on disk AND its recorded chunk
+  population matches kb_chunks. The 'vec_chunks' meta row is written
+  only by a fully successful RebuildVectorSidecar (it is poisoned to -1
+  while a rebuild is in flight), so a missing/half-built/stale sidecar
+  always reads as out of sync. Gates both Search's vector path (an
+  out-of-sync sidecar would silently hide documents — Codex P1 on
+  PR #214) and Sync's rebuild decision. }
+var
+  Recorded: Int64;
+begin
+  Result := FileExists(VecSidecarPath) and
+            GetMetaI64('vec_chunks', Recorded) and
+            (Recorded = ChunkCount);
+end;
+
 procedure TKBIndexImpl.RebuildVectorSidecar;
 var
   Rows: TStringList;
@@ -1044,6 +1120,11 @@ var
   Emb: TArray<Single>;
 begin
   if FStore = nil then Exit;
+  { Poison the sync marker first: if this rebuild dies mid-flight the
+    sidecar must read as out-of-sync (-1 can never equal a COUNT), so
+    Search keeps using FTS instead of the half-built store. The real
+    count is recorded only after a clean CommitBatch. }
+  SetMeta('vec_chunks', '-1');
   { Recreate the sidecar from scratch: close, delete the file, reopen.
     The chunk store in kb.db is the source of truth. }
   try FStore.CloseStore; except end;
@@ -1081,10 +1162,13 @@ begin
         end;
       end;
       FStore.CommitBatch;
+      SetMeta('vec_chunks', IntToStr(Rows.Count));
       LogDebug('kb.index: vector sidecar rebuilt (%d chunks)', [Rows.Count]);
     except
       on E: Exception do
       begin
+        { Meta stays at the -1 poison: the sidecar reads out-of-sync
+          and the next Sync retries the rebuild. }
         LogWarn('kb.index: vector rebuild failed mid-batch — %s', [E.Message]);
         try FStore.CommitBatch; except end;
       end;
@@ -1111,13 +1195,17 @@ begin
   if not FOpen then Exit;
   if K <= 0 then K := 5;
 
-  { Hybrid path when provisioned: the sidecar's internal FTS+vec RRF
-    fusion ranks; chunk text comes back as the snippet (same trade
-    PasClaw.Memory.Vector makes). Guard: a sidecar that has fallen
-    behind the chunk store (e.g. vector provisioned after the last
-    sync) is rebuilt on the next Sync, not here — Search must stay
-    cheap. }
-  if TryEnsureVector then
+  { Hybrid path when provisioned AND the sidecar matches the chunk
+    store: the sidecar's internal FTS+vec RRF fusion ranks; chunk text
+    comes back as the snippet (same trade PasClaw.Memory.Vector makes).
+
+    VectorInSync must gate BEFORE TryEnsureVector: an out-of-sync or
+    not-yet-built sidecar (vector provisioned after the last sync)
+    would otherwise be created empty right here and silently hide
+    every document (Codex P1 on PR #214). Until the operator runs
+    `pasclaw kb sync`, queries stay on the always-correct FTS path —
+    the rebuild itself belongs in Sync, Search must stay cheap. }
+  if VectorInSync and TryEnsureVector then
   begin
     try
       Emb := EmbedText(Query);
@@ -1293,7 +1381,9 @@ begin
   Result.VectorReady := False;
   if not FOpen then Exit;
   if QueryI64('SELECT COUNT(*) FROM kb_sources', [], [], V) then Result.Sources := V;
-  if QueryI64('SELECT COUNT(*) FROM kb_files',   [], [], V) then Result.Files   := V;
+  { nchunks > 0 — skip markers aren't documents; see GetSources. }
+  if QueryI64('SELECT COUNT(*) FROM kb_files WHERE nchunks > 0', [], [], V) then
+    Result.Files := V;
   if QueryI64('SELECT COUNT(*) FROM kb_chunks',  [], [], V) then Result.Chunks  := V;
   Cfg := LoadConfig;
   try
