@@ -1,27 +1,32 @@
 program tool_rpc_tests;
 (*
-  Covers PasClaw.Tools.RPC -- the in-process tool callback server
-  spawned execute_code scripts use to reach back into the parent
-  PasClaw's registry.
+  Covers PasClaw.Tools.RPC -- the per-call tool-callback server an
+  execute_code script uses to reach back into the parent PasClaw's
+  registry.
+
+  Post-Codex-P1+P2 (PR #206): the server is no longer a singleton
+  bound to a global registry. Each Tool_ExecuteCode invocation
+  constructs its own TToolRPCServer bound to ITS registry, on a
+  unique info-file path, and tells the spawned script via env
+  PASCLAW_TOOL_RPC_INFO. Tests drive the server directly via the
+  exposed constructor.
 
   We pin:
-    - StartToolRPCIfNeeded brings up a TCP listener and writes a
-      readable info file (port + token + pid)
-    - DiscoverRunningRPC round-trips that file back into the same
-      port + token, so the `pasclaw __tool` subcommand finds the
-      right server
-    - A valid request gets dispatched to the registered tool and
-      the result comes back on the wire
+    - Construct/Start writes the per-instance info file at the
+      caller-chosen path
+    - The file goes away on Stop, freeing the port + cleaning up
+    - A valid request dispatches through the registry we bound
+      this instance to (not some global)
     - A bad token is rejected without dispatching
-    - An unknown tool surfaces a clean error message
-    - Missing info file produces an actionable ErrMsg
-    - StopToolRPC tears the file down so a follow-up
-      DiscoverRunningRPC fails the way the model would see in a
-      detached environment
+    - An unknown tool surfaces a clean error
+    - DiscoverRunningRPC fails with an actionable error when the
+      PASCLAW_TOOL_RPC_INFO env var is missing -- matches what a
+      `pasclaw __tool` call from outside a script would see
 
-  We talk to the server over a plain TCP connection from the test
-  body -- no need to spawn a subprocess to exercise the same wire
-  protocol the production `pasclaw __tool` binary uses.
+  Two concurrent server instances (simulating parent + subagent
+  execute_codes running in parallel) get distinct ports + tokens
+  and dispatch to their OWN registry -- that's the heart of the
+  P1+P2 fix and the most important regression guard here.
 *)
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
@@ -32,6 +37,8 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes,
   IdTCPClient, IdGlobal,
+  PasClaw.Config,
+  PasClaw.Utils,
   PasClaw.JSON,
   PasClaw.Tools.Types,
   PasClaw.Tools.Registry,
@@ -66,38 +73,55 @@ begin
     Fail_(Msg + ' (needle "' + Needle + '" missing)');
 end;
 
-function FakeTool(const ArgsJSON: string; out ErrMsg: string): string;
-{ A dummy tool the tests register: echoes the args back so we can
-  verify the JSON survived the round trip cleanly. }
+{ Two distinct tool handlers so we can prove a request dispatched
+  through registry A returns A's result, not B's -- the core P1
+  contract.
+
+  These need to be module-level functions; they're registered as
+  ordinary TToolHandlers (not method-of-object) and the registry
+  invokes them via @-reference. }
+function EchoA(const ArgsJSON: string; out ErrMsg: string): string;
 begin
   ErrMsg := '';
-  Result := 'echo:' + ArgsJSON;
+  Result := 'from-A:' + ArgsJSON;
 end;
 
-function FakeFailingTool(const ArgsJSON: string; out ErrMsg: string): string;
+function EchoB(const ArgsJSON: string; out ErrMsg: string): string;
+begin
+  ErrMsg := '';
+  Result := 'from-B:' + ArgsJSON;
+end;
+
+function FailingTool(const ArgsJSON: string; out ErrMsg: string): string;
 begin
   ErrMsg := 'failing tool said no';
   Result := '';
 end;
 
-function MakeRegistry: TToolRegistry;
+function MakeRegistryWith(Handler: TToolHandler; const ToolName: string): TToolRegistry;
 var
   T: TTool;
 begin
   Result := TToolRegistry.Create;
-  T.Name        := 'fake_echo';
-  T.Description := 'echoes args';
+  T.Name        := ToolName;
+  T.Description := 'test';
   T.Schema      := '{"type":"object"}';
-  T.Handler     := @FakeTool;
+  T.Handler     := Handler;
   T.HandlerObj  := nil;
   T.IsCore      := True;
   T.Category    := tcReadOnly;
   Result.Register(T);
+end;
 
-  T.Name        := 'fake_failing';
+function MakeFailingRegistry: TToolRegistry;
+var
+  T: TTool;
+begin
+  Result := TToolRegistry.Create;
+  T.Name        := 'failing';
   T.Description := 'always fails';
   T.Schema      := '{"type":"object"}';
-  T.Handler     := @FakeFailingTool;
+  T.Handler     := @FailingTool;
   T.HandlerObj  := nil;
   T.IsCore      := True;
   T.Category    := tcReadOnly;
@@ -105,8 +129,6 @@ begin
 end;
 
 function CallRPC(Port: Integer; const RequestJSON: string): string;
-{ Tiny client: connect to the running server, write one JSON line,
-  read one JSON line back. Mirrors what `pasclaw __tool` does. }
 var
   Client: TIdTCPClient;
 begin
@@ -164,27 +186,32 @@ begin
   end;
 end;
 
-procedure TestServerStartWritesInfo;
+function TestInfoPath(const Suffix: string): string;
+begin
+  Result := JoinPath(JoinPath(GetHome, 'run'),
+                     'tool-rpc-test-' + Suffix + '.json');
+end;
+
+procedure TestStartWritesInfoStopRemovesIt;
 var
   Reg: TToolRegistry;
-  P: Integer;
-  Tok, Err: string;
+  Srv: TToolRPCServer;
+  P: string;
 begin
-  Reg := MakeRegistry;
+  Reg := MakeRegistryWith(@EchoA, 'echo');
   try
-    StartToolRPCIfNeeded(Reg);
+    P := TestInfoPath('start-stop');
+    Srv := TToolRPCServer.Create(Reg, P);
     try
-      AssertTrue(FileExists(ToolRPCInfoPath),
-                 'StartToolRPCIfNeeded creates info file at ' + ToolRPCInfoPath);
-      AssertTrue(DiscoverRunningRPC(P, Tok, Err),
-                 'DiscoverRunningRPC succeeds while server up (' + Err + ')');
-      AssertTrue(P > 0, 'discovered port > 0');
-      AssertEqInt(Length(Tok), 32, 'token is 32 hex chars');
+      Srv.Start;
+      AssertTrue(FileExists(P), 'info file written on Start');
+      AssertTrue(Srv.Port > 0, 'kernel assigned a non-zero port');
+      AssertEqInt(Length(Srv.Token), 32, 'token is 32 hex chars');
+      Srv.Stop;
+      AssertTrue(not FileExists(P), 'info file deleted on Stop');
     finally
-      StopToolRPC;
+      Srv.Free;
     end;
-    AssertTrue(not FileExists(ToolRPCInfoPath),
-               'StopToolRPC removes info file');
   finally
     Reg.Free;
   end;
@@ -193,32 +220,31 @@ end;
 procedure TestValidRequestRoundTrips;
 var
   Reg: TToolRegistry;
-  P: Integer;
-  Tok, Err, Resp, ResultText: string;
+  Srv: TToolRPCServer;
   Req, ArgsObj: TJsonObject;
+  Resp, RText: string;
 begin
-  Reg := MakeRegistry;
+  Reg := MakeRegistryWith(@EchoA, 'echo');
   try
-    StartToolRPCIfNeeded(Reg);
+    Srv := TToolRPCServer.Create(Reg, TestInfoPath('valid'));
     try
-      DiscoverRunningRPC(P, Tok, Err);
+      Srv.Start;
       Req := TJsonObject.Create;
       try
-        Req.PutStr('token', Tok);
-        Req.PutStr('name',  'fake_echo');
+        Req.PutStr('token', Srv.Token);
+        Req.PutStr('name',  'echo');
         ArgsObj := TJsonObject.Parse('{"hello":"world"}');
         Req.PutObject('args', ArgsObj);
-        Resp := CallRPC(P, Req.ToJSON);
+        Resp := CallRPC(Srv.Port, Req.ToJSON);
       finally
         Req.Free;
       end;
       AssertEqStr(ResponseErr(Resp), '', 'no err in response');
-      ResultText := ResponseResult(Resp);
-      AssertContains(ResultText, 'echo:',  'echo prefix present');
-      AssertContains(ResultText, '"hello"', 'args survived');
-      AssertContains(ResultText, '"world"', 'value survived');
+      RText := ResponseResult(Resp);
+      AssertContains(RText, 'from-A:', 'result came from registry A');
+      AssertContains(RText, '"hello"', 'args survived round trip');
     finally
-      StopToolRPC;
+      Srv.Free;
     end;
   finally
     Reg.Free;
@@ -228,21 +254,22 @@ end;
 procedure TestBadTokenRejected;
 var
   Reg: TToolRegistry;
-  P: Integer;
-  Tok, Err, Resp: string;
+  Srv: TToolRPCServer;
   Req, ArgsObj: TJsonObject;
+  Resp: string;
 begin
-  Reg := MakeRegistry;
+  Reg := MakeRegistryWith(@EchoA, 'echo');
   try
-    StartToolRPCIfNeeded(Reg);
+    Srv := TToolRPCServer.Create(Reg, TestInfoPath('badtoken'));
     try
-      DiscoverRunningRPC(P, Tok, Err);
+      Srv.Start;
       Req := TJsonObject.Create;
       try
         Req.PutStr('token', 'definitely-not-the-real-token');
-        Req.PutStr('name',  'fake_echo');
-        ArgsObj := TJsonObject.Parse('{}'); Req.PutObject('args', ArgsObj);
-        Resp := CallRPC(P, Req.ToJSON);
+        Req.PutStr('name',  'echo');
+        ArgsObj := TJsonObject.Parse('{}');
+        Req.PutObject('args', ArgsObj);
+        Resp := CallRPC(Srv.Port, Req.ToJSON);
       finally
         Req.Free;
       end;
@@ -251,7 +278,7 @@ begin
       AssertEqStr(ResponseResult(Resp), '',
                   'no result leaked when token rejected');
     finally
-      StopToolRPC;
+      Srv.Free;
     end;
   finally
     Reg.Free;
@@ -261,28 +288,29 @@ end;
 procedure TestUnknownToolSurfaces;
 var
   Reg: TToolRegistry;
-  P: Integer;
-  Tok, Err, Resp: string;
+  Srv: TToolRPCServer;
   Req, ArgsObj: TJsonObject;
+  Resp: string;
 begin
-  Reg := MakeRegistry;
+  Reg := MakeRegistryWith(@EchoA, 'echo');
   try
-    StartToolRPCIfNeeded(Reg);
+    Srv := TToolRPCServer.Create(Reg, TestInfoPath('unknown'));
     try
-      DiscoverRunningRPC(P, Tok, Err);
+      Srv.Start;
       Req := TJsonObject.Create;
       try
-        Req.PutStr('token', Tok);
+        Req.PutStr('token', Srv.Token);
         Req.PutStr('name',  'this_tool_does_not_exist');
-        ArgsObj := TJsonObject.Parse('{}'); Req.PutObject('args', ArgsObj);
-        Resp := CallRPC(P, Req.ToJSON);
+        ArgsObj := TJsonObject.Parse('{}');
+        Req.PutObject('args', ArgsObj);
+        Resp := CallRPC(Srv.Port, Req.ToJSON);
       finally
         Req.Free;
       end;
       AssertContains(ResponseErr(Resp), 'unknown tool',
                      'unknown tool error surfaces');
     finally
-      StopToolRPC;
+      Srv.Free;
     end;
   finally
     Reg.Free;
@@ -292,53 +320,147 @@ end;
 procedure TestFailingToolErrorPropagates;
 var
   Reg: TToolRegistry;
-  P: Integer;
-  Tok, Err, Resp: string;
+  Srv: TToolRPCServer;
   Req, ArgsObj: TJsonObject;
+  Resp: string;
 begin
-  Reg := MakeRegistry;
+  Reg := MakeFailingRegistry;
   try
-    StartToolRPCIfNeeded(Reg);
+    Srv := TToolRPCServer.Create(Reg, TestInfoPath('failing'));
     try
-      DiscoverRunningRPC(P, Tok, Err);
+      Srv.Start;
       Req := TJsonObject.Create;
       try
-        Req.PutStr('token', Tok);
-        Req.PutStr('name',  'fake_failing');
-        ArgsObj := TJsonObject.Parse('{}'); Req.PutObject('args', ArgsObj);
-        Resp := CallRPC(P, Req.ToJSON);
+        Req.PutStr('token', Srv.Token);
+        Req.PutStr('name',  'failing');
+        ArgsObj := TJsonObject.Parse('{}');
+        Req.PutObject('args', ArgsObj);
+        Resp := CallRPC(Srv.Port, Req.ToJSON);
       finally
         Req.Free;
       end;
       AssertContains(ResponseErr(Resp), 'failing tool said no',
                      'tool-side ErrMsg propagated verbatim');
     finally
-      StopToolRPC;
+      Srv.Free;
     end;
   finally
     Reg.Free;
   end;
 end;
 
-procedure TestDiscoverFailsWhenNoInfoFile;
+procedure TestTwoServersDispatchToTheirOwnRegistries;
+{ The heart of Codex P1 + P2. Two TToolRPCServer instances bound
+  to DIFFERENT registries run concurrently (simulating parent and
+  subagent execute_codes). Each request must dispatch through the
+  registry that server was bound to -- A's request returns from-A,
+  B's returns from-B. Pre-fix the global singleton would have
+  routed both requests through whichever registry registered
+  execute_code last. }
+var
+  RegA, RegB: TToolRegistry;
+  SrvA, SrvB: TToolRPCServer;
+  Req, ArgsObj: TJsonObject;
+  RespA, RespB: string;
+begin
+  RegA := MakeRegistryWith(@EchoA, 'shared_name');
+  RegB := MakeRegistryWith(@EchoB, 'shared_name');
+  try
+    SrvA := TToolRPCServer.Create(RegA, TestInfoPath('iso-A'));
+    SrvB := TToolRPCServer.Create(RegB, TestInfoPath('iso-B'));
+    try
+      SrvA.Start;
+      SrvB.Start;
+      { Distinct ports + distinct tokens prove the instances are
+        independent at the wire level. }
+      AssertTrue(SrvA.Port <> SrvB.Port,
+                 'each server got its own port');
+      AssertTrue(SrvA.Token <> SrvB.Token,
+                 'each server got its own token');
+
+      { Hit A with A's token; expect from-A. }
+      Req := TJsonObject.Create;
+      try
+        Req.PutStr('token', SrvA.Token);
+        Req.PutStr('name',  'shared_name');
+        ArgsObj := TJsonObject.Parse('{}');
+        Req.PutObject('args', ArgsObj);
+        RespA := CallRPC(SrvA.Port, Req.ToJSON);
+      finally
+        Req.Free;
+      end;
+      AssertContains(ResponseResult(RespA), 'from-A:',
+                     'server A dispatched through registry A');
+
+      { Hit B with B's token; expect from-B. Same tool name, different
+        registry, different result. }
+      Req := TJsonObject.Create;
+      try
+        Req.PutStr('token', SrvB.Token);
+        Req.PutStr('name',  'shared_name');
+        ArgsObj := TJsonObject.Parse('{}');
+        Req.PutObject('args', ArgsObj);
+        RespB := CallRPC(SrvB.Port, Req.ToJSON);
+      finally
+        Req.Free;
+      end;
+      AssertContains(ResponseResult(RespB), 'from-B:',
+                     'server B dispatched through registry B');
+
+      { Cross-token attack: hit A's port with B's token. A's token
+        check rejects it -- prevents a subagent's script from
+        guessing the parent's port and trying to dispatch with the
+        subagent's own credentials. }
+      Req := TJsonObject.Create;
+      try
+        Req.PutStr('token', SrvB.Token);
+        Req.PutStr('name',  'shared_name');
+        ArgsObj := TJsonObject.Parse('{}');
+        Req.PutObject('args', ArgsObj);
+        RespA := CallRPC(SrvA.Port, Req.ToJSON);
+      finally
+        Req.Free;
+      end;
+      AssertContains(ResponseErr(RespA), 'invalid token',
+                     'cross-instance token reuse rejected');
+    finally
+      SrvA.Free;
+      SrvB.Free;
+    end;
+  finally
+    RegA.Free;
+    RegB.Free;
+  end;
+end;
+
+procedure TestDiscoverFailsWithoutEnvVar;
+{ DiscoverRunningRPC reads PASCLAW_TOOL_RPC_INFO. The Makefile
+  target doesn't set it, so a fresh test run sees an empty env var
+  and bails with an actionable ErrMsg. If a contributor's shell
+  has the var set from outside, we skip the assertion (rare; would
+  only happen during interactive debugging). }
 var
   P: Integer;
   Tok, Err: string;
 begin
-  { Ensure no leftover file. }
-  if FileExists(ToolRPCInfoPath) then DeleteFile(ToolRPCInfoPath);
+  if GetEnvironmentVariable('PASCLAW_TOOL_RPC_INFO') <> '' then
+  begin
+    WriteLn('  skipping discover-no-env test: PASCLAW_TOOL_RPC_INFO is set');
+    Exit;
+  end;
   AssertTrue(not DiscoverRunningRPC(P, Tok, Err),
-             'discovery returns False when info file is missing');
-  AssertContains(Err, 'no tool-rpc info file',
-                 'ErrMsg names the missing file path');
+             'discovery returns False with no env var set');
+  AssertContains(Err, 'PASCLAW_TOOL_RPC_INFO',
+                 'ErrMsg names the missing env var');
 end;
 
 begin
-  TestServerStartWritesInfo;
+  TestStartWritesInfoStopRemovesIt;
   TestValidRequestRoundTrips;
   TestBadTokenRejected;
   TestUnknownToolSurfaces;
   TestFailingToolErrorPropagates;
-  TestDiscoverFailsWhenNoInfoFile;
+  TestTwoServersDispatchToTheirOwnRegistries;
+  TestDiscoverFailsWithoutEnvVar;
   WriteLn('tool_rpc_tests: OK');
 end.

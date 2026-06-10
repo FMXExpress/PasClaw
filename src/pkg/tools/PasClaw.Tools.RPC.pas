@@ -14,34 +14,45 @@
   fs_read as many times as it likes, all without re-entering the
   LLM.
 
-  Wire shape:
+  Lifetime is PER-CALL, not process-wide. Codex P1 + P2 on PR #206
+  caught two bugs in the original singleton design:
 
-    Discovery: when the RPC server starts it writes
-      $PASCLAW_HOME/run/tool-rpc.json  containing
-      {"port": <int>, "token": "<32-hex>"}
-      Stale files left by a previous PasClaw process get
-      overwritten -- they only matter if someone else stole the
-      port number in the meantime, in which case the token check
-      below catches them.
+    - P1: subagent's filtered registry never re-registered into
+      the singleton, so a subagent's execute_code script could RPC
+      its way into the PARENT's full tool surface and bypass the
+      subagent's allowlist.
+    - P2: two PasClaw processes sharing a $PASCLAW_HOME wrote into
+      the same fixed info file path, so process A's running script
+      would read process B's port and cross-dispatch into B's
+      registry.
 
-    Auth: every request must carry the token from the discovery
-    file. Process-local files are good enough for a personal-agent
-    home directory; cross-user attacks aren't in scope.
+  Per-call isolation kills both:
 
-    Protocol:
-      Client sends:    {"token":"...", "name":"...", "args":{...}}\n
-      Server replies:  {"result":"...stringified...", "err":"..."}\n
-      One request, one response, connection closes. No streaming;
-      tools that return huge outputs route through the existing
-      OutputCache same as the model-facing path.
+    Tool_ExecuteCode for each call:
+      Server := TToolRPCServer.Create(MyRegistry, UniquePath);
+      Server.Start;
+      env:PASCLAW_TOOL_RPC_INFO = UniquePath
+      spawn the script (env inherited)
+      script's `pasclaw __tool` reads $PASCLAW_TOOL_RPC_INFO
+      ...script runs, may make 0..N RPC calls...
+      Server.Stop;   { deletes the info file }
+      Server.Free;
 
-  Concurrency: TIdTCPServer spawns a thread per connection.
-  TToolRegistry.RunTool is internally locked, so concurrent RPC
-  requests don't race.
+  Concurrency: a parent loop and a subagent loop can BOTH be
+  inside Tool_ExecuteCode at the same time. Each creates its own
+  server bound to its own registry, on its own kernel-allocated
+  port, with its own info file. The env var passed to each
+  spawned script disambiguates. No global state, no race.
 
-  Lifecycle: started lazily on first execute_code call (per
-  process), torn down by finalization. Cheap to keep alive across
-  calls -- one socket, no resource cost when idle.
+  Wire shape (unchanged from v1):
+    Request:  {"token":"...", "name":"...", "args":{...}}\n
+    Response: {"result":"...", "err":"..."}\n
+    One request per connection. Tools that return huge outputs
+    route through the existing OutputCache same as the model-
+    facing path.
+
+  Auth: every request must carry the per-server random token.
+  Bad token -> {"err":"invalid token"} and close.
 *)
 unit PasClaw.Tools.RPC;
 
@@ -73,36 +84,43 @@ type
     procedure WriteInfoFile;
     procedure DeleteInfoFile;
   public
-    constructor Create;
+    (* Bind this RPC server to Registry. The server dispatches every
+       authenticated request through Registry.RunTool -- whatever
+       tool set the registry carries IS the tool set the RPC sees.
+       Caller is responsible for keeping Registry alive for the
+       lifetime of the server.
+
+       InfoPath is where the {port, token, pid} discovery file
+       gets written so the spawned script's `pasclaw __tool`
+       command can find this server. Callers building a per-call
+       server should pick a unique path so two concurrent
+       Tool_ExecuteCode invocations don't trample each other. *)
+    constructor Create(Registry: TToolRegistry; const InfoPath: string);
     destructor Destroy; override;
-    procedure Start(Registry: TToolRegistry);
+    procedure Start;
     procedure Stop;
     property Token: string read FToken;
     property Port:  Integer read FPort;
     property InfoPath: string read FInfoPath;
   end;
 
-(* Start the process-wide singleton RPC server if it isn't running
-   yet. Subsequent calls with a different registry rebind the
-   server to the new one -- the gateway / serve / agent loops
-   should each plug in their own registry on startup. Safe to
-   call from any thread; idempotent. *)
-procedure StartToolRPCIfNeeded(Registry: TToolRegistry);
+(* Compose a per-call info-file path under $PASCLAW_HOME/run/
+   that's unique to this caller + a random suffix. Used by
+   Tool_ExecuteCode to pick a path it can hand to the spawned
+   script via the PASCLAW_TOOL_RPC_INFO env var without colliding
+   with any other concurrent execute_code call. *)
+function MakePerCallInfoPath: string;
 
-(* Stop the singleton if it's running. Called from unit
-   finalization; callers don't normally invoke this directly. *)
-procedure StopToolRPC;
-
-(* Discover the running server's connection info by reading the
-   info file. Used by Cmd.ToolRPC (`pasclaw __tool`) to find the
-   parent PasClaw process's RPC port + token. Returns False with
-   ErrMsg populated when no running server is discoverable. *)
+(* Read the discovery file the spawned script uses to find the
+   parent PasClaw process's RPC server. The path comes from the
+   PASCLAW_TOOL_RPC_INFO env var the parent set before spawning
+   the script. Returns False with a precise ErrMsg when:
+     - the env var is missing (script wasn't spawned by
+       Tool_ExecuteCode, or env didn't propagate)
+     - the file doesn't exist (parent crashed mid-call?)
+     - the file is malformed
+   Used by Cmd.ToolRPC (`pasclaw __tool`). *)
 function DiscoverRunningRPC(out Port: Integer; out Token, ErrMsg: string): Boolean;
-
-(* The info file path for the running RPC server. Exposed so the
-   `pasclaw __tool` subcommand can read it without duplicating
-   the path-derivation logic. *)
-function ToolRPCInfoPath: string;
 
 implementation
 
@@ -113,10 +131,10 @@ uses
   PasClaw.JSON,
   PasClaw.Crypto.Random;
 
+const
+  EnvInfoVar = 'PASCLAW_TOOL_RPC_INFO';
+
 function RandomHexToken(NBytes: Integer): string;
-{ Hex-encoded random bytes from PasClaw.Crypto.Random's OS-CSPRNG.
-  We need a token the model's script can pass back over an HTTP-
-  shaped wire; hex is the cheapest "safe" encoding for that. }
 var
   B: TBytes;
   i: Integer;
@@ -133,22 +151,24 @@ begin
   end;
 end;
 
-var
-  GServer:     TToolRPCServer = nil;
-  GServerLock: TCriticalSection = nil;
-
-function ToolRPCInfoPath: string;
+function MakePerCallInfoPath: string;
+{ Per-call uniqueness: PID + random suffix. Parent and subagent
+  share a PID so the PID alone isn't enough; the random suffix
+  makes parallel calls within the same process unambiguous too. }
 begin
-  Result := JoinPath(JoinPath(GetHome, 'run'), 'tool-rpc.json');
+  Result := JoinPath(JoinPath(GetHome, 'run'),
+                     Format('tool-rpc-%d-%s.json',
+                            [GetProcessID, RandomHexToken(4)]));
 end;
 
-constructor TToolRPCServer.Create;
+constructor TToolRPCServer.Create(Registry: TToolRegistry; const InfoPath: string);
 begin
   inherited Create;
   FLock     := TCriticalSection.Create;
+  FRegistry := Registry;
+  FInfoPath := InfoPath;
   FServer   := TIdTCPServer.Create(nil);
   FServer.OnExecute := OnExecute;
-  FInfoPath := ToolRPCInfoPath;
 end;
 
 destructor TToolRPCServer.Destroy;
@@ -180,19 +200,18 @@ begin
   if FileExists(FInfoPath) then DeleteFile(FInfoPath);
 end;
 
-procedure TToolRPCServer.Start(Registry: TToolRegistry);
+procedure TToolRPCServer.Start;
 var
   Bind: TIdSocketHandle;
 begin
   FLock.Enter;
   try
-    FRegistry := Registry;
     if FServer.Active then Exit;
-    FToken := RandomHexToken(16);   { 32 hex chars }
+    FToken := RandomHexToken(16);
     FServer.Bindings.Clear;
     Bind := FServer.Bindings.Add;
     Bind.IP   := '127.0.0.1';
-    Bind.Port := 0;  { let the kernel pick }
+    Bind.Port := 0;
     try
       FServer.Active := True;
     except
@@ -202,10 +221,10 @@ begin
         raise;
       end;
     end;
-    { Pick up the actual port the kernel assigned. }
     FPort := FServer.Bindings[0].Port;
     WriteInfoFile;
-    LogDebug('tool-rpc: listening on 127.0.0.1:%d', [FPort]);
+    LogDebug('tool-rpc: listening on 127.0.0.1:%d (info=%s)',
+             [FPort, FInfoPath]);
   finally
     FLock.Leave;
   end;
@@ -309,39 +328,7 @@ begin
   end;
 end;
 
-procedure StartToolRPCIfNeeded(Registry: TToolRegistry);
-begin
-  if Registry = nil then Exit;
-  GServerLock.Enter;
-  try
-    if GServer = nil then GServer := TToolRPCServer.Create;
-    GServer.Start(Registry);
-  finally
-    GServerLock.Leave;
-  end;
-end;
-
-procedure StopToolRPC;
-begin
-  if GServerLock = nil then Exit;
-  GServerLock.Enter;
-  try
-    if GServer <> nil then
-    begin
-      GServer.Free;
-      GServer := nil;
-    end;
-  finally
-    GServerLock.Leave;
-  end;
-end;
-
 function DiscoverRunningRPC(out Port: Integer; out Token, ErrMsg: string): Boolean;
-{ Read the info file written by the parent pasclaw process. The
-  `pasclaw __tool` subcommand uses this to find where to connect.
-  Returns False with a precise ErrMsg so the model gets actionable
-  feedback when execute_code is being driven outside of a tool
-  loop (e.g. a test rig that doesn't start the server). }
 var
   Sl: TStringList;
   Obj: TJsonObject;
@@ -351,10 +338,18 @@ begin
   Port   := 0;
   Token  := '';
   ErrMsg := '';
-  Path := ToolRPCInfoPath;
+  Path := GetEnvironmentVariable(EnvInfoVar);
+  if Path = '' then
+  begin
+    ErrMsg := 'no ' + EnvInfoVar +
+              ' env var -- this command is meant to run from inside an ' +
+              'execute_code script, not standalone';
+    Exit;
+  end;
   if not FileExists(Path) then
   begin
-    ErrMsg := 'no tool-rpc info file at ' + Path + ' -- is pasclaw running?';
+    ErrMsg := 'tool-rpc info file at ' + Path +
+              ' is missing -- the parent execute_code may have already exited';
     Exit;
   end;
   Sl := TStringList.Create;
@@ -394,12 +389,5 @@ begin
   end;
   Result := True;
 end;
-
-initialization
-  GServerLock := TCriticalSection.Create;
-
-finalization
-  StopToolRPC;
-  if GServerLock <> nil then GServerLock.Free;
 
 end.
