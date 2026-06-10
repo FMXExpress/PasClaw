@@ -531,6 +531,14 @@ begin
   GRunners := nil;
 end;
 
+{ Empty initialization is intentional. Delphi dcc64 errors with
+  E2029 "Declaration expected but 'FINALIZATION' found" when a
+  unit has a bare finalization section -- the initialization
+  keyword is required as a header even when there's no startup
+  work. FPC mode delphi is more permissive and accepts the bare
+  finalization, which is why this only surfaced under dcc64. }
+initialization
+
 finalization
   FreeRunners;
 
