@@ -80,6 +80,18 @@ type
                              Always False for stdio entries. }
     Desc:          string; { one-liner shown by `pasclaw mcp catalog` }
     Docs:          string; { url for the user to learn more }
+    { True when EnvVar / AuthFmt / RequiresOAuth describe the actual
+      auth posture of the server. False when the entry came from the
+      hub LIST endpoint, which doesn't carry envSchema -- so a blank
+      EnvVar on a hub-summary row means "we don't know yet", NOT
+      "no auth needed". The bundled KnownMCPServers list and the
+      strict ProjectHubEntryToCatalog (which hits the per-slug detail
+      endpoint) both set this True; ProjectHubSummaryToCatalog leaves
+      it False. `pasclaw mcp catalog` reads it to render the auth
+      column truthfully -- a hub-summary row shows "(see detail)"
+      rather than the misleading "(no auth)" the operator used to
+      get when browsing a hub-fetched catalog. }
+    AuthKnown:     Boolean;
   end;
   TMCPCatalogEntryArray = array of TMCPCatalogEntry;
 
@@ -127,6 +139,8 @@ begin
 end;
 
 function KnownMCPServers: TMCPCatalogEntryArray;
+var
+  i: Integer;
 begin
   SetLength(Result, 5);
 
@@ -171,6 +185,13 @@ begin
   Result[4].AuthFmt := 'Bearer %s';
   Result[4].Desc    := 'Search Hugging Face models, datasets, papers, Spaces.';
   Result[4].Docs    := 'https://huggingface.co/docs/hub/en/agents-mcp';
+
+  { Every bundled row carries fully-known auth metadata -- they're
+    hand-curated above with EnvVar / AuthFmt / RequiresOAuth set
+    deliberately. Mark them so `pasclaw mcp catalog` can render the
+    auth column truthfully (and distinguish from hub-fetched summary
+    rows where the same blank EnvVar means "we don't know yet"). }
+  for i := 0 to High(Result) do Result[i].AuthKnown := True;
 end;
 
 function FindCatalogEntry(const Name: string;

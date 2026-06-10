@@ -92,6 +92,22 @@ begin
   end;
 end;
 
+function ProjectSummaryFromJSON(const JSON: string;
+                                 out Entry: TMCPCatalogEntry;
+                                 out ErrMsg: string): Boolean;
+var
+  Obj: TJsonObject;
+begin
+  Result := False;
+  Obj := TJsonObject.Parse(JSON);
+  if Obj = nil then begin ErrMsg := 'bad test JSON'; Exit; end;
+  try
+    Result := ProjectHubSummaryToCatalog(Obj, Entry, ErrMsg);
+  finally
+    Obj.Free;
+  end;
+end;
+
 procedure TestHttpEntryProjects;
 var
   Entry: TMCPCatalogEntry;
@@ -243,6 +259,107 @@ begin
   AssertEqStr(Entry.Transport, 'http', 'default transport is http');
 end;
 
+procedure TestListSummaryProjectsHttpEntry;
+var
+  Entry: TMCPCatalogEntry;
+  Err: string;
+begin
+  { Real /mcp?limit=N response shape -- just the four summary fields
+    per result. The previous projector required endpointUrl and
+    silently rejected EVERY hub entry from the list endpoint,
+    because endpointUrl only appears in the per-slug detail. }
+  AssertTrue(ProjectSummaryFromJSON(
+    '{"slug":"replicate","displayName":"Replicate",' +
+    '"summary":"Run open-source AI models","transport":"http"}',
+    Entry, Err), 'list-summary http entry projects');
+  AssertEqStr(Entry.Name,      'replicate',                'slug -> Name');
+  AssertEqStr(Entry.Transport, 'http',                     'transport tagged');
+  AssertEqStr(Entry.Desc,      'Run open-source AI models', 'summary -> Desc');
+  AssertEqStr(Entry.URL,       '',
+              'summary projector does not invent URL');
+  AssertFalse(Entry.AuthKnown,
+              'list summary leaves AuthKnown=False -- blank EnvVar means "unknown" not "no auth"');
+end;
+
+procedure TestStrictProjectorMarksAuthKnown;
+var
+  Entry: TMCPCatalogEntry;
+  Err: string;
+begin
+  AssertTrue(ProjectFromJSON(
+    '{"slug":"do-apps","transport":"http","endpointUrl":"https://x/mcp",' +
+    '"envSchema":[{"name":"DO_TOKEN","required":true}]}', Entry, Err),
+    'strict http entry projects');
+  AssertTrue(Entry.AuthKnown,
+             'strict projector walked envSchema -- mark AuthKnown True');
+  AssertTrue(ProjectFromJSON(
+    '{"slug":"runpod","transport":"http","endpointUrl":"https://r/mcp"}',
+    Entry, Err),
+    'strict http no-envSchema projects');
+  AssertTrue(Entry.AuthKnown,
+             'absence of envSchema in detail also means "definitely no auth"');
+end;
+
+procedure TestStdioStrictProjectorMarksAuthKnown;
+var
+  Entry: TMCPCatalogEntry;
+  Err: string;
+begin
+  AssertTrue(ProjectFromJSON(
+    '{"slug":"x","transport":"stdio","command":"npx","args":["a"]}',
+    Entry, Err), 'stdio strict projects');
+  AssertTrue(Entry.AuthKnown,
+             'stdio detail rows also carry authoritative env info');
+end;
+
+procedure TestListSummaryProjectsStdioEntry;
+var
+  Entry: TMCPCatalogEntry;
+  Err: string;
+begin
+  AssertTrue(ProjectSummaryFromJSON(
+    '{"slug":"github-mcp","summary":"GitHub MCP","transport":"stdio"}',
+    Entry, Err), 'list-summary stdio entry projects');
+  AssertEqStr(Entry.Transport, 'stdio',     'stdio transport tagged');
+  AssertEqStr(Entry.Cmd,       '',
+              'summary projector does not invent command');
+  AssertEqStr(Entry.CmdArgs,   '',
+              'summary projector does not invent args');
+end;
+
+procedure TestListSummaryProjectsSseEntry;
+var
+  Entry: TMCPCatalogEntry;
+  Err: string;
+begin
+  AssertTrue(ProjectSummaryFromJSON(
+    '{"slug":"replicate-sse","summary":"SSE Replicate","transport":"sse"}',
+    Entry, Err), 'list-summary sse entry projects');
+  AssertEqStr(Entry.Transport, 'sse', 'sse transport preserved for display');
+end;
+
+procedure TestListSummaryDefaultsTransportToHttp;
+var
+  Entry: TMCPCatalogEntry;
+  Err: string;
+begin
+  AssertTrue(ProjectSummaryFromJSON(
+    '{"slug":"x","summary":"y"}', Entry, Err),
+    'list summary without transport defaults to http');
+  AssertEqStr(Entry.Transport, 'http', 'default transport is http');
+end;
+
+procedure TestListSummaryRejectsMissingSlug;
+var
+  Entry: TMCPCatalogEntry;
+  Err: string;
+begin
+  AssertFalse(ProjectSummaryFromJSON(
+    '{"summary":"no slug"}', Entry, Err),
+    'list-summary without slug rejected');
+  AssertContains(Err, 'missing slug', 'clear error');
+end;
+
 procedure TestCatalogEntryIsStdioPredicate;
 var
   E: TMCPCatalogEntry;
@@ -272,6 +389,13 @@ begin
   TestMissingSlugRejects;            WriteLn('  ok: missing slug rejected');
   TestUnknownTransportRejects;       WriteLn('  ok: unknown transport still skipped');
   TestDefaultTransportIsHttp;        WriteLn('  ok: missing transport -> http');
-  TestCatalogEntryIsStdioPredicate;  WriteLn('  ok: CatalogEntryIsStdio predicate');
+  TestListSummaryProjectsHttpEntry;     WriteLn('  ok: list-summary http projects');
+  TestStrictProjectorMarksAuthKnown;    WriteLn('  ok: strict http -> AuthKnown=True');
+  TestStdioStrictProjectorMarksAuthKnown; WriteLn('  ok: strict stdio -> AuthKnown=True');
+  TestListSummaryProjectsStdioEntry;    WriteLn('  ok: list-summary stdio projects');
+  TestListSummaryProjectsSseEntry;      WriteLn('  ok: list-summary sse projects');
+  TestListSummaryDefaultsTransportToHttp; WriteLn('  ok: list-summary defaults transport=http');
+  TestListSummaryRejectsMissingSlug;    WriteLn('  ok: list-summary rejects missing slug');
+  TestCatalogEntryIsStdioPredicate;     WriteLn('  ok: CatalogEntryIsStdio predicate');
   WriteLn('PASS');
 end.

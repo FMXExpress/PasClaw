@@ -260,7 +260,7 @@ begin
     PrintLn(Ansi.Dim + '(showing built-in ' + IntToStr(Length(Entries)) + ' entries)' + Ansi.Reset);
   if Skipped > 0 then
     PrintLn(Ansi.Dim + '  (' + IntToStr(Skipped) +
-            ' hub entry/entries skipped -- unsupported transport)' +
+            ' hub entry/entries skipped -- malformed records on the registry)' +
             Ansi.Reset);
   PrintLn;
   if Length(Entries) = 0 then
@@ -272,7 +272,17 @@ begin
           '                       transport   env var          status');
   for i := 0 to High(Entries) do
   begin
-    if Entries[i].EnvVar = '' then Auth := '(no auth)'
+    { Auth display branches on whether the projector knew enough to
+      render it truthfully. Hub LIST summaries leave AuthKnown=False
+      because /mcp?limit=N doesn't carry envSchema -- a blank EnvVar
+      there means "not yet known", NOT "no auth needed". Telling the
+      operator "(no auth)" in that case is the bug Codex caught:
+      they'd think the server was credential-less and reach for it,
+      then hit a 401 at first call. (See ProjectHubSummaryToCatalog
+      in PasClaw.MCP.Hub.) }
+    if not Entries[i].AuthKnown then
+      Auth := Ansi.Dim + '(see install)' + Ansi.Reset
+    else if Entries[i].EnvVar = '' then Auth := '(no auth)'
     else if GetEnvironmentVariable(Entries[i].EnvVar) <> '' then Auth := Ansi.Green + 'set' + Ansi.Reset
     else Auth := Ansi.Yellow + 'unset' + Ansi.Reset;
     PrintLn(Format('%24s   %-9s   %-15s  %s',

@@ -90,12 +90,28 @@ function GetMCPHubEntry(const Slug: string;
                         out Entry: TMCPCatalogEntry;
                         out ErrMsg: string): Boolean;
 
-{ Project a single hub-registry JSON object onto the catalog record
-  shape. Exposed at interface scope so the unit tests can pin the
-  transport-routing contract directly against synthetic JSON, without
-  involving network HTTP. Accepts http / sse / streamable-http /
-  stream / stdio; everything else returns False with ErrMsg naming
-  the unsupported transport. }
+(* Project a list-endpoint summary record. The /mcp?limit=N response
+   carries only four fields per result -- slug, displayName, summary,
+   transport -- enough to populate `pasclaw mcp catalog` rows but NOT
+   enough to install (no endpointUrl, no command, no args). Use this
+   for catalog browsing; `mcp install <slug>` then fetches the
+   per-slug detail and calls ProjectHubEntryToCatalog for the full
+   shape.
+
+   Returns False only when the entry is structurally unusable for
+   display (missing slug). Unknown transports DO project; the catalog
+   display tags them so the operator can see what's available even
+   if our HTTP / stdio client can't yet route them. Install-time
+   rejection lives in ProjectHubEntryToCatalog. *)
+function ProjectHubSummaryToCatalog(Root: TJsonObject;
+                                     out Entry: TMCPCatalogEntry;
+                                     out ErrMsg: string): Boolean;
+
+{ Project a per-slug detail record onto a TMCPCatalogEntry the
+  install command can consume. Requires endpointUrl (for HTTP /
+  SSE / Streamable HTTP) or command (for stdio). Used by
+  GetMCPHubEntry which fetches /mcp/<slug>. Unknown / unsupported
+  transports return False with ErrMsg naming the kind. }
 function ProjectHubEntryToCatalog(Root: TJsonObject;
                                    out Entry: TMCPCatalogEntry;
                                    out ErrMsg: string): Boolean;
@@ -340,6 +356,40 @@ begin
   end;
 end;
 
+function ProjectHubSummaryToCatalog(Root: TJsonObject;
+                                     out Entry: TMCPCatalogEntry;
+                                     out ErrMsg: string): Boolean;
+(* Lenient projector for /mcp?limit=N list responses. The list
+   endpoint returns only the four summary fields per result:
+   slug, displayName, summary, transport. We populate Name +
+   Transport + Desc + (when present) Docs and leave URL / Cmd /
+   CmdArgs / EnvVar empty -- the catalog command displays just
+   name + transport + summary, and install fetches the full
+   detail per slug via GetMCPHubEntry anyway, so the missing
+   install-time fields aren't a problem here.
+
+   Rejection is narrow: only missing slug is fatal (a record we
+   can't even identify). Unknown transports DO project so the
+   operator sees what's in the registry; install-time strict
+   transport validation is in ProjectHubEntryToCatalog. *)
+begin
+  Result := False;
+  FillChar(Entry, SizeOf(Entry), 0);
+  Entry.Name := Root.GetStr('slug', '');
+  if Entry.Name = '' then
+  begin
+    ErrMsg := 'hub entry missing slug';
+    Exit;
+  end;
+  Entry.Transport := LowerCase(Root.GetStr('transport', 'http'));
+  Entry.Desc      := Root.GetStr('summary', '');
+  { Detail-endpoint extras (homepageUrl / repoUrl) aren't in the
+    list response; they're a no-op when absent. }
+  Entry.Docs      := Root.GetStr('homepageUrl', '');
+  if Entry.Docs = '' then Entry.Docs := Root.GetStr('repoUrl', '');
+  Result := True;
+end;
+
 function ProjectHubEntryToCatalog(Root: TJsonObject;
                                    out Entry: TMCPCatalogEntry;
                                    out ErrMsg: string): Boolean;
@@ -416,6 +466,10 @@ begin
     Entry.URL       := URL;
     if Entry.EnvVar <> '' then
       Entry.AuthFmt := 'Bearer %s';   { sane default; hub may carry an explicit format later }
+    { Detail endpoint walked envSchema above -- EnvVar / AuthFmt are
+      authoritative for HTTP rows from this point. Mark the auth
+      posture as known so `mcp catalog` can render it truthfully. }
+    Entry.AuthKnown := True;
     Result := True;
     Exit;
   end;
@@ -440,7 +494,9 @@ begin
     { stdio binaries read env vars themselves at spawn time -- AuthFmt
       doesn't apply. We still propagate EnvVar so the install command
       can warn the operator when the binary's required token isn't
-      set in their shell. }
+      set in their shell. envSchema was walked above; EnvVar is
+      authoritative even when blank. }
+    Entry.AuthKnown := True;
     Result := True;
     Exit;
   end;
@@ -533,7 +589,14 @@ begin
             Item := Arr.ItemObject(i);
             if Item = nil then Continue;
             try
-              if ProjectHubEntryToCatalog(Item, Entry, ProjectErr) then
+              (* List endpoint returns a slim per-row summary:
+                 just slug + displayName + summary + transport.
+                 endpointUrl / command / args / envSchema only show
+                 up in the per-slug detail. Use the summary projector
+                 for catalog DISPLAY; install-time detail gets
+                 fetched by GetMCPHubEntry per-slug and validated by
+                 ProjectHubEntryToCatalog at that point. *)
+              if ProjectHubSummaryToCatalog(Item, Entry, ProjectErr) then
               begin
                 SetLength(Entries, Length(Entries) + 1);
                 Entries[High(Entries)] := Entry;
