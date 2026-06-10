@@ -273,6 +273,7 @@
         <DCCReference Include="..\pkg\agent\PasClaw.Agent.Prompt.pas"/>
         <DCCReference Include="..\pkg\agent\PasClaw.Agent.Compact.pas"/>
         <DCCReference Include="..\pkg\agent\PasClaw.Agent.Subagent.pas"/>
+        <DCCReference Include="..\pkg\agent\PasClaw.Agent.SubagentBg.pas"/>
         <DCCReference Include="..\pkg\agent\PasClaw.Agent.Hooks.pas"/>
         <DCCReference Include="..\pkg\agent\PasClaw.Agent.Steering.pas"/>
         <DCCReference Include="..\pkg\agent\PasClaw.Agent.AutoRouter.pas"/>

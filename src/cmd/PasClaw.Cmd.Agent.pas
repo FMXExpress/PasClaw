@@ -47,6 +47,7 @@ uses
   PasClaw.Skills.Loader,
   PasClaw.Agent.Prompt,
   PasClaw.Agent.Subagent,
+  PasClaw.Agent.SubagentBg,
   PasClaw.Agent.AutoRouter,
   PasClaw.Session.Store,
   PasClaw.Tools.Sandbox,
@@ -223,6 +224,23 @@ begin
   Result := RegisterSpawnTool(Reg, Ctx, Cfg.Subagents);
 end;
 
+function MaybeRegisterBackgroundSpawnTools(Cfg: TConfig; Provider: ILLMProvider;
+                                            Reg: TToolRegistry;
+                                            const Model: string)
+                                            : TBackgroundSpawnCoordinator;
+var
+  Ctx: TSubagentContext;
+begin
+  Result := nil;
+  if (Reg = nil) or (Length(Cfg.Subagents) = 0) then Exit;
+  Ctx.Provider       := Provider;
+  Ctx.Fallbacks      := ResolveFallbacks(Cfg);
+  Ctx.ParentRegistry := Reg;
+  Ctx.DefaultModel   := Model;
+  Ctx.PromptCache    := Cfg.PromptCache;
+  Result := RegisterBackgroundSpawnTools(Reg, Ctx, Cfg.Subagents);
+end;
+
 function ConnectMCP(Cfg: TConfig; Reg: TToolRegistry; NoMCP: Boolean): TMCPClientList;
 begin
   SetLength(Result, 0);
@@ -338,6 +356,7 @@ var
   Model: string;
   MCPClients: TMCPClientList;
   Spawn: TSpawnTool;
+  BgCoord: TBackgroundSpawnCoordinator;
 begin
   if not PickProvider(Cfg, A, Provider, Err) then
   begin
@@ -363,6 +382,7 @@ begin
                               Cfg.ToolOutputCap > 0);
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
+  BgCoord := MaybeRegisterBackgroundSpawnTools(Cfg, Provider, Reg, Model);
   Handlers := TLoopHandlers.Create;
   try
     SetLength(Msgs, 1);
@@ -401,6 +421,7 @@ var
   Names: TStringArray;
   MCPClients: TMCPClientList;
   Spawn: TSpawnTool;
+  BgCoord: TBackgroundSpawnCoordinator;
   SystemPromptOverride: string;   { tracks the compacted system prompt across turns }
   WorkingStateBlock: string;       { per-turn prefix from Session.Meta.WorkingState }
   ThinkingOn: Boolean;             { toggled by /think; cleared each turn after sending }
@@ -461,6 +482,7 @@ begin
                               Cfg.ToolOutputCap > 0);
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
+  BgCoord := MaybeRegisterBackgroundSpawnTools(Cfg, Provider, Reg, Model);
   Handlers := TLoopHandlers.Create;
   try
     SetLength(Msgs, 0);
@@ -683,6 +705,15 @@ begin
           `pasclaw steer <session-id> "..."` writes to the same
           file the loop is about to read. }
         LoopCfg.SteeringKey := Session.Meta.Id;
+        { Background subagents: bind the coordinator to this session
+          on first turn (idempotent re-binds are cheap), and let
+          RunToolLoop fold finished results into the system prompt
+          via the same channel steering uses. }
+        if BgCoord <> nil then
+        begin
+          BgCoord.SetKey(Session.Meta.Id);
+          LoopCfg.BackgroundDrainKey := Session.Meta.Id;
+        end;
       end;
       { /think: apply ThinkingLevel for this turn, then clear so
         subsequent turns reset (matches the OpenClaw /think model --

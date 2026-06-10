@@ -98,6 +98,15 @@ type
        PR #117); channels can set their own per-conversation key
        when wiring concurrent polling. *)
     SteeringKey:    string;
+    (* Background-subagent drain key. Symmetric with SteeringKey:
+       PasClaw.Agent.SubagentBg registers itself in a key->coordinator
+       map under THIS string; at each iteration top RunToolLoop calls
+       GBackgroundDrainHook(BackgroundDrainKey) and folds any
+       finished-and-not-yet-delivered results into the system prompt
+       so the model sees them automatically. Empty key = no
+       background subagents installed for this session. Cmd.Agent
+       sets this to Session.Meta.Id, same as SteeringKey. *)
+    BackgroundDrainKey: string;
     (* Tool output truncation cap in bytes. When > 0, RunToolLoop
        runs each tool's ResultText through StashAndMaybeTruncate
        (PasClaw.Tools.OutputCache) before appending it to history:
@@ -150,6 +159,19 @@ type
 function RunToolLoop(const Cfg: TToolLoopConfig;
                      var Messages: array of TMessage;
                      out Loop: TToolLoopResult): Boolean;
+
+type
+  (* Late-bound hook so PasClaw.Tools.ToolLoop doesn't have to
+     `uses` PasClaw.Agent.SubagentBg (which itself calls
+     RunToolLoop -- a circular dep). The background-subagent unit
+     assigns this in its initialization. Returns a formatted
+     "[background subagent results]" block when one or more jobs
+     bound to Key have finished since the last drain, '' otherwise.
+     MaxChars bounds the total block size. *)
+  TBackgroundDrainFn = function(const Key: string; MaxChars: Integer): string;
+
+var
+  GBackgroundDrainHook: TBackgroundDrainFn = nil;
 
 implementation
 
@@ -533,7 +555,7 @@ var
   Batches: TToolBatchArray;
   Batch: TToolBatch;
   Workers: array of TToolCallWorker;
-  Steering, BatchSteering, HistSystem, LastProviderErrText: string;
+  Steering, BatchSteering, HistSystem, LastProviderErrText, BgBlock, PersistentSP: string;
   Steers: TSteeringMessageArray;
   InContext: string;       { tool output cap (#PR new): in-context
                              body that lands in Hist after the
@@ -589,6 +611,32 @@ begin
     Inc(Iter);
     LogDebug('toolloop iteration %d / %d', [Iter, Cfg.MaxIterations]);
 
+    { Pre-call compaction. NeedsCompact is a cheap token estimate;
+      only when it trips do we pay for a summariser round.
+      CompactMessages may rewrite Hist AND modify
+      LiveOptions.SystemPrompt -- the summary folds into the system
+      prompt because both OpenAI and Anthropic builders silently
+      drop in-message mrSystem entries when SystemPrompt is set
+      (Codex PR #87 P1). Returns verbatim on summariser failure,
+      so a broken summary can never wipe live context.
+
+      Moved BEFORE the ephemeral drains (steering / bg) so
+      compaction's persistent rebuild of SystemPrompt happens on a
+      clean baseline. The ephemeral folds below get snapshot-and-
+      restored around the provider call so they don't pollute
+      Loop.FinalSystemPrompt (which Cmd.Agent persists across
+      turns). Codex P2 on PR #211. }
+    if Cfg.CompactEnabled and
+       NeedsCompact(Hist, Cfg.CompactOpts.ThresholdTokens) then
+      Hist := CompactMessages(Cfg.Provider, Cfg.Model, Hist,
+                               LiveOptions, Cfg.CompactOpts);
+
+    { Snapshot the persistent SystemPrompt so we can restore it
+      after Provider.Chat -- everything compaction did above is
+      meant to survive into Loop.FinalSystemPrompt; everything the
+      ephemeral drains do below is one-turn-only. }
+    PersistentSP := LiveOptions.SystemPrompt;
+
     { Mid-loop steering: drain any user follow-ups that arrived
       while we were busy (CLI `pasclaw steer <id> "..."`, channels
       with concurrent polling) and fold each into LiveOptions.
@@ -609,6 +657,30 @@ begin
       system prompt unbounded; the cap matches nanobot's
       _MAX_INJECTIONS_PER_TURN sanity bound. Cache breakpoint
       invalidates for the steering turn -- acceptable cost. }
+    { Background-subagent drain. Same channel as steering -- fold
+      into LiveOptions.SystemPrompt because providers skip in-
+      history mrSystem when SystemPrompt is set. Folded BEFORE
+      steering so a user steering message that mentions the result
+      arrives logically after the result the model sees. Late-bound
+      hook to break the circular dep; assigned by
+      PasClaw.Agent.SubagentBg.initialization.
+
+      Drained results are EPHEMERAL: they go to this provider call
+      only, then LiveOptions.SystemPrompt is restored to
+      PersistentSP just before the next iteration. The
+      drain-once contract inside the coordinator (FCollected) is
+      no longer the only line of defence -- Codex P2 on PR #211. }
+    if (Cfg.BackgroundDrainKey <> '') and Assigned(GBackgroundDrainHook) then
+    begin
+      BgBlock := GBackgroundDrainHook(Cfg.BackgroundDrainKey, 8192);
+      if BgBlock <> '' then
+      begin
+        if LiveOptions.SystemPrompt <> '' then
+          LiveOptions.SystemPrompt := LiveOptions.SystemPrompt + sLineBreak + sLineBreak;
+        LiveOptions.SystemPrompt := LiveOptions.SystemPrompt + BgBlock;
+      end;
+    end;
+
     if Cfg.SteeringKey <> '' then
     begin
       Steers := DrainSteering(Cfg.SteeringKey, MaxSteeringPerTurn);
@@ -627,19 +699,6 @@ begin
         end;
       end;
     end;
-
-    { Pre-call compaction. NeedsCompact is a cheap token estimate;
-      only when it trips do we pay for a summariser round.
-      CompactMessages may rewrite Hist AND modify
-      LiveOptions.SystemPrompt -- the summary folds into the system
-      prompt because both OpenAI and Anthropic builders silently
-      drop in-message mrSystem entries when SystemPrompt is set
-      (Codex PR #87 P1). Returns verbatim on summariser failure,
-      so a broken summary can never wipe live context. }
-    if Cfg.CompactEnabled and
-       NeedsCompact(Hist, Cfg.CompactOpts.ThresholdTokens) then
-      Hist := CompactMessages(Cfg.Provider, Cfg.Model, Hist,
-                               LiveOptions, Cfg.CompactOpts);
 
     { Fire BeforeTurn hooks. Embedder can mutate Hist (e.g. inject
       a system note based on out-of-band state) or set
@@ -734,6 +793,17 @@ begin
         end;
       end;
     end;
+    { Restore SystemPrompt to its pre-drain state so the next
+      iteration -- and Loop.FinalSystemPrompt, which Cmd.Agent
+      persists as Session.Meta.SystemPromptOverride -- carry only
+      the compaction-stable baseline, not the ephemeral bg drain or
+      steering folds. Codex P2 on PR #211: without this, a
+      [background subagent results] block delivered once on turn N
+      would get baked into the persisted SystemPrompt and replayed
+      on turns N+1, N+2, etc., causing unbounded prompt growth and
+      stale result repetition. }
+    LiveOptions.SystemPrompt := PersistentSP;
+
     Loop.LastResp := Resp;
     { Roll up usage across every provider call in this loop (incl.
       successful fallbacks). Per-iteration cache writes and reads
