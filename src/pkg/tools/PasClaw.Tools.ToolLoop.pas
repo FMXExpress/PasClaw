@@ -24,7 +24,8 @@ uses
   PasClaw.Agent.Compact,
   PasClaw.Agent.Hooks,
   PasClaw.Agent.Steering,
-  PasClaw.Identity;
+  PasClaw.Identity,
+  PasClaw.Stream.Reliability;
 
 type
   TToolLoopConfig = record
@@ -117,6 +118,18 @@ type
        set this to ~8192 and register the OutputCache tool on the
        same registry. *)
     ToolOutputCap:  Integer;
+    (* Stream-reliability knobs. When EmptyRetryAttempts > 0 the
+       loop's primary Provider.Chat goes through ChatWithEmptyRetry,
+       which retries empty-turn responses (Content='' + no tool
+       calls + finish_reason='stop') up to N times with exponential
+       backoff. Fallback-walk semantics are unchanged -- the retry
+       fires on the primary provider only, BEFORE the fallback walk
+       sees the response. Zero attempts (default record value)
+       means single-shot behaviour, same as pre-PR. The other
+       fields (StreamIdleTimeoutMs, ToolCallRepairEnabled) don't
+       apply to the synchronous tool loop -- they're surfaced by
+       gateway / channel paths that drive ChatStream directly. *)
+    StreamReliability: TStreamReliabilityConfig;
   end;
 
   TToolLoopResult = record
@@ -733,7 +746,16 @@ begin
       diagnostic still get it via OnError. (Codex P2 on PR #114.) }
     LastProviderErrText := '';
     try
-      Resp := Cfg.Provider.Chat(Hist, Tools, Cfg.Model, LiveOptions);
+      { Empty-turn auto-retry. When StreamReliability.EmptyRetryAttempts
+        is 0 (default record zero, the legacy shape) ChatWithEmptyRetry
+        is a one-shot call -- identical to the pre-PR behaviour.
+        Callers (Cmd.Agent BuildLoopConfig, gateway HandleChat, etc.)
+        populate StreamReliability from Cfg.StreamReliability to
+        opt this loop into the retry path. The fallback walk below
+        still runs unchanged on retryable HTTP failures; empty-turn
+        is a separate, pre-fallback recovery. }
+      Resp := ChatWithEmptyRetry(Cfg.Provider, Hist, Tools, Cfg.Model,
+                                  LiveOptions, Cfg.StreamReliability);
     except
       on E: Exception do
       begin
