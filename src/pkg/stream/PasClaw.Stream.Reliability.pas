@@ -334,6 +334,8 @@ begin
 end;
 
 procedure TStreamJob.InternalOnChunk(const C: TStreamChunk);
+var
+  DeliveredContent: Boolean;
 begin
   { Hold the lock across the user callback so Cancel cannot return
     until any in-progress OnChunk has finished. Without that
@@ -348,10 +350,21 @@ begin
     (Cancel / Detach just flip Booleans) so the worker-blocked-on-
     Cancel window is bounded by the OnChunk write -- typically a
     single socket write, well under the idle-timeout poll cadence. }
+  { Bump FChunkCount only when the chunk actually delivered
+    user-visible content. Empty text deltas and protocol-only
+    events ('usage', 'done', terminal end-of-stream markers some
+    providers emit) would otherwise pin ChunkCount > 0 and
+    suppress the empty-turn retry on a stream that produced no
+    output -- exactly the case the retry exists to recover from.
+    Codex P2 finding on PR #213. FLastChunkAt still updates on
+    every chunk because any activity counts as "not idle" for
+    the timeout watcher. }
+  DeliveredContent := ((C.Kind = 'text') and (C.Text <> '')) or
+                      (C.Kind = 'tool_call');
   FLock.Enter;
   try
     FLastChunkAt := Now;
-    Inc(FChunkCount);
+    if DeliveredContent then Inc(FChunkCount);
     if FCancelled or (not Assigned(FUserOnChunk)) then Exit;
     { User OnChunk may write to a torn-down connection; swallow any
       exception so the worker can still drain the provider stream
@@ -380,7 +393,18 @@ begin
     begin
       FExceptionMsg := E.ClassName + ': ' + E.Message;
       FResp := Default(TLLMResponse);
-      FResp.StatusCode := -1;
+      FResp.StatusCode   := -1;
+      { Mark the response as a hard failure so callers that
+        switch on FinishReason (StreamResponsesViaProvider checks
+        for 'error' / 'timeout' to drive its response.failed
+        path) propagate the exception instead of reporting a
+        successful empty completion. Codex P2 finding on PR #213:
+        the previous shape -- StatusCode=-1 with FinishReason=''
+        -- looked identical to "200 OK, model said nothing", and
+        the gateway happily closed the SSE stream with
+        response.completed. }
+      FResp.FinishReason := 'error';
+      FResp.Content      := FExceptionMsg;
     end;
   end;
   Done.SetEvent;

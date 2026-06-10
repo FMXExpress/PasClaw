@@ -92,11 +92,23 @@ type
     FSleepBefore: Integer;  { ms per Chat / ChatStream call }
     FChunkText:   string;   { if non-empty, ChatStream emits this as one chunk
                               before returning the scripted response }
+    FProtocolOnlyChunks: Boolean;
+                            { when True, ChatStream emits one empty 'text' chunk
+                              and one 'done' chunk before returning -- the
+                              "stream produced protocol events but no user-
+                              visible content" shape that finding #2 covers }
+    FRaiseFromStream: string;
+                            { when non-empty, ChatStream raises Exception with
+                              this message before producing any chunks --
+                              the DNS/socket/provider exception shape that
+                              finding #1 covers }
   public
     constructor Create;
     function ChatCallCount: Integer;
     procedure SetSleepBeforeMs(MS: Integer);
     procedure SetChunkText(const Text: string);
+    procedure SetProtocolOnlyChunks(V: Boolean);
+    procedure SetRaiseFromStream(const Msg: string);
     procedure AddScriptedEmpty;
     procedure AddScriptedContent(const Body: string);
     function Chat(const Messages: array of TMessage;
@@ -119,9 +131,11 @@ constructor TScriptedProvider.Create;
 begin
   inherited;
   SetLength(FScript, 0);
-  FCallCount   := 0;
-  FSleepBefore := 0;
-  FChunkText   := '';
+  FCallCount         := 0;
+  FSleepBefore       := 0;
+  FChunkText         := '';
+  FProtocolOnlyChunks := False;
+  FRaiseFromStream   := '';
 end;
 
 function TScriptedProvider.ChatCallCount: Integer; begin Result := FCallCount; end;
@@ -131,6 +145,12 @@ begin FSleepBefore := MS; end;
 
 procedure TScriptedProvider.SetChunkText(const Text: string);
 begin FChunkText := Text; end;
+
+procedure TScriptedProvider.SetProtocolOnlyChunks(V: Boolean);
+begin FProtocolOnlyChunks := V; end;
+
+procedure TScriptedProvider.SetRaiseFromStream(const Msg: string);
+begin FRaiseFromStream := Msg; end;
 
 procedure TScriptedProvider.AddScriptedEmpty;
 var
@@ -190,7 +210,19 @@ var
 begin
   if FSleepBefore > 0 then Sleep(FSleepBefore);
   Inc(FCallCount);
-  if (FChunkText <> '') and Assigned(OnChunk) then
+  if FRaiseFromStream <> '' then
+    raise Exception.Create(FRaiseFromStream);
+  if FProtocolOnlyChunks and Assigned(OnChunk) then
+  begin
+    Chunk := Default(TStreamChunk);
+    Chunk.Kind := 'text';
+    Chunk.Text := '';            { empty delta -- protocol event only }
+    OnChunk(Chunk);
+    Chunk := Default(TStreamChunk);
+    Chunk.Kind := 'done';
+    OnChunk(Chunk);
+  end
+  else if (FChunkText <> '') and Assigned(OnChunk) then
   begin
     Chunk := Default(TStreamChunk);
     Chunk.Kind := 'text';
@@ -428,6 +460,85 @@ begin
   Sleep(5000);
 end;
 
+procedure TestChatStreamExceptionMarkedAsFailure;
+var
+  P: TScriptedProvider;
+  Pi: ILLMProvider;
+  Cfg: TStreamReliabilityConfig;
+  Msgs: array of TMessage;
+  Tools: array of TToolDefinition;
+  R: TLLMResponse;
+  Collector: TStreamCollector;
+begin
+  P := TScriptedProvider.Create;
+  Pi := P;
+  P.SetRaiseFromStream('simulated socket reset');
+
+  Cfg := DefaultStreamReliabilityConfig;
+  Cfg.StreamIdleTimeoutMs := 5000;
+  Cfg.EmptyRetryAttempts  := 0;
+
+  SetLength(Msgs, 1);
+  Msgs[0] := MakeMessage(mrUser, 'ping');
+
+  Collector := TStreamCollector.Create;
+  try
+    SetLength(Tools, 0);
+    R := ChatStreamWithReliability(Pi, Msgs, Tools, 'fake',
+                                    DefaultChatOptions, Collector.OnChunk, Cfg);
+    AssertEqStr(R.FinishReason, 'error', 'exception turns into FinishReason=error');
+    AssertTrue(R.StatusCode < 0, 'status code negative on exception');
+    AssertContains(R.Content, 'simulated socket reset',
+                   'exception message surfaced in Content for the gateway');
+  finally
+    Collector.Free;
+  end;
+end;
+
+procedure TestProtocolOnlyChunksDoNotSuppressRetry;
+var
+  P: TScriptedProvider;
+  Pi: ILLMProvider;
+  Cfg: TStreamReliabilityConfig;
+  Msgs: array of TMessage;
+  Tools: array of TToolDefinition;
+  R: TLLMResponse;
+  Collector: TStreamCollector;
+begin
+  P := TScriptedProvider.Create;
+  Pi := P;
+  { First call: empty TLLMResponse plus protocol-only chunks (one
+    empty 'text' delta + a 'done'). Second call: real content. }
+  P.SetProtocolOnlyChunks(True);
+  P.AddScriptedEmpty;
+  P.AddScriptedContent('recovered');
+
+  Cfg := DefaultStreamReliabilityConfig;
+  Cfg.StreamIdleTimeoutMs := 5000;
+  Cfg.EmptyRetryAttempts  := 2;
+  Cfg.EmptyRetryBackoffMs := 50;
+
+  SetLength(Msgs, 1);
+  Msgs[0] := MakeMessage(mrUser, 'ping');
+
+  Collector := TStreamCollector.Create;
+  try
+    SetLength(Tools, 0);
+    R := ChatStreamWithReliability(Pi, Msgs, Tools, 'fake',
+                                    DefaultChatOptions, Collector.OnChunk, Cfg);
+    { On the retry attempt the provider had its protocol-only flag
+      still set, but the scripted response carries content -- this
+      asserts the retry FIRED. Without the fix, FChunkCount would
+      have been bumped by the empty-text + done chunks of the
+      first call and the retry would have been skipped, leaving
+      R.Content empty. }
+    AssertEqStr(R.Content, 'recovered', 'retry fired despite protocol-only chunks');
+    AssertTrue(P.ChatCallCount >= 2, 'at least one retry attempted');
+  finally
+    Collector.Free;
+  end;
+end;
+
 procedure TestRepairLeavesMatchedPairsAlone;
 var
   Msgs: TMessageArray;
@@ -557,6 +668,8 @@ begin
   TestChatWithEmptyRetryDisabled;        WriteLn('  ok: ChatWithEmptyRetry disabled');
   TestChatStreamHappyPath;               WriteLn('  ok: ChatStream happy path');
   TestChatStreamIdleTimeout;             WriteLn('  ok: ChatStream idle timeout');
+  TestChatStreamExceptionMarkedAsFailure; WriteLn('  ok: ChatStream exception marked as failure');
+  TestProtocolOnlyChunksDoNotSuppressRetry; WriteLn('  ok: Protocol-only chunks do not suppress retry');
   TestRepairLeavesMatchedPairsAlone;     WriteLn('  ok: Repair leaves matched pairs alone');
   TestRepairSynthesizesStubsForOrphans;  WriteLn('  ok: Repair synthesizes stubs');
   TestRepairPartialOrphanMix;            WriteLn('  ok: Repair partial-orphan mix');
