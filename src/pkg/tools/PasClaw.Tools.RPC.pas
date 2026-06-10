@@ -129,10 +129,28 @@ uses
   PasClaw.Utils,
   PasClaw.Logger,
   PasClaw.JSON,
-  PasClaw.Crypto.Random;
+  PasClaw.Crypto.Random
+  {$IFNDEF FPC}{$IFDEF MSWINDOWS}, Winapi.Windows{$ENDIF}
+                {$IFDEF POSIX}, Posix.Unistd{$ENDIF}{$ENDIF};
 
 const
   EnvInfoVar = 'PASCLAW_TOOL_RPC_INFO';
+
+function CurrentProcessID: Int64;
+{ Cross-compiler PID lookup. FPC ships SysUtils.GetProcessID;
+  Delphi dcc64 doesn't (E2003 on that name) and routes through
+  the platform RTL instead -- Winapi.Windows.GetCurrentProcessId
+  on Windows, Posix.Unistd.getpid on POSIX. Wrapped so the two
+  callers below don't have to repeat the IFDEF dance. }
+begin
+  {$IFDEF FPC}
+  Result := GetProcessID;
+  {$ELSE}{$IFDEF MSWINDOWS}
+  Result := GetCurrentProcessId;
+  {$ELSE}
+  Result := getpid;
+  {$ENDIF}{$ENDIF}
+end;
 
 function RandomHexToken(NBytes: Integer): string;
 var
@@ -158,7 +176,7 @@ function MakePerCallInfoPath: string;
 begin
   Result := JoinPath(JoinPath(GetHome, 'run'),
                      Format('tool-rpc-%d-%s.json',
-                            [GetProcessID, RandomHexToken(4)]));
+                            [CurrentProcessID, RandomHexToken(4)]));
 end;
 
 constructor TToolRPCServer.Create(Registry: TToolRegistry; const InfoPath: string);
@@ -188,7 +206,7 @@ begin
   Sl := TStringList.Create;
   try
     Sl.Add(Format('{"port":%d,"token":"%s","pid":%d}',
-                  [FPort, FToken, GetProcessID]));
+                  [FPort, FToken, CurrentProcessID]));
     Sl.SaveToFile(FInfoPath);
   finally
     Sl.Free;
