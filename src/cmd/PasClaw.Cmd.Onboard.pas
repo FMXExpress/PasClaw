@@ -31,6 +31,7 @@ uses
   PasClaw.Providers.Catalog,
   PasClaw.Providers.Models,
   PasClaw.MCP.Catalog,
+  PasClaw.KB.Index,
   PasClaw.Cmd.Memory;
 
 function ReadLineEcho(const Prompt: string): string;
@@ -631,6 +632,85 @@ begin
       '(deferred -- run `pasclaw memory provision` when ready)' + Ansi.Reset);
 end;
 
+procedure PromptKnowledgebase(Cfg: TConfig);
+{ KB (RAG) opt-in. Gated on VectorSearchEnabled: the knowledgebase
+  still works FTS-only, but the natural moment to offer "index my
+  documents" is right after the user opted into local semantic search
+  -- that's the capability that makes a doc corpus worth pointing the
+  agent at. If they declined vectors we stay quiet and let them reach
+  it later via `pasclaw kb add`.
+
+  Adds operator-chosen director(ies)/file(s) as KB sources (indexed in
+  place, never copied) and runs one Sync. Default NO and an explicit
+  blank-to-finish loop: indexing reads real files (and, once the
+  embedding runtime is provisioned, embeds every chunk), so nothing is
+  touched unless the user asks. Missing libsqlite3 degrades to a
+  one-line skip -- same philosophy as the rest of onboarding. }
+var
+  Choice, Path, Abs, Err: string;
+  Idx: IKBIndex;
+  Added, Files, Chunks: Integer;
+begin
+  if not Cfg.VectorSearchEnabled then Exit;
+
+  PrintLn;
+  PrintLn(Ansi.Bold + 'Knowledgebase (RAG over your documents)' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'Index reference docs -- markdown, text, source code -- so the agent can' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'retrieve them with kb_search. Indexed in place; PDFs unsupported (convert first).' +
+    Ansi.Reset);
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Add documents to the knowledgebase now? [y/N]: ')));
+  if not ((Choice = 'y') or (Choice = 'yes')) then
+  begin
+    PrintLn('  ' + Ansi.Dim +
+      '(skipped -- add later with `pasclaw kb add <path>`)' + Ansi.Reset);
+    Exit;
+  end;
+
+  Idx := NewKBIndex;
+  if not Idx.Open(DefaultKBDbPath) then
+  begin
+    Idx := nil;
+    PrintLn('  ' + Ansi.Red + '✗' + Ansi.Reset +
+      ' knowledgebase unavailable (libsqlite3 missing) -- skipped');
+    Exit;
+  end;
+  try
+    Added := 0;
+    repeat
+      Path := Trim(ReadLineEcho('  Directory or file to add (blank to finish): '));
+      if Path = '' then Break;
+      Abs := ExpandHome(Path);   { ReadLine has no shell, so expand ~ ourselves }
+      if Idx.AddSource(Abs, Err) then
+      begin
+        PrintLn('    ' + Ansi.Green + '+' + Ansi.Reset + ' ' + ExpandFileName(Abs));
+        Inc(Added);
+      end
+      else
+        PrintLn('    ' + Ansi.Dim + 'skip: ' + Err + Ansi.Reset);
+    until False;
+
+    if Added = 0 then
+    begin
+      PrintLn('  ' + Ansi.Dim + '(nothing added)' + Ansi.Reset);
+      Exit;
+    end;
+
+    PrintLn('  indexing...');
+    Idx.Sync(Files, Chunks);
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
+      Format(' indexed %d file(s), %d chunk(s)', [Files, Chunks]));
+    PrintLn('  ' + Ansi.Dim +
+      '(kb_search activates for the agent; `pasclaw kb sync` after documents change)' +
+      Ansi.Reset);
+  finally
+    Idx := nil;
+  end;
+end;
+
 procedure PromptMCPInstalls(Cfg: TConfig);
 var
   Entries: TMCPCatalogEntryArray;
@@ -813,6 +893,7 @@ begin
     PromptMCPInstalls(Cfg);
     PromptVaultTools(Cfg);
     PromptVectorSearch(Cfg);
+    PromptKnowledgebase(Cfg);
     PromptStatsCollection(Cfg);
     PromptAutoRouter(Cfg);
 
