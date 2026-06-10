@@ -67,6 +67,16 @@ type
 
 function NewMemoryIndex: IMemoryIndex;
 
+(* Turn a natural-language query into an FTS5-safe MATCH expression
+   (OR-ed quoted tokens; ASCII punctuation stripped; UTF-8 token
+   bytes preserved). Exposed so PasClaw.Session.Search can reuse the
+   exact same query normalisation rather than re-deriving it -- the
+   two indexes must treat "what did we discuss?" identically or
+   operators get confusingly different hit sets from memory_search
+   vs session_search. Returns '' for all-separator input (caller
+   early-exits). *)
+function SanitizeFtsQuery(const Raw: string): string;
+
 implementation
 
 uses

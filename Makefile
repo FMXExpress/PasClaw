@@ -366,4 +366,12 @@ test-tool-rpc: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/tool_rpc_tests.pas -o$(BUILDDIR)/tool_rpc_tests
 	@PASCLAW_HOME=$(BUILDDIR)/tool-rpc-test-home $(BUILDDIR)/tool_rpc_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc
+# session_search FTS5 index over saved transcripts. PASCLAW_HOME isolated so
+# the synthetic sessions + .search.db don't touch the operator's real store.
+# Needs libsqlite3 at runtime (same as the memory_search tests).
+test-session-search: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/session_search_tests.pas -o$(BUILDDIR)/session_search_tests
+	@PASCLAW_HOME=$(BUILDDIR)/session-search-test-home $(BUILDDIR)/session_search_tests
+
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search

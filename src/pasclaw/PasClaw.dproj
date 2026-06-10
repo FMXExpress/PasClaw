@@ -192,6 +192,7 @@
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.ExecuteCode.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.RPC.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Memory.pas"/>
+        <DCCReference Include="..\pkg\tools\PasClaw.Tools.SessionSearch.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.WebSearch.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.WebFetch.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.MemoryFetch.pas"/>
@@ -263,6 +264,7 @@
 
         <!-- pkg/session -->
         <DCCReference Include="..\pkg\session\PasClaw.Session.Store.pas"/>
+        <DCCReference Include="..\pkg\session\PasClaw.Session.Search.pas"/>
 
         <!-- pkg/identity -->
         <DCCReference Include="..\pkg\identity\PasClaw.Identity.pas"/>
