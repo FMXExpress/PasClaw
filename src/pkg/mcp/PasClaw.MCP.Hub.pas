@@ -466,6 +466,10 @@ begin
     Entry.URL       := URL;
     if Entry.EnvVar <> '' then
       Entry.AuthFmt := 'Bearer %s';   { sane default; hub may carry an explicit format later }
+    { Detail endpoint walked envSchema above -- EnvVar / AuthFmt are
+      authoritative for HTTP rows from this point. Mark the auth
+      posture as known so `mcp catalog` can render it truthfully. }
+    Entry.AuthKnown := True;
     Result := True;
     Exit;
   end;
@@ -490,7 +494,9 @@ begin
     { stdio binaries read env vars themselves at spawn time -- AuthFmt
       doesn't apply. We still propagate EnvVar so the install command
       can warn the operator when the binary's required token isn't
-      set in their shell. }
+      set in their shell. envSchema was walked above; EnvVar is
+      authoritative even when blank. }
+    Entry.AuthKnown := True;
     Result := True;
     Exit;
   end;

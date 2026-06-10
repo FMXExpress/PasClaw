@@ -277,6 +277,39 @@ begin
   AssertEqStr(Entry.Desc,      'Run open-source AI models', 'summary -> Desc');
   AssertEqStr(Entry.URL,       '',
               'summary projector does not invent URL');
+  AssertFalse(Entry.AuthKnown,
+              'list summary leaves AuthKnown=False -- blank EnvVar means "unknown" not "no auth"');
+end;
+
+procedure TestStrictProjectorMarksAuthKnown;
+var
+  Entry: TMCPCatalogEntry;
+  Err: string;
+begin
+  AssertTrue(ProjectFromJSON(
+    '{"slug":"do-apps","transport":"http","endpointUrl":"https://x/mcp",' +
+    '"envSchema":[{"name":"DO_TOKEN","required":true}]}', Entry, Err),
+    'strict http entry projects');
+  AssertTrue(Entry.AuthKnown,
+             'strict projector walked envSchema -- mark AuthKnown True');
+  AssertTrue(ProjectFromJSON(
+    '{"slug":"runpod","transport":"http","endpointUrl":"https://r/mcp"}',
+    Entry, Err),
+    'strict http no-envSchema projects');
+  AssertTrue(Entry.AuthKnown,
+             'absence of envSchema in detail also means "definitely no auth"');
+end;
+
+procedure TestStdioStrictProjectorMarksAuthKnown;
+var
+  Entry: TMCPCatalogEntry;
+  Err: string;
+begin
+  AssertTrue(ProjectFromJSON(
+    '{"slug":"x","transport":"stdio","command":"npx","args":["a"]}',
+    Entry, Err), 'stdio strict projects');
+  AssertTrue(Entry.AuthKnown,
+             'stdio detail rows also carry authoritative env info');
 end;
 
 procedure TestListSummaryProjectsStdioEntry;
@@ -357,6 +390,8 @@ begin
   TestUnknownTransportRejects;       WriteLn('  ok: unknown transport still skipped');
   TestDefaultTransportIsHttp;        WriteLn('  ok: missing transport -> http');
   TestListSummaryProjectsHttpEntry;     WriteLn('  ok: list-summary http projects');
+  TestStrictProjectorMarksAuthKnown;    WriteLn('  ok: strict http -> AuthKnown=True');
+  TestStdioStrictProjectorMarksAuthKnown; WriteLn('  ok: strict stdio -> AuthKnown=True');
   TestListSummaryProjectsStdioEntry;    WriteLn('  ok: list-summary stdio projects');
   TestListSummaryProjectsSseEntry;      WriteLn('  ok: list-summary sse projects');
   TestListSummaryDefaultsTransportToHttp; WriteLn('  ok: list-summary defaults transport=http');
