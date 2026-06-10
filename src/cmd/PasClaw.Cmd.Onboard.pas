@@ -699,6 +699,17 @@ begin
       Exit;
     end;
 
+    { Persist the vector opt-in before indexing. Sync's TryEnsureVector
+      reloads config.json from disk to decide whether to build the vector
+      sidecar; onboarding's own SaveConfig runs later (end of
+      Cmd_Onboard_Run), so on a re-run that just flipped
+      vector_search_enabled false->true the on-disk value would still be
+      stale here and the sidecar would be skipped. Writing now makes the
+      flag Sync reads match what the user just chose (we only reach here
+      when VectorSearchEnabled is true). The trailing SaveConfig stays
+      and is idempotent. }
+    SaveConfig(Cfg);
+
     PrintLn('  indexing...');
     Idx.Sync(Files, Chunks);
     PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
