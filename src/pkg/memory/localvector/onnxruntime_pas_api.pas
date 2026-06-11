@@ -975,7 +975,12 @@ type
   const DefaultLanguageProjection = OrtLanguageProjection.ORT_PROJECTION_CPLUSPLUS;
 
 type
-  TOrtLibHandle = {$IFDEF FPC}TLibHandle{$ELSE}HMODULE{$ENDIF};
+  TOrtLibHandle =
+    {$IFDEF FPC}
+      TLibHandle
+    {$ELSE}
+      {$IFDEF MSWINDOWS}HMODULE{$ELSE}NativeUInt{$ENDIF}
+    {$ENDIF};
   TfnOrtGetApiBase = function: POrtApiBase; cdecl;
   TfnOrtAppendCPU = function(options: POrtSessionOptions; use_arena: longint): POrtStatus; cdecl;
   TfnOrtAppendDev = function(options: POrtSessionOptions; device_id: longint): POrtStatus; cdecl;
@@ -1057,7 +1062,16 @@ begin
 {$IFDEF FPC}
   Result := LoadLibrary(AName);
 {$ELSE}
+  {$IFDEF MSWINDOWS}
   Result := LoadLibrary(PChar(AName));
+  {$ELSE}
+  { Delphi non-Windows (Linux64) -- there's no top-level LoadLibrary
+    overload here; route through Posix.Dlfcn.dlopen and cast the
+    Pointer handle back to TOrtLibHandle (= NativeUInt). RTLD_NOW
+    surfaces a missing entrypoint up front, matching the loaded-or-
+    not contract OrtRuntimeLoaded relies on. }
+  Result := TOrtLibHandle(dlopen(PAnsiChar(AnsiString(AName)), RTLD_NOW));
+  {$ENDIF}
 {$ENDIF}
 end;
 
@@ -1066,7 +1080,12 @@ begin
 {$IFDEF FPC}
   Result := GetProcedureAddress(AHandle, AName);
 {$ELSE}
+  {$IFDEF MSWINDOWS}
   Result := GetProcAddress(AHandle, PAnsiChar(AnsiString(AName)));
+  {$ELSE}
+  { Delphi Linux: dlsym against the dlopen handle. }
+  Result := dlsym(Pointer(AHandle), PAnsiChar(AnsiString(AName)));
+  {$ENDIF}
 {$ENDIF}
 end;
 
