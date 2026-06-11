@@ -45,7 +45,8 @@ uses
   PasClaw.Config,
   PasClaw.Logger,
   PasClaw.Memory.Index,
-  PasClaw.Memory.Vector;
+  PasClaw.Memory.Vector,
+  PasClaw.Promptware;     { injection scan on recalled snippets -- chokepoint 2 }
 
 function ParseStringArg(const ArgsJSON, Field: string; out V: string): Boolean;
 var
@@ -189,6 +190,16 @@ begin
   finally
     Lines.Free;
   end;
+
+  { Promptware chokepoint 2 of 3: recalled memory. Snippets were
+    written on earlier turns -- possibly copied from attacker-supplied
+    content the model summarised into a daily note -- so they re-enter
+    the context as if they were the agent's own trusted notes. Label
+    the scan source explicitly (the generic tool-output scan in the
+    tool loop would catch this too, but "recalled memory" tells the
+    model WHICH trust boundary the content crossed; the banner-mark
+    idempotence guard stops the loop from double-wrapping). }
+  Result := MaybeFlagPromptware(Result, 'recalled memory (memory_search)');
 
   LogDebug('memory_search query=%s k=%d hits=%d', [Query, K, Length(Hits)]);
 end;

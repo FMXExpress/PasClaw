@@ -194,7 +194,8 @@ uses
   PasClaw.Hashline,
   PasClaw.Tools.Types,
   PasClaw.Tools.OutputCache,
-  PasClaw.Condense.JSON;
+  PasClaw.Condense.JSON,
+  PasClaw.Promptware;       { injection scan on tool results -- chokepoint 1 }
 
 type
   { Per-call work unit. The same record is filled in by a worker thread
@@ -1011,6 +1012,18 @@ begin
             See PasClaw.Condense.JSON. }
           Dispatches[Batch[j]].ResultText :=
             MaybeCondenseJSON(Dispatches[Batch[j]].ResultText);
+
+          { Promptware chokepoint 1 of 3: tool output is the widest
+            door for indirect prompt injection (fetched pages, read
+            files, MCP responses). A pattern hit prepends a warning
+            banner -- annotate, never block; see PasClaw.Promptware.
+            Runs after condensation (scan the bytes the model will
+            actually see) and before the byte-cap below (so the
+            banner survives truncation's head slice). }
+          Dispatches[Batch[j]].ResultText :=
+            MaybeFlagPromptware(Dispatches[Batch[j]].ResultText,
+                                'tool output (' +
+                                Dispatches[Batch[j]].Call.Func.Name + ')');
 
           { Cap large successful tool outputs (errors stay verbatim --
             they're already short and the head/tail split would just

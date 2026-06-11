@@ -264,6 +264,7 @@ uses
                                      in /stats overlay }
   PasClaw.Tools.Shell.Filters,     { ShellFilterCalls / BytesSaved
                                      -- also surfaced in /stats }
+  PasClaw.Promptware,              { PromptwareScans / Hits -- ditto }
   PasClaw.Agent.Steering,
   PasClaw.Checkpoints,             { InitCheckpoints / BeginTurn / UndoTurns
                                      -- /undo slash command + per-turn
@@ -823,9 +824,10 @@ begin
   ToolRows := Length(FStatsToolCallNames);
   if ToolRows > 8 then ToolRows := 8;       { cap rendered rows; full
                                               list still in memory }
-  BoxH := 10 + ToolRows;                    { frame + 8 stat rows
+  BoxH := 11 + ToolRows;                    { frame + 9 stat rows
                                               (session/tokens/truncated/
-                                              shell/cache/tool-call hdr) +
+                                              shell/cache/promptware/
+                                              tool-call hdr) +
                                               tool-call rows + footer }
   BoxX := (W - BoxW) div 2;
   BoxY := (H - BoxH) div 2;
@@ -904,6 +906,20 @@ begin
   GotoXY(BoxX, Row);
   Label_ := Format(' cache      %d handle(s) held, %d bytes',
                    [EntryCount, TotalBytes]);
+  while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+  if Length(Label_) > BoxW - 2 then Label_ := Copy(Label_, 1, BoxW - 2);
+  WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);
+  Inc(Row);
+
+  { Promptware scan: how many tool-output / recalled-memory / skill
+    scans ran and how many flagged. A non-zero hit count is the
+    operator's cue to check the logs for the rule + source detail. }
+  GotoXY(BoxX, Row);
+  if PromptwareScanEnabled then
+    Label_ := Format(' promptware %d scan(s), %d flagged',
+                     [PromptwareScans, PromptwareHits])
+  else
+    Label_ := ' promptware disabled (promptware_enabled: false)';
   while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
   if Length(Label_) > BoxW - 2 then Label_ := Copy(Label_, 1, BoxW - 2);
   WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);

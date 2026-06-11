@@ -21,7 +21,7 @@ program shell_filters_tests;
 {$H+}
 
 uses
-  SysUtils,
+  SysUtils, StrUtils,
   PasClaw.Tools.Shell.Filters;
 
 procedure Fail(const Msg: string);
@@ -281,6 +281,279 @@ begin
              'byte savings accumulate');
 end;
 
+procedure TestCanonicalizeExpandedFamilies;
+{ The rtk-inspired families: containers, k8s, gh, linters, package
+  managers, IaC. Plus the sudo/npx peel and the option-skipping
+  subcommand walk. }
+begin
+  AssertEqStr(CanonicalizeShellCommand('docker ps -a'), 'docker ps',
+              'docker ps');
+  AssertEqStr(CanonicalizeShellCommand('sudo docker images'), 'docker images',
+              'sudo peeled before docker');
+  AssertEqStr(CanonicalizeShellCommand('docker --context prod ps'), 'docker',
+              'option in subcommand position degrades to one-word key (passes through)');
+  AssertEqStr(CanonicalizeShellCommand('kubectl get pods -n prod'), 'kubectl get',
+              'kubectl get');
+  AssertEqStr(CanonicalizeShellCommand('gh pr list --limit 50'), 'gh pr',
+              'gh pr');
+  AssertEqStr(CanonicalizeShellCommand('npx eslint src/'), 'eslint',
+              'npx peeled before eslint');
+  AssertEqStr(CanonicalizeShellCommand('pip3 install -r requirements.txt'),
+              'pip install', 'pip3 -> pip');
+  AssertEqStr(CanonicalizeShellCommand('npm i lodash'), 'npm install',
+              'npm i -> npm install');
+  AssertEqStr(CanonicalizeShellCommand('./gradlew build'), 'gradle build',
+              'gradlew wrapper -> gradle');
+  AssertEqStr(CanonicalizeShellCommand('terraform plan -out tf.plan'),
+              'terraform plan', 'terraform plan');
+  AssertEqStr(CanonicalizeShellCommand('aws s3 ls'), 'aws', 'aws one-word key');
+end;
+
+procedure TestTabularCapsDockerPs;
+var
+  Raw, Got: string;
+  i: Integer;
+begin
+  ResetShellFilterCounters;
+  Raw := 'CONTAINER ID   IMAGE     COMMAND   STATUS' + sLineBreak;
+  for i := 1 to 60 do
+    Raw := Raw + Format('%.12d   img%d:latest   "cmd"   Up %d minutes',
+                        [i, i, i]) + sLineBreak;
+  Got := ApplyShellFilter('docker ps -a', Raw, 0);
+  AssertTrue(Pos('CONTAINER ID', Got) > 0, 'header row kept');
+  AssertTrue(Pos('more rows elided', Got) > 0, 'overflow hint shown');
+  AssertTrue(Length(Got) < Length(Raw), 'docker ps table capped');
+  { Same shape via kubectl get. }
+  Got := ApplyShellFilter('kubectl get pods', Raw, 0);
+  AssertTrue(Pos('more rows elided', Got) > 0, 'kubectl get capped too');
+  { Small tables pass through. }
+  Raw := 'CONTAINER ID   IMAGE' + sLineBreak + 'abc   img:1';
+  Got := ApplyShellFilter('docker ps', Raw, 0);
+  AssertEqStr(Got, Raw, 'small table passes through');
+end;
+
+procedure TestCargoClippyCollapsesCompileNoise;
+{ clippy exits 0 with warnings -- exactly the case tee-on-failure
+  does NOT protect, so the filter must keep the warnings verbatim
+  while dropping the Compiling/Checking wall. }
+var
+  Raw, Got: string;
+  i: Integer;
+begin
+  ResetShellFilterCounters;
+  Raw := '';
+  for i := 1 to 40 do
+    Raw := Raw + '    Checking crate' + IntToStr(i) + ' v0.1.' + IntToStr(i) +
+           sLineBreak;
+  Raw := Raw +
+    'warning: unused variable: `x`' + sLineBreak +
+    '  --> src/main.rs:4:9' + sLineBreak +
+    '   = note: `#[warn(unused_variables)]` on by default' + sLineBreak +
+    '' + sLineBreak +
+    '    Finished dev [unoptimized] target(s) in 12.3s';
+  Got := ApplyShellFilter('cargo clippy', Raw, 0);
+  AssertTrue(Pos('unused variable', Got) > 0, 'warning text kept verbatim');
+  AssertTrue(Pos('src/main.rs:4:9', Got) > 0, 'warning location kept');
+  AssertTrue(Pos('Finished', Got) > 0, 'Finished line kept');
+  AssertTrue(Pos('40 compile/fetch lines elided', Got) > 0,
+             'compile noise collapsed to count');
+  AssertTrue(Length(Got) < Length(Raw), 'clippy filter saves bytes');
+end;
+
+procedure TestCargoOverCapReportsElidedCount;
+{ Codex P2 on PR #230: when warnings exceed MAX_WARN_BLOCKS the
+  filter must tell the model how many extra diagnostics exist --
+  not silently drop them. clippy exits 0 with warnings, so they
+  bypass tee-on-failure and would otherwise vanish past the cap. }
+var
+  Raw, Got: string;
+  i: Integer;
+begin
+  ResetShellFilterCounters;
+  Raw := '';
+  for i := 1 to 5 do
+    Raw := Raw + '    Checking pkg' + IntToStr(i) + ' v0.1.0' + sLineBreak;
+  { 15 warnings -- 5 more than MAX_WARN_BLOCKS = 10. }
+  for i := 1 to 15 do
+    Raw := Raw +
+      'warning: unused variable: `x' + IntToStr(i) + '`' + sLineBreak +
+      '  --> src/main.rs:' + IntToStr(i) + ':9' + sLineBreak +
+      '' + sLineBreak;
+  Raw := Raw + '    Finished dev [unoptimized] target(s) in 1.2s';
+  Got := ApplyShellFilter('cargo clippy', Raw, 0);
+  AssertTrue(Pos('5 more warning/error block(s) elided', Got) > 0,
+             'over-cap diagnostics counted and reported');
+  AssertTrue(Pos('Finished', Got) > 0, 'Finished line still kept');
+  AssertTrue(Pos('unused variable: `x1`', Got) > 0,
+             'first warning kept verbatim');
+end;
+
+procedure TestGoTestCollapsesOkPackages;
+var
+  Raw, Got: string;
+  i: Integer;
+begin
+  ResetShellFilterCounters;
+  Raw := '';
+  for i := 1 to 30 do
+    Raw := Raw + 'ok  	example.com/pkg' + IntToStr(i) + '	0.0' +
+           IntToStr(i mod 10) + 's' + sLineBreak;
+  Got := ApplyShellFilter('go test ./...', Raw, 0);
+  AssertTrue(Pos('30 package(s) ok', Got) > 0, 'ok packages counted');
+  AssertTrue(Length(Got) < Length(Raw), 'go test filter saves bytes');
+end;
+
+procedure TestEslintAggregates;
+var
+  Raw, Got: string;
+  i: Integer;
+begin
+  ResetShellFilterCounters;
+  Raw := '/repo/src/app.ts' + sLineBreak;
+  for i := 1 to 30 do
+    Raw := Raw + Format('  %d:10  warning  Unexpected any  @typescript-eslint/no-explicit-any',
+                        [i]) + sLineBreak;
+  Raw := Raw + sLineBreak +
+         '✖ 30 problems (0 errors, 30 warnings)';
+  Got := ApplyShellFilter('npx eslint src/', Raw, 0);
+  AssertTrue(Pos('/repo/src/app.ts', Got) > 0, 'file header kept');
+  AssertTrue(Pos('30 problems', Got) > 0, 'summary line kept');
+  AssertTrue(Pos('more problem lines elided', Got) > 0,
+             'per-file problems capped');
+  AssertTrue(Length(Got) < Length(Raw), 'eslint filter saves bytes');
+end;
+
+procedure TestPipInstallCollapses;
+var
+  Raw, Got: string;
+  i: Integer;
+begin
+  ResetShellFilterCounters;
+  Raw := '';
+  for i := 1 to 15 do
+    Raw := Raw + 'Collecting package' + IntToStr(i) + '>=1.0' + sLineBreak +
+           'Downloading package' + IntToStr(i) + '-1.0-py3-none-any.whl (50 kB)' +
+           sLineBreak;
+  for i := 1 to 10 do
+    Raw := Raw + 'Requirement already satisfied: dep' + IntToStr(i) +
+           ' in ./venv/lib' + sLineBreak;
+  Raw := Raw + 'Successfully installed package1-1.0 package2-1.0';
+  Got := ApplyShellFilter('pip install -r requirements.txt', Raw, 0);
+  AssertTrue(Pos('Successfully installed', Got) > 0,
+             'Successfully-installed line kept');
+  AssertTrue(Pos('30 fetch/build lines + 10 already-satisfied elided', Got) > 0,
+             'noise collapsed to counts');
+  AssertTrue(Length(Got) < Length(Raw), 'pip filter saves bytes');
+end;
+
+procedure TestNpmInstallKeepsSummary;
+var
+  Raw, Got: string;
+  i: Integer;
+begin
+  ResetShellFilterCounters;
+  Raw := '';
+  for i := 1 to 25 do
+    Raw := Raw + 'npm http fetch GET 200 https://registry.npmjs.org/pkg' +
+           IntToStr(i) + sLineBreak;
+  Raw := Raw +
+    'added 312 packages, and audited 313 packages in 12s' + sLineBreak +
+    'found 0 vulnerabilities';
+  Got := ApplyShellFilter('npm install', Raw, 0);
+  AssertTrue(Pos('added 312 packages', Got) > 0, 'added-summary kept');
+  AssertTrue(Pos('vulnerabilities', Got) > 0, 'audit line kept');
+  AssertTrue(Pos('progress lines elided', Got) > 0, 'progress collapsed');
+  AssertTrue(Length(Got) < Length(Raw), 'npm install filter saves bytes');
+end;
+
+procedure TestMavenDropsInfoWall;
+var
+  Raw, Got: string;
+  i: Integer;
+begin
+  ResetShellFilterCounters;
+  Raw := '';
+  for i := 1 to 50 do
+    Raw := Raw + '[INFO] Downloading from central: https://repo/' +
+           IntToStr(i) + sLineBreak;
+  Raw := Raw +
+    '[WARNING] Using platform encoding (UTF-8)' + sLineBreak +
+    '[INFO] BUILD SUCCESS' + sLineBreak +
+    '[INFO] Total time:  12.3 s';
+  Got := ApplyShellFilter('mvn package', Raw, 0);
+  AssertTrue(Pos('BUILD SUCCESS', Got) > 0, 'build status kept');
+  AssertTrue(Pos('Total time', Got) > 0, 'total time kept');
+  AssertTrue(Pos('[WARNING]', Got) > 0, 'warnings kept');
+  AssertTrue(Pos('[INFO] lines elided', Got) > 0, 'INFO wall collapsed');
+  AssertTrue(Length(Got) < Length(Raw), 'mvn filter saves bytes');
+end;
+
+procedure TestTerraformPlanKeepsResourceList;
+var
+  Raw, Got: string;
+  i: Integer;
+begin
+  ResetShellFilterCounters;
+  Raw := 'Terraform will perform the following actions:' + sLineBreak;
+  for i := 1 to 5 do
+  begin
+    Raw := Raw + sLineBreak +
+      '  # aws_instance.web' + IntToStr(i) + ' will be created' + sLineBreak +
+      '  + resource "aws_instance" "web' + IntToStr(i) + '" {' + sLineBreak;
+    { 20 attribute lines per resource -- the noise we drop. }
+    Raw := Raw + StringOfChar(' ', 6) + '+ ami           = "ami-123"' + sLineBreak;
+    Raw := Raw + DupeString('      + tag           = "v"' + sLineBreak, 19);
+    Raw := Raw + '    }' + sLineBreak;
+  end;
+  Raw := Raw + sLineBreak + 'Plan: 5 to add, 0 to change, 0 to destroy.';
+  Got := ApplyShellFilter('terraform plan', Raw, 0);
+  AssertTrue(Pos('aws_instance.web1', Got) > 0, 'resource header kept');
+  AssertTrue(Pos('Plan: 5 to add', Got) > 0, 'plan summary kept');
+  AssertTrue(Pos('attribute/diff lines elided', Got) > 0,
+             'attribute noise collapsed');
+  AssertTrue(Length(Got) < Length(Raw), 'terraform filter saves bytes');
+end;
+
+procedure TestHeadTailKeepsLogTail;
+{ docker/kubectl logs -- the tail is where the recent (interesting)
+  events live, so the filter must keep BOTH ends. }
+var
+  Raw, Got: string;
+  i: Integer;
+begin
+  ResetShellFilterCounters;
+  Raw := '';
+  for i := 1 to 200 do
+    Raw := Raw + 'log line ' + IntToStr(i) + sLineBreak;
+  Got := ApplyShellFilter('docker logs mycontainer', Raw, 0);
+  AssertTrue(Pos('log line 1' + sLineBreak, Got) > 0, 'head kept');
+  AssertTrue(Pos('log line 200', Got) > 0, 'tail kept');
+  AssertTrue(Pos('lines elided', Got) > 0, 'middle elided');
+  AssertTrue(Length(Got) < Length(Raw), 'log filter saves bytes');
+end;
+
+procedure TestAwsJsonRoutesThroughCondenser;
+{ aws CLI defaults to JSON; a long array response should come back
+  condensed (first-N + "...more items" + last), same engine as the
+  tool loop's MCP condenser. }
+var
+  Raw, Got: string;
+  i: Integer;
+begin
+  ResetShellFilterCounters;
+  Raw := '{"Reservations":[';
+  for i := 1 to 300 do
+  begin
+    if i > 1 then Raw := Raw + ',';
+    Raw := Raw + '{"InstanceId":"i-' + IntToStr(100000 + i) +
+           '","State":"running","Az":"us-east-1a"}';
+  end;
+  Raw := Raw + ']}';
+  Got := ApplyShellFilter('aws ec2 describe-instances', Raw, 0);
+  AssertTrue(Length(Got) < Length(Raw), 'aws JSON condensed');
+  AssertTrue(Pos('more items', Got) > 0, 'array collapse marker present');
+end;
+
 begin
   TestCanonicalize;
   TestTeeOnFailure;
@@ -292,5 +565,17 @@ begin
   TestPytestFailures;
   TestGrepAggregatesByFile;
   TestCountersIncrement;
+  TestCanonicalizeExpandedFamilies;
+  TestTabularCapsDockerPs;
+  TestCargoClippyCollapsesCompileNoise;
+  TestCargoOverCapReportsElidedCount;
+  TestGoTestCollapsesOkPackages;
+  TestEslintAggregates;
+  TestPipInstallCollapses;
+  TestNpmInstallKeepsSummary;
+  TestMavenDropsInfoWall;
+  TestTerraformPlanKeepsResourceList;
+  TestHeadTailKeepsLogTail;
+  TestAwsJsonRoutesThroughCondenser;
   WriteLn('shell_filters_tests: OK');
 end.

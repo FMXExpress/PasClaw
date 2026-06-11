@@ -70,7 +70,9 @@ procedure ResetShellFilterCounters;
 implementation
 
 uses
-  Classes, StrUtils;
+  Classes, StrUtils,
+  PasClaw.Condense.JSON;   { FilterAws routes JSON-shaped aws CLI
+                             output through the shared condenser }
 
 {$IFNDEF FPC}
 type
@@ -178,6 +180,14 @@ begin
     These wrappers carry the real command as the trailing argument. }
   Idx := 0;
   First := LowerCase(Tokens[0]);
+  { sudo / npx are transparent runners -- the interesting command is
+    the next token (`sudo docker ps`, `npx eslint src/`). Peel before
+    the shell-wrapper check so `sudo bash -c "..."` also unwraps. }
+  while ((First = 'sudo') or (First = 'npx')) and (Idx + 1 < Length(Tokens)) do
+  begin
+    Inc(Idx);
+    First := LowerCase(Tokens[Idx]);
+  end;
   if (First = 'powershell') or (First = 'powershell.exe') or
      (First = 'pwsh')       or (First = 'pwsh.exe') then
   begin
@@ -212,18 +222,40 @@ begin
   else if (First = 'gc') or (First = 'get-content') or (First = 'type') then
     First := 'cat'
   else if (First = 'sls') or (First = 'select-string') or (First = 'findstr') then
-    First := 'grep';
+    First := 'grep'
+  else if (First = 'pip3') then
+    First := 'pip'
+  else if (Pos('gradlew', First) > 0) then
+    { ./gradlew, gradlew.bat, /path/to/gradlew -- the wrapper script
+      produces the same output shape as a bare gradle. }
+    First := 'gradle';
 
   { Two-word commands have a meaningful subcommand the filter
-    dispatcher cares about (git status vs git diff vs git log). }
-  if (First = 'git') or (First = 'npm')   or (First = 'pnpm') or
-     (First = 'yarn') or (First = 'cargo') or (First = 'mvn') then
+    dispatcher cares about (git status vs git diff vs git log,
+    docker ps vs docker build, kubectl get vs kubectl describe). }
+  if (First = 'git')    or (First = 'npm')     or (First = 'pnpm')      or
+     (First = 'yarn')   or (First = 'cargo')   or (First = 'mvn')       or
+     (First = 'docker') or (First = 'kubectl') or (First = 'gh')        or
+     (First = 'go')     or (First = 'pip')     or (First = 'terraform') or
+     (First = 'gradle') then
   begin
     if Idx + 1 < Length(Tokens) then
-      Second := LowerCase(Tokens[Idx + 1])
+    begin
+      Second := LowerCase(Tokens[Idx + 1]);
+      { npm i == npm install -- collapse so the dispatcher needs one key. }
+      if ((First = 'npm') or (First = 'pnpm')) and (Second = 'i') then
+        Second := 'install';
+      { An option in subcommand position (`docker --context prod ps`)
+        means we can't tell where the real subcommand starts without
+        knowing each flag's arity. Degrade to the one-word key -- the
+        dispatcher won't match it and the output passes through, which
+        beats mis-dispatching to the wrong filter. }
+      if (Length(Second) > 0) and (Second[1] = '-') then
+        Second := '';
+    end
     else
       Second := '';
-    Result := First + ' ' + Second;
+    Result := Trim(First + ' ' + Second);
   end
   else
     Result := First;
@@ -751,6 +783,626 @@ begin
   end;
 end;
 
+function FilterTabular(const Raw: string): string;
+{ Header-plus-rows tables: `docker ps`, `docker images`, `kubectl get`,
+  `gh pr list`, `gh run list`. Keep the header row + the first
+  MAX_ROWS data rows; everything after collapses to a count. Small
+  tables pass through untouched. }
+const
+  MAX_ROWS = 20;
+var
+  Lines: TArray<string>;
+  i, Kept: Integer;
+  Out_: TStringList;
+begin
+  Lines := SplitLines(Raw);
+  if Length(Lines) <= MAX_ROWS + 1 then
+  begin
+    Result := Raw;
+    Exit;
+  end;
+  Out_ := TStringList.Create;
+  try
+    Kept := 0;
+    for i := 0 to High(Lines) do
+    begin
+      if Kept > MAX_ROWS then Break;   { header + MAX_ROWS rows }
+      if (i > 0) and (Length(Trim(Lines[i])) = 0) then Continue;
+      Out_.Add(Lines[i]);
+      Inc(Kept);
+    end;
+    Out_.Add(Format('(+ %d more rows elided -- add a filter/--limit to narrow)',
+                    [Length(Lines) - Kept]));
+    Result := JoinLines(Out_.ToStringArray);
+  finally
+    Out_.Free;
+  end;
+end;
+
+function FilterHeadTail(const Raw: string): string;
+{ Log-shaped output where the TAIL matters most (`docker logs`,
+  `kubectl logs`, `kubectl describe`, `tsc` listings): keep the first
+  HEAD_K lines for orientation and the last TAIL_K where the recent
+  events / final summary live. }
+const
+  MAX_PASSTHROUGH = 80;
+  HEAD_K          = 15;
+  TAIL_K          = 25;
+var
+  Lines: TArray<string>;
+  i: Integer;
+  Out_: TStringList;
+begin
+  Lines := SplitLines(Raw);
+  if Length(Lines) <= MAX_PASSTHROUGH then
+  begin
+    Result := Raw;
+    Exit;
+  end;
+  Out_ := TStringList.Create;
+  try
+    for i := 0 to HEAD_K - 1 do Out_.Add(Lines[i]);
+    Out_.Add(Format('(... %d lines elided ...)',
+                    [Length(Lines) - HEAD_K - TAIL_K]));
+    for i := Length(Lines) - TAIL_K to High(Lines) do Out_.Add(Lines[i]);
+    Result := JoinLines(Out_.ToStringArray);
+  finally
+    Out_.Free;
+  end;
+end;
+
+function FilterDockerBuild(const Raw: string): string;
+{ `docker build`. Classic builder emits "Step X/Y : ..." + layer noise;
+  BuildKit emits "#N [stage a/b] ..." + per-layer progress. Keep the
+  step/stage marker lines, warnings/errors, and the closing image
+  lines; collapse everything else to a count. }
+var
+  Lines: TArray<string>;
+  i, Dropped: Integer;
+  L, LL: string;
+  Out_: TStringList;
+  GotMarker: Boolean;
+begin
+  Lines := SplitLines(Raw);
+  Out_ := TStringList.Create;
+  try
+    Dropped := 0;
+    GotMarker := False;
+    for i := 0 to High(Lines) do
+    begin
+      L  := Lines[i];
+      LL := LowerCase(L);
+      if (Pos('Step ', L) = 1) or
+         ((Length(L) > 1) and (L[1] = '#') and CharInSet(L[2], ['0'..'9'])) then
+      begin
+        { BuildKit repeats "#N ..." for every progress tick; keep only
+          stage-define / finish lines, not the byte-counter spam. }
+        if (Pos('Step ', L) = 1) or (Pos(' [', L) > 0) or
+           (Pos('DONE', L) > 0) or (Pos('ERROR', L) > 0) or
+           (Pos('CACHED', L) > 0) then
+        begin
+          Out_.Add(L);
+          GotMarker := True;
+        end
+        else
+          Inc(Dropped);
+        Continue;
+      end;
+      if (Pos('warning', LL) > 0) or (Pos('error', LL) > 0) or
+         (Pos('successfully built', LL) > 0) or
+         (Pos('successfully tagged', LL) > 0) or
+         (Pos('writing image', LL) > 0) or (Pos('naming to', LL) > 0) then
+      begin
+        Out_.Add(L);
+        GotMarker := True;
+        Continue;
+      end;
+      if Length(Trim(L)) > 0 then Inc(Dropped);
+    end;
+    if (not GotMarker) or (Dropped = 0) then
+    begin
+      Result := Raw;   { not docker-build shaped, or nothing to save }
+      Exit;
+    end;
+    Out_.Add(Format('(%d layer/progress lines elided)', [Dropped]));
+    Result := JoinLines(Out_.ToStringArray);
+  finally
+    Out_.Free;
+  end;
+end;
+
+function FilterCargoCompile(const Raw: string): string;
+{ `cargo build` / `cargo check` / `cargo clippy`. Success output is a
+  wall of "Compiling crate vX.Y.Z" lines; what matters is warnings
+  (clippy exits 0 with warnings!) and the Finished line. Keep the
+  first MAX_WARN_BLOCKS warning blocks verbatim and surface a count
+  of any that exceeded the cap so the model knows more diagnostics
+  exist beyond what's printed -- silently dropping them would let
+  warnings hide past the visible window (Codex P2 on PR #230).
+  Compile/fetch noise collapses to a single count. }
+const
+  MAX_WARN_BLOCKS = 10;
+var
+  Lines: TArray<string>;
+  i, Compiled, WarnBlocks: Integer;
+  L, T: string;
+  Out_: TStringList;
+  InWarn: Boolean;
+begin
+  Lines := SplitLines(Raw);
+  Out_ := TStringList.Create;
+  try
+    Compiled := 0;
+    WarnBlocks := 0;
+    InWarn := False;
+    for i := 0 to High(Lines) do
+    begin
+      L := Lines[i];
+      T := Trim(L);
+      if (Pos('Compiling ', T) = 1) or (Pos('Checking ', T) = 1) or
+         (Pos('Fresh ', T) = 1)     or (Pos('Downloading ', T) = 1) or
+         (Pos('Downloaded ', T) = 1) or (Pos('Updating ', T) = 1) or
+         (Pos('Adding ', T) = 1)     or (Pos('Locking ', T) = 1) then
+      begin
+        Inc(Compiled);
+        InWarn := False;
+        Continue;
+      end;
+      if (Pos('warning', T) = 1) or (Pos('error', T) = 1) then
+      begin
+        { Count EVERY diagnostic header even when over the cap so we
+          can tell the model how many extra ones got elided. Print only
+          the first MAX_WARN_BLOCKS bodies. }
+        Inc(WarnBlocks);
+        InWarn := WarnBlocks <= MAX_WARN_BLOCKS;
+        if InWarn then Out_.Add(L);
+        Continue;
+      end;
+      if Pos('Finished ', T) = 1 then
+      begin
+        InWarn := False;
+        Out_.Add(L);
+        Continue;
+      end;
+      { Warning bodies are indented context lines ("  --> src/x.rs:1",
+        "   |", note/help). Carry them while in a kept block. }
+      if InWarn and (Length(T) > 0) then
+        Out_.Add(L)
+      else if Length(T) = 0 then
+        InWarn := False;
+    end;
+    if Compiled = 0 then
+    begin
+      Result := Raw;
+      Exit;
+    end;
+    if WarnBlocks > MAX_WARN_BLOCKS then
+      Out_.Add(Format('(+ %d more warning/error block(s) elided -- ' +
+                      're-run with --message-format=json or scope the ' +
+                      'crate to see them)',
+                      [WarnBlocks - MAX_WARN_BLOCKS]));
+    Out_.Insert(0, Format('(%d compile/fetch lines elided)', [Compiled]));
+    Result := JoinLines(Out_.ToStringArray);
+  finally
+    Out_.Free;
+  end;
+end;
+
+function FilterGoTest(const Raw: string): string;
+{ `go test ./...`. Passing packages each emit "ok  pkg  0.12s" (plus
+  optional "=== RUN" / "--- PASS" verbosity). Collapse passes to a
+  count; FAIL lines and their blocks stay verbatim (a failing suite
+  usually exits non-zero and bypasses filters entirely via
+  tee-on-failure, but `go test` keeps exit 0 for some flag combos). }
+var
+  Lines: TArray<string>;
+  i, OkCount, RunCount: Integer;
+  L, T: string;
+  Out_: TStringList;
+begin
+  Lines := SplitLines(Raw);
+  Out_ := TStringList.Create;
+  try
+    OkCount := 0;
+    RunCount := 0;
+    for i := 0 to High(Lines) do
+    begin
+      L := Lines[i];
+      T := Trim(L);
+      if (Pos('ok ', T) = 1) or (Pos('ok'#9, T) = 1) then
+      begin
+        Inc(OkCount);
+        Continue;
+      end;
+      if (Pos('=== RUN', T) = 1) or (Pos('--- PASS', T) = 1) or
+         (T = 'PASS') then
+      begin
+        Inc(RunCount);
+        Continue;
+      end;
+      if Length(T) > 0 then Out_.Add(L);
+    end;
+    if OkCount = 0 then
+    begin
+      Result := Raw;
+      Exit;
+    end;
+    Out_.Insert(0, Format('go test: %d package(s) ok (%d per-test lines elided)',
+                          [OkCount, RunCount]));
+    Result := JoinLines(Out_.ToStringArray);
+  finally
+    Out_.Free;
+  end;
+end;
+
+function FilterEslint(const Raw: string): string;
+{ eslint's stylish reporter: a path line, then "  L:C  warning|error
+  message  rule-id" lines, then a "✖ N problems" summary. Warnings
+  exit 0, so a lint-y repo floods the context. Aggregate per file:
+  counts + first PER_FILE_K problem lines, keep the summary. }
+const
+  PER_FILE_K = 3;
+  FILE_TOP_K = 20;
+var
+  Lines: TArray<string>;
+  i, FileCount, Problems, Shown: Integer;
+  L, T: string;
+  Out_: TStringList;
+  PerFileShown: Integer;
+  IsProblemLine: Boolean;
+begin
+  Lines := SplitLines(Raw);
+  Out_ := TStringList.Create;
+  try
+    FileCount := 0;
+    Problems := 0;
+    Shown := 0;
+    PerFileShown := 0;
+    for i := 0 to High(Lines) do
+    begin
+      L := Lines[i];
+      T := Trim(L);
+      if Length(T) = 0 then Continue;
+      { Problem lines are indented and lead with "line:col". }
+      IsProblemLine := (Length(L) > 2) and (L[1] = ' ') and
+                       (Pos(':', T) > 1) and
+                       CharInSet(T[1], ['0'..'9']) and
+                       ((Pos(' warning ', T) > 0) or (Pos(' error ', T) > 0));
+      if IsProblemLine then
+      begin
+        Inc(Problems);
+        if (PerFileShown < PER_FILE_K) and (FileCount <= FILE_TOP_K) then
+        begin
+          Out_.Add(L);
+          Inc(PerFileShown);
+          Inc(Shown);
+        end;
+        Continue;
+      end;
+      { Summary line ("✖ 12 problems (2 errors, 10 warnings)"). }
+      if (Pos('problem', T) > 0) and
+         ((Pos('error', T) > 0) or (Pos('warning', T) > 0)) then
+      begin
+        Out_.Add(L);
+        Continue;
+      end;
+      { Anything else non-indented is a file path header. }
+      if L[1] <> ' ' then
+      begin
+        Inc(FileCount);
+        PerFileShown := 0;
+        if FileCount <= FILE_TOP_K then Out_.Add(L);
+        Continue;
+      end;
+    end;
+    if Problems = 0 then
+    begin
+      Result := Raw;
+      Exit;
+    end;
+    if Problems > Shown then
+      Out_.Add(Format('(+ %d more problem lines elided)', [Problems - Shown]));
+    Result := JoinLines(Out_.ToStringArray);
+  finally
+    Out_.Free;
+  end;
+end;
+
+function FilterNpmInstall(const Raw: string): string;
+{ `npm install` / `npm ci` / pnpm / yarn equivalents. Keep the lines
+  an operator actually reads -- "added N packages", deprecation
+  warnings (capped), the audit summary -- and drop progress noise. }
+const
+  MAX_WARNS = 5;
+var
+  Lines: TArray<string>;
+  i, Dropped, Warns: Integer;
+  L, LL: string;
+  Out_: TStringList;
+  GotSummary: Boolean;
+begin
+  Lines := SplitLines(Raw);
+  Out_ := TStringList.Create;
+  try
+    Dropped := 0;
+    Warns := 0;
+    GotSummary := False;
+    for i := 0 to High(Lines) do
+    begin
+      L := Lines[i];
+      LL := LowerCase(Trim(L));
+      if Length(LL) = 0 then Continue;
+      if ((Pos('added', LL) > 0) and (Pos('package', LL) > 0)) or
+         (Pos('removed', LL) = 1) or (Pos('changed', LL) = 1) or
+         (Pos('up to date', LL) > 0) or (Pos('audited', LL) > 0) or
+         (Pos('vulnerabilit', LL) > 0) or
+         (Pos('done in', LL) = 1) {yarn/pnpm} then
+      begin
+        Out_.Add(L);
+        GotSummary := True;
+        Continue;
+      end;
+      if (Pos('npm warn', LL) = 1) or (Pos('warning', LL) = 1) then
+      begin
+        Inc(Warns);
+        if Warns <= MAX_WARNS then Out_.Add(L) else Inc(Dropped);
+        Continue;
+      end;
+      Inc(Dropped);
+    end;
+    if not GotSummary then
+    begin
+      Result := Raw;
+      Exit;
+    end;
+    if Warns > MAX_WARNS then
+      Out_.Add(Format('(+ %d more warnings elided)', [Warns - MAX_WARNS]));
+    if Dropped > 0 then
+      Out_.Add(Format('(%d progress lines elided)', [Dropped]));
+    Result := JoinLines(Out_.ToStringArray);
+  finally
+    Out_.Free;
+  end;
+end;
+
+function FilterPipInstall(const Raw: string): string;
+{ `pip install`. Collapse Collecting / Downloading / Requirement
+  already satisfied / Using cached noise into counts; keep the
+  "Successfully installed ..." line and any warnings/errors. }
+var
+  Lines: TArray<string>;
+  i, Collected, Satisfied: Integer;
+  L, T: string;
+  Out_: TStringList;
+begin
+  Lines := SplitLines(Raw);
+  Out_ := TStringList.Create;
+  try
+    Collected := 0;
+    Satisfied := 0;
+    for i := 0 to High(Lines) do
+    begin
+      L := Lines[i];
+      T := Trim(L);
+      if Length(T) = 0 then Continue;
+      if (Pos('Collecting ', T) = 1) or (Pos('Downloading ', T) = 1) or
+         (Pos('Using cached ', T) = 1) or (Pos('Preparing ', T) = 1) or
+         (Pos('Building wheel', T) = 1) or (Pos('Created wheel', T) = 1) or
+         (Pos('Stored in directory', T) = 1) or
+         (Pos('Attempting uninstall', T) = 1) or
+         (Pos('Found existing installation', T) = 1) or
+         (Pos('Uninstalling ', T) = 1) then
+      begin
+        Inc(Collected);
+        Continue;
+      end;
+      if Pos('Requirement already satisfied', T) = 1 then
+      begin
+        Inc(Satisfied);
+        Continue;
+      end;
+      Out_.Add(L);
+    end;
+    if Collected + Satisfied = 0 then
+    begin
+      Result := Raw;
+      Exit;
+    end;
+    Out_.Insert(0, Format('pip: %d fetch/build lines + %d already-satisfied elided',
+                          [Collected, Satisfied]));
+    Result := JoinLines(Out_.ToStringArray);
+  finally
+    Out_.Free;
+  end;
+end;
+
+function FilterMaven(const Raw: string): string;
+{ mvn anything. Maven prefixes every line with [INFO] / [WARNING] /
+  [ERROR]; the [INFO] stream is overwhelmingly noise. Keep warnings
+  and errors (capped), the BUILD SUCCESS/FAILURE block, reactor
+  summary rows, and Total time. }
+const
+  MAX_WARNS = 10;
+var
+  Lines: TArray<string>;
+  i, InfoDropped, Warns: Integer;
+  L: string;
+  Out_: TStringList;
+  InReactor: Boolean;
+begin
+  Lines := SplitLines(Raw);
+  Out_ := TStringList.Create;
+  try
+    InfoDropped := 0;
+    Warns := 0;
+    InReactor := False;
+    for i := 0 to High(Lines) do
+    begin
+      L := Lines[i];
+      if (Pos('[WARNING]', L) > 0) or (Pos('[ERROR]', L) > 0) then
+      begin
+        Inc(Warns);
+        if Warns <= MAX_WARNS then Out_.Add(L);
+        Continue;
+      end;
+      if Pos('Reactor Summary', L) > 0 then InReactor := True;
+      if (Pos('BUILD SUCCESS', L) > 0) or (Pos('BUILD FAILURE', L) > 0) or
+         (Pos('Total time', L) > 0) or (Pos('Reactor Summary', L) > 0) or
+         (InReactor and (Pos('SUCCESS [', L) > 0)) or
+         (InReactor and (Pos('FAILURE [', L) > 0)) then
+      begin
+        Out_.Add(L);
+        Continue;
+      end;
+      if Pos('[INFO]', L) > 0 then
+      begin
+        Inc(InfoDropped);
+        Continue;
+      end;
+    end;
+    if InfoDropped = 0 then
+    begin
+      Result := Raw;
+      Exit;
+    end;
+    if Warns > MAX_WARNS then
+      Out_.Add(Format('(+ %d more warnings/errors elided)', [Warns - MAX_WARNS]));
+    Out_.Insert(0, Format('(%d [INFO] lines elided)', [InfoDropped]));
+    Result := JoinLines(Out_.ToStringArray);
+  finally
+    Out_.Free;
+  end;
+end;
+
+function FilterGradle(const Raw: string): string;
+{ gradle / ./gradlew. Keep "> Task" lines only when they carry a
+  non-default outcome (FAILED / SKIPPED), warnings, and the BUILD
+  SUCCESSFUL / actionable-tasks summary; count the rest. }
+var
+  Lines: TArray<string>;
+  i, TaskDropped: Integer;
+  L, T: string;
+  Out_: TStringList;
+  GotSummary: Boolean;
+begin
+  Lines := SplitLines(Raw);
+  Out_ := TStringList.Create;
+  try
+    TaskDropped := 0;
+    GotSummary := False;
+    for i := 0 to High(Lines) do
+    begin
+      L := Lines[i];
+      T := Trim(L);
+      if Length(T) = 0 then Continue;
+      if Pos('> Task ', T) = 1 then
+      begin
+        if (Pos('FAILED', T) > 0) or (Pos('SKIPPED', T) > 0) then
+          Out_.Add(L)
+        else
+          Inc(TaskDropped);
+        Continue;
+      end;
+      if (Pos('BUILD SUCCESSFUL', T) > 0) or (Pos('BUILD FAILED', T) > 0) or
+         (Pos('actionable task', T) > 0) then
+      begin
+        Out_.Add(L);
+        GotSummary := True;
+        Continue;
+      end;
+      if (Pos('warning', LowerCase(T)) > 0) or (Pos('deprecat', LowerCase(T)) > 0) then
+      begin
+        Out_.Add(L);
+        Continue;
+      end;
+      Inc(TaskDropped);
+    end;
+    if not GotSummary then
+    begin
+      Result := Raw;
+      Exit;
+    end;
+    if TaskDropped > 0 then
+      Out_.Add(Format('(%d task/output lines elided)', [TaskDropped]));
+    Result := JoinLines(Out_.ToStringArray);
+  finally
+    Out_.Free;
+  end;
+end;
+
+function FilterTerraformPlan(const Raw: string): string;
+{ `terraform plan` / `apply`. The attribute-level diff inside each
+  resource block dwarfs the decision-relevant content: which
+  resources change and the Plan: summary. Keep resource headers +
+  summaries, drop attribute lines, only when output is long. }
+const
+  MAX_PASSTHROUGH = 60;
+var
+  Lines: TArray<string>;
+  i, Dropped: Integer;
+  L, T: string;
+  Out_: TStringList;
+  GotPlanLine: Boolean;
+begin
+  Lines := SplitLines(Raw);
+  if Length(Lines) <= MAX_PASSTHROUGH then
+  begin
+    Result := Raw;
+    Exit;
+  end;
+  Out_ := TStringList.Create;
+  try
+    Dropped := 0;
+    GotPlanLine := False;
+    for i := 0 to High(Lines) do
+    begin
+      L := Lines[i];
+      T := Trim(L);
+      if Length(T) = 0 then Continue;
+      if (Pos('# ', T) = 1) or                       { "# aws_x.y will be created" }
+         (Pos('Plan:', T) = 1) or
+         (Pos('No changes', T) = 1) or
+         (Pos('Apply complete', T) = 1) or
+         (Pos('Terraform will perform', T) > 0) or
+         (Pos('Terraform used', T) = 1) or
+         (Pos('resource "', T) > 0) then
+      begin
+        Out_.Add(L);
+        if (Pos('Plan:', T) = 1) or (Pos('No changes', T) = 1) or
+           (Pos('Apply complete', T) = 1) then
+          GotPlanLine := True;
+        Continue;
+      end;
+      Inc(Dropped);
+    end;
+    if not GotPlanLine then
+    begin
+      Result := Raw;   { not plan-shaped after all }
+      Exit;
+    end;
+    Out_.Add(Format('(%d attribute/diff lines elided -- the resource list above is complete)',
+                    [Dropped]));
+    Result := JoinLines(Out_.ToStringArray);
+  finally
+    Out_.Free;
+  end;
+end;
+
+function FilterAws(const Raw: string): string;
+{ aws CLI defaults to JSON output -- route it through the JSON-aware
+  condenser (same engine the tool loop uses for MCP bodies, but with
+  the shell filter's accounting). Non-JSON aws output (e.g. `aws s3
+  ls`) gets the head/tail treatment when long. }
+var
+  T: string;
+begin
+  T := Trim(Raw);
+  if (Length(T) > 0) and ((T[1] = '{') or (T[1] = '[')) then
+    Result := MaybeCondenseJSON(Raw)
+  else
+    Result := FilterHeadTail(Raw);
+end;
+
 { =================== dispatcher =================== }
 
 function ApplyShellFilter(const Cmd, RawOut: string;
@@ -779,7 +1431,43 @@ begin
     Result := FilterTestRunner(RawOut)
   else if Key = 'grep' then        Result := FilterGrep(RawOut)
   else if Key = 'ls' then          Result := FilterLs(RawOut)
-  else if Key = 'find' then        Result := FilterLs(RawOut);
+  else if Key = 'find' then        Result := FilterLs(RawOut)
+
+  { --- rtk-inspired expansion: containers / k8s / gh / linters /
+        compilers / package managers / IaC / cloud CLIs --- }
+  else if (Key = 'docker ps')     or (Key = 'docker images') or
+          (Key = 'docker image')  or (Key = 'docker container') or
+          (Key = 'kubectl get')   or
+          (Key = 'gh pr')         or (Key = 'gh run') or
+          (Key = 'gh issue')      or (Key = 'gh release') then
+    Result := FilterTabular(RawOut)
+  else if Key = 'docker build' then
+    Result := FilterDockerBuild(RawOut)
+  else if (Key = 'docker logs')      or (Key = 'kubectl logs') or
+          (Key = 'kubectl describe') or (Key = 'kubectl events') or
+          (Key = 'tsc') then
+    Result := FilterHeadTail(RawOut)
+  else if (Key = 'cargo build') or (Key = 'cargo check') or
+          (Key = 'cargo clippy') then
+    Result := FilterCargoCompile(RawOut)
+  else if Key = 'go test' then
+    Result := FilterGoTest(RawOut)
+  else if Key = 'eslint' then
+    Result := FilterEslint(RawOut)
+  else if (Key = 'npm install')  or (Key = 'npm ci') or
+          (Key = 'pnpm install') or (Key = 'yarn install') or
+          (Key = 'yarn add')     or (Key = 'pnpm add') then
+    Result := FilterNpmInstall(RawOut)
+  else if Key = 'pip install' then
+    Result := FilterPipInstall(RawOut)
+  else if Pos('mvn ', Key) = 1 then
+    Result := FilterMaven(RawOut)
+  else if (Key = 'gradle') or (Pos('gradle ', Key) = 1) then
+    Result := FilterGradle(RawOut)
+  else if (Key = 'terraform plan') or (Key = 'terraform apply') then
+    Result := FilterTerraformPlan(RawOut)
+  else if Key = 'aws' then
+    Result := FilterAws(RawOut);
 
   if Length(Result) < OrigLen then
   begin
