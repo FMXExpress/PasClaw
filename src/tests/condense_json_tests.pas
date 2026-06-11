@@ -201,6 +201,54 @@ begin
   AssertEqStr(Got, Src, 'below MaxBytes -> verbatim');
 end;
 
+procedure TestEllipsisNeverSplitsAnEscapeSequence;
+var
+  Src, Got: string;
+  i, BackslashCount: Integer;
+begin
+  { Build a long string full of \n escapes. The previous Copy(Raw, 2,
+    HeadLen) implementation could land HeadLen between '\' and 'n',
+    emitting "...\..." -- malformed JSON. The code-point walker
+    guarantees the head ends before a '\' or after its full escape. }
+  Src := '"';
+  for i := 1 to 80 do Src := Src + '\n';
+  Src := Src + 'TAILTAILTAILTAIL"';
+  Got := MaybeCondenseJSON('{"x":' + Src + '}', TinyOpts);
+  { Count trailing backslashes immediately before "..." -- there must
+    be none. A '\' just before the ellipsis means the head ended in
+    the middle of an escape. }
+  BackslashCount := 0;
+  i := Pos('...', Got);
+  if i > 1 then
+  begin
+    while (i > 1) and (Got[i - 1] = '\') do
+    begin
+      Inc(BackslashCount);
+      Dec(i);
+    end;
+  end;
+  AssertTrue(BackslashCount mod 2 = 0,
+             'no orphan backslash immediately before ellipsis ' +
+             '(would mean we split an escape sequence): ' + Got);
+end;
+
+procedure TestEllipsisNeverSplitsUTF8Sequence;
+var
+  Src, Got: string;
+  i: Integer;
+begin
+  { Build a long ASCII-only payload so we can verify the boundary
+    logic without worrying about platform char encoding. The escape-
+    sequence safety case above is the main risk vector; this just
+    asserts the walker doesn't ALSO break ASCII. }
+  Src := '"';
+  for i := 1 to 80 do Src := Src + 'AB';
+  Src := Src + 'XYZ"';
+  Got := MaybeCondenseJSON('{"x":' + Src + '}', TinyOpts);
+  AssertContains(Got, '...', 'ellipsis emitted');
+  AssertContains(Got, '"AB',  'head preserved verbatim ASCII');
+end;
+
 procedure TestMalformedJsonReturnsVerbatim;
 var
   Src, Got: string;
@@ -224,6 +272,9 @@ begin
   TestNestedArrayInsideObjectCollapses;   WriteLn('  ok: nested array inside object collapses');
   TestEachCallProducesValidJsonShape;     WriteLn('  ok: output remains JSON-shaped');
   TestRespectsMaxBytes;                   WriteLn('  ok: respects MaxBytes threshold');
+  TestEllipsisNeverSplitsAnEscapeSequence;
+                                          WriteLn('  ok: ellipsis never splits an escape sequence');
+  TestEllipsisNeverSplitsUTF8Sequence;     WriteLn('  ok: ellipsis safe across ASCII run');
   TestMalformedJsonReturnsVerbatim;       WriteLn('  ok: malformed JSON verbatim');
   WriteLn('PASS');
 end.

@@ -259,6 +259,65 @@ begin
   Result := True;
 end;
 
+type
+  { Minimal turn driver: appends ONLY the user message to Hist,
+    leaves Reply non-empty, never appends an assistant message.
+    Used by TestTurnFnControlsAssistantAppend below to assert the
+    runner doesn't quietly mutate Hist beyond what TurnFn left
+    there -- the goal-runner contract is that the caller owns the
+    Hist shape, and the runner only walks it. }
+  TBareDriver = class
+    function TurnFn(const UserMsg: string;
+                     var Hist: TMessageArray;
+                     out Reply: string): Boolean;
+  end;
+
+function TBareDriver.TurnFn(const UserMsg: string;
+                             var Hist: TMessageArray;
+                             out Reply: string): Boolean;
+begin
+  SetLength(Hist, Length(Hist) + 1);
+  Hist[High(Hist)] := MakeMessage(mrUser, UserMsg);
+  Reply  := 'I am the assistant.';
+  Result := True;
+end;
+
+procedure TestTurnFnControlsAssistantAppend;
+(* Codex P1 on PR #223: the goal-runner contract is "TGoalTurnFn
+   appends BOTH the user msg AND the assistant reply". The runner
+   itself doesn't dictate Hist shape -- if a turn driver only
+   appended one message, the runner shouldn't compensate by
+   appending a second. This test pins that invariant from the
+   runner's side; the matching fix in PasClaw.Cmd.Agent's
+   GoalTurnRunner makes sure the production callback does append
+   both. *)
+var
+  J: TScriptedJudge; JIntf: ILLMProvider;
+  D: TBareDriver;
+  Runner: TGoalRunner;
+  Hist: TMessageArray;
+  R: TGoalResult;
+begin
+  J := TScriptedJudge.Create; JIntf := J;
+  J.ScriptVerdict('MET' + #10 + 'ok');
+  D := TBareDriver.Create;
+  try
+    SetLength(Hist, 0);
+    Runner := TGoalRunner.Create(JIntf, 'j', 3, D.TurnFn);
+    try
+      R := Runner.Run('do a thing', Hist);
+      AssertTrue(R.Verdict = gvMet, 'MET');
+      AssertEqInt(Length(Hist), 1,
+                  'runner left Hist exactly as TurnFn returned it -- ' +
+                  'one user message, no spurious appends');
+    finally
+      Runner.Free;
+    end;
+  finally
+    D.Free;
+  end;
+end;
+
 procedure TestParseVerdictHandlesAllShapes;
 var
   Verdict: TGoalVerdict;
@@ -468,6 +527,7 @@ end;
 
 begin
   TestParseVerdictHandlesAllShapes;             WriteLn('  ok: verdict parser handles all shapes');
+  TestTurnFnControlsAssistantAppend;            WriteLn('  ok: TurnFn owns Hist shape (runner does not append)');
   TestMetOnFirstIteration;                      WriteLn('  ok: MET on first iteration');
   TestContinueThenMet;                          WriteLn('  ok: CONTINUE then MET');
   TestContinueLoopHitsBudget;                   WriteLn('  ok: CONTINUE loop hits budget');

@@ -174,18 +174,87 @@ begin
   FailParse(W);
 end;
 
+function AdvanceCodePoint(const S: string; var P: Integer): Boolean;
+{ Advance P past one logical character in a JSON string body --
+  either a complete escape sequence ('\X' or '\uXXXX') or one
+  UTF-8 byte sequence (1-4 bytes). Returns False if we ran off the
+  end mid-escape or hit the closing quote at P. The condenser uses
+  this to enumerate safe split positions so the head/tail join
+  never falls INSIDE an escape (which would emit invalid JSON like
+  "head\..." or "...\uXX...") and never inside a multi-byte UTF-8
+  rune (which would emit a half-formed character).
+
+  AdvanceCodePoint is forgiving: a malformed UTF-8 lead byte
+  advances by 1 instead of failing, so the worst case is a
+  conservative split rather than a refusal to condense. }
+var
+  C: Char;
+  B: Byte;
+begin
+  Result := False;
+  if (P < 1) or (P > Length(S)) then Exit;
+  C := S[P];
+  if C = '"' then Exit;     { closing quote -- string body done }
+  if C = '\' then
+  begin
+    if P + 1 > Length(S) then Exit;
+    if S[P + 1] = 'u' then
+    begin
+      if P + 5 > Length(S) then Exit;
+      Inc(P, 6);
+    end
+    else
+      Inc(P, 2);
+    Result := True;
+    Exit;
+  end;
+  B := Ord(C);
+  if (B and $80) = 0 then
+    Inc(P)
+  else if (B and $E0) = $C0 then
+  begin
+    if P + 1 > Length(S) then Exit;
+    Inc(P, 2);
+  end
+  else if (B and $F0) = $E0 then
+  begin
+    if P + 2 > Length(S) then Exit;
+    Inc(P, 3);
+  end
+  else if (B and $F8) = $F0 then
+  begin
+    if P + 3 > Length(S) then Exit;
+    Inc(P, 4);
+  end
+  else
+    Inc(P);                 { malformed lead -- consume one byte }
+  Result := True;
+end;
+
 procedure EmitCondensedString(SB: TStringBuilder; const Raw: string;
                                MaxLen: Integer);
-{ Raw includes the surrounding double quotes. When Raw's length minus
-  the two quotes exceeds MaxLen, keep the first ~2/3 of MaxLen, the
-  last ~1/3, and join with a synthetic "..." segment INSIDE the
-  quotes so the result is still valid JSON. Splitting 2:1 keeps
-  paths / URLs / error prefixes intact at the front (the head is
-  usually where the operator's grep starts) while preserving the
-  tail's filename / status code. }
+{ Raw includes the surrounding double quotes. When the inner length
+  exceeds MaxLen, keep a HEAD prefix + "..." + a TAIL suffix inside
+  the quotes so the result is still valid JSON. The split positions
+  are picked from a precomputed list of SAFE code-point boundaries
+  (see AdvanceCodePoint) so the join never lands inside a JSON
+  escape sequence or a UTF-8 multi-byte rune -- Codex P2 on PR #223:
+  the previous Copy(Raw, 2, HeadLen) cut blindly at arbitrary byte
+  positions and could emit "head\..." or "...\uXX...", which is not
+  parseable JSON.
+
+  Boundary distribution: ~2/3 of MaxLen budget goes to head, ~1/3 to
+  tail. Paths / URLs / error prefixes stay grep-recognisable at the
+  front; filenames / status codes / extension fragments survive at
+  the tail. When no safe split is possible within budget (a giant
+  string of one continuous escape or multi-byte rune chain), we
+  fall back to emitting the original verbatim -- the caller's
+  outer "did we shrink it?" check then keeps the original. }
 var
-  InnerLen, HeadLen, TailLen: Integer;
-  Head, Tail: string;
+  InnerLen, HeadTarget, TailTarget: Integer;
+  Boundaries: array of Integer;
+  BCap, BCount, P, i: Integer;
+  HeadEnd, TailStart: Integer;
 begin
   InnerLen := Length(Raw) - 2;
   if InnerLen <= MaxLen then
@@ -193,19 +262,74 @@ begin
     SB.Append(Raw);
     Exit;
   end;
-  HeadLen := (MaxLen * 2) div 3;
-  TailLen := MaxLen - HeadLen;
-  if HeadLen < 8 then HeadLen := 8;
-  if TailLen < 8 then TailLen := 8;
-  { Copy positions: Raw[1] is the opening quote; the inner content
-    runs from index 2 to Length(Raw) - 1; Raw[Length(Raw)] is the
-    closing quote. }
-  Head := Copy(Raw, 2, HeadLen);
-  Tail := Copy(Raw, Length(Raw) - TailLen, TailLen);
+
+  HeadTarget := (MaxLen * 2) div 3;
+  TailTarget := MaxLen - HeadTarget;
+  if HeadTarget < 8 then HeadTarget := 8;
+  if TailTarget < 8 then TailTarget := 8;
+
+  { Enumerate safe code-point start positions within the body.
+    Boundaries[k] = the 1-based index in Raw where code point k
+    begins. Boundaries[BCount] (the sentinel) is the position of the
+    closing quote, so any byte slice Boundaries[i]..Boundaries[j]-1
+    lies on safe boundaries on both ends. }
+  BCap := InnerLen + 2;
+  SetLength(Boundaries, BCap);
+  BCount := 0;
+  P := 2;
+  while P < Length(Raw) do
+  begin
+    Boundaries[BCount] := P;
+    Inc(BCount);
+    if BCount >= BCap then Break;
+    if not AdvanceCodePoint(Raw, P) then Break;
+  end;
+  if BCount >= BCap then
+  begin
+    { Defensive: bail to verbatim rather than risk an out-of-range
+      sentinel write. The outer inflation check still applies. }
+    SB.Append(Raw);
+    Exit;
+  end;
+  Boundaries[BCount] := Length(Raw);  { = closing-quote position }
+
+  { HeadEnd: largest boundary index whose byte-offset-from-body-start
+    fits in HeadTarget. }
+  HeadEnd := 0;
+  for i := 0 to BCount do
+  begin
+    if Boundaries[i] - 2 <= HeadTarget then
+      HeadEnd := i
+    else
+      Break;
+  end;
+
+  { TailStart: smallest boundary index whose bytes-to-end fit in
+    TailTarget. Iterate forward and stop at the first hit. }
+  TailStart := BCount;
+  for i := 0 to BCount do
+    if (Length(Raw) - Boundaries[i]) <= TailTarget then
+    begin
+      TailStart := i;
+      Break;
+    end;
+
+  { If head and tail would overlap or touch, no safe split within
+    budget -- emit verbatim. The condenser's outer length-check then
+    surfaces the original to the caller. }
+  if TailStart <= HeadEnd then
+  begin
+    SB.Append(Raw);
+    Exit;
+  end;
+
   SB.Append('"');
-  SB.Append(Head);
+  if Boundaries[HeadEnd] > 2 then
+    SB.Append(Copy(Raw, 2, Boundaries[HeadEnd] - 2));
   SB.Append('...');
-  SB.Append(Tail);
+  if Boundaries[TailStart] < Length(Raw) then
+    SB.Append(Copy(Raw, Boundaries[TailStart],
+                    Length(Raw) - Boundaries[TailStart]));
   SB.Append('"');
 end;
 

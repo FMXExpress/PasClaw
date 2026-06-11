@@ -527,7 +527,18 @@ var
     BeginTurn;
     if not RunToolLoop(GCfg, Hist, GLoop) then Exit;
 
+    { RunToolLoop returns FinalMessages BEFORE the final non-tool
+      assistant text -- the regular CLI / TUI paths explicitly append
+      Loop.Content afterwards. Mirror that here, otherwise the
+      assistant's actual answer gets dropped from history and the
+      next judge-driven turn (and the persisted session) only see
+      the tool transcript. Codex P1 on PR #223. }
     Hist := GLoop.FinalMessages;
+    if Trim(GLoop.Content) <> '' then
+    begin
+      SetLength(Hist, Length(Hist) + 1);
+      Hist[High(Hist)] := MakeMessage(mrAssistant, GLoop.Content);
+    end;
     Reply := GLoop.Content;
     if Trim(Reply) = '' then Reply := '(no reply)';
     if GLoop.FinalSystemPrompt <> '' then
