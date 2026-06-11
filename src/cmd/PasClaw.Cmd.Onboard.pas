@@ -395,6 +395,48 @@ begin
   end;
 end;
 
+procedure PromptCheckpoints(Cfg: TConfig);
+{ Opt-in toggle for per-edit checkpoints + `/undo`. Off by default
+  because it can be heavy -- a turn that fs_writes a 5 MB generated
+  file copies the whole 5 MB into the per-turn snapshot dir. Bounded
+  by checkpoints_keep_last (default 32) but the upper bound is still
+  controlled by the operator's intent, so we ask. }
+var
+  Choice: string;
+begin
+  PrintLn;
+  PrintLn(Ansi.Bold + 'Checkpoints + /undo' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'Auto-snapshot files BEFORE fs_write / fs_edit_hashline mutates them. ' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'The TUI ' + Ansi.Reset + Ansi.Bold + '/undo' + Ansi.Reset +
+    Ansi.Dim + ' [N] command rewinds N turns by restoring those captures.' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'Storage: workspace/checkpoints/<session>/turn-NNNN/ (the last 32 turns).' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    '(Off by default -- can be heavy when the model writes large files. ' +
+    'No rollback story without this.)' +
+    Ansi.Reset);
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Enable checkpoints [y/N]: ')));
+  if (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Cfg.CheckpointsEnabled := True;
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
+            ' checkpoints enabled (last 32 turns kept per session)');
+  end
+  else
+  begin
+    Cfg.CheckpointsEnabled := False;
+    PrintLn('  ' + Ansi.Dim +
+            '(skipped -- flip checkpoints_enabled in config.json to enable later)' +
+            Ansi.Reset);
+  end;
+end;
+
 procedure PromptStatsCollection(Cfg: TConfig);
 { Opt-in toggle for persisting per-session usage stats (tokens,
   turns, tool calls, truncation savings) into the session JSON so
@@ -906,6 +948,7 @@ begin
     PromptVectorSearch(Cfg);
     PromptKnowledgebase(Cfg);
     PromptStatsCollection(Cfg);
+    PromptCheckpoints(Cfg);
     PromptAutoRouter(Cfg);
 
     SaveConfig(Cfg);

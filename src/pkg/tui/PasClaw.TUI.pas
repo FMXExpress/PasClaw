@@ -162,6 +162,8 @@ type
     procedure RefreshSessions;
     procedure SelectSession(Id: string);
     procedure StartNewSession;
+    procedure RewireCheckpoints;
+    procedure HandleUndoCommand(const Args: string);
     procedure DeleteSelectedSession;
     procedure PersistSession;
     procedure Flash(const Msg: string);
@@ -187,6 +189,13 @@ type
        and Codex P2 on PR #118. *)
     PromptCacheEnabled: Boolean;
     PromptCacheTTL:     string;
+    { Per-edit checkpoints. Cmd_TUI_Run forwards Cfg.CheckpointsEnabled
+      and Cfg.CheckpointsKeepLast here so onboarding's opt-in survives
+      into the live TUI loop. When the operator switches sessions the
+      TUI rewires the checkpoints module to the new session's subdir
+      so /undo stays bound to whatever's on screen. }
+    CheckpointsEnabled:    Boolean;
+    CheckpointsKeepLast:   Integer;
     (* When True, the assistant's reply is run through
        PasClaw.Markdown.Render before being printed -- headings and
        fenced code blocks get ANSI styling, raw stars and hashes
@@ -245,6 +254,9 @@ uses
   PasClaw.Tools.Shell.Filters,     { ShellFilterCalls / BytesSaved
                                      -- also surfaced in /stats }
   PasClaw.Agent.Steering,
+  PasClaw.Checkpoints,             { InitCheckpoints / BeginTurn / UndoTurns
+                                     -- /undo slash command + per-turn
+                                     snapshot bookkeeping. }
   PasClaw.Markdown.Render,
   PasClaw.Providers.Catalog,       { TProviderSpec -- for TModelRefreshThread }
   PasClaw.Config
@@ -1008,6 +1020,57 @@ begin
   FInputBuf := '';
   Flash('session: ' + FSession.Meta.Id);
   RefreshSessions;
+  RewireCheckpoints;
+end;
+
+procedure TTUI.RewireCheckpoints;
+{ Point the checkpoints module at the active session. No-op when
+  the operator hasn't opted in (CheckpointsEnabled=False on the
+  public TUI field, set by Cmd.TUI from Cfg.CheckpointsEnabled).
+  Called whenever FSession changes (new / load / switch). The
+  per-turn BeginTurn call inside StartTurn does the actual edge-
+  triggering; this just sets the session subdir. }
+var
+  CC: TCheckpointConfig;
+begin
+  if FSession = nil then Exit;
+  CC.Enabled   := CheckpointsEnabled;
+  CC.SessionId := FSession.Meta.Id;
+  CC.Root      := JoinPath(GetHome, 'workspace/checkpoints');
+  CC.KeepLast  := CheckpointsKeepLast;
+  InitCheckpoints(CC);
+end;
+
+procedure TTUI.HandleUndoCommand(const Args: string);
+{ `/undo` -> rewind 1 turn; `/undo N` -> rewind N turns. Restores
+  file contents that were captured at the start of each rewound turn.
+  Files the model CREATED inside the rewound window are left in
+  place (v1 conservative semantic; see PasClaw.Checkpoints). }
+var
+  N: Integer;
+  Restored: TRestoredFileArray;
+  Err: string;
+  Trimmed: string;
+begin
+  Trimmed := Trim(Args);
+  if Trimmed = '' then
+    N := 1
+  else
+    N := StrToIntDef(Trimmed, -1);
+  if N <= 0 then
+  begin
+    Flash('/undo: argument must be a positive turn count');
+    Exit;
+  end;
+  if not UndoTurns(N, Restored, Err) then
+  begin
+    Flash('/undo: ' + Err);
+    Exit;
+  end;
+  if Length(Restored) = 0 then
+    Flash(Format('/undo %d: no files to restore', [N]))
+  else
+    Flash(Format('/undo %d: restored %d file(s)', [N, Length(Restored)]));
 end;
 
 procedure TTUI.StartNewSession;
@@ -1041,6 +1104,7 @@ begin
     FSession := TSession.Create('');
     FInputBuf := '';
     FChatScroll := 0;
+    RewireCheckpoints;
   end;
   RefreshSessions;
   FConfirmDelete := False;
@@ -1053,6 +1117,14 @@ var
 begin
   if (FProvider = nil) or (Trim(UserText) = '') then Exit;
   if FLoopThread <> nil then Exit;   { already in flight }
+
+  { Open a fresh checkpoints turn so any fs_write / fs_edit_hashline
+    this loop fires lands in turn-NNNN/ under this session. No-op
+    when checkpoints aren't enabled. We use Stats.Turns+1 because
+    Stats.Turns reflects COMPLETED turns; the one we're about to
+    run is the next ordinal. }
+  if FSession <> nil then
+    BeginTurn(FSession.Meta.Stats.Turns + 1);
 
   { Append the user's turn to history BEFORE kicking off the loop so
     it shows up in the chat pane immediately (next redraw). }
@@ -1285,7 +1357,7 @@ begin
       end;
     end
     else if Text = '/help' then
-      Flash('keys: Tab swap pane | N new | D del | Q quit | /theme | /model | /stats')
+      Flash('keys: Tab swap | N new | D del | Q quit | /theme | /model | /stats | /undo [N]')
     else if (Text = '/tools') and (FRegistry <> nil) then
       Flash(Format('registered tools: %d', [FRegistry.Count]))
     else if Text = '/theme' then
@@ -1294,6 +1366,8 @@ begin
       OpenModelMenu
     else if Text = '/stats' then
       OpenStatsOverlay
+    else if (Text = '/undo') or (Copy(Text, 1, 6) = '/undo ') then
+      HandleUndoCommand(Copy(Text, 7, MaxInt))
     else
       Flash('unknown: ' + Text);
     FInputBuf := '';
@@ -2111,6 +2185,7 @@ begin
   end;
   FSession := TSession.Create(SessionId);
   RefreshSessions;
+  RewireCheckpoints;
 
   Flash('session: ' + FSession.Meta.Id);
 
@@ -2315,6 +2390,11 @@ begin
   if Cmd = '/clear' then begin Print(#27'[2J' + #27'[H'); DrawHeader; Exit; end;
   if Cmd = '/tools' then begin ShowTools; Exit; end;
   if Cmd = '/help'  then begin ShowHelp;  Exit; end;
+  if (Cmd = '/undo') or (Copy(Cmd, 1, 6) = '/undo ') then
+  begin
+    HandleUndoCommand(Copy(Cmd, 7, MaxInt));
+    Exit;
+  end;
   if Cmd = '/model' then begin ShowCachedModelsFPC(FModel, ''); Exit; end;
   if (Length(Cmd) > 7) and (Copy(Cmd, 1, 7) = '/model ') then
   begin
@@ -2340,6 +2420,16 @@ begin
             '(offline - no provider configured)');
     Exit;
   end;
+
+  { FPC legacy REPL: same checkpoints turn boundary as the positioned
+    TUI's StartTurn. Use the session's persisted turn counter when
+    one's attached; otherwise fall back to the checkpoints module's
+    own running counter so `/undo` still works within the running
+    process. }
+  if FSession <> nil then
+    BeginTurn(FSession.Meta.Stats.Turns + 1)
+  else
+    BeginTurn(CurrentTurnNumber + 1);
 
   SetLength(Msgs, 1);
   Msgs[0] := MakeMessage(mrUser, Text);

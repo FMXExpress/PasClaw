@@ -42,7 +42,8 @@ uses
   PasClaw.JSON,
   PasClaw.Utils,
   PasClaw.Hashline,
-  PasClaw.Tools.Sandbox;
+  PasClaw.Tools.Sandbox,
+  PasClaw.Checkpoints;
 
 var
   GHashlineEnabled: Boolean = True;
@@ -201,6 +202,12 @@ begin
     Lines.Free;
   end;
   try
+    { Checkpoint hook: snapshot the file's current bytes BEFORE we
+      overwrite. No-op when checkpoints are disabled, when the file
+      didn't exist (the model is creating it; /undo leaves new files
+      in place), or when we already snapshotted this path earlier in
+      the same turn. See PasClaw.Checkpoints for the storage layout. }
+    SnapshotBeforeWrite(Path);
     WriteFileText(Path, Content);
     if Stripped then
       Result := Format('wrote %d bytes to %s (stripped hashline prefixes)', [Length(Content), Path])
@@ -308,6 +315,10 @@ begin
   try
     for i := 0 to High(Plans) do
     begin
+      { Same checkpoint hook as fs_write. Plans[i].Path has already
+        passed the sandbox + stale-hash gates above, so the file
+        definitely exists and we want its pre-edit bytes. }
+      SnapshotBeforeWrite(Plans[i].Path);
       WriteFileText(Plans[i].Path, Plans[i].NewBody);
       Sb.Append(Format('%s: wrote %d bytes (%d edits)',
                        [Plans[i].Path, Length(Plans[i].NewBody), Plans[i].EditCount]));

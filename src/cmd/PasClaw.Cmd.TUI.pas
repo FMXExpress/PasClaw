@@ -154,6 +154,8 @@ begin
     TUIInst.SessionId          := A.Session;
     TUIInst.ThemeName          := A.Theme;
     TUIInst.RenderMarkdownEnabled := Cfg.RenderMarkdown;
+    TUIInst.CheckpointsEnabled    := Cfg.CheckpointsEnabled;
+    TUIInst.CheckpointsKeepLast   := Cfg.CheckpointsKeepLast;
     TUIInst.BgCoordinator      := BgCoord;
     try
       TUIInst.Run;
