@@ -34,7 +34,16 @@ uses
 {$IFDEF MSWINDOWS}
   , {$IFDEF FPC}Windows{$ELSE}Winapi.Windows{$ENDIF}
 {$ELSE}
-  {$IFDEF FPC}, dynlibs{$ENDIF}
+  {$IFDEF FPC}
+  , dynlibs
+  {$ELSE}
+  { Delphi non-Windows (Linux64) -- the FPC `dynlibs` unit doesn't
+    exist here, so we get dlopen / dlsym out of Posix.Dlfcn instead.
+    Without this import the original {$ELSE} branch tried to call
+    FPC's LoadLibrary(string) and GetProcedureAddress, which dcc64
+    on Linux can't resolve. }
+  , Posix.Dlfcn
+  {$ENDIF}
 {$ENDIF}
   ;
 
@@ -123,7 +132,16 @@ begin
 {$IFDEF MSWINDOWS}
   Result := LoadLibrary(PChar(AName));
 {$ELSE}
+  {$IFDEF FPC}
   Result := LoadLibrary(AName);
+  {$ELSE}
+  { Delphi Linux: dlopen returns a Pointer; cast to TOrdHandle (which
+    is NativeUInt on non-Windows Delphi). RTLD_NOW resolves every
+    symbol up front so a missing entrypoint surfaces here, not on
+    the first call -- mirrors what FPC's LoadLibrary does internally
+    on POSIX. }
+  Result := TOrdHandle(dlopen(PAnsiChar(AnsiString(AName)), RTLD_NOW));
+  {$ENDIF}
 {$ENDIF}
 end;
 
@@ -132,7 +150,13 @@ begin
 {$IFDEF MSWINDOWS}
   Result := GetProcAddress(h, PAnsiChar(AnsiString(AName)));
 {$ELSE}
+  {$IFDEF FPC}
   Result := GetProcedureAddress(h, AName);
+  {$ELSE}
+  { Delphi Linux equivalent of FPC's GetProcedureAddress -- dlsym
+    against the handle dlopen handed back. }
+  Result := dlsym(Pointer(h), PAnsiChar(AnsiString(AName)));
+  {$ENDIF}
 {$ENDIF}
 end;
 
