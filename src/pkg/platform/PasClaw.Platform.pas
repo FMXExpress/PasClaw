@@ -134,7 +134,9 @@ uses
     Winapi.Windows
   {$ELSE}
     Posix.Base, Posix.Unistd, Posix.Stdlib, Posix.SysWait,
-    Posix.Signal, Posix.SysTypes, Posix.SysSelect
+    Posix.Signal, Posix.SysTypes, Posix.SysSelect,
+    Posix.SysTime                  { timeval / Ptimeval for select() --
+                                     NOT re-exported by Posix.SysSelect }
   {$ENDIF}{$ENDIF};
 
 {$IFDEF FPC}
@@ -716,7 +718,10 @@ end;
 function TStdioProcess.WriteBytes(const Buf; Count: Integer): Integer;
 begin
   if FStdinFd < 0 then Exit(0);
-  Result := __write(FStdinFd, Buf, Count);
+  { @Buf: Delphi's Posix.Unistd declares __write(Handle, Buf: Pointer,
+    Count) -- an untyped const param doesn't implicitly convert, so
+    take its address explicitly. }
+  Result := __write(FStdinFd, @Buf, Count);
 end;
 
 function TStdioProcess.WriteLineUTF8(const S: string): Boolean;
@@ -730,7 +735,11 @@ end;
 function TStdioProcess.ReadAvailable(var Buf; BufSize: Integer): Integer;
 var
   Status, R, Waited: Integer;
-  TimeoutFd: TFDSet;
+  { fd_set, not FPC's TFDSet -- Delphi's Posix.SysSelect keeps the
+    C type name. Its FD_* helpers are __-prefixed (__FD_SET below)
+    because the bare name FD_SET would collide case-insensitively
+    with the fd_set type itself. }
+  TimeoutFd: fd_set;
   Tv: timeval;
 begin
   Result := 0;
@@ -739,13 +748,14 @@ begin
   while True do
   begin
     FillChar(TimeoutFd, SizeOf(TimeoutFd), 0);
-    FD_SET(FStdoutFd, TimeoutFd);
+    __FD_SET(FStdoutFd, TimeoutFd);
     Tv.tv_sec  := 0;
     Tv.tv_usec := 10 * 1000;   { 10 ms }
     Status := select(FStdoutFd + 1, @TimeoutFd, nil, nil, @Tv);
     if Status > 0 then
     begin
-      R := __read(FStdoutFd, Buf, BufSize);
+      { @Buf -- same Pointer-param contract as __write above. }
+      R := __read(FStdoutFd, @Buf, BufSize);
       if R > 0 then Exit(R);
       Exit;
     end;
@@ -760,7 +770,9 @@ var
   Status, R: Integer;
 begin
   if (FPid = 0) or not FStarted then Exit(False);
-  R := waitpid(FPid, Status, WNOHANG);
+  { @Status: Delphi's Posix.SysWait waitpid takes stat_loc: PInteger,
+    not a var param like FPC's fpWaitPid. }
+  R := waitpid(FPid, @Status, WNOHANG);
   if R = 0 then Exit(True);   { still running }
   if R = FPid then
   begin
@@ -809,7 +821,7 @@ begin
       end
       else if not P.Running then Break;
     end;
-    waitpid(P.FPid, Status, 0);
+    waitpid(P.FPid, @Status, 0);   { PInteger stat_loc -- see Running }
     if WIFEXITED(Status) then Result := WEXITSTATUS(Status) else Result := -1;
     if Acc.Size > 0 then
     begin
