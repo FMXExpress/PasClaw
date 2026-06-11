@@ -189,6 +189,7 @@ type
     procedure ShowHelp;
     procedure ShowTools;
     procedure HandleSlashCommand(const Cmd: string);
+    procedure HandleUndoCommand(const Args: string);
     procedure HandleUserInput(const Text: string);
     {$ENDIF}
   public
@@ -2444,6 +2445,38 @@ begin
     Exit;
   end;
   PrintLn(Ansi.Yellow + 'unknown command: ' + Cmd + Ansi.Reset);
+end;
+
+procedure TTUI.HandleUndoCommand(const Args: string);
+{ FPC line-based variant. The Delphi positioned TUI's HandleUndoCommand
+  routes operator-visible messages through Flash (a one-line transient
+  status slot at the bottom of the screen). The FPC REPL has no such
+  slot, so we PrintLn directly. Semantics match: parse N, call
+  UndoTurns, report what got restored. }
+var
+  N: Integer;
+  Restored: TRestoredFileArray;
+  Err, Trimmed: string;
+begin
+  Trimmed := Trim(Args);
+  if Trimmed = '' then
+    N := 1
+  else
+    N := StrToIntDef(Trimmed, -1);
+  if N <= 0 then
+  begin
+    PrintLn(Ansi.Yellow + '/undo: argument must be a positive turn count' + Ansi.Reset);
+    Exit;
+  end;
+  if not UndoTurns(N, Restored, Err) then
+  begin
+    PrintLn(Ansi.Yellow + '/undo: ' + Err + Ansi.Reset);
+    Exit;
+  end;
+  if Length(Restored) = 0 then
+    PrintLn(Ansi.Dim + Format('/undo %d: no files to restore', [N]) + Ansi.Reset)
+  else
+    PrintLn(Ansi.Green + Format('/undo %d: restored %d file(s)', [N, Length(Restored)]) + Ansi.Reset);
 end;
 
 procedure TTUI.HandleUserInput(const Text: string);

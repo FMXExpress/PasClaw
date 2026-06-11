@@ -1083,10 +1083,12 @@ begin
   {$IFDEF MSWINDOWS}
   Result := GetProcAddress(AHandle, PAnsiChar(AnsiString(AName)));
   {$ELSE}
-  { Delphi Linux: dlsym against the dlopen handle. Two-step cast --
-    Delphi rejects direct Pointer(UInt64), so go via NativeUInt
-    (the underlying integer type of TOrtLibHandle in this branch). }
-  Result := dlsym(Pointer(NativeUInt(AHandle)), PAnsiChar(AnsiString(AName)));
+  { Delphi Linux: dlsym against the dlopen handle. Reinterpret via
+    PPointer(@AHandle)^ -- dcc64 still rejects Pointer(NativeUInt(AHandle))
+    because NativeUInt is a UInt64 alias and Delphi blocks UInt64 ->
+    Pointer regardless of size match. PPointer overlays the storage
+    bits without an integer cast. }
+  Result := dlsym(PPointer(@AHandle)^, PAnsiChar(AnsiString(AName)));
   {$ENDIF}
 {$ENDIF}
 end;

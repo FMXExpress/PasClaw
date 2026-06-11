@@ -414,6 +414,130 @@ begin
   end;
 end;
 
+type
+  PMessageArray = ^TMessageArray;
+  PStringRef    = ^string;
+
+  { Bundles the per-/goal-call state that GoalRunner's of-object
+    callbacks need into a real method-of-object form. The
+    TGoalTurnFn / TGoalProgressFn callbacks in PasClaw.Agent.Goals
+    are `of object`; Delphi (dcc64) rejects assigning a nested
+    procedure to an of-object type (FPC tolerates it via the
+    `is nested` calling convention, but Delphi has no equivalent),
+    so the /goal handler bundles the captures into this helper and
+    hands TurnFn / Progress as proper method pointers. The pMsgs /
+    pSysPromptOverride fields point back at RunInteractive's local
+    vars so the runner can mutate them in place, matching what the
+    original nested-procedure form did via lexical capture. }
+  TGoalCmdCallbacks = class
+    Cfg:                TConfig;
+    A:                  TAgentArgs;
+    Provider:           ILLMProvider;
+    Reg:                TToolRegistry;
+    Model:              string;
+    Handlers:           TLoopHandlers;
+    Session:            TSession;
+    BgCoord:            TBackgroundSpawnCoordinator;
+    pMsgs:              PMessageArray;
+    pSysPromptOverride: PStringRef;
+    procedure PersistSessionCb;
+    function  TurnFn(const UserMsg: string;
+                      var Hist: TMessageArray;
+                      out Reply: string): Boolean;
+    procedure Progress(IterNo, MaxIter: Integer; const Reply: string);
+  end;
+
+procedure TGoalCmdCallbacks.PersistSessionCb;
+var j: Integer;
+begin
+  if Session = nil then Exit;
+  SetLength(Session.Messages, Length(pMsgs^));
+  for j := 0 to High(pMsgs^) do Session.Messages[j] := pMsgs^[j];
+  Session.Meta.SystemPromptOverride := pSysPromptOverride^;
+  Session.Meta.Model := Model;
+  if Provider <> nil then Session.Meta.Provider := Provider.GetName;
+  Session.AutoTitle;
+  Session.Touch;
+  Session.Save;
+end;
+
+function TGoalCmdCallbacks.TurnFn(const UserMsg: string;
+                                   var Hist: TMessageArray;
+                                   out Reply: string): Boolean;
+{ TGoalTurnFn implementation -- one agent turn during the Ralph loop.
+  Mirrors the relevant subset of RunInteractive's main `while Inputs
+  do` body: append user message, build the same LoopCfg, run BeginTurn
+  (checkpoints) then RunToolLoop, swap Hist for the loop's compaction-
+  aware history. Compaction summary survives across iterations because
+  pSysPromptOverride^ is the enclosing RunInteractive's var.
+
+  Deliberately skips a couple of bells the main loop has on each user-
+  typed turn (auto-router, working-state prefix, /think one-shot):
+  those depend on UI state that doesn't apply to the judge-driven
+  Continue stream. Operators who want them per-turn on a goal run
+  should drive each step interactively. }
+var
+  GLoop: TToolLoopResult;
+  GCfg:  TToolLoopConfig;
+  k:     Integer;
+begin
+  Result := False;
+  Reply := '';
+  SetLength(Hist, Length(Hist) + 1);
+  Hist[High(Hist)] := MakeMessage(mrUser, UserMsg);
+
+  GCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers);
+  if pSysPromptOverride^ <> '' then
+    GCfg.Options.SystemPrompt := pSysPromptOverride^;
+  if Session <> nil then
+  begin
+    GCfg.Options.CacheKey := Session.Meta.Id;
+    GCfg.SteeringKey      := Session.Meta.Id;
+    if BgCoord <> nil then
+    begin
+      BgCoord.SetKey(Session.Meta.Id);
+      GCfg.BackgroundDrainKey := Session.Meta.Id;
+    end;
+  end;
+
+  BeginTurn;
+  if not RunToolLoop(GCfg, Hist, GLoop) then Exit;
+
+  { RunToolLoop returns FinalMessages BEFORE the final non-tool
+    assistant text -- the regular CLI / TUI paths explicitly append
+    Loop.Content afterwards. Mirror that here, otherwise the
+    assistant's actual answer gets dropped from history and the next
+    judge-driven turn (and the persisted session) only see the tool
+    transcript. Codex P1 on PR #223. }
+  Hist := GLoop.FinalMessages;
+  if Trim(GLoop.Content) <> '' then
+  begin
+    SetLength(Hist, Length(Hist) + 1);
+    Hist[High(Hist)] := MakeMessage(mrAssistant, GLoop.Content);
+  end;
+  Reply := GLoop.Content;
+  if Trim(Reply) = '' then Reply := '(no reply)';
+  if GLoop.FinalSystemPrompt <> '' then
+    pSysPromptOverride^ := GLoop.FinalSystemPrompt;
+
+  { Mirror Msgs from the local var the main loop reads on subsequent
+    iterations. The goal runner walks Hist; copy it back so a follow-
+    up user turn (after the goal loop ends) picks up the same compacted
+    state. pMsgs^ is the enclosing RunInteractive's array; rebuilding
+    it keeps /undo, /compact, /status all consistent. }
+  SetLength(pMsgs^, Length(Hist));
+  for k := 0 to High(Hist) do pMsgs^[k] := Hist[k];
+  PersistSessionCb;
+  Result := True;
+end;
+
+procedure TGoalCmdCallbacks.Progress(IterNo, MaxIter: Integer; const Reply: string);
+begin
+  PrintLn(Ansi.Dim + Format('— goal iter %d/%d —', [IterNo, MaxIter]) + Ansi.Reset);
+  PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ': ' +
+          MaybeRender(Cfg, Reply));
+end;
+
 procedure RunInteractive(const Cfg: TConfig; const A: TAgentArgs);
 var
   Line: string;
@@ -484,93 +608,20 @@ var
     InitCheckpoints(CC);
   end;
 
-  function GoalTurnRunner(const UserMsg: string;
-                           var Hist: TMessageArray;
-                           out Reply: string): Boolean;
-  { TGoalTurnFn implementation -- runs ONE agent turn during the
-    Ralph loop. Mirrors the relevant subset of the main `while
-    Inputs do` body just below: append user message, build the
-    same LoopCfg the main loop uses, run BeginTurn (checkpoints)
-    then RunToolLoop, swap Hist for the loop's compaction-aware
-    history. Compaction summary survives across iterations because
-    SystemPromptOverride is the enclosing var.
-
-    Deliberately skips a couple of bells the main loop has on each
-    user-typed turn (auto-router, working-state prefix, /think one-
-    shot): those depend on UI state that doesn't apply to the
-    judge-driven Continue stream. Operators who want them per-turn
-    on a goal run should drive each step interactively. }
-  var
-    GLoop: TToolLoopResult;
-    GCfg: TToolLoopConfig;
-    k: Integer;
-  begin
-    Result := False;
-    Reply := '';
-    SetLength(Hist, Length(Hist) + 1);
-    Hist[High(Hist)] := MakeMessage(mrUser, UserMsg);
-
-    GCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers);
-    if SystemPromptOverride <> '' then
-      GCfg.Options.SystemPrompt := SystemPromptOverride;
-    if Session <> nil then
-    begin
-      GCfg.Options.CacheKey := Session.Meta.Id;
-      GCfg.SteeringKey      := Session.Meta.Id;
-      if BgCoord <> nil then
-      begin
-        BgCoord.SetKey(Session.Meta.Id);
-        GCfg.BackgroundDrainKey := Session.Meta.Id;
-      end;
-    end;
-
-    BeginTurn;
-    if not RunToolLoop(GCfg, Hist, GLoop) then Exit;
-
-    { RunToolLoop returns FinalMessages BEFORE the final non-tool
-      assistant text -- the regular CLI / TUI paths explicitly append
-      Loop.Content afterwards. Mirror that here, otherwise the
-      assistant's actual answer gets dropped from history and the
-      next judge-driven turn (and the persisted session) only see
-      the tool transcript. Codex P1 on PR #223. }
-    Hist := GLoop.FinalMessages;
-    if Trim(GLoop.Content) <> '' then
-    begin
-      SetLength(Hist, Length(Hist) + 1);
-      Hist[High(Hist)] := MakeMessage(mrAssistant, GLoop.Content);
-    end;
-    Reply := GLoop.Content;
-    if Trim(Reply) = '' then Reply := '(no reply)';
-    if GLoop.FinalSystemPrompt <> '' then
-      SystemPromptOverride := GLoop.FinalSystemPrompt;
-
-    { Mirror Msgs from the local var the main loop reads on
-      subsequent iterations. The goal runner walks Hist; we
-      copy it back so a follow-up user turn (after the goal
-      loop ends) picks up the same compacted state. The local
-      Msgs is the enclosing RunInteractive's array; rebuilding
-      it keeps /undo, /compact, /status all consistent. }
-    SetLength(Msgs, Length(Hist));
-    for k := 0 to High(Hist) do Msgs[k] := Hist[k];
-    PersistSession;
-    Result := True;
-  end;
-
-  procedure GoalProgress(IterNo, MaxIter: Integer; const Reply: string);
-  begin
-    PrintLn(Ansi.Dim + Format('— goal iter %d/%d —', [IterNo, MaxIter]) + Ansi.Reset);
-    PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ': ' +
-            MaybeRender(Cfg, Reply));
-  end;
-
   procedure HandleGoalCommand(const Args: string);
   { /goal <objective> or /goal --max N <objective>. Spins up a
-    TGoalRunner that pumps GoalTurnRunner through up to MaxIter
+    TGoalRunner that pumps Callbacks.TurnFn through up to MaxIter
     judge-arbitrated turns. The judge model defaults to the
     primary Model -- the operator can wire a cheaper one via
-    Cfg.AutoRouter.EasyModel in a follow-up. }
+    Cfg.AutoRouter.EasyModel in a follow-up.
+
+    Callbacks wraps the per-turn / per-progress state in a method-
+    of-object form because TGoalTurnFn / TGoalProgressFn are
+    `of object` and dcc64 refuses to assign a nested procedure to
+    an of-object type. See TGoalCmdCallbacks above. }
   var
     Runner: TGoalRunner;
+    Callbacks: TGoalCmdCallbacks;
     Trimmed, Goal: string;
     MaxIter: Integer;
     R: TGoalResult;
@@ -610,9 +661,22 @@ var
     PrintLn(Ansi.Bold + '— goal —' + Ansi.Reset + ' ' + Goal +
             Ansi.Dim + Format('  (budget=%d)', [MaxIter]) + Ansi.Reset);
 
-    Runner := TGoalRunner.Create(Provider, Model, MaxIter, GoalTurnRunner);
+    Callbacks := TGoalCmdCallbacks.Create;
+    Callbacks.Cfg                := Cfg;
+    Callbacks.A                  := A;
+    Callbacks.Provider           := Provider;
+    Callbacks.Reg                := Reg;
+    Callbacks.Model              := Model;
+    Callbacks.Handlers           := Handlers;
+    Callbacks.Session            := Session;
+    Callbacks.BgCoord            := BgCoord;
+    Callbacks.pMsgs              := @Msgs;
+    Callbacks.pSysPromptOverride := @SystemPromptOverride;
+
+    Runner := TGoalRunner.Create(Provider, Model, MaxIter, Callbacks.TurnFn);
     try
-      Runner.OnProgress := GoalProgress;
+     try
+      Runner.OnProgress := Callbacks.Progress;
       HistAlias := nil;
       SetLength(HistAlias, Length(Msgs));
       for k := 0 to High(Msgs) do HistAlias[k] := Msgs[k];
@@ -636,8 +700,11 @@ var
       end;
       if Trim(R.Reason) <> '' then
         PrintLn(Ansi.Dim + '  judge: ' + Trim(R.Reason) + Ansi.Reset);
-    finally
+     finally
       Runner.Free;
+     end;
+    finally
+      Callbacks.Free;
     end;
   end;
 
