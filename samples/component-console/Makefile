@@ -88,6 +88,7 @@ UNIT_DIRS = \
 	$(ROOT)/src/pkg/config \
 	$(ROOT)/src/pkg/json \
 	$(ROOT)/src/pkg/providers \
+	$(ROOT)/src/pkg/stream \
 	$(ROOT)/src/pkg/tokenizer \
 	$(ROOT)/src/pkg/tools \
 	$(ROOT)/src/pkg/mcp \
@@ -98,10 +99,12 @@ UNIT_DIRS = \
 	$(ROOT)/src/pkg/search \
 	$(ROOT)/src/pkg/cron \
 	$(ROOT)/src/pkg/skills \
+	$(ROOT)/src/pkg/checkpoints \
 	$(ROOT)/src/pkg/session \
 	$(ROOT)/src/pkg/identity \
 	$(ROOT)/src/pkg/agent \
 	$(ROOT)/src/pkg/memory \
+	$(ROOT)/src/pkg/kb \
 	$(ROOT)/src/pkg/updater \
 	$(ROOT)/src/pkg/membench \
 	$(ROOT)/src/pkg/tui \
