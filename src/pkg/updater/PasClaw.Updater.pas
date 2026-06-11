@@ -53,24 +53,31 @@ implementation
 uses
   Classes,
   {$IFDEF FPC}{$IFDEF UNIX} BaseUnix, {$ENDIF}{$ENDIF}
+  {$IFNDEF FPC}{$IFDEF MSWINDOWS} Winapi.Windows, {$ENDIF}{$ENDIF}
   {$IFNDEF FPC}{$IFDEF POSIX} Posix.SysStat, Posix.UniStd, Posix.Errno, {$ENDIF}{$ENDIF}
   PasClaw.JSON,
   PasClaw.Logger,
   PasClaw.Providers.HTTP;
 
 function LastOSErrno: Integer;
-{ Cross-compiler errno read for the "rename failed" diagnostic.
-  GetLastOSError is in System.SysUtils on Delphi Windows (returns
-  GetLastError) and on FPC (returns fpgeterrno / errno), but dcc64
-  Linux doesn't expose it as of the version we target -- E2003 on
-  the call site. Read errno directly via Posix.Errno there. }
+(* Cross-compiler errno read for the "rename failed" diagnostic. Skips
+   System.SysUtils.GetLastOSError because dcc64 has refused it on the
+   builds we've hit: on Delphi Linux it isn't declared at all (E2003
+   was the original report -- PR #229), and on dcc64 Windows the
+   declaration's call-through to GetLastError won't resolve unless
+   Winapi.Windows is in scope, so leaning on the SysUtils wrapper
+   would still re-import the Windows API anyway. Going straight to the
+   per-platform primitive is one fewer indirection and one fewer
+   surprise. *)
 begin
-  {$IFNDEF FPC}{$IFDEF POSIX}
-  Result := errno;
+  {$IFDEF FPC}
+  Result := GetLastOSError;
   {$ELSE}
-  Result := GetLastOSError;
-  {$ENDIF}{$ELSE}
-  Result := GetLastOSError;
+  {$IFDEF MSWINDOWS}
+  Result := Integer(GetLastError);
+  {$ELSE}
+  Result := errno;
+  {$ENDIF}
   {$ENDIF}
 end;
 
