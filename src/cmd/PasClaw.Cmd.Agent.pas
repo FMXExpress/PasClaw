@@ -205,10 +205,14 @@ begin
     operator has flipped on Cfg.ToolOutputCap. The tool's only
     useful while truncation is active, so the flag gates both. }
   if EnableOutputCache then RegisterOutputCacheTool(Result);
-  { send_message gates itself: it registers only when config.json
-    declares named channels ("channels": [{name,kind,target}]), so
-    there's no flag to thread through here. The model can only post
-    to operator-declared targets -- see PasClaw.Tools.SendMessage. }
+  (* send_message gates itself: it registers only when config.json
+     declares named channels (a "channels" array of name/kind/target
+     entries), so there's no flag to thread through here. The model
+     can only post to operator-declared targets -- see
+     PasClaw.Tools.SendMessage. Paren-star delimiters because the
+     literal braces of a JSON object example inside curly-brace
+     comments terminate the comment early on dcc64; FPC tolerated
+     it but Delphi closes on the first '}'. *)
   RegisterSendMessageTool(Result);
   Skills := LoadSkillManifests(GetHome);
   RegisterSkills(Result, Skills);
