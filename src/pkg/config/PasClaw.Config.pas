@@ -129,6 +129,20 @@ type
     Enabled: Boolean;
   end;
 
+  (* Named outbound channel for the send_message model tool (and,
+     prospectively, anything else that wants operator-blessed posting
+     targets). The model addresses channels strictly BY NAME -- the
+     kind/target stay in config.json under operator control, so a
+     prompt-injected model can't exfiltrate to an arbitrary webhook
+     URL it made up; it can only post to endpoints the operator
+     pre-declared. Kinds mirror `pasclaw post`: discord | slack |
+     teams | webhook | line | whatsapp. *)
+  TChannelEntry = record
+    Name:   string;   { handle the model uses, e.g. "team-alerts" }
+    Kind:   string;   { discord | slack | teams | webhook | line | whatsapp }
+    Target: string;   { webhook URL / LINE to-id / WhatsApp phone number }
+  end;
+
   (* TSubagentSpec - declaration of a named subagent the parent agent
      can fan out to via the `spawn` tool. Each spec is a focused
      "specialist" -- its own system prompt, an allowlist of tools
@@ -420,6 +434,25 @@ type
        by flipping checkpoints_enabled in config.json. *)
     CheckpointsEnabled:    Boolean;
     CheckpointsKeepLast:   Integer;
+    (* On-by-default: scan tool output / recalled memory / stored
+       skill descriptions for prompt-injection patterns and annotate
+       hits with a warning banner (PasClaw.Promptware). A lowercase
+       substring scan over bytes already in memory -- effectively
+       free. "promptware_enabled": false opts out. *)
+    PromptwareEnabled:     Boolean;
+    (* Off-by-default: when True AND the caller passes a task hint to
+       BuildSystemPrompt, the MEMORY section injects only the
+       sections of MEMORY.md / daily notes that lexically overlap the
+       task, instead of the whole files (PasClaw.Agent.Orient). Whole-
+       file injection stays the default because slicing changes what
+       the model sees -- operators opt in via "orient_task_aware":
+       true once their MEMORY.md outgrows the always-inject budget. *)
+    OrientTaskAware:       Boolean;
+    (* Named outbound channels for the send_message model tool.
+       Empty (default) = tool not registered. Configured via
+       config.json: "channels": [{"name":"team-alerts",
+       "kind":"slack","target":"https://hooks.slack.com/..."}]. *)
+    Channels:   array of TChannelEntry;
     AutoRouter:           TAutoRouterConfig;
     AnthropicServerTools: TAnthropicServerToolsConfig;
     OpenAIServerTools:    TOpenAIServerToolsConfig;
@@ -453,7 +486,9 @@ implementation
 
 uses
   PasClaw.Utils,
-  PasClaw.JSON;
+  PasClaw.JSON,
+  PasClaw.Promptware;   { LoadConfig propagates promptware_enabled --
+                          see the comment inside LoadConfig }
 
 procedure ApplyPromptCacheConfig(var Opts: TChatOptions; const PC: TPromptCacheConfig);
 begin
@@ -493,6 +528,9 @@ begin
   StatsCollectionEnabled := False; { opt-in via onboarding; see TConfig.StatsCollectionEnabled. }
   CheckpointsEnabled     := False; { opt-in via onboarding; see TConfig.CheckpointsEnabled. }
   CheckpointsKeepLast    := 0;     { 0 means default (32) inside PasClaw.Checkpoints. }
+  PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
+  OrientTaskAware        := False; { opt-in; whole-file MEMORY injection is the contract. }
+  SetLength(Channels, 0);          { no channels -> send_message tool not registered. }
   AutoRouter.Enabled        := False;  { opt-in via onboarding; see TAutoRouterConfig. }
   AutoRouter.EasyProvider   := '';
   AutoRouter.EasyModel      := '';
@@ -681,6 +719,13 @@ begin
       Root.PutBool('checkpoints_enabled', True);
     if CheckpointsKeepLast > 0 then
       Root.PutInt('checkpoints_keep_last', CheckpointsKeepLast);
+    { Default True -- emit only the explicit-off so it round-trips
+      (same rule as render_markdown / vector_search_enabled). }
+    if not PromptwareEnabled then
+      Root.PutBool('promptware_enabled', False);
+    { Default False -- emit only the explicit-on. }
+    if OrientTaskAware then
+      Root.PutBool('orient_task_aware', True);
     if AutoRouter.Enabled
        or (AutoRouter.EasyProvider <> '')
        or (AutoRouter.EasyModel <> '')
@@ -766,6 +811,20 @@ begin
       Arr.AddObject(Tmp);
     end;
     Root.PutArray('crons', Arr);
+
+    if Length(Channels) > 0 then
+    begin
+      Arr := TJsonArray.Create;
+      for i := 0 to High(Channels) do
+      begin
+        Tmp := TJsonObject.Create;
+        Tmp.PutStr('name',   Channels[i].Name);
+        Tmp.PutStr('kind',   Channels[i].Kind);
+        Tmp.PutStr('target', Channels[i].Target);
+        Arr.AddObject(Tmp);
+      end;
+      Root.PutArray('channels', Arr);
+    end;
 
     Arr := TJsonArray.Create;
     for i := 0 to High(Skills) do
@@ -902,6 +961,8 @@ begin
     CheckpointsEnabled  := Root.GetBool('checkpoints_enabled', CheckpointsEnabled);
     CheckpointsKeepLast := Integer(Root.GetInt('checkpoints_keep_last',
                                                 CheckpointsKeepLast));
+    PromptwareEnabled   := Root.GetBool('promptware_enabled', PromptwareEnabled);
+    OrientTaskAware     := Root.GetBool('orient_task_aware',  OrientTaskAware);
 
     Obj := Root.ChildObject('auto_router');
     if Obj <> nil then
@@ -1051,6 +1112,33 @@ begin
       Arr.Free;
     end;
 
+    Arr := Root.ChildArray('channels');
+    if Arr <> nil then
+    try
+      SetLength(Channels, Arr.Count);
+      for i := 0 to Arr.Count - 1 do
+      begin
+        Item := Arr.ItemObject(i);
+        if Item = nil then Continue;
+        try
+          Channels[i].Name   := Item.GetStr('name',   '');
+          Channels[i].Kind   := Item.GetStr('kind',   '');
+          (* Accept "url" as an alias -- the Cmd.Post header has long
+             documented channels entries as objects with name/kind/url
+             keys, so configs written against that doc shape keep
+             working. (Paren-star comment: the literal braces in the
+             JSON shape would close a curly-brace comment early.) *)
+          Channels[i].Target := Item.GetStr('target', '');
+          if Channels[i].Target = '' then
+            Channels[i].Target := Item.GetStr('url', '');
+        finally
+          Item.Free;
+        end;
+      end;
+    finally
+      Arr.Free;
+    end;
+
     Arr := Root.ChildArray('subagents');
     if Arr <> nil then
     try
@@ -1110,14 +1198,26 @@ var
 begin
   Result := TConfig.Create;
   Path := GetConfigPath;
-  if not FileExists(Path) then Exit;
-  S := ReadFileText(Path);
   try
-    Result.FromJSON(S);
-  except
-    on E: Exception do
-      { Bad config: keep defaults rather than aborting CLI startup. }
-      ;
+    if FileExists(Path) then
+    begin
+      S := ReadFileText(Path);
+      try
+        Result.FromJSON(S);
+      except
+        on E: Exception do
+          { Bad config: keep defaults rather than aborting CLI startup. }
+          ;
+      end;
+    end;
+  finally
+    { Propagate the promptware off-switch here -- LoadConfig is the
+      one choke every entry point (CLI, TUI, gateway, serve, tool
+      handlers re-loading mid-session) passes through, so the scan
+      module's process-global flag can't drift from config.json.
+      PasClaw.Promptware is a leaf unit (SysUtils + Logger only);
+      keep it that way or this import becomes a cycle. }
+    SetPromptwareEnabled(Result.PromptwareEnabled);
   end;
 end;
 

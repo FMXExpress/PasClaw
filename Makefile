@@ -412,6 +412,21 @@ test-condense-json: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/condense_json_tests.pas -o$(BUILDDIR)/condense_json_tests
 	@$(BUILDDIR)/condense_json_tests
 
+# Promptware defense: injection-pattern scan at the three indirect-
+# input chokepoints (tool output / recalled memory / skill
+# descriptions). Pure string scan, no model.
+test-promptware: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/promptware_tests.pas -o$(BUILDDIR)/promptware_tests
+	@$(BUILDDIR)/promptware_tests
+
+# Task-aware orientation: MEMORY.md section slicing/scoring against a
+# task hint (PasClaw.Agent.Orient). Pure string functions, no model.
+test-orient: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/orient_tests.pas -o$(BUILDDIR)/orient_tests
+	@$(BUILDDIR)/orient_tests
+
 # Goals runner: the auto-continue Ralph loop. Scripted fake provider
 # returns MET / CONTINUE / FAILED verdicts; pins parser + budget +
 # abort + judge-outage semantics. No real model.
@@ -442,4 +457,4 @@ test-kb-index: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/kb_index_tests.pas -o$(BUILDDIR)/kb_index_tests
 	@$(BUILDDIR)/kb_index_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-promptware test-orient

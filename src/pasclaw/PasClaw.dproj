@@ -199,6 +199,7 @@
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.RPC.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Memory.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.SessionSearch.pas"/>
+        <DCCReference Include="..\pkg\tools\PasClaw.Tools.SendMessage.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.WebSearch.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.WebFetch.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.MemoryFetch.pas"/>
@@ -285,6 +286,8 @@
         <DCCReference Include="..\pkg\agent\PasClaw.Agent.Steering.pas"/>
         <DCCReference Include="..\pkg\agent\PasClaw.Agent.AutoRouter.pas"/>
         <DCCReference Include="..\pkg\agent\PasClaw.Agent.Goals.pas"/>
+        <DCCReference Include="..\pkg\agent\PasClaw.Agent.Orient.pas"/>
+        <DCCReference Include="..\pkg\agent\PasClaw.Promptware.pas"/>
 
         <!-- pkg/condense -->
         <DCCReference Include="..\pkg\condense\PasClaw.Condense.JSON.pas"/>

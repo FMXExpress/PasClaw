@@ -36,6 +36,7 @@ uses
   PasClaw.Tools.Memory,
   PasClaw.Tools.KB,
   PasClaw.Tools.SessionSearch,
+  PasClaw.Tools.SendMessage,
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
@@ -204,6 +205,11 @@ begin
     operator has flipped on Cfg.ToolOutputCap. The tool's only
     useful while truncation is active, so the flag gates both. }
   if EnableOutputCache then RegisterOutputCacheTool(Result);
+  { send_message gates itself: it registers only when config.json
+    declares named channels ("channels": [{name,kind,target}]), so
+    there's no flag to thread through here. The model can only post
+    to operator-declared targets -- see PasClaw.Tools.SendMessage. }
+  RegisterSendMessageTool(Result);
   Skills := LoadSkillManifests(GetHome);
   RegisterSkills(Result, Skills);
 end;
@@ -256,7 +262,8 @@ end;
 function BuildLoopConfig(const Cfg: TConfig;
                          Provider: ILLMProvider; Reg: TToolRegistry;
                          const Model: string; const A: TAgentArgs;
-                         Handlers: TLoopHandlers): TToolLoopConfig;
+                         Handlers: TLoopHandlers;
+                         const TaskHint: string = ''): TToolLoopConfig;
 begin
   Result.Provider      := Provider;
   Result.Registry      := Reg;
@@ -270,8 +277,15 @@ begin
     actually call. Reg is nil when --no-tools is set (RunBuilder
     passes nil; see Run* call sites above) -- deriving from the
     registry, not from A.NoTools, also handles the case where future
-    callers nil out Reg for other reasons. }
-  Result.Options.SystemPrompt  := BuildSystemPrompt(Cfg, A.SystemPrompt, Reg <> nil);
+    callers nil out Reg for other reasons.
+
+    TaskHint is the current user message where the call site has it
+    (one-shot Prompt, the interactive Line, the goal turn's UserMsg)
+    -- only consulted when Cfg.OrientTaskAware is on, in which case
+    the MEMORY section slices to task-relevant sections instead of
+    whole files. }
+  Result.Options.SystemPrompt  := BuildSystemPrompt(Cfg, A.SystemPrompt,
+                                                    Reg <> nil, TaskHint);
   Result.Options.ThinkingLevel := A.Thinking;
   if A.MaxTokens > 0 then Result.Options.MaxTokens := A.MaxTokens;
   { Prompt caching threads through TChatOptions so each provider
@@ -397,7 +411,7 @@ begin
     SetLength(Msgs, 1);
     Msgs[0] := MakeMessage(mrUser, Prompt);
 
-    LoopCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers);
+    LoopCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers, Prompt);
 
     PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ' (' + Provider.GetName + '/' + Model + '):');
     if RunToolLoop(LoopCfg, Msgs, Loop) then
@@ -486,7 +500,7 @@ begin
   SetLength(Hist, Length(Hist) + 1);
   Hist[High(Hist)] := MakeMessage(mrUser, UserMsg);
 
-  GCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers);
+  GCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers, UserMsg);
   if pSysPromptOverride^ <> '' then
     GCfg.Options.SystemPrompt := pSysPromptOverride^;
   if Session <> nil then
@@ -976,7 +990,7 @@ begin
         Continue;
       end;
 
-      LoopCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers);
+      LoopCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers, Line);
       { After the first compaction the summary lives in
         LiveOptions.SystemPrompt inside RunToolLoop and gets returned
         via Loop.FinalSystemPrompt. We override here so the next turn

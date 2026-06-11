@@ -66,9 +66,18 @@ uses
   tells the model to call tools that the tool loop will refuse to
   pass through, producing a confused conversation. Identity, workspace
   paths, and memory contents stay in either mode since they are useful
-  as context even without tools available. }
+  as context even without tools available.
+
+  TaskHint (optional): the user's task text, when the caller has it
+  (the one-shot CLI message, the first interactive input). When
+  Cfg.OrientTaskAware is on AND a hint is given, the MEMORY section
+  injects only the sections of MEMORY.md / daily notes that lexically
+  overlap the task (PasClaw.Agent.Orient) instead of the whole files.
+  Either condition absent = verbatim whole-file injection, the
+  long-standing default. }
 function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
-                           ToolsEnabled: Boolean = True): string;
+                           ToolsEnabled: Boolean = True;
+                           const TaskHint: string = ''): string;
 
 { True iff at least one message in the array is mrSystem. The gateway's
   /v1/chat/completions handler uses this to decide whether to inject the
@@ -82,7 +91,8 @@ implementation
 uses
   Classes,
   PasClaw.Utils,
-  PasClaw.Skills.Loader;
+  PasClaw.Skills.Loader,
+  PasClaw.Agent.Orient;   { task-aware MEMORY slicing (Cfg.OrientTaskAware) }
 
 const
   SectionSep = sLineBreak + sLineBreak + '---' + sLineBreak + sLineBreak;
@@ -149,20 +159,28 @@ begin
     '- Logs:   ' + JoinPath(Home, 'logs');
 end;
 
-function BuildMemorySection: string;
+function BuildMemorySection(TaskAware: Boolean; const TaskHint: string): string;
 { Inject up to three markdown files into the system prompt:
     workspace/memory/MEMORY.md         -- durable user-owned notes
     workspace/memory/<today>.md        -- today's daily note, if it exists
     workspace/memory/<yesterday>.md    -- yesterday's daily note, for fresh context
   Mirrors openclaw's bootstrap loading. Older notes stay on disk and reach
   the model only when memory_search returns them. Each file is wrapped in
-  a subsection so the model can tell durable from dated material apart. }
+  a subsection so the model can tell durable from dated material apart.
+
+  Task-aware mode (Cfg.OrientTaskAware + a non-empty TaskHint from the
+  caller): each file is sliced through PasClaw.Agent.Orient so only the
+  sections that lexically overlap the task are injected, with an
+  "(N sections elided ...)" note so the model knows to memory_search
+  for the rest. Whole-file injection remains the default path. }
 var
   MemoryDir, TodayStr, YesterdayStr: string;
+  Slicing: Boolean;
 
   procedure AppendFile(const SubHeader, FilePath: string);
   var
     SubBody: string;
+    Elided: Integer;
   begin
     if not FileExists(FilePath) then Exit;
     try
@@ -171,6 +189,18 @@ var
       SubBody := '';
     end;
     if SubBody = '' then Exit;
+    if Slicing then
+    begin
+      SubBody := SelectRelevantSlices(SubBody, TaskHint,
+                                      DefaultOrientBudgetBytes, Elided);
+      if SubBody = '' then
+        SubBody := '(no sections matched the current task -- use ' +
+                   '`memory_search` to recall specifics from this file)'
+      else if Elided > 0 then
+        SubBody := SubBody + sLineBreak + sLineBreak +
+                   Format('(%d unrelated/over-budget section(s) elided -- ' +
+                          '`memory_search` reaches them)', [Elided]);
+    end;
     if Result = '' then
       Result := '## Memory'
     else
@@ -181,6 +211,7 @@ var
 
 begin
   Result := '';
+  Slicing := TaskAware and (Trim(TaskHint) <> '');
   MemoryDir := JoinPath(GetHome, 'workspace/memory');
 
   AppendFile('MEMORY.md (durable)', JoinPath(MemoryDir, 'MEMORY.md'));
@@ -339,12 +370,14 @@ begin
 end;
 
 function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
-                           ToolsEnabled: Boolean): string;
+                           ToolsEnabled: Boolean;
+                           const TaskHint: string): string;
 begin
   Result := '';
   Result := AppendSection(Result, BuildIdentitySection);
   Result := AppendSection(Result, BuildWorkspaceSection);
-  Result := AppendSection(Result, BuildMemorySection);
+  Result := AppendSection(Result,
+              BuildMemorySection((Cfg <> nil) and Cfg.OrientTaskAware, TaskHint));
   { Skills are only callable when the tool registry was actually built.
     --no-tools (and component UseTools=False) bypass RegisterSkills, so
     advertising the catalog would be a lie. }

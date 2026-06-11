@@ -317,6 +317,7 @@ uses
   PasClaw.Tools.WebFetch,
   PasClaw.Tools.MemoryFetch,
   PasClaw.Tools.OutputCache,
+  PasClaw.Tools.SendMessage,
   PasClaw.Tools.Sandbox,
   PasClaw.Skills.Loader,
   PasClaw.Agent.Prompt,
@@ -494,6 +495,9 @@ begin
     sees handles in truncated tool results with no way to
     dereference them. Codex P2 on PR #176. }
   if FConfig.ToolOutputCap > 0 then RegisterOutputCacheTool(FRegistry);
+  { send_message self-gates on config.json's "channels" array --
+    no-op when the operator hasn't declared named targets. }
+  RegisterSendMessageTool(FRegistry);
   Skills := LoadSkillManifests(GetHome);
   RegisterSkills(FRegistry, Skills);
   if FUseMCP then

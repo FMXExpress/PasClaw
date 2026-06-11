@@ -101,7 +101,8 @@ uses
   PasClaw.Utils,
   PasClaw.JSON,
   PasClaw.Logger,
-  PasClaw.Platform;
+  PasClaw.Platform,
+  PasClaw.Promptware;   { injection scan on skill descriptions -- chokepoint 3 }
 
 const
   MaxSkills = 64;
@@ -496,7 +497,8 @@ end;
 
 function LoadSkillManifests(const HomeDir: string): TSkillSpecArray;
 var
-  Root: string;
+  Root, RuleId: string;
+  i: Integer;
 begin
   SetLength(Result, 0);
   Root := JoinPath(HomeDir, 'workspace/skills');
@@ -505,6 +507,27 @@ begin
     skill (picoclaw, nanobot, ClawHub, Anthropic agent-skills) ships in. }
   ScanSkillDirs(Root, Result);
   ScanJsonSkills(Root, Result);
+
+  { Promptware chokepoint 3 of 3: stored skills. Descriptions are
+    advertised VERBATIM inside the system prompt (BuildSkillsSection)
+    -- the model's most trusted real estate -- so a hub-installed
+    skill whose description smuggles "ignore previous instructions"
+    would speak with system authority. Unlike chokepoints 1/2 we
+    suppress rather than annotate here: a warning banner inside the
+    system prompt would itself be prompt noise. The body is NOT
+    scanned at load time; it reaches the model through fs_read, where
+    the tool-output chokepoint annotates it with full context. }
+  if PromptwareScanEnabled then
+    for i := 0 to High(Result) do
+      if ScanPromptware(Result[i].Description, RuleId) then
+      begin
+        LogWarn('promptware: skill "%s" description matched pattern "%s" -- ' +
+                'suppressed from the system prompt catalog (source: %s)',
+                [Result[i].Name, RuleId, Result[i].Source]);
+        Result[i].Description :=
+          '(description withheld: matched injection pattern "' + RuleId +
+          '" -- inspect ' + Result[i].Source + ' before trusting)';
+      end;
 end;
 
 procedure RegisterSkills(Reg: TToolRegistry; const Skills: TSkillSpecArray);
