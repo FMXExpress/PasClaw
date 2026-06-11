@@ -92,6 +92,16 @@ type
                                          loop is running, the result must land
                                          in the ORIGINATING session, never in
                                          whatever FSession now points at }
+    FPendingCheckpointRewire: Boolean;  { Codex P2 on PR #221: when the operator
+                                          switches sessions while a tool loop is
+                                          still running, the loop's FS-write
+                                          hooks would otherwise see the new
+                                          session's globals and write snapshots
+                                          under the WRONG session. Defer the
+                                          checkpoints rewire until
+                                          PollLoopWorker observes loop
+                                          completion; set this flag in
+                                          SelectSession to remind ourselves. }
     FMenuOpen:          Boolean;       { theme picker overlay active }
     FMenuSelIdx:        Integer;       { highlighted theme in the menu }
     FMenuOrigTheme:     string;        { theme name to revert to on Escape }
@@ -1020,7 +1030,13 @@ begin
   FInputBuf := '';
   Flash('session: ' + FSession.Meta.Id);
   RefreshSessions;
-  RewireCheckpoints;
+  if FLoopThread = nil then
+    RewireCheckpoints
+  else
+    { Loop still owns the checkpoints globals -- defer until it's
+      done so its in-flight fs_write hooks stay scoped to its
+      originating session. Codex P2 on PR #221. }
+    FPendingCheckpointRewire := True;
 end;
 
 procedure TTUI.RewireCheckpoints;
@@ -1104,7 +1120,10 @@ begin
     FSession := TSession.Create('');
     FInputBuf := '';
     FChatScroll := 0;
-    RewireCheckpoints;
+    if FLoopThread = nil then
+      RewireCheckpoints
+    else
+      FPendingCheckpointRewire := True;
   end;
   RefreshSessions;
   FConfirmDelete := False;
@@ -1120,11 +1139,14 @@ begin
 
   { Open a fresh checkpoints turn so any fs_write / fs_edit_hashline
     this loop fires lands in turn-NNNN/ under this session. No-op
-    when checkpoints aren't enabled. We use Stats.Turns+1 because
-    Stats.Turns reflects COMPLETED turns; the one we're about to
-    run is the next ordinal. }
-  if FSession <> nil then
-    BeginTurn(FSession.Meta.Stats.Turns + 1);
+    when checkpoints aren't enabled. The checkpoints module owns
+    the turn counter internally (resumed from on-disk state at
+    InitCheckpoints), so we don't pass a number here -- Codex P2
+    on PR #221: the previous design pulled the turn number from
+    TSession.Meta.Stats.Turns, which only increments when stats
+    collection is enabled, so with stats off every turn called
+    BeginTurn(1) and overwrote the same manifest. }
+  BeginTurn;
 
   { Append the user's turn to history BEFORE kicking off the loop so
     it shows up in the chat pane immediately (next redraw). }
@@ -1302,6 +1324,14 @@ begin
     FLoopSessionId := '';
     Flash(Format('timed out after %ds', [TimeoutSec]));
     RefreshSessions;
+    { Same deferred-rewire finalisation as the success / failure
+      paths below -- a timeout still ends the loop, so any pending
+      session switch is now safe to apply. }
+    if FPendingCheckpointRewire then
+    begin
+      FPendingCheckpointRewire := False;
+      RewireCheckpoints;
+    end;
     Exit;
   end;
 
@@ -1327,6 +1357,17 @@ begin
   Worker.Free;
   FLoopThread := nil;
   FLoopSessionId := '';
+  { Codex P2 on PR #221: the operator may have switched sessions
+    while this loop was running. The rewire was deferred so the
+    loop's fs_write hooks stayed scoped to FLoopSessionId; now that
+    the loop has finished, rebind checkpoints to whatever session
+    the operator is actually looking at. No-op when no switch
+    happened. }
+  if FPendingCheckpointRewire then
+  begin
+    FPendingCheckpointRewire := False;
+    RewireCheckpoints;
+  end;
 end;
 
 procedure TTUI.SubmitInput;
@@ -2422,14 +2463,10 @@ begin
   end;
 
   { FPC legacy REPL: same checkpoints turn boundary as the positioned
-    TUI's StartTurn. Use the session's persisted turn counter when
-    one's attached; otherwise fall back to the checkpoints module's
-    own running counter so `/undo` still works within the running
-    process. }
-  if FSession <> nil then
-    BeginTurn(FSession.Meta.Stats.Turns + 1)
-  else
-    BeginTurn(CurrentTurnNumber + 1);
+    TUI's StartTurn. The checkpoints module owns the counter
+    (resumed from on-disk state); see the matching comment in
+    StartTurn for the Codex P2 / stats-decoupling story. }
+  BeginTurn;
 
   SetLength(Msgs, 1);
   Msgs[0] := MakeMessage(mrUser, Text);

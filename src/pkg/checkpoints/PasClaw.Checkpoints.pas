@@ -93,7 +93,7 @@ type
   TRestoredFileArray = array of TRestoredFile;
 
 procedure InitCheckpoints(const Cfg: TCheckpointConfig);
-procedure BeginTurn(TurnNumber: Integer);
+procedure BeginTurn;
 procedure SnapshotBeforeWrite(const Path: string);
 
 function CheckpointsEnabled: Boolean;
@@ -266,6 +266,18 @@ begin
 end;
 
 procedure InitCheckpoints(const Cfg: TCheckpointConfig);
+{ Resume the per-session counter from on-disk state. PasClaw can restart
+  between turns -- the next BeginTurn must land on turn (MaxExisting + 1)
+  so we don't clobber the previous run's snapshots. Codex P2 on PR #221:
+  the old design relied on the caller passing a TurnNumber sourced from
+  TSession.Meta.Stats.Turns, which only increments when stats collection
+  is enabled; with stats off (the default) every TUI turn called
+  BeginTurn(1) and rewrote turn-0001's manifest. Fixed by making the
+  module own its own monotonically-increasing counter, independent of
+  the optional session-stats field. }
+var
+  Names: TStringList;
+  i, T, MaxT: Integer;
 begin
   GLock.Acquire;
   try
@@ -282,8 +294,24 @@ begin
     if Cfg.KeepLast > 0 then GKeep := Cfg.KeepLast
     else GKeep := DefaultKeepLastTurns;
     EnsureDir(SessionDir);
-    LogDebug('checkpoints: enabled session=%s root=%s keep=%d',
-             [GSession, GRoot, GKeep]);
+    { Scan for the highest existing turn-NNNN under SessionDir so
+      BeginTurn picks up where the previous run left off. }
+    MaxT := 0;
+    Names := TStringList.Create;
+    try
+      ListSubdirs(SessionDir, Names);
+      for i := 0 to Names.Count - 1 do
+      begin
+        if (Length(Names[i]) < 9) or (Copy(Names[i], 1, 5) <> 'turn-') then Continue;
+        T := StrToIntDef(Copy(Names[i], 6, MaxInt), -1);
+        if T > MaxT then MaxT := T;
+      end;
+    finally
+      Names.Free;
+    end;
+    GTurn := MaxT;  { BeginTurn will Inc this to MaxT+1 before snapshotting }
+    LogDebug('checkpoints: enabled session=%s root=%s keep=%d resume_turn=%d',
+             [GSession, GRoot, GKeep, GTurn]);
   finally
     GLock.Release;
   end;
@@ -309,12 +337,19 @@ begin
   end;
 end;
 
-procedure BeginTurn(TurnNumber: Integer);
+procedure BeginTurn;
+{ Advance the per-session turn counter and reset per-turn state.
+  Codex P2 on PR #221: caller no longer passes a TurnNumber sourced
+  from TSession.Meta.Stats.Turns (which depends on stats_collection_
+  enabled). The module owns its own counter, initialised from
+  on-disk state at InitCheckpoints, so checkpoints turn numbering
+  is independent of the optional stats subsystem AND survives
+  pasclaw restarts cleanly. }
 begin
   GLock.Acquire;
   try
     if not GEnabled then Exit;
-    GTurn := TurnNumber;
+    Inc(GTurn);
     GTurnBlobCount := 0;
     GTurnPaths.Clear;
     GTurnEntries.Clear;

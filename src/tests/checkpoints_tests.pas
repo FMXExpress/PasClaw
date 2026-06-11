@@ -115,7 +115,7 @@ var
   P: string;
 begin
   SetupDisabled;
-  BeginTurn(1);
+  BeginTurn;
   P := ScratchPath('disabled.txt');
   WriteScratch(P, 'original');
   SnapshotBeforeWrite(P);
@@ -135,7 +135,7 @@ begin
   P := ScratchPath('a.txt');
   WriteScratch(P, 'original');
 
-  BeginTurn(1);
+  BeginTurn;
   SnapshotBeforeWrite(P);
   WriteFileText(P, 'modified by model');
 
@@ -155,7 +155,7 @@ begin
   P := ScratchPath('b.txt');
   WriteScratch(P, 'state-A');
 
-  BeginTurn(2);
+  BeginTurn;
   SnapshotBeforeWrite(P);              { captures state-A }
   WriteFileText(P, 'state-B');
   SnapshotBeforeWrite(P);              { no-op: keep state-A }
@@ -177,15 +177,15 @@ begin
   P := ScratchPath('c.txt');
   WriteScratch(P, 'gen-1');
 
-  BeginTurn(1);
+  BeginTurn;
   SnapshotBeforeWrite(P);
   WriteFileText(P, 'gen-2');
 
-  BeginTurn(2);
+  BeginTurn;
   SnapshotBeforeWrite(P);
   WriteFileText(P, 'gen-3');
 
-  BeginTurn(3);
+  BeginTurn;
   SnapshotBeforeWrite(P);
   WriteFileText(P, 'gen-4');
 
@@ -204,7 +204,7 @@ begin
   P := ScratchPath('d.txt');
   WriteScratch(P, 'v0');
 
-  BeginTurn(1);
+  BeginTurn;
   SnapshotBeforeWrite(P);
   WriteFileText(P, 'v1');
 
@@ -220,7 +220,7 @@ var
   Err: string;
 begin
   SetupSession('reject', 0);
-  BeginTurn(1);
+  BeginTurn;
   AssertFalse(UndoTurns(0, Restored, Err),
               'undo 0 rejected');
   AssertContains(Err, 'positive', 'clear error message');
@@ -260,7 +260,7 @@ begin
   P := ScratchPath('e-new.txt');
   if FileExists(P) then DeleteFile(P);
 
-  BeginTurn(1);
+  BeginTurn;
   SnapshotBeforeWrite(P);          { file does not exist -- no blob written }
   WriteFileText(P, 'created by model');
 
@@ -288,7 +288,7 @@ begin
   WriteScratch(P, 'seed');
   for i := 1 to 6 do
   begin
-    BeginTurn(i);
+    BeginTurn;
     SnapshotBeforeWrite(P);
     WriteFileText(P, 'gen-' + IntToStr(i));
   end;
@@ -297,6 +297,54 @@ begin
               'only last 3 turn dirs remain after auto-prune');
   AssertEqInt(OldestTurn, 4, 'oldest is turn 4');
   AssertEqInt(NewestTurn, 6, 'newest is turn 6');
+end;
+
+procedure TestInitResumesFromExistingTurnDirs;
+(* Codex P2 on PR #221: the old design pulled the turn number from
+   TSession.Meta.Stats.Turns, which only increments when
+   stats_collection_enabled is True. With stats off (the default),
+   every TUI turn called BeginTurn(1) and overwrote turn-0001's
+   manifest. Fix: the module owns its own counter and resumes from
+   the highest existing turn-NNNN dir at InitCheckpoints. This test
+   pins that resume: drop a turn-0007 dir on disk, re-Init, and
+   verify the next BeginTurn lands on turn-0008. *)
+var
+  Cfg: TCheckpointConfig;
+  P: string;
+  Restored: TRestoredFileArray;
+  Err: string;
+  Old, NewestT: Integer;
+begin
+  SetupSession('resume', 0);
+  P := ScratchPath('h.txt');
+  WriteScratch(P, 'baseline');
+
+  BeginTurn;   { turn-0001 }
+  SnapshotBeforeWrite(P);
+  WriteFileText(P, 'edited-1');
+
+  { Pretend we just relaunched pasclaw: re-Init the same session.
+    The module should rediscover turn-0001 and resume from there. }
+  Cfg.Enabled   := True;
+  Cfg.SessionId := 'resume';
+  Cfg.Root      := JoinPath(GTmpRoot, 'cp');
+  Cfg.KeepLast  := 0;
+  InitCheckpoints(Cfg);
+
+  AssertEqInt(CountSnapshottedTurns(Old, NewestT), 1, 'one turn on disk');
+  AssertEqInt(NewestT, 1, 'newest is 1');
+
+  BeginTurn;   { should land on turn-0002, NOT turn-0001 again }
+  SnapshotBeforeWrite(P);
+  WriteFileText(P, 'edited-2');
+
+  AssertEqInt(CountSnapshottedTurns(Old, NewestT), 2,
+              'second BeginTurn after resume created a NEW turn dir');
+  AssertEqInt(NewestT, 2, 'newest is 2 (resumed correctly)');
+
+  AssertTrue(UndoTurns(1, Restored, Err), 'undo 1');
+  AssertEqStr(ReadFileText(P), 'edited-1',
+              'undo 1 rolls back to state at start of turn-0002');
 end;
 
 procedure TestMultipleFilesInOneTurn;
@@ -311,7 +359,7 @@ begin
   WriteScratch(P1, 'one-original');
   WriteScratch(P2, 'two-original');
 
-  BeginTurn(1);
+  BeginTurn;
   SnapshotBeforeWrite(P1);
   SnapshotBeforeWrite(P2);
   WriteFileText(P1, 'one-modified');
@@ -358,6 +406,7 @@ begin
     TestUndoWhenDisabledFails;                WriteLn('  ok: undo when disabled fails');
     TestModelCreatedFilesAreLeftInPlace;      WriteLn('  ok: model-created files left in place');
     TestKeepLastPrunesOlderTurns;             WriteLn('  ok: KeepLast prunes older turns');
+    TestInitResumesFromExistingTurnDirs;      WriteLn('  ok: Init resumes turn counter from disk');
     TestMultipleFilesInOneTurn;               WriteLn('  ok: multiple files in one turn');
     WriteLn('PASS');
   finally
