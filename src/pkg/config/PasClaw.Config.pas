@@ -409,6 +409,17 @@ type
        this flag (it keeps an in-memory accumulator), so flipping
        it off doesn't disable the in-process view. *)
     StatsCollectionEnabled: Boolean;
+    (* Per-edit checkpoints + `/undo`. When True, fs_write and
+       fs_edit_hashline snapshot the pre-edit bytes of every file they
+       touch into workspace/checkpoints/<session-id>/turn-NNNN/ before
+       writing; the TUI's /undo command rewinds N turns by restoring
+       those captures. Off by default because it can be heavy -- a
+       turn that overwrites a 5 MB generated file copies the whole 5 MB
+       per turn. KeepLast caps how many turn dirs survive (older auto-
+       pruned). 0 means default (32). Opt in via `pasclaw onboard` or
+       by flipping checkpoints_enabled in config.json. *)
+    CheckpointsEnabled:    Boolean;
+    CheckpointsKeepLast:   Integer;
     AutoRouter:           TAutoRouterConfig;
     AnthropicServerTools: TAnthropicServerToolsConfig;
     OpenAIServerTools:    TOpenAIServerToolsConfig;
@@ -480,6 +491,8 @@ begin
   RenderMarkdown       := True;  { on by default for terminal surfaces; cmd/serve flips off }
   ToolOutputCap        := 0;     { off by default; operators opt in. See TConfig.ToolOutputCap. }
   StatsCollectionEnabled := False; { opt-in via onboarding; see TConfig.StatsCollectionEnabled. }
+  CheckpointsEnabled     := False; { opt-in via onboarding; see TConfig.CheckpointsEnabled. }
+  CheckpointsKeepLast    := 0;     { 0 means default (32) inside PasClaw.Checkpoints. }
   AutoRouter.Enabled        := False;  { opt-in via onboarding; see TAutoRouterConfig. }
   AutoRouter.EasyProvider   := '';
   AutoRouter.EasyModel      := '';
@@ -664,6 +677,10 @@ begin
       Root.PutInt('tool_output_cap', ToolOutputCap);
     if StatsCollectionEnabled then
       Root.PutBool('stats_collection_enabled', True);
+    if CheckpointsEnabled then
+      Root.PutBool('checkpoints_enabled', True);
+    if CheckpointsKeepLast > 0 then
+      Root.PutInt('checkpoints_keep_last', CheckpointsKeepLast);
     if AutoRouter.Enabled
        or (AutoRouter.EasyProvider <> '')
        or (AutoRouter.EasyModel <> '')
@@ -882,6 +899,9 @@ begin
     ToolOutputCap       := Integer(Root.GetInt('tool_output_cap', ToolOutputCap));
     StatsCollectionEnabled := Root.GetBool('stats_collection_enabled',
                                            StatsCollectionEnabled);
+    CheckpointsEnabled  := Root.GetBool('checkpoints_enabled', CheckpointsEnabled);
+    CheckpointsKeepLast := Integer(Root.GetInt('checkpoints_keep_last',
+                                                CheckpointsKeepLast));
 
     Obj := Root.ChildObject('auto_router');
     if Obj <> nil then

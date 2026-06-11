@@ -52,7 +52,7 @@ if errorlevel 1 (
 popd
 
 set "FPCFLAGS=-MDelphi -Sh -O2 -Xs -XX"
-set "FPCFLAGS=%FPCFLAGS% -Fusrc\pkg\cliui -Fusrc\pkg\utils -Fusrc\pkg\logger -Fusrc\pkg\config -Fusrc\pkg\json -Fusrc\pkg\providers -Fusrc\pkg\stream -Fusrc\pkg\tokenizer -Fusrc\pkg\tools -Fusrc\pkg\mcp -Fusrc\pkg\gateway -Fusrc\pkg\channels -Fusrc\pkg\crypto -Fusrc\pkg\net -Fusrc\pkg\search -Fusrc\pkg\cron -Fusrc\pkg\skills -Fusrc\pkg\session -Fusrc\pkg\identity -Fusrc\pkg\agent -Fusrc\pkg\memory -Fusrc\pkg\memory\localvector -Fusrc\pkg\kb -Fusrc\pkg\updater -Fusrc\pkg\membench -Fusrc\pkg\tui -Fusrc\pkg\platform -Fusrc\pkg\hashline -Fusrc\pkg\component -Fusrc\pkg\markdown -Fusrc\cmd"
+set "FPCFLAGS=%FPCFLAGS% -Fusrc\pkg\cliui -Fusrc\pkg\utils -Fusrc\pkg\logger -Fusrc\pkg\config -Fusrc\pkg\json -Fusrc\pkg\providers -Fusrc\pkg\stream -Fusrc\pkg\tokenizer -Fusrc\pkg\tools -Fusrc\pkg\mcp -Fusrc\pkg\gateway -Fusrc\pkg\channels -Fusrc\pkg\crypto -Fusrc\pkg\net -Fusrc\pkg\search -Fusrc\pkg\cron -Fusrc\pkg\skills -Fusrc\pkg\checkpoints -Fusrc\pkg\session -Fusrc\pkg\identity -Fusrc\pkg\agent -Fusrc\pkg\memory -Fusrc\pkg\memory\localvector -Fusrc\pkg\kb -Fusrc\pkg\updater -Fusrc\pkg\membench -Fusrc\pkg\tui -Fusrc\pkg\platform -Fusrc\pkg\hashline -Fusrc\pkg\component -Fusrc\pkg\markdown -Fusrc\cmd"
 set "FPCFLAGS=%FPCFLAGS% -Fu%INDY_DIR%\Lib\Core -Fu%INDY_DIR%\Lib\Protocols -Fu%INDY_DIR%\Lib\System -Fi%INDY_DIR%\Lib\Core -Fi%INDY_DIR%\Lib\Protocols -Fi%INDY_DIR%\Lib\System"
 if not "%ICONVENC_DIR%"=="" set "FPCFLAGS=%FPCFLAGS% -Fu%ICONVENC_DIR%"
 set "FPCFLAGS=%FPCFLAGS% -FE%BUILDDIR% -FU%BUILDDIR%\lib"
