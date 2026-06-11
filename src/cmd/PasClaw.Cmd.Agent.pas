@@ -54,6 +54,7 @@ uses
   PasClaw.Tools.Sandbox,
   PasClaw.Identity,
   PasClaw.Agent.Steering,
+  PasClaw.Checkpoints,
   PasClaw.Markdown.Render;
 
 type
@@ -464,6 +465,61 @@ var
     Session.Save;
   end;
 
+  procedure RewireCheckpoints;
+  { Point the checkpoints module at the active session. No-op when
+    the operator hasn't opted in. Called every time Session is
+    swapped (initial create, /reset --> new id, /new). The per-turn
+    BeginTurn call before RunToolLoop fires the actual snapshot
+    boundary; this just sets the session subdir. Mirrors the TUI's
+    RewireCheckpoints. }
+  var
+    CC: TCheckpointConfig;
+  begin
+    if Session = nil then Exit;
+    CC.Enabled   := Cfg.CheckpointsEnabled;
+    CC.SessionId := Session.Meta.Id;
+    CC.Root      := JoinPath(GetHome, 'workspace/checkpoints');
+    CC.KeepLast  := Cfg.CheckpointsKeepLast;
+    InitCheckpoints(CC);
+  end;
+
+  procedure HandleUndoCommand(const Args: string);
+  { `/undo` -> rewind 1 turn; `/undo N` -> rewind N turns. Restores
+    file contents captured at the start of each rewound turn. Files
+    the model created inside the rewound window are left in place
+    (v1 conservative semantic). Mirrors the TUI's HandleUndoCommand
+    so both interactive surfaces feel the same. }
+  var
+    N, k: Integer;
+    Restored: TRestoredFileArray;
+    UndoErr, Trimmed: string;
+  begin
+    Trimmed := Trim(Args);
+    if Trimmed = '' then
+      N := 1
+    else
+      N := StrToIntDef(Trimmed, -1);
+    if N <= 0 then
+    begin
+      PrintLn(Ansi.Yellow + '/undo: argument must be a positive turn count' + Ansi.Reset);
+      Exit;
+    end;
+    if not UndoTurns(N, Restored, UndoErr) then
+    begin
+      PrintLn(Ansi.Yellow + '/undo: ' + UndoErr + Ansi.Reset);
+      Exit;
+    end;
+    if Length(Restored) = 0 then
+      PrintLn(Ansi.Dim + Format('/undo %d: no files to restore', [N]) + Ansi.Reset)
+    else
+    begin
+      PrintLn(Ansi.Green + Format('/undo %d: restored %d file(s)',
+                                   [N, Length(Restored)]) + Ansi.Reset);
+      for k := 0 to High(Restored) do
+        PrintLn(Ansi.Dim + '  - ' + Restored[k].Path + Ansi.Reset);
+    end;
+  end;
+
 begin
   SystemPromptOverride := '';
   Session := nil;
@@ -502,6 +558,7 @@ begin
       Codex P1 on PR #117: making this opt-in defeated the whole
       "history survives restarts" point. }
     Session := TSession.Create(A.Session);
+    RewireCheckpoints;
     if Session.MetaExists then
     begin
       SetLength(Msgs, Length(Session.Messages));
@@ -537,6 +594,7 @@ begin
           ClearSteering(Session.Meta.Id);
           Session.Free;
           Session := TSession.Create('');   { fresh id }
+          RewireCheckpoints;
           PrintLn(Ansi.Dim + '(new session ' + Session.Meta.Id + ')' + Ansi.Reset);
         end
         else
@@ -579,7 +637,13 @@ begin
         PrintLn('  /think       toggle extended thinking on the next turn (if the provider supports it)');
         PrintLn('  /tools       list registered tools');
         PrintLn('  /steer <msg> queue a mid-loop steering message for the NEXT iteration');
+        PrintLn('  /undo [N]    rewind N turns by restoring file checkpoints (default 1)');
         PrintLn('  /quit        exit (alias: /exit)');
+        Continue;
+      end;
+      if (Line = '/undo') or (Copy(Line, 1, 6) = '/undo ') then
+      begin
+        HandleUndoCommand(Copy(Line, 7, MaxInt));
         Continue;
       end;
       if Line = '/status' then
@@ -783,6 +847,14 @@ begin
             PrintLn(Ansi.Dim + '(routed -> ' + RoutedProviderNm + ')' + Ansi.Reset);
           end;
         end;
+
+      { Open a fresh checkpoints turn so any fs_write / fs_edit_hashline
+        this loop fires lands in turn-NNNN/ under this session. No-op
+        when checkpoints aren't enabled. The checkpoints module owns
+        its turn counter internally (resumed from on-disk state at
+        InitCheckpoints), so the FPC line-based agent and the TUI
+        agree on what /undo N rolls back to. }
+      BeginTurn;
 
       if RunToolLoop(LoopCfg, Msgs, Loop) then
       begin
