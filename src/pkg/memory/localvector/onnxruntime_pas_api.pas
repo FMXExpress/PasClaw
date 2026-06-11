@@ -1066,11 +1066,11 @@ begin
   Result := LoadLibrary(PChar(AName));
   {$ELSE}
   { Delphi non-Windows (Linux64) -- there's no top-level LoadLibrary
-    overload here; route through Posix.Dlfcn.dlopen and cast the
-    Pointer handle back to TOrtLibHandle (= NativeUInt). RTLD_NOW
+    overload here; route through Posix.Dlfcn.dlopen, whose handle is
+    already declared NativeUInt (= TOrtLibHandle) by the RTL. RTLD_NOW
     surfaces a missing entrypoint up front, matching the loaded-or-
     not contract OrtRuntimeLoaded relies on. }
-  Result := TOrtLibHandle(dlopen(PAnsiChar(AnsiString(AName)), RTLD_NOW));
+  Result := dlopen(PAnsiChar(AnsiString(AName)), RTLD_NOW);
   {$ENDIF}
 {$ENDIF}
 end;
@@ -1083,12 +1083,11 @@ begin
   {$IFDEF MSWINDOWS}
   Result := GetProcAddress(AHandle, PAnsiChar(AnsiString(AName)));
   {$ELSE}
-  { Delphi Linux: dlsym against the dlopen handle. Reinterpret via
-    PPointer(@AHandle)^ -- dcc64 still rejects Pointer(NativeUInt(AHandle))
-    because NativeUInt is a UInt64 alias and Delphi blocks UInt64 ->
-    Pointer regardless of size match. PPointer overlays the storage
-    bits without an integer cast. }
-  Result := dlsym(PPointer(@AHandle)^, PAnsiChar(AnsiString(AName)));
+  { Delphi Linux: dlsym against the dlopen handle. No cast --
+    Posix.Dlfcn declares dlsym(Handle: NativeUInt; ...), so the
+    ordinal handle is passed straight through. See the matching
+    comment in LocalVector.Sqlite3.ldProc for the E2010 history. }
+  Result := dlsym(AHandle, PAnsiChar(AnsiString(AName)));
   {$ENDIF}
 {$ENDIF}
 end;

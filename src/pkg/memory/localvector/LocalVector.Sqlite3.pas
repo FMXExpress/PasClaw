@@ -136,12 +136,13 @@ begin
   {$IFDEF FPC}
   Result := LoadLibrary(AName);
   {$ELSE}
-  { Delphi Linux: dlopen returns a Pointer; cast to TOrdHandle (which
-    is NativeUInt on non-Windows Delphi). RTLD_NOW resolves every
-    symbol up front so a missing entrypoint surfaces here, not on
-    the first call -- mirrors what FPC's LoadLibrary does internally
-    on POSIX. }
-  Result := TOrdHandle(dlopen(PAnsiChar(AnsiString(AName)), RTLD_NOW));
+  { Delphi Linux: Posix.Dlfcn declares dlopen returning the handle
+    as NativeUInt (the RTL wraps the POSIX void* as an ordinal, like
+    HMODULE on Windows), which is exactly TOrdHandle here -- no cast.
+    RTLD_NOW resolves every symbol up front so a missing entrypoint
+    surfaces here, not on the first call -- mirrors what FPC's
+    LoadLibrary does internally on POSIX. }
+  Result := dlopen(PAnsiChar(AnsiString(AName)), RTLD_NOW);
   {$ENDIF}
 {$ENDIF}
 end;
@@ -155,14 +156,15 @@ begin
   Result := GetProcedureAddress(h, AName);
   {$ELSE}
   { Delphi Linux equivalent of FPC's GetProcedureAddress -- dlsym
-    against the handle dlopen handed back.
-
-    Reinterpret-cast via PPointer(@h)^: dcc64 still rejects
-    Pointer(NativeUInt(h)) outright -- even though sizeof matches
-    on 64-bit, NativeUInt is a UInt64 alias and Delphi's typecast
-    rules block UInt64 -> Pointer. PPointer overlays the storage
-    bits of h on Pointer without going through an integer cast. }
-  Result := dlsym(PPointer(@h)^, PAnsiChar(AnsiString(AName)));
+    against the handle dlopen handed back. No cast: Delphi's
+    Posix.Dlfcn declares dlsym(Handle: NativeUInt; ...) -- the RTL
+    wraps the POSIX void* handle as an ordinal, same as HMODULE on
+    Windows -- and h is already that type. Every earlier attempt to
+    hand it a Pointer (Pointer(h), Pointer(NativeUInt(h)),
+    PPointer(@h)^) drew E2010 "UInt64 and Pointer" because the
+    PARAMETER wants the ordinal, not because the cast itself was
+    ill-formed. }
+  Result := dlsym(h, PAnsiChar(AnsiString(AName)));
   {$ENDIF}
 {$ENDIF}
 end;
