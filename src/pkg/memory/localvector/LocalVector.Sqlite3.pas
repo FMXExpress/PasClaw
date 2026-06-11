@@ -155,11 +155,14 @@ begin
   Result := GetProcedureAddress(h, AName);
   {$ELSE}
   { Delphi Linux equivalent of FPC's GetProcedureAddress -- dlsym
-    against the handle dlopen handed back. }
-  { Two-step cast: Delphi rejects a direct Pointer(UInt64) typecast,
-    so go via NativeUInt (which is the underlying integer type of
-    TOrdHandle in this branch). }
-  Result := dlsym(Pointer(NativeUInt(h)), PAnsiChar(AnsiString(AName)));
+    against the handle dlopen handed back.
+
+    Reinterpret-cast via PPointer(@h)^: dcc64 still rejects
+    Pointer(NativeUInt(h)) outright -- even though sizeof matches
+    on 64-bit, NativeUInt is a UInt64 alias and Delphi's typecast
+    rules block UInt64 -> Pointer. PPointer overlays the storage
+    bits of h on Pointer without going through an integer cast. }
+  Result := dlsym(PPointer(@h)^, PAnsiChar(AnsiString(AName)));
   {$ENDIF}
 {$ENDIF}
 end;
