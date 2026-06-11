@@ -28,6 +28,7 @@ uses
   PasClaw.Tools.Memory,
   PasClaw.Tools.KB,
   PasClaw.Tools.SessionSearch,
+  PasClaw.Tools.SendMessage,
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
@@ -119,6 +120,13 @@ begin
         on -- otherwise the model sees a tool it'd only call against
         non-existent handles. Pair the registration with the cap. }
       if Cfg.ToolOutputCap > 0 then RegisterOutputCacheTool(Reg);
+      { send_message self-gates on Cfg.Channels being non-empty.
+        Codex P2 on PR #230: every chat surface (CLI, TUI, Serve,
+        Gateway, embedder) builds its own registry and must register
+        this tool independently, otherwise the documented channel-
+        notification tool is silently missing on the surface the
+        operator actually uses. }
+      RegisterSendMessageTool(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
     end;

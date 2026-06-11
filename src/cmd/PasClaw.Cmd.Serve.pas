@@ -57,6 +57,7 @@ uses
   PasClaw.Tools.Memory,
   PasClaw.Tools.KB,
   PasClaw.Tools.SessionSearch,
+  PasClaw.Tools.SendMessage,
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
@@ -176,6 +177,8 @@ begin
         chat surface would still tell the user "no Code Vault tool". }
       if Cfg.VaultToolsEnabled then RegisterVaultTools(Reg);
       if Cfg.ToolOutputCap > 0 then RegisterOutputCacheTool(Reg);
+      { send_message self-gates on Cfg.Channels. Codex P2 on PR #230. }
+      RegisterSendMessageTool(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
       if Length(Skills) > 0 then

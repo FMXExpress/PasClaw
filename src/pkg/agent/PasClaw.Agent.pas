@@ -902,6 +902,10 @@ begin
       Gateway.Server forwards FCfg.ToolOutputCap into its LoopCfg.
       Codex P2 on PR #176. }
     if FConfig.ToolOutputCap > 0 then RegisterOutputCacheTool(FRegistry);
+    { send_message self-gates on FConfig.Channels. Codex P2 on PR #230:
+      TPasClawServer builds its registry independently of TPasClawAgent
+      and the CLI surfaces, so it must register the tool separately. }
+    RegisterSendMessageTool(FRegistry);
     Skills := LoadSkillManifests(GetHome);
     RegisterSkills(FRegistry, Skills);
   end;

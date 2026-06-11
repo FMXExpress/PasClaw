@@ -360,6 +360,34 @@ begin
   AssertTrue(Length(Got) < Length(Raw), 'clippy filter saves bytes');
 end;
 
+procedure TestCargoOverCapReportsElidedCount;
+{ Codex P2 on PR #230: when warnings exceed MAX_WARN_BLOCKS the
+  filter must tell the model how many extra diagnostics exist --
+  not silently drop them. clippy exits 0 with warnings, so they
+  bypass tee-on-failure and would otherwise vanish past the cap. }
+var
+  Raw, Got: string;
+  i: Integer;
+begin
+  ResetShellFilterCounters;
+  Raw := '';
+  for i := 1 to 5 do
+    Raw := Raw + '    Checking pkg' + IntToStr(i) + ' v0.1.0' + sLineBreak;
+  { 15 warnings -- 5 more than MAX_WARN_BLOCKS = 10. }
+  for i := 1 to 15 do
+    Raw := Raw +
+      'warning: unused variable: `x' + IntToStr(i) + '`' + sLineBreak +
+      '  --> src/main.rs:' + IntToStr(i) + ':9' + sLineBreak +
+      '' + sLineBreak;
+  Raw := Raw + '    Finished dev [unoptimized] target(s) in 1.2s';
+  Got := ApplyShellFilter('cargo clippy', Raw, 0);
+  AssertTrue(Pos('5 more warning/error block(s) elided', Got) > 0,
+             'over-cap diagnostics counted and reported');
+  AssertTrue(Pos('Finished', Got) > 0, 'Finished line still kept');
+  AssertTrue(Pos('unused variable: `x1`', Got) > 0,
+             'first warning kept verbatim');
+end;
+
 procedure TestGoTestCollapsesOkPackages;
 var
   Raw, Got: string;
@@ -540,6 +568,7 @@ begin
   TestCanonicalizeExpandedFamilies;
   TestTabularCapsDockerPs;
   TestCargoClippyCollapsesCompileNoise;
+  TestCargoOverCapReportsElidedCount;
   TestGoTestCollapsesOkPackages;
   TestEslintAggregates;
   TestPipInstallCollapses;

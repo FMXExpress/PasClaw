@@ -914,8 +914,12 @@ end;
 function FilterCargoCompile(const Raw: string): string;
 { `cargo build` / `cargo check` / `cargo clippy`. Success output is a
   wall of "Compiling crate vX.Y.Z" lines; what matters is warnings
-  (clippy exits 0 with warnings!) and the Finished line. Keep warning
-  blocks verbatim (capped), collapse the compile noise to a count. }
+  (clippy exits 0 with warnings!) and the Finished line. Keep the
+  first MAX_WARN_BLOCKS warning blocks verbatim and surface a count
+  of any that exceeded the cap so the model knows more diagnostics
+  exist beyond what's printed -- silently dropping them would let
+  warnings hide past the visible window (Codex P2 on PR #230).
+  Compile/fetch noise collapses to a single count. }
 const
   MAX_WARN_BLOCKS = 10;
 var
@@ -946,12 +950,12 @@ begin
       end;
       if (Pos('warning', T) = 1) or (Pos('error', T) = 1) then
       begin
-        InWarn := WarnBlocks < MAX_WARN_BLOCKS;
-        if InWarn then
-        begin
-          Inc(WarnBlocks);
-          Out_.Add(L);
-        end;
+        { Count EVERY diagnostic header even when over the cap so we
+          can tell the model how many extra ones got elided. Print only
+          the first MAX_WARN_BLOCKS bodies. }
+        Inc(WarnBlocks);
+        InWarn := WarnBlocks <= MAX_WARN_BLOCKS;
+        if InWarn then Out_.Add(L);
         Continue;
       end;
       if Pos('Finished ', T) = 1 then
@@ -972,6 +976,11 @@ begin
       Result := Raw;
       Exit;
     end;
+    if WarnBlocks > MAX_WARN_BLOCKS then
+      Out_.Add(Format('(+ %d more warning/error block(s) elided -- ' +
+                      're-run with --message-format=json or scope the ' +
+                      'crate to see them)',
+                      [WarnBlocks - MAX_WARN_BLOCKS]));
     Out_.Insert(0, Format('(%d compile/fetch lines elided)', [Compiled]));
     Result := JoinLines(Out_.ToStringArray);
   finally
