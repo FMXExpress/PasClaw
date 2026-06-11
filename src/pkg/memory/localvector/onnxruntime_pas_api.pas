@@ -1083,8 +1083,10 @@ begin
   {$IFDEF MSWINDOWS}
   Result := GetProcAddress(AHandle, PAnsiChar(AnsiString(AName)));
   {$ELSE}
-  { Delphi Linux: dlsym against the dlopen handle. }
-  Result := dlsym(Pointer(AHandle), PAnsiChar(AnsiString(AName)));
+  { Delphi Linux: dlsym against the dlopen handle. Two-step cast --
+    Delphi rejects direct Pointer(UInt64), so go via NativeUInt
+    (the underlying integer type of TOrtLibHandle in this branch). }
+  Result := dlsym(Pointer(NativeUInt(AHandle)), PAnsiChar(AnsiString(AName)));
   {$ENDIF}
 {$ENDIF}
 end;

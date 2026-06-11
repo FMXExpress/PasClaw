@@ -135,7 +135,11 @@ type
     var
     // similar as overloading [] operators for property x[v: string]: integer read gx write sx; default;
     Instance: PT ; // default keyword for non property.
-    RefCount: PLongint;
+    { PInteger (not PLongint) -- on Delphi POSIX 64-bit LongInt widens
+      to 64 bits, which can't satisfy TInterlocked.Increment(var Integer).
+      Integer is 32-bit on every supported target (FPC delphi-mode,
+      Delphi Win, Delphi Linux64), matching the intended ref-count width. }
+    RefCount: PInteger;
     procedure DecRef();
 
     class operator Initialize({$ifdef fpc}var{$else}out{$endif} dst: TSmartPtr<T>);
@@ -162,7 +166,7 @@ type
   var
     // similar as overloading [] operators for property x[v: string]: integer read gx write sx; default;
     Instance: PT ; // default keyword for non property.
-    RefCount: PLongint;
+    RefCount: PInteger;  // see TSmartPtr<T> -- PInteger for dcc64 Linux compat
     DisposerFunc: TORTAllocatedFree;
     constructor Create(const val:PT;const aDisposer:TORTAllocatedFree);
     procedure DecRef();
@@ -216,7 +220,10 @@ type
   end;
   PMemHouseKeeper = ^TMemHouseKeeper;
   //TMemHouseKeeper = TOrderedKeyValueList<Pointer,PLongInt>;
-  TMemHouseKeeper = TOrderedKeyValueList<Pointer,TArray<LongInt>>;
+  TMemHouseKeeper = TOrderedKeyValueList<Pointer,TArray<Integer>>;
+  // PInteger / TArray<Integer> -- LongInt would be 64-bit on Delphi Linux64
+  // and break TInterlocked.Increment/Decrement(var Integer). Integer is
+  // 32-bit on every supported target, matching the intended ref-count width.
 
   {$endif}
 
@@ -1678,7 +1685,7 @@ end;
 procedure TORTBase<T>.NewRef;
 var
   //RefCount:PLongInt;
-  RefCount:TArray<LongInt>;
+  RefCount:TArray<Integer>;
 begin
 
  //New(RefCount);
@@ -1703,7 +1710,7 @@ end;
 procedure TORTBase<T>.Assign(const val: Pointer);
 var
   //RefCount:PLongInt;
-  RefCount:TArray<LongInt>;
+  RefCount:TArray<Integer>;
 begin
   if not HouseKeeper.TryGetValue(p_,RefCount) then RefCount:=nil;
   if RefCount <> nil then
@@ -1716,7 +1723,7 @@ end;
 procedure TORTBase<T>.DecRef;
 var
   //RefCount:PLongInt;
-  RefCount:TArray<LongInt>;
+  RefCount:TArray<Integer>;
 begin
   if not HouseKeeper.TryGetValue(p_,RefCount) then RefCount:=nil;
   {$IFDEF MEM_DEBUG}
@@ -1795,7 +1802,7 @@ begin
 end;
 
 class operator TORTBase<T>.Initialize({$ifdef fpc}outvar{$else}out{$endif} v: TORTBase<T>);
-var RefCount:PLongInt;
+var RefCount:PInteger;
 begin
   v.p_:=nil;
   if GetApi=nil then exit;
@@ -1840,7 +1847,7 @@ class operator TORTBase<T>.Assign(var dst: TORTBase<T>; const [ref] src: TORTBas
 {$endif}
 var
   //dRefCount,sRefCount:PLongInt;
-  dRefCount,sRefCount:TArray<LongInt>;
+  dRefCount,sRefCount:TArray<Integer>;
 begin
   if not HouseKeeper.TryGetValue(dst.p_,dRefCount) then dRefCount:=nil;
   if not HouseKeeper.TryGetValue(src.p_,sRefCount) then sRefCount:=nil;
@@ -1877,7 +1884,7 @@ begin
 class operator TORTBase<T>.AddRef(var src: TORTBase<T>);
 var
   //RefCount:PLongInt;
-  RefCount:TArray<LongInt>;
+  RefCount:TArray<Integer>;
 begin
   if not HouseKeeper.TryGetValue(src.p_,RefCount) then RefCount:=nil;
   {$IFDEF MEM_DEBUG}
