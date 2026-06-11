@@ -2569,7 +2569,21 @@ end;
 procedure TTUI.Run;
 var
   Line: string;
+  CC: TCheckpointConfig;
 begin
+  { Wire the checkpoints module before the REPL starts. The Delphi
+    positioned TUI does this via RewireCheckpoints on every session
+    switch; the FPC REPL is single-session with no FSession, so we
+    initialize once here against the same fixed key HandleUserInput
+    already uses for the background-subagent coordinator. Without
+    this, BeginTurn snapshots nothing and /undo always reported
+    "checkpoints not enabled". Codex P2 on PR #226. }
+  CC.Enabled   := CheckpointsEnabled;
+  CC.SessionId := 'fpc-tui-session';
+  CC.Root      := JoinPath(GetHome, 'workspace/checkpoints');
+  CC.KeepLast  := CheckpointsKeepLast;
+  InitCheckpoints(CC);
+
   Print(#27'[2J' + #27'[H');
   DrawHeader;
   PrintLn(Ansi.Dim + '/help for commands, /quit to exit' + Ansi.Reset);
