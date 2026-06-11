@@ -53,10 +53,26 @@ implementation
 uses
   Classes,
   {$IFDEF FPC}{$IFDEF UNIX} BaseUnix, {$ENDIF}{$ENDIF}
-  {$IFNDEF FPC}{$IFDEF POSIX} Posix.SysStat, Posix.UniStd, {$ENDIF}{$ENDIF}
+  {$IFNDEF FPC}{$IFDEF POSIX} Posix.SysStat, Posix.UniStd, Posix.Errno, {$ENDIF}{$ENDIF}
   PasClaw.JSON,
   PasClaw.Logger,
   PasClaw.Providers.HTTP;
+
+function LastOSErrno: Integer;
+{ Cross-compiler errno read for the "rename failed" diagnostic.
+  GetLastOSError is in System.SysUtils on Delphi Windows (returns
+  GetLastError) and on FPC (returns fpgeterrno / errno), but dcc64
+  Linux doesn't expose it as of the version we target -- E2003 on
+  the call site. Read errno directly via Posix.Errno there. }
+begin
+  {$IFNDEF FPC}{$IFDEF POSIX}
+  Result := errno;
+  {$ELSE}
+  Result := GetLastOSError;
+  {$ENDIF}{$ELSE}
+  Result := GetLastOSError;
+  {$ENDIF}
+end;
 
 function HostPlatformSuffix: string;
 begin
@@ -266,7 +282,7 @@ begin
   {$ELSE}
   if not RenameFile(DownloadedPath, TargetBinary) then
   begin
-    ErrMsg := 'rename failed (errno=' + IntToStr(GetLastOSError) + ')';
+    ErrMsg := 'rename failed (errno=' + IntToStr(LastOSErrno) + ')';
     Exit(False);
   end;
   {$IFDEF FPC}{$IFDEF UNIX}
