@@ -37,11 +37,12 @@ uses
   {$IFDEF FPC}
   , dynlibs
   {$ELSE}
-  { Delphi non-Windows (Linux64) -- the FPC `dynlibs` unit doesn't
-    exist here, so we get dlopen / dlsym out of Posix.Dlfcn instead.
-    Without this import the original {$ELSE} branch tried to call
-    FPC's LoadLibrary(string) and GetProcedureAddress, which dcc64
-    on Linux can't resolve. }
+  (* Delphi non-Windows (Linux64) -- the FPC `dynlibs` unit doesn't
+     exist here, so we get dlopen / dlsym out of Posix.Dlfcn instead.
+     Without this import the original non-FPC branch tried to call
+     FPC's LoadLibrary(string) and GetProcedureAddress, which dcc64
+     on Linux can't resolve. Paren-star delimiters so the IFDEF/ELSE
+     tokens inside this comment don't trip Delphi's preprocessor. *)
   , Posix.Dlfcn
   {$ENDIF}
 {$ENDIF}
@@ -155,7 +156,10 @@ begin
   {$ELSE}
   { Delphi Linux equivalent of FPC's GetProcedureAddress -- dlsym
     against the handle dlopen handed back. }
-  Result := dlsym(Pointer(h), PAnsiChar(AnsiString(AName)));
+  { Two-step cast: Delphi rejects a direct Pointer(UInt64) typecast,
+    so go via NativeUInt (which is the underlying integer type of
+    TOrdHandle in this branch). }
+  Result := dlsym(Pointer(NativeUInt(h)), PAnsiChar(AnsiString(AName)));
   {$ENDIF}
 {$ENDIF}
 end;
