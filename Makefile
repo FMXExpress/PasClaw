@@ -113,6 +113,7 @@ UNIT_DIRS = \
 	src/pkg/cron \
 	src/pkg/skills \
 	src/pkg/checkpoints \
+	src/pkg/condense \
 	src/pkg/session \
 	src/pkg/identity \
 	src/pkg/agent \
@@ -402,6 +403,23 @@ test-checkpoints: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/checkpoints_tests.pas -o$(BUILDDIR)/checkpoints_tests
 	@$(BUILDDIR)/checkpoints_tests
 
+# JSON-aware condenser: pure string-in / string-out, no model. Pins
+# the collapse-arrays / ellipsize-strings contract that
+# PasClaw.Condense.JSON applies to tool output before it reaches the
+# byte-budget truncate stage.
+test-condense-json: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/condense_json_tests.pas -o$(BUILDDIR)/condense_json_tests
+	@$(BUILDDIR)/condense_json_tests
+
+# Goals runner: the auto-continue Ralph loop. Scripted fake provider
+# returns MET / CONTINUE / FAILED verdicts; pins parser + budget +
+# abort + judge-outage semantics. No real model.
+test-goals-runner: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/goals_runner_tests.pas -o$(BUILDDIR)/goals_runner_tests
+	@$(BUILDDIR)/goals_runner_tests
+
 # MCP hub projection: transport routing for pasclaw.dev catalog entries
 # (http / sse / streamable-http / stdio). Pure JSON-in / record-out;
 # no network. Pins the regression that "10 entries skipped -- non-HTTP
@@ -424,4 +442,4 @@ test-kb-index: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/kb_index_tests.pas -o$(BUILDDIR)/kb_index_tests
 	@$(BUILDDIR)/kb_index_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-kb-index
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index

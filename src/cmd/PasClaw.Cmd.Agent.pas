@@ -55,6 +55,7 @@ uses
   PasClaw.Identity,
   PasClaw.Agent.Steering,
   PasClaw.Checkpoints,
+  PasClaw.Agent.Goals,
   PasClaw.Markdown.Render;
 
 type
@@ -483,6 +484,152 @@ var
     InitCheckpoints(CC);
   end;
 
+  function GoalTurnRunner(const UserMsg: string;
+                           var Hist: TMessageArray;
+                           out Reply: string): Boolean;
+  { TGoalTurnFn implementation -- runs ONE agent turn during the
+    Ralph loop. Mirrors the relevant subset of the main `while
+    Inputs do` body just below: append user message, build the
+    same LoopCfg the main loop uses, run BeginTurn (checkpoints)
+    then RunToolLoop, swap Hist for the loop's compaction-aware
+    history. Compaction summary survives across iterations because
+    SystemPromptOverride is the enclosing var.
+
+    Deliberately skips a couple of bells the main loop has on each
+    user-typed turn (auto-router, working-state prefix, /think one-
+    shot): those depend on UI state that doesn't apply to the
+    judge-driven Continue stream. Operators who want them per-turn
+    on a goal run should drive each step interactively. }
+  var
+    GLoop: TToolLoopResult;
+    GCfg: TToolLoopConfig;
+    k: Integer;
+  begin
+    Result := False;
+    Reply := '';
+    SetLength(Hist, Length(Hist) + 1);
+    Hist[High(Hist)] := MakeMessage(mrUser, UserMsg);
+
+    GCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers);
+    if SystemPromptOverride <> '' then
+      GCfg.Options.SystemPrompt := SystemPromptOverride;
+    if Session <> nil then
+    begin
+      GCfg.Options.CacheKey := Session.Meta.Id;
+      GCfg.SteeringKey      := Session.Meta.Id;
+      if BgCoord <> nil then
+      begin
+        BgCoord.SetKey(Session.Meta.Id);
+        GCfg.BackgroundDrainKey := Session.Meta.Id;
+      end;
+    end;
+
+    BeginTurn;
+    if not RunToolLoop(GCfg, Hist, GLoop) then Exit;
+
+    Hist := GLoop.FinalMessages;
+    Reply := GLoop.Content;
+    if Trim(Reply) = '' then Reply := '(no reply)';
+    if GLoop.FinalSystemPrompt <> '' then
+      SystemPromptOverride := GLoop.FinalSystemPrompt;
+
+    { Mirror Msgs from the local var the main loop reads on
+      subsequent iterations. The goal runner walks Hist; we
+      copy it back so a follow-up user turn (after the goal
+      loop ends) picks up the same compacted state. The local
+      Msgs is the enclosing RunInteractive's array; rebuilding
+      it keeps /undo, /compact, /status all consistent. }
+    SetLength(Msgs, Length(Hist));
+    for k := 0 to High(Hist) do Msgs[k] := Hist[k];
+    PersistSession;
+    Result := True;
+  end;
+
+  procedure GoalProgress(IterNo, MaxIter: Integer; const Reply: string);
+  begin
+    PrintLn(Ansi.Dim + Format('— goal iter %d/%d —', [IterNo, MaxIter]) + Ansi.Reset);
+    PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ': ' +
+            MaybeRender(Cfg, Reply));
+  end;
+
+  procedure HandleGoalCommand(const Args: string);
+  { /goal <objective> or /goal --max N <objective>. Spins up a
+    TGoalRunner that pumps GoalTurnRunner through up to MaxIter
+    judge-arbitrated turns. The judge model defaults to the
+    primary Model -- the operator can wire a cheaper one via
+    Cfg.AutoRouter.EasyModel in a follow-up. }
+  var
+    Runner: TGoalRunner;
+    Trimmed, Goal: string;
+    MaxIter: Integer;
+    R: TGoalResult;
+    SpacePos: Integer;
+    NumStr: string;
+    HistAlias: TMessageArray;
+    k: Integer;
+  begin
+    Trimmed := Trim(Args);
+    MaxIter := DefaultGoalMaxIter;
+    if Copy(Trimmed, 1, 6) = '--max ' then
+    begin
+      Trimmed := Trim(Copy(Trimmed, 7, MaxInt));
+      SpacePos := Pos(' ', Trimmed);
+      if SpacePos > 0 then
+      begin
+        NumStr := Copy(Trimmed, 1, SpacePos - 1);
+        MaxIter := StrToIntDef(NumStr, DefaultGoalMaxIter);
+        if MaxIter <= 0 then MaxIter := DefaultGoalMaxIter;
+        Goal := Trim(Copy(Trimmed, SpacePos + 1, MaxInt));
+      end
+      else
+        Goal := '';
+    end
+    else
+      Goal := Trimmed;
+    if Goal = '' then
+    begin
+      PrintLn(Ansi.Yellow + '/goal: needs an objective. Usage: /goal [--max N] <objective>' + Ansi.Reset);
+      Exit;
+    end;
+    if Provider = nil then
+    begin
+      PrintLn(Ansi.Yellow + '/goal: no provider configured (offline mode)' + Ansi.Reset);
+      Exit;
+    end;
+    PrintLn(Ansi.Bold + '— goal —' + Ansi.Reset + ' ' + Goal +
+            Ansi.Dim + Format('  (budget=%d)', [MaxIter]) + Ansi.Reset);
+
+    Runner := TGoalRunner.Create(Provider, Model, MaxIter, GoalTurnRunner);
+    try
+      Runner.OnProgress := GoalProgress;
+      HistAlias := nil;
+      SetLength(HistAlias, Length(Msgs));
+      for k := 0 to High(Msgs) do HistAlias[k] := Msgs[k];
+      R := Runner.Run(Goal, HistAlias);
+      SetLength(Msgs, Length(HistAlias));
+      for k := 0 to High(HistAlias) do Msgs[k] := HistAlias[k];
+
+      case R.Verdict of
+        gvMet:
+          PrintLn(Ansi.Green + '✓ goal met' + Ansi.Reset +
+                  Format(' after %d iter(s)', [R.Iterations]));
+        gvFailed:
+          PrintLn(Ansi.Red + '✗ judged FAILED' + Ansi.Reset +
+                  Format(' after %d iter(s)', [R.Iterations]));
+        gvBudgetExhausted:
+          PrintLn(Ansi.Yellow + '… budget exhausted' + Ansi.Reset +
+                  Format(' (%d iter(s))', [R.Iterations]));
+        gvAborted:
+          PrintLn(Ansi.Yellow + '… aborted' + Ansi.Reset +
+                  Format(' after %d iter(s)', [R.Iterations]));
+      end;
+      if Trim(R.Reason) <> '' then
+        PrintLn(Ansi.Dim + '  judge: ' + Trim(R.Reason) + Ansi.Reset);
+    finally
+      Runner.Free;
+    end;
+  end;
+
   procedure HandleUndoCommand(const Args: string);
   { `/undo` -> rewind 1 turn; `/undo N` -> rewind N turns. Restores
     file contents captured at the start of each rewound turn. Files
@@ -638,12 +785,19 @@ begin
         PrintLn('  /tools       list registered tools');
         PrintLn('  /steer <msg> queue a mid-loop steering message for the NEXT iteration');
         PrintLn('  /undo [N]    rewind N turns by restoring file checkpoints (default 1)');
+        PrintLn('  /goal [--max N] <objective>');
+        PrintLn('               auto-continue turns until a judge model says MET / FAILED (budget N, default 5)');
         PrintLn('  /quit        exit (alias: /exit)');
         Continue;
       end;
       if (Line = '/undo') or (Copy(Line, 1, 6) = '/undo ') then
       begin
         HandleUndoCommand(Copy(Line, 7, MaxInt));
+        Continue;
+      end;
+      if (Line = '/goal') or (Copy(Line, 1, 6) = '/goal ') then
+      begin
+        HandleGoalCommand(Copy(Line, 7, MaxInt));
         Continue;
       end;
       if Line = '/status' then

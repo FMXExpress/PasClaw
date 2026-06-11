@@ -100,6 +100,7 @@ UNIT_DIRS = \
 	$(ROOT)/src/pkg/cron \
 	$(ROOT)/src/pkg/skills \
 	$(ROOT)/src/pkg/checkpoints \
+	$(ROOT)/src/pkg/condense \
 	$(ROOT)/src/pkg/session \
 	$(ROOT)/src/pkg/identity \
 	$(ROOT)/src/pkg/agent \
