@@ -193,7 +193,8 @@ uses
   PasClaw.JSON,
   PasClaw.Hashline,
   PasClaw.Tools.Types,
-  PasClaw.Tools.OutputCache;
+  PasClaw.Tools.OutputCache,
+  PasClaw.Condense.JSON;
 
 type
   { Per-call work unit. The same record is filled in by a worker thread
@@ -1000,6 +1001,17 @@ begin
                                               'ERROR: ' + Dispatches[Batch[j]].Err)
         else
         begin
+          { JSON-aware condensation runs FIRST: a tool that returned
+            a 200 KB JSON array of mostly-repetitive rows collapses
+            to a structural summary (first N + "...K more items" +
+            last 1) the model can still reason about, which is
+            usually small enough to skip the byte-budget truncate
+            below entirely. No-op when the body doesn't parse as
+            JSON or when condensation wouldn't shrink it.
+            See PasClaw.Condense.JSON. }
+          Dispatches[Batch[j]].ResultText :=
+            MaybeCondenseJSON(Dispatches[Batch[j]].ResultText);
+
           { Cap large successful tool outputs (errors stay verbatim --
             they're already short and the head/tail split would just
             obscure the actual failure). The handle goes into the
