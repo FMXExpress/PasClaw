@@ -241,6 +241,33 @@ begin
               'UTF-8 input round-trips through codepage 65001');
 end;
 
+procedure TestAutoDetectPrefersUTF8ForValidSequences;
+(* Codex P2 on PR #239: PowerShell 6+ (pwsh) defaults to UTF-8 stdout,
+   so when execute_code or shell_exec captures pwsh output the bytes
+   are valid UTF-8 sequences -- decoding via GetOEMCP would mojibake
+   them. With Codepage = 0 the helper should detect "this is valid
+   UTF-8" and pass through verbatim, NOT route through CP437. POSIX
+   side: Codepage=0 already goes through TEncoding.UTF8.GetString
+   so the same input is handled the same way on Linux CI. *)
+var
+  B: TBytes;
+  Got: string;
+begin
+  { "résumé" as UTF-8: r(0x72), é(0xC3 0xA9), s(0x73), u(0x75),
+    m(0x6D), é(0xC3 0xA9) -- 8 bytes total. }
+  SetLength(B, 8);
+  B[0] := $72;
+  B[1] := $C3; B[2] := $A9;
+  B[3] := $73;
+  B[4] := $75;
+  B[5] := $6D;
+  B[6] := $C3; B[7] := $A9;
+  Got := DecodeShellOutputBytes(B);   { Codepage = 0 -> auto-detect }
+  AssertEqStr(Got, 'résumé',
+              'auto-detect: valid UTF-8 input passes through verbatim ' +
+              '(would be mojibake "rA©sumA©" or similar if CP437 was forced)');
+end;
+
 begin
   TestEmptyInputEmptyOutput;
   WriteLn('  ok: empty input -> empty output');
@@ -262,5 +289,7 @@ begin
   WriteLn('  ok: CP437 0xC4 -> ─ (3-byte UTF-8)');
   TestUTF8InputThroughExplicitCP65001;
   WriteLn('  ok: codepage 65001 = pass-through UTF-8');
+  TestAutoDetectPrefersUTF8ForValidSequences;
+  WriteLn('  ok: auto-detect picks UTF-8 for valid UTF-8 input (pwsh case)');
   WriteLn('PASS');
 end.
