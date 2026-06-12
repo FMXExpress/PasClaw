@@ -199,7 +199,28 @@ begin
   if Len > Length(Bytes) then Len := Length(Bytes);
 
   {$IFDEF MSWINDOWS}
-  if Codepage = 0 then CP := GetOEMCP else CP := Codepage;
+  if Codepage <> 0 then
+    CP := Codepage
+  else
+  begin
+    { Prefer the ACTIVE console output codepage over the system OEM
+      default. cmd.exe writes its stdout in whichever codepage is
+      currently set on the console (the OEM default initially, but
+      operators can switch it -- `chcp 65001` puts the console in
+      UTF-8, and PowerShell sessions inherit the host process's
+      OutputEncoding). Pinning to GetOEMCP would silently re-mojibake
+      output in those environments by decoding UTF-8 bytes as if they
+      were CP437. GetConsoleOutputCP returns the active output CP for
+      the console attached to this process; it returns 0 when the
+      process isn't attached to a console (gateway / serve daemons
+      launched from a service manager, headless CI), in which case
+      we fall back to GetOEMCP -- a long-running headless daemon
+      doesn't have a "currently active" console CP to consult, but
+      its spawned cmd.exe children still default to the OEM CP.
+      Codex P2 on PR #237. }
+    CP := GetConsoleOutputCP;
+    if CP = 0 then CP := GetOEMCP;
+  end;
   { Pass 1: discover the wide-char buffer size we need. }
   WideLen := MultiByteToWideChar(CP, 0, PAnsiChar(@Bytes[0]), Len, nil, 0);
   if WideLen <= 0 then
