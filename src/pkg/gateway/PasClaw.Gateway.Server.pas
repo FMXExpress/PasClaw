@@ -201,7 +201,13 @@ uses
   PasClaw.Identity,
   PasClaw.Session.Store,
   PasClaw.Gateway.ToolView,
-  PasClaw.Gateway.WebUI;
+  PasClaw.Gateway.WebUI,
+  PasClaw.Otel;             { http.server.request span wrapping every
+                              inbound /v1/* call. Parent context comes
+                              from the incoming traceparent header (W3C
+                              Trace Context) when present, so an upstream
+                              caller's trace stays connected to the agent
+                              turn that gets kicked off by this request. }
 
 var
   { Process-wide cache for the /v1/stats response. Walking the
@@ -592,11 +598,29 @@ var
   Doc: string;
   IsChatCompletionsStream: Boolean;
   ResponseStarted: Boolean;
+  HttpSpan: TOtelSpan;
+  ParentTP: string;
 begin
   Doc := ARequest.Document;
   IsChatCompletionsStream := False;
   ResponseStarted := False;
   LogDebug('gateway: %s %s', [ARequest.Command, Doc]);
+
+  { Tier-4 instrumentation: wrap the whole inbound request in an
+    http.server span. ParentTP is the incoming W3C Trace Context
+    header (typically set by an OTel-instrumented client upstream);
+    when absent we start a new trace right here. Each Indy worker
+    thread runs OnCommandGet on its own thread, and Otel's
+    threadvar current-span stack scopes child agent.turn /
+    chat / execute_tool spans to this request without cross-thread
+    bleed. }
+  ParentTP := ARequest.RawHeaders.Values['traceparent'];
+  HttpSpan := StartSpan('HTTP ' + ARequest.Command + ' ' + Doc,
+                        oskServer, ParentTP);
+  try
+    SetAttrStr(HttpSpan, 'http.request.method', ARequest.Command);
+    SetAttrStr(HttpSpan, 'url.path',            Doc);
+    SetAttrStr(HttpSpan, 'http.route',          Doc);
 
   { MCP-only listener: when this gateway was spun up as the
     --mcp-port companion, the only routes it honours are the
@@ -660,6 +684,7 @@ begin
     on E: Exception do
     begin
       LogError('gateway: handler crashed: %s', [E.Message]);
+      SetStatus(HttpSpan, oscError, E.ClassName + ': ' + E.Message);
       if IsChatCompletionsStream and (ResponseStarted or AResponse.HeaderHasBeenWritten) then
       begin
         LogWarn('gateway: streaming response already started; closing connection');
@@ -678,6 +703,15 @@ begin
       else if (AContext <> nil) and (AContext.Connection <> nil) then
         AContext.Connection.Disconnect;
     end;
+  end;
+  finally
+    SetAttrInt(HttpSpan, 'http.response.status_code', AResponse.ResponseNo);
+    if (AResponse.ResponseNo >= 200) and (AResponse.ResponseNo < 400) then
+      SetStatus(HttpSpan, oscOk, '')
+    else if HttpSpan <> nil then
+      SetStatus(HttpSpan, oscError,
+                'HTTP ' + IntToStr(AResponse.ResponseNo));
+    FinishSpan(HttpSpan);
   end;
 end;
 
