@@ -58,6 +58,7 @@ uses
   PasClaw.Cmd.ToolRPC,
   PasClaw.Cmd.Export,
   PasClaw.Cmd.Runbook,
+  PasClaw.Cmd.Heartbeat,
   PasClaw.Cmd.TUI;
 
 type
@@ -112,7 +113,7 @@ const
 var
   Sub, Fl: array of string;
 begin
-  SetLength(Sub, 26);
+  SetLength(Sub, 27);
   Sub[0]  := 'config       View/edit configuration';
   Sub[1]  := 'onboard      Initialize config & workspace';
   Sub[2]  := 'agent        Chat with the assistant (line-by-line)';
@@ -138,7 +139,8 @@ begin
   Sub[22] := 'learn        Mine sessions for recurring tool failures';
   Sub[23] := 'export       Render memory/skills/sandbox into AGENTS.md / CLAUDE.md / Cursor / Gemini / Zed';
   Sub[24] := 'runbook      Ask the model to probe the project and write a starter AGENTS.md';
-  Sub[25] := 'version      Show version info';
+  Sub[25] := 'heartbeat    Run the proactive periodic wake-up daemon (off by default; opt in via onboard)';
+  Sub[26] := 'version      Show version info';
 
   SetLength(Fl, 2);
   Fl[0] := '--no-color   Disable colored output (also: NO_COLOR env)';
@@ -195,6 +197,7 @@ begin
     as not-for-humans. See PasClaw.Cmd.ToolRPC for the wire shape. }
   else if Cmd = '__tool'   then Result := Cmd_ToolRPC_Run(Argv)
   else if Cmd = 'tui'      then Result := Cmd_TUI_Run(Argv)
+  else if Cmd = 'heartbeat' then Result := Cmd_Heartbeat_Run(Argv)
   else if Cmd = 'update'   then Result := Cmd_Update_Run(Argv)
   else if Cmd = 'version'  then Result := Cmd_Version_Run(Argv)
   else

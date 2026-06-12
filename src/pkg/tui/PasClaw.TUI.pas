@@ -824,10 +824,10 @@ begin
   ToolRows := Length(FStatsToolCallNames);
   if ToolRows > 8 then ToolRows := 8;       { cap rendered rows; full
                                               list still in memory }
-  BoxH := 11 + ToolRows;                    { frame + 9 stat rows
+  BoxH := 12 + ToolRows;                    { frame + 10 stat rows
                                               (session/tokens/truncated/
                                               shell/cache/promptware/
-                                              tool-call hdr) +
+                                              ccr/tool-call hdr) +
                                               tool-call rows + footer }
   BoxX := (W - BoxW) div 2;
   BoxY := (H - BoxH) div 2;
@@ -920,6 +920,21 @@ begin
                      [PromptwareScans, PromptwareHits])
   else
     Label_ := ' promptware disabled (promptware_enabled: false)';
+  while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
+  if Length(Label_) > BoxW - 2 then Label_ := Copy(Label_, 1, BoxW - 2);
+  WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);
+  Inc(Row);
+
+  { Reversible condensation: how many tool outputs the condenser
+    shrunk and the cumulative bytes preserved under handles. Zero
+    when CondenseReversible is off OR no tool output passed the
+    condenser's saving floor this session. }
+  GotoXY(BoxX, Row);
+  if CondenseReversibleEnabled then
+    Label_ := Format(' ccr        %d stash(es), %d bytes preserved',
+                     [CondenseStashCount, CondenseStashBytesPreserved])
+  else
+    Label_ := ' ccr        disabled (condense_reversible: false)';
   while Length(Label_) < BoxW - 2 do Label_ := Label_ + ' ';
   if Length(Label_) > BoxW - 2 then Label_ := Copy(Label_, 1, BoxW - 2);
   WriteAnsiText(ConsoleTheme.Text, Side + Label_ + Side);

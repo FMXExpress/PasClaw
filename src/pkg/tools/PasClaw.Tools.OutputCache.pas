@@ -70,6 +70,32 @@ procedure GetOutputCacheStats(out EntryCount: Integer;
   defeat the purpose; the TUI doesn't call it. Exposed for tests. }
 procedure ClearOutputCache;
 
+{ Reversible condensation (CCR, headroom-inspired). When a condenser
+  (PasClaw.Condense.JSON, PasClaw.Tools.Shell.Filters) actually shrinks
+  output, callers wrap their (Original, Condensed) pair through here:
+  if the saving exceeds MinSavingsBytes, stash the ORIGINAL bytes under
+  a fresh handle and append a footer pointing the model at
+  tool_output_get for the full text. Otherwise return Condensed
+  unchanged. The model gets the structural summary by default; the
+  bytes-as-written remain reachable on demand. Same OutputCache the
+  byte-budget truncation already uses -- one stash hub, one retrieval
+  tool. No-op when SetCondenseReversible(False) was called from
+  config.json. }
+function AttachReversibleStashFooter(const Original, Condensed: string;
+                                     MinSavingsBytes: Integer = 256): string;
+
+{ Process-wide enable switch for AttachReversibleStashFooter. Default
+  True; LoadConfig propagates Cfg.CondenseReversible here. Mirrors
+  PasClaw.Promptware.SetPromptwareEnabled. }
+procedure SetCondenseReversible(AEnabled: Boolean);
+function CondenseReversibleEnabled: Boolean;
+
+{ Counters: how many condense outputs were stashed reversibly + the
+  cumulative bytes the model would have otherwise lost access to.
+  Surfaced by the TUI /stats overlay alongside the byte-cap savings. }
+function CondenseStashCount: Int64;
+function CondenseStashBytesPreserved: Int64;
+
 { Adds the `tool_output_get` tool to the registry. Callers only invoke
   this when the truncation feature is on (Cfg.ToolOutputCap > 0) -- no
   point advertising a tool that always returns "no handle". }
@@ -96,6 +122,9 @@ var
   GEntries:  array of TOutputEntry;
   GCounter:  Int64;             { monotonic; combined with PID-ish
                                   randomness for the handle id }
+  GCondenseReversible: Boolean = True;   { LoadConfig forwards Cfg.CondenseReversible here. }
+  GCondenseStashCount: Int64 = 0;
+  GCondenseStashBytes: Int64 = 0;
 
 function IndexOfHandle(const Handle: string): Integer;
 { Caller holds GLock. Linear scan -- entry count rarely exceeds the
@@ -246,6 +275,53 @@ begin
   finally
     GLock.Leave;
   end;
+end;
+
+procedure SetCondenseReversible(AEnabled: Boolean);
+begin
+  GCondenseReversible := AEnabled;
+end;
+
+function CondenseReversibleEnabled: Boolean;
+begin
+  Result := GCondenseReversible;
+end;
+
+function CondenseStashCount: Int64;        begin Result := GCondenseStashCount; end;
+function CondenseStashBytesPreserved: Int64; begin Result := GCondenseStashBytes; end;
+
+function AttachReversibleStashFooter(const Original, Condensed: string;
+                                     MinSavingsBytes: Integer): string;
+var
+  Saved: Integer;
+  Handle: string;
+begin
+  Result := Condensed;
+  if not GCondenseReversible then Exit;
+  { Length() is char-count, which for UTF-8 strings under FPC mode
+    delphi (8-bit AnsiString) equals byte count -- same as everywhere
+    else in this codebase that compares to byte caps. }
+  Saved := Length(Original) - Length(Condensed);
+  if Saved < MinSavingsBytes then Exit;
+  { Stash the FULL original. The body is the bytes we want the model
+    to be able to retrieve; the head/tail-splitting StashAndMaybeTruncate
+    does is unhelpful here (the condenser already gave the model a
+    shape-preserving view -- tool_output_get is the escape hatch when
+    that shape isn't enough). Allocate a handle directly. }
+  Handle := NewHandle;
+  GLock.Enter;
+  try
+    SetLength(GEntries, Length(GEntries) + 1);
+    GEntries[High(GEntries)].Handle := Handle;
+    GEntries[High(GEntries)].Body   := Original;
+    Inc(GCondenseStashCount);
+    Inc(GCondenseStashBytes, Length(Original));
+  finally
+    GLock.Leave;
+  end;
+  Result := Condensed + sLineBreak +
+    Format('[condensed %d -> %d bytes; full original at handle="%s" via tool_output_get]',
+           [Length(Original), Length(Condensed), Handle]);
 end;
 
 function Tool_OutputGet(const ArgsJSON: string; out ErrMsg: string): string;

@@ -427,6 +427,19 @@ test-orient: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/orient_tests.pas -o$(BUILDDIR)/orient_tests
 	@$(BUILDDIR)/orient_tests
 
+# Reversible condensation (CCR): when JSON/shell condensers shrink output,
+# stash the original under a tool_output_get handle. PasClaw.Tools.OutputCache.
+test-condense-reversible: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/condense_reversible_tests.pas -o$(BUILDDIR)/condense_reversible_tests
+	@$(BUILDDIR)/condense_reversible_tests
+
+# Heartbeat daemon: proactive periodic wake-up. Scripted provider fakes the model.
+test-heartbeat: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/heartbeat_tests.pas -o$(BUILDDIR)/heartbeat_tests
+	@$(BUILDDIR)/heartbeat_tests
+
 # Goals runner: the auto-continue Ralph loop. Scripted fake provider
 # returns MET / CONTINUE / FAILED verdicts; pins parser + budget +
 # abort + judge-outage semantics. No real model.
@@ -457,4 +470,4 @@ test-kb-index: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/kb_index_tests.pas -o$(BUILDDIR)/kb_index_tests
 	@$(BUILDDIR)/kb_index_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-promptware test-orient
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-promptware test-orient test-condense-reversible test-heartbeat
