@@ -105,7 +105,9 @@ UNIT_DIRS = \
 	$(ROOT)/src/pkg/identity \
 	$(ROOT)/src/pkg/agent \
 	$(ROOT)/src/pkg/memory \
+	$(ROOT)/src/pkg/memory/localvector \
 	$(ROOT)/src/pkg/kb \
+	$(ROOT)/src/pkg/markdown \
 	$(ROOT)/src/pkg/updater \
 	$(ROOT)/src/pkg/membench \
 	$(ROOT)/src/pkg/tui \
