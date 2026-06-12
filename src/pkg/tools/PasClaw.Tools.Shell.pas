@@ -30,15 +30,20 @@ implementation
 uses
   PasClaw.JSON,
   PasClaw.Logger,
-  PasClaw.Platform,
   PasClaw.Tools.Sandbox,
   PasClaw.Tools.Shell.Filters,
-  PasClaw.Tools.OutputCache;     { AttachReversibleStashFooter --
+  PasClaw.Tools.OutputCache,     { AttachReversibleStashFooter --
                                    when ApplyShellFilter shrinks the
                                    bytes, stash the original so the
                                    model can recall it via
                                    tool_output_get. Same retrieval
                                    substrate the byte-cap path uses. }
+  PasClaw.Shell.Backend;         { dispatch through the active
+                                   IShellBackend instead of going
+                                   straight to RunOneShot -- the
+                                   docker backend exec's into a
+                                   per-session container; the local
+                                   backend is the legacy path. }
 
 function ParseStringArg(const ArgsJSON, Field: string; out V: string): Boolean;
 var
@@ -91,7 +96,7 @@ begin
   else
     WorkDir := '';
   LogDebug('shell exec (cwd=%s): %s', [WorkDir, Cmd]);
-  ExitCode := RunOneShot(Cmd, WorkDir, Out_);
+  ExitCode := RunOneShotViaBackend(GetCurrentSessionId, Cmd, WorkDir, Out_);
   { Per-command condenser. Tee-on-failure: ApplyShellFilter returns
     raw output verbatim when ExitCode <> 0 so the model gets full
     error context to debug. On the success path, known commands
@@ -115,9 +120,21 @@ end;
 procedure RegisterShellTool(R: TToolRegistry);
 var
   T: TTool;
+  Backend: IShellBackend;
+  BackendNote: string;
 begin
+  Backend := GetActiveShellBackend;
+  if (Backend <> nil) and (Backend.Name <> 'local') then
+    { Tell the model where commands actually run so it doesn't
+      `apt install` something expecting host-persistence. Same
+      trick send_message uses to enumerate configured channels. }
+    BackendNote := ' Runs via the ' + Backend.Name + ' shell backend: ' +
+                   Backend.Describe + '.'
+  else
+    BackendNote := '';
   T.Name        := 'shell_exec';
-  T.Description := 'Run a shell command via /bin/sh -c (or cmd.exe on Windows). Captures stdout+stderr, caps output at 1 MiB.';
+  T.Description := 'Run a shell command via /bin/sh -c (or cmd.exe on Windows). ' +
+                   'Captures stdout+stderr, caps output at 1 MiB.' + BackendNote;
   T.Schema      := '{"type":"object","properties":{"command":{"type":"string","description":"Shell command to execute."}},"required":["command"]}';
   T.Handler     := Tool_Shell;
   T.IsCore      := True;

@@ -35,6 +35,9 @@ uses
   PasClaw.Tools.MemoryFetch,
   PasClaw.Tools.OutputCache,
   PasClaw.Tools.Sandbox,
+  PasClaw.Shell.Backend,           { StartShellSession / SetCurrentSessionId
+                                     -- same session-lifecycle hooks as Cmd.Agent }
+  PasClaw.Shell.Backend.Factory,   { InstallShellBackend }
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
   PasClaw.Agent.Subagent,
@@ -43,13 +46,14 @@ uses
 
 type
   TTUIArgs = record
-    Model:       string;
-    Provider:    string;
-    Session:     string;
-    Theme:       string;
-    NoMCP:       Boolean;
-    NoTools:     Boolean;
-    NoHashline:  Boolean;
+    Model:           string;
+    Provider:        string;
+    Session:         string;
+    Theme:           string;
+    NoMCP:           Boolean;
+    NoTools:         Boolean;
+    NoHashline:      Boolean;
+    BackendOverride: string;
   end;
 
 function ParseArgs(const Argv: array of string; var A: TTUIArgs): Boolean;
@@ -59,12 +63,14 @@ begin
   Result := True;
   A.Model := ''; A.Provider := ''; A.Session := ''; A.Theme := '';
   A.NoMCP := False; A.NoTools := False; A.NoHashline := False;
+  A.BackendOverride := '';
   i := 0;
   while i <= High(Argv) do
   begin
     if Argv[i] = '--model'        then begin if i = High(Argv) then Exit(False); A.Model    := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--provider'     then begin if i = High(Argv) then Exit(False); A.Provider := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--session'      then begin if i = High(Argv) then Exit(False); A.Session  := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--backend'      then begin if i = High(Argv) then Exit(False); A.BackendOverride := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--theme'        then begin if i = High(Argv) then Exit(False); A.Theme    := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--no-mcp'       then begin A.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-tools'     then begin A.NoTools    := True; Inc(i); Continue; end;
@@ -87,10 +93,37 @@ var
   SubCtx: TSubagentContext;
   Spawn: TSpawnTool;
   BgCoord: TBackgroundSpawnCoordinator;
+  KindSelected: TShellBackendKind;
+  BackendDesc: string;
 begin
   if not ParseArgs(Argv, A) then Exit(1);
   Cfg := LoadConfig;
   ConfigureSandbox(Cfg.Sandbox, '');
+  { Phase 1 docker backend is wired for the agent + heartbeat
+    surfaces; TUI's in-process session switching (/new, /load) needs
+    a per-switch container handoff that's a Phase 1.5 follow-up.
+    Until then, install only the local backend on TUI and refuse a
+    docker selection loudly so the operator isn't silently running
+    on the host when they thought they had isolation. }
+  if (LowerCase(A.BackendOverride) = 'docker')
+     or ((A.BackendOverride = '') and (Cfg.ShellBackend = sbDocker)) then
+  begin
+    PrintLn(Ansi.Yellow + '!' + Ansi.Reset +
+            ' TUI does not yet support the docker shell backend.');
+    PrintLn('  Use ' + Ansi.Bold + 'pasclaw agent' + Ansi.Reset +
+            ' for an interactive docker-backed session, or pass ' +
+            Ansi.Bold + '--backend local' + Ansi.Reset + '.');
+    Exit(1);
+  end;
+  try
+    InstallShellBackend(Cfg, A.BackendOverride, KindSelected, BackendDesc);
+  except
+    on E: Exception do
+    begin
+      PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + E.Message);
+      Exit(1);
+    end;
+  end;
   try
     if A.Provider <> '' then Name := A.Provider else Name := Cfg.DefaultProvider;
     Provider := nil;

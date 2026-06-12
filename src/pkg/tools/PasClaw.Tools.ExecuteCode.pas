@@ -114,7 +114,11 @@ uses
   PasClaw.Platform,
   PasClaw.Utils,
   PasClaw.Tools.Sandbox,
-  PasClaw.Tools.RPC;
+  PasClaw.Tools.RPC,
+  PasClaw.Shell.Backend;   { route the spawn through the active
+                             shell backend so docker sessions
+                             execute the script inside the
+                             container rather than on the host }
 
 type
   (* Per-registry execute_code handler. RegisterExecuteCodeTool
@@ -438,7 +442,8 @@ begin
       LogDebug('execute_code (lang=%s cwd=%s rpc=%s): %s',
                [ResolvedLang, WorkDir,
                 BoolToStr(Server <> nil, True), ScriptPath]);
-      ExitCode := RunOneShotWithEnv(Cmd, WorkDir, ExtraEnv, Out_);
+      ExitCode := RunOneShotWithEnvViaBackend(GetCurrentSessionId, Cmd, WorkDir,
+                                              ExtraEnv, Out_);
       Result := Format('exit=%d'#10'%s', [ExitCode, Out_]);
     finally
       if (ScriptPath <> '') and FileExists(ScriptPath) then

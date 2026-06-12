@@ -65,6 +65,8 @@ uses
   PasClaw.Tools.Vault,
   PasClaw.Tools.OutputCache,
   PasClaw.Tools.Sandbox,
+  PasClaw.Shell.Backend,    { TShellBackendKind -- gate on Cfg.ShellBackend
+                              so we refuse docker on serve cleanly }
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
   PasClaw.Stream.Reliability,
@@ -136,6 +138,28 @@ begin
   ConfigureSandbox(Cfg.Sandbox, '');
   try
     Args := ParseServe(Argv, Cfg);
+    { Phase 1 scope: docker shell-backend is wired for `pasclaw agent`
+      and `pasclaw heartbeat`. The multi-tenant serve path needs
+      per-request session containers and cross-thread session-id
+      propagation, which is Phase 1.5 work. Refuse docker here
+      loudly so an operator who flipped on docker globally doesn't
+      silently end up on the host when they hit /v1.
+
+      Skip the gate when --no-tools was passed -- a tool-disabled
+      server never dispatches shell_exec, so the docker isolation
+      story doesn't apply. Codex P2 on PR #233: parse args before
+      the gate so the help text's `--no-tools` advice is actually
+      honoured. }
+    if (Cfg.ShellBackend = sbDocker) and (not Args.NoTools) then
+    begin
+      PrintLn(Ansi.Yellow + '!' + Ansi.Reset +
+              ' `pasclaw serve` does not yet host the docker shell backend.');
+      PrintLn('  Run with shell_backend=local in config.json (single-tenant ' +
+              'docker is on `pasclaw agent` only),');
+      PrintLn('  or pass ' + Ansi.Bold + '--no-tools' + Ansi.Reset +
+              ' to disable tool execution.');
+      Exit(1);
+    end;
 
     { Stream-reliability env-var overrides. Lets operators tune
       UC_EMPTY_RETRY_ATTEMPTS / UC_EMPTY_RETRY_BACKOFF_MS /

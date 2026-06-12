@@ -53,6 +53,17 @@ uses
   PasClaw.Agent.AutoRouter,
   PasClaw.Session.Store,
   PasClaw.Tools.Sandbox,
+  PasClaw.Shell.Backend,           { StartShellSession / CloseShellSession +
+                                     SetCurrentSessionId -- so the
+                                     active shell backend (docker, ssh,
+                                     local) knows which session is
+                                     running and dispatches Exec to the
+                                     right container. }
+  PasClaw.Shell.Backend.Factory,   { InstallShellBackend -- called once
+                                     from Cmd_Agent_Run with the loaded
+                                     Cfg + the optional --backend
+                                     override. Sets the process-wide
+                                     active backend. }
   PasClaw.Identity,
   PasClaw.Agent.Steering,
   PasClaw.Checkpoints,
@@ -80,6 +91,9 @@ type
       pre-seed an id like "daily-2026-06-01"). RunSingleTurn (one-shot
       -m) ignores this -- single turns aren't worth persisting. }
     Session:       string;
+    { --backend local|docker. Empty = use Cfg.ShellBackend. Override
+      is per-invocation; we don't persist it to config. }
+    BackendOverride: string;
   end;
 
   TLoopHandlers = class
@@ -144,6 +158,7 @@ begin
     if Argv[i] = '--no-mcp'      then begin A.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline' then begin A.NoHashline := True; Inc(i); Continue; end;
     if Argv[i] = '--session'     then begin if i = High(Argv) then Exit(False); A.Session := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--backend'     then begin if i = High(Argv) then Exit(False); A.BackendOverride := Argv[i + 1]; Inc(i, 2); Continue; end;
     Inc(i);
   end;
 end;
@@ -384,6 +399,7 @@ var
   MCPClients: TMCPClientList;
   Spawn: TSpawnTool;
   BgCoord: TBackgroundSpawnCoordinator;
+  OneShotSessionId: string;
 begin
   if not PickProvider(Cfg, A, Provider, Err) then
   begin
@@ -412,6 +428,18 @@ begin
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   BgCoord := MaybeRegisterBackgroundSpawnTools(Cfg, Provider, Reg, Model);
   Handlers := TLoopHandlers.Create;
+  { Allocate a one-shot session id so the active shell backend
+    (docker, ssh, ...) actually isolates this turn. Codex P1 on
+    PR #233: without StartShellSession the docker backend's empty-
+    SessionId fallback dispatched to RunOneShot ON THE HOST,
+    silently bypassing the isolation the operator asked for. The
+    id is purely for the backend (one-shot turns aren't persisted
+    as PasClaw sessions); short prefix avoids docker's 64-char
+    container-name cap. }
+  OneShotSessionId := 'oneshot-' + FormatDateTime('yyyymmdd-hhnnss', Now) +
+                      '-' + IntToHex(Random(1 shl 24), 6);
+  StartShellSession(OneShotSessionId);
+  SetCurrentSessionId(OneShotSessionId);
   try
     SetLength(Msgs, 1);
     Msgs[0] := MakeMessage(mrUser, Prompt);
@@ -426,6 +454,8 @@ begin
     if Loop.TotalUsage.InputTokens + Loop.TotalUsage.OutputTokens > 0 then
       PrintLn(Ansi.Dim + FormatTokenLine(Loop.TotalUsage, Loop.Iterations) + Ansi.Reset);
   finally
+    CloseShellSession(OneShotSessionId);
+    SetCurrentSessionId('');
     Handlers.Free;
     FreeMCPClients(MCPClients);
     if Spawn <> nil then Spawn.Free;
@@ -804,6 +834,14 @@ begin
       "history survives restarts" point. }
     Session := TSession.Create(A.Session);
     RewireCheckpoints;
+    { Tell the active shell backend a session is starting so docker
+      can spawn its per-session container BEFORE the first tool
+      call. SetCurrentSessionId makes shell_exec / execute_code
+      dispatch through the right container (or fall back cleanly
+      on local). The matching CloseShellSession runs in the
+      finally below. }
+    StartShellSession(Session.Meta.Id);
+    SetCurrentSessionId(Session.Meta.Id);
     if Session.MetaExists then
     begin
       SetLength(Msgs, Length(Session.Messages));
@@ -1196,7 +1234,16 @@ begin
     FreeMCPClients(MCPClients);
     if Spawn <> nil then Spawn.Free;
     Reg.Free;
-    if Session <> nil then Session.Free;
+    if Session <> nil then
+    begin
+      { Stop the per-session container before freeing the session
+        meta. The Local backend's CloseSession is a no-op; the
+        Docker backend issues `docker stop <name>` (which --rm
+        cleans up). }
+      CloseShellSession(Session.Meta.Id);
+      SetCurrentSessionId('');
+      Session.Free;
+    end;
   end;
 end;
 
@@ -1204,6 +1251,8 @@ function Cmd_Agent_Run(const Argv: array of string): Integer;
 var
   A: TAgentArgs;
   Cfg: TConfig;
+  KindSelected: TShellBackendKind;
+  BackendDesc: string;
 begin
   if not ParseArgs(Argv, A) then
   begin
@@ -1215,6 +1264,20 @@ begin
 
   Cfg := LoadConfig;
   ConfigureSandbox(Cfg.Sandbox, '');
+  { Install the active shell backend BEFORE any session can spawn a
+    container or build its tool registry (shell_exec's description
+    advertises the backend). Surfaces docker-daemon errors here
+    with the right command-line context so the operator sees what
+    --backend they picked. }
+  try
+    InstallShellBackend(Cfg, A.BackendOverride, KindSelected, BackendDesc);
+  except
+    on E: Exception do
+    begin
+      PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + E.Message);
+      Exit(1);
+    end;
+  end;
   try
     if A.Message <> '' then RunSingleTurn(Cfg, A, A.Message)
     else                    RunInteractive(Cfg, A);

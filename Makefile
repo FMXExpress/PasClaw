@@ -114,6 +114,7 @@ UNIT_DIRS = \
 	src/pkg/skills \
 	src/pkg/checkpoints \
 	src/pkg/condense \
+	src/pkg/shell \
 	src/pkg/session \
 	src/pkg/identity \
 	src/pkg/agent \
@@ -440,6 +441,13 @@ test-heartbeat: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/heartbeat_tests.pas -o$(BUILDDIR)/heartbeat_tests
 	@$(BUILDDIR)/heartbeat_tests
 
+# Shell backend abstraction (PasClaw.Shell.Backend + local impl + recording mock).
+# Docker is exercised by a separate harness that requires Docker on the box.
+test-shell-backend: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/shell_backend_tests.pas -o$(BUILDDIR)/shell_backend_tests
+	@$(BUILDDIR)/shell_backend_tests
+
 # Goals runner: the auto-continue Ralph loop. Scripted fake provider
 # returns MET / CONTINUE / FAILED verdicts; pins parser + budget +
 # abort + judge-outage semantics. No real model.
@@ -470,4 +478,4 @@ test-kb-index: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/kb_index_tests.pas -o$(BUILDDIR)/kb_index_tests
 	@$(BUILDDIR)/kb_index_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-promptware test-orient test-condense-reversible test-heartbeat
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend

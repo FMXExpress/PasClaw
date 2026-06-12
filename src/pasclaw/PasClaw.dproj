@@ -201,6 +201,10 @@
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.Memory.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.SessionSearch.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.SendMessage.pas"/>
+        <DCCReference Include="..\pkg\shell\PasClaw.Shell.Backend.pas"/>
+        <DCCReference Include="..\pkg\shell\PasClaw.Shell.Backend.Local.pas"/>
+        <DCCReference Include="..\pkg\shell\PasClaw.Shell.Backend.Docker.pas"/>
+        <DCCReference Include="..\pkg\shell\PasClaw.Shell.Backend.Factory.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.WebSearch.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.WebFetch.pas"/>
         <DCCReference Include="..\pkg\tools\PasClaw.Tools.MemoryFetch.pas"/>

@@ -51,6 +51,9 @@ uses
   PasClaw.Tools.OutputCache,
   PasClaw.Tools.Sandbox,    { ConfigureSandbox -- apply the operator's
                               policy before fs_*/shell tools can fire }
+  PasClaw.Shell.Backend,         { TShellBackendKind -- needed for the
+                                   KindSelected local var }
+  PasClaw.Shell.Backend.Factory, { InstallShellBackend }
   PasClaw.Heartbeat;
 
 procedure Help;
@@ -64,6 +67,7 @@ begin
   PrintLn('  --once                run a single tick and exit (testing)');
   PrintLn('  --interval N          override config''s interval (minutes)');
   PrintLn('  --content PATH        override config''s content file path');
+  PrintLn('  --backend local|docker  override config''s shell_backend for this run');
   PrintLn('  --force               run even when heartbeat.enabled is false in config');
 end;
 
@@ -98,10 +102,13 @@ var
   HB: THeartbeat;
   Once, Force: Boolean;
   IntervalOverride: Integer;
-  ContentOverride, Err, ProviderName, Model: string;
+  ContentOverride, Err, ProviderName, Model, BackendOverride: string;
+  KindSelected: TShellBackendKind;
+  BackendDesc: string;
   i: Integer;
 begin
   Once := False;
+  BackendOverride := '';
   Force := False;
   IntervalOverride := -1;
   ContentOverride := '';
@@ -119,6 +126,11 @@ begin
     if (Argv[i] = '--content') and (i < High(Argv)) then
     begin
       ContentOverride := Argv[i + 1];
+      Inc(i, 2); Continue;
+    end;
+    if (Argv[i] = '--backend') and (i < High(Argv)) then
+    begin
+      BackendOverride := Argv[i + 1];
       Inc(i, 2); Continue;
     end;
     if (Argv[i] = '-h') or (Argv[i] = '--help') then
@@ -139,6 +151,20 @@ begin
       outside the workspace regardless of sandbox settings.
       Codex P1 on PR #232. }
     ConfigureSandbox(Cfg.Sandbox, '');
+    { Install the shell backend. Each tick starts its own session
+      so the docker container is short-lived (matches the
+      "ephemeral" tick semantics). --backend override on the
+      command line lets the operator pick local for a one-off
+      tick without editing config. }
+    try
+      InstallShellBackend(Cfg, BackendOverride, KindSelected, BackendDesc);
+    except
+      on E: Exception do
+      begin
+        PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + E.Message);
+        Exit(1);
+      end;
+    end;
     if not Cfg.Heartbeat.Enabled then
     begin
       if not Force then
