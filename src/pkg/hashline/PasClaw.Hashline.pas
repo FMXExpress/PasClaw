@@ -328,6 +328,16 @@ begin
       Sb.Append(FormatNumberedLine(StartLine + i, Lines[i]));
     end;
     Result := Sb.ToString;
+    {$IFDEF FPC}
+    { TStringBuilder.ToString returns a string with no codepage set
+      regardless of what the appended pieces were tagged with. Stamp
+      it CP_UTF8 so callers concatenating this result (Tool_FSGrep's
+      multi-section TStringBuilder, the patch-apply summary) carry
+      the right tag through to JSON serialisation. The bytes are
+      already correct -- Text comes in as whatever the caller passes
+      (file bytes are UTF-8 in practice) and we don't transcode. }
+    SetCodePage(RawByteString(Result), CP_UTF8, False);
+    {$ENDIF}
   finally
     Sb.Free;
     Lines.Free;
@@ -338,6 +348,17 @@ function FormatHashlineRead(const FilePath, Content: string): string;
 begin
   Result := FormatHashlineHeader(FilePath, ComputeFileHash(Content)) + #10 +
             FormatNumberedLines(Content, 1);
+  {$IFDEF FPC}
+  { Concat of a CP_UTF8 header with default-codepage operands resets
+    the result's tag to CP=0 ("use DefaultSystemCodepage"). On Windows
+    that's the system ANSI CP (CP1252 on English), so the JSON
+    serialiser downstream would still mojibake the UTF-8 bytes the
+    way it would have before the FormatHashlineHeader fix. Stamp
+    the final concatenation here too -- this is the actual string
+    Tool_FSRead returns, the same one PasClaw.JSON.PutStr serialises
+    to the model. Codex P2 on PR #238. }
+  SetCodePage(RawByteString(Result), CP_UTF8, False);
+  {$ENDIF}
 end;
 
 { ====================== Prefix stripping (defensive) ====================== }
