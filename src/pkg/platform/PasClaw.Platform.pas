@@ -183,6 +183,11 @@ uses
 function DecodeShellOutputBytes(const Bytes: TBytes;
                                 ByteCount: Integer;
                                 Codepage: UInt32): string;
+{$IFDEF MSWINDOWS}
+const
+  CP_UTF8_LOCAL              = 65001;
+  MB_ERR_INVALID_CHARS_LOCAL = $00000008;
+{$ENDIF}
 var
   Len: Integer;
   {$IFDEF MSWINDOWS}
@@ -203,23 +208,38 @@ begin
     CP := Codepage
   else
   begin
-    { Prefer the ACTIVE console output codepage over the system OEM
-      default. cmd.exe writes its stdout in whichever codepage is
-      currently set on the console (the OEM default initially, but
-      operators can switch it -- `chcp 65001` puts the console in
-      UTF-8, and PowerShell sessions inherit the host process's
-      OutputEncoding). Pinning to GetOEMCP would silently re-mojibake
-      output in those environments by decoding UTF-8 bytes as if they
-      were CP437. GetConsoleOutputCP returns the active output CP for
-      the console attached to this process; it returns 0 when the
-      process isn't attached to a console (gateway / serve daemons
-      launched from a service manager, headless CI), in which case
-      we fall back to GetOEMCP -- a long-running headless daemon
-      doesn't have a "currently active" console CP to consult, but
-      its spawned cmd.exe children still default to the OEM CP.
-      Codex P2 on PR #237. }
-    CP := GetConsoleOutputCP;
-    if CP = 0 then CP := GetOEMCP;
+    { Auto-detect between UTF-8 and OEM. PR #237's first attempt
+      pinned GetConsoleOutputCP (wrong: returns OUR console's CP,
+      not the spawned cmd.exe's piped-output CP). The revert to
+      unconditional GetOEMCP was right for cmd.exe (which pipes
+      OEM regardless of chcp) but wrong for pwsh -- PowerShell 6+
+      defaults to UTF-8 stdout, so a `Write-Output 'résumé'` from
+      execute_code's pwsh branch produces UTF-8 bytes that GetOEMCP
+      would mojibake as CP437. Codex P2 on PR #239.
+
+      Heuristic: try strict UTF-8 (MB_ERR_INVALID_CHARS) first.
+      Valid UTF-8 -> use it (pwsh / chcp 65001 / Linux on Wine).
+      Invalid sequence anywhere -> fall back to OEM (cmd.exe's
+      piped output).
+
+      This is robust because:
+        - Pure ASCII (most output) is valid UTF-8 -> taken either way.
+        - cmd's CP437 non-ASCII bytes (0x80-0xFF) are typically
+          invalid UTF-8 lead bytes -- e.g. 0x82 (é in CP437) has
+          binary 10000010 which is a UTF-8 continuation marker, not
+          a lead byte, so it fails MB_ERR_INVALID_CHARS.
+        - pwsh UTF-8 output (multi-byte sequences for é/résumé/etc.)
+          parses cleanly.
+
+      Edge case: OEM bytes that happen to coincide with a valid
+      UTF-8 sequence (e.g. exactly a 2-byte CP437 pair that maps
+      to a real Unicode codepoint via UTF-8 decoding). This is
+      vanishingly unlikely for filename / dir output. }
+    if MultiByteToWideChar(CP_UTF8_LOCAL, MB_ERR_INVALID_CHARS_LOCAL,
+                            PAnsiChar(@Bytes[0]), Len, nil, 0) > 0 then
+      CP := CP_UTF8_LOCAL
+    else
+      CP := GetOEMCP;
   end;
   { Pass 1: discover the wide-char buffer size we need. }
   WideLen := MultiByteToWideChar(CP, 0, PAnsiChar(@Bytes[0]), Len, nil, 0);
