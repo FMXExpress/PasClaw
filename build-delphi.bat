@@ -42,7 +42,7 @@ if errorlevel 1 (
 if not exist "build\delphi\%PLATFORM%\%CONFIG%" mkdir "build\delphi\%PLATFORM%\%CONFIG%" || exit /b 1
 if not exist "build\delphi\%PLATFORM%\%CONFIG%\dcu" mkdir "build\delphi\%PLATFORM%\%CONFIG%\dcu" || exit /b 1
 
-set "UNIT_PATH=src\cmd;src\pkg\cliui;src\pkg\utils;src\pkg\logger;src\pkg\config;src\pkg\json;src\pkg\providers;src\pkg\stream;src\pkg\tokenizer;src\pkg\tools;src\pkg\mcp;src\pkg\gateway;src\pkg\channels;src\pkg\crypto;src\pkg\net;src\pkg\search;src\pkg\cron;src\pkg\skills;src\pkg\checkpoints;src\pkg\condense;src\pkg\session;src\pkg\identity;src\pkg\agent;src\pkg\memory;src\pkg\memory\localvector;src\pkg\kb;src\pkg\updater;src\pkg\membench;src\pkg\tui;src\pkg\platform;src\pkg\hashline;src\pkg\component;src\pkg\markdown;src\pkg\vendor\dmvcframework"
+set "UNIT_PATH=src\cmd;src\pkg\cliui;src\pkg\utils;src\pkg\logger;src\pkg\config;src\pkg\json;src\pkg\providers;src\pkg\stream;src\pkg\tokenizer;src\pkg\tools;src\pkg\mcp;src\pkg\gateway;src\pkg\channels;src\pkg\crypto;src\pkg\net;src\pkg\search;src\pkg\cron;src\pkg\skills;src\pkg\checkpoints;src\pkg\condense;src\pkg\session;src\pkg\identity;src\pkg\agent;src\pkg\memory;src\pkg\memory\localvector;src\pkg\kb;src\pkg\updater;src\pkg\membench;src\pkg\tui;src\pkg\platform;src\pkg\hashline;src\pkg\component;src\pkg\markdown;src\pkg\shell;src\pkg\vendor\dmvcframework"
 
 echo Building %DPR% with dcc64.exe...
 rem -DPASCLAW_NETHTTP routes outbound HTTP through System.Net.HttpClient
