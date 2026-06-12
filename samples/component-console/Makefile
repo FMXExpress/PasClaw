@@ -112,6 +112,7 @@ UNIT_DIRS = \
 	$(ROOT)/src/pkg/platform \
 	$(ROOT)/src/pkg/hashline \
 	$(ROOT)/src/pkg/component \
+	$(ROOT)/src/pkg/shell \
 	$(ROOT)/src/cmd
 
 INDY_UNIT_DIRS = \
