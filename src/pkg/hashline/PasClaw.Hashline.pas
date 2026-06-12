@@ -36,6 +36,24 @@ unit PasClaw.Hashline;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}            { Tag this unit's AnsiStrings as CP_UTF8
+                                so concatenation results
+                                (FormatHashlineHeader's `HL_FILE_PREFIX
+                                + FilePath + ...`) carry CP_UTF8 instead
+                                of defaulting to the system ANSI codepage.
+                                Without this, on Windows the JSON
+                                serialiser downstream treats the bytes
+                                as CP1252 and re-encodes them to UTF-8 --
+                                that's how the bytes for `¶` (0xC2 0xB6)
+                                turned into `Â¶` (0xC3 0x82 0xC2 0xB6) in
+                                fs_read tool results. The special-char
+                                constants below sidestep the
+                                directive's literal-promotion gotcha by
+                                being spelled as raw byte sequences. }
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 
@@ -47,7 +65,26 @@ const
      native string form: Delphi UnicodeString = one WideChar per
      codepoint, FPC mode-delphi UTF-8 AnsiString = multi-byte encoding.
      Length() and Copy() are unit-consistent per compiler (chars in
-     Delphi, bytes in FPC), so the same parsing code works in both. *)
+     Delphi, bytes in FPC), so the same parsing code works in both.
+
+     FPC-side: byte literals (#$NN sequences) avoid any source
+     codepage interpretation. The .pas file is saved as UTF-8 on
+     disk, but FPC's default source codepage on Windows is CP1252
+     (or other system ANSI), which would read the UTF-8 bytes of
+     '¶' (0xC2 0xB6) as two separate Latin-1 chars and tag the
+     AnsiString as CP1252. When that string later flowed through
+     fs_read into the model's tool result, downstream UTF-8
+     re-encoding turned `¶` into `Â¶`. Spelling the bytes explicitly
+     bypasses the source-codepage step entirely and we additionally
+     tag the resulting AnsiString as CP_UTF8 via SetCodePage at
+     unit initialization, so the bytes round-trip through the JSON
+     serialiser as proper UTF-8. *)
+  {$IFDEF FPC}
+  HL_FILE_HASH_SEP   = '#';
+  HL_LINE_BODY_SEP   = ':';
+  HL_OP_REPLACE      = ':';
+  HL_PAYLOAD_REPLACE = '|';
+  {$ELSE}
   HL_FILE_PREFIX     = '¶';
   HL_FILE_HASH_SEP   = '#';
   HL_LINE_BODY_SEP   = ':';
@@ -55,6 +92,19 @@ const
   HL_PAYLOAD_REPLACE = '|';
   HL_PAYLOAD_ABOVE   = '↑';
   HL_PAYLOAD_BELOW   = '↓';
+  {$ENDIF}
+
+  {$IFDEF FPC}
+  { UTF-8 byte sequences spelled out to bypass source-codepage
+    interpretation. ¶ U+00B6 = 0xC2 0xB6. ↑ U+2191 = 0xE2 0x86 0x91.
+    ↓ U+2193 = 0xE2 0x86 0x93. Constants are AnsiString here; the
+    initialization section below SetCodePages each to CP_UTF8 so
+    downstream code (JSON serialisation, etc.) treats the bytes as
+    UTF-8 instead of re-encoding via the system ANSI codepage. }
+  HL_FILE_PREFIX:     AnsiString = #$C2#$B6;
+  HL_PAYLOAD_ABOVE:   AnsiString = #$E2#$86#$91;
+  HL_PAYLOAD_BELOW:   AnsiString = #$E2#$86#$93;
+  {$ENDIF}
   HL_FILE_HASH_LEN   = 4;
 
 type
@@ -241,6 +291,18 @@ end;
 function FormatHashlineHeader(const FilePath, FileHash: string): string;
 begin
   Result := HL_FILE_PREFIX + FilePath + HL_FILE_HASH_SEP + FileHash;
+  {$IFDEF FPC}
+  { Concatenating an AnsiString(CP_UTF8) with strings tagged at the
+    system's default codepage produces a Result tagged CP=0 ("use
+    DefaultSystemCodepage") even though the bytes are valid UTF-8.
+    On Windows that DefaultSystemCodepage is the system ANSI CP
+    (CP1252 on English, etc.), so downstream JSON serialisation
+    transcodes our UTF-8 bytes as if they were CP1252 chars --
+    that's how `¶` (0xC2 0xB6) flips to `Â¶` (0xC3 0x82 0xC2 0xB6)
+    in fs_read output. Stamp the result as CP_UTF8 so the
+    downstream serialiser passes the bytes through verbatim. }
+  SetCodePage(RawByteString(Result), CP_UTF8, False);
+  {$ENDIF}
 end;
 
 function FormatNumberedLine(LineNumber: Integer; const LineText: string): string;
@@ -819,5 +881,17 @@ begin
     Src.Free;
   end;
 end;
+
+{$IFDEF FPC}
+initialization
+  { Tag the byte-literal AnsiString constants as CP_UTF8 so when
+    they reach the JSON serialiser (via hashline headers in fs_read
+    output, etc.) the bytes are treated as the UTF-8 sequences they
+    are -- not re-encoded as if they were the system ANSI codepage,
+    which is what produced "Â¶..." instead of "¶..." on Windows. }
+  SetCodePage(RawByteString(HL_FILE_PREFIX),   CP_UTF8, False);
+  SetCodePage(RawByteString(HL_PAYLOAD_ABOVE), CP_UTF8, False);
+  SetCodePage(RawByteString(HL_PAYLOAD_BELOW), CP_UTF8, False);
+{$ENDIF}
 
 end.
