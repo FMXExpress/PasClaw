@@ -32,6 +32,8 @@ uses
   PasClaw.Providers.Models,
   PasClaw.MCP.Catalog,
   PasClaw.KB.Index,
+  PasClaw.Shell.Backend,  { TShellBackendKind for the PromptShellBackend
+                            assignment to Cfg.ShellBackend }
   PasClaw.Cmd.Memory;
 
 function ReadLineEcho(const Prompt: string): string;
@@ -434,6 +436,62 @@ begin
     PrintLn('  ' + Ansi.Dim +
             '(skipped -- flip checkpoints_enabled in config.json to enable later)' +
             Ansi.Reset);
+  end;
+end;
+
+procedure PromptShellBackend(Cfg: TConfig);
+{ Pick where shell_exec / execute_code run. Local (default) =
+  /bin/sh in the host process, same as PasClaw has shipped to date.
+  Docker = a per-session container with workspace bind-mounted at
+  the same path so files the model writes are visible to the
+  operator on the host. Phase 2 will add ssh. }
+var
+  Choice, Image, Network: string;
+begin
+  PrintLn;
+  PrintLn(Ansi.Bold + 'Shell backend' + Ansi.Reset +
+          ' -- where ' + Ansi.Bold + 'shell_exec' + Ansi.Reset +
+          ' and ' + Ansi.Bold + 'execute_code' + Ansi.Reset + ' run');
+  PrintLn(Ansi.Dim +
+    '  local:  /bin/sh in the host process (current behaviour)' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    '  docker: docker exec into a per-session container; workspace' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    '          bind-mounted at the same path so the model sees the' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    '          same files you do on the host. Requires `docker` CLI' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    '          + a running daemon.' + Ansi.Reset);
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Pick [local/docker] (default local): ')));
+  if Choice = 'docker' then
+  begin
+    Cfg.ShellBackend := sbDocker;
+    Image := Trim(ReadLineEcho('  Docker image [ubuntu:24.04]: '));
+    if Image <> '' then Cfg.ShellBackendDocker.Image := Image;
+    Network := Trim(LowerCase(ReadLineEcho(
+                '  Network mode [bridge/host/none] (default bridge): ')));
+    if (Network = 'host') or (Network = 'none') then
+      Cfg.ShellBackendDocker.Network := Network
+    else
+      Cfg.ShellBackendDocker.Network := 'bridge';
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
+            ' docker backend configured (image=' + Cfg.ShellBackendDocker.Image +
+            ', network=' + Cfg.ShellBackendDocker.Network + ')');
+    PrintLn('  ' + Ansi.Dim +
+            'Test with: ' + Ansi.Reset + Ansi.Bold + 'pasclaw agent -m "echo hello from $(uname -n)"' +
+            Ansi.Reset);
+  end
+  else
+  begin
+    Cfg.ShellBackend := sbLocal;
+    PrintLn('  ' + Ansi.Dim +
+            '(local backend -- legacy behaviour. Change in config.json or ' +
+            'pass --backend docker per-run.)' + Ansi.Reset);
   end;
 end;
 
@@ -1011,6 +1069,7 @@ begin
     PromptKnowledgebase(Cfg);
     PromptStatsCollection(Cfg);
     PromptCheckpoints(Cfg);
+    PromptShellBackend(Cfg);
     PromptHeartbeat(Cfg);
     PromptAutoRouter(Cfg);
 

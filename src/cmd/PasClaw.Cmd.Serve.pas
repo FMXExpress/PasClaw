@@ -65,6 +65,8 @@ uses
   PasClaw.Tools.Vault,
   PasClaw.Tools.OutputCache,
   PasClaw.Tools.Sandbox,
+  PasClaw.Shell.Backend,    { TShellBackendKind -- gate on Cfg.ShellBackend
+                              so we refuse docker on serve cleanly }
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
   PasClaw.Stream.Reliability,
@@ -134,6 +136,23 @@ var
 begin
   Cfg := LoadConfig;
   ConfigureSandbox(Cfg.Sandbox, '');
+  { Phase 1 scope: docker shell-backend is wired for `pasclaw agent`
+    (interactive + one-shot) and `pasclaw heartbeat`. The multi-tenant
+    gateway / serve paths need per-request session containers and
+    cross-thread session-id propagation, which is Phase 1.5 work.
+    Refuse docker here loudly so an operator who flipped on docker
+    globally doesn't silently end up on the host when they hit the
+    serve / gateway endpoints. }
+  if Cfg.ShellBackend = sbDocker then
+  begin
+    PrintLn(Ansi.Yellow + '!' + Ansi.Reset +
+            ' `pasclaw serve` does not yet host the docker shell backend.');
+    PrintLn('  Run with shell_backend=local in config.json (single-tenant ' +
+            'docker is on `pasclaw agent` only),');
+    PrintLn('  or pass ' + Ansi.Bold + '--no-tools' + Ansi.Reset +
+            ' to disable tool execution.');
+    Exit(1);
+  end;
   try
     Args := ParseServe(Argv, Cfg);
 

@@ -13,7 +13,12 @@ interface
 uses
   SysUtils, Classes,
   PasClaw.Providers.Types,
-  PasClaw.Stream.Reliability;
+  PasClaw.Stream.Reliability,
+  PasClaw.Shell.Backend;   { TShellBackendKind -- typed enum the
+                             ShellBackend field uses. Defining it
+                             in the leaf shell unit means
+                             PasClaw.Shell.Backend.* impls don't
+                             have to use-back into PasClaw.Config. }
 
 const
   (* Single source of truth for the product version is VersionFallback below;
@@ -122,6 +127,18 @@ type
                                 to. Empty = log-only. Matches send_message
                                 semantics: operator pre-declares the target so a
                                 prompt-injected heartbeat body can't exfiltrate. }
+  end;
+
+  (* Shell-backend Docker options. Picks the image / network /
+     privileged mode the Docker IShellBackend impl uses. Default
+     image is small and universally available; operators can swap
+     for pasclaw/runner: once we publish a curated one, or any
+     image with the tooling they want preinstalled. *)
+  TShellBackendDockerConfig = record
+    Image:       string;    { default 'ubuntu:24.04' }
+    Network:     string;    { 'bridge' (default) | 'host' | 'none' }
+    User:        string;    { '' = container default }
+    Privileged:  Boolean;
   end;
 
   TCronEntry = record
@@ -476,6 +493,16 @@ type
        optionally posts the result to a named channel. Empty file or
        missing file = skip the tick (no spurious model call). *)
     Heartbeat:             THeartbeatConfig;
+    (* Shell backend (PasClaw.Shell.Backend). sbLocal = today's
+       behaviour (commands in the host process); sbDocker spawns a
+       per-session container and `docker exec`s into it for
+       shell_exec / execute_code. Onboarding picks the default;
+       commands can override per-run with --backend. Phase 2 adds
+       sbSSH; this enum is a forward declaration from
+       PasClaw.Shell.Backend so the same identifier flows
+       everywhere. *)
+    ShellBackend:          TShellBackendKind;
+    ShellBackendDocker:    TShellBackendDockerConfig;
     (* Named outbound channels for the send_message model tool.
        Empty (default) = tool not registered. Configured via
        config.json: "channels": [{"name":"team-alerts",
@@ -513,6 +540,7 @@ procedure ApplyPromptCacheConfig(var Opts: TChatOptions; const PC: TPromptCacheC
 implementation
 
 uses
+  StrUtils,                   { IndexStr -- shell_backend enum parsing }
   PasClaw.Utils,
   PasClaw.JSON,
   PasClaw.Promptware,         { LoadConfig propagates promptware_enabled --
@@ -565,6 +593,11 @@ begin
   Heartbeat.IntervalMins := 30;
   Heartbeat.ContentPath  := '';    { empty -> default workspace/heartbeat.md at load time }
   Heartbeat.Channel      := '';
+  ShellBackend           := sbLocal;
+  ShellBackendDocker.Image      := 'ubuntu:24.04';
+  ShellBackendDocker.Network    := 'bridge';
+  ShellBackendDocker.User       := '';
+  ShellBackendDocker.Privileged := False;
   SetLength(Channels, 0);          { no channels -> send_message tool not registered. }
   AutoRouter.Enabled        := False;  { opt-in via onboarding; see TAutoRouterConfig. }
   AutoRouter.EasyProvider   := '';
@@ -778,6 +811,39 @@ begin
         if Heartbeat.Channel <> '' then
           Tmp.PutStr('channel', Heartbeat.Channel);
         Root.PutObject('heartbeat', Tmp);
+      except
+        Tmp.Free; raise;
+      end;
+    end;
+    { shell_backend always round-trips. Emit the kind string and,
+      when docker is selected, the docker subobject too -- writing
+      it out always (even on local) would clutter every stock
+      config; only emit when the operator picked docker OR diverged
+      from defaults. }
+    if ShellBackend = sbDocker then
+      Root.PutStr('shell_backend', 'docker')
+    else if ShellBackend = sbLocal then
+      { Default; skip emission unless someone touched the docker
+        subobject -- in which case we still emit "local" to keep
+        the file self-explanatory about which backend is active. }
+      if (ShellBackendDocker.Image <> 'ubuntu:24.04')
+         or (ShellBackendDocker.Network <> 'bridge')
+         or (ShellBackendDocker.User <> '')
+         or ShellBackendDocker.Privileged then
+        Root.PutStr('shell_backend', 'local');
+    if (ShellBackend = sbDocker)
+       or (ShellBackendDocker.Image <> 'ubuntu:24.04')
+       or (ShellBackendDocker.Network <> 'bridge')
+       or (ShellBackendDocker.User <> '')
+       or ShellBackendDocker.Privileged then
+    begin
+      Tmp := TJsonObject.Create;
+      try
+        Tmp.PutStr('image',      ShellBackendDocker.Image);
+        Tmp.PutStr('network',    ShellBackendDocker.Network);
+        if ShellBackendDocker.User <> '' then Tmp.PutStr('user', ShellBackendDocker.User);
+        if ShellBackendDocker.Privileged then Tmp.PutBool('privileged', True);
+        Root.PutObject('shell_backend_docker', Tmp);
       except
         Tmp.Free; raise;
       end;
@@ -1029,6 +1095,29 @@ begin
                                                     Heartbeat.IntervalMins));
       Heartbeat.ContentPath  := Obj.GetStr('content_path', Heartbeat.ContentPath);
       Heartbeat.Channel      := Obj.GetStr('channel',      Heartbeat.Channel);
+    finally
+      Obj.Free;
+    end;
+
+    { shell_backend: a single string at the top level. Unknown
+      values fall back to local rather than failing -- a future
+      "ssh" string written by a newer PasClaw shouldn't brick an
+      older binary's startup. }
+    case IndexStr(LowerCase(Trim(Root.GetStr('shell_backend', ''))),
+                  ['', 'local', 'docker']) of
+      0, 1: ShellBackend := sbLocal;
+      2:    ShellBackend := sbDocker;
+    else
+      ShellBackend := sbLocal;
+    end;
+
+    Obj := Root.ChildObject('shell_backend_docker');
+    if Obj <> nil then
+    try
+      ShellBackendDocker.Image      := Obj.GetStr('image',      ShellBackendDocker.Image);
+      ShellBackendDocker.Network    := Obj.GetStr('network',    ShellBackendDocker.Network);
+      ShellBackendDocker.User       := Obj.GetStr('user',       ShellBackendDocker.User);
+      ShellBackendDocker.Privileged := Obj.GetBool('privileged', ShellBackendDocker.Privileged);
     finally
       Obj.Free;
     end;

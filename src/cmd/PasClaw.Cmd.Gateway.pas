@@ -43,6 +43,8 @@ uses
   PasClaw.Tools.Vault,
   PasClaw.Tools.OutputCache,
   PasClaw.Tools.Sandbox,
+  PasClaw.Shell.Backend,    { TShellBackendKind -- gate on Cfg.ShellBackend
+                              so we refuse docker on gateway cleanly }
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
   PasClaw.Cron.Scheduler,
@@ -176,6 +178,18 @@ var
 begin
   Cfg := LoadConfig;
   ConfigureSandbox(Cfg.Sandbox, '');
+  { Phase 1: docker backend not yet wired on the multi-tenant gateway
+    (per-request session containers + cross-thread session-id
+    propagation are Phase 1.5). Refuse cleanly so the operator
+    isn't silently running on the host. }
+  if Cfg.ShellBackend = sbDocker then
+  begin
+    PrintLn(Ansi.Yellow + '!' + Ansi.Reset +
+            ' `pasclaw gateway` does not yet host the docker shell backend.');
+    PrintLn('  Run with shell_backend=local in config.json, or pass ' +
+            Ansi.Bold + '--no-tools' + Ansi.Reset + '.');
+    Exit(1);
+  end;
   try
     Args := ParseGw(Argv, Cfg);
 

@@ -102,6 +102,10 @@ uses
   PasClaw.Logger,
   PasClaw.Providers.Types,
   PasClaw.Tools.ToolLoop,
+  PasClaw.Shell.Backend,        { per-tick StartShellSession +
+                                  SetCurrentSessionId so the docker
+                                  backend gets its own container for
+                                  every heartbeat tick }
   PasClaw.Channels.Discord,
   PasClaw.Channels.Slack,
   PasClaw.Channels.Teams,
@@ -297,10 +301,17 @@ var
   Msgs: TMessageArray;
   Loop: TToolLoopResult;
   Cfg:  TToolLoopConfig;
-  Kind, Target: string;
+  Kind, Target, SessionId: string;
 begin
   Result := False;
   Inc(FTicks);
+  { Heartbeats are ephemeral so each tick gets its own session id
+    (and, on the docker backend, its own short-lived container).
+    Tying the id to the tick number keeps the docker container
+    naming deterministic per tick while still isolating ticks from
+    one another in their state -- a `cd /tmp` in tick N doesn't
+    survive into tick N+1. }
+  SessionId := Format('heartbeat-tick-%d', [FTicks]);
 
   Path := ResolveContentPath;
   if not FileExists(Path) then
@@ -345,39 +356,50 @@ begin
   Msgs[0].Role    := mrUser;
   Msgs[0].Content := Body;
 
+  { Start the per-tick shell session (docker container) BEFORE the
+    loop and close it AFTER -- so heartbeat ticks don't leak
+    containers if the operator stops the daemon mid-tick. The
+    Local backend's Start/Close are no-ops. }
+  StartShellSession(SessionId);
+  SetCurrentSessionId(SessionId);
   try
-    if not RunToolLoop(Cfg, Msgs, Loop) then
-    begin
-      LogWarn('heartbeat: tool loop failed (no reply)');
-      Exit;
+    try
+      if not RunToolLoop(Cfg, Msgs, Loop) then
+      begin
+        LogWarn('heartbeat: tool loop failed (no reply)');
+        Exit;
+      end;
+    except
+      on E: Exception do
+      begin
+        LogError('heartbeat: tool loop raised %s: %s', [E.ClassName, E.Message]);
+        Exit;
+      end;
     end;
-  except
-    on E: Exception do
+
+    Reply := Trim(Loop.Content);
+    if Reply = '' then Reply := '(no reply)';
+    LogInfo('heartbeat: tick %d ok (%d iters, reply=%d bytes)',
+            [FTicks, Loop.Iterations, Length(Reply)]);
+
+    if FCfg.Heartbeat.Channel <> '' then
     begin
-      LogError('heartbeat: tool loop raised %s: %s', [E.ClassName, E.Message]);
-      Exit;
+      if ResolveChannelTarget(FCfg.Heartbeat.Channel, Kind, Target) then
+      begin
+        if not PostToChannel(Kind, Target,
+                             Format('heartbeat:'#10'%s', [Reply])) then
+          LogWarn('heartbeat: post to channel "%s" (%s) failed',
+                  [FCfg.Heartbeat.Channel, Kind]);
+      end
+      else
+        LogWarn('heartbeat: channel "%s" not declared in config.json',
+                [FCfg.Heartbeat.Channel]);
     end;
+    Result := True;
+  finally
+    CloseShellSession(SessionId);
+    SetCurrentSessionId('');
   end;
-
-  Reply := Trim(Loop.Content);
-  if Reply = '' then Reply := '(no reply)';
-  LogInfo('heartbeat: tick %d ok (%d iters, reply=%d bytes)',
-          [FTicks, Loop.Iterations, Length(Reply)]);
-
-  if FCfg.Heartbeat.Channel <> '' then
-  begin
-    if ResolveChannelTarget(FCfg.Heartbeat.Channel, Kind, Target) then
-    begin
-      if not PostToChannel(Kind, Target,
-                           Format('heartbeat:'#10'%s', [Reply])) then
-        LogWarn('heartbeat: post to channel "%s" (%s) failed',
-                [FCfg.Heartbeat.Channel, Kind]);
-    end
-    else
-      LogWarn('heartbeat: channel "%s" not declared in config.json',
-              [FCfg.Heartbeat.Channel]);
-  end;
-  Result := True;
 end;
 
 end.
