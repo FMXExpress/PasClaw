@@ -203,23 +203,28 @@ begin
     CP := Codepage
   else
   begin
-    { Prefer the ACTIVE console output codepage over the system OEM
-      default. cmd.exe writes its stdout in whichever codepage is
-      currently set on the console (the OEM default initially, but
-      operators can switch it -- `chcp 65001` puts the console in
-      UTF-8, and PowerShell sessions inherit the host process's
-      OutputEncoding). Pinning to GetOEMCP would silently re-mojibake
-      output in those environments by decoding UTF-8 bytes as if they
-      were CP437. GetConsoleOutputCP returns the active output CP for
-      the console attached to this process; it returns 0 when the
-      process isn't attached to a console (gateway / serve daemons
-      launched from a service manager, headless CI), in which case
-      we fall back to GetOEMCP -- a long-running headless daemon
-      doesn't have a "currently active" console CP to consult, but
-      its spawned cmd.exe children still default to the OEM CP.
-      Codex P2 on PR #237. }
-    CP := GetConsoleOutputCP;
-    if CP = 0 then CP := GetOEMCP;
+    { Use the OEM codepage, NOT GetConsoleOutputCP. Reverting PR #237's
+      Codex P2 fix because real-world testing (Eli on a Windows Terminal
+      / Windows 7 box) showed it regresses the common case. The
+      reviewer's reasoning was: "what if the operator ran chcp 65001
+      first?" But `chcp` in cmd.exe is well-documented to NOT reliably
+      switch piped output encoding -- cmd.exe's redirected stdout uses
+      the OEM codepage regardless of the console's chcp setting (and
+      our spawned cmd.exe children don't inherit a parent shell's
+      chcp at all). Meanwhile pasclaw.exe launched from Windows
+      Terminal (CP_UTF8 by default on Win10+) makes GetConsoleOutputCP
+      return 65001 -- so we then ran MultiByteToWideChar(65001, ...)
+      over real CP437 bytes (the 0x82 byte for é). 65001 is strict
+      UTF-8: 0x82 is an invalid lead byte, gets replaced with U+FFFD,
+      and the model sees `r�sum�.txt` instead of `résumé.txt`.
+      Exactly the original bug, just routed through a different
+      mojibake. GetOEMCP returns the system default (CP437 on US
+      English Windows), which is what cmd.exe's piped output actually
+      uses. The chcp 65001 case can still be handled by the operator
+      running it inside their shell_exec command -- `cmd /c "chcp
+      65001 && dir /b > out.utf8 && type out.utf8"` -- but the
+      default decode path must match cmd.exe's pipe default. }
+    CP := GetOEMCP;
   end;
   { Pass 1: discover the wide-char buffer size we need. }
   WideLen := MultiByteToWideChar(CP, 0, PAnsiChar(@Bytes[0]), Len, nil, 0);
