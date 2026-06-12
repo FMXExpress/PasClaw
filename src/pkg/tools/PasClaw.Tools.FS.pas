@@ -448,6 +448,7 @@ var
   Sb: TStringBuilder;
   TotalMatches: Integer;
   PatLower: string;
+  DirectSR: TSearchRec;
 
   procedure ScanFile(const Path: string);
   var
@@ -563,7 +564,21 @@ begin
     if DirectoryExists(Root) then
       Walk(Root)
     else if FileExists(Root) then
-      ScanFile(Root)
+    begin
+      { ripgrep tier 4: enforce the size cap on the direct-file path
+        too, not just inside Walk. Without this, `fs_grep
+        path=server.log pattern=...` against an 11 MiB log would
+        still scan it -- the schema and tool description promise
+        files over max_file_bytes are skipped, so the direct-file
+        case has to honour that contract too. SR.Size from FindFirst
+        is the same stat that Walk uses; no read of the file body. }
+      if FindFirst(Root, faAnyFile, DirectSR) = 0 then
+        try
+          if DirectSR.Size <= MaxFileBytes then ScanFile(Root);
+        finally
+          FindClose(DirectSR);
+        end;
+    end
     else
     begin
       ErrMsg := 'no such path: ' + Root;

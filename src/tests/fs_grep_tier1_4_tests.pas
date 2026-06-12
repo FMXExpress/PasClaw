@@ -249,6 +249,42 @@ begin
   end;
 end;
 
+procedure TestDirectFilePathRespectsCap;
+{ Regression for PR #240 P2: when fs_grep is called with `path`
+  pointing directly at a file (not a dir), the size cap must still
+  apply. The walk-time SR.Size check inside Walk() does nothing on
+  the direct-file branch; the fix puts an equivalent FindFirst stat
+  in front of that branch too. Pin both directions: oversize is
+  skipped at the default cap AND included when the cap is raised. }
+var
+  Got, Big, Huge: string;
+const
+  Marker = 'FsGrepTier4DirectMarker_TRIPWIRE';
+  BigSize = 11 * 1024 * 1024;
+begin
+  Huge := IncludeTrailingPathDelimiter(SysUtils.GetTempDir) +
+          'pasclaw-fsgrep-direct-' + IntToStr(Random(MaxInt)) + '.log';
+  try
+    SetLength(Big, BigSize);
+    FillChar(Big[1], BigSize, Ord('A'));
+    Move(Marker[1], Big[BigSize - Length(Marker) + 1], Length(Marker));
+    WriteText(Huge, Big);
+
+    { Default cap: an 11 MiB file targeted by exact path is still
+      over 10 MiB, so its marker must NOT surface. }
+    Got := CallGrep(Huge, Marker);
+    AssertContains(Got, 'no matches',
+                   'direct-file path: oversize file skipped at default cap');
+
+    { Raise the cap and the same direct-file path must scan it. }
+    Got := CallGrep(Huge, Marker, 20 * 1024 * 1024);
+    AssertContains(Got, '.log',
+                   'direct-file path: oversize file IS scanned when cap is raised');
+  finally
+    if FileExists(Huge) then DeleteFile(Huge);
+  end;
+end;
+
 procedure TestEmptyResultRendersClean;
 var
   Root, Got: string;
@@ -296,6 +332,8 @@ begin
   WriteLn('  ok: tier 4 -- 11 MiB file skipped at default 10 MiB cap');
   TestRaisingCapIncludesLargeFile;
   WriteLn('  ok: tier 4 -- raising max_file_bytes brings file back in scope');
+  TestDirectFilePathRespectsCap;
+  WriteLn('  ok: tier 4 -- direct-file path also honours / overrides cap (PR #240 P2)');
   TestEmptyResultRendersClean;
   WriteLn('  ok: zero-match result still renders friendly placeholder');
   TestMatchOutputUnchangedForHitFiles;
