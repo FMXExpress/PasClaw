@@ -32,7 +32,13 @@ uses
   PasClaw.Logger,
   PasClaw.Platform,
   PasClaw.Tools.Sandbox,
-  PasClaw.Tools.Shell.Filters;
+  PasClaw.Tools.Shell.Filters,
+  PasClaw.Tools.OutputCache;     { AttachReversibleStashFooter --
+                                   when ApplyShellFilter shrinks the
+                                   bytes, stash the original so the
+                                   model can recall it via
+                                   tool_output_get. Same retrieval
+                                   substrate the byte-cap path uses. }
 
 function ParseStringArg(const ArgsJSON, Field: string; out V: string): Boolean;
 var
@@ -60,7 +66,7 @@ function Tool_Shell(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Cmd, Reason, WorkDir: string;
   ExitCode: Integer;
-  Out_: string;
+  Out_, RawOut: string;
 begin
   ErrMsg := '';
   if not ParseStringArg(ArgsJSON, 'command', Cmd) then
@@ -93,7 +99,16 @@ begin
     ls -R / find / dir /s, with PowerShell-alias normalisation)
     get condensed; everything else passes through and falls back
     to the OutputCache byte cap if it's still oversize. }
-  Out_ := ApplyShellFilter(Cmd, Out_, ExitCode);
+  RawOut := Out_;
+  Out_   := ApplyShellFilter(Cmd, Out_, ExitCode);
+  { Reversible condensation (CCR). When the filter actually shrunk
+    the bytes, stash the original under a fresh OutputCache handle
+    and append a footer naming it so the model can retrieve the
+    untruncated output via tool_output_get. ApplyShellFilter is
+    tee-on-failure, so RawOut and Out_ are byte-identical on failure
+    and the footer doesn't attach -- no wasted slots for raw error
+    output. No-op when SetCondenseReversible(False) is in effect. }
+  Out_ := AttachReversibleStashFooter(RawOut, Out_);
   Result := Format('exit=%d'#10'%s', [ExitCode, Out_]);
 end;
 

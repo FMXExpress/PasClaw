@@ -113,6 +113,17 @@ type
     Enabled: Boolean;
   end;
 
+  THeartbeatConfig = record
+    Enabled:       Boolean;
+    IntervalMins:  Integer;   { default 30; minimum enforced at runtime to 1 }
+    ContentPath:   string;    { default '<home>/workspace/heartbeat.md'; relative
+                                paths anchor on $PASCLAW_HOME }
+    Channel:       string;    { Named channel from Cfg.Channels to post the result
+                                to. Empty = log-only. Matches send_message
+                                semantics: operator pre-declares the target so a
+                                prompt-injected heartbeat body can't exfiltrate. }
+  end;
+
   TCronEntry = record
     Id:            string;
     Spec:          string;   { cron expression }
@@ -448,6 +459,23 @@ type
        the model sees -- operators opt in via "orient_task_aware":
        true once their MEMORY.md outgrows the always-inject budget. *)
     OrientTaskAware:       Boolean;
+    (* On-by-default: reversible condensation (CCR, headroom-inspired).
+       When a condenser (JSON, shell filters) actually shrinks tool
+       output, stash the ORIGINAL under a fresh OutputCache handle and
+       append a footer naming it -- the model gets the structural view
+       by default and can call tool_output_get when the shape isn't
+       enough. tool_output_get registers whenever this is on OR
+       Cfg.ToolOutputCap > 0. Flip "condense_reversible": false to
+       revert to destructive condensation. *)
+    CondenseReversible:    Boolean;
+    (* Proactive periodic wake-up (picoclaw / openclaw heartbeat).
+       Off by default. When Enabled, the standalone `pasclaw
+       heartbeat` daemon (and the gateway / serve embedders, when
+       they're set up to host it) reads workspace/heartbeat.md every
+       IntervalMins minutes, runs RunToolLoop on its body, and
+       optionally posts the result to a named channel. Empty file or
+       missing file = skip the tick (no spurious model call). *)
+    Heartbeat:             THeartbeatConfig;
     (* Named outbound channels for the send_message model tool.
        Empty (default) = tool not registered. Configured via
        config.json: "channels": [{"name":"team-alerts",
@@ -487,8 +515,10 @@ implementation
 uses
   PasClaw.Utils,
   PasClaw.JSON,
-  PasClaw.Promptware;   { LoadConfig propagates promptware_enabled --
-                          see the comment inside LoadConfig }
+  PasClaw.Promptware,         { LoadConfig propagates promptware_enabled --
+                                see the comment inside LoadConfig }
+  PasClaw.Tools.OutputCache;  { LoadConfig propagates condense_reversible
+                                via SetCondenseReversible -- same pattern }
 
 procedure ApplyPromptCacheConfig(var Opts: TChatOptions; const PC: TPromptCacheConfig);
 begin
@@ -530,6 +560,11 @@ begin
   CheckpointsKeepLast    := 0;     { 0 means default (32) inside PasClaw.Checkpoints. }
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
   OrientTaskAware        := False; { opt-in; whole-file MEMORY injection is the contract. }
+  CondenseReversible     := True;  { on by default -- condense + stash original under handle. }
+  Heartbeat.Enabled      := False; { opt-in via onboarding; off by default. }
+  Heartbeat.IntervalMins := 30;
+  Heartbeat.ContentPath  := '';    { empty -> default workspace/heartbeat.md at load time }
+  Heartbeat.Channel      := '';
   SetLength(Channels, 0);          { no channels -> send_message tool not registered. }
   AutoRouter.Enabled        := False;  { opt-in via onboarding; see TAutoRouterConfig. }
   AutoRouter.EasyProvider   := '';
@@ -726,6 +761,27 @@ begin
     { Default False -- emit only the explicit-on. }
     if OrientTaskAware then
       Root.PutBool('orient_task_aware', True);
+    { Default True -- emit only explicit-off so it round-trips. }
+    if not CondenseReversible then
+      Root.PutBool('condense_reversible', False);
+    if Heartbeat.Enabled
+       or (Heartbeat.IntervalMins <> 30)
+       or (Heartbeat.ContentPath <> '')
+       or (Heartbeat.Channel <> '') then
+    begin
+      Tmp := TJsonObject.Create;
+      try
+        Tmp.PutBool('enabled',       Heartbeat.Enabled);
+        Tmp.PutInt ('interval_mins', Heartbeat.IntervalMins);
+        if Heartbeat.ContentPath <> '' then
+          Tmp.PutStr('content_path', Heartbeat.ContentPath);
+        if Heartbeat.Channel <> '' then
+          Tmp.PutStr('channel', Heartbeat.Channel);
+        Root.PutObject('heartbeat', Tmp);
+      except
+        Tmp.Free; raise;
+      end;
+    end;
     if AutoRouter.Enabled
        or (AutoRouter.EasyProvider <> '')
        or (AutoRouter.EasyModel <> '')
@@ -963,6 +1019,19 @@ begin
                                                 CheckpointsKeepLast));
     PromptwareEnabled   := Root.GetBool('promptware_enabled', PromptwareEnabled);
     OrientTaskAware     := Root.GetBool('orient_task_aware',  OrientTaskAware);
+    CondenseReversible  := Root.GetBool('condense_reversible', CondenseReversible);
+
+    Obj := Root.ChildObject('heartbeat');
+    if Obj <> nil then
+    try
+      Heartbeat.Enabled      := Obj.GetBool('enabled',       Heartbeat.Enabled);
+      Heartbeat.IntervalMins := Integer(Obj.GetInt('interval_mins',
+                                                    Heartbeat.IntervalMins));
+      Heartbeat.ContentPath  := Obj.GetStr('content_path', Heartbeat.ContentPath);
+      Heartbeat.Channel      := Obj.GetStr('channel',      Heartbeat.Channel);
+    finally
+      Obj.Free;
+    end;
 
     Obj := Root.ChildObject('auto_router');
     if Obj <> nil then
@@ -1218,6 +1287,9 @@ begin
       PasClaw.Promptware is a leaf unit (SysUtils + Logger only);
       keep it that way or this import becomes a cycle. }
     SetPromptwareEnabled(Result.PromptwareEnabled);
+    { Symmetric propagation of the reversible-condensation flag --
+      OutputCache holds the same process-global mirror. }
+    SetCondenseReversible(Result.CondenseReversible);
   end;
 end;
 

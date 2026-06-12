@@ -150,6 +150,7 @@
         <DCCReference Include="..\cmd\PasClaw.Cmd.Export.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Runbook.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.TUI.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Heartbeat.pas"/>
 
         <!-- pkg/cliui -->
         <DCCReference Include="..\pkg\cliui\PasClaw.CliUI.pas"/>
@@ -287,6 +288,7 @@
         <DCCReference Include="..\pkg\agent\PasClaw.Agent.AutoRouter.pas"/>
         <DCCReference Include="..\pkg\agent\PasClaw.Agent.Goals.pas"/>
         <DCCReference Include="..\pkg\agent\PasClaw.Agent.Orient.pas"/>
+        <DCCReference Include="..\pkg\agent\PasClaw.Heartbeat.pas"/>
         <DCCReference Include="..\pkg\agent\PasClaw.Promptware.pas"/>
 
         <!-- pkg/condense -->

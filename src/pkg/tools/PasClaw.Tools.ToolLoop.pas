@@ -575,6 +575,9 @@ var
   InContext: string;       { tool output cap (#PR new): in-context
                              body that lands in Hist after the
                              optional StashAndMaybeTruncate pass }
+  OrigBody:  string;       { snapshot of the raw tool result before
+                             reversible condensation, so the original
+                             can be stashed for tool_output_get }
   OrigLen:   Integer;
   Truncated: Boolean;
 begin
@@ -1009,9 +1012,21 @@ begin
             usually small enough to skip the byte-budget truncate
             below entirely. No-op when the body doesn't parse as
             JSON or when condensation wouldn't shrink it.
-            See PasClaw.Condense.JSON. }
+            See PasClaw.Condense.JSON.
+
+            Reversible condensation (CCR, headroom-inspired): when
+            MaybeCondenseJSON actually shrinks the body, stash the
+            original under a handle so the model can call
+            tool_output_get to retrieve it. The model defaults to the
+            structural view; the escape hatch is one tool call away.
+            No-op when SetCondenseReversible(False) is in effect or
+            the saving is below the floor. }
+          OrigBody := Dispatches[Batch[j]].ResultText;
           Dispatches[Batch[j]].ResultText :=
-            MaybeCondenseJSON(Dispatches[Batch[j]].ResultText);
+            MaybeCondenseJSON(OrigBody);
+          Dispatches[Batch[j]].ResultText :=
+            AttachReversibleStashFooter(OrigBody,
+                                        Dispatches[Batch[j]].ResultText);
 
           { Promptware chokepoint 1 of 3: tool output is the widest
             door for indirect prompt injection (fetched pages, read

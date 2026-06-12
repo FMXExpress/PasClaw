@@ -406,7 +406,8 @@ begin
     Reg := NewBuiltinRegistry(not A.NoHashline, Cfg.VaultToolsEnabled,
                               HasConfiguredWebSearchProvider(Cfg),
                               Cfg.WebFetchEnabled,
-                              Cfg.ToolOutputCap > 0);
+                              (Cfg.ToolOutputCap > 0)
+                                or Cfg.CondenseReversible);
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   BgCoord := MaybeRegisterBackgroundSpawnTools(Cfg, Provider, Reg, Model);
@@ -785,7 +786,8 @@ begin
     Reg := NewBuiltinRegistry(not A.NoHashline, Cfg.VaultToolsEnabled,
                               HasConfiguredWebSearchProvider(Cfg),
                               Cfg.WebFetchEnabled,
-                              Cfg.ToolOutputCap > 0);
+                              (Cfg.ToolOutputCap > 0)
+                                or Cfg.CondenseReversible);
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   BgCoord := MaybeRegisterBackgroundSpawnTools(Cfg, Provider, Reg, Model);

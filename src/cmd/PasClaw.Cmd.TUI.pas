@@ -119,7 +119,10 @@ begin
       { tool_output_get is only useful when the truncation feature is
         on -- otherwise the model sees a tool it'd only call against
         non-existent handles. Pair the registration with the cap. }
-      if Cfg.ToolOutputCap > 0 then RegisterOutputCacheTool(Reg);
+      { OR-gate: byte cap OR reversible condensation both stash
+        handles the model needs tool_output_get to retrieve. }
+      if (Cfg.ToolOutputCap > 0) or Cfg.CondenseReversible then
+        RegisterOutputCacheTool(Reg);
       { send_message self-gates on Cfg.Channels being non-empty.
         Codex P2 on PR #230: every chat surface (CLI, TUI, Serve,
         Gateway, embedder) builds its own registry and must register

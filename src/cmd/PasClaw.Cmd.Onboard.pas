@@ -437,6 +437,68 @@ begin
   end;
 end;
 
+function PickStrChan(const Channel: string): string;
+{ Tiny inline helper used by the heartbeat onboarding line only. }
+begin
+  if Channel = '' then Result := ', log-only'
+  else                 Result := ', posts to "' + Channel + '"';
+end;
+
+procedure PromptHeartbeat(Cfg: TConfig);
+{ Heartbeat = proactive periodic wake-up: a background `pasclaw
+  heartbeat` daemon reads workspace/heartbeat.md every N minutes
+  and runs the agent on its body. Off by default because it
+  produces unsolicited model calls -- "the agent talks to itself"
+  surprises operators who didn't ask for it, and on metered
+  providers each tick is real spend.
+
+  When the operator opts in, prompt for the interval and the
+  channel name. Default channel name is empty (log only); the
+  operator can still wire one up later by editing config.json.
+  We don't surface "channels" as an onboarding concept here --
+  that lives in send_message / cron / channel docs. }
+var
+  Choice, IntervalIn, ChannelIn: string;
+  Mins: Integer;
+begin
+  PrintLn;
+  PrintLn(Ansi.Bold + 'Heartbeat -- proactive periodic wake-up' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'A background `pasclaw heartbeat` daemon reads ' + Ansi.Reset +
+    Ansi.Bold + 'workspace/heartbeat.md' + Ansi.Reset + Ansi.Dim +
+    ' every N' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'minutes and runs the agent on its body (e.g. "check the build status; if' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'red over an hour, send_message to ops"). Result can post to a configured' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'channel. Off by default -- unsolicited model spend opts in by hand.' + Ansi.Reset);
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Enable heartbeat [y/N]: ')));
+  if (Choice <> 'y') and (Choice <> 'yes') then
+  begin
+    Cfg.Heartbeat.Enabled := False;
+    PrintLn('  ' + Ansi.Dim +
+            '(skipped -- flip heartbeat.enabled in config.json to enable later)' +
+            Ansi.Reset);
+    Exit;
+  end;
+  Cfg.Heartbeat.Enabled := True;
+  IntervalIn := Trim(ReadLineEcho('  Interval in minutes [30]: '));
+  Mins := StrToIntDef(IntervalIn, 30);
+  if Mins < 1 then Mins := 30;
+  Cfg.Heartbeat.IntervalMins := Mins;
+  ChannelIn := Trim(ReadLineEcho('  Post result to channel (empty = log only): '));
+  Cfg.Heartbeat.Channel := ChannelIn;
+  PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
+          Format(' heartbeat enabled (every %d min', [Mins]) +
+          PickStrChan(ChannelIn) + ')');
+  PrintLn('  ' + Ansi.Dim +
+          'Create workspace/heartbeat.md with your tick prompt, then run:' +
+          Ansi.Reset);
+  PrintLn('  ' + Ansi.Dim + '  pasclaw heartbeat' + Ansi.Reset);
+end;
+
 procedure PromptStatsCollection(Cfg: TConfig);
 { Opt-in toggle for persisting per-session usage stats (tokens,
   turns, tool calls, truncation savings) into the session JSON so
@@ -949,6 +1011,7 @@ begin
     PromptKnowledgebase(Cfg);
     PromptStatsCollection(Cfg);
     PromptCheckpoints(Cfg);
+    PromptHeartbeat(Cfg);
     PromptAutoRouter(Cfg);
 
     SaveConfig(Cfg);

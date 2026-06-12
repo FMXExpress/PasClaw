@@ -494,7 +494,13 @@ begin
     FConfig.ToolOutputCap, so if we skip this branch the model
     sees handles in truncated tool results with no way to
     dereference them. Codex P2 on PR #176. }
-  if FConfig.ToolOutputCap > 0 then RegisterOutputCacheTool(FRegistry);
+  { tool_output_get is needed whenever ANY mechanism might stash bytes
+    the model would want to retrieve: the byte cap (Cfg.ToolOutputCap)
+    AND reversible condensation (Cfg.CondenseReversible, default True).
+    Without this OR, condensed outputs would advertise handles the
+    model has no tool to dereference. }
+  if (FConfig.ToolOutputCap > 0) or FConfig.CondenseReversible then
+    RegisterOutputCacheTool(FRegistry);
   { send_message self-gates on config.json's "channels" array --
     no-op when the operator hasn't declared named targets. }
   RegisterSendMessageTool(FRegistry);
@@ -897,11 +903,12 @@ begin
       LogWebSearchSkipOnce;
     if FConfig.WebFetchEnabled then RegisterWebFetchTool(FRegistry);
     if FConfig.WebFetchEnabled then RegisterMemoryFetchTool(FRegistry);
-    { Same gate as EnsureRegistry above -- without this, TPasClawServer
-      builds a registry that's missing tool_output_get even though
-      Gateway.Server forwards FCfg.ToolOutputCap into its LoopCfg.
-      Codex P2 on PR #176. }
-    if FConfig.ToolOutputCap > 0 then RegisterOutputCacheTool(FRegistry);
+    { Same OR gate as EnsureRegistry above -- byte cap OR reversible
+      condensation both produce handles the model needs to dereference.
+      Codex P2 on PR #176 was specifically about ToolOutputCap; the
+      CondenseReversible side is the headroom-CCR follow-up. }
+    if (FConfig.ToolOutputCap > 0) or FConfig.CondenseReversible then
+      RegisterOutputCacheTool(FRegistry);
     { send_message self-gates on FConfig.Channels. Codex P2 on PR #230:
       TPasClawServer builds its registry independently of TPasClawAgent
       and the CLI surfaces, so it must register the tool separately. }

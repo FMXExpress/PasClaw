@@ -210,7 +210,10 @@ begin
         "vault_search / vault_get enabled" but the gateway / web UI
         chat surface would still tell the user "no Code Vault tool". }
       if Cfg.VaultToolsEnabled then RegisterVaultTools(Reg);
-      if Cfg.ToolOutputCap > 0 then RegisterOutputCacheTool(Reg);
+      { OR-gate: byte cap OR reversible condensation both stash
+        handles the model needs tool_output_get to retrieve. }
+      if (Cfg.ToolOutputCap > 0) or Cfg.CondenseReversible then
+        RegisterOutputCacheTool(Reg);
       { send_message self-gates on Cfg.Channels. Codex P2 on PR #230. }
       RegisterSendMessageTool(Reg);
       Skills := LoadSkillManifests(GetHome);
