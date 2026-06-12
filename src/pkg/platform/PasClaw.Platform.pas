@@ -29,6 +29,21 @@ unit PasClaw.Platform;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}            { Tag this unit's AnsiStrings as UTF-8 so
+                                the UTF-8 bytes DecodeShellOutputBytes
+                                builds survive the function return on
+                                Windows. Without this, FPC implicitly
+                                transcodes UTF-8 -> system ANSI
+                                codepage (CP1252 on English Windows,
+                                CP932 on Japanese, etc.) at the result
+                                assignment, dropping characters that
+                                aren't representable in the system CP
+                                -- exactly the round-trip loss this
+                                whole patch is trying to prevent. }
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 
