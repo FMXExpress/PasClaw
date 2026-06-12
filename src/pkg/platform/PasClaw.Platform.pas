@@ -29,6 +29,21 @@ unit PasClaw.Platform;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}            { Tag this unit's AnsiStrings as UTF-8 so
+                                the UTF-8 bytes DecodeShellOutputBytes
+                                builds survive the function return on
+                                Windows. Without this, FPC implicitly
+                                transcodes UTF-8 -> system ANSI
+                                codepage (CP1252 on English Windows,
+                                CP932 on Japanese, etc.) at the result
+                                assignment, dropping characters that
+                                aren't representable in the system CP
+                                -- exactly the round-trip loss this
+                                whole patch is trying to prevent. }
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 
@@ -125,11 +140,37 @@ function RunOneShotWithEnv(const Cmd, WorkingDir: string;
                             ExtraEnv: TStringList;
                             out Output: string): Integer;
 
+(* Decode a byte buffer captured from a child shell's stdout/stderr
+   into a UTF-8-encoded Pascal string suitable for tool output. On
+   Windows, cmd.exe writes its stdout in the SYSTEM OEM CODEPAGE
+   (CP437 on US English, CP866 on Cyrillic, CP932 on Japanese,
+   etc.) -- NOT UTF-8. Decoding those bytes as UTF-8 produces
+   mojibake on any non-ASCII byte and was the documented cause of
+   the "directory exists?" failures on D:/E:/F: drives with
+   non-ASCII path components. We detect the OEM codepage via
+   GetOEMCP and route through MultiByteToWideChar to UTF-16, then
+   UTF-8 encode. POSIX shells already output UTF-8 so the POSIX
+   path is a plain UTF-8 decode -- unchanged from the previous
+   behaviour, just routed through one helper.
+
+   Codepage parameter: 0 (default) means "auto-detect per platform"
+   -- Windows uses GetOEMCP, POSIX is fixed UTF-8. Explicit
+   non-zero values pin the codepage and are used by tests so a
+   known CP437 byte sequence decodes the same way on Linux as it
+   would on a Windows operator's box. ByteCount lets the caller
+   pass only the prefix of a larger buffer; pass -1 for "all of
+   Bytes". *)
+function DecodeShellOutputBytes(const Bytes: TBytes;
+                                ByteCount: Integer = -1;
+                                Codepage: UInt32 = 0): string;
+
 implementation
 
 uses
   {$IFDEF FPC}
     Process
+    {$IFDEF MSWINDOWS}, Windows {$ENDIF}   { GetOEMCP + MultiByteToWideChar
+                                             for cmd.exe output decode }
   {$ELSE}{$IFDEF MSWINDOWS}
     Winapi.Windows
   {$ELSE}
@@ -138,6 +179,89 @@ uses
     Posix.SysTime                  { timeval / Ptimeval for select() --
                                      NOT re-exported by Posix.SysSelect }
   {$ENDIF}{$ENDIF};
+
+function DecodeShellOutputBytes(const Bytes: TBytes;
+                                ByteCount: Integer;
+                                Codepage: UInt32): string;
+var
+  Len: Integer;
+  {$IFDEF MSWINDOWS}
+  WideLen: Integer;
+  Wide: UnicodeString;
+  CP: UInt32;
+  {$ELSE}
+  Enc: TEncoding;
+  {$ENDIF}
+begin
+  Result := '';
+  if ByteCount < 0 then Len := Length(Bytes) else Len := ByteCount;
+  if Len <= 0 then Exit;
+  if Len > Length(Bytes) then Len := Length(Bytes);
+
+  {$IFDEF MSWINDOWS}
+  if Codepage <> 0 then
+    CP := Codepage
+  else
+  begin
+    { Prefer the ACTIVE console output codepage over the system OEM
+      default. cmd.exe writes its stdout in whichever codepage is
+      currently set on the console (the OEM default initially, but
+      operators can switch it -- `chcp 65001` puts the console in
+      UTF-8, and PowerShell sessions inherit the host process's
+      OutputEncoding). Pinning to GetOEMCP would silently re-mojibake
+      output in those environments by decoding UTF-8 bytes as if they
+      were CP437. GetConsoleOutputCP returns the active output CP for
+      the console attached to this process; it returns 0 when the
+      process isn't attached to a console (gateway / serve daemons
+      launched from a service manager, headless CI), in which case
+      we fall back to GetOEMCP -- a long-running headless daemon
+      doesn't have a "currently active" console CP to consult, but
+      its spawned cmd.exe children still default to the OEM CP.
+      Codex P2 on PR #237. }
+    CP := GetConsoleOutputCP;
+    if CP = 0 then CP := GetOEMCP;
+  end;
+  { Pass 1: discover the wide-char buffer size we need. }
+  WideLen := MultiByteToWideChar(CP, 0, PAnsiChar(@Bytes[0]), Len, nil, 0);
+  if WideLen <= 0 then
+  begin
+    { Fall back to UTF-8 if the OEM decode failed -- better than
+      returning empty. Catches the case where GetOEMCP returned an
+      unsupported codepage on a weird locale. }
+    Result := UTF8Encode(TEncoding.UTF8.GetString(Bytes, 0, Len));
+    Exit;
+  end;
+  SetLength(Wide, WideLen);
+  MultiByteToWideChar(CP, 0, PAnsiChar(@Bytes[0]), Len, PWideChar(Wide), WideLen);
+  { Wide -> UTF-8. UTF8Encode is the cross-compiler explicit form;
+    implicit assignment would go via DefaultSystemCodepage which on
+    Windows is the ANSI codepage, not UTF-8 -- exactly the bug we're
+    avoiding. }
+  Result := UTF8Encode(Wide);
+  {$ELSE}
+  { POSIX shells (bash, sh, zsh) output UTF-8 -- just decode as such.
+    Codepage param is honoured for tests so a fixture exercising the
+    Windows OEM path can call from Linux with an explicit CP. The
+    runtime always passes 0 on POSIX so the test-only branch never
+    fires in production. 65001 = CP_UTF8 (named constant lives in
+    Windows.pas which isn't imported on POSIX). }
+  if (Codepage = 0) or (Codepage = 65001) then
+  begin
+    Result := UTF8Encode(TEncoding.UTF8.GetString(Bytes, 0, Len));
+    Exit;
+  end;
+  { TEncoding.GetEncoding hands back a freshly-allocated instance the
+    caller must Free; route through UTF8Encode for the implicit
+    UnicodeString -> string conversion so the bytes land as UTF-8
+    regardless of DefaultSystemCodepage. }
+  Enc := TEncoding.GetEncoding(Codepage);
+  try
+    Result := UTF8Encode(Enc.GetString(Bytes, 0, Len));
+  finally
+    Enc.Free;
+  end;
+  {$ENDIF}
+end;
 
 {$IFDEF FPC}
 (* ----- FPC backend (fcl-process) ----- *)
@@ -251,6 +375,7 @@ var
   P: TInternalProcess;
   M: TMemoryStream;
   Buf: array[0..ReadBufferSize - 1] of Byte;
+  Bytes: TBytes;
   N, Total: Integer;
 begin
   Result := -1;
@@ -280,8 +405,19 @@ begin
       Sleep(20);
     end;
     Result := P.ExitStatus;
-    SetLength(Output, M.Size);
-    if M.Size > 0 then begin M.Position := 0; M.ReadBuffer(Output[1], M.Size); end;
+    if M.Size > 0 then
+    begin
+      { Hand the captured bytes to the shared decoder rather than
+        copying them straight into the Pascal string. On Windows
+        cmd.exe writes its stdout in the system OEM codepage, not
+        UTF-8 or the system ANSI codepage -- without a proper
+        decode any non-ASCII path or filename surfaces as mojibake.
+        See DecodeShellOutputBytes for the full rationale. }
+      SetLength(Bytes, M.Size);
+      M.Position := 0;
+      M.ReadBuffer(Bytes[0], M.Size);
+      Output := DecodeShellOutputBytes(Bytes, Length(Bytes));
+    end;
   finally
     M.Free;
     P.Free;
@@ -301,6 +437,7 @@ var
   P: TInternalProcess;
   M: TMemoryStream;
   Buf: array[0..ReadBufferSize - 1] of Byte;
+  Bytes: TBytes;
   N, Total, i, EqPos: Integer;
   EnvList: TStringList;
   Name, Existing: string;
@@ -358,8 +495,15 @@ begin
       Sleep(20);
     end;
     Result := P.ExitStatus;
-    SetLength(Output, M.Size);
-    if M.Size > 0 then begin M.Position := 0; M.ReadBuffer(Output[1], M.Size); end;
+    if M.Size > 0 then
+    begin
+      { Same OEM-decode trick as RunOneShot above -- see the
+        comment there and DecodeShellOutputBytes for the rationale. }
+      SetLength(Bytes, M.Size);
+      M.Position := 0;
+      M.ReadBuffer(Bytes[0], M.Size);
+      Output := DecodeShellOutputBytes(Bytes, Length(Bytes));
+    end;
   finally
     EnvList.Free;
     M.Free;
@@ -577,7 +721,11 @@ begin
       SetLength(Bytes, Acc.Size);
       Acc.Position := 0;
       Acc.ReadBuffer(Bytes[0], Acc.Size);
-      Output := TEncoding.UTF8.GetString(Bytes);
+      { OEM-aware decode on Windows; plain UTF-8 on POSIX. The
+        helper makes both branches go through one place so the
+        bug-fix history -- "cmd.exe is in OEM not UTF-8" -- lives
+        in one comment block (see DecodeShellOutputBytes). }
+      Output := DecodeShellOutputBytes(Bytes, Length(Bytes));
     end;
   finally
     Acc.Free;
@@ -828,7 +976,11 @@ begin
       SetLength(Bytes, Acc.Size);
       Acc.Position := 0;
       Acc.ReadBuffer(Bytes[0], Acc.Size);
-      Output := TEncoding.UTF8.GetString(Bytes);
+      { OEM-aware decode on Windows; plain UTF-8 on POSIX. The
+        helper makes both branches go through one place so the
+        bug-fix history -- "cmd.exe is in OEM not UTF-8" -- lives
+        in one comment block (see DecodeShellOutputBytes). }
+      Output := DecodeShellOutputBytes(Bytes, Length(Bytes));
     end;
   finally
     Acc.Free;

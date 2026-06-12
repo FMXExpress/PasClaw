@@ -15,6 +15,16 @@ unit PasClaw.Tools.Shell;
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
+{$IFDEF FPC}
+  {$CODEPAGE UTF8}            { Match PasClaw.Platform: keep shell
+                                output bytes UTF-8-tagged through the
+                                Format(...) string-building in
+                                Tool_Shell so they survive into JSON
+                                serialization without ANSI-codepage
+                                transcoding. }
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
+{$ENDIF}
 
 interface
 

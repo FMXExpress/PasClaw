@@ -448,6 +448,14 @@ test-shell-backend: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/shell_backend_tests.pas -o$(BUILDDIR)/shell_backend_tests
 	@$(BUILDDIR)/shell_backend_tests
 
+# Shell output decode (PasClaw.Platform.DecodeShellOutputBytes) -- the OEM
+# codepage fix for cmd.exe stdout. Exercises the explicit-codepage path so
+# tests pin Windows behaviour without needing Windows itself.
+test-shell-output-decode: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/shell_output_decode_tests.pas -o$(BUILDDIR)/shell_output_decode_tests
+	@$(BUILDDIR)/shell_output_decode_tests
+
 # Goals runner: the auto-continue Ralph loop. Scripted fake provider
 # returns MET / CONTINUE / FAILED verdicts; pins parser + budget +
 # abort + judge-outage semantics. No real model.
@@ -478,4 +486,4 @@ test-kb-index: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/kb_index_tests.pas -o$(BUILDDIR)/kb_index_tests
 	@$(BUILDDIR)/kb_index_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-shell-output-decode
