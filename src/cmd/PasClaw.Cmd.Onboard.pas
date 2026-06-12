@@ -471,7 +471,7 @@ begin
   if Choice = 'docker' then
   begin
     Cfg.ShellBackend := sbDocker;
-    Image := Trim(ReadLineEcho('  Docker image [ubuntu:24.04]: '));
+    Image := Trim(ReadLineEcho('  Docker image [debian:bookworm-slim]: '));
     if Image <> '' then Cfg.ShellBackendDocker.Image := Image;
     Network := Trim(LowerCase(ReadLineEcho(
                 '  Network mode [bridge/host/none] (default bridge): ')));

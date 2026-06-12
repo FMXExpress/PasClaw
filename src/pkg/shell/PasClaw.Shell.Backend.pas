@@ -51,7 +51,7 @@ type
   IShellBackend = interface
     ['{B7C0F5B3-2DCB-4A5F-9E40-7F2C6DBE1A11}']
     { Identifier for status output / log lines. e.g. 'local',
-      'docker (image=ubuntu:24.04)'. Never empty. }
+      'docker (image=debian:bookworm-slim)'. Never empty. }
     function Name: string;
 
     { Human-readable backend descriptor for the shell_exec tool

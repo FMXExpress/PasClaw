@@ -12,7 +12,7 @@
     - The IShellBackend chain is uniform from every caller's point
       of view; the local case isn't a special branch in Tool_Shell.
     - Status output / log lines from "local" come out the same way
-      they do for "docker (image=ubuntu:24.04)".
+      they do for "docker (image=debian:bookworm-slim)".
     - The Cfg.ShellBackend = "local" path is explicit and tested,
       not "whatever the default was when no backend got set".
 

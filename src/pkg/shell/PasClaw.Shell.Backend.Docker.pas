@@ -54,7 +54,7 @@ uses
 
 type
   TDockerBackendOptions = record
-    Image:       string;   { e.g. 'ubuntu:24.04' (default) }
+    Image:       string;   { e.g. 'debian:bookworm-slim' (default) }
     Network:     string;   { 'bridge' (default) | 'host' | 'none' }
     ExtraMounts: TStringList;   { each entry passed verbatim to -v;
                                   caller owns the list }
@@ -108,7 +108,7 @@ const
 
 function DefaultDockerBackendOptions: TDockerBackendOptions;
 begin
-  Result.Image      := 'ubuntu:24.04';
+  Result.Image      := 'debian:bookworm-slim';
   Result.Network    := 'bridge';
   Result.ExtraMounts := nil;
   Result.Privileged := False;

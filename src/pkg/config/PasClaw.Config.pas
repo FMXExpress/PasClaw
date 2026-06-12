@@ -135,7 +135,7 @@ type
      for pasclaw/runner: once we publish a curated one, or any
      image with the tooling they want preinstalled. *)
   TShellBackendDockerConfig = record
-    Image:       string;    { default 'ubuntu:24.04' }
+    Image:       string;    { default 'debian:bookworm-slim' }
     Network:     string;    { 'bridge' (default) | 'host' | 'none' }
     User:        string;    { '' = container default }
     Privileged:  Boolean;
@@ -594,7 +594,7 @@ begin
   Heartbeat.ContentPath  := '';    { empty -> default workspace/heartbeat.md at load time }
   Heartbeat.Channel      := '';
   ShellBackend           := sbLocal;
-  ShellBackendDocker.Image      := 'ubuntu:24.04';
+  ShellBackendDocker.Image      := 'debian:bookworm-slim';
   ShellBackendDocker.Network    := 'bridge';
   ShellBackendDocker.User       := '';
   ShellBackendDocker.Privileged := False;
@@ -826,13 +826,13 @@ begin
       { Default; skip emission unless someone touched the docker
         subobject -- in which case we still emit "local" to keep
         the file self-explanatory about which backend is active. }
-      if (ShellBackendDocker.Image <> 'ubuntu:24.04')
+      if (ShellBackendDocker.Image <> 'debian:bookworm-slim')
          or (ShellBackendDocker.Network <> 'bridge')
          or (ShellBackendDocker.User <> '')
          or ShellBackendDocker.Privileged then
         Root.PutStr('shell_backend', 'local');
     if (ShellBackend = sbDocker)
-       or (ShellBackendDocker.Image <> 'ubuntu:24.04')
+       or (ShellBackendDocker.Image <> 'debian:bookworm-slim')
        or (ShellBackendDocker.Network <> 'bridge')
        or (ShellBackendDocker.User <> '')
        or ShellBackendDocker.Privileged then
