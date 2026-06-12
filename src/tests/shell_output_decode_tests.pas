@@ -28,6 +28,16 @@ program shell_output_decode_tests;
 {$IFDEF FPC}{$CODEPAGE UTF8}{$ENDIF}
 
 uses
+  {$IFDEF UNIX}cwstring,{$ENDIF}    { Bridges TEncoding.GetEncoding to
+                                      iconv for non-default codepages.
+                                      Production POSIX paths only ever
+                                      decode UTF-8, which works without
+                                      this; the explicit-codepage tests
+                                      below need it to actually resolve
+                                      CP437 (otherwise FPC falls back
+                                      to Latin-1 sign-extension and
+                                      0x82 round-trips as U+0082 instead
+                                      of U+00E9). }
   SysUtils,
   PasClaw.Platform;
 
@@ -139,6 +149,98 @@ begin
               'oversized ByteCount clamps to actual array length');
 end;
 
+procedure TestCP437SingleNonAsciiByte;
+(* The actual point of the whole patch: prove the codepage table is
+   hit correctly, not just that the byte-counting math works. Byte
+   0x82 in CP437 is 'é' (U+00E9); UTF-8 encodes 'é' as the two-byte
+   sequence 0xC3 0xA9. This is the exact mojibake the bug reporter
+   hit -- under naive UTF-8 decoding 0x82 is an invalid lead byte
+   and shows up as a replacement character. Through GetOEMCP +
+   MultiByteToWideChar (Windows) or TEncoding.GetEncoding(437)
+   (Linux via iconv's IBM437) the byte resolves to the right
+   character.
+
+   The CODEPAGE UTF8 directive at the top of this file means 'é'
+   as a source literal is encoded as bytes 0xC3 0xA9 too, so
+   AssertEqStr is meaningful -- otherwise we'd be comparing
+   different encodings. Paren-star delimiters because the directive
+   token would close a curly-brace comment early on dcc64. *)
+var
+  B: TBytes;
+  Got: string;
+begin
+  SetLength(B, 1);
+  B[0] := $82;
+  Got := DecodeShellOutputBytes(B, 1, 437);
+  AssertEqInt(Length(Got), 2,
+              'é UTF-8-encodes to exactly 2 bytes');
+  AssertEqInt(Byte(Got[1]), $C3, 'first UTF-8 byte of é is 0xC3');
+  AssertEqInt(Byte(Got[2]), $A9, 'second UTF-8 byte of é is 0xA9');
+  AssertEqStr(Got, 'é',
+              'CP437 byte 0x82 decodes to é (and round-trips as UTF-8)');
+end;
+
+procedure TestCP437MultiByteString;
+{ A string with multiple non-ASCII CP437 bytes mixed with ASCII --
+  like a real `dir` listing of a directory whose name contains
+  accents. Pins that the conversion handles a mixed run, not just
+  one byte in isolation. }
+var
+  B: TBytes;
+  Got: string;
+begin
+  { "résumé" in CP437:
+      r=0x72, é=0x82, s=0x73, u=0x75, m=0x6D, é=0x82 }
+  SetLength(B, 6);
+  B[0] := $72;
+  B[1] := $82;
+  B[2] := $73;
+  B[3] := $75;
+  B[4] := $6D;
+  B[5] := $82;
+  Got := DecodeShellOutputBytes(B, 6, 437);
+  AssertEqStr(Got, 'résumé',
+              'CP437 multibyte sequence round-trips through the helper');
+end;
+
+procedure TestCP437BoxDrawing;
+{ `dir`'s table output uses CP437 box-drawing characters by
+  default. Byte 0xC4 in CP437 is U+2500 (─, light horizontal),
+  which UTF-8 encodes as 3 bytes 0xE2 0x94 0x80. Pins the
+  three-byte UTF-8 case in addition to the two-byte one above. }
+var
+  B: TBytes;
+  Got: string;
+begin
+  SetLength(B, 1);
+  B[0] := $C4;
+  Got := DecodeShellOutputBytes(B, 1, 437);
+  AssertEqInt(Length(Got), 3,
+              'U+2500 UTF-8-encodes to exactly 3 bytes');
+  AssertEqInt(Byte(Got[1]), $E2, 'first UTF-8 byte of ─ is 0xE2');
+  AssertEqInt(Byte(Got[2]), $94, 'second UTF-8 byte of ─ is 0x94');
+  AssertEqInt(Byte(Got[3]), $80, 'third UTF-8 byte of ─ is 0x80');
+end;
+
+procedure TestUTF8InputThroughExplicitCP65001;
+{ Codepage 65001 is the magic "this is UTF-8" CP on Windows. When
+  the input is already UTF-8 bytes (which is what cmd.exe writes
+  on Windows 10/11 when the operator has the "Use Unicode UTF-8"
+  region option enabled), we must round-trip verbatim. Pins both
+  the Windows-UTF-8-locale branch and the POSIX default. }
+var
+  B: TBytes;
+  Got: string;
+begin
+  { 'é' in UTF-8 = 0xC3 0xA9 }
+  SetLength(B, 2);
+  B[0] := $C3;
+  B[1] := $A9;
+  Got := DecodeShellOutputBytes(B, 2, 65001);
+  AssertEqStr(Got, 'é',
+              'UTF-8 input round-trips through codepage 65001');
+end;
+
 begin
   TestEmptyInputEmptyOutput;
   WriteLn('  ok: empty input -> empty output');
@@ -152,5 +254,13 @@ begin
   WriteLn('  ok: dir-shaped output survives intact');
   TestLengthExceedsBytes;
   WriteLn('  ok: oversized ByteCount clamps safely');
+  TestCP437SingleNonAsciiByte;
+  WriteLn('  ok: CP437 0x82 -> é (the actual codepage table is hit)');
+  TestCP437MultiByteString;
+  WriteLn('  ok: CP437 multibyte sequence round-trips');
+  TestCP437BoxDrawing;
+  WriteLn('  ok: CP437 0xC4 -> ─ (3-byte UTF-8)');
+  TestUTF8InputThroughExplicitCP65001;
+  WriteLn('  ok: codepage 65001 = pass-through UTF-8');
   WriteLn('PASS');
 end.
