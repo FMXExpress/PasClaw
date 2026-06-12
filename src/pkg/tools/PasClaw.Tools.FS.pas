@@ -467,7 +467,20 @@ begin
     if TotalMatches = 0 then
       Result := '(no matches)'
     else
+    begin
       Result := Sb.ToString;
+      {$IFDEF FPC}
+      { fs_grep's TStringBuilder concatenates hashline-formatted
+        per-file sections (each CP_UTF8) with #10 separators. The
+        builder's ToString resets the codepage tag back to 0 ("use
+        DefaultSystemCodepage"), which on Windows means CP1252 and
+        the JSON serialiser would re-encode our valid UTF-8 bytes
+        as if they were CP1252 chars -- the same root mojibake the
+        hashline fix is undoing in FormatHashlineRead. Stamp the
+        final fs_grep result CP_UTF8 too. Codex P2 on PR #238. }
+      SetCodePage(RawByteString(Result), CP_UTF8, False);
+      {$ENDIF}
+    end;
   finally
     Sb.Free;
     Globs.Free;
