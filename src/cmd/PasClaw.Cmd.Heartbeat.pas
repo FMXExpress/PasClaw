@@ -49,6 +49,8 @@ uses
   PasClaw.Tools.Memory,
   PasClaw.Tools.SendMessage,
   PasClaw.Tools.OutputCache,
+  PasClaw.Tools.Sandbox,    { ConfigureSandbox -- apply the operator's
+                              policy before fs_*/shell tools can fire }
   PasClaw.Heartbeat;
 
 procedure Help;
@@ -129,6 +131,14 @@ begin
 
   Cfg := LoadConfig;
   try
+    { Apply the operator's sandbox policy BEFORE any tool can run --
+      same call every other entry point (Agent / TUI / Serve /
+      Gateway / embedder) makes at startup. PasClaw.Tools.Sandbox
+      defaults RestrictToWorkspace to False until configured, so
+      skipping this would let a heartbeat prompt fs_write / shell
+      outside the workspace regardless of sandbox settings.
+      Codex P1 on PR #232. }
+    ConfigureSandbox(Cfg.Sandbox, '');
     if not Cfg.Heartbeat.Enabled then
     begin
       if not Force then
