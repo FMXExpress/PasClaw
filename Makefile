@@ -497,4 +497,15 @@ test-fs-grep-tier1-4: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/fs_grep_tier1_4_tests.pas -o$(BUILDDIR)/fs_grep_tier1_4_tests
 	@$(BUILDDIR)/fs_grep_tier1_4_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-shell-output-decode test-fs-grep-tier1-4
+# fs_grep ripgrep-tier5-6 optimisations: byte walker replacing the
+# TStringList/StringReplace/per-line LowerCase path (tier 5), and
+# Boyer-Moore-Horspool substring search replacing Pos() (tier 6).
+# Output-equivalent rewrite: tests pin line numbers, CRLF handling,
+# no-trailing-newline, multi-match-per-file, case-insensitive,
+# overlapping/partial/embedded patterns, m=1 and m>n edge cases.
+test-fs-grep-tier5-6: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/fs_grep_tier5_6_tests.pas -o$(BUILDDIR)/fs_grep_tier5_6_tests
+	@$(BUILDDIR)/fs_grep_tier5_6_tests
+
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6
