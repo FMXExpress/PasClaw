@@ -29,7 +29,8 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes,
   PasClaw.Shell.Backend,
-  PasClaw.Shell.Backend.Local;
+  PasClaw.Shell.Backend.Local,
+  PasClaw.Shell.Backend.Docker;
 
 procedure Fail_(const Msg: string);
 begin
@@ -217,6 +218,58 @@ begin
   end;
 end;
 
+procedure TestDockerRefusesEmptySessionId;
+{ Codex P1 on PR #233: the previous empty-SessionId fallback ran
+  commands on the HOST when no session id was set, defeating the
+  isolation the operator picked docker for. Pin the new contract:
+  StartSession refuses empty ids with a clear error, and Exec
+  returns -1 + a diagnostic Output rather than silently dispatching
+  to RunOneShot.
+
+  We construct the backend WITHOUT calling DockerCliReachable so
+  the test runs even when docker isn't on the box -- the validation
+  paths we're testing all fail before any docker subprocess. }
+var
+  Opts: TDockerBackendOptions;
+  Backend: TDockerShellBackend;
+  Ifc: IShellBackend;
+  Out_: string;
+  ExitCode: Integer;
+  Raised: Boolean;
+begin
+  Opts := DefaultDockerBackendOptions;
+  Backend := TDockerShellBackend.Create(Opts);
+  Ifc := Backend;
+  try
+    Raised := False;
+    try
+      Backend.StartSession('');
+    except
+      on E: Exception do
+      begin
+        Raised := True;
+        AssertTrue(Pos('empty SessionId', E.Message) > 0,
+                   'StartSession error names the bad arg: ' + E.Message);
+      end;
+    end;
+    AssertTrue(Raised, 'StartSession('''') raises rather than no-opping');
+
+    { Exec('') must NOT spawn anything host-side; it must surface an
+      explicit error so a forgotten lifecycle call is visible. }
+    ExitCode := Backend.Exec('', 'echo should-not-run-on-host', '',
+                             nil, Out_);
+    AssertTrue(ExitCode = -1,
+               'Exec('''') returns -1, not 0 from a successful host run');
+    AssertTrue(Pos('empty SessionId', Out_) > 0,
+               'Exec('''') Output explains the contract: ' + Out_);
+    AssertTrue(Pos('should-not-run-on-host', Out_) = 0,
+               'the model''s command does NOT appear in the output ' +
+               '(would mean it ran on the host)');
+  finally
+    SetActiveShellBackend(nil);
+  end;
+end;
+
 begin
   TestNoBackendFallsBackToHost;
   WriteLn('  ok: no backend -> host fallback works');
@@ -228,5 +281,7 @@ begin
   WriteLn('  ok: dispatch goes through active backend (recording mock)');
   TestRunOneShotWithEnvDispatch;
   WriteLn('  ok: with-env wrapper dispatches through active backend');
+  TestDockerRefusesEmptySessionId;
+  WriteLn('  ok: docker backend refuses empty SessionId (no host fallback)');
   WriteLn('PASS');
 end.

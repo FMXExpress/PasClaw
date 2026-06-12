@@ -178,20 +178,24 @@ var
 begin
   Cfg := LoadConfig;
   ConfigureSandbox(Cfg.Sandbox, '');
-  { Phase 1: docker backend not yet wired on the multi-tenant gateway
-    (per-request session containers + cross-thread session-id
-    propagation are Phase 1.5). Refuse cleanly so the operator
-    isn't silently running on the host. }
-  if Cfg.ShellBackend = sbDocker then
-  begin
-    PrintLn(Ansi.Yellow + '!' + Ansi.Reset +
-            ' `pasclaw gateway` does not yet host the docker shell backend.');
-    PrintLn('  Run with shell_backend=local in config.json, or pass ' +
-            Ansi.Bold + '--no-tools' + Ansi.Reset + '.');
-    Exit(1);
-  end;
   try
     Args := ParseGw(Argv, Cfg);
+    { Phase 1: docker backend not yet wired on the multi-tenant gateway
+      (per-request session containers + cross-thread session-id
+      propagation are Phase 1.5). Refuse when tools are on so an
+      operator with shell_backend=docker globally isn't silently
+      running on the host. Codex P2 on PR #233: skip the gate when
+      --no-tools was passed since the gateway never dispatches
+      shell_exec in that mode -- the docker isolation story doesn't
+      apply. Parse args first so the flag is read before the gate. }
+    if (Cfg.ShellBackend = sbDocker) and (not Args.NoTools) then
+    begin
+      PrintLn(Ansi.Yellow + '!' + Ansi.Reset +
+              ' `pasclaw gateway` does not yet host the docker shell backend.');
+      PrintLn('  Run with shell_backend=local in config.json, or pass ' +
+              Ansi.Bold + '--no-tools' + Ansi.Reset + '.');
+      Exit(1);
+    end;
 
     { Stream-reliability env-var overrides -- see Cmd.Serve for the
       same shape. Env wins over config; defaults from TConfig.Create

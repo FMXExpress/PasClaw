@@ -399,6 +399,7 @@ var
   MCPClients: TMCPClientList;
   Spawn: TSpawnTool;
   BgCoord: TBackgroundSpawnCoordinator;
+  OneShotSessionId: string;
 begin
   if not PickProvider(Cfg, A, Provider, Err) then
   begin
@@ -427,6 +428,18 @@ begin
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   BgCoord := MaybeRegisterBackgroundSpawnTools(Cfg, Provider, Reg, Model);
   Handlers := TLoopHandlers.Create;
+  { Allocate a one-shot session id so the active shell backend
+    (docker, ssh, ...) actually isolates this turn. Codex P1 on
+    PR #233: without StartShellSession the docker backend's empty-
+    SessionId fallback dispatched to RunOneShot ON THE HOST,
+    silently bypassing the isolation the operator asked for. The
+    id is purely for the backend (one-shot turns aren't persisted
+    as PasClaw sessions); short prefix avoids docker's 64-char
+    container-name cap. }
+  OneShotSessionId := 'oneshot-' + FormatDateTime('yyyymmdd-hhnnss', Now) +
+                      '-' + IntToHex(Random(1 shl 24), 6);
+  StartShellSession(OneShotSessionId);
+  SetCurrentSessionId(OneShotSessionId);
   try
     SetLength(Msgs, 1);
     Msgs[0] := MakeMessage(mrUser, Prompt);
@@ -441,6 +454,8 @@ begin
     if Loop.TotalUsage.InputTokens + Loop.TotalUsage.OutputTokens > 0 then
       PrintLn(Ansi.Dim + FormatTokenLine(Loop.TotalUsage, Loop.Iterations) + Ansi.Reset);
   finally
+    CloseShellSession(OneShotSessionId);
+    SetCurrentSessionId('');
     Handlers.Free;
     FreeMCPClients(MCPClients);
     if Spawn <> nil then Spawn.Free;

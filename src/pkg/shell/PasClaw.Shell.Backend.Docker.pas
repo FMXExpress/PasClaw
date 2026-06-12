@@ -311,17 +311,19 @@ end;
 
 procedure TDockerShellBackend.StartSession(const SessionId: string);
 begin
-  if IsRunning(SessionId) then Exit;
+  { No empty-SessionId fallback. Codex P1 on PR #233: silently
+    skipping Spawn here let Exec route to the host (RunOneShot),
+    bypassing the isolation the operator asked for and the
+    shell_exec description advertises. Every caller must allocate
+    a SessionId; one-shot CLI turns allocate a synthetic id
+    (RunSingleTurn). The Local backend ignores SessionId, so this
+    extra strictness only affects docker/ssh. }
   if Trim(SessionId) = '' then
-  begin
-    { Empty SessionId = one-shot path that didn't allocate one.
-      Spinning a docker container for a single-turn pasclaw -m
-      pays the start-up latency for no benefit. Fall back to local
-      transparently. The active backend stays docker (so embedders
-      see the right Name/Describe), but Exec routes the local-via-
-      RunOneShot path -- see Exec below. }
-    Exit;
-  end;
+    raise Exception.Create(
+      'shell-backend(docker): StartSession with empty SessionId. ' +
+      'Each session must allocate an id before tools can run. ' +
+      '(Caller bug -- file a PasClaw issue.)');
+  if IsRunning(SessionId) then Exit;
   SpawnContainer(SessionId);
 end;
 
@@ -340,23 +342,31 @@ var
 begin
   Output := '';
 
-  { Empty SessionId or container not started -> route to host
-    shell. This covers test harnesses + the one-shot pasclaw -m
-    path that doesn't bother with a session id. Tradeoff: silent
-    fallback to local IS the security regression the docker option
-    exists to prevent... but it ONLY hits when there's no session
-    id (the model running these has no session-scoped state to
-    leak ANYWAY), and the explicit "use docker" config flag
-    already produces a loud error at command startup when the
-    daemon isn't available. The interesting case -- interactive
-    session, model issuing commands -- always has a SessionId.
-    Documented per-impl on IShellBackend.StartSession's contract. }
-  if (Trim(SessionId) = '') or (not IsRunning(SessionId)) then
+  { No host fallback. Codex P1 on PR #233 was right: silently
+    routing to RunOneShot when SessionId is empty (or the container
+    didn't start) bypasses the isolation the operator chose, AND
+    the model thinks it's running in the container because the
+    shell_exec description advertises it. The fix isn't a softer
+    fallback -- the fix is for every entry point to allocate a
+    session id; RunSingleTurn now does. Surface any remaining
+    forgotten paths as a clear error rather than a security
+    regression. }
+  if Trim(SessionId) = '' then
   begin
-    if ExtraEnv <> nil then
-      Result := RunOneShotWithEnv(Cmd, WorkDir, ExtraEnv, Output)
-    else
-      Result := RunOneShot(Cmd, WorkDir, Output);
+    Output :=
+      'shell-backend(docker): refusing to run with empty SessionId. ' +
+      'StartShellSession must be called for every session that runs ' +
+      'tools (CLI / TUI / heartbeat / embedder). Pass --backend local ' +
+      'if a one-off host execution was intended.';
+    Result := -1;
+    Exit;
+  end;
+  if not IsRunning(SessionId) then
+  begin
+    Output :=
+      'shell-backend(docker): container for SessionId "' + SessionId +
+      '" is not running. StartSession may have failed; check docker daemon.';
+    Result := -1;
     Exit;
   end;
 
