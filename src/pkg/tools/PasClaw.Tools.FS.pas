@@ -116,6 +116,71 @@ begin
   end;
 end;
 
+function ParseInt64Arg(const ArgsJSON, Field: string; Default_: Int64): Int64;
+var
+  Obj: TJsonObject;
+begin
+  Result := Default_;
+  if Trim(ArgsJSON) = '' then Exit;
+  try
+    Obj := TJsonObject.Parse(ArgsJSON);
+    if Obj = nil then Exit;
+    try
+      if Obj.Has(Field) then Result := Obj.GetInt(Field, Default_);
+    finally
+      Obj.Free;
+    end;
+  except
+    Result := Default_;
+  end;
+end;
+
+function IsBlockedGrepDir(const Name: string): Boolean;
+{ ripgrep-style hardcoded skip list. The model never wants
+  fs_grep results from .git/, node_modules/, etc. -- they're
+  pure noise for project-level queries. Cuts directory walk
+  time by ~10x on a typical repo where the bulk of file count
+  lives under these dirs. Operators with non-standard layouts
+  who genuinely need to grep into one of these can pass an
+  explicit Path pointing INTO it (the skip list only kicks
+  during recursion, not at the user-supplied Root). }
+const
+  BlockedDirs: array[0..11] of string = (
+    '.git', '.hg', '.svn',                  { VCS }
+    'node_modules',                          { JS/TS deps }
+    'target',                                { Rust / Java build }
+    'build',                                 { generic build dir }
+    'dist',                                  { JS publish output }
+    'vendor',                                { Go / PHP deps }
+    '.venv',                                 { Python venv }
+    '__pycache__',                           { Python bytecode }
+    '.gradle',                               { Gradle cache }
+    '.next'                                  { Next.js build }
+  );
+var
+  i: Integer;
+begin
+  for i := Low(BlockedDirs) to High(BlockedDirs) do
+    if SameText(Name, BlockedDirs[i]) then Exit(True);
+  Result := False;
+end;
+
+function LooksBinary(const Body: string): Boolean;
+{ ripgrep-style binary detection: peek at the first 1024 bytes
+  for a NUL. Source code never embeds NUL; PDFs / PNGs / zips /
+  .exe / .so all do at the file header. Cheap O(1024) scan that
+  saves the per-line allocation work on the (often majority)
+  files where the model has no use for the contents anyway. }
+var
+  N, i: Integer;
+begin
+  N := Length(Body);
+  if N > 1024 then N := 1024;
+  for i := 1 to N do
+    if Body[i] = #0 then Exit(True);
+  Result := False;
+end;
+
 function Tool_FSRead(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Path, Body, Reason: string;
@@ -348,19 +413,46 @@ function Tool_FSGrep(const ArgsJSON: string; out ErrMsg: string): string;
 { Recursive line scan returning hashline-formatted matches. Output looks
   like one section per matched file (¶path#hash header + N:line per
   match), so a follow-up fs_edit_hashline call can paste anchors
-  verbatim. }
+  verbatim.
+
+  Speed: four ripgrep-inspired tier-1 optimisations layered on top of
+  the original naive scan:
+
+    1. Defer ComputeFileHash until the first match in a file. Most
+       scanned files don't match the pattern; hashing them was pure
+       waste.
+    2. Skip well-known VCS / build / dependency directories by name
+       at walk time (.git, node_modules, target, build, ...). Cuts
+       directory walk by ~10x on a typical project.
+    3. Binary file detection (NUL byte in first 1024 bytes) -- skip
+       these before line-splitting since the model can't use the
+       contents anyway.
+    4. File-size cap (default 10 MB, override via max_file_bytes
+       arg) -- a multi-GB log file would dominate the grep.
+
+  Tier 5+ (byte-level scan to avoid TStringList, Boyer-Moore-Horspool
+  substring search) are a worthwhile follow-up if a perf budget
+  surfaces. }
+const
+  { 10 MiB. Source files are kilobytes; binary blobs get caught by
+    the NUL-byte check above; the cap exists for "the model accidentally
+    fs_greps a giant log file" cases that would otherwise stall a
+    session for tens of seconds reading megabytes off disk. }
+  DefaultMaxFileBytes = 10 * 1024 * 1024;
 var
   Root, Pattern, IncludeGlob: string;
   IgnoreCase: Boolean;
   MaxMatches: Int64;
+  MaxFileBytes: Int64;
   Globs: TStringList;
   Sb: TStringBuilder;
   TotalMatches: Integer;
   PatLower: string;
+  DirectSR: TSearchRec;
 
   procedure ScanFile(const Path: string);
   var
-    Body, Header: string;
+    Body: string;
     Lines: TStringList;
     j: Integer;
     Cmp: string;
@@ -370,20 +462,18 @@ var
     try
       Body := ReadFileText(Path);
     except
-      Exit;  { binary / permissions -- skip silently to keep grep tractable }
+      Exit;  { permissions -- skip silently to keep grep tractable }
     end;
-    Header := FormatHashlineHeader(Path, ComputeFileHash(Body));
+    { ripgrep tier 3: skip binaries before the line-splitting work.
+      Source code never has embedded NUL bytes; PDFs / PNGs / zips /
+      executables always do at the file header. }
+    if LooksBinary(Body) then Exit;
     Lines := TStringList.Create;
     try
       Lines.LineBreak := #10;
       Lines.StrictDelimiter := True;
       Lines.Text := StringReplace(Body, #13, '', [rfReplaceAll]);
       Wrote := False;
-      { Removed MatchCount local -- it was incremented per match but
-        never read; the per-file scope made it look like a counter
-        but only TotalMatches actually gates the loop. dcc64 H2077
-        flagged the dead writes; removing the var keeps the code
-        honest about what's being tracked. }
       for j := 0 to Lines.Count - 1 do
       begin
         if TotalMatches >= MaxMatches then Break;
@@ -393,7 +483,11 @@ var
           if not Wrote then
           begin
             if Sb.Length > 0 then Sb.Append(#10);
-            Sb.Append(Header).Append(#10);
+            { ripgrep tier 1: defer ComputeFileHash until we actually
+              have a match. On a typical project scan most files have
+              zero matches -- hashing them all was pure waste. }
+            Sb.Append(FormatHashlineHeader(Path,
+                       ComputeFileHash(Body))).Append(#10);
             Wrote := True;
           end;
           Sb.Append(FormatNumberedLine(j + 1, Lines[j])).Append(#10);
@@ -419,12 +513,22 @@ var
           Full := JoinPath(Dir, SR.Name);
           if (SR.Attr and faDirectory) <> 0 then
           begin
-            if SR.Name <> '' then
-              if SR.Name[1] = '.' then Continue;  { skip dotdirs }
+            if (SR.Name <> '') and (SR.Name[1] = '.') then Continue;
+            { ripgrep tier 2: skip well-known VCS / build / deps dirs
+              by name. The model never wants results from node_modules
+              etc. -- and these dirs dominate file count on real repos. }
+            if IsBlockedGrepDir(SR.Name) then Continue;
             Walk(Full);
           end
-          else if MatchesAny(SR.Name, Globs) then
-            ScanFile(Full);
+          else
+          begin
+            { ripgrep tier 4: skip files over the cap WITHOUT reading
+              them. TSearchRec.Size is already populated by FindFirst /
+              FindNext, so no extra stat call. }
+            if SR.Size > MaxFileBytes then Continue;
+            if MatchesAny(SR.Name, Globs) then
+              ScanFile(Full);
+          end;
         until (FindNext(SR) <> 0) or (TotalMatches >= MaxMatches);
       finally
         FindClose(SR);
@@ -448,6 +552,8 @@ begin
   IgnoreCase := ParseBoolArg(ArgsJSON, 'ignore_case', False);
   if IgnoreCase then PatLower := LowerCase(Pattern) else PatLower := Pattern;
   MaxMatches := 1000;
+  MaxFileBytes := ParseInt64Arg(ArgsJSON, 'max_file_bytes', DefaultMaxFileBytes);
+  if MaxFileBytes <= 0 then MaxFileBytes := DefaultMaxFileBytes;
   IncludeGlob := '';
   ParseStringArg(ArgsJSON, 'include', IncludeGlob);
   Globs := TStringList.Create;
@@ -458,7 +564,21 @@ begin
     if DirectoryExists(Root) then
       Walk(Root)
     else if FileExists(Root) then
-      ScanFile(Root)
+    begin
+      { ripgrep tier 4: enforce the size cap on the direct-file path
+        too, not just inside Walk. Without this, `fs_grep
+        path=server.log pattern=...` against an 11 MiB log would
+        still scan it -- the schema and tool description promise
+        files over max_file_bytes are skipped, so the direct-file
+        case has to honour that contract too. SR.Size from FindFirst
+        is the same stat that Walk uses; no read of the file body. }
+      if FindFirst(Root, faAnyFile, DirectSR) = 0 then
+        try
+          if DirectSR.Size <= MaxFileBytes then ScanFile(Root);
+        finally
+          FindClose(DirectSR);
+        end;
+    end
     else
     begin
       ErrMsg := 'no such path: ' + Root;
@@ -589,9 +709,18 @@ begin
 
     T.Name        := 'fs_grep';
     T.Description := 'Search files for a substring. Recursive when path is a directory. ' +
-                     'Skips dotdirs. Returns hashline-formatted matches (one section per file, header + LINENO:line per match) ' +
+                     'Skips dotdirs, well-known build/VCS/deps dirs (.git, node_modules, target, build, ' +
+                     'dist, vendor, .venv, __pycache__, .gradle, .next), binary files (NUL-byte detection ' +
+                     'in first 1 KiB), and files larger than max_file_bytes (default 10 MiB). Returns ' +
+                     'hashline-formatted matches (one section per file, header + LINENO:line per match) ' +
                      'so you can paste anchors directly into fs_edit_hashline.';
-    T.Schema      := '{"type":"object","properties":{"path":{"type":"string"},"pattern":{"type":"string"},"ignore_case":{"type":"boolean"},"include":{"type":"string","description":"Comma-separated filename glob(s), e.g. *.pas,*.dpr"}},"required":["path","pattern"]}';
+    T.Schema      := '{"type":"object","properties":{' +
+                     '"path":{"type":"string"},' +
+                     '"pattern":{"type":"string"},' +
+                     '"ignore_case":{"type":"boolean"},' +
+                     '"include":{"type":"string","description":"Comma-separated filename glob(s), e.g. *.pas,*.dpr"},' +
+                     '"max_file_bytes":{"type":"integer","description":"Skip files larger than this (default 10485760 = 10 MiB). Override for grepping into giant log files."}' +
+                     '},"required":["path","pattern"]}';
     T.Handler     := Tool_FSGrep;
     T.IsCore      := True;
     T.Category    := tcReadOnly;
