@@ -282,7 +282,7 @@ A `gateway:anon` identity would then be dropped at the channel boundary — defe
 
 ### Known limitations
 
-- The embedded web UI doesn't yet pass the token through. Operators using the web UI with `gateway.token` set will see the chat / stats / logs panels return 401 from JS. Workaround: bind the gateway to `127.0.0.1` and ssh-tunnel for browser access, or leave `gateway.token` empty and rely on loopback. Native web UI auth is a follow-up.
+- The embedded web UI passes the token through to every `/v1/*` fetch as `Authorization: Bearer <token>`. The token lives in browser `localStorage` under `pasclaw.gw_token.v1`. On the first 401 (typically the initial `GET /v1/status` after page load) a prompt asks for the token; subsequent calls reuse it. The 🔑 button in the header lets the operator re-set or clear the token without reloading. For SSE endpoints (`/v1/logs`) the token is appended as `?token=<value>` since `EventSource` can't set custom headers — same query-param fallback `PasClaw.Gateway.Auth.CheckGatewayAuth` already accepts. localStorage is acceptable for this single-shared-secret model; higher-assurance auth is the reverse-proxy + mTLS path noted above.
 - Token rotation requires a restart (config is read at `pasclaw gateway` startup, not per-request).
 - No per-tenant tokens / no JWT — single shared secret. The use case is "PasClaw is the team's shared HTTP agent, every team member has the same secret", not "multi-tenant SaaS".
 

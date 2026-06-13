@@ -203,6 +203,7 @@
     <button data-tab="logs">Logs</button>
     <button data-tab="stats">Stats</button>
     <button data-tab="settings">Settings</button>
+    <button id="gw-token-btn" title="Set / clear gateway bearer token (used when PASCLAW_GATEWAY_TOKEN is set on the server)" style="margin-left:auto">🔑</button>
   </nav>
 </header>
 <main>
@@ -348,20 +349,90 @@
 const $ = s => document.querySelector(s);
 const $$ = s => document.querySelectorAll(s);
 
+/* ===== Gateway bearer-token auth =====
+   When PasClaw.Gateway.Server has Cfg.Gateway.Token set, every
+   non-exempt /v1/* route returns 401 unless the request carries
+   `Authorization: Bearer <token>`. The web UI itself is exempt at
+   `GET /` so this page loads without a token, but every subsequent
+   fetch from JS needs to carry one.
+
+   UX:
+     - gwFetch() is a wrapper around fetch() that pulls the token from
+       localStorage and adds the header. On 401 it pops a prompt asking
+       for the token, saves the answer to localStorage, and retries the
+       original request once. Subsequent calls reuse the stored value.
+     - The 🔑 button in the header lets the operator set / clear the
+       token explicitly (handy when rotating, or after pasting one from
+       `doctl apps tier list-instance-sizes` style URL parameters).
+     - For SSE endpoints (EventSource can't set headers), gwSseUrl()
+       appends `?token=<value>` to the URL -- the same query-param
+       fallback PasClaw.Gateway.Auth.CheckGatewayAuth accepts.
+
+   Security note:
+     - localStorage is accessible to any script running on this page;
+       since the embedded UI ships verbatim from the gateway binary
+       and loads no third-party scripts, that's acceptable for the
+       single-shared-secret model. Higher-assurance auth is the
+       reverse-proxy + mTLS path documented in docs/gateway.md.
+*/
+const GW_TOKEN_KEY = "pasclaw.gw_token.v1";
+function gwToken()           { try { return localStorage.getItem(GW_TOKEN_KEY) || ""; } catch { return ""; } }
+function gwSetToken(t)       { try { localStorage.setItem(GW_TOKEN_KEY, t); } catch {} }
+function gwClearToken()      { try { localStorage.removeItem(GW_TOKEN_KEY); } catch {} }
+function promptForToken(msg) {
+  const cur = gwToken();
+  const t = window.prompt(msg || "Gateway bearer token (Authorization: Bearer …). Leave blank to clear.", cur);
+  if (t === null) return cur;   // user cancelled
+  if (t === "") { gwClearToken(); return ""; }
+  gwSetToken(t);
+  return t;
+}
+async function gwFetch(url, opts) {
+  opts = opts || {};
+  const headers = new Headers(opts.headers || {});
+  let tok = gwToken();
+  if (tok) headers.set("Authorization", "Bearer " + tok);
+  let r = await fetch(url, Object.assign({}, opts, { headers }));
+  if (r.status !== 401) return r;
+  // First 401 -> ask once and retry. Don't loop indefinitely; a
+  // second 401 after the user supplied a token surfaces the error
+  // to the caller normally (rendered as "offline" / "error" in each
+  // tab's loader).
+  tok = promptForToken("This gateway requires a bearer token. Paste your PASCLAW_GATEWAY_TOKEN:");
+  if (!tok) return r;
+  headers.set("Authorization", "Bearer " + tok);
+  return await fetch(url, Object.assign({}, opts, { headers }));
+}
+function gwSseUrl(path) {
+  const tok = gwToken();
+  if (!tok) return path;
+  return path + (path.indexOf("?") < 0 ? "?" : "&") + "token=" + encodeURIComponent(tok);
+}
+document.addEventListener("DOMContentLoaded", () => {
+  const btn = document.getElementById("gw-token-btn");
+  if (btn) btn.addEventListener("click", () => promptForToken(
+    "Set or clear the gateway bearer token. Current: " + (gwToken() ? "set" : "(empty)")));
+});
+
 /* ===== Tab switching ===== */
 const tabLoaded = {};
 function showTab(name) {
-  $$("nav button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  // Scope both the active-class toggle AND the click-handler wiring
+  // to buttons that actually map to a tab (data-tab set). Without the
+  // [data-tab] qualifier the new 🔑 token button in the nav would also
+  // get a click handler bound, which would call showTab(undefined) and
+  // hide every .tab (Codex P2 on PR #249).
+  $$("nav button[data-tab]").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
   $$(".tab").forEach(t => t.classList.toggle("active", t.id === "tab-" + name));
   if (!tabLoaded[name] && typeof tabLoaders[name] === "function") {
     tabLoaders[name]();
     tabLoaded[name] = true;
   }
 }
-$$("nav button").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
+$$("nav button[data-tab]").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
 
 /* ===== Header status ===== */
-fetch("/v1/status").then(r => r.json()).then(s => {
+gwFetch("/v1/status").then(r => r.json()).then(s => {
   $("#meta").textContent = `${s.default_provider}/${s.default_model} • tools:${s.tools} • mcp:${s.mcp_servers}`;
 }).catch(_ => $("#meta").textContent = "offline");
 
@@ -470,7 +541,7 @@ f.addEventListener("submit", async e => {
   const history = s.turns.filter(t => t.role === "u" || t.role === "a")
                           .map(t => ({ role: t.role === "u" ? "user" : "assistant", content: t.text }));
   try {
-    const r = await fetch("/v1/chat/completions", {
+    const r = await gwFetch("/v1/chat/completions", {
       method: "POST",
       headers: { "content-type": "application/json", "accept": "text/event-stream" },
       /* Model omitted on purpose -- gateway falls back to FCfg.DefaultModel,
@@ -532,7 +603,7 @@ const tabLoaders = {
     const list = $("#mem-list");
     list.innerHTML = "loading…";
     try {
-      const j = await (await fetch("/v1/memory")).json();
+      const j = await (await gwFetch("/v1/memory")).json();
       list.innerHTML = "";
       if (!j.files || !j.files.length) {
         list.innerHTML = `<div class="empty-pane">No memory files yet.</div>`;
@@ -546,7 +617,7 @@ const tabLoaders = {
           $$("#mem-list .item").forEach(x => x.classList.remove("active"));
           el.classList.add("active");
           try {
-            const r = await (await fetch("/v1/memory/" + encodeURIComponent(f.name))).json();
+            const r = await (await gwFetch("/v1/memory/" + encodeURIComponent(f.name))).json();
             $("#mem-view").textContent = r.content || "";
           } catch (e) { $("#mem-view").textContent = String(e); }
         });
@@ -563,7 +634,7 @@ const tabLoaders = {
       list.innerHTML = "loading…";
       try {
         const url = path ? "/v1/fs?path=" + encodeURIComponent(path) : "/v1/fs";
-        const j = await (await fetch(url)).json();
+        const j = await (await gwFetch(url)).json();
         cwd = j.path || path || "";
         list.innerHTML = "";
         if (cwd) {
@@ -582,7 +653,7 @@ const tabLoaders = {
             if (e.dir) load(full);
             else {
               try {
-                const r = await (await fetch("/v1/fs/read?path=" + encodeURIComponent(full))).json();
+                const r = await (await gwFetch("/v1/fs/read?path=" + encodeURIComponent(full))).json();
                 $("#fs-view").textContent = r.content + (r.truncated ? "\n…(truncated)" : "");
               } catch (err) { $("#fs-view").textContent = String(err); }
             }
@@ -601,7 +672,7 @@ const tabLoaders = {
   async mcp() {
     const tbody = $("#mcp-table tbody"); tbody.innerHTML = "";
     try {
-      const j = await (await fetch("/v1/mcp")).json();
+      const j = await (await gwFetch("/v1/mcp")).json();
       if (!j.servers || !j.servers.length) {
         tbody.innerHTML = `<tr><td colspan=4><div class="empty-pane">No MCP servers configured.</div></td></tr>`;
         return;
@@ -620,7 +691,7 @@ const tabLoaders = {
   async cron() {
     const tbody = $("#cron-table tbody"); tbody.innerHTML = "";
     try {
-      const j = await (await fetch("/v1/cron")).json();
+      const j = await (await gwFetch("/v1/cron")).json();
       if (!j.entries || !j.entries.length) {
         tbody.innerHTML = `<tr><td colspan=6><div class="empty-pane">No cron entries.</div></td></tr>`;
         return;
@@ -642,7 +713,7 @@ const tabLoaders = {
   async skills() {
     const pane = $("#skills-pane"); pane.innerHTML = "";
     try {
-      const j = await (await fetch("/v1/skills")).json();
+      const j = await (await gwFetch("/v1/skills")).json();
       if (!j.skills || !j.skills.length) {
         pane.innerHTML = `<div class="empty-pane">No skills installed. Run <code>pasclaw skills install &lt;owner/repo&gt;</code> or <code>pasclaw skills install clawhub:&lt;slug&gt;</code>.</div>`;
         return;
@@ -665,7 +736,7 @@ const tabLoaders = {
     view.textContent = "";
     let es;
     try {
-      es = new EventSource("/v1/logs");
+      es = new EventSource(gwSseUrl("/v1/logs"));
       es.onopen = () => status.textContent = "live";
       es.onerror = () => status.textContent = "disconnected";
       es.onmessage = e => {
@@ -680,7 +751,7 @@ const tabLoaders = {
   async settings() {
     const view = $("#config-view");
     try {
-      const j = await (await fetch("/v1/config")).json();
+      const j = await (await gwFetch("/v1/config")).json();
       view.textContent = JSON.stringify(j, null, 2);
     } catch (e) { view.textContent = String(e); }
   },
@@ -715,7 +786,7 @@ function fmtBytes(n) {
 
 async function refreshStats() {
   try {
-    const j = await (await fetch("/v1/stats")).json();
+    const j = await (await gwFetch("/v1/stats")).json();
     const hint = $("#stats-hint");
     if (!j.stats_collection_enabled) {
       hint.innerHTML =
