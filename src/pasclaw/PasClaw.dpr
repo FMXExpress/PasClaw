@@ -97,6 +97,17 @@ begin
 
   if not (IsStdioMCPInvocation or IsQuietInvocation) then
     PrintBanner;
+  if IsQuietInvocation then
+    { --quiet / -q also clamps the logger to error level so the
+      [info] / [debug] noise that LoadConfig + ConnectMCP +
+      Search.Factory emit during agent startup ("web_search disabled",
+      "mcp[<name>] cache hit", color-detect chatter, etc.) doesn't
+      pollute the stdout pipeline scripts read. Real errors still
+      reach stderr -- a quiet pipeline that silently swallows the
+      reason it failed is worse than one that prints an extra
+      [info] line. mcp-stdio mode handles its own logging upstream;
+      we don't clamp there. }
+    SetLogLevel(llError);
   ApplyTimezoneFromEnv;
 
   ExitCode_ := RunRootCommand;
