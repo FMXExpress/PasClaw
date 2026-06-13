@@ -57,8 +57,23 @@ RUN make get-indy
 # is injected by the Makefile from `git describe` when available; we pass an
 # explicit value so the binary reports something stable even though .git is
 # .dockerignore'd.
+#
+# Two overrides vs. the Makefile autodetect:
+#  - mkdir /out: BIN=/out/pasclaw points the linker at a directory the
+#    Makefile doesn't itself create. Without the explicit mkdir the link
+#    step errors with "no such file or directory" and the runtime stage
+#    has nothing to copy. (Codex P1 on PR #248.)
+#  - LAZUTILS_DIR: the Makefile defaults to /usr/lib/lazarus/3.0/... which
+#    is the Lazarus 3.x layout (Trixie/sid). Debian Bookworm ships
+#    lazarus-src 2.2.6 under /usr/share/lazarus/2.2.6/components/lazutils,
+#    so we pin the path explicitly here. If a future base image bumps the
+#    lazarus-src version, the build fails loudly and the path is
+#    obvious to fix. (Codex P1 on PR #248.)
 ARG PASCLAW_VERSION=do-appplatform
-RUN make BIN=/out/pasclaw PASCLAW_VERSION=$PASCLAW_VERSION
+RUN mkdir -p /out \
+ && make BIN=/out/pasclaw \
+         PASCLAW_VERSION=$PASCLAW_VERSION \
+         LAZUTILS_DIR=/usr/share/lazarus/2.2.6/components/lazutils
 
 # -----------------------------------------------------------------------
 # Stage 2: runtime
@@ -75,6 +90,29 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       curl \
   && rm -rf /var/lib/apt/lists/* \
   && useradd --create-home --shell /bin/sh pasclaw
+
+# OpenSSL 1.0.x for Indy.
+#
+# The vendored Indy ships only the legacy TIdSSLIOHandlerSocketOpenSSL,
+# whose IdSSLOpenSSLHeaders.SSLDLLVers array dynamic-loads libssl.so.10
+# / libssl.so.1.0.x (RHEL- and pre-bullseye-style names). It does NOT
+# know about libssl.so.1.1 or libssl.so.3. Without libssl1.0.2 in the
+# runtime image every outbound HTTPS call (provider chats, MCP, OTel
+# exports, ...) fails with EIdOSSLCouldNotLoadSSLLibrary on the first
+# attempt. Codex P1 on PR #248.
+#
+# Bookworm doesn't carry libssl1.0 in its default archive. snapshot.debian.org
+# hosts the last Debian-published libssl1.0.2 .deb indefinitely as part of
+# Debian's long-term archive; we ADD it from there.
+#
+# If snapshot.debian.org changes its URL pattern, this needs updating --
+# operators see the failure at first HTTPS call, surfaced via the same
+# error path docs/troubleshooting.md already covers under
+# "EIdOSSLCouldNotLoadSSLLibrary".
+ADD https://snapshot.debian.org/archive/debian/20230102T211522Z/pool/main/o/openssl1.0/libssl1.0.2_1.0.2u-1~deb9u8_amd64.deb \
+    /tmp/libssl1.0.2.deb
+RUN dpkg -i /tmp/libssl1.0.2.deb \
+ && rm /tmp/libssl1.0.2.deb
 
 COPY --from=builder /out/pasclaw                     /usr/local/bin/pasclaw
 COPY digitalocean/entrypoint.sh                      /usr/local/bin/entrypoint.sh

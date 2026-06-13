@@ -43,8 +43,9 @@
   },
 
   "sandbox": {
-    "restrict_to_workspace": true,
-    "shell_deny_enabled":    true,
+    "restrict_to_workspace":  true,
+    "workspace":              "/data/pasclaw/workspace",
+    "shell_deny_enabled":     true,
     "block_private_networks": true
   }
 }

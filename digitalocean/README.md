@@ -6,11 +6,21 @@ Deliberately strips the optional layers openclaw's [`openclaw-appplatform`](http
 
 ## What you get
 
-- Public HTTPS endpoint at `https://your-app.ondigitalocean.app/` (App Platform terminates TLS for you).
-- OpenAI-compatible API at `/v1/chat/completions` and `/v1/responses`.
-- The embedded web UI at `/`.
-- Health probe at `/v1/health` (App Platform auto-configures it from the App Spec).
-- Inbound bearer-token auth on every other `/v1/*` route (PR #246).
+One service, one public hostname, **both the web UI and the OpenAI-compatible API** are served from the same URL:
+
+| Path | What's there | Auth |
+|---|---|---|
+| `GET /` | Embedded web UI HTML (`src/pkg/gateway/webui.html`) | none |
+| `GET /v1/health` | Health probe | none (exempt) |
+| `GET /v1/version` | Build metadata | none (exempt) |
+| `POST /v1/chat/completions` | OpenAI Chat Completions (streaming + non-streaming) | Bearer required |
+| `POST /v1/responses` | OpenAI Responses API (string or message-array input) | Bearer required |
+| `POST /v1/chat` | PasClaw JSON chat (`{"message":"..."}`) | Bearer required |
+| `GET /v1/models` | Model list | Bearer required |
+| `GET /v1/status`, `/v1/tools`, `/v1/mcp`, `/v1/cron`, `/v1/skills`, `/v1/memory`, `/v1/fs`, `/v1/logs`, `/v1/stats`, `/v1/config` | Read-only inspection routes | Bearer required |
+
+DO App Platform terminates TLS in front of the container's port 8088; **publicly your endpoint is `https://your-app.ondigitalocean.app/`** (port 443, standard HTTPS). Inside the container the gateway listens on `0.0.0.0:8088`.
+
 - OpenTelemetry traces (opt-in via `OTEL_EXPORTER_OTLP_ENDPOINT`).
 
 ## What you don't get (deliberately)
@@ -156,8 +166,12 @@ Want a custom config? Mount your own `config.json` into `$PASCLAW_HOME/config.js
 ## Security notes
 
 - **`PASCLAW_GATEWAY_TOKEN` is the only thing standing between the public internet and an agent that can read/write files in `$PASCLAW_HOME` and execute shell commands.** Generate a strong one (`openssl rand -hex 32`), keep it secret.
-- **Sandbox defaults**: the template enables `sandbox.restrict_to_workspace`, `sandbox.shell_deny_enabled`, and `sandbox.block_private_networks`. Even if a model escapes the bearer-token check (which would require the operator to leak the token), it can only touch `$PASCLAW_HOME/workspace/` and `web_fetch` can't reach the DO metadata endpoint at `169.254.169.254`.
+- **Sandbox defaults**: the template enables `sandbox.restrict_to_workspace`, sets `sandbox.workspace` explicitly to `/data/pasclaw/workspace`, and turns on `sandbox.shell_deny_enabled` + `sandbox.block_private_networks`. Even if a model escapes the bearer-token check (which would require the operator to leak the token), it can only touch `/data/pasclaw/workspace/` and `web_fetch` can't reach the DO metadata endpoint at `169.254.169.254`.
 - **Provider keys** in the App Spec's `envs:` section are stored encrypted by DO and never written to disk by PasClaw — the `${VAR_NAME}` substitution path resolves at load time, in-memory only.
+
+## Known issues
+
+- **OpenSSL 1.0.2 from snapshot.debian.org.** The vendored Indy only knows about OpenSSL 1.0.x SO names — Bookworm's default `libssl3` doesn't load. The Dockerfile pulls `libssl1.0.2_1.0.2u-1~deb9u8_amd64.deb` from `snapshot.debian.org` (Debian's long-term archive) and `dpkg -i`'s it. If snapshot.debian.org changes its URL pattern in the future, the build fails and the Dockerfile needs the new URL. Symptom of a wrong/missing libssl1.0 at runtime: `EIdOSSLCouldNotLoadSSLLibrary` on the first HTTPS provider call. The longer-term fix is for PasClaw to migrate to a newer Indy variant with `TIdSSLIOHandlerSocketOpenSSL11` — out of scope for this PR.
 
 ## See also
 
