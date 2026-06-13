@@ -1,156 +1,210 @@
-# PasClaw on DigitalOcean App Platform (and any docker-build-aware host).
+# PasClaw container — multi-stage build.
 #
-# Two-stage build: stage 1 is a Debian Bookworm + FPC 3.2 toolchain that
-# clones Indy at build time and compiles a single static-ish pasclaw binary.
-# Stage 2 is bookworm-slim with just the runtime DLLs the binary actually
-# links against (libssl1.0 via snapshot.debian.org, libsqlite3). Final
-# image is ~80-90 MB.
+# Builder stage:    debian:bookworm + apt-installed fpc 3.2.2 + units,
+#                   runs `make get-indy && make` to produce build/pasclaw.
+# openssl-1.0:      fetches libssl1.0.2_1.0.2u from snapshot.debian.org's
+#                   immutable debian-archive, picks the right arch via
+#                   $TARGETARCH for buildx multi-arch.
+# Runtime stage:    debian:bookworm-slim with the pasclaw binary plus
+#                   libssl.so.1.0.2 + libcrypto.so.1.0.2 bundled next to
+#                   it at /opt/pasclaw/, RPATH=$ORIGIN so the binary
+#                   resolves to them before /usr/lib/.
 #
-# Lives at the repo root (rather than under digitalocean/) so DO App
-# Platform's UI auto-detect picks it up without the operator having to
-# touch the "Source Directory" / "Dockerfile Path" fields. Build context
-# is the repo root; the root-level .dockerignore strips docs/, samples/,
-# cog/, browser/, vendor/Indy/, etc. so the upload to the daemon stays
-# small (a few MB instead of ~700 MB).
+# Why bundled OpenSSL 1.0:
+#   IndySockets/Indy master (what `make get-indy` clones) targets OpenSSL
+#   0.9.8 / 1.0.x — its TLS path bails on 1.1+. Modern distros ship
+#   OpenSSL 3.x as libssl.so.3 only, so without bundled 1.0 the binary
+#   has no TLS at all. ~5 MB extra; deletes whenever Indy lands its
+#   long-awaited 1.1/3 support upstream.
 #
-# Runtime contract:
-#   - Listens on $PORT (default 8088) bound to 0.0.0.0.
-#   - PASCLAW_HOME defaults to /data/pasclaw -- ephemeral by default; mount
-#     a persistent volume there if you want sessions / memory / KB to
-#     survive restarts. See digitalocean/README.md.
-#   - On first boot, entrypoint stamps config.template.json into
-#     $PASCLAW_HOME/config.json. Template carries ${VAR_NAME} markers the
-#     PasClaw config loader resolves from env (PR #247) -- secrets stay in
-#     env vars, never baked into the image.
-#   - /v1/health is exempt from gateway-token auth, so DO App Platform's
-#     health probe works whether PASCLAW_GATEWAY_TOKEN is set or not.
+# Build:
+#   docker build -f docker/Dockerfile -t pasclaw:dev .
+# Run:
+#   docker run --rm -p 8088:8088 \
+#     -v $HOME/.pasclaw:/home/pasclaw/.pasclaw \
+#     pasclaw:dev gateway
+#
+# Multi-arch (buildx):
+#   docker buildx build --platform linux/amd64,linux/arm64 \
+#     -f docker/Dockerfile -t ghcr.io/fmxexpress/pasclaw:dev --push .
 
-# -----------------------------------------------------------------------
-# Stage 1: build
-# -----------------------------------------------------------------------
-FROM debian:bookworm AS builder
+ARG DEBIAN_VERSION=bookworm
 
-ENV DEBIAN_FRONTEND=noninteractive
-
-# Why each fp-units-* package is here (an unhinted `fp-compiler` install
-# misses several units the build needs, with the failure surfacing as a
-# generic "Can't find unit X" -- the apt-units mapping below is the part
-# you can't grep for from the FPC error):
-#   fp-units-base  -- classic Classes / SysUtils / StrUtils / DateUtils
-#   fp-units-fcl   -- SyncObjs (TCriticalSection used by PasClaw.Otel,
-#                     PasClaw.Logger, PasClaw.Tools.OutputCache, MCP, etc.)
-#   fp-units-db    -- fcl-db / SQLite3Connection (memory_search, kb_*,
-#                     session_search)
-#   fp-units-misc  -- iconvenc (web_fetch HTML-to-text decoder)
-#   fp-units-rtl   -- belt-and-suspenders; fp-compiler usually pulls it,
-#                     but Debian's dependency chain has flexed before.
-#   lazarus-src    -- Masks unit (PasClaw.Tools.FS's fs_grep `include`
-#                     glob filter) -- see LAZUTILS_DIR override below.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      fp-compiler \
-      fp-units-base \
-      fp-units-fcl \
-      fp-units-db \
-      fp-units-misc \
-      fp-units-rtl \
-      lazarus-src \
-      libssl-dev \
-      libsqlite3-dev \
-      git \
-      make \
-      ca-certificates \
-  && rm -rf /var/lib/apt/lists/*
+# --- builder ------------------------------------------------------------
+# Why not freepascal/fpc:3.2.2-bookworm-full? It installs FPC from
+# source under non-Debian paths (/usr/local/lib/fpc/), but our Makefile
+# expects the Debian-packaged layout
+# (/usr/lib/<arch>-linux-gnu/fpc/<version>/units/, /usr/lib/lazarus/).
+# Using plain debian:bookworm + apt gives us the layout the Makefile
+# was written against.
+FROM debian:${DEBIAN_VERSION} AS builder
 
 WORKDIR /src
 
-# Copy only the source needed to build the binary. The .dockerignore at the
-# repo root already excludes docs/, samples/, cog/, browser/, vendor/Indy/,
-# so this COPY pulls just src/, Makefile, and the digitalocean overlay.
-COPY Makefile        ./Makefile
-COPY src             ./src
+# Build deps:
+#   fpc                FPC 3.2.2 (bookworm ships this exact version)
+#   fp-units-db        TSQLite3Connection + FCL DB units
+#   fp-units-misc      iconvenc, ssockets
+#   lazarus-src        lazutils (PasClaw's memory FTS5 link uses it)
+#   libsqlite3-dev     SQLite link symbols
+#   make, git, curl    build + `make get-indy` + Indy clone
+#   ca-certificates    HTTPS for the Indy clone
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        fpc \
+        fp-units-db fp-units-misc \
+        lazarus-src \
+        libsqlite3-dev \
+        make git curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# Clone Indy fresh (vendor/Indy is .dockerignore'd so we don't pull the
-# ~600 MB working copy from the host). `make get-indy` is idempotent.
-RUN make get-indy
+# Copy source AFTER deps so dep-layer caching survives source edits.
+COPY . .
 
-# Build into /out so the runtime stage can copy a single file. PASCLAW_VERSION
-# is injected by the Makefile from `git describe` when available; we pass an
-# explicit value so the binary reports something stable even though .git is
-# .dockerignore'd.
+# Vendor Indy + build. `make get-indy` clones IndySockets/Indy; `make`
+# produces build/pasclaw.
 #
-# Two overrides vs. the Makefile autodetect:
-#  - mkdir /out: BIN=/out/pasclaw points the linker at a directory the
-#    Makefile doesn't itself create. Without the explicit mkdir the link
-#    step errors with "no such file or directory" and the runtime stage
-#    has nothing to copy. (Codex P1 on PR #248.)
-#  - LAZUTILS_DIR: the Makefile defaults to /usr/lib/lazarus/3.0/... which
-#    is the Lazarus 3.x layout (Trixie/sid). Debian Bookworm ships
-#    lazarus-src 2.2.6 under /usr/share/lazarus/2.2.6/components/lazutils,
-#    so we pin the path explicitly here. If a future base image bumps the
-#    lazarus-src version, the build fails loudly and the path is
-#    obvious to fix. (Codex P1 on PR #248.)
-ARG PASCLAW_VERSION=do-appplatform
-RUN mkdir -p /out \
- && make BIN=/out/pasclaw \
-         PASCLAW_VERSION=$PASCLAW_VERSION \
-         LAZUTILS_DIR=/usr/share/lazarus/2.2.6/components/lazutils
+# LAZUTILS_DIR override: bookworm's lazarus-src is 2.2.6+dfsg2-2 and
+# installs to /usr/lib/lazarus/2.2.6/, but the Makefile defaults to
+# /usr/lib/lazarus/3.0/ (which is what some Ubuntu releases ship).
+# Without this override the `Masks` import in
+# src/pkg/tools/PasClaw.Tools.FS.pas fails to resolve. Codex P1 on
+# PR #121. When Debian trixie ships lazarus 3.x, bump this in lock-
+# step with DEBIAN_VERSION.
+ARG LAZUTILS_DIR=/usr/lib/lazarus/2.2.6/components/lazutils
+# C2W: set to 1 (--build-arg C2W=1) to compile the container2wasm in-browser
+# networking path (-dPASCLAW_C2W) so the binary routes HTTP through the
+# c2w-net-proxy Fetch bridge. Off by default for normal native/container
+# images. See docs/c2w.md.
+ARG C2W=
+RUN make get-indy \
+    && make LAZUTILS_DIR="${LAZUTILS_DIR}" C2W="${C2W}" \
+    && test -x build/pasclaw \
+    && build/pasclaw version
 
-# -----------------------------------------------------------------------
-# Stage 2: runtime
-# -----------------------------------------------------------------------
-FROM debian:bookworm-slim AS runtime
+# --- openssl-1.0 fetcher ------------------------------------------------
+# Separate stage so the deb cache is reused across builder edits. Pulls
+# the LAST OpenSSL 1.0.2u Debian stretch-security package from
+# snapshot.debian.org's frozen debian-archive — that archive is
+# immutable, so this URL won't rot even after Debian retires the
+# codename. Package is libssl1.0.2 (which contains libssl.so.1.0.2);
+# Indy's dlopen of plain `libssl.so` resolves via the symlink we
+# create in the runtime stage.
+FROM debian:bookworm-slim AS openssl-1.0
 
-ENV DEBIAN_FRONTEND=noninteractive
+ARG TARGETARCH
+ARG OPENSSL_SNAPSHOT=20240331T102506Z
+ARG OPENSSL_DEB_VERSION=1.0.2u-1~deb9u7
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      libsqlite3-0 \
-      libssl3 \
-      ca-certificates \
-      tini \
-      curl \
-  && rm -rf /var/lib/apt/lists/* \
-  && useradd --create-home --shell /bin/sh pasclaw
+        curl ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
-# OpenSSL 1.0.x for Indy.
-#
-# The vendored Indy ships only the legacy TIdSSLIOHandlerSocketOpenSSL,
-# whose IdSSLOpenSSLHeaders.SSLDLLVers array dynamic-loads libssl.so.10
-# / libssl.so.1.0.x (RHEL- and pre-bullseye-style names). It does NOT
-# know about libssl.so.1.1 or libssl.so.3. Without libssl1.0.2 in the
-# runtime image every outbound HTTPS call (provider chats, MCP, OTel
-# exports, ...) fails with EIdOSSLCouldNotLoadSSLLibrary on the first
-# attempt. Codex P1 on PR #248.
-#
-# Bookworm doesn't carry libssl1.0 in its default archive. snapshot.debian.org
-# hosts the last Debian-published libssl1.0.2 .deb indefinitely as part of
-# Debian's long-term archive; we ADD it from there.
-#
-# If snapshot.debian.org changes its URL pattern, this needs updating --
-# operators see the failure at first HTTPS call, surfaced via the same
-# error path docs/troubleshooting.md already covers under
-# "EIdOSSLCouldNotLoadSSLLibrary".
-ADD https://snapshot.debian.org/archive/debian/20230102T211522Z/pool/main/o/openssl1.0/libssl1.0.2_1.0.2u-1~deb9u8_amd64.deb \
-    /tmp/libssl1.0.2.deb
-RUN dpkg -i /tmp/libssl1.0.2.deb \
- && rm /tmp/libssl1.0.2.deb
+RUN set -e; \
+    case "${TARGETARCH:-amd64}" in \
+        amd64) ARCH=amd64 ;; \
+        arm64) ARCH=arm64 ;; \
+        *) echo "unsupported TARGETARCH=${TARGETARCH}"; exit 1 ;; \
+    esac; \
+    mkdir -p /openssl /tmp/x; \
+    URL="https://snapshot.debian.org/archive/debian-archive/${OPENSSL_SNAPSHOT}/debian-security/pool/updates/main/o/openssl1.0/libssl1.0.2_${OPENSSL_DEB_VERSION}_${ARCH}.deb"; \
+    echo "fetching $URL"; \
+    curl -fsSL --retry 3 --max-time 90 "$URL" -o /tmp/libssl.deb; \
+    dpkg-deb -x /tmp/libssl.deb /tmp/x; \
+    cp /tmp/x/usr/lib/*-linux-*/libssl.so.1.0.2    /openssl/; \
+    cp /tmp/x/usr/lib/*-linux-*/libcrypto.so.1.0.2 /openssl/; \
+    ls -l /openssl/
 
-COPY --from=builder /out/pasclaw                     /usr/local/bin/pasclaw
-COPY digitalocean/entrypoint.sh                      /usr/local/bin/entrypoint.sh
-COPY digitalocean/config.template.json               /etc/pasclaw/config.template.json
-RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/pasclaw
+# --- runtime ------------------------------------------------------------
+FROM debian:bookworm-slim AS runtime
 
-# Workspace location -- ephemeral when no volume mounted. Mount a persistent
-# disk here (see digitalocean/.do/app.yaml's persistent_disk block when you
-# want one) to keep sessions / memory / KB across restarts.
-ENV PASCLAW_HOME=/data/pasclaw
-ENV PORT=8088
+ARG PASCLAW_UID=1000
 
-# Pre-create the home dir owned by the unprivileged user so first boot
-# doesn't need root to mkdir.
-RUN mkdir -p /data/pasclaw && chown -R pasclaw:pasclaw /data/pasclaw /etc/pasclaw
+# Runtime deps:
+#   ca-certificates  HTTPS trust anchors (Anthropic / OpenAI / etc.)
+#   libsqlite3-0     memory FTS5 backend
+#   tzdata           timestamps in logs + session ids
+#   curl             HEALTHCHECK probe (~250 KB)
+#   patchelf         set RPATH on the binary at install time only
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        libsqlite3-0 \
+        tzdata \
+        curl \
+        patchelf \
+    && rm -rf /var/lib/apt/lists/* \
+    && useradd --create-home --uid ${PASCLAW_UID} --shell /bin/bash pasclaw
+
+# Place the binary + bundled libssl/libcrypto together so RPATH=$ORIGIN
+# finds them via the binary's own directory. /opt/pasclaw stays
+# root-owned, world-readable — only the workspace under $PASCLAW_HOME
+# needs the pasclaw user to write to it.
+RUN mkdir -p /opt/pasclaw
+
+COPY --from=openssl-1.0 /openssl/libssl.so.1.0.2    /opt/pasclaw/
+COPY --from=openssl-1.0 /openssl/libcrypto.so.1.0.2 /opt/pasclaw/
+COPY --from=builder /src/build/pasclaw              /opt/pasclaw/pasclaw
+
+# Symlinks for Indy's plain `libssl.so` / `libcrypto.so` dlopen names.
+RUN ln -sf libssl.so.1.0.2    /opt/pasclaw/libssl.so \
+ && ln -sf libcrypto.so.1.0.2 /opt/pasclaw/libcrypto.so \
+ && chmod +x /opt/pasclaw/pasclaw \
+ && patchelf --set-rpath '$ORIGIN' /opt/pasclaw/pasclaw \
+ && apt-get purge -y patchelf \
+ && apt-get autoremove -y \
+ && rm -rf /var/lib/apt/lists/*
+
+ENV PASCLAW_HOME=/home/pasclaw/.pasclaw \
+    PATH=/opt/pasclaw:${PATH}
+
+# DigitalOcean App Platform / Docker Hub / generic-host first-boot
+# config stamping. The entrypoint copies the bundled template into
+# $PASCLAW_HOME/config.json IFF the file isn't already there, then
+# execs `pasclaw` with whatever args were passed (default CMD below
+# points it at `gateway --addr 0.0.0.0 --port 8088`). The template
+# uses ${VAR_NAME} markers PasClaw's config loader resolves from the
+# env at startup, so deployment secrets stay in env vars and never
+# get baked into the image. Operators bind-mounting their own
+# config.json (the docker/ host path documented at docker/README.md)
+# skip the stamp -- the entrypoint never clobbers an existing
+# config.json.
+COPY digitalocean/entrypoint.sh        /usr/local/bin/entrypoint.sh
+COPY digitalocean/config.template.json /etc/pasclaw/config.template.json
+RUN chmod +x /usr/local/bin/entrypoint.sh \
+ && mkdir -p /etc/pasclaw
+
 USER pasclaw
+WORKDIR /home/pasclaw
+
+# Pre-create the workspace so the very first `pasclaw gateway` doesn't
+# race on directory creation under a bind-mounted volume that may not
+# exist yet. Idempotent — `pasclaw onboard` is happy to skip an
+# existing workspace.
+RUN mkdir -p ${PASCLAW_HOME}/workspace
 
 EXPOSE 8088
 
-# Tini reaps zombie child processes (shell_exec / execute_code spawn lots).
-ENTRYPOINT ["/usr/bin/tini", "--", "/usr/local/bin/entrypoint.sh"]
+# Probe the gateway's model-listing endpoint — always returns 200 when
+# the gateway is up, even with no providers configured. The probe is
+# hardcoded to 8088 because the default CMD below pins the gateway to
+# the same port; users who override CMD to a different `--port N` must
+# either also rebuild with a matching port or override HEALTHCHECK at
+# `docker run --health-cmd ...`. (Codex P2 on PR #121.)
+HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
+  CMD curl -fsS http://localhost:8088/v1/models > /dev/null || exit 1
+
+# Entrypoint stamps config.json from the template on first boot, then
+# execs `pasclaw` with whatever CMD is set. Default CMD is the HTTP
+# gateway bound to 0.0.0.0:8088:
+#   docker run pasclaw                              # gateway
+#   docker run pasclaw version                      # arbitrary subcommand
+#   docker run pasclaw agent -m "hi"                # interactive turn
+#
+# `--addr 0.0.0.0` is mandatory inside the container: pasclaw's default
+# bind is 127.0.0.1 (sane for desktop CLI use), which inside a
+# container means "container loopback only" — Docker's published host
+# port couldn't reach it even though the in-container HEALTHCHECK
+# would still pass. Codex P1 on PR #121.
+# `--port 8088` is explicit so HEALTHCHECK and EXPOSE stay in sync
+# even when a mounted config.json sets gateway.port to something else.
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["gateway", "--addr", "0.0.0.0", "--port", "8088"]

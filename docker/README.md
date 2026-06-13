@@ -7,8 +7,10 @@ The builder uses Debian-packaged FPC rather than the upstream `freepascal/fpc:*`
 ## Quick start
 
 ```sh
-# Build for the local arch
-docker build -f docker/Dockerfile -t pasclaw:dev .
+# Build for the local arch (Dockerfile lives at the repo root since
+# PR #252 so DigitalOcean App Platform's auto-detect picks it up
+# without operator config; same Dockerfile, same build for any host).
+docker build -t pasclaw:dev .
 
 # Run the gateway, persist workspace to ~/.pasclaw on the host
 docker run --rm -p 8088:8088 \
@@ -63,7 +65,6 @@ The Dockerfile is `linux/amd64` + `linux/arm64` ready (the bundled-OpenSSL stage
 docker buildx create --use --name pasclaw-builder
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  -f docker/Dockerfile \
   -t ghcr.io/fmxexpress/pasclaw:dev \
   --push .
 ```
