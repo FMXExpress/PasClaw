@@ -45,6 +45,66 @@ type
     Port:     Integer;
   end;
 
+  (*  TOtelHeader -- one header pair for OTLP exports. The
+      OpenTelemetry collector spec uses these for auth (Authorization:
+      Bearer ..., x-honeycomb-team, etc). Mirrors openclaw's
+      diagnostics.otel.headers shape so a config block copy-pastes. *)
+  TOtelHeader = record
+    Name:  string;
+    Value: string;
+  end;
+
+  (*  TOtelDiagnosticsConfig -- OTLP/HTTP traces exporter. Off by
+      default; turn on by setting diagnostics.otel.enabled=true and
+      a valid endpoint, OR by setting OTEL_EXPORTER_OTLP_ENDPOINT in
+      the environment (the standard OTel SDK contract -- the env var
+      flips Enabled=true on its own).
+
+      Endpoint
+        Collector URL. http://localhost:4318 is the OTel Collector
+        default. We append /v1/traces when the path is missing.
+
+      Protocol
+        Always "http/json" in this release. Reserved for "http/protobuf"
+        once we ship a protobuf encoder.
+
+      ServiceName
+        resource.service.name attribute on every span. Defaults to
+        "pasclaw" -- override per-deployment to distinguish CLI
+        sessions from gateway deployments.
+
+      SampleRate
+        Bernoulli sampling on trace start, 0.0..1.0. 1.0 = trace
+        every turn, 0.0 = trace nothing (effectively off), 0.1 =
+        trace ~10%. Sampling is decided at the root span (agent.turn
+        or http.server.request); children inherit the parent's
+        decision. Default 1.0.
+
+      Headers
+        Extra HTTP headers on every OTLP POST. Typically Authorization,
+        x-honeycomb-team, etc. The OTEL_EXPORTER_OTLP_HEADERS env var
+        ("k1=v1,k2=v2") overrides this when set.
+
+      Traces / Metrics / Logs
+        Reserved booleans. Only Traces is wired in this release;
+        Metrics and Logs are a follow-up PR. Defaults: traces=true,
+        metrics=false, logs=false. *)
+  TOtelDiagnosticsConfig = record
+    Enabled:     Boolean;
+    Endpoint:    string;
+    Protocol:    string;
+    ServiceName: string;
+    SampleRate:  Double;
+    Headers:     array of TOtelHeader;
+    Traces:      Boolean;
+    Metrics:     Boolean;
+    Logs:        Boolean;
+  end;
+
+  TDiagnosticsConfig = record
+    Otel: TOtelDiagnosticsConfig;
+  end;
+
   (*  TSandboxPolicy - opt-in workspace + shell hardening.
 
       RestrictToWorkspace
@@ -376,6 +436,7 @@ type
       or by editing config.json's "fallbacks": ["openai","gemini"]. }
     Fallbacks:  array of string;
     Gateway:    TGatewayConfig;
+    Diagnostics: TDiagnosticsConfig;  { OpenTelemetry traces -- see TOtelDiagnosticsConfig }
     Sandbox:    TSandboxPolicy;
     Providers:  array of TProviderConfig;
     MCPServers: array of TMCPServer;
@@ -545,8 +606,13 @@ uses
   PasClaw.JSON,
   PasClaw.Promptware,         { LoadConfig propagates promptware_enabled --
                                 see the comment inside LoadConfig }
-  PasClaw.Tools.OutputCache;  { LoadConfig propagates condense_reversible
+  PasClaw.Tools.OutputCache,  { LoadConfig propagates condense_reversible
                                 via SetCondenseReversible -- same pattern }
+  PasClaw.Otel;               { LoadConfig calls InitOtelFromConfig so
+                                env-var overrides (OTEL_EXPORTER_OTLP_ENDPOINT)
+                                + the diagnostics.otel.* block in config.json
+                                both take effect at the same single chokepoint
+                                every entry point already passes through. }
 
 procedure ApplyPromptCacheConfig(var Opts: TChatOptions; const PC: TPromptCacheConfig);
 begin
@@ -562,6 +628,19 @@ begin
   Gateway.LogLevel := 'info';
   Gateway.BindAddr := '127.0.0.1';
   Gateway.Port     := 8088;
+  { OpenTelemetry diagnostics defaults: off, but pre-populated with
+    the OTel Collector localhost address so flipping enabled=true is
+    a one-key change. Sampling at 1.0 (trace every turn) is the right
+    default for the small-scale deployments PasClaw targets; turn
+    down for high-volume gateways. }
+  Diagnostics.Otel.Enabled     := False;
+  Diagnostics.Otel.Endpoint    := 'http://localhost:4318';
+  Diagnostics.Otel.Protocol    := 'http/json';
+  Diagnostics.Otel.ServiceName := 'pasclaw';
+  Diagnostics.Otel.SampleRate  := 1.0;
+  Diagnostics.Otel.Traces      := True;
+  Diagnostics.Otel.Metrics     := False;
+  Diagnostics.Otel.Logs        := False;
   { Sandbox defaults: workspace boundary OFF for backwards compat
     (existing configs do not have a sandbox section), shell denylist
     ON because it's a strict safety upgrade over the previous
@@ -694,7 +773,7 @@ end;
 
 function TConfig.ToJSON: string;
 var
-  Root, Gw, Tmp: TJsonObject;
+  Root, Gw, Tmp, Diag, OtelHdrs: TJsonObject;
   Arr, FallbacksArr: TJsonArray;
   i: Integer;
 begin
@@ -715,6 +794,37 @@ begin
     Gw.PutStr ('bind_addr', Gateway.BindAddr);
     Gw.PutInt ('port',      Gateway.Port);
     Root.PutObject('gateway', Gw);
+
+    (* diagnostics.otel round-trip. Without this block, ANY command
+       that calls SaveConfig after a LoadConfig (auth, model, mcp,
+       skill updates) would rewrite config.json through ToJSON and
+       silently drop the whole diagnostics tree. The user re-runs
+       the agent expecting traces and gets nothing, with no error to
+       tell them why. The shape mirrors the FromJSON parse block
+       below 1-for-1 (same keys, same types, same headers nested
+       object). Symmetric with the gateway / sandbox blocks above:
+       always emitted, even at defaults, so a `pasclaw config show`
+       round-trip is stable. *)
+    Tmp := TJsonObject.Create;
+    Tmp.PutBool ('enabled',     Diagnostics.Otel.Enabled);
+    Tmp.PutStr  ('endpoint',    Diagnostics.Otel.Endpoint);
+    Tmp.PutStr  ('protocol',    Diagnostics.Otel.Protocol);
+    Tmp.PutStr  ('serviceName', Diagnostics.Otel.ServiceName);
+    Tmp.PutFloat('sampleRate',  Diagnostics.Otel.SampleRate);
+    Tmp.PutBool ('traces',      Diagnostics.Otel.Traces);
+    Tmp.PutBool ('metrics',     Diagnostics.Otel.Metrics);
+    Tmp.PutBool ('logs',        Diagnostics.Otel.Logs);
+    if Length(Diagnostics.Otel.Headers) > 0 then
+    begin
+      OtelHdrs := TJsonObject.Create;
+      for i := 0 to High(Diagnostics.Otel.Headers) do
+        OtelHdrs.PutStr(Diagnostics.Otel.Headers[i].Name,
+                        Diagnostics.Otel.Headers[i].Value);
+      Tmp.PutObject('headers', OtelHdrs);
+    end;
+    Diag := TJsonObject.Create;
+    Diag.PutObject('otel', Tmp);
+    Root.PutObject('diagnostics', Diag);
 
     Tmp := TJsonObject.Create;
     Tmp.PutBool('restrict_to_workspace',        Sandbox.RestrictToWorkspace);
@@ -975,8 +1085,9 @@ end;
 
 procedure TConfig.FromJSON(const S: string);
 var
-  Root, Obj, Item: TJsonObject;
+  Root, Obj, Item, Sub, SubHdrs: TJsonObject;
   Arr, ToolsArr: TJsonArray;
+  HdrKeys: TStringList;
   i, j: Integer;
 begin
   if Trim(S) = '' then Exit;
@@ -1004,6 +1115,50 @@ begin
       Gateway.LogLevel := Obj.GetStr('log_level', Gateway.LogLevel);
       Gateway.BindAddr := Obj.GetStr('bind_addr', Gateway.BindAddr);
       Gateway.Port     := Obj.GetInt('port',      Gateway.Port);
+    finally
+      Obj.Free;
+    end;
+
+    { diagnostics.otel.* -- mirrors openclaw v2026.2+ keys so a
+      config block ports cleanly. The env vars
+      OTEL_EXPORTER_OTLP_ENDPOINT / OTEL_EXPORTER_OTLP_HEADERS take
+      effect later in PasClaw.Otel.InitOtelFromConfig; we don't
+      mutate the parsed values here so the round-trip toString stays
+      faithful to what's in config.json. }
+    Obj := Root.ChildObject('diagnostics');
+    if Obj <> nil then
+    try
+      Sub := Obj.ChildObject('otel');
+      if Sub <> nil then
+      try
+        Diagnostics.Otel.Enabled     := Sub.GetBool('enabled',     Diagnostics.Otel.Enabled);
+        Diagnostics.Otel.Endpoint    := Sub.GetStr ('endpoint',    Diagnostics.Otel.Endpoint);
+        Diagnostics.Otel.Protocol    := Sub.GetStr ('protocol',    Diagnostics.Otel.Protocol);
+        Diagnostics.Otel.ServiceName := Sub.GetStr ('serviceName', Diagnostics.Otel.ServiceName);
+        Diagnostics.Otel.SampleRate  := Sub.GetFloat('sampleRate', Diagnostics.Otel.SampleRate);
+        Diagnostics.Otel.Traces      := Sub.GetBool('traces',      Diagnostics.Otel.Traces);
+        Diagnostics.Otel.Metrics     := Sub.GetBool('metrics',     Diagnostics.Otel.Metrics);
+        Diagnostics.Otel.Logs        := Sub.GetBool('logs',        Diagnostics.Otel.Logs);
+        SubHdrs := Sub.ChildObject('headers');
+        if SubHdrs <> nil then
+        try
+          HdrKeys := SubHdrs.Keys;
+          try
+            SetLength(Diagnostics.Otel.Headers, HdrKeys.Count);
+            for i := 0 to HdrKeys.Count - 1 do
+            begin
+              Diagnostics.Otel.Headers[i].Name  := HdrKeys[i];
+              Diagnostics.Otel.Headers[i].Value := SubHdrs.GetStr(HdrKeys[i], '');
+            end;
+          finally
+            HdrKeys.Free;
+          end;
+        finally
+          SubHdrs.Free;
+        end;
+      finally
+        Sub.Free;
+      end;
     finally
       Obj.Free;
     end;
@@ -1379,6 +1534,11 @@ begin
     { Symmetric propagation of the reversible-condensation flag --
       OutputCache holds the same process-global mirror. }
     SetCondenseReversible(Result.CondenseReversible);
+    { OpenTelemetry traces. No-op when diagnostics.otel.enabled is
+      False AND the OTEL_EXPORTER_OTLP_ENDPOINT env var is unset --
+      so single-shot CLI commands like `pasclaw status` pay nothing
+      for the wiring. }
+    InitOtelFromConfig(Result);
   end;
 end;
 

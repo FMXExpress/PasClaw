@@ -128,6 +128,7 @@ UNIT_DIRS = \
 	src/pkg/hashline \
 	src/pkg/component \
 	src/pkg/markdown \
+	src/pkg/otel \
 	src/cmd
 
 # Indy unit + include dirs (only used when building under FPC).
@@ -497,6 +498,18 @@ test-fs-grep-tier1-4: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/fs_grep_tier1_4_tests.pas -o$(BUILDDIR)/fs_grep_tier1_4_tests
 	@$(BUILDDIR)/fs_grep_tier1_4_tests
 
+# OpenTelemetry traces (OTLP/HTTP+JSON). Pins span hierarchy,
+# attribute names (gen_ai.* semantic conventions), W3C traceparent
+# propagation in/out, sampling toggle, env-var override, JSON
+# escaping. Uses the test-export transport seam in PasClaw.Otel --
+# no real collector spun up, just captures the POST body and asserts
+# on its shape.
+test-otel: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/otel_tests.pas -o$(BUILDDIR)/otel_tests
+	@$(BUILDDIR)/otel_tests
+	@OTEL_EXPORTER_OTLP_ENDPOINT=http://env-host:4318 $(BUILDDIR)/otel_tests --env-mode
+
 # fs_grep ripgrep-tier5-6 optimisations: byte walker replacing the
 # TStringList/StringReplace/per-line LowerCase path (tier 5), and
 # Boyer-Moore-Horspool substring search replacing Pos() (tier 6).
@@ -508,4 +521,4 @@ test-fs-grep-tier5-6: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/fs_grep_tier5_6_tests.pas -o$(BUILDDIR)/fs_grep_tier5_6_tests
 	@$(BUILDDIR)/fs_grep_tier5_6_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-otel

@@ -195,7 +195,11 @@ uses
   PasClaw.Tools.Types,
   PasClaw.Tools.OutputCache,
   PasClaw.Condense.JSON,
-  PasClaw.Promptware;       { injection scan on tool results -- chokepoint 1 }
+  PasClaw.Promptware,       { injection scan on tool results -- chokepoint 1 }
+  PasClaw.Otel;             (* agent.turn / chat / execute_tool spans.
+                               All helpers are no-ops when OTel is
+                               disabled, so the wiring costs ~5 ns per
+                               call in the default-off shape. *)
 
 type
   { Per-call work unit. The same record is filled in by a worker thread
@@ -580,6 +584,7 @@ var
                              can be stashed for tool_output_get }
   OrigLen:   Integer;
   Truncated: Boolean;
+  TurnSpan, ChatSpan, ToolSpan: TOtelSpan;
 begin
   Loop.Content    := '';
   Loop.Iterations := 0;
@@ -589,6 +594,21 @@ begin
   Loop.ToolCallsDispatched := 0;
 
   if Cfg.Provider = nil then Exit(False);
+
+  { openclaw.agent.turn span (tier-1 instrumentation point). Wraps
+    the whole tool loop -- everything below up to the final
+    Result := True / Result := False flows through this span.
+    Pascal's Exit cleanly traverses try/finally, so every
+    Exit(True) / Exit(False) deeper in the loop still finishes
+    the span. TurnSpan is nil when OTel is off; all Set/Finish
+    helpers tolerate nil. }
+  TurnSpan := StartSpan('openclaw.agent.turn', oskInternal, '');
+  try
+    SetAttrStr(TurnSpan, 'gen_ai.request.model',  Cfg.Model);
+    SetAttrStr(TurnSpan, 'gen_ai.operation.name', 'chat');
+    SetAttrInt(TurnSpan, 'openclaw.max_iterations', Cfg.MaxIterations);
+    if Cfg.Provider <> nil then
+      SetAttrStr(TurnSpan, 'gen_ai.provider.name', Cfg.Provider.GetName);
 
   { Annotate the log stream once per turn with the canonical sender
     id (picoclaw parity -- pkg/identity). Hooks and post-hoc audit
@@ -750,26 +770,46 @@ begin
       details through to the caller. Hook embedders that want the
       diagnostic still get it via OnError. (Codex P2 on PR #114.) }
     LastProviderErrText := '';
+    { gen_ai chat span (tier-2 instrumentation). Wraps the actual
+      provider request -- naming follows openclaw / Langfuse so
+      backend dashboards recognise the span shape. Token counts
+      are stamped on success; status flips to error on a non-2xx
+      StatusCode or an exception. }
+    ChatSpan := StartSpan('chat ' + Cfg.Model, oskClient, '');
     try
-      { Empty-turn auto-retry. When StreamReliability.EmptyRetryAttempts
-        is 0 (default record zero, the legacy shape) ChatWithEmptyRetry
-        is a one-shot call -- identical to the pre-PR behaviour.
-        Callers (Cmd.Agent BuildLoopConfig, gateway HandleChat, etc.)
-        populate StreamReliability from Cfg.StreamReliability to
-        opt this loop into the retry path. The fallback walk below
-        still runs unchanged on retryable HTTP failures; empty-turn
-        is a separate, pre-fallback recovery. }
-      Resp := ChatWithEmptyRetry(Cfg.Provider, Hist, Tools, Cfg.Model,
-                                  LiveOptions, Cfg.StreamReliability);
-    except
-      on E: Exception do
-      begin
-        LogWarn('provider Chat raised: %s: %s', [E.ClassName, E.Message]);
-        Resp := Default(TLLMResponse);
-        Resp.StatusCode := -1;
-        LastProviderErrText := Cfg.Provider.GetName + ': '
-                               + E.ClassName + ': ' + E.Message;
+      SetAttrStr(ChatSpan, 'gen_ai.operation.name', 'chat');
+      SetAttrStr(ChatSpan, 'gen_ai.request.model',  Cfg.Model);
+      SetAttrStr(ChatSpan, 'gen_ai.provider.name',  Cfg.Provider.GetName);
+      SetAttrInt(ChatSpan, 'openclaw.turn.iteration', Iter);
+      try
+        { Empty-turn auto-retry. When StreamReliability.EmptyRetryAttempts
+          is 0 (default record zero, the legacy shape) ChatWithEmptyRetry
+          is a one-shot call -- identical to the pre-PR behaviour. }
+        Resp := ChatWithEmptyRetry(Cfg.Provider, Hist, Tools, Cfg.Model,
+                                    LiveOptions, Cfg.StreamReliability);
+      except
+        on E: Exception do
+        begin
+          LogWarn('provider Chat raised: %s: %s', [E.ClassName, E.Message]);
+          Resp := Default(TLLMResponse);
+          Resp.StatusCode := -1;
+          LastProviderErrText := Cfg.Provider.GetName + ': '
+                                 + E.ClassName + ': ' + E.Message;
+          SetStatus(ChatSpan, oscError, E.ClassName + ': ' + E.Message);
+        end;
       end;
+    finally
+      SetAttrInt(ChatSpan, 'http.response.status_code',  Resp.StatusCode);
+      SetAttrInt(ChatSpan, 'gen_ai.usage.input_tokens',  Resp.Usage.InputTokens);
+      SetAttrInt(ChatSpan, 'gen_ai.usage.output_tokens', Resp.Usage.OutputTokens);
+      if Resp.FinishReason <> '' then
+        SetAttrStr(ChatSpan, 'gen_ai.response.finish_reason', Resp.FinishReason);
+      if (Resp.StatusCode >= 200) and (Resp.StatusCode < 300) then
+        SetStatus(ChatSpan, oscOk, '')
+      else if ChatSpan <> nil then
+        SetStatus(ChatSpan, oscError,
+                  'provider status ' + IntToStr(Resp.StatusCode));
+      FinishSpan(ChatSpan);
     end;
     { Provider fallback. Retryable conditions: HTTP 408 / 429 / 5xx,
       and StatusCode <= 0 (network / TLS / pre-HTTP failure that the
@@ -959,10 +999,35 @@ begin
         { Serial batch (or Parallel disabled): just run inline on the
           main thread. Same DispatchOneToolCall the workers use, so
           fs_edit_hashline retry semantics are identical. Skip
-          cancelled slots -- synthetic result already in ResultText. }
+          cancelled slots -- synthetic result already in ResultText.
+
+          execute_tool span (tier-3 instrumentation). Parent is the
+          enclosing agent.turn span via the threadvar stack. Tool
+          spans only emit on the serial path -- parallel-worker
+          dispatch doesn't share the parent's threadvar context yet;
+          a follow-up PR threads the W3C traceparent through workers. }
         for j := 0 to High(Batch) do
           if not Dispatches[Batch[j]].Cancelled then
-            DispatchOneToolCall(Cfg, Dispatches[Batch[j]]);
+          begin
+            ToolSpan := StartSpan('execute_tool ' +
+                                  Dispatches[Batch[j]].Call.Func.Name,
+                                  oskInternal, '');
+            try
+              SetAttrStr(ToolSpan, 'openclaw.tool.name',
+                         Dispatches[Batch[j]].Call.Func.Name);
+              SetAttrStr(ToolSpan, 'openclaw.tool.call_id',
+                         Dispatches[Batch[j]].Call.Id);
+              DispatchOneToolCall(Cfg, Dispatches[Batch[j]]);
+              if Dispatches[Batch[j]].Err <> '' then
+                SetStatus(ToolSpan, oscError, Dispatches[Batch[j]].Err)
+              else
+                SetStatus(ToolSpan, oscOk, '');
+              SetAttrInt(ToolSpan, 'openclaw.tool.result_bytes',
+                         Length(Dispatches[Batch[j]].ResultText));
+            finally
+              FinishSpan(ToolSpan);
+            end;
+          end;
       end;
 
       { Phase 2: fire AfterToolResult hooks + OnToolResult event +
@@ -1134,6 +1199,17 @@ begin
   Loop.FinalMessages    := Hist;
   Loop.FinalSystemPrompt := LiveOptions.SystemPrompt;
   Result := True;
+  finally
+    { Roll the final per-turn telemetry into the span before
+      flushing. Iterations + total token usage are the two
+      numbers anyone looking at a trace will want first; the
+      provider already has per-call counters on each chat span. }
+    SetAttrInt(TurnSpan, 'openclaw.iterations', Loop.Iterations);
+    SetAttrInt(TurnSpan, 'gen_ai.usage.input_tokens',  Loop.TotalUsage.InputTokens);
+    SetAttrInt(TurnSpan, 'gen_ai.usage.output_tokens', Loop.TotalUsage.OutputTokens);
+    if not Result then SetStatus(TurnSpan, oscError, 'agent turn returned false');
+    FinishSpan(TurnSpan);
+  end;
 end;
 
 end.
