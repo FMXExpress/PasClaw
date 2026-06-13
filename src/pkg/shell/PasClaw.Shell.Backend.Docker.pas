@@ -12,6 +12,24 @@
   whether PasClaw reads the file directly on the host. Operators
   inspect with `ls ~/.pasclaw/workspace/` on the host. ✓
 
+  Windows exception: a Linux container can't hold a `C:\` path, so
+  same-path is impossible there. ContainerPath maps the bind roots
+  to fixed POSIX mount points (workspace -> /workspace, tmp ->
+  /pasclaw/tmp, run -> /pasclaw/run) and `-w` / shell_exec's pinned
+  cwd are translated through it. shell_exec works; execute_code,
+  which embeds an absolute host path in the command it runs
+  (`bash C:\...\script`), still needs per-command path translation
+  and is a tracked Windows follow-up.
+
+  No host shell: every docker invocation is built as an argv vector
+  and spawned via RunArgvCapture (CreateProcessW / execvp / TProcess --
+  no intermediate /bin/sh or cmd.exe). The model's command reaches the
+  container as a single argv element after `sh -c`, so the host shell
+  never parses it. This is what keeps Windows correct: cmd.exe would
+  otherwise strip the POSIX quoting AND percent-expand `%VAR%` in
+  container commands like `printf '%s\n'` or `date +%Y` before docker
+  ever saw them.
+
   Container naming: `pasclaw-<session-id>` (truncated + sanitised
   for Docker's name restrictions). Same SessionId across multiple
   StartSession calls is idempotent -- StartSession is a no-op when
@@ -65,7 +83,7 @@ type
 function DefaultDockerBackendOptions: TDockerBackendOptions;
 
 type
-  TDockerShellBackend = class(TInterfacedObject, IShellBackend)
+  TDockerShellBackend = class(TInterfacedObject, IShellBackend, IShellPathMapper)
   private
     FOpts:  TDockerBackendOptions;
     FLock:  TCriticalSection;
@@ -84,6 +102,8 @@ type
     function Exec(const SessionId, Cmd, WorkDir: string;
                   ExtraEnv: TStringList;
                   out Output: string): Integer;
+    { IShellPathMapper }
+    function HostToContainerPath(const HostPath: string): string;
   end;
 
 { Probe: is the `docker` CLI on PATH and answering `docker info`?
@@ -115,21 +135,85 @@ begin
   Result.User       := '';
 end;
 
-function ShellQuote(const S: string): string;
-{ Single-quote a value for inclusion in a /bin/sh -c "..." string.
-  Embedded single quotes get the canonical '\'' substitution. }
+{$IFDEF MSWINDOWS}
+function ToPosixSlashes(const S: string): string;
 begin
-  Result := '''' + StringReplace(S, '''', '''\''''', [rfReplaceAll]) + '''';
+  Result := StringReplace(S, '\', '/', [rfReplaceAll]);
+end;
+
+function MapUnderRoot(const HostPath, HostRoot, ContainerRoot: string;
+                      out Mapped: string): Boolean;
+{ True when HostPath is HostRoot or a descendant of it; yields the
+  container path with the root prefix swapped and separators
+  POSIX-normalised. Case-insensitive because Windows paths are. }
+var
+  Rest: string;
+begin
+  Result := False;
+  if (HostRoot = '') or (HostPath = '') then Exit;
+  if SameText(HostPath, HostRoot) then
+  begin
+    Mapped := ContainerRoot;
+    Exit(True);
+  end;
+  if (Length(HostPath) > Length(HostRoot)) and
+     SameText(Copy(HostPath, 1, Length(HostRoot) + 1), HostRoot + PathDelim) then
+  begin
+    Rest := Copy(HostPath, Length(HostRoot) + 2, MaxInt);
+    Mapped := ContainerRoot + '/' + ToPosixSlashes(Rest);
+    Result := True;
+  end;
+end;
+{$ENDIF}
+
+function ContainerPath(const HostPath: string): string;
+{ The path the Linux container sees for a given host path.
+
+  POSIX: identity. The bind mounts are same-path (host /x mounted at
+  container /x), so no translation -- byte-identical to before.
+
+  Windows: a Linux container cannot hold a `C:\` path, so same-path
+  is impossible. Map the three bind roots ($PASCLAW_HOME/workspace,
+  /tmp, /run) to fixed POSIX mount points and rewrite descendants
+  accordingly. This is what lets `-w <workspace>`, shell_exec's
+  workspace-pinned cwd, and the script path execute_code bakes into
+  its command (via IShellPathMapper.HostToContainerPath) resolve
+  inside the container. }
+{$IFDEF MSWINDOWS}
+var
+  Home, M: string;
+{$ENDIF}
+begin
+  {$IFDEF MSWINDOWS}
+  if HostPath = '' then Exit('');
+  Home := GetHome;
+  if MapUnderRoot(HostPath, JoinPath(Home, 'workspace'), '/workspace', M) then Exit(M);
+  if MapUnderRoot(HostPath, JoinPath(Home, 'tmp'), '/pasclaw/tmp', M) then Exit(M);
+  if MapUnderRoot(HostPath, JoinPath(Home, 'run'), '/pasclaw/run', M) then Exit(M);
+  { Unknown root: best-effort POSIXify. Only meaningful if the operator
+    added a matching ExtraMount; otherwise it isn't mounted anyway. }
+  Result := ToPosixSlashes(HostPath);
+  {$ELSE}
+  Result := HostPath;
+  {$ENDIF}
 end;
 
 function DockerCliReachable(out ErrMsg: string): Boolean;
 var
   ExitCode: Integer;
   Out_: string;
+  Args: TStringList;
 begin
   ErrMsg := '';
-  ExitCode := RunOneShot('docker info --format "{{.ServerVersion}}" 2>&1',
-                         '', Out_);
+  Args := TStringList.Create;
+  try
+    Args.Add('info');
+    Args.Add('--format');
+    Args.Add('{{.ServerVersion}}');
+    ExitCode := RunArgvCapture('docker', Args, '', Out_);
+  finally
+    Args.Free;
+  end;
   Result := ExitCode = 0;
   if not Result then
     ErrMsg := 'docker CLI not reachable: ' + Trim(Out_) +
@@ -218,17 +302,21 @@ begin
   end;
 end;
 
-procedure AddBindIfExists(var Flags: string; const Path: string);
-{ Bind-mount Path inside the container at the same host path. ForceDirectories
-  first because docker silently creates the source if missing AS ROOT, which
-  then trips ENOENT on every operation the container does inside that path. }
+procedure AddBindIfExists(Args: TStringList; const Path: string);
+{ Append a `-v host:container` bind mount to the argv. On POSIX the
+  container side is the same host path (ContainerPath is identity); on
+  Windows it's the mapped POSIX mount point, since a Linux container
+  can't hold a `C:\` path. ForceDirectories first because docker
+  silently creates the source if missing AS ROOT, which then trips
+  ENOENT on every operation the container does inside that path. No
+  quoting: each token is a separate argv element passed straight to
+  docker (RunArgvCapture spawns it without a host shell). }
 begin
   if Path = '' then Exit;
   if not DirectoryExists(Path) then
     ForceDirectories(Path);
-  Flags := Flags + ' -v ' + '''' +
-           StringReplace(Path + ':' + Path, '''', '''\''''', [rfReplaceAll]) +
-           '''';
+  Args.Add('-v');
+  Args.Add(Path + ':' + ContainerPath(Path));
 end;
 
 procedure TDockerShellBackend.SpawnContainer(const SessionId: string);
@@ -244,38 +332,55 @@ procedure TDockerShellBackend.SpawnContainer(const SessionId: string);
 
   Anything else under $PASCLAW_HOME (config.json with provider keys,
   cache/, logs/) stays out so a leaky shell can't `cat` operator
-  secrets. Same path on both sides means PasClaw's host-side code
-  doesn't translate paths -- a file written by MakeTempScript is at
-  the same path inside the container. }
+  secrets. On POSIX the bind is same-path so PasClaw's host-side code
+  needs no translation; on Windows ContainerPath maps the roots (see
+  there). The command is built as an argv vector and spawned without a
+  host shell -- no quoting, no cmd.exe percent-expansion. }
 var
-  Cmd, WorkspacePath, MountFlags, ExtraFlags: string;
-  Out_: string;
+  Args: TStringList;
+  WorkspacePath, Out_: string;
   ExitCode, i: Integer;
 begin
   WorkspacePath := JoinPath(GetHome, 'workspace');
-  MountFlags := '';
-  AddBindIfExists(MountFlags, WorkspacePath);
-  AddBindIfExists(MountFlags, JoinPath(GetHome, 'tmp'));
-  AddBindIfExists(MountFlags, JoinPath(GetHome, 'run'));
-  MountFlags := MountFlags + ' -w ' + ShellQuote(WorkspacePath);
-  if (FOpts.ExtraMounts <> nil) then
-    for i := 0 to FOpts.ExtraMounts.Count - 1 do
-      if Trim(FOpts.ExtraMounts[i]) <> '' then
-        MountFlags := MountFlags + ' -v ' + ShellQuote(FOpts.ExtraMounts[i]);
+  Args := TStringList.Create;
+  try
+    Args.Add('run');
+    Args.Add('-d');
+    Args.Add('--rm');
+    Args.Add('--name');
+    Args.Add(ContainerName(SessionId));
+    AddBindIfExists(Args, WorkspacePath);
+    AddBindIfExists(Args, JoinPath(GetHome, 'tmp'));
+    AddBindIfExists(Args, JoinPath(GetHome, 'run'));
+    Args.Add('-w');
+    Args.Add(ContainerPath(WorkspacePath));
+    if (FOpts.ExtraMounts <> nil) then
+      for i := 0 to FOpts.ExtraMounts.Count - 1 do
+        if Trim(FOpts.ExtraMounts[i]) <> '' then
+        begin
+          Args.Add('-v');
+          Args.Add(FOpts.ExtraMounts[i]);
+        end;
+    Args.Add('--network');
+    Args.Add(FOpts.Network);
+    if FOpts.Privileged then Args.Add('--privileged');
+    if FOpts.User <> '' then
+    begin
+      Args.Add('-u');
+      Args.Add(FOpts.User);
+    end;
+    Args.Add(FOpts.Image);
+    Args.Add('sh');
+    Args.Add('-c');
+    Args.Add(KeepAliveCmd);
 
-  ExtraFlags := '--network ' + FOpts.Network;
-  if FOpts.Privileged then ExtraFlags := ExtraFlags + ' --privileged';
-  if FOpts.User <> '' then ExtraFlags := ExtraFlags + ' -u ' + ShellQuote(FOpts.User);
+    LogInfo('shell-backend(docker): spawning %s (image=%s)',
+            [ContainerName(SessionId), FOpts.Image]);
+    ExitCode := RunArgvCapture('docker', Args, '', Out_);
+  finally
+    Args.Free;
+  end;
 
-  Cmd := Format('docker run -d --rm --name %s %s %s %s sh -c %s 2>&1',
-                [ShellQuote(ContainerName(SessionId)),
-                 MountFlags, ExtraFlags,
-                 ShellQuote(FOpts.Image),
-                 ShellQuote(KeepAliveCmd)]);
-
-  LogInfo('shell-backend(docker): spawning %s (image=%s)',
-          [ContainerName(SessionId), FOpts.Image]);
-  ExitCode := RunOneShot(Cmd, '', Out_);
   if ExitCode <> 0 then
     raise Exception.CreateFmt(
       'docker: failed to start container %s: %s',
@@ -290,15 +395,23 @@ end;
 
 procedure TDockerShellBackend.StopContainer(const SessionId: string);
 var
-  Cmd, Out_: string;
+  Out_: string;
   Idx: Integer;
+  Args: TStringList;
 begin
   { Best-effort stop -- if Docker can't reach it (already gone,
     daemon died), proceed anyway. The --rm we passed at spawn means
-    the container is removed automatically on stop. }
-  Cmd := 'docker stop --time 2 ' + ShellQuote(ContainerName(SessionId)) +
-         ' >/dev/null 2>&1';
-  RunOneShot(Cmd, '', Out_);
+    the container is removed automatically on stop. Output discarded. }
+  Args := TStringList.Create;
+  try
+    Args.Add('stop');
+    Args.Add('--time');
+    Args.Add('2');
+    Args.Add(ContainerName(SessionId));
+    RunArgvCapture('docker', Args, '', Out_);
+  finally
+    Args.Free;
+  end;
   FLock.Enter;
   try
     Idx := FAlive.IndexOf(SessionId);
@@ -337,7 +450,7 @@ function TDockerShellBackend.Exec(const SessionId, Cmd, WorkDir: string;
                                   ExtraEnv: TStringList;
                                   out Output: string): Integer;
 var
-  DockerCmd, EnvFlags, WorkDirFlag: string;
+  Args: TStringList;
   i: Integer;
 begin
   Output := '';
@@ -370,32 +483,46 @@ begin
     Exit;
   end;
 
-  EnvFlags := '';
-  if ExtraEnv <> nil then
-    for i := 0 to ExtraEnv.Count - 1 do
-      if Trim(ExtraEnv[i]) <> '' then
-        EnvFlags := EnvFlags + ' -e ' + ShellQuote(ExtraEnv[i]);
+  { Build `docker exec [-e ...] [-w ...] <name> sh -c <Cmd>` as an argv
+    vector. Cmd is the model's command and becomes a SINGLE argv element
+    passed to the container's `sh -c` -- the host never parses it, so
+    quoting and (on Windows) cmd.exe percent-expansion can't corrupt it.
+    The container sees the workspace at ContainerPath(WorkDir). }
+  Args := TStringList.Create;
+  try
+    Args.Add('exec');
+    if ExtraEnv <> nil then
+      for i := 0 to ExtraEnv.Count - 1 do
+        if Trim(ExtraEnv[i]) <> '' then
+        begin
+          Args.Add('-e');
+          Args.Add(ExtraEnv[i]);
+        end;
+    if WorkDir <> '' then
+    begin
+      Args.Add('-w');
+      Args.Add(ContainerPath(WorkDir));
+    end;
+    Args.Add(ContainerName(SessionId));
+    Args.Add('sh');
+    Args.Add('-c');
+    Args.Add(Cmd);
 
-  if WorkDir <> '' then
-    WorkDirFlag := ' -w ' + ShellQuote(WorkDir)
-  else
-    WorkDirFlag := '';
+    { Spawn on the HOST -- this is a docker CLI call, not the contained
+      command. RunArgvCapture blocks until `docker exec` exits, which it
+      does when the command inside the container exits, and propagates
+      that exit code. }
+    Result := RunArgvCapture('docker', Args, '', Output);
+  finally
+    Args.Free;
+  end;
+end;
 
-  { Wrap the model's command in `sh -c '...'` inside the container.
-    The container sees the same workspace files because the host
-    path is bind-mounted at the same path; relative paths the
-    model uses resolve identically. }
-  DockerCmd := Format('docker exec %s%s %s sh -c %s 2>&1',
-                      [EnvFlags, WorkDirFlag,
-                       ShellQuote(ContainerName(SessionId)),
-                       ShellQuote(Cmd)]);
-
-  { Spawn on the HOST -- this is a docker CLI call, not the
-    contained command. RunOneShot blocks until docker exec exits,
-    which it does when the command inside the container exits.
-    Exit code propagates through (docker exec exits with the
-    contained process's exit code). }
-  Result := RunOneShot(DockerCmd, '', Output);
+function TDockerShellBackend.HostToContainerPath(const HostPath: string): string;
+{ IShellPathMapper: let execute_code translate the script path it bakes
+  into its command to the path the container will see. }
+begin
+  Result := ContainerPath(HostPath);
 end;
 
 end.
