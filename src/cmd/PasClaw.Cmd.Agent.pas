@@ -405,7 +405,16 @@ begin
   else                       Result := S;
 end;
 
-procedure RunSingleTurn(const Cfg: TConfig; const A: TAgentArgs; const Prompt: string);
+function RunSingleTurn(const Cfg: TConfig; const A: TAgentArgs;
+                       const Prompt: string): Boolean;
+(* Returns True on a clean turn (provider resolved, RunToolLoop
+   returned True) and False on either failure mode. Cmd_Agent_Run
+   maps False -> process exit code 1 so scripts using --quiet (or
+   anything else parsing $?) treat a missing provider or a failed
+   tool loop as a failed invocation. PR #243 P2: prior behaviour
+   always exited 0 even when the assistant produced no reply,
+   which silently masked provider-config errors in machine-readable
+   pipelines. *)
 var
   Provider: ILLMProvider;
   Err: string;
@@ -420,13 +429,20 @@ var
   BgCoord: TBackgroundSpawnCoordinator;
   OneShotSessionId: string;
 begin
+  { Default to True; only flip to False on a known failure path.
+    Any code path that hits Exit before producing a real assistant
+    reply MUST set Result := False first so Cmd_Agent_Run can map
+    it to a non-zero process exit. }
+  Result := True;
   if not PickProvider(Cfg, A, Provider, Err) then
   begin
+    Result := False;
     if A.Quiet then
       { Quiet mode: a single undecorated line so scripts have
         SOMETHING on stdout to surface, without the banner-y "(offline
-        preview)" / "You: ..." mock-conversation rendering. Callers
-        relying on exit code still see this as a failure path. }
+        preview)" / "You: ..." mock-conversation rendering. Exit
+        code (non-zero, via Cmd_Agent_Run) is the authoritative
+        success signal. }
       PrintLn('pasclaw error: provider not configured (' + Err + ')')
     else
     begin
@@ -494,15 +510,15 @@ begin
       else
         PrintLn(MaybeRender(Cfg, Loop.Content));
     end
-    else if not A.Quiet then
-      PrintLn('(loop failed)')
     else
-      { In quiet mode, a failed loop still needs SOMETHING on stdout
-        so the caller doesn't silently get an empty body and assume
-        the model said nothing. Match the non-quiet sentinel verbatim
-        so scripts can grep for it; exit code is the authoritative
-        success signal anyway. }
+    begin
+      Result := False;
+      { Failed loop: a "(loop failed)" sentinel still goes to stdout
+        in both modes so a caller eyeballing the output sees what
+        happened, but Result := False bubbles up so Cmd_Agent_Run
+        exits non-zero (PR #243 P2 fix). }
       PrintLn('(loop failed)');
+    end;
     if (not A.Quiet) and
        (Loop.TotalUsage.InputTokens + Loop.TotalUsage.OutputTokens > 0) then
       PrintLn(Ansi.Dim + FormatTokenLine(Loop.TotalUsage, Loop.Iterations) + Ansi.Reset);
@@ -1332,9 +1348,24 @@ begin
     end;
   end;
   try
-    if A.Message <> '' then RunSingleTurn(Cfg, A, A.Message)
-    else                    RunInteractive(Cfg, A);
-    Result := 0;
+    if A.Message <> '' then
+    begin
+      { One-shot path: RunSingleTurn returns False on (a) no provider
+        configured or (b) a failed tool loop. Map either to exit 1 so
+        `pasclaw agent --quiet -m "..."` callers checking $? see real
+        failures instead of a silently-zero exit code that lies about
+        success. PR #243 P2. Interactive mode has no equivalent
+        return -- session lifecycle is the user's signal there. }
+      if RunSingleTurn(Cfg, A, A.Message) then
+        Result := 0
+      else
+        Result := 1;
+    end
+    else
+    begin
+      RunInteractive(Cfg, A);
+      Result := 0;
+    end;
   finally
     Cfg.Free;
   end;
