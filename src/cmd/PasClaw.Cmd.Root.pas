@@ -85,6 +85,24 @@ begin
   end;
 end;
 
+function ArgvHasQuietFlag: Boolean;
+(* Mirrors PasClaw.dpr's IsQuietInvocation so RunRootCommand can
+   ask the same question without a cross-module reach. Duplicated
+   intentionally -- both call sites need to know "did the user
+   pass --quiet anywhere on argv" BEFORE the per-command ParseArgs
+   runs. Three lines isn't worth a shared module. *)
+var
+  i: Integer;
+  Arg: string;
+begin
+  Result := False;
+  for i := 1 to ParamCount do
+  begin
+    Arg := ParamStr(i);
+    if (Arg = '--quiet') or (Arg = '-q') then Exit(True);
+  end;
+end;
+
 function CollectArgs: TStringList;
 var
   i: Integer;
@@ -223,10 +241,19 @@ begin
   try
     StripGlobalFlags(Args);
 
-    { Apply log level from config (best-effort; ignore on missing file). }
+    { Apply log level from config (best-effort; ignore on missing file).
+      EXCEPT when the user passed --quiet / -q: PasClaw.dpr has already
+      clamped the level to llError, and applying the default 'info'
+      from config.json here would undo the clamp before LoadConfig /
+      ConnectMCP / Search.Factory get a chance to fire their LogInfo
+      noise -- which is the entire point of --quiet. (Codex P1 on
+      PR #244: the config-driven level was overriding the clamp
+      silently and the [info] lines were still appearing in quiet
+      one-shot output.) }
     Cfg := LoadConfig;
     try
-      SetLogLevelFromString(Cfg.Gateway.LogLevel);
+      if not ArgvHasQuietFlag then
+        SetLogLevelFromString(Cfg.Gateway.LogLevel);
     finally
       Cfg.Free;
     end;

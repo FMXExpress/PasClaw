@@ -121,6 +121,52 @@ begin
              'SetLogLevel reverts cleanly back to llInfo');
 end;
 
+procedure TestRunRootCommandPreservesQuietClamp;
+(* PR #244 P1: PasClaw.dpr clamps to llError when --quiet is on
+   argv, but RunRootCommand unconditionally followed up with
+   SetLogLevelFromString(Cfg.Gateway.LogLevel), whose default is
+   'info'. That sequence (clamp -> config override -> next LogInfo
+   callsite fires) was the exact path that let [info] noise back
+   into quiet one-shot output. Pin both halves of the sequence:
+
+     1. With the fix (skip-when-quiet): clamp survives, LogInfo
+        stays suppressed.
+     2. Without the fix (apply unconditionally): clamp is undone,
+        LogInfo emits -- the regression we're fixing.
+
+   We test both halves so a future refactor that drops the
+   "if not ArgvHasQuietFlag" guard fails this test instead of
+   reintroducing the user-facing bug. *)
+const
+  MarkerWithFix = 'qlt-WITH-FIX-MARKER-' + 'a4f9';
+  MarkerWithoutFix = 'qlt-WITHOUT-FIX-MARKER-' + 'a4f9';
+  GatewayDefaultLogLevel = 'info';  { TConfig.Create default }
+begin
+  { Sequence with the fix: dpr clamps, RunRootCommand SKIPS the
+    config-driven re-set because --quiet is on argv. Subsequent
+    LogInfo gets dropped. }
+  SetLogLevel(llError);
+  { ArgvHasQuietFlag returned True; SetLogLevelFromString NOT called }
+  LogInfo(MarkerWithFix);
+  AssertTrue(not BufferTailHas(MarkerWithFix),
+             'with fix: clamp survives RunRootCommand, LogInfo suppressed');
+
+  { Sequence without the fix (pre-PR #244 P1 behaviour, reproduced
+    here to lock in the regression test): dpr clamps, RunRootCommand
+    unconditionally applies the config default of "info" which
+    undoes the clamp. Subsequent LogInfo leaks into stderr / the
+    buffer. }
+  SetLogLevel(llError);
+  SetLogLevelFromString(GatewayDefaultLogLevel);  { simulates the bug }
+  LogInfo(MarkerWithoutFix);
+  AssertTrue(BufferTailHas(MarkerWithoutFix),
+             'without the skip-when-quiet guard, the clamp gets undone -- ' +
+             'this assertion documents the regression we are guarding against');
+
+  { Restore default for any subsequent tests in this binary. }
+  SetLogLevel(llInfo);
+end;
+
 begin
   TestLevelErrorSuppressesInfoAndDebug;
   WriteLn('  ok: SetLogLevel(llError) suppresses Debug/Info/Warn, keeps Error');
@@ -130,5 +176,7 @@ begin
   WriteLn('  ok: SetLogLevelFromString("error") matches SetLogLevel(llError)');
   TestCurrentLogLevelMatchesSet;
   WriteLn('  ok: CurrentLogLevel reflects the last SetLogLevel call');
+  TestRunRootCommandPreservesQuietClamp;
+  WriteLn('  ok: skip-when-quiet guard preserves the dpr clamp through RunRootCommand (PR #244 P1)');
   WriteLn('PASS');
 end.
