@@ -43,6 +43,18 @@ type
     LogLevel: string;
     BindAddr: string;
     Port:     Integer;
+    { Inbound bearer token gating /v1/* routes. Empty (the default)
+      means unauthenticated -- every request reaches its route
+      handler with no check. When non-empty, OnCommandGet's auth
+      middleware requires `Authorization: Bearer <token>` (or the
+      query parameter `?token=<token>`) on every non-exempt route
+      and returns 401 otherwise. Exempt routes: `/` (web UI HTML),
+      `/v1/health`, `/v1/version`, and every `/webhooks/*` path
+      (those carry their own per-channel signature secret).
+      Env var $PASCLAW_GATEWAY_TOKEN overrides this at LoadConfig
+      time, same precedence shape `OTEL_EXPORTER_OTLP_ENDPOINT`
+      uses. Comparisons are constant-time. }
+    Token:    string;
   end;
 
   (*  TOtelHeader -- one header pair for OTLP exports. The
@@ -583,6 +595,24 @@ function GetHome: string;
 function GetConfigPath: string;
 function LoadConfig: TConfig;
 procedure SaveConfig(C: TConfig);
+
+(*  Effective gateway bearer token. Returns the env-var override
+    when $PASCLAW_GATEWAY_TOKEN or $OPENCLAW_GATEWAY_TOKEN is set
+    (PASCLAW_ wins when both are set), else C.Gateway.Token from
+    the parsed config file. Distinct from C.Gateway.Token so that
+    env-only secrets don't leak into the persisted config via the
+    SaveConfig -> ToJSON round-trip a config-mutating command
+    (auth, model, skills install, ...) would otherwise force on
+    every restart. Codex P2 on PR #246.
+
+    OPENCLAW_GATEWAY_TOKEN is honoured as an alias so an
+    operator's existing openclaw .env file ports verbatim --
+    openclaw uses that name; PasClaw's own convention is the
+    PASCLAW_ prefix, but accepting both costs nothing.
+
+    The gateway middleware uses this getter; ToJSON / SaveConfig
+    serialise only C.Gateway.Token (never the env value). *)
+function GetEffectiveGatewayToken(const C: TConfig): string;
 function FormatVersion: string;
 function FormatBuildInfo: string;
 
@@ -614,6 +644,19 @@ uses
                                 both take effect at the same single chokepoint
                                 every entry point already passes through. }
 
+var
+  { Env-var-sourced gateway bearer token, kept SEPARATE from
+    TConfig.Gateway.Token so a config-mutating command (auth,
+    model, skills install, ...) doing LoadConfig -> SaveConfig
+    can't accidentally persist a deployment secret into
+    config.json. Set by LoadConfig at startup (from
+    $PASCLAW_GATEWAY_TOKEN, or $OPENCLAW_GATEWAY_TOKEN for
+    openclaw-compat); read by GetEffectiveGatewayToken which is
+    what the middleware actually checks against. Empty when
+    neither env var is set -- the middleware then falls back to
+    C.Gateway.Token. }
+  GEnvGatewayToken: string = '';
+
 procedure ApplyPromptCacheConfig(var Opts: TChatOptions; const PC: TPromptCacheConfig);
 begin
   Opts.CacheEnabled := PC.Enabled;
@@ -628,6 +671,7 @@ begin
   Gateway.LogLevel := 'info';
   Gateway.BindAddr := '127.0.0.1';
   Gateway.Port     := 8088;
+  Gateway.Token    := '';
   { OpenTelemetry diagnostics defaults: off, but pre-populated with
     the OTel Collector localhost address so flipping enabled=true is
     a one-key change. Sampling at 1.0 (trace every turn) is the right
@@ -793,6 +837,7 @@ begin
     Gw.PutStr ('log_level', Gateway.LogLevel);
     Gw.PutStr ('bind_addr', Gateway.BindAddr);
     Gw.PutInt ('port',      Gateway.Port);
+    if Gateway.Token <> '' then Gw.PutStr('token', Gateway.Token);
     Root.PutObject('gateway', Gw);
 
     (* diagnostics.otel round-trip. Without this block, ANY command
@@ -1115,6 +1160,7 @@ begin
       Gateway.LogLevel := Obj.GetStr('log_level', Gateway.LogLevel);
       Gateway.BindAddr := Obj.GetStr('bind_addr', Gateway.BindAddr);
       Gateway.Port     := Obj.GetInt('port',      Gateway.Port);
+      Gateway.Token    := Obj.GetStr('token',     Gateway.Token);
     finally
       Obj.Free;
     end;
@@ -1539,7 +1585,30 @@ begin
       so single-shot CLI commands like `pasclaw status` pay nothing
       for the wiring. }
     InitOtelFromConfig(Result);
+    { Gateway bearer-token env override. Populates the module-level
+      GEnvGatewayToken; does NOT mutate Result.Gateway.Token, so
+      SaveConfig -> ToJSON never persists an env-only secret into
+      config.json. PASCLAW_GATEWAY_TOKEN is PasClaw's prefix; we
+      also honour OPENCLAW_GATEWAY_TOKEN for openclaw-compat -- an
+      operator pointing PasClaw at an existing openclaw .env file
+      doesn't have to rename anything. PASCLAW_ wins when both
+      env vars are set (we're not openclaw, after all). Codex P2
+      on PR #246: persistence side of the fix. }
+    if GetEnvironmentVariable('PASCLAW_GATEWAY_TOKEN') <> '' then
+      GEnvGatewayToken := GetEnvironmentVariable('PASCLAW_GATEWAY_TOKEN')
+    else if GetEnvironmentVariable('OPENCLAW_GATEWAY_TOKEN') <> '' then
+      GEnvGatewayToken := GetEnvironmentVariable('OPENCLAW_GATEWAY_TOKEN')
+    else
+      GEnvGatewayToken := '';
   end;
+end;
+
+function GetEffectiveGatewayToken(const C: TConfig): string;
+begin
+  if GEnvGatewayToken <> '' then
+    Result := GEnvGatewayToken
+  else
+    Result := C.Gateway.Token;
 end;
 
 procedure SaveConfig(C: TConfig);

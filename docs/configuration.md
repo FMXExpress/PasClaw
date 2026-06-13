@@ -44,6 +44,7 @@ pasclaw config reset  # write a default config
 | `gateway.log_level` | `"info"` | Logger level. `--quiet`/`-q` clamps to `error` for the whole process. |
 | `gateway.bind_addr` | `"127.0.0.1"` | HTTP gateway bind. |
 | `gateway.port` | `8088` | HTTP gateway port. |
+| `gateway.token` | `""` | Inbound bearer token for `/v1/*` routes. Empty = unauthenticated (every route open — the default). When non-empty, every non-exempt route requires `Authorization: Bearer <token>` (or `?token=<token>` query param). `$PASCLAW_GATEWAY_TOKEN` env var overrides. See [Gateway](./gateway.md#authentication). |
 | `prompt_cache.enabled` | `true` | Anthropic+OpenAI prompt caching. See [Providers](./providers.md). |
 | `prompt_cache.ttl` | `"5m"` | Extended-TTL hint (Anthropic). Set `"1h"` for the long bucket. |
 | `vector_search_enabled` | `true` | Hybrid FTS5+vector backend for `memory_search`. |
@@ -131,6 +132,8 @@ Each entry registers a `spawn(agent="<name>", prompt="...")` tool the parent age
 | `PASCLAW_HOME` | PasClaw home directory. |
 | `PASCLAW_CONFIG` | Config-file path. |
 | `PASCLAW_VERSION` | Compile-time FPC version override used by the Makefile. |
+| `PASCLAW_GATEWAY_TOKEN` | Inbound bearer token for the HTTP gateway. Overrides `gateway.token` in config.json when set. Empty = unauthenticated. Env value never persists into `config.json` (any later `SaveConfig` writes only the in-config value). |
+| `OPENCLAW_GATEWAY_TOKEN` | Alias of `PASCLAW_GATEWAY_TOKEN` for openclaw-compat (operator porting an existing openclaw `.env` doesn't have to rename). `PASCLAW_` wins when both are set. |
 | `NO_COLOR` | Disables ANSI color output. Equivalent to `--no-color`. |
 
 ### Web search
