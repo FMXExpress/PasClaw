@@ -595,6 +595,24 @@ function GetHome: string;
 function GetConfigPath: string;
 function LoadConfig: TConfig;
 procedure SaveConfig(C: TConfig);
+
+(*  Effective gateway bearer token. Returns the env-var override
+    when $PASCLAW_GATEWAY_TOKEN or $OPENCLAW_GATEWAY_TOKEN is set
+    (PASCLAW_ wins when both are set), else C.Gateway.Token from
+    the parsed config file. Distinct from C.Gateway.Token so that
+    env-only secrets don't leak into the persisted config via the
+    SaveConfig -> ToJSON round-trip a config-mutating command
+    (auth, model, skills install, ...) would otherwise force on
+    every restart. Codex P2 on PR #246.
+
+    OPENCLAW_GATEWAY_TOKEN is honoured as an alias so an
+    operator's existing openclaw .env file ports verbatim --
+    openclaw uses that name; PasClaw's own convention is the
+    PASCLAW_ prefix, but accepting both costs nothing.
+
+    The gateway middleware uses this getter; ToJSON / SaveConfig
+    serialise only C.Gateway.Token (never the env value). *)
+function GetEffectiveGatewayToken(const C: TConfig): string;
 function FormatVersion: string;
 function FormatBuildInfo: string;
 
@@ -625,6 +643,19 @@ uses
                                 + the diagnostics.otel.* block in config.json
                                 both take effect at the same single chokepoint
                                 every entry point already passes through. }
+
+var
+  { Env-var-sourced gateway bearer token, kept SEPARATE from
+    TConfig.Gateway.Token so a config-mutating command (auth,
+    model, skills install, ...) doing LoadConfig -> SaveConfig
+    can't accidentally persist a deployment secret into
+    config.json. Set by LoadConfig at startup (from
+    $PASCLAW_GATEWAY_TOKEN, or $OPENCLAW_GATEWAY_TOKEN for
+    openclaw-compat); read by GetEffectiveGatewayToken which is
+    what the middleware actually checks against. Empty when
+    neither env var is set -- the middleware then falls back to
+    C.Gateway.Token. }
+  GEnvGatewayToken: string = '';
 
 procedure ApplyPromptCacheConfig(var Opts: TChatOptions; const PC: TPromptCacheConfig);
 begin
@@ -1554,13 +1585,30 @@ begin
       so single-shot CLI commands like `pasclaw status` pay nothing
       for the wiring. }
     InitOtelFromConfig(Result);
-    { Gateway bearer-token env override. $PASCLAW_GATEWAY_TOKEN wins
-      over the config value when set non-empty -- standard ops-sets-
-      env-at-deploy contract, mirrors the OTel env var precedence.
-      Empty env is a no-op (the config value, if any, wins). }
+    { Gateway bearer-token env override. Populates the module-level
+      GEnvGatewayToken; does NOT mutate Result.Gateway.Token, so
+      SaveConfig -> ToJSON never persists an env-only secret into
+      config.json. PASCLAW_GATEWAY_TOKEN is PasClaw's prefix; we
+      also honour OPENCLAW_GATEWAY_TOKEN for openclaw-compat -- an
+      operator pointing PasClaw at an existing openclaw .env file
+      doesn't have to rename anything. PASCLAW_ wins when both
+      env vars are set (we're not openclaw, after all). Codex P2
+      on PR #246: persistence side of the fix. }
     if GetEnvironmentVariable('PASCLAW_GATEWAY_TOKEN') <> '' then
-      Result.Gateway.Token := GetEnvironmentVariable('PASCLAW_GATEWAY_TOKEN');
+      GEnvGatewayToken := GetEnvironmentVariable('PASCLAW_GATEWAY_TOKEN')
+    else if GetEnvironmentVariable('OPENCLAW_GATEWAY_TOKEN') <> '' then
+      GEnvGatewayToken := GetEnvironmentVariable('OPENCLAW_GATEWAY_TOKEN')
+    else
+      GEnvGatewayToken := '';
   end;
+end;
+
+function GetEffectiveGatewayToken(const C: TConfig): string;
+begin
+  if GEnvGatewayToken <> '' then
+    Result := GEnvGatewayToken
+  else
+    Result := C.Gateway.Token;
 end;
 
 procedure SaveConfig(C: TConfig);

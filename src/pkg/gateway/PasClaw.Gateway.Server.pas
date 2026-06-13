@@ -637,7 +637,7 @@ begin
     rationale in PasClaw.Gateway.Auth's unit comment. The check
     fires BEFORE the FMCPOnly early-exit below so the --mcp-port
     isolation listener honours the same token. }
-  if not CheckGatewayAuth(FCfg.Gateway.Token,
+  if not CheckGatewayAuth(GetEffectiveGatewayToken(FCfg),
                           ARequest.Command, Doc,
                           ARequest.RawHeaders.Values['Authorization'],
                           ARequest.Params.Values['token']) then
@@ -1024,6 +1024,19 @@ begin
       end;
     finally
       Arr.Free;
+    end;
+
+    { gateway.token is the inbound bearer for /v1/* routes. An
+      authenticated /v1/config caller would otherwise see the
+      shared secret in cleartext -- defeating the read-only-status
+      contract this endpoint advertises. Codex P2 on PR #246. }
+    Item := Root.ChildObject('gateway');
+    if Item <> nil then
+    try
+      if Item.GetStr('token', '') <> '' then
+        Item.PutStr('token', '•••');
+    finally
+      Item.Free;
     end;
 
     WriteJSON(AResp, 200, Root.ToJSON);
@@ -1532,7 +1545,7 @@ begin
     entry. When the token is empty (unauthenticated mode), keep the
     legacy 'gateway:anon' so existing allowlists / hook gates don't
     silently change shape. }
-  if FCfg.Gateway.Token <> '' then
+  if GetEffectiveGatewayToken(FCfg) <> '' then
     LoopCfg.Identity := MakeIdentity('gateway', 'authed')
   else
     LoopCfg.Identity := MakeIdentity('gateway', 'anon');
@@ -2078,7 +2091,7 @@ begin
     LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
     LoopCfg.Options       := DefaultChatOptions;
     ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
-    if FCfg.Gateway.Token <> '' then
+    if GetEffectiveGatewayToken(FCfg) <> '' then
       LoopCfg.Identity := MakeIdentity('gateway', 'authed')
     else
       LoopCfg.Identity := MakeIdentity('gateway', 'anon');
@@ -3829,7 +3842,7 @@ begin
       LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
       LoopCfg.Options       := DefaultChatOptions;
       ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
-      if FCfg.Gateway.Token <> '' then
+      if GetEffectiveGatewayToken(FCfg) <> '' then
         LoopCfg.Identity := MakeIdentity('gateway', 'authed')
       else
         LoopCfg.Identity := MakeIdentity('gateway', 'anon');

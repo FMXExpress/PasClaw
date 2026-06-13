@@ -518,6 +518,8 @@ test-gateway-token: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/gateway_token_tests.pas -o$(BUILDDIR)/gateway_token_tests
 	@$(BUILDDIR)/gateway_token_tests
+	@PASCLAW_GATEWAY_TOKEN=sk-pasclaw-env-test-aaaaaaaa $(BUILDDIR)/gateway_token_tests --env-mode
+	@OPENCLAW_GATEWAY_TOKEN=sk-openclaw-env-test-bbbbbb $(BUILDDIR)/gateway_token_tests --env-mode
 
 # OpenTelemetry traces (OTLP/HTTP+JSON). Pins span hierarchy,
 # attribute names (gen_ai.* semantic conventions), W3C traceparent

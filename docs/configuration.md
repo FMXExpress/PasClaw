@@ -132,7 +132,8 @@ Each entry registers a `spawn(agent="<name>", prompt="...")` tool the parent age
 | `PASCLAW_HOME` | PasClaw home directory. |
 | `PASCLAW_CONFIG` | Config-file path. |
 | `PASCLAW_VERSION` | Compile-time FPC version override used by the Makefile. |
-| `PASCLAW_GATEWAY_TOKEN` | Inbound bearer token for the HTTP gateway. Overrides `gateway.token` in config.json when set. Empty = unauthenticated. |
+| `PASCLAW_GATEWAY_TOKEN` | Inbound bearer token for the HTTP gateway. Overrides `gateway.token` in config.json when set. Empty = unauthenticated. Env value never persists into `config.json` (any later `SaveConfig` writes only the in-config value). |
+| `OPENCLAW_GATEWAY_TOKEN` | Alias of `PASCLAW_GATEWAY_TOKEN` for openclaw-compat (operator porting an existing openclaw `.env` doesn't have to rename). `PASCLAW_` wins when both are set. |
 | `NO_COLOR` | Disables ANSI color output. Equivalent to `--no-color`. |
 
 ### Web search

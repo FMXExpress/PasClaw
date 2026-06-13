@@ -26,6 +26,7 @@ program gateway_token_tests;
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes,
+  PasClaw.Config,
   PasClaw.Gateway.Auth;
 
 procedure Fail_(const Msg: string);
@@ -215,6 +216,116 @@ begin
              'similar-looking path does not silently match /v1/health');
 end;
 
+procedure TestEffectiveTokenContract;
+(* PR #246 P2 (Codex) -- the env-var override MUST stay out of the
+   persisted config, and the public getter MUST honour the env-vs-
+   config precedence + the openclaw alias.
+
+   We can't mutate process env here (FPC's RTL snapshots envp at
+   startup -- same caveat that drove the otel_tests --env-mode
+   round-trip). What we CAN pin in-process is the precedence
+   contract: when GetEffectiveGatewayToken sees neither env nor a
+   config field, it returns ''; when only the config field is set,
+   it returns that; when ToJSON is called the in-config field
+   round-trips but the env value never does.
+
+   The env-vs-config-precedence path is exercised in a second pass
+   driven by the Makefile (--env-mode), same shape as otel_tests. *)
+var
+  Cfg, RT: TConfig;
+  Serialised: string;
+begin
+  Cfg := TConfig.Create;
+  RT  := TConfig.Create;
+  try
+    { Baseline: no token anywhere -> getter returns ''. }
+    AssertEq(GetEffectiveGatewayToken(Cfg), '',
+             'no token anywhere: GetEffectiveGatewayToken returns ""');
+
+    { Config-only token -> getter returns it. }
+    Cfg.Gateway.Token := 'sk-pasclaw-from-config-aaaaaaaa';
+    AssertEq(GetEffectiveGatewayToken(Cfg),
+             'sk-pasclaw-from-config-aaaaaaaa',
+             'config-only: getter returns Cfg.Gateway.Token');
+
+    { Round-trip: config token DOES persist through ToJSON. }
+    Serialised := Cfg.ToJSON;
+    AssertTrue(Pos('"token"', Serialised) > 0,
+               'ToJSON emits the gateway.token field when Cfg.Gateway.Token is set');
+    RT.FromJSON(Serialised);
+    AssertEq(RT.Gateway.Token, 'sk-pasclaw-from-config-aaaaaaaa',
+             'FromJSON round-trip preserves Cfg.Gateway.Token');
+
+    { Empty token NOT emitted -- a fresh config wouldn't grow a
+      "token":"" field just by being serialised. Guards against a
+      future SaveConfig dropping an empty token row that operators
+      would then think they had to fill in. }
+    Cfg.Gateway.Token := '';
+    Serialised := Cfg.ToJSON;
+    AssertTrue(Pos('"token"', Serialised) <= 0,
+               'ToJSON omits gateway.token when empty');
+  finally
+    Cfg.Free;
+    RT.Free;
+  end;
+end;
+
+procedure TestEnvModePrecedence;
+(* Second pass: invoked from the Makefile with PASCLAW_GATEWAY_TOKEN
+   (or OPENCLAW_GATEWAY_TOKEN) set in the parent process so FPC's
+   envp snapshot picks it up. Asserts that GetEffectiveGatewayToken
+   returns the env value AND that Cfg.Gateway.Token (the config
+   field, source of ToJSON) stays untouched by the env override.
+   That second half is the literal Codex P2: env-only secrets must
+   not bleed into persisted config. *)
+var
+  Cfg, RT: TConfig;
+  Serialised: string;
+  EnvPasclaw, EnvOpenclaw: string;
+begin
+  EnvPasclaw  := GetEnvironmentVariable('PASCLAW_GATEWAY_TOKEN');
+  EnvOpenclaw := GetEnvironmentVariable('OPENCLAW_GATEWAY_TOKEN');
+  AssertTrue((EnvPasclaw <> '') or (EnvOpenclaw <> ''),
+             'precondition: one of PASCLAW_GATEWAY_TOKEN / OPENCLAW_GATEWAY_TOKEN inherited from Makefile');
+
+  Cfg := TConfig.Create;
+  RT  := TConfig.Create;
+  try
+    { LoadConfig is what populates the module-level GEnvGatewayToken
+      from env -- we have to invoke the same code path here. The
+      easiest path that doesn't require a real $PASCLAW_HOME is to
+      construct a fresh TConfig (already done above) and then run
+      the env-pickup logic via LoadConfig's chokepoint. LoadConfig
+      tolerates a missing config file -- it just leaves Result at
+      defaults. Then we observe the side-effect. }
+    Cfg.Free;
+    Cfg := LoadConfig;
+    AssertEq(Cfg.Gateway.Token, '',
+             'Cfg.Gateway.Token stays empty when only the env is set -- '
+             + 'this is the Codex P2 fix: env-only secrets do NOT bleed into the persisted config');
+
+    if EnvPasclaw <> '' then
+      AssertEq(GetEffectiveGatewayToken(Cfg), EnvPasclaw,
+               'PASCLAW_GATEWAY_TOKEN env value wins')
+    else
+      AssertEq(GetEffectiveGatewayToken(Cfg), EnvOpenclaw,
+               'OPENCLAW_GATEWAY_TOKEN env value wins (openclaw-compat alias)');
+
+    { ToJSON of an env-only-token config MUST NOT emit a token
+      field -- this is the assertion that catches the original bug
+      (SaveConfig writing the env value into config.json). }
+    Serialised := Cfg.ToJSON;
+    AssertTrue(Pos('"token"', Serialised) <= 0,
+               'ToJSON does NOT emit gateway.token when only the env var was set');
+    RT.FromJSON(Serialised);
+    AssertEq(RT.Gateway.Token, '',
+             'FromJSON round-trip of an env-only-token config produces empty Gateway.Token');
+  finally
+    Cfg.Free;
+    RT.Free;
+  end;
+end;
+
 procedure TestTokenLengthDoesNotLeakViaShortCircuit;
 const
   Tok = 'sk-pasclaw-test-token-aaaaaaaa';
@@ -239,6 +350,18 @@ begin
 end;
 
 begin
+  if (ParamCount >= 1) and (ParamStr(1) = '--env-mode') then
+  begin
+    { Second pass: PASCLAW_GATEWAY_TOKEN or OPENCLAW_GATEWAY_TOKEN
+      set by the Makefile before launch. Only run the env-precedence
+      assertions -- the rest were exercised in the first pass with a
+      clean env. }
+    TestEnvModePrecedence;
+    WriteLn('  ok: env-mode -- env-only token does NOT bleed into Cfg.Gateway.Token (PR #246 P2)');
+    WriteLn('PASS');
+    Exit;
+  end;
+
   TestUnauthenticatedModePassesEveryRoute;
   WriteLn('  ok: unauthenticated mode (empty token) passes every route');
   TestConfiguredTokenRefusesUnauthedRequest;
@@ -259,5 +382,7 @@ begin
   WriteLn('  ok: IsExemptRoute names exactly the four families documented in the unit comment');
   TestTokenLengthDoesNotLeakViaShortCircuit;
   WriteLn('  ok: first-byte and last-byte mismatch both return False (no early short-circuit)');
+  TestEffectiveTokenContract;
+  WriteLn('  ok: GetEffectiveGatewayToken contract: empty when no source, config field round-trips, empty token NOT emitted (PR #246 P2)');
   WriteLn('PASS');
 end.
