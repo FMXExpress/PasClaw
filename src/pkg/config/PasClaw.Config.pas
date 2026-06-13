@@ -613,6 +613,34 @@ procedure SaveConfig(C: TConfig);
     The gateway middleware uses this getter; ToJSON / SaveConfig
     serialise only C.Gateway.Token (never the env value). *)
 function GetEffectiveGatewayToken(const C: TConfig): string;
+
+(*  ExpandEnvVarsInJSON -- raw-text ${VAR_NAME} substitution applied
+    to the JSON config body BEFORE TConfig.FromJSON parses it.
+    Matches openclaw's `${...}` template-substitution feature so an
+    operator can keep secrets out of `config.json` without using
+    the dedicated `PASCLAW_GATEWAY_TOKEN` env var:
+
+      "providers": [
+        { "name": "anthropic", "api_key": "${ANTHROPIC_API_KEY}" }
+      ]
+
+    Pattern: `${[A-Z_][A-Z0-9_]*}` (uppercase only, matching openclaw).
+    On a match we GetEnvironmentVariable the name and splice the value
+    in -- JSON-escaping any `"`, `\`, or control byte so the result
+    stays valid JSON regardless of the env value's contents. When the
+    env var is unset (or set but empty), the literal `${VAR_NAME}` is
+    left in place so an operator reading config back can diagnose by
+    seeing the unresolved marker. No escape sequence for a literal
+    `${UPPER}` value in v1; the workaround is downcasing one letter
+    so the pattern doesn't match, or use the dedicated PASCLAW_* env
+    var path that doesn't go through string substitution at all.
+
+    Applied at LoadConfig only -- embedders constructing TConfig from
+    a hand-crafted JSON string and calling FromJSON directly do their
+    own env wiring. Exposed in the interface so the test can pin
+    the expansion contract without driving LoadConfig itself. *)
+function ExpandEnvVarsInJSON(const Body: string): string;
+
 function FormatVersion: string;
 function FormatBuildInfo: string;
 
@@ -1561,6 +1589,13 @@ begin
     if FileExists(Path) then
     begin
       S := ReadFileText(Path);
+      (* Resolve ${VAR_NAME} markers BEFORE FromJSON parses. Lets
+         operators keep API keys / bearer tokens / webhook URLs in
+         the environment and reference them by name from config.json
+         the same way openclaw's templates work. Unset env vars
+         leave the literal marker in place so config-back-from-disk
+         diagnostics still show which variable didn't resolve. *)
+      S := ExpandEnvVarsInJSON(S);
       try
         Result.FromJSON(S);
       except
@@ -1609,6 +1644,105 @@ begin
     Result := GEnvGatewayToken
   else
     Result := C.Gateway.Token;
+end;
+
+function EnvSubstJsonEscape(const S: string): string;
+(* Escape a substituted env value so the resulting JSON stays valid
+   no matter what bytes the operator's env happens to contain. Same
+   control-byte handling as PasClaw.Otel's JsonEscape (intentionally
+   duplicated -- making PasClaw.Config depend on PasClaw.Otel for
+   one helper would be backwards: Config is downstream of Otel).
+   Used only for ${VAR_NAME} expansion below. *)
+var
+  i: Integer;
+  c: Char;
+  Sb: TStringBuilder;
+begin
+  Sb := TStringBuilder.Create;
+  try
+    for i := 1 to Length(S) do
+    begin
+      c := S[i];
+      case c of
+        '"':  Sb.Append('\"');
+        '\':  Sb.Append('\\');
+        #8:   Sb.Append('\b');
+        #9:   Sb.Append('\t');
+        #10:  Sb.Append('\n');
+        #12:  Sb.Append('\f');
+        #13:  Sb.Append('\r');
+      else
+        if Ord(c) < $20 then
+          Sb.Append('\u00' + IntToHex(Ord(c), 2))
+        else
+          Sb.Append(c);
+      end;
+    end;
+    Result := Sb.ToString;
+  finally
+    Sb.Free;
+  end;
+end;
+
+function ExpandEnvVarsInJSON(const Body: string): string;
+var
+  i, j, n, NameStart: Integer;
+  Sb: TStringBuilder;
+  Name, Value: string;
+
+  function IsFirstNameChar(c: Char): Boolean;
+  begin
+    Result := ((c >= 'A') and (c <= 'Z')) or (c = '_');
+  end;
+
+  function IsNameChar(c: Char): Boolean;
+  begin
+    Result := ((c >= 'A') and (c <= 'Z'))
+           or ((c >= '0') and (c <= '9'))
+           or (c = '_');
+  end;
+
+begin
+  n := Length(Body);
+  Sb := TStringBuilder.Create;
+  try
+    i := 1;
+    while i <= n do
+    begin
+      if (Body[i] = '$') and (i + 1 <= n) and (Body[i + 1] = '{') then
+      begin
+        NameStart := i + 2;
+        if (NameStart <= n) and IsFirstNameChar(Body[NameStart]) then
+        begin
+          j := NameStart + 1;
+          while (j <= n) and IsNameChar(Body[j]) do Inc(j);
+          if (j <= n) and (Body[j] = '}') then
+          begin
+            Name := Copy(Body, NameStart, j - NameStart);
+            Value := GetEnvironmentVariable(Name);
+            if Value <> '' then
+              Sb.Append(EnvSubstJsonEscape(Value))
+            else
+              (* Unset / empty env: keep the literal ${VAR_NAME} in
+                 the JSON so the operator can read config back and
+                 see exactly which marker didn't resolve. FromJSON
+                 accepts it as a normal string value. *)
+              Sb.Append(Copy(Body, i, j + 1 - i));
+            i := j + 1;
+            Continue;
+          end;
+        end;
+        (* Falls through: malformed ${...} -- missing closing brace,
+           empty name, lowercase first char. Preserve verbatim so an
+           accidental `$` in a value like a regex doesn't get eaten. *)
+      end;
+      Sb.Append(Body[i]);
+      Inc(i);
+    end;
+    Result := Sb.ToString;
+  finally
+    Sb.Free;
+  end;
 end;
 
 procedure SaveConfig(C: TConfig);

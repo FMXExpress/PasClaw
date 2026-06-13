@@ -18,6 +18,63 @@ pasclaw config path   # print the resolved path
 pasclaw config reset  # write a default config
 ```
 
+## `${VAR_NAME}` environment-variable substitution
+
+`config.json` string values can reference environment variables with the openclaw `${VAR_NAME}` syntax. At `LoadConfig` time PasClaw resolves every marker in the raw JSON body before parsing, so the rest of the codebase sees the substituted value.
+
+```json
+{
+  "providers": [
+    { "name": "anthropic",
+      "kind": "anthropic",
+      "api_key": "${ANTHROPIC_API_KEY}",
+      "model":   "claude-opus-4-7" }
+  ],
+  "gateway": {
+    "token": "${PASCLAW_GATEWAY_TOKEN}"
+  },
+  "channels": [
+    { "name":   "ops",
+      "kind":   "discord",
+      "target": "${OPS_DISCORD_WEBHOOK}" }
+  ]
+}
+```
+
+### Pattern
+
+`${[A-Z_][A-Z0-9_]*}` — matches openclaw exactly:
+
+- Uppercase only. Lowercase names don't match: `${api_key}` is left in place verbatim.
+- First character must be `A-Z` or `_`. Digit-first names don't match: `${1FOO}` is left in place.
+- Subsequent characters allow digits: `${FOO_42}` matches if `FOO_42` is set.
+- No dashes: `${WITH-DASH}` is left in place.
+
+### Behaviour on unset env
+
+When the named env var is unset (or set to empty), the literal `${VAR_NAME}` is left in the config string. This is deliberate — `pasclaw config show` then prints the unresolved marker so an operator can see exactly which variable didn't resolve. No error, no abort, no silent substitution to empty.
+
+### JSON safety
+
+Substituted values are JSON-escaped on the fly: `"`, `\`, and control bytes get the standard `\"` / `\\` / `\u00xx` treatment. An `ANTHROPIC_API_KEY=foo"bar` env value yields valid `{"api_key":"foo\"bar"}` JSON, not a broken parse.
+
+### Round-trip with `SaveConfig`
+
+Substitution is **not preserved** through `SaveConfig`. Any config-mutating CLI command (`pasclaw auth login`, `pasclaw model set`, `pasclaw skills install`, ...) round-trips through `TConfig.FromJSON` → memory → `TConfig.ToJSON`, and by that point the marker has already resolved to its literal value. The next `SaveConfig` writes the resolved value, not the marker.
+
+If you want a secret to live **only** in the environment and never get persisted, prefer the dedicated env-var path:
+
+- `PASCLAW_GATEWAY_TOKEN` (or `OPENCLAW_GATEWAY_TOKEN`) for the gateway bearer — see [Gateway § Authentication](./gateway.md#authentication).
+- Other dedicated env-only paths are documented per-feature.
+
+### No literal `${UPPER}` value
+
+There is no escape sequence for a literal `${UPPER}` string in a config value. Workarounds:
+
+- Use the dedicated env-var path mentioned above (doesn't go through substitution at all).
+- Downcase one letter so the pattern doesn't match: `${UPPER}` → `${Upper}`.
+- Wrap with extra chars: `${{UPPER}}` resolves the outer `{UPPER}` (not a match — no opening `$`), so the literal stays. Note this only works because `${UPPER}` requires the leading `$` directly before `{`.
+
 ## Defaults
 
 ```json

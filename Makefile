@@ -521,6 +521,21 @@ test-gateway-token: | $(BUILDDIR)
 	@PASCLAW_GATEWAY_TOKEN=sk-pasclaw-env-test-aaaaaaaa $(BUILDDIR)/gateway_token_tests --env-mode
 	@OPENCLAW_GATEWAY_TOKEN=sk-openclaw-env-test-bbbbbb $(BUILDDIR)/gateway_token_tests --env-mode
 
+# ${VAR_NAME} env-substitution in config.json. Pins the pattern
+# (uppercase only, [A-Z_][A-Z0-9_]*), the splice + JSON-escape, the
+# unset-env "leave the literal in place" diagnostic behaviour, and
+# the round-trip through TConfig.FromJSON when a marker is
+# unresolved. --env-mode pass inherits fixture vars from this rule
+# to exercise the actual splicing path FPC's startup-snapshotted
+# envp would otherwise block.
+test-config-env-subst: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/config_env_subst_tests.pas -o$(BUILDDIR)/config_env_subst_tests
+	@$(BUILDDIR)/config_env_subst_tests
+	@PASCLAW_CONFIG_TEST_VAR_A4F9='hello-from-env-aaaaaaaa' \
+	 PASCLAW_CONFIG_TRICKY_VAR_A4F9='hello"world\backslash' \
+	 $(BUILDDIR)/config_env_subst_tests --env-mode
+
 # OpenTelemetry traces (OTLP/HTTP+JSON). Pins span hierarchy,
 # attribute names (gen_ai.* semantic conventions), W3C traceparent
 # propagation in/out, sampling toggle, env-var override, JSON
@@ -544,4 +559,4 @@ test-fs-grep-tier5-6: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/fs_grep_tier5_6_tests.pas -o$(BUILDDIR)/fs_grep_tier5_6_tests
 	@$(BUILDDIR)/fs_grep_tier5_6_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-otel test-logger-level-quiet test-gateway-token
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-otel test-logger-level-quiet test-gateway-token test-config-env-subst
