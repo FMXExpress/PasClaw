@@ -21,7 +21,7 @@ services:
       branch: main
       deploy_on_push: true
     source_dir: /
-    dockerfile_path: digitalocean/Dockerfile
+    dockerfile_path: Dockerfile
 
     # Public HTTP -- App Platform terminates TLS in front of this port.
     http_port: 8088

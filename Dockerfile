@@ -1,14 +1,17 @@
-# PasClaw on DigitalOcean App Platform.
+# PasClaw on DigitalOcean App Platform (and any docker-build-aware host).
 #
 # Two-stage build: stage 1 is a Debian Bookworm + FPC 3.2 toolchain that
 # clones Indy at build time and compiles a single static-ish pasclaw binary.
 # Stage 2 is bookworm-slim with just the runtime DLLs the binary actually
-# links against (libssl3, libsqlite3). Final image is ~80-90 MB.
+# links against (libssl1.0 via snapshot.debian.org, libsqlite3). Final
+# image is ~80-90 MB.
 #
-# Build context is the repo root (`docker build -f digitalocean/Dockerfile .`).
-# The root-level .dockerignore strips docs/, samples/, cog/, browser/,
-# vendor/Indy/, etc. so the build context stays small (a few MB instead
-# of ~700 MB).
+# Lives at the repo root (rather than under digitalocean/) so DO App
+# Platform's UI auto-detect picks it up without the operator having to
+# touch the "Source Directory" / "Dockerfile Path" fields. Build context
+# is the repo root; the root-level .dockerignore strips docs/, samples/,
+# cog/, browser/, vendor/Indy/, etc. so the upload to the daemon stays
+# small (a few MB instead of ~700 MB).
 #
 # Runtime contract:
 #   - Listens on $PORT (default 8088) bound to 0.0.0.0.
