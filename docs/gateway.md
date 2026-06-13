@@ -209,6 +209,14 @@ PASCLAW_GATEWAY_TOKEN=sk-pasclaw-<secret> pasclaw gateway --addr 0.0.0.0
 
 `OPENCLAW_GATEWAY_TOKEN` is honoured as an alias for openclaw-compat — an operator pointing PasClaw at an existing openclaw `.env` file doesn't have to rename anything. `PASCLAW_GATEWAY_TOKEN` wins when both env vars are set.
 
+A third path: reference any env var inline via openclaw-style `${VAR_NAME}` substitution in `config.json` (see [Configuration § `${VAR_NAME}` environment-variable substitution](./configuration.md#var_name-environment-variable-substitution)):
+
+```json
+"gateway": { "token": "${MY_CORP_PASCLAW_TOKEN}" }
+```
+
+This pattern persists the resolved value through `SaveConfig`; for env-only secrets that should never end up in `config.json`, prefer the dedicated `PASCLAW_GATEWAY_TOKEN` env path above.
+
 Env overrides config when both are set. An env-only token does **not** leak into `config.json` — any config-mutating command (`pasclaw auth login`, `pasclaw model set`, `pasclaw skills install`, ...) round-trips through `SaveConfig` and `TConfig.ToJSON` emits only the in-config `gateway.token` field, never the env override. The middleware reads the effective value via `PasClaw.Config.GetEffectiveGatewayToken`.
 
 The `/v1/config` route masks `gateway.token` to `•••` for any authenticated caller — same shape `providers[].api_key` and `mcp_servers[].env` already use.
