@@ -1,0 +1,50 @@
+{
+  "default_provider": "anthropic",
+  "default_model":    "claude-opus-4-7",
+
+  "gateway": {
+    "log_level": "info",
+    "bind_addr": "0.0.0.0",
+    "port":      8088,
+    "token":     "${PASCLAW_GATEWAY_TOKEN}"
+  },
+
+  "providers": [
+    {
+      "name":     "anthropic",
+      "kind":     "anthropic",
+      "api_base": "https://api.anthropic.com",
+      "api_key":  "${ANTHROPIC_API_KEY}",
+      "model":    "claude-opus-4-7"
+    },
+    {
+      "name":     "openai",
+      "kind":     "openai",
+      "api_base": "https://api.openai.com",
+      "api_key":  "${OPENAI_API_KEY}",
+      "model":    "gpt-4o-mini"
+    }
+  ],
+
+  "fallbacks": ["openai"],
+
+  "web_search": {
+    "provider":    "brave",
+    "api_key":     "${PASCLAW_BRAVE_API_KEY}",
+    "max_results": 5
+  },
+
+  "diagnostics": {
+    "otel": {
+      "enabled":     false,
+      "endpoint":    "${OTEL_EXPORTER_OTLP_ENDPOINT}",
+      "serviceName": "pasclaw-do"
+    }
+  },
+
+  "sandbox": {
+    "restrict_to_workspace": true,
+    "shell_deny_enabled":    true,
+    "block_private_networks": true
+  }
+}
