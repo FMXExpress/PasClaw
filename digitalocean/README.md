@@ -101,7 +101,7 @@ curl $URL/v1/chat/completions \
 
 From an OpenAI client (Python / JS / etc.) point `base_url` at `https://your-app.ondigitalocean.app/v1` and pass the gateway token as `api_key`.
 
-The embedded web UI is at `https://your-app.ondigitalocean.app/`. Note: the web UI doesn't yet pass the gateway token from JS to its `/v1/*` fetches, so chat/stats/logs panels return 401 when the token is set. Either leave `PASCLAW_GATEWAY_TOKEN` unset (unauthenticated mode — only safe if the app is behind a private network) or wait for the follow-up that adds web-UI auth.
+The embedded web UI is at `https://your-app.ondigitalocean.app/`. When `PASCLAW_GATEWAY_TOKEN` is set, the first `/v1/*` fetch returns 401 and the page pops a prompt asking for the token — paste your `PASCLAW_GATEWAY_TOKEN`, it gets stored in browser `localStorage`, and every subsequent fetch (including SSE streams) carries it. Use the 🔑 button in the header to rotate or clear the stored token without reloading.
 
 ## Persistent state
 
