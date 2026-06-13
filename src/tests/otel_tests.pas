@@ -355,6 +355,81 @@ begin
   end;
 end;
 
+procedure TestConfigRoundTripPreservesOtelBlock;
+(* PR #242 P2 regression: TConfig.ToJSON had no diagnostics emission
+   block, so any command that called SaveConfig after LoadConfig
+   (auth, model, mcp, skill updates) rewrote config.json through
+   ToJSON and silently dropped the whole diagnostics tree. The user
+   re-ran the agent expecting traces and got nothing. Pin every
+   otel field through a ToJSON / FromJSON round-trip so a future
+   refactor that touches the emitter can't regress this silently
+   again. *)
+var
+  Src, Dst: TConfig;
+  Roundtripped: string;
+begin
+  Src := TConfig.Create;
+  Dst := TConfig.Create;
+  try
+    { Mutate every field away from defaults so a missing emission
+      shows up as a value drop, not a "happens to match default". }
+    Src.Diagnostics.Otel.Enabled     := True;
+    Src.Diagnostics.Otel.Endpoint    := 'https://collector.example.com:4318';
+    Src.Diagnostics.Otel.Protocol    := 'http/json';
+    Src.Diagnostics.Otel.ServiceName := 'pasclaw-prod';
+    Src.Diagnostics.Otel.SampleRate  := 0.25;
+    Src.Diagnostics.Otel.Traces      := True;
+    Src.Diagnostics.Otel.Metrics     := True;
+    Src.Diagnostics.Otel.Logs        := True;
+    SetLength(Src.Diagnostics.Otel.Headers, 2);
+    Src.Diagnostics.Otel.Headers[0].Name  := 'Authorization';
+    Src.Diagnostics.Otel.Headers[0].Value := 'Bearer test-token';
+    Src.Diagnostics.Otel.Headers[1].Name  := 'x-honeycomb-team';
+    Src.Diagnostics.Otel.Headers[1].Value := 'hc-key-123';
+
+    Roundtripped := Src.ToJSON;
+
+    { The emission must produce a diagnostics.otel block at all --
+      catch the regression directly so a future change that breaks
+      emitting any block shows up as an actionable failure, not just
+      "all the field assertions trivially pass because default ==
+      default". }
+    AssertContains(Roundtripped, '"diagnostics"',
+                   'ToJSON emits the diagnostics block');
+    AssertContains(Roundtripped, '"otel"',
+                   'ToJSON emits the diagnostics.otel block');
+
+    Dst.FromJSON(Roundtripped);
+    AssertTrue(Dst.Diagnostics.Otel.Enabled,
+               'enabled preserved');
+    AssertEq(Dst.Diagnostics.Otel.Endpoint,
+             'https://collector.example.com:4318',
+             'endpoint preserved');
+    AssertEq(Dst.Diagnostics.Otel.Protocol,    'http/json',
+             'protocol preserved');
+    AssertEq(Dst.Diagnostics.Otel.ServiceName, 'pasclaw-prod',
+             'serviceName preserved');
+    AssertTrue(Abs(Dst.Diagnostics.Otel.SampleRate - 0.25) < 0.0001,
+               'sampleRate preserved');
+    AssertTrue(Dst.Diagnostics.Otel.Traces,  'traces preserved');
+    AssertTrue(Dst.Diagnostics.Otel.Metrics, 'metrics preserved');
+    AssertTrue(Dst.Diagnostics.Otel.Logs,    'logs preserved');
+    AssertEqInt(Length(Dst.Diagnostics.Otel.Headers), 2,
+                'two headers preserved');
+    { Header order is not guaranteed across the JSON object dance;
+      check each by name. }
+    AssertTrue((Dst.Diagnostics.Otel.Headers[0].Name = 'Authorization') or
+               (Dst.Diagnostics.Otel.Headers[1].Name = 'Authorization'),
+               'Authorization header survived');
+    AssertTrue((Dst.Diagnostics.Otel.Headers[0].Name = 'x-honeycomb-team') or
+               (Dst.Diagnostics.Otel.Headers[1].Name = 'x-honeycomb-team'),
+               'x-honeycomb-team header survived');
+  finally
+    Src.Free;
+    Dst.Free;
+  end;
+end;
+
 procedure TestSampleRateZeroDropsTrace;
 { sampleRate=0 means "trace nothing". StartSpan must return nil for
   ROOT spans, so the rest of the call graph stays in no-op mode and
@@ -483,6 +558,8 @@ begin
   WriteLn('  ok: malformed traceparent does not break span creation');
   TestCurrentTraceparentForOutbound;
   WriteLn('  ok: CurrentTraceparent formats W3C header for outbound HTTP');
+  TestConfigRoundTripPreservesOtelBlock;
+  WriteLn('  ok: TConfig.ToJSON / FromJSON round-trip preserves diagnostics.otel (PR #242 P2)');
   TestSampleRateZeroDropsTrace;
   WriteLn('  ok: sampleRate=0.0 drops root spans (no buffer, no export)');
   TestErrorStatusEncoded;

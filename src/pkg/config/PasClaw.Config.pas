@@ -773,7 +773,7 @@ end;
 
 function TConfig.ToJSON: string;
 var
-  Root, Gw, Tmp: TJsonObject;
+  Root, Gw, Tmp, Diag, OtelHdrs: TJsonObject;
   Arr, FallbacksArr: TJsonArray;
   i: Integer;
 begin
@@ -794,6 +794,37 @@ begin
     Gw.PutStr ('bind_addr', Gateway.BindAddr);
     Gw.PutInt ('port',      Gateway.Port);
     Root.PutObject('gateway', Gw);
+
+    (* diagnostics.otel round-trip. Without this block, ANY command
+       that calls SaveConfig after a LoadConfig (auth, model, mcp,
+       skill updates) would rewrite config.json through ToJSON and
+       silently drop the whole diagnostics tree. The user re-runs
+       the agent expecting traces and gets nothing, with no error to
+       tell them why. The shape mirrors the FromJSON parse block
+       below 1-for-1 (same keys, same types, same headers nested
+       object). Symmetric with the gateway / sandbox blocks above:
+       always emitted, even at defaults, so a `pasclaw config show`
+       round-trip is stable. *)
+    Tmp := TJsonObject.Create;
+    Tmp.PutBool ('enabled',     Diagnostics.Otel.Enabled);
+    Tmp.PutStr  ('endpoint',    Diagnostics.Otel.Endpoint);
+    Tmp.PutStr  ('protocol',    Diagnostics.Otel.Protocol);
+    Tmp.PutStr  ('serviceName', Diagnostics.Otel.ServiceName);
+    Tmp.PutFloat('sampleRate',  Diagnostics.Otel.SampleRate);
+    Tmp.PutBool ('traces',      Diagnostics.Otel.Traces);
+    Tmp.PutBool ('metrics',     Diagnostics.Otel.Metrics);
+    Tmp.PutBool ('logs',        Diagnostics.Otel.Logs);
+    if Length(Diagnostics.Otel.Headers) > 0 then
+    begin
+      OtelHdrs := TJsonObject.Create;
+      for i := 0 to High(Diagnostics.Otel.Headers) do
+        OtelHdrs.PutStr(Diagnostics.Otel.Headers[i].Name,
+                        Diagnostics.Otel.Headers[i].Value);
+      Tmp.PutObject('headers', OtelHdrs);
+    end;
+    Diag := TJsonObject.Create;
+    Diag.PutObject('otel', Tmp);
+    Root.PutObject('diagnostics', Diag);
 
     Tmp := TJsonObject.Create;
     Tmp.PutBool('restrict_to_workspace',        Sandbox.RestrictToWorkspace);
