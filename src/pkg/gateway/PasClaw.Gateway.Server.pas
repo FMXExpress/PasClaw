@@ -202,6 +202,12 @@ uses
   PasClaw.Session.Store,
   PasClaw.Gateway.ToolView,
   PasClaw.Gateway.WebUI,
+  PasClaw.Gateway.Auth,     { CheckGatewayAuth -- bearer-token middleware
+                              fired at the top of OnCommandGet. Off when
+                              Cfg.Gateway.Token is empty (the default);
+                              when set, every non-exempt route requires
+                              `Authorization: Bearer <token>` or
+                              `?token=<token>` and returns 401 otherwise. }
   PasClaw.Otel;             { http.server.request span wrapping every
                               inbound /v1/* call. Parent context comes
                               from the incoming traceparent header (W3C
@@ -621,6 +627,32 @@ begin
     SetAttrStr(HttpSpan, 'http.request.method', ARequest.Command);
     SetAttrStr(HttpSpan, 'url.path',            Doc);
     SetAttrStr(HttpSpan, 'http.route',          Doc);
+
+  { Bearer-token gate. No-op when Cfg.Gateway.Token is empty
+    (the default -- preserves the unauthenticated shape every
+    pre-token deployment relied on). When the token IS set,
+    every non-exempt route requires `Authorization: Bearer
+    <token>` OR `?token=<token>` and gets a 401 otherwise.
+    Exempt routes: /, /v1/health, /v1/version, /webhooks/* --
+    rationale in PasClaw.Gateway.Auth's unit comment. The check
+    fires BEFORE the FMCPOnly early-exit below so the --mcp-port
+    isolation listener honours the same token. }
+  if not CheckGatewayAuth(FCfg.Gateway.Token,
+                          ARequest.Command, Doc,
+                          ARequest.RawHeaders.Values['Authorization'],
+                          ARequest.Params.Values['token']) then
+  begin
+    SetAttrInt(HttpSpan, 'http.response.status_code', 401);
+    SetStatus(HttpSpan, oscError, 'unauthorized');
+    { WWW-Authenticate names the scheme + realm so a stock
+      OpenAI client sees a recognisable challenge rather than a
+      bare 401. realm is informational only -- no realm-specific
+      auth scheme behind it. WriteJSON below sets ResponseNo. }
+    AResponse.CustomHeaders.AddValue('WWW-Authenticate', 'Bearer realm="pasclaw"');
+    WriteJSON(AResponse, 401,
+              '{"error":"unauthorized","message":"missing or invalid bearer token"}');
+    Exit;
+  end;
 
   { MCP-only listener: when this gateway was spun up as the
     --mcp-port companion, the only routes it honours are the
@@ -1493,12 +1525,17 @@ begin
   LoopCfg.Options       := DefaultChatOptions;
   ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
   LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
-  { No HTTP-header-derived identity yet -- the gateway terminates an
-    unauthenticated TCP socket, so any header value would be
-    client-asserted and unsafe to gate on. Stamp 'gateway:anon' so
-    downstream hooks/logs see SOMETHING; tightening this is a
-    follow-up alongside gateway auth. }
-  LoopCfg.Identity      := MakeIdentity('gateway', 'anon');
+  { Identity stamping. When Cfg.Gateway.Token is set, the request
+    reaching this point already passed CheckGatewayAuth's bearer
+    check (or hit an exempt route), so we stamp 'gateway:authed' so
+    `allow_senders: ["gateway:authed"]` is a meaningful allowlist
+    entry. When the token is empty (unauthenticated mode), keep the
+    legacy 'gateway:anon' so existing allowlists / hook gates don't
+    silently change shape. }
+  if FCfg.Gateway.Token <> '' then
+    LoopCfg.Identity := MakeIdentity('gateway', 'authed')
+  else
+    LoopCfg.Identity := MakeIdentity('gateway', 'anon');
   LoopCfg.OnText        := nil;
   LoopCfg.OnToolCall    := nil;
   LoopCfg.OnToolResult  := nil;
@@ -2041,7 +2078,10 @@ begin
     LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
     LoopCfg.Options       := DefaultChatOptions;
     ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
-    LoopCfg.Identity      := MakeIdentity('gateway', 'anon');
+    if FCfg.Gateway.Token <> '' then
+      LoopCfg.Identity := MakeIdentity('gateway', 'authed')
+    else
+      LoopCfg.Identity := MakeIdentity('gateway', 'anon');
     { Inject the composed PasClaw system prompt -- but only if the client
       didn't already supply one of their own. Third-party tooling calling
       /v1/chat/completions with its own persona/system message should win;
@@ -3789,7 +3829,10 @@ begin
       LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
       LoopCfg.Options       := DefaultChatOptions;
       ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
-      LoopCfg.Identity      := MakeIdentity('gateway', 'anon');
+      if FCfg.Gateway.Token <> '' then
+        LoopCfg.Identity := MakeIdentity('gateway', 'authed')
+      else
+        LoopCfg.Identity := MakeIdentity('gateway', 'anon');
       if not HasSystemMessage(Msgs) then
         LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
       RawTemp := Req.GetFloat('temperature', 0);

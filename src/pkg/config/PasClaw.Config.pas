@@ -43,6 +43,18 @@ type
     LogLevel: string;
     BindAddr: string;
     Port:     Integer;
+    { Inbound bearer token gating /v1/* routes. Empty (the default)
+      means unauthenticated -- every request reaches its route
+      handler with no check. When non-empty, OnCommandGet's auth
+      middleware requires `Authorization: Bearer <token>` (or the
+      query parameter `?token=<token>`) on every non-exempt route
+      and returns 401 otherwise. Exempt routes: `/` (web UI HTML),
+      `/v1/health`, `/v1/version`, and every `/webhooks/*` path
+      (those carry their own per-channel signature secret).
+      Env var $PASCLAW_GATEWAY_TOKEN overrides this at LoadConfig
+      time, same precedence shape `OTEL_EXPORTER_OTLP_ENDPOINT`
+      uses. Comparisons are constant-time. }
+    Token:    string;
   end;
 
   (*  TOtelHeader -- one header pair for OTLP exports. The
@@ -628,6 +640,7 @@ begin
   Gateway.LogLevel := 'info';
   Gateway.BindAddr := '127.0.0.1';
   Gateway.Port     := 8088;
+  Gateway.Token    := '';
   { OpenTelemetry diagnostics defaults: off, but pre-populated with
     the OTel Collector localhost address so flipping enabled=true is
     a one-key change. Sampling at 1.0 (trace every turn) is the right
@@ -793,6 +806,7 @@ begin
     Gw.PutStr ('log_level', Gateway.LogLevel);
     Gw.PutStr ('bind_addr', Gateway.BindAddr);
     Gw.PutInt ('port',      Gateway.Port);
+    if Gateway.Token <> '' then Gw.PutStr('token', Gateway.Token);
     Root.PutObject('gateway', Gw);
 
     (* diagnostics.otel round-trip. Without this block, ANY command
@@ -1115,6 +1129,7 @@ begin
       Gateway.LogLevel := Obj.GetStr('log_level', Gateway.LogLevel);
       Gateway.BindAddr := Obj.GetStr('bind_addr', Gateway.BindAddr);
       Gateway.Port     := Obj.GetInt('port',      Gateway.Port);
+      Gateway.Token    := Obj.GetStr('token',     Gateway.Token);
     finally
       Obj.Free;
     end;
@@ -1539,6 +1554,12 @@ begin
       so single-shot CLI commands like `pasclaw status` pay nothing
       for the wiring. }
     InitOtelFromConfig(Result);
+    { Gateway bearer-token env override. $PASCLAW_GATEWAY_TOKEN wins
+      over the config value when set non-empty -- standard ops-sets-
+      env-at-deploy contract, mirrors the OTel env var precedence.
+      Empty env is a no-op (the config value, if any, wins). }
+    if GetEnvironmentVariable('PASCLAW_GATEWAY_TOKEN') <> '' then
+      Result.Gateway.Token := GetEnvironmentVariable('PASCLAW_GATEWAY_TOKEN');
   end;
 end;
 

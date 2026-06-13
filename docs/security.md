@@ -112,6 +112,23 @@ The check happens after DNS resolution — a hostname that resolves to a private
 
 This is the "race-safe" property: when the agent reads, summarises, then writes, the writeback might race against another process editing the same file. Hashline catches the conflict and surfaces it as a tool error the model can react to (e.g. re-read and re-patch).
 
+## Gateway bearer token
+
+The HTTP gateway is unauthenticated by default — every `/v1/*` route is open and the OpenAI-compatible endpoints ignore the `api_key` field. The implicit safety is binding to `127.0.0.1` (loopback); operators who use `--addr 0.0.0.0` are exposing an unauthenticated agent loop.
+
+For network-bound deployments, set `gateway.token` (or `$PASCLAW_GATEWAY_TOKEN`):
+
+```json
+"gateway": {
+  "bind_addr": "0.0.0.0",
+  "token":     "sk-pasclaw-<shared-secret>"
+}
+```
+
+Every non-exempt route then requires `Authorization: Bearer <token>` (or `?token=<token>`). Exempt: `/`, `/v1/health`, `/v1/version`, `/webhooks/*`. See [Gateway](./gateway.md#authentication) for the full contract including the `gateway:authed` identity stamp `allow_senders` can gate on.
+
+The check is constant-time. For higher-assurance auth, terminate TLS + mTLS at a reverse proxy and run PasClaw loopback-bound.
+
 ## TLS
 
 All HTTPS provider and MCP calls go through Indy's OpenSSL IO handler. PasClaw refuses to connect to TLS endpoints if OpenSSL isn't loadable — there's no plaintext fallback path that could be misconfigured into a downgrade.

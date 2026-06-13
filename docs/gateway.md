@@ -187,6 +187,93 @@ Gateway-side stateless API calls (`/v1/chat`, `/v1/chat/completions`, `/v1/respo
 
 Default off: per-session JSONs of flag-off operators are byte-identical to the pre-feature schema.
 
+## Authentication
+
+Off by default. The gateway runs unauthenticated — every `/v1/*` route is open and the OpenAI-compatible endpoints accept any `api_key` string (it's ignored). The implicit safety is binding to `127.0.0.1` (loopback only); operators who run `--addr 0.0.0.0` are intentionally exposing an unauthenticated agent loop to the network.
+
+To gate every non-exempt route on a bearer token, set `gateway.token` in `config.json`:
+
+```json
+"gateway": {
+  "bind_addr": "0.0.0.0",
+  "port":      8088,
+  "token":     "sk-pasclaw-<your-shared-secret>"
+}
+```
+
+Or via environment (standard ops-sets-env-at-deploy pattern, mirrors `OTEL_EXPORTER_OTLP_ENDPOINT`):
+
+```sh
+PASCLAW_GATEWAY_TOKEN=sk-pasclaw-<secret> pasclaw gateway --addr 0.0.0.0
+```
+
+Env overrides config when both are set.
+
+### Calling an authenticated gateway
+
+Header (preferred — doesn't leak through access logs):
+
+```sh
+curl http://127.0.0.1:8088/v1/chat/completions \
+  -H "Authorization: Bearer sk-pasclaw-<secret>" \
+  -H 'Content-Type: application/json' \
+  -d '{"model":"claude-opus-4-7","messages":[{"role":"user","content":"hi"}]}'
+```
+
+OpenAI SDK — set the same value as `api_key`:
+
+```python
+client = OpenAI(base_url="http://127.0.0.1:8088/v1", api_key="sk-pasclaw-<secret>")
+```
+
+Query parameter — needed by browser `EventSource` which can't set headers:
+
+```sh
+curl 'http://127.0.0.1:8088/v1/logs?token=sk-pasclaw-<secret>'
+```
+
+When both are present, the header wins (logs may capture the query string; the header is authoritative).
+
+### Exempt routes
+
+These four route families bypass the bearer check even when `gateway.token` is set:
+
+| Route | Why exempt |
+|---|---|
+| `GET /` | Web UI HTML. Browsers can't attach a Bearer header on the initial GET; the JS inside attaches the token to subsequent `/v1/*` fetches. |
+| `GET /v1/health` | k8s liveness / readiness probes. A 401 would route the platform's probe into "instance unhealthy" even when the gateway is up. |
+| `GET /v1/version` | Build metadata. Frequently scraped; pinning a token wouldn't protect anything sensitive. |
+| `/webhooks/<channel>` | LINE / WhatsApp / Slack inbound paths. Upstream channels can't supply the gateway bearer; they carry their own per-channel signature secret instead (`x-line-signature`, `x-hub-signature-256`, etc.). |
+
+### What's gated
+
+Everything else, including `/v1/logs`, `/v1/stats`, `/v1/config`, `/v1/fs`, `/v1/fs/read`, `/mcp`, `/v1/mcp/rpc`. The `/v1/logs` ring buffer leaks per-tool argument bytes; `/v1/config` carries masked API keys + bot tokens; `/v1/fs/read` returns file contents up to 256 KB. Locking these down behind the token is the whole point.
+
+### Identity stamping
+
+Inbound requests reach `RunToolLoop` with `LoopCfg.Identity := MakeIdentity('gateway', '<sub>')` where `<sub>` is:
+
+- `anon` when no token is configured (unauthenticated mode).
+- `authed` when a token is configured (the request has already passed the bearer check by the time `LoopCfg` is built).
+
+Operators wanting to require token-auth for any gateway-driven turn can set:
+
+```json
+"allow_senders": ["gateway:authed", "telegram:*", "cli:*"]
+```
+
+A `gateway:anon` identity would then be dropped at the channel boundary — defence in depth in case the operator accidentally removes the `gateway.token` field without also un-binding from `0.0.0.0`.
+
+### Comparison shape
+
+`gateway.token` comparisons are constant-time so a timing oracle can't enumerate the token byte-by-byte. ASCII byte equality only — the token is whatever string the operator put in config.json (or the env var); there's no scheme-specific validation (no JWT, no signature, no expiry). For higher-assurance auth, terminate TLS + mTLS at a reverse proxy and let PasClaw run loopback-bound; `gateway.token` is for the "shared secret + HTTPS over the LAN" middle case openclaw targets.
+
+### Known limitations
+
+- The embedded web UI doesn't yet pass the token through. Operators using the web UI with `gateway.token` set will see the chat / stats / logs panels return 401 from JS. Workaround: bind the gateway to `127.0.0.1` and ssh-tunnel for browser access, or leave `gateway.token` empty and rely on loopback. Native web UI auth is a follow-up.
+- Token rotation requires a restart (config is read at `pasclaw gateway` startup, not per-request).
+- No per-tenant tokens / no JWT — single shared secret. The use case is "PasClaw is the team's shared HTTP agent, every team member has the same secret", not "multi-tenant SaaS".
+
 ## Trace correlation
 
 When OpenTelemetry is enabled (`diagnostics.otel.enabled` or `OTEL_EXPORTER_OTLP_ENDPOINT`), every inbound `/v1/*` request is wrapped in an `HTTP <method> <route>` server span. The `traceparent` request header (W3C Trace Context) becomes the parent context, so an upstream caller's trace stays connected to whatever the gateway then does (`openclaw.agent.turn`, `chat <model>`, `execute_tool <name>`). See [Observability](./observability.md).
