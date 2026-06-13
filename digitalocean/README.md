@@ -34,35 +34,43 @@ DO App Platform terminates TLS in front of the container's port 8088; **publicly
 ## Files
 
 ```
+/                              ← repo root
+└── Dockerfile                 ← lives here (not under digitalocean/) so DO's
+                                  UI auto-detect picks it up with no source-
+                                  directory edits. Build context = repo root,
+                                  COPY paths resolve to src/ / Makefile /
+                                  digitalocean/entrypoint.sh / etc.
+
 digitalocean/
 ├── README.md                  ← this file
-├── Dockerfile                 ← two-stage FPC build → ~80 MB runtime image
 ├── entrypoint.sh              ← stamps config.json from template on first boot, execs pasclaw gateway
 ├── config.template.json       ← config.json with ${VAR_NAME} markers (resolved at LoadConfig)
 ├── .env.example               ← every env var the App Spec references, with comments
 ├── Makefile                   ← local `docker build` + `docker run` smoke
 └── .do/
-    └── app.yaml               ← App Spec
+    └── app.yaml               ← App Spec (source_dir: /, dockerfile_path: Dockerfile)
 ```
 
 ## Deploy
 
-### Option A: paste the spec (no `doctl` required)
+### Option A: DigitalOcean dashboard "Create App" flow (recommended)
 
-1. Go to https://cloud.digitalocean.com/apps/new/spec.
-2. Paste the contents of [`.do/app.yaml`](./.do/app.yaml). Edit `github.repo` if you forked.
-3. On the **Environment Variables** screen, fill in the SECRET-marked vars:
+1. Go to https://cloud.digitalocean.com/apps/new.
+2. **Source:** select GitHub → pick your fork of this repo (or `FMXExpress/PasClaw` if you have access) → branch `main`.
+3. **Resource detection:** leave **Source Directory** blank (or `/`). DO auto-detects the root `Dockerfile`. **Do NOT set Source Directory to `digitalocean`** — that would break the build because the Dockerfile's `COPY Makefile` / `COPY src` lines reference the repo root.
+4. On the **Environment Variables** screen, fill in the SECRET-marked vars:
    - `PASCLAW_GATEWAY_TOKEN` — generate with `openssl rand -hex 32`.
    - `ANTHROPIC_API_KEY` — your Anthropic key (`sk-ant-...`).
    - Optional: `OPENAI_API_KEY`, `PASCLAW_BRAVE_API_KEY`, `OTEL_EXPORTER_OTLP_ENDPOINT`.
-4. Click **Create Resources**. First build takes ~5 minutes.
-5. Wait for the deploy. The dashboard shows a green health badge once `/v1/health` returns 200.
-6. Smoke test:
+   - Also set `PASCLAW_HOME=/data/pasclaw` and `PORT=8088` (non-secret) so the runtime matches the App Spec defaults.
+5. Click **Create Resources**. First build takes ~5 minutes.
+6. Wait for the deploy. The dashboard shows a green health badge once `/v1/health` returns 200.
+7. Smoke test:
    ```sh
    curl https://your-app.ondigitalocean.app/v1/health
    ```
 
-### Option B: `doctl` CLI
+### Option B: `doctl` CLI (uses the bundled App Spec)
 
 ```sh
 # Fork the repo and edit digitalocean/.do/app.yaml's github.repo if you

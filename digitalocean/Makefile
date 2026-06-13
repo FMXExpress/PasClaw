@@ -23,7 +23,7 @@ REPO_ROOT  := $(abspath $(dir $(firstword $(MAKEFILE_LIST)))/..)
 build:
 	cd $(REPO_ROOT) && docker build \
 	  -t $(IMAGE) \
-	  -f digitalocean/Dockerfile \
+	  -f Dockerfile \
 	  .
 
 # Run the image locally with a named volume mimicking the App Platform
