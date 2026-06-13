@@ -12,6 +12,22 @@
   whether PasClaw reads the file directly on the host. Operators
   inspect with `ls ~/.pasclaw/workspace/` on the host. ✓
 
+  Windows exception: a Linux container can't hold a `C:\` path, so
+  same-path is impossible there. ContainerPath maps the bind roots
+  to fixed POSIX mount points (workspace -> /workspace, tmp ->
+  /pasclaw/tmp, run -> /pasclaw/run) and `-w` / shell_exec's pinned
+  cwd are translated through it. shell_exec works; execute_code,
+  which embeds an absolute host path in the command it runs
+  (`bash C:\...\script`), still needs per-command path translation
+  and is a tracked Windows follow-up.
+
+  Quoting: the docker command is assembled as a single string and
+  handed to RunOneShot, which wraps it in `/bin/sh -c` on POSIX but
+  `cmd.exe /C` on Windows. ShellQuote therefore quotes per-platform
+  (single quotes on POSIX, double quotes on Windows) -- cmd.exe does
+  not strip single quotes, so POSIX-style quoting leaked literal
+  quotes into docker's argv on Windows ("invalid reference format").
+
   Container naming: `pasclaw-<session-id>` (truncated + sanitised
   for Docker's name restrictions). Same SessionId across multiple
   StartSession calls is idempotent -- StartSession is a no-op when
@@ -116,10 +132,93 @@ begin
 end;
 
 function ShellQuote(const S: string): string;
-{ Single-quote a value for inclusion in a /bin/sh -c "..." string.
-  Embedded single quotes get the canonical '\'' substitution. }
+{ Quote one argument for the shell RunOneShot wraps the command in.
+  This MUST match that shell, not the container's: RunOneShot runs
+  `/bin/sh -c <line>` on POSIX but `cmd.exe /C <line>` on Windows
+  (PasClaw.Platform), and cmd.exe does NOT treat single quotes as
+  quoting -- it passes them through literally, which is what made
+  `docker run ... 'debian:bookworm-slim'` reach docker with the
+  quotes intact ("invalid reference format").
+
+  POSIX: single-quote, with the canonical '\'' substitution for any
+  embedded single quote. Byte-identical to the previous release.
+
+  Windows: double-quote, doubling any embedded `"` ("" is how cmd.exe
+  escapes a quote inside a quoted run). The docker command line always
+  begins with the literal `docker`, so cmd.exe's strip-outer-quotes
+  rule (which only fires when the first character after /C is a quote)
+  never applies and the quotes survive to docker's argv intact. }
 begin
+  {$IFDEF MSWINDOWS}
+  Result := '"' + StringReplace(S, '"', '""', [rfReplaceAll]) + '"';
+  {$ELSE}
   Result := '''' + StringReplace(S, '''', '''\''''', [rfReplaceAll]) + '''';
+  {$ENDIF}
+end;
+
+{$IFDEF MSWINDOWS}
+function ToPosixSlashes(const S: string): string;
+begin
+  Result := StringReplace(S, '\', '/', [rfReplaceAll]);
+end;
+
+function MapUnderRoot(const HostPath, HostRoot, ContainerRoot: string;
+                      out Mapped: string): Boolean;
+{ True when HostPath is HostRoot or a descendant of it; yields the
+  container path with the root prefix swapped and separators
+  POSIX-normalised. Case-insensitive because Windows paths are. }
+var
+  Rest: string;
+begin
+  Result := False;
+  if (HostRoot = '') or (HostPath = '') then Exit;
+  if SameText(HostPath, HostRoot) then
+  begin
+    Mapped := ContainerRoot;
+    Exit(True);
+  end;
+  if (Length(HostPath) > Length(HostRoot)) and
+     SameText(Copy(HostPath, 1, Length(HostRoot) + 1), HostRoot + PathDelim) then
+  begin
+    Rest := Copy(HostPath, Length(HostRoot) + 2, MaxInt);
+    Mapped := ContainerRoot + '/' + ToPosixSlashes(Rest);
+    Result := True;
+  end;
+end;
+{$ENDIF}
+
+function ContainerPath(const HostPath: string): string;
+{ The path the Linux container sees for a given host path.
+
+  POSIX: identity. The bind mounts are same-path (host /x mounted at
+  container /x), so no translation -- byte-identical to before.
+
+  Windows: a Linux container cannot hold a `C:\` path, so same-path
+  is impossible. Map the three bind roots ($PASCLAW_HOME/workspace,
+  /tmp, /run) to fixed POSIX mount points and rewrite descendants
+  accordingly. This is what lets `-w <workspace>` and shell_exec's
+  workspace-pinned cwd resolve inside the container. (Commands that
+  embed an absolute *host* path in their text -- notably
+  execute_code's `bash C:\...\script` -- still need per-command path
+  translation; that's a tracked Windows follow-up, separate from the
+  shell_exec path this fixes.) }
+{$IFDEF MSWINDOWS}
+var
+  Home, M: string;
+{$ENDIF}
+begin
+  {$IFDEF MSWINDOWS}
+  if HostPath = '' then Exit('');
+  Home := GetHome;
+  if MapUnderRoot(HostPath, JoinPath(Home, 'workspace'), '/workspace', M) then Exit(M);
+  if MapUnderRoot(HostPath, JoinPath(Home, 'tmp'), '/pasclaw/tmp', M) then Exit(M);
+  if MapUnderRoot(HostPath, JoinPath(Home, 'run'), '/pasclaw/run', M) then Exit(M);
+  { Unknown root: best-effort POSIXify. Only meaningful if the operator
+    added a matching ExtraMount; otherwise it isn't mounted anyway. }
+  Result := ToPosixSlashes(HostPath);
+  {$ELSE}
+  Result := HostPath;
+  {$ENDIF}
 end;
 
 function DockerCliReachable(out ErrMsg: string): Boolean;
@@ -219,16 +318,18 @@ begin
 end;
 
 procedure AddBindIfExists(var Flags: string; const Path: string);
-{ Bind-mount Path inside the container at the same host path. ForceDirectories
-  first because docker silently creates the source if missing AS ROOT, which
-  then trips ENOENT on every operation the container does inside that path. }
+{ Bind-mount Path into the container. On POSIX the container side is the
+  same host path (ContainerPath is identity); on Windows it's the mapped
+  POSIX mount point, since a Linux container can't hold a `C:\` path.
+  ForceDirectories first because docker silently creates the source if
+  missing AS ROOT, which then trips ENOENT on every operation the
+  container does inside that path. Quoting goes through ShellQuote so
+  it matches the shell RunOneShot uses (cmd.exe on Windows). }
 begin
   if Path = '' then Exit;
   if not DirectoryExists(Path) then
     ForceDirectories(Path);
-  Flags := Flags + ' -v ' + '''' +
-           StringReplace(Path + ':' + Path, '''', '''\''''', [rfReplaceAll]) +
-           '''';
+  Flags := Flags + ' -v ' + ShellQuote(Path + ':' + ContainerPath(Path));
 end;
 
 procedure TDockerShellBackend.SpawnContainer(const SessionId: string);
@@ -257,7 +358,7 @@ begin
   AddBindIfExists(MountFlags, WorkspacePath);
   AddBindIfExists(MountFlags, JoinPath(GetHome, 'tmp'));
   AddBindIfExists(MountFlags, JoinPath(GetHome, 'run'));
-  MountFlags := MountFlags + ' -w ' + ShellQuote(WorkspacePath);
+  MountFlags := MountFlags + ' -w ' + ShellQuote(ContainerPath(WorkspacePath));
   if (FOpts.ExtraMounts <> nil) then
     for i := 0 to FOpts.ExtraMounts.Count - 1 do
       if Trim(FOpts.ExtraMounts[i]) <> '' then
@@ -377,7 +478,7 @@ begin
         EnvFlags := EnvFlags + ' -e ' + ShellQuote(ExtraEnv[i]);
 
   if WorkDir <> '' then
-    WorkDirFlag := ' -w ' + ShellQuote(WorkDir)
+    WorkDirFlag := ' -w ' + ShellQuote(ContainerPath(WorkDir))
   else
     WorkDirFlag := '';
 
