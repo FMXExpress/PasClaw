@@ -69,13 +69,33 @@ begin
   end;
 end;
 
+function IsQuietInvocation: Boolean;
+{ Suppress the banner whenever the user passed --quiet or -q on the
+  command line. The actual semantic suppression (tool decoration,
+  token line, assistant header) lives inside Cmd.Agent's RunSingleTurn,
+  but the banner is printed BEFORE arg parsing in this file, so we
+  need an early scan here -- same shape IsStdioMCPInvocation uses
+  for the mcp-stdio case. Flag form matches what Cmd.Agent.ParseArgs
+  accepts, so users only have to type --quiet once. }
+var
+  i: Integer;
+  Arg: string;
+begin
+  Result := False;
+  for i := 1 to ParamCount do
+  begin
+    Arg := ParamStr(i);
+    if (Arg = '--quiet') or (Arg = '-q') then Exit(True);
+  end;
+end;
+
 var
   ExitCode_: Integer;
 begin
   { Detect color support before any output so the banner respects NO_COLOR. }
   CliUI_Init(EarlyColorDisabled);
 
-  if not IsStdioMCPInvocation then
+  if not (IsStdioMCPInvocation or IsQuietInvocation) then
     PrintBanner;
   ApplyTimezoneFromEnv;
 

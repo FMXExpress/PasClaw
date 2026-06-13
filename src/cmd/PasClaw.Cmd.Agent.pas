@@ -94,15 +94,31 @@ type
     { --backend local|docker. Empty = use Cfg.ShellBackend. Override
       is per-invocation; we don't persist it to config. }
     BackendOverride: string;
+    (* --quiet / -q: machine-friendly output. RunSingleTurn drops the
+       `assistant (provider/model):` header, every tool-call /
+       tool-result preview line, and the trailing dim
+       [tokens in=... out=... iters=...] line, leaving only the
+       assistant's final reply on stdout (followed by a single
+       newline). PrintBanner is also skipped at the dpr level via
+       IsQuietInvocation. Designed for Replicate / Lambda / curl
+       pipelines where the caller wants the model's answer as the
+       sole stdout payload. Interactive mode ignores this; quiet
+       only makes sense for one-shot -m. *)
+    Quiet: Boolean;
   end;
 
   TLoopHandlers = class
+    Quiet: Boolean;  { when True, OnToolCall / OnToolResult emit nothing.
+                       Set by Cmd_Agent_Run before passing to BuildLoopConfig
+                       so machine-friendly callers (-q / --quiet) get the
+                       assistant reply on stdout with no per-tool decoration. }
     procedure OnToolCall(const Name, ArgsJSON: string);
     procedure OnToolResult(const Name, ResultText, Err: string);
   end;
 
 procedure TLoopHandlers.OnToolCall(const Name, ArgsJSON: string);
 begin
+  if Quiet then Exit;
   PrintLn(Ansi.Magenta + '› tool ' + Name + Ansi.Reset + ' ' + Copy(ArgsJSON, 1, 200));
 end;
 
@@ -110,6 +126,7 @@ procedure TLoopHandlers.OnToolResult(const Name, ResultText, Err: string);
 var
   Preview: string;
 begin
+  if Quiet then Exit;
   if Err <> '' then
     PrintLn(Ansi.Red + '  ✗ ' + Err + Ansi.Reset)
   else
@@ -132,6 +149,7 @@ begin
   Result.NoTools       := False;
   Result.NoMCP         := False;
   Result.NoHashline    := False;
+  Result.Quiet         := False;
 end;
 
 function ParseArgs(const Argv: array of string; var A: TAgentArgs): Boolean;
@@ -157,6 +175,7 @@ begin
     if Argv[i] = '--no-tools'    then begin A.NoTools    := True; Inc(i); Continue; end;
     if Argv[i] = '--no-mcp'      then begin A.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline' then begin A.NoHashline := True; Inc(i); Continue; end;
+    if (Argv[i] = '--quiet') or (Argv[i] = '-q') then begin A.Quiet := True; Inc(i); Continue; end;
     if Argv[i] = '--session'     then begin if i = High(Argv) then Exit(False); A.Session := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--backend'     then begin if i = High(Argv) then Exit(False); A.BackendOverride := Argv[i + 1]; Inc(i, 2); Continue; end;
     Inc(i);
@@ -386,7 +405,16 @@ begin
   else                       Result := S;
 end;
 
-procedure RunSingleTurn(const Cfg: TConfig; const A: TAgentArgs; const Prompt: string);
+function RunSingleTurn(const Cfg: TConfig; const A: TAgentArgs;
+                       const Prompt: string): Boolean;
+(* Returns True on a clean turn (provider resolved, RunToolLoop
+   returned True) and False on either failure mode. Cmd_Agent_Run
+   maps False -> process exit code 1 so scripts using --quiet (or
+   anything else parsing $?) treat a missing provider or a failed
+   tool loop as a failed invocation. PR #243 P2: prior behaviour
+   always exited 0 even when the assistant produced no reply,
+   which silently masked provider-config errors in machine-readable
+   pipelines. *)
 var
   Provider: ILLMProvider;
   Err: string;
@@ -401,11 +429,27 @@ var
   BgCoord: TBackgroundSpawnCoordinator;
   OneShotSessionId: string;
 begin
+  { Default to True; only flip to False on a known failure path.
+    Any code path that hits Exit before producing a real assistant
+    reply MUST set Result := False first so Cmd_Agent_Run can map
+    it to a non-zero process exit. }
+  Result := True;
   if not PickProvider(Cfg, A, Provider, Err) then
   begin
-    PrintLn(Ansi.Yellow + '(offline preview -- ' + Err + ')' + Ansi.Reset);
-    PrintLn('You: ' + Prompt);
-    PrintLn('Assistant: <provider not configured; run `pasclaw onboard`>');
+    Result := False;
+    if A.Quiet then
+      { Quiet mode: a single undecorated line so scripts have
+        SOMETHING on stdout to surface, without the banner-y "(offline
+        preview)" / "You: ..." mock-conversation rendering. Exit
+        code (non-zero, via Cmd_Agent_Run) is the authoritative
+        success signal. }
+      PrintLn('pasclaw error: provider not configured (' + Err + ')')
+    else
+    begin
+      PrintLn(Ansi.Yellow + '(offline preview -- ' + Err + ')' + Ansi.Reset);
+      PrintLn('You: ' + Prompt);
+      PrintLn('Assistant: <provider not configured; run `pasclaw onboard`>');
+    end;
     Exit;
   end;
 
@@ -428,6 +472,12 @@ begin
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   BgCoord := MaybeRegisterBackgroundSpawnTools(Cfg, Provider, Reg, Model);
   Handlers := TLoopHandlers.Create;
+  { Propagate --quiet so the per-tool decoration the loop fires
+    through the OnToolCall / OnToolResult callbacks no-ops. Combined
+    with the header + token-line skips below, the only thing
+    RunSingleTurn writes to stdout in quiet mode is the assistant's
+    final reply (plus a single trailing newline). }
+  Handlers.Quiet := A.Quiet;
   { Allocate a one-shot session id so the active shell backend
     (docker, ssh, ...) actually isolates this turn. Codex P1 on
     PR #233: without StartShellSession the docker backend's empty-
@@ -446,12 +496,31 @@ begin
 
     LoopCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers, Prompt);
 
-    PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ' (' + Provider.GetName + '/' + Model + '):');
+    if not A.Quiet then
+      PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset +
+              ' (' + Provider.GetName + '/' + Model + '):');
     if RunToolLoop(LoopCfg, Msgs, Loop) then
-      PrintLn(MaybeRender(Cfg, Loop.Content))
+    begin
+      { In quiet mode skip MaybeRender -- the markdown renderer adds
+        ANSI styling that defeats the "machine-readable plain text"
+        contract --quiet promises. The model's raw reply text goes
+        straight to stdout, no decoration. }
+      if A.Quiet then
+        PrintLn(Loop.Content)
+      else
+        PrintLn(MaybeRender(Cfg, Loop.Content));
+    end
     else
+    begin
+      Result := False;
+      { Failed loop: a "(loop failed)" sentinel still goes to stdout
+        in both modes so a caller eyeballing the output sees what
+        happened, but Result := False bubbles up so Cmd_Agent_Run
+        exits non-zero (PR #243 P2 fix). }
       PrintLn('(loop failed)');
-    if Loop.TotalUsage.InputTokens + Loop.TotalUsage.OutputTokens > 0 then
+    end;
+    if (not A.Quiet) and
+       (Loop.TotalUsage.InputTokens + Loop.TotalUsage.OutputTokens > 0) then
       PrintLn(Ansi.Dim + FormatTokenLine(Loop.TotalUsage, Loop.Iterations) + Ansi.Reset);
   finally
     CloseShellSession(OneShotSessionId);
@@ -1258,7 +1327,7 @@ begin
   begin
     PrintLnErr('usage: pasclaw agent [-m "msg"] [--model M] [--provider P] [--system S]');
     PrintLnErr('                     [--thinking low|medium|high] [--max-tokens N]');
-    PrintLnErr('                     [--max-iterations N] [--no-tools]');
+    PrintLnErr('                     [--max-iterations N] [--no-tools] [-q|--quiet]');
     Exit(1);
   end;
 
@@ -1279,9 +1348,24 @@ begin
     end;
   end;
   try
-    if A.Message <> '' then RunSingleTurn(Cfg, A, A.Message)
-    else                    RunInteractive(Cfg, A);
-    Result := 0;
+    if A.Message <> '' then
+    begin
+      { One-shot path: RunSingleTurn returns False on (a) no provider
+        configured or (b) a failed tool loop. Map either to exit 1 so
+        `pasclaw agent --quiet -m "..."` callers checking $? see real
+        failures instead of a silently-zero exit code that lies about
+        success. PR #243 P2. Interactive mode has no equivalent
+        return -- session lifecycle is the user's signal there. }
+      if RunSingleTurn(Cfg, A, A.Message) then
+        Result := 0
+      else
+        Result := 1;
+    end
+    else
+    begin
+      RunInteractive(Cfg, A);
+      Result := 0;
+    end;
   finally
     Cfg.Free;
   end;
