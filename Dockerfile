@@ -32,10 +32,27 @@ FROM debian:bookworm AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Why each fp-units-* package is here (an unhinted `fp-compiler` install
+# misses several units the build needs, with the failure surfacing as a
+# generic "Can't find unit X" -- the apt-units mapping below is the part
+# you can't grep for from the FPC error):
+#   fp-units-base  -- classic Classes / SysUtils / StrUtils / DateUtils
+#   fp-units-fcl   -- SyncObjs (TCriticalSection used by PasClaw.Otel,
+#                     PasClaw.Logger, PasClaw.Tools.OutputCache, MCP, etc.)
+#   fp-units-db    -- fcl-db / SQLite3Connection (memory_search, kb_*,
+#                     session_search)
+#   fp-units-misc  -- iconvenc (web_fetch HTML-to-text decoder)
+#   fp-units-rtl   -- belt-and-suspenders; fp-compiler usually pulls it,
+#                     but Debian's dependency chain has flexed before.
+#   lazarus-src    -- Masks unit (PasClaw.Tools.FS's fs_grep `include`
+#                     glob filter) -- see LAZUTILS_DIR override below.
 RUN apt-get update && apt-get install -y --no-install-recommends \
       fp-compiler \
+      fp-units-base \
+      fp-units-fcl \
       fp-units-db \
       fp-units-misc \
+      fp-units-rtl \
       lazarus-src \
       libssl-dev \
       libsqlite3-dev \
