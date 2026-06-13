@@ -40,7 +40,7 @@ pasclaw config reset  # write a default config
 |---|---|---|
 | `default_provider` | `"anthropic"` | Name of the entry in `providers[]` used when nothing overrides. |
 | `default_model` | `"claude-opus-4-7"` | Default model id passed to the provider. |
-| `fallbacks` | `[]` | Names of provider entries to walk on `429`/`5xx`/network error from the primary. Configure via `pasclaw auth fallback openai gemini`. |
+| `fallbacks` | `[]` | Names of provider entries to walk on `429`/`5xx`/network error from the primary. Edit the array in `config.json` directly. |
 | `gateway.log_level` | `"info"` | Logger level. `--quiet`/`-q` clamps to `error` for the whole process. |
 | `gateway.bind_addr` | `"127.0.0.1"` | HTTP gateway bind. |
 | `gateway.port` | `8088` | HTTP gateway port. |

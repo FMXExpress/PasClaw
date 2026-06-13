@@ -53,7 +53,12 @@ The source of truth is `src/pkg/providers/PasClaw.Providers.Catalog.pas`. To add
 pasclaw auth login anthropic       # prompt for API key, store in providers[].api_key
 pasclaw auth logout anthropic
 pasclaw auth status                # show which providers have keys
-pasclaw auth fallback openai gemini
+```
+
+To set the fallback chain, edit `fallbacks` in `config.json` directly:
+
+```json
+"fallbacks": ["openai", "gemini"]
 ```
 
 Per-provider entry in `config.json`:

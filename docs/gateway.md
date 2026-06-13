@@ -16,8 +16,7 @@ pasclaw gateway --whatsapp                          # also $PASCLAW_WHATSAPP_*
 pasclaw gateway --matrix                            # also $PASCLAW_MATRIX_HOMESERVER + $PASCLAW_MATRIX_TOKEN
 pasclaw gateway --irc                               # also $PASCLAW_IRC_*
 pasclaw gateway --email                             # SMTP send + IMAP poll
-pasclaw gateway --discord --token <BOT_TOKEN>
-pasclaw gateway --slack                             # Events API webhook
+pasclaw gateway --mcp-port 9090                     # spawn a second MCP-only listener (--mcp-allow-write opts in to mutating tools)
 pasclaw gateway --no-tools --no-mcp --no-hashline
 
 pasclaw serve

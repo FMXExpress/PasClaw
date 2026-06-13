@@ -7,10 +7,8 @@ PasClaw can run as a chatbot on multiple messaging platforms. Each channel trans
 | Channel | Transport | Implementation |
 |---|---|---|
 | **Telegram** | Long-poll bot | `--telegram --token <BOT_TOKEN>` |
-| **Discord** | Bot polling | `--discord --token <BOT_TOKEN>` |
 | **LINE** | Webhook | `--line` + `$PASCLAW_LINE_TOKEN` + `$PASCLAW_LINE_SECRET` |
 | **WhatsApp** | Cloud API webhook | `--whatsapp` + `$PASCLAW_WHATSAPP_{TOKEN,PHONE_ID,VERIFY_TOKEN,APP_SECRET}` |
-| **Slack** | Events API webhook + Incoming Webhook reply | `--slack` |
 | **Matrix** | REST `/sync` long-poll (federated, self-hostable) | `--matrix` + `$PASCLAW_MATRIX_HOMESERVER` + `$PASCLAW_MATRIX_TOKEN` |
 | **IRC** | `TIdIRC` | `--irc` + `$PASCLAW_IRC_{SERVER,NICK,CHANNEL}` |
 | **Email** | SMTP send + IMAP poll | `--email`, env-var configured (see `PasClaw.Channels.Email`) |
@@ -19,6 +17,8 @@ PasClaw can run as a chatbot on multiple messaging platforms. Each channel trans
 
 | Channel | Use case |
 |---|---|
+| **Discord** | Bot webhook URL — post via `pasclaw post discord <url>` or `send_message`. The `PasClaw.Channels.Discord` unit has an in-progress bot-polling path but it is not yet wired into the gateway flag surface. |
+| **Slack** | Incoming Webhook URL — post via `pasclaw post slack <url>` or `send_message`. The `PasClaw.Channels.Slack` unit has an Events API webhook receiver but it is not yet wired into the gateway flag surface. |
 | **Microsoft Teams** | Incoming Webhook URL — post agent replies into a channel. |
 | **Generic Webhook** | Arbitrary POST sink for custom integrations. |
 
@@ -30,8 +30,6 @@ pasclaw gateway --line
 pasclaw gateway --whatsapp
 pasclaw gateway --matrix
 pasclaw gateway --irc
-pasclaw gateway --discord --token <BOT_TOKEN>
-pasclaw gateway --slack
 pasclaw gateway --email
 ```
 
@@ -88,7 +86,7 @@ Webhook. Requires:
 - `$PASCLAW_LINE_TOKEN` — channel access token.
 - `$PASCLAW_LINE_SECRET` — channel secret (used to verify `X-Line-Signature` on inbound events).
 
-Point LINE's webhook URL at `https://<your-gateway>/v1/line/webhook`.
+Point LINE's webhook URL at `https://<your-gateway>/webhooks/line`.
 
 ### WhatsApp
 
@@ -99,13 +97,15 @@ Meta's Cloud API. Requires:
 - `$PASCLAW_WHATSAPP_VERIFY_TOKEN` — user-chosen string used to verify Meta's `GET /webhooks/whatsapp` subscription handshake.
 - `$PASCLAW_WHATSAPP_APP_SECRET` — Meta App Secret used to validate `X-Hub-Signature-256` on inbound events.
 
-Point Meta's webhook URL at `https://<your-gateway>/v1/whatsapp/webhook`.
+Point Meta's webhook URL at `https://<your-gateway>/webhooks/whatsapp`. Both the `GET` subscription handshake and the `POST` event delivery hit the same path.
 
 ### Slack
 
-Events API webhook + Incoming Webhook reply. Inbound events go to `https://<your-gateway>/v1/slack/events`. The bot replies via the channel's Incoming Webhook URL (set via `app.config` or the per-channel config).
+Currently outbound-only via `pasclaw post slack <webhook-url>` and the `send_message` tool. The `PasClaw.Channels.Slack` unit ships an Events API webhook receiver (`SlackChallengeResponse` + signature validation) — landing the inbound path on the gateway flag surface is a follow-up.
 
-For environments behind a firewall, use Slack's Socket Mode connector running on a public host that proxies to your gateway.
+### Discord
+
+Currently outbound-only via `pasclaw post discord <webhook-url>` and the `send_message` tool. The `PasClaw.Channels.Discord` unit ships `TDiscordBot` with a polling-fetch loop — wiring it into a `--discord` gateway flag is a follow-up.
 
 ### Matrix
 

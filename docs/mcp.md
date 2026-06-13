@@ -89,15 +89,14 @@ curl http://127.0.0.1:8088/mcp \
 
 ### Allowlist + read-only mode
 
-The gateway can be locked down for exposed MCP:
+The gateway can be locked down for exposed MCP. By default the inbound MCP server refuses mutating tools (`fs_write`, `fs_edit_hashline`, `shell_exec`, `execute_code`); `--mcp-allow-write` opts in to them. There is no per-tool allowlist flag — the allowlist is the read-only / read-write split.
 
 ```sh
-pasclaw gateway --mcp-allow fs_read,fs_list,memory_search    # only these tools advertised
-pasclaw gateway --mcp-read-only                               # refuse mutating tools (fs_write, shell_exec, ...)
-pasclaw gateway --mcp-only --mcp-port 9090                    # second listener: MCP-only routes
+pasclaw gateway --mcp-port 9090                       # spawn a second MCP-only listener on port 9090
+pasclaw gateway --mcp-port 9090 --mcp-allow-write     # second listener with mutating tools enabled
 ```
 
-`--mcp-only` spins a second `TGatewayServer` instance on the named port that honours only the MCP routes plus `/v1/health`. Use to isolate MCP traffic from the human-facing routes.
+`--mcp-port <p>` spawns a second `TGatewayServer` instance on the named port that honours only the MCP routes (`/mcp`, `/v1/mcp/rpc`) plus `/v1/health`. The main gateway port keeps the full route table. Use the second listener to isolate MCP traffic from the human-facing routes (different firewall rules, different network).
 
 ## See also
 

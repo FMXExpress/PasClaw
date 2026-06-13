@@ -95,8 +95,9 @@ Full-screen terminal UI. **Delphi build**: positioned two-pane (`MVCFramework.Co
 pasclaw auth status
 pasclaw auth login anthropic
 pasclaw auth logout anthropic
-pasclaw auth fallback openai gemini     # set Cfg.Fallbacks
 ```
+
+The fallback provider chain is set by editing the `fallbacks` array in `config.json` directly (`"fallbacks": ["openai", "gemini"]`).
 
 Prompts for an API key and stores it in the matching provider entry. See [Providers](./providers.md).
 
@@ -111,10 +112,11 @@ pasclaw gateway --whatsapp                          # also $PASCLAW_WHATSAPP_{TO
 pasclaw gateway --matrix                            # also $PASCLAW_MATRIX_HOMESERVER + $PASCLAW_MATRIX_TOKEN
 pasclaw gateway --irc                               # also $PASCLAW_IRC_{SERVER,NICK,CHANNEL}
 pasclaw gateway --email                             # SMTP send + IMAP poll
-pasclaw gateway --discord --token <BOT_TOKEN>
-pasclaw gateway --slack                             # Events API webhook
+pasclaw gateway --mcp-port 9090                     # spawn a second MCP-only listener
 pasclaw gateway --no-tools --no-mcp --no-hashline
 ```
+
+Discord and Slack are currently outbound-only via `pasclaw post discord <url> "..."` / `pasclaw post slack <url> "..."` and the `send_message` model-facing tool — no `--discord` / `--slack` flag on the gateway yet.
 
 Starts the full surface: HTTP server, embedded web UI, OpenAI-compatible endpoints, cron, optional chat-channel bots. See [Gateway and OpenAI-compatible API](./gateway.md) for the route table and [Channels](./channels.md) for channel wiring.
 

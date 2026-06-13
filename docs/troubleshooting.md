@@ -135,7 +135,7 @@ Check stderr for the full `[error] gateway: handler crashed:` line. The stack tr
 
 ### `MCP-only listener; route not found`
 
-You hit a non-MCP route on a listener spawned with `--mcp-only`. By design — that listener only honours `/mcp`, `/v1/mcp/rpc`, and `/v1/health`. Use the main gateway port for `/v1/chat`, etc.
+You hit a non-MCP route on the listener spawned by `--mcp-port <p>`. By design — that listener only honours `/mcp`, `/v1/mcp/rpc`, and `/v1/health`. Use the main gateway port for `/v1/chat`, etc.
 
 ## MCP
 
