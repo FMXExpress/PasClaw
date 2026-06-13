@@ -364,7 +364,7 @@ function Tool_ExecuteCodeImpl(Registry: TToolRegistry;
   (parent + subagent, or two parallel tool calls) can't trample
   each other's bindings. }
 var
-  Lang, Code, ResolvedLang, ScriptPath, Reason, WorkDir, Cmd, Out_: string;
+  Lang, Code, ResolvedLang, ScriptPath, RunScriptPath, Reason, WorkDir, Cmd, Out_: string;
   Argv: TStringArray;
   ExitCode, i: Integer;
   Server: TToolRPCServer;
@@ -403,7 +403,11 @@ begin
       Server   := TToolRPCServer.Create(Registry, InfoPath);
       Server.Start;
       ExtraEnv := TStringList.Create;
-      ExtraEnv.Add('PASCLAW_TOOL_RPC_INFO=' + InfoPath);
+      { The script runs in the active backend's namespace, so the env
+        value must be the path IT sees. Identity on the local backend
+        and on POSIX docker; mapped on Windows docker. }
+      ExtraEnv.Add('PASCLAW_TOOL_RPC_INFO=' +
+                   HostToContainerPathViaBackend(InfoPath));
     except
       on E: Exception do
       begin
@@ -416,7 +420,14 @@ begin
   try
     if not MakeTempScript(ResolvedLang, Code, ScriptPath, ErrMsg) then Exit;
     try
-      if not BuildExecuteCodeArgv(ResolvedLang, ScriptPath, Argv) then
+      { The temp file is written/deleted at the HOST path (ScriptPath),
+        but the command that runs it must reference the path the active
+        backend sees. Identity on the local backend and on POSIX docker
+        (same-path bind mount); on Windows docker the host C:\...\tmp\
+        script is mapped to its /pasclaw/tmp mount point -- otherwise
+        `bash C:\...\script` would not exist inside the Linux container. }
+      RunScriptPath := HostToContainerPathViaBackend(ScriptPath);
+      if not BuildExecuteCodeArgv(ResolvedLang, RunScriptPath, Argv) then
       begin
         ErrMsg := 'execute_code: unsupported lang "' + Lang + '"';
         Exit;

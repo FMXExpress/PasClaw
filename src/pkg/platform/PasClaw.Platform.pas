@@ -140,6 +140,21 @@ function RunOneShotWithEnv(const Cmd, WorkingDir: string;
                             ExtraEnv: TStringList;
                             out Output: string): Integer;
 
+(* Run a program directly from its argv vector -- NO shell. Captures
+   combined stdout+stderr (UTF-8) up to OneShotMaxBytes; returns the
+   exit code, -1 on spawn failure, 124 if output was truncated and the
+   child killed.
+
+   Unlike RunOneShot there is no `/bin/sh -c` or `cmd.exe /C` wrapper,
+   so Args reach the program verbatim: no word-splitting, no glob, no
+   quote-stripping, and -- crucially on Windows -- no cmd.exe `%VAR%`
+   percent-expansion of the arguments. Callers that assemble a command
+   from model/untrusted text (the Docker backend) use this to keep that
+   text out of a host shell entirely. *)
+function RunArgvCapture(const Exe: string; Args: TStrings;
+                        const WorkingDir: string;
+                        out Output: string): Integer;
+
 (* Decode a byte buffer captured from a child shell's stdout/stderr
    into a UTF-8-encoded Pascal string suitable for tool output. On
    Windows, cmd.exe writes its stdout in the SYSTEM OEM CODEPAGE
@@ -1034,6 +1049,67 @@ end;
 function RunOneShot(const Cmd: string; out Output: string): Integer;
 begin
   Result := RunOneShot(Cmd, '', Output);
+end;
+
+function RunArgvCapture(const Exe: string; Args: TStrings;
+                        const WorkingDir: string; out Output: string): Integer;
+{ Cross-platform: built on the TStdioProcess abstraction (TProcess on
+  FPC, CreateProcessW on Delphi/Windows, fork+execvp on Delphi/POSIX) so
+  there is exactly one implementation. MergeStderr mirrors RunOneShot's
+  combined-capture contract. Drain pattern matches RunOneShot and
+  MCP.StdioClient: read what's available, and only stop once the pipe is
+  empty AND the child has been reaped (Running populates ExitCode on the
+  transition). }
+var
+  P: TStdioProcess;
+  M: TMemoryStream;
+  Buf: array[0..ReadBufferSize - 1] of Byte;
+  Bytes: TBytes;
+  N, Total: Integer;
+  Overflow: Boolean;
+begin
+  Result := -1;
+  Output := '';
+  P := TStdioProcess.Create;
+  M := TMemoryStream.Create;
+  try
+    if not P.Spawn(Exe, Args, {MergeStderr=}True, WorkingDir) then Exit;
+    Total := 0;
+    Overflow := False;
+    while True do
+    begin
+      N := P.ReadAvailable(Buf, SizeOf(Buf));
+      if N > 0 then
+      begin
+        M.WriteBuffer(Buf, N);
+        Inc(Total, N);
+        if Total > OneShotMaxBytes then
+        begin
+          Overflow := True;
+          P.Terminate;
+          Break;
+        end;
+      end
+      else if not P.Running then
+        Break
+      else
+        Sleep(20);
+    end;
+    if Overflow then
+      Result := 124          { killed for exceeding OneShotMaxBytes; matches RunOneShot }
+    else
+      Result := P.ExitCode;
+    if M.Size > 0 then
+    begin
+      SetLength(Bytes, M.Size);
+      M.Position := 0;
+      M.ReadBuffer(Bytes[0], M.Size);
+      Output := DecodeShellOutputBytes(Bytes, Length(Bytes));
+    end;
+  finally
+    M.Free;
+    P.Free;
+  end;
 end;
 
 end.

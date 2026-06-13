@@ -81,6 +81,19 @@ type
                   out Output: string): Integer;
   end;
 
+  { Optional capability. A backend that runs commands in a DIFFERENT
+    filesystem namespace than the host (docker: a Linux container, and
+    on Windows the host path can't even exist inside it) implements this
+    so a caller that bakes an absolute HOST path into a command --
+    notably execute_code's `bash <script>` -- can translate it to the
+    path the command will actually see. Queried with Supports(), so
+    host-namespace backends (local) simply don't implement it and the
+    path is used unchanged. }
+  IShellPathMapper = interface
+    ['{3F2A9C84-1B6E-4D7A-9C2F-8E5B0A1D6F33}']
+    function HostToContainerPath(const HostPath: string): string;
+  end;
+
 { Process-wide active backend. nil until set; helpers below treat
   nil as "use the local fallback" so a caller who never called
   SetActiveShellBackend (test harnesses, scripts that didn't go
@@ -97,6 +110,12 @@ function RunOneShotViaBackend(const SessionId, Cmd, WorkDir: string;
 function RunOneShotWithEnvViaBackend(const SessionId, Cmd, WorkDir: string;
                                      ExtraEnv: TStringList;
                                      out Output: string): Integer;
+
+{ Translate a host path to the path the active backend's commands will
+  see. Identity unless the active backend implements IShellPathMapper
+  (docker). execute_code uses this for the script path it embeds in the
+  command it runs, so `bash <script>` resolves inside the container. }
+function HostToContainerPathViaBackend(const HostPath: string): string;
 
 { Convenience: lifecycle for the CURRENT (active) backend. Safe
   to call when no backend is set -- both are no-ops. }
@@ -152,6 +171,16 @@ begin
     Result := GActive.Exec(SessionId, Cmd, WorkDir, ExtraEnv, Output)
   else
     Result := RunOneShotWithEnv(Cmd, WorkDir, ExtraEnv, Output);
+end;
+
+function HostToContainerPathViaBackend(const HostPath: string): string;
+var
+  Mapper: IShellPathMapper;
+begin
+  if (GActive <> nil) and Supports(GActive, IShellPathMapper, Mapper) then
+    Result := Mapper.HostToContainerPath(HostPath)
+  else
+    Result := HostPath;
 end;
 
 procedure StartShellSession(const SessionId: string);

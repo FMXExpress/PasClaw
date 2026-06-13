@@ -28,6 +28,7 @@ program shell_backend_tests;
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes,
+  PasClaw.Platform,
   PasClaw.Shell.Backend,
   PasClaw.Shell.Backend.Local,
   PasClaw.Shell.Backend.Docker;
@@ -270,9 +271,62 @@ begin
   end;
 end;
 
+procedure TestRunArgvCaptureNoShell;
+{ RunArgvCapture must hand argv straight to the program with NO shell in
+  between -- this is what makes the docker backend correct on Windows,
+  where cmd.exe would otherwise strip quotes and percent-expand %VAR%
+  before docker saw the command. We prove it by giving /bin/echo a string
+  full of shell/cmd metacharacters and checking it returns verbatim, plus
+  that the child's exit code propagates. POSIX-only (the helper itself is
+  cross-platform; this just needs known argv-only programs to spawn). }
+{$IFDEF UNIX}
+const
+  Literal = '$HOME %PATH% `whoami` "q" ''s''';
+var
+  Args: TStringList;
+  Out_: string;
+  ExitCode: Integer;
+begin
+  Args := TStringList.Create;
+  try
+    Args.Add(Literal);
+    ExitCode := RunArgvCapture('/bin/echo', Args, '', Out_);
+  finally
+    Args.Free;
+  end;
+  AssertTrue(ExitCode = 0, 'echo exits 0 (got ' + IntToStr(ExitCode) + ')');
+  AssertEqStr(Trim(Out_), Literal,
+              'argv reaches the program verbatim (no shell expansion)');
+
+  { Exit code propagates. The exact encoding differs per platform
+    (decoded on Windows/Delphi-POSIX, raw wait-status on FPC), and
+    RunArgvCapture matches the platform's existing RunOneShot
+    convention -- so assert nonzero AND equality with RunOneShot
+    rather than hardcoding a value. }
+  Args := TStringList.Create;
+  try
+    Args.Add('-c');
+    Args.Add('exit 3');
+    ExitCode := RunArgvCapture('/bin/sh', Args, '', Out_);
+  finally
+    Args.Free;
+  end;
+  AssertTrue(ExitCode <> 0,
+             'nonzero exit propagates (got ' + IntToStr(ExitCode) + ')');
+  AssertTrue(ExitCode = RunOneShot('exit 3', Out_),
+             'exit code matches RunOneShot convention (got ' +
+             IntToStr(ExitCode) + ')');
+end;
+{$ELSE}
+begin
+end;
+{$ENDIF}
+
 begin
   TestNoBackendFallsBackToHost;
   WriteLn('  ok: no backend -> host fallback works');
+  TestRunArgvCaptureNoShell;
+  WriteLn('  ok: RunArgvCapture passes argv verbatim (no shell)');
   TestLocalBackendInstall;
   WriteLn('  ok: local backend installs + Exec round-trips');
   TestCurrentSessionIdRoundTrips;
