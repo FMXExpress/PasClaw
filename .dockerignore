@@ -40,3 +40,29 @@ samples/**/build/
 # extracted .so files); the Dockerfile pulls them at build time so we
 # don't need them in context.
 docker/vendor/
+
+# Documentation and per-deployment scaffolds. Each scaffold's Dockerfile
+# explicitly COPYs the few files it needs (entrypoint.sh, config template,
+# .do/app.yaml), so wholesale-excluding the parent directories is safe
+# AND keeps the upload to the daemon fast. Adding a new deployment
+# subdirectory? Add it here unless its Dockerfile genuinely needs the
+# rest of the tree as build context.
+docs/
+**/*.md
+**/*.markdown
+cog/
+browser/
+
+# Delphi / RAD Studio project files. FPC builds in the container don't
+# read these.
+*.dproj
+*.dpk
+*.dpr.local
+**/__history/
+**/__recovery/
+
+# Local env files. Should never be committed but defensive-exclude in
+# case someone forgot to add `.env` to .gitignore in a fork.
+.env
+.env.*
+.envrc

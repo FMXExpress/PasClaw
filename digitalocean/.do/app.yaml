@@ -1,0 +1,77 @@
+# PasClaw on DigitalOcean App Platform -- minimal "just works" App Spec.
+#
+# Deploy via either:
+#   doctl apps create --spec digitalocean/.do/app.yaml
+# or paste the YAML into https://cloud.digitalocean.com/apps/new/spec
+#
+# Customise: change `github.repo` to your fork, swap `instance_size_slug`,
+# add a `persistent_disk` block under the service if you want $PASCLAW_HOME
+# to survive restarts (see digitalocean/README.md).
+
+name: pasclaw
+region: nyc
+
+services:
+  - name: gateway
+    # Source: build from this repo on every push to main.
+    # When you publish a prebuilt image to a registry, swap this whole
+    # `github:` + `dockerfile_path:` pair for `image:`.
+    github:
+      repo: FMXExpress/PasClaw
+      branch: main
+      deploy_on_push: true
+    source_dir: /
+    dockerfile_path: digitalocean/Dockerfile
+
+    # Public HTTP -- App Platform terminates TLS in front of this port.
+    http_port: 8088
+
+    # basic-xxs (~$5/mo, 512 MB / 1 vCPU) is enough for personal use.
+    # Bump to basic-xs for heavier prompt traffic / parallel tool calls.
+    instance_count: 1
+    instance_size_slug: basic-xxs
+
+    # /v1/health is exempt from gateway-token auth (see PR #246), so the
+    # probe works whether PASCLAW_GATEWAY_TOKEN is set or not.
+    health_check:
+      http_path: /v1/health
+      initial_delay_seconds: 30
+      period_seconds: 30
+      timeout_seconds: 5
+      failure_threshold: 3
+
+    envs:
+      # Container-level config (not secrets).
+      - key: PASCLAW_HOME
+        value: /data/pasclaw
+        scope: RUN_TIME
+      - key: PORT
+        value: "8088"
+        scope: RUN_TIME
+
+      # ---- Secrets ----
+      # Set actual values in the DO dashboard (or `doctl apps update`).
+      # The values in config.template.json reference these via ${VAR_NAME}
+      # substitution at LoadConfig time; PasClaw never writes them to
+      # disk (and the env-only PASCLAW_GATEWAY_TOKEN path explicitly
+      # prevents persistence via SaveConfig -- see docs/configuration.md).
+      - key: PASCLAW_GATEWAY_TOKEN
+        type: SECRET
+        scope: RUN_TIME
+      - key: ANTHROPIC_API_KEY
+        type: SECRET
+        scope: RUN_TIME
+
+      # Optional providers / features -- leave unset to skip. Unresolved
+      # ${VAR_NAME} markers stay literal in the parsed config; web_search /
+      # OpenAI fallback / OTel simply don't engage when their respective
+      # env vars are absent.
+      - key: OPENAI_API_KEY
+        type: SECRET
+        scope: RUN_TIME
+      - key: PASCLAW_BRAVE_API_KEY
+        type: SECRET
+        scope: RUN_TIME
+      - key: OTEL_EXPORTER_OTLP_ENDPOINT
+        type: GENERAL
+        scope: RUN_TIME
