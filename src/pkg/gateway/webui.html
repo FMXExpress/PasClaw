@@ -417,14 +417,19 @@ document.addEventListener("DOMContentLoaded", () => {
 /* ===== Tab switching ===== */
 const tabLoaded = {};
 function showTab(name) {
-  $$("nav button").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  // Scope both the active-class toggle AND the click-handler wiring
+  // to buttons that actually map to a tab (data-tab set). Without the
+  // [data-tab] qualifier the new 🔑 token button in the nav would also
+  // get a click handler bound, which would call showTab(undefined) and
+  // hide every .tab (Codex P2 on PR #249).
+  $$("nav button[data-tab]").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
   $$(".tab").forEach(t => t.classList.toggle("active", t.id === "tab-" + name));
   if (!tabLoaded[name] && typeof tabLoaders[name] === "function") {
     tabLoaders[name]();
     tabLoaded[name] = true;
   }
 }
-$$("nav button").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
+$$("nav button[data-tab]").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
 
 /* ===== Header status ===== */
 gwFetch("/v1/status").then(r => r.json()).then(s => {
