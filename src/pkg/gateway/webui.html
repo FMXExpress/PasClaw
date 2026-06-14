@@ -183,6 +183,54 @@
 
   .empty-pane{margin:auto;color:var(--mut);text-align:center;padding:2rem;font-size:12px}
 
+  /* ===== Markdown rendering inside assistant bubbles ===== */
+  .bub.md{white-space:normal}
+  .bub.md h1,.bub.md h2,.bub.md h3,.bub.md h4{margin:.5rem 0 .3rem;line-height:1.25;color:var(--fg)}
+  .bub.md h1{font-size:1.32em} .bub.md h2{font-size:1.18em}
+  .bub.md h3{font-size:1.06em} .bub.md h4{font-size:1em}
+  .bub.md p{margin:.35rem 0} .bub.md p:first-child{margin-top:0} .bub.md p:last-child{margin-bottom:0}
+  .bub.md ul,.bub.md ol{margin:.35rem 0;padding-left:1.35rem}
+  .bub.md li{margin:.12rem 0}
+  .bub.md a{color:var(--cyan);text-decoration:underline}
+  .bub.md blockquote{margin:.4rem 0;padding:.15rem .7rem;border-left:2px solid var(--mag);color:var(--mut)}
+  .bub.md hr{border:0;border-top:1px solid rgba(255,255,255,.14);margin:.55rem 0}
+  code.ic{background:rgba(2,5,15,.6);border:1px solid rgba(255,255,255,.1);
+    border-radius:5px;padding:.04rem .3rem;font-size:.92em}
+  .code-wrap{margin:.5rem 0;border:1px solid rgba(32,246,255,.22);border-radius:10px;
+    overflow:hidden;background:rgba(2,5,15,.72)}
+  .code-head{display:flex;align-items:center;justify-content:space-between;
+    padding:.18rem .55rem;background:rgba(255,255,255,.04);
+    border-bottom:1px solid rgba(255,255,255,.08)}
+  .code-lang{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--mut)}
+  .copy-btn{background:transparent;color:var(--cyan);border:1px solid rgba(32,246,255,.3);
+    border-radius:6px;padding:.08rem .45rem;font:inherit;font-size:10px;cursor:pointer;
+    text-transform:uppercase;letter-spacing:.05em}
+  .copy-btn:hover{background:rgba(32,246,255,.12)}
+  .copy-btn.ok{color:var(--green);border-color:rgba(61,242,129,.4)}
+  .code-wrap pre{margin:0;padding:.6rem .7rem;overflow:auto;font-size:12.5px;line-height:1.45}
+  .code-wrap code{white-space:pre}
+
+  /* ===== Per-message hover actions ===== */
+  .msg-actions{display:flex;gap:.35rem;margin-top:.45rem;opacity:0;transition:opacity .12s}
+  .row:hover .msg-actions{opacity:.9}
+  .msg-actions button{background:transparent;color:var(--mut);
+    border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:.06rem .42rem;
+    font:inherit;font-size:10px;cursor:pointer;text-transform:uppercase;letter-spacing:.05em}
+  .msg-actions button:hover{color:var(--cyan);border-color:var(--cyan)}
+  .msg-actions button.ok{color:var(--green);border-color:rgba(61,242,129,.4)}
+
+  /* ===== Header model picker + theme toggle ===== */
+  #model-sel{background:rgba(2,5,15,.72);color:var(--fg);
+    border:1px solid rgba(32,246,255,.3);border-radius:8px;padding:.26rem .4rem;
+    font:inherit;font-size:11px;max-width:13rem}
+  #model-sel:focus{outline:none;border-color:var(--cyan);box-shadow:var(--glow-cyan)}
+
+  /* ===== Light theme: a single CSS-filter invert on the root, with media
+     elements counter-inverted so photos/video stay true-colour. Toggled by
+     #theme-btn; preference persisted in localStorage. ===== */
+  html.lite{filter:invert(1) hue-rotate(180deg)}
+  html.lite img,html.lite video,html.lite iframe{filter:invert(1) hue-rotate(180deg)}
+
   @media (max-width:760px){
     nav{order:99;width:100%;margin-left:0}
     aside.sessions,.col-list{flex-basis:8rem}
@@ -203,7 +251,9 @@
     <button data-tab="logs">Logs</button>
     <button data-tab="stats">Stats</button>
     <button data-tab="settings">Settings</button>
-    <button id="gw-token-btn" title="Set / clear gateway bearer token (used when PASCLAW_GATEWAY_TOKEN is set on the server)" style="margin-left:auto">🔑</button>
+    <select id="model-sel" title="Model used for new messages (empty = server default)" style="margin-left:auto"></select>
+    <button id="theme-btn" title="Toggle light / dark theme">🌙</button>
+    <button id="gw-token-btn" title="Set / clear gateway bearer token (used when PASCLAW_GATEWAY_TOKEN is set on the server)">🔑</button>
   </nav>
 </header>
 <main>
@@ -484,7 +534,7 @@ function activateSession(id) {
   const s = sessions.find(x => x.id === id);
   clearLog();
   if (!s) return;
-  for (const t of s.turns) addLine(t.role, t.text);
+  s.turns.forEach((t, i) => renderTurn(t.role, t.text, i));
 }
 function activeSession() {
   let s = sessions.find(x => x.id === activeSessionId);
@@ -505,50 +555,126 @@ $("#session-new").addEventListener("click", () => newSession());
 /* ===== Chat surface ===== */
 const log = $("#log");
 const f = $("#f"), m = $("#m"), b = $("#b");
+const TYPING_HTML =
+  '<span class="typing"><span></span><span></span><span></span></span>';
+
+let streaming = false;       // an assistant turn is being received
+let currentAbort = null;     // AbortController for the in-flight stream
 
 function clearLog() { log.innerHTML = ""; }
-function addLine(role, text) {
+
+/* Bare row used for the live-streaming assistant bubble (plain text, no
+   actions). Finalised turns are (re)drawn by renderTurn after the stream
+   completes so markdown + per-message actions land consistently. */
+function makeRow(role) {
   const r = document.createElement("div");
   r.className = "row " + role;
   r.innerHTML = `<div class="role">${role==="u"?"you":role==="a"?"pasclaw":"error"}</div>`
               + `<div class="bub"></div>`;
-  r.querySelector(".bub").textContent = text || "";
   log.appendChild(r);
   log.scrollTop = log.scrollHeight;
+  return r;
+}
+function addLine(role, text) {
+  const r = makeRow(role);
+  r.querySelector(".bub").textContent = text || "";
   return r.querySelector(".bub");
 }
 
-m.addEventListener("keydown", e => {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); f.requestSubmit(); }
-});
+/* A persisted turn: markdown for the assistant, plain text for the user
+   (user input is shown verbatim), plus hover actions keyed by turn index. */
+function renderTurn(role, text, index) {
+  const r = makeRow(role);
+  r._raw = text;
+  fillBubble(r.querySelector(".bub"), text, role === "a");
+  attachActions(r, role, index);
+}
 
-f.addEventListener("submit", async e => {
-  e.preventDefault();
-  const msg = m.value.trim();
-  if (!msg) return;
-  addLine("u", msg);
-  recordTurn("u", msg);
-  m.value = ""; b.disabled = true;
+function fillBubble(bub, text, asMarkdown) {
+  if (asMarkdown) {
+    bub.classList.add("md");
+    bub.innerHTML = renderMarkdown(text);
+    wireCopyButtons(bub);
+  } else {
+    bub.classList.remove("md");
+    bub.textContent = text;
+  }
+}
 
+function attachActions(row, role, index) {
+  const bar = document.createElement("div");
+  bar.className = "msg-actions";
+  const mk = (label, fn) => {
+    const btn = document.createElement("button");
+    btn.type = "button"; btn.textContent = label;
+    btn.addEventListener("click", fn);
+    return btn;
+  };
+  bar.appendChild(mk("copy", e => copyText(row._raw, e.currentTarget)));
+  if (role === "u") bar.appendChild(mk("edit", () => editTurn(index)));
+  if (role === "a") bar.appendChild(mk("regenerate", () => regenerateAt(index)));
+  row.appendChild(bar);
+}
+
+/* Drop the turn at `index` and everything after it, then re-stream a fresh
+   assistant reply against the (now trailing-user) history. Works whether
+   the user clicked regenerate on an assistant turn or after an edit. */
+function regenerateAt(index) {
+  if (streaming) return;
+  const s = activeSession();
+  s.turns = s.turns.slice(0, index);
+  saveSessions();
+  activateSession(s.id);
+  streamAssistant();
+}
+
+/* Pull a user turn back into the composer for editing; truncate the
+   conversation at that point so the resend rebuilds cleanly from there. */
+function editTurn(index) {
+  if (streaming) return;
+  const s = activeSession();
+  const t = s.turns[index];
+  if (!t) return;
+  m.value = t.text;
+  s.turns = s.turns.slice(0, index);
+  saveSessions();
+  activateSession(s.id);
+  m.focus();
+}
+
+function setStreaming(on) {
+  streaming = on;
+  b.textContent = on ? "Stop" : "Send";
+  b.disabled = false;
+}
+
+/* Stream one assistant reply for the active session's current history.
+   The user turn is expected to already be recorded + rendered. */
+async function streamAssistant() {
+  const s = activeSession();
   const bub = addLine("a", "");
-  bub.innerHTML = '<span class="typing"><span></span><span></span><span></span></span>';
+  bub.innerHTML = TYPING_HTML;
+  setStreaming(true);
+  currentAbort = new AbortController();
   let assistantText = "";
 
   /* Use /v1/chat/completions with stream:true so tool calls + results
      surface as content deltas (the gateway emits ⏺/⎿ markers per
      PasClaw.Gateway.ToolView). */
-  const s = activeSession();
   const history = s.turns.filter(t => t.role === "u" || t.role === "a")
                           .map(t => ({ role: t.role === "u" ? "user" : "assistant", content: t.text }));
+  const body = { messages: history, stream: true };
+  /* Model from the header picker, if the operator chose one. Empty value
+     means "let the gateway use FCfg.DefaultModel" -- the historical default. */
+  const sel = $("#model-sel");
+  if (sel && sel.value) body.model = sel.value;
+
   try {
     const r = await gwFetch("/v1/chat/completions", {
       method: "POST",
       headers: { "content-type": "application/json", "accept": "text/event-stream" },
-      /* Model omitted on purpose -- gateway falls back to FCfg.DefaultModel,
-         which the operator set via `pasclaw model set`. Letting the
-         server choose keeps the web UI from having to know provider/model
-         strings ahead of time. */
-      body: JSON.stringify({ messages: history, stream: true })
+      body: JSON.stringify(body),
+      signal: currentAbort.signal
     });
     if (!r.ok) {
       bub.textContent = `(http ${r.status})`;
@@ -574,26 +700,202 @@ f.addEventListener("submit", async e => {
           const delta = (j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content) || "";
           if (delta) {
             assistantText += delta;
-            bub.textContent = assistantText;
+            bub.textContent = assistantText;   // plain while streaming; markdown on finalise
             log.scrollTop = log.scrollHeight;
           }
         } catch { /* ignore parse errors on SSE comments */ }
       }
     }
   } catch (err) {
-    bub.textContent = String(err);
-    bub.parentElement.className = "row e";
+    /* User-initiated Stop arrives as AbortError -- keep whatever streamed
+       so far rather than surfacing it as an error. */
+    if (err && err.name !== "AbortError") {
+      bub.textContent = String(err);
+      bub.parentElement.className = "row e";
+    }
   } finally {
-    /* Safety net for streams that close without ever sending a delta --
-       textContent = ... above clears the typing indicator naturally on
-       first content, but a content-less success would otherwise leave
-       the dots pulsing forever. */
-    if (bub.querySelector(".typing")) bub.textContent = "(no response)";
-    recordTurn("a", assistantText);
-    b.disabled = false;
+    setStreaming(false);
+    currentAbort = null;
+    if (assistantText) {
+      /* Persist + redraw the whole log so the finished turn renders as
+         markdown with copy/regenerate actions at the right index. */
+      recordTurn("a", assistantText);
+      activateSession(activeSessionId);
+    } else if (bub.querySelector(".typing")) {
+      /* Stream closed with no content and wasn't an error -- clear the dots. */
+      bub.textContent = "(no response)";
+    }
     m.focus();
   }
+}
+
+function submitUser(msg) {
+  recordTurn("u", msg);
+  activateSession(activeSessionId);   // draw the user turn with its actions
+  streamAssistant();
+}
+
+m.addEventListener("keydown", e => {
+  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); f.requestSubmit(); }
 });
+
+f.addEventListener("submit", e => {
+  e.preventDefault();
+  /* While a reply is streaming the primary button acts as Stop. */
+  if (streaming) { if (currentAbort) currentAbort.abort(); return; }
+  const msg = m.value.trim();
+  if (!msg) return;
+  m.value = "";
+  submitUser(msg);
+});
+
+/* ===== Markdown rendering (dependency-free, XSS-safe) =====
+   A small block-level renderer: fenced code (with a copy button),
+   headings, ordered/unordered lists, blockquotes, horizontal rules, and
+   paragraphs; inline bold/italic/code/links. All text is HTML-escaped
+   FIRST and only our own tags are injected, so model output can't smuggle
+   markup. Deliberately minimal -- no tables/nested lists -- to stay
+   correct and tiny rather than feature-complete. */
+function renderMarkdown(src) {
+  const esc = escapeHtml;
+  const inline = s => {
+    s = esc(s);
+    s = s.replace(/`([^`]+)`/g, (_, c) => '<code class="ic">' + c + "</code>");
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+                  (_, t, u) => '<a href="' + esc(u) + '" target="_blank" rel="noopener">' + t + "</a>");
+    return s;
+  };
+  const lines = String(src).split("\n");
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const ln = lines[i];
+    const fence = ln.match(/^```(.*)$/);
+    if (fence) {
+      const lang = fence[1].trim();
+      const code = [];
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i])) { code.push(lines[i]); i++; }
+      i++; // consume closing fence (or run off the end on an unterminated block)
+      out.push(codeBlock(code.join("\n"), lang));
+      continue;
+    }
+    const h = ln.match(/^(#{1,6})\s+(.*)$/);
+    if (h) { out.push("<h" + h[1].length + ">" + inline(h[2]) + "</h" + h[1].length + ">"); i++; continue; }
+    if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(ln)) { out.push("<hr>"); i++; continue; }
+    if (/^>\s?/.test(ln)) {
+      const q = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) { q.push(lines[i].replace(/^>\s?/, "")); i++; }
+      out.push("<blockquote>" + inline(q.join(" ")) + "</blockquote>");
+      continue;
+    }
+    if (/^\s*[-*+]\s+/.test(ln)) {
+      const items = [];
+      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
+        items.push("<li>" + inline(lines[i].replace(/^\s*[-*+]\s+/, "")) + "</li>"); i++;
+      }
+      out.push("<ul>" + items.join("") + "</ul>");
+      continue;
+    }
+    if (/^\s*\d+\.\s+/.test(ln)) {
+      const items = [];
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+        items.push("<li>" + inline(lines[i].replace(/^\s*\d+\.\s+/, "")) + "</li>"); i++;
+      }
+      out.push("<ol>" + items.join("") + "</ol>");
+      continue;
+    }
+    if (/^\s*$/.test(ln)) { i++; continue; }
+    const para = [];
+    while (i < lines.length && !/^\s*$/.test(lines[i]) && !/^```/.test(lines[i]) &&
+           !/^#{1,6}\s/.test(lines[i]) && !/^\s*[-*+]\s+/.test(lines[i]) &&
+           !/^\s*\d+\.\s+/.test(lines[i]) && !/^>\s?/.test(lines[i])) {
+      para.push(lines[i]); i++;
+    }
+    out.push("<p>" + inline(para.join("\n")).replace(/\n/g, "<br>") + "</p>");
+  }
+  return out.join("\n");
+}
+
+function codeBlock(code, lang) {
+  return '<div class="code-wrap"><div class="code-head">'
+       + '<span class="code-lang">' + escapeHtml(lang || "code") + "</span>"
+       + '<button class="copy-btn" type="button">copy</button></div>'
+       + "<pre><code>" + escapeHtml(code) + "</code></pre></div>";
+}
+
+function wireCopyButtons(scope) {
+  scope.querySelectorAll(".code-wrap").forEach(w => {
+    const btn = w.querySelector(".copy-btn");
+    const code = w.querySelector("code");
+    if (btn && code) btn.addEventListener("click", () => copyText(code.textContent, btn));
+  });
+}
+
+function copyText(text, btn) {
+  const flash = () => {
+    if (!btn) return;
+    const prev = btn.textContent;
+    btn.textContent = "copied"; btn.classList.add("ok");
+    setTimeout(() => { btn.textContent = prev; btn.classList.remove("ok"); }, 1200);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(flash).catch(() => fallbackCopy(text, flash));
+  } else {
+    fallbackCopy(text, flash);
+  }
+}
+function fallbackCopy(text, done) {
+  const ta = document.createElement("textarea");
+  ta.value = text; ta.style.position = "fixed"; ta.style.opacity = "0";
+  document.body.appendChild(ta); ta.focus(); ta.select();
+  try { document.execCommand("copy"); if (done) done(); } catch {}
+  document.body.removeChild(ta);
+}
+
+/* ===== Model picker ===== */
+const MODEL_KEY = "pasclaw.model.v1";
+async function loadModels() {
+  const sel = $("#model-sel");
+  if (!sel) return;
+  sel.innerHTML = '<option value="">default model</option>';
+  try {
+    const j = await (await gwFetch("/v1/models")).json();
+    const ids = (j.data || j.models || [])
+      .map(x => (typeof x === "string" ? x : (x.id || x.name)))
+      .filter(Boolean);
+    for (const id of ids) {
+      const o = document.createElement("option");
+      o.value = id; o.textContent = id;
+      sel.appendChild(o);
+    }
+    let saved = ""; try { saved = localStorage.getItem(MODEL_KEY) || ""; } catch {}
+    if (saved && ids.indexOf(saved) >= 0) sel.value = saved;
+  } catch { /* leave the default-model option as the only choice */ }
+  sel.addEventListener("change", () => {
+    try { localStorage.setItem(MODEL_KEY, sel.value); } catch {}
+  });
+}
+
+/* ===== Theme toggle (CSS-filter invert on <html>) ===== */
+const THEME_KEY = "pasclaw.theme.v1";
+function applyTheme() {
+  let lite = false; try { lite = localStorage.getItem(THEME_KEY) === "lite"; } catch {}
+  document.documentElement.classList.toggle("lite", lite);
+  const tb = $("#theme-btn");
+  if (tb) tb.textContent = lite ? "☀️" : "🌙";
+}
+function initTheme() {
+  const tb = $("#theme-btn");
+  if (tb) tb.addEventListener("click", () => {
+    let lite = false; try { lite = localStorage.getItem(THEME_KEY) === "lite"; } catch {}
+    try { localStorage.setItem(THEME_KEY, lite ? "dark" : "lite"); } catch {}
+    applyTheme();
+  });
+  applyTheme();
+}
 
 /* ===== Loaders for the read-only tabs (lazy-bound on first show) ===== */
 const tabLoaders = {
@@ -845,6 +1147,8 @@ function escapeHtml(s) {
 }
 
 /* ===== Boot ===== */
+initTheme();
+loadModels();
 if (sessions.length === 0) newSession();
 else { activeSessionId = sessions[0].id; renderSessions(); activateSession(sessions[0].id); }
 m.focus();
