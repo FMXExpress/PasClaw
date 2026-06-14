@@ -280,7 +280,14 @@ begin
   Lock := LockPath(SessionKey);
   if not AcquireLock(Lock) then
   begin
-    LogWarn('steering: drain lock timeout for %s', [SessionKey]);
+    { Benign and self-healing: we never renamed the queue file, so the
+      pending messages are still there and the next loop iteration's
+      drain picks them up. This only trips under lock contention (a
+      concurrent push/drain, or a stale lock not yet reclaimed) and fires
+      at the loop's per-iteration cadence -- warn-level spam for a
+      condition that needs no operator action. Debug keeps it diagnosable
+      without the noise. }
+    LogDebug('steering: drain lock contended for %s (retrying next turn)', [SessionKey]);
     Exit;
   end;
   try
