@@ -813,13 +813,18 @@ begin
     T.Name        := 'fs_edit_hashline';
     T.Description := 'Apply a hashline-format patch. Begins with a ' + HL_FILE_PREFIX +
                      'path#hash header, then one or more blocks. Each block is an anchor line ' +
-                     '(42: for one line, 7-10: for a range) followed by payload lines. EVERY ' +
-                     'payload line must start with its own marker: ' + HL_PAYLOAD_REPLACE +
+                     'that is JUST the line number(s) -- "42:" for one line, "7-10:" for a ' +
+                     'range -- with NOTHING after the colon. Do NOT copy fs_read''s "N:content" ' +
+                     'display onto the anchor (write "42:", not "42:  the old text"). The ' +
+                     'anchor is followed by payload lines, and EVERY payload line must start ' +
+                     'with its own marker: ' + HL_PAYLOAD_REPLACE +
                      ' to replace, ' + HL_PAYLOAD_ABOVE + ' to insert above the anchor, ' +
                      HL_PAYLOAD_BELOW + ' to insert below. A multi-line replacement repeats ' +
                      HL_PAYLOAD_REPLACE + ' on every line (a 3-line replacement has three ' +
-                     HL_PAYLOAD_REPLACE + ' lines) -- never a bare line. The header hash must ' +
-                     'match the file on disk; stale patches abort without writing.';
+                     HL_PAYLOAD_REPLACE + ' lines) -- never a bare line. Example: "' +
+                     HL_FILE_PREFIX + 'foo.pas#ab12" / "10:" / "' + HL_PAYLOAD_REPLACE +
+                     '  new line 10 text". The header hash must match the file on disk; ' +
+                     'stale patches abort without writing.';
     T.Schema      := '{"type":"object","properties":{"patch":{"type":"string","description":"Hashline-format patch text."}},"required":["patch"]}';
     T.Handler     := Tool_FSEditHashline;
     T.IsCore      := True;
