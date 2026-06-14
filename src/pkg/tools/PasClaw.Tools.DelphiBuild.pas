@@ -67,11 +67,12 @@ function DiscoverDelphiBin: string;
 function ParseDelphiOutput(const Raw: string;
                            out NErrors, NWarnings, NHints: Integer): string;
 
-{ Append the ';'-separated tokens of every <Tag>...</Tag> in Xml to Dest,
-  skipping empties, MSBuild macros ($(...)), and duplicates. Used to pull
-  DCC_UnitSearchPath / DCC_Namespace out of a .dproj for dcc-direct builds.
-  Exposed for tests. }
-procedure CollectDprojTokens(const Xml, Tag: string; Dest: TStringList);
+{ Pull a .dproj tag's tokens (DCC_UnitSearchPath / DCC_Namespace) for the
+  requested Platform_/Config: only PropertyGroups whose Condition applies to
+  that build contribute, ';'-split, $() macros + dupes dropped. Exposed for
+  tests. }
+procedure CollectDprojTokens(const Xml, Tag, Platform_, Config: string;
+                             Dest: TStringList);
 
 implementation
 
@@ -296,13 +297,28 @@ begin
   Result := (V = '1') or (V = 'true') or (V = 'yes') or (V = 'on');
 end;
 
-procedure CollectDprojTokens(const Xml, Tag: string; Dest: TStringList);
-{ Append the ';'-separated tokens from every <Tag>...</Tag> in Xml to Dest,
-  skipping empties, MSBuild macro tokens ($(...)), and duplicates. A
-  lightweight string scan -- no XML-parser dependency, which is plenty for
-  the flat <DCC_UnitSearchPath> / <DCC_Namespace> values RAD Studio writes.
-  Exposed (below) so dcc-direct builds use the project's own search paths
-  and namespaces instead of making the model hand-roll -U flags. }
+function CondMatchesBuild(const Cond, Platform_, Config: string): Boolean;
+{ A .dproj PropertyGroup applies to this build unless its Condition names
+  ONLY the other platform or the other config. Unconditional / Base groups
+  (no platform/config mention) always apply. Heuristic -- avoids a full
+  MSBuild condition evaluator while keeping, e.g., Win64-only search dirs
+  out of a Win32 build (Codex P2 on PR #271). }
+var
+  C, P, Cfg, OtherP, OtherC: string;
+begin
+  C := LowerCase(Cond);
+  P := LowerCase(Platform_);
+  Cfg := LowerCase(Config);
+  if P = 'win64' then OtherP := 'win32' else OtherP := 'win64';
+  if Cfg = 'debug' then OtherC := 'release' else OtherC := 'debug';
+  Result := True;
+  if (Pos(OtherP, C) > 0) and (Pos(P, C) = 0) then Exit(False);     { other platform only }
+  if (Pos(OtherC, C) > 0) and (Pos(Cfg, C) = 0) then Exit(False);   { other config only }
+end;
+
+procedure ExtractTagTokens(const Body, Tag: string; Dest: TStringList);
+{ Append the ';'-separated tokens of every <Tag>...</Tag> in Body to Dest,
+  skipping empties, MSBuild macros ($(...)), and duplicates. }
 var
   OpenT, CloseT, Inner, Tok: string;
   p, q, e, sp: Integer;
@@ -311,12 +327,12 @@ begin
   CloseT := '</' + Tag + '>';
   p := 1;
   repeat
-    p := Pos(OpenT, Xml, p);
+    p := Pos(OpenT, Body, p);
     if p = 0 then Break;
     q := p + Length(OpenT);
-    e := Pos(CloseT, Xml, q);
+    e := Pos(CloseT, Body, q);
     if e = 0 then Break;
-    Inner := Copy(Xml, q, e - q) + ';';   { trailing ';' so the last token splits }
+    Inner := Copy(Body, q, e - q) + ';';   { trailing ';' so the last token splits }
     repeat
       sp := Pos(';', Inner);
       if sp = 0 then Break;
@@ -326,6 +342,49 @@ begin
         Dest.Add(Tok);
     until Inner = '';
     p := e + Length(CloseT);
+  until False;
+end;
+
+procedure CollectDprojTokens(const Xml, Tag, Platform_, Config: string;
+                             Dest: TStringList);
+{ Walk <PropertyGroup ...>...</PropertyGroup> blocks; for each whose
+  Condition applies to the requested Platform_/Config (see CondMatchesBuild),
+  extract the Tag's tokens. A lightweight string scan -- no XML-parser
+  dependency, which is plenty for the flat DCC_UnitSearchPath /
+  DCC_Namespace values RAD Studio writes. Exposed so dcc-direct builds use
+  the project's own (config-correct) search paths/namespaces rather than
+  making the model hand-roll -U flags. }
+var
+  p, openEnd, gClose, cs, ce: Integer;
+  OpenTag, Cond, Body: string;
+begin
+  p := 1;
+  repeat
+    p := Pos('<PropertyGroup', Xml, p);
+    if p = 0 then Break;
+    openEnd := Pos('>', Xml, p);
+    if openEnd = 0 then Break;
+    OpenTag := Copy(Xml, p, openEnd - p + 1);   { <PropertyGroup Condition="..."> }
+    { self-closing <PropertyGroup .../> has no body to scan }
+    if (Length(OpenTag) >= 2) and (OpenTag[Length(OpenTag) - 1] = '/') then
+    begin
+      p := openEnd + 1;
+      Continue;
+    end;
+    gClose := Pos('</PropertyGroup>', Xml, openEnd);
+    if gClose = 0 then gClose := Length(Xml) + 1;
+    Body := Copy(Xml, openEnd + 1, gClose - (openEnd + 1));
+    Cond := '';
+    cs := Pos('Condition="', OpenTag);
+    if cs > 0 then
+    begin
+      cs := cs + Length('Condition="');
+      ce := Pos('"', OpenTag, cs);
+      if ce > 0 then Cond := Copy(OpenTag, cs, ce - cs);
+    end;
+    if CondMatchesBuild(Cond, Platform_, Config) then
+      ExtractTagTokens(Body, Tag, Dest);
+    p := gClose + 1;
   until False;
 end;
 
@@ -377,8 +436,8 @@ begin
     if FileExists(DprojPath) then
     begin
       Xml := ReadFileText(DprojPath);
-      CollectDprojTokens(Xml, 'DCC_UnitSearchPath', SearchDirs);
-      CollectDprojTokens(Xml, 'DCC_Namespace', ProjNs);
+      CollectDprojTokens(Xml, 'DCC_UnitSearchPath', Platform_, Config, SearchDirs);
+      CollectDprojTokens(Xml, 'DCC_Namespace', Platform_, Config, ProjNs);
     end;
     for i := 0 to ProjNs.Count - 1 do
       if Pos(';' + ProjNs[i] + ';', ';' + NS + ';') = 0 then

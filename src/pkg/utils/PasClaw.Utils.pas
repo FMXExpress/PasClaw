@@ -41,6 +41,13 @@ function JoinPath(const A, B: string): string;
 function FileExistsCI(const Path: string): Boolean;
 function ReadFileText(const Path: string): string;
 procedure WriteFileText(const Path, Content: string);
+{ On Windows, convert '/' to '\' so RTL path parsing (ExtractFilePath,
+  ForceDirectories) handles paths the model passes with forward slashes
+  (it copies them from fs_read's "path" output). Without this,
+  ExtractFilePath('a/b/c.pas') returns '' on Windows and ForceDirectories
+  raises "Unable to create directory". On POSIX '\' is a legal filename
+  char, so the path is returned untouched. }
+function NormalizePathSep(const P: string): string;
 function SplitToList(const S: string; Sep: Char): TStringList;
 function NowIsoUtc: string;
 
@@ -243,14 +250,25 @@ begin
   Result := FileExists(Path);
 end;
 
+function NormalizePathSep(const P: string): string;
+begin
+  {$IFDEF MSWINDOWS}
+  Result := StringReplace(P, '/', '\', [rfReplaceAll]);
+  {$ELSE}
+  Result := P;
+  {$ENDIF}
+end;
+
 function ReadFileText(const Path: string): string;
 var
   Strm: TFileStream;
   Bytes: TBytes;
+  NPath: string;
 begin
   Result := '';
-  if not FileExists(Path) then Exit;
-  Strm := TFileStream.Create(Path, fmOpenRead or fmShareDenyWrite);
+  NPath := NormalizePathSep(Path);
+  if not FileExists(NPath) then Exit;
+  Strm := TFileStream.Create(NPath, fmOpenRead or fmShareDenyWrite);
   try
     SetLength(Bytes, Strm.Size);
     if Strm.Size > 0 then Strm.ReadBuffer(Bytes[0], Strm.Size);
@@ -269,10 +287,15 @@ procedure WriteFileText(const Path, Content: string);
 var
   Strm: TFileStream;
   Bytes: TBytes;
-  Tagged: string;
+  Tagged, NPath, Dir: string;
 begin
-  EnsureDir(ExtractFilePath(Path));
-  Strm := TFileStream.Create(Path, fmCreate);
+  NPath := NormalizePathSep(Path);
+  { Only force-create the directory when there is one -- ExtractFilePath of
+    a bare filename is '', and ForceDirectories('') raises EInOutError
+    "Unable to create directory". }
+  Dir := ExtractFilePath(NPath);
+  if Dir <> '' then EnsureDir(Dir);
+  Strm := TFileStream.Create(NPath, fmCreate);
   try
     if Content <> '' then
     begin
