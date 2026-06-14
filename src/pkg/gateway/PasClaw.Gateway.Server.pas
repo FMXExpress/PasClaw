@@ -2427,11 +2427,16 @@ begin
       preamble for free. }
     if not HasSystemMessage(Msgs) then
       LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
-    { Temperature: only forward if the client actually set it (>0). Avoids
-      the deprecated-field 400 from newer Claude models when the OpenAI
-      client library defaults to 1.0. }
-    RawTemp := Req.GetFloat('temperature', 0);
-    if RawTemp > 0 then LoopCfg.Options.Temperature := RawTemp;
+    { Temperature: forward only when the client explicitly sent the field
+      (Req.Has), so an absent field keeps the provider/library default
+      rather than pinning 0. An explicit 0 IS honoured -- it's a valid
+      deterministic setting (the web UI's params sidebar exposes it).
+      Negatives are ignored as malformed. }
+    if Req.Has('temperature') then
+    begin
+      RawTemp := Req.GetFloat('temperature', 0);
+      if RawTemp >= 0 then LoopCfg.Options.Temperature := RawTemp;
+    end;
     if Req.Has('max_tokens') then
       LoopCfg.Options.MaxTokens := Req.GetInt('max_tokens', LoopCfg.Options.MaxTokens);
     LoopCfg.OnText        := nil;
