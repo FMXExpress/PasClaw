@@ -85,13 +85,22 @@ const
   HL_OP_REPLACE      = ':';
   HL_PAYLOAD_REPLACE = '|';
   {$ELSE}
-  HL_FILE_PREFIX     = '¶';
+  { Delphi (UnicodeString = one WideChar per codepoint). Spell the
+    non-ASCII markers as explicit codepoint literals, NOT source
+    characters: this .pas is saved UTF-8 WITHOUT a BOM, and Delphi then
+    reads it via the system ANSI codepage -- so a source '¶' (UTF-8
+    bytes C2 B6) would compile to the TWO chars 'Â¶' (U+00C2 U+00B6) on
+    a CP1252 box, and HL_FILE_PREFIX would never match a real ¶. The
+    parser failed every patch at "line 1: content before any ¶ header".
+    #$00B6 etc. are unambiguous regardless of the file's on-disk
+    encoding -- the Delphi mirror of the FPC byte-literal trick above. }
+  HL_FILE_PREFIX     = #$00B6;   { ¶ U+00B6 }
   HL_FILE_HASH_SEP   = '#';
   HL_LINE_BODY_SEP   = ':';
   HL_OP_REPLACE      = ':';
   HL_PAYLOAD_REPLACE = '|';
-  HL_PAYLOAD_ABOVE   = '↑';
-  HL_PAYLOAD_BELOW   = '↓';
+  HL_PAYLOAD_ABOVE   = #$2191;   { ↑ U+2191 }
+  HL_PAYLOAD_BELOW   = #$2193;   { ↓ U+2193 }
   {$ENDIF}
 
   {$IFDEF FPC}
@@ -673,7 +682,15 @@ begin
       end;
       if Trim(Lines[i]) = '' then Continue;
       if (Lines[i] <> '') and (Lines[i][1] = '#') then Continue;
-      ErrMsg := Format('line %d: unrecognized content %s', [i + 1, QuotedStr(Lines[i])]);
+      { Most common cause: a multi-line replacement that prefixed only its
+        first line. Every payload line needs its own marker, so a bare
+        line inside a block reads as unrecognized. Say so. }
+      ErrMsg := Format('line %d: unrecognized content %s -- every payload line ' +
+                       'must start with %s (replace), %s (insert above), or %s ' +
+                       '(insert below); a bare line usually means a multi-line ' +
+                       'replacement is missing its per-line %s prefix',
+                       [i + 1, QuotedStr(Lines[i]), HL_PAYLOAD_REPLACE,
+                        HL_PAYLOAD_ABOVE, HL_PAYLOAD_BELOW, HL_PAYLOAD_REPLACE]);
       Exit;
     end;
     if Started then
