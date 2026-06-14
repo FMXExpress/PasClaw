@@ -479,6 +479,24 @@ begin
   Body := BuildRequest(Msgs, Tools, 'gemini-3.5-flash', Opts);
   AssertMissing(Body, 'Continue.',
     'no synthetic user turn when the tail already starts with a user turn');
+
+  { Tail that is ENTIRELY orphaned tool results (a parallel tool batch
+    whose retained window fell wholly inside the result block). All get
+    skipped, so the synthetic user turn must still be emitted -- otherwise
+    contents[] is empty and Gemini has no user turn to continue from. }
+  SetLength(Msgs, 2);
+  Msgs[0].Role := mrTool; Msgs[0].ToolCallId := 'x0';
+  Msgs[0].Content := '[]'; Msgs[0].Name := 'fs_list';
+  Msgs[1].Role := mrTool; Msgs[1].ToolCallId := 'x1';
+  Msgs[1].Content := '[]'; Msgs[1].Name := 'fs_grep';
+  Body := BuildRequest(Msgs, Tools, 'gemini-3.5-flash', Opts);
+  AssertContains(Body, '"contents"', 'contents array present');
+  AssertContains(Body, 'Continue.',
+    'synthetic user turn emitted when every retained entry is an orphaned tool');
+  AssertContains(Body, '"role" : "user"',
+    'the synthesised turn is a user turn');
+  AssertMissing(Body, 'functionResponse',
+    'orphaned tool results are dropped, not emitted as functionResponse');
 end;
 
 begin
