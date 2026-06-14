@@ -44,8 +44,11 @@ uses
   PasClaw.Tools.Vault,
   PasClaw.Tools.OutputCache,
   PasClaw.Tools.Sandbox,
-  PasClaw.Shell.Backend,    { TShellBackendKind -- gate on Cfg.ShellBackend
-                              so we refuse docker on gateway cleanly }
+  PasClaw.Shell.Backend,    { TShellBackendKind + StartShellSession /
+                              SetCurrentSessionId / CloseShellSession --
+                              one container per gateway process }
+  PasClaw.Shell.Backend.Factory,  { InstallShellBackend }
+  PasClaw.Session.Store,    { NewSessionId for the shell session id }
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
   PasClaw.Cron.Scheduler,
@@ -176,26 +179,47 @@ var
   Email:    TEmailChannel;
   Scheduler: TCronScheduler;
   Skills: TSkillSpecArray;
+  KindSelected: TShellBackendKind;
+  BackendDesc, ShellSessionId: string;
 begin
   Cfg := LoadConfig;
   ConfigureSandbox(Cfg.Sandbox, '');
+  ShellSessionId := '';
   try
     Args := ParseGw(Argv, Cfg);
-    { Phase 1: docker backend not yet wired on the multi-tenant gateway
-      (per-request session containers + cross-thread session-id
-      propagation are Phase 1.5). Refuse when tools are on so an
-      operator with shell_backend=docker globally isn't silently
-      running on the host. Codex P2 on PR #233: skip the gate when
-      --no-tools was passed since the gateway never dispatches
-      shell_exec in that mode -- the docker isolation story doesn't
-      apply. Parse args first so the flag is read before the gate. }
-    if (Cfg.ShellBackend = sbDocker) and (not Args.NoTools) then
+    { Install the configured shell backend so shell_exec / execute_code run
+      where the operator asked -- including docker. The gateway uses ONE
+      container for the whole process (like the TUI): every request /
+      channel message shares it, since there's no per-request session
+      lifecycle here. That's coarser than per-tenant isolation but it hosts
+      the docker backend honestly instead of falling through to the host.
+      Skipped under --no-tools (no shell dispatch). }
+    if not Args.NoTools then
     begin
-      PrintLn(Ansi.Yellow + '!' + Ansi.Reset +
-              ' `pasclaw gateway` does not yet host the docker shell backend.');
-      PrintLn('  Run with shell_backend=local in config.json, or pass ' +
-              Ansi.Bold + '--no-tools' + Ansi.Reset + '.');
-      Exit(1);
+      try
+        InstallShellBackend(Cfg, '', KindSelected, BackendDesc);
+      except
+        on E: Exception do
+        begin
+          PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + E.Message);
+          Exit(1);
+        end;
+      end;
+      if KindSelected = sbDocker then
+      begin
+        ShellSessionId := NewSessionId;
+        PrintLn(Ansi.Dim + 'starting docker container for this gateway...' + Ansi.Reset);
+        try
+          StartShellSession(ShellSessionId);
+        except
+          on E: Exception do
+          begin
+            PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + E.Message);
+            Exit(1);
+          end;
+        end;
+        SetCurrentSessionId(ShellSessionId);
+      end;
     end;
 
     { Stream-reliability env-var overrides -- see Cmd.Serve for the
@@ -397,6 +421,8 @@ begin
 
     Result := 0;
   finally
+    { Tear down the one shell container (no-op for local / unset). }
+    if ShellSessionId <> '' then CloseShellSession(ShellSessionId);
     Cfg.Free;
   end;
 end;
