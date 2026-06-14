@@ -132,6 +132,9 @@ type
     FClient: TMCPBaseClient;
     FDone:   TEvent;   { signalled when Execute returns -- lets shutdown
                          bound its wait instead of a 30s-connect WaitFor }
+    FRegLock: TCriticalSection;  { held across the registry mutation so
+                                   shutdown can flush an in-progress
+                                   registration before freeing FReg }
   protected
     procedure Execute; override;
   public
@@ -139,6 +142,10 @@ type
                        State: TMCPServerState);
     destructor  Destroy; override;
     property DoneEvent: TEvent read FDone;
+    { Block until the loader is not mid-registration. After this returns,
+      with Terminated already set, the loader will not touch FReg again --
+      so the caller can free the registry and abandon the thread safely. }
+    procedure FlushPendingRegistration;
   end;
 
 const
@@ -328,6 +335,13 @@ begin
   FState  := State;
   FClient := nil;
   FDone   := TEvent.Create(nil, {ManualReset=}True, {InitialState=}False, '');
+  FRegLock := TCriticalSection.Create;
+end;
+
+procedure TMCPLoader.FlushPendingRegistration;
+begin
+  FRegLock.Acquire;
+  FRegLock.Release;
 end;
 
 destructor TMCPLoader.Destroy;
@@ -337,6 +351,7 @@ begin
     client is still ours to free. }
   if FClient <> nil then begin FClient.Free; FClient := nil; end;
   FDone.Free;
+  FRegLock.Free;
   inherited Destroy;
 end;
 
@@ -406,35 +421,49 @@ begin
     end;
     LogInfo('mcp[%s] live connect OK (%d tools)', [FCfg.Name, Length(Tools)]);
     SaveCachedTools(FCfg.Name, Tools);
-    { Shutting down -- don't mutate the registry/state past this point so
-      an abandoned loader can't use-after-free them (the cache is already
-      saved). }
+    { Cheap early-out before taking the lock -- the cache is already saved. }
     if Terminated then Exit;
 
-    { Always re-register every live tool. Reuse the existing
-      dispatch object (created in the cache pass) when one is
-      present so HandlerObj pointer stability holds -- only the
-      description and schema on the TTool entry change. Skipping
-      re-registration when a cached entry exists would leave the
-      registry stuck on yesterday's (possibly stale) description
-      and inputSchema while the model continued to dispatch via
-      the (live, working) dispatch object. Codex P2 on PR #141.
-      FindDispatchFor + Register are both O(N); for several
-      thousand tools that's an O(N²) one-time cost in the loader
-      thread -- acceptable, but if it ever becomes noticeable
-      promote FDispatches to a sorted TStringList. }
-    for i := 0 to High(Tools) do
-    begin
-      Dispatch := FState.FindDispatchFor(Tools[i].Name);
-      if Dispatch = nil then
-        Dispatch := FState.AddDispatch(Tools[i].Name);
-      RegisterToolViaDispatch(FReg, FCfg.Name, Tools[i], Dispatch);
-    end;
+    { Registry mutation is the one shutdown-sensitive step: it writes FReg,
+      which the caller frees right after FreeMCPClients returns. Hold
+      FRegLock across the whole re-register + SetReady so a concurrent
+      shutdown's FlushPendingRegistration blocks until we finish (bounded
+      by registration time -- CPU only, no network), then re-check
+      Terminated INSIDE the lock: if shutdown began before we acquired it,
+      skip touching FReg entirely. Together with FreeMCPClients setting
+      Terminated before the flush, this guarantees an abandoned loader
+      never writes a freed registry. }
+    FRegLock.Acquire;
+    try
+      if Terminated then Exit;
 
-    FState.SetReady(FClient);
-    { Ownership transferred to FState; clear ours so Destroy doesn't
-      double-free. }
-    FClient := nil;
+      { Always re-register every live tool. Reuse the existing
+        dispatch object (created in the cache pass) when one is
+        present so HandlerObj pointer stability holds -- only the
+        description and schema on the TTool entry change. Skipping
+        re-registration when a cached entry exists would leave the
+        registry stuck on yesterday's (possibly stale) description
+        and inputSchema while the model continued to dispatch via
+        the (live, working) dispatch object. Codex P2 on PR #141.
+        FindDispatchFor + Register are both O(N); for several
+        thousand tools that's an O(N²) one-time cost in the loader
+        thread -- acceptable, but if it ever becomes noticeable
+        promote FDispatches to a sorted TStringList. }
+      for i := 0 to High(Tools) do
+      begin
+        Dispatch := FState.FindDispatchFor(Tools[i].Name);
+        if Dispatch = nil then
+          Dispatch := FState.AddDispatch(Tools[i].Name);
+        RegisterToolViaDispatch(FReg, FCfg.Name, Tools[i], Dispatch);
+      end;
+
+      FState.SetReady(FClient);
+      { Ownership transferred to FState; clear ours so Destroy doesn't
+        double-free. }
+      FClient := nil;
+    finally
+      FRegLock.Release;
+    end;
   except
     on E: Exception do
     begin
@@ -519,7 +548,15 @@ begin
     if Clients[i] <> nil then
     begin
       Loader := TMCPLoader(Clients[i]);
+      { Order matters: set Terminated, THEN flush. After the flush returns,
+        any registration that was in flight has finished and -- because
+        Terminated is now set and the registration block re-checks it under
+        FRegLock -- the loader will never write FReg again. Only then is it
+        safe for the abandon branch to let the caller free the registry.
+        The flush blocks at most for a registration pass (CPU only); it
+        never waits on the network. }
       Loader.Terminate;
+      Loader.FlushPendingRegistration;
       if Loader.DoneEvent.WaitFor(ShutdownWaitMs) = wrSignaled then
       begin
         Loader.WaitFor;
@@ -527,10 +564,11 @@ begin
       end
       else
       begin
-        { Still blocked in a network call. Don't hang the app on exit:
-          hand the thread to the OS (FreeOnTerminate) and abandon it. Its
-          Terminated checks keep it from touching the registry/state after
-          this point, so it self-frees cleanly when the call returns. }
+        { Still blocked in a network call (Connect/ListTools -- neither
+          touches FReg). Don't hang the app on exit: hand the thread to the
+          OS (FreeOnTerminate) and abandon it. The flush above + the
+          Terminated re-check guarantee it can't write the about-to-be-freed
+          registry; it self-frees when the call returns. }
         Loader.FreeOnTerminate := True;
         Abandoned := True;
       end;
