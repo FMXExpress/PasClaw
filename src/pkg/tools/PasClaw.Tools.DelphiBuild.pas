@@ -67,6 +67,13 @@ function DiscoverDelphiBin: string;
 function ParseDelphiOutput(const Raw: string;
                            out NErrors, NWarnings, NHints: Integer): string;
 
+{ Pull a .dproj tag's tokens (DCC_UnitSearchPath / DCC_Namespace) for the
+  requested Platform_/Config: only PropertyGroups whose Condition applies to
+  that build contribute, ';'-split, $() macros + dupes dropped. Exposed for
+  tests. }
+procedure CollectDprojTokens(const Xml, Tag, Platform_, Config: string;
+                             Dest: TStringList);
+
 implementation
 
 uses
@@ -290,6 +297,97 @@ begin
   Result := (V = '1') or (V = 'true') or (V = 'yes') or (V = 'on');
 end;
 
+function CondMatchesBuild(const Cond, Platform_, Config: string): Boolean;
+{ A .dproj PropertyGroup applies to this build unless its Condition names
+  ONLY the other platform or the other config. Unconditional / Base groups
+  (no platform/config mention) always apply. Heuristic -- avoids a full
+  MSBuild condition evaluator while keeping, e.g., Win64-only search dirs
+  out of a Win32 build (Codex P2 on PR #271). }
+var
+  C, P, Cfg, OtherP, OtherC: string;
+begin
+  C := LowerCase(Cond);
+  P := LowerCase(Platform_);
+  Cfg := LowerCase(Config);
+  if P = 'win64' then OtherP := 'win32' else OtherP := 'win64';
+  if Cfg = 'debug' then OtherC := 'release' else OtherC := 'debug';
+  Result := True;
+  if (Pos(OtherP, C) > 0) and (Pos(P, C) = 0) then Exit(False);     { other platform only }
+  if (Pos(OtherC, C) > 0) and (Pos(Cfg, C) = 0) then Exit(False);   { other config only }
+end;
+
+procedure ExtractTagTokens(const Body, Tag: string; Dest: TStringList);
+{ Append the ';'-separated tokens of every <Tag>...</Tag> in Body to Dest,
+  skipping empties, MSBuild macros ($(...)), and duplicates. }
+var
+  OpenT, CloseT, Inner, Tok: string;
+  p, q, e, sp: Integer;
+begin
+  OpenT  := '<' + Tag + '>';
+  CloseT := '</' + Tag + '>';
+  p := 1;
+  repeat
+    p := Pos(OpenT, Body, p);
+    if p = 0 then Break;
+    q := p + Length(OpenT);
+    e := Pos(CloseT, Body, q);
+    if e = 0 then Break;
+    Inner := Copy(Body, q, e - q) + ';';   { trailing ';' so the last token splits }
+    repeat
+      sp := Pos(';', Inner);
+      if sp = 0 then Break;
+      Tok := Trim(Copy(Inner, 1, sp - 1));
+      Delete(Inner, 1, sp);
+      if (Tok <> '') and (Pos('$(', Tok) = 0) and (Dest.IndexOf(Tok) < 0) then
+        Dest.Add(Tok);
+    until Inner = '';
+    p := e + Length(CloseT);
+  until False;
+end;
+
+procedure CollectDprojTokens(const Xml, Tag, Platform_, Config: string;
+                             Dest: TStringList);
+{ Walk <PropertyGroup ...>...</PropertyGroup> blocks; for each whose
+  Condition applies to the requested Platform_/Config (see CondMatchesBuild),
+  extract the Tag's tokens. A lightweight string scan -- no XML-parser
+  dependency, which is plenty for the flat DCC_UnitSearchPath /
+  DCC_Namespace values RAD Studio writes. Exposed so dcc-direct builds use
+  the project's own (config-correct) search paths/namespaces rather than
+  making the model hand-roll -U flags. }
+var
+  p, openEnd, gClose, cs, ce: Integer;
+  OpenTag, Cond, Body: string;
+begin
+  p := 1;
+  repeat
+    p := Pos('<PropertyGroup', Xml, p);
+    if p = 0 then Break;
+    openEnd := Pos('>', Xml, p);
+    if openEnd = 0 then Break;
+    OpenTag := Copy(Xml, p, openEnd - p + 1);   { <PropertyGroup Condition="..."> }
+    { self-closing <PropertyGroup .../> has no body to scan }
+    if (Length(OpenTag) >= 2) and (OpenTag[Length(OpenTag) - 1] = '/') then
+    begin
+      p := openEnd + 1;
+      Continue;
+    end;
+    gClose := Pos('</PropertyGroup>', Xml, openEnd);
+    if gClose = 0 then gClose := Length(Xml) + 1;
+    Body := Copy(Xml, openEnd + 1, gClose - (openEnd + 1));
+    Cond := '';
+    cs := Pos('Condition="', OpenTag);
+    if cs > 0 then
+    begin
+      cs := cs + Length('Condition="');
+      ce := Pos('"', OpenTag, cs);
+      if ce > 0 then Cond := Copy(OpenTag, cs, ce - cs);
+    end;
+    if CondMatchesBuild(Cond, Platform_, Config) then
+      ExtractTagTokens(Body, Tag, Dest);
+    p := gClose + 1;
+  until False;
+end;
+
 function BuildViaDcc(const BinDir, ProjDpr, Platform_, Config: string;
                      out Output: string): Integer;
 { Spawn dcc directly via its argv (RunArgvCapture -> CreateProcessW), NOT
@@ -298,10 +396,16 @@ function BuildViaDcc(const BinDir, ProjDpr, Platform_, Config: string;
   re-escaped as \" by the process layer and cmd.exe rejects it
   ('\"...dcc32.exe\"' is not recognized). argv sidesteps quoting entirely:
   each element reaches dcc verbatim. RunArgvCapture also merges stderr, so
-  no 2>&1. }
+  no 2>&1.
+
+  Search paths come from the sibling .dproj's DCC_UnitSearchPath +
+  DCC_Namespace -- so a multi-dir project (e.g. src\llama_cpp\...) compiles
+  without the model hand-constructing -U flags, which is the F2613
+  "unit not found" trap. }
 var
-  Bds, Dcc, LibBase, NS, Extra, DbgDcu, RelDcu: string;
-  Args: TStringList;
+  Bds, Dcc, LibBase, NS, Extra, DbgDcu, RelDcu, DprojPath, Xml: string;
+  Args, SearchDirs, ProjNs: TStringList;
+  i: Integer;
 begin
   Bds := ExtractFileDir(ExcludeTrailingPathDelimiter(BinDir));   { ...\Studio\NN.0 }
 
@@ -321,8 +425,24 @@ begin
 
   Extra := GetEnvironmentVariable('PASCLAW_DELPHI_SEARCH');
 
+  SearchDirs := TStringList.Create;
+  ProjNs := TStringList.Create;
   Args := TStringList.Create;
   try
+    { Pull the project's own unit search paths + namespaces from the .dproj
+      (sibling of the .dpr). These are relative to the project dir, which is
+      the cwd we run dcc from, so they resolve as-is. }
+    DprojPath := ChangeFileExt(ProjDpr, '.dproj');
+    if FileExists(DprojPath) then
+    begin
+      Xml := ReadFileText(DprojPath);
+      CollectDprojTokens(Xml, 'DCC_UnitSearchPath', Platform_, Config, SearchDirs);
+      CollectDprojTokens(Xml, 'DCC_Namespace', Platform_, Config, ProjNs);
+    end;
+    for i := 0 to ProjNs.Count - 1 do
+      if Pos(';' + ProjNs[i] + ';', ';' + NS + ';') = 0 then
+        NS := NS + ';' + ProjNs[i];
+
     { -B build all; -NS namespaces; -U unit search; -$D+/- debug info.
       Each flag is one argv element -- no quoting; spaces in a -U path are
       preserved because CreateProcessW quotes the whole element. Output
@@ -333,6 +453,8 @@ begin
     if SameText(Config, 'Debug') and DirectoryExists(DbgDcu) then
       Args.Add('-U' + DbgDcu);
     if Extra <> '' then Args.Add('-U' + Extra);
+    for i := 0 to SearchDirs.Count - 1 do
+      Args.Add('-U' + SearchDirs[i]);   { project's own dirs, relative to cwd }
     if SameText(Config, 'Release') then
     begin
       Args.Add('-$D-'); Args.Add('-$L-'); Args.Add('-$O+');
@@ -345,6 +467,8 @@ begin
     Result := RunArgvCapture(Dcc, Args, ExtractFileDir(ProjDpr), Output);
   finally
     Args.Free;
+    ProjNs.Free;
+    SearchDirs.Free;
   end;
 end;
 
@@ -515,11 +639,19 @@ begin
     Result := Format('build FAILED (%s/%s, exit=%d): %d error(s), %d warning(s)',
                      [Config, Platform_, ExitCode, NErr, NWarn]);
   if Diags <> '' then
-    Result := Result + #10 + Diags
-  else if ExitCode <> 0 then
-    { No coded diagnostics parsed but the compiler failed -- surface the
-      raw tail so the model isn't blind (e.g. "file not found", env issues). }
-    Result := Result + #10 + Copy(Trim(Out_), 1, 1500);
+    Result := Result + #10 + Diags;
+  { Failed but no error code was parsed (e.g. a linker/env failure, or the
+    real error scrolled past the classifier) -- surface the raw tail so the
+    model isn't left with "FAILED, 0 errors" and nothing to act on. Tail,
+    not head: dcc prints diagnostics near the end. }
+  if (ExitCode <> 0) and (NErr = 0) then
+  begin
+    Out_ := Trim(Out_);
+    if Length(Out_) > 1500 then
+      Out_ := '...' + Copy(Out_, Length(Out_) - 1500 + 1, 1500);
+    if Out_ <> '' then
+      Result := Result + #10 + '--- raw output (tail) ---' + #10 + Out_;
+  end;
 end;
 
 procedure RegisterDelphiBuildTool(R: TToolRegistry);

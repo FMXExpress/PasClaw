@@ -14,7 +14,7 @@ program delphi_build_tests;
 {$H+}
 
 uses
-  SysUtils,
+  SysUtils, Classes,
   PasClaw.Tools.DelphiBuild;
 
 procedure Fail(const Msg: string);
@@ -96,9 +96,61 @@ begin
   if Diags <> '' then Fail('clean build yields no diagnostics, got: ' + Diags);
 end;
 
+procedure TestDprojTokenExtraction;
+{ dcc-direct pulls the project's own search paths + namespaces from the
+  .dproj so multi-dir projects compile without hand-rolled -U flags. Verify:
+  ';'-split, skip $() macros, dedupe across groups, AND honour PropertyGroup
+  conditions -- a Win32 build must NOT pull a Win64-only group's dirs. }
+const
+  Dproj =
+    '<Project>' +
+    { Base/unconditional group -- applies to every build. }
+    '<PropertyGroup>' +
+    '<DCC_UnitSearchPath>src;src\llama_cpp;src\llama_cpp\Api;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>' +
+    '<DCC_Namespace>System;FMX;$(DCC_Namespace)</DCC_Namespace>' +
+    '</PropertyGroup>' +
+    { Win32 group -- applies to a Win32 build. }
+    '<PropertyGroup Condition="''$(Platform)''==''Win32''">' +
+    '<DCC_UnitSearchPath>src\llama_cpp\CType;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>' +
+    '</PropertyGroup>' +
+    { Win64-only group -- must be EXCLUDED from a Win32 build. }
+    '<PropertyGroup Condition="''$(Platform)''==''Win64''">' +
+    '<DCC_UnitSearchPath>src\only_win64;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>' +
+    '</PropertyGroup>' +
+    '</Project>';
+var
+  Dirs, Ns: TStringList;
+begin
+  Dirs := TStringList.Create;
+  Ns := TStringList.Create;
+  try
+    CollectDprojTokens(Dproj, 'DCC_UnitSearchPath', 'Win32', 'Debug', Dirs);
+    CollectDprojTokens(Dproj, 'DCC_Namespace', 'Win32', 'Debug', Ns);
+
+    { Base (3) + Win32 group (1 new). Macro + the Win64 dir excluded. }
+    AssertEq(Dirs.Count, 4, 'Win32 build: base + Win32 dirs only');
+    if Dirs.IndexOf('src\llama_cpp\Api') < 0 then Fail('expected base dir src\llama_cpp\Api');
+    if Dirs.IndexOf('src\llama_cpp\CType') < 0 then Fail('expected Win32 dir src\llama_cpp\CType');
+    if Dirs.IndexOf('src\only_win64') >= 0 then Fail('Win64-only dir must be excluded from Win32 build');
+    if Dirs.IndexOf('$(DCC_UnitSearchPath)') >= 0 then Fail('macro token must be skipped');
+
+    AssertEq(Ns.Count, 2, 'namespaces (System, FMX); macro skipped');
+    if Ns.IndexOf('FMX') < 0 then Fail('expected FMX namespace');
+
+    { A Win64 build picks up the Win64 dir and drops nothing of the base. }
+    Dirs.Clear;
+    CollectDprojTokens(Dproj, 'DCC_UnitSearchPath', 'Win64', 'Debug', Dirs);
+    if Dirs.IndexOf('src\only_win64') < 0 then Fail('Win64 build should include src\only_win64');
+  finally
+    Ns.Free;
+    Dirs.Free;
+  end;
+end;
+
 begin
   TestRawDccFormat;
   TestMsbuildBracketFormat;
   TestCleanBuildAndNoFalsePositives;
+  TestDprojTokenExtraction;
   WriteLn('delphi_build_tests: OK');
 end.
