@@ -625,7 +625,7 @@ function GetEffectiveGatewayToken(const C: TConfig): string;
       gateway: bearer-token auth ENABLED (source=env, token len=64, prefix=ab12...)
       gateway: bearer-token auth ENABLED (source=config.json, token len=64, prefix=ab12...)
       gateway: bearer-token auth MISCONFIGURED -- token field is unresolved template '${PASCLAW_GATEWAY_TOKEN}'; env var not set, so no client token will match
-      gateway: bearer-token auth DISABLED -- no token configured (every /v1/* route open)
+      gateway: bearer-token auth DISABLED -- no token configured (every /v1/* and /mcp route open to any caller)
 
     The MISCONFIGURED case is the typo trap: an operator sets
     PASCAL_GATEWAY_TOKEN (no W) in the platform's env-var UI,
@@ -1717,8 +1717,15 @@ begin
   end
   else
   begin
+    (* Mention both /v1/* (main API surface) and /mcp (the dedicated
+       MCP companion listener at --mcp-port, plus the /v1/mcp/rpc
+       in-main-port path) so operators understand the full exposure
+       -- a token-less gateway leaves the MCP JSON-RPC endpoint open
+       to any reachable caller, not just the OpenAI-compatible
+       routes. Codex P2 on PR #255. *)
     Result := 'gateway: bearer-token auth DISABLED -- ' +
-              'no token configured (every /v1/* route open)';
+              'no token configured (every /v1/* and /mcp route ' +
+              'open to any caller)';
     Exit;
   end;
 
