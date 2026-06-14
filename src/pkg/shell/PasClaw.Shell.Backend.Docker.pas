@@ -264,16 +264,23 @@ begin
   {$IFDEF MSWINDOWS}
   { Windows host only: without this the model follows the host platform and
     emits cmd.exe (`dir /s /b`, C:\ paths) into the Linux container, which
-    fails. Spell out Linux/POSIX and the mapped container cwd (/workspace).
-    On POSIX hosts the container shares the host's conventions and the
-    workspace is same-path, so no such warning is needed -- see the ELSE
-    branch, which keeps the original wording verbatim. }
+    fails. Spell out Linux/POSIX, the mapped container cwd (/workspace),
+    AND a concrete host->container path example -- the model otherwise sees
+    host paths everywhere (fs_read/fs_list return them) and mistranslates,
+    e.g. C:\...\workspace\DelphiPalAI became /workspace/workspace/DelphiPalAI
+    (the 'workspace' segment counted twice). On POSIX hosts the container
+    shares the host's conventions and the workspace is same-path, so no
+    such warning is needed -- see the ELSE branch (original wording). }
   Result := Format('runs each command inside a per-session Linux Docker container ' +
-                   '(image=%s, network=%s) via /bin/sh, so use POSIX commands ' +
-                   '(ls, find, grep, cat) and POSIX paths -- NOT Windows cmd ' +
-                   '(dir) or C:\ paths even though the host is Windows. The ' +
-                   'workspace is mounted at %s, which is the working directory',
+                   '(image=%s, network=%s) via /bin/sh. Use POSIX commands (ls, find, ' +
+                   'grep, cat) and POSIX paths -- NOT Windows cmd (dir) or C:\ paths ' +
+                   'even though the host is Windows. The workspace is mounted at %s, ' +
+                   'which is the working directory: a host path %s\NAME appears here ' +
+                   'as %s/NAME (do not reuse the C:\ path or repeat "workspace"). ' +
+                   'Prefer paths relative to the working directory.',
                    [FOpts.Image, FOpts.Network,
+                    ContainerPath(JoinPath(GetHome, 'workspace')),
+                    JoinPath(GetHome, 'workspace'),
                     ContainerPath(JoinPath(GetHome, 'workspace'))]);
   {$ELSE}
   Result := Format('runs inside a per-session Docker container (image=%s, network=%s; ' +
