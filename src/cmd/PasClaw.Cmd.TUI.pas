@@ -42,6 +42,8 @@ uses
   PasClaw.Skills.Loader,
   PasClaw.Agent.Subagent,
   PasClaw.Agent.SubagentBg,
+  PasClaw.Session.Store,           { NewSessionId -- stable per-launch id for
+                                     the TUI's single shell container }
   PasClaw.TUI;
 
 type
@@ -95,26 +97,19 @@ var
   BgCoord: TBackgroundSpawnCoordinator;
   KindSelected: TShellBackendKind;
   BackendDesc: string;
+  ShellSessionId: string;
 begin
   if not ParseArgs(Argv, A) then Exit(1);
   Cfg := LoadConfig;
   ConfigureSandbox(Cfg.Sandbox, '');
-  { Phase 1 docker backend is wired for the agent + heartbeat
-    surfaces; TUI's in-process session switching (/new, /load) needs
-    a per-switch container handoff that's a Phase 1.5 follow-up.
-    Until then, install only the local backend on TUI and refuse a
-    docker selection loudly so the operator isn't silently running
-    on the host when they thought they had isolation. }
-  if (LowerCase(A.BackendOverride) = 'docker')
-     or ((A.BackendOverride = '') and (Cfg.ShellBackend = sbDocker)) then
-  begin
-    PrintLn(Ansi.Yellow + '!' + Ansi.Reset +
-            ' TUI does not yet support the docker shell backend.');
-    PrintLn('  Use ' + Ansi.Bold + 'pasclaw agent' + Ansi.Reset +
-            ' for an interactive docker-backed session, or pass ' +
-            Ansi.Bold + '--backend local' + Ansi.Reset + '.');
-    Exit(1);
-  end;
+  { Docker backend: the TUI runs ONE container for its whole process,
+    not one per chat session. The container is a workspace sandbox --
+    every TUI session shares the same bind-mounted workspace, and
+    shell_exec/execute_code pick their container via the process-wide
+    GetCurrentSessionId -- so there's nothing per-conversation to
+    isolate and no per-switch container handoff to get wrong. We spawn
+    it once below (before the full-screen UI, so a slow first-time image
+    pull doesn't freeze the alt-screen) and tear it down on exit. }
   try
     InstallShellBackend(Cfg, A.BackendOverride, KindSelected, BackendDesc);
   except
@@ -125,6 +120,30 @@ begin
     end;
   end;
   try
+    { Spawn the one TUI container up front (no-op for the local backend).
+      A docker spawn blocks while the image pulls on first use, which is
+      why it happens here -- before TTUI.Run enters the alt-screen -- and
+      surfaces failures as a clean console error rather than a frozen UI.
+      The id is unique per launch so a leaked container from a previous
+      run can't collide on the docker name. SetCurrentSessionId points
+      shell_exec/execute_code at this container for every turn. }
+    ShellSessionId := '';
+    if KindSelected = sbDocker then
+    begin
+      ShellSessionId := NewSessionId;
+      PrintLn(Ansi.Dim + 'starting docker container for this session...' + Ansi.Reset);
+      try
+        StartShellSession(ShellSessionId);
+      except
+        on E: Exception do
+        begin
+          PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + E.Message);
+          Exit(1);
+        end;
+      end;
+      SetCurrentSessionId(ShellSessionId);
+    end;
+
     if A.Provider <> '' then Name := A.Provider else Name := Cfg.DefaultProvider;
     Provider := nil;
     if Name <> '' then
@@ -204,6 +223,9 @@ begin
     try
       TUIInst.Run;
     finally
+      { Stop the TUI's container (no-op for local / when none was
+        started). --rm at spawn removes it on stop. }
+      if ShellSessionId <> '' then CloseShellSession(ShellSessionId);
       TUIInst.Free;
       FreeMCPClients(MCPClients);
       { Spawn owned here (same shape as Cmd.Agent); BgCoord is NOT
