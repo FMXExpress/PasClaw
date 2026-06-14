@@ -579,14 +579,21 @@ async function activateSession(id) {
   renderSessions();
   clearLog();
   activeTurns = [];
+  let loaded = [];
   try {
     const j = await (await gwFetch("/v1/sessions/" + encodeURIComponent(id))).json();
+    /* Guard against a stale load winning a race: if the operator switched
+       sessions while this request was in flight, drop the late response
+       rather than overwriting the now-active conversation. */
+    if (activeSessionId !== id) return;
     for (const msg of (j.messages || [])) {
-      if (msg.role === "user") activeTurns.push({ role: "u", text: msg.content || "" });
-      else if (msg.role === "assistant") activeTurns.push({ role: "a", text: msg.content || "" });
+      if (msg.role === "user") loaded.push({ role: "u", text: msg.content || "" });
+      else if (msg.role === "assistant") loaded.push({ role: "a", text: msg.content || "" });
       /* tool/system turns aren't shown in the web transcript */
     }
   } catch { /* leave empty on a failed load */ }
+  if (activeSessionId !== id) return;   // switched away during the await
+  activeTurns = loaded;
   renderActive();
 }
 
@@ -596,7 +603,21 @@ function recordTurn(role, text) {
 
 /* Persist the open conversation. Creates the session on first save
    (POST -> server mints the id) then overwrites it (PUT). Errors are
-   non-fatal -- the chat stays usable in-memory. */
+   non-fatal -- the chat stays usable in-memory.
+
+   The web UI only knows the user/assistant turns it displays. If the
+   target session is a rich agent transcript (tool/system turns,
+   assistant tool_calls -- e.g. one started in the TUI), a blind PUT of
+   the flattened turns would drop that hidden structure and break
+   terminal resume. The server refuses such a PUT with 409; we honour
+   that by forking into a fresh web-owned session (POST) instead of
+   clobbering the original. */
+async function createSession(body) {
+  const r = await gwFetch("/v1/sessions", {
+    method: "POST", headers: { "content-type": "application/json" }, body });
+  const j = await r.json();
+  if (j && j.id) activeSessionId = j.id;
+}
 async function persistActive() {
   const msgs = activeTurns
     .filter(t => t.role === "u" || t.role === "a")
@@ -605,13 +626,15 @@ async function persistActive() {
   const body = JSON.stringify({ messages: msgs });
   try {
     if (!activeSessionId) {
-      const r = await gwFetch("/v1/sessions", {
-        method: "POST", headers: { "content-type": "application/json" }, body });
-      const j = await r.json();
-      if (j && j.id) activeSessionId = j.id;
+      await createSession(body);
     } else {
-      await gwFetch("/v1/sessions/" + encodeURIComponent(activeSessionId), {
+      const r = await gwFetch("/v1/sessions/" + encodeURIComponent(activeSessionId), {
         method: "PUT", headers: { "content-type": "application/json" }, body });
+      if (r.status === 409) {
+        /* Don't clobber an agent transcript -- fork to a new session. */
+        activeSessionId = null;
+        await createSession(body);
+      }
     }
     await refreshSessions();   // pick up server-derived title + new ordering
   } catch { /* keep going; next turn will retry the write */ }
@@ -785,15 +808,18 @@ async function streamAssistant() {
     currentAbort = null;
     if (assistantText) {
       /* Record + redraw so the finished turn renders as markdown with
-         copy/regenerate actions at the right index, then persist to the
-         server (creating the session on the first turn). */
+         copy/regenerate actions at the right index. */
       recordTurn("a", assistantText);
       renderActive();
-      persistActive();
     } else if (bub.querySelector(".typing")) {
       /* Stream closed with no content and wasn't an error -- clear the dots. */
       bub.textContent = "(no response)";
     }
+    /* Persist whatever we have, even when the assistant produced nothing
+       (HTTP error / network failure / Stop before the first token). The
+       user turn is already in activeTurns from submitUser, and must
+       survive a reload rather than being lost with the failed reply. */
+    if (activeTurns.length) persistActive();
     m.focus();
   }
 }
