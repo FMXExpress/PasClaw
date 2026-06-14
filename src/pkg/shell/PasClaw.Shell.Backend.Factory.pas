@@ -40,6 +40,7 @@ implementation
 
 uses
   PasClaw.Utils,                 { JoinPath -- workspace cwd align (GetHome is in PasClaw.Config) }
+  PasClaw.Tools.Sandbox,         { ConfigureSandbox -- re-point GWorkspace after the chdir }
   PasClaw.Shell.Backend.Local,
   PasClaw.Shell.Backend.Docker;
 
@@ -95,7 +96,19 @@ begin
           leaves the operator's launch cwd untouched. }
         WsHost := JoinPath(GetHome, 'workspace');
         if not DirectoryExists(WsHost) then ForceDirectories(WsHost);
-        if DirectoryExists(WsHost) then SetCurrentDir(WsHost);
+        if DirectoryExists(WsHost) then
+        begin
+          SetCurrentDir(WsHost);
+          { Re-point the sandbox at the new cwd. The surface called
+            ConfigureSandbox BEFORE us, so (with restrict_to_workspace=true
+            and sandbox.workspace empty) GWorkspace was pinned to the launch
+            dir. After the chdir, fs tools canonicalize relative paths
+            against WsHost; without this re-config a plain fs_read("foo")
+            would resolve under WsHost yet be rejected as outside the stale
+            GWorkspace, and shell_exec would pin to the stale dir. Codex P1
+            on PR #267. Passing WsHost explicitly makes GWorkspace == cwd. }
+          ConfigureSandbox(Cfg.Sandbox, WsHost);
+        end;
       end;
   else
     { sbLocal -- and any unknown future enum value falls back here
