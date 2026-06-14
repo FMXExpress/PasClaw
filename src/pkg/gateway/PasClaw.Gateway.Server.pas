@@ -1245,7 +1245,29 @@ var
   SR: TSearchRec;
 begin
   Path := ARequest.Params.Values['path'];
-  if Path = '' then Path := GetHome;
+  if Path = '' then
+  begin
+    (* Default landing directory for a no-param `GET /v1/fs`.
+
+       When the sandbox is on, default to its configured workspace
+       so the operator's first request returns useful contents
+       (the listing of /v1/fs/workspace) instead of an immediate
+       403 on $PASCLAW_HOME root. When the sandbox is off (or no
+       workspace is configured), keep the historical $PASCLAW_HOME
+       fallback so single-user CLI / desktop deployments still
+       browse the config tree from the home root.
+
+       Side-stepping the 403 silently is the right call here --
+       /v1/fs is operator-facing, not the model's tool surface
+       (that's tools/fs_read), and an empty-path "give me
+       something" request really does want the directory the
+       sandbox WILL allow rather than one it's guaranteed to
+       refuse. *)
+    if FCfg.Sandbox.RestrictToWorkspace and (FCfg.Sandbox.Workspace <> '') then
+      Path := FCfg.Sandbox.Workspace
+    else
+      Path := GetHome;
+  end;
   { Route through the same sandbox CanReadPath check that fs_read
     uses. PR #88 Codex P1: the original "reject `..`" check let
     absolute paths like /etc/passwd through even when
