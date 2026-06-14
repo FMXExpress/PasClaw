@@ -2516,7 +2516,7 @@ begin
         LogWarn('chat/completions: tool loop hit MaxIterations=%d (%d pending tool call(s), %d content chars)',
                 [FMaxIter, Length(Loop.LastResp.ToolCalls), Length(Loop.Content)]);
       end
-      else if Loop.Content = '' then
+      else if Trim(Loop.Content) = '' then
       begin
         Loop.Content := Format('(no content returned by the model; finish_reason=%s)',
                                 [FinishReason]);
@@ -2606,7 +2606,7 @@ begin
       LogWarn('chat/completions: tool loop hit MaxIterations=%d (%d pending tool call(s), %d content chars)',
               [FMaxIter, Length(Loop.LastResp.ToolCalls), Length(Loop.Content)]);
     end
-    else if Loop.Content = '' then
+    else if Trim(Loop.Content) = '' then
     begin
       { Loop exited normally with no pending tool calls but the model
         produced no text. Some streaming clients can't represent that. }
@@ -4196,7 +4196,7 @@ begin
         LogWarn('responses: tool loop hit MaxIterations=%d (%d pending tool call(s), %d content chars)',
                 [FMaxIter, Length(Loop.LastResp.ToolCalls), Length(Loop.Content)]);
       end
-      else if Loop.Content = '' then
+      else if Trim(Loop.Content) = '' then
       begin
         Loop.Content := Format('(no content returned by the model; finish_reason=%s)',
                                 [FinishReason]);
