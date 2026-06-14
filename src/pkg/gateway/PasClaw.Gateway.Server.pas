@@ -97,6 +97,23 @@ type
     procedure OnCommandGet(AContext: TIdContext;
                            ARequest: TIdHTTPRequestInfo;
                            AResponse: TIdHTTPResponseInfo);
+    (* OnParseAuth -- accept every Authorization scheme so Indy's
+       TIdCustomHTTPServer doesn't auto-401 with "Basic realm=..." on
+       Bearer (or any non-Basic) tokens before OnCommandGet runs.
+       Without this, Indy raises EIdHTTPUnsupportedAuthorisationScheme
+       on the FIRST byte of an `Authorization: Bearer <tok>` header,
+       which is converted to a 401 in its request-loop exception
+       handler -- so PasClaw's CheckGatewayAuth middleware never gets
+       a chance to validate. PR #246's bearer flow was silently broken
+       end-to-end; the web UI dodged it only because gwFetch suppresses
+       the Authorization header until a token is stored, and the
+       token-less default config never sent one either. The handler
+       just sets VHandled := True; real validation stays in
+       OnCommandGet via PasClaw.Gateway.Auth.CheckGatewayAuth. *)
+    procedure OnParseAuth(AContext: TIdContext;
+                          const AAuthType, AAuthData: string;
+                          var VUsername, VPassword: string;
+                          var VHandled: Boolean);
     procedure HandleHealth(AResp: TIdHTTPResponseInfo);
     procedure HandleVersion(AResp: TIdHTTPResponseInfo);
     procedure HandleStatus(AResp: TIdHTTPResponseInfo);
@@ -348,6 +365,7 @@ begin
   SetLength(FWebhookHandlers, 0);
   FHTTP := TIdHTTPServer.Create(nil);
   FHTTP.OnCommandGet := OnCommandGet;
+  FHTTP.OnParseAuthentication := OnParseAuth;
   FHTTP.KeepAlive    := True;
   FHTTP.ServerSoftware := 'PasClaw/' + FormatVersion;
   FMCPInbound       := nil;
@@ -596,6 +614,34 @@ end;
 
 { TGatewayServer.WriteSSE removed -- dead method, see class
   declaration. dcc64 H2219 cleanup. }
+
+procedure TGatewayServer.OnParseAuth(AContext: TIdContext;
+                                     const AAuthType, AAuthData: string;
+                                     var VUsername, VPassword: string;
+                                     var VHandled: Boolean);
+begin
+  (* Accept ALL schemes -- Bearer, plus anything an operator's
+     middleware might prepend later. Indy's default DoParseAuthentication
+     handles Basic itself before this fires; everything else falls
+     through to us. Setting VHandled := True keeps Indy from raising
+     EIdHTTPUnsupportedAuthorisationScheme (which it would auto-convert
+     to a 401 in the request-loop exception handler at
+     IdCustomHTTPServer.pas:1476, before OnCommandGet runs). PasClaw's
+     real bearer check lives in OnCommandGet via CheckGatewayAuth, so
+     leaving VUsername / VPassword empty is fine -- the AuthHeader is
+     still on ARequest.RawHeaders and CheckGatewayAuth pulls it from
+     there directly. PR #255 follow-up to fix PR #246's silent break.
+
+     AContext is not used here, but the parameter is part of Indy's
+     TIdHTTPParseAuthenticationEvent signature; we keep it named for
+     readability and reference it once to silence the "unused" hint. *)
+  if AContext = nil then ;       { silence unused-param hint }
+  if AAuthType = '' then ;       { likewise }
+  if AAuthData = '' then ;
+  VUsername := '';
+  VPassword := '';
+  VHandled  := True;
+end;
 
 procedure TGatewayServer.OnCommandGet(AContext: TIdContext;
                                      ARequest: TIdHTTPRequestInfo;
