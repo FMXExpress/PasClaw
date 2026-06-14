@@ -96,6 +96,34 @@ begin
   if Diags <> '' then Fail('clean build yields no diagnostics, got: ' + Diags);
 end;
 
+procedure TestErrorsLeadAndSurviveCap;
+{ A real build can emit hundreds of hints/warnings -- more than the 200-line
+  keep cap. The model must still SEE the actual errors, and they must lead the
+  output, so they can't be silently dropped behind a hint flood. }
+var
+  Raw, Diags: string;
+  E, W, H, i: Integer;
+  Sb: TStringBuilder;
+begin
+  Sb := TStringBuilder.Create;
+  try
+    { 300 hints (over the 200 cap), then the one error that matters, last. }
+    for i := 1 to 300 do
+      Sb.Append(Format('Unit.pas(%d): H2077 Value assigned to ''X'' never used'#10, [i]));
+    Sb.Append('Broken.pas(7): E2003 Undeclared identifier: ''DoThing''');
+    Raw := Sb.ToString;
+  finally
+    Sb.Free;
+  end;
+  Diags := ParseDelphiOutput(Raw, E, W, H);
+  AssertEq(E, 1, 'one error counted under hint flood');
+  AssertEq(H, 300, 'all hints counted');
+  AssertContains(Diags, 'E2003', 'error survives the keep cap');
+  { The error must come first -- before any hint text in the kept output. }
+  if Pos('E2003', Diags) > Pos('H2077', Diags) then
+    Fail('error must lead the diagnostics, not trail the hints');
+end;
+
 procedure TestDprojTokenExtraction;
 { dcc-direct pulls the project's own search paths + namespaces from the
   .dproj so multi-dir projects compile without hand-rolled -U flags. Verify:
@@ -151,6 +179,7 @@ begin
   TestRawDccFormat;
   TestMsbuildBracketFormat;
   TestCleanBuildAndNoFalsePositives;
+  TestErrorsLeadAndSurviveCap;
   TestDprojTokenExtraction;
   WriteLn('delphi_build_tests: OK');
 end.

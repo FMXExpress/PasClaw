@@ -250,15 +250,36 @@ function ParseDelphiOutput(const Raw: string;
 const
   MaxKept = 200;   { cap so a runaway build can't blow the tool-result budget }
 var
-  Lines: TStringList;
+  Lines, Errs, Warns, Hints: TStringList;
   Sb: TStringBuilder;
   i, Kept: Integer;
   Letter: Char;
   Ln: string;
+
+  { Drain a bucket into the result, newest-cap-aware, until either the
+    bucket is empty or the shared MaxKept budget is exhausted. Errors are
+    drained first by call order, so a flood of hints/warnings can never
+    push a real error out of the model's view. }
+  procedure Drain(Src: TStringList);
+  var
+    j: Integer;
+  begin
+    for j := 0 to Src.Count - 1 do
+    begin
+      if Kept >= MaxKept then Exit;
+      if Sb.Length > 0 then Sb.Append(#10);
+      Sb.Append(Src[j]);
+      Inc(Kept);
+    end;
+  end;
+
 begin
   NErrors := 0; NWarnings := 0; NHints := 0;
   Kept := 0;
   Lines := TStringList.Create;
+  Errs  := TStringList.Create;
+  Warns := TStringList.Create;
+  Hints := TStringList.Create;
   Sb := TStringBuilder.Create;
   try
     Lines.Text := StringReplace(Raw, #13, '', [rfReplaceAll]);
@@ -267,24 +288,26 @@ begin
       Ln := Lines[i];
       if not FindDelphiCode(Ln, Letter) then Continue;
       case Letter of
-        'F': Inc(NErrors);   { fatal counts as an error for the model }
-        'E': Inc(NErrors);
-        'W': Inc(NWarnings);
-        'H': Inc(NHints);
-      end;
-      if Kept < MaxKept then
-      begin
-        if Sb.Length > 0 then Sb.Append(#10);
-        Sb.Append(Trim(Ln));
-        Inc(Kept);
+        'F': begin Inc(NErrors);   Errs.Add(Trim(Ln)); end;  { fatal counts as an error }
+        'E': begin Inc(NErrors);   Errs.Add(Trim(Ln)); end;
+        'W': begin Inc(NWarnings); Warns.Add(Trim(Ln)); end;
+        'H': begin Inc(NHints);    Hints.Add(Trim(Ln)); end;
       end;
     end;
+    { Errors first so they always lead and are never dropped by the cap;
+      then warnings, then hints fill whatever budget remains. }
+    Drain(Errs);
+    Drain(Warns);
+    Drain(Hints);
     Result := Sb.ToString;
     {$IFDEF FPC}
     SetCodePage(RawByteString(Result), CP_UTF8, False);
     {$ENDIF}
   finally
     Sb.Free;
+    Hints.Free;
+    Warns.Free;
+    Errs.Free;
     Lines.Free;
   end;
 end;
