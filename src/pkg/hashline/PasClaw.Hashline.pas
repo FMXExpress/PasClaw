@@ -489,6 +489,34 @@ begin
   Result := (RangeStart > 0) and (RangeEnd >= RangeStart);
 end;
 
+function IsAnchorWithTrailingText(const Line: string): Boolean;
+{ True for lines shaped like "10:  foo" or "7-10: foo" -- a line-number
+  anchor with text echoed after the colon. This is the single most common
+  malformed anchor: the model copies fs_read's "N:content" display onto
+  the anchor line instead of using a bare "N:" with the text on a |/↑/↓
+  payload line. TryParseAnchor rejects it (anchors take no trailing text),
+  and we use this to turn the generic "unrecognized content" into a
+  precise hint. NOT a parse path -- diagnostics only. }
+var
+  i, n: Integer;
+begin
+  Result := False;
+  n := Length(Line);
+  i := 1;
+  while (i <= n) and (Line[i] = ' ') do Inc(i);
+  if (i > n) or not ((Line[i] >= '1') and (Line[i] <= '9')) then Exit;
+  while (i <= n) and (Line[i] >= '0') and (Line[i] <= '9') do Inc(i);
+  if (i <= n) and (Line[i] = '-') then
+  begin
+    Inc(i);
+    while (i <= n) and (Line[i] >= '0') and (Line[i] <= '9') do Inc(i);
+  end;
+  if (i > n) or (Line[i] <> ':') then Exit;
+  Inc(i);
+  while (i <= n) and (Line[i] = ' ') do Inc(i);
+  Result := i <= n;   { non-space content remains after "N:" }
+end;
+
 function TryParsePayload(const Line: string; out Kind: THLPayloadKind;
                          out Body: string): Boolean;
 begin
@@ -682,15 +710,25 @@ begin
       end;
       if Trim(Lines[i]) = '' then Continue;
       if (Lines[i] <> '') and (Lines[i][1] = '#') then Continue;
-      { Most common cause: a multi-line replacement that prefixed only its
-        first line. Every payload line needs its own marker, so a bare
-        line inside a block reads as unrecognized. Say so. }
-      ErrMsg := Format('line %d: unrecognized content %s -- every payload line ' +
-                       'must start with %s (replace), %s (insert above), or %s ' +
-                       '(insert below); a bare line usually means a multi-line ' +
-                       'replacement is missing its per-line %s prefix',
-                       [i + 1, QuotedStr(Lines[i]), HL_PAYLOAD_REPLACE,
-                        HL_PAYLOAD_ABOVE, HL_PAYLOAD_BELOW, HL_PAYLOAD_REPLACE]);
+      if IsAnchorWithTrailingText(Lines[i]) then
+        { The model echoed the current line text onto the anchor (copying
+          fs_read's "N:content" display). Anchors take no trailing text. }
+        ErrMsg := Format('line %d: anchor line must be JUST the line number(s) -- ' +
+                         '"%s" should be e.g. "10:" or "7-10:" with nothing after ' +
+                         'the colon. Do not copy the "N:content" form from fs_read ' +
+                         'onto the anchor; put the replacement text on the next ' +
+                         'line(s) prefixed with %s (replace).',
+                         [i + 1, Trim(Lines[i]), HL_PAYLOAD_REPLACE])
+      else
+        { Most common remaining cause: a multi-line replacement that
+          prefixed only its first line. Every payload line needs its own
+          marker, so a bare line inside a block reads as unrecognized. }
+        ErrMsg := Format('line %d: unrecognized content %s -- every payload line ' +
+                         'must start with %s (replace), %s (insert above), or %s ' +
+                         '(insert below); a bare line usually means a multi-line ' +
+                         'replacement is missing its per-line %s prefix',
+                         [i + 1, QuotedStr(Lines[i]), HL_PAYLOAD_REPLACE,
+                          HL_PAYLOAD_ABOVE, HL_PAYLOAD_BELOW, HL_PAYLOAD_REPLACE]);
       Exit;
     end;
     if Started then

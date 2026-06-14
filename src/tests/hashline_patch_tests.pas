@@ -66,10 +66,39 @@ begin
              'error explains the per-line prefix requirement: ' + Err);
 end;
 
+procedure TestAnchorWithEchoedTextRejected;
+{ The recurring real-world mistake: the model copies fs_read's "N:content"
+  display onto the anchor line instead of a bare "N:". Must be rejected
+  (echoing the old text on the anchor is ambiguous in multi-line cases),
+  and the error must precisely name the anchor problem -- not the generic
+  missing-| hint -- so the model fixes it without flailing. The bare-"N:"
+  form must of course still parse. }
+var
+  P, Err: string;
+  Sections: THLSectionArray;
+begin
+  P := '¶e.txt#beef' + #10 +
+       '10:  FireDAC.FUI.Transit, FireDAC.Comp.UI;' + #10 +
+       '|  FireDAC.FMXUI.Wait, FireDAC.Comp.UI;';
+  AssertTrue(not ParseHashlinePatch(P, Sections, Err),
+             'anchor line with echoed text must be rejected');
+  AssertTrue(Pos('anchor', Err) > 0,
+             'error names the anchor as the problem: ' + Err);
+  AssertTrue((Pos('per-line', Err) = 0),
+             'error does NOT misfire the generic missing-| hint: ' + Err);
+
+  { The corrected form -- bare anchor + replace payload -- parses fine. }
+  P := '¶e.txt#beef' + #10 + '10:' + #10 +
+       '|  FireDAC.FMXUI.Wait, FireDAC.Comp.UI;';
+  AssertTrue(ParseHashlinePatch(P, Sections, Err),
+             'bare "N:" anchor + payload still parses: ' + Err);
+end;
+
 begin
   TestValidInsertion;
   TestValidMultilineReplacement;
   TestInvalidInlinePayload;
   TestBareContinuationLineRejected;
+  TestAnchorWithEchoedTextRejected;
   Writeln('PASS');
 end.
