@@ -78,6 +78,25 @@
   .session-list li:hover .del{opacity:.7}
   .session-list li .del:hover{opacity:1}
   .chat-pane{flex:1;display:flex;flex-direction:column;min-width:0}
+  .chat-toolbar{display:flex;align-items:center;gap:.5rem;padding:.4rem .6rem;
+    border-bottom:1px solid rgba(255,255,255,.06)}
+  .params-summary{font-size:10.5px;color:var(--mut);letter-spacing:.03em}
+  #params-toggle.on{background:rgba(32,246,255,.12);box-shadow:var(--glow-cyan)}
+  .chat-params{display:flex;flex-direction:column;gap:.5rem;padding:.6rem .7rem;
+    border-bottom:1px solid rgba(255,255,255,.08);background:rgba(2,5,15,.4)}
+  .chat-params[hidden]{display:none}
+  .chat-params .pf{display:flex;flex-direction:column;gap:.25rem;font-size:10.5px;
+    text-transform:uppercase;letter-spacing:.07em;color:var(--mut)}
+  .chat-params .pf-row{display:flex;gap:.6rem;align-items:flex-end;flex-wrap:wrap}
+  .chat-params textarea,.chat-params input,.chat-params select{
+    background:rgba(2,5,15,.72);color:var(--fg);caret-color:var(--cyan);
+    border:1px solid rgba(32,246,255,.3);border-radius:8px;padding:.4rem .5rem;
+    font:inherit;font-size:12px;outline:none;text-transform:none;letter-spacing:normal}
+  .chat-params textarea{resize:vertical;min-height:2.4rem}
+  .chat-params textarea:focus,.chat-params input:focus,.chat-params select:focus{
+    border-color:var(--cyan);box-shadow:var(--glow-cyan)}
+  .chat-params .num-pf{flex:1;min-width:7rem}
+  .chat-params .preset-pf{flex:1;min-width:8rem}
   #log{flex:1;overflow:auto;padding:.85rem;display:flex;flex-direction:column;gap:.55rem;
     scrollbar-color:var(--mag) transparent}
   .row{display:flex;gap:.6rem;align-items:flex-start;animation:rise .18s ease-out}
@@ -273,6 +292,32 @@
       <ul class="session-list" id="session-list"></ul>
     </aside>
     <div class="chat-pane">
+      <div class="chat-toolbar">
+        <button class="icon-btn" id="params-toggle" title="Per-chat parameters">⚙ Params</button>
+        <span id="params-summary" class="params-summary"></span>
+      </div>
+      <div id="chat-params" class="chat-params" hidden>
+        <label class="pf">System prompt
+          <textarea id="p-system" rows="3"
+            placeholder="Override the system prompt for this chat (blank = PasClaw default)"></textarea>
+        </label>
+        <div class="pf-row">
+          <label class="pf preset-pf">Preset
+            <select id="p-preset"><option value="">—</option></select>
+          </label>
+          <button class="icon-btn" id="p-preset-save"  title="Save the system prompt above as a preset">save</button>
+          <button class="icon-btn" id="p-preset-del"   title="Delete the selected preset">del</button>
+        </div>
+        <div class="pf-row">
+          <label class="pf num-pf">Temperature
+            <input id="p-temp" type="number" step="0.1" min="0" max="2" placeholder="default">
+          </label>
+          <label class="pf num-pf">Max tokens
+            <input id="p-maxtok" type="number" min="1" step="1" placeholder="default">
+          </label>
+          <button class="icon-btn" id="p-reset" title="Clear all per-chat parameters">reset</button>
+        </div>
+      </div>
       <div id="log"></div>
       <form class="send" id="f">
         <textarea id="m" rows="2"
@@ -728,13 +773,18 @@ async function streamAssistant() {
   /* Use /v1/chat/completions with stream:true so tool calls + results
      surface as content deltas (the gateway emits ⏺/⎿ markers per
      PasClaw.Gateway.ToolView). */
-  const history = activeTurns.filter(t => t.role === "u" || t.role === "a")
+  let history = activeTurns.filter(t => t.role === "u" || t.role === "a")
                           .map(t => ({ role: t.role === "u" ? "user" : "assistant", content: t.text }));
-  const body = { messages: history, stream: true };
+  const body = { stream: true };
   /* Model from the header picker, if the operator chose one. Empty value
      means "let the gateway use FCfg.DefaultModel" -- the historical default. */
   const sel = $("#model-sel");
   if (sel && sel.value) body.model = sel.value;
+  /* Per-chat parameters: a leading system message (the gateway lets a
+     client system prompt win over its default), plus temperature /
+     max_tokens, all honoured by /v1/chat/completions. */
+  history = applyChatParams(body, history);
+  body.messages = history;
 
   try {
     const r = await gwFetch("/v1/chat/completions", {
@@ -1209,6 +1259,104 @@ async function refreshStats() {
   }
 }
 
+/* ===== Per-chat parameters + system-prompt presets =====
+   LM-Studio-style controls applied to outgoing /v1/chat/completions
+   requests: a system-prompt override (sent as a leading system message,
+   which the gateway lets win over its default), temperature, and
+   max_tokens. Presets are named system prompts. Everything lives in
+   localStorage -- these are client-side request shaping, not server
+   config (that's the Settings tab). */
+const PARAMS_KEY  = "pasclaw.params.v1";
+const PRESETS_KEY = "pasclaw.presets.v1";
+let chatParams = { system: "", temp: "", maxtok: "" };
+
+function loadParams() {
+  try { chatParams = Object.assign(chatParams, JSON.parse(localStorage.getItem(PARAMS_KEY) || "{}")); } catch {}
+}
+function saveParams() {
+  try { localStorage.setItem(PARAMS_KEY, JSON.stringify(chatParams)); } catch {}
+  updateParamsSummary();
+}
+function updateParamsSummary() {
+  const bits = [];
+  if (chatParams.system)    bits.push("system");
+  if (chatParams.temp   !== "") bits.push("temp " + chatParams.temp);
+  if (chatParams.maxtok !== "") bits.push("max " + chatParams.maxtok);
+  const el = $("#params-summary");
+  if (el) el.textContent = bits.length ? bits.join(" · ") : "defaults";
+}
+function loadPresets() { try { return JSON.parse(localStorage.getItem(PRESETS_KEY) || "{}"); } catch { return {}; } }
+function savePresets(p) { try { localStorage.setItem(PRESETS_KEY, JSON.stringify(p)); } catch {} }
+function renderPresets() {
+  const sel = $("#p-preset");
+  if (!sel) return;
+  const presets = loadPresets();
+  sel.innerHTML = '<option value="">—</option>';
+  Object.keys(presets).sort().forEach(name => {
+    const o = document.createElement("option");
+    o.value = name; o.textContent = name;
+    sel.appendChild(o);
+  });
+}
+function applyChatParams(body, history) {
+  if (chatParams.system)
+    history = [{ role: "system", content: chatParams.system }].concat(history);
+  const t = parseFloat(chatParams.temp);
+  if (!isNaN(t) && t > 0) body.temperature = t;
+  const mx = parseInt(chatParams.maxtok, 10);
+  if (!isNaN(mx) && mx > 0) body.max_tokens = mx;
+  return history;
+}
+function initParams() {
+  loadParams();
+  const sys = $("#p-system"), temp = $("#p-temp"), maxtok = $("#p-maxtok");
+  const presetSel = $("#p-preset");
+  if (sys)    sys.value    = chatParams.system || "";
+  if (temp)   temp.value   = chatParams.temp   || "";
+  if (maxtok) maxtok.value = chatParams.maxtok || "";
+  updateParamsSummary();
+  renderPresets();
+
+  const toggle = $("#params-toggle"), panel = $("#chat-params");
+  if (toggle && panel) toggle.addEventListener("click", () => {
+    const show = panel.hasAttribute("hidden");
+    if (show) panel.removeAttribute("hidden"); else panel.setAttribute("hidden", "");
+    toggle.classList.toggle("on", show);
+  });
+  if (sys)    sys.addEventListener("input",    () => { chatParams.system = sys.value; saveParams(); });
+  if (temp)   temp.addEventListener("input",   () => { chatParams.temp   = temp.value.trim(); saveParams(); });
+  if (maxtok) maxtok.addEventListener("input", () => { chatParams.maxtok = maxtok.value.trim(); saveParams(); });
+
+  if (presetSel) presetSel.addEventListener("change", () => {
+    if (!presetSel.value) return;
+    const txt = loadPresets()[presetSel.value] || "";
+    if (sys) sys.value = txt;
+    chatParams.system = txt; saveParams();
+  });
+  const saveBtn = $("#p-preset-save");
+  if (saveBtn) saveBtn.addEventListener("click", () => {
+    const name = (window.prompt("Save current system prompt as preset named:") || "").trim();
+    if (!name) return;
+    const presets = loadPresets();
+    presets[name] = sys ? sys.value : "";
+    savePresets(presets); renderPresets();
+    if (presetSel) presetSel.value = name;
+  });
+  const delBtn = $("#p-preset-del");
+  if (delBtn) delBtn.addEventListener("click", () => {
+    if (!presetSel || !presetSel.value) return;
+    const presets = loadPresets();
+    delete presets[presetSel.value];
+    savePresets(presets); renderPresets();
+  });
+  const resetBtn = $("#p-reset");
+  if (resetBtn) resetBtn.addEventListener("click", () => {
+    chatParams = { system: "", temp: "", maxtok: "" };
+    if (sys) sys.value = ""; if (temp) temp.value = ""; if (maxtok) maxtok.value = "";
+    saveParams();
+  });
+}
+
 /* ===== Misc helpers ===== */
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c =>
@@ -1218,6 +1366,7 @@ function escapeHtml(s) {
 /* ===== Boot ===== */
 initTheme();
 loadModels();
+initParams();
 (async () => {
   await refreshSessions();
   if (sessions.length > 0) activateSession(sessions[0].id);
