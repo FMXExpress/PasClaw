@@ -331,6 +331,13 @@ begin
                            ScriptExtension(Lang)]));
   Sl := TStringList.Create;
   try
+    { LF line endings, always. TStringList.SaveToFile defaults to the host
+      line ending -- CRLF on Windows -- but with the docker backend the
+      script runs in a Linux container where bash treats the trailing \r as
+      part of the last token ("ls -la\r" -> "invalid option", "-maxdepth
+      2\r" -> "not a positive integer"). LF is correct for bash and
+      accepted by PowerShell, so force it unconditionally. }
+    Sl.LineBreak := #10;
     Sl.Text := Code;
     try
       Sl.SaveToFile(Path);
