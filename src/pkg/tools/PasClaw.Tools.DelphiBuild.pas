@@ -290,17 +290,18 @@ begin
   Result := (V = '1') or (V = 'true') or (V = 'yes') or (V = 'on');
 end;
 
-function DQuote(const S: string): string;
-{ Double-quote a path/arg for the cmd.exe / dcc command line we hand to
-  RunOneShot (which wraps in cmd /C on Windows). }
-begin
-  Result := '"' + S + '"';
-end;
-
 function BuildViaDcc(const BinDir, ProjDpr, Platform_, Config: string;
                      out Output: string): Integer;
+{ Spawn dcc directly via its argv (RunArgvCapture -> CreateProcessW), NOT
+  through RunOneShot's cmd.exe /C wrapper. The exe path contains spaces
+  ("Program Files"), so a quoted string handed to cmd /C gets its quotes
+  re-escaped as \" by the process layer and cmd.exe rejects it
+  ('\"...dcc32.exe\"' is not recognized). argv sidesteps quoting entirely:
+  each element reaches dcc verbatim. RunArgvCapture also merges stderr, so
+  no 2>&1. }
 var
-  Bds, Dcc, LibBase, Cmd, NS, Extra, DbgDcu, RelDcu: string;
+  Bds, Dcc, LibBase, NS, Extra, DbgDcu, RelDcu: string;
+  Args: TStringList;
 begin
   Bds := ExtractFileDir(ExcludeTrailingPathDelimiter(BinDir));   { ...\Studio\NN.0 }
 
@@ -320,26 +321,50 @@ begin
 
   Extra := GetEnvironmentVariable('PASCLAW_DELPHI_SEARCH');
 
-  { -B build all; -NS namespaces; -U unit search; -$D+/- debug info.
-    Output (exe/dcu) lands in the project dir (the cwd we run from). }
-  Cmd := DQuote(Dcc) + ' -B -NS' + NS;
-  if DirectoryExists(RelDcu) then Cmd := Cmd + ' -U' + DQuote(RelDcu);
-  if SameText(Config, 'Debug') and DirectoryExists(DbgDcu) then
-    Cmd := Cmd + ' -U' + DQuote(DbgDcu);
-  if Extra <> '' then Cmd := Cmd + ' -U' + DQuote(Extra);
-  if SameText(Config, 'Release') then
-    Cmd := Cmd + ' -$D- -$L- -$O+'
-  else
-    Cmd := Cmd + ' -$D+ -$L+ -$O-';
-  Cmd := Cmd + ' ' + DQuote(ProjDpr) + ' 2>&1';
-
-  Result := RunOneShot(Cmd, ExtractFileDir(ProjDpr), Output);
+  Args := TStringList.Create;
+  try
+    { -B build all; -NS namespaces; -U unit search; -$D+/- debug info.
+      Each flag is one argv element -- no quoting; spaces in a -U path are
+      preserved because CreateProcessW quotes the whole element. Output
+      (exe/dcu) lands in the project dir (the cwd we run from). }
+    Args.Add('-B');
+    Args.Add('-NS' + NS);
+    if DirectoryExists(RelDcu) then Args.Add('-U' + RelDcu);
+    if SameText(Config, 'Debug') and DirectoryExists(DbgDcu) then
+      Args.Add('-U' + DbgDcu);
+    if Extra <> '' then Args.Add('-U' + Extra);
+    if SameText(Config, 'Release') then
+    begin
+      Args.Add('-$D-'); Args.Add('-$L-'); Args.Add('-$O+');
+    end
+    else
+    begin
+      Args.Add('-$D+'); Args.Add('-$L+'); Args.Add('-$O-');
+    end;
+    Args.Add(ProjDpr);
+    Result := RunArgvCapture(Dcc, Args, ExtractFileDir(ProjDpr), Output);
+  finally
+    Args.Free;
+  end;
 end;
 
 function BuildViaMsbuild(const BinDir, Proj, Platform_, Config: string;
                          out Output: string): Integer;
+{ MSBuild needs cmd.exe (it's `call rsvars.bat && msbuild`, a batch chain),
+  but handing a quoted command string to cmd /C through the process layer
+  hits the same \"-escaping problem as dcc. Sidestep it: write the chain to
+  a temp .bat -- where cmd.exe reads the quotes literally. Then run it by a
+  metacharacter-free RELATIVE name with the project dir as the working
+  directory: a full bat path would otherwise carry cmd metacharacters from
+  the workspace path (e.g. C:\R&D\...) onto the /C command line, where
+  RunArgvCapture only quotes for spaces and cmd would split on the '&' and
+  never run the build. The working dir is a CreateProcessW parameter, not
+  part of cmd's command line, so any '&' in it is harmless. Codex P2 on
+  PR #268. }
 var
-  Rsvars, Cmd: string;
+  Rsvars, ProjDir, BatName, BatPath, Bat: string;
+  Args: TStringList;
+  L: TStringList;
 begin
   Rsvars := JoinPath(BinDir, 'rsvars.bat');
   if not FileExists(Rsvars) then
@@ -347,11 +372,40 @@ begin
     Output := 'rsvars.bat not found in ' + BinDir;
     Exit(-1);
   end;
-  { call rsvars to set up the MSBuild + compiler environment, then build. }
-  Cmd := 'call ' + DQuote(Rsvars) + ' && msbuild ' + DQuote(Proj) +
-         ' /t:Build /p:Config=' + Config + ';Platform=' + Platform_ +
-         ' /nologo /v:minimal 2>&1';
-  Result := RunOneShot(Cmd, ExtractFileDir(Proj), Output);
+
+  ProjDir := ExtractFileDir(Proj);
+  { Safe filename: prefix + digits + ".bat" only -- no cmd metacharacters. }
+  BatName := 'pasclaw_msbuild_' + FormatDateTime('hhnnsszzz', Now) + '.bat';
+  BatPath := JoinPath(ProjDir, BatName);
+  Bat := '@echo off' + sLineBreak +
+         'call "' + Rsvars + '"' + sLineBreak +
+         'msbuild "' + Proj + '" /t:Build /p:Config=' + Config +
+         ';Platform=' + Platform_ + ' /nologo /v:minimal' + sLineBreak;
+  L := TStringList.Create;
+  try
+    L.Text := Bat;
+    try
+      L.SaveToFile(BatPath);
+    except
+      on E: Exception do
+      begin
+        Output := 'could not write build script: ' + E.Message;
+        Exit(-1);
+      end;
+    end;
+  finally
+    L.Free;
+  end;
+
+  Args := TStringList.Create;
+  try
+    Args.Add('/C');
+    Args.Add('.\' + BatName);   { relative; the (maybe '&'-bearing) dir is the cwd }
+    Result := RunArgvCapture('cmd.exe', Args, ProjDir, Output);
+  finally
+    Args.Free;
+    if FileExists(BatPath) then SysUtils.DeleteFile(BatPath);
+  end;
 end;
 
 function Tool_DelphiBuild(const ArgsJSON: string; out ErrMsg: string): string;
