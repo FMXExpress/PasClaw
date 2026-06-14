@@ -32,9 +32,16 @@
   no per-slot handler boilerplate, no MaxBindings cap. Replicate's
   catalog can be as big as it wants.
 
-  FreeMCPClients waits for every loader thread to finish before freeing
-  its client, so a fast `^C` doesn't race the thread that's still inside
-  Connect.
+  FreeMCPClients gives each loader a bounded wait to finish (so the
+  common case frees cleanly), but a loader still blocked inside a network
+  Connect/ListTools is abandoned to the OS (FreeOnTerminate) rather than
+  hanging the app's exit -- its Terminated checks keep it from touching
+  the registry/state after teardown begins.
+
+  Refresh TTL: a tools/list cache younger than MCPRefreshTTLSeconds is
+  reused as-is. The loader still connects (so tool calls work) but skips
+  the expensive tools/list; only a stale/absent cache pays the full
+  refresh. This is what keeps a quick start+exit cheap.
 }
 unit PasClaw.MCP.Bridge;
 
@@ -123,13 +130,22 @@ type
     FReg:    TToolRegistry;
     FState:  TMCPServerState;
     FClient: TMCPBaseClient;
+    FDone:   TEvent;   { signalled when Execute returns -- lets shutdown
+                         bound its wait instead of a 30s-connect WaitFor }
   protected
     procedure Execute; override;
   public
     constructor Create(const ServerCfg: TMCPServer; Reg: TToolRegistry;
                        State: TMCPServerState);
     destructor  Destroy; override;
+    property DoneEvent: TEvent read FDone;
   end;
+
+const
+  { TTL for the live tools/list refresh. A cache younger than this is
+    reused as-is (the loader still connects, so tool calls work, but skips
+    the expensive tools/list -- Replicate returns thousands of tools). }
+  MCPRefreshTTLSeconds = 12 * 60 * 60;
 
 var
   GStates: TList;  { TList of TMCPServerState -- owned; freed in FreeMCPClients }
@@ -311,6 +327,7 @@ begin
   FReg    := Reg;
   FState  := State;
   FClient := nil;
+  FDone   := TEvent.Create(nil, {ManualReset=}True, {InitialState=}False, '');
 end;
 
 destructor TMCPLoader.Destroy;
@@ -319,6 +336,7 @@ begin
     here) or failed before reaching that point -- in which case the
     client is still ours to free. }
   if FClient <> nil then begin FClient.Free; FClient := nil; end;
+  FDone.Free;
   inherited Destroy;
 end;
 
@@ -345,7 +363,9 @@ var
   Err: string;
   Dispatch: TMCPToolDispatch;
   i: Integer;
+  Age: Int64;
 begin
+  try
   {$IFDEF MSWINDOWS}
   CoInitializeEx(nil, COINIT_MULTITHREADED);
   try
@@ -355,12 +375,29 @@ begin
       FClient := TMCPHttpClient.Create(FCfg.Name, FCfg.Cmd, FCfg.Args)
     else
       FClient := TMCPStdioClient.Create(FCfg.Name, FCfg.Cmd, FCfg.Args);
+    if Terminated then Exit;
     if not FClient.Connect(30 * 1000, Err) then
     begin
       LogWarn('mcp[%s] connect failed: %s', [FCfg.Name, Err]);
       FState.SetFailed(Err);
       Exit;
     end;
+    if Terminated then Exit;
+
+    { TTL gate: a cache younger than MCPRefreshTTLSeconds is still good.
+      Connect above established the live session so tool calls work --
+      reuse the tools we already registered at startup and skip the
+      expensive tools/list (Replicate's catalog is thousands of tools). }
+    Age := CacheAgeSeconds(FCfg.Name);
+    if (Age >= 0) and (Age < MCPRefreshTTLSeconds) then
+    begin
+      LogInfo('mcp[%s] cache fresh (%ds old < %ds TTL) -- reusing cached tools, skipping live tools/list',
+              [FCfg.Name, Age, Int64(MCPRefreshTTLSeconds)]);
+      FState.SetReady(FClient);
+      FClient := nil;
+      Exit;
+    end;
+
     if not FClient.ListTools(Tools, Err) then
     begin
       LogWarn('mcp[%s] tools/list failed: %s', [FCfg.Name, Err]);
@@ -369,6 +406,10 @@ begin
     end;
     LogInfo('mcp[%s] live connect OK (%d tools)', [FCfg.Name, Length(Tools)]);
     SaveCachedTools(FCfg.Name, Tools);
+    { Shutting down -- don't mutate the registry/state past this point so
+      an abandoned loader can't use-after-free them (the cache is already
+      saved). }
+    if Terminated then Exit;
 
     { Always re-register every live tool. Reuse the existing
       dispatch object (created in the cache pass) when one is
@@ -406,6 +447,10 @@ begin
     CoUninitialize;
   end;
   {$ENDIF}
+  finally
+    { Always signal completion so a bounded shutdown wait can proceed. }
+    FDone.SetEvent;
+  end;
 end;
 
 { ============================================================
@@ -442,7 +487,7 @@ begin
         Inc(CachedCount);
       end;
       if CachedCount > 0 then
-        LogInfo('mcp[%s] cache hit: %d tool(s) registered, live refresh started',
+        LogInfo('mcp[%s] cache hit: %d tool(s) registered (connecting in background)',
                 [Cfg.MCPServers[i].Name, CachedCount]);
       Inc(CachedRegistered, CachedCount);
     end;
@@ -458,24 +503,54 @@ begin
 end;
 
 procedure FreeMCPClients(var Clients: TMCPClientList);
+const
+  { Per-loader budget. A finished or fresh-cache loader signals DoneEvent
+    almost immediately; only one still blocked in a network call waits the
+    full budget before being abandoned. Bounds exit instead of a 30s
+    connect WaitFor. }
+  ShutdownWaitMs = 1000;
 var
   i: Integer;
+  Loader: TMCPLoader;
+  Abandoned: Boolean;
 begin
+  Abandoned := False;
   for i := 0 to High(Clients) do
     if Clients[i] <> nil then
     begin
-      try Clients[i].WaitFor; except end;
-      Clients[i].Free;
+      Loader := TMCPLoader(Clients[i]);
+      Loader.Terminate;
+      if Loader.DoneEvent.WaitFor(ShutdownWaitMs) = wrSignaled then
+      begin
+        Loader.WaitFor;
+        Loader.Free;
+      end
+      else
+      begin
+        { Still blocked in a network call. Don't hang the app on exit:
+          hand the thread to the OS (FreeOnTerminate) and abandon it. Its
+          Terminated checks keep it from touching the registry/state after
+          this point, so it self-frees cleanly when the call returns. }
+        Loader.FreeOnTerminate := True;
+        Abandoned := True;
+      end;
     end;
   SetLength(Clients, 0);
 
   { Server states (and their owned dispatch objects + clients) are
     referenced from the registry via HandlerObj pointers; freeing them
     here invalidates those entries, but the caller is tearing the whole
-    agent down so the registry is going too. }
-  for i := 0 to GStates.Count - 1 do
-    TMCPServerState(GStates[i]).Free;
-  GStates.Clear;
+    agent down so the registry is going too.
+
+    When a loader was abandoned, skip this: that loader still references
+    its TMCPServerState, so freeing it would risk a use-after-free. The
+    process is exiting, so the leak is reclaimed by the OS momentarily. }
+  if not Abandoned then
+  begin
+    for i := 0 to GStates.Count - 1 do
+      TMCPServerState(GStates[i]).Free;
+    GStates.Clear;
+  end;
 end;
 
 initialization
