@@ -353,10 +353,16 @@ function BuildViaMsbuild(const BinDir, Proj, Platform_, Config: string;
 { MSBuild needs cmd.exe (it's `call rsvars.bat && msbuild`, a batch chain),
   but handing a quoted command string to cmd /C through the process layer
   hits the same \"-escaping problem as dcc. Sidestep it: write the chain to
-  a temp .bat -- where cmd.exe reads the quotes literally -- and run that
-  one quote-free path via argv (RunArgvCapture cmd.exe /C <bat>). }
+  a temp .bat -- where cmd.exe reads the quotes literally. Then run it by a
+  metacharacter-free RELATIVE name with the project dir as the working
+  directory: a full bat path would otherwise carry cmd metacharacters from
+  the workspace path (e.g. C:\R&D\...) onto the /C command line, where
+  RunArgvCapture only quotes for spaces and cmd would split on the '&' and
+  never run the build. The working dir is a CreateProcessW parameter, not
+  part of cmd's command line, so any '&' in it is harmless. Codex P2 on
+  PR #268. }
 var
-  Rsvars, BatPath, Bat: string;
+  Rsvars, ProjDir, BatName, BatPath, Bat: string;
   Args: TStringList;
   L: TStringList;
 begin
@@ -367,8 +373,10 @@ begin
     Exit(-1);
   end;
 
-  BatPath := JoinPath(ExtractFileDir(Proj),
-                      '.pasclaw_msbuild_' + FormatDateTime('hhnnsszzz', Now) + '.bat');
+  ProjDir := ExtractFileDir(Proj);
+  { Safe filename: prefix + digits + ".bat" only -- no cmd metacharacters. }
+  BatName := 'pasclaw_msbuild_' + FormatDateTime('hhnnsszzz', Now) + '.bat';
+  BatPath := JoinPath(ProjDir, BatName);
   Bat := '@echo off' + sLineBreak +
          'call "' + Rsvars + '"' + sLineBreak +
          'msbuild "' + Proj + '" /t:Build /p:Config=' + Config +
@@ -392,8 +400,8 @@ begin
   Args := TStringList.Create;
   try
     Args.Add('/C');
-    Args.Add(BatPath);
-    Result := RunArgvCapture('cmd.exe', Args, ExtractFileDir(Proj), Output);
+    Args.Add('.\' + BatName);   { relative; the (maybe '&'-bearing) dir is the cwd }
+    Result := RunArgvCapture('cmd.exe', Args, ProjDir, Output);
   finally
     Args.Free;
     if FileExists(BatPath) then SysUtils.DeleteFile(BatPath);
