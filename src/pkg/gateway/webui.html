@@ -570,6 +570,7 @@ function newSession() {
   activeTurns = [];
   clearLog();
   m.value = "";
+  loadParamsForActive();   // seed the new chat from the most-recent params
   renderSessions();
   m.focus();
 }
@@ -577,6 +578,7 @@ function newSession() {
 async function deleteSession(id) {
   try { await gwFetch("/v1/sessions/" + encodeURIComponent(id), { method: "DELETE" }); }
   catch { /* fall through to refresh; a failed delete just stays listed */ }
+  dropSessionParams(id);
   await refreshSessions();
   if (activeSessionId === id) newSession();
 }
@@ -639,6 +641,7 @@ async function activateSession(id) {
   } catch { /* leave empty on a failed load */ }
   if (activeSessionId !== id) return;   // switched away during the await
   activeTurns = loaded;
+  loadParamsForActive();   // this session's own params (defaults if none)
   renderActive();
 }
 
@@ -661,7 +664,13 @@ async function createSession(body) {
   const r = await gwFetch("/v1/sessions", {
     method: "POST", headers: { "content-type": "application/json" }, body });
   const j = await r.json();
-  if (j && j.id) activeSessionId = j.id;
+  if (j && j.id) {
+    activeSessionId = j.id;
+    /* Capture the new chat's current params (seeded from the most-recent
+       set, possibly edited) under its freshly minted id so they stay with
+       this conversation. */
+    persistChatParams();
+  }
 }
 async function persistActive() {
   const msgs = activeTurns
@@ -1294,14 +1303,58 @@ async function refreshStats() {
    config (that's the Settings tab). */
 const PARAMS_KEY  = "pasclaw.params.v1";
 const PRESETS_KEY = "pasclaw.presets.v1";
-let chatParams = { system: "", temp: "", maxtok: "" };
+const DEFAULT_PARAMS = { system: "", temp: "", maxtok: "" };
+let chatParams = Object.assign({}, DEFAULT_PARAMS);
 
-function loadParams() {
-  try { chatParams = Object.assign(chatParams, JSON.parse(localStorage.getItem(PARAMS_KEY) || "{}")); } catch {}
+/* Params are scoped PER CONVERSATION: one localStorage map keyed by
+   session id, so each saved chat keeps the params it started with and one
+   chat's system prompt / sampling never bleeds into another. A reserved
+   "__last__" slot tracks the most-recently-used params; a NEW chat seeds
+   from it, so the values you just used carry forward to your next chat
+   without overwriting existing ones. */
+const LAST_PARAMS = "__last__";
+function loadParamsStore() {
+  try { return JSON.parse(localStorage.getItem(PARAMS_KEY) || "{}"); } catch { return {}; }
 }
-function saveParams() {
-  try { localStorage.setItem(PARAMS_KEY, JSON.stringify(chatParams)); } catch {}
+function saveParamsStore(store) {
+  try { localStorage.setItem(PARAMS_KEY, JSON.stringify(store)); } catch {}
+}
+function isDefaultParams(p) {
+  return !p.system && p.temp === "" && p.maxtok === "";
+}
+/* Persist the active conversation's params, and update the "most recent"
+   template that new chats seed from. */
+function persistChatParams() {
+  const store = loadParamsStore();
+  const p = { system: chatParams.system, temp: chatParams.temp, maxtok: chatParams.maxtok };
+  if (activeSessionId) {
+    if (isDefaultParams(p)) delete store[activeSessionId];
+    else store[activeSessionId] = p;
+  }
+  if (isDefaultParams(p)) delete store[LAST_PARAMS];
+  else store[LAST_PARAMS] = p;
+  saveParamsStore(store);
   updateParamsSummary();
+}
+function syncParamsPanel() {
+  const sys = $("#p-system"), temp = $("#p-temp"), maxtok = $("#p-maxtok");
+  if (sys)    sys.value    = chatParams.system || "";
+  if (temp)   temp.value   = chatParams.temp   || "";
+  if (maxtok) maxtok.value = chatParams.maxtok || "";
+  updateParamsSummary();
+}
+/* Load params for the active context into memory + the panel: an existing
+   session uses its own stored params (defaults if it has none); a new chat
+   (no id yet) seeds from the most-recently-used params. */
+function loadParamsForActive() {
+  const store = loadParamsStore();
+  const stored = activeSessionId ? store[activeSessionId] : store[LAST_PARAMS];
+  chatParams = Object.assign({}, DEFAULT_PARAMS, stored || {});
+  syncParamsPanel();
+}
+function dropSessionParams(id) {
+  const store = loadParamsStore();
+  if (store[id]) { delete store[id]; saveParamsStore(store); }
 }
 function updateParamsSummary() {
   const bits = [];
@@ -1339,13 +1392,8 @@ function applyChatParams(body, history) {
   return history;
 }
 function initParams() {
-  loadParams();
   const sys = $("#p-system"), temp = $("#p-temp"), maxtok = $("#p-maxtok");
   const presetSel = $("#p-preset");
-  if (sys)    sys.value    = chatParams.system || "";
-  if (temp)   temp.value   = chatParams.temp   || "";
-  if (maxtok) maxtok.value = chatParams.maxtok || "";
-  updateParamsSummary();
   renderPresets();
 
   const toggle = $("#params-toggle"), panel = $("#chat-params");
@@ -1354,15 +1402,15 @@ function initParams() {
     if (show) panel.removeAttribute("hidden"); else panel.setAttribute("hidden", "");
     toggle.classList.toggle("on", show);
   });
-  if (sys)    sys.addEventListener("input",    () => { chatParams.system = sys.value; saveParams(); });
-  if (temp)   temp.addEventListener("input",   () => { chatParams.temp   = temp.value.trim(); saveParams(); });
-  if (maxtok) maxtok.addEventListener("input", () => { chatParams.maxtok = maxtok.value.trim(); saveParams(); });
+  if (sys)    sys.addEventListener("input",    () => { chatParams.system = sys.value; persistChatParams(); });
+  if (temp)   temp.addEventListener("input",   () => { chatParams.temp   = temp.value.trim(); persistChatParams(); });
+  if (maxtok) maxtok.addEventListener("input", () => { chatParams.maxtok = maxtok.value.trim(); persistChatParams(); });
 
   if (presetSel) presetSel.addEventListener("change", () => {
     if (!presetSel.value) return;
     const txt = loadPresets()[presetSel.value] || "";
     if (sys) sys.value = txt;
-    chatParams.system = txt; saveParams();
+    chatParams.system = txt; persistChatParams();
   });
   const saveBtn = $("#p-preset-save");
   if (saveBtn) saveBtn.addEventListener("click", () => {
@@ -1382,10 +1430,14 @@ function initParams() {
   });
   const resetBtn = $("#p-reset");
   if (resetBtn) resetBtn.addEventListener("click", () => {
-    chatParams = { system: "", temp: "", maxtok: "" };
-    if (sys) sys.value = ""; if (temp) temp.value = ""; if (maxtok) maxtok.value = "";
-    saveParams();
+    chatParams = Object.assign({}, DEFAULT_PARAMS);
+    syncParamsPanel();
+    persistChatParams();
   });
+
+  /* Initial population; boot's activateSession/newSession will refresh
+     this for the chat that actually opens. */
+  loadParamsForActive();
 }
 
 /* ===== Misc helpers ===== */
