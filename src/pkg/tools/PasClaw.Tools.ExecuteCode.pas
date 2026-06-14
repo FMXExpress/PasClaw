@@ -202,12 +202,30 @@ begin
   {$ENDIF}
 end;
 
+function AutoLang: string;
+{ Resolve 'auto'/'' to a shell that actually exists where the script will
+  RUN. Normally that's the host default, but when a non-local shell backend
+  (docker -> Linux container) is active the script runs in the container,
+  not on the host. PowerShell isn't in the debian image, so a Windows
+  host's "powershell" default fails with 'sh: powershell: not found'
+  (exit 127). Default to bash in that case. (Explicit lang=powershell is
+  still honoured -- and still fails clearly if the env lacks it.) }
+var
+  B: IShellBackend;
+begin
+  B := GetActiveShellBackend;
+  if (B <> nil) and (B.Name <> 'local') then
+    Result := 'bash'
+  else
+    Result := HostDefaultLang;
+end;
+
 function ResolveExecuteCodeLang(const Requested: string): string;
 var
   L: string;
 begin
   L := LowerCase(Trim(Requested));
-  if (L = '') or (L = 'auto') then Exit(HostDefaultLang);
+  if (L = '') or (L = 'auto') then Exit(AutoLang);
   { 'sh' is a common ask from models that want maximum portability
     -- accept it but route to bash. /bin/sh is dash on Debian /
     Ubuntu which is missing common bashisms; pinning to bash is
@@ -217,7 +235,7 @@ begin
   if (L = 'bash') or (L = 'sh') then Exit('bash');
   if (L = 'powershell') or (L = 'pwsh') or (L = 'ps') then
     Exit('powershell');
-  Result := HostDefaultLang;
+  Result := AutoLang;
 end;
 
 function FindOnPath(const Exe: string): Boolean;
