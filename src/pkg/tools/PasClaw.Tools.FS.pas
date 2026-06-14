@@ -811,11 +811,15 @@ begin
   if UseHashline then
   begin
     T.Name        := 'fs_edit_hashline';
-    T.Description := 'Apply a hashline-format patch. Patch begins with ' + HL_FILE_PREFIX +
-                     'path#hash; each block is an anchor like 42: or 7-10: followed by ' +
-                     '| (replace), ' + HL_PAYLOAD_ABOVE + ' (insert above), or ' +
-                     HL_PAYLOAD_BELOW + ' (insert below). The header hash must match the file on disk; ' +
-                     'stale patches abort without writing.';
+    T.Description := 'Apply a hashline-format patch. Begins with a ' + HL_FILE_PREFIX +
+                     'path#hash header, then one or more blocks. Each block is an anchor line ' +
+                     '(42: for one line, 7-10: for a range) followed by payload lines. EVERY ' +
+                     'payload line must start with its own marker: ' + HL_PAYLOAD_REPLACE +
+                     ' to replace, ' + HL_PAYLOAD_ABOVE + ' to insert above the anchor, ' +
+                     HL_PAYLOAD_BELOW + ' to insert below. A multi-line replacement repeats ' +
+                     HL_PAYLOAD_REPLACE + ' on every line (a 3-line replacement has three ' +
+                     HL_PAYLOAD_REPLACE + ' lines) -- never a bare line. The header hash must ' +
+                     'match the file on disk; stale patches abort without writing.';
     T.Schema      := '{"type":"object","properties":{"patch":{"type":"string","description":"Hashline-format patch text."}},"required":["patch"]}';
     T.Handler     := Tool_FSEditHashline;
     T.IsCore      := True;

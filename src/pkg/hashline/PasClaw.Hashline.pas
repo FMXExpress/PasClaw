@@ -682,7 +682,15 @@ begin
       end;
       if Trim(Lines[i]) = '' then Continue;
       if (Lines[i] <> '') and (Lines[i][1] = '#') then Continue;
-      ErrMsg := Format('line %d: unrecognized content %s', [i + 1, QuotedStr(Lines[i])]);
+      { Most common cause: a multi-line replacement that prefixed only its
+        first line. Every payload line needs its own marker, so a bare
+        line inside a block reads as unrecognized. Say so. }
+      ErrMsg := Format('line %d: unrecognized content %s -- every payload line ' +
+                       'must start with %s (replace), %s (insert above), or %s ' +
+                       '(insert below); a bare line usually means a multi-line ' +
+                       'replacement is missing its per-line %s prefix',
+                       [i + 1, QuotedStr(Lines[i]), HL_PAYLOAD_REPLACE,
+                        HL_PAYLOAD_ABOVE, HL_PAYLOAD_BELOW, HL_PAYLOAD_REPLACE]);
       Exit;
     end;
     if Started then
