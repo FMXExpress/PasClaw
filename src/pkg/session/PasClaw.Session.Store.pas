@@ -159,6 +159,15 @@ type
 function ChatBodyToMessages(const Body: string;
                             out Title, Model: string): TMessageArray;
 
+(* True when a transcript carries structure beyond plain user/assistant
+   text -- system or tool turns, or assistant turns with tool_calls (ids,
+   provider signatures). Such a session was produced by the agent loop /
+   TUI; a surface that only models user/assistant turns (the web UI)
+   must not overwrite it from its flattened view, or terminal resume for
+   tool-using conversations breaks. Exposed so the gateway's /v1/sessions
+   PUT can refuse (409) and the web UI fork instead. *)
+function SessionHasRichTurns(const Msgs: TMessageArray): Boolean;
+
 function NewSessionId: string;
 { True when Id is a safe filename component for a session file -- see
   IsSafeSessionId in the implementation for the exact rules. Exposed
@@ -298,6 +307,18 @@ begin
   finally
     Req.Free;
   end;
+end;
+
+function SessionHasRichTurns(const Msgs: TMessageArray): Boolean;
+var
+  i: Integer;
+begin
+  Result := True;
+  for i := 0 to High(Msgs) do
+    if (Msgs[i].Role = mrSystem) or (Msgs[i].Role = mrTool) or
+       ((Msgs[i].Role = mrAssistant) and (Length(Msgs[i].ToolCalls) > 0)) then
+      Exit;
+  Result := False;
 end;
 
 function NewSessionId: string;

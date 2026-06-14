@@ -194,6 +194,42 @@ begin
   DeleteFile(SessionPath(Id));
 end;
 
+procedure TestRichTurnDetection;
+{ The PUT handler refuses (409) to overwrite a session with tool/system
+  turns or assistant tool_calls so the web UI can't strip an agent
+  transcript. Pin the predicate that gate keys off. }
+var
+  Msgs: TMessageArray;
+begin
+  { Plain user/assistant -- web-ownable, NOT rich. }
+  SetLength(Msgs, 2);
+  Msgs[0] := MakeMessage(mrUser, 'hi');
+  Msgs[1] := MakeMessage(mrAssistant, 'hello');
+  AssertTrue(not SessionHasRichTurns(Msgs), 'plain user/assistant is not rich');
+
+  { A tool turn makes it rich. }
+  SetLength(Msgs, 3);
+  Msgs[2] := MakeMessage(mrTool, 'ERROR: boom');
+  AssertTrue(SessionHasRichTurns(Msgs), 'a tool turn marks the session rich');
+
+  { A system turn makes it rich. }
+  SetLength(Msgs, 1);
+  Msgs[0] := MakeMessage(mrSystem, 'you are an agent');
+  AssertTrue(SessionHasRichTurns(Msgs), 'a system turn marks the session rich');
+
+  { An assistant turn carrying tool_calls makes it rich. }
+  SetLength(Msgs, 1);
+  Msgs[0] := MakeMessage(mrAssistant, '');
+  SetLength(Msgs[0].ToolCalls, 1);
+  Msgs[0].ToolCalls[0].Id := 'call_1';
+  Msgs[0].ToolCalls[0].Func.Name := 'shell_exec';
+  AssertTrue(SessionHasRichTurns(Msgs), 'assistant tool_calls mark the session rich');
+
+  { Empty transcript is not rich. }
+  SetLength(Msgs, 0);
+  AssertTrue(not SessionHasRichTurns(Msgs), 'empty transcript is not rich');
+end;
+
 function HomeLooksIsolated: Boolean;
 var
   Home: string;
@@ -214,5 +250,6 @@ begin
   TestParseEdgeCases;
   TestRoundTrip;
   TestListSurfacesSession;
+  TestRichTurnDetection;
   WriteLn('session_endpoint_tests: OK');
 end.

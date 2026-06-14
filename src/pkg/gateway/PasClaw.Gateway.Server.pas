@@ -1389,6 +1389,16 @@ begin
   begin
     S := TSession.Create(Id);     { loads if present; new handle otherwise }
     try
+      { Refuse to overwrite a rich agent transcript (tool/system turns or
+        assistant tool_calls) from the web UI's flattened view -- doing so
+        would strip the structure terminal resume needs. The web UI forks
+        to a new session on 409. New/plain sessions fall through. }
+      if S.MetaExists and SessionHasRichTurns(S.Messages) then
+      begin
+        WriteJSON(AResp, 409,
+          '{"error":"session has tool/system turns; not overwriting from web UI"}');
+        Exit;
+      end;
       try
         SaveSessionFromBody(S, ReadRequestBody(ARequest));
       except
