@@ -35,6 +35,7 @@ uses
   PasClaw.Tools.ExecuteCode,
   PasClaw.Tools.Memory,
   PasClaw.Tools.KB,
+  PasClaw.Tools.DelphiBuild,
   PasClaw.Tools.SessionSearch,
   PasClaw.Tools.SendMessage,
   PasClaw.Tools.WebSearch,
@@ -210,6 +211,11 @@ begin
   RegisterExecuteCodeTool(Result);
   RegisterMemoryTools(Result);
   RegisterKBTools(Result);
+  { delphi_build self-gates: registers only when a RAD Studio install is
+    found (so it's invisible on non-Delphi hosts). Runs host-side, which is
+    the point -- the compiler lives on the host even when shell_exec is in
+    a docker container. }
+  RegisterDelphiBuildTool(Result);
   RegisterSessionSearchTool(Result);
   { web_search registers only when a real provider is configured
     (Brave / Tavily / Perplexity / Gemini key, or SearXNG base URL).
