@@ -14,7 +14,7 @@ program delphi_build_tests;
 {$H+}
 
 uses
-  SysUtils,
+  SysUtils, Classes,
   PasClaw.Tools.DelphiBuild;
 
 procedure Fail(const Msg: string);
@@ -96,9 +96,48 @@ begin
   if Diags <> '' then Fail('clean build yields no diagnostics, got: ' + Diags);
 end;
 
+procedure TestDprojTokenExtraction;
+{ dcc-direct pulls the project's own search paths + namespaces from the
+  .dproj so multi-dir projects compile without hand-rolled -U flags. Verify
+  the extractor: ';'-split, skip $() macros, dedupe, multiple tags merge. }
+const
+  Dproj =
+    '<Project>' +
+    '<PropertyGroup>' +
+    '<DCC_UnitSearchPath>src;src\llama_cpp;src\llama_cpp\Api;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>' +
+    '<DCC_Namespace>System;FMX;$(DCC_Namespace)</DCC_Namespace>' +
+    '</PropertyGroup>' +
+    '<PropertyGroup>' +   { a second config group repeats one dir + adds one }
+    '<DCC_UnitSearchPath>src\llama_cpp;src\llama_cpp\CType;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>' +
+    '</PropertyGroup>' +
+    '</Project>';
+var
+  Dirs, Ns: TStringList;
+begin
+  Dirs := TStringList.Create;
+  Ns := TStringList.Create;
+  try
+    CollectDprojTokens(Dproj, 'DCC_UnitSearchPath', Dirs);
+    CollectDprojTokens(Dproj, 'DCC_Namespace', Ns);
+
+    { 4 distinct dirs across both groups; the macro + the dupe are dropped. }
+    AssertEq(Dirs.Count, 4, 'unit search paths deduped, macro skipped');
+    if Dirs.IndexOf('src\llama_cpp\Api') < 0 then Fail('expected src\llama_cpp\Api');
+    if Dirs.IndexOf('src\llama_cpp\CType') < 0 then Fail('expected src\llama_cpp\CType');
+    if Dirs.IndexOf('$(DCC_UnitSearchPath)') >= 0 then Fail('macro token must be skipped');
+
+    AssertEq(Ns.Count, 2, 'namespaces (System, FMX); macro skipped');
+    if Ns.IndexOf('FMX') < 0 then Fail('expected FMX namespace');
+  finally
+    Ns.Free;
+    Dirs.Free;
+  end;
+end;
+
 begin
   TestRawDccFormat;
   TestMsbuildBracketFormat;
   TestCleanBuildAndNoFalsePositives;
+  TestDprojTokenExtraction;
   WriteLn('delphi_build_tests: OK');
 end.
