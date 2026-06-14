@@ -131,20 +131,23 @@ procedure RegisterShellTool(R: TToolRegistry);
 var
   T: TTool;
   Backend: IShellBackend;
-  BackendNote: string;
 begin
   Backend := GetActiveShellBackend;
   if (Backend <> nil) and (Backend.Name <> 'local') then
-    { Tell the model where commands actually run so it doesn't
-      `apt install` something expecting host-persistence. Same
-      trick send_message uses to enumerate configured channels. }
-    BackendNote := ' Runs via the ' + Backend.Name + ' shell backend: ' +
-                   Backend.Describe + '.'
+  begin
+    { A non-local backend (docker/ssh) runs commands somewhere other than
+      the host shell, so the host-oriented "/bin/sh -c or cmd.exe on
+      Windows" line is misleading -- on a Windows host it nudges the model
+      toward cmd syntax that fails in a Linux container. Lead with the
+      backend's own description of where (and how) commands run. }
+    T.Description := 'Run a shell command in the ' + Backend.Name +
+                     ' shell backend: ' + Backend.Describe +
+                     '. Captures stdout+stderr, caps output at 1 MiB.';
+  end
   else
-    BackendNote := '';
+    T.Description := 'Run a shell command via /bin/sh -c (or cmd.exe on Windows). ' +
+                     'Captures stdout+stderr, caps output at 1 MiB.';
   T.Name        := 'shell_exec';
-  T.Description := 'Run a shell command via /bin/sh -c (or cmd.exe on Windows). ' +
-                   'Captures stdout+stderr, caps output at 1 MiB.' + BackendNote;
   T.Schema      := '{"type":"object","properties":{"command":{"type":"string","description":"Shell command to execute."}},"required":["command"]}';
   T.Handler     := Tool_Shell;
   T.IsCore      := True;

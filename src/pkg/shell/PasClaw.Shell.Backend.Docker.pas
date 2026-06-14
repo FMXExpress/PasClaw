@@ -261,10 +261,19 @@ end;
 
 function TDockerShellBackend.Describe: string;
 begin
-  Result := Format('runs inside a per-session Docker container (image=%s, network=%s; ' +
-                   'workspace bind-mounted at the same path so the model sees the ' +
-                   'same files you do on the host)',
-                   [FOpts.Image, FOpts.Network]);
+  { Spell out that commands run in a LINUX container via /bin/sh, with the
+    workspace at its container path -- otherwise, on a Windows host, the
+    model follows the host platform and emits cmd.exe (`dir /s /b`) with
+    C:\ paths, which fail inside the Linux container. ContainerPath gives
+    the in-container workspace dir (same-path on POSIX, /workspace on
+    Windows). }
+  Result := Format('runs each command inside a per-session Linux Docker container ' +
+                   '(image=%s, network=%s) via /bin/sh, so use POSIX commands ' +
+                   '(ls, find, grep, cat) and POSIX paths -- NOT Windows cmd ' +
+                   '(dir) or C:\ paths, even when the host is Windows. The ' +
+                   'workspace is mounted at %s, which is the working directory',
+                   [FOpts.Image, FOpts.Network,
+                    ContainerPath(JoinPath(GetHome, 'workspace'))]);
 end;
 
 function TDockerShellBackend.ContainerName(const SessionId: string): string;
