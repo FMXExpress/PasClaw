@@ -1409,6 +1409,12 @@ begin
   WriteSSE('data: ' + JsonEscape('[' + Tag + '] ' + Msg) + #10#10);
 end;
 
+(* Forward declaration -- implementation lives next to TSSEStreamer
+   for thematic grouping. See the long-form comment at the
+   implementation site for why this exists. *)
+function EmitSSEResponseHeaders(AContext: TIdContext;
+                                AResp: TIdHTTPResponseInfo): Boolean; forward;
+
 procedure TGatewayServer.HandleLogs(AContext: TIdContext;
                                      ARequest: TIdHTTPRequestInfo;
                                      AResp: TIdHTTPResponseInfo);
@@ -1418,69 +1424,20 @@ var
   Snapshot: TStringList;
   i: Integer;
   TabPos: Integer;
-  Tag, Body, Line, HeaderStr: string;
-  HeaderTmp: TBytes;
-  HeaderIdBytes: TIdBytes;
+  Tag, Body, Line: string;
+  TerminatorTmp: TBytes;
+  TerminatorIdBytes: TIdBytes;
 begin
   { SSE stream -- emit the recent buffer up front, then subscribe
     for live tail. The handler doesn't return until the client
     disconnects (or we throw); on either path the listener gets
     unsubscribed.
 
-    Why bypass AResp.WriteHeader entirely and write the status +
-    headers raw via IOHandler:
-
-      Indy's TIdHTTPResponseInfo.WriteHeader rewrites ContentType
-      to "text/html; charset=utf-8" under conditions that are
-      hard to fully unset from outside the unit (around
-      Content-Length / Transfer-Encoding / ContentText interplay
-      -- see IdCustomHTTPServer.pas line ~"if ContentType = ''"
-      block). The result: the response header line said
-      "Content-Type: text/html" even though we set
-      text/event-stream. Strict EventSource implementations
-      (recent Firefox) refuse the stream; lenient ones (Chrome,
-      Safari) tolerate it but the wire is technically wrong.
-
-      The cure is to build the response status line + every
-      header byte ourselves and write them through the underlying
-      IOHandler, then flip AResp.HeaderHasBeenWritten := True so
-      Indy knows to skip its own header emission. The same trick
-      lets us guarantee Content-Type, Transfer-Encoding: chunked,
-      and the SSE-required Cache-Control / X-Accel-Buffering all
-      land verbatim. Chunked body framing (TLogStreamWriter)
-      stays exactly as before. }
-  HeaderStr :=
-    'HTTP/1.1 200 OK'#13#10 +
-    'Content-Type: text/event-stream; charset=utf-8'#13#10 +
-    'Cache-Control: no-cache, no-transform'#13#10 +
-    'Connection: keep-alive'#13#10 +
-    'X-Accel-Buffering: no'#13#10 +
-    'Transfer-Encoding: chunked'#13#10 +
-    'Server: PasClaw/' + FormatVersion + #13#10 +
-    #13#10;
-  try
-    { Convert string -> TBytes (TEncoding) -> TIdBytes (Indy
-      Write expects this exact type -- Delphi dcc64 enforces it;
-      FPC happens to accept TBytes here too. Same one-byte-at-a-
-      time copy idiom as TLogStreamWriter.WriteSSE.). }
-    SetLength(HeaderTmp, Length(HeaderStr));   { ASCII safe -- header line is ascii-only }
-    HeaderTmp := TEncoding.ASCII.GetBytes(HeaderStr);
-    SetLength(HeaderIdBytes, Length(HeaderTmp));
-    for i := 0 to High(HeaderTmp) do HeaderIdBytes[i] := HeaderTmp[i];
-    AContext.Connection.IOHandler.Write(HeaderIdBytes);
-    while AContext.Connection.IOHandler.WriteBufferingActive do
-      AContext.Connection.IOHandler.WriteBufferClose;
-  except
-    on E: Exception do
-    begin
-      LogWarn('logs SSE: failed to emit headers: %s', [E.Message]);
-      Exit;
-    end;
-  end;
-  AResp.HeaderHasBeenWritten := True;
-  AResp.ContentText  := '';
-  AResp.ContentLength := 0;
-  AResp.ResponseNo   := 200;
+    Headers go through EmitSSEResponseHeaders (shared with
+    /v1/chat/completions and /v1/responses) so Indy's
+    WriteHeader-emits-CL-and-TE-together bug doesn't poison this
+    feed for strict L7 proxies either. }
+  if not EmitSSEResponseHeaders(AContext, AResp) then Exit;
 
   Writer := TLogStreamWriter.Create;
   Writer.Conn := AContext.Connection;
@@ -1521,10 +1478,10 @@ begin
       end-of-stream. Same TBytes→TIdBytes conversion as the header
       write above -- Delphi dcc64 enforces the type match. }
     try
-      HeaderTmp := TEncoding.ASCII.GetBytes('0'#13#10#13#10);
-      SetLength(HeaderIdBytes, Length(HeaderTmp));
-      for i := 0 to High(HeaderTmp) do HeaderIdBytes[i] := HeaderTmp[i];
-      AContext.Connection.IOHandler.Write(HeaderIdBytes);
+      TerminatorTmp := TEncoding.ASCII.GetBytes('0'#13#10#13#10);
+      SetLength(TerminatorIdBytes, Length(TerminatorTmp));
+      for i := 0 to High(TerminatorTmp) do TerminatorIdBytes[i] := TerminatorTmp[i];
+      AContext.Connection.IOHandler.Write(TerminatorIdBytes);
     except
     end;
     Writer.Free;
@@ -1754,6 +1711,83 @@ type
     procedure CloseStream;
     property Closed: Boolean read FClosed;
   end;
+
+function EmitSSEResponseHeaders(AContext: TIdContext;
+                                AResp: TIdHTTPResponseInfo): Boolean;
+(* Write the SSE response status line + headers raw via the underlying
+   socket, bypassing Indy's TIdHTTPResponseInfo.WriteHeader entirely.
+
+   Why this exists: Indy's WriteHeader emits both `Content-Length: 0`
+   AND `Transfer-Encoding: chunked` for streaming responses (the
+   ContentLength := -1 "suppress auto Content-Length" workaround
+   doesn't actually suppress -- it leaves CL=0 in place because
+   Indy treats negative values as "fall through to ContentText length"
+   which is empty). That combination is a HTTP/1.1 protocol violation
+   per RFC 7230 §3.3.3 -- strict L7 proxies (DigitalOcean App
+   Platform's Envoy frontend, AWS ALB in strict mode, Cloudflare
+   Workers) reject it with `upstream_reset_before_response_started
+   {protocol_error}` and never forward the response body. Loose
+   proxies (nginx default, local curl) tolerate it, which is why
+   the bug only shows up on managed platforms.
+
+   Indy ALSO rewrites our `text/event-stream` ContentType back to
+   `text/html; charset=utf-8` under conditions that are hard to
+   override from outside the unit (around the Content-Length /
+   Transfer-Encoding interaction). Bypassing WriteHeader fixes
+   that too -- the literal bytes in HeaderStr are what reach the
+   wire verbatim.
+
+   This is the same workaround HandleLogs has been using since the
+   `/v1/logs` SSE feed shipped; centralising it into a helper means
+   the same fix applies to /v1/chat/completions and /v1/responses
+   without duplicating the byte-twiddle.
+
+   Returns True on success; on a write exception, logs at warn and
+   returns False so the caller can Exit without trying to emit
+   body chunks against a half-dead connection. *)
+var
+  HeaderStr: string;
+  HeaderTmp: TBytes;
+  HeaderIdBytes: TIdBytes;
+  i: Integer;
+begin
+  Result := False;
+  HeaderStr :=
+    'HTTP/1.1 200 OK'#13#10 +
+    'Content-Type: text/event-stream; charset=utf-8'#13#10 +
+    'Cache-Control: no-cache, no-transform'#13#10 +
+    'Connection: keep-alive'#13#10 +
+    'X-Accel-Buffering: no'#13#10 +
+    'Transfer-Encoding: chunked'#13#10 +
+    'Server: PasClaw/' + FormatVersion + #13#10 +
+    #13#10;
+  try
+    SetLength(HeaderTmp, Length(HeaderStr));
+    HeaderTmp := TEncoding.ASCII.GetBytes(HeaderStr);
+    SetLength(HeaderIdBytes, Length(HeaderTmp));
+    for i := 0 to High(HeaderTmp) do HeaderIdBytes[i] := HeaderTmp[i];
+    AContext.Connection.IOHandler.Write(HeaderIdBytes);
+    while AContext.Connection.IOHandler.WriteBufferingActive do
+      AContext.Connection.IOHandler.WriteBufferClose;
+  except
+    on E: Exception do
+    begin
+      LogWarn('sse: failed to emit headers: %s', [E.Message]);
+      Exit;
+    end;
+  end;
+  (* Tell Indy not to emit its own headers when the request handler
+     returns. AResp.HeaderHasBeenWritten is the public flag for "I've
+     written my own status + headers, stay out of it." Clearing
+     ContentText / ContentLength keeps Indy from queuing a body
+     after our chunked stream finishes (the terminator chunk goes
+     out via TSSEStreamer.CloseStream). *)
+  AResp.HeaderHasBeenWritten := True;
+  AResp.ContentText  := '';
+  AResp.ContentLength := 0;
+  AResp.ResponseNo   := 200;
+  Result := True;
+end;
 
 constructor TSSEStreamer.Create(AContext: TIdContext; const Id, Model: string;
                                 DebugIO: Boolean);
@@ -2196,40 +2230,17 @@ begin
         itself still runs synchronously in this thread; the difference
         is the response body now drains incrementally instead of all
         at once at the end. }
-      AResp.ResponseNo  := 200;
-      AResp.ContentType := 'text/event-stream; charset=utf-8';
-      AResp.CharSet     := 'utf-8';
-      AResp.CustomHeaders.AddValue('Cache-Control', 'no-cache');
-      AResp.CustomHeaders.AddValue('X-Accel-Buffering', 'no');
-      AResp.CustomHeaders.AddValue('Transfer-Encoding', 'chunked');
-      AResp.ContentLength := -1;  { suppress Indy's auto Content-Length header }
-      { Avoid AResp.CloseConnection := True: combined with no
-        Content-Length, Indy was emitting `Content-Length: 0` +
-        `Connection: close`, and OpenAI clients (nanobot, etc.) read
-        the zero-byte body, marked the response complete, and closed
-        the socket immediately -- which is why every subsequent SSE
-        chunk hit `connection already closed` in the debug log.
-        Chunked transfer encoding tells the client to keep reading
-        until a zero-length terminator chunk arrives, which
-        TSSEStreamer.CloseStream writes when Finalize / WriteError
-        finishes. Indy still sets a Content-Length header on its own
-        when none is set, so we add the chunked header via
-        CustomHeaders rather than relying on AResp.TransferEncoding
-        which on some Indy builds also tries to auto-frame body
-        writes (and would double-chunk ours). }
-      AResp.WriteHeader;
-      StreamStarted := True;
+      (* Emit SSE headers raw via the socket. AResp.WriteHeader is
+         poisonous here -- it emits Content-Length: 0 alongside
+         Transfer-Encoding: chunked, which is a RFC 7230 §3.3.3
+         protocol violation that DigitalOcean App Platform's Envoy
+         proxy (and other strict L7 proxies) reset with
+         `upstream_reset_before_response_started{protocol_error}`
+         before forwarding any body bytes. See EmitSSEResponseHeaders'
+         long-form comment for the full story. *)
+      if not EmitSSEResponseHeaders(AContext, AResp) then Exit;
+      StreamStarted    := True;
       AResponseStarted := True;
-      { Drain every nested write buffer so headers AND subsequent body
-        writes go straight to the socket. TIdHTTPServer opens a
-        connection-level buffer per request to compute Content-Length;
-        WriteHeader opens another inside that to write its own bytes.
-        WriteBufferFlush only flushes one level at a time and is a no-op
-        when no buffer is open -- so loop until WriteBufferingActive is
-        False. After this, subsequent IOHandler.Write calls hit the
-        socket immediately. }
-      while AContext.Connection.IOHandler.WriteBufferingActive do
-        AContext.Connection.IOHandler.WriteBufferClose;
       if FDebugIO then
         LogDebug('sse: headers flushed, connection still up=%s',
                  [BoolToStr(AContext.Connection.Connected, True)]);
@@ -2937,17 +2948,11 @@ begin
   end;
 
   { Headers: same shape as the chat-completions SSE setup. }
-  AResp.ResponseNo  := 200;
-  AResp.ContentType := 'text/event-stream; charset=utf-8';
-  AResp.CharSet     := 'utf-8';
-  AResp.CustomHeaders.AddValue('Cache-Control', 'no-cache');
-  AResp.CustomHeaders.AddValue('X-Accel-Buffering', 'no');
-  AResp.CustomHeaders.AddValue('Transfer-Encoding', 'chunked');
-  AResp.ContentLength := -1;
-  AResp.WriteHeader;
+  (* Same RFC-7230-compliant raw header emit as HandleChatCompletions
+     -- AResp.WriteHeader emits Content-Length: 0 alongside chunked
+     transfer encoding, which strict L7 proxies reject. *)
+  if not EmitSSEResponseHeaders(AContext, AResp) then Exit;
   AResponseStarted := True;
-  while AContext.Connection.IOHandler.WriteBufferingActive do
-    AContext.Connection.IOHandler.WriteBufferClose;
 
   Streamer := TSSEStreamer.Create(AContext, RespId, Model, DebugIO);
   try
@@ -3174,17 +3179,11 @@ begin
       PartObj.Free;
     end;
 
-    AResp.ResponseNo  := 200;
-    AResp.ContentType := 'text/event-stream; charset=utf-8';
-    AResp.CharSet     := 'utf-8';
-    AResp.CustomHeaders.AddValue('Cache-Control', 'no-cache');
-    AResp.CustomHeaders.AddValue('X-Accel-Buffering', 'no');
-    AResp.CustomHeaders.AddValue('Transfer-Encoding', 'chunked');
-    AResp.ContentLength := -1;
-    AResp.WriteHeader;
+    (* Same RFC-7230-compliant raw header emit as HandleChatCompletions
+       -- AResp.WriteHeader emits Content-Length: 0 alongside chunked
+       transfer encoding, which strict L7 proxies reject. *)
+    if not EmitSSEResponseHeaders(AContext, AResp) then Exit;
     AResponseStarted := True;
-    while AContext.Connection.IOHandler.WriteBufferingActive do
-      AContext.Connection.IOHandler.WriteBufferClose;
 
     State.Streamer := TSSEStreamer.Create(AContext, RespId, Model, DebugIO);
     try
