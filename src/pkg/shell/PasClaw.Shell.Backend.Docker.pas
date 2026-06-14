@@ -261,19 +261,26 @@ end;
 
 function TDockerShellBackend.Describe: string;
 begin
-  { Spell out that commands run in a LINUX container via /bin/sh, with the
-    workspace at its container path -- otherwise, on a Windows host, the
-    model follows the host platform and emits cmd.exe (`dir /s /b`) with
-    C:\ paths, which fail inside the Linux container. ContainerPath gives
-    the in-container workspace dir (same-path on POSIX, /workspace on
-    Windows). }
+  {$IFDEF MSWINDOWS}
+  { Windows host only: without this the model follows the host platform and
+    emits cmd.exe (`dir /s /b`, C:\ paths) into the Linux container, which
+    fails. Spell out Linux/POSIX and the mapped container cwd (/workspace).
+    On POSIX hosts the container shares the host's conventions and the
+    workspace is same-path, so no such warning is needed -- see the ELSE
+    branch, which keeps the original wording verbatim. }
   Result := Format('runs each command inside a per-session Linux Docker container ' +
                    '(image=%s, network=%s) via /bin/sh, so use POSIX commands ' +
                    '(ls, find, grep, cat) and POSIX paths -- NOT Windows cmd ' +
-                   '(dir) or C:\ paths, even when the host is Windows. The ' +
+                   '(dir) or C:\ paths even though the host is Windows. The ' +
                    'workspace is mounted at %s, which is the working directory',
                    [FOpts.Image, FOpts.Network,
                     ContainerPath(JoinPath(GetHome, 'workspace'))]);
+  {$ELSE}
+  Result := Format('runs inside a per-session Docker container (image=%s, network=%s; ' +
+                   'workspace bind-mounted at the same path so the model sees the ' +
+                   'same files you do on the host)',
+                   [FOpts.Image, FOpts.Network]);
+  {$ENDIF}
 end;
 
 function TDockerShellBackend.ContainerName(const SessionId: string): string;
