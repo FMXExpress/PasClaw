@@ -223,9 +223,6 @@ begin
     try
       TUIInst.Run;
     finally
-      { Stop the TUI's container (no-op for local / when none was
-        started). --rm at spawn removes it on stop. }
-      if ShellSessionId <> '' then CloseShellSession(ShellSessionId);
       TUIInst.Free;
       FreeMCPClients(MCPClients);
       { Spawn owned here (same shape as Cmd.Agent); BgCoord is NOT
@@ -237,6 +234,12 @@ begin
     end;
     Result := 0;
   finally
+    { Tear down the TUI container here, not in the inner TUIInst.Run
+      finally: this covers every path after a successful StartShellSession
+      -- including a raise during provider/registry/MCP setup before
+      TTUI.Run -- so a --rm docker container can't be orphaned. No-op for
+      local / when none was started. }
+    if ShellSessionId <> '' then CloseShellSession(ShellSessionId);
     Cfg.Free;
   end;
 end;
