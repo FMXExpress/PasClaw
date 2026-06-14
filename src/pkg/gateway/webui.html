@@ -62,7 +62,12 @@
   .icon-btn{background:transparent;color:var(--cyan);border:1px solid rgba(32,246,255,.32);
     border-radius:8px;padding:.2rem .55rem;font:inherit;font-size:11px;cursor:pointer;letter-spacing:.05em}
   .icon-btn:hover{background:rgba(32,246,255,.12);box-shadow:var(--glow-cyan)}
+  .session-search{margin:.1rem .5rem .35rem;background:rgba(2,5,15,.72);color:var(--fg);
+    border:1px solid rgba(255,255,255,.1);border-radius:8px;padding:.3rem .5rem;
+    font:inherit;font-size:11px;outline:none}
+  .session-search:focus{border-color:var(--cyan)}
   .session-list{flex:1;overflow:auto;padding:.3rem;margin:0;list-style:none}
+  .session-list li.muted{opacity:.5;font-style:italic}
   .session-list li{padding:.45rem .55rem;border-radius:8px;margin-bottom:.2rem;cursor:pointer;
     color:var(--mut);font-size:12px;border:1px solid transparent;
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -263,6 +268,8 @@
         <span class="title">Sessions</span>
         <button class="icon-btn" id="session-new">+ New</button>
       </header>
+      <input id="session-search" class="session-search" type="search"
+             placeholder="search…" autocomplete="off">
       <ul class="session-list" id="session-list"></ul>
     </aside>
     <div class="chat-pane">
@@ -486,40 +493,63 @@ gwFetch("/v1/status").then(r => r.json()).then(s => {
   $("#meta").textContent = `${s.default_provider}/${s.default_model} • tools:${s.tools} • mcp:${s.mcp_servers}`;
 }).catch(_ => $("#meta").textContent = "offline");
 
-/* ===== Sessions (localStorage) ===== */
-const SESS_KEY = "pasclaw.sessions.v1";
-let sessions = loadSessions();
-let activeSessionId = null;
-function loadSessions() {
-  try { return JSON.parse(localStorage.getItem(SESS_KEY) || "[]"); } catch { return []; }
+/* ===== Sessions (server-backed) =====
+   Chats are durable on the gateway under
+   $PASCLAW_HOME/workspace/sessions/<id>.json -- the SAME store the TUI
+   and `pasclaw session` use, so a web chat is resumable from the
+   terminal and vice-versa. The sidebar lists metadata from
+   GET /v1/sessions; switching to one pulls its transcript from
+   GET /v1/sessions/<id>; each completed turn is written back via
+   POST /v1/sessions (first save, mints the id) then PUT
+   /v1/sessions/<id>. `activeTurns` holds the open conversation in
+   memory so streaming / edit / regenerate don't round-trip the server
+   mid-turn. */
+let sessions = [];           // metadata list from the server
+let activeSessionId = null;  // server id, or null for an unsaved new chat
+let activeTurns = [];        // [{role:'u'|'a', text}] for the open chat
+let sessionFilter = "";      // sidebar search (matches title)
+
+async function refreshSessions() {
+  try {
+    const j = await (await gwFetch("/v1/sessions")).json();
+    sessions = j.sessions || [];
+  } catch { sessions = []; }
+  renderSessions();
 }
-function saveSessions() { localStorage.setItem(SESS_KEY, JSON.stringify(sessions)); }
+
 function newSession() {
-  const id = "s" + Date.now();
-  const s = { id, title: "New chat", created: Date.now(), turns: [] };
-  sessions.unshift(s);
-  saveSessions();
+  /* Client-only until the first turn is saved -- avoids littering the
+     store with empty sessions. The id is minted server-side by the
+     first persist (POST). */
+  activeSessionId = null;
+  activeTurns = [];
+  clearLog();
+  m.value = "";
   renderSessions();
-  activateSession(id);
+  m.focus();
 }
-function deleteSession(id) {
-  sessions = sessions.filter(s => s.id !== id);
-  saveSessions();
-  renderSessions();
-  if (activeSessionId === id) {
-    activeSessionId = sessions.length ? sessions[0].id : null;
-    if (activeSessionId) activateSession(activeSessionId); else clearLog();
-  }
+
+async function deleteSession(id) {
+  try { await gwFetch("/v1/sessions/" + encodeURIComponent(id), { method: "DELETE" }); }
+  catch { /* fall through to refresh; a failed delete just stays listed */ }
+  await refreshSessions();
+  if (activeSessionId === id) newSession();
 }
+
 function renderSessions() {
   const ul = $("#session-list");
   ul.innerHTML = "";
+  const q = sessionFilter;
+  let shown = 0;
   for (const s of sessions) {
+    const title = s.title || "(untitled)";
+    if (q && title.toLowerCase().indexOf(q) < 0) continue;
+    shown++;
     const li = document.createElement("li");
     if (s.id === activeSessionId) li.className = "active";
-    li.title = new Date(s.created).toLocaleString();
+    if (s.updated_at) li.title = new Date(s.updated_at * 1000).toLocaleString();
     const span = document.createElement("span");
-    span.textContent = s.title || "(untitled)";
+    span.textContent = title;
     const del = document.createElement("span");
     del.className = "del"; del.textContent = "×";
     del.addEventListener("click", e => { e.stopPropagation(); deleteSession(s.id); });
@@ -527,30 +557,71 @@ function renderSessions() {
     li.addEventListener("click", () => activateSession(s.id));
     ul.appendChild(li);
   }
+  if (shown === 0) {
+    const li = document.createElement("li");
+    li.className = "muted";
+    li.textContent = q ? "no matches" : "no saved chats yet";
+    ul.appendChild(li);
+  }
 }
-function activateSession(id) {
+
+/* Render the in-memory active conversation (after a local mutation --
+   send / edit / regenerate -- without re-fetching the server). */
+function renderActive() {
+  clearLog();
+  activeTurns.forEach((t, i) => renderTurn(t.role, t.text, i));
+}
+
+/* Switch to a stored session: pull its transcript and show it. */
+async function activateSession(id) {
+  if (streaming) return;
   activeSessionId = id;
   renderSessions();
-  const s = sessions.find(x => x.id === id);
   clearLog();
-  if (!s) return;
-  s.turns.forEach((t, i) => renderTurn(t.role, t.text, i));
+  activeTurns = [];
+  try {
+    const j = await (await gwFetch("/v1/sessions/" + encodeURIComponent(id))).json();
+    for (const msg of (j.messages || [])) {
+      if (msg.role === "user") activeTurns.push({ role: "u", text: msg.content || "" });
+      else if (msg.role === "assistant") activeTurns.push({ role: "a", text: msg.content || "" });
+      /* tool/system turns aren't shown in the web transcript */
+    }
+  } catch { /* leave empty on a failed load */ }
+  renderActive();
 }
-function activeSession() {
-  let s = sessions.find(x => x.id === activeSessionId);
-  if (!s) { newSession(); s = sessions[0]; }
-  return s;
-}
+
 function recordTurn(role, text) {
-  const s = activeSession();
-  s.turns.push({ role, text });
-  if (role === "u" && (!s.title || s.title === "New chat")) {
-    s.title = text.slice(0, 40);
-  }
-  saveSessions();
-  renderSessions();
+  activeTurns.push({ role, text });
 }
+
+/* Persist the open conversation. Creates the session on first save
+   (POST -> server mints the id) then overwrites it (PUT). Errors are
+   non-fatal -- the chat stays usable in-memory. */
+async function persistActive() {
+  const msgs = activeTurns
+    .filter(t => t.role === "u" || t.role === "a")
+    .map(t => ({ role: t.role === "u" ? "user" : "assistant", content: t.text }));
+  if (msgs.length === 0 && !activeSessionId) return;
+  const body = JSON.stringify({ messages: msgs });
+  try {
+    if (!activeSessionId) {
+      const r = await gwFetch("/v1/sessions", {
+        method: "POST", headers: { "content-type": "application/json" }, body });
+      const j = await r.json();
+      if (j && j.id) activeSessionId = j.id;
+    } else {
+      await gwFetch("/v1/sessions/" + encodeURIComponent(activeSessionId), {
+        method: "PUT", headers: { "content-type": "application/json" }, body });
+    }
+    await refreshSessions();   // pick up server-derived title + new ordering
+  } catch { /* keep going; next turn will retry the write */ }
+}
+
 $("#session-new").addEventListener("click", () => newSession());
+$("#session-search").addEventListener("input", e => {
+  sessionFilter = e.target.value.trim().toLowerCase();
+  renderSessions();
+});
 
 /* ===== Chat surface ===== */
 const log = $("#log");
@@ -621,24 +692,21 @@ function attachActions(row, role, index) {
    the user clicked regenerate on an assistant turn or after an edit. */
 function regenerateAt(index) {
   if (streaming) return;
-  const s = activeSession();
-  s.turns = s.turns.slice(0, index);
-  saveSessions();
-  activateSession(s.id);
-  streamAssistant();
+  activeTurns = activeTurns.slice(0, index);
+  renderActive();
+  streamAssistant();   // persists on completion
 }
 
 /* Pull a user turn back into the composer for editing; truncate the
    conversation at that point so the resend rebuilds cleanly from there. */
 function editTurn(index) {
   if (streaming) return;
-  const s = activeSession();
-  const t = s.turns[index];
+  const t = activeTurns[index];
   if (!t) return;
   m.value = t.text;
-  s.turns = s.turns.slice(0, index);
-  saveSessions();
-  activateSession(s.id);
+  activeTurns = activeTurns.slice(0, index);
+  renderActive();
+  persistActive();
   m.focus();
 }
 
@@ -651,7 +719,6 @@ function setStreaming(on) {
 /* Stream one assistant reply for the active session's current history.
    The user turn is expected to already be recorded + rendered. */
 async function streamAssistant() {
-  const s = activeSession();
   const bub = addLine("a", "");
   bub.innerHTML = TYPING_HTML;
   setStreaming(true);
@@ -661,7 +728,7 @@ async function streamAssistant() {
   /* Use /v1/chat/completions with stream:true so tool calls + results
      surface as content deltas (the gateway emits ⏺/⎿ markers per
      PasClaw.Gateway.ToolView). */
-  const history = s.turns.filter(t => t.role === "u" || t.role === "a")
+  const history = activeTurns.filter(t => t.role === "u" || t.role === "a")
                           .map(t => ({ role: t.role === "u" ? "user" : "assistant", content: t.text }));
   const body = { messages: history, stream: true };
   /* Model from the header picker, if the operator chose one. Empty value
@@ -717,10 +784,12 @@ async function streamAssistant() {
     setStreaming(false);
     currentAbort = null;
     if (assistantText) {
-      /* Persist + redraw the whole log so the finished turn renders as
-         markdown with copy/regenerate actions at the right index. */
+      /* Record + redraw so the finished turn renders as markdown with
+         copy/regenerate actions at the right index, then persist to the
+         server (creating the session on the first turn). */
       recordTurn("a", assistantText);
-      activateSession(activeSessionId);
+      renderActive();
+      persistActive();
     } else if (bub.querySelector(".typing")) {
       /* Stream closed with no content and wasn't an error -- clear the dots. */
       bub.textContent = "(no response)";
@@ -731,7 +800,7 @@ async function streamAssistant() {
 
 function submitUser(msg) {
   recordTurn("u", msg);
-  activateSession(activeSessionId);   // draw the user turn with its actions
+  renderActive();        // draw the user turn with its actions
   streamAssistant();
 }
 
@@ -1149,8 +1218,11 @@ function escapeHtml(s) {
 /* ===== Boot ===== */
 initTheme();
 loadModels();
-if (sessions.length === 0) newSession();
-else { activeSessionId = sessions[0].id; renderSessions(); activateSession(sessions[0].id); }
+(async () => {
+  await refreshSessions();
+  if (sessions.length > 0) activateSession(sessions[0].id);
+  else newSession();
+})();
 m.focus();
 </script>
 </body></html>
