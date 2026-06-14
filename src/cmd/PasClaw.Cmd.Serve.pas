@@ -56,6 +56,7 @@ uses
   PasClaw.Tools.ExecuteCode,
   PasClaw.Tools.Memory,
   PasClaw.Tools.KB,
+  PasClaw.Tools.DelphiBuild,
   PasClaw.Tools.SessionSearch,
   PasClaw.Tools.SendMessage,
   PasClaw.Tools.WebSearch,
@@ -188,6 +189,7 @@ begin
       RegisterExecuteCodeTool(Reg);
       RegisterMemoryTools(Reg);
       RegisterKBTools(Reg);
+      RegisterDelphiBuildTool(Reg);   { self-gates on a discovered RAD Studio }
       RegisterSessionSearchTool(Reg);
       if HasConfiguredWebSearchProvider(Cfg) then
         RegisterWebSearchTool(Reg)
