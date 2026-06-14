@@ -614,6 +614,37 @@ procedure SaveConfig(C: TConfig);
     serialise only C.Gateway.Token (never the env value). *)
 function GetEffectiveGatewayToken(const C: TConfig): string;
 
+(*  DescribeGatewayAuthState -- one-line summary of the gateway's
+    bearer-token auth state, intended for a single LogInfo at
+    gateway startup. Helps operators diagnose the typical
+    misconfigurations from the deploy logs without a console
+    exec into the container.
+
+    Possible outputs (always exactly one line, no token value):
+
+      gateway: bearer-token auth ENABLED (source=env, token len=64, prefix=ab12...)
+      gateway: bearer-token auth ENABLED (source=config.json, token len=64, prefix=ab12...)
+      gateway: bearer-token auth MISCONFIGURED -- token field is unresolved template '${PASCLAW_GATEWAY_TOKEN}'; env var not set, so no client token will match
+      gateway: bearer-token auth DISABLED -- no token configured (every /v1/* and /mcp route open to any caller)
+
+    The MISCONFIGURED case is the typo trap: an operator sets
+    PASCAL_GATEWAY_TOKEN (no W) in the platform's env-var UI,
+    ExpandEnvVarsInJSON sees no PASCLAW_GATEWAY_TOKEN to substitute,
+    the literal `${PASCLAW_GATEWAY_TOKEN}` survives into
+    Cfg.Gateway.Token, GetEffectiveGatewayToken returns it, and
+    every bearer the web UI sends gets compared against the literal
+    template string -- guaranteed mismatch, infinite 401 loop.
+    This log line surfaces that case immediately at startup.
+
+    The prefix is the first 4 chars of the token + `...` -- enough
+    for the operator to visually match against the token they pasted
+    into their secret manager, not enough to enable a brute force
+    against the remaining bytes (16 bits of guessing for a hex
+    token, and the token is presumed long). Suppressed for tokens
+    shorter than 8 chars (we log `prefix=<short>` instead -- a 4-byte
+    prefix of a 6-byte token leaks too much). *)
+function DescribeGatewayAuthState(const C: TConfig): string;
+
 (*  ExpandEnvVarsInJSON -- raw-text ${VAR_NAME} substitution applied
     to the JSON config body BEFORE TConfig.FromJSON parses it.
     Matches openclaw's `${...}` template-substitution feature so an
@@ -1644,6 +1675,71 @@ begin
     Result := GEnvGatewayToken
   else
     Result := C.Gateway.Token;
+end;
+
+function LooksLikeUnresolvedTemplate(const S: string): Boolean;
+(* Heuristic: matches the literal `${...}` shape ExpandEnvVarsInJSON
+   leaves behind when an env var referenced by config.json isn't set.
+   No real bearer token would ever be generated in this shape (operators
+   pull from `openssl rand -hex 32` / a password manager / DO's secret
+   form), so the false-positive risk is zero in practice. *)
+var
+  n: Integer;
+begin
+  n := Length(S);
+  Result := (n >= 4) and (S[1] = '$') and (S[2] = '{') and (S[n] = '}');
+end;
+
+function GatewayTokenPrefix(const Tok: string): string;
+(* First 4 chars + `...` when long enough to keep the prefix from
+   leaking too much of a short token. Pure display helper; never
+   handed to the comparison path. *)
+begin
+  if Length(Tok) >= 8 then
+    Result := Copy(Tok, 1, 4) + '...'
+  else
+    Result := '<short>';
+end;
+
+function DescribeGatewayAuthState(const C: TConfig): string;
+var
+  Tok, Source: string;
+begin
+  if GEnvGatewayToken <> '' then
+  begin
+    Tok    := GEnvGatewayToken;
+    Source := 'env';
+  end
+  else if C.Gateway.Token <> '' then
+  begin
+    Tok    := C.Gateway.Token;
+    Source := 'config.json';
+  end
+  else
+  begin
+    (* Mention both /v1/* (main API surface) and /mcp (the dedicated
+       MCP companion listener at --mcp-port, plus the /v1/mcp/rpc
+       in-main-port path) so operators understand the full exposure
+       -- a token-less gateway leaves the MCP JSON-RPC endpoint open
+       to any reachable caller, not just the OpenAI-compatible
+       routes. Codex P2 on PR #255. *)
+    Result := 'gateway: bearer-token auth DISABLED -- ' +
+              'no token configured (every /v1/* and /mcp route ' +
+              'open to any caller)';
+    Exit;
+  end;
+
+  if LooksLikeUnresolvedTemplate(Tok) then
+  begin
+    Result := Format('gateway: bearer-token auth MISCONFIGURED -- ' +
+                     'token field is unresolved template ''%s''; env var ' +
+                     'not set, so no client token will match', [Tok]);
+    Exit;
+  end;
+
+  Result := Format('gateway: bearer-token auth ENABLED ' +
+                   '(source=%s, token len=%d, prefix=%s)',
+                   [Source, Length(Tok), GatewayTokenPrefix(Tok)]);
 end;
 
 function EnvSubstJsonEscape(const S: string): string;

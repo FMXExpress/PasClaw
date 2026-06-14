@@ -483,6 +483,16 @@ begin
   FHTTP.Active := True;
   FStarted := True;
   LogInfo('gateway: listening on http://%s:%d', [BindAddr, Port]);
+  (* Auth-state summary at startup. Only the primary listener prints
+     it; the optional MCP companion listener shares the same FCfg, so
+     a second copy would be noise. The MISCONFIGURED branch in
+     particular is the typo trap that motivates the line -- operators
+     misspelling PASCLAW_GATEWAY_TOKEN as PASCAL_GATEWAY_TOKEN end up
+     with the literal "${PASCLAW_GATEWAY_TOKEN}" template stuck in
+     Cfg.Gateway.Token, and the gateway will reject every client
+     bearer until the env var is renamed. *)
+  if not FMCPOnly then
+    LogInfo('%s', [DescribeGatewayAuthState(FCfg)]);
 end;
 
 procedure TGatewayServer.Stop;
