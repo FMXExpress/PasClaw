@@ -147,6 +147,27 @@ type
     procedure AutoTitle;
   end;
 
+(* Parse a chat-style request body --
+   {"messages":[{"role","content"},...], "title"?, "model"?} -- into a
+   message array, with any title/model overrides returned via the out
+   params. Roles map through MsgRoleFromString (user/assistant/tool/
+   system). Returns an empty array when "messages" is absent or empty;
+   raises EArgumentException on invalid JSON so the caller can map it to
+   a 400. Used by the gateway's /v1/sessions writer (POST/PUT) and the
+   web UI's session persistence; exposed here so it's unit-testable
+   without binding an HTTP listener. *)
+function ChatBodyToMessages(const Body: string;
+                            out Title, Model: string): TMessageArray;
+
+(* True when a transcript carries structure beyond plain user/assistant
+   text -- system or tool turns, or assistant turns with tool_calls (ids,
+   provider signatures). Such a session was produced by the agent loop /
+   TUI; a surface that only models user/assistant turns (the web UI)
+   must not overwrite it from its flattened view, or terminal resume for
+   tool-using conversations breaks. Exposed so the gateway's /v1/sessions
+   PUT can refuse (409) and the web UI fork instead. *)
+function SessionHasRichTurns(const Msgs: TMessageArray): Boolean;
+
 function NewSessionId: string;
 { True when Id is a safe filename component for a session file -- see
   IsSafeSessionId in the implementation for the exact rules. Exposed
@@ -235,6 +256,69 @@ uses
 function NowUnix: Int64;
 begin
   Result := DateTimeToUnix(Now, False);
+end;
+
+function ChatBodyToMessages(const Body: string;
+                            out Title, Model: string): TMessageArray;
+var
+  Req, MsgObj: TJsonObject;
+  Arr: TJsonArray;
+  i: Integer;
+  B, Role, Content: string;
+begin
+  SetLength(Result, 0);
+  Title := '';
+  Model := '';
+  B := Trim(Body);
+  if B = '' then B := '{}';
+  { TJsonObject.Parse raises (EPasClawJSON) on malformed input and can
+    also return nil; normalise both into EArgumentException so the
+    gateway handler maps a bad body to 400 instead of leaking a 500. }
+  try
+    Req := TJsonObject.Parse(B);
+  except
+    on E: Exception do
+      raise EArgumentException.Create('invalid json body: ' + E.Message);
+  end;
+  if Req = nil then
+    raise EArgumentException.Create('invalid json body');
+  try
+    Title := Req.GetStr('title', '');
+    Model := Req.GetStr('model', '');
+    Arr := Req.ChildArray('messages');
+    if Arr <> nil then
+    try
+      for i := 0 to Arr.Count - 1 do
+      begin
+        MsgObj := Arr.ItemObject(i);     { detached copy -- free per item }
+        if MsgObj = nil then Continue;
+        try
+          Role    := MsgObj.GetStr('role',    'user');
+          Content := MsgObj.GetStr('content', '');
+        finally
+          MsgObj.Free;
+        end;
+        SetLength(Result, Length(Result) + 1);
+        Result[High(Result)] := MakeMessage(MsgRoleFromString(Role), Content);
+      end;
+    finally
+      Arr.Free;
+    end;
+  finally
+    Req.Free;
+  end;
+end;
+
+function SessionHasRichTurns(const Msgs: TMessageArray): Boolean;
+var
+  i: Integer;
+begin
+  Result := True;
+  for i := 0 to High(Msgs) do
+    if (Msgs[i].Role = mrSystem) or (Msgs[i].Role = mrTool) or
+       ((Msgs[i].Role = mrAssistant) and (Length(Msgs[i].ToolCalls) > 0)) then
+      Exit;
+  Result := False;
 end;
 
 function NewSessionId: string;

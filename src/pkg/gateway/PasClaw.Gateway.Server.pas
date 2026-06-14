@@ -48,6 +48,7 @@ uses
   PasClaw.Providers.Types,
   PasClaw.Providers.Intf,
   PasClaw.Tools.Registry,
+  PasClaw.Session.Store,
   PasClaw.MCP.Server;
 
 type
@@ -127,6 +128,22 @@ type
                                 AResp: TIdHTTPResponseInfo);
     procedure HandleConfig(AResp: TIdHTTPResponseInfo);
     procedure HandleStats(AResp: TIdHTTPResponseInfo);
+    { Durable chat sessions, shared with the TUI / `pasclaw session`
+      via PasClaw.Session.Store -- web chats land in the same
+      $PASCLAW_HOME/workspace/sessions/*.json files and are resumable
+      from the terminal. List + create on /v1/sessions; read / replace
+      / delete one on /v1/sessions/<id>. }
+    procedure HandleSessionsList(AResp: TIdHTTPResponseInfo);
+    procedure HandleSessionCreate(ARequest: TIdHTTPRequestInfo;
+                                  AResp: TIdHTTPResponseInfo);
+    procedure HandleSessionItem(const Doc: string;
+                                ARequest: TIdHTTPRequestInfo;
+                                AResp: TIdHTTPResponseInfo);
+    { Read a request's POST body as a UTF-8 string ('' when none). }
+    function  ReadRequestBody(ARequest: TIdHTTPRequestInfo): string;
+    { Fill S.Messages + title/model/provider from a messages/title/model
+      JSON body and Save. Raises on invalid JSON; caller maps to 400. }
+    procedure SaveSessionFromBody(S: TSession; const Body: string);
     procedure HandleFSList(ARequest: TIdHTTPRequestInfo;
                             AResp: TIdHTTPResponseInfo);
     procedure HandleFSRead(ARequest: TIdHTTPRequestInfo;
@@ -216,7 +233,6 @@ uses
   PasClaw.Agent.Compact,
   PasClaw.Agent.Prompt,
   PasClaw.Identity,
-  PasClaw.Session.Store,
   PasClaw.Gateway.ToolView,
   PasClaw.Gateway.WebUI,
   PasClaw.Gateway.Auth,     { CheckGatewayAuth -- bearer-token middleware
@@ -749,6 +765,9 @@ begin
       HandleMemoryRead(Doc, ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/config')  then HandleConfig(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/stats')   then HandleStats(AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/sessions') then HandleSessionsList(AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/sessions') then HandleSessionCreate(ARequest, AResponse)
+    else if (Copy(Doc, 1, 13) = '/v1/sessions/') then HandleSessionItem(Doc, ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs')      then HandleFSList(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs/read') then HandleFSRead(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/logs')    then HandleLogs(AContext, ARequest, AResponse)
@@ -1232,6 +1251,200 @@ begin
   finally
     ByProvider.Free;
     ByModel.Free;
+  end;
+end;
+
+function TGatewayServer.ReadRequestBody(ARequest: TIdHTTPRequestInfo): string;
+var
+  Bytes: TBytes;
+begin
+  Result := '';
+  if ARequest.PostStream = nil then Exit;
+  ARequest.PostStream.Position := 0;
+  SetLength(Bytes, ARequest.PostStream.Size);
+  if ARequest.PostStream.Size > 0 then
+  begin
+    ARequest.PostStream.ReadBuffer(Bytes[0], ARequest.PostStream.Size);
+    { Bodies are JSON, UTF-8 by convention -- decode once here so the
+      Delphi and FPC builds see the same string. }
+    Result := TEncoding.UTF8.GetString(Bytes);
+  end;
+end;
+
+function SessionMetaJSON(const Meta: TSessionMeta): TJsonObject;
+{ Compact metadata view for the session list + lifecycle responses --
+  enough for the web UI sidebar without shipping the whole transcript. }
+begin
+  Result := TJsonObject.Create;
+  Result.PutStr('id',         Meta.Id);
+  Result.PutStr('title',      Meta.Title);
+  Result.PutInt('created_at', Meta.CreatedAt);
+  Result.PutInt('updated_at', Meta.UpdatedAt);
+  Result.PutStr('model',      Meta.Model);
+  Result.PutStr('provider',   Meta.Provider);
+end;
+
+procedure TGatewayServer.SaveSessionFromBody(S: TSession; const Body: string);
+var
+  Title, Model: string;
+begin
+  { ChatBodyToMessages owns the JSON parse (and raises EArgumentException
+    on bad input, which the callers map to 400); it lives in the store
+    unit so it's unit-testable without binding an HTTP listener. }
+  S.Messages := ChatBodyToMessages(Body, Title, Model);
+
+  if Title <> '' then S.Meta.Title := Title;
+  S.AutoTitle;                          { derive from first user turn if still blank }
+  if Model <> '' then S.Meta.Model := Model
+  else if S.Meta.Model = '' then S.Meta.Model := FCfg.DefaultModel;
+  if (S.Meta.Provider = '') and (FProvider <> nil) then
+    S.Meta.Provider := FProvider.GetName;
+  { A PUT to an id that wasn't on disk yet (new web chat) loads as a
+    Default meta with CreatedAt=0 -- stamp it so listing sorts sanely. }
+  if S.Meta.CreatedAt = 0 then S.Meta.CreatedAt := DateTimeToUnix(Now, False);
+  S.Touch;
+  S.Save;
+end;
+
+procedure TGatewayServer.HandleSessionsList(AResp: TIdHTTPResponseInfo);
+var
+  Metas: TSessionMetaArray;
+  Root, Item: TJsonObject;
+  Arr: TJsonArray;
+  i: Integer;
+begin
+  { Exclude the synthetic _gateway_* stat buckets -- those aren't real
+    conversations and would clutter the sidebar (same rule the TUI uses). }
+  Metas := ListSessions(False);
+  Root := TJsonObject.Create;
+  try
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Metas) do
+    begin
+      Item := SessionMetaJSON(Metas[i]);   { AddObject takes ownership (var param) }
+      Arr.AddObject(Item);
+    end;
+    Root.PutArray('sessions', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleSessionCreate(ARequest: TIdHTTPRequestInfo;
+                                             AResp: TIdHTTPResponseInfo);
+var
+  S: TSession;
+  Root: TJsonObject;
+begin
+  S := TSession.Create('');     { mint a fresh, safe id }
+  try
+    try
+      SaveSessionFromBody(S, ReadRequestBody(ARequest));
+    except
+      on E: EArgumentException do
+      begin
+        WriteJSON(AResp, 400, '{"error":"' + JsonEscape(E.Message) + '"}');
+        Exit;
+      end;
+    end;
+    Root := SessionMetaJSON(S.Meta);
+    try
+      WriteJSON(AResp, 200, Root.ToJSON);
+    finally
+      Root.Free;
+    end;
+  finally
+    S.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleSessionItem(const Doc: string;
+                                           ARequest: TIdHTTPRequestInfo;
+                                           AResp: TIdHTTPResponseInfo);
+var
+  Id: string;
+  S: TSession;
+  Root, MsgObj: TJsonObject;
+  Arr: TJsonArray;
+  i: Integer;
+begin
+  Id := Copy(Doc, Length('/v1/sessions/') + 1, MaxInt);
+  if not IsSafeSessionId(Id) then
+  begin
+    WriteJSON(AResp, 400, '{"error":"bad session id"}');
+    Exit;
+  end;
+
+  if ARequest.Command = 'DELETE' then
+  begin
+    if DeleteSession(Id) then
+      WriteJSON(AResp, 200, '{"deleted":true}')
+    else
+      WriteJSON(AResp, 404, '{"error":"not found"}');
+    Exit;
+  end;
+
+  if ARequest.Command = 'PUT' then
+  begin
+    S := TSession.Create(Id);     { loads if present; new handle otherwise }
+    try
+      { Refuse to overwrite a rich agent transcript (tool/system turns or
+        assistant tool_calls) from the web UI's flattened view -- doing so
+        would strip the structure terminal resume needs. The web UI forks
+        to a new session on 409. New/plain sessions fall through. }
+      if S.MetaExists and SessionHasRichTurns(S.Messages) then
+      begin
+        WriteJSON(AResp, 409,
+          '{"error":"session has tool/system turns; not overwriting from web UI"}');
+        Exit;
+      end;
+      try
+        SaveSessionFromBody(S, ReadRequestBody(ARequest));
+      except
+        on E: EArgumentException do
+        begin
+          WriteJSON(AResp, 400, '{"error":"' + JsonEscape(E.Message) + '"}');
+          Exit;
+        end;
+      end;
+      Root := SessionMetaJSON(S.Meta);
+      try
+        WriteJSON(AResp, 200, Root.ToJSON);
+      finally
+        Root.Free;
+      end;
+    finally
+      S.Free;
+    end;
+    Exit;
+  end;
+
+  { GET -- return metadata + the full message transcript. }
+  S := TSession.Create(Id);
+  try
+    if not S.MetaExists then
+    begin
+      WriteJSON(AResp, 404, '{"error":"not found"}');
+      Exit;
+    end;
+    Root := SessionMetaJSON(S.Meta);
+    try
+      Arr := TJsonArray.Create;
+      for i := 0 to High(S.Messages) do
+      begin
+        MsgObj := TJsonObject.Create;
+        MsgObj.PutStr('role',    MsgRoleToString(S.Messages[i].Role));
+        MsgObj.PutStr('content', S.Messages[i].Content);
+        Arr.AddObject(MsgObj);
+      end;
+      Root.PutArray('messages', Arr);
+      WriteJSON(AResp, 200, Root.ToJSON);
+    finally
+      Root.Free;
+    end;
+  finally
+    S.Free;
   end;
 end;
 
@@ -2214,11 +2427,16 @@ begin
       preamble for free. }
     if not HasSystemMessage(Msgs) then
       LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
-    { Temperature: only forward if the client actually set it (>0). Avoids
-      the deprecated-field 400 from newer Claude models when the OpenAI
-      client library defaults to 1.0. }
-    RawTemp := Req.GetFloat('temperature', 0);
-    if RawTemp > 0 then LoopCfg.Options.Temperature := RawTemp;
+    { Temperature: forward only when the client explicitly sent the field
+      (Req.Has), so an absent field keeps the provider/library default
+      rather than pinning 0. An explicit 0 IS honoured -- it's a valid
+      deterministic setting (the web UI's params sidebar exposes it).
+      Negatives are ignored as malformed. }
+    if Req.Has('temperature') then
+    begin
+      RawTemp := Req.GetFloat('temperature', 0);
+      if RawTemp >= 0 then LoopCfg.Options.Temperature := RawTemp;
+    end;
     if Req.Has('max_tokens') then
       LoopCfg.Options.MaxTokens := Req.GetInt('max_tokens', LoopCfg.Options.MaxTokens);
     LoopCfg.OnText        := nil;
