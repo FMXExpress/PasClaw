@@ -1327,8 +1327,13 @@ function renderPresets() {
 function applyChatParams(body, history) {
   if (chatParams.system)
     history = [{ role: "system", content: chatParams.system }].concat(history);
-  const t = parseFloat(chatParams.temp);
-  if (!isNaN(t) && t > 0) body.temperature = t;
+  /* Empty field = "unset"; an explicit 0 is a valid (deterministic)
+     temperature and must be sent -- the summary shows "temp 0", so the
+     request has to match it. */
+  if (chatParams.temp !== "") {
+    const t = parseFloat(chatParams.temp);
+    if (!isNaN(t) && t >= 0) body.temperature = t;
+  }
   const mx = parseInt(chatParams.maxtok, 10);
   if (!isNaN(mx) && mx > 0) body.max_tokens = mx;
   return history;
