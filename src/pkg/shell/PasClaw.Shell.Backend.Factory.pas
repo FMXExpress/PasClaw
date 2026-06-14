@@ -39,6 +39,7 @@ function InstallShellBackend(const Cfg: TConfig;
 implementation
 
 uses
+  PasClaw.Utils,                 { JoinPath -- workspace cwd align (GetHome is in PasClaw.Config) }
   PasClaw.Shell.Backend.Local,
   PasClaw.Shell.Backend.Docker;
 
@@ -59,7 +60,7 @@ function InstallShellBackend(const Cfg: TConfig;
 var
   Backend: IShellBackend;
   Opts: TDockerBackendOptions;
-  Err: string;
+  Err, WsHost: string;
 begin
   if CLIOverride <> '' then
     KindSelected := ParseKind(CLIOverride, Cfg.ShellBackend)
@@ -81,6 +82,20 @@ begin
         Opts.User       := Cfg.ShellBackendDocker.User;
         Opts.Privileged := Cfg.ShellBackendDocker.Privileged;
         Backend := TDockerShellBackend.Create(Opts);
+
+        { Align the host process cwd with the container's workspace mount.
+          The docker backend bind-mounts $PASCLAW_HOME/workspace at
+          /workspace and runs shell_exec there, but fs_read/fs_grep/fs_list
+          run on the HOST and resolve relative paths against the process
+          cwd -- which is usually PasClaw's launch dir (the exe dir), NOT
+          the workspace. The model then sees two different trees for the
+          same "." (shell_exec finds the project under /workspace; fs_*
+          find the exe dir) and can't navigate. chdir-ing here makes fs_*'s
+          "." == the container's /workspace. Docker-only; the local backend
+          leaves the operator's launch cwd untouched. }
+        WsHost := JoinPath(GetHome, 'workspace');
+        if not DirectoryExists(WsHost) then ForceDirectories(WsHost);
+        if DirectoryExists(WsHost) then SetCurrentDir(WsHost);
       end;
   else
     { sbLocal -- and any unknown future enum value falls back here
