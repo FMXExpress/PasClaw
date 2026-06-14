@@ -437,8 +437,53 @@ begin
     'no functionDeclarations entry when caller has no tools');
 end;
 
+procedure TestCompactedTailOrdering;
+{ After compaction the retained tail can begin with a model functionCall
+  (its originating user turn was summarised into systemInstruction).
+  BuildRequest must synthesise a leading user turn so Gemini doesn't 400
+  with "function call turn comes immediately after a user turn or after a
+  function response turn". A tail that already starts with a real user
+  turn must NOT get the synthetic turn. }
+var
+  Msgs:  TMessageArray;
+  Tools: TToolDefinitionArray;
+  Opts:  TChatOptions;
+  Body:  string;
+begin
+  SetLength(Tools, 0);
+  Opts := DefaultChatOptions;
+
+  { Compacted tail: leading model functionCall + its tool response. }
+  SetLength(Msgs, 2);
+  Msgs[0].Role    := mrAssistant;
+  Msgs[0].Content := '';
+  SetLength(Msgs[0].ToolCalls, 1);
+  Msgs[0].ToolCalls[0].Id            := 'c0';
+  Msgs[0].ToolCalls[0].Kind          := 'function';
+  Msgs[0].ToolCalls[0].Func.Name     := 'fs_list';
+  Msgs[0].ToolCalls[0].Func.Arguments := '{"path":"."}';
+  Msgs[1].Role       := mrTool;
+  Msgs[1].ToolCallId := 'c0';
+  Msgs[1].Content    := '[]';
+  Msgs[1].Name       := 'fs_list';
+
+  Body := BuildRequest(Msgs, Tools, 'gemini-3.5-flash', Opts);
+  AssertContains(Body, 'Continue.',
+    'synthetic user turn added before a leading model functionCall');
+  if Pos('Continue.', Body) > Pos('"functionCall"', Body) then
+    Fail('synthetic user turn must precede the functionCall', Body);
+
+  { Normal tail already starting with a user turn -- no synthetic turn. }
+  SetLength(Msgs, 1);
+  Msgs[0] := MakeMessage(mrUser, 'hello there');
+  Body := BuildRequest(Msgs, Tools, 'gemini-3.5-flash', Opts);
+  AssertMissing(Body, 'Continue.',
+    'no synthetic user turn when the tail already starts with a user turn');
+end;
+
 begin
   TestRejectedFieldsScrubbed;
+  TestCompactedTailOrdering;
   TestUserPropertyNamedAdditionalPropertiesSurvives;
   TestEmptyAndMalformed;
   TestThoughtSignatureRoundTrip;
