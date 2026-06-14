@@ -44,7 +44,7 @@
 
   "sandbox": {
     "restrict_to_workspace":  true,
-    "workspace":              "/data/pasclaw/workspace",
+    "workspace":              "${PASCLAW_HOME}/workspace",
     "shell_deny_enabled":     true,
     "block_private_networks": true
   }
