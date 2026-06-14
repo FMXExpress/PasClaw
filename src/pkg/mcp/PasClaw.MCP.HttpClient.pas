@@ -97,6 +97,24 @@ begin
   end;
 end;
 
+function LooksLikeJsonRpcReply(const S: string): Boolean;
+{ True when S parses as a JSON object carrying a JSON-RPC reply shape
+  (result / error / jsonrpc). Used to salvage a streamed reply when the
+  HTTP layer reports a bad/zero status but the body actually arrived. }
+var
+  O: TJsonObject;
+begin
+  Result := False;
+  if Trim(S) = '' then Exit;
+  O := TJsonObject.Parse(S);
+  if O = nil then Exit;
+  try
+    Result := O.Has('result') or O.Has('error') or O.Has('jsonrpc');
+  finally
+    O.Free;
+  end;
+end;
+
 function LookupHeader(const Headers: THeaderPairs; const Name: string): string;
 { Case-insensitive header lookup. HTTP header names are
   case-insensitive per RFC 7230 §3.2, and Indy + TNetHTTPClient
@@ -160,7 +178,7 @@ function TMCPHttpClient.RoundTrip(const Method, ParamsJSON: string;
 
 var
   Req: TJsonObject;
-  Body, EffectiveAuth, RefreshErr: string;
+  Body, EffectiveAuth, RefreshErr, Salvaged: string;
   Headers: TArray<THeaderPair>;
   Resp: THTTPResult;
 begin
@@ -203,6 +221,20 @@ begin
 
   if (Resp.StatusCode < 200) or (Resp.StatusCode >= 300) then
   begin
+    { Salvage a streamed reply. Streamable-HTTP servers (Replicate among
+      them) send the JSON-RPC response as a single text/event-stream event
+      and then hold or abruptly close the connection; System.Net raises on
+      that, so we see StatusCode=0 even though the logical response landed
+      in the body intact. If the collapsed body is a well-formed JSON-RPC
+      envelope, treat it as success rather than discarding it. }
+    Salvaged := CollapseSSE(Resp.Body);
+    if LooksLikeJsonRpcReply(Salvaged) then
+    begin
+      if FSessionId = '' then
+        FSessionId := LookupHeader(Resp.RespHeaders, 'Mcp-Session-Id');
+      RespJSON := Salvaged;
+      Exit(True);
+    end;
     LogWarn('mcp-http[%s] status=%d body=%s',
             [FName, Resp.StatusCode, Copy(Resp.Body, 1, 200)]);
     Exit(False);

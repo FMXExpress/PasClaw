@@ -49,6 +49,13 @@ procedure SaveCachedTools(const ServerName: string;
 function CachePath(const ServerName: string): string;
 function HasCachedTools(const ServerName: string): Boolean;
 
+{ Seconds since the cache for ServerName was written (its `cached_at`).
+  -1 when there is no cache, it can't be read, or it predates the
+  cached_at field. Clock skew (cached_at in the future) clamps to 0 so a
+  fresh cache is never treated as stale. Used to gate the live tools/list
+  refresh on a TTL. }
+function CacheAgeSeconds(const ServerName: string): Int64;
+
 implementation
 
 uses
@@ -80,6 +87,38 @@ begin
   T := Now;
   {$ENDIF}
   Result := Round((T - UnixDelta) * 86400);
+end;
+
+function CacheAgeSeconds(const ServerName: string): Int64;
+var
+  Path: string;
+  L: TStringList;
+  Root: TJsonObject;
+  CachedAt: Int64;
+begin
+  Result := -1;
+  Path := CachePath(ServerName);
+  if not FileExists(Path) then Exit;
+  L := TStringList.Create;
+  try
+    try
+      L.LoadFromFile(Path);
+    except
+      Exit;
+    end;
+    Root := TJsonObject.Parse(L.Text);
+    if Root = nil then Exit;
+    try
+      CachedAt := Root.GetInt('cached_at', 0);
+    finally
+      Root.Free;
+    end;
+  finally
+    L.Free;
+  end;
+  if CachedAt <= 0 then Exit;
+  Result := NowUnix - CachedAt;
+  if Result < 0 then Result := 0;   { clock skew -> treat as fresh }
 end;
 
 function LoadCachedTools(const ServerName: string;

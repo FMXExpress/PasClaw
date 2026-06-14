@@ -32,9 +32,16 @@
   no per-slot handler boilerplate, no MaxBindings cap. Replicate's
   catalog can be as big as it wants.
 
-  FreeMCPClients waits for every loader thread to finish before freeing
-  its client, so a fast `^C` doesn't race the thread that's still inside
-  Connect.
+  FreeMCPClients gives each loader a bounded wait to finish (so the
+  common case frees cleanly), but a loader still blocked inside a network
+  Connect/ListTools is abandoned to the OS (FreeOnTerminate) rather than
+  hanging the app's exit -- its Terminated checks keep it from touching
+  the registry/state after teardown begins.
+
+  Refresh TTL: a tools/list cache younger than MCPRefreshTTLSeconds is
+  reused as-is. The loader still connects (so tool calls work) but skips
+  the expensive tools/list; only a stale/absent cache pays the full
+  refresh. This is what keeps a quick start+exit cheap.
 }
 unit PasClaw.MCP.Bridge;
 
@@ -123,13 +130,29 @@ type
     FReg:    TToolRegistry;
     FState:  TMCPServerState;
     FClient: TMCPBaseClient;
+    FDone:   TEvent;   { signalled when Execute returns -- lets shutdown
+                         bound its wait instead of a 30s-connect WaitFor }
+    FRegLock: TCriticalSection;  { held across the registry mutation so
+                                   shutdown can flush an in-progress
+                                   registration before freeing FReg }
   protected
     procedure Execute; override;
   public
     constructor Create(const ServerCfg: TMCPServer; Reg: TToolRegistry;
                        State: TMCPServerState);
     destructor  Destroy; override;
+    property DoneEvent: TEvent read FDone;
+    { Block until the loader is not mid-registration. After this returns,
+      with Terminated already set, the loader will not touch FReg again --
+      so the caller can free the registry and abandon the thread safely. }
+    procedure FlushPendingRegistration;
   end;
+
+const
+  { TTL for the live tools/list refresh. A cache younger than this is
+    reused as-is (the loader still connects, so tool calls work, but skips
+    the expensive tools/list -- Replicate returns thousands of tools). }
+  MCPRefreshTTLSeconds = 12 * 60 * 60;
 
 var
   GStates: TList;  { TList of TMCPServerState -- owned; freed in FreeMCPClients }
@@ -311,6 +334,14 @@ begin
   FReg    := Reg;
   FState  := State;
   FClient := nil;
+  FDone   := TEvent.Create(nil, {ManualReset=}True, {InitialState=}False, '');
+  FRegLock := TCriticalSection.Create;
+end;
+
+procedure TMCPLoader.FlushPendingRegistration;
+begin
+  FRegLock.Acquire;
+  FRegLock.Release;
 end;
 
 destructor TMCPLoader.Destroy;
@@ -319,6 +350,8 @@ begin
     here) or failed before reaching that point -- in which case the
     client is still ours to free. }
   if FClient <> nil then begin FClient.Free; FClient := nil; end;
+  FDone.Free;
+  FRegLock.Free;
   inherited Destroy;
 end;
 
@@ -345,7 +378,9 @@ var
   Err: string;
   Dispatch: TMCPToolDispatch;
   i: Integer;
+  Age: Int64;
 begin
+  try
   {$IFDEF MSWINDOWS}
   CoInitializeEx(nil, COINIT_MULTITHREADED);
   try
@@ -355,12 +390,29 @@ begin
       FClient := TMCPHttpClient.Create(FCfg.Name, FCfg.Cmd, FCfg.Args)
     else
       FClient := TMCPStdioClient.Create(FCfg.Name, FCfg.Cmd, FCfg.Args);
+    if Terminated then Exit;
     if not FClient.Connect(30 * 1000, Err) then
     begin
       LogWarn('mcp[%s] connect failed: %s', [FCfg.Name, Err]);
       FState.SetFailed(Err);
       Exit;
     end;
+    if Terminated then Exit;
+
+    { TTL gate: a cache younger than MCPRefreshTTLSeconds is still good.
+      Connect above established the live session so tool calls work --
+      reuse the tools we already registered at startup and skip the
+      expensive tools/list (Replicate's catalog is thousands of tools). }
+    Age := CacheAgeSeconds(FCfg.Name);
+    if (Age >= 0) and (Age < MCPRefreshTTLSeconds) then
+    begin
+      LogInfo('mcp[%s] cache fresh (%ds old < %ds TTL) -- reusing cached tools, skipping live tools/list',
+              [FCfg.Name, Age, Int64(MCPRefreshTTLSeconds)]);
+      FState.SetReady(FClient);
+      FClient := nil;
+      Exit;
+    end;
+
     if not FClient.ListTools(Tools, Err) then
     begin
       LogWarn('mcp[%s] tools/list failed: %s', [FCfg.Name, Err]);
@@ -369,31 +421,49 @@ begin
     end;
     LogInfo('mcp[%s] live connect OK (%d tools)', [FCfg.Name, Length(Tools)]);
     SaveCachedTools(FCfg.Name, Tools);
+    { Cheap early-out before taking the lock -- the cache is already saved. }
+    if Terminated then Exit;
 
-    { Always re-register every live tool. Reuse the existing
-      dispatch object (created in the cache pass) when one is
-      present so HandlerObj pointer stability holds -- only the
-      description and schema on the TTool entry change. Skipping
-      re-registration when a cached entry exists would leave the
-      registry stuck on yesterday's (possibly stale) description
-      and inputSchema while the model continued to dispatch via
-      the (live, working) dispatch object. Codex P2 on PR #141.
-      FindDispatchFor + Register are both O(N); for several
-      thousand tools that's an O(N²) one-time cost in the loader
-      thread -- acceptable, but if it ever becomes noticeable
-      promote FDispatches to a sorted TStringList. }
-    for i := 0 to High(Tools) do
-    begin
-      Dispatch := FState.FindDispatchFor(Tools[i].Name);
-      if Dispatch = nil then
-        Dispatch := FState.AddDispatch(Tools[i].Name);
-      RegisterToolViaDispatch(FReg, FCfg.Name, Tools[i], Dispatch);
+    { Registry mutation is the one shutdown-sensitive step: it writes FReg,
+      which the caller frees right after FreeMCPClients returns. Hold
+      FRegLock across the whole re-register + SetReady so a concurrent
+      shutdown's FlushPendingRegistration blocks until we finish (bounded
+      by registration time -- CPU only, no network), then re-check
+      Terminated INSIDE the lock: if shutdown began before we acquired it,
+      skip touching FReg entirely. Together with FreeMCPClients setting
+      Terminated before the flush, this guarantees an abandoned loader
+      never writes a freed registry. }
+    FRegLock.Acquire;
+    try
+      if Terminated then Exit;
+
+      { Always re-register every live tool. Reuse the existing
+        dispatch object (created in the cache pass) when one is
+        present so HandlerObj pointer stability holds -- only the
+        description and schema on the TTool entry change. Skipping
+        re-registration when a cached entry exists would leave the
+        registry stuck on yesterday's (possibly stale) description
+        and inputSchema while the model continued to dispatch via
+        the (live, working) dispatch object. Codex P2 on PR #141.
+        FindDispatchFor + Register are both O(N); for several
+        thousand tools that's an O(N²) one-time cost in the loader
+        thread -- acceptable, but if it ever becomes noticeable
+        promote FDispatches to a sorted TStringList. }
+      for i := 0 to High(Tools) do
+      begin
+        Dispatch := FState.FindDispatchFor(Tools[i].Name);
+        if Dispatch = nil then
+          Dispatch := FState.AddDispatch(Tools[i].Name);
+        RegisterToolViaDispatch(FReg, FCfg.Name, Tools[i], Dispatch);
+      end;
+
+      FState.SetReady(FClient);
+      { Ownership transferred to FState; clear ours so Destroy doesn't
+        double-free. }
+      FClient := nil;
+    finally
+      FRegLock.Release;
     end;
-
-    FState.SetReady(FClient);
-    { Ownership transferred to FState; clear ours so Destroy doesn't
-      double-free. }
-    FClient := nil;
   except
     on E: Exception do
     begin
@@ -406,6 +476,10 @@ begin
     CoUninitialize;
   end;
   {$ENDIF}
+  finally
+    { Always signal completion so a bounded shutdown wait can proceed. }
+    FDone.SetEvent;
+  end;
 end;
 
 { ============================================================
@@ -442,7 +516,7 @@ begin
         Inc(CachedCount);
       end;
       if CachedCount > 0 then
-        LogInfo('mcp[%s] cache hit: %d tool(s) registered, live refresh started',
+        LogInfo('mcp[%s] cache hit: %d tool(s) registered (connecting in background)',
                 [Cfg.MCPServers[i].Name, CachedCount]);
       Inc(CachedRegistered, CachedCount);
     end;
@@ -458,24 +532,63 @@ begin
 end;
 
 procedure FreeMCPClients(var Clients: TMCPClientList);
+const
+  { Per-loader budget. A finished or fresh-cache loader signals DoneEvent
+    almost immediately; only one still blocked in a network call waits the
+    full budget before being abandoned. Bounds exit instead of a 30s
+    connect WaitFor. }
+  ShutdownWaitMs = 1000;
 var
   i: Integer;
+  Loader: TMCPLoader;
+  Abandoned: Boolean;
 begin
+  Abandoned := False;
   for i := 0 to High(Clients) do
     if Clients[i] <> nil then
     begin
-      try Clients[i].WaitFor; except end;
-      Clients[i].Free;
+      Loader := TMCPLoader(Clients[i]);
+      { Order matters: set Terminated, THEN flush. After the flush returns,
+        any registration that was in flight has finished and -- because
+        Terminated is now set and the registration block re-checks it under
+        FRegLock -- the loader will never write FReg again. Only then is it
+        safe for the abandon branch to let the caller free the registry.
+        The flush blocks at most for a registration pass (CPU only); it
+        never waits on the network. }
+      Loader.Terminate;
+      Loader.FlushPendingRegistration;
+      if Loader.DoneEvent.WaitFor(ShutdownWaitMs) = wrSignaled then
+      begin
+        Loader.WaitFor;
+        Loader.Free;
+      end
+      else
+      begin
+        { Still blocked in a network call (Connect/ListTools -- neither
+          touches FReg). Don't hang the app on exit: hand the thread to the
+          OS (FreeOnTerminate) and abandon it. The flush above + the
+          Terminated re-check guarantee it can't write the about-to-be-freed
+          registry; it self-frees when the call returns. }
+        Loader.FreeOnTerminate := True;
+        Abandoned := True;
+      end;
     end;
   SetLength(Clients, 0);
 
   { Server states (and their owned dispatch objects + clients) are
     referenced from the registry via HandlerObj pointers; freeing them
     here invalidates those entries, but the caller is tearing the whole
-    agent down so the registry is going too. }
-  for i := 0 to GStates.Count - 1 do
-    TMCPServerState(GStates[i]).Free;
-  GStates.Clear;
+    agent down so the registry is going too.
+
+    When a loader was abandoned, skip this: that loader still references
+    its TMCPServerState, so freeing it would risk a use-after-free. The
+    process is exiting, so the leak is reclaimed by the OS momentarily. }
+  if not Abandoned then
+  begin
+    for i := 0 to GStates.Count - 1 do
+      TMCPServerState(GStates[i]).Free;
+    GStates.Clear;
+  end;
 end;
 
 initialization
