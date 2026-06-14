@@ -392,7 +392,7 @@ var
   i, j: Integer;
   Sys, ToolName, ArgsJSON: string;
   ToolIds, ToolNames: TStringList;   { id -> name map, parallel arrays }
-  Idx: Integer;
+  Idx, StartIdx: Integer;
   EmitGoogleSearch: Boolean;
 begin
   ToolIds   := TStringList.Create;
@@ -437,8 +437,40 @@ begin
             ToolNames.Add(Messages[i].ToolCalls[j].Func.Name);
           end;
 
+    { Gemini ordering guard for a compacted tail. After compaction folds
+      the summary into systemInstruction and keeps only the trailing
+      messages, the first turn we'd emit can be:
+        - a model functionCall whose originating user turn was summarised
+          away -- Gemini 400s ("function call turn comes immediately after
+          a user turn or after a function response turn"), or
+        - an orphaned tool functionResponse whose functionCall was
+          summarised away -- a functionResponse with no matching call.
+      Skip leading orphaned tool results, then synthesise a user turn when
+      the first real turn is the model's -- OR when EVERY retained entry
+      was a skipped orphan (a tail that fell wholly inside a parallel
+      tool-result block), which would otherwise leave contents[] empty and
+      give Gemini no user turn to continue from. The summarised context
+      lives in systemInstruction, so nothing is lost. }
+    StartIdx := 0;
+    while (StartIdx <= High(Messages)) and
+          ((Messages[StartIdx].Role = mrSystem) or
+           (Messages[StartIdx].Role = mrTool)) do
+      Inc(StartIdx);
+    if (StartIdx > High(Messages)) or
+       (Messages[StartIdx].Role = mrAssistant) then
+    begin
+      Content := TJsonObject.Create;
+      Content.PutStr('role', 'user');
+      Parts := TJsonArray.Create;
+      Part := TJsonObject.Create;
+      Part.PutStr('text', 'Continue.');
+      Parts.AddObject(Part);
+      Content.PutArray('parts', Parts);
+      Contents.AddObject(Content);
+    end;
+
     { Second pass: build contents[] in order. }
-    for i := 0 to High(Messages) do
+    for i := StartIdx to High(Messages) do
     begin
       if Messages[i].Role = mrSystem then Continue;
 
