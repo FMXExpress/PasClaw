@@ -144,6 +144,12 @@ type
     { Fill S.Messages + title/model/provider from a messages/title/model
       JSON body and Save. Raises on invalid JSON; caller maps to 400. }
     procedure SaveSessionFromBody(S: TSession; const Body: string);
+    { pasclaw.dev Code Vault browse (read-only). Search on /v1/vault?q=,
+      read one entry's detail on /v1/vault/<slug>. Proxies the server-side
+      PasClaw.Vault.Client so the browser needn't reach pasclaw.dev directly. }
+    procedure HandleVaultSearch(ARequest: TIdHTTPRequestInfo;
+                                AResp: TIdHTTPResponseInfo);
+    procedure HandleVaultGet(const Doc: string; AResp: TIdHTTPResponseInfo);
     procedure HandleFSList(ARequest: TIdHTTPRequestInfo;
                             AResp: TIdHTTPResponseInfo);
     procedure HandleFSRead(ARequest: TIdHTTPRequestInfo;
@@ -233,6 +239,7 @@ uses
   PasClaw.Agent.Compact,
   PasClaw.Agent.Prompt,
   PasClaw.Identity,
+  PasClaw.Vault.Client,     { SearchVault / GetVaultEntry -- /v1/vault browse }
   PasClaw.Gateway.ToolView,
   PasClaw.Gateway.WebUI,
   PasClaw.Gateway.Auth,     { CheckGatewayAuth -- bearer-token middleware
@@ -768,6 +775,8 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/sessions') then HandleSessionsList(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/sessions') then HandleSessionCreate(ARequest, AResponse)
     else if (Copy(Doc, 1, 13) = '/v1/sessions/') then HandleSessionItem(Doc, ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/vault') then HandleVaultSearch(ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Copy(Doc, 1, 10) = '/v1/vault/') then HandleVaultGet(Doc, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs')      then HandleFSList(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs/read') then HandleFSRead(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/logs')    then HandleLogs(AContext, ARequest, AResponse)
@@ -1445,6 +1454,96 @@ begin
     end;
   finally
     S.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleVaultSearch(ARequest: TIdHTTPRequestInfo;
+                                           AResp: TIdHTTPResponseInfo);
+var
+  Query, Err: string;
+  Limit, i: Integer;
+  Results: TVaultResultArray;
+  Root, Item: TJsonObject;
+  Arr: TJsonArray;
+begin
+  Query := Trim(ARequest.Params.Values['q']);
+  if Query = '' then
+  begin
+    WriteJSON(AResp, 400, '{"error":"missing query: ?q="}');
+    Exit;
+  end;
+  Limit := StrToIntDef(ARequest.Params.Values['limit'], 20);
+  if Limit < 1 then Limit := 1;
+  if Limit > 50 then Limit := 50;
+  if not SearchVault(Query, Limit, Results, Err) then
+  begin
+    WriteJSON(AResp, 502, '{"error":"' + JsonEscape(Err) + '"}');
+    Exit;
+  end;
+  Root := TJsonObject.Create;
+  try
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Results) do
+    begin
+      Item := TJsonObject.Create;
+      Item.PutStr('slug',        Results[i].Slug);
+      Item.PutStr('displayName', Results[i].DisplayName);
+      Item.PutStr('summary',     Results[i].Summary);
+      Item.PutStr('category',    Results[i].Category);
+      Item.PutStr('tags',        Results[i].Tags);
+      Item.PutStr('repoUrl',     Results[i].RepoURL);
+      Item.PutStr('version',     Results[i].Version);
+      Arr.AddObject(Item);
+    end;
+    Root.PutArray('results', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleVaultGet(const Doc: string;
+                                        AResp: TIdHTTPResponseInfo);
+var
+  Slug, Err: string;
+  Detail: TVaultDetail;
+  Root: TJsonObject;
+begin
+  Slug := Copy(Doc, Length('/v1/vault/') + 1, MaxInt);
+  { Slugs are flat identifiers -- refuse any path-y input. }
+  if (Slug = '') or (Pos('/', Slug) > 0) or (Pos('\', Slug) > 0) or
+     (Pos('..', Slug) > 0) then
+  begin
+    WriteJSON(AResp, 400, '{"error":"bad slug"}');
+    Exit;
+  end;
+  if not GetVaultEntry(Slug, Detail, Err) then
+  begin
+    if Err = 'not found' then WriteJSON(AResp, 404, '{"error":"not found"}')
+    else WriteJSON(AResp, 502, '{"error":"' + JsonEscape(Err) + '"}');
+    Exit;
+  end;
+  Root := TJsonObject.Create;
+  try
+    Root.PutStr ('slug',                Detail.Slug);
+    Root.PutStr ('displayName',         Detail.DisplayName);
+    Root.PutStr ('summary',             Detail.Summary);
+    Root.PutStr ('descriptionMarkdown', Detail.DescriptionMarkdown);
+    Root.PutStr ('category',            Detail.Category);
+    Root.PutStr ('tags',                Detail.Tags);
+    Root.PutStr ('repoUrl',             Detail.RepoURL);
+    Root.PutStr ('homepageUrl',         Detail.HomepageURL);
+    Root.PutStr ('license',             Detail.License);
+    Root.PutStr ('delphiVersions',      Detail.DelphiVersions);
+    Root.PutStr ('packageManager',      Detail.PackageManager);
+    Root.PutStr ('installSnippet',      Detail.InstallSnippet);
+    Root.PutStr ('latestVersion',       Detail.LatestVersion);
+    Root.PutInt ('viewCount',           Detail.ViewCount);
+    Root.PutBool('blocked',             Detail.Blocked);
+    Root.PutBool('suspicious',          Detail.Suspicious);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
   end;
 end;
 
