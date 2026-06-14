@@ -102,20 +102,37 @@ begin
 end;
 
 {$IFDEF MSWINDOWS}
+function VersionKey(const S: string): Int64;
+{ "23.0" -> 23*1000+0, "9.0" -> 9*1000+0, so a numeric compare orders
+   versions correctly. TStringList.Sort would put "9.0" AFTER "23.0"
+   lexicographically ('9' > '2') and pick the older compiler. }
+var
+  p: Integer;
+begin
+  p := Pos('.', S);
+  if p > 0 then
+    Result := Int64(StrToIntDef(Copy(S, 1, p - 1), 0)) * 1000 +
+              StrToIntDef(Copy(S, p + 1, MaxInt), 0)
+  else
+    Result := Int64(StrToIntDef(S, 0)) * 1000;
+end;
+
 function RegFindBin(Root: HKEY): string;
 { RAD Studio records its install dir at
   <Root>\SOFTWARE\Embarcadero\BDS\<ver>\RootDir -- the canonical way to
   find a compiler installed anywhere (custom drive/path), which the
   Program-Files probe below would miss. HKCU is where a normal per-user
   install writes it and isn't WOW64-redirected; HKLM is the fallback.
-  Enumerate versions and prefer the newest. }
+  Enumerate versions and pick the highest NUMERIC one that has a dcc. }
 var
   Reg: TRegistry;
   Keys: TStringList;
   i: Integer;
   RootDir, Bin: string;
+  V, BestV: Int64;
 begin
   Result := '';
+  BestV  := -1;
   Reg := TRegistry.Create;
   Keys := TStringList.Create;
   try
@@ -123,8 +140,7 @@ begin
     if not Reg.OpenKeyReadOnly('SOFTWARE\Embarcadero\BDS') then Exit;
     Reg.GetKeyNames(Keys);
     Reg.CloseKey;
-    Keys.Sort;   { ascending -> walk descending for newest-first }
-    for i := Keys.Count - 1 downto 0 do
+    for i := 0 to Keys.Count - 1 do
     begin
       if Reg.OpenKeyReadOnly('SOFTWARE\Embarcadero\BDS\' + Keys[i]) then
       begin
@@ -137,7 +153,12 @@ begin
         if RootDir <> '' then
         begin
           Bin := JoinPath(RootDir, 'bin');
-          if HasDcc(Bin) then Exit(Bin);
+          V := VersionKey(Keys[i]);
+          if HasDcc(Bin) and (V > BestV) then
+          begin
+            BestV  := V;
+            Result := Bin;
+          end;
         end;
       end;
     end;
@@ -379,12 +400,15 @@ begin
     Exit;
   end;
 
-  { Sandbox: only build a project inside the workspace. CanReadPath honours
-    restrict_to_workspace; building writes outputs next to the project, but
-    the gate we care about is "is this a workspace project, not some
-    arbitrary host path the model dreamed up". }
+  { Sandbox: gate on the WRITE boundary, not the read one. delphi_build is
+    a mutating tool -- it runs the compiler with the project dir as cwd and
+    drops .exe/.dcu next to the project. CanReadPath would accept a
+    read-only out-of-workspace location (allow_read_paths /
+    allow_read_outside_workspace), letting the build write outside the
+    sandbox. CanWritePath enforces restrict_to_workspace + allow_write_paths
+    -- the boundary that actually matches what we do. Codex P1 on PR #266. }
   ProjAbs := ExpandFileName(ExpandHome(Project));
-  if not CanReadPath(ProjAbs, Reason) then
+  if not CanWritePath(ProjAbs, Reason) then
   begin
     ErrMsg := Reason;
     Exit;
