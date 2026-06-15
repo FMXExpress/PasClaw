@@ -1276,7 +1276,8 @@ var
   Idx: IKBIndex;
   Sources: TKBSourceArray;
   i, Files, Chunks: Integer;
-  HaveSource: Boolean;
+  HaveSource, Overwrote: Boolean;
+  PrevDt, NewDt: TDateTime;
 begin
   Body := ReadRequestBody(ARequest);
   Name := ''; Content := '';
@@ -1316,6 +1317,11 @@ begin
     Exit;
   end;
   FilePath := JoinPath(Dir, Name);
+  { Capture the existing mtime before overwriting so we can guarantee the
+    new file's mtime advances past it (see the bump below). }
+  Overwrote := FileExists(FilePath);
+  PrevDt := 0;
+  if Overwrote then FileAge(FilePath, PrevDt);
   try
     WriteFileText(FilePath, Content);
   except
@@ -1324,6 +1330,19 @@ begin
       WriteJSON(AResp, 500, '{"error":"' + JsonEscape(E.Message) + '"}');
       Exit;
     end;
+  end;
+  { Codex P2 on PR #284: IKBIndex.Sync only reindexes when the stored mtime
+    is strictly < the file's mtime, and filesystem mtime has 1-2s
+    granularity. Re-uploading the same filename within that window would
+    leave an identical mtime and Sync would skip it, serving stale chunks.
+    Force the new mtime strictly past the previously-indexed value so the
+    incremental gate always fires on a replace. }
+  if Overwrote then
+  begin
+    NewDt := Now;
+    if NewDt < PrevDt then NewDt := PrevDt;
+    NewDt := IncSecond(NewDt, 2);   { DOS file dates resolve to 2s }
+    FileSetDate(FilePath, DateTimeToFileDate(NewDt));
   end;
 
   Idx := NewKBIndex;
