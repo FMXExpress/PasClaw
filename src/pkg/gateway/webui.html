@@ -203,6 +203,9 @@
     padding:.45rem .6rem;font:inherit;font-size:12px;outline:none}
   .skill-install-row input:focus{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
 
+  /* ===== KB tab ===== */
+  .kb-stats{color:var(--mut);font-size:11px;margin:.2rem 0 .6rem;letter-spacing:.03em}
+
   /* ===== Logs tab ===== */
   #tab-logs{display:none;flex-direction:column}
   #tab-logs.active{display:flex}
@@ -308,6 +311,7 @@
   <nav id="tabs">
     <button data-tab="chat" class="active">Chat</button>
     <button data-tab="memory">Memory</button>
+    <button data-tab="kb">KB</button>
     <button data-tab="files">Files</button>
     <button data-tab="mcp">MCP</button>
     <button data-tab="cron">Cron</button>
@@ -375,6 +379,22 @@
         <div id="mem-list"></div>
       </div>
       <pre class="col-view" id="mem-view"><div class="empty-pane">Pick a file to view.</div></pre>
+    </div>
+  </div>
+
+  <div id="tab-kb" class="tab">
+    <div class="pane">
+      <form id="kb-upload" class="skill-install-row">
+        <input id="kb-file" type="file" title="Upload a text document into the knowledge base">
+        <button class="primary" id="kb-upload-btn" type="submit">Upload &amp; index</button>
+      </form>
+      <form id="kb-search" class="skill-install-row">
+        <input id="kb-q" type="text" autocomplete="off" placeholder="search the knowledge base…">
+        <button class="primary" id="kb-search-btn" type="submit">Search</button>
+      </form>
+      <div id="kb-status" class="settings-status"></div>
+      <div id="kb-results"></div>
+      <div id="kb-sources"></div>
     </div>
   </div>
 
@@ -1378,6 +1398,86 @@ const tabLoaders = {
       cform.addEventListener("submit", e => { e.preventDefault(); searchCatalog(); });
     }
     await render();
+  },
+
+  async kb() {
+    const upForm = $("#kb-upload"), file = $("#kb-file");
+    const sForm = $("#kb-search"), q = $("#kb-q");
+    const status = $("#kb-status"), results = $("#kb-results"), sources = $("#kb-sources");
+
+    function setStatus(msg, cls) {
+      status.textContent = msg || "";
+      status.className = "settings-status" + (cls ? " " + cls : "");
+    }
+    async function loadSources() {
+      sources.innerHTML = `<div class="empty-pane">loading…</div>`;
+      try {
+        const j = await (await gwFetch("/v1/kb")).json();
+        const st = j.stats || {};
+        const head = `<div class="kb-stats">${st.sources||0} source(s) · ${st.files||0} file(s) · ${st.chunks||0} chunk(s)${st.vector_ready ? " · vector" : ""}</div>`;
+        const rows = j.sources || [];
+        if (!rows.length) {
+          sources.innerHTML = head + `<div class="empty-pane">No documents indexed yet. Upload one above to make it searchable.</div>`;
+          return;
+        }
+        let html = head;
+        for (const s of rows)
+          html += `<div class="skill-card"><div><span class="name">${escapeHtml(s.root)}</span>`
+                + `<span class="kind">${s.files} file(s)</span></div>`
+                + `<div class="path">${s.chunks} chunk(s)</div></div>`;
+        sources.innerHTML = html;
+      } catch (e) { sources.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; }
+    }
+    async function search() {
+      const term = q.value.trim();
+      if (!term) { results.innerHTML = ""; return; }
+      results.innerHTML = `<div class="empty-pane">searching…</div>`;
+      try {
+        const r = await gwFetch("/v1/kb/search?q=" + encodeURIComponent(term));
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.error) { results.innerHTML = `<div class="empty-pane">search failed: ${escapeHtml(j.error || ("http " + r.status))}</div>`; return; }
+        const hits = j.hits || [];
+        if (!hits.length) { results.innerHTML = `<div class="empty-pane">No matches for “${escapeHtml(term)}”.</div>`; return; }
+        results.innerHTML = "";
+        for (const h of hits) {
+          const el = document.createElement("div");
+          el.className = "skill-card";
+          el.innerHTML = `<div><span class="name">${escapeHtml(h.path)} <span class="kind">#c${h.chunk}</span></span></div>`
+                       + `<div class="desc">${escapeHtml(h.snippet || "")}</div>`;
+          results.appendChild(el);
+        }
+      } catch (e) { results.innerHTML = `<div class="empty-pane">search failed: ${escapeHtml(String(e))}</div>`; }
+    }
+    async function upload() {
+      const f = file.files && file.files[0];
+      if (!f) { setStatus("choose a file first", "err"); return; }
+      if (f.size > 4 * 1024 * 1024) { setStatus("file too large (max 4 MB of text)", "err"); return; }
+      setStatus("reading " + f.name + "…");
+      let text;
+      try { text = await f.text(); } catch (e) { setStatus("read failed: " + e, "err"); return; }
+      setStatus("uploading & indexing " + f.name + "…");
+      try {
+        const r = await gwFetch("/v1/kb/upload", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: f.name, content: text }) });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok && j.uploaded) {
+          setStatus(`indexed ${j.uploaded} — ${j.indexed_files} file(s), ${j.indexed_chunks} chunk(s)`, "ok");
+          file.value = "";
+          await loadSources();
+        } else setStatus("upload failed: " + (j.error || ("http " + r.status)), "err");
+      } catch (e) { setStatus("upload failed: " + e, "err"); }
+    }
+
+    if (!upForm.dataset.wired) {
+      upForm.dataset.wired = "1";
+      upForm.addEventListener("submit", e => { e.preventDefault(); upload(); });
+    }
+    if (!sForm.dataset.wired) {
+      sForm.dataset.wired = "1";
+      sForm.addEventListener("submit", e => { e.preventDefault(); search(); });
+    }
+    await loadSources();
   },
 
   vault() {

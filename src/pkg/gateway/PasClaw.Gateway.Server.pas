@@ -134,6 +134,15 @@ type
     procedure HandleSkillSearch(ARequest: TIdHTTPRequestInfo;
                                 AResp: TIdHTTPResponseInfo);
     procedure HandleSkillRemove(const Doc: string; AResp: TIdHTTPResponseInfo);
+    { Knowledge-base browse + ingest for the web UI. GET /v1/kb lists the
+      indexed sources and totals; POST /v1/kb/upload writes a document into
+      workspace/kb-files and (re)indexes it; GET /v1/kb/search?q= runs the
+      same FTS/vector search the kb_search tool uses. }
+    procedure HandleKBList(AResp: TIdHTTPResponseInfo);
+    procedure HandleKBUpload(ARequest: TIdHTTPRequestInfo;
+                             AResp: TIdHTTPResponseInfo);
+    procedure HandleKBSearch(ARequest: TIdHTTPRequestInfo;
+                             AResp: TIdHTTPResponseInfo);
     procedure HandleMemoryList(AResp: TIdHTTPResponseInfo);
     procedure HandleMemoryRead(const Doc: string;
                                 ARequest: TIdHTTPRequestInfo;
@@ -265,6 +274,7 @@ uses
   PasClaw.Skills.Install,   { InstallSkillTarget / RemoveSkillFiles / IsSafeSkillName }
   PasClaw.Skills.ClawHub,  { SearchClawHub -- catalog search (clawhub.ai) }
   PasClaw.Skills.PasClawHub, { SearchPasClawHub -- catalog search (pasclaw.dev) }
+  PasClaw.KB.Index,        { IKBIndex -- /v1/kb list / upload / search }
   PasClaw.Tools.Sandbox,
   PasClaw.Providers.Factory,
   PasClaw.Providers.Catalog,   { TProviderSpec for /v1/models discovery }
@@ -805,6 +815,9 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/skills')  then HandleSkillsList(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/skills')  then HandleSkillInstall(ARequest, AResponse)
     else if (ARequest.Command = 'DELETE') and (Copy(Doc, 1, 11) = '/v1/skills/') then HandleSkillRemove(Doc, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/kb/search') then HandleKBSearch(ARequest, AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/kb/upload') then HandleKBUpload(ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/kb')       then HandleKBList(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/memory')  then HandleMemoryList(AResponse)
     else if (ARequest.Command = 'GET')  and (Copy(Doc, 1, 11) = '/v1/memory/') then
       HandleMemoryRead(Doc, ARequest, AResponse)
@@ -1140,6 +1153,215 @@ begin
   finally
     Root.Free;
     Seen.Free;
+  end;
+end;
+
+{ A safe leaf filename for an uploaded KB document: no path separators,
+  no '..', a small allow-list of characters. The handler also runs the
+  value through ExtractFileName first, so this is belt-and-suspenders
+  against traversal out of workspace/kb-files. }
+function IsSafeKBName(const Name: string): Boolean;
+var
+  i: Integer;
+begin
+  Result := False;
+  if (Name = '') or (Length(Name) > 200) then Exit;
+  if (Name = '.') or (Name = '..') or (Pos('..', Name) > 0) then Exit;
+  for i := 1 to Length(Name) do
+    if not CharInSet(Name[i], ['A'..'Z','a'..'z','0'..'9','.','-','_',' ','(',')']) then Exit;
+  Result := True;
+end;
+
+procedure TGatewayServer.HandleKBList(AResp: TIdHTTPResponseInfo);
+var
+  Idx: IKBIndex;
+  Sources: TKBSourceArray;
+  St: TKBStats;
+  Root, Stats, Item: TJsonObject;
+  Arr: TJsonArray;
+  i: Integer;
+begin
+  Root := TJsonObject.Create;
+  try
+    Arr := TJsonArray.Create;
+    Stats := TJsonObject.Create;
+    Idx := NewKBIndex;
+    if Idx.Open(DefaultKBDbPath) then
+    begin
+      Sources := Idx.GetSources;
+      for i := 0 to High(Sources) do
+      begin
+        Item := TJsonObject.Create;
+        Item.PutStr('root',     Sources[i].Root);
+        Item.PutInt('files',    Sources[i].Files);
+        Item.PutInt('chunks',   Sources[i].Chunks);
+        Item.PutInt('added_at', Sources[i].AddedAt);
+        Arr.AddObject(Item);
+      end;
+      St := Idx.Stats;
+      Stats.PutInt ('sources',      St.Sources);
+      Stats.PutInt ('files',        St.Files);
+      Stats.PutInt ('chunks',       St.Chunks);
+      Stats.PutBool('vector_ready', St.VectorReady);
+      Idx := nil;
+    end
+    else
+    begin
+      { No index yet -- report an empty corpus so the tab can render its
+        "upload your first document" state instead of erroring. }
+      Stats.PutInt ('sources', 0); Stats.PutInt('files', 0);
+      Stats.PutInt ('chunks',  0); Stats.PutBool('vector_ready', False);
+    end;
+    Root.PutObject('stats',   Stats);
+    Root.PutArray ('sources', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleKBSearch(ARequest: TIdHTTPRequestInfo;
+                                        AResp: TIdHTTPResponseInfo);
+var
+  Query: string;
+  K, i: Integer;
+  Idx: IKBIndex;
+  Hits: TKBHitArray;
+  Root, Item: TJsonObject;
+  Arr: TJsonArray;
+begin
+  Query := Trim(ARequest.Params.Values['q']);
+  if Query = '' then
+  begin
+    WriteJSON(AResp, 400, '{"error":"missing query parameter: q"}');
+    Exit;
+  end;
+  K := StrToIntDef(ARequest.Params.Values['k'], 8);
+  if K <= 0 then K := 8;
+  if K > 25 then K := 25;
+
+  Idx := NewKBIndex;
+  if not Idx.Open(DefaultKBDbPath) then
+  begin
+    WriteJSON(AResp, 503,
+      '{"error":"knowledge base unavailable (nothing indexed yet, or libsqlite3 missing)"}');
+    Exit;
+  end;
+  Root := TJsonObject.Create;
+  try
+    Arr := TJsonArray.Create;
+    Hits := Idx.Search(Query, K);
+    for i := 0 to High(Hits) do
+    begin
+      Item := TJsonObject.Create;
+      Item.PutStr  ('path',    Hits[i].Path);
+      Item.PutInt  ('chunk',   Hits[i].ChunkNo);
+      Item.PutStr  ('snippet', Hits[i].Snippet);
+      Item.PutFloat('score',   Hits[i].Score);
+      Arr.AddObject(Item);
+    end;
+    Root.PutArray('hits', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+    Idx := nil;
+  end;
+end;
+
+procedure TGatewayServer.HandleKBUpload(ARequest: TIdHTTPRequestInfo;
+                                        AResp: TIdHTTPResponseInfo);
+var
+  Body, Name, Content, Err, Dir, FilePath: string;
+  Req, Root: TJsonObject;
+  Idx: IKBIndex;
+  Sources: TKBSourceArray;
+  i, Files, Chunks: Integer;
+  HaveSource: Boolean;
+begin
+  Body := ReadRequestBody(ARequest);
+  Name := ''; Content := '';
+  if Trim(Body) <> '' then
+  begin
+    Req := TJsonObject.Parse(Body);
+    if Req <> nil then
+    try
+      Name    := Trim(Req.GetStr('name', ''));
+      Content := Req.GetStr('content', '');
+    finally
+      Req.Free;
+    end;
+  end;
+  Name := ExtractFileName(Name);   { strip any client-sent path components }
+  if (Name = '') or (not IsSafeKBName(Name)) then
+  begin
+    WriteJSON(AResp, 400, '{"error":"invalid or missing field: name"}');
+    Exit;
+  end;
+  if not KBExtSupported(Name) then
+  begin
+    WriteJSON(AResp, 415,
+      '{"error":"unsupported file type -- the KB indexes text formats (.md, .txt, .pas, source code, ...)"}');
+    Exit;
+  end;
+  if Content = '' then
+  begin
+    WriteJSON(AResp, 400, '{"error":"empty content"}');
+    Exit;
+  end;
+
+  Dir := JoinPath(GetHome, 'workspace/kb-files');
+  if not ForceDirectories(Dir) then
+  begin
+    WriteJSON(AResp, 500, '{"error":"could not create workspace/kb-files"}');
+    Exit;
+  end;
+  FilePath := JoinPath(Dir, Name);
+  try
+    WriteFileText(FilePath, Content);
+  except
+    on E: Exception do
+    begin
+      WriteJSON(AResp, 500, '{"error":"' + JsonEscape(E.Message) + '"}');
+      Exit;
+    end;
+  end;
+
+  Idx := NewKBIndex;
+  if not Idx.Open(DefaultKBDbPath) then
+  begin
+    WriteJSON(AResp, 503,
+      '{"error":"knowledge base unavailable (libsqlite3 missing or path unwritable)"}');
+    Exit;
+  end;
+  Files := 0; Chunks := 0;
+  try
+    { Register workspace/kb-files as a source once; later uploads just drop
+      a file in and re-sync (Sync is mtime-incremental, so it only indexes
+      the new/changed file). }
+    HaveSource := False;
+    Sources := Idx.GetSources;
+    for i := 0 to High(Sources) do
+      if SameFileName(ExpandFileName(Sources[i].Root), ExpandFileName(Dir)) then
+      begin
+        HaveSource := True;
+        Break;
+      end;
+    if not HaveSource then
+      Idx.AddSource(Dir, Err);   { Sync indexes regardless of Err }
+    Idx.Sync(Files, Chunks);
+  finally
+    Idx := nil;
+  end;
+
+  LogInfo('gateway: KB upload %s -- indexed %d file(s), %d chunk(s)', [Name, Files, Chunks]);
+  Root := TJsonObject.Create;
+  try
+    Root.PutStr('uploaded',       Name);
+    Root.PutInt('indexed_files',  Files);
+    Root.PutInt('indexed_chunks', Chunks);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
   end;
 end;
 
