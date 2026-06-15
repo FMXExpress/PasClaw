@@ -66,8 +66,11 @@ uses
   PasClaw.Tools.Vault,
   PasClaw.Tools.OutputCache,
   PasClaw.Tools.Sandbox,
-  PasClaw.Shell.Backend,    { TShellBackendKind -- gate on Cfg.ShellBackend
-                              so we refuse docker on serve cleanly }
+  PasClaw.Shell.Backend,    { TShellBackendKind + StartShellSession /
+                              SetCurrentSessionId / CloseShellSession --
+                              one container per serve process }
+  PasClaw.Shell.Backend.Factory,  { InstallShellBackend }
+  PasClaw.Session.Store,    { NewSessionId for the shell session id }
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
   PasClaw.Stream.Reliability,
@@ -134,32 +137,51 @@ var
   Server, MCPServer: TGatewayServer;
   Skills: TSkillSpecArray;
   BaseURL: string;
+  KindSelected: TShellBackendKind;
+  BackendDesc, ShellSessionId: string;
 begin
   Cfg := LoadConfig;
   ConfigureSandbox(Cfg.Sandbox, '');
+  ShellSessionId := '';
   try
     Args := ParseServe(Argv, Cfg);
-    { Phase 1 scope: docker shell-backend is wired for `pasclaw agent`
-      and `pasclaw heartbeat`. The multi-tenant serve path needs
-      per-request session containers and cross-thread session-id
-      propagation, which is Phase 1.5 work. Refuse docker here
-      loudly so an operator who flipped on docker globally doesn't
-      silently end up on the host when they hit /v1.
-
-      Skip the gate when --no-tools was passed -- a tool-disabled
-      server never dispatches shell_exec, so the docker isolation
-      story doesn't apply. Codex P2 on PR #233: parse args before
-      the gate so the help text's `--no-tools` advice is actually
-      honoured. }
-    if (Cfg.ShellBackend = sbDocker) and (not Args.NoTools) then
+    { Install the active shell backend so shell_exec / execute_code run on
+      the backend the operator configured -- including docker. serve uses
+      ONE container for the whole process (like the TUI): every /v1 request
+      shares it, since the gateway has no per-request session lifecycle.
+      That's coarser than per-tenant isolation but it does host the docker
+      backend honestly instead of silently falling through to the host.
+      Skip entirely when --no-tools (no shell dispatch at all). }
+    if not Args.NoTools then
     begin
-      PrintLn(Ansi.Yellow + '!' + Ansi.Reset +
-              ' `pasclaw serve` does not yet host the docker shell backend.');
-      PrintLn('  Run with shell_backend=local in config.json (single-tenant ' +
-              'docker is on `pasclaw agent` only),');
-      PrintLn('  or pass ' + Ansi.Bold + '--no-tools' + Ansi.Reset +
-              ' to disable tool execution.');
-      Exit(1);
+      try
+        InstallShellBackend(Cfg, '', KindSelected, BackendDesc);
+      except
+        on E: Exception do
+        begin
+          PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + E.Message);
+          Exit(1);
+        end;
+      end;
+      { Spawn the single docker container up front (no-op for local) so a
+        first-time image pull surfaces as a clean console error here rather
+        than stalling the first request. SetCurrentSessionId points every
+        turn's shell_exec/execute_code at this container. }
+      if KindSelected = sbDocker then
+      begin
+        ShellSessionId := NewSessionId;
+        PrintLn(Ansi.Dim + 'starting docker container for this server...' + Ansi.Reset);
+        try
+          StartShellSession(ShellSessionId);
+        except
+          on E: Exception do
+          begin
+            PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + E.Message);
+            Exit(1);
+          end;
+        end;
+        SetCurrentSessionId(ShellSessionId);
+      end;
     end;
 
     { Stream-reliability env-var overrides. Lets operators tune
@@ -284,6 +306,8 @@ begin
 
     Result := 0;
   finally
+    { Tear down the one shell container (no-op for local / unset). }
+    if ShellSessionId <> '' then CloseShellSession(ShellSessionId);
     Cfg.Free;
   end;
 end;

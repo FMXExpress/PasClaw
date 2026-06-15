@@ -219,6 +219,23 @@
 
   .empty-pane{margin:auto;color:var(--mut);text-align:center;padding:2rem;font-size:12px}
 
+  /* ===== Vault tab ===== */
+  .vault-search-row{margin:0 0 .45rem}
+  .vault-search-row input{width:100%;background:rgba(2,5,15,.72);color:var(--fg);
+    caret-color:var(--cyan);border:1px solid rgba(32,246,255,.3);border-radius:8px;
+    padding:.4rem .55rem;font:inherit;font-size:12px;outline:none}
+  .vault-search-row input:focus{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
+  .vault-item .sub{display:block;color:var(--mut);font-size:10px;margin-top:.15rem;
+    white-space:normal;overflow:hidden;text-overflow:ellipsis}
+  #vault-view{white-space:normal}
+  #vault-view h2{margin:.1rem 0 .3rem;font-size:1.2em;color:var(--cyan)}
+  #vault-view p{margin:.35rem 0}
+  #vault-view a{color:var(--cyan);text-decoration:underline;word-break:break-all}
+  #vault-view ul{margin:.3rem 0;padding-left:1.3rem}
+  .vault-meta{display:flex;flex-wrap:wrap;gap:.3rem;margin:.4rem 0}
+  .vault-meta .badge{background:rgba(143,92,255,.16);color:var(--violet);
+    border:1px solid rgba(143,92,255,.4)}
+
   /* ===== Markdown rendering inside assistant bubbles ===== */
   .bub.md{white-space:normal}
   .bub.md h1,.bub.md h2,.bub.md h3,.bub.md h4{margin:.5rem 0 .3rem;line-height:1.25;color:var(--fg)}
@@ -284,6 +301,7 @@
     <button data-tab="mcp">MCP</button>
     <button data-tab="cron">Cron</button>
     <button data-tab="skills">Skills</button>
+    <button data-tab="vault">Vault</button>
     <button data-tab="logs">Logs</button>
     <button data-tab="stats">Stats</button>
     <button data-tab="settings">Settings</button>
@@ -379,6 +397,19 @@
 
   <div id="tab-skills" class="tab">
     <div class="pane" id="skills-pane"></div>
+  </div>
+
+  <div id="tab-vault" class="tab">
+    <div class="two-col">
+      <div class="col-list">
+        <form id="vault-form" class="vault-search-row">
+          <input id="vault-q" type="search" autocomplete="off"
+                 placeholder="search Code Vault (Object Pascal)…">
+        </form>
+        <div id="vault-list"></div>
+      </div>
+      <div class="col-view" id="vault-view"><div class="empty-pane">Search the pasclaw.dev Code Vault for Object Pascal samples and components.</div></div>
+    </div>
   </div>
 
   <div id="tab-logs" class="tab">
@@ -1207,6 +1238,70 @@ const tabLoaders = {
         pane.appendChild(el);
       }
     } catch (e) { pane.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; }
+  },
+
+  vault() {
+    /* The Code Vault is a remote searchable corpus (pasclaw.dev), not a
+       fixed list -- wire the search form once and let the operator query. */
+    const form = $("#vault-form"), q = $("#vault-q");
+    const list = $("#vault-list"), view = $("#vault-view");
+    if (!form || form.dataset.wired) { if (q) q.focus(); return; }
+    form.dataset.wired = "1";
+
+    async function openEntry(slug) {
+      view.innerHTML = `<div class="empty-pane">loading…</div>`;
+      try {
+        const d = await (await gwFetch("/v1/vault/" + encodeURIComponent(slug))).json();
+        if (d.error) { view.innerHTML = `<div class="empty-pane">${escapeHtml(d.error)}</div>`; return; }
+        const meta = [];
+        if (d.category)       meta.push(escapeHtml(d.category));
+        if (d.latestVersion)  meta.push("v" + escapeHtml(d.latestVersion));
+        if (d.license)        meta.push(escapeHtml(d.license));
+        if (d.delphiVersions) meta.push(escapeHtml(d.delphiVersions));
+        let html = `<h2>${escapeHtml(d.displayName || d.slug)}</h2>`;
+        if (meta.length)
+          html += `<div class="vault-meta">` + meta.map(x => `<span class="badge">${x}</span>`).join("") + `</div>`;
+        if (d.suspicious || d.blocked)
+          html += `<div class="vault-meta"><span class="badge off">${d.blocked ? "blocked" : "flagged"}</span></div>`;
+        if (d.repoUrl)
+          html += /^https?:\/\//i.test(d.repoUrl)
+            ? `<p><a href="${escapeHtml(d.repoUrl)}" target="_blank" rel="noopener">${escapeHtml(d.repoUrl)}</a></p>`
+            : `<p>${escapeHtml(d.repoUrl)}</p>`;
+        if (d.installSnippet)
+          html += renderMarkdown("```\n" + d.installSnippet + "\n```");
+        html += renderMarkdown(d.descriptionMarkdown || d.summary || "");
+        view.innerHTML = html;
+        wireCopyButtons(view);
+      } catch (e) { view.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; }
+    }
+
+    async function runSearch() {
+      const query = q.value.trim();
+      if (!query) return;
+      list.innerHTML = `<div class="empty-pane">searching…</div>`;
+      try {
+        const j = await (await gwFetch("/v1/vault?q=" + encodeURIComponent(query))).json();
+        if (j.error) { list.innerHTML = `<div class="empty-pane">${escapeHtml(j.error)}</div>`; return; }
+        const rows = j.results || [];
+        if (!rows.length) { list.innerHTML = `<div class="empty-pane">no matches</div>`; return; }
+        list.innerHTML = "";
+        for (const r of rows) {
+          const el = document.createElement("div");
+          el.className = "item vault-item";
+          el.innerHTML = `<div><span>${escapeHtml(r.displayName || r.slug)}</span>`
+                       + (r.summary ? `<span class="sub">${escapeHtml(r.summary)}</span>` : "") + `</div>`;
+          el.addEventListener("click", () => {
+            $$("#vault-list .item").forEach(x => x.classList.remove("active"));
+            el.classList.add("active");
+            openEntry(r.slug);
+          });
+          list.appendChild(el);
+        }
+      } catch (e) { list.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; }
+    }
+
+    form.addEventListener("submit", e => { e.preventDefault(); runSearch(); });
+    q.focus();
   },
 
   logs() {
