@@ -127,6 +127,12 @@ type
       apply on the next restart -- the tool registry is built at startup. }
     procedure HandleSkillInstall(ARequest: TIdHTTPRequestInfo;
                                  AResp: TIdHTTPResponseInfo);
+    { Search the public skill catalogs (GET /v1/skills/search?q=...) so the
+      web UI can browse-and-install instead of pasting a target. Merges
+      pasclaw.dev + ClawHub; each result carries its source so the caller
+      installs via the matching hub: / clawhub: prefix. }
+    procedure HandleSkillSearch(ARequest: TIdHTTPRequestInfo;
+                                AResp: TIdHTTPResponseInfo);
     procedure HandleSkillRemove(const Doc: string; AResp: TIdHTTPResponseInfo);
     procedure HandleMemoryList(AResp: TIdHTTPResponseInfo);
     procedure HandleMemoryRead(const Doc: string;
@@ -257,6 +263,8 @@ uses
   PasClaw.Utils,
   PasClaw.Skills.Loader,
   PasClaw.Skills.Install,   { InstallSkillTarget / RemoveSkillFiles / IsSafeSkillName }
+  PasClaw.Skills.ClawHub,  { SearchClawHub -- catalog search (clawhub.ai) }
+  PasClaw.Skills.PasClawHub, { SearchPasClawHub -- catalog search (pasclaw.dev) }
   PasClaw.Tools.Sandbox,
   PasClaw.Providers.Factory,
   PasClaw.Providers.Catalog,   { TProviderSpec for /v1/models discovery }
@@ -793,6 +801,7 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/models')  then HandleModels(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/mcp')     then HandleMCPList(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/cron')    then HandleCronList(AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/skills/search') then HandleSkillSearch(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/skills')  then HandleSkillsList(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/skills')  then HandleSkillInstall(ARequest, AResponse)
     else if (ARequest.Command = 'DELETE') and (Copy(Doc, 1, 11) = '/v1/skills/') then HandleSkillRemove(Doc, AResponse)
@@ -1055,6 +1064,82 @@ begin
     WriteJSON(AResp, 200, Root.ToJSON);
   finally
     Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleSkillSearch(ARequest: TIdHTTPRequestInfo;
+                                           AResp: TIdHTTPResponseInfo);
+var
+  Query, ErrP, ErrC: string;
+  Limit, i: Integer;
+  PRes: TPasClawHubResultArray;
+  CRes: TClawHubResultArray;
+  OkP, OkC: Boolean;
+  Root, Item: TJsonObject;
+  Arr: TJsonArray;
+  Seen: TStringList;
+
+  procedure AddResult(const Slug, Display, Summary, Version, Source: string;
+                      Score: Double);
+  begin
+    { Dedupe across the two registries; pasclaw.dev is added first so it
+      wins, matching the bare-slug install precedence. Enforce the total
+      Limit on the MERGED set -- forwarding Limit to each backend and
+      concatenating would otherwise return up to 2x Limit. pasclaw.dev
+      fills the budget first, ClawHub takes whatever slots remain. }
+    if (Slug = '') or (Arr.Count >= Limit) or (Seen.IndexOf(LowerCase(Slug)) >= 0) then Exit;
+    Seen.Add(LowerCase(Slug));
+    Item := TJsonObject.Create;
+    Item.PutStr  ('slug',         Slug);
+    Item.PutStr  ('display_name', Display);
+    Item.PutStr  ('summary',      Summary);
+    Item.PutStr  ('version',      Version);
+    Item.PutFloat('score',        Score);
+    Item.PutStr  ('source',       Source);  { 'hub' (pasclaw.dev) | 'clawhub' }
+    Arr.AddObject(Item);
+  end;
+
+begin
+  Query := Trim(ARequest.Params.Values['q']);
+  if Query = '' then
+  begin
+    WriteJSON(AResp, 400, '{"error":"missing query parameter: q"}');
+    Exit;
+  end;
+  Limit := StrToIntDef(ARequest.Params.Values['limit'], 20);
+  if Limit <= 0 then Limit := 20;
+  if Limit > 50 then Limit := 50;
+
+  { Search both registries the install path knows (pasclaw.dev first, then
+    ClawHub). Each runs its own HTTP with its own timeout; one failing
+    doesn't sink the other -- only a total miss is an error. }
+  OkP := SearchPasClawHub(Query, Limit, PRes, ErrP);
+  OkC := SearchClawHub   (Query, Limit, CRes, ErrC);
+
+  if (not OkP) and (not OkC) then
+  begin
+    WriteJSON(AResp, 502, '{"error":"' +
+      JsonEscape('skill catalog search failed: ' + ErrP + ' / ' + ErrC) + '"}');
+    Exit;
+  end;
+
+  Seen := TStringList.Create;
+  Root := TJsonObject.Create;
+  try
+    Arr := TJsonArray.Create;
+    if OkP then
+      for i := 0 to High(PRes) do
+        AddResult(PRes[i].Slug, PRes[i].DisplayName, PRes[i].Summary,
+                  PRes[i].Version, 'hub', PRes[i].Score);
+    if OkC then
+      for i := 0 to High(CRes) do
+        AddResult(CRes[i].Slug, CRes[i].DisplayName, CRes[i].Summary,
+                  CRes[i].Version, 'clawhub', CRes[i].Score);
+    Root.PutArray('results', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+    Seen.Free;
   end;
 end;
 

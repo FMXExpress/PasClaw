@@ -413,7 +413,13 @@
                placeholder="install: owner/repo · clawhub:slug · hub:slug · or a bare slug">
         <button class="primary" id="skill-install-btn">Install</button>
       </form>
+      <form id="skill-search" class="skill-install-row">
+        <input id="skill-q" type="text" autocomplete="off"
+               placeholder="search the skill catalog (pasclaw.dev + ClawHub)…">
+        <button class="primary" id="skill-search-btn">Search</button>
+      </form>
       <div id="skill-status" class="settings-status"></div>
+      <div id="skill-catalog"></div>
       <div id="skills-pane"></div>
     </div>
   </div>
@@ -1299,25 +1305,77 @@ const tabLoaders = {
       } catch (e) { setStatus("remove failed: " + e, "err"); }
       await render();
     }
-    async function install() {
-      const t = target.value.trim();
-      if (!t) return;
-      btn.disabled = true; setStatus("installing " + t + "… (fetching from hub/GitHub)");
+    /* Shared install path: used by the manual target form AND the per-row
+       Install buttons in the catalog results below. Returns true on success
+       so callers can decide whether to clear input / refresh. */
+    async function doInstall(t) {
+      if (!t) return false;
+      setStatus("installing " + t + "… (fetching from hub/GitHub)");
       try {
         const r = await gwFetch("/v1/skills", {
           method: "POST", headers: { "content-type": "application/json" },
           body: JSON.stringify({ target: t }) });
         const j = await r.json().catch(() => ({}));
-        if (r.ok && j.installed) { setStatus("installed " + j.installed + " — " + (j.note || ""), "ok"); target.value = ""; }
-        else setStatus("install failed: " + (j.error || ("http " + r.status)), "err");
-      } catch (e) { setStatus("install failed: " + e, "err"); }
-      finally { btn.disabled = false; }
+        if (r.ok && j.installed) { setStatus("installed " + j.installed + " — " + (j.note || ""), "ok"); return true; }
+        setStatus("install failed: " + (j.error || ("http " + r.status)), "err"); return false;
+      } catch (e) { setStatus("install failed: " + e, "err"); return false; }
+    }
+    async function install() {
+      const t = target.value.trim();
+      if (!t) return;
+      btn.disabled = true;
+      const ok = await doInstall(t);
+      btn.disabled = false;
+      if (ok) target.value = "";
       await render();
+    }
+
+    /* Catalog browse-and-install: query GET /v1/skills/search and render
+       each hit with an Install button that targets the right hub via the
+       result's source (pasclaw.dev -> hub:, ClawHub -> clawhub:). */
+    const cform = $("#skill-search"), cq = $("#skill-q"), cres = $("#skill-catalog");
+    async function searchCatalog() {
+      const q = cq.value.trim();
+      if (!q) { cres.innerHTML = ""; return; }
+      cres.innerHTML = `<div class="empty-pane">searching the catalog…</div>`;
+      try {
+        const r = await gwFetch("/v1/skills/search?q=" + encodeURIComponent(q));
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.error) {
+          cres.innerHTML = `<div class="empty-pane">search failed: ${escapeHtml(j.error || ("http " + r.status))}</div>`;
+          return;
+        }
+        const rows = j.results || [];
+        if (!rows.length) { cres.innerHTML = `<div class="empty-pane">No catalog skills match “${escapeHtml(q)}”.</div>`; return; }
+        cres.innerHTML = "";
+        for (const it of rows) {
+          const tgt = (it.source === "clawhub" ? "clawhub:" : "hub:") + it.slug;
+          const el = document.createElement("div");
+          el.className = "skill-card";
+          el.innerHTML = `<button class="primary install" type="button">install</button>`
+                       + `<div><span class="name">${escapeHtml(it.display_name || it.slug)}</span>`
+                       + `<span class="kind">${escapeHtml(it.source)}</span></div>`
+                       + (it.summary ? `<div class="desc">${escapeHtml(it.summary)}</div>` : "")
+                       + `<div class="path">${escapeHtml(tgt)}${it.version ? " · v" + escapeHtml(it.version) : ""}</div>`;
+          const ib = el.querySelector(".install");
+          ib.addEventListener("click", async () => {
+            ib.disabled = true;
+            const ok = await doInstall(tgt);
+            ib.disabled = false;
+            if (ok) { ib.textContent = "installed"; await render(); }
+          });
+          cres.appendChild(el);
+        }
+      } catch (e) { cres.innerHTML = `<div class="empty-pane">search failed: ${escapeHtml(String(e))}</div>`; }
     }
 
     if (!form.dataset.wired) {
       form.dataset.wired = "1";
       form.addEventListener("submit", e => { e.preventDefault(); install(); });
+    }
+    if (!cform.dataset.wired) {
+      cform.dataset.wired = "1";
+      cform.addEventListener("submit", e => { e.preventDefault(); searchCatalog(); });
     }
     await render();
   },
