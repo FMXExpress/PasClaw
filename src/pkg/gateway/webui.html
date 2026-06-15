@@ -596,7 +596,8 @@ function isTab(name) {
 function showTab(name) {
   // Fall back to chat for an unknown / empty name (e.g. a stale or
   // hand-edited #hash) so we never end up with every .tab hidden.
-  if (!isTab(name)) name = "chat";
+  const valid = isTab(name);
+  if (!valid) name = "chat";
   // Scope both the active-class toggle AND the click-handler wiring
   // to buttons that actually map to a tab (data-tab set). Without the
   // [data-tab] qualifier the new 🔑 token button in the nav would also
@@ -607,8 +608,11 @@ function showTab(name) {
   // Reflect the active tab in the URL hash so it survives a reload, is
   // bookmarkable, and rides browser back/forward. Skip the write when the
   // hash already matches -- avoids a redundant history entry and the
-  // recursive hashchange it would trigger.
-  if (location.hash.slice(1) !== name) location.hash = name;
+  // recursive hashchange it would trigger. Only write for an explicitly
+  // requested tab: the empty/unknown -> chat fallback must NOT push #chat,
+  // else pressing Back to a hashless entry re-pushes it and traps the user
+  // on the page (Codex P2 on PR #281).
+  if (valid && location.hash.slice(1) !== name) location.hash = name;
   if (!tabLoaded[name] && typeof tabLoaders[name] === "function") {
     tabLoaders[name]();
     tabLoaded[name] = true;
