@@ -131,8 +131,18 @@
     0%,80%,100%{opacity:.25;transform:scale(.85)}
     40%{opacity:1;transform:scale(1)}
   }
-  form.send{display:flex;gap:.5rem;margin:0;padding:.6rem;
+  form.send{display:flex;flex-wrap:wrap;gap:.5rem;margin:0;padding:.6rem;
     border-top:1px solid rgba(255,255,255,.08);background:rgba(2,5,15,.4)}
+  #attach-chips{display:flex;flex-wrap:wrap;gap:.35rem;flex-basis:100%;order:-1}
+  #attach-chips:empty{display:none}
+  .attach-chip{display:inline-flex;align-items:center;gap:.3rem;font-size:11px;
+    background:rgba(32,246,255,.1);color:var(--cyan);border:1px solid rgba(32,246,255,.3);
+    border-radius:999px;padding:.12rem .2rem .12rem .55rem;max-width:18rem}
+  .attach-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .attach-chip button{background:transparent;border:0;color:var(--mut);cursor:pointer;
+    font:inherit;padding:0 .25rem;line-height:1}
+  .attach-chip button:hover{color:var(--red)}
+  #attach-btn{align-self:flex-end}
   textarea{flex:1;background:rgba(2,5,15,.72);color:var(--fg);caret-color:var(--cyan);
     border:1px solid rgba(32,246,255,.32);border-radius:10px;padding:.55rem .65rem;font:inherit;
     resize:none;min-height:2.4rem;max-height:9rem;outline:none}
@@ -203,6 +213,9 @@
     padding:.45rem .6rem;font:inherit;font-size:12px;outline:none}
   .skill-install-row input:focus{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
 
+  /* ===== KB tab ===== */
+  .kb-stats{color:var(--mut);font-size:11px;margin:.2rem 0 .6rem;letter-spacing:.03em}
+
   /* ===== Logs tab ===== */
   #tab-logs{display:none;flex-direction:column}
   #tab-logs.active{display:flex}
@@ -227,6 +240,17 @@
     padding:.7rem .8rem;font:12px ui-monospace,monospace;line-height:1.5;outline:none;
     white-space:pre;overflow:auto}
   #config-edit:focus{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
+  #config-form{flex:1;min-height:0;overflow:auto;padding-right:.3rem}
+  .cfg-section{font-size:10.5px;text-transform:uppercase;letter-spacing:.07em;color:var(--cyan);
+    margin:.7rem 0 .25rem;font-weight:700}
+  .cfg-row{display:flex;align-items:center;gap:.6rem;margin:.18rem 0 .18rem .6rem}
+  .cfg-label{flex:0 0 38%;font-size:11.5px;color:var(--mut);word-break:break-word}
+  .cfg-input{flex:1;background:rgba(2,5,15,.72);color:var(--fg);caret-color:var(--cyan);
+    border:1px solid rgba(32,246,255,.3);border-radius:8px;padding:.32rem .5rem;
+    font:inherit;font-size:12px;outline:none}
+  .cfg-input:focus{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
+  .cfg-check{width:16px;height:16px;accent-color:var(--cyan)}
+  #config-raw-toggle.on{border-color:var(--cyan);color:var(--cyan)}
 
   .empty-pane{margin:auto;color:var(--mut);text-align:center;padding:2rem;font-size:12px}
 
@@ -236,9 +260,10 @@
     caret-color:var(--cyan);border:1px solid rgba(32,246,255,.3);border-radius:8px;
     padding:.4rem .55rem;font:inherit;font-size:12px;outline:none}
   .vault-search-row input:focus{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
-  .vault-item .sub{display:block;color:var(--mut);font-size:10px;margin-top:.15rem;
+  .vault-item .sub,.col-list .item .sub{display:block;color:var(--mut);font-size:10px;margin-top:.15rem;
     white-space:normal;overflow:hidden;text-overflow:ellipsis}
   #vault-view{white-space:normal}
+  .build-with{margin:.35rem 0 .55rem;font-size:11px;padding:.34rem .7rem}
   #vault-view h2{margin:.1rem 0 .3rem;font-size:1.2em;color:var(--cyan)}
   #vault-view p{margin:.35rem 0}
   #vault-view a{color:var(--cyan);text-decoration:underline;word-break:break-all}
@@ -308,6 +333,7 @@
   <nav id="tabs">
     <button data-tab="chat" class="active">Chat</button>
     <button data-tab="memory">Memory</button>
+    <button data-tab="kb">KB</button>
     <button data-tab="files">Files</button>
     <button data-tab="mcp">MCP</button>
     <button data-tab="cron">Cron</button>
@@ -361,8 +387,12 @@
       </div>
       <div id="log"></div>
       <form class="send" id="f">
+        <div id="attach-chips"></div>
         <textarea id="m" rows="2"
           placeholder="Ask PasClaw... (Enter to send, Shift+Enter for newline)"></textarea>
+        <input id="attach-file" type="file" multiple style="display:none">
+        <button class="icon-btn" id="attach-btn" type="button"
+          title="Attach text file(s) — contents are folded into your message">📎</button>
         <button class="primary" id="b">Send</button>
       </form>
     </div>
@@ -371,10 +401,30 @@
   <div id="tab-memory" class="tab">
     <div class="two-col">
       <div class="col-list">
+        <form id="mem-search" class="vault-search-row">
+          <input id="mem-q" type="text" autocomplete="off"
+                 placeholder="search memory (BM25 / vector)…">
+        </form>
         <div class="crumb">workspace/memory/</div>
         <div id="mem-list"></div>
       </div>
-      <pre class="col-view" id="mem-view"><div class="empty-pane">Pick a file to view.</div></pre>
+      <pre class="col-view" id="mem-view"><div class="empty-pane">Pick a file to view, or search memory.</div></pre>
+    </div>
+  </div>
+
+  <div id="tab-kb" class="tab">
+    <div class="pane">
+      <form id="kb-upload" class="skill-install-row">
+        <input id="kb-file" type="file" title="Upload a text document into the knowledge base">
+        <button class="primary" id="kb-upload-btn" type="submit">Upload &amp; index</button>
+      </form>
+      <form id="kb-search" class="skill-install-row">
+        <input id="kb-q" type="text" autocomplete="off" placeholder="search the knowledge base…">
+        <button class="primary" id="kb-search-btn" type="submit">Search</button>
+      </form>
+      <div id="kb-status" class="settings-status"></div>
+      <div id="kb-results"></div>
+      <div id="kb-sources"></div>
     </div>
   </div>
 
@@ -514,12 +564,15 @@
       <div class="settings-bar">
         <button class="primary" id="config-save">Save</button>
         <button class="icon-btn" id="config-reload">Reload</button>
+        <button class="icon-btn" id="config-raw-toggle" title="Toggle the raw JSON editor (for adding/removing array entries the form can't)">Raw JSON</button>
         <span id="config-status" class="settings-status"></span>
       </div>
       <p class="settings-hint">Edits write <code>config.json</code> on the server and apply on the next
         restart. Secrets are shown as <code>•••</code> — leave them to keep the current value, or type a
-        new one to change it (you can set keys here, never read them).</p>
-      <textarea id="config-edit" spellcheck="false" autocomplete="off">loading config…</textarea>
+        new one to change it (you can set keys here, never read them). Use <em>Raw JSON</em> to add or
+        remove list entries (providers, MCP servers, …) the form can't.</p>
+      <div id="config-form"></div>
+      <textarea id="config-edit" spellcheck="false" autocomplete="off" style="display:none">loading config…</textarea>
     </div>
   </div>
 </main>
@@ -988,13 +1041,77 @@ m.addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); f.requestSubmit(); }
 });
 
+/* ===== Composer attachments =====
+   Chat content is plain text end-to-end, so an "attachment" is a text file
+   (or an oversized paste) whose contents are folded into the outgoing
+   message as a fenced block. Lets the operator drop a log/source file in
+   without hand-pasting, and turns a giant paste into a tidy chip. */
+let chatAttachments = [];   // [{name, content}]
+const attachBtn = $("#attach-btn"), attachFile = $("#attach-file"), attachChips = $("#attach-chips");
+const PASTE_TO_FILE_CHARS = 1500;
+const ATTACH_MAX_CHARS = 256 * 1024;
+
+function renderAttachChips() {
+  attachChips.innerHTML = "";
+  chatAttachments.forEach((a, i) => {
+    const chip = document.createElement("span");
+    chip.className = "attach-chip";
+    chip.innerHTML = `<span title="${escapeHtml(a.name)}">📄 ${escapeHtml(a.name)}</span>`;
+    const x = document.createElement("button");
+    x.type = "button"; x.textContent = "✕"; x.title = "remove attachment";
+    x.addEventListener("click", () => { chatAttachments.splice(i, 1); renderAttachChips(); });
+    chip.appendChild(x);
+    attachChips.appendChild(chip);
+  });
+}
+function addAttachment(name, content) {
+  if (!content) return;
+  if (content.length > ATTACH_MAX_CHARS) content = content.slice(0, ATTACH_MAX_CHARS) + "\n…(truncated)";
+  chatAttachments.push({ name: name || ("attachment-" + (chatAttachments.length + 1) + ".txt"), content });
+  renderAttachChips();
+}
+async function addFiles(files) {
+  for (const f of files) {
+    if (f.size > 4 * 1024 * 1024) continue;   // skip large binaries
+    try { addAttachment(f.name, await f.text()); } catch { /* unreadable -- skip */ }
+  }
+}
+function composeMessage(typed) {
+  if (!chatAttachments.length) return typed;
+  const blocks = chatAttachments.map(a =>
+    "Attached file: " + a.name + "\n```\n" + a.content + "\n```").join("\n\n");
+  return typed ? (blocks + "\n\n" + typed) : blocks;
+}
+/* Seed the composer from another tab (e.g. Vault "Build with this"):
+   stash context as an attachment, prefill a prompt, jump to chat. */
+function buildWithInChat(name, context, prompt) {
+  if (context) addAttachment(name, context);
+  if (prompt) m.value = prompt;
+  showTab("chat");
+  m.focus();
+}
+
+attachBtn.addEventListener("click", () => attachFile.click());
+attachFile.addEventListener("change", async () => { await addFiles(attachFile.files); attachFile.value = ""; });
+m.addEventListener("paste", e => {
+  const cd = e.clipboardData; if (!cd) return;
+  if (cd.files && cd.files.length) { e.preventDefault(); addFiles(cd.files); return; }
+  const txt = cd.getData("text");
+  if (txt && txt.length > PASTE_TO_FILE_CHARS) {
+    e.preventDefault();
+    addAttachment("pasted-" + (chatAttachments.length + 1) + ".txt", txt);
+  }
+});
+
 f.addEventListener("submit", e => {
   e.preventDefault();
   /* While a reply is streaming the primary button acts as Stop. */
   if (streaming) { if (currentAbort) currentAbort.abort(); return; }
-  const msg = m.value.trim();
-  if (!msg) return;
+  const typed = m.value.trim();
+  if (!typed && !chatAttachments.length) return;
+  const msg = composeMessage(typed);
   m.value = "";
+  chatAttachments = []; renderAttachChips();
   submitUser(msg);
 });
 
@@ -1150,31 +1267,67 @@ function initTheme() {
 const tabLoaders = {
   chat() { /* always loaded */ },
 
+  /* Memory: the workspace/memory/*.md files ARE the memory; the SQLite
+     index is a rebuildable FTS5 (+ optional vector) cache over them. The
+     list browses the files; the search box runs the same index the
+     memory_search tool uses and opens the matched file on click. */
   async memory() {
-    const list = $("#mem-list");
-    list.innerHTML = "loading…";
-    try {
-      const j = await (await gwFetch("/v1/memory")).json();
-      list.innerHTML = "";
-      if (!j.files || !j.files.length) {
-        list.innerHTML = `<div class="empty-pane">No memory files yet.</div>`;
-        return;
-      }
-      for (const f of j.files) {
-        const el = document.createElement("div");
-        el.className = "item";
-        el.innerHTML = `<span>${escapeHtml(f.name)}</span><span class="size">${f.size}b</span>`;
-        el.addEventListener("click", async () => {
-          $$("#mem-list .item").forEach(x => x.classList.remove("active"));
-          el.classList.add("active");
-          try {
-            const r = await (await gwFetch("/v1/memory/" + encodeURIComponent(f.name))).json();
-            $("#mem-view").textContent = r.content || "";
-          } catch (e) { $("#mem-view").textContent = String(e); }
-        });
-        list.appendChild(el);
-      }
-    } catch (e) { list.textContent = String(e); }
+    const list = $("#mem-list"), view = $("#mem-view");
+    const sForm = $("#mem-search"), q = $("#mem-q");
+    const baseName = p => (p || "").replace(/^.*[\\/]/, "");
+
+    async function openFile(name, el) {
+      $$("#mem-list .item").forEach(x => x.classList.remove("active"));
+      if (el) el.classList.add("active");
+      try {
+        const r = await (await gwFetch("/v1/memory/" + encodeURIComponent(name))).json();
+        view.textContent = r.content || "";
+      } catch (e) { view.textContent = String(e); }
+    }
+    async function loadFiles() {
+      list.innerHTML = "loading…";
+      try {
+        const j = await (await gwFetch("/v1/memory")).json();
+        list.innerHTML = "";
+        if (!j.files || !j.files.length) { list.innerHTML = `<div class="empty-pane">No memory files yet.</div>`; return; }
+        for (const f of j.files) {
+          const el = document.createElement("div");
+          el.className = "item";
+          el.innerHTML = `<span>${escapeHtml(f.name)}</span><span class="size">${f.size}b</span>`;
+          el.addEventListener("click", () => openFile(f.name, el));
+          list.appendChild(el);
+        }
+      } catch (e) { list.textContent = String(e); }
+    }
+    async function search() {
+      const term = q.value.trim();
+      if (!term) { await loadFiles(); return; }
+      list.innerHTML = "searching…";
+      try {
+        const r = await gwFetch("/v1/memory/search?q=" + encodeURIComponent(term));
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.error) { list.innerHTML = `<div class="empty-pane">search failed: ${escapeHtml(j.error || ("http " + r.status))}</div>`; return; }
+        const hits = j.hits || [];
+        if (!hits.length) { list.innerHTML = `<div class="empty-pane">No matches for “${escapeHtml(term)}”.</div>`; return; }
+        list.innerHTML = "";
+        for (const h of hits) {
+          const name = baseName(h.path);
+          const el = document.createElement("div");
+          el.className = "item";
+          el.innerHTML = `<div><span>${escapeHtml(name)}</span>`
+                       + `<span class="sub">${escapeHtml((h.snippet || "").slice(0, 160))}</span></div>`;
+          el.addEventListener("click", () => openFile(name, el));
+          list.appendChild(el);
+        }
+      } catch (e) { list.innerHTML = `<div class="empty-pane">search failed: ${escapeHtml(String(e))}</div>`; }
+    }
+
+    if (!sForm.dataset.wired) {
+      sForm.dataset.wired = "1";
+      sForm.addEventListener("submit", e => { e.preventDefault(); search(); });
+      q.addEventListener("input", () => { if (!q.value.trim()) loadFiles(); });
+    }
+    await loadFiles();
   },
 
   async files() {
@@ -1380,6 +1533,86 @@ const tabLoaders = {
     await render();
   },
 
+  async kb() {
+    const upForm = $("#kb-upload"), file = $("#kb-file");
+    const sForm = $("#kb-search"), q = $("#kb-q");
+    const status = $("#kb-status"), results = $("#kb-results"), sources = $("#kb-sources");
+
+    function setStatus(msg, cls) {
+      status.textContent = msg || "";
+      status.className = "settings-status" + (cls ? " " + cls : "");
+    }
+    async function loadSources() {
+      sources.innerHTML = `<div class="empty-pane">loading…</div>`;
+      try {
+        const j = await (await gwFetch("/v1/kb")).json();
+        const st = j.stats || {};
+        const head = `<div class="kb-stats">${st.sources||0} source(s) · ${st.files||0} file(s) · ${st.chunks||0} chunk(s)${st.vector_ready ? " · vector" : ""}</div>`;
+        const rows = j.sources || [];
+        if (!rows.length) {
+          sources.innerHTML = head + `<div class="empty-pane">No documents indexed yet. Upload one above to make it searchable.</div>`;
+          return;
+        }
+        let html = head;
+        for (const s of rows)
+          html += `<div class="skill-card"><div><span class="name">${escapeHtml(s.root)}</span>`
+                + `<span class="kind">${s.files} file(s)</span></div>`
+                + `<div class="path">${s.chunks} chunk(s)</div></div>`;
+        sources.innerHTML = html;
+      } catch (e) { sources.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; }
+    }
+    async function search() {
+      const term = q.value.trim();
+      if (!term) { results.innerHTML = ""; return; }
+      results.innerHTML = `<div class="empty-pane">searching…</div>`;
+      try {
+        const r = await gwFetch("/v1/kb/search?q=" + encodeURIComponent(term));
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.error) { results.innerHTML = `<div class="empty-pane">search failed: ${escapeHtml(j.error || ("http " + r.status))}</div>`; return; }
+        const hits = j.hits || [];
+        if (!hits.length) { results.innerHTML = `<div class="empty-pane">No matches for “${escapeHtml(term)}”.</div>`; return; }
+        results.innerHTML = "";
+        for (const h of hits) {
+          const el = document.createElement("div");
+          el.className = "skill-card";
+          el.innerHTML = `<div><span class="name">${escapeHtml(h.path)} <span class="kind">#c${h.chunk}</span></span></div>`
+                       + `<div class="desc">${escapeHtml(h.snippet || "")}</div>`;
+          results.appendChild(el);
+        }
+      } catch (e) { results.innerHTML = `<div class="empty-pane">search failed: ${escapeHtml(String(e))}</div>`; }
+    }
+    async function upload() {
+      const f = file.files && file.files[0];
+      if (!f) { setStatus("choose a file first", "err"); return; }
+      if (f.size > 4 * 1024 * 1024) { setStatus("file too large (max 4 MB of text)", "err"); return; }
+      setStatus("reading " + f.name + "…");
+      let text;
+      try { text = await f.text(); } catch (e) { setStatus("read failed: " + e, "err"); return; }
+      setStatus("uploading & indexing " + f.name + "…");
+      try {
+        const r = await gwFetch("/v1/kb/upload", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ name: f.name, content: text }) });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok && j.uploaded) {
+          setStatus(`indexed ${j.uploaded} — ${j.indexed_files} file(s), ${j.indexed_chunks} chunk(s)`, "ok");
+          file.value = "";
+          await loadSources();
+        } else setStatus("upload failed: " + (j.error || ("http " + r.status)), "err");
+      } catch (e) { setStatus("upload failed: " + e, "err"); }
+    }
+
+    if (!upForm.dataset.wired) {
+      upForm.dataset.wired = "1";
+      upForm.addEventListener("submit", e => { e.preventDefault(); upload(); });
+    }
+    if (!sForm.dataset.wired) {
+      sForm.dataset.wired = "1";
+      sForm.addEventListener("submit", e => { e.preventDefault(); search(); });
+    }
+    await loadSources();
+  },
+
   vault() {
     /* The Code Vault is a remote searchable corpus (pasclaw.dev), not a
        fixed list -- wire the search form once and let the operator query. */
@@ -1403,6 +1636,8 @@ const tabLoaders = {
           html += `<div class="vault-meta">` + meta.map(x => `<span class="badge">${x}</span>`).join("") + `</div>`;
         if (d.suspicious || d.blocked)
           html += `<div class="vault-meta"><span class="badge off">${d.blocked ? "blocked" : "flagged"}</span></div>`;
+        if (!d.blocked)
+          html += `<button class="primary build-with" type="button" title="Start a chat set up to build with this library">⚒ Build with this</button>`;
         if (d.repoUrl)
           html += /^https?:\/\//i.test(d.repoUrl)
             ? `<p><a href="${escapeHtml(d.repoUrl)}" target="_blank" rel="noopener">${escapeHtml(d.repoUrl)}</a></p>`
@@ -1412,6 +1647,20 @@ const tabLoaders = {
         html += renderMarkdown(d.descriptionMarkdown || d.summary || "");
         view.innerHTML = html;
         wireCopyButtons(view);
+        const bw = view.querySelector(".build-with");
+        if (bw) bw.addEventListener("click", () => {
+          /* Hand the library's reference (repo, install snippet, docs) to the
+             chat as an attachment and prime a build-oriented prompt. */
+          const ctx = [
+            "# " + (d.displayName || d.slug),
+            d.repoUrl ? ("Repo: " + d.repoUrl) : "",
+            d.installSnippet ? ("\nInstall:\n```\n" + d.installSnippet + "\n```") : "",
+            "\n" + (d.descriptionMarkdown || d.summary || "")
+          ].filter(Boolean).join("\n");
+          buildWithInChat((d.slug || "library") + ".md", ctx,
+            "Help me build a small Object Pascal example using " + (d.displayName || d.slug) +
+            ". Use the attached library reference for install/setup.");
+        });
       } catch (e) { view.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; }
     }
 
@@ -1461,43 +1710,145 @@ const tabLoaders = {
     $("#logs-clear").addEventListener("click", () => { view.textContent = ""; });
   },
 
+  /* Settings: a form generated from GET /v1/config -- every scalar leaf
+     (string / number / bool) becomes a labelled input keyed by its path
+     in the config tree. Saving deep-merges the edited leaves back into the
+     ORIGINAL object and PUTs the whole thing, so arrays and any field the
+     form didn't render are preserved untouched. A Raw JSON toggle exposes
+     the underlying object for structural edits (adding/removing list
+     entries) the flat form can't express. */
   async settings() {
-    const edit = $("#config-edit"), status = $("#config-status");
-    const save = $("#config-save"), reload = $("#config-reload");
+    const form = $("#config-form"), edit = $("#config-edit"), status = $("#config-status");
+    const save = $("#config-save"), reload = $("#config-reload"), rawBtn = $("#config-raw-toggle");
+    let current = {};          // last-loaded config object
+    let rawMode = false;
 
     function setStatus(msg, cls) {
       status.textContent = msg || "";
       status.className = "settings-status" + (cls ? " " + cls : "");
     }
+    const isObj = v => v !== null && typeof v === "object" && !Array.isArray(v);
+
+    // Render an input row for one scalar leaf at `path` (array of keys).
+    function leafRow(label, value, path) {
+      const row = document.createElement("label");
+      row.className = "cfg-row";
+      const cap = document.createElement("span"); cap.className = "cfg-label"; cap.textContent = label;
+      row.appendChild(cap);
+      let inp;
+      if (typeof value === "boolean") {
+        inp = document.createElement("input"); inp.type = "checkbox"; inp.checked = value;
+        inp.className = "cfg-check";
+      } else {
+        inp = document.createElement("input");
+        inp.type = (typeof value === "number") ? "number" : "text";
+        inp.value = (value === null || value === undefined) ? "" : String(value);
+        inp.className = "cfg-input";
+        if (value === "•••") inp.placeholder = "•••  (unchanged)";
+      }
+      inp.dataset.path = JSON.stringify(path);
+      inp.dataset.vtype = (value === null) ? "null" : typeof value;
+      row.appendChild(inp);
+      return row;
+    }
+
+    // Walk the config tree, emitting sections for nested objects/arrays.
+    function build(container, obj, path, depth) {
+      const keys = Object.keys(obj);
+      for (const k of keys) {
+        const v = obj[k], childPath = path.concat([k]);
+        if (isObj(v)) {
+          container.appendChild(sectionHead(k, depth));
+          build(container, v, childPath, depth + 1);
+        } else if (Array.isArray(v)) {
+          container.appendChild(sectionHead(k, depth));
+          v.forEach((item, i) => {
+            const ip = childPath.concat([i]);
+            if (isObj(item)) {
+              container.appendChild(sectionHead(k + "[" + i + "]", depth + 1));
+              build(container, item, ip, depth + 2);
+            } else {
+              container.appendChild(leafRow(k + "[" + i + "]", item, ip));
+            }
+          });
+        } else {
+          container.appendChild(leafRow(k, v, childPath));
+        }
+      }
+    }
+    function sectionHead(text, depth) {
+      const h = document.createElement("div");
+      h.className = "cfg-section";
+      h.style.marginLeft = (depth * 0.6) + "rem";
+      h.textContent = text;
+      return h;
+    }
+
+    function renderForm() {
+      form.innerHTML = "";
+      if (!Object.keys(current).length) { form.innerHTML = `<div class="empty-pane">empty config</div>`; return; }
+      build(form, current, [], 0);
+    }
+
+    // Deep-clone current, then write each input's value at its path.
+    function collectForm() {
+      const out = JSON.parse(JSON.stringify(current));
+      for (const inp of form.querySelectorAll("[data-path]")) {
+        const path = JSON.parse(inp.dataset.path), t = inp.dataset.vtype;
+        let val;
+        if (inp.type === "checkbox") val = inp.checked;
+        else if (t === "number") val = inp.value.trim() === "" ? 0 : Number(inp.value);
+        else val = inp.value;
+        let node = out;
+        for (let i = 0; i < path.length - 1; i++) node = node[path[i]];
+        node[path[path.length - 1]] = val;
+      }
+      return out;
+    }
+
     async function load() {
       setStatus("loading…");
       try {
-        const j = await (await gwFetch("/v1/config")).json();
-        edit.value = JSON.stringify(j, null, 2);
+        current = await (await gwFetch("/v1/config")).json();
+        edit.value = JSON.stringify(current, null, 2);
+        renderForm();
         setStatus("");
-      } catch (e) { edit.value = String(e); setStatus("load failed", "err"); }
+      } catch (e) { form.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; setStatus("load failed", "err"); }
+    }
+    function setRawMode(on) {
+      rawMode = on;
+      edit.style.display = on ? "" : "none";
+      form.style.display = on ? "none" : "";
+      rawBtn.classList.toggle("on", on);
+      // Keep the raw view in sync with form edits when switching INTO raw.
+      if (on) { try { edit.value = JSON.stringify(collectForm(), null, 2); } catch {} }
     }
     async function doSave() {
-      let parsed;
-      try { parsed = JSON.parse(edit.value); }
-      catch (e) { setStatus("not valid JSON: " + e.message, "err"); return; }
+      let payload;
+      if (rawMode) {
+        try { payload = JSON.parse(edit.value); }
+        catch (e) { setStatus("not valid JSON: " + e.message, "err"); return; }
+      } else {
+        payload = collectForm();
+      }
       save.disabled = true; setStatus("saving…");
       try {
         const r = await gwFetch("/v1/config", {
           method: "PUT", headers: { "content-type": "application/json" },
-          body: JSON.stringify(parsed) });
+          body: JSON.stringify(payload) });
         const j = await r.json().catch(() => ({}));
-        if (r.ok && j.saved) setStatus(j.note || "saved", "ok");
+        if (r.ok && j.saved) { setStatus(j.note || "saved", "ok"); current = payload; if (!rawMode) renderForm(); }
         else setStatus("save failed: " + (j.error || ("http " + r.status)), "err");
       } catch (e) { setStatus("save failed: " + e, "err"); }
       finally { save.disabled = false; }
     }
 
     /* Wire once; subsequent tab visits just reload the current config. */
-    if (!edit.dataset.wired) {
-      edit.dataset.wired = "1";
+    if (!form.dataset.wired) {
+      form.dataset.wired = "1";
       save.addEventListener("click", doSave);
       reload.addEventListener("click", load);
+      rawBtn.addEventListener("click", () => setRawMode(!rawMode));
     }
     await load();
   },
