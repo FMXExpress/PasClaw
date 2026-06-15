@@ -191,6 +191,17 @@
     font-size:10px;background:rgba(255,55,213,.16);color:var(--mag);text-transform:uppercase;letter-spacing:.06em}
   .skill-card .desc{color:var(--mut);font-size:12px;margin-top:.3rem}
   .skill-card .path{color:rgba(143,155,198,.5);font-size:10.5px;margin-top:.3rem;word-break:break-all}
+  .skill-card{position:relative}
+  .skill-card .remove{position:absolute;top:.55rem;right:.7rem;background:transparent;
+    color:var(--mut);border:1px solid rgba(255,255,255,.1);border-radius:6px;
+    padding:.06rem .42rem;font:inherit;font-size:10px;cursor:pointer;
+    text-transform:uppercase;letter-spacing:.05em}
+  .skill-card .remove:hover{color:var(--red);border-color:var(--red)}
+  .skill-install-row{display:flex;gap:.5rem;margin-bottom:.6rem}
+  .skill-install-row input{flex:1;background:rgba(2,5,15,.72);color:var(--fg);
+    caret-color:var(--cyan);border:1px solid rgba(32,246,255,.3);border-radius:10px;
+    padding:.45rem .6rem;font:inherit;font-size:12px;outline:none}
+  .skill-install-row input:focus{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
 
   /* ===== Logs tab ===== */
   #tab-logs{display:none;flex-direction:column}
@@ -366,7 +377,15 @@
   </div>
 
   <div id="tab-skills" class="tab">
-    <div class="pane" id="skills-pane"></div>
+    <div class="pane">
+      <form id="skill-install" class="skill-install-row">
+        <input id="skill-target" type="text" autocomplete="off"
+               placeholder="install: owner/repo · clawhub:slug · hub:slug · or a bare slug">
+        <button class="primary" id="skill-install-btn">Install</button>
+      </form>
+      <div id="skill-status" class="settings-status"></div>
+      <div id="skills-pane"></div>
+    </div>
   </div>
 
   <div id="tab-logs" class="tab">
@@ -1167,24 +1186,69 @@ const tabLoaders = {
   },
 
   async skills() {
-    const pane = $("#skills-pane"); pane.innerHTML = "";
-    try {
-      const j = await (await gwFetch("/v1/skills")).json();
-      if (!j.skills || !j.skills.length) {
-        pane.innerHTML = `<div class="empty-pane">No skills installed. Run <code>pasclaw skills install &lt;owner/repo&gt;</code> or <code>pasclaw skills install clawhub:&lt;slug&gt;</code>.</div>`;
-        return;
-      }
-      for (const s of j.skills) {
-        const el = document.createElement("div");
-        el.className = "skill-card";
-        const kindLabel = s.kind || "knowledge";
-        el.innerHTML = `<div><span class="name">${escapeHtml(s.name)}</span>`
-                     + `<span class="kind">${escapeHtml(kindLabel)}</span></div>`
-                     + (s.description ? `<div class="desc">${escapeHtml(s.description)}</div>` : "")
-                     + `<div class="path">${escapeHtml(s.path || s.dir || "")}</div>`;
-        pane.appendChild(el);
-      }
-    } catch (e) { pane.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; }
+    const pane = $("#skills-pane");
+    const status = $("#skill-status");
+    const form = $("#skill-install"), target = $("#skill-target");
+    const btn = $("#skill-install-btn");
+
+    function setStatus(msg, cls) {
+      status.textContent = msg || "";
+      status.className = "settings-status" + (cls ? " " + cls : "");
+    }
+    async function render() {
+      pane.innerHTML = "";
+      try {
+        const j = await (await gwFetch("/v1/skills")).json();
+        if (!j.skills || !j.skills.length) {
+          pane.innerHTML = `<div class="empty-pane">No skills installed. Install one above (e.g. <code>clawhub:slug</code> or <code>owner/repo</code>).</div>`;
+          return;
+        }
+        for (const s of j.skills) {
+          const el = document.createElement("div");
+          el.className = "skill-card";
+          const kindLabel = s.kind || "knowledge";
+          el.innerHTML = `<button class="remove" type="button">remove</button>`
+                       + `<div><span class="name">${escapeHtml(s.name)}</span>`
+                       + `<span class="kind">${escapeHtml(kindLabel)}</span></div>`
+                       + (s.description ? `<div class="desc">${escapeHtml(s.description)}</div>` : "")
+                       + `<div class="path">${escapeHtml(s.path || s.dir || "")}</div>`;
+          el.querySelector(".remove").addEventListener("click", () => removeSkill(s.name));
+          pane.appendChild(el);
+        }
+      } catch (e) { pane.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; }
+    }
+    async function removeSkill(name) {
+      if (!window.confirm('Remove skill "' + name + '"? (files are deleted; restart to apply)')) return;
+      setStatus("removing " + name + "…");
+      try {
+        const r = await gwFetch("/v1/skills/" + encodeURIComponent(name), { method: "DELETE" });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok && j.removed) setStatus(j.note || "removed", "ok");
+        else setStatus("remove failed: " + (j.error || ("http " + r.status)), "err");
+      } catch (e) { setStatus("remove failed: " + e, "err"); }
+      await render();
+    }
+    async function install() {
+      const t = target.value.trim();
+      if (!t) return;
+      btn.disabled = true; setStatus("installing " + t + "… (fetching from hub/GitHub)");
+      try {
+        const r = await gwFetch("/v1/skills", {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ target: t }) });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok && j.installed) { setStatus("installed " + j.installed + " — " + (j.note || ""), "ok"); target.value = ""; }
+        else setStatus("install failed: " + (j.error || ("http " + r.status)), "err");
+      } catch (e) { setStatus("install failed: " + e, "err"); }
+      finally { btn.disabled = false; }
+      await render();
+    }
+
+    if (!form.dataset.wired) {
+      form.dataset.wired = "1";
+      form.addEventListener("submit", e => { e.preventDefault(); install(); });
+    }
+    await render();
   },
 
   logs() {
