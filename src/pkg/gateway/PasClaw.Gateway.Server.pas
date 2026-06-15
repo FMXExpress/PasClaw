@@ -122,6 +122,12 @@ type
     procedure HandleMCPList(AResp: TIdHTTPResponseInfo);
     procedure HandleCronList(AResp: TIdHTTPResponseInfo);
     procedure HandleSkillsList(AResp: TIdHTTPResponseInfo);
+    { Install a skill (POST /v1/skills with a JSON target field) into
+      workspace/skills, and remove one (DELETE /v1/skills/<name>). Changes
+      apply on the next restart -- the tool registry is built at startup. }
+    procedure HandleSkillInstall(ARequest: TIdHTTPRequestInfo;
+                                 AResp: TIdHTTPResponseInfo);
+    procedure HandleSkillRemove(const Doc: string; AResp: TIdHTTPResponseInfo);
     procedure HandleMemoryList(AResp: TIdHTTPResponseInfo);
     procedure HandleMemoryRead(const Doc: string;
                                 ARequest: TIdHTTPRequestInfo;
@@ -238,6 +244,7 @@ uses
   PasClaw.Logger,
   PasClaw.Utils,
   PasClaw.Skills.Loader,
+  PasClaw.Skills.Install,   { InstallSkillTarget / RemoveSkillFiles / IsSafeSkillName }
   PasClaw.Tools.Sandbox,
   PasClaw.Providers.Factory,
   PasClaw.Tools.ToolLoop,
@@ -773,6 +780,8 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/mcp')     then HandleMCPList(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/cron')    then HandleCronList(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/skills')  then HandleSkillsList(AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/skills')  then HandleSkillInstall(ARequest, AResponse)
+    else if (ARequest.Command = 'DELETE') and (Copy(Doc, 1, 11) = '/v1/skills/') then HandleSkillRemove(Doc, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/memory')  then HandleMemoryList(AResponse)
     else if (ARequest.Command = 'GET')  and (Copy(Doc, 1, 11) = '/v1/memory/') then
       HandleMemoryRead(Doc, ARequest, AResponse)
@@ -952,6 +961,19 @@ begin
   end;
 end;
 
+function SkillRemovableId(const Spec: TSkillSpec): string;
+{ The on-disk basename DELETE /v1/skills/<id> targets. It is NOT the
+  frontmatter name: GitHub installs land under their repo/subpath segment,
+  which can differ from the SKILL.md `name:`. RemoveSkillFiles deletes
+  workspace/skills/<id>/ (SKILL.md skills) or <id>.json (legacy skills),
+  so derive <id> from the directory segment, or the file stem for .json. }
+begin
+  if HasSuffix(LowerCase(Spec.Source), '.json') then
+    Result := ChangeFileExt(ExtractFileName(Spec.Source), '')
+  else
+    Result := ExtractFileName(ExcludeTrailingPathDelimiter(Spec.Dir));
+end;
+
 procedure TGatewayServer.HandleSkillsList(AResp: TIdHTTPResponseInfo);
 var
   Root: TJsonObject;
@@ -968,6 +990,7 @@ begin
     begin
       Item := TJsonObject.Create;
       Item.PutStr('name',        Skills[i].Name);
+      Item.PutStr('id',          SkillRemovableId(Skills[i]));
       Item.PutStr('description', Skills[i].Description);
       Item.PutStr('kind',        Skills[i].Kind);
       Item.PutStr('path',        Skills[i].Source);
@@ -979,6 +1002,68 @@ begin
   finally
     Root.Free;
   end;
+end;
+
+procedure TGatewayServer.HandleSkillInstall(ARequest: TIdHTTPRequestInfo;
+                                            AResp: TIdHTTPResponseInfo);
+var
+  Body, Target, Name, Err, DestRoot: string;
+  Req, Root: TJsonObject;
+begin
+  Body := ReadRequestBody(ARequest);
+  Target := '';
+  if Trim(Body) <> '' then
+  begin
+    Req := TJsonObject.Parse(Body);
+    if Req <> nil then
+    try
+      Target := Trim(Req.GetStr('target', ''));
+    finally
+      Req.Free;
+    end;
+  end;
+  if Target = '' then
+  begin
+    WriteJSON(AResp, 400, '{"error":"missing field: target"}');
+    Exit;
+  end;
+  DestRoot := JoinPath(GetHome, 'workspace/skills');
+  if not InstallSkillTarget(Target, DestRoot, Name, Err) then
+  begin
+    WriteJSON(AResp, 502, '{"error":"' + JsonEscape(Err) + '"}');
+    Exit;
+  end;
+  LogInfo('gateway: installed skill %s via /v1/skills', [Name]);
+  Root := TJsonObject.Create;
+  try
+    Root.PutStr('installed', Name);
+    Root.PutStr('note', 'installed -- restart pasclaw to load it into the tool registry');
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleSkillRemove(const Doc: string;
+                                           AResp: TIdHTTPResponseInfo);
+var
+  Name, DestRoot: string;
+begin
+  Name := Copy(Doc, Length('/v1/skills/') + 1, MaxInt);
+  if not IsSafeSkillName(Name) then
+  begin
+    WriteJSON(AResp, 400, '{"error":"unsafe skill name"}');
+    Exit;
+  end;
+  DestRoot := JoinPath(GetHome, 'workspace/skills');
+  if RemoveSkillFiles(DestRoot, Name) then
+  begin
+    LogInfo('gateway: removed skill %s via /v1/skills', [Name]);
+    WriteJSON(AResp, 200,
+      '{"removed":true,"note":"removed -- restart pasclaw to drop it from the tool registry"}');
+  end
+  else
+    WriteJSON(AResp, 404, '{"error":"not found"}');
 end;
 
 procedure TGatewayServer.HandleMemoryList(AResp: TIdHTTPResponseInfo);
