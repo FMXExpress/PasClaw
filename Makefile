@@ -170,6 +170,11 @@ webui-res: $(WEBUI_RES)
 
 $(WEBUI_RES): src/pkg/gateway/webui.rc src/pkg/gateway/webui.html
 	cd src/pkg/gateway && fpcres -of res -o webui.res webui.rc
+	@# {$R webui.res} is baked into PasClaw.Gateway.WebUI's object at unit-
+	@# compile time. An incremental build that only regenerates the .res
+	@# leaves FPC's cached unit untouched, shipping stale HTML/JS. Touch the
+	@# unit so it -- and the embedded resource -- always recompiles.
+	@touch src/pkg/gateway/PasClaw.Gateway.WebUI.pas
 
 $(BIN): $(WEBUI_RES) | $(BUILDDIR) $(INDY_DIR)
 	@mkdir -p $(BUILDDIR)/lib
