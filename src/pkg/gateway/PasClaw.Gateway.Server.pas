@@ -241,13 +241,16 @@ procedure AccumulateGatewayStatsRaw(const Cfg: TConfig;
    web_search key -- GET /v1/config masks all of those, but the raw file
    would leak them. Also hides .env files and TLS private keys that
    commonly sit beside it. Matches the resolved config path exactly
-   (honours $PASCLAW_CONFIG) plus a basename denylist. Exposed for tests. *)
+   (honours $PASCLAW_CONFIG) plus a basename denylist. On Unix it follows
+   symlinks/hardlinks so an innocuously-named alias to the config cannot
+   slip past the lexical compare. Exposed for tests. *)
 function IsRestrictedFsPath(const Path: string): Boolean;
 
 implementation
 
 uses
   DateUtils,
+  {$IFDEF FPC}{$IFDEF UNIX}BaseUnix,{$ENDIF}{$ENDIF}
   IdTCPConnection,
   PasClaw.JSON,
   PasClaw.Logger,
@@ -1737,9 +1740,41 @@ begin
   end;
 end;
 
+{$IFDEF FPC}{$IFDEF UNIX}
+function CRealPath(path: PAnsiChar; resolved_path: PAnsiChar): PAnsiChar; cdecl;
+  external 'c' name 'realpath';
+
+(* Canonical, symlink-resolved absolute path, or '' if it cannot be
+   resolved (e.g. the path does not exist). ExpandFileName only
+   normalises `.`/`..` lexically -- it does NOT follow symlinks, so a
+   browseable alias whose target is the config file slips past a purely
+   lexical compare. realpath(3) collapses every link in the chain. *)
+function CanonicalPath(const P: string): string;
+var
+  Buf: array[0..4095] of AnsiChar;  { PATH_MAX on Linux }
+begin
+  if CRealPath(PAnsiChar(AnsiString(P)), @Buf[0]) <> nil then
+    Result := string(PAnsiChar(@Buf[0]))
+  else
+    Result := '';
+end;
+
+{ True when A and B name the same underlying file. FpStat follows
+  symlinks, so this also catches a hardlink to the config file (which
+  realpath cannot, since a hardlink has its own canonical name). }
+function SameInode(const A, B: string): Boolean;
+var
+  SA, SB: Stat;
+begin
+  Result := (FpStat(AnsiString(A), SA) = 0) and (FpStat(AnsiString(B), SB) = 0)
+            and (SA.st_dev = SB.st_dev) and (SA.st_ino = SB.st_ino);
+end;
+{$ENDIF}{$ENDIF}
+
 function IsRestrictedFsPath(const Path: string): Boolean;
 var
   Full, CfgFull, Base: string;
+  {$IFDEF FPC}{$IFDEF UNIX}CP: string;{$ENDIF}{$ENDIF}
 begin
   Result := False;
   if Path = '' then Exit;
@@ -1747,6 +1782,18 @@ begin
   { Exact match against the resolved config file, so an operator who moved
     it via $PASCLAW_CONFIG (a non-"config.json" name) is still covered. }
   try CfgFull := ExpandFileName(GetConfigPath); except CfgFull := GetConfigPath; end;
+  {$IFDEF FPC}{$IFDEF UNIX}
+  { PR #280 Codex P1: an innocuously-named symlink (notes.txt ->
+    $PASCLAW_CONFIG) or a hardlink would pass the lexical + basename
+    checks below, and HandleFSRead's TFileStream follows it to serve the
+    cleartext config. Catch the link by inode, and run the checks below
+    against the symlink-resolved target rather than the lexical name. }
+  if SameInode(Path, GetConfigPath) then Exit(True);
+  CP := CanonicalPath(Path);
+  if CP <> '' then Full := CP;
+  CP := CanonicalPath(GetConfigPath);
+  if CP <> '' then CfgFull := CP;
+  {$ENDIF}{$ENDIF}
   if (CfgFull <> '') and SameFileName(Full, CfgFull) then Exit(True);
   { Basename denylist for the conventional secret files. }
   Base := LowerCase(ExtractFileName(Full));

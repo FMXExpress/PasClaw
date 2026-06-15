@@ -16,6 +16,7 @@ program fs_secret_gate_tests;
 
 uses
   SysUtils,
+  {$IFDEF UNIX}BaseUnix,{$ENDIF}
   PasClaw.Config,          { GetConfigPath }
   PasClaw.Gateway.Server;  { IsRestrictedFsPath }
 
@@ -31,6 +32,61 @@ begin
     Fail_(Msg + ' (path "' + Path + '", got ' + BoolToStr(IsRestrictedFsPath(Path), True)
           + ', want ' + BoolToStr(Want, True) + ')');
 end;
+
+{$IFDEF UNIX}
+procedure WriteSmallFile(const Path, Content: string);
+var
+  F: Text;
+begin
+  AssignFile(F, Path);
+  Rewrite(F);
+  Write(F, Content);
+  CloseFile(F);
+end;
+
+procedure RunSymlinkChecks;
+var
+  Dir, Cfg, KeyTarget, Plain: string;
+  AliasCfg, AliasKey, AliasPlain, HardCfg: string;
+begin
+  { Absolute paths so the symlink targets resolve regardless of cwd. }
+  Cfg := ExpandFileName(GetConfigPath); { build/fs-gate-test.cfg via Makefile }
+  Dir := ExtractFilePath(Cfg);
+  { The config target must exist so realpath/inode can resolve it. }
+  WriteSmallFile(Cfg, '{"api_key":"secret"}');
+
+  { Innocuously-named symlink whose target IS the config -> caught by inode
+    and by the canonical-path exact match. }
+  AliasCfg := Dir + 'notes.txt';
+  DeleteFile(AliasCfg);
+  if fpSymlink(PChar(Cfg), PChar(AliasCfg)) <> 0 then Fail_('could not symlink notes.txt');
+  AssertRestricted(AliasCfg, True, 'symlink to config hidden');
+
+  { Symlink to a *.key target under a harmless name -> caught by the
+    denylist running against the resolved target basename. }
+  KeyTarget := Dir + 'tls-server.key';
+  WriteSmallFile(KeyTarget, 'PRIVATE KEY');
+  AliasKey := Dir + 'harmless.txt';
+  DeleteFile(AliasKey);
+  if fpSymlink(PChar(KeyTarget), PChar(AliasKey)) <> 0 then Fail_('could not symlink harmless.txt');
+  AssertRestricted(AliasKey, True, 'symlink to .key hidden');
+
+  { Symlink to an ordinary file stays visible. }
+  Plain := Dir + 'plain.txt';
+  WriteSmallFile(Plain, 'hello');
+  AliasPlain := Dir + 'link-ok.txt';
+  DeleteFile(AliasPlain);
+  if fpSymlink(PChar(Plain), PChar(AliasPlain)) <> 0 then Fail_('could not symlink link-ok.txt');
+  AssertRestricted(AliasPlain, False, 'symlink to ordinary file visible');
+
+  { Hardlink to the config (own name, shared inode) -> caught by inode.
+    Skip silently if the platform/fs refuses the link. }
+  HardCfg := Dir + 'hard.txt';
+  DeleteFile(HardCfg);
+  if fpLink(PChar(Cfg), PChar(HardCfg)) = 0 then
+    AssertRestricted(HardCfg, True, 'hardlink to config hidden');
+end;
+{$ENDIF}
 
 begin
   { Basename denylist -- conventional secret files anywhere. }
@@ -55,6 +111,14 @@ begin
     AssertRestricted(ExtractFilePath(GetConfigPath) + 'sibling.txt', False,
                      'sibling of moved config visible');
   end;
+
+  { Symlink/hardlink bypass (PR #280 Codex P1): an innocuously-named alias
+    whose target is a secret file must still be restricted, because
+    HandleFSRead opens it with a symlink-following TFileStream. Exercise
+    the realpath + inode resolution on Unix with real files. }
+  {$IFDEF UNIX}
+  RunSymlinkChecks;
+  {$ENDIF}
 
   WriteLn('fs_secret_gate_tests: OK');
 end.
