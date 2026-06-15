@@ -1141,8 +1141,8 @@ end;
 procedure TGatewayServer.HandleConfigWrite(ARequest: TIdHTTPRequestInfo;
                                            AResp: TIdHTTPResponseInfo);
 var
-  Body, Merged: string;
-  Tmp: TConfig;
+  Body, Merged, BaseJSON, Path: string;
+  Tmp, Cur: TConfig;
 begin
   Body := ReadRequestBody(ARequest);
   if Trim(Body) = '' then
@@ -1150,11 +1150,35 @@ begin
     WriteJSON(AResp, 400, '{"error":"empty body"}');
     Exit;
   end;
-  { Restore masked secrets from the running config so a client that never
+  { Merge masked secrets against the CURRENT on-disk config, not the
+    startup snapshot FCfg. FCfg is never refreshed after a save (config
+    changes apply on restart), so using it here would restore stale
+    secrets: a second save -- after an earlier save then Reload -- would
+    revert any key set in the meantime back to its boot-time value. Read
+    config.json directly (resolving env-var markers the same way
+    LoadConfig does) without LoadConfig's process-global side effects.
+    Fall back to FCfg when the file is missing/unreadable. }
+  BaseJSON := FCfg.ToJSON;
+  Path := GetConfigPath;
+  if FileExists(Path) then
+  begin
+    Cur := TConfig.Create;
+    try
+      try
+        Cur.FromJSON(ExpandEnvVarsInJSON(ReadFileText(Path)));
+        BaseJSON := Cur.ToJSON;
+      except
+        on E: Exception do { keep the FCfg fallback } ;
+      end;
+    finally
+      Cur.Free;
+    end;
+  end;
+  { Restore masked secrets from the base config so a client that never
     saw the real api_key / env / token values can't blank them by sending
     the mask back. Raises EArgumentException on unparseable JSON. }
   try
-    Merged := RestoreMaskedConfigSecrets(Body, FCfg.ToJSON);
+    Merged := RestoreMaskedConfigSecrets(Body, BaseJSON);
   except
     on E: Exception do
     begin
