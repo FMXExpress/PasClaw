@@ -945,6 +945,19 @@ begin
   end;
 end;
 
+function SkillRemovableId(const Spec: TSkillSpec): string;
+{ The on-disk basename DELETE /v1/skills/<id> targets. It is NOT the
+  frontmatter name: GitHub installs land under their repo/subpath segment,
+  which can differ from the SKILL.md `name:`. RemoveSkillFiles deletes
+  workspace/skills/<id>/ (SKILL.md skills) or <id>.json (legacy skills),
+  so derive <id> from the directory segment, or the file stem for .json. }
+begin
+  if HasSuffix(LowerCase(Spec.Source), '.json') then
+    Result := ChangeFileExt(ExtractFileName(Spec.Source), '')
+  else
+    Result := ExtractFileName(ExcludeTrailingPathDelimiter(Spec.Dir));
+end;
+
 procedure TGatewayServer.HandleSkillsList(AResp: TIdHTTPResponseInfo);
 var
   Root: TJsonObject;
@@ -961,6 +974,7 @@ begin
     begin
       Item := TJsonObject.Create;
       Item.PutStr('name',        Skills[i].Name);
+      Item.PutStr('id',          SkillRemovableId(Skills[i]));
       Item.PutStr('description', Skills[i].Description);
       Item.PutStr('kind',        Skills[i].Kind);
       Item.PutStr('path',        Skills[i].Source);

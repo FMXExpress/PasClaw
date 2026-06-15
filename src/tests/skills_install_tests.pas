@@ -51,9 +51,16 @@ begin
   Check('clawhub:bar',        stClawHub,    'bar', '');
   Check('clawhub:bar@3',      stClawHub,    'bar', '3');
 
-  { owner/repo and github URLs route to GitHub, passed through verbatim. }
-  Check('owner/repo',                       stGitHub, 'owner/repo', '');
-  Check('https://github.com/owner/repo',    stGitHub, 'https://github.com/owner/repo', '');
+  { owner/repo passes through; github URLs are normalized to the
+    owner/repo[/sub][@ref] shape the installer parses. }
+  Check('owner/repo',                              stGitHub, 'owner/repo', '');
+  Check('https://github.com/owner/repo',           stGitHub, 'owner/repo', '');
+  Check('https://github.com/owner/repo.git',       stGitHub, 'owner/repo', '');
+  Check('http://github.com/owner/repo/',           stGitHub, 'owner/repo', '');
+  Check('github.com/owner/repo',                   stGitHub, 'owner/repo', '');
+  Check('https://github.com/owner/repo/tree/main', stGitHub, 'owner/repo@main', '');
+  Check('https://github.com/owner/repo/tree/main/sub/dir',
+                                                   stGitHub, 'owner/repo/sub/dir@main', '');
 
   { Bare slug -> hub fallback chain; @version splits. }
   Check('baz',     stBareSlug, 'baz', '');

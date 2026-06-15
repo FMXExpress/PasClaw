@@ -1212,16 +1212,17 @@ const tabLoaders = {
                        + `<span class="kind">${escapeHtml(kindLabel)}</span></div>`
                        + (s.description ? `<div class="desc">${escapeHtml(s.description)}</div>` : "")
                        + `<div class="path">${escapeHtml(s.path || s.dir || "")}</div>`;
-          el.querySelector(".remove").addEventListener("click", () => removeSkill(s.name));
+          el.querySelector(".remove").addEventListener("click", () => removeSkill(s.id || s.name, s.name));
           pane.appendChild(el);
         }
       } catch (e) { pane.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; }
     }
-    async function removeSkill(name) {
-      if (!window.confirm('Remove skill "' + name + '"? (files are deleted; restart to apply)')) return;
-      setStatus("removing " + name + "…");
+    async function removeSkill(id, label) {
+      const shown = label || id;
+      if (!window.confirm('Remove skill "' + shown + '"? (files are deleted; restart to apply)')) return;
+      setStatus("removing " + shown + "…");
       try {
-        const r = await gwFetch("/v1/skills/" + encodeURIComponent(name), { method: "DELETE" });
+        const r = await gwFetch("/v1/skills/" + encodeURIComponent(id), { method: "DELETE" });
         const j = await r.json().catch(() => ({}));
         if (r.ok && j.removed) setStatus(j.note || "removed", "ok");
         else setStatus("remove failed: " + (j.error || ("http " + r.status)), "err");

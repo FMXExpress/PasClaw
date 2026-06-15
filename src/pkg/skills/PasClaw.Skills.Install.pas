@@ -70,6 +70,59 @@ begin
   end;
 end;
 
+function NormalizeGitHubUrl(const Target: string): string;
+{ Reduce a github.com URL to the owner/repo[/sub/path][@ref] shape the
+  GitHub installer parses (it splits on the first '/', so a raw URL would
+  be read as owner="https:"). Bare owner/repo input without a github.com
+  host is returned unchanged.
+    https://github.com/owner/repo          -> owner/repo
+    https://github.com/owner/repo.git      -> owner/repo
+    github.com/owner/repo/tree/REF         -> owner/repo@REF
+    github.com/owner/repo/tree/REF/sub/dir -> owner/repo/sub/dir@REF
+  (/blob/ is treated like /tree/. Refs containing '/' aren't disambiguated
+  -- the same simple-parsing limitation the installer itself has.) }
+var
+  S, L, Owner, Repo, Rest, Marker, Ref, Sub: string;
+  p: Integer;
+begin
+  S := Trim(Target);
+  L := LowerCase(S);
+  p := Pos('github.com/', L);
+  if p = 0 then Exit(S);   { not a github.com URL -- leave verbatim }
+  S := Copy(S, p + Length('github.com/'), MaxInt);
+  { strip query / fragment / trailing slashes }
+  p := Pos('?', S); if p > 0 then S := Copy(S, 1, p - 1);
+  p := Pos('#', S); if p > 0 then S := Copy(S, 1, p - 1);
+  while (S <> '') and (S[Length(S)] = '/') do SetLength(S, Length(S) - 1);
+  { owner }
+  p := Pos('/', S);
+  if p = 0 then Exit(S);   { only "owner" -- let the installer report it }
+  Owner := Copy(S, 1, p - 1);
+  Rest := Copy(S, p + 1, MaxInt);
+  { repo }
+  p := Pos('/', Rest);
+  if p = 0 then begin Repo := Rest; Rest := ''; end
+  else begin Repo := Copy(Rest, 1, p - 1); Rest := Copy(Rest, p + 1, MaxInt); end;
+  if HasSuffix(LowerCase(Repo), '.git') then Repo := Copy(Repo, 1, Length(Repo) - 4);
+  Result := Owner + '/' + Repo;
+  if Rest = '' then Exit;
+  { Rest is tree/REF[/sub], blob/REF[/sub], or a bare subpath. }
+  p := Pos('/', Rest);
+  if p = 0 then Marker := Rest else Marker := Copy(Rest, 1, p - 1);
+  L := LowerCase(Marker);
+  if (L = 'tree') or (L = 'blob') then
+  begin
+    Rest := Copy(Rest, p + 1, MaxInt);  { REF[/sub] -- empty if no slash above }
+    p := Pos('/', Rest);
+    if p = 0 then begin Ref := Rest; Sub := ''; end
+    else begin Ref := Copy(Rest, 1, p - 1); Sub := Copy(Rest, p + 1, MaxInt); end;
+    if Sub <> '' then Result := Result + '/' + Sub;
+    if Ref <> '' then Result := Result + '@' + Ref;
+  end
+  else
+    Result := Result + '/' + Rest;  { no tree/blob marker -- treat as subpath }
+end;
+
 procedure ClassifySkillTarget(const Target: string; out Kind: TSkillTargetKind;
                               out Slug, Version: string);
 var
@@ -88,10 +141,11 @@ begin
   end
   else if (Pos('github.com', L) > 0) or (Pos('/', Target) > 0) then
   begin
-    { owner/repo or a full github URL -- handed to the GitHub installer
-      verbatim (it parses owner/repo/ref itself). }
+    { owner/repo or a full github.com URL. The installer parses
+      owner/repo[/sub][@ref] but splits on the first '/', so a raw URL
+      must be reduced to that shape first; bare owner/repo passes through. }
     Kind := stGitHub;
-    Slug := Target;
+    Slug := NormalizeGitHubUrl(Target);
     Version := '';
   end
   else
