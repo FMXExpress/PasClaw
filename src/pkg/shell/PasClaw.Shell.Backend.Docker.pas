@@ -127,15 +127,15 @@ const
   KeepAliveCmd = 'tail -f /dev/null';
 
   { Timeouts (ms) for `docker` invocations, so a wedged Docker daemon
-    fails fast with a clear error instead of hanging serve/agent at
-    startup (Windows: Docker Desktop mid-restart is the classic case).
-    `docker info` is the boot-time reachability probe -- keep it short.
-    `docker run` is allowed a generous window so a first-run image pull
-    isn't killed mid-download. `docker stop` is bounded so cleanup on
-    exit can't wedge either. Exec (model commands) stays unbounded --
-    legitimate builds run long. }
+    fails fast with a clear error instead of hanging serve/agent (Windows:
+    Docker Desktop mid-restart is the classic case). `docker info` is the
+    reachability probe and is the one that actually wedges -- hard-bound it
+    short. `docker stop` is bounded so cleanup on exit can't wedge either.
+    `docker run` is deliberately NOT capped: a first-run pull of a large or
+    private image can legitimately take minutes, and a fixed cap would
+    abort an otherwise-healthy backend (Codex P2 on PR #286). The short
+    info probe already gates daemon health before we ever reach run. }
   DockerInfoTimeoutMs = 12000;     { DockerCliReachable probe }
-  DockerRunTimeoutMs  = 180000;    { SpawnContainer (allows image pull) }
   DockerStopTimeoutMs = 15000;     { StopContainer }
 
 function DefaultDockerBackendOptions: TDockerBackendOptions;
@@ -411,7 +411,10 @@ begin
 
     LogInfo('shell-backend(docker): spawning %s (image=%s)',
             [ContainerName(SessionId), FOpts.Image]);
-    ExitCode := RunArgvCapture('docker', Args, '', Out_, DockerRunTimeoutMs);
+    { Unbounded on purpose -- a cache-miss image pull can run for minutes;
+      see the timeout-const comment. Daemon health is already gated by the
+      bounded `docker info` probe before we get here. }
+    ExitCode := RunArgvCapture('docker', Args, '', Out_);
   finally
     Args.Free;
   end;
