@@ -1242,7 +1242,9 @@ const tabLoaders = {
         if (d.suspicious || d.blocked)
           html += `<div class="vault-meta"><span class="badge off">${d.blocked ? "blocked" : "flagged"}</span></div>`;
         if (d.repoUrl)
-          html += `<p><a href="${escapeHtml(d.repoUrl)}" target="_blank" rel="noopener">${escapeHtml(d.repoUrl)}</a></p>`;
+          html += /^https?:\/\//i.test(d.repoUrl)
+            ? `<p><a href="${escapeHtml(d.repoUrl)}" target="_blank" rel="noopener">${escapeHtml(d.repoUrl)}</a></p>`
+            : `<p>${escapeHtml(d.repoUrl)}</p>`;
         if (d.installSnippet)
           html += renderMarkdown("```\n" + d.installSnippet + "\n```");
         html += renderMarkdown(d.descriptionMarkdown || d.summary || "");
