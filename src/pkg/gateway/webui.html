@@ -131,8 +131,18 @@
     0%,80%,100%{opacity:.25;transform:scale(.85)}
     40%{opacity:1;transform:scale(1)}
   }
-  form.send{display:flex;gap:.5rem;margin:0;padding:.6rem;
+  form.send{display:flex;flex-wrap:wrap;gap:.5rem;margin:0;padding:.6rem;
     border-top:1px solid rgba(255,255,255,.08);background:rgba(2,5,15,.4)}
+  #attach-chips{display:flex;flex-wrap:wrap;gap:.35rem;flex-basis:100%;order:-1}
+  #attach-chips:empty{display:none}
+  .attach-chip{display:inline-flex;align-items:center;gap:.3rem;font-size:11px;
+    background:rgba(32,246,255,.1);color:var(--cyan);border:1px solid rgba(32,246,255,.3);
+    border-radius:999px;padding:.12rem .2rem .12rem .55rem;max-width:18rem}
+  .attach-chip span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .attach-chip button{background:transparent;border:0;color:var(--mut);cursor:pointer;
+    font:inherit;padding:0 .25rem;line-height:1}
+  .attach-chip button:hover{color:var(--red)}
+  #attach-btn{align-self:flex-end}
   textarea{flex:1;background:rgba(2,5,15,.72);color:var(--fg);caret-color:var(--cyan);
     border:1px solid rgba(32,246,255,.32);border-radius:10px;padding:.55rem .65rem;font:inherit;
     resize:none;min-height:2.4rem;max-height:9rem;outline:none}
@@ -253,6 +263,7 @@
   .vault-item .sub{display:block;color:var(--mut);font-size:10px;margin-top:.15rem;
     white-space:normal;overflow:hidden;text-overflow:ellipsis}
   #vault-view{white-space:normal}
+  .build-with{margin:.35rem 0 .55rem;font-size:11px;padding:.34rem .7rem}
   #vault-view h2{margin:.1rem 0 .3rem;font-size:1.2em;color:var(--cyan)}
   #vault-view p{margin:.35rem 0}
   #vault-view a{color:var(--cyan);text-decoration:underline;word-break:break-all}
@@ -376,8 +387,12 @@
       </div>
       <div id="log"></div>
       <form class="send" id="f">
+        <div id="attach-chips"></div>
         <textarea id="m" rows="2"
           placeholder="Ask PasClaw... (Enter to send, Shift+Enter for newline)"></textarea>
+        <input id="attach-file" type="file" multiple style="display:none">
+        <button class="icon-btn" id="attach-btn" type="button"
+          title="Attach text file(s) — contents are folded into your message">📎</button>
         <button class="primary" id="b">Send</button>
       </form>
     </div>
@@ -1022,13 +1037,77 @@ m.addEventListener("keydown", e => {
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); f.requestSubmit(); }
 });
 
+/* ===== Composer attachments =====
+   Chat content is plain text end-to-end, so an "attachment" is a text file
+   (or an oversized paste) whose contents are folded into the outgoing
+   message as a fenced block. Lets the operator drop a log/source file in
+   without hand-pasting, and turns a giant paste into a tidy chip. */
+let chatAttachments = [];   // [{name, content}]
+const attachBtn = $("#attach-btn"), attachFile = $("#attach-file"), attachChips = $("#attach-chips");
+const PASTE_TO_FILE_CHARS = 1500;
+const ATTACH_MAX_CHARS = 256 * 1024;
+
+function renderAttachChips() {
+  attachChips.innerHTML = "";
+  chatAttachments.forEach((a, i) => {
+    const chip = document.createElement("span");
+    chip.className = "attach-chip";
+    chip.innerHTML = `<span title="${escapeHtml(a.name)}">📄 ${escapeHtml(a.name)}</span>`;
+    const x = document.createElement("button");
+    x.type = "button"; x.textContent = "✕"; x.title = "remove attachment";
+    x.addEventListener("click", () => { chatAttachments.splice(i, 1); renderAttachChips(); });
+    chip.appendChild(x);
+    attachChips.appendChild(chip);
+  });
+}
+function addAttachment(name, content) {
+  if (!content) return;
+  if (content.length > ATTACH_MAX_CHARS) content = content.slice(0, ATTACH_MAX_CHARS) + "\n…(truncated)";
+  chatAttachments.push({ name: name || ("attachment-" + (chatAttachments.length + 1) + ".txt"), content });
+  renderAttachChips();
+}
+async function addFiles(files) {
+  for (const f of files) {
+    if (f.size > 4 * 1024 * 1024) continue;   // skip large binaries
+    try { addAttachment(f.name, await f.text()); } catch { /* unreadable -- skip */ }
+  }
+}
+function composeMessage(typed) {
+  if (!chatAttachments.length) return typed;
+  const blocks = chatAttachments.map(a =>
+    "Attached file: " + a.name + "\n```\n" + a.content + "\n```").join("\n\n");
+  return typed ? (blocks + "\n\n" + typed) : blocks;
+}
+/* Seed the composer from another tab (e.g. Vault "Build with this"):
+   stash context as an attachment, prefill a prompt, jump to chat. */
+function buildWithInChat(name, context, prompt) {
+  if (context) addAttachment(name, context);
+  if (prompt) m.value = prompt;
+  showTab("chat");
+  m.focus();
+}
+
+attachBtn.addEventListener("click", () => attachFile.click());
+attachFile.addEventListener("change", async () => { await addFiles(attachFile.files); attachFile.value = ""; });
+m.addEventListener("paste", e => {
+  const cd = e.clipboardData; if (!cd) return;
+  if (cd.files && cd.files.length) { e.preventDefault(); addFiles(cd.files); return; }
+  const txt = cd.getData("text");
+  if (txt && txt.length > PASTE_TO_FILE_CHARS) {
+    e.preventDefault();
+    addAttachment("pasted-" + (chatAttachments.length + 1) + ".txt", txt);
+  }
+});
+
 f.addEventListener("submit", e => {
   e.preventDefault();
   /* While a reply is streaming the primary button acts as Stop. */
   if (streaming) { if (currentAbort) currentAbort.abort(); return; }
-  const msg = m.value.trim();
-  if (!msg) return;
+  const typed = m.value.trim();
+  if (!typed && !chatAttachments.length) return;
+  const msg = composeMessage(typed);
   m.value = "";
+  chatAttachments = []; renderAttachChips();
   submitUser(msg);
 });
 
@@ -1517,6 +1596,8 @@ const tabLoaders = {
           html += `<div class="vault-meta">` + meta.map(x => `<span class="badge">${x}</span>`).join("") + `</div>`;
         if (d.suspicious || d.blocked)
           html += `<div class="vault-meta"><span class="badge off">${d.blocked ? "blocked" : "flagged"}</span></div>`;
+        if (!d.blocked)
+          html += `<button class="primary build-with" type="button" title="Start a chat set up to build with this library">⚒ Build with this</button>`;
         if (d.repoUrl)
           html += /^https?:\/\//i.test(d.repoUrl)
             ? `<p><a href="${escapeHtml(d.repoUrl)}" target="_blank" rel="noopener">${escapeHtml(d.repoUrl)}</a></p>`
@@ -1526,6 +1607,20 @@ const tabLoaders = {
         html += renderMarkdown(d.descriptionMarkdown || d.summary || "");
         view.innerHTML = html;
         wireCopyButtons(view);
+        const bw = view.querySelector(".build-with");
+        if (bw) bw.addEventListener("click", () => {
+          /* Hand the library's reference (repo, install snippet, docs) to the
+             chat as an attachment and prime a build-oriented prompt. */
+          const ctx = [
+            "# " + (d.displayName || d.slug),
+            d.repoUrl ? ("Repo: " + d.repoUrl) : "",
+            d.installSnippet ? ("\nInstall:\n```\n" + d.installSnippet + "\n```") : "",
+            "\n" + (d.descriptionMarkdown || d.summary || "")
+          ].filter(Boolean).join("\n");
+          buildWithInChat((d.slug || "library") + ".md", ctx,
+            "Help me build a small Object Pascal example using " + (d.displayName || d.slug) +
+            ". Use the attached library reference for install/setup.");
+        });
       } catch (e) { view.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; }
     }
 
