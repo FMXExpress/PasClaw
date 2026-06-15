@@ -590,7 +590,13 @@ document.addEventListener("DOMContentLoaded", () => {
 
 /* ===== Tab switching ===== */
 const tabLoaded = {};
+function isTab(name) {
+  return !!document.querySelector('nav button[data-tab="' + name + '"]');
+}
 function showTab(name) {
+  // Fall back to chat for an unknown / empty name (e.g. a stale or
+  // hand-edited #hash) so we never end up with every .tab hidden.
+  if (!isTab(name)) name = "chat";
   // Scope both the active-class toggle AND the click-handler wiring
   // to buttons that actually map to a tab (data-tab set). Without the
   // [data-tab] qualifier the new 🔑 token button in the nav would also
@@ -598,12 +604,19 @@ function showTab(name) {
   // hide every .tab (Codex P2 on PR #249).
   $$("nav button[data-tab]").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
   $$(".tab").forEach(t => t.classList.toggle("active", t.id === "tab-" + name));
+  // Reflect the active tab in the URL hash so it survives a reload, is
+  // bookmarkable, and rides browser back/forward. Skip the write when the
+  // hash already matches -- avoids a redundant history entry and the
+  // recursive hashchange it would trigger.
+  if (location.hash.slice(1) !== name) location.hash = name;
   if (!tabLoaded[name] && typeof tabLoaders[name] === "function") {
     tabLoaders[name]();
     tabLoaded[name] = true;
   }
 }
 $$("nav button[data-tab]").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
+// Follow back/forward and manual #hash edits between tabs.
+window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
 
 /* ===== Header status ===== */
 gwFetch("/v1/status").then(r => r.json()).then(s => {
@@ -1665,6 +1678,9 @@ function escapeHtml(s) {
 initTheme();
 loadModels();
 initParams();
+// Restore the tab named in the URL hash (deep link / reload / bookmark).
+// No hash leaves the markup default (Chat) active untouched.
+if (location.hash.slice(1)) showTab(location.hash.slice(1));
 (async () => {
   await refreshSessions();
   if (sessions.length > 0) activateSession(sessions[0].id);
