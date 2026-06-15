@@ -259,6 +259,8 @@ uses
   PasClaw.Skills.Install,   { InstallSkillTarget / RemoveSkillFiles / IsSafeSkillName }
   PasClaw.Tools.Sandbox,
   PasClaw.Providers.Factory,
+  PasClaw.Providers.Catalog,   { TProviderSpec for /v1/models discovery }
+  PasClaw.Providers.Models,    { DiscoverModels / cache -- /v1/models roster }
   PasClaw.Tools.ToolLoop,
   PasClaw.Stream.Reliability,
   PasClaw.Agent.Compact,
@@ -4596,34 +4598,73 @@ begin
 end;
 
 procedure TGatewayServer.HandleModels(AResp: TIdHTTPResponseInfo);
-{ OpenAI-compatible model list. Reports the default model only;
-  enumerating every supported provider/model combination is a deeper
-  change. A real one-model response is the contract most clients
-  need to validate the endpoint. }
+{ OpenAI-compatible model list. Enumerates the default provider's full
+  catalog via PasClaw.Providers.Models so the web UI's picker shows every
+  model the operator can choose, not just the configured default. The
+  on-disk cache ($PASCLAW_HOME/cache/models/<provider>.json) is preferred
+  so a warm gateway answers instantly; a cold cache triggers one live
+  fetch (shared with `pasclaw model refresh`) that is then persisted.
+  Discovery never raises -- when it is unavailable (offline, no key,
+  placeholder provider) the response still carries the configured default,
+  preserving the historical one-model contract. }
 var
   Root, Item: TJsonObject;
   DataArr: TJsonArray;
-  ModelId: string;
-begin
-  ModelId := FCfg.DefaultModel;
-  if ModelId = '' then ModelId := 'pasclaw';
+  DefModel, ProvName, Base, Key, Err: string;
+  Spec: TProviderSpec;
+  Disc: TModelDiscoveryResult;
+  Seen: TStringList;
+  i: Integer;
 
+  procedure AddModel(const Id, OwnedBy: string; Created: Int64);
+  begin
+    if (Id = '') or (Seen.IndexOf(Id) >= 0) then Exit;
+    Seen.Add(Id);
+    Item := TJsonObject.Create;
+    Item.PutStr('id',     Id);
+    Item.PutStr('object', 'model');
+    if Created > 0 then Item.PutInt('created', Created)
+    else                Item.PutInt('created', DateTimeToUnix(Now, False));
+    Item.PutStr('owned_by', OwnedBy);
+    DataArr.AddObject(Item);
+  end;
+
+begin
+  DefModel := FCfg.DefaultModel;
+  if DefModel = '' then DefModel := 'pasclaw';
+  ProvName := FCfg.DefaultProvider;
+
+  Seen := TStringList.Create;
   Root := TJsonObject.Create;
   try
     Root.PutStr('object', 'list');
     DataArr := TJsonArray.Create;
 
-    Item := TJsonObject.Create;
-    Item.PutStr('id',       ModelId);
-    Item.PutStr('object',   'model');
-    Item.PutInt('created',  DateTimeToUnix(Now, False));
-    Item.PutStr('owned_by', 'pasclaw');
-    DataArr.AddObject(Item);
+    if (ProvName <> '') and
+       ResolveProviderSpecForName(FCfg, ProvName, Spec, Base, Key, Err) then
+    begin
+      { Cache first (instant, no network on every page load); fall back to
+        a single live fetch and persist it for next time. }
+      if not LoadCachedModels(ProvName, Disc) then
+      begin
+        Disc := DiscoverModels(Spec, Base, Key);
+        if Disc.Ok and (Length(Disc.Models) > 0) then
+          SaveCachedModels(ProvName, Disc);
+      end;
+      if Disc.Ok then
+        for i := 0 to High(Disc.Models) do
+          AddModel(Disc.Models[i].Id, ProvName, Disc.Models[i].CreatedAt);
+    end;
+
+    { Always surface the configured default so the contract holds even when
+      discovery yields nothing. Dedup keeps it from doubling a catalog row. }
+    AddModel(DefModel, 'pasclaw', 0);
 
     Root.PutArray('data', DataArr);
     WriteJSON(AResp, 200, Root.ToJSON);
   finally
     Root.Free;
+    Seen.Free;
   end;
 end;
 
