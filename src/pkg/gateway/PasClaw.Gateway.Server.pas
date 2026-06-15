@@ -235,6 +235,15 @@ procedure AccumulateGatewayStatsRaw(const Cfg: TConfig;
                                     ToolCallsDispatched: Int64;
                                     TruncatedBytesSaved: Int64);
 
+(* True when Path is a secret-bearing file the operator-facing /v1/fs
+   browse must neither list nor serve. config.json holds cleartext
+   provider api_keys, the gateway bearer token, mcp env, and the
+   web_search key -- GET /v1/config masks all of those, but the raw file
+   would leak them. Also hides .env files and TLS private keys that
+   commonly sit beside it. Matches the resolved config path exactly
+   (honours $PASCLAW_CONFIG) plus a basename denylist. Exposed for tests. *)
+function IsRestrictedFsPath(const Path: string): Boolean;
+
 implementation
 
 uses
@@ -1728,6 +1737,24 @@ begin
   end;
 end;
 
+function IsRestrictedFsPath(const Path: string): Boolean;
+var
+  Full, CfgFull, Base: string;
+begin
+  Result := False;
+  if Path = '' then Exit;
+  try Full := ExpandFileName(Path); except Full := Path; end;
+  { Exact match against the resolved config file, so an operator who moved
+    it via $PASCLAW_CONFIG (a non-"config.json" name) is still covered. }
+  try CfgFull := ExpandFileName(GetConfigPath); except CfgFull := GetConfigPath; end;
+  if (CfgFull <> '') and SameFileName(Full, CfgFull) then Exit(True);
+  { Basename denylist for the conventional secret files. }
+  Base := LowerCase(ExtractFileName(Full));
+  if Base = 'config.json' then Exit(True);
+  if (Base = '.env') or HasPrefix(Base, '.env.') then Exit(True);
+  if HasSuffix(Base, '.pem') or HasSuffix(Base, '.key') then Exit(True);
+end;
+
 procedure TGatewayServer.HandleFSList(ARequest: TIdHTTPRequestInfo;
                                        AResp: TIdHTTPResponseInfo);
 var
@@ -1786,6 +1813,9 @@ begin
     try
       repeat
         if (SR.Name = '.') or (SR.Name = '..') then Continue;
+        { Hide secret-bearing files (config.json, .env, TLS keys) from the
+          operator browse so cleartext api_keys / tokens never surface. }
+        if IsRestrictedFsPath(JoinPath(Dir, SR.Name)) then Continue;
         Item := TJsonObject.Create;
         Item.PutStr ('name', SR.Name);
         Item.PutInt ('size', SR.Size);
@@ -1826,6 +1856,14 @@ begin
   if not CanReadPath(Path, Reason) then
   begin
     WriteJSON(AResp, 403, '{"error":"' + JsonEscape(Reason) + '"}');
+    Exit;
+  end;
+  { Refuse secret-bearing files even when the sandbox would allow them --
+    same denylist HandleFSList hides from the browse. Without this an
+    operator could read config.json's cleartext keys via a direct path. }
+  if IsRestrictedFsPath(Path) then
+  begin
+    WriteJSON(AResp, 403, '{"error":"access to this file is restricted"}');
     Exit;
   end;
   if not FileExists(Path) then
