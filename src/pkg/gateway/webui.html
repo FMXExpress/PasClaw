@@ -260,7 +260,7 @@
     caret-color:var(--cyan);border:1px solid rgba(32,246,255,.3);border-radius:8px;
     padding:.4rem .55rem;font:inherit;font-size:12px;outline:none}
   .vault-search-row input:focus{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
-  .vault-item .sub{display:block;color:var(--mut);font-size:10px;margin-top:.15rem;
+  .vault-item .sub,.col-list .item .sub{display:block;color:var(--mut);font-size:10px;margin-top:.15rem;
     white-space:normal;overflow:hidden;text-overflow:ellipsis}
   #vault-view{white-space:normal}
   .build-with{margin:.35rem 0 .55rem;font-size:11px;padding:.34rem .7rem}
@@ -401,10 +401,14 @@
   <div id="tab-memory" class="tab">
     <div class="two-col">
       <div class="col-list">
+        <form id="mem-search" class="vault-search-row">
+          <input id="mem-q" type="text" autocomplete="off"
+                 placeholder="search memory (BM25 / vector)…">
+        </form>
         <div class="crumb">workspace/memory/</div>
         <div id="mem-list"></div>
       </div>
-      <pre class="col-view" id="mem-view"><div class="empty-pane">Pick a file to view.</div></pre>
+      <pre class="col-view" id="mem-view"><div class="empty-pane">Pick a file to view, or search memory.</div></pre>
     </div>
   </div>
 
@@ -1263,31 +1267,67 @@ function initTheme() {
 const tabLoaders = {
   chat() { /* always loaded */ },
 
+  /* Memory: the workspace/memory/*.md files ARE the memory; the SQLite
+     index is a rebuildable FTS5 (+ optional vector) cache over them. The
+     list browses the files; the search box runs the same index the
+     memory_search tool uses and opens the matched file on click. */
   async memory() {
-    const list = $("#mem-list");
-    list.innerHTML = "loading…";
-    try {
-      const j = await (await gwFetch("/v1/memory")).json();
-      list.innerHTML = "";
-      if (!j.files || !j.files.length) {
-        list.innerHTML = `<div class="empty-pane">No memory files yet.</div>`;
-        return;
-      }
-      for (const f of j.files) {
-        const el = document.createElement("div");
-        el.className = "item";
-        el.innerHTML = `<span>${escapeHtml(f.name)}</span><span class="size">${f.size}b</span>`;
-        el.addEventListener("click", async () => {
-          $$("#mem-list .item").forEach(x => x.classList.remove("active"));
-          el.classList.add("active");
-          try {
-            const r = await (await gwFetch("/v1/memory/" + encodeURIComponent(f.name))).json();
-            $("#mem-view").textContent = r.content || "";
-          } catch (e) { $("#mem-view").textContent = String(e); }
-        });
-        list.appendChild(el);
-      }
-    } catch (e) { list.textContent = String(e); }
+    const list = $("#mem-list"), view = $("#mem-view");
+    const sForm = $("#mem-search"), q = $("#mem-q");
+    const baseName = p => (p || "").replace(/^.*[\\/]/, "");
+
+    async function openFile(name, el) {
+      $$("#mem-list .item").forEach(x => x.classList.remove("active"));
+      if (el) el.classList.add("active");
+      try {
+        const r = await (await gwFetch("/v1/memory/" + encodeURIComponent(name))).json();
+        view.textContent = r.content || "";
+      } catch (e) { view.textContent = String(e); }
+    }
+    async function loadFiles() {
+      list.innerHTML = "loading…";
+      try {
+        const j = await (await gwFetch("/v1/memory")).json();
+        list.innerHTML = "";
+        if (!j.files || !j.files.length) { list.innerHTML = `<div class="empty-pane">No memory files yet.</div>`; return; }
+        for (const f of j.files) {
+          const el = document.createElement("div");
+          el.className = "item";
+          el.innerHTML = `<span>${escapeHtml(f.name)}</span><span class="size">${f.size}b</span>`;
+          el.addEventListener("click", () => openFile(f.name, el));
+          list.appendChild(el);
+        }
+      } catch (e) { list.textContent = String(e); }
+    }
+    async function search() {
+      const term = q.value.trim();
+      if (!term) { await loadFiles(); return; }
+      list.innerHTML = "searching…";
+      try {
+        const r = await gwFetch("/v1/memory/search?q=" + encodeURIComponent(term));
+        const j = await r.json().catch(() => ({}));
+        if (!r.ok || j.error) { list.innerHTML = `<div class="empty-pane">search failed: ${escapeHtml(j.error || ("http " + r.status))}</div>`; return; }
+        const hits = j.hits || [];
+        if (!hits.length) { list.innerHTML = `<div class="empty-pane">No matches for “${escapeHtml(term)}”.</div>`; return; }
+        list.innerHTML = "";
+        for (const h of hits) {
+          const name = baseName(h.path);
+          const el = document.createElement("div");
+          el.className = "item";
+          el.innerHTML = `<div><span>${escapeHtml(name)}</span>`
+                       + `<span class="sub">${escapeHtml((h.snippet || "").slice(0, 160))}</span></div>`;
+          el.addEventListener("click", () => openFile(name, el));
+          list.appendChild(el);
+        }
+      } catch (e) { list.innerHTML = `<div class="empty-pane">search failed: ${escapeHtml(String(e))}</div>`; }
+    }
+
+    if (!sForm.dataset.wired) {
+      sForm.dataset.wired = "1";
+      sForm.addEventListener("submit", e => { e.preventDefault(); search(); });
+      q.addEventListener("input", () => { if (!q.value.trim()) loadFiles(); });
+    }
+    await loadFiles();
   },
 
   async files() {

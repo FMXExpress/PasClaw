@@ -144,6 +144,12 @@ type
     procedure HandleKBSearch(ARequest: TIdHTTPRequestInfo;
                              AResp: TIdHTTPResponseInfo);
     procedure HandleMemoryList(AResp: TIdHTTPResponseInfo);
+    { GET /v1/memory/search?q= -- BM25 (or hybrid vector) search over the
+      workspace memory markdown, the same index memory_search exposes to
+      the model. The .md files are the source of truth; the SQLite index is
+      a rebuildable cache, so this just surfaces existing search. }
+    procedure HandleMemorySearch(ARequest: TIdHTTPRequestInfo;
+                                 AResp: TIdHTTPResponseInfo);
     procedure HandleMemoryRead(const Doc: string;
                                 ARequest: TIdHTTPRequestInfo;
                                 AResp: TIdHTTPResponseInfo);
@@ -275,6 +281,8 @@ uses
   PasClaw.Skills.ClawHub,  { SearchClawHub -- catalog search (clawhub.ai) }
   PasClaw.Skills.PasClawHub, { SearchPasClawHub -- catalog search (pasclaw.dev) }
   PasClaw.KB.Index,        { IKBIndex -- /v1/kb list / upload / search }
+  PasClaw.Memory.Index,    { IMemoryIndex / NewMemoryIndex -- /v1/memory/search }
+  PasClaw.Memory.Vector,   { NewVectorMemoryIndex -- hybrid memory search }
   PasClaw.Tools.Sandbox,
   PasClaw.Providers.Factory,
   PasClaw.Providers.Catalog,   { TProviderSpec for /v1/models discovery }
@@ -818,6 +826,7 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/kb/search') then HandleKBSearch(ARequest, AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/kb/upload') then HandleKBUpload(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/kb')       then HandleKBList(AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/memory/search') then HandleMemorySearch(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/memory')  then HandleMemoryList(AResponse)
     else if (ARequest.Command = 'GET')  and (Copy(Doc, 1, 11) = '/v1/memory/') then
       HandleMemoryRead(Doc, ARequest, AResponse)
@@ -1434,6 +1443,82 @@ begin
       end;
     end;
     Root.PutArray('files', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleMemorySearch(ARequest: TIdHTTPRequestInfo;
+                                            AResp: TIdHTTPResponseInfo);
+const
+  DefaultK = 8;
+  MaxK     = 25;
+var
+  Query, Dir, DbBase: string;
+  K, i: Integer;
+  Idx: IMemoryIndex;
+  Hits: TMemoryHitArray;
+  Root, Item: TJsonObject;
+  Arr: TJsonArray;
+begin
+  Query := Trim(ARequest.Params.Values['q']);
+  if Query = '' then
+  begin
+    WriteJSON(AResp, 400, '{"error":"missing query parameter: q"}');
+    Exit;
+  end;
+  K := StrToIntDef(ARequest.Params.Values['k'], DefaultK);
+  if K < 1   then K := DefaultK;
+  if K > MaxK then K := MaxK;
+
+  Dir := JoinPath(GetHome, 'workspace/memory');
+  if not DirectoryExists(Dir) then
+  begin
+    WriteJSON(AResp, 200, '{"hits":[]}');   { no memory written yet }
+    Exit;
+  end;
+  DbBase := JoinPath(Dir, '.index.db');
+
+  { Mirror Tool_MemorySearch's backend selection: hybrid FTS+vector when
+    the operator opted in, else the FTS5-only index. Separate DB files so
+    flipping vector_search_enabled doesn't cross-talk schemas. }
+  Idx := nil;
+  if FCfg.VectorSearchEnabled then
+  begin
+    Idx := NewVectorMemoryIndex;
+    if not Idx.Open(DbBase + '.vec') then Idx := nil;
+  end;
+  if Idx = nil then
+  begin
+    Idx := NewMemoryIndex;
+    if not Idx.Open(DbBase) then
+    begin
+      Idx := nil;
+      WriteJSON(AResp, 503,
+        '{"error":"memory index unavailable (libsqlite3 missing or unreadable)"}');
+      Exit;
+    end;
+  end;
+  try
+    Idx.SyncDir(Dir);
+    Hits := Idx.Search(Query, K);
+  finally
+    Idx := nil;   { IInterface release closes the DB }
+  end;
+
+  Root := TJsonObject.Create;
+  try
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Hits) do
+    begin
+      Item := TJsonObject.Create;
+      Item.PutStr  ('path',    Hits[i].Path);
+      Item.PutStr  ('snippet', Hits[i].Snippet);
+      Item.PutFloat('score',   Hits[i].Score);
+      Arr.AddObject(Item);
+    end;
+    Root.PutArray('hits', Arr);
     WriteJSON(AResp, 200, Root.ToJSON);
   finally
     Root.Free;
