@@ -1083,8 +1083,11 @@ var
                       Score: Double);
   begin
     { Dedupe across the two registries; pasclaw.dev is added first so it
-      wins, matching the bare-slug install precedence. }
-    if (Slug = '') or (Seen.IndexOf(LowerCase(Slug)) >= 0) then Exit;
+      wins, matching the bare-slug install precedence. Enforce the total
+      Limit on the MERGED set -- forwarding Limit to each backend and
+      concatenating would otherwise return up to 2x Limit. pasclaw.dev
+      fills the budget first, ClawHub takes whatever slots remain. }
+    if (Slug = '') or (Arr.Count >= Limit) or (Seen.IndexOf(LowerCase(Slug)) >= 0) then Exit;
     Seen.Add(LowerCase(Slug));
     Item := TJsonObject.Create;
     Item.PutStr  ('slug',         Slug);
