@@ -127,6 +127,12 @@ type
                                 ARequest: TIdHTTPRequestInfo;
                                 AResp: TIdHTTPResponseInfo);
     procedure HandleConfig(AResp: TIdHTTPResponseInfo);
+    { PUT /v1/config -- persist an edited config from the web UI. Secrets
+      sent back as the mask placeholder are preserved from the current
+      config (client can set keys, never view them). Writes config.json;
+      changes apply on the next restart. }
+    procedure HandleConfigWrite(ARequest: TIdHTTPRequestInfo;
+                                AResp: TIdHTTPResponseInfo);
     procedure HandleStats(AResp: TIdHTTPResponseInfo);
     { Durable chat sessions, shared with the TUI / `pasclaw session`
       via PasClaw.Session.Store -- web chats land in the same
@@ -764,6 +770,7 @@ begin
     else if (ARequest.Command = 'GET')  and (Copy(Doc, 1, 11) = '/v1/memory/') then
       HandleMemoryRead(Doc, ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/config')  then HandleConfig(AResponse)
+    else if (ARequest.Command = 'PUT')  and (Doc = '/v1/config')  then HandleConfigWrite(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/stats')   then HandleStats(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/sessions') then HandleSessionsList(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/sessions') then HandleSessionCreate(ARequest, AResponse)
@@ -1070,7 +1077,7 @@ begin
         if Item = nil then Continue;
         try
           if Item.GetStr('api_key', '') <> '' then
-            Item.PutStr('api_key', '•••');
+            Item.PutStr('api_key', MaskedSecretPlaceholder);
         finally
           Item.Free;
         end;
@@ -1092,7 +1099,7 @@ begin
             to bearer tokens. Mask the whole string when non-empty;
             the UI just needs "is configured" signal, not the literal. }
           if Item.GetStr('env', '') <> '' then
-            Item.PutStr('env', '•••');
+            Item.PutStr('env', MaskedSecretPlaceholder);
         finally
           Item.Free;
         end;
@@ -1109,7 +1116,18 @@ begin
     if Item <> nil then
     try
       if Item.GetStr('token', '') <> '' then
-        Item.PutStr('token', '•••');
+        Item.PutStr('token', MaskedSecretPlaceholder);
+    finally
+      Item.Free;
+    end;
+
+    { web_search.api_key is a secret too (Brave/Tavily/Perplexity keys);
+      it was previously emitted in cleartext. Mask it like the others. }
+    Item := Root.ChildObject('web_search');
+    if Item <> nil then
+    try
+      if Item.GetStr('api_key', '') <> '' then
+        Item.PutStr('api_key', MaskedSecretPlaceholder);
     finally
       Item.Free;
     end;
@@ -1118,6 +1136,60 @@ begin
   finally
     Root.Free;
   end;
+end;
+
+procedure TGatewayServer.HandleConfigWrite(ARequest: TIdHTTPRequestInfo;
+                                           AResp: TIdHTTPResponseInfo);
+var
+  Body, Merged: string;
+  Tmp: TConfig;
+begin
+  Body := ReadRequestBody(ARequest);
+  if Trim(Body) = '' then
+  begin
+    WriteJSON(AResp, 400, '{"error":"empty body"}');
+    Exit;
+  end;
+  { Restore masked secrets from the running config so a client that never
+    saw the real api_key / env / token values can't blank them by sending
+    the mask back. Raises EArgumentException on unparseable JSON. }
+  try
+    Merged := RestoreMaskedConfigSecrets(Body, FCfg.ToJSON);
+  except
+    on E: Exception do
+    begin
+      WriteJSON(AResp, 400, '{"error":"' + JsonEscape(E.Message) + '"}');
+      Exit;
+    end;
+  end;
+  { Validate by round-tripping through TConfig before touching disk, so a
+    malformed edit is rejected rather than persisted. }
+  Tmp := TConfig.Create;
+  try
+    try
+      Tmp.FromJSON(Merged);
+    except
+      on E: Exception do
+      begin
+        WriteJSON(AResp, 400, '{"error":"invalid config: ' + JsonEscape(E.Message) + '"}');
+        Exit;
+      end;
+    end;
+    try
+      SaveConfig(Tmp);
+    except
+      on E: Exception do
+      begin
+        WriteJSON(AResp, 500, '{"error":"' + JsonEscape(E.Message) + '"}');
+        Exit;
+      end;
+    end;
+  finally
+    Tmp.Free;
+  end;
+  LogInfo('gateway: config.json updated via /v1/config (restart to apply)');
+  WriteJSON(AResp, 200,
+    '{"saved":true,"note":"saved to config.json -- restart pasclaw for changes to take effect"}');
 end;
 
 procedure TGatewayServer.HandleStats(AResp: TIdHTTPResponseInfo);
