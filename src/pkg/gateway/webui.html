@@ -204,6 +204,18 @@
   /* ===== Settings tab ===== */
   #config-view{font:12px ui-monospace,monospace;white-space:pre-wrap;color:#cdd6ff;
     padding:.85rem;margin:0;overflow:auto;flex:1}
+  .settings-pane{flex:1;display:flex;flex-direction:column;min-width:0;padding:.7rem .85rem;gap:.5rem}
+  .settings-bar{display:flex;align-items:center;gap:.5rem}
+  .settings-status{font-size:11px;color:var(--mut)}
+  .settings-status.ok{color:var(--green)} .settings-status.err{color:var(--red)}
+  .settings-hint{margin:0;font-size:11px;color:var(--mut)}
+  .settings-hint code{background:rgba(2,5,15,.6);border:1px solid rgba(255,255,255,.1);
+    border-radius:5px;padding:.02rem .25rem}
+  #config-edit{flex:1;min-height:0;resize:none;background:rgba(2,5,15,.72);color:#cdd6ff;
+    caret-color:var(--cyan);border:1px solid rgba(32,246,255,.3);border-radius:10px;
+    padding:.7rem .8rem;font:12px ui-monospace,monospace;line-height:1.5;outline:none;
+    white-space:pre;overflow:auto}
+  #config-edit:focus{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
 
   .empty-pane{margin:auto;color:var(--mut);text-align:center;padding:2rem;font-size:12px}
 
@@ -473,7 +485,17 @@
   </div>
 
   <div id="tab-settings" class="tab">
-    <pre id="config-view">loading config…</pre>
+    <div class="settings-pane">
+      <div class="settings-bar">
+        <button class="primary" id="config-save">Save</button>
+        <button class="icon-btn" id="config-reload">Reload</button>
+        <span id="config-status" class="settings-status"></span>
+      </div>
+      <p class="settings-hint">Edits write <code>config.json</code> on the server and apply on the next
+        restart. Secrets are shown as <code>•••</code> — leave them to keep the current value, or type a
+        new one to change it (you can set keys here, never read them).</p>
+      <textarea id="config-edit" spellcheck="false" autocomplete="off">loading config…</textarea>
+    </div>
   </div>
 </main>
 
@@ -1300,11 +1322,44 @@ const tabLoaders = {
   },
 
   async settings() {
-    const view = $("#config-view");
-    try {
-      const j = await (await gwFetch("/v1/config")).json();
-      view.textContent = JSON.stringify(j, null, 2);
-    } catch (e) { view.textContent = String(e); }
+    const edit = $("#config-edit"), status = $("#config-status");
+    const save = $("#config-save"), reload = $("#config-reload");
+
+    function setStatus(msg, cls) {
+      status.textContent = msg || "";
+      status.className = "settings-status" + (cls ? " " + cls : "");
+    }
+    async function load() {
+      setStatus("loading…");
+      try {
+        const j = await (await gwFetch("/v1/config")).json();
+        edit.value = JSON.stringify(j, null, 2);
+        setStatus("");
+      } catch (e) { edit.value = String(e); setStatus("load failed", "err"); }
+    }
+    async function doSave() {
+      let parsed;
+      try { parsed = JSON.parse(edit.value); }
+      catch (e) { setStatus("not valid JSON: " + e.message, "err"); return; }
+      save.disabled = true; setStatus("saving…");
+      try {
+        const r = await gwFetch("/v1/config", {
+          method: "PUT", headers: { "content-type": "application/json" },
+          body: JSON.stringify(parsed) });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok && j.saved) setStatus(j.note || "saved", "ok");
+        else setStatus("save failed: " + (j.error || ("http " + r.status)), "err");
+      } catch (e) { setStatus("save failed: " + e, "err"); }
+      finally { save.disabled = false; }
+    }
+
+    /* Wire once; subsequent tab visits just reload the current config. */
+    if (!edit.dataset.wired) {
+      edit.dataset.wired = "1";
+      save.addEventListener("click", doSave);
+      reload.addEventListener("click", load);
+    }
+    await load();
   },
 
   /* Stats: aggregates per-session counters across $PASCLAW_HOME/workspace/

@@ -596,6 +596,25 @@ function GetConfigPath: string;
 function LoadConfig: TConfig;
 procedure SaveConfig(C: TConfig);
 
+const
+  { Placeholder the gateway's read-only /v1/config substitutes for any
+    populated secret (providers[].api_key, mcp_servers[].env,
+    gateway.token) so the web UI can show "set vs unset" without leaking
+    the value. A write that sends this placeholder back means "keep the
+    existing secret"; any other value sets a new one. Shared so the mask
+    (GET) and the unmask-merge (PUT) can never drift. }
+  MaskedSecretPlaceholder = '•••';
+
+(* Merge an edited config body (as the web UI's Settings editor PUTs it,
+   with secrets still showing MaskedSecretPlaceholder) onto the current
+   on-disk config, restoring any masked secret from CurrentJSON so the
+   client can SET secrets without ever VIEWING them: a field left at the
+   placeholder keeps the server's value; any other value overwrites it.
+   Restores providers[].api_key + mcp_servers[].env (matched by name) and
+   gateway.token. Returns the merged JSON; raises on unparseable input.
+   Exposed for tests. *)
+function RestoreMaskedConfigSecrets(const EditedJSON, CurrentJSON: string): string;
+
 (*  Effective gateway bearer token. Returns the env-var override
     when $PASCLAW_GATEWAY_TOKEN or $OPENCLAW_GATEWAY_TOKEN is set
     (PASCLAW_ wins when both are set), else C.Gateway.Token from
@@ -1844,6 +1863,157 @@ end;
 procedure SaveConfig(C: TConfig);
 begin
   WriteFileText(GetConfigPath, C.ToJSON);
+end;
+
+function RestoreMaskedConfigSecrets(const EditedJSON, CurrentJSON: string): string;
+
+  { Codepage-agnostic "is this the mask placeholder?" check. This unit has
+    no UTF8 codepage directive, so the MaskedSecretPlaceholder literal is
+    tagged with the default source codepage while the parser hands back the
+    value tagged CP_NONE/CP_ACP -- a direct equality triggers a lossy
+    conversion and can be unequal on FPC despite byte-identical UTF-8.
+    Compare the raw bytes instead. (Delphi's string is UnicodeString, so a
+    plain compare is already correct there.) }
+  function IsMask(const S: string): Boolean;
+  begin
+    {$IFDEF FPC}
+    Result := RawByteString(S) = RawByteString(MaskedSecretPlaceholder);
+    {$ELSE}
+    Result := S = MaskedSecretPlaceholder;
+    {$ENDIF}
+  end;
+
+  { Find the named item in Arr and return its String field, or '' if no
+    match. Used to pull a secret back from the current config when the
+    edited body kept the placeholder. }
+  function LookupByName(Arr: TJsonArray; const Name, Field: string): string;
+  var
+    j: Integer;
+    It: TJsonObject;
+  begin
+    Result := '';
+    if Arr = nil then Exit;
+    for j := 0 to Arr.Count - 1 do
+    begin
+      It := Arr.ItemObject(j);
+      if It = nil then Continue;
+      try
+        if It.GetStr('name', '') = Name then
+        begin
+          Result := It.GetStr(Field, '');
+          Exit;
+        end;
+      finally
+        It.Free;
+      end;
+    end;
+  end;
+
+  { For each item in EdArr whose Field == placeholder, restore it from the
+    same-named item in CurArr. }
+  procedure RestoreArray(EdArr, CurArr: TJsonArray; const Field: string);
+  var
+    i: Integer;
+    It: TJsonObject;
+  begin
+    if EdArr = nil then Exit;
+    for i := 0 to EdArr.Count - 1 do
+    begin
+      It := EdArr.ItemObject(i);
+      if It = nil then Continue;
+      try
+        if IsMask(It.GetStr(Field, '')) then
+          It.PutStr(Field, LookupByName(CurArr, It.GetStr('name', ''), Field));
+      finally
+        It.Free;
+      end;
+    end;
+  end;
+
+var
+  Edited, Current: TJsonObject;
+  EdArr, CurArr: TJsonArray;
+  EdGw, CurGw: TJsonObject;
+begin
+  Edited := TJsonObject.Parse(EditedJSON);
+  if Edited = nil then
+    raise EArgumentException.Create('config body is not valid JSON');
+  try
+    Current := TJsonObject.Parse(CurrentJSON);
+    try
+      { providers[].api_key -- matched by provider name. }
+      EdArr  := Edited.ChildArray('providers');
+      try
+        if Current <> nil then CurArr := Current.ChildArray('providers') else CurArr := nil;
+        try
+          RestoreArray(EdArr, CurArr, 'api_key');
+        finally
+          if CurArr <> nil then CurArr.Free;
+        end;
+      finally
+        if EdArr <> nil then EdArr.Free;
+      end;
+
+      { mcp_servers[].env -- matched by server name. }
+      EdArr  := Edited.ChildArray('mcp_servers');
+      try
+        if Current <> nil then CurArr := Current.ChildArray('mcp_servers') else CurArr := nil;
+        try
+          RestoreArray(EdArr, CurArr, 'env');
+        finally
+          if CurArr <> nil then CurArr.Free;
+        end;
+      finally
+        if EdArr <> nil then EdArr.Free;
+      end;
+
+      { gateway.token -- single object. }
+      EdGw := Edited.ChildObject('gateway');
+      if EdGw <> nil then
+      try
+        if IsMask(EdGw.GetStr('token', '')) then
+        begin
+          if Current <> nil then CurGw := Current.ChildObject('gateway') else CurGw := nil;
+          if CurGw <> nil then
+          try
+            EdGw.PutStr('token', CurGw.GetStr('token', ''));
+          finally
+            CurGw.Free;
+          end
+          else
+            EdGw.PutStr('token', '');
+        end;
+      finally
+        EdGw.Free;
+      end;
+
+      { web_search.api_key -- single object. }
+      EdGw := Edited.ChildObject('web_search');
+      if EdGw <> nil then
+      try
+        if IsMask(EdGw.GetStr('api_key', '')) then
+        begin
+          if Current <> nil then CurGw := Current.ChildObject('web_search') else CurGw := nil;
+          if CurGw <> nil then
+          try
+            EdGw.PutStr('api_key', CurGw.GetStr('api_key', ''));
+          finally
+            CurGw.Free;
+          end
+          else
+            EdGw.PutStr('api_key', '');
+        end;
+      finally
+        EdGw.Free;
+      end;
+
+      Result := Edited.ToJSON;
+    finally
+      if Current <> nil then Current.Free;
+    end;
+  finally
+    Edited.Free;
+  end;
 end;
 
 function FormatVersion: string;
