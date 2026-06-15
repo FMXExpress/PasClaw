@@ -490,6 +490,7 @@ function TDockerShellBackend.Exec(const SessionId, Cmd, WorkDir: string;
 var
   Args: TStringList;
   i: Integer;
+  Err: string;
 begin
   Output := '';
 
@@ -512,13 +513,33 @@ begin
     Result := -1;
     Exit;
   end;
+  { Lazy start: the container is spawned on first use, not at boot, so a
+    down/slow/wedged Docker only affects chats that actually run a shell
+    tool -- never serve/agent startup. DockerCliReachable is the bounded
+    health probe; SpawnContainer does the (unbounded) pull+run. Both stay
+    isolation-safe -- no host fallback. Surface either failure as the tool
+    result rather than crashing the agent loop. (If the operator pre-spawned
+    via StartShellSession, IsRunning is already true and we skip straight to
+    exec.) }
   if not IsRunning(SessionId) then
   begin
-    Output :=
-      'shell-backend(docker): container for SessionId "' + SessionId +
-      '" is not running. StartSession may have failed; check docker daemon.';
-    Result := -1;
-    Exit;
+    if not DockerCliReachable(Err) then
+    begin
+      Output := 'shell-backend(docker): ' + Err +
+                ' -- start Docker, or set shell_backend=local in config.json.';
+      Result := -1;
+      Exit;
+    end;
+    try
+      SpawnContainer(SessionId);
+    except
+      on E: Exception do
+      begin
+        Output := 'shell-backend(docker): ' + E.Message;
+        Result := -1;
+        Exit;
+      end;
+    end;
   end;
 
   { Build `docker exec [-e ...] [-w ...] <name> sh -c <Cmd>` as an argv

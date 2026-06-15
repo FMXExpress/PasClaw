@@ -486,15 +486,18 @@ begin
   Handlers.Quiet := A.Quiet;
   { Allocate a one-shot session id so the active shell backend
     (docker, ssh, ...) actually isolates this turn. Codex P1 on
-    PR #233: without StartShellSession the docker backend's empty-
-    SessionId fallback dispatched to RunOneShot ON THE HOST,
-    silently bypassing the isolation the operator asked for. The
-    id is purely for the backend (one-shot turns aren't persisted
-    as PasClaw sessions); short prefix avoids docker's 64-char
-    container-name cap. }
+    PR #233: an empty SessionId let the docker backend fall back to
+    RunOneShot ON THE HOST, bypassing isolation -- so we always set a
+    real id here. The id is purely for the backend (one-shot turns
+    aren't persisted as PasClaw sessions); short prefix avoids docker's
+    64-char container-name cap.
+    Lazy docker (PR #286): we set the current session id but no longer
+    pre-spawn the container -- TDockerShellBackend.Exec spawns it on the
+    first shell tool call, so a turn that never shells out never touches
+    Docker and `pasclaw agent` doesn't stall at startup when Docker is
+    down/slow. }
   OneShotSessionId := 'oneshot-' + FormatDateTime('yyyymmdd-hhnnss', Now) +
                       '-' + IntToHex(Random(1 shl 24), 6);
-  StartShellSession(OneShotSessionId);
   SetCurrentSessionId(OneShotSessionId);
   try
     SetLength(Msgs, 1);
