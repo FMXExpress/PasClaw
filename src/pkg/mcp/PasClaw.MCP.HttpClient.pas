@@ -40,7 +40,7 @@ type
                        TimeoutSeconds: Integer; out RespJSON: string): Boolean;
   public
     constructor Create(const Name, URL, AuthHeader: string);
-    function Connect(TimeoutSeconds: Integer; out ErrMsg: string): Boolean; override;
+    function Connect(TimeoutMs: Integer; out ErrMsg: string): Boolean; override;
     function ListTools(out Tools: TMCPToolArray; out ErrMsg: string): Boolean; override;
     function CallTool(const ToolName, ArgsJSON: string;
                       out ResultText, ErrMsg: string): Boolean; override;
@@ -250,7 +250,7 @@ begin
   Result := RespJSON <> '';
 end;
 
-function TMCPHttpClient.Connect(TimeoutSeconds: Integer; out ErrMsg: string): Boolean;
+function TMCPHttpClient.Connect(TimeoutMs: Integer; out ErrMsg: string): Boolean;
 var
   Params, ServerInfo: TJsonObject;
   Caps: TJsonObject;
@@ -268,7 +268,14 @@ begin
     ServerInfo.PutStr('version', '0.1');
     Params.PutObject('clientInfo', ServerInfo);
     Params.PutObject('capabilities', Caps);
-    if not RoundTrip('initialize', Params.ToJSON, TimeoutSeconds, Resp) then
+    { TMCPBaseClient.Connect's contract is MILLISECONDS (the stdio client
+      and the bridge's 30*1000 call site agree); RoundTrip -> PostJSON take
+      SECONDS. Convert (ceil, min 1s). The prior code passed raw ms as
+      seconds, so a streamable-HTTP server like Replicate -- which streams
+      its reply then holds the socket open -- got an ~8h read timeout and
+      hung `serve`/`agent` at startup instead of timing out and salvaging
+      the streamed body. }
+    if not RoundTrip('initialize', Params.ToJSON, (TimeoutMs + 999) div 1000, Resp) then
     begin
       ErrMsg := 'initialize failed';
       Exit(False);
