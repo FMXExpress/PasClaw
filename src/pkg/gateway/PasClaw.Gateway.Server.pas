@@ -133,6 +133,12 @@ type
                                 ARequest: TIdHTTPRequestInfo;
                                 AResp: TIdHTTPResponseInfo);
     procedure HandleConfig(AResp: TIdHTTPResponseInfo);
+    { PUT /v1/config -- persist an edited config from the web UI. Secrets
+      sent back as the mask placeholder are preserved from the current
+      config (client can set keys, never view them). Writes config.json;
+      changes apply on the next restart. }
+    procedure HandleConfigWrite(ARequest: TIdHTTPRequestInfo;
+                                AResp: TIdHTTPResponseInfo);
     procedure HandleStats(AResp: TIdHTTPResponseInfo);
     { Durable chat sessions, shared with the TUI / `pasclaw session`
       via PasClaw.Session.Store -- web chats land in the same
@@ -150,6 +156,12 @@ type
     { Fill S.Messages + title/model/provider from a messages/title/model
       JSON body and Save. Raises on invalid JSON; caller maps to 400. }
     procedure SaveSessionFromBody(S: TSession; const Body: string);
+    { pasclaw.dev Code Vault browse (read-only). Search on /v1/vault?q=,
+      read one entry's detail on /v1/vault/<slug>. Proxies the server-side
+      PasClaw.Vault.Client so the browser needn't reach pasclaw.dev directly. }
+    procedure HandleVaultSearch(ARequest: TIdHTTPRequestInfo;
+                                AResp: TIdHTTPResponseInfo);
+    procedure HandleVaultGet(const Doc: string; AResp: TIdHTTPResponseInfo);
     procedure HandleFSList(ARequest: TIdHTTPRequestInfo;
                             AResp: TIdHTTPResponseInfo);
     procedure HandleFSRead(ARequest: TIdHTTPRequestInfo;
@@ -240,6 +252,7 @@ uses
   PasClaw.Agent.Compact,
   PasClaw.Agent.Prompt,
   PasClaw.Identity,
+  PasClaw.Vault.Client,     { SearchVault / GetVaultEntry -- /v1/vault browse }
   PasClaw.Gateway.ToolView,
   PasClaw.Gateway.WebUI,
   PasClaw.Gateway.Auth,     { CheckGatewayAuth -- bearer-token middleware
@@ -773,10 +786,13 @@ begin
     else if (ARequest.Command = 'GET')  and (Copy(Doc, 1, 11) = '/v1/memory/') then
       HandleMemoryRead(Doc, ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/config')  then HandleConfig(AResponse)
+    else if (ARequest.Command = 'PUT')  and (Doc = '/v1/config')  then HandleConfigWrite(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/stats')   then HandleStats(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/sessions') then HandleSessionsList(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/sessions') then HandleSessionCreate(ARequest, AResponse)
     else if (Copy(Doc, 1, 13) = '/v1/sessions/') then HandleSessionItem(Doc, ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/vault') then HandleVaultSearch(ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Copy(Doc, 1, 10) = '/v1/vault/') then HandleVaultGet(Doc, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs')      then HandleFSList(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs/read') then HandleFSRead(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/logs')    then HandleLogs(AContext, ARequest, AResponse)
@@ -1155,7 +1171,7 @@ begin
         if Item = nil then Continue;
         try
           if Item.GetStr('api_key', '') <> '' then
-            Item.PutStr('api_key', '•••');
+            Item.PutStr('api_key', MaskedSecretPlaceholder);
         finally
           Item.Free;
         end;
@@ -1177,7 +1193,7 @@ begin
             to bearer tokens. Mask the whole string when non-empty;
             the UI just needs "is configured" signal, not the literal. }
           if Item.GetStr('env', '') <> '' then
-            Item.PutStr('env', '•••');
+            Item.PutStr('env', MaskedSecretPlaceholder);
         finally
           Item.Free;
         end;
@@ -1194,7 +1210,18 @@ begin
     if Item <> nil then
     try
       if Item.GetStr('token', '') <> '' then
-        Item.PutStr('token', '•••');
+        Item.PutStr('token', MaskedSecretPlaceholder);
+    finally
+      Item.Free;
+    end;
+
+    { web_search.api_key is a secret too (Brave/Tavily/Perplexity keys);
+      it was previously emitted in cleartext. Mask it like the others. }
+    Item := Root.ChildObject('web_search');
+    if Item <> nil then
+    try
+      if Item.GetStr('api_key', '') <> '' then
+        Item.PutStr('api_key', MaskedSecretPlaceholder);
     finally
       Item.Free;
     end;
@@ -1203,6 +1230,84 @@ begin
   finally
     Root.Free;
   end;
+end;
+
+procedure TGatewayServer.HandleConfigWrite(ARequest: TIdHTTPRequestInfo;
+                                           AResp: TIdHTTPResponseInfo);
+var
+  Body, Merged, BaseJSON, Path: string;
+  Tmp, Cur: TConfig;
+begin
+  Body := ReadRequestBody(ARequest);
+  if Trim(Body) = '' then
+  begin
+    WriteJSON(AResp, 400, '{"error":"empty body"}');
+    Exit;
+  end;
+  { Merge masked secrets against the CURRENT on-disk config, not the
+    startup snapshot FCfg. FCfg is never refreshed after a save (config
+    changes apply on restart), so using it here would restore stale
+    secrets: a second save -- after an earlier save then Reload -- would
+    revert any key set in the meantime back to its boot-time value. Read
+    config.json directly (resolving env-var markers the same way
+    LoadConfig does) without LoadConfig's process-global side effects.
+    Fall back to FCfg when the file is missing/unreadable. }
+  BaseJSON := FCfg.ToJSON;
+  Path := GetConfigPath;
+  if FileExists(Path) then
+  begin
+    Cur := TConfig.Create;
+    try
+      try
+        Cur.FromJSON(ExpandEnvVarsInJSON(ReadFileText(Path)));
+        BaseJSON := Cur.ToJSON;
+      except
+        on E: Exception do { keep the FCfg fallback } ;
+      end;
+    finally
+      Cur.Free;
+    end;
+  end;
+  { Restore masked secrets from the base config so a client that never
+    saw the real api_key / env / token values can't blank them by sending
+    the mask back. Raises EArgumentException on unparseable JSON. }
+  try
+    Merged := RestoreMaskedConfigSecrets(Body, BaseJSON);
+  except
+    on E: Exception do
+    begin
+      WriteJSON(AResp, 400, '{"error":"' + JsonEscape(E.Message) + '"}');
+      Exit;
+    end;
+  end;
+  { Validate by round-tripping through TConfig before touching disk, so a
+    malformed edit is rejected rather than persisted. }
+  Tmp := TConfig.Create;
+  try
+    try
+      Tmp.FromJSON(Merged);
+    except
+      on E: Exception do
+      begin
+        WriteJSON(AResp, 400, '{"error":"invalid config: ' + JsonEscape(E.Message) + '"}');
+        Exit;
+      end;
+    end;
+    try
+      SaveConfig(Tmp);
+    except
+      on E: Exception do
+      begin
+        WriteJSON(AResp, 500, '{"error":"' + JsonEscape(E.Message) + '"}');
+        Exit;
+      end;
+    end;
+  finally
+    Tmp.Free;
+  end;
+  LogInfo('gateway: config.json updated via /v1/config (restart to apply)');
+  WriteJSON(AResp, 200,
+    '{"saved":true,"note":"saved to config.json -- restart pasclaw for changes to take effect"}');
 end;
 
 procedure TGatewayServer.HandleStats(AResp: TIdHTTPResponseInfo);
@@ -1530,6 +1635,96 @@ begin
     end;
   finally
     S.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleVaultSearch(ARequest: TIdHTTPRequestInfo;
+                                           AResp: TIdHTTPResponseInfo);
+var
+  Query, Err: string;
+  Limit, i: Integer;
+  Results: TVaultResultArray;
+  Root, Item: TJsonObject;
+  Arr: TJsonArray;
+begin
+  Query := Trim(ARequest.Params.Values['q']);
+  if Query = '' then
+  begin
+    WriteJSON(AResp, 400, '{"error":"missing query: ?q="}');
+    Exit;
+  end;
+  Limit := StrToIntDef(ARequest.Params.Values['limit'], 20);
+  if Limit < 1 then Limit := 1;
+  if Limit > 50 then Limit := 50;
+  if not SearchVault(Query, Limit, Results, Err) then
+  begin
+    WriteJSON(AResp, 502, '{"error":"' + JsonEscape(Err) + '"}');
+    Exit;
+  end;
+  Root := TJsonObject.Create;
+  try
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Results) do
+    begin
+      Item := TJsonObject.Create;
+      Item.PutStr('slug',        Results[i].Slug);
+      Item.PutStr('displayName', Results[i].DisplayName);
+      Item.PutStr('summary',     Results[i].Summary);
+      Item.PutStr('category',    Results[i].Category);
+      Item.PutStr('tags',        Results[i].Tags);
+      Item.PutStr('repoUrl',     Results[i].RepoURL);
+      Item.PutStr('version',     Results[i].Version);
+      Arr.AddObject(Item);
+    end;
+    Root.PutArray('results', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleVaultGet(const Doc: string;
+                                        AResp: TIdHTTPResponseInfo);
+var
+  Slug, Err: string;
+  Detail: TVaultDetail;
+  Root: TJsonObject;
+begin
+  Slug := Copy(Doc, Length('/v1/vault/') + 1, MaxInt);
+  { Slugs are flat identifiers -- refuse any path-y input. }
+  if (Slug = '') or (Pos('/', Slug) > 0) or (Pos('\', Slug) > 0) or
+     (Pos('..', Slug) > 0) then
+  begin
+    WriteJSON(AResp, 400, '{"error":"bad slug"}');
+    Exit;
+  end;
+  if not GetVaultEntry(Slug, Detail, Err) then
+  begin
+    if Err = 'not found' then WriteJSON(AResp, 404, '{"error":"not found"}')
+    else WriteJSON(AResp, 502, '{"error":"' + JsonEscape(Err) + '"}');
+    Exit;
+  end;
+  Root := TJsonObject.Create;
+  try
+    Root.PutStr ('slug',                Detail.Slug);
+    Root.PutStr ('displayName',         Detail.DisplayName);
+    Root.PutStr ('summary',             Detail.Summary);
+    Root.PutStr ('descriptionMarkdown', Detail.DescriptionMarkdown);
+    Root.PutStr ('category',            Detail.Category);
+    Root.PutStr ('tags',                Detail.Tags);
+    Root.PutStr ('repoUrl',             Detail.RepoURL);
+    Root.PutStr ('homepageUrl',         Detail.HomepageURL);
+    Root.PutStr ('license',             Detail.License);
+    Root.PutStr ('delphiVersions',      Detail.DelphiVersions);
+    Root.PutStr ('packageManager',      Detail.PackageManager);
+    Root.PutStr ('installSnippet',      Detail.InstallSnippet);
+    Root.PutStr ('latestVersion',       Detail.LatestVersion);
+    Root.PutInt ('viewCount',           Detail.ViewCount);
+    Root.PutBool('blocked',             Detail.Blocked);
+    Root.PutBool('suspicious',          Detail.Suspicious);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
   end;
 end;
 
@@ -2601,7 +2796,7 @@ begin
         LogWarn('chat/completions: tool loop hit MaxIterations=%d (%d pending tool call(s), %d content chars)',
                 [FMaxIter, Length(Loop.LastResp.ToolCalls), Length(Loop.Content)]);
       end
-      else if Loop.Content = '' then
+      else if Trim(Loop.Content) = '' then
       begin
         Loop.Content := Format('(no content returned by the model; finish_reason=%s)',
                                 [FinishReason]);
@@ -2691,7 +2886,7 @@ begin
       LogWarn('chat/completions: tool loop hit MaxIterations=%d (%d pending tool call(s), %d content chars)',
               [FMaxIter, Length(Loop.LastResp.ToolCalls), Length(Loop.Content)]);
     end
-    else if Loop.Content = '' then
+    else if Trim(Loop.Content) = '' then
     begin
       { Loop exited normally with no pending tool calls but the model
         produced no text. Some streaming clients can't represent that. }
@@ -4281,7 +4476,7 @@ begin
         LogWarn('responses: tool loop hit MaxIterations=%d (%d pending tool call(s), %d content chars)',
                 [FMaxIter, Length(Loop.LastResp.ToolCalls), Length(Loop.Content)]);
       end
-      else if Loop.Content = '' then
+      else if Trim(Loop.Content) = '' then
       begin
         Loop.Content := Format('(no content returned by the model; finish_reason=%s)',
                                 [FinishReason]);

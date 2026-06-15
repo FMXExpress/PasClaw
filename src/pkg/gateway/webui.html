@@ -215,8 +215,37 @@
   /* ===== Settings tab ===== */
   #config-view{font:12px ui-monospace,monospace;white-space:pre-wrap;color:#cdd6ff;
     padding:.85rem;margin:0;overflow:auto;flex:1}
+  .settings-pane{flex:1;display:flex;flex-direction:column;min-width:0;padding:.7rem .85rem;gap:.5rem}
+  .settings-bar{display:flex;align-items:center;gap:.5rem}
+  .settings-status{font-size:11px;color:var(--mut)}
+  .settings-status.ok{color:var(--green)} .settings-status.err{color:var(--red)}
+  .settings-hint{margin:0;font-size:11px;color:var(--mut)}
+  .settings-hint code{background:rgba(2,5,15,.6);border:1px solid rgba(255,255,255,.1);
+    border-radius:5px;padding:.02rem .25rem}
+  #config-edit{flex:1;min-height:0;resize:none;background:rgba(2,5,15,.72);color:#cdd6ff;
+    caret-color:var(--cyan);border:1px solid rgba(32,246,255,.3);border-radius:10px;
+    padding:.7rem .8rem;font:12px ui-monospace,monospace;line-height:1.5;outline:none;
+    white-space:pre;overflow:auto}
+  #config-edit:focus{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
 
   .empty-pane{margin:auto;color:var(--mut);text-align:center;padding:2rem;font-size:12px}
+
+  /* ===== Vault tab ===== */
+  .vault-search-row{margin:0 0 .45rem}
+  .vault-search-row input{width:100%;background:rgba(2,5,15,.72);color:var(--fg);
+    caret-color:var(--cyan);border:1px solid rgba(32,246,255,.3);border-radius:8px;
+    padding:.4rem .55rem;font:inherit;font-size:12px;outline:none}
+  .vault-search-row input:focus{border-color:var(--cyan);box-shadow:var(--glow-cyan)}
+  .vault-item .sub{display:block;color:var(--mut);font-size:10px;margin-top:.15rem;
+    white-space:normal;overflow:hidden;text-overflow:ellipsis}
+  #vault-view{white-space:normal}
+  #vault-view h2{margin:.1rem 0 .3rem;font-size:1.2em;color:var(--cyan)}
+  #vault-view p{margin:.35rem 0}
+  #vault-view a{color:var(--cyan);text-decoration:underline;word-break:break-all}
+  #vault-view ul{margin:.3rem 0;padding-left:1.3rem}
+  .vault-meta{display:flex;flex-wrap:wrap;gap:.3rem;margin:.4rem 0}
+  .vault-meta .badge{background:rgba(143,92,255,.16);color:var(--violet);
+    border:1px solid rgba(143,92,255,.4)}
 
   /* ===== Markdown rendering inside assistant bubbles ===== */
   .bub.md{white-space:normal}
@@ -283,6 +312,7 @@
     <button data-tab="mcp">MCP</button>
     <button data-tab="cron">Cron</button>
     <button data-tab="skills">Skills</button>
+    <button data-tab="vault">Vault</button>
     <button data-tab="logs">Logs</button>
     <button data-tab="stats">Stats</button>
     <button data-tab="settings">Settings</button>
@@ -388,6 +418,19 @@
     </div>
   </div>
 
+  <div id="tab-vault" class="tab">
+    <div class="two-col">
+      <div class="col-list">
+        <form id="vault-form" class="vault-search-row">
+          <input id="vault-q" type="search" autocomplete="off"
+                 placeholder="search Code Vault (Object Pascal)…">
+        </form>
+        <div id="vault-list"></div>
+      </div>
+      <div class="col-view" id="vault-view"><div class="empty-pane">Search the pasclaw.dev Code Vault for Object Pascal samples and components.</div></div>
+    </div>
+  </div>
+
   <div id="tab-logs" class="tab">
     <div class="logs-bar">
       <span class="meta" id="logs-status">disconnected</span>
@@ -461,7 +504,17 @@
   </div>
 
   <div id="tab-settings" class="tab">
-    <pre id="config-view">loading config…</pre>
+    <div class="settings-pane">
+      <div class="settings-bar">
+        <button class="primary" id="config-save">Save</button>
+        <button class="icon-btn" id="config-reload">Reload</button>
+        <span id="config-status" class="settings-status"></span>
+      </div>
+      <p class="settings-hint">Edits write <code>config.json</code> on the server and apply on the next
+        restart. Secrets are shown as <code>•••</code> — leave them to keep the current value, or type a
+        new one to change it (you can set keys here, never read them).</p>
+      <textarea id="config-edit" spellcheck="false" autocomplete="off">loading config…</textarea>
+    </div>
   </div>
 </main>
 
@@ -1252,6 +1305,70 @@ const tabLoaders = {
     await render();
   },
 
+  vault() {
+    /* The Code Vault is a remote searchable corpus (pasclaw.dev), not a
+       fixed list -- wire the search form once and let the operator query. */
+    const form = $("#vault-form"), q = $("#vault-q");
+    const list = $("#vault-list"), view = $("#vault-view");
+    if (!form || form.dataset.wired) { if (q) q.focus(); return; }
+    form.dataset.wired = "1";
+
+    async function openEntry(slug) {
+      view.innerHTML = `<div class="empty-pane">loading…</div>`;
+      try {
+        const d = await (await gwFetch("/v1/vault/" + encodeURIComponent(slug))).json();
+        if (d.error) { view.innerHTML = `<div class="empty-pane">${escapeHtml(d.error)}</div>`; return; }
+        const meta = [];
+        if (d.category)       meta.push(escapeHtml(d.category));
+        if (d.latestVersion)  meta.push("v" + escapeHtml(d.latestVersion));
+        if (d.license)        meta.push(escapeHtml(d.license));
+        if (d.delphiVersions) meta.push(escapeHtml(d.delphiVersions));
+        let html = `<h2>${escapeHtml(d.displayName || d.slug)}</h2>`;
+        if (meta.length)
+          html += `<div class="vault-meta">` + meta.map(x => `<span class="badge">${x}</span>`).join("") + `</div>`;
+        if (d.suspicious || d.blocked)
+          html += `<div class="vault-meta"><span class="badge off">${d.blocked ? "blocked" : "flagged"}</span></div>`;
+        if (d.repoUrl)
+          html += /^https?:\/\//i.test(d.repoUrl)
+            ? `<p><a href="${escapeHtml(d.repoUrl)}" target="_blank" rel="noopener">${escapeHtml(d.repoUrl)}</a></p>`
+            : `<p>${escapeHtml(d.repoUrl)}</p>`;
+        if (d.installSnippet)
+          html += renderMarkdown("```\n" + d.installSnippet + "\n```");
+        html += renderMarkdown(d.descriptionMarkdown || d.summary || "");
+        view.innerHTML = html;
+        wireCopyButtons(view);
+      } catch (e) { view.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; }
+    }
+
+    async function runSearch() {
+      const query = q.value.trim();
+      if (!query) return;
+      list.innerHTML = `<div class="empty-pane">searching…</div>`;
+      try {
+        const j = await (await gwFetch("/v1/vault?q=" + encodeURIComponent(query))).json();
+        if (j.error) { list.innerHTML = `<div class="empty-pane">${escapeHtml(j.error)}</div>`; return; }
+        const rows = j.results || [];
+        if (!rows.length) { list.innerHTML = `<div class="empty-pane">no matches</div>`; return; }
+        list.innerHTML = "";
+        for (const r of rows) {
+          const el = document.createElement("div");
+          el.className = "item vault-item";
+          el.innerHTML = `<div><span>${escapeHtml(r.displayName || r.slug)}</span>`
+                       + (r.summary ? `<span class="sub">${escapeHtml(r.summary)}</span>` : "") + `</div>`;
+          el.addEventListener("click", () => {
+            $$("#vault-list .item").forEach(x => x.classList.remove("active"));
+            el.classList.add("active");
+            openEntry(r.slug);
+          });
+          list.appendChild(el);
+        }
+      } catch (e) { list.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; }
+    }
+
+    form.addEventListener("submit", e => { e.preventDefault(); runSearch(); });
+    q.focus();
+  },
+
   logs() {
     const view = $("#logs-view"); const status = $("#logs-status");
     view.textContent = "";
@@ -1270,11 +1387,44 @@ const tabLoaders = {
   },
 
   async settings() {
-    const view = $("#config-view");
-    try {
-      const j = await (await gwFetch("/v1/config")).json();
-      view.textContent = JSON.stringify(j, null, 2);
-    } catch (e) { view.textContent = String(e); }
+    const edit = $("#config-edit"), status = $("#config-status");
+    const save = $("#config-save"), reload = $("#config-reload");
+
+    function setStatus(msg, cls) {
+      status.textContent = msg || "";
+      status.className = "settings-status" + (cls ? " " + cls : "");
+    }
+    async function load() {
+      setStatus("loading…");
+      try {
+        const j = await (await gwFetch("/v1/config")).json();
+        edit.value = JSON.stringify(j, null, 2);
+        setStatus("");
+      } catch (e) { edit.value = String(e); setStatus("load failed", "err"); }
+    }
+    async function doSave() {
+      let parsed;
+      try { parsed = JSON.parse(edit.value); }
+      catch (e) { setStatus("not valid JSON: " + e.message, "err"); return; }
+      save.disabled = true; setStatus("saving…");
+      try {
+        const r = await gwFetch("/v1/config", {
+          method: "PUT", headers: { "content-type": "application/json" },
+          body: JSON.stringify(parsed) });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok && j.saved) setStatus(j.note || "saved", "ok");
+        else setStatus("save failed: " + (j.error || ("http " + r.status)), "err");
+      } catch (e) { setStatus("save failed: " + e, "err"); }
+      finally { save.disabled = false; }
+    }
+
+    /* Wire once; subsequent tab visits just reload the current config. */
+    if (!edit.dataset.wired) {
+      edit.dataset.wired = "1";
+      save.addEventListener("click", doSave);
+      reload.addEventListener("click", load);
+    }
+    await load();
   },
 
   /* Stats: aggregates per-session counters across $PASCLAW_HOME/workspace/
