@@ -884,6 +884,14 @@ begin
     begin
       if not NewProviderFromConfig(FConfig, FProviderName, FProvider, Err) then
         RaiseError('provider unavailable: ' + Err);
+      { Keep the config's notion of the default provider in lockstep with
+        the backend we actually booted. Without this, FConfig.DefaultProvider
+        still names the on-disk default, so /v1/models (and anything else
+        that keys off it, e.g. /v1/status) would enumerate/advertise the
+        wrong provider's catalog while /v1/chat runs FProviderName. The
+        SetProvider override path already does this via ApplyProviderOverride;
+        the bare ProviderName property must too. Codex P2 on PR #282. }
+      FConfig.DefaultProvider := FProviderName;
     end
     else if not NewDefaultProvider(FConfig, FProvider, Err) then
       RaiseError('provider unavailable: ' + Err);
