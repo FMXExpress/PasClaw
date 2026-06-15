@@ -126,6 +126,18 @@ uses
 const
   KeepAliveCmd = 'tail -f /dev/null';
 
+  { Timeouts (ms) for `docker` invocations, so a wedged Docker daemon
+    fails fast with a clear error instead of hanging serve/agent at
+    startup (Windows: Docker Desktop mid-restart is the classic case).
+    `docker info` is the boot-time reachability probe -- keep it short.
+    `docker run` is allowed a generous window so a first-run image pull
+    isn't killed mid-download. `docker stop` is bounded so cleanup on
+    exit can't wedge either. Exec (model commands) stays unbounded --
+    legitimate builds run long. }
+  DockerInfoTimeoutMs = 12000;     { DockerCliReachable probe }
+  DockerRunTimeoutMs  = 180000;    { SpawnContainer (allows image pull) }
+  DockerStopTimeoutMs = 15000;     { StopContainer }
+
 function DefaultDockerBackendOptions: TDockerBackendOptions;
 begin
   Result.Image      := 'debian:bookworm-slim';
@@ -210,7 +222,7 @@ begin
     Args.Add('info');
     Args.Add('--format');
     Args.Add('{{.ServerVersion}}');
-    ExitCode := RunArgvCapture('docker', Args, '', Out_);
+    ExitCode := RunArgvCapture('docker', Args, '', Out_, DockerInfoTimeoutMs);
   finally
     Args.Free;
   end;
@@ -399,7 +411,7 @@ begin
 
     LogInfo('shell-backend(docker): spawning %s (image=%s)',
             [ContainerName(SessionId), FOpts.Image]);
-    ExitCode := RunArgvCapture('docker', Args, '', Out_);
+    ExitCode := RunArgvCapture('docker', Args, '', Out_, DockerRunTimeoutMs);
   finally
     Args.Free;
   end;
@@ -431,7 +443,7 @@ begin
     Args.Add('--time');
     Args.Add('2');
     Args.Add(ContainerName(SessionId));
-    RunArgvCapture('docker', Args, '', Out_);
+    RunArgvCapture('docker', Args, '', Out_, DockerStopTimeoutMs);
   finally
     Args.Free;
   end;

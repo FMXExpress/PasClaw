@@ -153,7 +153,8 @@ function RunOneShotWithEnv(const Cmd, WorkingDir: string;
    text out of a host shell entirely. *)
 function RunArgvCapture(const Exe: string; Args: TStrings;
                         const WorkingDir: string;
-                        out Output: string): Integer;
+                        out Output: string;
+                        TimeoutMs: Integer = 0): Integer;
 
 (* Decode a byte buffer captured from a child shell's stdout/stderr
    into a UTF-8-encoded Pascal string suitable for tool output. On
@@ -1052,21 +1053,30 @@ begin
 end;
 
 function RunArgvCapture(const Exe: string; Args: TStrings;
-                        const WorkingDir: string; out Output: string): Integer;
+                        const WorkingDir: string; out Output: string;
+                        TimeoutMs: Integer = 0): Integer;
 { Cross-platform: built on the TStdioProcess abstraction (TProcess on
   FPC, CreateProcessW on Delphi/Windows, fork+execvp on Delphi/POSIX) so
   there is exactly one implementation. MergeStderr mirrors RunOneShot's
   combined-capture contract. Drain pattern matches RunOneShot and
   MCP.StdioClient: read what's available, and only stop once the pipe is
   empty AND the child has been reaped (Running populates ExitCode on the
-  transition). }
+  transition).
+
+  TimeoutMs > 0 caps total wall-clock time: on expiry the child is
+  Terminated and 124 is returned. This is what keeps a wedged Docker
+  daemon (`docker info` that never returns) from hanging serve/agent at
+  startup -- the Docker backend passes a bounded timeout for every
+  `docker` invocation. 0 (default) preserves the historical unbounded
+  behaviour for every other caller. }
 var
   P: TStdioProcess;
   M: TMemoryStream;
   Buf: array[0..ReadBufferSize - 1] of Byte;
   Bytes: TBytes;
   N, Total: Integer;
-  Overflow: Boolean;
+  Overflow, TimedOut: Boolean;
+  StartT: TDateTime;
 begin
   Result := -1;
   Output := '';
@@ -1076,6 +1086,8 @@ begin
     if not P.Spawn(Exe, Args, {MergeStderr=}True, WorkingDir) then Exit;
     Total := 0;
     Overflow := False;
+    TimedOut := False;
+    StartT := Now;
     while True do
     begin
       N := P.ReadAvailable(Buf, SizeOf(Buf));
@@ -1094,9 +1106,18 @@ begin
         Break
       else
         Sleep(20);
+      { Wall-clock cap. 86400000 = ms/day; Now's resolution (~10-16ms) is
+        ample for the second-scale timeouts callers use. }
+      if (TimeoutMs > 0) and
+         (Trunc((Now - StartT) * 86400000.0) >= TimeoutMs) then
+      begin
+        TimedOut := True;
+        P.Terminate;
+        Break;
+      end;
     end;
-    if Overflow then
-      Result := 124          { killed for exceeding OneShotMaxBytes; matches RunOneShot }
+    if Overflow or TimedOut then
+      Result := 124          { killed (byte cap or timeout); matches RunOneShot }
     else
       Result := P.ExitCode;
     if M.Size > 0 then
@@ -1106,6 +1127,8 @@ begin
       M.ReadBuffer(Bytes[0], M.Size);
       Output := DecodeShellOutputBytes(Bytes, Length(Bytes));
     end;
+    if TimedOut then
+      Output := Trim(Output + Format(' (timed out after %d ms)', [TimeoutMs]));
   finally
     M.Free;
     P.Free;
