@@ -61,6 +61,10 @@ type
     DefaultModel: string;            { empty when the provider has no obvious default }
     Auth:         TAuthScheme;
     Notes:        string;            { one-line description, shown in onboard menus }
+    ChatPath:     string;            { path appended to the base for chat
+                                       completions; '/v1/chat/completions' for
+                                       OpenAI-shaped APIs, but e.g. Perplexity
+                                       uses '/chat/completions' (no /v1) }
   end;
 
   TProviderSpecArray = array of TProviderSpec;
@@ -91,7 +95,8 @@ end;
 
 function MkSpec(const Kind, DisplayName: string; Family: TProtocolFamily;
                 const DefaultBase, DefaultModel: string;
-                const Auth: TAuthScheme; const Notes: string): TProviderSpec;
+                const Auth: TAuthScheme; const Notes: string;
+                const ChatPath: string = '/v1/chat/completions'): TProviderSpec;
 begin
   Result.Kind         := Kind;
   Result.DisplayName  := DisplayName;
@@ -100,13 +105,14 @@ begin
   Result.DefaultModel := DefaultModel;
   Result.Auth         := Auth;
   Result.Notes        := Notes;
+  Result.ChatPath     := ChatPath;
 end;
 
 { The catalog. New providers go here -- one entry per row, no other code
   change required for OpenAI-compatible endpoints. }
 function BuildCatalog: TProviderSpecArray;
 begin
-  SetLength(Result, 21);
+  SetLength(Result, 22);
   Result[0]  := MkSpec('anthropic',  'Anthropic',
                        pfAnthropic,  'https://api.anthropic.com',
                        'claude-opus-4-7',
@@ -233,11 +239,21 @@ begin
                        'grok-4-fast',
                        MkAuth(asBearer),
                        'Grok 4 Fast / Grok 3 / Grok Code Fast 1');
-  (* Cohere intentionally not in this catalog: their chat API lives
-     at /v2/chat rather than /v1/chat/completions, and the pfOpenAI
-     provider hard-codes the OpenAI path. Lands when a TCohereProvider
-     gets written or when pfOpenAI grows a path-override knob; until
-     then the placeholder row was more confusing than helpful. *)
+  { Perplexity speaks the OpenAI chat shape but at /chat/completions
+    (no /v1) -- handled via the ChatPath override. Sonar models are
+    web-grounded; no separate /models discovery endpoint, so the catalog
+    DefaultModel stands in. }
+  Result[21] := MkSpec('perplexity', 'Perplexity (Sonar)',
+                       pfOpenAI,     'https://api.perplexity.ai',
+                       'sonar',
+                       MkAuth(asBearer),
+                       'Sonar / Sonar Pro / Sonar Reasoning (web-grounded)',
+                       '/chat/completions');
+  (* Cohere intentionally not in this catalog: their chat API lives at
+     /v2/chat with a non-OpenAI request/response body, so the ChatPath
+     override alone isn't enough -- it needs a real TCohereProvider (or
+     pfOpenAI body adapters). Until then a placeholder row is more
+     confusing than helpful. *)
 end;
 
 function LookupProvider(const Kind: string; out Spec: TProviderSpec): Boolean;
