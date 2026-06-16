@@ -48,6 +48,9 @@ uses
   PasClaw.Agent.Compact,
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
+  PasClaw.Skills.Manage,
+  PasClaw.Skills.Disclosure,
+  PasClaw.Agent.SkillDistiller,
   PasClaw.Agent.Prompt,
   PasClaw.Agent.Subagent,
   PasClaw.Agent.SubagentBg,
@@ -469,11 +472,15 @@ begin
 
   Reg := nil;
   if not A.NoTools then
+  begin
     Reg := NewBuiltinRegistry(not A.NoHashline, Cfg.VaultToolsEnabled,
                               HasConfiguredWebSearchProvider(Cfg),
                               Cfg.WebFetchEnabled,
                               (Cfg.ToolOutputCap > 0)
                                 or Cfg.CondenseReversible);
+    RegisterSkillManageTool(Reg, Cfg);
+    RegisterSkillDisclosureTools(Reg, Cfg);
+  end;
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   BgCoord := MaybeRegisterBackgroundSpawnTools(Cfg, Provider, Reg, Model);
@@ -518,6 +525,12 @@ begin
         PrintLn(Loop.Content)
       else
         PrintLn(MaybeRender(Cfg, Loop.Content));
+      { Self-improving skills: after the user-facing reply is printed,
+        consider distilling this turn into a reusable skill. No-op
+        unless the distiller is enabled and the turn was non-trivial. }
+      MaybeDistillTurn(Cfg, Provider, Model, Prompt, Loop.Content,
+                       DistillTranscriptFromMessages(Loop.FinalMessages),
+                       Loop.ToolCallsDispatched);
     end
     else
     begin
@@ -891,11 +904,15 @@ begin
   if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
   Reg := nil;
   if not A.NoTools then
+  begin
     Reg := NewBuiltinRegistry(not A.NoHashline, Cfg.VaultToolsEnabled,
                               HasConfiguredWebSearchProvider(Cfg),
                               Cfg.WebFetchEnabled,
                               (Cfg.ToolOutputCap > 0)
                                 or Cfg.CondenseReversible);
+    RegisterSkillManageTool(Reg, Cfg);
+    RegisterSkillDisclosureTools(Reg, Cfg);
+  end;
   MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
   Spawn := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   BgCoord := MaybeRegisterBackgroundSpawnTools(Cfg, Provider, Reg, Model);

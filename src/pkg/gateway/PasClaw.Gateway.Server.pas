@@ -134,6 +134,16 @@ type
     procedure HandleSkillSearch(ARequest: TIdHTTPRequestInfo;
                                 AResp: TIdHTTPResponseInfo);
     procedure HandleSkillRemove(const Doc: string; AResp: TIdHTTPResponseInfo);
+    { Agent-authored skill approval surface (self-improving skills).
+      GET  /v1/skills/pending          -- list staged skills + their diffs
+      POST /v1/skills/pending/approve  -- commit one (JSON body: id)
+      POST /v1/skills/pending/reject   -- discard one (JSON body: id)
+      Bearer-gated like every other /v1/* route. Approvals take effect
+      on the next restart -- the registry is built at startup. }
+    procedure HandleSkillsPending(AResp: TIdHTTPResponseInfo);
+    procedure HandleSkillPendingAction(const Approve: Boolean;
+                                       ARequest: TIdHTTPRequestInfo;
+                                       AResp: TIdHTTPResponseInfo);
     { Knowledge-base browse + ingest for the web UI. GET /v1/kb lists the
       indexed sources and totals; POST /v1/kb/upload writes a document into
       workspace/kb-files and (re)indexes it; GET /v1/kb/search?q= runs the
@@ -277,6 +287,7 @@ uses
   PasClaw.Logger,
   PasClaw.Utils,
   PasClaw.Skills.Loader,
+  PasClaw.Skills.Pending,
   PasClaw.Skills.Install,   { InstallSkillTarget / RemoveSkillFiles / IsSafeSkillName }
   PasClaw.Skills.ClawHub,  { SearchClawHub -- catalog search (clawhub.ai) }
   PasClaw.Skills.PasClawHub, { SearchPasClawHub -- catalog search (pasclaw.dev) }
@@ -820,6 +831,9 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/mcp')     then HandleMCPList(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/cron')    then HandleCronList(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/skills/search') then HandleSkillSearch(ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/skills/pending') then HandleSkillsPending(AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/skills/pending/approve') then HandleSkillPendingAction(True, ARequest, AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/skills/pending/reject')  then HandleSkillPendingAction(False, ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/skills')  then HandleSkillsList(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/skills')  then HandleSkillInstall(ARequest, AResponse)
     else if (ARequest.Command = 'DELETE') and (Copy(Doc, 1, 11) = '/v1/skills/') then HandleSkillRemove(Doc, AResponse)
@@ -1047,6 +1061,73 @@ begin
   finally
     Root.Free;
   end;
+end;
+
+procedure TGatewayServer.HandleSkillsPending(AResp: TIdHTTPResponseInfo);
+var
+  Root, Item: TJsonObject;
+  Arr: TJsonArray;
+  Pend: TPendingSkillArray;
+  i: Integer;
+  Content, Err: string;
+begin
+  Root := TJsonObject.Create;
+  try
+    Arr := TJsonArray.Create;
+    Pend := ListPending(GetHome);
+    for i := 0 to High(Pend) do
+    begin
+      Item := TJsonObject.Create;
+      Item.PutStr('id',      Pend[i].Id);
+      Item.PutStr('action',  Pend[i].Action);
+      Item.PutStr('name',    Pend[i].Name);
+      Item.PutStr('created', Pend[i].Created);
+      { Inline the proposed SKILL.md so the web UI can show a preview
+        without a second round-trip. }
+      if ReadPending(GetHome, Pend[i].Id, Content, Err) then
+        Item.PutStr('content', Content)
+      else
+        Item.PutStr('content', '');
+      Arr.AddObject(Item);
+    end;
+    Root.PutArray('pending', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleSkillPendingAction(const Approve: Boolean;
+                                                  ARequest: TIdHTTPRequestInfo;
+                                                  AResp: TIdHTTPResponseInfo);
+var
+  Body, Id, Err: string;
+  O: TJsonObject;
+  Ok: Boolean;
+begin
+  Body := ReadRequestBody(ARequest);
+  Id := '';
+  if Body <> '' then
+  begin
+    O := TJsonObject.Parse(Body);
+    if O <> nil then
+    try
+      Id := Trim(O.GetStr('id', ''));
+    finally
+      O.Free;
+    end;
+  end;
+  if Id = '' then
+  begin
+    WriteJSON(AResp, 400, '{"error":"missing id"}');
+    Exit;
+  end;
+  if Approve then Ok := ApprovePending(GetHome, Id, FCfg, Err)
+  else            Ok := RejectPending(GetHome, Id, Err);
+  if Ok then
+    WriteJSON(AResp, 200, '{"status":"ok","id":"' + JsonEscape(Id) + '"}')
+  else
+    WriteJSON(AResp, 400, '{"error":"' + JsonEscape(Err) + '"}');
 end;
 
 procedure TGatewayServer.HandleSkillInstall(ARequest: TIdHTTPRequestInfo;

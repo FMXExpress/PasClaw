@@ -95,6 +95,15 @@ function ParseSkillMD(const FilePath: string;
                       out Spec: TSkillSpec;
                       out ErrMsg: string): Boolean;
 
+{ Parse a SKILL.md from an in-memory string rather than a file. SourcePath
+  is recorded as Spec.Source / used to derive Spec.Dir (pass the eventual
+  on-disk path, or '' for a not-yet-saved candidate). Same validation as
+  ParseSkillMD. Used by PasClaw.Skills.Manage to validate model-authored
+  content before it ever touches disk. }
+function ParseSkillMDText(const Text, SourcePath: string;
+                          out Spec: TSkillSpec;
+                          out ErrMsg: string): Boolean;
+
 implementation
 
 uses
@@ -301,7 +310,20 @@ end;
 function ParseSkillMD(const FilePath: string; out Spec: TSkillSpec;
                       out ErrMsg: string): Boolean;
 var
-  Text, Line, Key, Value: string;
+  Text: string;
+begin
+  Result := False;
+  ErrMsg := '';
+  if not FileExists(FilePath) then begin ErrMsg := 'no such file'; Exit; end;
+  Text := ReadFileText(FilePath);
+  if Text = '' then begin ErrMsg := 'empty file'; Exit; end;
+  Result := ParseSkillMDText(Text, FilePath, Spec, ErrMsg);
+end;
+
+function ParseSkillMDText(const Text, SourcePath: string; out Spec: TSkillSpec;
+                          out ErrMsg: string): Boolean;
+var
+  Line, Key, Value: string;
   Lines: TStringList;
   i, StartIdx, EndIdx: Integer;
   Body: TStringList;
@@ -309,9 +331,7 @@ var
 begin
   Result := False;
   ErrMsg := '';
-  if not FileExists(FilePath) then begin ErrMsg := 'no such file'; Exit; end;
-  Text := ReadFileText(FilePath);
-  if Text = '' then begin ErrMsg := 'empty file'; Exit; end;
+  if Text = '' then begin ErrMsg := 'empty content'; Exit; end;
 
   Lines := TStringList.Create;
   Body  := TStringList.Create;
@@ -376,8 +396,8 @@ begin
     Spec.Schema      := '{"type":"object"}';
     Spec.Shell       := '';
     Spec.Prompt      := '';
-    Spec.Dir         := ExtractFileDir(FilePath);
-    Spec.Source      := FilePath;
+    Spec.Dir         := ExtractFileDir(SourcePath);
+    Spec.Source      := SourcePath;
 
     InFrontmatter := True;
     for i := StartIdx + 1 to EndIdx - 1 do

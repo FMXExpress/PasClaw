@@ -45,7 +45,8 @@ uses
   PasClaw.Skills.Loader,
   PasClaw.Skills.GitHub,
   PasClaw.Skills.ClawHub,
-  PasClaw.Skills.PasClawHub;
+  PasClaw.Skills.PasClawHub,
+  PasClaw.Skills.Pending;
 
 procedure Help;
 begin
@@ -58,6 +59,10 @@ begin
   PrintLn('  install <slug>                      Try pasclaw.dev first, then ClawHub.');
   PrintLn('  remove <name>                       Remove from config.json + workspace.');
   PrintLn('  search <query>                      Search pasclaw.dev + ClawHub for skills.');
+  PrintLn('  pending                             List agent-authored skills awaiting approval.');
+  PrintLn('  diff <id>                           Show a pending skill''s proposed SKILL.md.');
+  PrintLn('  approve <id>                        Commit a pending skill (effective next run).');
+  PrintLn('  reject <id>                         Discard a pending skill.');
 end;
 
 function IsGitHubTarget(const Target: string): Boolean;
@@ -612,6 +617,78 @@ begin
   Result := 0;
 end;
 
+function DoPending: Integer;
+var
+  Pend: TPendingSkillArray;
+  i: Integer;
+begin
+  Pend := ListPending(GetHome);
+  if Length(Pend) = 0 then
+  begin
+    PrintLn('(no pending skills)');
+    PrintLn(Ansi.Dim + '  Agent-authored skills land here when ' +
+            'self_improving_skills.auto_approve is false.' + Ansi.Reset);
+    Exit(0);
+  end;
+  PrintLn(Ansi.Bold + 'id                      action   name' + Ansi.Reset);
+  for i := 0 to High(Pend) do
+    PrintLn(Format('%-22s  %-7s  %s', [Pend[i].Id, Pend[i].Action, Pend[i].Name]));
+  PrintLn;
+  PrintLn(Ansi.Dim + 'Inspect: pasclaw skills diff <id>   ' +
+          'Commit: pasclaw skills approve <id>   ' +
+          'Discard: pasclaw skills reject <id>' + Ansi.Reset);
+  Result := 0;
+end;
+
+function DoDiff(const Argv: array of string): Integer;
+var
+  Content, ErrMsg: string;
+begin
+  if Length(Argv) < 2 then begin PrintLn('Usage: pasclaw skills diff <id>'); Exit(1); end;
+  if not ReadPending(GetHome, Argv[1], Content, ErrMsg) then
+  begin
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + ErrMsg);
+    Exit(1);
+  end;
+  PrintLn(Content);
+  Result := 0;
+end;
+
+function DoApprove(const Argv: array of string): Integer;
+var
+  Cfg: TConfig;
+  ErrMsg: string;
+begin
+  if Length(Argv) < 2 then begin PrintLn('Usage: pasclaw skills approve <id>'); Exit(1); end;
+  Cfg := LoadConfig;
+  try
+    if not ApprovePending(GetHome, Argv[1], Cfg, ErrMsg) then
+    begin
+      PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'approve failed: ' + ErrMsg);
+      Exit(1);
+    end;
+  finally
+    Cfg.Free;
+  end;
+  PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'approved ' + Argv[1] +
+          ' -- effective on next ' + Ansi.Bold + 'pasclaw agent' + Ansi.Reset + ' run.');
+  Result := 0;
+end;
+
+function DoReject(const Argv: array of string): Integer;
+var
+  ErrMsg: string;
+begin
+  if Length(Argv) < 2 then begin PrintLn('Usage: pasclaw skills reject <id>'); Exit(1); end;
+  if not RejectPending(GetHome, Argv[1], ErrMsg) then
+  begin
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'reject failed: ' + ErrMsg);
+    Exit(1);
+  end;
+  PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'discarded ' + Argv[1] + '.');
+  Result := 0;
+end;
+
 function Cmd_Skills_Run(const Argv: array of string): Integer;
 var
   Sub: string;
@@ -622,6 +699,10 @@ begin
   else if Sub = 'install' then Result := DoInstall(Argv)
   else if Sub = 'remove'  then Result := DoRemove(Argv)
   else if Sub = 'search'  then Result := DoSearch(Argv)
+  else if Sub = 'pending' then Result := DoPending
+  else if Sub = 'diff'    then Result := DoDiff(Argv)
+  else if Sub = 'approve' then Result := DoApprove(Argv)
+  else if Sub = 'reject'  then Result := DoReject(Argv)
   else begin Help; Result := 1; end;
 end;
 

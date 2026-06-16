@@ -318,6 +318,9 @@ uses
   PasClaw.Tools.MemoryFetch,
   PasClaw.Tools.OutputCache,
   PasClaw.Tools.SendMessage,
+  PasClaw.Skills.Manage,
+  PasClaw.Skills.Disclosure,
+  PasClaw.Agent.SkillDistiller,
   PasClaw.Tools.Sandbox,
   PasClaw.Skills.Loader,
   PasClaw.Agent.Prompt,
@@ -506,6 +509,10 @@ begin
   RegisterSendMessageTool(FRegistry);
   Skills := LoadSkillManifests(GetHome);
   RegisterSkills(FRegistry, Skills);
+  { Self-improving skills: skill_manage self-gates on
+    Cfg.SelfImprovingSkills.SelfManage. }
+  RegisterSkillManageTool(FRegistry, FConfig);
+  RegisterSkillDisclosureTools(FRegistry, FConfig);
   if FUseMCP then
     FMCPClients := ConnectMCPServers(FConfig, FRegistry);
   { Subagent spawn tool -- installs only when the operator declared
@@ -668,6 +675,15 @@ begin
   Result := ChatHistory(Msgs, Reply, ErrMsg);
 end;
 
+function LastUserMessage(const History: array of TMessage): string;
+var
+  i: Integer;
+begin
+  Result := '';
+  for i := High(History) downto 0 do
+    if History[i].Role = mrUser then Exit(History[i].Content);
+end;
+
 function TPasClawAgent.ChatHistory(const History: array of TMessage;
                                     out Reply, ErrMsg: string): Boolean;
 var
@@ -726,7 +742,17 @@ begin
   try
     Result := RunToolLoop(Cfg, Msgs, Loop);
     if Result then
-      Reply := Loop.Content
+    begin
+      Reply := Loop.Content;
+      { Self-improving skills: consider distilling this turn. No-op
+        unless Cfg.SelfImprovingSkills.Distiller is enabled and the
+        turn was non-trivial. Uses the last user message as the
+        request and the loop's final history as the trace. }
+      MaybeDistillTurn(FConfig, FProvider, ModelName,
+                       LastUserMessage(History), Reply,
+                       DistillTranscriptFromMessages(Loop.FinalMessages),
+                       Loop.ToolCallsDispatched);
+    end
     else
       ErrMsg := 'tool loop failed';
   except
@@ -923,6 +949,8 @@ begin
     RegisterSendMessageTool(FRegistry);
     Skills := LoadSkillManifests(GetHome);
     RegisterSkills(FRegistry, Skills);
+    RegisterSkillManageTool(FRegistry, FConfig);
+    RegisterSkillDisclosureTools(FRegistry, FConfig);
   end;
 
   SetLength(FMCPClients, 0);

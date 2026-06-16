@@ -222,7 +222,7 @@ begin
   AppendFile('Yesterday (' + YesterdayStr + ')', JoinPath(MemoryDir, YesterdayStr + '.md'));
 end;
 
-function BuildSkillsSection: string;
+function BuildSkillsSection(ProgressiveDisclosure: Boolean): string;
 var
   Skills: TSkillSpecArray;
   i: Integer;
@@ -237,6 +237,21 @@ begin
     Exit;
   end;
   if Length(Skills) = 0 then Exit;
+
+  { Progressive disclosure (Cfg.SelfImprovingSkills.ProgressiveDisclosure):
+    don't inline the catalog. Point the model at skills_list / skill_view
+    so the prompt stays small no matter how many skills accrue. The
+    count is cheap and useful framing. }
+  if ProgressiveDisclosure then
+  begin
+    Result :=
+      '## Skills' + sLineBreak + sLineBreak +
+      Format('You have %d skill(s) available. Call `skills_list` to see ' +
+             'their names + descriptions, then `skill_view(name)` to load ' +
+             'the full instructions for the one that fits the task. Do this ' +
+             'before reinventing a procedure from scratch.', [Length(Skills)]);
+    Exit;
+  end;
 
   HasCallable  := False;
   HasKnowledge := False;
@@ -382,7 +397,8 @@ begin
     --no-tools (and component UseTools=False) bypass RegisterSkills, so
     advertising the catalog would be a lie. }
   if ToolsEnabled then
-    Result := AppendSection(Result, BuildSkillsSection);
+    Result := AppendSection(Result, BuildSkillsSection(
+                (Cfg <> nil) and Cfg.SelfImprovingSkills.ProgressiveDisclosure));
   Result := AppendSection(Result, BuildRulesSection(ToolsEnabled));
   if Trim(UserSys) <> '' then
     Result := AppendSection(Result, Trim(UserSys));
