@@ -580,6 +580,78 @@ begin
   else Result := Sum div N;
 end;
 
+(* --export <path>: write the full per-run breakdown + aggregates as
+   JSON. Shape designed for downstream charting -- one "runs" array
+   with every TBenchRunStat row, one "aggregates" array with the per-
+   profile means + failure counts the on-screen table shows. The top-
+   level carries task / runs_requested / started_at so a chart-builder
+   can label the run. *)
+procedure WriteExport(const Path, Task: string;
+                      RunsRequested: Integer;
+                      const StartedAt: string;
+                      const Runs: TBenchRunStatArray;
+                      const Aggs: TBenchAggArray);
+var
+  Root, Item: TJsonObject;
+  RunsArr, AggsArr: TJsonArray;
+  i: Integer;
+begin
+  Root := TJsonObject.Create;
+  try
+    Root.PutStr ('task',           Task);
+    Root.PutInt ('runs_requested', RunsRequested);
+    Root.PutStr ('started_at',     StartedAt);
+
+    RunsArr := TJsonArray.Create;
+    for i := 0 to High(Runs) do
+    begin
+      Item := TJsonObject.Create;
+      Item.PutStr('profile',              Runs[i].Profile);
+      Item.PutInt('run_idx',              Runs[i].RunIdx);
+      Item.PutStr('session_id',           Runs[i].SessionId);
+      Item.PutInt('exit_code',            Runs[i].ExitCode);
+      Item.PutInt('wall_ms',              Runs[i].WallMs);
+      Item.PutInt('input_tokens',         Runs[i].InputTokens);
+      Item.PutInt('output_tokens',        Runs[i].OutputTokens);
+      Item.PutInt('cache_read_tokens',    Runs[i].CacheRead);
+      Item.PutInt('cache_created_tokens', Runs[i].CacheCreated);
+      Item.PutInt('turns',                Runs[i].Turns);
+      Item.PutInt('tool_calls',           Runs[i].ToolCalls);
+      RunsArr.AddObject(Item);
+    end;
+    Root.PutArray('runs', RunsArr);
+
+    AggsArr := TJsonArray.Create;
+    for i := 0 to High(Aggs) do
+    begin
+      Item := TJsonObject.Create;
+      Item.PutStr('profile',              Aggs[i].Profile);
+      Item.PutInt('runs',                 Aggs[i].Runs);
+      Item.PutInt('failures',             Aggs[i].Failures);
+      Item.PutInt('sum_wall_ms',          Aggs[i].SumWallMs);
+      Item.PutInt('sum_input_tokens',     Aggs[i].SumInputTokens);
+      Item.PutInt('sum_output_tokens',    Aggs[i].SumOutputTokens);
+      Item.PutInt('sum_cache_read',       Aggs[i].SumCacheRead);
+      Item.PutInt('sum_turns',            Aggs[i].SumTurns);
+      Item.PutInt('sum_tool_calls',       Aggs[i].SumToolCalls);
+      { Pre-computed per-profile means so a chart-builder doesn't have
+        to redo the divisions. Same Mean() helper the on-screen table
+        uses, so the values match exactly. }
+      Item.PutInt('mean_wall_ms',         Mean(Aggs[i].SumWallMs, Aggs[i].Runs));
+      Item.PutInt('mean_input_tokens',    Mean(Aggs[i].SumInputTokens, Aggs[i].Runs));
+      Item.PutInt('mean_output_tokens',   Mean(Aggs[i].SumOutputTokens, Aggs[i].Runs));
+      Item.PutInt('mean_turns',           Mean(Aggs[i].SumTurns, Aggs[i].Runs));
+      Item.PutInt('mean_tool_calls',      Mean(Aggs[i].SumToolCalls, Aggs[i].Runs));
+      AggsArr.AddObject(Item);
+    end;
+    Root.PutArray('aggregates', AggsArr);
+
+    WriteFileText(Path, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
 procedure PrintSummary(const Aggs: TBenchAggArray);
 var
   i: Integer;
@@ -613,16 +685,18 @@ var
   Run: TBenchRunStat;
   Aggs: TBenchAggArray;
   AllRuns: TBenchRunStatArray;
-  ErrMsg: string;
+  ErrMsg, ExportPath, StartedAt: string;
   Bodies: TProfileBodyArray;
 begin
   if HasFlag(Argv, '--help') or (Length(Argv) < 2) then
   begin
-    PrintLn('Usage: pasclaw profile bench --task "<prompt>" --profiles <a,b,c> [--runs N]');
+    PrintLn('Usage: pasclaw profile bench --task "<prompt>" --profiles <a,b,c> [--runs N] [--export <path>]');
     PrintLn;
     PrintLn('  --task <s>          The prompt to send to each profile + run.');
     PrintLn('  --profiles <list>   Comma-separated profile names.');
     PrintLn('  --runs N            How many times to run each profile (default 3).');
+    PrintLn('  --export <path>     Also dump the full per-run breakdown to a JSON file');
+    PrintLn('                      ({"runs":[...], "aggregates":[...]}) for charting.');
     PrintLn;
     PrintLn('Spawns `pasclaw agent --profile <p> --quiet --session <id> -m <task>`');
     PrintLn('for each pair; reads the session JSON for stats; prints a comparison table.');
@@ -651,6 +725,9 @@ begin
     Runs := StrToIntDef(RunsArg, 3);
   if Runs < 1 then Runs := 1;
 
+  ExportPath := '';
+  FindBenchArg(Argv, '--export', ExportPath);
+
   { Validate every profile up front so we don't burn provider calls
     before discovering a typo. }
   for ProfileIdx := 0 to High(Profiles) do
@@ -660,10 +737,14 @@ begin
       Exit(1);
     end;
 
+  StartedAt := FormatDateTime('yyyy"-"mm"-"dd"T"hh":"nn":"ss"Z"', Now);
+
   PrintLn(Ansi.Bold + 'profile bench' + Ansi.Reset);
   PrintLn('  task:     ' + TaskArg);
   PrintLn('  profiles: ' + ProfilesArg);
   PrintLn('  runs:     ' + IntToStr(Runs));
+  if ExportPath <> '' then
+    PrintLn('  export:   ' + ExportPath);
   PrintLn;
 
   SetLength(AllRuns, 0);
@@ -686,6 +767,19 @@ begin
     end;
 
   PrintSummary(Aggs);
+
+  if ExportPath <> '' then
+  try
+    WriteExport(ExportPath, TaskArg, Runs, StartedAt, AllRuns, Aggs);
+    PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'wrote ' + ExportPath +
+            Ansi.Dim + Format('  (%d run(s), %d profile(s))',
+                              [Length(AllRuns), Length(Aggs)]) + Ansi.Reset);
+  except
+    on E: Exception do
+      PrintLn(Ansi.Red + '✗ ' + Ansi.Reset +
+              'failed to write ' + ExportPath + ': ' + E.Message);
+  end;
+
   Result := 0;
 end;
 
