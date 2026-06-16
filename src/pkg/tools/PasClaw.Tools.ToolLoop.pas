@@ -1070,28 +1070,37 @@ begin
                                               'ERROR: ' + Dispatches[Batch[j]].Err)
         else
         begin
-          { JSON-aware condensation runs FIRST: a tool that returned
-            a 200 KB JSON array of mostly-repetitive rows collapses
-            to a structural summary (first N + "...K more items" +
-            last 1) the model can still reason about, which is
-            usually small enough to skip the byte-budget truncate
-            below entirely. No-op when the body doesn't parse as
-            JSON or when condensation wouldn't shrink it.
-            See PasClaw.Condense.JSON.
+          { JSON-aware condensation, gated on the reversible-condensation
+            switch (Codex PR #289 P1). When CondenseReversibleEnabled
+            is False the stash footer no-ops, but MaybeCondenseJSON was
+            still rewriting a 200 KB JSON tool result into a structural
+            summary -- and without the footer the model lost any way
+            to retrieve the original bytes. Skip the condenser
+            entirely so "off" means the raw JSON reaches the model,
+            not condensed-without-recovery.
+
+            When the switch IS on: a tool that returned a 200 KB
+            JSON array of mostly-repetitive rows collapses to a
+            structural summary (first N + "...K more items" + last 1)
+            the model can still reason about, which is usually small
+            enough to skip the byte-budget truncate below entirely.
+            No-op when the body doesn't parse as JSON or when
+            condensation wouldn't shrink it. See PasClaw.Condense.JSON.
 
             Reversible condensation (CCR, headroom-inspired): when
             MaybeCondenseJSON actually shrinks the body, stash the
             original under a handle so the model can call
             tool_output_get to retrieve it. The model defaults to the
-            structural view; the escape hatch is one tool call away.
-            No-op when SetCondenseReversible(False) is in effect or
-            the saving is below the floor. }
-          OrigBody := Dispatches[Batch[j]].ResultText;
-          Dispatches[Batch[j]].ResultText :=
-            MaybeCondenseJSON(OrigBody);
-          Dispatches[Batch[j]].ResultText :=
-            AttachReversibleStashFooter(OrigBody,
-                                        Dispatches[Batch[j]].ResultText);
+            structural view; the escape hatch is one tool call away. }
+          if CondenseReversibleEnabled then
+          begin
+            OrigBody := Dispatches[Batch[j]].ResultText;
+            Dispatches[Batch[j]].ResultText :=
+              MaybeCondenseJSON(OrigBody);
+            Dispatches[Batch[j]].ResultText :=
+              AttachReversibleStashFooter(OrigBody,
+                                          Dispatches[Batch[j]].ResultText);
+          end;
 
           { Promptware chokepoint 1 of 3: tool output is the widest
             door for indirect prompt injection (fetched pages, read

@@ -557,6 +557,279 @@ begin
   PrintLn('  ' + Ansi.Dim + '  pasclaw heartbeat' + Ansi.Reset);
 end;
 
+(* ---------------- Loop-shaping prompts (PR #289) ----------------
+
+   Six knobs that change what the model sees in its tool loop. The
+   PR-#289 audit found these were the loop-affecting features without
+   an onboarding question; each is wired in here defaulting to its
+   TConfig.Create value so pressing Enter through onboarding leaves the
+   defaults intact.
+
+     PromptCondenseReversible   default N  (Cfg default off)
+     PromptToolOutputCap        default N  (Cfg default off / 0)
+     PromptOrientTaskAware      default N  (Cfg default off)
+     PromptPromptware           default Y  (Cfg default on)
+     PromptWebFetch             default Y  (Cfg default on)
+     PromptSelfImprovingSkills  4 nested questions, all default N
+
+   All six follow the existing PromptStatsCollection / PromptVaultTools
+   shape: a bold header, two dim explainer lines, the y/N or Y/n
+   prompt, and a green ✓ / dim "(skipped)" tail line on either branch. *)
+
+procedure PromptCondenseReversible(Cfg: TConfig);
+{ Reversible condensation (CCR) -- when a JSON or shell-filter
+  condenser actually shrinks a tool result, stash the original under a
+  fresh tool_output_get handle and replace the in-context body with a
+  structural view + a footer naming the handle. Off by default since
+  PR #289: silently rewriting `ls -l` or `grep -r` output into a
+  shape view surprised operators on fresh deploys. The condenser
+  itself is harmless; the visibility change isn't. }
+var
+  Choice: string;
+begin
+  PrintLn;
+  PrintLn(Ansi.Bold + 'Condense long tool output' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'Replace long ls/grep/JSON tool results with a structural summary + a ' +
+    'handle the' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'model can dereference. Off by default -- the raw output goes to the ' +
+    'model verbatim.' + Ansi.Reset);
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Enable reversible condensation [y/N]: ')));
+  if (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Cfg.CondenseReversible := True;
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' reversible condensation enabled');
+  end
+  else
+  begin
+    Cfg.CondenseReversible := False;
+    PrintLn('  ' + Ansi.Dim + '(skipped -- raw tool output preserved; flip condense_reversible in config.json to enable later)' + Ansi.Reset);
+  end;
+end;
+
+procedure PromptToolOutputCap(Cfg: TConfig);
+{ Byte cap on per-tool-result bytes that enter the LLM context. When
+  > 0, RunToolLoop diverts overlong tool outputs into PasClaw.Tools.
+  OutputCache and replaces the in-context body with a head + tail
+  snippet plus a handle. Off by default; 8 KiB is the recommended
+  starting point (~2K tokens). Independent of CondenseReversible --
+  the cap is structural (cap N bytes), the condenser is semantic
+  (compress an N-byte JSON to a shape). }
+var
+  Choice, Input: string;
+  Cap: Integer;
+begin
+  PrintLn;
+  PrintLn(Ansi.Bold + 'Cap tool output size' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'Truncate any tool result above N bytes to head + tail + a handle the ' +
+    'model' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'can read back. Useful when a runaway grep can dump megabytes into the ' +
+    'context.' + Ansi.Reset);
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Cap tool output [y/N]: ')));
+  if (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Input := Trim(ReadLineEcho('  Cap (bytes) [8192]: '));
+    Cap := StrToIntDef(Input, 8192);
+    if Cap < 256 then Cap := 256;
+    Cfg.ToolOutputCap := Cap;
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + Format(' tool output cap = %d bytes', [Cap]));
+  end
+  else
+  begin
+    Cfg.ToolOutputCap := 0;
+    PrintLn('  ' + Ansi.Dim + '(skipped -- tool output is uncapped; flip tool_output_cap in config.json to enable later)' + Ansi.Reset);
+  end;
+end;
+
+procedure PromptOrientTaskAware(Cfg: TConfig);
+{ Task-aware MEMORY orientation: instead of injecting the whole
+  MEMORY.md + daily notes into the system prompt, slice them to the
+  sections that lexically overlap the user's task hint. Off by
+  default -- the whole-file injection is the documented contract;
+  this is a context-budget optimisation for operators with large
+  MEMORY.md files. }
+var
+  Choice: string;
+begin
+  PrintLn;
+  PrintLn(Ansi.Bold + 'Task-aware MEMORY slicing' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'Slice MEMORY.md + daily notes to the sections that overlap the task ' +
+    'instead of' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'injecting whole files. Useful once your MEMORY.md outgrows the always-inject ' +
+    'budget.' + Ansi.Reset);
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Enable task-aware orient [y/N]: ')));
+  if (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Cfg.OrientTaskAware := True;
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' task-aware orient enabled');
+  end
+  else
+  begin
+    Cfg.OrientTaskAware := False;
+    PrintLn('  ' + Ansi.Dim + '(skipped -- whole-file MEMORY injection stays the default)' + Ansi.Reset);
+  end;
+end;
+
+procedure PromptPromptware(Cfg: TConfig);
+{ Prompt-injection scan (PasClaw.Promptware). Lowercase substring
+  scan over tool output / recalled memory / skill descriptions that
+  annotates matches with a warning banner. On by default -- it's a
+  free defense layer; the prompt exists so an operator wanting raw
+  unannotated tool output can flip it off without grepping config. }
+var
+  Choice: string;
+begin
+  PrintLn;
+  PrintLn(Ansi.Bold + 'Promptware defense' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'Annotate tool output / recalled memory / skill descriptions matching ' +
+    'known' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'prompt-injection patterns ("ignore previous instructions" etc.) with a ' +
+    'warning.' + Ansi.Reset);
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Enable promptware scan [Y/n]: ')));
+  if (Choice = '') or (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Cfg.PromptwareEnabled := True;
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' promptware scan enabled');
+  end
+  else
+  begin
+    Cfg.PromptwareEnabled := False;
+    PrintLn('  ' + Ansi.Dim + '(skipped -- raw tool output passes through unannotated)' + Ansi.Reset);
+  end;
+end;
+
+procedure PromptWebFetch(Cfg: TConfig);
+{ web_fetch / memory_fetch tools. On by default since PR #289 --
+  picoclaw historically uses shell + curl, but PasClaw runs in
+  sandboxed containers where curl isn't always available. The
+  prompt is so operators not wanting outbound HTTP from the agent
+  can flip it off. }
+var
+  Choice: string;
+begin
+  PrintLn;
+  PrintLn(Ansi.Bold + 'web_fetch tool' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'Let the agent fetch URLs through a tracked tool (size cap, save_to, ' +
+    'tracing)' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'instead of shelling out to curl. memory_fetch is registered alongside ' +
+    'when on.' + Ansi.Reset);
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Enable web_fetch [Y/n]: ')));
+  if (Choice = '') or (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Cfg.WebFetchEnabled := True;
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' web_fetch / memory_fetch enabled');
+  end
+  else
+  begin
+    Cfg.WebFetchEnabled := False;
+    PrintLn('  ' + Ansi.Dim + '(skipped -- the model uses shell + curl for outbound HTTP)' + Ansi.Reset);
+  end;
+end;
+
+procedure PromptSelfImprovingSkills(Cfg: TConfig);
+{ Four nested toggles for the Hermes-style self-improving skills
+  (PR #288). Each defaults N because the feature touches:
+    - what tools the model has (skills_manage)
+    - how the system prompt is built (progressive disclosure)
+    - whether an extra LLM call happens per qualifying turn (distiller)
+    - the auto-approve gate on every model-authored skill write
+  An operator opting in for one piece usually doesn't want the
+  others by default. So we ask separately. Skipping the top-level
+  switch skips all four. }
+var
+  Choice: string;
+begin
+  PrintLn;
+  PrintLn(Ansi.Bold + 'Self-improving skills' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'Let the agent author / edit / refine skills on disk during a turn ' +
+    '(Hermes-style).' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'Off by default. See docs/skills.md for the safety model.' +
+    Ansi.Reset);
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Configure self-improving skills now [y/N]: ')));
+  if not ((Choice = 'y') or (Choice = 'yes')) then
+  begin
+    { Codex PR #289 P2: re-running onboarding on a config that already
+      had any sub-flag on must be able to turn them off. The original
+      "Exit" left previously-set True values intact, so a user who
+      enabled the feature once couldn't ever disable it via onboarding.
+      Reset all four explicitly. }
+    Cfg.SelfImprovingSkills.SelfManage            := False;
+    Cfg.SelfImprovingSkills.ProgressiveDisclosure := False;
+    Cfg.SelfImprovingSkills.Distiller.Enabled     := False;
+    Cfg.SelfImprovingSkills.AutoApprove           := False;
+    PrintLn('  ' + Ansi.Dim + '(skipped -- all four sub-flags reset to off)' + Ansi.Reset);
+    Exit;
+  end;
+
+  { Same preserve-old-true bug at each nested else: explicitly assign
+    False when the operator answers N, so a previously-on sub-flag
+    actually flips off on the re-run. }
+  Choice := Trim(LowerCase(ReadLineEcho('  Register skills_manage so the model can author skills [y/N]: ')));
+  if (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Cfg.SelfImprovingSkills.SelfManage := True;
+    PrintLn('    ' + Ansi.Green + '✓' + Ansi.Reset + ' skills_manage registered');
+  end
+  else
+  begin
+    Cfg.SelfImprovingSkills.SelfManage := False;
+    PrintLn('    ' + Ansi.Dim + '(skipped)' + Ansi.Reset);
+  end;
+
+  Choice := Trim(LowerCase(ReadLineEcho('  Use progressive disclosure (skills_list/skills_view) instead of the full SKILLS prompt [y/N]: ')));
+  if (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Cfg.SelfImprovingSkills.ProgressiveDisclosure := True;
+    PrintLn('    ' + Ansi.Green + '✓' + Ansi.Reset + ' progressive disclosure on');
+  end
+  else
+  begin
+    Cfg.SelfImprovingSkills.ProgressiveDisclosure := False;
+    PrintLn('    ' + Ansi.Dim + '(skipped)' + Ansi.Reset);
+  end;
+
+  Choice := Trim(LowerCase(ReadLineEcho('  Enable the post-turn distiller (one extra LLM call per qualifying turn) [y/N]: ')));
+  if (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Cfg.SelfImprovingSkills.Distiller.Enabled := True;
+    PrintLn('    ' + Ansi.Green + '✓' + Ansi.Reset + ' distiller enabled (min_tool_calls=5; model inherits the turn)');
+  end
+  else
+  begin
+    Cfg.SelfImprovingSkills.Distiller.Enabled := False;
+    PrintLn('    ' + Ansi.Dim + '(skipped)' + Ansi.Reset);
+  end;
+
+  Choice := Trim(LowerCase(ReadLineEcho('  Auto-approve agent-authored skill writes [y/N]: ')));
+  if (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Cfg.SelfImprovingSkills.AutoApprove := True;
+    PrintLn('    ' + Ansi.Green + '✓' + Ansi.Reset + ' auto-approve on (writes commit straight to workspace/skills/)');
+  end
+  else
+  begin
+    Cfg.SelfImprovingSkills.AutoApprove := False;
+    PrintLn('    ' + Ansi.Dim + '(skipped -- writes stage under .pending/; run "pasclaw skills approve" to commit)' + Ansi.Reset);
+  end;
+end;
+
 procedure PromptStatsCollection(Cfg: TConfig);
 { Opt-in toggle for persisting per-session usage stats (tokens,
   turns, tool calls, truncation savings) into the session JSON so
@@ -1067,6 +1340,16 @@ begin
     PromptVaultTools(Cfg);
     PromptVectorSearch(Cfg);
     PromptKnowledgebase(Cfg);
+    { Loop-shaping prompts (PR #289). Order is intentional: each
+      successive prompt is less likely to be wanted by an operator
+      who said yes to the previous one, so a quick "enter, enter,
+      enter" leaves the minimal-surprise defaults in place. }
+    PromptWebFetch(Cfg);
+    PromptPromptware(Cfg);
+    PromptCondenseReversible(Cfg);
+    PromptToolOutputCap(Cfg);
+    PromptOrientTaskAware(Cfg);
+    PromptSelfImprovingSkills(Cfg);
     PromptStatsCollection(Cfg);
     PromptCheckpoints(Cfg);
     PromptShellBackend(Cfg);
