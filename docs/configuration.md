@@ -8,11 +8,16 @@ A **profile** is a small JSON patch that gets merged into `TConfig` *before* you
 
 | Profile | What it flips |
 |---|---|
+| `stock` | Explicit no-op profile mirroring `TConfig.Create` defaults. `pasclaw profile show stock` documents the fresh-install state. Applying it is identical to no profile at all. |
 | `baseline` | Everything off. Control profile for A/B testing — *"how does pasclaw behave with no features enabled?"* |
 | `low-token` | Condenser on, output cap 8 KB, MEMORY task-aware slicing, prompt cache, progressive skill disclosure, auto-router. |
 | `security` | Workspace restriction + shell deny + private-network block, promptware scan, no `web_fetch`, no vault, agent-authored skills stage for approval. |
 | `max-build` | `_inherits: ["low-token"]` plus `web_fetch`, vault, vector search, checkpoints, stats, 16 KB cap, 1 h prompt cache, all four self-improving skill switches. |
 | `all-on` | `_inherits: ["max-build"]`. Every boolean knob flipped on. Surface-area testing only. |
+
+### Onboarding
+
+`pasclaw onboard` asks **"Pick a starter profile"** at the top of its loop-shaping section. Picking one of `stock` / `baseline` / `low-token` / `security` / `max-build` / `all-on` persists the choice as `"profile": "<name>"` in `config.json` AND skips the per-feature prompts below it (the profile encapsulates those choices). Picking option 7 (skip) or hitting Enter through leaves the per-feature flow exactly as before, with no `profile` field written.
 
 ### Selection precedence (highest wins)
 

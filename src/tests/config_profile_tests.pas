@@ -46,28 +46,82 @@ procedure TestCatalogue;
 var
   Profiles: TProfileSpecArray;
   i: Integer;
-  HaveBaseline, HaveLowToken, HaveSecurity, HaveMaxBuild, HaveAllOn: Boolean;
+  HaveStock, HaveBaseline, HaveLowToken, HaveSecurity, HaveMaxBuild, HaveAllOn: Boolean;
 begin
   Profiles := ListAvailableProfiles(Home);
-  AssertTrue(Length(Profiles) >= 5, 'at least five built-ins');
-  HaveBaseline := False; HaveLowToken := False; HaveSecurity := False;
-  HaveMaxBuild := False; HaveAllOn := False;
+  AssertTrue(Length(Profiles) >= 6, 'at least six built-ins');
+  HaveStock := False; HaveBaseline := False; HaveLowToken := False;
+  HaveSecurity := False; HaveMaxBuild := False; HaveAllOn := False;
   for i := 0 to High(Profiles) do
   begin
     AssertTrue(Profiles[i].Description <> '', 'profile "' + Profiles[i].Name + '" has a description');
+    if Profiles[i].Name = 'stock'     then HaveStock     := True;
     if Profiles[i].Name = 'baseline'  then HaveBaseline  := True;
     if Profiles[i].Name = 'low-token' then HaveLowToken  := True;
     if Profiles[i].Name = 'security'  then HaveSecurity  := True;
     if Profiles[i].Name = 'max-build' then HaveMaxBuild  := True;
     if Profiles[i].Name = 'all-on'    then HaveAllOn     := True;
   end;
+  AssertTrue(HaveStock,    'stock present');
   AssertTrue(HaveBaseline, 'baseline present');
   AssertTrue(HaveLowToken, 'low-token present');
   AssertTrue(HaveSecurity, 'security present');
   AssertTrue(HaveMaxBuild, 'max-build present');
   AssertTrue(HaveAllOn,    'all-on present');
+  AssertTrue(IsBuiltinProfile('stock'),    'stock is built-in');
   AssertTrue(IsBuiltinProfile('baseline'), 'baseline is built-in');
   AssertTrue(not IsBuiltinProfile('not-a-real-one'), 'unknown is not built-in');
+end;
+
+(* PR #291 follow-up: `stock` mirrors TConfig.Create defaults so
+   applying it is a no-op. The drift test: load a fresh TConfig, snap
+   the relevant booleans/ints, then apply `stock`, then compare. They
+   must match -- a divergence means the stock profile and
+   TConfig.Create have drifted. *)
+procedure TestStockMatchesDefaults;
+var
+  Fresh, Stocked: TConfig;
+begin
+  Fresh   := TConfig.Create;
+  Stocked := LoadConfig('stock');
+  try
+    AssertTrue(Fresh.VaultToolsEnabled    = Stocked.VaultToolsEnabled,    'stock: vault_tools_enabled');
+    AssertTrue(Fresh.WebFetchEnabled      = Stocked.WebFetchEnabled,      'stock: web_fetch_enabled');
+    AssertTrue(Fresh.VectorSearchEnabled  = Stocked.VectorSearchEnabled,  'stock: vector_search_enabled');
+    AssertTrue(Fresh.RenderMarkdown       = Stocked.RenderMarkdown,       'stock: render_markdown');
+    AssertTrue(Fresh.PromptwareEnabled    = Stocked.PromptwareEnabled,    'stock: promptware_enabled');
+    AssertTrue(Fresh.CondenseReversible   = Stocked.CondenseReversible,   'stock: condense_reversible');
+    AssertTrue(Fresh.ToolOutputCap        = Stocked.ToolOutputCap,        'stock: tool_output_cap');
+    AssertTrue(Fresh.OrientTaskAware      = Stocked.OrientTaskAware,      'stock: orient_task_aware');
+    AssertTrue(Fresh.StatsCollectionEnabled = Stocked.StatsCollectionEnabled, 'stock: stats_collection_enabled');
+    AssertTrue(Fresh.CheckpointsEnabled   = Stocked.CheckpointsEnabled,   'stock: checkpoints_enabled');
+    AssertTrue(Fresh.SelfImprovingSkills.SelfManage =
+               Stocked.SelfImprovingSkills.SelfManage,
+               'stock: self_improving_skills.self_manage');
+    AssertTrue(Fresh.SelfImprovingSkills.ProgressiveDisclosure =
+               Stocked.SelfImprovingSkills.ProgressiveDisclosure,
+               'stock: self_improving_skills.progressive_disclosure');
+    AssertTrue(Fresh.SelfImprovingSkills.AutoApprove =
+               Stocked.SelfImprovingSkills.AutoApprove,
+               'stock: self_improving_skills.auto_approve');
+    AssertTrue(Fresh.SelfImprovingSkills.Distiller.Enabled =
+               Stocked.SelfImprovingSkills.Distiller.Enabled,
+               'stock: self_improving_skills.distiller.enabled');
+    AssertTrue(Fresh.AutoRouter.Enabled   = Stocked.AutoRouter.Enabled,   'stock: auto_router.enabled');
+    AssertTrue(Fresh.PromptCache.Enabled  = Stocked.PromptCache.Enabled,  'stock: prompt_cache.enabled');
+    AssertTrue(Fresh.Sandbox.RestrictToWorkspace =
+               Stocked.Sandbox.RestrictToWorkspace,
+               'stock: sandbox.restrict_to_workspace');
+    AssertTrue(Fresh.Sandbox.ShellDenyEnabled =
+               Stocked.Sandbox.ShellDenyEnabled,
+               'stock: sandbox.shell_deny_enabled');
+    AssertTrue(Fresh.Sandbox.BlockPrivateNetworks =
+               Stocked.Sandbox.BlockPrivateNetworks,
+               'stock: sandbox.block_private_networks');
+  finally
+    Stocked.Free;
+    Fresh.Free;
+  end;
 end;
 
 procedure TestResolveSingleLayer;
@@ -326,6 +380,7 @@ begin
   EnsureDir(Home);
   try
     TestCatalogue;
+    TestStockMatchesDefaults;
     TestResolveSingleLayer;
     TestResolveInherits;
     TestUnknownProfile;

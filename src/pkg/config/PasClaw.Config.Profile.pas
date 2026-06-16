@@ -6,7 +6,11 @@
   embedded as Pascal string constants below; operators can add their
   own by dropping files at $PASCLAW_HOME/profiles/<name>.json.
 
-  Five built-ins (PR #291):
+  Six built-ins (PR #291):
+
+    stock       Mirrors TConfig.Create's exact defaults. Applying it is
+                a no-op; it exists so `pasclaw profile show stock`
+                documents the no-profile fresh-install state.
 
     baseline    Everything off. Bare-minimum control profile for A/B
                 comparison ("how does pasclaw behave with no features").
@@ -209,6 +213,46 @@ const
     '}' +
     '}';
 
+  (* `stock` mirrors TConfig.Create's exact defaults as an explicit
+     profile so `pasclaw profile show stock` documents the fresh-
+     install state. Applying it is a no-op (FromJSON sees its own
+     defaults), but it makes the no-profile case visible and lets
+     `pasclaw profile diff stock low-token` work cleanly (Stage D
+     follow-up). Keep this in lockstep with TConfig.Create -- a
+     drift between the two is what the test-config-profile suite's
+     stock cross-check catches. *)
+  Profile_Stock: string =
+    '{' +
+    '"_description":"Stock TConfig.Create defaults. Documents the ' +
+    'fresh-install state explicitly so `profile show stock` reveals ' +
+    'what `pasclaw agent` does with no --profile / PASCLAW_PROFILE / ' +
+    'config.json profile field set.",' +
+    '"vault_tools_enabled":true,' +
+    '"web_fetch_enabled":true,' +
+    '"vector_search_enabled":true,' +
+    '"render_markdown":true,' +
+    '"promptware_enabled":true,' +
+    '"condense_reversible":false,' +
+    '"tool_output_cap":0,' +
+    '"orient_task_aware":false,' +
+    '"stats_collection_enabled":false,' +
+    '"checkpoints_enabled":false,' +
+    '"self_improving_skills":{' +
+      '"self_manage":false,' +
+      '"progressive_disclosure":false,' +
+      '"auto_approve":false,' +
+      '"distiller":{"enabled":false}' +
+    '},' +
+    '"auto_router":{"enabled":false},' +
+    '"prompt_cache":{"enabled":true},' +
+    '"sandbox":{' +
+      '"restrict_to_workspace":false,' +
+      '"shell_deny_enabled":true,' +
+      '"block_private_networks":true,' +
+      '"allow_read_outside_workspace":false' +
+    '}' +
+    '}';
+
 type
   TBuiltin = record
     Name:        string;
@@ -219,12 +263,13 @@ type
 
 function Builtins: TBuiltinArray;
 begin
-  SetLength(Result, 5);
-  Result[0].Name := 'baseline';   Result[0].Body := Profile_Baseline;
-  Result[1].Name := 'low-token';  Result[1].Body := Profile_LowToken;
-  Result[2].Name := 'security';   Result[2].Body := Profile_Security;
-  Result[3].Name := 'max-build';  Result[3].Body := Profile_MaxBuild;
-  Result[4].Name := 'all-on';     Result[4].Body := Profile_AllOn;
+  SetLength(Result, 6);
+  Result[0].Name := 'stock';      Result[0].Body := Profile_Stock;
+  Result[1].Name := 'baseline';   Result[1].Body := Profile_Baseline;
+  Result[2].Name := 'low-token';  Result[2].Body := Profile_LowToken;
+  Result[3].Name := 'security';   Result[3].Body := Profile_Security;
+  Result[4].Name := 'max-build';  Result[4].Body := Profile_MaxBuild;
+  Result[5].Name := 'all-on';     Result[5].Body := Profile_AllOn;
 end;
 
 function ExtractDescription(const Body: string): string;
