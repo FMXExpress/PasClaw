@@ -4932,12 +4932,22 @@ begin
           TCObjIn := Req.ChildObject('tool_choice');
           if TCObjIn <> nil then
           try
-            FnObjIn := TCObjIn.ChildObject('function');
-            if FnObjIn <> nil then
-            try
-              ForcedFn := Trim(FnObjIn.GetStr('name', ''));
-            finally
-              FnObjIn.Free;
+            (* Two object shapes force a specific function:
+                 Responses API : type=function with a TOP-LEVEL name (the
+                                 same shape tools[] entries use);
+                 Chat Compl.   : type=function with a NESTED function.name.
+               Prefer the top-level name (the standard for /v1/responses),
+               then fall back to the nested Chat-Completions form. *)
+            ForcedFn := Trim(TCObjIn.GetStr('name', ''));
+            if ForcedFn = '' then
+            begin
+              FnObjIn := TCObjIn.ChildObject('function');
+              if FnObjIn <> nil then
+              try
+                ForcedFn := Trim(FnObjIn.GetStr('name', ''));
+              finally
+                FnObjIn.Free;
+              end;
             end;
           finally
             TCObjIn.Free;
@@ -4946,8 +4956,8 @@ begin
             PassthroughOpts.ToolChoice := ForcedFn
           else
             LogDebug('responses: dropping unrecognised tool_choice ' +
-                     '(want auto/none/required or {"type":"function",' +
-                     '"function":{"name":...}})', []);
+                     '(want auto/none/required, {"type":"function","name":...}, ' +
+                     'or {"type":"function","function":{"name":...}})', []);
         end;
       end;
 
