@@ -579,7 +579,18 @@ const
     '"name":{"type":"string","description":"skill name (lowercase, digits, - _)"},' +
     '"content":{"type":"string","description":"full SKILL.md (frontmatter + body) for create/edit"},' +
     '"description":{"type":"string"},' +
-    '"kind":{"type":"string","enum":["","shell","prompt"]},' +
+    (* Gemini rejects empty strings in enum arrays with "enum[0]: cannot
+       be empty" -- so the historical {"enum":["","shell","prompt"]}
+       shape that used "" to signal "knowledge-only skill" broke any
+       deploy that registered skills_manage against a Gemini model
+       (max-build profile + Gemini provider was the reported repro).
+       Drop the empty-string member; absent / missing `kind` already
+       means knowledge-only (the assembler at line ~336 skips writing
+       the `kind:` frontmatter line when GetStr('kind','') returns
+       empty), so this is a schema cleanup, not a behaviour change. *)
+    '"kind":{"type":"string","enum":["shell","prompt"],' +
+      '"description":"omit for knowledge-only skills (markdown body only); ' +
+      '\"shell\" or \"prompt\" registers a callable skill_<name> tool"},' +
     '"shell":{"type":"string"},"prompt":{"type":"string"},"schema":{"type":"string"},' +
     '"body":{"type":"string","description":"markdown body when not passing full content"},' +
     '"old_string":{"type":"string","description":"patch: unique text to replace"},' +
