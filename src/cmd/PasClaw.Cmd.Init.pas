@@ -43,6 +43,26 @@ interface
 
 function Cmd_Init_Run(const Argv: array of string): Integer;
 
+type
+  { Outcome of a single RunInit invocation. Lets callers that can't
+    print directly to stdout (the positioned TUI, future programmatic
+    callers like the gateway) report results without screen-scraping
+    the CLI. Status mirrors the exit code Cmd_Init_Run returns. }
+  TInitOutcome = record
+    Status:       Integer;    { 0 = success, 1 = runtime fail, 2 = arg fail }
+    ErrorMsg:     string;     { populated when Status <> 0 }
+    Path:         string;     { resolved project root }
+    TargetFile:   string;     { fully-qualified AGENTS.md path }
+    BodyBytes:    Integer;    { length of what was written }
+    ProviderName: string;     { provider actually used }
+    ModelName:    string;     { model actually used }
+  end;
+
+{ Stdio-free worker. Same Argv shape as Cmd_Init_Run; nothing prints,
+  everything is reported through Outcome. Used by Cmd_Init_Run (CLI)
+  and the positioned TUI's /init handler. Returns Outcome.Status. }
+function RunInit(const Argv: array of string; out Outcome: TInitOutcome): Integer;
+
 { Build the project digest (file tree + key-file snippets) that the
   model receives as the user message. Exposed for the /init slash
   command in the TUI and for unit tests that pin the digest shape.
@@ -149,6 +169,12 @@ begin
 end;
 
 function ReadHead(const Path: string; MaxBytes: Integer): string;
+{ Read up to MaxBytes from Path and decode as UTF-8. The bytes-then-
+  GetString detour matters under Delphi where `string` is UTF-16 and
+  a naive Move into Result[1] would interpret raw UTF-8 bytes as
+  UTF-16 code units (Codex P2 on PR #298). Mirrors the canonical
+  ReadFileText helper in PasClaw.Utils -- difference here is the
+  byte cap, since we only want a snippet for the digest. }
 var
   FS: TFileStream;
   Buf: TBytes;
@@ -163,8 +189,7 @@ begin
       if N <= 0 then Exit;
       SetLength(Buf, N);
       FS.ReadBuffer(Buf[0], N);
-      SetLength(Result, N);
-      Move(Buf[0], Result[1], N);
+      Result := TEncoding.UTF8.GetString(Buf);
     finally
       FS.Free;
     end;
@@ -353,7 +378,7 @@ begin
   PrintLn('  -h, --help       Show this help');
 end;
 
-function Cmd_Init_Run(const Argv: array of string): Integer;
+function RunInit(const Argv: array of string; out Outcome: TInitOutcome): Integer;
 var
   Cfg: TConfig;
   Provider: ILLMProvider;
@@ -365,32 +390,33 @@ var
   Opts: TChatOptions;
   Resp: TLLMResponse;
   Body: string;
-  FS: TFileStream;
 begin
+  Outcome := Default(TInitOutcome);
+
   if not ParseArgs(Argv, Path, Force, ModelArg, ProviderArg, ErrMsg) then
   begin
-    if ErrMsg = '__help__' then
-    begin
-      ShowHelp;
-      Exit(0);
-    end;
-    PrintErr('init: ' + ErrMsg);
-    Exit(2);
+    Outcome.Status   := 2;
+    Outcome.ErrorMsg := ErrMsg;
+    Exit(Outcome.Status);
   end;
 
   if Path = '' then Path := GetCurrentDir;
   Path := ExpandFileName(Path);
+  Outcome.Path := Path;
   if not DirectoryExists(Path) then
   begin
-    PrintErr('init: directory does not exist: ' + Path);
-    Exit(2);
+    Outcome.Status   := 2;
+    Outcome.ErrorMsg := 'directory does not exist: ' + Path;
+    Exit(Outcome.Status);
   end;
 
   Target := JoinPath(Path, 'AGENTS.md');
+  Outcome.TargetFile := Target;
   if FileExists(Target) and (not Force) then
   begin
-    PrintErr('init: ' + Target + ' already exists -- pass --force to overwrite');
-    Exit(1);
+    Outcome.Status   := 1;
+    Outcome.ErrorMsg := Target + ' already exists -- pass --force to overwrite';
+    Exit(Outcome.Status);
   end;
 
   Cfg := LoadConfig;
@@ -399,15 +425,17 @@ begin
     else ProviderName := Cfg.DefaultProvider;
     if not NewProviderFromConfig(Cfg, ProviderName, Provider, ErrMsg) then
     begin
-      PrintErr('init: provider "' + ProviderName + '" unavailable: ' + ErrMsg);
-      Exit(1);
+      Outcome.Status   := 1;
+      Outcome.ErrorMsg := 'provider "' + ProviderName + '" unavailable: ' + ErrMsg;
+      Exit(Outcome.Status);
     end;
+    Outcome.ProviderName := Provider.GetName;
 
     if ModelArg <> '' then ModelName := ModelArg
     else ModelName := Cfg.DefaultModel;
     if Trim(ModelName) = '' then ModelName := Provider.GetDefaultModel;
+    Outcome.ModelName := ModelName;
 
-    PrintLn(Ansi.Dim + 'scanning ' + Path + ' ...' + Ansi.Reset);
     Digest := BuildProjectDigest(Path);
 
     Opts := Default(TChatOptions);
@@ -420,51 +448,86 @@ begin
       sLineBreak + Digest);
     SetLength(EmptyTools, 0);
 
-    PrintLn(Ansi.Dim + 'asking ' + Provider.GetName + '/' + ModelName +
-            ' for a starter AGENTS.md ...' + Ansi.Reset);
     try
       Resp := Provider.Chat(Messages, EmptyTools, ModelName, Opts);
     except
       on E: Exception do
       begin
-        PrintErr('init: provider call failed: ' + E.Message);
-        Exit(1);
+        Outcome.Status   := 1;
+        Outcome.ErrorMsg := 'provider call failed: ' + E.Message;
+        Exit(Outcome.Status);
       end;
     end;
 
     if (Resp.StatusCode >= 400) or (Trim(Resp.Content) = '') then
     begin
-      PrintErr(Format('init: provider returned status=%d, content=%d bytes',
-                      [Resp.StatusCode, Length(Resp.Content)]));
-      Exit(1);
+      Outcome.Status := 1;
+      Outcome.ErrorMsg :=
+        Format('provider returned status=%d, content=%d bytes',
+               [Resp.StatusCode, Length(Resp.Content)]);
+      Exit(Outcome.Status);
     end;
 
     Body := UnfenceMarkdown(Resp.Content);
 
+    { WriteFileText handles UTF-8 encoding under both compilers (FPC
+      AnsiString-tagged UTF-8; Delphi UnicodeString -> UTF-8 bytes via
+      TEncoding). A raw TFileStream.WriteBuffer(Body[1], Length(Body))
+      under Delphi would dump UTF-16 with embedded NULs -- Codex P2
+      on PR #298. }
     try
-      FS := TFileStream.Create(Target, fmCreate);
-      try
-        if Body <> '' then
-          FS.WriteBuffer(Body[1], Length(Body));
-      finally
-        FS.Free;
-      end;
+      WriteFileText(Target, Body);
     except
       on E: Exception do
       begin
-        PrintErr('init: write failed: ' + E.Message);
-        Exit(1);
+        Outcome.Status   := 1;
+        Outcome.ErrorMsg := 'write failed: ' + E.Message;
+        Exit(Outcome.Status);
       end;
     end;
 
-    PrintLn(Ansi.Green + 'wrote ' + Target + ' (' + IntToStr(Length(Body)) +
-            ' bytes)' + Ansi.Reset);
-    PrintLn(Ansi.Dim + 'review and commit it; PasClaw will load it as ' +
-            'authoritative project rules on the next session.' + Ansi.Reset);
-    Result := 0;
+    Outcome.BodyBytes := Length(Body);
+    Outcome.Status    := 0;
   finally
     Cfg.Free;
   end;
+  Result := Outcome.Status;
+end;
+
+function Cmd_Init_Run(const Argv: array of string): Integer;
+var
+  Outcome: TInitOutcome;
+  Path, ModelArg, ProviderArg, ErrMsg: string;
+  Force: Boolean;
+begin
+  { Short-circuit --help -- ParseArgs reports it via a sentinel ErrMsg
+    so we can emit the full help block from the CLI side and still
+    let RunInit stay stdio-free. }
+  if ParseArgs(Argv, Path, Force, ModelArg, ProviderArg, ErrMsg) = False then
+  begin
+    if ErrMsg = '__help__' then
+    begin
+      ShowHelp;
+      Exit(0);
+    end;
+  end;
+
+  if Path = '' then Path := GetCurrentDir;
+  PrintLn(Ansi.Dim + 'scanning ' + ExpandFileName(Path) + ' ...' + Ansi.Reset);
+
+  Result := RunInit(Argv, Outcome);
+  if Result <> 0 then
+  begin
+    PrintErr('init: ' + Outcome.ErrorMsg);
+    Exit;
+  end;
+
+  PrintLn(Ansi.Dim + 'asked ' + Outcome.ProviderName + '/' + Outcome.ModelName +
+          ' for a starter AGENTS.md' + Ansi.Reset);
+  PrintLn(Ansi.Green + 'wrote ' + Outcome.TargetFile + ' (' +
+          IntToStr(Outcome.BodyBytes) + ' bytes)' + Ansi.Reset);
+  PrintLn(Ansi.Dim + 'review and commit it; PasClaw will load it as ' +
+          'authoritative project rules on the next session.' + Ansi.Reset);
 end;
 
 end.

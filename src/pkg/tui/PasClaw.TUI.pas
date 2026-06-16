@@ -181,6 +181,7 @@ type
     procedure StartNewSession;
     procedure RewireCheckpoints;
     procedure HandleUndoCommand(const Args: string);
+    procedure HandleInitCommand(const Args: string);
     procedure DeleteSelectedSession;
     procedure PersistSession;
     procedure Flash(const Msg: string);
@@ -1132,6 +1133,53 @@ begin
     Flash(Format('/undo %d: restored %d file(s)', [N, Length(Restored)]));
 end;
 
+procedure TTUI.HandleInitCommand(const Args: string);
+{ Positioned-TUI variant of /init. The framebuffer-aware UI can't let
+  Cmd_Init_Run print provider status to stdout (would corrupt the
+  rendered display), so route through the stdio-free RunInit worker
+  and report via Flash. The Provider.Chat call inside RunInit is
+  synchronous and blocks the UI thread for a few seconds -- acceptable
+  for a one-shot setup action; threading is a follow-up. }
+var
+  Argv: array of string;
+  Trimmed: string;
+  i, Start, L: Integer;
+  Outcome: TInitOutcome;
+begin
+  Trimmed := Trim(Args);
+  SetLength(Argv, 0);
+  Start := 1;
+  L := Length(Trimmed);
+  i := 1;
+  while i <= L do
+  begin
+    if Trimmed[i] = ' ' then
+    begin
+      if i > Start then
+      begin
+        SetLength(Argv, Length(Argv) + 1);
+        Argv[High(Argv)] := Copy(Trimmed, Start, i - Start);
+      end;
+      Start := i + 1;
+    end;
+    Inc(i);
+  end;
+  if Start <= L then
+  begin
+    SetLength(Argv, Length(Argv) + 1);
+    Argv[High(Argv)] := Copy(Trimmed, Start, L - Start + 1);
+  end;
+
+  Flash('/init: scanning + asking model (this blocks the UI for a few seconds)...');
+  RunInit(Argv, Outcome);
+  if Outcome.Status = 0 then
+    Flash(Format('/init: wrote %s (%d bytes via %s/%s)',
+                 [Outcome.TargetFile, Outcome.BodyBytes,
+                  Outcome.ProviderName, Outcome.ModelName]))
+  else
+    Flash('/init: ' + Outcome.ErrorMsg);
+end;
+
 procedure TTUI.StartNewSession;
 begin
   SelectSession('');
@@ -1478,6 +1526,8 @@ begin
       OpenStatsOverlay
     else if (Text = '/undo') or (Copy(Text, 1, 6) = '/undo ') then
       HandleUndoCommand(Copy(Text, 7, MaxInt))
+    else if (Text = '/init') or (Copy(Text, 1, 6) = '/init ') then
+      HandleInitCommand(Copy(Text, 7, MaxInt))
     else
       Flash('unknown: ' + Text);
     FInputBuf := '';

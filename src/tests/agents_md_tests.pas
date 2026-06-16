@@ -267,6 +267,72 @@ begin
   end;
 end;
 
+{ Regression for Codex P2 on PR #298: ReadHead used to Move raw bytes
+  into Result[1], which under Delphi (UTF-16 string) garbled the
+  snippet and broke UTF-8 multibyte sequences entirely. The fix
+  routes through TEncoding.UTF8.GetString. The test writes a README
+  containing a multibyte UTF-8 sequence (`é`, C3 A9) and asserts the
+  decoded codepoint survives the digest path. }
+procedure TestDigestUtf8;
+var
+  Dir, ReadmePath, Digest: string;
+const
+  EAcute = #$C3#$A9;  { UTF-8 bytes for U+00E9 }
+begin
+  Dir := MakeTempDir;
+  ReadmePath := JoinPath(Dir, 'README.md');
+  WriteFile_(ReadmePath, '# Caf' + EAcute + sLineBreak +
+                         'Multibyte UTF-8 must survive the snippet path.' + sLineBreak);
+  try
+    Digest := BuildProjectDigest(Dir);
+    AssertContains(Digest, 'Caf' + EAcute,
+                   'UTF-8 multibyte sequence preserved in digest');
+    AssertContains(Digest, 'Multibyte UTF-8',
+                   'rest of README still present');
+  finally
+    RemoveTree(Dir);
+  end;
+end;
+
+{ RunInit returns a populated Outcome with no stdio. The arg-only
+  failure paths (missing dir, existing AGENTS.md without --force) are
+  safe to exercise without a real provider; the model-call path needs
+  an integration setup we don't run here. Covers the structural
+  contract the positioned TUI's /init handler relies on. }
+procedure TestRunInitArgFailures;
+var
+  Argv: array of string;
+  Outcome: TInitOutcome;
+  Dir, ExistingTarget: string;
+  Rc: Integer;
+begin
+  { Missing positional: Status=2, ErrorMsg mentions the bad dir. }
+  SetLength(Argv, 1);
+  Argv[0] := '/tmp/__pasclaw_no_such_dir_for_init__';
+  Rc := RunInit(Argv, Outcome);
+  AssertTrue(Rc = 2, 'RunInit returns 2 on missing dir');
+  AssertTrue(Outcome.Status = 2, 'Outcome.Status = 2');
+  AssertContains(Outcome.ErrorMsg, 'directory does not exist',
+                 'errmsg explains the failure');
+
+  { Existing AGENTS.md, no --force: Status=1. }
+  Dir := MakeTempDir;
+  ExistingTarget := JoinPath(Dir, 'AGENTS.md');
+  WriteFile_(ExistingTarget, '# pre-existing' + sLineBreak);
+  try
+    SetLength(Argv, 1);
+    Argv[0] := Dir;
+    Rc := RunInit(Argv, Outcome);
+    AssertTrue(Rc = 1, 'RunInit returns 1 without --force on existing file');
+    AssertContains(Outcome.ErrorMsg, 'already exists',
+                   'errmsg explains overwrite refusal');
+    AssertContains(Outcome.ErrorMsg, '--force',
+                   'errmsg points at the escape hatch');
+  finally
+    RemoveTree(Dir);
+  end;
+end;
+
 begin
   Randomize;
   TestFindMissing;
@@ -279,5 +345,7 @@ begin
   TestUnfenceBare;
   TestUnfenceWrapped;
   TestDigestShape;
+  TestDigestUtf8;
+  TestRunInitArgFailures;
   Writeln('ok - agents.md ingest + init digest tests passed');
 end.
