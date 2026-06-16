@@ -94,7 +94,11 @@ type
       workspace/sessions/<id>.json. Non-empty AND missing on disk =
       create that session id with empty history (so a script can
       pre-seed an id like "daily-2026-06-01"). RunSingleTurn (one-shot
-      -m) ignores this -- single turns aren't worth persisting. }
+      -m) USED TO ignore this; as of PR #292 P1, when --session <id>
+      is supplied alongside -m the one-shot turn is persisted to that
+      id so scripted callers (notably `pasclaw profile bench`) can
+      read back per-turn stats. Callers that don't pass --session keep
+      the original "single turns aren't persisted" behaviour. }
     Session:       string;
     { --backend local|docker. Empty = use Cfg.ShellBackend. Override
       is per-invocation; we don't persist it to config. }
@@ -463,6 +467,8 @@ var
   Spawn: TSpawnTool;
   BgCoord: TBackgroundSpawnCoordinator;
   OneShotSessionId: string;
+  PersistedSession: TSession;       { non-nil only when A.Session is set (PR #292 P1) }
+  i: Integer;
 begin
   { Default to True; only flip to False on a known failure path.
     Any code path that hits Exit before producing a real assistant
@@ -529,8 +535,24 @@ begin
     first shell tool call, so a turn that never shells out never touches
     Docker and `pasclaw agent` doesn't stall at startup when Docker is
     down/slow. }
-  OneShotSessionId := 'oneshot-' + FormatDateTime('yyyymmdd-hhnnss', Now) +
-                      '-' + IntToHex(Random(1 shl 24), 6);
+  (* Codex PR #292 P1: when --session <id> is supplied alongside -m,
+     persist the one-shot turn to that session file. Previously the
+     one-shot path ignored A.Session entirely and used an internal
+     `oneshot-...` id purely for shell-backend isolation, so a
+     scripted caller (notably `pasclaw profile bench`) reading back
+     workspace/sessions/<id>.json would find nothing -- token /
+     turn / tool-call columns silently stayed at zero even when
+     stats_collection_enabled was on. Honouring --session here doesn't
+     change pre-existing behaviour for callers that don't pass it. *)
+  PersistedSession := nil;
+  if A.Session <> '' then
+  begin
+    PersistedSession := TSession.Create(A.Session);
+    OneShotSessionId := A.Session;
+  end
+  else
+    OneShotSessionId := 'oneshot-' + FormatDateTime('yyyymmdd-hhnnss', Now) +
+                        '-' + IntToHex(Random(1 shl 24), 6);
   SetCurrentSessionId(OneShotSessionId);
   try
     SetLength(Msgs, 1);
@@ -570,9 +592,36 @@ begin
     if (not A.Quiet) and
        (Loop.TotalUsage.InputTokens + Loop.TotalUsage.OutputTokens > 0) then
       PrintLn(Ansi.Dim + FormatTokenLine(Loop.TotalUsage, Loop.Iterations) + Ansi.Reset);
+
+    (* Persist the one-shot session when the operator asked. Includes
+       user prompt + final assistant content + tool history, plus
+       AccumulateTurnStats when stats_collection_enabled so the bench
+       harness (and any other reader) sees real token / turn / tool-
+       call counters. *)
+    if PersistedSession <> nil then
+    begin
+      SetLength(PersistedSession.Messages, Length(Loop.FinalMessages));
+      for i := 0 to High(Loop.FinalMessages) do
+        PersistedSession.Messages[i] := Loop.FinalMessages[i];
+      PersistedSession.Meta.Model    := Model;
+      if Provider <> nil then
+        PersistedSession.Meta.Provider := Provider.GetName;
+      if Cfg.StatsCollectionEnabled then
+        AccumulateTurnStats(PersistedSession.Meta,
+                            Loop.TotalUsage.InputTokens,
+                            Loop.TotalUsage.OutputTokens,
+                            Loop.TotalUsage.CacheReadTokens,
+                            Loop.TotalUsage.CacheCreatedTokens,
+                            Loop.ToolCallsDispatched,
+                            Loop.TruncatedBytesSaved);
+      PersistedSession.AutoTitle;
+      PersistedSession.Touch;
+      PersistedSession.Save;
+    end;
   finally
     CloseShellSession(OneShotSessionId);
     SetCurrentSessionId('');
+    if PersistedSession <> nil then PersistedSession.Free;
     Handlers.Free;
     FreeMCPClients(MCPClients);
     if Spawn <> nil then Spawn.Free;
