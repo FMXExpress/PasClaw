@@ -19,6 +19,7 @@ The main `README.md` at the repo root is the landing page. These docs go deeper.
 - [Knowledgebase](./knowledgebase.md) — `pasclaw kb` for indexing reference documents (markdown / source code / HTML).
 - [Skills](./skills.md) — `$PASCLAW_HOME/workspace/skills/`, GitHub + ClawHub install, SKILL.md format.
 - [Sessions](./sessions.md) — persistence, resume, `/new` / `/reset` / `/compact`, mid-loop `pasclaw steer`.
+- [Checkpoints](./checkpoints.md) — `/undo` / `/redo` for file-edit rewind via the zpaq-backed snapshot journal.
 - [MCP servers](./mcp.md) — stdio + streamable-HTTP transports, `pasclaw mcp catalog`, the bundled built-in list.
 - [Cron](./cron.md) — scheduled tasks, at-least-once delivery, per-job channel sinks.
 

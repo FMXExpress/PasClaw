@@ -182,6 +182,7 @@ type
     procedure RewireCheckpoints;
     procedure HandleUndoCommand(const Args: string);
     procedure HandleInitCommand(const Args: string);
+    procedure HandleRedoCommand(const Args: string);
     procedure DeleteSelectedSession;
     procedure PersistSession;
     procedure Flash(const Msg: string);
@@ -199,6 +200,7 @@ type
     procedure HandleSlashCommand(const Cmd: string);
     procedure HandleUndoCommand(const Args: string);
     procedure HandleInitCommand(const Args: string);
+    procedure HandleRedoCommand(const Args: string);
     procedure HandleUserInput(const Text: string);
     {$ENDIF}
   public
@@ -1133,6 +1135,36 @@ begin
     Flash(Format('/undo %d: restored %d file(s)', [N, Length(Restored)]));
 end;
 
+procedure TTUI.HandleRedoCommand(const Args: string);
+{ /redo and /redo N -- pop N redo bundles off the stack the most
+  recent /undo created. Only meaningful under the zpaq backend;
+  RedoTurns returns False with an explanatory message otherwise. }
+var
+  N: Integer;
+  Restored: TRestoredFileArray;
+  Err, Trimmed: string;
+begin
+  Trimmed := Trim(Args);
+  if Trimmed = '' then
+    N := 1
+  else
+    N := StrToIntDef(Trimmed, -1);
+  if N <= 0 then
+  begin
+    Flash('/redo: argument must be a positive turn count');
+    Exit;
+  end;
+  if not RedoTurns(N, Restored, Err) then
+  begin
+    Flash('/redo: ' + Err);
+    Exit;
+  end;
+  if Length(Restored) = 0 then
+    Flash(Format('/redo %d: no files to restore', [N]))
+  else
+    Flash(Format('/redo %d: restored %d file(s)', [N, Length(Restored)]));
+end;
+
 procedure TTUI.HandleInitCommand(const Args: string);
 { Positioned-TUI variant of /init. The framebuffer-aware UI can't let
   Cmd_Init_Run print provider status to stdout (would corrupt the
@@ -1503,7 +1535,7 @@ begin
       end;
     end
     else if Text = '/help' then
-      Flash('keys: Tab swap | Ctrl-B mode toggle | N new | D del | Q quit | /theme /model /stats /undo [N] /mode [plan|build]')
+      Flash('keys: Tab swap | Ctrl-B mode toggle | N new | D del | Q quit | /theme /model /stats /undo [N] /redo [N] /mode [plan|build]')
     else if Text = '/mode' then
       Flash('mode: ' + ModeName(FMode) + '  (Tab in chat to cycle; /mode plan or /mode build)')
     else if Text = '/mode plan' then
@@ -1528,6 +1560,8 @@ begin
       HandleUndoCommand(Copy(Text, 7, MaxInt))
     else if (Text = '/init') or (Copy(Text, 1, 6) = '/init ') then
       HandleInitCommand(Copy(Text, 7, MaxInt))
+    else if (Text = '/redo') or (Copy(Text, 1, 6) = '/redo ') then
+      HandleRedoCommand(Copy(Text, 7, MaxInt))
     else
       Flash('unknown: ' + Text);
     FInputBuf := '';
@@ -2471,6 +2505,9 @@ begin
   PrintLn('  /clear         clear the screen');
   PrintLn('  /model         list cached models for the default provider');
   PrintLn('  /model <id>    switch the active model for this session');
+  PrintLn('  /undo [N]      rewind file-edits over the last N turns (default 1)');
+  PrintLn('  /redo [N]      replay the last N undone snapshots (zpaq backend only)');
+  PrintLn('  /init [flags]  generate a starter AGENTS.md for this project');
   PrintLn('  /quit          exit');
 end;
 
@@ -2591,6 +2628,11 @@ begin
     HandleInitCommand(Copy(Cmd, 7, MaxInt));
     Exit;
   end;
+  if (Cmd = '/redo') or (Copy(Cmd, 1, 6) = '/redo ') then
+  begin
+    HandleRedoCommand(Copy(Cmd, 7, MaxInt));
+    Exit;
+  end;
   PrintLn(Ansi.Yellow + 'unknown command: ' + Cmd + Ansi.Reset);
 end;
 
@@ -2663,6 +2705,37 @@ begin
     PrintLn(Ansi.Dim + Format('/undo %d: no files to restore', [N]) + Ansi.Reset)
   else
     PrintLn(Ansi.Green + Format('/undo %d: restored %d file(s)', [N, Length(Restored)]) + Ansi.Reset);
+end;
+
+procedure TTUI.HandleRedoCommand(const Args: string);
+{ FPC line-based variant of /redo. Mirrors HandleUndoCommand: parse
+  N, call RedoTurns, PrintLn result. RedoTurns returns the
+  "backend doesn't support redo" message when the session was
+  initialised under the legacy blob store. }
+var
+  N: Integer;
+  Restored: TRestoredFileArray;
+  Err, Trimmed: string;
+begin
+  Trimmed := Trim(Args);
+  if Trimmed = '' then
+    N := 1
+  else
+    N := StrToIntDef(Trimmed, -1);
+  if N <= 0 then
+  begin
+    PrintLn(Ansi.Yellow + '/redo: argument must be a positive turn count' + Ansi.Reset);
+    Exit;
+  end;
+  if not RedoTurns(N, Restored, Err) then
+  begin
+    PrintLn(Ansi.Yellow + '/redo: ' + Err + Ansi.Reset);
+    Exit;
+  end;
+  if Length(Restored) = 0 then
+    PrintLn(Ansi.Dim + Format('/redo %d: no files to restore', [N]) + Ansi.Reset)
+  else
+    PrintLn(Ansi.Green + Format('/redo %d: restored %d file(s)', [N, Length(Restored)]) + Ansi.Reset);
 end;
 
 procedure TTUI.HandleUserInput(const Text: string);
