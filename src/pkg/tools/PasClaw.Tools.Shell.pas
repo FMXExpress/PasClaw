@@ -107,23 +107,33 @@ begin
     WorkDir := '';
   LogDebug('shell exec (cwd=%s): %s', [WorkDir, Cmd]);
   ExitCode := RunOneShotViaBackend(GetCurrentSessionId, Cmd, WorkDir, Out_);
-  { Per-command condenser. Tee-on-failure: ApplyShellFilter returns
-    raw output verbatim when ExitCode <> 0 so the model gets full
-    error context to debug. On the success path, known commands
-    (git status/diff/log, npm/pytest/cargo test, grep/findstr/sls,
-    ls -R / find / dir /s, with PowerShell-alias normalisation)
-    get condensed; everything else passes through and falls back
-    to the OutputCache byte cap if it's still oversize. }
-  RawOut := Out_;
-  Out_   := ApplyShellFilter(Cmd, Out_, ExitCode);
-  { Reversible condensation (CCR). When the filter actually shrunk
-    the bytes, stash the original under a fresh OutputCache handle
-    and append a footer naming it so the model can retrieve the
-    untruncated output via tool_output_get. ApplyShellFilter is
-    tee-on-failure, so RawOut and Out_ are byte-identical on failure
-    and the footer doesn't attach -- no wasted slots for raw error
-    output. No-op when SetCondenseReversible(False) is in effect. }
-  Out_ := AttachReversibleStashFooter(RawOut, Out_);
+  { Per-command condenser, gated on the reversible-condensation switch.
+    Codex PR #289 P1: when CondenseReversibleEnabled is False the
+    stash footer in AttachReversibleStashFooter no-ops, but the
+    filter itself was still rewriting ls/grep/git output and the
+    model lost access to the original bytes with no tool_output_get
+    handle to retrieve them. Skip the filter entirely so "off" means
+    raw output, not condensed-without-recovery.
+
+    Tee-on-failure: ApplyShellFilter returns raw output verbatim when
+    ExitCode <> 0 so the model gets full error context to debug. On
+    the success path, known commands (git status/diff/log, npm/pytest/
+    cargo test, grep/findstr/sls, ls -R / find / dir /s, with
+    PowerShell-alias normalisation) get condensed; everything else
+    passes through and falls back to the OutputCache byte cap if it
+    is still oversize. }
+  if CondenseReversibleEnabled then
+  begin
+    RawOut := Out_;
+    Out_   := ApplyShellFilter(Cmd, Out_, ExitCode);
+    { When the filter actually shrunk the bytes, stash the original
+      under a fresh OutputCache handle and append a footer naming it
+      so the model can retrieve the untruncated output via
+      tool_output_get. ApplyShellFilter is tee-on-failure, so RawOut
+      and Out_ are byte-identical on failure and the footer doesn't
+      attach -- no wasted slots for raw error output. }
+    Out_ := AttachReversibleStashFooter(RawOut, Out_);
+  end;
   Result := Format('exit=%d'#10'%s', [ExitCode, Out_]);
 end;
 

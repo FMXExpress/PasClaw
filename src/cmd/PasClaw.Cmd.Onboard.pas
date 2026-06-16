@@ -765,10 +765,22 @@ begin
   Choice := Trim(LowerCase(ReadLineEcho('  Configure self-improving skills now [y/N]: ')));
   if not ((Choice = 'y') or (Choice = 'yes')) then
   begin
-    PrintLn('  ' + Ansi.Dim + '(skipped -- all four sub-flags stay off)' + Ansi.Reset);
+    { Codex PR #289 P2: re-running onboarding on a config that already
+      had any sub-flag on must be able to turn them off. The original
+      "Exit" left previously-set True values intact, so a user who
+      enabled the feature once couldn't ever disable it via onboarding.
+      Reset all four explicitly. }
+    Cfg.SelfImprovingSkills.SelfManage            := False;
+    Cfg.SelfImprovingSkills.ProgressiveDisclosure := False;
+    Cfg.SelfImprovingSkills.Distiller.Enabled     := False;
+    Cfg.SelfImprovingSkills.AutoApprove           := False;
+    PrintLn('  ' + Ansi.Dim + '(skipped -- all four sub-flags reset to off)' + Ansi.Reset);
     Exit;
   end;
 
+  { Same preserve-old-true bug at each nested else: explicitly assign
+    False when the operator answers N, so a previously-on sub-flag
+    actually flips off on the re-run. }
   Choice := Trim(LowerCase(ReadLineEcho('  Register skills_manage so the model can author skills [y/N]: ')));
   if (Choice = 'y') or (Choice = 'yes') then
   begin
@@ -776,7 +788,10 @@ begin
     PrintLn('    ' + Ansi.Green + '✓' + Ansi.Reset + ' skills_manage registered');
   end
   else
+  begin
+    Cfg.SelfImprovingSkills.SelfManage := False;
     PrintLn('    ' + Ansi.Dim + '(skipped)' + Ansi.Reset);
+  end;
 
   Choice := Trim(LowerCase(ReadLineEcho('  Use progressive disclosure (skills_list/skills_view) instead of the full SKILLS prompt [y/N]: ')));
   if (Choice = 'y') or (Choice = 'yes') then
@@ -785,7 +800,10 @@ begin
     PrintLn('    ' + Ansi.Green + '✓' + Ansi.Reset + ' progressive disclosure on');
   end
   else
+  begin
+    Cfg.SelfImprovingSkills.ProgressiveDisclosure := False;
     PrintLn('    ' + Ansi.Dim + '(skipped)' + Ansi.Reset);
+  end;
 
   Choice := Trim(LowerCase(ReadLineEcho('  Enable the post-turn distiller (one extra LLM call per qualifying turn) [y/N]: ')));
   if (Choice = 'y') or (Choice = 'yes') then
@@ -794,7 +812,10 @@ begin
     PrintLn('    ' + Ansi.Green + '✓' + Ansi.Reset + ' distiller enabled (min_tool_calls=5; model inherits the turn)');
   end
   else
+  begin
+    Cfg.SelfImprovingSkills.Distiller.Enabled := False;
     PrintLn('    ' + Ansi.Dim + '(skipped)' + Ansi.Reset);
+  end;
 
   Choice := Trim(LowerCase(ReadLineEcho('  Auto-approve agent-authored skill writes [y/N]: ')));
   if (Choice = 'y') or (Choice = 'yes') then
@@ -803,7 +824,10 @@ begin
     PrintLn('    ' + Ansi.Green + '✓' + Ansi.Reset + ' auto-approve on (writes commit straight to workspace/skills/)');
   end
   else
+  begin
+    Cfg.SelfImprovingSkills.AutoApprove := False;
     PrintLn('    ' + Ansi.Dim + '(skipped -- writes stage under .pending/; run "pasclaw skills approve" to commit)' + Ansi.Reset);
+  end;
 end;
 
 procedure PromptStatsCollection(Cfg: TConfig);

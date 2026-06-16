@@ -22,7 +22,8 @@ program loop_shaping_defaults_tests;
 uses
   SysUtils,
   PasClaw.JSON,
-  PasClaw.Config;
+  PasClaw.Config,
+  PasClaw.Tools.OutputCache;    { CondenseReversibleEnabled / SetCondenseReversible }
 
 procedure Fail_(const Msg: string);
 begin WriteLn('FAIL: ' + Msg); Halt(1); end;
@@ -123,9 +124,27 @@ begin
   end;
 end;
 
+(* Codex PR #289 P1: when CondenseReversibleEnabled is False, BOTH the
+   stash footer AND the upstream condensers (ApplyShellFilter in
+   Tools.Shell, MaybeCondenseJSON in Tools.ToolLoop) must no-op. The
+   propagation contract being tested here is that the module-level
+   gate getter tracks SetCondenseReversible, which the LoadConfig
+   path propagates from Cfg.CondenseReversible. The dispatch-site
+   gating itself is exercised by test-condense-reversible. *)
+procedure TestCondenseGatePropagation;
+begin
+  SetCondenseReversible(True);
+  AssertTrue(CondenseReversibleEnabled, 'gate flips on');
+  SetCondenseReversible(False);
+  AssertTrue(not CondenseReversibleEnabled, 'gate flips off -- shell/json condensers must skip when this is False');
+  { Restore so a later test in the same process isn't surprised. }
+  SetCondenseReversible(False);
+end;
+
 begin
   TestFreshDefaults;
   TestEmittedFieldsAreTidy;
   TestExplicitOptOutRoundTrip;
+  TestCondenseGatePropagation;
   WriteLn('ok - loop-shaping defaults tests passed');
 end.
