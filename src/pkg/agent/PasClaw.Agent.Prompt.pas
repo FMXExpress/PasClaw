@@ -53,6 +53,7 @@ interface
 uses
   SysUtils,
   PasClaw.Config,
+  PasClaw.Agent.Mode,
   PasClaw.Providers.Types;
 
 { Returns the fully-composed system prompt. UserSys is appended verbatim
@@ -77,7 +78,17 @@ uses
   long-standing default. }
 function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
                            ToolsEnabled: Boolean = True;
-                           const TaskHint: string = ''): string;
+                           const TaskHint: string = ''): string; overload;
+
+{ Mode-aware overload (PR #290). When Mode = pmPlan, a "PLAN MODE"
+  block is prepended so the model knows mutating tools will refuse and
+  it should produce analysis / a proposed plan rather than calling
+  write/exec tools. The dispatch gate in PasClaw.Tools.ToolLoop is the
+  authority -- the prompt block is belt-and-braces / model-honesty. }
+function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
+                           ToolsEnabled: Boolean;
+                           const TaskHint: string;
+                           Mode: TPasClawMode): string; overload;
 
 { True iff at least one message in the array is mrSystem. The gateway's
   /v1/chat/completions handler uses this to decide whether to inject the
@@ -384,11 +395,32 @@ begin
   Result := Acc + SectionSep + Section;
 end;
 
+function BuildPlanModeSection: string;
+begin
+  Result :=
+    '## Plan Mode' + sLineBreak + sLineBreak +
+    'You are in **PLAN** mode. Read-only tools (fs_read, fs_list, fs_grep, ' +
+    'memory_search, kb_search, web_search, web_fetch, skills_list, ' +
+    'skills_view, ...) work normally; write/exec tools (fs_write, ' +
+    'fs_edit_hashline, shell_exec, execute_code, send_message, ' +
+    'skills_manage, ...) are REFUSED at the dispatch layer.' + sLineBreak +
+    sLineBreak +
+    'Do not attempt mutating tools -- they will return ' +
+    '`refused: ... needs build mode`. Instead, analyse the codebase and ' +
+    'produce a concrete plan: list the files that will need to change, ' +
+    'the rough shape of each change, and any open questions for the ' +
+    'operator. The operator can switch you back to Build mode (Tab in ' +
+    'the TUI, ``--mode build`` on the CLI, the mode toggle in the web ' +
+    'UI) when ready to apply the plan.';
+end;
+
 function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
-                           ToolsEnabled: Boolean;
-                           const TaskHint: string): string;
+                           ToolsEnabled: Boolean; const TaskHint: string;
+                           Mode: TPasClawMode): string;
 begin
   Result := '';
+  if Mode = pmPlan then
+    Result := AppendSection(Result, BuildPlanModeSection);
   Result := AppendSection(Result, BuildIdentitySection);
   Result := AppendSection(Result, BuildWorkspaceSection);
   Result := AppendSection(Result,
@@ -402,6 +434,13 @@ begin
   Result := AppendSection(Result, BuildRulesSection(ToolsEnabled));
   if Trim(UserSys) <> '' then
     Result := AppendSection(Result, Trim(UserSys));
+end;
+
+function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
+                           ToolsEnabled: Boolean;
+                           const TaskHint: string): string;
+begin
+  Result := BuildSystemPrompt(Cfg, UserSys, ToolsEnabled, TaskHint, pmBuild);
 end;
 
 function HasSystemMessage(const Messages: array of TMessage): Boolean;

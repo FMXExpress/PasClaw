@@ -74,9 +74,27 @@ pasclaw agent --no-tools --no-mcp --no-hashline
 pasclaw agent --session 20260601T093015-1a2b3c4d            # resume by id
 pasclaw agent --quiet -m "..."                              # machine-readable
 pasclaw agent --backend docker -m "..."                     # per-run override
+pasclaw agent --plan -m "review the gateway auth flow"      # read-only Plan mode
+pasclaw agent --mode build -m "..."                         # full-access (default)
 ```
 
-Persists conversation history to `$PASCLAW_HOME/workspace/sessions/<id>.json` after every turn by default. Interactive slash commands: `/help`, `/status`, `/new`, `/reset`, `/compact`, `/think`, `/tools`, `/steer <msg>`, `/quit`. See [Sessions](./sessions.md).
+Persists conversation history to `$PASCLAW_HOME/workspace/sessions/<id>.json` after every turn by default. Interactive slash commands: `/help`, `/status`, `/new`, `/reset`, `/compact`, `/think`, `/tools`, `/mode [plan|build]`, `/steer <msg>`, `/quit`. See [Sessions](./sessions.md).
+
+### Plan / Build mode
+
+Two operator-facing modes that gate the tool surface:
+
+- **`build`** (default) — full tool access; every registered tool dispatches normally. Historical behaviour.
+- **`plan`** — read-only. Tools categorised as mutating (`fs_write`, `fs_edit_hashline`, `shell_exec`, `execute_code`, `send_message`, `skills_manage`, …) are refused at the dispatch layer with a `refused: tool "X" needs build mode` message; read-only tools (`fs_read`, `fs_list`, `fs_grep`, `memory_search`, `kb_search`, `web_search`, `web_fetch`, `skills_list`, `skills_view`, …) work normally. The model is also told it is in plan mode in the system prompt so it produces analysis rather than attempting refused tools.
+
+Mode plumbing per surface:
+
+| Surface | How to switch |
+|---|---|
+| CLI | `--mode plan\|build`, or the short forms `--plan` / `--build`. In the interactive REPL: `/mode plan`, `/mode build`, or bare `/mode` to show the current value. |
+| TUI | **Tab** key while the chat pane is focused cycles Plan ↔ Build. A `[plan]` / `[build]` badge in the header bar shows the current value. Slash commands also work: `/mode`, `/mode plan`, `/mode build`. |
+| Web UI | The **🛠 build / 📋 plan** toggle in the top nav; per-tab, persisted in `localStorage`. |
+| `/v1/chat`, `/v1/chat/completions`, `/v1/responses` | Optional `"mode": "plan"` (or `"build"`) field in the JSON request body. Absent / unknown values default to `build` so existing OpenAI-compatible clients keep working unchanged. |
 
 ## tui
 

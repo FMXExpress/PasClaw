@@ -51,6 +51,7 @@ uses
                                      in the TTUI class; same dcc64
                                      visibility rule as the line above. }
   PasClaw.Tools.Registry,
+  PasClaw.Agent.Mode,              { TPasClawMode for the FMode field. }
   PasClaw.Agent.SubagentBg,        { TBackgroundSpawnCoordinator -- the
                                      BgCoordinator public field below; same
                                      dcc64 interface-visibility rule as the
@@ -68,6 +69,11 @@ type
     FRegistry: TToolRegistry;
     FModel:    string;
     FQuit:     Boolean;
+    (* Plan / Build mode (PR #290). Cycled by Tab when chat is
+       focused; surfaced in the header bar; threaded into LoopCfg.Mode
+       so the dispatch gate in Tools.ToolLoop sees it. Default pmBuild
+       so the TUI's historical full-access behaviour is preserved. *)
+    FMode:     TPasClawMode;
     {$IFNDEF FPC}
     { positioned-TUI state -- see Run() for the per-frame loop }
     FFocus:             TFocus;
@@ -1190,6 +1196,7 @@ begin
   Cfg.Model         := FModel;
   Cfg.MaxIterations := 6;
   Cfg.Parallel      := True;
+  Cfg.Mode          := FMode;  { PR #290: thread current Plan/Build into the dispatch gate }
   Cfg.Options       := DefaultChatOptions;
   Cfg.Options.CacheEnabled := PromptCacheEnabled;
   Cfg.Options.CacheTTL     := PromptCacheTTL;
@@ -1213,6 +1220,19 @@ begin
       prompt stays clean for fresh sessions. Helper lives in
       PasClaw.Session.Store. }
     Cfg.Options.SystemPrompt := FormatWorkingStateBlock(FSession.Meta);
+    (* PR #290: prepend a Plan Mode block so the model knows mutating
+       tools will refuse. The dispatch gate in Tools.ToolLoop is the
+       authority, but telling the model up-front means it produces a
+       useful analysis instead of a turn full of refused tool calls. *)
+    if FMode = pmPlan then
+      Cfg.Options.SystemPrompt :=
+        '## Plan Mode' + sLineBreak + sLineBreak +
+        'You are in PLAN mode (TUI Tab pressed). Read-only tools work; ' +
+        'fs_write / fs_edit_hashline / shell_exec / execute_code / ' +
+        'send_message / skills_manage / ... will REFUSE. Analyse the ' +
+        'codebase and propose a plan; do not attempt mutating tools.' +
+        sLineBreak + sLineBreak +
+        Cfg.Options.SystemPrompt;
   end;
   Cfg.OnText        := nil;
   Cfg.OnToolCall    := nil;
@@ -1430,7 +1450,19 @@ begin
       end;
     end
     else if Text = '/help' then
-      Flash('keys: Tab swap | N new | D del | Q quit | /theme | /model | /stats | /undo [N]')
+      Flash('keys: Tab=mode/swap | N new | D del | Q quit | /theme /model /stats /undo [N] /mode [plan|build]')
+    else if Text = '/mode' then
+      Flash('mode: ' + ModeName(FMode) + '  (Tab in chat to cycle; /mode plan or /mode build)')
+    else if Text = '/mode plan' then
+    begin
+      FMode := pmPlan;
+      Flash('mode -> plan');
+    end
+    else if Text = '/mode build' then
+    begin
+      FMode := pmBuild;
+      Flash('mode -> build');
+    end
     else if (Text = '/tools') and (FRegistry <> nil) then
       Flash(Format('registered tools: %d', [FRegistry.Count]))
     else if Text = '/theme' then
@@ -1667,7 +1699,20 @@ begin
   end;
   if Key = KEY_TAB then
   begin
-    if FFocus = foSessions then FFocus := foChat else FFocus := foSessions;
+    (* PR #290: when chat is focused, Tab cycles Plan / Build mode
+       (opencode parity); when sessions is focused Tab still swaps to
+       chat. Sessions-focused operator pressing Tab "moves into" the
+       chat to type; once typing, Tab is a frequent mode-toggle action.
+       Shift+Tab from chat back to sessions is conventional but we
+       cannot read Shift on every platform from KEY_TAB alone -- the
+       operator can press Escape and re-enter via session focus. *)
+    if FFocus = foChat then
+    begin
+      FMode := CycleMode(FMode);
+      Flash('mode -> ' + ModeName(FMode));
+    end
+    else
+      FFocus := foChat;
     FConfirmDelete := False;
     Exit;
   end;
@@ -1679,16 +1724,23 @@ end;
 
 procedure TTUI.DrawHeaderBar(W: Integer);
 var
-  Title, TimeStr, Line: string;
+  Title, ModeTag, TimeStr, Line: string;
+  TailLen: Integer;
 begin
   TimeStr := FormatDateTime('hh:nn:ss', Now);
-  Title := ' PasClaw  ' + StatusLine(FProvider, FModel, FRegistry);
-  Line := Title;
-  if Length(Line) > W - Length(TimeStr) - 2 then
-    Line := Copy(Line, 1, W - Length(TimeStr) - 2);
-  while Length(Line) < W - Length(TimeStr) - 1 do
+  (* PR #290: mode badge in the right-aligned tail next to the clock.
+     Always rendered (including "build") so the operator can tell at
+     a glance which mode they are in -- otherwise Plan mode is
+     invisible until a tool refusal surfaces. *)
+  ModeTag := '[' + ModeName(FMode) + ']';
+  Title   := ' PasClaw  ' + StatusLine(FProvider, FModel, FRegistry);
+  Line    := Title;
+  TailLen := Length(TimeStr) + 1 + Length(ModeTag) + 1;
+  if Length(Line) > W - TailLen - 1 then
+    Line := Copy(Line, 1, W - TailLen - 1);
+  while Length(Line) < W - TailLen do
     Line := Line + ' ';
-  Line := Line + TimeStr + ' ';
+  Line := Line + ModeTag + ' ' + TimeStr + ' ';
   if Length(Line) > W then Line := Copy(Line, 1, W);
   GotoXY(0, 0);
   WriteAnsiText(ConsoleTheme.HighlightText, Line);

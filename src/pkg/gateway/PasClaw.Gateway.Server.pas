@@ -302,6 +302,7 @@ uses
   PasClaw.Stream.Reliability,
   PasClaw.Agent.Compact,
   PasClaw.Agent.Prompt,
+  PasClaw.Agent.Mode,
   PasClaw.Identity,
   PasClaw.Vault.Client,     { SearchVault / GetVaultEntry -- /v1/vault browse }
   PasClaw.Gateway.ToolView,
@@ -2641,10 +2642,15 @@ begin
   LoopCfg.Model         := FCfg.DefaultModel;
   LoopCfg.MaxIterations := 8;
   LoopCfg.Parallel := True;
+  { PR #290: per-request Plan/Build. Defaults to pmBuild when the body
+    omits "mode", so OpenAI-compatible clients that don't know about
+    plan keep working unchanged. }
+  LoopCfg.Mode          := ParseModeFromBody(Body);
   LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
   LoopCfg.Options       := DefaultChatOptions;
   ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
-  LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
+  LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '',
+                                  LoopCfg.Registry <> nil, '', LoopCfg.Mode);
   { Identity stamping. When Cfg.Gateway.Token is set, the request
     reaching this point already passed CheckGatewayAuth's bearer
     check (or hit an exempt route), so we stamp 'gateway:authed' so
@@ -3272,6 +3278,7 @@ begin
     LoopCfg.Model         := ReqModel;
     LoopCfg.MaxIterations := FMaxIter;
     LoopCfg.Parallel := True;
+    LoopCfg.Mode          := ParseModeFromBody(Body);  { PR #290 }
     LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
     LoopCfg.Options       := DefaultChatOptions;
     ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
@@ -3285,7 +3292,8 @@ begin
       bare-bones clients that send only a user message get our identity
       preamble for free. }
     if not HasSystemMessage(Msgs) then
-      LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
+      LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '',
+                                      LoopCfg.Registry <> nil, '', LoopCfg.Mode);
     { Temperature: forward only when the client explicitly sent the field
       (Req.Has), so an absent field keeps the provider/library default
       rather than pinning 0. An explicit 0 IS honoured -- it's a valid
@@ -4993,6 +5001,7 @@ begin
       LoopCfg.Model         := ReqModel;
       LoopCfg.MaxIterations := FMaxIter;
       LoopCfg.Parallel := True;
+      LoopCfg.Mode          := ParseModeFromBody(Body);  { PR #290 }
       LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
       LoopCfg.Options       := DefaultChatOptions;
       ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
@@ -5001,7 +5010,8 @@ begin
       else
         LoopCfg.Identity := MakeIdentity('gateway', 'anon');
       if not HasSystemMessage(Msgs) then
-        LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '', LoopCfg.Registry <> nil);
+        LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '',
+                                        LoopCfg.Registry <> nil, '', LoopCfg.Mode);
       RawTemp := Req.GetFloat('temperature', 0);
       if RawTemp > 0 then LoopCfg.Options.Temperature := RawTemp;
       if Req.Has('max_output_tokens') then

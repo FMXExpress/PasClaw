@@ -44,6 +44,13 @@
   nav button:hover{border-color:var(--cyan);color:var(--cyan)}
   nav button.active{background:linear-gradient(120deg,rgba(32,246,255,.18),rgba(255,55,213,.18));
     color:var(--fg);border-color:var(--cyan);box-shadow:var(--glow-cyan)}
+  /* Plan/Build mode toggle (PR #290). Build is the default-quiet
+     appearance; Plan glows magenta-pink so the operator sees it
+     immediately. */
+  #mode-btn{font-size:11px;letter-spacing:.05em;text-transform:lowercase}
+  #mode-btn.mode-build{border-color:rgba(143,92,255,.45);color:var(--mut)}
+  #mode-btn.mode-plan{border-color:#ff37d5;color:#ff8ad5;
+    box-shadow:0 0 12px rgba(255,55,213,.45) inset, 0 0 12px rgba(255,55,213,.35)}
   main{position:relative;z-index:1;flex:1;display:flex;margin:.7rem .9rem .9rem;overflow:hidden;gap:.7rem}
   .tab{display:none;flex:1;min-width:0;border:1px solid rgba(143,92,255,.26);border-radius:16px;
     background:linear-gradient(120deg,var(--panel),rgba(32,12,45,.7));
@@ -354,6 +361,11 @@
     <button data-tab="stats">Stats</button>
     <button data-tab="settings">Settings</button>
     <select id="model-sel" title="Model used for new messages (empty = server default)" style="margin-left:auto"></select>
+    <!-- Plan/Build mode toggle (PR #290). Sets the `mode` field on every
+         /v1/chat/completions request. PLAN mode refuses mutating tools at
+         the gateway (fs_write, shell_exec, send_message, skills_manage,
+         ...); BUILD mode is full access. -->
+    <button id="mode-btn" title="Toggle Plan / Build mode. PLAN refuses write/exec tools; BUILD is full access.">🛠 build</button>
     <button id="theme-btn" title="Toggle light / dark theme">🌙</button>
     <button id="gw-token-btn" title="Set / clear gateway bearer token (used when PASCLAW_GATEWAY_TOKEN is set on the server)">🔑</button>
   </nav>
@@ -971,6 +983,11 @@ async function streamAssistant() {
      means "let the gateway use FCfg.DefaultModel" -- the historical default. */
   const sel = $("#model-sel");
   if (sel && sel.value) body.model = sel.value;
+  /* PR #290: Plan/Build mode. Send the current toggle on every chat
+     request. The gateway's ParseModeFromBody picks the field out of
+     the body; absent / unknown values default to "build" so OpenAI
+     clients that don't know about plan keep working. */
+  body.mode = currentMode;
   /* Per-chat parameters: a leading system message (the gateway lets a
      client system prompt win over its default), plus temperature /
      max_tokens, all honoured by /v1/chat/completions. */
@@ -1272,6 +1289,43 @@ function initTheme() {
     applyTheme();
   });
   applyTheme();
+}
+
+/* ===== Plan / Build mode toggle (PR #290) =====
+   Per-tab state; persisted in localStorage so a refresh keeps the
+   operator's choice. Sent on every /v1/chat/completions request via
+   body.mode (see streamAssistant). Default "build" so existing
+   deployments behave exactly as before. */
+const MODE_KEY = "pasclaw.mode.v1";
+let currentMode = "build";
+function loadMode() {
+  try {
+    const m = localStorage.getItem(MODE_KEY);
+    if (m === "plan" || m === "build") currentMode = m;
+  } catch {}
+}
+function applyModeUI() {
+  const b = $("#mode-btn");
+  if (!b) return;
+  if (currentMode === "plan") {
+    b.textContent = "📋 plan";
+    b.classList.add("mode-plan");
+    b.classList.remove("mode-build");
+  } else {
+    b.textContent = "🛠 build";
+    b.classList.add("mode-build");
+    b.classList.remove("mode-plan");
+  }
+}
+function initMode() {
+  loadMode();
+  applyModeUI();
+  const b = $("#mode-btn");
+  if (b) b.addEventListener("click", () => {
+    currentMode = (currentMode === "plan") ? "build" : "plan";
+    try { localStorage.setItem(MODE_KEY, currentMode); } catch {}
+    applyModeUI();
+  });
 }
 
 /* ===== Loaders for the read-only tabs (lazy-bound on first show) ===== */
@@ -2142,6 +2196,7 @@ function escapeHtml(s) {
 
 /* ===== Boot ===== */
 initTheme();
+initMode();
 loadModels();
 initParams();
 // Restore the tab named in the URL hash (deep link / reload / bookmark).
