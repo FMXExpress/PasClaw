@@ -423,6 +423,15 @@ type
   end;
   TBenchAggArray = array of TBenchAgg;
 
+  (* dcc64 E2003 fix: FPC accepted the bare `array of string` return
+     type via name-equivalence with a TStringArray declared somewhere
+     reachable through the uses chain, but Delphi requires the
+     identifier be in scope locally. Declare it here so the two
+     compilers agree without dragging an unrelated unit into the
+     uses block. Same idiom PasClaw.Tools.Registry / PasClaw.Tools.
+     Shell.Filters / MVCFramework.Console.pas use. *)
+  TStringArray = array of string;
+
 (* Split "a,b,c" into ['a','b','c'], trimming each entry. *)
 function SplitCSV(const S: string): TStringArray;
 var
