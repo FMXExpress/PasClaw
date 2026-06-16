@@ -397,14 +397,41 @@ end;
 
 function BuildPlanModeSection: string;
 begin
+  (* The plan-safe / plan-refused lists must match the actual
+     TToolCategory tags in the registry. web_fetch and memory_fetch
+     are tcMutating because their save_to / write paths touch the
+     workspace -- DO NOT advertise them as plan-safe even though
+     their "just read this URL" path looks read-only (the dispatch
+     gate refuses on category, not arguments). Codex P2 on PR #290.
+
+     Read-only (loadable):
+       fs_read / fs_list / fs_grep
+       memory_search / kb_search
+       web_search        (HTTP GETs only, tcReadOnly)
+       vault_search / vault_get
+       skills_list / skills_view
+       session_search
+       tool_output_get
+
+     Refused under Plan (tcMutating):
+       fs_write / fs_edit_hashline
+       shell_exec / execute_code / delphi_build
+       send_message
+       web_fetch / memory_fetch   (save_to writes a file)
+       skills_manage / kb_upload *)
   Result :=
     '## Plan Mode' + sLineBreak + sLineBreak +
     'You are in **PLAN** mode. Read-only tools (fs_read, fs_list, fs_grep, ' +
-    'memory_search, kb_search, web_search, web_fetch, skills_list, ' +
-    'skills_view, ...) work normally; write/exec tools (fs_write, ' +
-    'fs_edit_hashline, shell_exec, execute_code, send_message, ' +
-    'skills_manage, ...) are REFUSED at the dispatch layer.' + sLineBreak +
-    sLineBreak +
+    'memory_search, kb_search, web_search, skills_list, skills_view, ' +
+    'vault_search, vault_get, session_search, ...) work normally; ' +
+    'mutating tools (fs_write, fs_edit_hashline, shell_exec, ' +
+    'execute_code, delphi_build, send_message, web_fetch, memory_fetch, ' +
+    'skills_manage, kb_upload, ...) are REFUSED at the dispatch layer.' +
+    sLineBreak + sLineBreak +
+    'Note: web_fetch and memory_fetch are mutating because they can ' +
+    'persist results to disk (`save_to`). To read a URL in Plan mode, ' +
+    'use the search tools first; if a fetch is essential, ask the ' +
+    'operator to switch to Build mode.' + sLineBreak + sLineBreak +
     'Do not attempt mutating tools -- they will return ' +
     '`refused: ... needs build mode`. Instead, analyse the codebase and ' +
     'produce a concrete plan: list the files that will need to change, ' +

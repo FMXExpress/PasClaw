@@ -1450,7 +1450,7 @@ begin
       end;
     end
     else if Text = '/help' then
-      Flash('keys: Tab=mode/swap | N new | D del | Q quit | /theme /model /stats /undo [N] /mode [plan|build]')
+      Flash('keys: Tab=mode-cycle/focus-chat | Ctrl-B=back-to-sessions | N new | D del | Q quit | /theme /model /stats /undo [N] /mode [plan|build]')
     else if Text = '/mode' then
       Flash('mode: ' + ModeName(FMode) + '  (Tab in chat to cycle; /mode plan or /mode build)')
     else if Text = '/mode plan' then
@@ -1703,9 +1703,10 @@ begin
        (opencode parity); when sessions is focused Tab still swaps to
        chat. Sessions-focused operator pressing Tab "moves into" the
        chat to type; once typing, Tab is a frequent mode-toggle action.
-       Shift+Tab from chat back to sessions is conventional but we
-       cannot read Shift on every platform from KEY_TAB alone -- the
-       operator can press Escape and re-enter via session focus. *)
+       Codex P2 on the original PR: leaving Tab as the only
+       focus-swap meant chat-focused operators had no key path back
+       to the session list. KEY_CTRL_B below restores that path
+       without sacrificing the Tab-cycles-mode behaviour. *)
     if FFocus = foChat then
     begin
       FMode := CycleMode(FMode);
@@ -1713,6 +1714,17 @@ begin
     end
     else
       FFocus := foChat;
+    FConfirmDelete := False;
+    Exit;
+  end;
+  (* Ctrl+B = "Back to sessions". Restores the focus-swap path lost
+     when Tab became a mode cycler in chat focus (Codex P2 on PR #290).
+     Ctrl+B is below the printable threshold so HandleChatKey's input-
+     buffer accumulator skips it; the terminal emits it as the raw
+     byte 2 on every platform we ship to. *)
+  if (Key = 2) and (FFocus = foChat) then
+  begin
+    FFocus := foSessions;
     FConfirmDelete := False;
     Exit;
   end;
