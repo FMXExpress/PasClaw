@@ -53,6 +53,7 @@ interface
 uses
   SysUtils,
   PasClaw.Config,
+  PasClaw.Agent.Mode,
   PasClaw.Providers.Types;
 
 { Returns the fully-composed system prompt. UserSys is appended verbatim
@@ -77,7 +78,17 @@ uses
   long-standing default. }
 function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
                            ToolsEnabled: Boolean = True;
-                           const TaskHint: string = ''): string;
+                           const TaskHint: string = ''): string; overload;
+
+{ Mode-aware overload (PR #290). When Mode = pmPlan, a "PLAN MODE"
+  block is prepended so the model knows mutating tools will refuse and
+  it should produce analysis / a proposed plan rather than calling
+  write/exec tools. The dispatch gate in PasClaw.Tools.ToolLoop is the
+  authority -- the prompt block is belt-and-braces / model-honesty. }
+function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
+                           ToolsEnabled: Boolean;
+                           const TaskHint: string;
+                           Mode: TPasClawMode): string; overload;
 
 { True iff at least one message in the array is mrSystem. The gateway's
   /v1/chat/completions handler uses this to decide whether to inject the
@@ -384,11 +395,59 @@ begin
   Result := Acc + SectionSep + Section;
 end;
 
+function BuildPlanModeSection: string;
+begin
+  (* The plan-safe / plan-refused lists must match the actual
+     TToolCategory tags in the registry. web_fetch and memory_fetch
+     are tcMutating because their save_to / write paths touch the
+     workspace -- DO NOT advertise them as plan-safe even though
+     their "just read this URL" path looks read-only (the dispatch
+     gate refuses on category, not arguments). Codex P2 on PR #290.
+
+     Read-only (loadable):
+       fs_read / fs_list / fs_grep
+       memory_search / kb_search
+       web_search        (HTTP GETs only, tcReadOnly)
+       vault_search / vault_get
+       skills_list / skills_view
+       session_search
+       tool_output_get
+
+     Refused under Plan (tcMutating):
+       fs_write / fs_edit_hashline
+       shell_exec / execute_code / delphi_build
+       send_message
+       web_fetch / memory_fetch   (save_to writes a file)
+       skills_manage / kb_upload *)
+  Result :=
+    '## Plan Mode' + sLineBreak + sLineBreak +
+    'You are in **PLAN** mode. Read-only tools (fs_read, fs_list, fs_grep, ' +
+    'memory_search, kb_search, web_search, skills_list, skills_view, ' +
+    'vault_search, vault_get, session_search, ...) work normally; ' +
+    'mutating tools (fs_write, fs_edit_hashline, shell_exec, ' +
+    'execute_code, delphi_build, send_message, web_fetch, memory_fetch, ' +
+    'skills_manage, kb_upload, ...) are REFUSED at the dispatch layer.' +
+    sLineBreak + sLineBreak +
+    'Note: web_fetch and memory_fetch are mutating because they can ' +
+    'persist results to disk (`save_to`). To read a URL in Plan mode, ' +
+    'use the search tools first; if a fetch is essential, ask the ' +
+    'operator to switch to Build mode.' + sLineBreak + sLineBreak +
+    'Do not attempt mutating tools -- they will return ' +
+    '`refused: ... needs build mode`. Instead, analyse the codebase and ' +
+    'produce a concrete plan: list the files that will need to change, ' +
+    'the rough shape of each change, and any open questions for the ' +
+    'operator. The operator can switch you back to Build mode (Tab in ' +
+    'the TUI, ``--mode build`` on the CLI, the mode toggle in the web ' +
+    'UI) when ready to apply the plan.';
+end;
+
 function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
-                           ToolsEnabled: Boolean;
-                           const TaskHint: string): string;
+                           ToolsEnabled: Boolean; const TaskHint: string;
+                           Mode: TPasClawMode): string;
 begin
   Result := '';
+  if Mode = pmPlan then
+    Result := AppendSection(Result, BuildPlanModeSection);
   Result := AppendSection(Result, BuildIdentitySection);
   Result := AppendSection(Result, BuildWorkspaceSection);
   Result := AppendSection(Result,
@@ -402,6 +461,13 @@ begin
   Result := AppendSection(Result, BuildRulesSection(ToolsEnabled));
   if Trim(UserSys) <> '' then
     Result := AppendSection(Result, Trim(UserSys));
+end;
+
+function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
+                           ToolsEnabled: Boolean;
+                           const TaskHint: string): string;
+begin
+  Result := BuildSystemPrompt(Cfg, UserSys, ToolsEnabled, TaskHint, pmBuild);
 end;
 
 function HasSystemMessage(const Messages: array of TMessage): Boolean;

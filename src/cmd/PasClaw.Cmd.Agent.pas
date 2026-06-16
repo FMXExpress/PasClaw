@@ -51,6 +51,7 @@ uses
   PasClaw.Skills.Manage,
   PasClaw.Skills.Disclosure,
   PasClaw.Agent.SkillDistiller,
+  PasClaw.Agent.Mode,
   PasClaw.Agent.Prompt,
   PasClaw.Agent.Subagent,
   PasClaw.Agent.SubagentBg,
@@ -109,6 +110,12 @@ type
        sole stdout payload. Interactive mode ignores this; quiet
        only makes sense for one-shot -m. *)
     Quiet: Boolean;
+    (* --mode plan|build (PR #290). Default Build (full tool access).
+       Plan refuses tcMutating tools at dispatch time -- the model gets
+       analysis-only access. The interactive loop also re-checks the
+       current value before each turn so an in-session /mode switch
+       takes effect immediately. *)
+    Mode: TPasClawMode;
   end;
 
   TLoopHandlers = class
@@ -182,6 +189,18 @@ begin
     if (Argv[i] = '--quiet') or (Argv[i] = '-q') then begin A.Quiet := True; Inc(i); Continue; end;
     if Argv[i] = '--session'     then begin if i = High(Argv) then Exit(False); A.Session := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--backend'     then begin if i = High(Argv) then Exit(False); A.BackendOverride := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--mode'        then
+    begin
+      if i = High(Argv) then Exit(False);
+      if not ParseMode(Argv[i + 1], A.Mode) then
+      begin
+        PrintLnErr('invalid --mode "' + Argv[i + 1] + '" (expected plan|build)');
+        Exit(False);
+      end;
+      Inc(i, 2); Continue;
+    end;
+    if Argv[i] = '--plan'        then begin A.Mode := pmPlan;  Inc(i); Continue; end;
+    if Argv[i] = '--build'       then begin A.Mode := pmBuild; Inc(i); Continue; end;
     Inc(i);
   end;
 end;
@@ -332,7 +351,8 @@ begin
     the MEMORY section slices to task-relevant sections instead of
     whole files. }
   Result.Options.SystemPrompt  := BuildSystemPrompt(Cfg, A.SystemPrompt,
-                                                    Reg <> nil, TaskHint);
+                                                    Reg <> nil, TaskHint, A.Mode);
+  Result.Mode := A.Mode;
   Result.Options.ThinkingLevel := A.Thinking;
   if A.MaxTokens > 0 then Result.Options.MaxTokens := A.MaxTokens;
   { Prompt caching threads through TChatOptions so each provider
@@ -678,7 +698,7 @@ begin
           MaybeRender(Cfg, Reply));
 end;
 
-procedure RunInteractive(const Cfg: TConfig; const A: TAgentArgs);
+procedure RunInteractive(const Cfg: TConfig; var A: TAgentArgs);
 var
   Line: string;
   Provider: ILLMProvider;
@@ -1014,11 +1034,35 @@ begin
         PrintLn('  /compact     force a one-shot summariser pass on the history now');
         PrintLn('  /think       toggle extended thinking on the next turn (if the provider supports it)');
         PrintLn('  /tools       list registered tools');
+        PrintLn('  /mode [plan|build]   show or set the current mode (plan = read-only, build = full access)');
         PrintLn('  /steer <msg> queue a mid-loop steering message for the NEXT iteration');
         PrintLn('  /undo [N]    rewind N turns by restoring file checkpoints (default 1)');
         PrintLn('  /goal [--max N] <objective>');
         PrintLn('               auto-continue turns until a judge model says MET / FAILED (budget N, default 5)');
         PrintLn('  /quit        exit (alias: /exit)');
+        Continue;
+      end;
+      if (Line = '/mode') or (Copy(Line, 1, 6) = '/mode ') then
+      begin
+        if Line = '/mode' then
+          PrintLn('  mode: ' + ModeName(A.Mode) +
+                  '  (/mode plan -> read-only; /mode build -> full)')
+        else
+        begin
+          if not ParseMode(Trim(Copy(Line, 7, MaxInt)), A.Mode) then
+            PrintLn('  invalid mode -- use plan|build')
+          else
+          begin
+            { Re-build the system prompt so the next turn announces the new
+              mode to the model. The dispatch gate is the authority; this
+              keeps the model's own behaviour aligned. }
+            LoopCfg.Mode := A.Mode;
+            LoopCfg.Options.SystemPrompt :=
+              BuildSystemPrompt(Cfg, A.SystemPrompt, Reg <> nil, '', A.Mode);
+            PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
+                    ' mode -> ' + ModeName(A.Mode));
+          end;
+        end;
         Continue;
       end;
       if (Line = '/undo') or (Copy(Line, 1, 6) = '/undo ') then
@@ -1354,6 +1398,7 @@ begin
     PrintLnErr('usage: pasclaw agent [-m "msg"] [--model M] [--provider P] [--system S]');
     PrintLnErr('                     [--thinking low|medium|high] [--max-tokens N]');
     PrintLnErr('                     [--max-iterations N] [--no-tools] [-q|--quiet]');
+    PrintLnErr('                     [--mode plan|build] [--plan|--build]');
     Exit(1);
   end;
 

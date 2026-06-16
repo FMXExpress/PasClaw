@@ -23,6 +23,7 @@ uses
   PasClaw.Tools.Registry,
   PasClaw.Agent.Compact,
   PasClaw.Agent.Hooks,
+  PasClaw.Agent.Mode,
   PasClaw.Agent.Steering,
   PasClaw.Identity,
   PasClaw.Stream.Reliability;
@@ -130,6 +131,14 @@ type
        apply to the synchronous tool loop -- they're surfaced by
        gateway / channel paths that drive ChatStream directly. *)
     StreamReliability: TStreamReliabilityConfig;
+    (* Plan / Build mode (PR #290). pmBuild (zero / default) preserves
+       the historical full-access behaviour; pmPlan refuses any tool
+       whose Category = tcMutating at dispatch time with a clear
+       "switch to build mode" message in the tool result. The CLI / TUI
+       set this per-process; the gateway sets it per-request from the
+       JSON body's "mode" field. The system prompt also gets a "PLAN
+       MODE" addendum when pmPlan -- see PasClaw.Agent.Prompt. *)
+    Mode: TPasClawMode;
   end;
 
   TToolLoopResult = record
@@ -380,10 +389,31 @@ var
   RetryArgs, Patch, CanonicalPatch, N1, N2: string;
   ArgsObj: TJsonObject;
   HasUnsup: Boolean;
+  PlanTool: TTool;
 begin
   D.Err        := '';
   D.ResultText := '';
   RetryArgs    := D.Call.Func.Arguments;
+  (* Plan mode dispatch gate (PR #290). Before any preflight or registry
+     lookup, refuse mutating tools when Cfg.Mode = pmPlan. The refusal
+     becomes the tool result the model sees, so the model can plan
+     around the missing capability or report it to the operator. We
+     look up the tool to read its Category; an unknown name falls
+     through to the existing "no such tool" handling so plan mode
+     doesn't change the unknown-tool error message. *)
+  if (Cfg.Mode = pmPlan) and (Cfg.Registry <> nil)
+     and Cfg.Registry.Find(D.Call.Func.Name, PlanTool)
+     and (PlanTool.Category = tcMutating) then
+  begin
+    { Plan-mode refusal lands in ResultText (Err left empty) so the
+      descriptive guidance reaches the model verbatim. If we set Err
+      the loop would wrap the message as "ERROR: <Err>" and the
+      helpful "switch to build mode" hint would never reach the
+      model. The dispatch never actually ran the tool, so this is
+      not an error condition from the loop's perspective. }
+    D.ResultText := PlanModeRefusal(D.Call.Func.Name);
+    Exit;
+  end;
   if not PreflightToolCall(D.Call.Func.Name, RetryArgs, D.Err) then
     D.ResultText := ''
   else if Cfg.Registry <> nil then
