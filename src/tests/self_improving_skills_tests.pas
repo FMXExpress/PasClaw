@@ -161,6 +161,91 @@ begin
   end;
 end;
 
+(* Codex PR #288 P1: a hand-edited meta.json with `"name": "../../etc"`
+   would let the remove branch DeleteTree escape workspace/skills. *)
+procedure TestApprovePendingRejectsUnsafeMetaName;
+var
+  PendId, PendDir, Err: string;
+  Cfg: TConfig;
+  Ok: Boolean;
+begin
+  PendId := 'bad-meta-' + IntToStr(Random(1 shl 30));
+  PendDir := JoinPath(JoinPath(Home, 'workspace/skills/.pending'), PendId);
+  EnsureDir(PendDir);
+  WriteFileText(JoinPath(PendDir, 'meta.json'),
+    '{"id":"' + PendId + '","action":"remove","name":"../../escape","source":"x","created":"x"}');
+
+  Cfg := TConfig.Create;
+  try
+    Ok := ApprovePending(Home, PendId, Cfg, Err);
+  finally
+    Cfg.Free;
+  end;
+  AssertTrue(not Ok, 'approve must refuse unsafe meta name');
+  AssertTrue(Pos('unsafe', LowerCase(Err)) > 0, 'error mentions unsafe');
+  { Cleanup. }
+  DeleteFile(JoinPath(PendDir, 'meta.json'));
+  RemoveDir(PendDir);
+end;
+
+(* Codex PR #288 P2: an edit/patch whose staged SKILL.md renames the
+   skill must be refused; an edit/patch whose target no longer exists
+   must be refused too. *)
+procedure TestApprovePendingEditNameMismatch;
+var
+  Name, Path, Pend, Err, RenameId, RenameDir: string;
+  Cfg: TConfig;
+  Ok: Boolean;
+begin
+  Cfg := TConfig.Create;
+  try
+    { Stage + auto-approve an initial skill so something exists to edit. }
+    AssertTrue(CreateSkillFromContent(Home,
+                 MakeMD('orig_skill', 'first', '# Orig'),
+                 True, Cfg.SelfImprovingSkills.GuardDeny, Name, Path, Pend, Err),
+               'seed orig_skill: ' + Err);
+
+    { Hand-craft a pending edit whose meta says orig_skill but whose
+      staged SKILL.md renames to other_skill. }
+    RenameId := 'rename-' + IntToStr(Random(1 shl 30));
+    RenameDir := JoinPath(JoinPath(Home, 'workspace/skills/.pending'), RenameId);
+    EnsureDir(RenameDir);
+    WriteFileText(JoinPath(RenameDir, 'SKILL.md'),
+      MakeMD('other_skill', 'renamed', '# Renamed'));
+    WriteFileText(JoinPath(RenameDir, 'meta.json'),
+      '{"id":"' + RenameId + '","action":"edit","name":"orig_skill","source":"x","created":"x"}');
+
+    Ok := ApprovePending(Home, RenameId, Cfg, Err);
+    AssertTrue(not Ok, 'approve must refuse rename-via-edit');
+    AssertTrue(Pos('renames', Err) > 0, 'error mentions renames');
+    { Cleanup pending. }
+    DeleteFile(JoinPath(RenameDir, 'SKILL.md'));
+    DeleteFile(JoinPath(RenameDir, 'meta.json'));
+    RemoveDir(RenameDir);
+
+    { Now stage a legit edit, then delete the target before approving. }
+    RenameId := 'missing-' + IntToStr(Random(1 shl 30));
+    RenameDir := JoinPath(JoinPath(Home, 'workspace/skills/.pending'), RenameId);
+    EnsureDir(RenameDir);
+    WriteFileText(JoinPath(RenameDir, 'SKILL.md'),
+      MakeMD('orig_skill', 'first revised', '# Revised'));
+    WriteFileText(JoinPath(RenameDir, 'meta.json'),
+      '{"id":"' + RenameId + '","action":"edit","name":"orig_skill","source":"x","created":"x"}');
+    { Vanish the target. }
+    DeleteFile(JoinPath(JoinPath(Home, 'workspace/skills/orig_skill'), 'SKILL.md'));
+    RemoveDir(JoinPath(Home, 'workspace/skills/orig_skill'));
+
+    Ok := ApprovePending(Home, RenameId, Cfg, Err);
+    AssertTrue(not Ok, 'approve must refuse edit of missing target');
+    AssertTrue(Pos('no longer exists', Err) > 0, 'error mentions missing target');
+    DeleteFile(JoinPath(RenameDir, 'SKILL.md'));
+    DeleteFile(JoinPath(RenameDir, 'meta.json'));
+    RemoveDir(RenameDir);
+  finally
+    Cfg.Free;
+  end;
+end;
+
 procedure TestConfigRoundTrip;
 var
   C, C2: TConfig;
@@ -200,6 +285,8 @@ begin
     TestStageAndApprove;
     TestRejectAndDangerous;
     TestAutoApproveCommit;
+    TestApprovePendingRejectsUnsafeMetaName;
+    TestApprovePendingEditNameMismatch;
     TestConfigRoundTrip;
     WriteLn('ok - self-improving-skills tests passed');
   finally

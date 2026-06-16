@@ -2,7 +2,7 @@
   PasClaw.Skills.Manage - agent-authored skills (the write side of the
   Hermes-style "self-improving skills" feature).
 
-  Registers the `skill_manage` tool so the model can create / edit /
+  Registers the `skills_manage` tool so the model can create / edit /
   patch / remove skills on disk during a turn. Off by default; the
   command layer registers it only when
   Cfg.SelfImprovingSkills.SelfManage is True.
@@ -50,7 +50,7 @@
     - The description + body go through PasClaw.Promptware so an
       injected "ignore previous instructions" string can't be smuggled
       into the system prompt catalog via a self-authored skill.
-    - skill_manage cannot touch .pending sidecar internals or anything
+    - skills_manage cannot touch .pending sidecar internals or anything
       outside the skills tree; it only writes SKILL.md + meta.json.
 *)
 unit PasClaw.Skills.Manage;
@@ -65,7 +65,7 @@ uses
   PasClaw.Config,
   PasClaw.Tools.Registry;
 
-(* Register the `skill_manage` tool. No-op when SelfManage is off.
+(* Register the `skills_manage` tool. No-op when SelfManage is off.
    Captures the relevant Cfg fields into module state (the tool handler
    is a plain function pointer with no closure, same constraint the
    skill slot table works under). *)
@@ -292,7 +292,7 @@ begin
     MDPath := JoinPath(Dir, 'SKILL.md');
     WriteFileText(MDPath, RawSKILLMD);
     OutPath := Dir;
-    LogInfo('skill_manage: committed skill "%s" -> %s (effective next agent start)',
+    LogInfo('skills_manage: committed skill "%s" -> %s (effective next agent start)',
             [Name, MDPath]);
     Result := True;
     Exit;
@@ -316,7 +316,7 @@ begin
   end;
   OutPath := PendDir;
   OutPendingId := PendId;
-  LogInfo('skill_manage: staged skill "%s" as pending %s', [Name, PendId]);
+  LogInfo('skills_manage: staged skill "%s" as pending %s', [Name, PendId]);
   Result := True;
 end;
 
@@ -399,7 +399,7 @@ begin
   begin
     WriteFileText(JoinPath(JoinPath(SkillsRoot(GHomeDir), Name), 'SKILL.md'),
                   NewContent);
-    LogInfo('skill_manage: %s applied to "%s" (effective next agent start)',
+    LogInfo('skills_manage: %s applied to "%s" (effective next agent start)',
             [Action, Name]);
     Result := OkJSON(['status', 'committed', 'name', Name, 'action', Action,
                       'note', 'effective on next agent start']);
@@ -426,7 +426,7 @@ begin
   finally
     Meta.Free;
   end;
-  LogInfo('skill_manage: staged %s of "%s" as pending %s', [Action, Name, PendId]);
+  LogInfo('skills_manage: staged %s of "%s" as pending %s', [Action, Name, PendId]);
   Result := OkJSON(['status', 'staged', 'name', Name, 'action', Action,
                     'pending_id', PendId,
                     'note', 'awaiting operator approval (pasclaw skills approve ' + PendId + ')']);
@@ -523,7 +523,7 @@ begin
       ErrMsg := 'failed to delete ' + Dir;
       Exit;
     end;
-    LogInfo('skill_manage: removed skill "%s"', [Name]);
+    LogInfo('skills_manage: removed skill "%s"', [Name]);
     Result := OkJSON(['status', 'committed', 'name', Name, 'action', 'remove',
                       'note', 'effective on next agent start']);
     Exit;
@@ -543,7 +543,7 @@ begin
   finally
     Meta.Free;
   end;
-  LogInfo('skill_manage: staged removal of "%s" as pending %s', [Name, PendId]);
+  LogInfo('skills_manage: staged removal of "%s" as pending %s', [Name, PendId]);
   Result := OkJSON(['status', 'staged', 'name', Name, 'action', 'remove',
                     'pending_id', PendId,
                     'note', 'awaiting operator approval (pasclaw skills approve ' + PendId + ')']);
@@ -556,7 +556,7 @@ var
 begin
   ErrMsg := '';
   Result := '';
-  if GHomeDir = '' then begin ErrMsg := 'skill_manage not initialised'; Exit; end;
+  if GHomeDir = '' then begin ErrMsg := 'skills_manage not initialised'; Exit; end;
   O := TJsonObject.Parse(ArgsJSON);
   if O = nil then begin ErrMsg := 'invalid JSON arguments'; Exit; end;
   try
@@ -609,7 +609,7 @@ begin
   for i := 0 to High(Cfg.SelfImprovingSkills.GuardDeny) do
     GGuardDeny[i] := Cfg.SelfImprovingSkills.GuardDeny[i];
 
-  Tool.Name        := 'skill_manage';
+  Tool.Name        := 'skills_manage';
   Tool.Description := SkillManageDesc;
   Tool.Schema      := SkillManageSchema;
   Tool.Handler     := SkillManageHandler;
@@ -617,7 +617,7 @@ begin
   Tool.IsCore      := False;
   Tool.Category    := tcMutating;   { writes files -- never parallelised }
   Reg.Register(Tool);
-  LogInfo('skills: skill_manage tool registered (auto_approve=%s)',
+  LogInfo('skills: skills_manage tool registered (auto_approve=%s)',
           [BoolToStr(GAutoApprove, True)]);
 end;
 

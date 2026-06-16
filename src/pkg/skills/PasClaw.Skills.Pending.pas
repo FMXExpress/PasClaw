@@ -181,6 +181,17 @@ begin
   ErrMsg := '';
   if not FindPending(HomeDir, Id, P) then begin ErrMsg := 'no pending skill ' + Id; Exit; end;
 
+  (* Codex PR #288 P1: the remove branch built Dest from P.Name straight
+     out of meta.json without the safety guard, so a hand-edited meta
+     with `"name": "../.."` would let DeleteTree recurse out of the
+     skills tree. Validate the metadata name BEFORE constructing any
+     path -- on every action, not just create. *)
+  if not IsSafeSkillName(P.Name) then
+  begin
+    ErrMsg := 'pending metadata name "' + P.Name + '" is unsafe -- refusing';
+    Exit;
+  end;
+
   if P.Action = 'remove' then
   begin
     Dest := SkillDir(HomeDir, P.Name);
@@ -215,6 +226,31 @@ begin
   begin
     ErrMsg := 'staged skill matches dangerous pattern "' + Pattern + '" -- not approved';
     Exit;
+  end;
+
+  (* Codex PR #288 P2: edit/patch derived the destination from
+     Spec.Name (the name INSIDE the staged SKILL.md), which silently
+     diverged from P.Name if someone hand-renamed the pending file.
+     Worse, edit/patch never checked that the target still exists --
+     if the original skill was removed between stage and approve, an
+     edit would happily resurrect a NEW skill with the same name. Pin
+     non-create actions to the meta name and require the target dir
+     to be present.  *)
+  if (P.Action = 'edit') or (P.Action = 'patch') then
+  begin
+    if not SameText(Spec.Name, P.Name) then
+    begin
+      ErrMsg := 'staged %s renames the skill ("' + P.Name + '" -> "' + Spec.Name +
+                '"); reject and create a new skill instead';
+      ErrMsg := Format(ErrMsg, [P.Action]);
+      Exit;
+    end;
+    if not DirectoryExists(SkillDir(HomeDir, P.Name)) then
+    begin
+      ErrMsg := 'cannot ' + P.Action + ' "' + P.Name +
+                '": skill no longer exists; reject this pending entry';
+      Exit;
+    end;
   end;
 
   Dest := SkillDir(HomeDir, Spec.Name);

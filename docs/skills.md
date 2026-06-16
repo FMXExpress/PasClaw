@@ -137,9 +137,9 @@ Enable the pieces you want under `self_improving_skills` in `config.json`:
 }
 ```
 
-### `self_manage` — the `skill_manage` tool
+### `self_manage` — the `skills_manage` tool
 
-Registers a `skill_manage` tool with four actions the model can call mid-turn:
+Registers a `skills_manage` tool with four actions the model can call mid-turn:
 
 | action | args | effect |
 |---|---|---|
@@ -150,18 +150,18 @@ Registers a `skill_manage` tool with four actions the model can call mid-turn:
 
 Writes are **staged for approval** by default (see `auto_approve`). Like a hub install, an approved/committed skill is picked up on the **next agent start** — the tool registry is built once at boot, not mutated mid-session.
 
-### `progressive_disclosure` — `skills_list` / `skill_view`
+### `progressive_disclosure` — `skills_list` / `skills_view`
 
 Instead of inlining every skill's name + description into the system prompt on every turn, advertise two read-only tools and let the model pull what it needs:
 
 - `skills_list()` → metadata index (name, description, kind, source).
-- `skill_view(name)` → the full SKILL.md (or `skill_view(name, path)` for a file under the skill dir, e.g. `references/api.md`).
+- `skills_view(name)` → the full SKILL.md (or `skills_view(name, path)` for a file under the skill dir, e.g. `references/api.md`).
 
-The SKILLS section of the prompt shrinks to a one-line pointer, keeping the prompt small no matter how many skills accrue. `skill_view` confines reads to the skill's own directory.
+The SKILLS section of the prompt shrinks to a one-line pointer, keeping the prompt small no matter how many skills accrue. `skills_view` confines reads to the skill's own directory.
 
 ### `distiller` — autonomous skill creation
 
-After a qualifying turn (one that dispatched at least `min_tool_calls` tool calls), a small follow-up LLM call decides whether the work is a reusable procedure and, if so, drafts a SKILL.md. It runs **after** the user-facing reply, so it never adds latency. A Jaccard-similarity check against existing skill descriptions drops near-duplicates. Point `distiller.model` at a cheap model to keep the tax negligible. The draft goes through the same guard + staging path as `skill_manage`.
+After a qualifying turn (one that dispatched at least `min_tool_calls` tool calls), a small follow-up LLM call decides whether the work is a reusable procedure and, if so, drafts a SKILL.md. It runs **after** the user-facing reply, so it never adds latency. A Jaccard-similarity check against existing skill descriptions drops near-duplicates. Point `distiller.model` at a cheap model to keep the tax negligible. The draft goes through the same guard + staging path as `skills_manage`.
 
 ### Approval workflow
 
