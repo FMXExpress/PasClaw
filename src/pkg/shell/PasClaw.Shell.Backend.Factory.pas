@@ -61,7 +61,7 @@ function InstallShellBackend(const Cfg: TConfig;
 var
   Backend: IShellBackend;
   Opts: TDockerBackendOptions;
-  Err, WsHost: string;
+  WsHost: string;
 begin
   if CLIOverride <> '' then
     KindSelected := ParseKind(CLIOverride, Cfg.ShellBackend)
@@ -71,12 +71,13 @@ begin
   case KindSelected of
     sbDocker:
       begin
-        if not DockerCliReachable(Err) then
-          raise Exception.Create(
-            'shell_backend=docker selected but ' + Err + sLineBreak +
-            '  Start Docker, set shell_backend=local in config.json,' +
-            sLineBreak +
-            '  or pass --backend local on this command.');
+        { Docker is NOT probed here. Reachability + container spawn happen
+          lazily on the first shell_exec/execute_code (see
+          TDockerShellBackend.Exec), so a down/slow/wedged Docker never
+          blocks serve/agent startup -- only chats that actually run a
+          shell tool pay the cost, and the failure surfaces as that tool's
+          result. (Previously a boot-time `docker info` here could hang the
+          whole app; PR #286.) }
         Opts := DefaultDockerBackendOptions;
         if Cfg.ShellBackendDocker.Image   <> '' then Opts.Image   := Cfg.ShellBackendDocker.Image;
         if Cfg.ShellBackendDocker.Network <> '' then Opts.Network := Cfg.ShellBackendDocker.Network;

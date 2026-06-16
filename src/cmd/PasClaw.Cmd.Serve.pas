@@ -163,23 +163,16 @@ begin
           Exit(1);
         end;
       end;
-      { Spawn the single docker container up front (no-op for local) so a
-        first-time image pull surfaces as a clean console error here rather
-        than stalling the first request. SetCurrentSessionId points every
-        turn's shell_exec/execute_code at this container. }
+      { Lazy docker: allocate this server's single session id and point every
+        turn's shell_exec/execute_code at it, but DON'T spawn the container
+        now -- TDockerShellBackend.Exec spawns (and health-probes) it on the
+        first shell tool call. So serve starts instantly even when Docker is
+        down/slow/wedged; only chats that use a shell tool pay the cost, and
+        any Docker error surfaces as that tool's result. The finally below
+        still tears the container down (no-op if it was never spawned). }
       if KindSelected = sbDocker then
       begin
         ShellSessionId := NewSessionId;
-        PrintLn(Ansi.Dim + 'starting docker container for this server...' + Ansi.Reset);
-        try
-          StartShellSession(ShellSessionId);
-        except
-          on E: Exception do
-          begin
-            PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + E.Message);
-            Exit(1);
-          end;
-        end;
         SetCurrentSessionId(ShellSessionId);
       end;
     end;

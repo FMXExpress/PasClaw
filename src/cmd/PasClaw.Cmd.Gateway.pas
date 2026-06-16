@@ -205,19 +205,15 @@ begin
           Exit(1);
         end;
       end;
+      { Lazy docker (PR #286): allocate the gateway's single session id and
+        point shell_exec/execute_code at it, but spawn the container on first
+        use (TDockerShellBackend.Exec) instead of here -- the gateway starts
+        instantly even when Docker is down/slow, and Docker errors surface on
+        the first shell tool call. The finally still tears it down (no-op if
+        never spawned). }
       if KindSelected = sbDocker then
       begin
         ShellSessionId := NewSessionId;
-        PrintLn(Ansi.Dim + 'starting docker container for this gateway...' + Ansi.Reset);
-        try
-          StartShellSession(ShellSessionId);
-        except
-          on E: Exception do
-          begin
-            PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + E.Message);
-            Exit(1);
-          end;
-        end;
         SetCurrentSessionId(ShellSessionId);
       end;
     end;

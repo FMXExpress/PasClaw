@@ -126,6 +126,18 @@ uses
 const
   KeepAliveCmd = 'tail -f /dev/null';
 
+  { Timeouts (ms) for `docker` invocations, so a wedged Docker daemon
+    fails fast with a clear error instead of hanging serve/agent (Windows:
+    Docker Desktop mid-restart is the classic case). `docker info` is the
+    reachability probe and is the one that actually wedges -- hard-bound it
+    short. `docker stop` is bounded so cleanup on exit can't wedge either.
+    `docker run` is deliberately NOT capped: a first-run pull of a large or
+    private image can legitimately take minutes, and a fixed cap would
+    abort an otherwise-healthy backend (Codex P2 on PR #286). The short
+    info probe already gates daemon health before we ever reach run. }
+  DockerInfoTimeoutMs = 12000;     { DockerCliReachable probe }
+  DockerStopTimeoutMs = 15000;     { StopContainer }
+
 function DefaultDockerBackendOptions: TDockerBackendOptions;
 begin
   Result.Image      := 'debian:bookworm-slim';
@@ -210,7 +222,7 @@ begin
     Args.Add('info');
     Args.Add('--format');
     Args.Add('{{.ServerVersion}}');
-    ExitCode := RunArgvCapture('docker', Args, '', Out_);
+    ExitCode := RunArgvCapture('docker', Args, '', Out_, DockerInfoTimeoutMs);
   finally
     Args.Free;
   end;
@@ -399,6 +411,9 @@ begin
 
     LogInfo('shell-backend(docker): spawning %s (image=%s)',
             [ContainerName(SessionId), FOpts.Image]);
+    { Unbounded on purpose -- a cache-miss image pull can run for minutes;
+      see the timeout-const comment. Daemon health is already gated by the
+      bounded `docker info` probe before we get here. }
     ExitCode := RunArgvCapture('docker', Args, '', Out_);
   finally
     Args.Free;
@@ -431,7 +446,7 @@ begin
     Args.Add('--time');
     Args.Add('2');
     Args.Add(ContainerName(SessionId));
-    RunArgvCapture('docker', Args, '', Out_);
+    RunArgvCapture('docker', Args, '', Out_, DockerStopTimeoutMs);
   finally
     Args.Free;
   end;
@@ -475,6 +490,7 @@ function TDockerShellBackend.Exec(const SessionId, Cmd, WorkDir: string;
 var
   Args: TStringList;
   i: Integer;
+  Err: string;
 begin
   Output := '';
 
@@ -497,13 +513,33 @@ begin
     Result := -1;
     Exit;
   end;
+  { Lazy start: the container is spawned on first use, not at boot, so a
+    down/slow/wedged Docker only affects chats that actually run a shell
+    tool -- never serve/agent startup. DockerCliReachable is the bounded
+    health probe; SpawnContainer does the (unbounded) pull+run. Both stay
+    isolation-safe -- no host fallback. Surface either failure as the tool
+    result rather than crashing the agent loop. (If the operator pre-spawned
+    via StartShellSession, IsRunning is already true and we skip straight to
+    exec.) }
   if not IsRunning(SessionId) then
   begin
-    Output :=
-      'shell-backend(docker): container for SessionId "' + SessionId +
-      '" is not running. StartSession may have failed; check docker daemon.';
-    Result := -1;
-    Exit;
+    if not DockerCliReachable(Err) then
+    begin
+      Output := 'shell-backend(docker): ' + Err +
+                ' -- start Docker, or set shell_backend=local in config.json.';
+      Result := -1;
+      Exit;
+    end;
+    try
+      SpawnContainer(SessionId);
+    except
+      on E: Exception do
+      begin
+        Output := 'shell-backend(docker): ' + E.Message;
+        Result := -1;
+        Exit;
+      end;
+    end;
   end;
 
   { Build `docker exec [-e ...] [-w ...] <name> sh -c <Cmd>` as an argv
