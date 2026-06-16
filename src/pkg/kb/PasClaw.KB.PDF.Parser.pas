@@ -423,6 +423,20 @@ begin
   end;
 end;
 
+{ Build a document-wide map of font resource name (e.g. "F30") -> font
+  object id, restricted to fonts that actually carry a /ToUnicode CMap.
+
+  Known limitation: PDF font resource names are scoped to a page's
+  resource dictionary, not the document. Two pages can both define /F1
+  pointing at different subset fonts (common in LaTeX output where each
+  page gets its own subset). Because this map is document-wide and
+  AddOrSetValue is last-write-wins, pages using the *other* /F1 will
+  decode with the wrong /ToUnicode map and produce garbled glyphs for
+  those runs. Fixing this requires per-page resource maps threaded
+  through ParseTextOperators; deferred -- single-font and
+  same-font-across-pages documents (the majority of technical PDFs)
+  work correctly, and the CP1252 fallback in DecodeStringBytes still
+  yields readable plain ASCII even when the /ToUnicode lookup misses. }
 class function TPDFParser.BuildResourceFontMap(const S: string;
   const Fonts: TObjectDictionary<Integer, TFontInfo>): TDictionary<string, Integer>;
 var
@@ -700,6 +714,26 @@ var
   CurFont: TFontInfo;
   LastName: string;
   FID: Integer;
+  { Set when a positioning operator (Td/TD/Tm/T*/'/") follows an
+    already-emitted string; the next text-show operator prepends a
+    space before its decoded bytes. Without this, a BT block of the
+    form `(Hello) Tj 50 0 Td (World) Tj` extracts as "HelloWorld"
+    instead of "Hello World" -- TJ-array negative-number spacing
+    already handled below covers only positioned glyphs inside a
+    single TJ operand. }
+  NeedSpaceBeforeNext: Boolean;
+
+  procedure EmitWithSpacing(const Decoded: string);
+  begin
+    if NeedSpaceBeforeNext then
+    begin
+      if (Result <> '') and (Result[Length(Result)] <> ' ') then
+        Result := Result + ' ';
+      NeedSpaceBeforeNext := False;
+    end;
+    Result := Result + Decoded;
+  end;
+
 begin
   Result := '';
   I := 1;
@@ -712,6 +746,7 @@ begin
   InsideTJ := False;
   CurFont := nil;
   LastName := '';
+  NeedSpaceBeforeNext := False;
 
   while I <= Len do
   begin
@@ -764,7 +799,7 @@ begin
         if ParenDepth = 0 then
         begin
           InParen := False;
-          Result := Result + DecodeStringBytes(CurrentStr, CurFont);
+          EmitWithSpacing(DecodeStringBytes(CurrentStr, CurFont));
           CurrentStr := '';
         end
         else
@@ -780,7 +815,7 @@ begin
       if BlockS[I] = '>' then
       begin
         InHex := False;
-        Result := Result + DecodeStringBytes(HexToRawBytes(CurrentHex), CurFont);
+        EmitWithSpacing(DecodeStringBytes(HexToRawBytes(CurrentHex), CurFont));
         CurrentHex := '';
       end
       else if CharInSet(BlockS[I], ['0'..'9', 'a'..'f', 'A'..'F']) then
@@ -825,6 +860,27 @@ begin
         if (ResFontMap <> nil) and ResFontMap.TryGetValue(LastName, FID) then
           Fonts.TryGetValue(FID, CurFont);
         Inc(I);
+      end
+      else if (BlockS[I] = 'T') and (I < Len) and
+              ((BlockS[I + 1] = 'd') or (BlockS[I + 1] = 'D') or
+               (BlockS[I + 1] = 'm') or (BlockS[I + 1] = '*')) then
+      begin
+        { Td (translate), TD (translate + set leading), Tm (set matrix),
+          T* (next line): all position operators between text shows.
+          Mark that we need a space before the next emission so word-
+          per-Tj layouts ("BT (Hello) Tj 50 0 Td (World) Tj ET") don't
+          run together. }
+        if Result <> '' then
+          NeedSpaceBeforeNext := True;
+        Inc(I);
+      end
+      else if (BlockS[I] = '''') or (BlockS[I] = '"') then
+      begin
+        { ' (move to next line + show string) and " (move + show + adjust
+          spacings) are text-show ops preceded by an implicit line break,
+          so always treat as a word boundary. }
+        if Result <> '' then
+          NeedSpaceBeforeNext := True;
       end
       else if BlockS[I] = '[' then
       begin
@@ -1114,8 +1170,7 @@ var
   M: TMatch;
   ContentIDs: TList<Integer>;
   ObjID: Integer;
-  ObjMarker: string;
-  ObjIdx, NextObjIdx: Integer;
+  ObjIdx, EndObjIdx: Integer;
   PagesProcessed: Integer;
   ParsedPageCount: Integer;
   ObjIndex: TDictionary<Integer, Integer>;
@@ -1156,47 +1211,52 @@ begin
       begin
         for ObjID in ContentIDs do
         begin
-          ObjMarker := Format('%d 0 obj', [ObjID]);
-          ObjIdx := Pos(ObjMarker, S);
-          if ObjIdx > 0 then
+          { Use the precomputed object index so non-zero-generation
+            content streams (e.g. "12 1 obj" after an incremental
+            update) are still resolved. A regex hardcoded to "%d 0 obj"
+            would miss them and the wrapper would mis-report a valid
+            text PDF as "no extractable text". }
+          if not ObjIndex.TryGetValue(ObjID, ObjIdx) then Continue;
+
+          StreamIdx := Pos('stream', S, ObjIdx);
+          if StreamIdx > 0 then
           begin
-            StreamIdx := Pos('stream', S, ObjIdx);
-            if StreamIdx > 0 then
+            { Confirm the stream belongs to this object: the next
+              'endobj' must come after the stream, not before. Mirrors
+              the bounds check in GetObjectStreamData. }
+            EndObjIdx := Pos('endobj', S, ObjIdx);
+            if (EndObjIdx = 0) or (StreamIdx < EndObjIdx) then
             begin
-              NextObjIdx := Pos('obj', S, ObjIdx + Length(ObjMarker));
-              if (NextObjIdx = 0) or (StreamIdx < NextObjIdx) then
+              EndstreamIdx := Pos('endstream', S, StreamIdx + 6);
+              if EndstreamIdx > 0 then
               begin
-                EndstreamIdx := Pos('endstream', S, StreamIdx + 6);
-                if EndstreamIdx > 0 then
+                Dict := GetPrecedingDictionary(S, StreamIdx);
+
+                DataStart := StreamIdx + 6;
+                while (DataStart < EndstreamIdx) and CharInSet(S[DataStart], [#10, #13]) do
+                  Inc(DataStart);
+
+                DataLen := EndstreamIdx - DataStart;
+                if DataLen > 0 then
                 begin
-                  Dict := GetPrecedingDictionary(S, StreamIdx);
+                  SetLength(StreamBytes, DataLen);
+                  Move(Bytes[DataStart - 1], StreamBytes[0], DataLen);
 
-                  DataStart := StreamIdx + 6;
-                  while (DataStart < EndstreamIdx) and CharInSet(S[DataStart], [#10, #13]) do
-                    Inc(DataStart);
+                  if ContainsText(Dict, '/FlateDecode') or ContainsText(Dict, '/Fl') then
+                    Decompressed := DecompressFlate(StreamBytes)
+                  else
+                    Decompressed := StreamBytes;
 
-                  DataLen := EndstreamIdx - DataStart;
-                  if DataLen > 0 then
+                  if Length(Decompressed) > 0 then
                   begin
-                    SetLength(StreamBytes, DataLen);
-                    Move(Bytes[DataStart - 1], StreamBytes[0], DataLen);
-
-                    if ContainsText(Dict, '/FlateDecode') or ContainsText(Dict, '/Fl') then
-                      Decompressed := DecompressFlate(StreamBytes)
-                    else
-                      Decompressed := StreamBytes;
-
-                    if Length(Decompressed) > 0 then
+                    DecompressedStr := BytesToString(Decompressed);
+                    M := TRegEx.Match(DecompressedStr, '\bBT\b([\s\S]*?)\bET\b', [roIgnoreCase]);
+                    while M.Success do
                     begin
-                      DecompressedStr := BytesToString(Decompressed);
-                      M := TRegEx.Match(DecompressedStr, '\bBT\b([\s\S]*?)\bET\b', [roIgnoreCase]);
-                      while M.Success do
-                      begin
-                        BlockText := ParseTextOperators(M.Groups[1].Value, ResFontMap, Fonts);
-                        if BlockText <> '' then
-                          TextBuilder.Add(BlockText);
-                        M := M.NextMatch;
-                      end;
+                      BlockText := ParseTextOperators(M.Groups[1].Value, ResFontMap, Fonts);
+                      if BlockText <> '' then
+                        TextBuilder.Add(BlockText);
+                      M := M.NextMatch;
                     end;
                   end;
                 end;

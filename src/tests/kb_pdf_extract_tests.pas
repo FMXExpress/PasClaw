@@ -156,6 +156,94 @@ begin
   end;
 end;
 
+{ Two Tj operands in the same BT block separated by a Td position op.
+  Before the spacing fix this concatenated as "FooBar" instead of
+  "Foo Bar". Covers Codex P2 finding #3. }
+procedure TestPositionedTjSpacing;
+var
+  Dir, Path, Text, Err: string;
+  OK: Boolean;
+  PositionedPDF: string;
+const
+  CR = #13#10;
+begin
+  PositionedPDF :=
+    '%PDF-1.4' + CR +
+    '1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj' + CR +
+    '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj' + CR +
+    '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 144]' +
+      '/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj' + CR +
+    '4 0 obj<</Length 80>>' + CR +
+    'stream' + CR +
+    'BT' + CR +
+    '/F1 24 Tf' + CR +
+    '60 90 Td' + CR +
+    '(Foo) Tj' + CR +
+    '50 0 Td' + CR +
+    '(Bar) Tj' + CR +
+    'ET' + CR +
+    'endstream' + CR +
+    'endobj' + CR +
+    '5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj' + CR +
+    'trailer<</Size 6/Root 1 0 R>>' + CR +
+    '%%EOF' + CR;
+  Dir := GetTempDir(False);
+  Path := Dir + 'pasclaw_kb_pdf_test_positioned.pdf';
+  WriteRaw(Path, PositionedPDF);
+  try
+    OK := ExtractPDFText(Path, Text, Err);
+    AssertTrue(OK, 'positioned PDF extracts (err=' + Err + ')');
+    AssertContains(Text, 'Foo Bar', 'Td-separated Tj operands get a space inserted');
+  finally
+    DeleteFile(Path);
+  end;
+end;
+
+{ Content stream resolved through a nonzero-generation reference must
+  still be located. The parser now uses BuildObjectIndex (which records
+  every "N G obj" regardless of G) instead of a hardcoded "N 0 obj"
+  regex. Covers Codex P2 finding #1. }
+procedure TestNonZeroGenerationContent;
+var
+  Dir, Path, Text, Err: string;
+  OK: Boolean;
+  Pdf: string;
+const
+  CR = #13#10;
+begin
+  Pdf :=
+    '%PDF-1.4' + CR +
+    '1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj' + CR +
+    '2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj' + CR +
+    { Page's /Contents references gen 0 (the only generation supported by
+      the regex in GetPageContentStreamIDs); we mark obj 4 itself as
+      generation 1 to prove the lookup no longer hardcodes "0". }
+    '3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 144]' +
+      '/Contents 4 0 R/Resources<</Font<</F1 5 0 R>>>>>>endobj' + CR +
+    '4 1 obj<</Length 60>>' + CR +
+    'stream' + CR +
+    'BT' + CR +
+    '/F1 24 Tf' + CR +
+    '60 90 Td' + CR +
+    '(GenOne text) Tj' + CR +
+    'ET' + CR +
+    'endstream' + CR +
+    'endobj' + CR +
+    '5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj' + CR +
+    'trailer<</Size 6/Root 1 0 R>>' + CR +
+    '%%EOF' + CR;
+  Dir := GetTempDir(False);
+  Path := Dir + 'pasclaw_kb_pdf_test_gen1.pdf';
+  WriteRaw(Path, Pdf);
+  try
+    OK := ExtractPDFText(Path, Text, Err);
+    AssertTrue(OK, 'gen-1 content stream extracts (err=' + Err + ')');
+    AssertContains(Text, 'GenOne text', 'non-zero generation content stream resolved');
+  finally
+    DeleteFile(Path);
+  end;
+end;
+
 procedure TestEmptyTextPDF;
 { A PDF whose only objects are font/metadata (no BT/ET text streams)
   reports an explanatory Err rather than a silent empty index. Mirrors
@@ -194,6 +282,8 @@ begin
   TestMissingFile;
   TestNonPDF;
   TestMinimalPDF;
+  TestPositionedTjSpacing;
+  TestNonZeroGenerationContent;
   TestEmptyTextPDF;
   Writeln('ok - kb pdf extract tests passed');
 end.
