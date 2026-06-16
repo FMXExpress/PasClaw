@@ -4531,6 +4531,8 @@ var
                                     the bucket-stats accumulation. }
   ParamsObj: TJsonObject;
   ParamsRaw, ToolKind, ToolDisplayName: string;
+  TCObjIn, FnObjIn: TJsonObject;   { object-form tool_choice parse }
+  ForcedFn: string;
   EmptyToolCalls: array of TToolCall;
   FcCallIdVal, FcSignatureVal: string;
 
@@ -4910,21 +4912,43 @@ begin
       else if Req.Has('max_tokens') then
         PassthroughOpts.MaxTokens := Req.GetInt('max_tokens', PassthroughOpts.MaxTokens);
 
-      (* tool_choice forwarding. Accept the three string forms every
-        provider understands ("auto", "none", "required"). Anything
-        else -- most notably the object form
-        {"type":"function","function":{"name":"..."}}, which would
-        need per-provider translation -- is logged at debug and
-        dropped; the provider's default behaviour (typically
-        "auto" when tools are present) applies. *)
+      (* tool_choice forwarding. Two shapes:
+           - the string forms "auto" / "none" / "required";
+           - the object form {"type":"function","function":{"name":"..."}}
+             that forces a specific tool. We carry the forced name in
+             PassthroughOpts.ToolChoice (any non-keyword value is a tool
+             name by convention); each provider emits its own native shape
+             (OpenAI {"type":"function",...}, Anthropic {"type":"tool",...}).
+         Anything we can't interpret is logged at debug and dropped, so the
+         provider's default (typically "auto" with tools present) applies. *)
       if Req.Has('tool_choice') then
       begin
         ToolKind := LowerCase(Trim(Req.GetStr('tool_choice', '')));
         if (ToolKind = 'auto') or (ToolKind = 'none') or (ToolKind = 'required') then
           PassthroughOpts.ToolChoice := ToolKind
         else
-          LogDebug('responses: dropping tool_choice (only string forms ' +
-                   'auto/none/required supported; object form is a follow-up)', []);
+        begin
+          ForcedFn := '';
+          TCObjIn := Req.ChildObject('tool_choice');
+          if TCObjIn <> nil then
+          try
+            FnObjIn := TCObjIn.ChildObject('function');
+            if FnObjIn <> nil then
+            try
+              ForcedFn := Trim(FnObjIn.GetStr('name', ''));
+            finally
+              FnObjIn.Free;
+            end;
+          finally
+            TCObjIn.Free;
+          end;
+          if ForcedFn <> '' then
+            PassthroughOpts.ToolChoice := ForcedFn
+          else
+            LogDebug('responses: dropping unrecognised tool_choice ' +
+                     '(want auto/none/required or {"type":"function",' +
+                     '"function":{"name":...}})', []);
+        end;
       end;
 
       LogDebug('responses: passthrough %d msg(s), %d tool def(s), tool_choice=%s -> %s',

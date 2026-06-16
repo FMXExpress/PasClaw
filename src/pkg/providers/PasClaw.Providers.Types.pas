@@ -95,14 +95,19 @@ type
     Stream:        Boolean;
     SystemPrompt:  string;
     ThinkingLevel: string;   { "", "low", "medium", "high" }
-    ToolChoice:    string;   { "", "auto", "none", "required" -- the three forms
-                               every provider can represent. Empty means "do
-                               not emit the field"; the provider's own default
-                               (typically "auto" when tools are present) applies.
-                               Object-shaped tool_choice (force a specific
-                               function by name) is not currently supported by
-                               this field -- when a client sends one the
-                               gateway logs and drops it. }
+    ToolChoice:    string;   { Tool-selection control. Recognised values:
+                                 ""         -- do not emit; provider default
+                                               (typically "auto" with tools)
+                                 "auto"     -- model decides
+                                 "none"     -- must not call a tool
+                                 "required" -- must call some tool
+                                 <tool name> -- force that specific tool.
+                               Any non-empty value that isn't one of the three
+                               keywords is treated as a tool/function NAME to
+                               force; each provider emits its native object
+                               shape (OpenAI type=function with function.name,
+                               Anthropic type=tool with name). Gemini ignores
+                               tool_choice entirely. }
     (* Prompt caching. When CacheEnabled, the Anthropic builder tags
        the system prompt and the trailing tools-array entry with an
        ephemeral cache_control breakpoint; the OpenAI builder emits
