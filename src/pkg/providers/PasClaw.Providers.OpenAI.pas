@@ -168,7 +168,7 @@ function BuildOAIRequest(const Messages: array of TMessage;
                          const Options:  TChatOptions;
                          const ServerTools: TOpenAIServerTools): string;
 var
-  Root, M, ToolObj, FObj, TCObj, EmptyParams, WSO: TJsonObject;
+  Root, M, ToolObj, FObj, TCObj, TCFnObj, EmptyParams, WSO: TJsonObject;
   MsgArr, ToolArr, TCArr: TJsonArray;
   i, j: Integer;
   Sys: string;
@@ -267,14 +267,26 @@ begin
       end;
       Root.PutArray('tools', ToolArr);
 
-      { tool_choice maps 1:1 to the OpenAI Chat Completions schema:
-          "auto" / "none" / "required" -- emitted as a string field.
-        Empty means "do not emit; provider default applies". The
-        function-by-name object form is not yet supported here;
-        TChatOptions.ToolChoice is a plain string. }
+      (* tool_choice maps to the OpenAI Chat Completions schema:
+           "auto" / "none" / "required" -- emitted as a string field;
+           a specific tool NAME -- emitted as the object form
+           {"type":"function","function":{"name":<name>}}.
+         Empty means "do not emit; provider default applies". By
+         convention any ToolChoice value that isn't one of the three
+         keywords (and isn't empty) is treated as a function name to
+         force -- see TChatOptions.ToolChoice. *)
       if (Options.ToolChoice = 'auto') or (Options.ToolChoice = 'none') or
          (Options.ToolChoice = 'required') then
-        Root.PutStr('tool_choice', Options.ToolChoice);
+        Root.PutStr('tool_choice', Options.ToolChoice)
+      else if Options.ToolChoice <> '' then
+      begin
+        TCObj := TJsonObject.Create;
+        TCFnObj := TJsonObject.Create;
+        TCFnObj.PutStr('name', Options.ToolChoice);
+        TCObj.PutStr('type', 'function');
+        TCObj.PutObject('function', TCFnObj);
+        Root.PutObject('tool_choice', TCObj);
+      end;
     end;
 
     Result := Root.ToJSON;

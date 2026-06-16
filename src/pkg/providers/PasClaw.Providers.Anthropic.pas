@@ -382,7 +382,10 @@ begin
                                               because omitting the field with
                                               a non-empty tools array still
                                               lets the model call them)
-        Empty string means "don't emit; let provider default apply". *)
+          <tool name> -> {"type":"tool","name":<name>}  (force that tool)
+        Empty string means "don't emit; let provider default apply". By
+        convention any non-keyword, non-empty value is a tool name to
+        force -- see TChatOptions.ToolChoice. *)
       if (Options.ToolChoice = 'auto')
          or (Options.ToolChoice = 'required')
          or (Options.ToolChoice = 'none') then
@@ -394,6 +397,13 @@ begin
           ToolObj.PutStr('type', 'any')
         else
           ToolObj.PutStr('type', 'none');
+        Root.PutObject('tool_choice', ToolObj);
+      end
+      else if Options.ToolChoice <> '' then
+      begin
+        ToolObj := TJsonObject.Create;
+        ToolObj.PutStr('type', 'tool');
+        ToolObj.PutStr('name', Options.ToolChoice);
         Root.PutObject('tool_choice', ToolObj);
       end;
     end;
