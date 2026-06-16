@@ -45,6 +45,7 @@ uses
   SysUtils, Classes, SyncObjs,
   IdHTTPServer, IdContext, IdCustomHTTPServer, IdGlobal, IdSocketHandle,
   PasClaw.Config,
+  PasClaw.JSON,            { TJsonObject -- ResolveResponsesToolChoice param }
   PasClaw.Providers.Types,
   PasClaw.Providers.Intf,
   PasClaw.Tools.Registry,
@@ -277,13 +278,20 @@ procedure AccumulateGatewayStatsRaw(const Cfg: TConfig;
    slip past the lexical compare. Exposed for tests. *)
 function IsRestrictedFsPath(const Path: string): Boolean;
 
+(* Resolve a /v1/responses request's tool_choice into the
+   TChatOptions.ToolChoice convention: '' when absent/unrecognised (the
+   provider default applies), 'auto'/'none'/'required', or a tool NAME to
+   force. Accepts the keyword string form and both object forms that name
+   a function -- the Responses API's flat top-level "name", and the
+   Chat-Completions nested function.name. Exposed for tests. *)
+function ResolveResponsesToolChoice(Req: TJsonObject): string;
+
 implementation
 
 uses
   DateUtils,
   {$IFDEF FPC}{$IFDEF UNIX}BaseUnix,{$ENDIF}{$ENDIF}
   IdTCPConnection,
-  PasClaw.JSON,
   PasClaw.Logger,
   PasClaw.Utils,
   PasClaw.Crypto.HMAC,        { Base64ToBytes -- decode binary KB uploads }
@@ -3673,6 +3681,40 @@ begin
   end;
 end;
 
+function ResolveResponsesToolChoice(Req: TJsonObject): string;
+var
+  ToolKind: string;
+  TCObj, FnObj: TJsonObject;
+begin
+  Result := '';
+  if (Req = nil) or not Req.Has('tool_choice') then Exit;
+  { Keyword string form: "auto" / "none" / "required". GetStr returns ''
+    when tool_choice is an object, so this falls through to the object
+    parse below for the force-a-function shapes. }
+  ToolKind := LowerCase(Trim(Req.GetStr('tool_choice', '')));
+  if (ToolKind = 'auto') or (ToolKind = 'none') or (ToolKind = 'required') then
+    Exit(ToolKind);
+  TCObj := Req.ChildObject('tool_choice');
+  if TCObj = nil then Exit;
+  try
+    { Responses API: flat top-level name. Then fall back to the
+      Chat-Completions nested function.name. }
+    Result := Trim(TCObj.GetStr('name', ''));
+    if Result = '' then
+    begin
+      FnObj := TCObj.ChildObject('function');
+      if FnObj <> nil then
+      try
+        Result := Trim(FnObj.GetStr('name', ''));
+      finally
+        FnObj.Free;
+      end;
+    end;
+  finally
+    TCObj.Free;
+  end;
+end;
+
 function BuildResponsesObject(const Id, Model, Status, Content: string;
                                const ToolCalls: array of TToolCall;
                                const ToolsRawJSON: string;
@@ -4531,8 +4573,6 @@ var
                                     the bucket-stats accumulation. }
   ParamsObj: TJsonObject;
   ParamsRaw, ToolKind, ToolDisplayName: string;
-  TCObjIn, FnObjIn: TJsonObject;   { object-form tool_choice parse }
-  ForcedFn: string;
   EmptyToolCalls: array of TToolCall;
   FcCallIdVal, FcSignatureVal: string;
 
@@ -4912,53 +4952,20 @@ begin
       else if Req.Has('max_tokens') then
         PassthroughOpts.MaxTokens := Req.GetInt('max_tokens', PassthroughOpts.MaxTokens);
 
-      (* tool_choice forwarding. Two shapes:
-           - the string forms "auto" / "none" / "required";
-           - the object form {"type":"function","function":{"name":"..."}}
-             that forces a specific tool. We carry the forced name in
-             PassthroughOpts.ToolChoice (any non-keyword value is a tool
-             name by convention); each provider emits its own native shape
-             (OpenAI {"type":"function",...}, Anthropic {"type":"tool",...}).
-         Anything we can't interpret is logged at debug and dropped, so the
-         provider's default (typically "auto" with tools present) applies. *)
+      (* tool_choice forwarding. ResolveResponsesToolChoice handles the
+         keyword string forms ("auto"/"none"/"required") AND the two
+         force-a-function object shapes (Responses flat top-level name;
+         Chat-Completions nested function.name), returning the forced tool
+         NAME by convention. Each provider then emits its own native shape.
+         '' means absent or unrecognised -> drop and let the provider
+         default (typically "auto" with tools present) apply. *)
       if Req.Has('tool_choice') then
       begin
-        ToolKind := LowerCase(Trim(Req.GetStr('tool_choice', '')));
-        if (ToolKind = 'auto') or (ToolKind = 'none') or (ToolKind = 'required') then
-          PassthroughOpts.ToolChoice := ToolKind
-        else
-        begin
-          ForcedFn := '';
-          TCObjIn := Req.ChildObject('tool_choice');
-          if TCObjIn <> nil then
-          try
-            (* Two object shapes force a specific function:
-                 Responses API : type=function with a TOP-LEVEL name (the
-                                 same shape tools[] entries use);
-                 Chat Compl.   : type=function with a NESTED function.name.
-               Prefer the top-level name (the standard for /v1/responses),
-               then fall back to the nested Chat-Completions form. *)
-            ForcedFn := Trim(TCObjIn.GetStr('name', ''));
-            if ForcedFn = '' then
-            begin
-              FnObjIn := TCObjIn.ChildObject('function');
-              if FnObjIn <> nil then
-              try
-                ForcedFn := Trim(FnObjIn.GetStr('name', ''));
-              finally
-                FnObjIn.Free;
-              end;
-            end;
-          finally
-            TCObjIn.Free;
-          end;
-          if ForcedFn <> '' then
-            PassthroughOpts.ToolChoice := ForcedFn
-          else
-            LogDebug('responses: dropping unrecognised tool_choice ' +
-                     '(want auto/none/required, {"type":"function","name":...}, ' +
-                     'or {"type":"function","function":{"name":...}})', []);
-        end;
+        PassthroughOpts.ToolChoice := ResolveResponsesToolChoice(Req);
+        if PassthroughOpts.ToolChoice = '' then
+          LogDebug('responses: dropping unrecognised tool_choice ' +
+                   '(want auto/none/required, type=function with a name, ' +
+                   'or the nested function.name form)', []);
       end;
 
       LogDebug('responses: passthrough %d msg(s), %d tool def(s), tool_choice=%s -> %s',
