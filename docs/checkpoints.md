@@ -19,7 +19,7 @@ Two backends co-exist; the right one is picked at session start.
 
 ### `cbZpaq` (preferred)
 
-One streaming archive per session via the vendored Free Pascal port of **libzpaq 7.15** (`vendor/zpaq/`, MIT-licensed, cloned by `make get-zpaq`). Plus a JSON journal that records which archive segment belongs to which turn and which paths.
+One streaming archive per session via the vendored Free Pascal port of **libzpaq 7.15** (`src/pkg/vendor/zpaq/`, MIT-licensed, ~180 KB checked into the repo — no separate fetch step). Plus a JSON journal that records which archive segment belongs to which turn and which paths.
 
 ```
 $PASCLAW_HOME/workspace/checkpoints/<session-id>/
@@ -58,11 +58,11 @@ Each `/undo` snapshots the current state of every touched path into the archive 
 
 **Compression:** method 1 (LZ77) on the snapshot hot path — fast enough that latency stays sub-100ms per snapshot for typical source files. Higher tiers (methods 2–5) would save more disk at higher CPU cost; tune via `PasClaw.Checkpoints.Zpaq.ZpaqDefaultMethod`.
 
-**Selected when:** `vendor/zpaq/libzpaq.pas` is on disk (i.e. you've run `make get-zpaq`) AND PasClaw built under FPC. The vendor is `{$mode objfpc}` so it doesn't compile under Delphi.
+**Selected when:** PasClaw was built under FPC. The vendor is `{$mode objfpc}` so it doesn't compile under Delphi; Delphi builds fall through to `cbLegacy`.
 
 ### `cbLegacy` (fallback)
 
-Per-turn directory of raw blobs + `manifest.json` — the original PR #221 storage. Used when the zpaq vendor is missing (fresh clone without `make get-zpaq`, Delphi build). Same `/undo` semantics; **`/redo` is not available** under this backend (no per-undo capture point).
+Per-turn directory of raw blobs + `manifest.json` — the original PR #221 storage. Used on Delphi builds (where the zpaq vendor unit, written in `{$mode objfpc}`, doesn't compile). Same `/undo` semantics; **`/redo` is not available** under this backend (no per-undo capture point).
 
 ```
 $PASCLAW_HOME/workspace/checkpoints/<session-id>/turn-NNNN/
@@ -91,7 +91,7 @@ The carve-out for created files is the same in both backends: `/undo` doesn't de
 
 - `src/pkg/checkpoints/PasClaw.Checkpoints.pas` — public API + backend dispatch + both backend implementations.
 - `src/pkg/checkpoints/PasClaw.Checkpoints.Zpaq.pas` — thin wrapper over the vendored libzpaq port.
-- `vendor/zpaq/` — Xelitan's Free Pascal port of libzpaq 7.15, cloned by `make get-zpaq` (MIT).
+- `src/pkg/vendor/zpaq/` — Xelitan's Free Pascal port of libzpaq 7.15, vendored permanently in-tree (MIT; see `NOTICE` for provenance).
 - Tests:
   - `src/tests/checkpoints_tests.pas` — legacy backend coverage.
   - `src/tests/checkpoints_zpaq_tests.pas` — wrapper round-trip.

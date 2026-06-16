@@ -75,12 +75,12 @@ BIN      ?= $(BUILDDIR)/pasclaw
 INDY_DIR     ?= vendor/Indy
 INDY_REPO    ?= https://github.com/IndySockets/Indy.git
 
-# ZPAQ vendor: Free Pascal port of libzpaq 7.15 (Xelitan). Drives the new
-# checkpoints backend used by /undo + /redo when building under FPC. The
-# port is `{$mode objfpc}` so it's FPC-only -- Delphi builds fall back to
-# the legacy blob-tree checkpoints backend, which still works. License: MIT.
-ZPAQ_DIR  ?= vendor/zpaq
-ZPAQ_REPO ?= https://github.com/Xelitan/Free-Pascal-port-of-LIBZPAQ-Version-7.15.git
+# ZPAQ vendor: Free Pascal port of libzpaq 7.15 (Xelitan), MIT-licensed.
+# Vendored permanently under src/pkg/vendor/zpaq/ (only ~180 KB total)
+# so a fresh clone Just Builds without a separate fetch step. The port
+# is `{$mode objfpc}` so it's FPC-only -- Delphi builds fall back to the
+# legacy blob-tree checkpoints backend.
+ZPAQ_DIR  ?= src/pkg/vendor/zpaq
 # iconvenc lives in fp-units-misc on Debian; FPC's default config picks it up
 # on most distros but not always.
 ICONVENC_DIR ?= $(FPC_UNITS_DIR)/iconvenc
@@ -147,9 +147,9 @@ INDY_UNIT_DIRS = \
 INDY_INC_DIRS = $(INDY_UNIT_DIRS)
 
 # zpaq vendor unit dir (FPC only; the port is {$mode objfpc} so it won't
-# compile under Delphi). PasClaw.Checkpoints.Zpaq wraps it. When the
-# vendor isn't present, the wrapper unit raises at runtime and
-# PasClaw.Checkpoints falls back to the legacy blob backend.
+# compile under Delphi). PasClaw.Checkpoints.Zpaq wraps it; the wrapper
+# gates the `uses ZpaqClasses` import on {$IFDEF FPC} so Delphi builds
+# silently fall back to PasClaw.Checkpoints' legacy blob backend.
 ZPAQ_UNIT_DIRS = $(ZPAQ_DIR)
 
 # C2W=1 turns on the container2wasm in-browser deployment path: PasClaw's HTTP
@@ -166,14 +166,14 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 	$(foreach d,$(UNIT_DIRS),-Fu$(d)) \
 	$(foreach d,$(INDY_UNIT_DIRS),-Fu$(d)) \
 	$(foreach d,$(INDY_INC_DIRS),-Fi$(d)) \
-	$(if $(wildcard $(ZPAQ_DIR)/libzpaq.pas),$(foreach d,$(ZPAQ_UNIT_DIRS),-Fu$(d)) -dPASCLAW_HAVE_ZPAQ) \
+	$(foreach d,$(ZPAQ_UNIT_DIRS),-Fu$(d)) \
 	-Fu$(ICONVENC_DIR) \
 	-FE$(BUILDDIR) \
 	-FU$(BUILDDIR)/lib
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-model-discovery test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-delphi-build print-version get-indy get-zpaq webui-res browser
+.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-model-discovery test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-delphi-build print-version get-indy webui-res browser
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -205,15 +205,6 @@ get-indy:
 	  git clone --depth 1 $(INDY_REPO) $(INDY_DIR); \
 	else \
 	  echo "Indy already present at $(INDY_DIR)"; \
-	fi
-
-get-zpaq:
-	@if [ ! -d $(ZPAQ_DIR) ]; then \
-	  mkdir -p $(dir $(ZPAQ_DIR)); \
-	  echo "Cloning zpaq port into $(ZPAQ_DIR)..."; \
-	  git clone --depth 1 $(ZPAQ_REPO) $(ZPAQ_DIR); \
-	else \
-	  echo "zpaq port already present at $(ZPAQ_DIR)"; \
 	fi
 
 $(BUILDDIR):

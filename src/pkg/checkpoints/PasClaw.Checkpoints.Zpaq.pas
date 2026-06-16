@@ -1,7 +1,11 @@
 unit PasClaw.Checkpoints.Zpaq;
 (*
   PasClaw.Checkpoints.Zpaq - thin Pascal wrapper around the vendored
-  Xelitan FPC port of libzpaq 7.15 (vendor/zpaq).
+  Xelitan FPC port of libzpaq 7.15.
+
+  The port lives at src/pkg/vendor/zpaq/ (MIT-licensed, ~180 KB, three
+  Pascal source files vendored permanently in the repo so a fresh
+  clone Just Builds). See src/pkg/vendor/zpaq/NOTICE for provenance.
 
   Exposes the three operations PasClaw.Checkpoints needs to back its
   per-session journal:
@@ -20,13 +24,11 @@ unit PasClaw.Checkpoints.Zpaq;
   compression (LZ77 method 1 by default for the snapshot hot path),
   multi-version history in a single file, and indexed extraction.
 
-  Availability: gated on the PASCLAW_HAVE_ZPAQ define, which the
-  Makefile sets when vendor/zpaq/libzpaq.pas is on disk. Without it
-  ZpaqAvailable returns False and the other calls fail with a clear
-  error message; PasClaw.Checkpoints then routes through its legacy
-  blob backend. The vendor is `{$mode objfpc}` so this whole unit is
-  FPC-only -- under Delphi the helpers compile to "not available"
-  stubs and the legacy backend is the only path.
+  Compiler gate: the vendored unit is `{$mode objfpc}` so it doesn't
+  compile under Delphi. This wrapper gates `uses ZpaqClasses` on
+  `{$IFDEF FPC}` and exposes "not available" stubs otherwise;
+  PasClaw.Checkpoints' backend dispatch then routes to the legacy
+  blob-tree store under Delphi.
 *)
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
@@ -49,10 +51,10 @@ type
   end;
   TZpaqArchiveEntries = array of TZpaqArchiveEntry;
 
-{ Returns True when the wrapper can actually call into the vendored
-  port (i.e. PASCLAW_HAVE_ZPAQ is defined). Callers should check this
-  before invoking the other entry points -- when False, the others
-  return False with Err = 'zpaq backend not available'. }
+{ Returns True under FPC (the vendored port is FPC-only) and False
+  under Delphi.  Callers can branch on this without an IFDEF; the
+  other entry points return False with Err = 'zpaq backend not
+  available' under Delphi for the same reason. }
 function ZpaqAvailable: Boolean;
 
 { Compression-method tier for the streaming writer. 1 (LZ77) is fast
@@ -86,14 +88,14 @@ function ZpaqExtractByIndex(const Archive: string; Idx: Integer;
 
 implementation
 
-{$IFDEF PASCLAW_HAVE_ZPAQ}
+{$IFDEF FPC}
 uses
   ZpaqClasses;
 {$ENDIF}
 
 function ZpaqAvailable: Boolean;
 begin
-  {$IFDEF PASCLAW_HAVE_ZPAQ}
+  {$IFDEF FPC}
   Result := True;
   {$ELSE}
   Result := False;
@@ -110,7 +112,7 @@ begin
   Result := 1;
 end;
 
-{$IFDEF PASCLAW_HAVE_ZPAQ}
+{$IFDEF FPC}
 
 function ZpaqAppendBytes(const Archive: string; const Body: TBytes;
                          const Name: string; Method: Integer;
