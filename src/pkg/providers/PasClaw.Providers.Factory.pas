@@ -170,7 +170,7 @@ begin
                                     and IsGenuineOpenAI(Cfg.Providers[Idx].Kind,
                                                         Cfg.Providers[Idx].Name);
         Provider := TOpenAIProvider.Create(APIKey, Base, Model, Kind, Spec.Auth,
-                                            OAIServerTools);
+                                            OAIServerTools, Spec.ChatPath);
       end;
     pfGemini:
       begin

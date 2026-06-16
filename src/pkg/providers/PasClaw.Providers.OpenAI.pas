@@ -35,6 +35,9 @@ type
   private
     FAPIKey:       string;
     FAPIBase:      string;
+    FChatPath:     string;   { path appended to FAPIBase for chat; default
+                               '/v1/chat/completions'. Perplexity et al.
+                               omit the /v1 segment. }
     FDefaultModel: string;
     FAuth:         TAuthScheme;
     FDisplayName:  string;   { surface in GetName / log lines }
@@ -51,7 +54,8 @@ type
       ServerTools turns on web_search_options on the request body. }
     constructor Create(const APIKey, APIBase, DefaultModel, DisplayName: string;
                        const Auth: TAuthScheme;
-                       const ServerTools: TOpenAIServerTools); overload;
+                       const ServerTools: TOpenAIServerTools;
+                       const ChatPath: string = '/v1/chat/completions'); overload;
     function Chat(const Messages: array of TMessage;
                   const Tools:    array of TToolDefinition;
                   const Model:    string;
@@ -110,11 +114,13 @@ end;
 
 constructor TOpenAIProvider.Create(const APIKey, APIBase, DefaultModel, DisplayName: string;
                                     const Auth: TAuthScheme;
-                                    const ServerTools: TOpenAIServerTools);
+                                    const ServerTools: TOpenAIServerTools;
+                                    const ChatPath: string);
 begin
   inherited Create;
   FAPIKey := APIKey;
   if APIBase <> '' then FAPIBase := APIBase else FAPIBase := 'https://api.openai.com';
+  if ChatPath <> '' then FChatPath := ChatPath else FChatPath := '/v1/chat/completions';
   if DefaultModel <> '' then FDefaultModel := DefaultModel else FDefaultModel := 'gpt-4o-mini';
   if DisplayName <> '' then FDisplayName := DisplayName else FDisplayName := 'openai';
   FAuth := Auth;
@@ -378,7 +384,7 @@ var
   Headers: TArray<THeaderPair>;
 begin
   if Model <> '' then UseModel := Model else UseModel := FDefaultModel;
-  URL  := FAPIBase + '/v1/chat/completions';
+  URL  := FAPIBase + FChatPath;
   Body := BuildOAIRequest(Messages, Tools, UseModel, Options, FServerTools);
 
   Headers := BuildAuthHeaders;
