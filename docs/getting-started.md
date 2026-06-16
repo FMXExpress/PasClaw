@@ -66,7 +66,7 @@ The wizard:
 1. Creates `$PASCLAW_HOME` (default `~/.pasclaw/`) with the workspace skeleton.
 2. Asks which provider you want and prompts for an API key — auto-discovers the live `/v1/models` roster and presents a picker.
 3. Optionally enables any of the 5 bundled MCP servers (`replicate`, `digitalocean-apps`, `digitalocean-databases`, `runpod-docs`, `huggingface`).
-4. Optionally toggles `vault_tools_enabled`, `vector_search_enabled`, `web_fetch_enabled`, `auto_router.enabled`, `stats_collection_enabled`, the heartbeat daemon, and the docker shell backend.
+4. Walks through every loop-affecting knob: `vault_tools_enabled`, `vector_search_enabled`, `web_fetch_enabled`, `promptware_enabled`, `condense_reversible`, `tool_output_cap`, `orient_task_aware`, the four `self_improving_skills.*` switches, `auto_router.enabled`, `stats_collection_enabled`, the heartbeat daemon, and the docker shell backend. Each prompt's default keystroke matches the config default — pressing Enter all the way through lands the documented defaults.
 
 Re-run any time to change settings; the wizard preserves any keys you set out of band.
 

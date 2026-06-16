@@ -105,10 +105,10 @@ There is no escape sequence for a literal `${UPPER}` string in a config value. W
 | `prompt_cache.enabled` | `true` | Anthropic+OpenAI prompt caching. See [Providers](./providers.md). |
 | `prompt_cache.ttl` | `"5m"` | Extended-TTL hint (Anthropic). Set `"1h"` for the long bucket. |
 | `vector_search_enabled` | `true` | Hybrid FTS5+vector backend for `memory_search`. |
-| `web_fetch_enabled` | `false` | Registers the `web_fetch` tool. Off by default — explicit opt-in. |
-| `vault_tools_enabled` | `false` | Registers `vault_search` / `vault_get`. |
-| `promptware_enabled` | `true` | Indirect-input prompt-injection scan. |
-| `condense_reversible` | `true` | Stash original tool bytes under a `tool_output_get` handle when a condenser shrinks them. |
+| `web_fetch_enabled` | `true` | Registers the `web_fetch` tool. On by default since PR #289 — onboarding asks (default Y). |
+| `vault_tools_enabled` | `true` | Registers `vault_search` / `vault_get`. On by default since PR #289 — onboarding asks (default Y). |
+| `promptware_enabled` | `true` | Indirect-input prompt-injection scan. Onboarding asks (default Y). |
+| `condense_reversible` | `false` | Stash original tool bytes under a `tool_output_get` handle when a condenser shrinks them. **Off by default since PR #289** — fresh deploys see raw tool output verbatim. Onboarding asks (default N). |
 | `tool_output_cap` | `0` | Truncate tool outputs over this many bytes; model dereferences via `tool_output_get`. |
 | `auto_router.enabled` | `false` | Cheap-tier routing for easy turns. See [Providers](./providers.md). |
 | `stats_collection_enabled` | `false` | Persist per-turn counters into each session JSON's `meta.stats` block. |

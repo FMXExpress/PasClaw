@@ -519,19 +519,18 @@ type
        picoclaw's pkg/channels/base.go IsAllowedSender semantics).
        Configure via "allow_senders": [...] in config.json. *)
     AllowSenders: array of string;
-    (* Off-by-default: when True, Cmd.Agent.NewBuiltinRegistry
-       registers vault_search and vault_get for the model. The
-       onboarding flow asks the user to opt in (default yes).
-       Operators who skip onboarding can flip this directly in
-       config.json or re-run `pasclaw onboard`. *)
+    (* On-by-default since PR #289: when True, Cmd.Agent.NewBuiltinRegistry
+       registers vault_search and vault_get for the model -- read-only
+       HTTP GETs against the curated pasclaw.dev registry, no execution
+       path. The onboarding flow asks (default Y). Operators who don't
+       want any HTTP from this surface can flip it off in config.json. *)
     VaultToolsEnabled: Boolean;
-    (* Off-by-default: when True, Cmd.Agent / Cmd.Gateway / Cmd.Serve
-       register the web_fetch tool. Picoclaw doesn't ship a web_fetch
-       -- its model fetches arbitrary URLs through shell + curl -- so
-       PasClaw's default posture mirrors that. Flip this on for
-       deployments where curl isn't available (sandboxed containers,
-       constrained shells), or where the operator wants the tracked
-       web_fetch path with its size cap / save_to convenience. *)
+    (* On-by-default since PR #289: register the web_fetch tool in
+       Cmd.Agent / Cmd.Gateway / Cmd.Serve. Picoclaw historically
+       leaves it off (its model uses shell + curl), but PasClaw runs
+       fine in sandboxed containers where curl isn't available, so
+       the default is now on. Onboarding asks (default Y); operators
+       who don't want outbound HTTP from the agent flip it off. *)
     WebFetchEnabled:   Boolean;
     (* On-by-default: when True, memory_search uses a hybrid keyword
        (FTS5 BM25) + vector (sqlite-vec ANN) index over
@@ -604,14 +603,17 @@ type
        the model sees -- operators opt in via "orient_task_aware":
        true once their MEMORY.md outgrows the always-inject budget. *)
     OrientTaskAware:       Boolean;
-    (* On-by-default: reversible condensation (CCR, headroom-inspired).
-       When a condenser (JSON, shell filters) actually shrinks tool
-       output, stash the ORIGINAL under a fresh OutputCache handle and
-       append a footer naming it -- the model gets the structural view
-       by default and can call tool_output_get when the shape isn't
-       enough. tool_output_get registers whenever this is on OR
-       Cfg.ToolOutputCap > 0. Flip "condense_reversible": false to
-       revert to destructive condensation. *)
+    (* Off-by-default since PR #289: reversible condensation (CCR,
+       headroom-inspired). When True, a condenser (JSON, shell
+       filters) that actually shrinks tool output stashes the
+       ORIGINAL under a fresh OutputCache handle and appends a footer
+       naming it -- the model gets the structural view by default and
+       can call tool_output_get when the shape isn't enough.
+       tool_output_get registers whenever this is on OR
+       Cfg.ToolOutputCap > 0. Flipped to off-by-default because
+       silently rewriting `ls -l`/`grep` output into a structural
+       view surprised operators on fresh deploys (PR #289). Onboarding
+       asks (default N). *)
     CondenseReversible:    Boolean;
     (* Proactive periodic wake-up (picoclaw / openclaw heartbeat).
        Off by default. When Enabled, the standalone `pasclaw
@@ -838,8 +840,8 @@ begin
   WebSearch.MaxResults := 5;
   PromptCache.Enabled  := True;  { default-on; see TPromptCacheConfig comment }
   PromptCache.TTL      := '';    { default 5m via empty }
-  VaultToolsEnabled    := False; { off by default; onboarding asks to opt in }
-  WebFetchEnabled      := False; { off by default; the model uses shell+curl }
+  VaultToolsEnabled    := True;  { on by default -- vault_search/get are read-only HTTP GETs against pasclaw.dev. Onboarding asks (default Y). }
+  WebFetchEnabled      := True;  { on by default -- onboarding asks (default Y); operators not wanting outbound HTTP from the agent flip it off. }
   RenderMarkdown       := True;  { on by default for terminal surfaces; cmd/serve flips off }
   ToolOutputCap        := 0;     { off by default; operators opt in. See TConfig.ToolOutputCap. }
   StatsCollectionEnabled := False; { opt-in via onboarding; see TConfig.StatsCollectionEnabled. }
@@ -847,7 +849,7 @@ begin
   CheckpointsKeepLast    := 0;     { 0 means default (32) inside PasClaw.Checkpoints. }
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
   OrientTaskAware        := False; { opt-in; whole-file MEMORY injection is the contract. }
-  CondenseReversible     := True;  { on by default -- condense + stash original under handle. }
+  CondenseReversible     := False; { off by default -- raw tool output preserved verbatim. Onboarding asks (default N). Flipped from on-by-default in PR #289 so a fresh deploy doesn't silently rewrite ls/grep output behind the operator's back. }
   Heartbeat.Enabled      := False; { opt-in via onboarding; off by default. }
   Heartbeat.IntervalMins := 30;
   Heartbeat.ContentPath  := '';    { empty -> default workspace/heartbeat.md at load time }
@@ -1060,11 +1062,13 @@ begin
       Root.PutArray('allow_senders', Arr);
     end;
 
-    { Off-by-default -- only serialise when True so stock configs stay tidy. }
-    if VaultToolsEnabled then
-      Root.PutBool('vault_tools_enabled', True);
-    if WebFetchEnabled then
-      Root.PutBool('web_fetch_enabled', True);
+    { vault_tools_enabled, web_fetch_enabled: defaults flipped to ON
+      in PR #289. Emit only the explicit-off so a fresh config stays
+      tidy and an operator who explicitly opted out round-trips. }
+    if not VaultToolsEnabled then
+      Root.PutBool('vault_tools_enabled', False);
+    if not WebFetchEnabled then
+      Root.PutBool('web_fetch_enabled', False);
     { RenderMarkdown defaults to True; emit only when operator
       explicitly disabled it so they can flip it back via config.json
       and we round-trip correctly. }
@@ -1093,9 +1097,10 @@ begin
     { Default False -- emit only the explicit-on. }
     if OrientTaskAware then
       Root.PutBool('orient_task_aware', True);
-    { Default True -- emit only explicit-off so it round-trips. }
-    if not CondenseReversible then
-      Root.PutBool('condense_reversible', False);
+    { condense_reversible: default flipped to OFF in PR #289. Emit
+      only the explicit-on so fresh configs stay tidy. }
+    if CondenseReversible then
+      Root.PutBool('condense_reversible', True);
     if Heartbeat.Enabled
        or (Heartbeat.IntervalMins <> 30)
        or (Heartbeat.ContentPath <> '')
