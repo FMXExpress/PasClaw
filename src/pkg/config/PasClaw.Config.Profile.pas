@@ -282,9 +282,20 @@ begin
   Result := True;
 end;
 
-function LookupProfile(const HomeDir, Name: string;
-                      out Spec: TProfileSpec;
-                      out Body: string): Boolean;
+(* Internal lookup with an explicit user-shadow bypass switch.
+   Codex P2 on PR #291: the documented fork pattern
+     $PASCLAW_HOME/profiles/low-token.json:
+       {"_inherits":["low-token"], "tool_output_cap":4096}
+   would loop forever, because LookupProfile('low-token') hit the user
+   file for both the child AND the inherited parent, and the resolver
+   then saw 'low-token' twice and reported a cycle. The resolver passes
+   BypassUserShadow=True when it's chasing an _inherits parent whose
+   name matches the CURRENT profile's name, so the parent lookup
+   reaches past the user shadow to the built-in underneath. *)
+function LookupProfileInternal(const HomeDir, Name: string;
+                               BypassUserShadow: Boolean;
+                               out Spec: TProfileSpec;
+                               out Body: string): Boolean;
 var
   i: Integer;
   B: TBuiltinArray;
@@ -299,13 +310,16 @@ begin
   { User profile takes precedence over a same-named built-in --
     same shadowing rule the skills loader uses. Lets an operator
     customise a built-in without forking the binary. }
-  Path := UserProfilePath(HomeDir, Name);
-  if FileExists(Path) then
+  if not BypassUserShadow then
   begin
-    Body := ReadFileText(Path);
-    Spec.Source := Path;
-    Spec.Description := ExtractDescription(Body);
-    Exit(True);
+    Path := UserProfilePath(HomeDir, Name);
+    if FileExists(Path) then
+    begin
+      Body := ReadFileText(Path);
+      Spec.Source := Path;
+      Spec.Description := ExtractDescription(Body);
+      Exit(True);
+    end;
   end;
 
   B := Builtins;
@@ -317,6 +331,13 @@ begin
       Spec.Description := ExtractDescription(Body);
       Exit(True);
     end;
+end;
+
+function LookupProfile(const HomeDir, Name: string;
+                      out Spec: TProfileSpec;
+                      out Body: string): Boolean;
+begin
+  Result := LookupProfileInternal(HomeDir, Name, False, Spec, Body);
 end;
 
 function ListAvailableProfiles(const HomeDir: string): TProfileSpecArray;
@@ -374,22 +395,31 @@ end;
 
 (* Recursive resolver. Visited is the cycle-guard; Depth caps inheritance.
    On success, appends one body per ancestor in inheritance order, then
-   the current profile's body at the end. *)
-function ResolveInto(const HomeDir, Name: string;
+   the current profile's body at the end.
+
+   NameToBypass: when non-empty AND matches Name, the current lookup
+   bypasses the user-shadow file and reaches the built-in directly.
+   Set by the caller when recursing for an _inherits parent whose name
+   matches the current profile's name (Codex P2 on PR #291 -- the
+   "fork a built-in" pattern). Empty otherwise. *)
+function ResolveInto(const HomeDir, Name, NameToBypass: string;
                     var Bodies: TProfileBodyArray;
                     var Visited: TStringList;
                     Depth: Integer;
                     out ErrMsg: string): Boolean;
 var
   Spec: TProfileSpec;
-  Body: string;
+  Body, VisitedKey: string;
   O: TJsonObject;
   Inh: TJsonArray;
   ParentName: string;
-  i: Integer;
+  i, VisitedIdx: Integer;
+  PoppedSelf: Boolean;
+  BypassThisLookup: Boolean;
 begin
   Result := False;
   ErrMsg := '';
+  PoppedSelf := False;
   if Depth > MaxInheritDepth then
   begin
     ErrMsg := 'profile inheritance over depth cap (' + IntToStr(MaxInheritDepth) +
@@ -403,7 +433,8 @@ begin
   end;
   Visited.Add(LowerCase(Name));
 
-  if not LookupProfile(HomeDir, Name, Spec, Body) then
+  BypassThisLookup := (NameToBypass <> '') and SameText(Name, NameToBypass);
+  if not LookupProfileInternal(HomeDir, Name, BypassThisLookup, Spec, Body) then
   begin
     ErrMsg := 'profile "' + Name + '" not found';
     Exit;
@@ -427,8 +458,33 @@ begin
       begin
         ParentName := Trim(Inh.ItemStr(i, ''));
         if ParentName = '' then Continue;
-        if not ResolveInto(HomeDir, ParentName, Bodies, Visited, Depth + 1, ErrMsg) then
-          Exit;
+
+        if SameText(ParentName, Name) and (not BypassThisLookup) and
+           (Spec.Source <> 'builtin') then
+        begin
+          (* Self-shadow case (Codex P2): user file
+             $PASCLAW_HOME/profiles/<X>.json whose _inherits list
+             contains "X". Pop our own name from Visited so the
+             recursive call doesn't false-cycle, signal "bypass the
+             user-shadow for this one lookup", then re-add (no-op
+             via dupIgnore but explicit for readability). *)
+          VisitedKey := LowerCase(Name);
+          VisitedIdx := Visited.IndexOf(VisitedKey);
+          if VisitedIdx >= 0 then
+          begin
+            Visited.Delete(VisitedIdx);
+            PoppedSelf := True;
+          end;
+          try
+            if not ResolveInto(HomeDir, ParentName, Name,
+                               Bodies, Visited, Depth + 1, ErrMsg) then Exit;
+          finally
+            if PoppedSelf then Visited.Add(VisitedKey);
+            PoppedSelf := False;
+          end;
+        end
+        else if not ResolveInto(HomeDir, ParentName, '',
+                                Bodies, Visited, Depth + 1, ErrMsg) then Exit;
       end;
     finally
       Inh.Free;
@@ -453,7 +509,7 @@ begin
   Visited.Sorted := True;
   Visited.Duplicates := dupIgnore;
   try
-    Result := ResolveInto(HomeDir, Name, Bodies, Visited, 0, ErrMsg);
+    Result := ResolveInto(HomeDir, Name, '', Bodies, Visited, 0, ErrMsg);
   finally
     Visited.Free;
   end;

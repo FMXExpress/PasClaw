@@ -646,6 +646,15 @@ type
     (* Agent-authored / self-improving skills. All sub-switches
        default off -- see TSelfImprovingSkillsConfig. *)
     SelfImprovingSkills:  TSelfImprovingSkillsConfig;
+    (* Persisted profile selection (PR #291). Written by
+       `pasclaw profile use <name>`, read by LoadConfig as the third-
+       level fallback selector (after --profile and PASCLAW_PROFILE).
+       Round-trips through FromJSON / ToJSON so SaveConfig from any
+       config-mutating command (auth login, model set, /v1/config PUT,
+       ...) preserves the operator's choice instead of dropping it on
+       the next read -- Codex P2 on the original PR. Empty = no
+       persisted profile. *)
+    Profile:              string;
     constructor Create;
     function  ToJSON: string;
     procedure FromJSON(const S: string);
@@ -886,6 +895,7 @@ begin
   SelfImprovingSkills.Distiller.Enabled      := False;
   SelfImprovingSkills.Distiller.MinToolCalls := 5;
   SelfImprovingSkills.Distiller.Model        := '';
+  Profile := '';   { PR #291: empty == no persisted profile selection }
   VectorSearchEnabled  := True;  { on by default; onboarding asks (default Y) -- see TConfig comment }
   AnthropicServerTools.WebSearch        := False;
   AnthropicServerTools.WebSearchMaxUses := 0;
@@ -985,6 +995,11 @@ begin
   try
     Root.PutStr('default_provider', DefaultProvider);
     Root.PutStr('default_model',    DefaultModel);
+    { PR #291: persisted profile selection. Emit only when non-empty
+      so a no-profile install stays tidy. SaveConfig from any
+      config-mutating command preserves this verbatim. }
+    if Profile <> '' then
+      Root.PutStr('profile', Profile);
     if Length(Fallbacks) > 0 then
     begin
       FallbacksArr := TJsonArray.Create;
@@ -1337,6 +1352,7 @@ begin
   try
     DefaultProvider := Root.GetStr('default_provider', DefaultProvider);
     DefaultModel    := Root.GetStr('default_model',    DefaultModel);
+    Profile         := Root.GetStr('profile',          Profile);   { PR #291 }
     if Root.Has('fallbacks') then
     begin
       Arr := Root.ChildArray('fallbacks');
@@ -1790,11 +1806,14 @@ var
   Path, S, ProfileName, PErr, B: string;
   Bodies: TProfileBodyArray;
   i: Integer;
+  HasConfigFile: Boolean;
 begin
   Result := TConfig.Create;
   Path := GetConfigPath;
+  S := '';
+  HasConfigFile := FileExists(Path);
   try
-    if FileExists(Path) then
+    if HasConfigFile then
     begin
       S := ReadFileText(Path);
       (* Resolve ${VAR_NAME} markers BEFORE FromJSON parses. Lets
@@ -1804,44 +1823,50 @@ begin
          leave the literal marker in place so config-back-from-disk
          diagnostics still show which variable didn't resolve. *)
       S := ExpandEnvVarsInJSON(S);
+    end;
 
-      (* Profile resolution (PR #291). Selection precedence:
-           1. ProfileOverride (CLI --profile)
-           2. PASCLAW_PROFILE env var
-           3. "profile" field in config.json
-           4. None
-         When a profile name resolves, apply the ancestor chain + the
-         profile body via TConfig.FromJSON BEFORE the operator's own
-         config.json -- so explicit user fields win. FromJSON is
-         merge-style (every GetX call defaults to the current TConfig
-         value), so multiple applies layer cleanly. *)
-      ProfileName := ProfileOverride;
-      if ProfileName = '' then
-        ProfileName := GetEnvironmentVariable('PASCLAW_PROFILE');
-      if ProfileName = '' then
-        ProfileName := ExtractProfileField(S);
-      if ProfileName <> '' then
+    (* Profile resolution (PR #291). Selection precedence:
+         1. ProfileOverride (CLI --profile)
+         2. PASCLAW_PROFILE env var
+         3. "profile" field in config.json (when one exists)
+         4. None
+       Lives OUTSIDE the FileExists guard so a fresh deploy that has
+       no config.json yet still honours --profile / PASCLAW_PROFILE
+       (Codex P2 on PR #291). When a profile name resolves, apply
+       the ancestor chain + the profile body via TConfig.FromJSON
+       BEFORE the operator's own config.json -- so explicit user
+       fields win. FromJSON is merge-style (every GetX call defaults
+       to the current TConfig value), so multiple applies layer
+       cleanly. *)
+    ProfileName := ProfileOverride;
+    if ProfileName = '' then
+      ProfileName := GetEnvironmentVariable('PASCLAW_PROFILE');
+    if (ProfileName = '') and HasConfigFile then
+      ProfileName := ExtractProfileField(S);
+    if ProfileName <> '' then
+    begin
+      if ResolveProfileBodies(GetHome, ProfileName, Bodies, PErr) then
       begin
-        if ResolveProfileBodies(GetHome, ProfileName, Bodies, PErr) then
+        for i := 0 to High(Bodies) do
         begin
-          for i := 0 to High(Bodies) do
-          begin
-            B := ExpandEnvVarsInJSON(Bodies[i]);
-            try
-              Result.FromJSON(B);
-            except
-              on E: Exception do
-                LogWarn('config: profile "%s" layer %d apply failed: %s',
-                        [ProfileName, i, E.Message]);
-            end;
+          B := ExpandEnvVarsInJSON(Bodies[i]);
+          try
+            Result.FromJSON(B);
+          except
+            on E: Exception do
+              LogWarn('config: profile "%s" layer %d apply failed: %s',
+                      [ProfileName, i, E.Message]);
           end;
-          LogInfo('config: profile "%s" applied (%d layer(s))',
-                  [ProfileName, Length(Bodies)]);
-        end
-        else
-          LogWarn('config: %s -- using defaults + config.json only', [PErr]);
-      end;
+        end;
+        LogInfo('config: profile "%s" applied (%d layer(s))',
+                [ProfileName, Length(Bodies)]);
+      end
+      else
+        LogWarn('config: %s -- using defaults + config.json only', [PErr]);
+    end;
 
+    if HasConfigFile then
+    begin
       try
         Result.FromJSON(S);
       except

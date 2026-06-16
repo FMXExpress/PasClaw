@@ -141,8 +141,7 @@ function DoUse(const Argv: array of string): Integer;
 var
   Err: string;
   Bodies: TProfileBodyArray;
-  Path, Body, NewBody: string;
-  Cfg: TJsonObject;
+  Cfg: TConfig;
 begin
   if Length(Argv) < 2 then begin Help; Exit(1); end;
   { Validate the profile resolves BEFORE writing -- prevents stamping
@@ -154,28 +153,18 @@ begin
     Exit(1);
   end;
 
-  Path := GetConfigPath;
-  if FileExists(Path) then Body := ReadFileText(Path)
-  else Body := '{}';
-
+  { PR #291 Codex fix: write through TConfig + SaveConfig, not by
+    hand-rolling JSON. Cfg.Profile is a proper field now, so any
+    config-mutating command after this (auth login, model set, /v1/config
+    PUT, ...) preserves it instead of dropping the key on the next save. }
+  Cfg := LoadConfig('');
   try
-    Cfg := TJsonObject.Parse(Body);
-  except
-    on E: Exception do
-    begin
-      PrintLn(Ansi.Red + '✗ ' + Ansi.Reset +
-              'config.json parse failed (' + E.Message + ') -- aborting');
-      Exit(1);
-    end;
-  end;
-  if Cfg = nil then Cfg := TJsonObject.Create;
-  try
-    Cfg.PutStr('profile', Argv[1]);
-    NewBody := Cfg.ToJSON;
+    Cfg.Profile := Argv[1];
+    SaveConfig(Cfg);
   finally
     Cfg.Free;
   end;
-  WriteFileText(Path, NewBody);
+
   PrintLn(Ansi.Green + '✓ ' + Ansi.Reset +
           'config.json now selects profile "' + Argv[1] + '"');
   PrintLn(Ansi.Dim +

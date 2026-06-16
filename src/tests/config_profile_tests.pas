@@ -219,6 +219,98 @@ begin
   end;
 end;
 
+(* Codex P2 #1: --profile / PASCLAW_PROFILE must work even when
+   config.json doesn't exist. *)
+procedure TestProfileWithoutConfigFile;
+var
+  CfgPath: string;
+  C: TConfig;
+begin
+  CfgPath := JoinPath(Home, 'config.json');
+  if FileExists(CfgPath) then DeleteFile(CfgPath);
+  AssertTrue(not FileExists(CfgPath), 'config.json removed before test');
+
+  C := LoadConfig('low-token');
+  try
+    AssertTrue(C.CondenseReversible, 'profile applied without config.json');
+    AssertTrue(C.ToolOutputCap = 8192, 'tool_output_cap set from profile alone');
+  finally
+    C.Free;
+  end;
+end;
+
+(* Codex P2 #2: SaveConfig must preserve the persisted profile field
+   so mutating commands (auth login, model set, ...) don't drop it. *)
+procedure TestSaveConfigPreservesProfile;
+var
+  C, C2: TConfig;
+  CfgPath: string;
+begin
+  CfgPath := JoinPath(Home, 'config.json');
+  WriteFileText(CfgPath, '{}');
+
+  { Stamp "profile": "low-token" via the TConfig field + SaveConfig
+    (same path `pasclaw profile use` writes through). }
+  C := LoadConfig('');
+  try
+    C.Profile := 'low-token';
+    SaveConfig(C);
+  finally
+    C.Free;
+  end;
+
+  { Simulate a config-mutating command: load, edit something
+    unrelated, save again. The profile field must survive. }
+  C := LoadConfig('');
+  try
+    AssertEqS(C.Profile, 'low-token', 'persisted profile read back');
+    C.DefaultModel := 'claude-opus-4-7';
+    SaveConfig(C);
+  finally
+    C.Free;
+  end;
+
+  { Final load: profile is still there. }
+  C2 := LoadConfig('');
+  try
+    AssertEqS(C2.Profile, 'low-token', 'profile survives SaveConfig');
+    AssertEqS(C2.DefaultModel, 'claude-opus-4-7', 'unrelated edit persisted');
+    AssertTrue(C2.CondenseReversible,
+               'profile actually applied on the persisted-field path');
+  finally
+    C2.Free;
+  end;
+end;
+
+(* Codex P2 #3: a user file at $HOME/profiles/low-token.json whose
+   _inherits contains "low-token" should resolve to (built-in low-token
+   layer, then user's overrides) -- not a cycle error. *)
+procedure TestSelfShadowInherit;
+var
+  ProfilesDir, UserFile: string;
+  Bodies: TProfileBodyArray;
+  Err: string;
+begin
+  ProfilesDir := JoinPath(Home, 'profiles');
+  EnsureDir(ProfilesDir);
+  UserFile := JoinPath(ProfilesDir, 'low-token.json');
+  WriteFileText(UserFile,
+    '{"_description":"USER fork of low-token, smaller cap",' +
+    '"_inherits":["low-token"],' +
+    '"tool_output_cap":4096}');
+  try
+    AssertTrue(ResolveProfileBodies(Home, 'low-token', Bodies, Err),
+               'self-shadow resolves: ' + Err);
+    AssertEqI(Length(Bodies), 2, 'two layers: built-in then user override');
+    AssertTrue(Pos('"_description":"Minimise tokens', Bodies[0]) > 0,
+               'first layer is the built-in low-token');
+    AssertTrue(Pos('USER fork of low-token', Bodies[1]) > 0,
+               'second layer is the user file');
+  finally
+    DeleteFile(UserFile);
+  end;
+end;
+
 begin
   { PASCLAW_HOME is set by the Makefile target before launching --
     fpc doesn't ship fpSetenv on every supported version and setting
@@ -241,6 +333,9 @@ begin
     TestExtractProfileField;
     TestLoadConfigAppliesProfile;
     TestLoadConfigInheritsChain;
+    TestProfileWithoutConfigFile;
+    TestSaveConfigPreservesProfile;
+    TestSelfShadowInherit;
     WriteLn('ok - config profile tests passed');
   finally
     try RemoveDir(JoinPath(Home, 'profiles')); except end;
