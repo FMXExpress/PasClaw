@@ -85,6 +85,9 @@ type
     procedure AddObject(var Obj: TJsonObject);
     procedure AddArray (var Arr: TJsonArray);
     procedure AddRaw   (const RawJSON: string);
+    { Remove the item at Index from the array. No-op when Index is out
+      of range. Used by PasClaw.Checkpoints' redo-stack pop. }
+    procedure Delete   (Index: Integer);
     function ToJSON: string;
     function Backing: TObject;
   end;
@@ -530,6 +533,15 @@ begin
   end;
 end;
 
+procedure TJsonArray.Delete(Index: Integer);
+var
+  Arr: fpjson.TJSONArray;
+begin
+  Arr := fpjson.TJSONArray(FBacking);
+  if (Index >= 0) and (Index < Arr.Count) then
+    Arr.Delete(Index);
+end;
+
 function TJsonArray.ToJSON: string;
 begin
   Result := fpjson.TJSONArray(FBacking).AsJSON;
@@ -900,6 +912,15 @@ begin
   except
     { swallow malformed JSON -- call site can detect via Count }
   end;
+end;
+
+procedure TJsonArray.Delete(Index: Integer);
+var
+  Arr: System.JSON.TJSONArray;
+begin
+  Arr := System.JSON.TJSONArray(FBacking);
+  if (Index >= 0) and (Index < Arr.Count) then
+    Arr.Remove(Index).Free;
 end;
 
 function TJsonArray.ToJSON: string;

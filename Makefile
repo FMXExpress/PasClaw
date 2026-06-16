@@ -74,6 +74,13 @@ BIN      ?= $(BUILDDIR)/pasclaw
 
 INDY_DIR     ?= vendor/Indy
 INDY_REPO    ?= https://github.com/IndySockets/Indy.git
+
+# ZPAQ vendor: Free Pascal port of libzpaq 7.15 (Xelitan), MIT-licensed.
+# Vendored permanently under src/pkg/vendor/zpaq/ (only ~180 KB total)
+# so a fresh clone Just Builds without a separate fetch step. The port
+# is `{$mode objfpc}` so it's FPC-only -- Delphi builds fall back to the
+# legacy blob-tree checkpoints backend.
+ZPAQ_DIR  ?= src/pkg/vendor/zpaq
 # iconvenc lives in fp-units-misc on Debian; FPC's default config picks it up
 # on most distros but not always.
 ICONVENC_DIR ?= $(FPC_UNITS_DIR)/iconvenc
@@ -139,6 +146,12 @@ INDY_UNIT_DIRS = \
 
 INDY_INC_DIRS = $(INDY_UNIT_DIRS)
 
+# zpaq vendor unit dir (FPC only; the port is {$mode objfpc} so it won't
+# compile under Delphi). PasClaw.Checkpoints.Zpaq wraps it; the wrapper
+# gates the `uses ZpaqClasses` import on {$IFDEF FPC} so Delphi builds
+# silently fall back to PasClaw.Checkpoints' legacy blob backend.
+ZPAQ_UNIT_DIRS = $(ZPAQ_DIR)
+
 # C2W=1 turns on the container2wasm in-browser deployment path: PasClaw's HTTP
 # layer routes through the c2w-net-proxy (HTTP_PROXY/HTTPS_PROXY env) and opts
 # into Anthropic's browser/CORS mode. Off by default — only set it when
@@ -153,13 +166,14 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 	$(foreach d,$(UNIT_DIRS),-Fu$(d)) \
 	$(foreach d,$(INDY_UNIT_DIRS),-Fu$(d)) \
 	$(foreach d,$(INDY_INC_DIRS),-Fi$(d)) \
+	$(foreach d,$(ZPAQ_UNIT_DIRS),-Fu$(d)) \
 	-Fu$(ICONVENC_DIR) \
 	-FE$(BUILDDIR) \
 	-FU$(BUILDDIR)/lib
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-model-discovery test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-delphi-build print-version get-indy webui-res browser
+.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-model-discovery test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-delphi-build print-version get-indy webui-res browser
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -595,6 +609,24 @@ test-agents-md: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/agents_md_tests.pas -o$(BUILDDIR)/agents_md_tests
 	@$(BUILDDIR)/agents_md_tests
 
+# Checkpoints zpaq backend: round-trip Append/List/Extract via the
+# vendored Free Pascal libzpaq port. When vendor/zpaq is missing the
+# test prints "skipped" and exits 0 -- run `make get-zpaq` first to
+# enable the assertions.
+test-checkpoints-zpaq: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/checkpoints_zpaq_tests.pas -o$(BUILDDIR)/checkpoints_zpaq_tests
+	@$(BUILDDIR)/checkpoints_zpaq_tests
+
+# End-to-end undo/redo via the zpaq backend: spins a temp PASCLAW_HOME,
+# drives BeginTurn / SnapshotBeforeWrite / UndoTurns / RedoTurns, and
+# asserts the file contents and redo-stack semantics across the
+# happy path + the "new-write invalidates redo" branch.
+test-checkpoints-redo: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/checkpoints_redo_tests.pas -o$(BUILDDIR)/checkpoints_redo_tests
+	@$(BUILDDIR)/checkpoints_redo_tests
+
 # fs_grep ripgrep-tier1-4 optimisations: defer ComputeFileHash until first
 # match (tier 1), skip blocked dir names like .git/node_modules/target
 # (tier 2), skip binary files by NUL-byte sniff in the first kilobyte
@@ -675,4 +707,4 @@ test-fs-grep-tier5-6: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/fs_grep_tier5_6_tests.pas -o$(BUILDDIR)/fs_grep_tier5_6_tests
 	@$(BUILDDIR)/fs_grep_tier5_6_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-plan-build-mode test-config-profile test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-otel test-logger-level-quiet test-gateway-token test-fs-secret-gate test-config-env-subst test-delphi-build
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-plan-build-mode test-config-profile test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-checkpoints-redo test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-otel test-logger-level-quiet test-gateway-token test-fs-secret-gate test-config-env-subst test-delphi-build

@@ -92,16 +92,41 @@ type
   end;
   TRestoredFileArray = array of TRestoredFile;
 
+type
+  TCheckpointBackend = (
+    cbDisabled,   { Checkpoints feature off -- BeginTurn / Snapshot are
+                    no-ops; UndoTurns returns False with a message. }
+    cbLegacy,     (* Per-turn directory of raw blobs + manifest.json.
+                    Original PR #221 storage. Used when the zpaq vendor
+                    isn't on disk (e.g. fresh clone without
+                    "make get-zpaq", or a Delphi build where the
+                    vendored unit is mode-objfpc and won't compile). *)
+    cbZpaq        { One streaming archive per session (archive.zpaq) +
+                    JSON journal (index.json) tracking turn -> archive
+                    entries + a redo stack. Compresses snapshots and
+                    enables /redo. }
+  );
+
 procedure InitCheckpoints(const Cfg: TCheckpointConfig);
 procedure BeginTurn;
 procedure SnapshotBeforeWrite(const Path: string);
 
 function CheckpointsEnabled: Boolean;
+function CheckpointsBackend: TCheckpointBackend;
 function CurrentTurnNumber: Integer;
 function CountSnapshottedTurns(out OldestTurn, NewestTurn: Integer): Integer;
 
 function UndoTurns(N: Integer; out Restored: TRestoredFileArray;
                    out ErrMsg: string): Boolean;
+
+{ /redo support. Only available under cbZpaq -- legacy blob backend
+  has no per-undo capture point to roll forward from.  Returns False
+  with ErrMsg = 'redo not supported by this backend' under cbLegacy /
+  cbDisabled. CanRedo is True when the redo stack has at least one
+  entry; the UI uses it to gray out the /redo command. }
+function RedoTurns(N: Integer; out Restored: TRestoredFileArray;
+                   out ErrMsg: string): Boolean;
+function CanRedo: Boolean;
 
 implementation
 
@@ -109,7 +134,14 @@ uses
   DateUtils,
   PasClaw.JSON,
   PasClaw.Utils,
-  PasClaw.Logger;
+  PasClaw.Logger,
+  PasClaw.Checkpoints.Zpaq;
+
+{ Forward decls: the zpaq backend block uses these I/O helpers, which
+  the legacy backend defines further down. Forward-declaring keeps
+  both blocks readable without reshuffling the file. }
+function ReadFileBytes(const Path: string; out Bytes: TBytes): Boolean; forward;
+procedure WriteFileBytes(const Path: string; const Bytes: TBytes); forward;
 
 procedure ListSubdirs(const Dir: string; List: TStringList);
 { Local helper: enumerate the immediate subdirectory names of Dir
@@ -162,23 +194,35 @@ end;
 var
   GLock:    TCriticalSection;
   GEnabled: Boolean;
+  GBackend: TCheckpointBackend;
   GSession: string;
   GRoot:    string;
   GKeep:    Integer;
   GTurn:    Integer;
   { Files already snapshotted in the CURRENT turn; the second + nth
     snapshot of the same path within one turn is a no-op so we keep
-    the earliest captured state. Cleared at BeginTurn. }
+    the earliest captured state. Cleared at BeginTurn. Shared between
+    backends. }
   GTurnPaths: TStringList;
+
+  { ---- Legacy (cbLegacy) backend state ---- }
   GTurnBlobCount: Integer;
   { In-memory record of the current turn's manifest entries. Each
     SnapshotBeforeWrite appends one TStringList row formatted as
-    "blob|size|path" and rewrites the manifest.json atomically.
-    Holding the array in memory avoids parsing manifest.json every
-    snapshot -- the previous load-modify-save dance through the JSON
-    unit was leaking references on the second invocation per turn. }
+    "blob|size|path" and rewrites the manifest.json atomically. }
   GTurnEntries: TStringList;
   GTurnTimestamp: string;
+
+  { ---- Zpaq (cbZpaq) backend state ---- }
+  { Cached archive entry count -- bumped on each ZpaqAppendBytes so we
+    can tell new entries apart without re-listing the archive. }
+  GZpaqArchiveCount: Integer;
+  { Set after UndoTurns pushes a redo bundle; the next SnapshotBefore-
+    Write that adds an archive entry clears the redo stack (standard
+    editor semantic: new edits invalidate redo history).  /redo itself
+    doesn't trigger SnapshotBeforeWrite, so the stack survives a
+    sequence of undo / redo / undo / redo. }
+  GZpaqRedoDirty: Boolean;
 
 function SessionDir: string;
 begin
@@ -255,6 +299,7 @@ end;
 procedure ResetState;
 begin
   GEnabled := False;
+  GBackend := cbDisabled;
   GSession := '';
   GRoot    := '';
   GKeep    := DefaultKeepLastTurns;
@@ -263,6 +308,602 @@ begin
   if GTurnEntries <> nil then GTurnEntries.Clear;
   GTurnBlobCount := 0;
   GTurnTimestamp := '';
+  GZpaqArchiveCount := 0;
+  GZpaqRedoDirty := False;
+end;
+
+(* ===================================================================
+   cbZpaq backend
+   ===================================================================
+
+   Layout (per session):
+
+     <root>/<session>/archive.zpaq    one streaming archive, append-
+                                       only. Each SnapshotBeforeWrite
+                                       appends one segment.
+     <root>/<session>/index.json      PasClaw-side journal:
+                                       { "version": 1,
+                                         "current_turn": N,
+                                         "archive_count": M,
+                                         "turns": [
+                                           { "turn": K,
+                                             "ts": "...",
+                                             "entries": [
+                                               { "path": "<abs>",
+                                                 "archive_idx": I,
+                                                 "was_created": bool }
+                                             ] } ],
+                                         "redo_stack": [
+                                           { "turn_label": L,
+                                             "entries": [
+                                               { "path": "<abs>",
+                                                 "archive_idx": I } ] } ] }
+
+   archive_idx = -1 with was_created = True means the file did not
+   exist before the turn that touches it (model created it).  The
+   legacy carve-out -- leave model-created files in place on undo --
+   is preserved; deleting them properly needs a post-write snapshot
+   path and is deferred to a follow-up.
+
+   Redo stack semantics: UndoTurns appends a fresh archive segment
+   per touched path BEFORE restoring, then pushes the bundle onto
+   the stack.  Any subsequent SnapshotBeforeWrite that adds a real
+   new segment clears the stack (GZpaqRedoDirty).  /redo extracts
+   the bundle's segments without going through SnapshotBeforeWrite,
+   so a sequence of /undo, /redo, /undo, /redo cycles cleanly. *)
+
+function ZpaqArchivePath: string;
+begin
+  Result := JoinPath(SessionDir, 'archive.zpaq');
+end;
+
+function ZpaqIndexPath: string;
+begin
+  Result := JoinPath(SessionDir, 'index.json');
+end;
+
+function ZpaqEnsureArray(Owner: TJsonObject; const Key: string): TJsonArray;
+{ Return Owner's `Key` array, creating an empty one if missing. The
+  result is owned by Owner (caller does NOT free). Wraps the
+  PutArray-then-refetch dance: PutArray transfers ownership and nils
+  the local var, so a "PutArray(...); .AddObject(...)" sequence
+  would NPE.  EnsureArray hands back a live reference safe to mutate. }
+var
+  Fresh: TJsonArray;
+begin
+  Result := Owner.ChildArray(Key);
+  if Result = nil then
+  begin
+    Fresh := TJsonArray.Create;
+    Owner.PutArray(Key, Fresh);          { ownership transfers; Fresh := nil }
+    Result := Owner.ChildArray(Key);     { re-fetch live reference }
+  end;
+end;
+
+function ZpaqLoadIndex: TJsonObject;
+{ Read index.json into a fresh TJsonObject. Returns a default v1
+  skeleton (current_turn=0, empty turns / redo_stack) when the file
+  is missing or unparseable. Caller owns the result. }
+var
+  S: string;
+  Parsed: TJsonObject;
+begin
+  Result := TJsonObject.Create;
+  if FileExists(ZpaqIndexPath) then
+  begin
+    try
+      S := ReadFileText(ZpaqIndexPath);
+      Parsed := TJsonObject.Parse(S);
+      if Parsed <> nil then
+      begin
+        Result.Free;
+        Exit(Parsed);
+      end;
+    except
+      on E: Exception do
+        LogWarn('checkpoints: index.json unreadable (%s) -- starting fresh',
+                [E.Message]);
+    end;
+  end;
+  Result.PutInt('version',       1);
+  Result.PutInt('current_turn',  0);
+  Result.PutInt('archive_count', 0);
+  { Use EnsureArray for the side-effect: creates empty array,
+    Result keeps ownership.  Returning the reference is unused here. }
+  ZpaqEnsureArray(Result, 'turns');
+  ZpaqEnsureArray(Result, 'redo_stack');
+end;
+
+procedure ZpaqSaveIndex(Root: TJsonObject);
+{ Atomic write: tmp + rename so a crash mid-flush leaves either the
+  old index or the new one, never a partial. The archive append that
+  preceded this save is committed independently -- on crash, the
+  archive may have one trailing segment the index never recorded;
+  list-based scans recover by ignoring entries past archive_count. }
+var
+  Path, Tmp: string;
+begin
+  Path := ZpaqIndexPath;
+  Tmp  := Path + '.tmp';
+  WriteFileText(Tmp, Root.ToJSON);
+  { RenameFile is atomic on POSIX; on Windows DeleteFile+Rename is
+    the standard sequence. SysUtils' RenameFile wraps both. }
+  if FileExists(Path) then DeleteFile(Path);
+  if not RenameFile(Tmp, Path) then
+  begin
+    LogWarn('checkpoints: atomic rename %s -> %s failed; falling back to direct write',
+            [Tmp, Path]);
+    WriteFileText(Path, Root.ToJSON);
+    DeleteFile(Tmp);
+  end;
+end;
+
+function ZpaqFindOrAddTurn(Index: TJsonObject; Turn: Integer): TJsonObject;
+{ Return the existing turn record for Turn, or append a fresh one to
+  the turns array. Caller does NOT own the result -- it's owned by
+  the turns array, freed when Index is freed. }
+var
+  Turns: TJsonArray;
+  Obj, Fresh: TJsonObject;
+  i, NewIdx:  Integer;
+begin
+  Turns := ZpaqEnsureArray(Index, 'turns');
+  for i := 0 to Turns.Count - 1 do
+  begin
+    Obj := Turns.ItemObject(i);
+    if (Obj <> nil) and (Obj.GetInt('turn', -1) = Turn) then
+      Exit(Obj);
+  end;
+  Fresh := TJsonObject.Create;
+  Fresh.PutInt('turn', Turn);
+  Fresh.PutStr('ts',   FormatDateTime('yyyy-mm-dd"T"hh:nn:ss', Now));
+  ZpaqEnsureArray(Fresh, 'entries');
+  NewIdx := Turns.Count;
+  Turns.AddObject(Fresh);              { ownership transferred; Fresh := nil }
+  Result := Turns.ItemObject(NewIdx);  { live reference }
+end;
+
+procedure ZpaqClearRedoStack(Index: TJsonObject);
+{ Drop every bundle from the redo stack in place. Cheaper and safer
+  than swapping in a fresh array (no ownership transfer). }
+var
+  Stack: TJsonArray;
+  i:     Integer;
+begin
+  Stack := Index.ChildArray('redo_stack');
+  if (Stack = nil) or (Stack.Count = 0) then Exit;
+  LogDebug('checkpoints: redo stack cleared (%d bundles invalidated)',
+           [Stack.Count]);
+  for i := Stack.Count - 1 downto 0 do
+    Stack.Delete(i);
+end;
+
+procedure ZpaqInitFromDisk;
+{ Called from InitCheckpoints after the backend has been selected and
+  the session dir created. Loads the JSON journal to recover GTurn +
+  GZpaqArchiveCount across pasclaw restarts. }
+var
+  Index: TJsonObject;
+begin
+  Index := ZpaqLoadIndex;
+  try
+    GTurn             := Index.GetInt('current_turn',  0);
+    GZpaqArchiveCount := Index.GetInt('archive_count', 0);
+    GZpaqRedoDirty    := False;
+  finally
+    Index.Free;
+  end;
+end;
+
+procedure ZpaqPruneOldTurns;
+{ Drop the oldest turn records from index.json until len(turns) fits
+  the (GKeep - 1) budget -- mirrors the legacy backend's PruneOldTurns
+  so CountSnapshottedTurns behaves the same way under both backends.
+
+  Unlike the legacy backend, we don't (yet) compact the archive: the
+  pruned segments stay on disk, just unreferenced from the journal.
+  That's fine for v1; running zpaq journaling-format compaction here
+  is a follow-up once the vendor exposes it. }
+var
+  Index: TJsonObject;
+  Turns: TJsonArray;
+  Budget: Integer;
+begin
+  Budget := GKeep - 1;
+  if Budget < 0 then Budget := 0;
+
+  Index := ZpaqLoadIndex;
+  try
+    Turns := Index.ChildArray('turns');
+    if (Turns = nil) or (Turns.Count <= Budget) then Exit;
+    while Turns.Count > Budget do
+      Turns.Delete(0);
+    ZpaqSaveIndex(Index);
+  finally
+    Index.Free;
+  end;
+end;
+
+procedure ZpaqBeginTurn;
+begin
+  Inc(GTurn);
+  GTurnPaths.Clear;
+  GTurnTimestamp := FormatDateTime('yyyy-mm-dd"T"hh:nn:ss', Now);
+  { Prune happens here so the operator sees the count drop at the
+    start of each new turn, matching legacy timing. Skipped when
+    KeepLast is unset (GKeep = 0). }
+  if GKeep > 0 then
+    ZpaqPruneOldTurns;
+  { Note: redo stack is NOT cleared here -- a turn that produces no
+    snapshots (model just thinks / chats) shouldn't invalidate the
+    redo history. Clearing happens in ZpaqSnapshotBeforeWrite when an
+    actual archive segment is appended. }
+end;
+
+procedure ZpaqSnapshotBeforeWrite(const AbsPath: string);
+var
+  Bytes: TBytes;
+  Index: TJsonObject;
+  TurnObj, EntryObj: TJsonObject;
+  Entries: TJsonArray;
+  Err: string;
+  NewIdx: Integer;
+  WasCreated: Boolean;
+begin
+  if GTurnPaths.IndexOf(AbsPath) >= 0 then Exit;
+  GTurnPaths.Add(AbsPath);
+
+  WasCreated := not FileExists(AbsPath);
+  NewIdx     := -1;
+  if not WasCreated then
+  begin
+    if not ReadFileBytes(AbsPath, Bytes) then
+    begin
+      LogWarn('checkpoints: read %s failed -- snapshot skipped', [AbsPath]);
+      Exit;
+    end;
+    if not ZpaqAppendBytes(ZpaqArchivePath, Bytes, AbsPath,
+                           ZpaqDefaultMethod, Err) then
+    begin
+      LogWarn('checkpoints: zpaq append %s failed (%s) -- snapshot skipped',
+              [AbsPath, Err]);
+      Exit;
+    end;
+    NewIdx := GZpaqArchiveCount;
+    Inc(GZpaqArchiveCount);
+  end;
+
+  Index := ZpaqLoadIndex;
+  try
+    Index.PutInt('current_turn',  GTurn);
+    Index.PutInt('archive_count', GZpaqArchiveCount);
+    if GZpaqRedoDirty then
+    begin
+      ZpaqClearRedoStack(Index);
+      GZpaqRedoDirty := False;
+    end;
+    TurnObj := ZpaqFindOrAddTurn(Index, GTurn);
+    Entries := ZpaqEnsureArray(TurnObj, 'entries');
+    EntryObj := TJsonObject.Create;
+    EntryObj.PutStr('path',         AbsPath);
+    EntryObj.PutInt('archive_idx',  NewIdx);
+    EntryObj.PutBool('was_created', WasCreated);
+    Entries.AddObject(EntryObj);  { ownership transferred; EntryObj := nil }
+    ZpaqSaveIndex(Index);
+  finally
+    Index.Free;
+  end;
+
+  if WasCreated then
+    LogDebug('checkpoints: turn=%d created %s (no snapshot bytes)',
+             [GTurn, AbsPath])
+  else
+    LogDebug('checkpoints: turn=%d snap %s (%d bytes -> archive idx %d)',
+             [GTurn, AbsPath, Length(Bytes), NewIdx]);
+end;
+
+function ZpaqUndoTurns(N: Integer;
+                       out Restored: TRestoredFileArray;
+                       out ErrMsg: string): Boolean;
+var
+  Index: TJsonObject;
+  Turns, Entries, Stack, BundleEntries: TJsonArray;
+  TurnObj, EntryObj, BundleObj, BundleEntry: TJsonObject;
+  i, j, T, WindowLo, WindowHi, Idx: Integer;
+  Path: string;
+  TouchedPaths: TStringList;
+  TouchedIdx: TStringList;   { parallel: stores archive_idx for restore }
+  TouchedCreated: TStringList; { parallel: '1' if was_created else '0' }
+  Bytes: TBytes;
+  Err: string;
+  ArchiveIdx: Integer;
+  RestoredEntry: TRestoredFile;
+begin
+  Result := False;
+  SetLength(Restored, 0);
+  ErrMsg := '';
+  if N <= 0 then begin ErrMsg := 'argument must be a positive turn count'; Exit; end;
+
+  Index := ZpaqLoadIndex;
+  TouchedPaths := nil;
+  TouchedIdx := nil;
+  TouchedCreated := nil;
+  try
+    Turns := Index.ChildArray('turns');
+    if (Turns = nil) or (Turns.Count = 0) then
+    begin
+      ErrMsg := 'no snapshots recorded for this session yet';
+      Exit;
+    end;
+
+    if N > GTurn then N := GTurn;
+    WindowHi := GTurn;
+    WindowLo := GTurn - N + 1;
+    if WindowLo < 1 then WindowLo := 1;
+
+    { Pass 1: collect unique paths in the window. For each path, find
+      its EARLIEST snapshot inside the window (oldest-wins per file,
+      matching the legacy semantic: "restore to state at start of
+      oldest rewound turn"). }
+    TouchedPaths   := TStringList.Create;
+    TouchedPaths.CaseSensitive := True;
+    TouchedIdx     := TStringList.Create;
+    TouchedCreated := TStringList.Create;
+    for i := 0 to Turns.Count - 1 do
+    begin
+      TurnObj := Turns.ItemObject(i);
+      if TurnObj = nil then Continue;
+      T := TurnObj.GetInt('turn', -1);
+      if (T < WindowLo) or (T > WindowHi) then Continue;
+      Entries := TurnObj.ChildArray('entries');
+      if Entries = nil then Continue;
+      for j := 0 to Entries.Count - 1 do
+      begin
+        EntryObj := Entries.ItemObject(j);
+        if EntryObj = nil then Continue;
+        Path := EntryObj.GetStr('path', '');
+        if Path = '' then Continue;
+        if TouchedPaths.IndexOf(Path) >= 0 then Continue;
+        TouchedPaths.Add(Path);
+        TouchedIdx.Add(IntToStr(EntryObj.GetInt('archive_idx', -1)));
+        if EntryObj.GetBool('was_created', False) then
+          TouchedCreated.Add('1')
+        else
+          TouchedCreated.Add('0');
+      end;
+    end;
+
+    if TouchedPaths.Count = 0 then
+    begin
+      Result := True;   { friendly no-op, same as legacy }
+      Exit;
+    end;
+
+    { Pass 2: snapshot CURRENT bytes of each touched path into the
+      archive -- that's the redo bundle. Paths that no longer exist
+      on disk are skipped (model deleted them post-edit); the legacy
+      "leave created files in place" carve-out propagates: /undo
+      doesn't undo deletions either. Fix in a follow-up.
+
+      Push the bundle onto the stack first (as a freshly-allocated
+      TJsonObject), then re-fetch the live reference and fill in
+      entries. Doing it in this order avoids holding a dangling
+      pointer after AddObject's ownership transfer. }
+    Stack := ZpaqEnsureArray(Index, 'redo_stack');
+    BundleObj := TJsonObject.Create;
+    BundleObj.PutInt('turn_label', WindowLo);   { the turn we rewound TO }
+    ZpaqEnsureArray(BundleObj, 'entries');
+    Stack.AddObject(BundleObj);                 { ownership transferred }
+    BundleObj := Stack.ItemObject(Stack.Count - 1);
+    BundleEntries := BundleObj.ChildArray('entries');
+
+    for i := 0 to TouchedPaths.Count - 1 do
+    begin
+      Path := TouchedPaths[i];
+      if FileExists(Path) then
+      begin
+        if not ReadFileBytes(Path, Bytes) then
+        begin
+          LogWarn('checkpoints: undo: read %s failed -- redo bundle entry skipped',
+                  [Path]);
+          Continue;
+        end;
+        if not ZpaqAppendBytes(ZpaqArchivePath, Bytes, Path,
+                               ZpaqDefaultMethod, Err) then
+        begin
+          LogWarn('checkpoints: undo: zpaq append %s failed (%s)',
+                  [Path, Err]);
+          Continue;
+        end;
+        BundleEntry := TJsonObject.Create;
+        BundleEntry.PutStr('path',        Path);
+        BundleEntry.PutInt('archive_idx', GZpaqArchiveCount);
+        BundleEntries.AddObject(BundleEntry);
+        Inc(GZpaqArchiveCount);
+      end;
+    end;
+
+    { Pass 3: restore. For each touched path, write the pre-window
+      bytes back if archive_idx >= 0; if was_created (idx = -1), leave
+      the file in place (carve-out). }
+    for i := 0 to TouchedPaths.Count - 1 do
+    begin
+      Path := TouchedPaths[i];
+      ArchiveIdx := StrToIntDef(TouchedIdx[i], -1);
+      if TouchedCreated[i] = '1' then
+      begin
+        LogDebug('checkpoints: undo: %s was created -- left in place', [Path]);
+        Continue;
+      end;
+      if ArchiveIdx < 0 then Continue;
+      if not ZpaqExtractByIndex(ZpaqArchivePath, ArchiveIdx, Bytes, Err) then
+      begin
+        LogWarn('checkpoints: undo: extract %s (idx=%d) failed: %s',
+                [Path, ArchiveIdx, Err]);
+        Continue;
+      end;
+      try
+        WriteFileBytes(Path, Bytes);
+      except
+        on E: Exception do
+        begin
+          LogWarn('checkpoints: undo: write %s failed: %s', [Path, E.Message]);
+          Continue;
+        end;
+      end;
+      RestoredEntry.Path          := Path;
+      RestoredEntry.BlobIdx       := ArchiveIdx;
+      RestoredEntry.SnappedTurn   := WindowLo;
+      RestoredEntry.BytesRestored := Length(Bytes);
+      SetLength(Restored, Length(Restored) + 1);
+      Restored[High(Restored)] := RestoredEntry;
+    end;
+
+    Index.PutInt('archive_count', GZpaqArchiveCount);
+    ZpaqSaveIndex(Index);
+    GZpaqRedoDirty := True;
+    Result := True;
+  finally
+    TouchedPaths.Free;
+    TouchedIdx.Free;
+    TouchedCreated.Free;
+    Index.Free;
+  end;
+end;
+
+function ZpaqRedoTurns(N: Integer;
+                       out Restored: TRestoredFileArray;
+                       out ErrMsg: string): Boolean;
+var
+  Index: TJsonObject;
+  Stack, BundleEntries: TJsonArray;
+  BundleObj, EntryObj: TJsonObject;
+  i, j, Pops: Integer;
+  Path: string;
+  ArchiveIdx: Integer;
+  Bytes: TBytes;
+  Err: string;
+  RestoredEntry: TRestoredFile;
+begin
+  Result := False;
+  SetLength(Restored, 0);
+  ErrMsg := '';
+  if N <= 0 then begin ErrMsg := 'argument must be a positive turn count'; Exit; end;
+
+  Index := ZpaqLoadIndex;
+  try
+    Stack := Index.ChildArray('redo_stack');
+    if (Stack = nil) or (Stack.Count = 0) then
+    begin
+      ErrMsg := 'nothing to redo -- redo stack is empty';
+      Exit;
+    end;
+    Pops := N;
+    if Pops > Stack.Count then Pops := Stack.Count;
+
+    { Pop from the top (newest bundle first). Each bundle's entries
+      overwrite the files; later bundles win where paths overlap --
+      same shape as the undo restoration in reverse. }
+    for i := 0 to Pops - 1 do
+    begin
+      BundleObj := Stack.ItemObject(Stack.Count - 1);
+      if BundleObj = nil then Break;
+      BundleEntries := BundleObj.ChildArray('entries');
+      if BundleEntries <> nil then
+      begin
+        for j := 0 to BundleEntries.Count - 1 do
+        begin
+          EntryObj := BundleEntries.ItemObject(j);
+          if EntryObj = nil then Continue;
+          Path := EntryObj.GetStr('path', '');
+          ArchiveIdx := EntryObj.GetInt('archive_idx', -1);
+          if (Path = '') or (ArchiveIdx < 0) then Continue;
+          if not ZpaqExtractByIndex(ZpaqArchivePath, ArchiveIdx,
+                                    Bytes, Err) then
+          begin
+            LogWarn('checkpoints: redo: extract %s (idx=%d) failed: %s',
+                    [Path, ArchiveIdx, Err]);
+            Continue;
+          end;
+          try
+            WriteFileBytes(Path, Bytes);
+          except
+            on E: Exception do
+            begin
+              LogWarn('checkpoints: redo: write %s failed: %s',
+                      [Path, E.Message]);
+              Continue;
+            end;
+          end;
+          RestoredEntry.Path          := Path;
+          RestoredEntry.BlobIdx       := ArchiveIdx;
+          RestoredEntry.SnappedTurn   := BundleObj.GetInt('turn_label', 0);
+          RestoredEntry.BytesRestored := Length(Bytes);
+          SetLength(Restored, Length(Restored) + 1);
+          Restored[High(Restored)] := RestoredEntry;
+        end;
+      end;
+      Stack.Delete(Stack.Count - 1);
+    end;
+
+    ZpaqSaveIndex(Index);
+    Result := True;
+  finally
+    Index.Free;
+  end;
+end;
+
+function ZpaqCanRedo: Boolean;
+var
+  Index: TJsonObject;
+  Stack: TJsonArray;
+begin
+  Result := False;
+  if GBackend <> cbZpaq then Exit;
+  Index := ZpaqLoadIndex;
+  try
+    Stack := Index.ChildArray('redo_stack');
+    Result := (Stack <> nil) and (Stack.Count > 0);
+  finally
+    Index.Free;
+  end;
+end;
+
+function ZpaqCountSnapshottedTurns(out OldestTurn,
+                                   NewestTurn: Integer): Integer;
+var
+  Index: TJsonObject;
+  Turns: TJsonArray;
+  TurnObj: TJsonObject;
+  i, T, Lo, Hi: Integer;
+begin
+  Result     := 0;
+  OldestTurn := 0;
+  NewestTurn := 0;
+  Index := ZpaqLoadIndex;
+  try
+    Turns := Index.ChildArray('turns');
+    if Turns = nil then Exit;
+    Lo := MaxInt;
+    Hi := -1;
+    for i := 0 to Turns.Count - 1 do
+    begin
+      TurnObj := Turns.ItemObject(i);
+      if TurnObj = nil then Continue;
+      T := TurnObj.GetInt('turn', -1);
+      if T < 0 then Continue;
+      Inc(Result);
+      if T < Lo then Lo := T;
+      if T > Hi then Hi := T;
+    end;
+    if Result > 0 then
+    begin
+      OldestTurn := Lo;
+      NewestTurn := Hi;
+    end;
+  finally
+    Index.Free;
+  end;
 end;
 
 procedure InitCheckpoints(const Cfg: TCheckpointConfig);
@@ -294,24 +935,69 @@ begin
     if Cfg.KeepLast > 0 then GKeep := Cfg.KeepLast
     else GKeep := DefaultKeepLastTurns;
     EnsureDir(SessionDir);
-    { Scan for the highest existing turn-NNNN under SessionDir so
-      BeginTurn picks up where the previous run left off. }
-    MaxT := 0;
-    Names := TStringList.Create;
-    try
-      ListSubdirs(SessionDir, Names);
-      for i := 0 to Names.Count - 1 do
-      begin
-        if (Length(Names[i]) < 9) or (Copy(Names[i], 1, 5) <> 'turn-') then Continue;
-        T := StrToIntDef(Copy(Names[i], 6, MaxInt), -1);
-        if T > MaxT then MaxT := T;
+
+    { Pick backend. zpaq wins when the vendor is on disk; otherwise
+      we fall back to the legacy turn-NNNN blob tree so checkpoints
+      keep working under Delphi / fresh-clones-without-`make get-zpaq`.
+      The on-disk shapes are disjoint (archive.zpaq vs turn-NNNN/),
+      so detecting which one this session ran under previously is
+      cheap: if archive.zpaq exists we resume zpaq mode, else if
+      turn-NNNN dirs exist we resume legacy, else pick zpaq when
+      available. }
+    if FileExists(ZpaqArchivePath) and ZpaqAvailable then
+      GBackend := cbZpaq
+    else
+    begin
+      MaxT := 0;
+      Names := TStringList.Create;
+      try
+        ListSubdirs(SessionDir, Names);
+        for i := 0 to Names.Count - 1 do
+          if (Length(Names[i]) >= 9) and (Copy(Names[i], 1, 5) = 'turn-') then
+          begin
+            T := StrToIntDef(Copy(Names[i], 6, MaxInt), -1);
+            if T > MaxT then MaxT := T;
+          end;
+      finally
+        Names.Free;
       end;
-    finally
-      Names.Free;
+      if MaxT > 0 then
+        GBackend := cbLegacy
+      else if ZpaqAvailable then
+        GBackend := cbZpaq
+      else
+        GBackend := cbLegacy;
     end;
-    GTurn := MaxT;  { BeginTurn will Inc this to MaxT+1 before snapshotting }
-    LogDebug('checkpoints: enabled session=%s root=%s keep=%d resume_turn=%d',
-             [GSession, GRoot, GKeep, GTurn]);
+
+    case GBackend of
+      cbZpaq:
+        begin
+          ZpaqInitFromDisk;
+          LogDebug('checkpoints: enabled (zpaq) session=%s root=%s archive_count=%d resume_turn=%d',
+                   [GSession, GRoot, GZpaqArchiveCount, GTurn]);
+        end;
+      cbLegacy:
+        begin
+          { Scan for the highest existing turn-NNNN under SessionDir so
+            BeginTurn picks up where the previous run left off. }
+          MaxT := 0;
+          Names := TStringList.Create;
+          try
+            ListSubdirs(SessionDir, Names);
+            for i := 0 to Names.Count - 1 do
+            begin
+              if (Length(Names[i]) < 9) or (Copy(Names[i], 1, 5) <> 'turn-') then Continue;
+              T := StrToIntDef(Copy(Names[i], 6, MaxInt), -1);
+              if T > MaxT then MaxT := T;
+            end;
+          finally
+            Names.Free;
+          end;
+          GTurn := MaxT;
+          LogDebug('checkpoints: enabled (legacy) session=%s root=%s keep=%d resume_turn=%d',
+                   [GSession, GRoot, GKeep, GTurn]);
+        end;
+    end;
   finally
     GLock.Release;
   end;
@@ -349,16 +1035,25 @@ begin
   GLock.Acquire;
   try
     if not GEnabled then Exit;
-    Inc(GTurn);
-    GTurnBlobCount := 0;
-    GTurnPaths.Clear;
-    GTurnEntries.Clear;
-    GTurnTimestamp := FormatDateTime('yyyy-mm-dd"T"hh:nn:ss', Now);
-    { The turn dir + blob dir lazy-create on first snapshot; we
-      don't want to litter empty dirs for turns that don't touch
-      the FS. Prune happens here so the operator sees the dir size
-      drop right at the start of each new turn. }
-    PruneOldTurns;
+    case GBackend of
+      cbZpaq:
+        begin
+          ZpaqBeginTurn;
+        end;
+      cbLegacy:
+        begin
+          Inc(GTurn);
+          GTurnBlobCount := 0;
+          GTurnPaths.Clear;
+          GTurnEntries.Clear;
+          GTurnTimestamp := FormatDateTime('yyyy-mm-dd"T"hh:nn:ss', Now);
+          { The turn dir + blob dir lazy-create on first snapshot; we
+            don't want to litter empty dirs for turns that don't touch
+            the FS. Prune happens here so the operator sees the dir size
+            drop right at the start of each new turn. }
+          PruneOldTurns;
+        end;
+    end;
   finally
     GLock.Release;
   end;
@@ -452,40 +1147,42 @@ begin
   try
     if (not GEnabled) or (GTurn <= 0) then Exit;
     AbsPath := ExpandFileName(Path);
-    if GTurnPaths.IndexOf(AbsPath) >= 0 then
-    begin
-      { Already snapshotted earlier in this turn -- keep the
-        earliest state. fs_edit_hashline that touches the same file
-        twice in one turn must roll back to BEFORE the first edit,
-        not BEFORE the second. }
-      Exit;
+    case GBackend of
+      cbZpaq:
+        ZpaqSnapshotBeforeWrite(AbsPath);
+      cbLegacy:
+        begin
+          if GTurnPaths.IndexOf(AbsPath) >= 0 then
+          begin
+            { Already snapshotted earlier in this turn -- keep the
+              earliest state. fs_edit_hashline that touches the same file
+              twice in one turn must roll back to BEFORE the first edit,
+              not BEFORE the second. }
+            Exit;
+          end;
+          if not ReadFileBytes(AbsPath, Bytes) then
+          begin
+            { Truly-new file (didn't exist before the model wrote it).
+              Record nothing -- on /undo we leave model-created files in
+              place. The operator can rm them; the alternative ("delete
+              any file created during a rewound turn") risks data loss
+              if the model also re-wrote an unrelated file as part of
+              the same turn. }
+            GTurnPaths.Add(AbsPath);
+            Exit;
+          end;
+          EnsureDir(CurrentBlobsDir);
+          BlobName := Format('%4.4d.bin', [GTurnBlobCount]);
+          BlobPath := JoinPath(CurrentBlobsDir, BlobName);
+          WriteFileBytes(BlobPath, Bytes);
+          GTurnEntries.Add(BlobName + '|' + IntToStr(Length(Bytes)) + '|' + AbsPath);
+          WriteCurrentManifest;
+          GTurnPaths.Add(AbsPath);
+          Inc(GTurnBlobCount);
+          LogDebug('checkpoints: turn=%d snap %s (%d bytes -> %s)',
+                   [GTurn, AbsPath, Length(Bytes), BlobName]);
+        end;
     end;
-    if not ReadFileBytes(AbsPath, Bytes) then
-    begin
-      { Truly-new file (didn't exist before the model wrote it).
-        Record nothing -- on /undo we leave model-created files in
-        place. The operator can rm them; the alternative ("delete
-        any file created during a rewound turn") risks data loss
-        if the model also re-wrote an unrelated file as part of
-        the same turn. }
-      GTurnPaths.Add(AbsPath);  { still mark so a later edit in
-                                  this same turn doesn't try to
-                                  snapshot a file the model just
-                                  created -- the original-state
-                                  "no file" is already implied. }
-      Exit;
-    end;
-    EnsureDir(CurrentBlobsDir);
-    BlobName := Format('%4.4d.bin', [GTurnBlobCount]);
-    BlobPath := JoinPath(CurrentBlobsDir, BlobName);
-    WriteFileBytes(BlobPath, Bytes);
-    GTurnEntries.Add(BlobName + '|' + IntToStr(Length(Bytes)) + '|' + AbsPath);
-    WriteCurrentManifest;
-
-    GTurnPaths.Add(AbsPath);
-    Inc(GTurnBlobCount);
-    LogDebug('checkpoints: turn=%d snap %s (%d bytes -> %s)',
-             [GTurn, AbsPath, Length(Bytes), BlobName]);
   finally
     GLock.Release;
   end;
@@ -502,8 +1199,14 @@ begin
   NewestTurn := 0;
   GLock.Acquire;
   try
+    if not GEnabled then Exit;
+    if GBackend = cbZpaq then
+    begin
+      Result := ZpaqCountSnapshottedTurns(OldestTurn, NewestTurn);
+      Exit;
+    end;
     Dir := SessionDir;
-    if (not GEnabled) or (Dir = '') or (not DirectoryExists(Dir)) then Exit;
+    if (Dir = '') or (not DirectoryExists(Dir)) then Exit;
     Names := TStringList.Create;
     try
       ListSubdirs(Dir, Names);
@@ -557,6 +1260,12 @@ begin
       ErrMsg := 'checkpoints not enabled for this session';
       Exit;
     end;
+    if GBackend = cbZpaq then
+    begin
+      Result := ZpaqUndoTurns(N, Restored, ErrMsg);
+      Exit;
+    end;
+    { ----- legacy blob backend ----- }
     if N <= 0 then
     begin
       ErrMsg := 'argument must be a positive turn count';
@@ -686,6 +1395,53 @@ begin
       AlreadyRestored.Free;
     end;
     Result := True;
+  finally
+    GLock.Release;
+  end;
+end;
+
+function CheckpointsBackend: TCheckpointBackend;
+begin
+  GLock.Acquire;
+  try
+    Result := GBackend;
+  finally
+    GLock.Release;
+  end;
+end;
+
+function RedoTurns(N: Integer; out Restored: TRestoredFileArray;
+                   out ErrMsg: string): Boolean;
+begin
+  Result := False;
+  SetLength(Restored, 0);
+  ErrMsg := '';
+  GLock.Acquire;
+  try
+    if not GEnabled then
+    begin
+      ErrMsg := 'checkpoints not enabled for this session';
+      Exit;
+    end;
+    if GBackend <> cbZpaq then
+    begin
+      ErrMsg := 'redo not supported by this backend (legacy blob store has no per-undo capture point; ' +
+                'run `make get-zpaq` and start a fresh session for redo)';
+      Exit;
+    end;
+    Result := ZpaqRedoTurns(N, Restored, ErrMsg);
+  finally
+    GLock.Release;
+  end;
+end;
+
+function CanRedo: Boolean;
+begin
+  GLock.Acquire;
+  try
+    if (not GEnabled) or (GBackend <> cbZpaq) then
+      Exit(False);
+    Result := ZpaqCanRedo;
   finally
     GLock.Release;
   end;

@@ -1,0 +1,33 @@
+PasClaw vendors the following MIT-licensed source files in
+src/pkg/vendor/zpaq/:
+
+  libzpaq.pas
+  ZpaqClasses.pas
+  ZpaqSimple.pas
+      Free Pascal port of LIBZPAQ Version 7.15 (Aug. 17, 2016)
+      Port by Xelitan (www.xelitan.com)
+      https://github.com/Xelitan/Free-Pascal-port-of-LIBZPAQ-Version-7.15
+
+The port bundles code from three upstream projects under MIT and public
+domain licenses (all listed in libzpaq.pas + LICENSE):
+
+  libdivsufsort (C) 2003-2008 Yuta Mori        -- MIT
+  libtomcrypt   (C) 2001-2017 Tom St. Denis    -- public domain
+  Salsa20/8         D. Bernstein               -- public domain
+  LibZPaq           Matt Mahoney                -- public domain
+      http://mattmahoney.net/zpaq/
+
+The Pascal port itself is distributed under the MIT License (see
+LICENSE in this directory).
+
+These units back PasClaw.Checkpoints.Zpaq (src/pkg/checkpoints/) --
+the snapshot store that powers /undo + /redo. The port is written in
+{$mode objfpc} so it compiles only under Free Pascal; Delphi builds
+fall back to the legacy blob-tree checkpoint backend documented in
+docs/checkpoints.md.
+
+No modifications were made to the upstream sources beyond placing them
+in this directory. The demo program (zpaq.lpr) and Lazarus project
+file (zpaq.lpi) are NOT vendored since we drive the library through
+its Pascal API rather than the CLI. Updates can be re-vendored
+verbatim from upstream.
