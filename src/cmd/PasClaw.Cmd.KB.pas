@@ -16,8 +16,10 @@
   Index: SQLite FTS5 BM25 always; hybrid FTS+vector automatically when
   the localvector runtime is provisioned (`pasclaw memory provision`)
   and vector_search_enabled is on — the exact same artifacts and flag
-  memory_search uses. PDFs are not supported: convert to text or
-  markdown first.
+  memory_search uses. PDFs go through a native FlateDecode + /ToUnicode
+  parser (PasClaw.KB.PDF) so they can be added directly; image-only
+  scans without an embedded text layer fall out with a "no extractable
+  text" warning.
 *)
 unit PasClaw.Cmd.KB;
 
@@ -58,8 +60,9 @@ begin
   PrintLn;
   PrintLn('Notes:');
   PrintLn('  - Documents are indexed in place; edits need `pasclaw kb sync`.');
-  PrintLn('  - PDFs are not supported: convert to text/markdown first');
-  PrintLn('    (e.g. `pdftotext book.pdf book.txt`).');
+  PrintLn('  - PDFs are indexed via a built-in parser (FlateDecode +');
+  PrintLn('    /ToUnicode CMap). Image-only scans are skipped with a');
+  PrintLn('    "no extractable text" warning. Files up to 30 MB.');
   PrintLn('  - Vector (semantic) ranking activates automatically once');
   PrintLn('    `pasclaw memory provision` has installed the local embedding');
   PrintLn('    runtime; otherwise search is keyword (FTS5 BM25) only.');

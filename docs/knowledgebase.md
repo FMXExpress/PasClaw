@@ -23,10 +23,11 @@ Documents are indexed **in place** — never copied — into `$PASCLAW_HOME/work
 - Plain text (`.txt`).
 - HTML (`.html`, `.htm`) — tags stripped.
 - Source code: `.pas`, `.dpr`, `.dpk`, `.inc`, `.c`, `.h`, `.cpp`, `.py`, `.rs`, `.go`, `.js`, `.ts`, `.java`, `.cs`, `.rb`, `.lua`, `.sql`, `.sh`, `.bat`, `.ps1`, `.json`, `.yaml`, `.yml`, `.toml`, `.xml`.
+- **PDF (`.pdf`)** — text extracted via the built-in parser (`PasClaw.KB.PDF`), no external tool required. Handles `/FlateDecode` streams and per-font `/ToUnicode` CMaps (Type0/CID + simple fonts). Image-only scans without an embedded text layer are skipped with a "no extractable text" warning.
 
-**PDFs are not supported** — convert first, e.g. `pdftotext book.pdf book.txt`.
+File-size cap: **30 MB**. Larger files are skipped with a log line.
 
-Binary files are detected by NUL-byte sniff (same heuristic as `fs_grep`) and skipped silently.
+Binary files (other than PDF) are detected by NUL-byte sniff (same heuristic as `fs_grep`) and skipped silently.
 
 ## Tools (auto-registered)
 

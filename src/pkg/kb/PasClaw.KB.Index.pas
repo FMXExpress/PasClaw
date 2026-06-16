@@ -125,8 +125,11 @@ const
   KB_CHUNK_MAX    = 3200;
   { Files larger than this are skipped (with a log line) — a converted
     book lands well under it; anything bigger is usually a data dump
-    that would swamp the index. }
-  KB_MAX_FILE_BYTES = 4 * 1024 * 1024;
+    that would swamp the index. Bumped from 4 MB to 30 MB to admit
+    large PDFs (textbooks, scanned-and-OCR'd whitepapers); plain-text
+    sources at this size are still uncommon, and the chunker handles
+    them fine. }
+  KB_MAX_FILE_BYTES = 30 * 1024 * 1024;
 
 implementation
 
@@ -142,6 +145,7 @@ uses
   PasClaw.Config,
   PasClaw.Logger,
   PasClaw.Memory.Index,        { SanitizeFtsQuery }
+  PasClaw.KB.PDF,              { ExtractPDFText for .pdf ingest }
   LocalVector.VectorStore,
   LocalVector.Embedder,
   LocalVector.Tokenizer,
@@ -150,17 +154,19 @@ uses
 
 const
   { Extensions indexed by Sync. Lowercase, with dot. Plain-text reads;
-    .html/.htm additionally pass through KBStripHtml. PDFs are NOT
-    supported — convert to text/markdown first (kb add tells the user
-    this when it skips one). }
-  KB_EXTENSIONS: array[0..38] of string = (
+    .html/.htm additionally pass through KBStripHtml; .pdf is routed
+    through PasClaw.KB.PDF (native FlateDecode + /ToUnicode parser, no
+    external tools). Image-only / scanned PDFs without an embedded
+    text layer fall out of ingest with a "no extractable text" warning. }
+  KB_EXTENSIONS: array[0..39] of string = (
     '.md', '.markdown', '.txt', '.text', '.rst', '.adoc', '.org',
     '.pas', '.pp', '.inc', '.dpr', '.lpr',
     '.c', '.h', '.cc', '.cpp', '.hpp', '.cs', '.java', '.go', '.rs',
     '.js', '.ts', '.py', '.rb', '.php', '.swift', '.kt', '.sql',
     '.sh', '.bat', '.ps1',
     '.json', '.yaml', '.yml', '.toml', '.ini', '.csv',
-    '.html');
+    '.html',
+    '.pdf');
 
 function DefaultKBDbPath: string;
 begin
@@ -874,7 +880,7 @@ procedure TKBIndexImpl.ReindexFile(const Path, Root: string; Mtime: Int64;
   end;
 
 var
-  Body, Ext: string;
+  Body, Ext, PdfErr: string;
   Chunks: TArray<string>;
   j: Integer;
 begin
@@ -888,27 +894,46 @@ begin
     RecordSkipped;
     Exit;
   end;
-  try
-    Body := ReadFileText(Path);
-  except
-    on E: Exception do
-    begin
-      LogWarn('kb.index: read %s failed (%s) — skipping', [Path, E.Message]);
-      DropFile(Path);
-      Exit;
-    end;
-  end;
-  if KBLooksBinary(Copy(Body, 1, 4096)) then
-  begin
-    LogDebug('kb.index: %s looks binary — skipping', [Path]);
-    DropFile(Path);
-    RecordSkipped;
-    Exit;
-  end;
 
   Ext := LowerCase(ExtractFileExt(Path));
-  if (Ext = '.html') or (Ext = '.htm') then
-    Body := KBStripHtml(Body);
+
+  { PDF branch: native parser owns the read (it needs raw bytes, not
+    text) and skips the binary-sniff (PDFs always have NUL bytes). An
+    image-only PDF returns Body='' with PdfErr set; we log and record
+    as skipped so Sync doesn't re-attempt it every cycle. }
+  if Ext = '.pdf' then
+  begin
+    if not ExtractPDFText(Path, Body, PdfErr) then
+    begin
+      LogWarn('kb.index: pdf %s — %s', [Path, PdfErr]);
+      DropFile(Path);
+      RecordSkipped;
+      Exit;
+    end;
+  end
+  else
+  begin
+    try
+      Body := ReadFileText(Path);
+    except
+      on E: Exception do
+      begin
+        LogWarn('kb.index: read %s failed (%s) — skipping', [Path, E.Message]);
+        DropFile(Path);
+        Exit;
+      end;
+    end;
+    if KBLooksBinary(Copy(Body, 1, 4096)) then
+    begin
+      LogDebug('kb.index: %s looks binary — skipping', [Path]);
+      DropFile(Path);
+      RecordSkipped;
+      Exit;
+    end;
+
+    if (Ext = '.html') or (Ext = '.htm') then
+      Body := KBStripHtml(Body);
+  end;
 
   Chunks := KBChunkDocument(Body);
 

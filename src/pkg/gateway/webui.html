@@ -438,7 +438,7 @@
   <div id="tab-kb" class="tab">
     <div class="pane">
       <form id="kb-upload" class="skill-install-row">
-        <input id="kb-file" type="file" title="Upload a text document into the knowledge base">
+        <input id="kb-file" type="file" accept=".md,.markdown,.txt,.text,.rst,.adoc,.org,.pas,.pp,.inc,.dpr,.lpr,.c,.h,.cc,.cpp,.hpp,.cs,.java,.go,.rs,.js,.ts,.py,.rb,.php,.swift,.kt,.sql,.sh,.bat,.ps1,.json,.yaml,.yml,.toml,.ini,.csv,.html,.htm,.pdf,application/pdf,text/*" title="Upload a text document or PDF into the knowledge base (up to 30 MB)">
         <button class="primary" id="kb-upload-btn" type="submit">Upload &amp; index</button>
       </form>
       <form id="kb-search" class="skill-install-row">
@@ -1691,15 +1691,29 @@ const tabLoaders = {
     async function upload() {
       const f = file.files && file.files[0];
       if (!f) { setStatus("choose a file first", "err"); return; }
-      if (f.size > 4 * 1024 * 1024) { setStatus("file too large (max 4 MB of text)", "err"); return; }
+      if (f.size > 30 * 1024 * 1024) { setStatus("file too large (max 30 MB)", "err"); return; }
+      const isPdf = /\.pdf$/i.test(f.name);
       setStatus("reading " + f.name + "…");
-      let text;
-      try { text = await f.text(); } catch (e) { setStatus("read failed: " + e, "err"); return; }
+      let payload;
+      try {
+        if (isPdf) {
+          /* PDFs are binary; await f.text() would mangle them.  Read as
+             ArrayBuffer and base64-encode for JSON transport.  Server
+             decodes content_b64 and writes raw bytes. */
+          const buf = await f.arrayBuffer();
+          const u8 = new Uint8Array(buf);
+          let bin = "";
+          for (let i = 0; i < u8.length; i++) bin += String.fromCharCode(u8[i]);
+          payload = { name: f.name, content_b64: btoa(bin) };
+        } else {
+          payload = { name: f.name, content: await f.text() };
+        }
+      } catch (e) { setStatus("read failed: " + e, "err"); return; }
       setStatus("uploading & indexing " + f.name + "…");
       try {
         const r = await gwFetch("/v1/kb/upload", {
           method: "POST", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ name: f.name, content: text }) });
+          body: JSON.stringify(payload) });
         const j = await r.json().catch(() => ({}));
         if (r.ok && j.uploaded) {
           setStatus(`indexed ${j.uploaded} — ${j.indexed_files} file(s), ${j.indexed_chunks} chunk(s)`, "ok");

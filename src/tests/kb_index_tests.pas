@@ -116,7 +116,7 @@ begin
   AssertTrue(KBExtSupported('/x/doc.md'),    '.md supported');
   AssertTrue(KBExtSupported('/x/Unit1.PAS'), '.pas supported (case-insensitive)');
   AssertTrue(KBExtSupported('/x/page.htm'),  '.htm aliases .html');
-  AssertTrue(not KBExtSupported('/x/book.pdf'), '.pdf NOT supported');
+  AssertTrue(KBExtSupported('/x/book.pdf'),  '.pdf now supported (native parser)');
   AssertTrue(not KBExtSupported('/x/image.png'), '.png not supported');
   AssertTrue(not KBExtSupported('/x/noext'),     'no extension not supported');
 end;
