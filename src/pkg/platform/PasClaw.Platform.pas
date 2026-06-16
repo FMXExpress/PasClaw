@@ -100,7 +100,8 @@ type
       the forked child on POSIX, and TProcess.CurrentDirectory on FPC. }
     function Spawn(const Cmd: string; Args: TStrings;
                     MergeStderr: Boolean = False;
-                    const WorkingDir: string = ''): Boolean;
+                    const WorkingDir: string = '';
+                    ExtraEnv: TStrings = nil): Boolean;
 
     { Send Buf to child stdin. Returns the byte count written. }
     function WriteBytes(const Buf; Count: Integer): Integer;
@@ -320,15 +321,38 @@ end;
 
 function TStdioProcess.Spawn(const Cmd: string; Args: TStrings;
                               MergeStderr: Boolean;
-                              const WorkingDir: string): Boolean;
+                              const WorkingDir: string;
+                              ExtraEnv: TStrings): Boolean;
 var
   P: TInternalProcess;
-  i: Integer;
+  i, j, EqPos: Integer;
+  Nm: string;
 begin
   if FStarted then Exit(False);
   P := TInternalProcess.Create(nil);
   P.Executable := Cmd;
   for i := 0 to Args.Count - 1 do P.Parameters.Add(Args[i]);
+  { ExtraEnv: setting TProcess.Environment REPLACES the inherited env, so
+    seed it with the parent's env first, then layer ExtraEnv on top (each
+    KEY=VAL drops any prior KEY= line so the override wins, not duplicates).
+    Mirrors RunOneShotWithEnv's merge. Untouched when ExtraEnv is nil. }
+  if ExtraEnv <> nil then
+  begin
+    for i := 0 to GetEnvironmentVariableCount - 1 do
+      P.Environment.Add(GetEnvironmentString(i));
+    for i := 0 to ExtraEnv.Count - 1 do
+    begin
+      EqPos := Pos('=', ExtraEnv[i]);
+      if EqPos <= 0 then Continue;
+      Nm := Copy(ExtraEnv[i], 1, EqPos - 1);
+      for j := P.Environment.Count - 1 downto 0 do
+        if (Pos('=', P.Environment[j]) > 0) and
+           (Copy(P.Environment[j], 1, Length(Nm)) = Nm) and
+           (P.Environment[j][Length(Nm) + 1] = '=') then
+          P.Environment.Delete(j);
+      P.Environment.Add(ExtraEnv[i]);
+    end;
+  end;
   if WorkingDir <> '' then P.CurrentDirectory := WorkingDir;
   if MergeStderr then
     P.Options := [poUsePipes, poStderrToOutPut]
@@ -551,6 +575,72 @@ end;
 {$IFDEF MSWINDOWS}
 (* ----- Delphi/Windows backend (Win32 API direct) ----- *)
 
+function BuildUnicodeEnvBlock(ExtraEnv: TStrings): string;
+{ A CREATE_UNICODE_ENVIRONMENT block: the parent's environment merged with
+  ExtraEnv (KEY=VAL, ExtraEnv winning on a case-insensitive name collision),
+  every entry #0-terminated and the whole block #0#0-terminated. Returns ''
+  when there is nothing to inject so the caller passes nil (inherit, the
+  historical behaviour). Unlike POSIX setenv, a non-nil lpEnvironment makes
+  the child see EXACTLY this block -- so the parent's env must be folded in,
+  or the child would lose PATH/SystemRoot/etc. }
+var
+  Merged: TStringList;
+  EnvP, P: PWideChar;
+  Entry, Nm: string;
+  i, EqPos, j: Integer;
+  SB: TStringBuilder;
+begin
+  Result := '';
+  if (ExtraEnv = nil) or (ExtraEnv.Count = 0) then Exit;
+  Merged := TStringList.Create;
+  try
+    Merged.CaseSensitive := False;
+    { Snapshot the parent env. }
+    EnvP := GetEnvironmentStringsW;
+    if EnvP <> nil then
+    try
+      P := EnvP;
+      while P^ <> #0 do
+      begin
+        Entry := P;                 { up to the next #0 }
+        Merged.Add(Entry);
+        Inc(P, Length(Entry) + 1);
+      end;
+    finally
+      FreeEnvironmentStringsW(EnvP);
+    end;
+    { Layer ExtraEnv on top, dropping any prior KEY= line. }
+    for i := 0 to ExtraEnv.Count - 1 do
+    begin
+      EqPos := Pos('=', ExtraEnv[i]);
+      if EqPos <= 0 then Continue;
+      Nm := Copy(ExtraEnv[i], 1, EqPos - 1);
+      for j := Merged.Count - 1 downto 0 do
+        if (Length(Merged[j]) > Length(Nm)) and
+           (Merged[j][Length(Nm) + 1] = '=') and
+           SameText(Copy(Merged[j], 1, Length(Nm)), Nm) then
+          Merged.Delete(j);
+      Merged.Add(ExtraEnv[i]);
+    end;
+    { Windows wants the block sorted (case-insensitive) by name. }
+    Merged.Sort;
+    SB := TStringBuilder.Create;
+    try
+      for i := 0 to Merged.Count - 1 do
+      begin
+        SB.Append(Merged[i]);
+        SB.Append(#0);
+      end;
+      SB.Append(#0);                 { final terminator }
+      Result := SB.ToString;
+    finally
+      SB.Free;
+    end;
+  finally
+    Merged.Free;
+  end;
+end;
+
 constructor TStdioProcess.Create;
 begin
   inherited Create;
@@ -580,14 +670,17 @@ end;
 
 function TStdioProcess.Spawn(const Cmd: string; Args: TStrings;
                               MergeStderr: Boolean;
-                              const WorkingDir: string): Boolean;
+                              const WorkingDir: string;
+                              ExtraEnv: TStrings): Boolean;
 var
   SA: TSecurityAttributes;
   SI: TStartupInfoW;
   PI: TProcessInformation;
   ChildStdinRead, ChildStdoutWrite: THandle;
-  CmdLine, CurDirW: string;
+  CmdLine, CurDirW, EnvBlock: string;
   CurDirPtr: PWideChar;
+  EnvPtr: Pointer;
+  Flags: DWORD;
   i: Integer;
 begin
   if FStarted then Exit(False);
@@ -635,8 +728,19 @@ begin
   else
     CurDirPtr := nil;
 
+  { ExtraEnv: hand CreateProcessW a merged Unicode environment block (parent
+    env + overrides). nil/empty keeps the historical inherit-everything path. }
+  Flags  := CREATE_NO_WINDOW;
+  EnvPtr := nil;
+  EnvBlock := BuildUnicodeEnvBlock(ExtraEnv);
+  if EnvBlock <> '' then
+  begin
+    EnvPtr := PWideChar(EnvBlock);
+    Flags  := Flags or CREATE_UNICODE_ENVIRONMENT;
+  end;
+
   if not CreateProcessW(nil, PWideChar(CmdLine), nil, nil, True,
-                        CREATE_NO_WINDOW, nil, CurDirPtr, SI, PI) then
+                        Flags, EnvPtr, CurDirPtr, SI, PI) then
   begin
     CloseHandle(FStdoutRead); CloseHandle(ChildStdoutWrite);
     CloseHandle(ChildStdinRead); CloseHandle(FStdinWrite);
@@ -717,7 +821,13 @@ begin
     TerminateProcess(FProcHandle, 0);
 end;
 
-function RunOneShot(const Cmd, WorkingDir: string; out Output: string): Integer;
+function RunOneShotWithEnv(const Cmd, WorkingDir: string;
+                            ExtraEnv: TStringList;
+                            out Output: string): Integer;
+{ Delphi/Windows: cmd.exe /C <Cmd>, capturing merged stdout+stderr. ExtraEnv
+  (when non-nil) is injected via Spawn's CREATE_UNICODE_ENVIRONMENT block --
+  parent env + overrides -- so execute_code's tool-RPC vars actually reach
+  the child. RunOneShot is the no-env case (ExtraEnv = nil). }
 var
   P: TStdioProcess;
   Args: TStringList;
@@ -734,9 +844,9 @@ begin
   try
     Args.Add('/C'); Args.Add(Cmd);
     { WorkingDir flows into CreateProcessW.lpCurrentDirectory inside
-      Spawn -- no parent-side ChDir, so two RunOneShot calls firing in
-      parallel from the gateway can't trample each other's cwd. }
-    if not P.Spawn('cmd.exe', Args, {MergeStderr=}True, WorkingDir) then Exit;
+      Spawn -- no parent-side ChDir, so two calls firing in parallel from
+      the gateway can't trample each other's cwd. }
+    if not P.Spawn('cmd.exe', Args, {MergeStderr=}True, WorkingDir, ExtraEnv) then Exit;
     Total := 0;
     while True do
     begin
@@ -770,20 +880,9 @@ begin
   end;
 end;
 
-function RunOneShotWithEnv(const Cmd, WorkingDir: string;
-                            ExtraEnv: TStringList;
-                            out Output: string): Integer;
-{ Delphi Windows stub. Same story as the Delphi POSIX stub
-  below -- the env-injection path goes through CreateProcess and
-  needs an environment block, which is more invasive than the
-  fcl-process Environment list. ExtraEnv ignored; warn-once so
-  it's discoverable. Production builds use FPC. }
+function RunOneShot(const Cmd, WorkingDir: string; out Output: string): Integer;
 begin
-  { ExtraEnv silently ignored on this build. The fix is a follow-up
-    when someone exercises execute_code's tool-RPC on a Delphi
-    Windows build -- not the production path today. }
-  if ExtraEnv <> nil then ;
-  Result := RunOneShot(Cmd, WorkingDir, Output);
+  Result := RunOneShotWithEnv(Cmd, WorkingDir, nil, Output);
 end;
 
 {$ELSE}
@@ -805,6 +904,8 @@ function execvp(const path: PAnsiChar; const argv: PPAnsiChar): Integer; cdecl;
   external libc name _PU + 'execvp';
 function chdir(const path: PAnsiChar): Integer; cdecl;
   external libc name _PU + 'chdir';
+function setenv(const name, value: PAnsiChar; overwrite: Integer): Integer; cdecl;
+  external libc name _PU + 'setenv';
 
 constructor TStdioProcess.Create;
 begin
@@ -824,14 +925,15 @@ end;
 
 function TStdioProcess.Spawn(const Cmd: string; Args: TStrings;
                               MergeStderr: Boolean;
-                              const WorkingDir: string): Boolean;
+                              const WorkingDir: string;
+                              ExtraEnv: TStrings): Boolean;
 var
   StdinPipe, StdoutPipe: TPipeFDs;
   Pid: pid_t;
-  i: Integer;
+  i, EqPos: Integer;
   Argv: array of Pointer;
   ArgsI: array of RawByteString;
-  Path, WDPath: AnsiString;
+  Path, WDPath, EnvNm, EnvVal: AnsiString;
 begin
   if FStarted then Exit(False);
   if pipe(StdinPipe)  <> 0 then Exit(False);
@@ -874,6 +976,20 @@ begin
       WDPath := UTF8Encode(WorkingDir);
       chdir(PAnsiChar(WDPath));
     end;
+
+    { ExtraEnv: the child already inherited the parent's environment across
+      fork(), so we only setenv the overrides (overwrite=1). setenv copies
+      its args, so the transient AnsiStrings are safe. Done in the child, so
+      the parent's env and concurrent spawns are untouched. }
+    if ExtraEnv <> nil then
+      for i := 0 to ExtraEnv.Count - 1 do
+      begin
+        EqPos := Pos('=', ExtraEnv[i]);
+        if EqPos <= 0 then Continue;
+        EnvNm  := UTF8Encode(Copy(ExtraEnv[i], 1, EqPos - 1));
+        EnvVal := UTF8Encode(Copy(ExtraEnv[i], EqPos + 1, MaxInt));
+        setenv(PAnsiChar(EnvNm), PAnsiChar(EnvVal), 1);
+      end;
 
     Path := UTF8Encode(Cmd);
     SetLength(ArgsI, Args.Count);
@@ -973,7 +1089,13 @@ begin
     kill(FPid, SIGTERM);
 end;
 
-function RunOneShot(const Cmd, WorkingDir: string; out Output: string): Integer;
+function RunOneShotWithEnv(const Cmd, WorkingDir: string;
+                            ExtraEnv: TStringList;
+                            out Output: string): Integer;
+{ Delphi/POSIX: /bin/sh -c <Cmd>, capturing merged stdout+stderr. ExtraEnv
+  (when non-nil) is applied via setenv in the forked child inside Spawn, so
+  execute_code's tool-RPC vars actually reach the child. RunOneShot is the
+  no-env case (ExtraEnv = nil). }
 var
   P: TStdioProcess;
   Args: TStringList;
@@ -990,9 +1112,9 @@ begin
   try
     Args.Add('-c'); Args.Add(Cmd);
     { WorkingDir flows into chdir() in the forked child inside Spawn --
-      no parent-side ChDir, so two RunOneShot calls firing in parallel
-      from the gateway can't trample each other's cwd. }
-    if not P.Spawn('/bin/sh', Args, {MergeStderr=}True, WorkingDir) then Exit;
+      no parent-side ChDir, so two calls firing in parallel from the
+      gateway can't trample each other's cwd. }
+    if not P.Spawn('/bin/sh', Args, {MergeStderr=}True, WorkingDir, ExtraEnv) then Exit;
     Total := 0;
     while True do
     begin
@@ -1025,23 +1147,9 @@ begin
   end;
 end;
 
-function RunOneShotWithEnv(const Cmd, WorkingDir: string;
-                            ExtraEnv: TStringList;
-                            out Output: string): Integer;
-{ Delphi POSIX stub. Env-var injection isn't wired here yet --
-  the Delphi POSIX path forks/execs directly rather than going
-  through a TProcess abstraction with an Environment property,
-  so the implementation is more invasive. For now ExtraEnv is
-  ignored; production builds use the FPC implementation up top,
-  so this only matters for a hypothetical Delphi/POSIX
-  cross-build. Will produce a runtime warning when ExtraEnv is
-  non-empty so a future operator notices. }
+function RunOneShot(const Cmd, WorkingDir: string; out Output: string): Integer;
 begin
-  { ExtraEnv silently ignored on this build. Same story as the
-    Delphi Windows stub above -- production path is FPC and that
-    has the real implementation. }
-  if ExtraEnv <> nil then ;
-  Result := RunOneShot(Cmd, WorkingDir, Output);
+  Result := RunOneShotWithEnv(Cmd, WorkingDir, nil, Output);
 end;
 
 {$ENDIF}
