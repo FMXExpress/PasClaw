@@ -44,6 +44,7 @@ uses
   PasClaw.Cmd.MCP,
   PasClaw.Cmd.Migrate,
   PasClaw.Cmd.Skills,
+  PasClaw.Cmd.Profile,    (* PR #291: pasclaw profile list/show/use *)
   PasClaw.Cmd.Vault,
   PasClaw.Cmd.Session,
   PasClaw.Cmd.Learn,
@@ -182,6 +183,7 @@ begin
   else if Cmd = 'mcp'      then Result := Cmd_MCP_Run(Argv)
   else if Cmd = 'migrate'  then Result := Cmd_Migrate_Run(Argv)
   else if Cmd = 'skills'   then Result := Cmd_Skills_Run(Argv)
+  else if Cmd = 'profile'  then Result := Cmd_Profile_Run(Argv)
   else if Cmd = 'vault'    then Result := Cmd_Vault_Run(Argv)
   else if Cmd = 'session'  then Result := Cmd_Session_Run(Argv)
   else if Cmd = 'learn'    then Result := Cmd_Learn_Run(Argv)

@@ -2,6 +2,62 @@
 
 PasClaw stores configuration as a single JSON file at `$PASCLAW_HOME/config.json`. Every field has a sensible default; nothing here is required for a basic setup.
 
+## Profiles
+
+A **profile** is a small JSON patch that gets merged into `TConfig` *before* your `config.json` is applied. Five built-ins ship; operators can drop more at `$PASCLAW_HOME/profiles/<name>.json`.
+
+| Profile | What it flips |
+|---|---|
+| `stock` | Explicit no-op profile mirroring `TConfig.Create` defaults. `pasclaw profile show stock` documents the fresh-install state. Applying it is identical to no profile at all. |
+| `baseline` | Everything off. Control profile for A/B testing — *"how does pasclaw behave with no features enabled?"* |
+| `low-token` | Condenser on, output cap 8 KB, MEMORY task-aware slicing, prompt cache, progressive skill disclosure, auto-router. |
+| `security` | Workspace restriction + shell deny + private-network block, promptware scan, no `web_fetch`, no vault, agent-authored skills stage for approval. |
+| `max-build` | `_inherits: ["low-token"]` plus `web_fetch`, vault, vector search, checkpoints, stats, 16 KB cap, 1 h prompt cache, all four self-improving skill switches. |
+| `all-on` | `_inherits: ["max-build"]`. Every boolean knob flipped on. Surface-area testing only. |
+
+### Onboarding
+
+`pasclaw onboard` asks **"Pick a starter profile"** at the top of its loop-shaping section. Picking one of `stock` / `baseline` / `low-token` / `security` / `max-build` / `all-on` persists the choice as `"profile": "<name>"` in `config.json` AND skips the per-feature prompts below it (the profile encapsulates those choices). Picking option 7 (skip) or hitting Enter through leaves the per-feature flow exactly as before, with no `profile` field written.
+
+### Selection precedence (highest wins)
+
+1. `pasclaw <cmd> --profile <name>` — per-invocation.
+2. `PASCLAW_PROFILE=<name>` env var — process scope.
+3. `"profile": "<name>"` field in `config.json` — persistent default (write via `pasclaw profile use <name>`).
+4. None — `TConfig.Create` defaults flow straight through.
+
+### Layering
+
+`TConfig.Create` defaults → profile (with `_inherits` chain) → operator `config.json`. Each layer is applied via `FromJSON`, which is merge-style: every field defaults to the current `TConfig` value, so unset fields preserve the lower layer and set fields override. **Your explicit `config.json` always wins**, so you can pick `max-build` and still pin one field your own way.
+
+### Inheritance
+
+A profile may declare `"_inherits": ["other"]` (or several). Ancestors apply first, in order, then the current profile. Cycles are rejected, depth is capped at 4.
+
+### CLI
+
+```sh
+pasclaw profile list                 # show built-ins + your $PASCLAW_HOME/profiles/
+pasclaw profile show low-token       # print the resolved body
+pasclaw profile show max-build       # show two layers: low-token, then max-build
+pasclaw profile use security         # write "profile": "security" into config.json
+
+pasclaw agent --profile baseline -m "do X"   # per-run override
+PASCLAW_PROFILE=max-build pasclaw agent ...  # process-scope override
+```
+
+### Custom profiles
+
+Drop any JSON file at `$PASCLAW_HOME/profiles/<name>.json`. A user file with the same name as a built-in **shadows** it (same convention the skills loader uses). Useful for forking a built-in:
+
+```json
+{
+  "_description": "low-token but with a smaller cap",
+  "_inherits": ["low-token"],
+  "tool_output_cap": 4096
+}
+```
+
 ## File location
 
 | Override | Effect |

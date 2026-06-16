@@ -25,6 +25,7 @@ implementation
 uses
   SysUtils,
   PasClaw.Config,
+  PasClaw.Config.Profile,    { ResolveProfileBodies for PromptStarterProfile -- PR #291 }
   PasClaw.Utils,
   PasClaw.CliUI,
   PasClaw.Logger,
@@ -830,6 +831,90 @@ begin
   end;
 end;
 
+(* PR #291: starter profile picker. Sits at the top of the
+   loop-shaping block; when the operator picks a profile, every
+   loop-shaping prompt below it is skipped (the profile encapsulates
+   those choices) AND the profile name is persisted into config.json
+   so a later `pasclaw agent` invocation re-applies the bundle. The
+   default is "skip", which leaves the per-feature prompts behind
+   wired exactly like the pre-PR-#291 flow.
+
+   PickedAProfile is OUT True when the operator chose a real profile
+   (1-6); callers use this to short-circuit the loop-shaping prompts
+   below. *)
+procedure PromptStarterProfile(Cfg: TConfig; out PickedAProfile: Boolean);
+const
+  ChoiceLabels: array[0..5] of string = (
+    'stock      -- explicit no-op profile mirroring TConfig.Create defaults',
+    'baseline   -- everything off; A/B reference',
+    'low-token  -- condenser, output cap, cache, progressive disclosure, auto-router',
+    'security   -- sandbox tight, no outbound HTTP, agent skill writes staged',
+    'max-build  -- opinionated coding setup; low-token + web_fetch + vault + checkpoints + ...',
+    'all-on     -- every flag on; surface-area testing only'
+  );
+  ChoiceNames: array[0..5] of string = (
+    'stock', 'baseline', 'low-token', 'security', 'max-build', 'all-on'
+  );
+var
+  Input: string;
+  Idx: Integer;
+  Bodies: TProfileBodyArray;
+  Err: string;
+  i: Integer;
+begin
+  PickedAProfile := False;
+  PrintLn;
+  PrintLn(Ansi.Bold + 'Starter profile' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'A profile bundles loop-shaping defaults (condenser, output cap, ' +
+    'skills, etc).' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'Pick one to skip the per-feature prompts below, or skip to choose ' +
+    'à la carte.' + Ansi.Reset);
+  PrintLn;
+  for i := 0 to High(ChoiceLabels) do
+    PrintLn(Format('  %d. %s', [i + 1, ChoiceLabels[i]]));
+  PrintLn('  7. skip   -- per-feature prompts (default)');
+  PrintLn;
+  Input := Trim(ReadLineEcho('  Pick [1-7] (default 7): '));
+  if Input = '' then Idx := 7
+  else if not TryStrToInt(Input, Idx) then Idx := 7;
+  if (Idx < 1) or (Idx > 6) then
+  begin
+    PrintLn('  ' + Ansi.Dim + '(skipped -- per-feature prompts continue)' + Ansi.Reset);
+    Exit;
+  end;
+
+  { Apply the profile body chain so the operator can SEE the chosen
+    bundle in /v1/config + so other prompts that DON'T have profile
+    coverage (KB / stats / checkpoints / shell backend / heartbeat /
+    auto-router) get sensible defaults relative to the profile. Even
+    though Cfg.Profile is persisted and LoadConfig re-applies it on
+    every run, applying here makes the rest of onboarding consistent
+    with what's about to ship. }
+  if not ResolveProfileBodies(GetHome, ChoiceNames[Idx - 1], Bodies, Err) then
+  begin
+    PrintLn('  ' + Ansi.Red + '✗ ' + Ansi.Reset +
+            'profile lookup failed (' + Err + ') -- falling back to per-feature prompts');
+    Exit;
+  end;
+  for i := 0 to High(Bodies) do
+  try
+    Cfg.FromJSON(Bodies[i]);
+  except
+    { Bad profile body: leave Cfg as-is and bail. Shouldn't happen for
+      built-ins; protective for user profiles. }
+    PrintLn('  ' + Ansi.Yellow + '! ' + Ansi.Reset +
+            'profile layer ' + IntToStr(i + 1) + ' failed to apply -- partial state');
+  end;
+  Cfg.Profile := ChoiceNames[Idx - 1];
+  PickedAProfile := True;
+  PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' profile = ' +
+          ChoiceNames[Idx - 1] + Ansi.Dim +
+          '  (LoadConfig re-applies it on every run; override with --profile <other>)' +
+          Ansi.Reset);
+end;
+
 procedure PromptStatsCollection(Cfg: TConfig);
 { Opt-in toggle for persisting per-session usage stats (tokens,
   turns, tool calls, truncation savings) into the session JSON so
@@ -1248,6 +1333,7 @@ var
   Catalog: TProviderSpecArray;
   Spec: TProviderSpec;
   ExistingIdx, i: Integer;
+  PickedAProfile: Boolean;
 begin
   Home    := GetHome;
   CfgPath := GetConfigPath;
@@ -1337,19 +1423,29 @@ begin
       header value (same shape pasclaw mcp install writes when an
       env var is set). }
     PromptMCPInstalls(Cfg);
+    { PR #291: starter profile picker. When the operator picks a real
+      profile, the loop-shaping prompts below are skipped (the profile
+      bundle encapsulates those choices). VaultTools / Vector / KB /
+      Stats / Checkpoints / Shell / Heartbeat / AutoRouter still run
+      unconditionally -- those touch operator-environment concerns the
+      profile doesn't cover. }
+    PromptStarterProfile(Cfg, PickedAProfile);
     PromptVaultTools(Cfg);
     PromptVectorSearch(Cfg);
     PromptKnowledgebase(Cfg);
-    { Loop-shaping prompts (PR #289). Order is intentional: each
-      successive prompt is less likely to be wanted by an operator
-      who said yes to the previous one, so a quick "enter, enter,
-      enter" leaves the minimal-surprise defaults in place. }
-    PromptWebFetch(Cfg);
-    PromptPromptware(Cfg);
-    PromptCondenseReversible(Cfg);
-    PromptToolOutputCap(Cfg);
-    PromptOrientTaskAware(Cfg);
-    PromptSelfImprovingSkills(Cfg);
+    if not PickedAProfile then
+    begin
+      { Loop-shaping prompts (PR #289). Order is intentional: each
+        successive prompt is less likely to be wanted by an operator
+        who said yes to the previous one, so a quick "enter, enter,
+        enter" leaves the minimal-surprise defaults in place. }
+      PromptWebFetch(Cfg);
+      PromptPromptware(Cfg);
+      PromptCondenseReversible(Cfg);
+      PromptToolOutputCap(Cfg);
+      PromptOrientTaskAware(Cfg);
+      PromptSelfImprovingSkills(Cfg);
+    end;
     PromptStatsCollection(Cfg);
     PromptCheckpoints(Cfg);
     PromptShellBackend(Cfg);
