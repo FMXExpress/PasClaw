@@ -181,6 +181,7 @@ type
     procedure StartNewSession;
     procedure RewireCheckpoints;
     procedure HandleUndoCommand(const Args: string);
+    procedure HandleInitCommand(const Args: string);
     procedure DeleteSelectedSession;
     procedure PersistSession;
     procedure Flash(const Msg: string);
@@ -197,6 +198,7 @@ type
     procedure ShowTools;
     procedure HandleSlashCommand(const Cmd: string);
     procedure HandleUndoCommand(const Args: string);
+    procedure HandleInitCommand(const Args: string);
     procedure HandleUserInput(const Text: string);
     {$ENDIF}
   public
@@ -276,6 +278,9 @@ uses
   PasClaw.Checkpoints,             { InitCheckpoints / BeginTurn / UndoTurns
                                      -- /undo slash command + per-turn
                                      snapshot bookkeeping. }
+  PasClaw.Cmd.Init,                { Cmd_Init_Run -- /init slash command
+                                     delegates to the same code path as
+                                     `pasclaw init` on the CLI. }
   PasClaw.Markdown.Render,
   PasClaw.Providers.Catalog,       { TProviderSpec -- for TModelRefreshThread }
   PasClaw.Config
@@ -1128,6 +1133,53 @@ begin
     Flash(Format('/undo %d: restored %d file(s)', [N, Length(Restored)]));
 end;
 
+procedure TTUI.HandleInitCommand(const Args: string);
+{ Positioned-TUI variant of /init. The framebuffer-aware UI can't let
+  Cmd_Init_Run print provider status to stdout (would corrupt the
+  rendered display), so route through the stdio-free RunInit worker
+  and report via Flash. The Provider.Chat call inside RunInit is
+  synchronous and blocks the UI thread for a few seconds -- acceptable
+  for a one-shot setup action; threading is a follow-up. }
+var
+  Argv: array of string;
+  Trimmed: string;
+  i, Start, L: Integer;
+  Outcome: TInitOutcome;
+begin
+  Trimmed := Trim(Args);
+  SetLength(Argv, 0);
+  Start := 1;
+  L := Length(Trimmed);
+  i := 1;
+  while i <= L do
+  begin
+    if Trimmed[i] = ' ' then
+    begin
+      if i > Start then
+      begin
+        SetLength(Argv, Length(Argv) + 1);
+        Argv[High(Argv)] := Copy(Trimmed, Start, i - Start);
+      end;
+      Start := i + 1;
+    end;
+    Inc(i);
+  end;
+  if Start <= L then
+  begin
+    SetLength(Argv, Length(Argv) + 1);
+    Argv[High(Argv)] := Copy(Trimmed, Start, L - Start + 1);
+  end;
+
+  Flash('/init: scanning + asking model (this blocks the UI for a few seconds)...');
+  RunInit(Argv, Outcome);
+  if Outcome.Status = 0 then
+    Flash(Format('/init: wrote %s (%d bytes via %s/%s)',
+                 [Outcome.TargetFile, Outcome.BodyBytes,
+                  Outcome.ProviderName, Outcome.ModelName]))
+  else
+    Flash('/init: ' + Outcome.ErrorMsg);
+end;
+
 procedure TTUI.StartNewSession;
 begin
   SelectSession('');
@@ -1474,6 +1526,8 @@ begin
       OpenStatsOverlay
     else if (Text = '/undo') or (Copy(Text, 1, 6) = '/undo ') then
       HandleUndoCommand(Copy(Text, 7, MaxInt))
+    else if (Text = '/init') or (Copy(Text, 1, 6) = '/init ') then
+      HandleInitCommand(Copy(Text, 7, MaxInt))
     else
       Flash('unknown: ' + Text);
     FInputBuf := '';
@@ -2532,7 +2586,51 @@ begin
     ShowCachedModelsFPC(FModel, Arg);
     Exit;
   end;
+  if (Cmd = '/init') or (Copy(Cmd, 1, 6) = '/init ') then
+  begin
+    HandleInitCommand(Copy(Cmd, 7, MaxInt));
+    Exit;
+  end;
   PrintLn(Ansi.Yellow + 'unknown command: ' + Cmd + Ansi.Reset);
+end;
+
+procedure TTUI.HandleInitCommand(const Args: string);
+{ /init [--force] -- delegate straight to Cmd_Init_Run so the slash
+  command is byte-for-byte equivalent to `pasclaw init` on the CLI.
+  Args is whitespace-separated; we tokenise just enough to forward
+  --force / --model X / --provider Y / a positional path. }
+var
+  Argv: array of string;
+  i, Start, L: Integer;
+  Trimmed: string;
+  Rc: Integer;
+begin
+  Trimmed := Trim(Args);
+  SetLength(Argv, 0);
+  Start := 1;
+  L := Length(Trimmed);
+  i := 1;
+  while i <= L do
+  begin
+    if Trimmed[i] = ' ' then
+    begin
+      if i > Start then
+      begin
+        SetLength(Argv, Length(Argv) + 1);
+        Argv[High(Argv)] := Copy(Trimmed, Start, i - Start);
+      end;
+      Start := i + 1;
+    end;
+    Inc(i);
+  end;
+  if Start <= L then
+  begin
+    SetLength(Argv, Length(Argv) + 1);
+    Argv[High(Argv)] := Copy(Trimmed, Start, L - Start + 1);
+  end;
+  Rc := Cmd_Init_Run(Argv);
+  if Rc <> 0 then
+    PrintLn(Ansi.Yellow + Format('/init exited %d', [Rc]) + Ansi.Reset);
 end;
 
 procedure TTUI.HandleUndoCommand(const Args: string);

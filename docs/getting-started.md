@@ -101,6 +101,21 @@ Opens an HTTP server (default `127.0.0.1:8088`) with:
 
 See [Gateway and OpenAI-compatible API](./gateway.md) for the full route table.
 
+## Project rules: AGENTS.md
+
+When PasClaw starts a session, it walks up from the current directory to the nearest git root and reads `AGENTS.md` if it finds one. The contents go into the system prompt under **## Project Rules**, framed as authoritative guidance for that project — same file [opencode](https://opencode.ai), Codex CLI, Cursor, Zed AI, and Claude Code already read. Commit one and every agent in your team's toolbelt picks it up.
+
+Bootstrap one for an existing project:
+
+```sh
+cd ~/code/myrepo
+pasclaw init                    # one Chat() call -- ~5 s
+# or, for a model-driven deeper probe:
+pasclaw runbook
+```
+
+Both refuse to clobber an existing `AGENTS.md`; pass `--force` to overwrite. From inside the TUI, `/init` runs the same flow.
+
 ## Next steps
 
 - Add a [skill](./skills.md): `pasclaw skills install owner/repo` or `pasclaw skills install clawhub:<slug>`.
