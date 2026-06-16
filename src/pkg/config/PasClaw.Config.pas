@@ -330,6 +330,61 @@ type
     EasyMaxTokens: Integer;
   end;
 
+  (* TSkillDistillerConfig -- the post-turn "should this become a
+     reusable skill?" pass (Hermes-style autonomous skill creation).
+     After a qualifying turn the agent hands the tool trace to a small
+     LLM call which either emits a draft SKILL.md or declines. The
+     draft is staged (or auto-committed; see TSelfImprovingSkillsConfig)
+     -- it does NOT take effect mid-session: like a hub install, the
+     next agent start re-scans workspace/skills and picks it up.
+       Enabled:       master switch, default False.
+       MinToolCalls:  only consider turns that dispatched at least this
+                      many tool calls (proxy for "non-trivial workflow
+                      worth capturing"). Default 5, matching Hermes.
+       Model:         optional model override for the distiller call;
+                      empty = use the turn's own model. Point this at a
+                      cheap model (Haiku) to keep the tax low. *)
+  TSkillDistillerConfig = record
+    Enabled:      Boolean;
+    MinToolCalls: Integer;
+    Model:        string;
+  end;
+
+  (* TSelfImprovingSkillsConfig -- agent-authored skills (Hermes
+     "self-improving skills" port). Three independent, all-opt-in
+     capabilities plus a shared safety guard:
+
+       SelfManage           registers the `skill_manage` tool so the
+                            model can create / edit / patch / remove
+                            skills on disk during a turn. Default False.
+       ProgressiveDisclosure registers `skills_list` / `skill_view` and
+                            switches the system prompt's SKILLS section
+                            from "inline every skill" to a short
+                            "list/view on demand" blurb -- keeps the
+                            prompt small once a deployment accrues many
+                            skills. Default False (today's full-catalog
+                            behaviour preserved).
+       AutoApprove          when True, skill_manage / the distiller write
+                            straight to workspace/skills/<name>/; when
+                            False (default) writes stage under
+                            workspace/skills/.pending/<id>/ awaiting
+                            `pasclaw skills approve <id>` (or the gateway
+                            / web UI approve action). The operator is the
+                            quality judge -- there is no automated utility
+                            evaluator.
+       GuardDeny            extra case-insensitive substrings appended to
+                            the built-in dangerous-pattern denylist that
+                            rejects a model-authored `shell:` skill body
+                            before it is staged (rm -rf, curl|sh, etc).
+       Distiller            see TSkillDistillerConfig. *)
+  TSelfImprovingSkillsConfig = record
+    SelfManage:            Boolean;
+    ProgressiveDisclosure: Boolean;
+    AutoApprove:           Boolean;
+    GuardDeny:             array of string;
+    Distiller:             TSkillDistillerConfig;
+  end;
+
   (* TPromptCacheConfig -- provider-side prompt caching.
        Enabled: gate; when False, no cache_control breakpoints are
                 emitted and no prompt_cache_key is sent. Default True.
@@ -586,6 +641,9 @@ type
     OpenAIServerTools:    TOpenAIServerToolsConfig;
     GeminiServerTools:    TGeminiServerToolsConfig;
     StreamReliability:    TStreamReliabilityConfig;
+    (* Agent-authored / self-improving skills. All sub-switches
+       default off -- see TSelfImprovingSkillsConfig. *)
+    SelfImprovingSkills:  TSelfImprovingSkillsConfig;
     constructor Create;
     function  ToJSON: string;
     procedure FromJSON(const S: string);
@@ -804,6 +862,14 @@ begin
   AutoRouter.EasyProvider   := '';
   AutoRouter.EasyModel      := '';
   AutoRouter.EasyMaxTokens  := 500;
+  { Self-improving skills: everything opt-in (see TSelfImprovingSkillsConfig). }
+  SelfImprovingSkills.SelfManage            := False;
+  SelfImprovingSkills.ProgressiveDisclosure := False;
+  SelfImprovingSkills.AutoApprove           := False;
+  SetLength(SelfImprovingSkills.GuardDeny, 0);
+  SelfImprovingSkills.Distiller.Enabled      := False;
+  SelfImprovingSkills.Distiller.MinToolCalls := 5;
+  SelfImprovingSkills.Distiller.Model        := '';
   VectorSearchEnabled  := True;  { on by default; onboarding asks (default Y) -- see TConfig comment }
   AnthropicServerTools.WebSearch        := False;
   AnthropicServerTools.WebSearchMaxUses := 0;
@@ -895,7 +961,7 @@ end;
 
 function TConfig.ToJSON: string;
 var
-  Root, Gw, Tmp, Diag, OtelHdrs: TJsonObject;
+  Root, Gw, Tmp, Tmp2, Diag, OtelHdrs: TJsonObject;
   Arr, FallbacksArr: TJsonArray;
   i: Integer;
 begin
@@ -1093,6 +1159,39 @@ begin
         Tmp.PutStr ('easy_model',      AutoRouter.EasyModel);
         Tmp.PutInt ('easy_max_tokens', AutoRouter.EasyMaxTokens);
         Root.PutObject('auto_router', Tmp);
+      except
+        Tmp.Free; raise;
+      end;
+    end;
+    { Self-improving skills -- emit only when something is enabled so a
+      default config.json stays clean (same posture as auto_router). }
+    if SelfImprovingSkills.SelfManage
+       or SelfImprovingSkills.ProgressiveDisclosure
+       or SelfImprovingSkills.AutoApprove
+       or SelfImprovingSkills.Distiller.Enabled
+       or (Length(SelfImprovingSkills.GuardDeny) > 0)
+       or (SelfImprovingSkills.Distiller.MinToolCalls <> 5)
+       or (SelfImprovingSkills.Distiller.Model <> '') then
+    begin
+      Tmp := TJsonObject.Create;
+      try
+        Tmp.PutBool('self_manage',            SelfImprovingSkills.SelfManage);
+        Tmp.PutBool('progressive_disclosure', SelfImprovingSkills.ProgressiveDisclosure);
+        Tmp.PutBool('auto_approve',           SelfImprovingSkills.AutoApprove);
+        Arr := TJsonArray.Create;
+        for i := 0 to High(SelfImprovingSkills.GuardDeny) do
+          Arr.AddStr(SelfImprovingSkills.GuardDeny[i]);
+        Tmp.PutArray('guard_deny', Arr);
+        Tmp2 := TJsonObject.Create;
+        try
+          Tmp2.PutBool('enabled',        SelfImprovingSkills.Distiller.Enabled);
+          Tmp2.PutInt ('min_tool_calls', SelfImprovingSkills.Distiller.MinToolCalls);
+          Tmp2.PutStr ('model',          SelfImprovingSkills.Distiller.Model);
+          Tmp.PutObject('distiller', Tmp2);
+        except
+          Tmp2.Free; raise;
+        end;
+        Root.PutObject('self_improving_skills', Tmp);
       except
         Tmp.Free; raise;
       end;
@@ -1409,6 +1508,39 @@ begin
       AutoRouter.EasyModel     := Obj.GetStr ('easy_model',      AutoRouter.EasyModel);
       AutoRouter.EasyMaxTokens := Integer(Obj.GetInt('easy_max_tokens',
                                           AutoRouter.EasyMaxTokens));
+    finally
+      Obj.Free;
+    end;
+
+    Obj := Root.ChildObject('self_improving_skills');
+    if Obj <> nil then
+    try
+      SelfImprovingSkills.SelfManage :=
+        Obj.GetBool('self_manage', SelfImprovingSkills.SelfManage);
+      SelfImprovingSkills.ProgressiveDisclosure :=
+        Obj.GetBool('progressive_disclosure', SelfImprovingSkills.ProgressiveDisclosure);
+      SelfImprovingSkills.AutoApprove :=
+        Obj.GetBool('auto_approve', SelfImprovingSkills.AutoApprove);
+      Arr := Obj.ChildArray('guard_deny');
+      if Arr <> nil then
+      begin
+        SetLength(SelfImprovingSkills.GuardDeny, Arr.Count);
+        for i := 0 to Arr.Count - 1 do
+          SelfImprovingSkills.GuardDeny[i] := Arr.ItemStr(i, '');
+        Arr.Free;
+      end;
+      Sub := Obj.ChildObject('distiller');
+      if Sub <> nil then
+      try
+        SelfImprovingSkills.Distiller.Enabled :=
+          Sub.GetBool('enabled', SelfImprovingSkills.Distiller.Enabled);
+        SelfImprovingSkills.Distiller.MinToolCalls :=
+          Integer(Sub.GetInt('min_tool_calls', SelfImprovingSkills.Distiller.MinToolCalls));
+        SelfImprovingSkills.Distiller.Model :=
+          Sub.GetStr('model', SelfImprovingSkills.Distiller.Model);
+      finally
+        Sub.Free;
+      end;
     finally
       Obj.Free;
     end;

@@ -398,6 +398,12 @@ test-skills-install: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/skills_install_tests.pas -o$(BUILDDIR)/skills_install_tests
 	@$(BUILDDIR)/skills_install_tests
 
+# Self-improving skills: skill_manage staging/guard + pending approval flow.
+test-self-improving-skills: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/self_improving_skills_tests.pas -o$(BUILDDIR)/self_improving_skills_tests
+	@$(BUILDDIR)/self_improving_skills_tests
+
 # Tool-RPC server: the in-process callback the execute_code script uses
 # to reach back into the parent's tool registry. PASCLAW_HOME isolated so
 # the info file lands in a scratch dir.
@@ -612,4 +618,4 @@ test-fs-grep-tier5-6: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/fs_grep_tier5_6_tests.pas -o$(BUILDDIR)/fs_grep_tier5_6_tests
 	@$(BUILDDIR)/fs_grep_tier5_6_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-otel test-logger-level-quiet test-gateway-token test-fs-secret-gate test-config-env-subst test-delphi-build
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-model-discovery test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-tool-rpc test-session-search test-subagent-bg test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-otel test-logger-level-quiet test-gateway-token test-fs-secret-gate test-config-env-subst test-delphi-build

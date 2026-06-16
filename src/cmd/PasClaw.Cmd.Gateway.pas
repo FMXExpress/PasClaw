@@ -51,6 +51,8 @@ uses
   PasClaw.Session.Store,    { NewSessionId for the shell session id }
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
+  PasClaw.Skills.Manage,
+  PasClaw.Skills.Disclosure,
   PasClaw.Cron.Scheduler,
   PasClaw.Stream.Reliability,
   PasClaw.Gateway.Server,
@@ -258,6 +260,8 @@ begin
       RegisterSendMessageTool(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
+      RegisterSkillManageTool(Reg, Cfg);
+      RegisterSkillDisclosureTools(Reg, Cfg);
       if Length(Skills) > 0 then
         LogInfo('gateway: loaded %d skill(s) from workspace/skills/', [Length(Skills)]);
     end;

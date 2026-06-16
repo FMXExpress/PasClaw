@@ -207,6 +207,17 @@
     padding:.06rem .42rem;font:inherit;font-size:10px;cursor:pointer;
     text-transform:uppercase;letter-spacing:.05em}
   .skill-card .remove:hover{color:var(--red);border-color:var(--red)}
+  .skill-pending-hdr{margin:1rem 0 .4rem;font-weight:700;color:var(--mut);
+    text-transform:uppercase;letter-spacing:.06em;font-size:11px}
+  .skill-card.pending{border-color:rgba(255,55,213,.35)}
+  .skill-card .skill-preview{margin-top:.4rem;max-height:11rem;overflow:auto;
+    background:rgba(2,5,15,.6);border:1px solid rgba(255,255,255,.06);border-radius:6px;
+    padding:.5rem;font-size:11px;white-space:pre-wrap;word-break:break-word;color:var(--mut)}
+  .skill-card .skill-actions{margin-top:.5rem;display:flex;gap:.5rem}
+  .skill-card .pend-approve,.skill-card .pend-reject{font:inherit;font-size:11px;
+    border-radius:6px;padding:.18rem .6rem;cursor:pointer;border:1px solid rgba(255,255,255,.12);
+    background:transparent;color:var(--mut)}
+  .skill-card .pend-reject:hover{color:var(--red);border-color:var(--red)}
   .skill-install-row{display:flex;gap:.5rem;margin-bottom:.6rem}
   .skill-install-row input{flex:1;background:rgba(2,5,15,.72);color:var(--fg);
     caret-color:var(--cyan);border:1px solid rgba(32,246,255,.3);border-radius:10px;
@@ -1430,21 +1441,63 @@ const tabLoaders = {
         const j = await (await gwFetch("/v1/skills")).json();
         if (!j.skills || !j.skills.length) {
           pane.innerHTML = `<div class="empty-pane">No skills installed. Install one above (e.g. <code>clawhub:slug</code> or <code>owner/repo</code>).</div>`;
-          return;
-        }
-        for (const s of j.skills) {
-          const el = document.createElement("div");
-          el.className = "skill-card";
-          const kindLabel = s.kind || "knowledge";
-          el.innerHTML = `<button class="remove" type="button">remove</button>`
-                       + `<div><span class="name">${escapeHtml(s.name)}</span>`
-                       + `<span class="kind">${escapeHtml(kindLabel)}</span></div>`
-                       + (s.description ? `<div class="desc">${escapeHtml(s.description)}</div>` : "")
-                       + `<div class="path">${escapeHtml(s.path || s.dir || "")}</div>`;
-          el.querySelector(".remove").addEventListener("click", () => removeSkill(s.id || s.name, s.name));
-          pane.appendChild(el);
+        } else {
+          for (const s of j.skills) {
+            const el = document.createElement("div");
+            el.className = "skill-card";
+            const kindLabel = s.kind || "knowledge";
+            el.innerHTML = `<button class="remove" type="button">remove</button>`
+                         + `<div><span class="name">${escapeHtml(s.name)}</span>`
+                         + `<span class="kind">${escapeHtml(kindLabel)}</span></div>`
+                         + (s.description ? `<div class="desc">${escapeHtml(s.description)}</div>` : "")
+                         + `<div class="path">${escapeHtml(s.path || s.dir || "")}</div>`;
+            el.querySelector(".remove").addEventListener("click", () => removeSkill(s.id || s.name, s.name));
+            pane.appendChild(el);
+          }
         }
       } catch (e) { pane.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; }
+      await renderPending();
+    }
+    /* Agent-authored skills awaiting operator approval (self-improving
+       skills). Only shows a block when there are any pending -- a
+       deployment that never enabled the feature sees nothing. */
+    async function renderPending() {
+      let p;
+      try { p = await (await gwFetch("/v1/skills/pending")).json(); }
+      catch { return; }
+      if (!p || !p.pending || !p.pending.length) return;
+      const hdr = document.createElement("div");
+      hdr.className = "skill-pending-hdr";
+      hdr.textContent = "Pending approval (" + p.pending.length + ")";
+      pane.appendChild(hdr);
+      for (const s of p.pending) {
+        const el = document.createElement("div");
+        el.className = "skill-card pending";
+        el.innerHTML =
+            `<div><span class="name">${escapeHtml(s.name)}</span>`
+          + `<span class="kind">${escapeHtml(s.action)}</span>`
+          + `<span class="path">${escapeHtml(s.id)}</span></div>`
+          + (s.content ? `<pre class="skill-preview">${escapeHtml(s.content)}</pre>` : "")
+          + `<div class="skill-actions">`
+          + `<button class="primary pend-approve" type="button">approve</button> `
+          + `<button class="pend-reject" type="button">reject</button>`
+          + `</div>`;
+        el.querySelector(".pend-approve").addEventListener("click", () => pendAction(s.id, "approve"));
+        el.querySelector(".pend-reject").addEventListener("click", () => pendAction(s.id, "reject"));
+        pane.appendChild(el);
+      }
+    }
+    async function pendAction(id, path) {
+      setStatus((path === "approve" ? "approving " : "rejecting ") + id + "…");
+      try {
+        const r = await gwFetch("/v1/skills/pending/" + path, {
+          method: "POST", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ id }) });
+        const j = await r.json().catch(() => ({}));
+        if (r.ok) setStatus(path === "approve" ? "approved (effective next restart)" : "rejected", "ok");
+        else setStatus(path + " failed: " + (j.error || ("http " + r.status)), "err");
+      } catch (e) { setStatus(path + " failed: " + e, "err"); }
+      await render();
     }
     async function removeSkill(id, label) {
       const shown = label || id;

@@ -41,6 +41,8 @@ uses
   PasClaw.Shell.Backend.Factory,   { InstallShellBackend }
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
+  PasClaw.Skills.Manage,
+  PasClaw.Skills.Disclosure,
   PasClaw.Agent.Subagent,
   PasClaw.Agent.SubagentBg,
   PasClaw.Session.Store,           { NewSessionId -- stable per-launch id for
@@ -186,6 +188,8 @@ begin
       RegisterSendMessageTool(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
+      RegisterSkillManageTool(Reg, Cfg);
+      RegisterSkillDisclosureTools(Reg, Cfg);
     end;
 
     SetLength(MCPClients, 0);
