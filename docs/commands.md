@@ -36,6 +36,7 @@ Top-level commands are dispatched by `src/cmd/PasClaw.Cmd.Root.pas`. Run `pascla
 | [`export`](#export) | Render PasClaw state into agent-runtime rules files. |
 | [`init`](#init) | Scan cwd + ask the model for a starter `AGENTS.md` (one-shot, no tool loop). |
 | [`runbook`](#runbook) | Tool-driven variant of `init`: agent loop probes the repo via `execute_code`. |
+| [`build`](#build) | One-shot multi-iteration agent run with `workspace.zip` handshake. For cog / CI / ephemeral GPU runners. |
 | [`session`](#session) | List, show, delete, export saved sessions. |
 | [`resume`](#resume) | Alias: `agent --session <id>`. |
 | [`steer`](#steer) | Push a mid-loop follow-up into a running agent. |
@@ -330,6 +331,45 @@ pasclaw runbook --force         # overwrite an existing AGENTS.md
 ```
 
 Tool-driven variant of `init`. Spins the full agent loop with `execute_code` so the **model** runs the probe (`ls -la`, `cat Makefile`, parse package.json, `git log --oneline -10`, etc.) and writes the file via `fs_write`. Produces richer output than `init` because the model can chase whatever the project shape needs; takes longer and requires `shell_exec` to be allowed.
+
+## build
+
+```sh
+pasclaw build -d "implement the X feature" \
+              --max-iters 30 \
+              --workspace-in /tmp/prev.zip \
+              --workspace-out /tmp/next.zip \
+              --provider openai --model gpt-4o
+```
+
+One-shot multi-iteration agent run with an optional `workspace.zip` handshake, designed for **unattended use** in ephemeral compute (Replicate cog, CI runners, k8s Jobs, …). The cog at [`cog-build/`](../cog-build/) wraps this as a Replicate predictor.
+
+**Compared to `pasclaw agent`:**
+
+| | `agent` | `build` |
+|---|---|---|
+| Default `--max-iterations` | 8 (interactive — converges fast with operator feedback) | 50 (unattended — needs headroom to finish) |
+| Default output mode | interactive (TUI or REPL) | `-q` quiet (machine-friendly) |
+| Workspace handshake | no | yes — `--workspace-in <zip>` and `--workspace-out <zip>` round-trip the entire `$PASCLAW_HOME` |
+| `PASCLAW_HOME` | env var or `~/.pasclaw` | env, `--home`, or a fresh tempdir |
+
+**Flags `build` adds:**
+- `--workspace-in <zip>` — unpack into `$PASCLAW_HOME` first. Carries memory, KB, sessions, checkpoint archives, skills, and any project files from a previous run.
+- `--workspace-out <zip>` — repack `$PASCLAW_HOME` after the run, ready to feed back next call.
+- `--max-iters N` — defaults to 50.
+- `--cwd <dir>` — cwd for the model's `fs_write` / `execute_code`. Defaults to `$PASCLAW_HOME/workspace`.
+- `--home <dir>` — override `$PASCLAW_HOME` (otherwise: env var, otherwise: fresh tempdir).
+- `--keep-home` — don't clean up the tempdir on exit. For local debugging.
+
+**Flags forwarded as-is to `agent`:** `--provider`, `--model`, `--max-tokens`, `--thinking`, `--session`, `--profile`, `--mode {plan|build}`, `--no-tools`, `--no-mcp`, `--no-hashline`, `--system`.
+
+**Output:** the model's final reply on stdout (same as `pasclaw agent -q`), progress + `workspace.zip` size on stderr.
+
+**Input zip cap:** 4 GiB. Above that, fail fast with a clear error; split by session or skill.
+
+**Exclusions from the output zip:** `.git`, `.DS_Store`, `Thumbs.db`, `kb.db-journal` (transient SQLite WAL). Everything else — logs, tmp/, kb-files binaries — ships back, since the point of the handshake is "preserve the entire brain".
+
+See [`docs/checkpoints.md`](./checkpoints.md) for how the zpaq-backed `/undo` and `/redo` survive the round-trip, and [`cog-build/README.md`](../cog-build/README.md) for the matching Replicate predictor wiring.
 
 ## session
 
