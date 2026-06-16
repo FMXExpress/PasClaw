@@ -69,10 +69,11 @@ type
     FRegistry: TToolRegistry;
     FModel:    string;
     FQuit:     Boolean;
-    (* Plan / Build mode (PR #290). Cycled by Tab when chat is
-       focused; surfaced in the header bar; threaded into LoopCfg.Mode
-       so the dispatch gate in Tools.ToolLoop sees it. Default pmBuild
-       so the TUI's historical full-access behaviour is preserved. *)
+    (* Plan / Build mode (PR #290). Cycled by Ctrl-B (regardless of
+       which pane is focused); surfaced in the header bar; threaded
+       into LoopCfg.Mode so the dispatch gate in Tools.ToolLoop sees
+       it. Default pmBuild so the TUI's historical full-access
+       behaviour is preserved. *)
     FMode:     TPasClawMode;
     {$IFNDEF FPC}
     { positioned-TUI state -- see Run() for the per-frame loop }
@@ -1450,7 +1451,7 @@ begin
       end;
     end
     else if Text = '/help' then
-      Flash('keys: Tab=mode-cycle/focus-chat | Ctrl-B=back-to-sessions | N new | D del | Q quit | /theme /model /stats /undo [N] /mode [plan|build]')
+      Flash('keys: Tab swap | Ctrl-B mode toggle | N new | D del | Q quit | /theme /model /stats /undo [N] /mode [plan|build]')
     else if Text = '/mode' then
       Flash('mode: ' + ModeName(FMode) + '  (Tab in chat to cycle; /mode plan or /mode build)')
     else if Text = '/mode plan' then
@@ -1699,33 +1700,25 @@ begin
   end;
   if Key = KEY_TAB then
   begin
-    (* PR #290: when chat is focused, Tab cycles Plan / Build mode
-       (opencode parity); when sessions is focused Tab still swaps to
-       chat. Sessions-focused operator pressing Tab "moves into" the
-       chat to type; once typing, Tab is a frequent mode-toggle action.
-       Codex P2 on the original PR: leaving Tab as the only
-       focus-swap meant chat-focused operators had no key path back
-       to the session list. KEY_CTRL_B below restores that path
-       without sacrificing the Tab-cycles-mode behaviour. *)
-    if FFocus = foChat then
-    begin
-      FMode := CycleMode(FMode);
-      Flash('mode -> ' + ModeName(FMode));
-    end
-    else
-      FFocus := foChat;
+    { Tab swaps focus between the session list and the chat pane --
+      historical behaviour, restored after the PR-#290 follow-up:
+      Tab was briefly repurposed as a mode cycler, which left
+      chat-focused operators with no key path back to sessions
+      (Codex P2 + operator feedback). Mode cycling lives on Ctrl-B
+      below instead. }
+    if FFocus = foSessions then FFocus := foChat else FFocus := foSessions;
     FConfirmDelete := False;
     Exit;
   end;
-  (* Ctrl+B = "Back to sessions". Restores the focus-swap path lost
-     when Tab became a mode cycler in chat focus (Codex P2 on PR #290).
-     Ctrl+B is below the printable threshold so HandleChatKey's input-
-     buffer accumulator skips it; the terminal emits it as the raw
-     byte 2 on every platform we ship to. *)
-  if (Key = 2) and (FFocus = foChat) then
+  (* Ctrl+B = "Build/plan toggle". Cycles Plan <-> Build regardless of
+     which pane is focused; the mode is process-state, not pane-state.
+     Ctrl+B (raw byte 2) sits below HandleChatKey's printable-ASCII
+     accumulator on every platform, so it never lands in the chat
+     input buffer. *)
+  if Key = 2 then
   begin
-    FFocus := foSessions;
-    FConfirmDelete := False;
+    FMode := CycleMode(FMode);
+    Flash('mode -> ' + ModeName(FMode));
     Exit;
   end;
   case FFocus of

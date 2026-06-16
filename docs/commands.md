@@ -92,7 +92,7 @@ Mode plumbing per surface:
 | Surface | How to switch |
 |---|---|
 | CLI | `--mode plan\|build`, or the short forms `--plan` / `--build`. In the interactive REPL: `/mode plan`, `/mode build`, or bare `/mode` to show the current value. |
-| TUI | **Tab** while chat is focused cycles Plan ↔ Build (opencode parity). **Ctrl-B** in chat focus moves focus back to the sessions list. A `[plan]` / `[build]` badge in the header bar shows the current value. Slash commands also work: `/mode`, `/mode plan`, `/mode build`. |
+| TUI | **Ctrl-B** cycles Plan ↔ Build (works in either pane). Tab still swaps focus between the session list and chat. A `[plan]` / `[build]` badge in the header bar shows the current value. Slash commands also work: `/mode`, `/mode plan`, `/mode build`. |
 | Web UI | The **🛠 build / 📋 plan** toggle in the top nav; per-tab, persisted in `localStorage`. |
 | `/v1/chat`, `/v1/chat/completions`, `/v1/responses` | Optional `"mode": "plan"` (or `"build"`) field in the JSON request body. Absent / unknown values default to `build` so existing OpenAI-compatible clients keep working unchanged. |
 
