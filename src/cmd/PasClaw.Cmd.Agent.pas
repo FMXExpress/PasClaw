@@ -116,6 +116,11 @@ type
        current value before each turn so an in-session /mode switch
        takes effect immediately. *)
     Mode: TPasClawMode;
+    (* --profile <name> (PR #291). Overrides PASCLAW_PROFILE / the
+       config.json "profile" field for this invocation. Empty string
+       means "fall through to the env var / config.json / no-profile
+       chain". *)
+    Profile: string;
   end;
 
   TLoopHandlers = class
@@ -201,6 +206,7 @@ begin
     end;
     if Argv[i] = '--plan'        then begin A.Mode := pmPlan;  Inc(i); Continue; end;
     if Argv[i] = '--build'       then begin A.Mode := pmBuild; Inc(i); Continue; end;
+    if Argv[i] = '--profile'     then begin if i = High(Argv) then Exit(False); A.Profile := Argv[i + 1]; Inc(i, 2); Continue; end;
     Inc(i);
   end;
 end;
@@ -1399,10 +1405,11 @@ begin
     PrintLnErr('                     [--thinking low|medium|high] [--max-tokens N]');
     PrintLnErr('                     [--max-iterations N] [--no-tools] [-q|--quiet]');
     PrintLnErr('                     [--mode plan|build] [--plan|--build]');
+    PrintLnErr('                     [--profile baseline|low-token|security|max-build|all-on|<custom>]');
     Exit(1);
   end;
 
-  Cfg := LoadConfig;
+  Cfg := LoadConfig(A.Profile);
   ConfigureSandbox(Cfg.Sandbox, '');
   { Install the active shell backend BEFORE any session can spawn a
     container or build its tool registry (shell_exec's description

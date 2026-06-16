@@ -653,7 +653,19 @@ type
 
 function GetHome: string;
 function GetConfigPath: string;
-function LoadConfig: TConfig;
+function LoadConfig: TConfig; overload;
+
+(* Profile-aware overload (PR #291). When ProfileOverride is non-empty,
+   apply the named profile (and its _inherits ancestors) BEFORE the
+   operator's config.json. Empty string -> selection precedence:
+     1. PASCLAW_PROFILE env var
+     2. "profile" field inside config.json
+     3. None -- behave exactly like LoadConfig() does today.
+   Profile fields layer on top of TConfig.Create defaults; the
+   operator's config.json fields layer on top of the profile so
+   explicit config-json choices always win. See PasClaw.Config.Profile
+   for the catalogue and inheritance semantics. *)
+function LoadConfig(const ProfileOverride: string): TConfig; overload;
 procedure SaveConfig(C: TConfig);
 
 const
@@ -772,6 +784,8 @@ uses
   StrUtils,                   { IndexStr -- shell_backend enum parsing }
   PasClaw.Utils,
   PasClaw.JSON,
+  PasClaw.Config.Profile,     { ResolveProfileBodies / ExtractProfileField -- PR #291 }
+  PasClaw.Logger,             { LogWarn / LogInfo on the profile-apply path }
   PasClaw.Promptware,         { LoadConfig propagates promptware_enabled --
                                 see the comment inside LoadConfig }
   PasClaw.Tools.OutputCache,  { LoadConfig propagates condense_reversible
@@ -1767,8 +1781,15 @@ begin
 end;
 
 function LoadConfig: TConfig;
+begin
+  Result := LoadConfig('');
+end;
+
+function LoadConfig(const ProfileOverride: string): TConfig;
 var
-  Path, S: string;
+  Path, S, ProfileName, PErr, B: string;
+  Bodies: TProfileBodyArray;
+  i: Integer;
 begin
   Result := TConfig.Create;
   Path := GetConfigPath;
@@ -1783,6 +1804,44 @@ begin
          leave the literal marker in place so config-back-from-disk
          diagnostics still show which variable didn't resolve. *)
       S := ExpandEnvVarsInJSON(S);
+
+      (* Profile resolution (PR #291). Selection precedence:
+           1. ProfileOverride (CLI --profile)
+           2. PASCLAW_PROFILE env var
+           3. "profile" field in config.json
+           4. None
+         When a profile name resolves, apply the ancestor chain + the
+         profile body via TConfig.FromJSON BEFORE the operator's own
+         config.json -- so explicit user fields win. FromJSON is
+         merge-style (every GetX call defaults to the current TConfig
+         value), so multiple applies layer cleanly. *)
+      ProfileName := ProfileOverride;
+      if ProfileName = '' then
+        ProfileName := GetEnvironmentVariable('PASCLAW_PROFILE');
+      if ProfileName = '' then
+        ProfileName := ExtractProfileField(S);
+      if ProfileName <> '' then
+      begin
+        if ResolveProfileBodies(GetHome, ProfileName, Bodies, PErr) then
+        begin
+          for i := 0 to High(Bodies) do
+          begin
+            B := ExpandEnvVarsInJSON(Bodies[i]);
+            try
+              Result.FromJSON(B);
+            except
+              on E: Exception do
+                LogWarn('config: profile "%s" layer %d apply failed: %s',
+                        [ProfileName, i, E.Message]);
+            end;
+          end;
+          LogInfo('config: profile "%s" applied (%d layer(s))',
+                  [ProfileName, Length(Bodies)]);
+        end
+        else
+          LogWarn('config: %s -- using defaults + config.json only', [PErr]);
+      end;
+
       try
         Result.FromJSON(S);
       except

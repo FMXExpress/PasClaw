@@ -59,6 +59,7 @@ type
     NoTools:         Boolean;
     NoHashline:      Boolean;
     BackendOverride: string;
+    Profile:         string;   { --profile <name>; PR #291 }
   end;
 
 function ParseArgs(const Argv: array of string; var A: TTUIArgs): Boolean;
@@ -69,6 +70,7 @@ begin
   A.Model := ''; A.Provider := ''; A.Session := ''; A.Theme := '';
   A.NoMCP := False; A.NoTools := False; A.NoHashline := False;
   A.BackendOverride := '';
+  A.Profile := '';
   i := 0;
   while i <= High(Argv) do
   begin
@@ -80,6 +82,7 @@ begin
     if Argv[i] = '--no-mcp'       then begin A.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-tools'     then begin A.NoTools    := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline'  then begin A.NoHashline := True; Inc(i); Continue; end;
+    if Argv[i] = '--profile'      then begin if i = High(Argv) then Exit(False); A.Profile  := Argv[i + 1]; Inc(i, 2); Continue; end;
     Inc(i);
   end;
 end;
@@ -103,7 +106,7 @@ var
   ShellSessionId: string;
 begin
   if not ParseArgs(Argv, A) then Exit(1);
-  Cfg := LoadConfig;
+  Cfg := LoadConfig(A.Profile);
   ConfigureSandbox(Cfg.Sandbox, '');
   { Docker backend: the TUI runs ONE container for its whole process,
     not one per chat session. The container is a workspace sandbox --

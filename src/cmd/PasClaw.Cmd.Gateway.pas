@@ -183,8 +183,21 @@ var
   Skills: TSkillSpecArray;
   KindSelected: TShellBackendKind;
   BackendDesc, ShellSessionId: string;
+  ProfileName: string;
+  pi: Integer;
 begin
-  Cfg := LoadConfig;
+  { Pre-scan for --profile so LoadConfig sees it. Profile selection
+    has its own precedence chain (CLI > PASCLAW_PROFILE > config.json
+    "profile" field); passing '' here lets LoadConfig fall through to
+    the env/config-json layers. PR #291. }
+  ProfileName := '';
+  for pi := 0 to High(Argv) - 1 do
+    if Argv[pi] = '--profile' then
+    begin
+      ProfileName := Argv[pi + 1];
+      Break;
+    end;
+  Cfg := LoadConfig(ProfileName);
   ConfigureSandbox(Cfg.Sandbox, '');
   ShellSessionId := '';
   try
