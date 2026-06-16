@@ -365,6 +365,41 @@ begin
   end;
 end;
 
+(* PR #292 Stage D-prep: the diff command relies on profiles producing
+   different TConfig states. This test checks the contract from the
+   TConfig side -- if two profiles do diverge on at least one tracked
+   field, that divergence shows up post-apply. (DoDiff's own table
+   layout is exercised by smoke; the field-level divergence is the
+   logical invariant under test.) *)
+procedure TestDiffMaterial;
+var
+  CfgA, CfgB: TConfig;
+begin
+  WriteFileText(JoinPath(Home, 'config.json'), '{}');
+  CfgA := LoadConfig('baseline');
+  CfgB := LoadConfig('max-build');
+  try
+    AssertTrue((CfgA.VaultToolsEnabled <> CfgB.VaultToolsEnabled) or
+               (CfgA.WebFetchEnabled   <> CfgB.WebFetchEnabled) or
+               (CfgA.CondenseReversible <> CfgB.CondenseReversible) or
+               (CfgA.ToolOutputCap     <> CfgB.ToolOutputCap),
+               'baseline vs max-build differ on at least one tracked field');
+  finally
+    CfgA.Free; CfgB.Free;
+  end;
+
+  { stock vs the baseline of TConfig.Create should be a no-op. }
+  CfgA := LoadConfig('stock');
+  CfgB := LoadConfig('');
+  try
+    AssertTrue(CfgA.VaultToolsEnabled  = CfgB.VaultToolsEnabled,  'stock vs no-profile: vault');
+    AssertTrue(CfgA.CondenseReversible = CfgB.CondenseReversible, 'stock vs no-profile: condense');
+    AssertTrue(CfgA.ToolOutputCap      = CfgB.ToolOutputCap,      'stock vs no-profile: cap');
+  finally
+    CfgA.Free; CfgB.Free;
+  end;
+end;
+
 begin
   { PASCLAW_HOME is set by the Makefile target before launching --
     fpc doesn't ship fpSetenv on every supported version and setting
@@ -391,6 +426,7 @@ begin
     TestProfileWithoutConfigFile;
     TestSaveConfigPreservesProfile;
     TestSelfShadowInherit;
+    TestDiffMaterial;
     WriteLn('ok - config profile tests passed');
   finally
     try RemoveDir(JoinPath(Home, 'profiles')); except end;

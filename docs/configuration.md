@@ -41,10 +41,22 @@ pasclaw profile list                 # show built-ins + your $PASCLAW_HOME/profi
 pasclaw profile show low-token       # print the resolved body
 pasclaw profile show max-build       # show two layers: low-token, then max-build
 pasclaw profile use security         # write "profile": "security" into config.json
+pasclaw profile diff baseline max-build      # show which fields differ
+pasclaw profile bench --task "implement fizzbuzz in pascal" \
+                       --profiles baseline,low-token,max-build \
+                       --runs 3    # run the task against each profile, print a stats table
 
 pasclaw agent --profile baseline -m "do X"   # per-run override
 PASCLAW_PROFILE=max-build pasclaw agent ...  # process-scope override
 ```
+
+### `profile diff` and `profile bench`
+
+`diff` applies each profile (with `_inherits` resolved) against a fresh `TConfig` and prints a table of fields that differ. Rows where the two profiles agree are suppressed. The comparable field set is a hand-curated list of loop-shaping / sandbox / skill / cache flags — anything a profile could meaningfully set.
+
+`bench` spawns `pasclaw agent --profile <p> --quiet --session <id> -m "<task>"` for each (profile, run) pair, then reads the session JSON back to harvest stats. The summary table shows per-profile means of wall time, input/output tokens, turns, and tool-call count, plus a failure count. Token / turn / tool-call columns require `stats_collection_enabled` in the active profile to be non-zero — wall time and exit codes work regardless.
+
+`bench` is a comparison harness, not a benchmark in the academic sense: no statistical-significance testing, no controlled variance. Useful for "show me concrete numbers across these three profiles on this task" eyeballing. The `--judge` Ralph-loop pattern (PR #223) plugs in here as a follow-up; for now the printed responses are the quality signal.
 
 ### Custom profiles
 
