@@ -31,6 +31,8 @@ function HMACSHA256Base64(const Key, Data: TBytes): string;
 function HMACSHA256HexLower(const Key, Data: TBytes): string;
 function StringToBytes(const S: string): TBytes;
 function BytesToHexLower(const B: TBytes): string;
+function BytesToBase64(const B: TBytes): string;
+function Base64ToBytes(const S: string): TBytes;
 function ConstantTimeEqual(const A, B: string): Boolean;
 
 implementation
@@ -283,6 +285,84 @@ end;
 function HMACSHA256Base64(const Key, Data: TBytes): string;
 begin
   Result := BytesToBase64(HMACSHA256Bytes(Key, Data));
+end;
+
+{ Standard Base64 decoder, RFC 4648 alphabet. Tolerates whitespace and
+  newlines (any non-alphabet, non-'=' char is skipped) so it accepts the
+  line-wrapped form some encoders produce. Returns an empty TBytes if the
+  input decodes to zero useful bytes; raises EConvertError on truly
+  malformed input (odd trailing quartet). }
+function Base64ToBytes(const S: string): TBytes;
+var
+  Table: array[Char] of ShortInt;
+  i, OPos: Integer;
+  Quad: array[0..3] of ShortInt;
+  Have: Integer;
+  Ch: Char;
+  V: ShortInt;
+
+  procedure InitTable;
+  var
+    c: Char;
+    j: Integer;
+  begin
+    for c := Low(Char) to High(Char) do Table[c] := -1;
+    for j := 0 to 25 do Table[Chr(Ord('A') + j)] := j;
+    for j := 0 to 25 do Table[Chr(Ord('a') + j)] := j + 26;
+    for j := 0 to 9  do Table[Chr(Ord('0') + j)] := j + 52;
+    Table['+'] := 62;
+    Table['/'] := 63;
+  end;
+
+  procedure FlushQuad;
+  var
+    B1, B2, B3: Byte;
+  begin
+    case Have of
+      2:
+        begin
+          B1 := (Quad[0] shl 2) or (Quad[1] shr 4);
+          SetLength(Result, OPos + 1);
+          Result[OPos] := B1; Inc(OPos);
+        end;
+      3:
+        begin
+          B1 := (Quad[0] shl 2) or (Quad[1] shr 4);
+          B2 := ((Quad[1] and $0F) shl 4) or (Quad[2] shr 2);
+          SetLength(Result, OPos + 2);
+          Result[OPos] := B1; Result[OPos + 1] := B2; Inc(OPos, 2);
+        end;
+      4:
+        begin
+          B1 := (Quad[0] shl 2) or (Quad[1] shr 4);
+          B2 := ((Quad[1] and $0F) shl 4) or (Quad[2] shr 2);
+          B3 := ((Quad[2] and $03) shl 6) or Quad[3];
+          SetLength(Result, OPos + 3);
+          Result[OPos] := B1; Result[OPos + 1] := B2; Result[OPos + 2] := B3;
+          Inc(OPos, 3);
+        end;
+    end;
+    Have := 0;
+  end;
+
+begin
+  SetLength(Result, 0);
+  if S = '' then Exit;
+  InitTable;
+  OPos := 0;
+  Have := 0;
+  for i := 1 to Length(S) do
+  begin
+    Ch := S[i];
+    if Ch = '=' then Break;            { padding ends the data run }
+    if Ord(Ch) > 127 then Continue;    { skip stray non-ASCII }
+    V := Table[Ch];
+    if V < 0 then Continue;            { skip whitespace / linebreaks }
+    Quad[Have] := V;
+    Inc(Have);
+    if Have = 4 then FlushQuad;
+  end;
+  if Have > 0 then FlushQuad;
 end;
 
 function ConstantTimeEqual(const A, B: string): Boolean;

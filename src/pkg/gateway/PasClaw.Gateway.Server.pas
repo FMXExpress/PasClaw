@@ -286,6 +286,7 @@ uses
   PasClaw.JSON,
   PasClaw.Logger,
   PasClaw.Utils,
+  PasClaw.Crypto.HMAC,        { Base64ToBytes -- decode binary KB uploads }
   PasClaw.Skills.Loader,
   PasClaw.Skills.Pending,
   PasClaw.Skills.Install,   { InstallSkillTarget / RemoveSkillFiles / IsSafeSkillName }
@@ -1362,23 +1363,26 @@ end;
 procedure TGatewayServer.HandleKBUpload(ARequest: TIdHTTPRequestInfo;
                                         AResp: TIdHTTPResponseInfo);
 var
-  Body, Name, Content, Err, Dir, FilePath: string;
+  Body, Name, Content, ContentB64, Err, Dir, FilePath: string;
   Req, Root: TJsonObject;
   Idx: IKBIndex;
   Sources: TKBSourceArray;
   i, Files, Chunks: Integer;
-  HaveSource, Overwrote: Boolean;
+  HaveSource, Overwrote, BinaryUpload: Boolean;
   PrevDt, NewDt: TDateTime;
+  Bin: TBytes;
+  FS: TFileStream;
 begin
   Body := ReadRequestBody(ARequest);
-  Name := ''; Content := '';
+  Name := ''; Content := ''; ContentB64 := '';
   if Trim(Body) <> '' then
   begin
     Req := TJsonObject.Parse(Body);
     if Req <> nil then
     try
-      Name    := Trim(Req.GetStr('name', ''));
-      Content := Req.GetStr('content', '');
+      Name       := Trim(Req.GetStr('name', ''));
+      Content    := Req.GetStr('content', '');
+      ContentB64 := Req.GetStr('content_b64', '');
     finally
       Req.Free;
     end;
@@ -1392,10 +1396,11 @@ begin
   if not KBExtSupported(Name) then
   begin
     WriteJSON(AResp, 415,
-      '{"error":"unsupported file type -- the KB indexes text formats (.md, .txt, .pas, source code, ...)"}');
+      '{"error":"unsupported file type -- the KB indexes text formats (.md, .txt, .pas, source code, ...) and PDFs"}');
     Exit;
   end;
-  if Content = '' then
+  BinaryUpload := ContentB64 <> '';
+  if (not BinaryUpload) and (Content = '') then
   begin
     WriteJSON(AResp, 400, '{"error":"empty content"}');
     Exit;
@@ -1414,7 +1419,23 @@ begin
   PrevDt := 0;
   if Overwrote then FileAge(FilePath, PrevDt);
   try
-    WriteFileText(FilePath, Content);
+    if BinaryUpload then
+    begin
+      Bin := Base64ToBytes(ContentB64);
+      if Length(Bin) = 0 then
+      begin
+        WriteJSON(AResp, 400, '{"error":"content_b64 decoded to empty"}');
+        Exit;
+      end;
+      FS := TFileStream.Create(FilePath, fmCreate);
+      try
+        FS.WriteBuffer(Bin[0], Length(Bin));
+      finally
+        FS.Free;
+      end;
+    end
+    else
+      WriteFileText(FilePath, Content);
   except
     on E: Exception do
     begin
