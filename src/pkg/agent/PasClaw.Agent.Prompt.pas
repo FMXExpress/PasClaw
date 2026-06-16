@@ -90,6 +90,25 @@ function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
                            const TaskHint: string;
                            Mode: TPasClawMode): string; overload;
 
+{ Locate the nearest AGENTS.md walking up from StartDir to the
+  filesystem root, stopping at the first git working tree boundary
+  (a directory containing a `.git` entry) once that boundary is
+  crossed -- so a deep `cwd` inside a repo picks up the repo-root
+  AGENTS.md, but a working dir outside any repo still finds an
+  AGENTS.md sitting next to it. Returns '' when no AGENTS.md is
+  reachable. StartDir = '' uses GetCurrentDir. Pure I/O, no parsing. }
+function FindProjectAgentsMd(const StartDir: string): string;
+
+{ Read AGENTS.md into the prompt's Project Rules section. Reads at
+  most ProjectRulesMaxBytes from FindProjectAgentsMd's result; longer
+  files are tail-truncated with a "(...elided N bytes...)" notice so
+  the operator knows the body was clipped. Returns '' when no file
+  was found, when it was empty, or when reading raised an exception
+  (logged, never fatal). Cross-tool convention: same file Codex,
+  Cursor, opencode and friends already read for project-level
+  guidance. }
+function BuildProjectRulesSection: string;
+
 { True iff at least one message in the array is mrSystem. The gateway's
   /v1/chat/completions handler uses this to decide whether to inject the
   composed system prompt -- third-party clients that supply their own
@@ -107,6 +126,12 @@ uses
 
 const
   SectionSep = sLineBreak + sLineBreak + '---' + sLineBreak + sLineBreak;
+
+  { Cap injected AGENTS.md at 64 KB. Long enough for any sensibly-
+    curated project rules file (opencode's own AGENTS.md is ~3 KB);
+    short enough that an accidental commit of a large reference doc
+    under the same name doesn't blow the prompt window. }
+  ProjectRulesMaxBytes = 64 * 1024;
 
 function RuntimeString: string;
 begin
@@ -231,6 +256,77 @@ begin
   YesterdayStr := FormatDateTime('yyyy-mm-dd', Now - 1);
   AppendFile('Today (' + TodayStr + ')',         JoinPath(MemoryDir, TodayStr + '.md'));
   AppendFile('Yesterday (' + YesterdayStr + ')', JoinPath(MemoryDir, YesterdayStr + '.md'));
+end;
+
+function FindProjectAgentsMd(const StartDir: string): string;
+{ Walk up from StartDir (or the cwd) until we find AGENTS.md. Stop at
+  the first directory containing `.git` (or with a `.git` file for git
+  worktrees) -- that's the project root per the opencode / Codex
+  convention, and AGENTS.md sitting above it would belong to a
+  containing repo, not this one. If we never hit a git root, walk all
+  the way up to the filesystem root before giving up. }
+var
+  Dir, Parent, Candidate: string;
+begin
+  Result := '';
+  if StartDir = '' then Dir := GetCurrentDir else Dir := StartDir;
+  if Dir = '' then Exit;
+  Dir := ExcludeTrailingPathDelimiter(ExpandFileName(Dir));
+  while True do
+  begin
+    Candidate := JoinPath(Dir, 'AGENTS.md');
+    if FileExists(Candidate) then
+      Exit(Candidate);
+    { Hit the git root without finding AGENTS.md -- stop, do not bleed
+      into a parent repo's rules. }
+    if DirectoryExists(JoinPath(Dir, '.git')) or
+       FileExists(JoinPath(Dir, '.git')) then
+      Exit;
+    Parent := ExcludeTrailingPathDelimiter(ExtractFileDir(Dir));
+    if (Parent = '') or (Parent = Dir) then Exit;
+    Dir := Parent;
+  end;
+end;
+
+function BuildProjectRulesSection: string;
+var
+  Path, Body: string;
+  Original: Integer;
+begin
+  Result := '';
+  Path := FindProjectAgentsMd('');
+  if Path = '' then Exit;
+  try
+    Body := ReadFileText(Path);
+  except
+    on E: Exception do
+    begin
+      { Don't fail the session over a malformed AGENTS.md -- just skip
+        the section. Matches the MEMORY.md philosophy. }
+      Exit;
+    end;
+  end;
+  Body := Trim(Body);
+  if Body = '' then Exit;
+
+  Original := Length(Body);
+  if Original > ProjectRulesMaxBytes then
+  begin
+    Body := Copy(Body, 1, ProjectRulesMaxBytes) + sLineBreak + sLineBreak +
+            Format('(... %d byte(s) elided -- AGENTS.md exceeded the %d byte ' +
+                   'cap; read the full file with fs_read if you need the tail)',
+                   [Original - ProjectRulesMaxBytes, ProjectRulesMaxBytes]);
+  end;
+
+  Result :=
+    '## Project Rules (AGENTS.md)' + sLineBreak + sLineBreak +
+    'These are authoritative project-specific rules from `' + Path + '`. ' +
+    'They are the *opencode / Codex / Cursor / Zed* cross-tool convention ' +
+    'for per-project agent guidance and take precedence over generic ' +
+    'guidance elsewhere in this prompt when the two conflict. Treat them ' +
+    'as instructions from the project maintainer.' +
+    sLineBreak + sLineBreak +
+    Body;
 end;
 
 function BuildSkillsSection(ProgressiveDisclosure: Boolean): string;
@@ -452,6 +548,13 @@ begin
   Result := AppendSection(Result, BuildWorkspaceSection);
   Result := AppendSection(Result,
               BuildMemorySection((Cfg <> nil) and Cfg.OrientTaskAware, TaskHint));
+  { Project-level rules from AGENTS.md (opencode/Codex/Cursor
+    convention). Read from the cwd, walking up to the git root. Emitted
+    after memory so it can override or extend MEMORY.md guidance for
+    the specific project the user is in. Always loaded (not gated on
+    ToolsEnabled): even a chat-only session benefits from "in this
+    project, prefer X". }
+  Result := AppendSection(Result, BuildProjectRulesSection);
   { Skills are only callable when the tool registry was actually built.
     --no-tools (and component UseTools=False) bypass RegisterSkills, so
     advertising the catalog would be a lie. }

@@ -58,6 +58,8 @@ uses
   PasClaw.Cmd.KB,
   PasClaw.Cmd.ToolRPC,
   PasClaw.Cmd.Export,
+  PasClaw.Cmd.Init,         (* Pascal-driven AGENTS.md bootstrap -- complements
+                               Cmd.Runbook's tool-driven variant *)
   PasClaw.Cmd.Runbook,
   PasClaw.Cmd.Heartbeat,
   PasClaw.Cmd.TUI;
@@ -132,7 +134,7 @@ const
 var
   Sub, Fl: array of string;
 begin
-  SetLength(Sub, 27);
+  SetLength(Sub, 28);
   Sub[0]  := 'config       View/edit configuration';
   Sub[1]  := 'onboard      Initialize config & workspace';
   Sub[2]  := 'agent        Chat with the assistant (line-by-line)';
@@ -157,9 +159,10 @@ begin
   Sub[21] := 'kb           Manage the knowledgebase (index documents for the agent)';
   Sub[22] := 'learn        Mine sessions for recurring tool failures';
   Sub[23] := 'export       Render memory/skills/sandbox into AGENTS.md / CLAUDE.md / Cursor / Gemini / Zed';
-  Sub[24] := 'runbook      Ask the model to probe the project and write a starter AGENTS.md';
-  Sub[25] := 'heartbeat    Run the proactive periodic wake-up daemon (off by default; opt in via onboard)';
-  Sub[26] := 'version      Show version info';
+  Sub[24] := 'init         Scan cwd and ask the model for a starter AGENTS.md (one-shot, no tool loop)';
+  Sub[25] := 'runbook      Tool-driven variant of init: agent loop probes the repo via execute_code';
+  Sub[26] := 'heartbeat    Run the proactive periodic wake-up daemon (off by default; opt in via onboard)';
+  Sub[27] := 'version      Show version info';
 
   SetLength(Fl, 2);
   Fl[0] := '--no-color   Disable colored output (also: NO_COLOR env)';
@@ -188,6 +191,7 @@ begin
   else if Cmd = 'session'  then Result := Cmd_Session_Run(Argv)
   else if Cmd = 'learn'    then Result := Cmd_Learn_Run(Argv)
   else if Cmd = 'export'   then Result := Cmd_Export_Run(Argv)
+  else if Cmd = 'init'     then Result := Cmd_Init_Run(Argv)
   else if Cmd = 'runbook'  then Result := Cmd_Runbook_Run(Argv)
   { resume <id> is shorthand for `agent --session <id>` -- wire it
     here so `pasclaw resume foo` works as a top-level shortcut. }
