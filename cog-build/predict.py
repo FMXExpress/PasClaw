@@ -211,10 +211,79 @@ class Predictor(BasePredictor):
             description="DeepSeek API key. Stored encrypted; never surfaces in logs.",
             default=None,
         ),
+
+        # --- Local / self-hosted OpenAI-compatible servers ---
+        #
+        # These three providers exist in PasClaw's catalog with
+        # asNone auth -- they don't take API keys, they just need a
+        # base URL.  Inside the Replicate container "localhost" is
+        # the cog itself, so for any of these to be useful the
+        # operator has to expose their local server publicly: ngrok,
+        # cloudflared, Tailscale Funnel, a self-hosted box on a
+        # public IP, etc.  Leave empty to skip registering that
+        # provider.
+        ollama_url: str = Input(
+            description="Base URL of an Ollama server reachable from the cog "
+            "container (e.g. an ngrok tunnel to a laptop's local "
+            "instance). Leave empty to skip.",
+            default="",
+        ),
+        lmstudio_url: str = Input(
+            description="Base URL of an LM Studio server reachable from the "
+            "cog container (default LM Studio port is 1234). Leave "
+            "empty to skip.",
+            default="",
+        ),
+        vllm_url: str = Input(
+            description="Base URL of a vLLM server reachable from the cog "
+            "container (default vLLM port is 8000). Leave empty to skip.",
+            default="",
+        ),
+
+        # --- Generic OpenAI-compatible escape hatch ---
+        #
+        # For any provider that's OpenAI-compatible but not surfaced
+        # as a dedicated input.  Mistral, xAI, Cerebras, Moonshot,
+        # Qwen, Zhipu, Perplexity, NVIDIA NIM, Volcengine, MiniMax,
+        # Novita, LiteLLM, MiMo -- all of these are in PasClaw's
+        # catalog and speak the OpenAI request shape; the operator
+        # just needs to name the kind and URL.  Also handles any
+        # in-house OpenAI-compatible endpoint not in the catalog
+        # (kind = "openai-compat" gets aliased to "openai" by
+        # PasClaw.Providers.Factory.NormalizeProviderKind).
+        custom_provider_kind: str = Input(
+            description="Catalog kind for a custom provider (e.g. mistral, "
+            "xai, cerebras, moonshot, qwen, zhipu, perplexity, "
+            "nvidia, volcengine, minimax, novita, litellm, mimo). "
+            "Use 'openai-compat' for any other OpenAI-compatible "
+            "endpoint not in PasClaw's catalog. Leave empty to skip.",
+            default="",
+        ),
+        custom_provider_url: str = Input(
+            description="api_base URL for the custom provider. Required when "
+            "custom_provider_kind is set.",
+            default="",
+        ),
+        custom_provider_key: Optional[Secret] = Input(
+            description="API key for the custom provider. Stored encrypted; "
+            "never surfaces in logs. Leave empty if the endpoint "
+            "needs no auth.",
+            default=None,
+        ),
+        custom_provider_model: str = Input(
+            description="Default model id for the custom provider. Leave "
+            "empty to let the provider pick (some servers route "
+            "missing model ids to whatever is currently loaded).",
+            default="",
+        ),
+
         provider: str = Input(
             default="",
-            description="LLM provider (openai/anthropic/gemini/groq/openrouter/deepseek). "
-            "Empty = first configured key wins.",
+            description="LLM provider to route through. One of openai, "
+            "anthropic, gemini, groq, openrouter, deepseek, ollama, "
+            "lmstudio, vllm, or whatever you put in "
+            "custom_provider_kind. Empty = first configured "
+            "provider wins.",
         ),
         model: str = Input(
             default="",
@@ -227,8 +296,23 @@ class Predictor(BasePredictor):
         final reply as reply.txt -- both as separate file URLs.
         """
 
-        # --- validate inputs ---
-        keys = {
+        # --- collect every configured provider ---
+        #
+        # Three categories produce entries in providers_list:
+        #
+        #   1. Cloud providers with an API key (Secret inputs).
+        #   2. Local / self-hosted OpenAI-compatible servers with a
+        #      URL (no API key -- PasClaw catalog uses asNone auth).
+        #   3. The generic escape hatch (custom_provider_kind + url
+        #      + optional key + optional model).
+        #
+        # A provider is "available" if its corresponding input
+        # group is populated. `selected_provider` (the operator's
+        # `provider` flag, or the first-available fallback) must
+        # name one of these.
+
+        # 1. Cloud-key catalog -- shape matches cog/predict.py.
+        cloud_keys = {
             "openai":     _secret_str(openai_api_key),
             "anthropic":  _secret_str(anthropic_api_key),
             "gemini":     _secret_str(gemini_api_key),
@@ -236,26 +320,6 @@ class Predictor(BasePredictor):
             "openrouter": _secret_str(openrouter_api_key),
             "deepseek":   _secret_str(deepseek_api_key),
         }
-        available_providers = [p for p, k in keys.items() if k]
-        if not available_providers:
-            raise ValueError(
-                "No API keys provided -- supply at least one of "
-                "openai_api_key / anthropic_api_key / gemini_api_key / "
-                "groq_api_key / openrouter_api_key / deepseek_api_key."
-            )
-
-        selected_provider = provider.lower().strip() if provider else available_providers[0]
-        if selected_provider not in keys:
-            raise ValueError(
-                f"Unsupported provider '{selected_provider}'. "
-                f"Choose from: {list(keys.keys())}"
-            )
-        if not keys[selected_provider]:
-            raise ValueError(
-                f"Provider '{selected_provider}' selected but its API key is empty."
-            )
-
-        # Catalog defaults -- same shape as cog/predict.py
         catalog_defaults = {
             "openai":     {"kind": "openai",    "api_base": "https://api.openai.com",                 "model": "gpt-4o-mini"},
             "anthropic":  {"kind": "anthropic", "api_base": "https://api.anthropic.com",              "model": "claude-opus-4-7"},
@@ -266,17 +330,97 @@ class Predictor(BasePredictor):
         }
 
         providers_list = []
-        for prov_name, api_key in keys.items():
-            if api_key:
-                spec = catalog_defaults.get(prov_name, {"kind": prov_name, "api_base": "", "model": ""})
-                prov_model = model if (prov_name == selected_provider and model) else spec["model"]
-                providers_list.append({
-                    "name": prov_name, "kind": spec["kind"],
-                    "api_base": spec["api_base"], "api_key": api_key,
-                    "model": prov_model,
-                })
+        available_providers = []
 
+        # Cloud providers (need an API key).
+        for prov_name, api_key in cloud_keys.items():
+            if not api_key:
+                continue
+            spec = catalog_defaults[prov_name]
+            providers_list.append({
+                "name": prov_name, "kind": spec["kind"],
+                "api_base": spec["api_base"], "api_key": api_key,
+                "model": spec["model"],
+            })
+            available_providers.append(prov_name)
+
+        # 2. Local / self-hosted OpenAI-compatible servers (need a URL,
+        #    no key).  PasClaw's catalog already has these kinds with
+        #    asNone auth, so leaving api_key empty is the right shape.
+        local_servers = [
+            ("ollama",   ollama_url),
+            ("lmstudio", lmstudio_url),
+            ("vllm",     vllm_url),
+        ]
+        for prov_name, url in local_servers:
+            if not url:
+                continue
+            providers_list.append({
+                "name": prov_name, "kind": prov_name,
+                "api_base": url, "api_key": "",
+                # Empty model = PasClaw + the local server figure it
+                # out (LM Studio routes missing model ids to the
+                # currently-loaded one; Ollama needs an explicit pick
+                # via the `model` input or `provider` selection).
+                "model": "",
+            })
+            available_providers.append(prov_name)
+
+        # 3. Generic escape hatch.  The kind goes through PasClaw's
+        #    NormalizeProviderKind ("openai-compat" -> "openai"), so
+        #    any OpenAI-shaped endpoint not in the named-input set
+        #    (mistral, xai, cerebras, moonshot, qwen, zhipu,
+        #    perplexity, nvidia, volcengine, minimax, novita,
+        #    litellm, mimo, or an in-house gateway) plugs in here.
+        custom_kind = custom_provider_kind.lower().strip()
+        if custom_kind:
+            if not custom_provider_url:
+                raise ValueError(
+                    "custom_provider_kind is set but "
+                    "custom_provider_url is empty. Provide both."
+                )
+            providers_list.append({
+                "name": custom_kind, "kind": custom_kind,
+                "api_base": custom_provider_url,
+                "api_key": _secret_str(custom_provider_key),
+                "model": custom_provider_model,
+            })
+            available_providers.append(custom_kind)
+
+        if not available_providers:
+            raise ValueError(
+                "No provider configured. Supply at least one of: a cloud "
+                "API key (openai_api_key, anthropic_api_key, ...), a "
+                "local-server URL (ollama_url, lmstudio_url, vllm_url), "
+                "or the custom_provider_* set."
+            )
+
+        # --- pick the active provider ---
+        selected_provider = provider.lower().strip() if provider else available_providers[0]
+        if selected_provider not in available_providers:
+            raise ValueError(
+                f"Provider '{selected_provider}' is not configured. "
+                f"Configured providers: {available_providers}"
+            )
+
+        # If the operator passed a model override AND it's for the
+        # selected provider, patch it into providers_list. Same shape
+        # the previous code achieved via the per-entry conditional.
+        if model:
+            for entry in providers_list:
+                if entry["name"] == selected_provider:
+                    entry["model"] = model
+                    break
+
+        # default_model: model override wins; else catalog default for
+        # cloud providers; else the providers_list entry's model
+        # (covers local + custom).
         default_model = model or catalog_defaults.get(selected_provider, {}).get("model", "")
+        if not default_model:
+            for entry in providers_list:
+                if entry["name"] == selected_provider:
+                    default_model = entry["model"]
+                    break
 
         config_data = {
             "default_provider": selected_provider,
