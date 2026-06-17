@@ -21,6 +21,7 @@ program build_workspace_roundtrip_tests;
 
 uses
   SysUtils, Classes,
+  {$IFDEF FPC} Zipper {$ELSE} System.Zip {$ENDIF},
   PasClaw.Skills.Zip,
   PasClaw.Utils;
 
@@ -269,6 +270,154 @@ begin
              'err mentions not-found (got: ' + Err + ')');
 end;
 
+{ ----- Zip-slip regression suite (Codex P1 on PR #300) ----- }
+
+procedure WriteMaliciousZip(const ZipPath, MaliciousMember, Content: string);
+{ Build a zip whose single entry has MaliciousMember as its archive
+  name. The on-disk source path is benign (an actual file in a temp
+  scratch dir); only the in-archive name is dangerous. The point of
+  this helper is to hand the extractor an entry name that tries to
+  escape the destination. }
+var
+  Z: {$IFDEF FPC}TZipper{$ELSE}TZipFile{$ENDIF};
+  Bench: string;
+  FS: TFileStream;
+begin
+  Bench := JoinPath(GetTempDir(False), 'mz_' + IntToStr(Random(MaxInt)) + '.bin');
+  FS := TFileStream.Create(Bench, fmCreate);
+  try
+    if Content <> '' then FS.WriteBuffer(Content[1], Length(Content));
+  finally
+    FS.Free;
+  end;
+  Z := {$IFDEF FPC}TZipper{$ELSE}TZipFile{$ENDIF}.Create;
+  try
+    {$IFDEF FPC}
+    Z.Entries.AddFileEntry(Bench, MaliciousMember);
+    Z.FileName := ZipPath;
+    Z.ZipAllFiles;
+    {$ELSE}
+    Z.Open(ZipPath, zmWrite);
+    Z.Add(Bench, MaliciousMember);
+    Z.Close;
+    {$ENDIF}
+  finally
+    Z.Free;
+    DeleteFile(Bench);
+  end;
+end;
+
+procedure TestRejectsParentTraversal;
+var
+  Dest, Zip, Err: string;
+begin
+  Dest := MakeTempDir('slip_dest');
+  Zip := JoinPath(GetTempDir(False),
+                  'slip_parent_' + IntToStr(Random(MaxInt)) + '.zip');
+  try
+    WriteMaliciousZip(Zip, '../escaped.txt', 'OWNED');
+    AssertTrue(not ExtractZipToDir(Zip, Dest, Err),
+               '../escaped.txt should be rejected, got Result=True');
+    AssertTrue(Pos('unsafe', Err) > 0,
+               'err mentions "unsafe": ' + Err);
+    AssertTrue(not FileExists(JoinPath(ExtractFileDir(Dest), 'escaped.txt')),
+               'no file written outside Dest');
+  finally
+    DeleteFile(Zip);
+    RemoveTree(Dest);
+  end;
+end;
+
+procedure TestRejectsDeepParentTraversal;
+{ Sneakier: legitimate-looking prefix that then climbs out via ../. }
+var
+  Dest, Zip, Err: string;
+begin
+  Dest := MakeTempDir('slip_deep');
+  Zip := JoinPath(GetTempDir(False),
+                  'slip_deep_' + IntToStr(Random(MaxInt)) + '.zip');
+  try
+    WriteMaliciousZip(Zip, 'workspace/../../escaped.txt', 'OWNED');
+    AssertTrue(not ExtractZipToDir(Zip, Dest, Err),
+               'workspace/../../escaped.txt should be rejected');
+    AssertTrue(Pos('unsafe', Err) > 0,
+               'err mentions "unsafe": ' + Err);
+  finally
+    DeleteFile(Zip);
+    RemoveTree(Dest);
+  end;
+end;
+
+procedure TestRejectsAbsolutePath;
+var
+  Dest, Zip, Err: string;
+begin
+  Dest := MakeTempDir('slip_abs');
+  Zip := JoinPath(GetTempDir(False),
+                  'slip_abs_' + IntToStr(Random(MaxInt)) + '.zip');
+  try
+    WriteMaliciousZip(Zip, '/tmp/__pasclaw_owned__', 'OWNED');
+    AssertTrue(not ExtractZipToDir(Zip, Dest, Err),
+               'absolute /tmp/... should be rejected');
+    AssertTrue(not FileExists('/tmp/__pasclaw_owned__'),
+               'no file written at the absolute path');
+  finally
+    DeleteFile(Zip);
+    RemoveTree(Dest);
+  end;
+end;
+
+procedure TestRejectsBackslashTraversal;
+{ Zips occasionally carry backslash separators (Windows-produced
+  archives). Our validator normalises to forward-slash before the
+  segment scan; a sneaky ..\.. should be rejected just like ../.. }
+var
+  Dest, Zip, Err: string;
+begin
+  Dest := MakeTempDir('slip_bs');
+  Zip := JoinPath(GetTempDir(False),
+                  'slip_bs_' + IntToStr(Random(MaxInt)) + '.zip');
+  try
+    WriteMaliciousZip(Zip, '..\..\escaped.txt', 'OWNED');
+    AssertTrue(not ExtractZipToDir(Zip, Dest, Err),
+               'backslash ..\..\escaped.txt should be rejected');
+  finally
+    DeleteFile(Zip);
+    RemoveTree(Dest);
+  end;
+end;
+
+procedure TestAcceptsLegitimateNested;
+{ Containment check must not over-fire on legitimate nested paths
+  that LOOK like they could escape but actually resolve inside Dest. }
+var
+  Src, Dest, Zip, Err: string;
+  Empty: array of string;
+begin
+  SetLength(Empty, 0);
+  Src := MakeTempDir('legit_src');
+  Dest := MakeTempDir('legit_dest');
+  Zip := JoinPath(GetTempDir(False),
+                  'legit_' + IntToStr(Random(MaxInt)) + '.zip');
+  try
+    { Legitimate deeply-nested file -- the validator MUST accept this. }
+    WriteText(JoinPath(JoinPath(JoinPath(JoinPath(Src, 'workspace'),
+                                          'sessions'), 'foo'),
+                       'session.json'),
+              '{"ok": true}');
+    AssertTrue(PackDirToZip(Src, Zip, Empty, Err), 'pack: ' + Err);
+    AssertTrue(ExtractZipToDir(Zip, Dest, Err),
+               'legitimate nested path should extract: ' + Err);
+    AssertTrue(FileExists(JoinPath(JoinPath(JoinPath(JoinPath(Dest,
+                          'workspace'), 'sessions'), 'foo'), 'session.json')),
+               'legitimate file extracted to correct location');
+  finally
+    DeleteFile(Zip);
+    RemoveTree(Src);
+    RemoveTree(Dest);
+  end;
+end;
+
 begin
   Randomize;
   TestSimpleRoundtrip;
@@ -276,5 +425,10 @@ begin
   TestExclusionDenylist;
   TestEmptyDir;
   TestMissingSource;
+  TestRejectsParentTraversal;
+  TestRejectsDeepParentTraversal;
+  TestRejectsAbsolutePath;
+  TestRejectsBackslashTraversal;
+  TestAcceptsLegitimateNested;
   Writeln('ok - build workspace round-trip tests passed');
 end.

@@ -53,18 +53,179 @@ function PackDirToZip(const SrcDir, ZipPath: string;
 implementation
 
 uses
-  SysUtils, Classes,
+  SysUtils, Classes, StrUtils,
   {$IFDEF FPC}
     Zipper
   {$ELSE}
     System.Zip
   {$ENDIF};
 
-function ExtractZipToDir(const ZipPath, DestDir: string;
-                         out ErrMsg: string): Boolean;
+function IsUnsafeMemberName(const Name, AbsDest: string;
+                            out Reason: string): Boolean;
+{ Zip-slip guard. Reject when:
+    1. The archive entry name is empty.
+    2. It starts with a path separator -- absolute POSIX path.
+    3. It looks like a Windows drive (X:\...) or UNC (\\...).
+    4. Any segment is exactly "..".  Paranoid: ExpandFileName below
+       handles arbitrary "../" composition, but a leading-segment
+       reject gives a clearer error.
+    5. The resolved absolute target falls outside AbsDest.  This is
+       the canonical check; ExpandFileName collapses sequences like
+       "foo/../../etc/passwd" so even clever encodings end up at a
+       resolved path the containment test will reject.
+
+  AbsDest must already be the ExpandFileName'd + slash-terminated
+  destination root. Reason is set on rejection so the caller can
+  surface a useful diagnostic. }
+var
+  i: Integer;
+  Norm, AbsTarget, Segment: string;
+  Sep: Char;
+begin
+  Reason := '';
+  Result := True;
+  if Name = '' then
+  begin
+    Reason := 'empty entry name';
+    Exit;
+  end;
+  { Normalise separators so the segment scan + ExpandFileName both
+    see a single canonical form. Zip entries are documented to use
+    '/', but defensive code shouldn't trust that on a malicious input. }
+  Norm := StringReplace(Name, '\', '/', [rfReplaceAll]);
+  if (Norm[1] = '/') then
+  begin
+    Reason := 'absolute path';
+    Exit;
+  end;
+  if (Length(Norm) >= 2) and
+     (((Norm[1] >= 'A') and (Norm[1] <= 'Z')) or
+      ((Norm[1] >= 'a') and (Norm[1] <= 'z'))) and
+     (Norm[2] = ':') then
+  begin
+    Reason := 'Windows drive prefix';
+    Exit;
+  end;
+  if (Length(Norm) >= 2) and (Norm[1] = '/') and (Norm[2] = '/') then
+  begin
+    Reason := 'UNC prefix';
+    Exit;
+  end;
+  Segment := '';
+  for i := 1 to Length(Norm) do
+  begin
+    if Norm[i] = '/' then
+    begin
+      if Segment = '..' then
+      begin
+        Reason := '".." segment';
+        Exit;
+      end;
+      Segment := '';
+    end
+    else
+      Segment := Segment + Norm[i];
+  end;
+  if Segment = '..' then
+  begin
+    Reason := '".." segment';
+    Exit;
+  end;
+
+  { Canonical containment check. PathDelim on the host (Unix uses '/',
+    Windows '\') is what ExpandFileName + filesystem APIs honour, so
+    translate forward slashes to PathDelim before resolving. }
+  Sep := PathDelim;
+  AbsTarget := ExpandFileName(AbsDest +
+    StringReplace(Norm, '/', Sep, [rfReplaceAll]));
+  { Compare prefix using a string-aware case-insensitive match. On
+    POSIX paths are case-sensitive so SameText is overkill but
+    harmless; Windows demands case-insensitive. }
+  if not StartsText(AbsDest, AbsTarget) then
+  begin
+    Reason := Format('resolves outside destination (%s -> %s)',
+                     [Norm, AbsTarget]);
+    Exit;
+  end;
+
+  Result := False;
+end;
+
+function ValidateZipEntries(const ZipPath, AbsDest: string;
+                            out ErrMsg: string): Boolean;
 {$IFDEF FPC}
 var
   UZ: TUnZipper;
+  i: Integer;
+  EntryName, Reason: string;
+begin
+  Result := False;
+  ErrMsg := '';
+  UZ := TUnZipper.Create;
+  try
+    try
+      UZ.FileName := ZipPath;
+      UZ.Examine;
+      for i := 0 to UZ.Entries.Count - 1 do
+      begin
+        EntryName := UZ.Entries[i].ArchiveFileName;
+        if IsUnsafeMemberName(EntryName, AbsDest, Reason) then
+        begin
+          ErrMsg := Format('unsafe zip entry "%s": %s', [EntryName, Reason]);
+          Exit;
+        end;
+      end;
+      Result := True;
+    except
+      on E: Exception do ErrMsg := 'zip scan failed: ' + E.Message;
+    end;
+  finally
+    UZ.Free;
+  end;
+end;
+{$ELSE}
+var
+  Z: TZipFile;
+  i: Integer;
+  EntryName, Reason: string;
+begin
+  Result := False;
+  ErrMsg := '';
+  Z := TZipFile.Create;
+  try
+    try
+      Z.Open(ZipPath, zmRead);
+      try
+        for i := 0 to Z.FileCount - 1 do
+        begin
+          EntryName := Z.FileNames[i];
+          if IsUnsafeMemberName(EntryName, AbsDest, Reason) then
+          begin
+            ErrMsg := Format('unsafe zip entry "%s": %s', [EntryName, Reason]);
+            Exit;
+          end;
+        end;
+        Result := True;
+      finally
+        Z.Close;
+      end;
+    except
+      on E: Exception do ErrMsg := 'zip scan failed: ' + E.Message;
+    end;
+  finally
+    Z.Free;
+  end;
+end;
+{$ENDIF}
+
+function ExtractZipToDir(const ZipPath, DestDir: string;
+                         out ErrMsg: string): Boolean;
+var
+  AbsDest: string;
+{$IFDEF FPC}
+var
+  UZ: TUnZipper;
+{$ENDIF}
 begin
   Result := False;
   ErrMsg := '';
@@ -74,6 +235,20 @@ begin
     ErrMsg := 'cannot create destination directory: ' + DestDir;
     Exit;
   end;
+  { Resolve destination once + slash-terminate so the containment
+    check is byte-prefix-comparable. ExpandFileName on macOS resolves
+    /var -> /private/var and similar symlinks; doing this once up
+    front means every entry resolves into the same realpath space. }
+  AbsDest := IncludeTrailingPathDelimiter(ExpandFileName(DestDir));
+
+  { Validate every entry before letting either backend extract.
+    Zip-slip: a malicious archive with "../../etc/passwd" or absolute-
+    path entries could write outside DestDir under FPC's
+    UnZipAllFiles or Delphi's ExtractZipFile, which neither library
+    rejects. Codex P1 on PR #300. }
+  if not ValidateZipEntries(ZipPath, AbsDest, ErrMsg) then Exit;
+
+{$IFDEF FPC}
   UZ := TUnZipper.Create;
   try
     try
@@ -88,25 +263,15 @@ begin
   finally
     UZ.Free;
   end;
-end;
 {$ELSE}
-begin
-  Result := False;
-  ErrMsg := '';
-  if not FileExists(ZipPath) then begin ErrMsg := 'archive not found'; Exit; end;
-  if not ForceDirectories(DestDir) then
-  begin
-    ErrMsg := 'cannot create destination directory: ' + DestDir;
-    Exit;
-  end;
   try
     TZipFile.ExtractZipFile(ZipPath, DestDir);
     Result := True;
   except
     on E: Exception do ErrMsg := 'unzip failed: ' + E.Message;
   end;
-end;
 {$ENDIF}
+end;
 
 function NameExcluded(const Name: string;
                       const ExcludeNames: array of string): Boolean;
