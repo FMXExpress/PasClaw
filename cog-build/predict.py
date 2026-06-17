@@ -289,19 +289,31 @@ class Predictor(BasePredictor):
             os.makedirs(home_dir, exist_ok=True)
             out_zip_path = os.path.join(scratch, "workspace_out.zip")
 
-            # Pre-seed config.json inside the home dir BEFORE `pasclaw
-            # build` runs. If the input zip also carries one, the
-            # extraction will overwrite ours -- that's fine, the cog
-            # caller's intent ("use the workspace I sent") wins. But
-            # if there's no input zip we need a config so the agent
-            # has provider creds.
-            config_path = os.path.join(home_dir, "config.json")
+            # Write config.json OUTSIDE home_dir and point PasClaw at it
+            # via the PASCLAW_CONFIG env var (PasClaw.Config.GetConfigPath
+            # honours that override and falls back to $PASCLAW_HOME/
+            # config.json only when unset -- backward-compatible for every
+            # other caller).
+            #
+            # Why outside? Two reasons:
+            #   1. The output workspace.zip is everything under PASCLAW_HOME.
+            #      A config.json there would mean API keys bake into the zip
+            #      and travel back to the Replicate caller. Whatever they
+            #      do with the zip (store, share, log) becomes a key-leak
+            #      surface. Keeping config.json in `scratch/` keeps secrets
+            #      in the predict.py process scope.
+            #   2. workspace_in extraction unpacks into PASCLAW_HOME. A
+            #      config.json inside an old workspace zip would clobber
+            #      the fresh API keys this call was given -- silently
+            #      keeping the previous run's provider/model/auth.
+            config_path = os.path.join(scratch, "config.json")
             import json as _json
             with open(config_path, "w") as f:
                 _json.dump(config_data, f, indent=2)
 
             env = os.environ.copy()
-            env["PASCLAW_HOME"] = home_dir
+            env["PASCLAW_HOME"]   = home_dir
+            env["PASCLAW_CONFIG"] = config_path
 
             cmd = [
                 self.binary_path, "build",

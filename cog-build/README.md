@@ -54,7 +54,6 @@ for step in range(20):
 Everything under `$PASCLAW_HOME` ships back:
 
 ```
-config.json
 workspace/
 ├── memory/MEMORY.md           ← rules + scars carry forward
 ├── kb.db                      ← knowledgebase
@@ -73,6 +72,17 @@ A small denylist (`pasclaw build` enforces) keeps surrounding-repo noise out:
 - `kb.db-journal` (SQLite WAL, regenerated)
 
 Everything else — tmp files, log dumps, kb-files binaries — does ship. The whole point of the handshake is "preserve the entire brain".
+
+### What does NOT ship: `config.json` (API keys)
+
+`config.json` is deliberately kept **outside** `$PASCLAW_HOME` so it never ends up in `workspace.zip`:
+
+- The predictor writes it to a sibling scratch dir and sets `PASCLAW_CONFIG` so PasClaw finds it there.
+- API keys stay in the predict.py process scope.
+- A `workspace_in.zip` from a prior run can't clobber the fresh API keys this call was given.
+- The output `workspace.zip` is provider-agnostic — safe to log, share, or store anywhere the rest of the workspace already goes.
+
+Backward-compatible with every other `pasclaw` caller: when `PASCLAW_CONFIG` is unset (the normal case for CLI / TUI / gateway users), `GetConfigPath` falls back to `$PASCLAW_HOME/config.json` exactly as it did before.
 
 ## Size cap
 
