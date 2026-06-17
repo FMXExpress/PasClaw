@@ -64,6 +64,11 @@ interface
 
 function Cmd_Build_Run(const Argv: array of string): Integer;
 
+{ Exposed for the cross-process-uniqueness regression test.  Creates
+  a uniquely-named directory under the OS temp root and returns its
+  full path.  GUID-derived, race-free across parallel processes. }
+function MakeUniqueTempDir(const NamePrefix: string): string;
+
 const
   { 4 GiB hard cap on the input zip. Replicate's container limits and
     network timeouts are the real bound; the cap is here so a runaway
@@ -82,6 +87,7 @@ implementation
 uses
   SysUtils, Classes,
   {$IFDEF MSWINDOWS}Windows,{$ENDIF}
+  {$IFNDEF FPC}System.IOUtils,{$ENDIF}
   PasClaw.CliUI,
   PasClaw.Logger,
   PasClaw.Utils,
@@ -105,6 +111,59 @@ begin
   {$IFDEF MSWINDOWS}
   Windows.SetEnvironmentVariable(PChar(Name), PChar(Value));
   {$ENDIF}
+end;
+
+function PlatformTempRoot: string;
+{ FPC has SysUtils.GetTempDir(Global: Boolean) -- which Delphi
+  doesn't define at all. Wrap once so the rest of the file stays
+  legible. Delphi side goes through System.IOUtils.TPath. }
+begin
+  {$IFDEF FPC}
+  Result := GetTempDir(False);
+  {$ELSE}
+  Result := TPath.GetTempPath;
+  {$ENDIF}
+end;
+
+function MakeUniqueTempDir(const NamePrefix: string): string;
+{ Atomically create a uniquely-named tempdir under PlatformTempRoot.
+
+  Why not Randomize + Random? Codex P2 on PR #301: SysUtils.Randomize
+  seeds from the system clock, so two `pasclaw build` processes
+  started inside the same second produce identical Random(MaxInt)
+  sequences. ForceDirectories accepts a pre-existing dir, which
+  would let both processes silently share one $PASCLAW_HOME; the
+  first to exit's RemoveTree(Home) then nukes the other's
+  in-progress state.
+
+  CreateGUID is backed by OS entropy (UuidCreate on Windows,
+  /dev/urandom on Linux) on both FPC and Delphi, so the 128-bit
+  random component is genuinely unique across processes. CreateDir
+  (not ForceDirectories) fails on collision -- the retry loop
+  handles the cosmically-unlikely event that some other tool
+  pre-created the name, plus the (also unlikely) CreateGUID
+  failure on systems with no entropy source. }
+var
+  G: TGUID;
+  Hex: string;
+  Attempt: Integer;
+begin
+  Result := '';
+  for Attempt := 1 to 8 do
+  begin
+    if CreateGUID(G) <> 0 then Continue;
+    Hex := GUIDToString(G);
+    (* GUIDToString returns the canonical brace-wrapped dashed form;
+       strip braces + dashes for a cleaner directory name. *)
+    Hex := StringReplace(Hex, '{', '', [rfReplaceAll]);
+    Hex := StringReplace(Hex, '}', '', [rfReplaceAll]);
+    Hex := StringReplace(Hex, '-', '', [rfReplaceAll]);
+    Result := JoinPath(PlatformTempRoot, NamePrefix + '_' + Hex);
+    if SysUtils.CreateDir(Result) then Exit;
+  end;
+  raise Exception.CreateFmt(
+    'could not create unique tempdir under %s after 8 attempts',
+    [PlatformTempRoot]);
 end;
 
 type
@@ -278,26 +337,36 @@ begin
     Result := Env;
     Exit;
   end;
-  Result := JoinPath(GetTempDir(False),
-                     'pasclaw_build_' + IntToStr(GetProcessID) + '_' +
-                     IntToStr(Random(MaxInt)));
+  { Tempdir fallback.  MakeUniqueTempDir creates the directory
+    atomically with GUID-derived uniqueness, so parallel `pasclaw
+    build` processes never share one $PASCLAW_HOME (Codex P2 on
+    PR #301). }
+  Result := MakeUniqueTempDir('pasclaw_build');
   IsTemp := True;
 end;
 
 procedure RemoveTree(const Path: string);
 { Best-effort rm -rf. Survives transient lock failures by ignoring
   errors -- the OS reclaims the tempdir on next boot if we miss
-  anything. }
+  anything.
+
+  SysUtils. qualification is load-bearing here: when the Windows
+  unit is in scope (we need it for SetEnvironmentVariable above)
+  it shadows DeleteFile / FindClose / FindFirst / FindNext /
+  FileExists with PWideChar / THandle signatures that don't match
+  the SysUtils.TSearchRec helpers. Without the qualification dcc64
+  fires E2010 PWideChar/string + E2010 UInt64/TSearchRec. }
 var
-  SR: TSearchRec;
+  SR: SysUtils.TSearchRec;
   Child: string;
 begin
-  if (Path = '') or (not DirectoryExists(Path)) then
+  if (Path = '') or (not SysUtils.DirectoryExists(Path)) then
   begin
-    if FileExists(Path) then DeleteFile(Path);
+    if SysUtils.FileExists(Path) then SysUtils.DeleteFile(Path);
     Exit;
   end;
-  if FindFirst(JoinPath(Path, '*'), faAnyFile or faDirectory, SR) = 0 then
+  if SysUtils.FindFirst(JoinPath(Path, '*'),
+                        faAnyFile or faDirectory, SR) = 0 then
   try
     repeat
       if (SR.Name = '.') or (SR.Name = '..') then Continue;
@@ -305,23 +374,23 @@ begin
       if (SR.Attr and faDirectory) <> 0 then
         RemoveTree(Child)
       else
-        DeleteFile(Child);
-    until FindNext(SR) <> 0;
+        SysUtils.DeleteFile(Child);
+    until SysUtils.FindNext(SR) <> 0;
   finally
-    FindClose(SR);
+    SysUtils.FindClose(SR);
   end;
-  RemoveDir(Path);
+  SysUtils.RemoveDir(Path);
 end;
 
 function GetFileSize(const Path: string): Int64;
 var
-  SR: TSearchRec;
+  SR: SysUtils.TSearchRec;
 begin
   Result := -1;
-  if FindFirst(Path, faAnyFile, SR) = 0 then
+  if SysUtils.FindFirst(Path, faAnyFile, SR) = 0 then
   begin
     Result := SR.Size;
-    FindClose(SR);
+    SysUtils.FindClose(SR);
   end;
 end;
 
@@ -399,7 +468,7 @@ begin
       { 1. Unzip in. }
       if A.WorkspaceIn <> '' then
       begin
-        if not FileExists(A.WorkspaceIn) then
+        if not SysUtils.FileExists(A.WorkspaceIn) then
         begin
           PrintErr('build: workspace-in not found: ' + A.WorkspaceIn);
           Exit(1);
