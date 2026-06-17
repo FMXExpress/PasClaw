@@ -13,39 +13,44 @@ Sibling to [`/cog/`](../cog/), which runs the simpler one-shot `pasclaw agent` f
 | `timeout_seconds` | int | 3600 | Subprocess timeout (Replicate's container ceiling applies on top) |
 | `workspace_in` | `Optional[Path]` | None | *Optional.* Workspace archive from a previous build. Cog handles both upload + URL via Path. Leave empty for a fresh run. |
 | `workspace_in_url` | str | "" | *Optional.* Explicit URL — downloaded via [`pget`](https://github.com/replicate/pget) for parallelism. Wins over `workspace_in` when set. |
-| `openai_api_key` / `anthropic_api_key` / `gemini_api_key` / `groq_api_key` / `openrouter_api_key` / `deepseek_api_key` | str | "" | Provider creds — same shape as `/cog/`. |
+| `openai_api_key` / `anthropic_api_key` / `gemini_api_key` / `groq_api_key` / `openrouter_api_key` / `deepseek_api_key` | `Optional[Secret]` | None | Provider creds. [Cog Secret inputs](https://replicate.com/changelog/2024-06-07-secret-inputs-for-models) — stored encrypted on Replicate, masked in the UI, never appear in prediction-input logs. Supply at least one. |
 | `provider`, `model` | str | "" | Override which provider / model is used. Empty = first key wins. |
 
 ## Outputs
 
-A pydantic `BaseModel`:
+A list of **two file URLs** in this order:
 
 ```jsonc
-{
-  "workspace": "<Path to workspace_out.zip>",
-  "text":      "<model's final reply, same as `pasclaw agent -q`>"
-}
+[
+  "https://replicate.delivery/.../workspace_out_xxxx.zip",  // [0] new PASCLAW_HOME archive
+  "https://replicate.delivery/.../reply_out_xxxx.txt"       // [1] model's final reply text
+]
 ```
 
-The `text` field lets the caller decide whether to feed the workspace back for another round. Typical control-loop:
+Why a list of two URLs instead of a `BaseModel(workspace: Path, text: str)`? Cog's nested-Path upload path was unreliable in some runtime versions — the workspace zip came back base64-encoded inline instead of as a CDN URL. `List[Path]` gets uploaded reliably.
+
+The reply text lives in a tiny `.txt` file so the caller can fetch it with one HTTP GET to decide whether to continue. Typical control loop:
 
 ```python
 import replicate
+import requests
 
-ws = None
+ws_url = None
 for step in range(20):
     out = replicate.run(
         "owner/pasclaw-build",
         input={
             "message": "implement issue #42",
             "max_iters": 30,
-            "workspace_in_url": ws,        # None on the first call
-            "anthropic_api_key": KEY,
+            "workspace_in_url": ws_url,    # None on the first call
+            "anthropic_api_key": KEY,      # passed as a Secret
         },
     )
-    ws = out["workspace"]
-    print(out["text"])
-    if "DONE" in out["text"]:
+    ws_url    = out[0]                     # workspace zip URL
+    reply_url = out[1]                     # reply text URL
+    reply     = requests.get(reply_url).text
+    print(reply)
+    if "DONE" in reply:
         break
 ```
 

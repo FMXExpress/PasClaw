@@ -3,35 +3,44 @@ PasClaw BUILD cog: multi-iteration agent run with workspace.zip handshake.
 
 Inputs
 ------
-  message          : str  -- the build task ("add a --foo flag", "port X to Y", ...)
-  max_iters        : int  -- tool-loop iteration budget (default 50)
-  timeout_seconds  : int  -- subprocess timeout (default 3600 = 1 h)
-  workspace_in     : Path -- optional zip from a previous build. Replicate
-                             materialises HTTP URLs and direct uploads via the
-                             Path type; large URL-backed inputs are fetched
-                             through pget for parallelism.
-  workspace_in_url : str  -- explicit URL form. When set, takes precedence
-                             over `workspace_in` and is downloaded with pget.
-                             Useful when the caller already has the file in
-                             cloud storage and wants the fastest fetch path.
-  provider, model, ... API keys -- same shape as the sibling /cog/ predictor.
+  message            : str         -- the build task ("add a --foo flag", ...)
+  max_iters          : int         -- tool-loop iteration budget (default 50)
+  timeout_seconds    : int         -- subprocess timeout (default 3600 = 1 h)
+  workspace_in       : Path?       -- previous-build workspace archive. Cog
+                                      handles both upload and URL via Path.
+                                      Optional -- leave empty for a fresh run.
+  workspace_in_url   : str         -- explicit URL form. When set, takes
+                                      precedence over `workspace_in` and is
+                                      downloaded with pget for parallelism.
+  *_api_key          : Secret?     -- provider credentials. Cog Secret inputs
+                                      (https://replicate.com/changelog/
+                                      2024-06-07-secret-inputs-for-models)
+                                      so keys are stored encrypted and never
+                                      surface in the prediction's input log.
+  provider, model    : str         -- same as the sibling /cog/ predictor.
 
-Outputs
--------
-A pydantic BaseModel with two fields:
-  workspace : Path -- the new workspace.zip (full PASCLAW_HOME, includes
-                       memory/, sessions/, kb.db, checkpoints/<id>/archive.zpaq,
-                       skills/, plus whatever files the agent wrote into cwd).
-                       Caller passes this back as `workspace_in` next call to
-                       continue building on top of the prior state.
-  text      : str  -- the model's final reply, stdout-captured from
-                       `pasclaw build`. Same shape as `pasclaw agent -q`.
-                       Useful for deciding whether to feed the workspace
-                       back in for another build pass.
+Output
+------
+A list with exactly two file URLs:
+  [0] workspace_<random>.zip  -- new PASCLAW_HOME archive. Caller passes
+                                  this back as `workspace_in` (or
+                                  `workspace_in_url`) next call to continue
+                                  building on top of prior state.
+  [1] reply_<random>.txt      -- the model's final reply, stdout-captured
+                                  from `pasclaw build`. Same shape as
+                                  `pasclaw agent -q`. A single HTTP GET
+                                  fetches the body for the next-call
+                                  decision.
+
+We deliberately do NOT use a Pydantic BaseModel output with `workspace: Path`
++ `text: str`. Cog's nested-Path upload path was flaky in older runtimes
+(see https://github.com/replicate/cog issues around BaseModel + Path) and
+fell back to base64-encoding the workspace zip inline.  List[Path] gets
+uploaded reliably -- each entry becomes a CDN URL.
 
 Notes
 -----
-- Workspace cap: 4 GiB. Replicate timeouts the upload before that anyway,
+- Workspace cap: 4 GiB.  Replicate timeouts the upload before that anyway,
   but we fail fast with a clean error if a runaway caller hands us one.
 - Everything in PASCLAW_HOME ships back -- tmp/, logs, kb-files/*.bin --
   because the point of the handshake is "ship the whole brain". The
@@ -39,6 +48,9 @@ Notes
   Thumbs.db, kb.db-journal) to keep zip-build noise out.
 - `pget` is invoked for explicit URL inputs only; cog's Path handles
   the regular upload + URL paths transparently.
+- `pasclaw build` is passed `-q` so the ASCII banner is suppressed and
+  reply.txt contains only the model's final message text.
+- API keys are Secret inputs so Replicate's UI and logs mask them.
 """
 
 import os
@@ -46,9 +58,9 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
-from typing import Optional
+from typing import List, Optional
 
-from cog import BasePredictor, BaseModel, Input, Path
+from cog import BasePredictor, BaseModel, Input, Path, Secret
 
 
 # 4 GiB. Mirror the Pascal-side cap in PasClaw.Cmd.Build's
@@ -56,9 +68,17 @@ from cog import BasePredictor, BaseModel, Input, Path
 WORKSPACE_ZIP_CAP_BYTES = 4 * 1024 * 1024 * 1024
 
 
-class Output(BaseModel):
-    workspace: Path
-    text: str
+def _secret_str(s: Optional[Secret]) -> str:
+    """Extract the cleartext value from an Optional[Secret] input.
+
+    Cog's Secret type wraps Pydantic SecretStr; .get_secret_value() returns
+    the underlying string. None inputs (operator left the field blank)
+    become empty strings so the rest of the predictor's "if key:" logic
+    doesn't need to special-case None.
+    """
+    if s is None:
+        return ""
+    return s.get_secret_value()
 
 
 class Predictor(BasePredictor):
@@ -167,12 +187,30 @@ class Predictor(BasePredictor):
             "over workspace_in.",
             default="",
         ),
-        openai_api_key: str = Input(default="", description="Optional"),
-        anthropic_api_key: str = Input(default="", description="Optional"),
-        gemini_api_key: str = Input(default="", description="Optional"),
-        groq_api_key: str = Input(default="", description="Optional"),
-        openrouter_api_key: str = Input(default="", description="Optional"),
-        deepseek_api_key: str = Input(default="", description="Optional"),
+        openai_api_key: Optional[Secret] = Input(
+            description="OpenAI API key. Stored encrypted; never surfaces in logs.",
+            default=None,
+        ),
+        anthropic_api_key: Optional[Secret] = Input(
+            description="Anthropic API key. Stored encrypted; never surfaces in logs.",
+            default=None,
+        ),
+        gemini_api_key: Optional[Secret] = Input(
+            description="Google Gemini API key. Stored encrypted; never surfaces in logs.",
+            default=None,
+        ),
+        groq_api_key: Optional[Secret] = Input(
+            description="Groq API key. Stored encrypted; never surfaces in logs.",
+            default=None,
+        ),
+        openrouter_api_key: Optional[Secret] = Input(
+            description="OpenRouter API key. Stored encrypted; never surfaces in logs.",
+            default=None,
+        ),
+        deepseek_api_key: Optional[Secret] = Input(
+            description="DeepSeek API key. Stored encrypted; never surfaces in logs.",
+            default=None,
+        ),
         provider: str = Input(
             default="",
             description="LLM provider (openai/anthropic/gemini/groq/openrouter/deepseek). "
@@ -182,21 +220,21 @@ class Predictor(BasePredictor):
             default="",
             description="Override model id. Empty = provider's catalog default.",
         ),
-    ) -> Output:
+    ) -> List[Path]:
         """
-        Run `pasclaw build` with the configured provider against the
-        unzipped workspace, then ship the resulting PASCLAW_HOME back
-        as workspace.zip alongside the model's final reply text.
+        Run `pasclaw build` against the unzipped workspace, then ship the
+        resulting PASCLAW_HOME back as workspace_out.zip and the model's
+        final reply as reply.txt -- both as separate file URLs.
         """
 
         # --- validate inputs ---
         keys = {
-            "openai": openai_api_key,
-            "anthropic": anthropic_api_key,
-            "gemini": gemini_api_key,
-            "groq": groq_api_key,
-            "openrouter": openrouter_api_key,
-            "deepseek": deepseek_api_key,
+            "openai":     _secret_str(openai_api_key),
+            "anthropic":  _secret_str(anthropic_api_key),
+            "gemini":     _secret_str(gemini_api_key),
+            "groq":       _secret_str(groq_api_key),
+            "openrouter": _secret_str(openrouter_api_key),
+            "deepseek":   _secret_str(deepseek_api_key),
         }
         available_providers = [p for p, k in keys.items() if k]
         if not available_providers:
@@ -260,19 +298,12 @@ class Predictor(BasePredictor):
 
         # --- workspace handshake setup ---
 
-        # Two scratch dirs: one for the (possibly pget-downloaded) input
-        # zip, one for the output zip. PASCLAW_HOME is created and
-        # managed by `pasclaw build` itself.
         with tempfile.TemporaryDirectory(prefix="pasclaw_build_cog_") as scratch:
 
             in_zip = self._resolve_workspace_in(
                 workspace_in, workspace_in_url, scratch
             )
 
-            # Size cap check (mirrors the Pascal-side
-            # PASCLAW_WORKSPACE_ZIP_CAP). Replicate's upload+container
-            # limits would catch this too but we fail fast with a
-            # clean error message.
             if in_zip is not None:
                 size = os.path.getsize(in_zip)
                 if size > WORKSPACE_ZIP_CAP_BYTES:
@@ -292,22 +323,9 @@ class Predictor(BasePredictor):
             out_zip_path = os.path.join(scratch, "workspace_out.zip")
 
             # Write config.json OUTSIDE home_dir and point PasClaw at it
-            # via the PASCLAW_CONFIG env var (PasClaw.Config.GetConfigPath
-            # honours that override and falls back to $PASCLAW_HOME/
-            # config.json only when unset -- backward-compatible for every
-            # other caller).
-            #
-            # Why outside? Two reasons:
-            #   1. The output workspace.zip is everything under PASCLAW_HOME.
-            #      A config.json there would mean API keys bake into the zip
-            #      and travel back to the Replicate caller. Whatever they
-            #      do with the zip (store, share, log) becomes a key-leak
-            #      surface. Keeping config.json in `scratch/` keeps secrets
-            #      in the predict.py process scope.
-            #   2. workspace_in extraction unpacks into PASCLAW_HOME. A
-            #      config.json inside an old workspace zip would clobber
-            #      the fresh API keys this call was given -- silently
-            #      keeping the previous run's provider/model/auth.
+            # via the PASCLAW_CONFIG env var so API keys never enter the
+            # output workspace.zip.  See the in-source comment for the
+            # full rationale.
             config_path = os.path.join(scratch, "config.json")
             import json as _json
             with open(config_path, "w") as f:
@@ -317,8 +335,13 @@ class Predictor(BasePredictor):
             env["PASCLAW_HOME"]   = home_dir
             env["PASCLAW_CONFIG"] = config_path
 
+            # NOTE: `-q` is forwarded so the early-exit banner scan in
+            # PasClaw.dpr's IsQuietInvocation skips PrintBanner.
+            # Without it, the ASCII PASCLAW banner ends up in
+            # result.stdout and pollutes reply.txt.
             cmd = [
                 self.binary_path, "build",
+                "-q",
                 "-d", message,
                 "--max-iters", str(max_iters),
                 "--home", home_dir,
@@ -362,16 +385,41 @@ class Predictor(BasePredictor):
                     "(build flag missed? out path unwritable?)."
                 )
 
-            # Move the output zip to a path Replicate will keep alive
-            # past the TemporaryDirectory cleanup. cog's Output Path
-            # serialiser copies it out as the prediction completes.
-            persist = tempfile.NamedTemporaryFile(
+            # --- persist both outputs outside scratch ---
+            #
+            # Cog reads the returned Path values AFTER predict() returns,
+            # which is AFTER the `with TemporaryDirectory` cleanup. Any
+            # file still inside `scratch/` at that point has already been
+            # unlinked, and Cog's serializer fails with:
+            #
+            #   "Failed to read FileOutput ... No such file or directory"
+            #
+            # The fix is to shutil.move both files to NamedTemporaryFile
+            # paths (delete=False) before returning.
+
+            # 1. Workspace zip
+            persist_workspace = tempfile.NamedTemporaryFile(
                 suffix=".zip", delete=False, prefix="workspace_out_"
             )
-            persist.close()
-            shutil.move(out_zip_path, persist.name)
+            persist_workspace.close()
+            shutil.move(out_zip_path, persist_workspace.name)
 
-            return Output(
-                workspace=Path(persist.name),
-                text=text_out,
+            # 2. Reply text. Always write something so the file is never
+            #    zero-bytes -- some Cog runtimes silently skip empty
+            #    file uploads, leaving the caller with a one-element
+            #    output list.
+            inner_reply = os.path.join(scratch, "reply.txt")
+            with open(inner_reply, "w") as f:
+                f.write(text_out or
+                        "(no reply text captured -- the agent finished "
+                        "without a terminating model message; check "
+                        "workspace/sessions/<id>.json for tool-call "
+                        "history)")
+
+            persist_reply = tempfile.NamedTemporaryFile(
+                suffix=".txt", delete=False, prefix="reply_out_"
             )
+            persist_reply.close()
+            shutil.move(inner_reply, persist_reply.name)
+
+            return [Path(persist_workspace.name), Path(persist_reply.name)]
