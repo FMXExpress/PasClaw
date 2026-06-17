@@ -35,7 +35,7 @@ A list with exactly two file URLs:
 We deliberately do NOT use a Pydantic BaseModel output with `workspace: Path`
 + `text: str`. Cog's nested-Path upload path was flaky in older runtimes
 (see https://github.com/replicate/cog issues around BaseModel + Path) and
-fell back to base64-encoding the workspace zip inline.  List[Path] gets
+fell back to base64-encoding the workspace zip inline.  `list[Path]` gets
 uploaded reliably -- each entry becomes a CDN URL.
 
 Notes
@@ -58,7 +58,7 @@ import shutil
 import subprocess
 import tempfile
 import zipfile
-from typing import List, Optional
+from typing import Optional
 
 from cog import BasePredictor, BaseModel, Input, Path, Secret
 
@@ -220,7 +220,7 @@ class Predictor(BasePredictor):
             default="",
             description="Override model id. Empty = provider's catalog default.",
         ),
-    ) -> List[Path]:
+    ) -> list[Path]:
         """
         Run `pasclaw build` against the unzipped workspace, then ship the
         resulting PASCLAW_HOME back as workspace_out.zip and the model's

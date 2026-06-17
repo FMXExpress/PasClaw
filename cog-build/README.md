@@ -27,7 +27,7 @@ A list of **two file URLs** in this order:
 ]
 ```
 
-Why a list of two URLs instead of a `BaseModel(workspace: Path, text: str)`? Cog's nested-Path upload path was unreliable in some runtime versions — the workspace zip came back base64-encoded inline instead of as a CDN URL. `List[Path]` gets uploaded reliably.
+Why a list of two URLs instead of a `BaseModel(workspace: Path, text: str)`? Cog's nested-Path upload path was unreliable in some runtime versions — the workspace zip came back base64-encoded inline instead of as a CDN URL. `list[Path]` gets uploaded reliably.
 
 The reply text lives in a tiny `.txt` file so the caller can fetch it with one HTTP GET to decide whether to continue. Typical control loop:
 
