@@ -11,8 +11,8 @@ Sibling to [`/cog/`](../cog/), which runs the simpler one-shot `pasclaw agent` f
 | `message` | str | — | The build task ("add X", "port Y to Z", …) |
 | `max_iters` | int | 50 | Tool-loop iteration budget |
 | `timeout_seconds` | int | 3600 | Subprocess timeout (Replicate's container ceiling applies on top) |
-| `workspace_in` | Path | None | Workspace.zip from a previous build. Cog handles both upload + URL via Path |
-| `workspace_in_url` | str | "" | Explicit URL — downloaded via [`pget`](https://github.com/replicate/pget) for parallelism. Wins over `workspace_in` when set. |
+| `workspace_in` | `Optional[Path]` | None | *Optional.* Workspace archive from a previous build. Cog handles both upload + URL via Path. Leave empty for a fresh run. |
+| `workspace_in_url` | str | "" | *Optional.* Explicit URL — downloaded via [`pget`](https://github.com/replicate/pget) for parallelism. Wins over `workspace_in` when set. |
 | `openai_api_key` / `anthropic_api_key` / `gemini_api_key` / `groq_api_key` / `openrouter_api_key` / `deepseek_api_key` | str | "" | Provider creds — same shape as `/cog/`. |
 | `provider`, `model` | str | "" | Override which provider / model is used. Empty = first key wins. |
 
