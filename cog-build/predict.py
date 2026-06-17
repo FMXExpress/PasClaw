@@ -152,16 +152,18 @@ class Predictor(BasePredictor):
             "container ceiling on top of this.",
             default=3600, ge=30, le=24 * 3600,
         ),
-        workspace_in: Path = Input(
-            description="Optional workspace.zip from a previous build. "
-            "Replicate handles both file-uploads and URL inputs through "
-            "this. For very large URL-backed workspaces, prefer "
-            "workspace_in_url to get parallel pget download.",
+        workspace_in: Optional[Path] = Input(
+            description="Workspace archive from a previous build. "
+            "Leave empty for a fresh run. Replicate handles both "
+            "file-uploads and URL inputs through this. For very "
+            "large URL-backed workspaces, prefer workspace_in_url "
+            "to get parallel pget download.",
             default=None,
         ),
         workspace_in_url: str = Input(
-            description="Optional explicit URL to a workspace.zip. When "
-            "set, downloaded via pget for parallelism; takes precedence "
+            description="Explicit URL to a previous-build workspace "
+            "archive. Leave empty for a fresh run. When set, "
+            "downloaded via pget for parallelism; takes precedence "
             "over workspace_in.",
             default="",
         ),
