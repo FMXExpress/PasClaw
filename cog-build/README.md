@@ -13,41 +13,90 @@ Sibling to [`/cog/`](../cog/), which runs the simpler one-shot `pasclaw agent` f
 | `timeout_seconds` | int | 3600 | Subprocess timeout (Replicate's container ceiling applies on top) |
 | `workspace_in` | `Optional[Path]` | None | *Optional.* Workspace archive from a previous build. Cog handles both upload + URL via Path. Leave empty for a fresh run. |
 | `workspace_in_url` | str | "" | *Optional.* Explicit URL — downloaded via [`pget`](https://github.com/replicate/pget) for parallelism. Wins over `workspace_in` when set. |
-| `openai_api_key` / `anthropic_api_key` / `gemini_api_key` / `groq_api_key` / `openrouter_api_key` / `deepseek_api_key` | str | "" | Provider creds — same shape as `/cog/`. |
-| `provider`, `model` | str | "" | Override which provider / model is used. Empty = first key wins. |
+| `openai_api_key` / `anthropic_api_key` / `gemini_api_key` / `groq_api_key` / `openrouter_api_key` / `deepseek_api_key` | `Optional[Secret]` | None | Cloud-provider creds. [Cog Secret inputs](https://replicate.com/changelog/2024-06-07-secret-inputs-for-models) — stored encrypted on Replicate, masked in the UI, never appear in prediction-input logs. |
+| `ollama_url` / `lmstudio_url` / `vllm_url` | str | "" | Base URL of a self-hosted OpenAI-compatible server reachable from the cog container (ngrok / Cloudflare Tunnel / Tailscale Funnel / public IP). No API key — PasClaw uses `asNone` auth for these. |
+| `custom_provider_kind` | str | "" | Catalog kind for any OpenAI-compatible provider not surfaced as a dedicated input: `mistral`, `xai`, `cerebras`, `moonshot`, `qwen`, `zhipu`, `perplexity`, `nvidia`, `volcengine`, `minimax`, `novita`, `litellm`, `mimo`, or `openai-compat` for an in-house gateway. |
+| `custom_provider_url` | str | "" | `api_base` URL for the custom provider. Required when `custom_provider_kind` is set. |
+| `custom_provider_key` | `Optional[Secret]` | None | API key for the custom provider. Leave empty if the endpoint needs no auth. |
+| `custom_provider_model` | str | "" | Default model id for the custom provider. |
+| `provider` | str | "" | Route through this provider name. Any of the cloud names above, `ollama` / `lmstudio` / `vllm`, or whatever's in `custom_provider_kind`. Empty = first configured provider wins. |
+| `model` | str | "" | Override the model id. Empty = provider's catalog default (or whatever the local server is currently serving). |
+
+**At least one provider must be configured** — either a cloud API key, a local-server URL, or the `custom_provider_*` set.
 
 ## Outputs
 
-A pydantic `BaseModel`:
+A list of **two file URLs** in this order:
 
 ```jsonc
-{
-  "workspace": "<Path to workspace_out.zip>",
-  "text":      "<model's final reply, same as `pasclaw agent -q`>"
-}
+[
+  "https://replicate.delivery/.../workspace_out_xxxx.zip",  // [0] new PASCLAW_HOME archive
+  "https://replicate.delivery/.../reply_out_xxxx.txt"       // [1] model's final reply text
+]
 ```
 
-The `text` field lets the caller decide whether to feed the workspace back for another round. Typical control-loop:
+Why a list of two URLs instead of a `BaseModel(workspace: Path, text: str)`? Cog's nested-Path upload path was unreliable in some runtime versions — the workspace zip came back base64-encoded inline instead of as a CDN URL. `list[Path]` gets uploaded reliably.
+
+The reply text lives in a tiny `.txt` file so the caller can fetch it with one HTTP GET to decide whether to continue. Typical control loop:
 
 ```python
 import replicate
+import requests
 
-ws = None
+ws_url = None
 for step in range(20):
     out = replicate.run(
         "owner/pasclaw-build",
         input={
             "message": "implement issue #42",
             "max_iters": 30,
-            "workspace_in_url": ws,        # None on the first call
-            "anthropic_api_key": KEY,
+            "workspace_in_url": ws_url,    # None on the first call
+            "anthropic_api_key": KEY,      # passed as a Secret
         },
     )
-    ws = out["workspace"]
-    print(out["text"])
-    if "DONE" in out["text"]:
+    ws_url    = out[0]                     # workspace zip URL
+    reply_url = out[1]                     # reply text URL
+    reply     = requests.get(reply_url).text
+    print(reply)
+    if "DONE" in reply:
         break
 ```
+
+## Using a local LLM server (Ollama / LM Studio / vLLM)
+
+PasClaw's catalog has entries for `ollama`, `lmstudio`, and `vllm`. They default to `localhost:11434` / `localhost:1234` / `localhost:8000`, which makes sense on a developer laptop running `pasclaw tui` — but on Replicate, "localhost" is the cog container, not your machine.
+
+To route a build through your own GPU, expose the local server via a publicly-reachable URL:
+
+```sh
+# Ollama on your laptop
+ollama serve &
+ngrok http 11434
+
+# LM Studio on a desktop
+# (LM Studio's "Local Server" tab; default port 1234)
+ngrok http 1234
+
+# vLLM on a cloud box
+vllm serve meta-llama/Llama-3.1-8B-Instruct --host 0.0.0.0 --port 8000
+# point cog at http://that-box.example.com:8000
+```
+
+Then pass the tunnel URL as `ollama_url=https://abc-xyz.ngrok-free.app` (or the equivalent input). No API key needed — these endpoints use `asNone` auth in PasClaw's catalog.
+
+## Using any other PasClaw catalog provider
+
+Twelve catalog entries that aren't surfaced as dedicated inputs — `mistral`, `xai`, `cerebras`, `moonshot`, `qwen`, `zhipu`, `perplexity`, `nvidia`, `volcengine`, `minimax`, `novita`, `litellm`, `mimo` — are reachable via the generic escape hatch:
+
+```python
+custom_provider_kind  = "mistral"
+custom_provider_url   = "https://api.mistral.ai"
+custom_provider_key   = "secret-key-here"
+custom_provider_model = "mistral-large-latest"
+provider              = "mistral"   # tell pasclaw to route through this one
+```
+
+The `kind` value goes straight into PasClaw's `NormalizeProviderKind`, so the catalog's existing protocol/auth handling kicks in unchanged. For any OpenAI-compatible endpoint **not** in the catalog (your own gateway, a brand-new provider PasClaw hasn't caught up with), use `kind = "openai-compat"` — `NormalizeProviderKind` aliases it to `openai`.
 
 ## Workspace contents
 
