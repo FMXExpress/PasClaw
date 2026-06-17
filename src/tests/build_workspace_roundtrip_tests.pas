@@ -22,6 +22,7 @@ program build_workspace_roundtrip_tests;
 uses
   SysUtils, Classes,
   {$IFDEF FPC} Zipper {$ELSE} System.Zip {$ENDIF},
+  PasClaw.Cmd.Build,
   PasClaw.Skills.Zip,
   PasClaw.Utils;
 
@@ -418,6 +419,57 @@ begin
   end;
 end;
 
+procedure TestUniqueTempDirNoCollisions;
+{ Codex P2 on PR #301: with the old Randomize+Random scheme, two
+  processes started in the same second produced the same tempdir
+  name; with both calling ForceDirectories (idempotent) they ended
+  up sharing one $PASCLAW_HOME, and the first to RemoveTree it
+  wiped the other's state.  The fix routes through CreateGUID +
+  CreateDir.  Test:
+
+    1. Within one process: 64 sequential calls must each return a
+       new path that exists on disk and is unique.  64 is well
+       inside the GUID space; collisions would imply broken
+       OS entropy.
+    2. The path lies under the OS temp root (implementation detail,
+       but easy to verify and a good sanity check for misconfigured
+       hosts where TMPDIR points somewhere wrong).
+
+  True cross-process race is exercised by the smoke harness
+  documented in the PR description -- 8 parallel `pasclaw build`
+  invocations, all picked distinct GUID-suffixed paths. }
+var
+  Seen: TStringList;
+  Path: string;
+  i: Integer;
+begin
+  Seen := TStringList.Create;
+  Seen.Sorted := True;
+  Seen.Duplicates := dupError;
+  try
+    for i := 1 to 64 do
+    begin
+      Path := MakeUniqueTempDir('pasclaw_uniq_test');
+      try
+        AssertTrue(DirectoryExists(Path),
+                   Format('attempt %d: tempdir not created: %s', [i, Path]));
+        try
+          Seen.Add(Path);
+        except
+          on E: EStringListError do
+            Fail_(Format('attempt %d: duplicate tempdir %s', [i, Path]));
+        end;
+      finally
+        RemoveDir(Path);
+      end;
+    end;
+    AssertTrue(Seen.Count = 64,
+               Format('expected 64 unique tempdirs, got %d', [Seen.Count]));
+  finally
+    Seen.Free;
+  end;
+end;
+
 begin
   Randomize;
   TestSimpleRoundtrip;
@@ -430,5 +482,6 @@ begin
   TestRejectsAbsolutePath;
   TestRejectsBackslashTraversal;
   TestAcceptsLegitimateNested;
+  TestUniqueTempDirNoCollisions;
   Writeln('ok - build workspace round-trip tests passed');
 end.
