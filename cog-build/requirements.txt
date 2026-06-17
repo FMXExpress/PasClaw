@@ -1,0 +1,6 @@
+# PasClaw BUILD cog -- Python deps.
+#
+# Cog 0.13 brings the Output BaseModel + pget interop we rely on.
+# pget itself is a binary, installed via curl in cog.yaml `run:`,
+# not a pip package.
+cog>=0.13.0
