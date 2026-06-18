@@ -293,16 +293,19 @@ class Predictor(BasePredictor):
             default="max-build",
             description="PasClaw config profile applied on top of stock "
             "defaults. `max-build` (default) turns on web_fetch, "
-            "web_search, vector_search, auto_router, prompt_cache, "
-            "task-aware memory orientation, promptware guard, the "
-            "self-improving-skills suite, and bumps tool_output_cap "
-            "to 16 KB -- the richest unattended-build toolset. Other "
-            "choices: `baseline` (everything off, useful for A/B), "
-            "`low-token` (cheaper, smaller context window), "
-            "`security` (workspace restriction + shell deny + "
-            "private-network block), `all-on` (max-build plus every "
-            "remaining flag flipped on). Empty to skip profile "
-            "application.",
+            "vector_search, auto_router, prompt_cache, task-aware "
+            "memory orientation, promptware guard, the self-improving-"
+            "skills suite, and bumps tool_output_cap to 16 KB -- the "
+            "richest unattended-build toolset. (Note: web_search is a "
+            "max-build *flag*, but the tool only registers when "
+            "PasClaw is also configured with a search provider. This "
+            "cog doesn't supply one, so web_search isn't available "
+            "out of the box -- use web_fetch.) Other choices: "
+            "`baseline` (everything off, useful for A/B), `low-token` "
+            "(cheaper, smaller context window), `security` (workspace "
+            "restriction + shell deny + private-network block), "
+            "`all-on` (max-build plus every remaining flag flipped "
+            "on). Empty to skip profile application.",
         ),
     ) -> list[Path]:
         """
@@ -442,6 +445,16 @@ class Predictor(BasePredictor):
         # profile's defaults. We deliberately set checkpoints_enabled
         # outside the profile so /undo + /redo work even under profiles
         # that don't enable them (baseline / security).
+        #
+        # Sandbox fields are NOT seeded here. Codex P2 on PR #304: an
+        # explicit sandbox block would override `profile=security`'s
+        # hardening (which sets restrict_to_workspace / block_private_
+        # networks / etc.). PasClaw's TConfig defaults are already
+        # appropriate for a cloud container -- RestrictToWorkspace=False,
+        # ShellDenyEnabled=True, BlockPrivateNetworks=True -- and the
+        # security profile correctly tightens them when chosen. An
+        # operator who wants a custom sandbox can still author a
+        # user-shadow profile that sets those fields.
         config_data = {
             "default_provider": selected_provider,
             "default_model":    default_model,
@@ -449,15 +462,6 @@ class Predictor(BasePredictor):
             "render_markdown":  False,
             "stats_collection_enabled": False,
             "checkpoints_enabled": True,    # zpaq backend: /undo + /redo survive the zip round-trip
-            "sandbox": {
-                "restrict_to_workspace":      False,
-                "allow_read_outside_workspace": True,
-                "shell_deny_enabled":         True,
-                "block_private_networks":     False,
-                "allow_read_paths":           [],
-                "allow_write_paths":          [],
-                "custom_shell_deny":          [],
-            },
         }
 
         # Apply the profile when non-empty. PasClaw's selection
