@@ -21,6 +21,31 @@ Sibling to [`/cog/`](../cog/), which runs the simpler one-shot `pasclaw agent` f
 | `custom_provider_model` | str | "" | Default model id for the custom provider. |
 | `provider` | str | "" | Route through this provider name. Any of the cloud names above, `ollama` / `lmstudio` / `vllm`, or whatever's in `custom_provider_kind`. Empty = first configured provider wins. |
 | `model` | str | "" | Override the model id. Empty = provider's catalog default (or whatever the local server is currently serving). |
+| `profile` | str | `"max-build"` | PasClaw [config profile](../docs/configuration.md#profiles) applied on top of stock defaults. See **Profile defaults** below for what `max-build` flips on, and the other built-ins. Empty to skip. |
+
+### Profile defaults
+
+The cog defaults `profile` to **`max-build`** — the richest unattended-build toolset. Compared to PasClaw's stock defaults, `max-build` turns on:
+
+- `web_fetch`, `web_search` — let the model fetch docs and crawl the web for API references
+- `vector_search` — better memory recall via the hybrid FTS+vector backend
+- `auto_router` — route cheap turns to a cheap model
+- `prompt_cache` — Anthropic / OpenAI prompt-cache TTL on (1 h)
+- `condense_reversible` — longer effective context windows
+- `orient_task_aware` — only task-relevant memory sections enter the system prompt
+- `promptware` — prompt-injection guard scans incoming tool output
+- the self-improving-skills suite (4 switches)
+- vault tools (Code Vault search)
+- `tool_output_cap` bumped from 0 (uncapped) to 16384
+
+Override `profile` to:
+- `baseline` — everything off. A/B reference against a feature-poor PasClaw.
+- `low-token` — cheaper / smaller context. Same flags as `max-build` *minus* the wide-net ones.
+- `security` — workspace restriction + shell deny + private-network block; promptware on; vault and `web_fetch` off; agent-authored skills stage for approval.
+- `all-on` — inherits `max-build` and flips every remaining boolean. Surface-area testing only.
+- *(empty)* — skip profile application entirely.
+
+Profile is layered *under* the seeded `config.json` fields (provider catalog, sandbox, `checkpoints_enabled`), so the cog's explicit choices always win over the profile.
 
 **At least one provider must be configured** — either a cloud API key, a local-server URL, or the `custom_provider_*` set.
 
