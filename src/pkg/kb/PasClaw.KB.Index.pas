@@ -144,7 +144,7 @@ uses
   PasClaw.Utils,
   PasClaw.Config,
   PasClaw.Logger,
-  PasClaw.Memory.Index,        { SanitizeFtsQuery }
+  PasClaw.Memory.Index,        { SanitizeFtsQuery, FTS5_SNIPPET_TOKENS }
   PasClaw.KB.PDF,              { ExtractPDFText for .pdf ingest }
   LocalVector.VectorStore,
   LocalVector.Embedder,
@@ -1259,7 +1259,8 @@ begin
   try
     Q.Database := FConn;
     Q.SQL.Text :=
-      'SELECT path, chunk_no, snippet(kb_fts, 2, ''«'', ''»'', ''…'', 24), bm25(kb_fts) ' +
+      'SELECT path, chunk_no, snippet(kb_fts, 2, ''«'', ''»'', ''…'', ' +
+      IntToStr(FTS5_SNIPPET_TOKENS) + '), bm25(kb_fts) ' +
       'FROM kb_fts WHERE kb_fts MATCH :q ORDER BY bm25(kb_fts) LIMIT :k';
     Q.Params.ParamByName('q').AsString  := Sanitized;
     Q.Params.ParamByName('k').AsInteger := K;
@@ -1292,7 +1293,8 @@ begin
   try
     Q.Connection := FConn;
     Q.SQL.Text :=
-      'SELECT path, chunk_no, snippet(kb_fts, 2, ''«'', ''»'', ''…'', 24), bm25(kb_fts) ' +
+      'SELECT path, chunk_no, snippet(kb_fts, 2, ''«'', ''»'', ''…'', ' +
+      IntToStr(FTS5_SNIPPET_TOKENS) + '), bm25(kb_fts) ' +
       'FROM kb_fts WHERE kb_fts MATCH :q ORDER BY bm25(kb_fts) LIMIT :k';
     Q.ParamByName('q').AsString  := Sanitized;
     Q.ParamByName('k').AsInteger := K;

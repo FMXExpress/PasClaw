@@ -67,6 +67,16 @@ type
 
 function NewMemoryIndex: IMemoryIndex;
 
+const
+  (* Token budget for the FTS5 snippet() window. 64 is FTS5's hard
+     ceiling; 60 leaves a sliver of slack for the «...» highlight
+     markup. The historical width of 24 routinely clipped the actual
+     answer line out of the returned snippet (LOCOMO bench: snippet
+     R@10 ≈ 0.75 with width=24 vs 1.0 with width=60). Exposed in the
+     interface so PasClaw.KB.Index can pin its kb_search snippets to
+     the same width. *)
+  FTS5_SNIPPET_TOKENS = 60;
+
 (* Turn a natural-language query into an FTS5-safe MATCH expression
    (OR-ed quoted tokens; ASCII punctuation stripped; UTF-8 token
    bytes preserved). Exposed so PasClaw.Session.Search can reuse the
@@ -583,7 +593,8 @@ begin
   try
     Q.Database := FConn;
     Q.SQL.Text :=
-      'SELECT path, snippet(memory_fts, 1, ''«'', ''»'', ''…'', 24), bm25(memory_fts) ' +
+      'SELECT path, snippet(memory_fts, 1, ''«'', ''»'', ''…'', ' +
+      IntToStr(FTS5_SNIPPET_TOKENS) + '), bm25(memory_fts) ' +
       'FROM memory_fts WHERE memory_fts MATCH :q ' +
       'ORDER BY bm25(memory_fts) LIMIT :k';
     Q.Params.ParamByName('q').AsString := Sanitized;
@@ -628,7 +639,8 @@ begin
   try
     Q.Connection := FConn;
     Q.SQL.Text :=
-      'SELECT path, snippet(memory_fts, 1, ''«'', ''»'', ''…'', 24), bm25(memory_fts) ' +
+      'SELECT path, snippet(memory_fts, 1, ''«'', ''»'', ''…'', ' +
+      IntToStr(FTS5_SNIPPET_TOKENS) + '), bm25(memory_fts) ' +
       'FROM memory_fts WHERE memory_fts MATCH :q ' +
       'ORDER BY bm25(memory_fts) LIMIT :k';
     Q.ParamByName('q').AsString  := Sanitized;
