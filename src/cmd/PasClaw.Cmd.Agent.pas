@@ -38,6 +38,7 @@ uses
   PasClaw.Tools.DelphiBuild,
   PasClaw.Tools.SessionSearch,
   PasClaw.Tools.SendMessage,
+  PasClaw.Tools.Cron,
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
@@ -233,7 +234,8 @@ function NewBuiltinRegistry(UseHashline: Boolean = True;
                             EnableVault: Boolean = False;
                             EnableWebSearch: Boolean = False;
                             EnableWebFetch: Boolean = False;
-                            EnableOutputCache: Boolean = False): TToolRegistry;
+                            EnableOutputCache: Boolean = False;
+                            EnableCron: Boolean = False): TToolRegistry;
 var
   Skills: TSkillSpecArray;
 begin
@@ -277,6 +279,11 @@ begin
     operator has flipped on Cfg.ToolOutputCap. The tool's only
     useful while truncation is active, so the flag gates both. }
   if EnableOutputCache then RegisterOutputCacheTool(Result);
+  { cron tool: opt-in (Cfg.CronToolEnabled). Lets the model schedule an
+    existing skill on a cron; off by default since it grants background
+    autonomy. In `agent` there's no live scheduler, so additions apply the
+    next time serve/gateway runs. }
+  if EnableCron then RegisterCronTool(Result);
   (* send_message gates itself: it registers only when config.json
      declares named channels (a "channels" array of name/kind/target
      entries), so there's no flag to thread through here. The model
@@ -509,7 +516,7 @@ begin
                               HasConfiguredWebSearchProvider(Cfg),
                               Cfg.WebFetchEnabled,
                               (Cfg.ToolOutputCap > 0)
-                                or Cfg.CondenseReversible);
+                                or Cfg.CondenseReversible, Cfg.CronToolEnabled);
     RegisterSkillManageTool(Reg, Cfg);
     RegisterSkillDisclosureTools(Reg, Cfg);
   end;
@@ -984,7 +991,7 @@ begin
                               HasConfiguredWebSearchProvider(Cfg),
                               Cfg.WebFetchEnabled,
                               (Cfg.ToolOutputCap > 0)
-                                or Cfg.CondenseReversible);
+                                or Cfg.CondenseReversible, Cfg.CronToolEnabled);
     RegisterSkillManageTool(Reg, Cfg);
     RegisterSkillDisclosureTools(Reg, Cfg);
   end;

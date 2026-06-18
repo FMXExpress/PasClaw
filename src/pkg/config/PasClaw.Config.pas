@@ -532,6 +532,15 @@ type
        the default is now on. Onboarding asks (default Y); operators
        who don't want outbound HTTP from the agent flip it off. *)
     WebFetchEnabled:   Boolean;
+    (* OFF by default: when True, the model gets a `cron` tool that can
+       list/add/remove scheduled jobs by editing config.json's crons[].
+       Bounded by design -- a cron entry only runs an EXISTING operator-
+       installed skill on a schedule, so the model can schedule but not
+       author the work. Off by default because letting the model schedule
+       background execution is an autonomy step operators should opt into;
+       flip cron_tool_enabled=true in config.json. The running scheduler
+       picks up the model's edits within one tick (config mtime watch). *)
+    CronToolEnabled:   Boolean;
     (* On-by-default: when True, memory_search uses a hybrid keyword
        (FTS5 BM25) + vector (sqlite-vec ANN) index over
        workspace/memory/ files, fused via Reciprocal Rank Fusion.
@@ -865,6 +874,7 @@ begin
   PromptCache.TTL      := '';    { default 5m via empty }
   VaultToolsEnabled    := True;  { on by default -- vault_search/get are read-only HTTP GETs against pasclaw.dev. Onboarding asks (default Y). }
   WebFetchEnabled      := True;  { on by default -- onboarding asks (default Y); operators not wanting outbound HTTP from the agent flip it off. }
+  CronToolEnabled      := False; { off by default -- model-scheduled background jobs are an opt-in autonomy step (runs existing skills only). }
   RenderMarkdown       := True;  { on by default for terminal surfaces; cmd/serve flips off }
   ToolOutputCap        := 0;     { off by default; operators opt in. See TConfig.ToolOutputCap. }
   StatsCollectionEnabled := False; { opt-in via onboarding; see TConfig.StatsCollectionEnabled. }
@@ -1098,6 +1108,10 @@ begin
       Root.PutBool('vault_tools_enabled', False);
     if not WebFetchEnabled then
       Root.PutBool('web_fetch_enabled', False);
+    { cron_tool_enabled defaults OFF; emit only the explicit-on so an
+      operator who opted into model-scheduled jobs round-trips. }
+    if CronToolEnabled then
+      Root.PutBool('cron_tool_enabled', True);
     { RenderMarkdown defaults to True; emit only when operator
       explicitly disabled it so they can flip it back via config.json
       and we round-trip correctly. }
@@ -1488,6 +1502,7 @@ begin
 
     VaultToolsEnabled   := Root.GetBool('vault_tools_enabled',   VaultToolsEnabled);
     WebFetchEnabled     := Root.GetBool('web_fetch_enabled',     WebFetchEnabled);
+    CronToolEnabled     := Root.GetBool('cron_tool_enabled',     CronToolEnabled);
     RenderMarkdown      := Root.GetBool('render_markdown',       RenderMarkdown);
     VectorSearchEnabled := Root.GetBool('vector_search_enabled', VectorSearchEnabled);
     ToolOutputCap       := Integer(Root.GetInt('tool_output_cap', ToolOutputCap));

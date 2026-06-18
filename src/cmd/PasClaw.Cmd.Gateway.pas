@@ -37,6 +37,7 @@ uses
   PasClaw.Tools.DelphiBuild,
   PasClaw.Tools.SessionSearch,
   PasClaw.Tools.SendMessage,
+  PasClaw.Tools.Cron,             { cron tool -- gated on cron_tool_enabled }
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
@@ -271,6 +272,7 @@ begin
         RegisterOutputCacheTool(Reg);
       { send_message self-gates on Cfg.Channels. Codex P2 on PR #230. }
       RegisterSendMessageTool(Reg);
+      if Cfg.CronToolEnabled then RegisterCronTool(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
       RegisterSkillManageTool(Reg, Cfg);
