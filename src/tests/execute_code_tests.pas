@@ -228,6 +228,61 @@ begin
   AssertContains(Err, 'code', 'error mentions the missing arg');
 end;
 
+procedure TestArgvNeedsQuoting;
+{ Regression for the Windows cmd-quoting bug that produced
+  "'\"powershell\"' is not recognized as an internal or external
+  command". Argv[0] is always a bareword executable name on every
+  current code path (bash / pwsh / powershell), so the quoting
+  helper must NOT wrap it. The script-path argument can contain
+  spaces when $PASCLAW_HOME sits under a profile with spaces, so
+  it must still get quoted. }
+begin
+  { Bareword executable names: must NOT be quoted. }
+  AssertTrue(not ArgvNeedsQuoting('bash'),
+             'bash bareword unquoted');
+  AssertTrue(not ArgvNeedsQuoting('powershell'),
+             'powershell bareword unquoted');
+  AssertTrue(not ArgvNeedsQuoting('pwsh'),
+             'pwsh bareword unquoted');
+
+  { Bareword flags: also unquoted. }
+  AssertTrue(not ArgvNeedsQuoting('-File'),
+             '-File flag unquoted');
+  AssertTrue(not ArgvNeedsQuoting('-NoProfile'),
+             '-NoProfile flag unquoted');
+  AssertTrue(not ArgvNeedsQuoting('Bypass'),
+             'Bypass policy value unquoted');
+
+  { Paths without spaces -- safe unquoted. }
+  AssertTrue(not ArgvNeedsQuoting('/tmp/x.ps1'),
+             'simple POSIX path unquoted');
+  AssertTrue(not ArgvNeedsQuoting('/home/u/.pasclaw/tmp/exec.sh'),
+             'real-shape POSIX path unquoted');
+
+  { Windows paths without spaces -- safe unquoted. Backslash is not a
+    shell metacharacter on either cmd or sh, so a bareword Windows
+    path passes through clean. }
+  AssertTrue(not ArgvNeedsQuoting('C:\Users\anony\.pasclaw\tmp\exec.ps1'),
+             'plain Windows path unquoted (no spaces, no specials)');
+
+  { Paths WITH spaces -- must be quoted. This is the realistic case
+    that makes Cmd_Build_Run keep the quoting code path at all. }
+  AssertTrue(ArgvNeedsQuoting('C:\Program Files\thing\x.ps1'),
+             'Windows path with literal space must be quoted');
+  AssertTrue(ArgvNeedsQuoting('/path with space/script.sh'),
+             'POSIX path with space must be quoted');
+
+  { Empty string -- needs explicit "" so the arg slot isn't lost. }
+  AssertTrue(ArgvNeedsQuoting(''), 'empty arg needs "" wrapping');
+
+  { Shell-special chars in the body. }
+  AssertTrue(ArgvNeedsQuoting('a && b'),  '&& metacharacter');
+  AssertTrue(ArgvNeedsQuoting('a | b'),   '| pipe');
+  AssertTrue(ArgvNeedsQuoting('a"b'),     'embedded quote');
+  AssertTrue(ArgvNeedsQuoting('a$b'),     '$ dollar');
+  AssertTrue(ArgvNeedsQuoting('a`b'),     '` backtick');
+end;
+
 begin
   TestResolveLangDispatch;
   TestBuildArgvBash;
@@ -237,5 +292,6 @@ begin
   TestEndToEndRoundTrip;
   TestDenylistRejectsScriptBody;
   TestMissingCodeArg;
+  TestArgvNeedsQuoting;
   WriteLn('execute_code_tests: OK');
 end.
