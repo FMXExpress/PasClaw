@@ -27,7 +27,7 @@ Sibling to [`/cog/`](../cog/), which runs the simpler one-shot `pasclaw agent` f
 
 The cog defaults `profile` to **`max-build`** — the richest unattended-build toolset. Compared to PasClaw's stock defaults, `max-build` turns on:
 
-- `web_fetch`, `web_search` — let the model fetch docs and crawl the web for API references
+- `web_fetch` — let the model fetch docs by URL (the `web_search` flag is also flipped on by `max-build`, but the tool only registers when PasClaw has a search provider configured. The cog doesn't supply one, so `web_search` isn't available out of the box — use `web_fetch`.)
 - `vector_search` — better memory recall via the hybrid FTS+vector backend
 - `auto_router` — route cheap turns to a cheap model
 - `prompt_cache` — Anthropic / OpenAI prompt-cache TTL on (1 h)
@@ -45,7 +45,7 @@ Override `profile` to:
 - `all-on` — inherits `max-build` and flips every remaining boolean. Surface-area testing only.
 - *(empty)* — skip profile application entirely.
 
-Profile is layered *under* the seeded `config.json` fields (provider catalog, sandbox, `checkpoints_enabled`), so the cog's explicit choices always win over the profile.
+Profile is layered *under* the seeded `config.json` fields, so the cog's explicit choices (provider catalog, `checkpoints_enabled`, …) always win over the profile. The cog does **not** seed sandbox fields — that's intentional, so `profile=security`'s workspace restriction + private-network block + shell deny actually take effect when the operator chooses it. The default (`profile=max-build` or any non-security profile) inherits PasClaw's stock `TConfig` sandbox: `RestrictToWorkspace=False`, `ShellDenyEnabled=True`, `BlockPrivateNetworks=True` — appropriate for a cloud container.
 
 **At least one provider must be configured** — either a cloud API key, a local-server URL, or the `custom_provider_*` set.
 
