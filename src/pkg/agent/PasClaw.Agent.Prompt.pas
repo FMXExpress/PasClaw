@@ -472,7 +472,13 @@ begin
     '/{today}.md (e.g. ' + FormatDateTime('yyyy-mm-dd', Now) +
     '.md) for episodic context. Use `memory_search` before answering ' +
     'questions about prior conversations or project facts you might ' +
-    'have written down on an earlier turn.' + sLineBreak +
+    'have written down on an earlier turn. **`memory_search` / ' +
+    '`kb_search` return bounded snippets (a token window centred on the ' +
+    'matched terms) -- if the answer line might fall just outside the ' +
+    'window, follow up with `fs_read` (or `kb_get` for the KB) on the ' +
+    'cited path to surface the surrounding paragraphs. A snippet that ' +
+    'shows the right file but not quite the right line is a hit, not a ' +
+    'miss.**' + sLineBreak +
     sLineBreak +
     '6. **Think in code, not in transcripts** -- when a question needs ' +
     'numbers, summaries, or filtered results across many files, prefer ' +
