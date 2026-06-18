@@ -92,6 +92,13 @@ function BuildExecuteCodeArgv(const Lang, ScriptPath: string;
    hardcoding pwsh and silently breaking on stock Windows. *)
 function ResolvePowerShellExe: string;
 
+(* True when Arg must be wrapped in `"..."` for `cmd /C` or `/bin/sh -c`
+   not to mis-parse it. Bareword-safe tokens (no whitespace, no shell
+   metacharacters) pass through unquoted. Exposed so a unit test can
+   pin the regression for the "'\"powershell\"' is not recognized"
+   cmd.exe bug without spawning anything. *)
+function ArgvNeedsQuoting(const Arg: string): Boolean;
+
 (* The tool handler itself. Exposed (rather than only registered)
    so a regression test can drive it without standing up a full
    agent + provider. Same calling convention as every other
@@ -317,6 +324,34 @@ begin
   if Lang = 'powershell' then Result := '.ps1' else Result := '.sh';
 end;
 
+function ArgvNeedsQuoting(const Arg: string): Boolean;
+{ True when Arg must be wrapped in quotes for `cmd /C` or `sh -c`
+  not to mis-parse it. Bareword-safe tokens (no whitespace, no
+  shell metacharacters) can pass through unquoted, which matters
+  on Windows where quoting the executable name itself breaks
+  cmd.exe's command lookup (`'"powershell"' is not recognized`).
+
+  The metacharacter set covers what either shell treats specially:
+  whitespace + shell-operator chars + quote chars themselves.
+  Conservative: false positives just produce unnecessary quoting,
+  not incorrect parsing. }
+var
+  i: Integer;
+begin
+  if Arg = '' then Exit(True);    { empty arg needs explicit "" }
+  for i := 1 to Length(Arg) do
+    case Arg[i] of
+      ' ', #9, #10, #13,
+      '"', '''',
+      '&', '|', '<', '>', '^',
+      '(', ')',
+      '*', '?', ';',
+      '$', '`':
+        Exit(True);
+    end;
+  Result := False;
+end;
+
 function MakeTempScript(const Lang, Code: string; out Path: string;
                        out ErrMsg: string): Boolean;
 { Materialise the model's script body to disk under
@@ -460,15 +495,26 @@ begin
 
       { Compose the spawn command. RunOneShotWithEnv wants a single
         command string it can hand to /bin/sh -c (or cmd /c on
-        Windows) -- we don't have a direct argv-vector API. Quote
-        each argument so spaces or special chars in $PASCLAW_HOME
-        don't fragment the script-path argument; the script body
-        itself is in the file and isn't touched by this quoting. }
+        Windows) -- we don't have a direct argv-vector API.
+
+        Quote each argument that contains whitespace or shell
+        special chars; leave bareword-safe tokens (the executable
+        name like `bash` / `pwsh` / `powershell`) unquoted. Earlier
+        revisions unconditionally wrapped every element in `"..."`
+        -- on Windows that produced `cmd /C ""powershell" "-File"
+        "C:\..\.ps1""` which cmd.exe's parser misreads as a request
+        for a program literally named `"powershell"` (with quotes),
+        failing with "'\"powershell\"' is not recognized". The
+        script path under $PASCLAW_HOME/tmp/ does still need
+        quoting on hosts where the user profile name has spaces. }
       Cmd := '';
       for i := 0 to High(Argv) do
       begin
         if Cmd <> '' then Cmd := Cmd + ' ';
-        Cmd := Cmd + '"' + StringReplace(Argv[i], '"', '\"', [rfReplaceAll]) + '"';
+        if ArgvNeedsQuoting(Argv[i]) then
+          Cmd := Cmd + '"' + StringReplace(Argv[i], '"', '\"', [rfReplaceAll]) + '"'
+        else
+          Cmd := Cmd + Argv[i];
       end;
 
       if RestrictionActive then

@@ -444,8 +444,32 @@ begin
   M := TMemoryStream.Create;
   try
     {$IFDEF MSWINDOWS}
-    P.Executable := 'cmd.exe';
-    P.Parameters.Add('/C'); P.Parameters.Add(Cmd);
+    (* cmd.exe quoting workaround. TProcess.Parameters builds the
+       Windows lpCommandLine via FPC's MSVCRT-style escape pass --
+       embedded `"` becomes `\"`. cmd.exe does NOT recognise `\"`;
+       its escape for an embedded quote is `""` (doubled). When the
+       model sends `python -c "..."` containing literal quotes, the
+       FPC-escaped `\"` confuses cmd's parser, which splits the
+       argument at the wrong boundary and Python receives a
+       truncated `-c` value -- the well-known cmd.exe-vs-MSVCRT
+       quoting mismatch.
+
+       Bypass FPC's escape pass by setting CommandLine directly.
+       cmd.exe's `cmd /C "<stuff>"` outer-quote-strip rule then
+       handles the common case cleanly:
+
+         CommandLine := 'cmd.exe /C "python -c "with open(...)""'
+                        ^                                     ^
+                        +-- cmd strips these (first + last char) -+
+         -> cmd executes: python -c "with open(...)"
+
+       Limitation: if `Cmd` contains an unquoted shell operator
+       (`&&`, `|`, `>`) AND no internal quotes, cmd's strip rule
+       may still apply incorrectly. The model rarely emits such
+       commands -- and the FPC.Parameters path's mangling was a
+       guaranteed bug for every quoted command, so this is a
+       net improvement. *)
+    P.CommandLine := 'cmd.exe /C "' + Cmd + '"';
     {$ELSE}
     P.Executable := '/bin/sh';
     P.Parameters.Add('-c'); P.Parameters.Add(Cmd);
@@ -534,8 +558,32 @@ begin
       end;
     P.Environment := EnvList;
     {$IFDEF MSWINDOWS}
-    P.Executable := 'cmd.exe';
-    P.Parameters.Add('/C'); P.Parameters.Add(Cmd);
+    (* cmd.exe quoting workaround. TProcess.Parameters builds the
+       Windows lpCommandLine via FPC's MSVCRT-style escape pass --
+       embedded `"` becomes `\"`. cmd.exe does NOT recognise `\"`;
+       its escape for an embedded quote is `""` (doubled). When the
+       model sends `python -c "..."` containing literal quotes, the
+       FPC-escaped `\"` confuses cmd's parser, which splits the
+       argument at the wrong boundary and Python receives a
+       truncated `-c` value -- the well-known cmd.exe-vs-MSVCRT
+       quoting mismatch.
+
+       Bypass FPC's escape pass by setting CommandLine directly.
+       cmd.exe's `cmd /C "<stuff>"` outer-quote-strip rule then
+       handles the common case cleanly:
+
+         CommandLine := 'cmd.exe /C "python -c "with open(...)""'
+                        ^                                     ^
+                        +-- cmd strips these (first + last char) -+
+         -> cmd executes: python -c "with open(...)"
+
+       Limitation: if `Cmd` contains an unquoted shell operator
+       (`&&`, `|`, `>`) AND no internal quotes, cmd's strip rule
+       may still apply incorrectly. The model rarely emits such
+       commands -- and the FPC.Parameters path's mangling was a
+       guaranteed bug for every quoted command, so this is a
+       net improvement. *)
+    P.CommandLine := 'cmd.exe /C "' + Cmd + '"';
     {$ELSE}
     P.Executable := '/bin/sh';
     P.Parameters.Add('-c'); P.Parameters.Add(Cmd);
