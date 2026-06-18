@@ -289,6 +289,21 @@ class Predictor(BasePredictor):
             default="",
             description="Override model id. Empty = provider's catalog default.",
         ),
+        profile: str = Input(
+            default="max-build",
+            description="PasClaw config profile applied on top of stock "
+            "defaults. `max-build` (default) turns on web_fetch, "
+            "web_search, vector_search, auto_router, prompt_cache, "
+            "task-aware memory orientation, promptware guard, the "
+            "self-improving-skills suite, and bumps tool_output_cap "
+            "to 16 KB -- the richest unattended-build toolset. Other "
+            "choices: `baseline` (everything off, useful for A/B), "
+            "`low-token` (cheaper, smaller context window), "
+            "`security` (workspace restriction + shell deny + "
+            "private-network block), `all-on` (max-build plus every "
+            "remaining flag flipped on). Empty to skip profile "
+            "application.",
+        ),
     ) -> list[Path]:
         """
         Run `pasclaw build` against the unzipped workspace, then ship the
@@ -422,6 +437,11 @@ class Predictor(BasePredictor):
                     default_model = entry["model"]
                     break
 
+        # PasClaw applies the profile (with _inherits resolved) BEFORE
+        # this config layer, so any explicit field below wins over the
+        # profile's defaults. We deliberately set checkpoints_enabled
+        # outside the profile so /undo + /redo work even under profiles
+        # that don't enable them (baseline / security).
         config_data = {
             "default_provider": selected_provider,
             "default_model":    default_model,
@@ -439,6 +459,19 @@ class Predictor(BasePredictor):
                 "custom_shell_deny":          [],
             },
         }
+
+        # Apply the profile when non-empty. PasClaw's selection
+        # precedence (PasClaw.Config.LoadConfig) is:
+        #   1. --profile CLI flag           (we don't use this)
+        #   2. PASCLAW_PROFILE env var      (we don't use this either)
+        #   3. "profile" field in config.json   <-- this path
+        #   4. None
+        # Setting it in the seeded config means a fresh run gets the
+        # richer toolset; the operator's `profile` override flows
+        # through unchanged for baseline / low-token / security / etc.
+        profile_normalised = profile.strip()
+        if profile_normalised:
+            config_data["profile"] = profile_normalised
 
         # --- workspace handshake setup ---
 
@@ -498,6 +531,7 @@ class Predictor(BasePredictor):
                 f"build: invoking {self.binary_path} build "
                 f"max_iters={max_iters} timeout={timeout_seconds}s "
                 f"provider={selected_provider} model={default_model} "
+                f"profile={profile_normalised or '(none)'} "
                 f"workspace_in={'yes' if in_zip else 'no'}"
             )
 
