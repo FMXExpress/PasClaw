@@ -285,8 +285,12 @@ begin
     if (not Args.NoMCP) and (Reg <> nil) then
       MCPClients := ConnectMCPServers(Cfg, Reg);
 
+    { Start the scheduler when there are crons OR the model can add them
+      (cron_tool_enabled) -- otherwise an empty-config server with the cron
+      tool on would accept an add but never fire it until restart. Codex P2
+      on PR #310. }
     Scheduler := nil;
-    if (Reg <> nil) and (Length(Cfg.Crons) > 0) then
+    if (Reg <> nil) and ((Length(Cfg.Crons) > 0) or Cfg.CronToolEnabled) then
     begin
       Scheduler := TCronScheduler.Create(Cfg, Reg);
       Scheduler.Start;

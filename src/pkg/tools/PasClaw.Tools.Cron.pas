@@ -54,6 +54,14 @@ type
   end;
   TCronRows = array of TCronRow;
 
+var
+  { The registry the scheduler will run jobs through. Set by
+    RegisterCronTool; the SAME instance serve/gateway hand to
+    TCronScheduler, so validating against it matches exactly what the
+    running process can fire. nil in unit tests (they call Tool_Cron
+    directly) -> SkillExists falls back to the on-disk manifest set. }
+  GCronRegistry: TToolRegistry = nil;
+
 { Read config.json (raw) into a TJsonObject. Missing file -> empty object so
   a first add can create it. Returns False with Err on a parse failure. }
 function LoadConfigRoot(out Root: TJsonObject; out Err: string): Boolean;
@@ -140,8 +148,18 @@ function SkillExists(const Name: string): Boolean;
 var
   Skills: TSkillSpecArray;
   i: Integer;
+  T: TTool;
 begin
   Result := False;
+  { Validate against the registry the scheduler actually runs jobs through
+    (skills register as skill_<name> at startup, fired via Reg.RunTool).
+    This rejects a skill that's on disk but not in THIS running process --
+    one the scheduler couldn't fire until restart anyway. Codex P2 on
+    PR #310. }
+  if GCronRegistry <> nil then
+    Exit(GCronRegistry.Find('skill_' + Name, T));
+  { No registry wired (unit tests call Tool_Cron directly) -- fall back to
+    the on-disk manifest set. }
   Skills := LoadSkillManifests(GetHome);
   for i := 0 to High(Skills) do
     if SameText(Skills[i].Name, Name) then Exit(True);
@@ -263,6 +281,7 @@ var
   T: TTool;
 begin
   if R = nil then Exit;
+  GCronRegistry := R;   { validate add's skill against what this process can fire }
   T.Name        := 'cron';
   T.Description :=
     'Schedule background jobs that run an installed skill on a cron schedule. ' +

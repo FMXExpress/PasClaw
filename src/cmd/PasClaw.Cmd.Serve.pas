@@ -76,6 +76,7 @@ uses
   PasClaw.Skills.Loader,
   PasClaw.Skills.Manage,
   PasClaw.Skills.Disclosure,
+  PasClaw.Cron.Scheduler,
   PasClaw.Stream.Reliability,
   PasClaw.Gateway.Server;
 
@@ -138,6 +139,7 @@ var
   Reg: TToolRegistry;
   MCPClients: TMCPClientList;
   Server, MCPServer: TGatewayServer;
+  Scheduler: TCronScheduler;
   Skills: TSkillSpecArray;
   BaseURL: string;
   KindSelected: TShellBackendKind;
@@ -157,6 +159,7 @@ begin
   Cfg := LoadConfig(ProfileName);
   ConfigureSandbox(Cfg.Sandbox, '');
   ShellSessionId := '';
+  Scheduler := nil;   { so the finally is safe if we Exit before starting it }
   try
     Args := ParseServe(Argv, Cfg);
     { Install the active shell backend so shell_exec / execute_code run on
@@ -252,6 +255,16 @@ begin
     if (not Args.NoMCP) and (Reg <> nil) then
       MCPClients := ConnectMCPServers(Cfg, Reg);
 
+    { Cron scheduler: serve had none before. Start it when crons exist OR
+      the model can add them (cron_tool_enabled), so a cron the model
+      schedules actually fires in this process. Codex P2 on PR #310. }
+    Scheduler := nil;
+    if (Reg <> nil) and ((Length(Cfg.Crons) > 0) or Cfg.CronToolEnabled) then
+    begin
+      Scheduler := TCronScheduler.Create(Cfg, Reg);
+      Scheduler.Start;
+    end;
+
     Server := TGatewayServer.Create(Cfg, Provider, Reg);
     Server.DebugIO := Args.Debug;
     Server.MaxIter := Args.MaxIter;
@@ -312,6 +325,9 @@ begin
       if MCPServer <> nil then MCPServer.Stop;
       Server.Free;
       if MCPServer <> nil then MCPServer.Free;
+      { Stop the cron thread before tearing down the registry it fires
+        jobs through (Free -> Destroy joins the thread). }
+      if Scheduler <> nil then Scheduler.Free;
       FreeMCPClients(MCPClients);
       if Reg <> nil then Reg.Free;
     end;
