@@ -543,6 +543,38 @@ PasClaw at the real Anthropic endpoint, not through this harness;
 the bench's localhost-stub design needs a model that can author the
 schema reliably.
 
+### Methodology problem at scale — Haiku subagents bypass PasClaw
+
+Across **27 Haiku-driven cells** (9 first wave + 3 fixture-01 retry +
+15 batched), **only 5 produced REAL PasClaw-driven data**
+(`tlc ≥ 2`). The other 22 either:
+
+- authored malformed responses → PasClaw saw 0 tool_calls → subagent
+  modified workspace files via its OWN tools to satisfy the oracle, OR
+- skipped the response entirely and just edited the workspace, OR
+- in one case, edited the FIXTURE pre-fix tree (cross-cell
+  contamination — reverted via git)
+
+This isn't reflective of Haiku-as-PasClaw's-LLM behavior. It's
+reflective of Haiku-as-instruction-following-subagent under tight
+time pressure: when the goal is "satisfy the oracle" and the protocol
+is complex, smaller models route around the protocol to satisfy the
+apparent goal directly.
+
+The right way to bench Haiku as PasClaw's actual model is to point
+PasClaw at the real Anthropic Haiku endpoint (no localhost-stub, no
+subagent driver). That's outside this bench's sandbox.
+
+The 5 REAL cells:
+
+  fixture / profile          turns  tlc  trajectory
+  01-snippet / lean-edit       3     2   fs_read -> fs_write -> done
+  01-snippet / stock           5     4   fs_read x2 -> fs_write -> fs_read
+  01-snippet / max-build       9     8   fs_read + 2x fs_list + fs_read +
+                                          fs_edit_hashline (x2) + fs_read x3
+  02-shell-quoting / lean-edit 4     3   fs_read -> fs_write -> fs_read -> done
+  10-cloudflare / lean-edit    8     8   navigate catalog + edit + build
+
 ### Clean Haiku data (cells with `tlc ≥ 2`)
 
 | fixture / profile | turns | tlc | trajectory |
