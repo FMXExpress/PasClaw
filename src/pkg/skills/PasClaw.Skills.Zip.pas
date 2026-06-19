@@ -45,10 +45,18 @@ function ExtractZipToDir(const ZipPath, DestDir: string;
   basenames to skip at any depth (e.g. ['.git', 'node_modules']);
   pass [] to include everything. Returns False with ErrMsg set on
   any error; on success ZipPath is a valid zip readable by any
-  standard tool. }
+  standard tool.
+
+  ArchivePrefix (optional) is prepended to every stored entry name,
+  so PackDirToZip(home/workspace, ..., 'workspace') yields entries
+  like "workspace/memory.md" -- matching `pasclaw build`'s whole-home
+  layout so a web-exported zip drops straight into
+  `pasclaw build --workspace-in`. Empty (default) keeps the old
+  relative-to-SrcDir naming. }
 function PackDirToZip(const SrcDir, ZipPath: string;
                       const ExcludeNames: array of string;
-                      out ErrMsg: string): Boolean;
+                      out ErrMsg: string;
+                      const ArchivePrefix: string = ''): Boolean;
 
 implementation
 
@@ -340,13 +348,14 @@ end;
 
 function PackDirToZip(const SrcDir, ZipPath: string;
                       const ExcludeNames: array of string;
-                      out ErrMsg: string): Boolean;
+                      out ErrMsg: string;
+                      const ArchivePrefix: string): Boolean;
 {$IFDEF FPC}
 var
   Z: TZipper;
   Files: TStringList;
   i: Integer;
-  Src, OnDisk, InZip: string;
+  Src, Pfx, OnDisk, InZip: string;
 begin
   Result := False;
   ErrMsg := '';
@@ -356,6 +365,10 @@ begin
     Exit;
   end;
   Src := ExcludeTrailingPathDelimiter(SrcDir);
+  { Stored entry names are forward-slash separated; append one '/' so the
+    prefix becomes a directory component (e.g. "workspace/memory.md"). }
+  Pfx := ArchivePrefix;
+  if Pfx <> '' then Pfx := Pfx + '/';
 
   { Make sure the destination parent dir exists -- TZipper.SaveToFile
     raises a generic exception otherwise. Don't ForceDirectories on
@@ -370,9 +383,9 @@ begin
       CollectFiles(Src, '', ExcludeNames, Files);
       for i := 0 to Files.Count - 1 do
       begin
-        InZip := Files[i];
-        OnDisk := Src + PathDelim + StringReplace(InZip, '/', PathDelim,
+        OnDisk := Src + PathDelim + StringReplace(Files[i], '/', PathDelim,
                                                  [rfReplaceAll]);
+        InZip := Pfx + Files[i];
         Z.Entries.AddFileEntry(OnDisk, InZip);
       end;
       Z.FileName := ZipPath;
@@ -391,7 +404,7 @@ var
   Z: TZipFile;
   Files: TStringList;
   i: Integer;
-  Src, OnDisk, InZip: string;
+  Src, Pfx, OnDisk, InZip: string;
 begin
   Result := False;
   ErrMsg := '';
@@ -401,6 +414,8 @@ begin
     Exit;
   end;
   Src := ExcludeTrailingPathDelimiter(SrcDir);
+  Pfx := ArchivePrefix;
+  if Pfx <> '' then Pfx := Pfx + '/';
   if ExtractFilePath(ZipPath) <> '' then
     ForceDirectories(ExtractFilePath(ZipPath));
 
@@ -412,9 +427,9 @@ begin
       Z.Open(ZipPath, zmWrite);
       for i := 0 to Files.Count - 1 do
       begin
-        InZip := Files[i];
-        OnDisk := Src + PathDelim + StringReplace(InZip, '/', PathDelim,
+        OnDisk := Src + PathDelim + StringReplace(Files[i], '/', PathDelim,
                                                  [rfReplaceAll]);
+        InZip := Pfx + Files[i];
         Z.Add(OnDisk, InZip);
       end;
       Z.Close;

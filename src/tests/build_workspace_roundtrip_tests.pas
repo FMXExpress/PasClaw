@@ -168,6 +168,45 @@ begin
   end;
 end;
 
+procedure TestArchivePrefix;
+{ The web UI exports workspace/ with an ArchivePrefix of 'workspace' so
+  the zip's entries land under a top-level workspace/ dir -- matching
+  `pasclaw build`'s whole-home layout, so a web-exported zip drops
+  straight into `pasclaw build --workspace-in` (which extracts into
+  $HOME). Pack a flat source with the prefix; every file must extract
+  UNDER workspace/ in the destination, never at the root. }
+var
+  Src, Dst, Zip, Err: string;
+  Empty: array of string;
+begin
+  SetLength(Empty, 0);
+  Src := MakeTempDir('pfx_src');
+  Dst := MakeTempDir('pfx_dst');
+  Zip := JoinPath(GetTempDir(False), 'pfx_' + IntToStr(Random(MaxInt)) + '.zip');
+  try
+    { Src plays the role of $HOME/workspace: files sit at its root. }
+    WriteText(JoinPath(Src, 'MEMORY.md'), '## rules');
+    WriteText(JoinPath(JoinPath(Src, 'skills'), 'SKILL.md'), '# a skill');
+
+    AssertTrue(PackDirToZip(Src, Zip, Empty, Err, 'workspace'),
+               'pack with prefix: ' + Err);
+    AssertTrue(ExtractZipToDir(Zip, Dst, Err), 'extract: ' + Err);
+
+    { Entries must be under Dst/workspace/, NOT at Dst root. }
+    AssertTrue(FileExists(JoinPath(JoinPath(Dst, 'workspace'), 'MEMORY.md')),
+               'MEMORY.md lands under workspace/');
+    AssertTrue(FileExists(JoinPath(JoinPath(JoinPath(Dst, 'workspace'),
+                          'skills'), 'SKILL.md')),
+               'nested skills/SKILL.md lands under workspace/');
+    AssertTrue(not FileExists(JoinPath(Dst, 'MEMORY.md')),
+               'no file at the destination root (prefix applied)');
+  finally
+    DeleteFile(Zip);
+    RemoveTree(Src);
+    RemoveTree(Dst);
+  end;
+end;
+
 procedure TestBinaryRoundtrip;
 { Snapshots / kb.db / checkpoints archive.zpaq are all binary -- must
   survive the zip path without bit mangling. Test with a payload that
@@ -473,6 +512,7 @@ end;
 begin
   Randomize;
   TestSimpleRoundtrip;
+  TestArchivePrefix;
   TestBinaryRoundtrip;
   TestExclusionDenylist;
   TestEmptyDir;

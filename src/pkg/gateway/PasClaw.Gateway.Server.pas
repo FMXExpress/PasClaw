@@ -149,6 +149,18 @@ type
       indexed sources and totals; POST /v1/kb/upload writes a document into
       workspace/kb-files and (re)indexes it; GET /v1/kb/search?q= runs the
       same FTS/vector search the kb_search tool uses. }
+    { GET /v1/workspace/export -- stream $PASCLAW_HOME/workspace as a zip
+      download. Deliberately scoped to workspace/ (NOT the whole home) so
+      config.json secrets and oauth tokens at the home root are never
+      shipped. }
+    procedure HandleWorkspaceExport(AResp: TIdHTTPResponseInfo);
+    { POST /v1/workspace/import -- accept a raw application/zip body and
+      overlay it onto $PASCLAW_HOME/workspace. Merge semantics: files in
+      the archive overwrite their counterparts; existing files the archive
+      doesn't mention are left alone. Zip-slip is rejected by
+      ExtractZipToDir's entry validation before anything is written. }
+    procedure HandleWorkspaceImport(ARequest: TIdHTTPRequestInfo;
+                                    AResp: TIdHTTPResponseInfo);
     procedure HandleKBList(AResp: TIdHTTPResponseInfo);
     procedure HandleKBUpload(ARequest: TIdHTTPRequestInfo;
                              AResp: TIdHTTPResponseInfo);
@@ -297,6 +309,7 @@ uses
   PasClaw.Crypto.HMAC,        { Base64ToBytes -- decode binary KB uploads }
   PasClaw.Skills.Loader,
   PasClaw.Skills.Pending,
+  PasClaw.Skills.Zip,       { PackDirToZip -- workspace export download }
   PasClaw.Skills.Install,   { InstallSkillTarget / RemoveSkillFiles / IsSafeSkillName }
   PasClaw.Skills.ClawHub,  { SearchClawHub -- catalog search (clawhub.ai) }
   PasClaw.Skills.PasClawHub, { SearchPasClawHub -- catalog search (pasclaw.dev) }
@@ -849,6 +862,8 @@ begin
     else if (ARequest.Command = 'DELETE') and (Copy(Doc, 1, 11) = '/v1/skills/') then HandleSkillRemove(Doc, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/kb/search') then HandleKBSearch(ARequest, AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/kb/upload') then HandleKBUpload(ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/workspace/export') then HandleWorkspaceExport(AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/workspace/import') then HandleWorkspaceImport(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/kb')       then HandleKBList(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/memory/search') then HandleMemorySearch(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/memory')  then HandleMemoryList(AResponse)
@@ -1270,6 +1285,221 @@ begin
   for i := 1 to Length(Name) do
     if not CharInSet(Name[i], ['A'..'Z','a'..'z','0'..'9','.','-','_',' ','(',')']) then Exit;
   Result := True;
+end;
+
+procedure TGatewayServer.HandleWorkspaceExport(AResp: TIdHTTPResponseInfo);
+{ Pack workspace/ into a zip and stream it as a download. Scoped to
+  workspace/ (not the whole home) so config.json / oauth tokens never
+  ship. The temp zip is written at the home ROOT (outside workspace) so
+  PackDirToZip doesn't try to include the file it's still writing. }
+const
+  ExcludeFromZip: array[0..3] of string =
+    ('.git', '.DS_Store', 'Thumbs.db', 'kb.db-journal');
+var
+  WsDir, ZipPath, Err: string;
+  Strm: TMemoryStream;
+  FS: TFileStream;
+begin
+  WsDir := JoinPath(GetHome, 'workspace');
+  if not DirectoryExists(WsDir) then
+  begin
+    WriteJSON(AResp, 404, '{"error":"no workspace directory yet"}');
+    Exit;
+  end;
+  ZipPath := JoinPath(GetHome,
+    'workspace-export-' + FormatDateTime('yyyymmdd-hhnnss', Now) + '.zip');
+  { Store entries under a top-level "workspace/" dir so the zip matches
+    `pasclaw build`'s whole-home layout -- a web-exported workspace.zip
+    then drops straight into `pasclaw build --workspace-in`. }
+  if not PackDirToZip(WsDir, ZipPath, ExcludeFromZip, Err, 'workspace') then
+  begin
+    WriteJSON(AResp, 500, '{"error":"' + JsonEscape('export failed: ' + Err) + '"}');
+    Exit;
+  end;
+  Strm := TMemoryStream.Create;
+  try
+    try
+      FS := TFileStream.Create(ZipPath, fmOpenRead or fmShareDenyWrite);
+      try
+        if FS.Size > 0 then Strm.CopyFrom(FS, FS.Size);
+      finally
+        FS.Free;
+      end;
+    except
+      on E: Exception do
+      begin
+        DeleteFile(ZipPath);
+        Strm.Free;
+        WriteJSON(AResp, 500, '{"error":"' + JsonEscape(E.Message) + '"}');
+        Exit;
+      end;
+    end;
+  finally
+    DeleteFile(ZipPath);   { bytes are in memory now; drop the temp file }
+  end;
+  Strm.Position := 0;
+  AResp.ResponseNo  := 200;
+  AResp.ContentType := 'application/zip';
+  AResp.CustomHeaders.AddValue('Content-Disposition', 'attachment; filename="workspace.zip"');
+  AResp.ContentStream     := Strm;
+  AResp.FreeContentStream := True;
+  AResp.ContentLength     := Strm.Size;
+  LogInfo('gateway: workspace export -> %d bytes', [Strm.Size]);
+end;
+
+{ Recursive delete of a directory tree. Used to clean the import staging
+  area; portable across FPC/Delphi (no fileutil / IOUtils dependency). }
+procedure WsDeleteTree(const Dir: string);
+var
+  SR: TSearchRec;
+  P: string;
+begin
+  if not DirectoryExists(Dir) then Exit;
+  if FindFirst(IncludeTrailingPathDelimiter(Dir) + '*',
+               faAnyFile or faDirectory, SR) = 0 then
+  try
+    repeat
+      if (SR.Name = '.') or (SR.Name = '..') then Continue;
+      P := IncludeTrailingPathDelimiter(Dir) + SR.Name;
+      if (SR.Attr and faDirectory) <> 0 then WsDeleteTree(P)
+      else SysUtils.DeleteFile(P);
+    until FindNext(SR) <> 0;
+  finally
+    FindClose(SR);
+  end;
+  RemoveDir(Dir);
+end;
+
+{ Recursive merge-copy SrcDir -> DstDir. Files overwrite their
+  counterparts; existing files DstDir has that SrcDir lacks are kept
+  (overlay semantics). Returns False with Err set on the first failure. }
+function WsMergeTree(const SrcDir, DstDir: string; out Err: string): Boolean;
+var
+  SR: TSearchRec;
+  S, D: string;
+  FSrc, FDst: TFileStream;
+begin
+  Result := False; Err := '';
+  if not ForceDirectories(DstDir) then
+  begin Err := 'cannot create ' + DstDir; Exit; end;
+  if FindFirst(IncludeTrailingPathDelimiter(SrcDir) + '*',
+               faAnyFile or faDirectory, SR) = 0 then
+  try
+    repeat
+      if (SR.Name = '.') or (SR.Name = '..') then Continue;
+      S := IncludeTrailingPathDelimiter(SrcDir) + SR.Name;
+      D := IncludeTrailingPathDelimiter(DstDir) + SR.Name;
+      if (SR.Attr and faDirectory) <> 0 then
+      begin
+        if not WsMergeTree(S, D, Err) then Exit;
+      end
+      else
+      try
+        FSrc := TFileStream.Create(S, fmOpenRead or fmShareDenyWrite);
+        try
+          FDst := TFileStream.Create(D, fmCreate);
+          try
+            if FSrc.Size > 0 then FDst.CopyFrom(FSrc, FSrc.Size);
+          finally FDst.Free; end;
+        finally FSrc.Free; end;
+      except
+        on E: Exception do begin Err := 'copy ' + SR.Name + ': ' + E.Message; Exit; end;
+      end;
+    until FindNext(SR) <> 0;
+  finally
+    FindClose(SR);
+  end;
+  Result := True;
+end;
+
+procedure TGatewayServer.HandleWorkspaceImport(ARequest: TIdHTTPRequestInfo;
+                                               AResp: TIdHTTPResponseInfo);
+{ Accept a raw application/zip body and overlay its workspace/ contents
+  onto $PASCLAW_HOME/workspace.
+
+  The canonical zip carries a top-level "workspace/" dir (what our export
+  emits and what `pasclaw build` packs), so we can't just unzip into
+  workspace/ -- that would nest workspace/workspace/. Instead we extract
+  to a staging dir at the home root, then merge ONLY staging/workspace ->
+  home/workspace. Two payoffs:
+    * A full `pasclaw build` zip (which also has sessions/, config.json,
+      etc. at the root) imports cleanly -- we take only its workspace/,
+      so a stray config.json in the upload can NEVER overwrite the running
+      server's secrets.
+    * A "bare" zip (files at the root, no workspace/ dir) still works: we
+      fall back to merging the whole staging tree.
+  ExtractZipToDir zip-slip-validates every entry before writing, and the
+  staging dir is deleted regardless of outcome. }
+const
+  ImportZipCap = Int64(512) * 1024 * 1024;   { 512 MB -- generous; body is buffered }
+var
+  WsDir, StageDir, SrcWs, ZipPath, Stamp, Err: string;
+  FS: TFileStream;
+  Size: Int64;
+begin
+  if ARequest.PostStream = nil then
+  begin
+    WriteJSON(AResp, 400, '{"error":"missing zip body"}');
+    Exit;
+  end;
+  Size := ARequest.PostStream.Size;
+  if Size = 0 then
+  begin
+    WriteJSON(AResp, 400, '{"error":"empty zip body"}');
+    Exit;
+  end;
+  if Size > ImportZipCap then
+  begin
+    WriteJSON(AResp, 413, '{"error":"workspace zip too large (max 512 MB)"}');
+    Exit;
+  end;
+
+  Stamp    := FormatDateTime('yyyymmdd-hhnnss', Now);
+  WsDir    := JoinPath(GetHome, 'workspace');
+  ZipPath  := JoinPath(GetHome, 'workspace-import-' + Stamp + '.zip');
+  StageDir := JoinPath(GetHome, 'workspace-import-stage-' + Stamp);
+  try
+    try
+      FS := TFileStream.Create(ZipPath, fmCreate);
+      try
+        ARequest.PostStream.Position := 0;
+        FS.CopyFrom(ARequest.PostStream, Size);
+      finally
+        FS.Free;
+      end;
+    except
+      on E: Exception do
+      begin
+        WriteJSON(AResp, 500, '{"error":"' + JsonEscape('save upload: ' + E.Message) + '"}');
+        Exit;
+      end;
+    end;
+
+    if not ExtractZipToDir(ZipPath, StageDir, Err) then
+    begin
+      WriteJSON(AResp, 400, '{"error":"' + JsonEscape('import failed: ' + Err) + '"}');
+      Exit;
+    end;
+
+    { Prefer staging/workspace (canonical / build layout); fall back to the
+      whole staging tree for a bare zip with files at the root. }
+    SrcWs := JoinPath(StageDir, 'workspace');
+    if not DirectoryExists(SrcWs) then SrcWs := StageDir;
+
+    if not WsMergeTree(SrcWs, WsDir, Err) then
+    begin
+      WriteJSON(AResp, 500, '{"error":"' + JsonEscape('import failed: ' + Err) + '"}');
+      Exit;
+    end;
+  finally
+    SysUtils.DeleteFile(ZipPath);
+    WsDeleteTree(StageDir);
+  end;
+
+  LogInfo('gateway: workspace import <- %d bytes', [Size]);
+  WriteJSON(AResp, 200,
+    '{"imported":true,"bytes":' + IntToStr(Size) +
+    ',"note":"workspace updated; restart serve/gateway to pick up new skills/config"}');
 end;
 
 procedure TGatewayServer.HandleKBList(AResp: TIdHTTPResponseInfo);
