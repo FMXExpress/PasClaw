@@ -299,6 +299,91 @@ That's a real behavior finding surfaced through the bench — exactly the
 kind of trajectory-quality signal Perplexity §"Trajectory quality"
 calls out as the second metric beyond pass-rate.
 
+## What `max-build` actually costs — first-turn ablation
+
+Each setting in `max-build` was tested individually against `stock` using
+`harness/probe_first_turn.py` — it spins up PasClaw, captures the very
+first `/v1/chat/completions` request, measures size + tool count, kills
+PasClaw. Cheap (~3 seconds per variant), runs without a real provider,
+results in `results/ablation.md`.
+
+Headline:
+
+| variant | bytes/turn | tools | Δ vs stock |
+|---|---|---|---|
+| `baseline` / `security` | 9910 | 9 | −22.7% |
+| `stock` | 12822 | 13 | — |
+| `lean-stock` (proposed) | 12822 | 13 | 0% |
+| `lean-build` (proposed) | 13374 | 14 | +4.3% |
+| `low-token` | 14226 | 16 | +10.9% |
+| `max-build` (as shipped) | 15717 | 17 | +22.6% |
+| `all-on` | 15717 | 17 | +22.6% |
+
+The 2895-byte gap between `stock` and `max-build` breaks down as:
+
+| toggle | Δbytes | tools added | when it pays |
+|---|---|---|---|
+| `condense_reversible` OR `tool_output_cap > 0` | +552 | `tool_output_get` | tool outputs that cap |
+| `self_improving_skills.progressive_disclosure` | +852 | `skills_list`, `skills_view` | skills installed |
+| `self_improving_skills.self_manage` | +1491 | `skills_manage` | agent authors skills |
+| `orient_task_aware`, `checkpoints`, `stats_collection`, `prompt_cache.ttl=1h`, `auto_router`, `distiller` | 0 | — | always free behavioral upgrade |
+
+**`max-build` over-pays by ~2.9KB / turn (~720 input tokens) for skill
+features most operators don't need**. Over a 10-turn task with PasClaw's
+typical prompt-cache behavior, that's ~5-7K tokens/task. Per-task cost
+dominates over wall-clock on every real provider.
+
+### Two proposed composites
+
+- **`lean-stock`** — stock + all 6 zero-cost behavioral toggles
+  (`orient_task_aware`, `checkpoints`, `stats`, `cache_ttl=1h`,
+  `distiller`, `auto_router`). Same prompt size as stock (12822 bytes)
+  with all the productive-coding behavior turned on.
+- **`lean-build`** — `lean-stock` + `condense_reversible` +
+  `tool_output_cap=16384`. Adds the `tool_output_get` tool (+552B / +1
+  tool). The right default for sessions that may run long or hit big
+  tool outputs.
+
+Skip `progressive_disclosure` unless you've actually installed skills.
+Skip `self_manage` unless the agent should be authoring skills
+mid-session. Both pay for themselves only in narrow scenarios.
+
+### How to regenerate
+
+```sh
+# Probe every variant in ablation.json against fixture 01:
+python3 -c "
+import json, subprocess
+rows = []
+for v in json.load(open('bench/swe/ablation.json')):
+    r = subprocess.run(['python3','bench/swe/harness/probe_first_turn.py',
+        '--fixture','bench/swe/fixture/01-snippet-window-magic-number',
+        '--variant',json.dumps(v)], capture_output=True, text=True)
+    if r.returncode == 0:
+        rows.append(json.loads(r.stdout.strip().splitlines()[-1]))
+open('bench/swe/results/probe.json','w').write(json.dumps(rows, indent=2))
+"
+python3 bench/swe/harness/ablation_report.py
+# wrote bench/swe/results/ablation.md
+```
+
+### What the probe doesn't measure
+
+The first-turn probe only catches the **prompt-side** delta. It misses:
+
+- `condense_reversible` — kicks in only after a long context, not on
+  turn 1.
+- `distiller` — passively monitors for repeated tool-call patterns; no
+  effect on turn 1.
+- `auto_router` — routes turns to a cheap model; only observable with
+  a multi-tier provider config.
+- `prompt_cache.ttl` — back-to-back runs benefit; single runs don't.
+
+For these, run a pass-rate sweep with `score.py --proxy <real provider>`
+or `--blocking` and a real long fixture (Phase B fixtures
+`03-count-source-files`, `04-fix-yaml-syntax` already exercise some of
+the operator-workflow surface).
+
 ### Token-metric caveat for live-driven runs
 
 `provider_stub.py` reads `tokens_in` / `tokens_out` from the response's
