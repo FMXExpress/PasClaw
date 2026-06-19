@@ -154,6 +154,13 @@ type
       config.json secrets and oauth tokens at the home root are never
       shipped. }
     procedure HandleWorkspaceExport(AResp: TIdHTTPResponseInfo);
+    { POST /v1/workspace/import -- accept a raw application/zip body and
+      overlay it onto $PASCLAW_HOME/workspace. Merge semantics: files in
+      the archive overwrite their counterparts; existing files the archive
+      doesn't mention are left alone. Zip-slip is rejected by
+      ExtractZipToDir's entry validation before anything is written. }
+    procedure HandleWorkspaceImport(ARequest: TIdHTTPRequestInfo;
+                                    AResp: TIdHTTPResponseInfo);
     procedure HandleKBList(AResp: TIdHTTPResponseInfo);
     procedure HandleKBUpload(ARequest: TIdHTTPRequestInfo;
                              AResp: TIdHTTPResponseInfo);
@@ -856,6 +863,7 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/kb/search') then HandleKBSearch(ARequest, AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/kb/upload') then HandleKBUpload(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/workspace/export') then HandleWorkspaceExport(AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/workspace/import') then HandleWorkspaceImport(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/kb')       then HandleKBList(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/memory/search') then HandleMemorySearch(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/memory')  then HandleMemoryList(AResponse)
@@ -1334,6 +1342,74 @@ begin
   AResp.FreeContentStream := True;
   AResp.ContentLength     := Strm.Size;
   LogInfo('gateway: workspace export -> %d bytes', [Strm.Size]);
+end;
+
+procedure TGatewayServer.HandleWorkspaceImport(ARequest: TIdHTTPRequestInfo;
+                                               AResp: TIdHTTPResponseInfo);
+{ Save the uploaded zip to a temp file at the home root (outside
+  workspace/, so it can't appear inside the tree we extract into), then
+  overlay it onto workspace/. ExtractZipToDir validates every entry
+  (zip-slip guard) before writing, and creates workspace/ if missing.
+  Merge semantics: archive files overwrite collisions; other existing
+  files are untouched. }
+const
+  ImportZipCap = Int64(512) * 1024 * 1024;   { 512 MB -- generous; body is buffered }
+var
+  WsDir, ZipPath, Err: string;
+  FS: TFileStream;
+  Size: Int64;
+begin
+  if ARequest.PostStream = nil then
+  begin
+    WriteJSON(AResp, 400, '{"error":"missing zip body"}');
+    Exit;
+  end;
+  Size := ARequest.PostStream.Size;
+  if Size = 0 then
+  begin
+    WriteJSON(AResp, 400, '{"error":"empty zip body"}');
+    Exit;
+  end;
+  if Size > ImportZipCap then
+  begin
+    WriteJSON(AResp, 413, '{"error":"workspace zip too large (max 512 MB)"}');
+    Exit;
+  end;
+
+  WsDir   := JoinPath(GetHome, 'workspace');
+  ZipPath := JoinPath(GetHome,
+    'workspace-import-' + FormatDateTime('yyyymmdd-hhnnss', Now) + '.zip');
+  try
+    try
+      FS := TFileStream.Create(ZipPath, fmCreate);
+      try
+        ARequest.PostStream.Position := 0;
+        FS.CopyFrom(ARequest.PostStream, Size);
+      finally
+        FS.Free;
+      end;
+    except
+      on E: Exception do
+      begin
+        DeleteFile(ZipPath);
+        WriteJSON(AResp, 500, '{"error":"' + JsonEscape('save upload: ' + E.Message) + '"}');
+        Exit;
+      end;
+    end;
+
+    if not ExtractZipToDir(ZipPath, WsDir, Err) then
+    begin
+      WriteJSON(AResp, 400, '{"error":"' + JsonEscape('import failed: ' + Err) + '"}');
+      Exit;
+    end;
+  finally
+    DeleteFile(ZipPath);
+  end;
+
+  LogInfo('gateway: workspace import <- %d bytes', [Size]);
+  WriteJSON(AResp, 200,
+    '{"imported":true,"bytes":' + IntToStr(Size) +
+    ',"note":"workspace updated; restart serve/gateway to pick up new skills/config"}');
 end;
 
 procedure TGatewayServer.HandleKBList(AResp: TIdHTTPResponseInfo);

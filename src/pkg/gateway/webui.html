@@ -589,6 +589,8 @@
         <button class="icon-btn" id="config-reload">Reload</button>
         <button class="icon-btn" id="config-raw-toggle" title="Toggle the raw JSON editor (for adding/removing array entries the form can't)">Raw JSON</button>
         <button class="icon-btn" id="ws-export" title="Download workspace/ (memory, skills, KB, sessions) as a zip. Secrets in config.json are NOT included.">⬇ workspace.zip</button>
+        <button class="icon-btn" id="ws-import" title="Upload a workspace.zip and overlay it onto workspace/ — files in the zip overwrite, others are kept. Restart serve/gateway to pick up new skills.">⬆ import zip</button>
+        <input type="file" id="ws-import-file" accept=".zip,application/zip" style="display:none">
         <span id="config-status" class="settings-status"></span>
       </div>
       <p class="settings-hint">Edits write <code>config.json</code> on the server and apply on the next
@@ -1989,12 +1991,37 @@ const tabLoaders = {
       finally { btn.disabled = false; }
     }
 
+    // Upload a workspace.zip and overlay it onto workspace/. POST the raw
+    // bytes (application/zip) — the server zip-slip-validates every entry
+    // before extracting, and merges (zip files overwrite, others kept).
+    async function importWorkspace(file) {
+      if (!file) return;
+      const btn = $("#ws-import");
+      if (!confirm("Overlay \"" + file.name + "\" onto workspace/?\n\n" +
+                   "Files in the zip overwrite existing ones; other files are kept. " +
+                   "Restart serve/gateway afterwards to pick up new skills.")) return;
+      btn.disabled = true; setStatus("uploading & extracting " + file.name + "…");
+      try {
+        const r = await gwFetch("/v1/workspace/import", {
+          method: "POST",
+          headers: { "Content-Type": "application/zip" },
+          body: file,
+        });
+        let j = {}; try { j = await r.json(); } catch {}
+        if (r.ok && j.imported) setStatus(j.note || "workspace imported", "ok");
+        else setStatus("import failed: " + (j.error || ("http " + r.status)), "err");
+      } catch (e) { setStatus("import failed: " + e, "err"); }
+      finally { btn.disabled = false; $("#ws-import-file").value = ""; }
+    }
+
     if (!form.dataset.wired) {
       form.dataset.wired = "1";
       save.addEventListener("click", doSave);
       reload.addEventListener("click", load);
       rawBtn.addEventListener("click", () => setRawMode(!rawMode));
       $("#ws-export").addEventListener("click", exportWorkspace);
+      $("#ws-import").addEventListener("click", () => $("#ws-import-file").click());
+      $("#ws-import-file").addEventListener("change", (e) => importWorkspace(e.target.files[0]));
     }
     await load();
   },
