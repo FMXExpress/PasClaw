@@ -149,6 +149,11 @@ type
       indexed sources and totals; POST /v1/kb/upload writes a document into
       workspace/kb-files and (re)indexes it; GET /v1/kb/search?q= runs the
       same FTS/vector search the kb_search tool uses. }
+    { GET /v1/workspace/export -- stream $PASCLAW_HOME/workspace as a zip
+      download. Deliberately scoped to workspace/ (NOT the whole home) so
+      config.json secrets and oauth tokens at the home root are never
+      shipped. }
+    procedure HandleWorkspaceExport(AResp: TIdHTTPResponseInfo);
     procedure HandleKBList(AResp: TIdHTTPResponseInfo);
     procedure HandleKBUpload(ARequest: TIdHTTPRequestInfo;
                              AResp: TIdHTTPResponseInfo);
@@ -297,6 +302,7 @@ uses
   PasClaw.Crypto.HMAC,        { Base64ToBytes -- decode binary KB uploads }
   PasClaw.Skills.Loader,
   PasClaw.Skills.Pending,
+  PasClaw.Skills.Zip,       { PackDirToZip -- workspace export download }
   PasClaw.Skills.Install,   { InstallSkillTarget / RemoveSkillFiles / IsSafeSkillName }
   PasClaw.Skills.ClawHub,  { SearchClawHub -- catalog search (clawhub.ai) }
   PasClaw.Skills.PasClawHub, { SearchPasClawHub -- catalog search (pasclaw.dev) }
@@ -849,6 +855,7 @@ begin
     else if (ARequest.Command = 'DELETE') and (Copy(Doc, 1, 11) = '/v1/skills/') then HandleSkillRemove(Doc, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/kb/search') then HandleKBSearch(ARequest, AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/kb/upload') then HandleKBUpload(ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/workspace/export') then HandleWorkspaceExport(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/kb')       then HandleKBList(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/memory/search') then HandleMemorySearch(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/memory')  then HandleMemoryList(AResponse)
@@ -1270,6 +1277,63 @@ begin
   for i := 1 to Length(Name) do
     if not CharInSet(Name[i], ['A'..'Z','a'..'z','0'..'9','.','-','_',' ','(',')']) then Exit;
   Result := True;
+end;
+
+procedure TGatewayServer.HandleWorkspaceExport(AResp: TIdHTTPResponseInfo);
+{ Pack workspace/ into a zip and stream it as a download. Scoped to
+  workspace/ (not the whole home) so config.json / oauth tokens never
+  ship. The temp zip is written at the home ROOT (outside workspace) so
+  PackDirToZip doesn't try to include the file it's still writing. }
+const
+  ExcludeFromZip: array[0..3] of string =
+    ('.git', '.DS_Store', 'Thumbs.db', 'kb.db-journal');
+var
+  WsDir, ZipPath, Err: string;
+  Strm: TMemoryStream;
+  FS: TFileStream;
+begin
+  WsDir := JoinPath(GetHome, 'workspace');
+  if not DirectoryExists(WsDir) then
+  begin
+    WriteJSON(AResp, 404, '{"error":"no workspace directory yet"}');
+    Exit;
+  end;
+  ZipPath := JoinPath(GetHome,
+    'workspace-export-' + FormatDateTime('yyyymmdd-hhnnss', Now) + '.zip');
+  if not PackDirToZip(WsDir, ZipPath, ExcludeFromZip, Err) then
+  begin
+    WriteJSON(AResp, 500, '{"error":"' + JsonEscape('export failed: ' + Err) + '"}');
+    Exit;
+  end;
+  Strm := TMemoryStream.Create;
+  try
+    try
+      FS := TFileStream.Create(ZipPath, fmOpenRead or fmShareDenyWrite);
+      try
+        if FS.Size > 0 then Strm.CopyFrom(FS, FS.Size);
+      finally
+        FS.Free;
+      end;
+    except
+      on E: Exception do
+      begin
+        DeleteFile(ZipPath);
+        Strm.Free;
+        WriteJSON(AResp, 500, '{"error":"' + JsonEscape(E.Message) + '"}');
+        Exit;
+      end;
+    end;
+  finally
+    DeleteFile(ZipPath);   { bytes are in memory now; drop the temp file }
+  end;
+  Strm.Position := 0;
+  AResp.ResponseNo  := 200;
+  AResp.ContentType := 'application/zip';
+  AResp.CustomHeaders.AddValue('Content-Disposition', 'attachment; filename="workspace.zip"');
+  AResp.ContentStream     := Strm;
+  AResp.FreeContentStream := True;
+  AResp.ContentLength     := Strm.Size;
+  LogInfo('gateway: workspace export -> %d bytes', [Strm.Size]);
 end;
 
 procedure TGatewayServer.HandleKBList(AResp: TIdHTTPResponseInfo);

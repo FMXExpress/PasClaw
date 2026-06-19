@@ -588,6 +588,7 @@
         <button class="primary" id="config-save">Save</button>
         <button class="icon-btn" id="config-reload">Reload</button>
         <button class="icon-btn" id="config-raw-toggle" title="Toggle the raw JSON editor (for adding/removing array entries the form can't)">Raw JSON</button>
+        <button class="icon-btn" id="ws-export" title="Download workspace/ (memory, skills, KB, sessions) as a zip. Secrets in config.json are NOT included.">⬇ workspace.zip</button>
         <span id="config-status" class="settings-status"></span>
       </div>
       <p class="settings-hint">Edits write <code>config.json</code> on the server and apply on the next
@@ -1965,11 +1966,35 @@ const tabLoaders = {
     }
 
     /* Wire once; subsequent tab visits just reload the current config. */
+    // Download workspace/ as a zip. gwFetch carries the bearer token, so we
+    // fetch -> blob -> synthetic <a download> rather than a plain link.
+    async function exportWorkspace() {
+      const btn = $("#ws-export");
+      btn.disabled = true; setStatus("packing workspace…");
+      try {
+        const r = await gwFetch("/v1/workspace/export");
+        if (!r.ok) {
+          let msg = "http " + r.status;
+          try { const j = await r.json(); if (j.error) msg = j.error; } catch {}
+          setStatus("export failed: " + msg, "err"); return;
+        }
+        const blob = await r.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = "workspace.zip";
+        document.body.appendChild(a); a.click(); a.remove();
+        URL.revokeObjectURL(url);
+        setStatus("downloaded workspace.zip (" + Math.round(blob.size / 1024) + " KB)", "ok");
+      } catch (e) { setStatus("export failed: " + e, "err"); }
+      finally { btn.disabled = false; }
+    }
+
     if (!form.dataset.wired) {
       form.dataset.wired = "1";
       save.addEventListener("click", doSave);
       reload.addEventListener("click", load);
       rawBtn.addEventListener("click", () => setRawMode(!rawMode));
+      $("#ws-export").addEventListener("click", exportWorkspace);
     }
     await load();
   },
