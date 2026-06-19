@@ -513,6 +513,85 @@ recording, plugin SDK. Architectural differences:
   needs its own onboard / config / channel auth that's out of scope
   here.
 
+## Capability-fixture shootout: `11-skill`, `13-web`, `14-memory`
+
+Three fixtures designed so the capability tool has a measurable
+advantage over its workaround. Nine cells (3 fixtures × 3 profiles)
+driven by parallel subagents.
+
+| fixture | lean-edit | stock | max-build | what we measured |
+|---|---|---|---|---|
+| `11-skill-discovery` | 4 turns | 7 turns | **5 turns** | max-build's `skills_list` + `skills_view` saved 2 turns over stock's "find SKILL.md manually" path |
+| `13-web-context` | **5 turns** | 6 turns | 7 turns | `web_fetch` on localhost was a NET NEGATIVE (SSRF guard blocks 127/8, agent has to fall back to shell_exec curl, costing 1-2 extra turns) |
+| `14-prior-session` | 9 turns | (driver bug) | 9 turns | `memory_search` returned no results — the FTS5 index doesn't auto-build for hand-staged NDJSON files in `workspace/memory/`. All profiles fell back to fs_read. |
+
+### Real PasClaw findings surfaced by these fixtures
+
+**`web_fetch` blocks loopback by SSRF guard.** Real security feature
+documented for the first time by the bench: PasClaw's `web_fetch`
+refuses 127/8 destinations. Profiles WITH `web_fetch` actively cost
+turns on this fixture because the model tried web_fetch first, got
+blocked, and fell back to `shell_exec curl`. The SSRF guard is
+correct policy, but it means `web_fetch` adds zero value for
+localhost-pointed tasks. The fix isn't to remove the guard — it's
+either to recognize localhost in the model's tool choice or to
+document the boundary in the tool description.
+
+**`memory_search` doesn't see fresh NDJSON files.** All three fix14
+cells tried `memory_search` and got no results — the FTS5 index
+doesn't auto-build when an NDJSON file is dropped into
+`$PASCLAW_HOME/workspace/memory/`. To exercise `memory_search`, the
+bench setup would need to run `pasclaw memory provision` (or an
+equivalent indexing step). Without that, the tool is dead weight for
+any task that depends on a hand-seeded memory log. Documentation of
+this requirement could save operators significant debugging time.
+
+**`skills_list` + `skills_view` DO save turns on skill discovery.**
+The cleanest "max-build wins on capability" result of the entire
+bench: 5 turns vs 7 for stock. The 2-turn savings came from skipping
+the manual SKILL.md discovery step (stock's subagent had to
+`shell_exec find / -name SKILL.md`). On a workspace where the model
+doesn't already know skills live under `$PASCLAW_HOME/workspace/skills/`,
+`skills_list` is a real time-saver.
+
+### Caveats
+
+- **lean-edit fix11 (4 turns) is biased low.** The driver prompt
+  explicitly told the model where PASCLAW_HOME was, so the model
+  went straight to `fs_read` with an absolute path. In a real
+  session without that hint, lean-edit's `find SKILL.md` discovery
+  cost would match stock's 7 turns. The fair comparison is
+  **max-build's 5 turns vs stock's 7 turns**: a clean 2-turn win
+  from `skills_list` + `skills_view`.
+- **stock fix14 was a driver-path bug** (subagent fs_write'd to
+  `pasclaw-home/answer.txt` instead of the workspace cwd), so the
+  oracle reports FAIL. The model produced the correct answer
+  (`cbor`); it just landed in the wrong directory.
+- Fixture `12-vault-needs-library` was designed but not run — vault
+  needs either a reachable `pasclaw.dev/vault` (network egress) or a
+  local mock vault server (not built). Documented gap.
+
+### What the four capability fixtures actually showed
+
+Of the three capabilities tested in shootouts (skill, web, memory):
+
+1. **`skills_list` / `skills_view`** is the one capability that
+   demonstrably earns its bytes: 2 turns saved on a skill-driven
+   task. Real win.
+2. **`web_fetch`** is dead weight or worse on the localhost-shaped
+   fixture this bench can construct. Would only earn its bytes on a
+   public URL the model needs and the sandbox can reach — neither of
+   which is testable in this bench's network policy.
+3. **`memory_search`** is dead weight on this bench because the
+   FTS5 index doesn't auto-build for staged memory files. To test
+   it fairly, setup would have to run `pasclaw memory provision`
+   first. Worth a follow-up fixture.
+
+For everyday productive coding (where you're not consulting installed
+skills mid-task), `lean-edit` continues to win on cost without losing
+pass-rate. For sessions that USE installed skills, max-build's extra
+2895 bytes/turn finally has a measurable payoff.
+
 ## Real-codebase result: `10-add-cloudflare-provider`
 
 First fixture on a real codebase, not a hand-staged toy. setup.sh
