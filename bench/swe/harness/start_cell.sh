@@ -88,10 +88,11 @@ argv = [
     "--provider", "stub", "--model", "stub",
     "--max-iters", str(variant.get("max_iters", 20)),
 ]
-if variant.get("profile"):    argv += ["--profile",    variant["profile"]]
-if variant.get("mode"):       argv += ["--mode",       variant["mode"]]
-if variant.get("no_tools"):   argv += ["--no-tools"]
-if variant.get("no_mcp"):     argv += ["--no-mcp"]
+if variant.get("profile"):     argv += ["--profile",  variant["profile"]]
+if variant.get("mode"):        argv += ["--mode",     variant["mode"]]
+if variant.get("no_tools"):    argv += ["--no-tools"]
+if variant.get("no_mcp"):      argv += ["--no-mcp"]
+if variant.get("no_hashline"): argv += ["--no-hashline"]
 if variant.get("system_prompt"): argv += ["--system", variant["system_prompt"]]
 with open(out_path, "w") as fh:
     json.dump(argv, fh, indent=2)

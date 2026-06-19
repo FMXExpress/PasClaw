@@ -93,8 +93,9 @@ def build_argv(variant: dict, prompt: str, workspace: Path) -> list[str]:
     ]
     if variant.get("profile"): argv += ["--profile", variant["profile"]]
     if variant.get("mode"):    argv += ["--mode",    variant["mode"]]
-    if variant.get("no_tools"): argv += ["--no-tools"]
-    if variant.get("no_mcp"):   argv += ["--no-mcp"]
+    if variant.get("no_tools"):    argv += ["--no-tools"]
+    if variant.get("no_mcp"):      argv += ["--no-mcp"]
+    if variant.get("no_hashline"): argv += ["--no-hashline"]
     if variant.get("system_prompt"):
         argv += ["--system", variant["system_prompt"]]
     return argv

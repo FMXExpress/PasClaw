@@ -333,6 +333,21 @@ features most operators don't need**. Over a 10-turn task with PasClaw's
 typical prompt-cache behavior, that's ~5-7K tokens/task. Per-task cost
 dominates over wall-clock on every real provider.
 
+### Recipe for the bench-proven minimum
+
+`--profile lean-edit --no-hashline` produces a **7681 B / 7-tool**
+prompt that solved every bench fixture (4/4 pass via subagent
+drivers). That's **−51% from `max-build`**. The 7 surviving tools:
+`fs_read`, `fs_write`, `fs_list`, `shell_exec`, `execute_code`,
+`memory_search`, `session_search`. Drops `fs_edit_hashline` and
+`fs_grep` (which are bundled together behind `--no-hashline`).
+
+`--no-hashline` is currently a CLI flag without a corresponding
+config field — exposing it as `hashline_enabled: false` in TConfig
++ FromJSON + the agent / build / serve commands would let a future
+`lean-fs` profile inherit from `lean-edit` and set it declaratively.
+Small Pascal change; worth doing in a follow-up.
+
 ### Three proposed composites — all shipped as built-in profiles
 
 - **`lean-edit`** — `lean-stock` minus `web_fetch` + `vault_tools`. The
@@ -373,6 +388,62 @@ On a 10-turn task, the gap widens to ~70 KB. With prompt-cache on, the
 billing-side savings are smaller (cached prompt is half-price on most
 providers) but the per-turn latency hit from a bigger payload still
 stings.
+
+### Are the tools we ship actually being used?
+
+Sharper question than "which profile is cheapest" — which tools earn
+their bytes on real tasks? `harness/tool_utilization.py` tallies
+per-tool call counts across the bundled mock transcripts and any
+live-driven runs left under `results/`.
+
+On the four bundled fixtures, **the ideal trajectories use 3 tools out
+of 17 (18%)** — `fs_read`, `fs_write`, `shell_exec`. The other 14 are
+registered but never called. They cost **10,303 bytes (90.7% of the
+total tool-registration budget) for zero use** on these tasks. Full
+table in `results/tool_utilization.md`.
+
+The big caveat is that these fixtures are small. Real coding tasks
+would call `fs_grep` (find callers), `fs_edit_hashline` (surgical
+patches), and `memory_search` (recall prior decisions) far more often.
+The 18% number is a floor, not a ceiling. But it's also empirical
+evidence that `max-build`'s 17 registrations are paid mostly out of
+optimism, not measured benefit, for the simple-task end of the
+distribution.
+
+Empirical validation: running the most-stripped config (`lean-edit`
++ `--no-hashline`, **7681 B / 7 tools — half of `max-build`**) on
+all four fixtures through subagent drivers, all four still pass. That
+covers fs_read, fs_write, fs_list, shell_exec, execute_code,
+memory_search, session_search — the irreducible minimum that handled
+every bench task.
+
+### How does this compare to openclaw?
+
+[openclaw](https://github.com/openclaw/openclaw) is the upstream
+PasClaw drew its memory architecture from. It's a TypeScript
+implementation with a much broader scope: 75+ subdirectories under
+`src/` including channels (Discord, Slack), media generation (image,
+music, video), realtime transcription, talk (voice), trajectory
+recording, plugin SDK. Architectural differences:
+
+- **Prompt construction**: openclaw is data-driven — the LLM prompt
+  is composed from workspace files (`~/.openclaw/workspace/AGENTS.md`,
+  `SOUL.md`, `TOOLS.md`) that the operator owns and edits. PasClaw's
+  is mostly compiled-in. Tradeoff: openclaw is more flexible per
+  deployment, PasClaw is more predictable across deployments.
+- **Tool surface**: openclaw exposes everything openclaw is, including
+  the voice / channel / media-generation paths PasClaw doesn't have.
+  Its default `tools[]` payload is therefore likely larger than
+  `max-build`. For pure SWE-style coding tasks (what this bench
+  measures), PasClaw's `lean-edit` is the smaller surface; for
+  agent-as-OS workflows (multi-channel chat, scheduled cron, voice),
+  openclaw's surface is the more capable one.
+- **Effectiveness on the same tasks**: undetermined without running
+  openclaw against these fixtures. The bench harness is provider-
+  agnostic — a single `provider_stub.py --proxy <openclaw_endpoint>`
+  cell would slot openclaw in. Left as a follow-up because openclaw
+  needs its own onboard / config / channel auth that's out of scope
+  here.
 
 ### Where are the remaining improvements
 
