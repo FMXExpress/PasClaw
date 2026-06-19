@@ -317,6 +317,8 @@ def main() -> int:
                            help="provider stub replays from this file")
     stub_mode.add_argument("--proxy", metavar="BASE_URL",
                            help="provider stub forwards to this upstream")
+    stub_mode.add_argument("--blocking", metavar="QUEUE_DIR",
+                           help="file-FIFO mode for live driving")
     ap.add_argument("--record", metavar="TRANSCRIPT_JSONL",
                     help="record the proxied transcript (proxy mode only)")
     args = ap.parse_args()
@@ -345,6 +347,8 @@ def main() -> int:
     stub_args = []
     if args.mock:
         stub_args = ["--mock", str(Path(args.mock).resolve())]
+    elif args.blocking:
+        stub_args = ["--blocking", str(Path(args.blocking).resolve())]
     else:
         stub_args = ["--proxy", args.proxy]
     if args.record:

@@ -127,20 +127,48 @@ class Upstream:
 # --------------------------------------------------------------------------- #
 
 
-def metrics_from_response(resp_body: bytes) -> dict:
+def _rough_token_count(s: str) -> int:
+    """Approximate token count: one token per 4 chars, the OpenAI rule of
+    thumb. Off by ~10-20% for English prose; off more for code-heavy text.
+    Used as a fallback when the live-driven provider doesn't supply honest
+    usage numbers."""
+    return max(1, len(s) // 4)
+
+
+def metrics_from_response(
+    resp_body: bytes,
+    req_body: bytes = b"",
+    estimate_if_missing: bool = False,
+) -> dict:
     """Parse a chat-completion response body and return a metric record.
-    Tolerates non-JSON bodies (upstream errors etc.) by returning zeros."""
+    Tolerates non-JSON bodies (upstream errors etc.) by returning zeros.
+
+    When estimate_if_missing is True, a zero/missing usage block is
+    replaced by a rough char-count estimate from req_body and resp_body.
+    Use this for live-driven runs where the LLM author (a human or a
+    subagent) may not bother filling in honest usage numbers; leave it
+    off for proxy runs where the upstream provider's count is real."""
     try:
         obj = json.loads(resp_body)
     except (json.JSONDecodeError, UnicodeDecodeError):
-        return {"tokens_in": 0, "tokens_out": 0, "tool_calls": 0}
+        obj = {}
     usage = obj.get("usage") or {}
     choice = (obj.get("choices") or [{}])[0]
     msg = choice.get("message") or {}
     tool_calls = msg.get("tool_calls") or []
+    tokens_in = int(usage.get("prompt_tokens") or 0)
+    tokens_out = int(usage.get("completion_tokens") or 0)
+    if estimate_if_missing and (tokens_in == 0 or tokens_in == 1):
+        tokens_in = _rough_token_count(req_body.decode("utf-8", "replace"))
+    if estimate_if_missing and (tokens_out == 0 or tokens_out == 1):
+        # Estimate from the assistant message content + tool-call argument blobs.
+        out_str = msg.get("content") or ""
+        for tc in tool_calls:
+            out_str += (tc.get("function") or {}).get("arguments", "")
+        tokens_out = _rough_token_count(out_str)
     return {
-        "tokens_in": int(usage.get("prompt_tokens") or 0),
-        "tokens_out": int(usage.get("completion_tokens") or 0),
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
         "tool_calls": len(tool_calls),
     }
 
@@ -153,6 +181,8 @@ def metrics_from_response(resp_body: bytes) -> dict:
 class _State:
     transcript: Optional[Transcript] = None
     upstream: Optional[Upstream] = None
+    blocking_queue: Optional[str] = None  # dir; req_N.json / resp_N.json files
+    blocking_timeout_s: int = 600
     record_fh = None  # open file handle for --record
     turn_count = 0
 
@@ -195,6 +225,8 @@ class StubHandler(BaseHTTPRequestHandler):
 
         if _State.upstream:
             status, resp_body, resp_ct = _State.upstream.forward(req_body, content_type)
+        elif _State.blocking_queue:
+            status, resp_body, resp_ct = self._blocking_serve(req_body)
         else:
             assert _State.transcript is not None, "no mode configured"
             resp_body = json.dumps(_State.transcript.next_response()).encode()
@@ -212,7 +244,13 @@ class StubHandler(BaseHTTPRequestHandler):
                 _State.record_fh.flush()
 
         _State.turn_count += 1
-        m = metrics_from_response(resp_body)
+        # In --blocking mode the "provider" is a Claude (this session or a
+        # subagent) authoring responses by hand -- it rarely fills honest
+        # usage numbers. Fall back to a char-count estimate so the bench's
+        # token metric remains comparable across cells. Proxy / mock modes
+        # trust the response's usage field verbatim.
+        estimate = _State.blocking_queue is not None
+        m = metrics_from_response(resp_body, req_body, estimate_if_missing=estimate)
         _State.emit_event({
             "event": "turn",
             "turn": _State.turn_count,
@@ -222,6 +260,40 @@ class StubHandler(BaseHTTPRequestHandler):
         })
 
         self._send(status, resp_body, resp_ct)
+
+    def _blocking_serve(self, req_body: bytes) -> tuple[int, bytes, str]:
+        """File-FIFO mode: write req_N.json, poll for resp_N.json.
+
+        Atomic publication: write req_N.json.tmp first, then rename to
+        req_N.json so the driver never sees a half-written file. Same for
+        the response side -- the driver writes resp_N.json.tmp and renames.
+        Two-end file handshake stays correct even with concurrent IO."""
+        seq = _State.turn_count + 1  # 1-based; _State.turn_count bumps after
+        q = _State.blocking_queue
+        req_tmp = os.path.join(q, "req_%d.json.tmp" % seq)
+        req_final = os.path.join(q, "req_%d.json" % seq)
+        resp_path = os.path.join(q, "resp_%d.json" % seq)
+
+        with open(req_tmp, "wb") as fh:
+            fh.write(req_body)
+        os.rename(req_tmp, req_final)
+
+        # Poll for the response. Driver MUST write resp_N.json.tmp then
+        # rename, so we only see it once it's complete.
+        deadline = time.monotonic() + _State.blocking_timeout_s
+        while time.monotonic() < deadline:
+            if os.path.exists(resp_path):
+                with open(resp_path, "rb") as fh:
+                    body = fh.read()
+                return 200, body, "application/json"
+            time.sleep(0.5)
+        # Timeout: synthesize a terminal "I gave up" response so the agent
+        # loop exits instead of retrying forever.
+        body = json.dumps(
+            _final_message("Provider timeout: no response after %ds." %
+                            _State.blocking_timeout_s)
+        ).encode()
+        return 200, body, "application/json"
 
     def _send(self, status: int, body: bytes, content_type: str) -> None:
         self.send_response(status)
@@ -249,6 +321,13 @@ def main() -> int:
                       help="replay each line as the next assistant response")
     mode.add_argument("--proxy", metavar="BASE_URL",
                       help="forward to <BASE_URL>/v1/chat/completions")
+    mode.add_argument("--blocking", metavar="QUEUE_DIR",
+                      help="write each request to QUEUE_DIR/req_N.json and "
+                           "poll QUEUE_DIR/resp_N.json for the reply. Used "
+                           "when a Claude subagent (or human) is the live "
+                           "provider in the loop.")
+    ap.add_argument("--blocking-timeout-s", type=int, default=600,
+                    help="max seconds to wait for each response (default 600)")
 
     ap.add_argument("--record", metavar="TRANSCRIPT_JSONL",
                     help="append each response to a JSONL transcript (proxy mode)")
@@ -259,11 +338,15 @@ def main() -> int:
 
     if args.mock:
         _State.transcript = Transcript(args.mock)
+    elif args.blocking:
+        os.makedirs(args.blocking, exist_ok=True)
+        _State.blocking_queue = os.path.abspath(args.blocking)
+        _State.blocking_timeout_s = args.blocking_timeout_s
     else:
         _State.upstream = Upstream(args.proxy, os.environ.get(args.upstream_key_env))
 
     if args.record:
-        if args.mock:
+        if not args.proxy:
             ap.error("--record only makes sense with --proxy")
         _State.record_fh = open(args.record, "a", encoding="utf-8")
 
@@ -272,10 +355,15 @@ def main() -> int:
     sys.stdout.write("PORT=%d\n" % actual_port)
     sys.stdout.flush()
 
+    if args.mock:
+        mode = "mock"
+    elif args.blocking:
+        mode = "blocking"
+    else:
+        mode = "proxy"
     _State.emit_event({
         "event": "ready",
-        "host": args.host, "port": actual_port,
-        "mode": "mock" if args.mock else "proxy",
+        "host": args.host, "port": actual_port, "mode": mode,
     })
 
     try:

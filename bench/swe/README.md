@@ -52,7 +52,7 @@ in a follow-up by writing a fixture-loader that maps their schemas to
 ```
 
 `provider_stub.py` is a localhost OpenAI-compatible HTTP server. It runs
-in one of two modes:
+in one of three modes:
 
 - `--mock <transcript.jsonl>` — replay an offline transcript. Each line
   is one full chat-completion response. Used for harness self-tests
@@ -65,6 +65,14 @@ in one of two modes:
   `PROVIDER_STUB_UPSTREAM_KEY` to the bearer token.
   Optional `--record <transcript.jsonl>` snapshots the proxied turns
   for later replay.
+
+- `--blocking <queue_dir>` — file-FIFO mode for live driving. Each
+  POST atomically writes `queue/req_N.json`; the stub then polls
+  `queue/resp_N.json` and returns its content when it appears. The
+  driver (a human, this Claude Code session, or a subagent) is the
+  live LLM in the loop. See `harness/start_cell.sh` /
+  `harness/finalize_cell.sh` / `harness/driver_helper.py` for the
+  bracket+helper pattern.
 
 PasClaw is invoked via `pasclaw build -d <prompt>`, the one-shot
 multi-iter mode designed for CI runs. It writes a workspace.zip-style
@@ -161,9 +169,43 @@ One-shot a single cell:
 ```sh
 python3 bench/swe/harness/run.py \
     --fixture bench/swe/fixture/01-snippet-window-magic-number \
-    --variant @bench/swe/variants.json#0 \   # or '{"id":"x","profile":"stock"}'
+    --variant '{"id":"x","profile":"stock","max_iters":8}' \
     --proxy http://localhost:11434
 ```
+
+### Live driving (human or Claude subagent as the provider)
+
+For inside-the-session bench runs where you want a Claude (this one,
+or a spawned subagent) acting as the LLM directly — no upstream API:
+
+```sh
+# 1. stage a cell, leaving stub + pasclaw running in background
+RUN_ID="live-$(date +%s)"
+bash bench/swe/harness/start_cell.sh \
+    "$PWD/bench/swe/fixture/01-snippet-window-magic-number" \
+    '{"id":"x","profile":"max-build","max_iters":10}' \
+    "$RUN_ID"
+# prints {run_dir, queue, port, pasclaw_pid, stub_pid}
+
+# 2. drive each turn: read req_N.json, write the JSON response
+RUN_DIR="bench/swe/results/run-$RUN_ID"
+python3 bench/swe/harness/driver_helper.py status --queue "$RUN_DIR/queue"
+# {"pending":[1],"answered":[],"next_seq":2}
+cat "$RUN_DIR/queue/req_1.json"   # see what PasClaw is asking
+# author /tmp/r.json as an OpenAI chat-completion response
+python3 bench/swe/harness/driver_helper.py send-reply \
+    --queue "$RUN_DIR/queue" < /tmp/r.json
+# ... repeat until pasclaw.pid exits ...
+
+# 3. finalize -- runs the oracle, writes result.json, kills the stub
+bash bench/swe/harness/finalize_cell.sh "$RUN_DIR"
+```
+
+The Claude Agent SDK pattern: spawn one general-purpose subagent per
+cell with the above sequence as its prompt. Multiple cells can run in
+parallel — each binds a random port and lives in its own RUN_DIR. Real
+sweep results captured this way live alongside mock/proxy results in
+`results/`, scored by the same `score.py`.
 
 ## Metrics
 
@@ -229,6 +271,45 @@ chmod +x bench/swe/fixture/05-my-task/oracle/test.sh
 For the mock transcript, the simplest path is to do one real `--proxy`
 run with `--record` against your favourite upstream provider; the
 resulting JSONL becomes the bundled `mock/default.jsonl`.
+
+## First live-driven results
+
+Five cells driven with Claude as the LLM (no upstream API), using the
+`--blocking` mode + start_cell.sh / finalize_cell.sh / driver_helper.py
+flow:
+
+| fixture | variant | driver | passed | turns | tool_calls | wall_s |
+|---|---|---|---|---|---|---|
+| 01-snippet-window-magic-number | stock         | this session, manual | yes | 3 | 2 | 77 |
+| 01-snippet-window-magic-number | max-build     | subagent (parallel)  | yes | 2 | 1 | 100 |
+| 01-snippet-window-magic-number | low-token     | subagent (parallel)  | yes | 2 | 1 | 101 |
+| 02-windows-shell-quoting       | max-build     | subagent             | yes | 2 | 1 | 112 |
+| 03-count-source-files          | max-build     | subagent (parallel)  | yes | 4 | 3 | 141 |
+
+5/5 pass. The subagents on fixture 01 both converged on a 2-turn solution
+(skip the read, go straight to fs_write) -- the manual cell took 3 because
+I read first. Fixture 03 needed 4 turns because PasClaw's shell sandbox
+denied the subagent's first try at `shell_exec "wc -l $(find ...)"`:
+
+> PasClaw's shell sandbox blocks `$(...)` command substitution as a
+> forbidden pattern. The agent had to split the count and the write into
+> separate tool calls.
+
+That's a real behavior finding surfaced through the bench — exactly the
+kind of trajectory-quality signal Perplexity §"Trajectory quality"
+calls out as the second metric beyond pass-rate.
+
+### Token-metric caveat for live-driven runs
+
+`provider_stub.py` reads `tokens_in` / `tokens_out` from the response's
+`usage` field — which is authoritative for proxy and mock runs (real
+provider, or recorded transcript). For `--blocking` runs, the human or
+subagent author rarely bothers to fill in honest numbers, so the stub
+now applies a char-count fallback (~1 token per 4 chars) when the
+provider returns 0 or 1. That estimator was added in this same commit,
+so the first live-driven sweep above predates it and its tokens columns
+are not meaningful. Re-running with the same RUN_IDs after the change
+will produce comparable token data.
 
 ## Out of scope (v1)
 
