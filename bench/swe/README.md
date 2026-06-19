@@ -513,6 +513,64 @@ recording, plugin SDK. Architectural differences:
   needs its own onboard / config / channel auth that's out of scope
   here.
 
+## Long-creative result: `08-cli-centipede`
+
+A from-scratch build task: write a playable CLI Centipede game in
+Python (curses TUI) with classes for Player/Centipede/Bullet/Game, a
+`--self-test` mode that simulates 20 ticks without a TTY and prints
+`SELF_TEST_OK`, 100-800 LOC. Designed to be the first fixture long
+enough that condenser / tool_output_cap / prompt_cache could fire
+meaningfully.
+
+Subagent-driven runs of three profiles:
+
+| profile | tools | pass | turns | tool calls | wall_s | game LOC | self-test |
+|---|---|---|---|---|---|---|---|
+| `lean-edit` | 9 | **PASS** | 3 | 2 | 247 | 392 | OK |
+| `stock` | 13 | **PASS** | 3 | 2 | 249 | 360 | OK |
+| `max-build` | 17 | **PASS** | 3 | 2 | 247 | 426 | OK |
+
+**All three solved it in exactly 3 turns** (fs_write game.py →
+shell_exec --self-test → done). Same pass-rate, same trajectory shape,
+same wall-clock. The 30-LOC spread is subagent-to-subagent variation,
+not profile-driven.
+
+### What this means
+
+Subagent-driven runs cost (per turn): `lean-edit` ≈ 9.9 KB system+tools,
+`stock` ≈ 12.8 KB, `max-build` ≈ 15.7 KB. Over the 3 turns this task
+took, `lean-edit` paid ~30% less per turn for the **identical
+outcome**. The extra capabilities `max-build` carries — skill discovery,
+skill authoring, condensable tool results, vault lookups — were
+**registered but never invoked**, because the task is self-contained
+and doesn't need any of them.
+
+### Caveats
+
+This doesn't mean `max-build` is wrong for everyone. It means **on a
+one-shot creative task that fits in a small turn budget**, profile
+choice doesn't change the outcome, so the cheapest variant wins on
+cost. The bench HASN'T YET produced a long, capability-dependent task
+where `max-build`'s extras would surface. That's a known gap (`08`
+isn't long enough to trigger condenser; `07-cross-file-grep` was the
+only capability-shaped fixture and shell-shaped substitutes beat
+`fs_grep`).
+
+The genuinely hard test — and the next priority — is a multi-hour
+task where the conversation grows large enough that `condense_reversible`
+fires on accumulated tool outputs. None of these short fixtures hit
+that.
+
+### Tooling note
+
+This shootout initially failed because PasClaw's OpenAI provider
+hardcoded a 120s HTTP read timeout, and Claude subagents authoring
+multi-KB game files frequently took 130+ seconds to publish their
+first reply. All three cells reported "FAIL: game.py missing" even
+though each subagent had a working game in `/tmp/`. Bumped to 600s
+in `src/pkg/providers/PasClaw.Providers.OpenAI.pas` (line 405). Worth
+making configurable, but 600s covers slow-think for now.
+
 ## Capability-fixture result: `07-cross-file-grep`
 
 The first capability test was designed to make `fs_grep` shine: 8
