@@ -1,0 +1,5 @@
+service: alpha-service
+version: 1.0.0
+provider:: openai
+model: gpt-4o-mini
+max_tokens: 2048

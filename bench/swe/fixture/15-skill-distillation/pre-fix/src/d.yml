@@ -1,0 +1,4 @@
+name: delta-job
+schedule:: 0 */4 * * *
+command: scripts/run.sh
+retries: 3

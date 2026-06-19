@@ -1,0 +1,6 @@
+service: gamma-service
+api_base:: https://api.example.com
+timeout_seconds: 60
+features:
+  - auth
+  - cache

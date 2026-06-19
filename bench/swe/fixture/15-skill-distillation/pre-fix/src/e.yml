@@ -1,0 +1,4 @@
+component: epsilon-worker
+queue:: jobs.high
+batch_size: 50
+poll_interval: 1500
