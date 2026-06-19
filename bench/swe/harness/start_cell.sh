@@ -34,6 +34,16 @@ if [ -d "$FIXTURE_DIR/pre-fix" ]; then
   cp -r "$FIXTURE_DIR/pre-fix/." "$RUN_DIR/workspace/"
 fi
 
+# Optional fixture-side setup hook: gets to populate the workspace beyond what
+# the static pre-fix/ tree provides. Used by fixtures that need a snapshot of
+# a real repo (too large to commit verbatim) or want to do a git archive/clone.
+# The hook sees WORKSPACE and FIXTURE_DIR in its env; non-zero exit aborts.
+if [ -x "$FIXTURE_DIR/setup.sh" ]; then
+  WORKSPACE="$RUN_DIR/workspace" FIXTURE_DIR="$FIXTURE_DIR" \
+    bash "$FIXTURE_DIR/setup.sh" >> "$RUN_DIR/setup.log" 2>&1 \
+    || { echo "fixture setup.sh failed; see $RUN_DIR/setup.log" >&2; exit 1; }
+fi
+
 # Start the blocking stub
 python3 "$HARNESS_DIR/provider_stub.py" \
     --blocking "$RUN_DIR/queue" \
