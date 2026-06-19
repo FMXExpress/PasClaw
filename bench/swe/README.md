@@ -513,6 +513,53 @@ recording, plugin SDK. Architectural differences:
   needs its own onboard / config / channel auth that's out of scope
   here.
 
+## Multi-iteration result: `09-bash-notes-cli`
+
+Longer than the Centipede task. The agent has to design AND implement
+a 6-subcommand bash CLI plus write its own end-to-end test suite, then
+gate "done" on the tests actually passing. Expected to surface the
+write→test→fix→retest cycle.
+
+Subagent-driven runs of three profiles:
+
+| profile | tools | pass | turns | tool calls | wall_s | notes script LOC | self-tests |
+|---|---|---|---|---|---|---|---|
+| `lean-edit` (retry) | 9 | **PASS** | 5 | 4 | 213 | 132 | OK |
+| `stock` | 13 | **PASS** | 9 | 8 | 436 | 154 | OK |
+| `max-build` | 17 | **PASS** | 12 | 10 | 433 | 154 | OK |
+
+`max-build` took **3 more turns than stock and 7 more than lean-edit**,
+for the **identical pass-rate**. Subagent transcripts show the extra
+turns were dead-end exploration triggered by the larger tool surface
+(distiller hook firing, extra denylist-recovery attempts).
+
+The first lean-edit attempt (not shown) failed for a driver reason
+unrelated to PasClaw: the subagent fs_write'd to an ABSOLUTE path into
+`pasclaw-home/` instead of the workspace cwd. The retry above clarified
+that PasClaw's `--cwd workspace` means relative paths land correctly.
+Same fixture, same profile, just a clearer driver prompt.
+
+### What this means
+
+For a moderately long, multi-iteration task that DOESN'T need
+max-build's incremental tools (skills, vault, web), max-build pays:
+
+- 30% more prompt bytes per turn (15.7 KB vs lean-edit's 9.9 KB)
+- ~2.4x more turns than lean-edit (12 vs 5)
+- For the same outcome
+
+That's a real cost. The extra capability tools weren't called once
+across the 12 turns. They were registered, advertised in the system
+prompt, and ignored.
+
+Notable real find: **PasClaw's shell denylist blocks `chmod`, bare
+`rm`, and `$(...)` substitution in tool-call command strings**, but
+NOT inside scripts the shell invokes. All three subagents discovered
+this independently and routed around it via `execute_code` (python
+`os.chmod`) or by writing the command to a file then `bash file`.
+That's friction on every bash-shaped task — worth investigating
+whether the denylist is too aggressive for the threat model.
+
 ## Long-creative result: `08-cli-centipede`
 
 A from-scratch build task: write a playable CLI Centipede game in
