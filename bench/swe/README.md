@@ -543,7 +543,95 @@ PasClaw at the real Anthropic endpoint, not through this harness;
 the bench's localhost-stub design needs a model that can author the
 schema reliably.
 
-### Methodology problem at scale — Haiku subagents bypass PasClaw
+### Sonnet 4.6 shootout — identical fixture set, dramatically different reliability
+
+Same 5 fixtures (02, 03, 04, 07, 14) × 3 profiles = 15 cells driven by
+**Sonnet 4.6** instead of Haiku 4.5. Same harness, same prompts, same
+expectations.
+
+### Headline: 15 of 15 REAL
+
+  fixture / profile          turns  tlc  trajectory
+  02-shell-quote / lean-edit    4     3  fs_read -> fs_edit_hashline -> fs_read
+  02-shell-quote / stock         4     3  fs_read -> fs_edit_hashline -> fs_read
+  02-shell-quote / max-build     4     3  fs_read -> fs_edit_hashline -> fs_read
+  03-count-files / lean-edit     3     2  shell_exec -> fs_write
+  03-count-files / stock         3     2  shell_exec -> fs_write
+  03-count-files / max-build     3     2  shell_exec -> fs_write
+  04-yaml-fix / lean-edit        4     2  fs_read -> fs_write          (+1 driver hiccup)
+  04-yaml-fix / stock            3     2  fs_read -> fs_edit_hashline
+  04-yaml-fix / max-build        3     2  fs_read -> fs_write
+  07-cross-grep / lean-edit      3     2  fs_grep -> fs_write
+  07-cross-grep / stock          3     2  fs_grep -> fs_write
+  07-cross-grep / max-build      3     2  fs_grep -> fs_write
+  14-memory / lean-edit          3     2  memory_search -> fs_write    (inferred "cbor" from snippet!)
+  14-memory / max-build          4     3  memory_search -> fs_read -> fs_write
+  14-memory / stock              5     4  memory_search -> fs_read -> fs_write -> fs_write (format slip)
+
+Compare to Haiku on the same fixture set: 1 REAL out of 15. Same
+prompts, same schema, same time budget. The difference is purely
+model capability at authoring the OpenAI chat-completion schema.
+
+### Profile differentiation for Sonnet — basically zero
+
+Look at the trajectory column: across each fixture, Sonnet picked the
+**same tools in the same order regardless of profile**:
+
+  fix02: every profile -> fs_read -> fs_edit_hashline -> fs_read    (3 tlc)
+  fix03: every profile -> shell_exec -> fs_write                    (2 tlc)
+  fix07: every profile -> fs_grep -> fs_write                       (2 tlc)
+  fix04: lean-edit / max-build identical, stock used fs_edit_hashline
+  fix14: lean-edit beat the others (snippet inference)
+
+Same conclusion as Opus on a different fixture set: **for capable
+models on routine tasks, profile choice doesn't move the trajectory**.
+The byte savings (lean-edit's ~30% smaller prompt) still apply, but
+the model behaves the same way regardless.
+
+### Where Sonnet differs from Opus
+
+`fs_edit_hashline`: **Sonnet used it on every fix02 cell and one fix04
+cell, all successfully.** Opus never called it across the ~45 prior
+cells. Haiku tried it on fix01-max-build and couldn't author the
+format. Sonnet sits in the sweet spot — knows the hashline anchor
+format, applies it correctly, doesn't fall back to fs_write.
+
+This is one of the rare cases where a smaller (or differently-trained)
+model uses a tool the bigger one ignores. The bigger model has even
+more "I'll just rewrite the whole file" inclination; Sonnet has more
+"surgical patch" preference. Worth noting for tool-design judgment:
+`fs_edit_hashline` is paying for itself on Sonnet but not on Opus.
+
+### Where Sonnet differs from Haiku
+
+The headline finding from the Haiku run was that **max-build's
+17-tool surface lured Haiku into fs_edit_hashline and a 9-turn
+trajectory vs lean-edit's 3 turns** — a 3x turn ratio.
+
+Sonnet's max-build trajectories are identical to its lean-edit ones.
+No 3x penalty, no extra exploration. Sonnet has the discernment to
+ignore tools it doesn't need. The "small models do WORSE with more
+tools" finding is real but **specifically a Haiku-tier behavior** —
+not a general "smaller models suffer with bigger profiles" rule.
+
+### Cumulative cross-model picture
+
+  model class     reliability  max-build turn penalty   recommendation
+  Haiku 4.5       1/15 REAL    3x (lean-edit STRONGLY better)  lean-edit
+  Sonnet 4.6      15/15 REAL   ~none (profile invariant)        lean-stock (cheapest equal)
+  Opus 4.8        ~45/45 REAL  ~none (profile invariant)        lean-stock / lean-build
+
+For Opus and Sonnet, the lean profiles win on cost-per-turn while
+matching the trajectory shape. For Haiku, the lean profiles win on
+both cost AND turn count.
+
+The bench's overall verdict has converged: **`lean-stock` is the right
+default across every model tier the bench could measure**. The
+remaining open question is whether real-world long-running sessions
+(where condenser would fire) shift the verdict — none of the bench
+fixtures reached that regime.
+
+## Methodology problem at scale — Haiku subagents bypass PasClaw
 
 Across **27 Haiku-driven cells** (9 first wave + 3 fixture-01 retry +
 15 batched), **only 5 produced REAL PasClaw-driven data**
