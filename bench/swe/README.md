@@ -513,6 +513,92 @@ recording, plugin SDK. Architectural differences:
   needs its own onboard / config / channel auth that's out of scope
   here.
 
+## Skill-distillation shootout (`15-skill-distillation`)
+
+First fixture to exercise PasClaw's **auto skill creation** feature
+end-to-end: the post-turn `distiller` pass that asks "should this
+trajectory become a reusable skill?", plus the `auto_approve` toggle
+that controls whether the resulting draft is staged for operator
+review or installed live. Three cells with subagents authoring
+`{"create": true, ...}` when prompted by the distiller.
+
+### Result
+
+| profile | turns | tlc | pass | pending drafts | live skills |
+|---|---|---|---|---|---|
+| `lean-edit` | 14 | 12 | PASS | 0 | 0 |
+| `max-build` (default) | 13 | 11 | PASS | **1** (staged in `.pending/`) | 0 |
+| `max-build` + `auto_approve=true` | 13 | 11 | PASS | 0 | **1** (live) |
+
+**The distiller pipeline works end-to-end.** The bench captured real
+artifacts:
+
+- `max-build` (default `auto_approve=false`) staged a draft at
+  `pasclaw-home/workspace/skills/.pending/20260619-111748-2686/SKILL.md`
+  (662 bytes) with valid YAML frontmatter, a procedural body, plus
+  proper `meta.json` recording the action / name / source / timestamp.
+- `max-build + auto_approve` skipped staging and installed the draft
+  directly at `pasclaw-home/workspace/skills/yaml-double-colon-autofix/SKILL.md`.
+
+### Correction surfaced by this fixture
+
+**Distiller is NOT max-build-specific.** I had been describing the
+distiller as a "max-build add-on", but the bench confirmed it's
+inherited from `lean-stock` and present in every `lean-*` profile
+(it's a zero-prompt-cost behavioral toggle, exactly as the earlier
+ablation showed). The lean-edit cell's distiller fired too — its
+subagent just declined (`{"create": false}`) per the task brief, so
+no artifact got staged.
+
+So the distiller is **available everywhere except baseline + security**.
+What max-build adds that the lean profiles don't is:
+
+- **`skills_manage`** (`+1491 bytes/turn`) — the agent can manually
+  create / install / remove skills MID-SESSION, not just receive
+  distiller drafts post-turn. Differentiator only for sessions where
+  the model is actively organizing its own skill library.
+- (`auto_approve` is operator-controlled, not profile-bound — flipping
+  it on lean-edit would also produce live installs.)
+
+### The cleanest distillation recipe
+
+Based on the bench:
+
+- For **operator-supervised** skill curation (default for most
+  deployments): `lean-stock` is enough. The distiller fires, drafts
+  go to `.pending/`, the operator approves via
+  `pasclaw skills approve <id>`. Cheapest prompt that exercises the
+  feature.
+- For **autonomous** skill curation (CI, scheduled agents,
+  experimental setups): `lean-stock` + `auto_approve=true` via
+  config override. Live installs.
+- For **mid-session skill authoring** (rare): max-build's
+  `skills_manage` is the unique addition.
+
+### Verified artifact structure
+
+`meta.json` shape PasClaw produced:
+```json
+{"id":"20260619-111748-2686","action":"create",
+ "name":"yaml-double-colon-fix","source":"agent",
+ "created":"2026-06-19T11:17:48Z"}
+```
+
+`SKILL.md` shape (the bench's subagent-authored draft):
+```
+---
+name: yaml-double-colon-fix
+description: Fix bash-style double-colon typos in YAML config files...
+---
+
+# yaml-double-colon-fix
+...steps the next agent can follow...
+```
+
+PasClaw's `IsSafeSkillName` + dangerous-pattern guard ran on the
+incoming JSON and accepted the name. Approve at-write time re-runs
+those guards, per the doc comment in `PasClaw.Skills.Pending.pas`.
+
 ## Memory_search shootout (refixed `14-prior-session`)
 
 The first round of `14-prior-session` came back with `memory_search`
