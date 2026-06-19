@@ -1,6 +1,6 @@
 # Ablation: first-turn prompt cost by setting
 
-Generated: 2026-06-19T03:21:50Z
+Generated: 2026-06-19T04:36:55Z
 
 Each row is one variant of PasClaw's configuration. `req_bytes`
 is the size of the FIRST `/v1/chat/completions` request body --
@@ -14,6 +14,7 @@ tokens spent on every turn before any agent reasoning.
 | `stock-no-tools` | 1879 | -10943 | 0 | -13 | − execute_code fs_edit_hashline fs_grep fs_list fs_read fs_write memory_fetch memory_search session_search shell_exec vault_get vault_search web_fetch |
 | `baseline` | 9910 | -2912 | 9 | -4 | − memory_fetch vault_get vault_search web_fetch |
 | `security` | 9910 | -2912 | 9 | -4 | − memory_fetch vault_get vault_search web_fetch |
+| `lean-edit` | 9910 | -2912 | 9 | -4 | − memory_fetch vault_get vault_search web_fetch |
 | `stock` | 12822 | +0 | 13 | +0 | — |
 | `stock+orient-task-aware` | 12822 | +0 | 13 | +0 | — |
 | `stock+checkpoints` | 12822 | +0 | 13 | +0 | — |

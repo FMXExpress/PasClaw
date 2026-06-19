@@ -257,6 +257,27 @@ const
     '"tool_output_cap":16384' +
     '}';
 
+  (* `lean-edit`: lean-stock for pure-local sessions that never reach
+     the web or the Code Vault. The first-turn ablation shows
+     web_fetch_enabled+vault_tools_enabled together cost 2912 bytes /
+     4 tool registrations (web_fetch, vault_get, vault_search,
+     memory_fetch). Stripping them lands at 9910 B/turn -- 22.7%
+     smaller than stock and 37% smaller than max-build. Use this for
+     focused editing / refactor sessions where you already have all
+     the context locally. *)
+
+  Profile_LeanEdit: string =
+    '{' +
+    '"_description":"lean-stock minus web_fetch / vault / memory_fetch ' +
+    '-- the smallest prompt that still gets you a working code-editing ' +
+    'agent. 22.7% smaller than stock per turn. Use for pure local ' +
+    'sessions where you don''t need web or vault. See ' +
+    'bench/swe/results/ablation.md.",' +
+    '"_inherits":["lean-stock"],' +
+    '"web_fetch_enabled":false,' +
+    '"vault_tools_enabled":false' +
+    '}';
+
   (* `stock` mirrors TConfig.Create's exact defaults as an explicit
      profile so `pasclaw profile show stock` documents the fresh-
      install state. Applying it is a no-op (FromJSON sees its own
@@ -307,15 +328,16 @@ type
 
 function Builtins: TBuiltinArray;
 begin
-  SetLength(Result, 8);
+  SetLength(Result, 9);
   Result[0].Name := 'stock';      Result[0].Body := Profile_Stock;
   Result[1].Name := 'baseline';   Result[1].Body := Profile_Baseline;
   Result[2].Name := 'low-token';  Result[2].Body := Profile_LowToken;
   Result[3].Name := 'security';   Result[3].Body := Profile_Security;
-  Result[4].Name := 'lean-stock'; Result[4].Body := Profile_LeanStock;
-  Result[5].Name := 'lean-build'; Result[5].Body := Profile_LeanBuild;
-  Result[6].Name := 'max-build';  Result[6].Body := Profile_MaxBuild;
-  Result[7].Name := 'all-on';     Result[7].Body := Profile_AllOn;
+  Result[4].Name := 'lean-edit';  Result[4].Body := Profile_LeanEdit;
+  Result[5].Name := 'lean-stock'; Result[5].Body := Profile_LeanStock;
+  Result[6].Name := 'lean-build'; Result[6].Body := Profile_LeanBuild;
+  Result[7].Name := 'max-build';  Result[7].Body := Profile_MaxBuild;
+  Result[8].Name := 'all-on';     Result[8].Body := Profile_AllOn;
 end;
 
 function ExtractDescription(const Body: string): string;

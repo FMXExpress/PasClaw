@@ -333,8 +333,14 @@ features most operators don't need**. Over a 10-turn task with PasClaw's
 typical prompt-cache behavior, that's ~5-7K tokens/task. Per-task cost
 dominates over wall-clock on every real provider.
 
-### Two proposed composites
+### Three proposed composites — all shipped as built-in profiles
 
+- **`lean-edit`** — `lean-stock` minus `web_fetch` + `vault_tools`. The
+  smallest viable code-editing surface: still has `fs_*`, `shell_exec`,
+  `execute_code`, `memory_search`, `session_search`. **22.7% smaller
+  than `stock` (9910 B vs 12822 B), 37% smaller than `max-build`.** Use
+  for focused local editing where you never need the web or the
+  pasclaw.dev Code Vault.
 - **`lean-stock`** — stock + all 6 zero-cost behavioral toggles
   (`orient_task_aware`, `checkpoints`, `stats`, `cache_ttl=1h`,
   `distiller`, `auto_router`). Same prompt size as stock (12822 bytes)
@@ -347,6 +353,54 @@ dominates over wall-clock on every real provider.
 Skip `progressive_disclosure` unless you've actually installed skills.
 Skip `self_manage` unless the agent should be authoring skills
 mid-session. Both pay for themselves only in narrow scenarios.
+
+### Total cost over a multi-turn task
+
+Per-turn growth turned out to be **invariant at +1203 B/turn across
+every variant** (`harness/turn_growth.py`), because PasClaw's `condenser`
+only fires on individual tool results above 4 KB and most code reads
+are well under that. So the variant deltas at turn 1 persist linearly:
+
+| variant | turn 1 | 3-turn total | Δ vs max-build |
+|---|---|---|---|
+| `lean-edit` / `baseline` | 9916 | 32913 | **−34.6%** |
+| `stock` / `lean-stock` | 12828 | 41649 | −17.3% |
+| `lean-build` | 13380 | 43305 | −14.0% |
+| `low-token` | 14232 | 45861 | −8.9% |
+| `max-build` / `all-on` | 15723 | 50334 | — |
+
+On a 10-turn task, the gap widens to ~70 KB. With prompt-cache on, the
+billing-side savings are smaller (cached prompt is half-price on most
+providers) but the per-turn latency hit from a bigger payload still
+stings.
+
+### Where are the remaining improvements
+
+The bench made three things clear that aren't currently fixable from
+config alone:
+
+1. **`condense_reversible` only fires on tool results > 4 KB**
+   (`PasClaw.Condense.JSON.DefaultJSONCondenseOptions.MaxBytes`). For
+   typical source files (~750 B), it never triggers. Exposing
+   `condense_max_bytes` as a config field would let users tune this for
+   their session shape; a lower threshold could clip moderate `fs_read`
+   results too. Cost: condensed views may degrade for borderline-size
+   bodies — needs a separate quality bench.
+2. **No per-tool toggle.** Stock registers 13 tools whether or not
+   you'll use them; `execute_code` alone is 1078 B, `web_fetch` 954 B,
+   `fs_edit_hashline` 982 B. A `tools.exclude: [...]` config field
+   would let an operator drop tools they know they won't need on this
+   session, getting below `lean-edit`'s 9910 B floor.
+3. **History is re-sent every turn.** The +1203 B per-turn growth is
+   the conversation accumulating (prior assistant message + tool result
+   + envelope). Provider-side prompt cache offsets this on real
+   billing, but the raw payload still grows linearly. PasClaw's
+   `condenser` is the right hook to address this; tuning thresholds (or
+   adding a turn-count trigger) is a follow-up.
+
+For 2 and 3, the bench harness can validate any future change with one
+command (`probe_first_turn.py` for byte cost, `turn_growth.py` for
+multi-turn shape, `run.py` / live-driving subagents for pass-rate).
 
 ### How to regenerate
 

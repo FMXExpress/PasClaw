@@ -251,6 +251,12 @@ class StubHandler(BaseHTTPRequestHandler):
         # trust the response's usage field verbatim.
         estimate = _State.blocking_queue is not None
         m = metrics_from_response(resp_body, req_body, estimate_if_missing=estimate)
+        # Track the per-turn request size too -- exposes how the conversation
+        # grows over time (message accumulation, tool-result bloat). Stock
+        # vs. lean-build vs. max-build will differ in turn-1 size; condenser
+        # / output-cap differences show up as turn-N growth slopes.
+        m["req_bytes"] = len(req_body)
+        m["resp_bytes"] = len(resp_body)
         _State.emit_event({
             "event": "turn",
             "turn": _State.turn_count,
