@@ -588,7 +588,7 @@
         <button class="primary" id="config-save">Save</button>
         <button class="icon-btn" id="config-reload">Reload</button>
         <button class="icon-btn" id="config-raw-toggle" title="Toggle the raw JSON editor (for adding/removing array entries the form can't)">Raw JSON</button>
-        <button class="icon-btn" id="ws-export" title="Download workspace/ (memory, skills, KB, sessions) as a zip. Secrets in config.json are NOT included.">⬇ workspace.zip</button>
+        <button class="icon-btn" id="ws-export" title="Download workspace/ (memory, skills, KB, sessions) as a zip with a top-level workspace/ dir — drops straight into `pasclaw build --workspace-in`. Secrets in config.json are NOT included.">⬇ workspace.zip</button>
         <button class="icon-btn" id="ws-import" title="Upload a workspace.zip and overlay it onto workspace/ — files in the zip overwrite, others are kept. Restart serve/gateway to pick up new skills.">⬆ import zip</button>
         <input type="file" id="ws-import-file" accept=".zip,application/zip" style="display:none">
         <span id="config-status" class="settings-status"></span>

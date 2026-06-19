@@ -1308,7 +1308,10 @@ begin
   end;
   ZipPath := JoinPath(GetHome,
     'workspace-export-' + FormatDateTime('yyyymmdd-hhnnss', Now) + '.zip');
-  if not PackDirToZip(WsDir, ZipPath, ExcludeFromZip, Err) then
+  { Store entries under a top-level "workspace/" dir so the zip matches
+    `pasclaw build`'s whole-home layout -- a web-exported workspace.zip
+    then drops straight into `pasclaw build --workspace-in`. }
+  if not PackDirToZip(WsDir, ZipPath, ExcludeFromZip, Err, 'workspace') then
   begin
     WriteJSON(AResp, 500, '{"error":"' + JsonEscape('export failed: ' + Err) + '"}');
     Exit;
@@ -1344,18 +1347,93 @@ begin
   LogInfo('gateway: workspace export -> %d bytes', [Strm.Size]);
 end;
 
+{ Recursive delete of a directory tree. Used to clean the import staging
+  area; portable across FPC/Delphi (no fileutil / IOUtils dependency). }
+procedure WsDeleteTree(const Dir: string);
+var
+  SR: TSearchRec;
+  P: string;
+begin
+  if not DirectoryExists(Dir) then Exit;
+  if FindFirst(IncludeTrailingPathDelimiter(Dir) + '*',
+               faAnyFile or faDirectory, SR) = 0 then
+  try
+    repeat
+      if (SR.Name = '.') or (SR.Name = '..') then Continue;
+      P := IncludeTrailingPathDelimiter(Dir) + SR.Name;
+      if (SR.Attr and faDirectory) <> 0 then WsDeleteTree(P)
+      else SysUtils.DeleteFile(P);
+    until FindNext(SR) <> 0;
+  finally
+    FindClose(SR);
+  end;
+  RemoveDir(Dir);
+end;
+
+{ Recursive merge-copy SrcDir -> DstDir. Files overwrite their
+  counterparts; existing files DstDir has that SrcDir lacks are kept
+  (overlay semantics). Returns False with Err set on the first failure. }
+function WsMergeTree(const SrcDir, DstDir: string; out Err: string): Boolean;
+var
+  SR: TSearchRec;
+  S, D: string;
+  FSrc, FDst: TFileStream;
+begin
+  Result := False; Err := '';
+  if not ForceDirectories(DstDir) then
+  begin Err := 'cannot create ' + DstDir; Exit; end;
+  if FindFirst(IncludeTrailingPathDelimiter(SrcDir) + '*',
+               faAnyFile or faDirectory, SR) = 0 then
+  try
+    repeat
+      if (SR.Name = '.') or (SR.Name = '..') then Continue;
+      S := IncludeTrailingPathDelimiter(SrcDir) + SR.Name;
+      D := IncludeTrailingPathDelimiter(DstDir) + SR.Name;
+      if (SR.Attr and faDirectory) <> 0 then
+      begin
+        if not WsMergeTree(S, D, Err) then Exit;
+      end
+      else
+      try
+        FSrc := TFileStream.Create(S, fmOpenRead or fmShareDenyWrite);
+        try
+          FDst := TFileStream.Create(D, fmCreate);
+          try
+            if FSrc.Size > 0 then FDst.CopyFrom(FSrc, FSrc.Size);
+          finally FDst.Free; end;
+        finally FSrc.Free; end;
+      except
+        on E: Exception do begin Err := 'copy ' + SR.Name + ': ' + E.Message; Exit; end;
+      end;
+    until FindNext(SR) <> 0;
+  finally
+    FindClose(SR);
+  end;
+  Result := True;
+end;
+
 procedure TGatewayServer.HandleWorkspaceImport(ARequest: TIdHTTPRequestInfo;
                                                AResp: TIdHTTPResponseInfo);
-{ Save the uploaded zip to a temp file at the home root (outside
-  workspace/, so it can't appear inside the tree we extract into), then
-  overlay it onto workspace/. ExtractZipToDir validates every entry
-  (zip-slip guard) before writing, and creates workspace/ if missing.
-  Merge semantics: archive files overwrite collisions; other existing
-  files are untouched. }
+{ Accept a raw application/zip body and overlay its workspace/ contents
+  onto $PASCLAW_HOME/workspace.
+
+  The canonical zip carries a top-level "workspace/" dir (what our export
+  emits and what `pasclaw build` packs), so we can't just unzip into
+  workspace/ -- that would nest workspace/workspace/. Instead we extract
+  to a staging dir at the home root, then merge ONLY staging/workspace ->
+  home/workspace. Two payoffs:
+    * A full `pasclaw build` zip (which also has sessions/, config.json,
+      etc. at the root) imports cleanly -- we take only its workspace/,
+      so a stray config.json in the upload can NEVER overwrite the running
+      server's secrets.
+    * A "bare" zip (files at the root, no workspace/ dir) still works: we
+      fall back to merging the whole staging tree.
+  ExtractZipToDir zip-slip-validates every entry before writing, and the
+  staging dir is deleted regardless of outcome. }
 const
   ImportZipCap = Int64(512) * 1024 * 1024;   { 512 MB -- generous; body is buffered }
 var
-  WsDir, ZipPath, Err: string;
+  WsDir, StageDir, SrcWs, ZipPath, Stamp, Err: string;
   FS: TFileStream;
   Size: Int64;
 begin
@@ -1376,9 +1454,10 @@ begin
     Exit;
   end;
 
-  WsDir   := JoinPath(GetHome, 'workspace');
-  ZipPath := JoinPath(GetHome,
-    'workspace-import-' + FormatDateTime('yyyymmdd-hhnnss', Now) + '.zip');
+  Stamp    := FormatDateTime('yyyymmdd-hhnnss', Now);
+  WsDir    := JoinPath(GetHome, 'workspace');
+  ZipPath  := JoinPath(GetHome, 'workspace-import-' + Stamp + '.zip');
+  StageDir := JoinPath(GetHome, 'workspace-import-stage-' + Stamp);
   try
     try
       FS := TFileStream.Create(ZipPath, fmCreate);
@@ -1391,19 +1470,30 @@ begin
     except
       on E: Exception do
       begin
-        DeleteFile(ZipPath);
         WriteJSON(AResp, 500, '{"error":"' + JsonEscape('save upload: ' + E.Message) + '"}');
         Exit;
       end;
     end;
 
-    if not ExtractZipToDir(ZipPath, WsDir, Err) then
+    if not ExtractZipToDir(ZipPath, StageDir, Err) then
     begin
       WriteJSON(AResp, 400, '{"error":"' + JsonEscape('import failed: ' + Err) + '"}');
       Exit;
     end;
+
+    { Prefer staging/workspace (canonical / build layout); fall back to the
+      whole staging tree for a bare zip with files at the root. }
+    SrcWs := JoinPath(StageDir, 'workspace');
+    if not DirectoryExists(SrcWs) then SrcWs := StageDir;
+
+    if not WsMergeTree(SrcWs, WsDir, Err) then
+    begin
+      WriteJSON(AResp, 500, '{"error":"' + JsonEscape('import failed: ' + Err) + '"}');
+      Exit;
+    end;
   finally
-    DeleteFile(ZipPath);
+    SysUtils.DeleteFile(ZipPath);
+    WsDeleteTree(StageDir);
   end;
 
   LogInfo('gateway: workspace import <- %d bytes', [Size]);
