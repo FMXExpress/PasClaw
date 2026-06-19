@@ -94,6 +94,20 @@ end;
 
 (* ---- TCronScheduler ---- *)
 
+{ Element-wise copy into the named TCronEntryArray. dcc64 (Delphi 12) won't
+  assign Copy(Cfg.Crons) -- an anonymous `array of TCronEntry` -- to the
+  named type (E2010 strict named-type matching; FPC is lenient). An open-
+  array param accepts either shape, and per-element record assignment is
+  always compatible. }
+procedure CopyCronEntries(const Src: array of TCronEntry; out Dst: TCronEntryArray);
+var
+  i: Integer;
+begin
+  SetLength(Dst, Length(Src));
+  for i := 0 to High(Src) do
+    Dst[i] := Src[i];
+end;
+
 constructor TCronScheduler.Create(Cfg: TConfig; Registry: TToolRegistry);
 var
   State: TCronState;
@@ -108,7 +122,7 @@ begin
   { Seed our private entry list from the startup config, and remember the
     config file's mtime so ReloadCronsIfChanged can pick up later edits
     (the model's cron tool writes config.json). }
-  FCrons      := Copy(Cfg.Crons);
+  CopyCronEntries(Cfg.Crons, FCrons);
   FCronsPath  := GetConfigPath;
   FCronsMtime := 0;
   FileAge(FCronsPath, FCronsMtime);
@@ -129,7 +143,7 @@ begin
   if (FCronsMtime <> 0) and (Mtime <= FCronsMtime) then Exit;
   Fresh := LoadConfig;
   try
-    FCrons := Copy(Fresh.Crons);
+    CopyCronEntries(Fresh.Crons, FCrons);
     FCronsMtime := Mtime;
     LogInfo('cron: reloaded %d entr(ies) after config change', [Length(FCrons)]);
   finally
