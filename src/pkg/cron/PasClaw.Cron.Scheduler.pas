@@ -22,6 +22,12 @@ uses
   PasClaw.Tools.Registry;
 
 type
+  { Owned-by-the-scheduler-thread copy of the cron entries, so the model's
+    cron tool can edit config.json and have new jobs picked up live without
+    any cross-thread mutation of the shared TConfig (which the gateway's
+    /v1/cron handler also reads). See ReloadCronsIfChanged. }
+  TCronEntryArray = array of TCronEntry;
+
   TCronScheduler = class
   private
     FCfg:      TConfig;
@@ -30,6 +36,10 @@ type
     FStopEvt:  TEvent;
     FStop:     Boolean;
     FState:    TObject;   { TCronState -- opaque to avoid uses-cycle at decl time }
+    FCrons:      TCronEntryArray;  { private copy RunOnce iterates }
+    FCronsPath:  string;           { config.json path we watch }
+    FCronsMtime: TDateTime;        { last-seen config mtime; 0 = unknown }
+    procedure ReloadCronsIfChanged;
     procedure RunOnce;
   public
     constructor Create(Cfg: TConfig; Registry: TToolRegistry);
@@ -95,6 +105,36 @@ begin
   State := TCronState.Create(DefaultCronStatePath);
   State.Load;
   FState := State;
+  { Seed our private entry list from the startup config, and remember the
+    config file's mtime so ReloadCronsIfChanged can pick up later edits
+    (the model's cron tool writes config.json). }
+  FCrons      := Copy(Cfg.Crons);
+  FCronsPath  := GetConfigPath;
+  FCronsMtime := 0;
+  FileAge(FCronsPath, FCronsMtime);
+end;
+
+procedure TCronScheduler.ReloadCronsIfChanged;
+{ Cheap mtime poll: when config.json changed since we last loaded it,
+  re-read and replace our private FCrons. Runs only on the scheduler
+  thread, so FCrons is never touched concurrently -- no lock needed, and
+  we never mutate the shared FCfg the gateway also reads. }
+var
+  Mtime: TDateTime;
+  Fresh: TConfig;
+begin
+  if FCronsPath = '' then Exit;
+  Mtime := 0;
+  if not FileAge(FCronsPath, Mtime) then Exit;   { file gone -- keep current }
+  if (FCronsMtime <> 0) and (Mtime <= FCronsMtime) then Exit;
+  Fresh := LoadConfig;
+  try
+    FCrons := Copy(Fresh.Crons);
+    FCronsMtime := Mtime;
+    LogInfo('cron: reloaded %d entr(ies) after config change', [Length(FCrons)]);
+  finally
+    Fresh.Free;
+  end;
 end;
 
 destructor TCronScheduler.Destroy;
@@ -144,9 +184,13 @@ begin
   State := TCronState(FState);
   Dirty := False;
 
-  for i := 0 to High(FCfg.Crons) do
+  { Pick up any config.json edits (e.g. the model's cron tool) before the
+    sweep, so new jobs go live within one tick instead of needing a restart. }
+  ReloadCronsIfChanged;
+
+  for i := 0 to High(FCrons) do
   begin
-    Entry := FCfg.Crons[i];
+    Entry := FCrons[i];
     if not Entry.Enabled then Continue;
     if not ParseCronExpr(Entry.Spec, Expr) then
     begin
