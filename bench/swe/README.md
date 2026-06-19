@@ -299,6 +299,63 @@ That's a real behavior finding surfaced through the bench — exactly the
 kind of trajectory-quality signal Perplexity §"Trajectory quality"
 calls out as the second metric beyond pass-rate.
 
+## The cost / capability tradeoff
+
+PasClaw's profiles aren't a "small is better" axis. Each one targets a
+different operator scenario:
+
+| profile | targets | what it carries |
+|---|---|---|
+| `baseline` | A/B controls | bare minimum, no feature tools |
+| `lean-edit` | pure local editing | fs / shell / execute_code / memory_search / session_search; no web, no vault |
+| `stock` | fresh install defaults | adds web_fetch + vault to lean-edit's core |
+| `lean-stock` | stock + productive behaviors | same tools as stock, plus checkpoints / stats / 1h cache / distiller / orient-aware / auto-router |
+| `lean-build` | productive coding (no skill authoring) | lean-stock + condenser + 16KB cap (adds tool_output_get) |
+| `low-token` | aggressive token economy | lean-build + progressive_disclosure (skills_list/view) |
+| `security` | sandboxed deployments | drops web_fetch + vault + adds workspace + shell denylist |
+| `max-build` | **maximum capability** | every tool registered: skill authoring (skills_manage), skill discovery (skills_list/view), web research (web_fetch), library lookup (vault_search/get), agent memory (memory_search/fetch), session recall (session_search) |
+| `all-on` | surface-area testing | max-build + auto_approve |
+
+Each capability has a purpose:
+
+- `web_fetch` — read documentation, fetch a known URL into the conversation
+- `vault_search` / `vault_get` — discover library APIs and example code from the pasclaw.dev Code Vault. The agent searches for what would help its work.
+- `memory_search` / `memory_fetch` — recall facts and decisions from prior sessions
+- `session_search` — find prior tool-call output (e.g. an earlier grep result the agent forgot)
+- `skills_list` / `skills_view` — discover and read user-installed skills (procedures the operator wants the agent to follow)
+- `skills_manage` — create / install / remove skills mid-session (self-improving loop)
+- `fs_edit_hashline` — surgical patches that preserve byte-exact context
+- `fs_grep` — cross-file pattern search with built-in skip rules
+- `execute_code` — multi-line scripts (heredocs, loops, fan-out)
+- `tool_output_get` — re-fetch a tool output that got capped
+
+`max-build` carries every one of those because its job is to be ready
+for ANY task, including ones the operator can't predict. The bench's
+job, then, is to find tasks where each capability **earns** its bytes:
+
+- A task that needs cross-file pattern finding → exercises `fs_grep`
+- A task that needs supporting library examples → exercises `vault_search`
+- A task that needs a known URL's content → exercises `web_fetch`
+- A task that depends on prior-session memory → exercises `memory_search`
+- A task with a pre-installed procedural skill → exercises `skills_list/view`
+
+If `lean-edit` and `max-build` solve a task in the same turn count,
+the extra capability isn't earning anything on that task. If
+`max-build` solves it in 2 turns and `lean-edit` takes 8, that's the
+capability earning ~75% time savings.
+
+`fixture/01..04` are simple bug-fix tasks. They don't exercise the
+incremental surface — both ends of the spectrum pass identically.
+`fixture/07-cross-file-grep` is the first capability fixture: it
+forces a cross-file pattern lookup. See "Capability fixtures" below
+for the empirical comparison.
+
+## First-turn prompt cost (informational)
+
+The byte-cost data below is the FLOOR price every variant pays per
+turn whether it uses those tools or not. Combine with the capability
+data to decide which profile fits your task mix.
+
 ## What `max-build` actually costs — first-turn ablation
 
 Each setting in `max-build` was tested individually against `stock` using
@@ -328,10 +385,21 @@ The 2895-byte gap between `stock` and `max-build` breaks down as:
 | `self_improving_skills.self_manage` | +1491 | `skills_manage` | agent authors skills |
 | `orient_task_aware`, `checkpoints`, `stats_collection`, `prompt_cache.ttl=1h`, `auto_router`, `distiller` | 0 | — | always free behavioral upgrade |
 
-**`max-build` over-pays by ~2.9KB / turn (~720 input tokens) for skill
-features most operators don't need**. Over a 10-turn task with PasClaw's
-typical prompt-cache behavior, that's ~5-7K tokens/task. Per-task cost
-dominates over wall-clock on every real provider.
+**The right way to read this**: `max-build` is not a "bloated" profile
+that should be slimmed. Its purpose is to advertise PasClaw's *maximum
+development capability* — every skill, every search surface, every
+self-improvement loop. The 2895-byte delta is the cost of carrying that
+capability to every turn, used or not.
+
+The bench's job is to find tasks where those capabilities **earn** that
+cost — tasks that lean-edit *fails* and max-build *passes*. The four
+bundled fixtures don't differentiate: they're simple enough that the
+core surface (fs_read / fs_write / shell_exec) handles them all. So
+the cost-only ablation above is only half the story.
+
+Fixtures that actually exercise max-build's incremental surface
+(`fixture/05-*` and beyond) are a follow-up — see "Capability fixtures"
+below.
 
 ### Recipe for the bench-proven minimum
 
@@ -444,6 +512,92 @@ recording, plugin SDK. Architectural differences:
   cell would slot openclaw in. Left as a follow-up because openclaw
   needs its own onboard / config / channel auth that's out of scope
   here.
+
+## Capability-fixture result: `07-cross-file-grep`
+
+The first capability test was designed to make `fs_grep` shine: 8
+`.pas` files, 3 with real calls to `OldRoutine` and 5 with a comment
+that just mentions it. The agent has to write the 3 calling files to
+`result.txt`. Subagent-driven runs of three variants:
+
+| variant | tools available | turns | tool calls | notes |
+|---|---|---|---|---|
+| `stock` | 13 (incl. fs_grep) | 3 | `fs_grep` → `fs_write` → done | clean baseline |
+| `lean-edit` | 9 (incl. fs_grep) | 3* | `fs_grep` → `fs_write` → done | *first turn malformed by driver; would be 3 |
+| `lean-edit + --no-hashline` | 7 (no fs_grep) | **2** | `shell_exec "grep -rln 'OldRoutine(' src/ > result.txt"` → done | one shell pipeline does find + filter + write |
+
+**The stripped variant won.** `fs_grep` requires two steps (run the
+search, parse the hashline output, write the result file). A single
+`shell_exec` with `grep > result.txt` redirects in one shot. The 926
+bytes `fs_grep` pays for didn't earn turns on this task.
+
+That doesn't mean `fs_grep` is useless — it has built-in skip rules
+(binary detection, vendored-dir exclusion) that `grep -r` doesn't, and
+returns hashline-formatted output the agent can feed straight into
+`fs_edit_hashline`. The win case for `fs_grep` is when you actually
+WILL apply hashline patches downstream — at which point the shared
+format is the value, not the search itself.
+
+This is the right shape of finding for the bench: empirical, specific,
+and surprising. A capability that *looked* like it should pay for
+itself on a task built around it didn't, because there's a cheap
+shell-shaped alternative.
+
+### Implication for future capability fixtures
+
+A clean "max-build wins" requires a task where the shell-shaped
+alternative is **not** sufficient. That probably looks like:
+
+- `08-vault-needs-library` — needs `vault_search/get` to find an
+  example the model doesn't know from training data. No shell
+  alternative (no `grep` over pasclaw.dev/vault). Pending.
+- `09-skill-discovery` — agent must use `skills_list/view` because
+  the skill body contains task-specific instructions that change the
+  fix. No shell alternative (fs_list + fs_read works but is multi-step
+  and the agent has to know where to look). Pending.
+- `10-web-context` — task includes a URL whose contents are needed
+  to solve it. Without `web_fetch`, the agent has no way to fetch it
+  (shell `curl` may or may not be denied by the sandbox). Pending.
+- `11-prior-session` — depends on a fact the agent decided in a
+  previous session that's logged in `workspace/memory/`. Without
+  `memory_search`, the agent has to grep / read manually. Pending.
+
+Each of those would isolate a tool whose value is **uniqueness** (no
+cheap substitute), not just convenience.
+
+## Capability fixtures — does max-build's extra surface earn its weight?
+
+The simple fixtures (01-04) can be solved with `fs_read` + `fs_write` +
+`shell_exec`, so they don't distinguish max-build from a stripped
+profile on capability. The capability fixtures (05+) are designed so
+that each exercises a SPECIFIC tool max-build registers, and a
+stripped profile is forced to fall back on a slower workaround.
+
+| fixture | tests capability | task | expected lean-edit cost |
+|---|---|---|---|
+| `07-cross-file-grep` | `fs_grep` | Find every .pas file that calls `OldRoutine` across 8 files; one is in a subdirectory; 5 distractor files mention it in a comment but don't call it. | one `fs_grep` call vs multiple `fs_read`s or a `shell_exec grep` |
+| `08-vault-needs-library` (planned) | `vault_search` + `vault_get` | "Implement X using the documented pattern from the pasclaw.dev Code Vault under <topic>." | without vault, model relies on training-data knowledge of the API |
+| `09-skill-discovery` (planned) | `skills_list` + `skills_view` | Workspace pre-seeded with a relevant `~/.pasclaw/workspace/skills/<name>/SKILL.md`. Task says "use the installed skill that handles this kind of refactor." | without progressive_disclosure, agent has to fs_list the skills dir + fs_read the SKILL.md |
+| `10-web-context` (planned) | `web_fetch` | Task with a URL: "Read the spec at <url> and implement what it describes." | without web_fetch, no way to fetch the URL (test fails) |
+| `11-prior-session` (planned) | `memory_search` | Pre-seed workspace memory log with a decision; task asks the agent to recall it. | without memory_search, agent has to fs_read the memory log manually |
+
+### Methodology
+
+For each capability fixture, run three variants:
+
+- `max-build` — has the capability tool registered. Expected: clean win.
+- `stock` — has the same tool (the toggles are profile-side, but the tool registration is independent). Expected: matches max-build.
+- `lean-edit + --no-hashline` (or another stripped variant relevant to the test) — falls back on workarounds. Expected: more turns and/or more tokens, possibly outright failure.
+
+Tabulate `turns`, `total_bytes_across_all_turns`, and `passed`. The
+fixture validates the capability when:
+
+- All three variants pass, but stripped takes >2× the turns OR
+- Stripped fails outright while max-build passes
+
+If stripped matches max-build on both turns and pass-rate, the
+capability isn't earning its bytes on THAT task shape (which doesn't
+mean it never earns them — just not here).
 
 ### Where are the remaining improvements
 
