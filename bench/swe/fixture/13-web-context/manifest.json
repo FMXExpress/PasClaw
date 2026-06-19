@@ -1,0 +1,10 @@
+{
+  "name": "13-web-context",
+  "category": "capability-test-web-fetch",
+  "shape_of": "Tests web_fetch. Setup starts a localhost HTTP server that serves a spec file. The task requires the agent to fetch the spec and implement what it describes. web_fetch is a one-call solution; without it, the agent has to shell_exec curl (which works for localhost but is more steps).",
+  "prompt": "The API spec is at the URL printed in `spec_url.txt` at the workspace root (read that file first to get the URL). Fetch the contents, then implement a Python function called `transform(rows)` in `transform.py` at the workspace root that does what the spec describes. Don't guess — read the spec. When done, run `python3 -c 'from transform import transform; print(transform([(1,\"foo\"),(2,\"bar\")]))'` to sanity-check it. Say done.",
+  "scope_paths": ["transform.py"],
+  "oracle": {
+    "cmd": "$FIXTURE_DIR/oracle/test.sh"
+  }
+}

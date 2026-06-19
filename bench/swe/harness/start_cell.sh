@@ -36,10 +36,14 @@ fi
 
 # Optional fixture-side setup hook: gets to populate the workspace beyond what
 # the static pre-fix/ tree provides. Used by fixtures that need a snapshot of
-# a real repo (too large to commit verbatim) or want to do a git archive/clone.
-# The hook sees WORKSPACE and FIXTURE_DIR in its env; non-zero exit aborts.
+# a real repo (too large to commit verbatim), want to install a skill into
+# PASCLAW_HOME, start a localhost server, etc. The hook sees WORKSPACE,
+# PASCLAW_HOME, and FIXTURE_DIR in its env; non-zero exit aborts.
 if [ -x "$FIXTURE_DIR/setup.sh" ]; then
-  WORKSPACE="$RUN_DIR/workspace" FIXTURE_DIR="$FIXTURE_DIR" \
+  WORKSPACE="$RUN_DIR/workspace" \
+    PASCLAW_HOME="$RUN_DIR/pasclaw-home" \
+    FIXTURE_DIR="$FIXTURE_DIR" \
+    RUN_DIR="$RUN_DIR" \
     bash "$FIXTURE_DIR/setup.sh" >> "$RUN_DIR/setup.log" 2>&1 \
     || { echo "fixture setup.sh failed; see $RUN_DIR/setup.log" >&2; exit 1; }
 fi

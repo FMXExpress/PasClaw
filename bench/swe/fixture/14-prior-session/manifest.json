@@ -1,0 +1,10 @@
+{
+  "name": "14-prior-session",
+  "category": "capability-test-memory-recall",
+  "shape_of": "Tests memory_search (max-build keeps it; lean-edit drops memory_fetch but keeps memory_search). Pre-populates PASCLAW_HOME/workspace/memory/ with a 32-entry NDJSON log of a fake prior session that discusses several topics; only one entry contains the answer to the task. memory_search finds it in 1 call; without indexing, the agent must fs_read or fs_grep through the log.",
+  "prompt": "In our previous session we decided which serialization format to use for the new note-storage layer. Look it up and tell me what we chose. Write your answer as a single lowercase word (the format name, e.g. `json`, `yaml`, `msgpack`, `protobuf`, `cbor`, `sqlite`) to `answer.txt` at workspace root, exit 0. Say done.",
+  "scope_paths": ["answer.txt"],
+  "oracle": {
+    "cmd": "$FIXTURE_DIR/oracle/test.sh"
+  }
+}

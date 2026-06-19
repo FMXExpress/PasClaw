@@ -1,0 +1,10 @@
+{
+  "name": "11-skill-discovery",
+  "category": "capability-test-skill-discovery",
+  "shape_of": "Tests skills_list / skills_view (max-build's progressive_disclosure tools). A skill is pre-installed in PASCLAW_HOME with specific non-guessable transformation rules. The task TELLS the agent to use that skill -- but only profiles with skills_list/view have a clean discovery path. lean-edit (no skills tools) must figure out where skills live and fs_read SKILL.md manually.",
+  "prompt": "There's a PasClaw skill installed called `csv-transform` that explains exactly how to process this kind of input. Read it, then apply its rules to `data.csv` and write the result to `result.csv`. The skill body is the spec -- don't guess the rules.",
+  "scope_paths": ["result.csv"],
+  "oracle": {
+    "cmd": "$FIXTURE_DIR/oracle/test.sh"
+  }
+}
