@@ -213,6 +213,50 @@ const
     '}' +
     '}';
 
+  (* `lean-stock` and `lean-build` come out of bench/swe/'s first-turn
+     ablation (commit 2c798dc). Probing each max-build feature
+     individually showed 6 of its 11 toggles cost zero prompt bytes
+     (pure behavior) and three more (skills_manage / skills_list /
+     skills_view / tool_output_get) add tools whose value depends on
+     scenario. lean-stock packages the six free behavioral toggles --
+     identical prompt size as stock (12822 bytes/turn on the bench),
+     all the productive-coding behavior on. lean-build adds the +552
+     B / +1 tool tool_output_get registration via the condenser +
+     output-cap pair, for sessions that may run long or hit big tool
+     outputs. Both skip skills_* (2343 bytes/turn, only useful if you
+     have skills installed and / or want the agent authoring them).
+     See bench/swe/results/ablation.md for the full per-toggle table. *)
+
+  Profile_LeanStock: string =
+    '{' +
+    '"_description":"Stock + every zero-prompt-cost behavioral toggle ' +
+    'from max-build (orient_task_aware, checkpoints, stats, 1h cache, ' +
+    'distiller, auto_router). Same prompt size as stock with all the ' +
+    'productive-coding behavior on. See bench/swe/results/ablation.md.",' +
+    '"_inherits":["stock"],' +
+    '"orient_task_aware":true,' +
+    '"checkpoints_enabled":true,' +
+    '"checkpoints_keep_last":32,' +
+    '"stats_collection_enabled":true,' +
+    '"prompt_cache":{"enabled":true,"ttl":"1h"},' +
+    '"auto_router":{"enabled":true},' +
+    '"self_improving_skills":{' +
+      '"distiller":{"enabled":true,"min_tool_calls":5}' +
+    '}' +
+    '}';
+
+  Profile_LeanBuild: string =
+    '{' +
+    '"_description":"lean-stock + condenser + 16KB tool_output_cap ' +
+    '(adds tool_output_get, +552 bytes/turn). The right default for ' +
+    'productive coding when you are NOT authoring skills -- 14.9% ' +
+    'smaller prompt than max-build with identical functionality. See ' +
+    'bench/swe/results/ablation.md.",' +
+    '"_inherits":["lean-stock"],' +
+    '"condense_reversible":true,' +
+    '"tool_output_cap":16384' +
+    '}';
+
   (* `stock` mirrors TConfig.Create's exact defaults as an explicit
      profile so `pasclaw profile show stock` documents the fresh-
      install state. Applying it is a no-op (FromJSON sees its own
@@ -263,13 +307,15 @@ type
 
 function Builtins: TBuiltinArray;
 begin
-  SetLength(Result, 6);
+  SetLength(Result, 8);
   Result[0].Name := 'stock';      Result[0].Body := Profile_Stock;
   Result[1].Name := 'baseline';   Result[1].Body := Profile_Baseline;
   Result[2].Name := 'low-token';  Result[2].Body := Profile_LowToken;
   Result[3].Name := 'security';   Result[3].Body := Profile_Security;
-  Result[4].Name := 'max-build';  Result[4].Body := Profile_MaxBuild;
-  Result[5].Name := 'all-on';     Result[5].Body := Profile_AllOn;
+  Result[4].Name := 'lean-stock'; Result[4].Body := Profile_LeanStock;
+  Result[5].Name := 'lean-build'; Result[5].Body := Profile_LeanBuild;
+  Result[6].Name := 'max-build';  Result[6].Body := Profile_MaxBuild;
+  Result[7].Name := 'all-on';     Result[7].Body := Profile_AllOn;
 end;
 
 function ExtractDescription(const Body: string): string;
