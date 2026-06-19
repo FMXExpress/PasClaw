@@ -513,6 +513,74 @@ recording, plugin SDK. Architectural differences:
   needs its own onboard / config / channel auth that's out of scope
   here.
 
+## Real-codebase result: `10-add-cloudflare-provider`
+
+First fixture on a real codebase, not a hand-staged toy. setup.sh
+git-archives PasClaw at origin/main (241 .pas files), copies vendor/Indy
+from the host, and pre-builds (so the agent starts incremental). The
+agent then has to add `cloudflare-ai-gateway` as a new provider in the
+catalog and verify both the build and CLI surface still work.
+
+Designed as the first fixture where `web_fetch` (Cloudflare docs) and
+`vault_search` (PasClaw's example bank) might genuinely earn their bytes.
+
+### Result
+
+| profile | tools | pass | turns | tool calls | wall_s | strategy |
+|---|---|---|---|---|---|---|
+| `lean-edit` | 9 | **PASS** | 5 | 5 | 629 | read → edit → 3× shell_exec |
+| `stock` | 13 | **PASS** | 8 | 9 | 620 | read → edit → 5× shell_exec to work around Makefile issue |
+| `max-build` | 17 | **PASS** | 2 | 1 | 609 | one mega-`execute_code` with bash heredoc that patched, built, and verified |
+
+**All three passed**. Wall-clock was within 3% — subagent thinking
+time dominated PasClaw's per-turn overhead. Turn count varied by 4x
+but for strategy reasons, not profile-capability reasons (see below).
+
+### The headline finding
+
+**Across all three cells, ZERO calls to any of max-build's incremental
+tools**: no `web_fetch`, no `vault_search` / `vault_get`, no
+`skills_list` / `view` / `manage`, no `tool_output_get`. On a task
+specifically chosen to make `web_fetch` plausible (researching the
+Cloudflare AI Gateway URL pattern), every subagent reported:
+
+> URL pattern source: training-data knowledge of Cloudflare AI Gateway.
+
+Plus the task prompt happened to include the URL pattern itself, so
+even without training knowledge, no fetch was needed.
+
+That's the cleanest empirical answer the bench has produced: **on a
+realistic mid-sized feature-add task where `web_fetch` would seem
+useful, the model didn't need it**. The capability is real, but its
+break-even point is further out than this fixture — probably tasks
+involving libraries / APIs the model genuinely doesn't know
+(post-training-cutoff releases, obscure internal APIs, etc.).
+
+### Why max-build "won" on turn count (but didn't really)
+
+max-build's 2-turn pass looks like a feature-win but unpacks as:
+
+- **T1**: subagent authored response in Anthropic format
+  (`content: [{type: text}, {type: tool_use}]`) instead of OpenAI
+  format (`choices[0].message.tool_calls`). PasClaw's OpenAI provider
+  couldn't parse it, so the model effectively "said something" without
+  calling a tool. One wasted turn.
+- **T2**: corrected to OpenAI format and authored a single
+  `execute_code` call with a 1500-byte bash heredoc that patched
+  Catalog.pas, ran make, and verified onboard output in one shot.
+
+Strategy choice. `lean-edit` has `execute_code` too. The 2-turn win
+was the subagent picking a different shape on T2, not anything
+max-build's tools enabled.
+
+### Real PasClaw finding: Makefile dependency gap
+
+All three subagents independently hit the same wall: PasClaw's
+top-level `make` doesn't depend on `*.pas` mtimes. A `make` after
+editing a Pascal source returns "Nothing to be done for 'all'", which
+sent stock down a 4-turn rabbit hole investigating the Makefile. Real
+PasClaw issue, surfaced by the bench. Worth a follow-up.
+
 ## Multi-iteration result: `09-bash-notes-cli`
 
 Longer than the Centipede task. The agent has to design AND implement
