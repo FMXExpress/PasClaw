@@ -1,0 +1,10 @@
+{
+  "name": "02-windows-shell-quoting",
+  "category": "function-level-fix",
+  "shape_of": "PR #307 (windows: fix cmd.exe quoting bugs in shell_exec + execute_code)",
+  "prompt": "src/cmd_quote.pas has a QuoteForCmd function that should wrap a command argument in double quotes and escape internal double quotes by doubling them. It currently just wraps in double quotes and doesn't escape internals at all. Fix QuoteForCmd so that every internal `\"` becomes `\"\"`. Also: an empty input must return `\"\"` (two quote chars, not the empty string). Do not rename the function, do not change its signature, do not add new units. Say done when finished.",
+  "scope_paths": ["src/"],
+  "oracle": {
+    "cmd": "$FIXTURE_DIR/oracle/test.sh"
+  }
+}
