@@ -513,7 +513,70 @@ recording, plugin SDK. Architectural differences:
   needs its own onboard / config / channel auth that's out of scope
   here.
 
-## Capability-fixture shootout: `11-skill`, `13-web`, `14-memory`
+## Memory_search shootout (refixed `14-prior-session`)
+
+The first round of `14-prior-session` came back with `memory_search`
+returning zero hits across all profiles. Root cause was a fixture bug:
+PasClaw's memory indexer (`PasClaw.Memory.Index.SyncDir`) only indexes
+`*.md` files — the original setup staged an `.ndjson` session log,
+which SyncDir silently skipped. Fixed: rewrite setup as a hand-authored
+markdown storage-architecture note with the same shape (10 unrelated
+decisions, one of which is "use cbor for the note-storage layer").
+Re-ran the shootout with `baseline` (no memory tools) added as control.
+
+### Result
+
+| profile | tools | turns | tool calls | trajectory |
+|---|---|---|---|---|
+| `baseline` | 8 (no memory_search) | 2 | 1 | fs_write only (**driver artifact** — see caveat) |
+| `lean-edit` | 9 (has memory_search) | 4 | 3 | memory_search → fs_read → fs_write |
+| `stock` | 13 | 4 | 3 | memory_search → fs_read → fs_write |
+| `max-build` | 17 | 4 | 3 | memory_search → fs_read → fs_write |
+
+**Headline: every profile with `memory_search` behaves IDENTICALLY on
+this task** — 4 turns, same trajectory shape: search returns a hit,
+the snippet clips before the "Final decision" line, agent follows up
+with `fs_read` to surface the full paragraph, writes the answer.
+
+### Three real things this surfaced
+
+**1. memory_search does work on `.md` files** when SyncDir's lazy
+indexing path runs. No `pasclaw memory provision` needed — the first
+search call triggers the index build automatically.
+
+**2. PR #309's snippet-clipping pattern is real and the bench's
+agents follow Rule 5 correctly.** The FTS5 snippet (even at the
+60-token width PR #309 set) didn't contain the "Final decision:
+cbor" line on this file — the matched query terms ("serialization
+format storage") were earlier in the paragraph, and 60 tokens worth
+of context didn't reach the decision line. Every agent (lean-edit,
+stock, max-build) followed Rule 5: when the snippet shows the right
+file but not the right line, follow up with `fs_read` on the cited
+path. Exact validation of the rule we shipped.
+
+**3. With memory_search present, profile differences disappear on
+recall-shaped tasks.** lean-edit, stock, and max-build all picked
+the same tools in the same order. The 2895-byte-per-turn premium
+max-build pays does not buy any recall-task advantage over lean-edit.
+
+### Caveat on the baseline cell
+
+The `baseline` cell exited in 2 turns because the subagent driver
+read the memory `.md` file with its OWN tools (the Read tool
+available to it as a Claude Code subagent), then told PasClaw to
+just `fs_write` "cbor" — side-channel leak. A proper baseline run
+would need either a stricter driver contract or a different setup
+that hides the answer from the subagent's own view. Estimating from
+how lean-edit handles it without memory_search (would have to
+`fs_list` the memory dir, `fs_read` the file, scan for the decision,
+write), a fair baseline number is probably 5-6 turns.
+
+So the honest memory_search savings vs no-memory_search is **roughly
+1-2 turns**: enough to be real, not enough to flip the
+cost/capability tradeoff for everyday tasks where memory recall
+isn't on the critical path.
+
+## Capability-fixture shootout: `11-skill`, `13-web`, `14-memory` (original ndjson run)
 
 Three fixtures designed so the capability tool has a measurable
 advantage over its workaround. Nine cells (3 fixtures × 3 profiles)
