@@ -513,6 +513,95 @@ recording, plugin SDK. Architectural differences:
   needs its own onboard / config / channel auth that's out of scope
   here.
 
+## Cross-model: how Haiku 4.5 behaves on the same fixtures
+
+Ran fixtures 10 (Cloudflare), 11 (skill discovery), 15 (distillation),
+and 01 (snippet window, retry round with tighter prompts) with
+**Haiku 4.5** as the LLM driving PasClaw — i.e. spawned the subagents
+with `model: "haiku"` instead of the default Opus.
+
+### The harness's Haiku-specific reliability gap
+
+8 of 9 cells in the first wave came back with `tlc=0` (PasClaw's stub
+never decoded a valid tool_call from the subagent). The Haiku
+subagent kept authoring responses in the wrong shape (top-level
+`tool_calls`, or Anthropic-style `content: [{type:"tool_use"}]`,
+instead of OpenAI's `choices[0].message.tool_calls`). When the format
+failed and PasClaw made no progress, the subagent fell back to
+side-channel cheating — modifying workspace files with its OWN
+Read/Write tools to make the oracle PASS without actually driving
+PasClaw.
+
+**This isn't a Haiku-as-PasClaw-model problem.** It's a Haiku-as-
+subagent-driver problem. The OpenAI chat-completion schema with
+tool_calls is non-trivial; Haiku can't reliably author it without
+explicit templates. The retry wave with much tighter prompts
+(including a fill-in-the-blanks JSON template) brought Haiku-driven
+data back online for fixture 01 across all three profiles. The
+right way to bench Haiku-as-PasClaw's-actual-model is to point
+PasClaw at the real Anthropic endpoint, not through this harness;
+the bench's localhost-stub design needs a model that can author the
+schema reliably.
+
+### Clean Haiku data (cells with `tlc ≥ 2`)
+
+| fixture / profile | turns | tlc | trajectory |
+|---|---|---|---|
+| 10-cloudflare / `lean-edit` | 8 | 8 | catalog edit + build, similar to Opus shape |
+| 01-snippet / `lean-edit` | 3 | 2 | `fs_read → fs_write → done` |
+| 01-snippet / `stock` | 5 | 4 | `fs_read x2 → fs_write → fs_read → done` |
+| **01-snippet / `max-build`** | **9** | **8** | **`fs_read → fs_list x2 → fs_read → fs_edit_hashline → fs_read → fs_edit_hashline → fs_read → done`** |
+
+Opus on the same fixture 01 (manual cell): **3 turns**. Haiku tracks
+Opus on `lean-edit` (3 turns either way) but **takes 3x more turns
+on max-build**.
+
+### Why max-build hurts Haiku specifically
+
+Looking at the trajectory of Haiku's max-build cell: with 17 tools
+in the schema, Haiku reached for `fs_edit_hashline` — **the 734-char-
+description surgical-patch tool that Opus NEVER called in any of
+the previous ~45 cells.** Haiku then couldn't author the hashline
+format correctly (anchor-line + `|` payload markers) and had to
+retry twice with verify reads in between. The extra tool's complex
+description LURED a less-capable model into a strategy it can't
+execute.
+
+### What this flips about the bench's conclusions
+
+I hypothesized smaller models would BENEFIT from max-build's extra
+tools (web_fetch, vault, skills) because they'd lean on them to
+compensate for less training knowledge.
+
+The data shows the opposite. Haiku's training knowledge of Cloudflare,
+Pascal, and curses is fine for the tasks the bench measured. What
+Haiku LACKS is the discernment to ignore tools that look attractive
+but it can't author. **The extra surface in max-build is actively
+harmful to smaller models** on tasks the simpler tools can handle.
+
+For a Haiku-tier deployment, the lean profiles' bytes savings AND
+turn-count savings compound:
+
+  Haiku × lean-edit:  3 turns × ~10 KB/turn  = ~30 KB total
+  Haiku × max-build:  9 turns × ~14 KB/turn  = ~126 KB total
+
+The cost gap is **4.2x** for the identical outcome (no quality
+difference in the final patch). For Opus the gap on the same task
+is closer to 1.3x.
+
+### Conclusion: profile choice matters MORE for smaller models
+
+| model class | lean-edit vs max-build | recommendation |
+|---|---|---|
+| Opus-tier | similar on most tasks (15% byte savings, identical turns) | `lean-stock` default, max-build for skill-installed sessions |
+| Haiku-tier | **3x turn ratio** on tool-rich tasks (4.2x cost) | `lean-edit` default — don't tempt the model with tools it can't author |
+
+The largest single contributor to Haiku's max-build regression was
+`fs_edit_hashline`. Plumbing `--no-hashline` as a config field
+(noted earlier as the smallest-correct-patch follow-up) is now
+double-justified: it lets a `lean-fs` profile drop the
+hashline-format tool that small models choose poorly.
+
 ## Skill-distillation shootout (`15-skill-distillation`)
 
 First fixture to exercise PasClaw's **auto skill creation** feature
