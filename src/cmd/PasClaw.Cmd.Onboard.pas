@@ -742,15 +742,14 @@ begin
 end;
 
 procedure PromptHashline(Cfg: TConfig);
-{ fs_edit_hashline + fs_grep tool registrations. On by default --
-  surgical patches are useful and the format is well-documented in
-  the tool description. The reason this is asked at all is the
-  bench/swe finding (bench/swe/README.md): smaller models
-  (Haiku-class) reach for fs_edit_hashline on tasks fs_write would
-  handle and then fail the anchor/payload format, burning turns
-  recovering. Operators on small-model deployments save measurable
-  per-task turns by opting out -- equivalent to the --no-hashline
-  CLI flag but persisted in config.json. }
+{ fs_edit_hashline + fs_grep tool registrations. OFF by default per
+  the bench finding (bench/swe/README.md): smaller models
+  (Haiku-class) mis-author the hashline anchor/payload format and
+  burn turns recovering. The question defaults Y so operators on
+  Opus / Sonnet / GPT-4-tier models restore the surgical-patch
+  toolchain in one keystroke -- those models use it correctly when
+  present. CLI --no-hashline still works as a per-run override;
+  config OFF supersedes CLI ON. }
 var
   Choice: string;
 begin

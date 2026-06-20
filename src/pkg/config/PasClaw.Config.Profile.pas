@@ -242,7 +242,7 @@ const
     '"render_markdown":true,' +
     '"promptware_enabled":true,' +
     '"condense_reversible":false,' +
-    '"hashline_enabled":true,' +
+    '"hashline_enabled":false,' +
     '"tool_output_cap":0,' +
     '"orient_task_aware":true,' +
     '"stats_collection_enabled":true,' +

@@ -893,7 +893,7 @@ begin
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
   OrientTaskAware        := True;  { on by default -- MEMORY task-aware injection. Zero prompt cost when MEMORY.md is absent; saves tokens when present. }
   CondenseReversible     := False; { off by default -- raw tool output preserved verbatim. Onboarding asks (default N). Flipped from on-by-default in PR #289 so a fresh deploy doesn't silently rewrite ls/grep output behind the operator's back. }
-  HashlineEnabled        := True;  { on by default -- fs_edit_hashline + fs_grep advertised. The bench found smaller models (Haiku) mishandle the hashline format; onboarding asks so operators on smaller models can opt out (equivalent to the --no-hashline CLI flag). }
+  HashlineEnabled        := False; { off by default per the bench finding (bench/swe/README.md): the surgical-patch surface fs_edit_hashline + fs_grep lures smaller models (Haiku-class) into mis-authoring the anchor/payload format and burning turns. Bigger models (Opus / Sonnet) use the tool correctly when it's present, so the onboarding question defaults Y -- operators on Opus / Sonnet / GPT-4-tier deployments restore the toolchain in one keystroke. CLI --no-hashline still works as a per-run override; config OFF supersedes CLI ON. }
   Heartbeat.Enabled      := False; { opt-in via onboarding; off by default. }
   Heartbeat.IntervalMins := 30;
   Heartbeat.ContentPath  := '';    { empty -> default workspace/heartbeat.md at load time }
