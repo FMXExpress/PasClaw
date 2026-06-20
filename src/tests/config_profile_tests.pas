@@ -294,6 +294,69 @@ begin
   end;
 end;
 
+(* PR #314 review P1/P2: every default flipped in this PR must
+   round-trip its opt-OUT through SaveConfig + LoadConfig. The old
+   ToJSON gates only emitted explicit-on for default-off toggles
+   (and vice versa); after the flips, a fresh-default value would
+   skip emission so an opt-OUT (= match the OLD default) would
+   silently revert to the NEW default on the next LoadConfig. Fixed
+   in this PR's ToJSON updates. This test pins the round-trip honest
+   for every flipped toggle.
+
+   Asymmetric: we test the OPT-OUT path (the one that breaks the
+   review-comment scenarios). The opt-IN path (default value) is
+   tested by TestStockMatchesDefaults. *)
+procedure TestOptOutsPersistAcrossRoundTrip;
+var
+  Saved, Loaded: TConfig;
+begin
+  Saved := LoadConfig('');  { TConfig.Create defaults via no-profile path }
+  try
+    { Flip every toggle whose default moved in PR #314 to its
+      OPPOSITE value, so the resulting SaveConfig has to emit the
+      opt-out and the next LoadConfig has to read it back. }
+    Saved.VaultToolsEnabled                     := True;   { default False -> opt-in }
+    Saved.WebFetchEnabled                       := True;   { default False -> opt-in }
+    Saved.StatsCollectionEnabled                := False;  { default True  -> opt-out }
+    Saved.CheckpointsEnabled                    := False;  { default True  -> opt-out }
+    Saved.CheckpointsKeepLast                   := 16;     { default 32    -> custom }
+    Saved.OrientTaskAware                       := False;  { default True  -> opt-out }
+    Saved.HashlineEnabled                       := True;   { default False -> opt-in }
+    Saved.PromptCache.TTL                       := '5m';   { default '1h'  -> non-default }
+    Saved.AutoRouter.Enabled                    := False;  { default True  -> opt-out }
+    Saved.SelfImprovingSkills.Distiller.Enabled := False;  { default True  -> opt-out }
+    SaveConfig(Saved);
+  finally
+    Saved.Free;
+  end;
+
+  Loaded := LoadConfig('');
+  try
+    AssertTrue(Loaded.VaultToolsEnabled,
+               'vault_tools_enabled opt-in persisted');
+    AssertTrue(Loaded.WebFetchEnabled,
+               'web_fetch_enabled opt-in persisted');
+    AssertTrue(not Loaded.StatsCollectionEnabled,
+               'stats_collection_enabled opt-out persisted');
+    AssertTrue(not Loaded.CheckpointsEnabled,
+               'checkpoints_enabled opt-out persisted');
+    AssertEqI(Loaded.CheckpointsKeepLast, 16,
+              'checkpoints_keep_last custom value persisted');
+    AssertTrue(not Loaded.OrientTaskAware,
+               'orient_task_aware opt-out persisted');
+    AssertTrue(Loaded.HashlineEnabled,
+               'hashline_enabled opt-in persisted');
+    AssertEqS(Loaded.PromptCache.TTL, '5m',
+              'prompt_cache.ttl custom value persisted');
+    AssertTrue(not Loaded.AutoRouter.Enabled,
+               'auto_router.enabled opt-out persisted');
+    AssertTrue(not Loaded.SelfImprovingSkills.Distiller.Enabled,
+               'distiller.enabled opt-out persisted');
+  finally
+    Loaded.Free;
+  end;
+end;
+
 (* Codex P2 #2: SaveConfig must preserve the persisted profile field
    so mutating commands (auth login, model set, ...) don't drop it. *)
 procedure TestSaveConfigPreservesProfile;
@@ -426,6 +489,7 @@ begin
     TestLoadConfigInheritsChain;
     TestProfileWithoutConfigFile;
     TestSaveConfigPreservesProfile;
+    TestOptOutsPersistAcrossRoundTrip;
     TestSelfShadowInherit;
     TestDiffMaterial;
     WriteLn('ok - config profile tests passed');

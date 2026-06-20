@@ -1100,8 +1100,11 @@ begin
     end;
 
     { Only emit prompt_cache when non-default -- keeps stock configs
-      tidy. Reading back: missing object => defaults (enabled, 5m). }
-    if (not PromptCache.Enabled) or (PromptCache.TTL <> '') then
+      tidy. Default flipped to 1h in PR #314 (bench/swe/README.md): an
+      operator setting TTL back to "5m" or any other non-default needs
+      the value to round-trip; same for the explicit-off path. Reading
+      back: missing object => defaults (enabled, 1h). }
+    if (not PromptCache.Enabled) or ((PromptCache.TTL <> '') and (PromptCache.TTL <> '1h')) then
     begin
       Tmp := TJsonObject.Create;
       Tmp.PutBool('enabled', PromptCache.Enabled);
@@ -1116,13 +1119,15 @@ begin
       Root.PutArray('allow_senders', Arr);
     end;
 
-    { vault_tools_enabled, web_fetch_enabled: defaults flipped to ON
-      in PR #289. Emit only the explicit-off so a fresh config stays
-      tidy and an operator who explicitly opted out round-trips. }
-    if not VaultToolsEnabled then
-      Root.PutBool('vault_tools_enabled', False);
-    if not WebFetchEnabled then
-      Root.PutBool('web_fetch_enabled', False);
+    { vault_tools_enabled, web_fetch_enabled: defaults flipped to OFF
+      in PR #314 (bench/swe/README.md). Emit only the explicit-on so a
+      fresh config stays tidy AND so an operator who answered Y to the
+      onboarding prompt sees the choice round-trip (without this, the
+      Y would silently revert to N on the next LoadConfig). }
+    if VaultToolsEnabled then
+      Root.PutBool('vault_tools_enabled', True);
+    if WebFetchEnabled then
+      Root.PutBool('web_fetch_enabled', True);
     { cron_tool_enabled defaults OFF; emit only the explicit-on so an
       operator who opted into model-scheduled jobs round-trips. }
     if CronToolEnabled then
@@ -1142,28 +1147,38 @@ begin
       JSON keeps fresh config files clean. }
     if ToolOutputCap > 0 then
       Root.PutInt('tool_output_cap', ToolOutputCap);
-    if StatsCollectionEnabled then
-      Root.PutBool('stats_collection_enabled', True);
-    if CheckpointsEnabled then
-      Root.PutBool('checkpoints_enabled', True);
-    if CheckpointsKeepLast > 0 then
+    { stats_collection_enabled, checkpoints_enabled, orient_task_aware:
+      defaults flipped to ON in PR #314 (the six free behavioral toggles
+      from the bench's ablation). Emit only the explicit-off so an
+      operator answering N to onboarding (or editing the field by hand)
+      sees the choice round-trip. Without this, an opt-out silently
+      reverts to the on-by-default behavior on the next load -- privacy
+      / storage / behavior opt-outs do not stick. }
+    if not StatsCollectionEnabled then
+      Root.PutBool('stats_collection_enabled', False);
+    if not CheckpointsEnabled then
+      Root.PutBool('checkpoints_enabled', False);
+    { CheckpointsKeepLast default flipped from 0 (=> use library
+      default 32) to an explicit 32 in PR #314. Emit when it differs --
+      0 and other values both round-trip. }
+    if CheckpointsKeepLast <> 32 then
       Root.PutInt('checkpoints_keep_last', CheckpointsKeepLast);
     { Default True -- emit only the explicit-off so it round-trips
       (same rule as render_markdown / vector_search_enabled). }
     if not PromptwareEnabled then
       Root.PutBool('promptware_enabled', False);
-    { Default False -- emit only the explicit-on. }
-    if OrientTaskAware then
-      Root.PutBool('orient_task_aware', True);
+    if not OrientTaskAware then
+      Root.PutBool('orient_task_aware', False);
     { condense_reversible: default flipped to OFF in PR #289. Emit
       only the explicit-on so fresh configs stay tidy. }
     if CondenseReversible then
       Root.PutBool('condense_reversible', True);
-    { hashline_enabled: default ON; emit only the explicit-off so
-      operators who flipped it during onboarding see the choice
-      persisted on disk. }
-    if not HashlineEnabled then
-      Root.PutBool('hashline_enabled', False);
+    { hashline_enabled: default flipped to OFF in PR #314 (bench/swe).
+      Emit only the explicit-on so operators answering Y to the
+      onboarding prompt (Opus / Sonnet deployments) see the choice
+      round-trip. CLI --no-hashline still works as a per-run override. }
+    if HashlineEnabled then
+      Root.PutBool('hashline_enabled', True);
     if Heartbeat.Enabled
        or (Heartbeat.IntervalMins <> 30)
        or (Heartbeat.ContentPath <> '')
@@ -1215,10 +1230,13 @@ begin
         Tmp.Free; raise;
       end;
     end;
-    if AutoRouter.Enabled
-       or (AutoRouter.EasyProvider <> '')
-       or (AutoRouter.EasyModel <> '')
-       or (AutoRouter.EasyMaxTokens <> 500) then
+    { auto_router.enabled default flipped to ON in PR #314. Always
+      emit the subobject -- True default plus the previous "emit when
+      Enabled" gate means an opt-out (Enabled := False with no other
+      changes) would skip emission and the next LoadConfig would
+      silently re-enable. Emitting unconditionally keeps the round-trip
+      honest at the cost of one always-present subobject in fresh
+      configs (cheap given it has four fields). }
     begin
       Tmp := TJsonObject.Create;
       try
@@ -1231,12 +1249,17 @@ begin
         Tmp.Free; raise;
       end;
     end;
-    { Self-improving skills -- emit only when something is enabled so a
-      default config.json stays clean (same posture as auto_router). }
+    { Self-improving skills -- emit when ANYTHING differs from the new
+      defaults so the round-trip is honest. Distiller.Enabled default
+      flipped to True in PR #314, so the gate ALSO has to fire on the
+      explicit-off path (without `not Distiller.Enabled` here, an
+      onboarding-skip + manual distiller=false flip would silently
+      revert to on). SelfManage / ProgressiveDisclosure / AutoApprove
+      defaults stay False -- gate emits when any is True. }
     if SelfImprovingSkills.SelfManage
        or SelfImprovingSkills.ProgressiveDisclosure
        or SelfImprovingSkills.AutoApprove
-       or SelfImprovingSkills.Distiller.Enabled
+       or (not SelfImprovingSkills.Distiller.Enabled)
        or (Length(SelfImprovingSkills.GuardDeny) > 0)
        or (SelfImprovingSkills.Distiller.MinToolCalls <> 5)
        or (SelfImprovingSkills.Distiller.Model <> '') then
