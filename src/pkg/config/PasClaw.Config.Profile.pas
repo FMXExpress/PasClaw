@@ -16,12 +16,17 @@
                 checkpoints, stats, 1h prompt cache, distiller, auto-
                 router) ON by default. Additionally drops fs_edit_hashline
                 + fs_grep -- one step BEYOND strict lean-edit, driven by
-                the bench finding that smaller models (Haiku-class) misuse
-                the hashline format and burn turns recovering; onboarding's
-                PromptHashline restores both tools with one keystroke for
-                Opus / Sonnet deployments. Applying the profile explicitly
-                is a no-op; it exists so `pasclaw profile show stock`
-                documents the no-profile fresh-install state.
+                TWO bench findings: (1) smaller models (Haiku-class) misuse
+                the hashline format and burn turns recovering; (2) on
+                fixture 07-cross-file-grep, every model class found
+                shell_exec "grep -rln PATTERN PATH > result.txt" beat
+                fs_grep + fs_write by 1 turn (the single shell invocation
+                collapses find + filter + write into one tool call).
+                Onboarding's PromptHashline restores both tools with one
+                keystroke for operators who want them back. Applying the
+                profile explicitly is a no-op; it exists so
+                `pasclaw profile show stock` documents the no-profile
+                fresh-install state.
 
     baseline    Everything off. Bare-minimum control profile for A/B
                 comparison ("how does pasclaw behave with no features").
@@ -241,10 +246,11 @@ const
     '+ vault + memory_fetch OFF (operators opt in via onboarding); ' +
     '6 zero-prompt-cost behavioral toggles ON (orient, checkpoints, ' +
     'stats, 1h cache, distiller, auto-router). Additionally drops ' +
-    'fs_edit_hashline + fs_grep -- this part goes beyond strict ' +
-    'lean-edit, driven by the bench finding that small models ' +
-    '(Haiku-class) misuse the hashline format; onboarding restores ' +
-    'them with one keystroke for Opus / Sonnet operators.",' +
+    'fs_edit_hashline + fs_grep -- beyond strict lean-edit, justified ' +
+    'by TWO bench findings: small models mis-author the hashline ' +
+    'format (Haiku 3x turn penalty), and on fixture 07 shell_exec ' +
+    '\"grep -rln ... > result.txt\" beat fs_grep+fs_write across every ' +
+    'model class. Onboarding restores both tools with one keystroke.",' +
     '"vault_tools_enabled":false,' +
     '"web_fetch_enabled":false,' +
     '"vector_search_enabled":true,' +
