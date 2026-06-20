@@ -624,15 +624,22 @@ type
        view surprised operators on fresh deploys (PR #289). Onboarding
        asks (default N). *)
     CondenseReversible:    Boolean;
-    (* HashlineEnabled -- gate fs_edit_hashline + fs_grep tool
-       registrations. On by default so the surgical-patch tool surface
-       is available. The bench (bench/swe/README.md) found that smaller
-       models (Haiku-class) misuse fs_edit_hashline -- they reach for it
-       on tasks fs_write would handle, then fail the anchor/payload
-       format and burn turns recovering. Onboarding asks (default Y)
-       so operators on small-model deployments can opt out -- equivalent
-       to the --no-hashline CLI flag but persistent. Both layers compose
-       (CLI flag OR config off = drop registrations). *)
+    (* HashlineEnabled gates fs_edit_hashline ONLY (PR #314: split the
+       previous bundled gate -- fs_grep now registers unconditionally
+       because its ripgrep-inspired optimisations beat shell_exec grep
+       on real codebases and on Windows it's the only grep available).
+       The flag also controls fs_read's default output format
+       (hashline-prefixed vs raw bytes).
+
+       PLATFORM-CONDITIONAL default in TConfig.Create:
+         Linux / macOS: False (bench finding -- smaller models mis-author
+           the hashline anchor/payload format and burn turns recovering).
+         Windows:       True  (the format isn't model-specific, so the
+           default just preserves the historical surface; small-model
+           operators on Windows still flip it off via onboarding or
+           the --no-hashline CLI flag).
+       Both gate layers compose: CLI flag OR config off = drop the
+       fs_edit_hashline registration. *)
     HashlineEnabled:       Boolean;
     (* Proactive periodic wake-up (picoclaw / openclaw heartbeat).
        Off by default. When Enabled, the standalone `pasclaw
@@ -893,7 +900,30 @@ begin
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
   OrientTaskAware        := True;  { on by default -- MEMORY task-aware injection. Zero prompt cost when MEMORY.md is absent; saves tokens when present. }
   CondenseReversible     := False; { off by default -- raw tool output preserved verbatim. Onboarding asks (default N). Flipped from on-by-default in PR #289 so a fresh deploy doesn't silently rewrite ls/grep output behind the operator's back. }
-  HashlineEnabled        := False; { off by default per the bench finding (bench/swe/README.md): the surgical-patch surface fs_edit_hashline + fs_grep lures smaller models (Haiku-class) into mis-authoring the anchor/payload format and burning turns. Bigger models (Opus / Sonnet) use the tool correctly when it's present, so the onboarding question defaults Y -- operators on Opus / Sonnet / GPT-4-tier deployments restore the toolchain in one keystroke. CLI --no-hashline still works as a per-run override; config OFF supersedes CLI ON. }
+  { HashlineEnabled gates fs_edit_hashline ONLY (PR #314 split the
+    previous bundled gate). fs_grep registers unconditionally.
+
+    Linux / macOS default OFF: bench (bench/swe/README.md) found that
+      smaller models (Haiku-class) mis-author fs_edit_hashline's
+      anchor/payload format and burn turns recovering on every cell
+      that hit the tool. Big-model operators (Opus / Sonnet / GPT-4)
+      who DO use it correctly restore via the onboarding PromptHashline
+      question (default N on these platforms but a single Y keystroke
+      flips it back).
+
+    Windows default ON: the bench's small-model finding still applies
+      but Windows operators on big models tend to want fs_edit_hashline
+      available out-of-box (no platform-specific reason to drop it like
+      there was for fs_grep). PromptHashline still asks (defaults Y on
+      Windows).
+
+    --no-hashline CLI flag still works as a per-run override; config
+    OFF supersedes CLI ON. }
+  {$IFDEF MSWINDOWS}
+  HashlineEnabled        := True;
+  {$ELSE}
+  HashlineEnabled        := False;
+  {$ENDIF}
   Heartbeat.Enabled      := False; { opt-in via onboarding; off by default. }
   Heartbeat.IntervalMins := 30;
   Heartbeat.ContentPath  := '';    { empty -> default workspace/heartbeat.md at load time }

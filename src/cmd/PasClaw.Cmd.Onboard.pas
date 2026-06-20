@@ -742,43 +742,52 @@ begin
 end;
 
 procedure PromptHashline(Cfg: TConfig);
-{ fs_edit_hashline + fs_grep tool registrations. OFF by default per
-  the bench finding (bench/swe/README.md): smaller models
-  (Haiku-class) mis-author the hashline anchor/payload format and
-  burn turns recovering. The question defaults Y so operators on
-  Opus / Sonnet / GPT-4-tier models restore the surgical-patch
-  toolchain in one keystroke -- those models use it correctly when
-  present. CLI --no-hashline still works as a per-run override;
-  config OFF supersedes CLI ON. }
+{ fs_edit_hashline tool registration. PLATFORM-CONDITIONAL default
+  (Y on Windows, N on Linux / macOS) per the bench finding -- smaller
+  models mis-author the anchor/payload format and burn turns recovering.
+  Big-model operators answer Y to keep the surgical-patch tool. NOTE:
+  fs_grep is NOT gated by this -- it registers unconditionally because
+  its ripgrep-inspired optimisations win on real codebases and on
+  Windows there's no shell grep at all. }
 var
-  Choice: string;
+  Choice, DefaultHint, Prompt: string;
+  DefaultOn: Boolean;
 begin
+  {$IFDEF MSWINDOWS}
+  DefaultOn   := True;
+  DefaultHint := '[Y/n]';
+  {$ELSE}
+  DefaultOn   := False;
+  DefaultHint := '[y/N]';
+  {$ENDIF}
   PrintLn;
-  PrintLn(Ansi.Bold + 'fs_edit_hashline + fs_grep' + Ansi.Reset);
+  PrintLn(Ansi.Bold + 'fs_edit_hashline (surgical patches)' + Ansi.Reset);
   PrintLn(Ansi.Dim +
-    'Surgical-patch toolchain: hashline-format edits with built-in skip ' +
-    'rules' + Ansi.Reset);
+    'Hashline-format anchored edits. Big models (Opus / Sonnet / GPT-4) ' +
+    'use it' + Ansi.Reset);
   PrintLn(Ansi.Dim +
-    'for grep. Works great with Opus / Sonnet / GPT-4-tier models; smaller ' +
-    'models' + Ansi.Reset);
+    'correctly; smaller models (Haiku, gpt-4o-mini, Llama 3.x 8B) sometimes ' +
+    'mis-author' + Ansi.Reset);
   PrintLn(Ansi.Dim +
-    '(Haiku, gpt-4o-mini, Llama 3.x 8B) sometimes mis-author the hashline ' +
-    'format' + Ansi.Reset);
+    'the anchor/payload format and waste turns. Default Y on Windows, N ' +
+    'on Linux/macOS.' + Ansi.Reset);
   PrintLn(Ansi.Dim +
-    'and waste turns. Opt out to drop them; the model falls back on ' +
-    'fs_write + shell_exec grep.' + Ansi.Reset);
+    'When disabled the model uses fs_write rewrites instead. fs_grep is ' +
+    'always on.' + Ansi.Reset);
   PrintLn;
-  Choice := Trim(LowerCase(ReadLineEcho('  Enable hashline tools [Y/n]: ')));
-  if (Choice = '') or (Choice = 'y') or (Choice = 'yes') then
-  begin
-    Cfg.HashlineEnabled := True;
-    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' fs_edit_hashline + fs_grep enabled');
-  end
+  Prompt := '  Enable fs_edit_hashline ' + DefaultHint + ': ';
+  Choice := Trim(LowerCase(ReadLineEcho(Prompt)));
+  if Choice = '' then
+    { Enter-through: take the platform default. }
+    Cfg.HashlineEnabled := DefaultOn
+  else if (Choice = 'y') or (Choice = 'yes') then
+    Cfg.HashlineEnabled := True
   else
-  begin
     Cfg.HashlineEnabled := False;
-    PrintLn('  ' + Ansi.Dim + '(skipped -- the model uses fs_write + shell_exec grep)' + Ansi.Reset);
-  end;
+  if Cfg.HashlineEnabled then
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' fs_edit_hashline enabled')
+  else
+    PrintLn('  ' + Ansi.Dim + '(skipped -- the model uses fs_write rewrites)' + Ansi.Reset);
 end;
 
 procedure PromptSelfImprovingSkills(Cfg: TConfig);

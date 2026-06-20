@@ -14,19 +14,20 @@
                 them on via onboarding when they actually use them); the
                 six zero-prompt-cost behavioral toggles (orient_task_aware,
                 checkpoints, stats, 1h prompt cache, distiller, auto-
-                router) ON by default. Additionally drops fs_edit_hashline
-                + fs_grep -- one step BEYOND strict lean-edit, driven by
-                TWO bench findings: (1) smaller models (Haiku-class) misuse
-                the hashline format and burn turns recovering; (2) on
-                fixture 07-cross-file-grep, every model class found
-                shell_exec "grep -rln PATTERN PATH > result.txt" beat
-                fs_grep + fs_write by 1 turn (the single shell invocation
-                collapses find + filter + write into one tool call).
-                Onboarding's PromptHashline restores both tools with one
-                keystroke for operators who want them back. Applying the
-                profile explicitly is a no-op; it exists so
-                `pasclaw profile show stock` documents the no-profile
-                fresh-install state.
+                router) ON by default. fs_edit_hashline is PLATFORM-
+                CONDITIONAL by default: OFF on Linux / macOS (bench
+                finding -- smaller models mis-author the anchor/payload
+                format and burn turns recovering), ON on Windows.
+                fs_grep registers UNCONDITIONALLY -- its six ripgrep-
+                inspired optimisations (skip lists, BMH, binary
+                detection, byte-walking, file-size cap, deferred
+                hashing) make it 10-50x faster than shell_exec grep on
+                real codebases, and on Windows it's the only grep
+                equivalent available. PromptHashline asks about
+                fs_edit_hashline at onboarding with a platform-aware
+                default Y/N. Applying the profile explicitly is a no-op;
+                it exists so `pasclaw profile show stock` documents the
+                no-profile fresh-install state.
 
     baseline    Everything off. Bare-minimum control profile for A/B
                 comparison ("how does pasclaw behave with no features").
@@ -245,19 +246,18 @@ const
     'bench-grounded lean-edit shape (bench/swe/README.md): web_fetch ' +
     '+ vault + memory_fetch OFF (operators opt in via onboarding); ' +
     '6 zero-prompt-cost behavioral toggles ON (orient, checkpoints, ' +
-    'stats, 1h cache, distiller, auto-router). Additionally drops ' +
-    'fs_edit_hashline + fs_grep -- beyond strict lean-edit, justified ' +
-    'by TWO bench findings: small models mis-author the hashline ' +
-    'format (Haiku 3x turn penalty), and on fixture 07 shell_exec ' +
-    '\"grep -rln ... > result.txt\" beat fs_grep+fs_write across every ' +
-    'model class. Onboarding restores both tools with one keystroke.",' +
+    'stats, 1h cache, distiller, auto-router). hashline_enabled gates ' +
+    'fs_edit_hashline ONLY and is PLATFORM-CONDITIONAL -- defaults OFF ' +
+    'on Linux / macOS, ON on Windows; see TConfig.Create. fs_grep ' +
+    'registers unconditionally (6 ripgrep-inspired optimisations + no ' +
+    'shell grep on Windows). Onboarding PromptHashline asks about ' +
+    'fs_edit_hashline with a platform-aware default Y/N.",' +
     '"vault_tools_enabled":false,' +
     '"web_fetch_enabled":false,' +
     '"vector_search_enabled":true,' +
     '"render_markdown":true,' +
     '"promptware_enabled":true,' +
     '"condense_reversible":false,' +
-    '"hashline_enabled":false,' +
     '"tool_output_cap":0,' +
     '"orient_task_aware":true,' +
     '"stats_collection_enabled":true,' +
