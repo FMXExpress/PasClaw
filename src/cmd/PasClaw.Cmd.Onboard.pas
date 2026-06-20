@@ -741,6 +741,47 @@ begin
   end;
 end;
 
+procedure PromptHashline(Cfg: TConfig);
+{ fs_edit_hashline + fs_grep tool registrations. On by default --
+  surgical patches are useful and the format is well-documented in
+  the tool description. The reason this is asked at all is the
+  bench/swe finding (bench/swe/README.md): smaller models
+  (Haiku-class) reach for fs_edit_hashline on tasks fs_write would
+  handle and then fail the anchor/payload format, burning turns
+  recovering. Operators on small-model deployments save measurable
+  per-task turns by opting out -- equivalent to the --no-hashline
+  CLI flag but persisted in config.json. }
+var
+  Choice: string;
+begin
+  PrintLn;
+  PrintLn(Ansi.Bold + 'fs_edit_hashline + fs_grep' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'Surgical-patch toolchain: hashline-format edits with built-in skip ' +
+    'rules' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'for grep. Works great with Opus / Sonnet / GPT-4-tier models; smaller ' +
+    'models' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    '(Haiku, gpt-4o-mini, Llama 3.x 8B) sometimes mis-author the hashline ' +
+    'format' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'and waste turns. Opt out to drop them; the model falls back on ' +
+    'fs_write + shell_exec grep.' + Ansi.Reset);
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Enable hashline tools [Y/n]: ')));
+  if (Choice = '') or (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Cfg.HashlineEnabled := True;
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' fs_edit_hashline + fs_grep enabled');
+  end
+  else
+  begin
+    Cfg.HashlineEnabled := False;
+    PrintLn('  ' + Ansi.Dim + '(skipped -- the model uses fs_write + shell_exec grep)' + Ansi.Reset);
+  end;
+end;
+
 procedure PromptSelfImprovingSkills(Cfg: TConfig);
 { Four nested toggles for the Hermes-style self-improving skills
   (PR #288). Each defaults N because the feature touches:
@@ -1440,6 +1481,7 @@ begin
         who said yes to the previous one, so a quick "enter, enter,
         enter" leaves the minimal-surprise defaults in place. }
       PromptWebFetch(Cfg);
+      PromptHashline(Cfg);
       PromptPromptware(Cfg);
       PromptCondenseReversible(Cfg);
       PromptToolOutputCap(Cfg);

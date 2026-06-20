@@ -91,6 +91,7 @@ begin
     AssertTrue(Fresh.RenderMarkdown       = Stocked.RenderMarkdown,       'stock: render_markdown');
     AssertTrue(Fresh.PromptwareEnabled    = Stocked.PromptwareEnabled,    'stock: promptware_enabled');
     AssertTrue(Fresh.CondenseReversible   = Stocked.CondenseReversible,   'stock: condense_reversible');
+    AssertTrue(Fresh.HashlineEnabled      = Stocked.HashlineEnabled,      'stock: hashline_enabled');
     AssertTrue(Fresh.ToolOutputCap        = Stocked.ToolOutputCap,        'stock: tool_output_cap');
     AssertTrue(Fresh.OrientTaskAware      = Stocked.OrientTaskAware,      'stock: orient_task_aware');
     AssertTrue(Fresh.StatsCollectionEnabled = Stocked.StatsCollectionEnabled, 'stock: stats_collection_enabled');

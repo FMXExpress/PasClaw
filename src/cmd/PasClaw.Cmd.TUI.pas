@@ -160,7 +160,7 @@ begin
     if not A.NoTools then
     begin
       Reg := TToolRegistry.Create;
-      RegisterFSTools(Reg, not A.NoHashline);
+      RegisterFSTools(Reg, (not A.NoHashline) and Cfg.HashlineEnabled);
       RegisterShellTool(Reg);
       RegisterExecuteCodeTool(Reg);
       RegisterMemoryTools(Reg);
