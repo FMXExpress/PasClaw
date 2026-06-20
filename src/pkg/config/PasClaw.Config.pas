@@ -1189,12 +1189,14 @@ begin
       only the explicit-on so fresh configs stay tidy. }
     if CondenseReversible then
       Root.PutBool('condense_reversible', True);
-    { hashline_enabled: default flipped to OFF in PR #314 (bench/swe).
-      Emit only the explicit-on so operators answering Y to the
-      onboarding prompt (Opus / Sonnet deployments) see the choice
-      round-trip. CLI --no-hashline still works as a per-run override. }
-    if HashlineEnabled then
-      Root.PutBool('hashline_enabled', True);
+    { hashline_enabled: default True. Emit only the explicit OFF so
+      small-model operators who answer N to PromptHashline (or who
+      set the field via config edit) see their choice round-trip;
+      Y-keepers don't get a redundant "hashline_enabled": true in
+      their config.json. CLI --no-hashline still works as a per-run
+      override. }
+    if not HashlineEnabled then
+      Root.PutBool('hashline_enabled', False);
     if Heartbeat.Enabled
        or (Heartbeat.IntervalMins <> 30)
        or (Heartbeat.ContentPath <> '')
