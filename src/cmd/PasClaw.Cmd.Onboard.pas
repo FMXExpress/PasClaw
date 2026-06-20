@@ -742,24 +742,16 @@ begin
 end;
 
 procedure PromptHashline(Cfg: TConfig);
-{ fs_edit_hashline tool registration. PLATFORM-CONDITIONAL default
-  (Y on Windows, N on Linux / macOS) per the bench finding -- smaller
+{ fs_edit_hashline tool registration. Default Y (matches TConfig.Create);
+  Enter-through keeps the surgical-patch tool. Small-model operators
+  (Haiku-class) answer N to drop the tool -- the bench found those
   models mis-author the anchor/payload format and burn turns recovering.
-  Big-model operators answer Y to keep the surgical-patch tool. NOTE:
-  fs_grep is NOT gated by this -- it registers unconditionally because
-  its ripgrep-inspired optimisations win on real codebases and on
-  Windows there's no shell grep at all. }
+  NOTE: fs_grep is NOT gated by this -- it registers unconditionally
+  because its ripgrep-inspired optimisations win on real codebases and
+  on Windows there's no shell grep at all. }
 var
-  Choice, DefaultHint, Prompt: string;
-  DefaultOn: Boolean;
+  Choice: string;
 begin
-  {$IFDEF MSWINDOWS}
-  DefaultOn   := True;
-  DefaultHint := '[Y/n]';
-  {$ELSE}
-  DefaultOn   := False;
-  DefaultHint := '[y/N]';
-  {$ENDIF}
   PrintLn;
   PrintLn(Ansi.Bold + 'fs_edit_hashline (surgical patches)' + Ansi.Reset);
   PrintLn(Ansi.Dim +
@@ -769,25 +761,23 @@ begin
     'correctly; smaller models (Haiku, gpt-4o-mini, Llama 3.x 8B) sometimes ' +
     'mis-author' + Ansi.Reset);
   PrintLn(Ansi.Dim +
-    'the anchor/payload format and waste turns. Default Y on Windows, N ' +
-    'on Linux/macOS.' + Ansi.Reset);
+    'the anchor/payload format and waste turns. Answer N on small-model ' +
+    'deployments;' + Ansi.Reset);
   PrintLn(Ansi.Dim +
-    'When disabled the model uses fs_write rewrites instead. fs_grep is ' +
-    'always on.' + Ansi.Reset);
+    'the agent then uses fs_write rewrites instead. fs_grep is always on.' +
+    Ansi.Reset);
   PrintLn;
-  Prompt := '  Enable fs_edit_hashline ' + DefaultHint + ': ';
-  Choice := Trim(LowerCase(ReadLineEcho(Prompt)));
-  if Choice = '' then
-    { Enter-through: take the platform default. }
-    Cfg.HashlineEnabled := DefaultOn
-  else if (Choice = 'y') or (Choice = 'yes') then
-    Cfg.HashlineEnabled := True
+  Choice := Trim(LowerCase(ReadLineEcho('  Enable fs_edit_hashline [Y/n]: ')));
+  if (Choice = '') or (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Cfg.HashlineEnabled := True;
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' fs_edit_hashline enabled');
+  end
   else
+  begin
     Cfg.HashlineEnabled := False;
-  if Cfg.HashlineEnabled then
-    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' fs_edit_hashline enabled')
-  else
     PrintLn('  ' + Ansi.Dim + '(skipped -- the model uses fs_write rewrites)' + Ansi.Reset);
+  end;
 end;
 
 procedure PromptSelfImprovingSkills(Cfg: TConfig);

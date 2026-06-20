@@ -321,7 +321,7 @@ begin
     Saved.CheckpointsEnabled                    := False;  { default True  -> opt-out }
     Saved.CheckpointsKeepLast                   := 16;     { default 32    -> custom }
     Saved.OrientTaskAware                       := False;  { default True  -> opt-out }
-    Saved.HashlineEnabled                       := True;   { default False -> opt-in }
+    Saved.HashlineEnabled                       := False;  { default True  -> opt-out }
     Saved.PromptCache.TTL                       := '5m';   { default '1h'  -> non-default }
     Saved.AutoRouter.Enabled                    := False;  { default True  -> opt-out }
     Saved.SelfImprovingSkills.Distiller.Enabled := False;  { default True  -> opt-out }
@@ -344,8 +344,8 @@ begin
               'checkpoints_keep_last custom value persisted');
     AssertTrue(not Loaded.OrientTaskAware,
                'orient_task_aware opt-out persisted');
-    AssertTrue(Loaded.HashlineEnabled,
-               'hashline_enabled opt-in persisted');
+    AssertTrue(not Loaded.HashlineEnabled,
+               'hashline_enabled opt-out persisted');
     AssertEqS(Loaded.PromptCache.TTL, '5m',
               'prompt_cache.ttl custom value persisted');
     AssertTrue(not Loaded.AutoRouter.Enabled,

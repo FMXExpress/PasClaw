@@ -631,14 +631,12 @@ type
        The flag also controls fs_read's default output format
        (hashline-prefixed vs raw bytes).
 
-       PLATFORM-CONDITIONAL default in TConfig.Create:
-         Linux / macOS: False (bench finding -- smaller models mis-author
-           the hashline anchor/payload format and burn turns recovering).
-         Windows:       True  (the format isn't model-specific, so the
-           default just preserves the historical surface; small-model
-           operators on Windows still flip it off via onboarding or
-           the --no-hashline CLI flag).
-       Both gate layers compose: CLI flag OR config off = drop the
+       Default True everywhere. The bench (bench/swe/README.md) found
+       that smaller models (Haiku-class) mis-author the hashline
+       anchor/payload format and burn turns recovering; operators on
+       small-model deployments opt out via onboarding's PromptHashline
+       (default N skips it) or the --no-hashline CLI flag. Both gate
+       layers compose: CLI flag OR config off = drop the
        fs_edit_hashline registration. *)
     HashlineEnabled:       Boolean;
     (* Proactive periodic wake-up (picoclaw / openclaw heartbeat).
@@ -901,29 +899,17 @@ begin
   OrientTaskAware        := True;  { on by default -- MEMORY task-aware injection. Zero prompt cost when MEMORY.md is absent; saves tokens when present. }
   CondenseReversible     := False; { off by default -- raw tool output preserved verbatim. Onboarding asks (default N). Flipped from on-by-default in PR #289 so a fresh deploy doesn't silently rewrite ls/grep output behind the operator's back. }
   { HashlineEnabled gates fs_edit_hashline ONLY (PR #314 split the
-    previous bundled gate). fs_grep registers unconditionally.
+    previous bundled gate -- fs_grep registers unconditionally).
 
-    Linux / macOS default OFF: bench (bench/swe/README.md) found that
-      smaller models (Haiku-class) mis-author fs_edit_hashline's
-      anchor/payload format and burn turns recovering on every cell
-      that hit the tool. Big-model operators (Opus / Sonnet / GPT-4)
-      who DO use it correctly restore via the onboarding PromptHashline
-      question (default N on these platforms but a single Y keystroke
-      flips it back).
-
-    Windows default ON: the bench's small-model finding still applies
-      but Windows operators on big models tend to want fs_edit_hashline
-      available out-of-box (no platform-specific reason to drop it like
-      there was for fs_grep). PromptHashline still asks (defaults Y on
-      Windows).
-
-    --no-hashline CLI flag still works as a per-run override; config
-    OFF supersedes CLI ON. }
-  {$IFDEF MSWINDOWS}
+    Default True everywhere. The bench (bench/swe/README.md) found
+    that smaller models (Haiku-class) mis-author fs_edit_hashline's
+    anchor/payload format and burn turns recovering; those operators
+    opt out via onboarding's PromptHashline (default Y) or the
+    --no-hashline CLI flag. Big-model operators (Opus / Sonnet /
+    GPT-4) use the tool correctly, and they're the majority case
+    pasclaw is tuned for. CLI flag OR config off = drop the
+    fs_edit_hashline registration. }
   HashlineEnabled        := True;
-  {$ELSE}
-  HashlineEnabled        := False;
-  {$ENDIF}
   Heartbeat.Enabled      := False; { opt-in via onboarding; off by default. }
   Heartbeat.IntervalMins := 30;
   Heartbeat.ContentPath  := '';    { empty -> default workspace/heartbeat.md at load time }

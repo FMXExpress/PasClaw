@@ -14,20 +14,17 @@
                 them on via onboarding when they actually use them); the
                 six zero-prompt-cost behavioral toggles (orient_task_aware,
                 checkpoints, stats, 1h prompt cache, distiller, auto-
-                router) ON by default. fs_edit_hashline is PLATFORM-
-                CONDITIONAL by default: OFF on Linux / macOS (bench
-                finding -- smaller models mis-author the anchor/payload
-                format and burn turns recovering), ON on Windows.
+                router) ON by default. fs_edit_hashline ON by default
+                (small-model operators opt out via onboarding's
+                PromptHashline question or the --no-hashline CLI flag);
                 fs_grep registers UNCONDITIONALLY -- its six ripgrep-
                 inspired optimisations (skip lists, BMH, binary
                 detection, byte-walking, file-size cap, deferred
                 hashing) make it 10-50x faster than shell_exec grep on
                 real codebases, and on Windows it's the only grep
-                equivalent available. PromptHashline asks about
-                fs_edit_hashline at onboarding with a platform-aware
-                default Y/N. Applying the profile explicitly is a no-op;
-                it exists so `pasclaw profile show stock` documents the
-                no-profile fresh-install state.
+                equivalent available. Applying the profile explicitly
+                is a no-op; it exists so `pasclaw profile show stock`
+                documents the no-profile fresh-install state.
 
     baseline    Everything off. Bare-minimum control profile for A/B
                 comparison ("how does pasclaw behave with no features").
@@ -247,11 +244,10 @@ const
     '+ vault + memory_fetch OFF (operators opt in via onboarding); ' +
     '6 zero-prompt-cost behavioral toggles ON (orient, checkpoints, ' +
     'stats, 1h cache, distiller, auto-router). hashline_enabled gates ' +
-    'fs_edit_hashline ONLY and is PLATFORM-CONDITIONAL -- defaults OFF ' +
-    'on Linux / macOS, ON on Windows; see TConfig.Create. fs_grep ' +
-    'registers unconditionally (6 ripgrep-inspired optimisations + no ' +
-    'shell grep on Windows). Onboarding PromptHashline asks about ' +
-    'fs_edit_hashline with a platform-aware default Y/N.",' +
+    'fs_edit_hashline ONLY -- defaults True; small-model operators opt ' +
+    'out via the onboarding PromptHashline question or --no-hashline ' +
+    'CLI flag. fs_grep registers unconditionally (6 ripgrep-inspired ' +
+    'optimisations + no shell grep on Windows).",' +
     '"vault_tools_enabled":false,' +
     '"web_fetch_enabled":false,' +
     '"vector_search_enabled":true,' +
