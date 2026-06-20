@@ -8,13 +8,18 @@
 
   Six built-ins:
 
-    stock       TConfig.Create's exact defaults. The shape is the
-                bench-grounded lean-edit (bench/swe/README.md): web_fetch,
+    stock       TConfig.Create's exact defaults. Adopted the bench-
+                grounded lean-edit shape (bench/swe/README.md): web_fetch,
                 vault, and memory_fetch OFF out-of-box (operators turn
                 them on via onboarding when they actually use them); the
                 six zero-prompt-cost behavioral toggles (orient_task_aware,
                 checkpoints, stats, 1h prompt cache, distiller, auto-
-                router) ON by default. Applying the profile explicitly
+                router) ON by default. Additionally drops fs_edit_hashline
+                + fs_grep -- one step BEYOND strict lean-edit, driven by
+                the bench finding that smaller models (Haiku-class) misuse
+                the hashline format and burn turns recovering; onboarding's
+                PromptHashline restores both tools with one keystroke for
+                Opus / Sonnet deployments. Applying the profile explicitly
                 is a no-op; it exists so `pasclaw profile show stock`
                 documents the no-profile fresh-install state.
 
@@ -231,11 +236,15 @@ const
      stock cross-check catches. *)
   Profile_Stock: string =
     '{' +
-    '"_description":"Stock TConfig.Create defaults. Adopted lean-edit ' +
-    'shape: web_fetch + vault + memory_fetch OFF (operators opt in via ' +
-    'onboarding); 6 zero-prompt-cost behavioral toggles ON (orient, ' +
-    'checkpoints, stats, 1h cache, distiller, auto-router). See ' +
-    'bench/swe/README.md for the data behind the shift.",' +
+    '"_description":"Stock TConfig.Create defaults. Adopted the ' +
+    'bench-grounded lean-edit shape (bench/swe/README.md): web_fetch ' +
+    '+ vault + memory_fetch OFF (operators opt in via onboarding); ' +
+    '6 zero-prompt-cost behavioral toggles ON (orient, checkpoints, ' +
+    'stats, 1h cache, distiller, auto-router). Additionally drops ' +
+    'fs_edit_hashline + fs_grep -- this part goes beyond strict ' +
+    'lean-edit, driven by the bench finding that small models ' +
+    '(Haiku-class) misuse the hashline format; onboarding restores ' +
+    'them with one keystroke for Opus / Sonnet operators.",' +
     '"vault_tools_enabled":false,' +
     '"web_fetch_enabled":false,' +
     '"vector_search_enabled":true,' +
