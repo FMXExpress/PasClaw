@@ -1,0 +1,11 @@
+{
+  "name": "12-vault-needs-library",
+  "category": "capability-test-vault-search",
+  "shape_of": "Tests vault_search / vault_get. PasClaw's vault tools hit https://pasclaw.dev/vault which is a real network service (the Code Vault, a curated library of Pascal helpers). A fair test of vault would need either real network access OR a mocked local vault server matching the same wire shape. This fixture is the placeholder -- the task is designed but the bench currently can't differentiate vault_search from a no-op until the mock or real endpoint is wired up. Documented gap.",
+  "prompt": "[CAPABILITY FIXTURE -- not yet runnable without a vault endpoint] Implement a Pascal helper `IsValidUTF8(const Bytes: array of Byte): Boolean` that returns True iff Bytes is a valid UTF-8 byte sequence. There's a Code Vault entry under the keyword `utf8 validation` with a battle-tested reference implementation -- consult it (vault_search / vault_get) and adapt it. Without vault, you'd have to write the validator from RFC 3629 from memory.",
+  "scope_paths": ["src/"],
+  "skipped_reason": "Requires a reachable vault endpoint at https://pasclaw.dev/vault OR a local mock. Document and revisit when the infrastructure exists.",
+  "oracle": {
+    "cmd": "$FIXTURE_DIR/oracle/test.sh"
+  }
+}

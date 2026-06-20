@@ -1,0 +1,10 @@
+{
+  "name": "15-skill-distillation",
+  "category": "capability-test-auto-skill-creation",
+  "shape_of": "Exercises the full distiller -> pending-draft (or auto-installed) loop. Task is intentionally repetitive (fix the same YAML typo in 5 files) so the distiller's min_tool_calls=5 trigger fires post-task. Oracle then checks for a staged or auto-installed skill draft.",
+  "prompt": "There are 5 YAML files under `src/` (`a.yml`, `b.yml`, `c.yml`, `d.yml`, `e.yml`). Each one has the same bug -- one of its top-level keys is written with a double colon (`provider::` instead of `provider:`, `region::` instead of `region:`, etc.). Read each file, fix the double-colon typo, and write the corrected version back. Don't combine the fixes into one operation -- handle each file individually so the workflow stays clear. Preserve every other line exactly. When all 5 files parse cleanly as YAML, say done.",
+  "scope_paths": ["src/"],
+  "oracle": {
+    "cmd": "$FIXTURE_DIR/oracle/test.sh"
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "name": "01-snippet-window-magic-number",
+  "category": "trivial-localisation",
+  "shape_of": "PR #309 (memory/kb: widen FTS5 snippet window 24 -> 60)",
+  "prompt": "Two SQL queries in src/index.pas use a hardcoded snippet width of 24. The 24 is too narrow -- profiling shows the answer line is often clipped. Lift 24 into a named const FTS5_SNIPPET_TOKENS = 60 in the unit's interface section (so other units can reuse it), and replace both occurrences in the SQL strings with IntToStr(FTS5_SNIPPET_TOKENS). Do not touch any other behavior. When you're done, just say done.",
+  "scope_paths": ["src/"],
+  "oracle": {
+    "cmd": "$FIXTURE_DIR/oracle/test.sh",
+    "_doc": "Returns 0 iff (a) FTS5_SNIPPET_TOKENS = 60 is declared in src/index.pas's interface section, AND (b) both SQL string literals reference IntToStr(FTS5_SNIPPET_TOKENS) instead of the literal 24."
+  }
+}

@@ -1,0 +1,5 @@
+service: beta-service
+version: 1.0.1
+region:: us-east-1
+deploy_target: production
+replicas: 3

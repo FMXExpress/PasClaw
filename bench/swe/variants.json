@@ -1,0 +1,39 @@
+[
+  {
+    "id": "baseline",
+    "_note": "Everything off. Control profile for A/B comparison.",
+    "profile": "baseline",
+    "max_iters": 20
+  },
+  {
+    "id": "stock",
+    "_note": "TConfig defaults. The no-profile fresh-install state.",
+    "profile": "stock",
+    "max_iters": 20
+  },
+  {
+    "id": "max-build",
+    "_note": "Productive coding defaults (vector search, web_fetch, vault, ...).",
+    "profile": "max-build",
+    "max_iters": 20
+  },
+  {
+    "id": "max-build-low-iters",
+    "_note": "Same surface as max-build but a tight iteration budget. Tests whether the iteration ceiling is the binding constraint.",
+    "profile": "max-build",
+    "max_iters": 8
+  },
+  {
+    "id": "max-build-plan-mode",
+    "_note": "Force plan-mode for the first turn. Tests whether forced planning helps on multi-file localisation.",
+    "profile": "max-build",
+    "max_iters": 20,
+    "mode": "plan"
+  },
+  {
+    "id": "low-token",
+    "_note": "Token-economy profile: condenser, output cap, task-aware MEMORY slicing. Tests the cost ceiling at small intelligence sacrifice.",
+    "profile": "low-token",
+    "max_iters": 20
+  }
+]

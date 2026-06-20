@@ -1,0 +1,10 @@
+{
+  "name": "08-cli-centipede",
+  "category": "long-creative",
+  "shape_of": "A multi-turn from-scratch build task. The agent designs and writes a working CLI Centipede game. Long enough that condenser / tool_output_cap may actually fire, varied enough that profiles with skill discovery or web research could in principle do better, simple enough to stay tractable in a bench. Pass-rate plus turn count + total tool calls + final-line-count tell the profile-comparison story.",
+  "prompt": "Build a playable CLI Centipede game in Python and save it as `game.py` at the workspace root. Requirements:\n\n- Uses the `curses` standard-library module for the terminal UI (no external pip packages).\n- Has at minimum: a player on the bottom row that can move left/right and fire; a centipede made of multiple connected segments that traverses the play area top-to-bottom; bullets the player can fire upward; bullet/segment collision that destroys the segment (and ideally splits the centipede); a win condition (all segments destroyed) and a lose condition (centipede reaches player's row).\n- Includes a `--self-test` flag mode that initialises the game state without curses (no terminal needed), runs ~20 simulated tick steps with a scripted input, and prints `SELF_TEST_OK` if all internal invariants hold, then exits 0. (This is how the oracle checks it.)\n- The code should be readable: clear class or function boundaries (Player, Centipede / segments, Bullet, Game). Total length 200-500 lines.\n- Doesn't have to look exactly like Atari's Centipede — the mushroom field is optional. Focus on the core loop.\n\nIterate as needed. When the self-test passes and you've checked the game is structurally sound, say done.",
+  "scope_paths": ["game.py", "src/"],
+  "oracle": {
+    "cmd": "$FIXTURE_DIR/oracle/test.sh"
+  }
+}
