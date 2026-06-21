@@ -78,6 +78,24 @@ treated as a **wildcard** — it accepts any model. Useful for "I'll
 serve whatever you throw at me" workers without explicit capability
 tracking.
 
+**Query-string fallback for browser EventSource workers.** Native
+browser `EventSource` ignores custom headers, so the gateway also
+accepts `?token=<token>`, `?worker_id=<id>`, and `?caps=<a,b,c>` as
+fallbacks for the equivalent headers. A header beats the query
+param when both are present. Non-browser workers should keep using
+the headers (no extra URL noise; nothing in query-string logs).
+
+**CORS.** Cross-origin browser workers (a WebLLM page on
+`http://localhost:3000` pointing at a gateway on
+`https://my-pasclaw.example.com`) get permissive CORS on all three
+`/v1/relay/*` endpoints: `Access-Control-Allow-Origin: *`,
+`Access-Control-Allow-Methods: GET, POST, OPTIONS`,
+`Access-Control-Allow-Headers` reflecting the browser's preflight
+request. `OPTIONS` preflights answer 204 with a 10-minute cache. The
+bearer token still gates access; `*` is safe because the token is
+the authentication boundary and no cookies are involved (no
+`credentials: include`).
+
 The queue does first-come-first-served dispatch: pending requests go to
 the first connected worker whose capabilities match the request's
 model. If no matching worker is connected, the request stays in the
@@ -293,6 +311,8 @@ sees the relay layer.
 
 ### Browser + WebLLM (minimal example)
 
+The WHATWG `EventSource` constructor has **no headers option** in real browsers, so a Pascal-style "set X-Relay-Worker-Id as a header" approach can't work from JS. PasClaw's gateway therefore accepts `?token=`, `?worker_id=`, and `?caps=` as query-string fallbacks for the equivalent headers on `/v1/relay/poll`. Use them from the browser; the `Authorization` header continues to work for the response `POST` (where `fetch` honours `headers`).
+
 ```html
 <!DOCTYPE html>
 <script type="module">
@@ -301,16 +321,15 @@ sees the relay layer.
   const TOKEN = "...";
   const URL   = "http://localhost:8888";
   const MODEL = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
+  const WID   = `tab-${crypto.randomUUID()}`;
 
   const engine = await CreateMLCEngine(MODEL);
-  const events = new EventSource(`${URL}/v1/relay/poll`, {
-    withCredentials: false,
-    headers: {
-      "Authorization":         `Bearer ${TOKEN}`,
-      "X-Relay-Worker-Id":     `tab-${crypto.randomUUID()}`,
-      "X-Relay-Capabilities":  MODEL,
-    },
-  });
+
+  // Query-string auth so the browser can attach worker identity +
+  // capabilities + token without custom headers (which native
+  // EventSource silently drops).
+  const q = new URLSearchParams({ token: TOKEN, worker_id: WID, caps: MODEL });
+  const events = new EventSource(`${URL}/v1/relay/poll?${q}`);
 
   events.onmessage = async (ev) => {
     const req = JSON.parse(ev.data);
