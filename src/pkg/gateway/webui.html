@@ -195,6 +195,28 @@
     gap:1rem;padding:.5rem .8rem 1rem}
   .stats-table-wrap h3{margin:.2rem 0 .4rem;font-size:11px;color:var(--cyan);
     text-transform:uppercase;letter-spacing:.1em;font-weight:600}
+  /* Relay tab. Reuses .stat-card for the status numbers; adds a config
+     row (URL/token inputs) and a snippets stack. */
+  #relay-pane h3{margin:1rem .8rem .35rem;font-size:11px;color:var(--cyan);
+    text-transform:uppercase;letter-spacing:.1em;font-weight:600}
+  .relay-hint{padding:.4rem .8rem;color:var(--mut);font-size:12.5px;line-height:1.5}
+  .relay-hint code{background:rgba(255,255,255,.05);padding:.05rem .25rem;border-radius:3px}
+  .relay-hint-small{display:block;color:var(--mut);font-size:11px;margin-top:.25rem;line-height:1.4}
+  .relay-hint-small code{background:rgba(255,255,255,.05);padding:.05rem .25rem;border-radius:3px}
+  .relay-status-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
+    gap:.5rem;padding:.4rem .8rem}
+  .relay-config-grid{display:grid;grid-template-columns:1fr 1fr;gap:.85rem;padding:.6rem .8rem}
+  .relay-config-grid label{display:flex;flex-direction:column;gap:.3rem;font-size:11px;
+    text-transform:uppercase;letter-spacing:.06em;color:var(--cyan)}
+  .relay-token-label > span:first-child{display:flex;align-items:center;gap:.4rem}
+  .relay-config-grid input{font-family:var(--mono);font-size:12.5px;padding:.42rem .55rem;
+    background:rgba(255,255,255,.04);border:1px solid var(--line);border-radius:6px;
+    color:var(--fg);text-transform:none;letter-spacing:0}
+  .relay-config-grid input:focus{outline:none;border-color:var(--cyan)}
+  .relay-snippets{display:flex;flex-direction:column;gap:.7rem;padding:.4rem .8rem}
+  @media (max-width:780px){
+    .relay-config-grid{grid-template-columns:1fr}
+  }
   .badge{display:inline-block;padding:.1rem .45rem;border-radius:999px;font-size:10px;
     text-transform:uppercase;letter-spacing:.06em;font-weight:700}
   .badge.on{background:rgba(61,242,129,.16);color:var(--green);border:1px solid rgba(61,242,129,.4)}
@@ -359,6 +381,7 @@
     <button data-tab="vault">Vault</button>
     <button data-tab="logs">Logs</button>
     <button data-tab="stats">Stats</button>
+    <button data-tab="relay">Relay</button>
     <button data-tab="settings">Settings</button>
     <select id="model-sel" title="Model used for new messages (empty = server default)" style="margin-left:auto"></select>
     <!-- Plan/Build mode toggle (PR #290). Sets the `mode` field on every
@@ -579,6 +602,50 @@
           </table>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div id="tab-relay" class="tab">
+    <!-- Relay-worker connection panel. Surfaces the URL + token + ready-
+         to-paste snippets a client uses to spin up a `pasclaw relay`
+         worker (or browser/Python/cog-relay equivalent) pointing at THIS
+         gateway. Live worker status + queue depth from /v1/relay/status
+         underneath. -->
+    <div class="pane" id="relay-pane">
+      <div class="relay-hint" id="relay-hint">
+        <p>Workers connect outbound to this gateway's <code>/v1/relay/poll</code>, advertise their model capabilities, drain pending inference requests, run them locally, and POST the results back to <code>/v1/relay/respond/&lt;id&gt;</code>. See
+          <a href="https://github.com/FMXExpress/PasClaw/blob/main/docs/providers-relay.md" target="_blank" rel="noopener">docs/providers-relay.md</a>
+          for the full wire protocol.</p>
+      </div>
+
+      <div class="relay-status-row">
+        <div class="stat-card"><div class="stat-label">Connected workers</div><div class="stat-value" id="relay-stat-workers">—</div></div>
+        <div class="stat-card"><div class="stat-label">Pending</div><div class="stat-value" id="relay-stat-pending">—</div></div>
+        <div class="stat-card"><div class="stat-label">In-flight</div><div class="stat-value" id="relay-stat-inflight">—</div></div>
+        <div class="stat-card"><div class="stat-label">Completed</div><div class="stat-value" id="relay-stat-completed">—</div></div>
+        <div class="stat-card"><div class="stat-label">Failed</div><div class="stat-value" id="relay-stat-failed">—</div></div>
+      </div>
+
+      <div class="relay-config-grid">
+        <label>Gateway URL
+          <input type="text" id="relay-url" autocomplete="off" spellcheck="false">
+          <span class="relay-hint-small">Defaults to this page's origin. Override if workers reach the gateway through a different URL (tunnel, proxy, public hostname).</span>
+        </label>
+        <label class="relay-token-label">
+          <span>Bearer token <button type="button" class="icon-btn" id="relay-token-toggle" title="Show/hide the real token in snippets">show</button></span>
+          <input type="text" id="relay-token" autocomplete="off" spellcheck="false" readonly>
+          <span class="relay-hint-small" id="relay-token-hint">Pulled from your browser's stored gateway token. With “show” off, snippets use the literal placeholder <code>&lt;PASCLAW_GATEWAY_TOKEN&gt;</code> so you can screen-share safely.</span>
+        </label>
+      </div>
+
+      <h3>Connect a worker</h3>
+      <div class="relay-snippets" id="relay-snippets"></div>
+
+      <h3>Connected workers</h3>
+      <table class="data" id="relay-workers">
+        <thead><tr><th>Worker id</th><th>Capabilities</th><th>Requests</th><th>Last seen</th></tr></thead>
+        <tbody></tbody>
+      </table>
     </div>
   </div>
 
@@ -2035,6 +2102,20 @@ const tabLoaders = {
     await refreshStats();
     if (statsTimer) clearInterval(statsTimer);
     statsTimer = setInterval(refreshStats, 10000);
+  },
+
+  /* Relay tab: copy-paste snippets clients use to point a worker at
+     THIS gateway, plus a live mini-dashboard of who's connected. The
+     token rendered into the snippets defaults to a literal
+     "<PASCLAW_GATEWAY_TOKEN>" placeholder so an operator can screen-
+     share this tab without leaking; a per-tab "show" toggle swaps in
+     the real token from localStorage when they want to copy it
+     somewhere private. */
+  async relay() {
+    setupRelayTab();
+    await refreshRelay();
+    if (relayTimer) clearInterval(relayTimer);
+    relayTimer = setInterval(refreshRelay, 5000);
   }
 };
 
@@ -2274,5 +2355,219 @@ if (location.hash.slice(1)) showTab(location.hash.slice(1));
   else newSession();
 })();
 m.focus();
+
+/* ===== Relay tab implementation =====
+   See tabLoaders.relay above for the entry. Three responsibilities:
+     - render the URL/token/snippets pane (setupRelayTab)
+     - re-render snippets when the URL or "show token" toggle changes
+     - refresh the worker list + queue counters from /v1/relay/status
+       every 5s (refreshRelay)
+*/
+
+let relayTimer       = null;
+let relaySetupDone   = false;
+let relayShowToken   = false;
+
+const RELAY_TOKEN_PLACEHOLDER = "<PASCLAW_GATEWAY_TOKEN>";
+
+function relayEffectiveToken() {
+  if (relayShowToken) {
+    const t = gwToken();
+    return t || RELAY_TOKEN_PLACEHOLDER;
+  }
+  return RELAY_TOKEN_PLACEHOLDER;
+}
+
+function setupRelayTab() {
+  if (relaySetupDone) {
+    /* Re-pull the token's masked state from storage in case the
+       operator updated it via the 🔑 button. URL field is left alone
+       (operator may have customised it for an externally-reachable
+       hostname). */
+    syncRelayTokenInput();
+    renderRelaySnippets();
+    return;
+  }
+  $("#relay-url").value = window.location.origin;
+  syncRelayTokenInput();
+
+  $("#relay-url").addEventListener("input", renderRelaySnippets);
+
+  $("#relay-token-toggle").addEventListener("click", () => {
+    relayShowToken = !relayShowToken;
+    $("#relay-token-toggle").textContent = relayShowToken ? "hide" : "show";
+    syncRelayTokenInput();
+    renderRelaySnippets();
+  });
+
+  renderRelaySnippets();
+  relaySetupDone = true;
+}
+
+function syncRelayTokenInput() {
+  const t = gwToken();
+  const input = $("#relay-token");
+  if (!t) {
+    input.value = "(no token stored -- click the 🔑 nav button to set one)";
+    input.style.color = "var(--mut)";
+    return;
+  }
+  input.style.color = "";
+  if (relayShowToken) {
+    input.value = t;
+  } else {
+    input.value = "•".repeat(Math.min(t.length, 24));
+  }
+}
+
+function renderRelaySnippets() {
+  const url = ($("#relay-url").value || window.location.origin).replace(/\/+$/, "");
+  const tok = relayEffectiveToken();
+
+  const cli = "pasclaw relay \\\n"
+            + "  --gateway-url " + url + " \\\n"
+            + "  --gateway-token " + tok;
+
+  const cliEnv = "export PASCLAW_GATEWAY_URL=" + url + "\n"
+               + "export PASCLAW_GATEWAY_TOKEN=" + tok + "\n"
+               + "pasclaw relay";
+
+  const browser =
+"<!DOCTYPE html>\n" +
+"<script type=\"module\">\n" +
+"  import { CreateMLCEngine } from \"https://esm.run/@mlc-ai/web-llm\";\n" +
+"\n" +
+"  const URL   = \"" + url + "\";\n" +
+"  const TOKEN = \"" + tok + "\";\n" +
+"  const MODEL = \"Llama-3.2-3B-Instruct-q4f16_1-MLC\";\n" +
+"\n" +
+"  const engine = await CreateMLCEngine(MODEL);\n" +
+"  const events = new EventSource(`${URL}/v1/relay/poll`, {\n" +
+"    withCredentials: false,\n" +
+"    headers: {\n" +
+"      \"Authorization\":        `Bearer ${TOKEN}`,\n" +
+"      \"X-Relay-Worker-Id\":    `tab-${crypto.randomUUID()}`,\n" +
+"      \"X-Relay-Capabilities\": MODEL,\n" +
+"    },\n" +
+"  });\n" +
+"  events.onmessage = async (ev) => {\n" +
+"    const req = JSON.parse(ev.data);\n" +
+"    const c = await engine.chat.completions.create({\n" +
+"      messages:    req.messages,\n" +
+"      temperature: parseFloat(req.options?.temperature ?? \"0\"),\n" +
+"      max_tokens:  req.options?.max_tokens ?? 512,\n" +
+"    });\n" +
+"    await fetch(`${URL}/v1/relay/respond/${req.id}`, {\n" +
+"      method: \"POST\",\n" +
+"      headers: { \"Authorization\": `Bearer ${TOKEN}`, \"Content-Type\": \"application/json\" },\n" +
+"      body: JSON.stringify({\n" +
+"        content:       c.choices[0].message.content,\n" +
+"        finish_reason: c.choices[0].finish_reason,\n" +
+"        usage:         c.usage,\n" +
+"        tool_calls:    c.choices[0].message.tool_calls,\n" +
+"      }),\n" +
+"    });\n" +
+"  };\n" +
+"</" + "script>";
+
+  const python =
+"import json, requests, sseclient, llama_cpp\n" +
+"\n" +
+"URL   = \"" + url + "\"\n" +
+"TOKEN = \"" + tok + "\"\n" +
+"\n" +
+"llm = llama_cpp.Llama(model_path=\"...\", n_gpu_layers=-1)\n" +
+"r = requests.get(f\"{URL}/v1/relay/poll\", stream=True, headers={\n" +
+"    \"Authorization\":        f\"Bearer {TOKEN}\",\n" +
+"    \"X-Relay-Worker-Id\":    \"py-worker-1\",\n" +
+"    \"X-Relay-Capabilities\": \"llama-3.2-3b-instruct\",\n" +
+"    \"Accept\":               \"text/event-stream\",\n" +
+"})\n" +
+"for ev in sseclient.SSEClient(r).events():\n" +
+"    req = json.loads(ev.data)\n" +
+"    out = llm.create_chat_completion(\n" +
+"        messages=req[\"messages\"],\n" +
+"        max_tokens=req[\"options\"][\"max_tokens\"],\n" +
+"    )\n" +
+"    requests.post(f\"{URL}/v1/relay/respond/{req['id']}\", headers={\n" +
+"        \"Authorization\": f\"Bearer {TOKEN}\",\n" +
+"    }, json={\n" +
+"        \"content\":       out[\"choices\"][0][\"message\"][\"content\"],\n" +
+"        \"finish_reason\": out[\"choices\"][0][\"finish_reason\"],\n" +
+"        \"usage\":         out[\"usage\"],\n" +
+"    })";
+
+  const cogHint =
+"# Deploy the cog-relay/ Replicate cog and call predict() with these inputs.\n" +
+"# Same gateway URL/token shape as the CLI -- the cog spawns `pasclaw relay`\n" +
+"# inside its container for the configured lifetime_seconds window.\n" +
+"replicate.run(\"your-handle/pasclaw-relay\", input={\n" +
+"  \"gateway_url\":      \"" + url + "\",\n" +
+"  \"gateway_token\":    \"" + tok + "\",  # Replicate Secret in real usage\n" +
+"  \"openai_api_key\":   \"sk-...\",                # forward jobs through this key\n" +
+"  \"lifetime_seconds\": 300,\n" +
+"})";
+
+  const snippets = $("#relay-snippets");
+  snippets.innerHTML =
+      codeBlock(cli,     "pasclaw relay (CLI flags)")
+    + codeBlock(cliEnv,  "pasclaw relay (env vars)")
+    + codeBlock(browser, "Browser worker (WebLLM, ESM)")
+    + codeBlock(python,  "Python worker (llama.cpp)")
+    + codeBlock(cogHint, "Replicate cog-relay");
+  wireCopyButtons(snippets);
+}
+
+async function refreshRelay() {
+  /* The relay status endpoint is bearer-gated like every other /v1/*
+     route. When the gateway is running without a token, gwFetch passes
+     no header and the endpoint replies 200 anyway -- so this works in
+     both modes. */
+  try {
+    const r = await gwFetch("/v1/relay/status");
+    if (!r.ok) {
+      /* 503 when no relay queue is initialised (gateway built without
+         the relay subsystem, or queue init failed). Surface visibly
+         rather than leaving the dashboard blank. */
+      $("#relay-stat-workers").textContent   = "—";
+      $("#relay-stat-pending").textContent   = "—";
+      $("#relay-stat-inflight").textContent  = "—";
+      $("#relay-stat-completed").textContent = "—";
+      $("#relay-stat-failed").textContent    = "—";
+      $("#relay-workers tbody").innerHTML =
+        "<tr><td colspan=\"4\" style=\"color:var(--mut)\">relay disabled on this gateway (HTTP " + r.status + ")</td></tr>";
+      return;
+    }
+    const j = await r.json();
+    $("#relay-stat-workers").textContent   = fmtInt(j.connected_workers);
+    $("#relay-stat-pending").textContent   = fmtInt(j.pending_requests);
+    $("#relay-stat-inflight").textContent  = fmtInt(j.inflight_requests);
+    $("#relay-stat-completed").textContent = fmtInt(j.total_completed);
+    $("#relay-stat-failed").textContent    = fmtInt(j.total_failed);
+
+    const tb = $("#relay-workers tbody");
+    tb.innerHTML = "";
+    const ws = j.workers || [];
+    if (ws.length === 0) {
+      tb.innerHTML =
+        "<tr><td colspan=\"4\" style=\"color:var(--mut)\">no workers connected yet -- paste a snippet above on a worker host to attach one</td></tr>";
+      return;
+    }
+    for (const w of ws) {
+      const tr = document.createElement("tr");
+      const caps = (w.caps && w.caps.length) ? w.caps.join(", ") : "(wildcard)";
+      tr.innerHTML =
+          "<td><code>" + escapeHtml(w.id) + "</code></td>"
+        + "<td>" + escapeHtml(caps) + "</td>"
+        + "<td>" + fmtInt(w.requests_seen) + "</td>"
+        + "<td>" + escapeHtml(w.last_seen || "") + "</td>";
+      tb.appendChild(tr);
+    }
+  } catch (e) {
+    $("#relay-workers tbody").innerHTML =
+      "<tr><td colspan=\"4\" style=\"color:var(--red)\">" + escapeHtml(String(e)) + "</td></tr>";
+  }
+}
+
 </script>
 </body></html>
