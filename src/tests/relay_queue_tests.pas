@@ -128,6 +128,32 @@ begin
   WriteLn('  ok: empty capability list is a wildcard');
 end;
 
+procedure TestEmptyRequestModelMatchesAnyWorker;
+var
+  Q: TRelayQueue;
+  Req, Out_: TRelayRequest;
+begin
+  (* The case the user surfaced during PR #318 review: when the
+     operator picks "relay" in onboarding without naming a model
+     (because they don't know which model the connected worker will
+     advertise), the agent loop calls Chat() with an empty Model
+     field. The empty model should match ANY worker -- caller said
+     "any worker will do" -- not zero workers as the original V1
+     code did. *)
+  Q := TRelayQueue.Create;
+  try
+    Q.RegisterWorker('worker-specific', Caps(['llama-3.2-3b']));
+    Req := TRelayRequest.Create('req_anymodel_1', '', '{}');
+    Q.Enqueue(Req);
+    Out_ := Q.DequeueForWorker('worker-specific', 1000);
+    AssertTrue(Out_ <> nil,
+               'empty-model request should match a worker with non-empty capabilities');
+  finally
+    Q.Free;
+  end;
+  WriteLn('  ok: empty request model matches any worker (onboarding case)');
+end;
+
 procedure TestRespondSignalsWaiter;
 var
   Q: TRelayQueue;
@@ -329,6 +355,7 @@ begin
   TestEnqueueDequeueRoundTrip;
   TestCapabilityFiltering;
   TestEmptyCapabilityListIsWildcard;
+  TestEmptyRequestModelMatchesAnyWorker;
   TestRespondSignalsWaiter;
   TestLateRespondIsSilent;
   TestUnregisterRequeuesInflight;

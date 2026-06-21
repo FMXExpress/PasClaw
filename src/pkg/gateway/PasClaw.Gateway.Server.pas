@@ -50,6 +50,7 @@ uses
   PasClaw.Providers.Intf,
   PasClaw.Tools.Registry,
   PasClaw.Session.Store,
+  PasClaw.Gateway.RelayQueue, { TRelayQueue -- FRelayQueue field type }
   PasClaw.MCP.Server;
 
 type
@@ -74,6 +75,10 @@ type
     FStarted:  Boolean;
     FStopFlag: TEvent;
     FDebugIO:  Boolean;
+    (* Relay queue owned by the gateway. Created in Create, registered
+       via SetGlobalRelayQueue so TRelayProvider can find it through
+       the factory. Freed in Destroy after clearing the global. *)
+    FRelayQueue: TRelayQueue;
     FMaxIter:  Integer;
     FWebhookPaths:    TStringList;
     FWebhookHandlers: array of TWebhookHandler;
@@ -213,6 +218,17 @@ type
     procedure HandleLogs(AContext: TIdContext;
                           ARequest: TIdHTTPRequestInfo;
                           AResp: TIdHTTPResponseInfo);
+    (* Relay endpoints. PasClaw.Gateway.RelayQueue + PasClaw.Providers.Relay
+       form the in-process side; these three handlers are the HTTP
+       surface workers connect to. SSE for long-polling, JSON POST for
+       responses, JSON GET for status. See docs/providers-relay.md. *)
+    procedure HandleRelayPoll(AContext: TIdContext;
+                               ARequest: TIdHTTPRequestInfo;
+                               AResp: TIdHTTPResponseInfo);
+    procedure HandleRelayRespond(const ReqId: string;
+                                  ARequest: TIdHTTPRequestInfo;
+                                  AResp: TIdHTTPResponseInfo);
+    procedure HandleRelayStatus(AResp: TIdHTTPResponseInfo);
     procedure HandleChat(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
     procedure HandleChatCompletions(AContext: TIdContext;
                                     ARequest: TIdHTTPRequestInfo;
@@ -316,6 +332,9 @@ uses
   PasClaw.KB.Index,        { IKBIndex -- /v1/kb list / upload / search }
   PasClaw.Memory.Index,    { IMemoryIndex / NewMemoryIndex -- /v1/memory/search }
   PasClaw.Memory.Vector,   { NewVectorMemoryIndex -- hybrid memory search }
+  { PasClaw.Gateway.RelayQueue is in the interface uses clause -- needed
+    there because TGatewayServer's FRelayQueue field references the
+    type. Don't re-import here. }
   PasClaw.Tools.Sandbox,
   PasClaw.Providers.Factory,
   PasClaw.Providers.Catalog,   { TProviderSpec for /v1/models discovery }
@@ -482,6 +501,17 @@ begin
   FMCPInboundLock   := TCriticalSection.Create;
   FMCPAllowMutating := False;
   SetLength(FMCPAllowList, 0);
+
+  { Relay queue. Always created -- the catalog `relay` provider gets
+    a working queue whether or not the operator wired any relay
+    workers. When no workers ever connect, TRelayProvider.Chat()
+    times out cleanly (5 min default) and the fallback walker kicks
+    in. The global-accessor pattern is what connects this queue to
+    TRelayProvider instances built by PasClaw.Providers.Factory --
+    the factory can't take the queue through NewProviderFromConfig's
+    signature because it doesn't know about the gateway. }
+  FRelayQueue := TRelayQueue.Create;
+  SetGlobalRelayQueue(FRelayQueue);
 end;
 
 destructor TGatewayServer.Destroy;
@@ -492,6 +522,10 @@ begin
   FWebhookPaths.Free;
   if FMCPInbound <> nil then FMCPInbound.Free;
   FMCPInboundLock.Free;
+  { Clear the global before freeing the queue so a TRelayProvider
+    that's racing Destroy can't dereference a freed pointer. }
+  SetGlobalRelayQueue(nil);
+  FRelayQueue.Free;
   inherited Destroy;
 end;
 
@@ -880,6 +914,12 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs')      then HandleFSList(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs/read') then HandleFSRead(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/logs')    then HandleLogs(AContext, ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/relay/poll') then
+      HandleRelayPoll(AContext, ARequest, AResponse)
+    else if (ARequest.Command = 'POST') and (Copy(Doc, 1, 18) = '/v1/relay/respond/') then
+      HandleRelayRespond(Copy(Doc, 19, MaxInt), ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/relay/status') then
+      HandleRelayStatus(AResponse)
     else if Doc = '/' then
     begin
       AResponse.ResponseNo  := 200;
@@ -2839,6 +2879,291 @@ begin
     except
     end;
     Writer.Free;
+  end;
+end;
+
+(* ============================================================
+   Relay endpoints. See docs/providers-relay.md for the full wire
+   protocol. The queue + provider live in PasClaw.Gateway.RelayQueue
+   + PasClaw.Providers.Relay; these handlers just translate between
+   HTTP and the queue's Pascal API.
+   ============================================================ *)
+
+type
+  (* Per-worker SSE writer. Mirrors TLogStreamWriter's pattern: a
+     Conn + a WriteSSE that builds chunked-transfer frames manually
+     because Indy doesn't auto-frame when ContentLength = -1. *)
+  TRelayStreamWriter = class
+    Conn: TIdTCPConnection;
+    function WriteSSEFrame(const Payload: string): Boolean;
+  end;
+
+function TRelayStreamWriter.WriteSSEFrame(const Payload: string): Boolean;
+var
+  PayloadBytes, HeaderBytes: TBytes;
+  Frame: TIdBytes;
+  HeaderStr: string;
+  i, Offset: Integer;
+begin
+  Result := False;
+  if (Conn = nil) or (not Conn.Connected) then Exit;
+  PayloadBytes := TEncoding.UTF8.GetBytes(Payload);
+  if Length(PayloadBytes) = 0 then Exit(True);
+  HeaderStr := IntToHex(Length(PayloadBytes), 1) + #13#10;
+  HeaderBytes := TEncoding.ASCII.GetBytes(HeaderStr);
+  SetLength(Frame, Length(HeaderBytes) + Length(PayloadBytes) + 2);
+  Offset := 0;
+  for i := 0 to High(HeaderBytes)  do begin Frame[Offset] := HeaderBytes[i];  Inc(Offset); end;
+  for i := 0 to High(PayloadBytes) do begin Frame[Offset] := PayloadBytes[i]; Inc(Offset); end;
+  Frame[Offset]     := 13;
+  Frame[Offset + 1] := 10;
+  try
+    Conn.IOHandler.Write(Frame);
+    while Conn.IOHandler.WriteBufferingActive do
+      Conn.IOHandler.WriteBufferClose;
+    Result := True;
+  except
+    { Client dropped -- caller's loop will notice on next iteration. }
+  end;
+end;
+
+procedure TGatewayServer.HandleRelayPoll(AContext: TIdContext;
+                                          ARequest: TIdHTTPRequestInfo;
+                                          AResp: TIdHTTPResponseInfo);
+(* GET /v1/relay/poll
+   Long-poll SSE stream. The worker advertises its id + capabilities via
+   request headers on connect, the queue registers it, and as pending
+   requests arrive matching the worker's capabilities they're emitted
+   as `data:` SSE events.
+
+   Auth: bearer-token gate fires in OnCommandGet before we land here.
+*)
+const
+  PollIntervalMs = 1000;   { wake every second to recheck for work + connection liveness }
+var
+  Q: TRelayQueue;
+  Writer: TRelayStreamWriter;
+  WorkerId, CapHeader: string;
+  Caps: TStringArray;
+  CapsList: TStringList;
+  Req: TRelayRequest;
+  i: Integer;
+  TerminatorTmp: TBytes;
+  TerminatorIdBytes: TIdBytes;
+  Payload: string;
+begin
+  Q := GetGlobalRelayQueue;
+  if Q = nil then
+  begin
+    WriteJSON(AResp, 503,
+              '{"error":"relay disabled","message":"no relay queue initialised; ' +
+              'configure a relay provider in config.json"}');
+    Exit;
+  end;
+
+  WorkerId := Trim(ARequest.RawHeaders.Values['X-Relay-Worker-Id']);
+  if WorkerId = '' then
+  begin
+    WriteJSON(AResp, 400,
+              '{"error":"missing header","message":"X-Relay-Worker-Id is required"}');
+    Exit;
+  end;
+
+  { Parse capabilities header (comma-separated). Empty / missing =
+    wildcard worker (CanServe always returns True). }
+  CapHeader := Trim(ARequest.RawHeaders.Values['X-Relay-Capabilities']);
+  SetLength(Caps, 0);
+  if CapHeader <> '' then
+  begin
+    CapsList := TStringList.Create;
+    try
+      CapsList.Delimiter     := ',';
+      CapsList.StrictDelimiter := True;
+      CapsList.DelimitedText := CapHeader;
+      SetLength(Caps, CapsList.Count);
+      for i := 0 to CapsList.Count - 1 do
+        Caps[i] := Trim(CapsList[i]);
+    finally
+      CapsList.Free;
+    end;
+  end;
+
+  Q.RegisterWorker(WorkerId, Caps);
+  try
+    if not EmitSSEResponseHeaders(AContext, AResp) then Exit;
+
+    Writer := TRelayStreamWriter.Create;
+    Writer.Conn := AContext.Connection;
+    try
+      { Poll loop. DequeueForWorker blocks up to PollIntervalMs
+        waiting for work; we wake periodically to check connection
+        liveness + the server-wide stop flag. }
+      while AContext.Connection.Connected do
+      begin
+        if FStopFlag.WaitFor(0) = wrSignaled then Break;
+        Req := Q.DequeueForWorker(WorkerId, PollIntervalMs);
+        if Req <> nil then
+        begin
+          Payload := 'data: ' + Req.BodyJSON + #10#10;
+          if not Writer.WriteSSEFrame(Payload) then
+          begin
+            { Write failed mid-stream -- worker dropped between
+              dequeue and write. Requeue so another worker can
+              pick it up. UnregisterWorker in the finally block
+              will sweep any remaining inflight requests we
+              haven't accounted for. }
+            Break;
+          end;
+        end;
+      end;
+    finally
+      try
+        TerminatorTmp := TEncoding.ASCII.GetBytes('0'#13#10#13#10);
+        SetLength(TerminatorIdBytes, Length(TerminatorTmp));
+        for i := 0 to High(TerminatorTmp) do TerminatorIdBytes[i] := TerminatorTmp[i];
+        AContext.Connection.IOHandler.Write(TerminatorIdBytes);
+      except
+      end;
+      Writer.Free;
+    end;
+  finally
+    { Worker disconnected (closed tab, crashed, network drop) or we
+      exited via FStopFlag. UnregisterWorker requeues any requests
+      this worker was holding so they don't get stuck. }
+    Q.UnregisterWorker(WorkerId);
+  end;
+end;
+
+procedure TGatewayServer.HandleRelayRespond(const ReqId: string;
+                                             ARequest: TIdHTTPRequestInfo;
+                                             AResp: TIdHTTPResponseInfo);
+(* POST /v1/relay/respond/<request_id>
+   Body:
+     { "content": "...",
+       "finish_reason": "stop",
+       "usage": { "prompt_tokens": 47, "completion_tokens": 8 } }
+
+   Matches the in-flight request by id; signals the waiting
+   TRelayProvider.Chat() caller via Done.SetEvent. Late / duplicate
+   POSTs (worker submitted twice, another worker beat them) are a
+   silent no-op inside Q.Respond.
+*)
+var
+  Q: TRelayQueue;
+  Body: string;
+  Bytes: TBytes;
+  Req, Usage: TJsonObject;
+  Resp: TRelayResponse;
+begin
+  Q := GetGlobalRelayQueue;
+  if Q = nil then
+  begin
+    WriteJSON(AResp, 503,
+              '{"error":"relay disabled","message":"no relay queue initialised"}');
+    Exit;
+  end;
+
+  if Trim(ReqId) = '' then
+  begin
+    WriteJSON(AResp, 400,
+              '{"error":"missing id","message":"path must be /v1/relay/respond/<id>"}');
+    Exit;
+  end;
+
+  Body := '';
+  if ARequest.PostStream <> nil then
+  begin
+    ARequest.PostStream.Position := 0;
+    SetLength(Bytes, ARequest.PostStream.Size);
+    if ARequest.PostStream.Size > 0 then
+    begin
+      ARequest.PostStream.ReadBuffer(Bytes[0], ARequest.PostStream.Size);
+      Body := TEncoding.UTF8.GetString(Bytes);
+    end;
+  end;
+
+  if Trim(Body) = '' then
+  begin
+    WriteJSON(AResp, 400, '{"error":"empty body"}');
+    Exit;
+  end;
+
+  FillChar(Resp, SizeOf(Resp), 0);
+  Req := TJsonObject.Parse(Body);
+  if Req = nil then
+  begin
+    WriteJSON(AResp, 400, '{"error":"invalid JSON"}');
+    Exit;
+  end;
+  try
+    Resp.Content      := Req.GetStr('content',       '');
+    Resp.FinishReason := Req.GetStr('finish_reason', '');
+    Resp.ErrMsg       := Req.GetStr('error',         '');
+    Usage := Req.ChildObject('usage');
+    if Usage <> nil then
+    begin
+      Resp.UsageInput  := Integer(Usage.GetInt('prompt_tokens',     0));
+      Resp.UsageOutput := Integer(Usage.GetInt('completion_tokens', 0));
+    end;
+  finally
+    Req.Free;
+  end;
+
+  Q.Respond(ReqId, Resp);
+  WriteJSON(AResp, 200, '{"ok":true}');
+end;
+
+procedure TGatewayServer.HandleRelayStatus(AResp: TIdHTTPResponseInfo);
+(* GET /v1/relay/status -- queue depth, connected workers, per-worker
+   caps + last-seen. Used by the TUI panel and `pasclaw status`. *)
+var
+  Q: TRelayQueue;
+  S: TRelayQueueStatus;
+  Workers: TRelayWorkerArray;
+  Root, WObj: TJsonObject;
+  Arr: TJsonArray;
+  CapsArr: TJsonArray;
+  i, j: Integer;
+begin
+  Q := GetGlobalRelayQueue;
+  if Q = nil then
+  begin
+    WriteJSON(AResp, 503,
+              '{"error":"relay disabled","message":"no relay queue initialised"}');
+    Exit;
+  end;
+
+  S := Q.GetStatus;
+  Workers := Q.GetConnectedWorkers;
+
+  Root := TJsonObject.Create;
+  try
+    Root.PutInt('pending_requests',  S.PendingRequests);
+    Root.PutInt('inflight_requests', S.InflightRequests);
+    Root.PutInt('connected_workers', S.ConnectedWorkers);
+    Root.PutInt('total_enqueued',    S.TotalEnqueued);
+    Root.PutInt('total_completed',   S.TotalCompleted);
+    Root.PutInt('total_failed',      S.TotalFailed);
+
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Workers) do
+    begin
+      WObj := TJsonObject.Create;
+      WObj.PutStr('id', Workers[i].Id);
+      CapsArr := TJsonArray.Create;
+      for j := 0 to High(Workers[i].Capabilities) do
+        CapsArr.AddStr(Workers[i].Capabilities[j]);
+      WObj.PutArray('caps', CapsArr);
+      WObj.PutInt('requests_seen', Workers[i].RequestsSeen);
+      WObj.PutStr('last_seen', FormatDateTime('yyyy-mm-dd"T"hh:nn:ss',
+                                                Workers[i].LastSeen));
+      Arr.AddObject(WObj);
+    end;
+    Root.PutArray('workers', Arr);
+
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
   end;
 end;
 

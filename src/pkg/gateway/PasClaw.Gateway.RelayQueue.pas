@@ -345,11 +345,34 @@ var
   i: Integer;
 begin
   Target := LowerCase(Trim(Model));
-  { Empty capability list = wildcard. A worker that didn't advertise
-    anything will accept any model -- useful for "I'll serve whatever
-    you throw at me" workers without explicit capability tracking.
-    Operators wanting strict matching should always advertise. }
-  if Length(FCapabilities) = 0 then Exit(True);
+  { V1 dispatch semantics: empty on EITHER side counts as a match.
+
+      Empty request model    -- caller said "any worker will do"
+                                (the common case: agent loop didn't
+                                pick a specific model, or operator
+                                selected `relay` in onboarding
+                                without knowing which model the
+                                worker would advertise).
+
+      Empty worker caps      -- worker said "I'll serve anything"
+                                (the "set up a worker first, decide
+                                what model to advertise later" case;
+                                also wraps minimal worker scripts
+                                that don't bother with X-Relay-
+                                Capabilities at all).
+
+      Both non-empty         -- strict case-insensitive exact match
+                                required. The web UI's explicit
+                                "send THIS request to a worker
+                                serving Llama 3.2 3B" flow lands
+                                here.
+
+    The strict-match-when-both-non-empty rule is what the operator
+    actually wants: they only pin a model when they care enough to
+    type it in. The empty-on-either-side wildcard handles the
+    onboarding case where neither side has committed to a model id
+    yet. }
+  if (Target = '') or (Length(FCapabilities) = 0) then Exit(True);
   for i := 0 to High(FCapabilities) do
     if FCapabilities[i] = Target then Exit(True);
   Result := False;
