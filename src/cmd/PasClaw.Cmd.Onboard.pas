@@ -325,7 +325,15 @@ begin
     if SameText(Cfg.Providers[i].Name, Spec.Kind) then
     begin
       if Key <> '' then Cfg.Providers[i].APIKey := Key;
-      if Model <> '' then Cfg.Providers[i].Model := Model;
+      { Empty Model normally means "operator left the prompt blank,
+        keep the existing per-provider model." For the relay family
+        empty is the deliberate wildcard sentinel and must overwrite
+        a previously-pinned value -- otherwise re-onboarding can't
+        clear it. Same exemption the DefaultModel assignment in
+        Cmd_Onboard_Run uses, kept in sync here so the per-provider
+        record and the top-level Cfg.DefaultModel don't drift apart. }
+      if (Model <> '') or (Spec.Family = pfRelay) then
+        Cfg.Providers[i].Model := Model;
       Cfg.Providers[i].Kind := Spec.Kind;
       if Cfg.Providers[i].APIBase = '' then
         Cfg.Providers[i].APIBase := Spec.DefaultBase;
@@ -1202,7 +1210,11 @@ begin
   begin
     Cfg.AutoRouter.Enabled       := True;
     Cfg.AutoRouter.EasyProvider  := Spec.Kind;
-    if Model <> '' then Cfg.AutoRouter.EasyModel := Model;
+    { Same wildcard rule as the primary-provider DefaultModel
+      assignment above -- relay's empty model is a deliberate
+      sentinel, not "operator left blank, keep the previous value." }
+    if (Model <> '') or (Spec.Family = pfRelay) then
+      Cfg.AutoRouter.EasyModel := Model;
     PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
             ' auto-router on; easy turns route to ' + Spec.Kind);
   end
@@ -1543,7 +1555,21 @@ begin
     Model := PickModelInteractive(Spec, EffectiveKey);
 
     Cfg.DefaultProvider := Spec.Kind;
-    if Model <> '' then Cfg.DefaultModel := Model;
+    (* `if Model <> '' then` is the right guard for ordinary
+       providers (where empty means "operator left the prompt blank,
+       keep whatever DefaultModel already has"). For the relay
+       family empty is the deliberate wildcard sentinel meaning
+       "accept any model the connected worker advertises", and
+       Cfg.DefaultModel is what the agent loop ultimately threads
+       into TRelayProvider.Chat -- so without the explicit assign
+       here, the cold-onboarded relay config keeps TConfig.Create's
+       claude-opus-4-7 default, the queue matches against
+       claude-opus-4-7, and workers advertising their actual local
+       model id never get dispatched. Same path also re-onboarders
+       can use to clear a previously-pinned relay model back to
+       wildcard. Codex P1 review on PR #329. *)
+    if (Model <> '') or (Spec.Family = pfRelay) then
+      Cfg.DefaultModel := Model;
 
     UpsertProvider(Cfg, Spec, Model, Key);
 
