@@ -37,6 +37,7 @@ uses
   PasClaw.Tools.KB,
   PasClaw.Tools.DelphiBuild,
   PasClaw.Tools.SessionSearch,
+  PasClaw.Tools.PlanWrite,
   PasClaw.Tools.SendMessage,
   PasClaw.Tools.Cron,
   PasClaw.Tools.WebSearch,
@@ -235,7 +236,8 @@ function NewBuiltinRegistry(UseHashline: Boolean = True;
                             EnableWebSearch: Boolean = False;
                             EnableWebFetch: Boolean = False;
                             EnableOutputCache: Boolean = False;
-                            EnableCron: Boolean = False): TToolRegistry;
+                            EnableCron: Boolean = False;
+                            EnablePlanWrite: Boolean = False): TToolRegistry;
 var
   Skills: TSkillSpecArray;
 begin
@@ -284,6 +286,11 @@ begin
     autonomy. In `agent` there's no live scheduler, so additions apply the
     next time serve/gateway runs. }
   if EnableCron then RegisterCronTool(Result);
+  { plan_write registers when running in pmPlan mode (Cmd.Plan and
+    `pasclaw agent --mode plan` both arrive here with the flag set).
+    The tool is tcReadOnly even though it writes the one plan-meta
+    file -- see PasClaw.Tools.PlanWrite for the rationale. }
+  if EnablePlanWrite then RegisterPlanWriteTool(Result);
   (* send_message gates itself: it registers only when config.json
      declares named channels (a "channels" array of name/kind/target
      entries), so there's no flag to thread through here. The model
@@ -517,7 +524,13 @@ begin
                               HasConfiguredWebSearchProvider(Cfg),
                               Cfg.WebFetchEnabled,
                               (Cfg.ToolOutputCap > 0)
-                                or Cfg.CondenseReversible, Cfg.CronToolEnabled);
+                                or Cfg.CondenseReversible,
+                              Cfg.CronToolEnabled,
+                              { EnablePlanWrite -- only when --mode plan
+                                was selected; auto-includes the dedicated
+                                plan_write tool the `pasclaw plan`
+                                command relies on. }
+                              A.Mode = pmPlan);
     RegisterSkillManageTool(Reg, Cfg);
     RegisterSkillDisclosureTools(Reg, Cfg);
   end;
@@ -993,7 +1006,13 @@ begin
                               HasConfiguredWebSearchProvider(Cfg),
                               Cfg.WebFetchEnabled,
                               (Cfg.ToolOutputCap > 0)
-                                or Cfg.CondenseReversible, Cfg.CronToolEnabled);
+                                or Cfg.CondenseReversible,
+                              Cfg.CronToolEnabled,
+                              { EnablePlanWrite -- only when --mode plan
+                                was selected; auto-includes the dedicated
+                                plan_write tool the `pasclaw plan`
+                                command relies on. }
+                              A.Mode = pmPlan);
     RegisterSkillManageTool(Reg, Cfg);
     RegisterSkillDisclosureTools(Reg, Cfg);
   end;
