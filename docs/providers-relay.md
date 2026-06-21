@@ -182,6 +182,17 @@ Workers that don't support tool calling just ignore the `tools` array
 and emit any tool calls as text in the response; PasClaw extracts them
 on receipt.
 
+Assistant messages in `messages[]` that carry tool calls use the same
+OpenAI shape — `role:"assistant"` + `tool_calls: [{id, type,
+function: {name, arguments}, provider_signature? }, ...]` — with
+`tool_call_id` on the matching tool result. The optional
+`provider_signature` round-trips Gemini 3+'s `thoughtSignature` (or
+any future opaque per-call provider blob); workers forwarding to a
+Gemini 3 model must echo it back into the upstream request or
+Gemini returns 400 *"Function call is missing a thought_signature."*
+Workers forwarding to other providers see the field absent and
+ignore it.
+
 ## Response envelope
 
 ```jsonc
@@ -206,7 +217,20 @@ on receipt.
       "function": {
         "name":      "fs_read",
         "arguments": "{\"path\":\"foo.pas\"}"
-      }
+      },
+      "provider_signature": "..."   // optional; opaque blob the
+                                    // assistant must echo back on the
+                                    // follow-up turn. Currently only
+                                    // Gemini 3+ uses this (its
+                                    // `thoughtSignature` on
+                                    // functionCall parts); other
+                                    // providers and Gemini 2.x leave
+                                    // it empty / absent. PasClaw round-
+                                    // trips it through the request
+                                    // envelope's `tool_calls` so the
+                                    // next turn doesn't 400 with
+                                    // "Function call is missing a
+                                    // thought_signature."
     }
   ]
 }

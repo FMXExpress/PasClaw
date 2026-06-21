@@ -201,6 +201,19 @@ begin
           FnObj.PutStr('name',      Messages[i].ToolCalls[j].Func.Name);
           FnObj.PutStr('arguments', Messages[i].ToolCalls[j].Func.Arguments);
           TCObj.PutObject('function', FnObj);
+          (* provider_signature: opaque blob the assistant must echo
+             back on the follow-up turn. Currently used only by Gemini
+             3+ (the thoughtSignature on functionCall parts) -- Gemini
+             3 rejects the next request with 400 "Function call is
+             missing a thought_signature" if it's dropped. Empty for
+             other providers and for Gemini 2.x; only emitted when
+             non-empty to keep the wire compact. The worker's
+             DecodeMessages reads it back into TToolCall.
+             ProviderSignature, which the worker's local Gemini
+             provider then threads back into the request. *)
+          if Messages[i].ToolCalls[j].ProviderSignature <> '' then
+            TCObj.PutStr('provider_signature',
+                          Messages[i].ToolCalls[j].ProviderSignature);
           TCArr.AddObject(TCObj);
         end;
         MsgObj.PutArray('tool_calls', TCArr);

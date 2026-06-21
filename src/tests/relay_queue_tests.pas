@@ -628,6 +628,48 @@ begin
   WriteLn('  ok: tool-call metadata round-trips through the envelope');
 end;
 
+procedure TestRequestBodyEmitsProviderSignature;
+(* Gemini 3+ thoughtSignature must round-trip through the request
+   envelope. The assistant's prior turn carries a thoughtSignature
+   per functionCall part; if BuildRelayRequestBody drops it on the
+   wire, the worker's local Gemini 3 provider 400s the next request
+   with "Function call is missing a thought_signature." User report
+   on PR #330. *)
+var
+  Msgs:  array of TMessage;
+  Tools: array of TToolDefinition;
+  Opts:  TChatOptions;
+  Body:  string;
+begin
+  SetLength(Msgs, 1);
+  Msgs[0] := MakeMessage(mrAssistant, '');
+  SetLength(Msgs[0].ToolCalls, 1);
+  Msgs[0].ToolCalls[0].Id                := 'call_sig_1';
+  Msgs[0].ToolCalls[0].Kind              := 'function';
+  Msgs[0].ToolCalls[0].Func.Name         := 'fs_list';
+  Msgs[0].ToolCalls[0].Func.Arguments    := '{}';
+  Msgs[0].ToolCalls[0].ProviderSignature := 'OPAQUE_GEMINI_3_SIG_BLOB';
+
+  SetLength(Tools, 0);
+  Opts := DefaultChatOptions;
+
+  Body := BuildRelayRequestBody(Msgs, Tools, 'gemini-3-pro', Opts, 'req_sig_1');
+
+  AssertContains(Body, '"provider_signature"',
+                 'envelope carries provider_signature key');
+  AssertContains(Body, 'OPAQUE_GEMINI_3_SIG_BLOB',
+                 'envelope carries the actual signature value');
+
+  { Empty signature must NOT emit the key -- keeps the wire clean
+    for non-Gemini callers and Gemini 2.x. }
+  Msgs[0].ToolCalls[0].ProviderSignature := '';
+  Body := BuildRelayRequestBody(Msgs, Tools, 'gpt-4o', Opts, 'req_sig_2');
+  AssertTrue(Pos('provider_signature', Body) = 0,
+             'empty signature omitted from wire');
+
+  WriteLn('  ok: provider_signature round-trips through the request envelope');
+end;
+
 procedure TestWorkerResponseSurfacesNon2xxAsError;
 (* Codex P2 review on PR #323: a worker forwarding to a provider that
    returns 401/429/5xx must encode the result as an "error" envelope
@@ -685,6 +727,41 @@ begin
   WriteLn('  ok: worker encodes non-2xx upstream status as a relay error');
 end;
 
+procedure TestWorkerResponseEmitsProviderSignature;
+(* Worker-side response envelope must carry provider_signature so
+   HandleRelayRespond can stash it on TLLMResponse.ToolCalls[i] for
+   BuildRelayRequestBody to emit on the next turn. Without this, the
+   round-trip is broken at the worker -> gateway hop and Gemini 3
+   still 400s on turn 2. *)
+var
+  R: TLLMResponse;
+  Body: string;
+begin
+  FillChar(R, SizeOf(R), 0);
+  R.StatusCode    := 200;
+  R.Content       := '';
+  R.FinishReason  := 'tool_calls';
+  SetLength(R.ToolCalls, 1);
+  R.ToolCalls[0].Id                := 'call_resp_sig_1';
+  R.ToolCalls[0].Kind              := 'function';
+  R.ToolCalls[0].Func.Name         := 'fs_list';
+  R.ToolCalls[0].Func.Arguments    := '{}';
+  R.ToolCalls[0].ProviderSignature := 'GEMINI_3_RESPONSE_SIG_BLOB';
+  Body := BuildRelayWorkerResponseJSON(R);
+  AssertContains(Body, '"provider_signature"',
+                 'response carries provider_signature key');
+  AssertContains(Body, 'GEMINI_3_RESPONSE_SIG_BLOB',
+                 'response carries the actual signature value');
+
+  { Empty signature must NOT emit the field. }
+  R.ToolCalls[0].ProviderSignature := '';
+  Body := BuildRelayWorkerResponseJSON(R);
+  AssertTrue(Pos('provider_signature', Body) = 0,
+             'empty signature omitted from response wire');
+
+  WriteLn('  ok: provider_signature round-trips through the response envelope');
+end;
+
 procedure TestGlobalQueueAccessor;
 var
   Q: TRelayQueue;
@@ -721,7 +798,9 @@ begin
   TestStatusSnapshot;
   TestRequestBodyEnvelope;
   TestRequestBodyToolMetadataRoundTrip;
+  TestRequestBodyEmitsProviderSignature;
   TestWorkerResponseSurfacesNon2xxAsError;
+  TestWorkerResponseEmitsProviderSignature;
   TestGlobalQueueAccessor;
   WriteLn('ok - relay queue tests passed');
 end.

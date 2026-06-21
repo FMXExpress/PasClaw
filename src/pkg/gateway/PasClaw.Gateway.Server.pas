@@ -3265,6 +3265,16 @@ begin
           TC.Func.Name      := FObj.GetStr('name', '');
           TC.Func.Arguments := FObj.GetStr('arguments', '{}');
         end;
+        { Round-trip the Gemini-3 thoughtSignature (or any future
+          opaque per-tool-call provider blob). EncodeToolCalls on the
+          worker side emits it as `provider_signature`; here we read
+          it back into TC.ProviderSignature so TRelayProvider.
+          DecodeResponse can copy it forward into TLLMResponse and the
+          gateway-side agent loop threads it back into the next
+          turn's BuildRelayRequestBody envelope. Without this, the
+          worker's local Gemini 3 provider 400s on turn 2 with
+          "Function call is missing a thought_signature." }
+        TC.ProviderSignature := TCObj.GetStr('provider_signature', '');
         SetLength(Resp.ToolCalls, Length(Resp.ToolCalls) + 1);
         Resp.ToolCalls[High(Resp.ToolCalls)] := TC;
       end;
