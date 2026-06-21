@@ -457,6 +457,16 @@ test-config-profile: | $(BUILDDIR)
 	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
 	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/config_profile_tests
 
+# PasClaw.MCP.Disclosure -- Hermes-style progressive disclosure + Claude
+# Code-style tool_search for MCP tools. Hermetic: synthetic TTool records
+# only, no actual MCP server started.
+test-mcp-disclosure: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/mcp_disclosure_tests.pas -o$(BUILDDIR)/mcp_disclosure_tests
+	@PASCLAW_HOME=$$(mktemp -d) ; \
+	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
+	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/mcp_disclosure_tests
+
 # Tool-RPC server: the in-process callback the execute_code script uses
 # to reach back into the parent's tool registry. PASCLAW_HOME isolated so
 # the info file lands in a scratch dir.

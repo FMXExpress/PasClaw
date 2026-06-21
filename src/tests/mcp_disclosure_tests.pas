@@ -1,0 +1,315 @@
+program mcp_disclosure_tests;
+(*
+  Tests for PasClaw.MCP.Disclosure (progressive disclosure / tool_search,
+  Claude Code-style ToolSearch parity).
+
+  Coverage:
+    - TToolRegistry.ToProviderDefs strips IsDeferred=True tools by default.
+    - TToolRegistry.Reveal flips a deferred name into the visible set.
+    - TToolRegistry.DeferredNames / DeferredFind only see deferred entries.
+    - tool_search "select:Name" returns a <function> block for the matched
+      name AND reveals it (next ToProviderDefs sees it).
+    - tool_search keyword query ranks by name+description hit count and
+      caps at max_results.
+    - tool_search "+required keyword" rejects tools whose name lacks the
+      required substring.
+    - tool_search on an empty / unknown query returns a clean text result
+      rather than crashing or wedging.
+    - Cfg.MCPProgressiveDisclosure round-trips through SaveConfig /
+      LoadConfig.
+
+  These tests construct a TToolRegistry directly and register synthetic
+  TTool records -- no actual MCP server is started, so the test stays
+  hermetic (no sockets, no subprocesses, runs offline).
+*)
+
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
+{$H+}
+{$IFDEF FPC}{$CODEPAGE UTF8}{$ENDIF}
+
+uses
+  SysUtils,
+  PasClaw.Config,
+  PasClaw.Tools.Types,
+  PasClaw.Tools.Registry,
+  PasClaw.MCP.Disclosure,
+  PasClaw.JSON,
+  PasClaw.Utils;
+
+procedure Fail_(const Msg: string);
+begin WriteLn('FAIL: ' + Msg); Halt(1); end;
+
+procedure AssertTrue(Cond: Boolean; const Msg: string);
+begin if not Cond then Fail_(Msg); end;
+
+procedure AssertEqI(Got, Want: Integer; const Msg: string);
+begin if Got <> Want then Fail_(Msg + ' (got ' + IntToStr(Got) + ', want ' + IntToStr(Want) + ')'); end;
+
+procedure AssertContains(const Haystack, Needle, Msg: string);
+begin if Pos(Needle, Haystack) = 0 then
+  Fail_(Msg + ' (no "' + Needle + '" in "' + Haystack + '")'); end;
+
+{ A no-op handler for the synthetic tools. The disclosure path never
+  actually calls it; we just need a valid TTool record to register. }
+function NoopHandler(const ArgsJSON: string; out ErrMsg: string): string;
+begin ErrMsg := ''; Result := ''; end;
+
+procedure RegisterDeferred(Reg: TToolRegistry; const Name, Desc: string);
+var T: TTool;
+begin
+  FillChar(T, SizeOf(T), 0);
+  T.Name := Name;
+  T.Description := Desc;
+  T.Schema := '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}';
+  T.Handler := NoopHandler;
+  T.Category := tcReadOnly;
+  T.IsDeferred := True;
+  Reg.Register(T);
+end;
+
+procedure RegisterVisible(Reg: TToolRegistry; const Name: string);
+var T: TTool;
+begin
+  FillChar(T, SizeOf(T), 0);
+  T.Name := Name;
+  T.Description := 'visible';
+  T.Schema := '{}';
+  T.Handler := NoopHandler;
+  T.Category := tcReadOnly;
+  T.IsDeferred := False;
+  Reg.Register(T);
+end;
+
+function CountResults(Reg: TToolRegistry): Integer;
+begin Result := Length(Reg.ToProviderDefs); end;
+
+procedure TestRegistryFiltersDeferred;
+var
+  Reg: TToolRegistry;
+begin
+  Reg := TToolRegistry.Create;
+  try
+    RegisterVisible (Reg, 'fs_read');
+    RegisterDeferred(Reg, 'github__list_issues',  'List issues');
+    RegisterDeferred(Reg, 'github__create_issue', 'Create issue');
+    RegisterVisible (Reg, 'fs_write');
+    AssertEqI(CountResults(Reg), 2, 'ToProviderDefs strips IsDeferred entries');
+    AssertEqI(Length(Reg.DeferredNames), 2, 'DeferredNames lists the deferred pair');
+  finally
+    Reg.Free;
+  end;
+  WriteLn('  ok: registry filters deferred');
+end;
+
+procedure TestRevealAddsToProviderDefs;
+var
+  Reg: TToolRegistry;
+begin
+  Reg := TToolRegistry.Create;
+  try
+    RegisterVisible (Reg, 'fs_read');
+    RegisterDeferred(Reg, 'github__list_issues', 'List issues');
+    Reg.Reveal('github__list_issues');
+    AssertEqI(CountResults(Reg), 2, 'Reveal moves a deferred tool into ToProviderDefs');
+    AssertEqI(Length(Reg.DeferredNames), 0,
+              'Reveal removes from DeferredNames');
+  finally
+    Reg.Free;
+  end;
+  WriteLn('  ok: reveal surfaces the deferred tool');
+end;
+
+procedure TestRevealUnknownIsNoop;
+var
+  Reg: TToolRegistry;
+begin
+  Reg := TToolRegistry.Create;
+  try
+    RegisterDeferred(Reg, 'github__list_issues', 'List issues');
+    { Stale model that calls tool_search with a stale name from a
+      previous session must not wedge the registry. }
+    Reg.Reveal('does_not_exist');
+    Reg.Reveal('');
+    AssertEqI(CountResults(Reg), 0, 'Reveal of unknown name is a no-op');
+    AssertEqI(Length(Reg.DeferredNames), 1,
+              'Reveal of unknown name does not consume the deferred entry');
+  finally
+    Reg.Free;
+  end;
+  WriteLn('  ok: reveal of unknown name is a no-op');
+end;
+
+procedure TestToolSearchSelectQuery;
+var
+  Reg: TToolRegistry;
+  Cfg: TConfig;
+  T: TTool;
+  Result_, ErrMsg: string;
+begin
+  Reg := TToolRegistry.Create;
+  Cfg := TConfig.Create;
+  try
+    Cfg.MCPProgressiveDisclosure := True;
+    RegisterDeferred(Reg, 'github__list_issues',  'List issues on a repo');
+    RegisterDeferred(Reg, 'github__create_issue', 'Open a new issue');
+    RegisterMCPDisclosureTools(Reg, Cfg);
+    AssertTrue(Reg.Find('tool_search', T),
+               'tool_search registered when MCPProgressiveDisclosure=True');
+    Result_ := Reg.RunTool('tool_search',
+                            '{"query":"select:github__list_issues"}', ErrMsg);
+    AssertTrue(ErrMsg = '', 'select query: no error');
+    AssertContains(Result_, '<function>',
+                   'select query: returns a <function> block');
+    AssertContains(Result_, 'github__list_issues',
+                   'select query: includes the requested tool name');
+    AssertEqI(CountResults(Reg), 2,
+              { tool_search itself + the revealed tool }
+              'select query: reveals the matched tool into ToProviderDefs');
+  finally
+    Cfg.Free;
+    Reg.Free;
+  end;
+  WriteLn('  ok: tool_search select: loads + reveals');
+end;
+
+procedure TestToolSearchKeywordQueryRanksAndCaps;
+var
+  Reg: TToolRegistry;
+  Cfg: TConfig;
+  Result_, ErrMsg: string;
+begin
+  Reg := TToolRegistry.Create;
+  Cfg := TConfig.Create;
+  try
+    Cfg.MCPProgressiveDisclosure := True;
+    RegisterDeferred(Reg, 'github__list_issues',  'List issues on a repo');
+    RegisterDeferred(Reg, 'github__create_issue', 'Open a new issue with title and body');
+    RegisterDeferred(Reg, 'github__list_prs',     'List pull requests');
+    RegisterDeferred(Reg, 'slack__post_message',  'Post a Slack message');
+    RegisterMCPDisclosureTools(Reg, Cfg);
+
+    { "issue" should hit the two github__ issue tools (name + desc) and
+      miss the prs / slack ones. max_results=1 caps the result. }
+    Result_ := Reg.RunTool('tool_search',
+                            '{"query":"issue","max_results":1}', ErrMsg);
+    AssertTrue(ErrMsg = '', 'keyword query: no error');
+    AssertContains(Result_, 'Loaded 1 tool(s)',
+                   'keyword query: respects max_results cap');
+    { Either of the two issue tools is acceptable; check that some
+      issue tool came back rather than the prs / slack ones. }
+    AssertTrue((Pos('github__list_issues',  Result_) > 0) or
+               (Pos('github__create_issue', Result_) > 0),
+               'keyword query: returns an issue tool');
+    AssertTrue(Pos('slack__post_message', Result_) = 0,
+               'keyword query: does not return a non-matching tool');
+  finally
+    Cfg.Free;
+    Reg.Free;
+  end;
+  WriteLn('  ok: tool_search keyword ranks + caps');
+end;
+
+procedure TestToolSearchRequiredTerm;
+var
+  Reg: TToolRegistry;
+  Cfg: TConfig;
+  Result_, ErrMsg: string;
+begin
+  Reg := TToolRegistry.Create;
+  Cfg := TConfig.Create;
+  try
+    Cfg.MCPProgressiveDisclosure := True;
+    RegisterDeferred(Reg, 'github__list_issues', 'List issues');
+    RegisterDeferred(Reg, 'slack__list_channels','List Slack channels');
+    RegisterMCPDisclosureTools(Reg, Cfg);
+    { "+slack list" must require "slack" in the name -- the github
+      tool also matches "list" but its name lacks "slack". }
+    Result_ := Reg.RunTool('tool_search',
+                            '{"query":"+slack list"}', ErrMsg);
+    AssertTrue(ErrMsg = '', 'required-term query: no error');
+    AssertContains(Result_, 'slack__list_channels',
+                   'required-term query: returns the slack-prefixed tool');
+    AssertTrue(Pos('github__list_issues', Result_) = 0,
+               'required-term query: rejects tool lacking the required substring');
+  finally
+    Cfg.Free;
+    Reg.Free;
+  end;
+  WriteLn('  ok: tool_search +required filters by name');
+end;
+
+procedure TestToolSearchEmptyDeferred;
+var
+  Reg: TToolRegistry;
+  Cfg: TConfig;
+  Result_, ErrMsg: string;
+begin
+  Reg := TToolRegistry.Create;
+  Cfg := TConfig.Create;
+  try
+    Cfg.MCPProgressiveDisclosure := True;
+    RegisterMCPDisclosureTools(Reg, Cfg);
+    Result_ := Reg.RunTool('tool_search', '{"query":"anything"}', ErrMsg);
+    AssertTrue(ErrMsg = '', 'empty-deferred: no error');
+    AssertContains(Result_, 'No deferred tools',
+                   'empty-deferred: clean text result');
+  finally
+    Cfg.Free;
+    Reg.Free;
+  end;
+  WriteLn('  ok: tool_search with no deferred tools returns clean text');
+end;
+
+procedure TestToolSearchSkipsRegistrationWhenDisabled;
+var
+  Reg: TToolRegistry;
+  Cfg: TConfig;
+  T: TTool;
+begin
+  Reg := TToolRegistry.Create;
+  Cfg := TConfig.Create;
+  try
+    Cfg.MCPProgressiveDisclosure := False;  { explicit off }
+    RegisterMCPDisclosureTools(Reg, Cfg);
+    AssertTrue(not Reg.Find('tool_search', T),
+               'tool_search not registered when MCPProgressiveDisclosure=False');
+  finally
+    Cfg.Free;
+    Reg.Free;
+  end;
+  WriteLn('  ok: tool_search skipped when disclosure off');
+end;
+
+procedure TestConfigRoundTrip;
+var
+  Saved, Loaded: TConfig;
+begin
+  Saved := LoadConfig('');
+  try
+    Saved.MCPProgressiveDisclosure := True;
+    SaveConfig(Saved);
+  finally
+    Saved.Free;
+  end;
+  Loaded := LoadConfig('');
+  try
+    AssertTrue(Loaded.MCPProgressiveDisclosure,
+               'mcp_progressive_disclosure round-trips through save/load');
+  finally
+    Loaded.Free;
+  end;
+  WriteLn('  ok: config round-trips MCPProgressiveDisclosure');
+end;
+
+begin
+  TestRegistryFiltersDeferred;
+  TestRevealAddsToProviderDefs;
+  TestRevealUnknownIsNoop;
+  TestToolSearchSelectQuery;
+  TestToolSearchKeywordQueryRanksAndCaps;
+  TestToolSearchRequiredTerm;
+  TestToolSearchEmptyDeferred;
+  TestToolSearchSkipsRegistrationWhenDisabled;
+  TestConfigRoundTrip;
+  WriteLn('ok - mcp disclosure tests passed');
+end.

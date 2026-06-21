@@ -780,6 +780,63 @@ begin
   end;
 end;
 
+procedure PromptMCPProgressiveDisclosure(Cfg: TConfig);
+{ Hermes-style lazy reveal for MCP tools. Default N -- preserves the
+  historical "every MCP tool schema in every turn's tools array"
+  behaviour. Asked only when at least one MCP server is configured so
+  fresh installs without MCP don't see a confusing question about a
+  feature that has no effect. Operators with fat catalogs (the GitHub
+  MCP alone ships 50+ tools) flip on to cut per-turn prompt cost. }
+var
+  Choice: string;
+  Enabled, i: Integer;
+begin
+  Enabled := 0;
+  for i := 0 to High(Cfg.MCPServers) do
+    if Cfg.MCPServers[i].Enabled then Inc(Enabled);
+  if Enabled = 0 then
+  begin
+    { No MCP servers -- the flag would be inert. Reset to False so a
+      re-run after the operator removed their servers doesn't leave
+      a dangling True. }
+    Cfg.MCPProgressiveDisclosure := False;
+    Exit;
+  end;
+
+  PrintLn;
+  PrintLn(Ansi.Bold + 'MCP progressive disclosure' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    Format('You have %d MCP server(s) enabled. Progressive disclosure ' +
+           'withholds', [Enabled]) + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'their tool schemas from the per-request `tools` array; the model ' +
+    'discovers' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'tools by name in the system prompt and loads schemas on demand via ' +
+    '`tool_search`.' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'Cuts prompt cost on turns that touch zero MCP tools; adds 1 turn ' +
+    'whenever the' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'model needs a tool it hasn''t loaded yet. Recommend Y for fat ' +
+    'catalogs (GitHub MCP +50 tools).' + Ansi.Reset);
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Enable MCP progressive disclosure [y/N]: ')));
+  if (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Cfg.MCPProgressiveDisclosure := True;
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
+            ' tool_search registered; MCP tool schemas withheld until loaded');
+  end
+  else
+  begin
+    Cfg.MCPProgressiveDisclosure := False;
+    PrintLn('  ' + Ansi.Dim +
+            '(skipped -- every MCP tool''s schema sent in the per-request tools array)' +
+            Ansi.Reset);
+  end;
+end;
+
 procedure PromptSelfImprovingSkills(Cfg: TConfig);
 { Four nested toggles for the Hermes-style self-improving skills
   (PR #288). Each defaults N because the feature touches:
@@ -1491,6 +1548,7 @@ begin
     PromptShellBackend(Cfg);
     PromptHeartbeat(Cfg);
     PromptAutoRouter(Cfg);
+    PromptMCPProgressiveDisclosure(Cfg);
 
     SaveConfig(Cfg);
     PrintLn;

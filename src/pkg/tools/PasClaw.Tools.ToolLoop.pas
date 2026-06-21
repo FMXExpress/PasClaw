@@ -664,6 +664,13 @@ begin
     SetLength(Tools, 0);
 
   Iter := 0;
+  { When progressive disclosure is on (PasClaw.MCP.Disclosure), the
+    model can call tool_search mid-loop to reveal deferred tools.
+    Reveal mutates the registry's FRevealed set; the next
+    ToProviderDefs call will then include the newly-revealed tools.
+    We re-snapshot Tools inside the iter loop (just before each
+    provider call) so a reveal at iter N becomes visible at iter
+    N+1. Cheap -- ToProviderDefs is an array copy under one CS. }
   { Stamp the per-turn identity onto every registered hook so
     override implementations can read `Self.Identity` from any of
     the BeforeTurn / BeforeToolCall / AfterToolResult / OnError
@@ -800,6 +807,15 @@ begin
       details through to the caller. Hook embedders that want the
       diagnostic still get it via OnError. (Codex P2 on PR #114.) }
     LastProviderErrText := '';
+    { Refresh the per-request tools array. tool_search reveals MCP
+      tools by mutating the registry; the next provider call needs
+      the updated def list so a newly-revealed schema is callable
+      without waiting a full user turn. ToProviderDefs holds the
+      registry CS for the duration of one array copy, which is
+      microseconds even for fat MCP catalogs. }
+    if Cfg.Registry <> nil then
+      Tools := Cfg.Registry.ToProviderDefs;
+
     { gen_ai chat span (tier-2 instrumentation). Wraps the actual
       provider request -- naming follows openclaw / Langfuse so
       backend dashboards recognise the span shape. Token counts

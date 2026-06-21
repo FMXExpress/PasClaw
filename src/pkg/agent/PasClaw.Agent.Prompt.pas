@@ -122,7 +122,8 @@ uses
   Classes,
   PasClaw.Utils,
   PasClaw.Skills.Loader,
-  PasClaw.Agent.Orient;   { task-aware MEMORY slicing (Cfg.OrientTaskAware) }
+  PasClaw.Agent.Orient,   { task-aware MEMORY slicing (Cfg.OrientTaskAware) }
+  PasClaw.MCP.Disclosure; { deferred-tools section (Cfg.MCPProgressiveDisclosure) }
 
 const
   SectionSep = sLineBreak + sLineBreak + '---' + sLineBreak + sLineBreak;
@@ -567,6 +568,12 @@ begin
   if ToolsEnabled then
     Result := AppendSection(Result, BuildSkillsSection(
                 (Cfg <> nil) and Cfg.SelfImprovingSkills.ProgressiveDisclosure));
+  { Deferred MCP tools (Cfg.MCPProgressiveDisclosure). Lists names only
+    -- schemas are loaded on demand by tool_search. Emits empty string
+    when disclosure is off or no MCP tools are deferred, so the gated
+    section never adds whitespace to the prompt unnecessarily. }
+  if ToolsEnabled then
+    Result := AppendSection(Result, BuildDeferredToolsSection);
   Result := AppendSection(Result, BuildRulesSection(ToolsEnabled));
   if Trim(UserSys) <> '' then
     Result := AppendSection(Result, Trim(UserSys));
