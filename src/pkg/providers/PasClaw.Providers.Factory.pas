@@ -56,6 +56,7 @@ uses
   PasClaw.Providers.Anthropic,
   PasClaw.Providers.OpenAI,
   PasClaw.Providers.Gemini,
+  PasClaw.Providers.Relay,
   PasClaw.Providers.Catalog;
 
 function FindProvider(Cfg: TConfig; const Name: string; out Idx: Integer): Boolean;
@@ -181,6 +182,17 @@ begin
           the older google_search_retrieval shape. }
         GeminiSrvTools.GoogleSearch := Cfg.GeminiServerTools.GoogleSearch;
         Provider := TGeminiProvider.Create(APIKey, Base, Model, GeminiSrvTools);
+      end;
+    pfRelay:
+      begin
+        { No outbound config -- the relay queue lives in-process and
+          the worker connects INBOUND to /v1/relay/poll. Model field
+          is whatever the operator put in config.json (or the catalog
+          default, which is empty). The Chat() call resolves "empty
+          model" to whatever capability a connected worker advertises;
+          if multiple workers serve multiple models, the operator
+          sets default_model to pin one. }
+        Provider := TRelayProvider.Create(Model, Cfg.Providers[Idx].Name);
       end;
     pfPlaceholder:
       begin

@@ -43,6 +43,11 @@ type
     pfOpenAI,
     pfAnthropic,
     pfGemini,
+    pfRelay,       { pull-worker pattern -- external workers connect
+                     INBOUND via /v1/relay/poll and serve inference on
+                     their own hardware. The provider has no outbound
+                     URL; the queue is in-process. See
+                     PasClaw.Providers.Relay + PasClaw.Gateway.RelayQueue. }
     pfPlaceholder  { kind known, no implementation yet -- Bedrock/Azure/etc. }
   );
 
@@ -112,7 +117,7 @@ end;
   change required for OpenAI-compatible endpoints. }
 function BuildCatalog: TProviderSpecArray;
 begin
-  SetLength(Result, 25);
+  SetLength(Result, 26);
   Result[0]  := MkSpec('anthropic',  'Anthropic',
                        pfAnthropic,  'https://api.anthropic.com',
                        'claude-opus-4-7',
@@ -323,6 +328,23 @@ begin
                        'gemini-3.5-flash',
                        MkAuth(asHeader, 'x-goog-api-key'),
                        'AI Gateway proxy to Gemini (set api_base to .../gateway/google-ai-studio; x-goog-api-key = your Gemini key)');
+  (* Relay (pull-worker) -- external workers connect INBOUND to
+     `pasclaw gateway`'s /v1/relay/poll SSE endpoint, advertise the
+     models they can serve, pull pending requests off the queue, run
+     inference on their own hardware, and POST results back. The
+     provider has no api_base because the queue is in-process; the
+     worker uses the existing PASCLAW_GATEWAY_TOKEN for auth on the
+     poll/respond endpoints. DefaultModel empty -- whatever the
+     connected workers advertise via X-Relay-Capabilities. Operators
+     wire up a reference HTML worker (tools/relay-worker/index.html)
+     or roll their own HTTP+SSE client (llama.cpp wrapper, mlc-llm,
+     Transformers.js, WebLLM, ...). See PasClaw.Providers.Relay +
+     PasClaw.Gateway.RelayQueue + docs/providers-relay.md. *)
+  Result[25] := MkSpec('relay',       'Relay (Pull-Worker)',
+                       pfRelay,       '',
+                       '',
+                       MkAuth(asNone),
+                       'Pull-worker pattern: external apps connect to the gateway and serve inference locally. No outbound HTTP from PasClaw; model name matches what the worker advertises.');
   (* Cohere intentionally not in this catalog: their chat API lives at
      /v2/chat with a non-OpenAI request/response body, so the ChatPath
      override alone isn't enough -- it needs a real TCohereProvider (or
