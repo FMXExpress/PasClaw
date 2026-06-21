@@ -498,6 +498,7 @@ var
   Stream: TSSEStream;
   URL:    string;
   Hdrs:   TNetHeaders;
+  Resp:   IHTTPResponse;
 begin
   Result := False;
   ErrMsg := '';
@@ -531,10 +532,29 @@ begin
     Stream := TSSEStream.Create(@Ctx);
     try
       try
-        Client.Get(URL, Stream, Hdrs);
-        { Get returned without an exception -> server closed the
-          stream cleanly. Outer loop reconnects. }
-        Result := True;
+        (* Capture the response so we can inspect StatusCode.
+           THTTPClient.Get does NOT raise on non-2xx (unlike Indy's
+           TIdHTTP.Get, which raises EIdHTTPProtocolException by
+           default). The gateway's /v1/relay/poll handler returns
+           plain JSON for 401 (bad / missing token), 400 (missing
+           worker id) and 503 (relay queue not initialised); without
+           checking StatusCode here, every one of those reads as
+           "server closed cleanly" -> outer loop resets backoff to
+           1s -> worker spins forever hammering the gateway with the
+           same bad request. Codex P2 review on PR #330. *)
+        Resp := Client.Get(URL, Stream, Hdrs);
+        if (Resp = nil) or (Resp.StatusCode < 200) or (Resp.StatusCode >= 300) then
+        begin
+          if Resp <> nil then
+            ErrMsg := Format('HTTP %d %s', [Resp.StatusCode, Resp.StatusText])
+          else
+            ErrMsg := 'no response from gateway';
+          Result := False;
+        end
+        else
+          { 2xx + stream closed = clean disconnect, outer loop
+            reconnects with backoff reset. }
+          Result := True;
       except
         on E: Exception do
         begin
