@@ -140,9 +140,9 @@ function BuildRelayRequestBody(const Messages: array of TMessage;
                                const Options:  TChatOptions;
                                const RequestId: string): string;
 var
-  Root, MsgObj, ToolObj, OptsObj: TJsonObject;
-  MsgArr, ToolArr: TJsonArray;
-  i: Integer;
+  Root, MsgObj, ToolObj, OptsObj, TCObj, FnObj: TJsonObject;
+  MsgArr, ToolArr, TCArr: TJsonArray;
+  i, j: Integer;
 begin
   Root := TJsonObject.Create;
   try
@@ -156,14 +156,55 @@ begin
     if Options.CacheKey <> '' then
       Root.PutStr('session_id', Options.CacheKey);
 
-    { messages: full conversation. The worker is stateless -- it sees
-      the entire history on every call. }
+    (* messages: full conversation. The worker is stateless -- it
+       sees the entire history on every call.
+
+       Tool-call metadata MUST round-trip. A multi-turn relayed
+       session that fires a tool call has assistant messages carrying
+       ToolCalls and tool-result messages carrying ToolCallId / Name
+       -- provider request builders (OpenAI, Anthropic, Gemini)
+       require these to thread the call/result pair. Dropping them on
+       the worker wire (as the original V1 did) made the second turn
+       after any tool call fail with "missing tool_call_id" or stall
+       silently. Emit the OpenAI-shape envelope so workers that
+       forward through any OpenAI-compatible (and Anthropic/Gemini
+       via their adapters) provider get a valid request shape:
+
+         - assistant with tool calls: role="assistant", content, and
+           a tool_calls array of objects each with id, type, and a
+           function sub-object holding name and arguments.
+         - tool result: role="tool", tool_call_id, name (the tool
+           name), and content (the tool's output as a string).
+         - named system/user message (rare): adds a top-level name
+           field alongside role / content.
+
+       Codex P1 review on PR #323. *)
     MsgArr := TJsonArray.Create;
     for i := 0 to High(Messages) do
     begin
       MsgObj := TJsonObject.Create;
       MsgObj.PutStr('role',    MsgRoleToString(Messages[i].Role));
       MsgObj.PutStr('content', Messages[i].Content);
+      if Messages[i].Name <> '' then
+        MsgObj.PutStr('name', Messages[i].Name);
+      if Messages[i].ToolCallId <> '' then
+        MsgObj.PutStr('tool_call_id', Messages[i].ToolCallId);
+      if Length(Messages[i].ToolCalls) > 0 then
+      begin
+        TCArr := TJsonArray.Create;
+        for j := 0 to High(Messages[i].ToolCalls) do
+        begin
+          TCObj := TJsonObject.Create;
+          TCObj.PutStr('id',   Messages[i].ToolCalls[j].Id);
+          TCObj.PutStr('type', Messages[i].ToolCalls[j].Kind);
+          FnObj := TJsonObject.Create;
+          FnObj.PutStr('name',      Messages[i].ToolCalls[j].Func.Name);
+          FnObj.PutStr('arguments', Messages[i].ToolCalls[j].Func.Arguments);
+          TCObj.PutObject('function', FnObj);
+          TCArr.AddObject(TCObj);
+        end;
+        MsgObj.PutArray('tool_calls', TCArr);
+      end;
       MsgArr.AddObject(MsgObj);
     end;
     Root.PutArray('messages', MsgArr);

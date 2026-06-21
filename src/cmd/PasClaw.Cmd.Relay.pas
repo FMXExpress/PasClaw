@@ -52,7 +52,19 @@ unit PasClaw.Cmd.Relay;
 
 interface
 
+uses
+  PasClaw.Providers.Types;
+
 function Cmd_Relay_Run(const Argv: array of string): Integer;
+
+(* Exposed for test coverage of the worker-side response envelope.
+   Returns the JSON the worker POSTs to /v1/relay/respond/<id>. Any
+   non-2xx upstream status (and the StatusCode=-1 socket-failure
+   sentinel) becomes an "error" field so the gateway's DecodeResponse
+   flips the relay response into the retryable-failure path -- without
+   this, a 429/5xx upstream surfaced as the assistant's reply text
+   and bypassed Cfg.Fallbacks. Codex P2 review on PR #323. *)
+function BuildRelayWorkerResponseJSON(const R: TLLMResponse): string;
 
 implementation
 
@@ -68,7 +80,7 @@ uses
 {$IFEND}
   PasClaw.CliUI, PasClaw.Logger, PasClaw.Utils,
   PasClaw.JSON, PasClaw.Config,
-  PasClaw.Providers.Types, PasClaw.Providers.Intf, PasClaw.Providers.Factory,
+  PasClaw.Providers.Intf, PasClaw.Providers.Factory,
   PasClaw.Providers.HTTP;
 
 type
@@ -120,7 +132,37 @@ begin
     SetLength(Result, Length(Result) - 1);
 end;
 
+function DecodeToolCalls(TCArr: TJsonArray): TToolCallArray;
+var
+  i: Integer;
+  Obj, FObj: TJsonObject;
+begin
+  SetLength(Result, 0);
+  if TCArr = nil then Exit;
+  SetLength(Result, TCArr.Count);
+  for i := 0 to TCArr.Count - 1 do
+  begin
+    Obj := TCArr.ItemObject(i);
+    if Obj = nil then Continue;
+    Result[i].Id   := Obj.GetStr('id', '');
+    Result[i].Kind := Obj.GetStr('type', 'function');
+    FObj := Obj.ChildObject('function');
+    if FObj <> nil then
+    begin
+      Result[i].Func.Name      := FObj.GetStr('name', '');
+      Result[i].Func.Arguments := FObj.GetStr('arguments', '{}');
+    end;
+  end;
+end;
+
 function DecodeMessages(MArr: TJsonArray): TMessageArray;
+{ Round-trip the OpenAI-shape message fields BuildRelayRequestBody now
+  emits: role + content + optional name + tool_call_id + tool_calls.
+  Without these, a multi-turn relayed session that fires a tool call
+  loses the tool-call/result correlation on its second turn and the
+  forwarded Provider.Chat() fails with "missing tool_call_id" (OpenAI)
+  / "tool_use_id not found" (Anthropic) / similar elsewhere. Codex P1
+  review on PR #323. }
 var
   i: Integer;
   Obj: TJsonObject;
@@ -132,8 +174,11 @@ begin
   begin
     Obj := MArr.ItemObject(i);
     if Obj = nil then Continue;
-    Result[i].Role    := MsgRoleFromString(Obj.GetStr('role', 'user'));
-    Result[i].Content := Obj.GetStr('content', '');
+    Result[i].Role       := MsgRoleFromString(Obj.GetStr('role', 'user'));
+    Result[i].Content    := Obj.GetStr('content', '');
+    Result[i].Name       := Obj.GetStr('name', '');
+    Result[i].ToolCallId := Obj.GetStr('tool_call_id', '');
+    Result[i].ToolCalls  := DecodeToolCalls(Obj.ChildArray('tool_calls'));
   end;
 end;
 
@@ -196,15 +241,41 @@ begin
   end;
 end;
 
-function BuildResponseJSON(const R: TLLMResponse): string;
+function ResponseIsError(const R: TLLMResponse): Boolean; inline;
+{ Any non-success outcome the worker should surface as a relay error
+  rather than a "valid LLM reply." StatusCode = -1 is the pre-HTTP /
+  socket / TLS failure path other providers use (network unreachable,
+  DNS, etc.). StatusCode in [200..299] is a successful HTTP exchange.
+  Anything else -- 4xx / 5xx returned by the upstream provider --
+  must NOT be encoded as a normal completion: the gateway-side
+  TRelayProvider.DecodeResponse reads `error` to flip StatusCode to
+  -1, which is what triggers the agent loop's fallback-walk over
+  Cfg.Fallbacks. Without this, a worker forwarding to a 429-rate-
+  limited OpenAI key would surface the upstream error JSON to the
+  agent as if it were the assistant's reply, killing fallback. Codex
+  P2 review on PR #323. }
+begin
+  if R.StatusCode = -1 then Exit(True);
+  if R.StatusCode = 0  then Exit(False);  { older providers that don't populate -- treat as success }
+  Result := (R.StatusCode < 200) or (R.StatusCode >= 300);
+end;
+
+function BuildRelayWorkerResponseJSON(const R: TLLMResponse): string;
 var
   Root, Usage: TJsonObject;
   TCArr: TJsonArray;
+  ErrText: string;
 begin
   Root := TJsonObject.Create;
   try
-    if R.StatusCode = -1 then
-      Root.PutStr('error', R.Content)
+    if ResponseIsError(R) then
+    begin
+      if R.StatusCode = -1 then
+        ErrText := R.Content
+      else
+        ErrText := Format('upstream HTTP %d: %s', [R.StatusCode, R.Content]);
+      Root.PutStr('error', ErrText);
+    end
     else
     begin
       Root.PutStr('content',       R.Content);
@@ -291,7 +362,7 @@ begin
           [ReqId, GetTickCount64 - StartTick, Resp.StatusCode,
            Resp.Usage.InputTokens, Resp.Usage.OutputTokens]);
 
-  RespJSON := BuildResponseJSON(Resp);
+  RespJSON := BuildRelayWorkerResponseJSON(Resp);
   PostResponse(Ctx, ReqId, RespJSON);
 end;
 
