@@ -70,6 +70,12 @@ implementation
 
 uses
   SysUtils, Classes, SyncObjs,
+  DateUtils,        { MilliSecondsBetween -- the FPC+Delphi-portable
+                      way to measure elapsed milliseconds. FPC ships
+                      SysUtils.GetTickCount64; dcc64 errors E2003 on
+                      that identifier. See the timing block in
+                      DispatchEvent for the elapsed-ms pattern this
+                      replaces. }
 {$IFDEF FPC}
   {$IFDEF UNIX}cthreads,{$ENDIF}
 {$ENDIF}
@@ -81,7 +87,9 @@ uses
   PasClaw.CliUI, PasClaw.Logger, PasClaw.Utils,
   PasClaw.JSON, PasClaw.Config,
   PasClaw.Providers.Intf, PasClaw.Providers.Factory,
-  PasClaw.Providers.HTTP;
+  PasClaw.Providers.HTTP
+  {$IFNDEF FPC}{$IFDEF MSWINDOWS}, Winapi.Windows{$ENDIF}
+                {$IFDEF POSIX}, Posix.Unistd{$ENDIF}{$ENDIF};
 
 type
   TWorkerCtx = record
@@ -118,6 +126,23 @@ begin
   else                    Result := GetEnvironmentVariable(EnvName);
 end;
 
+function CurrentProcessID: Int64;
+{ Cross-compiler PID lookup. FPC ships SysUtils.GetProcessID;
+  Delphi dcc64 doesn't (E2003) and routes through the platform RTL
+  instead -- Winapi.Windows.GetCurrentProcessId on Windows,
+  Posix.Unistd.getpid on POSIX. Same shim PasClaw.Tools.RPC's
+  CurrentProcessID uses; lifted into this unit to avoid a cross-
+  unit import just for the worker-id default. }
+begin
+  {$IFDEF FPC}
+  Result := GetProcessID;
+  {$ELSE}{$IFDEF MSWINDOWS}
+  Result := GetCurrentProcessId;
+  {$ELSE}
+  Result := getpid;
+  {$ENDIF}{$ENDIF}
+end;
+
 function HostName: string;
 begin
   Result := GetEnvironmentVariable('HOSTNAME');
@@ -132,29 +157,6 @@ begin
     SetLength(Result, Length(Result) - 1);
 end;
 
-function DecodeToolCalls(TCArr: TJsonArray): TToolCallArray;
-var
-  i: Integer;
-  Obj, FObj: TJsonObject;
-begin
-  SetLength(Result, 0);
-  if TCArr = nil then Exit;
-  SetLength(Result, TCArr.Count);
-  for i := 0 to TCArr.Count - 1 do
-  begin
-    Obj := TCArr.ItemObject(i);
-    if Obj = nil then Continue;
-    Result[i].Id   := Obj.GetStr('id', '');
-    Result[i].Kind := Obj.GetStr('type', 'function');
-    FObj := Obj.ChildObject('function');
-    if FObj <> nil then
-    begin
-      Result[i].Func.Name      := FObj.GetStr('name', '');
-      Result[i].Func.Arguments := FObj.GetStr('arguments', '{}');
-    end;
-  end;
-end;
-
 function DecodeMessages(MArr: TJsonArray): TMessageArray;
 { Round-trip the OpenAI-shape message fields BuildRelayRequestBody now
   emits: role + content + optional name + tool_call_id + tool_calls.
@@ -162,10 +164,19 @@ function DecodeMessages(MArr: TJsonArray): TMessageArray;
   loses the tool-call/result correlation on its second turn and the
   forwarded Provider.Chat() fails with "missing tool_call_id" (OpenAI)
   / "tool_use_id not found" (Anthropic) / similar elsewhere. Codex P1
-  review on PR #323. }
+  review on PR #323.
+
+  The tool_calls decode is inlined rather than split into a helper
+  because TMessage.ToolCalls is declared as an inline
+  `array of TToolCall` (not the TToolCallArray alias) and dcc64
+  enforces strict named-type matching on dynamic-array assignment --
+  a helper returning TToolCallArray would E2010 at the call site.
+  Inlining sidesteps the mismatch without forcing the TMessage
+  record's field declaration to change. }
 var
-  i: Integer;
-  Obj: TJsonObject;
+  i, j: Integer;
+  Obj, TCObj, FObj: TJsonObject;
+  TCArr: TJsonArray;
 begin
   SetLength(Result, 0);
   if MArr = nil then Exit;
@@ -178,7 +189,22 @@ begin
     Result[i].Content    := Obj.GetStr('content', '');
     Result[i].Name       := Obj.GetStr('name', '');
     Result[i].ToolCallId := Obj.GetStr('tool_call_id', '');
-    Result[i].ToolCalls  := DecodeToolCalls(Obj.ChildArray('tool_calls'));
+    TCArr := Obj.ChildArray('tool_calls');
+    if TCArr = nil then Continue;
+    SetLength(Result[i].ToolCalls, TCArr.Count);
+    for j := 0 to TCArr.Count - 1 do
+    begin
+      TCObj := TCArr.ItemObject(j);
+      if TCObj = nil then Continue;
+      Result[i].ToolCalls[j].Id   := TCObj.GetStr('id', '');
+      Result[i].ToolCalls[j].Kind := TCObj.GetStr('type', 'function');
+      FObj := TCObj.ChildObject('function');
+      if FObj <> nil then
+      begin
+        Result[i].ToolCalls[j].Func.Name      := FObj.GetStr('name', '');
+        Result[i].ToolCalls[j].Func.Arguments := FObj.GetStr('arguments', '{}');
+      end;
+    end;
   end;
 end;
 
@@ -222,7 +248,14 @@ begin
   Result.CacheKey := SessionId;
 end;
 
-function EncodeToolCalls(const Calls: TToolCallArray): TJsonArray;
+function EncodeToolCalls(const Calls: array of TToolCall): TJsonArray;
+{ Open-array parameter rather than `const Calls: TToolCallArray`
+  because the call site passes TLLMResponse.ToolCalls, which is
+  declared as inline `array of TToolCall` (not the named alias).
+  dcc64 enforces strict named-type matching on dynamic-array
+  assignments / parameter passing and refused the named-vs-inline
+  pairing with E2010. FPC accepted it. Open-array parameters accept
+  both shapes on both compilers. }
 var
   i: Integer;
   Obj, FObj: TJsonObject;
@@ -319,7 +352,7 @@ var
   Opts:  TChatOptions;
   Resp:  TLLMResponse;
   RespJSON: string;
-  StartTick: QWord;
+  StartTime: TDateTime;
 begin
   Env := TJsonObject.Parse(Data);
   if Env = nil then
@@ -346,7 +379,7 @@ begin
 
   LogInfo('relay worker: dispatching %s (model=%s, %d msgs, %d tools)',
           [ReqId, Model, Length(Msgs), Length(Tools)]);
-  StartTick := GetTickCount64;
+  StartTime := Now;
   try
     Resp := Ctx.Provider.Chat(Msgs, Tools, Model, Opts);
   except
@@ -359,7 +392,7 @@ begin
     end;
   end;
   LogInfo('relay worker: completed %s in %dms (status=%d, %d in / %d out)',
-          [ReqId, GetTickCount64 - StartTick, Resp.StatusCode,
+          [ReqId, MilliSecondsBetween(Now, StartTime), Resp.StatusCode,
            Resp.Usage.InputTokens, Resp.Usage.OutputTokens]);
 
   RespJSON := BuildRelayWorkerResponseJSON(Resp);
@@ -688,7 +721,7 @@ begin
     if WorkerIdArg <> '' then
       Ctx.WorkerId := WorkerIdArg
     else
-      Ctx.WorkerId := HostName + '-' + IntToStr(GetProcessID);
+      Ctx.WorkerId := HostName + '-' + IntToStr(CurrentProcessID);
 
     PrintLn(Ansi.Bold + 'pasclaw relay worker' + Ansi.Reset);
     PrintLn('  gateway        : ' + Ctx.GatewayURL);
