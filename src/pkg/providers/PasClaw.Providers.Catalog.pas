@@ -252,15 +252,18 @@ begin
   (* Cloudflare AI Gateway. Two URL shapes operators paste into
      api_base, both OpenAI Chat Completions compatible:
 
-       Workers AI direct (no gateway features):
-         https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/v1
-         + ChatPath /chat/completions
-         => POST .../ai/v1/chat/completions
-
-       AI Gateway proxy (caching, rate limits, analytics, fallback):
+       AI Gateway compat proxy (caching, rate limits, analytics,
+       multi-provider routing -- the headline feature, and what this
+       catalog row is named after):
          https://gateway.ai.cloudflare.com/v1/{ACCOUNT_ID}/{GATEWAY_ID}/compat
          + ChatPath /chat/completions
          => POST .../{GATEWAY_ID}/compat/chat/completions
+
+       Workers AI direct (no gateway features; bypasses the AI Gateway
+       entirely and hits Workers AI's own OpenAI-compat endpoint):
+         https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/v1
+         + ChatPath /chat/completions
+         => POST .../ai/v1/chat/completions
 
      Both expect Authorization: Bearer <CLOUDFLARE_API_TOKEN>; both
      return the same OpenAI-shaped response. ChatPath is /chat/completions
@@ -269,19 +272,24 @@ begin
      because the URL embeds the operator's account_id (same as mimo /
      litellm).
 
-     DefaultModel is a Workers AI flagship: Llama 3.3 70B FP8 fast.
-     Operators wanting a different upstream (gpt-oss-120b, Mistral, an
-     Anthropic passthrough through the AI Gateway, etc.) override via
-     the model field per request -- Workers AI prefixes models with
-     `@cf/<vendor>/<name>`; AI Gateway passthroughs use the upstream
-     provider's native model id. Docs:
-     https://developers.cloudflare.com/ai-gateway/ +
-     https://developers.cloudflare.com/workers-ai/. *)
+     DefaultModel uses the compat endpoint's {provider}/{model} routing
+     format (Codex P2 on PR #316 -- the bare `@cf/...` form the row
+     shipped with works for the direct path but the compat path
+     rejects unprefixed model ids because it has to pick which upstream
+     to forward to). `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast`
+     routes through Workers AI on the compat path AND is overridable
+     to any other compat-supported upstream (openai/gpt-5.2,
+     anthropic/claude-sonnet-4-5, google-ai-studio/gemini-2.5-flash,
+     etc.) via the per-request model field. Operators on the direct
+     Workers AI path override the model to bare `@cf/...` (or use the
+     cloudflare-workers-ai sibling row if one ever lands). Docs:
+     https://developers.cloudflare.com/ai-gateway/usage/chat-completion/
+     + https://developers.cloudflare.com/workers-ai/. *)
   Result[22] := MkSpec('cloudflare', 'Cloudflare AI Gateway',
                        pfOpenAI,     '',
-                       '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+                       'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
                        MkAuth(asBearer),
-                       'Workers AI direct or AI Gateway proxy (set api_base; Bearer = CLOUDFLARE_API_TOKEN; @cf/ model prefix for Workers AI)',
+                       'AI Gateway proxy (set api_base to .../compat; Bearer = CLOUDFLARE_API_TOKEN; model uses {provider}/{model} routing -- workers-ai/@cf/..., openai/..., anthropic/..., google-ai-studio/...)',
                        '/chat/completions');
   (* Cloudflare AI Gateway -- Anthropic passthrough. Routes Anthropic-
      shaped requests through a named gateway for caching / rate

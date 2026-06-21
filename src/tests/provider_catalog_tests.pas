@@ -48,18 +48,24 @@ begin
   Expect(Spec.ChatPath = '/v1/chat/completions',
          'groq ChatPath default regressed: ' + Spec.ChatPath);
 
-  { Cloudflare AI Gateway: OpenAI family, Bearer auth, /chat/completions
-    (no /v1 -- the /v1 lives in the operator-supplied api_base prefix).
-    DefaultBase empty because the URL embeds the operator's account id
-    (same pattern as mimo / litellm). DefaultModel is a Workers AI
-    flagship with the @cf/ prefix. }
+  (* Cloudflare AI Gateway: OpenAI family, Bearer auth, /chat/completions
+     (no /v1 -- the /v1 lives in the operator-supplied api_base prefix).
+     DefaultBase empty because the URL embeds the operator's account id
+     (same pattern as mimo / litellm). DefaultModel uses the AI Gateway
+     compat endpoint's {provider}/{model} routing format -- the bare
+     `@cf/...` form the row originally shipped with would 4xx on the
+     compat path (Codex P2 on PR #316). The compat-prefixed form routes
+     through Workers AI by default AND is overridable to any other
+     compat-supported upstream (openai/..., anthropic/...,
+     google-ai-studio/...). *)
   Expect(LookupProvider('cloudflare', Spec), 'cloudflare not in catalog');
   Expect(Spec.Family = pfOpenAI,             'cloudflare should be pfOpenAI');
   Expect(Spec.Auth.Kind = asBearer,          'cloudflare should be bearer auth');
   Expect(Spec.DefaultBase = '',
          'cloudflare DefaultBase must be empty (operator supplies URL): ' + Spec.DefaultBase);
-  Expect(Spec.DefaultModel = '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
-         'cloudflare DefaultModel wrong: ' + Spec.DefaultModel);
+  Expect(Spec.DefaultModel = 'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+         'cloudflare DefaultModel must use AI Gateway compat <provider>/<model> routing format: '
+         + Spec.DefaultModel);
   Expect(Spec.ChatPath = '/chat/completions',
          'cloudflare ChatPath must be /chat/completions (no /v1), got: ' + Spec.ChatPath);
   Expect(Spec.DisplayName = 'Cloudflare AI Gateway',
