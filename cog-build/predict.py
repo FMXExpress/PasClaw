@@ -289,6 +289,29 @@ class Predictor(BasePredictor):
             default="",
             description="Override model id. Empty = provider's catalog default.",
         ),
+        mode: str = Input(
+            description=(
+                "What to run. "
+                "'build' (default) runs `pasclaw build` -- one-shot multi-iter "
+                "agent run with workspace.zip handshake (the historical "
+                "behavior of this cog). "
+                "'plan' runs `pasclaw plan` -- generates workspace/PLAN.md as "
+                "a structured markdown deliverable (Goal / Files / Steps / "
+                "Open questions / Risks) and stops. The PLAN.md is inside the "
+                "returned workspace zip. "
+                "'plan build' chains the two: first generates PLAN.md, then "
+                "runs build with PLAN.md auto-loaded into the system prompt "
+                "as authoritative guidance. After the build succeeds, the "
+                "plan is archived to workspace/memory/plans/<timestamp>.md "
+                "and you get a browsable history alongside the artifact. "
+                "'plan build goal' is the same as 'plan build' but the build "
+                "step uses the Ralph judge loop (parses '## Goal' from "
+                "PLAN.md as the objective; iterations pump until the judge "
+                "model says MET / FAILED, capped by --goal-max-iters)."
+            ),
+            choices=["build", "plan", "plan build", "plan build goal"],
+            default="build",
+        ),
         profile: str = Input(
             default="max-build",
             description="PasClaw config profile applied on top of stock "
@@ -516,55 +539,108 @@ class Predictor(BasePredictor):
             env["PASCLAW_HOME"]   = home_dir
             env["PASCLAW_CONFIG"] = config_path
 
-            # NOTE: `-q` is forwarded so the early-exit banner scan in
-            # PasClaw.dpr's IsQuietInvocation skips PrintBanner.
-            # Without it, the ASCII PASCLAW banner ends up in
-            # result.stdout and pollutes reply.txt.
-            cmd = [
-                self.binary_path, "build",
-                "-q",
-                "-d", message,
-                "--max-iters", str(max_iters),
-                "--home", home_dir,
-                "--workspace-out", out_zip_path,
-            ]
-            if in_zip is not None:
-                cmd += ["--workspace-in", in_zip]
+            # Phase 4 of the plan/build pairing: dispatch on `mode` to
+            # decide which pasclaw subcommand(s) to invoke.
+            #
+            # build              -> pasclaw build
+            # plan               -> pasclaw plan
+            # plan build         -> pasclaw plan then pasclaw build
+            # plan build goal    -> pasclaw plan then pasclaw build --goal
+            #
+            # For the chained variants, an intermediate "mid_zip"
+            # carries PLAN.md from plan -> build through the existing
+            # workspace.zip handshake. The build step's workspace-out
+            # becomes the cog's final return artifact.
+            mode_norm = mode.strip().lower()
+            mid_zip_path = os.path.join(scratch, "workspace_mid.zip")
+            do_plan  = mode_norm in ("plan", "plan build", "plan build goal")
+            do_build = mode_norm in ("build", "plan build", "plan build goal")
+            do_goal  = mode_norm == "plan build goal"
 
-            print(
-                f"build: invoking {self.binary_path} build "
-                f"max_iters={max_iters} timeout={timeout_seconds}s "
-                f"provider={selected_provider} model={default_model} "
-                f"profile={profile_normalised or '(none)'} "
-                f"workspace_in={'yes' if in_zip else 'no'}"
-            )
+            def invoke_pasclaw(subcmd, extra_args, in_zip_arg, out_zip_arg,
+                                label):
+                """One pasclaw <subcmd> invocation with consistent error
+                surfacing. -q suppresses the ASCII banner (else PrintBanner
+                would land in reply.txt). Returns the captured stdout text;
+                raises on non-zero exit or timeout. """
+                cmd_ = [
+                    self.binary_path, subcmd,
+                    "-q",
+                    "-d", message,
+                    "--home", home_dir,
+                ] + extra_args
+                if in_zip_arg is not None:
+                    cmd_ += ["--workspace-in", in_zip_arg]
+                if out_zip_arg is not None:
+                    cmd_ += ["--workspace-out", out_zip_arg]
 
-            try:
-                result = subprocess.run(
-                    cmd, env=env, capture_output=True, text=True,
-                    check=True, timeout=timeout_seconds,
+                print(
+                    f"{label}: invoking {self.binary_path} {subcmd} "
+                    f"timeout={timeout_seconds}s "
+                    f"provider={selected_provider} model={default_model} "
+                    f"profile={profile_normalised or '(none)'} "
+                    f"workspace_in={'yes' if in_zip_arg else 'no'}"
                 )
-                text_out = result.stdout.strip()
-            except subprocess.CalledProcessError as e:
-                # Surface stdout (model's partial reply, if any) +
-                # stderr (PasClaw's diagnostic log lines) so the
-                # operator can debug from Replicate logs.
-                raise RuntimeError(
-                    "pasclaw build exited non-zero.\n"
-                    f"STDOUT:\n{e.stdout}\n"
-                    f"STDERR:\n{e.stderr}"
-                )
-            except subprocess.TimeoutExpired:
-                raise RuntimeError(
-                    f"pasclaw build timed out after {timeout_seconds}s. "
-                    "Re-run with a higher timeout_seconds, or split the "
-                    "build into smaller calls and re-feed workspace_in."
-                )
+                try:
+                    res = subprocess.run(
+                        cmd_, env=env, capture_output=True, text=True,
+                        check=True, timeout=timeout_seconds,
+                    )
+                    return res.stdout.strip()
+                except subprocess.CalledProcessError as e:
+                    raise RuntimeError(
+                        f"pasclaw {subcmd} exited non-zero (mode={mode_norm}).\n"
+                        f"STDOUT:\n{e.stdout}\n"
+                        f"STDERR:\n{e.stderr}"
+                    )
+                except subprocess.TimeoutExpired:
+                    raise RuntimeError(
+                        f"pasclaw {subcmd} timed out after {timeout_seconds}s. "
+                        "Re-run with a higher timeout_seconds, or split into "
+                        "smaller calls."
+                    )
+
+            text_out = ""
+
+            # --- Plan step (runs first for plan / plan build / plan build goal).
+            #
+            # When chaining, plan writes to mid_zip; build later reads it as
+            # workspace-in. For "plan" alone, plan writes directly to the
+            # cog's final out_zip.
+            if do_plan:
+                plan_args = []
+                # plan uses its own Pascal-side default max-iters (12); the
+                # operator's max_iters input is build's budget, NOT plan's.
+                plan_in   = in_zip
+                plan_out  = mid_zip_path if do_build else out_zip_path
+                text_out  = invoke_pasclaw("plan", plan_args, plan_in,
+                                            plan_out, "plan")
+
+            # --- Build step.
+            #
+            # When chained with plan, reads mid_zip as input. When standalone,
+            # reads the original workspace_in. --goal forwards PLAN.md's
+            # parsed Goal as the Ralph objective (Phase 3 wiring).
+            if do_build:
+                build_args = ["--max-iters", str(max_iters)]
+                if do_goal:
+                    build_args.append("--goal")
+                build_in = mid_zip_path if do_plan else in_zip
+                # When build runs after plan, the mid_zip is what was just
+                # produced -- pass it explicitly. When build runs standalone,
+                # in_zip may be None (fresh run).
+                if do_plan and not os.path.exists(mid_zip_path):
+                    raise RuntimeError(
+                        "pasclaw plan claimed to finish but produced no "
+                        "intermediate workspace zip; cannot proceed with build."
+                    )
+                text_out = invoke_pasclaw("build", build_args, build_in,
+                                          out_zip_path, "build")
 
             if not os.path.exists(out_zip_path):
                 raise RuntimeError(
-                    "pasclaw build did not produce workspace_out.zip "
-                    "(build flag missed? out path unwritable?)."
+                    f"pasclaw {mode_norm} did not produce workspace_out.zip "
+                    f"(missing flag? out path unwritable?)."
                 )
 
             # --- persist both outputs outside scratch ---

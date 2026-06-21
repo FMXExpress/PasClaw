@@ -457,6 +457,15 @@ test-config-profile: | $(BUILDDIR)
 	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
 	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/config_profile_tests
 
+# Active Plan section -- pins BuildActivePlanSection's gating cases
+# (NoPlan / pmPlan / missing) and the happy-path PLAN.md injection.
+test-active-plan-section: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/active_plan_section_tests.pas -o$(BUILDDIR)/active_plan_section_tests
+	@PASCLAW_HOME=$$(mktemp -d) ; \
+	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
+	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/active_plan_section_tests
+
 # PasClaw.MCP.Disclosure -- Hermes-style progressive disclosure + Claude
 # Code-style tool_search for MCP tools. Hermetic: synthetic TTool records
 # only, no actual MCP server started.

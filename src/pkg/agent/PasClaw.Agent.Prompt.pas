@@ -84,11 +84,52 @@ function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
   block is prepended so the model knows mutating tools will refuse and
   it should produce analysis / a proposed plan rather than calling
   write/exec tools. The dispatch gate in PasClaw.Tools.ToolLoop is the
-  authority -- the prompt block is belt-and-braces / model-honesty. }
+  authority -- the prompt block is belt-and-braces / model-honesty.
+
+  NoPlan -- opt out of the workspace/PLAN.md auto-pickup. When False
+  (default) and Mode = pmBuild, an "## Active Plan" section is read
+  from <home>/workspace/PLAN.md and injected as authoritative guidance.
+  Plan-mode runs always skip this section -- Cmd.Plan handles existing
+  PLAN.md via a planner --system directive, so auto-pickup would
+  double-inject. }
 function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
                            ToolsEnabled: Boolean;
                            const TaskHint: string;
-                           Mode: TPasClawMode): string; overload;
+                           Mode: TPasClawMode;
+                           NoPlan: Boolean = False): string; overload;
+
+{ Active-plan section -- reads <home>/workspace/PLAN.md (the output of
+  a prior `pasclaw plan`) and returns it wrapped in a "## Active Plan"
+  block for injection into the build's system prompt. Returns '' when
+  NoPlan is True (opt-out), when Mode = pmPlan (plan command handles
+  its own PLAN.md context via --system), or when PLAN.md is missing /
+  unreadable / empty. Exposed for unit tests; production callers go
+  through BuildSystemPrompt. }
+function BuildActivePlanSection(NoPlan: Boolean; Mode: TPasClawMode): string;
+
+{ Extract the "## Goal" objective line from workspace/PLAN.md.
+
+  Looks for the first markdown H2 heading equal to "Goal" (or "Goal:"),
+  then returns the next non-empty, non-heading content line (trimmed).
+  That line is the planner's single-sentence verb-prefixed objective
+  per `pasclaw plan`'s opinionated structure.
+
+  Returns '' when PLAN.md is missing, unreadable, or has no parseable
+  Goal section. Caller decides whether '' is a soft fall-through (skip
+  the goal driver) or hard error (fail the build).
+
+  Two overloads:
+    - No-arg version uses GetHome (PASCLAW_HOME env) to resolve the
+      workspace root. Suitable for tests and any caller whose
+      PASCLAW_HOME is reliably set in the OS env table.
+    - HomeOverride version takes an explicit home dir. Used by
+      Cmd.Build where the libc_setenv just-set PASCLAW_HOME isn't
+      always visible to a same-process GetEnvironmentVariable read --
+      passing Home explicitly bypasses the env round-trip and is
+      strictly more correct anyway (Cmd.Build owns the home path; no
+      reason to round-trip it through env). }
+function ExtractGoalFromPlanFile: string; overload;
+function ExtractGoalFromPlanFile(const HomeOverride: string): string; overload;
 
 { Locate the nearest AGENTS.md walking up from StartDir to the
   filesystem root, stopping at the first git working tree boundary
@@ -121,6 +162,7 @@ implementation
 uses
   Classes,
   PasClaw.Utils,
+  PasClaw.Logger,         { LogWarn for BuildActivePlanSection's PLAN.md read failures }
   PasClaw.Skills.Loader,
   PasClaw.Agent.Orient,   { task-aware MEMORY slicing (Cfg.OrientTaskAware) }
   PasClaw.MCP.Disclosure; { deferred-tools section (Cfg.MCPProgressiveDisclosure) }
@@ -498,6 +540,180 @@ begin
   Result := Acc + SectionSep + Section;
 end;
 
+function ExtractGoalFromPlanFile: string; overload;
+begin
+  Result := ExtractGoalFromPlanFile(GetHome);
+end;
+
+function ExtractGoalFromPlanFile(const HomeOverride: string): string; overload;
+{ Phase 3 helper: parse the "## Goal" section of <home>/workspace/PLAN.md
+  and return the first content line as the Ralph objective. The planner
+  directive constrains plans to open the Goal section with a single-
+  sentence verb-prefixed objective, so the first non-empty, non-heading
+  line after the header IS the objective.
+
+  Tolerances:
+    - Heading can be "## Goal", "## Goal:", "##Goal", "## GOAL", etc.
+      (case-insensitive on the word, optional trailing colon and
+      whitespace).
+    - Blank lines between heading and content are skipped.
+    - The objective itself may be wrapped across multiple lines; we
+      return only the first line (the planner is opinionated on
+      single-sentence objectives, and the rest is treated as
+      explanation).
+
+  Returns '' for any read failure or missing/empty Goal section. }
+const
+  HeaderToken = 'GOAL';
+var
+  Path, Body, Line, Stripped: string;
+  Lines: TStringList;
+  i: Integer;
+  InGoal: Boolean;
+
+  function StripHeader(const S: string): string;
+  { Strip leading '#' chars + whitespace + a trailing colon, uppercase
+    what's left. Used to recognise heading lines as "## Goal" without
+    being picky about exact formatting. }
+  var
+    Trimmed: string;
+  begin
+    Trimmed := Trim(S);
+    while (Trimmed <> '') and (Trimmed[1] = '#') do
+      Delete(Trimmed, 1, 1);
+    Trimmed := Trim(Trimmed);
+    if (Trimmed <> '') and (Trimmed[Length(Trimmed)] = ':') then
+      SetLength(Trimmed, Length(Trimmed) - 1);
+    Result := UpperCase(Trim(Trimmed));
+  end;
+
+  function IsHeading(const S: string): Boolean;
+  begin
+    Result := (Trim(S) <> '') and (Trim(S)[1] = '#');
+  end;
+
+begin
+  Result := '';
+  Path := JoinPath(JoinPath(HomeOverride, 'workspace'), 'PLAN.md');
+  if not FileExists(Path) then Exit;
+  try
+    Body := ReadFileText(Path);
+  except
+    on E: Exception do
+    begin
+      LogWarn('plan-goal: PLAN.md unreadable (%s)', [E.Message]);
+      Exit;
+    end;
+  end;
+  if Trim(Body) = '' then Exit;
+
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Body;
+    InGoal := False;
+    for i := 0 to Lines.Count - 1 do
+    begin
+      Line := Lines[i];
+      Stripped := Trim(Line);
+
+      if not InGoal then
+      begin
+        { Looking for the Goal header. }
+        if IsHeading(Line) and (StripHeader(Line) = HeaderToken) then
+          InGoal := True;
+      end
+      else
+      begin
+        { In the Goal section. Skip blanks; on the first non-blank
+          non-heading line, return its trimmed text. A heading here
+          means we walked off the end of the Goal section without
+          finding content (e.g., "## Goal\n## Files"); give up. }
+        if Stripped = '' then Continue;
+        if IsHeading(Line) then Exit;
+        Result := Stripped;
+        Exit;
+      end;
+    end;
+  finally
+    Lines.Free;
+  end;
+end;
+
+function BuildActivePlanSection(NoPlan: Boolean; Mode: TPasClawMode): string;
+{ Phase 2 of the `pasclaw plan` / `pasclaw build` pairing. Reads
+  <home>/workspace/PLAN.md (the output of a prior `pasclaw plan`
+  run) and injects it as authoritative guidance for the build.
+
+  Suppressed in three cases:
+    1. NoPlan True -- operator passed --no-plan to opt out.
+    2. Mode = pmPlan -- the planner command's own --system directive
+       handles existing PLAN.md as "revise" context; auto-pickup here
+       would double-inject the same body and confuse the model.
+    3. PLAN.md is missing or unreadable -- the auto-pickup is
+       opportunistic, not required.
+
+  Stale guidance: when PLAN.md hasn't been touched in over 24h, a
+  "(stale: N hours)" note is appended to the section header so the
+  model treats it with appropriate skepticism. We DO NOT block the
+  load -- cog / non-TTY runs would deadlock on an interactive prompt,
+  and an operator who wanted to ignore it would pass --no-plan or
+  archive the file. }
+const
+  StaleHours = 24.0;
+var
+  Path, Body, StaleNote: string;
+  AgeRaw: Integer;
+  Hours: Double;
+begin
+  Result := '';
+  if NoPlan then Exit;
+  if Mode = pmPlan then Exit;
+
+  Path := JoinPath(JoinPath(GetHome, 'workspace'), 'PLAN.md');
+  if not FileExists(Path) then Exit;
+  try
+    Body := Trim(ReadFileText(Path));
+  except
+    on E: Exception do
+    begin
+      { Surface the read failure to the log but don't fail the agent
+        run -- PLAN.md being unreadable shouldn't break an
+        otherwise-valid build. }
+      LogWarn('build: PLAN.md present but unreadable (%s); skipping ' +
+              'active-plan section', [E.Message]);
+      Exit;
+    end;
+  end;
+  if Body = '' then Exit;
+
+  StaleNote := '';
+  AgeRaw := FileAge(Path);
+  if AgeRaw <> -1 then
+  begin
+    try
+      Hours := (Now - FileDateToDateTime(AgeRaw)) * 24.0;
+      if Hours > StaleHours then
+        StaleNote := Format(' (stale: %.0f hours old -- ' +
+                            'pass --no-plan to ignore PLAN.md)', [Hours]);
+    except
+      { FileDateToDateTime can raise on a corrupt time stamp on some
+        filesystems. Fall through with no stale note rather than
+        failing the whole section. }
+      StaleNote := '';
+    end;
+  end;
+
+  Result :=
+    '## Active Plan' + StaleNote + sLineBreak + sLineBreak +
+    'A prior `pasclaw plan` run produced the plan below at ' +
+    '`' + Path + '`. Treat it as authoritative guidance for what to ' +
+    'do this turn. The plan''s `## Goal` section opens with a single-' +
+    'sentence objective -- that''s the success criterion. Pass ' +
+    '`--no-plan` on the build command to ignore PLAN.md entirely.' +
+    sLineBreak + sLineBreak +
+    Body;
+end;
+
 function BuildPlanModeSection: string;
 begin
   (* The plan-safe / plan-refused lists must match the actual
@@ -546,7 +762,8 @@ end;
 
 function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
                            ToolsEnabled: Boolean; const TaskHint: string;
-                           Mode: TPasClawMode): string;
+                           Mode: TPasClawMode;
+                           NoPlan: Boolean = False): string;
 begin
   Result := '';
   if Mode = pmPlan then
@@ -562,6 +779,12 @@ begin
     ToolsEnabled): even a chat-only session benefits from "in this
     project, prefer X". }
   Result := AppendSection(Result, BuildProjectRulesSection);
+  { Active plan auto-pickup. Emitted between project rules and skills
+    so the plan can reference both above it (memory + AGENTS.md) and
+    below (skills, deferred MCP tools, behaviour rules). pmPlan mode
+    suppresses this -- Cmd.Plan handles existing PLAN.md via its
+    --system directive, not auto-pickup. See BuildActivePlanSection. }
+  Result := AppendSection(Result, BuildActivePlanSection(NoPlan, Mode));
   { Skills are only callable when the tool registry was actually built.
     --no-tools (and component UseTools=False) bypass RegisterSkills, so
     advertising the catalog would be a lie. }

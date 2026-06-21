@@ -92,7 +92,8 @@ uses
   PasClaw.Logger,
   PasClaw.Utils,
   PasClaw.Skills.Zip,
-  PasClaw.Cmd.Agent;
+  PasClaw.Cmd.Agent,
+  PasClaw.Agent.Prompt;  { ExtractGoalFromPlanFile for --goal flag }
 
 {$IFDEF UNIX}
 { libc setenv is POSIX-portable across glibc / musl / macOS / BSD --
@@ -176,11 +177,26 @@ type
     HomeOverride:  string;
     KeepHome:      Boolean;
     HelpRequested: Boolean;
+    { --goal -- Phase 3 of the plan/build pairing. When True, Cmd.Build
+      reads <home>/workspace/PLAN.md, parses the "## Goal" line, and
+      forwards it to Cmd.Agent as --goal-objective. Cmd.Agent then
+      routes the one-shot run through RunSingleTurnGoalDriven (the
+      Ralph judge loop) instead of single-shot. Fails fast if --goal
+      is set but PLAN.md is missing or has no parseable Goal section
+      -- silently falling back to a regular build would defeat the
+      operator's intent. }
+    Goal:          Boolean;
+    { --goal-max-iters N -- override the Ralph iteration budget when
+      --goal is set. Defaults to 0 = use Cmd.Agent's
+      DefaultGoalMaxIter. Ignored when --goal is False. }
+    GoalMaxIters:  Integer;
     Forwarded:     TStringList;  { remaining flags handed to Cmd_Agent_Run }
   end;
 
 procedure InitArgs(out A: TBuildArgs);
 begin
+  A.Goal          := False;
+  A.GoalMaxIters  := 0;
   A.Description   := '';
   A.MaxIters      := PASCLAW_BUILD_DEFAULT_MAX_ITERS;
   A.WorkspaceIn   := '';
@@ -205,6 +221,11 @@ begin
   PrintLn('Build flags:');
   PrintLn('  -d, --describe <text>      The task to perform (REQUIRED).');
   PrintLn('  --max-iters N              Iteration budget (default 50).');
+  PrintLn('  --goal                     Drive the run via the Ralph judge loop');
+  PrintLn('                             against workspace/PLAN.md''s "## Goal"');
+  PrintLn('                             line. Requires a prior `pasclaw plan`.');
+  PrintLn('  --goal-max-iters N         Override the Ralph budget (default 5);');
+  PrintLn('                             ignored when --goal is absent.');
   PrintLn('  --workspace-in <zip>       Unzip this into PASCLAW_HOME first.');
   PrintLn('  --workspace-out <zip>      Zip PASCLAW_HOME here after the run.');
   PrintLn('  --cwd <dir>                cwd for fs_write (default: ');
@@ -290,6 +311,21 @@ begin
     begin
       if i = High(Argv) then begin ErrMsg := '--home needs a path'; Exit; end;
       Inc(i); A.HomeOverride := Argv[i];
+    end
+    else if Token = '--goal' then
+    begin
+      A.Goal := True;
+    end
+    else if Token = '--goal-max-iters' then
+    begin
+      if i = High(Argv) then begin ErrMsg := '--goal-max-iters needs a value'; Exit; end;
+      Inc(i);
+      A.GoalMaxIters := StrToIntDef(Argv[i], A.GoalMaxIters);
+      if A.GoalMaxIters <= 0 then
+      begin
+        ErrMsg := '--goal-max-iters must be positive (got ' + Argv[i] + ')';
+        Exit;
+      end;
     end
     else if Token = '--keep-home' then
     begin
@@ -395,11 +431,14 @@ begin
 end;
 
 function BuildForwardedArgv(const A: TBuildArgs;
+                            const GoalObjective: string;
                             out Argv: TStringList): Boolean;
 { Construct the argv pasclaw agent will see. Always inject -q
   (machine-friendly stdout), -m (the description), and
-  --max-iterations (the operator's choice or our default 50). Then
-  append whatever flags survived our parser. }
+  --max-iterations (the operator's choice or our default 50). When
+  GoalObjective is non-empty, also forward --goal-objective so
+  Cmd.Agent routes through the Ralph goal-driver instead of single-
+  shot. Then append whatever flags survived our parser. }
 begin
   Result := True;
   Argv := TStringList.Create;
@@ -408,6 +447,16 @@ begin
   Argv.Add(A.Description);
   Argv.Add('--max-iterations');
   Argv.Add(IntToStr(A.MaxIters));
+  if GoalObjective <> '' then
+  begin
+    Argv.Add('--goal-objective');
+    Argv.Add(GoalObjective);
+    if A.GoalMaxIters > 0 then
+    begin
+      Argv.Add('--goal-max-iters');
+      Argv.Add(IntToStr(A.GoalMaxIters));
+    end;
+  end;
   Argv.AddStrings(A.Forwarded);
 end;
 
@@ -417,6 +466,75 @@ var
 begin
   SetLength(Result, L.Count);
   for i := 0 to L.Count - 1 do Result[i] := L[i];
+end;
+
+function ContainsNoPlanFlag(Forwarded: TStringList): Boolean;
+{ Cmd.Build doesn't parse --no-plan -- it just forwards every unknown
+  flag to Cmd.Agent. For archival we need to know whether the operator
+  opted out, so scan A.Forwarded for the bare flag. Match is exact:
+  we don't expand prefixes the way some parsers do. }
+var
+  i: Integer;
+begin
+  Result := False;
+  for i := 0 to Forwarded.Count - 1 do
+    if Forwarded[i] = '--no-plan' then Exit(True);
+end;
+
+procedure ArchivePlanMaybe(const Home: string; AgentRc: Integer;
+                            Forwarded: TStringList);
+{ Move <home>/workspace/PLAN.md to <home>/workspace/memory/plans/
+  <timestamp>.md when the build that just consumed it succeeded.
+
+  Skipped silently when:
+    - --no-plan was in the operator's argv (they opted out of
+      auto-pickup; respect that and don't touch the file)
+    - PLAN.md doesn't exist (no plan, nothing to archive)
+    - The agent exited with non-zero status (the build failed; the
+      plan is still relevant for whatever retry comes next, and
+      destroying it would force the operator to re-plan from
+      scratch).
+
+  Failures (mkdir / rename) are logged but don't override AgentRc
+  -- a failed archival shouldn't sink an otherwise-successful build. }
+var
+  PlanPath, ArchiveDir, Stamp, ArchivePath: string;
+begin
+  if AgentRc <> 0 then Exit;
+  if ContainsNoPlanFlag(Forwarded) then
+  begin
+    LogInfo('build: --no-plan set, leaving PLAN.md in place');
+    Exit;
+  end;
+  PlanPath := JoinPath(JoinPath(Home, 'workspace'), 'PLAN.md');
+  if not SysUtils.FileExists(PlanPath) then Exit;
+
+  ArchiveDir := JoinPath(JoinPath(JoinPath(Home, 'workspace'), 'memory'), 'plans');
+  if not ForceDirectories(ArchiveDir) then
+  begin
+    LogWarn('build: cannot create plan archive dir %s -- leaving PLAN.md in place',
+            [ArchiveDir]);
+    Exit;
+  end;
+
+  Stamp := FormatDateTime('yyyy-mm-dd-hhnnss', Now);
+  ArchivePath := JoinPath(ArchiveDir, Stamp + '.md');
+  try
+    if not RenameFile(PlanPath, ArchivePath) then
+    begin
+      LogWarn('build: PLAN.md archive RenameFile failed (%s -> %s); leaving in place',
+              [PlanPath, ArchivePath]);
+      Exit;
+    end;
+  except
+    on E: Exception do
+    begin
+      LogWarn('build: PLAN.md archive raised %s: %s; leaving in place',
+              [E.ClassName, E.Message]);
+      Exit;
+    end;
+  end;
+  LogInfo('build: archived PLAN.md -> %s', [ArchivePath]);
 end;
 
 function Cmd_Build_Run(const Argv: array of string): Integer;
@@ -429,7 +547,7 @@ const
   );
 var
   A: TBuildArgs;
-  ErrMsg, Home, Cwd, SavedHomeEnv, SavedCwd: string;
+  ErrMsg, Home, Cwd, SavedHomeEnv, SavedCwd, GoalObjective: string;
   AgentArgv: TStringList;
   Argv_: TArray<string>;
   HomeIsTemp: Boolean;
@@ -506,9 +624,35 @@ begin
       end;
       LogInfo('build: cwd=%s', [Cwd]);
 
+      { 2.5 Phase 3 of plan/build: when --goal is set, parse
+        <home>/workspace/PLAN.md's "## Goal" line and forward it to
+        Cmd.Agent as --goal-objective. Fail fast on missing PLAN.md
+        or empty Goal section -- silently falling back to a regular
+        build would defeat the operator's intent. ExtractGoalFromPlanFile
+        reads PLAN.md via GetHome, which honors the PASCLAW_HOME we
+        just set. }
+      GoalObjective := '';
+      if A.Goal then
+      begin
+        { Pass Home explicitly: libc_setenv's PASCLAW_HOME isn't
+          always visible to a same-process GetEnvironmentVariable
+          read on FPC, and Cmd.Build already owns the home path
+          locally -- no reason to round-trip through env. }
+        GoalObjective := ExtractGoalFromPlanFile(Home);
+        if GoalObjective = '' then
+        begin
+          PrintErr('build: --goal was set but workspace/PLAN.md has no ' +
+                   'parseable "## Goal" section (run `pasclaw plan -d ...` ' +
+                   'first to produce one)');
+          Exit(1);
+        end;
+        LogInfo('build: goal-driven run -- objective from PLAN.md: %s',
+                [GoalObjective]);
+      end;
+
       { 3. Run the agent. Its stdout becomes our stdout under -q --
         Replicate (and any subprocess.run caller) captures that. }
-      if not BuildForwardedArgv(A, AgentArgv) then
+      if not BuildForwardedArgv(A, GoalObjective, AgentArgv) then
       begin
         PrintErr('build: failed to build agent argv');
         Exit(1);
@@ -521,6 +665,21 @@ begin
       end;
       if Rc <> 0 then
         LogWarn('build: agent exited with status %d', [Rc]);
+
+      { 3.5 PLAN.md archival. If a prior `pasclaw plan` left a
+        workspace/PLAN.md the model just consumed as system-prompt
+        context (Phase 2), move it to workspace/memory/plans/
+        <timestamp>.md so the next `pasclaw build` doesn't re-load
+        the same plan and the operator gets a browsable history of
+        what was planned.
+
+        Skipped if --no-plan was in the operator's argv (opt-out
+        of the auto-pickup also means opt-out of archival -- if you
+        ignored PLAN.md, leave it alone) OR if the agent exited
+        with a non-zero status (a failed build's plan is still
+        relevant for the retry). }
+      ArchivePlanMaybe(Home, Rc, A.Forwarded);
+
 
       { 4. Zip out. Failure to pack is logged but doesn't override
         the agent's exit code -- the operator can still inspect

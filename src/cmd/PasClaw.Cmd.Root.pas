@@ -62,6 +62,8 @@ uses
                                Cmd.Runbook's tool-driven variant *)
   PasClaw.Cmd.Build,        (* `pasclaw build` -- one-shot multi-iter agent
                                with workspace.zip handshake *)
+  PasClaw.Cmd.Plan,         (* `pasclaw plan` -- plan-mode sibling to build,
+                               writes workspace/PLAN.md via plan_write *)
   PasClaw.Cmd.Runbook,
   PasClaw.Cmd.Heartbeat,
   PasClaw.Cmd.TUI;
@@ -136,7 +138,7 @@ const
 var
   Sub, Fl: array of string;
 begin
-  SetLength(Sub, 29);
+  SetLength(Sub, 30);
   Sub[0]  := 'config       View/edit configuration';
   Sub[1]  := 'onboard      Initialize config & workspace';
   Sub[2]  := 'agent        Chat with the assistant (line-by-line)';
@@ -164,8 +166,9 @@ begin
   Sub[24] := 'init         Scan cwd and ask the model for a starter AGENTS.md (one-shot, no tool loop)';
   Sub[25] := 'runbook      Tool-driven variant of init: agent loop probes the repo via execute_code';
   Sub[26] := 'build        One-shot multi-iter agent run with workspace.zip handshake (for cog / CI)';
-  Sub[27] := 'heartbeat    Run the proactive periodic wake-up daemon (off by default; opt in via onboard)';
-  Sub[28] := 'version      Show version info';
+  Sub[27] := 'plan         Plan-mode sibling to build; writes workspace/PLAN.md via plan_write tool';
+  Sub[28] := 'heartbeat    Run the proactive periodic wake-up daemon (off by default; opt in via onboard)';
+  Sub[29] := 'version      Show version info';
 
   SetLength(Fl, 2);
   Fl[0] := '--no-color   Disable colored output (also: NO_COLOR env)';
@@ -196,6 +199,7 @@ begin
   else if Cmd = 'export'   then Result := Cmd_Export_Run(Argv)
   else if Cmd = 'init'     then Result := Cmd_Init_Run(Argv)
   else if Cmd = 'build'    then Result := Cmd_Build_Run(Argv)
+  else if Cmd = 'plan'     then Result := Cmd_Plan_Run(Argv)
   else if Cmd = 'runbook'  then Result := Cmd_Runbook_Run(Argv)
   { resume <id> is shorthand for `agent --session <id>` -- wire it
     here so `pasclaw resume foo` works as a top-level shortcut. }
