@@ -5,6 +5,8 @@ program mcp_disclosure_tests;
 
   Coverage:
     - TToolRegistry.ToProviderDefs strips IsDeferred=True tools by default.
+    - Plain Register defensively zeroes IsDeferred (legacy stack-garbage
+      safety -- the reviewer's P1 concern on PR #315).
     - TToolRegistry.Reveal flips a deferred name into the visible set.
     - TToolRegistry.DeferredNames / DeferredFind only see deferred entries.
     - tool_search "select:Name" returns a <function> block for the matched
@@ -54,7 +56,12 @@ begin if Pos(Needle, Haystack) = 0 then
 function NoopHandler(const ArgsJSON: string; out ErrMsg: string): string;
 begin ErrMsg := ''; Result := ''; end;
 
-procedure RegisterDeferred(Reg: TToolRegistry; const Name, Desc: string);
+{ Register a synthetic deferred tool. Routes through the registry's
+  RegisterDeferred to mirror how the MCP bridge actually registers --
+  plain Register defensively clears IsDeferred, so a test that sets
+  T.IsDeferred := True then called Register would silently get False
+  and the registry-filtering tests would all pass on a no-op. }
+procedure RegisterDeferredTool(Reg: TToolRegistry; const Name, Desc: string);
 var T: TTool;
 begin
   FillChar(T, SizeOf(T), 0);
@@ -63,8 +70,7 @@ begin
   T.Schema := '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}';
   T.Handler := NoopHandler;
   T.Category := tcReadOnly;
-  T.IsDeferred := True;
-  Reg.Register(T);
+  Reg.RegisterDeferred(T, True);
 end;
 
 procedure RegisterVisible(Reg: TToolRegistry; const Name: string);
@@ -76,7 +82,6 @@ begin
   T.Schema := '{}';
   T.Handler := NoopHandler;
   T.Category := tcReadOnly;
-  T.IsDeferred := False;
   Reg.Register(T);
 end;
 
@@ -90,8 +95,8 @@ begin
   Reg := TToolRegistry.Create;
   try
     RegisterVisible (Reg, 'fs_read');
-    RegisterDeferred(Reg, 'github__list_issues',  'List issues');
-    RegisterDeferred(Reg, 'github__create_issue', 'Create issue');
+    RegisterDeferredTool(Reg, 'github__list_issues',  'List issues');
+    RegisterDeferredTool(Reg, 'github__create_issue', 'Create issue');
     RegisterVisible (Reg, 'fs_write');
     AssertEqI(CountResults(Reg), 2, 'ToProviderDefs strips IsDeferred entries');
     AssertEqI(Length(Reg.DeferredNames), 2, 'DeferredNames lists the deferred pair');
@@ -101,6 +106,42 @@ begin
   WriteLn('  ok: registry filters deferred');
 end;
 
+procedure TestLegacyRegisterClearsIsDeferred;
+{ Reviewer concern on PR #315: legacy callers (RegisterFSTools,
+  RegisterShellTool, every TPasClawTool subclass) build T: TTool on
+  the stack without ever touching the new IsDeferred field. Stack
+  garbage there could cause ToProviderDefs to silently drop core
+  tools even when MCP progressive disclosure is off. The defensive
+  clear in plain Register protects against that; this test
+  simulates the risk by setting IsDeferred := True before calling
+  plain Register and asserts the tool nevertheless shows up in
+  ToProviderDefs (because Register zeroes the field). The MCP path
+  -- the only legitimate IsDeferred=True source -- uses
+  RegisterDeferred instead, which is exercised by the other tests. }
+var
+  Reg: TToolRegistry;
+  T: TTool;
+begin
+  Reg := TToolRegistry.Create;
+  try
+    FillChar(T, SizeOf(T), 0);
+    T.Name := 'fs_read';
+    T.Description := 'core tool with garbage IsDeferred';
+    T.Schema := '{}';
+    T.Handler := NoopHandler;
+    T.Category := tcReadOnly;
+    T.IsDeferred := True;   { simulates stack garbage in a non-MCP path }
+    Reg.Register(T);
+    AssertEqI(CountResults(Reg), 1,
+              'plain Register defensively clears IsDeferred even when caller sets True');
+    AssertEqI(Length(Reg.DeferredNames), 0,
+              'plain Register: tool does not leak into DeferredNames');
+  finally
+    Reg.Free;
+  end;
+  WriteLn('  ok: plain Register clears IsDeferred (legacy stack-garbage safety)');
+end;
+
 procedure TestRevealAddsToProviderDefs;
 var
   Reg: TToolRegistry;
@@ -108,7 +149,7 @@ begin
   Reg := TToolRegistry.Create;
   try
     RegisterVisible (Reg, 'fs_read');
-    RegisterDeferred(Reg, 'github__list_issues', 'List issues');
+    RegisterDeferredTool(Reg, 'github__list_issues', 'List issues');
     Reg.Reveal('github__list_issues');
     AssertEqI(CountResults(Reg), 2, 'Reveal moves a deferred tool into ToProviderDefs');
     AssertEqI(Length(Reg.DeferredNames), 0,
@@ -125,7 +166,7 @@ var
 begin
   Reg := TToolRegistry.Create;
   try
-    RegisterDeferred(Reg, 'github__list_issues', 'List issues');
+    RegisterDeferredTool(Reg, 'github__list_issues', 'List issues');
     { Stale model that calls tool_search with a stale name from a
       previous session must not wedge the registry. }
     Reg.Reveal('does_not_exist');
@@ -150,8 +191,8 @@ begin
   Cfg := TConfig.Create;
   try
     Cfg.MCPProgressiveDisclosure := True;
-    RegisterDeferred(Reg, 'github__list_issues',  'List issues on a repo');
-    RegisterDeferred(Reg, 'github__create_issue', 'Open a new issue');
+    RegisterDeferredTool(Reg, 'github__list_issues',  'List issues on a repo');
+    RegisterDeferredTool(Reg, 'github__create_issue', 'Open a new issue');
     RegisterMCPDisclosureTools(Reg, Cfg);
     AssertTrue(Reg.Find('tool_search', T),
                'tool_search registered when MCPProgressiveDisclosure=True');
@@ -182,10 +223,10 @@ begin
   Cfg := TConfig.Create;
   try
     Cfg.MCPProgressiveDisclosure := True;
-    RegisterDeferred(Reg, 'github__list_issues',  'List issues on a repo');
-    RegisterDeferred(Reg, 'github__create_issue', 'Open a new issue with title and body');
-    RegisterDeferred(Reg, 'github__list_prs',     'List pull requests');
-    RegisterDeferred(Reg, 'slack__post_message',  'Post a Slack message');
+    RegisterDeferredTool(Reg, 'github__list_issues',  'List issues on a repo');
+    RegisterDeferredTool(Reg, 'github__create_issue', 'Open a new issue with title and body');
+    RegisterDeferredTool(Reg, 'github__list_prs',     'List pull requests');
+    RegisterDeferredTool(Reg, 'slack__post_message',  'Post a Slack message');
     RegisterMCPDisclosureTools(Reg, Cfg);
 
     { "issue" should hit the two github__ issue tools (name + desc) and
@@ -219,8 +260,8 @@ begin
   Cfg := TConfig.Create;
   try
     Cfg.MCPProgressiveDisclosure := True;
-    RegisterDeferred(Reg, 'github__list_issues', 'List issues');
-    RegisterDeferred(Reg, 'slack__list_channels','List Slack channels');
+    RegisterDeferredTool(Reg, 'github__list_issues', 'List issues');
+    RegisterDeferredTool(Reg, 'slack__list_channels','List Slack channels');
     RegisterMCPDisclosureTools(Reg, Cfg);
     { "+slack list" must require "slack" in the name -- the github
       tool also matches "list" but its name lacks "slack". }
@@ -319,6 +360,7 @@ end;
 
 begin
   TestRegistryFiltersDeferred;
+  TestLegacyRegisterClearsIsDeferred;
   TestRevealAddsToProviderDefs;
   TestRevealUnknownIsNoop;
   TestToolSearchSelectQuery;

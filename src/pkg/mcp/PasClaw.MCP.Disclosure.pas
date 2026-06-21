@@ -463,7 +463,8 @@ begin
   T.HandlerObj  := nil;
   T.IsCore      := False;
   T.Category    := tcReadOnly;
-  T.IsDeferred  := False;   { the discovery tool itself is always visible }
+  { Plain Register defensively zeroes IsDeferred -- the discovery tool
+    itself is always visible. }
   Reg.Register(T);
 
   LogInfo('mcp: progressive-disclosure tool registered (tool_search)');

@@ -41,10 +41,25 @@ type
       tool (HTTP MCP call, shell-out) can't block parallel reads. }
     FLock:  TCriticalSection;
     function IsRevealedLocked(const Name: string): Boolean;
+    procedure RegisterImpl(const T: TTool);
   public
     constructor Create;
     destructor  Destroy; override;
+    { Register a tool. Defensively zeroes T.IsDeferred so legacy
+      stack-built records (RegisterFSTools, RegisterShellTool, every
+      TPasClawTool subclass) that never touched the new field don't
+      get accidentally hidden from ToProviderDefs by stack garbage.
+      The MCP bridge -- the only legitimate IsDeferred=True source --
+      routes through RegisterDeferred instead, which preserves the
+      explicit value. This mirrors the existing HandlerObj defensive
+      clear: same risk shape, same fix shape. }
     procedure Register(const T: TTool);
+    { Register a tool with an explicit IsDeferred override. Used by
+      PasClaw.MCP.Bridge when Cfg.MCPProgressiveDisclosure is on so
+      newly-registered MCP tools are stripped from ToProviderDefs
+      until tool_search reveals them. Callers must NOT also set
+      T.IsDeferred -- the Deferred parameter is authoritative. }
+    procedure RegisterDeferred(const T: TTool; Deferred: Boolean);
     function  Find(const Name: string; out T: TTool): Boolean;
     function  Names: TStringArray;
     function  Count: Integer;
@@ -84,7 +99,7 @@ begin
   inherited Destroy;
 end;
 
-procedure TToolRegistry.Register(const T: TTool);
+procedure TToolRegistry.RegisterImpl(const T: TTool);
 var
   i: Integer;
   Stored: TTool;
@@ -115,6 +130,32 @@ begin
   finally
     FLock.Release;
   end;
+end;
+
+procedure TToolRegistry.Register(const T: TTool);
+var
+  Modified: TTool;
+begin
+  Modified := T;
+  { Same risk shape as the HandlerObj defensive clear in RegisterImpl:
+    legacy callers (RegisterFSTools, RegisterShellTool, every
+    TPasClawTool subclass) build T: TTool on the stack and never
+    touched the new IsDeferred field. Stack garbage there would let
+    ToProviderDefs silently drop a core tool from the provider's
+    tools array even when MCP progressive disclosure is off. Force
+    False here; MCP -- the only legitimate IsDeferred=True path --
+    goes through RegisterDeferred instead. }
+  Modified.IsDeferred := False;
+  RegisterImpl(Modified);
+end;
+
+procedure TToolRegistry.RegisterDeferred(const T: TTool; Deferred: Boolean);
+var
+  Modified: TTool;
+begin
+  Modified := T;
+  Modified.IsDeferred := Deferred;
+  RegisterImpl(Modified);
 end;
 
 function TToolRegistry.Find(const Name: string; out T: TTool): Boolean;

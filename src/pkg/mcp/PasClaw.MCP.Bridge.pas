@@ -323,15 +323,17 @@ begin
   Entry.Handler     := nil;
   Entry.HandlerObj  := Dispatch.Handler;
   Entry.IsCore      := False;
-  { IsDeferred drives progressive disclosure (Cfg.MCPProgressiveDisclosure):
+  { RegisterDeferred drives progressive disclosure (Cfg.MCPProgressiveDisclosure):
     the dispatcher still resolves the tool, but ToProviderDefs strips it
     from the per-request `tools` array until tool_search reveals the
     name. The two-layer boot (cache then live connect) re-registers the
-    same name -- IsDeferred is set from the same Cfg field both times,
-    so a tool revealed mid-session stays revealed (the registry's
-    FRevealed set is keyed on name, not on TTool identity). }
-  Entry.IsDeferred  := Deferred;
-  Reg.Register(Entry);
+    same name -- the Deferred flag flows from the same Cfg field both
+    times, so a tool revealed mid-session stays revealed (the registry's
+    FRevealed set is keyed on name, not on TTool identity). The Deferred
+    parameter is authoritative; do NOT set Entry.IsDeferred here, the
+    plain Register clears it defensively for legacy stack-garbage
+    safety. }
+  Reg.RegisterDeferred(Entry, Deferred);
 end;
 
 { ============================================================
