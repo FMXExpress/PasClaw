@@ -2462,6 +2462,8 @@ function renderRelaySnippets() {
 "\n" +
 "  // Browsers' native EventSource constructor has no headers option,\n" +
 "  // so auth + worker identity + capabilities ride as query params.\n" +
+"  // Cross-origin pages (worker on http://localhost vs gateway elsewhere)\n" +
+"  // are covered by the gateway's CORS headers on /v1/relay/*.\n" +
 "  const q = new URLSearchParams({ token: TOKEN, worker_id: WID, caps: MODEL });\n" +
 "  const events = new EventSource(`${URL}/v1/relay/poll?${q}`);\n" +
 "\n" +

@@ -104,6 +104,15 @@ type
     procedure OnCommandGet(AContext: TIdContext;
                            ARequest: TIdHTTPRequestInfo;
                            AResponse: TIdHTTPResponseInfo);
+    (* OnCommandOther -- Indy routes non-GET/non-POST verbs here.
+       Wired so OPTIONS (CORS preflight from browser relay workers)
+       gets a proper 204 + Access-Control headers, ahead of the
+       bearer-token gate so the preflight succeeds without auth (per
+       the CORS spec -- the actual subsequent request still gets
+       auth-gated). Codex P2 review on PR #324. *)
+    procedure OnCommandOther(AContext: TIdContext;
+                             ARequest: TIdHTTPRequestInfo;
+                             AResponse: TIdHTTPResponseInfo);
     (* OnParseAuth -- accept every Authorization scheme so Indy's
        TIdCustomHTTPServer doesn't auto-401 with "Basic realm=..." on
        Bearer (or any non-Basic) tokens before OnCommandGet runs.
@@ -228,7 +237,21 @@ type
     procedure HandleRelayRespond(const ReqId: string;
                                   ARequest: TIdHTTPRequestInfo;
                                   AResp: TIdHTTPResponseInfo);
-    procedure HandleRelayStatus(AResp: TIdHTTPResponseInfo);
+    procedure HandleRelayStatus(ARequest: TIdHTTPRequestInfo;
+                                 AResp: TIdHTTPResponseInfo);
+    (* Cross-origin support for the relay endpoints. Browser workers
+       served from a different origin than the gateway (the documented
+       case: a local WebLLM page pointing at a remote gateway) get
+       blocked by CORS before the gateway's bearer / worker-id checks
+       run. EmitRelayCors stamps Access-Control-Allow-Origin (and
+       friends) on the response so the browser lets the
+       EventSource / fetch through. The bearer token still gates
+       access; CORS is purely about whether the browser surfaces the
+       response to JS. Codex P2 review on PR #324. *)
+    procedure EmitRelayCors(ARequest: TIdHTTPRequestInfo;
+                             AResp: TIdHTTPResponseInfo);
+    procedure HandleRelayOptionsPreflight(ARequest: TIdHTTPRequestInfo;
+                                           AResp: TIdHTTPResponseInfo);
     procedure HandleChat(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
     procedure HandleChatCompletions(AContext: TIdContext;
                                     ARequest: TIdHTTPRequestInfo;
@@ -494,6 +517,7 @@ begin
   SetLength(FWebhookHandlers, 0);
   FHTTP := TIdHTTPServer.Create(nil);
   FHTTP.OnCommandGet := OnCommandGet;
+  FHTTP.OnCommandOther := OnCommandOther;
   FHTTP.OnParseAuthentication := OnParseAuth;
   FHTTP.KeepAlive    := True;
   FHTTP.ServerSoftware := 'PasClaw/' + FormatVersion;
@@ -919,7 +943,7 @@ begin
     else if (ARequest.Command = 'POST') and (Copy(Doc, 1, 18) = '/v1/relay/respond/') then
       HandleRelayRespond(Copy(Doc, 19, MaxInt), ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/relay/status') then
-      HandleRelayStatus(AResponse)
+      HandleRelayStatus(ARequest, AResponse)
     else if Doc = '/' then
     begin
       AResponse.ResponseNo  := 200;
@@ -969,6 +993,38 @@ begin
                 'HTTP ' + IntToStr(AResponse.ResponseNo));
     FinishSpan(HttpSpan);
   end;
+end;
+
+procedure TGatewayServer.OnCommandOther(AContext: TIdContext;
+                                        ARequest: TIdHTTPRequestInfo;
+                                        AResponse: TIdHTTPResponseInfo);
+(* CORS preflight + any other non-GET/non-POST verb.
+
+   The only verb we care about here is OPTIONS, fired by browsers as
+   a preflight for cross-origin requests that aren't "simple" (i.e.
+   non-default Content-Type or custom request headers). The relay's
+   POST /v1/relay/respond/<id> qualifies on both counts -- application/
+   json body + Authorization header.
+
+   Preflights MUST NOT carry credentials per CORS, so we deliberately
+   answer BEFORE the bearer-token gate. The 204 + Access-Control-Allow-*
+   headers tell the browser "OK to fire the real request"; that real
+   request comes through OnCommandGet and gets auth-checked normally.
+
+   Any other verb falls through to a 405. Codex P2 review on PR #324. *)
+var
+  Doc: string;
+begin
+  Doc := ARequest.Document;
+  if (ARequest.Command = 'OPTIONS') and
+     (Pos('/v1/relay/', Doc) = 1) then
+  begin
+    HandleRelayOptionsPreflight(ARequest, AResponse);
+    Exit;
+  end;
+  AResponse.ResponseNo := 405;
+  AResponse.ContentText := '{"error":"method not allowed"}';
+  AResponse.ContentType := 'application/json';
 end;
 
 procedure TGatewayServer.HandleHealth(AResp: TIdHTTPResponseInfo);
@@ -2927,6 +2983,56 @@ begin
   end;
 end;
 
+procedure TGatewayServer.EmitRelayCors(ARequest: TIdHTTPRequestInfo;
+                                        AResp: TIdHTTPResponseInfo);
+(* Stamp the response with permissive CORS headers so a cross-origin
+   browser worker page can talk to the relay endpoints. Authorization
+   still gates access -- this only tells the browser "let JS see the
+   response."
+
+   Why permissive (Access-Control-Allow-Origin set to wildcard)?
+     The relay endpoints are guarded by a bearer token (or the
+     ?token= query fallback). Anyone reaching them already had to
+     present credentials. Echoing the Origin (vs hard-allowlisting)
+     would require the operator to configure a CORS allowlist, which
+     buys nothing security-wise because the token IS the gate.
+     Browsers also refuse `Authorization` over a credentials=include
+     request with `*` -- but we DON'T use credentials=include
+     (cookies aren't involved); the token rides as a header or query
+     param, which `*` permits cleanly.
+
+   Reflecting Access-Control-Request-Headers lets browsers ask for
+   any auth header they want without us having to enumerate them
+   ahead of time. *)
+var
+  ReqHdrs: string;
+begin
+  AResp.CustomHeaders.AddValue('Access-Control-Allow-Origin',  '*');
+  AResp.CustomHeaders.AddValue('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  ReqHdrs := Trim(ARequest.RawHeaders.Values['Access-Control-Request-Headers']);
+  if ReqHdrs = '' then
+    ReqHdrs := 'Authorization, Content-Type, X-Relay-Worker-Id, X-Relay-Capabilities';
+  AResp.CustomHeaders.AddValue('Access-Control-Allow-Headers', ReqHdrs);
+  { 10-minute preflight cache. Browser-relay workers reconnect often
+    (page reloads, EventSource retries) -- caching the preflight
+    saves a round-trip per reconnect without making policy changes
+    take an unreasonably long time to roll out. }
+  AResp.CustomHeaders.AddValue('Access-Control-Max-Age',       '600');
+end;
+
+procedure TGatewayServer.HandleRelayOptionsPreflight(ARequest: TIdHTTPRequestInfo;
+                                                      AResp: TIdHTTPResponseInfo);
+(* Standalone OPTIONS handler -- no auth gate. Per the CORS spec,
+   preflights MUST NOT carry credentials (the actual request that
+   follows does). The browser uses the preflight to learn what's
+   allowed; our 204 + Allow-* headers is the answer. *)
+begin
+  EmitRelayCors(ARequest, AResp);
+  AResp.ResponseNo := 204;
+  AResp.ContentLength := 0;
+  AResp.ContentText   := '';
+end;
+
 procedure TGatewayServer.HandleRelayPoll(AContext: TIdContext;
                                           ARequest: TIdHTTPRequestInfo;
                                           AResp: TIdHTTPResponseInfo);
@@ -2960,6 +3066,12 @@ begin
               'configure a relay provider in config.json"}');
     Exit;
   end;
+
+  { Browser workers served from a foreign origin need CORS to receive
+    SSE events at all. Stamp the headers before kicking off the SSE
+    stream -- once EmitSSEResponseHeaders flushes the response line,
+    they can't be added. }
+  EmitRelayCors(ARequest, AResp);
 
   { Worker identity. Header is canonical; ?worker_id= falls back for
     browser EventSource workers -- the WHATWG EventSource constructor
@@ -3070,6 +3182,12 @@ var
   TC: TToolCall;
   i: Integer;
 begin
+  { Browser workers POSTing this response from a foreign origin need
+    the response surfaced through CORS or fetch() rejects. Stamp the
+    headers up front -- the WriteJSON branches below all preserve
+    custom headers. }
+  EmitRelayCors(ARequest, AResp);
+
   Q := GetGlobalRelayQueue;
   if Q = nil then
   begin
@@ -3154,9 +3272,11 @@ begin
   WriteJSON(AResp, 200, '{"ok":true}');
 end;
 
-procedure TGatewayServer.HandleRelayStatus(AResp: TIdHTTPResponseInfo);
+procedure TGatewayServer.HandleRelayStatus(ARequest: TIdHTTPRequestInfo;
+                                            AResp: TIdHTTPResponseInfo);
 (* GET /v1/relay/status -- queue depth, connected workers, per-worker
-   caps + last-seen. Used by the TUI panel and `pasclaw status`. *)
+   caps + last-seen. Used by the TUI panel and `pasclaw status` and
+   the webui's relay-tab mini-dashboard. *)
 var
   Q: TRelayQueue;
   S: TRelayQueueStatus;
@@ -3166,6 +3286,7 @@ var
   CapsArr: TJsonArray;
   i, j: Integer;
 begin
+  EmitRelayCors(ARequest, AResp);
   Q := GetGlobalRelayQueue;
   if Q = nil then
   begin
@@ -3471,12 +3592,20 @@ function EmitSSEResponseHeaders(AContext: TIdContext;
    returns False so the caller can Exit without trying to emit
    body chunks against a half-dead connection. *)
 var
-  HeaderStr: string;
+  HeaderStr, CustomHeadersStr: string;
   HeaderTmp: TBytes;
   HeaderIdBytes: TIdBytes;
   i: Integer;
 begin
   Result := False;
+  { Include any AResp.CustomHeaders the caller added BEFORE invoking
+    us (e.g. EmitRelayCors on /v1/relay/poll). Bypassing
+    WriteHeader means Indy never emits them on its own, so they have
+    to be appended here for cross-origin browser workers to see CORS
+    headers on the SSE response. }
+  CustomHeadersStr := '';
+  for i := 0 to AResp.CustomHeaders.Count - 1 do
+    CustomHeadersStr := CustomHeadersStr + AResp.CustomHeaders[i] + #13#10;
   HeaderStr :=
     'HTTP/1.1 200 OK'#13#10 +
     'Content-Type: text/event-stream; charset=utf-8'#13#10 +
@@ -3485,6 +3614,7 @@ begin
     'X-Accel-Buffering: no'#13#10 +
     'Transfer-Encoding: chunked'#13#10 +
     'Server: PasClaw/' + FormatVersion + #13#10 +
+    CustomHeadersStr +
     #13#10;
   try
     SetLength(HeaderTmp, Length(HeaderStr));

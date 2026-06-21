@@ -85,6 +85,17 @@ fallbacks for the equivalent headers. A header beats the query
 param when both are present. Non-browser workers should keep using
 the headers (no extra URL noise; nothing in query-string logs).
 
+**CORS.** Cross-origin browser workers (a WebLLM page on
+`http://localhost:3000` pointing at a gateway on
+`https://my-pasclaw.example.com`) get permissive CORS on all three
+`/v1/relay/*` endpoints: `Access-Control-Allow-Origin: *`,
+`Access-Control-Allow-Methods: GET, POST, OPTIONS`,
+`Access-Control-Allow-Headers` reflecting the browser's preflight
+request. `OPTIONS` preflights answer 204 with a 10-minute cache. The
+bearer token still gates access; `*` is safe because the token is
+the authentication boundary and no cookies are involved (no
+`credentials: include`).
+
 The queue does first-come-first-served dispatch: pending requests go to
 the first connected worker whose capabilities match the request's
 model. If no matching worker is connected, the request stays in the
