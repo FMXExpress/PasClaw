@@ -107,6 +107,15 @@ const
   RelayWorkerResponseTimeoutMs = 3 * 60 * 1000;
 
 type
+  {$IFNDEF FPC}
+  { Delphi's RTL doesn't declare TStringArray (FPC's SysUtils does);
+    declare it locally so the cross-compiler signatures below resolve.
+    Same pattern PasClaw.Tools.Registry + PasClaw.Tools.Shell.Filters
+    use for the same gap. dcc64 E2003 / E2005 errors at every signature
+    that references TStringArray cascade until this is in scope. }
+  TStringArray = array of string;
+  {$ENDIF}
+
   TRelayRequestId = string;
   TRelayWorkerId  = string;
 
