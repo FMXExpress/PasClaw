@@ -1,0 +1,5 @@
+# PasClaw RELAY cog -- Python deps.
+#
+# Same cog floor as the sibling cogs. No pget here -- the relay
+# worker doesn't fetch workspace archives.
+cog>=0.13.0

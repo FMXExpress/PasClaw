@@ -1,0 +1,75 @@
+# Configuration for Cog (replicate.com) -- PasClaw RELAY mode.
+#
+# Sibling to /cog/ (one-shot `pasclaw agent`) and /cog-build/
+# (multi-iter `pasclaw build` with workspace.zip handshake).
+#
+# This one runs `pasclaw relay` -- a pull-worker that connects
+# OUTBOUND to a remote PasClaw gateway's /v1/relay/poll, drains
+# inference jobs off the gateway's queue, runs each one through the
+# cog's locally-configured provider (any of openai/anthropic/gemini/
+# groq/openrouter/deepseek/ollama/lmstudio/vllm/custom), and POSTs
+# the result back to /v1/relay/respond/<id>.
+#
+# Use case: lend a cog deployment's API-key + compute to a separate
+# gateway instance (a home server, a CI runner, a friend's PasClaw)
+# without exposing the API key directly. The gateway never sees the
+# key; it just sees results coming back through the queue.
+#
+# Each predict() call runs the worker for `lifetime_seconds` (default
+# 300 = 5 min) then exits. Drop a Replicate deployment in a wrapper
+# loop or cron for continuous coverage; one prediction = one polling
+# window.
+#
+# Layout:
+#   - cog-relay/cog.yaml         : you're here. Same image as cog-build
+#                                  (FPC + PasClaw binary + bundled
+#                                  OpenSSL 1.0.2) minus pget -- no
+#                                  workspace.zip download path here.
+#   - cog-relay/predict.py       : the Predictor.
+#   - cog-relay/requirements.txt : Python deps.
+
+build:
+  gpu: false
+  base_image: "debian:bookworm-slim"
+  system_packages:
+    - "fpc"
+    - "fp-units-db"
+    - "fp-units-misc"
+    - "lazarus-src"
+    - "libsqlite3-dev"
+    - "make"
+    - "git"
+    - "curl"
+    - "ca-certificates"
+    - "patchelf"
+    - "libsqlite3-0"
+    - "tzdata"
+  python_version: "3.10"
+  python_requirements: "requirements.txt"
+  run:
+    # 1. Clone PasClaw + Indy
+    - git clone https://github.com/FMXExpress/PasClaw.git /src
+    - cd /src && make get-indy
+
+    # 2. Compile the PasClaw binary
+    - cd /src && make LAZUTILS_DIR=/usr/lib/lazarus/2.2.6/components/lazutils
+
+    # 3. Runtime dir
+    - mkdir -p /opt/pasclaw
+    - cp /src/build/pasclaw /opt/pasclaw/pasclaw
+
+    # 4. OpenSSL 1.0.2 next to the binary (Indy's TLS path needs it)
+    - mkdir -p /openssl /tmp/x
+    - curl -fsSL --retry 3 --max-time 90 "https://snapshot.debian.org/archive/debian-archive/20240331T102506Z/debian-security/pool/updates/main/o/openssl1.0/libssl1.0.2_1.0.2u-1~deb9u7_amd64.deb" -o /tmp/libssl.deb
+    - dpkg-deb -x /tmp/libssl.deb /tmp/x
+    - cp /tmp/x/usr/lib/x86_64-linux-gnu/libssl.so.1.0.2 /opt/pasclaw/
+    - cp /tmp/x/usr/lib/x86_64-linux-gnu/libcrypto.so.1.0.2 /opt/pasclaw/
+    - ln -sf libssl.so.1.0.2 /opt/pasclaw/libssl.so
+    - ln -sf libcrypto.so.1.0.2 /opt/pasclaw/libcrypto.so
+    - chmod +x /opt/pasclaw/pasclaw
+    - patchelf --set-rpath '$ORIGIN' /opt/pasclaw/pasclaw
+
+    # 5. Cleanup
+    - rm -rf /src /tmp/x /tmp/libssl.deb /openssl
+
+run: "predict.py:Predictor"
