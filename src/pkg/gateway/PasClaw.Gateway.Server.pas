@@ -998,20 +998,26 @@ end;
 procedure TGatewayServer.OnCommandOther(AContext: TIdContext;
                                         ARequest: TIdHTTPRequestInfo;
                                         AResponse: TIdHTTPResponseInfo);
-(* CORS preflight + any other non-GET/non-POST verb.
+(* Non-GET/non-POST verbs land here. Indy's TIdHTTPServer routes
+   GET/POST/HEAD through OnCommandGet and everything else (PUT,
+   DELETE, OPTIONS, PATCH, ...) through OnCommandOther. When this
+   handler was unassigned (the historical state), Indy fell back to
+   firing OnCommandGet for those verbs too -- which is how the
+   existing PUT /v1/config, DELETE /v1/skills/*, and the
+   /v1/sessions/* PUT/DELETE handlers in the OnCommandGet dispatch
+   block ever ran.
 
-   The only verb we care about here is OPTIONS, fired by browsers as
-   a preflight for cross-origin requests that aren't "simple" (i.e.
-   non-default Content-Type or custom request headers). The relay's
-   POST /v1/relay/respond/<id> qualifies on both counts -- application/
-   json body + Authorization header.
+   Wiring this handler for the OPTIONS preflight case (Codex P2 on
+   PR #324) broke that fallback -- PUT and DELETE traffic started
+   getting a 405 instead of reaching their handlers, killing
+   settings save / session delete / skill remove from the web UI.
+   Codex P1 review on PR #327.
 
-   Preflights MUST NOT carry credentials per CORS, so we deliberately
-   answer BEFORE the bearer-token gate. The 204 + Access-Control-Allow-*
-   headers tell the browser "OK to fire the real request"; that real
-   request comes through OnCommandGet and gets auth-checked normally.
-
-   Any other verb falls through to a 405. Codex P2 review on PR #324. *)
+   Fix: handle OPTIONS preflights for /v1/relay/* here (they MUST
+   NOT carry credentials per the CORS spec, so they go BEFORE the
+   bearer-token gate) and delegate everything else to OnCommandGet
+   so the existing dispatch block runs. The catch-all 404 inside
+   OnCommandGet's dispatch handles truly-unknown verb+path pairs. *)
 var
   Doc: string;
 begin
@@ -1022,9 +1028,7 @@ begin
     HandleRelayOptionsPreflight(ARequest, AResponse);
     Exit;
   end;
-  AResponse.ResponseNo := 405;
-  AResponse.ContentText := '{"error":"method not allowed"}';
-  AResponse.ContentType := 'application/json';
+  OnCommandGet(AContext, ARequest, AResponse);
 end;
 
 procedure TGatewayServer.HandleHealth(AResp: TIdHTTPResponseInfo);
