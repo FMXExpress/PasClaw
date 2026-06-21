@@ -65,6 +65,8 @@ uses
   PasClaw.Cmd.Plan,         (* `pasclaw plan` -- plan-mode sibling to build,
                                writes workspace/PLAN.md via plan_write *)
   PasClaw.Cmd.Runbook,
+  PasClaw.Cmd.Relay,        (* `pasclaw relay` -- worker client polling
+                               a remote gateway's /v1/relay/poll *)
   PasClaw.Cmd.Heartbeat,
   PasClaw.Cmd.TUI;
 
@@ -138,7 +140,7 @@ const
 var
   Sub, Fl: array of string;
 begin
-  SetLength(Sub, 30);
+  SetLength(Sub, 31);
   Sub[0]  := 'config       View/edit configuration';
   Sub[1]  := 'onboard      Initialize config & workspace';
   Sub[2]  := 'agent        Chat with the assistant (line-by-line)';
@@ -168,7 +170,8 @@ begin
   Sub[26] := 'build        One-shot multi-iter agent run with workspace.zip handshake (for cog / CI)';
   Sub[27] := 'plan         Plan-mode sibling to build; writes workspace/PLAN.md via plan_write tool';
   Sub[28] := 'heartbeat    Run the proactive periodic wake-up daemon (off by default; opt in via onboard)';
-  Sub[29] := 'version      Show version info';
+  Sub[29] := 'relay        Pull-worker for /v1/relay -- forwards jobs through the local provider';
+  Sub[30] := 'version      Show version info';
 
   SetLength(Fl, 2);
   Fl[0] := '--no-color   Disable colored output (also: NO_COLOR env)';
@@ -201,6 +204,7 @@ begin
   else if Cmd = 'build'    then Result := Cmd_Build_Run(Argv)
   else if Cmd = 'plan'     then Result := Cmd_Plan_Run(Argv)
   else if Cmd = 'runbook'  then Result := Cmd_Runbook_Run(Argv)
+  else if Cmd = 'relay'    then Result := Cmd_Relay_Run(Argv)
   { resume <id> is shorthand for `agent --session <id>` -- wire it
     here so `pasclaw resume foo` works as a top-level shortcut. }
   else if Cmd = 'resume'   then
