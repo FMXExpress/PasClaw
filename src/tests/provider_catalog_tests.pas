@@ -69,5 +69,43 @@ begin
   Expect(LookupProvider('Cloudflare', Spec),
          'cloudflare lookup not case-insensitive');
 
+  { Cloudflare AI Gateway -- Anthropic passthrough. Family pfAnthropic
+    because the wire shape is Anthropic's /v1/messages, not OpenAI's.
+    Auth is asHeader 'x-api-key' (forwarded to api.anthropic.com
+    upstream by the gateway). DefaultBase empty because the URL embeds
+    the operator's account id and gateway id. }
+  Expect(LookupProvider('cloudflare-anthropic', Spec),
+         'cloudflare-anthropic not in catalog');
+  Expect(Spec.Family = pfAnthropic,
+         'cloudflare-anthropic should be pfAnthropic');
+  Expect(Spec.Auth.Kind = asHeader,
+         'cloudflare-anthropic should be asHeader auth');
+  Expect(Spec.Auth.HeaderName = 'x-api-key',
+         'cloudflare-anthropic header name wrong: ' + Spec.Auth.HeaderName);
+  Expect(Spec.DefaultBase = '',
+         'cloudflare-anthropic DefaultBase must be empty: ' + Spec.DefaultBase);
+  Expect(Spec.DefaultModel = 'claude-opus-4-7',
+         'cloudflare-anthropic DefaultModel wrong: ' + Spec.DefaultModel);
+  Expect(Spec.DisplayName = 'Cloudflare AI Gateway (Anthropic)',
+         'cloudflare-anthropic DisplayName wrong: ' + Spec.DisplayName);
+
+  { Cloudflare AI Gateway -- Gemini passthrough. Family pfGemini, auth
+    asHeader 'x-goog-api-key' (Gemini's own auth, forwarded by the
+    gateway). DefaultBase empty (operator URL embeds the account id). }
+  Expect(LookupProvider('cloudflare-gemini', Spec),
+         'cloudflare-gemini not in catalog');
+  Expect(Spec.Family = pfGemini,
+         'cloudflare-gemini should be pfGemini');
+  Expect(Spec.Auth.Kind = asHeader,
+         'cloudflare-gemini should be asHeader auth');
+  Expect(Spec.Auth.HeaderName = 'x-goog-api-key',
+         'cloudflare-gemini header name wrong: ' + Spec.Auth.HeaderName);
+  Expect(Spec.DefaultBase = '',
+         'cloudflare-gemini DefaultBase must be empty: ' + Spec.DefaultBase);
+  Expect(Spec.DefaultModel = 'gemini-3.5-flash',
+         'cloudflare-gemini DefaultModel wrong: ' + Spec.DefaultModel);
+  Expect(Spec.DisplayName = 'Cloudflare AI Gateway (Gemini)',
+         'cloudflare-gemini DisplayName wrong: ' + Spec.DisplayName);
+
   WriteLn('provider_catalog_tests: OK');
 end.

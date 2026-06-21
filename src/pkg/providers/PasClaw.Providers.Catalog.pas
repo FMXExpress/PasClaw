@@ -112,7 +112,7 @@ end;
   change required for OpenAI-compatible endpoints. }
 function BuildCatalog: TProviderSpecArray;
 begin
-  SetLength(Result, 23);
+  SetLength(Result, 25);
   Result[0]  := MkSpec('anthropic',  'Anthropic',
                        pfAnthropic,  'https://api.anthropic.com',
                        'claude-opus-4-7',
@@ -283,6 +283,38 @@ begin
                        MkAuth(asBearer),
                        'Workers AI direct or AI Gateway proxy (set api_base; Bearer = CLOUDFLARE_API_TOKEN; @cf/ model prefix for Workers AI)',
                        '/chat/completions');
+  (* Cloudflare AI Gateway -- Anthropic passthrough. Routes Anthropic-
+     shaped requests through a named gateway for caching / rate
+     limiting / analytics, then forwards to api.anthropic.com upstream.
+     The pfAnthropic provider appends /v1/messages to api_base, so:
+
+       api_base = https://gateway.ai.cloudflare.com/v1/{ACCT}/{GW}/anthropic
+       URL      = .../anthropic/v1/messages
+
+     Auth is the operator's ANTHROPIC api key in x-api-key (Cloudflare
+     forwards the upstream auth header unmodified). Operators with
+     "Authenticated Gateway" set on their CF gateway also need a
+     `cf-aig-authorization` header -- not supported here in V1, so
+     leave the gateway unauthenticated or wait for follow-up. *)
+  Result[23] := MkSpec('cloudflare-anthropic', 'Cloudflare AI Gateway (Anthropic)',
+                       pfAnthropic,  '',
+                       'claude-opus-4-7',
+                       MkAuth(asHeader, 'x-api-key'),
+                       'AI Gateway proxy to Anthropic (set api_base to .../gateway/anthropic; x-api-key = your Anthropic key)');
+  (* Cloudflare AI Gateway -- Gemini passthrough. Same pattern as the
+     Anthropic row but the upstream slug is "google-ai-studio" and
+     the path the pfGemini provider appends is
+     /v1beta/models/<model>:generateContent:
+
+       api_base = https://gateway.ai.cloudflare.com/v1/{ACCT}/{GW}/google-ai-studio
+       URL      = .../google-ai-studio/v1beta/models/<model>:generateContent
+
+     Auth is the operator's GEMINI api key in x-goog-api-key. *)
+  Result[24] := MkSpec('cloudflare-gemini',    'Cloudflare AI Gateway (Gemini)',
+                       pfGemini,     '',
+                       'gemini-3.5-flash',
+                       MkAuth(asHeader, 'x-goog-api-key'),
+                       'AI Gateway proxy to Gemini (set api_base to .../gateway/google-ai-studio; x-goog-api-key = your Gemini key)');
   (* Cohere intentionally not in this catalog: their chat API lives at
      /v2/chat with a non-OpenAI request/response body, so the ChatPath
      override alone isn't enough -- it needs a real TCohereProvider (or
