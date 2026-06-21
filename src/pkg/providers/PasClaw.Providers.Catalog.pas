@@ -112,7 +112,7 @@ end;
   change required for OpenAI-compatible endpoints. }
 function BuildCatalog: TProviderSpecArray;
 begin
-  SetLength(Result, 22);
+  SetLength(Result, 25);
   Result[0]  := MkSpec('anthropic',  'Anthropic',
                        pfAnthropic,  'https://api.anthropic.com',
                        'claude-opus-4-7',
@@ -249,6 +249,80 @@ begin
                        MkAuth(asBearer),
                        'Sonar / Sonar Pro / Sonar Reasoning (web-grounded)',
                        '/chat/completions');
+  (* Cloudflare AI Gateway. Two URL shapes operators paste into
+     api_base, both OpenAI Chat Completions compatible:
+
+       AI Gateway compat proxy (caching, rate limits, analytics,
+       multi-provider routing -- the headline feature, and what this
+       catalog row is named after):
+         https://gateway.ai.cloudflare.com/v1/{ACCOUNT_ID}/{GATEWAY_ID}/compat
+         + ChatPath /chat/completions
+         => POST .../{GATEWAY_ID}/compat/chat/completions
+
+       Workers AI direct (no gateway features; bypasses the AI Gateway
+       entirely and hits Workers AI's own OpenAI-compat endpoint):
+         https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/v1
+         + ChatPath /chat/completions
+         => POST .../ai/v1/chat/completions
+
+     Both expect Authorization: Bearer <CLOUDFLARE_API_TOKEN>; both
+     return the same OpenAI-shaped response. ChatPath is /chat/completions
+     (no /v1) -- like Perplexity -- because the /v1 segment is part of
+     the Cloudflare URL prefix, not the OpenAI path. DefaultBase empty
+     because the URL embeds the operator's account_id (same as mimo /
+     litellm).
+
+     DefaultModel uses the compat endpoint's {provider}/{model} routing
+     format (Codex P2 on PR #316 -- the bare `@cf/...` form the row
+     shipped with works for the direct path but the compat path
+     rejects unprefixed model ids because it has to pick which upstream
+     to forward to). `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast`
+     routes through Workers AI on the compat path AND is overridable
+     to any other compat-supported upstream (openai/gpt-5.2,
+     anthropic/claude-sonnet-4-5, google-ai-studio/gemini-2.5-flash,
+     etc.) via the per-request model field. Operators on the direct
+     Workers AI path override the model to bare `@cf/...` (or use the
+     cloudflare-workers-ai sibling row if one ever lands). Docs:
+     https://developers.cloudflare.com/ai-gateway/usage/chat-completion/
+     + https://developers.cloudflare.com/workers-ai/. *)
+  Result[22] := MkSpec('cloudflare', 'Cloudflare AI Gateway',
+                       pfOpenAI,     '',
+                       'workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+                       MkAuth(asBearer),
+                       'AI Gateway proxy (set api_base to .../compat; Bearer = CLOUDFLARE_API_TOKEN; model uses {provider}/{model} routing -- workers-ai/@cf/..., openai/..., anthropic/..., google-ai-studio/...)',
+                       '/chat/completions');
+  (* Cloudflare AI Gateway -- Anthropic passthrough. Routes Anthropic-
+     shaped requests through a named gateway for caching / rate
+     limiting / analytics, then forwards to api.anthropic.com upstream.
+     The pfAnthropic provider appends /v1/messages to api_base, so:
+
+       api_base = https://gateway.ai.cloudflare.com/v1/{ACCT}/{GW}/anthropic
+       URL      = .../anthropic/v1/messages
+
+     Auth is the operator's ANTHROPIC api key in x-api-key (Cloudflare
+     forwards the upstream auth header unmodified). Operators with
+     "Authenticated Gateway" set on their CF gateway also need a
+     `cf-aig-authorization` header -- not supported here in V1, so
+     leave the gateway unauthenticated or wait for follow-up. *)
+  Result[23] := MkSpec('cloudflare-anthropic', 'Cloudflare AI Gateway (Anthropic)',
+                       pfAnthropic,  '',
+                       'claude-opus-4-7',
+                       MkAuth(asHeader, 'x-api-key'),
+                       'AI Gateway proxy to Anthropic (set api_base to .../gateway/anthropic; x-api-key = your Anthropic key)');
+  (* Cloudflare AI Gateway -- Gemini passthrough. Same pattern as the
+     Anthropic row but the upstream slug is "google-ai-studio" and
+     the path the pfGemini provider appends is
+     /v1beta/models/<model>:generateContent:
+
+       api_base = https://gateway.ai.cloudflare.com/v1/{ACCT}/{GW}/google-ai-studio
+       URL      = .../google-ai-studio/v1beta/models/<model>:generateContent
+
+     Auth is the operator's GEMINI api key in x-goog-api-key. *)
+  Result[24] := MkSpec('cloudflare-gemini',    'Cloudflare AI Gateway (Gemini)',
+                       pfGemini,     '',
+                       'gemini-3.5-flash',
+                       MkAuth(asHeader, 'x-goog-api-key'),
+                       'AI Gateway proxy to Gemini (set api_base to .../gateway/google-ai-studio; x-goog-api-key = your Gemini key)');
   (* Cohere intentionally not in this catalog: their chat API lives at
      /v2/chat with a non-OpenAI request/response body, so the ChatPath
      override alone isn't enough -- it needs a real TCohereProvider (or
