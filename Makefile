@@ -466,6 +466,13 @@ test-active-plan-section: | $(BUILDDIR)
 	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
 	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/active_plan_section_tests
 
+# Relay queue + provider envelope tests. Hermetic -- in-process
+# synchronisation only; no HTTP, no real workers.
+test-relay-queue: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/relay_queue_tests.pas -o$(BUILDDIR)/relay_queue_tests
+	@$(BUILDDIR)/relay_queue_tests
+
 # PasClaw.MCP.Disclosure -- Hermes-style progressive disclosure + Claude
 # Code-style tool_search for MCP tools. Hermetic: synthetic TTool records
 # only, no actual MCP server started.
