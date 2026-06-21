@@ -81,6 +81,7 @@ uses
   SysUtils, Classes,
   {$IFDEF MSWINDOWS}Windows,{$ENDIF}
   PasClaw.CliUI,
+  PasClaw.Config,            { GetHome -- ResolveHome's local-default fallback }
   PasClaw.Logger,
   PasClaw.Utils,
   PasClaw.Skills.Zip,
@@ -297,10 +298,23 @@ begin
 end;
 
 function ResolveHome(const A: TPlanArgs; out IsTemp: Boolean): string;
-{ Resolution order matches Cmd.Build:
-    1. --home <dir>                  (operator override)
-    2. existing PASCLAW_HOME env var (cog already sets one)
-    3. fresh tempdir                 (cleaned on exit unless --keep-home) }
+{ Resolution order, mirroring Cmd.Build for the override and env-var
+  paths but DIVERGING on the fallback because `pasclaw plan`'s
+  deliverable IS a file in the workspace (workspace/PLAN.md). If we
+  fell back to a fresh tempdir like build does, the finally-block
+  cleanup below would delete PLAN.md before the operator could
+  review it -- a local `pasclaw plan -d "..."` with no flags would
+  silently produce nothing. Codex P2 reviewer on PR #317.
+
+  Order:
+    1. --home <dir>                  (explicit override)
+    2. existing PASCLAW_HOME env var (cog or shell-exported)
+    3. --workspace-out <zip>         (caller is using the zip
+                                      handshake; tempdir is fine
+                                      because the artifact ships out
+                                      via the zip)
+    4. GetHome (= ~/.pasclaw)        (local default; PLAN.md persists
+                                      where the operator can find it) }
 var
   Env: string;
 begin
@@ -310,8 +324,17 @@ begin
   Env := GetEnvironmentVariable('PASCLAW_HOME');
   if Env <> '' then
     Exit(Env);
-  IsTemp := True;
-  Result := MakeUniqueTempDir('pasclaw_plan');
+  if A.WorkspaceOut <> '' then
+  begin
+    { Zip-handshake flow: the artifact survives in the output zip, so
+      destroying the tempdir is fine. Mirrors cog usage. }
+    IsTemp := True;
+    Result := MakeUniqueTempDir('pasclaw_plan');
+    Exit;
+  end;
+  { Local default: persist to ~/.pasclaw/workspace/PLAN.md so the
+    operator can review or hand it off to `pasclaw build`. }
+  Result := GetHome;
 end;
 
 procedure CleanupTempHome(const Home: string);
@@ -545,14 +568,22 @@ begin
       { 6. Zip out. PLAN.md is captured by the whole-home pack just
         like every other file under $PASCLAW_HOME. Exclusion list
         matches Cmd.Build's so the two commands produce zips with
-        the same shape. }
+        the same shape.
+
+        Failure promoted to non-zero exit (Codex P2 reviewer on PR
+        #317): the tempdir-default cleanup below would otherwise
+        destroy PLAN.md while the caller saw exit 0 -- silently
+        producing nothing. Cmd.Build does the same promotion. }
       if A.WorkspaceOut <> '' then
       begin
         LogInfo('plan: packing %s -> %s', [Home, A.WorkspaceOut]);
         if not PackDirToZip(Home, A.WorkspaceOut,
                             ['.git', '.DS_Store', 'Thumbs.db', 'kb.db-journal'],
                             ErrMsg, '') then
-          LogWarn('plan: zip-out failed: %s', [ErrMsg]);
+        begin
+          PrintErr('plan: zip-out failed: ' + ErrMsg);
+          if Rc = 0 then Rc := 1;
+        end;
       end;
 
       Result := Rc;

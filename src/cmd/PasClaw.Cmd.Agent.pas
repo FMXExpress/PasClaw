@@ -830,6 +830,17 @@ begin
   Spawn      := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
   BgCoord    := MaybeRegisterBackgroundSpawnTools(Cfg, Provider, Reg, Model);
   Handlers   := TLoopHandlers.Create;
+  { Propagate --quiet so per-tool decoration fired through
+    OnToolCall / OnToolResult no-ops. Mirrors RunSingleTurn at
+    Cmd.Agent.pas:572. Codex P2 reviewer on PR #317: without this,
+    pasclaw build --goal would print tool-call/result previews to
+    stdout during each Ralph iteration even though Cmd.Build always
+    injects -q, polluting cog reply.txt and other subprocess
+    consumers that rely on -q meaning "only the final assistant
+    reply". The verbose banner + verdict lines are still gated on
+    `not A.Quiet` further down so non-quiet operators still see
+    them. }
+  Handlers.Quiet := A.Quiet;
 
   { Per-process shell-backend session id, same shape as RunSingleTurn.
     Lazy docker container -- only spawned on the first shell tool call. }
