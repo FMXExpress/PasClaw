@@ -477,14 +477,97 @@ end;
 
 function OpenSSEAndPump(const Ctx: TWorkerCtx; out ErrMsg: string): Boolean;
 {$IF Defined(PASCLAW_NETHTTP) and not Defined(FPC)}
-{ TNetHTTPClient path: not supported for V1. SSE through TNetHTTPClient
-  requires its OnReceiveData callback, which has a different lifecycle.
-  Surface a clear error so operators on the Delphi -DPASCLAW_NETHTTP
-  build know to switch backends. }
+(* TNetHTTPClient path -- Delphi-only, opt-in via -DPASCLAW_NETHTTP for
+   builds that need to skip OpenSSL DLL shipping (Windows SChannel /
+   macOS Secure Transport / Linux libcurl handle TLS instead).
+
+   Shape mirrors the Indy branch below: build a custom destination
+   stream, kick off a GET that writes body bytes into it as they
+   arrive, and let the inline TSSEStream.Write parse + dispatch each
+   `data:` event synchronously. THTTPClient.Get(URL, Stream, Headers)
+   blocks until the server closes the connection or raises on
+   disconnect / read error -- same lifecycle the Indy version
+   relies on. Outer Run loop handles reconnect on either path.
+
+   The original V1 left this branch as an error stub so anyone
+   running `pasclaw relay` on a -DPASCLAW_NETHTTP build hit an
+   immediate "rebuild without the define" message; that defeated the
+   point of the OpenSSL-free path. *)
+var
+  Client: THTTPClient;
+  Stream: TSSEStream;
+  URL:    string;
+  Hdrs:   TNetHeaders;
+  Resp:   IHTTPResponse;
 begin
-  ErrMsg := 'pasclaw relay worker requires the Indy HTTP backend; ' +
-           'rebuild without -DPASCLAW_NETHTTP';
   Result := False;
+  ErrMsg := '';
+  URL := StripTrailingSlash(Ctx.GatewayURL) + '/v1/relay/poll';
+
+  Client := THTTPClient.Create;
+  try
+    { Connection timeout is bounded (15 s) so a dead gateway surfaces
+      promptly via the reconnect loop. ResponseTimeout = 0 means "no
+      timeout" -- required for SSE long-polling where idle periods
+      between events can be arbitrarily long. }
+    Client.ConnectionTimeout := 15 * 1000;
+    Client.ResponseTimeout   := 0;
+    Client.HandleRedirects   := True;
+    Client.UserAgent         := 'PasClaw-relay-worker/0.1';
+    Client.Accept            := 'text/event-stream';
+
+    { Build headers array. TNetHeaders is `array of TNetHeader`;
+      THTTPClient.Get's third argument expects this shape. Capabilities
+      header omitted when empty so the gateway sees the same "wildcard
+      worker" signal it gets from the Indy path. }
+    if Ctx.Caps <> '' then
+      SetLength(Hdrs, 3)
+    else
+      SetLength(Hdrs, 2);
+    Hdrs[0] := TNetHeader.Create('Authorization',     'Bearer ' + Ctx.Token);
+    Hdrs[1] := TNetHeader.Create('X-Relay-Worker-Id', Ctx.WorkerId);
+    if Ctx.Caps <> '' then
+      Hdrs[2] := TNetHeader.Create('X-Relay-Capabilities', Ctx.Caps);
+
+    Stream := TSSEStream.Create(@Ctx);
+    try
+      try
+        (* Capture the response so we can inspect StatusCode.
+           THTTPClient.Get does NOT raise on non-2xx (unlike Indy's
+           TIdHTTP.Get, which raises EIdHTTPProtocolException by
+           default). The gateway's /v1/relay/poll handler returns
+           plain JSON for 401 (bad / missing token), 400 (missing
+           worker id) and 503 (relay queue not initialised); without
+           checking StatusCode here, every one of those reads as
+           "server closed cleanly" -> outer loop resets backoff to
+           1s -> worker spins forever hammering the gateway with the
+           same bad request. Codex P2 review on PR #330. *)
+        Resp := Client.Get(URL, Stream, Hdrs);
+        if (Resp = nil) or (Resp.StatusCode < 200) or (Resp.StatusCode >= 300) then
+        begin
+          if Resp <> nil then
+            ErrMsg := Format('HTTP %d %s', [Resp.StatusCode, Resp.StatusText])
+          else
+            ErrMsg := 'no response from gateway';
+          Result := False;
+        end
+        else
+          { 2xx + stream closed = clean disconnect, outer loop
+            reconnects with backoff reset. }
+          Result := True;
+      except
+        on E: Exception do
+        begin
+          ErrMsg := E.Message;
+          Result := False;
+        end;
+      end;
+    finally
+      Stream.Free;
+    end;
+  finally
+    Client.Free;
+  end;
 end;
 {$ELSE}
 var
