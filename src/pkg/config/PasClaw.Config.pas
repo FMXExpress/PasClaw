@@ -624,6 +624,21 @@ type
        view surprised operators on fresh deploys (PR #289). Onboarding
        asks (default N). *)
     CondenseReversible:    Boolean;
+    (* HashlineEnabled gates fs_edit_hashline ONLY (PR #314: split the
+       previous bundled gate -- fs_grep now registers unconditionally
+       because its ripgrep-inspired optimisations beat shell_exec grep
+       on real codebases and on Windows it's the only grep available).
+       The flag also controls fs_read's default output format
+       (hashline-prefixed vs raw bytes).
+
+       Default True everywhere. The bench (bench/swe/README.md) found
+       that smaller models (Haiku-class) mis-author the hashline
+       anchor/payload format and burn turns recovering; operators on
+       small-model deployments opt out via onboarding's PromptHashline
+       (default N skips it) or the --no-hashline CLI flag. Both gate
+       layers compose: CLI flag OR config off = drop the
+       fs_edit_hashline registration. *)
+    HashlineEnabled:       Boolean;
     (* Proactive periodic wake-up (picoclaw / openclaw heartbeat).
        Off by default. When Enabled, the standalone `pasclaw
        heartbeat` daemon (and the gateway / serve embedders, when
@@ -871,18 +886,30 @@ begin
   WebSearch.BaseURL    := '';
   WebSearch.MaxResults := 5;
   PromptCache.Enabled  := True;  { default-on; see TPromptCacheConfig comment }
-  PromptCache.TTL      := '';    { default 5m via empty }
-  VaultToolsEnabled    := True;  { on by default -- vault_search/get are read-only HTTP GETs against pasclaw.dev. Onboarding asks (default Y). }
-  WebFetchEnabled      := True;  { on by default -- onboarding asks (default Y); operators not wanting outbound HTTP from the agent flip it off. }
+  PromptCache.TTL      := '1h';  { 1h cache hits well across back-to-back runs (bench/swe/results/ablation.md). 5m was the historical default; 1h is one of the six zero-prompt-cost behavioral toggles the bench identified as a free upgrade. }
+  VaultToolsEnabled    := False; { off by default per the bench-grounded "stock = lean-edit shape" verdict (bench/swe/README.md). Vault entries are never called across the bench's 45+ cells -- the model has them as training data. Onboarding asks (default Y for operators who DO use the vault). }
+  WebFetchEnabled      := False; { off by default for the same reason as VaultToolsEnabled. Also drops memory_fetch (RegisterMemoryFetchTool is gated on EnableWebFetch in NewBuiltinRegistry -- see comment there). Onboarding asks. }
   CronToolEnabled      := False; { off by default -- model-scheduled background jobs are an opt-in autonomy step (runs existing skills only). }
   RenderMarkdown       := True;  { on by default for terminal surfaces; cmd/serve flips off }
   ToolOutputCap        := 0;     { off by default; operators opt in. See TConfig.ToolOutputCap. }
-  StatsCollectionEnabled := False; { opt-in via onboarding; see TConfig.StatsCollectionEnabled. }
-  CheckpointsEnabled     := False; { opt-in via onboarding; see TConfig.CheckpointsEnabled. }
-  CheckpointsKeepLast    := 0;     { 0 means default (32) inside PasClaw.Checkpoints. }
+  StatsCollectionEnabled := True;  { on by default -- zero prompt cost, useful for diagnosing turn-count regressions. Onboarding can flip off for privacy-conscious operators. }
+  CheckpointsEnabled     := True;  { on by default -- zero prompt cost, prevents lost work on multi-edit sessions. }
+  CheckpointsKeepLast    := 32;    { keep last 32 atomic edit checkpoints. }
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
-  OrientTaskAware        := False; { opt-in; whole-file MEMORY injection is the contract. }
+  OrientTaskAware        := True;  { on by default -- MEMORY task-aware injection. Zero prompt cost when MEMORY.md is absent; saves tokens when present. }
   CondenseReversible     := False; { off by default -- raw tool output preserved verbatim. Onboarding asks (default N). Flipped from on-by-default in PR #289 so a fresh deploy doesn't silently rewrite ls/grep output behind the operator's back. }
+  { HashlineEnabled gates fs_edit_hashline ONLY (PR #314 split the
+    previous bundled gate -- fs_grep registers unconditionally).
+
+    Default True everywhere. The bench (bench/swe/README.md) found
+    that smaller models (Haiku-class) mis-author fs_edit_hashline's
+    anchor/payload format and burn turns recovering; those operators
+    opt out via onboarding's PromptHashline (default Y) or the
+    --no-hashline CLI flag. Big-model operators (Opus / Sonnet /
+    GPT-4) use the tool correctly, and they're the majority case
+    pasclaw is tuned for. CLI flag OR config off = drop the
+    fs_edit_hashline registration. }
+  HashlineEnabled        := True;
   Heartbeat.Enabled      := False; { opt-in via onboarding; off by default. }
   Heartbeat.IntervalMins := 30;
   Heartbeat.ContentPath  := '';    { empty -> default workspace/heartbeat.md at load time }
@@ -893,16 +920,20 @@ begin
   ShellBackendDocker.User       := '';
   ShellBackendDocker.Privileged := False;
   SetLength(Channels, 0);          { no channels -> send_message tool not registered. }
-  AutoRouter.Enabled        := False;  { opt-in via onboarding; see TAutoRouterConfig. }
+  AutoRouter.Enabled        := True;   { on by default -- routes easy turns to the cheap model when EasyProvider/Model are configured. Zero prompt cost; no effect unless multi-tier provider config is set. }
   AutoRouter.EasyProvider   := '';
   AutoRouter.EasyModel      := '';
   AutoRouter.EasyMaxTokens  := 500;
-  { Self-improving skills: everything opt-in (see TSelfImprovingSkillsConfig). }
+  { Self-improving skills: distiller on by default (zero prompt cost,
+    post-turn pass produces staged drafts under workspace/skills/.pending/).
+    The three other switches (self_manage / progressive_disclosure /
+    auto_approve) remain opt-in -- each adds tool registrations or
+    skips operator review. See TSelfImprovingSkillsConfig. }
   SelfImprovingSkills.SelfManage            := False;
   SelfImprovingSkills.ProgressiveDisclosure := False;
   SelfImprovingSkills.AutoApprove           := False;
   SetLength(SelfImprovingSkills.GuardDeny, 0);
-  SelfImprovingSkills.Distiller.Enabled      := False;
+  SelfImprovingSkills.Distiller.Enabled      := True;
   SelfImprovingSkills.Distiller.MinToolCalls := 5;
   SelfImprovingSkills.Distiller.Model        := '';
   Profile := '';   { PR #291: empty == no persisted profile selection }
@@ -1085,8 +1116,11 @@ begin
     end;
 
     { Only emit prompt_cache when non-default -- keeps stock configs
-      tidy. Reading back: missing object => defaults (enabled, 5m). }
-    if (not PromptCache.Enabled) or (PromptCache.TTL <> '') then
+      tidy. Default flipped to 1h in PR #314 (bench/swe/README.md): an
+      operator setting TTL back to "5m" or any other non-default needs
+      the value to round-trip; same for the explicit-off path. Reading
+      back: missing object => defaults (enabled, 1h). }
+    if (not PromptCache.Enabled) or ((PromptCache.TTL <> '') and (PromptCache.TTL <> '1h')) then
     begin
       Tmp := TJsonObject.Create;
       Tmp.PutBool('enabled', PromptCache.Enabled);
@@ -1101,13 +1135,15 @@ begin
       Root.PutArray('allow_senders', Arr);
     end;
 
-    { vault_tools_enabled, web_fetch_enabled: defaults flipped to ON
-      in PR #289. Emit only the explicit-off so a fresh config stays
-      tidy and an operator who explicitly opted out round-trips. }
-    if not VaultToolsEnabled then
-      Root.PutBool('vault_tools_enabled', False);
-    if not WebFetchEnabled then
-      Root.PutBool('web_fetch_enabled', False);
+    { vault_tools_enabled, web_fetch_enabled: defaults flipped to OFF
+      in PR #314 (bench/swe/README.md). Emit only the explicit-on so a
+      fresh config stays tidy AND so an operator who answered Y to the
+      onboarding prompt sees the choice round-trip (without this, the
+      Y would silently revert to N on the next LoadConfig). }
+    if VaultToolsEnabled then
+      Root.PutBool('vault_tools_enabled', True);
+    if WebFetchEnabled then
+      Root.PutBool('web_fetch_enabled', True);
     { cron_tool_enabled defaults OFF; emit only the explicit-on so an
       operator who opted into model-scheduled jobs round-trips. }
     if CronToolEnabled then
@@ -1127,23 +1163,40 @@ begin
       JSON keeps fresh config files clean. }
     if ToolOutputCap > 0 then
       Root.PutInt('tool_output_cap', ToolOutputCap);
-    if StatsCollectionEnabled then
-      Root.PutBool('stats_collection_enabled', True);
-    if CheckpointsEnabled then
-      Root.PutBool('checkpoints_enabled', True);
-    if CheckpointsKeepLast > 0 then
+    { stats_collection_enabled, checkpoints_enabled, orient_task_aware:
+      defaults flipped to ON in PR #314 (the six free behavioral toggles
+      from the bench's ablation). Emit only the explicit-off so an
+      operator answering N to onboarding (or editing the field by hand)
+      sees the choice round-trip. Without this, an opt-out silently
+      reverts to the on-by-default behavior on the next load -- privacy
+      / storage / behavior opt-outs do not stick. }
+    if not StatsCollectionEnabled then
+      Root.PutBool('stats_collection_enabled', False);
+    if not CheckpointsEnabled then
+      Root.PutBool('checkpoints_enabled', False);
+    { CheckpointsKeepLast default flipped from 0 (=> use library
+      default 32) to an explicit 32 in PR #314. Emit when it differs --
+      0 and other values both round-trip. }
+    if CheckpointsKeepLast <> 32 then
       Root.PutInt('checkpoints_keep_last', CheckpointsKeepLast);
     { Default True -- emit only the explicit-off so it round-trips
       (same rule as render_markdown / vector_search_enabled). }
     if not PromptwareEnabled then
       Root.PutBool('promptware_enabled', False);
-    { Default False -- emit only the explicit-on. }
-    if OrientTaskAware then
-      Root.PutBool('orient_task_aware', True);
+    if not OrientTaskAware then
+      Root.PutBool('orient_task_aware', False);
     { condense_reversible: default flipped to OFF in PR #289. Emit
       only the explicit-on so fresh configs stay tidy. }
     if CondenseReversible then
       Root.PutBool('condense_reversible', True);
+    { hashline_enabled: default True. Emit only the explicit OFF so
+      small-model operators who answer N to PromptHashline (or who
+      set the field via config edit) see their choice round-trip;
+      Y-keepers don't get a redundant "hashline_enabled": true in
+      their config.json. CLI --no-hashline still works as a per-run
+      override. }
+    if not HashlineEnabled then
+      Root.PutBool('hashline_enabled', False);
     if Heartbeat.Enabled
        or (Heartbeat.IntervalMins <> 30)
        or (Heartbeat.ContentPath <> '')
@@ -1195,10 +1248,13 @@ begin
         Tmp.Free; raise;
       end;
     end;
-    if AutoRouter.Enabled
-       or (AutoRouter.EasyProvider <> '')
-       or (AutoRouter.EasyModel <> '')
-       or (AutoRouter.EasyMaxTokens <> 500) then
+    { auto_router.enabled default flipped to ON in PR #314. Always
+      emit the subobject -- True default plus the previous "emit when
+      Enabled" gate means an opt-out (Enabled := False with no other
+      changes) would skip emission and the next LoadConfig would
+      silently re-enable. Emitting unconditionally keeps the round-trip
+      honest at the cost of one always-present subobject in fresh
+      configs (cheap given it has four fields). }
     begin
       Tmp := TJsonObject.Create;
       try
@@ -1211,12 +1267,17 @@ begin
         Tmp.Free; raise;
       end;
     end;
-    { Self-improving skills -- emit only when something is enabled so a
-      default config.json stays clean (same posture as auto_router). }
+    { Self-improving skills -- emit when ANYTHING differs from the new
+      defaults so the round-trip is honest. Distiller.Enabled default
+      flipped to True in PR #314, so the gate ALSO has to fire on the
+      explicit-off path (without `not Distiller.Enabled` here, an
+      onboarding-skip + manual distiller=false flip would silently
+      revert to on). SelfManage / ProgressiveDisclosure / AutoApprove
+      defaults stay False -- gate emits when any is True. }
     if SelfImprovingSkills.SelfManage
        or SelfImprovingSkills.ProgressiveDisclosure
        or SelfImprovingSkills.AutoApprove
-       or SelfImprovingSkills.Distiller.Enabled
+       or (not SelfImprovingSkills.Distiller.Enabled)
        or (Length(SelfImprovingSkills.GuardDeny) > 0)
        or (SelfImprovingSkills.Distiller.MinToolCalls <> 5)
        or (SelfImprovingSkills.Distiller.Model <> '') then
@@ -1514,6 +1575,7 @@ begin
     PromptwareEnabled   := Root.GetBool('promptware_enabled', PromptwareEnabled);
     OrientTaskAware     := Root.GetBool('orient_task_aware',  OrientTaskAware);
     CondenseReversible  := Root.GetBool('condense_reversible', CondenseReversible);
+    HashlineEnabled     := Root.GetBool('hashline_enabled',    HashlineEnabled);
 
     Obj := Root.ChildObject('heartbeat');
     if Obj <> nil then

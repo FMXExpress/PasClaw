@@ -6,18 +6,33 @@
   embedded as Pascal string constants below; operators can add their
   own by dropping files at $PASCLAW_HOME/profiles/<name>.json.
 
-  Six built-ins (PR #291):
+  Six built-ins:
 
-    stock       Mirrors TConfig.Create's exact defaults. Applying it is
-                a no-op; it exists so `pasclaw profile show stock`
+    stock       TConfig.Create's exact defaults. Adopted the bench-
+                grounded lean-edit shape (bench/swe/README.md): web_fetch,
+                vault, and memory_fetch OFF out-of-box (operators turn
+                them on via onboarding when they actually use them); the
+                six zero-prompt-cost behavioral toggles (orient_task_aware,
+                checkpoints, stats, 1h prompt cache, distiller, auto-
+                router) ON by default. fs_edit_hashline ON by default
+                (small-model operators opt out via onboarding's
+                PromptHashline question or the --no-hashline CLI flag);
+                fs_grep registers UNCONDITIONALLY -- its six ripgrep-
+                inspired optimisations (skip lists, BMH, binary
+                detection, byte-walking, file-size cap, deferred
+                hashing) make it 10-50x faster than shell_exec grep on
+                real codebases, and on Windows it's the only grep
+                equivalent available. Applying the profile explicitly
+                is a no-op; it exists so `pasclaw profile show stock`
                 documents the no-profile fresh-install state.
 
     baseline    Everything off. Bare-minimum control profile for A/B
                 comparison ("how does pasclaw behave with no features").
 
     low-token   Minimise tokens going to/from the model: condenser on,
-                output cap on, MEMORY task-aware slicing, prompt cache,
-                progressive disclosure for skills, auto-router for
+                output cap on, prompt cache, progressive disclosure for
+                skills (so the registry advertises skills_list/view
+                without the heavier skills_manage), auto-router for
                 easy turns.
 
     security    Maximum sandboxing: workspace restriction + shell deny
@@ -25,10 +40,11 @@
                 and vault tools off, agent-authored skills stage for
                 approval (auto_approve off).
 
-    max-build   Best settings for productive coding: web_fetch, vault,
-                vector search, checkpoints, stats, condenser, large
-                output cap, 1h prompt cache, all four self-improving
-                skill switches on.
+    max-build   Maximum capability surface: web_fetch + vault + memory_fetch
+                back on, plus skill discovery (progressive_disclosure)
+                and skill authoring (self_manage), condenser + 16KB
+                output cap. Use when you need the broadest tool surface
+                and don't mind paying ~2900 bytes/turn for it.
 
     all-on      Every boolean knob flipped on. For surface-area /
                 integration testing only.
@@ -223,28 +239,34 @@ const
      stock cross-check catches. *)
   Profile_Stock: string =
     '{' +
-    '"_description":"Stock TConfig.Create defaults. Documents the ' +
-    'fresh-install state explicitly so `profile show stock` reveals ' +
-    'what `pasclaw agent` does with no --profile / PASCLAW_PROFILE / ' +
-    'config.json profile field set.",' +
-    '"vault_tools_enabled":true,' +
-    '"web_fetch_enabled":true,' +
+    '"_description":"Stock TConfig.Create defaults. Adopted the ' +
+    'bench-grounded lean-edit shape (bench/swe/README.md): web_fetch ' +
+    '+ vault + memory_fetch OFF (operators opt in via onboarding); ' +
+    '6 zero-prompt-cost behavioral toggles ON (orient, checkpoints, ' +
+    'stats, 1h cache, distiller, auto-router). hashline_enabled gates ' +
+    'fs_edit_hashline ONLY -- defaults True; small-model operators opt ' +
+    'out via the onboarding PromptHashline question or --no-hashline ' +
+    'CLI flag. fs_grep registers unconditionally (6 ripgrep-inspired ' +
+    'optimisations + no shell grep on Windows).",' +
+    '"vault_tools_enabled":false,' +
+    '"web_fetch_enabled":false,' +
     '"vector_search_enabled":true,' +
     '"render_markdown":true,' +
     '"promptware_enabled":true,' +
     '"condense_reversible":false,' +
     '"tool_output_cap":0,' +
-    '"orient_task_aware":false,' +
-    '"stats_collection_enabled":false,' +
-    '"checkpoints_enabled":false,' +
+    '"orient_task_aware":true,' +
+    '"stats_collection_enabled":true,' +
+    '"checkpoints_enabled":true,' +
+    '"checkpoints_keep_last":32,' +
     '"self_improving_skills":{' +
       '"self_manage":false,' +
       '"progressive_disclosure":false,' +
       '"auto_approve":false,' +
-      '"distiller":{"enabled":false}' +
+      '"distiller":{"enabled":true,"min_tool_calls":5}' +
     '},' +
-    '"auto_router":{"enabled":false},' +
-    '"prompt_cache":{"enabled":true},' +
+    '"auto_router":{"enabled":true},' +
+    '"prompt_cache":{"enabled":true,"ttl":"1h"},' +
     '"sandbox":{' +
       '"restrict_to_workspace":false,' +
       '"shell_deny_enabled":true,' +

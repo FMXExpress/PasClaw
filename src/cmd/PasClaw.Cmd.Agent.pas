@@ -512,7 +512,8 @@ begin
   Reg := nil;
   if not A.NoTools then
   begin
-    Reg := NewBuiltinRegistry(not A.NoHashline, Cfg.VaultToolsEnabled,
+    Reg := NewBuiltinRegistry((not A.NoHashline) and Cfg.HashlineEnabled,
+                              Cfg.VaultToolsEnabled,
                               HasConfiguredWebSearchProvider(Cfg),
                               Cfg.WebFetchEnabled,
                               (Cfg.ToolOutputCap > 0)
@@ -987,7 +988,8 @@ begin
   Reg := nil;
   if not A.NoTools then
   begin
-    Reg := NewBuiltinRegistry(not A.NoHashline, Cfg.VaultToolsEnabled,
+    Reg := NewBuiltinRegistry((not A.NoHashline) and Cfg.HashlineEnabled,
+                              Cfg.VaultToolsEnabled,
                               HasConfiguredWebSearchProvider(Cfg),
                               Cfg.WebFetchEnabled,
                               (Cfg.ToolOutputCap > 0)

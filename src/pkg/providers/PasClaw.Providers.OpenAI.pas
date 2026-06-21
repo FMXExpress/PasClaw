@@ -402,7 +402,14 @@ begin
   Headers := BuildAuthHeaders;
 
   LogDebug('%s POST %s (model=%s, body=%d bytes)', [FDisplayName, URL, UseModel, Length(Body)]);
-  Resp := PostJSON(URL, Body, Headers, 120);
+  { 600s read timeout: a high-effort model on a complex one-shot task
+    can take 2-3 minutes to emit a reasoning preamble + a multi-KB
+    tool-call body. 120s was tight for that and broke bench cells
+    where a slow Claude subagent took ~130s to publish its first
+    reply to the localhost stub. The 600s ceiling covers slow-think
+    scenarios without affecting the happy path -- the read returns
+    as soon as the body lands; the timeout is a ceiling, not a wait. }
+  Resp := PostJSON(URL, Body, Headers, 600);
 
   Result.Content := '';
   Result.StatusCode := Resp.StatusCode;

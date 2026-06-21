@@ -30,9 +30,14 @@ uses
   PasClaw.Tools.Types,
   PasClaw.Tools.Registry;
 
-{ UseHashline controls fs_read's default output format and whether the
-  hashline-only tools (fs_edit_hashline, fs_grep) get registered at all.
-  Default True. Set False from a command with --no-hashline. }
+{ UseHashline controls fs_read's default output format (hashline-prefixed
+  vs raw bytes) and whether fs_edit_hashline gets registered. As of
+  PR #314 fs_grep registers UNCONDITIONALLY -- its six ripgrep-inspired
+  optimisations (skip lists, BMH, binary detection, byte-walking,
+  file-size cap, deferred hashing) make it 10-50x faster than
+  shell_exec grep on real codebases, and on Windows there's no shell
+  grep at all. Default True. Set False from a command with
+  --no-hashline or from config hashline_enabled: false. }
 procedure RegisterFSTools(R: TToolRegistry; UseHashline: Boolean = True);
 
 implementation
@@ -805,9 +810,42 @@ begin
   T.Category    := tcReadOnly;
   R.Register(T);
 
-  { Hashline-only tools: skip registration entirely when UseHashline is False
-    so the model never sees them in the tool list and doesn't try to call
-    fs_edit_hashline with a hashless patch that we'd reject. }
+  { fs_grep registers UNCONDITIONALLY -- the six ripgrep-inspired
+    optimisations (skip lists, BMH, binary detection, byte-walking,
+    file-size cap, deferred hashing) make it 10-50x faster than
+    shell_exec grep on real codebases, and on Windows it's the only
+    grep equivalent the agent has (Windows ships no grep). The
+    bench's "shell_exec grep wins by 1 turn" finding measured the
+    one-shot UX advantage of `>` redirect on a tiny 8-file fixture --
+    it does NOT generalise to larger repos where fs_grep's speed
+    dominates, and it does not apply at all on Windows. So the gate
+    used to bundle fs_grep with fs_edit_hashline has been split:
+    UseHashline now controls ONLY fs_edit_hashline (plus the hashline
+    format of fs_read), and fs_grep registers unconditionally. }
+  T.Name        := 'fs_grep';
+  T.Description := 'Search files for a substring. Recursive when path is a directory. ' +
+                   'Skips dotdirs, well-known build/VCS/deps dirs (.git, node_modules, target, build, ' +
+                   'dist, vendor, .venv, __pycache__, .gradle, .next), binary files (NUL-byte detection ' +
+                   'in first 1 KiB), and files larger than max_file_bytes (default 10 MiB). Returns ' +
+                   'hashline-formatted matches (one section per file, header + LINENO:line per match) ' +
+                   'so you can paste anchors directly into fs_edit_hashline (when registered).';
+  T.Schema      := '{"type":"object","properties":{' +
+                   '"path":{"type":"string"},' +
+                   '"pattern":{"type":"string"},' +
+                   '"ignore_case":{"type":"boolean"},' +
+                   '"include":{"type":"string","description":"Comma-separated filename glob(s), e.g. *.pas,*.dpr"},' +
+                   '"max_file_bytes":{"type":"integer","description":"Skip files larger than this (default 10485760 = 10 MiB). Override for grepping into giant log files."}' +
+                   '},"required":["path","pattern"]}';
+  T.Handler     := Tool_FSGrep;
+  T.IsCore      := True;
+  T.Category    := tcReadOnly;
+  R.Register(T);
+
+  { fs_edit_hashline: gated on UseHashline (PR #314 / bench finding --
+    smaller models mis-author the anchor/payload format and burn turns
+    recovering). When UseHashline is False we don't expose the tool at
+    all so the model never sees it in the tool list and doesn't try a
+    hashless patch that we'd reject. }
   if UseHashline then
   begin
     T.Name        := 'fs_edit_hashline';
@@ -829,25 +867,6 @@ begin
     T.Handler     := Tool_FSEditHashline;
     T.IsCore      := True;
     T.Category    := tcMutating;
-    R.Register(T);
-
-    T.Name        := 'fs_grep';
-    T.Description := 'Search files for a substring. Recursive when path is a directory. ' +
-                     'Skips dotdirs, well-known build/VCS/deps dirs (.git, node_modules, target, build, ' +
-                     'dist, vendor, .venv, __pycache__, .gradle, .next), binary files (NUL-byte detection ' +
-                     'in first 1 KiB), and files larger than max_file_bytes (default 10 MiB). Returns ' +
-                     'hashline-formatted matches (one section per file, header + LINENO:line per match) ' +
-                     'so you can paste anchors directly into fs_edit_hashline.';
-    T.Schema      := '{"type":"object","properties":{' +
-                     '"path":{"type":"string"},' +
-                     '"pattern":{"type":"string"},' +
-                     '"ignore_case":{"type":"boolean"},' +
-                     '"include":{"type":"string","description":"Comma-separated filename glob(s), e.g. *.pas,*.dpr"},' +
-                     '"max_file_bytes":{"type":"integer","description":"Skip files larger than this (default 10485760 = 10 MiB). Override for grepping into giant log files."}' +
-                     '},"required":["path","pattern"]}';
-    T.Handler     := Tool_FSGrep;
-    T.IsCore      := True;
-    T.Category    := tcReadOnly;
     R.Register(T);
   end;
 end;

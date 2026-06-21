@@ -741,6 +741,45 @@ begin
   end;
 end;
 
+procedure PromptHashline(Cfg: TConfig);
+{ fs_edit_hashline tool registration. Default Y (matches TConfig.Create);
+  Enter-through keeps the surgical-patch tool. Small-model operators
+  (Haiku-class) answer N to drop the tool -- the bench found those
+  models mis-author the anchor/payload format and burn turns recovering.
+  NOTE: fs_grep is NOT gated by this -- it registers unconditionally
+  because its ripgrep-inspired optimisations win on real codebases and
+  on Windows there's no shell grep at all. }
+var
+  Choice: string;
+begin
+  PrintLn;
+  PrintLn(Ansi.Bold + 'fs_edit_hashline (surgical patches)' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'Hashline-format anchored edits. Big models (Opus / Sonnet / GPT-4) ' +
+    'use it' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'correctly; smaller models (Haiku, gpt-4o-mini, Llama 3.x 8B) sometimes ' +
+    'mis-author' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'the anchor/payload format and waste turns. Answer N on small-model ' +
+    'deployments;' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'the agent then uses fs_write rewrites instead. fs_grep is always on.' +
+    Ansi.Reset);
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Enable fs_edit_hashline [Y/n]: ')));
+  if (Choice = '') or (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Cfg.HashlineEnabled := True;
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' fs_edit_hashline enabled');
+  end
+  else
+  begin
+    Cfg.HashlineEnabled := False;
+    PrintLn('  ' + Ansi.Dim + '(skipped -- the model uses fs_write rewrites)' + Ansi.Reset);
+  end;
+end;
+
 procedure PromptSelfImprovingSkills(Cfg: TConfig);
 { Four nested toggles for the Hermes-style self-improving skills
   (PR #288). Each defaults N because the feature touches:
@@ -1440,6 +1479,7 @@ begin
         who said yes to the previous one, so a quick "enter, enter,
         enter" leaves the minimal-surprise defaults in place. }
       PromptWebFetch(Cfg);
+      PromptHashline(Cfg);
       PromptPromptware(Cfg);
       PromptCondenseReversible(Cfg);
       PromptToolOutputCap(Cfg);
