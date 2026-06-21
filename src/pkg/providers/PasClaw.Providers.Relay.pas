@@ -222,6 +222,8 @@ end;
 
 function TRelayProvider.DecodeResponse(const R: TRelayResponse;
                                         const RequestedModel: string): TLLMResponse;
+var
+  i: Integer;
 begin
   FillChar(Result, SizeOf(Result), 0);
   Result.Content      := R.Content;
@@ -229,6 +231,19 @@ begin
   Result.Usage.InputTokens  := R.UsageInput;
   Result.Usage.OutputTokens := R.UsageOutput;
   Result.Model        := RequestedModel;
+  { Codex P2 on PR #318: copy structured tool calls into TLLMResponse
+    so RunToolLoop dispatches them. V1 doc claimed "tool calls are
+    text-parsed from the model reply" but no parser existed; relay-
+    backed agent flows silently stalled after the first tool call.
+    Workers using inference libraries that emit structured tool calls
+    (WebLLM, llama.cpp grammar mode, mlc-llm, etc.) put them in the
+    `tool_calls` array of the response JSON; HandleRelayRespond
+    parses them into TRelayResponse.ToolCalls; here we forward.
+    Workers that only emit text are unchanged -- they get text-only
+    chat through the relay, same as before this fix. }
+  SetLength(Result.ToolCalls, Length(R.ToolCalls));
+  for i := 0 to High(R.ToolCalls) do
+    Result.ToolCalls[i] := R.ToolCalls[i];
   if R.ErrMsg <> '' then
   begin
     { Match the convention other providers use: StatusCode -1 means
@@ -274,11 +289,10 @@ begin
   Body  := BuildRelayRequestBody(Messages, Tools, EffMod, Options, ReqId);
 
   Req := TRelayRequest.Create(ReqId, EffMod, Body);
+  Q.Enqueue(Req);
+  LogInfo('relay: enqueued %s (model=%s, %d messages, %d tools)',
+          [ReqId, EffMod, Length(Messages), Length(Tools)]);
   try
-    Q.Enqueue(Req);
-    LogInfo('relay: enqueued %s (model=%s, %d messages, %d tools)',
-            [ReqId, EffMod, Length(Messages), Length(Tools)]);
-
     Sig := Req.Done.WaitFor(Cardinal(FWaitTimeoutMs));
     case Sig of
       wrSignaled:
@@ -304,6 +318,24 @@ begin
       LogWarn('relay: %s wait failed (%d)', [ReqId, Ord(Sig)]);
     end;
   finally
+    { Codex P1 on PR #318: the original code freed Req in finally
+      without checking whether the queue still held a reference. On
+      every non-success exit (timeout, abort, wait failure) the
+      request was still in FPending or FInflight, and freeing here
+      left the queue with a dangling pointer that a later worker
+      Respond or queue Destroy would dereference.
+
+      Cancel returns True iff it actually pulled the request out of a
+      queue list -- we own the memory in that case and must Free.
+      Cancel returns False iff the request was already consumed by a
+      Respond that arrived between WaitFor wake and this Cancel call
+      -- which means the response decode above already ran on
+      Req.Response (snapshot taken before any race), and the request
+      is no longer reachable from queue state, so we still own the
+      memory and still Free here. Either way Cancel guarantees the
+      queue no longer holds a pointer; either way we Free. The
+      Cancel-then-always-Free idiom is the simplest correct shape. }
+    Q.Cancel(ReqId);
     Req.Free;
   end;
 end;

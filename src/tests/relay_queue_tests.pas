@@ -276,6 +276,73 @@ begin
   WriteLn('  ok: max attempts cap fails the waiter cleanly');
 end;
 
+procedure TestCancelPullsFromPending;
+var
+  Q: TRelayQueue;
+  Req: TRelayRequest;
+  WasOurs: Boolean;
+begin
+  (* Codex P1 on PR #318: Chat() used to free a request from finally
+     without first removing it from the queue's lists. Cancel under-
+     the-lock is the safe shape; verify the public surface. *)
+  Q := TRelayQueue.Create;
+  try
+    Req := TRelayRequest.Create('req_cancel_p', 'm', '{}');
+    Q.Enqueue(Req);
+    AssertEqI(Q.GetStatus.PendingRequests, 1, 'pending before cancel');
+    WasOurs := Q.Cancel('req_cancel_p');
+    AssertTrue(WasOurs,
+               'Cancel returns True when the request was in pending');
+    AssertEqI(Q.GetStatus.PendingRequests, 0,
+              'pending counter decremented on cancel');
+    Req.Free;  { provider would Free here -- queue no longer holds the pointer }
+  finally
+    Q.Free;
+  end;
+  WriteLn('  ok: Cancel pulls request from pending list');
+end;
+
+procedure TestCancelPullsFromInflight;
+var
+  Q: TRelayQueue;
+  Req: TRelayRequest;
+  WasOurs: Boolean;
+begin
+  Q := TRelayQueue.Create;
+  try
+    Q.RegisterWorker('w', Caps(['m']));
+    Req := TRelayRequest.Create('req_cancel_i', 'm', '{}');
+    Q.Enqueue(Req);
+    Q.DequeueForWorker('w', 1000);  { now inflight }
+    AssertEqI(Q.GetStatus.InflightRequests, 1, 'inflight before cancel');
+    WasOurs := Q.Cancel('req_cancel_i');
+    AssertTrue(WasOurs,
+               'Cancel returns True when the request was inflight');
+    AssertEqI(Q.GetStatus.InflightRequests, 0,
+              'inflight counter decremented on cancel');
+    Req.Free;
+  finally
+    Q.Free;
+  end;
+  WriteLn('  ok: Cancel pulls request from inflight list');
+end;
+
+procedure TestCancelOfUnknownIsFalse;
+var
+  Q: TRelayQueue;
+  WasOurs: Boolean;
+begin
+  Q := TRelayQueue.Create;
+  try
+    WasOurs := Q.Cancel('req_never_existed');
+    AssertTrue(not WasOurs,
+               'Cancel returns False for unknown id (already consumed or never enqueued)');
+  finally
+    Q.Free;
+  end;
+  WriteLn('  ok: Cancel of unknown id is False');
+end;
+
 procedure TestStatusSnapshot;
 var
   Q: TRelayQueue;
@@ -360,6 +427,9 @@ begin
   TestLateRespondIsSilent;
   TestUnregisterRequeuesInflight;
   TestMaxAttemptsCap;
+  TestCancelPullsFromPending;
+  TestCancelPullsFromInflight;
+  TestCancelOfUnknownIsFalse;
   TestStatusSnapshot;
   TestRequestBodyEnvelope;
   TestGlobalQueueAccessor;

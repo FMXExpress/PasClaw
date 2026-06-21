@@ -3052,8 +3052,11 @@ var
   Q: TRelayQueue;
   Body: string;
   Bytes: TBytes;
-  Req, Usage: TJsonObject;
+  Req, Usage, TCObj, FObj: TJsonObject;
+  TCArr: TJsonArray;
   Resp: TRelayResponse;
+  TC: TToolCall;
+  i: Integer;
 begin
   Q := GetGlobalRelayQueue;
   if Q = nil then
@@ -3105,6 +3108,32 @@ begin
       Resp.UsageInput  := Integer(Usage.GetInt('prompt_tokens',     0));
       Resp.UsageOutput := Integer(Usage.GetInt('completion_tokens', 0));
     end;
+    { Codex P2 on PR #318: structured tool calls. Same OpenAI shape
+      every other provider uses -- id / type / function.name /
+      function.arguments. Workers that emit text-only replies get
+      tool_calls absent and the agent gets text-only chat through the
+      relay (same as V1). Workers using mlc-llm / WebLLM / llama.cpp
+      grammar mode emit a proper tool_calls array which we forward
+      verbatim through TRelayResponse.ToolCalls -> TLLMResponse.
+      ToolCalls -> RunToolLoop's dispatch. }
+    TCArr := Req.ChildArray('tool_calls');
+    if TCArr <> nil then
+      for i := 0 to TCArr.Count - 1 do
+      begin
+        TCObj := TCArr.ItemObject(i);
+        if TCObj = nil then Continue;
+        FillChar(TC, SizeOf(TC), 0);
+        TC.Id   := TCObj.GetStr('id', '');
+        TC.Kind := TCObj.GetStr('type', 'function');
+        FObj := TCObj.ChildObject('function');
+        if FObj <> nil then
+        begin
+          TC.Func.Name      := FObj.GetStr('name', '');
+          TC.Func.Arguments := FObj.GetStr('arguments', '{}');
+        end;
+        SetLength(Resp.ToolCalls, Length(Resp.ToolCalls) + 1);
+        Resp.ToolCalls[High(Resp.ToolCalls)] := TC;
+      end;
   finally
     Req.Free;
   end;

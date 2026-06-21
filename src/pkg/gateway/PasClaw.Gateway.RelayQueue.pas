@@ -112,12 +112,25 @@ type
 
   { Stringly-typed because the worker side is HTTP and the gateway
     just relays whatever the worker sent us. The provider materialises
-    these back into TLLMResponse fields on receive. }
+    these back into TLLMResponse fields on receive.
+
+    ToolCalls -- structured worker output for agent flows (Codex P2 on
+    PR #318). The V1 doc claimed "tool calls are text-parsed from the
+    model reply" but there was no parser; relay-backed agent flows
+    silently stalled after the first tool call. V1.1: accept a
+    `tool_calls` array in the worker's response JSON with the same
+    OpenAI shape (id / type / function.name / function.arguments) and
+    pass it through DecodeResponse into TLLMResponse.ToolCalls. Workers
+    that emit only text get text-only chat (no tool dispatch) -- the
+    same limitation the V1 doc warns about for "smaller local models
+    without strong tool support." Modern inference libraries (WebLLM,
+    llama.cpp via grammar, mlc-llm) all emit structured tool calls. }
   TRelayResponse = record
     Content:      string;
     FinishReason: string;
     UsageInput:   Integer;
     UsageOutput:  Integer;
+    ToolCalls:    array of TToolCall;
     ErrMsg:       string;       { non-empty when the worker reported a failure }
   end;
 
@@ -214,6 +227,15 @@ type
 
     { Provider side -- TRelayProvider.Chat() calls these. }
     procedure Enqueue(R: TRelayRequest);
+    { Drop a request from FPending or FInflight if still present, under
+      lock. Idempotent; safe to call on a request that was already
+      consumed via Respond (returns False). The provider's Chat()
+      must call Cancel BEFORE Free on any timeout / abort path so the
+      queue doesn't keep a dangling pointer past the request's
+      lifetime (Codex P1 on PR #318). Returns True when the request
+      was found and removed; False otherwise (already consumed or
+      never enqueued). }
+    function  Cancel(const Id: TRelayRequestId): Boolean;
 
     { Operator surface. }
     function  GetStatus: TRelayQueueStatus;
@@ -389,7 +411,18 @@ constructor TRelayQueue.Create;
 begin
   inherited;
   FLock     := TCriticalSection.Create;
-  FNewWork  := TEvent.Create(nil, {ManualReset=}False,
+  { Manual-reset: SetEvent unblocks ALL waiters, not just one. Codex
+    P1 on PR #318: a single auto-reset event woke an arbitrary
+    blocked worker who may not have matched the request's
+    capabilities, leaving the actually-capable worker blocked. With
+    manual-reset broadcasting + Reset-when-empty (under lock, inside
+    DequeueForWorker after PopMatching returns nil), every blocked
+    worker re-evaluates on each enqueue; whichever matches takes the
+    work, the rest go back to sleep cleanly. The Reset-under-lock +
+    SetEvent-under-lock ordering means no lost-wakeup race: a wake
+    happens iff the queue had pending work at any time after the
+    waiter committed to wait. }
+  FNewWork  := TEvent.Create(nil, {ManualReset=}True,
                               {InitialState=}False, '');
   FPending  := TList.Create;
   FInflight := TList.Create;
@@ -518,9 +551,11 @@ begin
     begin
       FWorkers.Add(TRelayWorker.Create(WorkerId, Capabilities));
     end;
-    { A new worker may unblock requests waiting on its capabilities --
-      poke the wake event so blocked DequeueForWorker callers re-evaluate. }
-    FNewWork.SetEvent;
+    { A new worker may unblock requests that the existing workers
+      couldn't serve. Wake all blocked dequeuers so the new worker (or
+      any worker that's been re-evaluating) sees the pending queue. }
+    if FPending.Count > 0 then
+      FNewWork.SetEvent;
   finally
     FLock.Release;
   end;
@@ -583,14 +618,18 @@ begin
       W.Touch;
       R := PopMatchingRequestLocked(W);
       if R <> nil then Exit(R);
+      { No matching pending work for THIS worker. Reset the broadcast
+        event ONLY when the queue has no pending work AT ALL -- if
+        there's a pending request this worker can't serve (capability
+        mismatch), some OTHER worker might be able to, and we mustn't
+        starve their wakeup. The Reset + SetEvent serialise on FLock
+        so there's no lost-wakeup race: any Enqueue that happens after
+        we Reset must wait for our lock release, then will SetEvent. }
+      if FPending.Count = 0 then
+        FNewWork.ResetEvent;
     finally
       FLock.Release;
     end;
-    { Nothing to do; wait for new work (or timeout). FNewWork is a
-      manual / auto-reset choice -- we use auto-reset (constructor
-      passed ManualReset=False) so each SetEvent wakes at most one
-      waiter. That avoids a thundering herd when one new request
-      arrives but ten workers are blocked. }
     Now_ := Now;
     if Now_ >= Deadline then Exit(nil);
     Remaining := Round((Deadline - Now_) * 24 * 60 * 60 * 1000);
@@ -630,6 +669,61 @@ begin
   R.FDone.SetEvent;
 end;
 
+function TRelayQueue.Cancel(const Id: TRelayRequestId): Boolean;
+{ Drop a request from FPending or FInflight under the lock. Idempotent.
+
+  Codex P1 on PR #318: TRelayProvider.Chat() used to free the request
+  in its finally block on every exit path. On the timeout / abort path
+  the request was still in FPending or FInflight, so the queue kept a
+  dangling pointer past Free -- a later Respond() or queue destruction
+  would dereference / re-free freed memory.
+
+  Provider now calls Cancel BEFORE Free on every non-success exit:
+  Cancel removes the entry from whichever list owns it, decrements the
+  matching stat counter, and returns True so the provider knows the
+  pointer is still safe to free. False return = the request was
+  already consumed (Respond arrived between WaitFor wake and Cancel)
+  and the queue already cleaned up; the provider must not Free a
+  request the queue already disposed of in that case -- the queue
+  doesn't own the memory, so it doesn't free it either, but Respond's
+  prior signal means the request is no longer reachable from FPending
+  / FInflight. The provider Frees iff Cancel returned True; iff
+  Cancel returned False, the response path already ran and the
+  ResponseValid flag tells the caller a real response is sitting
+  there. }
+var
+  i: Integer;
+  R: TRelayRequest;
+begin
+  Result := False;
+  FLock.Acquire;
+  try
+    for i := 0 to FPending.Count - 1 do
+    begin
+      R := TRelayRequest(FPending[i]);
+      if R.Id = Id then
+      begin
+        FPending.Delete(i);
+        Dec(FStats.PendingRequests);
+        if FPending.Count = 0 then FNewWork.ResetEvent;
+        Exit(True);
+      end;
+    end;
+    for i := 0 to FInflight.Count - 1 do
+    begin
+      R := TRelayRequest(FInflight[i]);
+      if R.Id = Id then
+      begin
+        FInflight.Delete(i);
+        Dec(FStats.InflightRequests);
+        Exit(True);
+      end;
+    end;
+  finally
+    FLock.Release;
+  end;
+end;
+
 procedure TRelayQueue.Enqueue(R: TRelayRequest);
 begin
   FLock.Acquire;
@@ -637,6 +731,11 @@ begin
     FPending.Add(R);
     Inc(FStats.PendingRequests);
     Inc(FStats.TotalEnqueued);
+    { Manual-reset broadcast wake (Codex P1 on PR #318): SetEvent
+      unblocks every waiter in DequeueForWorker. Each waiter re-checks
+      under the lock; whichever's CanServe matches takes the work, the
+      rest see no match, Reset the event (if queue is now empty), and
+      go back to sleep. }
     FNewWork.SetEvent;
   finally
     FLock.Release;

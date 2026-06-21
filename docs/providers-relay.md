@@ -28,10 +28,15 @@ Three flows this unblocks that none of the existing catalog providers do:
 - Non-streaming. Worker returns one POST with the full completion.
   Streaming (chunks back through PasClaw to the agent loop's caller) is
   a V2 feature.
-- Tool calls are **text-parsed** from the model's reply. The worker
-  serves raw text; PasClaw's existing tool-call extraction does the
-  rest. Smaller local models without strong tool-calling capability get
-  text-only chat.
+- Tool calls flow through the response envelope's **`tool_calls`
+  array** (OpenAI shape: `id`, `type`, `function.name`,
+  `function.arguments`). Workers using libraries that emit structured
+  tool calls (WebLLM, mlc-llm, llama.cpp grammar mode) populate this;
+  workers that emit only text omit the array and the agent gets
+  text-only chat through the relay. There is **no text-extraction
+  fallback** -- worker libraries that can't emit structured output
+  yield text-only relay sessions. Most modern small-model runtimes
+  support structured tool calls; this is the right floor for V1.
 - Capability matching is **exact case-insensitive string match** on the
   model id. Glob / semver matching is V2.
 - Single-process. One in-process queue, one set of workers.
@@ -160,12 +165,31 @@ on receipt.
   "usage": {                       // optional; best-effort token accounting
     "prompt_tokens":     47,
     "completion_tokens": 12
-  }
+  },
+  "tool_calls": [                  // optional; OpenAI shape. Omit when the model
+                                   // produced only text (e.g., smaller models
+                                   // without tool-calling support). Workers
+                                   // that support tool calling -- WebLLM,
+                                   // mlc-llm, llama.cpp grammar mode --
+                                   // populate this; PasClaw forwards verbatim
+                                   // into TLLMResponse.ToolCalls and
+                                   // RunToolLoop dispatches.
+    {
+      "id":   "call_0",
+      "type": "function",
+      "function": {
+        "name":      "fs_read",
+        "arguments": "{\"path\":\"foo.pas\"}"
+      }
+    }
+  ]
 }
 ```
 
 Workers without a token counter can omit `usage`; PasClaw estimates via
-its tokenizer if needed.
+its tokenizer if needed. Workers without tool-calling support omit
+`tool_calls` entirely and the agent gets text-only chat through the
+relay.
 
 ## Multi-worker semantics (this is important)
 
@@ -247,6 +271,10 @@ sees the relay layer.
         content:       completion.choices[0].message.content,
         finish_reason: completion.choices[0].finish_reason,
         usage:         completion.usage,
+        // Forward tool_calls if WebLLM produced them. PasClaw's
+        // RunToolLoop dispatches verbatim. Omit (or null) for
+        // text-only models.
+        tool_calls:    completion.choices[0].message.tool_calls,
       }),
     });
   };
