@@ -35,7 +35,10 @@ uses
   SysUtils, Classes, SyncObjs,
   PasClaw.Providers.Types,
   PasClaw.Providers.Relay,
-  PasClaw.Gateway.RelayQueue;
+  PasClaw.Gateway.RelayQueue,
+  PasClaw.Cmd.Relay;          { BuildRelayWorkerResponseJSON -- worker-side
+                                response envelope. Exposed for the Codex P2
+                                non-2xx-as-error coverage. }
 
 procedure Fail_(const Msg: string);
 begin WriteLn('FAIL: ' + Msg); Halt(1); end;
@@ -582,6 +585,106 @@ begin
   WriteLn('  ok: request body envelope shape');
 end;
 
+procedure TestRequestBodyToolMetadataRoundTrip;
+(* Codex P1 review on PR #323: round-trip the tool-call metadata
+   BuildRelayRequestBody now emits so workers can rebuild a faithful
+   TMessage[] for their forwarded Provider.Chat() call. Pre-fix, an
+   assistant message with ToolCalls + a tool result with ToolCallId
+   came out the worker side as bare role/content, and the next turn's
+   request to OpenAI/Anthropic failed with "missing tool_call_id". *)
+var
+  Msgs:  array of TMessage;
+  Tools: array of TToolDefinition;
+  Opts:  TChatOptions;
+  Body:  string;
+begin
+  SetLength(Msgs, 3);
+  Msgs[0] := MakeMessage(mrUser, 'Read foo.pas');
+
+  Msgs[1] := MakeMessage(mrAssistant, '');
+  SetLength(Msgs[1].ToolCalls, 1);
+  Msgs[1].ToolCalls[0].Id            := 'call_42';
+  Msgs[1].ToolCalls[0].Kind          := 'function';
+  Msgs[1].ToolCalls[0].Func.Name     := 'fs_read';
+  Msgs[1].ToolCalls[0].Func.Arguments := '{"path":"foo.pas"}';
+
+  Msgs[2] := MakeMessage(mrTool, 'unit Foo; ...');
+  Msgs[2].ToolCallId := 'call_42';
+  Msgs[2].Name       := 'fs_read';
+
+  SetLength(Tools, 0);
+  Opts := DefaultChatOptions;
+
+  Body := BuildRelayRequestBody(Msgs, Tools, 'm', Opts, 'req_tool_rt_1');
+
+  AssertContains(Body, '"tool_calls"',            'assistant tool_calls array emitted');
+  AssertContains(Body, '"id" : "call_42"',        'tool call id emitted');
+  AssertContains(Body, '"name" : "fs_read"',      'tool call function name emitted');
+  AssertContains(Body, '"arguments" : "{\"path\":\"foo.pas\"}"',
+                                                  'tool call arguments emitted (json-string)');
+  AssertContains(Body, '"tool_call_id" : "call_42"', 'tool result tool_call_id emitted');
+  AssertContains(Body, '"role" : "tool"',         'tool result role emitted');
+
+  WriteLn('  ok: tool-call metadata round-trips through the envelope');
+end;
+
+procedure TestWorkerResponseSurfacesNon2xxAsError;
+(* Codex P2 review on PR #323: a worker forwarding to a provider that
+   returns 401/429/5xx must encode the result as an "error" envelope
+   so the gateway-side TRelayProvider.DecodeResponse maps it to
+   StatusCode := -1 -- the retryable sentinel that triggers
+   Cfg.Fallbacks. Pre-fix, only StatusCode = -1 (pre-HTTP socket
+   failure) got encoded as error; positive non-2xx fell into the
+   success path and the upstream error text surfaced to the agent as
+   the assistant's reply, bypassing fallback. *)
+var
+  R: TLLMResponse;
+  Body: string;
+begin
+  { 429 from upstream rate limiting. }
+  FillChar(R, SizeOf(R), 0);
+  R.StatusCode := 429;
+  R.Content    := '{"error":"rate_limited"}';
+  Body := BuildRelayWorkerResponseJSON(R);
+  AssertContains(Body, '"error"',                 '429 surfaces error key');
+  AssertContains(Body, 'upstream HTTP 429',       '429 message names the status');
+  AssertContains(Body, 'rate_limited',            '429 carries upstream body');
+
+  { 500 from a flaky vLLM. }
+  FillChar(R, SizeOf(R), 0);
+  R.StatusCode := 500;
+  R.Content    := 'internal server error';
+  Body := BuildRelayWorkerResponseJSON(R);
+  AssertContains(Body, '"error"',                 '500 surfaces error key');
+  AssertContains(Body, 'upstream HTTP 500',       '500 message names the status');
+
+  { -1 socket failure -- pre-fix path; must still encode as error. }
+  FillChar(R, SizeOf(R), 0);
+  R.StatusCode := -1;
+  R.Content    := 'ECONNREFUSED';
+  Body := BuildRelayWorkerResponseJSON(R);
+  AssertContains(Body, '"error"',                 '-1 still surfaces error key');
+  AssertContains(Body, 'ECONNREFUSED',            '-1 keeps the socket-error text');
+
+  { 200 success -- must NOT have an error key. }
+  FillChar(R, SizeOf(R), 0);
+  R.StatusCode := 200;
+  R.Content    := 'Hello!';
+  R.FinishReason := 'stop';
+  Body := BuildRelayWorkerResponseJSON(R);
+  AssertTrue(Pos('"error"', Body) = 0,            '200 has no error key');
+  AssertContains(Body, '"content" : "Hello!"',    '200 carries content');
+
+  { 0 (older provider that doesn't populate the code) -- treat as success. }
+  FillChar(R, SizeOf(R), 0);
+  R.StatusCode := 0;
+  R.Content    := 'legacy provider reply';
+  Body := BuildRelayWorkerResponseJSON(R);
+  AssertTrue(Pos('"error"', Body) = 0,            '0 has no error key (legacy success path)');
+
+  WriteLn('  ok: worker encodes non-2xx upstream status as a relay error');
+end;
+
 procedure TestGlobalQueueAccessor;
 var
   Q: TRelayQueue;
@@ -617,6 +720,8 @@ begin
   TestEmptySessionIdIsNeverSticky;
   TestStatusSnapshot;
   TestRequestBodyEnvelope;
+  TestRequestBodyToolMetadataRoundTrip;
+  TestWorkerResponseSurfacesNon2xxAsError;
   TestGlobalQueueAccessor;
   WriteLn('ok - relay queue tests passed');
 end.
