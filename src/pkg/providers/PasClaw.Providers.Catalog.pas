@@ -112,7 +112,7 @@ end;
   change required for OpenAI-compatible endpoints. }
 function BuildCatalog: TProviderSpecArray;
 begin
-  SetLength(Result, 22);
+  SetLength(Result, 23);
   Result[0]  := MkSpec('anthropic',  'Anthropic',
                        pfAnthropic,  'https://api.anthropic.com',
                        'claude-opus-4-7',
@@ -248,6 +248,40 @@ begin
                        'sonar',
                        MkAuth(asBearer),
                        'Sonar / Sonar Pro / Sonar Reasoning (web-grounded)',
+                       '/chat/completions');
+  (* Cloudflare AI Gateway. Two URL shapes operators paste into
+     api_base, both OpenAI Chat Completions compatible:
+
+       Workers AI direct (no gateway features):
+         https://api.cloudflare.com/client/v4/accounts/{ACCOUNT_ID}/ai/v1
+         + ChatPath /chat/completions
+         => POST .../ai/v1/chat/completions
+
+       AI Gateway proxy (caching, rate limits, analytics, fallback):
+         https://gateway.ai.cloudflare.com/v1/{ACCOUNT_ID}/{GATEWAY_ID}/compat
+         + ChatPath /chat/completions
+         => POST .../{GATEWAY_ID}/compat/chat/completions
+
+     Both expect Authorization: Bearer <CLOUDFLARE_API_TOKEN>; both
+     return the same OpenAI-shaped response. ChatPath is /chat/completions
+     (no /v1) -- like Perplexity -- because the /v1 segment is part of
+     the Cloudflare URL prefix, not the OpenAI path. DefaultBase empty
+     because the URL embeds the operator's account_id (same as mimo /
+     litellm).
+
+     DefaultModel is a Workers AI flagship: Llama 3.3 70B FP8 fast.
+     Operators wanting a different upstream (gpt-oss-120b, Mistral, an
+     Anthropic passthrough through the AI Gateway, etc.) override via
+     the model field per request -- Workers AI prefixes models with
+     `@cf/<vendor>/<name>`; AI Gateway passthroughs use the upstream
+     provider's native model id. Docs:
+     https://developers.cloudflare.com/ai-gateway/ +
+     https://developers.cloudflare.com/workers-ai/. *)
+  Result[22] := MkSpec('cloudflare', 'Cloudflare AI Gateway',
+                       pfOpenAI,     '',
+                       '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+                       MkAuth(asBearer),
+                       'Workers AI direct or AI Gateway proxy (set api_base; Bearer = CLOUDFLARE_API_TOKEN; @cf/ model prefix for Workers AI)',
                        '/chat/completions');
   (* Cohere intentionally not in this catalog: their chat API lives at
      /v2/chat with a non-OpenAI request/response body, so the ChatPath

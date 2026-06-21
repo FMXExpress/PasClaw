@@ -48,5 +48,26 @@ begin
   Expect(Spec.ChatPath = '/v1/chat/completions',
          'groq ChatPath default regressed: ' + Spec.ChatPath);
 
+  { Cloudflare AI Gateway: OpenAI family, Bearer auth, /chat/completions
+    (no /v1 -- the /v1 lives in the operator-supplied api_base prefix).
+    DefaultBase empty because the URL embeds the operator's account id
+    (same pattern as mimo / litellm). DefaultModel is a Workers AI
+    flagship with the @cf/ prefix. }
+  Expect(LookupProvider('cloudflare', Spec), 'cloudflare not in catalog');
+  Expect(Spec.Family = pfOpenAI,             'cloudflare should be pfOpenAI');
+  Expect(Spec.Auth.Kind = asBearer,          'cloudflare should be bearer auth');
+  Expect(Spec.DefaultBase = '',
+         'cloudflare DefaultBase must be empty (operator supplies URL): ' + Spec.DefaultBase);
+  Expect(Spec.DefaultModel = '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+         'cloudflare DefaultModel wrong: ' + Spec.DefaultModel);
+  Expect(Spec.ChatPath = '/chat/completions',
+         'cloudflare ChatPath must be /chat/completions (no /v1), got: ' + Spec.ChatPath);
+  Expect(Spec.DisplayName = 'Cloudflare AI Gateway',
+         'cloudflare DisplayName wrong: ' + Spec.DisplayName);
+
+  { Case-insensitive lookup works for the new row too. }
+  Expect(LookupProvider('Cloudflare', Spec),
+         'cloudflare lookup not case-insensitive');
+
   WriteLn('provider_catalog_tests: OK');
 end.
