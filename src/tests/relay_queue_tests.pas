@@ -424,52 +424,75 @@ begin
   WriteLn('  ok: sticky routing falls back to FCFS when preferred worker is gone');
 end;
 
-procedure TestStickyDoesntStarveOtherSessions;
+procedure TestStrictStickyDoesntStealFromConnectedPreferred;
 var
   Q: TRelayQueue;
-  R1, R2, R3, OutA, OutB, OutC: TRelayRequest;
+  R1, R2, R3, OutA, OutB, OutC, OutD: TRelayRequest;
+  Resp: TRelayResponse;
 begin
-  (* Sticky must not starve sessions whose preferred worker is busy.
-     Setup: session-A is sticky to worker-x; worker-x is BUSY with
-     turn 1. Session-A enqueues turn 2 while session-B (new, no
-     stickiness) also enqueues. Worker-y polls -- it should NOT
-     skip session-B just because session-A's sticky preference
-     isn't available. *)
+  (* Codex P2 on PR #321: with two workers blocked in /v1/relay/poll,
+     after worker-x completes session A's first turn, session A's
+     second turn must NOT be stolen by worker-y just because worker-y
+     happens to acquire the queue lock first. That re-pins session-A
+     to worker-y and defeats sticky routing every cold-cache turn.
+     The strict-sticky rule: pass 2 (FCFS) skips requests pinned to
+     ANOTHER connected worker; takes them only when the pinned worker
+     has disconnected.
+
+     This test models the busy-preferred case (worker-x still alive
+     and registered):
+
+       - Session-A turn 1: worker-x. Sticky[A] := worker-x.
+       - Turn 1 completes (Respond).
+       - Session-A turn 2 (R2) + session-B (R3) enqueue.
+       - Worker-y polls FIRST -- must take R3 (no sticky), MUST skip
+         R2 (sticky to connected worker-x).
+       - Worker-y polls again -- nothing else available, returns nil.
+         (R2 reserved.)
+       - Worker-x polls -- takes R2 via sticky pass 1. *)
   Q := TRelayQueue.Create;
   try
     Q.RegisterWorker('worker-x', Caps([]));
     Q.RegisterWorker('worker-y', Caps([]));
 
-    R1 := TRelayRequest.Create('req_starve_1', '', '{}', 'session-A');
+    R1 := TRelayRequest.Create('req_strict_1', '', '{}', 'session-A');
     Q.Enqueue(R1);
     OutA := Q.DequeueForWorker('worker-x', 1000);
-    AssertTrue(OutA = R1, 'worker-x took turn 1; sticky now points x');
+    AssertTrue(OutA = R1, 'worker-x took turn 1; sticky now pins session-A to worker-x');
 
-    { worker-x is still handling turn 1 (we don't Respond). Now both
-      sessions enqueue: }
-    R2 := TRelayRequest.Create('req_starve_2', '', '{}', 'session-A');
-    R3 := TRelayRequest.Create('req_starve_3', '', '{}', 'session-B');
+    { Complete turn 1 cleanly so the test is about routing, not in-
+      flight requeue. worker-x remains connected and (now) idle. }
+    FillChar(Resp, SizeOf(Resp), 0);
+    Resp.Content := 'turn 1 done';
+    Q.Respond('req_strict_1', Resp);
+
+    R2 := TRelayRequest.Create('req_strict_2', '', '{}', 'session-A');
+    R3 := TRelayRequest.Create('req_strict_3', '', '{}', 'session-B');
     Q.Enqueue(R2);
     Q.Enqueue(R3);
 
-    { worker-y polls. Pass 1 (sticky) finds session-A's R2 but its
-      sticky points to worker-x, not worker-y, so skip. Pass 2 (FCFS)
-      picks up the head of the queue -- R2 (which was enqueued
-      first). After worker-y takes R2, the sticky map for session-A
-      moves to worker-y (last assignment wins). }
+    { worker-y polls. Pass 1 misses (nothing pinned to worker-y).
+      Pass 2: R2 is pinned to worker-x (connected) -- SKIP. R3 has
+      no sticky -- TAKE. Worker-y must take R3, not R2. }
     OutB := Q.DequeueForWorker('worker-y', 1000);
-    AssertTrue(OutB <> nil,
-               'worker-y should pick SOMETHING despite sticky mismatch on session-A');
+    AssertTrue(OutB = R3,
+               'worker-y must take session-B (no sticky), NOT steal session-A from worker-x');
 
-    { Whichever of R2 / R3 worker-y didn't take, worker-x can still
-      grab in turn. The key invariant is that worker-y did NOT sit
-      idle while waiting for session-A's worker preference. }
+    { worker-y polls again. R2 is still reserved for worker-x; nothing
+      else available; return nil after the 200ms timeout. }
     OutC := Q.DequeueForWorker('worker-y', 200);
-    AssertTrue(OutC <> nil, 'worker-y can still take the other pending request');
+    AssertTrue(OutC = nil,
+               'worker-y must NOT steal session-A''s R2 while worker-x is still connected');
+
+    { worker-x polls. Sticky pass hits: session-A pinned to worker-x,
+      R2 is session-A's, worker-x picks it up. Locality preserved. }
+    OutD := Q.DequeueForWorker('worker-x', 1000);
+    AssertTrue(OutD = R2,
+               'worker-x takes session-A''s R2 via sticky pass 1 -- locality preserved');
   finally
     Q.Free;
   end;
-  WriteLn('  ok: sticky preference does not starve sessions with busy preferred worker');
+  WriteLn('  ok: strict sticky does not steal sessions pinned to a connected preferred worker');
 end;
 
 procedure TestEmptySessionIdIsNeverSticky;
@@ -590,7 +613,7 @@ begin
   TestCancelOfUnknownIsFalse;
   TestStickyRoutingPrefersLastWorker;
   TestStickyRoutingFallsBackOnDisconnect;
-  TestStickyDoesntStarveOtherSessions;
+  TestStrictStickyDoesntStealFromConnectedPreferred;
   TestEmptySessionIdIsNeverSticky;
   TestStatusSnapshot;
   TestRequestBodyEnvelope;

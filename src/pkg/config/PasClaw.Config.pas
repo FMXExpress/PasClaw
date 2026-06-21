@@ -565,6 +565,15 @@ type
        flip cron_tool_enabled=true in config.json. The running scheduler
        picks up the model's edits within one tick (config mtime watch). *)
     CronToolEnabled:   Boolean;
+    (* Per-Chat() wait timeout in milliseconds for the relay provider
+       (PasClaw.Providers.Relay -- the pull-worker pattern). 0 = use
+       the Pascal default RelayDefaultWaitTimeoutMs (5 minutes).
+       Operators with a flaky worker that takes ages to connect set
+       this to 30 minutes or longer; operators wanting fast fallback
+       to the next provider in the chain set it lower. Sentinel: a
+       configured 0 keeps PasClaw on the built-in default so a future
+       bump to the constant flows through without operator action. *)
+    RelayWaitTimeoutMs: Integer;
     (* On-by-default: when True, memory_search uses a hybrid keyword
        (FTS5 BM25) + vector (sqlite-vec ANN) index over
        workspace/memory/ files, fused via Reciprocal Rank Fusion.
@@ -914,6 +923,7 @@ begin
   VaultToolsEnabled    := False; { off by default per the bench-grounded "stock = lean-edit shape" verdict (bench/swe/README.md). Vault entries are never called across the bench's 45+ cells -- the model has them as training data. Onboarding asks (default Y for operators who DO use the vault). }
   WebFetchEnabled      := False; { off by default for the same reason as VaultToolsEnabled. Also drops memory_fetch (RegisterMemoryFetchTool is gated on EnableWebFetch in NewBuiltinRegistry -- see comment there). Onboarding asks. }
   CronToolEnabled      := False; { off by default -- model-scheduled background jobs are an opt-in autonomy step (runs existing skills only). }
+  RelayWaitTimeoutMs   := 0;     { 0 = use the Pascal-side RelayDefaultWaitTimeoutMs (5 min). Operators set higher for flaky workers, lower for fast fallback. }
   MCPProgressiveDisclosure := True;  { on by default -- fat catalogs (Replicate MCP ~50 tools, GitHub MCP ~50+) make lazy reveal the right floor. The prompt cost of every MCP schema every turn dominates the bill on turns that touch zero MCP tools; tool_search loads schemas on demand at a one-turn cost per first-use. Operators with tiny catalogs flip off via onboarding (default N) or hand-edit if the +1 turn isn't worth the savings. Mirrors Claude Code's ToolSearch pattern. No-op when no MCP servers are configured. }
   RenderMarkdown       := True;  { on by default for terminal surfaces; cmd/serve flips off }
   ToolOutputCap        := 0;     { off by default; operators opt in. See TConfig.ToolOutputCap. }
@@ -1173,6 +1183,12 @@ begin
       operator who opted into model-scheduled jobs round-trips. }
     if CronToolEnabled then
       Root.PutBool('cron_tool_enabled', True);
+    { relay_wait_timeout_ms: 0 (the default) means "use the Pascal-
+      side RelayDefaultWaitTimeoutMs"; only emit when the operator
+      set a non-default value so future bumps to the constant flow
+      through and a fresh config stays tidy. }
+    if RelayWaitTimeoutMs > 0 then
+      Root.PutInt('relay_wait_timeout_ms', RelayWaitTimeoutMs);
     { RenderMarkdown defaults to True; emit only when operator
       explicitly disabled it so they can flip it back via config.json
       and we round-trip correctly. }
@@ -1597,6 +1613,8 @@ begin
     VaultToolsEnabled   := Root.GetBool('vault_tools_enabled',   VaultToolsEnabled);
     WebFetchEnabled     := Root.GetBool('web_fetch_enabled',     WebFetchEnabled);
     CronToolEnabled     := Root.GetBool('cron_tool_enabled',     CronToolEnabled);
+    RelayWaitTimeoutMs  := Integer(Root.GetInt('relay_wait_timeout_ms',
+                                                RelayWaitTimeoutMs));
     MCPProgressiveDisclosure := Root.GetBool('mcp_progressive_disclosure',
                                               MCPProgressiveDisclosure);
     RenderMarkdown      := Root.GetBool('render_markdown',       RenderMarkdown);

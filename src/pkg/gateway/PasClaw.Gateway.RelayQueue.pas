@@ -546,18 +546,26 @@ begin
     end;
   end;
 
-  { Pass 2: FCFS fallback. Either no sticky session for this worker
-    has pending work, or the session's preferred worker has just
-    moved (the sticky map's update on the next TakeRequestAtLocked
-    reflects whoever actually took this turn). }
+  { Pass 2: FCFS fallback. Skip requests whose session is pinned to a
+    DIFFERENT currently-connected worker -- that worker just hasn't
+    polled yet, and stealing the request would re-pin the session on
+    every cold-cache turn 2+, defeating sticky routing entirely
+    (Codex P2 on PR #321). Take only when the pinned worker has
+    actually disconnected from the registry, so the session falls
+    back rather than starving on a ghost. Requests with no sticky
+    entry (one-shot or first-turn-in-session) are taken as before. }
   for i := 0 to FPending.Count - 1 do
   begin
     R := TRelayRequest(FPending[i]);
-    if W.CanServe(R.Model) then
+    if not W.CanServe(R.Model) then Continue;
+    if R.SessionId <> '' then
     begin
-      TakeRequestAtLocked(i, R);
-      Exit(R);
+      Stuck := FSessionToWorker.Values[R.SessionId];
+      if (Stuck <> '') and (Stuck <> W.Id) and (FindWorker(Stuck) <> nil) then
+        Continue;
     end;
+    TakeRequestAtLocked(i, R);
+    Exit(R);
   end;
 end;
 

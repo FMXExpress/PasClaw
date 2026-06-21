@@ -242,10 +242,13 @@ Dispatch is two-pass:
 
 1. **Sticky pass** — scan pending requests for any whose session id
    is pinned to *this* polling worker. If found, take it.
-2. **FCFS pass** — fall back to the historical first-come-first-served
-   behaviour. If a session's preferred worker is busy or disconnected,
-   another worker can still pick up the session's request (no
-   starvation).
+2. **FCFS fallback** — take the head of the queue, BUT skip any
+   request whose session is pinned to a *different currently-connected*
+   worker. That worker just hasn't polled yet; stealing the request
+   would re-pin the session on every cold-cache turn 2+ and defeat
+   the routing. Take pinned-elsewhere requests only when the pinned
+   worker has actually disconnected from the registry, so sessions
+   don't starve on ghosts.
 
 After assignment the sticky map is updated to whoever took the work,
 so a session whose preferred worker disappeared gets re-pinned to its
@@ -255,6 +258,25 @@ inherit stale stickiness and the map doesn't grow unbounded.
 
 One-shot turns (empty `session_id`) never enter the sticky map — no
 sticky preference, no map pollution from empty-key entries.
+
+## Tuning the per-Chat wait timeout
+
+`Options` exposed in `config.json`:
+
+```jsonc
+{
+  "relay_wait_timeout_ms": 1800000   // 30 minutes; default 0 = use
+                                     // Pascal-side RelayDefaultWaitTimeoutMs (5 min)
+}
+```
+
+`TRelayProvider.Chat()` blocks on `Done.WaitFor` for this long before
+giving up and returning a `StatusCode := -1` error that walks the
+fallback chain. Operators with a flaky worker that takes ages to come
+back online set this higher (30 minutes, an hour); operators wanting
+fast fallback to the next provider set it lower. `0` (the default)
+keeps PasClaw on the built-in default so future bumps to the
+constant flow through without operator action.
 
 ## How `/v1/responses` differs
 
