@@ -89,6 +89,12 @@ type
     NoTools:       Boolean;
     NoMCP:         Boolean;
     NoHashline:    Boolean;
+    { --no-plan -- opt out of the workspace/PLAN.md auto-pickup
+      added in PR-cycle "pasclaw plan / pasclaw build" Phase 2.
+      Default False; when True, BuildActivePlanSection emits empty
+      so PLAN.md is ignored for this run. Cmd.Build also reads this
+      from A.Forwarded to skip its post-success archival step. }
+    NoPlan:        Boolean;
     { Session id to resume. Empty (the default) = interactive mode
       auto-allocates a fresh id and persists from turn 1, so a Ctrl-C
       / crash never drops the conversation. Non-empty AND existing on
@@ -171,6 +177,7 @@ begin
   Result.NoTools       := False;
   Result.NoMCP         := False;
   Result.NoHashline    := False;
+  Result.NoPlan        := False;
   Result.Quiet         := False;
 end;
 
@@ -197,6 +204,7 @@ begin
     if Argv[i] = '--no-tools'    then begin A.NoTools    := True; Inc(i); Continue; end;
     if Argv[i] = '--no-mcp'      then begin A.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline' then begin A.NoHashline := True; Inc(i); Continue; end;
+    if Argv[i] = '--no-plan'     then begin A.NoPlan     := True; Inc(i); Continue; end;
     if (Argv[i] = '--quiet') or (Argv[i] = '-q') then begin A.Quiet := True; Inc(i); Continue; end;
     if Argv[i] = '--session'     then begin if i = High(Argv) then Exit(False); A.Session := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--backend'     then begin if i = High(Argv) then Exit(False); A.BackendOverride := Argv[i + 1]; Inc(i, 2); Continue; end;
@@ -375,7 +383,8 @@ begin
     the MEMORY section slices to task-relevant sections instead of
     whole files. }
   Result.Options.SystemPrompt  := BuildSystemPrompt(Cfg, A.SystemPrompt,
-                                                    Reg <> nil, TaskHint, A.Mode);
+                                                    Reg <> nil, TaskHint,
+                                                    A.Mode, A.NoPlan);
   Result.Mode := A.Mode;
   Result.Options.ThinkingLevel := A.Thinking;
   if A.MaxTokens > 0 then Result.Options.MaxTokens := A.MaxTokens;
@@ -1141,7 +1150,8 @@ begin
               keeps the model's own behaviour aligned. }
             LoopCfg.Mode := A.Mode;
             LoopCfg.Options.SystemPrompt :=
-              BuildSystemPrompt(Cfg, A.SystemPrompt, Reg <> nil, '', A.Mode);
+              BuildSystemPrompt(Cfg, A.SystemPrompt, Reg <> nil, '',
+                                A.Mode, A.NoPlan);
             PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
                     ' mode -> ' + ModeName(A.Mode));
           end;

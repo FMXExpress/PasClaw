@@ -419,6 +419,75 @@ begin
   for i := 0 to L.Count - 1 do Result[i] := L[i];
 end;
 
+function ContainsNoPlanFlag(Forwarded: TStringList): Boolean;
+{ Cmd.Build doesn't parse --no-plan -- it just forwards every unknown
+  flag to Cmd.Agent. For archival we need to know whether the operator
+  opted out, so scan A.Forwarded for the bare flag. Match is exact:
+  we don't expand prefixes the way some parsers do. }
+var
+  i: Integer;
+begin
+  Result := False;
+  for i := 0 to Forwarded.Count - 1 do
+    if Forwarded[i] = '--no-plan' then Exit(True);
+end;
+
+procedure ArchivePlanMaybe(const Home: string; AgentRc: Integer;
+                            Forwarded: TStringList);
+{ Move <home>/workspace/PLAN.md to <home>/workspace/memory/plans/
+  <timestamp>.md when the build that just consumed it succeeded.
+
+  Skipped silently when:
+    - --no-plan was in the operator's argv (they opted out of
+      auto-pickup; respect that and don't touch the file)
+    - PLAN.md doesn't exist (no plan, nothing to archive)
+    - The agent exited with non-zero status (the build failed; the
+      plan is still relevant for whatever retry comes next, and
+      destroying it would force the operator to re-plan from
+      scratch).
+
+  Failures (mkdir / rename) are logged but don't override AgentRc
+  -- a failed archival shouldn't sink an otherwise-successful build. }
+var
+  PlanPath, ArchiveDir, Stamp, ArchivePath: string;
+begin
+  if AgentRc <> 0 then Exit;
+  if ContainsNoPlanFlag(Forwarded) then
+  begin
+    LogInfo('build: --no-plan set, leaving PLAN.md in place');
+    Exit;
+  end;
+  PlanPath := JoinPath(JoinPath(Home, 'workspace'), 'PLAN.md');
+  if not SysUtils.FileExists(PlanPath) then Exit;
+
+  ArchiveDir := JoinPath(JoinPath(JoinPath(Home, 'workspace'), 'memory'), 'plans');
+  if not ForceDirectories(ArchiveDir) then
+  begin
+    LogWarn('build: cannot create plan archive dir %s -- leaving PLAN.md in place',
+            [ArchiveDir]);
+    Exit;
+  end;
+
+  Stamp := FormatDateTime('yyyy-mm-dd-hhnnss', Now);
+  ArchivePath := JoinPath(ArchiveDir, Stamp + '.md');
+  try
+    if not RenameFile(PlanPath, ArchivePath) then
+    begin
+      LogWarn('build: PLAN.md archive RenameFile failed (%s -> %s); leaving in place',
+              [PlanPath, ArchivePath]);
+      Exit;
+    end;
+  except
+    on E: Exception do
+    begin
+      LogWarn('build: PLAN.md archive raised %s: %s; leaving in place',
+              [E.ClassName, E.Message]);
+      Exit;
+    end;
+  end;
+  LogInfo('build: archived PLAN.md -> %s', [ArchivePath]);
+end;
+
 function Cmd_Build_Run(const Argv: array of string): Integer;
 const
   ExcludeFromZip: array[0..3] of string = (
@@ -521,6 +590,21 @@ begin
       end;
       if Rc <> 0 then
         LogWarn('build: agent exited with status %d', [Rc]);
+
+      { 3.5 PLAN.md archival. If a prior `pasclaw plan` left a
+        workspace/PLAN.md the model just consumed as system-prompt
+        context (Phase 2), move it to workspace/memory/plans/
+        <timestamp>.md so the next `pasclaw build` doesn't re-load
+        the same plan and the operator gets a browsable history of
+        what was planned.
+
+        Skipped if --no-plan was in the operator's argv (opt-out
+        of the auto-pickup also means opt-out of archival -- if you
+        ignored PLAN.md, leave it alone) OR if the agent exited
+        with a non-zero status (a failed build's plan is still
+        relevant for the retry). }
+      ArchivePlanMaybe(Home, Rc, A.Forwarded);
+
 
       { 4. Zip out. Failure to pack is logged but doesn't override
         the agent's exit code -- the operator can still inspect
