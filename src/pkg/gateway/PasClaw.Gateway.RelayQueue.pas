@@ -165,8 +165,15 @@ type
     FResponse:       TRelayResponse;
     FResponseValid:  Boolean;
   public
+    { Overloaded rather than a single ctor with `const ASessionId: string =
+      ''` -- dcc64 rejects calls that supply the optional 4th arg with
+      E2034 "Too many actual parameters" when the default sits behind a
+      `const string` parameter. FPC accepts both forms; we just pick the
+      overload shape that compiles on both. The 3-arg overload delegates
+      to the 4-arg form with an empty session id. }
+    constructor Create(const AId, AModel, ABodyJSON: string); overload;
     constructor Create(const AId, AModel, ABodyJSON: string;
-                       const ASessionId: string = '');
+                       const ASessionId: string); overload;
     destructor  Destroy; override;
     property Id:             TRelayRequestId  read FId;
     property Model:          string           read FModel;
@@ -348,6 +355,11 @@ begin
 end;
 
 { ----- TRelayRequest ----- }
+
+constructor TRelayRequest.Create(const AId, AModel, ABodyJSON: string);
+begin
+  Create(AId, AModel, ABodyJSON, '');
+end;
 
 constructor TRelayRequest.Create(const AId, AModel, ABodyJSON: string;
                                   const ASessionId: string);
