@@ -95,6 +95,19 @@ type
       so PLAN.md is ignored for this run. Cmd.Build also reads this
       from A.Forwarded to skip its post-success archival step. }
     NoPlan:        Boolean;
+    { --goal-objective "<text>" -- Phase 3 of the plan/build pairing.
+      When non-empty in the one-shot -m path, RunSingleTurnGoalDriven
+      drives the Ralph judge loop (PasClaw.Agent.Goals.TGoalRunner)
+      against the objective instead of doing a single-shot turn. Empty
+      -> single-shot. Set by Cmd.Build --goal after parsing PLAN.md's
+      "## Goal" section. Interactive mode does NOT consume this --
+      operators in REPL use the /goal slash command instead. }
+    GoalObjective: string;
+    { --goal-max-iters N -- override the Ralph budget for the
+      --goal-objective driver. Defaults to
+      PasClaw.Agent.Goals.DefaultGoalMaxIter. Ignored when
+      GoalObjective is empty. }
+    GoalMaxIters:  Integer;
     { Session id to resume. Empty (the default) = interactive mode
       auto-allocates a fresh id and persists from turn 1, so a Ctrl-C
       / crash never drops the conversation. Non-empty AND existing on
@@ -178,6 +191,8 @@ begin
   Result.NoMCP         := False;
   Result.NoHashline    := False;
   Result.NoPlan        := False;
+  Result.GoalObjective := '';
+  Result.GoalMaxIters  := 0;  { 0 = use DefaultGoalMaxIter }
   Result.Quiet         := False;
 end;
 
@@ -205,6 +220,8 @@ begin
     if Argv[i] = '--no-mcp'      then begin A.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline' then begin A.NoHashline := True; Inc(i); Continue; end;
     if Argv[i] = '--no-plan'     then begin A.NoPlan     := True; Inc(i); Continue; end;
+    if Argv[i] = '--goal-objective' then begin if i = High(Argv) then Exit(False); A.GoalObjective := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--goal-max-iters' then begin if i = High(Argv) then Exit(False); A.GoalMaxIters := StrToIntDef(Argv[i + 1], A.GoalMaxIters); Inc(i, 2); Continue; end;
     if (Argv[i] = '--quiet') or (Argv[i] = '-q') then begin A.Quiet := True; Inc(i); Continue; end;
     if Argv[i] = '--session'     then begin if i = High(Argv) then Exit(False); A.Session := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--backend'     then begin if i = High(Argv) then Exit(False); A.BackendOverride := Argv[i + 1]; Inc(i, 2); Continue; end;
@@ -656,6 +673,225 @@ begin
     FreeMCPClients(MCPClients);
     if Spawn <> nil then Spawn.Free;
     Reg.Free;
+  end;
+end;
+
+{ ============================================================
+  Goal-driven one-shot path (Phase 3 of plan/build pairing).
+
+  RunSingleTurnGoalDriven wraps the one-shot RunToolLoop call in a
+  PasClaw.Agent.Goals.TGoalRunner instead of running it once. The
+  Ralph judge loop pumps turns: agent runs -> judge verdicts
+  (MET / CONTINUE / FAILED) -> next iteration with the judge's
+  suggestion as the new user message, up to MaxIters.
+
+  Cmd.Build --goal sets A.GoalObjective to PLAN.md's parsed Goal
+  line, and `pasclaw agent --goal-objective "<text>"` lets operators
+  drive the same machinery directly. Interactive mode does NOT
+  consume A.GoalObjective -- REPL operators use /goal instead.
+
+  Deliberately skipped vs the regular RunSingleTurn:
+    - Session persistence: a goal-driven run doesn't write to
+      workspace/sessions/. Operators wanting goal results in their
+      session history can re-pipe via `pasclaw agent --session <id>`
+      after the fact. Future work could add per-iteration persistence.
+    - SkillDistiller post-turn hook: the distiller assumes one
+      coherent task per turn; goal loops produce N iterations and
+      the right distillation moment is unclear. Skipped for V1.
+    - Auto-router per-iteration: goal CONTINUE turns are mid-task
+      and shouldn't route to a cheaper tier. Stays on the primary
+      model. Mirrors the interactive /goal handler.
+  ============================================================ }
+
+type
+  TOneShotGoalCallbacks = class
+    Cfg:      TConfig;
+    A:        TAgentArgs;
+    Provider: ILLMProvider;
+    Reg:      TToolRegistry;
+    Model:    string;
+    Handlers: TLoopHandlers;
+    function  TurnFn(const UserMsg: string;
+                      var Hist: TMessageArray;
+                      out Reply: string): Boolean;
+    procedure Progress(IterNo, MaxIter: Integer; const Reply: string);
+  end;
+
+function TOneShotGoalCallbacks.TurnFn(const UserMsg: string;
+                                       var Hist: TMessageArray;
+                                       out Reply: string): Boolean;
+{ TGoalTurnFn implementation -- one agent turn during the Ralph loop.
+  Slimmed-down counterpart to TGoalCmdCallbacks.TurnFn in the
+  interactive path: no session, no background-spawn drain key, no
+  systems-prompt-override threading (the goal-driven one-shot doesn't
+  persist across turns by design). }
+var
+  Loop:    TToolLoopResult;
+  LoopCfg: TToolLoopConfig;
+begin
+  Result := False;
+  Reply  := '';
+  SetLength(Hist, Length(Hist) + 1);
+  Hist[High(Hist)] := MakeMessage(mrUser, UserMsg);
+
+  LoopCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers, UserMsg);
+  if not RunToolLoop(LoopCfg, Hist, Loop) then Exit;
+
+  { Mirror the RunSingleTurn / interactive convention: RunToolLoop
+    returns Hist with tool transcripts but the final assistant text
+    in Loop.Content -- append it explicitly so the judge call (which
+    reads the most recent assistant message) sees it. Codex P1 on
+    PR #223 covers the original interactive fix; same shape here. }
+  Hist := Loop.FinalMessages;
+  if Trim(Loop.Content) <> '' then
+  begin
+    SetLength(Hist, Length(Hist) + 1);
+    Hist[High(Hist)] := MakeMessage(mrAssistant, Loop.Content);
+  end;
+  Reply := Loop.Content;
+  if Trim(Reply) = '' then Reply := '(no reply)';
+  Result := True;
+end;
+
+procedure TOneShotGoalCallbacks.Progress(IterNo, MaxIter: Integer;
+                                          const Reply: string);
+begin
+  { Quiet mode: no per-iteration chatter, just the final reply.
+    Verbose mode: per-iteration banner so a long goal loop doesn't
+    sit silent for tens of seconds. }
+  if A.Quiet then Exit;
+  PrintLn;
+  PrintLn(Ansi.Dim + Format('— goal iter %d/%d —', [IterNo, MaxIter]) + Ansi.Reset);
+  if Trim(Reply) <> '' then
+    PrintLn(MaybeRender(Cfg, Reply));
+end;
+
+function VerdictName(V: TGoalVerdict): string;
+begin
+  case V of
+    gvMet:              Result := 'MET';
+    gvFailed:           Result := 'FAILED';
+    gvBudgetExhausted:  Result := 'BUDGET-EXHAUSTED';
+    gvAborted:          Result := 'ABORTED';
+  else
+    Result := 'UNKNOWN';
+  end;
+end;
+
+function RunSingleTurnGoalDriven(const Cfg: TConfig; const A: TAgentArgs;
+                                  const Prompt: string): Boolean;
+{ Goal-driven counterpart to RunSingleTurn. Setup mirrors the regular
+  one-shot path but the per-iteration RunToolLoop call is wrapped in
+  TGoalRunner.
+
+  Returns True when the loop ended with MET or BUDGET-EXHAUSTED (the
+  latter is "we tried hard but ran out of turns" -- still a successful
+  best-effort run). Returns False on FAILED, ABORTED, or any
+  setup-time failure (no provider, etc.) so Cmd_Agent_Run maps it to
+  exit 1. Phase 3 of the plan/build pairing. }
+var
+  Provider:   ILLMProvider;
+  Err, Model: string;
+  Reg:        TToolRegistry;
+  Handlers:   TLoopHandlers;
+  MCPClients: TMCPClientList;
+  Spawn:      TSpawnTool;
+  BgCoord:    TBackgroundSpawnCoordinator;
+  Msgs:       TMessageArray;
+  Callbacks:  TOneShotGoalCallbacks;
+  Runner:     TGoalRunner;
+  MaxIter:    Integer;
+  R:          TGoalResult;
+  OneShotSessionId: string;
+begin
+  Result := False;
+  if not PickProvider(Cfg, A, Provider, Err) then
+  begin
+    PrintErr(Err);
+    Exit;
+  end;
+  if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
+
+  Reg := nil;
+  if not A.NoTools then
+  begin
+    Reg := NewBuiltinRegistry((not A.NoHashline) and Cfg.HashlineEnabled,
+                              Cfg.VaultToolsEnabled,
+                              HasConfiguredWebSearchProvider(Cfg),
+                              Cfg.WebFetchEnabled,
+                              (Cfg.ToolOutputCap > 0)
+                                or Cfg.CondenseReversible,
+                              Cfg.CronToolEnabled,
+                              A.Mode = pmPlan);
+    RegisterSkillManageTool(Reg, Cfg);
+    RegisterSkillDisclosureTools(Reg, Cfg);
+  end;
+  MCPClients := ConnectMCP(Cfg, Reg, A.NoMCP);
+  Spawn      := MaybeRegisterSpawnTool(Cfg, Provider, Reg, Model);
+  BgCoord    := MaybeRegisterBackgroundSpawnTools(Cfg, Provider, Reg, Model);
+  Handlers   := TLoopHandlers.Create;
+
+  { Per-process shell-backend session id, same shape as RunSingleTurn.
+    Lazy docker container -- only spawned on the first shell tool call. }
+  OneShotSessionId := 'oneshot-goal-' + FormatDateTime('yyyymmdd-hhnnss', Now) +
+                      '-' + IntToHex(Random(1 shl 24), 6);
+  SetCurrentSessionId(OneShotSessionId);
+
+  try
+    SetLength(Msgs, 1);
+    Msgs[0] := MakeMessage(mrUser, Prompt);
+
+    MaxIter := A.GoalMaxIters;
+    if MaxIter <= 0 then MaxIter := DefaultGoalMaxIter;
+
+    if not A.Quiet then
+    begin
+      PrintLn(Ansi.Bold + '— goal —' + Ansi.Reset + ' ' + A.GoalObjective +
+              Ansi.Dim + Format('  (budget=%d)', [MaxIter]) + Ansi.Reset);
+      PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset +
+              ' (' + Provider.GetName + '/' + Model + '):');
+    end;
+
+    Callbacks := TOneShotGoalCallbacks.Create;
+    Callbacks.Cfg      := Cfg;
+    Callbacks.A        := A;
+    Callbacks.Provider := Provider;
+    Callbacks.Reg      := Reg;
+    Callbacks.Model    := Model;
+    Callbacks.Handlers := Handlers;
+    try
+      Runner := TGoalRunner.Create(Provider, Model, MaxIter, Callbacks.TurnFn);
+      try
+        Runner.OnProgress := Callbacks.Progress;
+        R := Runner.Run(A.GoalObjective, Msgs);
+      finally
+        Runner.Free;
+      end;
+    finally
+      Callbacks.Free;
+    end;
+
+    { Final reply. Quiet mode emits the last assistant text only (cog
+      caller pipes it); verbose mode emits a verdict banner + reason. }
+    if A.Quiet then
+      PrintLn(R.LastReply)
+    else
+    begin
+      PrintLn;
+      PrintLn(Ansi.Bold + '— verdict —' + Ansi.Reset + ' ' + VerdictName(R.Verdict) +
+              ' (iterations=' + IntToStr(R.Iterations) + ')');
+      if R.Reason <> '' then
+        PrintLn(Ansi.Dim + R.Reason + Ansi.Reset);
+    end;
+
+    Result := R.Verdict in [gvMet, gvBudgetExhausted];
+  finally
+    CloseShellSession(OneShotSessionId);
+    SetCurrentSessionId('');
+    Handlers.Free;
+    FreeMCPClients(MCPClients);
+    if Spawn <> nil then Spawn.Free;
+    if Reg <> nil then Reg.Free;
   end;
 end;
 
@@ -1520,8 +1756,21 @@ begin
         `pasclaw agent --quiet -m "..."` callers checking $? see real
         failures instead of a silently-zero exit code that lies about
         success. PR #243 P2. Interactive mode has no equivalent
-        return -- session lifecycle is the user's signal there. }
-      if RunSingleTurn(Cfg, A, A.Message) then
+        return -- session lifecycle is the user's signal there.
+
+        Phase 3 of plan/build: --goal-objective (set by Cmd.Build
+        --goal after parsing PLAN.md's Goal line) routes the one-shot
+        path through RunSingleTurnGoalDriven instead, wrapping
+        RunToolLoop in TGoalRunner so the Ralph judge loop pumps
+        iterations until MET / FAILED / BUDGET-EXHAUSTED. }
+      if A.GoalObjective <> '' then
+      begin
+        if RunSingleTurnGoalDriven(Cfg, A, A.Message) then
+          Result := 0
+        else
+          Result := 1;
+      end
+      else if RunSingleTurn(Cfg, A, A.Message) then
         Result := 0
       else
         Result := 1;

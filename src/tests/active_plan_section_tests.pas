@@ -101,6 +101,93 @@ begin
   WriteLn('  ok: happy path injects PLAN.md body');
 end;
 
+procedure TestGoalExtractHappyPath;
+var
+  Goal: string;
+begin
+  WritePlanInHome(
+    '## Goal' + sLineBreak +
+    'Add a --version flag to the CLI.' + sLineBreak + sLineBreak +
+    '## Files' + sLineBreak +
+    '- src/cmd/PasClaw.Cmd.Root.pas' + sLineBreak);
+  Goal := ExtractGoalFromPlanFile;
+  AssertTrue(Goal = 'Add a --version flag to the CLI.',
+             'Goal extraction picks the first content line ' +
+             '(got "' + Goal + '")');
+  WriteLn('  ok: ExtractGoalFromPlanFile happy path');
+end;
+
+procedure TestGoalExtractColonHeader;
+var
+  Goal: string;
+begin
+  { Some models write "## Goal:" instead of "## Goal". The parser
+    should tolerate the trailing colon. }
+  WritePlanInHome(
+    '## Goal:' + sLineBreak +
+    'Tighten config validation.' + sLineBreak);
+  Goal := ExtractGoalFromPlanFile;
+  AssertTrue(Goal = 'Tighten config validation.',
+             'Goal heading with trailing colon parses (got "' + Goal + '")');
+  WriteLn('  ok: ExtractGoalFromPlanFile tolerates "## Goal:"');
+end;
+
+procedure TestGoalExtractSkipsBlankLines;
+var
+  Goal: string;
+begin
+  WritePlanInHome(
+    '## Goal' + sLineBreak +
+    sLineBreak +
+    sLineBreak +
+    'Build it.' + sLineBreak);
+  Goal := ExtractGoalFromPlanFile;
+  AssertTrue(Goal = 'Build it.',
+             'Goal extraction skips blank lines between header and ' +
+             'content (got "' + Goal + '")');
+  WriteLn('  ok: ExtractGoalFromPlanFile skips blanks');
+end;
+
+procedure TestGoalExtractEmptyWhenMissing;
+var
+  Goal: string;
+begin
+  DeletePlanInHome;
+  Goal := ExtractGoalFromPlanFile;
+  AssertEmpty(Goal, 'missing PLAN.md returns empty');
+  WriteLn('  ok: ExtractGoalFromPlanFile returns "" when PLAN.md missing');
+end;
+
+procedure TestGoalExtractEmptyWhenNoGoalSection;
+var
+  Goal: string;
+begin
+  WritePlanInHome(
+    '## Files' + sLineBreak +
+    '- foo.pas' + sLineBreak +
+    sLineBreak +
+    '## Steps' + sLineBreak +
+    '1. Do the thing.' + sLineBreak);
+  Goal := ExtractGoalFromPlanFile;
+  AssertEmpty(Goal, 'PLAN.md without a "## Goal" section returns ""');
+  WriteLn('  ok: ExtractGoalFromPlanFile returns "" when no Goal section');
+end;
+
+procedure TestGoalExtractEmptyWhenHeaderHasNoContent;
+var
+  Goal: string;
+begin
+  { ## Goal followed by ## Files with no content between -- parser
+    should bail rather than picking up the next heading as the goal. }
+  WritePlanInHome(
+    '## Goal' + sLineBreak +
+    '## Files' + sLineBreak +
+    '- foo.pas' + sLineBreak);
+  Goal := ExtractGoalFromPlanFile;
+  AssertEmpty(Goal, 'PLAN.md with empty Goal section returns ""');
+  WriteLn('  ok: ExtractGoalFromPlanFile returns "" when Goal is empty');
+end;
+
 procedure TestStaleNoteWhenOver24h;
 var
   Section: string;
@@ -127,5 +214,11 @@ begin
   TestEmptyWhenPlanMissing;
   TestInjectsBody;
   TestStaleNoteWhenOver24h;
-  WriteLn('ok - active plan section tests passed');
+  TestGoalExtractHappyPath;
+  TestGoalExtractColonHeader;
+  TestGoalExtractSkipsBlankLines;
+  TestGoalExtractEmptyWhenMissing;
+  TestGoalExtractEmptyWhenNoGoalSection;
+  TestGoalExtractEmptyWhenHeaderHasNoContent;
+  WriteLn('ok - active plan section + goal extract tests passed');
 end.

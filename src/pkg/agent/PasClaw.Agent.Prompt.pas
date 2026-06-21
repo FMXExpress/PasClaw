@@ -107,6 +107,30 @@ function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
   through BuildSystemPrompt. }
 function BuildActivePlanSection(NoPlan: Boolean; Mode: TPasClawMode): string;
 
+{ Extract the "## Goal" objective line from workspace/PLAN.md.
+
+  Looks for the first markdown H2 heading equal to "Goal" (or "Goal:"),
+  then returns the next non-empty, non-heading content line (trimmed).
+  That line is the planner's single-sentence verb-prefixed objective
+  per `pasclaw plan`'s opinionated structure.
+
+  Returns '' when PLAN.md is missing, unreadable, or has no parseable
+  Goal section. Caller decides whether '' is a soft fall-through (skip
+  the goal driver) or hard error (fail the build).
+
+  Two overloads:
+    - No-arg version uses GetHome (PASCLAW_HOME env) to resolve the
+      workspace root. Suitable for tests and any caller whose
+      PASCLAW_HOME is reliably set in the OS env table.
+    - HomeOverride version takes an explicit home dir. Used by
+      Cmd.Build where the libc_setenv just-set PASCLAW_HOME isn't
+      always visible to a same-process GetEnvironmentVariable read --
+      passing Home explicitly bypasses the env round-trip and is
+      strictly more correct anyway (Cmd.Build owns the home path; no
+      reason to round-trip it through env). }
+function ExtractGoalFromPlanFile: string; overload;
+function ExtractGoalFromPlanFile(const HomeOverride: string): string; overload;
+
 { Locate the nearest AGENTS.md walking up from StartDir to the
   filesystem root, stopping at the first git working tree boundary
   (a directory containing a `.git` entry) once that boundary is
@@ -514,6 +538,105 @@ begin
   if Trim(Section) = '' then Exit(Acc);
   if Acc = '' then Exit(Section);
   Result := Acc + SectionSep + Section;
+end;
+
+function ExtractGoalFromPlanFile: string; overload;
+begin
+  Result := ExtractGoalFromPlanFile(GetHome);
+end;
+
+function ExtractGoalFromPlanFile(const HomeOverride: string): string; overload;
+{ Phase 3 helper: parse the "## Goal" section of <home>/workspace/PLAN.md
+  and return the first content line as the Ralph objective. The planner
+  directive constrains plans to open the Goal section with a single-
+  sentence verb-prefixed objective, so the first non-empty, non-heading
+  line after the header IS the objective.
+
+  Tolerances:
+    - Heading can be "## Goal", "## Goal:", "##Goal", "## GOAL", etc.
+      (case-insensitive on the word, optional trailing colon and
+      whitespace).
+    - Blank lines between heading and content are skipped.
+    - The objective itself may be wrapped across multiple lines; we
+      return only the first line (the planner is opinionated on
+      single-sentence objectives, and the rest is treated as
+      explanation).
+
+  Returns '' for any read failure or missing/empty Goal section. }
+const
+  HeaderToken = 'GOAL';
+var
+  Path, Body, Line, Stripped: string;
+  Lines: TStringList;
+  i: Integer;
+  InGoal: Boolean;
+
+  function StripHeader(const S: string): string;
+  { Strip leading '#' chars + whitespace + a trailing colon, uppercase
+    what's left. Used to recognise heading lines as "## Goal" without
+    being picky about exact formatting. }
+  var
+    Trimmed: string;
+  begin
+    Trimmed := Trim(S);
+    while (Trimmed <> '') and (Trimmed[1] = '#') do
+      Delete(Trimmed, 1, 1);
+    Trimmed := Trim(Trimmed);
+    if (Trimmed <> '') and (Trimmed[Length(Trimmed)] = ':') then
+      SetLength(Trimmed, Length(Trimmed) - 1);
+    Result := UpperCase(Trim(Trimmed));
+  end;
+
+  function IsHeading(const S: string): Boolean;
+  begin
+    Result := (Trim(S) <> '') and (Trim(S)[1] = '#');
+  end;
+
+begin
+  Result := '';
+  Path := JoinPath(JoinPath(HomeOverride, 'workspace'), 'PLAN.md');
+  if not FileExists(Path) then Exit;
+  try
+    Body := ReadFileText(Path);
+  except
+    on E: Exception do
+    begin
+      LogWarn('plan-goal: PLAN.md unreadable (%s)', [E.Message]);
+      Exit;
+    end;
+  end;
+  if Trim(Body) = '' then Exit;
+
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Body;
+    InGoal := False;
+    for i := 0 to Lines.Count - 1 do
+    begin
+      Line := Lines[i];
+      Stripped := Trim(Line);
+
+      if not InGoal then
+      begin
+        { Looking for the Goal header. }
+        if IsHeading(Line) and (StripHeader(Line) = HeaderToken) then
+          InGoal := True;
+      end
+      else
+      begin
+        { In the Goal section. Skip blanks; on the first non-blank
+          non-heading line, return its trimmed text. A heading here
+          means we walked off the end of the Goal section without
+          finding content (e.g., "## Goal\n## Files"); give up. }
+        if Stripped = '' then Continue;
+        if IsHeading(Line) then Exit;
+        Result := Stripped;
+        Exit;
+      end;
+    end;
+  finally
+    Lines.Free;
+  end;
 end;
 
 function BuildActivePlanSection(NoPlan: Boolean; Mode: TPasClawMode): string;
