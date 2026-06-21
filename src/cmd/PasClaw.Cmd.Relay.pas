@@ -198,6 +198,12 @@ begin
       if TCObj = nil then Continue;
       Result[i].ToolCalls[j].Id   := TCObj.GetStr('id', '');
       Result[i].ToolCalls[j].Kind := TCObj.GetStr('type', 'function');
+      { Round-trip the Gemini-3 thoughtSignature -- BuildRelayRequestBody
+        emits it as `provider_signature` next to each tool_call when
+        non-empty. Empty for non-Gemini callers, in which case the
+        getter returns ''. }
+      Result[i].ToolCalls[j].ProviderSignature :=
+        TCObj.GetStr('provider_signature', '');
       FObj := TCObj.ChildObject('function');
       if FObj <> nil then
       begin
@@ -270,6 +276,15 @@ begin
     FObj.PutStr('name',      Calls[i].Func.Name);
     FObj.PutStr('arguments', Calls[i].Func.Arguments);
     Obj.PutObject('function', FObj);
+    { Emit provider_signature from the worker's local provider so the
+      gateway side can stash it on TLLMResponse.ToolCalls[i] and feed
+      it back in next turn's request envelope (BuildRelayRequestBody).
+      Gemini 3+ returns this on the assistant's functionCall part and
+      400s the follow-up if it's dropped. Only emitted when
+      non-empty -- other providers (including Gemini 2.x) leave it
+      blank and the field is omitted from the wire. }
+    if Calls[i].ProviderSignature <> '' then
+      Obj.PutStr('provider_signature', Calls[i].ProviderSignature);
     Result.AddObject(Obj);
   end;
 end;
