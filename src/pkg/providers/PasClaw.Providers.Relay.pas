@@ -148,6 +148,13 @@ begin
   try
     Root.PutStr('id',    RequestId);
     Root.PutStr('model', Model);
+    { session_id: opaque conversation identifier, empty for one-shot
+      turns. The gateway's queue uses this for sticky routing (keep
+      multi-turn sessions on the same worker for KV-cache locality);
+      workers can read it for their own cache reuse. Only emit when
+      non-empty so workers don't see a noisy 'session_id: ""' field. }
+    if Options.CacheKey <> '' then
+      Root.PutStr('session_id', Options.CacheKey);
 
     { messages: full conversation. The worker is stateless -- it sees
       the entire history on every call. }
@@ -288,7 +295,16 @@ begin
   ReqId := NewRelayRequestId;
   Body  := BuildRelayRequestBody(Messages, Tools, EffMod, Options, ReqId);
 
-  Req := TRelayRequest.Create(ReqId, EffMod, Body);
+  { Pass Options.CacheKey (the conversation/session id PasClaw threads
+    through the agent loop) as the sticky-routing key. Empty for one-
+    shot turns (no session) -- in which case the queue just FCFS-
+    dispatches. Non-empty for sessioned conversations -- in which
+    case the queue keeps subsequent turns on the same worker for
+    KV-cache locality. The session id is opaque to the worker; we
+    also include it in the request envelope (see BuildRelayRequestBody)
+    so workers that can do their own KV cache reuse have a key to
+    work with. }
+  Req := TRelayRequest.Create(ReqId, EffMod, Body, Options.CacheKey);
   Q.Enqueue(Req);
   LogInfo('relay: enqueued %s (model=%s, %d messages, %d tools)',
           [ReqId, EffMod, Length(Messages), Length(Tools)]);

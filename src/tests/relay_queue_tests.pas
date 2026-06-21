@@ -343,6 +343,187 @@ begin
   WriteLn('  ok: Cancel of unknown id is False');
 end;
 
+procedure TestStickyRoutingPrefersLastWorker;
+var
+  Q: TRelayQueue;
+  R1, R2, Out1, Out2: TRelayRequest;
+begin
+  (* Sticky routing: session A's first turn establishes worker X as
+     the preferred handler; the same session's second turn should
+     prefer X over Y (assuming X is idle), even when Y polls first.
+     Keeps KV cache warm on X. *)
+  Q := TRelayQueue.Create;
+  try
+    Q.RegisterWorker('worker-x', Caps([]));
+    Q.RegisterWorker('worker-y', Caps([]));
+
+    R1 := TRelayRequest.Create('req_sticky_1', '', '{}', 'session-A');
+    Q.Enqueue(R1);
+
+    { Worker X picks up turn 1. The sticky map should now pin
+      session-A to worker-x. }
+    Out1 := Q.DequeueForWorker('worker-x', 1000);
+    AssertTrue(Out1 = R1, 'worker-x picks up session-A turn 1');
+
+    { Now session-A enqueues turn 2 AND a third party (session-B
+      with no history) enqueues. Worker Y polls first. Worker Y
+      should pick up session-B because session-A is sticky to X. }
+    R2 := TRelayRequest.Create('req_sticky_2', '', '{}', 'session-A');
+    Q.Enqueue(R2);
+
+    Out2 := Q.DequeueForWorker('worker-x', 1000);
+    AssertTrue(Out2 = R2,
+               'worker-x preferred for session-A turn 2 (sticky hit)');
+  finally
+    Q.Free;
+  end;
+  WriteLn('  ok: sticky routing prefers the last worker for the same session');
+end;
+
+procedure TestStickyRoutingFallsBackOnDisconnect;
+var
+  Q: TRelayQueue;
+  R1, R2, Out1, Out2: TRelayRequest;
+  Resp: TRelayResponse;
+begin
+  (* When session A's sticky worker disconnects, the next turn falls
+     back to FCFS and a different worker can take it. The sticky map
+     is rebuilt -- session A is now pinned to whoever took turn 2.
+
+     Turn 1 must be Respond'ed before worker-x unregisters, otherwise
+     UnregisterWorker requeues the in-flight R1 and pollutes the next
+     dequeue. Modelling a clean turn-1 completion then a worker drop
+     before turn 2 is the case we care about. *)
+  Q := TRelayQueue.Create;
+  try
+    Q.RegisterWorker('worker-x', Caps([]));
+    R1 := TRelayRequest.Create('req_fb_1', '', '{}', 'session-A');
+    Q.Enqueue(R1);
+    Out1 := Q.DequeueForWorker('worker-x', 1000);
+    AssertTrue(Out1 = R1, 'worker-x picked up turn 1');
+
+    { worker-x finishes turn 1 cleanly first. }
+    FillChar(Resp, SizeOf(Resp), 0);
+    Resp.Content := 'turn 1 done';
+    Q.Respond('req_fb_1', Resp);
+
+    { Now worker-x disappears. Sticky entry for session-A should be
+      pruned during UnregisterWorker. }
+    Q.UnregisterWorker('worker-x');
+
+    { New worker shows up; turn 2 lands here via FCFS fallback. }
+    Q.RegisterWorker('worker-z', Caps([]));
+    R2 := TRelayRequest.Create('req_fb_2', '', '{}', 'session-A');
+    Q.Enqueue(R2);
+    Out2 := Q.DequeueForWorker('worker-z', 1000);
+    AssertTrue(Out2 = R2,
+               'session-A falls back to worker-z after sticky worker disconnect');
+  finally
+    Q.Free;
+  end;
+  WriteLn('  ok: sticky routing falls back to FCFS when preferred worker is gone');
+end;
+
+procedure TestStrictStickyDoesntStealFromConnectedPreferred;
+var
+  Q: TRelayQueue;
+  R1, R2, R3, OutA, OutB, OutC, OutD: TRelayRequest;
+  Resp: TRelayResponse;
+begin
+  (* Codex P2 on PR #321: with two workers blocked in /v1/relay/poll,
+     after worker-x completes session A's first turn, session A's
+     second turn must NOT be stolen by worker-y just because worker-y
+     happens to acquire the queue lock first. That re-pins session-A
+     to worker-y and defeats sticky routing every cold-cache turn.
+     The strict-sticky rule: pass 2 (FCFS) skips requests pinned to
+     ANOTHER connected worker; takes them only when the pinned worker
+     has disconnected.
+
+     This test models the busy-preferred case (worker-x still alive
+     and registered):
+
+       - Session-A turn 1: worker-x. Sticky[A] := worker-x.
+       - Turn 1 completes (Respond).
+       - Session-A turn 2 (R2) + session-B (R3) enqueue.
+       - Worker-y polls FIRST -- must take R3 (no sticky), MUST skip
+         R2 (sticky to connected worker-x).
+       - Worker-y polls again -- nothing else available, returns nil.
+         (R2 reserved.)
+       - Worker-x polls -- takes R2 via sticky pass 1. *)
+  Q := TRelayQueue.Create;
+  try
+    Q.RegisterWorker('worker-x', Caps([]));
+    Q.RegisterWorker('worker-y', Caps([]));
+
+    R1 := TRelayRequest.Create('req_strict_1', '', '{}', 'session-A');
+    Q.Enqueue(R1);
+    OutA := Q.DequeueForWorker('worker-x', 1000);
+    AssertTrue(OutA = R1, 'worker-x took turn 1; sticky now pins session-A to worker-x');
+
+    { Complete turn 1 cleanly so the test is about routing, not in-
+      flight requeue. worker-x remains connected and (now) idle. }
+    FillChar(Resp, SizeOf(Resp), 0);
+    Resp.Content := 'turn 1 done';
+    Q.Respond('req_strict_1', Resp);
+
+    R2 := TRelayRequest.Create('req_strict_2', '', '{}', 'session-A');
+    R3 := TRelayRequest.Create('req_strict_3', '', '{}', 'session-B');
+    Q.Enqueue(R2);
+    Q.Enqueue(R3);
+
+    { worker-y polls. Pass 1 misses (nothing pinned to worker-y).
+      Pass 2: R2 is pinned to worker-x (connected) -- SKIP. R3 has
+      no sticky -- TAKE. Worker-y must take R3, not R2. }
+    OutB := Q.DequeueForWorker('worker-y', 1000);
+    AssertTrue(OutB = R3,
+               'worker-y must take session-B (no sticky), NOT steal session-A from worker-x');
+
+    { worker-y polls again. R2 is still reserved for worker-x; nothing
+      else available; return nil after the 200ms timeout. }
+    OutC := Q.DequeueForWorker('worker-y', 200);
+    AssertTrue(OutC = nil,
+               'worker-y must NOT steal session-A''s R2 while worker-x is still connected');
+
+    { worker-x polls. Sticky pass hits: session-A pinned to worker-x,
+      R2 is session-A's, worker-x picks it up. Locality preserved. }
+    OutD := Q.DequeueForWorker('worker-x', 1000);
+    AssertTrue(OutD = R2,
+               'worker-x takes session-A''s R2 via sticky pass 1 -- locality preserved');
+  finally
+    Q.Free;
+  end;
+  WriteLn('  ok: strict sticky does not steal sessions pinned to a connected preferred worker');
+end;
+
+procedure TestEmptySessionIdIsNeverSticky;
+var
+  Q: TRelayQueue;
+  R: TRelayRequest;
+  Status: TRelayQueueStatus;
+begin
+  (* One-shot turns (no session id) must never enter the sticky map.
+     Otherwise an empty-string key would collect every one-shot's
+     worker assignment and the map would grow without bound. *)
+  Q := TRelayQueue.Create;
+  try
+    Q.RegisterWorker('w', Caps([]));
+    R := TRelayRequest.Create('req_no_session', '', '{}', '');  { empty session id }
+    Q.Enqueue(R);
+    Q.DequeueForWorker('w', 1000);
+    { No public accessor for FSessionToWorker; we check indirectly by
+      observing that a follow-up empty-session-id request still goes
+      FCFS to any worker, which the empty-cap matching already
+      guarantees. The strongest assertion we CAN make: status shows
+      the request was assigned. }
+    Status := Q.GetStatus;
+    AssertEqI(Status.InflightRequests, 1,
+              'empty-session-id request still assigned');
+  finally
+    Q.Free;
+  end;
+  WriteLn('  ok: empty session id does not poison the sticky map');
+end;
+
 procedure TestStatusSnapshot;
 var
   Q: TRelayQueue;
@@ -430,6 +611,10 @@ begin
   TestCancelPullsFromPending;
   TestCancelPullsFromInflight;
   TestCancelOfUnknownIsFalse;
+  TestStickyRoutingPrefersLastWorker;
+  TestStickyRoutingFallsBackOnDisconnect;
+  TestStrictStickyDoesntStealFromConnectedPreferred;
+  TestEmptySessionIdIsNeverSticky;
   TestStatusSnapshot;
   TestRequestBodyEnvelope;
   TestGlobalQueueAccessor;

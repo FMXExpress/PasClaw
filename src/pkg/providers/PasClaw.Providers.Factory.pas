@@ -191,8 +191,16 @@ begin
           default, which is empty). The Chat() call resolves "empty
           model" to whatever capability a connected worker advertises;
           if multiple workers serve multiple models, the operator
-          sets default_model to pin one. }
-        Provider := TRelayProvider.Create(Model, Cfg.Providers[Idx].Name);
+          sets default_model to pin one.
+
+          Cfg.RelayWaitTimeoutMs threads the per-Chat() timeout from
+          config.json -- 0 keeps the Pascal-side default
+          (RelayDefaultWaitTimeoutMs = 5 min); operators with a flaky
+          worker that takes ages to connect set it to 30 minutes or
+          longer. TRelayProvider.Create's own AWaitTimeoutMs <= 0
+          branch handles the sentinel. }
+        Provider := TRelayProvider.Create(Model, Cfg.Providers[Idx].Name,
+                                          Cfg.RelayWaitTimeoutMs);
       end;
     pfPlaceholder:
       begin

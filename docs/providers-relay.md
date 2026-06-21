@@ -128,8 +128,16 @@ Used by the TUI panel and `pasclaw status`.
 
 ```jsonc
 {
-  "id":      "req_...",                 // ULID-ish; sortable + unique
-  "model":   "llama-3.2-3b-instruct",   // matched against worker capabilities
+  "id":         "req_...",              // ULID-ish; sortable + unique
+  "model":      "llama-3.2-3b-instruct",// matched against worker capabilities
+  "session_id": "sess_abc123",          // optional; opaque conversation id
+                                        // (sourced from Options.CacheKey on the
+                                        // PasClaw side -- the same key OpenAI
+                                        // uses for prompt_cache_key). Drives
+                                        // the queue's sticky-routing
+                                        // preference and is available for the
+                                        // worker's own KV-cache reuse. Omitted
+                                        // entirely for one-shot turns.
   "messages": [
     { "role": "system",    "content": "..." },
     { "role": "user",      "content": "..." },
@@ -218,6 +226,57 @@ requeued to the head of the queue. The next polling worker picks them
 up. Bounded by `RelayMaxAttempts` (default 3) — after that many
 requeues, the request fails the caller with a clear error rather than
 looping forever.
+
+## Sticky routing (KV-cache locality)
+
+When a request carries a `session_id` (sourced from
+`Options.CacheKey`, which the agent loop sets to `Session.Meta.Id`),
+the queue remembers which worker last served that session and
+preferentially routes the session's next turn to the same worker.
+This keeps the model's working state hot in the worker's GPU memory
+across multi-turn conversations — typically 5-10× speedup on turn 2+
+with long contexts (PasClaw's typical case with MEMORY.md +
+AGENTS.md + PLAN.md all loaded).
+
+Dispatch is two-pass:
+
+1. **Sticky pass** — scan pending requests for any whose session id
+   is pinned to *this* polling worker. If found, take it.
+2. **FCFS fallback** — take the head of the queue, BUT skip any
+   request whose session is pinned to a *different currently-connected*
+   worker. That worker just hasn't polled yet; stealing the request
+   would re-pin the session on every cold-cache turn 2+ and defeat
+   the routing. Take pinned-elsewhere requests only when the pinned
+   worker has actually disconnected from the registry, so sessions
+   don't starve on ghosts.
+
+After assignment the sticky map is updated to whoever took the work,
+so a session whose preferred worker disappeared gets re-pinned to its
+new handler. When a worker unregisters, sticky entries pointing at it
+are pruned so a fresh worker connecting under the same id doesn't
+inherit stale stickiness and the map doesn't grow unbounded.
+
+One-shot turns (empty `session_id`) never enter the sticky map — no
+sticky preference, no map pollution from empty-key entries.
+
+## Tuning the per-Chat wait timeout
+
+`Options` exposed in `config.json`:
+
+```jsonc
+{
+  "relay_wait_timeout_ms": 1800000   // 30 minutes; default 0 = use
+                                     // Pascal-side RelayDefaultWaitTimeoutMs (5 min)
+}
+```
+
+`TRelayProvider.Chat()` blocks on `Done.WaitFor` for this long before
+giving up and returning a `StatusCode := -1` error that walks the
+fallback chain. Operators with a flaky worker that takes ages to come
+back online set this higher (30 minutes, an hour); operators wanting
+fast fallback to the next provider set it lower. `0` (the default)
+keeps PasClaw on the built-in default so future bumps to the
+constant flow through without operator action.
 
 ## How `/v1/responses` differs
 
@@ -347,11 +406,11 @@ match against worker capabilities when the agent loop doesn't override.
 | Provider (`PasClaw.Providers.Relay`) | V1 landed |
 | Catalog row (`relay` kind, `pfRelay` family) | V1 landed |
 | Factory wiring | V1 landed |
-| `GET /v1/relay/poll` SSE endpoint | Follow-up PR — needs grafting onto `PasClaw.Gateway.Server` |
-| `POST /v1/relay/respond/:id` | Follow-up PR |
-| `GET /v1/relay/status` | Follow-up PR |
+| `GET /v1/relay/poll` SSE endpoint | V1 landed |
+| `POST /v1/relay/respond/:id` | V1 landed |
+| `GET /v1/relay/status` | V1 landed |
+| Structured tool calls from workers | V1 landed (PR #318 review fix) |
+| Sticky routing (KV-cache locality) | V1.1 landed |
 | Reference HTML worker | Follow-up PR |
 | Streaming back to caller | V2 |
-| Structured tool calls from workers | V2 |
-| Sticky routing (KV-cache locality) | V2 |
 | Persistent queue | V2 if anyone runs PasClaw as a long-lived multi-tenant service |
