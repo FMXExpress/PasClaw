@@ -2341,6 +2341,19 @@ function escapeHtml(s) {
     ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
 }
 
+/* ===== Relay tab state =====
+   Declared above the boot block on purpose: when the page is loaded
+   at /#relay, the boot's hash dispatch fires tabLoaders.relay()
+   which reaches into these via setupRelayTab(). If the let/const
+   declarations sat after the boot, the relay loader would hit the
+   temporal dead zone and ReferenceError out (one of these for each
+   binding it touches), leaving the tab blank for any bookmarked /
+   reloaded Relay URL. Codex P2 review on PR #324. */
+let relayTimer       = null;
+let relaySetupDone   = false;
+let relayShowToken   = false;
+const RELAY_TOKEN_PLACEHOLDER = "<PASCLAW_GATEWAY_TOKEN>";
+
 /* ===== Boot ===== */
 initTheme();
 initMode();
@@ -2362,13 +2375,9 @@ m.focus();
      - re-render snippets when the URL or "show token" toggle changes
      - refresh the worker list + queue counters from /v1/relay/status
        every 5s (refreshRelay)
-*/
-
-let relayTimer       = null;
-let relaySetupDone   = false;
-let relayShowToken   = false;
-
-const RELAY_TOKEN_PLACEHOLDER = "<PASCLAW_GATEWAY_TOKEN>";
+   The state bindings (relayTimer / relaySetupDone / relayShowToken /
+   RELAY_TOKEN_PLACEHOLDER) live above the boot block -- see the
+   "Relay tab state" comment near it for why. */
 
 function relayEffectiveToken() {
   if (relayShowToken) {
@@ -2432,6 +2441,13 @@ function renderRelaySnippets() {
                + "export PASCLAW_GATEWAY_TOKEN=" + tok + "\n"
                + "pasclaw relay";
 
+  /* Browser snippet uses URL-only EventSource: the WHATWG constructor
+     has no headers option, so PasClaw's gateway accepts ?token=,
+     ?worker_id=, and ?caps= as query-param fallbacks for the
+     equivalent headers (Codex P2 review on PR #324). The response POST
+     can still use a header for Authorization since fetch() honours
+     the options.headers map fine. */
+  const wid = "tab-" + Math.random().toString(36).slice(2, 10);
   const browser =
 "<!DOCTYPE html>\n" +
 "<script type=\"module\">\n" +
@@ -2440,16 +2456,15 @@ function renderRelaySnippets() {
 "  const URL   = \"" + url + "\";\n" +
 "  const TOKEN = \"" + tok + "\";\n" +
 "  const MODEL = \"Llama-3.2-3B-Instruct-q4f16_1-MLC\";\n" +
+"  const WID   = \"" + wid + "\";\n" +
 "\n" +
 "  const engine = await CreateMLCEngine(MODEL);\n" +
-"  const events = new EventSource(`${URL}/v1/relay/poll`, {\n" +
-"    withCredentials: false,\n" +
-"    headers: {\n" +
-"      \"Authorization\":        `Bearer ${TOKEN}`,\n" +
-"      \"X-Relay-Worker-Id\":    `tab-${crypto.randomUUID()}`,\n" +
-"      \"X-Relay-Capabilities\": MODEL,\n" +
-"    },\n" +
-"  });\n" +
+"\n" +
+"  // Browsers' native EventSource constructor has no headers option,\n" +
+"  // so auth + worker identity + capabilities ride as query params.\n" +
+"  const q = new URLSearchParams({ token: TOKEN, worker_id: WID, caps: MODEL });\n" +
+"  const events = new EventSource(`${URL}/v1/relay/poll?${q}`);\n" +
+"\n" +
 "  events.onmessage = async (ev) => {\n" +
 "    const req = JSON.parse(ev.data);\n" +
 "    const c = await engine.chat.completions.create({\n" +

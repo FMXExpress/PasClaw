@@ -2961,17 +2961,29 @@ begin
     Exit;
   end;
 
+  { Worker identity. Header is canonical; ?worker_id= falls back for
+    browser EventSource workers -- the WHATWG EventSource constructor
+    has no headers option, so browser code can't set
+    X-Relay-Worker-Id. Same fallback pattern the bearer token has for
+    /v1/* routes (Authorization header OR ?token=). Codex P2 review
+    on PR #324. }
   WorkerId := Trim(ARequest.RawHeaders.Values['X-Relay-Worker-Id']);
+  if WorkerId = '' then
+    WorkerId := Trim(ARequest.Params.Values['worker_id']);
   if WorkerId = '' then
   begin
     WriteJSON(AResp, 400,
-              '{"error":"missing header","message":"X-Relay-Worker-Id is required"}');
+              '{"error":"missing header","message":"X-Relay-Worker-Id is required ' +
+              '(or ?worker_id= query param for browser EventSource workers)"}');
     Exit;
   end;
 
   { Parse capabilities header (comma-separated). Empty / missing =
-    wildcard worker (CanServe always returns True). }
+    wildcard worker (CanServe always returns True). Same browser-
+    EventSource fallback as worker id above -- ?caps=a,b,c. }
   CapHeader := Trim(ARequest.RawHeaders.Values['X-Relay-Capabilities']);
+  if CapHeader = '' then
+    CapHeader := Trim(ARequest.Params.Values['caps']);
   SetLength(Caps, 0);
   if CapHeader <> '' then
   begin
