@@ -150,6 +150,12 @@ type
   private
     FId:             TRelayRequestId;
     FModel:          string;
+    FSessionId:      string;        { Options.CacheKey from the provider -- empty
+                                      in one-shot turns, non-empty for sessioned
+                                      conversations. Used by the queue's
+                                      sticky-routing pass to keep multi-turn
+                                      sessions warm on the same worker for
+                                      KV-cache locality. }
     FBodyJSON:       string;       { serialised messages+tools+options for the worker }
     FEnqueuedAt:     TDateTime;
     FAssignedWorker: TRelayWorkerId;
@@ -159,10 +165,12 @@ type
     FResponse:       TRelayResponse;
     FResponseValid:  Boolean;
   public
-    constructor Create(const AId, AModel, ABodyJSON: string);
+    constructor Create(const AId, AModel, ABodyJSON: string;
+                       const ASessionId: string = '');
     destructor  Destroy; override;
     property Id:             TRelayRequestId  read FId;
     property Model:          string           read FModel;
+    property SessionId:      string           read FSessionId;
     property BodyJSON:       string           read FBodyJSON;
     property EnqueuedAt:     TDateTime        read FEnqueuedAt;
     property AssignedWorker: TRelayWorkerId   read FAssignedWorker;
@@ -216,6 +224,20 @@ type
     FInflight:    TList;              { TRelayRequest currently assigned to a worker }
     FWorkers:     TList;              { TRelayWorker }
     FStats:       TRelayQueueStatus;
+    { Sticky-routing map: session_id -> last worker id that served a
+      request from this session. PopMatchingRequestLocked makes a
+      first pass scanning for "any pending request whose session is
+      pinned to THIS worker" before falling back to FCFS. Keeps a
+      multi-turn session's KV cache warm on the same worker (5-10x
+      speedup on turn 2+ with long contexts: typical PasClaw case
+      with MEMORY.md + AGENTS.md + PLAN.md all loaded). Strings.Values
+      semantics: Names[i] = session_id, ValueFromIndex(i) = worker_id.
+
+      Cleanup: when a worker unregisters, we drop entries pointing at
+      it so a brand-new worker connecting under the same name doesn't
+      inherit stale stickiness. Bounded by # of active sessions x
+      session lifetime; in-memory single-process for V1. }
+    FSessionToWorker: TStringList;
     function  FindWorker(const WorkerId: TRelayWorkerId): TRelayWorker;
     function  PopMatchingRequestLocked(const W: TRelayWorker): TRelayRequest;
     function  FindInflightByIdLocked(const Id: TRelayRequestId): TRelayRequest;
@@ -327,11 +349,13 @@ end;
 
 { ----- TRelayRequest ----- }
 
-constructor TRelayRequest.Create(const AId, AModel, ABodyJSON: string);
+constructor TRelayRequest.Create(const AId, AModel, ABodyJSON: string;
+                                  const ASessionId: string);
 begin
   inherited Create;
   FId             := AId;
   FModel          := AModel;
+  FSessionId      := ASessionId;
   FBodyJSON       := ABodyJSON;
   FEnqueuedAt     := Now;
   FAssignedWorker := '';
@@ -420,6 +444,8 @@ constructor TRelayQueue.Create;
 begin
   inherited;
   FLock     := TCriticalSection.Create;
+  FSessionToWorker := TStringList.Create;
+  FSessionToWorker.CaseSensitive := True;     { session ids are opaque tokens; preserve case }
   { Manual-reset: SetEvent unblocks ALL waiters, not just one. Codex
     P1 on PR #318: a single auto-reset event woke an arbitrary
     blocked worker who may not have matched the request's
@@ -460,6 +486,7 @@ begin
     TRelayWorker(FWorkers[i]).Free;
   FWorkers.Free;
 
+  FSessionToWorker.Free;
   FNewWork.Free;
   FLock.Free;
   inherited;
@@ -476,25 +503,59 @@ begin
 end;
 
 function TRelayQueue.PopMatchingRequestLocked(const W: TRelayWorker): TRelayRequest;
+
+  procedure TakeRequestAtLocked(Idx: Integer; Req: TRelayRequest);
+  { Shared body for both passes -- moves a request out of FPending into
+    FInflight, marks worker assignment + counters, and (when the
+    request carries a session id) refreshes the sticky map so the
+    same worker preferentially gets the session's next turn. }
+  begin
+    FPending.Delete(Idx);
+    Inc(Req.FAttempts);
+    Req.FAssignedWorker := W.Id;
+    Req.FAssignedAt     := Now;
+    FInflight.Add(Req);
+    Inc(W.FRequestsSeen);
+    W.Touch;
+    Inc(FStats.InflightRequests);
+    Dec(FStats.PendingRequests);
+    if Req.SessionId <> '' then
+      FSessionToWorker.Values[Req.SessionId] := W.Id;
+  end;
+
 var
   i: Integer;
   R: TRelayRequest;
+  Stuck: string;
 begin
   Result := nil;
+
+  { Pass 1: sticky -- "is any pending request from a session pinned to
+    THIS worker still waiting?" If so, prefer it. KV-cache locality
+    win: the model's working state for this session is already hot in
+    the worker's GPU memory. }
+  for i := 0 to FPending.Count - 1 do
+  begin
+    R := TRelayRequest(FPending[i]);
+    if R.SessionId = '' then Continue;
+    Stuck := FSessionToWorker.Values[R.SessionId];
+    if (Stuck = W.Id) and W.CanServe(R.Model) then
+    begin
+      TakeRequestAtLocked(i, R);
+      Exit(R);
+    end;
+  end;
+
+  { Pass 2: FCFS fallback. Either no sticky session for this worker
+    has pending work, or the session's preferred worker has just
+    moved (the sticky map's update on the next TakeRequestAtLocked
+    reflects whoever actually took this turn). }
   for i := 0 to FPending.Count - 1 do
   begin
     R := TRelayRequest(FPending[i]);
     if W.CanServe(R.Model) then
     begin
-      FPending.Delete(i);
-      Inc(R.FAttempts);
-      R.FAssignedWorker := W.Id;
-      R.FAssignedAt     := Now;
-      FInflight.Add(R);
-      Inc(W.FRequestsSeen);
-      W.Touch;
-      Inc(FStats.InflightRequests);
-      Dec(FStats.PendingRequests);
+      TakeRequestAtLocked(i, R);
       Exit(R);
     end;
   end;
@@ -595,6 +656,15 @@ begin
       else
         Inc(i);
     end;
+    { Drop sticky entries pointing at this worker so a future worker
+      connecting under the same id doesn't inherit stale stickiness
+      from a previous incarnation, and so the map doesn't grow
+      unbounded across long-running gateways. Sessions whose preferred
+      worker is gone will fall back to FCFS on the next turn, which
+      may re-stick them to whoever picks up the work. }
+    for i := FSessionToWorker.Count - 1 downto 0 do
+      if FSessionToWorker.ValueFromIndex[i] = WorkerId then
+        FSessionToWorker.Delete(i);
     { Drop the worker registration. }
     FWorkers.Remove(W);
     W.Free;

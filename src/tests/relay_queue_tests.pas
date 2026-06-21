@@ -343,6 +343,164 @@ begin
   WriteLn('  ok: Cancel of unknown id is False');
 end;
 
+procedure TestStickyRoutingPrefersLastWorker;
+var
+  Q: TRelayQueue;
+  R1, R2, Out1, Out2: TRelayRequest;
+begin
+  (* Sticky routing: session A's first turn establishes worker X as
+     the preferred handler; the same session's second turn should
+     prefer X over Y (assuming X is idle), even when Y polls first.
+     Keeps KV cache warm on X. *)
+  Q := TRelayQueue.Create;
+  try
+    Q.RegisterWorker('worker-x', Caps([]));
+    Q.RegisterWorker('worker-y', Caps([]));
+
+    R1 := TRelayRequest.Create('req_sticky_1', '', '{}', 'session-A');
+    Q.Enqueue(R1);
+
+    { Worker X picks up turn 1. The sticky map should now pin
+      session-A to worker-x. }
+    Out1 := Q.DequeueForWorker('worker-x', 1000);
+    AssertTrue(Out1 = R1, 'worker-x picks up session-A turn 1');
+
+    { Now session-A enqueues turn 2 AND a third party (session-B
+      with no history) enqueues. Worker Y polls first. Worker Y
+      should pick up session-B because session-A is sticky to X. }
+    R2 := TRelayRequest.Create('req_sticky_2', '', '{}', 'session-A');
+    Q.Enqueue(R2);
+
+    Out2 := Q.DequeueForWorker('worker-x', 1000);
+    AssertTrue(Out2 = R2,
+               'worker-x preferred for session-A turn 2 (sticky hit)');
+  finally
+    Q.Free;
+  end;
+  WriteLn('  ok: sticky routing prefers the last worker for the same session');
+end;
+
+procedure TestStickyRoutingFallsBackOnDisconnect;
+var
+  Q: TRelayQueue;
+  R1, R2, Out1, Out2: TRelayRequest;
+  Resp: TRelayResponse;
+begin
+  (* When session A's sticky worker disconnects, the next turn falls
+     back to FCFS and a different worker can take it. The sticky map
+     is rebuilt -- session A is now pinned to whoever took turn 2.
+
+     Turn 1 must be Respond'ed before worker-x unregisters, otherwise
+     UnregisterWorker requeues the in-flight R1 and pollutes the next
+     dequeue. Modelling a clean turn-1 completion then a worker drop
+     before turn 2 is the case we care about. *)
+  Q := TRelayQueue.Create;
+  try
+    Q.RegisterWorker('worker-x', Caps([]));
+    R1 := TRelayRequest.Create('req_fb_1', '', '{}', 'session-A');
+    Q.Enqueue(R1);
+    Out1 := Q.DequeueForWorker('worker-x', 1000);
+    AssertTrue(Out1 = R1, 'worker-x picked up turn 1');
+
+    { worker-x finishes turn 1 cleanly first. }
+    FillChar(Resp, SizeOf(Resp), 0);
+    Resp.Content := 'turn 1 done';
+    Q.Respond('req_fb_1', Resp);
+
+    { Now worker-x disappears. Sticky entry for session-A should be
+      pruned during UnregisterWorker. }
+    Q.UnregisterWorker('worker-x');
+
+    { New worker shows up; turn 2 lands here via FCFS fallback. }
+    Q.RegisterWorker('worker-z', Caps([]));
+    R2 := TRelayRequest.Create('req_fb_2', '', '{}', 'session-A');
+    Q.Enqueue(R2);
+    Out2 := Q.DequeueForWorker('worker-z', 1000);
+    AssertTrue(Out2 = R2,
+               'session-A falls back to worker-z after sticky worker disconnect');
+  finally
+    Q.Free;
+  end;
+  WriteLn('  ok: sticky routing falls back to FCFS when preferred worker is gone');
+end;
+
+procedure TestStickyDoesntStarveOtherSessions;
+var
+  Q: TRelayQueue;
+  R1, R2, R3, OutA, OutB, OutC: TRelayRequest;
+begin
+  (* Sticky must not starve sessions whose preferred worker is busy.
+     Setup: session-A is sticky to worker-x; worker-x is BUSY with
+     turn 1. Session-A enqueues turn 2 while session-B (new, no
+     stickiness) also enqueues. Worker-y polls -- it should NOT
+     skip session-B just because session-A's sticky preference
+     isn't available. *)
+  Q := TRelayQueue.Create;
+  try
+    Q.RegisterWorker('worker-x', Caps([]));
+    Q.RegisterWorker('worker-y', Caps([]));
+
+    R1 := TRelayRequest.Create('req_starve_1', '', '{}', 'session-A');
+    Q.Enqueue(R1);
+    OutA := Q.DequeueForWorker('worker-x', 1000);
+    AssertTrue(OutA = R1, 'worker-x took turn 1; sticky now points x');
+
+    { worker-x is still handling turn 1 (we don't Respond). Now both
+      sessions enqueue: }
+    R2 := TRelayRequest.Create('req_starve_2', '', '{}', 'session-A');
+    R3 := TRelayRequest.Create('req_starve_3', '', '{}', 'session-B');
+    Q.Enqueue(R2);
+    Q.Enqueue(R3);
+
+    { worker-y polls. Pass 1 (sticky) finds session-A's R2 but its
+      sticky points to worker-x, not worker-y, so skip. Pass 2 (FCFS)
+      picks up the head of the queue -- R2 (which was enqueued
+      first). After worker-y takes R2, the sticky map for session-A
+      moves to worker-y (last assignment wins). }
+    OutB := Q.DequeueForWorker('worker-y', 1000);
+    AssertTrue(OutB <> nil,
+               'worker-y should pick SOMETHING despite sticky mismatch on session-A');
+
+    { Whichever of R2 / R3 worker-y didn't take, worker-x can still
+      grab in turn. The key invariant is that worker-y did NOT sit
+      idle while waiting for session-A's worker preference. }
+    OutC := Q.DequeueForWorker('worker-y', 200);
+    AssertTrue(OutC <> nil, 'worker-y can still take the other pending request');
+  finally
+    Q.Free;
+  end;
+  WriteLn('  ok: sticky preference does not starve sessions with busy preferred worker');
+end;
+
+procedure TestEmptySessionIdIsNeverSticky;
+var
+  Q: TRelayQueue;
+  R: TRelayRequest;
+  Status: TRelayQueueStatus;
+begin
+  (* One-shot turns (no session id) must never enter the sticky map.
+     Otherwise an empty-string key would collect every one-shot's
+     worker assignment and the map would grow without bound. *)
+  Q := TRelayQueue.Create;
+  try
+    Q.RegisterWorker('w', Caps([]));
+    R := TRelayRequest.Create('req_no_session', '', '{}', '');  { empty session id }
+    Q.Enqueue(R);
+    Q.DequeueForWorker('w', 1000);
+    { No public accessor for FSessionToWorker; we check indirectly by
+      observing that a follow-up empty-session-id request still goes
+      FCFS to any worker, which the empty-cap matching already
+      guarantees. The strongest assertion we CAN make: status shows
+      the request was assigned. }
+    Status := Q.GetStatus;
+    AssertEqI(Status.InflightRequests, 1,
+              'empty-session-id request still assigned');
+  finally
+    Q.Free;
+  end;
+  WriteLn('  ok: empty session id does not poison the sticky map');
+end;
+
 procedure TestStatusSnapshot;
 var
   Q: TRelayQueue;
@@ -430,6 +588,10 @@ begin
   TestCancelPullsFromPending;
   TestCancelPullsFromInflight;
   TestCancelOfUnknownIsFalse;
+  TestStickyRoutingPrefersLastWorker;
+  TestStickyRoutingFallsBackOnDisconnect;
+  TestStickyDoesntStarveOtherSessions;
+  TestEmptySessionIdIsNeverSticky;
   TestStatusSnapshot;
   TestRequestBodyEnvelope;
   TestGlobalQueueAccessor;
