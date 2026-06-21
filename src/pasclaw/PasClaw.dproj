@@ -221,6 +221,7 @@
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.HttpClient.pas"/>
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Catalog.pas"/>
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Bridge.pas"/>
+        <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Disclosure.pas"/>
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Server.pas"/>
 
         <!-- pkg/gateway -->

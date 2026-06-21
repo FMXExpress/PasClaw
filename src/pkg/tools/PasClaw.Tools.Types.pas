@@ -51,6 +51,16 @@ type
     HandlerObj:  TToolHandlerObj;
     IsCore:      Boolean;
     Category:    TToolCategory;
+    { IsDeferred -- progressive-disclosure marker. When True the registry
+      skips the tool from ToProviderDefs (the provider's `tools` array
+      gets the schema STRIPPED), but RunTool / Find still dispatch
+      normally. The model sees the name in a system-prompt "deferred
+      tools" pointer and uses tool_search to load the schema, which
+      flips the per-name flag in the registry's revealed set; the next
+      ToProviderDefs call then includes the tool. Mirrors Claude Code's
+      ToolSearch pattern. Default False -- all built-in / skill / non-
+      MCP tools surface immediately. }
+    IsDeferred:  Boolean;
   end;
 
   TToolList = array of TTool;

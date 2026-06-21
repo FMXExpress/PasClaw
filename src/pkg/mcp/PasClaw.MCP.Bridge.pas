@@ -79,7 +79,8 @@ implementation
 uses
   SyncObjs,
   PasClaw.Logger,
-  PasClaw.MCP.Cache;
+  PasClaw.MCP.Cache,
+  PasClaw.MCP.Disclosure;
 
 type
   TMCPLoadState = (lsLoading, lsReady, lsFailed);
@@ -127,6 +128,9 @@ type
   TMCPLoader = class(TThread)
   private
     FCfg:    TMCPServer;
+    FDeferred: Boolean;   { snapshot of Cfg.MCPProgressiveDisclosure -- TMCPLoader
+                            mirrors the flag at create time so the loader thread
+                            doesn't have to hold a TConfig reference. }
     FReg:    TToolRegistry;
     FState:  TMCPServerState;
     FClient: TMCPBaseClient;
@@ -139,7 +143,7 @@ type
     procedure Execute; override;
   public
     constructor Create(const ServerCfg: TMCPServer; Reg: TToolRegistry;
-                       State: TMCPServerState);
+                       State: TMCPServerState; Deferred: Boolean);
     destructor  Destroy; override;
     property DoneEvent: TEvent read FDone;
     { Block until the loader is not mid-registration. After this returns,
@@ -304,7 +308,8 @@ end;
 procedure RegisterToolViaDispatch(Reg: TToolRegistry;
                                    const Server: string;
                                    const Tool: TMCPTool;
-                                   Dispatch: TMCPToolDispatch);
+                                   Dispatch: TMCPToolDispatch;
+                                   Deferred: Boolean);
 var
   Entry: TTool;
 begin
@@ -318,7 +323,17 @@ begin
   Entry.Handler     := nil;
   Entry.HandlerObj  := Dispatch.Handler;
   Entry.IsCore      := False;
-  Reg.Register(Entry);
+  { RegisterDeferred drives progressive disclosure (Cfg.MCPProgressiveDisclosure):
+    the dispatcher still resolves the tool, but ToProviderDefs strips it
+    from the per-request `tools` array until tool_search reveals the
+    name. The two-layer boot (cache then live connect) re-registers the
+    same name -- the Deferred flag flows from the same Cfg field both
+    times, so a tool revealed mid-session stays revealed (the registry's
+    FRevealed set is keyed on name, not on TTool identity). The Deferred
+    parameter is authoritative; do NOT set Entry.IsDeferred here, the
+    plain Register clears it defensively for legacy stack-garbage
+    safety. }
+  Reg.RegisterDeferred(Entry, Deferred);
 end;
 
 { ============================================================
@@ -326,11 +341,12 @@ end;
   ============================================================ }
 
 constructor TMCPLoader.Create(const ServerCfg: TMCPServer; Reg: TToolRegistry;
-                              State: TMCPServerState);
+                              State: TMCPServerState; Deferred: Boolean);
 begin
   inherited Create({CreateSuspended=}True);
   FreeOnTerminate := False;
   FCfg    := ServerCfg;
+  FDeferred := Deferred;
   FReg    := Reg;
   FState  := State;
   FClient := nil;
@@ -454,7 +470,7 @@ begin
         Dispatch := FState.FindDispatchFor(Tools[i].Name);
         if Dispatch = nil then
           Dispatch := FState.AddDispatch(Tools[i].Name);
-        RegisterToolViaDispatch(FReg, FCfg.Name, Tools[i], Dispatch);
+        RegisterToolViaDispatch(FReg, FCfg.Name, Tools[i], Dispatch, FDeferred);
       end;
 
       FState.SetReady(FClient);
@@ -512,7 +528,8 @@ begin
       begin
         Dispatch := State.AddDispatch(CachedTools[j].Name);
         RegisterToolViaDispatch(Reg, Cfg.MCPServers[i].Name,
-                                CachedTools[j], Dispatch);
+                                CachedTools[j], Dispatch,
+                                Cfg.MCPProgressiveDisclosure);
         Inc(CachedCount);
       end;
       if CachedCount > 0 then
@@ -521,7 +538,8 @@ begin
       Inc(CachedRegistered, CachedCount);
     end;
 
-    Loader := TMCPLoader.Create(Cfg.MCPServers[i], Reg, State);
+    Loader := TMCPLoader.Create(Cfg.MCPServers[i], Reg, State,
+                                 Cfg.MCPProgressiveDisclosure);
     SetLength(Result, Length(Result) + 1);
     Result[High(Result)] := Loader;
     Loader.Start;
@@ -529,6 +547,16 @@ begin
   if CachedRegistered > 0 then
     LogDebug('mcp: %d cached tool(s) registered across %d server(s); waiting on background refresh',
              [CachedRegistered, Length(Result)]);
+
+  { Register tool_search whenever progressive disclosure is on. The
+    discovery tool is the only path the model has to load schemas
+    for the deferred MCP tools registered above. No-op when
+    Cfg.MCPProgressiveDisclosure is False; safe even when zero MCP
+    servers are configured (reports "No deferred tools" on every
+    call). One registration point so every caller -- Cmd.Agent,
+    Cmd.Serve, Cmd.Gateway, Cmd.TUI, the long-running TAgent -- gets
+    it for free. }
+  RegisterMCPDisclosureTools(Reg, Cfg);
 end;
 
 procedure FreeMCPClients(var Clients: TMCPClientList);

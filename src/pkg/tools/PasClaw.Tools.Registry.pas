@@ -26,6 +26,13 @@ type
   TToolRegistry = class
   private
     FTools: TToolList;
+    { Set of tool names whose IsDeferred=True has been overridden by a
+      tool_search reveal. Names are looked up case-sensitively (matches
+      Find) and only consulted when filtering ToProviderDefs. Stored
+      separately from FTools so a re-register from the MCP bridge's
+      live-connect pass can replace the TTool record without us losing
+      track of which names the model has already pulled. }
+    FRevealed: TStringArray;
     { Background MCP loaders (PasClaw.MCP.Bridge) call Register after
       ConnectMCPServers has already returned; gateway worker threads
       may be reading the same array via Find / ToProviderDefs at the
@@ -33,15 +40,48 @@ type
       RunTool releases the lock before invoking the handler so a slow
       tool (HTTP MCP call, shell-out) can't block parallel reads. }
     FLock:  TCriticalSection;
+    function IsRevealedLocked(const Name: string): Boolean;
+    procedure RegisterImpl(const T: TTool);
   public
     constructor Create;
     destructor  Destroy; override;
+    { Register a tool. Defensively zeroes T.IsDeferred so legacy
+      stack-built records (RegisterFSTools, RegisterShellTool, every
+      TPasClawTool subclass) that never touched the new field don't
+      get accidentally hidden from ToProviderDefs by stack garbage.
+      The MCP bridge -- the only legitimate IsDeferred=True source --
+      routes through RegisterDeferred instead, which preserves the
+      explicit value. This mirrors the existing HandlerObj defensive
+      clear: same risk shape, same fix shape. }
     procedure Register(const T: TTool);
+    { Register a tool with an explicit IsDeferred override. Used by
+      PasClaw.MCP.Bridge when Cfg.MCPProgressiveDisclosure is on so
+      newly-registered MCP tools are stripped from ToProviderDefs
+      until tool_search reveals them. Callers must NOT also set
+      T.IsDeferred -- the Deferred parameter is authoritative. }
+    procedure RegisterDeferred(const T: TTool; Deferred: Boolean);
     function  Find(const Name: string; out T: TTool): Boolean;
     function  Names: TStringArray;
     function  Count: Integer;
     function  ToProviderDefs: TToolDefinitionArray;
     function  RunTool(const Name, ArgsJSON: string; out ErrMsg: string): string;
+    { Progressive-disclosure surface (PasClaw.MCP.Disclosure / tool_search).
+
+      DeferredNames returns the registered tool names whose IsDeferred is
+      still True (haven't been revealed yet) -- the source list a discovery
+      tool uses to populate its name-only index.
+
+      DeferredFind returns the full TTool for a deferred name so tool_search
+      can hand the schema back to the model.
+
+      Reveal moves the name into the revealed set so the NEXT ToProviderDefs
+      call includes it -- the model can then invoke the tool through the
+      normal tool-call path. Idempotent; calling on an undeclared name is
+      a silent no-op so a model that calls tool_search with stale names
+      can't wedge the registry. }
+    function  DeferredNames: TStringArray;
+    function  DeferredFind(const Name: string; out T: TTool): Boolean;
+    procedure Reveal(const Name: string);
   end;
 
 implementation
@@ -59,7 +99,7 @@ begin
   inherited Destroy;
 end;
 
-procedure TToolRegistry.Register(const T: TTool);
+procedure TToolRegistry.RegisterImpl(const T: TTool);
 var
   i: Integer;
   Stored: TTool;
@@ -90,6 +130,32 @@ begin
   finally
     FLock.Release;
   end;
+end;
+
+procedure TToolRegistry.Register(const T: TTool);
+var
+  Modified: TTool;
+begin
+  Modified := T;
+  { Same risk shape as the HandlerObj defensive clear in RegisterImpl:
+    legacy callers (RegisterFSTools, RegisterShellTool, every
+    TPasClawTool subclass) build T: TTool on the stack and never
+    touched the new IsDeferred field. Stack garbage there would let
+    ToProviderDefs silently drop a core tool from the provider's
+    tools array even when MCP progressive disclosure is off. Force
+    False here; MCP -- the only legitimate IsDeferred=True path --
+    goes through RegisterDeferred instead. }
+  Modified.IsDeferred := False;
+  RegisterImpl(Modified);
+end;
+
+procedure TToolRegistry.RegisterDeferred(const T: TTool; Deferred: Boolean);
+var
+  Modified: TTool;
+begin
+  Modified := T;
+  Modified.IsDeferred := Deferred;
+  RegisterImpl(Modified);
 end;
 
 function TToolRegistry.Find(const Name: string; out T: TTool): Boolean;
@@ -133,19 +199,101 @@ begin
   end;
 end;
 
+function TToolRegistry.IsRevealedLocked(const Name: string): Boolean;
+var
+  i: Integer;
+begin
+  for i := 0 to High(FRevealed) do
+    if FRevealed[i] = Name then Exit(True);
+  Result := False;
+end;
+
 function TToolRegistry.ToProviderDefs: TToolDefinitionArray;
+var
+  i, k: Integer;
+begin
+  FLock.Acquire;
+  try
+    SetLength(Result, Length(FTools));
+    k := 0;
+    for i := 0 to High(FTools) do
+    begin
+      { Progressive-disclosure filter: skip tools the bridge marked
+        deferred unless tool_search has since revealed the name. This
+        keeps the provider's per-request `tools` array small (and the
+        token bill low) while leaving the dispatcher unchanged. }
+      if FTools[i].IsDeferred and (not IsRevealedLocked(FTools[i].Name)) then
+        Continue;
+      Result[k].Name        := FTools[i].Name;
+      Result[k].Description := FTools[i].Description;
+      Result[k].Schema      := FTools[i].Schema;
+      Inc(k);
+    end;
+    SetLength(Result, k);
+  finally
+    FLock.Release;
+  end;
+end;
+
+function TToolRegistry.DeferredNames: TStringArray;
+var
+  i, k: Integer;
+begin
+  FLock.Acquire;
+  try
+    SetLength(Result, Length(FTools));
+    k := 0;
+    for i := 0 to High(FTools) do
+      if FTools[i].IsDeferred and (not IsRevealedLocked(FTools[i].Name)) then
+      begin
+        Result[k] := FTools[i].Name;
+        Inc(k);
+      end;
+    SetLength(Result, k);
+  finally
+    FLock.Release;
+  end;
+end;
+
+function TToolRegistry.DeferredFind(const Name: string; out T: TTool): Boolean;
 var
   i: Integer;
 begin
   FLock.Acquire;
   try
-    SetLength(Result, Length(FTools));
     for i := 0 to High(FTools) do
-    begin
-      Result[i].Name        := FTools[i].Name;
-      Result[i].Description := FTools[i].Description;
-      Result[i].Schema      := FTools[i].Schema;
-    end;
+      if (FTools[i].Name = Name) and FTools[i].IsDeferred then
+      begin
+        T := FTools[i];
+        Exit(True);
+      end;
+    Result := False;
+  finally
+    FLock.Release;
+  end;
+end;
+
+procedure TToolRegistry.Reveal(const Name: string);
+var
+  i: Integer;
+begin
+  if Name = '' then Exit;
+  FLock.Acquire;
+  try
+    { Silently no-op when the name doesn't match a deferred entry --
+      protects against a model that calls tool_search with stale names
+      from a previous session. Also dedupe so a re-reveal doesn't grow
+      FRevealed unbounded across a long session. }
+    for i := 0 to High(FTools) do
+      if (FTools[i].Name = Name) and FTools[i].IsDeferred then
+      begin
+        if not IsRevealedLocked(Name) then
+        begin
+          SetLength(FRevealed, Length(FRevealed) + 1);
+          FRevealed[High(FRevealed)] := Name;
+        end;
+        Exit;
+      end;
   finally
     FLock.Release;
   end;

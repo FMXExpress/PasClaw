@@ -507,6 +507,30 @@ type
     Sandbox:    TSandboxPolicy;
     Providers:  array of TProviderConfig;
     MCPServers: array of TMCPServer;
+    (* MCPProgressiveDisclosure -- Hermes-style lazy reveal for MCP tools
+       (parallel to SelfImprovingSkills.ProgressiveDisclosure on the
+       skills side). When True, MCP tools register into the dispatcher
+       as usual but with IsDeferred=True so TToolRegistry.ToProviderDefs
+       strips them from the provider's `tools` array. The system prompt
+       gains a "## Deferred Tools" pointer listing names only, and a
+       `tool_search` tool (PasClaw.MCP.Disclosure, modelled on Claude
+       Code's ToolSearch) loads the schema for matched names + Reveal()s
+       them so the next ToProviderDefs call surfaces them as callable.
+
+       Default True. Fat catalogs (Replicate MCP ships ~50 tools, the
+       GitHub MCP ships ~50+, several stacked easily reach 100+) make
+       lazy reveal the right floor -- the prompt cost of every MCP
+       schema every turn dominates the bill on turns that touch zero
+       MCP tools, and tool_search reveals on demand at a one-turn cost
+       per first-use. Operators with one or two tiny servers can flip
+       off via onboarding (default N to the prompt) or hand-edit if
+       the +1 turn isn't worth the savings.
+
+       Safe even with zero MCP servers configured -- tool_search is
+       still registered but DeferredNames is empty, so every call
+       returns "No deferred tools" and the system-prompt section
+       emits empty. *)
+    MCPProgressiveDisclosure: Boolean;
     Crons:      array of TCronEntry;
     Skills:     array of TSkillEntry;
     Subagents:  TSubagentSpecArray;  { see comment on the type alias }
@@ -890,6 +914,7 @@ begin
   VaultToolsEnabled    := False; { off by default per the bench-grounded "stock = lean-edit shape" verdict (bench/swe/README.md). Vault entries are never called across the bench's 45+ cells -- the model has them as training data. Onboarding asks (default Y for operators who DO use the vault). }
   WebFetchEnabled      := False; { off by default for the same reason as VaultToolsEnabled. Also drops memory_fetch (RegisterMemoryFetchTool is gated on EnableWebFetch in NewBuiltinRegistry -- see comment there). Onboarding asks. }
   CronToolEnabled      := False; { off by default -- model-scheduled background jobs are an opt-in autonomy step (runs existing skills only). }
+  MCPProgressiveDisclosure := True;  { on by default -- fat catalogs (Replicate MCP ~50 tools, GitHub MCP ~50+) make lazy reveal the right floor. The prompt cost of every MCP schema every turn dominates the bill on turns that touch zero MCP tools; tool_search loads schemas on demand at a one-turn cost per first-use. Operators with tiny catalogs flip off via onboarding (default N) or hand-edit if the +1 turn isn't worth the savings. Mirrors Claude Code's ToolSearch pattern. No-op when no MCP servers are configured. }
   RenderMarkdown       := True;  { on by default for terminal surfaces; cmd/serve flips off }
   ToolOutputCap        := 0;     { off by default; operators opt in. See TConfig.ToolOutputCap. }
   StatsCollectionEnabled := True;  { on by default -- zero prompt cost, useful for diagnosing turn-count regressions. Onboarding can flip off for privacy-conscious operators. }
@@ -1367,6 +1392,14 @@ begin
     end;
     Root.PutArray('mcp_servers', Arr);
 
+    { mcp_progressive_disclosure: default True (since the Replicate MCP
+      / GitHub MCP / fat-catalog-by-default reality). Emit only the
+      explicit OFF so operators who flipped it off via onboarding see
+      their choice round-trip; on-keepers don't get a redundant
+      "mcp_progressive_disclosure": true in their config.json. }
+    if not MCPProgressiveDisclosure then
+      Root.PutBool('mcp_progressive_disclosure', False);
+
     Arr := TJsonArray.Create;
     for i := 0 to High(Crons) do
     begin
@@ -1564,6 +1597,8 @@ begin
     VaultToolsEnabled   := Root.GetBool('vault_tools_enabled',   VaultToolsEnabled);
     WebFetchEnabled     := Root.GetBool('web_fetch_enabled',     WebFetchEnabled);
     CronToolEnabled     := Root.GetBool('cron_tool_enabled',     CronToolEnabled);
+    MCPProgressiveDisclosure := Root.GetBool('mcp_progressive_disclosure',
+                                              MCPProgressiveDisclosure);
     RenderMarkdown      := Root.GetBool('render_markdown',       RenderMarkdown);
     VectorSearchEnabled := Root.GetBool('vector_search_enabled', VectorSearchEnabled);
     ToolOutputCap       := Integer(Root.GetInt('tool_output_cap', ToolOutputCap));
