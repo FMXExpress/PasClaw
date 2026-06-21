@@ -6,6 +6,26 @@ This file mirrors the changelog section at the top of the root `README.md`. When
 
 ## 2026-06
 
+- **2026-06-21** — Relay pull-worker provider: external workers (WebGPU browser tab, phone with mlc-llm, desktop with llama.cpp) connect INBOUND to `pasclaw gateway`, advertise models via `X-Relay-Capabilities`, pull pending requests off PasClaw's in-process queue, run inference locally, POST results back. New endpoints `/v1/relay/poll` (SSE), `/v1/relay/respond/<id>`, `/v1/relay/status`; new catalog row `relay`. Unlocks WebGPU inference without exposed ports, cog-hosted PasClaw served by your phone, shared home GPU across devices. ([#318])
+- **2026-06-20** — `pasclaw plan` + `pasclaw build --goal` pairing. `pasclaw plan -d "<task>"` runs in `pmPlan` mode with a dedicated `plan_write` tool and writes `workspace/PLAN.md` (`## Goal / Files / Steps / Open questions / Risks`). `pasclaw build` auto-loads PLAN.md as system-prompt context (stale-check + `--no-plan` opt-out) and archives consumed plans to `workspace/memory/plans/<ts>.md`. `build --goal` parses `## Goal` and seeds the Ralph judge loop. `cog-build/predict.py` gains a 4-choice `mode` Input (`build` / `plan` / `plan build` / `plan build goal`). ([#317])
+- **2026-06-20** — Cloudflare AI Gateway catalog rows: `cloudflare` (compat OpenAI-shape endpoint, default `workers-ai/@cf/meta/llama-3.3-70b-instruct-fp8-fast` using the gateway's `<provider>/<model>` routing), `cloudflare-anthropic` and `cloudflare-gemini` (native passthroughs with each provider's own auth header). Catalog-only — existing provider units handle the wire shape once `api_base` is set. ([#316])
+- **2026-06-20** — MCP progressive disclosure + Claude Code-style `tool_search` (Hermes Level 0/1 pattern applied to MCP). Default on since fat catalogs (Replicate / GitHub MCP) make eager-reveal expensive. MCP tools register with `IsDeferred=True`; their schemas are stripped from the per-request `tools` array. System prompt lists names under `## Deferred Tools`; `tool_search` loads schemas on demand via `select:Name1,Name2`, `+required keyword1 keyword2`, or plain keyword search. Revealed tools callable next iteration. ([#315])
+- **2026-06-20** — Stock-config defaults adopt the bench-grounded lean-edit shape: `web_fetch` / `vault_tools` / `memory_fetch` OFF out-of-box; the six zero-prompt-cost behavioral toggles (`orient_task_aware`, `checkpoints`, `stats`, 1h `prompt_cache.ttl`, `distiller`, `auto_router`) ON. `HashlineEnabled` controls only `fs_edit_hashline` after split-gating; `fs_grep` registers unconditionally (its ripgrep-inspired optimisations beat `shell_exec grep` and Windows has no shell `grep`). ([#314])
+- **2026-06-18** — Web UI workspace.zip export + import from the gateway: download a snapshot of `$PASCLAW_HOME` (memory, sessions, kb, checkpoints, skills, scars) for hand-off between machines, re-import to restore. Same shape as the `pasclaw build` workspace handshake but operator-driven through the browser. ([#312])
+- **2026-06-18** — Model-callable `cron` tool (opt-in via `cron_tool_enabled: true`; off by default since it grants background autonomy). Lets the agent schedule an installed skill on a cron expression. Schedules persist in `workspace/cron.json`; the scheduler picks them up on the next `pasclaw serve` / `pasclaw gateway` start. ([#310])
+- **2026-06-18** — `memory_search` / `kb_search` FTS5 snippet window widened 24 → 60 chars; system prompt nudges the model to follow up with a targeted `fs_read` when a snippet looks relevant but lacks context. ([#309])
+- **2026-06-18** — Windows `cmd.exe` quoting fix in `shell_exec` / `execute_code`: embedded double-quote literals (`hello "world"`) now survive `cmd.exe /c`; previously the inner quotes were eaten. ([#307])
+- **2026-06-17** — `cog-build` honours `profile=security`'s sandbox tightening (workspace restriction + shell deny + private-network block) by intentionally **not** seeding any sandbox fields in its generated `config.json`. Same PR drops a misleading `web_search` claim in the cog README (the tool only registers when a search provider is configured; the cog doesn't supply one). ([#306])
+- **2026-06-17** — `cog-build` defaults `profile` to **`max-build`** (the richest unattended-build toolset). Operators wanting different posture override to `baseline` / `low-token` / `security` / `all-on` / empty. Profile layered UNDER the cog's explicit `config.json` fields so the cog's provider catalog + `checkpoints_enabled` always win. ([#304])
+- **2026-06-17** — `cog-build` outputs as `list[Path]` (workspace.zip + reply.txt CDN URLs) instead of a nested-Path `BaseModel` (Cog's older runtimes base64-encoded the nested Path inline). API keys move to `Optional[Secret]` inputs — masked in the UI, never appear in prediction logs. `-q` flag forwarded to `pasclaw build` so the ASCII banner stays out of `reply.txt`. ([#303])
+- **2026-06-16** — `cog-build` makes `workspace_in` optional (Cog's `Optional[Path]` plus a `workspace_in_url` string for explicit-URL `pget` parallelism). Empty = fresh run; the cog auto-creates a tempdir `$PASCLAW_HOME`. ([#302])
+- **2026-06-16** — `pasclaw build` command + `cog-build/` Replicate cog predictor with **workspace.zip handshake**. `pasclaw build -d "<task>"` orchestrates `pasclaw agent --quiet` with optional `--workspace-in <zip>` (unpack into `$PASCLAW_HOME` before the run) and `--workspace-out <zip>` (pack after). The cog wraps this for Replicate so callers can run long-horizon builds in 30s invocations and round-trip the entire agent brain through one zip URL per call. Default 50 iterations, 4 GiB cap. Sibling to the existing `cog/`. ([#300])
+- **2026-06-16** — Checkpoints backend switches to **zpaq**, enabling `/redo` on top of the existing `/undo`. Content-addressable + dedupe-by-default at `workspace/checkpoints/<session>/archive.zpaq` so multi-edit sessions don't bloat history. ([#299])
+- **2026-06-16** — `AGENTS.md` project-rules convention (opencode / Codex / Cursor / Zed shape) read from cwd walking up to git root + injected as the system prompt's `## Project Rules` section. New `pasclaw init` command + `/init` slash command scan cwd and ask the model for a starter `AGENTS.md`. ([#298])
+- **2026-06-16** — `tool_choice` supports force-a-specific-tool form across providers. Pass a tool / function NAME (anything other than `auto` / `none` / `required`) and each provider emits its native object shape. Gemini ignores `tool_choice` entirely. ([#297])
+- **2026-06-16** — Delphi build `IShellBackend` env-injection fix: `ExtraEnv` now reaches spawned children on Delphi/Windows AND Delphi/POSIX (was silently dropped before; FPC paths were already correct). ([#296])
+- **2026-06-16** — Knowledgebase native PDF ingest: parses PDF text via FlateDecode + `/ToUnicode` lookup in pure Pascal (no Poppler / `pdftotext` dependency). `pasclaw kb add <file>.pdf` works without preprocessing. Scanned PDFs still need external OCR. ([#295])
+- **2026-06-15** — `pasclaw profile diff <a> <b>` (side-by-side comparison of two profiles' resolved field values) + `pasclaw profile bench <profile>` (run the SWE bench fixtures under the named profile, emit aggregated turn-count / tool-call / token stats). Finishes the profile-system follow-ups. ([#292])
 - **2026-06-13** — `pasclaw agent --quiet` / `-q` clamps the logger to `llError` so `[info]` startup noise (`web_search disabled`, `mcp[<name>] cache hit`, ...) stays off the stdout pipeline scripts read. Pairs with the banner / assistant-header / per-tool decoration / token-line suppression from PR #243 — Replicate / Lambda / curl callers running `pasclaw agent --quiet -m "..."` now get only the model's reply on stdout. ([#244])
 - **2026-06-12** — `dcc64 F2613 Unit 'PasClaw.Otel' not found` fixed by appending `..\pkg\otel` to the Delphi project's `DCC_UnitSearchPath`. Same PR also adds `pasclaw agent --quiet` / `-q` for machine-readable single-turn output: drops banner / assistant header / per-tool decoration / token line; exit code is non-zero on provider misconfiguration or a failed tool loop. ([#243])
 - **2026-06-12** — OpenTelemetry traces (OTLP/HTTP+JSON) on the agent loop + gateway HTTP server, off by default. Span hierarchy: `HTTP <method> <route>` (gateway, W3C `traceparent` parsed for parent context) → `openclaw.agent.turn` → `chat <model>` (provider request with `gen_ai.*` attrs) → `execute_tool <name>`. Span shape mirrors openclaw v2026.2+ so Langfuse / Tempo / Jaeger / Honeycomb / Datadog dashboards work without remapping. Flip on via `diagnostics.otel.enabled: true` OR the standard `OTEL_EXPORTER_OTLP_ENDPOINT` env var. ([#242])
@@ -194,3 +214,23 @@ This file mirrors the changelog section at the top of the root `README.md`. When
 [#242]: https://github.com/FMXExpress/PasClaw/pull/242
 [#243]: https://github.com/FMXExpress/PasClaw/pull/243
 [#244]: https://github.com/FMXExpress/PasClaw/pull/244
+[#292]: https://github.com/FMXExpress/PasClaw/pull/292
+[#295]: https://github.com/FMXExpress/PasClaw/pull/295
+[#296]: https://github.com/FMXExpress/PasClaw/pull/296
+[#297]: https://github.com/FMXExpress/PasClaw/pull/297
+[#298]: https://github.com/FMXExpress/PasClaw/pull/298
+[#299]: https://github.com/FMXExpress/PasClaw/pull/299
+[#300]: https://github.com/FMXExpress/PasClaw/pull/300
+[#302]: https://github.com/FMXExpress/PasClaw/pull/302
+[#303]: https://github.com/FMXExpress/PasClaw/pull/303
+[#304]: https://github.com/FMXExpress/PasClaw/pull/304
+[#306]: https://github.com/FMXExpress/PasClaw/pull/306
+[#307]: https://github.com/FMXExpress/PasClaw/pull/307
+[#309]: https://github.com/FMXExpress/PasClaw/pull/309
+[#310]: https://github.com/FMXExpress/PasClaw/pull/310
+[#312]: https://github.com/FMXExpress/PasClaw/pull/312
+[#314]: https://github.com/FMXExpress/PasClaw/pull/314
+[#315]: https://github.com/FMXExpress/PasClaw/pull/315
+[#316]: https://github.com/FMXExpress/PasClaw/pull/316
+[#317]: https://github.com/FMXExpress/PasClaw/pull/317
+[#318]: https://github.com/FMXExpress/PasClaw/pull/318
