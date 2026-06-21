@@ -282,23 +282,39 @@ end;
 
 procedure TestConfigRoundTrip;
 var
-  Saved, Loaded: TConfig;
+  Fresh, Saved, Loaded: TConfig;
 begin
+  { Fresh-install default is True (PR moved the floor in response to
+    operators running fat-catalog MCP servers like Replicate). Verify
+    the default first so a future regression that flips it back surfaces
+    here rather than as a behaviour change in production. }
+  Fresh := LoadConfig('');
+  try
+    AssertTrue(Fresh.MCPProgressiveDisclosure,
+               'fresh install: MCPProgressiveDisclosure defaults True');
+  finally
+    Fresh.Free;
+  end;
+
+  { Round-trip the opt-OUT direction since True is the default. Setting
+    True would write nothing (SaveConfig skips equal-to-default fields)
+    and the load would just re-read the default -- not exercising the
+    round-trip at all. }
   Saved := LoadConfig('');
   try
-    Saved.MCPProgressiveDisclosure := True;
+    Saved.MCPProgressiveDisclosure := False;
     SaveConfig(Saved);
   finally
     Saved.Free;
   end;
   Loaded := LoadConfig('');
   try
-    AssertTrue(Loaded.MCPProgressiveDisclosure,
-               'mcp_progressive_disclosure round-trips through save/load');
+    AssertTrue(not Loaded.MCPProgressiveDisclosure,
+               'mcp_progressive_disclosure opt-out round-trips through save/load');
   finally
     Loaded.Free;
   end;
-  WriteLn('  ok: config round-trips MCPProgressiveDisclosure');
+  WriteLn('  ok: config defaults True, opt-out round-trips');
 end;
 
 begin

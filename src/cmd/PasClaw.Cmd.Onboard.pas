@@ -781,12 +781,14 @@ begin
 end;
 
 procedure PromptMCPProgressiveDisclosure(Cfg: TConfig);
-{ Hermes-style lazy reveal for MCP tools. Default N -- preserves the
-  historical "every MCP tool schema in every turn's tools array"
-  behaviour. Asked only when at least one MCP server is configured so
-  fresh installs without MCP don't see a confusing question about a
-  feature that has no effect. Operators with fat catalogs (the GitHub
-  MCP alone ships 50+ tools) flip on to cut per-turn prompt cost. }
+{ Hermes-style lazy reveal for MCP tools. Default Y -- fat catalogs
+  (Replicate MCP ~50 tools, GitHub MCP ~50+, stacks easily hit 100+)
+  make lazy reveal the right floor. The question is asked only when
+  at least one MCP server is configured; with zero servers the flag
+  is inert and the prompt would just be confusing noise. Operators
+  with one or two tiny servers answer N to keep every schema in the
+  per-request tools array (saves the +1 turn cost on first use of
+  each tool, at the price of larger every-turn prompts). }
 var
   Choice: string;
   Enabled, i: Integer;
@@ -796,10 +798,11 @@ begin
     if Cfg.MCPServers[i].Enabled then Inc(Enabled);
   if Enabled = 0 then
   begin
-    { No MCP servers -- the flag would be inert. Reset to False so a
-      re-run after the operator removed their servers doesn't leave
-      a dangling True. }
-    Cfg.MCPProgressiveDisclosure := False;
+    { No MCP servers -- the flag is inert at runtime (tool_search
+      registers but DeferredNames is empty). Leave whatever the
+      operator (or the default) has and skip the question. Do NOT
+      force False here: a fresh-install with the True default has
+      MCPProgressiveDisclosure=True and that's fine. }
     Exit;
   end;
 
@@ -815,14 +818,16 @@ begin
     'tools by name in the system prompt and loads schemas on demand via ' +
     '`tool_search`.' + Ansi.Reset);
   PrintLn(Ansi.Dim +
-    'Cuts prompt cost on turns that touch zero MCP tools; adds 1 turn ' +
-    'whenever the' + Ansi.Reset);
+    'Default Y -- recommended for fat catalogs (Replicate / GitHub MCP). ' +
+    'Answer N' + Ansi.Reset);
   PrintLn(Ansi.Dim +
-    'model needs a tool it hasn''t loaded yet. Recommend Y for fat ' +
-    'catalogs (GitHub MCP +50 tools).' + Ansi.Reset);
+    'if you have one or two tiny servers and the +1 turn per first-use ' +
+    'isn''t worth' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'the prompt savings.' + Ansi.Reset);
   PrintLn;
-  Choice := Trim(LowerCase(ReadLineEcho('  Enable MCP progressive disclosure [y/N]: ')));
-  if (Choice = 'y') or (Choice = 'yes') then
+  Choice := Trim(LowerCase(ReadLineEcho('  Enable MCP progressive disclosure [Y/n]: ')));
+  if (Choice = '') or (Choice = 'y') or (Choice = 'yes') then
   begin
     Cfg.MCPProgressiveDisclosure := True;
     PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
@@ -832,7 +837,7 @@ begin
   begin
     Cfg.MCPProgressiveDisclosure := False;
     PrintLn('  ' + Ansi.Dim +
-            '(skipped -- every MCP tool''s schema sent in the per-request tools array)' +
+            '(disabled -- every MCP tool''s schema sent in the per-request tools array)' +
             Ansi.Reset);
   end;
 end;
