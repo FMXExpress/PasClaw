@@ -2730,11 +2730,15 @@ async function inbWorkerConnect() {
   if (!model) { _inbLog("pick a model from the dropdown first", "err"); return; }
   if (!_relayInbReady) { _inbLog("worker not ready yet -- try again in a second", "warn"); return; }
 
-  /* Pull the cached scoped token from setupRelayTab's eager fetch.
-     If the operator just opened the tab and the fetch hasn't
-     landed, retry once before giving up. Unauth'd gateway -> empty
-     string, worker polls anonymously. */
-  if (!_relayScopedToken && gwToken()) {
+  /* ALWAYS refresh the scoped token on Connect -- not just when the
+     cache is empty. TGatewayServer.Create regenerates FRelayToken
+     on every startup, so if the gateway restarted (or its config
+     reloaded) while this tab stayed open, the stale cached token
+     would 401 against the freshly-regenerated server-side value
+     and the worker would keep failing until the page reloaded.
+     The fetch is one small JSON GET; the freshness matters more
+     than the cache hit. Codex P2 review on PR #334. */
+  if (gwToken()) {
     await refreshRelayScopedToken();
     if (!_relayScopedToken) {
       _inbLog("failed to fetch /v1/relay/worker-token (no scoped credential available); aborting", "err");
@@ -2743,6 +2747,11 @@ async function inbWorkerConnect() {
       $("#relay-inb-wid").disabled     = false;
       return;
     }
+    /* Re-render snippets so the displayed token reflects the
+       just-refreshed value (operator may have had "show" on with
+       a stale token visible). */
+    syncRelayTokenInput();
+    renderRelaySnippets();
   }
   const scopedToken = _relayScopedToken;
 
