@@ -317,6 +317,9 @@ begin
       PrintLn('         -d ''{"model":"' + Cfg.DefaultModel +
               '","messages":[{"role":"user","content":"hi"}]}''');
       PrintLn;
+      PrintLn(Ansi.Bold + 'Relay worker token: ' + Ansi.Reset +
+              Ansi.Cyan + Server.RelayToken + Ansi.Reset +
+              Ansi.Dim + '   (regenerated each start; unlocks /v1/relay/* only)' + Ansi.Reset);
       PrintLn(Ansi.Dim + 'Press Ctrl-C to stop.' + Ansi.Reset);
 
       Server.WaitForStop;

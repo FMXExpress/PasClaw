@@ -670,6 +670,45 @@ begin
   WriteLn('  ok: provider_signature round-trips through the request envelope');
 end;
 
+procedure TestRequestBodyEmitsToolChoice;
+(* Codex P2 review on PR #333: tool_choice must round-trip through
+   the envelope so workers forwarding to tool-call-capable providers
+   can honour a forced-tool turn (e.g. WebLLM workers needing
+   `tool_choice:"required"` for reliable structured emissions).
+   Pre-fix, BuildRelayRequestBody dropped Options.ToolChoice
+   entirely and the worker had no way to know the caller wanted a
+   forced call. *)
+var
+  Msgs:  array of TMessage;
+  Tools: array of TToolDefinition;
+  Opts:  TChatOptions;
+  Body:  string;
+begin
+  SetLength(Msgs, 1);
+  Msgs[0] := MakeMessage(mrUser, 'list files in pwd');
+
+  SetLength(Tools, 1);
+  Tools[0].Name        := 'fs_list';
+  Tools[0].Description := 'list directory contents';
+  Tools[0].Schema      := '{"type":"object","properties":{"path":{"type":"string"}}}';
+
+  Opts := DefaultChatOptions;
+  Opts.ToolChoice := 'required';
+
+  Body := BuildRelayRequestBody(Msgs, Tools, 'gemini-3-pro', Opts, 'req_tc_1');
+
+  AssertContains(Body, '"tool_choice" : "required"',
+                 'envelope carries tool_choice when non-empty');
+
+  { Empty tool_choice must NOT emit the key. }
+  Opts.ToolChoice := '';
+  Body := BuildRelayRequestBody(Msgs, Tools, 'gemini-3-pro', Opts, 'req_tc_2');
+  AssertTrue(Pos('tool_choice', Body) = 0,
+             'empty tool_choice omitted from wire');
+
+  WriteLn('  ok: tool_choice round-trips through the request envelope');
+end;
+
 procedure TestWorkerResponseSurfacesNon2xxAsError;
 (* Codex P2 review on PR #323: a worker forwarding to a provider that
    returns 401/429/5xx must encode the result as an "error" envelope
@@ -799,6 +838,7 @@ begin
   TestRequestBodyEnvelope;
   TestRequestBodyToolMetadataRoundTrip;
   TestRequestBodyEmitsProviderSignature;
+  TestRequestBodyEmitsToolChoice;
   TestWorkerResponseSurfacesNon2xxAsError;
   TestWorkerResponseEmitsProviderSignature;
   TestGlobalQueueAccessor;

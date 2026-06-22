@@ -405,6 +405,10 @@ begin
       if Args.IRC then
         PrintLn(Format('  irc %s:%d %s joining %s',
                        [Args.IRCServer, Args.IRCPort, Args.IRCNick, Args.IRCChannel]));
+      PrintLn('');
+      PrintLn(Ansi.Bold + 'Relay worker token: ' + Ansi.Reset +
+              Ansi.Cyan + Server.RelayToken + Ansi.Reset +
+              Ansi.Dim + '   (regenerated each start; unlocks /v1/relay/* only)' + Ansi.Reset);
       PrintLn(Ansi.Dim + 'Press Ctrl-C to stop.' + Ansi.Reset);
 
       if Args.Telegram then
