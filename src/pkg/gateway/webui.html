@@ -661,9 +661,13 @@
           <span class="relay-hint-small">Defaults to this page's origin. Override if workers reach the gateway through a different URL (tunnel, proxy, public hostname).</span>
         </label>
         <label class="relay-token-label">
-          <span>Bearer token <button type="button" class="icon-btn" id="relay-token-toggle" title="Show/hide the real token in snippets">show</button></span>
+          <span>Relay worker token <button type="button" class="icon-btn" id="relay-token-toggle" title="Show/hide the real token in snippets">show</button></span>
           <input type="text" id="relay-token" autocomplete="off" spellcheck="false" readonly>
-          <span class="relay-hint-small" id="relay-token-hint">Pulled from your browser's stored gateway token. With “show” off, snippets use the literal placeholder <code>&lt;PASCLAW_GATEWAY_TOKEN&gt;</code> so you can screen-share safely.</span>
+          <span class="relay-hint-small" id="relay-token-hint">
+            Per-process credential that unlocks <strong>only</strong> <code>/v1/relay/*</code>, not <code>/v1/chat</code> / <code>/v1/config</code> / <code>/v1/skills</code>.
+            Regenerated every <code>pasclaw serve</code> / <code>pasclaw gateway</code> startup; auto-fetched from <code>GET /v1/relay/worker-token</code>.
+            With "show" off, snippets use the literal placeholder <code>&lt;PASCLAW_RELAY_TOKEN&gt;</code> so you can screen-share safely.
+          </span>
         </label>
       </div>
 
@@ -673,11 +677,12 @@
           Run a relay worker in this browser tab. Clicking Connect dynamically loads
           <code>@mlc-ai/web-llm</code> from <code>esm.run</code> and downloads the
           selected model's weights on first use -- nothing third-party is fetched until
-          you click. The module runs in an <strong>opaque-origin sandboxed iframe</strong>
-          (no access to this page's localStorage, no <code>/v1/*</code> credentials), and
-          it talks to the gateway with a <strong>relay-scoped token</strong> that unlocks
-          only <code>/v1/relay/*</code> -- so a compromised model can't impersonate you
-          against the rest of PasClaw. Closing the tab disconnects.
+          you click. The module runs in a <strong>dedicated Web Worker</strong>
+          (Worker scope has no <code>window</code> and no <code>localStorage</code>, so
+          the WebLLM module can't read this page's stored gateway token), and it talks
+          to the gateway with a <strong>relay-scoped token</strong> that unlocks only
+          <code>/v1/relay/*</code> -- a compromised model can't impersonate you against
+          the rest of PasClaw. Closing the tab disconnects.
         </p>
         <div class="relay-inb-row">
           <label>Model
@@ -2170,10 +2175,13 @@ const tabLoaders = {
 
   /* Relay tab: copy-paste snippets clients use to point a worker at
      THIS gateway, plus a live mini-dashboard of who's connected. The
-     token rendered into the snippets defaults to a literal
-     "<PASCLAW_GATEWAY_TOKEN>" placeholder so an operator can screen-
-     share this tab without leaking; a per-tab "show" toggle swaps in
-     the real token from localStorage when they want to copy it
+     token rendered into the snippets is the RELAY-SCOPED token
+     (fetched lazily from GET /v1/relay/worker-token), so external
+     workers run on least-privilege credentials -- the main gateway
+     token never appears in copy-pasted snippets. Defaults to a
+     literal "<PASCLAW_RELAY_TOKEN>" placeholder so an operator can
+     screen-share this tab without leaking; a per-tab "show" toggle
+     swaps in the real token when they want to copy it
      somewhere private. */
   async relay() {
     setupRelayTab();
@@ -2416,12 +2424,34 @@ function escapeHtml(s) {
 let relayTimer       = null;
 let relaySetupDone   = false;
 let relayShowToken   = false;
-const RELAY_TOKEN_PLACEHOLDER = "<PASCLAW_GATEWAY_TOKEN>";
+const RELAY_TOKEN_PLACEHOLDER = "<PASCLAW_RELAY_TOKEN>";
+/* Cached value of GET /v1/relay/worker-token. Fetched lazily on
+   tab open + re-fetched whenever the operator updates the main
+   gateway token (since the scoped fetch is gated by the MAIN
+   token). Empty string when the gateway is unauth'd (the scoped
+   token endpoint still works but every other request rides the
+   anonymous path) or the fetch failed. */
+let _relayScopedToken = "";
 /* In-browser worker state. Declared up here next to the other
    relay-tab bindings so a /#relay deep link doesn't hit the
    temporal dead zone trying to read them through setupInBrowserWorker.
-   (Same TDZ trap as RELAY_TOKEN_PLACEHOLDER above.) */
-let _relayInbIframe  = null;
+   (Same TDZ trap as RELAY_TOKEN_PLACEHOLDER above.)
+
+   Why a Web Worker instead of the sandbox-iframe approach that
+   landed in PR #333: opaque-origin iframes (sandbox without
+   allow-same-origin) cannot use IndexedDB or SharedArrayBuffer,
+   and WebLLM needs IndexedDB to cache multi-GB model weights.
+   The PR #333 attempt died with "The operation is insecure" on
+   CreateMLCEngine. A dedicated Web Worker is the right primitive:
+     - Same origin so IndexedDB / WebGPU / SharedArrayBuffer work.
+     - Worker scope has no `window`, so localStorage is unreachable.
+     - No parent DOM access; communicates only via postMessage.
+     - PasClaw uses bearer-token auth (no cookies), so a
+       same-origin fetch from the worker has no implicit credentials
+       -- the worker can only call /v1/* with tokens we hand it via
+       postMessage, and we only hand it the relay-scoped token. */
+let _relayInbWorker    = null;
+let _relayInbWorkerUrl = null;
 let _relayInbReady   = false;
 let _relayInbJobs    = 0;
 
@@ -2479,25 +2509,33 @@ m.focus();
    "Relay tab state" comment near it for why. */
 
 function relayEffectiveToken() {
-  if (relayShowToken) {
-    const t = gwToken();
-    return t || RELAY_TOKEN_PLACEHOLDER;
-  }
+  /* Snippets render with the RELAY-scoped token (not the main
+     gateway token) -- the snippets are meant to run on machines
+     OTHER than the gateway, configuring external `pasclaw relay`
+     workers / browser pages / Python loops. Those workers should
+     hold the least-privilege credential, so we render the scoped
+     token here. Falls back to the placeholder when masked or when
+     the scoped fetch hasn't landed yet. */
+  if (relayShowToken && _relayScopedToken)
+    return _relayScopedToken;
   return RELAY_TOKEN_PLACEHOLDER;
 }
 
 function setupRelayTab() {
   if (relaySetupDone) {
-    /* Re-pull the token's masked state from storage in case the
-       operator updated it via the 🔑 button. URL field is left alone
-       (operator may have customised it for an externally-reachable
-       hostname). */
-    syncRelayTokenInput();
-    renderRelaySnippets();
+    /* Re-fetch the scoped token in case the operator updated the
+       main gateway token via the 🔑 button (the scoped fetch is
+       gated by the main token). URL field is left alone since
+       the operator may have customised it for an externally-
+       reachable hostname. */
+    refreshRelayScopedToken().then(() => {
+      syncRelayTokenInput();
+      renderRelaySnippets();
+    });
     return;
   }
   $("#relay-url").value = window.location.origin;
-  syncRelayTokenInput();
+  syncRelayTokenInput();   /* renders the "fetching ..." placeholder */
 
   $("#relay-url").addEventListener("input", renderRelaySnippets);
 
@@ -2509,6 +2547,14 @@ function setupRelayTab() {
   });
 
   setupInBrowserWorker();
+
+  /* Fire-and-forget the scoped-token fetch; renderRelaySnippets
+     re-runs once it lands so the visible token / snippet bodies
+     update without forcing the operator to interact. */
+  refreshRelayScopedToken().then(() => {
+    syncRelayTokenInput();
+    renderRelaySnippets();
+  });
 
   renderRelaySnippets();
   relaySetupDone = true;
@@ -2589,42 +2635,48 @@ function setupInBrowserWorker() {
   $("#relay-inb-wid").value =
     "tab-" + Math.random().toString(36).slice(2, 10);
 
-  /* Create the sandboxed iframe up front (offscreen / 0-height).
-     The srcdoc contains a tiny self-contained postMessage protocol
-     responder. The web-llm import inside it is gated behind a
-     'connect' message, so just opening the Relay tab still fetches
-     nothing from esm.run -- only clicking Connect triggers the
-     load. */
-  _relayInbIframe = document.createElement("iframe");
-  /* setAttribute (not the IDL setter) so the value is the literal
-     reflected HTML attribute string browsers honour for sandbox
-     enforcement. The DOMTokenList IDL setter is less consistent
-     across engines and getAttribute round-trips don't always
-     reflect it. */
-  _relayInbIframe.setAttribute("sandbox", "allow-scripts");   /* no allow-same-origin -> opaque null origin */
-  _relayInbIframe.style.cssText = "display:none;width:0;height:0;border:0";
-  _relayInbIframe.srcdoc = _buildInbIframeSrcdoc();
-  document.querySelector(".relay-inb").appendChild(_relayInbIframe);
+  /* Create the Web Worker up front from a blob: URL holding the
+     ESM-flavoured worker script. Module workers can use `await
+     import('https://esm.run/...')` so the WebLLM fetch stays gated
+     behind a 'connect' message -- just opening the Relay tab still
+     fetches nothing from esm.run.
 
-  window.addEventListener("message", _onInbMessage);
+     Why not the sandboxed iframe approach from PR #333:
+     opaque-origin iframes can't open IndexedDB, and WebLLM needs
+     IndexedDB to cache multi-GB model weights (CreateMLCEngine
+     fails with "The operation is insecure" without it). Web
+     Workers are same-origin so IndexedDB / WebGPU / SharedArrayBuffer
+     all work, but the worker global scope has no `window` and no
+     localStorage, so the credential-isolation properties we wanted
+     from the iframe are still here -- we just hand the worker the
+     relay-scoped token via postMessage instead of granting it the
+     main gateway origin's credentials. */
+  const workerSrc = _buildInbWorkerScript();
+  const blob = new Blob([workerSrc], { type: "application/javascript" });
+  _relayInbWorkerUrl = URL.createObjectURL(blob);
+  _relayInbWorker = new Worker(_relayInbWorkerUrl, { type: "module" });
+  _relayInbWorker.addEventListener("message", _onInbMessage);
+
   $("#relay-inb-connect").addEventListener("click", inbWorkerConnect);
   $("#relay-inb-disconnect").addEventListener("click", inbWorkerDisconnect);
 
-  /* Best-effort: tell the iframe to disconnect on tab unload so the
+  /* Best-effort: tell the worker to disconnect on tab unload so the
      gateway's worker registry sweeps us promptly. */
   window.addEventListener("beforeunload", () => {
-    if (_relayInbIframe && _relayInbReady) {
-      try { _relayInbIframe.contentWindow.postMessage({type:"disconnect"}, "*"); } catch {}
+    if (_relayInbWorker && _relayInbReady) {
+      try { _relayInbWorker.postMessage({type:"disconnect"}); } catch {}
     }
   });
 }
 
 function _onInbMessage(ev) {
-  /* Filter strictly by source object identity. event.origin is
-     "null" for sandboxed iframes, but identity check is sufficient
-     and avoids surprises if the spec ever changes how null-origin
-     gets stringified. */
-  if (!_relayInbIframe || ev.source !== _relayInbIframe.contentWindow) return;
+  /* The worker event handler receives a MessageEvent whose source
+     is the Worker object itself when wired via worker.addEventListener
+     -- but the standard pattern is just to consume ev.data. Worker
+     messages can't be spoofed by external code, so no source filter
+     is needed for security; we still null-check the worker to avoid
+     races during teardown. */
+  if (!_relayInbWorker) return;
   const m = ev.data;
   if (!m || typeof m !== "object") return;
   switch (m.type) {
@@ -2669,20 +2721,6 @@ function _inbBumpJobs() {
   $("#relay-inb-jobs").textContent = _relayInbJobs + " served";
 }
 
-async function _fetchRelayScopedToken() {
-  /* Fetch the per-process relay token via the authenticated
-     /v1/relay/worker-token endpoint. The parent uses gwFetch
-     (carries the MAIN token); the relay token comes back and
-     is passed to the sandboxed iframe at Connect time -- it
-     never sits in this page's localStorage. */
-  try {
-    const r = await gwFetch("/v1/relay/worker-token");
-    if (!r.ok) return null;
-    const j = await r.json();
-    return j.token || null;
-  } catch { return null; }
-}
-
 async function inbWorkerConnect() {
   const url   = ($("#relay-url").value || window.location.origin).replace(/\/+$/, "");
   const wid   = $("#relay-inb-wid").value.trim();
@@ -2690,39 +2728,43 @@ async function inbWorkerConnect() {
   if (!url)   { _inbLog("gateway URL is required", "err"); return; }
   if (!wid)   { _inbLog("worker id is required", "err");   return; }
   if (!model) { _inbLog("pick a model from the dropdown first", "err"); return; }
-  if (!_relayInbReady) { _inbLog("sandbox iframe not ready yet -- try again in a second", "warn"); return; }
+  if (!_relayInbReady) { _inbLog("worker not ready yet -- try again in a second", "warn"); return; }
 
-  /* Fetch the relay-scoped token (NOT gwToken which is the main
-     credential). On unauth'd gateways the endpoint may not require
-     a token; the iframe falls through to anonymous polling. */
-  let scopedToken = "";
-  if (gwToken()) {
-    scopedToken = (await _fetchRelayScopedToken()) || "";
-    if (!scopedToken) {
+  /* Pull the cached scoped token from setupRelayTab's eager fetch.
+     If the operator just opened the tab and the fetch hasn't
+     landed, retry once before giving up. Unauth'd gateway -> empty
+     string, worker polls anonymously. */
+  if (!_relayScopedToken && gwToken()) {
+    await refreshRelayScopedToken();
+    if (!_relayScopedToken) {
       _inbLog("failed to fetch /v1/relay/worker-token (no scoped credential available); aborting", "err");
+      $("#relay-inb-connect").disabled = false;
+      $("#relay-inb-model").disabled   = false;
+      $("#relay-inb-wid").disabled     = false;
       return;
     }
   }
+  const scopedToken = _relayScopedToken;
 
   $("#relay-inb-connect").disabled = true;
   $("#relay-inb-model").disabled = true;
   $("#relay-inb-wid").disabled = true;
   _inbProgress(0);
-  _inbStatus("starting sandboxed worker ...", "busy");
-  _inbLog("dispatching connect to sandboxed iframe (model load happens there, in opaque null origin)");
+  _inbStatus("starting in-browser worker ...", "busy");
+  _inbLog("dispatching connect to Web Worker (IndexedDB-backed; model weights cache after first download)");
 
-  _relayInbIframe.contentWindow.postMessage({
+  _relayInbWorker.postMessage({
     type:     "connect",
     url:      url,
     token:    scopedToken,
     model:    model,
     workerId: wid,
-  }, "*");
+  });
 }
 
 function inbWorkerDisconnect() {
-  if (_relayInbIframe && _relayInbReady) {
-    try { _relayInbIframe.contentWindow.postMessage({type:"disconnect"}, "*"); } catch {}
+  if (_relayInbWorker && _relayInbReady) {
+    try { _relayInbWorker.postMessage({type:"disconnect"}); } catch {}
   }
   _inbStatus("disconnected", "");
   _inbLog("disconnected by user");
@@ -2732,24 +2774,27 @@ function inbWorkerDisconnect() {
   $("#relay-inb-wid").disabled        = false;
 }
 
-function _buildInbIframeSrcdoc() {
-  /* Self-contained sandbox payload. No imports outside the
-     web-llm dynamic import inside the connect handler. The page
-     has no UI -- just a postMessage responder. The parent renders
-     all status / log / progress updates relayed via postMessage. */
+function _buildInbWorkerScript() {
+  /* Module worker script. Loaded into a Blob URL + spawned via
+     `new Worker(url, {type:'module'})`. ES module syntax lets us
+     use `await import('https://esm.run/...')` inside the connect
+     handler so the WebLLM fetch stays gated behind a Connect click.
+     The worker has no DOM / window / localStorage; it talks to the
+     parent via self.postMessage. The token + URL the parent hands
+     us in the 'connect' message are the ONLY credentials this code
+     ever sees -- if the parent only ever passes the relay-scoped
+     token (which it does), a compromised WebLLM module can do
+     nothing more than pull jobs and POST responses. */
   return [
-    "<!DOCTYPE html>",
-    "<script>",
-    "(function() {",
     "'use strict';",
-    "var engine = null, events = null;",
-    "function post(msg) { parent.postMessage(msg, '*'); }",
-    "window.addEventListener('message', async function(ev) {",
-    "  var m = ev.data;",
+    "let engine = null, events = null;",
+    "function post(msg) { self.postMessage(msg); }",
+    "self.addEventListener('message', async function(ev) {",
+    "  const m = ev.data;",
     "  if (!m || typeof m !== 'object') return;",
     "  if (m.type === 'connect') {",
     "    post({type:'log', text:'loading @mlc-ai/web-llm via esm.run ...'});",
-    "    var webllm;",
+    "    let webllm;",
     "    try {",
     "      webllm = await import('https://esm.run/@mlc-ai/web-llm');",
     "    } catch (e) {",
@@ -2773,8 +2818,12 @@ function _buildInbIframeSrcdoc() {
     "    }",
     "    post({type:'progress', pct:100});",
     "    post({type:'log', text:'engine ready, opening SSE to ' + m.url + '/v1/relay/poll', level:'ok'});",
-    "    var q = new URLSearchParams({worker_id: m.workerId, caps: m.model});",
+    "    const q = new URLSearchParams({worker_id: m.workerId, caps: m.model});",
     "    if (m.token) q.set('token', m.token);",
+    "    /* EventSource is exposed to DedicatedWorker scope in all",
+    "       evergreen browsers (Chrome, Firefox, Safari). If we ever",
+    "       need to support an environment where it isn't, swap this",
+    "       for a manual fetch + ReadableStream SSE parser. */",
     "    events = new EventSource(m.url + '/v1/relay/poll?' + q.toString());",
     "    events.onopen  = function() { post({type:'status', text:'connected -- waiting for jobs', level:'on'}); };",
     "    events.onerror = function() {",
@@ -2782,32 +2831,23 @@ function _buildInbIframeSrcdoc() {
     "      post({type:'log', text:'SSE error -- browser EventSource will retry on its own', level:'warn'});",
     "    };",
     "    events.onmessage = async function(ee) {",
-    "      var req;",
+    "      let req;",
     "      try { req = JSON.parse(ee.data); }",
     "      catch (e) { post({type:'log', text:'bad event JSON: ' + e.message, level:'err'}); return; }",
     "      post({type:'log', text:'dispatching ' + req.id + ' (' + (req.messages || []).length + ' msgs)'});",
     "      post({type:'status', text:'serving ' + req.id, level:'busy'});",
     "      try {",
-    "        /* Build the chat.completions.create payload. Codex P2",
-    "           review on PR #333 -- tools were dropped here so WebLLM",
-    "           never saw the relay envelope's tool definitions, which",
-    "           meant agent tool-using flows stalled (no structured",
-    "           tool_calls back from the worker). The envelope ships",
-    "           tools as { name, description, parameters } where",
-    "           parameters is a JSON-string-containing-JSON (the schema",
-    "           is shipped verbatim under a string key); WebLLM wants",
-    "           OpenAI shape: { type:'function', function: { name,",
-    "           description, parameters: <object> } }, so we map +",
-    "           JSON.parse the schema string. tool_choice rides on",
-    "           req.options when the gateway-side caller specified one. */",
-    "        var ccOpts = {",
+    "        /* Map the envelope's tools -> WebLLM's OpenAI shape +",
+    "           JSON.parse the schema-as-string. Forward tool_choice",
+    "           when the gateway-side caller specified one. PR #333. */",
+    "        const ccOpts = {",
     "          messages: req.messages,",
     "          temperature: parseFloat((req.options && req.options.temperature) || '0'),",
     "          max_tokens:  (req.options && req.options.max_tokens) || 512,",
     "        };",
     "        if (req.tools && req.tools.length) {",
     "          ccOpts.tools = req.tools.map(function(t) {",
-    "            var params;",
+    "            let params;",
     "            try { params = JSON.parse(t.parameters || '{}'); }",
     "            catch (e) { params = {}; }",
     "            return { type:'function', function: {",
@@ -2817,10 +2857,10 @@ function _buildInbIframeSrcdoc() {
     "          if (req.options && req.options.tool_choice)",
     "            ccOpts.tool_choice = req.options.tool_choice;",
     "        }",
-    "        var c = await engine.chat.completions.create(ccOpts);",
-    "        var headers = {'Content-Type':'application/json'};",
+    "        const c = await engine.chat.completions.create(ccOpts);",
+    "        const headers = {'Content-Type':'application/json'};",
     "        if (m.token) headers['Authorization'] = 'Bearer ' + m.token;",
-    "        var r = await fetch(m.url + '/v1/relay/respond/' + req.id, {",
+    "        const r = await fetch(m.url + '/v1/relay/respond/' + req.id, {",
     "          method:'POST', headers: headers,",
     "          body: JSON.stringify({",
     "            content: c.choices[0].message.content,",
@@ -2847,25 +2887,35 @@ function _buildInbIframeSrcdoc() {
     "  }",
     "});",
     "post({type:'ready'});",
-    "})();",
-    "</" + "script>",
   ].join("\n");
 }
 
 function syncRelayTokenInput() {
-  const t = gwToken();
   const input = $("#relay-token");
-  if (!t) {
-    input.value = "(no token stored -- click the 🔑 nav button to set one)";
+  if (!_relayScopedToken) {
+    input.value = gwToken()
+      ? "(fetching scoped token from /v1/relay/worker-token ...)"
+      : "(no main token set -- the relay endpoints accept anonymous traffic)";
     input.style.color = "var(--mut)";
     return;
   }
   input.style.color = "";
-  if (relayShowToken) {
-    input.value = t;
-  } else {
-    input.value = "•".repeat(Math.min(t.length, 24));
-  }
+  input.value = relayShowToken
+    ? _relayScopedToken
+    : "•".repeat(_relayScopedToken.length);
+}
+
+async function refreshRelayScopedToken() {
+  /* Pull the per-process scoped token. Gated by the MAIN gateway
+     token via the standard auth check, so an unauth'd gateway just
+     returns 200 anyway. Cached in _relayScopedToken; refreshed when
+     the operator updates the main token via the 🔑 nav button. */
+  try {
+    const r = await gwFetch("/v1/relay/worker-token");
+    if (!r.ok) { _relayScopedToken = ""; return; }
+    const j = await r.json();
+    _relayScopedToken = j.token || "";
+  } catch { _relayScopedToken = ""; }
 }
 
 function renderRelaySnippets() {
@@ -2877,7 +2927,7 @@ function renderRelaySnippets() {
             + "  --gateway-token " + tok;
 
   const cliEnv = "export PASCLAW_GATEWAY_URL=" + url + "\n"
-               + "export PASCLAW_GATEWAY_TOKEN=" + tok + "\n"
+               + "export PASCLAW_RELAY_TOKEN=" + tok + "\n"
                + "pasclaw relay";
 
   /* Browser worker no longer rendered as a code-block snippet here.
