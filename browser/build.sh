@@ -58,7 +58,10 @@ ensure_c2w
 echo "    using c2w: $C2W"
 
 echo "==> 1/7  build the image with browser networking compiled in (C2W=1)"
-docker build -f docker/Dockerfile --build-arg C2W=1 -t "$IMAGE" .
+# Dockerfile lives at the repo root (`./Dockerfile`), not under docker/ --
+# docker/ holds the README only. Omit `-f` so docker picks up the
+# default ./Dockerfile under our build context.
+docker build --build-arg C2W=1 -t "$IMAGE" .
 
 echo "==> 2/7  derive a browser image: onboard (BYO API key) then run the agent"
 # The normal image runs the gateway SERVER (no use in a single-user tab). For
