@@ -80,7 +80,19 @@ DOCKERFILE
 
 echo "==> 3/7  c2w --to-js : emscripten wasm + js into $OUT/"
 rm -rf "$OUT"; mkdir -p "$OUT"
-"$C2W" --to-js "$BROWSER_IMAGE" "$OUT/"
+# c2w v0.8.4's internal Dockerfile clones ${SOURCE_REPO} (default
+# https://github.com/ktock/container2wasm) at the pinned
+# ${SOURCE_REPO_VERSION} for build assets. ktock's repo no longer
+# carries tags (the project moved to its own org), so the default
+# clone now dies with `Remote branch v0.8.4 not found in upstream
+# origin`. Forward a docker --build-arg through c2w's --build-arg
+# passthrough so the assets stage clones the still-tagged
+# container2wasm/container2wasm fork instead. Override via the
+# C2W_SOURCE_REPO env if a future upstream move breaks this again.
+C2W_SOURCE_REPO="${C2W_SOURCE_REPO:-https://github.com/container2wasm/container2wasm}"
+"$C2W" --to-js \
+  --build-arg "SOURCE_REPO=$C2W_SOURCE_REPO" \
+  "$BROWSER_IMAGE" "$OUT/"
 
 echo "==> 4/7  fetch the container2wasm example harness ($C2W_VERSION)"
 git clone --depth 1 -b "$C2W_VERSION" \
