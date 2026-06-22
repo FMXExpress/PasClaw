@@ -214,6 +214,35 @@
     color:var(--fg);text-transform:none;letter-spacing:0}
   .relay-config-grid input:focus{outline:none;border-color:var(--cyan)}
   .relay-snippets{display:flex;flex-direction:column;gap:.7rem;padding:.4rem .8rem}
+  /* In-browser worker pane. Same panel feel as the rest of the relay
+     tab; the picker + buttons row uses a flex layout so it collapses
+     gracefully on narrow widths. */
+  .relay-inb{display:flex;flex-direction:column;gap:.55rem;padding:.4rem .8rem .8rem}
+  .relay-inb-row{display:grid;grid-template-columns:1fr 1fr auto;gap:.65rem;align-items:end}
+  .relay-inb-row label{display:flex;flex-direction:column;gap:.3rem;font-size:11px;
+    text-transform:uppercase;letter-spacing:.06em;color:var(--cyan)}
+  .relay-inb-row select, .relay-inb-row input{font-family:var(--mono);font-size:12.5px;
+    padding:.42rem .55rem;background:rgba(255,255,255,.04);border:1px solid var(--line);
+    border-radius:6px;color:var(--fg);text-transform:none;letter-spacing:0}
+  .relay-inb-row select:focus, .relay-inb-row input:focus{outline:none;border-color:var(--cyan)}
+  .relay-inb-actions{display:flex;gap:.45rem;align-items:end}
+  .relay-inb-status{display:flex;gap:.65rem;align-items:center;padding:.45rem .7rem;
+    background:rgba(2,5,15,.5);border:1px solid var(--line);border-radius:8px;font-size:12px}
+  .relay-inb-status .dot{width:.55rem;height:.55rem;border-radius:50%;background:var(--mut)}
+  .relay-inb-status .dot.on{background:var(--green);box-shadow:0 0 8px rgba(61,242,129,.6)}
+  .relay-inb-status .dot.err{background:var(--red);box-shadow:0 0 8px rgba(255,77,109,.5)}
+  .relay-inb-status .dot.busy{background:var(--orange);box-shadow:0 0 8px rgba(255,159,28,.55)}
+  .relay-inb-meter{flex:1;height:4px;background:rgba(255,255,255,.07);border-radius:2px;overflow:hidden}
+  .relay-inb-meter > span{display:block;height:100%;background:var(--cyan);width:0%;transition:width .3s ease}
+  #relay-inb-jobs{color:var(--cyan)}
+  #relay-inb-log{margin:0;padding:.7rem;max-height:220px;overflow:auto;
+    background:rgba(2,5,15,.7);border:1px solid var(--line);border-radius:8px;
+    font-size:11.5px;line-height:1.5;color:var(--mut);
+    white-space:pre-wrap;word-break:break-word;font-family:var(--mono)}
+  #relay-inb-log .ok{color:var(--green)}
+  #relay-inb-log .warn{color:var(--orange)}
+  #relay-inb-log .err{color:var(--red)}
+  @media (max-width:780px){.relay-inb-row{grid-template-columns:1fr}.relay-inb-actions{justify-content:flex-end}}
   @media (max-width:780px){
     .relay-config-grid{grid-template-columns:1fr}
   }
@@ -638,7 +667,38 @@
         </label>
       </div>
 
-      <h3>Connect a worker</h3>
+      <h3>In-browser worker</h3>
+      <div class="relay-inb">
+        <p class="relay-hint" style="margin:0">
+          Run a relay worker in this browser tab. Clicking Connect dynamically loads
+          <code>@mlc-ai/web-llm</code> from <code>esm.run</code> and downloads the
+          selected model's weights on first use -- nothing third-party is fetched until
+          you click. Closing the tab disconnects.
+        </p>
+        <div class="relay-inb-row">
+          <label>Model
+            <select id="relay-inb-model">
+              <option value="" disabled selected>-- choose a model --</option>
+            </select>
+          </label>
+          <label>Worker id
+            <input type="text" id="relay-inb-wid" autocomplete="off" spellcheck="false">
+          </label>
+          <div class="relay-inb-actions">
+            <button type="button" id="relay-inb-connect" class="primary">Connect</button>
+            <button type="button" id="relay-inb-disconnect" disabled>Disconnect</button>
+          </div>
+        </div>
+        <div class="relay-inb-status">
+          <span class="dot" id="relay-inb-dot"></span>
+          <span id="relay-inb-status-text">idle -- pick a model and click Connect</span>
+          <div class="relay-inb-meter"><span id="relay-inb-meter-fill"></span></div>
+          <span id="relay-inb-jobs">0 served</span>
+        </div>
+        <pre id="relay-inb-log">(log)</pre>
+      </div>
+
+      <h3>Connect a worker from another host</h3>
       <div class="relay-snippets" id="relay-snippets"></div>
 
       <h3>Connected workers</h3>
@@ -2354,14 +2414,14 @@ let relaySetupDone   = false;
 let relayShowToken   = false;
 const RELAY_TOKEN_PLACEHOLDER = "<PASCLAW_GATEWAY_TOKEN>";
 
-/* Curated WebLLM model list -- consumed by buildBrowserSnippet below.
-   Declared up here next to the other relay-tab state for the same TDZ
-   reason: a /#relay deep link fires the relay loader before the
-   later const initializer would run. Each entry is an MLC prebuilt
-   model_id from https://github.com/mlc-ai/web-llm/blob/main/src/
-   config.ts. Grouped by approximate VRAM footprint so the operator
-   can pick by "what fits on my hardware" rather than chasing version
-   numbers. */
+/* Curated WebLLM model list -- populated into the in-browser worker
+   dropdown by setupInBrowserWorker. Declared up here next to the
+   other relay-tab state for the same TDZ reason: a /#relay deep
+   link fires the relay loader before a later const initializer
+   would run. Each entry is an MLC prebuilt model_id from
+   https://github.com/mlc-ai/web-llm/blob/main/src/config.ts.
+   Grouped by approximate VRAM footprint so the operator picks by
+   "what fits on my hardware" rather than chasing version numbers. */
 const RELAY_WEBLLM_MODELS = [
   { group: "Tiny (under 1B -- fits anywhere, fast)", items: [
     { id: "Llama-3.2-1B-Instruct-q4f16_1-MLC",  label: "Llama 3.2 1B Instruct" },
@@ -2437,8 +2497,192 @@ function setupRelayTab() {
     renderRelaySnippets();
   });
 
+  setupInBrowserWorker();
+
   renderRelaySnippets();
   relaySetupDone = true;
+}
+
+/* In-browser worker: model picker + Connect/Disconnect lifecycle.
+   Dynamic-import the WebLLM library inside the Connect handler so a
+   bare visit to the Relay tab never fetches anything from esm.run --
+   the third-party fetch is gated entirely behind an explicit user
+   action. Lifecycle:
+     - Connect: import("@mlc-ai/web-llm") -> CreateMLCEngine
+       (progress bar driven by initProgressCallback) -> open
+       EventSource on /v1/relay/poll. Each event runs through the
+       engine + POSTs back to /v1/relay/respond/<id>.
+     - Disconnect: close EventSource. Engine reference is dropped;
+       browser GCs the WASM module.
+   Stored on the window so the relay tab can clean up if the user
+   reloads or navigates away. */
+let _relayInbState = { engine: null, events: null, jobs: 0 };
+
+function setupInBrowserWorker() {
+  /* Populate the model dropdown from the curated list. Optgroup
+     labels mirror the constant's grouping. */
+  const sel = $("#relay-inb-model");
+  for (const g of RELAY_WEBLLM_MODELS) {
+    const og = document.createElement("optgroup");
+    og.label = g.group;
+    for (const m of g.items) {
+      const opt = document.createElement("option");
+      opt.value = m.id;
+      opt.textContent = m.label;
+      og.appendChild(opt);
+    }
+    sel.appendChild(og);
+  }
+  $("#relay-inb-wid").value =
+    "tab-" + Math.random().toString(36).slice(2, 10);
+
+  $("#relay-inb-connect").addEventListener("click", inbWorkerConnect);
+  $("#relay-inb-disconnect").addEventListener("click", inbWorkerDisconnect);
+  /* Best-effort: close the EventSource when the tab unloads so the
+     gateway's worker registry sweeps us promptly rather than waiting
+     for the keepalive timeout. */
+  window.addEventListener("beforeunload", () => {
+    if (_relayInbState.events) try { _relayInbState.events.close(); } catch {}
+  });
+}
+
+function _inbLog(msg, cls) {
+  const ts = new Date().toLocaleTimeString();
+  const el = $("#relay-inb-log");
+  const safe = escapeHtml(msg);
+  el.innerHTML += "\n[" + ts + "] " + (cls ? '<span class="' + cls + '">' + safe + '</span>' : safe);
+  el.scrollTop = el.scrollHeight;
+}
+function _inbStatus(text, cls) {
+  $("#relay-inb-status-text").textContent = text;
+  $("#relay-inb-dot").className = "dot" + (cls ? " " + cls : "");
+}
+function _inbProgress(pct) {
+  $("#relay-inb-meter-fill").style.width = pct + "%";
+}
+function _inbBumpJobs() {
+  _relayInbState.jobs += 1;
+  $("#relay-inb-jobs").textContent = _relayInbState.jobs + " served";
+}
+
+async function inbWorkerConnect() {
+  const url   = ($("#relay-url").value || window.location.origin).replace(/\/+$/, "");
+  const tok   = gwToken();
+  const wid   = $("#relay-inb-wid").value.trim();
+  const model = $("#relay-inb-model").value;
+  if (!url)   { _inbLog("gateway URL is required", "err"); return; }
+  if (!wid)   { _inbLog("worker id is required", "err");   return; }
+  if (!model) { _inbLog("pick a model from the dropdown first", "err"); return; }
+
+  $("#relay-inb-connect").disabled = true;
+  $("#relay-inb-model").disabled = true;
+  $("#relay-inb-wid").disabled = true;
+  _inbProgress(0);
+  _inbStatus("loading " + model + " ...", "busy");
+  _inbLog("dynamic-importing @mlc-ai/web-llm from esm.run (first-time fetch only)");
+
+  let webllm;
+  try {
+    /* Dynamic import keeps the fetch gated behind this click. A user
+       who never opens this section never pays the esm.run download
+       cost. Browsers cache the module so subsequent Connects are
+       instant. */
+    webllm = await import("https://esm.run/@mlc-ai/web-llm");
+  } catch (e) {
+    _inbLog("web-llm module load failed: " + e.message, "err");
+    _inbStatus("module load failed", "err");
+    $("#relay-inb-connect").disabled = false;
+    $("#relay-inb-model").disabled = false;
+    $("#relay-inb-wid").disabled = false;
+    return;
+  }
+
+  try {
+    _relayInbState.engine = await webllm.CreateMLCEngine(model, {
+      initProgressCallback: (r) => {
+        _inbProgress(Math.round((r.progress || 0) * 100));
+        if (r.text) _inbStatus(r.text, "busy");
+      },
+    });
+  } catch (e) {
+    _inbLog("engine init failed: " + e.message, "err");
+    _inbStatus("engine init failed", "err");
+    $("#relay-inb-connect").disabled = false;
+    $("#relay-inb-model").disabled = false;
+    $("#relay-inb-wid").disabled = false;
+    return;
+  }
+  _inbProgress(100);
+  _inbLog("engine ready, opening SSE to " + url + "/v1/relay/poll", "ok");
+
+  /* Browser EventSource has no headers option -- auth + worker
+     identity + caps ride as query params (gateway accepts both
+     shapes; see HandleRelayPoll). Token omitted when blank to match
+     the gateway's unauth'd mode. */
+  const q = new URLSearchParams({ worker_id: wid, caps: model });
+  if (tok) q.set("token", tok);
+  _relayInbState.events = new EventSource(url + "/v1/relay/poll?" + q.toString());
+  _relayInbState.events.onopen  = () => _inbStatus("connected -- waiting for jobs", "on");
+  _relayInbState.events.onerror = () => {
+    _inbStatus("disconnected (browser will auto-retry)", "err");
+    _inbLog("SSE error -- browser EventSource will retry on its own", "warn");
+  };
+  _relayInbState.events.onmessage = async (ev) => {
+    let req;
+    try { req = JSON.parse(ev.data); }
+    catch (e) { _inbLog("bad event JSON: " + e.message, "err"); return; }
+    _inbLog("dispatching " + req.id + " (" + (req.messages || []).length + " msgs)");
+    _inbStatus("serving " + req.id, "busy");
+    try {
+      const c = await _relayInbState.engine.chat.completions.create({
+        messages:    req.messages,
+        temperature: parseFloat(req.options?.temperature ?? "0"),
+        max_tokens:  req.options?.max_tokens ?? 512,
+      });
+      const headers = { "Content-Type": "application/json" };
+      if (tok) headers["Authorization"] = "Bearer " + tok;
+      const r = await fetch(url + "/v1/relay/respond/" + req.id, {
+        method: "POST", headers,
+        body: JSON.stringify({
+          content:       c.choices[0].message.content,
+          finish_reason: c.choices[0].finish_reason,
+          usage:         c.usage,
+          tool_calls:    c.choices[0].message.tool_calls,
+        }),
+      });
+      if (!r.ok) _inbLog("respond POST got HTTP " + r.status, "warn");
+      _inbBumpJobs();
+      _inbStatus("connected -- waiting for jobs", "on");
+      _inbLog("completed " + req.id + " (" + (c.usage?.completion_tokens ?? "?") + " tokens)", "ok");
+    } catch (e) {
+      _inbLog("dispatch error for " + req.id + ": " + e.message, "err");
+      const headers = { "Content-Type": "application/json" };
+      if (tok) headers["Authorization"] = "Bearer " + tok;
+      fetch(url + "/v1/relay/respond/" + req.id, {
+        method: "POST", headers,
+        body: JSON.stringify({ error: e.message }),
+      }).catch(() => {});
+    }
+  };
+
+  $("#relay-inb-disconnect").disabled = false;
+}
+
+function inbWorkerDisconnect() {
+  if (_relayInbState.events) {
+    try { _relayInbState.events.close(); } catch {}
+    _relayInbState.events = null;
+  }
+  /* Drop the engine reference so the WASM module can be GC'd. The
+     model weights stay in the browser's cache so a re-Connect skips
+     the download. */
+  _relayInbState.engine = null;
+  _inbStatus("disconnected", "");
+  _inbLog("disconnected by user");
+  $("#relay-inb-connect").disabled = false;
+  $("#relay-inb-disconnect").disabled = true;
+  $("#relay-inb-model").disabled = false;
+  $("#relay-inb-wid").disabled = false;
 }
 
 function syncRelayTokenInput() {
@@ -2457,257 +2701,6 @@ function syncRelayTokenInput() {
   }
 }
 
-function buildBrowserSnippet(gatewayUrl, gatewayToken, defaultWorkerId) {
-  /* Render each curated model as an <option>. Optgroup labels match
-     the JS-side grouping so the operator sees the same tiers in the
-     dropdown that the constant declares. */
-  const optionsHtml = RELAY_WEBLLM_MODELS.map(g =>
-    "        <optgroup label=\"" + g.group + "\">\n" +
-    g.items.map(m =>
-      "          <option value=\"" + m.id + "\">" + m.label + "</option>"
-    ).join("\n") +
-    "\n        </optgroup>"
-  ).join("\n");
-
-  /* Multi-line HTML built as an array.join('\n') -- easier to scan
-     than the old "..." + concat soup, escapes only the literal
-     backslashes / quotes that JS would otherwise eat. The page is
-     standalone: save as relay.html, open in a browser, click
-     Connect. */
-  return [
-    "<!DOCTYPE html>",
-    "<html lang=\"en\">",
-    "<head>",
-    "<meta charset=\"utf-8\">",
-    "<title>PasClaw -- WebLLM relay worker</title>",
-    "<style>",
-    "  :root {",
-    "    color-scheme: dark;",
-    "    --bg:    #050611;  --bg2:  #0b1026;",
-    "    --fg:    #f5f7ff;  --mut:  #8f9bc6;",
-    "    --cyan:  #20f6ff;  --green:#3df281;",
-    "    --red:   #ff4d6d;  --orange:#ff9f1c;",
-    "    --panel: rgba(12,18,43,.72);",
-    "    --line:  rgba(32,246,255,.22);",
-    "    --glow:  0 0 0 1px rgba(32,246,255,.22), 0 12px 28px -16px rgba(32,246,255,.4);",
-    "  }",
-    "  * { box-sizing: border-box; }",
-    "  body {",
-    "    margin: 0; min-height: 100vh; padding: 2.5rem 1.5rem;",
-    "    color: var(--fg);",
-    "    font: 13px/1.55 'JetBrains Mono', 'SF Mono', Menlo, Consolas, monospace;",
-    "    background: radial-gradient(1100px 600px at 80% -10%, rgba(32,246,255,.10), transparent 60%),",
-    "                radial-gradient(900px 500px at 10% 90%, rgba(143,92,255,.10), transparent 65%),",
-    "                linear-gradient(135deg, var(--bg), var(--bg2) 48%, #13051f);",
-    "  }",
-    "  .wrap { max-width: 760px; margin: 0 auto; display: flex; flex-direction: column; gap: 1rem; }",
-    "  h1 { margin: 0 0 .25rem; font-size: 17px; letter-spacing: .04em; }",
-    "  h1 .accent { color: var(--cyan); }",
-    "  .sub { color: var(--mut); font-size: 12px; margin: 0 0 1rem; line-height: 1.6; }",
-    "  .panel {",
-    "    background: var(--panel); backdrop-filter: blur(6px);",
-    "    border: 1px solid var(--line); border-radius: 12px;",
-    "    padding: 1rem 1.1rem;",
-    "  }",
-    "  .row { display: grid; grid-template-columns: 8rem 1fr; gap: .65rem .85rem; align-items: center; }",
-    "  .row label { color: var(--mut); font-size: 11px; text-transform: uppercase; letter-spacing: .07em; }",
-    "  .row input, .row select {",
-    "    background: rgba(2,5,15,.7); border: 1px solid var(--line); border-radius: 6px;",
-    "    color: var(--fg); padding: .45rem .6rem; font: inherit;",
-    "  }",
-    "  .row input:focus, .row select:focus { outline: none; border-color: var(--cyan); }",
-    "  .actions { display: flex; gap: .55rem; justify-content: flex-end; margin-top: .8rem; }",
-    "  button {",
-    "    background: transparent; color: var(--cyan); border: 1px solid var(--cyan);",
-    "    border-radius: 6px; padding: .45rem 1rem; font: inherit; cursor: pointer;",
-    "    transition: background .15s ease;",
-    "  }",
-    "  button.primary { background: var(--cyan); color: #050611; font-weight: 600; }",
-    "  button:disabled { opacity: .4; cursor: not-allowed; }",
-    "  button:not(:disabled):hover { background: rgba(32,246,255,.12); }",
-    "  button.primary:not(:disabled):hover { background: var(--cyan); filter: brightness(1.1); }",
-    "  .status {",
-    "    display: flex; gap: .8rem; align-items: center; padding: .55rem .75rem;",
-    "    background: rgba(2,5,15,.5); border: 1px solid var(--line); border-radius: 8px;",
-    "    font-size: 12px;",
-    "  }",
-    "  .dot { width: .55rem; height: .55rem; border-radius: 50%; background: var(--mut); }",
-    "  .dot.on  { background: var(--green); box-shadow: 0 0 8px rgba(61,242,129,.6); }",
-    "  .dot.err { background: var(--red);   box-shadow: 0 0 8px rgba(255,77,109,.5); }",
-    "  .dot.busy{ background: var(--orange);box-shadow: 0 0 8px rgba(255,159,28,.55); }",
-    "  .meter { flex: 1; height: 4px; background: rgba(255,255,255,.07); border-radius: 2px; overflow: hidden; }",
-    "  .meter > span { display: block; height: 100%; background: var(--cyan); width: 0%; transition: width .3s ease; }",
-    "  pre.log {",
-    "    margin: 0; padding: .8rem; max-height: 280px; overflow: auto;",
-    "    background: rgba(2,5,15,.7); border: 1px solid var(--line); border-radius: 8px;",
-    "    font-size: 11.5px; line-height: 1.5; color: var(--mut); white-space: pre-wrap; word-break: break-word;",
-    "  }",
-    "  pre.log .ok   { color: var(--green); }",
-    "  pre.log .warn { color: var(--orange); }",
-    "  pre.log .err  { color: var(--red); }",
-    "</style>",
-    "</head>",
-    "<body>",
-    "  <div class=\"wrap\">",
-    "    <header>",
-    "      <h1><span class=\"accent\">PasClaw</span> -- WebLLM relay worker</h1>",
-    "      <p class=\"sub\">",
-    "        Browser-hosted worker for a remote PasClaw gateway. Pick a model, hit Connect, and",
-    "        the page polls <code>/v1/relay/poll</code> over SSE -- each inference request lands here,",
-    "        runs locally via WebLLM on your GPU, and POSTs back to <code>/v1/relay/respond/&lt;id&gt;</code>.",
-    "        Save this page as <code>relay.html</code> and reopen any time. Closing the tab disconnects.",
-    "      </p>",
-    "    </header>",
-    "",
-    "    <div class=\"panel\">",
-    "      <div class=\"row\">",
-    "        <label for=\"gw-url\">Gateway URL</label>",
-    "        <input id=\"gw-url\" type=\"text\" value=\"" + gatewayUrl + "\" spellcheck=\"false\">",
-    "",
-    "        <label for=\"gw-tok\">Bearer token</label>",
-    "        <input id=\"gw-tok\" type=\"text\" value=\"" + gatewayToken + "\" spellcheck=\"false\"",
-    "               placeholder=\"(leave empty for an unauth'd gateway)\">",
-    "",
-    "        <label for=\"wid\">Worker id</label>",
-    "        <input id=\"wid\" type=\"text\" value=\"" + defaultWorkerId + "\" spellcheck=\"false\">",
-    "",
-    "        <label for=\"model\">Model</label>",
-    "        <select id=\"model\">",
-    "          <option value=\"\" disabled selected>-- choose a model --</option>",
-    optionsHtml,
-    "        </select>",
-    "      </div>",
-    "      <div class=\"actions\">",
-    "        <button id=\"disconnect\" disabled>Disconnect</button>",
-    "        <button id=\"connect\" class=\"primary\">Connect</button>",
-    "      </div>",
-    "    </div>",
-    "",
-    "    <div class=\"status\">",
-    "      <span class=\"dot\" id=\"dot\"></span>",
-    "      <span id=\"status-text\">idle -- pick a model and connect</span>",
-    "      <div class=\"meter\"><span id=\"meter-fill\"></span></div>",
-    "      <span id=\"jobs\" style=\"color:var(--cyan)\">0 served</span>",
-    "    </div>",
-    "",
-    "    <pre class=\"log\" id=\"log\">",
-    "(log)</pre>",
-    "  </div>",
-    "",
-    "<script type=\"module\">",
-    "  import { CreateMLCEngine } from \"https://esm.run/@mlc-ai/web-llm\";",
-    "",
-    "  const $   = s => document.querySelector(s);",
-    "  const logEl = $('#log'); const dot = $('#dot');",
-    "  const statusText = $('#status-text'); const meterFill = $('#meter-fill');",
-    "  const jobsEl = $('#jobs');",
-    "",
-    "  let engine = null; let events = null; let jobs = 0;",
-    "",
-    "  function log(msg, cls) {",
-    "    const ts = new Date().toLocaleTimeString();",
-    "    const span = cls ? `<span class=\"${cls}\">${msg}</span>` : msg;",
-    "    logEl.innerHTML += `\\n[${ts}] ${span}`;",
-    "    logEl.scrollTop = logEl.scrollHeight;",
-    "  }",
-    "  function setStatus(text, cls) {",
-    "    statusText.textContent = text;",
-    "    dot.className = 'dot' + (cls ? ' ' + cls : '');",
-    "  }",
-    "  function setProgress(pct) { meterFill.style.width = pct + '%'; }",
-    "  function setJobs(n) { jobs = n; jobsEl.textContent = n + ' served'; }",
-    "",
-    "  async function connect() {",
-    "    const url   = $('#gw-url').value.trim().replace(/\\/+$/, '');",
-    "    const tok   = $('#gw-tok').value.trim();",
-    "    const wid   = $('#wid').value.trim();",
-    "    const model = $('#model').value;",
-    "    if (!url) return log('gateway URL is required', 'err');",
-    "    if (!wid) return log('worker id is required', 'err');",
-    "    if (!model) return log('pick a model from the dropdown first', 'err');",
-    "",
-    "    $('#connect').disabled = true;",
-    "    setStatus('loading ' + model + ' ...', 'busy');",
-    "    setProgress(0);",
-    "    log('downloading + warming WebLLM engine for ' + model);",
-    "    try {",
-    "      engine = await CreateMLCEngine(model, {",
-    "        initProgressCallback: (r) => {",
-    "          setProgress(Math.round((r.progress || 0) * 100));",
-    "          if (r.text) statusText.textContent = r.text;",
-    "        },",
-    "      });",
-    "    } catch (e) {",
-    "      log('engine load failed: ' + e.message, 'err');",
-    "      setStatus('engine load failed', 'err');",
-    "      $('#connect').disabled = false;",
-    "      return;",
-    "    }",
-    "    setProgress(100);",
-    "    log('engine ready, opening SSE to ' + url + '/v1/relay/poll', 'ok');",
-    "",
-    "    // Browsers' EventSource constructor has no headers option,",
-    "    // so auth + worker identity + capabilities ride as query params.",
-    "    const q = new URLSearchParams({ worker_id: wid, caps: model });",
-    "    if (tok) q.set('token', tok);",
-    "    events = new EventSource(url + '/v1/relay/poll?' + q.toString());",
-    "    events.onopen  = () => { setStatus('connected -- waiting for jobs', 'on'); };",
-    "    events.onerror = () => { setStatus('disconnected (will auto-retry)', 'err'); log('SSE error -- browser will retry', 'warn'); };",
-    "    events.onmessage = async (ev) => {",
-    "      let req;",
-    "      try { req = JSON.parse(ev.data); }",
-    "      catch (e) { log('bad event JSON: ' + e.message, 'err'); return; }",
-    "      log('dispatching ' + req.id + ' (' + (req.messages || []).length + ' msgs)');",
-    "      setStatus('serving ' + req.id, 'busy');",
-    "      try {",
-    "        const c = await engine.chat.completions.create({",
-    "          messages: req.messages,",
-    "          temperature: parseFloat(req.options?.temperature ?? '0'),",
-    "          max_tokens:  req.options?.max_tokens ?? 512,",
-    "        });",
-    "        const headers = { 'Content-Type': 'application/json' };",
-    "        if (tok) headers['Authorization'] = 'Bearer ' + tok;",
-    "        const r = await fetch(url + '/v1/relay/respond/' + req.id, {",
-    "          method: 'POST', headers,",
-    "          body: JSON.stringify({",
-    "            content:       c.choices[0].message.content,",
-    "            finish_reason: c.choices[0].finish_reason,",
-    "            usage:         c.usage,",
-    "            tool_calls:    c.choices[0].message.tool_calls,",
-    "          }),",
-    "        });",
-    "        if (!r.ok) log('respond POST got HTTP ' + r.status, 'warn');",
-    "        setJobs(jobs + 1);",
-    "        setStatus('connected -- waiting for jobs', 'on');",
-    "        log('completed ' + req.id + ' (' + (c.usage?.completion_tokens ?? '?') + ' tokens)', 'ok');",
-    "      } catch (e) {",
-    "        log('dispatch error for ' + req.id + ': ' + e.message, 'err');",
-    "        const headers = { 'Content-Type': 'application/json' };",
-    "        if (tok) headers['Authorization'] = 'Bearer ' + tok;",
-    "        await fetch(url + '/v1/relay/respond/' + req.id, {",
-    "          method: 'POST', headers, body: JSON.stringify({ error: e.message }),",
-    "        }).catch(()=>{});",
-    "      }",
-    "    };",
-    "    $('#disconnect').disabled = false;",
-    "  }",
-    "",
-    "  function disconnect() {",
-    "    if (events) { events.close(); events = null; }",
-    "    setStatus('disconnected', '');",
-    "    log('disconnected by user');",
-    "    $('#connect').disabled = false;",
-    "    $('#disconnect').disabled = true;",
-    "  }",
-    "",
-    "  $('#connect').addEventListener('click', connect);",
-    "  $('#disconnect').addEventListener('click', disconnect);",
-    "</" + "script>",
-    "</body>",
-    "</html>",
-  ].join("\n");
-}
-
 function renderRelaySnippets() {
   const url = ($("#relay-url").value || window.location.origin).replace(/\/+$/, "");
   const tok = relayEffectiveToken();
@@ -2720,27 +2713,12 @@ function renderRelaySnippets() {
                + "export PASCLAW_GATEWAY_TOKEN=" + tok + "\n"
                + "pasclaw relay";
 
-  /* Browser snippet: a standalone HTML page styled to match the
-     PasClaw webui (dark navy gradient, cyan accents, mono font),
-     with a curated model picker and a Connect/Disconnect lifecycle
-     so the operator can choose a model before WebLLM downloads
-     gigabytes of weights. The page is self-contained (one <html>,
-     inline CSS, ESM import for web-llm via esm.run) so the
-     operator can save it as relay.html, open it in any modern
-     browser, and immediately have a working worker -- no toolchain
-     setup.
-
-     The PasClaw values (gateway URL, optional token, generated
-     worker id) are baked into the rendered template at copy time
-     so a paste-and-run flow works without env config. The model
-     dropdown lists a curated subset of MLC's prebuilt configs
-     (https://github.com/mlc-ai/web-llm/blob/main/src/config.ts)
-     covering tiny (under 1B) / small (2-3B) / medium (7-8B) tiers
-     across Llama, Qwen, Phi, Gemma, DeepSeek-R1, and Hermes
-     families. The first option is left blank as a forcing function
-     so connecting without a model picked is impossible. */
-  const wid = "tab-" + Math.random().toString(36).slice(2, 10);
-  const browser = buildBrowserSnippet(url, tok, wid);
+  /* Browser worker no longer rendered as a code-block snippet here.
+     The "In-browser worker" section above this list runs WebLLM
+     directly in the Relay tab via a dynamic-import() that fires
+     only on Connect, so the standalone HTML page that used to live
+     here is redundant. Saved 11KB of generated HTML out of every
+     webui render. */
 
   const python =
 "import json, requests, sseclient, llama_cpp\n" +
@@ -2784,7 +2762,6 @@ function renderRelaySnippets() {
   snippets.innerHTML =
       codeBlock(cli,     "pasclaw relay (CLI flags)")
     + codeBlock(cliEnv,  "pasclaw relay (env vars)")
-    + codeBlock(browser, "Browser worker (WebLLM, ESM)")
     + codeBlock(python,  "Python worker (llama.cpp)")
     + codeBlock(cogHint, "Replicate cog-relay");
   wireCopyButtons(snippets);
