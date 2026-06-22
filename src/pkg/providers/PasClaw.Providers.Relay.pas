@@ -251,6 +251,15 @@ begin
       OptsObj.PutStr('temperature', FloatToStr(Options.Temperature));
     if Options.SystemPrompt <> '' then
       OptsObj.PutStr('system_prompt', Options.SystemPrompt);
+    (* tool_choice -- "" / "auto" / "none" / "required" / a literal
+       tool name. Workers that support tool calling forward this to
+       their upstream provider so a forced-tool turn (e.g. the
+       Hermes / WebLLM flow that needs `tool_choice:"required"` to
+       reliably emit structured calls) survives the relay hop.
+       Skipped when empty so the wire stays compact. Codex P2 review
+       on PR #333. *)
+    if Options.ToolChoice <> '' then
+      OptsObj.PutStr('tool_choice', Options.ToolChoice);
     Root.PutObject('options', OptsObj);
 
     Result := Root.ToJSON;

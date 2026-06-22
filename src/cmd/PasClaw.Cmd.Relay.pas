@@ -247,6 +247,11 @@ begin
     TempStr := OObj.GetStr('temperature', '');
     if TempStr <> '' then
       Result.Temperature := StrToFloatDef(TempStr, 0);
+    { Round-trip tool_choice through the worker -- the local
+      provider's request builder uses it to force a tool call or
+      pin a specific tool name. BuildRelayRequestBody emits this
+      when non-empty (Codex P2 review on PR #333). }
+    Result.ToolChoice := OObj.GetStr('tool_choice', '');
   end;
   { Thread the envelope's session_id back into Options.CacheKey so the
     locally-configured provider's own prompt caching aligns with the
