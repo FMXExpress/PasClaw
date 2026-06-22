@@ -22,7 +22,9 @@
       "Provider.Chat() in a loop". Workers that run tools would
       double-dispatch.
     * Reconnect on drop with exponential backoff (1s -> 30s cap).
-    * Bearer auth via PASCLAW_GATEWAY_TOKEN or --gateway-token flag.
+    * Bearer auth via PASCLAW_RELAY_TOKEN (preferred -- scoped to
+      /v1/relay/* only), PASCLAW_GATEWAY_TOKEN (main token, back-
+      compat), or --gateway-token flag.
 
   Usage:
     pasclaw relay [flags]
@@ -31,7 +33,11 @@
                          http://192.168.1.10:8888). Falls back to
                          PASCLAW_GATEWAY_URL env var.
     --gateway-token TOK  Bearer token for the gateway. Falls back to
-                         PASCLAW_GATEWAY_TOKEN env var.
+                         PASCLAW_RELAY_TOKEN env (preferred -- the
+                         scoped per-process credential printed at
+                         pasclaw serve startup) then to
+                         PASCLAW_GATEWAY_TOKEN env (main token, for
+                         back-compat with pre-scoped-token setups).
     --provider NAME      PasClaw provider to forward jobs through.
                          Defaults to the configured default provider.
                          Must not itself be a relay provider (refuses
@@ -703,7 +709,8 @@ begin
   PrintLn('');
   PrintLn('Flags:');
   PrintLn('  --gateway-url URL      Remote gateway base URL (or PASCLAW_GATEWAY_URL)');
-  PrintLn('  --gateway-token TOK    Bearer token       (or PASCLAW_GATEWAY_TOKEN)');
+  PrintLn('  --gateway-token TOK    Bearer token       (or PASCLAW_RELAY_TOKEN /');
+  PrintLn('                                              PASCLAW_GATEWAY_TOKEN env)');
   PrintLn('  --provider NAME        Provider to forward to (default: configured default)');
   PrintLn('  --model NAME           Capability to advertise (default: provider default;');
   PrintLn('                         pass empty string for wildcard)');
@@ -799,7 +806,16 @@ begin
   GetArgValue(Argv, '--worker-id',     WorkerIdArg);
 
   Ctx.GatewayURL := EnvOr('PASCLAW_GATEWAY_URL',   Ctx.GatewayURL);
-  Ctx.Token      := EnvOr('PASCLAW_GATEWAY_TOKEN', Ctx.Token);
+  (* Token resolution: --gateway-token wins, then the new
+     PASCLAW_RELAY_TOKEN env (the scoped credential printed at
+     `pasclaw serve` startup -- preferred for least-privilege
+     workers), then PASCLAW_GATEWAY_TOKEN for back-compat with
+     existing setups that use the main gateway token. Both
+     credentials are accepted by /v1/relay/* server-side (dual-
+     token rule); the choice of env var is just which credential
+     the operator hands the worker. *)
+  Ctx.Token := EnvOr('PASCLAW_RELAY_TOKEN', Ctx.Token);
+  Ctx.Token := EnvOr('PASCLAW_GATEWAY_TOKEN', Ctx.Token);
 
   if Ctx.GatewayURL = '' then
   begin
