@@ -79,6 +79,21 @@ type
        via SetGlobalRelayQueue so TRelayProvider can find it through
        the factory. Freed in Destroy after clearing the global. *)
     FRelayQueue: TRelayQueue;
+    (* Per-process scoped credential. Random hex generated in Create
+       once per `pasclaw serve` / `pasclaw gateway` startup. Gates the
+       /v1/relay/* surface independently of Cfg.Gateway.Token so an
+       untrusted worker (browser tab running third-party WebLLM
+       weights, a phone someone else's PasClaw lent us, ...) can be
+       handed a credential that pulls relay jobs without unlocking
+       /v1/chat / /v1/config / /v1/skills. The main gateway token
+       continues to accept everywhere (back-compat); the relay token
+       additionally unlocks just the relay endpoints. Exposed to the
+       authenticated webui via GET /v1/relay/worker-token so the
+       in-tab sandboxed-iframe worker can authenticate without ever
+       seeing the main token. Printed loudly on startup so external
+       `pasclaw relay` CLIs can use it explicitly if they want
+       scoped credentials. *)
+    FRelayToken: string;
     FMaxIter:  Integer;
     FWebhookPaths:    TStringList;
     FWebhookHandlers: array of TWebhookHandler;
@@ -239,6 +254,19 @@ type
                                   AResp: TIdHTTPResponseInfo);
     procedure HandleRelayStatus(ARequest: TIdHTTPRequestInfo;
                                  AResp: TIdHTTPResponseInfo);
+    (* Exposes the per-process relay-scoped token (FRelayToken) to the
+       authenticated webui so the in-tab sandboxed worker can poll
+       /v1/relay/poll without ever holding the main gateway token.
+       Gated by the MAIN token via the normal auth check -- only the
+       trusted UI surface can read it. *)
+    procedure HandleRelayWorkerToken(ARequest: TIdHTTPRequestInfo;
+                                      AResp: TIdHTTPResponseInfo);
+    (* Dual-token check helper -- True when the request targets
+       /v1/relay/* (except /worker-token) AND the bearer/query
+       token matches FRelayToken. The auth gate consults this
+       AFTER the main-token check fails, so the main token still
+       works everywhere and the relay token adds scoped access. *)
+    function RelayTokenAuthorises(const Doc, AuthHeader, QueryToken: string): Boolean;
     (* Cross-origin support for the relay endpoints. Browser workers
        served from a different origin than the gateway (the documented
        case: a local WebLLM page pointing at a remote gateway) get
@@ -280,6 +308,13 @@ type
       to match what typical code agents need for read-debug-edit cycles;
       legacy /v1/chat keeps its 8-iteration cap unchanged. }
     property MaxIter: Integer read FMaxIter write FMaxIter;
+    { Random per-process token that gates /v1/relay/* in addition to
+      the main Cfg.Gateway.Token. Printed at startup so external
+      `pasclaw relay` workers can use scoped credentials; surfaced
+      to the trusted webui via GET /v1/relay/worker-token so the
+      in-tab sandboxed worker can authenticate without seeing the
+      main token. Regenerates every Create. }
+    property RelayToken: string read FRelayToken;
     { MCP inbound server policy. SetMCPAllowMutating(True) lets the
       inbound /mcp surface expose tcMutating tools (fs_write, shell,
       fs_edit_hashline) too -- off by default. SetMCPAllowList
@@ -346,6 +381,7 @@ uses
   PasClaw.Logger,
   PasClaw.Utils,
   PasClaw.Crypto.HMAC,        { Base64ToBytes -- decode binary KB uploads }
+  PasClaw.Crypto.Random,      { GetRandomBytes -- per-process relay token }
   PasClaw.Skills.Loader,
   PasClaw.Skills.Pending,
   PasClaw.Skills.Zip,       { PackDirToZip -- workspace export download }
@@ -504,6 +540,40 @@ begin
                             Loop.TruncatedBytesSaved);
 end;
 
+function GenerateRelayWorkerToken: string;
+(* Crockford base32, 8 chars in two 4-char groups, hyphen-separated.
+   Format detailed at the FRelayToken assignment site below. Picks
+   each output char from 32 alphabet entries -- since 256/32 = 8
+   exactly, `Bytes[i] and $1F` (low 5 bits) is uniform without
+   modulo bias. *)
+const
+  ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ';   { Crockford base32; no I/L/O/U }
+var
+  B: TBytes;
+  i: Integer;
+  S: string;
+begin
+  B := GetRandomBytes(8);
+  S := '';
+  for i := 0 to High(B) do
+    S := S + ALPHABET[(B[i] and $1F) + 1];
+  Result := Copy(S, 1, 4) + '-' + Copy(S, 5, 4);
+end;
+
+function NormaliseTokenForCompare(const S: string): string;
+(* Crockford base32 is case-insensitive on input by convention --
+   operators dictating "A8M9-PXRT" over the phone may key it as
+   "a8m9-pxrt" or "A8M9PXRT" (no hyphen). Normalise both sides to
+   uppercase + stripped hyphens before constant-time compare. *)
+var
+  i: Integer;
+begin
+  Result := '';
+  for i := 1 to Length(S) do
+    if S[i] <> '-' then
+      Result := Result + UpCase(S[i]);
+end;
+
 constructor TGatewayServer.Create(Cfg: TConfig; Provider: ILLMProvider; Registry: TToolRegistry);
 begin
   inherited Create;
@@ -536,6 +606,25 @@ begin
     signature because it doesn't know about the gateway. }
   FRelayQueue := TRelayQueue.Create;
   SetGlobalRelayQueue(FRelayQueue);
+
+  { Generate a fresh per-process relay-scoped token. Format is
+    phone-typable: two 4-char groups separated by a hyphen
+    (e.g. A8M9-PXRT) drawn from Crockford base32
+    -- 0123456789ABCDEFGHJKMNPQRSTVWXYZ, 32 chars omitting the
+    confusable I/L/O/U. 8 chars * 5 bits/char = 40 bits of entropy
+    (~1 trillion combos). At a sustained 10k req/s brute-force --
+    well above what any HTTP gateway will tolerate without rate
+    limiting or operator notice -- exhausting the space takes 3.5
+    years. Combined with the relay-only scope of the token (a
+    compromised one can only pull jobs and POST responses, not
+    impersonate against /v1/chat or /v1/config or /v1/skills), 40
+    bits is the right trade for phone-typability.
+
+    EOSRandomFailure from /dev/urandom / CryptGenRandom is fatal --
+    without an unguessable token the scoping is pointless. Let it
+    bubble up to the caller; serve/gateway both abort cleanly on
+    Create exceptions. }
+  FRelayToken := GenerateRelayWorkerToken;
 end;
 
 destructor TGatewayServer.Destroy;
@@ -860,11 +949,24 @@ begin
     Exempt routes: /, /v1/health, /v1/version, /webhooks/* --
     rationale in PasClaw.Gateway.Auth's unit comment. The check
     fires BEFORE the FMCPOnly early-exit below so the --mcp-port
-    isolation listener honours the same token. }
-  if not CheckGatewayAuth(GetEffectiveGatewayToken(FCfg),
-                          ARequest.Command, Doc,
-                          ARequest.RawHeaders.Values['Authorization'],
-                          ARequest.Params.Values['token']) then
+    isolation listener honours the same token.
+
+    Dual-token rule for /v1/relay/*: in addition to the main token,
+    the per-process FRelayToken also unlocks the relay surface.
+    That lets the trusted webui hand a SCOPED credential to the
+    sandboxed in-tab WebLLM worker (and to external `pasclaw
+    relay` CLIs that prefer least-privilege) without unlocking
+    /v1/chat / /v1/config / /v1/skills. If the relay token leaks
+    to a compromised worker, the worst they can do is pull jobs
+    and POST responses -- they can't impersonate the operator
+    against the rest of the API. }
+  if (not CheckGatewayAuth(GetEffectiveGatewayToken(FCfg),
+                            ARequest.Command, Doc,
+                            ARequest.RawHeaders.Values['Authorization'],
+                            ARequest.Params.Values['token']))
+     and not RelayTokenAuthorises(Doc,
+                                   ARequest.RawHeaders.Values['Authorization'],
+                                   ARequest.Params.Values['token']) then
   begin
     SetAttrInt(HttpSpan, 'http.response.status_code', 401);
     SetStatus(HttpSpan, oscError, 'unauthorized');
@@ -944,6 +1046,8 @@ begin
       HandleRelayRespond(Copy(Doc, 19, MaxInt), ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/relay/status') then
       HandleRelayStatus(ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/relay/worker-token') then
+      HandleRelayWorkerToken(ARequest, AResponse)
     else if Doc = '/' then
     begin
       AResponse.ResponseNo  := 200;
@@ -3022,6 +3126,58 @@ begin
     saves a round-trip per reconnect without making policy changes
     take an unreasonably long time to roll out. }
   AResp.CustomHeaders.AddValue('Access-Control-Max-Age',       '600');
+end;
+
+function TGatewayServer.RelayTokenAuthorises(const Doc, AuthHeader, QueryToken: string): Boolean;
+(* Dual-token rule for /v1/relay/*: in addition to the main
+   gateway token (checked above by CheckGatewayAuth), the
+   per-process FRelayToken also unlocks just the relay endpoints.
+   Returns True when:
+     - the path is under /v1/relay/, AND
+     - the presented credential (Authorization: Bearer X OR
+       ?token=X) matches FRelayToken case-insensitively with
+       hyphens stripped (operators dictating the token over the
+       phone often paraphrase the format).
+
+   /v1/relay/worker-token is intentionally NOT covered by this
+   helper -- that endpoint exposes FRelayToken to the trusted
+   webui and must be gated by the MAIN token only. *)
+var
+  Presented: string;
+begin
+  Result := False;
+  if Pos('/v1/relay/', Doc) <> 1 then Exit;
+  if Doc = '/v1/relay/worker-token' then Exit;
+
+  Presented := ExtractBearerToken(AuthHeader);
+  if Presented = '' then Presented := QueryToken;
+  if Presented = '' then Exit;
+
+  Result := NormaliseTokenForCompare(Presented) =
+            NormaliseTokenForCompare(FRelayToken);
+end;
+
+procedure TGatewayServer.HandleRelayWorkerToken(ARequest: TIdHTTPRequestInfo;
+                                                 AResp: TIdHTTPResponseInfo);
+(* GET /v1/relay/worker-token -- returns the per-process FRelayToken
+   as JSON so the trusted webui can pass it to its sandboxed
+   in-tab WebLLM worker. Gated by the MAIN token via the
+   normal OnCommandGet auth check (RelayTokenAuthorises
+   deliberately excludes this path), so an attacker who only has
+   the relay token CANNOT escalate to read it. CORS-stamped so the
+   webui can fetch from a cross-origin context if the operator
+   hosts it that way. *)
+var
+  Root: TJsonObject;
+begin
+  EmitRelayCors(ARequest, AResp);
+  Root := TJsonObject.Create;
+  try
+    Root.PutStr('token', FRelayToken);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
 end;
 
 procedure TGatewayServer.HandleRelayOptionsPreflight(ARequest: TIdHTTPRequestInfo;

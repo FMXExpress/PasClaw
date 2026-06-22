@@ -673,7 +673,11 @@
           Run a relay worker in this browser tab. Clicking Connect dynamically loads
           <code>@mlc-ai/web-llm</code> from <code>esm.run</code> and downloads the
           selected model's weights on first use -- nothing third-party is fetched until
-          you click. Closing the tab disconnects.
+          you click. The module runs in an <strong>opaque-origin sandboxed iframe</strong>
+          (no access to this page's localStorage, no <code>/v1/*</code> credentials), and
+          it talks to the gateway with a <strong>relay-scoped token</strong> that unlocks
+          only <code>/v1/relay/*</code> -- so a compromised model can't impersonate you
+          against the rest of PasClaw. Closing the tab disconnects.
         </p>
         <div class="relay-inb-row">
           <label>Model
@@ -2413,6 +2417,13 @@ let relayTimer       = null;
 let relaySetupDone   = false;
 let relayShowToken   = false;
 const RELAY_TOKEN_PLACEHOLDER = "<PASCLAW_GATEWAY_TOKEN>";
+/* In-browser worker state. Declared up here next to the other
+   relay-tab bindings so a /#relay deep link doesn't hit the
+   temporal dead zone trying to read them through setupInBrowserWorker.
+   (Same TDZ trap as RELAY_TOKEN_PLACEHOLDER above.) */
+let _relayInbIframe  = null;
+let _relayInbReady   = false;
+let _relayInbJobs    = 0;
 
 /* Curated WebLLM model list -- populated into the in-browser worker
    dropdown by setupInBrowserWorker. Declared up here next to the
@@ -2516,7 +2527,49 @@ function setupRelayTab() {
        browser GCs the WASM module.
    Stored on the window so the relay tab can clean up if the user
    reloads or navigates away. */
-let _relayInbState = { engine: null, events: null, jobs: 0 };
+/* In-browser worker: sandbox the WebLLM module load + execution
+   inside a `<iframe sandbox="allow-scripts">` so the third-party
+   code runs in an OPAQUE null origin, not in the gateway UI's own
+   origin. Why this matters:
+
+     - localStorage is keyed by origin. A null-origin iframe cannot
+       read this page's `pasclaw.gw_token.v1` entry.
+     - DOM access is origin-checked. The iframe cannot reach into
+       the parent's UI, install listeners, or scrape inputs.
+     - Same-origin fetch privileges (cookies, CORS) belong to the
+       parent's origin. The iframe makes cross-origin requests
+       only, with the credentials WE hand it via postMessage.
+
+   The iframe receives the RELAY-SCOPED token (not the main gateway
+   token) when the operator clicks Connect. If a compromised model
+   exfiltrates that token, the attacker can only pull jobs from
+   /v1/relay/* -- not call /v1/chat / /v1/config / /v1/skills.
+   The dual-token rule at HandleRelayPoll's auth gate enforces the
+   scoping server-side.
+
+   Wire protocol between parent and iframe (postMessage):
+
+     parent -> iframe:
+       { type: "connect",   url, token, model, workerId }
+       { type: "disconnect" }
+
+     iframe -> parent:
+       { type: "ready" }                                  -- once on load
+       { type: "log",        text, level? }
+       { type: "status",     text, level? }
+       { type: "progress",   pct }
+       { type: "job-served" }
+       { type: "connected"   }
+       { type: "disconnected" }
+       { type: "connection-failed" }
+
+   The parent identifies messages from this iframe by
+   event.source === iframeEl.contentWindow. event.origin is "null"
+   for sandboxed iframes; we don't pin on the literal string since
+   spec-conformant browsers all emit "null" but better to filter by
+   source object identity.
+
+   (Storage bindings declared above the boot block to dodge TDZ.) */
 
 function setupInBrowserWorker() {
   /* Populate the model dropdown from the curated list. Optgroup
@@ -2536,14 +2589,65 @@ function setupInBrowserWorker() {
   $("#relay-inb-wid").value =
     "tab-" + Math.random().toString(36).slice(2, 10);
 
+  /* Create the sandboxed iframe up front (offscreen / 0-height).
+     The srcdoc contains a tiny self-contained postMessage protocol
+     responder. The web-llm import inside it is gated behind a
+     'connect' message, so just opening the Relay tab still fetches
+     nothing from esm.run -- only clicking Connect triggers the
+     load. */
+  _relayInbIframe = document.createElement("iframe");
+  /* setAttribute (not the IDL setter) so the value is the literal
+     reflected HTML attribute string browsers honour for sandbox
+     enforcement. The DOMTokenList IDL setter is less consistent
+     across engines and getAttribute round-trips don't always
+     reflect it. */
+  _relayInbIframe.setAttribute("sandbox", "allow-scripts");   /* no allow-same-origin -> opaque null origin */
+  _relayInbIframe.style.cssText = "display:none;width:0;height:0;border:0";
+  _relayInbIframe.srcdoc = _buildInbIframeSrcdoc();
+  document.querySelector(".relay-inb").appendChild(_relayInbIframe);
+
+  window.addEventListener("message", _onInbMessage);
   $("#relay-inb-connect").addEventListener("click", inbWorkerConnect);
   $("#relay-inb-disconnect").addEventListener("click", inbWorkerDisconnect);
-  /* Best-effort: close the EventSource when the tab unloads so the
-     gateway's worker registry sweeps us promptly rather than waiting
-     for the keepalive timeout. */
+
+  /* Best-effort: tell the iframe to disconnect on tab unload so the
+     gateway's worker registry sweeps us promptly. */
   window.addEventListener("beforeunload", () => {
-    if (_relayInbState.events) try { _relayInbState.events.close(); } catch {}
+    if (_relayInbIframe && _relayInbReady) {
+      try { _relayInbIframe.contentWindow.postMessage({type:"disconnect"}, "*"); } catch {}
+    }
   });
+}
+
+function _onInbMessage(ev) {
+  /* Filter strictly by source object identity. event.origin is
+     "null" for sandboxed iframes, but identity check is sufficient
+     and avoids surprises if the spec ever changes how null-origin
+     gets stringified. */
+  if (!_relayInbIframe || ev.source !== _relayInbIframe.contentWindow) return;
+  const m = ev.data;
+  if (!m || typeof m !== "object") return;
+  switch (m.type) {
+    case "ready":
+      _relayInbReady = true; break;
+    case "log":
+      _inbLog(m.text || "", m.level); break;
+    case "status":
+      _inbStatus(m.text || "", m.level); break;
+    case "progress":
+      _inbProgress(m.pct || 0); break;
+    case "job-served":
+      _inbBumpJobs(); break;
+    case "connected":
+      $("#relay-inb-disconnect").disabled = false; break;
+    case "disconnected":
+    case "connection-failed":
+      $("#relay-inb-connect").disabled    = false;
+      $("#relay-inb-disconnect").disabled = true;
+      $("#relay-inb-model").disabled      = false;
+      $("#relay-inb-wid").disabled        = false;
+      break;
+  }
 }
 
 function _inbLog(msg, cls) {
@@ -2561,128 +2665,166 @@ function _inbProgress(pct) {
   $("#relay-inb-meter-fill").style.width = pct + "%";
 }
 function _inbBumpJobs() {
-  _relayInbState.jobs += 1;
-  $("#relay-inb-jobs").textContent = _relayInbState.jobs + " served";
+  _relayInbJobs += 1;
+  $("#relay-inb-jobs").textContent = _relayInbJobs + " served";
+}
+
+async function _fetchRelayScopedToken() {
+  /* Fetch the per-process relay token via the authenticated
+     /v1/relay/worker-token endpoint. The parent uses gwFetch
+     (carries the MAIN token); the relay token comes back and
+     is passed to the sandboxed iframe at Connect time -- it
+     never sits in this page's localStorage. */
+  try {
+    const r = await gwFetch("/v1/relay/worker-token");
+    if (!r.ok) return null;
+    const j = await r.json();
+    return j.token || null;
+  } catch { return null; }
 }
 
 async function inbWorkerConnect() {
   const url   = ($("#relay-url").value || window.location.origin).replace(/\/+$/, "");
-  const tok   = gwToken();
   const wid   = $("#relay-inb-wid").value.trim();
   const model = $("#relay-inb-model").value;
   if (!url)   { _inbLog("gateway URL is required", "err"); return; }
   if (!wid)   { _inbLog("worker id is required", "err");   return; }
   if (!model) { _inbLog("pick a model from the dropdown first", "err"); return; }
+  if (!_relayInbReady) { _inbLog("sandbox iframe not ready yet -- try again in a second", "warn"); return; }
+
+  /* Fetch the relay-scoped token (NOT gwToken which is the main
+     credential). On unauth'd gateways the endpoint may not require
+     a token; the iframe falls through to anonymous polling. */
+  let scopedToken = "";
+  if (gwToken()) {
+    scopedToken = (await _fetchRelayScopedToken()) || "";
+    if (!scopedToken) {
+      _inbLog("failed to fetch /v1/relay/worker-token (no scoped credential available); aborting", "err");
+      return;
+    }
+  }
 
   $("#relay-inb-connect").disabled = true;
   $("#relay-inb-model").disabled = true;
   $("#relay-inb-wid").disabled = true;
   _inbProgress(0);
-  _inbStatus("loading " + model + " ...", "busy");
-  _inbLog("dynamic-importing @mlc-ai/web-llm from esm.run (first-time fetch only)");
+  _inbStatus("starting sandboxed worker ...", "busy");
+  _inbLog("dispatching connect to sandboxed iframe (model load happens there, in opaque null origin)");
 
-  let webllm;
-  try {
-    /* Dynamic import keeps the fetch gated behind this click. A user
-       who never opens this section never pays the esm.run download
-       cost. Browsers cache the module so subsequent Connects are
-       instant. */
-    webllm = await import("https://esm.run/@mlc-ai/web-llm");
-  } catch (e) {
-    _inbLog("web-llm module load failed: " + e.message, "err");
-    _inbStatus("module load failed", "err");
-    $("#relay-inb-connect").disabled = false;
-    $("#relay-inb-model").disabled = false;
-    $("#relay-inb-wid").disabled = false;
-    return;
-  }
-
-  try {
-    _relayInbState.engine = await webllm.CreateMLCEngine(model, {
-      initProgressCallback: (r) => {
-        _inbProgress(Math.round((r.progress || 0) * 100));
-        if (r.text) _inbStatus(r.text, "busy");
-      },
-    });
-  } catch (e) {
-    _inbLog("engine init failed: " + e.message, "err");
-    _inbStatus("engine init failed", "err");
-    $("#relay-inb-connect").disabled = false;
-    $("#relay-inb-model").disabled = false;
-    $("#relay-inb-wid").disabled = false;
-    return;
-  }
-  _inbProgress(100);
-  _inbLog("engine ready, opening SSE to " + url + "/v1/relay/poll", "ok");
-
-  /* Browser EventSource has no headers option -- auth + worker
-     identity + caps ride as query params (gateway accepts both
-     shapes; see HandleRelayPoll). Token omitted when blank to match
-     the gateway's unauth'd mode. */
-  const q = new URLSearchParams({ worker_id: wid, caps: model });
-  if (tok) q.set("token", tok);
-  _relayInbState.events = new EventSource(url + "/v1/relay/poll?" + q.toString());
-  _relayInbState.events.onopen  = () => _inbStatus("connected -- waiting for jobs", "on");
-  _relayInbState.events.onerror = () => {
-    _inbStatus("disconnected (browser will auto-retry)", "err");
-    _inbLog("SSE error -- browser EventSource will retry on its own", "warn");
-  };
-  _relayInbState.events.onmessage = async (ev) => {
-    let req;
-    try { req = JSON.parse(ev.data); }
-    catch (e) { _inbLog("bad event JSON: " + e.message, "err"); return; }
-    _inbLog("dispatching " + req.id + " (" + (req.messages || []).length + " msgs)");
-    _inbStatus("serving " + req.id, "busy");
-    try {
-      const c = await _relayInbState.engine.chat.completions.create({
-        messages:    req.messages,
-        temperature: parseFloat(req.options?.temperature ?? "0"),
-        max_tokens:  req.options?.max_tokens ?? 512,
-      });
-      const headers = { "Content-Type": "application/json" };
-      if (tok) headers["Authorization"] = "Bearer " + tok;
-      const r = await fetch(url + "/v1/relay/respond/" + req.id, {
-        method: "POST", headers,
-        body: JSON.stringify({
-          content:       c.choices[0].message.content,
-          finish_reason: c.choices[0].finish_reason,
-          usage:         c.usage,
-          tool_calls:    c.choices[0].message.tool_calls,
-        }),
-      });
-      if (!r.ok) _inbLog("respond POST got HTTP " + r.status, "warn");
-      _inbBumpJobs();
-      _inbStatus("connected -- waiting for jobs", "on");
-      _inbLog("completed " + req.id + " (" + (c.usage?.completion_tokens ?? "?") + " tokens)", "ok");
-    } catch (e) {
-      _inbLog("dispatch error for " + req.id + ": " + e.message, "err");
-      const headers = { "Content-Type": "application/json" };
-      if (tok) headers["Authorization"] = "Bearer " + tok;
-      fetch(url + "/v1/relay/respond/" + req.id, {
-        method: "POST", headers,
-        body: JSON.stringify({ error: e.message }),
-      }).catch(() => {});
-    }
-  };
-
-  $("#relay-inb-disconnect").disabled = false;
+  _relayInbIframe.contentWindow.postMessage({
+    type:     "connect",
+    url:      url,
+    token:    scopedToken,
+    model:    model,
+    workerId: wid,
+  }, "*");
 }
 
 function inbWorkerDisconnect() {
-  if (_relayInbState.events) {
-    try { _relayInbState.events.close(); } catch {}
-    _relayInbState.events = null;
+  if (_relayInbIframe && _relayInbReady) {
+    try { _relayInbIframe.contentWindow.postMessage({type:"disconnect"}, "*"); } catch {}
   }
-  /* Drop the engine reference so the WASM module can be GC'd. The
-     model weights stay in the browser's cache so a re-Connect skips
-     the download. */
-  _relayInbState.engine = null;
   _inbStatus("disconnected", "");
   _inbLog("disconnected by user");
-  $("#relay-inb-connect").disabled = false;
+  $("#relay-inb-connect").disabled    = false;
   $("#relay-inb-disconnect").disabled = true;
-  $("#relay-inb-model").disabled = false;
-  $("#relay-inb-wid").disabled = false;
+  $("#relay-inb-model").disabled      = false;
+  $("#relay-inb-wid").disabled        = false;
+}
+
+function _buildInbIframeSrcdoc() {
+  /* Self-contained sandbox payload. No imports outside the
+     web-llm dynamic import inside the connect handler. The page
+     has no UI -- just a postMessage responder. The parent renders
+     all status / log / progress updates relayed via postMessage. */
+  return [
+    "<!DOCTYPE html>",
+    "<script>",
+    "(function() {",
+    "'use strict';",
+    "var engine = null, events = null;",
+    "function post(msg) { parent.postMessage(msg, '*'); }",
+    "window.addEventListener('message', async function(ev) {",
+    "  var m = ev.data;",
+    "  if (!m || typeof m !== 'object') return;",
+    "  if (m.type === 'connect') {",
+    "    post({type:'log', text:'loading @mlc-ai/web-llm via esm.run ...'});",
+    "    var webllm;",
+    "    try {",
+    "      webllm = await import('https://esm.run/@mlc-ai/web-llm');",
+    "    } catch (e) {",
+    "      post({type:'log', text:'web-llm module load failed: ' + e.message, level:'err'});",
+    "      post({type:'status', text:'module load failed', level:'err'});",
+    "      post({type:'connection-failed'});",
+    "      return;",
+    "    }",
+    "    try {",
+    "      engine = await webllm.CreateMLCEngine(m.model, {",
+    "        initProgressCallback: function(r) {",
+    "          post({type:'progress', pct: Math.round((r.progress || 0) * 100)});",
+    "          if (r.text) post({type:'status', text: r.text, level:'busy'});",
+    "        },",
+    "      });",
+    "    } catch (e) {",
+    "      post({type:'log', text:'engine init failed: ' + e.message, level:'err'});",
+    "      post({type:'status', text:'engine init failed', level:'err'});",
+    "      post({type:'connection-failed'});",
+    "      return;",
+    "    }",
+    "    post({type:'progress', pct:100});",
+    "    post({type:'log', text:'engine ready, opening SSE to ' + m.url + '/v1/relay/poll', level:'ok'});",
+    "    var q = new URLSearchParams({worker_id: m.workerId, caps: m.model});",
+    "    if (m.token) q.set('token', m.token);",
+    "    events = new EventSource(m.url + '/v1/relay/poll?' + q.toString());",
+    "    events.onopen  = function() { post({type:'status', text:'connected -- waiting for jobs', level:'on'}); };",
+    "    events.onerror = function() {",
+    "      post({type:'status', text:'disconnected (browser will auto-retry)', level:'err'});",
+    "      post({type:'log', text:'SSE error -- browser EventSource will retry on its own', level:'warn'});",
+    "    };",
+    "    events.onmessage = async function(ee) {",
+    "      var req;",
+    "      try { req = JSON.parse(ee.data); }",
+    "      catch (e) { post({type:'log', text:'bad event JSON: ' + e.message, level:'err'}); return; }",
+    "      post({type:'log', text:'dispatching ' + req.id + ' (' + (req.messages || []).length + ' msgs)'});",
+    "      post({type:'status', text:'serving ' + req.id, level:'busy'});",
+    "      try {",
+    "        var c = await engine.chat.completions.create({",
+    "          messages: req.messages,",
+    "          temperature: parseFloat((req.options && req.options.temperature) || '0'),",
+    "          max_tokens:  (req.options && req.options.max_tokens) || 512,",
+    "        });",
+    "        var headers = {'Content-Type':'application/json'};",
+    "        if (m.token) headers['Authorization'] = 'Bearer ' + m.token;",
+    "        var r = await fetch(m.url + '/v1/relay/respond/' + req.id, {",
+    "          method:'POST', headers: headers,",
+    "          body: JSON.stringify({",
+    "            content: c.choices[0].message.content,",
+    "            finish_reason: c.choices[0].finish_reason,",
+    "            usage: c.usage,",
+    "            tool_calls: c.choices[0].message.tool_calls,",
+    "          }),",
+    "        });",
+    "        if (!r.ok) post({type:'log', text:'respond POST got HTTP ' + r.status, level:'warn'});",
+    "        post({type:'job-served'});",
+    "        post({type:'status', text:'connected -- waiting for jobs', level:'on'});",
+    "        post({type:'log', text:'completed ' + req.id + ' (' + ((c.usage && c.usage.completion_tokens) || '?') + ' tokens)', level:'ok'});",
+    "      } catch (e) {",
+    "        post({type:'log', text:'dispatch error for ' + req.id + ': ' + e.message, level:'err'});",
+    "      }",
+    "    };",
+    "    post({type:'connected'});",
+    "  } else if (m.type === 'disconnect') {",
+    "    if (events) { try { events.close(); } catch (e) {} events = null; }",
+    "    engine = null;",
+    "    post({type:'status', text:'disconnected', level:''});",
+    "    post({type:'log', text:'disconnected by user'});",
+    "    post({type:'disconnected'});",
+    "  }",
+    "});",
+    "post({type:'ready'});",
+    "})();",
+    "</" + "script>",
+  ].join("\n");
 }
 
 function syncRelayTokenInput() {
