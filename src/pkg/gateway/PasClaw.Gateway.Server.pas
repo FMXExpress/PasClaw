@@ -6074,7 +6074,9 @@ var
   Spec: TProviderSpec;
   Disc: TModelDiscoveryResult;
   Seen: TStringList;
-  i: Integer;
+  i, j: Integer;
+  RelayWorkers: TRelayWorkerArray;
+  IsRelay: Boolean;
 
   procedure AddModel(const Id, OwnedBy: string; Created: Int64);
   begin
@@ -6091,8 +6093,15 @@ var
 
 begin
   DefModel := FCfg.DefaultModel;
-  if DefModel = '' then DefModel := 'pasclaw';
   ProvName := FCfg.DefaultProvider;
+  IsRelay  := False;
+  for i := 0 to High(FCfg.Providers) do
+    if SameText(FCfg.Providers[i].Name, ProvName) and
+       SameText(FCfg.Providers[i].Kind, 'relay') then
+    begin
+      IsRelay := True;
+      Break;
+    end;
 
   Seen := TStringList.Create;
   Root := TJsonObject.Create;
@@ -6100,7 +6109,22 @@ begin
     Root.PutStr('object', 'list');
     DataArr := TJsonArray.Create;
 
-    if (ProvName <> '') and
+    (* Relay provider has no /v1/models endpoint to discover from --
+       the queue's "available models" are whatever the currently-
+       connected workers advertise via X-Relay-Capabilities. Enumerate
+       them so the webui's model picker shows the worker's actual
+       model id (e.g. Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC) rather
+       than the literal "pasclaw" fallback that surfaced before. A
+       worker with empty capabilities (the wildcard case) contributes
+       nothing here, so the fallback below kicks in. *)
+    if IsRelay and (FRelayQueue <> nil) then
+    begin
+      RelayWorkers := FRelayQueue.GetConnectedWorkers;
+      for i := 0 to High(RelayWorkers) do
+        for j := 0 to High(RelayWorkers[i].Capabilities) do
+          AddModel(RelayWorkers[i].Capabilities[j], 'relay-worker', 0);
+    end
+    else if (ProvName <> '') and
        ResolveProviderSpecForName(FCfg, ProvName, Spec, Base, Key, Err) then
     begin
       { Cache first (instant, no network on every page load); fall back to
@@ -6117,7 +6141,11 @@ begin
     end;
 
     { Always surface the configured default so the contract holds even when
-      discovery yields nothing. Dedup keeps it from doubling a catalog row. }
+      discovery yields nothing. Dedup keeps it from doubling a catalog row.
+      "pasclaw" fallback when relay is the default AND no worker is
+      connected AND the operator didn't pin a model -- still better than
+      an empty list. }
+    if DefModel = '' then DefModel := 'pasclaw';
     AddModel(DefModel, 'pasclaw', 0);
 
     Root.PutArray('data', DataArr);

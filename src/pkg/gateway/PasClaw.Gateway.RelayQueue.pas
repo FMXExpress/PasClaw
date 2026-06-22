@@ -193,7 +193,15 @@ type
   TRelayWorker = class
   private
     FId:            TRelayWorkerId;
-    FCapabilities:  TStringArray;   { lowercase model ids }
+    FCapabilities:  TStringArray;   { advertised model ids -- stored as
+                                      the worker reported them so
+                                      /v1/models can surface the exact
+                                      casing engines downstream
+                                      (WebLLM's model_id is case-
+                                      sensitive: Qwen2.5-Coder-7B-...).
+                                      CanServe normalises both sides
+                                      at compare time. Codex P2 review
+                                      on PR #335. }
     FConnectedAt:   TDateTime;
     FLastSeen:      TDateTime;
     FRequestsSeen:  Int64;
@@ -395,7 +403,7 @@ begin
   FId           := AId;
   SetLength(FCapabilities, Length(ACapabilities));
   for i := 0 to High(ACapabilities) do
-    FCapabilities[i] := LowerCase(Trim(ACapabilities[i]));
+    FCapabilities[i] := Trim(ACapabilities[i]);
   FConnectedAt  := Now;
   FLastSeen     := FConnectedAt;
   FRequestsSeen := 0;
@@ -441,7 +449,11 @@ begin
     yet. }
   if (Target = '') or (Length(FCapabilities) = 0) then Exit(True);
   for i := 0 to High(FCapabilities) do
-    if FCapabilities[i] = Target then Exit(True);
+    (* FCapabilities is now stored as advertised (original casing
+       preserved for /v1/models); normalise both sides here so the
+       compare stays case-insensitive without sacrificing the
+       exact-id surface elsewhere. Codex P2 review on PR #335. *)
+    if LowerCase(Trim(FCapabilities[i])) = Target then Exit(True);
   Result := False;
 end;
 

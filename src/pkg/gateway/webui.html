@@ -683,6 +683,12 @@
           to the gateway with a <strong>relay-scoped token</strong> that unlocks only
           <code>/v1/relay/*</code> -- a compromised model can't impersonate you against
           the rest of PasClaw. Closing the tab disconnects.
+          <br><br>
+          <em>Tool calls:</em> WebLLM only accepts the <code>tools</code> argument for the
+          Hermes-2-Pro / Hermes-3 entries flagged "tool-calls supported" below. Other
+          models still work for text-only turns; if the agent sends a turn with tools the
+          worker strips them and retries (no structured <code>tool_calls</code> come back,
+          but text replies do).
         </p>
         <div class="relay-inb-row">
           <label>Model
@@ -2463,25 +2469,66 @@ let _relayInbJobs    = 0;
    https://github.com/mlc-ai/web-llm/blob/main/src/config.ts.
    Grouped by approximate VRAM footprint so the operator picks by
    "what fits on my hardware" rather than chasing version numbers. */
+/* WebLLM model curation. supportsTools=true marks the entries that
+   WebLLM's chat.completions.create accepts a `tools` array for --
+   per the library's own gate, that's just the Hermes-2-Pro and
+   Hermes-3 ports. Everything else takes text-only turns; the
+   worker now strips `tools` and retries on failure so non-tool
+   models still serve text traffic from the agent loop (they just
+   won't emit structured tool_calls).
+
+   Sorted with the agentic-coding sweet spot (Qwen2.5-Coder-7B)
+   first inside Medium so the dropdown's "best default" is obvious.
+   See `DEFAULT_RELAY_WEBLLM_MODEL` below for the auto-selected
+   option on tab open. */
 const RELAY_WEBLLM_MODELS = [
-  { group: "Tiny (under 1B -- fits anywhere, fast)", items: [
-    { id: "Llama-3.2-1B-Instruct-q4f16_1-MLC",  label: "Llama 3.2 1B Instruct" },
-    { id: "Qwen2.5-1.5B-Instruct-q4f16_1-MLC",  label: "Qwen 2.5 1.5B Instruct" },
-    { id: "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",  label: "Qwen 2.5 0.5B Instruct" },
+  { group: "Medium (7-8B -- best capability, needs 4-5 GB VRAM)", items: [
+    { id: "Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC",         label: "Qwen 2.5 Coder 7B Instruct -- best agentic coding" },
+    { id: "Hermes-3-Llama-3.1-8B-q4f16_1-MLC",             label: "Hermes 3 (Llama 3.1 8B) -- tool-calls supported", supportsTools: true },
+    { id: "Hermes-2-Pro-Llama-3-8B-q4f16_1-MLC",           label: "Hermes 2 Pro (Llama 3 8B) -- tool-calls supported", supportsTools: true },
+    { id: "Hermes-2-Pro-Mistral-7B-q4f16_1-MLC",           label: "Hermes 2 Pro (Mistral 7B) -- tool-calls supported", supportsTools: true },
+    { id: "Llama-3.1-8B-Instruct-q4f16_1-MLC",             label: "Llama 3.1 8B Instruct" },
+    { id: "Qwen3.5-9B-q4f16_1-MLC",                        label: "Qwen 3.5 9B" },
+    { id: "Qwen3-8B-q4f16_1-MLC",                          label: "Qwen 3 8B" },
+    { id: "DeepSeek-R1-Distill-Qwen-7B-q4f16_1-MLC",       label: "DeepSeek R1 Distill (Qwen 7B) -- reasoning" },
+    { id: "DeepSeek-R1-Distill-Llama-8B-q4f16_1-MLC",      label: "DeepSeek R1 Distill (Llama 8B) -- reasoning" },
+    { id: "gemma-2-9b-it-q4f16_1-MLC",                     label: "Gemma 2 9B Instruction-Tuned" },
   ]},
-  { group: "Small (2-3B -- balanced)", items: [
-    { id: "Llama-3.2-3B-Instruct-q4f16_1-MLC",     label: "Llama 3.2 3B Instruct" },
-    { id: "Qwen2.5-3B-Instruct-q4f16_1-MLC",       label: "Qwen 2.5 3B Instruct" },
-    { id: "Phi-3.5-mini-instruct-q4f16_1-MLC",     label: "Phi 3.5 mini Instruct (3.8B)" },
-    { id: "gemma-2-2b-it-q4f16_1-MLC",             label: "Gemma 2 2B Instruction-Tuned" },
-    { id: "Hermes-3-Llama-3.2-3B-q4f16_1-MLC",     label: "Hermes 3 (Llama 3.2 3B) -- tool-call friendly" },
+  { group: "Small (2-4B -- balanced)", items: [
+    { id: "Ministral-3-3B-Instruct-2512-BF16-q4f16_1-MLC", label: "Ministral 3 3B Instruct (2025-12)" },
+    { id: "Ministral-3-3B-Reasoning-2512-q4f16_1-MLC",     label: "Ministral 3 3B Reasoning (2025-12)" },
+    { id: "Qwen3.5-4B-q4f16_1-MLC",                        label: "Qwen 3.5 4B" },
+    { id: "Qwen3.5-2B-q4f16_1-MLC",                        label: "Qwen 3.5 2B" },
+    { id: "Qwen3-4B-q4f16_1-MLC",                          label: "Qwen 3 4B" },
+    { id: "Qwen2.5-Coder-3B-Instruct-q4f16_1-MLC",         label: "Qwen 2.5 Coder 3B Instruct -- small agentic coding" },
+    { id: "Qwen2.5-3B-Instruct-q4f16_1-MLC",               label: "Qwen 2.5 3B Instruct" },
+    { id: "Hermes-3-Llama-3.2-3B-q4f16_1-MLC",             label: "Hermes 3 (Llama 3.2 3B) -- (tool-calls NOT supported in WebLLM build)" },
+    { id: "Llama-3.2-3B-Instruct-q4f16_1-MLC",             label: "Llama 3.2 3B Instruct" },
+    { id: "Phi-4-mini-instruct-q4f16_1-MLC",               label: "Phi 4 mini Instruct" },
+    { id: "Phi-3.5-mini-instruct-q4f16_1-MLC",             label: "Phi 3.5 mini Instruct (3.8B)" },
+    { id: "gemma-2-2b-it-q4f16_1-MLC",                     label: "Gemma 2 2B Instruction-Tuned" },
   ]},
-  { group: "Medium (7-8B -- best capability, needs 4-5GB)", items: [
-    { id: "Llama-3.1-8B-Instruct-q4f16_1-MLC",                label: "Llama 3.1 8B Instruct" },
-    { id: "Qwen2.5-7B-Instruct-q4f16_1-MLC",                  label: "Qwen 2.5 7B Instruct" },
-    { id: "DeepSeek-R1-Distill-Qwen-7B-q4f16_1-MLC",          label: "DeepSeek R1 Distill (Qwen 7B) -- reasoning" },
+  { group: "Tiny (under 2B -- fits anywhere, fast, text-only)", items: [
+    { id: "Qwen3.5-0.8B-q4f16_1-MLC",                      label: "Qwen 3.5 0.8B" },
+    { id: "Qwen3-1.7B-q4f16_1-MLC",                        label: "Qwen 3 1.7B" },
+    { id: "Qwen3-0.6B-q4f16_1-MLC",                        label: "Qwen 3 0.6B" },
+    { id: "Qwen2.5-Coder-1.5B-Instruct-q4f16_1-MLC",       label: "Qwen 2.5 Coder 1.5B Instruct" },
+    { id: "Qwen2.5-1.5B-Instruct-q4f16_1-MLC",             label: "Qwen 2.5 1.5B Instruct" },
+    { id: "Qwen2.5-0.5B-Instruct-q4f16_1-MLC",             label: "Qwen 2.5 0.5B Instruct" },
+    { id: "Llama-3.2-1B-Instruct-q4f16_1-MLC",             label: "Llama 3.2 1B Instruct" },
+    { id: "SmolLM2-1.7B-Instruct-q4f16_1-MLC",             label: "SmolLM2 1.7B Instruct" },
+    { id: "gemma3-1b-it-q4f16_1-MLC",                      label: "Gemma 3 1B Instruction-Tuned" },
   ]},
 ];
+
+/* Auto-selected option when the dropdown is populated. Qwen2.5-Coder-7B
+   is the best general-purpose pick for agentic coding work on browser
+   hardware, even though WebLLM's gate refuses `tools` for it -- the
+   worker's tools-fallback path (catches the "not supported" error
+   and retries without tools) keeps tool-using flows working
+   text-only. For deterministic tool_calls switch to one of the
+   Hermes entries flagged supportsTools above. */
+const DEFAULT_RELAY_WEBLLM_MODEL = "Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC";
 
 /* ===== Boot ===== */
 initTheme();
@@ -2619,7 +2666,11 @@ function setupRelayTab() {
 
 function setupInBrowserWorker() {
   /* Populate the model dropdown from the curated list. Optgroup
-     labels mirror the constant's grouping. */
+     labels mirror the constant's grouping. The "-- choose a model --"
+     disabled placeholder option already lives in the markup; we
+     pre-select DEFAULT_RELAY_WEBLLM_MODEL afterwards so the
+     dropdown lands on a sane default but the operator can still
+     scroll back to the placeholder if they want to start blank. */
   const sel = $("#relay-inb-model");
   for (const g of RELAY_WEBLLM_MODELS) {
     const og = document.createElement("optgroup");
@@ -2632,6 +2683,7 @@ function setupInBrowserWorker() {
     }
     sel.appendChild(og);
   }
+  if (DEFAULT_RELAY_WEBLLM_MODEL) sel.value = DEFAULT_RELAY_WEBLLM_MODEL;
   $("#relay-inb-wid").value =
     "tab-" + Math.random().toString(36).slice(2, 10);
 
@@ -2866,7 +2918,28 @@ function _buildInbWorkerScript() {
     "          if (req.options && req.options.tool_choice)",
     "            ccOpts.tool_choice = req.options.tool_choice;",
     "        }",
-    "        const c = await engine.chat.completions.create(ccOpts);",
+    "        /* WebLLM gates tool support to a specific allowlist (the",
+    "           Hermes-2-Pro / Hermes-3 entries). If the operator picked",
+    "           a model outside that list and the gateway-side agent",
+    "           sends an envelope with tools, chat.completions.create",
+    "           throws with `... is not supported for ChatCompletionRequest.tools`.",
+    "           Catch that exact failure, strip tools+tool_choice, and",
+    "           retry once -- the model still produces a text reply and",
+    "           the gateway agent loop sees it as text (no structured",
+    "           tool_calls, but at least the request doesn't dead-letter). */",
+    "        let c;",
+    "        try {",
+    "          c = await engine.chat.completions.create(ccOpts);",
+    "        } catch (e) {",
+    "          if (ccOpts.tools && /not supported for ChatCompletionRequest\\.tools/.test(e.message || '')) {",
+    "            post({type:'log', text:'model does not support tools in WebLLM -- retrying text-only (no structured tool_calls)', level:'warn'});",
+    "            delete ccOpts.tools;",
+    "            delete ccOpts.tool_choice;",
+    "            c = await engine.chat.completions.create(ccOpts);",
+    "          } else {",
+    "            throw e;",
+    "          }",
+    "        }",
     "        const headers = {'Content-Type':'application/json'};",
     "        if (m.token) headers['Authorization'] = 'Bearer ' + m.token;",
     "        const r = await fetch(m.url + '/v1/relay/respond/' + req.id, {",
