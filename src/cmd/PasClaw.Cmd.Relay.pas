@@ -346,12 +346,20 @@ end;
 
 procedure PostResponse(const Ctx: TWorkerCtx; const ReqId, BodyJSON: string);
 var
-  Hdrs: array[0..0] of THeaderPair;
+  Hdrs: array of THeaderPair;
   Resp: THTTPResult;
   URL: string;
 begin
   URL := StripTrailingSlash(Ctx.GatewayURL) + '/v1/relay/respond/' + ReqId;
-  Hdrs[0] := MakeHeader('Authorization', 'Bearer ' + Ctx.Token);
+  { Authorization header skipped entirely when no token configured --
+    matches the gateway's unauth'd mode (Cfg.Gateway.Token empty). }
+  if Ctx.Token <> '' then
+  begin
+    SetLength(Hdrs, 1);
+    Hdrs[0] := MakeHeader('Authorization', 'Bearer ' + Ctx.Token);
+  end
+  else
+    SetLength(Hdrs, 0);
   Resp := PostJSON(URL, BodyJSON, Hdrs, 60);
   if (Resp.StatusCode < 200) or (Resp.StatusCode >= 300) then
     LogWarn('relay worker: respond POST for %s got HTTP %d: %s',
@@ -531,18 +539,18 @@ begin
     Client.UserAgent         := 'PasClaw-relay-worker/0.1';
     Client.Accept            := 'text/event-stream';
 
-    { Build headers array. TNetHeaders is `array of TNetHeader`;
-      THTTPClient.Get's third argument expects this shape. Capabilities
-      header omitted when empty so the gateway sees the same "wildcard
-      worker" signal it gets from the Indy path. }
+    { Build headers array dynamically. TNetHeaders is `array of
+      TNetHeader`. Authorization omitted when no token (matches the
+      gateway's unauth'd mode); X-Relay-Capabilities omitted when
+      empty so the gateway sees the same "wildcard worker" signal
+      it gets from the Indy path. X-Relay-Worker-Id is always
+      required by the gateway. }
+    SetLength(Hdrs, 0);
+    if Ctx.Token <> '' then
+      Hdrs := Hdrs + [TNetHeader.Create('Authorization', 'Bearer ' + Ctx.Token)];
+    Hdrs := Hdrs + [TNetHeader.Create('X-Relay-Worker-Id', Ctx.WorkerId)];
     if Ctx.Caps <> '' then
-      SetLength(Hdrs, 3)
-    else
-      SetLength(Hdrs, 2);
-    Hdrs[0] := TNetHeader.Create('Authorization',     'Bearer ' + Ctx.Token);
-    Hdrs[1] := TNetHeader.Create('X-Relay-Worker-Id', Ctx.WorkerId);
-    if Ctx.Caps <> '' then
-      Hdrs[2] := TNetHeader.Create('X-Relay-Capabilities', Ctx.Caps);
+      Hdrs := Hdrs + [TNetHeader.Create('X-Relay-Capabilities', Ctx.Caps)];
 
     Stream := TSSEStream.Create(@Ctx);
     try
@@ -606,8 +614,9 @@ begin
     Http.HandleRedirects := True;
     Http.Request.UserAgent := 'PasClaw-relay-worker/0.1';
     Http.Request.Accept    := 'text/event-stream';
-    Http.Request.CustomHeaders.AddValue('Authorization',
-                                         'Bearer ' + Ctx.Token);
+    if Ctx.Token <> '' then
+      Http.Request.CustomHeaders.AddValue('Authorization',
+                                           'Bearer ' + Ctx.Token);
     Http.Request.CustomHeaders.AddValue('X-Relay-Worker-Id', Ctx.WorkerId);
     if Ctx.Caps <> '' then
       Http.Request.CustomHeaders.AddValue('X-Relay-Capabilities', Ctx.Caps);
@@ -794,13 +803,13 @@ begin
       'pasclaw relay'));
     Exit(1);
   end;
-  if Ctx.Token = '' then
-  begin
-    PrintErr(FormatCLIError(
-      'missing --gateway-token (or PASCLAW_GATEWAY_TOKEN env)',
-      'pasclaw relay'));
-    Exit(1);
-  end;
+  { Token deliberately not required -- the gateway accepts unauth'd
+    connections when Cfg.Gateway.Token is empty (the historical
+    pre-PR-#246 shape), and forcing the worker to supply a token
+    against an unauth'd gateway turned a working pairing into a CLI
+    rejection. Header / query-param emission below skips Authorization
+    entirely when Ctx.Token = '' so the wire stays clean for both
+    sides. }
 
   Cfg := LoadConfig;
   try
