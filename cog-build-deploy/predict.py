@@ -713,11 +713,20 @@ class Predictor(BasePredictor):
 
             # ---------- Cloudflare deploy step (BUILD+DEPLOY) ----------
             #
-            # Only fire when the operator left deploy_to_cloudflare on
-            # AND the agent's output contains a wrangler.toml somewhere.
-            # Either condition false -> placeholders go into the URL
-            # files so the caller can detect skip-vs-failure-vs-success
-            # by inspecting the body.
+            # Three conditions for the deploy to fire:
+            #   1. The operator left deploy_to_cloudflare on (default).
+            #   2. THIS prediction actually built something -- skip on
+            #      mode="plan" where the agent only emits a PLAN.md and
+            #      there's no fresh Worker output. The do_build flag is
+            #      already set above for the build / plan-build /
+            #      plan-build-goal branches. Without this gate a plan-
+            #      only prediction with a workspace_in that happened to
+            #      contain a wrangler.toml from a previous run would
+            #      deploy stale code, surface a claimable account, and
+            #      mislead the caller into thinking the planner shipped
+            #      something. Codex P2 review on PR #338.
+            #   3. The agent's workspace contains a wrangler.toml /
+            #      wrangler.json / wrangler.jsonc.
             #
             # We deliberately do NOT fail the whole prediction on a
             # deploy error: the workspace + reply are still useful
@@ -727,10 +736,13 @@ class Predictor(BasePredictor):
             #   - "(deploy failed: <stderr tail>)" (wrangler returned non-zero)
             deployed_url = "(no deployment attempted)"
             claim_url    = "(no deployment attempted)"
-            if deploy_to_cloudflare:
+            if deploy_to_cloudflare and do_build:
                 deployed_url, claim_url = self._deploy_to_cloudflare(
-                    home_dir, wrangler_project_path
+                    home_dir, wrangler_project_path, scratch
                 )
+            elif deploy_to_cloudflare and not do_build:
+                deployed_url = "(no deployment attempted -- plan-only mode)"
+                claim_url    = "(no deployment attempted -- plan-only mode)"
 
             inner_dep_url = os.path.join(scratch, "deployed_url.txt")
             inner_claim   = os.path.join(scratch, "claim_url.txt")
@@ -758,17 +770,29 @@ class Predictor(BasePredictor):
     # Cloudflare temporary-deploy helpers
     # ------------------------------------------------------------------
 
+    # Wrangler accepts three config-file names. Cloudflare actively
+    # recommends wrangler.jsonc for new projects, so any of the
+    # three counts as "this directory is a Worker project." Order
+    # here is the priority wrangler itself uses when multiple
+    # exist in one dir (TOML wins, then JSON, then JSONC). Codex
+    # P2 review on PR #338.
+    _WRANGLER_CONFIG_NAMES = ("wrangler.toml", "wrangler.json", "wrangler.jsonc")
+
     def _find_wrangler_project(self, home_dir, operator_override):
-        """Locate the directory containing wrangler.toml inside the workspace.
+        """Locate the directory containing a wrangler config inside the workspace.
+
+        Recognised config filenames: wrangler.toml / wrangler.json /
+        wrangler.jsonc (Cloudflare recommends the .jsonc form for new
+        projects, but agents may emit any of the three).
 
         Order of precedence:
           1. operator_override (must be a path RELATIVE to
              $PASCLAW_HOME/workspace/, joined here -- absolute paths
              are rejected so the operator can't escape the workspace)
-          2. shallowest wrangler.toml under $PASCLAW_HOME/workspace/
+          2. shallowest matching config under $PASCLAW_HOME/workspace/
 
-        Returns the project directory (the parent of wrangler.toml), or
-        None when nothing matches.
+        Returns the project directory (the parent of the config file),
+        or None when nothing matches.
         """
         ws_root = os.path.join(home_dir, "workspace")
         if not os.path.isdir(ws_root):
@@ -779,22 +803,27 @@ class Predictor(BasePredictor):
             # land inside the workspace, no exceptions.
             ovr = operator_override.lstrip("/")
             candidate = os.path.join(ws_root, ovr)
-            if os.path.isfile(os.path.join(candidate, "wrangler.toml")):
+            # As-a-directory: any of the three config names present?
+            if os.path.isdir(candidate) and any(
+                os.path.isfile(os.path.join(candidate, n))
+                for n in self._WRANGLER_CONFIG_NAMES
+            ):
                 return candidate
-            if os.path.isfile(candidate) and candidate.endswith("wrangler.toml"):
+            # As-a-file: pointing directly at the config file.
+            if os.path.isfile(candidate) and os.path.basename(candidate) in self._WRANGLER_CONFIG_NAMES:
                 return os.path.dirname(candidate)
             print(
                 f"deploy: wrangler_project_path={operator_override!r} "
-                f"did not resolve to a wrangler.toml under "
+                f"did not resolve to a wrangler.{{toml,json,jsonc}} under "
                 f"$PASCLAW_HOME/workspace/. Falling back to auto-detect."
             )
 
-        # Auto-detect: shallowest wrangler.toml wins (depth sorts
-        # nested projects naturally below repo-root layouts).
+        # Auto-detect: shallowest match wins (depth sorts nested
+        # projects naturally below repo-root layouts).
         best = None
         best_depth = 1 << 30
         for root, _, files in os.walk(ws_root):
-            if "wrangler.toml" in files:
+            if any(n in files for n in self._WRANGLER_CONFIG_NAMES):
                 depth = root[len(ws_root):].count(os.sep)
                 if depth < best_depth:
                     best       = root
@@ -824,23 +853,75 @@ class Predictor(BasePredictor):
                     claim = u
         return deployed, claim
 
-    def _deploy_to_cloudflare(self, home_dir, operator_override):
-        """Run `wrangler deploy --temporary` and parse the URLs out of stdout."""
+    def _deploy_to_cloudflare(self, home_dir, operator_override, scratch):
+        """Run `wrangler deploy --temporary` and parse the URLs out of stdout.
+
+        Runs wrangler with a PER-PREDICTION HOME so the temporary
+        account cache wrangler keeps under ~/.config/.wrangler (or
+        wherever the platform default is) doesn't leak across
+        predictions. In a warm Cog container that serves multiple
+        predictions, wrangler will reuse a previously-issued
+        temporary account while its claim URL is still valid -- which
+        means prediction N could deploy into prediction N-1's temp
+        account and surface a claim URL that N-1's caller has access
+        to. Isolating HOME under the scratch tempdir (which the
+        TemporaryDirectory context manager wipes when the predict()
+        call returns) gives wrangler a fresh cache root each
+        invocation. Codex P1 review on PR #338.
+
+        Also scrubs inherited Cloudflare auth env so a warm container
+        with CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID set from a
+        prior context can't accidentally short-circuit the temporary-
+        account flow into a real-account deploy.
+        """
         proj = self._find_wrangler_project(home_dir, operator_override)
         if proj is None:
             print(
-                "deploy: no wrangler.toml found under "
+                "deploy: no wrangler config (toml/json/jsonc) under "
                 "$PASCLAW_HOME/workspace/; skipping the deploy step."
             )
             return ("(no wrangler.toml in workspace -- nothing to deploy)",
                     "(no wrangler.toml in workspace -- nothing to deploy)")
 
-        print(f"deploy: running `wrangler deploy --temporary` in {proj}")
+        # Per-prediction HOME so wrangler's cache (and any token it
+        # might write) lives inside this prediction's scratch dir.
+        # The scratch is the same TemporaryDirectory the build step
+        # used, which is deleted automatically when predict() returns.
+        wrangler_home = os.path.join(scratch, "wrangler-home")
+        os.makedirs(wrangler_home, exist_ok=True)
+
+        env = os.environ.copy()
+        env["HOME"] = wrangler_home
+        # XDG paths some wrangler versions consult; force them under
+        # the per-prediction HOME so nothing falls back to the
+        # container's default cache.
+        env["XDG_CONFIG_HOME"] = os.path.join(wrangler_home, ".config")
+        env["XDG_CACHE_HOME"]  = os.path.join(wrangler_home, ".cache")
+        env["XDG_STATE_HOME"]  = os.path.join(wrangler_home, ".state")
+        # CI=1 so wrangler refuses interactive prompts (would hang the
+        # subprocess) and emits structured-ish output.
+        env["CI"] = "1"
+        # Strip any inherited real-account auth so the --temporary flow
+        # can't be silently overridden into a real-account deploy.
+        for k in (
+            "CLOUDFLARE_API_TOKEN",
+            "CLOUDFLARE_API_KEY",
+            "CLOUDFLARE_EMAIL",
+            "CLOUDFLARE_ACCOUNT_ID",
+            "CF_API_TOKEN",
+            "CF_API_KEY",
+            "WRANGLER_API_TOKEN",
+        ):
+            env.pop(k, None)
+
+        print(f"deploy: running `wrangler deploy --temporary` in {proj} "
+              f"(HOME={wrangler_home})")
         try:
             res = subprocess.run(
                 ["wrangler", "deploy", "--temporary"],
                 cwd=proj, capture_output=True, text=True,
                 timeout=300,    # 5 min cap on the deploy itself
+                env=env,
             )
         except subprocess.TimeoutExpired:
             return ("(deploy failed: wrangler timed out after 5 min)",

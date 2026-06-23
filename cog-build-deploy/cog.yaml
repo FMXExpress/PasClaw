@@ -81,12 +81,15 @@ build:
     # 6. node 20 + wrangler (the deploy step). Cloudflare's
     #    `wrangler deploy --temporary` is what unlocks the no-API-key
     #    deploy path -- see https://blog.cloudflare.com/temporary-accounts/.
-    #    Pin wrangler to a known-good version so the temporary-accounts
-    #    feature is present and the CLI flag shape stays stable. Bump
-    #    when needed.
+    #    REQUIRES wrangler >= 4.102.0 (the version that ships the
+    #    --temporary flag); earlier majors -- including 3.x -- fail
+    #    with "unknown flag --temporary" and the whole deploy step
+    #    dead-letters silently. Pin to the 4.x line via ^4.102 so a
+    #    patch bump can ship without re-editing the cog. Bump
+    #    deliberately when Cloudflare changes the flag shape.
     - curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
     - apt-get install -y nodejs
-    - npm install -g wrangler@3
+    - npm install -g 'wrangler@^4.102'
     - wrangler --version
 
     # 7. Cleanup

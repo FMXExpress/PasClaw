@@ -21,9 +21,11 @@ Every input from `/cog-build/` is inherited unchanged. New on top:
 | Name | Type | Default | Description |
 |---|---|---|---|
 | `deploy_to_cloudflare` | `bool` | `True` | Run `wrangler deploy --temporary` after the build. Set `False` to skip the deploy step entirely. |
-| `wrangler_project_path` | `str` | `""` | Path inside the workspace to the directory containing `wrangler.toml`. Default empty = auto-detect the shallowest `wrangler.toml` under `$PASCLAW_HOME/workspace/`. Both `src/my-worker` (a dir) and `src/my-worker/wrangler.toml` (the file) work. Absolute paths are stripped so the operator can't escape the workspace. |
+| `wrangler_project_path` | `str` | `""` | Path inside the workspace to the directory containing a wrangler config. Default empty = auto-detect the shallowest `wrangler.toml` / `wrangler.json` / `wrangler.jsonc` under `$PASCLAW_HOME/workspace/`. Both `src/my-worker` (a dir) and `src/my-worker/wrangler.jsonc` (the file) work. Absolute paths are stripped so the operator can't escape the workspace. |
 
-The auto-detect path means **no agent-side instructions are needed** — if the build produced a `wrangler.toml`, it'll get found and deployed. If multiple exist (rare), set `wrangler_project_path` explicitly to disambiguate.
+The auto-detect path means **no agent-side instructions are needed** — if the build produced any wrangler config (TOML / JSON / JSONC — Cloudflare recommends `.jsonc` for new projects), it'll get found and deployed. If multiple exist (rare), set `wrangler_project_path` explicitly to disambiguate.
+
+**Plan-only predictions never deploy.** When `mode="plan"` is used the build step is skipped, so the deploy block is also skipped even with `deploy_to_cloudflare=True` — a planning-only run can't accidentally publish stale code from a `workspace_in` that happened to contain a wrangler config. Slots `[2]` / `[3]` carry `(no deployment attempted -- plan-only mode)` in that case.
 
 ## Outputs
 
@@ -45,7 +47,8 @@ Slots `[2]` and `[3]` always exist — empty fields would silently disappear on 
 | `https://...workers.dev` (slot 2) | Successful deploy. URL is live for 60 min. |
 | `https://dash.cloudflare.com/...` (slot 3) | Follow this URL to claim the temp account before it expires. |
 | `(no deployment attempted)` | `deploy_to_cloudflare=False`. |
-| `(no wrangler.toml in workspace -- nothing to deploy)` | Agent didn't produce a Worker; deploy was skipped automatically. |
+| `(no deployment attempted -- plan-only mode)` | `mode="plan"` -- the build step ran no agent loop, so the deploy step is skipped too even with the toggle on. |
+| `(no wrangler.toml in workspace -- nothing to deploy)` | Agent didn't produce a wrangler config (TOML / JSON / JSONC); deploy was skipped automatically. |
 | `(deploy failed: wrangler exit N)\n<stderr tail>` | wrangler returned non-zero. Workspace + reply still come back, the prediction itself doesn't fail. |
 | `(deploy failed: wrangler timed out after 5 min)` | Deploy hit the 5-minute timeout. |
 | `(deploy failed: wrangler CLI not found -- rebuild the cog image)` | The image was built without wrangler. Check `cog.yaml`. |
@@ -80,6 +83,18 @@ else:
 ## Test plan if you fork this
 
 The Python helper logic (`_find_wrangler_project`, `_extract_urls`) is unit-testable without a Cog runtime — see the test snippet in the corresponding PR description for the shape. Running the actual deploy requires a real Cog environment with the image built (node + wrangler must land in the image; check `cog.yaml`'s `run:` block for the install steps).
+
+## Isolation between predictions
+
+Cog can keep a built container warm across multiple predictions. Wrangler reuses cached temporary-account state while the claim URL is still valid, so a naive setup would let prediction *N* deploy into prediction *N-1*'s temp account — and surface a claim URL that *N-1*'s caller has access to.
+
+This cog runs wrangler with a **per-prediction `HOME`** under that call's scratch tempdir (which Cog wipes when `predict()` returns), and **strips any inherited Cloudflare auth env** (`CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_API_KEY`, `CLOUDFLARE_ACCOUNT_ID`, `CF_API_TOKEN`, `WRANGLER_API_TOKEN`, etc.) before invoking the CLI. Each prediction gets a fresh wrangler cache and can only use the `--temporary` flow — a real-account auth env can't accidentally route the deploy into a permanent account.
+
+`CI=1` is also set so wrangler refuses interactive prompts that would hang the subprocess.
+
+## Wrangler version
+
+The image pins `wrangler@^4.102` because `--temporary` requires Wrangler 4.102.0 or later per [Cloudflare's docs](https://blog.cloudflare.com/temporary-accounts/). Earlier majors (including 3.x) fail with "unknown flag `--temporary`" and the whole deploy step dead-letters. Bump the pin only when you've verified the flag shape didn't change.
 
 ## What it doesn't do
 
