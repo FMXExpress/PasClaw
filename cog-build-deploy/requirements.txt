@@ -1,0 +1,3 @@
+# Same minimal floor as /cog-build/. wrangler is a Node CLI installed
+# via npm in cog.yaml's `run:` block, not a Python package.
+cog>=0.13.0
