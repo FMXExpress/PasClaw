@@ -58,11 +58,17 @@ Notes
   Robust to wrangler text-output drift across versions: we capture
   all https URLs and categorise.
 - 4 GiB workspace cap inherited from /cog-build/.
-- HOME for the `pasclaw build` subprocess is the per-prediction
-  scratch dir (so tools the agent spawns -- npm, git, pip, ssh,
-  cargo, ... -- can't leak ~/.npm / ~/.gitconfig / etc. between
-  predictions on a warm Cog container). wrangler runs with its own
-  isolated HOME under scratch too -- see _deploy_to_cloudflare.
+- HOME for the `pasclaw build` subprocess is scratch/tool-home,
+  a SIBLING of scratch/home (PASCLAW_HOME). Two reasons it MUST
+  live outside PASCLAW_HOME: (1) tools the agent spawns -- npm /
+  git / pip / ssh / cargo / ... -- can't leak ~/.npm / ~/.gitconfig
+  / etc. between predictions on a warm Cog container; (2) pasclaw
+  build packs the entire PASCLAW_HOME into workspace_out.zip,
+  so an HOME inside PASCLAW_HOME would serialise the tool
+  dotfiles into the workspace handshake and ship them to the next
+  prediction. Same shape cog-build uses (PR #339 review fix).
+  wrangler runs with its own isolated HOME under scratch too --
+  see _deploy_to_cloudflare.
 - See /cog-build/predict.py for the rest of the rationale that didn't
   change (Secret inputs, pget, profile handling, mode chaining,
   list[Path] vs BaseModel choice, etc.).
@@ -560,6 +566,23 @@ class Predictor(BasePredictor):
 
             home_dir = os.path.join(scratch, "home")
             os.makedirs(home_dir, exist_ok=True)
+            # Per-prediction OS HOME -- a SIBLING of home_dir, NOT
+            # under it. Critical: pasclaw build packs the entire
+            # PASCLAW_HOME into workspace_out.zip (only a tiny
+            # denylist excludes .git / Thumbs.db / etc.). If HOME
+            # also lived inside PASCLAW_HOME, every tool dotfile +
+            # cache (~/.npm, ~/.gitconfig, ~/.ssh, ~/.cache/pip,
+            # ~/.cargo, ...) would land in the zip and ride the
+            # workspace handshake into the next prediction --
+            # turning the supposed "isolation" into "now we
+            # serialize the leak across the prediction chain."
+            # Same fix landed in cog-build (PR #339); this is the
+            # parallel for cog-build-deploy's pasclaw build
+            # subprocess. (The wrangler subprocess in
+            # _deploy_to_cloudflare already used its own
+            # scratch-sibling 'wrangler-home'.)
+            tool_home_dir = os.path.join(scratch, "tool-home")
+            os.makedirs(tool_home_dir, exist_ok=True)
             out_zip_path = os.path.join(scratch, "workspace_out.zip")
 
             # Write config.json OUTSIDE home_dir and point PasClaw at it
@@ -586,13 +609,15 @@ class Predictor(BasePredictor):
             # below. The TemporaryDirectory wipes everything on
             # predict() return, so nothing escapes the scratch
             # boundary.
-            env["HOME"] = home_dir
+            env["HOME"] = tool_home_dir
             # XDG paths some tools consult; force them under the
-            # per-prediction HOME for the same reason.
-            env["XDG_CONFIG_HOME"] = os.path.join(home_dir, ".config")
-            env["XDG_CACHE_HOME"]  = os.path.join(home_dir, ".cache")
-            env["XDG_DATA_HOME"]   = os.path.join(home_dir, ".local", "share")
-            env["XDG_STATE_HOME"]  = os.path.join(home_dir, ".local", "state")
+            # per-prediction tool-home for the same reason -- and
+            # crucially OUTSIDE PASCLAW_HOME so they don't get
+            # serialized into workspace_out.zip.
+            env["XDG_CONFIG_HOME"] = os.path.join(tool_home_dir, ".config")
+            env["XDG_CACHE_HOME"]  = os.path.join(tool_home_dir, ".cache")
+            env["XDG_DATA_HOME"]   = os.path.join(tool_home_dir, ".local", "share")
+            env["XDG_STATE_HOME"]  = os.path.join(tool_home_dir, ".local", "state")
 
             # Phase 4 of the plan/build pairing: dispatch on `mode` to
             # decide which pasclaw subcommand(s) to invoke.
