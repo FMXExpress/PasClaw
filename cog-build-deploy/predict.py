@@ -58,6 +58,11 @@ Notes
   Robust to wrangler text-output drift across versions: we capture
   all https URLs and categorise.
 - 4 GiB workspace cap inherited from /cog-build/.
+- HOME for the `pasclaw build` subprocess is the per-prediction
+  scratch dir (so tools the agent spawns -- npm, git, pip, ssh,
+  cargo, ... -- can't leak ~/.npm / ~/.gitconfig / etc. between
+  predictions on a warm Cog container). wrangler runs with its own
+  isolated HOME under scratch too -- see _deploy_to_cloudflare.
 - See /cog-build/predict.py for the rest of the rationale that didn't
   change (Secret inputs, pget, profile handling, mode chaining,
   list[Path] vs BaseModel choice, etc.).
@@ -569,6 +574,25 @@ class Predictor(BasePredictor):
             env = os.environ.copy()
             env["PASCLAW_HOME"]   = home_dir
             env["PASCLAW_CONFIG"] = config_path
+            # Per-prediction HOME so anything the agent's tools spawn
+            # under shell_exec / execute_code (npm, git, pip, cargo,
+            # ssh, etc.) writes its dotfiles + caches under THIS
+            # prediction's scratch instead of the cog container's
+            # actual HOME. Cog can keep a built container warm
+            # across predictions, so without this ~/.npm,
+            # ~/.cache/pip, ~/.gitconfig, ~/.ssh, ... from prediction
+            # N-1 would be visible to prediction N. Same per-prediction
+            # HOME treatment _deploy_to_cloudflare gives wrangler
+            # below. The TemporaryDirectory wipes everything on
+            # predict() return, so nothing escapes the scratch
+            # boundary.
+            env["HOME"] = home_dir
+            # XDG paths some tools consult; force them under the
+            # per-prediction HOME for the same reason.
+            env["XDG_CONFIG_HOME"] = os.path.join(home_dir, ".config")
+            env["XDG_CACHE_HOME"]  = os.path.join(home_dir, ".cache")
+            env["XDG_DATA_HOME"]   = os.path.join(home_dir, ".local", "share")
+            env["XDG_STATE_HOME"]  = os.path.join(home_dir, ".local", "state")
 
             # Phase 4 of the plan/build pairing: dispatch on `mode` to
             # decide which pasclaw subcommand(s) to invoke.
