@@ -51,6 +51,19 @@ Notes
 - `pasclaw build` is passed `-q` so the ASCII banner is suppressed and
   reply.txt contains only the model's final message text.
 - API keys are Secret inputs so Replicate's UI and logs mask them.
+- HOME is per-prediction AND a SIBLING of PASCLAW_HOME under
+  scratch (scratch/tool-home, not scratch/home). Anything the
+  agent's tools write under $HOME -- npm caches, ~/.gitconfig,
+  ~/.ssh, ~/.cache, pip caches, etc. -- lives in tool-home and
+  gets wiped on predict() return by the TemporaryDirectory.
+  Critically, HOME is NOT inside PASCLAW_HOME: pasclaw build
+  packs the entire PASCLAW_HOME into workspace_out.zip, so if
+  HOME lived there too, tool dotfiles would ride workspace.zip
+  into the next prediction -- serialising the leak instead of
+  isolating it. Cog can keep a built container warm across
+  predictions, so without this isolation prediction N-1's
+  artifacts would be visible to prediction N. Same shape
+  cog-build-deploy gives wrangler.
 """
 
 import os
@@ -524,6 +537,19 @@ class Predictor(BasePredictor):
 
             home_dir = os.path.join(scratch, "home")
             os.makedirs(home_dir, exist_ok=True)
+            # Per-prediction OS HOME -- a SIBLING of home_dir, NOT
+            # under it. Critical: pasclaw build packs the entire
+            # PASCLAW_HOME into workspace_out.zip (only a tiny
+            # denylist excludes .git / Thumbs.db / etc.). If HOME
+            # also lived inside PASCLAW_HOME, every tool dotfile +
+            # cache (~/.npm, ~/.gitconfig, ~/.ssh, ~/.cache/pip,
+            # ~/.cargo, ...) would land in the zip and ride the
+            # workspace handshake into the next prediction --
+            # turning the supposed "isolation" into "now we
+            # serialize the leak across the prediction chain."
+            # Codex P2 review on PR #339.
+            tool_home_dir = os.path.join(scratch, "tool-home")
+            os.makedirs(tool_home_dir, exist_ok=True)
             out_zip_path = os.path.join(scratch, "workspace_out.zip")
 
             # Write config.json OUTSIDE home_dir and point PasClaw at it
@@ -538,6 +564,26 @@ class Predictor(BasePredictor):
             env = os.environ.copy()
             env["PASCLAW_HOME"]   = home_dir
             env["PASCLAW_CONFIG"] = config_path
+            # Per-prediction HOME so anything the agent's tools spawn
+            # under shell_exec / execute_code (npm, git, pip, cargo,
+            # ssh, etc.) writes its dotfiles + caches under THIS
+            # prediction's scratch instead of the cog container's
+            # actual HOME. On a warm Cog container Replicate keeps
+            # the process around between predictions, so without this
+            # ~/.npm, ~/.cache/pip, ~/.gitconfig, ~/.ssh, ... from
+            # prediction N-1 would be visible to prediction N. Same
+            # treatment cog-build-deploy gives wrangler (PR #338).
+            # The TemporaryDirectory wipes everything on predict()
+            # return, so nothing escapes the scratch boundary.
+            env["HOME"] = tool_home_dir
+            # XDG paths some tools consult; force them under the
+            # per-prediction tool-home for the same reason -- and
+            # crucially OUTSIDE PASCLAW_HOME so they don't get
+            # serialized into workspace_out.zip.
+            env["XDG_CONFIG_HOME"] = os.path.join(tool_home_dir, ".config")
+            env["XDG_CACHE_HOME"]  = os.path.join(tool_home_dir, ".cache")
+            env["XDG_DATA_HOME"]   = os.path.join(tool_home_dir, ".local", "share")
+            env["XDG_STATE_HOME"]  = os.path.join(tool_home_dir, ".local", "state")
 
             # Phase 4 of the plan/build pairing: dispatch on `mode` to
             # decide which pasclaw subcommand(s) to invoke.
