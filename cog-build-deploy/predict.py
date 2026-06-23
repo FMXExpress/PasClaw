@@ -50,8 +50,12 @@ just carry placeholder strings the caller can detect.
 
 Notes
 -----
-- wrangler is a Node CLI; the image installs node 20 + wrangler@3 in
-  cog.yaml's `run:` block.
+- wrangler is a Node CLI; the image installs node 22 + wrangler@^4.102
+  in cog.yaml's `run:` block. `wrangler deploy --temporary` (the
+  no-API-token temporary-account flow) requires wrangler >= 4.102 and
+  a recent Node; verified working headlessly against wrangler 4.103.0
+  on Node 22 (provisions a temp account + claim URL with no
+  credentials, terms auto-accepted in CI/non-interactive mode).
 - `wrangler deploy --temporary` prints both URLs to stdout. We
   capture the full output, regex out the worker URL (matches
   *.workers.dev) and the claim URL (dash.cloudflare.com path).
