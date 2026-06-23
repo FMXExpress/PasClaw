@@ -44,10 +44,12 @@ build:
     - "tzdata"
     - "zip"
     - "unzip"
-    # node -- required for the wrangler CLI. nodejs 20 ships in
-    # bookworm-backports / Nodesource; we install from Nodesource
-    # in the `run` block below to get a recent enough version
-    # (wrangler 3.x requires node >= 18).
+    # node -- required for the wrangler CLI. We install node 22 from
+    # Nodesource in the `run` block below: wrangler 4.x needs a recent
+    # Node (4.40+ dropped Node 18, and the 4.102+ line that ships the
+    # --temporary flag wants Node 20+; pin 22 LTS so we're comfortably
+    # above the floor and on a maintained line). gnupg is for the
+    # Nodesource apt key.
     - "gnupg"
   python_version: "3.10"
   python_requirements: "requirements.txt"
@@ -78,18 +80,22 @@ build:
     - curl -fsSL -o /usr/local/bin/pget https://github.com/replicate/pget/releases/latest/download/pget_linux_x86_64
     - chmod +x /usr/local/bin/pget
 
-    # 6. node 20 + wrangler (the deploy step). Cloudflare's
+    # 6. node 22 + wrangler (the deploy step). Cloudflare's
     #    `wrangler deploy --temporary` is what unlocks the no-API-key
     #    deploy path -- see https://blog.cloudflare.com/temporary-accounts/.
     #    REQUIRES wrangler >= 4.102.0 (the version that ships the
     #    --temporary flag); earlier majors -- including 3.x -- fail
     #    with "unknown flag --temporary" and the whole deploy step
-    #    dead-letters silently. Pin to the 4.x line via ^4.102 so a
-    #    patch bump can ship without re-editing the cog. Bump
-    #    deliberately when Cloudflare changes the flag shape.
-    - curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    #    dead-letters silently. wrangler 4.x also wants a recent Node,
+    #    so install Node 22 LTS (Node 20 is past its prime and some
+    #    wrangler 4.x deps emit engine warnings / break on it). Pin
+    #    wrangler to the 4.x line via ^4.102 so a patch bump can ship
+    #    without re-editing the cog; bump deliberately when Cloudflare
+    #    changes the flag shape.
+    - curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     - apt-get install -y nodejs
     - npm install -g 'wrangler@^4.102'
+    - node --version
     - wrangler --version
 
     # 7. Cleanup
