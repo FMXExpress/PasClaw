@@ -1,0 +1,95 @@
+# Configuration for Cog (replicate.com) -- PasClaw BUILD + DEPLOY mode.
+#
+# Variant of /cog-build/ that, after `pasclaw build` finishes, optionally
+# deploys the resulting workspace to a Cloudflare Workers temporary
+# account via `wrangler deploy --temporary`. Returns the temp URL +
+# claim URL alongside the existing workspace.zip + reply.txt outputs.
+#
+# Why temporary accounts (https://blog.cloudflare.com/temporary-accounts/):
+#   - No Cloudflare account or API token needed on the cog side.
+#   - 60-minute lifetime; auto-deleted unless the human follows the
+#     claim URL to convert it to a real account.
+#   - Designed for "agent built a thing, let the human verify it
+#     live, then decide whether to keep it." Perfect for `pasclaw
+#     build` outputs that include a Worker.
+#
+# Layout differences vs /cog-build/:
+#   - cog.yaml (this file) adds node + wrangler to system_packages
+#     so the deploy step can shell out to `wrangler`.
+#   - predict.py extends the build flow with a post-step that scans
+#     workspace_out for a wrangler.toml, runs wrangler deploy
+#     --temporary in that dir, and surfaces both URLs.
+#   - Output is `list[Path]` of FOUR files: workspace.zip, reply.txt,
+#     deployed_url.txt, claim_url.txt (the latter two are "(no
+#     deployment attempted)" placeholders when deploy is skipped or
+#     no wrangler.toml is in the workspace).
+
+build:
+  gpu: false
+  base_image: "debian:bookworm-slim"
+  system_packages:
+    # FPC + units used by the PasClaw binary
+    - "fpc"
+    - "fp-units-db"
+    - "fp-units-misc"
+    - "lazarus-src"
+    - "libsqlite3-dev"
+    # generic build tooling
+    - "make"
+    - "git"
+    - "curl"
+    - "ca-certificates"
+    - "patchelf"
+    - "libsqlite3-0"
+    - "tzdata"
+    - "zip"
+    - "unzip"
+    # node -- required for the wrangler CLI. nodejs 20 ships in
+    # bookworm-backports / Nodesource; we install from Nodesource
+    # in the `run` block below to get a recent enough version
+    # (wrangler 3.x requires node >= 18).
+    - "gnupg"
+  python_version: "3.10"
+  python_requirements: "requirements.txt"
+  run:
+    # 1. Clone PasClaw + Indy
+    - git clone https://github.com/FMXExpress/PasClaw.git /src
+    - cd /src && make get-indy
+
+    # 2. Compile the PasClaw binary
+    - cd /src && make LAZUTILS_DIR=/usr/lib/lazarus/2.2.6/components/lazutils
+
+    # 3. Runtime dir
+    - mkdir -p /opt/pasclaw
+    - cp /src/build/pasclaw /opt/pasclaw/pasclaw
+
+    # 4. OpenSSL 1.0.2 next to the binary (Indy's TLS path needs it)
+    - mkdir -p /openssl /tmp/x
+    - curl -fsSL --retry 3 --max-time 90 "https://snapshot.debian.org/archive/debian-archive/20240331T102506Z/debian-security/pool/updates/main/o/openssl1.0/libssl1.0.2_1.0.2u-1~deb9u7_amd64.deb" -o /tmp/libssl.deb
+    - dpkg-deb -x /tmp/libssl.deb /tmp/x
+    - cp /tmp/x/usr/lib/x86_64-linux-gnu/libssl.so.1.0.2 /opt/pasclaw/
+    - cp /tmp/x/usr/lib/x86_64-linux-gnu/libcrypto.so.1.0.2 /opt/pasclaw/
+    - ln -sf libssl.so.1.0.2 /opt/pasclaw/libssl.so
+    - ln -sf libcrypto.so.1.0.2 /opt/pasclaw/libcrypto.so
+    - chmod +x /opt/pasclaw/pasclaw
+    - patchelf --set-rpath '$ORIGIN' /opt/pasclaw/pasclaw
+
+    # 5. pget (parallel workspace.zip downloads)
+    - curl -fsSL -o /usr/local/bin/pget https://github.com/replicate/pget/releases/latest/download/pget_linux_x86_64
+    - chmod +x /usr/local/bin/pget
+
+    # 6. node 20 + wrangler (the deploy step). Cloudflare's
+    #    `wrangler deploy --temporary` is what unlocks the no-API-key
+    #    deploy path -- see https://blog.cloudflare.com/temporary-accounts/.
+    #    Pin wrangler to a known-good version so the temporary-accounts
+    #    feature is present and the CLI flag shape stays stable. Bump
+    #    when needed.
+    - curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    - apt-get install -y nodejs
+    - npm install -g wrangler@3
+    - wrangler --version
+
+    # 7. Cleanup
+    - rm -rf /src /tmp/x /tmp/libssl.deb /openssl /var/lib/apt/lists/*
+
+run: "predict.py:Predictor"
