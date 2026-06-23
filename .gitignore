@@ -16,5 +16,4 @@ vendor/
 *.exe
 *~
 .DS_Store
-cog-build-deploy/__pycache__/
 cog-build*/__pycache__/
