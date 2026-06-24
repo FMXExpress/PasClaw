@@ -73,6 +73,17 @@ function FormatToolCallLine(const Name, ArgsJSON: string): string;
   No trailing newline. }
 function FormatToolResultLine(const Name, ResultText, Err: string): string;
 
+{ Compact single-line JSON describing a tool call or result, carried over the
+  `pasclaw-tool` SSE comment side-channel (TSSEStreamer.WriteComment). The web
+  UI reads these to populate the expandable tool-card body with the FULL
+  arguments / result; OpenAI-compatible clients drop SSE comments, so the
+  visible content stream (FormatToolCallLine / FormatToolResultLine) is
+  unaffected. Kind is 'call' or 'result'. Large args / results are capped so a
+  giant patch or file read can't flood the stream; truncation is flagged in
+  the value. The JSON is always one physical line (string values escape
+  newlines), so it rides a single comment frame. }
+function FormatToolDetailJSON(const Kind, Name, ArgsJSON, ResultText, Err: string): string;
+
 implementation
 
 uses
@@ -248,6 +259,37 @@ begin
   end;
 
   Result := '  ' + TV_RESULT_GLYPH + ' ' + Body;
+end;
+
+const
+  MaxDetailArgs   = 8 * 1024;   { cap full-args echo in the side-channel    }
+  MaxDetailResult = 16 * 1024;  { cap full-result echo in the side-channel  }
+
+function CapDetail(const S: string; Max: Integer): string;
+begin
+  if Length(S) <= Max then Result := S
+  else Result := Copy(S, 1, Max) +
+    Format(#10'...(truncated, %d more bytes)', [Length(S) - Max]);
+end;
+
+function FormatToolDetailJSON(const Kind, Name, ArgsJSON, ResultText, Err: string): string;
+var
+  Obj: TJsonObject;
+begin
+  Obj := TJsonObject.Create;
+  try
+    Obj.PutStr('t', Kind);
+    Obj.PutStr('name', Name);
+    if Kind = 'call' then
+      Obj.PutStr('args', CapDetail(ArgsJSON, MaxDetailArgs))
+    else if Err <> '' then
+      Obj.PutStr('err', CapDetail(Err, MaxDetailResult))
+    else
+      Obj.PutStr('result', CapDetail(ResultText, MaxDetailResult));
+    Result := Obj.ToJSON;
+  finally
+    Obj.Free;
+  end;
 end;
 
 end.

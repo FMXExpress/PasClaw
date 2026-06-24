@@ -156,6 +156,41 @@ begin
   AssertContains(Line, 'web_search', 'empty args fall through to the unknown branch');
 end;
 
+procedure TestDetailJSON;
+{ The pasclaw-tool side-channel payload: compact, single-line JSON the web UI
+  parses to fill the expandable card. Must carry full args/result, be one
+  physical line, and cap pathological sizes. }
+var
+  J, Big: string;
+  i: Integer;
+begin
+  (* Serializer spaces the tokens but stays on one physical line; JSON.parse
+     in the web UI tolerates the spacing. Assert on values + the no-newline
+     invariant rather than exact byte spacing. *)
+  J := FormatToolDetailJSON('call', 'fs_read', '{"path":"README.md"}', '', '');
+  AssertContains(J, '"call"',    'detail call kind');
+  AssertContains(J, 'fs_read',   'detail call name');
+  AssertContains(J, 'README.md', 'detail call carries full args');
+  if Pos(#10, J) > 0 then Fail('detail JSON must be one physical line (call)');
+
+  J := FormatToolDetailJSON('result', 'shell_exec', '', 'exit=0'#10'done', '');
+  AssertContains(J, '"result"', 'detail result kind');
+  AssertContains(J, 'exit=0',   'detail result carries full text');
+  if Pos(#10, J) > 0 then Fail('detail JSON must be one physical line (result)');
+
+  J := FormatToolDetailJSON('result', 'fs_read', '', '', 'file not found');
+  AssertContains(J, '"err"', 'detail surfaces the error field');
+  AssertContains(J, 'file not found', 'detail carries the error message');
+
+  { Oversized result is capped with a truncation marker. }
+  Big := '';
+  for i := 1 to 40 * 1024 do Big := Big + 'x';
+  J := FormatToolDetailJSON('result', 'fs_read', '', Big, '');
+  AssertContains(J, 'truncated', 'oversized result flags truncation');
+  if Length(J) > 20 * 1024 then
+    Fail('oversized result not capped (len=' + IntToStr(Length(J)) + ')');
+end;
+
 begin
   TestFsReadCall;
   TestShellCall;
@@ -169,5 +204,6 @@ begin
   TestResultEmpty;
   TestResultTrailingNewline;
   TestMalformedArgsDoesNotRaise;
+  TestDetailJSON;
   Writeln('PASS');
 end.
