@@ -139,11 +139,8 @@
   .tool-card .tc-glyph{color:var(--mag)}
   .tool-card .tc-call{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .tool-card .tc-body{padding:.45rem .7rem;border-top:1px solid rgba(255,255,255,.07);
-    font-family:ui-monospace,monospace;font-size:11.5px;color:var(--mut)}
-  .tool-card .tc-body pre{margin:.15rem 0 .4rem;white-space:pre-wrap;word-break:break-word;
-    max-height:22rem;overflow:auto}
-  .tool-card .tc-h{font-size:9.5px;text-transform:uppercase;letter-spacing:.1em;
-    color:var(--cyan);margin:.25rem 0 .1rem;opacity:.8}
+    font-family:ui-monospace,monospace;font-size:11.5px;color:var(--mut);
+    white-space:pre-wrap;word-break:break-word}
   /* In-flight indicator inside the assistant bubble -- three pulsing dots
      while we wait for the first SSE delta. textContent = ... naturally
      overwrites this once content arrives. */
@@ -994,8 +991,8 @@ async function activateSession(id) {
   renderActive();
 }
 
-function recordTurn(role, text, tools) {
-  activeTurns.push({ role, text, tools });
+function recordTurn(role, text) {
+  activeTurns.push({ role, text });
 }
 
 /* Persist the open conversation. Creates the session on first save
@@ -1083,15 +1080,14 @@ function addLine(role, text) {
 function renderTurn(role, text, index) {
   const r = makeRow(role);
   r._raw = text;
-  const turn = activeTurns[index];
-  fillBubble(r.querySelector(".bub"), text, role === "a", turn && turn.tools);
+  fillBubble(r.querySelector(".bub"), text, role === "a");
   attachActions(r, role, index);
 }
 
-function fillBubble(bub, text, asMarkdown, tools) {
+function fillBubble(bub, text, asMarkdown) {
   if (asMarkdown) {
     bub.classList.add("md");
-    bub.innerHTML = renderAssistantHTML(text, tools);
+    bub.innerHTML = renderAssistantHTML(text);
     wireCopyButtons(bub);
   } else {
     bub.classList.remove("md");
@@ -1153,7 +1149,6 @@ async function streamAssistant() {
   setStreaming(true);
   currentAbort = new AbortController();
   let assistantText = "";
-  const streamToolDetails = [];   // full call/result detail from the SSE comment side-channel
 
   /* Use /v1/chat/completions with stream:true so tool calls + results
      surface as content deltas (the gateway emits ⏺/⎿ markers per
@@ -1199,16 +1194,6 @@ async function streamAssistant() {
       let nl;
       while ((nl = buf.indexOf("\n")) >= 0) {
         const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
-        /* SSE comment side-channel: the gateway emits ": pasclaw-tool {json}"
-           with the FULL tool args / result. OpenAI clients drop comments; we
-           collect them to enrich the expandable tool cards. */
-        if (line.startsWith(":")) {
-          const c = line.slice(1).trim();
-          if (c.startsWith("pasclaw-tool ")) {
-            try { streamToolDetails.push(JSON.parse(c.slice("pasclaw-tool ".length))); } catch {}
-          }
-          continue;
-        }
         if (!line.startsWith("data:")) continue;
         const data = line.slice(5).trim();
         if (data === "[DONE]") break;
@@ -1235,11 +1220,8 @@ async function streamAssistant() {
     currentAbort = null;
     if (assistantText) {
       /* Record + redraw so the finished turn renders as markdown with
-         copy/regenerate actions at the right index. Tool detail (full
-         args/result) rides along so the cards expand to the real thing;
-         it's live-only -- a reloaded turn falls back to the streamed
-         summary lines embedded in the content. */
-      recordTurn("a", assistantText, pairToolDetails(streamToolDetails));
+         copy/regenerate actions at the right index. */
+      recordTurn("a", assistantText);
       renderActive();
     } else if (bub.querySelector(".typing")) {
       /* Stream closed with no content and wasn't an error -- clear the dots. */
@@ -1353,10 +1335,10 @@ f.addEventListener("submit", e => {
    clickable summary, the result is the expandable body (Claude-Code style).
    Non-tool text is rendered as markdown as before. */
 const TV_CALL = "⏺", TV_RESULT = "⎿", TV_ERR = "✗";
-function renderAssistantHTML(src, tools) {
+function renderAssistantHTML(src) {
   const lines = String(src).split("\n");
   const out = [];
-  let buf = [], cardIdx = 0;
+  let buf = [];
   const strip = ln => ln.replace(/^\s+/, "");
   const isCall = ln => strip(ln).startsWith(TV_CALL);
   const isResult = ln => strip(ln).startsWith(TV_RESULT);
@@ -1381,62 +1363,20 @@ function renderAssistantHTML(src, tools) {
         results.push(strip(lines[i]).slice(TV_RESULT.length).trim());
         i++;
       }
-      for (let k = 0; k < calls.length; k++) {
-        out.push(toolCard(calls[k], results[k] !== undefined ? [results[k]] : [], tools && tools[cardIdx]));
-        cardIdx++;
-      }
+      for (let k = 0; k < calls.length; k++)
+        out.push(toolCard(calls[k], results[k] !== undefined ? [results[k]] : []));
     } else { buf.push(lines[i]); i++; }
   }
   flush();
   return out.join("\n");
 }
-
-/* Walk the side-channel call/result events into per-card {name,args,result,err}
-   records, aligned to call order so the Nth record maps to the Nth ⏺ card. */
-function pairToolDetails(events) {
-  const pairs = [];
-  for (const e of events || []) {
-    if (!e || !e.t) continue;
-    if (e.t === "call") { pairs.push({ name: e.name || "", args: e.args || "" }); continue; }
-    /* result: attach to the EARLIEST still-open call (FIFO), preferring a
-       name match. Results stream in call order within a batch, so FIFO keeps
-       same-name parallel calls (two fs_read) paired correctly -- a LIFO
-       match would swap their results. */
-    const open = p => p.result === undefined && p.err === undefined;
-    let tgt = null;
-    for (let i = 0; i < pairs.length; i++)
-      if (open(pairs[i]) && pairs[i].name === e.name) { tgt = pairs[i]; break; }
-    if (!tgt) for (let i = 0; i < pairs.length; i++)
-      if (open(pairs[i])) { tgt = pairs[i]; break; }
-    if (tgt) { if (e.err) tgt.err = e.err; else tgt.result = e.result || ""; }
-  }
-  return pairs;
-}
-
-function prettyJSON(s) {
-  try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return s; }
-}
-
-function toolCard(call, results, detail) {
-  let bodyHtml, isErr;
-  if (detail && (detail.args !== undefined || detail.result !== undefined || detail.err !== undefined)) {
-    /* Rich body from the side-channel: full args + full result/error. */
-    isErr = detail.err !== undefined && detail.err !== "";
-    let h = "";
-    if (detail.args) h += '<div class="tc-h">args</div><pre>' + escapeHtml(prettyJSON(detail.args)) + "</pre>";
-    if (isErr) h += '<div class="tc-h">error</div><pre>' + escapeHtml(detail.err) + "</pre>";
-    else if (detail.result !== undefined) h += '<div class="tc-h">result</div><pre>' + escapeHtml(detail.result || "(no output)") + "</pre>";
-    bodyHtml = h || "<pre>(no detail)</pre>";
-  } else {
-    /* Fallback (reloaded turn / no side-channel): the streamed ⎿ summary. */
-    const body = results.join("\n").trim();
-    isErr = body.indexOf(TV_ERR) >= 0;
-    bodyHtml = "<pre>" + (body ? escapeHtml(body) : "(no result)") + "</pre>";
-  }
+function toolCard(call, results) {
+  const body = results.join("\n").trim();
+  const isErr = body.indexOf(TV_ERR) >= 0;
   return '<details class="tool-card' + (isErr ? " err" : "") + '">'
        + '<summary><span class="tc-glyph">' + TV_CALL + "</span>"
        + '<span class="tc-call">' + escapeHtml(call) + "</span></summary>"
-       + '<div class="tc-body">' + bodyHtml + "</div>"
+       + '<div class="tc-body">' + (body ? escapeHtml(body) : "(no result)") + "</div>"
        + "</details>";
 }
 

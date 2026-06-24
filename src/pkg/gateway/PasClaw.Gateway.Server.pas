@@ -3967,9 +3967,6 @@ begin
     LogDebug('chat/completions tool_call: name=%s args=%s', [Name, ArgsJSON]);
   WriteChunk(#10 + FormatToolCallLine(Name, ArgsJSON) + #10, '');
   WriteComment('tool_call name=' + Name + ' args=' + Preview);
-  { Structured side-channel for the web UI's expandable card: full args as
-    one-line JSON in a comment OpenAI clients ignore. }
-  WriteComment('pasclaw-tool ' + FormatToolDetailJSON('call', Name, ArgsJSON, '', ''));
 end;
 
 procedure TSSEStreamer.NoteToolResult(const Name, ResultText, Err: string);
@@ -3992,8 +3989,6 @@ begin
      the call but never its result. *)
   WriteChunk(FormatToolResultLine(Name, ResultText, Err) + #10, '');
   WriteComment('tool_result name=' + Name + ' ' + Status);
-  { Structured side-channel: full result (or error) for the web UI card. }
-  WriteComment('pasclaw-tool ' + FormatToolDetailJSON('result', Name, '', ResultText, Err));
 end;
 
 procedure TSSEStreamer.Finalize(const Content, FinishReason: string);
