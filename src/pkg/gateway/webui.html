@@ -125,6 +125,22 @@
     background:linear-gradient(135deg,rgba(65,17,32,.78),rgba(37,14,25,.72));box-shadow:var(--glow-hot)}
   .toolcall{color:var(--cyan);font-weight:600}
   .toolresult{color:var(--mut);padding-left:1.2rem}
+  /* Collapsible tool-call card (Claude-Code style): a ▸ disclosure that
+     expands the result summary. Built by toolCard() in JS. */
+  .tool-card{margin:.4rem 0;border:1px solid rgba(32,246,255,.22);border-radius:10px;
+    background:rgba(2,10,20,.5);overflow:hidden}
+  .tool-card.err{border-color:rgba(255,77,109,.4)}
+  .tool-card>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:.45rem;
+    padding:.4rem .6rem;font-family:ui-monospace,monospace;font-size:12px;color:var(--cyan)}
+  .tool-card>summary::-webkit-details-marker{display:none}
+  .tool-card>summary::before{content:"▸";color:var(--mut);font-size:11px}
+  .tool-card[open]>summary::before{content:"▾"}
+  .tool-card.err>summary{color:var(--red)}
+  .tool-card .tc-glyph{color:var(--mag)}
+  .tool-card .tc-call{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .tool-card .tc-body{padding:.45rem .7rem;border-top:1px solid rgba(255,255,255,.07);
+    font-family:ui-monospace,monospace;font-size:11.5px;color:var(--mut);
+    white-space:pre-wrap;word-break:break-word}
   /* In-flight indicator inside the assistant bubble -- three pulsing dots
      while we wait for the first SSE delta. textContent = ... naturally
      overwrites this once content arrives. */
@@ -149,7 +165,12 @@
   .attach-chip button{background:transparent;border:0;color:var(--mut);cursor:pointer;
     font:inherit;padding:0 .25rem;line-height:1}
   .attach-chip button:hover{color:var(--red)}
-  #attach-btn{align-self:flex-end}
+  /* Composer toolbar sits on its own row beneath the text input. */
+  .composer-bar{display:flex;align-items:center;gap:.45rem;flex-basis:100%;order:1}
+  .composer-spacer{flex:1}
+  .composer-add{font-size:15px;line-height:1;padding:.1rem .5rem;font-weight:700}
+  #m{flex-basis:100%}
+  #model-sel{max-width:14rem}
   textarea{flex:1;background:rgba(2,5,15,.72);color:var(--fg);caret-color:var(--cyan);
     border:1px solid rgba(32,246,255,.32);border-radius:10px;padding:.55rem .65rem;font:inherit;
     resize:none;min-height:2.4rem;max-height:9rem;outline:none}
@@ -369,7 +390,12 @@
   .code-wrap code{white-space:pre}
 
   /* ===== Per-message hover actions ===== */
-  .msg-actions{display:flex;gap:.35rem;margin-top:.45rem;opacity:0;transition:opacity .12s}
+  /* Action bar lives INSIDE the bubble now (was a sibling row that made
+     user/assistant rows different heights). Right-aligned, separated from
+     the content by a hairline, revealed on hover. */
+  .msg-actions{display:flex;gap:.35rem;justify-content:flex-end;margin:.5rem -.2rem -.1rem;
+    padding-top:.4rem;border-top:1px solid rgba(255,255,255,.08);
+    opacity:0;transition:opacity .12s}
   .row:hover .msg-actions{opacity:.9}
   .msg-actions button{background:transparent;color:var(--mut);
     border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:.06rem .42rem;
@@ -412,13 +438,7 @@
     <button data-tab="stats">Stats</button>
     <button data-tab="relay">Relay</button>
     <button data-tab="settings">Settings</button>
-    <select id="model-sel" title="Model used for new messages (empty = server default)" style="margin-left:auto"></select>
-    <!-- Plan/Build mode toggle (PR #290). Sets the `mode` field on every
-         /v1/chat/completions request. PLAN mode refuses mutating tools at
-         the gateway (fs_write, shell_exec, send_message, skills_manage,
-         ...); BUILD mode is full access. -->
-    <button id="mode-btn" title="Toggle Plan / Build mode. PLAN refuses write/exec tools; BUILD is full access.">🛠 build</button>
-    <button id="theme-btn" title="Toggle light / dark theme">🌙</button>
+    <button id="theme-btn" title="Toggle light / dark theme" style="margin-left:auto">🌙</button>
     <button id="gw-token-btn" title="Set / clear gateway bearer token (used when PASCLAW_GATEWAY_TOKEN is set on the server)">🔑</button>
   </nav>
 </header>
@@ -466,9 +486,19 @@
         <textarea id="m" rows="2"
           placeholder="Ask PasClaw... (Enter to send, Shift+Enter for newline)"></textarea>
         <input id="attach-file" type="file" multiple style="display:none">
-        <button class="icon-btn" id="attach-btn" type="button"
-          title="Attach text file(s) — contents are folded into your message">📎</button>
-        <button class="primary" id="b">Send</button>
+        <!-- Toolbar under the input: mode + attach on the left, model
+             picker + Send on the right. mode-btn / model-sel were lifted
+             out of the header so everything that shapes the next message
+             lives next to the send box. -->
+        <div class="composer-bar">
+          <button id="mode-btn" class="icon-btn" type="button"
+            title="Toggle Plan / Build mode. PLAN refuses write/exec tools; BUILD is full access.">🛠 build</button>
+          <button class="icon-btn composer-add" id="attach-btn" type="button"
+            title="Attach text file(s) — contents are folded into your message">+</button>
+          <span class="composer-spacer"></span>
+          <select id="model-sel" title="Model used for new messages (empty = server default)"></select>
+          <button class="primary" id="b">Send</button>
+        </div>
       </form>
     </div>
   </div>
@@ -1057,7 +1087,7 @@ function renderTurn(role, text, index) {
 function fillBubble(bub, text, asMarkdown) {
   if (asMarkdown) {
     bub.classList.add("md");
-    bub.innerHTML = renderMarkdown(text);
+    bub.innerHTML = renderAssistantHTML(text);
     wireCopyButtons(bub);
   } else {
     bub.classList.remove("md");
@@ -1077,7 +1107,9 @@ function attachActions(row, role, index) {
   bar.appendChild(mk("copy", e => copyText(row._raw, e.currentTarget)));
   if (role === "u") bar.appendChild(mk("edit", () => editTurn(index)));
   if (role === "a") bar.appendChild(mk("regenerate", () => regenerateAt(index)));
-  row.appendChild(bar);
+  /* Inside the bubble so the action row never changes the bubble's
+     footprint -- user and assistant bubbles stay the same width. */
+  (row.querySelector(".bub") || row).appendChild(bar);
 }
 
 /* Drop the turn at `index` and everything after it, then re-stream a fresh
@@ -1295,6 +1327,59 @@ f.addEventListener("submit", e => {
    FIRST and only our own tags are injected, so model output can't smuggle
    markup. Deliberately minimal -- no tables/nested lists -- to stay
    correct and tiny rather than feature-complete. */
+/* ===== Tool-call cards =====
+   The gateway streams tool activity as visible content lines
+   (PasClaw.Gateway.ToolView): "⏺ name(arg)" for the call, "⎿ summary" for
+   the result. Rather than leave those as flat text, group each call with
+   its result line(s) into a collapsible <details> card -- the call is the
+   clickable summary, the result is the expandable body (Claude-Code style).
+   Non-tool text is rendered as markdown as before. */
+const TV_CALL = "⏺", TV_RESULT = "⎿", TV_ERR = "✗";
+function renderAssistantHTML(src) {
+  const lines = String(src).split("\n");
+  const out = [];
+  let buf = [];
+  const strip = ln => ln.replace(/^\s+/, "");
+  const isCall = ln => strip(ln).startsWith(TV_CALL);
+  const isResult = ln => strip(ln).startsWith(TV_RESULT);
+  const flush = () => { if (buf.length) { out.push(renderMarkdown(buf.join("\n"))); buf = []; } };
+  let i = 0;
+  while (i < lines.length) {
+    if (isCall(lines[i])) {
+      flush();
+      /* A parallel batch announces EVERY call before ANY result
+         (PasClaw.Tools.ToolLoop fires all OnToolCall, then all OnToolResult,
+         in matching order), and the gateway prefixes each call line with a
+         blank line. So collect the whole run of calls (skipping those
+         blanks), then the run of results, and pair them BY INDEX -- a naive
+         "result immediately follows its call" rule mis-assigns parallel
+         batches (call A, call B, result A, result B). */
+      const calls = [], results = [];
+      while (i < lines.length && (isCall(lines[i]) || strip(lines[i]) === "")) {
+        if (isCall(lines[i])) calls.push(strip(lines[i]).slice(TV_CALL.length).trim());
+        i++;
+      }
+      while (i < lines.length && isResult(lines[i])) {
+        results.push(strip(lines[i]).slice(TV_RESULT.length).trim());
+        i++;
+      }
+      for (let k = 0; k < calls.length; k++)
+        out.push(toolCard(calls[k], results[k] !== undefined ? [results[k]] : []));
+    } else { buf.push(lines[i]); i++; }
+  }
+  flush();
+  return out.join("\n");
+}
+function toolCard(call, results) {
+  const body = results.join("\n").trim();
+  const isErr = body.indexOf(TV_ERR) >= 0;
+  return '<details class="tool-card' + (isErr ? " err" : "") + '">'
+       + '<summary><span class="tc-glyph">' + TV_CALL + "</span>"
+       + '<span class="tc-call">' + escapeHtml(call) + "</span></summary>"
+       + '<div class="tc-body">' + (body ? escapeHtml(body) : "(no result)") + "</div>"
+       + "</details>";
+}
+
 function renderMarkdown(src) {
   const esc = escapeHtml;
   const inline = s => {
