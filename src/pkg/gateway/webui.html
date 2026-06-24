@@ -1339,20 +1339,32 @@ function renderAssistantHTML(src) {
   const lines = String(src).split("\n");
   const out = [];
   let buf = [];
+  const strip = ln => ln.replace(/^\s+/, "");
+  const isCall = ln => strip(ln).startsWith(TV_CALL);
+  const isResult = ln => strip(ln).startsWith(TV_RESULT);
   const flush = () => { if (buf.length) { out.push(renderMarkdown(buf.join("\n"))); buf = []; } };
   let i = 0;
   while (i < lines.length) {
-    const s = lines[i].replace(/^\s+/, "");
-    if (s.startsWith(TV_CALL)) {
+    if (isCall(lines[i])) {
       flush();
-      const call = s.slice(TV_CALL.length).trim();
-      const results = [];
-      i++;
-      while (i < lines.length && lines[i].replace(/^\s+/, "").startsWith(TV_RESULT)) {
-        results.push(lines[i].replace(/^\s+/, "").slice(TV_RESULT.length).trim());
+      /* A parallel batch announces EVERY call before ANY result
+         (PasClaw.Tools.ToolLoop fires all OnToolCall, then all OnToolResult,
+         in matching order), and the gateway prefixes each call line with a
+         blank line. So collect the whole run of calls (skipping those
+         blanks), then the run of results, and pair them BY INDEX -- a naive
+         "result immediately follows its call" rule mis-assigns parallel
+         batches (call A, call B, result A, result B). */
+      const calls = [], results = [];
+      while (i < lines.length && (isCall(lines[i]) || strip(lines[i]) === "")) {
+        if (isCall(lines[i])) calls.push(strip(lines[i]).slice(TV_CALL.length).trim());
         i++;
       }
-      out.push(toolCard(call, results));
+      while (i < lines.length && isResult(lines[i])) {
+        results.push(strip(lines[i]).slice(TV_RESULT.length).trim());
+        i++;
+      }
+      for (let k = 0; k < calls.length; k++)
+        out.push(toolCard(calls[k], results[k] !== undefined ? [results[k]] : []));
     } else { buf.push(lines[i]); i++; }
   }
   flush();
