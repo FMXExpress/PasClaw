@@ -61,8 +61,9 @@
   /* ===== Chat tab ===== */
   #tab-chat{display:none}
   #tab-chat.active{display:flex}
-  aside.sessions{flex:0 0 14rem;border-right:1px solid rgba(255,255,255,.08);
-    display:flex;flex-direction:column;background:rgba(2,5,15,.32)}
+  aside.sessions{flex:0 0 10rem;min-width:0;border-right:1px solid rgba(255,255,255,.08);
+    display:flex;flex-direction:column;background:rgba(2,5,15,.32);overflow:hidden}
+  aside.sessions.collapsed,.chat-splitter.collapsed{display:none}
   aside.sessions header{margin:0;padding:.55rem .7rem;border:0;border-radius:0;
     background:transparent;box-shadow:none;display:flex;align-items:center;justify-content:space-between}
   aside.sessions header .title{font-size:11px;color:var(--mut);text-transform:uppercase;letter-spacing:.1em}
@@ -465,6 +466,7 @@
     <div class="chat-splitter" id="chat-splitter" title="Drag to resize"></div>
     <div class="chat-pane">
       <div class="chat-toolbar">
+        <button class="icon-btn" id="sidebar-toggle" title="Collapse / show the session list">☰</button>
         <button class="icon-btn" id="params-toggle" title="Per-chat parameters">⚙ Params</button>
         <span id="params-summary" class="params-summary"></span>
       </div>
@@ -1080,20 +1082,31 @@ function makeRow(role) {
   return r;
 }
 
-/* Drag the divider to resize the session sidebar; width persists across
-   sessions in localStorage and is clamped to a sane range. */
+/* Resize the session sidebar by dragging the divider, or collapse it
+   entirely with the toolbar toggle. Both the width and collapsed state
+   persist in localStorage. The drag range is intentionally wide -- the
+   sidebar can shrink to a sliver or grow until the chat pane is nearly
+   gone, clamped only by the current viewport. */
 (function initChatSplitter() {
   const run = () => {
     const aside = document.querySelector("aside.sessions");
     const sp = document.getElementById("chat-splitter");
+    const toggle = document.getElementById("sidebar-toggle");
     if (!aside || !sp) return;
-    const KEY = "pasclaw.sidebarWidth", MIN = 120, MAX = 600;
-    const saved = parseInt(localStorage.getItem(KEY), 10);
-    if (saved >= MIN && saved <= MAX) aside.style.flexBasis = saved + "px";
+    const WKEY = "pasclaw.sidebarWidth", CKEY = "pasclaw.sidebarCollapsed", MIN = 44;
+    const maxW = () => Math.max(MIN, window.innerWidth - 120);
+    const saved = parseInt(localStorage.getItem(WKEY), 10);
+    if (saved >= MIN) aside.style.flexBasis = Math.min(saved, maxW()) + "px";
+    if (localStorage.getItem(CKEY) === "1") { aside.classList.add("collapsed"); sp.classList.add("collapsed"); }
+    if (toggle) toggle.addEventListener("click", () => {
+      const collapsed = aside.classList.toggle("collapsed");
+      sp.classList.toggle("collapsed", collapsed);
+      localStorage.setItem(CKEY, collapsed ? "1" : "0");
+    });
     let dragging = false;
     const onMove = e => {
       if (!dragging) return;
-      const w = Math.max(MIN, Math.min(MAX, e.clientX - aside.getBoundingClientRect().left));
+      const w = Math.max(MIN, Math.min(maxW(), e.clientX - aside.getBoundingClientRect().left));
       aside.style.flexBasis = w + "px";
       e.preventDefault();
     };
@@ -1102,7 +1115,7 @@ function makeRow(role) {
       dragging = false;
       sp.classList.remove("drag");
       document.body.style.userSelect = "";
-      localStorage.setItem(KEY, String(Math.round(aside.getBoundingClientRect().width)));
+      localStorage.setItem(WKEY, String(Math.round(aside.getBoundingClientRect().width)));
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", stop);
     };
