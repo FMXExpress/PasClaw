@@ -1357,21 +1357,34 @@ function renderAssistantHTML(src, tools) {
   const lines = String(src).split("\n");
   const out = [];
   let buf = [], cardIdx = 0;
+  const strip = ln => ln.replace(/^\s+/, "");
+  const isCall = ln => strip(ln).startsWith(TV_CALL);
+  const isResult = ln => strip(ln).startsWith(TV_RESULT);
   const flush = () => { if (buf.length) { out.push(renderMarkdown(buf.join("\n"))); buf = []; } };
   let i = 0;
   while (i < lines.length) {
-    const s = lines[i].replace(/^\s+/, "");
-    if (s.startsWith(TV_CALL)) {
+    if (isCall(lines[i])) {
       flush();
-      const call = s.slice(TV_CALL.length).trim();
-      const results = [];
-      i++;
-      while (i < lines.length && lines[i].replace(/^\s+/, "").startsWith(TV_RESULT)) {
-        results.push(lines[i].replace(/^\s+/, "").slice(TV_RESULT.length).trim());
+      /* A parallel batch announces EVERY call before ANY result
+         (PasClaw.Tools.ToolLoop fires all OnToolCall, then all OnToolResult,
+         in matching order), and the gateway prefixes each call line with a
+         blank line. So collect the whole run of calls (skipping those
+         blanks), then the run of results, and pair them BY INDEX -- a naive
+         "result immediately follows its call" rule mis-assigns parallel
+         batches (call A, call B, result A, result B). */
+      const calls = [], results = [];
+      while (i < lines.length && (isCall(lines[i]) || strip(lines[i]) === "")) {
+        if (isCall(lines[i])) calls.push(strip(lines[i]).slice(TV_CALL.length).trim());
         i++;
       }
-      out.push(toolCard(call, results, tools && tools[cardIdx]));
-      cardIdx++;
+      while (i < lines.length && isResult(lines[i])) {
+        results.push(strip(lines[i]).slice(TV_RESULT.length).trim());
+        i++;
+      }
+      for (let k = 0; k < calls.length; k++) {
+        out.push(toolCard(calls[k], results[k] !== undefined ? [results[k]] : [], tools && tools[cardIdx]));
+        cardIdx++;
+      }
     } else { buf.push(lines[i]); i++; }
   }
   flush();
@@ -1385,12 +1398,16 @@ function pairToolDetails(events) {
   for (const e of events || []) {
     if (!e || !e.t) continue;
     if (e.t === "call") { pairs.push({ name: e.name || "", args: e.args || "" }); continue; }
-    /* result: attach to the most recent still-open call, preferring a name match. */
+    /* result: attach to the EARLIEST still-open call (FIFO), preferring a
+       name match. Results stream in call order within a batch, so FIFO keeps
+       same-name parallel calls (two fs_read) paired correctly -- a LIFO
+       match would swap their results. */
+    const open = p => p.result === undefined && p.err === undefined;
     let tgt = null;
-    for (let i = pairs.length - 1; i >= 0; i--)
-      if (pairs[i].result === undefined && pairs[i].err === undefined && pairs[i].name === e.name) { tgt = pairs[i]; break; }
-    if (!tgt) for (let i = pairs.length - 1; i >= 0; i--)
-      if (pairs[i].result === undefined && pairs[i].err === undefined) { tgt = pairs[i]; break; }
+    for (let i = 0; i < pairs.length; i++)
+      if (open(pairs[i]) && pairs[i].name === e.name) { tgt = pairs[i]; break; }
+    if (!tgt) for (let i = 0; i < pairs.length; i++)
+      if (open(pairs[i])) { tgt = pairs[i]; break; }
     if (tgt) { if (e.err) tgt.err = e.err; else tgt.result = e.result || ""; }
   }
   return pairs;
