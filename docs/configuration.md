@@ -208,7 +208,7 @@ There is no escape sequence for a literal `${UPPER}` string in a config value. W
 | `tool_output_cap` | `0` | Truncate tool outputs over this many bytes; model dereferences via `tool_output_get`. |
 | `auto_router.enabled` | `false` | Cheap-tier routing for easy turns. See [Providers](./providers.md). |
 | `stats_collection_enabled` | `false` | Persist per-turn counters into each session JSON's `meta.stats` block. |
-| `orient_task_aware` | `false` | Lexical task-vs-section scoring for `MEMORY.md` injection. |
+| `orient_task_aware` | `false` | Lexical task-vs-section scoring for `MEMORY.md` injection. Off on every profile; enable per-run with `pasclaw agent --orient` (`--no-orient` forces it back off) or persistently here. |
 | `shell_backend` | `"local"` | `"local"` or `"docker"`. See [Security](./security.md). |
 | `compaction.threshold_tokens` | `50000` | Trigger mid-loop history compaction over this many tokens. |
 | `allow_senders` | `[]` | Identity allowlist for inbound channel messages. See [Channels](./channels.md). |

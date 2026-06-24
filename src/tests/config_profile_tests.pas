@@ -215,7 +215,8 @@ begin
     The config.json has no condense_reversible field (since it
     matches the default and our ToJSON suppresses it). After load:
       tool_output_cap should be 8192 (profile value, no override)
-      orient_task_aware should be True (profile set, no override)
+      orient_task_aware should stay False (no profile enables it any
+        more -- it's CLI-only via --orient)
     Then write an explicit operator value and prove it wins. }
   CfgPath := JoinPath(Home, 'config.json');
 
@@ -225,7 +226,7 @@ begin
   try
     AssertTrue(C.CondenseReversible, 'profile sets CondenseReversible');
     AssertTrue(C.ToolOutputCap = 8192, 'profile sets ToolOutputCap=8192');
-    AssertTrue(C.OrientTaskAware, 'profile sets OrientTaskAware');
+    AssertTrue(not C.OrientTaskAware, 'no profile enables orient (CLI-only via --orient)');
   finally
     C.Free;
   end;
@@ -263,7 +264,7 @@ begin
   try
     { max-build inherits low-token, then overrides tool_output_cap to 16384. }
     AssertTrue(C.ToolOutputCap = 16384, 'max-build override wins over parent');
-    AssertTrue(C.OrientTaskAware, 'low-token field inherited through max-build');
+    AssertTrue(not C.OrientTaskAware, 'orient stays off through the inherit chain (CLI-only)');
     AssertTrue(C.WebFetchEnabled, 'max-build sets WebFetchEnabled');
     AssertTrue(C.SelfImprovingSkills.SelfManage,
                'max-build sets self_manage on top of progressive_disclosure from parent');
@@ -320,7 +321,7 @@ begin
     Saved.StatsCollectionEnabled                := False;  { default True  -> opt-out }
     Saved.CheckpointsEnabled                    := False;  { default True  -> opt-out }
     Saved.CheckpointsKeepLast                   := 16;     { default 32    -> custom }
-    Saved.OrientTaskAware                       := False;  { default True  -> opt-out }
+    Saved.OrientTaskAware                       := True;   { default False -> opt-in (orient default reverted to off) }
     Saved.HashlineEnabled                       := False;  { default True  -> opt-out }
     Saved.PromptCache.TTL                       := '5m';   { default '1h'  -> non-default }
     Saved.AutoRouter.Enabled                    := False;  { default True  -> opt-out }
@@ -342,8 +343,8 @@ begin
                'checkpoints_enabled opt-out persisted');
     AssertEqI(Loaded.CheckpointsKeepLast, 16,
               'checkpoints_keep_last custom value persisted');
-    AssertTrue(not Loaded.OrientTaskAware,
-               'orient_task_aware opt-out persisted');
+    AssertTrue(Loaded.OrientTaskAware,
+               'orient_task_aware opt-in persisted');
     AssertTrue(not Loaded.HashlineEnabled,
                'hashline_enabled opt-out persisted');
     AssertEqS(Loaded.PromptCache.TTL, '5m',

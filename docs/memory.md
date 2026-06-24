@@ -77,7 +77,13 @@ The system prompt always carries:
 3. Yesterday's daily note (`<yesterday>.md`).
 4. `SCARS.md` if present.
 
-Operators wanting **only** task-relevant slices instead of the verbatim files:
+Operators wanting **only** task-relevant slices instead of the verbatim files can try it for a single run without editing config:
+
+```sh
+pasclaw agent --orient -m "…"      # --no-orient forces it back off
+```
+
+or enable it persistently in `config.json`:
 
 ```json
 "orient_task_aware": true
@@ -87,7 +93,7 @@ Operators wanting **only** task-relevant slices instead of the verbatim files:
 
 The task hint is the current user message (one-shot `-m`, each interactive turn, each `/goal` turn). Call sites without a clear task (gateway requests, embedders that don't pass one) keep verbatim whole-file injection regardless of the flag.
 
-Off by default.
+Off by default on every profile — the only ways to turn it on are the `--orient` CLI flag (per run) or `orient_task_aware: true` (persistent).
 
 Inspired by [Abbasi-Alain/atlas](https://github.com/Abbasi-Alain/atlas)'s `orient` step.
 

@@ -12,9 +12,11 @@
                 grounded lean-edit shape (bench/swe/README.md): web_fetch,
                 vault, and memory_fetch OFF out-of-box (operators turn
                 them on via onboarding when they actually use them); the
-                six zero-prompt-cost behavioral toggles (orient_task_aware,
-                checkpoints, stats, 1h prompt cache, distiller, auto-
-                router) ON by default. fs_edit_hashline ON by default
+                five zero-prompt-cost behavioral toggles (checkpoints,
+                stats, 1h prompt cache, distiller, auto-router) ON by
+                default. orient_task_aware is OFF by default (whole-file
+                MEMORY injection is the contract; opt in per-run with
+                `pasclaw agent --orient`). fs_edit_hashline ON by default
                 (small-model operators opt out via onboarding's
                 PromptHashline question or the --no-hashline CLI flag);
                 fs_grep registers UNCONDITIONALLY -- its six ripgrep-
@@ -163,11 +165,11 @@ const
 
   Profile_LowToken: string =
     '{' +
-    '"_description":"Minimise tokens. Condenser on, output cap, MEMORY ' +
-    'task-aware, prompt cache, progressive disclosure, auto-router.",' +
+    '"_description":"Minimise tokens. Condenser on, output cap, prompt ' +
+    'cache, progressive disclosure, auto-router. (MEMORY task-aware ' +
+    'orient is off by default -- enable per-run with --orient.)",' +
     '"condense_reversible":true,' +
     '"tool_output_cap":8192,' +
-    '"orient_task_aware":true,' +
     '"prompt_cache":{"enabled":true,"ttl":"5m"},' +
     '"self_improving_skills":{' +
       '"progressive_disclosure":true' +
@@ -220,10 +222,11 @@ const
 
   Profile_AllOn: string =
     '{' +
-    '"_description":"Every boolean knob flipped on. Surface-area / ' +
-    'integration testing only -- not recommended for daily use.",' +
+    '"_description":"Every boolean knob flipped on, EXCEPT orient ' +
+    '(task-aware MEMORY slicing) which is CLI-only via --orient. ' +
+    'Surface-area / integration testing only -- not recommended for ' +
+    'daily use.",' +
     '"_inherits":["max-build"],' +
-    '"orient_task_aware":true,' +
     '"self_improving_skills":{' +
       '"auto_approve":true' +
     '}' +
@@ -242,7 +245,9 @@ const
     '"_description":"Stock TConfig.Create defaults. Adopted the ' +
     'bench-grounded lean-edit shape (bench/swe/README.md): web_fetch ' +
     '+ vault + memory_fetch OFF (operators opt in via onboarding); ' +
-    '6 zero-prompt-cost behavioral toggles ON (orient, checkpoints, ' +
+    'orient (task-aware MEMORY slicing) OFF -- whole-file injection is ' +
+    'the contract, opt in per-run with --orient; 5 zero-prompt-cost ' +
+    'behavioral toggles ON (checkpoints, ' +
     'stats, 1h cache, distiller, auto-router). hashline_enabled gates ' +
     'fs_edit_hashline ONLY -- defaults True; small-model operators opt ' +
     'out via the onboarding PromptHashline question or --no-hashline ' +
@@ -255,7 +260,6 @@ const
     '"promptware_enabled":true,' +
     '"condense_reversible":false,' +
     '"tool_output_cap":0,' +
-    '"orient_task_aware":true,' +
     '"stats_collection_enabled":true,' +
     '"checkpoints_enabled":true,' +
     '"checkpoints_keep_last":32,' +

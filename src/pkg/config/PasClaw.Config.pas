@@ -642,8 +642,10 @@ type
        sections of MEMORY.md / daily notes that lexically overlap the
        task, instead of the whole files (PasClaw.Agent.Orient). Whole-
        file injection stays the default because slicing changes what
-       the model sees -- operators opt in via "orient_task_aware":
-       true once their MEMORY.md outgrows the always-inject budget. *)
+       the model sees -- operators opt in per-run with
+       `pasclaw agent --orient` (--no-orient forces it back off), or
+       persistently via "orient_task_aware": true, once their MEMORY.md
+       outgrows the always-inject budget. *)
     OrientTaskAware:       Boolean;
     (* Off-by-default since PR #289: reversible condensation (CCR,
        headroom-inspired). When True, a condenser (JSON, shell
@@ -931,7 +933,7 @@ begin
   CheckpointsEnabled     := True;  { on by default -- zero prompt cost, prevents lost work on multi-edit sessions. }
   CheckpointsKeepLast    := 32;    { keep last 32 atomic edit checkpoints. }
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
-  OrientTaskAware        := True;  { on by default -- MEMORY task-aware injection. Zero prompt cost when MEMORY.md is absent; saves tokens when present. }
+  OrientTaskAware        := False; { off by default -- whole-file MEMORY injection is the contract; opt in per-run with `pasclaw agent --orient` or "orient_task_aware":true. }
   CondenseReversible     := False; { off by default -- raw tool output preserved verbatim. Onboarding asks (default N). Flipped from on-by-default in PR #289 so a fresh deploy doesn't silently rewrite ls/grep output behind the operator's back. }
   { HashlineEnabled gates fs_edit_hashline ONLY (PR #314 split the
     previous bundled gate -- fs_grep registers unconditionally).
@@ -1224,8 +1226,10 @@ begin
       (same rule as render_markdown / vector_search_enabled). }
     if not PromptwareEnabled then
       Root.PutBool('promptware_enabled', False);
-    if not OrientTaskAware then
-      Root.PutBool('orient_task_aware', False);
+    { Default False -- emit only the explicit-on so fresh configs stay
+      tidy and an opt-in round-trips. }
+    if OrientTaskAware then
+      Root.PutBool('orient_task_aware', True);
     { condense_reversible: default flipped to OFF in PR #289. Emit
       only the explicit-on so fresh configs stay tidy. }
     if CondenseReversible then
