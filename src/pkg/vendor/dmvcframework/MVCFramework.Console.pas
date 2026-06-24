@@ -35,15 +35,19 @@ unit MVCFramework.Console;
 {$I dmvcframework.inc}
 {$WARN UNIT_PLATFORM OFF}
 
-// PasClaw patch: this vendored unit implements only Windows and Linux, but its
-// "Linux" path is generic POSIX (termios / select / ioctl via the Posix.*
-// units), which is equally valid on Delphi macOS (dccosx64). macOS defines
-// MACOS, not LINUX, so without this it falls into the Windows {$ELSE} branches
-// and fails to compile (WinApi / Init / UpdateMode / GotoXY undeclared, see the
-// dccosx64 errors). Route the desktop-macOS build through the POSIX path. The
-// {$DEFINE} is scoped to this unit's compilation only.
+// PasClaw patch: this vendored unit implements only Windows and Linux. Its
+// "Linux" path is otherwise generic POSIX (termios / select / ioctl via the
+// Posix.* units), which is equally valid on Delphi desktop macOS (dccosx64) --
+// macOS defines MACOS, not LINUX, so without this the build falls into the
+// Windows {$ELSE} branches and fails to compile (WinApi / Init / UpdateMode /
+// GotoXY undeclared, see the dccosx64 errors). We reuse the POSIX path, but two
+// declarations in that block ARE Linux-specific -- the TIOCGWINSZ ioctl value
+// and the 'libc.so.6' soname for select -- and get a real Darwin branch below
+// (gated by PASCLAW_CONSOLE_DARWIN), since macOS has a different TIOCGWINSZ and
+// no libc.so.6. Both {$DEFINE}s are scoped to this unit's compilation only.
 {$IF defined(MACOS) and not defined(IOS) and not defined(LINUX)}
   {$DEFINE LINUX}
+  {$DEFINE PASCLAW_CONSOLE_DARWIN}
 {$IFEND}
 
 interface
@@ -594,10 +598,19 @@ type
   end;
 
 const
+  {$IFDEF PASCLAW_CONSOLE_DARWIN}
+  TIOCGWINSZ = $40087468;   // macOS/BSD value (Linux uses $5413)
+  {$ELSE}
   TIOCGWINSZ = $5413;
+  {$ENDIF}
 
+{$IFDEF PASCLAW_CONSOLE_DARWIN}
+function __select(nfds: Integer; readfds, writefds, exceptfds: Pointer;
+  timeout: Pointer): Integer; cdecl; external '/usr/lib/libc.dylib' name 'select';
+{$ELSE}
 function __select(nfds: Integer; readfds, writefds, exceptfds: Pointer;
   timeout: Pointer): Integer; cdecl; external 'libc.so.6' name 'select';
+{$ENDIF}
 
 var
   GOriginalTermios: termios;
