@@ -35,6 +35,17 @@ unit MVCFramework.Console;
 {$I dmvcframework.inc}
 {$WARN UNIT_PLATFORM OFF}
 
+// PasClaw patch: this vendored unit implements only Windows and Linux, but its
+// "Linux" path is generic POSIX (termios / select / ioctl via the Posix.*
+// units), which is equally valid on Delphi macOS (dccosx64). macOS defines
+// MACOS, not LINUX, so without this it falls into the Windows {$ELSE} branches
+// and fails to compile (WinApi / Init / UpdateMode / GotoXY undeclared, see the
+// dccosx64 errors). Route the desktop-macOS build through the POSIX path. The
+// {$DEFINE} is scoped to this unit's compilation only.
+{$IF defined(MACOS) and not defined(IOS) and not defined(LINUX)}
+  {$DEFINE LINUX}
+{$IFEND}
+
 interface
 
 uses
