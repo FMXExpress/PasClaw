@@ -78,6 +78,14 @@ uses
   PasClaw.Markdown.Render;
 
 type
+  (* --orient / --no-orient: per-invocation override of
+     Cfg.OrientTaskAware (task-aware MEMORY slicing, PasClaw.Agent.Orient).
+     ooUnset = leave whatever config.json / the profile resolved to;
+     ooOn = force task-aware slicing on for this run; ooOff = force whole-
+     file injection. The feature ships off on every profile, so --orient
+     is the normal way to try it without editing config.json. *)
+  TOrientOverride = (ooUnset, ooOn, ooOff);
+
   TAgentArgs = record
     Message:       string;
     Model:         string;
@@ -146,6 +154,9 @@ type
        means "fall through to the env var / config.json / no-profile
        chain". *)
     Profile: string;
+    { --orient / --no-orient override of Cfg.OrientTaskAware. See
+      TOrientOverride. ooUnset = honour config/profile. }
+    OrientOverride: TOrientOverride;
   end;
 
   TLoopHandlers = class
@@ -194,6 +205,7 @@ begin
   Result.GoalObjective := '';
   Result.GoalMaxIters  := 0;  { 0 = use DefaultGoalMaxIter }
   Result.Quiet         := False;
+  Result.OrientOverride := ooUnset;
 end;
 
 function ParseArgs(const Argv: array of string; var A: TAgentArgs): Boolean;
@@ -219,6 +231,8 @@ begin
     if Argv[i] = '--no-tools'    then begin A.NoTools    := True; Inc(i); Continue; end;
     if Argv[i] = '--no-mcp'      then begin A.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline' then begin A.NoHashline := True; Inc(i); Continue; end;
+    if Argv[i] = '--orient'      then begin A.OrientOverride := ooOn;  Inc(i); Continue; end;
+    if Argv[i] = '--no-orient'   then begin A.OrientOverride := ooOff; Inc(i); Continue; end;
     if Argv[i] = '--no-plan'     then begin A.NoPlan     := True; Inc(i); Continue; end;
     if Argv[i] = '--goal-objective' then begin if i = High(Argv) then Exit(False); A.GoalObjective := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--goal-max-iters' then begin if i = High(Argv) then Exit(False); A.GoalMaxIters := StrToIntDef(Argv[i + 1], A.GoalMaxIters); Inc(i, 2); Continue; end;
@@ -1738,12 +1752,18 @@ begin
     PrintLnErr('usage: pasclaw agent [-m "msg"] [--model M] [--provider P] [--system S]');
     PrintLnErr('                     [--thinking low|medium|high] [--max-tokens N]');
     PrintLnErr('                     [--max-iterations N] [--no-tools] [-q|--quiet]');
-    PrintLnErr('                     [--mode plan|build] [--plan|--build]');
+    PrintLnErr('                     [--orient|--no-orient] [--mode plan|build] [--plan|--build]');
     PrintLnErr('                     [--profile baseline|low-token|security|max-build|all-on|<custom>]');
     Exit(1);
   end;
 
   Cfg := LoadConfig(A.Profile);
+  { --orient / --no-orient override task-aware MEMORY slicing for this
+    run, on top of whatever config.json / the profile resolved to. The
+    feature ships off on every profile, so --orient is the no-edit way
+    to try it. }
+  if A.OrientOverride = ooOn  then Cfg.OrientTaskAware := True
+  else if A.OrientOverride = ooOff then Cfg.OrientTaskAware := False;
   ConfigureSandbox(Cfg.Sandbox, '');
   { Install the active shell backend BEFORE any session can spawn a
     container or build its tool registry (shell_exec's description
