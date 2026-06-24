@@ -51,11 +51,13 @@ const
   {$IFDEF MSWINDOWS}
   ORT_LIB = 'onnxruntime.dll';
   {$ELSE}
-    {$IFDEF DARWIN}
+    { macOS: FPC defines DARWIN; Delphi (dccosx64) defines MACOS/OSX. Match
+      onnxruntime_pas_api so Delphi macOS resolves the .dylib, not the .so. }
+    {$IF defined(DARWIN) or defined(MACOS) or defined(OSX)}
   ORT_LIB = 'onnxruntime.dylib';
     {$ELSE}
   ORT_LIB = 'onnxruntime.so';
-    {$ENDIF}
+    {$IFEND}
   {$ENDIF}
 
 implementation
