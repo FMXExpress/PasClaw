@@ -67,9 +67,11 @@ type
   const dllname='onnxruntime.dll';
   {$endif}
 
-  {$ifdef darwin}
+  { macOS: FPC defines `darwin`; Delphi (dccosx64) defines MACOS/OSX instead,
+    so cover both or the dccosx64 build leaves dllname undeclared (E2003). }
+  {$if defined(darwin) or defined(MACOS) or defined(OSX)}
   const dllname='onnxruntime.dylib';
-  {$endif}
+  {$ifend}
   {$ifdef linux}
   const dllname='onnxruntime.so';
   {$endif}
