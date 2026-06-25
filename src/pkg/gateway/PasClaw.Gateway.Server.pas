@@ -262,14 +262,21 @@ type
                             AResp: TIdHTTPResponseInfo);
     procedure HandleFSPeek(ARequest: TIdHTTPRequestInfo;
                             AResp: TIdHTTPResponseInfo);
-    procedure HandleCheckpointsList(AResp: TIdHTTPResponseInfo);
+    procedure HandleCheckpointsList(ARequest: TIdHTTPRequestInfo;
+                            AResp: TIdHTTPResponseInfo);
     procedure HandleCheckpointsUndo(ARequest: TIdHTTPRequestInfo;
                             AResp: TIdHTTPResponseInfo);
     procedure HandleCheckpointsRedo(ARequest: TIdHTTPRequestInfo;
                             AResp: TIdHTTPResponseInfo);
-    { BeginTurn + RunToolLoop, serialized under FCheckpointTurnLock when
-      checkpoints are on (process-global turn state -- see field comment). }
-    function RunCheckpointedLoop(const Cfg: TToolLoopConfig;
+    { Read the X-PasClaw-Session header (the active chat) and re-scope the
+      process-global checkpoint state to it. Both MUST run under
+      FCheckpointTurnLock (they mutate global state via InitCheckpoints). }
+    function ReqSessionId(ARequest: TIdHTTPRequestInfo): string;
+    procedure ApplyCheckpointSession(const ReqSession: string);
+    { ApplyCheckpointSession(reqSession) + BeginTurn + RunToolLoop, serialized
+      under FCheckpointTurnLock when checkpoints are on. }
+    function RunCheckpointedLoop(const ReqSession: string;
+                            const Cfg: TToolLoopConfig;
                             var Messages: array of TMessage;
                             out Loop: TToolLoopResult): Boolean;
     procedure HandleLogs(AContext: TIdContext;
@@ -607,16 +614,37 @@ begin
       Result := Result + UpCase(S[i]);
 end;
 
-function GatewayCheckpointSession: string;
-{ Scope the gateway's checkpoint archive to the active workspace: snapshots
-  store absolute paths, so two gateway runs under different workspaces must not
-  share one timeline (else undo in B could restore A's files). FNV-1a of the
-  canonical workspace path -> a short, stable session-dir name. }
+function CheckpointSessionId(const ReqSession: string): string;
+{ Per-chat checkpoint timeline. When the web UI sends its chat session id
+  (X-PasClaw-Session), each chat gets its own undo history; otherwise (e.g. a
+  brand-new unsaved chat) fall back to a per-workspace timeline so edits are
+  still captured. Snapshots store absolute paths, so the workspace fallback is
+  FNV-1a of the canonical workspace path -- two gateways under different
+  workspaces never share it. }
 var
-  Ws: string;
+  Ws, Clean: string;
+  c: Char;
   H: LongWord;
   i: Integer;
 begin
+  Clean := Trim(ReqSession);
+  if Clean <> '' then
+  begin
+    { Sanitise to a filesystem-safe dir name (session ids are already tame, but
+      never trust a header). }
+    Result := '';
+    for i := 1 to Length(Clean) do
+    begin
+      c := Clean[i];
+      if ((c >= 'A') and (c <= 'Z')) or ((c >= 'a') and (c <= 'z')) or
+         ((c >= '0') and (c <= '9')) or (c = '-') or (c = '_') or (c = '.') then
+        Result := Result + c
+      else
+        Result := Result + '_';
+    end;
+    Result := 'sess_' + Copy(Result, 1, 80);
+    Exit;
+  end;
   Ws := CurrentWorkspace;
   if Ws = '' then Ws := GetHome;
   H := 2166136261;
@@ -637,12 +665,12 @@ begin
   FProvider := Provider;
   FRegistry := Registry;
   FMaxIter  := 25;
-  { Wire the per-turn workspace checkpoint system into the gateway (it was
-    CLI/TUI-only). Scoped to the active workspace (not a single global name) so
-    runs under different workspaces don't share a timeline; BeginTurn fires per
-    chat turn, serialized via FCheckpointTurnLock. No-op when disabled. }
+  { Wire the per-turn checkpoint system into the gateway (it was CLI/TUI-only).
+    Init with the per-workspace fallback session; each request re-scopes to its
+    chat's session id (X-PasClaw-Session) via ApplyCheckpointSession under
+    FCheckpointTurnLock before BeginTurn. No-op when disabled. }
   CC.Enabled   := FCfg.CheckpointsEnabled;
-  CC.SessionId := GatewayCheckpointSession;
+  CC.SessionId := CheckpointSessionId('');
   CC.Root      := JoinPath(GetHome, 'workspace/checkpoints');
   CC.KeepLast  := FCfg.CheckpointsKeepLast;
   InitCheckpoints(CC);
@@ -1168,7 +1196,7 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs/read') then HandleFSRead(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs/download') then HandleFSDownload(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs/peek') then HandleFSPeek(ARequest, AResponse)
-    else if (ARequest.Command = 'GET')  and (Doc = '/v1/checkpoints')      then HandleCheckpointsList(AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/checkpoints')      then HandleCheckpointsList(ARequest, AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/checkpoints/undo') then HandleCheckpointsUndo(ARequest, AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/checkpoints/redo') then HandleCheckpointsRedo(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/logs')    then HandleLogs(AContext, ARequest, AResponse)
@@ -3256,19 +3284,39 @@ begin
   AResp.ContentLength     := Mem.Size;
 end;
 
-function TGatewayServer.RunCheckpointedLoop(const Cfg: TToolLoopConfig;
-  var Messages: array of TMessage; out Loop: TToolLoopResult): Boolean;
-{ PasClaw.Checkpoints keeps GTurn / GTurnPaths process-globally, so two
-  overlapping gateway turns (Indy serves requests on worker threads) would let
-  one BeginTurn clear/advance state mid-snapshot of another -- corrupting which
-  turn a file is attributed to, and thus undo/redo. Serialize the whole
-  BeginTurn+loop under FCheckpointTurnLock when checkpoints are enabled. When
-  disabled, run unserialized (no shared state to protect). }
+function TGatewayServer.ReqSessionId(ARequest: TIdHTTPRequestInfo): string;
+begin
+  Result := Trim(ARequest.RawHeaders.Values['X-PasClaw-Session']);
+end;
+
+procedure TGatewayServer.ApplyCheckpointSession(const ReqSession: string);
+{ Re-point the process-global checkpoint state at this chat's session. MUST be
+  called while holding FCheckpointTurnLock. Cheap (reads the session's small
+  index.json); idempotent. }
+var
+  CC: TCheckpointConfig;
+begin
+  CC.Enabled   := FCfg.CheckpointsEnabled;
+  CC.SessionId := CheckpointSessionId(ReqSession);
+  CC.Root      := JoinPath(GetHome, 'workspace/checkpoints');
+  CC.KeepLast  := FCfg.CheckpointsKeepLast;
+  InitCheckpoints(CC);
+end;
+
+function TGatewayServer.RunCheckpointedLoop(const ReqSession: string;
+  const Cfg: TToolLoopConfig; var Messages: array of TMessage;
+  out Loop: TToolLoopResult): Boolean;
+{ PasClaw.Checkpoints keeps turn state process-globally, so two overlapping
+  gateway turns (Indy serves on worker threads) would let one BeginTurn clear/
+  advance state mid-snapshot of another. Re-scope to this chat's session and
+  serialize the whole scope+BeginTurn+loop under FCheckpointTurnLock when
+  checkpoints are on. When off, run unserialized (no shared state). }
 begin
   if CheckpointsEnabled then
   begin
     FCheckpointTurnLock.Acquire;
     try
+      ApplyCheckpointSession(ReqSession);
       BeginTurn;
       Result := RunToolLoop(Cfg, Messages, Loop);
     finally
@@ -3279,10 +3327,21 @@ begin
     Result := RunToolLoop(Cfg, Messages, Loop);
 end;
 
-procedure TGatewayServer.HandleCheckpointsList(AResp: TIdHTTPResponseInfo);
-{ GET /v1/checkpoints -- backend/enabled/current/can_redo + per-turn file lists. }
+procedure TGatewayServer.HandleCheckpointsList(ARequest: TIdHTTPRequestInfo;
+                                               AResp: TIdHTTPResponseInfo);
+{ GET /v1/checkpoints -- per-chat backend/current/can_redo + per-turn files.
+  Scoped to X-PasClaw-Session, under the lock so it sees a consistent state. }
+var
+  Body: string;
 begin
-  WriteJSON(AResp, 200, CheckpointsStateJSON);
+  FCheckpointTurnLock.Acquire;
+  try
+    ApplyCheckpointSession(ReqSessionId(ARequest));
+    Body := CheckpointsStateJSON;
+  finally
+    FCheckpointTurnLock.Release;
+  end;
+  WriteJSON(AResp, 200, Body);
 end;
 
 function CheckpointResultJSON(Ok: Boolean; const Restored: TRestoredFileArray;
@@ -3319,15 +3378,23 @@ end;
 
 procedure TGatewayServer.HandleCheckpointsUndo(ARequest: TIdHTTPRequestInfo;
                                                AResp: TIdHTTPResponseInfo);
-{ POST /v1/checkpoints/undo?n=N -- roll the workspace back N turns (default 1). }
+{ POST /v1/checkpoints/undo?n=N -- roll this chat's workspace back N turns. }
 var
   N, Status: Integer;
   Restored: TRestoredFileArray;
   Err, Body: string;
+  Ok: Boolean;
 begin
   N := StrToIntDef(ARequest.Params.Values['n'], 1);
   if N < 1 then N := 1;
-  Body := CheckpointResultJSON(UndoTurns(N, Restored, Err), Restored, Err, Status);
+  FCheckpointTurnLock.Acquire;
+  try
+    ApplyCheckpointSession(ReqSessionId(ARequest));
+    Ok := UndoTurns(N, Restored, Err);
+  finally
+    FCheckpointTurnLock.Release;
+  end;
+  Body := CheckpointResultJSON(Ok, Restored, Err, Status);
   WriteJSON(AResp, Status, Body);
 end;
 
@@ -3338,10 +3405,18 @@ var
   N, Status: Integer;
   Restored: TRestoredFileArray;
   Err, Body: string;
+  Ok: Boolean;
 begin
   N := StrToIntDef(ARequest.Params.Values['n'], 1);
   if N < 1 then N := 1;
-  Body := CheckpointResultJSON(RedoTurns(N, Restored, Err), Restored, Err, Status);
+  FCheckpointTurnLock.Acquire;
+  try
+    ApplyCheckpointSession(ReqSessionId(ARequest));
+    Ok := RedoTurns(N, Restored, Err);
+  finally
+    FCheckpointTurnLock.Release;
+  end;
+  Body := CheckpointResultJSON(Ok, Restored, Err, Status);
   WriteJSON(AResp, Status, Body);
 end;
 
@@ -4026,7 +4101,7 @@ begin
   LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
   LoopCfg.StreamReliability := FCfg.StreamReliability;
 
-  if not RunCheckpointedLoop(LoopCfg, Msgs, Loop) then
+  if not RunCheckpointedLoop(ReqSessionId(ARequest), LoopCfg, Msgs, Loop) then
   begin
     WriteJSON(AResp, 502, '{"error":"loop failed"}');
     Exit;
@@ -4731,7 +4806,7 @@ begin
       LoopCfg.OnToolCall   := Streamer.NoteToolCall;
       LoopCfg.OnToolResult := Streamer.NoteToolResult;
       Streamer.WriteComment('connected');
-      if not RunCheckpointedLoop(LoopCfg, Msgs, Loop) then
+      if not RunCheckpointedLoop(ReqSessionId(ARequest), LoopCfg, Msgs, Loop) then
       begin
         if FDebugIO then LogDebug('chat/completions -> 502 (tool loop failed)');
         Streamer.WriteError('tool loop failed');
@@ -4807,7 +4882,7 @@ begin
     LoopCfg.OnToolCall   := ActivityCollector.OnToolCall;
     LoopCfg.OnToolResult := ActivityCollector.OnToolResult;
 
-    if not RunCheckpointedLoop(LoopCfg, Msgs, Loop) then
+    if not RunCheckpointedLoop(ReqSessionId(ARequest), LoopCfg, Msgs, Loop) then
     begin
       if FDebugIO then LogDebug('chat/completions -> 502 (tool loop failed)');
       WriteJSON(AResp, 502,
@@ -6440,7 +6515,7 @@ begin
       if FCfg.StreamReliability.ToolCallRepairEnabled then
         RepairOrphanedToolCalls(Msgs);
 
-      if not RunCheckpointedLoop(LoopCfg, Msgs, Loop) then
+      if not RunCheckpointedLoop(ReqSessionId(ARequest), LoopCfg, Msgs, Loop) then
       begin
         ReplyObj := BuildResponsesObject(RespId, ReqModel, 'failed', '',
                                           EmptyToolCalls, ToolsRawJSON,

@@ -926,6 +926,11 @@ async function gwFetch(url, opts) {
   const headers = new Headers(opts.headers || {});
   let tok = gwToken();
   if (tok) headers.set("Authorization", "Bearer " + tok);
+  /* Scope checkpoints to the active chat: the gateway keys the per-turn undo
+     timeline off this so each session has its own history (falls back to a
+     per-workspace timeline when absent, e.g. a brand-new unsaved chat). */
+  if (typeof activeSessionId !== "undefined" && activeSessionId)
+    headers.set("X-PasClaw-Session", activeSessionId);
   let r = await fetch(url, Object.assign({}, opts, { headers }));
   if (r.status !== 401) return r;
   // First 401 -> ask once and retry. Don't loop indefinitely; a
