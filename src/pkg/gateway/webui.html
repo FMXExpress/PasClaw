@@ -1531,6 +1531,9 @@ async function viewFile(path, name, size) {
     /* /v1/fs/read is server-capped at 256 KB, so this never pulls a giant file
        just to sniff it; a binary one routes to the paged hex viewer below. */
     const r = await (await gwFetch("/v1/fs/read?path=" + encodeURIComponent(path))).json();
+    /* The server flags binary content (it won't decode it -- doing so 500s on
+       Delphi) so we go straight to the hex viewer without reading it as text. */
+    if (r.binary) { viewHex(path, name, r.size || size); return; }
     const content = r.content || "";
     if (looksBinary(content)) { viewHex(path, name, size); return; }
     renderDocInto(v, name, content + (r.truncated ? "\n…(truncated)" : ""));
@@ -1538,11 +1541,12 @@ async function viewFile(path, name, size) {
 }
 
 /* Paged hex viewer. Fetches ONLY the window being viewed via /v1/fs/peek, so a
-   500 MB file over a remote gateway costs one ~4 KB request per page, not a
-   full download. First/Prev/Next/Last page through the file. */
+   500 MB file over a remote gateway costs one ~16 KB request per page, not a
+   full download. Each page is scrollable in the pane; First/Prev/Next/Last move
+   through the file. */
 function viewHex(path, name, sizeHint) {
   const v = $("#fs-view");
-  const PAGE = 4096;
+  const PAGE = 16384;
   let offset = 0, total = Number(sizeHint) || 0;
   async function render() {
     let bytes;
