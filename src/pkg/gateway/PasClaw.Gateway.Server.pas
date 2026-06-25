@@ -615,36 +615,18 @@ begin
 end;
 
 function CheckpointSessionId(const ReqSession: string): string;
-{ Per-chat checkpoint timeline. When the web UI sends its chat session id
-  (X-PasClaw-Session), each chat gets its own undo history; otherwise (e.g. a
-  brand-new unsaved chat) fall back to a per-workspace timeline so edits are
-  still captured. Snapshots store absolute paths, so the workspace fallback is
-  FNV-1a of the canonical workspace path -- two gateways under different
-  workspaces never share it. }
+{ Per-chat checkpoint timeline, ALWAYS namespaced by the workspace. Sessions are
+  global under $PASCLAW_HOME/workspace/sessions, but checkpoint snapshots store
+  absolute paths -- so the same chat id used from two different workspaces must
+  NOT share an archive (else undo in workspace B could rewrite A's files). Key =
+  FNV-1a of the canonical workspace path + the (sanitised) chat id; a brand-new
+  unsaved chat with no id falls back to the per-workspace timeline alone. }
 var
-  Ws, Clean: string;
+  Ws, Clean, WsHash, San: string;
   c: Char;
   H: LongWord;
   i: Integer;
 begin
-  Clean := Trim(ReqSession);
-  if Clean <> '' then
-  begin
-    { Sanitise to a filesystem-safe dir name (session ids are already tame, but
-      never trust a header). }
-    Result := '';
-    for i := 1 to Length(Clean) do
-    begin
-      c := Clean[i];
-      if ((c >= 'A') and (c <= 'Z')) or ((c >= 'a') and (c <= 'z')) or
-         ((c >= '0') and (c <= '9')) or (c = '-') or (c = '_') or (c = '.') then
-        Result := Result + c
-      else
-        Result := Result + '_';
-    end;
-    Result := 'sess_' + Copy(Result, 1, 80);
-    Exit;
-  end;
   Ws := CurrentWorkspace;
   if Ws = '' then Ws := GetHome;
   H := 2166136261;
@@ -653,7 +635,25 @@ begin
     H := H xor Ord(Ws[i]);
     H := H * 16777619;
   end;
-  Result := '_gateway_' + LowerCase(IntToHex(H, 8));
+  WsHash := LowerCase(IntToHex(H, 8));
+
+  Clean := Trim(ReqSession);
+  if Clean = '' then
+    Exit('_gateway_' + WsHash);   { per-workspace fallback }
+
+  { Sanitise the chat id to a filesystem-safe dir name (ids are tame, but never
+    trust a header). }
+  San := '';
+  for i := 1 to Length(Clean) do
+  begin
+    c := Clean[i];
+    if ((c >= 'A') and (c <= 'Z')) or ((c >= 'a') and (c <= 'z')) or
+       ((c >= '0') and (c <= '9')) or (c = '-') or (c = '_') or (c = '.') then
+      San := San + c
+    else
+      San := San + '_';
+  end;
+  Result := 'sess_' + WsHash + '_' + Copy(San, 1, 64);
 end;
 
 constructor TGatewayServer.Create(Cfg: TConfig; Provider: ILLMProvider; Registry: TToolRegistry);
