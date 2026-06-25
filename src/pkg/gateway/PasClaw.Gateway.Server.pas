@@ -79,6 +79,12 @@ type
        via SetGlobalRelayQueue so TRelayProvider can find it through
        the factory. Freed in Destroy after clearing the global. *)
     FRelayQueue: TRelayQueue;
+    (* Live provider hot-swap. FProvider and FFallbacks are rebuilt from config
+       on /v1/config write so a provider/model change applies without a
+       restart. FApplyLock guards the swap so a request thread reads a
+       consistent (primary, fallbacks) pair via SnapshotProviders. *)
+    FApplyLock: TCriticalSection;
+    FFallbacks: TLLMProviderArray;
     (* Per-process scoped credential. Random hex generated in Create
        once per `pasclaw serve` / `pasclaw gateway` startup. Gates the
        /v1/relay/* surface independently of Cfg.Gateway.Token so an
@@ -212,6 +218,12 @@ type
       changes apply on the next restart. }
     procedure HandleConfigWrite(ARequest: TIdHTTPRequestInfo;
                                 AResp: TIdHTTPResponseInfo);
+    { Lock-guarded reads of the live provider state (rebuilt on config write). }
+    function CurrentPrimary: ILLMProvider;
+    function CurrentFallbacks: TLLMProviderArray;
+    { Rebuild + swap the live provider/fallbacks from a saved config. Returns
+      False (and keeps the current provider) if the new primary won't build. }
+    function ApplyProviderConfig(NewCfg: TConfig): Boolean;
     procedure HandleStats(AResp: TIdHTTPResponseInfo);
     { Durable chat sessions, shared with the TUI / `pasclaw session`
       via PasClaw.Session.Store -- web chats land in the same
@@ -607,6 +619,11 @@ begin
   FRelayQueue := TRelayQueue.Create;
   SetGlobalRelayQueue(FRelayQueue);
 
+  { Live provider hot-swap state. Cache the fallback chain now (relay queue is
+    registered above, so a relay fallback resolves) -- rebuilt on config write. }
+  FApplyLock := TCriticalSection.Create;
+  FFallbacks := ResolveFallbacks(FCfg);
+
   { Generate a fresh per-process relay-scoped token. Format is
     phone-typable: two 4-char groups separated by a hyphen
     (e.g. A8M9-PXRT) drawn from Crockford base32
@@ -639,7 +656,59 @@ begin
     that's racing Destroy can't dereference a freed pointer. }
   SetGlobalRelayQueue(nil);
   FRelayQueue.Free;
+  FApplyLock.Free;
   inherited Destroy;
+end;
+
+function TGatewayServer.CurrentPrimary: ILLMProvider;
+{ Copy the primary ref under the lock so a concurrent ApplyProviderConfig swap
+  can't free it between a request reading the field and retaining it. The
+  returned interface is refcounted, so an in-flight request that grabbed it
+  keeps running on that provider even after a swap -- the switch only affects
+  requests that start afterwards; nothing in flight is interrupted. }
+begin
+  FApplyLock.Acquire;
+  try Result := FProvider; finally FApplyLock.Release; end;
+end;
+
+function TGatewayServer.CurrentFallbacks: TLLMProviderArray;
+begin
+  FApplyLock.Acquire;
+  try Result := Copy(FFallbacks); finally FApplyLock.Release; end;
+end;
+
+function TGatewayServer.ApplyProviderConfig(NewCfg: TConfig): Boolean;
+{ Rebuild the primary + fallback chain from a freshly-saved config and swap them
+  in, so a provider/model change over /v1/config takes effect without a restart.
+  The relay queue global is registered in Create, so a relay primary rebuilds
+  fine. Everything is built OUTSIDE the lock; only the pointer swap is guarded. }
+var
+  NewProv: ILLMProvider;
+  NewFB: TLLMProviderArray;
+  Err: string;
+begin
+  Result := False;
+  if not NewDefaultProvider(NewCfg, NewProv, Err) then
+  begin
+    LogWarn('gateway: live provider rebuild failed (%s) -- keeping current; restart to apply',
+            [Err]);
+    Exit;
+  end;
+  NewFB := ResolveFallbacks(NewCfg);
+  FApplyLock.Acquire;
+  try
+    FProvider  := NewProv;
+    FFallbacks := NewFB;
+    { Keep the in-memory display/model fields in step so /v1/status and the
+      legacy /v1/chat model reflect the switch immediately. }
+    FCfg.DefaultProvider := NewCfg.DefaultProvider;
+    FCfg.DefaultModel    := NewCfg.DefaultModel;
+  finally
+    FApplyLock.Release;
+  end;
+  LogInfo('gateway: provider switched live to %s / %s',
+          [NewCfg.DefaultProvider, NewCfg.DefaultModel]);
+  Result := True;
 end;
 
 procedure TGatewayServer.SetMCPAllowMutating(V: Boolean);
@@ -2207,7 +2276,9 @@ procedure TGatewayServer.HandleConfigWrite(ARequest: TIdHTTPRequestInfo;
 var
   Body, Merged, BaseJSON, Path: string;
   Tmp, Cur: TConfig;
+  Applied: Boolean;
 begin
+  Applied := False;
   Body := ReadRequestBody(ARequest);
   if Trim(Body) = '' then
   begin
@@ -2272,12 +2343,26 @@ begin
         Exit;
       end;
     end;
+    { Hot-swap the primary provider + fallback chain from the just-saved config
+      so a provider/model change takes effect without a restart. Built from Tmp
+      before it's freed. Other settings (sandbox, mcp, crons) still need a
+      restart. }
+    Applied := ApplyProviderConfig(Tmp);
   finally
     Tmp.Free;
   end;
-  LogInfo('gateway: config.json updated via /v1/config (restart to apply)');
-  WriteJSON(AResp, 200,
-    '{"saved":true,"note":"saved to config.json -- restart pasclaw for changes to take effect"}');
+  if Applied then
+  begin
+    LogInfo('gateway: config.json updated via /v1/config (provider applied live)');
+    WriteJSON(AResp, 200,
+      '{"saved":true,"applied":true,"note":"saved -- provider/model applied live; other settings take effect on restart"}');
+  end
+  else
+  begin
+    LogInfo('gateway: config.json updated via /v1/config (restart to apply)');
+    WriteJSON(AResp, 200,
+      '{"saved":true,"applied":false,"note":"saved to config.json -- restart pasclaw for changes to take effect"}');
+  end;
 end;
 
 procedure TGatewayServer.HandleStats(AResp: TIdHTTPResponseInfo);
@@ -3544,7 +3629,8 @@ begin
     Exit;
   end;
 
-  if FProvider = nil then
+  LoopCfg.Provider := CurrentPrimary;
+  if LoopCfg.Provider = nil then
   begin
     WriteJSON(AResp, 503, '{"error":"no provider configured"}');
     Exit;
@@ -3553,7 +3639,6 @@ begin
   SetLength(Msgs, 1);
   Msgs[0] := MakeMessage(mrUser, Prompt);
 
-  LoopCfg.Provider      := FProvider;
   LoopCfg.Registry      := FRegistry;
   LoopCfg.Model         := FCfg.DefaultModel;
   LoopCfg.MaxIterations := 8;
@@ -3562,7 +3647,7 @@ begin
     omits "mode", so OpenAI-compatible clients that don't know about
     plan keep working unchanged. }
   LoopCfg.Mode          := ParseModeFromBody(Body);
-  LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
+  LoopCfg.Fallbacks     := CurrentFallbacks;
   LoopCfg.Options       := DefaultChatOptions;
   ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
   LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '',
@@ -3593,7 +3678,7 @@ begin
   end;
   AccumulateGatewayStats(FCfg, GW_BUCKET_V1_CHAT,
                          '(gateway: /v1/chat)',
-                         FProvider.GetName, LoopCfg.Model, Loop);
+                         LoopCfg.Provider.GetName, LoopCfg.Model, Loop);
 
   RespJ := TJsonObject.Create;
   try
@@ -4195,7 +4280,8 @@ begin
       MsgArr.Free;
     end;
 
-    if FProvider = nil then
+    LoopCfg.Provider := CurrentPrimary;
+    if LoopCfg.Provider = nil then
     begin
       if FDebugIO then LogDebug('chat/completions -> 503 (no provider configured)');
       WriteJSON(AResp, 503,
@@ -4203,13 +4289,12 @@ begin
       Exit;
     end;
 
-    LoopCfg.Provider      := FProvider;
     LoopCfg.Registry      := FRegistry;
     LoopCfg.Model         := ReqModel;
     LoopCfg.MaxIterations := FMaxIter;
     LoopCfg.Parallel := True;
     LoopCfg.Mode          := ParseModeFromBody(Body);  { PR #290 }
-    LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
+    LoopCfg.Fallbacks     := CurrentFallbacks;
     LoopCfg.Options       := DefaultChatOptions;
     ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
     if GetEffectiveGatewayToken(FCfg) <> '' then
@@ -4294,7 +4379,7 @@ begin
       end;
       AccumulateGatewayStats(FCfg, GW_BUCKET_V1_CHAT_COMPLETIONS,
                              '(gateway: /v1/chat/completions)',
-                             FProvider.GetName, ReqModel, Loop);
+                             LoopCfg.Provider.GetName, ReqModel, Loop);
       if Loop.LastResp.FinishReason <> '' then
         FinishReason := Loop.LastResp.FinishReason
       else
@@ -4370,7 +4455,7 @@ begin
     end;
     AccumulateGatewayStats(FCfg, GW_BUCKET_V1_CHAT_COMPLETIONS,
                            '(gateway: /v1/chat/completions)',
-                           FProvider.GetName, ReqModel, Loop);
+                           LoopCfg.Provider.GetName, ReqModel, Loop);
 
     if Loop.LastResp.FinishReason <> '' then
       FinishReason := Loop.LastResp.FinishReason
@@ -5476,6 +5561,7 @@ var
   ParamsRaw, ToolKind, ToolDisplayName: string;
   EmptyToolCalls: array of TToolCall;
   FcCallIdVal, FcSignatureVal: string;
+  Prim: ILLMProvider;   { live-provider snapshot for this request (hot-swap safe) }
 
   procedure AppendMessage(Role: TMsgRole; const Content: string);
   begin
@@ -5815,7 +5901,8 @@ begin
     finally
       ToolsArrIn.Free;
     end;
-    if FProvider = nil then
+    Prim := CurrentPrimary;
+    if Prim = nil then
     begin
       WriteJSON(AResp, 503,
         '{"error":{"message":"no provider configured","type":"server_error"}}');
@@ -5879,7 +5966,7 @@ begin
       if WantsStream then
       begin
         StreamResponsesViaProvider(AContext, AResp, AResponseStarted,
-                                    FProvider, RespId, ReqModel, Msgs, ToolDefs,
+                                    Prim, RespId, ReqModel, Msgs, ToolDefs,
                                     PassthroughOpts, ToolsRawJSON, FDebugIO,
                                     FCfg.StreamReliability,
                                     OutUsage, StreamToolCallCount);
@@ -5890,7 +5977,7 @@ begin
           Codex P2 on PR #204. }
         AccumulateGatewayStatsRaw(FCfg, GW_BUCKET_V1_RESPONSES,
                                   '(gateway: /v1/responses)',
-                                  FProvider.GetName, ReqModel,
+                                  Prim.GetName, ReqModel,
                                   OutUsage,
                                   StreamToolCallCount,
                                   0);
@@ -5904,7 +5991,7 @@ begin
           chain, so retries against the primary provider are the
           only recovery before the response goes back to the
           client. }
-        PassthroughResp := ChatWithEmptyRetry(FProvider, Msgs, ToolDefs,
+        PassthroughResp := ChatWithEmptyRetry(Prim, Msgs, ToolDefs,
                                                ReqModel, PassthroughOpts,
                                                FCfg.StreamReliability);
       except
@@ -5943,7 +6030,7 @@ begin
         server-side (the client did). }
       AccumulateGatewayStatsRaw(FCfg, GW_BUCKET_V1_RESPONSES,
                                 '(gateway: /v1/responses)',
-                                FProvider.GetName, ReqModel,
+                                Prim.GetName, ReqModel,
                                 OutUsage,
                                 Length(OutToolCalls),
                                 0);
@@ -5959,13 +6046,13 @@ begin
         internal tool loop and surface its text. This keeps the
         non-Codex flows (curl /v1/responses with just an input
         string) working as before. }
-      LoopCfg.Provider      := FProvider;
+      LoopCfg.Provider      := Prim;
       LoopCfg.Registry      := FRegistry;
       LoopCfg.Model         := ReqModel;
       LoopCfg.MaxIterations := FMaxIter;
       LoopCfg.Parallel := True;
       LoopCfg.Mode          := ParseModeFromBody(Body);  { PR #290 }
-      LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
+      LoopCfg.Fallbacks     := CurrentFallbacks;
       LoopCfg.Options       := DefaultChatOptions;
       ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
       if GetEffectiveGatewayToken(FCfg) <> '' then
@@ -6008,7 +6095,7 @@ begin
       end;
       AccumulateGatewayStats(FCfg, GW_BUCKET_V1_RESPONSES,
                              '(gateway: /v1/responses)',
-                             FProvider.GetName, ReqModel, Loop);
+                             Prim.GetName, ReqModel, Loop);
 
       if Loop.LastResp.FinishReason <> '' then
         FinishReason := Loop.LastResp.FinishReason
