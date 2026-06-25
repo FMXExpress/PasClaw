@@ -49,6 +49,7 @@ uses
   PasClaw.Providers.Types,
   PasClaw.Providers.Intf,
   PasClaw.Tools.Registry,
+  PasClaw.Tools.ToolLoop,  { TToolLoopConfig/Result -- RunCheckpointedLoop sig }
   PasClaw.Session.Store,
   PasClaw.Gateway.RelayQueue, { TRelayQueue -- FRelayQueue field type }
   PasClaw.MCP.Server;
@@ -85,6 +86,10 @@ type
        consistent (primary, fallbacks) pair via SnapshotProviders. *)
     FApplyLock: TCriticalSection;
     FFallbacks: TLLMProviderArray;
+    { Serializes checkpointed tool loops: PasClaw.Checkpoints' turn state is
+      process-global, so overlapping gateway turns would corrupt snapshot
+      attribution. Held across BeginTurn + RunToolLoop when checkpoints are on. }
+    FCheckpointTurnLock: TCriticalSection;
     (* Per-process scoped credential. Random hex generated in Create
        once per `pasclaw serve` / `pasclaw gateway` startup. Gates the
        /v1/relay/* surface independently of Cfg.Gateway.Token so an
@@ -262,6 +267,11 @@ type
                             AResp: TIdHTTPResponseInfo);
     procedure HandleCheckpointsRedo(ARequest: TIdHTTPRequestInfo;
                             AResp: TIdHTTPResponseInfo);
+    { BeginTurn + RunToolLoop, serialized under FCheckpointTurnLock when
+      checkpoints are on (process-global turn state -- see field comment). }
+    function RunCheckpointedLoop(const Cfg: TToolLoopConfig;
+                            var Messages: array of TMessage;
+                            out Loop: TToolLoopResult): Boolean;
     procedure HandleLogs(AContext: TIdContext;
                           ARequest: TIdHTTPRequestInfo;
                           AResp: TIdHTTPResponseInfo);
@@ -422,7 +432,6 @@ uses
   PasClaw.Providers.Factory,
   PasClaw.Providers.Catalog,   { TProviderSpec for /v1/models discovery }
   PasClaw.Providers.Models,    { DiscoverModels / cache -- /v1/models roster }
-  PasClaw.Tools.ToolLoop,
   PasClaw.Stream.Reliability,
   PasClaw.Agent.Compact,
   PasClaw.Agent.Prompt,
@@ -598,6 +607,27 @@ begin
       Result := Result + UpCase(S[i]);
 end;
 
+function GatewayCheckpointSession: string;
+{ Scope the gateway's checkpoint archive to the active workspace: snapshots
+  store absolute paths, so two gateway runs under different workspaces must not
+  share one timeline (else undo in B could restore A's files). FNV-1a of the
+  canonical workspace path -> a short, stable session-dir name. }
+var
+  Ws: string;
+  H: LongWord;
+  i: Integer;
+begin
+  Ws := CurrentWorkspace;
+  if Ws = '' then Ws := GetHome;
+  H := 2166136261;
+  for i := 1 to Length(Ws) do
+  begin
+    H := H xor Ord(Ws[i]);
+    H := H * 16777619;
+  end;
+  Result := '_gateway_' + LowerCase(IntToHex(H, 8));
+end;
+
 constructor TGatewayServer.Create(Cfg: TConfig; Provider: ILLMProvider; Registry: TToolRegistry);
 var
   CC: TCheckpointConfig;
@@ -608,11 +638,11 @@ begin
   FRegistry := Registry;
   FMaxIter  := 25;
   { Wire the per-turn workspace checkpoint system into the gateway (it was
-    CLI/TUI-only). One process-global timeline scoped to a synthetic session,
-    since the web UI's sessions share one workspace; BeginTurn fires per chat
-    turn in the handlers below. No-op when checkpoints_enabled is false. }
+    CLI/TUI-only). Scoped to the active workspace (not a single global name) so
+    runs under different workspaces don't share a timeline; BeginTurn fires per
+    chat turn, serialized via FCheckpointTurnLock. No-op when disabled. }
   CC.Enabled   := FCfg.CheckpointsEnabled;
-  CC.SessionId := '_gateway_web';
+  CC.SessionId := GatewayCheckpointSession;
   CC.Root      := JoinPath(GetHome, 'workspace/checkpoints');
   CC.KeepLast  := FCfg.CheckpointsKeepLast;
   InitCheckpoints(CC);
@@ -645,6 +675,7 @@ begin
   { Live provider hot-swap state. Cache the fallback chain now (relay queue is
     registered above, so a relay fallback resolves) -- rebuilt on config write. }
   FApplyLock := TCriticalSection.Create;
+  FCheckpointTurnLock := TCriticalSection.Create;
   FFallbacks := ResolveFallbacks(FCfg);
 
   { Generate a fresh per-process relay-scoped token. Format is
@@ -680,6 +711,7 @@ begin
   SetGlobalRelayQueue(nil);
   FRelayQueue.Free;
   FApplyLock.Free;
+  FCheckpointTurnLock.Free;
   inherited Destroy;
 end;
 
@@ -3224,6 +3256,29 @@ begin
   AResp.ContentLength     := Mem.Size;
 end;
 
+function TGatewayServer.RunCheckpointedLoop(const Cfg: TToolLoopConfig;
+  var Messages: array of TMessage; out Loop: TToolLoopResult): Boolean;
+{ PasClaw.Checkpoints keeps GTurn / GTurnPaths process-globally, so two
+  overlapping gateway turns (Indy serves requests on worker threads) would let
+  one BeginTurn clear/advance state mid-snapshot of another -- corrupting which
+  turn a file is attributed to, and thus undo/redo. Serialize the whole
+  BeginTurn+loop under FCheckpointTurnLock when checkpoints are enabled. When
+  disabled, run unserialized (no shared state to protect). }
+begin
+  if CheckpointsEnabled then
+  begin
+    FCheckpointTurnLock.Acquire;
+    try
+      BeginTurn;
+      Result := RunToolLoop(Cfg, Messages, Loop);
+    finally
+      FCheckpointTurnLock.Release;
+    end;
+  end
+  else
+    Result := RunToolLoop(Cfg, Messages, Loop);
+end;
+
 procedure TGatewayServer.HandleCheckpointsList(AResp: TIdHTTPResponseInfo);
 { GET /v1/checkpoints -- backend/enabled/current/can_redo + per-turn file lists. }
 begin
@@ -3971,8 +4026,7 @@ begin
   LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
   LoopCfg.StreamReliability := FCfg.StreamReliability;
 
-  BeginTurn;   { checkpoint boundary: snapshot files this turn edits }
-  if not RunToolLoop(LoopCfg, Msgs, Loop) then
+  if not RunCheckpointedLoop(LoopCfg, Msgs, Loop) then
   begin
     WriteJSON(AResp, 502, '{"error":"loop failed"}');
     Exit;
@@ -4677,8 +4731,7 @@ begin
       LoopCfg.OnToolCall   := Streamer.NoteToolCall;
       LoopCfg.OnToolResult := Streamer.NoteToolResult;
       Streamer.WriteComment('connected');
-      BeginTurn;   { checkpoint boundary }
-      if not RunToolLoop(LoopCfg, Msgs, Loop) then
+      if not RunCheckpointedLoop(LoopCfg, Msgs, Loop) then
       begin
         if FDebugIO then LogDebug('chat/completions -> 502 (tool loop failed)');
         Streamer.WriteError('tool loop failed');
@@ -4754,8 +4807,7 @@ begin
     LoopCfg.OnToolCall   := ActivityCollector.OnToolCall;
     LoopCfg.OnToolResult := ActivityCollector.OnToolResult;
 
-    BeginTurn;   { checkpoint boundary }
-    if not RunToolLoop(LoopCfg, Msgs, Loop) then
+    if not RunCheckpointedLoop(LoopCfg, Msgs, Loop) then
     begin
       if FDebugIO then LogDebug('chat/completions -> 502 (tool loop failed)');
       WriteJSON(AResp, 502,
@@ -6388,8 +6440,7 @@ begin
       if FCfg.StreamReliability.ToolCallRepairEnabled then
         RepairOrphanedToolCalls(Msgs);
 
-      BeginTurn;   { checkpoint boundary }
-      if not RunToolLoop(LoopCfg, Msgs, Loop) then
+      if not RunCheckpointedLoop(LoopCfg, Msgs, Loop) then
       begin
         ReplyObj := BuildResponsesObject(RespId, ReqModel, 'failed', '',
                                           EmptyToolCalls, ToolsRawJSON,

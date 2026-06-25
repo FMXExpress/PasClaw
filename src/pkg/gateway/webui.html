@@ -1554,7 +1554,9 @@ async function renderCheckpoints() {
   });
   list.querySelectorAll(".cp-revert").forEach(b => b.addEventListener("click", async () => {
     const turn = parseInt(b.dataset.turn, 10);
-    const n = st.newest - turn + 1;   // undo back to BEFORE this turn
+    // UndoTurns(n) counts back from current_turn, which can be > newest after a
+    // turn that edited nothing -- so use current_turn, not newest.
+    const n = st.current_turn - turn + 1;
     if (n < 1) return;
     if (!confirm("Revert the workspace to before turn " + turn + "?\n(undo " + n + " turn" + (n > 1 ? "s" : "") + ")")) return;
     const j = await cpAction("undo", n);
