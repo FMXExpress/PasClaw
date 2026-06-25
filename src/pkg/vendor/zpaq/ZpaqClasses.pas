@@ -20,7 +20,14 @@ unit ZpaqClasses;
 
 
 { PasClaw: mode directive guarded so the unit also compiles under Delphi. }
-{$IFDEF FPC}{$mode objfpc}{$H+}{$ENDIF}
+{$IFDEF FPC}
+  {$mode objfpc}{$H+}
+{$ELSE}
+  { Delphi: the archive scanner deliberately mixes Cardinal fragment counts with
+    Integer offsets (values stay well within Integer range); silence the noisy
+    signed/unsigned widening warning. }
+  {$WARN COMBINING_SIGNED_UNSIGNED OFF}
+{$ENDIF}
 
 interface
 
@@ -101,7 +108,8 @@ type
         Size : Int64;                { -1 for streaming archives }
         Date : TDateTime;            {  0 for streaming archives }
         { journaling: fragment indices into Fht[] }
-        Ptrs : array of Cardinal;
+        Ptrs : TU32Array;   { shared named type (= array of Cardinal) so Delphi
+                              accepts assignment to/from the locals below }
         { streaming: entire decompressed file data cached here }
         Data : TMemoryStream;
       end;
@@ -434,7 +442,7 @@ var
   p, pEnd  : PAnsiChar;
   date     : Int64;
   na, ni   : Cardinal;
-  ptrArr   : array of Cardinal;
+  ptrArr   : TU32Array;
   fsize    : Int64;
   fi       : Integer;
   { streaming }
@@ -683,7 +691,7 @@ end;
 
 procedure TZpaqUnpacker.DecompressJournalEntry(idx: Integer; Dest: TStream);
 var
-  ptrs       : array of Cardinal;
+  ptrs       : TU32Array;
   lastBlk    : Integer;
   fs         : TFileStream;
   reader     : TReadBridge;
