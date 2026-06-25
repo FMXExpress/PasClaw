@@ -5,6 +5,11 @@ unit libzpaq;
 {$IFDEF FPC}
   {$mode objfpc}{$H+}{$inline on}
   {$MODESWITCH AdvancedRecords}
+{$ELSE}
+  { Delphi: the port works in AnsiString for byte data; silence the noisy
+    UnicodeString<->AnsiString cast warnings (ASCII method/filename strings). }
+  {$WARN IMPLICIT_STRING_CAST OFF}
+  {$WARN IMPLICIT_STRING_CAST_LOSS OFF}
 {$ENDIF}
 {$Q-}{$R-}{$POINTERMATH ON}
 
@@ -1606,7 +1611,7 @@ begin
     FinitTables := True;
     Move(sdt2k[0], Fdt2k[0], 256*4);
     Move(sdt_global[0], Fdt[0], 1024*4);
-    FillWord(Fsquasht[0], 1376, 0);
+    FillChar(Fsquasht[0], 1376 * SizeOf(Fsquasht[0]), 0);  { FillWord is FPC-only; value 0 -> FillChar is equivalent + cross-compiler }
     Move(ssquasht[0], Fsquasht[1376], 1344*2);
     for i := 2720 to 4095 do Fsquasht[i] := 32767;
     k := 16384;
@@ -3858,7 +3863,7 @@ procedure compressBlock(inbuf: TStringBuffer; out_: TZPAQLStream;
                         const comment: AnsiString;
                         dosha1: Boolean);
 var
-  methodStr: AnsiString = '';
+  methodStr: AnsiString;   { Delphi forbids local-var initializers; AnsiString auto-inits to '' }
   n: U32;
   arg0: Integer;
   mtype: AnsiChar;
