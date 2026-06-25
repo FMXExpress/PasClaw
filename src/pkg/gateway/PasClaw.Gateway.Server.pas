@@ -49,6 +49,7 @@ uses
   PasClaw.Providers.Types,
   PasClaw.Providers.Intf,
   PasClaw.Tools.Registry,
+  PasClaw.Tools.ToolLoop,  { TToolLoopConfig/Result -- RunCheckpointedLoop sig }
   PasClaw.Session.Store,
   PasClaw.Gateway.RelayQueue, { TRelayQueue -- FRelayQueue field type }
   PasClaw.MCP.Server;
@@ -85,6 +86,10 @@ type
        consistent (primary, fallbacks) pair via SnapshotProviders. *)
     FApplyLock: TCriticalSection;
     FFallbacks: TLLMProviderArray;
+    { Serializes checkpointed tool loops: PasClaw.Checkpoints' turn state is
+      process-global, so overlapping gateway turns would corrupt snapshot
+      attribution. Held across BeginTurn + RunToolLoop when checkpoints are on. }
+    FCheckpointTurnLock: TCriticalSection;
     (* Per-process scoped credential. Random hex generated in Create
        once per `pasclaw serve` / `pasclaw gateway` startup. Gates the
        /v1/relay/* surface independently of Cfg.Gateway.Token so an
@@ -257,6 +262,16 @@ type
                             AResp: TIdHTTPResponseInfo);
     procedure HandleFSPeek(ARequest: TIdHTTPRequestInfo;
                             AResp: TIdHTTPResponseInfo);
+    procedure HandleCheckpointsList(AResp: TIdHTTPResponseInfo);
+    procedure HandleCheckpointsUndo(ARequest: TIdHTTPRequestInfo;
+                            AResp: TIdHTTPResponseInfo);
+    procedure HandleCheckpointsRedo(ARequest: TIdHTTPRequestInfo;
+                            AResp: TIdHTTPResponseInfo);
+    { BeginTurn + RunToolLoop, serialized under FCheckpointTurnLock when
+      checkpoints are on (process-global turn state -- see field comment). }
+    function RunCheckpointedLoop(const Cfg: TToolLoopConfig;
+                            var Messages: array of TMessage;
+                            out Loop: TToolLoopResult): Boolean;
     procedure HandleLogs(AContext: TIdContext;
                           ARequest: TIdHTTPRequestInfo;
                           AResp: TIdHTTPResponseInfo);
@@ -413,10 +428,10 @@ uses
     there because TGatewayServer's FRelayQueue field references the
     type. Don't re-import here. }
   PasClaw.Tools.Sandbox,
+  PasClaw.Checkpoints,          { web UI checkpoints: Init/BeginTurn/Undo/Redo/state }
   PasClaw.Providers.Factory,
   PasClaw.Providers.Catalog,   { TProviderSpec for /v1/models discovery }
   PasClaw.Providers.Models,    { DiscoverModels / cache -- /v1/models roster }
-  PasClaw.Tools.ToolLoop,
   PasClaw.Stream.Reliability,
   PasClaw.Agent.Compact,
   PasClaw.Agent.Prompt,
@@ -592,13 +607,45 @@ begin
       Result := Result + UpCase(S[i]);
 end;
 
+function GatewayCheckpointSession: string;
+{ Scope the gateway's checkpoint archive to the active workspace: snapshots
+  store absolute paths, so two gateway runs under different workspaces must not
+  share one timeline (else undo in B could restore A's files). FNV-1a of the
+  canonical workspace path -> a short, stable session-dir name. }
+var
+  Ws: string;
+  H: LongWord;
+  i: Integer;
+begin
+  Ws := CurrentWorkspace;
+  if Ws = '' then Ws := GetHome;
+  H := 2166136261;
+  for i := 1 to Length(Ws) do
+  begin
+    H := H xor Ord(Ws[i]);
+    H := H * 16777619;
+  end;
+  Result := '_gateway_' + LowerCase(IntToHex(H, 8));
+end;
+
 constructor TGatewayServer.Create(Cfg: TConfig; Provider: ILLMProvider; Registry: TToolRegistry);
+var
+  CC: TCheckpointConfig;
 begin
   inherited Create;
   FCfg      := Cfg;
   FProvider := Provider;
   FRegistry := Registry;
   FMaxIter  := 25;
+  { Wire the per-turn workspace checkpoint system into the gateway (it was
+    CLI/TUI-only). Scoped to the active workspace (not a single global name) so
+    runs under different workspaces don't share a timeline; BeginTurn fires per
+    chat turn, serialized via FCheckpointTurnLock. No-op when disabled. }
+  CC.Enabled   := FCfg.CheckpointsEnabled;
+  CC.SessionId := GatewayCheckpointSession;
+  CC.Root      := JoinPath(GetHome, 'workspace/checkpoints');
+  CC.KeepLast  := FCfg.CheckpointsKeepLast;
+  InitCheckpoints(CC);
   FStopFlag := TEvent.Create(nil, True, False, '');
   FWebhookPaths := TStringList.Create;
   FWebhookPaths.CaseSensitive := False;
@@ -628,6 +675,7 @@ begin
   { Live provider hot-swap state. Cache the fallback chain now (relay queue is
     registered above, so a relay fallback resolves) -- rebuilt on config write. }
   FApplyLock := TCriticalSection.Create;
+  FCheckpointTurnLock := TCriticalSection.Create;
   FFallbacks := ResolveFallbacks(FCfg);
 
   { Generate a fresh per-process relay-scoped token. Format is
@@ -663,6 +711,7 @@ begin
   SetGlobalRelayQueue(nil);
   FRelayQueue.Free;
   FApplyLock.Free;
+  FCheckpointTurnLock.Free;
   inherited Destroy;
 end;
 
@@ -1119,6 +1168,9 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs/read') then HandleFSRead(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs/download') then HandleFSDownload(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs/peek') then HandleFSPeek(ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/checkpoints')      then HandleCheckpointsList(AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/checkpoints/undo') then HandleCheckpointsUndo(ARequest, AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/checkpoints/redo') then HandleCheckpointsRedo(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/logs')    then HandleLogs(AContext, ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/relay/poll') then
       HandleRelayPoll(AContext, ARequest, AResponse)
@@ -3204,6 +3256,95 @@ begin
   AResp.ContentLength     := Mem.Size;
 end;
 
+function TGatewayServer.RunCheckpointedLoop(const Cfg: TToolLoopConfig;
+  var Messages: array of TMessage; out Loop: TToolLoopResult): Boolean;
+{ PasClaw.Checkpoints keeps GTurn / GTurnPaths process-globally, so two
+  overlapping gateway turns (Indy serves requests on worker threads) would let
+  one BeginTurn clear/advance state mid-snapshot of another -- corrupting which
+  turn a file is attributed to, and thus undo/redo. Serialize the whole
+  BeginTurn+loop under FCheckpointTurnLock when checkpoints are enabled. When
+  disabled, run unserialized (no shared state to protect). }
+begin
+  if CheckpointsEnabled then
+  begin
+    FCheckpointTurnLock.Acquire;
+    try
+      BeginTurn;
+      Result := RunToolLoop(Cfg, Messages, Loop);
+    finally
+      FCheckpointTurnLock.Release;
+    end;
+  end
+  else
+    Result := RunToolLoop(Cfg, Messages, Loop);
+end;
+
+procedure TGatewayServer.HandleCheckpointsList(AResp: TIdHTTPResponseInfo);
+{ GET /v1/checkpoints -- backend/enabled/current/can_redo + per-turn file lists. }
+begin
+  WriteJSON(AResp, 200, CheckpointsStateJSON);
+end;
+
+function CheckpointResultJSON(Ok: Boolean; const Restored: TRestoredFileArray;
+  const Err: string; out Status: Integer): string;
+var
+  Root: TJsonObject;
+  Arr: TJsonArray;
+  FileObj: TJsonObject;
+  i: Integer;
+begin
+  if not Ok then
+  begin
+    Status := 400;
+    Exit('{"ok":false,"error":"' + JsonEscape(Err) + '"}');
+  end;
+  Status := 200;
+  Root := TJsonObject.Create;
+  try
+    Root.PutBool('ok', True);
+    Root.PutInt ('restored', Length(Restored));
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Restored) do
+    begin
+      FileObj := TJsonObject.Create;
+      FileObj.PutStr('path', Restored[i].Path);
+      Arr.AddObject(FileObj);
+    end;
+    Root.PutArray('files', Arr);
+    Result := Root.ToJSON;
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleCheckpointsUndo(ARequest: TIdHTTPRequestInfo;
+                                               AResp: TIdHTTPResponseInfo);
+{ POST /v1/checkpoints/undo?n=N -- roll the workspace back N turns (default 1). }
+var
+  N, Status: Integer;
+  Restored: TRestoredFileArray;
+  Err, Body: string;
+begin
+  N := StrToIntDef(ARequest.Params.Values['n'], 1);
+  if N < 1 then N := 1;
+  Body := CheckpointResultJSON(UndoTurns(N, Restored, Err), Restored, Err, Status);
+  WriteJSON(AResp, Status, Body);
+end;
+
+procedure TGatewayServer.HandleCheckpointsRedo(ARequest: TIdHTTPRequestInfo;
+                                               AResp: TIdHTTPResponseInfo);
+{ POST /v1/checkpoints/redo?n=N -- re-apply N undone turns (zpaq backend only). }
+var
+  N, Status: Integer;
+  Restored: TRestoredFileArray;
+  Err, Body: string;
+begin
+  N := StrToIntDef(ARequest.Params.Values['n'], 1);
+  if N < 1 then N := 1;
+  Body := CheckpointResultJSON(RedoTurns(N, Restored, Err), Restored, Err, Status);
+  WriteJSON(AResp, Status, Body);
+end;
+
 type
   TLogStreamWriter = class
     Conn: TIdTCPConnection;
@@ -3885,7 +4026,7 @@ begin
   LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
   LoopCfg.StreamReliability := FCfg.StreamReliability;
 
-  if not RunToolLoop(LoopCfg, Msgs, Loop) then
+  if not RunCheckpointedLoop(LoopCfg, Msgs, Loop) then
   begin
     WriteJSON(AResp, 502, '{"error":"loop failed"}');
     Exit;
@@ -4590,7 +4731,7 @@ begin
       LoopCfg.OnToolCall   := Streamer.NoteToolCall;
       LoopCfg.OnToolResult := Streamer.NoteToolResult;
       Streamer.WriteComment('connected');
-      if not RunToolLoop(LoopCfg, Msgs, Loop) then
+      if not RunCheckpointedLoop(LoopCfg, Msgs, Loop) then
       begin
         if FDebugIO then LogDebug('chat/completions -> 502 (tool loop failed)');
         Streamer.WriteError('tool loop failed');
@@ -4666,7 +4807,7 @@ begin
     LoopCfg.OnToolCall   := ActivityCollector.OnToolCall;
     LoopCfg.OnToolResult := ActivityCollector.OnToolResult;
 
-    if not RunToolLoop(LoopCfg, Msgs, Loop) then
+    if not RunCheckpointedLoop(LoopCfg, Msgs, Loop) then
     begin
       if FDebugIO then LogDebug('chat/completions -> 502 (tool loop failed)');
       WriteJSON(AResp, 502,
@@ -6299,7 +6440,7 @@ begin
       if FCfg.StreamReliability.ToolCallRepairEnabled then
         RepairOrphanedToolCalls(Msgs);
 
-      if not RunToolLoop(LoopCfg, Msgs, Loop) then
+      if not RunCheckpointedLoop(LoopCfg, Msgs, Loop) then
       begin
         ReplyObj := BuildResponsesObject(RespId, ReqModel, 'failed', '',
                                           EmptyToolCalls, ToolsRawJSON,
