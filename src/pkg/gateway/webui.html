@@ -1587,11 +1587,21 @@ function renderDocInto(el, name, text) {
 }
 
 /* Path from a hashline patch header (¶path#hash on the first line). */
-function firstPatchPath(patch) {
-  let s = String(patch || "").split("\n")[0].trim().replace(/^¶/, "");
-  const h = s.indexOf("#");
-  if (h >= 0) s = s.slice(0, h);
-  return s.trim();
+/* All target paths from a hashline patch: every ¶path#hash header line. A
+   single fs_edit_hashline call can edit multiple files, so we collect them all
+   (not just the first) for the Files dropdown. */
+function allPatchPaths(patch) {
+  const out = [];
+  for (const line of String(patch || "").split("\n")) {
+    const t = line.trim();
+    if (t[0] !== "¶") continue;
+    let s = t.slice(1);
+    const h = s.indexOf("#");
+    if (h >= 0) s = s.slice(0, h);
+    s = s.trim();
+    if (s) out.push(s);
+  }
+  return out;
 }
 
 /* Files written/edited in the current chat, newest-last, deduped. Prefers the
@@ -1607,7 +1617,7 @@ function chatFiles() {
     for (const d of (t.tools || [])) {
       try {
         if (d.name === "fs_write") { add(JSON.parse(d.args).path); used = true; }
-        else if (d.name === "fs_edit_hashline") { add(firstPatchPath(JSON.parse(d.args).patch)); used = true; }
+        else if (d.name === "fs_edit_hashline") { allPatchPaths(JSON.parse(d.args).patch).forEach(add); used = true; }
       } catch {}
     }
     if (!used) {
