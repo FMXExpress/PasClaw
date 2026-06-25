@@ -270,6 +270,26 @@
   .relay-hint code{background:rgba(255,255,255,.05);padding:.05rem .25rem;border-radius:3px}
   .relay-hint-small{display:block;color:var(--mut);font-size:11px;margin-top:.25rem;line-height:1.4}
   .relay-hint-small code{background:rgba(255,255,255,.05);padding:.05rem .25rem;border-radius:3px}
+  /* Condensed lead text with an inline collapsible "details" disclosure. */
+  .relay-lead{padding:.45rem .8rem;color:var(--mut);font-size:12.5px;line-height:1.5}
+  .relay-lead code{background:rgba(255,255,255,.05);padding:.05rem .25rem;border-radius:3px}
+  .relay-info{margin-top:.35rem}
+  .relay-info > summary{cursor:pointer;color:var(--cyan);font-size:11px;width:auto;
+    list-style:none;display:inline-flex;align-items:center;gap:.3rem}
+  .relay-info > summary::-webkit-details-marker{display:none}
+  .relay-info > summary::before{content:"▸";font-size:.8em;transition:transform .15s}
+  .relay-info[open] > summary::before{transform:rotate(90deg)}
+  /* Collapsible major sections -- summary styled like the old <h3> headings. */
+  .relay-sec{border-top:1px solid rgba(255,255,255,.07);margin-top:.55rem}
+  .relay-sec > summary{cursor:pointer;margin:0;padding:.7rem .8rem .5rem;font-size:11px;
+    color:var(--cyan);text-transform:uppercase;letter-spacing:.1em;font-weight:600;
+    list-style:none;display:flex;align-items:center;gap:.45rem}
+  .relay-sec > summary::-webkit-details-marker{display:none}
+  .relay-sec > summary::before{content:"▸";font-size:.85em;color:var(--mut);transition:transform .15s}
+  .relay-sec[open] > summary::before{transform:rotate(90deg)}
+  /* Group the URL + token inputs in a bordered panel. */
+  .relay-panel{margin:.5rem .8rem;border:1px solid rgba(255,255,255,.08);
+    border-radius:10px;background:rgba(2,5,15,.3)}
   .relay-status-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
     gap:.5rem;padding:.4rem .8rem}
   .relay-config-grid{display:grid;grid-template-columns:1fr 1fr;gap:.85rem;padding:.6rem .8rem}
@@ -729,10 +749,12 @@
          gateway. Live worker status + queue depth from /v1/relay/status
          underneath. -->
     <div class="pane" id="relay-pane">
-      <div class="relay-hint" id="relay-hint">
-        <p>Workers connect outbound to this gateway's <code>/v1/relay/poll</code>, advertise their model capabilities, drain pending inference requests, run them locally, and POST the results back to <code>/v1/relay/respond/&lt;id&gt;</code>. See
-          <a href="https://github.com/FMXExpress/PasClaw/blob/main/docs/providers-relay.md" target="_blank" rel="noopener">docs/providers-relay.md</a>
-          for the full wire protocol.</p>
+      <div class="relay-lead">
+        Workers connect outbound to <code>/v1/relay/poll</code>, run inference locally, and POST results back — WebGPU / phone / shared home-GPU inference with no inbound ports.
+        <details class="relay-info"><summary>How it works</summary>
+          Workers advertise capabilities via <code>X-Relay-Capabilities</code>, drain pending requests off this gateway's queue, and POST results to <code>/v1/relay/respond/&lt;id&gt;</code>. See
+          <a href="https://github.com/FMXExpress/PasClaw/blob/main/docs/providers-relay.md" target="_blank" rel="noopener">docs/providers-relay.md</a> for the wire protocol.
+        </details>
       </div>
 
       <div class="relay-status-row">
@@ -743,7 +765,7 @@
         <div class="stat-card"><div class="stat-label">Failed</div><div class="stat-value" id="relay-stat-failed">—</div></div>
       </div>
 
-      <div class="relay-config-grid">
+      <div class="relay-panel relay-config-grid">
         <label>Gateway URL
           <input type="text" id="relay-url" autocomplete="off" spellcheck="false">
           <span class="relay-hint-small">Defaults to this page's origin. Override if workers reach the gateway through a different URL (tunnel, proxy, public hostname).</span>
@@ -752,63 +774,58 @@
           <span>Relay worker token <button type="button" class="icon-btn" id="relay-token-toggle" title="Show/hide the real token in snippets">show</button></span>
           <input type="text" id="relay-token" autocomplete="off" spellcheck="false" readonly>
           <span class="relay-hint-small" id="relay-token-hint">
-            Per-process credential that unlocks <strong>only</strong> <code>/v1/relay/*</code>, not <code>/v1/chat</code> / <code>/v1/config</code> / <code>/v1/skills</code>.
-            Regenerated every <code>pasclaw serve</code> / <code>pasclaw gateway</code> startup; auto-fetched from <code>GET /v1/relay/worker-token</code>.
-            With "show" off, snippets use the literal placeholder <code>&lt;PASCLAW_RELAY_TOKEN&gt;</code> so you can screen-share safely.
+            Per-process credential that unlocks <strong>only</strong> <code>/v1/relay/*</code>. Regenerated each <code>pasclaw serve</code>/<code>gateway</code> startup. With "show" off, snippets use the placeholder <code>&lt;PASCLAW_RELAY_TOKEN&gt;</code> so you can screen-share safely.
           </span>
         </label>
       </div>
 
-      <h3>In-browser worker</h3>
-      <div class="relay-inb">
-        <p class="relay-hint" style="margin:0">
-          Run a relay worker in this browser tab. Clicking Connect dynamically loads
-          <code>@mlc-ai/web-llm</code> from <code>esm.run</code> and downloads the
-          selected model's weights on first use -- nothing third-party is fetched until
-          you click. The module runs in a <strong>dedicated Web Worker</strong>
-          (Worker scope has no <code>window</code> and no <code>localStorage</code>, so
-          the WebLLM module can't read this page's stored gateway token), and it talks
-          to the gateway with a <strong>relay-scoped token</strong> that unlocks only
-          <code>/v1/relay/*</code> -- a compromised model can't impersonate you against
-          the rest of PasClaw. Closing the tab disconnects.
-          <br><br>
-          <em>Tool calls:</em> WebLLM only accepts the <code>tools</code> argument for the
-          Hermes-2-Pro / Hermes-3 entries flagged "tool-calls supported" below. Other
-          models still work for text-only turns; if the agent sends a turn with tools the
-          worker strips them and retries (no structured <code>tool_calls</code> come back,
-          but text replies do).
-        </p>
-        <div class="relay-inb-row">
-          <label>Model
-            <select id="relay-inb-model">
-              <option value="" disabled selected>-- choose a model --</option>
-            </select>
-          </label>
-          <label>Worker id
-            <input type="text" id="relay-inb-wid" autocomplete="off" spellcheck="false">
-          </label>
-          <div class="relay-inb-actions">
-            <button type="button" id="relay-inb-connect" class="primary">Connect</button>
-            <button type="button" id="relay-inb-disconnect" disabled>Disconnect</button>
+      <details class="relay-sec" open>
+        <summary>In-browser worker</summary>
+        <div class="relay-inb">
+          <div class="relay-lead">
+            Run a relay worker in this tab: Connect loads <code>@mlc-ai/web-llm</code> from <code>esm.run</code> and downloads the model's weights on first use — nothing third-party is fetched until you click.
+            <details class="relay-info"><summary>Security &amp; tool-call notes</summary>
+              The module runs in a <strong>dedicated Web Worker</strong> (no <code>window</code> / <code>localStorage</code>, so it can't read this page's stored gateway token) and talks to the gateway with a <strong>relay-scoped token</strong> that unlocks only <code>/v1/relay/*</code> — a compromised model can't impersonate you. Closing the tab disconnects.
+              <br><br>
+              <em>Tool calls:</em> WebLLM only accepts the <code>tools</code> argument for the Hermes-2-Pro / Hermes-3 entries flagged "tool-calls supported". Other models still work for text-only turns; if a turn carries tools the worker strips them and retries (text replies come back, no structured <code>tool_calls</code>).
+            </details>
           </div>
+          <div class="relay-inb-row">
+            <label>Model
+              <select id="relay-inb-model">
+                <option value="" disabled selected>-- choose a model --</option>
+              </select>
+            </label>
+            <label>Worker id
+              <input type="text" id="relay-inb-wid" autocomplete="off" spellcheck="false">
+            </label>
+            <div class="relay-inb-actions">
+              <button type="button" id="relay-inb-connect" class="primary">Connect</button>
+              <button type="button" id="relay-inb-disconnect" disabled>Disconnect</button>
+            </div>
+          </div>
+          <div class="relay-inb-status">
+            <span class="dot" id="relay-inb-dot"></span>
+            <span id="relay-inb-status-text">idle -- pick a model and click Connect</span>
+            <div class="relay-inb-meter"><span id="relay-inb-meter-fill"></span></div>
+            <span id="relay-inb-jobs">0 served</span>
+          </div>
+          <pre id="relay-inb-log">(log)</pre>
         </div>
-        <div class="relay-inb-status">
-          <span class="dot" id="relay-inb-dot"></span>
-          <span id="relay-inb-status-text">idle -- pick a model and click Connect</span>
-          <div class="relay-inb-meter"><span id="relay-inb-meter-fill"></span></div>
-          <span id="relay-inb-jobs">0 served</span>
-        </div>
-        <pre id="relay-inb-log">(log)</pre>
-      </div>
+      </details>
 
-      <h3>Connect a worker from another host</h3>
-      <div class="relay-snippets" id="relay-snippets"></div>
+      <details class="relay-sec">
+        <summary>Connect a worker from another host</summary>
+        <div class="relay-snippets" id="relay-snippets"></div>
+      </details>
 
-      <h3>Connected workers</h3>
-      <table class="data" id="relay-workers">
-        <thead><tr><th>Worker id</th><th>Capabilities</th><th>Requests</th><th>Last seen</th></tr></thead>
-        <tbody></tbody>
-      </table>
+      <details class="relay-sec" open>
+        <summary>Connected workers</summary>
+        <table class="data" id="relay-workers">
+          <thead><tr><th>Worker id</th><th>Capabilities</th><th>Requests</th><th>Last seen</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </details>
     </div>
   </div>
 
