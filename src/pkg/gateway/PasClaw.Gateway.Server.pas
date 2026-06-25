@@ -2794,10 +2794,8 @@ begin
        something" request really does want the directory the
        sandbox WILL allow rather than one it's guaranteed to
        refuse. *)
-    if FCfg.Sandbox.RestrictToWorkspace and (FCfg.Sandbox.Workspace <> '') then
-      Path := FCfg.Sandbox.Workspace
-    else
-      Path := GetHome;
+    Path := CurrentWorkspace;
+    if Path = '' then Path := GetHome;
   end;
   { Route through the same sandbox CanReadPath check that fs_read
     uses. PR #88 Codex P1: the original "reject `..`" check let
@@ -2805,7 +2803,7 @@ begin
     sandbox.restrict_to_workspace was on. CanReadPath honours
     workspace bounds, allow_read_paths globs, and
     allow_read_outside_workspace. }
-  if not CanReadPath(Path, Reason) then
+  if not CanReadPathHTTP(Path, Reason) then
   begin
     WriteJSON(AResp, 403, '{"error":"' + JsonEscape(Reason) + '"}');
     Exit;
@@ -2864,7 +2862,7 @@ begin
   { Same sandbox gate as HandleFSList -- fs_read's policy applies
     here too. PR #88 Codex P1 caught the original "reject `..`"
     check that let /etc/passwd through. }
-  if not CanReadPath(Path, Reason) then
+  if not CanReadPathHTTP(Path, Reason) then
   begin
     WriteJSON(AResp, 403, '{"error":"' + JsonEscape(Reason) + '"}');
     Exit;
@@ -2934,7 +2932,7 @@ begin
     WriteJSON(AResp, 400, '{"error":"bad path"}');
     Exit;
   end;
-  if not CanReadPath(Path, Reason) then
+  if not CanReadPathHTTP(Path, Reason) then
   begin
     WriteJSON(AResp, 403, '{"error":"' + JsonEscape(Reason) + '"}');
     Exit;
@@ -2996,7 +2994,7 @@ begin
     WriteJSON(AResp, 400, '{"error":"bad path"}');
     Exit;
   end;
-  if not CanReadPath(Path, Reason) then
+  if not CanReadPathHTTP(Path, Reason) then
   begin
     WriteJSON(AResp, 403, '{"error":"' + JsonEscape(Reason) + '"}');
     Exit;

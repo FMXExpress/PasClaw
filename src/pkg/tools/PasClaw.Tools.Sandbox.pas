@@ -85,6 +85,15 @@ function CanReadPath (const Path: string; out Reason: string): Boolean;
 function CanWritePath(const Path: string; out Reason: string): Boolean;
 function ShellAllowed(const Cmd:  string; out Reason: string): Boolean;
 
+{ Like CanReadPath, but the workspace boundary is ALWAYS enforced regardless of
+  RestrictToWorkspace / AllowReadOutsideWorkspace. The gateway's HTTP file
+  endpoints (/v1/fs, /v1/fs/read, /v1/fs/download, /v1/fs/peek) use this so a
+  client that reaches the gateway can never pull a file from outside the
+  workspace -- even when the operator left the agent's tool sandbox
+  unrestricted (the default). allow_read_paths still applies as an explicit
+  operator opt-in. }
+function CanReadPathHTTP(const Path: string; out Reason: string): Boolean;
+
 { The configured workspace directory in canonical form. The shell
   tool reads this to bind RunOneShot's working directory when
   RestrictToWorkspace is on, so a model that managed to slip a
@@ -220,6 +229,36 @@ begin
   Reason := 'refused: path "' + Canon + '" is outside the workspace ' +
             '"' + GWorkspace + '" and does not match any allow_read_paths ' +
             'pattern (sandbox.restrict_to_workspace=true)';
+  Result := False;
+end;
+
+function CanReadPathHTTP(const Path: string; out Reason: string): Boolean;
+var
+  Canon: string;
+begin
+  Reason := '';
+  { Reject pathological input before touching the filesystem: an embedded NUL
+    can truncate the path differently at the canonicalisation check vs the OS
+    open (a classic poison-NUL bypass), and a megabyte-long path is only ever a
+    DoS/oversize probe. A long-but-sane path is still handled normally -- the
+    boundary check below is a lexical prefix test, so length alone can't escape
+    the workspace. }
+  if Pos(#0, Path) > 0 then
+  begin
+    Reason := 'refused: path contains a NUL byte';
+    Exit(False);
+  end;
+  if Length(Path) > 4096 then
+  begin
+    Reason := 'refused: path too long';
+    Exit(False);
+  end;
+  Canon := Canonicalize(Path);
+  if PathInsideDirectory(Canon, GWorkspace) then Exit(True);
+  if AnyRegexMatches(Canon, GPolicy.AllowReadPaths) then Exit(True);
+  Reason := 'refused: path "' + Canon + '" is outside the workspace "' +
+            GWorkspace + '" -- gateway file access is confined to the ' +
+            'workspace (independent of sandbox.restrict_to_workspace)';
   Result := False;
 end;
 
