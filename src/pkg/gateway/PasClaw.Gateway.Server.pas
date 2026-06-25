@@ -2931,6 +2931,36 @@ begin
   end;
 end;
 
+function FSBytesLookText(const Bytes: TBytes; Count: Int64): Boolean;
+{ True iff the first Count bytes are valid UTF-8 with no NUL -- i.e. safe to
+  decode and return as a text "content" field. Binary content (a NUL, or an
+  invalid UTF-8 sequence) returns False so HandleFSRead flags it and the web UI
+  shows the hex viewer instead of trying to render it as text. This matters on
+  the Delphi build: TEncoding.UTF8.GetString on invalid bytes raises a codepage
+  error ("No mapping for the Unicode character ...") that surfaced as a 500.
+  A multibyte sequence truncated at the Count cap is treated as text. }
+var
+  i: Int64;
+  b, n, j: Integer;
+begin
+  i := 0;
+  while i < Count do
+  begin
+    b := Bytes[i];
+    if b = 0 then Exit(False);
+    if b < $80 then begin Inc(i); Continue; end;
+    if      (b and $E0) = $C0 then n := 1
+    else if (b and $F0) = $E0 then n := 2
+    else if (b and $F8) = $F0 then n := 3
+    else Exit(False);
+    if i + n >= Count then Exit(True);   { truncated tail at the cap -> assume text }
+    for j := 1 to n do
+      if (Bytes[i + j] and $C0) <> $80 then Exit(False);
+    Inc(i, n + 1);
+  end;
+  Result := True;
+end;
+
 procedure TGatewayServer.HandleFSRead(ARequest: TIdHTTPRequestInfo;
                                        AResp: TIdHTTPResponseInfo);
 const
@@ -2939,8 +2969,8 @@ var
   Path, Body, Reason: string;
   Root: TJsonObject;
   Strm: TFileStream;
-  Truncated: Boolean;
-  ToRead: Int64;
+  Truncated, IsBinary: Boolean;
+  ToRead, FullSize: Int64;
   Bytes: TBytes;
 begin
   Path := ARequest.Params.Values['path'];
@@ -2971,19 +3001,31 @@ begin
     Exit;
   end;
   Truncated := False;
+  IsBinary  := False;
+  FullSize  := 0;
+  Body      := '';
   try
     Strm := TFileStream.Create(Path, fmOpenRead or fmShareDenyWrite);
     try
-      ToRead := Strm.Size;
+      FullSize := Strm.Size;
+      ToRead := FullSize;
       if ToRead > MAX_BYTES then begin ToRead := MAX_BYTES; Truncated := True; end;
       SetLength(Bytes, ToRead);
       if ToRead > 0 then Strm.ReadBuffer(Bytes[0], ToRead);
-      {$IFDEF FPC}
-      if ToRead = 0 then Body := ''
-      else SetString(Body, PAnsiChar(@Bytes[0]), ToRead);
-      {$ELSE}
-      Body := TEncoding.UTF8.GetString(Bytes);
-      {$ENDIF}
+      { Binary content (NUL / invalid UTF-8) is NOT decoded -- doing so 500s on
+        Delphi. Flag it so the web UI opens the hex viewer (it pages raw bytes
+        via /v1/fs/peek). }
+      if (ToRead > 0) and not FSBytesLookText(Bytes, ToRead) then
+        IsBinary := True
+      else
+      begin
+        {$IFDEF FPC}
+        if ToRead = 0 then Body := ''
+        else SetString(Body, PAnsiChar(@Bytes[0]), ToRead);
+        {$ELSE}
+        Body := TEncoding.UTF8.GetString(Bytes);
+        {$ENDIF}
+      end;
     finally
       Strm.Free;
     end;
@@ -2996,9 +3038,17 @@ begin
   end;
   Root := TJsonObject.Create;
   try
-    Root.PutStr ('path',      Path);
-    Root.PutStr ('content',   Body);
-    Root.PutBool('truncated', Truncated);
+    Root.PutStr ('path', Path);
+    if IsBinary then
+    begin
+      Root.PutBool('binary', True);
+      Root.PutInt ('size',   FullSize);
+    end
+    else
+    begin
+      Root.PutStr ('content',   Body);
+      Root.PutBool('truncated', Truncated);
+    end;
     WriteJSON(AResp, 200, Root.ToJSON);
   finally
     Root.Free;
