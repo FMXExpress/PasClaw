@@ -241,6 +241,8 @@ type
                             AResp: TIdHTTPResponseInfo);
     procedure HandleFSDownload(ARequest: TIdHTTPRequestInfo;
                             AResp: TIdHTTPResponseInfo);
+    procedure HandleFSPeek(ARequest: TIdHTTPRequestInfo;
+                            AResp: TIdHTTPResponseInfo);
     procedure HandleLogs(AContext: TIdContext;
                           ARequest: TIdHTTPRequestInfo;
                           AResp: TIdHTTPResponseInfo);
@@ -1042,6 +1044,7 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs')      then HandleFSList(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs/read') then HandleFSRead(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs/download') then HandleFSDownload(ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs/peek') then HandleFSPeek(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/logs')    then HandleLogs(AContext, ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/relay/poll') then
       HandleRelayPoll(AContext, ARequest, AResponse)
@@ -2970,6 +2973,76 @@ begin
   AResp.ContentStream     := Strm;
   AResp.FreeContentStream := True;
   AResp.ContentLength     := Strm.Size;
+end;
+
+procedure TGatewayServer.HandleFSPeek(ARequest: TIdHTTPRequestInfo;
+                                      AResp: TIdHTTPResponseInfo);
+{ Stream a bounded WINDOW [offset, offset+len) of a file's raw bytes, plus an
+  X-File-Total header with the full size, so the web UI's hex viewer can page
+  through a huge file without ever downloading the whole thing (important when
+  the operator is driving a REMOTE gateway). Same sandbox + restricted gates as
+  read/download; the window is capped at 64 KB. }
+const
+  MAX_WIN = 64 * 1024;
+var
+  Path, Reason: string;
+  Strm: TFileStream;
+  Mem: TMemoryStream;
+  Offset, Len, Total: Int64;
+begin
+  Path := ARequest.Params.Values['path'];
+  if Path = '' then
+  begin
+    WriteJSON(AResp, 400, '{"error":"bad path"}');
+    Exit;
+  end;
+  if not CanReadPath(Path, Reason) then
+  begin
+    WriteJSON(AResp, 403, '{"error":"' + JsonEscape(Reason) + '"}');
+    Exit;
+  end;
+  if IsRestrictedFsPath(Path) then
+  begin
+    WriteJSON(AResp, 403, '{"error":"access to this file is restricted"}');
+    Exit;
+  end;
+  if not FileExists(Path) then
+  begin
+    WriteJSON(AResp, 404, '{"error":"not found"}');
+    Exit;
+  end;
+  Offset := StrToInt64Def(ARequest.Params.Values['offset'], 0);
+  Len    := StrToInt64Def(ARequest.Params.Values['len'], 4096);
+  if Len < 0 then Len := 0;
+  if Len > MAX_WIN then Len := MAX_WIN;
+  try
+    Strm := TFileStream.Create(Path, fmOpenRead or fmShareDenyWrite);
+  except
+    on E: Exception do
+    begin
+      WriteJSON(AResp, 500, '{"error":"' + JsonEscape(E.Message) + '"}');
+      Exit;
+    end;
+  end;
+  Mem := TMemoryStream.Create;
+  try
+    Total := Strm.Size;
+    if Offset < 0 then Offset := 0;
+    if Offset > Total then Offset := Total;
+    if Offset + Len > Total then Len := Total - Offset;
+    Strm.Position := Offset;
+    if Len > 0 then Mem.CopyFrom(Strm, Len);
+  finally
+    Strm.Free;
+  end;
+  Mem.Position := 0;
+  AResp.ResponseNo  := 200;
+  AResp.ContentType := 'application/octet-stream';
+  AResp.CustomHeaders.AddValue('X-File-Total',  IntToStr(Total));
+  AResp.CustomHeaders.AddValue('X-File-Offset', IntToStr(Offset));
+  AResp.ContentStream     := Mem;
+  AResp.FreeContentStream := True;
+  AResp.ContentLength     := Mem.Size;
 end;
 
 type

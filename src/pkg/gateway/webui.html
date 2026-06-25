@@ -108,6 +108,10 @@
   .fs-menu .frow span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .fs-menu .empty{color:var(--mut);padding:.45rem;font-size:11px}
   .dl-btn{padding:.05rem .35rem;font-size:11px;margin-left:.4rem}
+  .fs-img{max-width:100%;border-radius:8px;border:1px solid rgba(255,255,255,.1)}
+  .hexbar{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.5rem}
+  .hexbar .hexpos{color:var(--mut);font-size:11px;font-family:var(--mono)}
+  .hexdump{font-family:var(--mono);font-size:12px;line-height:1.45;white-space:pre}
   #params-toggle.on{background:rgba(32,246,255,.12);box-shadow:var(--glow-cyan)}
   .chat-params{display:flex;flex-direction:column;gap:.5rem;padding:.6rem .7rem;
     border-bottom:1px solid rgba(255,255,255,.08);background:rgba(2,5,15,.4)}
@@ -183,6 +187,11 @@
     border-top:1px solid rgba(255,255,255,.08);background:rgba(2,5,15,.4)}
   #attach-chips{display:flex;flex-wrap:wrap;gap:.35rem;flex-basis:100%;order:-1}
   #attach-chips:empty{display:none}
+  .msg-queue{display:flex;flex-wrap:wrap;gap:.35rem;flex-basis:100%;order:-1}
+  .msg-queue:empty{display:none}
+  .queue-chip{display:inline-flex;align-items:center;gap:.4rem;font-size:11px;color:var(--fg);
+    background:rgba(255,159,28,.1);border:1px solid rgba(255,159,28,.32);border-radius:999px;padding:.15rem .55rem}
+  .queue-chip button{background:none;border:0;color:var(--red);cursor:pointer;font-size:11px;padding:0;line-height:1}
   /* Slash-command autocomplete, floats above the composer and filters as you type. */
   .send{position:relative}
   .slash-menu{position:absolute;left:0;right:0;bottom:calc(100% + .3rem);z-index:50;
@@ -411,6 +420,8 @@
   .md ul,.md ol{margin:.35rem 0;padding-left:1.35rem}
   .md li{margin:.12rem 0}
   .md a{color:var(--cyan);text-decoration:underline}
+  .md-img{max-width:100%;border-radius:8px;margin:.35rem 0;display:block;
+    border:1px solid rgba(255,255,255,.1)}
   .md blockquote{margin:.4rem 0;padding:.15rem .7rem;border-left:2px solid var(--mag);color:var(--mut)}
   .md hr{border:0;border-top:1px solid rgba(255,255,255,.14);margin:.55rem 0}
   code.ic{background:rgba(2,5,15,.6);border:1px solid rgba(255,255,255,.1);
@@ -528,6 +539,7 @@
       <div id="log"></div>
       <form class="send" id="f">
         <div id="slash-menu" class="slash-menu" hidden></div>
+        <div id="msg-queue" class="msg-queue"></div>
         <div id="attach-chips"></div>
         <textarea id="m" rows="2"
           placeholder="Ask PasClaw... (Enter to send, Shift+Enter for newline, / for commands)"></textarea>
@@ -1344,6 +1356,12 @@ async function streamAssistant() {
        survive a reload rather than being lost with the failed reply. */
     if (activeTurns.length) persistActive();
     m.focus();
+    /* Type-ahead: send the next queued message now that the turn is done. */
+    if (msgQueue.length) {
+      const next = msgQueue.shift();
+      renderQueue();
+      submitUser(next);
+    }
   }
 }
 
@@ -1359,6 +1377,36 @@ function submitUser(msg) {
    composer is a single line, so multi-line editing keeps normal arrows). A
    leading "/" is a client-side command (the gateway has no slash API). */
 let histIdx = -1, histDraft = "";
+/* Type-ahead queue: messages composed while a reply streams; flushed one per
+   turn from streamAssistant's finally. Enter queues (instead of Stop) while
+   streaming; the Send button (labelled "Stop" then) still aborts. */
+let msgQueue = [];
+function enqueueMsg() {
+  const typed = m.value.trim();
+  if (!typed && !chatAttachments.length) return;
+  const msg = composeMessage(typed);
+  m.value = ""; chatAttachments = []; renderAttachChips();
+  msgQueue.push(msg);
+  renderQueue();
+}
+function renderQueue() {
+  const c = $("#msg-queue");
+  if (!c) return;
+  c.innerHTML = "";
+  msgQueue.forEach((msg, i) => {
+    const chip = document.createElement("span");
+    chip.className = "queue-chip";
+    const label = msg.split("\n")[0];
+    chip.innerHTML = '<span title="' + escapeHtml(msg) + '">⏳ ' +
+      escapeHtml(label.length > 56 ? label.slice(0, 56) + "…" : label) + '</span>';
+    const x = document.createElement("button");
+    x.type = "button"; x.textContent = "✕";
+    x.title = "Remove from queue";
+    x.addEventListener("click", () => { msgQueue.splice(i, 1); renderQueue(); });
+    chip.appendChild(x);
+    c.appendChild(chip);
+  });
+}
 const userHistory = () => activeTurns.filter(t => t.role === "u").map(t => t.text);
 function caretToEnd() { m.setSelectionRange(m.value.length, m.value.length); }
 
@@ -1371,7 +1419,12 @@ m.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { acceptSlash(true); e.preventDefault(); return; }
     if (e.key === "Escape")    { hideSlashMenu(); e.preventDefault(); return; }
   }
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); f.requestSubmit(); return; }
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    if (streaming) enqueueMsg();   // type-ahead: queue instead of stopping
+    else f.requestSubmit();
+    return;
+  }
   const multiline = m.value.indexOf("\n") >= 0;
   if (e.key === "ArrowUp" && !multiline) {
     const h = userHistory();
@@ -1415,6 +1468,109 @@ async function downloadPath(path, name) {
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 2000);
   } catch (e) { alert("download failed: " + e); }
+}
+
+/* ===== Files tab viewer: image / hex / text ===== */
+const FS_IMG_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i;
+const FS_IMG_MAX = 25 * 1024 * 1024;   // don't pull a giant "image" inline
+let lastFsBlobUrl = null;
+function freeFsBlob() { if (lastFsBlobUrl) { URL.revokeObjectURL(lastFsBlobUrl); lastFsBlobUrl = null; } }
+function humanBytes(b) {
+  b = Number(b) || 0;
+  return b < 1024 ? b + " B"
+    : b < 1048576 ? (b / 1024).toFixed(1) + " KB"
+    : b < 1073741824 ? (b / 1048576).toFixed(1) + " MB"
+    : (b / 1073741824).toFixed(2) + " GB";
+}
+
+/* Heuristic: a NUL byte, or >15% control chars in the first 4 KB, means treat
+   the file as binary and show a hex dump rather than mojibake text. */
+function looksBinary(s) {
+  if (s.indexOf("\u0000") >= 0) return true;
+  const n = Math.min(s.length, 4096);
+  let ctrl = 0;
+  for (let i = 0; i < n; i++) { const c = s.charCodeAt(i); if (c < 9 || (c > 13 && c < 32)) ctrl++; }
+  return n > 0 && ctrl / n > 0.15;
+}
+
+async function viewFile(path, name, size) {
+  const v = $("#fs-view");
+  freeFsBlob();
+  if (FS_IMG_RE.test(name)) {
+    if (size > FS_IMG_MAX) {
+      v.classList.remove("md");
+      v.textContent = "(" + humanBytes(size) + " image — too large to preview inline; use ⬇ to download)";
+      return;
+    }
+    try {
+      const blob = await (await gwFetch("/v1/fs/download?path=" + encodeURIComponent(path))).blob();
+      lastFsBlobUrl = URL.createObjectURL(blob);
+      v.classList.remove("md");
+      v.innerHTML = '<img class="fs-img" alt="' + escapeHtml(name) + '" src="' + lastFsBlobUrl + '">';
+    } catch (e) { v.classList.remove("md"); v.textContent = String(e); }
+    return;
+  }
+  try {
+    /* /v1/fs/read is server-capped at 256 KB, so this never pulls a giant file
+       just to sniff it; a binary one routes to the paged hex viewer below. */
+    const r = await (await gwFetch("/v1/fs/read?path=" + encodeURIComponent(path))).json();
+    const content = r.content || "";
+    if (looksBinary(content)) { viewHex(path, name, size); return; }
+    renderDocInto(v, name, content + (r.truncated ? "\n…(truncated)" : ""));
+  } catch (e) { v.classList.remove("md"); v.textContent = String(e); }
+}
+
+/* Paged hex viewer. Fetches ONLY the window being viewed via /v1/fs/peek, so a
+   500 MB file over a remote gateway costs one ~4 KB request per page, not a
+   full download. First/Prev/Next/Last page through the file. */
+function viewHex(path, name, sizeHint) {
+  const v = $("#fs-view");
+  const PAGE = 4096;
+  let offset = 0, total = Number(sizeHint) || 0;
+  async function render() {
+    let bytes;
+    try {
+      const r = await gwFetch("/v1/fs/peek?path=" + encodeURIComponent(path) +
+                              "&offset=" + offset + "&len=" + PAGE);
+      if (!r.ok) throw new Error("http " + r.status);
+      const h = r.headers.get("X-File-Total");
+      if (h != null && h !== "") total = parseInt(h, 10);
+      bytes = new Uint8Array(await r.arrayBuffer());
+    } catch (e) { v.classList.remove("md"); v.textContent = String(e); return; }
+    const rows = [];
+    for (let p = 0; p < bytes.length; p += 16) {
+      const hex = [];
+      let asc = "";
+      for (let j = 0; j < 16; j++) {
+        if (p + j < bytes.length) {
+          const b = bytes[p + j];
+          hex.push(b.toString(16).padStart(2, "0"));
+          asc += (b >= 32 && b < 127) ? String.fromCharCode(b) : ".";
+        } else hex.push("  ");
+        if (j === 7) hex.push("");
+      }
+      rows.push((offset + p).toString(16).padStart(8, "0") + "  " + hex.join(" ") + "  |" + asc + "|");
+    }
+    const end = offset + bytes.length;
+    v.classList.remove("md");
+    v.innerHTML = '<div class="hexbar">'
+      + '<button class="icon-btn" data-h="first" title="First">⏮</button>'
+      + '<button class="icon-btn" data-h="prev" title="Previous page">◀</button>'
+      + '<button class="icon-btn" data-h="next" title="Next page">▶</button>'
+      + '<button class="icon-btn" data-h="last" title="Last">⏭</button>'
+      + '<span class="hexpos"></span></div><div class="hexdump"></div>';
+    v.querySelector(".hexpos").textContent =
+      name + " — bytes " + offset + "–" + (end > offset ? end - 1 : offset) +
+      " of " + humanBytes(total) + " (" + total + ")";
+    v.querySelector(".hexdump").textContent = rows.join("\n") || "(empty)";
+    const lastPage = total > 0 ? Math.floor((total - 1) / PAGE) * PAGE : 0;
+    const go = o => { offset = Math.max(0, Math.min(o, lastPage)); render(); };
+    v.querySelector('[data-h="first"]').onclick = () => go(0);
+    v.querySelector('[data-h="prev"]').onclick  = () => go(offset - PAGE);
+    v.querySelector('[data-h="next"]').onclick  = () => go(offset + PAGE);
+    v.querySelector('[data-h="last"]').onclick  = () => go(lastPage);
+  }
+  render();
 }
 
 /* Render a document into a viewer <pre>: markdown for .md/.markdown (reusing the
@@ -1833,6 +1989,10 @@ function renderMarkdown(src) {
     s = s.replace(/`([^`]+)`/g, (_, c) => '<code class="ic">' + c + "</code>");
     s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     s = s.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+    /* Images BEFORE links (![alt](url) contains [alt](url)). Only http(s) and
+       data:image URLs, so no javascript:/other-scheme smuggling. */
+    s = s.replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+|data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+)\)/gi,
+                  (_, alt, u) => '<img class="md-img" src="' + esc(u) + '" alt="' + esc(alt) + '" loading="lazy">');
     s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
                   (_, t, u) => '<a href="' + esc(u) + '" target="_blank" rel="noopener">' + t + "</a>");
     return s;
@@ -2095,16 +2255,7 @@ const tabLoaders = {
           el.innerHTML = `<span>${escapeHtml(e.name)}${e.dir?"/":""}</span>`
                        + `<span class="size">${e.dir?"":e.size+"b"}</span>`
                        + (e.dir ? "" : `<button class="dl-btn icon-btn" title="Download">⬇</button>`);
-          el.addEventListener("click", async () => {
-            if (e.dir) load(full);
-            else {
-              try {
-                const r = await (await gwFetch("/v1/fs/read?path=" + encodeURIComponent(full))).json();
-                renderDocInto($("#fs-view"), e.name,
-                  (r.content || "") + (r.truncated ? "\n…(truncated)" : ""));
-              } catch (err) { const v = $("#fs-view"); v.classList.remove("md"); v.textContent = String(err); }
-            }
-          });
+          el.addEventListener("click", () => { if (e.dir) load(full); else viewFile(full, e.name, e.size); });
           if (!e.dir) el.querySelector(".dl-btn").addEventListener("click", ev => {
             ev.stopPropagation(); downloadPath(full, e.name);
           });
