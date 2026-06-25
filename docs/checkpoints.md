@@ -83,6 +83,35 @@ $PASCLAW_HOME/workspace/checkpoints/<session-id>/turn-NNNN/
 
 The carve-out for created files is the same in both backends: `/undo` doesn't delete files the model created during the rewound window. Fixing this needs a post-write snapshot path and is deferred to a follow-up; the alternative ("delete any file created during a rewound turn") risks data loss when the model rewrites unrelated files in the same turn.
 
+## Concurrency (per-session contexts)
+
+Checkpoint state is scoped **per session**, not per process. Each session
+(`sess_<workspace>_<chat>` in the gateway) owns a `TCheckpointContext` —
+its own turn counter, in-flight turn snapshots, backend selection and zpaq
+bookkeeping — held in a process registry keyed by root + session. The
+"current" context for a thread is thread-local, selected by
+`InitCheckpoints`.
+
+Two locks per context:
+
+- **state lock** — short, guards a context's fields inside each method.
+- **turn lock** — coarse, the embedder holds it across a whole turn
+  (`BeginTurn` → tool loop) or an undo/redo via
+  `AcquireCheckpointTurn` / `ReleaseCheckpointTurn`.
+
+Consequences for the gateway (multiple chats / users at once):
+
+- Different sessions run their turns **concurrently** — one chat's LLM
+  round-trips no longer block another's. (Before, a single process-global
+  turn lock serialized every checkpointed turn across all sessions.)
+- The **same** session still serializes against itself on its own turn
+  lock, so two requests on one chat can't tear each other's turn.
+- **Subagents** that run their tool loop on a separate thread inherit the
+  parent's context via `CurrentCheckpointHandle` (captured on the parent
+  thread) + `AdoptCheckpointHandle` (called on the child thread), so their
+  file writes snapshot into the parent's session turn. Contexts live for
+  the whole process, so an adopted handle never dangles.
+
 ## Choosing `KeepLast`
 
 `checkpoints.keep_last` (default 32) bounds how many turn records the journal keeps. Once exceeded, the oldest is dropped at the next `BeginTurn`. Under `cbZpaq` the archive itself isn't compacted — the segments stay on disk, just unreferenced from the journal. Disk grows monotonically per session; archive a finished session and remove its `checkpoints/<session-id>/` dir to reclaim space.
@@ -93,6 +122,6 @@ The carve-out for created files is the same in both backends: `/undo` doesn't de
 - `src/pkg/checkpoints/PasClaw.Checkpoints.Zpaq.pas` — thin wrapper over the vendored libzpaq port.
 - `src/pkg/vendor/zpaq/` — Xelitan's Free Pascal port of libzpaq 7.15, vendored permanently in-tree (MIT; see `NOTICE` for provenance).
 - Tests:
-  - `src/tests/checkpoints_tests.pas` — legacy backend coverage.
+  - `src/tests/checkpoints_tests.pas` — legacy backend coverage + per-session concurrency (distinct sessions stay isolated; same session serializes cleanly).
   - `src/tests/checkpoints_zpaq_tests.pas` — wrapper round-trip.
   - `src/tests/checkpoints_redo_tests.pas` — full `BeginTurn / SnapshotBeforeWrite / UndoTurns / RedoTurns` flow incl. redo-stack invalidation.
