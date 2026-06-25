@@ -19,12 +19,18 @@ unit ZpaqClasses;
 //                Supports both streaming and journaling formats.
 
 
-{$mode objfpc}{$H+}
+{ PasClaw: mode directive guarded so the unit also compiles under Delphi. }
+{$IFDEF FPC}{$mode objfpc}{$H+}{$ENDIF}
 
 interface
 
 uses
   SysUtils, Classes, DateUtils, libzpaq;
+
+{$IFNDEF FPC}
+type
+  DWord = LongWord;   { FPC built-in; not in scope on Delphi without Winapi }
+{$ENDIF}
 
 { ------------------------------------------------------------------ }
 {  Filter callback: return True to extract the file, False to skip.   }

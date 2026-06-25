@@ -70,7 +70,7 @@
         <Manifest_File>None</Manifest_File>
         <DCC_UsePackage>$(DCC_UsePackage)</DCC_UsePackage>
         <!-- Every src/pkg/* directory + src/cmd, relative to src/pasclaw/ -->
-        <DCC_UnitSearchPath>..\cmd;..\pkg\cliui;..\pkg\utils;..\pkg\logger;..\pkg\config;..\pkg\json;..\pkg\providers;..\pkg\stream;..\pkg\tokenizer;..\pkg\tools;..\pkg\mcp;..\pkg\gateway;..\pkg\channels;..\pkg\crypto;..\pkg\net;..\pkg\search;..\pkg\cron;..\pkg\skills;..\pkg\checkpoints;..\pkg\condense;..\pkg\session;..\pkg\identity;..\pkg\agent;..\pkg\memory;..\pkg\memory\localvector;..\pkg\kb;..\pkg\updater;..\pkg\membench;..\pkg\tui;..\pkg\platform;..\pkg\hashline;..\pkg\component;..\pkg\markdown;..\pkg\shell;..\pkg\otel;..\pkg\vendor\dmvcframework;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+        <DCC_UnitSearchPath>..\cmd;..\pkg\cliui;..\pkg\utils;..\pkg\logger;..\pkg\config;..\pkg\json;..\pkg\providers;..\pkg\stream;..\pkg\tokenizer;..\pkg\tools;..\pkg\mcp;..\pkg\gateway;..\pkg\channels;..\pkg\crypto;..\pkg\net;..\pkg\search;..\pkg\cron;..\pkg\skills;..\pkg\checkpoints;..\pkg\condense;..\pkg\session;..\pkg\identity;..\pkg\agent;..\pkg\memory;..\pkg\memory\localvector;..\pkg\kb;..\pkg\updater;..\pkg\membench;..\pkg\tui;..\pkg\platform;..\pkg\hashline;..\pkg\component;..\pkg\markdown;..\pkg\shell;..\pkg\otel;..\pkg\vendor\dmvcframework;..\pkg\vendor\zpaq;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
         <!--
           DCC_Namespace lets dcc32/dcc64 resolve bare unit names ("SysUtils",
           "Classes", "Windows") back to their fully qualified modern names
@@ -184,6 +184,7 @@
 
         <!-- pkg/checkpoints -->
         <DCCReference Include="..\pkg\checkpoints\PasClaw.Checkpoints.pas"/>
+        <DCCReference Include="..\pkg\checkpoints\PasClaw.Checkpoints.Zpaq.pas"/>
 
         <!-- pkg/tokenizer -->
         <DCCReference Include="..\pkg\tokenizer\PasClaw.Tokenizer.pas"/>
@@ -351,6 +352,13 @@
         <DCCReference Include="..\pkg\vendor\dmvcframework\MVCFramework.Console.pas"/>
         <None Include="..\pkg\vendor\dmvcframework\dmvcframework.inc"/>
         <None Include="..\pkg\vendor\dmvcframework\NOTICE"/>
+
+        <!-- pkg/vendor/zpaq (MIT) -- libzpaq port; backs the zpaq checkpoint store -->
+        <DCCReference Include="..\pkg\vendor\zpaq\libzpaq.pas"/>
+        <DCCReference Include="..\pkg\vendor\zpaq\ZpaqClasses.pas"/>
+        <DCCReference Include="..\pkg\vendor\zpaq\ZpaqSimple.pas"/>
+        <None Include="..\pkg\vendor\zpaq\LICENSE"/>
+        <None Include="..\pkg\vendor\zpaq\NOTICE"/>
 
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
