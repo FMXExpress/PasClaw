@@ -988,9 +988,19 @@ $$("nav button[data-tab]").forEach(b => b.addEventListener("click", () => showTa
 window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
 
 /* ===== Header status ===== */
-gwFetch("/v1/status").then(r => r.json()).then(s => {
-  $("#meta").textContent = `${s.default_provider}/${s.default_model} • tools:${s.tools} • mcp:${s.mcp_servers}`;
-}).catch(_ => $("#meta").textContent = "offline");
+let metaOffline = false;
+function refreshMeta() {
+  gwFetch("/v1/status").then(r => r.json()).then(s => {
+    $("#meta").textContent = `${s.default_provider}/${s.default_model} • tools:${s.tools} • mcp:${s.mcp_servers}`;
+    metaOffline = false;
+  }).catch(_ => {
+    $("#meta").textContent = "offline";
+    metaOffline = true;
+  });
+}
+refreshMeta();
+/* Poll every 5s so the header recovers automatically after a server restart. */
+setInterval(refreshMeta, 5000);
 
 /* ===== Sessions (server-backed) =====
    Chats are durable on the gateway under
