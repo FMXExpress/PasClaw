@@ -2931,32 +2931,53 @@ begin
   end;
 end;
 
-function FSBytesLookText(const Bytes: TBytes; Count: Int64): Boolean;
-{ True iff the first Count bytes are valid UTF-8 with no NUL -- i.e. safe to
-  decode and return as a text "content" field. Binary content (a NUL, or an
-  invalid UTF-8 sequence) returns False so HandleFSRead flags it and the web UI
-  shows the hex viewer instead of trying to render it as text. This matters on
-  the Delphi build: TEncoding.UTF8.GetString on invalid bytes raises a codepage
-  error ("No mapping for the Unicode character ...") that surfaced as a 500.
-  A multibyte sequence truncated at the Count cap is treated as text. }
+function FSBytesLookText(const Bytes: TBytes; Count: Int64;
+                         TruncatedAtCap: Boolean): Boolean;
+{ True iff the first Count bytes are WELL-FORMED UTF-8 with no NUL -- i.e. safe
+  to hand to the text decoder. Binary content returns False so HandleFSRead
+  flags it ("binary":true) and the web UI shows the hex viewer instead. This
+  matters on the Delphi build: TEncoding.UTF8.GetString on malformed bytes
+  raises a codepage error ("No mapping for the Unicode character ...") that
+  surfaced as a 500.
+
+  Enforces Unicode Table 3-7 (not just the byte-count shape), so overlong forms
+  (C0/C1, E0 80..9F, F0 80..8F), UTF-16 surrogates (ED A0..BF), and out-of-range
+  leads (F4 90.., F5..FF) are all rejected. An incomplete trailing sequence is
+  tolerated ONLY when the read was cut at the 256 KB cap (TruncatedAtCap) -- the
+  rest of that codepoint lives just past the cap; a file that genuinely ends
+  mid-sequence is malformed and treated as binary. }
 var
   i: Int64;
-  b, n, j: Integer;
+  b, b1: Byte;
+  need, lo, hi, k: Integer;
 begin
   i := 0;
   while i < Count do
   begin
     b := Bytes[i];
     if b = 0 then Exit(False);
-    if b < $80 then begin Inc(i); Continue; end;
-    if      (b and $E0) = $C0 then n := 1
-    else if (b and $F0) = $E0 then n := 2
-    else if (b and $F8) = $F0 then n := 3
-    else Exit(False);
-    if i + n >= Count then Exit(True);   { truncated tail at the cap -> assume text }
-    for j := 1 to n do
-      if (Bytes[i + j] and $C0) <> $80 then Exit(False);
-    Inc(i, n + 1);
+    if b <= $7F then begin Inc(i); Continue; end;
+    if b <  $C2 then Exit(False);                                 { 80..BF lone cont; C0/C1 overlong }
+    if      b <= $DF then begin need := 1; lo := $80; hi := $BF; end
+    else if b =  $E0 then begin need := 2; lo := $A0; hi := $BF; end  { reject overlong E0 80..9F }
+    else if b <= $EC then begin need := 2; lo := $80; hi := $BF; end
+    else if b =  $ED then begin need := 2; lo := $80; hi := $9F; end  { reject surrogates ED A0..BF }
+    else if b <= $EF then begin need := 2; lo := $80; hi := $BF; end
+    else if b =  $F0 then begin need := 3; lo := $90; hi := $BF; end  { reject overlong F0 80..8F }
+    else if b <= $F3 then begin need := 3; lo := $80; hi := $BF; end
+    else if b =  $F4 then begin need := 3; lo := $80; hi := $8F; end  { reject > U+10FFFF }
+    else Exit(False);                                             { F5..FF }
+    if i + need >= Count then
+    begin
+      { Sequence runs off the end of what we read. Fine only if we trimmed at
+        the cap (the rest is in the file); otherwise the file is malformed. }
+      if TruncatedAtCap then Exit(True) else Exit(False);
+    end;
+    b1 := Bytes[i + 1];
+    if (b1 < lo) or (b1 > hi) then Exit(False);
+    for k := 2 to need do
+      if (Bytes[i + k] and $C0) <> $80 then Exit(False);
+    Inc(i, need + 1);
   end;
   Result := True;
 end;
@@ -3015,7 +3036,7 @@ begin
       { Binary content (NUL / invalid UTF-8) is NOT decoded -- doing so 500s on
         Delphi. Flag it so the web UI opens the hex viewer (it pages raw bytes
         via /v1/fs/peek). }
-      if (ToRead > 0) and not FSBytesLookText(Bytes, ToRead) then
+      if (ToRead > 0) and not FSBytesLookText(Bytes, ToRead, Truncated) then
         IsBinary := True
       else
       begin
