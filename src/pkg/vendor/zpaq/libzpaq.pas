@@ -3235,7 +3235,7 @@ var
 
   { ---- read next char from meth at mpos ---- }
   { Not inlined: Delphi (E2449) refuses to inline a nested routine that touches
-    the enclosing scope (meth / mpos); FPC's {$inline on} made these inline but
+    the enclosing scope (meth / mpos). FPC inline-mode had made them inline, but
     the perf cost of dropping it on a method-string parser is nil. }
   function MC(): AnsiChar;
   begin if mpos <= Length(meth) then Result := meth[mpos] else Result := #0; end;
