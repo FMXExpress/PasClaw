@@ -93,8 +93,25 @@
     background:linear-gradient(transparent,var(--cyan),transparent)}
   .chat-pane{flex:1;display:flex;flex-direction:column;min-width:0}
   .chat-toolbar{display:flex;align-items:center;gap:.5rem;padding:.4rem .6rem;
-    border-bottom:1px solid rgba(255,255,255,.06)}
+    border-bottom:1px solid rgba(255,255,255,.06);position:relative}
   .params-summary{font-size:10.5px;color:var(--mut);letter-spacing:.03em}
+  .sandbox-chip{font-size:10px;letter-spacing:.04em;border:1px solid rgba(255,255,255,.14);
+    border-radius:999px;padding:.16rem .5rem;color:var(--mut);white-space:nowrap;cursor:default}
+  .sandbox-chip.sb-local{color:var(--cyan);border-color:rgba(32,246,255,.3)}
+  .sandbox-chip.sb-remote{color:var(--mag);border-color:rgba(255,55,213,.3)}
+  .fs-menu{position:absolute;top:100%;right:.6rem;z-index:40;min-width:14rem;max-width:24rem;
+    max-height:18rem;overflow:auto;background:var(--panel);border:1px solid rgba(255,255,255,.14);
+    border-radius:8px;padding:.3rem;box-shadow:0 12px 30px rgba(0,0,0,.4)}
+  .fs-menu .frow{display:flex;justify-content:space-between;gap:.6rem;padding:.32rem .45rem;
+    cursor:pointer;border-radius:6px;font-size:11.5px;color:var(--fg)}
+  .fs-menu .frow:hover{background:rgba(32,246,255,.12)}
+  .fs-menu .frow span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fs-menu .empty{color:var(--mut);padding:.45rem;font-size:11px}
+  .dl-btn{padding:.05rem .35rem;font-size:11px;margin-left:.4rem}
+  .fs-img{max-width:100%;border-radius:8px;border:1px solid rgba(255,255,255,.1)}
+  .hexbar{display:flex;align-items:center;gap:.4rem;flex-wrap:wrap;margin-bottom:.5rem}
+  .hexbar .hexpos{color:var(--mut);font-size:11px;font-family:var(--mono)}
+  .hexdump{font-family:var(--mono);font-size:12px;line-height:1.45;white-space:pre}
   #params-toggle.on{background:rgba(32,246,255,.12);box-shadow:var(--glow-cyan)}
   .chat-params{display:flex;flex-direction:column;gap:.5rem;padding:.6rem .7rem;
     border-bottom:1px solid rgba(255,255,255,.08);background:rgba(2,5,15,.4)}
@@ -126,8 +143,10 @@
     font-size:13px}
   .row.u .bub{border-color:rgba(32,246,255,.32);
     background:linear-gradient(135deg,rgba(12,42,61,.72),rgba(10,19,42,.7));box-shadow:var(--glow-cyan)}
-  .row.a .bub{border-color:rgba(255,55,213,.28);
-    background:linear-gradient(135deg,rgba(36,16,62,.72),rgba(14,17,44,.72));box-shadow:var(--glow-mag)}
+  /* Assistant turns read as full-width prose: no empty label gutter and no
+     bubble chrome (border/background/shadow dropped). User + error keep theirs. */
+  .row.a .role{display:none}
+  .row.a .bub{border:none;background:none;box-shadow:none;padding:.45rem .15rem}
   .row.e .bub{border-color:rgba(255,77,109,.42);
     background:linear-gradient(135deg,rgba(65,17,32,.78),rgba(37,14,25,.72));box-shadow:var(--glow-hot)}
   .toolcall{color:var(--cyan);font-weight:600}
@@ -168,6 +187,23 @@
     border-top:1px solid rgba(255,255,255,.08);background:rgba(2,5,15,.4)}
   #attach-chips{display:flex;flex-wrap:wrap;gap:.35rem;flex-basis:100%;order:-1}
   #attach-chips:empty{display:none}
+  .msg-queue{display:flex;flex-wrap:wrap;gap:.35rem;flex-basis:100%;order:-1}
+  .msg-queue:empty{display:none}
+  .queue-chip{display:inline-flex;align-items:center;gap:.4rem;font-size:11px;color:var(--fg);
+    background:rgba(255,159,28,.1);border:1px solid rgba(255,159,28,.32);border-radius:999px;padding:.15rem .55rem}
+  .queue-chip button{background:none;border:0;color:var(--red);cursor:pointer;font-size:11px;padding:0;line-height:1}
+  /* Slash-command autocomplete, floats above the composer and filters as you type. */
+  .send{position:relative}
+  .slash-menu{position:absolute;left:0;right:0;bottom:calc(100% + .3rem);z-index:50;
+    max-height:15rem;overflow:auto;background:var(--panel);
+    border:1px solid rgba(143,92,255,.3);border-radius:10px;
+    box-shadow:0 12px 30px rgba(0,0,0,.45);padding:.25rem}
+  .slash-menu .si{display:flex;gap:.6rem;align-items:baseline;padding:.34rem .5rem;
+    border-radius:7px;cursor:pointer}
+  .slash-menu .si .cmd{color:var(--cyan);font-family:var(--mono);font-size:12px;white-space:nowrap}
+  .slash-menu .si .desc{color:var(--mut);font-size:11px;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .slash-menu .si.active,.slash-menu .si:hover{background:rgba(32,246,255,.12)}
   .attach-chip{display:inline-flex;align-items:center;gap:.3rem;font-size:11px;
     background:rgba(32,246,255,.1);color:var(--cyan);border:1px solid rgba(32,246,255,.3);
     border-radius:999px;padding:.12rem .2rem .12rem .55rem;max-width:18rem}
@@ -373,16 +409,21 @@
     border:1px solid rgba(143,92,255,.4)}
 
   /* ===== Markdown rendering inside assistant bubbles ===== */
-  .bub.md{white-space:normal}
-  .bub.md h1,.bub.md h2,.bub.md h3,.bub.md h4{margin:.5rem 0 .3rem;line-height:1.25;color:var(--fg)}
-  .bub.md h1{font-size:1.32em} .bub.md h2{font-size:1.18em}
-  .bub.md h3{font-size:1.06em} .bub.md h4{font-size:1em}
-  .bub.md p{margin:.35rem 0} .bub.md p:first-child{margin-top:0} .bub.md p:last-child{margin-bottom:0}
-  .bub.md ul,.bub.md ol{margin:.35rem 0;padding-left:1.35rem}
-  .bub.md li{margin:.12rem 0}
-  .bub.md a{color:var(--cyan);text-decoration:underline}
-  .bub.md blockquote{margin:.4rem 0;padding:.15rem .7rem;border-left:2px solid var(--mag);color:var(--mut)}
-  .bub.md hr{border:0;border-top:1px solid rgba(255,255,255,.14);margin:.55rem 0}
+  /* Markdown styling is shared by chat bubbles (.bub.md) and the file/memory
+     viewers (.col-view.md) -- scope to .md so both pick it up. */
+  .md{white-space:normal}
+  .col-view.md{font-family:inherit;line-height:1.5}
+  .md h1,.md h2,.md h3,.md h4{margin:.5rem 0 .3rem;line-height:1.25;color:var(--fg)}
+  .md h1{font-size:1.32em} .md h2{font-size:1.18em}
+  .md h3{font-size:1.06em} .md h4{font-size:1em}
+  .md p{margin:.35rem 0} .md p:first-child{margin-top:0} .md p:last-child{margin-bottom:0}
+  .md ul,.md ol{margin:.35rem 0;padding-left:1.35rem}
+  .md li{margin:.12rem 0}
+  .md a{color:var(--cyan);text-decoration:underline}
+  .md-img{max-width:100%;border-radius:8px;margin:.35rem 0;display:block;
+    border:1px solid rgba(255,255,255,.1)}
+  .md blockquote{margin:.4rem 0;padding:.15rem .7rem;border-left:2px solid var(--mag);color:var(--mut)}
+  .md hr{border:0;border-top:1px solid rgba(255,255,255,.14);margin:.55rem 0}
   code.ic{background:rgba(2,5,15,.6);border:1px solid rgba(255,255,255,.1);
     border-radius:5px;padding:.04rem .3rem;font-size:.92em}
   .code-wrap{margin:.5rem 0;border:1px solid rgba(32,246,255,.22);border-radius:10px;
@@ -469,6 +510,9 @@
         <button class="icon-btn" id="sidebar-toggle" title="Collapse / show the session list">☰</button>
         <button class="icon-btn" id="params-toggle" title="Per-chat parameters">⚙ Params</button>
         <span id="params-summary" class="params-summary"></span>
+        <span id="sandbox-chip" class="sandbox-chip" style="margin-left:auto" hidden></span>
+        <button class="icon-btn" id="chat-files-btn" title="Download files created in this chat">🗎 Files</button>
+        <div id="chat-files-menu" class="fs-menu" hidden></div>
       </div>
       <div id="chat-params" class="chat-params" hidden>
         <label class="pf">System prompt
@@ -494,9 +538,11 @@
       </div>
       <div id="log"></div>
       <form class="send" id="f">
+        <div id="slash-menu" class="slash-menu" hidden></div>
+        <div id="msg-queue" class="msg-queue"></div>
         <div id="attach-chips"></div>
         <textarea id="m" rows="2"
-          placeholder="Ask PasClaw... (Enter to send, Shift+Enter for newline)"></textarea>
+          placeholder="Ask PasClaw... (Enter to send, Shift+Enter for newline, / for commands)"></textarea>
         <input id="attach-file" type="file" multiple style="display:none">
         <!-- Toolbar under the input: mode + attach on the left, model
              picker + Send on the right. mode-btn / model-sel were lifted
@@ -1310,18 +1356,464 @@ async function streamAssistant() {
        survive a reload rather than being lost with the failed reply. */
     if (activeTurns.length) persistActive();
     m.focus();
+    /* Type-ahead: send the next queued message now that the turn is done. */
+    if (msgQueue.length) {
+      const next = msgQueue.shift();
+      renderQueue();
+      submitUser(next);
+    }
   }
 }
 
 function submitUser(msg) {
+  histIdx = -1;
   recordTurn("u", msg);
   renderActive();        // draw the user turn with its actions
   streamAssistant();
 }
 
+/* ===== Shell-style input history + slash commands =====
+   Up/Down cycle through this session's prior USER messages (only while the
+   composer is a single line, so multi-line editing keeps normal arrows). A
+   leading "/" is a client-side command (the gateway has no slash API). */
+let histIdx = -1, histDraft = "";
+/* Type-ahead queue: messages composed while a reply streams; flushed one per
+   turn from streamAssistant's finally. Enter queues (instead of Stop) while
+   streaming; the Send button (labelled "Stop" then) still aborts. */
+let msgQueue = [];
+function enqueueMsg() {
+  const typed = m.value.trim();
+  if (!typed && !chatAttachments.length) return;
+  const msg = composeMessage(typed);
+  m.value = ""; chatAttachments = []; renderAttachChips();
+  msgQueue.push(msg);
+  renderQueue();
+}
+function renderQueue() {
+  const c = $("#msg-queue");
+  if (!c) return;
+  c.innerHTML = "";
+  msgQueue.forEach((msg, i) => {
+    const chip = document.createElement("span");
+    chip.className = "queue-chip";
+    const label = msg.split("\n")[0];
+    chip.innerHTML = '<span title="' + escapeHtml(msg) + '">⏳ ' +
+      escapeHtml(label.length > 56 ? label.slice(0, 56) + "…" : label) + '</span>';
+    const x = document.createElement("button");
+    x.type = "button"; x.textContent = "✕";
+    x.title = "Remove from queue";
+    x.addEventListener("click", () => { msgQueue.splice(i, 1); renderQueue(); });
+    chip.appendChild(x);
+    c.appendChild(chip);
+  });
+}
+const userHistory = () => activeTurns.filter(t => t.role === "u").map(t => t.text);
+function caretToEnd() { m.setSelectionRange(m.value.length, m.value.length); }
+
 m.addEventListener("keydown", e => {
-  if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); f.requestSubmit(); }
+  /* Slash-command menu owns the arrows / Enter / Tab / Esc while it's open. */
+  if (slashMenuOpen()) {
+    if (e.key === "ArrowDown") { moveSlash(1);  e.preventDefault(); return; }
+    if (e.key === "ArrowUp")   { moveSlash(-1); e.preventDefault(); return; }
+    if (e.key === "Tab")       { acceptSlash(false); e.preventDefault(); return; }
+    if (e.key === "Enter" && !e.shiftKey) { acceptSlash(true); e.preventDefault(); return; }
+    if (e.key === "Escape")    { hideSlashMenu(); e.preventDefault(); return; }
+  }
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    if (streaming) enqueueMsg();   // type-ahead: queue instead of stopping
+    else f.requestSubmit();
+    return;
+  }
+  const multiline = m.value.indexOf("\n") >= 0;
+  if (e.key === "ArrowUp" && !multiline) {
+    const h = userHistory();
+    if (!h.length) return;
+    if (histIdx === -1) { histDraft = m.value; histIdx = h.length; }
+    if (histIdx > 0) { histIdx--; m.value = h[histIdx]; e.preventDefault(); caretToEnd(); }
+    return;
+  }
+  if (e.key === "ArrowDown" && !multiline && histIdx !== -1) {
+    const h = userHistory();
+    if (histIdx < h.length - 1) { histIdx++; m.value = h[histIdx]; }
+    else { histIdx = -1; m.value = histDraft; }
+    e.preventDefault(); caretToEnd();
+    return;
+  }
+  if (histIdx !== -1 && e.key !== "ArrowUp" && e.key !== "ArrowDown") histIdx = -1;
 });
+
+/* Ephemeral assistant-styled note (slash-command output). Not recorded in
+   activeTurns, so it clears on the next render -- fine for transient output. */
+function sysNote(html) {
+  const r = makeRow("a");
+  const bub = r.querySelector(".bub");
+  bub.classList.add("md");
+  bub.innerHTML = html;
+  log.scrollTop = log.scrollHeight;
+}
+
+/* Download a workspace file's raw bytes via /v1/fs/download. Goes through
+   gwFetch (so the bearer token rides along, unlike a bare <a href>), buffers to
+   a blob, and saves it client-side -- works for binaries like a built .exe. */
+async function downloadPath(path, name) {
+  try {
+    const r = await gwFetch("/v1/fs/download?path=" + encodeURIComponent(path));
+    if (!r.ok) throw new Error("http " + r.status);
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = name || path.replace(/^.*[\\/]/, "") || "download";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 2000);
+  } catch (e) { alert("download failed: " + e); }
+}
+
+/* ===== Files tab viewer: image / hex / text ===== */
+const FS_IMG_RE = /\.(png|jpe?g|gif|webp|svg|bmp|ico|avif)$/i;
+const FS_IMG_MAX = 25 * 1024 * 1024;   // don't pull a giant "image" inline
+let lastFsBlobUrl = null;
+function freeFsBlob() { if (lastFsBlobUrl) { URL.revokeObjectURL(lastFsBlobUrl); lastFsBlobUrl = null; } }
+function humanBytes(b) {
+  b = Number(b) || 0;
+  return b < 1024 ? b + " B"
+    : b < 1048576 ? (b / 1024).toFixed(1) + " KB"
+    : b < 1073741824 ? (b / 1048576).toFixed(1) + " MB"
+    : (b / 1073741824).toFixed(2) + " GB";
+}
+
+/* Heuristic: a NUL byte, or >15% control chars in the first 4 KB, means treat
+   the file as binary and show a hex dump rather than mojibake text. */
+function looksBinary(s) {
+  if (s.indexOf("\u0000") >= 0) return true;
+  const n = Math.min(s.length, 4096);
+  let ctrl = 0;
+  for (let i = 0; i < n; i++) { const c = s.charCodeAt(i); if (c < 9 || (c > 13 && c < 32)) ctrl++; }
+  return n > 0 && ctrl / n > 0.15;
+}
+
+async function viewFile(path, name, size) {
+  const v = $("#fs-view");
+  freeFsBlob();
+  if (FS_IMG_RE.test(name)) {
+    if (size > FS_IMG_MAX) {
+      v.classList.remove("md");
+      v.textContent = "(" + humanBytes(size) + " image — too large to preview inline; use ⬇ to download)";
+      return;
+    }
+    try {
+      const blob = await (await gwFetch("/v1/fs/download?path=" + encodeURIComponent(path))).blob();
+      lastFsBlobUrl = URL.createObjectURL(blob);
+      v.classList.remove("md");
+      v.innerHTML = '<img class="fs-img" alt="' + escapeHtml(name) + '" src="' + lastFsBlobUrl + '">';
+    } catch (e) { v.classList.remove("md"); v.textContent = String(e); }
+    return;
+  }
+  try {
+    /* /v1/fs/read is server-capped at 256 KB, so this never pulls a giant file
+       just to sniff it; a binary one routes to the paged hex viewer below. */
+    const r = await (await gwFetch("/v1/fs/read?path=" + encodeURIComponent(path))).json();
+    const content = r.content || "";
+    if (looksBinary(content)) { viewHex(path, name, size); return; }
+    renderDocInto(v, name, content + (r.truncated ? "\n…(truncated)" : ""));
+  } catch (e) { v.classList.remove("md"); v.textContent = String(e); }
+}
+
+/* Paged hex viewer. Fetches ONLY the window being viewed via /v1/fs/peek, so a
+   500 MB file over a remote gateway costs one ~4 KB request per page, not a
+   full download. First/Prev/Next/Last page through the file. */
+function viewHex(path, name, sizeHint) {
+  const v = $("#fs-view");
+  const PAGE = 4096;
+  let offset = 0, total = Number(sizeHint) || 0;
+  async function render() {
+    let bytes;
+    try {
+      const r = await gwFetch("/v1/fs/peek?path=" + encodeURIComponent(path) +
+                              "&offset=" + offset + "&len=" + PAGE);
+      if (!r.ok) throw new Error("http " + r.status);
+      const h = r.headers.get("X-File-Total");
+      if (h != null && h !== "") total = parseInt(h, 10);
+      bytes = new Uint8Array(await r.arrayBuffer());
+    } catch (e) { v.classList.remove("md"); v.textContent = String(e); return; }
+    const rows = [];
+    for (let p = 0; p < bytes.length; p += 16) {
+      const hex = [];
+      let asc = "";
+      for (let j = 0; j < 16; j++) {
+        if (p + j < bytes.length) {
+          const b = bytes[p + j];
+          hex.push(b.toString(16).padStart(2, "0"));
+          asc += (b >= 32 && b < 127) ? String.fromCharCode(b) : ".";
+        } else hex.push("  ");
+        if (j === 7) hex.push("");
+      }
+      rows.push((offset + p).toString(16).padStart(8, "0") + "  " + hex.join(" ") + "  |" + asc + "|");
+    }
+    const end = offset + bytes.length;
+    v.classList.remove("md");
+    v.innerHTML = '<div class="hexbar">'
+      + '<button class="icon-btn" data-h="first" title="First">⏮</button>'
+      + '<button class="icon-btn" data-h="prev" title="Previous page">◀</button>'
+      + '<button class="icon-btn" data-h="next" title="Next page">▶</button>'
+      + '<button class="icon-btn" data-h="last" title="Last">⏭</button>'
+      + '<span class="hexpos"></span></div><div class="hexdump"></div>';
+    v.querySelector(".hexpos").textContent =
+      name + " — bytes " + offset + "–" + (end > offset ? end - 1 : offset) +
+      " of " + humanBytes(total) + " (" + total + ")";
+    v.querySelector(".hexdump").textContent = rows.join("\n") || "(empty)";
+    const lastPage = total > 0 ? Math.floor((total - 1) / PAGE) * PAGE : 0;
+    const go = o => { offset = Math.max(0, Math.min(o, lastPage)); render(); };
+    v.querySelector('[data-h="first"]').onclick = () => go(0);
+    v.querySelector('[data-h="prev"]').onclick  = () => go(offset - PAGE);
+    v.querySelector('[data-h="next"]').onclick  = () => go(offset + PAGE);
+    v.querySelector('[data-h="last"]').onclick  = () => go(lastPage);
+  }
+  render();
+}
+
+/* Render a document into a viewer <pre>: markdown for .md/.markdown (reusing the
+   chat's renderer), plain text otherwise. Used by the Files and Memory tabs. */
+function renderDocInto(el, name, text) {
+  if (/\.(md|markdown)$/i.test(name || "")) {
+    el.classList.add("md");
+    el.innerHTML = renderMarkdown(text || "");
+    wireCopyButtons(el);
+  } else {
+    el.classList.remove("md");
+    el.textContent = text || "";
+  }
+}
+
+/* Path from a hashline patch header (¶path#hash on the first line). */
+/* All target paths from a hashline patch: every ¶path#hash header line. A
+   single fs_edit_hashline call can edit multiple files, so we collect them all
+   (not just the first) for the Files dropdown. */
+function allPatchPaths(patch) {
+  const out = [];
+  for (const line of String(patch || "").split("\n")) {
+    const t = line.trim();
+    if (t[0] !== "¶") continue;
+    let s = t.slice(1);
+    const h = s.indexOf("#");
+    if (h >= 0) s = s.slice(0, h);
+    s = s.trim();
+    if (s) out.push(s);
+  }
+  return out;
+}
+
+/* Files written/edited in the current chat, newest-last, deduped. Prefers the
+   full tool args from the side-channel (t.tools); falls back to parsing the
+   visible ⏺ fs_write/fs_edit_hashline card lines for turns reloaded without it
+   (ellipsized paths are skipped -- they'd 404 on download). */
+function chatFiles() {
+  const out = new Map();
+  const add = p => { p = (p || "").trim(); if (p && p.indexOf("…") < 0) out.set(p, true); };
+  for (const t of activeTurns) {
+    if (t.role !== "a") continue;
+    let used = false;
+    for (const d of (t.tools || [])) {
+      try {
+        if (d.name === "fs_write") { add(JSON.parse(d.args).path); used = true; }
+        else if (d.name === "fs_edit_hashline") { allPatchPaths(JSON.parse(d.args).patch).forEach(add); used = true; }
+      } catch {}
+    }
+    if (!used) {
+      const re = /⏺\s*(fs_write|fs_edit_hashline)\(([^)]*)\)/g;
+      let m2; const text = t.text || "";
+      while ((m2 = re.exec(text))) add(m2[2]);
+    }
+  }
+  return [...out.keys()];
+}
+
+/* Chat-toolbar file dropdown: list files created in this chat, click to download. */
+(function initChatFiles() {
+  const btn = $("#chat-files-btn"), menu = $("#chat-files-menu");
+  if (!btn || !menu) return;
+  function build() {
+    const files = chatFiles();
+    if (!files.length) { menu.innerHTML = '<div class="empty">No files written in this chat yet.</div>'; return; }
+    menu.innerHTML = "";
+    files.forEach(p => {
+      const row = document.createElement("div");
+      row.className = "frow";
+      const name = p.replace(/^.*[\\/]/, "");
+      row.innerHTML = `<span title="${escapeHtml(p)}">${escapeHtml(name)}</span><span>⬇</span>`;
+      row.addEventListener("click", () => { menu.hidden = true; downloadPath(p, name); });
+      menu.appendChild(row);
+    });
+  }
+  btn.addEventListener("click", e => {
+    e.stopPropagation();
+    if (menu.hidden) { build(); menu.hidden = false; } else menu.hidden = true;
+  });
+  document.addEventListener("click", e => {
+    if (!menu.hidden && !menu.contains(e.target) && e.target !== btn) menu.hidden = true;
+  });
+})();
+
+/* Sandbox indicator: reflects the shell backend chosen at onboarding --
+   "local" (commands run in the host process) vs "docker" (per-session
+   container). Read from /v1/config.shell_backend (absent == local). Tooltip
+   carries the docker image and the fs sandbox workspace/restriction. */
+(function initSandboxChip() {
+  const chip = $("#sandbox-chip");
+  if (!chip) return;
+  gwFetch("/v1/config").then(r => r.json()).then(c => {
+    const docker = String(c.shell_backend || "local").toLowerCase() === "docker";
+    chip.textContent = docker ? "🐳 docker" : "💻 local";
+    chip.classList.add(docker ? "sb-remote" : "sb-local");
+    const sb = c.sandbox || {};
+    const ws = sb.workspace || "(startup working dir)";
+    const restrict = sb.restrict_to_workspace ? "restricted to workspace" : "filesystem unrestricted";
+    const img = (c.shell_backend_docker && c.shell_backend_docker.image) || "";
+    const head = docker
+      ? ("Shell backend: Docker container" + (img ? " (" + img + ")" : ""))
+      : "Shell backend: local (host process)";
+    chip.title = head + "\nworkspace: " + ws + "\n" + restrict;
+    chip.hidden = false;
+  }).catch(() => {
+    chip.textContent = "💻 local"; chip.classList.add("sb-local"); chip.hidden = false;
+  });
+})();
+
+const SLASH = {
+  help() {
+    const names = Object.keys(SLASH).filter(k => k !== "help").sort();
+    sysNote("<strong>Commands</strong><br>" +
+      "/help — this list<br>" +
+      "/clear — clear this chat<br>" +
+      "/new — start a new session<br>" +
+      "/model [name] — list models, or set the default (restart to apply)<br>" +
+      "/provider [name] — list providers, or set the default (restart to apply)<br>" +
+      "/tools — list registered tools<br>" +
+      "/stats, /files, /memory, /logs, /settings, /mcp, /cron, /skills — open that tab");
+  },
+  clear() { activeTurns = []; activeSessionId = null; renderActive(); },
+  new() { const b = $("#session-new"); if (b) b.click(); },
+  async model(arg) {
+    if (arg) {
+      await saveConfigKeys({ default_model: arg });
+      sysNote("default_model set to <code>" + escapeHtml(arg) + "</code> — restart pasclaw to apply.");
+      return;
+    }
+    try {
+      const j = await (await gwFetch("/v1/models")).json();
+      const ids = (j.data || []).map(x => x.id);
+      sysNote("<strong>Models</strong><br>" + (ids.length
+        ? ids.map(i => "<code>" + escapeHtml(i) + "</code>").join("<br>")
+        : "(none discovered)") + "<br><span class='hint'>/model &lt;name&gt; to set</span>");
+    } catch (e) { sysNote("models: " + escapeHtml(String(e))); }
+  },
+  async provider(arg) {
+    if (arg) {
+      await saveConfigKeys({ default_provider: arg });
+      sysNote("default_provider set to <code>" + escapeHtml(arg) + "</code> — restart pasclaw to apply.");
+      return;
+    }
+    try {
+      const c = await (await gwFetch("/v1/config")).json();
+      const names = (c.providers || []).map(p => p.name).filter(Boolean);
+      sysNote("<strong>Providers</strong><br>" + (names.length
+        ? names.map(n => "<code>" + escapeHtml(n) + "</code>").join("<br>")
+        : "(none configured)") + "<br><span class='hint'>/provider &lt;name&gt; to set</span>");
+    } catch (e) { sysNote("providers: " + escapeHtml(String(e))); }
+  },
+  async tools() {
+    try {
+      const j = await (await gwFetch("/v1/tools")).json();
+      const ts = (j.tools || j || []);
+      const names = Array.isArray(ts) ? ts.map(t => t.name || t).filter(Boolean) : [];
+      sysNote("<strong>Tools (" + names.length + ")</strong><br>" +
+        names.map(n => "<code>" + escapeHtml(n) + "</code>").join(", "));
+    } catch (e) { sysNote("tools: " + escapeHtml(String(e))); }
+  },
+  stats() { showTab("stats"); }, files() { showTab("files"); },
+  memory() { showTab("memory"); }, logs() { showTab("logs"); },
+  settings() { showTab("settings"); }, mcp() { showTab("mcp"); },
+  cron() { showTab("cron"); }, skills() { showTab("skills"); },
+};
+
+/* Persist one or more top-level config keys via PUT /v1/config (read-merge-write
+   so we don't clobber the rest of the config). */
+async function saveConfigKeys(patch) {
+  const cur = await (await gwFetch("/v1/config")).json();
+  Object.assign(cur, patch);
+  await gwFetch("/v1/config", { method: "PUT",
+    headers: { "content-type": "application/json" }, body: JSON.stringify(cur) });
+}
+
+/* Returns true if the typed text was handled as a slash command. */
+function handleSlash(typed) {
+  if (typed[0] !== "/") return false;
+  const sp = typed.indexOf(" ");
+  const name = (sp === -1 ? typed.slice(1) : typed.slice(1, sp)).toLowerCase();
+  const arg = sp === -1 ? "" : typed.slice(sp + 1).trim();
+  const fn = SLASH[name];
+  if (!fn) { sysNote("unknown command <code>/" + escapeHtml(name) + "</code> — try /help"); return true; }
+  m.value = ""; histIdx = -1;
+  Promise.resolve(fn(arg)).catch(e => sysNote("error: " + escapeHtml(String(e))));
+  return true;
+}
+
+/* ===== Slash-command autocomplete =====
+   While the composer holds just "/word" (no space yet) a menu floats above it
+   listing matching commands and filtering as you type. Arrows move, Tab
+   completes to "/name ", Enter runs the highlighted command, Esc dismisses. */
+const SLASH_DESC = {
+  help: "show this list", clear: "clear this chat", new: "start a new session",
+  model: "[name] — list models / set default", provider: "[name] — list providers / set default",
+  tools: "list registered tools", stats: "open the Stats tab", files: "open the Files tab",
+  memory: "open the Memory tab", logs: "open the Logs tab", settings: "open the Settings tab",
+  mcp: "open the MCP tab", cron: "open the Cron tab", skills: "open the Skills tab",
+};
+const slashMenu = $("#slash-menu");
+let slashList = [], slashActive = 0;
+
+function slashMenuOpen() { return slashMenu && !slashMenu.hidden; }
+function hideSlashMenu() { if (slashMenu) slashMenu.hidden = true; slashList = []; }
+
+function updateSlashMenu() {
+  if (!slashMenu) return;
+  const mm = /^\/([a-z]*)$/i.exec(m.value);   // only while typing the command name
+  if (!mm) { hideSlashMenu(); return; }
+  const pre = mm[1].toLowerCase();
+  slashList = Object.keys(SLASH).filter(k => k.indexOf(pre) === 0).sort();
+  if (!slashList.length) { hideSlashMenu(); return; }
+  slashActive = 0;
+  renderSlashMenu();
+  slashMenu.hidden = false;
+}
+function renderSlashMenu() {
+  slashMenu.innerHTML = "";
+  slashList.forEach((name, i) => {
+    const row = document.createElement("div");
+    row.className = "si" + (i === slashActive ? " active" : "");
+    row.innerHTML = '<span class="cmd">/' + escapeHtml(name) + '</span>'
+                  + '<span class="desc">' + escapeHtml(SLASH_DESC[name] || "") + '</span>';
+    row.addEventListener("mousedown", e => { e.preventDefault(); slashActive = i; acceptSlash(true); });
+    slashMenu.appendChild(row);
+  });
+}
+function moveSlash(d) {
+  if (!slashList.length) return;
+  slashActive = (slashActive + d + slashList.length) % slashList.length;
+  renderSlashMenu();
+  const el = slashMenu.children[slashActive];
+  if (el) el.scrollIntoView({ block: "nearest" });
+}
+function acceptSlash(run) {
+  const name = slashList[slashActive];
+  if (!name) return;
+  hideSlashMenu();
+  if (run) { m.value = "/" + name; handleSlash(m.value); }
+  else { m.value = "/" + name + " "; caretToEnd(); m.focus(); }
+}
+m.addEventListener("input", updateSlashMenu);
+m.addEventListener("blur", () => setTimeout(hideSlashMenu, 120));
 
 /* ===== Composer attachments =====
    Chat content is plain text end-to-end, so an "attachment" is a text file
@@ -1391,6 +1883,7 @@ f.addEventListener("submit", e => {
   if (streaming) { if (currentAbort) currentAbort.abort(); return; }
   const typed = m.value.trim();
   if (!typed && !chatAttachments.length) return;
+  if (!chatAttachments.length && handleSlash(typed)) return;
   const msg = composeMessage(typed);
   m.value = "";
   chatAttachments = []; renderAttachChips();
@@ -1506,6 +1999,10 @@ function renderMarkdown(src) {
     s = s.replace(/`([^`]+)`/g, (_, c) => '<code class="ic">' + c + "</code>");
     s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
     s = s.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+    /* Images BEFORE links (![alt](url) contains [alt](url)). Only http(s) and
+       data:image URLs, so no javascript:/other-scheme smuggling. */
+    s = s.replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+|data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+)\)/gi,
+                  (_, alt, u) => '<img class="md-img" src="' + esc(u) + '" alt="' + esc(alt) + '" loading="lazy">');
     s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
                   (_, t, u) => '<a href="' + esc(u) + '" target="_blank" rel="noopener">' + t + "</a>");
     return s;
@@ -1695,8 +2192,8 @@ const tabLoaders = {
       if (el) el.classList.add("active");
       try {
         const r = await (await gwFetch("/v1/memory/" + encodeURIComponent(name))).json();
-        view.textContent = r.content || "";
-      } catch (e) { view.textContent = String(e); }
+        renderDocInto(view, name, r.content || "");
+      } catch (e) { view.classList.remove("md"); view.textContent = String(e); }
     }
     async function loadFiles() {
       list.innerHTML = "loading…";
@@ -1764,17 +2261,13 @@ const tabLoaders = {
         for (const e of (j.entries || [])) {
           const el = document.createElement("div");
           el.className = "item";
+          const full = (cwd ? cwd.replace(/\/$/, "") + "/" : "") + e.name;
           el.innerHTML = `<span>${escapeHtml(e.name)}${e.dir?"/":""}</span>`
-                       + `<span class="size">${e.dir?"":e.size+"b"}</span>`;
-          el.addEventListener("click", async () => {
-            const full = (cwd ? cwd.replace(/\/$/, "") + "/" : "") + e.name;
-            if (e.dir) load(full);
-            else {
-              try {
-                const r = await (await gwFetch("/v1/fs/read?path=" + encodeURIComponent(full))).json();
-                $("#fs-view").textContent = r.content + (r.truncated ? "\n…(truncated)" : "");
-              } catch (err) { $("#fs-view").textContent = String(err); }
-            }
+                       + `<span class="size">${e.dir?"":e.size+"b"}</span>`
+                       + (e.dir ? "" : `<button class="dl-btn icon-btn" title="Download">⬇</button>`);
+          el.addEventListener("click", () => { if (e.dir) load(full); else viewFile(full, e.name, e.size); });
+          if (!e.dir) el.querySelector(".dl-btn").addEventListener("click", ev => {
+            ev.stopPropagation(); downloadPath(full, e.name);
           });
           list.appendChild(el);
         }
@@ -2200,7 +2693,51 @@ const tabLoaders = {
     const isObj = v => v !== null && typeof v === "object" && !Array.isArray(v);
 
     // Render an input row for one scalar leaf at `path` (array of keys).
+    // /v1/models is fetched once per Settings render to fill the model dropdown.
+    let _modelIds = null;
+    async function modelIds() {
+      if (_modelIds) return _modelIds;
+      try {
+        const j = await (await gwFetch("/v1/models")).json();
+        _modelIds = (j.data || j.models || [])
+          .map(x => typeof x === "string" ? x : (x.id || x.name)).filter(Boolean);
+      } catch { _modelIds = []; }
+      return _modelIds;
+    }
+    // A <select> leaf -- collectForm reads it via [data-path]/.value like an input.
+    function selectRow(label, value, path, options) {
+      const row = document.createElement("label"); row.className = "cfg-row";
+      const cap = document.createElement("span"); cap.className = "cfg-label"; cap.textContent = label;
+      row.appendChild(cap);
+      const sel = document.createElement("select"); sel.className = "cfg-input";
+      const cur = (value == null) ? "" : String(value);
+      const seen = new Set();
+      const addOpt = v => { if (v == null || seen.has(v)) return; seen.add(v);
+        const o = document.createElement("option"); o.value = v; o.textContent = v || "(default)"; sel.appendChild(o); };
+      addOpt(cur); (options || []).forEach(addOpt); sel.value = cur;
+      sel.dataset.path = JSON.stringify(path); sel.dataset.vtype = "string";
+      row.appendChild(sel);
+      return { row, sel };
+    }
+
     function leafRow(label, value, path) {
+      // Top-level default_provider / default_model render as dropdowns instead
+      // of free-form text. (Saved config applies on gateway restart.)
+      const key = path[path.length - 1];
+      if (path.length === 1 && key === "default_provider") {
+        const names = ((current && current.providers) || []).map(p => p && p.name).filter(Boolean);
+        return selectRow(label, value, path, names).row;
+      }
+      if (path.length === 1 && key === "default_model") {
+        const r = selectRow(label, value, path, []);
+        modelIds().then(ids => {
+          const keep = r.sel.value;
+          ids.forEach(id => { if (![...r.sel.options].some(o => o.value === id)) {
+            const o = document.createElement("option"); o.value = id; o.textContent = id; r.sel.appendChild(o); } });
+          r.sel.value = keep;
+        });
+        return r.row;
+      }
       const row = document.createElement("label");
       row.className = "cfg-row";
       const cap = document.createElement("span"); cap.className = "cfg-label"; cap.textContent = label;
