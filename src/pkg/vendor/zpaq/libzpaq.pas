@@ -3234,12 +3234,15 @@ var
   n1, t: Integer;
 
   { ---- read next char from meth at mpos ---- }
-  function MC(): AnsiChar; inline;
+  { Not inlined: Delphi (E2449) refuses to inline a nested routine that touches
+    the enclosing scope (meth / mpos); FPC's {$inline on} made these inline but
+    the perf cost of dropping it on a method-string parser is nil. }
+  function MC(): AnsiChar;
   begin if mpos <= Length(meth) then Result := meth[mpos] else Result := #0; end;
-  function MCadv(): AnsiChar; inline;
+  function MCadv(): AnsiChar;
   begin Result := MC(); if mpos <= Length(meth) then Inc(mpos); end;
 
-  function isDigit(c: AnsiChar): Boolean; inline;
+  function isDigit(c: AnsiChar): Boolean;
   begin Result := (c >= '0') and (c <= '9'); end;
 
 begin
