@@ -218,9 +218,11 @@ type
       changes apply on the next restart. }
     procedure HandleConfigWrite(ARequest: TIdHTTPRequestInfo;
                                 AResp: TIdHTTPResponseInfo);
-    { Lock-guarded reads of the live provider state (rebuilt on config write). }
-    function CurrentPrimary: ILLMProvider;
-    function CurrentFallbacks: TLLMProviderArray;
+    { Lock-guarded snapshot of the live provider state (rebuilt on config write):
+      primary, fallback chain, and default model copied together so a swap can't
+      split them across a starting request. }
+    procedure SnapshotRuntime(out Prim: ILLMProvider; out FB: TLLMProviderArray;
+                              out DefModel: string);
     { Rebuild + swap the live provider/fallbacks from a saved config. Returns
       False (and keeps the current provider) if the new primary won't build. }
     function ApplyProviderConfig(NewCfg: TConfig): Boolean;
@@ -660,21 +662,24 @@ begin
   inherited Destroy;
 end;
 
-function TGatewayServer.CurrentPrimary: ILLMProvider;
-{ Copy the primary ref under the lock so a concurrent ApplyProviderConfig swap
-  can't free it between a request reading the field and retaining it. The
-  returned interface is refcounted, so an in-flight request that grabbed it
-  keeps running on that provider even after a swap -- the switch only affects
-  requests that start afterwards; nothing in flight is interrupted. }
+procedure TGatewayServer.SnapshotRuntime(out Prim: ILLMProvider;
+  out FB: TLLMProviderArray; out DefModel: string);
+{ Copy the primary provider, fallback chain, AND default model together under
+  the lock so a concurrent ApplyProviderConfig swap can't tear them apart -- a
+  request must not end up sending the new model to the old provider (or vice
+  versa) if a live /v1/config save lands mid-setup. The returned interfaces are
+  refcounted, so an in-flight request that grabbed them keeps running on that
+  provider even after a swap; the switch only affects requests that start
+  afterwards. Nothing in flight is interrupted. }
 begin
   FApplyLock.Acquire;
-  try Result := FProvider; finally FApplyLock.Release; end;
-end;
-
-function TGatewayServer.CurrentFallbacks: TLLMProviderArray;
-begin
-  FApplyLock.Acquire;
-  try Result := Copy(FFallbacks); finally FApplyLock.Release; end;
+  try
+    Prim     := FProvider;
+    FB       := Copy(FFallbacks);
+    DefModel := FCfg.DefaultModel;
+  finally
+    FApplyLock.Release;
+  end;
 end;
 
 function TGatewayServer.ApplyProviderConfig(NewCfg: TConfig): Boolean;
@@ -3593,6 +3598,9 @@ var
   Msgs: TMessageArray;
   Loop: TToolLoopResult;
   LoopCfg: TToolLoopConfig;
+  Prim: ILLMProvider;
+  FB: TLLMProviderArray;
+  DefModel: string;
 begin
   Body := '';
   if ARequest.PostStream <> nil then
@@ -3629,7 +3637,10 @@ begin
     Exit;
   end;
 
-  LoopCfg.Provider := CurrentPrimary;
+  { Snapshot provider + fallbacks + default model together (one lock) so a live
+    /v1/config swap can't pair the new model with the old provider. }
+  SnapshotRuntime(Prim, FB, DefModel);
+  LoopCfg.Provider := Prim;
   if LoopCfg.Provider = nil then
   begin
     WriteJSON(AResp, 503, '{"error":"no provider configured"}');
@@ -3640,14 +3651,14 @@ begin
   Msgs[0] := MakeMessage(mrUser, Prompt);
 
   LoopCfg.Registry      := FRegistry;
-  LoopCfg.Model         := FCfg.DefaultModel;
+  LoopCfg.Model         := DefModel;
   LoopCfg.MaxIterations := 8;
   LoopCfg.Parallel := True;
   { PR #290: per-request Plan/Build. Defaults to pmBuild when the body
     omits "mode", so OpenAI-compatible clients that don't know about
     plan keep working unchanged. }
   LoopCfg.Mode          := ParseModeFromBody(Body);
-  LoopCfg.Fallbacks     := CurrentFallbacks;
+  LoopCfg.Fallbacks     := FB;
   LoopCfg.Options       := DefaultChatOptions;
   ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
   LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '',
@@ -4194,6 +4205,9 @@ var
   Streamer: TSSEStreamer;
   StreamStarted, StreamClosed: Boolean;
   ActivityCollector: TToolActivityCollector;
+  Prim: ILLMProvider;
+  FB: TLLMProviderArray;
+  SnapModel: string;
   function SanitizeStreamError(const S: string): string;
   begin
     Result := StringReplace(S, #13, ' ', [rfReplaceAll]);
@@ -4280,7 +4294,10 @@ begin
       MsgArr.Free;
     end;
 
-    LoopCfg.Provider := CurrentPrimary;
+    { Provider + fallbacks snapshotted together (model is the request's
+      ReqModel, resolved at parse). }
+    SnapshotRuntime(Prim, FB, SnapModel);
+    LoopCfg.Provider := Prim;
     if LoopCfg.Provider = nil then
     begin
       if FDebugIO then LogDebug('chat/completions -> 503 (no provider configured)');
@@ -4294,7 +4311,7 @@ begin
     LoopCfg.MaxIterations := FMaxIter;
     LoopCfg.Parallel := True;
     LoopCfg.Mode          := ParseModeFromBody(Body);  { PR #290 }
-    LoopCfg.Fallbacks     := CurrentFallbacks;
+    LoopCfg.Fallbacks     := FB;
     LoopCfg.Options       := DefaultChatOptions;
     ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
     if GetEffectiveGatewayToken(FCfg) <> '' then
@@ -5562,6 +5579,8 @@ var
   EmptyToolCalls: array of TToolCall;
   FcCallIdVal, FcSignatureVal: string;
   Prim: ILLMProvider;   { live-provider snapshot for this request (hot-swap safe) }
+  FB: TLLMProviderArray;
+  SnapModel: string;
 
   procedure AppendMessage(Role: TMsgRole; const Content: string);
   begin
@@ -5901,7 +5920,7 @@ begin
     finally
       ToolsArrIn.Free;
     end;
-    Prim := CurrentPrimary;
+    SnapshotRuntime(Prim, FB, SnapModel);
     if Prim = nil then
     begin
       WriteJSON(AResp, 503,
@@ -6052,7 +6071,7 @@ begin
       LoopCfg.MaxIterations := FMaxIter;
       LoopCfg.Parallel := True;
       LoopCfg.Mode          := ParseModeFromBody(Body);  { PR #290 }
-      LoopCfg.Fallbacks     := CurrentFallbacks;
+      LoopCfg.Fallbacks     := FB;
       LoopCfg.Options       := DefaultChatOptions;
       ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
       if GetEffectiveGatewayToken(FCfg) <> '' then
