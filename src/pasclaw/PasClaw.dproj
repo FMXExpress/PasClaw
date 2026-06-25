@@ -353,7 +353,7 @@
         <None Include="..\pkg\vendor\dmvcframework\dmvcframework.inc"/>
         <None Include="..\pkg\vendor\dmvcframework\NOTICE"/>
 
-        <!-- pkg/vendor/zpaq (MIT) -- libzpaq port; backs the zpaq checkpoint store -->
+        <!-- pkg/vendor/zpaq (MIT): libzpaq port; backs the zpaq checkpoint store -->
         <DCCReference Include="..\pkg\vendor\zpaq\libzpaq.pas"/>
         <DCCReference Include="..\pkg\vendor\zpaq\ZpaqClasses.pas"/>
         <DCCReference Include="..\pkg\vendor\zpaq\ZpaqSimple.pas"/>
