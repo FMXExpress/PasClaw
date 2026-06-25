@@ -183,6 +183,18 @@
     border-top:1px solid rgba(255,255,255,.08);background:rgba(2,5,15,.4)}
   #attach-chips{display:flex;flex-wrap:wrap;gap:.35rem;flex-basis:100%;order:-1}
   #attach-chips:empty{display:none}
+  /* Slash-command autocomplete, floats above the composer and filters as you type. */
+  .send{position:relative}
+  .slash-menu{position:absolute;left:0;right:0;bottom:calc(100% + .3rem);z-index:50;
+    max-height:15rem;overflow:auto;background:var(--panel);
+    border:1px solid rgba(143,92,255,.3);border-radius:10px;
+    box-shadow:0 12px 30px rgba(0,0,0,.45);padding:.25rem}
+  .slash-menu .si{display:flex;gap:.6rem;align-items:baseline;padding:.34rem .5rem;
+    border-radius:7px;cursor:pointer}
+  .slash-menu .si .cmd{color:var(--cyan);font-family:var(--mono);font-size:12px;white-space:nowrap}
+  .slash-menu .si .desc{color:var(--mut);font-size:11px;overflow:hidden;
+    text-overflow:ellipsis;white-space:nowrap}
+  .slash-menu .si.active,.slash-menu .si:hover{background:rgba(32,246,255,.12)}
   .attach-chip{display:inline-flex;align-items:center;gap:.3rem;font-size:11px;
     background:rgba(32,246,255,.1);color:var(--cyan);border:1px solid rgba(32,246,255,.3);
     border-radius:999px;padding:.12rem .2rem .12rem .55rem;max-width:18rem}
@@ -515,9 +527,10 @@
       </div>
       <div id="log"></div>
       <form class="send" id="f">
+        <div id="slash-menu" class="slash-menu" hidden></div>
         <div id="attach-chips"></div>
         <textarea id="m" rows="2"
-          placeholder="Ask PasClaw... (Enter to send, Shift+Enter for newline)"></textarea>
+          placeholder="Ask PasClaw... (Enter to send, Shift+Enter for newline, / for commands)"></textarea>
         <input id="attach-file" type="file" multiple style="display:none">
         <!-- Toolbar under the input: mode + attach on the left, model
              picker + Send on the right. mode-btn / model-sel were lifted
@@ -1350,6 +1363,14 @@ const userHistory = () => activeTurns.filter(t => t.role === "u").map(t => t.tex
 function caretToEnd() { m.setSelectionRange(m.value.length, m.value.length); }
 
 m.addEventListener("keydown", e => {
+  /* Slash-command menu owns the arrows / Enter / Tab / Esc while it's open. */
+  if (slashMenuOpen()) {
+    if (e.key === "ArrowDown") { moveSlash(1);  e.preventDefault(); return; }
+    if (e.key === "ArrowUp")   { moveSlash(-1); e.preventDefault(); return; }
+    if (e.key === "Tab")       { acceptSlash(false); e.preventDefault(); return; }
+    if (e.key === "Enter" && !e.shiftKey) { acceptSlash(true); e.preventDefault(); return; }
+    if (e.key === "Escape")    { hideSlashMenu(); e.preventDefault(); return; }
+  }
   if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); f.requestSubmit(); return; }
   const multiline = m.value.indexOf("\n") >= 0;
   if (e.key === "ArrowUp" && !multiline) {
@@ -1571,6 +1592,62 @@ function handleSlash(typed) {
   Promise.resolve(fn(arg)).catch(e => sysNote("error: " + escapeHtml(String(e))));
   return true;
 }
+
+/* ===== Slash-command autocomplete =====
+   While the composer holds just "/word" (no space yet) a menu floats above it
+   listing matching commands and filtering as you type. Arrows move, Tab
+   completes to "/name ", Enter runs the highlighted command, Esc dismisses. */
+const SLASH_DESC = {
+  help: "show this list", clear: "clear this chat", new: "start a new session",
+  model: "[name] — list models / set default", provider: "[name] — list providers / set default",
+  tools: "list registered tools", stats: "open the Stats tab", files: "open the Files tab",
+  memory: "open the Memory tab", logs: "open the Logs tab", settings: "open the Settings tab",
+  mcp: "open the MCP tab", cron: "open the Cron tab", skills: "open the Skills tab",
+};
+const slashMenu = $("#slash-menu");
+let slashList = [], slashActive = 0;
+
+function slashMenuOpen() { return slashMenu && !slashMenu.hidden; }
+function hideSlashMenu() { if (slashMenu) slashMenu.hidden = true; slashList = []; }
+
+function updateSlashMenu() {
+  if (!slashMenu) return;
+  const mm = /^\/([a-z]*)$/i.exec(m.value);   // only while typing the command name
+  if (!mm) { hideSlashMenu(); return; }
+  const pre = mm[1].toLowerCase();
+  slashList = Object.keys(SLASH).filter(k => k.indexOf(pre) === 0).sort();
+  if (!slashList.length) { hideSlashMenu(); return; }
+  slashActive = 0;
+  renderSlashMenu();
+  slashMenu.hidden = false;
+}
+function renderSlashMenu() {
+  slashMenu.innerHTML = "";
+  slashList.forEach((name, i) => {
+    const row = document.createElement("div");
+    row.className = "si" + (i === slashActive ? " active" : "");
+    row.innerHTML = '<span class="cmd">/' + escapeHtml(name) + '</span>'
+                  + '<span class="desc">' + escapeHtml(SLASH_DESC[name] || "") + '</span>';
+    row.addEventListener("mousedown", e => { e.preventDefault(); slashActive = i; acceptSlash(true); });
+    slashMenu.appendChild(row);
+  });
+}
+function moveSlash(d) {
+  if (!slashList.length) return;
+  slashActive = (slashActive + d + slashList.length) % slashList.length;
+  renderSlashMenu();
+  const el = slashMenu.children[slashActive];
+  if (el) el.scrollIntoView({ block: "nearest" });
+}
+function acceptSlash(run) {
+  const name = slashList[slashActive];
+  if (!name) return;
+  hideSlashMenu();
+  if (run) { m.value = "/" + name; handleSlash(m.value); }
+  else { m.value = "/" + name + " "; caretToEnd(); m.focus(); }
+}
+m.addEventListener("input", updateSlashMenu);
+m.addEventListener("blur", () => setTimeout(hideSlashMenu, 120));
 
 /* ===== Composer attachments =====
    Chat content is plain text end-to-end, so an "attachment" is a text file
