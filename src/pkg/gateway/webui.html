@@ -292,6 +292,19 @@
     border-radius:10px;background:rgba(2,5,15,.3)}
   .relay-status-row{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
     gap:.5rem;padding:.4rem .8rem}
+  /* Checkpoints tab */
+  #cp-pane{display:flex;flex-direction:column;min-height:0;flex:1}
+  .cp-bar{display:flex;align-items:center;gap:.5rem;padding:.5rem .8rem;
+    border-bottom:1px solid rgba(255,255,255,.06)}
+  .cp-status{font-size:11px;color:var(--mut);margin-left:.4rem}
+  .cp-list{padding:.5rem .8rem;overflow:auto;flex:1}
+  .cp-turn{border:1px solid rgba(255,255,255,.08);border-radius:10px;
+    margin-bottom:.5rem;background:rgba(2,5,15,.3)}
+  .cp-turn-head{display:flex;justify-content:space-between;align-items:center;gap:.6rem;
+    padding:.45rem .7rem;font-size:12px;color:var(--fg);border-bottom:1px solid rgba(255,255,255,.06)}
+  .cp-files{padding:.4rem .7rem;display:flex;flex-direction:column;gap:.15rem}
+  .cp-file{font-family:var(--mono);font-size:11.5px;color:var(--mut);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .relay-config-grid{display:grid;grid-template-columns:1fr 1fr;gap:.85rem;padding:.6rem .8rem}
   .relay-config-grid label{display:flex;flex-direction:column;gap:.3rem;font-size:11px;
     text-transform:uppercase;letter-spacing:.06em;color:var(--cyan)}
@@ -507,6 +520,7 @@
     <button data-tab="vault">Vault</button>
     <button data-tab="logs">Logs</button>
     <button data-tab="stats">Stats</button>
+    <button data-tab="checkpoints">Checkpoints</button>
     <button data-tab="relay">Relay</button>
     <button data-tab="settings">Settings</button>
     <button id="theme-btn" title="Toggle light / dark theme" style="margin-left:auto">🌙</button>
@@ -531,6 +545,8 @@
         <button class="icon-btn" id="params-toggle" title="Per-chat parameters">⚙ Params</button>
         <span id="params-summary" class="params-summary"></span>
         <span id="sandbox-chip" class="sandbox-chip" style="margin-left:auto" hidden></span>
+        <button class="icon-btn" id="chat-undo" title="Undo the last turn's file edits (checkpoints)">↶</button>
+        <button class="icon-btn" id="chat-redo" title="Redo (zpaq backend only)">↷</button>
         <button class="icon-btn" id="chat-files-btn" title="Download files created in this chat">🗎 Files</button>
         <div id="chat-files-menu" class="fs-menu" hidden></div>
       </div>
@@ -739,6 +755,18 @@
           </table>
         </div>
       </div>
+    </div>
+  </div>
+
+  <div id="tab-checkpoints" class="tab">
+    <div class="pane" id="cp-pane">
+      <div class="cp-bar">
+        <button class="icon-btn" id="cp-undo" title="Undo the last turn's file edits">↶ Undo</button>
+        <button class="icon-btn" id="cp-redo" title="Redo (zpaq backend only)">↷ Redo</button>
+        <button class="icon-btn" id="cp-refresh" title="Refresh">⟳</button>
+        <span id="cp-status" class="cp-status"></span>
+      </div>
+      <div class="cp-list" id="cp-list"><div class="empty-pane">Loading…</div></div>
     </div>
   </div>
 
@@ -1470,6 +1498,81 @@ function sysNote(html) {
   log.scrollTop = log.scrollHeight;
 }
 
+/* ===== Checkpoints (workspace undo/redo) ===== */
+async function cpAction(kind, n) {
+  try {
+    const r = await gwFetch("/v1/checkpoints/" + kind + "?n=" + (n || 1), { method: "POST" });
+    return await r.json().catch(() => ({ ok: false, error: "http " + r.status }));
+  } catch (e) { return { ok: false, error: String(e) }; }
+}
+async function refreshCpButtons() {
+  try {
+    const st = await (await gwFetch("/v1/checkpoints")).json();
+    const can = !!st.can_redo, n = st.count || 0;
+    [["#chat-redo", can], ["#cp-redo", can]].forEach(([id, ok]) => { const b = $(id); if (b) b.disabled = !ok; });
+    [["#chat-undo", n > 0]].forEach(([id, ok]) => { const b = $(id); if (b) b.disabled = !ok; });
+    return st;
+  } catch { return null; }
+}
+/* Chat-toolbar buttons: undo/redo one turn, report in the transcript. */
+async function cpQuick(kind) {
+  const j = await cpAction(kind, 1);
+  if (j.ok) sysNote("↶ " + kind + ": restored " + (j.restored || 0) + " file(s).");
+  else sysNote("checkpoint " + kind + ": " + escapeHtml(j.error || "failed"));
+  refreshCpButtons();
+  if (!$("#tab-checkpoints").classList.contains("active")) return;
+  renderCheckpoints();
+}
+async function renderCheckpoints() {
+  const list = $("#cp-list"), status = $("#cp-status");
+  if (!list) return;
+  let st;
+  try { st = await (await gwFetch("/v1/checkpoints")).json(); }
+  catch (e) { list.innerHTML = '<div class="empty-pane">' + escapeHtml(String(e)) + '</div>'; return; }
+  $("#cp-redo").disabled = !st.can_redo;
+  $("#chat-redo").disabled = !st.can_redo;
+  status.textContent = st.enabled
+    ? ("backend " + st.backend + " · current turn " + st.current_turn + " · " + (st.count || 0) + " checkpointed"
+       + (st.backend === "legacy" ? " · redo unavailable on this backend" : ""))
+    : "checkpoints disabled — set checkpoints_enabled in Settings, then restart";
+  if (!st.turns || !st.turns.length) {
+    list.innerHTML = '<div class="empty-pane">No checkpoints yet — they record automatically when the agent edits files.</div>';
+    return;
+  }
+  list.innerHTML = "";
+  st.turns.slice().sort((a, b) => b.turn - a.turn).forEach(t => {
+    const card = document.createElement("div");
+    card.className = "cp-turn";
+    const files = (t.files || []).map(f =>
+      '<div class="cp-file">' + (f.created ? "➕ " : "✎ ") + escapeHtml(f.path) + "</div>").join("");
+    card.innerHTML =
+      '<div class="cp-turn-head"><span>Turn ' + t.turn + (t.ts ? " · " + escapeHtml(t.ts) : "") +
+      " · " + (t.files || []).length + ' file(s)</span>' +
+      '<button class="icon-btn cp-revert" data-turn="' + t.turn + '">⮌ revert to before</button></div>' +
+      '<div class="cp-files">' + files + "</div>";
+    list.appendChild(card);
+  });
+  list.querySelectorAll(".cp-revert").forEach(b => b.addEventListener("click", async () => {
+    const turn = parseInt(b.dataset.turn, 10);
+    const n = st.newest - turn + 1;   // undo back to BEFORE this turn
+    if (n < 1) return;
+    if (!confirm("Revert the workspace to before turn " + turn + "?\n(undo " + n + " turn" + (n > 1 ? "s" : "") + ")")) return;
+    const j = await cpAction("undo", n);
+    status.textContent = j.ok ? ("reverted " + (j.restored || 0) + " file(s)") : ("error: " + (j.error || "failed"));
+    renderCheckpoints();
+  }));
+}
+(function initCheckpointButtons() {
+  const u = $("#chat-undo"), r = $("#chat-redo");
+  if (u) u.addEventListener("click", () => cpQuick("undo"));
+  if (r) r.addEventListener("click", () => cpQuick("redo"));
+  const tu = $("#cp-undo"), tr = $("#cp-redo"), tf = $("#cp-refresh");
+  if (tu) tu.addEventListener("click", () => cpQuick("undo"));
+  if (tr) tr.addEventListener("click", () => cpQuick("redo"));
+  if (tf) tf.addEventListener("click", renderCheckpoints);
+  refreshCpButtons();
+})();
+
 /* Download a workspace file's raw bytes via /v1/fs/download. Goes through
    gwFetch (so the bearer token rides along, unlike a bare <a href>), buffers to
    a blob, and saves it client-side -- works for binaries like a built .exe. */
@@ -2198,6 +2301,7 @@ function initMode() {
 /* ===== Loaders for the read-only tabs (lazy-bound on first show) ===== */
 const tabLoaders = {
   chat() { /* always loaded */ },
+  checkpoints() { renderCheckpoints(); },
 
   /* Memory: the workspace/memory/*.md files ARE the memory; the SQLite
      index is a rebuildable FTS5 (+ optional vector) cache over them. The

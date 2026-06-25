@@ -128,6 +128,12 @@ function RedoTurns(N: Integer; out Restored: TRestoredFileArray;
                    out ErrMsg: string): Boolean;
 function CanRedo: Boolean;
 
+{ JSON snapshot of checkpoint state for the gateway web UI: backend / enabled /
+  current_turn / can_redo / oldest / newest / count, plus a per-turn list of the
+  files each turn changed. Reads both the zpaq index.json and the legacy
+  per-turn manifest.json. Returns an enabled:false skeleton when off. }
+function CheckpointsStateJSON: string;
+
 implementation
 
 uses
@@ -1444,6 +1450,128 @@ begin
     Result := ZpaqCanRedo;
   finally
     GLock.Release;
+  end;
+end;
+
+function CheckpointsStateJSON: string;
+{ Built without holding GLock (it calls the public, individually-locked
+  accessors and reads the on-disk index/manifests fresh) so it can't deadlock
+  against the recursive-vs-not GLock. A turn being written concurrently is a
+  benign read-skew for a listing. }
+var
+  Root, TurnOut, FileOut: TJsonObject;
+  TurnsOut, FilesOut: TJsonArray;
+  Oldest, Newest, Cnt: Integer;
+  Backend: TCheckpointBackend;
+
+  procedure EmitZpaqTurns;
+  var
+    Idx: TJsonObject;
+    Turns, Entries: TJsonArray;
+    TObj, EObj: TJsonObject;
+    i, j: Integer;
+  begin
+    Idx := ZpaqLoadIndex;
+    try
+      Turns := Idx.ChildArray('turns');
+      if Turns = nil then Exit;
+      for i := 0 to Turns.Count - 1 do
+      begin
+        TObj := Turns.ItemObject(i);
+        if TObj = nil then Continue;
+        Entries := TObj.ChildArray('entries');
+        if (Entries = nil) or (Entries.Count = 0) then Continue;
+        TurnOut := TJsonObject.Create;
+        TurnOut.PutInt('turn', TObj.GetInt('turn', 0));
+        TurnOut.PutStr('ts',   TObj.GetStr('ts', ''));
+        FilesOut := TJsonArray.Create;
+        for j := 0 to Entries.Count - 1 do
+        begin
+          EObj := Entries.ItemObject(j);
+          if EObj = nil then Continue;
+          FileOut := TJsonObject.Create;
+          FileOut.PutStr ('path',    EObj.GetStr('path', ''));
+          FileOut.PutBool('created', EObj.GetBool('was_created', False));
+          FilesOut.AddObject(FileOut);
+        end;
+        TurnOut.PutArray('files', FilesOut);
+        TurnsOut.AddObject(TurnOut);
+      end;
+    finally
+      Idx.Free;
+    end;
+  end;
+
+  procedure EmitLegacyTurns;
+  var
+    T, j: Integer;
+    MPath, S: string;
+    Man: TJsonObject;
+    Files: TJsonArray;
+    FObj: TJsonObject;
+  begin
+    for T := Oldest to Newest do
+    begin
+      MPath := JoinPath(TurnDir(T), 'manifest.json');
+      if not FileExists(MPath) then Continue;
+      Man := nil;
+      try
+        S := ReadFileText(MPath);
+        Man := TJsonObject.Parse(S);
+      except
+        Man := nil;
+      end;
+      if Man = nil then Continue;
+      try
+        Files := Man.ChildArray('files');
+        TurnOut := TJsonObject.Create;
+        TurnOut.PutInt('turn', Man.GetInt('turn', T));
+        TurnOut.PutStr('ts',   Man.GetStr('ts', ''));
+        FilesOut := TJsonArray.Create;
+        if Files <> nil then
+          for j := 0 to Files.Count - 1 do
+          begin
+            FObj := Files.ItemObject(j);
+            if FObj = nil then Continue;
+            FileOut := TJsonObject.Create;
+            FileOut.PutStr ('path',    FObj.GetStr('path', ''));
+            FileOut.PutBool('created', False);  { legacy manifest has no created flag }
+            FilesOut.AddObject(FileOut);
+          end;
+        TurnOut.PutArray('files', FilesOut);
+        TurnsOut.AddObject(TurnOut);
+      finally
+        Man.Free;
+      end;
+    end;
+  end;
+
+begin
+  Backend := CheckpointsBackend;
+  Cnt := CountSnapshottedTurns(Oldest, Newest);
+  Root := TJsonObject.Create;
+  try
+    Root.PutBool('enabled', CheckpointsEnabled);
+    case Backend of
+      cbZpaq:   Root.PutStr('backend', 'zpaq');
+      cbLegacy: Root.PutStr('backend', 'legacy');
+    else        Root.PutStr('backend', 'disabled');
+    end;
+    Root.PutInt ('current_turn', CurrentTurnNumber);
+    Root.PutBool('can_redo',     CanRedo);
+    Root.PutInt ('count',        Cnt);
+    Root.PutInt ('oldest',       Oldest);
+    Root.PutInt ('newest',       Newest);
+    TurnsOut := TJsonArray.Create;
+    if CheckpointsEnabled then
+      case Backend of
+        cbZpaq:   EmitZpaqTurns;
+        cbLegacy: EmitLegacyTurns;
+      end;
+    Root.PutArray('turns', TurnsOut);
+    Result := Root.ToJSON;
+  finally
+    Root.Free;
   end;
 end;
 

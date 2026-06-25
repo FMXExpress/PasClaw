@@ -257,6 +257,11 @@ type
                             AResp: TIdHTTPResponseInfo);
     procedure HandleFSPeek(ARequest: TIdHTTPRequestInfo;
                             AResp: TIdHTTPResponseInfo);
+    procedure HandleCheckpointsList(AResp: TIdHTTPResponseInfo);
+    procedure HandleCheckpointsUndo(ARequest: TIdHTTPRequestInfo;
+                            AResp: TIdHTTPResponseInfo);
+    procedure HandleCheckpointsRedo(ARequest: TIdHTTPRequestInfo;
+                            AResp: TIdHTTPResponseInfo);
     procedure HandleLogs(AContext: TIdContext;
                           ARequest: TIdHTTPRequestInfo;
                           AResp: TIdHTTPResponseInfo);
@@ -413,6 +418,7 @@ uses
     there because TGatewayServer's FRelayQueue field references the
     type. Don't re-import here. }
   PasClaw.Tools.Sandbox,
+  PasClaw.Checkpoints,          { web UI checkpoints: Init/BeginTurn/Undo/Redo/state }
   PasClaw.Providers.Factory,
   PasClaw.Providers.Catalog,   { TProviderSpec for /v1/models discovery }
   PasClaw.Providers.Models,    { DiscoverModels / cache -- /v1/models roster }
@@ -593,12 +599,23 @@ begin
 end;
 
 constructor TGatewayServer.Create(Cfg: TConfig; Provider: ILLMProvider; Registry: TToolRegistry);
+var
+  CC: TCheckpointConfig;
 begin
   inherited Create;
   FCfg      := Cfg;
   FProvider := Provider;
   FRegistry := Registry;
   FMaxIter  := 25;
+  { Wire the per-turn workspace checkpoint system into the gateway (it was
+    CLI/TUI-only). One process-global timeline scoped to a synthetic session,
+    since the web UI's sessions share one workspace; BeginTurn fires per chat
+    turn in the handlers below. No-op when checkpoints_enabled is false. }
+  CC.Enabled   := FCfg.CheckpointsEnabled;
+  CC.SessionId := '_gateway_web';
+  CC.Root      := JoinPath(GetHome, 'workspace/checkpoints');
+  CC.KeepLast  := FCfg.CheckpointsKeepLast;
+  InitCheckpoints(CC);
   FStopFlag := TEvent.Create(nil, True, False, '');
   FWebhookPaths := TStringList.Create;
   FWebhookPaths.CaseSensitive := False;
@@ -1119,6 +1136,9 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs/read') then HandleFSRead(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs/download') then HandleFSDownload(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs/peek') then HandleFSPeek(ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/checkpoints')      then HandleCheckpointsList(AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/checkpoints/undo') then HandleCheckpointsUndo(ARequest, AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/checkpoints/redo') then HandleCheckpointsRedo(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/logs')    then HandleLogs(AContext, ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/relay/poll') then
       HandleRelayPoll(AContext, ARequest, AResponse)
@@ -3204,6 +3224,72 @@ begin
   AResp.ContentLength     := Mem.Size;
 end;
 
+procedure TGatewayServer.HandleCheckpointsList(AResp: TIdHTTPResponseInfo);
+{ GET /v1/checkpoints -- backend/enabled/current/can_redo + per-turn file lists. }
+begin
+  WriteJSON(AResp, 200, CheckpointsStateJSON);
+end;
+
+function CheckpointResultJSON(Ok: Boolean; const Restored: TRestoredFileArray;
+  const Err: string; out Status: Integer): string;
+var
+  Root: TJsonObject;
+  Arr: TJsonArray;
+  FileObj: TJsonObject;
+  i: Integer;
+begin
+  if not Ok then
+  begin
+    Status := 400;
+    Exit('{"ok":false,"error":"' + JsonEscape(Err) + '"}');
+  end;
+  Status := 200;
+  Root := TJsonObject.Create;
+  try
+    Root.PutBool('ok', True);
+    Root.PutInt ('restored', Length(Restored));
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Restored) do
+    begin
+      FileObj := TJsonObject.Create;
+      FileObj.PutStr('path', Restored[i].Path);
+      Arr.AddObject(FileObj);
+    end;
+    Root.PutArray('files', Arr);
+    Result := Root.ToJSON;
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleCheckpointsUndo(ARequest: TIdHTTPRequestInfo;
+                                               AResp: TIdHTTPResponseInfo);
+{ POST /v1/checkpoints/undo?n=N -- roll the workspace back N turns (default 1). }
+var
+  N, Status: Integer;
+  Restored: TRestoredFileArray;
+  Err, Body: string;
+begin
+  N := StrToIntDef(ARequest.Params.Values['n'], 1);
+  if N < 1 then N := 1;
+  Body := CheckpointResultJSON(UndoTurns(N, Restored, Err), Restored, Err, Status);
+  WriteJSON(AResp, Status, Body);
+end;
+
+procedure TGatewayServer.HandleCheckpointsRedo(ARequest: TIdHTTPRequestInfo;
+                                               AResp: TIdHTTPResponseInfo);
+{ POST /v1/checkpoints/redo?n=N -- re-apply N undone turns (zpaq backend only). }
+var
+  N, Status: Integer;
+  Restored: TRestoredFileArray;
+  Err, Body: string;
+begin
+  N := StrToIntDef(ARequest.Params.Values['n'], 1);
+  if N < 1 then N := 1;
+  Body := CheckpointResultJSON(RedoTurns(N, Restored, Err), Restored, Err, Status);
+  WriteJSON(AResp, Status, Body);
+end;
+
 type
   TLogStreamWriter = class
     Conn: TIdTCPConnection;
@@ -3885,6 +3971,7 @@ begin
   LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
   LoopCfg.StreamReliability := FCfg.StreamReliability;
 
+  BeginTurn;   { checkpoint boundary: snapshot files this turn edits }
   if not RunToolLoop(LoopCfg, Msgs, Loop) then
   begin
     WriteJSON(AResp, 502, '{"error":"loop failed"}');
@@ -4590,6 +4677,7 @@ begin
       LoopCfg.OnToolCall   := Streamer.NoteToolCall;
       LoopCfg.OnToolResult := Streamer.NoteToolResult;
       Streamer.WriteComment('connected');
+      BeginTurn;   { checkpoint boundary }
       if not RunToolLoop(LoopCfg, Msgs, Loop) then
       begin
         if FDebugIO then LogDebug('chat/completions -> 502 (tool loop failed)');
@@ -4666,6 +4754,7 @@ begin
     LoopCfg.OnToolCall   := ActivityCollector.OnToolCall;
     LoopCfg.OnToolResult := ActivityCollector.OnToolResult;
 
+    BeginTurn;   { checkpoint boundary }
     if not RunToolLoop(LoopCfg, Msgs, Loop) then
     begin
       if FDebugIO then LogDebug('chat/completions -> 502 (tool loop failed)');
@@ -6299,6 +6388,7 @@ begin
       if FCfg.StreamReliability.ToolCallRepairEnabled then
         RepairOrphanedToolCalls(Msgs);
 
+      BeginTurn;   { checkpoint boundary }
       if not RunToolLoop(LoopCfg, Msgs, Loop) then
       begin
         ReplyObj := BuildResponsesObject(RespId, ReqModel, 'failed', '',
