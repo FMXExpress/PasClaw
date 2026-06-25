@@ -1126,6 +1126,16 @@ async function createSession(body) {
     persistChatParams();
   }
 }
+/* Ensure a server session exists (mint one if this is a fresh chat) so the
+   first turn is session-scoped. Seeds it with whatever turns are recorded so
+   far -- the post-turn persistActive then overwrites with the full exchange. */
+async function ensureSession() {
+  if (activeSessionId) return;
+  const msgs = activeTurns
+    .filter(t => t.role === "u" || t.role === "a")
+    .map(t => ({ role: t.role === "u" ? "user" : "assistant", content: t.text }));
+  try { await createSession(JSON.stringify({ messages: msgs })); } catch {}
+}
 async function persistActive() {
   const msgs = activeTurns
     .filter(t => t.role === "u" || t.role === "a")
@@ -1303,6 +1313,10 @@ function setStreaming(on) {
 /* Stream one assistant reply for the active session's current history.
    The user turn is expected to already be recorded + rendered. */
 async function streamAssistant() {
+  /* Mint the server session BEFORE the request so the very first turn carries
+     X-PasClaw-Session and is checkpoint-scoped to this chat (not the workspace
+     fallback). No-op once a session id exists. */
+  await ensureSession();
   const bub = addLine("a", "");
   bub.innerHTML = TYPING_HTML;
   setStreaming(true);
