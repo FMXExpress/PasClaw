@@ -239,6 +239,8 @@ type
                             AResp: TIdHTTPResponseInfo);
     procedure HandleFSRead(ARequest: TIdHTTPRequestInfo;
                             AResp: TIdHTTPResponseInfo);
+    procedure HandleFSDownload(ARequest: TIdHTTPRequestInfo;
+                            AResp: TIdHTTPResponseInfo);
     procedure HandleLogs(AContext: TIdContext;
                           ARequest: TIdHTTPRequestInfo;
                           AResp: TIdHTTPResponseInfo);
@@ -1039,6 +1041,7 @@ begin
     else if (ARequest.Command = 'GET')  and (Copy(Doc, 1, 10) = '/v1/vault/') then HandleVaultGet(Doc, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs')      then HandleFSList(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs/read') then HandleFSRead(ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs/download') then HandleFSDownload(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/logs')    then HandleLogs(AContext, ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/relay/poll') then
       HandleRelayPoll(AContext, ARequest, AResponse)
@@ -2909,6 +2912,64 @@ begin
   finally
     Root.Free;
   end;
+end;
+
+procedure TGatewayServer.HandleFSDownload(ARequest: TIdHTTPRequestInfo;
+                                          AResp: TIdHTTPResponseInfo);
+{ Stream a file's RAW bytes as an attachment so the browser can save binaries
+  (e.g. a built .exe) that /v1/fs/read can't carry -- read returns UTF-8 text
+  in JSON and caps at 256 KB. Same sandbox + restricted-file gates as read; no
+  size cap, no decoding. Streams straight from the file (FreeContentStream lets
+  Indy own + close the stream) so a large file isn't buffered into memory. }
+var
+  Path, Reason, FName: string;
+  Strm: TFileStream;
+begin
+  Path := ARequest.Params.Values['path'];
+  if Path = '' then
+  begin
+    WriteJSON(AResp, 400, '{"error":"bad path"}');
+    Exit;
+  end;
+  if not CanReadPath(Path, Reason) then
+  begin
+    WriteJSON(AResp, 403, '{"error":"' + JsonEscape(Reason) + '"}');
+    Exit;
+  end;
+  if IsRestrictedFsPath(Path) then
+  begin
+    WriteJSON(AResp, 403, '{"error":"access to this file is restricted"}');
+    Exit;
+  end;
+  if not FileExists(Path) then
+  begin
+    WriteJSON(AResp, 404, '{"error":"not found"}');
+    Exit;
+  end;
+  try
+    Strm := TFileStream.Create(Path, fmOpenRead or fmShareDenyWrite);
+  except
+    on E: Exception do
+    begin
+      WriteJSON(AResp, 500, '{"error":"' + JsonEscape(E.Message) + '"}');
+      Exit;
+    end;
+  end;
+  { Strip any quotes/CR/LF from the suggested filename so they can't break out
+    of the Content-Disposition header. }
+  FName := ExtractFileName(Path);
+  FName := StringReplace(FName, '"', '', [rfReplaceAll]);
+  FName := StringReplace(FName, #13, '', [rfReplaceAll]);
+  FName := StringReplace(FName, #10, '', [rfReplaceAll]);
+  if FName = '' then FName := 'download';
+  Strm.Position := 0;
+  AResp.ResponseNo  := 200;
+  AResp.ContentType := 'application/octet-stream';
+  AResp.CustomHeaders.AddValue('Content-Disposition',
+    'attachment; filename="' + FName + '"');
+  AResp.ContentStream     := Strm;
+  AResp.FreeContentStream := True;
+  AResp.ContentLength     := Strm.Size;
 end;
 
 type
