@@ -1,7 +1,12 @@
 unit libzpaq;
-{$mode objfpc}{$H+}{$Q-}{$R-}{$inline on}
-{$MODESWITCH AdvancedRecords}
-{$POINTERMATH ON}
+{ PasClaw: directives guarded so the unit also parses under Delphi. The body is
+  already portable -- AnsiChar/Byte throughout, no PChar, pointer math gated by
+  POINTERMATH (which Delphi supports), advanced records native to Delphi. }
+{$IFDEF FPC}
+  {$mode objfpc}{$H+}{$inline on}
+  {$MODESWITCH AdvancedRecords}
+{$ENDIF}
+{$Q-}{$R-}{$POINTERMATH ON}
 
 //Pascal port of LIBZPAQ Version 7.15 (Aug. 17, 2016)
 //Port by www.xelitan.com
@@ -17,6 +22,11 @@ unit libzpaq;
 
 interface
 uses SysUtils;
+
+{$IFNDEF FPC}
+type
+  QWord = UInt64;   { FPC built-in; Delphi spells it UInt64 }
+{$ENDIF}
 
 type
   U8  = Byte;

@@ -97,10 +97,10 @@ type
     cbDisabled,   { Checkpoints feature off -- BeginTurn / Snapshot are
                     no-ops; UndoTurns returns False with a message. }
     cbLegacy,     (* Per-turn directory of raw blobs + manifest.json.
-                    Original PR #221 storage. Used when the zpaq vendor
-                    isn't on disk (e.g. fresh clone without
-                    "make get-zpaq", or a Delphi build where the
-                    vendored unit is mode-objfpc and won't compile). *)
+                    Original PR #221 storage. Fallback when the zpaq
+                    archive can't be initialised at runtime. (The vendored
+                    port now compiles under Delphi too, so this is no longer
+                    the default there.) *)
     cbZpaq        { One streaming archive per session (archive.zpaq) +
                     JSON journal (index.json) tracking turn -> archive
                     entries + a redo stack. Compresses snapshots and

@@ -24,11 +24,12 @@ unit PasClaw.Checkpoints.Zpaq;
   compression (LZ77 method 1 by default for the snapshot hot path),
   multi-version history in a single file, and indexed extraction.
 
-  Compiler gate: the vendored unit is `{$mode objfpc}` so it doesn't
-  compile under Delphi. This wrapper gates `uses ZpaqClasses` on
-  `{$IFDEF FPC}` and exposes "not available" stubs otherwise;
-  PasClaw.Checkpoints' backend dispatch then routes to the legacy
-  blob-tree store under Delphi.
+  Compiler support: the vendored units' FPC-only directives ({$mode},
+  {$MODESWITCH}, {$inline on}) are now guarded with {$IFDEF FPC} and the
+  body is portable (AnsiChar/Byte, POINTERMATH), so they compile under both
+  FPC and Delphi. This wrapper therefore uses ZpaqClasses unconditionally and
+  ZpaqAvailable returns True on both; the zpaq backend (with /redo) is the
+  default on Delphi too, not just FPC.
 *)
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
@@ -88,18 +89,14 @@ function ZpaqExtractByIndex(const Archive: string; Idx: Integer;
 
 implementation
 
-{$IFDEF FPC}
 uses
   ZpaqClasses;
-{$ENDIF}
 
 function ZpaqAvailable: Boolean;
 begin
-  {$IFDEF FPC}
+  { The vendored port now compiles under both FPC and Delphi (directives
+    guarded), so the backend is available on both. }
   Result := True;
-  {$ELSE}
-  Result := False;
-  {$ENDIF}
 end;
 
 function ZpaqDefaultMethod: Integer;
@@ -111,8 +108,6 @@ begin
     compression can call the underlying ZpaqAppendBytes directly. }
   Result := 1;
 end;
-
-{$IFDEF FPC}
 
 function ZpaqAppendBytes(const Archive: string; const Body: TBytes;
                          const Name: string; Method: Integer;
@@ -251,37 +246,5 @@ begin
       Err := E.Message;
   end;
 end;
-
-{$ELSE}
-
-{ ----- PASCLAW_HAVE_ZPAQ stubs ----- }
-
-function ZpaqAppendBytes(const Archive: string; const Body: TBytes;
-                         const Name: string; Method: Integer;
-                         out Err: string): Boolean;
-begin
-  Err := 'zpaq backend not available (vendor/zpaq missing; run `make get-zpaq`)';
-  Result := False;
-end;
-
-function ZpaqListEntries(const Archive: string;
-                         out Entries: TZpaqArchiveEntries;
-                         out Err: string): Boolean;
-begin
-  SetLength(Entries, 0);
-  Err := 'zpaq backend not available (vendor/zpaq missing; run `make get-zpaq`)';
-  Result := False;
-end;
-
-function ZpaqExtractByIndex(const Archive: string; Idx: Integer;
-                            out Body: TBytes;
-                            out Err: string): Boolean;
-begin
-  SetLength(Body, 0);
-  Err := 'zpaq backend not available (vendor/zpaq missing; run `make get-zpaq`)';
-  Result := False;
-end;
-
-{$ENDIF}
 
 end.

@@ -1,6 +1,6 @@
 unit ZpaqSimple;
 
-{$mode delphi}
+{$IFDEF FPC}{$mode delphi}{$ENDIF}
 
 //Pascal port of LIBZPAQ Version 7.15 (Aug. 17, 2016)
 //Port by www.xelitan.com
