@@ -1468,25 +1468,29 @@ function chatFiles() {
   });
 })();
 
-/* Sandbox indicator: the gateway has no local/remote flag, so infer from the
-   host the browser connected to (localhost == local). Tooltip carries the
-   sandbox workspace + restriction from /v1/config. */
+/* Sandbox indicator: reflects the shell backend chosen at onboarding --
+   "local" (commands run in the host process) vs "docker" (per-session
+   container). Read from /v1/config.shell_backend (absent == local). Tooltip
+   carries the docker image and the fs sandbox workspace/restriction. */
 (function initSandboxChip() {
   const chip = $("#sandbox-chip");
   if (!chip) return;
-  const host = location.hostname;
-  const isLocal = host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "";
-  chip.textContent = isLocal ? "● local" : "● remote";
-  chip.classList.add(isLocal ? "sb-local" : "sb-remote");
-  chip.hidden = false;
-  const base = isLocal ? "Gateway on this machine" : "Gateway on " + host;
-  chip.title = base;
   gwFetch("/v1/config").then(r => r.json()).then(c => {
+    const docker = String(c.shell_backend || "local").toLowerCase() === "docker";
+    chip.textContent = docker ? "🐳 docker" : "💻 local";
+    chip.classList.add(docker ? "sb-remote" : "sb-local");
     const sb = c.sandbox || {};
     const ws = sb.workspace || "(startup working dir)";
     const restrict = sb.restrict_to_workspace ? "restricted to workspace" : "filesystem unrestricted";
-    chip.title = base + "\nworkspace: " + ws + "\n" + restrict;
-  }).catch(() => {});
+    const img = (c.shell_backend_docker && c.shell_backend_docker.image) || "";
+    const head = docker
+      ? ("Shell backend: Docker container" + (img ? " (" + img + ")" : ""))
+      : "Shell backend: local (host process)";
+    chip.title = head + "\nworkspace: " + ws + "\n" + restrict;
+    chip.hidden = false;
+  }).catch(() => {
+    chip.textContent = "💻 local"; chip.classList.add("sb-local"); chip.hidden = false;
+  });
 })();
 
 const SLASH = {
