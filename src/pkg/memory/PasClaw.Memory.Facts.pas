@@ -82,9 +82,12 @@ function NewFactStore: IFactStore;
 function DefaultFactsDbPath(const HomeDir: string): string;
 
 { Render facts as a system-prompt block, newest first, until Budget bytes
-  are used; a trailing "(N more -- use memory_search)" breadcrumb notes
-  any omitted. Wholesale (NOT relevance-sliced). '' when Facts is empty or
-  Budget <= 0. Pure -- exposed for testing. }
+  are used; a trailing "(+N older fact(s) not shown)" breadcrumb notes any
+  omitted. The breadcrumb does NOT point at memory_search -- that tool only
+  indexes workspace/memory/*.md, not facts.db, so omitted facts aren't
+  reachable that way until facts are wired into retrieval (Phase 4b).
+  Wholesale (NOT relevance-sliced). '' when Facts is empty or Budget <= 0.
+  Pure -- exposed for testing. }
 function FormatFactsBlock(const Facts: TStoredFactArray; Budget: Integer): string;
 
 { Convenience for the prompt builder: open the default store, read the
@@ -141,8 +144,11 @@ begin
   if Body = '' then Exit;
   Result := Header + sLineBreak + Body;
   if Omitted > 0 then
+    { No memory_search hint: it indexes only workspace/memory/*.md, not
+      facts.db, so it can't recover these. Just flag the omission;
+      raising memory_facts_budget surfaces more. }
     Result := Result + sLineBreak +
-      Format('(%d more -- ask via memory_search)', [Omitted]);
+      Format('(+%d older fact(s) not shown)', [Omitted]);
 end;
 
 function ActiveFactsBlock(const HomeDir, Today: string; Budget: Integer): string;

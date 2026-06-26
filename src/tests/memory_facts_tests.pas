@@ -171,12 +171,15 @@ begin
   AssertTrue(Pos('Durable facts', S) > 0, 'has header');
   AssertTrue(Pos('- Prefers Delphi', S) > 0, 'has a bullet');
   AssertTrue(Pos('(until 2026-12-31)', S) > 0, 'expiry annotated');
-  AssertTrue(Pos('more --', S) = 0, 'no breadcrumb when all fit');
+  AssertTrue(Pos('not shown', S) = 0, 'no breadcrumb when all fit');
+  { Must NOT promise memory_search -- it can't reach facts.db (Phase 4b). }
+  AssertTrue(Pos('memory_search', S) = 0, 'no false memory_search hint');
 
   { Tiny budget: at least one fact kept, rest summarised as a breadcrumb. }
   S := FormatFactsBlock(Facts, 45);
   AssertTrue(Pos('- Prefers Delphi', S) > 0, 'keeps newest fact under tiny budget');
-  AssertTrue(Pos('more --', S) > 0, 'breadcrumb notes the omitted facts');
+  AssertTrue(Pos('not shown', S) > 0, 'breadcrumb notes the omitted facts');
+  AssertTrue(Pos('memory_search', S) = 0, 'breadcrumb does not point at memory_search');
 end;
 
 begin
