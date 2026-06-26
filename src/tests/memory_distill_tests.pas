@@ -220,6 +220,52 @@ begin
   end;
 end;
 
+procedure TestMalformedBracesDoNotRaise;
+{ Braces that are NOT valid JSON must be swallowed -> 0 facts, no crash
+  (TJsonObject.Parse raises on these). }
+var
+  P: TScriptedProvider;
+  D: TMemoryDistiller;
+  Facts: TFactArray;
+  Err: string;
+begin
+  P := TScriptedProvider.Create;
+  P.Reply := 'sure: {not json, just braces ::}';
+  D := TMemoryDistiller.Create(P, 'fake');
+  try
+    AssertTrue(D.Distill(Convo, 'sess-5', '2026-06-26', Facts, Err), 'malformed braces -> still ok');
+    AssertEqInt(Length(Facts), 0, 'malformed braces -> no facts (no exception)');
+  finally
+    D.Free;
+  end;
+end;
+
+procedure TestOversizedNewestMessageStillRenders;
+{ When the newest message alone exceeds the byte budget, RenderTranscript
+  must keep a truncated head rather than producing an empty transcript
+  (which would skip the provider and silently return zero facts). }
+var
+  P: TScriptedProvider;
+  D: TMemoryDistiller;
+  Facts: TFactArray;
+  Err: string;
+  Big: TMessageArray;
+begin
+  P := TScriptedProvider.Create;
+  P.Reply := '{"facts":[{"text":"something","kind":"static","scope":"user","confidence":0.8,"expires":""}]}';
+  D := TMemoryDistiller.Create(P, 'fake');
+  try
+    D.MaxTranscriptChars := 50;
+    SetLength(Big, 1);
+    Big[0] := MakeMessage(mrUser, StringOfChar('x', 500));   { newest > budget }
+    AssertTrue(D.Distill(Big, 'sess-6', '2026-06-26', Facts, Err), 'oversized ok');
+    AssertEqInt(P.Calls, 1, 'provider WAS called (transcript not empty)');
+    AssertEqInt(Length(Facts), 1, 'facts still extracted from truncated context');
+  finally
+    D.Free;
+  end;
+end;
+
 begin
   TestSliceJsonObject;                  WriteLn('  ok: slice json object (fences/embedded)');
   TestNormaliseFact;                    WriteLn('  ok: normalise fact fields');
@@ -227,5 +273,7 @@ begin
   TestEmptyTranscriptSkipsProvider;     WriteLn('  ok: empty transcript skips provider');
   TestProviderErrorSurfaces;            WriteLn('  ok: provider error surfaces');
   TestGarbageReplyYieldsNoFacts;        WriteLn('  ok: non-JSON reply -> no facts');
+  TestMalformedBracesDoNotRaise;        WriteLn('  ok: malformed braces -> no crash, no facts');
+  TestOversizedNewestMessageStillRenders; WriteLn('  ok: oversized newest message still renders');
   WriteLn('PASS');
 end.

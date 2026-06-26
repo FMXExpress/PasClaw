@@ -415,6 +415,16 @@ begin
     Exit;
   end;
 
+  { Guard before touching NewMemoryLog: it opens the .ndjson with fmCreate,
+    so a typo'd session id would CREATE an empty log -- which then becomes
+    the newest session and hijacks the default-latest selection on every
+    later run. Require the transcript to already exist. }
+  if not FileExists(JoinPath(MemoryDir, SessionId + '.ndjson')) then
+  begin
+    PrintErr('session "' + SessionId + '" not found under ' + MemoryDir + sLineBreak);
+    Exit;
+  end;
+
   Cfg := LoadConfig;
   try
     if not NewDefaultProvider(Cfg, Provider, Err) then

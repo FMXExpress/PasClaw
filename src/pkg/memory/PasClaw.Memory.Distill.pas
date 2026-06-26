@@ -135,7 +135,17 @@ begin
     if Trim(Transcript[i].Content) = '' then Continue;
     Line := MsgRoleToString(Transcript[i].Role) + ': ' +
             Transcript[i].Content + sLineBreak;
-    if (Budget - Length(Line)) < 0 then Break;
+    if Length(Line) > Budget then
+    begin
+      { This entry overflows the remaining budget. If we've added nothing
+        yet -- the newest message alone is bigger than the whole budget,
+        common for a large tool result saved last -- keep a truncated head
+        so the model still gets recent context instead of an empty string
+        (which would make Distill silently return zero facts). }
+      if (Acc = '') and (Budget > 0) then
+        Acc := Copy(Line, 1, Budget);
+      Break;
+    end;
     Acc    := Line + Acc;
     Budget := Budget - Length(Line);
   end;
@@ -204,7 +214,17 @@ begin
   Result := nil;
   Json := SliceJsonObject(Raw);
   if Json = '' then Exit;
-  Root := TJsonObject.Parse(Json);
+  { Lenient parse: the model can emit brace characters that don't form
+    valid JSON (stray braces in prose). TJsonObject.Parse RAISES on
+    those, so swallow it and treat the reply as "no facts" rather than
+    letting the exception escape Distill (which only wraps the provider
+    call) and abort the caller. }
+  Root := nil;
+  try
+    Root := TJsonObject.Parse(Json);
+  except
+    Root := nil;
+  end;
   if Root = nil then Exit;
   Seen := TStringList.Create;
   try
