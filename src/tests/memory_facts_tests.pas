@@ -115,6 +115,34 @@ begin
   Store.Close;
 end;
 
+procedure RunDedupTests;
+{ Exact-text dedup: a re-observed active fact returns the existing id
+  (no duplicate row). But an EXPIRED prior copy must NOT block a fresh
+  insert -- otherwise the refreshed fact never re-enters active memory. }
+const
+  T2025 = 1751328000;   { ~2025-07-01; "today" for these Adds derives from it }
+var
+  DbPath: string;
+  Store: IFactStore;
+  Id1, Id2, Id3, Id4: Int64;
+begin
+  DbPath := JoinPath(GTmpDir, 'dedup.db');
+  Store := NewFactStore;
+  AssertTrue(Store.Open(DbPath), 'open dedup store');
+
+  Id1 := Store.Add(MkFact('Likes tea', 'static', 'user', '', 0.9), T2025);
+  Id2 := Store.Add(MkFact('LIKES TEA', 'dynamic', 'user', '', 0.4), T2025 + 1);
+  AssertTrue(Id2 = Id1, 'case-insensitive exact dup returns existing id');
+  AssertEqInt(Store.CountAll, 1, 'exact dup not inserted');
+
+  { Expired prior copy must not suppress the refreshed one. }
+  Id3 := Store.Add(MkFact('Sprint topic', 'dynamic', 'project', '2020-01-01', 0.5), T2025);
+  Id4 := Store.Add(MkFact('Sprint topic', 'dynamic', 'project', '', 0.6), T2025 + 1);
+  AssertTrue(Id4 <> Id3, 'expired dup does NOT block a fresh insert');
+  AssertEqInt(Store.CountAll, 3, 'tea + expired sprint + fresh sprint');
+  Store.Close;
+end;
+
 begin
   GTmpDir := JoinPath(GetTempDir, 'pasclaw-facts-test-' + IntToStr(Random(1 shl 30)));
   EnsureDir(GTmpDir);
@@ -123,6 +151,8 @@ begin
     WriteLn('  ok: add / read-back / active-excludes-expired');
     WriteLn('  ok: supersede / delete / counts');
     WriteLn('  ok: durability across reopen');
+    RunDedupTests;
+    WriteLn('  ok: exact-text dedup (expired copy does not block refresh)');
     WriteLn('PASS');
   finally
     {$IFDEF UNIX}

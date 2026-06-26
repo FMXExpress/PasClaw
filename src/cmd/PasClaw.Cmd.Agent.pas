@@ -26,6 +26,7 @@ implementation
 uses
   SysUtils, Classes,
   PasClaw.Config, PasClaw.Utils, PasClaw.CliUI, PasClaw.Logger,
+  PasClaw.Memory.AutoDistill,
   PasClaw.Providers.Types,
   PasClaw.Providers.Intf,
   PasClaw.Providers.Factory,
@@ -1666,6 +1667,13 @@ begin
                               Loop.TotalUsage.CacheCreatedTokens,
                               Loop.ToolCallsDispatched,
                               Loop.TruncatedBytesSaved);
+
+        { Opt-in distilled memory: background-distil the latest exchange
+          into the fact store. Best-effort, non-blocking; needs a session
+          for provenance. Uses the chat provider, no ONNX. }
+        if Cfg.MemoryDistillEnabled and (Session <> nil) then
+          ScheduleDistill(Provider, Model, GetHome, Session.Meta.Id,
+            BuildRecentTranscript(Loop.FinalMessages, Loop.Content, DefaultRecentMsgs));
 
         { Pick up the compacted history from RunToolLoop so the next
           interactive turn starts from the summarised state, not the

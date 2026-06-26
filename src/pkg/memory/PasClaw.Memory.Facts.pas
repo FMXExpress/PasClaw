@@ -90,6 +90,7 @@ uses
   FireDAC.Comp.Client, FireDAC.Phys.SQLite, FireDAC.Stan.Def,
   FireDAC.Stan.Async, FireDAC.Stan.Param, FireDAC.DApt,
   {$ENDIF}
+  DateUtils,
   PasClaw.Utils,
   PasClaw.Logger;
 
@@ -281,18 +282,27 @@ end;
 function TFactStoreImpl.Add(const F: TFact; CreatedAt: Int64): Int64;
 var
   Q: TQuery;
+  TodayStr: string;
 begin
   Result := 0;
   if not FOpen then Exit;
   { Exact-text dedup: per-turn auto-distill keeps re-surfacing the same
     wording, so if an ACTIVE fact already has this exact text (case-
     insensitive) return its id instead of inserting a duplicate. Cheap;
-    paraphrase/semantic dedup is a later phase. }
+    paraphrase/semantic dedup is a later phase.
+
+    Must use the SAME active predicate as ActiveFacts -- skip EXPIRED
+    rows too. Otherwise a re-observed fact whose old copy has expired
+    would match the stale row and never re-enter active memory. "today"
+    is the date this fact is being created (CreatedAt). }
+  TodayStr := FormatDateTime('yyyy"-"mm"-"dd', UnixToDateTime(CreatedAt, False));
   Q := NewQuery;
   try
     Q.SQL.Text :=
       'SELECT id FROM facts WHERE superseded = 0 ' +
+      'AND (expires = '''' OR expires >= :today) ' +
       'AND lower(text) = lower(:t) LIMIT 1';
+    PStr(Q, 'today', TodayStr);
     PStr(Q, 't', F.Text);
     Q.Open;
     if not Q.EOF then

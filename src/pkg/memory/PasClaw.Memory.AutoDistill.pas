@@ -88,41 +88,48 @@ var
   i: Integer;
   NowU: Int64;
 begin
+  { Outer try/finally guarantees the concurrency slot is released on EVERY
+    path -- the early Exits below (no facts, store open failed, distill
+    error) used to skip the decrement, so after a couple of no-fact turns
+    GActive stuck at the cap and auto-distill silently stopped forever. }
   try
-    Today := FormatDateTime('yyyy"-"mm"-"dd', Now);
-    Distiller := TMemoryDistiller.Create(FProvider, FModel);
     try
-      if not Distiller.Distill(FTranscript, FSession, Today, Facts, Err) then
-      begin
-        LogDebug('auto-distill: %s', [Err]);
-        Exit;
+      Today := FormatDateTime('yyyy"-"mm"-"dd', Now);
+      Distiller := TMemoryDistiller.Create(FProvider, FModel);
+      try
+        if not Distiller.Distill(FTranscript, FSession, Today, Facts, Err) then
+        begin
+          LogDebug('auto-distill: %s', [Err]);
+          Exit;
+        end;
+      finally
+        Distiller.Free;
       end;
-    finally
-      Distiller.Free;
-    end;
 
-    if Length(Facts) = 0 then Exit;
+      if Length(Facts) = 0 then Exit;
 
-    Store := NewFactStore;
-    if not Store.Open(DefaultFactsDbPath(FHome)) then Exit;
-    try
-      NowU := DateTimeToUnix(Now, False);
-      for i := 0 to High(Facts) do
-        Store.Add(Facts[i], NowU + i);
-    finally
-      Store.Close;
+      Store := NewFactStore;
+      if not Store.Open(DefaultFactsDbPath(FHome)) then Exit;
+      try
+        NowU := DateTimeToUnix(Now, False);
+        for i := 0 to High(Facts) do
+          Store.Add(Facts[i], NowU + i);
+      finally
+        Store.Close;
+      end;
+      LogDebug('auto-distill: stored %d fact(s) from session %s',
+               [Length(Facts), FSession]);
+    except
+      on E: Exception do
+        LogWarn('auto-distill: %s', [E.Message]);
     end;
-    LogDebug('auto-distill: stored %d fact(s) from session %s',
-             [Length(Facts), FSession]);
-  except
-    on E: Exception do
-      LogWarn('auto-distill: %s', [E.Message]);
-  end;
-  GLock.Acquire;
-  try
-    Dec(GActive);
   finally
-    GLock.Release;
+    GLock.Acquire;
+    try
+      Dec(GActive);
+    finally
+      GLock.Release;
+    end;
   end;
 end;
 

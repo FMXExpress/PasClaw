@@ -3327,9 +3327,12 @@ begin
 
   { Opt-in distilled memory: on a successful turn, fire a background pass
     that extracts durable facts from the latest exchange and stores them.
-    Best-effort and non-blocking -- never affects the response. }
+    Best-effort and non-blocking -- never affects the response.
+    Use Cfg.Provider/Cfg.Model -- the SNAPSHOT this turn actually ran on --
+    not FProvider, which a concurrent /v1/config hot-swap may have already
+    repointed at a different backend. }
   if Result and FCfg.MemoryDistillEnabled then
-    ScheduleDistill(FProvider, Cfg.Model, GetHome, ReqSession,
+    ScheduleDistill(Cfg.Provider, Cfg.Model, GetHome, ReqSession,
       BuildRecentTranscript(Loop.FinalMessages, Loop.Content, DefaultRecentMsgs));
 end;
 
