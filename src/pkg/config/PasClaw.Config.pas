@@ -639,6 +639,15 @@ type
        Independent of vector_search_enabled. Costs ~one extra LLM call
        per turn, which is why it's off unless the operator asks. *)
     MemoryDistillEnabled:  Boolean;
+    (* Byte budget for the always-on "durable facts" block injected into
+       the system prompt when MemoryDistillEnabled. Facts are tiny, so the
+       whole active set usually fits; past the budget the newest/highest-
+       confidence win and the rest stay reachable via memory_search. This
+       is a WHOLESALE block, deliberately NOT relevance-sliced like
+       OrientTaskAware -- standing memory shouldn't narrow to the current
+       query. 0 disables auto-injection (facts become search-only).
+       Default 2000 (~30 facts). *)
+    MemoryFactsBudget:     Integer;
     (* On-by-default: scan tool output / recalled memory / stored
        skill descriptions for prompt-injection patterns and annotate
        hits with a warning banner (PasClaw.Promptware). A lowercase
@@ -940,6 +949,7 @@ begin
   StatsCollectionEnabled := True;  { on by default -- zero prompt cost, useful for diagnosing turn-count regressions. Onboarding can flip off for privacy-conscious operators. }
   CheckpointsEnabled     := True;  { on by default -- zero prompt cost, prevents lost work on multi-edit sessions. }
   MemoryDistillEnabled   := False; { opt-in: ~one extra LLM call per turn. }
+  MemoryFactsBudget      := 2000;  { ~30 facts injected wholesale when distill on. }
   CheckpointsKeepLast    := 32;    { keep last 32 atomic edit checkpoints. }
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
   OrientTaskAware        := False; { off by default -- whole-file MEMORY injection is the contract; opt in per-run with `pasclaw agent --orient` or "orient_task_aware":true. }
@@ -1230,6 +1240,10 @@ begin
       (onboarding or hand-edit) sticks across save/load. }
     if MemoryDistillEnabled then
       Root.PutBool('memory_distill_enabled', True);
+    { Emit only when changed from the 2000 default (0 = injection off both
+      round-trip). }
+    if MemoryFactsBudget <> 2000 then
+      Root.PutInt('memory_facts_budget', MemoryFactsBudget);
     { CheckpointsKeepLast default flipped from 0 (=> use library
       default 32) to an explicit 32 in PR #314. Emit when it differs --
       0 and other values both round-trip. }
@@ -1641,6 +1655,7 @@ begin
                                            StatsCollectionEnabled);
     CheckpointsEnabled  := Root.GetBool('checkpoints_enabled', CheckpointsEnabled);
     MemoryDistillEnabled := Root.GetBool('memory_distill_enabled', MemoryDistillEnabled);
+    MemoryFactsBudget    := Root.GetInt('memory_facts_budget', MemoryFactsBudget);
     CheckpointsKeepLast := Integer(Root.GetInt('checkpoints_keep_last',
                                                 CheckpointsKeepLast));
     PromptwareEnabled   := Root.GetBool('promptware_enabled', PromptwareEnabled);

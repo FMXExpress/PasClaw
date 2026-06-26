@@ -81,6 +81,17 @@ function NewFactStore: IFactStore;
 { Default on-disk location: <home>/workspace/memory/facts.db }
 function DefaultFactsDbPath(const HomeDir: string): string;
 
+{ Render facts as a system-prompt block, newest first, until Budget bytes
+  are used; a trailing "(N more -- use memory_search)" breadcrumb notes
+  any omitted. Wholesale (NOT relevance-sliced). '' when Facts is empty or
+  Budget <= 0. Pure -- exposed for testing. }
+function FormatFactsBlock(const Facts: TStoredFactArray; Budget: Integer): string;
+
+{ Convenience for the prompt builder: open the default store, read the
+  facts active as of Today, and format them within Budget. '' when the
+  store is absent/empty or Budget <= 0. }
+function ActiveFactsBlock(const HomeDir, Today: string; Budget: Integer): string;
+
 implementation
 
 uses
@@ -97,6 +108,56 @@ uses
 function DefaultFactsDbPath(const HomeDir: string): string;
 begin
   Result := JoinPath(JoinPath(JoinPath(HomeDir, 'workspace'), 'memory'), 'facts.db');
+end;
+
+function FormatFactsBlock(const Facts: TStoredFactArray; Budget: Integer): string;
+const
+  Header = 'Durable facts (auto-distilled memory):';
+var
+  i, Used, Omitted: Integer;
+  Line, Body: string;
+begin
+  Result := '';
+  if (Length(Facts) = 0) or (Budget <= 0) then Exit;
+  Body := '';
+  Used := Length(Header);
+  Omitted := 0;
+  for i := 0 to High(Facts) do
+  begin
+    if Trim(Facts[i].Text) = '' then Continue;
+    Line := '- ' + Facts[i].Text;
+    if Facts[i].Expires <> '' then
+      Line := Line + ' (until ' + Facts[i].Expires + ')';
+    { +1 for the newline this line will cost. Always keep at least one. }
+    if (Body <> '') and (Used + Length(Line) + 1 > Budget) then
+    begin
+      Omitted := Length(Facts) - i;
+      Break;
+    end;
+    if Body <> '' then Body := Body + sLineBreak;
+    Body := Body + Line;
+    Used := Used + Length(Line) + 1;
+  end;
+  if Body = '' then Exit;
+  Result := Header + sLineBreak + Body;
+  if Omitted > 0 then
+    Result := Result + sLineBreak +
+      Format('(%d more -- ask via memory_search)', [Omitted]);
+end;
+
+function ActiveFactsBlock(const HomeDir, Today: string; Budget: Integer): string;
+var
+  Store: IFactStore;
+begin
+  Result := '';
+  if Budget <= 0 then Exit;
+  Store := NewFactStore;
+  if not Store.Open(DefaultFactsDbPath(HomeDir)) then Exit;
+  try
+    Result := FormatFactsBlock(Store.ActiveFacts(Today), Budget);
+  finally
+    Store.Close;
+  end;
 end;
 
 type
