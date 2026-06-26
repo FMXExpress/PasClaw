@@ -931,7 +931,17 @@ async function gwFetch(url, opts) {
      per-workspace timeline when absent, e.g. a brand-new unsaved chat). */
   if (typeof activeSessionId !== "undefined" && activeSessionId)
     headers.set("X-PasClaw-Session", activeSessionId);
-  let r = await fetch(url, Object.assign({}, opts, { headers }));
+  let r;
+  try {
+    r = await fetch(url, Object.assign({}, opts, { headers }));
+  } catch (e) {
+    /* Network-level failure (gateway down). Flip the header chip and arm
+       the recovery probe; the caller still sees the rejection. */
+    if (typeof metaWentOffline === "function") metaWentOffline();
+    throw e;
+  }
+  /* Reached the gateway (any HTTP status counts as "up"). */
+  if (typeof metaCameOnline === "function") metaCameOnline();
   if (r.status !== 401) return r;
   // First 401 -> ask once and retry. Don't loop indefinitely; a
   // second 401 after the user supplied a token surfaces the error
@@ -987,20 +997,42 @@ $$("nav button[data-tab]").forEach(b => b.addEventListener("click", () => showTa
 // Follow back/forward and manual #hash edits between tabs.
 window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
 
-/* ===== Header status ===== */
+/* ===== Header status =====
+   Detection is event-driven, not a steady-state poll: gwFetch() (which
+   every request goes through) flips the chip on any network failure /
+   success via metaWentOffline()/metaCameOnline(). We only spin up a
+   /v1/status probe WHILE offline, to recover an otherwise-idle tab after
+   a server restart, and stop it the instant the gateway answers. Healthy
+   operation makes zero extra status calls. */
 let metaOffline = false;
+let metaRecoverTimer = null;
+
 function refreshMeta() {
-  gwFetch("/v1/status").then(r => r.json()).then(s => {
+  /* One status read -> repopulate the chip. Used on load and as the
+     while-offline recovery probe. Resolves true when the gateway answered. */
+  return gwFetch("/v1/status").then(r => r.json()).then(s => {
     $("#meta").textContent = `${s.default_provider}/${s.default_model} • tools:${s.tools} • mcp:${s.mcp_servers}`;
-    metaOffline = false;
-  }).catch(_ => {
-    $("#meta").textContent = "offline";
-    metaOffline = true;
-  });
+    return true;
+  }).catch(_ => { $("#meta").textContent = "offline"; return false; });
 }
-refreshMeta();
-/* Poll every 5s so the header recovers automatically after a server restart. */
-setInterval(refreshMeta, 5000);
+
+function metaWentOffline() {
+  if (metaOffline) return;
+  metaOffline = true;
+  $("#meta").textContent = "offline";
+  /* Probe only now that we're offline; clear it the moment we recover. */
+  if (!metaRecoverTimer)
+    metaRecoverTimer = setInterval(() => { refreshMeta(); }, 5000);
+}
+
+function metaCameOnline() {
+  if (!metaOffline) return;
+  metaOffline = false;
+  if (metaRecoverTimer) { clearInterval(metaRecoverTimer); metaRecoverTimer = null; }
+  refreshMeta();   /* repopulate provider/model now that the gateway answers */
+}
+
+refreshMeta();   /* initial paint; a failure here arms the recovery probe via gwFetch */
 
 /* ===== Sessions (server-backed) =====
    Chats are durable on the gateway under
