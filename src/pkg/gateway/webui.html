@@ -928,20 +928,28 @@ async function gwFetch(url, opts) {
   if (tok) headers.set("Authorization", "Bearer " + tok);
   /* Scope checkpoints to the active chat: the gateway keys the per-turn undo
      timeline off this so each session has its own history (falls back to a
-     per-workspace timeline when absent, e.g. a brand-new unsaved chat). */
-  if (typeof activeSessionId !== "undefined" && activeSessionId)
-    headers.set("X-PasClaw-Session", activeSessionId);
+     per-workspace timeline when absent, e.g. a brand-new unsaved chat).
+     activeSessionId is a `let` declared later in the file; the very first
+     gwFetch (the header status probe) runs before that line, so a plain
+     `typeof activeSessionId` would hit the temporal dead zone and THROW
+     (typeof does not save you for a declared-but-uninitialized let) -- which
+     made the status chip show "offline" on every fresh load. Read it through
+     a try so an early call degrades to "no session header" instead. */
+  var sess = null;
+  try { if (activeSessionId) sess = activeSessionId; } catch (_) { sess = null; }
+  if (sess) headers.set("X-PasClaw-Session", sess);
   let r;
   try {
     r = await fetch(url, Object.assign({}, opts, { headers }));
   } catch (e) {
     /* Network-level failure (gateway down). Flip the header chip and arm
-       the recovery probe; the caller still sees the rejection. */
-    if (typeof metaWentOffline === "function") metaWentOffline();
+       the recovery probe; the caller still sees the rejection. _silentMeta
+       suppresses this so refreshMeta's own probe can't re-enter the hook. */
+    if (!opts._silentMeta && typeof metaWentOffline === "function") metaWentOffline();
     throw e;
   }
   /* Reached the gateway (any HTTP status counts as "up"). */
-  if (typeof metaCameOnline === "function") metaCameOnline();
+  if (!opts._silentMeta && typeof metaCameOnline === "function") metaCameOnline();
   if (r.status !== 401) return r;
   // Background/automatic callers (opts.noPrompt) must never open the token
   // modal -- e.g. the header status chip refreshing on its own shouldn't
@@ -1003,47 +1011,61 @@ $$("nav button[data-tab]").forEach(b => b.addEventListener("click", () => showTa
 window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
 
 /* ===== Header status =====
-   Detection is event-driven, not a steady-state poll: gwFetch() (which
-   every request goes through) flips the chip on any network failure /
-   success via metaWentOffline()/metaCameOnline(). We only spin up a
-   /v1/status probe WHILE offline, to recover an otherwise-idle tab after
-   a server restart, and stop it the instant the gateway answers. Healthy
-   operation makes zero extra status calls. */
+   refreshMeta() is self-sufficient: it decides online/offline from its OWN
+   result and owns the recovery probe, so EVERY failure mode arms recovery --
+   a network throw AND a reachable-but-erroring response (e.g. a proxy 502
+   while the gateway restarts). An earlier version only armed the probe on a
+   throw, so a non-OK response left the chip stuck on "offline" forever.
+
+   gwFetch()'s metaWentOffline()/metaCameOnline() hooks are just accelerators
+   so OTHER traffic flips the chip without waiting for the 5s probe. The probe
+   itself passes _silentMeta so it never re-enters those hooks (no recursion).
+   Healthy operation makes zero extra status calls once populated. */
 let metaOffline = false;
 let metaRecoverTimer = null;
 
-function refreshMeta() {
-  /* One status read -> repopulate the chip. Used on load and as the
-     while-offline recovery probe. noPrompt: this is a background refresh, so
-     a token-protected gateway must NOT pop the login modal at us -- on 401 we
-     just show "locked" and let a real user action drive authentication.
-     Resolves true when the gateway answered (even with 401: it's reachable). */
-  return gwFetch("/v1/status", { noPrompt: true }).then(r => {
-    if (!r.ok) { $("#meta").textContent = r.status === 401 ? "locked" : "offline"; return r.status === 401; }
-    return r.json().then(s => {
-      $("#meta").textContent = `${s.default_provider}/${s.default_model} • tools:${s.tools} • mcp:${s.mcp_servers}`;
-      return true;
-    });
-  }).catch(_ => { $("#meta").textContent = "offline"; return false; });
+function metaStartProbe() {
+  if (!metaRecoverTimer) metaRecoverTimer = setInterval(refreshMeta, 5000);
+}
+function metaStopProbe() {
+  if (metaRecoverTimer) { clearInterval(metaRecoverTimer); metaRecoverTimer = null; }
 }
 
+function refreshMeta() {
+  /* noPrompt: background refresh must never pop the token modal. _silentMeta:
+     don't let our own probe re-trigger the gwFetch online/offline hooks. */
+  return gwFetch("/v1/status", { noPrompt: true, _silentMeta: true }).then(r => {
+    if (r.status === 401) {            // reachable, just needs a token
+      $("#meta").textContent = "locked";
+      metaOffline = false; metaStopProbe();
+      return;
+    }
+    if (!r.ok) throw new Error("status " + r.status);   // funnel to the offline path
+    return r.json().then(s => {
+      $("#meta").textContent = `${s.default_provider}/${s.default_model} • tools:${s.tools} • mcp:${s.mcp_servers}`;
+      metaOffline = false; metaStopProbe();
+    });
+  }).catch(_ => {
+    /* Unreachable OR erroring -> show offline and keep probing until it answers. */
+    $("#meta").textContent = "offline";
+    metaOffline = true;
+    metaStartProbe();
+  });
+}
+
+/* gwFetch hooks (accelerators only). */
 function metaWentOffline() {
   if (metaOffline) return;
   metaOffline = true;
   $("#meta").textContent = "offline";
-  /* Probe only now that we're offline; clear it the moment we recover. */
-  if (!metaRecoverTimer)
-    metaRecoverTimer = setInterval(() => { refreshMeta(); }, 5000);
+  metaStartProbe();
 }
-
 function metaCameOnline() {
-  if (!metaOffline) return;
-  metaOffline = false;
-  if (metaRecoverTimer) { clearInterval(metaRecoverTimer); metaRecoverTimer = null; }
-  refreshMeta();   /* repopulate provider/model now that the gateway answers */
+  if (!metaOffline) return;            // transition-guarded -> can't loop
+  refreshMeta();                       // reachable again: repopulate + stop probe
 }
 
-refreshMeta();   /* initial paint; a failure here arms the recovery probe via gwFetch */
+refreshMeta();   /* initial paint; failure (throw OR bad response) arms the probe */
 
 /* ===== Sessions (server-backed) =====
    Chats are durable on the gateway under
