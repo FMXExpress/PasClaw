@@ -69,8 +69,11 @@ type
     function  Supersede(Id: Int64): Boolean;
     { Hard-delete a fact. True if a row was removed. }
     function  Delete(Id: Int64): Boolean;
-    { Row count; IncludeInactive=False counts only non-superseded. }
-    function  Count(IncludeInactive: Boolean): Integer;
+    { Total rows, including superseded/expired. }
+    function  CountAll: Integer;
+    { Count of facts ACTIVE as of Today -- identical predicate to
+      ActiveFacts(Today), so the two never disagree. }
+    function  CountActive(const Today: string): Integer;
   end;
 
 function NewFactStore: IFactStore;
@@ -128,7 +131,8 @@ type
     function  AllFacts: TStoredFactArray;
     function  Supersede(Id: Int64): Boolean;
     function  Delete(Id: Int64): Boolean;
-    function  Count(IncludeInactive: Boolean): Integer;
+    function  CountAll: Integer;
+    function  CountActive(const Today: string): Integer;
   end;
 
 function NewFactStore: IFactStore;
@@ -398,7 +402,7 @@ begin
   end;
 end;
 
-function TFactStoreImpl.Count(IncludeInactive: Boolean): Integer;
+function TFactStoreImpl.CountAll: Integer;
 var
   Q: TQuery;
 begin
@@ -406,10 +410,30 @@ begin
   if not FOpen then Exit;
   Q := NewQuery;
   try
-    if IncludeInactive then
-      Q.SQL.Text := 'SELECT COUNT(*) FROM facts'
-    else
-      Q.SQL.Text := 'SELECT COUNT(*) FROM facts WHERE superseded = 0';
+    Q.SQL.Text := 'SELECT COUNT(*) FROM facts';
+    Q.Open;
+    if not Q.EOF then Result := Q.Fields[0].AsInteger;
+    Q.Close;
+  finally
+    Q.Free;
+  end;
+end;
+
+function TFactStoreImpl.CountActive(const Today: string): Integer;
+{ Same predicate as ActiveFacts(Today): not superseded AND not expired.
+  Kept in lockstep so Count and the listing can't disagree (the earlier
+  Count(False) only filtered superseded and over-counted expired rows). }
+var
+  Q: TQuery;
+begin
+  Result := 0;
+  if not FOpen then Exit;
+  Q := NewQuery;
+  try
+    Q.SQL.Text :=
+      'SELECT COUNT(*) FROM facts WHERE superseded = 0 ' +
+      'AND (expires = '''' OR expires >= :today)';
+    PStr(Q, 'today', Today);
     Q.Open;
     if not Q.EOF then Result := Q.Fields[0].AsInteger;
     Q.Close;

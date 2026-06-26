@@ -92,19 +92,24 @@ begin
   All := Store.AllFacts;
   AssertEqInt(Length(All), 4, 'AllFacts keeps superseded + expired');
 
-  AssertEqInt(Store.Count(False), 3, 'Count(active-only) excludes superseded');
-  AssertEqInt(Store.Count(True), 4, 'Count(all) includes superseded');
+  { CountActive must match ActiveFacts exactly: NoExp + Future = 2 (the
+    past-expiry fact is NOT counted, and the superseded one is gone). The
+    old Count(False) wrongly reported 3 by ignoring expiry. }
+  AssertEqInt(Store.CountActive(TODAY), 2, 'active count excludes superseded AND expired');
+  AssertEqInt(Store.CountActive(TODAY), Length(Store.ActiveFacts(TODAY)),
+              'CountActive agrees with ActiveFacts');
+  AssertEqInt(Store.CountAll, 4, 'CountAll includes superseded + expired');
 
   { Delete the expired one entirely. }
   AssertTrue(Store.Delete(IdPast), 'delete returns true');
-  AssertEqInt(Store.Count(True), 3, 'count drops after delete');
+  AssertEqInt(Store.CountAll, 3, 'count drops after delete');
 
   Store.Close;
 
   { Reopen: durability. }
   Store := NewFactStore;
   AssertTrue(Store.Open(DbPath), 'reopen store');
-  AssertEqInt(Store.Count(True), 3, 'facts persisted across reopen');
+  AssertEqInt(Store.CountAll, 3, 'facts persisted across reopen');
   Active := Store.ActiveFacts(TODAY);
   AssertEqInt(Length(Active), 2, 'active count stable after reopen');
   Store.Close;
