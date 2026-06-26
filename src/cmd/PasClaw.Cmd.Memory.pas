@@ -46,6 +46,11 @@ uses
   PasClaw.Utils,
   PasClaw.Config,
   PasClaw.Logger,
+  PasClaw.Memory,
+  PasClaw.Memory.Distill,
+  PasClaw.Providers.Types,
+  PasClaw.Providers.Intf,
+  PasClaw.Providers.Factory,
   LocalVector.Models,
   LocalVector.OrtProvision,
   LocalVector.VecProvision,
@@ -74,6 +79,9 @@ begin
   PrintLn('              embedding model into $PASCLAW_HOME/cache/localvector/');
   PrintLn('  status      Show which runtime artifacts are present and which');
   PrintLn('              backend memory_search would pick on the next call');
+  PrintLn('  distill [session]');
+  PrintLn('              Extract durable facts from a session transcript via');
+  PrintLn('              the LLM and print them (latest session if omitted).');
 end;
 
 function ModelDir(const SubDir: string): string;
@@ -345,6 +353,127 @@ begin
   Result := 0;
 end;
 
+function MemoryDir: string;
+begin
+  Result := JoinPath(JoinPath(GetHome, 'workspace'), 'memory');
+end;
+
+function LatestSessionId: string;
+{ Newest *.ndjson under workspace/memory (by mtime), or '' if none. }
+var
+  SR: TSearchRec;
+  Best: string;
+  BestTime: LongInt;
+begin
+  Result := '';
+  Best := '';
+  BestTime := -1;
+  if FindFirst(JoinPath(MemoryDir, '*.ndjson'), faAnyFile, SR) = 0 then
+  try
+    repeat
+      if (SR.Attr and faDirectory) <> 0 then Continue;
+      { SR.Time is a packed file timestamp -- fine for "newest" ordering
+        and available under both FPC and Delphi (unlike .TimeStamp). }
+      if (Best = '') or (SR.Time > BestTime) then
+      begin
+        Best := SR.Name;
+        BestTime := SR.Time;
+      end;
+    until FindNext(SR) <> 0;
+  finally
+    FindClose(SR);
+  end;
+  if Best <> '' then
+    Result := ChangeFileExt(Best, '');   { strip .ndjson -> session id }
+end;
+
+function RunDistill(const Argv: array of string): Integer;
+{ pasclaw memory distill [sessionId]
+
+  Phase 1: read a session's transcript, run the LLM distiller, and PRINT
+  the extracted facts. Persistence (SQLite fact store) lands in Phase 2,
+  so this is a read-only preview of what the distiller would remember. }
+var
+  Cfg: TConfig;
+  Provider: ILLMProvider;
+  Err, SessionId, Today: string;
+  Log: TMemoryLog;
+  Hist: TMessageArray;
+  Distiller: TMemoryDistiller;
+  Facts: TFactArray;
+  i: Integer;
+  Line: string;
+begin
+  Result := 1;
+  if Length(Argv) >= 2 then
+    SessionId := Argv[1]
+  else
+    SessionId := LatestSessionId;
+  if SessionId = '' then
+  begin
+    PrintErr('no session found under ' + MemoryDir + sLineBreak);
+    Exit;
+  end;
+
+  { Guard before touching NewMemoryLog: it opens the .ndjson with fmCreate,
+    so a typo'd session id would CREATE an empty log -- which then becomes
+    the newest session and hijacks the default-latest selection on every
+    later run. Require the transcript to already exist. }
+  if not FileExists(JoinPath(MemoryDir, SessionId + '.ndjson')) then
+  begin
+    PrintErr('session "' + SessionId + '" not found under ' + MemoryDir + sLineBreak);
+    Exit;
+  end;
+
+  Cfg := LoadConfig;
+  try
+    if not NewDefaultProvider(Cfg, Provider, Err) then
+    begin
+      PrintErr('distill: ' + Err + sLineBreak);
+      Exit;
+    end;
+
+    Log := NewMemoryLog(GetHome, SessionId);
+    try
+      Hist := Log.LoadHistory;
+    finally
+      Log.Free;
+    end;
+    if Length(Hist) = 0 then
+    begin
+      PrintErr('session "' + SessionId + '" has no transcript' + sLineBreak);
+      Exit;
+    end;
+
+    Today := FormatDateTime('yyyy"-"mm"-"dd', Now);
+    Distiller := TMemoryDistiller.Create(Provider, Cfg.DefaultModel);
+    try
+      if not Distiller.Distill(Hist, SessionId, Today, Facts, Err) then
+      begin
+        PrintErr('distill: ' + Err + sLineBreak);
+        Exit;
+      end;
+    finally
+      Distiller.Free;
+    end;
+  finally
+    Cfg.Free;
+  end;
+
+  PrintLn(Ansi.Bold + 'Distilled ' + IntToStr(Length(Facts)) +
+          ' fact(s) from session ' + SessionId + Ansi.Reset);
+  PrintLn(Ansi.Dim + '(preview only -- persistence lands in Phase 2)' + Ansi.Reset);
+  for i := 0 to High(Facts) do
+  begin
+    Line := Format('  [%s/%s %.2f] %s',
+      [Facts[i].Kind, Facts[i].Scope, Facts[i].Confidence, Facts[i].Text]);
+    if Facts[i].Expires <> '' then
+      Line := Line + Ansi.Dim + ' (expires ' + Facts[i].Expires + ')' + Ansi.Reset;
+    PrintLn(Line);
+  end;
+  Result := 0;
+end;
+
 function Cmd_Memory_Run(const Argv: array of string): Integer;
 var
   Sub: string;
@@ -362,6 +491,7 @@ begin
   end;
   if Sub = 'provision' then Exit(RunProvision);
   if Sub = 'status'    then Exit(RunStatus);
+  if Sub = 'distill'   then Exit(RunDistill(Argv));
   PrintErr('unknown memory subcommand: ' + Sub + sLineBreak);
   Help;
   Result := 1;
