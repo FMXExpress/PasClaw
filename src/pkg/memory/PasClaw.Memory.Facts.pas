@@ -284,6 +284,27 @@ var
 begin
   Result := 0;
   if not FOpen then Exit;
+  { Exact-text dedup: per-turn auto-distill keeps re-surfacing the same
+    wording, so if an ACTIVE fact already has this exact text (case-
+    insensitive) return its id instead of inserting a duplicate. Cheap;
+    paraphrase/semantic dedup is a later phase. }
+  Q := NewQuery;
+  try
+    Q.SQL.Text :=
+      'SELECT id FROM facts WHERE superseded = 0 ' +
+      'AND lower(text) = lower(:t) LIMIT 1';
+    PStr(Q, 't', F.Text);
+    Q.Open;
+    if not Q.EOF then
+    begin
+      Result := Q.Fields[0].AsLargeInt;
+      Q.Close;
+      Exit;
+    end;
+    Q.Close;
+  finally
+    Q.Free;
+  end;
   Q := NewQuery;
   try
     Q.SQL.Text :=
