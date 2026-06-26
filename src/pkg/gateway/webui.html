@@ -943,6 +943,11 @@ async function gwFetch(url, opts) {
   /* Reached the gateway (any HTTP status counts as "up"). */
   if (typeof metaCameOnline === "function") metaCameOnline();
   if (r.status !== 401) return r;
+  // Background/automatic callers (opts.noPrompt) must never open the token
+  // modal -- e.g. the header status chip refreshing on its own shouldn't
+  // throw a login prompt in the user's face while they're just viewing the
+  // page. They get the raw 401 and degrade quietly.
+  if (opts.noPrompt) return r;
   // First 401 -> ask once and retry. Don't loop indefinitely; a
   // second 401 after the user supplied a token surfaces the error
   // to the caller normally (rendered as "offline" / "error" in each
@@ -1009,10 +1014,16 @@ let metaRecoverTimer = null;
 
 function refreshMeta() {
   /* One status read -> repopulate the chip. Used on load and as the
-     while-offline recovery probe. Resolves true when the gateway answered. */
-  return gwFetch("/v1/status").then(r => r.json()).then(s => {
-    $("#meta").textContent = `${s.default_provider}/${s.default_model} • tools:${s.tools} • mcp:${s.mcp_servers}`;
-    return true;
+     while-offline recovery probe. noPrompt: this is a background refresh, so
+     a token-protected gateway must NOT pop the login modal at us -- on 401 we
+     just show "locked" and let a real user action drive authentication.
+     Resolves true when the gateway answered (even with 401: it's reachable). */
+  return gwFetch("/v1/status", { noPrompt: true }).then(r => {
+    if (!r.ok) { $("#meta").textContent = r.status === 401 ? "locked" : "offline"; return r.status === 401; }
+    return r.json().then(s => {
+      $("#meta").textContent = `${s.default_provider}/${s.default_model} • tools:${s.tools} • mcp:${s.mcp_servers}`;
+      return true;
+    });
   }).catch(_ => { $("#meta").textContent = "offline"; return false; });
 }
 
