@@ -1,0 +1,421 @@
+(*
+  PasClaw.Memory.Facts - Phase 2 persistence for distilled memory.
+
+  Stores the TFact records produced by PasClaw.Memory.Distill in a
+  SQLite table (workspace/memory/facts.db). This is the relational
+  store + lifecycle bookkeeping; the similarity/dedup side (sqlite-vec
+  embeddings, contradiction resolution) is Phase 3 and slots in on top
+  of this schema.
+
+  Why SQLite rather than flat .md files: the fact store's core ops are
+  metadata queries and in-place updates -- "active facts as of today"
+  (WHERE not superseded AND not expired), supersede a contradicted
+  fact, expire-sweep -- which SQL does cleanly and a markdown blob does
+  not. Auditability (the thing pure-vector stores lose) comes back via
+  a future Memory web tab + a markdown export, not by making files the
+  source of truth.
+
+  Cross-target split mirrors PasClaw.Memory.Index:
+    - {$IFDEF FPC}: TSQLite3Connection + TSQLQuery (sqldb).
+    - {$ELSE}:      FireDAC TFDConnection + TFDQuery.
+
+  Schema:
+    facts(id INTEGER PK, text, kind, scope, confidence REAL,
+          expires TEXT, source_session TEXT, created_at INTEGER,
+          superseded INTEGER)
+
+    expires is '' (never) or 'YYYY-MM-DD'. A fact is ACTIVE when
+    superseded = 0 and (expires = '' or expires >= today). "today" is
+    passed in by the caller so reads stay deterministic/testable.
+*)
+unit PasClaw.Memory.Facts;
+
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
+{$H+}
+
+interface
+
+uses
+  SysUtils, Classes,
+  PasClaw.Memory.Distill;   { TFact }
+
+type
+  TStoredFact = record
+    Id:            Int64;
+    Text:          string;
+    Kind:          string;
+    Scope:         string;
+    Confidence:    Double;
+    Expires:       string;
+    SourceSession: string;
+    CreatedAt:     Int64;     { unix seconds }
+    Superseded:    Boolean;
+  end;
+  TStoredFactArray = array of TStoredFact;
+
+  IFactStore = interface
+    ['{4C2F9A11-7E3D-4B8A-9F21-2A6D0C5E1B77}']
+    function  Open(const DbPath: string): Boolean;
+    procedure Close;
+    { Insert F; returns the new row id (0 on failure). CreatedAt is set
+      to now; Superseded starts false. }
+    function  Add(const F: TFact; CreatedAt: Int64): Int64;
+    { Facts that are live as of Today ('YYYY-MM-DD'): not superseded and
+      not past their expiry. Newest first. }
+    function  ActiveFacts(const Today: string): TStoredFactArray;
+    { Every fact, including superseded/expired (newest first). }
+    function  AllFacts: TStoredFactArray;
+    { Mark a fact superseded (kept for history). True if a row changed. }
+    function  Supersede(Id: Int64): Boolean;
+    { Hard-delete a fact. True if a row was removed. }
+    function  Delete(Id: Int64): Boolean;
+    { Row count; IncludeInactive=False counts only non-superseded. }
+    function  Count(IncludeInactive: Boolean): Integer;
+  end;
+
+function NewFactStore: IFactStore;
+
+{ Default on-disk location: <home>/workspace/memory/facts.db }
+function DefaultFactsDbPath(const HomeDir: string): string;
+
+implementation
+
+uses
+  {$IFDEF FPC}
+  sqldb, sqlite3conn,
+  {$ELSE}
+  FireDAC.Comp.Client, FireDAC.Phys.SQLite, FireDAC.Stan.Def,
+  FireDAC.Stan.Async, FireDAC.Stan.Param, FireDAC.DApt,
+  {$ENDIF}
+  PasClaw.Utils,
+  PasClaw.Logger;
+
+function DefaultFactsDbPath(const HomeDir: string): string;
+begin
+  Result := JoinPath(JoinPath(JoinPath(HomeDir, 'workspace'), 'memory'), 'facts.db');
+end;
+
+type
+{$IFDEF FPC}
+  TQuery = TSQLQuery;
+{$ELSE}
+  TQuery = TFDQuery;
+{$ENDIF}
+
+  TFactStoreImpl = class(TInterfacedObject, IFactStore)
+  private
+    {$IFDEF FPC}
+    FConn: TSQLite3Connection;
+    FTx:   TSQLTransaction;
+    {$ELSE}
+    FConn: TFDConnection;
+    {$ENDIF}
+    FOpen: Boolean;
+    function  NewQuery: TQuery;
+    procedure PStr(Q: TQuery; const N, V: string);
+    procedure PInt(Q: TQuery; const N: string; V: Int64);
+    procedure PFloat(Q: TQuery; const N: string; V: Double);
+    procedure Commit;
+    procedure ExecSQL(const SQL: string);
+    procedure EnsureSchema;
+    function  ReadRows(Q: TQuery): TStoredFactArray;
+  public
+    destructor Destroy; override;
+    function  Open(const DbPath: string): Boolean;
+    procedure Close;
+    function  Add(const F: TFact; CreatedAt: Int64): Int64;
+    function  ActiveFacts(const Today: string): TStoredFactArray;
+    function  AllFacts: TStoredFactArray;
+    function  Supersede(Id: Int64): Boolean;
+    function  Delete(Id: Int64): Boolean;
+    function  Count(IncludeInactive: Boolean): Integer;
+  end;
+
+function NewFactStore: IFactStore;
+begin
+  Result := TFactStoreImpl.Create;
+end;
+
+destructor TFactStoreImpl.Destroy;
+begin
+  Close;
+  inherited Destroy;
+end;
+
+function TFactStoreImpl.NewQuery: TQuery;
+begin
+  Result := TQuery.Create(nil);
+  {$IFDEF FPC}
+  Result.Database := FConn;
+  {$ELSE}
+  Result.Connection := FConn;
+  {$ENDIF}
+end;
+
+procedure TFactStoreImpl.PStr(Q: TQuery; const N, V: string);
+begin
+  {$IFDEF FPC}
+  Q.Params.ParamByName(N).AsString := V;
+  {$ELSE}
+  Q.ParamByName(N).AsString := V;
+  {$ENDIF}
+end;
+
+procedure TFactStoreImpl.PInt(Q: TQuery; const N: string; V: Int64);
+begin
+  {$IFDEF FPC}
+  Q.Params.ParamByName(N).AsLargeInt := V;
+  {$ELSE}
+  Q.ParamByName(N).AsLargeInt := V;
+  {$ENDIF}
+end;
+
+procedure TFactStoreImpl.PFloat(Q: TQuery; const N: string; V: Double);
+begin
+  {$IFDEF FPC}
+  Q.Params.ParamByName(N).AsFloat := V;
+  {$ELSE}
+  Q.ParamByName(N).AsFloat := V;
+  {$ENDIF}
+end;
+
+procedure TFactStoreImpl.Commit;
+begin
+  {$IFDEF FPC}
+  if (FTx <> nil) and FTx.Active then FTx.CommitRetaining;
+  {$ENDIF}
+  { FireDAC autocommits each statement by default -- no-op on Delphi. }
+end;
+
+procedure TFactStoreImpl.ExecSQL(const SQL: string);
+{$IFDEF FPC}
+begin
+  FConn.ExecuteDirect(SQL);
+  FTx.CommitRetaining;
+end;
+{$ELSE}
+begin
+  FConn.ExecSQL(SQL);
+end;
+{$ENDIF}
+
+procedure TFactStoreImpl.EnsureSchema;
+begin
+  ExecSQL(
+    'CREATE TABLE IF NOT EXISTS facts (' +
+    '  id INTEGER PRIMARY KEY AUTOINCREMENT,' +
+    '  text TEXT NOT NULL,' +
+    '  kind TEXT NOT NULL,' +
+    '  scope TEXT NOT NULL,' +
+    '  confidence REAL NOT NULL,' +
+    '  expires TEXT NOT NULL DEFAULT '''',' +
+    '  source_session TEXT NOT NULL DEFAULT '''',' +
+    '  created_at INTEGER NOT NULL,' +
+    '  superseded INTEGER NOT NULL DEFAULT 0)');
+  { Indexes that match the two hot read paths (active listing + expiry sweep). }
+  ExecSQL('CREATE INDEX IF NOT EXISTS idx_facts_active ON facts(superseded, expires)');
+end;
+
+function TFactStoreImpl.Open(const DbPath: string): Boolean;
+begin
+  Result := False;
+  if FOpen then Exit(True);
+  try
+    EnsureDir(ExtractFilePath(DbPath));
+    {$IFDEF FPC}
+    FConn := TSQLite3Connection.Create(nil);
+    FTx   := TSQLTransaction.Create(nil);
+    FConn.DatabaseName := DbPath;
+    FConn.Transaction  := FTx;
+    FTx.Database       := FConn;
+    FConn.Open;
+    FTx.StartTransaction;
+    {$ELSE}
+    FConn := TFDConnection.Create(nil);
+    FConn.DriverName := 'SQLite';
+    FConn.Params.Values['Database'] := DbPath;
+    FConn.LoginPrompt := False;
+    FConn.Connected := True;
+    {$ENDIF}
+    EnsureSchema;
+    FOpen := True;
+    Result := True;
+    LogDebug('memory.facts: opened %s', [DbPath]);
+  except
+    on E: Exception do
+    begin
+      LogWarn('memory.facts: failed to open %s (%s) -- fact store disabled',
+              [DbPath, E.Message]);
+      {$IFDEF FPC}
+      FreeAndNil(FTx);
+      {$ENDIF}
+      FreeAndNil(FConn);
+      FOpen := False;
+    end;
+  end;
+end;
+
+procedure TFactStoreImpl.Close;
+begin
+  if not FOpen then Exit;
+  try
+    {$IFDEF FPC}
+    if (FTx <> nil) and FTx.Active then FTx.Commit;
+    if (FConn <> nil) and FConn.Connected then FConn.Close;
+    FreeAndNil(FTx);
+    {$ELSE}
+    if (FConn <> nil) and FConn.Connected then FConn.Connected := False;
+    {$ENDIF}
+    FreeAndNil(FConn);
+  except
+    on E: Exception do
+      LogWarn('memory.facts: close error: %s', [E.Message]);
+  end;
+  FOpen := False;
+end;
+
+function TFactStoreImpl.Add(const F: TFact; CreatedAt: Int64): Int64;
+var
+  Q: TQuery;
+begin
+  Result := 0;
+  if not FOpen then Exit;
+  Q := NewQuery;
+  try
+    Q.SQL.Text :=
+      'INSERT INTO facts (text, kind, scope, confidence, expires, ' +
+      'source_session, created_at, superseded) ' +
+      'VALUES (:t, :k, :sc, :cf, :ex, :ss, :ca, 0)';
+    PStr  (Q, 't',  F.Text);
+    PStr  (Q, 'k',  F.Kind);
+    PStr  (Q, 'sc', F.Scope);
+    PFloat(Q, 'cf', F.Confidence);
+    PStr  (Q, 'ex', F.Expires);
+    PStr  (Q, 'ss', F.SourceSession);
+    PInt  (Q, 'ca', CreatedAt);
+    Q.ExecSQL;
+    Commit;
+    Q.SQL.Text := 'SELECT last_insert_rowid()';
+    Q.Open;
+    if not Q.EOF then Result := Q.Fields[0].AsLargeInt;
+    Q.Close;
+  finally
+    Q.Free;
+  end;
+end;
+
+function TFactStoreImpl.ReadRows(Q: TQuery): TStoredFactArray;
+var
+  F: TStoredFact;
+begin
+  Result := nil;
+  Q.Open;
+  while not Q.EOF do
+  begin
+    F.Id            := Q.FieldByName('id').AsLargeInt;
+    F.Text          := Q.FieldByName('text').AsString;
+    F.Kind          := Q.FieldByName('kind').AsString;
+    F.Scope         := Q.FieldByName('scope').AsString;
+    F.Confidence    := Q.FieldByName('confidence').AsFloat;
+    F.Expires       := Q.FieldByName('expires').AsString;
+    F.SourceSession := Q.FieldByName('source_session').AsString;
+    F.CreatedAt     := Q.FieldByName('created_at').AsLargeInt;
+    F.Superseded    := Q.FieldByName('superseded').AsLargeInt <> 0;
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)] := F;
+    Q.Next;
+  end;
+  Q.Close;
+end;
+
+function TFactStoreImpl.ActiveFacts(const Today: string): TStoredFactArray;
+var
+  Q: TQuery;
+begin
+  Result := nil;
+  if not FOpen then Exit;
+  Q := NewQuery;
+  try
+    Q.SQL.Text :=
+      'SELECT * FROM facts WHERE superseded = 0 ' +
+      'AND (expires = '''' OR expires >= :today) ' +
+      'ORDER BY created_at DESC, id DESC';
+    PStr(Q, 'today', Today);
+    Result := ReadRows(Q);
+  finally
+    Q.Free;
+  end;
+end;
+
+function TFactStoreImpl.AllFacts: TStoredFactArray;
+var
+  Q: TQuery;
+begin
+  Result := nil;
+  if not FOpen then Exit;
+  Q := NewQuery;
+  try
+    Q.SQL.Text := 'SELECT * FROM facts ORDER BY created_at DESC, id DESC';
+    Result := ReadRows(Q);
+  finally
+    Q.Free;
+  end;
+end;
+
+function TFactStoreImpl.Supersede(Id: Int64): Boolean;
+var
+  Q: TQuery;
+begin
+  Result := False;
+  if not FOpen then Exit;
+  Q := NewQuery;
+  try
+    Q.SQL.Text := 'UPDATE facts SET superseded = 1 WHERE id = :id AND superseded = 0';
+    PInt(Q, 'id', Id);
+    Q.ExecSQL;
+    Result := Q.RowsAffected > 0;
+    Commit;
+  finally
+    Q.Free;
+  end;
+end;
+
+function TFactStoreImpl.Delete(Id: Int64): Boolean;
+var
+  Q: TQuery;
+begin
+  Result := False;
+  if not FOpen then Exit;
+  Q := NewQuery;
+  try
+    Q.SQL.Text := 'DELETE FROM facts WHERE id = :id';
+    PInt(Q, 'id', Id);
+    Q.ExecSQL;
+    Result := Q.RowsAffected > 0;
+    Commit;
+  finally
+    Q.Free;
+  end;
+end;
+
+function TFactStoreImpl.Count(IncludeInactive: Boolean): Integer;
+var
+  Q: TQuery;
+begin
+  Result := 0;
+  if not FOpen then Exit;
+  Q := NewQuery;
+  try
+    if IncludeInactive then
+      Q.SQL.Text := 'SELECT COUNT(*) FROM facts'
+    else
+      Q.SQL.Text := 'SELECT COUNT(*) FROM facts WHERE superseded = 0';
+    Q.Open;
+    if not Q.EOF then Result := Q.Fields[0].AsInteger;
+    Q.Close;
+  finally
+    Q.Free;
+  end;
+end;
+
+end.
