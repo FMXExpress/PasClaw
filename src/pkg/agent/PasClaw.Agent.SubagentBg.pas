@@ -94,6 +94,10 @@ type
     FPrompt:     string;
     FResultText: string;
     FErrMsg:     string;
+    { Parent's checkpoint context, captured on the spawning thread so
+      this job's file writes snapshot into the parent's session turn.
+      Opaque handle -- nil when checkpoints are off. }
+    FCheckpointHandle: TObject;
     FState:      TBgJobState;
     FCollected:  Boolean;            { delivered via drain already }
     FAbandoned:  Boolean;            { coordinator gone; self-free }
@@ -160,6 +164,7 @@ uses
   PasClaw.JSON,
   PasClaw.Logger,
   PasClaw.Crypto.Random,
+  PasClaw.Checkpoints,
   PasClaw.Tools.ToolLoop;
 
 type
@@ -208,6 +213,11 @@ var
 begin
   Ok := False;
   try
+    { Run this background loop under the parent's checkpoint session so
+      its fs_write / fs_edit snapshots fold into the parent's turn (the
+      worker thread starts with no context of its own). No-op when the
+      parent had checkpoints off. }
+    AdoptCheckpointHandle(FCheckpointHandle);
     SetLength(Hist, 1);
     Hist[0] := MakeMessage(mrUser, FPrompt);
     Ok := RunToolLoop(TLoopCfgBox(FCfg).Cfg, Hist, Loop);
@@ -472,6 +482,9 @@ begin
     Job.FPrompt    := Prompt;
     Job.FState     := bjRunning;
     Job.FStartedAt := Now;
+    { Capture on THIS (parent) thread -- the worker thread can't see the
+      parent's threadvar-scoped context. }
+    Job.FCheckpointHandle := CurrentCheckpointHandle;
     Job.FChildReg  := BuildFilteredRegistry(FCtx.ParentRegistry, Spec.Tools);
     Box := TLoopCfgBox.Create;
     Box.Cfg.Provider      := FCtx.Provider;

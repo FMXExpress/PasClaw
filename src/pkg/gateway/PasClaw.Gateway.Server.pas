@@ -86,10 +86,6 @@ type
        consistent (primary, fallbacks) pair via SnapshotProviders. *)
     FApplyLock: TCriticalSection;
     FFallbacks: TLLMProviderArray;
-    { Serializes checkpointed tool loops: PasClaw.Checkpoints' turn state is
-      process-global, so overlapping gateway turns would corrupt snapshot
-      attribution. Held across BeginTurn + RunToolLoop when checkpoints are on. }
-    FCheckpointTurnLock: TCriticalSection;
     (* Per-process scoped credential. Random hex generated in Create
        once per `pasclaw serve` / `pasclaw gateway` startup. Gates the
        /v1/relay/* surface independently of Cfg.Gateway.Token so an
@@ -268,13 +264,14 @@ type
                             AResp: TIdHTTPResponseInfo);
     procedure HandleCheckpointsRedo(ARequest: TIdHTTPRequestInfo;
                             AResp: TIdHTTPResponseInfo);
-    { Read the X-PasClaw-Session header (the active chat) and re-scope the
-      process-global checkpoint state to it. Both MUST run under
-      FCheckpointTurnLock (they mutate global state via InitCheckpoints). }
+    { Read the X-PasClaw-Session header (the active chat) and select this
+      thread's per-session checkpoint context. The turn body is then bracketed
+      with Acquire/ReleaseCheckpointTurn so same-session requests serialize
+      while different sessions overlap. }
     function ReqSessionId(ARequest: TIdHTTPRequestInfo): string;
     procedure ApplyCheckpointSession(const ReqSession: string);
     { ApplyCheckpointSession(reqSession) + BeginTurn + RunToolLoop, serialized
-      under FCheckpointTurnLock when checkpoints are on. }
+      per session via that context's turn lock when checkpoints are on. }
     function RunCheckpointedLoop(const ReqSession: string;
                             const Cfg: TToolLoopConfig;
                             var Messages: array of TMessage;
@@ -667,8 +664,9 @@ begin
   FMaxIter  := 25;
   { Wire the per-turn checkpoint system into the gateway (it was CLI/TUI-only).
     Init with the per-workspace fallback session; each request re-scopes to its
-    chat's session id (X-PasClaw-Session) via ApplyCheckpointSession under
-    FCheckpointTurnLock before BeginTurn. No-op when disabled. }
+    chat's session id (X-PasClaw-Session) via ApplyCheckpointSession, then
+    serializes its turn on that session's own turn lock. Different sessions run
+    concurrently. No-op when disabled. }
   CC.Enabled   := FCfg.CheckpointsEnabled;
   CC.SessionId := CheckpointSessionId('');
   CC.Root      := JoinPath(GetHome, 'workspace/checkpoints');
@@ -703,7 +701,6 @@ begin
   { Live provider hot-swap state. Cache the fallback chain now (relay queue is
     registered above, so a relay fallback resolves) -- rebuilt on config write. }
   FApplyLock := TCriticalSection.Create;
-  FCheckpointTurnLock := TCriticalSection.Create;
   FFallbacks := ResolveFallbacks(FCfg);
 
   { Generate a fresh per-process relay-scoped token. Format is
@@ -739,7 +736,6 @@ begin
   SetGlobalRelayQueue(nil);
   FRelayQueue.Free;
   FApplyLock.Free;
-  FCheckpointTurnLock.Free;
   inherited Destroy;
 end;
 
@@ -3290,9 +3286,10 @@ begin
 end;
 
 procedure TGatewayServer.ApplyCheckpointSession(const ReqSession: string);
-{ Re-point the process-global checkpoint state at this chat's session. MUST be
-  called while holding FCheckpointTurnLock. Cheap (reads the session's small
-  index.json); idempotent. }
+{ Select this thread's per-session checkpoint context (the calling Indy worker
+  thread). Cheap: first touch of a session creates + loads it, later touches
+  just re-point the thread. Does NOT acquire the turn lock -- the caller
+  brackets the actual work with Acquire/ReleaseCheckpointTurn. }
 var
   CC: TCheckpointConfig;
 begin
@@ -3306,21 +3303,22 @@ end;
 function TGatewayServer.RunCheckpointedLoop(const ReqSession: string;
   const Cfg: TToolLoopConfig; var Messages: array of TMessage;
   out Loop: TToolLoopResult): Boolean;
-{ PasClaw.Checkpoints keeps turn state process-globally, so two overlapping
-  gateway turns (Indy serves on worker threads) would let one BeginTurn clear/
-  advance state mid-snapshot of another. Re-scope to this chat's session and
-  serialize the whole scope+BeginTurn+loop under FCheckpointTurnLock when
-  checkpoints are on. When off, run unserialized (no shared state). }
+{ Indy serves on worker threads, so two requests can run turns at once. Select
+  this thread's session context, then serialize the BeginTurn+loop on THAT
+  session's turn lock: same session can't tear its own turn, different sessions
+  (other chats / other users) overlap freely -- their LLM round-trips no longer
+  block each other. Branch on the static config, not the thread's current
+  context, since a fresh worker thread has none selected yet. }
 begin
-  if CheckpointsEnabled then
+  if FCfg.CheckpointsEnabled then
   begin
-    FCheckpointTurnLock.Acquire;
+    ApplyCheckpointSession(ReqSession);
+    AcquireCheckpointTurn;
     try
-      ApplyCheckpointSession(ReqSession);
       BeginTurn;
       Result := RunToolLoop(Cfg, Messages, Loop);
     finally
-      FCheckpointTurnLock.Release;
+      ReleaseCheckpointTurn;
     end;
   end
   else
@@ -3330,16 +3328,17 @@ end;
 procedure TGatewayServer.HandleCheckpointsList(ARequest: TIdHTTPRequestInfo;
                                                AResp: TIdHTTPResponseInfo);
 { GET /v1/checkpoints -- per-chat backend/current/can_redo + per-turn files.
-  Scoped to X-PasClaw-Session, under the lock so it sees a consistent state. }
+  Scoped to X-PasClaw-Session, under that session's turn lock so it sees a
+  consistent state. }
 var
   Body: string;
 begin
-  FCheckpointTurnLock.Acquire;
+  ApplyCheckpointSession(ReqSessionId(ARequest));
+  AcquireCheckpointTurn;
   try
-    ApplyCheckpointSession(ReqSessionId(ARequest));
     Body := CheckpointsStateJSON;
   finally
-    FCheckpointTurnLock.Release;
+    ReleaseCheckpointTurn;
   end;
   WriteJSON(AResp, 200, Body);
 end;
@@ -3387,12 +3386,12 @@ var
 begin
   N := StrToIntDef(ARequest.Params.Values['n'], 1);
   if N < 1 then N := 1;
-  FCheckpointTurnLock.Acquire;
+  ApplyCheckpointSession(ReqSessionId(ARequest));
+  AcquireCheckpointTurn;
   try
-    ApplyCheckpointSession(ReqSessionId(ARequest));
     Ok := UndoTurns(N, Restored, Err);
   finally
-    FCheckpointTurnLock.Release;
+    ReleaseCheckpointTurn;
   end;
   Body := CheckpointResultJSON(Ok, Restored, Err, Status);
   WriteJSON(AResp, Status, Body);
@@ -3409,12 +3408,12 @@ var
 begin
   N := StrToIntDef(ARequest.Params.Values['n'], 1);
   if N < 1 then N := 1;
-  FCheckpointTurnLock.Acquire;
+  ApplyCheckpointSession(ReqSessionId(ARequest));
+  AcquireCheckpointTurn;
   try
-    ApplyCheckpointSession(ReqSessionId(ARequest));
     Ok := RedoTurns(N, Restored, Err);
   finally
-    FCheckpointTurnLock.Release;
+    ReleaseCheckpointTurn;
   end;
   Body := CheckpointResultJSON(Ok, Restored, Err, Status);
   WriteJSON(AResp, Status, Body);
