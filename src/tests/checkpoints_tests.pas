@@ -515,6 +515,71 @@ begin
   AssertEqInt(NewestT, 16, 'turn counter is monotonic to 16');
 end;
 
+{ ===================================================================
+  Subagent / TUI propagation: BeginTurn on one thread, the file write
+  (SnapshotBeforeWrite) on a worker that ADOPTED the parent's handle.
+  This mirrors the TUI's TRunToolLoopThread and the background subagent:
+  without AdoptCheckpointHandle the worker's current context is nil and
+  the edit never snapshots, so /undo finds nothing.
+  =================================================================== }
+type
+  TAdoptWorker = class(TThread)
+  private
+    FHandle: TObject;
+    FFile:   string;
+  protected
+    procedure Execute; override;
+  public
+    Failed: Boolean;
+    FailMsg: string;
+    constructor Create(AHandle: TObject; const AFile: string);
+  end;
+
+constructor TAdoptWorker.Create(AHandle: TObject; const AFile: string);
+begin
+  FHandle := AHandle;
+  FFile   := AFile;
+  Failed  := False;
+  inherited Create(False);
+end;
+
+procedure TAdoptWorker.Execute;
+begin
+  try
+    { Worker starts with no context of its own -- adopt the parent's. }
+    AdoptCheckpointHandle(FHandle);
+    SnapshotBeforeWrite(FFile);
+    WriteFileText(FFile, 'edited-on-worker');
+  except
+    on E: Exception do begin Failed := True; FailMsg := E.ClassName + ': ' + E.Message; end;
+  end;
+end;
+
+procedure TestAdoptedHandleSnapshotsOnWorkerThread;
+var
+  W: TAdoptWorker;
+  P: string;
+  Restored: TRestoredFileArray;
+  Err: string;
+begin
+  SetupSession('adopt', 0);
+  P := ScratchPath('adopt.txt');
+  WriteScratch(P, 'base-adopt');
+
+  { Turn opened on THIS thread; the worker does the actual edit. }
+  BeginTurn;
+  W := TAdoptWorker.Create(CurrentCheckpointHandle, P);
+  W.WaitFor;
+  AssertFalse(W.Failed, 'adopt worker errored: ' + W.FailMsg);
+  W.Free;
+
+  { The worker's edit must have snapshotted under the adopted context, so
+    /undo restores the pre-edit bytes. (Pre-fix this returned 0 turns.) }
+  AssertTrue(UndoTurns(1, Restored, Err), 'undo after worker edit: ' + Err);
+  AssertEqInt(Length(Restored), 1, 'worker snapshot recorded one file');
+  AssertEqStr(ReadFileText(P), 'base-adopt', 'worker-thread edit rolled back');
+end;
+
 procedure CleanupTmp;
 begin
   if (GTmpRoot <> '') and DirectoryExists(GTmpRoot) then
@@ -556,6 +621,8 @@ begin
                                               WriteLn('  ok: concurrent distinct sessions stay isolated');
     TestConcurrentSameSessionSerializesCleanly;
                                               WriteLn('  ok: concurrent same session serializes cleanly');
+    TestAdoptedHandleSnapshotsOnWorkerThread;
+                                              WriteLn('  ok: adopted handle snapshots on a worker thread');
     WriteLn('PASS');
   finally
     CleanupTmp;

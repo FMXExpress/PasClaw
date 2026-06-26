@@ -304,6 +304,11 @@ type
     FOk: Boolean;
     FErr: string;
     FDone: TEvent;
+    { Checkpoint context captured on the UI thread (which called BeginTurn),
+      adopted in Execute so fs_write/fs_edit snapshots on THIS worker thread
+      land in the active session's turn. Without it the threadvar-scoped
+      context is nil here and TUI edits would never snapshot. }
+    FCheckpointHandle: TObject;
   protected
     procedure Execute; override;
   public
@@ -359,6 +364,9 @@ begin
   for i := 0 to High(AMsgs) do
     FMsgs[i] := AMsgs[i];
   FDone := TEvent.Create(nil, True, False, '');
+  { Constructor runs on the UI thread, where BeginTurn just set the current
+    context -- capture it here so Execute can re-adopt it on the worker. }
+  FCheckpointHandle := CurrentCheckpointHandle;
 end;
 
 destructor TRunToolLoopThread.Destroy;
@@ -370,6 +378,9 @@ end;
 procedure TRunToolLoopThread.Execute;
 begin
   try
+    { Inherit the UI thread's checkpoint session so this worker's file
+      writes snapshot into the turn BeginTurn opened. No-op when off. }
+    AdoptCheckpointHandle(FCheckpointHandle);
     FOk := RunToolLoop(FCfg, FMsgs, FLoop);
   except
     on E: Exception do
