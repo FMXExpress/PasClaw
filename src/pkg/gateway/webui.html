@@ -215,7 +215,7 @@
   .composer-bar{display:flex;align-items:center;gap:.45rem;flex-basis:100%;order:1}
   .composer-spacer{flex:1}
   .composer-add{font-size:15px;line-height:1;padding:.1rem .5rem;font-weight:700}
-  #m{flex-basis:100%}
+  #m{flex-basis:100%;max-height:none;overflow-y:hidden}
   #model-sel{max-width:14rem}
   textarea{flex:1;background:rgba(2,5,15,.72);color:var(--fg);caret-color:var(--cyan);
     border:1px solid rgba(32,246,255,.32);border-radius:10px;padding:.55rem .65rem;font:inherit;
@@ -1076,7 +1076,7 @@ function newSession() {
   activeSessionId = null;
   activeTurns = [];
   clearLog();
-  m.value = "";
+  m.value = ""; autosizeMsg();
   loadParamsForActive();   // seed the new chat from the most-recent params
   renderSessions();
   m.focus();
@@ -1350,7 +1350,7 @@ function editTurn(index) {
   if (streaming) return;
   const t = activeTurns[index];
   if (!t) return;
-  m.value = t.text;
+  m.value = t.text; autosizeMsg();
   activeTurns = activeTurns.slice(0, index);
   renderActive();
   persistActive();
@@ -1502,7 +1502,7 @@ function enqueueMsg() {
   const typed = m.value.trim();
   if (!typed && !chatAttachments.length) return;
   const msg = composeMessage(typed);
-  m.value = ""; chatAttachments = []; renderAttachChips();
+  m.value = ""; autosizeMsg(); chatAttachments = []; renderAttachChips();
   msgQueue.push(msg);
   renderQueue();
 }
@@ -1527,6 +1527,35 @@ function renderQueue() {
 const userHistory = () => activeTurns.filter(t => t.role === "u").map(t => t.text);
 function caretToEnd() { m.setSelectionRange(m.value.length, m.value.length); }
 
+/* Auto-grow the composer with its content up to MSG_MAX_ROWS lines, then stop
+   widening and scroll. Called on input and after any programmatic value change
+   (those don't fire "input"). */
+const MSG_MAX_ROWS = 10;
+function autosizeMsg() {
+  const cs = getComputedStyle(m);
+  const lh  = parseFloat(cs.lineHeight) || 20;
+  const pad = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom) +
+              parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+  const max = (lh * MSG_MAX_ROWS) + pad;
+  m.style.height = "auto";                       // reset so scrollHeight shrinks too
+  const full = m.scrollHeight;
+  m.style.height = Math.min(full, max) + "px";
+  m.style.overflowY = full > max ? "auto" : "hidden";
+}
+m.addEventListener("input", autosizeMsg);
+autosizeMsg();   // baseline size on load
+
+/* Caret on the first / last visual line? Used to decide when an arrow should
+   navigate history vs. just move within a multi-line entry. */
+function caretOnFirstLine() { return m.value.lastIndexOf("\n", m.selectionStart - 1) === -1; }
+function caretOnLastLine()  { return m.value.indexOf("\n", m.selectionStart) === -1; }
+/* Load a history entry / draft into the composer and keep the box sized. */
+function setComposer(val, toEnd) {
+  m.value = val;
+  if (toEnd) caretToEnd();
+  autosizeMsg();
+}
+
 m.addEventListener("keydown", e => {
   /* Slash-command menu owns the arrows / Enter / Tab / Esc while it's open. */
   if (slashMenuOpen()) {
@@ -1542,19 +1571,31 @@ m.addEventListener("keydown", e => {
     else f.requestSubmit();
     return;
   }
-  const multiline = m.value.indexOf("\n") >= 0;
-  if (e.key === "ArrowUp" && !multiline) {
+  /* History: Up walks back, Down walks forward. While NOT yet navigating we
+     only hijack Up for a single-line draft (so editing a multi-line draft
+     keeps normal arrows and we don't clobber it). Once navigating, arrows
+     move within a multi-line entry and only step history at the first/last
+     line -- so a 3-line recalled message no longer "sticks". */
+  if (e.key === "ArrowUp") {
     const h = userHistory();
     if (!h.length) return;
-    if (histIdx === -1) { histDraft = m.value; histIdx = h.length; }
-    if (histIdx > 0) { histIdx--; m.value = h[histIdx]; e.preventDefault(); caretToEnd(); }
+    if (histIdx === -1) {
+      if (m.value.indexOf("\n") >= 0) return;     // editing multi-line draft: leave arrows alone
+      histDraft = m.value; histIdx = h.length;
+      histIdx--; setComposer(h[histIdx], true); e.preventDefault();
+      return;
+    }
+    if (!caretOnFirstLine()) return;              // move the caret up within the entry
+    e.preventDefault();
+    if (histIdx > 0) { histIdx--; setComposer(h[histIdx], true); }  // else: at oldest, stay put
     return;
   }
-  if (e.key === "ArrowDown" && !multiline && histIdx !== -1) {
+  if (e.key === "ArrowDown" && histIdx !== -1) {
+    if (!caretOnLastLine()) return;               // move the caret down within the entry
     const h = userHistory();
-    if (histIdx < h.length - 1) { histIdx++; m.value = h[histIdx]; }
-    else { histIdx = -1; m.value = histDraft; }
-    e.preventDefault(); caretToEnd();
+    e.preventDefault();
+    if (histIdx < h.length - 1) { histIdx++; setComposer(h[histIdx], true); }
+    else { histIdx = -1; setComposer(histDraft, true); }
     return;
   }
   if (histIdx !== -1 && e.key !== "ArrowUp" && e.key !== "ArrowDown") histIdx = -1;
@@ -1952,7 +1993,7 @@ function handleSlash(typed) {
   const arg = sp === -1 ? "" : typed.slice(sp + 1).trim();
   const fn = SLASH[name];
   if (!fn) { sysNote("unknown command <code>/" + escapeHtml(name) + "</code> — try /help"); return true; }
-  m.value = ""; histIdx = -1;
+  m.value = ""; histIdx = -1; autosizeMsg();
   Promise.resolve(fn(arg)).catch(e => sysNote("error: " + escapeHtml(String(e))));
   return true;
 }
@@ -2008,7 +2049,7 @@ function acceptSlash(run) {
   if (!name) return;
   hideSlashMenu();
   if (run) { m.value = "/" + name; handleSlash(m.value); }
-  else { m.value = "/" + name + " "; caretToEnd(); m.focus(); }
+  else { m.value = "/" + name + " "; caretToEnd(); autosizeMsg(); m.focus(); }
 }
 m.addEventListener("input", updateSlashMenu);
 m.addEventListener("blur", () => setTimeout(hideSlashMenu, 120));
@@ -2058,7 +2099,7 @@ function composeMessage(typed) {
    stash context as an attachment, prefill a prompt, jump to chat. */
 function buildWithInChat(name, context, prompt) {
   if (context) addAttachment(name, context);
-  if (prompt) m.value = prompt;
+  if (prompt) { m.value = prompt; autosizeMsg(); }
   showTab("chat");
   m.focus();
 }
@@ -2083,7 +2124,7 @@ f.addEventListener("submit", e => {
   if (!typed && !chatAttachments.length) return;
   if (!chatAttachments.length && handleSlash(typed)) return;
   const msg = composeMessage(typed);
-  m.value = "";
+  m.value = ""; autosizeMsg();
   chatAttachments = []; renderAttachChips();
   submitUser(msg);
 });
