@@ -228,6 +228,7 @@ begin
     TUIInst.RenderMarkdownEnabled := Cfg.RenderMarkdown;
     TUIInst.CheckpointsEnabled    := Cfg.CheckpointsEnabled;
     TUIInst.CheckpointsKeepLast   := Cfg.CheckpointsKeepLast;
+    TUIInst.MemoryDistillEnabled  := Cfg.MemoryDistillEnabled;
     TUIInst.BgCoordinator      := BgCoord;
     try
       TUIInst.Run;

@@ -479,6 +479,49 @@ begin
   end;
 end;
 
+procedure PromptMemoryDistill(Cfg: TConfig);
+{ Opt-in (default N): auto-distil durable facts from each turn into
+  workspace/memory/facts.db. Uses the chat model -- NOT the embedding
+  model -- so it needs no `memory provision` / ONNX download, and is
+  independent of vector search. Off by default because it spends ~one
+  extra LLM call per turn. }
+var
+  Choice: string;
+begin
+  PrintLn;
+  PrintLn(Ansi.Bold + 'Distilled memory (auto-facts)' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'After each turn, run one LLM pass that extracts durable facts ' +
+    '(preferences, decisions, current focus) and stores them in ' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'workspace/memory/facts.db -- recalled later via memory_search.' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'Uses your chat model (no extra download, independent of vector ' +
+    'search); costs ~one extra LLM call per turn.' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    '(Off by default. Manage with `pasclaw memory facts` / ' +
+    '`pasclaw memory distill`.)' +
+    Ansi.Reset);
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Enable distilled memory [y/N]: ')));
+  if (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Cfg.MemoryDistillEnabled := True;
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
+            ' distilled memory enabled (facts captured each turn)');
+  end
+  else
+  begin
+    Cfg.MemoryDistillEnabled := False;
+    PrintLn('  ' + Ansi.Dim +
+            '(skipped -- flip memory_distill_enabled in config.json to enable later)' +
+            Ansi.Reset);
+  end;
+end;
+
 procedure PromptShellBackend(Cfg: TConfig);
 { Pick where shell_exec / execute_code run. Local (default) =
   /bin/sh in the host process, same as PasClaw has shipped to date.
@@ -1591,6 +1634,10 @@ begin
     PromptVaultTools(Cfg);
     PromptVectorSearch(Cfg);
     PromptKnowledgebase(Cfg);
+    { Distilled memory: conceptually "memory", so it reads naturally after
+      the vector/KB prompts -- but it's independent (chat model, no ONNX),
+      so it's NOT gated on vector search. }
+    PromptMemoryDistill(Cfg);
     if not PickedAProfile then
     begin
       { Loop-shaping prompts (PR #289). Order is intentional: each

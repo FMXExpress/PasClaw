@@ -631,6 +631,14 @@ type
        by flipping checkpoints_enabled in config.json. *)
     CheckpointsEnabled:    Boolean;
     CheckpointsKeepLast:   Integer;
+    (* Opt-in (default OFF): after each turn, run one LLM pass that
+       distils durable facts from the latest exchange and stores them in
+       workspace/memory/facts.db (PasClaw.Memory.Distill + .Facts). Uses
+       the chat provider -- NOT the embedding model -- so it needs no
+       `memory provision` / ONNX download; just a configured provider.
+       Independent of vector_search_enabled. Costs ~one extra LLM call
+       per turn, which is why it's off unless the operator asks. *)
+    MemoryDistillEnabled:  Boolean;
     (* On-by-default: scan tool output / recalled memory / stored
        skill descriptions for prompt-injection patterns and annotate
        hits with a warning banner (PasClaw.Promptware). A lowercase
@@ -931,6 +939,7 @@ begin
   ToolOutputCap        := 0;     { off by default; operators opt in. See TConfig.ToolOutputCap. }
   StatsCollectionEnabled := True;  { on by default -- zero prompt cost, useful for diagnosing turn-count regressions. Onboarding can flip off for privacy-conscious operators. }
   CheckpointsEnabled     := True;  { on by default -- zero prompt cost, prevents lost work on multi-edit sessions. }
+  MemoryDistillEnabled   := False; { opt-in: ~one extra LLM call per turn. }
   CheckpointsKeepLast    := 32;    { keep last 32 atomic edit checkpoints. }
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
   OrientTaskAware        := False; { off by default -- whole-file MEMORY injection is the contract; opt in per-run with `pasclaw agent --orient` or "orient_task_aware":true. }
@@ -1217,6 +1226,10 @@ begin
       Root.PutBool('stats_collection_enabled', False);
     if not CheckpointsEnabled then
       Root.PutBool('checkpoints_enabled', False);
+    { Default OFF -- emit only the explicit-on so an operator opt-in
+      (onboarding or hand-edit) sticks across save/load. }
+    if MemoryDistillEnabled then
+      Root.PutBool('memory_distill_enabled', True);
     { CheckpointsKeepLast default flipped from 0 (=> use library
       default 32) to an explicit 32 in PR #314. Emit when it differs --
       0 and other values both round-trip. }
@@ -1627,6 +1640,7 @@ begin
     StatsCollectionEnabled := Root.GetBool('stats_collection_enabled',
                                            StatsCollectionEnabled);
     CheckpointsEnabled  := Root.GetBool('checkpoints_enabled', CheckpointsEnabled);
+    MemoryDistillEnabled := Root.GetBool('memory_distill_enabled', MemoryDistillEnabled);
     CheckpointsKeepLast := Integer(Root.GetInt('checkpoints_keep_last',
                                                 CheckpointsKeepLast));
     PromptwareEnabled   := Root.GetBool('promptware_enabled', PromptwareEnabled);

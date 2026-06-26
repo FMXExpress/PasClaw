@@ -218,6 +218,10 @@ type
       so /undo stays bound to whatever's on screen. }
     CheckpointsEnabled:    Boolean;
     CheckpointsKeepLast:   Integer;
+    { Per-turn distilled memory. Cmd_TUI_Run forwards Cfg.MemoryDistillEnabled
+      here; when on, each finished turn background-distils the latest
+      exchange into the fact store (PasClaw.Memory.AutoDistill). }
+    MemoryDistillEnabled:  Boolean;
     (* When True, the assistant's reply is run through
        PasClaw.Markdown.Render before being printed -- headings and
        fenced code blocks get ANSI styling, raw stars and hashes
@@ -280,6 +284,7 @@ uses
   PasClaw.Checkpoints,             { InitCheckpoints / BeginTurn / UndoTurns
                                      -- /undo slash command + per-turn
                                      snapshot bookkeeping. }
+  PasClaw.Memory.AutoDistill,      { opt-in per-turn fact distillation }
   PasClaw.Cmd.Init,                { Cmd_Init_Run -- /init slash command
                                      delegates to the same code path as
                                      `pasclaw init` on the CLI. }
@@ -1491,6 +1496,12 @@ begin
     Loop := Worker.LoopResult;
     ApplyLoopResultTo(FLoopSessionId, Loop, FSession);
     AccumulateLoopStats(Loop);
+    { Opt-in distilled memory: background-distil the latest exchange into
+      the fact store. Best-effort, non-blocking; scoped to the session the
+      turn ran under. }
+    if MemoryDistillEnabled then
+      ScheduleDistill(FProvider, FModel, GetHome, FLoopSessionId,
+        BuildRecentTranscript(Loop.FinalMessages, Loop.Content, DefaultRecentMsgs));
     if FLoopSessionId <> FSession.Meta.Id then
       Flash('result -> ' + FLoopSessionId);
     RefreshSessions;

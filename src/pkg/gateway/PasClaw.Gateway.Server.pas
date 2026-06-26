@@ -433,6 +433,7 @@ uses
     type. Don't re-import here. }
   PasClaw.Tools.Sandbox,
   PasClaw.Checkpoints,          { web UI checkpoints: Init/BeginTurn/Undo/Redo/state }
+  PasClaw.Memory.AutoDistill,   { opt-in per-turn fact distillation }
   PasClaw.Providers.Factory,
   PasClaw.Providers.Catalog,   { TProviderSpec for /v1/models discovery }
   PasClaw.Providers.Models,    { DiscoverModels / cache -- /v1/models roster }
@@ -3323,6 +3324,16 @@ begin
   end
   else
     Result := RunToolLoop(Cfg, Messages, Loop);
+
+  { Opt-in distilled memory: on a successful turn, fire a background pass
+    that extracts durable facts from the latest exchange and stores them.
+    Best-effort and non-blocking -- never affects the response.
+    Use Cfg.Provider/Cfg.Model -- the SNAPSHOT this turn actually ran on --
+    not FProvider, which a concurrent /v1/config hot-swap may have already
+    repointed at a different backend. }
+  if Result and FCfg.MemoryDistillEnabled then
+    ScheduleDistill(Cfg.Provider, Cfg.Model, GetHome, ReqSession,
+      BuildRecentTranscript(Loop.FinalMessages, Loop.Content, DefaultRecentMsgs));
 end;
 
 procedure TGatewayServer.HandleCheckpointsList(ARequest: TIdHTTPRequestInfo;
