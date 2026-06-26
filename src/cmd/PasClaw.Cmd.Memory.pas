@@ -46,8 +46,10 @@ uses
   PasClaw.Utils,
   PasClaw.Config,
   PasClaw.Logger,
+  DateUtils,
   PasClaw.Memory,
   PasClaw.Memory.Distill,
+  PasClaw.Memory.Facts,
   PasClaw.Providers.Types,
   PasClaw.Providers.Intf,
   PasClaw.Providers.Factory,
@@ -79,9 +81,13 @@ begin
   PrintLn('              embedding model into $PASCLAW_HOME/cache/localvector/');
   PrintLn('  status      Show which runtime artifacts are present and which');
   PrintLn('              backend memory_search would pick on the next call');
-  PrintLn('  distill [session]');
+  PrintLn('  distill [session] [--save]');
   PrintLn('              Extract durable facts from a session transcript via');
-  PrintLn('              the LLM and print them (latest session if omitted).');
+  PrintLn('              the LLM (latest session if omitted). --save persists');
+  PrintLn('              them to the fact store; otherwise it just previews.');
+  PrintLn('  facts [--all]');
+  PrintLn('              List stored facts (active only; --all includes');
+  PrintLn('              superseded/expired).');
 end;
 
 function ModelDir(const SubDir: string): string;
@@ -403,12 +409,21 @@ var
   Facts: TFactArray;
   i: Integer;
   Line: string;
+  Save: Boolean;
+  Store: IFactStore;
+  Saved: Integer;
+  NowU: Int64;
 begin
   Result := 1;
-  if Length(Argv) >= 2 then
-    SessionId := Argv[1]
-  else
-    SessionId := LatestSessionId;
+  { Args after 'distill': an optional session id and an optional --save. }
+  Save := False;
+  SessionId := '';
+  for i := 1 to High(Argv) do
+  begin
+    if (Argv[i] = '--save') or (Argv[i] = '-s') then Save := True
+    else if SessionId = '' then SessionId := Argv[i];
+  end;
+  if SessionId = '' then SessionId := LatestSessionId;
   if SessionId = '' then
   begin
     PrintErr('no session found under ' + MemoryDir + sLineBreak);
@@ -462,13 +477,81 @@ begin
 
   PrintLn(Ansi.Bold + 'Distilled ' + IntToStr(Length(Facts)) +
           ' fact(s) from session ' + SessionId + Ansi.Reset);
-  PrintLn(Ansi.Dim + '(preview only -- persistence lands in Phase 2)' + Ansi.Reset);
+  if not Save then
+    PrintLn(Ansi.Dim + '(preview only -- pass --save to persist)' + Ansi.Reset);
   for i := 0 to High(Facts) do
   begin
     Line := Format('  [%s/%s %.2f] %s',
       [Facts[i].Kind, Facts[i].Scope, Facts[i].Confidence, Facts[i].Text]);
     if Facts[i].Expires <> '' then
       Line := Line + Ansi.Dim + ' (expires ' + Facts[i].Expires + ')' + Ansi.Reset;
+    PrintLn(Line);
+  end;
+
+  if Save and (Length(Facts) > 0) then
+  begin
+    Store := NewFactStore;
+    if not Store.Open(DefaultFactsDbPath(GetHome)) then
+    begin
+      PrintErr('distill: could not open fact store' + sLineBreak);
+      Exit;
+    end;
+    try
+      NowU := DateTimeToUnix(Now, False);
+      Saved := 0;
+      for i := 0 to High(Facts) do
+        if Store.Add(Facts[i], NowU + i) > 0 then Inc(Saved);
+    finally
+      Store.Close;
+    end;
+    PrintLn(Ansi.Green + 'Saved ' + IntToStr(Saved) + ' fact(s) to ' +
+            DefaultFactsDbPath(GetHome) + Ansi.Reset);
+  end;
+  Result := 0;
+end;
+
+function RunFacts(const Argv: array of string): Integer;
+{ pasclaw memory facts [--all]
+
+  List stored facts. Default shows only ACTIVE facts (not superseded,
+  not expired as of today); --all includes superseded/expired. }
+var
+  Store: IFactStore;
+  Facts: TStoredFactArray;
+  All: Boolean;
+  i: Integer;
+  Line, Today: string;
+begin
+  All := False;
+  for i := 1 to High(Argv) do
+    if (Argv[i] = '--all') or (Argv[i] = '-a') then All := True;
+
+  Store := NewFactStore;
+  if not Store.Open(DefaultFactsDbPath(GetHome)) then
+  begin
+    PrintErr('facts: no fact store at ' + DefaultFactsDbPath(GetHome) + sLineBreak);
+    Exit(1);
+  end;
+  try
+    Today := FormatDateTime('yyyy"-"mm"-"dd', Now);
+    if All then Facts := Store.AllFacts
+    else Facts := Store.ActiveFacts(Today);
+  finally
+    Store.Close;
+  end;
+
+  if All then
+    PrintLn(Ansi.Bold + IntToStr(Length(Facts)) + ' fact(s) (all)' + Ansi.Reset)
+  else
+    PrintLn(Ansi.Bold + IntToStr(Length(Facts)) + ' active fact(s)' + Ansi.Reset);
+  for i := 0 to High(Facts) do
+  begin
+    Line := Format('  #%d [%s/%s %.2f] %s',
+      [Facts[i].Id, Facts[i].Kind, Facts[i].Scope, Facts[i].Confidence, Facts[i].Text]);
+    if Facts[i].Expires <> '' then
+      Line := Line + Ansi.Dim + ' (expires ' + Facts[i].Expires + ')' + Ansi.Reset;
+    if Facts[i].Superseded then
+      Line := Line + Ansi.Dim + ' (superseded)' + Ansi.Reset;
     PrintLn(Line);
   end;
   Result := 0;
@@ -492,6 +575,7 @@ begin
   if Sub = 'provision' then Exit(RunProvision);
   if Sub = 'status'    then Exit(RunStatus);
   if Sub = 'distill'   then Exit(RunDistill(Argv));
+  if Sub = 'facts'     then Exit(RunFacts(Argv));
   PrintErr('unknown memory subcommand: ' + Sub + sLineBreak);
   Help;
   Result := 1;
