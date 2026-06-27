@@ -104,6 +104,11 @@ function FormatFactsBlock(const Facts: TStoredFactArray; Budget: Integer): strin
   store is absent/empty or Budget <= 0. }
 function ActiveFactsBlock(const HomeDir, Today: string; Budget: Integer): string;
 
+{ Render facts as human-readable / git-friendly Markdown, grouped by scope
+  (the auditability export -- shared by the CLI `memory export` and the web
+  Memory tab's download). Pure. }
+function FactsToMarkdown(const Facts: TStoredFactArray; const Today: string): string;
+
 { Keyword-rank Facts against Query: score each by how many distinct query
   terms appear (case-insensitive substring) in its text, drop zero-score,
   sort by score then confidence then recency, return the top K. Pure (the
@@ -296,6 +301,43 @@ begin
     Result := FormatFactsBlock(Store.ActiveFacts(Today), Budget);
   finally
     Store.Close;
+  end;
+end;
+
+function FactsToMarkdown(const Facts: TStoredFactArray; const Today: string): string;
+var
+  SL: TStringList;
+
+  procedure EmitScope(const Scope: string);
+  var j: Integer; Any: Boolean; Line: string;
+  begin
+    Any := False;
+    for j := 0 to High(Facts) do
+    begin
+      if Facts[j].Scope <> Scope then Continue;
+      if not Any then begin SL.Add('## ' + Scope); SL.Add(''); Any := True; end;
+      Line := Format('- %s  _(%s, conf %.2f)_',
+        [Facts[j].Text, Facts[j].Kind, Facts[j].Confidence]);
+      if Facts[j].Expires <> '' then Line := Line + ' _(until ' + Facts[j].Expires + ')_';
+      if Facts[j].Superseded then Line := Line + ' _(superseded)_';
+      SL.Add(Line);
+    end;
+    if Any then SL.Add('');
+  end;
+
+begin
+  SL := TStringList.Create;
+  try
+    SL.Add('# PasClaw distilled memory');
+    SL.Add('');
+    SL.Add(Format('_%d fact(s), exported %s._', [Length(Facts), Today]));
+    SL.Add('');
+    EmitScope('user');
+    EmitScope('project');
+    EmitScope('session');
+    Result := SL.Text;
+  finally
+    SL.Free;
   end;
 end;
 

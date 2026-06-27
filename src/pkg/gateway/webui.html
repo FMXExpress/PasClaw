@@ -598,6 +598,15 @@
   </div>
 
   <div id="tab-memory" class="tab">
+    <div id="facts-box">
+      <div class="crumb">distilled facts <span id="facts-status"></span>
+        <a href="#" id="facts-export" style="float:right">export .md</a></div>
+      <form id="facts-add" class="vault-search-row">
+        <input id="facts-text" type="text" autocomplete="off"
+               placeholder="remember a fact… (Enter to add)">
+      </form>
+      <div id="facts-list"></div>
+    </div>
     <div class="two-col">
       <div class="col-list">
         <form id="mem-search" class="vault-search-row">
@@ -1955,6 +1964,27 @@ const SLASH = {
   },
   clear() { activeTurns = []; activeSessionId = null; renderActive(); },
   new() { const b = $("#session-new"); if (b) b.click(); },
+  async remember(arg) {
+    const text = (arg || "").trim();
+    if (!text) { sysNote("usage: /remember &lt;fact&gt;"); return; }
+    try {
+      const r = await gwFetch("/v1/memory/facts", { method: "POST",
+        headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok && j.id) sysNote("remembered fact <code>#" + j.id + "</code>: " + escapeHtml(text));
+      else sysNote("remember failed: " + escapeHtml(j.error || ("http " + r.status)));
+    } catch (e) { sysNote("remember: " + escapeHtml(String(e))); }
+  },
+  async forget(arg) {
+    const id = (arg || "").trim();
+    if (!/^\d+$/.test(id)) { sysNote("usage: /forget &lt;id&gt; (see the Memory tab for ids)"); return; }
+    try {
+      const r = await gwFetch("/v1/memory/facts/" + id, { method: "DELETE" });
+      const j = await r.json().catch(() => ({}));
+      if (r.ok) sysNote("forgot fact <code>#" + id + "</code>");
+      else sysNote("forget failed: " + escapeHtml(j.error || ("http " + r.status)));
+    } catch (e) { sysNote("forget: " + escapeHtml(String(e))); }
+  },
   async model(arg) {
     if (arg) {
       await saveConfigKeys({ default_model: arg });
@@ -2026,6 +2056,7 @@ function handleSlash(typed) {
    completes to "/name ", Enter runs the highlighted command, Esc dismisses. */
 const SLASH_DESC = {
   help: "show this list", clear: "clear this chat", new: "start a new session",
+  remember: "<fact> — store a durable memory fact", forget: "<id> — delete a fact",
   model: "[name] — list models / set default", provider: "[name] — list providers / set default",
   tools: "list registered tools", stats: "open the Stats tab", files: "open the Files tab",
   memory: "open the Memory tab", logs: "open the Logs tab", settings: "open the Settings tab",
@@ -2500,6 +2531,67 @@ const tabLoaders = {
       sForm.addEventListener("submit", e => { e.preventDefault(); search(); });
       q.addEventListener("input", () => { if (!q.value.trim()) loadFiles(); });
     }
+
+    /* ----- distilled facts panel (Phase 5b) ----- */
+    const fList = $("#facts-list"), fAddForm = $("#facts-add"),
+          fText = $("#facts-text"), fStatus = $("#facts-status");
+    async function loadFacts() {
+      fList.innerHTML = "loading…";
+      try {
+        const j = await (await gwFetch("/v1/memory/facts")).json();
+        const facts = j.facts || [];
+        fStatus.textContent = j.enabled
+          ? "(" + facts.length + ")"
+          : "(" + facts.length + " — distilled memory is OFF; enable memory_distill_enabled)";
+        fList.innerHTML = "";
+        if (!facts.length) { fList.innerHTML = `<div class="empty-pane">No facts yet.</div>`; return; }
+        for (const f of facts) {
+          const el = document.createElement("div");
+          el.className = "item";
+          let meta = `${f.kind}/${f.scope}`;
+          if (f.expires) meta += " · until " + f.expires;
+          el.innerHTML = `<div style="flex:1"><span>${escapeHtml(f.text)}</span>`
+                       + `<span class="sub">#${f.id} · ${escapeHtml(meta)}</span></div>`;
+          const x = document.createElement("button");
+          x.type = "button"; x.textContent = "✕"; x.title = "Forget";
+          x.addEventListener("click", async () => {
+            try {
+              const r = await gwFetch("/v1/memory/facts/" + f.id, { method: "DELETE" });
+              if (r.ok) loadFacts();
+            } catch (_) {}
+          });
+          el.appendChild(x);
+          fList.appendChild(el);
+        }
+      } catch (e) { fList.innerHTML = `<div class="empty-pane">${escapeHtml(String(e))}</div>`; }
+    }
+    if (fAddForm && !fAddForm.dataset.wired) {
+      fAddForm.dataset.wired = "1";
+      fAddForm.addEventListener("submit", async e => {
+        e.preventDefault();
+        const text = fText.value.trim();
+        if (!text) return;
+        try {
+          const r = await gwFetch("/v1/memory/facts", { method: "POST",
+            headers: { "content-type": "application/json" }, body: JSON.stringify({ text }) });
+          if (r.ok) { fText.value = ""; loadFacts(); }
+        } catch (_) {}
+      });
+      $("#facts-export").addEventListener("click", async e => {
+        e.preventDefault();
+        /* gwFetch (carries the auth token) + a blob download -- window.open
+           wouldn't send the bearer on a token-protected gateway. */
+        try {
+          const txt = await (await gwFetch("/v1/memory/facts/export")).text();
+          const url = URL.createObjectURL(new Blob([txt], { type: "text/markdown" }));
+          const a = document.createElement("a");
+          a.href = url; a.download = "memory-facts.md"; a.click();
+          URL.revokeObjectURL(url);
+        } catch (_) {}
+      });
+    }
+
+    await loadFacts();
     await loadFiles();
   },
 
