@@ -849,7 +849,11 @@ begin
     EmitScope('session');
     if OutFile <> '' then
     begin
-      SL.SaveToFile(OutFile {$IFDEF FPC}, TEncoding.UTF8{$ENDIF});
+      { WriteFileText is the codebase's UTF-8 writer (same path memory/
+        checkpoints use) -- guarantees UTF-8 on BOTH compilers, unlike
+        TStringList.SaveToFile whose default encoding is the system code
+        page on Delphi and would mojibake accents / CJK / emoji. }
+      WriteFileText(OutFile, SL.Text);
       PrintLn(Ansi.Green + '✓' + Ansi.Reset + ' exported ' + IntToStr(Length(Facts)) +
               ' fact(s) to ' + OutFile);
     end
