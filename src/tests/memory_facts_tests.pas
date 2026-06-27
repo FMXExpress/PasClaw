@@ -143,6 +143,45 @@ begin
   Store.Close;
 end;
 
+function SF(const Txt, Expires: string): TStoredFact;
+begin
+  Result := Default(TStoredFact);
+  Result.Text := Txt;
+  Result.Kind := 'static'; Result.Scope := 'user';
+  Result.Expires := Expires;
+end;
+
+procedure RunFormatTests;
+{ Pure FormatFactsBlock: budget gating, breadcrumb, expiry annotation. }
+var
+  Facts: TStoredFactArray;
+  S: string;
+begin
+  SetLength(Facts, 0);
+  AssertEqStr(FormatFactsBlock(Facts, 2000), '', 'empty -> empty block');
+
+  SetLength(Facts, 3);
+  Facts[0] := SF('Prefers Delphi', '');
+  Facts[1] := SF('Sprint ends', '2026-12-31');
+  Facts[2] := SF('Likes terse commits', '');
+
+  AssertEqStr(FormatFactsBlock(Facts, 0), '', 'budget 0 -> no injection');
+
+  S := FormatFactsBlock(Facts, 2000);
+  AssertTrue(Pos('Durable facts', S) > 0, 'has header');
+  AssertTrue(Pos('- Prefers Delphi', S) > 0, 'has a bullet');
+  AssertTrue(Pos('(until 2026-12-31)', S) > 0, 'expiry annotated');
+  AssertTrue(Pos('not shown', S) = 0, 'no breadcrumb when all fit');
+  { Must NOT promise memory_search -- it can't reach facts.db (Phase 4b). }
+  AssertTrue(Pos('memory_search', S) = 0, 'no false memory_search hint');
+
+  { Tiny budget: at least one fact kept, rest summarised as a breadcrumb. }
+  S := FormatFactsBlock(Facts, 45);
+  AssertTrue(Pos('- Prefers Delphi', S) > 0, 'keeps newest fact under tiny budget');
+  AssertTrue(Pos('not shown', S) > 0, 'breadcrumb notes the omitted facts');
+  AssertTrue(Pos('memory_search', S) = 0, 'breadcrumb does not point at memory_search');
+end;
+
 begin
   GTmpDir := JoinPath(GetTempDir, 'pasclaw-facts-test-' + IntToStr(Random(1 shl 30)));
   EnsureDir(GTmpDir);
@@ -153,6 +192,8 @@ begin
     WriteLn('  ok: durability across reopen');
     RunDedupTests;
     WriteLn('  ok: exact-text dedup (expired copy does not block refresh)');
+    RunFormatTests;
+    WriteLn('  ok: format facts block (budget / breadcrumb / expiry)');
     WriteLn('PASS');
   finally
     {$IFDEF UNIX}

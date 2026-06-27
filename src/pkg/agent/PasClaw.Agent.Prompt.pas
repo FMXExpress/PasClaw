@@ -165,6 +165,7 @@ uses
   PasClaw.Logger,         { LogWarn for BuildActivePlanSection's PLAN.md read failures }
   PasClaw.Skills.Loader,
   PasClaw.Agent.Orient,   { task-aware MEMORY slicing (Cfg.OrientTaskAware) }
+  PasClaw.Memory.Facts,   { distilled-fact injection (Cfg.MemoryDistillEnabled) }
   PasClaw.MCP.Disclosure; { deferred-tools section (Cfg.MCPProgressiveDisclosure) }
 
 const
@@ -236,6 +237,22 @@ begin
     '- Memory: ' + JoinPath(Home, 'workspace/memory/MEMORY.md') + sLineBreak +
     '- Skills: ' + JoinPath(Home, 'workspace/skills') + '/{skill-name}/SKILL.md' + sLineBreak +
     '- Logs:   ' + JoinPath(Home, 'logs');
+end;
+
+function BuildFactsSection(Cfg: TConfig): string;
+{ Always-on block of distilled facts, injected WHOLESALE (newest first,
+  bounded by MemoryFactsBudget) when MemoryDistillEnabled. Deliberately
+  NOT relevance-sliced like the OrientTaskAware path -- standing memory
+  shouldn't narrow to the current query and give the model a one-track
+  mind. Empty (no I/O) when the feature is off or the budget is 0, so a
+  default install pays nothing. }
+begin
+  Result := '';
+  if (Cfg = nil) or (not Cfg.MemoryDistillEnabled) or (Cfg.MemoryFactsBudget <= 0) then
+    Exit;
+  Result := ActiveFactsBlock(GetHome,
+                             FormatDateTime('yyyy"-"mm"-"dd', Now),
+                             Cfg.MemoryFactsBudget);
 end;
 
 function BuildMemorySection(TaskAware: Boolean; const TaskHint: string): string;
@@ -772,6 +789,9 @@ begin
   Result := AppendSection(Result, BuildWorkspaceSection);
   Result := AppendSection(Result,
               BuildMemorySection((Cfg <> nil) and Cfg.OrientTaskAware, TaskHint));
+  { Distilled facts (Cfg.MemoryDistillEnabled). Wholesale, after the .md
+    memory so curated MEMORY.md leads and auto-facts follow. }
+  Result := AppendSection(Result, BuildFactsSection(Cfg));
   { Project-level rules from AGENTS.md (opencode/Codex/Cursor
     convention). Read from the cwd, walking up to the git root. Emitted
     after memory so it can override or extend MEMORY.md guidance for
