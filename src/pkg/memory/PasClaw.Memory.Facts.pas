@@ -82,18 +82,28 @@ function NewFactStore: IFactStore;
 function DefaultFactsDbPath(const HomeDir: string): string;
 
 { Render facts as a system-prompt block, newest first, until Budget bytes
-  are used; a trailing "(+N older fact(s) not shown)" breadcrumb notes any
-  omitted. The breadcrumb does NOT point at memory_search -- that tool only
-  indexes workspace/memory/*.md, not facts.db, so omitted facts aren't
-  reachable that way until facts are wired into retrieval (Phase 4b).
-  Wholesale (NOT relevance-sliced). '' when Facts is empty or Budget <= 0.
-  Pure -- exposed for testing. }
+  are used; a trailing "(+N more -- search with memory_search)" breadcrumb
+  notes any omitted. Wholesale (NOT relevance-sliced). '' when Facts is
+  empty or Budget <= 0. Pure -- exposed for testing. }
 function FormatFactsBlock(const Facts: TStoredFactArray; Budget: Integer): string;
 
 { Convenience for the prompt builder: open the default store, read the
   facts active as of Today, and format them within Budget. '' when the
   store is absent/empty or Budget <= 0. }
 function ActiveFactsBlock(const HomeDir, Today: string; Budget: Integer): string;
+
+{ Keyword-rank Facts against Query: score each by how many distinct query
+  terms appear (case-insensitive substring) in its text, drop zero-score,
+  sort by score then confidence then recency, return the top K. Pure (the
+  keyword half of hybrid retrieval) -- exposed for testing. }
+function RankFactsByQuery(const Facts: TStoredFactArray;
+                          const Query: string; K: Integer): TStoredFactArray;
+
+{ Open the default store and return the top-K active (as of Today) facts
+  matching Query. [] when the store is absent/empty. Used by memory_search
+  so distilled facts are reachable alongside the .md notes. }
+function SearchActiveFacts(const HomeDir, Today, Query: string;
+                          K: Integer): TStoredFactArray;
 
 implementation
 
@@ -144,11 +154,10 @@ begin
   if Body = '' then Exit;
   Result := Header + sLineBreak + Body;
   if Omitted > 0 then
-    { No memory_search hint: it indexes only workspace/memory/*.md, not
-      facts.db, so it can't recover these. Just flag the omission;
-      raising memory_facts_budget surfaces more. }
+    { memory_search now also searches facts.db (Phase 4b), so this hint is
+      actionable -- the model can recover omitted facts by querying. }
     Result := Result + sLineBreak +
-      Format('(+%d older fact(s) not shown)', [Omitted]);
+      Format('(+%d more -- search with memory_search)', [Omitted]);
 end;
 
 function ActiveFactsBlock(const HomeDir, Today: string; Budget: Integer): string;
@@ -161,6 +170,95 @@ begin
   if not Store.Open(DefaultFactsDbPath(HomeDir)) then Exit;
   try
     Result := FormatFactsBlock(Store.ActiveFacts(Today), Budget);
+  finally
+    Store.Close;
+  end;
+end;
+
+function RankFactsByQuery(const Facts: TStoredFactArray;
+  const Query: string; K: Integer): TStoredFactArray;
+var
+  Terms: array of string;
+  Cur, LowText: string;
+  i, j, NTerms, Score: Integer;
+  { Parallel scored set: a fact + its match score, before top-K sort. }
+  Scored: array of TStoredFact;
+  ScoreOf: array of Integer;
+  n, a, b: Integer;
+  TmpF: TStoredFact;
+  TmpI: Integer;
+
+  procedure AddTerm(const T: string);
+  var t2: string; x: Integer; dup: Boolean;
+  begin
+    t2 := LowerCase(Trim(T));
+    if t2 = '' then Exit;
+    dup := False;
+    for x := 0 to High(Terms) do if Terms[x] = t2 then begin dup := True; Break; end;
+    if not dup then begin SetLength(Terms, Length(Terms) + 1); Terms[High(Terms)] := t2; end;
+  end;
+
+begin
+  Result := nil;
+  if (Length(Facts) = 0) or (Trim(Query) = '') then Exit;
+  if K <= 0 then K := 5;
+
+  { Tokenise the query on non-alphanumeric (>= $80 kept so UTF-8 survives). }
+  SetLength(Terms, 0);
+  Cur := '';
+  for i := 1 to Length(Query) do
+    if (Query[i] in ['a'..'z','A'..'Z','0'..'9']) or (Ord(Query[i]) >= $80) then
+      Cur := Cur + Query[i]
+    else begin AddTerm(Cur); Cur := ''; end;
+  AddTerm(Cur);
+  NTerms := Length(Terms);
+  if NTerms = 0 then Exit;
+
+  { Score: distinct query terms present (substring) in the fact text. }
+  n := 0;
+  for i := 0 to High(Facts) do
+  begin
+    LowText := LowerCase(Facts[i].Text);
+    Score := 0;
+    for j := 0 to NTerms - 1 do
+      if Pos(Terms[j], LowText) > 0 then Inc(Score);
+    if Score = 0 then Continue;
+    SetLength(Scored, n + 1);
+    SetLength(ScoreOf, n + 1);
+    Scored[n] := Facts[i];
+    ScoreOf[n] := Score;
+    Inc(n);
+  end;
+  if n = 0 then Exit;
+
+  { Selection sort (small n): score desc, then confidence desc, then
+    created_at desc. }
+  for a := 0 to n - 2 do
+    for b := a + 1 to n - 1 do
+      if (ScoreOf[b] > ScoreOf[a]) or
+         ((ScoreOf[b] = ScoreOf[a]) and (Scored[b].Confidence > Scored[a].Confidence)) or
+         ((ScoreOf[b] = ScoreOf[a]) and (Scored[b].Confidence = Scored[a].Confidence)
+            and (Scored[b].CreatedAt > Scored[a].CreatedAt)) then
+      begin
+        TmpF := Scored[a]; Scored[a] := Scored[b]; Scored[b] := TmpF;
+        TmpI := ScoreOf[a]; ScoreOf[a] := ScoreOf[b]; ScoreOf[b] := TmpI;
+      end;
+
+  if n > K then n := K;
+  SetLength(Result, n);
+  for i := 0 to n - 1 do Result[i] := Scored[i];
+end;
+
+function SearchActiveFacts(const HomeDir, Today, Query: string;
+  K: Integer): TStoredFactArray;
+var
+  Store: IFactStore;
+begin
+  Result := nil;
+  Store := NewFactStore;
+  if not Store.Open(DefaultFactsDbPath(HomeDir)) then Exit;
+  try
+    Result := RankFactsByQuery(Store.ActiveFacts(Today), Query, K);
   finally
     Store.Close;
   end;
