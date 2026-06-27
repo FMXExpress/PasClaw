@@ -238,6 +238,11 @@
     color:var(--fg);border-color:transparent}
   .subpane{display:none;flex:1;min-height:0;min-width:0;flex-direction:column;overflow:hidden}
   .subpane.active{display:flex}
+  /* A nested .two-col inside a column-oriented .subpane is a flex item on the
+     column main axis; without min-height:0 its auto minimum grows to its
+     contents and (with .subpane overflow:hidden) the lower part gets clipped
+     instead of letting .col-list / .col-view scroll. */
+  .subpane .two-col{min-height:0}
   #tab-memory{flex-direction:column}
   #facts-box{flex:1;min-height:0;display:flex;flex-direction:column;
     padding:.7rem .8rem;overflow:hidden}
