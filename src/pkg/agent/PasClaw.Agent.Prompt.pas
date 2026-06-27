@@ -150,6 +150,17 @@ function FindProjectAgentsMd(const StartDir: string): string;
   guidance. }
 function BuildProjectRulesSection: string;
 
+{ Orient launch-preamble section. When Cfg.OrientTaskAware is on, returns an
+  instruction telling the model to open a task with a brief plan BEFORE it
+  starts calling tools, so the operator sees what it's about to do instead
+  of it silently diving in -- the transparency half of the orient feature
+  (the other half being task-aware MEMORY slicing in BuildMemorySection).
+  Returns '' when orient is off (the default), in plan mode (the planner
+  already produces a plan), or without tools (nothing to preface). Exposed
+  for tests. }
+function BuildOrientPreambleSection(Cfg: TConfig; ToolsEnabled: Boolean;
+                                    Mode: TPasClawMode): string;
+
 { True iff at least one message in the array is mrSystem. The gateway's
   /v1/chat/completions handler uses this to decide whether to inject the
   composed system prompt -- third-party clients that supply their own
@@ -797,6 +808,23 @@ begin
     'UI) when ready to apply the plan.';
 end;
 
+function BuildOrientPreambleSection(Cfg: TConfig; ToolsEnabled: Boolean;
+                                    Mode: TPasClawMode): string;
+begin
+  Result := '';
+  if (Cfg = nil) or (not Cfg.OrientTaskAware) then Exit;
+  { Plan mode already produces a plan as its deliverable; a tool-less run
+    has no "diving into work" to preface. }
+  if (Mode = pmPlan) or (not ToolsEnabled) then Exit;
+  Result :=
+    '## Before you start' + sLineBreak +
+    'Open each task with a brief plan -- 1-3 lines on what you understand ' +
+    'the goal to be and the steps you''ll take -- BEFORE calling any tools, ' +
+    'then carry it out. Keep it short: it''s a heads-up for the operator so ' +
+    'they can see your intent, not a document, and not a request for ' +
+    'approval. Skip it for a trivial one-step reply.';
+end;
+
 function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
                            ToolsEnabled: Boolean; const TaskHint: string;
                            Mode: TPasClawMode;
@@ -837,6 +865,10 @@ begin
     section never adds whitespace to the prompt unnecessarily. }
   if ToolsEnabled then
     Result := AppendSection(Result, BuildDeferredToolsSection);
+  { Orient transparency preamble (opt-in via Cfg.OrientTaskAware): ask the
+    model to announce a short plan before it starts using tools. Grouped
+    with the behaviour rules below. }
+  Result := AppendSection(Result, BuildOrientPreambleSection(Cfg, ToolsEnabled, Mode));
   Result := AppendSection(Result, BuildRulesSection(ToolsEnabled));
   if Trim(UserSys) <> '' then
     Result := AppendSection(Result, Trim(UserSys));
