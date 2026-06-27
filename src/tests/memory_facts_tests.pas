@@ -171,15 +171,45 @@ begin
   AssertTrue(Pos('Durable facts', S) > 0, 'has header');
   AssertTrue(Pos('- Prefers Delphi', S) > 0, 'has a bullet');
   AssertTrue(Pos('(until 2026-12-31)', S) > 0, 'expiry annotated');
-  AssertTrue(Pos('not shown', S) = 0, 'no breadcrumb when all fit');
-  { Must NOT promise memory_search -- it can't reach facts.db (Phase 4b). }
-  AssertTrue(Pos('memory_search', S) = 0, 'no false memory_search hint');
+  AssertTrue(Pos('more --', S) = 0, 'no breadcrumb when all fit');
 
-  { Tiny budget: at least one fact kept, rest summarised as a breadcrumb. }
+  { Tiny budget: at least one fact kept, rest summarised as a breadcrumb
+    that now (Phase 4b) points at the searchable store. }
   S := FormatFactsBlock(Facts, 45);
   AssertTrue(Pos('- Prefers Delphi', S) > 0, 'keeps newest fact under tiny budget');
-  AssertTrue(Pos('not shown', S) > 0, 'breadcrumb notes the omitted facts');
-  AssertTrue(Pos('memory_search', S) = 0, 'breadcrumb does not point at memory_search');
+  AssertTrue(Pos('more --', S) > 0, 'breadcrumb notes the omitted facts');
+  AssertTrue(Pos('memory_search', S) > 0, 'breadcrumb points at memory_search (now searchable)');
+end;
+
+procedure RunRankTests;
+{ Pure keyword ranking: term matching, score/confidence ordering, K cap,
+  no-match -> empty. }
+var
+  Facts, R: TStoredFactArray;
+begin
+  SetLength(Facts, 3);
+  Facts[0] := SF('User prefers Delphi over Lazarus', ''); Facts[0].Confidence := 0.5; Facts[0].CreatedAt := 10;
+  Facts[1] := SF('Deploys on FreeBSD', '');                Facts[1].Confidence := 0.9; Facts[1].CreatedAt := 20;
+  Facts[2] := SF('Delphi build uses dcc64', '');           Facts[2].Confidence := 0.5; Facts[2].CreatedAt := 30;
+
+  { No match -> empty. }
+  R := RankFactsByQuery(Facts, 'kubernetes', 5);
+  AssertEqInt(Length(R), 0, 'no-match query -> empty');
+
+  { "delphi build" hits #2 (both terms) over #0 (one term). }
+  R := RankFactsByQuery(Facts, 'delphi build', 5);
+  AssertTrue(Length(R) >= 2, 'matches the two delphi facts');
+  AssertEqStr(R[0].Text, 'Delphi build uses dcc64', 'higher term-overlap ranks first');
+
+  { Single shared term -> tie broken by confidence (FreeBSD 0.9 not relevant;
+    use a term in two equal-score facts). "delphi" hits #0 and #2 (score 1
+    each); #2 is newer so wins the recency tiebreak (equal confidence). }
+  R := RankFactsByQuery(Facts, 'delphi', 5);
+  AssertEqStr(R[0].Text, 'Delphi build uses dcc64', 'equal score -> newer wins');
+
+  { K cap. }
+  R := RankFactsByQuery(Facts, 'delphi', 1);
+  AssertEqInt(Length(R), 1, 'K caps results');
 end;
 
 begin
@@ -194,6 +224,8 @@ begin
     WriteLn('  ok: exact-text dedup (expired copy does not block refresh)');
     RunFormatTests;
     WriteLn('  ok: format facts block (budget / breadcrumb / expiry)');
+    RunRankTests;
+    WriteLn('  ok: keyword rank facts (match / order / K cap)');
     WriteLn('PASS');
   finally
     {$IFDEF UNIX}

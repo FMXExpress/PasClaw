@@ -46,6 +46,7 @@ uses
   PasClaw.Logger,
   PasClaw.Memory.Index,
   PasClaw.Memory.Vector,
+  PasClaw.Memory.Facts,   { distilled-fact search (Phase 4b) }
   PasClaw.Promptware;     { injection scan on recalled snippets -- chokepoint 2 }
 
 function ParseStringArg(const ArgsJSON, Field: string; out V: string): Boolean;
@@ -110,6 +111,9 @@ var
   Lines: TStringList;
   Dir:   string;
   Cfg:   TConfig;
+  UseVector, DistillOn, IndexFailed: Boolean;
+  MdText, FactText: string;
+  FactHits: TStoredFactArray;
 begin
   ErrMsg := '';
   Result := '';
@@ -145,27 +149,41 @@ begin
     exist and isn't touched. }
   Cfg := LoadConfig;
   try
-    if Cfg.VectorSearchEnabled then
-    begin
-      Idx := NewVectorMemoryIndex;
-      if not Idx.Open(IndexDbPath + '.vec') then
-        Idx := nil;  { releases the interface; falls through to FTS }
-    end;
+    UseVector := Cfg.VectorSearchEnabled;
+    DistillOn := Cfg.MemoryDistillEnabled;
   finally
     Cfg.Free;
   end;
 
+  if UseVector then
+  begin
+    Idx := NewVectorMemoryIndex;
+    if not Idx.Open(IndexDbPath + '.vec') then
+      Idx := nil;  { releases the interface; falls through to FTS }
+  end;
+
+  IndexFailed := False;
   if Idx = nil then
   begin
     Idx := NewMemoryIndex;
     if not Idx.Open(IndexDbPath) then
     begin
       Idx := nil;
-      ErrMsg := 'memory index unavailable (libsqlite3 missing or unreadable)';
-      Exit;
+      { Index unavailable. If distilled facts are on, remember the failure
+        and fall through so the fact store can still answer; otherwise this
+        is a hard error (unchanged behaviour). The failure is NOT silently
+        dropped -- it's reported below if facts don't produce results, and
+        flagged as a partial search if they do. }
+      if not DistillOn then
+      begin
+        ErrMsg := 'memory index unavailable (libsqlite3 missing or unreadable)';
+        Exit;
+      end;
+      IndexFailed := True;
     end;
   end;
 
+  if Idx <> nil then
   try
     Idx.SyncDir(Dir);
     Hits := Idx.Search(Query, K);
@@ -173,23 +191,75 @@ begin
     Idx := nil;  { IInterface release closes the DB }
   end;
 
-  if Length(Hits) = 0 then
-    Exit(Format('(no matches for %s in %s)', [Query, Dir]));
-
-  Lines := TStringList.Create;
-  try
-    Lines.Add(Format('%d match(es) for %s:', [Length(Hits), Query]));
-    Lines.Add('');
-    for i := 0 to High(Hits) do
-    begin
-      Lines.Add(Format('%s  (bm25=%.3f)', [Hits[i].Path, Hits[i].Score]));
-      Lines.Add('  ' + Hits[i].Snippet);
-      if i < High(Hits) then Lines.Add('');
+  { ----- .md note hits ----- }
+  MdText := '';
+  if Length(Hits) > 0 then
+  begin
+    Lines := TStringList.Create;
+    try
+      Lines.Add(Format('%d match(es) for %s:', [Length(Hits), Query]));
+      Lines.Add('');
+      for i := 0 to High(Hits) do
+      begin
+        Lines.Add(Format('%s  (bm25=%.3f)', [Hits[i].Path, Hits[i].Score]));
+        Lines.Add('  ' + Hits[i].Snippet);
+        if i < High(Hits) then Lines.Add('');
+      end;
+      MdText := Lines.Text;
+    finally
+      Lines.Free;
     end;
-    Result := Lines.Text;
-  finally
-    Lines.Free;
   end;
+
+  { ----- distilled-fact hits (Phase 4b) ----- }
+  FactText := '';
+  if DistillOn then
+  begin
+    FactHits := SearchActiveFacts(GetHome,
+                  FormatDateTime('yyyy"-"mm"-"dd', Now), Query, K);
+    if Length(FactHits) > 0 then
+    begin
+      Lines := TStringList.Create;
+      try
+        Lines.Add(Format('%d distilled fact(s) for %s:', [Length(FactHits), Query]));
+        for i := 0 to High(FactHits) do
+        begin
+          if FactHits[i].Expires <> '' then
+            Lines.Add(Format('- %s (until %s)', [FactHits[i].Text, FactHits[i].Expires]))
+          else
+            Lines.Add('- ' + FactHits[i].Text);
+        end;
+        FactText := Lines.Text;
+      finally
+        Lines.Free;
+      end;
+    end;
+  end;
+
+  if (MdText = '') and (FactText = '') then
+  begin
+    { Nothing to return. If the markdown index never opened, that's the
+      real reason -- report it as unavailable rather than a misleading
+      "no matches" (the notes were never searched). }
+    if IndexFailed then
+      ErrMsg := 'memory index unavailable (libsqlite3 missing or unreadable); ' +
+                'no matching distilled facts either'
+    else
+      Result := Format('(no matches for %s in %s)', [Query, Dir]);
+    Exit;
+  end;
+
+  Result := MdText;
+  if FactText <> '' then
+  begin
+    if Result <> '' then Result := Result + sLineBreak;
+    Result := Result + FactText;
+  end;
+  { Facts answered but the markdown index was down -- tell the model this
+    was a partial search so it doesn't assume the notes were checked. }
+  if IndexFailed then
+    Result := '(note: markdown memory index unavailable -- searched ' +
+              'distilled facts only)' + sLineBreak + Result;
 
   { Promptware chokepoint 2 of 3: recalled memory. Snippets were
     written on earlier turns -- possibly copied from attacker-supplied
@@ -211,11 +281,12 @@ begin
   if R = nil then Exit;
   T.Name        := 'memory_search';
   T.Description :=
-    'Search the workspace memory directory (MEMORY.md + workspace/memory/*.md) ' +
-    'with SQLite FTS5 BM25 ranking. Use this before answering questions about ' +
-    'prior conversations, the user''s preferences, or project facts you might ' +
-    'have written down on an earlier turn. Returns up to k matches as path + ' +
-    'snippet + score (smaller score = stronger match).';
+    'Search workspace memory: the markdown notes (MEMORY.md + ' +
+    'workspace/memory/*.md, SQLite FTS5 BM25) AND, when distilled memory ' +
+    'is enabled, the auto-distilled fact store. Use this before answering ' +
+    'questions about prior conversations, the user''s preferences, or ' +
+    'project facts from an earlier turn. Returns up to k note matches ' +
+    '(path + snippet + score) plus matching distilled facts.';
   T.Schema      :=
     '{"type":"object",' +
     '"properties":{' +
