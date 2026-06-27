@@ -176,11 +176,37 @@ type
        into Options.SystemPrompt are NOT in this list. *)
     FinalMessages:    TMessageArray;
     FinalSystemPrompt: string;
+    (* Set True when the loop stopped because it reached Cfg.MaxIterations
+       while the model still wanted to call tools -- i.e. the task is most
+       likely UNFINISHED, not a clean stop. Callers surface a "stopped at
+       the limit -- reply to continue" notice (FormatMaxIterNotice) instead
+       of presenting the partial output as a completed answer. *)
+    HitMaxIterations: Boolean;
+    (* Distinct tool names from the final (never-fed-back) model response
+       when HitMaxIterations -- the "what it was doing when it stopped"
+       detail for the notice. Empty otherwise. *)
+    PendingToolNames: TArray<string>;
   end;
 
 function RunToolLoop(const Cfg: TToolLoopConfig;
                      var Messages: array of TMessage;
                      out Loop: TToolLoopResult): Boolean;
+
+{ Build the operator-facing "stopped at the tool-iteration limit" notice
+  from a finished loop result, or '' when the loop did NOT hit the cap (so
+  callers can append it unconditionally). MaxIter is the configured cap;
+  HowToRaise is a surface-specific hint for lifting it (e.g.
+  '--max-iter on `pasclaw serve`', or '' to omit that clause).
+
+  Resumable says whether THIS caller carries conversation history forward:
+    True  (interactive CLI, session-backed TUI, gateway clients that resend
+          the message array) -> "reply continue to resume from here".
+    False (one-shot CLI without --session, the line-based TUI that rebuilds
+          the history from the current input each turn) -> there is nothing
+          to resume into, so the notice tells the user to raise the cap and
+          re-run instead of promising a continue that would start fresh. }
+function FormatMaxIterNotice(const Loop: TToolLoopResult; MaxIter: Integer;
+                            const HowToRaise: string; Resumable: Boolean): string;
 
 type
   (* Late-bound hook so PasClaw.Tools.ToolLoop doesn't have to
@@ -583,6 +609,70 @@ begin
     end;
   end;
   FlushCur;
+end;
+
+function CollectToolNames(const Calls: array of TToolCall): TArray<string>;
+{ Distinct tool names in first-seen order. Small N (a single model turn's
+  tool calls), so a linear dedupe is fine. }
+var
+  i, j: Integer;
+  Nm: string;
+  Seen: Boolean;
+begin
+  SetLength(Result, 0);
+  for i := 0 to High(Calls) do
+  begin
+    Nm := Calls[i].Func.Name;
+    if Nm = '' then Continue;
+    Seen := False;
+    for j := 0 to High(Result) do
+      if Result[j] = Nm then begin Seen := True; Break; end;
+    if Seen then Continue;
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)] := Nm;
+  end;
+end;
+
+function FormatMaxIterNotice(const Loop: TToolLoopResult; MaxIter: Integer;
+  const HowToRaise: string; Resumable: Boolean): string;
+var
+  Names: string;
+  i: Integer;
+begin
+  Result := '';
+  if not Loop.HitMaxIterations then Exit;
+  Names := '';
+  for i := 0 to High(Loop.PendingToolNames) do
+  begin
+    if Names <> '' then Names := Names + ', ';
+    Names := Names + Loop.PendingToolNames[i];
+  end;
+  Result := Format(
+    '[stopped: hit the tool-call limit of %d iteration(s) while still ' +
+    'working -- this task is probably unfinished]', [MaxIter]);
+  if Names <> '' then
+    Result := Result + sLineBreak +
+      'It was mid-way through: ' + Names + '.';
+  if Resumable then
+  begin
+    { History carries over -- a follow-up turn resumes from here. }
+    Result := Result + sLineBreak +
+      'Reply "continue" to resume from here (the conversation carries over)';
+    if HowToRaise <> '' then
+      Result := Result + ', or raise the limit (' + HowToRaise + ')';
+    Result := Result + '.';
+  end
+  else
+  begin
+    { Stateless caller: there is nothing to "continue" into -- a fresh
+      request would start over without the tool history -- so point the
+      user at raising the cap and re-running. }
+    Result := Result + sLineBreak + 'This turn does not carry over -- ';
+    if HowToRaise <> '' then
+      Result := Result + 'raise the limit (' + HowToRaise + ') and re-run to finish.'
+    else
+      Result := Result + 'raise the iteration limit and re-run to finish.';
+  end;
 end;
 
 function RunToolLoop(const Cfg: TToolLoopConfig;
@@ -1248,11 +1338,17 @@ begin
     end;
   end;
 
-  { Max iterations exhausted; return whatever we last got. }
+  { Max iterations exhausted; return whatever we last got. The loop only
+    reaches here with Resp still carrying tool calls (a tool-less response
+    Exit(True)s above), so this is the "ran out of room mid-task" stop --
+    flag it and capture what it was doing so callers can offer a continue. }
   Loop.Content    := Resp.Content;
   Loop.Iterations := Iter;
   Loop.FinalMessages    := Hist;
   Loop.FinalSystemPrompt := LiveOptions.SystemPrompt;
+  Loop.HitMaxIterations := Length(Resp.ToolCalls) > 0;
+  if Loop.HitMaxIterations then
+    Loop.PendingToolNames := CollectToolNames(Resp.ToolCalls);
   Result := True;
   finally
     { Roll the final per-turn telemetry into the span before

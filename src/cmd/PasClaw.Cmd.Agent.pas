@@ -636,6 +636,16 @@ begin
         PrintLn(Loop.Content)
       else
         PrintLn(MaybeRender(Cfg, Loop.Content));
+      { The tool loop stopped at the iteration cap mid-task -- tell the
+        operator instead of letting the partial answer look complete. In
+        quiet mode route it to stderr so stdout stays machine-readable.
+        One-shot history only carries over when --session is set, so the
+        "reply continue" hint is gated on that. }
+      if Loop.HitMaxIterations then
+        if A.Quiet then
+          PrintErr(FormatMaxIterNotice(Loop, A.MaxIterations, '--max-iterations N', A.Session <> '') + sLineBreak)
+        else
+          PrintLn(Ansi.Yellow + FormatMaxIterNotice(Loop, A.MaxIterations, '--max-iterations N', A.Session <> '') + Ansi.Reset);
       { Self-improving skills: after the user-facing reply is printed,
         consider distilling this turn into a reusable skill. No-op
         unless the distiller is enabled and the turn was non-trivial. }
@@ -1650,6 +1660,12 @@ begin
         else
           PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset + ' (' + Provider.GetName + '/' + Model + '):');
         PrintLn(MaybeRender(Cfg, Loop.Content));
+        { Stopped at the iteration cap mid-task -- surface it so the
+          operator knows the answer is partial and can just type "continue"
+          (the interactive history carries over to the next turn). }
+        if Loop.HitMaxIterations then
+          PrintLn(Ansi.Yellow + FormatMaxIterNotice(Loop, A.MaxIterations,
+                  '--max-iterations N', {Resumable=} True) + Ansi.Reset);
         if Loop.TotalUsage.InputTokens + Loop.TotalUsage.OutputTokens > 0 then
         begin
           { Surface aggregate usage across every provider call in the

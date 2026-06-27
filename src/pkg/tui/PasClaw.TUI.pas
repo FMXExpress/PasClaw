@@ -1362,7 +1362,21 @@ var
   i: Integer;
   OwnsTarget: Boolean;
   Cfg: TConfig;
+  DisplayContent: string;
 begin
+  { Fold the max-iteration notice into the assistant turn so the operator
+    sees the turn stopped mid-task (and can type "continue"). Kept in the
+    content -- as the gateway does -- so the carried-over history records
+    that this turn was cut off. }
+  DisplayContent := Loop.Content;
+  if Loop.HitMaxIterations then
+  begin
+    if Trim(DisplayContent) <> '' then
+      DisplayContent := DisplayContent + sLineBreak + sLineBreak;
+    DisplayContent := DisplayContent +
+      FormatMaxIterNotice(Loop, Loop.Iterations, 'max_iterations in config',
+                          {Resumable=} True);   { session-backed -- history persists }
+  end;
   if (CurrentSession <> nil) and (CurrentSession.Meta.Id = SessionId) then
   begin
     Target := CurrentSession;
@@ -1380,13 +1394,13 @@ begin
       for i := 0 to High(Loop.FinalMessages) do
         Target.Messages[i] := Loop.FinalMessages[i];
       Target.Messages[High(Target.Messages)] :=
-        MakeMessage(mrAssistant, Loop.Content);
+        MakeMessage(mrAssistant, DisplayContent);
     end
     else
     begin
       SetLength(Target.Messages, Length(Target.Messages) + 1);
       Target.Messages[High(Target.Messages)] :=
-        MakeMessage(mrAssistant, Loop.Content);
+        MakeMessage(mrAssistant, DisplayContent);
     end;
     { Working-state snapshot: refresh from this loop's final message
       history (edits / shell commands / errors) so the next turn can
@@ -2840,6 +2854,11 @@ begin
     PrintLn(RenderMarkdown(Loop.Content))
   else
     PrintLn(Loop.Content);
+  if Loop.HitMaxIterations then
+    { This line-based path rebuilds the history from the current input each
+      turn -- nothing to "continue" into, so Resumable=False. }
+    PrintLn(Ansi.Yellow + FormatMaxIterNotice(Loop, Loop.Iterations,
+            'max_iterations in config', {Resumable=} False) + Ansi.Reset);
   if Loop.LastResp.Usage.InputTokens + Loop.LastResp.Usage.OutputTokens > 0 then
     PrintLn(Ansi.Dim + '         ' +
       Format('[tokens in=%d out=%d, iters=%d]',
