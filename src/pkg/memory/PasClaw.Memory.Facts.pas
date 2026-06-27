@@ -81,6 +81,11 @@ type
     { Count of facts ACTIVE as of Today -- identical predicate to
       ActiveFacts(Today), so the two never disagree. }
     function  CountActive(const Today: string): Integer;
+    { Embed any ACTIVE rows that have no embedding yet (pre-4c databases,
+      or facts saved while the embedder was unavailable) so they take part
+      in semantic dedup + search. No-op without a wired embedder. Returns
+      the number of rows filled. }
+    function  BackfillEmbeddings(const Today: string): Integer;
   end;
 
 function NewFactStore: IFactStore;
@@ -121,6 +126,12 @@ function SearchActiveFacts(const HomeDir, Today, Query: string;
   The heavy ONNX embedder lives in PasClaw.Memory.Facts.Embed. }
 procedure SetFactEmbedder(Fn: TFactEmbedFn);
 function FactEmbedderActive: Boolean;
+
+{ Open the default store and backfill embeddings for active rows missing
+  them (see IFactStore.BackfillEmbeddings). Returns rows filled; 0 when no
+  embedder is wired or the store is absent. Called when the embedder is
+  enabled so pre-4c facts join the semantic layer. }
+function BackfillFactEmbeddings(const HomeDir, Today: string): Integer;
 
 { Cosine similarity of two equal-length vectors (0 when either is empty or
   lengths differ). Pure -- exposed for testing. }
@@ -479,6 +490,21 @@ begin
   Result := FuseFactRanks(KwHits, SemHits, K);
 end;
 
+function BackfillFactEmbeddings(const HomeDir, Today: string): Integer;
+var
+  Store: IFactStore;
+begin
+  Result := 0;
+  if not Assigned(GFactEmbed) then Exit;
+  Store := NewFactStore;
+  if not Store.Open(DefaultFactsDbPath(HomeDir)) then Exit;
+  try
+    Result := Store.BackfillEmbeddings(Today);
+  finally
+    Store.Close;
+  end;
+end;
+
 type
 {$IFDEF FPC}
   TQuery = TSQLQuery;
@@ -514,6 +540,7 @@ type
     function  Delete(Id: Int64): Boolean;
     function  CountAll: Integer;
     function  CountActive(const Today: string): Integer;
+    function  BackfillEmbeddings(const Today: string): Integer;
   end;
 
 function NewFactStore: IFactStore;
@@ -892,6 +919,37 @@ begin
   finally
     Q.Free;
   end;
+end;
+
+function TFactStoreImpl.BackfillEmbeddings(const Today: string): Integer;
+var
+  Active: TStoredFactArray;
+  Emb: TArray<Single>;
+  EmbHex: string;
+  i: Integer;
+  Q: TQuery;
+begin
+  Result := 0;
+  if (not FOpen) or (not Assigned(GFactEmbed)) then Exit;
+  Active := ActiveFacts(Today);
+  for i := 0 to High(Active) do
+  begin
+    if Active[i].EmbeddingHex <> '' then Continue;
+    Emb := GFactEmbed(Active[i].Text);
+    if Length(Emb) = 0 then Continue;
+    EmbHex := EmbToHex(Emb);
+    Q := NewQuery;
+    try
+      Q.SQL.Text := 'UPDATE facts SET embedding = :e WHERE id = :id';
+      PStr(Q, 'e', EmbHex);
+      PInt(Q, 'id', Active[i].Id);
+      Q.ExecSQL;
+    finally
+      Q.Free;
+    end;
+    Inc(Result);
+  end;
+  if Result > 0 then Commit;
 end;
 
 end.

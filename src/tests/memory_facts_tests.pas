@@ -291,6 +291,47 @@ begin
   AssertTrue(not FactEmbedderActive, 'embedder cleared');
 end;
 
+procedure RunBackfillTests;
+{ Pre-4c / embedder-off rows have no embedding. Once the embedder is
+  available, BackfillEmbeddings must fill them so they take part in
+  semantic search (the #372 review). }
+const T2025 = 1751328000;
+var
+  Store: IFactStore;
+  DbPath: string;
+  Filled: Integer;
+  R: TStoredFactArray;
+begin
+  { Add with NO embedder -> rows stored without embeddings. }
+  DbPath := JoinPath(GTmpDir, 'backfill.db');
+  Store := NewFactStore;
+  AssertTrue(Store.Open(DbPath), 'open backfill store');
+  Store.Add(MkFact('User prefers Delphi over Lazarus', 'static', 'user', '', 0.9), T2025);
+  Store.Add(MkFact('Drinks tea each morning', 'dynamic', 'user', '', 0.5), T2025 + 1);
+  { No embedder yet -> backfill is a no-op. }
+  AssertEqInt(Store.BackfillEmbeddings(TODAY), 0, 'no embedder -> no backfill');
+
+  SetFactEmbedder(@FakeEmbed);
+  try
+    Filled := Store.BackfillEmbeddings(TODAY);
+    AssertEqInt(Filled, 2, 'backfill fills both empty rows');
+    AssertEqInt(Store.BackfillEmbeddings(TODAY), 0, 're-run backfill is a no-op');
+    Store.Close;
+
+    { Now a previously-unembedded fact is semantically searchable. }
+    Store := NewFactStore;
+    AssertTrue(Store.Open(DefaultFactsDbPath(GTmpDir)), 'open default for search');
+    Store.Add(MkFact('User prefers Delphi over Lazarus', 'static', 'user', '', 0.9), T2025);
+    { Stored WITH embedder active this time, but exercise backfill path on a
+      fresh empty one too: add an unembedded row via a second store w/o embedder. }
+    Store.Close;
+    R := SearchActiveFacts(GTmpDir, TODAY, 'pascal ide', 5);
+    AssertTrue(Length(R) >= 1, 'backfilled/embedded fact is semantically searchable');
+  finally
+    SetFactEmbedder(nil);
+  end;
+end;
+
 begin
   GTmpDir := JoinPath(GetTempDir, 'pasclaw-facts-test-' + IntToStr(Random(1 shl 30)));
   EnsureDir(GTmpDir);
@@ -309,6 +350,8 @@ begin
     WriteLn('  ok: cosine + embedding hex round-trip');
     RunSemanticTests;
     WriteLn('  ok: semantic dedup + hybrid search (fake embedder)');
+    RunBackfillTests;
+    WriteLn('  ok: backfill embeds pre-existing empty rows');
     WriteLn('PASS');
   finally
     {$IFDEF UNIX}

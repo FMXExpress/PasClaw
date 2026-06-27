@@ -133,6 +133,18 @@ begin
   finally
     GLock.Release;
   end;
+
+  { Backfill OUTSIDE the lock: each embed re-enters DoFactEmbed -> GLock,
+    so doing this under the lock would deadlock on a non-recursive mutex.
+    Best-effort; fills pre-4c rows / facts saved while embeddings were off
+    so they join semantic dedup + search. }
+  if Result then
+    try
+      BackfillFactEmbeddings(HomeDir, FormatDateTime('yyyy"-"mm"-"dd', Now));
+    except
+      on E: Exception do
+        LogDebug('fact-embed: backfill skipped (%s)', [E.Message]);
+    end;
 end;
 
 initialization
