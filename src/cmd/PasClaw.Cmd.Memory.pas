@@ -724,8 +724,10 @@ begin
     Store.Close;
   end;
 
-  { Reuse the pure formatter so the CLI and the prompt agree exactly. }
-  Block := FormatUpcomingBlock(Facts, Today, Days);
+  { Reuse the pure formatter so the CLI and the prompt agree exactly. The
+    CLI is interactive output, not the token-bounded prompt, so the budget
+    is effectively unbounded (MaxInt) -- show every upcoming fact. }
+  Block := FormatUpcomingBlock(Facts, Today, Days, MaxInt);
   if Block = '' then
   begin
     PrintLn(Ansi.Dim + 'Nothing upcoming in the next ' + IntToStr(Days) +

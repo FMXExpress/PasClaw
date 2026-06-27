@@ -114,17 +114,22 @@ function ActiveFactsBlock(const HomeDir, Today: string; Budget: Integer): string
   falls between Today and Today+WithinDays (inclusive), soonest first,
   each phrased relative to Today ("today" / "tomorrow" / "in N days").
   This is the "your exam is tomorrow" surfacing -- distinct from the
-  wholesale facts block, which is keyed on expiry, not event date. Pure;
-  '' when nothing is upcoming, Facts is empty, or WithinDays < 0. }
+  wholesale facts block, which is keyed on expiry, not event date.
+
+  Budget bounds the rendered size (bytes), same contract as
+  FormatFactsBlock: lines are emitted soonest-first until the budget is
+  used, at least one is kept, and a "(+N more ...)" breadcrumb notes any
+  dropped. Pure; '' when nothing is upcoming, Facts is empty,
+  WithinDays < 0, or Budget <= 0. }
 function FormatUpcomingBlock(const Facts: TStoredFactArray;
-                            const Today: string; WithinDays: Integer): string;
+                            const Today: string; WithinDays, Budget: Integer): string;
 
 { Convenience for the prompt builder: open the default store and format
   the upcoming-events block for facts active as of Today (so an expired
-  fact never resurfaces). '' when nothing is upcoming or the store is
-  absent. }
+  fact never resurfaces), bounded by Budget bytes. '' when nothing is
+  upcoming, the store is absent, or Budget <= 0. }
 function UpcomingFactsBlock(const HomeDir, Today: string;
-                           WithinDays: Integer): string;
+                           WithinDays, Budget: Integer): string;
 
 { Render facts as human-readable / git-friendly Markdown, grouped by scope
   (the auditability export -- shared by the CLI `memory export` and the web
@@ -363,17 +368,17 @@ begin
 end;
 
 function FormatUpcomingBlock(const Facts: TStoredFactArray;
-  const Today: string; WithinDays: Integer): string;
+  const Today: string; WithinDays, Budget: Integer): string;
 const
   Header = 'Upcoming (mention proactively if the user would want a heads-up):';
 var
-  i, j, n, Days: Integer;
+  i, j, n, Days, Used, Omitted: Integer;
   Idx, DayOf: array of Integer;
   ti, tj: Integer;
   Body, Line: string;
 begin
   Result := '';
-  if (Length(Facts) = 0) or (WithinDays < 0) then Exit;
+  if (Length(Facts) = 0) or (WithinDays < 0) or (Budget <= 0) then Exit;
   { Collect facts with an event_date in [Today, Today+WithinDays]. }
   n := 0;
   for i := 0 to High(Facts) do
@@ -393,27 +398,42 @@ begin
         ti := DayOf[i]; DayOf[i] := DayOf[j]; DayOf[j] := ti;
         tj := Idx[i];   Idx[i]   := Idx[j];   Idx[j]   := tj;
       end;
+  { Emit soonest-first within Budget; keep at least one, breadcrumb the rest. }
   Body := '';
+  Used := Length(Header);
+  Omitted := 0;
   for i := 0 to n - 1 do
   begin
     Line := Format('- %s (%s, %s)',
       [Facts[Idx[i]].Text, RelDayPhrase(DayOf[i]), Facts[Idx[i]].EventDate]);
+    { +1 for the newline this line will cost. }
+    if (Body <> '') and (Used + Length(Line) + 1 > Budget) then
+    begin
+      Omitted := n - i;
+      Break;
+    end;
     if Body <> '' then Body := Body + sLineBreak;
     Body := Body + Line;
+    Used := Used + Length(Line) + 1;
   end;
+  if Body = '' then Exit;
   Result := Header + sLineBreak + Body;
+  if Omitted > 0 then
+    Result := Result + sLineBreak +
+      Format('(+%d more upcoming -- search with memory_search)', [Omitted]);
 end;
 
 function UpcomingFactsBlock(const HomeDir, Today: string;
-  WithinDays: Integer): string;
+  WithinDays, Budget: Integer): string;
 var
   Store: IFactStore;
 begin
   Result := '';
+  if Budget <= 0 then Exit;
   Store := NewFactStore;
   if not Store.Open(DefaultFactsDbPath(HomeDir)) then Exit;
   try
-    Result := FormatUpcomingBlock(Store.ActiveFacts(Today), Today, WithinDays);
+    Result := FormatUpcomingBlock(Store.ActiveFacts(Today), Today, WithinDays, Budget);
   finally
     Store.Close;
   end;
@@ -687,6 +707,7 @@ type
     procedure ExecSQL(const SQL: string);
     procedure EnsureSchema;
     function  ReadRows(Q: TQuery): TStoredFactArray;
+    procedure RefreshFactDates(Id: Int64; const EventDate, Expires: string);
   public
     destructor Destroy; override;
     function  Open(const DbPath: string): Boolean;
@@ -895,6 +916,10 @@ begin
     begin
       Result := Q.Fields[0].AsLargeInt;
       Q.Close;
+      { Re-observed fact: fold in any newly supplied dates so a later
+        `add ... --event` (or a distil pass that learns the date) onto an
+        existing/undated row isn't silently dropped. }
+      RefreshFactDates(Result, F.EventDate, F.Expires);
       Exit;
     end;
     Q.Close;
@@ -921,6 +946,7 @@ begin
         if Best >= SemanticDedupThreshold then
         begin
           Result := Active[i].Id;   { paraphrase of an existing fact }
+          RefreshFactDates(Result, F.EventDate, F.Expires);
           Exit;
         end;
       end;
@@ -948,6 +974,38 @@ begin
     Q.Open;
     if not Q.EOF then Result := Q.Fields[0].AsLargeInt;
     Q.Close;
+  finally
+    Q.Free;
+  end;
+end;
+
+procedure TFactStoreImpl.RefreshFactDates(Id: Int64;
+  const EventDate, Expires: string);
+{ Fold newly-supplied dates into a row a re-observed fact deduped onto.
+  Only NON-empty incoming values overwrite -- we never blank an existing
+  date with an empty one, so a later dateless re-observation can't wipe a
+  date the row already carries. No-op when neither date is supplied. }
+var
+  Q: TQuery;
+  SetClause: string;
+begin
+  if not FOpen then Exit;
+  SetClause := '';
+  if EventDate <> '' then SetClause := 'event_date = :ev';
+  if Expires <> '' then
+  begin
+    if SetClause <> '' then SetClause := SetClause + ', ';
+    SetClause := SetClause + 'expires = :ex';
+  end;
+  if SetClause = '' then Exit;
+  Q := NewQuery;
+  try
+    Q.SQL.Text := 'UPDATE facts SET ' + SetClause + ' WHERE id = :id';
+    if EventDate <> '' then PStr(Q, 'ev', EventDate);
+    if Expires <> '' then PStr(Q, 'ex', Expires);
+    PInt(Q, 'id', Id);
+    Q.ExecSQL;
+    Commit;
   finally
     Q.Free;
   end;
