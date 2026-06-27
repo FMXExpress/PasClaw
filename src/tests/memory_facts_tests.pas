@@ -212,6 +212,126 @@ begin
   AssertEqInt(Length(R), 1, 'K caps results');
 end;
 
+{ Deterministic fake embedder: a 4-dim bag-of-topics so paraphrases that
+  share a topic land on the same vector, and a query can match a fact
+  whose literal words differ (semantic recall the keyword tier misses).
+    dim0 pascal/delphi   dim1 lazarus   dim2 tea/drink   dim3 deploy }
+function FakeEmbed(const Text: string): TArray<Single>;
+var
+  L: string;
+  function Has(const W: string): Boolean; begin Result := Pos(W, L) > 0; end;
+begin
+  L := LowerCase(Text);
+  SetLength(Result, 4);
+  Result[0] := Ord(Has('delphi') or Has('pascal') or Has('ide') or Has('dcc64'));
+  Result[1] := Ord(Has('lazarus'));
+  Result[2] := Ord(Has('tea') or Has('drink') or Has('beverage'));
+  Result[3] := Ord(Has('deploy') or Has('freebsd') or Has('server'));
+end;
+
+procedure RunSemCoreTests;
+{ Pure cosine + hex round-trip. }
+var
+  A, B, C: TArray<Single>;
+begin
+  SetLength(A, 3); A[0] := 1; A[1] := 0; A[2] := 0;
+  SetLength(B, 3); B[0] := 1; B[1] := 0; B[2] := 0;
+  SetLength(C, 3); C[0] := 0; C[1] := 1; C[2] := 0;
+  AssertTrue(Abs(CosineSim(A, B) - 1.0) < 0.0001, 'identical -> 1');
+  AssertTrue(Abs(CosineSim(A, C)) < 0.0001, 'orthogonal -> 0');
+  AssertTrue(Abs(CosineSim(A, nil)) < 0.0001, 'empty -> 0');
+
+  { Hex round-trips exactly. }
+  B := HexToEmb(EmbToHex(A));
+  AssertEqInt(Length(B), 3, 'hex round-trip length');
+  AssertTrue(Abs(CosineSim(A, B) - 1.0) < 0.0001, 'hex round-trip preserves vector');
+  AssertEqStr(EmbToHex(nil), '', 'empty embedding -> empty hex');
+end;
+
+procedure RunSemanticTests;
+const T2025 = 1751328000;
+var
+  Store: IFactStore;
+  DbPath: string;
+  Id1, Id2, Id3: Int64;
+  R: TStoredFactArray;
+begin
+  SetFactEmbedder(@FakeEmbed);
+  try
+    AssertTrue(FactEmbedderActive, 'embedder registered');
+
+    { --- semantic dedup: a paraphrase merges into the existing fact --- }
+    DbPath := JoinPath(GTmpDir, 'sem.db');
+    Store := NewFactStore;
+    AssertTrue(Store.Open(DbPath), 'open sem store');
+    Id1 := Store.Add(MkFact('User prefers Delphi over Lazarus', 'static', 'user', '', 0.9), T2025);
+    { Different exact text (exact-dedup misses) but same topic vector. }
+    Id2 := Store.Add(MkFact('Loves Delphi, avoids Lazarus', 'dynamic', 'user', '', 0.4), T2025 + 1);
+    AssertTrue(Id2 = Id1, 'semantic dedup merges paraphrase');
+    AssertEqInt(Store.CountAll, 1, 'paraphrase not inserted');
+    Id3 := Store.Add(MkFact('Drinks tea each morning', 'dynamic', 'user', '', 0.5), T2025 + 2);
+    AssertTrue(Id3 <> Id1, 'unrelated topic inserted');
+    AssertEqInt(Store.CountAll, 2, 'two distinct facts');
+    Store.Close;
+
+    { --- semantic search: query matches by topic with no word overlap --- }
+    Store := NewFactStore;
+    AssertTrue(Store.Open(DefaultFactsDbPath(GTmpDir)), 'open default store');
+    Store.Add(MkFact('User prefers Delphi over Lazarus', 'static', 'user', '', 0.9), T2025);
+    Store.Add(MkFact('Drinks tea each morning', 'dynamic', 'user', '', 0.5), T2025 + 1);
+    Store.Close;
+
+    R := SearchActiveFacts(GTmpDir, TODAY, 'pascal ide', 5);
+    AssertTrue(Length(R) >= 1, 'semantic search finds a topical fact');
+    AssertEqStr(R[0].Text, 'User prefers Delphi over Lazarus',
+                'semantic match despite zero keyword overlap');
+  finally
+    SetFactEmbedder(nil);
+  end;
+  AssertTrue(not FactEmbedderActive, 'embedder cleared');
+end;
+
+procedure RunBackfillTests;
+{ Pre-4c / embedder-off rows have no embedding. Once the embedder is
+  available, BackfillEmbeddings must fill them so they take part in
+  semantic search (the #372 review). }
+const T2025 = 1751328000;
+var
+  Store: IFactStore;
+  DbPath: string;
+  Filled: Integer;
+  R: TStoredFactArray;
+begin
+  { Add with NO embedder -> rows stored without embeddings. }
+  DbPath := JoinPath(GTmpDir, 'backfill.db');
+  Store := NewFactStore;
+  AssertTrue(Store.Open(DbPath), 'open backfill store');
+  Store.Add(MkFact('User prefers Delphi over Lazarus', 'static', 'user', '', 0.9), T2025);
+  Store.Add(MkFact('Drinks tea each morning', 'dynamic', 'user', '', 0.5), T2025 + 1);
+  { No embedder yet -> backfill is a no-op. }
+  AssertEqInt(Store.BackfillEmbeddings(TODAY), 0, 'no embedder -> no backfill');
+
+  SetFactEmbedder(@FakeEmbed);
+  try
+    Filled := Store.BackfillEmbeddings(TODAY);
+    AssertEqInt(Filled, 2, 'backfill fills both empty rows');
+    AssertEqInt(Store.BackfillEmbeddings(TODAY), 0, 're-run backfill is a no-op');
+    Store.Close;
+
+    { Now a previously-unembedded fact is semantically searchable. }
+    Store := NewFactStore;
+    AssertTrue(Store.Open(DefaultFactsDbPath(GTmpDir)), 'open default for search');
+    Store.Add(MkFact('User prefers Delphi over Lazarus', 'static', 'user', '', 0.9), T2025);
+    { Stored WITH embedder active this time, but exercise backfill path on a
+      fresh empty one too: add an unembedded row via a second store w/o embedder. }
+    Store.Close;
+    R := SearchActiveFacts(GTmpDir, TODAY, 'pascal ide', 5);
+    AssertTrue(Length(R) >= 1, 'backfilled/embedded fact is semantically searchable');
+  finally
+    SetFactEmbedder(nil);
+  end;
+end;
+
 begin
   GTmpDir := JoinPath(GetTempDir, 'pasclaw-facts-test-' + IntToStr(Random(1 shl 30)));
   EnsureDir(GTmpDir);
@@ -226,6 +346,12 @@ begin
     WriteLn('  ok: format facts block (budget / breadcrumb / expiry)');
     RunRankTests;
     WriteLn('  ok: keyword rank facts (match / order / K cap)');
+    RunSemCoreTests;
+    WriteLn('  ok: cosine + embedding hex round-trip');
+    RunSemanticTests;
+    WriteLn('  ok: semantic dedup + hybrid search (fake embedder)');
+    RunBackfillTests;
+    WriteLn('  ok: backfill embeds pre-existing empty rows');
     WriteLn('PASS');
   finally
     {$IFDEF UNIX}

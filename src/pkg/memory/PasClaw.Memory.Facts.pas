@@ -50,8 +50,15 @@ type
     SourceSession: string;
     CreatedAt:     Int64;     { unix seconds }
     Superseded:    Boolean;
+    EmbeddingHex:  string;    { hex-packed Single[] (Phase 4c); '' if none }
   end;
   TStoredFactArray = array of TStoredFact;
+
+  { Injectable text embedder. Returns a unit-ish vector; [] when embedding
+    is unavailable (no ONNX model provisioned). Set via SetFactEmbedder so
+    the dedup/search logic stays testable with a fake and the heavy ONNX
+    dependency lives in a separate unit. }
+  TFactEmbedFn = function(const Text: string): TArray<Single>;
 
   IFactStore = interface
     ['{4C2F9A11-7E3D-4B8A-9F21-2A6D0C5E1B77}']
@@ -74,6 +81,11 @@ type
     { Count of facts ACTIVE as of Today -- identical predicate to
       ActiveFacts(Today), so the two never disagree. }
     function  CountActive(const Today: string): Integer;
+    { Embed any ACTIVE rows that have no embedding yet (pre-4c databases,
+      or facts saved while the embedder was unavailable) so they take part
+      in semantic dedup + search. No-op without a wired embedder. Returns
+      the number of rows filled. }
+    function  BackfillEmbeddings(const Today: string): Integer;
   end;
 
 function NewFactStore: IFactStore;
@@ -101,9 +113,34 @@ function RankFactsByQuery(const Facts: TStoredFactArray;
 
 { Open the default store and return the top-K active (as of Today) facts
   matching Query. [] when the store is absent/empty. Used by memory_search
-  so distilled facts are reachable alongside the .md notes. }
+  so distilled facts are reachable alongside the .md notes. When a fact
+  embedder is active, keyword and semantic (cosine) ranks are RRF-fused. }
 function SearchActiveFacts(const HomeDir, Today, Query: string;
                           K: Integer): TStoredFactArray;
+
+{ ----- Semantic layer (Phase 4c) -----
+
+  Register the embedder used for semantic dedup + search. nil (the
+  default) disables the semantic layer entirely -- everything falls back
+  to the exact + keyword behaviour, so a build without ONNX is unaffected.
+  The heavy ONNX embedder lives in PasClaw.Memory.Facts.Embed. }
+procedure SetFactEmbedder(Fn: TFactEmbedFn);
+function FactEmbedderActive: Boolean;
+
+{ Open the default store and backfill embeddings for active rows missing
+  them (see IFactStore.BackfillEmbeddings). Returns rows filled; 0 when no
+  embedder is wired or the store is absent. Called when the embedder is
+  enabled so pre-4c facts join the semantic layer. }
+function BackfillFactEmbeddings(const HomeDir, Today: string): Integer;
+
+{ Cosine similarity of two equal-length vectors (0 when either is empty or
+  lengths differ). Pure -- exposed for testing. }
+function CosineSim(const A, B: TArray<Single>): Double;
+
+{ Hex (de)serialisation of an embedding for the TEXT column. Round-trip
+  exact; locale-safe (no float formatting). Pure -- exposed for testing. }
+function EmbToHex(const V: TArray<Single>): string;
+function HexToEmb(const S: string): TArray<Single>;
 
 implementation
 
@@ -121,6 +158,93 @@ uses
 function DefaultFactsDbPath(const HomeDir: string): string;
 begin
   Result := JoinPath(JoinPath(JoinPath(HomeDir, 'workspace'), 'memory'), 'facts.db');
+end;
+
+const
+  { Cosine above which two facts are "the same" for semantic dedup.
+    MiniLM normalised cosine: ~0.85 catches paraphrases without merging
+    merely-related facts. Tunable; conservative on the high side so we
+    never silently lose a distinct fact. }
+  SemanticDedupThreshold = 0.85;
+  RrfK = 60;   { Reciprocal Rank Fusion constant (same as the .md index). }
+
+var
+  GFactEmbed: TFactEmbedFn = nil;
+
+procedure SetFactEmbedder(Fn: TFactEmbedFn);
+begin
+  GFactEmbed := Fn;
+end;
+
+function FactEmbedderActive: Boolean;
+begin
+  Result := Assigned(GFactEmbed);
+end;
+
+function CosineSim(const A, B: TArray<Single>): Double;
+var
+  i: Integer;
+  dot, na, nb: Double;
+begin
+  Result := 0;
+  if (Length(A) = 0) or (Length(A) <> Length(B)) then Exit;
+  dot := 0; na := 0; nb := 0;
+  for i := 0 to High(A) do
+  begin
+    dot := dot + (A[i] * B[i]);
+    na  := na + (A[i] * A[i]);
+    nb  := nb + (B[i] * B[i]);
+  end;
+  if (na = 0) or (nb = 0) then Exit;
+  Result := dot / (Sqrt(na) * Sqrt(nb));
+end;
+
+function EmbToHex(const V: TArray<Single>): string;
+const
+  Hex: array[0..15] of Char = '0123456789abcdef';
+var
+  Bytes: TBytes;
+  i: Integer;
+begin
+  Result := '';
+  if Length(V) = 0 then Exit;
+  SetLength(Bytes, Length(V) * SizeOf(Single));
+  if Length(Bytes) > 0 then
+    Move(V[0], Bytes[0], Length(Bytes));
+  SetLength(Result, Length(Bytes) * 2);
+  for i := 0 to High(Bytes) do
+  begin
+    Result[(i * 2) + 1] := Hex[(Bytes[i] shr 4) and $0F];
+    Result[(i * 2) + 2] := Hex[Bytes[i] and $0F];
+  end;
+end;
+
+function HexToEmb(const S: string): TArray<Single>;
+var
+  Bytes: TBytes;
+  i, n: Integer;
+
+  function Nib(C: Char): Integer;
+  begin
+    case C of
+      '0'..'9': Result := Ord(C) - Ord('0');
+      'a'..'f': Result := Ord(C) - Ord('a') + 10;
+      'A'..'F': Result := Ord(C) - Ord('A') + 10;
+    else Result := 0;
+    end;
+  end;
+
+begin
+  Result := nil;
+  if (S = '') or (Length(S) mod 2 <> 0) then Exit;
+  n := Length(S) div 2;
+  if n mod SizeOf(Single) <> 0 then Exit;
+  SetLength(Bytes, n);
+  for i := 0 to n - 1 do
+    Bytes[i] := (Nib(S[(i * 2) + 1]) shl 4) or Nib(S[(i * 2) + 2]);
+  SetLength(Result, n div SizeOf(Single));
+  if Length(Result) > 0 then
+    Move(Bytes[0], Result[0], n);
 end;
 
 function FormatFactsBlock(const Facts: TStoredFactArray; Budget: Integer): string;
@@ -249,16 +373,133 @@ begin
   for i := 0 to n - 1 do Result[i] := Scored[i];
 end;
 
+function RankFactsBySemantic(const Facts: TStoredFactArray;
+  const QueryEmb: TArray<Single>; K: Integer): TStoredFactArray;
+const
+  MinCosine = 0.30;   { drop clearly-unrelated facts before fusion }
+var
+  Scored: array of TStoredFact;
+  ScoreOf: array of Double;
+  i, n, a, b: Integer;
+  c: Double;
+  TmpF: TStoredFact;
+  TmpD: Double;
+begin
+  Result := nil;
+  if (Length(Facts) = 0) or (Length(QueryEmb) = 0) then Exit;
+  if K <= 0 then K := 5;
+  n := 0;
+  for i := 0 to High(Facts) do
+  begin
+    if Facts[i].EmbeddingHex = '' then Continue;
+    c := CosineSim(QueryEmb, HexToEmb(Facts[i].EmbeddingHex));
+    if c < MinCosine then Continue;
+    SetLength(Scored, n + 1); SetLength(ScoreOf, n + 1);
+    Scored[n] := Facts[i]; ScoreOf[n] := c; Inc(n);
+  end;
+  if n = 0 then Exit;
+  for a := 0 to n - 2 do
+    for b := a + 1 to n - 1 do
+      if ScoreOf[b] > ScoreOf[a] then
+      begin
+        TmpF := Scored[a]; Scored[a] := Scored[b]; Scored[b] := TmpF;
+        TmpD := ScoreOf[a]; ScoreOf[a] := ScoreOf[b]; ScoreOf[b] := TmpD;
+      end;
+  if n > K then n := K;
+  SetLength(Result, n);
+  for i := 0 to n - 1 do Result[i] := Scored[i];
+end;
+
+function FuseFactRanks(const A, B: TStoredFactArray; K: Integer): TStoredFactArray;
+{ Reciprocal Rank Fusion over two ranked fact lists, keyed by fact id. }
+var
+  Uniq: TStoredFactArray;
+  Score: array of Double;
+  n, i, j, a2, b2: Integer;
+  TmpF: TStoredFact;
+  TmpD: Double;
+
+  function FindUniq(Id: Int64): Integer;
+  var x: Integer;
+  begin
+    Result := -1;
+    for x := 0 to n - 1 do if Uniq[x].Id = Id then Exit(x);
+  end;
+
+  procedure Fold(const L: TStoredFactArray);
+  var r, idx: Integer;
+  begin
+    for r := 0 to High(L) do
+    begin
+      idx := FindUniq(L[r].Id);
+      if idx < 0 then
+      begin
+        SetLength(Uniq, n + 1); SetLength(Score, n + 1);
+        Uniq[n] := L[r]; Score[n] := 0; idx := n; Inc(n);
+      end;
+      Score[idx] := Score[idx] + (1.0 / (RrfK + r + 1));
+    end;
+  end;
+
+begin
+  Result := nil;
+  n := 0;
+  Fold(A);
+  Fold(B);
+  if n = 0 then Exit;
+  for a2 := 0 to n - 2 do
+    for b2 := a2 + 1 to n - 1 do
+      if Score[b2] > Score[a2] then
+      begin
+        TmpF := Uniq[a2]; Uniq[a2] := Uniq[b2]; Uniq[b2] := TmpF;
+        TmpD := Score[a2]; Score[a2] := Score[b2]; Score[b2] := TmpD;
+      end;
+  if (K > 0) and (n > K) then n := K;
+  SetLength(Result, n);
+  for i := 0 to n - 1 do Result[i] := Uniq[i];
+end;
+
 function SearchActiveFacts(const HomeDir, Today, Query: string;
   K: Integer): TStoredFactArray;
 var
   Store: IFactStore;
+  Active, KwHits, SemHits: TStoredFactArray;
+  QEmb: TArray<Single>;
 begin
   Result := nil;
   Store := NewFactStore;
   if not Store.Open(DefaultFactsDbPath(HomeDir)) then Exit;
   try
-    Result := RankFactsByQuery(Store.ActiveFacts(Today), Query, K);
+    Active := Store.ActiveFacts(Today);
+  finally
+    Store.Close;
+  end;
+  if Length(Active) = 0 then Exit;
+
+  KwHits := RankFactsByQuery(Active, Query, K);
+
+  { Keyword-only unless an embedder is wired and can embed the query. }
+  if not Assigned(GFactEmbed) then Exit(KwHits);
+  QEmb := GFactEmbed(Query);
+  if Length(QEmb) = 0 then Exit(KwHits);
+
+  SemHits := RankFactsBySemantic(Active, QEmb, K);
+  if Length(SemHits) = 0 then Exit(KwHits);
+
+  { Hybrid: fuse the keyword and semantic ranks (the LoCoMo lever). }
+  Result := FuseFactRanks(KwHits, SemHits, K);
+end;
+
+function BackfillFactEmbeddings(const HomeDir, Today: string): Integer;
+var
+  Store: IFactStore;
+begin
+  Result := 0;
+  if not Assigned(GFactEmbed) then Exit;
+  Store := NewFactStore;
+  if not Store.Open(DefaultFactsDbPath(HomeDir)) then Exit;
+  try
+    Result := Store.BackfillEmbeddings(Today);
   finally
     Store.Close;
   end;
@@ -299,6 +540,7 @@ type
     function  Delete(Id: Int64): Boolean;
     function  CountAll: Integer;
     function  CountActive(const Today: string): Integer;
+    function  BackfillEmbeddings(const Today: string): Integer;
   end;
 
 function NewFactStore: IFactStore;
@@ -381,9 +623,18 @@ begin
     '  expires TEXT NOT NULL DEFAULT '''',' +
     '  source_session TEXT NOT NULL DEFAULT '''',' +
     '  created_at INTEGER NOT NULL,' +
-    '  superseded INTEGER NOT NULL DEFAULT 0)');
+    '  superseded INTEGER NOT NULL DEFAULT 0,' +
+    '  embedding TEXT NOT NULL DEFAULT '''')');
   { Indexes that match the two hot read paths (active listing + expiry sweep). }
   ExecSQL('CREATE INDEX IF NOT EXISTS idx_facts_active ON facts(superseded, expires)');
+  { Phase 4c: add the embedding column to stores created before it existed.
+    SQLite has no ADD COLUMN IF NOT EXISTS, so just try and ignore the
+    "duplicate column name" error on already-migrated databases. }
+  try
+    ExecSQL('ALTER TABLE facts ADD COLUMN embedding TEXT NOT NULL DEFAULT ''''');
+  except
+    on E: Exception do ; { column already present -- fine }
+  end;
 end;
 
 function TFactStoreImpl.Open(const DbPath: string): Boolean;
@@ -447,7 +698,11 @@ end;
 function TFactStoreImpl.Add(const F: TFact; CreatedAt: Int64): Int64;
 var
   Q: TQuery;
-  TodayStr: string;
+  TodayStr, EmbHex: string;
+  Emb: TArray<Single>;
+  Active: TStoredFactArray;
+  i: Integer;
+  Best: Double;
 begin
   Result := 0;
   if not FOpen then Exit;
@@ -480,12 +735,38 @@ begin
   finally
     Q.Free;
   end;
+
+  { Semantic dedup (Phase 4c): embed the new fact and, if it's near-
+    identical in meaning to an existing ACTIVE fact (cosine >= threshold),
+    treat it as the same and return that id -- this catches paraphrases
+    the exact-text check misses. No-op when no embedder is wired. }
+  EmbHex := '';
+  if Assigned(GFactEmbed) then
+  begin
+    Emb := GFactEmbed(F.Text);
+    if Length(Emb) > 0 then
+    begin
+      EmbHex := EmbToHex(Emb);
+      Active := ActiveFacts(TodayStr);
+      for i := 0 to High(Active) do
+      begin
+        if Active[i].EmbeddingHex = '' then Continue;
+        Best := CosineSim(Emb, HexToEmb(Active[i].EmbeddingHex));
+        if Best >= SemanticDedupThreshold then
+        begin
+          Result := Active[i].Id;   { paraphrase of an existing fact }
+          Exit;
+        end;
+      end;
+    end;
+  end;
+
   Q := NewQuery;
   try
     Q.SQL.Text :=
       'INSERT INTO facts (text, kind, scope, confidence, expires, ' +
-      'source_session, created_at, superseded) ' +
-      'VALUES (:t, :k, :sc, :cf, :ex, :ss, :ca, 0)';
+      'source_session, created_at, superseded, embedding) ' +
+      'VALUES (:t, :k, :sc, :cf, :ex, :ss, :ca, 0, :emb)';
     PStr  (Q, 't',  F.Text);
     PStr  (Q, 'k',  F.Kind);
     PStr  (Q, 'sc', F.Scope);
@@ -493,6 +774,7 @@ begin
     PStr  (Q, 'ex', F.Expires);
     PStr  (Q, 'ss', F.SourceSession);
     PInt  (Q, 'ca', CreatedAt);
+    PStr  (Q, 'emb', EmbHex);
     Q.ExecSQL;
     Commit;
     Q.SQL.Text := 'SELECT last_insert_rowid()';
@@ -521,6 +803,7 @@ begin
     F.SourceSession := Q.FieldByName('source_session').AsString;
     F.CreatedAt     := Q.FieldByName('created_at').AsLargeInt;
     F.Superseded    := Q.FieldByName('superseded').AsLargeInt <> 0;
+    F.EmbeddingHex  := Q.FieldByName('embedding').AsString;
     SetLength(Result, Length(Result) + 1);
     Result[High(Result)] := F;
     Q.Next;
@@ -636,6 +919,37 @@ begin
   finally
     Q.Free;
   end;
+end;
+
+function TFactStoreImpl.BackfillEmbeddings(const Today: string): Integer;
+var
+  Active: TStoredFactArray;
+  Emb: TArray<Single>;
+  EmbHex: string;
+  i: Integer;
+  Q: TQuery;
+begin
+  Result := 0;
+  if (not FOpen) or (not Assigned(GFactEmbed)) then Exit;
+  Active := ActiveFacts(Today);
+  for i := 0 to High(Active) do
+  begin
+    if Active[i].EmbeddingHex <> '' then Continue;
+    Emb := GFactEmbed(Active[i].Text);
+    if Length(Emb) = 0 then Continue;
+    EmbHex := EmbToHex(Emb);
+    Q := NewQuery;
+    try
+      Q.SQL.Text := 'UPDATE facts SET embedding = :e WHERE id = :id';
+      PStr(Q, 'e', EmbHex);
+      PInt(Q, 'id', Active[i].Id);
+      Q.ExecSQL;
+    finally
+      Q.Free;
+    end;
+    Inc(Result);
+  end;
+  if Result > 0 then Commit;
 end;
 
 end.
