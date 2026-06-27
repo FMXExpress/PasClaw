@@ -227,6 +227,30 @@
     box-shadow:0 0 16px rgba(255,55,213,.24)}
   button.primary:disabled{opacity:.45;cursor:wait}
 
+  /* ===== In-tab sub-tabs (pill segmented control, e.g. Memory) ===== */
+  .subtabs{display:flex;gap:.4rem;padding:.55rem .6rem;flex:0 0 auto;
+    border-bottom:1px solid rgba(255,255,255,.08);background:rgba(2,5,15,.32)}
+  .subtabs button{background:transparent;color:var(--mut);
+    border:1px solid rgba(255,255,255,.08);border-radius:999px;padding:.3rem .9rem;
+    font:inherit;font-size:12px;cursor:pointer;transition:color .15s,border-color .15s}
+  .subtabs button:hover{border-color:var(--cyan);color:var(--cyan)}
+  .subtabs button.active{background:linear-gradient(120deg,rgba(32,246,255,.18),rgba(255,55,213,.18));
+    color:var(--fg);border-color:transparent}
+  .subpane{display:none;flex:1;min-height:0;min-width:0;flex-direction:column;overflow:hidden}
+  .subpane.active{display:flex}
+  #tab-memory{flex-direction:column}
+  #facts-box{flex:1;min-height:0;display:flex;flex-direction:column;
+    padding:.7rem .8rem;overflow:hidden}
+  #facts-list{flex:1;overflow:auto;min-height:0}
+  #facts-list .item{display:flex;align-items:flex-start;justify-content:space-between;gap:.5rem;
+    padding:.45rem .55rem;border-radius:8px;margin-bottom:.25rem;font-size:12.5px;
+    border:1px solid rgba(255,255,255,.06);background:rgba(2,5,15,.32)}
+  #facts-list .item:hover{border-color:rgba(255,55,213,.2)}
+  #facts-list .item .sub{display:block;color:var(--mut);font-size:10px;margin-top:.15rem}
+  #facts-list .item button{background:transparent;border:none;color:var(--mut);cursor:pointer;
+    font-size:13px;line-height:1;padding:.1rem .3rem;border-radius:6px;flex:0 0 auto}
+  #facts-list .item button:hover{color:var(--red)}
+
   /* ===== Generic two-column tabs ===== */
   .two-col{display:flex;flex:1;min-width:0}
   .col-list{flex:0 0 16rem;border-right:1px solid rgba(255,255,255,.08);
@@ -598,25 +622,33 @@
   </div>
 
   <div id="tab-memory" class="tab">
-    <div id="facts-box">
-      <div class="crumb">distilled facts <span id="facts-status"></span>
-        <a href="#" id="facts-export" style="float:right">export .md</a></div>
-      <form id="facts-add" class="vault-search-row">
-        <input id="facts-text" type="text" autocomplete="off"
-               placeholder="remember a fact… (Enter to add)">
-      </form>
-      <div id="facts-list"></div>
+    <div class="subtabs" id="mem-subtabs">
+      <button type="button" data-sub="facts" class="active">Distilled facts</button>
+      <button type="button" data-sub="notes">Notes &amp; files</button>
     </div>
-    <div class="two-col">
-      <div class="col-list">
-        <form id="mem-search" class="vault-search-row">
-          <input id="mem-q" type="text" autocomplete="off"
-                 placeholder="search memory (BM25 / vector)…">
+    <div class="subpane active" id="subpane-facts">
+      <div id="facts-box">
+        <div class="crumb">distilled facts <span id="facts-status"></span>
+          <a href="#" id="facts-export" style="float:right">export .md</a></div>
+        <form id="facts-add" class="vault-search-row">
+          <input id="facts-text" type="text" autocomplete="off"
+                 placeholder="remember a fact… (Enter to add)">
         </form>
-        <div class="crumb">workspace/memory/</div>
-        <div id="mem-list"></div>
+        <div id="facts-list"></div>
       </div>
-      <pre class="col-view" id="mem-view"><div class="empty-pane">Pick a file to view, or search memory.</div></pre>
+    </div>
+    <div class="subpane" id="subpane-notes">
+      <div class="two-col">
+        <div class="col-list">
+          <form id="mem-search" class="vault-search-row">
+            <input id="mem-q" type="text" autocomplete="off"
+                   placeholder="search memory (BM25 / vector)…">
+          </form>
+          <div class="crumb">workspace/memory/</div>
+          <div id="mem-list"></div>
+        </div>
+        <pre class="col-view" id="mem-view"><div class="empty-pane">Pick a file to view, or search memory.</div></pre>
+      </div>
     </div>
   </div>
 
@@ -1018,6 +1050,16 @@ function showTab(name) {
 $$("nav button[data-tab]").forEach(b => b.addEventListener("click", () => showTab(b.dataset.tab)));
 // Follow back/forward and manual #hash edits between tabs.
 window.addEventListener("hashchange", () => showTab(location.hash.slice(1)));
+
+// In-tab sub-tabs (pill segmented control, e.g. Memory: facts vs notes).
+// Toggles .active on the clicked pill and the matching .subpane within the
+// same tab, so two panels that used to be squished side by side now each
+// get the full pane -- and read well on mobile.
+$$(".subtabs button[data-sub]").forEach(b => b.addEventListener("click", () => {
+  const tab = b.closest(".tab"), sub = b.dataset.sub;
+  tab.querySelectorAll(".subtabs button[data-sub]").forEach(x => x.classList.toggle("active", x === b));
+  tab.querySelectorAll(".subpane").forEach(p => p.classList.toggle("active", p.id === "subpane-" + sub));
+}));
 
 /* ===== Header status =====
    refreshMeta() is self-sufficient: it decides online/offline from its OWN
