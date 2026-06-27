@@ -3143,8 +3143,30 @@ begin
        (that's tools/fs_read), and an empty-path "give me
        something" request really does want the directory the
        sandbox WILL allow rather than one it's guaranteed to
-       refuse. *)
-    Path := CurrentWorkspace;
+       refuse.
+
+       Prefer the PasClaw workspace ($PASCLAW_HOME/workspace -- where
+       memory, skills and generated files live) over CurrentWorkspace.
+       The sandbox "workspace" defaults to the process launch directory
+       (GetCurrentDir) when none is configured, so an operator browsing
+       Files in the web UI was landing on wherever the binary booted
+       instead of the agent's workspace.
+
+       Adopt it only when it exists AND the policy permits reading it:
+         - Default config (restrict_to_workspace=false): CanReadPath
+           short-circuits to True, so the browser lands on the workspace
+           -- the common Docker/web-only boot the user reported.
+         - restrict_to_workspace=true with no configured workspace
+           (GWorkspace defaulted to cwd): the agent workspace is OUTSIDE
+           the sandbox, so the probe fails and we fall back to
+           CurrentWorkspace. That is correct, not a regression -- a
+           listing of $PASCLAW_HOME/workspace would be refused by the
+           CanReadPath gate below anyway, so the allowed cwd is the only
+           directory that won't 403. Operators who want the workspace
+           browsable under restriction set sandbox.workspace explicitly. *)
+    Path := JoinPath(GetHome, 'workspace');
+    if not (DirectoryExists(Path) and CanReadPathHTTP(Path, Reason)) then
+      Path := CurrentWorkspace;
     if Path = '' then Path := GetHome;
   end;
   { Route through the same sandbox CanReadPath check that fs_read
