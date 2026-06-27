@@ -753,6 +753,15 @@ function LoadConfig: TConfig; overload;
 function LoadConfig(const ProfileOverride: string): TConfig; overload;
 procedure SaveConfig(C: TConfig);
 
+{ Propagate the process-global mirrors of config-derived flags
+  (promptware on/off, reversible condensation, OTel, gateway-token env
+  override) from C. LoadConfig calls this in its finally so every CLI /
+  TUI / gateway entry point stays in sync. Exposed so code-driven embedders
+  that build a TConfig without LoadConfig (TPasClawAgent/TPasClawServer with
+  LoadConfigFromDisk = False) -- or that mutate Config after load -- can sync
+  the same globals before the first run. Idempotent. }
+procedure ApplyConfigGlobals(C: TConfig);
+
 const
   { Placeholder the gateway's read-only /v1/config substitutes for any
     populated secret (providers[].api_key, mcp_servers[].env,
@@ -2039,37 +2048,39 @@ begin
       end;
     end;
   finally
-    { Propagate the promptware off-switch here -- LoadConfig is the
-      one choke every entry point (CLI, TUI, gateway, serve, tool
-      handlers re-loading mid-session) passes through, so the scan
-      module's process-global flag can't drift from config.json.
-      PasClaw.Promptware is a leaf unit (SysUtils + Logger only);
-      keep it that way or this import becomes a cycle. }
-    SetPromptwareEnabled(Result.PromptwareEnabled);
-    { Symmetric propagation of the reversible-condensation flag --
-      OutputCache holds the same process-global mirror. }
-    SetCondenseReversible(Result.CondenseReversible);
-    { OpenTelemetry traces. No-op when diagnostics.otel.enabled is
-      False AND the OTEL_EXPORTER_OTLP_ENDPOINT env var is unset --
-      so single-shot CLI commands like `pasclaw status` pay nothing
-      for the wiring. }
-    InitOtelFromConfig(Result);
-    { Gateway bearer-token env override. Populates the module-level
-      GEnvGatewayToken; does NOT mutate Result.Gateway.Token, so
-      SaveConfig -> ToJSON never persists an env-only secret into
-      config.json. PASCLAW_GATEWAY_TOKEN is PasClaw's prefix; we
-      also honour OPENCLAW_GATEWAY_TOKEN for openclaw-compat -- an
-      operator pointing PasClaw at an existing openclaw .env file
-      doesn't have to rename anything. PASCLAW_ wins when both
-      env vars are set (we're not openclaw, after all). Codex P2
-      on PR #246: persistence side of the fix. }
-    if GetEnvironmentVariable('PASCLAW_GATEWAY_TOKEN') <> '' then
-      GEnvGatewayToken := GetEnvironmentVariable('PASCLAW_GATEWAY_TOKEN')
-    else if GetEnvironmentVariable('OPENCLAW_GATEWAY_TOKEN') <> '' then
-      GEnvGatewayToken := GetEnvironmentVariable('OPENCLAW_GATEWAY_TOKEN')
-    else
-      GEnvGatewayToken := '';
+    { Propagate config-derived process globals. Centralised in
+      ApplyConfigGlobals so code-driven embedders (no LoadConfig) can run
+      the exact same side effects. }
+    ApplyConfigGlobals(Result);
   end;
+end;
+
+procedure ApplyConfigGlobals(C: TConfig);
+begin
+  if C = nil then Exit;
+  { Propagate the promptware off-switch -- the scan module's process-global
+    flag must not drift from config. PasClaw.Promptware is a leaf unit
+    (SysUtils + Logger only); keep it that way or this import becomes a cycle. }
+  SetPromptwareEnabled(C.PromptwareEnabled);
+  { Symmetric propagation of the reversible-condensation flag -- OutputCache
+    holds the same process-global mirror. }
+  SetCondenseReversible(C.CondenseReversible);
+  { OpenTelemetry traces. No-op when diagnostics.otel.enabled is False AND
+    the OTEL_EXPORTER_OTLP_ENDPOINT env var is unset -- so single-shot CLI
+    commands like `pasclaw status` pay nothing for the wiring. }
+  InitOtelFromConfig(C);
+  { Gateway bearer-token env override. Populates the module-level
+    GEnvGatewayToken; does NOT mutate C.Gateway.Token, so SaveConfig ->
+    ToJSON never persists an env-only secret into config.json.
+    PASCLAW_GATEWAY_TOKEN is PasClaw's prefix; we also honour
+    OPENCLAW_GATEWAY_TOKEN for openclaw-compat. PASCLAW_ wins when both are
+    set. Codex P2 on PR #246. }
+  if GetEnvironmentVariable('PASCLAW_GATEWAY_TOKEN') <> '' then
+    GEnvGatewayToken := GetEnvironmentVariable('PASCLAW_GATEWAY_TOKEN')
+  else if GetEnvironmentVariable('OPENCLAW_GATEWAY_TOKEN') <> '' then
+    GEnvGatewayToken := GetEnvironmentVariable('OPENCLAW_GATEWAY_TOKEN')
+  else
+    GEnvGatewayToken := '';
 end;
 
 function GetEffectiveGatewayToken(const C: TConfig): string;

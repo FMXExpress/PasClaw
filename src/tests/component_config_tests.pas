@@ -21,6 +21,7 @@ uses
   {$IFDEF FPC}{$IFDEF UNIX}cthreads,{$ENDIF}{$ENDIF}
   SysUtils,
   PasClaw.Config,
+  PasClaw.Tools.OutputCache,  { CondenseReversibleEnabled / SetCondenseReversible }
   PasClaw.Agent.Subagent,   { establish TSpawnTool's unit before PasClaw.Agent
                               -- they form a circular interface dep that only
                               resolves cleanly when this compiles first. }
@@ -68,6 +69,19 @@ begin
     A.SetProvider('anthropic', 'sk-ant-test', 'claude-opus-4-7');
     AssertEqStr(A.Config.DefaultProvider, 'anthropic', 'SetProvider sets default_provider');
     AssertTrue(Length(A.Config.Providers) >= 1, 'SetProvider added a provider entry');
+
+    { P1 review: in no-disk mode the OutputCache process-global mirror must
+      not drift from Config. LoadConfig syncs it in its finally; the no-disk
+      path skips LoadConfig, so ApplyConfigGlobals (run at the component's
+      first Chat/Run) must do it. Simulate a stale global left enabled by a
+      prior run, then confirm syncing against the default (False) Config
+      turns it off -- otherwise tool output would be condensed while Config
+      says it shouldn't. }
+    SetCondenseReversible(True);
+    AssertTrue(not A.Config.CondenseReversible, 'default CondenseReversible = False');
+    ApplyConfigGlobals(A.Config);
+    AssertTrue(not CondenseReversibleEnabled,
+      'ApplyConfigGlobals syncs the condense-reversible global to Config');
   finally
     A.Free;
   end;

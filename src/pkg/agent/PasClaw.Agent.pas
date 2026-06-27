@@ -103,11 +103,13 @@ type
                                      False: start from clean TConfig defaults
                                      so the embedder makes every choice in code
                                      (no disk dependency). }
-    FSandboxApplied: Boolean;      { ConfigureSandbox is applied once at the
-                                     first Chat/Run, AFTER the embedder has
-                                     finished mutating Config.Sandbox -- not at
-                                     config-load time, or pre-run edits would
-                                     be ignored. }
+    FConfigApplied: Boolean;       { ConfigureSandbox + ApplyConfigGlobals are
+                                     applied once at the first Chat/Run, AFTER
+                                     the embedder has finished mutating Config
+                                     -- not at config-load time, or pre-run
+                                     edits (and, in no-disk mode, the global
+                                     mirrors LoadConfig would have synced)
+                                     would be ignored. }
     FBuiltinsInstalled: Boolean;  { tracks built-in tool / skill / MCP
                                     install separately from FRegistry's
                                     existence -- RegisterTool can create
@@ -139,7 +141,7 @@ type
     FOnError:        TPasClawErrorEvent;
     procedure EnsureConfig;
     function  GetConfig: TConfig;
-    procedure ApplySandboxOnce;
+    procedure ApplyConfigOnce;
     procedure EnsureProvider;
     procedure EnsureRegistry;
     procedure RefreshSubagentContext;
@@ -507,15 +509,19 @@ begin
   Result := FConfig;
 end;
 
-procedure TPasClawAgent.ApplySandboxOnce;
+procedure TPasClawAgent.ApplyConfigOnce;
 begin
-  { Apply the sandbox policy to the shared module-level state ONCE, at the
-    first Chat/Run -- after the embedder has finished mutating Config.Sandbox.
-    Same global state Cmd.Agent / Cmd.Serve seed at startup. }
-  if FSandboxApplied then Exit;
-  FSandboxApplied := True;
+  { Apply the config-derived process globals ONCE, at the first Chat/Run --
+    after the embedder has finished mutating Config. Same global state the
+    CLI seeds at startup: the sandbox policy, plus ApplyConfigGlobals
+    (promptware / reversible-condensation / OTel / gateway-token env). This
+    is what keeps the no-disk path (which skips LoadConfig's finally) and any
+    post-load Config edits in sync with the actual run. }
+  if FConfigApplied then Exit;
+  FConfigApplied := True;
   EnsureConfig;
   ConfigureSandbox(FConfig.Sandbox, '');
+  ApplyConfigGlobals(FConfig);
 end;
 
 procedure TPasClawAgent.EnsureProvider;
@@ -766,8 +772,9 @@ begin
   Reply  := '';
   ErrMsg := '';
   EnsureConfig;
-  { First-run apply of the sandbox, now that Config is fully configured. }
-  ApplySandboxOnce;
+  { First-run apply of sandbox + config-derived globals, now that Config is
+    fully configured. }
+  ApplyConfigOnce;
   EnsureProvider;
   if FProvider = nil then
   begin
@@ -980,6 +987,11 @@ begin
   if FConfig = nil then
     FConfig := LoadConfigOrDefaults(FLoadConfigFromDisk);
   ConfigureSandbox(FConfig.Sandbox, '');
+  { Sync config-derived process globals (promptware / reversible-condensation
+    / OTel / gateway-token env). LoadConfig does this in its finally, but a
+    pre-set or no-disk Config skips that path, so apply it here against the
+    final Config. Idempotent for the disk path. }
+  ApplyConfigGlobals(FConfig);
   { Fold in the code-supplied provider (from SetProvider) AFTER
     config load and BEFORE the NewProviderFromConfig block below,
     so the synthetic entry is the one the gateway boots with. }
