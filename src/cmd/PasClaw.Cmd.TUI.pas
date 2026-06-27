@@ -26,6 +26,7 @@ uses
   PasClaw.Tools.Shell,
   PasClaw.Tools.ExecuteCode,
   PasClaw.Tools.Memory,
+  PasClaw.Memory.Facts.Embed,      { Phase 4c: semantic fact embedder }
   PasClaw.Tools.KB,
   PasClaw.Tools.DelphiBuild,
   PasClaw.Tools.SessionSearch,
@@ -229,6 +230,10 @@ begin
     TUIInst.CheckpointsEnabled    := Cfg.CheckpointsEnabled;
     TUIInst.CheckpointsKeepLast   := Cfg.CheckpointsKeepLast;
     TUIInst.MemoryDistillEnabled  := Cfg.MemoryDistillEnabled;
+    { Phase 4c: best-effort load the semantic fact embedder (no-op when
+      distill off or ONNX unprovisioned). }
+    if Cfg.MemoryDistillEnabled then
+      EnableFactEmbeddings(GetHome);
     TUIInst.BgCoordinator      := BgCoord;
     try
       TUIInst.Run;

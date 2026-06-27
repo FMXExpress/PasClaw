@@ -434,6 +434,7 @@ uses
   PasClaw.Tools.Sandbox,
   PasClaw.Checkpoints,          { web UI checkpoints: Init/BeginTurn/Undo/Redo/state }
   PasClaw.Memory.AutoDistill,   { opt-in per-turn fact distillation }
+  PasClaw.Memory.Facts.Embed,   { Phase 4c: semantic fact embedder }
   PasClaw.Providers.Factory,
   PasClaw.Providers.Catalog,   { TProviderSpec for /v1/models discovery }
   PasClaw.Providers.Models,    { DiscoverModels / cache -- /v1/models roster }
@@ -673,6 +674,11 @@ begin
   CC.Root      := JoinPath(GetHome, 'workspace/checkpoints');
   CC.KeepLast  := FCfg.CheckpointsKeepLast;
   InitCheckpoints(CC);
+  { Phase 4c: best-effort load the local embedder so distilled-fact dedup
+    and memory_search run semantically. No-op when distill is off or the
+    ONNX artifacts aren't provisioned (keeps the keyword/exact tiers). }
+  if FCfg.MemoryDistillEnabled then
+    EnableFactEmbeddings(GetHome);
   FStopFlag := TEvent.Create(nil, True, False, '');
   FWebhookPaths := TStringList.Create;
   FWebhookPaths.CaseSensitive := False;
