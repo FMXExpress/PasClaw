@@ -3143,8 +3143,19 @@ begin
        (that's tools/fs_read), and an empty-path "give me
        something" request really does want the directory the
        sandbox WILL allow rather than one it's guaranteed to
-       refuse. *)
-    Path := CurrentWorkspace;
+       refuse.
+
+       Prefer the PasClaw workspace ($PASCLAW_HOME/workspace -- where
+       memory, skills and generated files live) over CurrentWorkspace.
+       The sandbox "workspace" defaults to the process launch directory
+       (GetCurrentDir) when none is configured, so an operator browsing
+       Files in the web UI was landing on wherever the binary booted
+       instead of the agent's workspace. Only adopt it when it exists
+       and the policy actually permits reading it, else fall back to the
+       historical CurrentWorkspace / $PASCLAW_HOME behaviour. *)
+    Path := JoinPath(GetHome, 'workspace');
+    if not (DirectoryExists(Path) and CanReadPathHTTP(Path, Reason)) then
+      Path := CurrentWorkspace;
     if Path = '' then Path := GetHome;
   end;
   { Route through the same sandbox CanReadPath check that fs_read
