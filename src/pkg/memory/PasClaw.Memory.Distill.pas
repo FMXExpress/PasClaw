@@ -16,11 +16,18 @@
 
   A fact:
 
-    { "text": "User prefers Delphi over Lazarus",
+    { "text": "User has a calculus exam on 2026-07-02",
       "kind": "static" | "dynamic",          // stable trait vs current focus
       "scope": "user" | "project" | "session",
       "confidence": 0.0 .. 1.0,
-      "expires": "YYYY-MM-DD" | "" }          // temporary facts self-expire
+      "event_date": "YYYY-MM-DD" | "",        // WHEN the thing happens (proactive)
+      "expires": "YYYY-MM-DD" | "" }          // WHEN the fact stops mattering
+
+  event_date and expires are DISTINCT. event_date is the date an event
+  occurs ("exam on the 2nd") so the agent can surface it proactively
+  ("your exam is tomorrow"); expires is when the fact is no longer worth
+  keeping (usually a bit after the event). A fact can have one, both, or
+  neither.
 
   The model is asked to return ONLY a JSON object {"facts":[...]}; we
   parse leniently (strip code fences, slice the outer object) and
@@ -46,7 +53,8 @@ type
     Kind:          string;   { 'static' | 'dynamic' }
     Scope:         string;   { 'user' | 'project' | 'session' }
     Confidence:    Double;   { 0..1 }
-    Expires:       string;   { 'YYYY-MM-DD' or '' }
+    EventDate:     string;   { 'YYYY-MM-DD' or '' -- when the event happens }
+    Expires:       string;   { 'YYYY-MM-DD' or '' -- when the fact stops mattering }
     SourceSession: string;
   end;
   TFactArray = array of TFact;
@@ -112,11 +120,15 @@ begin
     '  kind       "static" for stable traits, "dynamic" for current focus.'    + sLineBreak +
     '  scope      "user", "project", or "session".'                            + sLineBreak +
     '  confidence 0.0-1.0, how sure you are.'                                   + sLineBreak +
-    '  expires    "YYYY-MM-DD" for temporary facts ("exam tomorrow"), else "".'+ sLineBreak +
+    '  event_date "YYYY-MM-DD" when an event HAPPENS ("exam tomorrow" -> '      + sLineBreak +
+    '             that date), so it can be surfaced proactively; else "".'      + sLineBreak +
+    '  expires    "YYYY-MM-DD" when the fact stops mattering, else "". For a'   + sLineBreak +
+    '             dated event this is usually shortly AFTER event_date.'        + sLineBreak +
+    '             event_date and expires are separate -- set whichever fit.'    + sLineBreak +
     sLineBreak +
     'Return ONLY a JSON object, no prose, no code fence:'                       + sLineBreak +
     '{"facts":[{"text":"...","kind":"static","scope":"user",'                   +
-    '"confidence":0.9,"expires":""}]}'                                          + sLineBreak +
+    '"confidence":0.9,"event_date":"","expires":""}]}'                          + sLineBreak +
     'If nothing is worth remembering, return {"facts":[]}.';
 end;
 
@@ -199,6 +211,11 @@ begin
   { Accept only a plausible YYYY-MM-DD; anything else means "no expiry". }
   if (Length(F.Expires) <> 10) or (F.Expires[5] <> '-') or (F.Expires[8] <> '-') then
     F.Expires := '';
+
+  F.EventDate := Trim(F.EventDate);
+  { Same shape check as expires; anything else means "no event date". }
+  if (Length(F.EventDate) <> 10) or (F.EventDate[5] <> '-') or (F.EventDate[8] <> '-') then
+    F.EventDate := '';
 end;
 
 function TMemoryDistiller.ParseFacts(const Raw, SessionId: string): TFactArray;
@@ -239,6 +256,7 @@ begin
       F.Kind          := Obj.GetStr('kind', '');
       F.Scope         := Obj.GetStr('scope', '');
       F.Confidence    := Obj.GetFloat('confidence', 0.5);
+      F.EventDate     := Obj.GetStr('event_date', '');
       F.Expires       := Obj.GetStr('expires', '');
       F.SourceSession := SessionId;
       NormaliseFact(F);

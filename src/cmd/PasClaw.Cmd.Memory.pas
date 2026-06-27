@@ -100,8 +100,11 @@ begin
   PrintLn('  facts [--all]');
   PrintLn('              List stored facts (active only; --all includes');
   PrintLn('              superseded/expired).');
-  PrintLn('  add <text> [--kind k] [--scope s] [--expires YYYY-MM-DD]');
-  PrintLn('              Manually remember a fact.');
+  PrintLn('  add <text> [--kind k] [--scope s] [--event YYYY-MM-DD] [--expires YYYY-MM-DD]');
+  PrintLn('              Manually remember a fact (--event = when it happens).');
+  PrintLn('  upcoming [--days N]');
+  PrintLn('              List active facts with an event date in the next N');
+  PrintLn('              days (default 7), soonest first.');
   PrintLn('  forget <id> Delete a fact by id (from `memory facts`).');
   PrintLn('  export [--all] [--out FILE]');
   PrintLn('              Dump facts as Markdown (stdout, or to FILE).');
@@ -679,6 +682,8 @@ begin
   begin
     Line := Format('  #%d [%s/%s %.2f] %s',
       [Facts[i].Id, Facts[i].Kind, Facts[i].Scope, Facts[i].Confidence, Facts[i].Text]);
+    if Facts[i].EventDate <> '' then
+      Line := Line + Ansi.Dim + ' (event ' + Facts[i].EventDate + ')' + Ansi.Reset;
     if Facts[i].Expires <> '' then
       Line := Line + Ansi.Dim + ' (expires ' + Facts[i].Expires + ')' + Ansi.Reset;
     if Facts[i].Superseded then
@@ -688,11 +693,56 @@ begin
   Result := 0;
 end;
 
+function RunUpcoming(const Argv: array of string): Integer;
+{ pasclaw memory upcoming [--days N]
+
+  List active facts whose event_date falls within the next N days
+  (default 7), soonest first -- the proactive "your exam is tomorrow"
+  view. Mirrors what BuildFactsSection injects into the system prompt. }
+var
+  Store: IFactStore;
+  Facts: TStoredFactArray;
+  Days, i: Integer;
+  Today, Block: string;
+begin
+  Days := 7;
+  for i := 1 to High(Argv) do
+    if (Argv[i] = '--days') and (i < High(Argv)) then
+      if not TryStrToInt(Argv[i+1], Days) then Days := 7;
+  if Days < 0 then Days := 0;
+
+  Store := NewFactStore;
+  if not Store.Open(DefaultFactsDbPath(GetHome)) then
+  begin
+    PrintErr('upcoming: no fact store at ' + DefaultFactsDbPath(GetHome) + sLineBreak);
+    Exit(1);
+  end;
+  try
+    Today := FormatDateTime('yyyy"-"mm"-"dd', Now);
+    Facts := Store.ActiveFacts(Today);
+  finally
+    Store.Close;
+  end;
+
+  { Reuse the pure formatter so the CLI and the prompt agree exactly. }
+  Block := FormatUpcomingBlock(Facts, Today, Days);
+  if Block = '' then
+  begin
+    PrintLn(Ansi.Dim + 'Nothing upcoming in the next ' + IntToStr(Days) +
+            ' day(s).' + Ansi.Reset);
+    Exit(0);
+  end;
+  PrintLn(Block);
+  Result := 0;
+end;
+
 function RunAdd(const Argv: array of string): Integer;
 { pasclaw memory add <text...> [--kind static|dynamic] [--scope user|project|session]
-                               [--expires YYYY-MM-DD]
+                               [--event YYYY-MM-DD] [--expires YYYY-MM-DD]
   Manually remember a fact. Goes through the same store (and dedup) as the
-  auto-distiller; source is tagged "manual". }
+  auto-distiller; source is tagged "manual". --event records WHEN the
+  thing happens (for proactive surfacing); --expires when the fact stops
+  mattering. }
 var
   F: TFact;
   Store: IFactStore;
@@ -703,13 +753,14 @@ var
   DistillOn: Boolean;
 begin
   F.Text := ''; F.Kind := 'static'; F.Scope := 'user';
-  F.Confidence := 1.0; F.Expires := ''; F.SourceSession := 'manual';
+  F.Confidence := 1.0; F.EventDate := ''; F.Expires := ''; F.SourceSession := 'manual';
   TextParts := '';
   i := 1;
   while i <= High(Argv) do
   begin
     if (Argv[i] = '--kind')    and (i < High(Argv)) then begin F.Kind := Argv[i+1];    Inc(i,2); Continue; end;
     if (Argv[i] = '--scope')   and (i < High(Argv)) then begin F.Scope := Argv[i+1];   Inc(i,2); Continue; end;
+    if (Argv[i] = '--event')   and (i < High(Argv)) then begin F.EventDate := Argv[i+1]; Inc(i,2); Continue; end;
     if (Argv[i] = '--expires') and (i < High(Argv)) then begin F.Expires := Argv[i+1]; Inc(i,2); Continue; end;
     if TextParts <> '' then TextParts := TextParts + ' ';
     TextParts := TextParts + Argv[i];
@@ -884,6 +935,7 @@ begin
   if Sub = 'status'    then Exit(RunStatus);
   if Sub = 'distill'   then Exit(RunDistill(Argv));
   if Sub = 'facts'     then Exit(RunFacts(Argv));
+  if Sub = 'upcoming'  then Exit(RunUpcoming(Argv));
   if Sub = 'add'       then Exit(RunAdd(Argv));
   if Sub = 'forget'    then Exit(RunForget(Argv));
   if Sub = 'export'    then Exit(RunExport(Argv));

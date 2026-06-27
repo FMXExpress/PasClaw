@@ -21,12 +21,17 @@
 
   Schema:
     facts(id INTEGER PK, text, kind, scope, confidence REAL,
-          expires TEXT, source_session TEXT, created_at INTEGER,
-          superseded INTEGER)
+          event_date TEXT, expires TEXT, source_session TEXT,
+          created_at INTEGER, superseded INTEGER)
 
     expires is '' (never) or 'YYYY-MM-DD'. A fact is ACTIVE when
     superseded = 0 and (expires = '' or expires >= today). "today" is
     passed in by the caller so reads stay deterministic/testable.
+
+    event_date is '' or 'YYYY-MM-DD' and is DISTINCT from expires: it is
+    when an event happens (so the agent can surface "your exam is
+    tomorrow"), whereas expires is when the fact stops being worth
+    keeping. See FormatUpcomingBlock for the proactive surfacing path.
 *)
 unit PasClaw.Memory.Facts;
 
@@ -46,6 +51,7 @@ type
     Kind:          string;
     Scope:         string;
     Confidence:    Double;
+    EventDate:     string;    { 'YYYY-MM-DD' or '' -- when the event happens }
     Expires:       string;
     SourceSession: string;
     CreatedAt:     Int64;     { unix seconds }
@@ -103,6 +109,22 @@ function FormatFactsBlock(const Facts: TStoredFactArray; Budget: Integer): strin
   facts active as of Today, and format them within Budget. '' when the
   store is absent/empty or Budget <= 0. }
 function ActiveFactsBlock(const HomeDir, Today: string; Budget: Integer): string;
+
+{ Render the PROACTIVE "upcoming events" block: facts whose event_date
+  falls between Today and Today+WithinDays (inclusive), soonest first,
+  each phrased relative to Today ("today" / "tomorrow" / "in N days").
+  This is the "your exam is tomorrow" surfacing -- distinct from the
+  wholesale facts block, which is keyed on expiry, not event date. Pure;
+  '' when nothing is upcoming, Facts is empty, or WithinDays < 0. }
+function FormatUpcomingBlock(const Facts: TStoredFactArray;
+                            const Today: string; WithinDays: Integer): string;
+
+{ Convenience for the prompt builder: open the default store and format
+  the upcoming-events block for facts active as of Today (so an expired
+  fact never resurfaces). '' when nothing is upcoming or the store is
+  absent. }
+function UpcomingFactsBlock(const HomeDir, Today: string;
+                           WithinDays: Integer): string;
 
 { Render facts as human-readable / git-friendly Markdown, grouped by scope
   (the auditability export -- shared by the CLI `memory export` and the web
@@ -252,6 +274,40 @@ begin
     Move(Bytes[0], Result[0], n);
 end;
 
+function TryParseISODate(const S: string; out DT: TDateTime): Boolean;
+var
+  Y, M, D: Integer;
+begin
+  Result := False;
+  DT := 0;
+  if (Length(S) <> 10) or (S[5] <> '-') or (S[8] <> '-') then Exit;
+  if not TryStrToInt(Copy(S, 1, 4), Y) then Exit;
+  if not TryStrToInt(Copy(S, 6, 2), M) then Exit;
+  if not TryStrToInt(Copy(S, 9, 2), D) then Exit;
+  Result := TryEncodeDate(Y, M, D, DT);
+end;
+
+function ISODaysBetween(const FromISO, ToISO: string; out Days: Integer): Boolean;
+{ Whole days from FromISO to ToISO (positive => ToISO is later). False when
+  either side is not a valid YYYY-MM-DD. }
+var
+  A, B: TDateTime;
+begin
+  Result := False;
+  Days := 0;
+  if not TryParseISODate(FromISO, A) then Exit;
+  if not TryParseISODate(ToISO, B) then Exit;
+  Days := Trunc(B) - Trunc(A);
+  Result := True;
+end;
+
+function RelDayPhrase(Days: Integer): string;
+begin
+  if Days = 0 then Result := 'today'
+  else if Days = 1 then Result := 'tomorrow'
+  else Result := Format('in %d days', [Days]);
+end;
+
 function FormatFactsBlock(const Facts: TStoredFactArray; Budget: Integer): string;
 const
   Header = 'Durable facts (auto-distilled memory):';
@@ -268,6 +324,8 @@ begin
   begin
     if Trim(Facts[i].Text) = '' then Continue;
     Line := '- ' + Facts[i].Text;
+    if Facts[i].EventDate <> '' then
+      Line := Line + ' (event ' + Facts[i].EventDate + ')';
     if Facts[i].Expires <> '' then
       Line := Line + ' (until ' + Facts[i].Expires + ')';
     { +1 for the newline this line will cost. Always keep at least one. }
@@ -304,6 +362,63 @@ begin
   end;
 end;
 
+function FormatUpcomingBlock(const Facts: TStoredFactArray;
+  const Today: string; WithinDays: Integer): string;
+const
+  Header = 'Upcoming (mention proactively if the user would want a heads-up):';
+var
+  i, j, n, Days: Integer;
+  Idx, DayOf: array of Integer;
+  ti, tj: Integer;
+  Body, Line: string;
+begin
+  Result := '';
+  if (Length(Facts) = 0) or (WithinDays < 0) then Exit;
+  { Collect facts with an event_date in [Today, Today+WithinDays]. }
+  n := 0;
+  for i := 0 to High(Facts) do
+  begin
+    if Facts[i].EventDate = '' then Continue;
+    if not ISODaysBetween(Today, Facts[i].EventDate, Days) then Continue;
+    if (Days < 0) or (Days > WithinDays) then Continue;
+    SetLength(Idx, n + 1); SetLength(DayOf, n + 1);
+    Idx[n] := i; DayOf[n] := Days; Inc(n);
+  end;
+  if n = 0 then Exit;
+  { Soonest first (selection sort, small n). }
+  for i := 0 to n - 2 do
+    for j := i + 1 to n - 1 do
+      if DayOf[j] < DayOf[i] then
+      begin
+        ti := DayOf[i]; DayOf[i] := DayOf[j]; DayOf[j] := ti;
+        tj := Idx[i];   Idx[i]   := Idx[j];   Idx[j]   := tj;
+      end;
+  Body := '';
+  for i := 0 to n - 1 do
+  begin
+    Line := Format('- %s (%s, %s)',
+      [Facts[Idx[i]].Text, RelDayPhrase(DayOf[i]), Facts[Idx[i]].EventDate]);
+    if Body <> '' then Body := Body + sLineBreak;
+    Body := Body + Line;
+  end;
+  Result := Header + sLineBreak + Body;
+end;
+
+function UpcomingFactsBlock(const HomeDir, Today: string;
+  WithinDays: Integer): string;
+var
+  Store: IFactStore;
+begin
+  Result := '';
+  Store := NewFactStore;
+  if not Store.Open(DefaultFactsDbPath(HomeDir)) then Exit;
+  try
+    Result := FormatUpcomingBlock(Store.ActiveFacts(Today), Today, WithinDays);
+  finally
+    Store.Close;
+  end;
+end;
+
 function FactsToMarkdown(const Facts: TStoredFactArray; const Today: string): string;
 var
   SL: TStringList;
@@ -318,6 +433,7 @@ var
       if not Any then begin SL.Add('## ' + Scope); SL.Add(''); Any := True; end;
       Line := Format('- %s  _(%s, conf %.2f)_',
         [Facts[j].Text, Facts[j].Kind, Facts[j].Confidence]);
+      if Facts[j].EventDate <> '' then Line := Line + ' _(event ' + Facts[j].EventDate + ')_';
       if Facts[j].Expires <> '' then Line := Line + ' _(until ' + Facts[j].Expires + ')_';
       if Facts[j].Superseded then Line := Line + ' _(superseded)_';
       SL.Add(Line);
@@ -662,6 +778,7 @@ begin
     '  kind TEXT NOT NULL,' +
     '  scope TEXT NOT NULL,' +
     '  confidence REAL NOT NULL,' +
+    '  event_date TEXT NOT NULL DEFAULT '''',' +
     '  expires TEXT NOT NULL DEFAULT '''',' +
     '  source_session TEXT NOT NULL DEFAULT '''',' +
     '  created_at INTEGER NOT NULL,' +
@@ -669,11 +786,18 @@ begin
     '  embedding TEXT NOT NULL DEFAULT '''')');
   { Indexes that match the two hot read paths (active listing + expiry sweep). }
   ExecSQL('CREATE INDEX IF NOT EXISTS idx_facts_active ON facts(superseded, expires)');
-  { Phase 4c: add the embedding column to stores created before it existed.
-    SQLite has no ADD COLUMN IF NOT EXISTS, so just try and ignore the
-    "duplicate column name" error on already-migrated databases. }
+  { SQLite has no ADD COLUMN IF NOT EXISTS, so add columns that landed after
+    the original schema by trying and ignoring the "duplicate column name"
+    error on already-migrated databases. }
+  { Phase 4c: embedding. }
   try
     ExecSQL('ALTER TABLE facts ADD COLUMN embedding TEXT NOT NULL DEFAULT ''''');
+  except
+    on E: Exception do ; { column already present -- fine }
+  end;
+  { Event-date: distinct from expires, for proactive surfacing. }
+  try
+    ExecSQL('ALTER TABLE facts ADD COLUMN event_date TEXT NOT NULL DEFAULT ''''');
   except
     on E: Exception do ; { column already present -- fine }
   end;
@@ -806,13 +930,14 @@ begin
   Q := NewQuery;
   try
     Q.SQL.Text :=
-      'INSERT INTO facts (text, kind, scope, confidence, expires, ' +
+      'INSERT INTO facts (text, kind, scope, confidence, event_date, expires, ' +
       'source_session, created_at, superseded, embedding) ' +
-      'VALUES (:t, :k, :sc, :cf, :ex, :ss, :ca, 0, :emb)';
+      'VALUES (:t, :k, :sc, :cf, :ev, :ex, :ss, :ca, 0, :emb)';
     PStr  (Q, 't',  F.Text);
     PStr  (Q, 'k',  F.Kind);
     PStr  (Q, 'sc', F.Scope);
     PFloat(Q, 'cf', F.Confidence);
+    PStr  (Q, 'ev', F.EventDate);
     PStr  (Q, 'ex', F.Expires);
     PStr  (Q, 'ss', F.SourceSession);
     PInt  (Q, 'ca', CreatedAt);
@@ -841,6 +966,7 @@ begin
     F.Kind          := Q.FieldByName('kind').AsString;
     F.Scope         := Q.FieldByName('scope').AsString;
     F.Confidence    := Q.FieldByName('confidence').AsFloat;
+    F.EventDate     := Q.FieldByName('event_date').AsString;
     F.Expires       := Q.FieldByName('expires').AsString;
     F.SourceSession := Q.FieldByName('source_session').AsString;
     F.CreatedAt     := Q.FieldByName('created_at').AsLargeInt;

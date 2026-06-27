@@ -332,6 +332,70 @@ begin
   end;
 end;
 
+procedure RunEventDateTests;
+{ event_date is stored distinctly from expires, round-trips, and drives
+  the proactive FormatUpcomingBlock surfacing. TODAY = 2026-06-26. }
+var
+  DbPath: string;
+  Store: IFactStore;
+  F: TFact;
+  Active, Up: TStoredFactArray;
+  S: string;
+  i: Integer;
+  FoundExam: Boolean;
+begin
+  DbPath := JoinPath(GTmpDir, 'facts-event.db');
+  Store := NewFactStore;
+  AssertTrue(Store.Open(DbPath), 'open event store');
+
+  { Exam tomorrow (2026-06-27), distinct expiry a few days out. }
+  F := MkFact('User has a calculus exam', 'dynamic', 'user', '2026-06-30', 0.9);
+  F.EventDate := '2026-06-27';
+  Store.Add(F, 2000);
+  { Conference in 10 days -- beyond a 7-day horizon. }
+  F := MkFact('PasCon talk', 'dynamic', 'project', '', 0.8);
+  F.EventDate := '2026-07-06';
+  Store.Add(F, 2001);
+  { Plain fact, no event date. }
+  Store.Add(MkFact('Prefers Delphi', 'static', 'user', '', 0.9), 2002);
+
+  { event_date round-trips through storage. }
+  Active := Store.ActiveFacts(TODAY);
+  FoundExam := False;
+  for i := 0 to High(Active) do
+    if Active[i].Text = 'User has a calculus exam' then
+    begin
+      AssertEqStr(Active[i].EventDate, '2026-06-27', 'event_date round-trips');
+      AssertEqStr(Active[i].Expires, '2026-06-30', 'expires stays distinct from event_date');
+      FoundExam := True;
+    end;
+  AssertTrue(FoundExam, 'exam fact present in active set');
+  Store.Close;
+
+  { Upcoming within 7 days: only the exam (tomorrow). The conference is 10
+    days out; the Delphi fact has no event date. Reopen to prove durability. }
+  Store := NewFactStore;
+  AssertTrue(Store.Open(DbPath), 'reopen event store');
+  Up := Store.ActiveFacts(TODAY);
+  Store.Close;
+
+  S := FormatUpcomingBlock(Up, TODAY, 7);
+  AssertTrue(Pos('Upcoming', S) > 0, 'upcoming header present');
+  AssertTrue(Pos('calculus exam', S) > 0, 'exam surfaced within horizon');
+  AssertTrue(Pos('tomorrow', S) > 0, 'exam phrased relatively as tomorrow');
+  AssertTrue(Pos('PasCon', S) = 0, 'event beyond horizon not surfaced');
+  AssertTrue(Pos('Prefers Delphi', S) = 0, 'event-less fact not surfaced');
+
+  { Widen the horizon to catch the conference too; soonest first. }
+  S := FormatUpcomingBlock(Up, TODAY, 14);
+  AssertTrue(Pos('PasCon', S) > 0, 'conference surfaced with wider horizon');
+  AssertTrue(Pos('calculus exam', S) < Pos('PasCon', S), 'soonest event listed first');
+
+  { Nothing upcoming when the horizon is 0 and the only event is tomorrow. }
+  S := FormatUpcomingBlock(Up, TODAY, 0);
+  AssertEqStr(S, '', 'horizon 0 -> nothing upcoming (exam is tomorrow, not today)');
+end;
+
 begin
   GTmpDir := JoinPath(GetTempDir, 'pasclaw-facts-test-' + IntToStr(Random(1 shl 30)));
   EnsureDir(GTmpDir);
@@ -352,6 +416,8 @@ begin
     WriteLn('  ok: semantic dedup + hybrid search (fake embedder)');
     RunBackfillTests;
     WriteLn('  ok: backfill embeds pre-existing empty rows');
+    RunEventDateTests;
+    WriteLn('  ok: event_date round-trip + proactive upcoming block');
     WriteLn('PASS');
   finally
     {$IFDEF UNIX}

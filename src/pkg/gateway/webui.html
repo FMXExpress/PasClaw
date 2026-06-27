@@ -2549,6 +2549,7 @@ const tabLoaders = {
           const el = document.createElement("div");
           el.className = "item";
           let meta = `${f.kind}/${f.scope}`;
+          if (f.event_date) meta += " · event " + f.event_date;
           if (f.expires) meta += " · until " + f.expires;
           el.innerHTML = `<div style="flex:1"><span>${escapeHtml(f.text)}</span>`
                        + `<span class="sub">#${f.id} · ${escapeHtml(meta)}</span></div>`;
