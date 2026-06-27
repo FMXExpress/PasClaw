@@ -34,6 +34,13 @@ unit PasClaw.Cmd.Memory;
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
+// Compiler-neutral macOS symbol: FPC uses DARWIN, Delphi uses MACOS/OSX.
+// Three separate IFDEF lines (not one IF DEFINED expression) so it stays
+// portable across both toolchains' directive dialects.
+{$IFDEF DARWIN}{$DEFINE PCLAW_MACOS}{$ENDIF}
+{$IFDEF MACOS}{$DEFINE PCLAW_MACOS}{$ENDIF}
+{$IFDEF OSX}{$DEFINE PCLAW_MACOS}{$ENDIF}
+
 interface
 
 function Cmd_Memory_Run(const Argv: array of string): Integer;
@@ -204,7 +211,7 @@ function PosixOrtAsset(out Asset, LibGlob, DestName: string): Boolean;
   to extract. Returns False on a platform with no known asset. }
 begin
   Result := True;
-  {$IFDEF DARWIN}
+  {$IFDEF PCLAW_MACOS}
   Asset    := 'onnxruntime-osx-universal2-' + ORT_POSIX_VERSION + '.tgz';
   LibGlob  := 'libonnxruntime*.dylib';
   DestName := 'onnxruntime.dylib';
