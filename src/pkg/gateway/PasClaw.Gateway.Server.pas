@@ -2306,28 +2306,35 @@ var
   Today: string;
 begin
   All := ARequest.Params.Values['all'] = '1';
+  Store := NewFactStore;
+  { Open creates the DB when merely absent, so a False return is a real
+    failure (corrupt/unreadable). Surface it rather than returning an empty
+    list that looks like "all facts vanished". Mirrors add/delete. }
+  if not Store.Open(DefaultFactsDbPath(GetHome)) then
+  begin
+    WriteJSON(AResp, 503, '{"error":"fact store unavailable"}');
+    Exit;
+  end;
+  try
+    Today := FormatDateTime('yyyy"-"mm"-"dd', Now);
+    if All then Facts := Store.AllFacts else Facts := Store.ActiveFacts(Today);
+  finally
+    Store.Close;
+  end;
   Root := TJsonObject.Create;
   try
     Root.PutBool('enabled', FCfg.MemoryDistillEnabled);
     Arr := TJsonArray.Create;
-    Store := NewFactStore;
-    if Store.Open(DefaultFactsDbPath(GetHome)) then
-    try
-      Today := FormatDateTime('yyyy"-"mm"-"dd', Now);
-      if All then Facts := Store.AllFacts else Facts := Store.ActiveFacts(Today);
-      for i := 0 to High(Facts) do
-      begin
-        FO := TJsonObject.Create;
-        FO.PutInt ('id',         Facts[i].Id);
-        FO.PutStr ('text',       Facts[i].Text);
-        FO.PutStr ('kind',       Facts[i].Kind);
-        FO.PutStr ('scope',      Facts[i].Scope);
-        FO.PutStr ('expires',    Facts[i].Expires);
-        FO.PutBool('superseded', Facts[i].Superseded);
-        Arr.AddObject(FO);
-      end;
-    finally
-      Store.Close;
+    for i := 0 to High(Facts) do
+    begin
+      FO := TJsonObject.Create;
+      FO.PutInt ('id',         Facts[i].Id);
+      FO.PutStr ('text',       Facts[i].Text);
+      FO.PutStr ('kind',       Facts[i].Kind);
+      FO.PutStr ('scope',      Facts[i].Scope);
+      FO.PutStr ('expires',    Facts[i].Expires);
+      FO.PutBool('superseded', Facts[i].Superseded);
+      Arr.AddObject(FO);
     end;
     Root.PutArray('facts', Arr);
     WriteJSON(AResp, 200, Root.ToJSON);
@@ -2422,17 +2429,24 @@ var
   Today: string;
 begin
   Store := NewFactStore;
-  if Store.Open(DefaultFactsDbPath(GetHome)) then
+  if not Store.Open(DefaultFactsDbPath(GetHome)) then
+  begin
+    WriteJSON(AResp, 503, '{"error":"fact store unavailable"}');
+    Exit;
+  end;
   try
     Today := FormatDateTime('yyyy"-"mm"-"dd', Now);
     Facts := Store.ActiveFacts(Today);
   finally
     Store.Close;
   end;
-  AResp.ContentType := 'text/markdown; charset=utf-8';
-  AResp.ContentDisposition := 'attachment; filename="memory-facts.md"';
-  AResp.ContentText := FactsToMarkdown(Facts, FormatDateTime('yyyy"-"mm"-"dd', Now));
   AResp.ResponseNo := 200;
+  AResp.ContentType := 'text/markdown; charset=utf-8';
+  AResp.CharSet := 'utf-8';
+  AResp.ContentDisposition := 'attachment; filename="memory-facts.md"';
+  { WriteBodyStream, not ContentText: Indy's FPC ContentText writer can
+    corrupt/drop UTF-8 bodies, and facts are UTF-8 from the UI/API. }
+  WriteBodyStream(AResp, FactsToMarkdown(Facts, Today));
 end;
 
 procedure TGatewayServer.HandleConfig(AResp: TIdHTTPResponseInfo);
