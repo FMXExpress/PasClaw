@@ -105,14 +105,18 @@ UNIT_DIRS = \
 	$(ROOT)/src/pkg/identity \
 	$(ROOT)/src/pkg/agent \
 	$(ROOT)/src/pkg/memory \
+	$(ROOT)/src/pkg/memory/localvector \
 	$(ROOT)/src/pkg/kb \
 	$(ROOT)/src/pkg/updater \
 	$(ROOT)/src/pkg/membench \
 	$(ROOT)/src/pkg/tui \
 	$(ROOT)/src/pkg/platform \
 	$(ROOT)/src/pkg/hashline \
+	$(ROOT)/src/pkg/markdown \
+	$(ROOT)/src/pkg/otel \
 	$(ROOT)/src/pkg/component \
 	$(ROOT)/src/pkg/shell \
+	$(ROOT)/src/pkg/vendor/zpaq \
 	$(ROOT)/src/cmd
 
 INDY_UNIT_DIRS = \
@@ -130,13 +134,14 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 	-FE$(BUILDDIR) \
 	-FU$(BUILDDIR)/lib
 
-.PHONY: all clean console simple server
+.PHONY: all clean console simple server configured
 
-all: console simple server
+all: console simple server configured
 
-console: $(BUILDDIR)/SampleConsole
-simple:  $(BUILDDIR)/SampleSimple
-server:  $(BUILDDIR)/SampleServer
+console:    $(BUILDDIR)/SampleConsole
+simple:     $(BUILDDIR)/SampleSimple
+server:     $(BUILDDIR)/SampleServer
+configured: $(BUILDDIR)/SampleConfigured
 
 $(BUILDDIR)/SampleConsole: SampleConsole.dpr | $(BUILDDIR) $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) SampleConsole.dpr
@@ -146,6 +151,9 @@ $(BUILDDIR)/SampleSimple: SampleSimple.dpr | $(BUILDDIR) $(BUILDDIR)/lib
 
 $(BUILDDIR)/SampleServer: SampleServer.dpr | $(BUILDDIR) $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) SampleServer.dpr
+
+$(BUILDDIR)/SampleConfigured: SampleConfigured.dpr | $(BUILDDIR) $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) SampleConfigured.dpr
 
 $(BUILDDIR):
 	mkdir -p $@

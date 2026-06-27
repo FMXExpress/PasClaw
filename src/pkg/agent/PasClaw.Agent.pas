@@ -65,6 +65,12 @@ uses
   PasClaw.Tools.Registry,
   PasClaw.Tools.Obj,
   PasClaw.Agent.Hooks,
+  PasClaw.Agent.Subagent,   { TSubagentContext / TSpawnTool -- used by the
+                              FSubagentCtx / FSpawnTool interface fields below.
+                              Was only in the implementation uses, so the
+                              component failed to compile standalone; its
+                              interface doesn't depend back on this unit, so
+                              importing it here is cycle-free. }
   PasClaw.Gateway.Server,
   PasClaw.MCP.Bridge;
 
@@ -92,6 +98,16 @@ type
     FUseTools:       Boolean;
     FUseMCP:         Boolean;
     FUseHashline:    Boolean;
+    FLoadConfigFromDisk: Boolean;  { True (default): EnsureConfig reads
+                                     ~/.pasclaw/config.json (+ env + profile).
+                                     False: start from clean TConfig defaults
+                                     so the embedder makes every choice in code
+                                     (no disk dependency). }
+    FSandboxApplied: Boolean;      { ConfigureSandbox is applied once at the
+                                     first Chat/Run, AFTER the embedder has
+                                     finished mutating Config.Sandbox -- not at
+                                     config-load time, or pre-run edits would
+                                     be ignored. }
     FBuiltinsInstalled: Boolean;  { tracks built-in tool / skill / MCP
                                     install separately from FRegistry's
                                     existence -- RegisterTool can create
@@ -122,6 +138,8 @@ type
     FOnToolResult:   TPasClawToolResultEvent;
     FOnError:        TPasClawErrorEvent;
     procedure EnsureConfig;
+    function  GetConfig: TConfig;
+    procedure ApplySandboxOnce;
     procedure EnsureProvider;
     procedure EnsureRegistry;
     procedure RefreshSubagentContext;
@@ -199,8 +217,21 @@ type
     function Execute(const Command: string; const Args: array of string): Integer;
     property Provider: ILLMProvider  read FProvider;
     property Registry: TToolRegistry read FRegistry;
-    property Config:   TConfig       read FConfig;
+    { The live config the agent will run with. Reading it lazily loads the
+      config (from disk, or from clean defaults when LoadConfigFromDisk is
+      False) so it is never nil after Create -- mutate any field here BEFORE
+      the first Chat/Run to express the same choices `pasclaw onboard` makes
+      (MemoryDistillEnabled, WebFetchEnabled, OrientTaskAware, Sandbox,
+      Fallbacks, AutoRouter, …). Changes after the first Chat/Run may not
+      re-apply (provider + sandbox are built once). }
+    property Config:   TConfig       read GetConfig;
   published
+    { When False, the agent starts from clean TConfig defaults instead of
+      reading ~/.pasclaw/config.json (+ env + profile) -- so an embedding app
+      can configure everything in code with no disk dependency. Default True
+      preserves the historical inherit-from-config.json behaviour. Set it
+      before the first Config access / Chat / Run. }
+    property LoadConfigFromDisk: Boolean read FLoadConfigFromDisk write FLoadConfigFromDisk default True;
     property ProviderName:  string  read FProviderName  write FProviderName;
     property Model:         string  read FModel         write FModel;
     property SystemPrompt:  string  read FSystemPrompt  write FSystemPrompt;
@@ -238,11 +269,13 @@ type
     FEnableHashline: Boolean;
     FProviderName:   string;
     FModel:          string;
+    FLoadConfigFromDisk: Boolean;  { see TPasClawAgent.LoadConfigFromDisk }
     FOnStarted:      TNotifyEvent;
     FOnStopped:      TNotifyEvent;
     FOnError:        TPasClawErrorEvent;
     FLastError:      string;
     procedure RaiseError(const Msg: string);
+    function  GetConfig: TConfig;
   public
     constructor Create(AOwner: TComponent); overload; override;
     { Code-driven convenience constructor. Equivalent to
@@ -285,7 +318,15 @@ type
 
     property Server: TGatewayServer read FServer;
     property LastError: string read FLastError;
+    { The live config the server will boot with. Reading it lazily loads the
+      config (disk, or clean defaults when LoadConfigFromDisk is False) so it
+      is never nil -- mutate any field BEFORE Start to configure the server in
+      code (provider, fallbacks, memory, sandbox, …). Start preserves a
+      pre-set Config instead of reloading it. }
+    property Config: TConfig read GetConfig;
   published
+    { See TPasClawAgent.LoadConfigFromDisk. Default True. }
+    property LoadConfigFromDisk: Boolean read FLoadConfigFromDisk write FLoadConfigFromDisk default True;
     property BindAddr:       string  read FBindAddr       write FBindAddr;
     property Port:           Integer read FPort           write FPort           default 8088;
     property MaxIter:        Integer read FMaxIter        write FMaxIter        default 25;
@@ -324,7 +365,8 @@ uses
   PasClaw.Tools.Sandbox,
   PasClaw.Skills.Loader,
   PasClaw.Agent.Prompt,
-  PasClaw.Agent.Subagent,
+  { PasClaw.Agent.Subagent moved to the interface uses (TSpawnTool /
+    TSubagentContext are referenced by interface fields). }
   PasClaw.Tools.ToolLoop;
 
 { ------------------------------ helpers ------------------------------ }
@@ -364,6 +406,17 @@ end;
 { Fold the override into Cfg: replace any existing Provider with the
   same Kind, or append; promote to default. Used by both
   TPasClawAgent.EnsureConfig and TPasClawServer.Start. }
+function LoadConfigOrDefaults(FromDisk: Boolean): TConfig;
+{ Shared by both components: load ~/.pasclaw/config.json (+ env + profile),
+  or start from clean TConfig defaults when the embedder opted out of disk so
+  it can express every choice in code. }
+begin
+  if FromDisk then
+    Result := LoadConfig
+  else
+    Result := TConfig.Create;
+end;
+
 procedure ApplyProviderOverride(var Cfg: TConfig; const Override: TProviderConfig);
 var
   i, Idx: Integer;
@@ -407,6 +460,7 @@ begin
   FUseTools      := True;
   FUseMCP        := True;
   FUseHashline   := True;
+  FLoadConfigFromDisk := True;
   FOwnedTools    := TObjectList.Create(True);  { owns + frees its items }
   FHooks         := TObjectList.Create(True);  { owns + frees registered hooks }
   GAgentInstance := Self;
@@ -432,20 +486,36 @@ end;
 
 procedure TPasClawAgent.EnsureConfig;
 begin
-  if FConfig = nil then
-  begin
-    FConfig := LoadConfig;
-    { Apply the sandbox policy to the shared module-level state.
-      The component sits next to the CLI in one process so this is
-      the same global state Cmd.Agent / Cmd.Serve seed at startup. }
-    ConfigureSandbox(FConfig.Sandbox, '');
-    { Fold in any provider configured in code via SetProvider. Has
-      to land AFTER LoadConfig so a code-supplied entry wins over
-      whatever ~/.pasclaw/config.json had, and BEFORE
-      EnsureProvider runs so NewProviderFromConfig sees it. }
-    if FHasProviderOverride then
-      ApplyProviderOverride(FConfig, FProviderOverride);
-  end;
+  if FConfig <> nil then Exit;
+  { Load-only: disk (+ env + profile) by default, or clean defaults when the
+    embedder opted out of disk so it can configure everything in code. The
+    sandbox is NOT applied here -- see ApplySandboxOnce -- because reading
+    Config (which calls this) must not freeze Config.Sandbox before the
+    embedder has set it. }
+  FConfig := LoadConfigOrDefaults(FLoadConfigFromDisk);
+  { Fold in any provider configured in code via SetProvider before the config
+    was first loaded (a SetProvider after load applies immediately in
+    SetProvider itself). Must land before EnsureProvider's
+    NewProviderFromConfig sees it. }
+  if FHasProviderOverride then
+    ApplyProviderOverride(FConfig, FProviderOverride);
+end;
+
+function TPasClawAgent.GetConfig: TConfig;
+begin
+  EnsureConfig;
+  Result := FConfig;
+end;
+
+procedure TPasClawAgent.ApplySandboxOnce;
+begin
+  { Apply the sandbox policy to the shared module-level state ONCE, at the
+    first Chat/Run -- after the embedder has finished mutating Config.Sandbox.
+    Same global state Cmd.Agent / Cmd.Serve seed at startup. }
+  if FSandboxApplied then Exit;
+  FSandboxApplied := True;
+  EnsureConfig;
+  ConfigureSandbox(FConfig.Sandbox, '');
 end;
 
 procedure TPasClawAgent.EnsureProvider;
@@ -696,6 +766,8 @@ begin
   Reply  := '';
   ErrMsg := '';
   EnsureConfig;
+  { First-run apply of the sandbox, now that Config is fully configured. }
+  ApplySandboxOnce;
   EnsureProvider;
   if FProvider = nil then
   begin
@@ -849,6 +921,7 @@ begin
   FEnableTools    := True;
   FEnableMCP      := True;
   FEnableHashline := True;
+  FLoadConfigFromDisk := True;
   FOwnedTools     := TObjectList.Create(True);  { owns + frees its items }
   FStopSignal     := TEvent.Create(nil, True, False, '');  { manual reset, non-signalled }
   GServerInstance := Self;
@@ -859,6 +932,13 @@ begin
   Create(TComponent(nil));
   FBindAddr := AAddr;
   FPort     := APort;
+end;
+
+function TPasClawServer.GetConfig: TConfig;
+begin
+  if FConfig = nil then
+    FConfig := LoadConfigOrDefaults(FLoadConfigFromDisk);
+  Result := FConfig;
 end;
 
 destructor TPasClawServer.Destroy;
@@ -893,10 +973,15 @@ begin
     again instead of returning immediately. }
   if FStopSignal <> nil then FStopSignal.ResetEvent;
 
-  FConfig := LoadConfig;
+  { Preserve a Config the embedder pre-configured via the Config property;
+    otherwise load it now (disk, or clean defaults when LoadConfigFromDisk
+    is False). Sandbox applies here -- Start is the server's single first-run
+    point, after the embedder finished mutating Config. }
+  if FConfig = nil then
+    FConfig := LoadConfigOrDefaults(FLoadConfigFromDisk);
   ConfigureSandbox(FConfig.Sandbox, '');
   { Fold in the code-supplied provider (from SetProvider) AFTER
-    LoadConfig and BEFORE the NewProviderFromConfig block below,
+    config load and BEFORE the NewProviderFromConfig block below,
     so the synthetic entry is the one the gateway boots with. }
   if FHasProviderOverride then
     ApplyProviderOverride(FConfig, FProviderOverride);
