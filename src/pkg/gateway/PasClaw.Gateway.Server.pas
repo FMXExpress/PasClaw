@@ -212,6 +212,16 @@ type
     procedure HandleMemoryRead(const Doc: string;
                                 ARequest: TIdHTTPRequestInfo;
                                 AResp: TIdHTTPResponseInfo);
+    { Distilled-fact store management for the web Memory tab (Phase 5b).
+      GET /v1/memory/facts[?all=1] -- list; POST -- manually remember;
+      DELETE /v1/memory/facts/<id> -- forget; GET .../export -- Markdown. }
+    procedure HandleMemoryFactsList(ARequest: TIdHTTPRequestInfo;
+                                AResp: TIdHTTPResponseInfo);
+    procedure HandleMemoryFactAdd(ARequest: TIdHTTPRequestInfo;
+                                AResp: TIdHTTPResponseInfo);
+    procedure HandleMemoryFactDelete(const IdStr: string;
+                                AResp: TIdHTTPResponseInfo);
+    procedure HandleMemoryFactsExport(AResp: TIdHTTPResponseInfo);
     procedure HandleConfig(AResp: TIdHTTPResponseInfo);
     { PUT /v1/config -- persist an edited config from the web UI. Secrets
       sent back as the mask placeholder are preserved from the current
@@ -434,6 +444,8 @@ uses
   PasClaw.Tools.Sandbox,
   PasClaw.Checkpoints,          { web UI checkpoints: Init/BeginTurn/Undo/Redo/state }
   PasClaw.Memory.AutoDistill,   { opt-in per-turn fact distillation }
+  PasClaw.Memory.Facts,         { fact store for the web Memory tab (Phase 5b) }
+  PasClaw.Memory.Distill,       { TFact + NormaliseFact for manual remember }
   PasClaw.Memory.Facts.Embed,   { Phase 4c: semantic fact embedder }
   PasClaw.Providers.Factory,
   PasClaw.Providers.Catalog,   { TProviderSpec for /v1/models discovery }
@@ -1184,6 +1196,13 @@ begin
     else if (ARequest.Command = 'POST') and (Doc = '/v1/workspace/import') then HandleWorkspaceImport(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/kb')       then HandleKBList(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/memory/search') then HandleMemorySearch(ARequest, AResponse)
+    { Distilled-fact routes -- BEFORE the generic /v1/memory/ GET prefix so
+      "facts" isn't mistaken for a markdown filename. }
+    else if (ARequest.Command = 'GET')    and (Doc = '/v1/memory/facts/export') then HandleMemoryFactsExport(AResponse)
+    else if (ARequest.Command = 'GET')    and (Doc = '/v1/memory/facts') then HandleMemoryFactsList(ARequest, AResponse)
+    else if (ARequest.Command = 'POST')   and (Doc = '/v1/memory/facts') then HandleMemoryFactAdd(ARequest, AResponse)
+    else if (ARequest.Command = 'DELETE') and (Copy(Doc, 1, 17) = '/v1/memory/facts/') then
+      HandleMemoryFactDelete(Copy(Doc, 18, MaxInt), AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/memory')  then HandleMemoryList(AResponse)
     else if (ARequest.Command = 'GET')  and (Copy(Doc, 1, 11) = '/v1/memory/') then
       HandleMemoryRead(Doc, ARequest, AResponse)
@@ -2272,6 +2291,162 @@ begin
   finally
     Root.Free;
   end;
+end;
+
+procedure TGatewayServer.HandleMemoryFactsList(ARequest: TIdHTTPRequestInfo;
+                                               AResp: TIdHTTPResponseInfo);
+{ GET /v1/memory/facts[?all=1] -- the distilled fact store as JSON. }
+var
+  Store: IFactStore;
+  Facts: TStoredFactArray;
+  Root, FO: TJsonObject;
+  Arr: TJsonArray;
+  i: Integer;
+  All: Boolean;
+  Today: string;
+begin
+  All := ARequest.Params.Values['all'] = '1';
+  Store := NewFactStore;
+  { Open creates the DB when merely absent, so a False return is a real
+    failure (corrupt/unreadable). Surface it rather than returning an empty
+    list that looks like "all facts vanished". Mirrors add/delete. }
+  if not Store.Open(DefaultFactsDbPath(GetHome)) then
+  begin
+    WriteJSON(AResp, 503, '{"error":"fact store unavailable"}');
+    Exit;
+  end;
+  try
+    Today := FormatDateTime('yyyy"-"mm"-"dd', Now);
+    if All then Facts := Store.AllFacts else Facts := Store.ActiveFacts(Today);
+  finally
+    Store.Close;
+  end;
+  Root := TJsonObject.Create;
+  try
+    Root.PutBool('enabled', FCfg.MemoryDistillEnabled);
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Facts) do
+    begin
+      FO := TJsonObject.Create;
+      FO.PutInt ('id',         Facts[i].Id);
+      FO.PutStr ('text',       Facts[i].Text);
+      FO.PutStr ('kind',       Facts[i].Kind);
+      FO.PutStr ('scope',      Facts[i].Scope);
+      FO.PutStr ('expires',    Facts[i].Expires);
+      FO.PutBool('superseded', Facts[i].Superseded);
+      Arr.AddObject(FO);
+    end;
+    Root.PutArray('facts', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleMemoryFactAdd(ARequest: TIdHTTPRequestInfo;
+                                             AResp: TIdHTTPResponseInfo);
+{ POST /v1/memory/facts with a text/kind/scope/expires JSON body -- manual remember. }
+var
+  Store: IFactStore;
+  Obj: TJsonObject;
+  F: TFact;
+  Id: Int64;
+begin
+  Obj := nil;
+  try
+    Obj := TJsonObject.Parse(ReadRequestBody(ARequest));
+  except
+    Obj := nil;
+  end;
+  if Obj = nil then
+  begin
+    WriteJSON(AResp, 400, '{"error":"bad json"}');
+    Exit;
+  end;
+  try
+    F.Text          := Trim(Obj.GetStr('text', ''));
+    F.Kind          := Obj.GetStr('kind', 'static');
+    F.Scope         := Obj.GetStr('scope', 'user');
+    F.Confidence    := 1.0;
+    F.Expires       := Obj.GetStr('expires', '');
+    F.SourceSession := 'manual-web';
+  finally
+    Obj.Free;
+  end;
+  if F.Text = '' then
+  begin
+    WriteJSON(AResp, 400, '{"error":"text required"}');
+    Exit;
+  end;
+  NormaliseFact(F);
+  Store := NewFactStore;
+  if not Store.Open(DefaultFactsDbPath(GetHome)) then
+  begin
+    WriteJSON(AResp, 500, '{"error":"fact store unavailable"}');
+    Exit;
+  end;
+  try
+    Id := Store.Add(F, DateTimeToUnix(Now, False));
+  finally
+    Store.Close;
+  end;
+  WriteJSON(AResp, 200, '{"ok":true,"id":' + IntToStr(Id) + '}');
+end;
+
+procedure TGatewayServer.HandleMemoryFactDelete(const IdStr: string;
+                                                AResp: TIdHTTPResponseInfo);
+{ DELETE /v1/memory/facts/<id> -- forget. }
+var
+  Store: IFactStore;
+  Id: Int64;
+  Ok: Boolean;
+begin
+  if not TryStrToInt64(IdStr, Id) then
+  begin
+    WriteJSON(AResp, 400, '{"error":"bad id"}');
+    Exit;
+  end;
+  Store := NewFactStore;
+  if not Store.Open(DefaultFactsDbPath(GetHome)) then
+  begin
+    WriteJSON(AResp, 500, '{"error":"fact store unavailable"}');
+    Exit;
+  end;
+  try
+    Ok := Store.Delete(Id);
+  finally
+    Store.Close;
+  end;
+  if Ok then WriteJSON(AResp, 200, '{"ok":true}')
+  else WriteJSON(AResp, 404, '{"error":"no such fact"}');
+end;
+
+procedure TGatewayServer.HandleMemoryFactsExport(AResp: TIdHTTPResponseInfo);
+{ GET /v1/memory/facts/export -- the store as downloadable Markdown. }
+var
+  Store: IFactStore;
+  Facts: TStoredFactArray;
+  Today: string;
+begin
+  Store := NewFactStore;
+  if not Store.Open(DefaultFactsDbPath(GetHome)) then
+  begin
+    WriteJSON(AResp, 503, '{"error":"fact store unavailable"}');
+    Exit;
+  end;
+  try
+    Today := FormatDateTime('yyyy"-"mm"-"dd', Now);
+    Facts := Store.ActiveFacts(Today);
+  finally
+    Store.Close;
+  end;
+  AResp.ResponseNo := 200;
+  AResp.ContentType := 'text/markdown; charset=utf-8';
+  AResp.CharSet := 'utf-8';
+  AResp.ContentDisposition := 'attachment; filename="memory-facts.md"';
+  { WriteBodyStream, not ContentText: Indy's FPC ContentText writer can
+    corrupt/drop UTF-8 bodies, and facts are UTF-8 from the UI/API. }
+  WriteBodyStream(AResp, FactsToMarkdown(Facts, Today));
 end;
 
 procedure TGatewayServer.HandleConfig(AResp: TIdHTTPResponseInfo);
