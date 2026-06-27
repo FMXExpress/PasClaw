@@ -43,6 +43,101 @@ begin
   ReadLn(Result);
 end;
 
+function IsCloudflareKind(const Kind: string): Boolean;
+{ Any of the three Cloudflare AI Gateway catalog specs -- the OpenAI-compat
+  'cloudflare' plus the '-anthropic' / '-gemini' passthroughs. The picker
+  collapses all three into ONE row and asks which upstream in a follow-up.
+  The catalog itself is untouched (config / tests resolve all three by kind). }
+begin
+  Result := SameText(Kind, 'cloudflare') or
+            SameText(Kind, 'cloudflare-anthropic') or
+            SameText(Kind, 'cloudflare-gemini');
+end;
+
+function CatalogHasKind(const Catalog: TProviderSpecArray;
+                        const Kind: string): Boolean;
+var
+  i: Integer;
+begin
+  Result := False;
+  for i := 0 to High(Catalog) do
+    if SameText(Catalog[i].Kind, Kind) then Exit(True);
+end;
+
+function BuildDisplayCatalog(const Full: TProviderSpecArray): TProviderSpecArray;
+{ Collapse every Cloudflare AI Gateway variant present into a SINGLE
+  "Cloudflare AI Gateway" anchor row (the first one encountered), so the
+  family shows up whenever any variant is in Full -- even when the catalog
+  has been filtered (e.g. the fallback picker drops the primary provider,
+  which could itself be a Cloudflare variant). The follow-up
+  PickCloudflareVariant then offers only the variants Full actually holds. }
+var
+  i, n: Integer;
+  SeenCf: Boolean;
+begin
+  SetLength(Result, Length(Full));
+  n := 0;
+  SeenCf := False;
+  for i := 0 to High(Full) do
+  begin
+    if IsCloudflareKind(Full[i].Kind) then
+    begin
+      if SeenCf then Continue;          { already emitted the collapsed row }
+      SeenCf := True;
+      Result[n] := Full[i];
+      Result[n].DisplayName := 'Cloudflare AI Gateway';   { generic family label }
+      Inc(n);
+      Continue;
+    end;
+    Result[n] := Full[i];
+    Inc(n);
+  end;
+  SetLength(Result, n);
+end;
+
+function PickCloudflareVariant(const Catalog: TProviderSpecArray;
+                               out Spec: TProviderSpec): Boolean;
+{ Second step after the operator picks "Cloudflare AI Gateway": choose the
+  upstream the gateway proxies. Offers ONLY the variants present in Catalog,
+  so a filtered catalog (e.g. the fallback picker, which excludes the
+  primary provider) can't let the user re-select the excluded primary and
+  defeat the point of a fallback. Auto-selects when only one variant is
+  available. }
+const
+  Kinds:  array[0..2] of string = (
+    'cloudflare', 'cloudflare-anthropic', 'cloudflare-gemini');
+  Labels: array[0..2] of string = (
+    'OpenAI-compatible  (compat endpoint -- OpenAI, Workers AI, most models)',
+    'Anthropic passthrough  (Claude via /anthropic)',
+    'Gemini passthrough  (Google AI Studio via /google-ai-studio)');
+var
+  Avail: array of Integer;   { indices into Kinds/Labels present in Catalog }
+  i, Idx: Integer;
+  Input: string;
+begin
+  Result := False;
+  SetLength(Avail, 0);
+  for i := 0 to High(Kinds) do
+    if CatalogHasKind(Catalog, Kinds[i]) then
+    begin
+      SetLength(Avail, Length(Avail) + 1);
+      Avail[High(Avail)] := i;
+    end;
+  if Length(Avail) = 0 then Exit;                  { nothing to offer }
+  if Length(Avail) = 1 then                        { only one -- don't ask }
+    Exit(LookupProvider(Kinds[Avail[0]], Spec));
+
+  PrintLn;
+  PrintLn(Ansi.Bold + 'Cloudflare AI Gateway -- which upstream?' + Ansi.Reset);
+  for i := 0 to High(Avail) do
+    PrintLn(Format('  %d. %s', [i + 1, Labels[Avail[i]]]));
+  Input := Trim(ReadLineEcho(Format('Pick [1-%d] (default 1): ', [Length(Avail)])));
+  if Input = '' then Input := '1';
+  if not TryStrToInt(Input, Idx) then Exit;
+  if (Idx < 1) or (Idx > Length(Avail)) then Exit;
+  Result := LookupProvider(Kinds[Avail[Idx - 1]], Spec);
+end;
+
 procedure PrintCatalog(const Catalog: TProviderSpecArray);
 var
   i: Integer;
@@ -56,33 +151,42 @@ function PickFromCatalog(const Catalog: TProviderSpecArray;
                          const DefaultKind: string;
                          out Spec: TProviderSpec): Boolean;
 var
+  Display: TProviderSpecArray;
   Input: string;
   Idx, DefaultIdx, i: Integer;
 begin
   Result := False;
+  { Collapse the Cloudflare AI Gateway siblings into one picker row. }
+  Display := BuildDisplayCatalog(Catalog);
   DefaultIdx := -1;
-  for i := 0 to High(Catalog) do
-    if SameText(Catalog[i].Kind, DefaultKind) then
+  for i := 0 to High(Display) do
+    if SameText(Display[i].Kind, DefaultKind) then
     begin
       DefaultIdx := i;
       Break;
     end;
-  PrintCatalog(Catalog);
+  PrintCatalog(Display);
   if DefaultIdx >= 0 then
     Input := ReadLineEcho(Format('Pick [1-%d] (default %d=%s): ',
-              [Length(Catalog), DefaultIdx + 1, Catalog[DefaultIdx].DisplayName]))
+              [Length(Display), DefaultIdx + 1, Display[DefaultIdx].DisplayName]))
   else
-    Input := ReadLineEcho(Format('Pick [1-%d]: ', [Length(Catalog)]));
+    Input := ReadLineEcho(Format('Pick [1-%d]: ', [Length(Display)]));
   Input := Trim(Input);
   if (Input = '') and (DefaultIdx >= 0) then
+    Spec := Display[DefaultIdx]
+  else
   begin
-    Spec := Catalog[DefaultIdx];
-    Exit(True);
+    if not TryStrToInt(Input, Idx) then Exit;
+    if (Idx < 1) or (Idx > Length(Display)) then Exit;
+    Spec := Display[Idx - 1];
   end;
-  if not TryStrToInt(Input, Idx) then Exit;
-  if (Idx < 1) or (Idx > Length(Catalog)) then Exit;
-  Spec := Catalog[Idx - 1];
-  Result := True;
+  { Drill into the upstream choice once the collapsed gateway row is picked.
+    Match the whole family (the anchor row's Kind is whichever variant came
+    first in Catalog), and pass Catalog so the sub-pick stays within it. }
+  if IsCloudflareKind(Spec.Kind) then
+    Result := PickCloudflareVariant(Catalog, Spec)
+  else
+    Result := True;
 end;
 
 function CompareModelsByDate(const A, B: TModelInfo): Integer;
