@@ -111,7 +111,7 @@ var
   Lines: TStringList;
   Dir:   string;
   Cfg:   TConfig;
-  UseVector, DistillOn: Boolean;
+  UseVector, DistillOn, IndexFailed: Boolean;
   MdText, FactText: string;
   FactHits: TStoredFactArray;
 begin
@@ -162,19 +162,24 @@ begin
       Idx := nil;  { releases the interface; falls through to FTS }
   end;
 
+  IndexFailed := False;
   if Idx = nil then
   begin
     Idx := NewMemoryIndex;
     if not Idx.Open(IndexDbPath) then
     begin
       Idx := nil;
-      { Index unavailable. If distilled facts are on, fall through and let
-        the facts search still answer; otherwise this is a hard error. }
+      { Index unavailable. If distilled facts are on, remember the failure
+        and fall through so the fact store can still answer; otherwise this
+        is a hard error (unchanged behaviour). The failure is NOT silently
+        dropped -- it's reported below if facts don't produce results, and
+        flagged as a partial search if they do. }
       if not DistillOn then
       begin
         ErrMsg := 'memory index unavailable (libsqlite3 missing or unreadable)';
         Exit;
       end;
+      IndexFailed := True;
     end;
   end;
 
@@ -232,7 +237,17 @@ begin
   end;
 
   if (MdText = '') and (FactText = '') then
-    Exit(Format('(no matches for %s in %s)', [Query, Dir]));
+  begin
+    { Nothing to return. If the markdown index never opened, that's the
+      real reason -- report it as unavailable rather than a misleading
+      "no matches" (the notes were never searched). }
+    if IndexFailed then
+      ErrMsg := 'memory index unavailable (libsqlite3 missing or unreadable); ' +
+                'no matching distilled facts either'
+    else
+      Result := Format('(no matches for %s in %s)', [Query, Dir]);
+    Exit;
+  end;
 
   Result := MdText;
   if FactText <> '' then
@@ -240,6 +255,11 @@ begin
     if Result <> '' then Result := Result + sLineBreak;
     Result := Result + FactText;
   end;
+  { Facts answered but the markdown index was down -- tell the model this
+    was a partial search so it doesn't assume the notes were checked. }
+  if IndexFailed then
+    Result := '(note: markdown memory index unavailable -- searched ' +
+              'distilled facts only)' + sLineBreak + Result;
 
   { Promptware chokepoint 2 of 3: recalled memory. Snippets were
     written on earlier turns -- possibly copied from attacker-supplied
