@@ -5041,7 +5041,7 @@ begin
         Loop.Content := Trim(Loop.Content);
         if Loop.Content <> '' then Loop.Content := Loop.Content + #10#10;
         Loop.Content := Loop.Content + FormatMaxIterNotice(Loop, FMaxIter,
-          '`--max-iter` on `pasclaw serve` or `max_iterations` in config');
+          '`--max-iter` on `pasclaw serve` or `max_iterations` in config', True);
         FinishReason := 'length';
         LogWarn('chat/completions: tool loop hit MaxIterations=%d (%d pending tool call(s), %d content chars)',
                 [FMaxIter, Length(Loop.LastResp.ToolCalls), Length(Loop.Content)]);
@@ -5128,7 +5128,7 @@ begin
       Loop.Content := Trim(Loop.Content);
       if Loop.Content <> '' then Loop.Content := Loop.Content + #10#10;
       Loop.Content := Loop.Content + FormatMaxIterNotice(Loop, FMaxIter,
-        '`--max-iter` on `pasclaw serve` or `max_iterations` in config');
+        '`--max-iter` on `pasclaw serve` or `max_iterations` in config', True);
       FinishReason := 'length';
       LogWarn('chat/completions: tool loop hit MaxIterations=%d (%d pending tool call(s), %d content chars)',
               [FMaxIter, Length(Loop.LastResp.ToolCalls), Length(Loop.Content)]);
@@ -6754,7 +6754,7 @@ begin
         Loop.Content := Trim(Loop.Content);
         if Loop.Content <> '' then Loop.Content := Loop.Content + #10#10;
         Loop.Content := Loop.Content + FormatMaxIterNotice(Loop, FMaxIter,
-          '`--max-iter` on `pasclaw serve` or `max_iterations` in config');
+          '`--max-iter` on `pasclaw serve` or `max_iterations` in config', True);
         FinishReason := 'length';
         LogWarn('responses: tool loop hit MaxIterations=%d (%d pending tool call(s), %d content chars)',
                 [FMaxIter, Length(Loop.LastResp.ToolCalls), Length(Loop.Content)]);

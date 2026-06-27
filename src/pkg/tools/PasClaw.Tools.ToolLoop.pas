@@ -196,12 +196,17 @@ function RunToolLoop(const Cfg: TToolLoopConfig;
   from a finished loop result, or '' when the loop did NOT hit the cap (so
   callers can append it unconditionally). MaxIter is the configured cap;
   HowToRaise is a surface-specific hint for lifting it (e.g.
-  '--max-iter on `pasclaw serve`', or '' to omit that clause). The notice
-  explains why it stopped, what it was mid-doing, and that replying
-  "continue" resumes -- the history carries over, so a follow-up turn picks
-  up where this one left off. }
+  '--max-iter on `pasclaw serve`', or '' to omit that clause).
+
+  Resumable says whether THIS caller carries conversation history forward:
+    True  (interactive CLI, session-backed TUI, gateway clients that resend
+          the message array) -> "reply continue to resume from here".
+    False (one-shot CLI without --session, the line-based TUI that rebuilds
+          the history from the current input each turn) -> there is nothing
+          to resume into, so the notice tells the user to raise the cap and
+          re-run instead of promising a continue that would start fresh. }
 function FormatMaxIterNotice(const Loop: TToolLoopResult; MaxIter: Integer;
-                            const HowToRaise: string): string;
+                            const HowToRaise: string; Resumable: Boolean): string;
 
 type
   (* Late-bound hook so PasClaw.Tools.ToolLoop doesn't have to
@@ -629,7 +634,7 @@ begin
 end;
 
 function FormatMaxIterNotice(const Loop: TToolLoopResult; MaxIter: Integer;
-  const HowToRaise: string): string;
+  const HowToRaise: string; Resumable: Boolean): string;
 var
   Names: string;
   i: Integer;
@@ -648,11 +653,26 @@ begin
   if Names <> '' then
     Result := Result + sLineBreak +
       'It was mid-way through: ' + Names + '.';
-  Result := Result + sLineBreak +
-    'Reply "continue" to resume from here (the conversation carries over)';
-  if HowToRaise <> '' then
-    Result := Result + ', or raise the limit (' + HowToRaise + ')';
-  Result := Result + '.';
+  if Resumable then
+  begin
+    { History carries over -- a follow-up turn resumes from here. }
+    Result := Result + sLineBreak +
+      'Reply "continue" to resume from here (the conversation carries over)';
+    if HowToRaise <> '' then
+      Result := Result + ', or raise the limit (' + HowToRaise + ')';
+    Result := Result + '.';
+  end
+  else
+  begin
+    { Stateless caller: there is nothing to "continue" into -- a fresh
+      request would start over without the tool history -- so point the
+      user at raising the cap and re-running. }
+    Result := Result + sLineBreak + 'This turn does not carry over -- ';
+    if HowToRaise <> '' then
+      Result := Result + 'raise the limit (' + HowToRaise + ') and re-run to finish.'
+    else
+      Result := Result + 'raise the iteration limit and re-run to finish.';
+  end;
 end;
 
 function RunToolLoop(const Cfg: TToolLoopConfig;

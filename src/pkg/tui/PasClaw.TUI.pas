@@ -1374,7 +1374,8 @@ begin
     if Trim(DisplayContent) <> '' then
       DisplayContent := DisplayContent + sLineBreak + sLineBreak;
     DisplayContent := DisplayContent +
-      FormatMaxIterNotice(Loop, Loop.Iterations, 'max_iterations in config');
+      FormatMaxIterNotice(Loop, Loop.Iterations, 'max_iterations in config',
+                          {Resumable=} True);   { session-backed -- history persists }
   end;
   if (CurrentSession <> nil) and (CurrentSession.Meta.Id = SessionId) then
   begin
@@ -2854,8 +2855,10 @@ begin
   else
     PrintLn(Loop.Content);
   if Loop.HitMaxIterations then
+    { This line-based path rebuilds the history from the current input each
+      turn -- nothing to "continue" into, so Resumable=False. }
     PrintLn(Ansi.Yellow + FormatMaxIterNotice(Loop, Loop.Iterations,
-            'max_iterations in config') + Ansi.Reset);
+            'max_iterations in config', {Resumable=} False) + Ansi.Reset);
   if Loop.LastResp.Usage.InputTokens + Loop.LastResp.Usage.OutputTokens > 0 then
     PrintLn(Ansi.Dim + '         ' +
       Format('[tokens in=%d out=%d, iters=%d]',
