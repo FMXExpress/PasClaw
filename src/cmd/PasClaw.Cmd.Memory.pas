@@ -100,6 +100,11 @@ begin
   PrintLn('  facts [--all]');
   PrintLn('              List stored facts (active only; --all includes');
   PrintLn('              superseded/expired).');
+  PrintLn('  add <text> [--kind k] [--scope s] [--expires YYYY-MM-DD]');
+  PrintLn('              Manually remember a fact.');
+  PrintLn('  forget <id> Delete a fact by id (from `memory facts`).');
+  PrintLn('  export [--all] [--out FILE]');
+  PrintLn('              Dump facts as Markdown (stdout, or to FILE).');
 end;
 
 function ModelDir(const SubDir: string): string;
@@ -683,6 +688,183 @@ begin
   Result := 0;
 end;
 
+function RunAdd(const Argv: array of string): Integer;
+{ pasclaw memory add <text...> [--kind static|dynamic] [--scope user|project|session]
+                               [--expires YYYY-MM-DD]
+  Manually remember a fact. Goes through the same store (and dedup) as the
+  auto-distiller; source is tagged "manual". }
+var
+  F: TFact;
+  Store: IFactStore;
+  Cfg: TConfig;
+  i: Integer;
+  Id: Int64;
+  TextParts: string;
+  DistillOn: Boolean;
+begin
+  F.Text := ''; F.Kind := 'static'; F.Scope := 'user';
+  F.Confidence := 1.0; F.Expires := ''; F.SourceSession := 'manual';
+  TextParts := '';
+  i := 1;
+  while i <= High(Argv) do
+  begin
+    if (Argv[i] = '--kind')    and (i < High(Argv)) then begin F.Kind := Argv[i+1];    Inc(i,2); Continue; end;
+    if (Argv[i] = '--scope')   and (i < High(Argv)) then begin F.Scope := Argv[i+1];   Inc(i,2); Continue; end;
+    if (Argv[i] = '--expires') and (i < High(Argv)) then begin F.Expires := Argv[i+1]; Inc(i,2); Continue; end;
+    if TextParts <> '' then TextParts := TextParts + ' ';
+    TextParts := TextParts + Argv[i];
+    Inc(i);
+  end;
+  F.Text := Trim(TextParts);
+  if F.Text = '' then
+  begin
+    PrintErr('add: fact text required, e.g. pasclaw memory add "prefers Delphi"' + sLineBreak);
+    Exit(1);
+  end;
+  NormaliseFact(F);   { normalise kind/scope/confidence/expires like the distiller }
+
+  Store := NewFactStore;
+  if not Store.Open(DefaultFactsDbPath(GetHome)) then
+  begin
+    PrintErr('add: cannot open fact store at ' + DefaultFactsDbPath(GetHome) + sLineBreak);
+    Exit(1);
+  end;
+  try
+    Id := Store.Add(F, DateTimeToUnix(Now, False));
+  finally
+    Store.Close;
+  end;
+  PrintLn(Ansi.Green + '✓' + Ansi.Reset + ' remembered #' + IntToStr(Id) +
+          ' [' + F.Kind + '/' + F.Scope + ']: ' + F.Text);
+
+  { Gentle nudge: a manual fact only reaches the model when the feature is on. }
+  Cfg := LoadConfig;
+  try DistillOn := Cfg.MemoryDistillEnabled; finally Cfg.Free; end;
+  if not DistillOn then
+    PrintLn('  ' + Ansi.Dim +
+      '(note: memory_distill_enabled is off -- enable it for this fact to be ' +
+      'injected / searched)' + Ansi.Reset);
+  Result := 0;
+end;
+
+function RunForget(const Argv: array of string): Integer;
+{ pasclaw memory forget <id>   (id from `pasclaw memory facts`) }
+var
+  Store: IFactStore;
+  Id: Int64;
+  Ok: Boolean;
+begin
+  if (Length(Argv) < 2) or (not TryStrToInt64(Argv[1], Id)) then
+  begin
+    PrintErr('forget: a numeric fact id is required ' +
+             '(see `pasclaw memory facts`)' + sLineBreak);
+    Exit(1);
+  end;
+  Store := NewFactStore;
+  if not Store.Open(DefaultFactsDbPath(GetHome)) then
+  begin
+    PrintErr('forget: cannot open fact store' + sLineBreak);
+    Exit(1);
+  end;
+  try
+    Ok := Store.Delete(Id);
+  finally
+    Store.Close;
+  end;
+  if Ok then
+  begin
+    PrintLn(Ansi.Green + '✓' + Ansi.Reset + ' forgot #' + IntToStr(Id));
+    Result := 0;
+  end
+  else
+  begin
+    PrintErr('forget: no fact #' + IntToStr(Id) + sLineBreak);
+    Result := 1;
+  end;
+end;
+
+function RunExport(const Argv: array of string): Integer;
+{ pasclaw memory export [--all] [--out FILE]
+  Dump the fact store as human-readable / git-friendly Markdown (the
+  auditability escape hatch for the SQLite store). }
+var
+  Store: IFactStore;
+  Facts: TStoredFactArray;
+  SL: TStringList;
+  All: Boolean;
+  OutFile, Today: string;
+  i: Integer;
+
+  procedure EmitScope(const Scope: string);
+  var
+    j: Integer;
+    Any: Boolean;
+    Line: string;
+  begin
+    Any := False;
+    for j := 0 to High(Facts) do
+    begin
+      if Facts[j].Scope <> Scope then Continue;
+      if not Any then begin SL.Add('## ' + Scope); SL.Add(''); Any := True; end;
+      Line := Format('- %s  _(%s, conf %.2f)_',
+        [Facts[j].Text, Facts[j].Kind, Facts[j].Confidence]);
+      if Facts[j].Expires <> '' then Line := Line + ' _(until ' + Facts[j].Expires + ')_';
+      if Facts[j].Superseded then Line := Line + ' _(superseded)_';
+      SL.Add(Line);
+    end;
+    if Any then SL.Add('');
+  end;
+
+begin
+  All := False; OutFile := '';
+  i := 1;
+  while i <= High(Argv) do
+  begin
+    if Argv[i] = '--all' then begin All := True; Inc(i); Continue; end;
+    if (Argv[i] = '--out') and (i < High(Argv)) then begin OutFile := Argv[i+1]; Inc(i,2); Continue; end;
+    Inc(i);
+  end;
+
+  Store := NewFactStore;
+  if not Store.Open(DefaultFactsDbPath(GetHome)) then
+  begin
+    PrintErr('export: no fact store at ' + DefaultFactsDbPath(GetHome) + sLineBreak);
+    Exit(1);
+  end;
+  try
+    Today := FormatDateTime('yyyy"-"mm"-"dd', Now);
+    if All then Facts := Store.AllFacts else Facts := Store.ActiveFacts(Today);
+  finally
+    Store.Close;
+  end;
+
+  SL := TStringList.Create;
+  try
+    SL.Add('# PasClaw distilled memory');
+    SL.Add('');
+    SL.Add(Format('_%d fact(s), exported %s._', [Length(Facts), Today]));
+    SL.Add('');
+    EmitScope('user');
+    EmitScope('project');
+    EmitScope('session');
+    if OutFile <> '' then
+    begin
+      { WriteFileText is the codebase's UTF-8 writer (same path memory/
+        checkpoints use) -- guarantees UTF-8 on BOTH compilers, unlike
+        TStringList.SaveToFile whose default encoding is the system code
+        page on Delphi and would mojibake accents / CJK / emoji. }
+      WriteFileText(OutFile, SL.Text);
+      PrintLn(Ansi.Green + '✓' + Ansi.Reset + ' exported ' + IntToStr(Length(Facts)) +
+              ' fact(s) to ' + OutFile);
+    end
+    else
+      Write(SL.Text);
+  finally
+    SL.Free;
+  end;
+  Result := 0;
+end;
+
 function Cmd_Memory_Run(const Argv: array of string): Integer;
 var
   Sub: string;
@@ -702,6 +884,9 @@ begin
   if Sub = 'status'    then Exit(RunStatus);
   if Sub = 'distill'   then Exit(RunDistill(Argv));
   if Sub = 'facts'     then Exit(RunFacts(Argv));
+  if Sub = 'add'       then Exit(RunAdd(Argv));
+  if Sub = 'forget'    then Exit(RunForget(Argv));
+  if Sub = 'export'    then Exit(RunExport(Argv));
   PrintErr('unknown memory subcommand: ' + Sub + sLineBreak);
   Help;
   Result := 1;
