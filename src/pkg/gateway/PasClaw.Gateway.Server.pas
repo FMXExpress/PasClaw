@@ -2332,6 +2332,7 @@ begin
       FO.PutStr ('text',       Facts[i].Text);
       FO.PutStr ('kind',       Facts[i].Kind);
       FO.PutStr ('scope',      Facts[i].Scope);
+      FO.PutStr ('event_date', Facts[i].EventDate);
       FO.PutStr ('expires',    Facts[i].Expires);
       FO.PutBool('superseded', Facts[i].Superseded);
       Arr.AddObject(FO);
@@ -2368,6 +2369,7 @@ begin
     F.Kind          := Obj.GetStr('kind', 'static');
     F.Scope         := Obj.GetStr('scope', 'user');
     F.Confidence    := 1.0;
+    F.EventDate     := Obj.GetStr('event_date', '');
     F.Expires       := Obj.GetStr('expires', '');
     F.SourceSession := 'manual-web';
   finally

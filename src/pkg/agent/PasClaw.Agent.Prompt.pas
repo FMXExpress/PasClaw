@@ -245,14 +245,39 @@ function BuildFactsSection(Cfg: TConfig): string;
   NOT relevance-sliced like the OrientTaskAware path -- standing memory
   shouldn't narrow to the current query and give the model a one-track
   mind. Empty (no I/O) when the feature is off or the budget is 0, so a
-  default install pays nothing. }
+  default install pays nothing.
+
+  Prepended with a proactive "Upcoming" block: facts carrying an
+  event_date within the next week, phrased relatively ("tomorrow"), so
+  the model can volunteer "your exam is tomorrow" rather than waiting to
+  be asked.
+
+  Both blocks share the SAME MemoryFactsBudget so the section never grows
+  past the operator's configured cap: the upcoming block draws first (it
+  is the proactive priority), and the durable block gets whatever bytes
+  remain. }
+const
+  UpcomingHorizonDays = 7;
+var
+  Today, Upcoming, Facts: string;
+  Remaining: Integer;
 begin
   Result := '';
   if (Cfg = nil) or (not Cfg.MemoryDistillEnabled) or (Cfg.MemoryFactsBudget <= 0) then
     Exit;
-  Result := ActiveFactsBlock(GetHome,
-                             FormatDateTime('yyyy"-"mm"-"dd', Now),
-                             Cfg.MemoryFactsBudget);
+  Today    := FormatDateTime('yyyy"-"mm"-"dd', Now);
+  Upcoming := UpcomingFactsBlock(GetHome, Today, UpcomingHorizonDays,
+                                 Cfg.MemoryFactsBudget);
+  Remaining := Cfg.MemoryFactsBudget - Length(Upcoming);
+  if Remaining < 0 then Remaining := 0;
+  Facts    := ActiveFactsBlock(GetHome, Today, Remaining);
+  if Upcoming <> '' then
+  begin
+    Result := Upcoming;
+    if Facts <> '' then Result := Result + sLineBreak + sLineBreak + Facts;
+  end
+  else
+    Result := Facts;
 end;
 
 function BuildMemorySection(TaskAware: Boolean; const TaskHint: string): string;

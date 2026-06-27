@@ -332,6 +332,126 @@ begin
   end;
 end;
 
+procedure RunEventDateTests;
+{ event_date is stored distinctly from expires, round-trips, and drives
+  the proactive FormatUpcomingBlock surfacing. TODAY = 2026-06-26. }
+var
+  DbPath: string;
+  Store: IFactStore;
+  F: TFact;
+  Active, Up: TStoredFactArray;
+  S: string;
+  i: Integer;
+  FoundExam: Boolean;
+begin
+  DbPath := JoinPath(GTmpDir, 'facts-event.db');
+  Store := NewFactStore;
+  AssertTrue(Store.Open(DbPath), 'open event store');
+
+  { Exam tomorrow (2026-06-27), distinct expiry a few days out. }
+  F := MkFact('User has a calculus exam', 'dynamic', 'user', '2026-06-30', 0.9);
+  F.EventDate := '2026-06-27';
+  Store.Add(F, 2000);
+  { Conference in 10 days -- beyond a 7-day horizon. }
+  F := MkFact('PasCon talk', 'dynamic', 'project', '', 0.8);
+  F.EventDate := '2026-07-06';
+  Store.Add(F, 2001);
+  { Plain fact, no event date. }
+  Store.Add(MkFact('Prefers Delphi', 'static', 'user', '', 0.9), 2002);
+
+  { event_date round-trips through storage. }
+  Active := Store.ActiveFacts(TODAY);
+  FoundExam := False;
+  for i := 0 to High(Active) do
+    if Active[i].Text = 'User has a calculus exam' then
+    begin
+      AssertEqStr(Active[i].EventDate, '2026-06-27', 'event_date round-trips');
+      AssertEqStr(Active[i].Expires, '2026-06-30', 'expires stays distinct from event_date');
+      FoundExam := True;
+    end;
+  AssertTrue(FoundExam, 'exam fact present in active set');
+  Store.Close;
+
+  { Upcoming within 7 days: only the exam (tomorrow). The conference is 10
+    days out; the Delphi fact has no event date. Reopen to prove durability. }
+  Store := NewFactStore;
+  AssertTrue(Store.Open(DbPath), 'reopen event store');
+  Up := Store.ActiveFacts(TODAY);
+  Store.Close;
+
+  S := FormatUpcomingBlock(Up, TODAY, 7, 4000);
+  AssertTrue(Pos('Upcoming', S) > 0, 'upcoming header present');
+  AssertTrue(Pos('calculus exam', S) > 0, 'exam surfaced within horizon');
+  AssertTrue(Pos('tomorrow', S) > 0, 'exam phrased relatively as tomorrow');
+  AssertTrue(Pos('PasCon', S) = 0, 'event beyond horizon not surfaced');
+  AssertTrue(Pos('Prefers Delphi', S) = 0, 'event-less fact not surfaced');
+
+  { Widen the horizon to catch the conference too; soonest first. }
+  S := FormatUpcomingBlock(Up, TODAY, 14, 4000);
+  AssertTrue(Pos('PasCon', S) > 0, 'conference surfaced with wider horizon');
+  AssertTrue(Pos('calculus exam', S) < Pos('PasCon', S), 'soonest event listed first');
+
+  { Budget bounds the block: a tiny budget keeps the soonest and breadcrumbs
+    the rest, so the section can't blow past the operator's facts budget. }
+  S := FormatUpcomingBlock(Up, TODAY, 14, 70);
+  AssertTrue(Pos('calculus exam', S) > 0, 'tiny budget keeps the soonest event');
+  AssertTrue(Pos('PasCon', S) = 0, 'tiny budget drops the later event');
+  AssertTrue(Pos('more upcoming', S) > 0, 'tiny budget breadcrumbs the dropped event');
+  AssertEqStr(FormatUpcomingBlock(Up, TODAY, 14, 0), '', 'budget 0 -> empty block');
+
+  { Nothing upcoming when the horizon is 0 and the only event is tomorrow. }
+  S := FormatUpcomingBlock(Up, TODAY, 0, 4000);
+  AssertEqStr(S, '', 'horizon 0 -> nothing upcoming (exam is tomorrow, not today)');
+end;
+
+procedure RunDedupDatesTests;
+{ A re-observed fact that dedups onto an existing row must fold in newly
+  supplied dates (event_date / expires) -- not silently drop them. }
+var
+  DbPath: string;
+  Store: IFactStore;
+  F: TFact;
+  Id1, Id2: Int64;
+  Active: TStoredFactArray;
+  i: Integer;
+  Found: Boolean;
+begin
+  DbPath := JoinPath(GTmpDir, 'facts-dedup-dates.db');
+  Store := NewFactStore;
+  AssertTrue(Store.Open(DbPath), 'open dedup-dates store');
+
+  { Original fact has no event date. }
+  Id1 := Store.Add(MkFact('User has a calculus exam', 'dynamic', 'user', '', 0.9), 3000);
+  AssertTrue(Id1 > 0, 'first add returns id');
+
+  { Re-add the SAME text WITH an event date -- dedups onto Id1 but must now
+    carry the date. }
+  F := MkFact('User has a calculus exam', 'dynamic', 'user', '2026-06-30', 0.9);
+  F.EventDate := '2026-06-27';
+  Id2 := Store.Add(F, 3001);
+  AssertTrue(Id2 = Id1, 'dedup returns the existing id');
+
+  Active := Store.ActiveFacts(TODAY);
+  Found := False;
+  for i := 0 to High(Active) do
+    if Active[i].Id = Id1 then
+    begin
+      AssertEqStr(Active[i].EventDate, '2026-06-27', 'dedup folded in the new event date');
+      AssertEqStr(Active[i].Expires, '2026-06-30', 'dedup folded in the new expiry');
+      Found := True;
+    end;
+  AssertTrue(Found, 'deduped row still active');
+
+  { A later dateless re-observation must NOT blank the stored date. }
+  Store.Add(MkFact('User has a calculus exam', 'dynamic', 'user', '', 0.9), 3002);
+  Active := Store.ActiveFacts(TODAY);
+  for i := 0 to High(Active) do
+    if Active[i].Id = Id1 then
+      AssertEqStr(Active[i].EventDate, '2026-06-27', 'empty re-observation does not wipe the date');
+
+  Store.Close;
+end;
+
 begin
   GTmpDir := JoinPath(GetTempDir, 'pasclaw-facts-test-' + IntToStr(Random(1 shl 30)));
   EnsureDir(GTmpDir);
@@ -352,6 +472,10 @@ begin
     WriteLn('  ok: semantic dedup + hybrid search (fake embedder)');
     RunBackfillTests;
     WriteLn('  ok: backfill embeds pre-existing empty rows');
+    RunEventDateTests;
+    WriteLn('  ok: event_date round-trip + proactive upcoming block');
+    RunDedupDatesTests;
+    WriteLn('  ok: dedup folds in event/expiry dates without wiping them');
     WriteLn('PASS');
   finally
     {$IFDEF UNIX}
