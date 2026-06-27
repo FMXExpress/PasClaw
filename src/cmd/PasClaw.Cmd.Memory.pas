@@ -503,21 +503,23 @@ function LatestSessionId: string;
 var
   SR: TSearchRec;
   Best: string;
-  BestTime: LongInt;
+  BestTime, FT: TDateTime;
 begin
   Result := '';
   Best := '';
-  BestTime := -1;
+  BestTime := 0;
   if FindFirst(JoinPath(MemoryDir, '*.ndjson'), faAnyFile, SR) = 0 then
   try
     repeat
       if (SR.Attr and faDirectory) <> 0 then Continue;
-      { SR.Time is a packed file timestamp -- fine for "newest" ordering
-        and available under both FPC and Delphi (unlike .TimeStamp). }
-      if (Best = '') or (SR.Time > BestTime) then
+      { Use FileAge's TDateTime overload for "newest" ordering rather than
+        SR.Time -- the packed TSearchRec.Time field is deprecated under
+        Delphi, and the two-arg FileAge exists on both FPC and Delphi. }
+      if not FileAge(JoinPath(MemoryDir, SR.Name), FT) then Continue;
+      if (Best = '') or (FT > BestTime) then
       begin
         Best := SR.Name;
-        BestTime := SR.Time;
+        BestTime := FT;
       end;
     until FindNext(SR) <> 0;
   finally
