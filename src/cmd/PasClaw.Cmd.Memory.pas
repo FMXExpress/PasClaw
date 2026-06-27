@@ -34,6 +34,13 @@ unit PasClaw.Cmd.Memory;
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
 {$H+}
 
+// Compiler-neutral macOS symbol: FPC uses DARWIN, Delphi uses MACOS/OSX.
+// Three separate IFDEF lines (not one IF DEFINED expression) so it stays
+// portable across both toolchains' directive dialects.
+{$IFDEF DARWIN}{$DEFINE PCLAW_MACOS}{$ENDIF}
+{$IFDEF MACOS}{$DEFINE PCLAW_MACOS}{$ENDIF}
+{$IFDEF OSX}{$DEFINE PCLAW_MACOS}{$ENDIF}
+
 interface
 
 function Cmd_Memory_Run(const Argv: array of string): Integer;
@@ -42,6 +49,11 @@ implementation
 
 uses
   SysUtils, Classes,
+  {$IFDEF FPC}
+  fphttpclient, opensslsockets,
+  {$ELSE}
+  System.Net.HttpClient, System.Net.URLClient,
+  {$ENDIF}
   PasClaw.CliUI,
   PasClaw.Utils,
   PasClaw.Config,
@@ -151,22 +163,141 @@ begin
   end;
 end;
 
-function ProvisionOnnxRuntime: Boolean;
-{ Returns True if the runtime ends up loadable (auto-downloaded on
-  win-x64 OR resolvable through the system loader on Linux/macOS).
-  EnsureOnnxRuntime is the single entry; CanAutoProvisionRuntime tells
-  us whether auto-download is even an option on this platform. }
+{$IFNDEF MSWINDOWS}
+const
+  { ONNX Runtime release pinned for the POSIX auto-download. The vendored
+    LocalVector.OrtProvision only auto-fetches win-x64; this fills in
+    Linux/macOS so `pasclaw memory provision` is one step on every host.
+    Pinned to a known-good published release (the C API the bindings load
+    is stable across 1.x). }
+  ORT_POSIX_VERSION = '1.20.1';
+
+function HttpDownload(const Url, Dest: string): Boolean;
+{$IFDEF FPC}
+var
+  C: TFPHTTPClient;
 begin
   Result := False;
-  if not CanAutoProvisionRuntime then
-  begin
-    PrintLn('  ' + Ansi.Dim + '·' + Ansi.Reset +
-      ' ONNX Runtime auto-download is win-x64 only on this build;');
-    PrintLn('    install via your system package manager:');
-    PrintLn('      Debian / Ubuntu:  apt install libonnxruntime-dev');
-    PrintLn('      macOS (Homebrew): brew install onnxruntime');
-    PrintLn('      Other Linux:      see https://onnxruntime.ai/docs/install/');
+  C := TFPHTTPClient.Create(nil);
+  try
+    C.AllowRedirect := True;
+    C.AddHeader('User-Agent', 'pasclaw');
+    C.Get(Url, Dest);
+    Result := FileExists(Dest);
+  finally
+    C.Free;
   end;
+end;
+{$ELSE}
+var
+  C: THTTPClient;
+  FS: TFileStream;
+begin
+  Result := False;
+  C := THTTPClient.Create;
+  FS := TFileStream.Create(Dest, fmCreate);
+  try
+    C.Get(Url, FS);
+    Result := FS.Size > 0;
+  finally
+    FS.Free;
+    C.Free;
+  end;
+end;
+{$ENDIF}
+
+function PosixOrtAsset(out Asset, LibGlob, DestName: string): Boolean;
+{ Map this platform to its ONNX Runtime release asset + the library file
+  to extract. Returns False on a platform with no known asset. }
+begin
+  Result := True;
+  {$IFDEF PCLAW_MACOS}
+  Asset    := 'onnxruntime-osx-universal2-' + ORT_POSIX_VERSION + '.tgz';
+  LibGlob  := 'libonnxruntime*.dylib';
+  DestName := 'onnxruntime.dylib';
+  {$else}
+    {$IFDEF CPUAARCH64}
+    Asset := 'onnxruntime-linux-aarch64-' + ORT_POSIX_VERSION + '.tgz';
+    {$ELSE}
+    Asset := 'onnxruntime-linux-x64-' + ORT_POSIX_VERSION + '.tgz';
+    {$ENDIF}
+  LibGlob  := 'libonnxruntime.so.*';
+  DestName := 'onnxruntime.so';
+  {$ENDIF}
+end;
+
+function TryProvisionPosixRuntime: Boolean;
+{ Download the platform's ONNX Runtime release, extract the shared lib,
+  and drop it as the cache onnxruntime.so / .dylib -- exactly where
+  EnsureOnnxRuntime looks. Uses the system `tar` (present on Linux/macOS).
+  Best-effort: returns False (with a status line) on any failure. }
+var
+  Asset, LibGlob, DestName, Url, Tgz, Tmp, Dest: string;
+begin
+  Result := False;
+  if not PosixOrtAsset(Asset, LibGlob, DestName) then Exit;
+  ForceDirectories(CacheDir);
+  Dest := JoinPath(CacheDir, DestName);
+  Url  := 'https://github.com/microsoft/onnxruntime/releases/download/v' +
+          ORT_POSIX_VERSION + '/' + Asset;
+  Tgz  := JoinPath(CacheDir, Asset);
+  Tmp  := JoinPath(CacheDir, 'ort-extract');
+
+  try
+    PrintLn('  ' + Ansi.Dim + 'downloading ONNX Runtime ' + ORT_POSIX_VERSION +
+            ' (' + Asset + ') ...' + Ansi.Reset);
+    if not HttpDownload(Url, Tgz) then
+    begin
+      PrintCheckMark(Ansi.Red, '✗', 'ONNX Runtime download failed: ' + Url);
+      Exit;
+    end;
+    { Extract + copy the real (non-symlink) shared lib via system tar. }
+    ExecuteProcess('/bin/sh', ['-c', 'rm -rf "' + Tmp + '" && mkdir -p "' + Tmp +
+      '" && tar -xzf "' + Tgz + '" -C "' + Tmp + '" && cp "$(find "' + Tmp +
+      '" -name ''' + LibGlob + ''' -type f | head -1)" "' + Dest + '"']);
+    Result := FileExists(Dest);
+    if Result then
+      PrintCheckMark(Ansi.Green, '✓', 'ONNX Runtime installed at ' + Dest)
+    else
+      PrintCheckMark(Ansi.Red, '✗',
+        'ONNX Runtime extract failed (no ' + LibGlob + ' in archive)');
+  except
+    on E: Exception do
+      PrintCheckMark(Ansi.Red, '✗', 'ONNX Runtime: ' + E.Message);
+  end;
+  { Tidy the tarball + extract dir; leave only the installed lib. }
+  try
+    if FileExists(Tgz) then DeleteFile(Tgz);
+    ExecuteProcess('/bin/sh', ['-c', 'rm -rf "' + Tmp + '"']);
+  except
+    on E: Exception do ;
+  end;
+end;
+{$ENDIF}
+
+function ProvisionOnnxRuntime: Boolean;
+{ Returns True if the runtime ends up loadable. Win-x64 auto-downloads via
+  the vendored EnsureOnnxRuntime; Linux/macOS auto-download here (the
+  vendored unit is win-only). Either way EnsureOnnxRuntime is the final
+  arbiter of "loadable". }
+begin
+  Result := False;
+  {$IFNDEF MSWINDOWS}
+  { POSIX: if the runtime isn't already on the loader path / in the cache,
+    fetch + extract the release ourselves. }
+  try
+    EnsureOnnxRuntime(CacheDir, {AAllowDownload=} False, {AVerbose=} False);
+  except
+    on E: Exception do TryProvisionPosixRuntime;
+  end;
+  {$ENDIF}
+  {$IFDEF MSWINDOWS}
+  { Windows-on-ARM has no wired asset -- the vendored auto-download is
+    win-x64 only. POSIX is handled above. }
+  if not CanAutoProvisionRuntime then
+    PrintLn('  ' + Ansi.Dim + '·' + Ansi.Reset +
+      ' ONNX Runtime auto-download is win-x64 only on this build.');
+  {$ENDIF}
   try
     EnsureOnnxRuntime(CacheDir,
                       {AAllowDownload=} True,
@@ -175,12 +306,7 @@ begin
     Result := True;
   except
     on E: Exception do
-    begin
       PrintCheckMark(Ansi.Red, '✗', 'ONNX Runtime: ' + E.Message);
-      if not CanAutoProvisionRuntime then
-        PrintLn('    (install per the instructions above, then re-run ' +
-                '`pasclaw memory provision`)');
-    end;
   end;
 end;
 
