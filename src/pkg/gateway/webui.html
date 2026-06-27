@@ -450,6 +450,35 @@
   .cfg-check{width:16px;height:16px;accent-color:var(--cyan)}
   #config-raw-toggle.on{border-color:var(--cyan);color:var(--cyan)}
 
+  /* ===== First-boot onboarding wizard ===== */
+  #onboard-overlay{position:fixed;inset:0;z-index:200;display:flex;align-items:center;
+    justify-content:center;background:rgba(2,5,15,.74);backdrop-filter:blur(6px);padding:1rem}
+  #onboard-overlay[hidden]{display:none}
+  #onboard-card{width:min(460px,94vw);max-height:92vh;overflow:auto;
+    border:1px solid rgba(143,92,255,.4);border-radius:16px;padding:1.1rem 1.2rem;
+    background:linear-gradient(140deg,var(--panel),rgba(32,12,45,.92));
+    box-shadow:var(--shadow),inset 0 1px 0 rgba(255,255,255,.08)}
+  #onboard-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:.3rem}
+  #onboard-head .ob-title{font-size:15px;letter-spacing:.04em}
+  #onboard-close{background:transparent;border:none;color:var(--mut);cursor:pointer;font-size:15px}
+  #onboard-close:hover{color:var(--fg)}
+  .ob-sub{color:var(--mut);font-size:12px;margin:.1rem 0 .8rem;line-height:1.45}
+  .ob-field{display:flex;flex-direction:column;gap:.25rem;margin-bottom:.6rem}
+  .ob-field label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--cyan)}
+  .ob-field[hidden]{display:none}
+  .ob-note{font-size:10.5px;color:var(--mut);min-height:.8rem}
+  .ob-err{color:var(--red);font-size:11.5px;margin:.2rem 0 .5rem}
+  .ob-err[hidden]{display:none}
+  #onboard-actions{display:flex;justify-content:flex-end;gap:.5rem;margin-top:.6rem}
+  .ob-btn{background:linear-gradient(120deg,rgba(32,246,255,.22),rgba(255,55,213,.22));
+    color:var(--fg);border:1px solid transparent;border-radius:999px;padding:.4rem 1.1rem;
+    font:inherit;font-size:12.5px;cursor:pointer}
+  .ob-btn:hover{border-color:var(--cyan)}
+  .ob-btn[disabled]{opacity:.5;cursor:default}
+  .ob-btn-ghost{background:transparent;color:var(--mut);border:1px solid rgba(255,255,255,.12);
+    border-radius:999px;padding:.4rem 1rem;font:inherit;font-size:12.5px;cursor:pointer}
+  .ob-btn-ghost:hover{color:var(--fg);border-color:var(--cyan)}
+
   .empty-pane{margin:auto;color:var(--mut);text-align:center;padding:2rem;font-size:12px}
 
   /* ===== Vault tab ===== */
@@ -923,6 +952,40 @@
     </div>
   </div>
 </main>
+
+<!-- First-boot onboarding wizard. Hidden by default; shown by JS when the
+     config has no usable provider (or via the /onboard command). -->
+<div id="onboard-overlay" hidden>
+  <div id="onboard-card">
+    <div id="onboard-head">
+      <span class="ob-title">Welcome to <b>PAS<span style="color:var(--mag)">CLAW</span></b></span>
+      <button type="button" id="onboard-close" title="Configure later in Settings">✕</button>
+    </div>
+    <p class="ob-sub">No model provider is configured yet. Pick one and add your API key to start chatting — saved straight to the gateway, no restart needed.</p>
+    <div class="ob-field">
+      <label for="ob-provider">Provider</label>
+      <select id="ob-provider" class="cfg-input"></select>
+      <div class="ob-note" id="ob-provider-note"></div>
+    </div>
+    <div class="ob-field" id="ob-key-field">
+      <label for="ob-key">API key</label>
+      <input id="ob-key" class="cfg-input" type="password" autocomplete="off" placeholder="paste your key…">
+    </div>
+    <div class="ob-field" id="ob-base-field" hidden>
+      <label for="ob-base">API base URL</label>
+      <input id="ob-base" class="cfg-input" type="text" autocomplete="off" placeholder="https://…">
+    </div>
+    <div class="ob-field">
+      <label for="ob-model">Model</label>
+      <input id="ob-model" class="cfg-input" type="text" autocomplete="off" placeholder="model id">
+    </div>
+    <div id="onboard-err" class="ob-err" hidden></div>
+    <div id="onboard-actions">
+      <button type="button" id="onboard-skip" class="ob-btn-ghost">Skip</button>
+      <button type="button" id="onboard-save" class="ob-btn">Save &amp; start</button>
+    </div>
+  </div>
+</div>
 
 <script>
 "use strict";
@@ -2073,6 +2136,7 @@ const SLASH = {
   memory() { showTab("memory"); }, logs() { showTab("logs"); },
   settings() { showTab("settings"); }, mcp() { showTab("mcp"); },
   cron() { showTab("cron"); }, skills() { showTab("skills"); },
+  onboard() { obShow(); },
 };
 
 /* Persist one or more top-level config keys via PUT /v1/config (read-merge-write
@@ -2108,6 +2172,7 @@ const SLASH_DESC = {
   tools: "list registered tools", stats: "open the Stats tab", files: "open the Files tab",
   memory: "open the Memory tab", logs: "open the Logs tab", settings: "open the Settings tab",
   mcp: "open the MCP tab", cron: "open the Cron tab", skills: "open the Skills tab",
+  onboard: "set up a model provider + API key",
 };
 const slashMenu = $("#slash-menu");
 let slashList = [], slashActive = 0;
@@ -3673,6 +3738,121 @@ const RELAY_WEBLLM_MODELS = [
    Hermes entries flagged supportsTools above. */
 const DEFAULT_RELAY_WEBLLM_MODEL = "Qwen2.5-Coder-7B-Instruct-q4f16_1-MLC";
 
+/* ===== First-boot onboarding wizard =====
+   Shows a modal to pick a provider + paste a key when the gateway has no
+   usable provider configured (fresh Docker/web-only boot, where there's no
+   CLI `pasclaw onboard` to run). Writes via PUT /v1/config (hot-reloads the
+   provider, no restart). Also reachable any time via the /onboard command. */
+let obCatalog = [];
+
+async function obLoadCatalog() {
+  if (obCatalog.length) return obCatalog;
+  try {
+    const j = await (await gwFetch("/v1/providers/catalog")).json();
+    // Only providers we can actually talk to -- placeholder kinds can't chat.
+    obCatalog = (j.data || []).filter(p => !p.placeholder);
+  } catch (_) { obCatalog = []; }
+  return obCatalog;
+}
+
+function obSelectedSpec() {
+  const kind = $("#ob-provider").value;
+  return obCatalog.find(p => p.kind === kind) || null;
+}
+
+function obApplySpecToForm() {
+  const s = obSelectedSpec();
+  if (!s) return;
+  $("#ob-provider-note").textContent = s.notes || "";
+  // Key field only when the provider authenticates.
+  $("#ob-key-field").hidden = !s.needs_key;
+  // Base field when the catalog default is templated/empty (local servers,
+  // Cloudflare AI Gateway, …); prefill the default so the user just edits it.
+  $("#ob-base-field").hidden = !s.needs_base;
+  $("#ob-base").value = s.default_base || "";
+  $("#ob-model").value = s.default_model || "";
+}
+
+async function obPopulate() {
+  const cat = await obLoadCatalog();
+  const sel = $("#ob-provider");
+  sel.innerHTML = "";
+  for (const p of cat) {
+    const o = document.createElement("option");
+    o.value = p.kind; o.textContent = p.display_name;
+    sel.appendChild(o);
+  }
+  // Default to Anthropic if present, else first entry.
+  const pref = cat.find(p => p.kind === "anthropic");
+  if (pref) sel.value = "anthropic";
+  obApplySpecToForm();
+}
+
+function obShow() {
+  obPopulate();
+  $("#onboard-err").hidden = true;
+  $("#onboard-overlay").hidden = false;
+}
+function obHide() { $("#onboard-overlay").hidden = true; }
+
+async function obSave() {
+  const s = obSelectedSpec();
+  if (!s) return;
+  const key = $("#ob-key").value.trim();
+  const base = $("#ob-base").value.trim();
+  const model = $("#ob-model").value.trim();
+  const err = $("#onboard-err");
+  if (s.needs_key && !key) { err.textContent = "An API key is required for " + s.display_name + "."; err.hidden = false; return; }
+  if (s.needs_base && !base) { err.textContent = "An API base URL is required for " + s.display_name + "."; err.hidden = false; return; }
+  if (!model) { err.textContent = "Enter a model id."; err.hidden = false; return; }
+  err.hidden = true;
+  const saveBtn = $("#onboard-save");
+  saveBtn.disabled = true; saveBtn.textContent = "Saving…";
+  try {
+    const cur = await (await gwFetch("/v1/config")).json();
+    const providers = Array.isArray(cur.providers) ? cur.providers : [];
+    const entry = { name: s.kind, kind: s.kind, api_base: base, api_key: key, model };
+    const at = providers.findIndex(p => p && p.name === s.kind);
+    if (at >= 0) Object.assign(providers[at], entry); else providers.push(entry);
+    cur.providers = providers;
+    cur.default_provider = s.kind;
+    cur.default_model = model;
+    const r = await gwFetch("/v1/config", { method: "PUT",
+      headers: { "content-type": "application/json" }, body: JSON.stringify(cur) });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      throw new Error(j.error || ("http " + r.status));
+    }
+    obHide();
+    sysNote("provider <code>" + escapeHtml(s.display_name) + "</code> configured — you're ready to chat.");
+    loadModels();
+    refreshMeta();
+  } catch (e) {
+    err.textContent = "Save failed: " + String(e && e.message || e);
+    err.hidden = false;
+  } finally {
+    saveBtn.disabled = false; saveBtn.textContent = "Save & start";
+  }
+}
+
+$("#ob-provider").addEventListener("change", obApplySpecToForm);
+$("#onboard-save").addEventListener("click", obSave);
+$("#onboard-close").addEventListener("click", obHide);
+$("#onboard-skip").addEventListener("click", obHide);
+
+/* Show the wizard on boot when no provider carries a key (fresh install). */
+async function maybeOnboard() {
+  try {
+    const c = await (await gwFetch("/v1/config", undefined)).json();
+    const provs = Array.isArray(c.providers) ? c.providers : [];
+    // A usable provider is one with a key, OR a keyless local provider
+    // (api_base set, e.g. Ollama). Empty list => definitely needs setup.
+    const usable = provs.some(p => p && (
+      (p.api_key && p.api_key !== "") || (p.api_base && p.api_base !== "")));
+    if (!usable) obShow();
+  } catch (_) { /* offline / auth wall -- don't force the wizard */ }
+}
+
 /* ===== Boot ===== */
 initTheme();
 initMode();
@@ -3686,6 +3866,7 @@ if (location.hash.slice(1)) showTab(location.hash.slice(1));
   if (sessions.length > 0) activateSession(sessions[0].id);
   else newSession();
 })();
+maybeOnboard();
 m.focus();
 
 /* ===== Relay tab implementation =====

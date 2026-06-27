@@ -339,6 +339,10 @@ type
                               out AWasStreamingRequest: Boolean;
                               out AResponseStarted: Boolean);
     procedure HandleModels(AResp: TIdHTTPResponseInfo);
+    { GET /v1/providers/catalog -- the static provider catalog (names, default
+      base/model, auth requirement) so the web onboarding wizard can offer a
+      provider picker without hardcoding the list client-side. No secrets. }
+    procedure HandleProvidersCatalog(AResp: TIdHTTPResponseInfo);
     procedure WriteJSON(AResp: TIdHTTPResponseInfo; Code: Integer; const Body: string);
     { TGatewayServer.WriteSSE removed -- never called. The streaming
       response paths build their SSE frames via TSSEStreamer +
@@ -1181,6 +1185,7 @@ begin
     else if (ARequest.Command = 'POST') and ((Doc = '/mcp') or (Doc = '/v1/mcp/rpc')) then
       HandleMCPRequest(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/models')  then HandleModels(AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/providers/catalog') then HandleProvidersCatalog(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/mcp')     then HandleMCPList(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/cron')    then HandleCronList(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/skills/search') then HandleSkillSearch(ARequest, AResponse)
@@ -6898,6 +6903,63 @@ begin
   finally
     Root.Free;
     Seen.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleProvidersCatalog(AResp: TIdHTTPResponseInfo);
+{ The static provider catalog as JSON for the web onboarding wizard. No
+  secrets -- just kind/display name, default base+model, and whether the
+  provider needs an API key (so the wizard knows to show the key field) and
+  whether the operator must supply a base (templated/empty base, e.g.
+  Cloudflare AI Gateway or a local Ollama/vLLM URL). Placeholder-family
+  kinds are marked so the UI can grey them out. }
+var
+  Root, Item: TJsonObject;
+  Arr: TJsonArray;
+  Specs: TProviderSpecArray;
+  i: Integer;
+  AuthStr: string;
+  NeedsBase: Boolean;
+
+  function AuthKindStr(K: TAuthSchemeKind): string;
+  begin
+    case K of
+      asNone:   Result := 'none';
+      asHeader: Result := 'header';
+    else        Result := 'bearer';
+    end;
+  end;
+
+begin
+  Specs := AllProviderSpecs;
+  Root := TJsonObject.Create;
+  try
+    Root.PutStr('object', 'list');
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Specs) do
+    begin
+      AuthStr := AuthKindStr(Specs[i].Auth.Kind);
+      { The operator must fill in a base when the catalog default is empty
+        (local servers) or carries account/gateway-id placeholders in
+        braces (e.g. Cloudflare AI Gateway). }
+      NeedsBase := (Trim(Specs[i].DefaultBase) = '') or
+                   (Pos('{', Specs[i].DefaultBase) > 0);
+      Item := TJsonObject.Create;
+      Item.PutStr ('kind',          Specs[i].Kind);
+      Item.PutStr ('display_name',  Specs[i].DisplayName);
+      Item.PutStr ('default_base',  Specs[i].DefaultBase);
+      Item.PutStr ('default_model', Specs[i].DefaultModel);
+      Item.PutStr ('auth',          AuthStr);
+      Item.PutBool('needs_key',     Specs[i].Auth.Kind <> asNone);
+      Item.PutBool('needs_base',    NeedsBase);
+      Item.PutBool('placeholder',   Specs[i].Family = pfPlaceholder);
+      Item.PutStr ('notes',         Specs[i].Notes);
+      Arr.AddObject(Item);
+    end;
+    Root.PutArray('data', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
   end;
 end;
 
