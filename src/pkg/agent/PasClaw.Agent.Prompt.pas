@@ -704,7 +704,7 @@ const
   StaleHours = 24.0;
 var
   Path, Body, StaleNote: string;
-  AgeRaw: Integer;
+  FileTS: TDateTime;
   Hours: Double;
 begin
   Result := '';
@@ -729,20 +729,15 @@ begin
   if Body = '' then Exit;
 
   StaleNote := '';
-  AgeRaw := FileAge(Path);
-  if AgeRaw <> -1 then
+  { Two-arg FileAge (out TDateTime) -- the single-arg Integer overload is
+    deprecated under Delphi; this form exists on both FPC and Delphi and
+    skips the FileDateToDateTime conversion entirely. }
+  if FileAge(Path, FileTS) then
   begin
-    try
-      Hours := (Now - FileDateToDateTime(AgeRaw)) * 24.0;
-      if Hours > StaleHours then
-        StaleNote := Format(' (stale: %.0f hours old -- ' +
-                            'pass --no-plan to ignore PLAN.md)', [Hours]);
-    except
-      { FileDateToDateTime can raise on a corrupt time stamp on some
-        filesystems. Fall through with no stale note rather than
-        failing the whole section. }
-      StaleNote := '';
-    end;
+    Hours := (Now - FileTS) * 24.0;
+    if Hours > StaleHours then
+      StaleNote := Format(' (stale: %.0f hours old -- ' +
+                          'pass --no-plan to ignore PLAN.md)', [Hours]);
   end;
 
   Result :=

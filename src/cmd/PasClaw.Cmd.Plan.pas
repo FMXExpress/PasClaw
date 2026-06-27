@@ -436,7 +436,7 @@ var
   Rc: Integer;
   HomeIsTemp, PlanExisted: Boolean;
   Bytes, FinalSize: Int64;
-  PreviousAge, FinalAge: Integer;
+  PreviousAge, FinalAge: TDateTime;
 begin
   Result := 1;
   InitArgs(A);
@@ -511,9 +511,12 @@ begin
       ExistingPlan := ReadExistingPlanBody;
       PlanPath := ResolvePlanPath;
       PlanExisted := FileExists(PlanPath);
+      { Two-arg FileAge (out TDateTime) -- the single-arg Integer overload
+        is deprecated under Delphi; this form is on both FPC and Delphi.
+        On failure PreviousAge stays 0. }
       PreviousAge := 0;
       if PlanExisted then
-        PreviousAge := FileAge(PlanPath);
+        FileAge(PlanPath, PreviousAge);
 
       Directive := BuildPlannerDirective(ExistingPlan);
 
@@ -550,7 +553,8 @@ begin
         Exit(1);
       end;
       FinalSize := FileSizeOf(PlanPath);
-      FinalAge  := FileAge(PlanPath);
+      FinalAge  := 0;
+      FileAge(PlanPath, FinalAge);
       if PlanExisted and (FinalAge = PreviousAge) then
       begin
         { FileAge unchanged -- the model didn't update PLAN.md.
