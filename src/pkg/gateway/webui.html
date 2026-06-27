@@ -975,7 +975,7 @@
       <label for="ob-base">API base URL</label>
       <input id="ob-base" class="cfg-input" type="text" autocomplete="off" placeholder="https://…">
     </div>
-    <div class="ob-field">
+    <div class="ob-field" id="ob-model-field">
       <label for="ob-model">Model</label>
       <input id="ob-model" class="cfg-input" type="text" autocomplete="off" placeholder="model id">
     </div>
@@ -3770,6 +3770,9 @@ function obApplySpecToForm() {
   // Cloudflare AI Gateway, …); prefill the default so the user just edits it.
   $("#ob-base-field").hidden = !s.needs_base;
   $("#ob-base").value = s.default_base || "";
+  // Model field hidden for kinds whose model is a wildcard (relay -- the
+  // worker advertises it); shown and prefilled for everything else.
+  $("#ob-model-field").hidden = (s.needs_model === false);
   $("#ob-model").value = s.default_model || "";
 }
 
@@ -3804,7 +3807,7 @@ async function obSave() {
   const err = $("#onboard-err");
   if (s.needs_key && !key) { err.textContent = "An API key is required for " + s.display_name + "."; err.hidden = false; return; }
   if (s.needs_base && !base) { err.textContent = "An API base URL is required for " + s.display_name + "."; err.hidden = false; return; }
-  if (!model) { err.textContent = "Enter a model id."; err.hidden = false; return; }
+  if (s.needs_model !== false && !model) { err.textContent = "Enter a model id."; err.hidden = false; return; }
   err.hidden = true;
   const saveBtn = $("#onboard-save");
   saveBtn.disabled = true; saveBtn.textContent = "Saving…";
@@ -3840,15 +3843,24 @@ $("#onboard-save").addEventListener("click", obSave);
 $("#onboard-close").addEventListener("click", obHide);
 $("#onboard-skip").addEventListener("click", obHide);
 
-/* Show the wizard on boot when no provider carries a key (fresh install). */
+/* Show the wizard on boot when no provider is actually usable (fresh
+   install). "Usable" depends on the provider's auth scheme, not just on a
+   non-empty field: a hosted kind (anthropic/openai) needs an API KEY --
+   a config row that carries only the default api_base but no key is NOT
+   usable (NewProviderFromConfig rejects it), so the wizard must still show.
+   Keyless kinds (Ollama/vLLM local, relay) are usable as configured. */
 async function maybeOnboard() {
   try {
     const c = await (await gwFetch("/v1/config", undefined)).json();
     const provs = Array.isArray(c.providers) ? c.providers : [];
-    // A usable provider is one with a key, OR a keyless local provider
-    // (api_base set, e.g. Ollama). Empty list => definitely needs setup.
-    const usable = provs.some(p => p && (
-      (p.api_key && p.api_key !== "") || (p.api_base && p.api_base !== "")));
+    const cat = await obLoadCatalog();
+    const usable = provs.some(p => {
+      if (!p) return false;
+      const spec = cat.find(s => s.kind === (p.kind || p.name));
+      if (!spec) return !!(p.api_key || p.api_base);   // unknown kind: best effort
+      if (spec.needs_key) return !!(p.api_key && p.api_key !== "");
+      return true;   // keyless (local/relay) -- works without a key
+    });
     if (!usable) obShow();
   } catch (_) { /* offline / auth wall -- don't force the wizard */ }
 }

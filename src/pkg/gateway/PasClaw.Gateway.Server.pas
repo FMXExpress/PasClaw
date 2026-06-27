@@ -6941,9 +6941,12 @@ begin
       AuthStr := AuthKindStr(Specs[i].Auth.Kind);
       { The operator must fill in a base when the catalog default is empty
         (local servers) or carries account/gateway-id placeholders in
-        braces (e.g. Cloudflare AI Gateway). }
-      NeedsBase := (Trim(Specs[i].DefaultBase) = '') or
-                   (Pos('{', Specs[i].DefaultBase) > 0);
+        braces (e.g. Cloudflare AI Gateway). Relay is exempt: it has no
+        outbound URL -- external workers connect inbound to the in-process
+        queue -- so an empty base is intentional, not a missing field. }
+      NeedsBase := (Specs[i].Family <> pfRelay) and
+                   ((Trim(Specs[i].DefaultBase) = '') or
+                    (Pos('{', Specs[i].DefaultBase) > 0));
       Item := TJsonObject.Create;
       Item.PutStr ('kind',          Specs[i].Kind);
       Item.PutStr ('display_name',  Specs[i].DisplayName);
@@ -6952,6 +6955,9 @@ begin
       Item.PutStr ('auth',          AuthStr);
       Item.PutBool('needs_key',     Specs[i].Auth.Kind <> asNone);
       Item.PutBool('needs_base',    NeedsBase);
+      { Relay's model is a wildcard -- the worker advertises it -- so the
+        wizard must not force one. Every other kind needs a model id. }
+      Item.PutBool('needs_model',   Specs[i].Family <> pfRelay);
       Item.PutBool('placeholder',   Specs[i].Family = pfPlaceholder);
       Item.PutStr ('notes',         Specs[i].Notes);
       Arr.AddObject(Item);
