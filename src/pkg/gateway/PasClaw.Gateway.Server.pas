@@ -6862,7 +6862,7 @@ procedure TGatewayServer.HandleEmbeddings(ARequest: TIdHTTPRequestInfo;
   OpenAI Python SDK asks for). No outbound call -- vectors are computed
   on-host and never leave. }
 var
-  Body, EncFmt, ReqModel, ModelId, OneInput, VecJson: string;
+  Body, EncFmt, ReqModel, ModelId, OneInput, VecJson, NumStr: string;
   Req, Root, Item, Usage: TJsonObject;
   InArr, DataArr: TJsonArray;
   Inputs: array of string;
@@ -6870,7 +6870,6 @@ var
   Dim, i, j, ApproxTokens: Integer;
   AsBase64: Boolean;
   Bytes: TBytes;
-  Fmt: TFormatSettings;
 begin
   Body := ReadRequestBody(ARequest);
   if Trim(Body) = '' then
@@ -6940,12 +6939,6 @@ begin
     AsBase64 := SameText(EncFmt, 'base64');
     ReqModel := Req.GetStr('model', '');
 
-    { JSON numbers must use '.' regardless of host locale; 7 significant
-      digits matches the float32 the model actually produces. }
-    Fmt := DefaultFormatSettings;
-    Fmt.DecimalSeparator  := '.';
-    Fmt.ThousandSeparator := #0;
-
     ApproxTokens := 0;
     DataArr := TJsonArray.Create;
     try
@@ -6972,7 +6965,13 @@ begin
           for j := 0 to High(Vec) do
           begin
             if j > 0 then VecJson := VecJson + ',';
-            VecJson := VecJson + FloatToStrF(Vec[j], ffGeneral, 7, 0, Fmt);
+            { Str() always emits a '.' decimal regardless of host locale, on
+              both FPC and Delphi -- no TFormatSettings needed (dcc64 didn't
+              resolve DefaultFormatSettings here, and FPC 3.2.2 has no
+              parameterless TFormatSettings.Create). 7 decimals comfortably
+              covers a unit-normalised float32 component. }
+            Str(Vec[j]:0:7, NumStr);
+            VecJson := VecJson + Trim(NumStr);
           end;
           VecJson := VecJson + ']';
           Item.PutRaw('embedding', VecJson);
