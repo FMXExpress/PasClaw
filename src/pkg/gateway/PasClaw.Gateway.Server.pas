@@ -1052,7 +1052,18 @@ begin
     Exit;
   end;
 
-  RespLine := Core.HandleRequest(Body);
+  { The MCP core dispatches tools/call straight through FRegistry.RunTool --
+    it does NOT go through the agent loop's DispatchOneToolCall, so publish
+    the active config on this request thread here too, otherwise an external
+    /mcp caller's config-driven tools (memory_search/kb_search/web_search)
+    would LoadConfig from disk even for a no-disk embed. Thread-scoped +
+    cleared in finally, same contract as DispatchOneToolCall. }
+  if FToolsHonorInMemoryConfig then SetActiveConfig(FCfg);
+  try
+    RespLine := Core.HandleRequest(Body);
+  finally
+    if FToolsHonorInMemoryConfig then SetActiveConfig(nil);
+  end;
   if RespLine = '' then
   begin
     { Notification path -- spec says no body. 204 No Content. }
