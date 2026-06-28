@@ -762,25 +762,29 @@ procedure SaveConfig(C: TConfig);
   the same globals before the first run. Idempotent. }
 procedure ApplyConfigGlobals(C: TConfig);
 
-{ Process-global "active config" override for tool handlers.
+{ Thread-scoped "active config" override for tool handlers.
 
   Several built-in tools (web_search, send_message, memory, kb) resolve
   their settings by calling LoadConfig themselves on each invocation, which
   reads ~/.pasclaw/config.json + env + profile. That's deliberate for the
   CLI / bare gateway (it picks up live config.json edits mid-session), but
-  it means an embedder that built its config in code -- TPasClawAgent /
-  TPasClawServer, especially with LoadConfigFromDisk = False -- has its
-  in-memory Config ignored by those tools.
+  it means an embedder that built its config in code (TPasClawAgent with
+  LoadConfigFromDisk = False) would have its in-memory Config ignored by
+  those tools.
 
-  SetActiveConfig lets the component publish its live Config here; tool
-  handlers call LoadEffectiveConfig instead of LoadConfig. When an override
-  is set, LoadEffectiveConfig returns a fresh deep COPY of it (so the caller
-  keeps its existing `Cfg.Free` ownership and later mutations are picked up);
-  when nil (the default -- bare CLI / serve never set it), it falls back to
-  LoadConfig, preserving the disk hot-reload behaviour exactly.
+  Mechanism: TToolLoopConfig carries an ActiveConfig; RunToolLoop's
+  DispatchOneToolCall calls SetActiveConfig(Cfg.ActiveConfig) around each
+  tool call. Tool handlers call LoadEffectiveConfig instead of LoadConfig:
+  when the override is set it returns a fresh deep COPY of it (callers keep
+  their `Cfg.Free` ownership; later mutations are picked up); when nil it
+  falls back to LoadConfig, preserving disk hot-reload exactly.
 
-  The reference is borrowed, not owned -- the component clears it
-  (SetActiveConfig(nil)) before freeing its config. }
+  The slot is a threadvar, NOT a process global: tool dispatch happens on the
+  loop thread and on parallel worker threads, and one TPasClawAgent + one
+  TPasClawServer may run loops concurrently -- a single global would let them
+  read each other's config. Setting it around each dispatch (and clearing
+  after) keeps it scoped to exactly that thread + call. The reference is
+  borrowed, not owned. }
 procedure SetActiveConfig(C: TConfig);
 function  LoadEffectiveConfig: TConfig;
 
@@ -2105,10 +2109,17 @@ begin
     GEnvGatewayToken := '';
 end;
 
-var
-  { Borrowed (not owned) reference; nil unless a component published its
-    live config via SetActiveConfig. See the interface comment. }
-  GActiveConfig: TConfig = nil;
+threadvar
+  { Per-THREAD borrowed (not owned) reference; nil on every thread unless the
+    tool loop published the run's config via SetActiveConfig. Thread-local on
+    purpose: tool dispatch runs on the loop thread (serial/mutating tools) and
+    on short-lived worker threads (parallel read-only tools), and two live
+    components (one TPasClawAgent + one TPasClawServer) may run loops
+    concurrently -- a single process-global would let them stomp each other.
+    RunToolLoop's DispatchOneToolCall sets this from TToolLoopConfig.ActiveConfig
+    around each tool call, so it's scoped to exactly the dispatching thread for
+    exactly that call. See the interface comment. }
+  GActiveConfig: TConfig;
 
 procedure SetActiveConfig(C: TConfig);
 begin

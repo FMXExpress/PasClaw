@@ -154,11 +154,11 @@ begin
     C.ShellBackendDocker.Privileged := False;
 
     { ===== web_search tool provider =====
-      Honoured by the embedded component: the agent publishes this live Config
-      via SetActiveConfig, and the web_search tool reads it through
-      LoadEffectiveConfig -- so switching to Brave/Tavily here (with a key)
-      takes effect even with LoadConfigFromDisk=False. (An API key may still
-      come from $PASCLAW_<KIND>_API_KEY env if you leave APIKey empty.) }
+      Honoured by TPasClawAgent: the agent passes this live Config into the
+      tool loop, and the web_search tool reads it via LoadEffectiveConfig --
+      so switching to Brave/Tavily here (with a key) takes effect even with
+      LoadConfigFromDisk=False. (An API key may still come from
+      $PASCLAW_<KIND>_API_KEY env if you leave APIKey empty.) }
     C.WebSearch.Provider   := 'duckduckgo';  { duckduckgo|brave|tavily|searxng|perplexity }
     C.WebSearch.APIKey     := '';
     C.WebSearch.BaseURL    := '';            { required only for self-hosted searxng }

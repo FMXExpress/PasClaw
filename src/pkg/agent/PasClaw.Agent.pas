@@ -479,9 +479,6 @@ begin
   FreeMCPClients(FMCPClients);
   FreeAndNil(FRegistry);
   FProvider := nil;
-  { Drop the active-config override before freeing FConfig so a later
-    LoadEffectiveConfig (e.g. from another instance) can't read freed memory. }
-  if FConfigApplied then SetActiveConfig(nil);
   FreeAndNil(FConfig);
   FreeAndNil(FOwnedTools);  { frees every TPasClawTool we accepted }
   FreeAndNil(FHooks);       { frees every TPasClawHook we accepted }
@@ -525,11 +522,8 @@ begin
   EnsureConfig;
   ConfigureSandbox(FConfig.Sandbox, '');
   ApplyConfigGlobals(FConfig);
-  { Publish the live config so tool handlers that would otherwise LoadConfig
-    from disk (web_search, send_message, memory, kb) honour this agent's
-    in-memory Config -- the piece that makes LoadConfigFromDisk=False reach
-    the tools, not just the loop. Cleared in Destroy before FConfig is freed. }
-  SetActiveConfig(FConfig);
+  { Tool handlers receive this config per-dispatch via TToolLoopConfig.ActiveConfig
+    (set in ChatHistory), not a process global -- see DispatchOneToolCall. }
 end;
 
 procedure TPasClawAgent.EnsureProvider;
@@ -830,6 +824,12 @@ begin
     registers when this is > 0). Without this the loop saw the record
     default 0 and sent full tool output regardless of Config.ToolOutputCap. }
   Cfg.ToolOutputCap := FConfig.ToolOutputCap;
+  { Publish the live config into the loop so tools that would otherwise
+    LoadConfig from disk (web_search/send_message/memory/kb) honour this
+    agent's in-memory Config -- DispatchOneToolCall scopes it per dispatch
+    thread. This is what makes LoadConfigFromDisk=False reach the tools.
+    Thread-scoped, so a concurrently-running TPasClawServer is unaffected. }
+  Cfg.ActiveConfig := FConfig;
 
   try
     Result := RunToolLoop(Cfg, Msgs, Loop);
@@ -1005,10 +1005,6 @@ begin
     pre-set or no-disk Config skips that path, so apply it here against the
     final Config. Idempotent for the disk path. }
   ApplyConfigGlobals(FConfig);
-  { Publish the live config so the gateway's tool handlers (web_search,
-    send_message, memory, kb) honour this server's in-memory Config instead
-    of LoadConfig-ing from disk. Cleared in Stop before FConfig is freed. }
-  SetActiveConfig(FConfig);
   { Fold in the code-supplied provider (from SetProvider) AFTER
     config load and BEFORE the NewProviderFromConfig block below,
     so the synthetic entry is the one the gateway boots with. }
@@ -1130,8 +1126,6 @@ begin
   FreeMCPClients(FMCPClients);
   FreeAndNil(FRegistry);
   FProvider := nil;
-  { Drop the active-config override before freeing FConfig. }
-  SetActiveConfig(nil);
   FreeAndNil(FConfig);
   if Assigned(FOnStopped) then FOnStopped(Self);
 end;
