@@ -39,6 +39,7 @@ begin if Got <> Want then Fail_(Msg + ' (got "' + Got + '", want "' + Want + '")
 var
   A: TPasClawAgent;
   C: TConfig;
+  Eff: TConfig;
 begin
   A := TPasClawAgent.Create('claude-opus-4-7');
   try
@@ -82,10 +83,34 @@ begin
     ApplyConfigGlobals(A.Config);
     AssertTrue(not CondenseReversibleEnabled,
       'ApplyConfigGlobals syncs the condense-reversible global to Config');
+
+    { Active-config override: tool handlers that call LoadEffectiveConfig must
+      see the agent's in-memory Config (not disk) once it's published. Set a
+      distinctive value, publish, and confirm a fresh effective config carries
+      it -- as a COPY (different object the caller can free). }
+    A.Config.WebSearch.Provider := 'brave';
+    SetActiveConfig(A.Config);
+    Eff := LoadEffectiveConfig;
+    try
+      AssertEqStr(Eff.WebSearch.Provider, 'brave',
+        'LoadEffectiveConfig reflects the published in-memory Config');
+      AssertTrue(Eff <> A.Config, 'LoadEffectiveConfig returns a copy, not the live object');
+    finally
+      Eff.Free;
+    end;
+    { Cleared -> falls back to disk/defaults (default WebSearch is not 'brave'). }
+    SetActiveConfig(nil);
+    Eff := LoadEffectiveConfig;
+    try
+      AssertTrue(Eff.WebSearch.Provider <> 'brave',
+        'cleared override falls back to LoadConfig (disk/defaults)');
+    finally
+      Eff.Free;
+    end;
   finally
     A.Free;
   end;
 
-  WriteLn('  ok: component code-config (live Config, no-disk defaults, mutations, SetProvider)');
+  WriteLn('  ok: component code-config (live Config, defaults, globals, active-config override)');
   WriteLn('PASS');
 end.

@@ -762,6 +762,28 @@ procedure SaveConfig(C: TConfig);
   the same globals before the first run. Idempotent. }
 procedure ApplyConfigGlobals(C: TConfig);
 
+{ Process-global "active config" override for tool handlers.
+
+  Several built-in tools (web_search, send_message, memory, kb) resolve
+  their settings by calling LoadConfig themselves on each invocation, which
+  reads ~/.pasclaw/config.json + env + profile. That's deliberate for the
+  CLI / bare gateway (it picks up live config.json edits mid-session), but
+  it means an embedder that built its config in code -- TPasClawAgent /
+  TPasClawServer, especially with LoadConfigFromDisk = False -- has its
+  in-memory Config ignored by those tools.
+
+  SetActiveConfig lets the component publish its live Config here; tool
+  handlers call LoadEffectiveConfig instead of LoadConfig. When an override
+  is set, LoadEffectiveConfig returns a fresh deep COPY of it (so the caller
+  keeps its existing `Cfg.Free` ownership and later mutations are picked up);
+  when nil (the default -- bare CLI / serve never set it), it falls back to
+  LoadConfig, preserving the disk hot-reload behaviour exactly.
+
+  The reference is borrowed, not owned -- the component clears it
+  (SetActiveConfig(nil)) before freeing its config. }
+procedure SetActiveConfig(C: TConfig);
+function  LoadEffectiveConfig: TConfig;
+
 const
   { Placeholder the gateway's read-only /v1/config substitutes for any
     populated secret (providers[].api_key, mcp_servers[].env,
@@ -2081,6 +2103,43 @@ begin
     GEnvGatewayToken := GetEnvironmentVariable('OPENCLAW_GATEWAY_TOKEN')
   else
     GEnvGatewayToken := '';
+end;
+
+var
+  { Borrowed (not owned) reference; nil unless a component published its
+    live config via SetActiveConfig. See the interface comment. }
+  GActiveConfig: TConfig = nil;
+
+procedure SetActiveConfig(C: TConfig);
+begin
+  GActiveConfig := C;
+end;
+
+function LoadEffectiveConfig: TConfig;
+begin
+  if GActiveConfig = nil then
+  begin
+    { No embedder override -- disk path, identical to a direct LoadConfig
+      (env + profile + config.json, with config-globals applied). }
+    Result := LoadConfig;
+    Exit;
+  end;
+  { Hand back a fresh deep copy of the in-memory config so the caller can
+    Free it as usual and any later mutation of the live config is reflected
+    on the next call. ToJSON/FromJSON round-trips every persisted field
+    (providers + keys, web_search, channels, sandbox, ...). }
+  Result := TConfig.Create;
+  try
+    Result.FromJSON(GActiveConfig.ToJSON);
+  except
+    on E: Exception do
+    begin
+      { Defensive: never fail a tool call over a clone hiccup -- fall back
+        to the disk path. }
+      FreeAndNil(Result);
+      Result := LoadConfig;
+    end;
+  end;
 end;
 
 function GetEffectiveGatewayToken(const C: TConfig): string;

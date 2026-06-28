@@ -105,7 +105,7 @@ begin
     Exit;
   end;
 
-  Cfg := LoadConfig;
+  Cfg := LoadEffectiveConfig;
   try
     Default := Cfg.WebSearch.MaxResults;
     if Default <= 0 then Default := 5;

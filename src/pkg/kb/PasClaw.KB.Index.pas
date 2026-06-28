@@ -1054,7 +1054,7 @@ begin
   FVecTried := True;
   Result := False;
 
-  Cfg := LoadConfig;
+  Cfg := LoadEffectiveConfig;
   try
     if not Cfg.VectorSearchEnabled then Exit;
   finally
@@ -1412,7 +1412,7 @@ begin
   if QueryI64('SELECT COUNT(*) FROM kb_files WHERE nchunks > 0', [], [], V) then
     Result.Files := V;
   if QueryI64('SELECT COUNT(*) FROM kb_chunks',  [], [], V) then Result.Chunks  := V;
-  Cfg := LoadConfig;
+  Cfg := LoadEffectiveConfig;
   try
     Result.VectorReady := Cfg.VectorSearchEnabled and
                           VectorArtifactsPresent(FModelSpec);
