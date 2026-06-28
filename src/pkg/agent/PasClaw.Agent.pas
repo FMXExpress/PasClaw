@@ -1080,6 +1080,12 @@ begin
   FServer := TGatewayServer.Create(FConfig, FProvider, FRegistry);
   FServer.DebugIO := FDebug;
   FServer.MaxIter := FMaxIter;
+  { Code-driven embed: thread this server's in-memory config into each
+    request's tool loop so config-driven tools (web_search/send_message/
+    memory/kb) honour it instead of LoadConfig-ing from disk -- the server
+    half of the no-disk story. Safe alongside a live TPasClawAgent because the
+    override is thread-scoped per dispatch (see DispatchOneToolCall). }
+  FServer.ToolsHonorInMemoryConfig := True;
 
   FLastError := '';
   FThread := TServerWorker.Create(FServer, FBindAddr, FPort);
