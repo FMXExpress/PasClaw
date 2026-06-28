@@ -125,6 +125,14 @@ uses
 var
   GPolicy:    TSandboxPolicy;
   GWorkspace: string;
+  { The agent's own home workspace ($PASCLAW_HOME/workspace -- where memory,
+    skills, sessions, checkpoints and generated files live). CanReadPathHTTP
+    (the operator-facing /v1/fs browse, NOT the model's CanReadPath) allows
+    reads here IN ADDITION to GWorkspace, so the web UI's Files tab can show
+    the agent workspace even when it sits outside the launch directory (the
+    common case: `pasclaw serve` run from anywhere, or a Docker boot). Set in
+    ConfigureSandbox. }
+  GOperatorBrowseRoot: string;
 
 procedure ConfigureSandbox(const Policy: TSandboxPolicy; const Workspace: string);
 begin
@@ -136,6 +144,10 @@ begin
   else
     GWorkspace := GetCurrentDir;
   GWorkspace := ExcludeTrailingPathDelimiter(ExpandFileName(GWorkspace));
+  { Independent of the sandbox workspace -- always the agent's data home, so
+    the operator Files browser can reach it from any launch directory. }
+  GOperatorBrowseRoot := ExcludeTrailingPathDelimiter(ExpandFileName(
+    IncludeTrailingPathDelimiter(GetHome) + 'workspace'));
   if Policy.RestrictToWorkspace then
     LogDebug('sandbox: restrict_to_workspace=true workspace=%s', [GWorkspace]);
 end;
@@ -255,10 +267,19 @@ begin
   end;
   Canon := Canonicalize(Path);
   if PathInsideDirectory(Canon, GWorkspace) then Exit(True);
+  { Also allow the agent's own home workspace ($PASCLAW_HOME/workspace) so the
+    operator Files browser can reach memory / skills / sessions / generated
+    files even when the launch directory (GWorkspace) is elsewhere. Operator
+    endpoint only -- the model's CanReadPath is unchanged. Secrets live at the
+    home ROOT (config.json / .env), outside this subtree, and are additionally
+    hidden by IsRestrictedFsPath. }
+  if (GOperatorBrowseRoot <> '') and PathInsideDirectory(Canon, GOperatorBrowseRoot) then
+    Exit(True);
   if AnyRegexMatches(Canon, GPolicy.AllowReadPaths) then Exit(True);
   Reason := 'refused: path "' + Canon + '" is outside the workspace "' +
-            GWorkspace + '" -- gateway file access is confined to the ' +
-            'workspace (independent of sandbox.restrict_to_workspace)';
+            GWorkspace + '" and the agent home workspace "' +
+            GOperatorBrowseRoot + '" -- gateway file access is confined to ' +
+            'those (independent of sandbox.restrict_to_workspace)';
   Result := False;
 end;
 
