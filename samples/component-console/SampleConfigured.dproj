@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
     <PropertyGroup>
-        <ProjectGuid>{B5C2D8E3-4A91-4F76-8E0B-2D4C6A9F1E83}</ProjectGuid>
+        <ProjectGuid>{B7C4E2F1-3A6D-4E59-9C8B-1F0A7D5E2C34}</ProjectGuid>
         <ProjectVersion>20.2</ProjectVersion>
         <FrameworkType>None</FrameworkType>
-        <MainSource>SampleServer.dpr</MainSource>
+        <MainSource>SampleConfigured.dpr</MainSource>
         <Base>True</Base>
         <Config Condition="'$(Config)'==''">Debug</Config>
         <Platform Condition="'$(Platform)'==''">Win64</Platform>
@@ -37,24 +37,27 @@
     </PropertyGroup>
 
     <PropertyGroup Condition="'$(Base)'!=''">
-        <DCC_DependencyCheckOutputName>SampleServer.dcc_dep</DCC_DependencyCheckOutputName>
+        <DCC_DependencyCheckOutputName>SampleConfigured.dcc_dep</DCC_DependencyCheckOutputName>
         <DCC_ExeOutput>..\..\build\delphi\$(Platform)\$(Config)</DCC_ExeOutput>
         <DCC_DcuOutput>..\..\build\delphi\$(Platform)\$(Config)\dcu</DCC_DcuOutput>
-        <SanitizedProjectName>SampleServer</SanitizedProjectName>
+        <SanitizedProjectName>SampleConfigured</SanitizedProjectName>
 
         <!--
-          Delphi's System.Net.HttpClient backend (not Indy+OpenSSL), matching
-          src/pasclaw/PasClaw.dproj. Without it the provider stack uses the
-          Indy path and the first HTTPS call fails with an OpenSSL-load error.
-          FPC ignores this define (guarded `... and not Defined(FPC)`).
+          Use Delphi's System.Net.HttpClient backend instead of Indy+OpenSSL,
+          matching src/pasclaw/PasClaw.dproj. The provider HTTP stack picks
+          TNetHTTPClient under {$IF Defined(PASCLAW_NETHTTP) and not Defined(FPC)};
+          without this define the sample builds but fails its first HTTPS
+          request with an OpenSSL-load error (no DLLs beside the exe). FPC
+          ignores the define.
         -->
         <DCC_Define>PASCLAW_NETHTTP;$(DCC_Define)</DCC_Define>
 
         <!--
-          Unit search path — every src/pkg/* the main pasclaw binary uses,
-          re-rooted at ..\..\src\. Without this, dcc32 fails on the first
-          PasClaw.* unit the sample's `uses` clause references. The list
-          mirrors src/pasclaw/PasClaw.dproj's DCC_UnitSearchPath.
+          Unit search path — every src/pkg/* the component transitively
+          needs, re-rooted at ..\..\src\. Mirrors src/pasclaw/PasClaw.dproj's
+          DCC_UnitSearchPath (vendor\zpaq is FPC-only at runtime but harmless
+          as a search-path entry on Delphi). Without this, dcc32 fails on the
+          first PasClaw.* unit the sample's `uses` clause references.
         -->
         <DCC_UnitSearchPath>..\..\src\cmd;..\..\src\pkg\cliui;..\..\src\pkg\utils;..\..\src\pkg\logger;..\..\src\pkg\config;..\..\src\pkg\json;..\..\src\pkg\providers;..\..\src\pkg\stream;..\..\src\pkg\tokenizer;..\..\src\pkg\tools;..\..\src\pkg\mcp;..\..\src\pkg\gateway;..\..\src\pkg\channels;..\..\src\pkg\crypto;..\..\src\pkg\net;..\..\src\pkg\search;..\..\src\pkg\cron;..\..\src\pkg\skills;..\..\src\pkg\checkpoints;..\..\src\pkg\condense;..\..\src\pkg\session;..\..\src\pkg\identity;..\..\src\pkg\agent;..\..\src\pkg\memory;..\..\src\pkg\memory\localvector;..\..\src\pkg\kb;..\..\src\pkg\updater;..\..\src\pkg\membench;..\..\src\pkg\tui;..\..\src\pkg\platform;..\..\src\pkg\hashline;..\..\src\pkg\markdown;..\..\src\pkg\otel;..\..\src\pkg\component;..\..\src\pkg\shell;..\..\src\pkg\vendor\zpaq;..\..\src\pkg\vendor\dmvcframework;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
 
@@ -93,7 +96,7 @@
         <BorlandProject>
             <Delphi.Personality>
                 <Source>
-                    <Source Name="MainSource">SampleServer.dpr</Source>
+                    <Source Name="MainSource">SampleConfigured.dpr</Source>
                 </Source>
             </Delphi.Personality>
             <Platforms>
