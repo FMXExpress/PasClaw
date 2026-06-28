@@ -153,7 +153,12 @@ begin
     C.ShellBackendDocker.User       := '';
     C.ShellBackendDocker.Privileged := False;
 
-    { ===== web_search tool provider ===== }
+    { ===== web_search tool provider =====
+      NOTE: the registered web_search tool resolves its provider by calling
+      LoadConfig itself (~/.pasclaw/config.json + $PASCLAW_<KIND>_API_KEY env)
+      on each invocation -- it does NOT read Agent.Config. So in this no-disk
+      sample these fields are reference-only; to actually switch web_search to
+      Brave/Tavily, set them in config.json or the env, not here. }
     C.WebSearch.Provider   := 'duckduckgo';  { duckduckgo|brave|tavily|searxng|perplexity }
     C.WebSearch.APIKey     := '';
     C.WebSearch.BaseURL    := '';            { required only for self-hosted searxng }
@@ -188,7 +193,13 @@ begin
     C.SelfImprovingSkills.Distiller.Model        := '';   { '' = the turn's model }
 
     { ===== Arrays: one example entry each ===== }
-    { Cheap fallback provider + task-difficulty router (enabled only with a key). }
+    { Cheap fallback provider + task-difficulty router (only with a key).
+      The Fallbacks chain IS honoured by the embedded component (ResolveFallbacks
+      is wired into ChatHistory) -- it retries 'groq' when the primary errors.
+      The AutoRouter, however, is applied only by the `pasclaw agent` CLI
+      (PasClaw.Agent.AutoRouter.RouteProvider); TPasClawAgent.Run does NOT route,
+      so the fields below are reference-only for an embedder -- Run always uses
+      the primary provider even for "easy" prompts. }
     if GroqKey <> '' then
     begin
       n := Length(C.Providers);
@@ -198,8 +209,8 @@ begin
       C.Providers[n].APIKey := GroqKey;
       C.Providers[n].Model  := 'llama-3.3-70b-versatile';
       SetLength(C.Fallbacks, 1);
-      C.Fallbacks[0] := 'groq';
-      C.AutoRouter.Enabled       := True;
+      C.Fallbacks[0] := 'groq';        { used: retry chain on primary error }
+      C.AutoRouter.Enabled       := True;  { CLI-only -- see note above }
       C.AutoRouter.EasyProvider  := 'groq';
       C.AutoRouter.EasyModel     := '';     { '' = that provider's default }
       C.AutoRouter.EasyMaxTokens := 500;
