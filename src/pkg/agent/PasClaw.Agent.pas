@@ -817,6 +817,11 @@ begin
   Cfg.OnToolCall    := ForwardToolCall;
   Cfg.OnToolResult  := ForwardToolResult;
   Cfg.StreamReliability := FConfig.StreamReliability;
+  { Honour the byte cap so oversized tool results are diverted to the
+    OutputCache (and surfaced via tool_output_get, which EnsureRegistry
+    registers when this is > 0). Without this the loop saw the record
+    default 0 and sent full tool output regardless of Config.ToolOutputCap. }
+  Cfg.ToolOutputCap := FConfig.ToolOutputCap;
 
   try
     Result := RunToolLoop(Cfg, Msgs, Loop);
