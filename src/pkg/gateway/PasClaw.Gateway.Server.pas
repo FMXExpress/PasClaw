@@ -73,6 +73,12 @@ type
     FCfg:      TConfig;
     FProvider: ILLMProvider;
     FRegistry: TToolRegistry;
+    { When True, each request's tool loop carries FCfg as ActiveConfig so
+      config-driven tools (web_search/send_message/memory/kb) honour this
+      gateway's in-memory config instead of LoadConfig-ing from disk. Set by
+      the TPasClawServer component (code-driven / no-disk embed); left False
+      for `pasclaw serve` / `pasclaw gateway`, which keep the disk hot-reload. }
+    FToolsHonorInMemoryConfig: Boolean;
     FStarted:  Boolean;
     FStopFlag: TEvent;
     FDebugIO:  Boolean;
@@ -355,6 +361,12 @@ type
       and the response body via LogDebug. Off by default; the `serve`
       subcommand flips it on with --debug. }
     property DebugIO: Boolean read FDebugIO write FDebugIO;
+    { Opt-in: thread this gateway's in-memory FCfg into each request's tool
+      loop so config-driven tools honour it instead of LoadConfig-ing from
+      disk. The TPasClawServer component sets this True for a code-driven /
+      no-disk embed; bare `serve` leaves it False to keep disk hot-reload. }
+    property ToolsHonorInMemoryConfig: Boolean
+      read FToolsHonorInMemoryConfig write FToolsHonorInMemoryConfig;
     { Cap on tool-loop iterations for /v1/chat/completions. Defaults to 25
       to match what typical code agents need for read-debug-edit cycles;
       legacy /v1/chat keeps its 8-iteration cap unchanged. }
@@ -1040,7 +1052,18 @@ begin
     Exit;
   end;
 
-  RespLine := Core.HandleRequest(Body);
+  { The MCP core dispatches tools/call straight through FRegistry.RunTool --
+    it does NOT go through the agent loop's DispatchOneToolCall, so publish
+    the active config on this request thread here too, otherwise an external
+    /mcp caller's config-driven tools (memory_search/kb_search/web_search)
+    would LoadConfig from disk even for a no-disk embed. Thread-scoped +
+    cleared in finally, same contract as DispatchOneToolCall. }
+  if FToolsHonorInMemoryConfig then SetActiveConfig(FCfg);
+  try
+    RespLine := Core.HandleRequest(Body);
+  finally
+    if FToolsHonorInMemoryConfig then SetActiveConfig(nil);
+  end;
   if RespLine = '' then
   begin
     { Notification path -- spec says no body. 204 No Content. }
@@ -4290,6 +4313,7 @@ begin
   Msgs[0] := MakeMessage(mrUser, Prompt);
 
   LoopCfg.Registry      := FRegistry;
+  if FToolsHonorInMemoryConfig then LoopCfg.ActiveConfig := FCfg;
   LoopCfg.Model         := DefModel;
   LoopCfg.MaxIterations := 8;
   LoopCfg.Parallel := True;
@@ -4946,6 +4970,7 @@ begin
     end;
 
     LoopCfg.Registry      := FRegistry;
+    if FToolsHonorInMemoryConfig then LoopCfg.ActiveConfig := FCfg;
     LoopCfg.Model         := ReqModel;
     LoopCfg.MaxIterations := FMaxIter;
     LoopCfg.Parallel := True;
@@ -6700,6 +6725,7 @@ begin
         string) working as before. }
       LoopCfg.Provider      := Prim;
       LoopCfg.Registry      := FRegistry;
+      if FToolsHonorInMemoryConfig then LoopCfg.ActiveConfig := FCfg;
       LoopCfg.Model         := ReqModel;
       LoopCfg.MaxIterations := FMaxIter;
       LoopCfg.Parallel := True;
