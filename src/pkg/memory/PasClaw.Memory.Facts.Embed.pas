@@ -31,6 +31,21 @@ interface
   embeddings are active, False (graceful) when artifacts are missing. }
 function EnableFactEmbeddings(const HomeDir: string): Boolean;
 
+{ True when the local ONNX embedder is loadable for HomeDir (model + vocab
+  + runtime provisioned). Same gate EnableFactEmbeddings uses. }
+function LocalEmbedAvailable(const HomeDir: string): Boolean;
+
+{ Active local-embedding model id + dimension (e.g. 'minilm', 384). False
+  when the embedder isn't provisioned. For the /v1/embeddings response. }
+function LocalEmbedModelInfo(const HomeDir: string; out ModelId: string;
+                            out Dim: Integer): Boolean;
+
+{ One-shot text -> unit-normalised embedding using the local ONNX model.
+  Ensures the embedder is loaded for HomeDir, then embeds Text. False
+  (graceful) when the model isn't provisioned or the embed fails. Serialised
+  internally, so it's safe to call from concurrent gateway worker threads. }
+function LocalEmbed(const HomeDir, Text: string; out Vec: TArray<Single>): Boolean;
+
 implementation
 
 uses
@@ -53,6 +68,27 @@ var
   GSpec:  TModelSpec;
   GReady: Boolean = False;
   GTried: Boolean = False;
+  { True when the latched failure was specifically "artifacts not on disk"
+    (vs a genuine load failure). Lets LocalEmbedAvailable clear the latch and
+    retry once after `pasclaw memory provision` writes the model, without
+    re-attempting a broken load on every /v1/embeddings request. }
+  GTriedWithoutArtifacts: Boolean = False;
+
+{ Recompute the model + vocab paths for HomeDir and report whether both are
+  present. Used to detect provisioning that happened AFTER a latched
+  artifacts-missing failure. }
+function EmbedArtifactsExist(const HomeDir: string): Boolean;
+var
+  Spec: TModelSpec;
+  ModelDir: string;
+begin
+  Result := False;
+  if not FindModelSpec(DEFAULT_MODEL, Spec) then Exit;
+  ModelDir := JoinPath(JoinPath(JoinPath(JoinPath(HomeDir, 'cache'),
+                       'localvector'), 'models'), Spec.SubDir);
+  Result := FileExists(JoinPath(ModelDir, 'model.onnx'))
+        and FileExists(JoinPath(ModelDir, 'vocab.txt'));
+end;
 
 function DoFactEmbed(const Text: string): TArray<Single>;
 { Registered as the TFactEmbedFn. Serialised; returns [] on any failure
@@ -80,6 +116,50 @@ begin
   end;
 end;
 
+function LocalEmbedAvailable(const HomeDir: string): Boolean;
+begin
+  Result := EnableFactEmbeddings(HomeDir);
+  if Result then Exit;
+  { EnableFactEmbeddings latches its first failure (GTried) and won't re-probe
+    the filesystem -- so a gateway that started BEFORE `pasclaw memory
+    provision` ran would 503 forever despite the 503 telling the operator to
+    provision. If that latched failure was "artifacts missing" AND they now
+    exist on disk, clear the latch and try once more so /v1/embeddings
+    recovers in-process. A genuine load failure (GTriedWithoutArtifacts=False)
+    is NOT retried, so a broken runtime can't trigger a reload per request. }
+  GLock.Acquire;
+  try
+    if GReady then Exit(True);   { another thread may have loaded it meanwhile }
+    if not (GTriedWithoutArtifacts and EmbedArtifactsExist(HomeDir)) then
+      Exit(False);
+    GTried := False;             { artifacts appeared -- allow one more attempt }
+  finally
+    GLock.Release;
+  end;
+  Result := EnableFactEmbeddings(HomeDir);
+end;
+
+function LocalEmbedModelInfo(const HomeDir: string; out ModelId: string;
+                            out Dim: Integer): Boolean;
+begin
+  ModelId := '';
+  Dim     := 0;
+  if not EnableFactEmbeddings(HomeDir) then Exit(False);
+  { GSpec is set once under GLock during enable and never mutated after, so
+    reading it here without the lock is safe. }
+  ModelId := GSpec.Key;
+  Dim     := GSpec.Dim;
+  Result  := True;
+end;
+
+function LocalEmbed(const HomeDir, Text: string; out Vec: TArray<Single>): Boolean;
+begin
+  Vec := nil;
+  if not EnableFactEmbeddings(HomeDir) then Exit(False);
+  Vec := DoFactEmbed(Text);   { acquires GLock itself; EnableFactEmbeddings already released it }
+  Result := Length(Vec) > 0;
+end;
+
 function EnableFactEmbeddings(const HomeDir: string): Boolean;
 var
   Cache, ModelDir, ModelP, VocabP: string;
@@ -102,14 +182,19 @@ begin
     if not FileExists(ModelP) then
     begin
       LogDebug('fact-embed: model not found at %s -- semantic layer off', [ModelP]);
+      GTriedWithoutArtifacts := True;   { provisioning may add it later }
       Exit(False);
     end;
     if not FileExists(VocabP) then
     begin
       LogDebug('fact-embed: vocab not found at %s -- semantic layer off', [VocabP]);
+      GTriedWithoutArtifacts := True;
       Exit(False);
     end;
 
+    { Artifacts are present -- any failure past here is a genuine load
+      failure, not a missing-artifacts one, so don't mark it retryable. }
+    GTriedWithoutArtifacts := False;
     try
       EnsureOnnxRuntime(Cache, {AAllowDownload=} False, {AVerbose=} False);
       GTok := TBertTokenizer.Create(VocabP, GSpec.DoLowerCase);
