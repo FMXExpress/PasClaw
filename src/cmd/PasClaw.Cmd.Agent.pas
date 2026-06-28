@@ -60,6 +60,7 @@ uses
   PasClaw.Agent.Subagent,
   PasClaw.Agent.SubagentBg,
   PasClaw.Agent.AutoRouter,
+  PasClaw.Agent.AutoRouter.Apply,
   PasClaw.Session.Store,
   PasClaw.Tools.Sandbox,
   PasClaw.Shell.Backend,           { StartShellSession / CloseShellSession +
@@ -525,6 +526,7 @@ var
   OneShotSessionId: string;
   PersistedSession: TSession;       { non-nil only when A.Session is set (PR #292 P1) }
   i: Integer;
+  RoutedNm: string;
 begin
   { Default to True; only flip to False on a known failure path.
     Any code path that hits Exit before producing a real assistant
@@ -622,6 +624,9 @@ begin
     Msgs[0] := MakeMessage(mrUser, Prompt);
 
     LoopCfg := BuildLoopConfig(Cfg, Provider, Reg, Model, A, Handlers, Prompt);
+    { Auto-router (opt-in) on the one-shot path too -- shared helper, no-op
+      unless Cfg.AutoRouter.Enabled. }
+    ApplyAutoRoute(LoopCfg, Cfg, Msgs, RoutedNm);
 
     if not A.Quiet then
       PrintLn(Ansi.Cyan + 'assistant' + Ansi.Reset +
@@ -1591,56 +1596,18 @@ begin
         ThinkingOn := False;
       end;
 
-      { Auto-router: classify the latest user message and, if it
-        looks easy enough, swap LoopCfg.Provider to the cheap
-        fallback for this turn. Keeps the primary on the fallback
-        list as the first retry target so a routing-fooled turn
-        falls back cleanly without operator intervention. See
-        PasClaw.Agent.AutoRouter for the heuristic. }
+      { Auto-router: classify the latest user message and, if it looks easy
+        enough, swap LoopCfg.Provider to the cheap provider for this turn (and
+        prepend the primary to the fallback chain). Shared with the TUI /
+        gateway / component via ApplyAutoRoute -- one implementation, all
+        surfaces. No-op unless Cfg.AutoRouter.Enabled. }
       RoutedThisTurn := False;
-      if Reg <> nil then Names := Reg.Names else Names := nil;
       if (not Offline) and (PrimaryProvider <> nil) then
-        if RouteProvider(Cfg, Line,
-                         Names,
-                         RoutedProviderNm, RoutedModelOverride) then
+        if ApplyAutoRoute(LoopCfg, Cfg, Msgs, RoutedProviderNm) then
         begin
-          { Lazy-build the easy provider on first routing. Cached
-            for the rest of the session so we don't pay the
-            construction cost per routed turn. If the build fails
-            (catalog drift, missing key) we log once and stay on
-            the primary -- never crash mid-turn for a router
-            misconfiguration. }
-          if EasyProvider = nil then
-            if not NewProviderFromConfig(Cfg, RoutedProviderNm,
-                                         EasyProvider, Err) then
-            begin
-              LogWarn('auto-router: easy provider "%s" unresolvable: %s',
-                      [RoutedProviderNm, Err]);
-              EasyProvider := nil;
-            end;
-          if EasyProvider <> nil then
-          begin
-            PrimaryFallbacks := LoopCfg.Fallbacks;
-            LoopCfg.Provider := EasyProvider;
-            { Prepend the original primary to the fallback chain
-              so a failed routed call drops cleanly back to the
-              provider the operator would have used anyway. }
-            SetLength(LoopCfg.Fallbacks, Length(PrimaryFallbacks) + 1);
-            LoopCfg.Fallbacks[0] := PrimaryProvider;
-            for i := 0 to High(PrimaryFallbacks) do
-              LoopCfg.Fallbacks[i + 1] := PrimaryFallbacks[i];
-            { RouteProvider resolved the model for us (explicit
-              EasyModel -> per-provider stored Model -> catalog
-              default) and refused to route if none of those
-              produced a value -- so RoutedModelOverride is
-              guaranteed non-empty when we're here. Overriding
-              LoopCfg.Model is mandatory: BuildLoopConfig set it
-              to the primary's model and passing claude-* to a
-              Groq endpoint (etc.) just fails. Codex P2 #203. }
-            LoopCfg.Model := RoutedModelOverride;
-            RoutedThisTurn := True;
-            PrintLn(Ansi.Dim + '(routed -> ' + RoutedProviderNm + ')' + Ansi.Reset);
-          end;
+          RoutedThisTurn      := True;
+          RoutedModelOverride := LoopCfg.Model;   { for the assistant label }
+          PrintLn(Ansi.Dim + '(routed -> ' + RoutedProviderNm + ')' + Ansi.Reset);
         end;
 
       { Open a fresh checkpoints turn so any fs_write / fs_edit_hashline

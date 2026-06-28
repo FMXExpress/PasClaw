@@ -50,6 +50,7 @@ uses
   PasClaw.Providers.Intf,
   PasClaw.Tools.Registry,
   PasClaw.Tools.ToolLoop,  { TToolLoopConfig/Result -- RunCheckpointedLoop sig }
+  PasClaw.Agent.AutoRouter.Apply,  { ApplyAutoRoute -- per-turn cheap routing }
   PasClaw.Session.Store,
   PasClaw.Gateway.RelayQueue, { TRelayQueue -- FRelayQueue field type }
   PasClaw.MCP.Server;
@@ -3571,20 +3572,31 @@ function TGatewayServer.RunCheckpointedLoop(const ReqSession: string;
   (other chats / other users) overlap freely -- their LLM round-trips no longer
   block each other. Branch on the static config, not the thread's current
   context, since a fresh worker thread has none selected yet. }
+var
+  LocalCfg: TToolLoopConfig;
+  RoutedNm: string;
 begin
+  { Task-difficulty auto-router (opt-in via FCfg.AutoRouter). Applied here so
+    EVERY gateway/serve chat path -- the four RunCheckpointedLoop call sites
+    (chat, chat/completions streaming + non-streaming, responses) -- routes
+    identically. Cfg is const; copy it so the swap (provider/model + primary
+    prepended to fallbacks) is local to this turn. No-op unless enabled. }
+  LocalCfg := Cfg;
+  ApplyAutoRoute(LocalCfg, FCfg, Messages, RoutedNm);
+
   if FCfg.CheckpointsEnabled then
   begin
     ApplyCheckpointSession(ReqSession);
     AcquireCheckpointTurn;
     try
       BeginTurn;
-      Result := RunToolLoop(Cfg, Messages, Loop);
+      Result := RunToolLoop(LocalCfg, Messages, Loop);
     finally
       ReleaseCheckpointTurn;
     end;
   end
   else
-    Result := RunToolLoop(Cfg, Messages, Loop);
+    Result := RunToolLoop(LocalCfg, Messages, Loop);
 
   { Opt-in distilled memory: on a successful turn, fire a background pass
     that extracts durable facts from the latest exchange and stores them.
@@ -3593,7 +3605,7 @@ begin
     not FProvider, which a concurrent /v1/config hot-swap may have already
     repointed at a different backend. }
   if Result and FCfg.MemoryDistillEnabled then
-    ScheduleDistill(Cfg.Provider, Cfg.Model, GetHome, ReqSession,
+    ScheduleDistill(LocalCfg.Provider, LocalCfg.Model, GetHome, ReqSession,
       BuildRecentTranscript(Loop.FinalMessages, Loop.Content, DefaultRecentMsgs));
 end;
 

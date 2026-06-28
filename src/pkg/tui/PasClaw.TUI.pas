@@ -290,7 +290,8 @@ uses
                                      `pasclaw init` on the CLI. }
   PasClaw.Markdown.Render,
   PasClaw.Providers.Catalog,       { TProviderSpec -- for TModelRefreshThread }
-  PasClaw.Config
+  PasClaw.Config,
+  PasClaw.Agent.AutoRouter.Apply   { ApplyAutoRoute -- cheap per-turn routing }
   { PasClaw.Providers.Models is in the interface uses already -- needed
     from there so dcc64 can see TModelInfoArray when it compiles the
     TTUI class declaration. }
@@ -1272,6 +1273,8 @@ procedure TTUI.StartTurn(const UserText: string);
 var
   Cfg: TToolLoopConfig;
   Worker: TRunToolLoopThread;
+  RouteCfg: TConfig;
+  RoutedNm: string;
 begin
   if (FProvider = nil) or (Trim(UserText) = '') then Exit;
   if FLoopThread <> nil then Exit;   { already in flight }
@@ -1338,6 +1341,15 @@ begin
   Cfg.OnText        := nil;
   Cfg.OnToolCall    := nil;
   Cfg.OnToolResult  := nil;
+
+  { Task-difficulty auto-router (opt-in via Config.AutoRouter) -- same path the
+    CLI/gateway/component use. No-op unless enabled. }
+  RouteCfg := LoadConfig;
+  try
+    ApplyAutoRoute(Cfg, RouteCfg, FSession.Messages, RoutedNm);
+  finally
+    RouteCfg.Free;
+  end;
 
   Worker := TRunToolLoopThread.Create(Cfg, FSession.Messages);
   Worker.Start;
@@ -2782,6 +2794,8 @@ var
   W: TRunToolLoopThread;
   TimeoutSec: Integer;
   WaitRes: TWaitResult;
+  RouteCfg: TConfig;
+  RoutedNm: string;
 begin
   if FProvider = nil then
   begin
@@ -2824,6 +2838,15 @@ begin
     Cfg.BackgroundDrainKey := 'fpc-tui-session';
   end;
   TimeoutSec        := ResolveRequestTimeoutSeconds;
+
+  { Task-difficulty auto-router (opt-in via Config.AutoRouter) -- same shared
+    path as the CLI/gateway/component. No-op unless enabled. }
+  RouteCfg := LoadConfig;
+  try
+    ApplyAutoRoute(Cfg, RouteCfg, Msgs, RoutedNm);
+  finally
+    RouteCfg.Free;
+  end;
 
   LogDebug('tool-loop start model=%s timeout=%ds', [FModel, TimeoutSec]);
   PrintLn(Ansi.Dim + '         [hint: press Ctrl+C to interrupt]' + Ansi.Reset);
