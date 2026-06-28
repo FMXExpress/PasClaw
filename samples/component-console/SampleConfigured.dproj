@@ -43,6 +43,16 @@
         <SanitizedProjectName>SampleConfigured</SanitizedProjectName>
 
         <!--
+          Use Delphi's System.Net.HttpClient backend instead of Indy+OpenSSL,
+          matching src/pasclaw/PasClaw.dproj. The provider HTTP stack picks
+          TNetHTTPClient under {$IF Defined(PASCLAW_NETHTTP) and not Defined(FPC)};
+          without this define the sample builds but fails its first HTTPS
+          request with an OpenSSL-load error (no DLLs beside the exe). FPC
+          ignores the define.
+        -->
+        <DCC_Define>PASCLAW_NETHTTP;$(DCC_Define)</DCC_Define>
+
+        <!--
           Unit search path — every src/pkg/* the component transitively
           needs, re-rooted at ..\..\src\. Mirrors src/pasclaw/PasClaw.dproj's
           DCC_UnitSearchPath (vendor\zpaq is FPC-only at runtime but harmless

@@ -43,6 +43,14 @@
         <SanitizedProjectName>SampleConsole</SanitizedProjectName>
 
         <!--
+          Delphi's System.Net.HttpClient backend (not Indy+OpenSSL), matching
+          src/pasclaw/PasClaw.dproj. Without it the provider stack uses the
+          Indy path and the first HTTPS call fails with an OpenSSL-load error.
+          FPC ignores this define (guarded `... and not Defined(FPC)`).
+        -->
+        <DCC_Define>PASCLAW_NETHTTP;$(DCC_Define)</DCC_Define>
+
+        <!--
           Unit search path — every src/pkg/* the main pasclaw binary uses,
           re-rooted at ..\..\src\. Without this, dcc32 fails on the first
           PasClaw.* unit the sample's `uses` clause references. The list
