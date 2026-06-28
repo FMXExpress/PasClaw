@@ -272,6 +272,13 @@
   .col-list .crumb{font-size:11px;color:var(--mut);padding:.3rem .55rem;
     border-bottom:1px solid rgba(255,255,255,.06);margin-bottom:.3rem;
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .fs-roots{display:flex;gap:.35rem;padding:.4rem .55rem .1rem;flex-wrap:wrap}
+  .fs-roots button{background:transparent;color:var(--mut);
+    border:1px solid rgba(255,255,255,.12);border-radius:999px;
+    padding:.18rem .6rem;font:inherit;font-size:10.5px;cursor:pointer}
+  .fs-roots button:hover{border-color:var(--cyan);color:var(--cyan)}
+  .fs-roots button.active{background:linear-gradient(120deg,rgba(32,246,255,.18),rgba(255,55,213,.18));
+    color:var(--fg);border-color:transparent}
 
   /* ===== Table tabs (MCP, Cron) ===== */
   .pane{flex:1;overflow:auto;padding:.85rem;min-width:0}
@@ -657,10 +664,10 @@
 
   <div id="tab-memory" class="tab">
     <div class="subtabs" id="mem-subtabs">
-      <button type="button" data-sub="facts" class="active">Distilled facts</button>
-      <button type="button" data-sub="notes">Notes &amp; files</button>
+      <button type="button" data-sub="notes" class="active">Notes &amp; files</button>
+      <button type="button" data-sub="facts">Distilled facts</button>
     </div>
-    <div class="subpane active" id="subpane-facts">
+    <div class="subpane" id="subpane-facts">
       <div id="facts-box">
         <div class="crumb">distilled facts <span id="facts-status"></span>
           <a href="#" id="facts-export" style="float:right">export .md</a></div>
@@ -671,7 +678,7 @@
         <div id="facts-list"></div>
       </div>
     </div>
-    <div class="subpane" id="subpane-notes">
+    <div class="subpane active" id="subpane-notes">
       <div class="two-col">
         <div class="col-list">
           <form id="mem-search" class="vault-search-row">
@@ -705,6 +712,7 @@
   <div id="tab-files" class="tab">
     <div class="two-col">
       <div class="col-list">
+        <div class="fs-roots" id="fs-roots"></div>
         <div class="crumb" id="fs-crumb">…</div>
         <div id="fs-list"></div>
       </div>
@@ -2718,6 +2726,23 @@ const tabLoaders = {
         const url = path ? "/v1/fs?path=" + encodeURIComponent(path) : "/v1/fs";
         const j = await (await gwFetch(url)).json();
         cwd = j.path || path || "";
+        $("#fs-crumb").textContent = cwd || "(home)";   // show the resolved dir
+        // Quick-switch chips for the two browseable roots: the PasClaw
+        // workspace ($PASCLAW_HOME/workspace) and the launch dir (cwd). The
+        // server emits each only when readable; dedupe when they're equal.
+        const roots = $("#fs-roots");
+        roots.innerHTML = "";
+        const addRoot = (label, p) => {
+          if (!p) return;
+          if (label === "Launch dir" && p === j.workspace_root) return; // same as workspace
+          const b = document.createElement("button");
+          b.textContent = label; b.title = p;
+          if (cwd === p) b.classList.add("active");
+          b.addEventListener("click", () => load(p));
+          roots.appendChild(b);
+        };
+        addRoot("Workspace", j.workspace_root);
+        addRoot("Launch dir", j.cwd_root);
         list.innerHTML = "";
         if (cwd) {
           const up = document.createElement("div");

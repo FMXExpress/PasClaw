@@ -3148,11 +3148,18 @@ procedure TGatewayServer.HandleFSList(ARequest: TIdHTTPRequestInfo;
                                        AResp: TIdHTTPResponseInfo);
 var
   Path, Dir, Reason: string;
+  WsRoot, CwdRoot: string;
   Root: TJsonObject;
   Arr: TJsonArray;
   Item: TJsonObject;
   SR: TSearchRec;
 begin
+  { Ensure the agent workspace exists so the Files tab can default to (and
+    offer a switch to) it even on a fresh web-only / Docker boot where no
+    agent has run yet to create it. Best-effort; a failure just means the
+    workspace button won't appear. }
+  WsRoot := JoinPath(GetHome, 'workspace');
+  ForceDirectories(WsRoot);
   Path := ARequest.Params.Values['path'];
   if Path = '' then
   begin
@@ -3192,7 +3199,7 @@ begin
            CanReadPath gate below anyway, so the allowed cwd is the only
            directory that won't 403. Operators who want the workspace
            browsable under restriction set sandbox.workspace explicitly. *)
-    Path := JoinPath(GetHome, 'workspace');
+    Path := WsRoot;
     if not (DirectoryExists(Path) and CanReadPathHTTP(Path, Reason)) then
       Path := CurrentWorkspace;
     if Path = '' then Path := GetHome;
@@ -3217,6 +3224,21 @@ begin
   Root := TJsonObject.Create;
   try
     Root.PutStr('path', Dir);
+    { Expose the two browseable roots so the Files tab can offer quick-switch
+      buttons: the PasClaw workspace ($PASCLAW_HOME/workspace) and the launch
+      directory (the sandbox cwd). Each is emitted only when it exists and the
+      read policy permits it, so the UI never shows a button that 403s. They
+      can be equal (the UI dedupes). }
+    if DirectoryExists(WsRoot) and CanReadPathHTTP(WsRoot, Reason) then
+      Root.PutStr('workspace_root', WsRoot)
+    else
+      Root.PutStr('workspace_root', '');
+    CwdRoot := CurrentWorkspace;
+    if (CwdRoot <> '') and DirectoryExists(CwdRoot)
+       and CanReadPathHTTP(CwdRoot, Reason) then
+      Root.PutStr('cwd_root', CwdRoot)
+    else
+      Root.PutStr('cwd_root', '');
     Arr := TJsonArray.Create;
     if FindFirst(JoinPath(Dir, '*'), faAnyFile, SR) = 0 then
     try
