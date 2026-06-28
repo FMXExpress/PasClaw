@@ -31,6 +31,21 @@ interface
   embeddings are active, False (graceful) when artifacts are missing. }
 function EnableFactEmbeddings(const HomeDir: string): Boolean;
 
+{ True when the local ONNX embedder is loadable for HomeDir (model + vocab
+  + runtime provisioned). Same gate EnableFactEmbeddings uses. }
+function LocalEmbedAvailable(const HomeDir: string): Boolean;
+
+{ Active local-embedding model id + dimension (e.g. 'minilm', 384). False
+  when the embedder isn't provisioned. For the /v1/embeddings response. }
+function LocalEmbedModelInfo(const HomeDir: string; out ModelId: string;
+                            out Dim: Integer): Boolean;
+
+{ One-shot text -> unit-normalised embedding using the local ONNX model.
+  Ensures the embedder is loaded for HomeDir, then embeds Text. False
+  (graceful) when the model isn't provisioned or the embed fails. Serialised
+  internally, so it's safe to call from concurrent gateway worker threads. }
+function LocalEmbed(const HomeDir, Text: string; out Vec: TArray<Single>): Boolean;
+
 implementation
 
 uses
@@ -78,6 +93,32 @@ begin
   finally
     GLock.Release;
   end;
+end;
+
+function LocalEmbedAvailable(const HomeDir: string): Boolean;
+begin
+  Result := EnableFactEmbeddings(HomeDir);
+end;
+
+function LocalEmbedModelInfo(const HomeDir: string; out ModelId: string;
+                            out Dim: Integer): Boolean;
+begin
+  ModelId := '';
+  Dim     := 0;
+  if not EnableFactEmbeddings(HomeDir) then Exit(False);
+  { GSpec is set once under GLock during enable and never mutated after, so
+    reading it here without the lock is safe. }
+  ModelId := GSpec.Key;
+  Dim     := GSpec.Dim;
+  Result  := True;
+end;
+
+function LocalEmbed(const HomeDir, Text: string; out Vec: TArray<Single>): Boolean;
+begin
+  Vec := nil;
+  if not EnableFactEmbeddings(HomeDir) then Exit(False);
+  Vec := DoFactEmbed(Text);   { acquires GLock itself; EnableFactEmbeddings already released it }
+  Result := Length(Vec) > 0;
 end;
 
 function EnableFactEmbeddings(const HomeDir: string): Boolean;

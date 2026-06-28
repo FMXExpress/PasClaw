@@ -345,6 +345,11 @@ type
                               out AWasStreamingRequest: Boolean;
                               out AResponseStarted: Boolean);
     procedure HandleModels(AResp: TIdHTTPResponseInfo);
+    { POST /v1/embeddings -- OpenAI-compatible embeddings computed with
+      PasClaw's local ONNX model (no outbound call; vectors never leave the
+      host). 503 when the model isn't provisioned. }
+    procedure HandleEmbeddings(ARequest: TIdHTTPRequestInfo;
+                               AResp: TIdHTTPResponseInfo);
     { GET /v1/providers/catalog -- the static provider catalog (names, default
       base/model, auth requirement) so the web onboarding wizard can offer a
       provider picker without hardcoding the list client-side. No secrets. }
@@ -1208,6 +1213,7 @@ begin
     else if (ARequest.Command = 'POST') and ((Doc = '/mcp') or (Doc = '/v1/mcp/rpc')) then
       HandleMCPRequest(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/models')  then HandleModels(AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/embeddings') then HandleEmbeddings(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/providers/catalog') then HandleProvidersCatalog(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/mcp')     then HandleMCPList(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/cron')    then HandleCronList(AResponse)
@@ -1271,7 +1277,7 @@ begin
     end
     else if Doc = '/v1' then
       WriteJSON(AResponse, 200,
-        '{"name":"pasclaw","routes":["/v1/health","/v1/version","/v1/status","/v1/tools","/v1/chat","/v1/chat/completions","/v1/responses","/v1/models"]}')
+        '{"name":"pasclaw","routes":["/v1/health","/v1/version","/v1/status","/v1/tools","/v1/chat","/v1/chat/completions","/v1/responses","/v1/models","/v1/embeddings"]}')
     else if not DispatchWebhook(AContext, ARequest, AResponse) then
       WriteJSON(AResponse, 404, '{"error":"not found","path":"' + Doc + '"}');
   except
@@ -6818,6 +6824,161 @@ begin
       finally
         ReplyObj.Free;
       end;
+    end;
+  finally
+    Req.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleEmbeddings(ARequest: TIdHTTPRequestInfo;
+                                          AResp: TIdHTTPResponseInfo);
+{ OpenAI-compatible embeddings over PasClaw's local ONNX model. Accepts the
+  standard body fields input (string or array of strings), optional model,
+  and optional encoding_format, and returns the usual object:list / data /
+  model / usage shape. encoding_format "float" (default) emits a JSON number
+  array; "base64" emits base64 of the float32 little-endian bytes (what the
+  OpenAI Python SDK asks for). No outbound call -- vectors are computed
+  on-host and never leave. }
+var
+  Body, EncFmt, ReqModel, ModelId, OneInput, VecJson: string;
+  Req, Root, Item, Usage: TJsonObject;
+  InArr, DataArr: TJsonArray;
+  Inputs: array of string;
+  Vec: TArray<Single>;
+  Dim, i, j, ApproxTokens: Integer;
+  AsBase64: Boolean;
+  Bytes: TBytes;
+  Fmt: TFormatSettings;
+begin
+  Body := ReadRequestBody(ARequest);
+  if Trim(Body) = '' then
+  begin
+    WriteJSON(AResp, 400,
+      '{"error":{"message":"empty body","type":"invalid_request_error"}}');
+    Exit;
+  end;
+
+  Req := nil;
+  try
+    try
+      Req := TJsonObject.Parse(Body);
+    except
+      on E: Exception do
+      begin
+        WriteJSON(AResp, 400,
+          '{"error":{"message":"invalid JSON","type":"invalid_request_error"}}');
+        Exit;
+      end;
+    end;
+
+    { input: a single string OR an array of strings. }
+    SetLength(Inputs, 0);
+    InArr := Req.ChildArray('input');
+    if InArr <> nil then
+    begin
+      for i := 0 to InArr.Count - 1 do
+      begin
+        OneInput := InArr.ItemStr(i, '');
+        if OneInput <> '' then
+        begin
+          SetLength(Inputs, Length(Inputs) + 1);
+          Inputs[High(Inputs)] := OneInput;
+        end;
+      end;
+    end
+    else
+    begin
+      OneInput := Req.GetStr('input', '');
+      if OneInput <> '' then
+      begin
+        SetLength(Inputs, 1);
+        Inputs[0] := OneInput;
+      end;
+    end;
+
+    if Length(Inputs) = 0 then
+    begin
+      WriteJSON(AResp, 400,
+        '{"error":{"message":"input is required (a string or array of strings)",' +
+        '"type":"invalid_request_error"}}');
+      Exit;
+    end;
+
+    if not LocalEmbedAvailable(GetHome) then
+    begin
+      WriteJSON(AResp, 503,
+        '{"error":{"message":"local embeddings not provisioned -- run ' +
+        '`pasclaw memory provision` to download the ONNX model",' +
+        '"type":"server_error"}}');
+      Exit;
+    end;
+
+    LocalEmbedModelInfo(GetHome, ModelId, Dim);
+    EncFmt   := Req.GetStr('encoding_format', 'float');
+    AsBase64 := SameText(EncFmt, 'base64');
+    ReqModel := Req.GetStr('model', '');
+
+    { JSON numbers must use '.' regardless of host locale; 7 significant
+      digits matches the float32 the model actually produces. }
+    Fmt := DefaultFormatSettings;
+    Fmt.DecimalSeparator  := '.';
+    Fmt.ThousandSeparator := #0;
+
+    ApproxTokens := 0;
+    DataArr := TJsonArray.Create;
+    try
+      for i := 0 to High(Inputs) do
+      begin
+        if not LocalEmbed(GetHome, Inputs[i], Vec) then
+        begin
+          WriteJSON(AResp, 500,
+            '{"error":{"message":"embedding failed","type":"server_error"}}');
+          Exit;
+        end;
+        Item := TJsonObject.Create;
+        Item.PutStr('object', 'embedding');
+        Item.PutInt('index', i);
+        if AsBase64 then
+        begin
+          SetLength(Bytes, Length(Vec) * SizeOf(Single));
+          if Length(Vec) > 0 then Move(Vec[0], Bytes[0], Length(Bytes));
+          Item.PutStr('embedding', BytesToBase64(Bytes));
+        end
+        else
+        begin
+          VecJson := '[';
+          for j := 0 to High(Vec) do
+          begin
+            if j > 0 then VecJson := VecJson + ',';
+            VecJson := VecJson + FloatToStrF(Vec[j], ffGeneral, 7, 0, Fmt);
+          end;
+          VecJson := VecJson + ']';
+          Item.PutRaw('embedding', VecJson);
+        end;
+        DataArr.AddObject(Item);   { takes ownership; Item := nil }
+        { Rough token estimate -- the endpoint doesn't expose the tokenizer's
+          count and most clients ignore embedding usage. }
+        Inc(ApproxTokens, (Length(Inputs[i]) + 3) div 4);
+      end;
+
+      Root := TJsonObject.Create;
+      try
+        Root.PutStr('object', 'list');
+        Root.PutArray('data', DataArr);   { takes ownership; DataArr := nil }
+        if ReqModel <> '' then
+          Root.PutStr('model', ReqModel)   { echo the requested model id }
+        else
+          Root.PutStr('model', 'pasclaw-local-' + ModelId);
+        Usage := TJsonObject.Create;
+        Usage.PutInt('prompt_tokens', ApproxTokens);
+        Usage.PutInt('total_tokens',  ApproxTokens);
+        Root.PutObject('usage', Usage);
+        WriteJSON(AResp, 200, Root.ToJSON);
+      finally
+        Root.Free;
+      end;
+    finally
+      DataArr.Free;   { nil after PutArray's ownership transfer -- safe }
     end;
   finally
     Req.Free;
