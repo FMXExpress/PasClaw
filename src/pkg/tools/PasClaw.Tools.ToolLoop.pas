@@ -26,7 +26,8 @@ uses
   PasClaw.Agent.Mode,
   PasClaw.Agent.Steering,
   PasClaw.Identity,
-  PasClaw.Stream.Reliability;
+  PasClaw.Stream.Reliability,
+  PasClaw.Config;   { TConfig + SetActiveConfig for the per-dispatch override }
 
 type
   TToolLoopConfig = record
@@ -139,6 +140,14 @@ type
        JSON body's "mode" field. The system prompt also gets a "PLAN
        MODE" addendum when pmPlan -- see PasClaw.Agent.Prompt. *)
     Mode: TPasClawMode;
+    (* Optional in-memory config published to tool handlers for this run.
+       When non-nil, DispatchOneToolCall sets it as the thread-scoped active
+       config around each tool call, so tools that would otherwise LoadConfig
+       from disk (web_search, send_message, memory, kb) honour it via
+       LoadEffectiveConfig. Set by TPasClawAgent (its FConfig) so a
+       code-configured / no-disk embed reaches the tools; nil for the CLI,
+       TUI, and bare gateway, which keep the LoadConfig disk hot-reload. *)
+    ActiveConfig: TConfig;
   end;
 
   TToolLoopResult = record
@@ -417,6 +426,13 @@ var
   HasUnsup: Boolean;
   PlanTool: TTool;
 begin
+  { Publish this run's config to the dispatching thread (loop thread for
+    serial/mutating tools, worker thread for parallel read-only ones) so any
+    tool that calls LoadEffectiveConfig (web_search / send_message / memory /
+    kb) honours it. nil => LoadEffectiveConfig falls back to disk LoadConfig.
+    Cleared in the finally so it never lingers past this call. }
+  SetActiveConfig(Cfg.ActiveConfig);
+  try
   D.Err        := '';
   D.ResultText := '';
   RetryArgs    := D.Call.Func.Arguments;
@@ -487,6 +503,9 @@ begin
     end
     else
       D.Err := 'format_error: unable to canonicalize patch for deterministic retry; regenerate patch intent or use safer apply-patch/unified-diff edit path. original=' + D.Err;
+  end;
+  finally
+    SetActiveConfig(nil);
   end;
 end;
 

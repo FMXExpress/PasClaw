@@ -154,11 +154,11 @@ begin
     C.ShellBackendDocker.Privileged := False;
 
     { ===== web_search tool provider =====
-      NOTE: the registered web_search tool resolves its provider by calling
-      LoadConfig itself (~/.pasclaw/config.json + $PASCLAW_<KIND>_API_KEY env)
-      on each invocation -- it does NOT read Agent.Config. So in this no-disk
-      sample these fields are reference-only; to actually switch web_search to
-      Brave/Tavily, set them in config.json or the env, not here. }
+      Honoured by TPasClawAgent: the agent passes this live Config into the
+      tool loop, and the web_search tool reads it via LoadEffectiveConfig --
+      so switching to Brave/Tavily here (with a key) takes effect even with
+      LoadConfigFromDisk=False. (An API key may still come from
+      $PASCLAW_<KIND>_API_KEY env if you leave APIKey empty.) }
     C.WebSearch.Provider   := 'duckduckgo';  { duckduckgo|brave|tavily|searxng|perplexity }
     C.WebSearch.APIKey     := '';
     C.WebSearch.BaseURL    := '';            { required only for self-hosted searxng }

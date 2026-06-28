@@ -171,7 +171,7 @@ begin
     editing config.json mid-session is honoured, and so the handler --
     a plain function pointer with no closure -- has somewhere to get
     the mapping from. }
-  Cfg := LoadConfig;
+  Cfg := LoadEffectiveConfig;
   try
     Found := -1;
     Names := '';
@@ -216,7 +216,7 @@ begin
   { Enumerate the configured channel names into the description so
     the model knows its options without a failed probe call. }
   Names := '';
-  Cfg := LoadConfig;
+  Cfg := LoadEffectiveConfig;
   try
     if Length(Cfg.Channels) = 0 then Exit;   { nothing to send to -- skip }
     for i := 0 to High(Cfg.Channels) do

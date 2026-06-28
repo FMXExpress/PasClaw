@@ -147,7 +147,7 @@ begin
     disk; only one is opened per call. The vector DB file is created
     on first SyncDir after provisioning lands; until then it doesn't
     exist and isn't touched. }
-  Cfg := LoadConfig;
+  Cfg := LoadEffectiveConfig;
   try
     UseVector := Cfg.VectorSearchEnabled;
     DistillOn := Cfg.MemoryDistillEnabled;

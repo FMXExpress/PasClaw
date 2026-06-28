@@ -522,6 +522,8 @@ begin
   EnsureConfig;
   ConfigureSandbox(FConfig.Sandbox, '');
   ApplyConfigGlobals(FConfig);
+  { Tool handlers receive this config per-dispatch via TToolLoopConfig.ActiveConfig
+    (set in ChatHistory), not a process global -- see DispatchOneToolCall. }
 end;
 
 procedure TPasClawAgent.EnsureProvider;
@@ -822,6 +824,12 @@ begin
     registers when this is > 0). Without this the loop saw the record
     default 0 and sent full tool output regardless of Config.ToolOutputCap. }
   Cfg.ToolOutputCap := FConfig.ToolOutputCap;
+  { Publish the live config into the loop so tools that would otherwise
+    LoadConfig from disk (web_search/send_message/memory/kb) honour this
+    agent's in-memory Config -- DispatchOneToolCall scopes it per dispatch
+    thread. This is what makes LoadConfigFromDisk=False reach the tools.
+    Thread-scoped, so a concurrently-running TPasClawServer is unaffected. }
+  Cfg.ActiveConfig := FConfig;
 
   try
     Result := RunToolLoop(Cfg, Msgs, Loop);
