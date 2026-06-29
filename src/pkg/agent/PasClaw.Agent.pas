@@ -367,6 +367,7 @@ uses
   PasClaw.Tools.Sandbox,
   PasClaw.Skills.Loader,
   PasClaw.Agent.Prompt,
+  PasClaw.Agent.AutoRouter.Apply,
   { PasClaw.Agent.Subagent moved to the interface uses (TSpawnTool /
     TSubagentContext are referenced by interface fields). }
   PasClaw.Tools.ToolLoop;
@@ -770,6 +771,7 @@ var
   Msgs: array of TMessage;
   i: Integer;
   ModelName: string;
+  RoutedNm: string;
 begin
   Reply  := '';
   ErrMsg := '';
@@ -830,6 +832,11 @@ begin
     thread. This is what makes LoadConfigFromDisk=False reach the tools.
     Thread-scoped, so a concurrently-running TPasClawServer is unaffected. }
   Cfg.ActiveConfig := FConfig;
+
+  { Task-difficulty auto-router (opt-in via Config.AutoRouter). Centralised in
+    ApplyAutoRoute so the component routes exactly like the CLI/TUI/gateway --
+    no-op unless enabled. }
+  ApplyAutoRoute(Cfg, FConfig, Msgs, RoutedNm);
 
   try
     Result := RunToolLoop(Cfg, Msgs, Loop);
