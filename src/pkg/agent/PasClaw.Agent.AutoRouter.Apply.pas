@@ -58,9 +58,14 @@ begin
       Exit(Messages[i].Content);
 end;
 
-{ Fingerprint of the named provider's config entry. Used to bust the per-thread
-  easy-provider cache when a /v1/config hot-swap changes the entry (kind / base
-  / key / model) without changing its name. Empty when the name is unknown. }
+{ Fingerprint of every input NewProviderFromConfig captures into the easy
+  provider object. Used to bust the per-thread cache when a /v1/config
+  hot-swap changes any of them without changing the provider name. Beyond the
+  per-provider entry (kind / base / key / model), NewProviderFromConfig also
+  bakes provider-WIDE settings into the object -- the Anthropic/OpenAI/Gemini
+  server-tool toggles and the relay wait timeout -- so those must be in the
+  key too, or a config that only flips e.g. web_search would keep reusing a
+  stale provider on a same-thread surface. Empty when the name is unknown. }
 function EasyProviderFingerprint(const Cfg: TConfig; const Name: string): string;
 var
   i: Integer;
@@ -70,7 +75,14 @@ begin
     if SameText(Cfg.Providers[i].Name, Name) then
     begin
       Result := Cfg.Providers[i].Kind + '|' + Cfg.Providers[i].APIBase + '|' +
-                Cfg.Providers[i].APIKey + '|' + Cfg.Providers[i].Model;
+                Cfg.Providers[i].APIKey + '|' + Cfg.Providers[i].Model + '|' +
+                BoolToStr(Cfg.AnthropicServerTools.WebSearch, True) + ',' +
+                IntToStr(Cfg.AnthropicServerTools.WebSearchMaxUses) + ',' +
+                BoolToStr(Cfg.AnthropicServerTools.WebFetch, True) + ',' +
+                IntToStr(Cfg.AnthropicServerTools.WebFetchMaxUses) + '|' +
+                BoolToStr(Cfg.OpenAIServerTools.WebSearch, True) + '|' +
+                BoolToStr(Cfg.GeminiServerTools.GoogleSearch, True) + '|' +
+                IntToStr(Cfg.RelayWaitTimeoutMs);
       Exit;
     end;
 end;

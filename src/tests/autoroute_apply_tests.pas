@@ -146,6 +146,17 @@ begin
     AssertTrue(ApplyAutoRoute(LoopCfg, Cfg, Msgs, Routed),
       'route after config hot-swap still routes (cache rebuilt)');
     AssertTrue(LoopCfg.Provider.GetName = 'groq', 'rebuilt route resolves the easy provider');
+
+    { ---- A provider-wide setting (server-tool toggle) also busts the cache:
+      NewProviderFromConfig bakes these into the provider object, so the
+      fingerprint must include them. Route must still resolve. ---- }
+    Cfg.OpenAIServerTools.WebSearch := not Cfg.OpenAIServerTools.WebSearch;
+    LoopCfg := Default(TToolLoopConfig);
+    LoopCfg.Provider := Primary;
+    LoopCfg.Model    := 'claude-opus-4-7';
+    AssertTrue(ApplyAutoRoute(LoopCfg, Cfg, Msgs, Routed),
+      'route after server-tool toggle still routes (cache rebuilt)');
+    AssertTrue(LoopCfg.Provider.GetName = 'groq', 'provider-wide-change route resolves the easy provider');
   finally
     Cfg.Free;
   end;
