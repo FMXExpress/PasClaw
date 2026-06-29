@@ -1326,12 +1326,17 @@ begin
 
   if SameAsPrimary then
   begin
-    { Same provider as the primary. Do NOT UpsertProvider -- that keys on
-      Name == Spec.Kind and would overwrite the primary's model with this
-      cheaper one. And do NOT add a same-provider entry to the error-retry
-      fallback chain: it's a pointless retry target (same endpoint/key), and
-      the router already prepends the primary at route time. The cheaper model
-      lives only on AutoRouter.EasyModel. }
+    { Same provider as the primary. Upsert with an EMPTY model: for a non-relay
+      provider UpsertProvider only writes Model when it's non-empty, so this
+      preserves the primary's model while STILL saving a rotated/just-entered
+      API key (dropping the key here would leave routed turns authenticating
+      with the old/blank primary key until a separate re-onboard). The cheaper
+      model lives only on AutoRouter.EasyModel. We also skip adding a
+      same-provider entry to the error-retry chain -- a same-endpoint/key retry
+      buys no resilience, and the router already prepends the primary at route
+      time. }
+    if Key <> '' then
+      UpsertProvider(Cfg, Spec, '', Key);
     if SameText(Model, Cfg.DefaultModel) then
       PrintLn('  ' + Ansi.Yellow +
               'note: that matches your primary model -- routing would be a no-op; ' +
