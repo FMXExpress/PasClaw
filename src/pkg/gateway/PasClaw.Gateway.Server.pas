@@ -843,6 +843,15 @@ begin
     FCfg.Fallbacks       := Copy(NewCfg.Fallbacks);
     FCfg.FallbackModels  := Copy(NewCfg.FallbackModels);
     FCfg.AutoRouter      := NewCfg.AutoRouter;
+    { Provider-WIDE construction knobs that NewProviderFromConfig bakes into
+      the live provider objects (and into auto-routed easy providers built from
+      FCfg) -- mirror them too, or GET would report stale values for settings
+      that are already active and the router's easy provider would keep the old
+      server-tool/relay options until restart. }
+    FCfg.AnthropicServerTools := NewCfg.AnthropicServerTools;
+    FCfg.OpenAIServerTools    := NewCfg.OpenAIServerTools;
+    FCfg.GeminiServerTools    := NewCfg.GeminiServerTools;
+    FCfg.RelayWaitTimeoutMs   := NewCfg.RelayWaitTimeoutMs;
   finally
     FApplyLock.Release;
   end;
@@ -2516,7 +2525,17 @@ begin
     OPENAI_API_KEY=, GITHUB_TOKEN=, etc. for stdio MCP servers.
     Mask any non-empty secret field with "•••" so the UI can show
     "set vs unset" without leaking the value. }
-  Body := FCfg.ToJSON;
+  { Serialize under the hot-swap lock: ApplyProviderConfig mutates FCfg's
+    providers/fallbacks/fallback_models/auto_router (+ the provider-wide
+    server-tool/relay knobs) live, so an overlapping PUT could otherwise make
+    ToJSON traverse a dynamic array/refcounted string mid-replacement -- a torn
+    body or an access violation. The lock window is just the snapshot. }
+  FApplyLock.Acquire;
+  try
+    Body := FCfg.ToJSON;
+  finally
+    FApplyLock.Release;
+  end;
   Root := TJsonObject.Parse(Body);
   if Root = nil then
   begin
