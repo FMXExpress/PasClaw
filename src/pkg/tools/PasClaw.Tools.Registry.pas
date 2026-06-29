@@ -85,6 +85,10 @@ type
     function  DeferredNames: TStringArray;
     function  DeferredFind(const Name: string; out T: TTool): Boolean;
     procedure Reveal(const Name: string);
+    { True once any deferred tool has been revealed (FRevealed non-empty).
+      Lets tool_search distinguish "deferred set empty because all MCP tools
+      are revealed + active" from "empty because none ever loaded". }
+    function  AnyRevealed: Boolean;
   end;
 
 implementation
@@ -197,6 +201,16 @@ begin
   FLock.Acquire;
   try
     Result := Length(FTools);
+  finally
+    FLock.Release;
+  end;
+end;
+
+function TToolRegistry.AnyRevealed: Boolean;
+begin
+  FLock.Acquire;
+  try
+    Result := Length(FRevealed) > 0;
   finally
     FLock.Release;
   end;
