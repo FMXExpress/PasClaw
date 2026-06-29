@@ -328,9 +328,130 @@ begin
                'nil/empty tool list + ambiguous -> abstain (not crash)');
 end;
 
+procedure TestClassifyScoreMonotonic;
+{ The structural score is the new Wayfinder-shaped engine. We don't pin exact
+  values (weights are tunable) -- we pin the relationships that must hold:
+  easy markers lower the score, length / code fences / hard keywords raise it,
+  and a trivial message scores below the default threshold while a structured
+  one scores above. }
+var
+  W: TRouterWeights;
+  Trivial, WithFence, Longer, EasyOne, HardOne: Double;
+  Big: string;
+begin
+  W := DefaultAutoRouterWeights;
+  Trivial   := ClassifyScore('hello there', NoTools, W);
+  EasyOne   := ClassifyScore('summarize the readme', NoTools, W);
+  WithFence := ClassifyScore('here is code ```let x = 1``` ok', NoTools, W);
+  HardOne   := ClassifyScore('implement the parser', NoTools, W);
+  Big := StringOfChar('x', 1600);   { ~400 tokens, under the 500 cap }
+  Longer := ClassifyScore(Big, NoTools, W);
+
+  AssertTrue(Trivial < W.Threshold, 'trivial message scores below threshold');
+  AssertTrue(EasyOne < Trivial, 'easy marker lowers the score');
+  AssertTrue(WithFence > Trivial, 'a code fence raises the score');
+  AssertTrue(HardOne > Trivial, 'a hard keyword raises the score');
+  AssertTrue(Longer > W.Threshold, 'a long message scores above threshold');
+end;
+
+procedure TestClassifyScoreZeroWeightsFallBack;
+{ A zeroed weights record (TConfig built without Create) must not collapse
+  scoring -- EffectiveWeights substitutes the defaults. }
+var
+  Zero: TRouterWeights;
+  S: Double;
+begin
+  FillChar(Zero, SizeOf(Zero), 0);
+  S := ClassifyScore('summarize the readme', NoTools, Zero);
+  AssertTrue((S > 0) and (S < 1), 'zeroed weights fall back to defaults (score in range)');
+end;
+
+procedure TestRouteProviderRoutesUnmarkedLowScore;
+{ New capability over the v1 keyword-only path: a low-complexity message with
+  NO easy marker now routes on the score alone (once it clears the
+  continuation floor). }
+var
+  Cfg: TConfig;
+  Provider, Model: string;
+  Score: Double;
+begin
+  Cfg := TConfig.Create;
+  try
+    Cfg.AutoRouter.Enabled       := True;
+    Cfg.AutoRouter.EasyProvider  := 'groq';
+    Cfg.AutoRouter.EasyModel     := 'llama-3.3-70b-versatile';
+    SetLength(Cfg.Providers, 1);
+    Cfg.Providers[0].Name := 'groq';
+    Cfg.Providers[0].Kind := 'groq';
+    AssertTrue(RouteProvider(Cfg, 'who wrote the linux kernel originally',
+                             ReadOnlyTools, Provider, Model, Score),
+               'unmarked low-score message routes on score');
+    AssertTrue((Score >= 0) and (Score <= Cfg.AutoRouter.Weights.Threshold),
+               'routed message score is at/under threshold');
+  finally
+    Cfg.Free;
+  end;
+end;
+
+procedure TestRouteProviderStructuralVeto;
+{ The score's safety value: a message with an easy marker but heavy structure
+  (a big fenced code block) does NOT route -- the fences + length push it back
+  over the threshold even though "explain" is present. }
+var
+  Cfg: TConfig;
+  Provider, Model: string;
+  Score: Double;
+  Heavy: string;
+begin
+  Cfg := TConfig.Create;
+  try
+    Cfg.AutoRouter.Enabled       := True;
+    Cfg.AutoRouter.EasyProvider  := 'groq';
+    Cfg.AutoRouter.EasyModel     := 'llama-3.3-70b-versatile';
+    SetLength(Cfg.Providers, 1);
+    Cfg.Providers[0].Name := 'groq';
+    Cfg.Providers[0].Kind := 'groq';
+    Heavy := 'explain this ```' + StringOfChar('a', 1200) + '```';
+    AssertTrue(not RouteProvider(Cfg, Heavy, ReadOnlyTools, Provider, Model, Score),
+               'easy marker + heavy structure -> score veto, no route');
+    AssertTrue(Score > Cfg.AutoRouter.Weights.Threshold,
+               'heavy message scored above threshold');
+  finally
+    Cfg.Free;
+  end;
+end;
+
+procedure TestRouteProviderContinuationFloor;
+{ A bare one-word continuation must NOT route even with read-only tools: in an
+  agent loop "ok" means "carry on with the current (maybe hard) task". }
+var
+  Cfg: TConfig;
+  Provider, Model: string;
+  Score: Double;
+begin
+  Cfg := TConfig.Create;
+  try
+    Cfg.AutoRouter.Enabled       := True;
+    Cfg.AutoRouter.EasyProvider  := 'groq';
+    Cfg.AutoRouter.EasyModel     := 'llama-3.3-70b-versatile';
+    SetLength(Cfg.Providers, 1);
+    Cfg.Providers[0].Name := 'groq';
+    Cfg.Providers[0].Kind := 'groq';
+    AssertTrue(not RouteProvider(Cfg, 'ok', ReadOnlyTools, Provider, Model, Score),
+               'bare continuation stays on primary (continuation floor)');
+  finally
+    Cfg.Free;
+  end;
+end;
+
 begin
   TestHardKeywordsBeatEverything;
   TestTokenCountThreshold;
+  TestClassifyScoreMonotonic;
+  TestClassifyScoreZeroWeightsFallBack;
+  TestRouteProviderRoutesUnmarkedLowScore;
+  TestRouteProviderStructuralVeto;
+  TestRouteProviderContinuationFloor;
   TestEasyKeywordsRouteEasy;
   TestWriteRunToolsBlockEasyOnAmbiguousIntent;
   TestWriteToolsAllowEasyWithEasyMarker;

@@ -36,7 +36,16 @@ uses
   untouched (and RoutedProviderName empty). Never raises. }
 function ApplyAutoRoute(var LoopCfg: TToolLoopConfig; const Cfg: TConfig;
                         const Messages: array of TMessage;
-                        out RoutedProviderName: string): Boolean;
+                        out RoutedProviderName: string): Boolean; overload;
+
+{ As above, plus the computed structural complexity score (0..1) for
+  transparency -- surface it in a "(routed -> x [score=...])" line / a
+  response header. RoutedScore is -1 when the router short-circuits before
+  scoring (disabled / nil provider / empty message). }
+function ApplyAutoRoute(var LoopCfg: TToolLoopConfig; const Cfg: TConfig;
+                        const Messages: array of TMessage;
+                        out RoutedProviderName: string;
+                        out RoutedScore: Double): Boolean; overload;
 
 implementation
 
@@ -45,6 +54,7 @@ uses
   PasClaw.Providers.Intf,
   PasClaw.Providers.Factory,
   PasClaw.Tools.Registry,
+  PasClaw.Agent.Mode,            { TPasClawMode / pmPlan -- plan-mode skip }
   PasClaw.Logger,
   PasClaw.Agent.AutoRouter;
 
@@ -100,7 +110,8 @@ threadvar
 
 function ApplyAutoRoute(var LoopCfg: TToolLoopConfig; const Cfg: TConfig;
                         const Messages: array of TMessage;
-                        out RoutedProviderName: string): Boolean;
+                        out RoutedProviderName: string;
+                        out RoutedScore: Double): Boolean;
 var
   UserMsg, RoutedModel, Err, OrigModel, Fingerprint: string;
   Names: TStringArray;
@@ -111,9 +122,15 @@ var
 begin
   Result := False;
   RoutedProviderName := '';
+  RoutedScore := -1;
   { Cheap outs first so the non-routing path stays free. }
   if not Cfg.AutoRouter.Enabled then Exit;
   if LoopCfg.Provider = nil then Exit;
+  { Plan mode is "big thinking": never route a planning/architecture turn to
+    the cheap model, however it scores. The strong (primary) model owns
+    plan-mode turns; routing resumes automatically in Build mode. Surfaces
+    that don't set a mode default to pmBuild, so this is a no-op for them. }
+  if LoopCfg.Mode = pmPlan then Exit;
   UserMsg := LatestUserMessage(Messages);
   if UserMsg = '' then Exit;
 
@@ -122,7 +139,7 @@ begin
   else
     SetLength(Names, 0);
 
-  if not RouteProvider(Cfg, UserMsg, Names, RoutedProviderName, RoutedModel) then
+  if not RouteProvider(Cfg, UserMsg, Names, RoutedProviderName, RoutedModel, RoutedScore) then
   begin
     RoutedProviderName := '';
     Exit;
@@ -188,6 +205,15 @@ begin
       LoopCfg.FallbackModels[i + 1] := PrimaryFallbackModels[i];
 
   Result := True;
+end;
+
+function ApplyAutoRoute(var LoopCfg: TToolLoopConfig; const Cfg: TConfig;
+                        const Messages: array of TMessage;
+                        out RoutedProviderName: string): Boolean;
+var
+  IgnoredScore: Double;
+begin
+  Result := ApplyAutoRoute(LoopCfg, Cfg, Messages, RoutedProviderName, IgnoredScore);
 end;
 
 end.

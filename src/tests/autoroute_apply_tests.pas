@@ -22,6 +22,7 @@ uses
   PasClaw.Config,
   PasClaw.Providers.Types,
   PasClaw.Providers.Intf,
+  PasClaw.Agent.Mode,
   PasClaw.Tools.ToolLoop,
   PasClaw.Agent.AutoRouter.Apply;
 
@@ -124,6 +125,17 @@ begin
     AssertTrue((Length(LoopCfg.FallbackModels) = 1)
                and (LoopCfg.FallbackModels[0] = 'claude-opus-4-7'),
       'caller pre-route model preserved as the primary fallback override');
+
+    { ---- Plan mode is "big thinking": never route, even with an easy message
+      and a fully-configured easy provider. LoopCfg untouched. ---- }
+    LoopCfg := Default(TToolLoopConfig);
+    LoopCfg.Provider := Primary;
+    LoopCfg.Model    := 'claude-opus-4-7';
+    LoopCfg.Mode     := pmPlan;
+    AssertTrue(not ApplyAutoRoute(LoopCfg, Cfg, Msgs, Routed),
+      'plan mode -> never routes');
+    AssertTrue(LoopCfg.Provider = Primary, 'plan mode -> provider untouched');
+    AssertTrue(LoopCfg.Model = 'claude-opus-4-7', 'plan mode -> model untouched');
 
     { ---- Second route reuses the per-thread easy-provider cache (same name +
       fingerprint) and must still route correctly. ---- }

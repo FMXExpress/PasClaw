@@ -1093,6 +1093,7 @@ var
   PrimaryFallbacks:  TLLMProviderArray;
   RoutedProviderNm:  string;
   RoutedModelOverride: string;
+  RoutedScoreVal:    Double;
   RoutedThisTurn:    Boolean;
   CompactOptsLocal: TCompactOptions;
   CompactedLiveOpts: TChatOptions;
@@ -1603,11 +1604,12 @@ begin
         surfaces. No-op unless Cfg.AutoRouter.Enabled. }
       RoutedThisTurn := False;
       if (not Offline) and (PrimaryProvider <> nil) then
-        if ApplyAutoRoute(LoopCfg, Cfg, Msgs, RoutedProviderNm) then
+        if ApplyAutoRoute(LoopCfg, Cfg, Msgs, RoutedProviderNm, RoutedScoreVal) then
         begin
           RoutedThisTurn      := True;
           RoutedModelOverride := LoopCfg.Model;   { for the assistant label }
-          PrintLn(Ansi.Dim + '(routed -> ' + RoutedProviderNm + ')' + Ansi.Reset);
+          PrintLn(Ansi.Dim + '(routed -> ' + RoutedProviderNm +
+                  ' [score=' + FormatFloat('0.00', RoutedScoreVal) + '])' + Ansi.Reset);
         end;
 
       { Open a fresh checkpoints turn so any fs_write / fs_edit_hashline

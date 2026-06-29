@@ -72,26 +72,55 @@ function ClassifyTask(const UserMessage: string;
                       const ToolNamesInUse: array of string;
                       EasyMaxTokens: Integer): TTaskDifficulty;
 
-(* Decide whether to route this turn to the cheap provider. Returns
-   True (and writes the routed provider's name to RoutedProvider /
-   RoutedModel) when the classifier says tdEasy AND the router is
-   enabled AND the EasyProvider is resolvable in Cfg.Providers.
-   Returns False otherwise -- the caller keeps using the primary.
-   ToolNamesInUse threaded through to the classifier. *)
+(* Structural complexity score in 0..1 (Wayfinder-shaped): a logistic of a
+   weighted linear sum of cheap, deterministic features -- estimated token
+   count (the dominant term), code-fence / list / heading counts, and
+   hard/easy keyword + write-run-tool signals. Higher = harder. No model
+   call, no network. Exposed so a caller (or test) can read the score
+   directly -- "you get a score and a recommendation, what you do with it is
+   up to you." Pass DefaultAutoRouterWeights (or Cfg.AutoRouter.Weights) for
+   W; a zeroed record falls back to the defaults. *)
+function ClassifyScore(const UserMessage: string;
+                       const ToolNamesInUse: array of string;
+                       const W: TRouterWeights): Double;
+
+(* Decide whether to route this turn to the cheap provider. Returns True
+   (and writes the routed provider's name + model to RoutedProvider /
+   RoutedModel, and the computed complexity score to RoutedScore) when the
+   structural score is at/under the configured threshold AND the categorical
+   safety rails don't veto it (hard keyword, over-length, write/run-tool
+   ambiguity) AND the router is enabled AND EasyProvider resolves in
+   Cfg.Providers. Returns False otherwise -- the caller keeps the primary.
+   RoutedScore is set whenever scoring runs (>= 0), or -1 when the router
+   short-circuits before scoring (disabled / no easy provider). *)
 function RouteProvider(const Cfg: TConfig;
                        const UserMessage: string;
                        const ToolNamesInUse: array of string;
-                       out RoutedProvider, RoutedModel: string): Boolean;
+                       out RoutedProvider, RoutedModel: string;
+                       out RoutedScore: Double): Boolean; overload;
+{ Back-compat shorthand that discards the score. }
+function RouteProvider(const Cfg: TConfig;
+                       const UserMessage: string;
+                       const ToolNamesInUse: array of string;
+                       out RoutedProvider, RoutedModel: string): Boolean; overload;
 
 implementation
 
 uses
   SysUtils,
+  StrUtils,
+  Math,
   PasClaw.Tokenizer,
   PasClaw.Providers.Catalog;
 
 const
   DefaultEasyMaxTokens = 500;
+  { Below this many estimated tokens an unmarked message is treated as a
+    continuation ("yes", "ok", "continue") and kept on the primary even if it
+    scores low -- in an agent loop a bare one-word turn usually means "carry
+    on with the (possibly hard) thing", not a standalone easy question. An
+    explicit easy marker bypasses this floor. }
+  MinScoreRouteTokens = 6;
 
   HardKeywords: array[0..14] of string = (
     'implement', 'refactor', 'debug', 'fix bug', 'fix the bug',
@@ -134,6 +163,122 @@ begin
     for j := Low(Targets) to High(Targets) do
       if SameText(ToolNames[i], Targets[j]) then Exit(True);
   Result := False;
+end;
+
+function CountSubstr(const S, Sub: string): Integer;
+var
+  P, Start: Integer;
+begin
+  Result := 0;
+  if Sub = '' then Exit;
+  Start := 1;
+  repeat
+    P := PosEx(Sub, S, Start);
+    if P = 0 then Break;
+    Inc(Result);
+    Start := P + Length(Sub);
+  until False;
+end;
+
+{ Single pass over the message counting markdown heading lines (leading '#')
+  and list-item lines (leading '-'/'*'/'N.'/'N)' followed by a space). Cheap
+  structural signals: a prompt full of lists/headings is usually a spec or
+  multi-step task, not a one-liner. }
+procedure CountLineMarkers(const S: string; out Headings, ListItems: Integer);
+var
+  i, j, k, len: Integer;
+begin
+  Headings := 0;
+  ListItems := 0;
+  len := Length(S);
+  i := 1;
+  while i <= len do
+  begin
+    j := i;
+    while (j <= len) and ((S[j] = ' ') or (S[j] = #9)) do Inc(j);
+    if j <= len then
+    begin
+      if S[j] = '#' then
+        Inc(Headings)
+      else if ((S[j] = '-') or (S[j] = '*')) and (j < len) and (S[j + 1] = ' ') then
+        Inc(ListItems)
+      else if (S[j] >= '0') and (S[j] <= '9') then
+      begin
+        k := j;
+        while (k <= len) and (S[k] >= '0') and (S[k] <= '9') do Inc(k);
+        if (k < len) and ((S[k] = '.') or (S[k] = ')')) and (S[k + 1] = ' ') then
+          Inc(ListItems);
+      end;
+    end;
+    while (i <= len) and (S[i] <> #10) do Inc(i);
+    Inc(i);
+  end;
+end;
+
+function CountKeywordHits(const LowerMsg: string;
+                         const Needles: array of string): Integer;
+var
+  i: Integer;
+begin
+  Result := 0;
+  for i := Low(Needles) to High(Needles) do
+    if Pos(Needles[i], LowerMsg) > 0 then Inc(Result);
+end;
+
+function Sigmoid(X: Double): Double;
+var
+  E: Double;
+begin
+  if X >= 0 then
+    Result := 1.0 / (1.0 + Exp(-X))
+  else
+  begin
+    E := Exp(X);
+    Result := E / (1.0 + E);
+  end;
+end;
+
+{ A TConfig built without Create (or with a hand-zeroed weights block) would
+  carry an all-zero TRouterWeights -- which would score everything at 0.5 with
+  a 0 threshold. Substitute the defaults so scoring is always well-defined. }
+function EffectiveWeights(const W: TRouterWeights): TRouterWeights;
+begin
+  if (W.Threshold = 0) and (W.Tokens = 0) and (W.Bias = 0) then
+    Result := DefaultAutoRouterWeights
+  else
+    Result := W;
+end;
+
+function ClassifyScore(const UserMessage: string;
+                       const ToolNamesInUse: array of string;
+                       const W: TRouterWeights): Double;
+var
+  EW: TRouterWeights;
+  Lo: string;
+  Tokens, Fences, Headings, ListItems, HardHits, EasyHits, WriteRun: Integer;
+  Raw: Double;
+begin
+  EW := EffectiveWeights(W);
+  Lo := LowerCase(UserMessage);
+  Tokens := EstimateTokens(UserMessage);
+  Fences := CountSubstr(UserMessage, '```');
+  CountLineMarkers(UserMessage, Headings, ListItems);
+  HardHits := CountKeywordHits(Lo, HardKeywords);
+  EasyHits := CountKeywordHits(Lo, EasyKeywords);
+  if HasAnyToolMatching(ToolNamesInUse, WriteOrRunTools) then
+    WriteRun := 1
+  else
+    WriteRun := 0;
+
+  Raw := EW.Bias
+       + EW.Tokens       * Tokens
+       + EW.CodeFence    * Fences
+       + EW.ListItem     * ListItems
+       + EW.Heading      * Headings
+       + EW.HardKeyword  * HardHits
+       + EW.WriteRunTool * WriteRun
+       - EW.EasyKeyword  * EasyHits;
+  Result := Sigmoid(Raw);
 end;
 
 function ClassifyTask(const UserMessage: string;
@@ -214,41 +359,75 @@ end;
 function RouteProvider(const Cfg: TConfig;
                        const UserMessage: string;
                        const ToolNamesInUse: array of string;
-                       out RoutedProvider, RoutedModel: string): Boolean;
+                       out RoutedProvider, RoutedModel: string;
+                       out RoutedScore: Double): Boolean;
 var
-  Difficulty: TTaskDifficulty;
+  W: TRouterWeights;
+  MaxTokens, Tokens: Integer;
+  HasEasy, HasWriteRun, ShouldRoute: Boolean;
 begin
   RoutedProvider := '';
   RoutedModel    := '';
+  RoutedScore    := -1;
   if not Cfg.AutoRouter.Enabled then Exit(False);
   if Cfg.AutoRouter.EasyProvider = '' then Exit(False);
   if not ConfiguredProviderExists(Cfg, Cfg.AutoRouter.EasyProvider) then
   begin
     { An EasyProvider that doesn't resolve is an operator config
-      mistake -- log it once and stay on the primary. We can't
-      surface it to stderr from here without dragging the logger
-      into the unit, but `pasclaw status` or the gateway's
-      /v1/status would let an operator notice. For now: silently
-      decline rather than crash mid-turn. }
+      mistake -- decline silently and stay on the primary rather
+      than crash mid-turn (`pasclaw status` surfaces the misconfig). }
     Exit(False);
   end;
 
-  Difficulty := ClassifyTask(UserMessage, ToolNamesInUse,
-                             Cfg.AutoRouter.EasyMaxTokens);
-  if Difficulty <> tdEasy then Exit(False);
+  W := EffectiveWeights(Cfg.AutoRouter.Weights);
+  RoutedScore := ClassifyScore(UserMessage, ToolNamesInUse, W);
+
+  { Categorical safety rails, kept from the conservative v1 classifier --
+    these matter more in an agent loop than in Wayfinder's one-shot use:
+      - a hard-keyword task ("implement", "refactor", ...) never routes;
+      - an over-length prompt never routes;
+      - an ambiguous continuation with write/run tools available ("yes",
+        "continue") stays on the primary -- it may mean "now run the risky
+        thing we just discussed". }
+  if ContainsAny(UserMessage, HardKeywords) then Exit(False);
+  MaxTokens := Cfg.AutoRouter.EasyMaxTokens;
+  if MaxTokens <= 0 then MaxTokens := DefaultEasyMaxTokens;
+  Tokens := EstimateTokens(UserMessage);
+  if Tokens > MaxTokens then Exit(False);
+  HasWriteRun := HasAnyToolMatching(ToolNamesInUse, WriteOrRunTools);
+  HasEasy     := ContainsAny(UserMessage, EasyKeywords);
+  if HasWriteRun and (not HasEasy) then Exit(False);
+
+  { Decision: route when the structural score is at/under threshold. An
+    explicit easy marker is enough on its own; an unmarked message must also
+    clear the continuation floor (a bare "ok" stays on the primary). The
+    score still vetoes "summarize <huge fenced code block>" -- the fences and
+    length push it back over the threshold. }
+  ShouldRoute := (RoutedScore <= W.Threshold)
+                 and (HasEasy or (Tokens >= MinScoreRouteTokens));
+  if not ShouldRoute then Exit(False);
 
   RoutedProvider := Cfg.AutoRouter.EasyProvider;
   RoutedModel    := ResolveEasyModel(Cfg);
   if RoutedModel = '' then
   begin
-    { Couldn't pin a safe model for the easy provider. Refuse to
-      route rather than hand the loop a primary-tier model the
-      cheap provider can't serve. Caller stays on the primary
-      via the existing default. }
+    { Couldn't pin a safe model for the easy provider. Refuse to route rather
+      than hand the loop a primary-tier model the cheap provider can't serve. }
     RoutedProvider := '';
     Exit(False);
   end;
   Result := True;
+end;
+
+function RouteProvider(const Cfg: TConfig;
+                       const UserMessage: string;
+                       const ToolNamesInUse: array of string;
+                       out RoutedProvider, RoutedModel: string): Boolean;
+var
+  IgnoredScore: Double;
+begin
+  Result := RouteProvider(Cfg, UserMessage, ToolNamesInUse,
+                          RoutedProvider, RoutedModel, IgnoredScore);
 end;
 
 end.
