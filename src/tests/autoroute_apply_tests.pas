@@ -118,6 +118,12 @@ begin
     AssertTrue(LoopCfg.Model = 'llama-3.3-70b-versatile', 'model swapped to the easy model');
     AssertTrue((Length(LoopCfg.Fallbacks) = 1) and (LoopCfg.Fallbacks[0] = Primary),
       'original primary prepended to the fallback chain');
+    { Review fix: the prepended primary must carry the caller's pre-route
+      model so a routing-fooled turn retries the primary with the model the
+      operator actually requested, not the primary's catalog default. }
+    AssertTrue((Length(LoopCfg.FallbackModels) = 1)
+               and (LoopCfg.FallbackModels[0] = 'claude-opus-4-7'),
+      'caller pre-route model preserved as the primary fallback override');
   finally
     Cfg.Free;
   end;

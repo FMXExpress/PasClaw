@@ -69,6 +69,18 @@ type
        -- is required because dcc64 enforces strict named-type matching
        on dynamic-array assignments. *)
     Fallbacks:      TLLMProviderArray;
+    (* Optional per-fallback model override, parallel to Fallbacks by
+       index. When FallbackModels[i] is non-empty it is the model used
+       for Fallbacks[i] instead of that provider's GetDefaultModel; an
+       empty entry (or an index past the end of this array) falls through
+       to the GetDefaultModel -> Cfg.Model behaviour. Left empty by most
+       callers -- the catalog GetDefaultModel path is correct out of the
+       box. The auto-router populates [0] with the caller's pre-route
+       model when it prepends the original primary, so a routing-fooled
+       turn retries the primary with the model the caller actually
+       requested (--model / TUI picker / request model) rather than the
+       primary's catalog default. *)
+    FallbackModels: TStringArray;
     (* Hook callbacks for observe / veto / transform / steer. See
        PasClaw.Agent.Hooks for the TPasClawHook base class and the
        four virtuals embedders override (BeforeTurn, BeforeToolCall,
@@ -975,11 +987,11 @@ begin
       GetDefaultModel -- anthropic-only model names ("claude-opus-4-7")
       passed verbatim to an OpenAI fallback would fail at the remote
       API and trigger the next fallback even when the chain was
-      otherwise healthy. We only fall back to Cfg.Model when the
-      fallback explicitly returns '' for its default. A per-fallback
-      override (Cfg.FallbackModels: array of string) is a clean
-      follow-up but the GetDefaultModel path gets the right behaviour
-      out of the box for the catalog providers we ship. }
+      otherwise healthy. A non-empty Cfg.FallbackModels[fbi] overrides
+      this entirely -- that is how the auto-router preserves the caller's
+      explicitly requested model when it prepends the original primary as
+      Fallbacks[0]. Otherwise we only fall back to Cfg.Model when the
+      fallback explicitly returns '' for its GetDefaultModel. }
     if IsRetryableStatus(Resp.StatusCode) and (Length(Cfg.Fallbacks) > 0) then
     begin
       LogWarn('provider primary returned status=%d, walking %d fallback(s)',
@@ -987,8 +999,13 @@ begin
       for fbi := 0 to High(Cfg.Fallbacks) do
       begin
         if Cfg.Fallbacks[fbi] = nil then Continue;
-        FallbackModel := Cfg.Fallbacks[fbi].GetDefaultModel;
-        if FallbackModel = '' then FallbackModel := Cfg.Model;
+        if (fbi <= High(Cfg.FallbackModels)) and (Cfg.FallbackModels[fbi] <> '') then
+          FallbackModel := Cfg.FallbackModels[fbi]
+        else
+        begin
+          FallbackModel := Cfg.Fallbacks[fbi].GetDefaultModel;
+          if FallbackModel = '' then FallbackModel := Cfg.Model;
+        end;
         LogDebug('fallback %d: trying %s with model=%s',
                  [fbi, Cfg.Fallbacks[fbi].GetName, FallbackModel]);
         try

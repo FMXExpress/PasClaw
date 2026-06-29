@@ -62,10 +62,11 @@ function ApplyAutoRoute(var LoopCfg: TToolLoopConfig; const Cfg: TConfig;
                         const Messages: array of TMessage;
                         out RoutedProviderName: string): Boolean;
 var
-  UserMsg, RoutedModel, Err: string;
+  UserMsg, RoutedModel, Err, OrigModel: string;
   Names: TStringArray;
   EasyProvider, PrimaryProvider: ILLMProvider;
   PrimaryFallbacks: TLLMProviderArray;
+  PrimaryFallbackModels: TStringArray;
   i: Integer;
 begin
   Result := False;
@@ -98,8 +99,16 @@ begin
     Exit;
   end;
 
-  PrimaryProvider  := LoopCfg.Provider;
-  PrimaryFallbacks := LoopCfg.Fallbacks;
+  PrimaryProvider       := LoopCfg.Provider;
+  PrimaryFallbacks      := LoopCfg.Fallbacks;
+  PrimaryFallbackModels := LoopCfg.FallbackModels;
+  { Capture the caller's pre-route model BEFORE we overwrite it. This is the
+    model the operator actually asked for (--model, the TUI picker, or an
+    OpenAI-compatible request model). When the routed call fails and we fall
+    back to the primary, RunToolLoop must retry with THIS model, not the
+    primary's catalog default -- otherwise auto-routing silently downgrades
+    an explicit model choice on every routing-fooled turn. }
+  OrigModel        := LoopCfg.Model;
   LoopCfg.Provider := EasyProvider;
   { RouteProvider guarantees a non-empty model when it routes (explicit
     EasyModel -> per-provider Model -> catalog default), so the cheap
@@ -107,11 +116,19 @@ begin
   if RoutedModel <> '' then
     LoopCfg.Model := RoutedModel;
   { Prepend the original primary so a failed routed call drops cleanly back to
-    it before walking the rest of the chain. }
+    it before walking the rest of the chain, carrying OrigModel as its
+    per-fallback override so the caller's requested model is preserved. }
   SetLength(LoopCfg.Fallbacks, Length(PrimaryFallbacks) + 1);
   LoopCfg.Fallbacks[0] := PrimaryProvider;
   for i := 0 to High(PrimaryFallbacks) do
     LoopCfg.Fallbacks[i + 1] := PrimaryFallbacks[i];
+  { Parallel FallbackModels: [0] = the caller's pre-route model for the
+    re-prepended primary; the rest carry over any prior per-fallback
+    overrides (empty entries fall through to GetDefaultModel as before). }
+  SetLength(LoopCfg.FallbackModels, Length(PrimaryFallbacks) + 1);
+  LoopCfg.FallbackModels[0] := OrigModel;
+  for i := 0 to High(PrimaryFallbackModels) do
+    LoopCfg.FallbackModels[i + 1] := PrimaryFallbackModels[i];
 
   Result := True;
 end;
