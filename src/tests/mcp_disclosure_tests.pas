@@ -331,6 +331,39 @@ begin
   WriteLn('  ok: tool_search names a configured-but-disabled MCP server');
 end;
 
+procedure TestToolSearchEmptyAfterAllRevealed;
+{ Review fix: once an enabled server's deferred tools are all revealed,
+  DeferredNames is empty but the tools are ACTIVE. tool_search must report
+  "already revealed / active," not slander the healthy server as failed. }
+var
+  Reg: TToolRegistry;
+  Cfg: TConfig;
+  Result_, ErrMsg: string;
+begin
+  Reg := TToolRegistry.Create;
+  Cfg := TConfig.Create;
+  try
+    Cfg.MCPProgressiveDisclosure := True;
+    SetLength(Cfg.MCPServers, 1);
+    Cfg.MCPServers[0].Name    := 'replicate';
+    Cfg.MCPServers[0].Enabled := True;
+    RegisterMCPDisclosureTools(Reg, Cfg);
+    RegisterDeferredTool(Reg, 'replicate_create_predictions', 'Create a prediction');
+    { Reveal the only deferred tool, then search again -> deferred set empty. }
+    Reg.RunTool('tool_search', '{"query":"select:replicate_create_predictions"}', ErrMsg);
+    Result_ := Reg.RunTool('tool_search', '{"query":"nothing-left"}', ErrMsg);
+    AssertTrue(ErrMsg = '', 'all-revealed: no error');
+    AssertContains(Result_, 'already been revealed',
+                   'all-revealed: reports tools active, not failed');
+    AssertTrue(Pos('failed to start', Result_) = 0,
+               'all-revealed: does NOT claim the server failed');
+  finally
+    Cfg.Free;
+    Reg.Free;
+  end;
+  WriteLn('  ok: tool_search reports all-revealed servers as active, not failed');
+end;
+
 procedure TestToolSearchEmptyDeferredEnabledButUnloaded;
 { Enabled server but no tools registered yet (cold cache / still connecting /
   failed). tool_search should say so and suggest a retry, not a dead end. }
@@ -427,6 +460,7 @@ begin
   TestToolSearchEmptyDeferred;
   TestToolSearchEmptyDeferredDisabledServer;
   TestToolSearchEmptyDeferredEnabledButUnloaded;
+  TestToolSearchEmptyAfterAllRevealed;
   TestToolSearchSkipsRegistrationWhenDisabled;
   TestConfigRoundTrip;
   WriteLn('ok - mcp disclosure tests passed');

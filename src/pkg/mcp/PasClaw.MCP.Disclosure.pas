@@ -236,16 +236,30 @@ end;
   no MCP tool is currently revealed-able -- explain WHY using the configured
   server snapshot, instead of a dead end that reads as "no such capability." }
 function EmptyDeferredMessage: string;
+var
+  Revealed: Boolean;
 begin
   if GMCPConfigured = 0 then
     Exit('No MCP tools are configured, so there is nothing to search. '
        + 'Add an MCP server (e.g. `pasclaw mcp add`) to gain external tools.');
-  Result := 'No MCP tools are active right now.';
+  { An empty deferred set after tools were revealed means the MCP tools loaded
+    fine and are already active -- not that a server failed. Distinguish the
+    two so a follow-up search after revealing the last tool doesn't slander a
+    healthy server. }
+  Revealed := (GRegistry <> nil) and GRegistry.AnyRevealed;
+  if Revealed then
+    Result := 'No remaining deferred MCP tools to load -- the available MCP '
+            + 'tools have already been revealed and are active; call the one '
+            + 'you need directly by name.'
+  else
+    Result := 'No MCP tools are active right now.';
   if GMCPDisabledList <> '' then
     Result := Result + ' Configured but DISABLED: ' + GMCPDisabledList
             + ' -- set "enabled": true for it in mcp_servers in config.json '
             + 'and restart pasclaw to use its tools.';
-  if GMCPEnabledList <> '' then
+  { Only warn about not-loaded servers when nothing has been revealed -- if a
+    reveal has happened, the enabled servers did load. }
+  if (not Revealed) and (GMCPEnabledList <> '') then
     Result := Result + ' Enabled but no tools loaded yet (still connecting, or '
             + 'the server failed to start): ' + GMCPEnabledList
             + ' -- retry tool_search in a moment, or check the logs for an '
