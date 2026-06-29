@@ -359,7 +359,7 @@ begin
   Result := nil;
   if (Reg = nil) or (Length(Cfg.Subagents) = 0) then Exit;
   Ctx.Provider       := Provider;
-  Ctx.Fallbacks      := ResolveFallbacks(Cfg);
+  Ctx.Fallbacks      := ResolveFallbacks(Cfg, Ctx.FallbackModels);
   Ctx.ParentRegistry := Reg;
   Ctx.DefaultModel   := Model;
   Ctx.PromptCache    := Cfg.PromptCache;
@@ -376,7 +376,7 @@ begin
   Result := nil;
   if (Reg = nil) or (Length(Cfg.Subagents) = 0) then Exit;
   Ctx.Provider       := Provider;
-  Ctx.Fallbacks      := ResolveFallbacks(Cfg);
+  Ctx.Fallbacks      := ResolveFallbacks(Cfg, Ctx.FallbackModels);
   Ctx.ParentRegistry := Reg;
   Ctx.DefaultModel   := Model;
   Ctx.PromptCache    := Cfg.PromptCache;

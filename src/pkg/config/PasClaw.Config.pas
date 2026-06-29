@@ -1662,6 +1662,14 @@ begin
       finally
         Arr.Free;
       end;
+      { FromJSON is merge-style (LoadConfig layers profile JSON, then
+        config.json). A later layer that overrides "fallbacks" but omits
+        "fallback_models" must NOT keep an inherited model array -- it would be
+        index-paired with the NEW providers and apply one provider's model to
+        another. Clear it here; the block below repopulates if this layer
+        actually carries fallback_models. }
+      if not Root.Has('fallback_models') then
+        SetLength(FallbackModels, 0);
     end;
     if Root.Has('fallback_models') then
     begin

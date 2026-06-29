@@ -57,6 +57,7 @@ type
   TSubagentContext = record
     Provider:       ILLMProvider;
     Fallbacks:      TLLMProviderArray;
+    FallbackModels: TStringArray;   { lockstep per-fallback model overrides }
     ParentRegistry: TToolRegistry;
     DefaultModel:   string;
     (* Operator's prompt-cache config propagated from the parent so
@@ -335,6 +336,7 @@ begin
     ChildCfg.MaxIterations := MaxIter;
     ChildCfg.Parallel      := True;
     ChildCfg.Fallbacks     := FCtx.Fallbacks;
+    ChildCfg.FallbackModels := FCtx.FallbackModels;
     ChildCfg.Options       := DefaultChatOptions;
     ApplyPromptCacheConfig(ChildCfg.Options, FCtx.PromptCache);
     ChildCfg.Options.SystemPrompt := Spec.SystemPrompt;

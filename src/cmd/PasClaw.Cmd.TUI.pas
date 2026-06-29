@@ -213,7 +213,7 @@ begin
     if (Reg <> nil) and (Provider <> nil) and (Length(Cfg.Subagents) > 0) then
     begin
       SubCtx.Provider       := Provider;
-      SubCtx.Fallbacks      := ResolveFallbacks(Cfg);
+      SubCtx.Fallbacks      := ResolveFallbacks(Cfg, SubCtx.FallbackModels);
       SubCtx.ParentRegistry := Reg;
       SubCtx.DefaultModel   := Model;
       SubCtx.PromptCache    := Cfg.PromptCache;

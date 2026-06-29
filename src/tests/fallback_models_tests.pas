@@ -157,11 +157,36 @@ begin
   end;
 end;
 
+procedure TestLayeredOverrideClearsStaleModels;
+{ FromJSON is merge-style (LoadConfig layers profile JSON then config.json). A
+  later layer that overrides "fallbacks" but omits "fallback_models" must not
+  keep the inherited model array -- it would be index-paired with the new
+  providers and misapply a model. (Review fix on PR #398.) }
+var
+  Cfg: TConfig;
+begin
+  Cfg := TConfig.Create;
+  try
+    Cfg.FromJSON('{"fallbacks":["anthropic"],"fallback_models":["claude-sonnet-4-6"]}');
+    AssertTrue((Length(Cfg.FallbackModels) = 1)
+               and (Cfg.FallbackModels[0] = 'claude-sonnet-4-6'),
+               'layer 1 sets fallback_models');
+    { Later layer overrides fallbacks, omits fallback_models. }
+    Cfg.FromJSON('{"fallbacks":["groq","openai"]}');
+    AssertTrue(Length(Cfg.Fallbacks) = 2, 'layer 2 replaced fallbacks');
+    AssertTrue(Length(Cfg.FallbackModels) = 0,
+               'stale fallback_models cleared when the overriding layer omits them');
+  finally
+    Cfg.Free;
+  end;
+end;
+
 begin
   TestRoundTrip;
   TestNotEmittedWhenAllBlank;
   TestResolveLockstep;
   TestResolveSkipKeepsAlignment;
   TestBackCompatOverloadStillWorks;
+  TestLayeredOverrideClearsStaleModels;
   WriteLn('fallback_models_tests: OK');
 end.
