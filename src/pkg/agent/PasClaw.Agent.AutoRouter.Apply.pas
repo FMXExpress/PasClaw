@@ -58,11 +58,51 @@ begin
       Exit(Messages[i].Content);
 end;
 
+{ Fingerprint of every input NewProviderFromConfig captures into the easy
+  provider object. Used to bust the per-thread cache when a /v1/config
+  hot-swap changes any of them without changing the provider name. Beyond the
+  per-provider entry (kind / base / key / model), NewProviderFromConfig also
+  bakes provider-WIDE settings into the object -- the Anthropic/OpenAI/Gemini
+  server-tool toggles and the relay wait timeout -- so those must be in the
+  key too, or a config that only flips e.g. web_search would keep reusing a
+  stale provider on a same-thread surface. Empty when the name is unknown. }
+function EasyProviderFingerprint(const Cfg: TConfig; const Name: string): string;
+var
+  i: Integer;
+begin
+  Result := '';
+  for i := 0 to High(Cfg.Providers) do
+    if SameText(Cfg.Providers[i].Name, Name) then
+    begin
+      Result := Cfg.Providers[i].Kind + '|' + Cfg.Providers[i].APIBase + '|' +
+                Cfg.Providers[i].APIKey + '|' + Cfg.Providers[i].Model + '|' +
+                BoolToStr(Cfg.AnthropicServerTools.WebSearch, True) + ',' +
+                IntToStr(Cfg.AnthropicServerTools.WebSearchMaxUses) + ',' +
+                BoolToStr(Cfg.AnthropicServerTools.WebFetch, True) + ',' +
+                IntToStr(Cfg.AnthropicServerTools.WebFetchMaxUses) + '|' +
+                BoolToStr(Cfg.OpenAIServerTools.WebSearch, True) + '|' +
+                BoolToStr(Cfg.GeminiServerTools.GoogleSearch, True) + '|' +
+                IntToStr(Cfg.RelayWaitTimeoutMs);
+      Exit;
+    end;
+end;
+
+{ Per-thread cache of the last-constructed easy provider. Routing the same easy
+  provider every turn (the common case) reused one object across the session in
+  the old CLI inline code; this restores that for all surfaces without sharing
+  state across threads (the gateway routes from worker threads -- no locking,
+  each thread caches independently). Keyed on name + config fingerprint so a
+  hot-swap rebuilds correctly. }
+threadvar
+  GEasyName:        string;
+  GEasyFingerprint: string;
+  GEasyProv:        ILLMProvider;
+
 function ApplyAutoRoute(var LoopCfg: TToolLoopConfig; const Cfg: TConfig;
                         const Messages: array of TMessage;
                         out RoutedProviderName: string): Boolean;
 var
-  UserMsg, RoutedModel, Err, OrigModel: string;
+  UserMsg, RoutedModel, Err, OrigModel, Fingerprint: string;
   Names: TStringArray;
   EasyProvider, PrimaryProvider: ILLMProvider;
   PrimaryFallbacks: TLLMProviderArray;
@@ -88,15 +128,27 @@ begin
     Exit;
   end;
 
-  { Build the easy provider on demand. On failure (catalog drift, missing
-    key) log once and stay on the primary -- never crash a turn over a router
+  { Resolve the easy provider, reusing the per-thread cached object when the
+    name and config fingerprint are unchanged so a long routed session doesn't
+    reconstruct it every turn. On a build failure (catalog drift, missing key)
+    log once and stay on the primary -- never crash a turn over a router
     misconfiguration. }
-  if not NewProviderFromConfig(Cfg, RoutedProviderName, EasyProvider, Err) then
+  Fingerprint := EasyProviderFingerprint(Cfg, RoutedProviderName);
+  if (GEasyProv <> nil) and (GEasyName = RoutedProviderName)
+     and (GEasyFingerprint = Fingerprint) then
+    EasyProvider := GEasyProv
+  else
   begin
-    LogWarn('auto-router: easy provider "%s" unresolvable: %s -- staying on primary',
-            [RoutedProviderName, Err]);
-    RoutedProviderName := '';
-    Exit;
+    if not NewProviderFromConfig(Cfg, RoutedProviderName, EasyProvider, Err) then
+    begin
+      LogWarn('auto-router: easy provider "%s" unresolvable: %s -- staying on primary',
+              [RoutedProviderName, Err]);
+      RoutedProviderName := '';
+      Exit;
+    end;
+    GEasyName        := RoutedProviderName;
+    GEasyFingerprint := Fingerprint;
+    GEasyProv        := EasyProvider;
   end;
 
   PrimaryProvider       := LoopCfg.Provider;
@@ -127,8 +179,13 @@ begin
     overrides (empty entries fall through to GetDefaultModel as before). }
   SetLength(LoopCfg.FallbackModels, Length(PrimaryFallbacks) + 1);
   LoopCfg.FallbackModels[0] := OrigModel;
-  for i := 0 to High(PrimaryFallbackModels) do
-    LoopCfg.FallbackModels[i + 1] := PrimaryFallbackModels[i];
+  { Bound on Fallbacks (the array we sized to), not PrimaryFallbackModels:
+    a caller that set FallbackModels longer than Fallbacks would otherwise
+    write past the end. Indices without a prior override stay '' (the
+    GetDefaultModel fall-through). }
+  for i := 0 to High(PrimaryFallbacks) do
+    if i <= High(PrimaryFallbackModels) then
+      LoopCfg.FallbackModels[i + 1] := PrimaryFallbackModels[i];
 
   Result := True;
 end;

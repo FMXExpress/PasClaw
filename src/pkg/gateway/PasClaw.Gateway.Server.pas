@@ -3601,11 +3601,15 @@ begin
   { Opt-in distilled memory: on a successful turn, fire a background pass
     that extracts durable facts from the latest exchange and stores them.
     Best-effort and non-blocking -- never affects the response.
-    Use Cfg.Provider/Cfg.Model -- the SNAPSHOT this turn actually ran on --
-    not FProvider, which a concurrent /v1/config hot-swap may have already
-    repointed at a different backend. }
+    Use Cfg.Provider/Cfg.Model -- the PRIMARY snapshot, NOT LocalCfg, which
+    auto-routing may have swapped to the cheap easy provider for this turn.
+    Fact extraction wants the operator's strong model regardless of which
+    model answered the (easy) turn; routing the chat reply cheaply should not
+    silently downgrade the durable memory the gateway writes. Cfg (not
+    FProvider) because a concurrent /v1/config hot-swap may have already
+    repointed FProvider at a different backend. }
   if Result and FCfg.MemoryDistillEnabled then
-    ScheduleDistill(LocalCfg.Provider, LocalCfg.Model, GetHome, ReqSession,
+    ScheduleDistill(Cfg.Provider, Cfg.Model, GetHome, ReqSession,
       BuildRecentTranscript(Loop.FinalMessages, Loop.Content, DefaultRecentMsgs));
 end;
 
