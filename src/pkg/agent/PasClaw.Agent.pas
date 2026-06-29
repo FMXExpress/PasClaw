@@ -602,7 +602,7 @@ begin
   if (Length(FConfig.Subagents) > 0) and (FProvider <> nil) then
   begin
     FSubagentCtx.Provider       := FProvider;
-    FSubagentCtx.Fallbacks      := ResolveFallbacks(FConfig);
+    FSubagentCtx.Fallbacks      := ResolveFallbacks(FConfig, FSubagentCtx.FallbackModels);
     FSubagentCtx.ParentRegistry := FRegistry;
     FSubagentCtx.PromptCache    := FConfig.PromptCache;
     if FModel <> '' then
@@ -634,7 +634,7 @@ begin
     on PR #107.) }
   if (FSpawnTool = nil) or (FProvider = nil) then Exit;
   FSubagentCtx.Provider       := FProvider;
-  FSubagentCtx.Fallbacks      := ResolveFallbacks(FConfig);
+  FSubagentCtx.Fallbacks      := ResolveFallbacks(FConfig, FSubagentCtx.FallbackModels);
   FSubagentCtx.ParentRegistry := FRegistry;
   FSubagentCtx.PromptCache    := FConfig.PromptCache;
   if FModel <> '' then
@@ -804,7 +804,7 @@ begin
   Cfg.Model         := ModelName;
   Cfg.MaxIterations := FMaxIterations;
   Cfg.Parallel := True;
-  Cfg.Fallbacks     := ResolveFallbacks(FConfig);
+  Cfg.Fallbacks     := ResolveFallbacks(FConfig, Cfg.FallbackModels);
   Cfg.Hooks         := BuildHookArray;
   Cfg.Options       := DefaultChatOptions;
   ApplyPromptCacheConfig(Cfg.Options, FConfig.PromptCache);

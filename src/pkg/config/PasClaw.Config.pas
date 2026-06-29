@@ -526,6 +526,16 @@ type
       directly. Configured via `pasclaw auth fallback openai gemini`
       or by editing config.json's "fallbacks": ["openai","gemini"]. }
     Fallbacks:  array of string;
+    { Optional per-fallback model override, parallel to Fallbacks by index.
+      When FallbackModels[i] is non-empty the loop retries Fallbacks[i] with
+      THAT model instead of the provider's catalog default. This is what makes
+      a same-provider fallback useful: "fallbacks":["anthropic"] +
+      "fallback_models":["claude-sonnet-4-6"] retries Sonnet on one key when
+      Opus is rate-limited / overloaded (per-model limits are real on both the
+      subscription and the API). Empty entry / shorter array -> that fallback
+      uses its catalog default, exactly as before. Configured by editing
+      config.json's "fallback_models". }
+    FallbackModels: array of string;
     Gateway:    TGatewayConfig;
     Diagnostics: TDiagnosticsConfig;  { OpenTelemetry traces -- see TOtelDiagnosticsConfig }
     Sandbox:    TSandboxPolicy;
@@ -1175,6 +1185,15 @@ begin
         and (A.Threshold = B.Threshold);
 end;
 
+function AnyNonEmpty(const A: array of string): Boolean;
+var
+  i: Integer;
+begin
+  for i := Low(A) to High(A) do
+    if A[i] <> '' then Exit(True);
+  Result := False;
+end;
+
 function TConfig.ToJSON: string;
 var
   Root, Gw, Tmp, Tmp2, Diag, OtelHdrs, WTmp: TJsonObject;
@@ -1196,6 +1215,16 @@ begin
       for i := 0 to High(Fallbacks) do
         FallbacksArr.AddStr(Fallbacks[i]);
       Root.PutArray('fallbacks', FallbacksArr);  { takes ownership; sets FallbacksArr := nil }
+    end;
+    { Per-fallback model overrides, parallel to fallbacks. Emit only when at
+      least one entry is non-empty so configs without model overrides stay
+      tidy. }
+    if AnyNonEmpty(FallbackModels) then
+    begin
+      FallbacksArr := TJsonArray.Create;
+      for i := 0 to High(FallbackModels) do
+        FallbacksArr.AddStr(FallbackModels[i]);
+      Root.PutArray('fallback_models', FallbacksArr);
     end;
 
     Gw := TJsonObject.Create;
@@ -1630,6 +1659,26 @@ begin
         SetLength(Fallbacks, Arr.Count);
         for i := 0 to Arr.Count - 1 do
           Fallbacks[i] := Arr.ItemStr(i);
+      finally
+        Arr.Free;
+      end;
+      { FromJSON is merge-style (LoadConfig layers profile JSON, then
+        config.json). A later layer that overrides "fallbacks" but omits
+        "fallback_models" must NOT keep an inherited model array -- it would be
+        index-paired with the NEW providers and apply one provider's model to
+        another. Clear it here; the block below repopulates if this layer
+        actually carries fallback_models. }
+      if not Root.Has('fallback_models') then
+        SetLength(FallbackModels, 0);
+    end;
+    if Root.Has('fallback_models') then
+    begin
+      Arr := Root.ChildArray('fallback_models');
+      if Arr <> nil then
+      try
+        SetLength(FallbackModels, Arr.Count);
+        for i := 0 to Arr.Count - 1 do
+          FallbackModels[i] := Arr.ItemStr(i);
       finally
         Arr.Free;
       end;

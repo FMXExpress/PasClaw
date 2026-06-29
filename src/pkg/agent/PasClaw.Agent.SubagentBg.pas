@@ -493,6 +493,7 @@ begin
     Box.Cfg.MaxIterations := MaxIter;
     Box.Cfg.Parallel      := True;
     Box.Cfg.Fallbacks     := FCtx.Fallbacks;
+    Box.Cfg.FallbackModels := FCtx.FallbackModels;
     Box.Cfg.Options       := DefaultChatOptions;
     ApplyPromptCacheConfig(Box.Cfg.Options, FCtx.PromptCache);
     Box.Cfg.Options.SystemPrompt := Spec.SystemPrompt;

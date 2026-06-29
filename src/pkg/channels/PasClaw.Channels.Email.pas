@@ -419,7 +419,7 @@ begin
             LoopCfg.Model         := FCfg.DefaultModel;
             LoopCfg.MaxIterations := 6;
             LoopCfg.Parallel      := True;
-            LoopCfg.Fallbacks     := ResolveFallbacks(FCfg);
+            LoopCfg.Fallbacks     := ResolveFallbacks(FCfg, LoopCfg.FallbackModels);
             LoopCfg.Options       := DefaultChatOptions;
             ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
             LoopCfg.OnText        := nil;

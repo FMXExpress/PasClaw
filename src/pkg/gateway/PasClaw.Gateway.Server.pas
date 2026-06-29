@@ -93,6 +93,7 @@ type
        consistent (primary, fallbacks) pair via SnapshotProviders. *)
     FApplyLock: TCriticalSection;
     FFallbacks: TLLMProviderArray;
+    FFallbackModels: TStringArray;   { per-fallback model overrides, lockstep with FFallbacks }
     (* Per-process scoped credential. Random hex generated in Create
        once per `pasclaw serve` / `pasclaw gateway` startup. Gates the
        /v1/relay/* surface independently of Cfg.Gateway.Token so an
@@ -240,7 +241,7 @@ type
       primary, fallback chain, and default model copied together so a swap can't
       split them across a starting request. }
     procedure SnapshotRuntime(out Prim: ILLMProvider; out FB: TLLMProviderArray;
-                              out DefModel: string);
+                              out FBModels: TStringArray; out DefModel: string);
     { Rebuild + swap the live provider/fallbacks from a saved config. Returns
       False (and keeps the current provider) if the new primary won't build. }
     function ApplyProviderConfig(NewCfg: TConfig): Boolean;
@@ -742,7 +743,7 @@ begin
   { Live provider hot-swap state. Cache the fallback chain now (relay queue is
     registered above, so a relay fallback resolves) -- rebuilt on config write. }
   FApplyLock := TCriticalSection.Create;
-  FFallbacks := ResolveFallbacks(FCfg);
+  FFallbacks := ResolveFallbacks(FCfg, FFallbackModels);
 
   { Generate a fresh per-process relay-scoped token. Format is
     phone-typable: two 4-char groups separated by a hyphen
@@ -781,7 +782,7 @@ begin
 end;
 
 procedure TGatewayServer.SnapshotRuntime(out Prim: ILLMProvider;
-  out FB: TLLMProviderArray; out DefModel: string);
+  out FB: TLLMProviderArray; out FBModels: TStringArray; out DefModel: string);
 { Copy the primary provider, fallback chain, AND default model together under
   the lock so a concurrent ApplyProviderConfig swap can't tear them apart -- a
   request must not end up sending the new model to the old provider (or vice
@@ -794,6 +795,7 @@ begin
   try
     Prim     := FProvider;
     FB       := Copy(FFallbacks);
+    FBModels := Copy(FFallbackModels);
     DefModel := FCfg.DefaultModel;
   finally
     FApplyLock.Release;
@@ -808,6 +810,7 @@ function TGatewayServer.ApplyProviderConfig(NewCfg: TConfig): Boolean;
 var
   NewProv: ILLMProvider;
   NewFB: TLLMProviderArray;
+  NewFBModels: TStringArray;
   Err: string;
 begin
   Result := False;
@@ -817,11 +820,12 @@ begin
             [Err]);
     Exit;
   end;
-  NewFB := ResolveFallbacks(NewCfg);
+  NewFB := ResolveFallbacks(NewCfg, NewFBModels);
   FApplyLock.Acquire;
   try
     FProvider  := NewProv;
     FFallbacks := NewFB;
+    FFallbackModels := NewFBModels;
     { Keep the in-memory display/model fields in step so /v1/status and the
       legacy /v1/chat model reflect the switch immediately. }
     FCfg.DefaultProvider := NewCfg.DefaultProvider;
@@ -4306,6 +4310,7 @@ var
   LoopCfg: TToolLoopConfig;
   Prim: ILLMProvider;
   FB: TLLMProviderArray;
+  FBModels: TStringArray;
   DefModel: string;
 begin
   Body := '';
@@ -4345,7 +4350,7 @@ begin
 
   { Snapshot provider + fallbacks + default model together (one lock) so a live
     /v1/config swap can't pair the new model with the old provider. }
-  SnapshotRuntime(Prim, FB, DefModel);
+  SnapshotRuntime(Prim, FB, FBModels, DefModel);
   LoopCfg.Provider := Prim;
   if LoopCfg.Provider = nil then
   begin
@@ -4366,6 +4371,7 @@ begin
     plan keep working unchanged. }
   LoopCfg.Mode          := ParseModeFromBody(Body);
   LoopCfg.Fallbacks     := FB;
+  LoopCfg.FallbackModels := FBModels;
   LoopCfg.Options       := DefaultChatOptions;
   ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
   LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '',
@@ -4914,6 +4920,7 @@ var
   ActivityCollector: TToolActivityCollector;
   Prim: ILLMProvider;
   FB: TLLMProviderArray;
+  FBModels: TStringArray;
   SnapModel: string;
   function SanitizeStreamError(const S: string): string;
   begin
@@ -5003,7 +5010,7 @@ begin
 
     { Provider + fallbacks snapshotted together (model is the request's
       ReqModel, resolved at parse). }
-    SnapshotRuntime(Prim, FB, SnapModel);
+    SnapshotRuntime(Prim, FB, FBModels, SnapModel);
     LoopCfg.Provider := Prim;
     if LoopCfg.Provider = nil then
     begin
@@ -5020,6 +5027,7 @@ begin
     LoopCfg.Parallel := True;
     LoopCfg.Mode          := ParseModeFromBody(Body);  { PR #290 }
     LoopCfg.Fallbacks     := FB;
+    LoopCfg.FallbackModels := FBModels;
     LoopCfg.Options       := DefaultChatOptions;
     ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
     if GetEffectiveGatewayToken(FCfg) <> '' then
@@ -6282,6 +6290,7 @@ var
   FcCallIdVal, FcSignatureVal: string;
   Prim: ILLMProvider;   { live-provider snapshot for this request (hot-swap safe) }
   FB: TLLMProviderArray;
+  FBModels: TStringArray;
   SnapModel: string;
 
   procedure AppendMessage(Role: TMsgRole; const Content: string);
@@ -6622,7 +6631,7 @@ begin
     finally
       ToolsArrIn.Free;
     end;
-    SnapshotRuntime(Prim, FB, SnapModel);
+    SnapshotRuntime(Prim, FB, FBModels, SnapModel);
     if Prim = nil then
     begin
       WriteJSON(AResp, 503,
@@ -6775,6 +6784,7 @@ begin
       LoopCfg.Parallel := True;
       LoopCfg.Mode          := ParseModeFromBody(Body);  { PR #290 }
       LoopCfg.Fallbacks     := FB;
+      LoopCfg.FallbackModels := FBModels;
       LoopCfg.Options       := DefaultChatOptions;
       ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
       if GetEffectiveGatewayToken(FCfg) <> '' then

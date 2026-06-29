@@ -359,7 +359,7 @@ begin
   Result := nil;
   if (Reg = nil) or (Length(Cfg.Subagents) = 0) then Exit;
   Ctx.Provider       := Provider;
-  Ctx.Fallbacks      := ResolveFallbacks(Cfg);
+  Ctx.Fallbacks      := ResolveFallbacks(Cfg, Ctx.FallbackModels);
   Ctx.ParentRegistry := Reg;
   Ctx.DefaultModel   := Model;
   Ctx.PromptCache    := Cfg.PromptCache;
@@ -376,7 +376,7 @@ begin
   Result := nil;
   if (Reg = nil) or (Length(Cfg.Subagents) = 0) then Exit;
   Ctx.Provider       := Provider;
-  Ctx.Fallbacks      := ResolveFallbacks(Cfg);
+  Ctx.Fallbacks      := ResolveFallbacks(Cfg, Ctx.FallbackModels);
   Ctx.ParentRegistry := Reg;
   Ctx.DefaultModel   := Model;
   Ctx.PromptCache    := Cfg.PromptCache;
@@ -402,7 +402,7 @@ begin
   Result.Model         := Model;
   Result.MaxIterations := A.MaxIterations;
   Result.Parallel := True;
-  Result.Fallbacks     := ResolveFallbacks(Cfg);
+  Result.Fallbacks     := ResolveFallbacks(Cfg, Result.FallbackModels);
   Result.Options       := DefaultChatOptions;
   { ToolsEnabled tracks the registry we are about to hand RunToolLoop
     so the system prompt stays in sync with what the model can
