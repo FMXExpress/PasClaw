@@ -1238,24 +1238,6 @@ begin
   end;
 end;
 
-function FilterCatalogExcluding(const Catalog: TProviderSpecArray;
-                                const ExcludeKind: string): TProviderSpecArray;
-{ Drop the primary provider from the picker we show for the cheap
-  fallback -- the operator already picked it once and a same-as-
-  primary fallback wouldn't do anything useful. }
-var
-  i, n: Integer;
-begin
-  SetLength(Result, Length(Catalog));
-  n := 0;
-  for i := 0 to High(Catalog) do
-    if not SameText(Catalog[i].Kind, ExcludeKind) then
-    begin
-      Result[n] := Catalog[i];
-      Inc(n);
-    end;
-  SetLength(Result, n);
-end;
 
 procedure PromptAutoRouter(Cfg: TConfig);
 { Configure a cheap-tier fallback + the auto-router (UltraCode-Shim
@@ -1274,18 +1256,24 @@ var
   Catalog, Pool: TProviderSpecArray;
   Spec: TProviderSpec;
   i: Integer;
-  AlreadyInFallbacks: Boolean;
+  AlreadyInFallbacks, SameAsPrimary: Boolean;
 begin
   PrintLn;
-  PrintLn(Ansi.Bold + 'Cheap fallback provider' + Ansi.Reset);
+  PrintLn(Ansi.Bold + 'Cheaper model for simple turns' + Ansi.Reset);
   PrintLn(Ansi.Dim +
-    'Optional: add a second provider PasClaw retries on if the primary fails,' +
+    'Optional: pick a cheaper model the auto-router sends easy turns to.' +
     Ansi.Reset);
   PrintLn(Ansi.Dim +
-    'and optionally route simple questions to it to save cost on cheap-tier models.' +
+    'It can be YOUR PRIMARY provider with a smaller/cheaper model (e.g. a' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'mini/haiku tier on the same key), or a second provider -- a local model' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'or another cloud account that also doubles as a retry fallback on errors.' +
     Ansi.Reset);
   PrintLn;
-  Choice := Trim(LowerCase(ReadLineEcho('  Set up a cheap fallback now [y/N]: ')));
+  Choice := Trim(LowerCase(ReadLineEcho('  Set up a cheaper easy-turn model now [y/N]: ')));
   if (Choice <> 'y') and (Choice <> 'yes') then
   begin
     PrintLn('  ' + Ansi.Dim +
@@ -1295,11 +1283,15 @@ begin
   end;
 
   Catalog := AllProviderSpecs;
-  Pool := FilterCatalogExcluding(Catalog, Cfg.DefaultProvider);
+  { Include the primary in the pool: routing easy turns to the same provider
+    with a smaller model (Opus -> Haiku on one key) is a first-class choice,
+    not a no-op. A different provider additionally serves as an error-retry
+    fallback; the same-provider pick is router-only. }
+  Pool := Catalog;
   if Length(Pool) = 0 then
   begin
     PrintLn('  ' + Ansi.Yellow +
-            'no other provider in the catalog; skipping' + Ansi.Reset);
+            'no providers in the catalog; skipping' + Ansi.Reset);
     Exit;
   end;
 
@@ -1330,29 +1322,50 @@ begin
       end;
 
   Model := PickModelInteractive(Spec, EffectiveKey);
-  UpsertProvider(Cfg, Spec, Model, Key);
+  SameAsPrimary := SameText(Spec.Kind, Cfg.DefaultProvider);
 
-  { Append to Cfg.Fallbacks unless it's already there. The retry
-    chain is keyed on Name == Spec.Kind by NewProviderFromConfig,
-    so we de-dupe by Kind. }
-  AlreadyInFallbacks := False;
-  for i := 0 to High(Cfg.Fallbacks) do
-    if SameText(Cfg.Fallbacks[i], Spec.Kind) then
-    begin
-      AlreadyInFallbacks := True;
-      Break;
-    end;
-  if not AlreadyInFallbacks then
+  if SameAsPrimary then
   begin
-    SetLength(Cfg.Fallbacks, Length(Cfg.Fallbacks) + 1);
-    Cfg.Fallbacks[High(Cfg.Fallbacks)] := Spec.Kind;
+    { Same provider as the primary. Do NOT UpsertProvider -- that keys on
+      Name == Spec.Kind and would overwrite the primary's model with this
+      cheaper one. And do NOT add a same-provider entry to the error-retry
+      fallback chain: it's a pointless retry target (same endpoint/key), and
+      the router already prepends the primary at route time. The cheaper model
+      lives only on AutoRouter.EasyModel. }
+    if SameText(Model, Cfg.DefaultModel) then
+      PrintLn('  ' + Ansi.Yellow +
+              'note: that matches your primary model -- routing would be a no-op; ' +
+              'pick a smaller model to actually save cost.' + Ansi.Reset)
+    else
+      PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
+              ' will route easy turns to ' + Spec.DisplayName + ' / ' + Model);
+  end
+  else
+  begin
+    UpsertProvider(Cfg, Spec, Model, Key);
+
+    { Append to Cfg.Fallbacks unless it's already there. The retry
+      chain is keyed on Name == Spec.Kind by NewProviderFromConfig,
+      so we de-dupe by Kind. }
+    AlreadyInFallbacks := False;
+    for i := 0 to High(Cfg.Fallbacks) do
+      if SameText(Cfg.Fallbacks[i], Spec.Kind) then
+      begin
+        AlreadyInFallbacks := True;
+        Break;
+      end;
+    if not AlreadyInFallbacks then
+    begin
+      SetLength(Cfg.Fallbacks, Length(Cfg.Fallbacks) + 1);
+      Cfg.Fallbacks[High(Cfg.Fallbacks)] := Spec.Kind;
+    end;
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
+            ' added ' + Spec.DisplayName + ' to fallback chain');
   end;
-  PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
-          ' added ' + Spec.DisplayName + ' to fallback chain');
 
   PrintLn;
   Choice := Trim(LowerCase(ReadLineEcho(
-    '  Auto-route simple tasks (summarise / list / explain) to this fallback [y/N]: ')));
+    '  Auto-route simple tasks (summarise / list / explain) to this model [y/N]: ')));
   if (Choice = 'y') or (Choice = 'yes') then
   begin
     Cfg.AutoRouter.Enabled       := True;
@@ -1365,6 +1378,10 @@ begin
     PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
             ' auto-router on; easy turns route to ' + Spec.Kind);
   end
+  else if SameAsPrimary then
+    PrintLn('  ' + Ansi.Dim +
+            '(router off -- nothing else to set up for a same-provider pick. ' +
+            'Flip auto_router.enabled in config.json to enable.)' + Ansi.Reset)
   else
     PrintLn('  ' + Ansi.Dim +
             '(router off -- fallback still used on primary errors. ' +
