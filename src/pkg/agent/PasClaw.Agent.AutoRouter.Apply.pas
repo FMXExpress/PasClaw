@@ -36,7 +36,16 @@ uses
   untouched (and RoutedProviderName empty). Never raises. }
 function ApplyAutoRoute(var LoopCfg: TToolLoopConfig; const Cfg: TConfig;
                         const Messages: array of TMessage;
-                        out RoutedProviderName: string): Boolean;
+                        out RoutedProviderName: string): Boolean; overload;
+
+{ As above, plus the computed structural complexity score (0..1) for
+  transparency -- surface it in a "(routed -> x [score=...])" line / a
+  response header. RoutedScore is -1 when the router short-circuits before
+  scoring (disabled / nil provider / empty message). }
+function ApplyAutoRoute(var LoopCfg: TToolLoopConfig; const Cfg: TConfig;
+                        const Messages: array of TMessage;
+                        out RoutedProviderName: string;
+                        out RoutedScore: Double): Boolean; overload;
 
 implementation
 
@@ -100,7 +109,8 @@ threadvar
 
 function ApplyAutoRoute(var LoopCfg: TToolLoopConfig; const Cfg: TConfig;
                         const Messages: array of TMessage;
-                        out RoutedProviderName: string): Boolean;
+                        out RoutedProviderName: string;
+                        out RoutedScore: Double): Boolean;
 var
   UserMsg, RoutedModel, Err, OrigModel, Fingerprint: string;
   Names: TStringArray;
@@ -111,6 +121,7 @@ var
 begin
   Result := False;
   RoutedProviderName := '';
+  RoutedScore := -1;
   { Cheap outs first so the non-routing path stays free. }
   if not Cfg.AutoRouter.Enabled then Exit;
   if LoopCfg.Provider = nil then Exit;
@@ -122,7 +133,7 @@ begin
   else
     SetLength(Names, 0);
 
-  if not RouteProvider(Cfg, UserMsg, Names, RoutedProviderName, RoutedModel) then
+  if not RouteProvider(Cfg, UserMsg, Names, RoutedProviderName, RoutedModel, RoutedScore) then
   begin
     RoutedProviderName := '';
     Exit;
@@ -188,6 +199,15 @@ begin
       LoopCfg.FallbackModels[i + 1] := PrimaryFallbackModels[i];
 
   Result := True;
+end;
+
+function ApplyAutoRoute(var LoopCfg: TToolLoopConfig; const Cfg: TConfig;
+                        const Messages: array of TMessage;
+                        out RoutedProviderName: string): Boolean;
+var
+  IgnoredScore: Double;
+begin
+  Result := ApplyAutoRoute(LoopCfg, Cfg, Messages, RoutedProviderName, IgnoredScore);
 end;
 
 end.

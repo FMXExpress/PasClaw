@@ -323,11 +323,35 @@ type
                        working on prose-heavy projects can raise
                        this; coding-heavy work usually wants the
                        default. *)
+  (* TRouterWeights -- weights for the structural complexity score the
+     auto-router computes per turn (Wayfinder-shaped: score a prompt's
+     structure + length, decide locally, no model call). The score is a
+     logistic (0..1) of a weighted linear sum of cheap features; the router
+     routes a turn to the cheap/easy tier when score <= Threshold (and the
+     categorical safety rails -- hard keyword, length cap, write/run-tool
+     ambiguity -- don't veto it first). All fields optional in config; absent
+     -> DefaultAutoRouterWeights. Tuning by hand is the intended workflow:
+     watch the score readout, nudge weights. Length dominates on purpose --
+     Wayfinder's own data found the lexical signals lost to a length
+     baseline, so we keep those weights modest. *)
+  TRouterWeights = record
+    Tokens:       Double;   { per estimated token (the dominant term) }
+    CodeFence:    Double;   { per ``` fence -- code blocks signal real work }
+    ListItem:     Double;   { per list line (-, *, "N.") }
+    Heading:      Double;   { per markdown heading line }
+    HardKeyword:  Double;   { per hard-keyword hit (raises score) }
+    EasyKeyword:  Double;   { per easy-keyword hit (lowers score) }
+    WriteRunTool: Double;   { write/run tool present in the loop }
+    Bias:         Double;   { intercept }
+    Threshold:    Double;   { route easy when score <= this (default 0.5) }
+  end;
+
   TAutoRouterConfig = record
     Enabled:       Boolean;
     EasyProvider:  string;
     EasyModel:     string;
     EasyMaxTokens: Integer;
+    Weights:       TRouterWeights;   { structural-score weights + threshold }
   end;
 
   (* TSkillDistillerConfig -- the post-turn "should this become a
@@ -886,6 +910,12 @@ function ExpandEnvVarsInJSON(const Body: string): string;
 function FormatVersion: string;
 function FormatBuildInfo: string;
 
+{ Default weights for the auto-router's structural complexity score. Length
+  dominates; lexical/structural signals are deliberately modest (see
+  TRouterWeights). Used by SetDefaults and as the fallback when a TConfig is
+  built without defaults. }
+function DefaultAutoRouterWeights: TRouterWeights;
+
 (* Fold the operator's prompt_cache config into a TChatOptions that
    was just initialised from DefaultChatOptions. Call this at every
    config-backed site that builds chat options (CLI, channels, gateway,
@@ -933,6 +963,24 @@ procedure ApplyPromptCacheConfig(var Opts: TChatOptions; const PC: TPromptCacheC
 begin
   Opts.CacheEnabled := PC.Enabled;
   Opts.CacheTTL     := PC.TTL;
+end;
+
+function DefaultAutoRouterWeights: TRouterWeights;
+begin
+  { Length dominates: ~250 tokens of prose pushes the linear sum to +1.0
+    (score ~0.73) on its own. Code fences / headings / hard keywords nudge
+    up; easy keywords nudge down; Bias keeps a bare short message comfortably
+    under the 0.5 threshold so trivial turns route. These are starting points
+    meant to be hand-tuned against the score readout, not trained constants. }
+  Result.Tokens       := 0.004;
+  Result.CodeFence    := 0.80;
+  Result.ListItem     := 0.15;
+  Result.Heading      := 0.30;
+  Result.HardKeyword  := 1.20;
+  Result.EasyKeyword  := 1.00;
+  Result.WriteRunTool := 0.50;
+  Result.Bias         := -0.60;
+  Result.Threshold    := 0.50;
 end;
 
 constructor TConfig.Create;
@@ -1015,6 +1063,7 @@ begin
   AutoRouter.EasyProvider   := '';
   AutoRouter.EasyModel      := '';
   AutoRouter.EasyMaxTokens  := 500;
+  AutoRouter.Weights        := DefaultAutoRouterWeights;
   { Self-improving skills: distiller on by default (zero prompt cost,
     post-turn pass produces staged drafts under workspace/skills/.pending/).
     The three other switches (self_manage / progressive_disclosure /
@@ -1117,9 +1166,18 @@ begin
   if S.MaxIter > 0 then Result.PutInt('max_iterations', S.MaxIter);
 end;
 
+function SameRouterWeights(const A, B: TRouterWeights): Boolean;
+begin
+  Result := (A.Tokens = B.Tokens) and (A.CodeFence = B.CodeFence)
+        and (A.ListItem = B.ListItem) and (A.Heading = B.Heading)
+        and (A.HardKeyword = B.HardKeyword) and (A.EasyKeyword = B.EasyKeyword)
+        and (A.WriteRunTool = B.WriteRunTool) and (A.Bias = B.Bias)
+        and (A.Threshold = B.Threshold);
+end;
+
 function TConfig.ToJSON: string;
 var
-  Root, Gw, Tmp, Tmp2, Diag, OtelHdrs: TJsonObject;
+  Root, Gw, Tmp, Tmp2, Diag, OtelHdrs, WTmp: TJsonObject;
   Arr, FallbacksArr: TJsonArray;
   i: Integer;
 begin
@@ -1369,6 +1427,27 @@ begin
         Tmp.PutStr ('easy_provider',   AutoRouter.EasyProvider);
         Tmp.PutStr ('easy_model',      AutoRouter.EasyModel);
         Tmp.PutInt ('easy_max_tokens', AutoRouter.EasyMaxTokens);
+        { Emit the structural-score weights only when the operator has
+          diverged from the defaults -- keeps fresh configs uncluttered while
+          preserving any hand-tuning across a round-trip. }
+        if not SameRouterWeights(AutoRouter.Weights, DefaultAutoRouterWeights) then
+        begin
+          WTmp := TJsonObject.Create;
+          try
+            WTmp.PutFloat('tokens',         AutoRouter.Weights.Tokens);
+            WTmp.PutFloat('code_fence',     AutoRouter.Weights.CodeFence);
+            WTmp.PutFloat('list_item',      AutoRouter.Weights.ListItem);
+            WTmp.PutFloat('heading',        AutoRouter.Weights.Heading);
+            WTmp.PutFloat('hard_keyword',   AutoRouter.Weights.HardKeyword);
+            WTmp.PutFloat('easy_keyword',   AutoRouter.Weights.EasyKeyword);
+            WTmp.PutFloat('write_run_tool', AutoRouter.Weights.WriteRunTool);
+            WTmp.PutFloat('bias',           AutoRouter.Weights.Bias);
+            WTmp.PutFloat('threshold',      AutoRouter.Weights.Threshold);
+            Tmp.PutObject('weights', WTmp);
+          except
+            WTmp.Free; raise;
+          end;
+        end;
         Root.PutObject('auto_router', Tmp);
       except
         Tmp.Free; raise;
@@ -1741,6 +1820,24 @@ begin
       AutoRouter.EasyModel     := Obj.GetStr ('easy_model',      AutoRouter.EasyModel);
       AutoRouter.EasyMaxTokens := Integer(Obj.GetInt('easy_max_tokens',
                                           AutoRouter.EasyMaxTokens));
+      { Structural-score weights. Each field defaults to whatever Create
+        already set (DefaultAutoRouterWeights), so a partial weights object
+        only overrides the keys it names. }
+      Sub := Obj.ChildObject('weights');
+      if Sub <> nil then
+      try
+        AutoRouter.Weights.Tokens       := Sub.GetFloat('tokens',         AutoRouter.Weights.Tokens);
+        AutoRouter.Weights.CodeFence    := Sub.GetFloat('code_fence',     AutoRouter.Weights.CodeFence);
+        AutoRouter.Weights.ListItem     := Sub.GetFloat('list_item',      AutoRouter.Weights.ListItem);
+        AutoRouter.Weights.Heading      := Sub.GetFloat('heading',        AutoRouter.Weights.Heading);
+        AutoRouter.Weights.HardKeyword  := Sub.GetFloat('hard_keyword',   AutoRouter.Weights.HardKeyword);
+        AutoRouter.Weights.EasyKeyword  := Sub.GetFloat('easy_keyword',   AutoRouter.Weights.EasyKeyword);
+        AutoRouter.Weights.WriteRunTool := Sub.GetFloat('write_run_tool', AutoRouter.Weights.WriteRunTool);
+        AutoRouter.Weights.Bias         := Sub.GetFloat('bias',           AutoRouter.Weights.Bias);
+        AutoRouter.Weights.Threshold    := Sub.GetFloat('threshold',      AutoRouter.Weights.Threshold);
+      finally
+        Sub.Free;
+      end;
     finally
       Obj.Free;
     end;
