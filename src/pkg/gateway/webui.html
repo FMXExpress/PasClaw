@@ -474,6 +474,11 @@
   .ob-field label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--cyan)}
   .ob-field[hidden]{display:none}
   .ob-note{font-size:10.5px;color:var(--mut);min-height:.8rem}
+  .ob-divider{margin:.9rem 0 .5rem;font-size:10px;text-transform:uppercase;letter-spacing:.08em;
+    color:var(--mut);text-align:center;border-top:1px solid rgba(255,255,255,.08);padding-top:.55rem}
+  .ob-check{display:flex;align-items:center;gap:.4rem;font-size:11.5px;color:var(--fg);margin:.15rem 0}
+  .ob-check[hidden]{display:none}
+  .ob-check input{accent-color:var(--cyan)}
   .ob-err{color:var(--red);font-size:11.5px;margin:.2rem 0 .5rem}
   .ob-err[hidden]{display:none}
   #onboard-actions{display:flex;justify-content:flex-end;gap:.5rem;margin-top:.6rem}
@@ -987,6 +992,34 @@
       <label for="ob-model">Model</label>
       <input id="ob-model" class="cfg-input" type="text" autocomplete="off" placeholder="model id">
     </div>
+
+    <!-- Optional secondary/cheap tier: powers the auto-router (easy turns) and/or
+         a rate-limit fallback. Mirrors the CLI `pasclaw onboard` PromptAutoRouter. -->
+    <div class="ob-divider">optional · cheaper model</div>
+    <div class="ob-field" id="ob2-provider-field">
+      <label for="ob2-provider">Secondary provider</label>
+      <select id="ob2-provider" class="cfg-input"></select>
+      <div class="ob-note">Same provider with a smaller model (e.g. a haiku/mini tier on the same key), or a different one.</div>
+    </div>
+    <div class="ob-field" id="ob2-key-field" hidden>
+      <label for="ob2-key">Secondary API key</label>
+      <input id="ob2-key" class="cfg-input" type="password" autocomplete="off" placeholder="paste key…">
+    </div>
+    <div class="ob-field" id="ob2-base-field" hidden>
+      <label for="ob2-base">Secondary API base URL</label>
+      <input id="ob2-base" class="cfg-input" type="text" autocomplete="off" placeholder="https://…">
+    </div>
+    <div class="ob-field" id="ob2-model-field" hidden>
+      <label for="ob2-model">Secondary model</label>
+      <input id="ob2-model" class="cfg-input" type="text" autocomplete="off" placeholder="model id">
+    </div>
+    <label class="ob-check" id="ob2-route-field" hidden>
+      <input type="checkbox" id="ob2-route" checked> Route simple turns (summarise / list / explain) to it
+    </label>
+    <label class="ob-check" id="ob2-fallback-field" hidden>
+      <input type="checkbox" id="ob2-fallback"> Fall back to it when the primary is rate-limited
+    </label>
+
     <div id="onboard-err" class="ob-err" hidden></div>
     <div id="onboard-actions">
       <button type="button" id="onboard-skip" class="ob-btn-ghost">Skip</button>
@@ -3801,6 +3834,37 @@ function obApplySpecToForm() {
   $("#ob-model").value = s.default_model || "";
 }
 
+// ----- optional secondary / cheap tier -----
+function obSelectedSpec2() {
+  const kind = $("#ob2-provider").value;
+  if (!kind) return null;            // "(none — skip)"
+  return obCatalog.find(p => p.kind === kind) || null;
+}
+
+function obApplySpec2ToForm() {
+  const s2 = obSelectedSpec2();
+  const on = !!s2;
+  $("#ob2-key-field").hidden = true;
+  $("#ob2-base-field").hidden = true;
+  $("#ob2-model-field").hidden = !on;
+  $("#ob2-route-field").hidden = !on;
+  $("#ob2-fallback-field").hidden = !on;
+  if (!on) return;
+  // A same-provider secondary reuses the primary's key/base -- only a DIFFERENT
+  // provider needs its own credentials.
+  const sameAsPrimary = (s2.kind === $("#ob-provider").value);
+  $("#ob2-key-field").hidden  = !(s2.needs_key  && !sameAsPrimary);
+  $("#ob2-base-field").hidden = !(s2.needs_base && !sameAsPrimary);
+  if (!$("#ob2-base-field").hidden && !$("#ob2-base").value)
+    $("#ob2-base").value = s2.default_base || "";
+  $("#ob2-model-field").hidden = (s2.needs_model === false);
+  // Prefill a model only for a different provider; for the same provider leave
+  // it blank so the user picks a *smaller* model (prefilling the catalog
+  // default would just match the primary -> a no-op route).
+  if (!sameAsPrimary && !$("#ob2-model").value)
+    $("#ob2-model").value = s2.default_model || "";
+}
+
 async function obPopulate() {
   const cat = await obLoadCatalog();
   const sel = $("#ob-provider");
@@ -3814,6 +3878,20 @@ async function obPopulate() {
   const pref = cat.find(p => p.kind === "anthropic");
   if (pref) sel.value = "anthropic";
   obApplySpecToForm();
+
+  // Secondary picker: "(none)" + the same catalog.
+  const sel2 = $("#ob2-provider");
+  sel2.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = ""; none.textContent = "(none — skip)";
+  sel2.appendChild(none);
+  for (const p of cat) {
+    const o = document.createElement("option");
+    o.value = p.kind; o.textContent = p.display_name;
+    sel2.appendChild(o);
+  }
+  sel2.value = "";
+  obApplySpec2ToForm();
 }
 
 function obShow() {
@@ -3845,6 +3923,45 @@ async function obSave() {
     cur.providers = providers;
     cur.default_provider = s.kind;
     cur.default_model = model;
+
+    // Optional secondary / cheap tier -> auto_router (easy turns) and/or a
+    // rate-limit fallback (mirrors the CLI onboarder's PromptAutoRouter).
+    const s2 = obSelectedSpec2();
+    if (s2) {
+      const m2 = $("#ob2-model").value.trim();
+      const k2 = $("#ob2-key").value.trim();
+      const b2 = $("#ob2-base").value.trim();
+      const sameAsPrimary = (s2.kind === s.kind);
+      if (s2.needs_model !== false && !m2) {
+        err.textContent = "Enter a model for the secondary provider (or set it to none)."; err.hidden = false; return;
+      }
+      if (!sameAsPrimary && s2.needs_key && !k2) {
+        err.textContent = "An API key is required for the secondary provider " + s2.display_name + "."; err.hidden = false; return;
+      }
+      // A different secondary provider needs its own providers[] entry; a
+      // same-provider pick rides on the primary's entry (its model lives only
+      // in auto_router / fallback_models, never overwriting the primary model).
+      if (!sameAsPrimary) {
+        const e2 = { name: s2.kind, kind: s2.kind, api_base: b2, api_key: k2, model: m2 };
+        const at2 = providers.findIndex(p => p && p.name === s2.kind);
+        if (at2 >= 0) Object.assign(providers[at2], e2); else providers.push(e2);
+        cur.providers = providers;
+      }
+      if ($("#ob2-route").checked) {
+        cur.auto_router = Object.assign({}, cur.auto_router,
+          { enabled: true, easy_provider: s2.kind, easy_model: m2 });
+      }
+      if ($("#ob2-fallback").checked) {
+        const fb = Array.isArray(cur.fallbacks) ? cur.fallbacks.slice() : [];
+        const fm = Array.isArray(cur.fallback_models) ? cur.fallback_models.slice() : [];
+        while (fm.length < fb.length) fm.push("");   // keep parallel-by-index
+        const idx = fb.indexOf(s2.kind);
+        if (idx < 0) { fb.push(s2.kind); fm.push(m2 || ""); }
+        else if (m2) { fm[idx] = m2; }
+        cur.fallbacks = fb; cur.fallback_models = fm;
+      }
+    }
+
     const r = await gwFetch("/v1/config", { method: "PUT",
       headers: { "content-type": "application/json" }, body: JSON.stringify(cur) });
     if (!r.ok) {
@@ -3863,7 +3980,8 @@ async function obSave() {
   }
 }
 
-$("#ob-provider").addEventListener("change", obApplySpecToForm);
+$("#ob-provider").addEventListener("change", () => { obApplySpecToForm(); obApplySpec2ToForm(); });
+$("#ob2-provider").addEventListener("change", obApplySpec2ToForm);
 $("#onboard-save").addEventListener("click", obSave);
 $("#onboard-close").addEventListener("click", obHide);
 $("#onboard-skip").addEventListener("click", obHide);
