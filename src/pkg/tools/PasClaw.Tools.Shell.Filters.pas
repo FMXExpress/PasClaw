@@ -71,17 +71,16 @@ implementation
 
 uses
   Classes, StrUtils,
+  PasClaw.Utils,           { canonical TStringArray (Delphi side) }
   PasClaw.Condense.JSON;   { FilterAws routes JSON-shaped aws CLI
                              output through the shared condenser }
 
 {$IFNDEF FPC}
 type
-  { FPC's SysUtils declares TStringArray; Delphi's RTL doesn't,
-    so dcc64 errors on the SplitTokens return type and every
-    downstream LowerCase(Tokens[i]) call below. Declare it
-    locally for the Delphi build only -- same pattern PasClaw
-    uses in PasClaw.Tools.Registry. }
-  TStringArray = array of string;
+  { FPC's SysUtils declares TStringArray; Delphi's RTL doesn't. Alias the
+    canonical PasClaw.Utils definition (Delphi build only) instead of a fresh
+    local one -- keeps a single type identity across the codebase. }
+  TStringArray = PasClaw.Utils.TStringArray;
 {$ENDIF}
 
 var

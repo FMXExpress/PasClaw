@@ -13,14 +13,17 @@ interface
 
 uses
   SysUtils, Classes, SyncObjs,
+  PasClaw.Utils,            { canonical TStringArray (Delphi side) }
   PasClaw.Tools.Types,
   PasClaw.Providers.Types;
 
 type
   {$IFNDEF FPC}
-  { Delphi's RTL doesn't declare TStringArray (FPC's SysUtils does); declare
-    it locally so the cross-compiler signature below resolves. }
-  TStringArray = array of string;
+  { Delphi's RTL doesn't declare TStringArray (FPC's SysUtils does). Alias the
+    one canonical definition in PasClaw.Utils so every unit's TStringArray is
+    the SAME type identity -- otherwise dcc64 rejects cross-unit array passes
+    (E2010/E2250). }
+  TStringArray = PasClaw.Utils.TStringArray;
   {$ENDIF}
 
   TToolRegistry = class
