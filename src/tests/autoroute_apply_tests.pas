@@ -124,6 +124,28 @@ begin
     AssertTrue((Length(LoopCfg.FallbackModels) = 1)
                and (LoopCfg.FallbackModels[0] = 'claude-opus-4-7'),
       'caller pre-route model preserved as the primary fallback override');
+
+    { ---- Second route reuses the per-thread easy-provider cache (same name +
+      fingerprint) and must still route correctly. ---- }
+    LoopCfg := Default(TToolLoopConfig);
+    LoopCfg.Provider := Primary;
+    LoopCfg.Model    := 'claude-opus-4-7';
+    AssertTrue(ApplyAutoRoute(LoopCfg, Cfg, Msgs, Routed),
+      'second route (cache hit) still routes');
+    AssertTrue(LoopCfg.Provider.GetName = 'groq', 'cache-hit route still swaps to easy provider');
+    AssertTrue((Length(LoopCfg.FallbackModels) = 1)
+               and (LoopCfg.FallbackModels[0] = 'claude-opus-4-7'),
+      'cache-hit route still preserves the caller model');
+
+    { ---- Hot-swap busts the cache: change the easy provider's config and the
+      next route must reflect it (still resolvable -> still routes). ---- }
+    Cfg.Providers[0].Model := 'llama-3.1-8b-instant';   { fingerprint changes }
+    LoopCfg := Default(TToolLoopConfig);
+    LoopCfg.Provider := Primary;
+    LoopCfg.Model    := 'claude-opus-4-7';
+    AssertTrue(ApplyAutoRoute(LoopCfg, Cfg, Msgs, Routed),
+      'route after config hot-swap still routes (cache rebuilt)');
+    AssertTrue(LoopCfg.Provider.GetName = 'groq', 'rebuilt route resolves the easy provider');
   finally
     Cfg.Free;
   end;

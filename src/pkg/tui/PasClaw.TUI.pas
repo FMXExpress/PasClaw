@@ -56,6 +56,10 @@ uses
                                      BgCoordinator public field below; same
                                      dcc64 interface-visibility rule as the
                                      types above. }
+  PasClaw.Config,                  { TConfig -- the FRouteCfg auto-router
+                                     snapshot field + RouteConfig method
+                                     declared on TTUI; same interface-
+                                     visibility rule as the types above. }
   PasClaw.Session.Store;
 
 type
@@ -75,6 +79,15 @@ type
        it. Default pmBuild so the TUI's historical full-access
        behaviour is preserved. *)
     FMode:     TPasClawMode;
+    { Lazily-loaded config snapshot reused by the per-turn auto-router so we
+      don't stat+read+parse config.json on every turn (the previous code did
+      LoadConfig + Free per turn, even with the router disabled). Loaded once
+      on the first turn; freed in teardown (Delphi destructor / FPC Run exit).
+      Router config is set out-of-band -- config file / CLI, never the TUI --
+      so a session-lifetime snapshot is correct and matches the CLI's
+      session-scoped easy-provider cache. }
+    FRouteCfg: TConfig;
+    function RouteConfig: TConfig;
     {$IFNDEF FPC}
     { positioned-TUI state -- see Run() for the per-frame loop }
     FFocus:             TFocus;
@@ -290,8 +303,10 @@ uses
                                      `pasclaw init` on the CLI. }
   PasClaw.Markdown.Render,
   PasClaw.Providers.Catalog,       { TProviderSpec -- for TModelRefreshThread }
-  PasClaw.Config,
-  PasClaw.Agent.AutoRouter.Apply   { ApplyAutoRoute -- cheap per-turn routing }
+  PasClaw.Agent.AutoRouter.Apply   { ApplyAutoRoute -- cheap per-turn routing.
+                                     PasClaw.Config moved to the interface uses
+                                     (TConfig is now referenced by the TTUI
+                                     class declaration). }
   { PasClaw.Providers.Models is in the interface uses already -- needed
     from there so dcc64 can see TModelInfoArray when it compiles the
     TTUI class declaration. }
@@ -439,6 +454,16 @@ begin
   PromptCacheEnabled := True;
   PromptCacheTTL     := '';
   RenderMarkdownEnabled := True;
+  FRouteCfg := nil;
+end;
+
+{ Lazily load + cache the config used by the per-turn auto-router. Shared by
+  both TUI surfaces; loaded at most once per session. }
+function TTUI.RouteConfig: TConfig;
+begin
+  if FRouteCfg = nil then
+    FRouteCfg := LoadConfig;
+  Result := FRouteCfg;
 end;
 
 function StatusLine(Provider: ILLMProvider; const Model: string;
@@ -497,6 +522,7 @@ begin
     FModelRefreshThread := nil;
   end;
   FSession.Free;
+  FRouteCfg.Free;
   inherited Destroy;
 end;
 
@@ -1273,7 +1299,6 @@ procedure TTUI.StartTurn(const UserText: string);
 var
   Cfg: TToolLoopConfig;
   Worker: TRunToolLoopThread;
-  RouteCfg: TConfig;
   RoutedNm: string;
 begin
   if (FProvider = nil) or (Trim(UserText) = '') then Exit;
@@ -1343,13 +1368,9 @@ begin
   Cfg.OnToolResult  := nil;
 
   { Task-difficulty auto-router (opt-in via Config.AutoRouter) -- same path the
-    CLI/gateway/component use. No-op unless enabled. }
-  RouteCfg := LoadConfig;
-  try
-    ApplyAutoRoute(Cfg, RouteCfg, FSession.Messages, RoutedNm);
-  finally
-    RouteCfg.Free;
-  end;
+    CLI/gateway/component use. No-op unless enabled. Uses the cached config
+    snapshot so we don't re-read config.json every turn. }
+  ApplyAutoRoute(Cfg, RouteConfig, FSession.Messages, RoutedNm);
 
   Worker := TRunToolLoopThread.Create(Cfg, FSession.Messages);
   Worker.Start;
@@ -2794,7 +2815,6 @@ var
   W: TRunToolLoopThread;
   TimeoutSec: Integer;
   WaitRes: TWaitResult;
-  RouteCfg: TConfig;
   RoutedNm: string;
 begin
   if FProvider = nil then
@@ -2840,13 +2860,9 @@ begin
   TimeoutSec        := ResolveRequestTimeoutSeconds;
 
   { Task-difficulty auto-router (opt-in via Config.AutoRouter) -- same shared
-    path as the CLI/gateway/component. No-op unless enabled. }
-  RouteCfg := LoadConfig;
-  try
-    ApplyAutoRoute(Cfg, RouteCfg, Msgs, RoutedNm);
-  finally
-    RouteCfg.Free;
-  end;
+    path as the CLI/gateway/component. No-op unless enabled. Uses the cached
+    config snapshot so we don't re-read config.json every turn. }
+  ApplyAutoRoute(Cfg, RouteConfig, Msgs, RoutedNm);
 
   LogDebug('tool-loop start model=%s timeout=%ds', [FModel, TimeoutSec]);
   PrintLn(Ansi.Dim + '         [hint: press Ctrl+C to interrupt]' + Ansi.Reset);
@@ -2926,6 +2942,8 @@ begin
     end;
     HandleUserInput(Line);
   end;
+  FRouteCfg.Free;   { FPC has no TTUI destructor override; free the cache here }
+  FRouteCfg := nil;
   PrintLn(Ansi.Dim + 'goodbye.' + Ansi.Reset);
 end;
 
