@@ -124,6 +124,15 @@ uses
 
 var
   GRegistry: TToolRegistry = nil;
+  { Snapshot of the configured MCP servers captured at registration so
+    tool_search can explain an empty deferred set: "no MCP tools active --
+    replicate is DISABLED" beats a bare "No deferred tools to search," which
+    reads as "there are none" and sends the model off inventing CLI/Python
+    workarounds. Cfg is only available at registration, not in the stateless
+    handler, hence the module globals (same pattern as GRegistry). }
+  GMCPConfigured:    Integer = 0;   { total configured servers (any enabled state) }
+  GMCPDisabledList:  string  = '';  { comma-joined names with enabled=false }
+  GMCPEnabledList:   string  = '';  { comma-joined names with enabled=true }
 
 { ---- query parsing ---- }
 
@@ -222,6 +231,27 @@ begin
   end;
 end;
 
+{ Actionable message for an empty deferred set. Progressive disclosure is on
+  (tool_search wouldn't be registered otherwise), so "nothing to search" means
+  no MCP tool is currently revealed-able -- explain WHY using the configured
+  server snapshot, instead of a dead end that reads as "no such capability." }
+function EmptyDeferredMessage: string;
+begin
+  if GMCPConfigured = 0 then
+    Exit('No MCP tools are configured, so there is nothing to search. '
+       + 'Add an MCP server (e.g. `pasclaw mcp add`) to gain external tools.');
+  Result := 'No MCP tools are active right now.';
+  if GMCPDisabledList <> '' then
+    Result := Result + ' Configured but DISABLED: ' + GMCPDisabledList
+            + ' -- set "enabled": true for it in mcp_servers in config.json '
+            + 'and restart pasclaw to use its tools.';
+  if GMCPEnabledList <> '' then
+    Result := Result + ' Enabled but no tools loaded yet (still connecting, or '
+            + 'the server failed to start): ' + GMCPEnabledList
+            + ' -- retry tool_search in a moment, or check the logs for an '
+            + 'mcp[...] error.';
+end;
+
 { ---- handler ---- }
 
 function ToolSearchHandler(const ArgsJSON: string; out ErrMsg: string): string;
@@ -275,7 +305,7 @@ begin
   DeferredNames := GRegistry.DeferredNames;
   if Length(DeferredNames) = 0 then
   begin
-    Result := 'No deferred tools to search.';
+    Result := EmptyDeferredMessage;
     Exit;
   end;
 
@@ -450,11 +480,29 @@ end;
 procedure RegisterMCPDisclosureTools(Reg: TToolRegistry; const Cfg: TConfig);
 var
   T: TTool;
+  i: Integer;
 begin
   if Reg = nil then Exit;
   if not Cfg.MCPProgressiveDisclosure then Exit;
 
   GRegistry := Reg;
+
+  { Capture the configured MCP servers so an empty deferred set can name the
+    disabled / not-yet-loaded ones instead of a dead-end message. }
+  GMCPConfigured   := Length(Cfg.MCPServers);
+  GMCPDisabledList := '';
+  GMCPEnabledList  := '';
+  for i := 0 to High(Cfg.MCPServers) do
+    if Cfg.MCPServers[i].Enabled then
+    begin
+      if GMCPEnabledList <> '' then GMCPEnabledList := GMCPEnabledList + ', ';
+      GMCPEnabledList := GMCPEnabledList + Cfg.MCPServers[i].Name;
+    end
+    else
+    begin
+      if GMCPDisabledList <> '' then GMCPDisabledList := GMCPDisabledList + ', ';
+      GMCPDisabledList := GMCPDisabledList + Cfg.MCPServers[i].Name;
+    end;
 
   T.Name        := 'tool_search';
   T.Description := ToolSearchDesc;

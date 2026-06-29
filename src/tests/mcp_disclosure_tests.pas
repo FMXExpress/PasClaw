@@ -292,13 +292,71 @@ begin
     RegisterMCPDisclosureTools(Reg, Cfg);
     Result_ := Reg.RunTool('tool_search', '{"query":"anything"}', ErrMsg);
     AssertTrue(ErrMsg = '', 'empty-deferred: no error');
-    AssertContains(Result_, 'No deferred tools',
-                   'empty-deferred: clean text result');
+    { No MCP servers configured at all -> explain that, not a bare dead end. }
+    AssertContains(Result_, 'No MCP tools are configured',
+                   'empty-deferred (none configured): explains nothing is configured');
   finally
     Cfg.Free;
     Reg.Free;
   end;
-  WriteLn('  ok: tool_search with no deferred tools returns clean text');
+  WriteLn('  ok: tool_search with no MCP configured returns an explanatory message');
+end;
+
+procedure TestToolSearchEmptyDeferredDisabledServer;
+{ The case that produced the 25-call flail: an MCP server is configured but
+  disabled, so no tools register. tool_search must NAME it as disabled with the
+  fix, instead of "No deferred tools to search" (which reads as "no such
+  capability"). }
+var
+  Reg: TToolRegistry;
+  Cfg: TConfig;
+  Result_, ErrMsg: string;
+begin
+  Reg := TToolRegistry.Create;
+  Cfg := TConfig.Create;
+  try
+    Cfg.MCPProgressiveDisclosure := True;
+    SetLength(Cfg.MCPServers, 1);
+    Cfg.MCPServers[0].Name    := 'replicate';
+    Cfg.MCPServers[0].Enabled := False;
+    RegisterMCPDisclosureTools(Reg, Cfg);
+    Result_ := Reg.RunTool('tool_search', '{"query":"flux image"}', ErrMsg);
+    AssertTrue(ErrMsg = '', 'disabled-server: no error');
+    AssertContains(Result_, 'DISABLED', 'disabled-server: flags a disabled server');
+    AssertContains(Result_, 'replicate', 'disabled-server: names the disabled server');
+  finally
+    Cfg.Free;
+    Reg.Free;
+  end;
+  WriteLn('  ok: tool_search names a configured-but-disabled MCP server');
+end;
+
+procedure TestToolSearchEmptyDeferredEnabledButUnloaded;
+{ Enabled server but no tools registered yet (cold cache / still connecting /
+  failed). tool_search should say so and suggest a retry, not a dead end. }
+var
+  Reg: TToolRegistry;
+  Cfg: TConfig;
+  Result_, ErrMsg: string;
+begin
+  Reg := TToolRegistry.Create;
+  Cfg := TConfig.Create;
+  try
+    Cfg.MCPProgressiveDisclosure := True;
+    SetLength(Cfg.MCPServers, 1);
+    Cfg.MCPServers[0].Name    := 'replicate';
+    Cfg.MCPServers[0].Enabled := True;
+    RegisterMCPDisclosureTools(Reg, Cfg);
+    Result_ := Reg.RunTool('tool_search', '{"query":"flux image"}', ErrMsg);
+    AssertTrue(ErrMsg = '', 'enabled-unloaded: no error');
+    AssertContains(Result_, 'no tools loaded yet',
+                   'enabled-unloaded: explains the server has not loaded tools');
+    AssertContains(Result_, 'replicate', 'enabled-unloaded: names the server');
+  finally
+    Cfg.Free;
+    Reg.Free;
+  end;
+  WriteLn('  ok: tool_search explains an enabled-but-unloaded MCP server');
 end;
 
 procedure TestToolSearchSkipsRegistrationWhenDisabled;
@@ -367,6 +425,8 @@ begin
   TestToolSearchKeywordQueryRanksAndCaps;
   TestToolSearchRequiredTerm;
   TestToolSearchEmptyDeferred;
+  TestToolSearchEmptyDeferredDisabledServer;
+  TestToolSearchEmptyDeferredEnabledButUnloaded;
   TestToolSearchSkipsRegistrationWhenDisabled;
   TestConfigRoundTrip;
   WriteLn('ok - mcp disclosure tests passed');
