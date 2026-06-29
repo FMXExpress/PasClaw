@@ -826,10 +826,23 @@ begin
     FProvider  := NewProv;
     FFallbacks := NewFB;
     FFallbackModels := NewFBModels;
-    { Keep the in-memory display/model fields in step so /v1/status and the
-      legacy /v1/chat model reflect the switch immediately. }
+    { Mirror the LIVE-swapped surface into FCfg so GET /v1/config (which
+      serializes FCfg) reflects what is actually running now, and so the
+      per-turn router -- which reads FCfg.AutoRouter / the fallback config --
+      picks up the change without a restart. Only the fields this swap truly
+      applies live are copied: provider/model, the provider catalog the live
+      objects were built from, the fallback chain + per-fallback models, and
+      the auto-router. Everything else (sandbox, mcp, crons, gateway, ...) is
+      established at boot and still needs a restart, so we deliberately leave
+      FCfg's copies of those untouched -- GET then stays honest about what is
+      actually active vs merely saved to disk. Copy() the dynamic arrays so we
+      don't alias NewCfg (the caller frees it on return). }
     FCfg.DefaultProvider := NewCfg.DefaultProvider;
     FCfg.DefaultModel    := NewCfg.DefaultModel;
+    FCfg.Providers       := Copy(NewCfg.Providers);
+    FCfg.Fallbacks       := Copy(NewCfg.Fallbacks);
+    FCfg.FallbackModels  := Copy(NewCfg.FallbackModels);
+    FCfg.AutoRouter      := NewCfg.AutoRouter;
   finally
     FApplyLock.Release;
   end;
