@@ -3938,6 +3938,9 @@ async function obSave() {
       if (!sameAsPrimary && s2.needs_key && !k2) {
         err.textContent = "An API key is required for the secondary provider " + s2.display_name + "."; err.hidden = false; return;
       }
+      if (!sameAsPrimary && s2.needs_base && !b2) {
+        err.textContent = "An API base URL is required for the secondary provider " + s2.display_name + "."; err.hidden = false; return;
+      }
       // A different secondary provider needs its own providers[] entry; a
       // same-provider pick rides on the primary's entry (its model lives only
       // in auto_router / fallback_models, never overwriting the primary model).
@@ -3981,7 +3984,15 @@ async function obSave() {
 }
 
 $("#ob-provider").addEventListener("change", () => { obApplySpecToForm(); obApplySpec2ToForm(); });
-$("#ob2-provider").addEventListener("change", obApplySpec2ToForm);
+$("#ob2-provider").addEventListener("change", () => {
+  // Reset model/base so a value prefilled for a previously-selected secondary
+  // provider can't leak into the new pick (e.g. OpenAI's gpt-4o-mini surviving
+  // a switch back to the Anthropic same-provider tier). obApplySpec2ToForm then
+  // re-prefills appropriately (different provider) or leaves blank (same).
+  $("#ob2-model").value = "";
+  $("#ob2-base").value = "";
+  obApplySpec2ToForm();
+});
 $("#onboard-save").addEventListener("click", obSave);
 $("#onboard-close").addEventListener("click", obHide);
 $("#onboard-skip").addEventListener("click", obHide);
