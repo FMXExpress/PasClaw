@@ -804,7 +804,7 @@ begin
   Cfg.Model         := ModelName;
   Cfg.MaxIterations := FMaxIterations;
   Cfg.Parallel := True;
-  Cfg.Fallbacks     := ResolveFallbacks(FConfig);
+  Cfg.Fallbacks     := ResolveFallbacks(FConfig, Cfg.FallbackModels);
   Cfg.Hooks         := BuildHookArray;
   Cfg.Options       := DefaultChatOptions;
   ApplyPromptCacheConfig(Cfg.Options, FConfig.PromptCache);

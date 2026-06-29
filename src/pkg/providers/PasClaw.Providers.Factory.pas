@@ -13,6 +13,9 @@ interface
 uses
   SysUtils,
   PasClaw.Config,
+  PasClaw.Tools.Registry,   { TStringArray -- same named type TToolLoopConfig
+                              .FallbackModels uses, so the out-param binds
+                              under dcc64's strict named-type matching }
   PasClaw.Providers.Intf;
 
 { TLLMProviderArray moved to PasClaw.Providers.Intf so both this unit
@@ -30,7 +33,16 @@ function NewDefaultProvider(Cfg: TConfig; out Provider: ILLMProvider; out ErrMsg
    silently skipped (a logged warning is the only feedback) so a typo
    in config.json doesn't break the loop. Returns an empty array when
    Cfg.Fallbacks is empty. *)
-function ResolveFallbacks(Cfg: TConfig): TLLMProviderArray;
+function ResolveFallbacks(Cfg: TConfig): TLLMProviderArray; overload;
+
+(* As above, additionally returning the per-fallback model overrides
+   (TConfig.FallbackModels) in LOCKSTEP with the resolved providers -- the
+   same skip logic applies to both, so FallbackModels[i] always lines up with
+   the returned providers[i]. Drop both into TToolLoopConfig.Fallbacks /
+   .FallbackModels so the loop retries each fallback with its configured model
+   (empty -> the provider's catalog default, as before). *)
+function ResolveFallbacks(Cfg: TConfig;
+                          out FallbackModels: TStringArray): TLLMProviderArray; overload;
 
 (* True iff RawKind/RawName identify the catalog's genuine OpenAI
    entry -- NOT "openai-compat" or any other catalog member of the
@@ -226,13 +238,15 @@ begin
   Result := NewProviderFromConfig(Cfg, Cfg.DefaultProvider, Provider, ErrMsg);
 end;
 
-function ResolveFallbacks(Cfg: TConfig): TLLMProviderArray;
+function ResolveFallbacks(Cfg: TConfig;
+                          out FallbackModels: TStringArray): TLLMProviderArray;
 var
   i, Out_: Integer;
   P: ILLMProvider;
   Err: string;
 begin
   SetLength(Result, Length(Cfg.Fallbacks));
+  SetLength(FallbackModels, Length(Cfg.Fallbacks));
   Out_ := 0;
   for i := 0 to High(Cfg.Fallbacks) do
   begin
@@ -247,9 +261,25 @@ begin
       Continue;
     end;
     Result[Out_] := P;
+    { Carry the per-fallback model override in lockstep with the resolved
+      provider so the indices stay aligned even when entries are skipped.
+      Empty (or absent) -> the loop falls through to the provider's catalog
+      default, exactly as before. }
+    if i <= High(Cfg.FallbackModels) then
+      FallbackModels[Out_] := Cfg.FallbackModels[i]
+    else
+      FallbackModels[Out_] := '';
     Inc(Out_);
   end;
   SetLength(Result, Out_);
+  SetLength(FallbackModels, Out_);
+end;
+
+function ResolveFallbacks(Cfg: TConfig): TLLMProviderArray;
+var
+  IgnoredModels: TStringArray;
+begin
+  Result := ResolveFallbacks(Cfg, IgnoredModels);
 end;
 
 end.
