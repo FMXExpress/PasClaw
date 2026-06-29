@@ -87,7 +87,9 @@ type
       so a session-lifetime snapshot is correct and matches the CLI's
       session-scoped easy-provider cache. }
     FRouteCfg: TConfig;
-    function RouteConfig: TConfig;
+    { NB: RouteConfig is declared further down, after every field -- dcc64
+      (E2169) forbids a field definition after a method/property in the same
+      visibility section, and the build branches below add more fields. }
     {$IFNDEF FPC}
     { positioned-TUI state -- see Run() for the per-frame loop }
     FFocus:             TFocus;
@@ -216,6 +218,10 @@ type
     procedure HandleRedoCommand(const Args: string);
     procedure HandleUserInput(const Text: string);
     {$ENDIF}
+    { Common to both builds; declared here (after all fields) so dcc64's
+      field-before-method rule isn't broken by the conditional field blocks
+      above. Lazily loads + caches FRouteCfg for the per-turn auto-router. }
+    function RouteConfig: TConfig;
   public
     (* Operator's prompt-cache settings. Defaults to default-on (matches
        DefaultChatOptions). Cmd_TUI_Run copies Cfg.PromptCache into this
