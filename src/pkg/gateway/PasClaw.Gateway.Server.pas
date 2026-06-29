@@ -826,10 +826,32 @@ begin
     FProvider  := NewProv;
     FFallbacks := NewFB;
     FFallbackModels := NewFBModels;
-    { Keep the in-memory display/model fields in step so /v1/status and the
-      legacy /v1/chat model reflect the switch immediately. }
+    { Mirror the LIVE-swapped surface into FCfg so GET /v1/config (which
+      serializes FCfg) reflects what is actually running now, and so the
+      per-turn router -- which reads FCfg.AutoRouter / the fallback config --
+      picks up the change without a restart. Only the fields this swap truly
+      applies live are copied: provider/model, the provider catalog the live
+      objects were built from, the fallback chain + per-fallback models, and
+      the auto-router. Everything else (sandbox, mcp, crons, gateway, ...) is
+      established at boot and still needs a restart, so we deliberately leave
+      FCfg's copies of those untouched -- GET then stays honest about what is
+      actually active vs merely saved to disk. Copy() the dynamic arrays so we
+      don't alias NewCfg (the caller frees it on return). }
     FCfg.DefaultProvider := NewCfg.DefaultProvider;
     FCfg.DefaultModel    := NewCfg.DefaultModel;
+    FCfg.Providers       := Copy(NewCfg.Providers);
+    FCfg.Fallbacks       := Copy(NewCfg.Fallbacks);
+    FCfg.FallbackModels  := Copy(NewCfg.FallbackModels);
+    FCfg.AutoRouter      := NewCfg.AutoRouter;
+    { Provider-WIDE construction knobs that NewProviderFromConfig bakes into
+      the live provider objects (and into auto-routed easy providers built from
+      FCfg) -- mirror them too, or GET would report stale values for settings
+      that are already active and the router's easy provider would keep the old
+      server-tool/relay options until restart. }
+    FCfg.AnthropicServerTools := NewCfg.AnthropicServerTools;
+    FCfg.OpenAIServerTools    := NewCfg.OpenAIServerTools;
+    FCfg.GeminiServerTools    := NewCfg.GeminiServerTools;
+    FCfg.RelayWaitTimeoutMs   := NewCfg.RelayWaitTimeoutMs;
   finally
     FApplyLock.Release;
   end;
@@ -2503,7 +2525,17 @@ begin
     OPENAI_API_KEY=, GITHUB_TOKEN=, etc. for stdio MCP servers.
     Mask any non-empty secret field with "•••" so the UI can show
     "set vs unset" without leaking the value. }
-  Body := FCfg.ToJSON;
+  { Serialize under the hot-swap lock: ApplyProviderConfig mutates FCfg's
+    providers/fallbacks/fallback_models/auto_router (+ the provider-wide
+    server-tool/relay knobs) live, so an overlapping PUT could otherwise make
+    ToJSON traverse a dynamic array/refcounted string mid-replacement -- a torn
+    body or an access violation. The lock window is just the snapshot. }
+  FApplyLock.Acquire;
+  try
+    Body := FCfg.ToJSON;
+  finally
+    FApplyLock.Release;
+  end;
   Root := TJsonObject.Parse(Body);
   if Root = nil then
   begin
