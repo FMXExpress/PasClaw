@@ -81,6 +81,7 @@ interface
 
 uses
   SysUtils, Classes, SyncObjs,
+  PasClaw.Utils,            { canonical TStringArray (Delphi side) }
   PasClaw.Providers.Types;
 
 const
@@ -108,12 +109,11 @@ const
 
 type
   {$IFNDEF FPC}
-  { Delphi's RTL doesn't declare TStringArray (FPC's SysUtils does);
-    declare it locally so the cross-compiler signatures below resolve.
-    Same pattern PasClaw.Tools.Registry + PasClaw.Tools.Shell.Filters
-    use for the same gap. dcc64 E2003 / E2005 errors at every signature
-    that references TStringArray cascade until this is in scope. }
-  TStringArray = array of string;
+  { Delphi's RTL doesn't declare TStringArray (FPC's SysUtils does). Alias the
+    canonical PasClaw.Utils definition so RelayQueue.TStringArray is the SAME
+    type as Registry's etc. -- the gateway uses both, and distinct named types
+    here caused dcc64 E2010/E2250 on the fallback-model arrays. }
+  TStringArray = PasClaw.Utils.TStringArray;
   {$ENDIF}
 
   TRelayRequestId = string;

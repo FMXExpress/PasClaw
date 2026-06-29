@@ -12,6 +12,22 @@ interface
 uses
   SysUtils, Classes, DateUtils;
 
+type
+  (* Canonical dynamic string array. FPC's SysUtils already exports a
+     TStringArray that every FPC unit shares, so the per-unit local defs were
+     all Delphi-only -- the duplication (and dcc64's E2010/E2250 "distinct
+     named type" collisions) only ever bit the Delphi build. Mirror that here:
+     alias the RTL type on FPC (so PasClaw.Utils.TStringArray is literally
+     SysUtils.TStringArray and adds no second type), and provide the ONE
+     canonical definition on Delphi, which the former definers now alias.
+     PasClaw.Utils depends only on the RTL, so it is safe to use anywhere
+     without a cycle. *)
+  {$IFDEF FPC}
+  TStringArray = SysUtils.TStringArray;
+  {$ELSE}
+  TStringArray = array of string;
+  {$ENDIF}
+
 function DupStr(const S: string; Count: Integer): string;
 function VisibleLength(const S: string): Integer;
 (* Right-pad S with spaces until its visible length reaches W. Same
