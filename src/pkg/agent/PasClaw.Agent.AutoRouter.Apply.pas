@@ -54,6 +54,7 @@ uses
   PasClaw.Providers.Intf,
   PasClaw.Providers.Factory,
   PasClaw.Tools.Registry,
+  PasClaw.Agent.Mode,            { TPasClawMode / pmPlan -- plan-mode skip }
   PasClaw.Logger,
   PasClaw.Agent.AutoRouter;
 
@@ -125,6 +126,11 @@ begin
   { Cheap outs first so the non-routing path stays free. }
   if not Cfg.AutoRouter.Enabled then Exit;
   if LoopCfg.Provider = nil then Exit;
+  { Plan mode is "big thinking": never route a planning/architecture turn to
+    the cheap model, however it scores. The strong (primary) model owns
+    plan-mode turns; routing resumes automatically in Build mode. Surfaces
+    that don't set a mode default to pmBuild, so this is a no-op for them. }
+  if LoopCfg.Mode = pmPlan then Exit;
   UserMsg := LatestUserMessage(Messages);
   if UserMsg = '' then Exit;
 
