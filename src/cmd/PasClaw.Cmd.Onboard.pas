@@ -1238,6 +1238,35 @@ begin
   end;
 end;
 
+{ Append (or update) a fallback entry plus its per-fallback model override,
+  keeping Cfg.Fallbacks and Cfg.FallbackModels aligned by index. De-dupes by
+  name: an existing entry just gets its model override refreshed. A non-empty
+  Model is what makes a SAME-provider fallback useful -- "anthropic" +
+  "claude-sonnet-4-6" retries Sonnet on one key when Opus is rate-limited
+  (#398). Empty Model -> the fallback uses its catalog/stored default. }
+procedure AppendFallbackWithModel(Cfg: TConfig; const Name, Model: string);
+var
+  i: Integer;
+begin
+  { Pad FallbackModels up to Fallbacks length so index assignment stays aligned
+    even if an earlier path appended a bare fallback. }
+  while Length(Cfg.FallbackModels) < Length(Cfg.Fallbacks) do
+  begin
+    SetLength(Cfg.FallbackModels, Length(Cfg.FallbackModels) + 1);
+    Cfg.FallbackModels[High(Cfg.FallbackModels)] := '';
+  end;
+  for i := 0 to High(Cfg.Fallbacks) do
+    if SameText(Cfg.Fallbacks[i], Name) then
+    begin
+      if Model <> '' then Cfg.FallbackModels[i] := Model;
+      Exit;
+    end;
+  SetLength(Cfg.Fallbacks, Length(Cfg.Fallbacks) + 1);
+  Cfg.Fallbacks[High(Cfg.Fallbacks)] := Name;
+  SetLength(Cfg.FallbackModels, Length(Cfg.Fallbacks));
+  Cfg.FallbackModels[High(Cfg.FallbackModels)] := Model;
+end;
+
 
 procedure PromptAutoRouter(Cfg: TConfig);
 { Configure a cheap-tier fallback + the auto-router (UltraCode-Shim
@@ -1256,7 +1285,7 @@ var
   Catalog, Pool: TProviderSpecArray;
   Spec: TProviderSpec;
   i: Integer;
-  AlreadyInFallbacks, SameAsPrimary: Boolean;
+  SameAsPrimary: Boolean;
 begin
   PrintLn;
   PrintLn(Ansi.Bold + 'Cheaper model for simple turns' + Ansi.Reset);
@@ -1349,21 +1378,10 @@ begin
   begin
     UpsertProvider(Cfg, Spec, Model, Key);
 
-    { Append to Cfg.Fallbacks unless it's already there. The retry
-      chain is keyed on Name == Spec.Kind by NewProviderFromConfig,
-      so we de-dupe by Kind. }
-    AlreadyInFallbacks := False;
-    for i := 0 to High(Cfg.Fallbacks) do
-      if SameText(Cfg.Fallbacks[i], Spec.Kind) then
-      begin
-        AlreadyInFallbacks := True;
-        Break;
-      end;
-    if not AlreadyInFallbacks then
-    begin
-      SetLength(Cfg.Fallbacks, Length(Cfg.Fallbacks) + 1);
-      Cfg.Fallbacks[High(Cfg.Fallbacks)] := Spec.Kind;
-    end;
+    { Add to the error-retry chain, recording the picked model as the
+      per-fallback override so the chain retries exactly that model (de-dupes
+      by name). }
+    AppendFallbackWithModel(Cfg, Spec.Kind, Model);
     PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
             ' added ' + Spec.DisplayName + ' to fallback chain');
   end;
@@ -1383,14 +1401,31 @@ begin
     PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
             ' auto-router on; easy turns route to ' + Spec.Kind);
   end
-  else if SameAsPrimary then
-    PrintLn('  ' + Ansi.Dim +
-            '(router off -- nothing else to set up for a same-provider pick. ' +
-            'Flip auto_router.enabled in config.json to enable.)' + Ansi.Reset)
-  else
+  else if not SameAsPrimary then
     PrintLn('  ' + Ansi.Dim +
             '(router off -- fallback still used on primary errors. ' +
             'Flip auto_router.enabled in config.json to enable.)' + Ansi.Reset);
+
+  { Same-provider capacity fallback (#398). Retrying the SAME provider only
+    helps when it's a DIFFERENT model -- "Opus rate-limited -> Sonnet on one
+    key" -- since per-model rate/capacity limits are real on subscription and
+    API. A different provider already went into the chain above. Offer it only
+    when the picked model is distinct and non-empty (else it's a same-model
+    retry, which buys nothing). }
+  if SameAsPrimary and (Model <> '') and (not SameText(Model, Cfg.DefaultModel)) then
+  begin
+    PrintLn;
+    Choice := Trim(LowerCase(ReadLineEcho(
+      '  Also retry ' + Model +
+      ' when your primary is rate-limited (capacity fallback)? [y/N]: ')));
+    if (Choice = 'y') or (Choice = 'yes') then
+    begin
+      AppendFallbackWithModel(Cfg, Spec.Kind, Model);
+      PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
+              ' capacity fallback on; ' + Spec.DisplayName + ' retries ' + Model +
+              ' when the primary is rate-limited');
+    end;
+  end;
 end;
 
 procedure PromptVectorSearch(Cfg: TConfig);
