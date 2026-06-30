@@ -100,6 +100,7 @@ var
   Model, Name: string;
   TUIInst: TTUI;
   SubCtx: TSubagentContext;
+  SubSpecs: TSubagentSpecArray;
   Spawn: TSpawnTool;
   BgCoord: TBackgroundSpawnCoordinator;
   KindSelected: TShellBackendKind;
@@ -210,15 +211,16 @@ begin
       StartTurn can bind it to the active session each turn. }
     Spawn   := nil;
     BgCoord := nil;
-    if (Reg <> nil) and (Provider <> nil) and (Length(Cfg.Subagents) > 0) then
+    SubSpecs := ResolveSubagentSpecs(Cfg);   { configured + built-in general-purpose; empty when disabled }
+    if (Reg <> nil) and (Provider <> nil) and (Length(SubSpecs) > 0) then
     begin
       SubCtx.Provider       := Provider;
       SubCtx.Fallbacks      := ResolveFallbacks(Cfg, SubCtx.FallbackModels);
       SubCtx.ParentRegistry := Reg;
       SubCtx.DefaultModel   := Model;
       SubCtx.PromptCache    := Cfg.PromptCache;
-      Spawn   := RegisterSpawnTool(Reg, SubCtx, Cfg.Subagents);
-      BgCoord := RegisterBackgroundSpawnTools(Reg, SubCtx, Cfg.Subagents);
+      Spawn   := RegisterSpawnTool(Reg, SubCtx, SubSpecs);
+      BgCoord := RegisterBackgroundSpawnTools(Reg, SubCtx, SubSpecs);
     end;
 
     TUIInst := TTUI.Create(Provider, Reg, Model);

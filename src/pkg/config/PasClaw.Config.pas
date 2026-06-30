@@ -568,6 +568,13 @@ type
     Crons:      array of TCronEntry;
     Skills:     array of TSkillEntry;
     Subagents:  TSubagentSpecArray;  { see comment on the type alias }
+    (* Master switch for the spawn / spawn_background tools. Default True, so a
+       built-in "general-purpose" subagent (inheriting the parent's tools) is
+       available out of the box even with no `subagents` configured -- spawn
+       works without setup. Set false to remove the spawn tools entirely (e.g.
+       to forbid fan-out / cap token spend). Configured `subagents` are still
+       honoured when on; they appear alongside general-purpose. *)
+    SubagentsEnabled: Boolean;
     WebSearch:  TWebSearchConfig;
     PromptCache: TPromptCacheConfig;
     (* Sender allowlist -- canonical PasClaw.Identity strings or
@@ -1038,6 +1045,7 @@ begin
   RelayWaitTimeoutMs   := 0;     { 0 = use the Pascal-side RelayDefaultWaitTimeoutMs (5 min). Operators set higher for flaky workers, lower for fast fallback. }
   MCPProgressiveDisclosure := True;  { on by default -- fat catalogs (Replicate MCP ~50 tools, GitHub MCP ~50+) make lazy reveal the right floor. The prompt cost of every MCP schema every turn dominates the bill on turns that touch zero MCP tools; tool_search loads schemas on demand at a one-turn cost per first-use. Operators with tiny catalogs flip off via onboarding (default N) or hand-edit if the +1 turn isn't worth the savings. Mirrors Claude Code's ToolSearch pattern. No-op when no MCP servers are configured. }
   RenderMarkdown       := True;  { on by default for terminal surfaces; cmd/serve flips off }
+  SubagentsEnabled     := True;  { on by default -- a built-in general-purpose subagent makes `spawn` available with no config. }
   ToolOutputCap        := 0;     { off by default; operators opt in. See TConfig.ToolOutputCap. }
   StatsCollectionEnabled := True;  { on by default -- zero prompt cost, useful for diagnosing turn-count regressions. Onboarding can flip off for privacy-conscious operators. }
   CheckpointsEnabled     := True;  { on by default -- zero prompt cost, prevents lost work on multi-edit sessions. }
@@ -1630,6 +1638,10 @@ begin
       end;
       Root.PutArray('subagents', Arr);
     end;
+    { Emit only on the non-default (opt-out) path so default installs stay tidy
+      -- absence parses back to the True default. }
+    if not SubagentsEnabled then
+      Root.PutBool('subagents_enabled', False);
 
     Result := Root.ToJSON;
   finally
@@ -2117,6 +2129,7 @@ begin
     finally
       Arr.Free;
     end;
+    SubagentsEnabled := Root.GetBool('subagents_enabled', SubagentsEnabled);
   finally
     Root.Free;
   end;

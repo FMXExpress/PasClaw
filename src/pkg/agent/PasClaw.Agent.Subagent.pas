@@ -119,6 +119,19 @@ function RegisterSpawnTool(Reg: TToolRegistry;
                             const Ctx: TSubagentContext;
                             const Specs: TSubagentSpecArray): TSpawnTool;
 
+(* The built-in "general-purpose" subagent, available out of the box so `spawn`
+   works with no `subagents` configured. Its Tools list is the single wildcard
+   '*' -- BuildFilteredRegistry expands that to the parent's active toolset
+   (every non-deferred tool except the spawn family and tool_search). *)
+function DefaultSubagentSpec: TSubagentSpec;
+
+(* The effective subagent specs for registration: empty when
+   Cfg.SubagentsEnabled is False; otherwise the operator's configured
+   subagents plus the built-in general-purpose default (unless they defined
+   their own agent named "general-purpose"). One place so every surface --
+   CLI, TUI, embedder -- resolves the same set. *)
+function ResolveSubagentSpecs(const Cfg: TConfig): TSubagentSpecArray;
+
 implementation
 
 uses
@@ -136,23 +149,94 @@ begin
   Result.Install(Reg);
 end;
 
+function IsSpawnFamily(const N: string): Boolean;
+begin
+  { spawn, spawn_background, spawn_status, spawn_wait, spawn_cancel -- a
+    subagent never gets any of them (no nested sub-subagents in v1). }
+  Result := (N = 'spawn') or (Copy(N, 1, 6) = 'spawn_');
+end;
+
 function BuildFilteredRegistry(Source: TToolRegistry;
                                const Names: array of string): TToolRegistry;
 var
   i: Integer;
   T: TTool;
+  AllNames: TStringArray;
+  Wildcard: Boolean;
 begin
   Result := TToolRegistry.Create;
   if Source = nil then Exit;
+
+  Wildcard := False;
+  for i := 0 to High(Names) do
+    if Names[i] = '*' then Wildcard := True;
+
+  if Wildcard then
+  begin
+    { Inherit the parent's ACTIVE toolset: every registered tool except the
+      spawn family, tool_search, and deferred (not-yet-revealed) MCP tools --
+      pulling deferred MCP schemas in would blow up the subagent's prompt the
+      progressive-disclosure layer exists to avoid. }
+    AllNames := Source.Names;
+    for i := 0 to High(AllNames) do
+    begin
+      if IsSpawnFamily(AllNames[i]) then Continue;
+      if AllNames[i] = 'tool_search' then Continue;
+      if not Source.Find(AllNames[i], T) then Continue;
+      if T.IsDeferred then Continue;
+      Result.Register(T);
+    end;
+    Exit;
+  end;
+
   for i := 0 to High(Names) do
   begin
-    if Names[i] = 'spawn' then Continue;  { no nested sub-subagents }
+    if IsSpawnFamily(Names[i]) then Continue;  { no nested sub-subagents }
     if not Source.Find(Names[i], T) then
     begin
       LogWarn('subagent: source registry has no tool named "%s" -- skipping', [Names[i]]);
       Continue;
     end;
     Result.Register(T);
+  end;
+end;
+
+function DefaultSubagentSpec: TSubagentSpec;
+begin
+  Result.Name        := 'general-purpose';
+  Result.Description := 'General-purpose subagent: completes one focused, '
+    + 'self-contained sub-task using the same tools as the main agent. Use it '
+    + 'to fan out independent work (research, multi-file search, drafting, '
+    + 'analysis) without cluttering the main thread; it returns only its final '
+    + 'answer.';
+  Result.SystemPrompt := 'You are a focused sub-agent spawned to complete ONE '
+    + 'self-contained task and report back. Work autonomously with the tools '
+    + 'you have; do not ask the caller questions. Finish with a concise result '
+    + 'the caller can use directly. Do not try to spawn further sub-agents.';
+  SetLength(Result.Tools, 1);
+  Result.Tools[0] := '*';   { expanded by BuildFilteredRegistry to the parent toolset }
+  Result.Model    := '';    { inherit the parent's default model }
+  Result.MaxIter  := 0;     { -> handler default }
+end;
+
+function ResolveSubagentSpecs(const Cfg: TConfig): TSubagentSpecArray;
+var
+  i: Integer;
+  HasGeneral: Boolean;
+begin
+  SetLength(Result, 0);
+  if not Cfg.SubagentsEnabled then Exit;
+  SetLength(Result, Length(Cfg.Subagents));
+  HasGeneral := False;
+  for i := 0 to High(Cfg.Subagents) do
+  begin
+    Result[i] := Cfg.Subagents[i];
+    if SameText(Cfg.Subagents[i].Name, 'general-purpose') then HasGeneral := True;
+  end;
+  if not HasGeneral then
+  begin
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)] := DefaultSubagentSpec;
   end;
 end;
 
