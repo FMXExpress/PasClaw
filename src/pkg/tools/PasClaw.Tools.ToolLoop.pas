@@ -678,18 +678,25 @@ var
 begin
   Result := Loop.Content;
   if Trim(Result) <> '' then Exit;
-  { Loop ended without a closing text turn (last round was a tool call, or it
-    hit MaxIterations). Recover the last assistant text from history. }
-  for i := High(Loop.FinalMessages) downto Low(Loop.FinalMessages) do
-    if (Loop.FinalMessages[i].Role = mrAssistant)
-       and (Trim(Loop.FinalMessages[i].Content) <> '') then
-      Exit(Loop.FinalMessages[i].Content);
-  { Genuinely no text at all -- explain rather than return ''. }
+  { Empty Content. Recover the last assistant text from history ONLY when the
+    loop ended on a tool call (HitMaxIterations) -- there the final turn was a
+    tool call rather than a closing answer, so the most recent assistant text
+    is the best "what it produced before it ran out". A CLEAN stop with empty
+    Content is different: the model deliberately ended its turn with no text and
+    no tool call, so scanning back for earlier progress text ("let me check
+    X...") would misreport that throwaway line as the completed answer. Leave
+    the clean empty stop to the no-answer note below. }
+  if Loop.HitMaxIterations then
+    for i := High(Loop.FinalMessages) downto Low(Loop.FinalMessages) do
+      if (Loop.FinalMessages[i].Role = mrAssistant)
+         and (Trim(Loop.FinalMessages[i].Content) <> '') then
+        Exit(Loop.FinalMessages[i].Content);
+  { Genuinely no usable text -- explain rather than return ''. }
   if Loop.HitMaxIterations then
     Result := Format('(no final answer: hit the %d-iteration limit after %d tool call(s) -- raise max_iterations or narrow the task)',
                      [Loop.Iterations, Integer(Loop.ToolCallsDispatched)])
   else
-    Result := Format('(no final answer: ended after %d iteration(s) and %d tool call(s) without producing text)',
+    Result := Format('(no final answer: the agent ended its turn without producing text, after %d iteration(s) and %d tool call(s))',
                      [Loop.Iterations, Integer(Loop.ToolCallsDispatched)]);
 end;
 

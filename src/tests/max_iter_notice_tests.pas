@@ -77,15 +77,35 @@ begin
   AssertTrue(LoopResultText(Loop) = 'the answer is 42',
     'LoopResultText returns Content when present');
 
-  { Empty Content but an earlier assistant text in history -> recover it. }
+  { Hit the cap with empty Content but an earlier assistant text in history
+    -> recover it (the final turn was a tool call, not a closing answer). }
   Loop := Default(TToolLoopResult);
   Loop.Content := '';
+  Loop.HitMaxIterations := True;
   SetLength(Loop.FinalMessages, 3);
   Loop.FinalMessages[0] := MakeMessage(mrUser, 'q');
   Loop.FinalMessages[1] := MakeMessage(mrAssistant, 'sum is 76127');
   Loop.FinalMessages[2] := MakeMessage(mrAssistant, '');   { final turn: tool-call only }
   AssertTrue(LoopResultText(Loop) = 'sum is 76127',
-    'LoopResultText recovers the last non-empty assistant text');
+    'LoopResultText recovers the last non-empty assistant text on a max-iter stop');
+
+  { CLEAN stop (no tool calls) with empty Content but stale progress text in
+    history -> must NOT return the stale text as a successful answer; report a
+    no-answer note instead. This is the review fix: history recovery is gated
+    to tool-call (max-iter) endings, never clean empty stops. }
+  Loop := Default(TToolLoopResult);
+  Loop.Content := '';
+  Loop.HitMaxIterations := False;          { clean stop }
+  Loop.Iterations := 2;
+  Loop.ToolCallsDispatched := 1;
+  SetLength(Loop.FinalMessages, 2);
+  Loop.FinalMessages[0] := MakeMessage(mrUser, 'q');
+  Loop.FinalMessages[1] := MakeMessage(mrAssistant, 'let me check the file...');
+  S := LoopResultText(Loop);
+  AssertTrue(not Has(S, 'let me check the file'),
+    'LoopResultText does NOT return stale progress text on a clean empty stop');
+  AssertTrue(Has(S, 'no final answer'),
+    'LoopResultText reports a no-answer note on a clean empty stop');
 
   { Empty Content, no assistant text, hit the cap -> a clear note, never ''. }
   Loop := Default(TToolLoopResult);
