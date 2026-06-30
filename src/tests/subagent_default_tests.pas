@@ -19,7 +19,38 @@ uses
   PasClaw.Config,
   PasClaw.Tools.Types,
   PasClaw.Tools.Registry,
-  PasClaw.Agent.Subagent;
+  PasClaw.Providers.Intf,
+  PasClaw.Providers.Types,
+  PasClaw.Agent.Subagent,
+  PasClaw.Agent.SubagentBg;
+
+type
+  { Minimal provider so RegisterSubagentTools has a non-nil parent provider to
+    capture into the subagent context (never actually called). }
+  TFakeProvider = class(TInterfacedObject, ILLMProvider)
+  public
+    function Chat(const Messages: array of TMessage; const Tools: array of TToolDefinition;
+                  const Model: string; const Options: TChatOptions): TLLMResponse;
+    function GetDefaultModel: string;
+    function GetName: string;
+    function SupportsThinking: Boolean;
+    function SupportsNativeSearch: Boolean;
+    function SupportsStreaming: Boolean;
+    function ChatStream(const Messages: array of TMessage; const Tools: array of TToolDefinition;
+                        const Model: string; const Options: TChatOptions;
+                        OnChunk: TStreamCallback): TLLMResponse;
+  end;
+
+function TFakeProvider.Chat(const Messages: array of TMessage; const Tools: array of TToolDefinition;
+  const Model: string; const Options: TChatOptions): TLLMResponse; begin Result := Default(TLLMResponse); end;
+function TFakeProvider.GetDefaultModel: string; begin Result := 'fake'; end;
+function TFakeProvider.GetName: string; begin Result := 'fake'; end;
+function TFakeProvider.SupportsThinking: Boolean; begin Result := False; end;
+function TFakeProvider.SupportsNativeSearch: Boolean; begin Result := False; end;
+function TFakeProvider.SupportsStreaming: Boolean; begin Result := False; end;
+function TFakeProvider.ChatStream(const Messages: array of TMessage; const Tools: array of TToolDefinition;
+  const Model: string; const Options: TChatOptions; OnChunk: TStreamCallback): TLLMResponse;
+begin Result := Default(TLLMResponse); end;
 
 procedure Fail_(const Msg: string); begin WriteLn('FAIL: ' + Msg); Halt(1); end;
 procedure AssertTrue(Cond: Boolean; const Msg: string); begin if not Cond then Fail_(Msg); end;
@@ -156,6 +187,49 @@ begin
   WriteLn('  ok: subagents_enabled defaults True, opt-out round-trips');
 end;
 
+procedure TestRegisterSubagentToolsWiresSpawn;
+{ The shared helper serve/gateway use: registers spawn + the background tools
+  on the registry by default (no subagents configured). }
+var
+  Cfg: TConfig;
+  Reg: TToolRegistry;
+  Prov: ILLMProvider;
+  T: TTool;
+begin
+  Cfg := TConfig.Create;
+  Reg := TToolRegistry.Create;
+  Prov := TFakeProvider.Create;
+  try
+    AddPlain(Reg, 'fs_read');   { give the parent a tool so the subagent inherits one }
+    RegisterSubagentTools(Cfg, Prov, Reg, 'fake');
+    AssertTrue(Reg.Find('spawn', T), 'RegisterSubagentTools registers spawn by default');
+    AssertTrue(Reg.Find('spawn_background', T), 'RegisterSubagentTools registers spawn_background');
+  finally
+    Reg.Free; Cfg.Free;
+  end;
+  WriteLn('  ok: RegisterSubagentTools wires spawn on by default (serve/gateway path)');
+end;
+
+procedure TestRegisterSubagentToolsRespectsDisable;
+var
+  Cfg: TConfig;
+  Reg: TToolRegistry;
+  Prov: ILLMProvider;
+  T: TTool;
+begin
+  Cfg := TConfig.Create;
+  Reg := TToolRegistry.Create;
+  Prov := TFakeProvider.Create;
+  try
+    Cfg.SubagentsEnabled := False;
+    RegisterSubagentTools(Cfg, Prov, Reg, 'fake');
+    AssertTrue(not Reg.Find('spawn', T), 'disabled -> no spawn registered');
+  finally
+    Reg.Free; Cfg.Free;
+  end;
+  WriteLn('  ok: RegisterSubagentTools is a no-op when subagents disabled');
+end;
+
 begin
   TestDefaultPresentWhenNoneConfigured;
   TestEmptyWhenDisabled;
@@ -163,6 +237,8 @@ begin
   TestOperatorOverridesGeneralPurpose;
   TestWildcardInheritsActiveTools;
   TestExplicitListStillExcludesSpawn;
+  TestRegisterSubagentToolsWiresSpawn;
+  TestRegisterSubagentToolsRespectsDisable;
   TestConfigRoundTrip;
   WriteLn('subagent_default_tests: OK');
 end.

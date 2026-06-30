@@ -70,6 +70,7 @@ uses
   SysUtils, Classes, SyncObjs,
   PasClaw.Config,
   PasClaw.Providers.Types,
+  PasClaw.Providers.Intf,      { ILLMProvider -- RegisterSubagentTools param }
   PasClaw.Tools.Types,
   PasClaw.Tools.Registry,
   PasClaw.Agent.Subagent;
@@ -157,12 +158,23 @@ function RegisterBackgroundSpawnTools(Reg: TToolRegistry;
                                       const Specs: TSubagentSpecArray)
                                       : TBackgroundSpawnCoordinator;
 
+{ One-call wiring of the synchronous `spawn` + the background spawn tools onto
+  Reg, for surfaces that don't track the returned tool/coordinator (serve,
+  gateway). Builds the TSubagentContext from Cfg/Provider/Reg, resolves the
+  effective specs (built-in general-purpose + any configured; empty when
+  subagents are disabled), and registers both. No-op when subagents are off or
+  there's no provider/registry. The created tools live for the process (Reg
+  dispatches through their method pointers), which is the server lifetime. }
+procedure RegisterSubagentTools(Cfg: TConfig; Provider: ILLMProvider;
+                                Reg: TToolRegistry; const DefaultModel: string);
+
 implementation
 
 uses
   DateUtils,
   PasClaw.JSON,
   PasClaw.Logger,
+  PasClaw.Providers.Factory,   { ResolveFallbacks for RegisterSubagentTools }
   PasClaw.Crypto.Random,
   PasClaw.Checkpoints,
   PasClaw.Tools.ToolLoop;
@@ -834,6 +846,24 @@ begin
   T.IsCore      := True;
   T.Category    := tcMutating;
   Reg.Register(T);
+end;
+
+procedure RegisterSubagentTools(Cfg: TConfig; Provider: ILLMProvider;
+                                Reg: TToolRegistry; const DefaultModel: string);
+var
+  Ctx: TSubagentContext;
+  Specs: TSubagentSpecArray;
+begin
+  if (Reg = nil) or (Provider = nil) then Exit;
+  Specs := ResolveSubagentSpecs(Cfg);
+  if Length(Specs) = 0 then Exit;   { subagents disabled }
+  Ctx.Provider       := Provider;
+  Ctx.Fallbacks      := ResolveFallbacks(Cfg, Ctx.FallbackModels);
+  Ctx.ParentRegistry := Reg;
+  Ctx.DefaultModel   := DefaultModel;
+  Ctx.PromptCache    := Cfg.PromptCache;
+  RegisterSpawnTool(Reg, Ctx, Specs);
+  RegisterBackgroundSpawnTools(Reg, Ctx, Specs);
 end;
 
 procedure FreeCoordinators;
