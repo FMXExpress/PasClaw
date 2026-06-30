@@ -4,9 +4,39 @@ PasClaw is an ultra-lightweight personal AI agent written in Delphi Object Pasca
 
 The main program lives at `src/pasclaw/PasClaw.dpr`. It initializes terminal color handling, prints the banner, applies timezone configuration, and dispatches into the command tree implemented under `src/cmd/`.
 
+## Quick start
+
+**Docker** — the fastest way to try PasClaw without building anything locally:
+
+```sh
+docker pull fmxexpress/pasclaw
+
+# HTTP gateway + web UI on http://localhost:8088 -- onboard right in the browser
+docker run -p 8088:8088 fmxexpress/pasclaw pasclaw gateway
+
+# Interactive CLI agent (run `pasclaw onboard` inside, or set a provider key)
+docker run -it fmxexpress/pasclaw pasclaw agent
+```
+
+The gateway's web UI has a first-boot onboarding wizard, so you pick a provider and paste a key in the browser — nothing on the command line. To keep config + workspace across runs, add `-v "$HOME/.pasclaw:/root/.pasclaw"`. See [`docker/README.md`](docker/README.md) for more. (This runs **PasClaw itself** in a container — distinct from the optional [Docker *shell-backend*](#-security--sandbox), which runs the model's `shell_exec` calls inside a throwaway container for a stronger sandbox.)
+
+**Native binary** — build the single ~4–5 MB binary (no runtime deps beyond `libsqlite3` and OpenSSL):
+
+```sh
+make get-indy && make          # FPC  -> build/pasclaw
+pasclaw onboard                # pick a provider, paste a key, choose options
+pasclaw agent                  # start chatting
+```
+
+See [Build](#build) for Delphi / cross-compile / Windows-on-ARM.
+
 ## Features
 
-**LLM providers** — 19-entry catalog covering Anthropic Messages, OpenAI Chat Completions, Google Gemini `generateContent`, plus OpenAI-protocol-compatible providers (Groq, DeepSeek, Mistral, Cerebras, OpenRouter, Zhipu, Qwen, Moonshot, MiniMax, NVIDIA NIM, Novita, MiMo, VolcEngine, Ollama, vLLM, LiteLLM). The full list lives in `src/pkg/providers/PasClaw.Providers.Catalog.pas`; adding a provider is a one-record append. Streaming SSE on all three protocol families; native search grounding on Gemini; citation collation on Perplexity. **Fallback chain** — `Cfg.Fallbacks = ["openai", "gemini"]` walks the list when the primary returns 429 / 5xx / network error. Code-driven `SetProvider('anthropic', $ANTHROPIC_API_KEY)` for embedders so no `~/.pasclaw/config.json` is required.
+**LLM providers** — ~26-entry catalog covering Anthropic Messages, OpenAI Chat Completions, Google Gemini `generateContent`, plus OpenAI-protocol-compatible providers (Groq, DeepSeek, Mistral, Cerebras, OpenRouter, Zhipu, Qwen, Moonshot, MiniMax, NVIDIA NIM, Novita, MiMo, VolcEngine, xAI/Grok, Perplexity, Ollama, LM Studio, vLLM, LiteLLM) and three Cloudflare AI Gateway fronts (`cloudflare`, `cloudflare-anthropic`, `cloudflare-gemini`). The full list lives in `src/pkg/providers/PasClaw.Providers.Catalog.pas`; adding a provider is a one-record append. Streaming SSE on all three protocol families; native search grounding on Gemini; citation collation on Perplexity. Code-driven `SetProvider('anthropic', $ANTHROPIC_API_KEY)` for embedders so no `~/.pasclaw/config.json` is required.
+
+**Fallback chain + per-model fallback** — `"fallbacks": ["openai", "gemini"]` walks the list when the primary returns 429 / 5xx / network error. `"fallback_models": ["gpt-4o", "gemini-2.0-flash"]` (parallel by index) pins a model per fallback — including the *same* provider with a cheaper model, so "Opus rate-limited → Sonnet on one key" works (per-model rate/capacity limits are real on both the subscription and the API).
+
+**Auto-router (opt-in)** — classifies each turn's difficulty with a deterministic, offline, no-model-call structural score (estimated tokens, code fences, lists, headings + keyword/tool signals; Wayfinder-shaped) and routes easy turns to a cheaper `easy_provider` / `easy_model` (which can be a smaller model on your existing provider), keeping the primary on the fallback chain so a routing-fooled turn drops back cleanly. Weights + threshold are tunable under `auto_router.weights`; Plan-mode turns always stay on the primary. Off until you configure an easy tier (`pasclaw onboard` offers it).
 
 **Built-in tools** — exposed to the model on every turn:
 
@@ -22,12 +52,21 @@ The main program lives at `src/pasclaw/PasClaw.dpr`. It initializes terminal col
 | `session_search` | SQLite FTS5 BM25 over the full text of every saved session under `workspace/sessions/`. Searches PAST conversations, not just the current one — returns session id + title + snippet + score with a `pasclaw resume <id>` hint. Index at `workspace/sessions/.search.db`, lazily rebuilt (reindexes a session only when its `UpdatedAt` advances). Gateway stat buckets excluded. |
 | `vault_search` / `vault_get` | search + read pasclaw.dev Code Vault entries (Object Pascal samples + components); opt-in via `vault_tools_enabled` |
 | `send_message` | post a message to a named, operator-configured channel mid-task (progress updates, alerts) — Discord / Slack / Teams / generic webhook / LINE / WhatsApp, same senders `pasclaw post` uses. Registers only when `config.json` declares `"channels": [{"name","kind","target"}]`; the model addresses channels strictly by name, so it can only reach endpoints the operator pre-declared (no model-supplied URLs) |
+| `execute_code` | run a code snippet (Python / JS / Bash / …) through the active shell backend; can call back into PasClaw tools via the `__tool` RPC channel |
+| `memory_fetch` | fetch a URL and write it to `workspace/memory/` for later recall (body never enters context); gated on `web_fetch_enabled` |
+| `kb_search` / `kb_get` | FTS5 + optional local-vector search over your registered knowledgebase sources (text / markdown / code / PDF) |
+| `tool_search` | progressive disclosure: load schemas for deferred MCP tools on demand (keeps the prompt small when you have 50+ MCP tools); on by default |
+| `tool_output_get` | retrieve full output stashed when a large tool result was truncated/condensed (gated on `tool_output_cap` or `condense_reversible`) |
+| `cron` | model-scheduled background jobs (opt-in via `cron_tool_enabled`) |
+| `delphi_build` | self-registers only when RAD Studio is found on the host |
+| `spawn` / `spawn_background` / `spawn_status` / `spawn_wait` / `spawn_cancel` | fan out to specialist subagents (sync + background) — see Subagents below |
 | `skill_<name>` | Pascal-side tools registered from `kind: shell` / `kind: prompt` skills |
+| `skills_list` / `skills_view` / `skill_manage` | self-improving skills (progressive disclosure + model-authored skills; opt-in) |
 | MCP-bridged | every tool a configured MCP server exports — see below |
 
 **Parallel dispatch** — when the model returns multiple `tool_use` blocks in one turn, read-only tools (`web_search`, `web_fetch`, `fs_read`/`grep`/`list`, `memory_search`) fan out on worker threads; mutating tools (`fs_write`, `fs_edit_hashline`, `shell_exec`) stay serial. ~50% wall-clock win on multi-network-tool turns.
 
-**MCP** — both transports. Stdio MCP via spawned subprocess + JSON-RPC over pipes, and Streamable HTTP MCP (handles SSE-framed responses, Bearer-token auth). `pasclaw mcp catalog` queries the pasclaw.dev MCP registry (`GET /api/public/v1/mcp`) with a 5 s timeout and falls back to the bundled 5-entry list (`replicate`, `digitalocean-apps`, `digitalocean-databases`, `runpod-docs`, `huggingface`) when the hub is unreachable — source attribution (`hub` / `built-in`) shown in the output. `pasclaw mcp search <q>` searches the hub directly (no fallback — bundled list is too small to search). `pasclaw mcp install <slug>` tries the hub first so any registered server is installable, falls back to the bundled catalog when the hub doesn't have it. Reads the right env var, writes the right Authorization header, never preloaded.
+**MCP** — both transports. Stdio MCP via spawned subprocess + JSON-RPC over pipes, and Streamable HTTP MCP (handles SSE-framed responses, Bearer-token auth). `pasclaw mcp catalog` queries the pasclaw.dev MCP registry (`GET /api/public/v1/mcp`) with a 5 s timeout and falls back to the bundled 5-entry list (`replicate`, `digitalocean-apps`, `digitalocean-databases`, `runpod-docs`, `huggingface`) when the hub is unreachable — source attribution (`hub` / `built-in`) shown in the output. `pasclaw mcp search <q>` searches the hub directly (no fallback — bundled list is too small to search). `pasclaw mcp install <slug>` tries the hub first so any registered server is installable, falls back to the bundled catalog when the hub doesn't have it. Reads the right env var, writes the right Authorization header, never preloaded. **Progressive disclosure** (on by default, `mcp_progressive_disclosure`) keeps fat catalogs cheap: MCP tools register *deferred* (name-only in the prompt), and the model loads schemas on demand via `tool_search` — a one-turn cost only on turns that actually touch MCP, instead of paying for every schema every turn. PasClaw is also an MCP **server** (`POST /mcp`), exposing `memory_search` / `kb_search` / `session_search` to other MCP clients (Claude Desktop, Cursor, Codex).
 
 **Skills** — markdown manifests under `$PASCLAW_HOME/workspace/skills/` advertised in the system prompt; the model loads the body via `fs_read` on demand. Install from GitHub (`pasclaw skills install owner/repo[/path][@ref]` — codeload zip, FPC's `Zipper.TUnZipper` or Delphi's `System.Zip.TZipFile`); from the pasclaw.dev hub (`pasclaw skills install hub:<slug>[@<version>]`, or just `pasclaw skills install <slug>` which tries pasclaw.dev first then falls back to ClawHub); or from ClawHub directly (`pasclaw skills install clawhub:<slug>[@<version>]`). `pasclaw skills search <q>` queries both hubs and aggregates the results (pasclaw.dev first, ClawHub deduped). Malware-flagged skills refused; suspicious-flagged install with a warning.
 
@@ -101,6 +140,28 @@ The running `pasclaw agent --session <id>` drains the queue at the top of its NE
     "tools": ["fs_read", "fs_write", "fs_grep", "fs_edit_hashline"] }
 ]
 ```
+
+A spawn can also run in the **background** (`spawn_background` → handle; `spawn_status` / `spawn_wait` / `spawn_cancel`), so the parent keeps working while a slow research/analysis task runs; completion is pushed into the next loop iteration as a system note (`PasClaw.Agent.SubagentBg`, cap 4 concurrent).
+
+**Knowledgebase (RAG)** — `pasclaw kb add <path>` registers a file or directory; the index (SQLite FTS5 + the same optional local-vector backend memory uses) is built in place and incrementally re-synced on mtime change. Native PDF text extraction (FlateDecode + `/ToUnicode`, no OCR). The model reaches it via `kb_search` / `kb_get`; `pasclaw kb search/get/status` and the web UI **KB** tab mirror it. See [Knowledgebase](#knowledgebase-rag-over-your-documents).
+
+**Distilled memory + durable facts** — opt-in (`memory_distill_enabled`): after a qualifying turn a small background pass extracts durable facts from the exchange and stores them in a semantic fact store (exact + paraphrase dedup via local embeddings), budget-capped into the system prompt so the agent carries forward what matters without re-reading transcripts. Manage via `/v1/memory/facts*` and the web UI. Inspired by cross-agent memory-dedup work.
+
+**Self-improving skills** — opt-in: a post-turn distiller (`self_improving_skills.distiller`) can mine a non-trivial tool trace into a draft `SKILL.md`, staged under `workspace/skills/.pending/` for `pasclaw skills approve/reject` (or auto-committed). `skill_manage` lets the model author skills directly; `skills_list` / `skills_view` add progressive disclosure so skill bodies load on demand. A denylist guards model-authored shell skills. `pasclaw learn` mines past sessions for recurring tool failures and proposes skill candidates.
+
+**Checkpoints + undo** — opt-in (`checkpoints_enabled`): every turn snapshots the pre-edit bytes of files the model touches under `workspace/checkpoints/<session>/` (zpaq-compressed on the FPC build). `/undo` in the TUI and `/v1/checkpoints/undo|redo` rewind/replay edits turn-by-turn; `checkpoints_keep_last` auto-prunes.
+
+**Profiles** — named config layers (`pasclaw profile list/show/use/diff/bench`). Built-ins `baseline | low-token | security | max-build | all-on` plus user JSON under `$PASCLAW_HOME/profiles/` with `_inherits` composition. Precedence: `--profile` > `$PASCLAW_PROFILE` > `config.json`'s `profile` > none. `profile bench` A/B-runs a task across profiles and prints a turn/token/tool-call table.
+
+**Plan / Build mode** — `--mode plan` (or `pasclaw plan`) is a read-only lens: `fs_read` / `fs_grep` / `memory` / `kb` / `session` work, but `fs_write` / `shell_exec` / `execute_code` are blocked, and a `plan_write` tool drafts `workspace/PLAN.md`. `--mode build` (default) is full access. The auto-router never downgrades Plan-mode turns. `pasclaw build` / `pasclaw plan` add a `workspace.zip` in/out handshake for CI / cloud (Replicate, k8s) runs.
+
+**Heartbeat** — `pasclaw heartbeat` is a proactive daemon: on an interval it feeds `workspace/heartbeat.md` to the model, runs a loop, and posts the result to a named channel (or logs it) — agendas, monitors, periodic digests without an inbound trigger.
+
+**Relay / bring-your-own-compute** — the `relay` provider + `/v1/relay/*` endpoints invert the usual flow: external workers (a browser WebGPU tab, a phone with llama.cpp, a desktop with mlc-llm) connect *inbound* over SSE, advertise the models they serve, pull inference jobs off the gateway's queue, run them on their own hardware, and POST results back. `pasclaw relay` is the CLI worker.
+
+**Observability** — OpenTelemetry traces (`diagnostics.otel.*` or `OTEL_EXPORTER_OTLP_ENDPOINT`): per-turn / per-tool / per-provider spans over OTLP HTTP-JSON with W3C trace-context propagation and Bernoulli sampling. Stream-reliability knobs (`stream_reliability.*`) cover empty-turn retry, idle-stream timeout, and tool-call repair. Token / cache / tool-byte stats roll up in `/status`, the TUI `/stats` overlay, and `/v1/stats`.
+
+**Onboarding + scaffolding** — `pasclaw onboard` is an interactive wizard (provider + key, default model, and the zero-prompt-cost behavioural toggles). `pasclaw init` / `pasclaw runbook` bootstrap an `AGENTS.md` (one-shot vs. tool-driven repo probe); `pasclaw export` renders memory/skills/sandbox into `AGENTS.md` / `CLAUDE.md` / Cursor / Gemini / Zed formats.
 
 **Cross-platform** — Linux x86_64 + aarch64 under FPC 3.2+; macOS x86_64 + arm64 under FPC (Homebrew unit paths autodetected); Windows x64 + Linux + macOS under Delphi 12 / RAD Studio. Windows-on-ARM64 builds via FPC are supported through the Makefile's `CROSS_TARGET=aarch64-win64` override (pair with `FPC_UNITS_DIR` pointing at the cross-build's unit tree); the updater emits `windows_arm64.exe` as the release-asset suffix on those builds. The `Delphi 13 WinArm64EC` target isn't wired into `PasClaw.dproj` yet — add the platform via the IDE's Project Manager when you're ready to ship for it. Three sample binaries under `samples/component-console/` plus matching `.dproj` files for RAD Studio and `dcc32.cfg` / `dcc64.cfg` for cmdline Delphi builds.
 
@@ -405,6 +466,29 @@ NO_COLOR=1 pasclaw status
 ```
 
 Top-level commands are dispatched by `src/cmd/PasClaw.Cmd.Root.pas`:
+
+| Command | What it does |
+|---|---|
+| `onboard` | interactive setup wizard (provider + key, model, behavioural toggles) |
+| `agent` | one-shot (`-m "…"`) or interactive chat with the full tool loop |
+| `tui` | full-screen two-pane terminal UI (Delphi build is positioned; FPC is line-based) |
+| `gateway` | HTTP server: web UI + `/v1/*` OpenAI-compat API + inbound channel webhooks |
+| `serve` | OpenAI-compatible API server (`/v1/chat/completions`, `/v1/responses`) |
+| `resume <id>` / `session …` | resume / list / show / delete / export saved sessions |
+| `steer <id> "…"` | push a follow-up into a running agent mid-loop |
+| `model …` / `auth …` | view/switch the default model; provider login/logout/status |
+| `mcp …` | add / list / test / catalog / search / install / sync MCP servers; `stdio` bridge |
+| `skills …` | install (GitHub / hub / ClawHub) / search / list / pending / approve / reject |
+| `vault …` | search / show / install pasclaw.dev Code Vault entries |
+| `kb …` | add / sync / search / get / status for the RAG knowledgebase |
+| `memory …` | provision / status for the local ONNX vector backend; `migrate` (re)indexes |
+| `cron …` | add / list / enable / disable / remove scheduled skill jobs |
+| `profile …` | list / show / use / diff / bench config profiles |
+| `post` / `heartbeat` | one-shot channel post; proactive periodic daemon |
+| `build` / `plan` | multi-iteration build / read-only plan with `workspace.zip` handshake (CI/cloud) |
+| `init` / `runbook` / `export` / `learn` | scaffold `AGENTS.md`; render agent files; mine sessions for skills |
+| `relay` | pull-worker that runs gateway inference jobs on your own hardware |
+| `config` / `status` / `version` / `update` | inspect config; status dashboard; version; self-update |
 
 | Command | Purpose |
 |---------|---------|
