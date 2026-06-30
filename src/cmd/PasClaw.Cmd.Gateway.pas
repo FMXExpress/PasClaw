@@ -56,6 +56,7 @@ uses
   PasClaw.Skills.Disclosure,
   PasClaw.Cron.Scheduler,
   PasClaw.Stream.Reliability,
+  PasClaw.Agent.SubagentBg,   { RegisterSubagentTools -- spawn on the gateway loop }
   PasClaw.Gateway.Server,
   PasClaw.Channels.Telegram,
   PasClaw.Channels.LINE,
@@ -284,6 +285,14 @@ begin
     SetLength(MCPClients, 0);
     if (not Args.NoMCP) and (Reg <> nil) then
       MCPClients := ConnectMCPServers(Cfg, Reg);
+
+    { Subagents (on by default): register spawn + background spawn tools so the
+      gateway chat loop (web UI / /v1/chat / OpenAI-compat) can fan out to the
+      built-in general-purpose agent (and any configured subagents). No-op when
+      disabled or no provider. Provider captured at boot -- a later /v1/config
+      provider swap won't repoint the subagent context (acceptable for v1). }
+    if Reg <> nil then
+      RegisterSubagentTools(Cfg, Provider, Reg, Cfg.DefaultModel);
 
     { Start the scheduler when there are crons OR the model can add them
       (cron_tool_enabled) -- otherwise an empty-config server with the cron

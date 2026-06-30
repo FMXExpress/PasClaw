@@ -355,15 +355,18 @@ function MaybeRegisterSpawnTool(Cfg: TConfig; Provider: ILLMProvider;
                                  Reg: TToolRegistry; const Model: string): TSpawnTool;
 var
   Ctx: TSubagentContext;
+  Specs: TSubagentSpecArray;
 begin
   Result := nil;
-  if (Reg = nil) or (Length(Cfg.Subagents) = 0) then Exit;
+  Specs := ResolveSubagentSpecs(Cfg);   { configured + built-in general-purpose; empty when disabled }
+  if (Reg = nil) or (Length(Specs) = 0) then Exit;
   Ctx.Provider       := Provider;
   Ctx.Fallbacks      := ResolveFallbacks(Cfg, Ctx.FallbackModels);
   Ctx.ParentRegistry := Reg;
   Ctx.DefaultModel   := Model;
   Ctx.PromptCache    := Cfg.PromptCache;
-  Result := RegisterSpawnTool(Reg, Ctx, Cfg.Subagents);
+  Ctx.Cfg            := Cfg;   { subagent inherits MCP progressive disclosure }
+  Result := RegisterSpawnTool(Reg, Ctx, Specs);
 end;
 
 function MaybeRegisterBackgroundSpawnTools(Cfg: TConfig; Provider: ILLMProvider;
@@ -372,15 +375,18 @@ function MaybeRegisterBackgroundSpawnTools(Cfg: TConfig; Provider: ILLMProvider;
                                             : TBackgroundSpawnCoordinator;
 var
   Ctx: TSubagentContext;
+  Specs: TSubagentSpecArray;
 begin
   Result := nil;
-  if (Reg = nil) or (Length(Cfg.Subagents) = 0) then Exit;
+  Specs := ResolveSubagentSpecs(Cfg);
+  if (Reg = nil) or (Length(Specs) = 0) then Exit;
   Ctx.Provider       := Provider;
   Ctx.Fallbacks      := ResolveFallbacks(Cfg, Ctx.FallbackModels);
   Ctx.ParentRegistry := Reg;
   Ctx.DefaultModel   := Model;
   Ctx.PromptCache    := Cfg.PromptCache;
-  Result := RegisterBackgroundSpawnTools(Reg, Ctx, Cfg.Subagents);
+  Ctx.Cfg            := Cfg;   { subagent inherits MCP progressive disclosure }
+  Result := RegisterBackgroundSpawnTools(Reg, Ctx, Specs);
 end;
 
 function ConnectMCP(Cfg: TConfig; Reg: TToolRegistry; NoMCP: Boolean): TMCPClientList;

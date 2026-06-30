@@ -64,6 +64,12 @@ type
        `prompt_cache.enabled: false` reaches subagents too. Codex P2
        on PR #118 -- see PasClaw.Config.ApplyPromptCacheConfig. *)
     PromptCache:    TPromptCacheConfig;
+    (* The parent's config -- so a subagent whose registry inherited deferred
+       MCP tools (via '*') can get its OWN registry-bound tool_search +
+       "## Deferred Tools" prompt section, i.e. the same progressive disclosure
+       the parent has. nil-safe: when unset, subagents simply skip the MCP
+       disclosure wiring. *)
+    Cfg:            TConfig;
   end;
 
   { The spawn tool itself. Subclasses TPasClawTool so the OOP
@@ -119,11 +125,25 @@ function RegisterSpawnTool(Reg: TToolRegistry;
                             const Ctx: TSubagentContext;
                             const Specs: TSubagentSpecArray): TSpawnTool;
 
+(* The built-in "general-purpose" subagent, available out of the box so `spawn`
+   works with no `subagents` configured. Its Tools list is the single wildcard
+   '*' -- BuildFilteredRegistry expands that to the parent's active toolset
+   (every non-deferred tool except the spawn family and tool_search). *)
+function DefaultSubagentSpec: TSubagentSpec;
+
+(* The effective subagent specs for registration: empty when
+   Cfg.SubagentsEnabled is False; otherwise the operator's configured
+   subagents plus the built-in general-purpose default (unless they defined
+   their own agent named "general-purpose"). One place so every surface --
+   CLI, TUI, embedder -- resolves the same set. *)
+function ResolveSubagentSpecs(const Cfg: TConfig): TSubagentSpecArray;
+
 implementation
 
 uses
   PasClaw.JSON,
   PasClaw.Logger,
+  PasClaw.MCP.Disclosure,   { TMCPDisclosure / per-registry tool_search for subagents }
   PasClaw.Tools.ToolLoop;
 
 function RegisterSpawnTool(Reg: TToolRegistry;
@@ -136,23 +156,110 @@ begin
   Result.Install(Reg);
 end;
 
+function IsSpawnFamily(const N: string): Boolean;
+begin
+  { spawn, spawn_background, spawn_status, spawn_wait, spawn_cancel -- a
+    subagent never gets any of them (no nested sub-subagents in v1). }
+  Result := (N = 'spawn') or (Copy(N, 1, 6) = 'spawn_');
+end;
+
+function NameInList(const N: string; const Arr: TStringArray): Boolean;
+var
+  i: Integer;
+begin
+  for i := 0 to High(Arr) do
+    if Arr[i] = N then Exit(True);
+  Result := False;
+end;
+
 function BuildFilteredRegistry(Source: TToolRegistry;
                                const Names: array of string): TToolRegistry;
 var
   i: Integer;
   T: TTool;
+  AllNames, StillDeferred: TStringArray;
+  Wildcard: Boolean;
 begin
   Result := TToolRegistry.Create;
   if Source = nil then Exit;
+
+  Wildcard := False;
+  for i := 0 to High(Names) do
+    if Names[i] = '*' then Wildcard := True;
+
+  if Wildcard then
+  begin
+    { Inherit the parent's whole toolset except the spawn family and the
+      parent's tool_search (the child gets its OWN registry-bound tool_search
+      from the spawn handler). An MCP tool the parent has ALREADY revealed
+      (active via the revealed set, even though IsDeferred stays True) is
+      carried over ACTIVE so the subagent can use it immediately. A
+      still-deferred tool is copied PRESERVING deferred status, so the subagent
+      gets the same progressive disclosure as the parent -- lean prompt, load
+      on demand via its own tool_search -- not a dump of every MCP schema. }
+    AllNames := Source.Names;
+    StillDeferred := Source.DeferredNames;   { deferred AND not yet revealed }
+    for i := 0 to High(AllNames) do
+    begin
+      if IsSpawnFamily(AllNames[i]) then Continue;
+      if AllNames[i] = 'tool_search' then Continue;
+      if not Source.Find(AllNames[i], T) then Continue;
+      if T.IsDeferred and NameInList(AllNames[i], StillDeferred) then
+        Result.RegisterDeferred(T, True)   { genuinely still deferred }
+      else
+        Result.Register(T);                { non-deferred OR already revealed -> active }
+    end;
+    Exit;
+  end;
+
   for i := 0 to High(Names) do
   begin
-    if Names[i] = 'spawn' then Continue;  { no nested sub-subagents }
+    if IsSpawnFamily(Names[i]) then Continue;  { no nested sub-subagents }
     if not Source.Find(Names[i], T) then
     begin
       LogWarn('subagent: source registry has no tool named "%s" -- skipping', [Names[i]]);
       Continue;
     end;
     Result.Register(T);
+  end;
+end;
+
+function DefaultSubagentSpec: TSubagentSpec;
+begin
+  Result.Name        := 'general-purpose';
+  Result.Description := 'General-purpose subagent: completes one focused, '
+    + 'self-contained sub-task using the same tools as the main agent. Use it '
+    + 'to fan out independent work (research, multi-file search, drafting, '
+    + 'analysis) without cluttering the main thread; it returns only its final '
+    + 'answer.';
+  Result.SystemPrompt := 'You are a focused sub-agent spawned to complete ONE '
+    + 'self-contained task and report back. Work autonomously with the tools '
+    + 'you have; do not ask the caller questions. Finish with a concise result '
+    + 'the caller can use directly. Do not try to spawn further sub-agents.';
+  SetLength(Result.Tools, 1);
+  Result.Tools[0] := '*';   { expanded by BuildFilteredRegistry to the parent toolset }
+  Result.Model    := '';    { inherit the parent's default model }
+  Result.MaxIter  := 0;     { -> handler default }
+end;
+
+function ResolveSubagentSpecs(const Cfg: TConfig): TSubagentSpecArray;
+var
+  i: Integer;
+  HasGeneral: Boolean;
+begin
+  SetLength(Result, 0);
+  if not Cfg.SubagentsEnabled then Exit;
+  SetLength(Result, Length(Cfg.Subagents));
+  HasGeneral := False;
+  for i := 0 to High(Cfg.Subagents) do
+  begin
+    Result[i] := Cfg.Subagents[i];
+    if SameText(Cfg.Subagents[i].Name, 'general-purpose') then HasGeneral := True;
+  end;
+  if not HasGeneral then
+  begin
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)] := DefaultSubagentSpec;
   end;
 end;
 
@@ -287,6 +394,8 @@ var
   Spec: TSubagentSpec;
   ChildCfg: TToolLoopConfig;
   ChildReg: TToolRegistry;
+  ChildDisc: TMCPDisclosure;
+  SysPrompt, DeferredSec: string;
   ChildHist: TMessageArray;
   Loop: TToolLoopResult;
   Model: string;
@@ -329,7 +438,22 @@ begin
   if MaxIter <= 0 then MaxIter := 4;
 
   ChildReg := BuildFilteredRegistry(FCtx.ParentRegistry, Spec.Tools);
+  ChildDisc := nil;
   try
+    { If the child inherited deferred MCP tools (via '*'), give it its OWN
+      registry-bound tool_search and append the "## Deferred Tools" section to
+      its prompt, so the subagent has the same progressive disclosure the
+      parent does. ChildDisc is freed below (it's bound to ChildReg, which we
+      also free). }
+    SysPrompt := Spec.SystemPrompt;
+    if (FCtx.Cfg <> nil) and (Length(ChildReg.DeferredNames) > 0) then
+    begin
+      ChildDisc := RegisterMCPDisclosureTools(ChildReg, FCtx.Cfg, False);
+      DeferredSec := BuildDeferredToolsSection(ChildReg);
+      if DeferredSec <> '' then
+        SysPrompt := SysPrompt + sLineBreak + sLineBreak + DeferredSec;
+    end;
+
     ChildCfg.Provider      := FCtx.Provider;
     ChildCfg.Registry      := ChildReg;
     ChildCfg.Model         := Model;
@@ -339,7 +463,7 @@ begin
     ChildCfg.FallbackModels := FCtx.FallbackModels;
     ChildCfg.Options       := DefaultChatOptions;
     ApplyPromptCacheConfig(ChildCfg.Options, FCtx.PromptCache);
-    ChildCfg.Options.SystemPrompt := Spec.SystemPrompt;
+    ChildCfg.Options.SystemPrompt := SysPrompt;
     ChildCfg.OnText        := nil;
     ChildCfg.OnToolCall    := nil;
     ChildCfg.OnToolResult  := nil;
@@ -355,6 +479,7 @@ begin
       ErrMsg := Format('spawn: subagent "%s" failed', [AgentName]);
   finally
     ChildReg.Free;
+    ChildDisc.Free;   { non-primary disclosure -- this handler owns it }
   end;
 end;
 

@@ -70,6 +70,7 @@ uses
   SysUtils, Classes, SyncObjs,
   PasClaw.Config,
   PasClaw.Providers.Types,
+  PasClaw.Providers.Intf,      { ILLMProvider -- RegisterSubagentTools param }
   PasClaw.Tools.Types,
   PasClaw.Tools.Registry,
   PasClaw.Agent.Subagent;
@@ -90,6 +91,8 @@ type
     FHandle:     string;
     FAgentName:  string;
     FChildReg:   TToolRegistry;      { owned }
+    FChildDisc:  TObject;            { owned TMCPDisclosure when the child inherited
+                                       deferred MCP tools; nil otherwise }
     FCfg:        TObject;            { ^TToolLoopConfig boxed -- see impl }
     FPrompt:     string;
     FResultText: string;
@@ -157,12 +160,24 @@ function RegisterBackgroundSpawnTools(Reg: TToolRegistry;
                                       const Specs: TSubagentSpecArray)
                                       : TBackgroundSpawnCoordinator;
 
+{ One-call wiring of the synchronous `spawn` + the background spawn tools onto
+  Reg, for surfaces that don't track the returned tool/coordinator (serve,
+  gateway). Builds the TSubagentContext from Cfg/Provider/Reg, resolves the
+  effective specs (built-in general-purpose + any configured; empty when
+  subagents are disabled), and registers both. No-op when subagents are off or
+  there's no provider/registry. The created tools live for the process (Reg
+  dispatches through their method pointers), which is the server lifetime. }
+procedure RegisterSubagentTools(Cfg: TConfig; Provider: ILLMProvider;
+                                Reg: TToolRegistry; const DefaultModel: string);
+
 implementation
 
 uses
   DateUtils,
   PasClaw.JSON,
   PasClaw.Logger,
+  PasClaw.Providers.Factory,   { ResolveFallbacks for RegisterSubagentTools }
+  PasClaw.MCP.Disclosure,      { per-registry tool_search for bg subagents }
   PasClaw.Crypto.Random,
   PasClaw.Checkpoints,
   PasClaw.Tools.ToolLoop;
@@ -259,6 +274,7 @@ end;
 destructor TBgJob.Destroy;
 begin
   FChildReg.Free;
+  FChildDisc.Free;   { non-primary disclosure bound to FChildReg }
   FCfg.Free;
   FStateLock.Free;
   inherited Destroy;
@@ -447,6 +463,7 @@ var
   Job: TBgJob;
   Box: TLoopCfgBox;
   MaxIter: Integer;
+  SysPrompt, DeferredSec: string;
 begin
   Result := '';
   ErrMsg := '';
@@ -487,6 +504,18 @@ begin
     Job.FCheckpointHandle := CurrentCheckpointHandle;
     Job.FChildReg  := BuildFilteredRegistry(FCtx.ParentRegistry, Spec.Tools);
     Box := TLoopCfgBox.Create;
+    { Give a child that inherited deferred MCP tools its own registry-bound
+      tool_search + "## Deferred Tools" prompt section -- same progressive
+      disclosure as the parent. FChildDisc lives as long as the job (freed in
+      the job's destructor with FChildReg). }
+    SysPrompt := Spec.SystemPrompt;
+    if (FCtx.Cfg <> nil) and (Length(Job.FChildReg.DeferredNames) > 0) then
+    begin
+      Job.FChildDisc := RegisterMCPDisclosureTools(Job.FChildReg, FCtx.Cfg, False);
+      DeferredSec := BuildDeferredToolsSection(Job.FChildReg);
+      if DeferredSec <> '' then
+        SysPrompt := SysPrompt + sLineBreak + sLineBreak + DeferredSec;
+    end;
     Box.Cfg.Provider      := FCtx.Provider;
     Box.Cfg.Registry      := Job.FChildReg;
     Box.Cfg.Model         := Model;
@@ -496,7 +525,7 @@ begin
     Box.Cfg.FallbackModels := FCtx.FallbackModels;
     Box.Cfg.Options       := DefaultChatOptions;
     ApplyPromptCacheConfig(Box.Cfg.Options, FCtx.PromptCache);
-    Box.Cfg.Options.SystemPrompt := Spec.SystemPrompt;
+    Box.Cfg.Options.SystemPrompt := SysPrompt;
     Box.Cfg.OnText        := nil;
     Box.Cfg.OnToolCall    := nil;
     Box.Cfg.OnToolResult  := nil;
@@ -834,6 +863,25 @@ begin
   T.IsCore      := True;
   T.Category    := tcMutating;
   Reg.Register(T);
+end;
+
+procedure RegisterSubagentTools(Cfg: TConfig; Provider: ILLMProvider;
+                                Reg: TToolRegistry; const DefaultModel: string);
+var
+  Ctx: TSubagentContext;
+  Specs: TSubagentSpecArray;
+begin
+  if (Reg = nil) or (Provider = nil) then Exit;
+  Specs := ResolveSubagentSpecs(Cfg);
+  if Length(Specs) = 0 then Exit;   { subagents disabled }
+  Ctx.Provider       := Provider;
+  Ctx.Fallbacks      := ResolveFallbacks(Cfg, Ctx.FallbackModels);
+  Ctx.ParentRegistry := Reg;
+  Ctx.DefaultModel   := DefaultModel;
+  Ctx.PromptCache    := Cfg.PromptCache;
+  Ctx.Cfg            := Cfg;
+  RegisterSpawnTool(Reg, Ctx, Specs);
+  RegisterBackgroundSpawnTools(Reg, Ctx, Specs);
 end;
 
 procedure FreeCoordinators;

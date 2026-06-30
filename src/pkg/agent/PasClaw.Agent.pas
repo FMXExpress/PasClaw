@@ -549,6 +549,7 @@ end;
 procedure TPasClawAgent.EnsureRegistry;
 var
   Skills: TSkillSpecArray;
+  SubSpecs: TSubagentSpecArray;
   i: Integer;
 begin
   { Track the built-in install with its own flag, NOT with
@@ -599,17 +600,19 @@ begin
     the spawn tool's context captures the live ILLMProvider; in
     the ChatHistory path EnsureProvider runs before EnsureRegistry,
     so by here FProvider is non-nil. }
-  if (Length(FConfig.Subagents) > 0) and (FProvider <> nil) then
+  SubSpecs := ResolveSubagentSpecs(FConfig);   { configured + built-in general-purpose; empty when disabled }
+  if (Length(SubSpecs) > 0) and (FProvider <> nil) then
   begin
     FSubagentCtx.Provider       := FProvider;
     FSubagentCtx.Fallbacks      := ResolveFallbacks(FConfig, FSubagentCtx.FallbackModels);
     FSubagentCtx.ParentRegistry := FRegistry;
     FSubagentCtx.PromptCache    := FConfig.PromptCache;
+    FSubagentCtx.Cfg            := FConfig;
     if FModel <> '' then
       FSubagentCtx.DefaultModel := FModel
     else
       FSubagentCtx.DefaultModel := FConfig.DefaultModel;
-    FSpawnTool := RegisterSpawnTool(FRegistry, FSubagentCtx, FConfig.Subagents);
+    FSpawnTool := RegisterSpawnTool(FRegistry, FSubagentCtx, SubSpecs);
     FOwnedTools.Add(FSpawnTool);
   end;
   FBuiltinsInstalled := True;

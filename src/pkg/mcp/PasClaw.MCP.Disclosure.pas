@@ -98,22 +98,41 @@ uses
   PasClaw.Config,
   PasClaw.Tools.Registry;
 
-{ Register tool_search into Reg. No-op when
-  Cfg.MCPProgressiveDisclosure is False. The registry pointer is
-  captured into a module global so the handler can call back into
-  it without threading state through the TToolHandler signature
-  (matches the pattern PasClaw.Skills.Disclosure uses for
-  GHomeDir). }
-procedure RegisterMCPDisclosureTools(Reg: TToolRegistry; const Cfg: TConfig);
+type
+  { tool_search is bound to ONE registry: its Search method (registered as the
+    tool's HandlerObj) reveals into and searches that exact registry. This is
+    what lets a subagent get its own tool_search over its own filtered registry
+    -- the old module-global pointer would have revealed into the parent and
+    raced with concurrent background spawns. Holds a snapshot of the configured
+    MCP servers so an empty deferred set can explain WHY (disabled / not
+    loaded) rather than dead-end. }
+  TMCPDisclosure = class
+  private
+    FReg:          TToolRegistry;
+    FConfigured:   Integer;
+    FDisabledList: string;
+    FEnabledList:  string;
+    function EmptyDeferredMessage: string;
+  public
+    constructor Create(AReg: TToolRegistry; const Cfg: TConfig);
+    { tool_search handler (matches TToolHandlerObj). }
+    function Search(const ArgsJSON: string; out ErrMsg: string): string;
+  end;
 
-{ Build the "## Deferred Tools" section the system-prompt assembler
-  appends when progressive disclosure is on. Lists the names of all
-  deferred-and-not-yet-revealed tools so the model knows what's
-  available without paying the schema-token cost. Returns '' when
-  disclosure is off (GRegistry uncaptured) or when no deferred
-  tools are present. Safe to call from any thread -- DeferredNames
-  takes the registry lock. }
-function BuildDeferredToolsSection: string;
+{ Register tool_search into Reg, bound to a fresh TMCPDisclosure. No-op (returns
+  nil) when Cfg.MCPProgressiveDisclosure is False. When Primary (the main agent
+  / serve / gateway registry) the disclosure is tracked for process lifetime and
+  also becomes the registry the no-arg BuildDeferredToolsSection reads for the
+  system prompt. When not Primary (a subagent's child registry) the returned
+  object is the CALLER's to free once the child loop is done. }
+function RegisterMCPDisclosureTools(Reg: TToolRegistry; const Cfg: TConfig;
+                                    Primary: Boolean = True): TMCPDisclosure;
+
+{ "## Deferred Tools" section for the system-prompt assembler. The no-arg form
+  reads the primary registry (the main agent); the Reg form is for a subagent's
+  own filtered registry. Returns '' when there are no deferred tools. }
+function BuildDeferredToolsSection: string; overload;
+function BuildDeferredToolsSection(Reg: TToolRegistry): string; overload;
 
 implementation
 
@@ -123,16 +142,14 @@ uses
   PasClaw.Logger;
 
 var
-  GRegistry: TToolRegistry = nil;
-  { Snapshot of the configured MCP servers captured at registration so
-    tool_search can explain an empty deferred set: "no MCP tools active --
-    replicate is DISABLED" beats a bare "No deferred tools to search," which
-    reads as "there are none" and sends the model off inventing CLI/Python
-    workarounds. Cfg is only available at registration, not in the stateless
-    handler, hence the module globals (same pattern as GRegistry). }
-  GMCPConfigured:    Integer = 0;   { total configured servers (any enabled state) }
-  GMCPDisabledList:  string  = '';  { comma-joined names with enabled=false }
-  GMCPEnabledList:   string  = '';  { comma-joined names with enabled=true }
+  { The PRIMARY registry (main agent / serve / gateway) -- read by the no-arg
+    BuildDeferredToolsSection for the system prompt. Subagent registrations
+    don't touch this. }
+  GPrimaryReg: TToolRegistry = nil;
+  { Owns the process-lifetime (Primary) disclosure objects; freed at
+    finalization. Non-primary (subagent) disclosures are owned by their
+    caller instead. }
+  GDisclosures: TList = nil;
 
 { ---- query parsing ---- }
 
@@ -235,40 +252,40 @@ end;
   (tool_search wouldn't be registered otherwise), so "nothing to search" means
   no MCP tool is currently revealed-able -- explain WHY using the configured
   server snapshot, instead of a dead end that reads as "no such capability." }
-function EmptyDeferredMessage: string;
+function TMCPDisclosure.EmptyDeferredMessage: string;
 var
   Revealed: Boolean;
 begin
-  if GMCPConfigured = 0 then
+  if FConfigured = 0 then
     Exit('No MCP tools are configured, so there is nothing to search. '
        + 'Add an MCP server (e.g. `pasclaw mcp add`) to gain external tools.');
   { An empty deferred set after tools were revealed means the MCP tools loaded
     fine and are already active -- not that a server failed. Distinguish the
     two so a follow-up search after revealing the last tool doesn't slander a
     healthy server. }
-  Revealed := (GRegistry <> nil) and GRegistry.AnyRevealed;
+  Revealed := (FReg <> nil) and FReg.AnyRevealed;
   if Revealed then
     Result := 'No remaining deferred MCP tools to load -- the available MCP '
             + 'tools have already been revealed and are active; call the one '
             + 'you need directly by name.'
   else
     Result := 'No MCP tools are active right now.';
-  if GMCPDisabledList <> '' then
-    Result := Result + ' Configured but DISABLED: ' + GMCPDisabledList
+  if FDisabledList <> '' then
+    Result := Result + ' Configured but DISABLED: ' + FDisabledList
             + ' -- set "enabled": true for it in mcp_servers in config.json '
             + 'and restart pasclaw to use its tools.';
   { Only warn about not-loaded servers when nothing has been revealed -- if a
     reveal has happened, the enabled servers did load. }
-  if (not Revealed) and (GMCPEnabledList <> '') then
+  if (not Revealed) and (FEnabledList <> '') then
     Result := Result + ' Enabled but no tools loaded yet (still connecting, or '
-            + 'the server failed to start): ' + GMCPEnabledList
+            + 'the server failed to start): ' + FEnabledList
             + ' -- retry tool_search in a moment, or check the logs for an '
             + 'mcp[...] error.';
 end;
 
 { ---- handler ---- }
 
-function ToolSearchHandler(const ArgsJSON: string; out ErrMsg: string): string;
+function TMCPDisclosure.Search(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Obj: TJsonObject;
   Query: string;
@@ -290,7 +307,7 @@ var
 begin
   ErrMsg := '';
   Result := '';
-  if GRegistry = nil then
+  if FReg = nil then
   begin
     ErrMsg := 'tool_search: registry not initialised';
     Exit;
@@ -316,7 +333,7 @@ begin
     Exit;
   end;
 
-  DeferredNames := GRegistry.DeferredNames;
+  DeferredNames := FReg.DeferredNames;
   if Length(DeferredNames) = 0 then
   begin
     Result := EmptyDeferredMessage;
@@ -374,7 +391,7 @@ begin
     NumMatches := 0;
     for i := 0 to High(DeferredNames) do
     begin
-      if not GRegistry.DeferredFind(DeferredNames[i], T) then Continue;
+      if not FReg.DeferredFind(DeferredNames[i], T) then Continue;
       Matches[NumMatches].Name  := DeferredNames[i];
       Matches[NumMatches].Score := ScoreTool(T.Name, T.Description,
                                               Keywords, RequiredTerm);
@@ -419,7 +436,7 @@ begin
     Sb.AppendLine; Sb.AppendLine;
     for i := 0 to High(Selected) do
     begin
-      if not GRegistry.DeferredFind(Selected[i], T) then
+      if not FReg.DeferredFind(Selected[i], T) then
       begin
         { Race: registry pruned the entry between the deferred-names
           snapshot and the lookup. Skip silently rather than fail the
@@ -427,7 +444,7 @@ begin
         Continue;
       end;
       Sb.AppendLine(FormatToolBlock(T));
-      GRegistry.Reveal(Selected[i]);
+      FReg.Reveal(Selected[i]);
     end;
     Result := Sb.ToString;
   finally
@@ -455,15 +472,15 @@ const
     'callable on the next tool-loop iteration -- you do NOT need to call ' +
     'tool_search again to invoke them.';
 
-function BuildDeferredToolsSection: string;
+function BuildDeferredToolsSection(Reg: TToolRegistry): string;
 var
   Names: TStringArray;
   Sb: TStringBuilder;
   i: Integer;
 begin
   Result := '';
-  if GRegistry = nil then Exit;
-  Names := GRegistry.DeferredNames;
+  if Reg = nil then Exit;
+  Names := Reg.DeferredNames;
   if Length(Names) = 0 then Exit;
   Sb := TStringBuilder.Create;
   try
@@ -491,45 +508,82 @@ begin
   end;
 end;
 
-procedure RegisterMCPDisclosureTools(Reg: TToolRegistry; const Cfg: TConfig);
+function BuildDeferredToolsSection: string;
+begin
+  { No-arg form: the primary (main agent) registry. }
+  Result := BuildDeferredToolsSection(GPrimaryReg);
+end;
+
+constructor TMCPDisclosure.Create(AReg: TToolRegistry; const Cfg: TConfig);
 var
-  T: TTool;
   i: Integer;
 begin
-  if Reg = nil then Exit;
-  if not Cfg.MCPProgressiveDisclosure then Exit;
-
-  GRegistry := Reg;
-
-  { Capture the configured MCP servers so an empty deferred set can name the
+  inherited Create;
+  FReg := AReg;
+  { Snapshot the configured MCP servers so an empty deferred set can name the
     disabled / not-yet-loaded ones instead of a dead-end message. }
-  GMCPConfigured   := Length(Cfg.MCPServers);
-  GMCPDisabledList := '';
-  GMCPEnabledList  := '';
+  FConfigured   := Length(Cfg.MCPServers);
+  FDisabledList := '';
+  FEnabledList  := '';
   for i := 0 to High(Cfg.MCPServers) do
     if Cfg.MCPServers[i].Enabled then
     begin
-      if GMCPEnabledList <> '' then GMCPEnabledList := GMCPEnabledList + ', ';
-      GMCPEnabledList := GMCPEnabledList + Cfg.MCPServers[i].Name;
+      if FEnabledList <> '' then FEnabledList := FEnabledList + ', ';
+      FEnabledList := FEnabledList + Cfg.MCPServers[i].Name;
     end
     else
     begin
-      if GMCPDisabledList <> '' then GMCPDisabledList := GMCPDisabledList + ', ';
-      GMCPDisabledList := GMCPDisabledList + Cfg.MCPServers[i].Name;
+      if FDisabledList <> '' then FDisabledList := FDisabledList + ', ';
+      FDisabledList := FDisabledList + Cfg.MCPServers[i].Name;
     end;
+end;
+
+function RegisterMCPDisclosureTools(Reg: TToolRegistry; const Cfg: TConfig;
+                                    Primary: Boolean = True): TMCPDisclosure;
+var
+  T: TTool;
+begin
+  Result := nil;
+  if Reg = nil then Exit;
+  if not Cfg.MCPProgressiveDisclosure then Exit;
+
+  Result := TMCPDisclosure.Create(Reg, Cfg);
+  if Primary then
+  begin
+    GPrimaryReg := Reg;
+    if GDisclosures = nil then GDisclosures := TList.Create;
+    GDisclosures.Add(Result);   { process-lifetime; freed at finalization }
+  end;
+  { else: the caller (a subagent spawn) owns Result and frees it after its
+    child loop finishes. }
 
   T.Name        := 'tool_search';
   T.Description := ToolSearchDesc;
   T.Schema      := ToolSearchSchema;
-  T.Handler     := ToolSearchHandler;
-  T.HandlerObj  := nil;
+  T.Handler     := nil;
+  T.HandlerObj  := Result.Search;   { bound to THIS registry's disclosure }
   T.IsCore      := False;
   T.Category    := tcReadOnly;
   { Plain Register defensively zeroes IsDeferred -- the discovery tool
     itself is always visible. }
   Reg.Register(T);
 
-  LogInfo('mcp: progressive-disclosure tool registered (tool_search)');
+  if Primary then
+    LogInfo('mcp: progressive-disclosure tool registered (tool_search)');
 end;
 
+procedure FreeDisclosures;
+var
+  i: Integer;
+begin
+  if GDisclosures = nil then Exit;
+  for i := 0 to GDisclosures.Count - 1 do
+    TMCPDisclosure(GDisclosures[i]).Free;
+  GDisclosures.Free;
+  GDisclosures := nil;
+end;
+
+initialization
+finalization
+  FreeDisclosures;
 end.
