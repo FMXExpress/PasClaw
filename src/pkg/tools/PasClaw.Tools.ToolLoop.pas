@@ -213,6 +213,14 @@ function RunToolLoop(const Cfg: TToolLoopConfig;
                      var Messages: array of TMessage;
                      out Loop: TToolLoopResult): Boolean;
 
+{ The textual result of a finished loop. Loop.Content is the final assistant
+  text, but it is EMPTY when the loop ended on a tool-call round or hit
+  MaxIterations without a closing text turn -- which makes a subagent's
+  spawn_wait return a bare "(no output)" even though the job ran. Fall back to
+  the last non-empty assistant text in history, then to a clear note explaining
+  there was no final answer (so callers never surface emptiness as success). }
+function LoopResultText(const Loop: TToolLoopResult): string;
+
 { Build the operator-facing "stopped at the tool-iteration limit" notice
   from a finished loop result, or '' when the loop did NOT hit the cap (so
   callers can append it unconditionally). MaxIter is the configured cap;
@@ -662,6 +670,34 @@ begin
     SetLength(Result, Length(Result) + 1);
     Result[High(Result)] := Nm;
   end;
+end;
+
+function LoopResultText(const Loop: TToolLoopResult): string;
+var
+  i: Integer;
+begin
+  Result := Loop.Content;
+  if Trim(Result) <> '' then Exit;
+  { Empty Content. Recover the last assistant text from history ONLY when the
+    loop ended on a tool call (HitMaxIterations) -- there the final turn was a
+    tool call rather than a closing answer, so the most recent assistant text
+    is the best "what it produced before it ran out". A CLEAN stop with empty
+    Content is different: the model deliberately ended its turn with no text and
+    no tool call, so scanning back for earlier progress text ("let me check
+    X...") would misreport that throwaway line as the completed answer. Leave
+    the clean empty stop to the no-answer note below. }
+  if Loop.HitMaxIterations then
+    for i := High(Loop.FinalMessages) downto Low(Loop.FinalMessages) do
+      if (Loop.FinalMessages[i].Role = mrAssistant)
+         and (Trim(Loop.FinalMessages[i].Content) <> '') then
+        Exit(Loop.FinalMessages[i].Content);
+  { Genuinely no usable text -- explain rather than return ''. }
+  if Loop.HitMaxIterations then
+    Result := Format('(no final answer: hit the %d-iteration limit after %d tool call(s) -- raise max_iterations or narrow the task)',
+                     [Loop.Iterations, Integer(Loop.ToolCallsDispatched)])
+  else
+    Result := Format('(no final answer: the agent ended its turn without producing text, after %d iteration(s) and %d tool call(s))',
+                     [Loop.Iterations, Integer(Loop.ToolCallsDispatched)]);
 end;
 
 function FormatMaxIterNotice(const Loop: TToolLoopResult; MaxIter: Integer;

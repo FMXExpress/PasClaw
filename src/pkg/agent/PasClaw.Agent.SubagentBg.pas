@@ -256,7 +256,7 @@ begin
     else if Ok then
     begin
       FState      := bjDone;
-      FResultText := Loop.Content;
+      FResultText := LoopResultText(Loop);   { never a bare '' for a done job }
     end
     else
     begin
@@ -490,7 +490,7 @@ begin
     Model := Spec.Model;
     if Model = '' then Model := FCtx.DefaultModel;
     MaxIter := Spec.MaxIter;
-    if MaxIter <= 0 then MaxIter := 4;
+    if MaxIter <= 0 then MaxIter := DefaultSubagentMaxIter;
 
     Job := TBgJob.Create(True);   { suspended }
     Job.FStateLock := TCriticalSection.Create;
