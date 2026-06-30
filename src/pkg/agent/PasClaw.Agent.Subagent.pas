@@ -64,6 +64,12 @@ type
        `prompt_cache.enabled: false` reaches subagents too. Codex P2
        on PR #118 -- see PasClaw.Config.ApplyPromptCacheConfig. *)
     PromptCache:    TPromptCacheConfig;
+    (* The parent's config -- so a subagent whose registry inherited deferred
+       MCP tools (via '*') can get its OWN registry-bound tool_search +
+       "## Deferred Tools" prompt section, i.e. the same progressive disclosure
+       the parent has. nil-safe: when unset, subagents simply skip the MCP
+       disclosure wiring. *)
+    Cfg:            TConfig;
   end;
 
   { The spawn tool itself. Subclasses TPasClawTool so the OOP
@@ -137,6 +143,7 @@ implementation
 uses
   PasClaw.JSON,
   PasClaw.Logger,
+  PasClaw.MCP.Disclosure,   { TMCPDisclosure / per-registry tool_search for subagents }
   PasClaw.Tools.ToolLoop;
 
 function RegisterSpawnTool(Reg: TToolRegistry;
@@ -173,18 +180,22 @@ begin
 
   if Wildcard then
   begin
-    { Inherit the parent's ACTIVE toolset: every registered tool except the
-      spawn family, tool_search, and deferred (not-yet-revealed) MCP tools --
-      pulling deferred MCP schemas in would blow up the subagent's prompt the
-      progressive-disclosure layer exists to avoid. }
+    { Inherit the parent's whole toolset except the spawn family and the
+      parent's tool_search (the child gets its OWN registry-bound tool_search
+      from the spawn handler). Deferred MCP tools are copied PRESERVING their
+      deferred status, so the subagent gets the same progressive disclosure as
+      the parent -- lean prompt, load on demand via its own tool_search -- not
+      a dump of every MCP schema. }
     AllNames := Source.Names;
     for i := 0 to High(AllNames) do
     begin
       if IsSpawnFamily(AllNames[i]) then Continue;
       if AllNames[i] = 'tool_search' then Continue;
       if not Source.Find(AllNames[i], T) then Continue;
-      if T.IsDeferred then Continue;
-      Result.Register(T);
+      if T.IsDeferred then
+        Result.RegisterDeferred(T, True)
+      else
+        Result.Register(T);
     end;
     Exit;
   end;
@@ -371,6 +382,8 @@ var
   Spec: TSubagentSpec;
   ChildCfg: TToolLoopConfig;
   ChildReg: TToolRegistry;
+  ChildDisc: TMCPDisclosure;
+  SysPrompt, DeferredSec: string;
   ChildHist: TMessageArray;
   Loop: TToolLoopResult;
   Model: string;
@@ -413,7 +426,22 @@ begin
   if MaxIter <= 0 then MaxIter := 4;
 
   ChildReg := BuildFilteredRegistry(FCtx.ParentRegistry, Spec.Tools);
+  ChildDisc := nil;
   try
+    { If the child inherited deferred MCP tools (via '*'), give it its OWN
+      registry-bound tool_search and append the "## Deferred Tools" section to
+      its prompt, so the subagent has the same progressive disclosure the
+      parent does. ChildDisc is freed below (it's bound to ChildReg, which we
+      also free). }
+    SysPrompt := Spec.SystemPrompt;
+    if (FCtx.Cfg <> nil) and (Length(ChildReg.DeferredNames) > 0) then
+    begin
+      ChildDisc := RegisterMCPDisclosureTools(ChildReg, FCtx.Cfg, False);
+      DeferredSec := BuildDeferredToolsSection(ChildReg);
+      if DeferredSec <> '' then
+        SysPrompt := SysPrompt + sLineBreak + sLineBreak + DeferredSec;
+    end;
+
     ChildCfg.Provider      := FCtx.Provider;
     ChildCfg.Registry      := ChildReg;
     ChildCfg.Model         := Model;
@@ -423,7 +451,7 @@ begin
     ChildCfg.FallbackModels := FCtx.FallbackModels;
     ChildCfg.Options       := DefaultChatOptions;
     ApplyPromptCacheConfig(ChildCfg.Options, FCtx.PromptCache);
-    ChildCfg.Options.SystemPrompt := Spec.SystemPrompt;
+    ChildCfg.Options.SystemPrompt := SysPrompt;
     ChildCfg.OnText        := nil;
     ChildCfg.OnToolCall    := nil;
     ChildCfg.OnToolResult  := nil;
@@ -439,6 +467,7 @@ begin
       ErrMsg := Format('spawn: subagent "%s" failed', [AgentName]);
   finally
     ChildReg.Free;
+    ChildDisc.Free;   { non-primary disclosure -- this handler owns it }
   end;
 end;
 

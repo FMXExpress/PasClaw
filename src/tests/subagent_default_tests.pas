@@ -21,6 +21,7 @@ uses
   PasClaw.Tools.Registry,
   PasClaw.Providers.Intf,
   PasClaw.Providers.Types,
+  PasClaw.MCP.Disclosure,
   PasClaw.Agent.Subagent,
   PasClaw.Agent.SubagentBg;
 
@@ -133,7 +134,7 @@ begin
 end;
 
 procedure TestWildcardInheritsActiveTools;
-var Src, Filtered: TToolRegistry; Names: array of string;
+var Src, Filtered: TToolRegistry; Names, Def: array of string;
 begin
   Src := TToolRegistry.Create;
   try
@@ -141,15 +142,53 @@ begin
     AddPlain(Src, 'shell_exec');
     AddPlain(Src, 'spawn');             { spawn family -> excluded }
     AddPlain(Src, 'spawn_background');  { spawn family -> excluded }
-    AddPlain(Src, 'tool_search');       { excluded }
-    AddDeferred(Src, 'github__list');   { deferred MCP -> excluded }
+    AddPlain(Src, 'tool_search');       { excluded (child gets its own) }
+    AddDeferred(Src, 'github__list');   { deferred MCP -> kept, still deferred }
     SetLength(Names, 1); Names[0] := '*';
     Filtered := BuildFilteredRegistry(Src, Names);
     try
-      AssertEqI(Filtered.Count, 2, 'wildcard yields only fs_read + shell_exec');
+      { fs_read + shell_exec + github__list (deferred). spawn*/tool_search dropped. }
+      AssertEqI(Filtered.Count, 3, 'wildcard keeps built-ins + the deferred MCP tool');
+      Def := Filtered.DeferredNames;
+      AssertEqI(Length(Def), 1, 'the inherited MCP tool stays DEFERRED in the child');
+      AssertTrue(Def[0] = 'github__list', 'deferred MCP tool name preserved');
     finally Filtered.Free; end;
   finally Src.Free; end;
-  WriteLn('  ok: * inherits active parent tools, drops spawn*/tool_search/deferred');
+  WriteLn('  ok: * keeps deferred MCP tools (deferred), drops spawn*/tool_search');
+end;
+
+procedure TestChildToolSearchRevealsInChildOnly;
+{ The core of the per-registry refactor: a subagent's own tool_search reveals
+  into ITS registry, not the parent's. }
+var
+  Parent, Child: TToolRegistry;
+  Names: array of string;
+  Cfg: TConfig;
+  Disc: TMCPDisclosure;
+  Err: string;
+begin
+  Parent := TToolRegistry.Create;
+  Cfg := TConfig.Create;
+  try
+    Cfg.MCPProgressiveDisclosure := True;
+    AddDeferred(Parent, 'github__list');
+    AddDeferred(Parent, 'github__create');
+    SetLength(Names, 1); Names[0] := '*';
+    Child := BuildFilteredRegistry(Parent, Names);
+    Disc := RegisterMCPDisclosureTools(Child, Cfg, {Primary=}False);
+    try
+      AssertTrue(Disc <> nil, 'child disclosure created');
+      Child.RunTool('tool_search', '{"query":"select:github__list"}', Err);
+      AssertTrue(Child.AnyRevealed, 'child tool_search revealed into the CHILD');
+      AssertTrue(not Parent.AnyRevealed, 'parent registry was NOT touched');
+    finally
+      Child.Free;
+      Disc.Free;
+    end;
+  finally
+    Cfg.Free; Parent.Free;
+  end;
+  WriteLn('  ok: subagent tool_search reveals into the child registry, not the parent');
 end;
 
 procedure TestExplicitListStillExcludesSpawn;
@@ -237,6 +276,7 @@ begin
   TestOperatorOverridesGeneralPurpose;
   TestWildcardInheritsActiveTools;
   TestExplicitListStillExcludesSpawn;
+  TestChildToolSearchRevealsInChildOnly;
   TestRegisterSubagentToolsWiresSpawn;
   TestRegisterSubagentToolsRespectsDisable;
   TestConfigRoundTrip;

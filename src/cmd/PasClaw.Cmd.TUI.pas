@@ -219,6 +219,7 @@ begin
       SubCtx.ParentRegistry := Reg;
       SubCtx.DefaultModel   := Model;
       SubCtx.PromptCache    := Cfg.PromptCache;
+      SubCtx.Cfg            := Cfg;
       Spawn   := RegisterSpawnTool(Reg, SubCtx, SubSpecs);
       BgCoord := RegisterBackgroundSpawnTools(Reg, SubCtx, SubSpecs);
     end;

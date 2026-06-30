@@ -365,6 +365,7 @@ begin
   Ctx.ParentRegistry := Reg;
   Ctx.DefaultModel   := Model;
   Ctx.PromptCache    := Cfg.PromptCache;
+  Ctx.Cfg            := Cfg;   { subagent inherits MCP progressive disclosure }
   Result := RegisterSpawnTool(Reg, Ctx, Specs);
 end;
 
@@ -384,6 +385,7 @@ begin
   Ctx.ParentRegistry := Reg;
   Ctx.DefaultModel   := Model;
   Ctx.PromptCache    := Cfg.PromptCache;
+  Ctx.Cfg            := Cfg;   { subagent inherits MCP progressive disclosure }
   Result := RegisterBackgroundSpawnTools(Reg, Ctx, Specs);
 end;
 

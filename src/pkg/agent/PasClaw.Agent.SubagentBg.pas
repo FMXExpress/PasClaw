@@ -91,6 +91,8 @@ type
     FHandle:     string;
     FAgentName:  string;
     FChildReg:   TToolRegistry;      { owned }
+    FChildDisc:  TObject;            { owned TMCPDisclosure when the child inherited
+                                       deferred MCP tools; nil otherwise }
     FCfg:        TObject;            { ^TToolLoopConfig boxed -- see impl }
     FPrompt:     string;
     FResultText: string;
@@ -175,6 +177,7 @@ uses
   PasClaw.JSON,
   PasClaw.Logger,
   PasClaw.Providers.Factory,   { ResolveFallbacks for RegisterSubagentTools }
+  PasClaw.MCP.Disclosure,      { per-registry tool_search for bg subagents }
   PasClaw.Crypto.Random,
   PasClaw.Checkpoints,
   PasClaw.Tools.ToolLoop;
@@ -271,6 +274,7 @@ end;
 destructor TBgJob.Destroy;
 begin
   FChildReg.Free;
+  FChildDisc.Free;   { non-primary disclosure bound to FChildReg }
   FCfg.Free;
   FStateLock.Free;
   inherited Destroy;
@@ -459,6 +463,7 @@ var
   Job: TBgJob;
   Box: TLoopCfgBox;
   MaxIter: Integer;
+  SysPrompt, DeferredSec: string;
 begin
   Result := '';
   ErrMsg := '';
@@ -499,6 +504,18 @@ begin
     Job.FCheckpointHandle := CurrentCheckpointHandle;
     Job.FChildReg  := BuildFilteredRegistry(FCtx.ParentRegistry, Spec.Tools);
     Box := TLoopCfgBox.Create;
+    { Give a child that inherited deferred MCP tools its own registry-bound
+      tool_search + "## Deferred Tools" prompt section -- same progressive
+      disclosure as the parent. FChildDisc lives as long as the job (freed in
+      the job's destructor with FChildReg). }
+    SysPrompt := Spec.SystemPrompt;
+    if (FCtx.Cfg <> nil) and (Length(Job.FChildReg.DeferredNames) > 0) then
+    begin
+      Job.FChildDisc := RegisterMCPDisclosureTools(Job.FChildReg, FCtx.Cfg, False);
+      DeferredSec := BuildDeferredToolsSection(Job.FChildReg);
+      if DeferredSec <> '' then
+        SysPrompt := SysPrompt + sLineBreak + sLineBreak + DeferredSec;
+    end;
     Box.Cfg.Provider      := FCtx.Provider;
     Box.Cfg.Registry      := Job.FChildReg;
     Box.Cfg.Model         := Model;
@@ -508,7 +525,7 @@ begin
     Box.Cfg.FallbackModels := FCtx.FallbackModels;
     Box.Cfg.Options       := DefaultChatOptions;
     ApplyPromptCacheConfig(Box.Cfg.Options, FCtx.PromptCache);
-    Box.Cfg.Options.SystemPrompt := Spec.SystemPrompt;
+    Box.Cfg.Options.SystemPrompt := SysPrompt;
     Box.Cfg.OnText        := nil;
     Box.Cfg.OnToolCall    := nil;
     Box.Cfg.OnToolResult  := nil;
@@ -862,6 +879,7 @@ begin
   Ctx.ParentRegistry := Reg;
   Ctx.DefaultModel   := DefaultModel;
   Ctx.PromptCache    := Cfg.PromptCache;
+  Ctx.Cfg            := Cfg;
   RegisterSpawnTool(Reg, Ctx, Specs);
   RegisterBackgroundSpawnTools(Reg, Ctx, Specs);
 end;

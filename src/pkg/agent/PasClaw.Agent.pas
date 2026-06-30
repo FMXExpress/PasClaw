@@ -607,6 +607,7 @@ begin
     FSubagentCtx.Fallbacks      := ResolveFallbacks(FConfig, FSubagentCtx.FallbackModels);
     FSubagentCtx.ParentRegistry := FRegistry;
     FSubagentCtx.PromptCache    := FConfig.PromptCache;
+    FSubagentCtx.Cfg            := FConfig;
     if FModel <> '' then
       FSubagentCtx.DefaultModel := FModel
     else
