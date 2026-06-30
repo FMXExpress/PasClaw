@@ -11,14 +11,15 @@ The main program lives at `src/pasclaw/PasClaw.dpr`. It initializes terminal col
 ```sh
 docker pull fmxexpress/pasclaw
 
-# HTTP gateway + web UI on http://localhost:8088 -- onboard right in the browser
-docker run -p 8088:8088 fmxexpress/pasclaw pasclaw gateway
+# HTTP gateway + web UI on http://localhost:8088 -- onboard right in the browser.
+# The image's default command already runs the gateway, so no arguments needed.
+docker run -p 8088:8088 fmxexpress/pasclaw
 
 # Interactive CLI agent (run `pasclaw onboard` inside, or set a provider key)
-docker run -it fmxexpress/pasclaw pasclaw agent
+docker run -it fmxexpress/pasclaw agent
 ```
 
-The gateway's web UI has a first-boot onboarding wizard, so you pick a provider and paste a key in the browser — nothing on the command line. To keep config + workspace across runs, add `-v "$HOME/.pasclaw:/root/.pasclaw"`. See [`docker/README.md`](docker/README.md) for more. (This runs **PasClaw itself** in a container — distinct from the optional [Docker *shell-backend*](#-security--sandbox), which runs the model's `shell_exec` calls inside a throwaway container for a stronger sandbox.)
+The image's entrypoint runs `pasclaw` for you, so pass only the subcommand (`agent`, `serve`, …) — or nothing, which starts the gateway. The gateway's web UI has a first-boot onboarding wizard, so you pick a provider and paste a key in the browser — nothing on the command line. To keep config + workspace across runs, add `-v "$HOME/.pasclaw:/home/pasclaw/.pasclaw"` (the container's `PASCLAW_HOME`, owned by its `pasclaw` user). See [`docker/README.md`](docker/README.md) for more. (This runs **PasClaw itself** in a container — distinct from the optional [Docker *shell-backend*](#-security--sandbox), which runs the model's `shell_exec` calls inside a throwaway container for a stronger sandbox.)
 
 **Native binary** — build the single ~4–5 MB binary (no runtime deps beyond `libsqlite3` and OpenSSL):
 
