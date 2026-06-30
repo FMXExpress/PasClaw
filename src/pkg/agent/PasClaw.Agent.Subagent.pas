@@ -46,6 +46,16 @@ uses
   PasClaw.Tools.Registry,
   PasClaw.Tools.Obj;
 
+const
+  { Default per-spawn tool-iteration cap used when a subagent spec leaves
+    MaxIter unset (0). Matches picoclaw's `max_tool_iterations: 20` default
+    -- subagents there inherit the same cap -- and openclaw's docs, which
+    put the practical ceiling at 15-20 (most tasks finish under 10). The
+    old default of 4 was far too tight: a general-purpose agent that reads
+    a couple of files and runs a command would trip the cap before it ever
+    produced an answer. }
+  DefaultSubagentMaxIter = 20;
+
 type
   { TSubagentSpecArray now lives in PasClaw.Config alongside
     TSubagentSpec -- see comment there for the dcc64 named-type
@@ -435,7 +445,7 @@ begin
   Model := Spec.Model;
   if Model = '' then Model := FCtx.DefaultModel;
   MaxIter := Spec.MaxIter;
-  if MaxIter <= 0 then MaxIter := 4;
+  if MaxIter <= 0 then MaxIter := DefaultSubagentMaxIter;
 
   ChildReg := BuildFilteredRegistry(FCtx.ParentRegistry, Spec.Tools);
   ChildDisc := nil;
