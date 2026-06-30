@@ -163,12 +163,21 @@ begin
   Result := (N = 'spawn') or (Copy(N, 1, 6) = 'spawn_');
 end;
 
+function NameInList(const N: string; const Arr: TStringArray): Boolean;
+var
+  i: Integer;
+begin
+  for i := 0 to High(Arr) do
+    if Arr[i] = N then Exit(True);
+  Result := False;
+end;
+
 function BuildFilteredRegistry(Source: TToolRegistry;
                                const Names: array of string): TToolRegistry;
 var
   i: Integer;
   T: TTool;
-  AllNames: TStringArray;
+  AllNames, StillDeferred: TStringArray;
   Wildcard: Boolean;
 begin
   Result := TToolRegistry.Create;
@@ -182,20 +191,23 @@ begin
   begin
     { Inherit the parent's whole toolset except the spawn family and the
       parent's tool_search (the child gets its OWN registry-bound tool_search
-      from the spawn handler). Deferred MCP tools are copied PRESERVING their
-      deferred status, so the subagent gets the same progressive disclosure as
-      the parent -- lean prompt, load on demand via its own tool_search -- not
-      a dump of every MCP schema. }
+      from the spawn handler). An MCP tool the parent has ALREADY revealed
+      (active via the revealed set, even though IsDeferred stays True) is
+      carried over ACTIVE so the subagent can use it immediately. A
+      still-deferred tool is copied PRESERVING deferred status, so the subagent
+      gets the same progressive disclosure as the parent -- lean prompt, load
+      on demand via its own tool_search -- not a dump of every MCP schema. }
     AllNames := Source.Names;
+    StillDeferred := Source.DeferredNames;   { deferred AND not yet revealed }
     for i := 0 to High(AllNames) do
     begin
       if IsSpawnFamily(AllNames[i]) then Continue;
       if AllNames[i] = 'tool_search' then Continue;
       if not Source.Find(AllNames[i], T) then Continue;
-      if T.IsDeferred then
-        Result.RegisterDeferred(T, True)
+      if T.IsDeferred and NameInList(AllNames[i], StillDeferred) then
+        Result.RegisterDeferred(T, True)   { genuinely still deferred }
       else
-        Result.Register(T);
+        Result.Register(T);                { non-deferred OR already revealed -> active }
     end;
     Exit;
   end;

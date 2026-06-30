@@ -157,6 +157,31 @@ begin
   WriteLn('  ok: * keeps deferred MCP tools (deferred), drops spawn*/tool_search');
 end;
 
+procedure TestWildcardCarriesRevealedToolActive;
+{ Review fix: a tool the parent already REVEALED (IsDeferred stays True but it's
+  active via the revealed set) must be inherited ACTIVE, not re-deferred. }
+var Src, Filtered: TToolRegistry; Names, Def: array of string; T: TTool;
+begin
+  Src := TToolRegistry.Create;
+  try
+    AddDeferred(Src, 'github__list');
+    AddDeferred(Src, 'github__create');
+    Src.Reveal('github__create');   { parent revealed this one -> active }
+    SetLength(Names, 1); Names[0] := '*';
+    Filtered := BuildFilteredRegistry(Src, Names);
+    try
+      AssertEqI(Filtered.Count, 2, 'both inherited');
+      Def := Filtered.DeferredNames;
+      AssertEqI(Length(Def), 1, 'only the still-deferred one stays deferred in child');
+      AssertTrue(Def[0] = 'github__list', 'github__list is still deferred');
+      { github__create is active (non-deferred) in the child. }
+      AssertTrue(Filtered.Find('github__create', T) and (not T.IsDeferred),
+                 'parent-revealed tool is inherited ACTIVE, not re-deferred');
+    finally Filtered.Free; end;
+  finally Src.Free; end;
+  WriteLn('  ok: * carries a parent-revealed MCP tool over as active');
+end;
+
 procedure TestChildToolSearchRevealsInChildOnly;
 { The core of the per-registry refactor: a subagent's own tool_search reveals
   into ITS registry, not the parent's. }
@@ -276,6 +301,7 @@ begin
   TestOperatorOverridesGeneralPurpose;
   TestWildcardInheritsActiveTools;
   TestExplicitListStillExcludesSpawn;
+  TestWildcardCarriesRevealedToolActive;
   TestChildToolSearchRevealsInChildOnly;
   TestRegisterSubagentToolsWiresSpawn;
   TestRegisterSubagentToolsRespectsDisable;
