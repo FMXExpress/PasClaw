@@ -474,7 +474,7 @@ begin
     LogInfo('subagent spawn: name=%s model=%s tools=%d',
             [AgentName, Model, ChildReg.Count]);
     if RunToolLoop(ChildCfg, ChildHist, Loop) then
-      Result := Loop.Content
+      Result := LoopResultText(Loop)   { never a bare '' for a successful run }
     else
       ErrMsg := Format('spawn: subagent "%s" failed', [AgentName]);
   finally

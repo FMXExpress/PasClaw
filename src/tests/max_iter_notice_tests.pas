@@ -11,6 +11,7 @@ program max_iter_notice_tests;
 
 uses
   SysUtils,
+  PasClaw.Providers.Types,
   PasClaw.Tools.ToolLoop;
 
 procedure Fail_(const Msg: string);
@@ -68,5 +69,35 @@ begin
   AssertTrue(Has(S, '--max-iterations N'), 'stateless notice keeps the how-to-raise hint');
 
   WriteLn('  ok: format max-iter notice (clean / fields / resumable vs stateless)');
+
+  { LoopResultText: a subagent that finished with no closing text turn must not
+    yield a bare '' (the spawn_wait "(no output)" bug). }
+  Loop := Default(TToolLoopResult);
+  Loop.Content := 'the answer is 42';
+  AssertTrue(LoopResultText(Loop) = 'the answer is 42',
+    'LoopResultText returns Content when present');
+
+  { Empty Content but an earlier assistant text in history -> recover it. }
+  Loop := Default(TToolLoopResult);
+  Loop.Content := '';
+  SetLength(Loop.FinalMessages, 3);
+  Loop.FinalMessages[0] := MakeMessage(mrUser, 'q');
+  Loop.FinalMessages[1] := MakeMessage(mrAssistant, 'sum is 76127');
+  Loop.FinalMessages[2] := MakeMessage(mrAssistant, '');   { final turn: tool-call only }
+  AssertTrue(LoopResultText(Loop) = 'sum is 76127',
+    'LoopResultText recovers the last non-empty assistant text');
+
+  { Empty Content, no assistant text, hit the cap -> a clear note, never ''. }
+  Loop := Default(TToolLoopResult);
+  Loop.Content := '';
+  Loop.HitMaxIterations := True;
+  Loop.Iterations := 4;
+  Loop.ToolCallsDispatched := 4;
+  S := LoopResultText(Loop);
+  AssertTrue(S <> '', 'LoopResultText never returns empty for a finished run');
+  AssertTrue(Has(S, 'no final answer') and Has(S, 'limit'),
+    'LoopResultText explains a max-iter empty result');
+
+  WriteLn('  ok: LoopResultText (content / recovered text / no-answer note)');
   WriteLn('PASS');
 end.

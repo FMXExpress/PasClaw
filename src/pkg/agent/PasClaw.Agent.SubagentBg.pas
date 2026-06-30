@@ -256,7 +256,7 @@ begin
     else if Ok then
     begin
       FState      := bjDone;
-      FResultText := Loop.Content;
+      FResultText := LoopResultText(Loop);   { never a bare '' for a done job }
     end
     else
     begin
