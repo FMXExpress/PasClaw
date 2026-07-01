@@ -189,7 +189,7 @@ end;
 function Tool_FSRead(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Path, Body, Reason: string;
-  Plain: Boolean;
+  Hashline: Boolean;
 begin
   ErrMsg := '';
   if not ParseStringArg(ArgsJSON, 'path', Path) then
@@ -208,18 +208,19 @@ begin
     Exit('');
   end;
   Body := ReadFileText(Path);
-  { When hashline is disabled at register time, force plain regardless of
-    the per-call flag: there's no fs_edit_hashline registered to consume
-    a header, so emitting one would just confuse the model. The per-call
-    plain=true escape hatch still works in hashline-on mode. }
-  if not GHashlineEnabled then
-    Plain := True
+  { Plain text is the default -- clean content is what edit_file's
+    old_text/new_text string replacement matches against, and it's what
+    smaller models handle best. The hashline #hash + LINENO:line format is
+    now OPT-IN via a hashline:true arg (mirrors edit_file's advanced patch
+    mode), and only when hashline was enabled at register time (otherwise
+    there's no patch consumer, so a header would just be noise). The legacy
+    plain:true arg is still accepted and, since plain is now the default,
+    is a harmless no-op. }
+  Hashline := GHashlineEnabled and ParseBoolArg(ArgsJSON, 'hashline', False);
+  if Hashline then
+    Result := FormatHashlineRead(Path, Body)
   else
-    Plain := ParseBoolArg(ArgsJSON, 'plain', False);
-  if Plain then
-    Result := Body
-  else
-    Result := FormatHashlineRead(Path, Body);
+    Result := Body;
 end;
 
 function Tool_FSWrite(const ArgsJSON: string; out ErrMsg: string): string;
@@ -934,9 +935,11 @@ begin
   T.Name := 'read_file';
   if UseHashline then
   begin
-    T.Description := 'Read a file. Returns hashline format: a ' + HL_FILE_PREFIX +
-                     'path#hash header followed by LINENO:line per source line. Pass {"plain":true} for raw bytes.';
-    T.Schema      := '{"type":"object","properties":{"path":{"type":"string"},"plain":{"type":"boolean","description":"Return raw file bytes instead of hashline-prefixed output."}},"required":["path"]}';
+    T.Description := 'Read the contents of a file. Returns plain text by default. ' +
+                     'Pass {"hashline":true} for the ' + HL_FILE_PREFIX +
+                     'path#hash header + LINENO:line format used to build an ' +
+                     'edit_file `patch` (advanced).';
+    T.Schema      := '{"type":"object","properties":{"path":{"type":"string"},"hashline":{"type":"boolean","description":"Return the hashline #hash+LINENO format for edit_file patch edits, instead of plain text."}},"required":["path"]}';
   end
   else
   begin
@@ -1019,11 +1022,12 @@ begin
   if UseHashline then
   begin
     T.Description := 'Edit a file. Default: replace an exact snippet -- pass old_text (the existing text, ' +
-                     'verbatim including whitespace; do NOT include read_file''s "N:" line-number prefixes) ' +
-                     'and new_text. The match must be unique unless replace_all is set; omit new_text to ' +
-                     'delete. Advanced: pass a hashline `patch` instead for line-anchored multi-hunk edits (' +
-                     HL_FILE_PREFIX + 'path#hash header, "42:" anchors, ' + HL_PAYLOAD_REPLACE + '/' +
-                     HL_PAYLOAD_ABOVE + '/' + HL_PAYLOAD_BELOW + ' payload markers; header hash must match disk).';
+                     'verbatim including whitespace) and new_text. The match must be unique unless ' +
+                     'replace_all is set; omit new_text to delete. Advanced: pass a hashline `patch` instead ' +
+                     'for line-anchored multi-hunk edits -- first read the file with {"hashline":true} to ' +
+                     'get the ' + HL_FILE_PREFIX + 'path#hash header, then send "42:" anchors + ' +
+                     HL_PAYLOAD_REPLACE + '/' + HL_PAYLOAD_ABOVE + '/' + HL_PAYLOAD_BELOW +
+                     ' payload markers (header hash must match disk).';
     T.Schema      := '{"type":"object","properties":{' +
                      '"path":{"type":"string"},' +
                      '"old_text":{"type":"string","description":"Exact existing text to replace (verbatim, including whitespace)."},' +

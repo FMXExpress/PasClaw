@@ -112,6 +112,14 @@ begin
     AssertEqStr(ReadBack(Reg, PathA), 'hello', 'fs_write alias actually wrote the file');
     WriteLn('  ok: old fs_* names still dispatch as hidden aliases');
 
+    { --- 2b. read_file defaults to plain; hashline is opt-in. --- }
+    R := Reg.RunTool('read_file', '{"path":"' + PathA + '"}', Err);
+    AssertEqStr(R, 'hello', 'read_file defaults to plain content (no hashline header)');
+    R := Reg.RunTool('read_file', '{"path":"' + PathA + '","hashline":true}', Err);
+    AssertContains(R, '#', 'read_file hashline:true emits the #hash header');
+    AssertContains(R, '1:hello', 'read_file hashline:true emits LINENO:line');
+    WriteLn('  ok: read_file plain by default, hashline:true opts in');
+
     { --- 3. append_file concatenates. --- }
     R := Reg.RunTool('append_file', '{"path":"' + PathA + '","content":" world"}', Err);
     AssertEqStr(Err, '', 'append_file no error');
