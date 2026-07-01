@@ -253,8 +253,8 @@ begin
       "content":"" explicitly to legitimately clear a file. }
     ErrMsg := 'missing required argument: content. ' +
               'If your previous response was truncated mid-tool_call (model hit max_tokens), ' +
-              're-emit fs_write with the full content as a string, or use fs_edit_hashline ' +
-              'to apply incremental edits. Pass "content":"" explicitly to clear a file.';
+              're-emit write_file with the full content as a string, or build the file ' +
+              'incrementally with append_file / edit_file. Pass "content":"" explicitly to clear a file.';
     Exit('');
   end;
   ParseStringArg(ArgsJSON, 'content', Content);
@@ -767,13 +767,171 @@ begin
   end;
 end;
 
+function Tool_FSAppend(const ArgsJSON: string; out ErrMsg: string): string;
+{ append_file: add content to the end of a file (creating it + parent dirs
+  when absent). The incremental-write escape hatch -- build a large file
+  across several turns instead of one oversized write_file arg that a
+  provider may fail to serialise. Unlike write_file it does NOT strip
+  hashline prefixes: an append chunk is content the model just generated,
+  taken verbatim. }
+var
+  Path, Content, Existing, Reason: string;
+begin
+  ErrMsg := '';
+  if not ParseStringArg(ArgsJSON, 'path', Path) then
+  begin
+    ErrMsg := 'missing required argument: path';
+    Exit('');
+  end;
+  if not CanWritePath(Path, Reason) then
+  begin
+    ErrMsg := Reason;
+    Exit('');
+  end;
+  if not HasJSONKey(ArgsJSON, 'content') then
+  begin
+    ErrMsg := 'missing required argument: content. If your previous response was ' +
+              'truncated mid-tool_call (model hit max_tokens), re-emit append_file with ' +
+              'the next chunk as a string.';
+    Exit('');
+  end;
+  ParseStringArg(ArgsJSON, 'content', Content);
+  try
+    if FileExists(Path) then Existing := ReadFileText(Path) else Existing := '';
+    SnapshotBeforeWrite(Path);
+    WriteFileText(Path, Existing + Content);
+    Result := Format('appended %d bytes to %s (now %d bytes)',
+                     [Length(Content), Path, Length(Existing) + Length(Content)]);
+  except
+    on E: Exception do
+    begin
+      ErrMsg := E.Message;
+      Result := '';
+    end;
+  end;
+end;
+
+function CountSubstr(const S, Sub: string): Integer;
+{ Non-overlapping occurrence count. Sub is assumed non-empty. }
+var
+  Rest: string;
+  P: Integer;
+begin
+  Result := 0;
+  Rest := S;
+  repeat
+    P := Pos(Sub, Rest);
+    if P = 0 then Break;
+    Inc(Result);
+    Rest := Copy(Rest, P + Length(Sub), MaxInt);
+  until False;
+end;
+
+function Tool_FSEdit(const ArgsJSON: string; out ErrMsg: string): string;
+{ edit_file: two modes.
+    1. Plain string replacement (default): old_text -> new_text, the form
+       every model authors natively. Requires a unique match unless
+       replace_all is set.
+    2. Hashline patch (advanced): when a `patch` argument is present, defer
+       to the line-anchored applier (Tool_FSEditHashline) for precise
+       multi-hunk edits. }
+var
+  Path, OldText, NewText, Content, Reason: string;
+  ReplaceAll: Boolean;
+  Cnt: Integer;
+begin
+  ErrMsg := '';
+  { Hashline mode wins when a patch is supplied. }
+  if HasJSONKey(ArgsJSON, 'patch') then
+    Exit(Tool_FSEditHashline(ArgsJSON, ErrMsg));
+
+  if not ParseStringArg(ArgsJSON, 'path', Path) then
+  begin
+    ErrMsg := 'missing required argument: path';
+    Exit('');
+  end;
+  if not CanWritePath(Path, Reason) then
+  begin
+    ErrMsg := Reason;
+    Exit('');
+  end;
+  if not HasJSONKey(ArgsJSON, 'old_text') then
+  begin
+    ErrMsg := 'missing required argument: old_text. Provide old_text + new_text for a ' +
+              'string replacement, or a `patch` for a hashline edit.';
+    Exit('');
+  end;
+  ParseStringArg(ArgsJSON, 'old_text', OldText);
+  { new_text may be omitted -> treated as '' (a deletion). }
+  NewText := '';
+  ParseStringArg(ArgsJSON, 'new_text', NewText);
+  ReplaceAll := ParseBoolArg(ArgsJSON, 'replace_all', False);
+  if OldText = '' then
+  begin
+    ErrMsg := 'old_text must not be empty';
+    Exit('');
+  end;
+  if not FileExists(Path) then
+  begin
+    ErrMsg := 'no such file: ' + Path + ' (use write_file to create it)';
+    Exit('');
+  end;
+  Content := ReadFileText(Path);
+  Cnt := CountSubstr(Content, OldText);
+  if Cnt = 0 then
+  begin
+    ErrMsg := 'old_text not found in ' + Path + '. The match must be exact, including ' +
+              'whitespace and indentation; do not include read_file''s "N:" line-number ' +
+              'prefixes in old_text.';
+    Exit('');
+  end;
+  if (Cnt > 1) and (not ReplaceAll) then
+  begin
+    ErrMsg := Format('old_text matches %d times in %s. Add surrounding context to make it ' +
+                     'unique, or pass "replace_all":true to replace every occurrence.',
+                     [Cnt, Path]);
+    Exit('');
+  end;
+  if ReplaceAll then
+    Content := StringReplace(Content, OldText, NewText, [rfReplaceAll])
+  else
+    Content := StringReplace(Content, OldText, NewText, []);
+  try
+    SnapshotBeforeWrite(Path);
+    WriteFileText(Path, Content);
+    Result := Format('edited %s (replaced %d occurrence(s))', [Path, Cnt]);
+  except
+    on E: Exception do
+    begin
+      ErrMsg := E.Message;
+      Result := '';
+    end;
+  end;
+end;
+
 procedure RegisterFSTools(R: TToolRegistry; UseHashline: Boolean);
 var
   T: TTool;
+
+  { Register the canonical tool T, then a hidden back-compat alias under the
+    old name pointing at the same handler. Old configs / sessions / muscle-
+    memory keep working; the model only ever sees the new canonical name. }
+  procedure Emit(const OldName: string);
+  var
+    A: TTool;
+  begin
+    R.Register(T);
+    A := T;
+    A.Name := OldName;
+    R.RegisterHidden(A);
+  end;
+
 begin
   GHashlineEnabled := UseHashline;
 
-  T.Name := 'fs_read';
+  { read_file (was fs_read) }
+  T := Default(TTool);
+  T.Name := 'read_file';
   if UseHashline then
   begin
     T.Description := 'Read a file. Returns hashline format: a ' + HL_FILE_PREFIX +
@@ -788,9 +946,11 @@ begin
   T.Handler  := Tool_FSRead;
   T.IsCore   := True;
   T.Category := tcReadOnly;
-  R.Register(T);
+  Emit('fs_read');
 
-  T.Name := 'fs_write';
+  { write_file (was fs_write) }
+  T := Default(TTool);
+  T.Name := 'write_file';
   if UseHashline then
     T.Description := 'Write a string to a file (overwrites). Creates parent dirs. ' +
                      'Strips hashline LINENO: prefixes from `content` when every non-empty line carries one.'
@@ -800,35 +960,42 @@ begin
   T.Handler  := Tool_FSWrite;
   T.IsCore   := True;
   T.Category := tcMutating;
+  Emit('fs_write');
+
+  { append_file (new) -- the incremental-write escape hatch for large files. }
+  T := Default(TTool);
+  T.Name        := 'append_file';
+  T.Description := 'Append a string to the end of a file (creates it and parent dirs when missing). ' +
+                   'Use this to build a large file across several turns instead of one huge write_file ' +
+                   'call, which a provider may fail to serialise.';
+  T.Schema      := '{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}';
+  T.Handler     := Tool_FSAppend;
+  T.IsCore      := True;
+  T.Category    := tcMutating;
   R.Register(T);
 
-  T.Name        := 'fs_list';
+  { list_dir (was fs_list) }
+  T := Default(TTool);
+  T.Name        := 'list_dir';
   T.Description := 'List entries in a directory. Returns "d name" or "- name  size" lines.';
   T.Schema      := '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}';
   T.Handler     := Tool_FSList;
   T.IsCore      := True;
   T.Category    := tcReadOnly;
-  R.Register(T);
+  Emit('fs_list');
 
-  { fs_grep registers UNCONDITIONALLY -- the six ripgrep-inspired
-    optimisations (skip lists, BMH, binary detection, byte-walking,
-    file-size cap, deferred hashing) make it 10-50x faster than
-    shell_exec grep on real codebases, and on Windows it's the only
-    grep equivalent the agent has (Windows ships no grep). The
-    bench's "shell_exec grep wins by 1 turn" finding measured the
-    one-shot UX advantage of `>` redirect on a tiny 8-file fixture --
-    it does NOT generalise to larger repos where fs_grep's speed
-    dominates, and it does not apply at all on Windows. So the gate
-    used to bundle fs_grep with fs_edit_hashline has been split:
-    UseHashline now controls ONLY fs_edit_hashline (plus the hashline
-    format of fs_read), and fs_grep registers unconditionally. }
-  T.Name        := 'fs_grep';
+  { grep_files (was fs_grep) -- registers UNCONDITIONALLY -- the six
+    ripgrep-inspired optimisations (skip lists, BMH, binary detection,
+    byte-walking, file-size cap, deferred hashing) make it 10-50x faster
+    than shell_exec grep on real codebases, and on Windows it's the only
+    grep equivalent the agent has (Windows ships no grep). }
+  T := Default(TTool);
+  T.Name        := 'grep_files';
   T.Description := 'Search files for a substring. Recursive when path is a directory. ' +
                    'Skips dotdirs, well-known build/VCS/deps dirs (.git, node_modules, target, build, ' +
                    'dist, vendor, .venv, __pycache__, .gradle, .next), binary files (NUL-byte detection ' +
                    'in first 1 KiB), and files larger than max_file_bytes (default 10 MiB). Returns ' +
-                   'hashline-formatted matches (one section per file, header + LINENO:line per match) ' +
-                   'so you can paste anchors directly into fs_edit_hashline (when registered).';
+                   'matches with LINENO:line per hit, one section per file.';
   T.Schema      := '{"type":"object","properties":{' +
                    '"path":{"type":"string"},' +
                    '"pattern":{"type":"string"},' +
@@ -839,36 +1006,48 @@ begin
   T.Handler     := Tool_FSGrep;
   T.IsCore      := True;
   T.Category    := tcReadOnly;
-  R.Register(T);
+  Emit('fs_grep');
 
-  { fs_edit_hashline: gated on UseHashline (PR #314 / bench finding --
-    smaller models mis-author the anchor/payload format and burn turns
-    recovering). When UseHashline is False we don't expose the tool at
-    all so the model never sees it in the tool list and doesn't try a
-    hashless patch that we'd reject. }
+  { edit_file (was fs_edit_hashline) -- now registered UNCONDITIONALLY. The
+    default old_text->new_text string-replacement mode works for every
+    model; the hashline `patch` mode is advanced and only advertised (in
+    the schema/description) when UseHashline is on, so smaller models that
+    mis-author the anchor format don't see it. The handler still accepts a
+    patch either way, so the fs_edit_hashline alias keeps working. }
+  T := Default(TTool);
+  T.Name := 'edit_file';
   if UseHashline then
   begin
-    T.Name        := 'fs_edit_hashline';
-    T.Description := 'Apply a hashline-format patch. Begins with a ' + HL_FILE_PREFIX +
-                     'path#hash header, then one or more blocks. Each block is an anchor line ' +
-                     'that is JUST the line number(s) -- "42:" for one line, "7-10:" for a ' +
-                     'range -- with NOTHING after the colon. Do NOT copy fs_read''s "N:content" ' +
-                     'display onto the anchor (write "42:", not "42:  the old text"). The ' +
-                     'anchor is followed by payload lines, and EVERY payload line must start ' +
-                     'with its own marker: ' + HL_PAYLOAD_REPLACE +
-                     ' to replace, ' + HL_PAYLOAD_ABOVE + ' to insert above the anchor, ' +
-                     HL_PAYLOAD_BELOW + ' to insert below. A multi-line replacement repeats ' +
-                     HL_PAYLOAD_REPLACE + ' on every line (a 3-line replacement has three ' +
-                     HL_PAYLOAD_REPLACE + ' lines) -- never a bare line. Example: "' +
-                     HL_FILE_PREFIX + 'foo.pas#ab12" / "10:" / "' + HL_PAYLOAD_REPLACE +
-                     '  new line 10 text". The header hash must match the file on disk; ' +
-                     'stale patches abort without writing.';
-    T.Schema      := '{"type":"object","properties":{"patch":{"type":"string","description":"Hashline-format patch text."}},"required":["patch"]}';
-    T.Handler     := Tool_FSEditHashline;
-    T.IsCore      := True;
-    T.Category    := tcMutating;
-    R.Register(T);
+    T.Description := 'Edit a file. Default: replace an exact snippet -- pass old_text (the existing text, ' +
+                     'verbatim including whitespace; do NOT include read_file''s "N:" line-number prefixes) ' +
+                     'and new_text. The match must be unique unless replace_all is set; omit new_text to ' +
+                     'delete. Advanced: pass a hashline `patch` instead for line-anchored multi-hunk edits (' +
+                     HL_FILE_PREFIX + 'path#hash header, "42:" anchors, ' + HL_PAYLOAD_REPLACE + '/' +
+                     HL_PAYLOAD_ABOVE + '/' + HL_PAYLOAD_BELOW + ' payload markers; header hash must match disk).';
+    T.Schema      := '{"type":"object","properties":{' +
+                     '"path":{"type":"string"},' +
+                     '"old_text":{"type":"string","description":"Exact existing text to replace (verbatim, including whitespace)."},' +
+                     '"new_text":{"type":"string","description":"Replacement text. Omit to delete old_text."},' +
+                     '"replace_all":{"type":"boolean","description":"Replace every occurrence instead of requiring a unique match."},' +
+                     '"patch":{"type":"string","description":"Advanced: a hashline-format patch, used INSTEAD of old_text/new_text."}' +
+                     '}}';
+  end
+  else
+  begin
+    T.Description := 'Edit a file by replacing an exact snippet: pass old_text (the existing text, verbatim ' +
+                     'including whitespace) and new_text. The match must be unique unless replace_all is set; ' +
+                     'omit new_text to delete text.';
+    T.Schema      := '{"type":"object","properties":{' +
+                     '"path":{"type":"string"},' +
+                     '"old_text":{"type":"string","description":"Exact existing text to replace (verbatim, including whitespace)."},' +
+                     '"new_text":{"type":"string","description":"Replacement text. Omit to delete old_text."},' +
+                     '"replace_all":{"type":"boolean","description":"Replace every occurrence instead of requiring a unique match."}' +
+                     '},"required":["path","old_text"]}';
   end;
+  T.Handler  := Tool_FSEdit;
+  T.IsCore   := True;
+  T.Category := tcMutating;
+  Emit('fs_edit_hashline');
 end;
 
 end.

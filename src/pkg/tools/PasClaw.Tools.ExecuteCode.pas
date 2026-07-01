@@ -588,7 +588,7 @@ begin
                    'other tools by running `pasclaw __tool <name> ''<json-args>''` ' +
                    '-- the call hits the same registry you''re using now. ' +
                    'Use this to fan out: e.g. list files, then memory_search ' +
-                   'each, then fs_read the top hits, all in one script.';
+                   'each, then read_file the top hits, all in one script.';
   T.Schema      :=
     '{"type":"object",' +
      '"properties":{' +

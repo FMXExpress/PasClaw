@@ -1363,7 +1363,7 @@ begin
       Cfg.Options.SystemPrompt :=
         '## Plan Mode' + sLineBreak + sLineBreak +
         'You are in PLAN mode (TUI Tab pressed). Read-only tools work; ' +
-        'fs_write / fs_edit_hashline / shell_exec / execute_code / ' +
+        'write_file / append_file / edit_file / shell_exec / execute_code / ' +
         'send_message / skills_manage / ... will REFUSE. Analyse the ' +
         'codebase and propose a plan; do not attempt mutating tools.' +
         sLineBreak + sLineBreak +

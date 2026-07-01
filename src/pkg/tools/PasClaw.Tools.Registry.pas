@@ -57,6 +57,10 @@ type
       explicit value. This mirrors the existing HandlerObj defensive
       clear: same risk shape, same fix shape. }
     procedure Register(const T: TTool);
+    { Register a hidden back-compat alias (old tool name -> same handler).
+      Dispatches normally via Find / RunTool but is skipped by
+      ToProviderDefs, so the model only ever sees the new canonical name. }
+    procedure RegisterHidden(const T: TTool);
     { Register a tool with an explicit IsDeferred override. Used by
       PasClaw.MCP.Bridge when Cfg.MCPProgressiveDisclosure is on so
       newly-registered MCP tools are stripped from ToProviderDefs
@@ -153,6 +157,22 @@ begin
     False here; MCP -- the only legitimate IsDeferred=True path --
     goes through RegisterDeferred instead. }
   Modified.IsDeferred := False;
+  { Same defensive clear for the Hidden alias flag -- legacy stack-built
+    records never set it, so garbage there could silently drop a core tool
+    from ToProviderDefs. Aliases go through RegisterHidden instead. }
+  Modified.Hidden := False;
+  RegisterImpl(Modified);
+end;
+
+procedure TToolRegistry.RegisterHidden(const T: TTool);
+{ Register a back-compat alias: dispatches via Find / RunTool but is hidden
+  from ToProviderDefs so the model only sees the new canonical name. }
+var
+  Modified: TTool;
+begin
+  Modified := T;
+  Modified.IsDeferred := False;
+  Modified.Hidden     := True;
   RegisterImpl(Modified);
 end;
 
@@ -240,6 +260,10 @@ begin
         keeps the provider's per-request `tools` array small (and the
         token bill low) while leaving the dispatcher unchanged. }
       if FTools[i].IsDeferred and (not IsRevealedLocked(FTools[i].Name)) then
+        Continue;
+      { Hidden back-compat aliases dispatch but never reach the model's
+        tool list -- only the new canonical name is advertised. }
+      if FTools[i].Hidden then
         Continue;
       Result[k].Name        := FTools[i].Name;
       Result[k].Description := FTools[i].Description;

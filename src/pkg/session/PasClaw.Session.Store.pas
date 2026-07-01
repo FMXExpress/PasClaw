@@ -679,7 +679,10 @@ begin
     for k := 0 to High(Hist[i].ToolCalls) do
     begin
       Call := Hist[i].ToolCalls[k];
-      if (Call.Func.Name = 'fs_write') or
+      if (Call.Func.Name = 'write_file') or
+         (Call.Func.Name = 'append_file') or
+         (Call.Func.Name = 'edit_file') or
+         (Call.Func.Name = 'fs_write') or          { back-compat aliases }
          (Call.Func.Name = 'fs_edit_hashline') then
       begin
         Path := ParseFsArg(Call.Func.Arguments, 'path');

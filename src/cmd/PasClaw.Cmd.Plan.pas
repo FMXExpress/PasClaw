@@ -378,7 +378,7 @@ const
   PlanDirectiveHeader =
     'You are running under `pasclaw plan` -- your deliverable is a ' +
     'markdown plan, NOT actually doing the work. Read the codebase as ' +
-    'needed (fs_read, fs_grep, memory_search), then SAVE the plan via ' +
+    'needed (read_file, grep_files, memory_search), then SAVE the plan via ' +
     'the `plan_write` tool with the full markdown as the `content` ' +
     'argument. After plan_write returns, end your turn with a short ' +
     'confirmation -- do NOT restate the plan in your reply.' + sLineBreak + sLineBreak +

@@ -401,7 +401,7 @@ begin
     'file under the workspace instead -- useful for large pages, binary ' +
     'downloads, or anything that would blow the model''s context. When ' +
     'save_to is set, the tool result is a short receipt + preview, and ' +
-    'the model uses fs_read / fs_grep on the saved file.';
+    'the model uses read_file / grep_files on the saved file.';
   T.Schema      :=
     '{"type":"object",' +
     '"properties":{' +

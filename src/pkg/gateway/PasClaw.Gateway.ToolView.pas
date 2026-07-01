@@ -190,15 +190,17 @@ begin
       on EPasClawJSON do
         Obj := nil;
     end;
-    if Name = 'fs_read' then
+    if (Name = 'read_file') or (Name = 'fs_read') then
     begin
       Summary := ArgStr(Obj, 'path');
       if (Obj <> nil) and Obj.GetBool('plain', False) then
         Summary := Summary + ', plain';
     end
-    else if (Name = 'fs_write') or (Name = 'fs_list') then
+    else if (Name = 'write_file') or (Name = 'append_file') or
+            (Name = 'list_dir') or
+            (Name = 'fs_write') or (Name = 'fs_list') then
       Summary := ArgStr(Obj, 'path')
-    else if Name = 'fs_grep' then
+    else if (Name = 'grep_files') or (Name = 'fs_grep') then
     begin
       Pattern := ArgStr(Obj, 'pattern');
       Path    := ArgStr(Obj, 'path');
@@ -207,8 +209,12 @@ begin
       Inc_ := ArgStr(Obj, 'include');
       if Inc_ <> '' then Summary := Summary + ' (' + Inc_ + ')';
     end
-    else if Name = 'fs_edit_hashline' then
-      Summary := FirstPatchPath(ArgStr(Obj, 'patch'))
+    else if (Name = 'edit_file') or (Name = 'fs_edit_hashline') then
+    begin
+      { str-replace mode carries a path; hashline mode carries a patch. }
+      Summary := ArgStr(Obj, 'path');
+      if Summary = '' then Summary := FirstPatchPath(ArgStr(Obj, 'patch'));
+    end
     else if Name = 'shell_exec' then
       Summary := ArgStr(Obj, 'command')
     else

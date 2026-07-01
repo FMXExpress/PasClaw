@@ -60,7 +60,7 @@ uses
   as the final section if non-empty. Pass '' if there's nothing extra.
 
   ToolsEnabled controls whether tool-dependent sections (the skill
-  catalog, the "ALWAYS use tools" rule, the truncated-fs_write rule,
+  catalog, the "ALWAYS use tools" rule, the truncated-write_file rule,
   the verify-by-running-checks rule, the update-MEMORY.md rule) are
   emitted. Callers running `--no-tools` (or constructing the component
   with UseTools=False) MUST pass False here -- otherwise the prompt
@@ -410,7 +410,7 @@ begin
   begin
     Body := Copy(Body, 1, ProjectRulesMaxBytes) + sLineBreak + sLineBreak +
             Format('(... %d byte(s) elided -- AGENTS.md exceeded the %d byte ' +
-                   'cap; read the full file with fs_read if you need the tail)',
+                   'cap; read the full file with read_file if you need the tail)',
                    [Original - ProjectRulesMaxBytes, ProjectRulesMaxBytes]);
   end;
 
@@ -470,11 +470,11 @@ begin
     Lines.Add('## Skills');
     Lines.Add('');
     if HasCallable and HasKnowledge then
-      Lines.Add('Skills extend your capabilities. Callable skills register as `skill_<name>` tools you invoke directly; knowledge-only skills are markdown bodies -- read each one''s SKILL.md with `fs_read` when the matching task comes up.')
+      Lines.Add('Skills extend your capabilities. Callable skills register as `skill_<name>` tools you invoke directly; knowledge-only skills are markdown bodies -- read each one''s SKILL.md with `read_file` when the matching task comes up.')
     else if HasCallable then
       Lines.Add('The following skills register as `skill_<name>` tools you can call directly.')
     else
-      Lines.Add('Knowledge-only skills are markdown bodies. Read each SKILL.md with `fs_read` for the procedural context the model needs.');
+      Lines.Add('Knowledge-only skills are markdown bodies. Read each SKILL.md with `read_file` for the procedural context the model needs.');
     Lines.Add('');
     for i := 0 to High(Skills) do
     begin
@@ -492,7 +492,7 @@ begin
       else
       begin
         { Knowledge-only skill -- surface the SKILL.md path so the model
-          can fs_read it on demand. Picoclaw and nanobot do the same: the
+          can read_file it on demand. Picoclaw and nanobot do the same: the
           system prompt lists the catalog, the body loads lazily. }
         if Desc = '' then
           Lines.Add('- **' + Skills[i].Name + '**: read `' + Skills[i].Source + '`')
@@ -521,7 +521,7 @@ var
 begin
   if not ToolsEnabled then
   begin
-    { No-tools mode: the model cannot call fs_write, fs_edit_hashline,
+    { No-tools mode: the model cannot call write_file, edit_file,
       skills, or anything else. Rules 1, 3, 4, and 5 all assume tool
       access -- emitting them would tell the model to do things the
       tool loop is configured to refuse. Keep the precision rule
@@ -555,11 +555,11 @@ begin
     'run a targeted check (build, test, search). Do not assume the edit ' +
     'landed correctly because the tool returned success.' + sLineBreak +
     sLineBreak +
-    '4. **Truncated tool calls** -- if a `fs_write` call comes back with a ' +
+    '4. **Truncated tool calls** -- if a `write_file` call comes back with a ' +
     '"missing required argument: content" error, your previous response was ' +
     'truncated mid-tool_call (you hit max_tokens). Re-emit with the full ' +
-    'content, or switch to `fs_edit_hashline` for incremental edits on ' +
-    'large files.' + sLineBreak +
+    'content, or build the file incrementally with `append_file` (add a chunk ' +
+    'per turn) or `edit_file` for large files.' + sLineBreak +
     sLineBreak +
     '5. **Memory** -- when the user mentions something worth keeping across ' +
     'sessions (preferences, project facts, conventions), update ' +
@@ -571,7 +571,7 @@ begin
     'have written down on an earlier turn. **`memory_search` / ' +
     '`kb_search` return bounded snippets (a token window centred on the ' +
     'matched terms) -- if the answer line might fall just outside the ' +
-    'window, follow up with `fs_read` (or `kb_get` for the KB) on the ' +
+    'window, follow up with `read_file` (or `kb_get` for the KB) on the ' +
     'cited path to surface the surrounding paragraphs. A snippet that ' +
     'shows the right file but not quite the right line is a hit, not a ' +
     'miss.**' + sLineBreak +
@@ -772,7 +772,7 @@ begin
      gate refuses on category, not arguments). Codex P2 on PR #290.
 
      Read-only (loadable):
-       fs_read / fs_list / fs_grep
+       read_file / list_dir / grep_files
        memory_search / kb_search
        web_search        (HTTP GETs only, tcReadOnly)
        vault_search / vault_get
@@ -781,17 +781,17 @@ begin
        tool_output_get
 
      Refused under Plan (tcMutating):
-       fs_write / fs_edit_hashline
+       write_file / append_file / edit_file
        shell_exec / execute_code / delphi_build
        send_message
        web_fetch / memory_fetch   (save_to writes a file)
        skills_manage / kb_upload *)
   Result :=
     '## Plan Mode' + sLineBreak + sLineBreak +
-    'You are in **PLAN** mode. Read-only tools (fs_read, fs_list, fs_grep, ' +
+    'You are in **PLAN** mode. Read-only tools (read_file, list_dir, grep_files, ' +
     'memory_search, kb_search, web_search, skills_list, skills_view, ' +
     'vault_search, vault_get, session_search, ...) work normally; ' +
-    'mutating tools (fs_write, fs_edit_hashline, shell_exec, ' +
+    'mutating tools (write_file, append_file, edit_file, shell_exec, ' +
     'execute_code, delphi_build, send_message, web_fetch, memory_fetch, ' +
     'skills_manage, kb_upload, ...) are REFUSED at the dispatch layer.' +
     sLineBreak + sLineBreak +

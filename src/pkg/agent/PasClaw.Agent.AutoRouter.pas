@@ -133,8 +133,10 @@ const
     read-only loops can still be "easy"; once we see one of these
     in the tool registry the bar goes up unless the message is
     visibly read-only (handled below via the keyword sweep). }
-  WriteOrRunTools: array[0..3] of string = (
-    'shell_exec', 'execute_code', 'fs_write', 'fs_edit_hashline'
+  WriteOrRunTools: array[0..6] of string = (
+    'shell_exec', 'execute_code',
+    'write_file', 'append_file', 'edit_file',
+    'fs_write', 'fs_edit_hashline'   { back-compat aliases in older sessions }
   );
 
   EasyKeywords: array[0..7] of string = (
