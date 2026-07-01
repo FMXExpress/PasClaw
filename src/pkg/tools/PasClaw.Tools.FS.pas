@@ -197,6 +197,7 @@ begin
     ErrMsg := 'missing required argument: path';
     Exit('');
   end;
+  Path := ResolveWorkspacePath(Path);
   if not CanReadPath(Path, Reason) then
   begin
     ErrMsg := Reason;
@@ -235,6 +236,7 @@ begin
     ErrMsg := 'missing required argument: path';
     Exit('');
   end;
+  Path := ResolveWorkspacePath(Path);
   if not CanWritePath(Path, Reason) then
   begin
     ErrMsg := Reason;
@@ -330,6 +332,11 @@ begin
     ErrMsg := 'patch contained no sections; expected one or more lines starting with ' + HL_FILE_PREFIX + 'path#hash';
     Exit('');
   end;
+
+  { Resolve each section's ¶path against the workspace so a relative header
+    (¶index.html#hash) lands in the same place read_file / write_file do. }
+  for i := 0 to High(Sections) do
+    Sections[i].Path := ResolveWorkspacePath(Sections[i].Path);
 
   { Pass 1: validate every section and stage the new body in memory.
     No writes happen during this pass, so a stale hash / missing file /
@@ -659,6 +666,7 @@ begin
     ErrMsg := 'missing required argument: path';
     Exit('');
   end;
+  Root := ResolveWorkspacePath(Root);
   if not CanReadPath(Root, ErrMsg) then Exit('');
   if not ParseStringArg(ArgsJSON, 'pattern', Pattern) then
   begin
@@ -740,6 +748,7 @@ begin
     ErrMsg := 'missing required argument: path';
     Exit('');
   end;
+  Path := ResolveWorkspacePath(Path);
   if not CanReadPath(Path, ErrMsg) then Exit('');
   if not DirectoryExists(Path) then
   begin
@@ -897,7 +906,7 @@ begin
 
     if ApStarts(Line, '*** Add File: ') then
     begin
-      Path := Trim(Copy(Line, Length('*** Add File: ') + 1, MaxInt));
+      Path := ResolveWorkspacePath(Trim(Copy(Line, Length('*** Add File: ') + 1, MaxInt)));
       Inc(i);
       SetLength(Content, 0);
       while (i < n) and (not ApStarts(P[i], '*** ')) do
@@ -920,19 +929,19 @@ begin
     end
     else if ApStarts(Line, '*** Delete File: ') then
     begin
-      Path := Trim(Copy(Line, Length('*** Delete File: ') + 1, MaxInt));
+      Path := ResolveWorkspacePath(Trim(Copy(Line, Length('*** Delete File: ') + 1, MaxInt)));
       Act.Kind := pokDelete; Act.Path := Path; Act.MoveTo := ''; Act.Content := '';
       AddAction;
       Inc(i);
     end
     else if ApStarts(Line, '*** Update File: ') then
     begin
-      Path := Trim(Copy(Line, Length('*** Update File: ') + 1, MaxInt));
+      Path := ResolveWorkspacePath(Trim(Copy(Line, Length('*** Update File: ') + 1, MaxInt)));
       Inc(i);
       MoveTo := '';
       if (i < n) and ApStarts(P[i], '*** Move to: ') then
       begin
-        MoveTo := Trim(Copy(P[i], Length('*** Move to: ') + 1, MaxInt));
+        MoveTo := ResolveWorkspacePath(Trim(Copy(P[i], Length('*** Move to: ') + 1, MaxInt)));
         Inc(i);
       end;
       if not CanReadPath(Path, Reason) then begin ErrMsg := 'apply_patch: ' + Reason; Exit; end;
@@ -1103,6 +1112,7 @@ begin
     ErrMsg := 'missing required argument: path';
     Exit('');
   end;
+  Path := ResolveWorkspacePath(Path);
   if not CanWritePath(Path, Reason) then
   begin
     ErrMsg := Reason;
@@ -1170,6 +1180,7 @@ begin
     ErrMsg := 'missing required argument: path';
     Exit('');
   end;
+  Path := ResolveWorkspacePath(Path);
   if not CanWritePath(Path, Reason) then
   begin
     ErrMsg := Reason;

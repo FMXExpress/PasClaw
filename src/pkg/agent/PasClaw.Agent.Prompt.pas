@@ -177,6 +177,7 @@ uses
   PasClaw.Skills.Loader,
   PasClaw.Agent.Orient,   { task-aware MEMORY slicing (Cfg.OrientTaskAware) }
   PasClaw.Memory.Facts,   { distilled-fact injection (Cfg.MemoryDistillEnabled) }
+  PasClaw.Tools.Sandbox,  { CurrentWorkspace -- the working dir the prompt advertises }
   PasClaw.MCP.Disclosure; { deferred-tools section (Cfg.MCPProgressiveDisclosure) }
 
 const
@@ -239,12 +240,22 @@ end;
 
 function BuildWorkspaceSection: string;
 var
-  Home: string;
+  Home, WorkDir: string;
 begin
   Home := GetHome;
+  { The directory relative file paths resolve to. CurrentWorkspace is the
+    configured sandbox.workspace, or the launch dir when unset; empty only
+    if the sandbox was never configured (fall back to the current dir).
+    Advertising it here keeps the prompt honest -- a model that writes
+    write_file("index.html") lands the file exactly where we say it will,
+    instead of silently in the process's launch directory. }
+  WorkDir := CurrentWorkspace;
+  if Trim(WorkDir) = '' then WorkDir := GetCurrentDir;
   Result :=
     '## Workspace' + sLineBreak +
-    'Your workspace is at: ' + Home + sLineBreak +
+    'Your working directory is: ' + WorkDir + sLineBreak +
+    'Relative file paths (e.g. write_file "index.html") resolve here; pass an '
+    + 'absolute path to write elsewhere.' + sLineBreak +
     '- Memory: ' + JoinPath(Home, 'workspace/memory/MEMORY.md') + sLineBreak +
     '- Skills: ' + JoinPath(Home, 'workspace/skills') + '/{skill-name}/SKILL.md' + sLineBreak +
     '- Logs:   ' + JoinPath(Home, 'logs');
