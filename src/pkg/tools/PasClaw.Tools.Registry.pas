@@ -205,12 +205,25 @@ end;
 
 function TToolRegistry.Names: TStringArray;
 var
-  i: Integer;
+  i, k: Integer;
 begin
   FLock.Acquire;
   try
+    { Skip hidden back-compat aliases. Names feeds model-facing listings --
+      the subagent '*' expansion (BuildFilteredRegistry), the MCP server's
+      tools/list, the TUI/CLI tool rosters -- so an alias here would re-
+      surface the old fs_* name the Hidden flag exists to suppress. Dispatch
+      goes through Find (which still resolves hidden names), so back-compat
+      is unaffected. }
     SetLength(Result, Length(FTools));
-    for i := 0 to High(FTools) do Result[i] := FTools[i].Name;
+    k := 0;
+    for i := 0 to High(FTools) do
+      if not FTools[i].Hidden then
+      begin
+        Result[k] := FTools[i].Name;
+        Inc(k);
+      end;
+    SetLength(Result, k);
   finally
     FLock.Release;
   end;

@@ -79,6 +79,14 @@ begin
     if Defs[i].Name = Name then Exit(True);
 end;
 
+function NamesHas(const Names: TStringArray; const Name: string): Boolean;
+var i: Integer;
+begin
+  Result := False;
+  for i := 0 to High(Names) do
+    if Names[i] = Name then Exit(True);
+end;
+
 { Read a file back through read_file's plain mode so we don't need a
   separate disk-read helper. }
 function ReadBack(Reg: TToolRegistry; const Path: string): string;
@@ -125,7 +133,12 @@ begin
     R := Reg.RunTool('fs_write', '{"path":"' + PathA + '","content":"hello"}', Err);
     AssertEqStr(Err, '', 'fs_write alias runs without error');
     AssertEqStr(ReadBack(Reg, PathA), 'hello', 'fs_write alias actually wrote the file');
-    WriteLn('  ok: old fs_* names still dispatch as hidden aliases');
+    { Registry.Names (feeds subagent '*' expansion + MCP tools/list) must also
+      exclude the hidden aliases, not just ToProviderDefs. }
+    AssertTrue(NamesHas(Reg.Names, 'write_file'), 'Names includes canonical write_file');
+    AssertFalse(NamesHas(Reg.Names, 'fs_write'),  'Names excludes hidden fs_write alias');
+    AssertFalse(NamesHas(Reg.Names, 'fs_edit_hashline'), 'Names excludes hidden fs_edit_hashline alias');
+    WriteLn('  ok: old fs_* names still dispatch as hidden aliases, hidden from Names');
 
     { --- 2b. read_file defaults to plain; hashline is opt-in. --- }
     R := Reg.RunTool('read_file', '{"path":"' + PathA + '"}', Err);
@@ -207,7 +220,15 @@ begin
       Err);
     AssertContains(Err, 'context not found', 'apply_patch reports a missing-context failure');
     AssertEqStr(ReadBack(Reg, PathA), 'unchanged', 'apply_patch wrote nothing on failure');
-    WriteLn('  ok: apply_patch (update+add+delete, atomic on failure)');
+
+    { Add File onto an existing path must refuse (not silently clobber). PathN
+      already exists ("brand new") from the successful patch above. }
+    R := Reg.RunTool('apply_patch',
+      '{"patch":"' + JEsc('*** Begin Patch'#10'*** Add File: ' + PathN + #10'+overwrite'#10'*** End Patch'#10) + '"}',
+      Err);
+    AssertContains(Err, 'already exists', 'apply_patch refuses Add File onto an existing path');
+    AssertContains(ReadBack(Reg, PathN), 'brand new', 'apply_patch did NOT clobber the existing file');
+    WriteLn('  ok: apply_patch (update+add+delete, atomic on failure, no-clobber Add)');
 
   finally
     Reg.Free;

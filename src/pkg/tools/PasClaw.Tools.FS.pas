@@ -1021,13 +1021,30 @@ begin
     nothing, so a multi-file patch is all-or-nothing. }
   if not ParseApplyPatch(PatchText, Actions, ErrMsg) then Exit('');
 
-  { Sandbox-gate every target up front, still before any write. }
+  { Sandbox-gate every target up front, still before any write. Also refuse
+    create-targets that already exist: WriteFileText opens with fmCreate, so
+    an "Add File" (or a "Move to" destination) pointing at an existing path
+    would silently truncate the user's file and report it as "added". Make
+    that a hard failure so a model that used Add File instead of Update File
+    can't clobber content -- and abort before touching disk (atomic). }
   for i := 0 to High(Actions) do
   begin
     if not CanWritePath(Actions[i].Path, Reason) then
     begin ErrMsg := 'apply_patch: ' + Reason; Exit(''); end;
     if (Actions[i].MoveTo <> '') and (not CanWritePath(Actions[i].MoveTo, Reason)) then
     begin ErrMsg := 'apply_patch: ' + Reason; Exit(''); end;
+    if (Actions[i].Kind = pokAdd) and FileExists(Actions[i].Path) then
+    begin
+      ErrMsg := 'apply_patch: Add File target already exists: ' + Actions[i].Path +
+                ' (use "*** Update File" to modify an existing file)';
+      Exit('');
+    end;
+    if (Actions[i].Kind = pokUpdate) and (Actions[i].MoveTo <> '')
+       and FileExists(Actions[i].MoveTo) then
+    begin
+      ErrMsg := 'apply_patch: Move to target already exists: ' + Actions[i].MoveTo;
+      Exit('');
+    end;
   end;
 
   nAdd := 0; nUpd := 0; nDel := 0;
