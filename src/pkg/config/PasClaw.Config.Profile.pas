@@ -242,9 +242,10 @@ const
      stock cross-check catches. *)
   Profile_Stock: string =
     '{' +
-    '"_description":"Stock TConfig.Create defaults. Adopted the ' +
-    'bench-grounded lean-edit shape (bench/swe/README.md): web_fetch ' +
-    '+ vault + memory_fetch OFF (operators opt in via onboarding); ' +
+    '"_description":"Stock TConfig.Create defaults. vault OFF (operators ' +
+    'opt in via onboarding); web_fetch + memory_fetch ON (web_fetch''s ' +
+    'description documents the HTML-strip + 50000-char cap so the model ' +
+    'knows what it returns); ' +
     'orient (task-aware MEMORY slicing) OFF -- whole-file injection is ' +
     'the contract, opt in per-run with --orient; 5 zero-prompt-cost ' +
     'behavioral toggles ON (checkpoints, ' +
@@ -254,7 +255,7 @@ const
     'CLI flag. fs_grep registers unconditionally (6 ripgrep-inspired ' +
     'optimisations + no shell grep on Windows).",' +
     '"vault_tools_enabled":false,' +
-    '"web_fetch_enabled":false,' +
+    '"web_fetch_enabled":true,' +
     '"vector_search_enabled":true,' +
     '"render_markdown":true,' +
     '"promptware_enabled":true,' +

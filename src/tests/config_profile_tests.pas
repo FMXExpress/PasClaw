@@ -317,7 +317,7 @@ begin
       OPPOSITE value, so the resulting SaveConfig has to emit the
       opt-out and the next LoadConfig has to read it back. }
     Saved.VaultToolsEnabled                     := True;   { default False -> opt-in }
-    Saved.WebFetchEnabled                       := True;   { default False -> opt-in }
+    Saved.WebFetchEnabled                       := False;  { default True  -> opt-out }
     Saved.StatsCollectionEnabled                := False;  { default True  -> opt-out }
     Saved.CheckpointsEnabled                    := False;  { default True  -> opt-out }
     Saved.CheckpointsKeepLast                   := 16;     { default 32    -> custom }
@@ -335,8 +335,8 @@ begin
   try
     AssertTrue(Loaded.VaultToolsEnabled,
                'vault_tools_enabled opt-in persisted');
-    AssertTrue(Loaded.WebFetchEnabled,
-               'web_fetch_enabled opt-in persisted');
+    AssertTrue(not Loaded.WebFetchEnabled,
+               'web_fetch_enabled opt-out persisted');
     AssertTrue(not Loaded.StatsCollectionEnabled,
                'stats_collection_enabled opt-out persisted');
     AssertTrue(not Loaded.CheckpointsEnabled,
