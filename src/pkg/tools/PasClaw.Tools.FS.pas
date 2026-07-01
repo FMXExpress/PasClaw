@@ -768,6 +768,308 @@ begin
   end;
 end;
 
+{ ===== apply_patch: multi-file, context-anchored patches (Codex / OpenClaw
+  apply_patch format) ===================================================== }
+type
+  TLineArray = array of string;
+  TPatchOpKind = (pokAdd, pokUpdate, pokDelete);
+  TPatchAction = record
+    Kind:    TPatchOpKind;
+    Path:    string;
+    MoveTo:  string;
+    Content: string;
+  end;
+  TPatchActionArray = array of TPatchAction;
+
+function ApSplitLF(const S: string): TLineArray;
+{ Split on LF (CRLF/CR normalised first), keeping empty segments so a
+  join round-trips exactly, including a trailing newline. }
+var
+  T: string;
+  i, StartPos: Integer;
+begin
+  SetLength(Result, 0);
+  T := StringReplace(S, #13#10, #10, [rfReplaceAll]);
+  T := StringReplace(T, #13, #10, [rfReplaceAll]);
+  StartPos := 1;
+  for i := 1 to Length(T) do
+    if T[i] = #10 then
+    begin
+      SetLength(Result, Length(Result) + 1);
+      Result[High(Result)] := Copy(T, StartPos, i - StartPos);
+      StartPos := i + 1;
+    end;
+  SetLength(Result, Length(Result) + 1);
+  Result[High(Result)] := Copy(T, StartPos, Length(T) - StartPos + 1);
+end;
+
+function ApJoinLF(const A: TLineArray): string;
+var
+  i: Integer;
+begin
+  Result := '';
+  for i := 0 to High(A) do
+  begin
+    if i > 0 then Result := Result + #10;
+    Result := Result + A[i];
+  end;
+end;
+
+function ApFindBlock(const Hay, Needle: TLineArray; StartAt: Integer): Integer;
+var
+  i, j: Integer;
+  Ok: Boolean;
+begin
+  Result := -1;
+  if Length(Needle) = 0 then Exit(StartAt);
+  if StartAt < 0 then StartAt := 0;
+  for i := StartAt to Length(Hay) - Length(Needle) do
+  begin
+    Ok := True;
+    for j := 0 to High(Needle) do
+      if Hay[i + j] <> Needle[j] then begin Ok := False; Break; end;
+    if Ok then Exit(i);
+  end;
+end;
+
+procedure ApSplice(var Arr: TLineArray; StartIdx, RemoveCount: Integer; const Ins: TLineArray);
+var
+  Res: TLineArray;
+  i, k: Integer;
+begin
+  SetLength(Res, Length(Arr) - RemoveCount + Length(Ins));
+  k := 0;
+  for i := 0 to StartIdx - 1 do begin Res[k] := Arr[i]; Inc(k); end;
+  for i := 0 to High(Ins) do begin Res[k] := Ins[i]; Inc(k); end;
+  for i := StartIdx + RemoveCount to High(Arr) do begin Res[k] := Arr[i]; Inc(k); end;
+  Arr := Res;
+end;
+
+procedure ApAppend(var A: TLineArray; const S: string);
+begin
+  SetLength(A, Length(A) + 1);
+  A[High(A)] := S;
+end;
+
+function ApStarts(const S, Prefix: string): Boolean;
+begin
+  Result := Copy(S, 1, Length(Prefix)) = Prefix;
+end;
+
+function ParseApplyPatch(const PatchText: string; out Actions: TPatchActionArray;
+                         out ErrMsg: string): Boolean;
+var
+  P: TLineArray;
+  n, i, Idx: Integer;
+  Line, Path, MoveTo, Anchor, Reason: string;
+  CurLines, OldB, NewB, Content: TLineArray;
+  CurSearch: Integer;
+  Act: TPatchAction;
+
+  procedure AddAction;
+  begin
+    SetLength(Actions, Length(Actions) + 1);
+    Actions[High(Actions)] := Act;
+  end;
+
+begin
+  Result := False;
+  ErrMsg := '';
+  SetLength(Actions, 0);
+  P := ApSplitLF(PatchText);
+  { Drop the trailing '' ApSplitLF adds when the patch ends in a newline --
+    a split artifact, not a blank line. }
+  if (Length(P) > 0) and (P[High(P)] = '') then SetLength(P, Length(P) - 1);
+  n := Length(P);
+  i := 0;
+  while (i < n) and (Trim(P[i]) = '') do Inc(i);
+  if (i >= n) or (Trim(P[i]) <> '*** Begin Patch') then
+  begin
+    ErrMsg := 'apply_patch: missing "*** Begin Patch" header';
+    Exit;
+  end;
+  Inc(i);
+
+  while i < n do
+  begin
+    Line := P[i];
+    if Trim(Line) = '*** End Patch' then Exit(True);
+
+    if ApStarts(Line, '*** Add File: ') then
+    begin
+      Path := Trim(Copy(Line, Length('*** Add File: ') + 1, MaxInt));
+      Inc(i);
+      SetLength(Content, 0);
+      while (i < n) and (not ApStarts(P[i], '*** ')) do
+      begin
+        if P[i] = '' then
+          ApAppend(Content, '')
+        else if P[i][1] = '+' then
+          ApAppend(Content, Copy(P[i], 2, MaxInt))
+        else
+        begin
+          ErrMsg := 'apply_patch: Add File body lines must start with "+" (' + Path + ')';
+          Exit;
+        end;
+        Inc(i);
+      end;
+      Act.Kind := pokAdd; Act.Path := Path; Act.MoveTo := '';
+      Act.Content := ApJoinLF(Content);
+      if Length(Content) > 0 then Act.Content := Act.Content + #10;
+      AddAction;
+    end
+    else if ApStarts(Line, '*** Delete File: ') then
+    begin
+      Path := Trim(Copy(Line, Length('*** Delete File: ') + 1, MaxInt));
+      Act.Kind := pokDelete; Act.Path := Path; Act.MoveTo := ''; Act.Content := '';
+      AddAction;
+      Inc(i);
+    end
+    else if ApStarts(Line, '*** Update File: ') then
+    begin
+      Path := Trim(Copy(Line, Length('*** Update File: ') + 1, MaxInt));
+      Inc(i);
+      MoveTo := '';
+      if (i < n) and ApStarts(P[i], '*** Move to: ') then
+      begin
+        MoveTo := Trim(Copy(P[i], Length('*** Move to: ') + 1, MaxInt));
+        Inc(i);
+      end;
+      if not CanReadPath(Path, Reason) then begin ErrMsg := 'apply_patch: ' + Reason; Exit; end;
+      if not FileExists(Path) then
+      begin ErrMsg := 'apply_patch: no such file to update: ' + Path; Exit; end;
+      CurLines := ApSplitLF(ReadFileText(Path));
+      CurSearch := 0;
+      while (i < n) and (not ApStarts(P[i], '*** ')) do
+      begin
+        if ApStarts(P[i], '@@') then
+        begin
+          Anchor := Trim(Copy(P[i], 3, MaxInt));
+          Inc(i);
+          if Anchor <> '' then
+          begin
+            Idx := CurSearch;
+            while (Idx < Length(CurLines)) and (Pos(Anchor, CurLines[Idx]) = 0) do Inc(Idx);
+            if Idx < Length(CurLines) then CurSearch := Idx;
+          end;
+          Continue;
+        end;
+        SetLength(OldB, 0); SetLength(NewB, 0);
+        while (i < n) and (not ApStarts(P[i], '@@')) and (not ApStarts(P[i], '*** ')) do
+        begin
+          if P[i] = '' then
+          begin ApAppend(OldB, ''); ApAppend(NewB, ''); end
+          else
+            case P[i][1] of
+              '+': ApAppend(NewB, Copy(P[i], 2, MaxInt));
+              '-': ApAppend(OldB, Copy(P[i], 2, MaxInt));
+              ' ': begin ApAppend(OldB, Copy(P[i], 2, MaxInt)); ApAppend(NewB, Copy(P[i], 2, MaxInt)); end;
+            else
+              begin
+                ErrMsg := 'apply_patch: hunk line must start with " ", "+" or "-" (' + Path + '): ' + P[i];
+                Exit;
+              end;
+            end;
+          Inc(i);
+        end;
+        if Length(OldB) = 0 then
+        begin
+          ErrMsg := 'apply_patch: a hunk in ' + Path + ' has no context or "-" lines to locate the edit';
+          Exit;
+        end;
+        Idx := ApFindBlock(CurLines, OldB, CurSearch);
+        if Idx < 0 then Idx := ApFindBlock(CurLines, OldB, 0);   { anchor may have over-advanced }
+        if Idx < 0 then
+        begin
+          ErrMsg := 'apply_patch: context not found in ' + Path + ' near: ' + OldB[0];
+          Exit;
+        end;
+        ApSplice(CurLines, Idx, Length(OldB), NewB);
+        CurSearch := Idx + Length(NewB);
+      end;
+      Act.Kind := pokUpdate; Act.Path := Path; Act.MoveTo := MoveTo;
+      Act.Content := ApJoinLF(CurLines);
+      AddAction;
+    end
+    else if Trim(Line) = '' then
+      Inc(i)   { tolerate blank lines between sections }
+    else
+    begin
+      ErrMsg := 'apply_patch: unexpected line (want *** Add/Update/Delete File or *** End Patch): ' + Line;
+      Exit;
+    end;
+  end;
+
+  ErrMsg := 'apply_patch: missing "*** End Patch" terminator';
+  Result := False;
+end;
+
+function Tool_FSApplyPatch(const ArgsJSON: string; out ErrMsg: string): string;
+var
+  PatchText, Reason: string;
+  Actions: TPatchActionArray;
+  i, nAdd, nUpd, nDel: Integer;
+begin
+  ErrMsg := '';
+  if not HasJSONKey(ArgsJSON, 'patch') then
+  begin
+    ErrMsg := 'missing required argument: patch';
+    Exit('');
+  end;
+  ParseStringArg(ArgsJSON, 'patch', PatchText);
+  { Parse + locate every hunk BEFORE touching disk. A failure here writes
+    nothing, so a multi-file patch is all-or-nothing. }
+  if not ParseApplyPatch(PatchText, Actions, ErrMsg) then Exit('');
+
+  { Sandbox-gate every target up front, still before any write. }
+  for i := 0 to High(Actions) do
+  begin
+    if not CanWritePath(Actions[i].Path, Reason) then
+    begin ErrMsg := 'apply_patch: ' + Reason; Exit(''); end;
+    if (Actions[i].MoveTo <> '') and (not CanWritePath(Actions[i].MoveTo, Reason)) then
+    begin ErrMsg := 'apply_patch: ' + Reason; Exit(''); end;
+  end;
+
+  nAdd := 0; nUpd := 0; nDel := 0;
+  try
+    for i := 0 to High(Actions) do
+      case Actions[i].Kind of
+        pokAdd:
+          begin
+            SnapshotBeforeWrite(Actions[i].Path);
+            WriteFileText(Actions[i].Path, Actions[i].Content);
+            Inc(nAdd);
+          end;
+        pokDelete:
+          begin
+            SnapshotBeforeWrite(Actions[i].Path);
+            if FileExists(Actions[i].Path) then DeleteFile(Actions[i].Path);
+            Inc(nDel);
+          end;
+        pokUpdate:
+          begin
+            SnapshotBeforeWrite(Actions[i].Path);
+            if Actions[i].MoveTo <> '' then
+            begin
+              SnapshotBeforeWrite(Actions[i].MoveTo);
+              WriteFileText(Actions[i].MoveTo, Actions[i].Content);
+              if FileExists(Actions[i].Path) then DeleteFile(Actions[i].Path);
+            end
+            else
+              WriteFileText(Actions[i].Path, Actions[i].Content);
+            Inc(nUpd);
+          end;
+      end;
+  except
+    on E: Exception do
+    begin
+      ErrMsg := 'apply_patch: ' + E.Message;
+      Exit('');
+    end;
+  end;
+  Result := Format('applied patch: %d added, %d updated, %d deleted', [nAdd, nUpd, nDel]);
+end;
+
 function Tool_FSAppend(const ArgsJSON: string; out ErrMsg: string): string;
 { append_file: add content to the end of a file (creating it + parent dirs
   when absent). The incremental-write escape hatch -- build a large file
@@ -1052,6 +1354,29 @@ begin
   T.IsCore   := True;
   T.Category := tcMutating;
   Emit('fs_edit_hashline');
+
+  { apply_patch (new) -- multi-file, context-anchored patches in one call. }
+  T := Default(TTool);
+  T.Name := 'apply_patch';
+  T.Description :=
+    'Apply a multi-file patch in ONE call (Codex / OpenClaw apply_patch format). ' +
+    'Wrap everything between a "*** Begin Patch" line and a "*** End Patch" line. ' +
+    'Inside, one or more file sections: "*** Add File: <path>" then the new content ' +
+    'as lines each prefixed with "+"; "*** Delete File: <path>"; or "*** Update File: ' +
+    '<path>" (optionally followed by "*** Move to: <newpath>") then hunks. In a hunk, ' +
+    'optional "@@ <context>" lines help locate the region, then each change line starts ' +
+    'with " " (unchanged context), "-" (remove) or "+" (add). Edits are located by their ' +
+    'context and removed lines, NOT by line number. All-or-nothing: if any hunk fails to ' +
+    'locate, nothing is written. Prefer this over several edit_file calls when a change ' +
+    'spans multiple files or many hunks.';
+  T.Schema :=
+    '{"type":"object","properties":{"patch":{"type":"string",' +
+    '"description":"Full patch text, from *** Begin Patch through *** End Patch."}},' +
+    '"required":["patch"]}';
+  T.Handler  := Tool_FSApplyPatch;
+  T.IsCore   := True;
+  T.Category := tcMutating;
+  R.Register(T);
 end;
 
 end.

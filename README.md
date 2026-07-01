@@ -46,6 +46,7 @@ See [Build](#build) for Delphi / cross-compile / Windows-on-ARM.
 | `read_file` / `write_file` / `append_file` / `list_dir` | sandboxed filesystem access (`append_file` builds large files incrementally) |
 | `grep_files` | recursive substring search, returns line-numbered matches |
 | `edit_file` | `old_text`→`new_text` string replacement (default); optional hashline `patch` mode for line-anchored, hash-verified edits |
+| `apply_patch` | multi-file, context-anchored patch (Codex/OpenClaw format: add/update/delete/move in one atomic call) |
 | `shell_exec` | `/bin/sh -c` (or `cmd.exe`), output capped at 1 MiB, denylist-gated |
 | `web_search` | DuckDuckGo / Brave / Tavily / SearXNG / Perplexity / Gemini-grounding — 6 providers |
 | `web_fetch` | HTTP GET → readable plain text (HTML stripped, entities decoded), SSRF-guarded |

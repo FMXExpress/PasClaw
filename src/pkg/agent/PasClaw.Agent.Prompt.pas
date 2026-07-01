@@ -781,7 +781,7 @@ begin
        tool_output_get
 
      Refused under Plan (tcMutating):
-       write_file / append_file / edit_file
+       write_file / append_file / edit_file / apply_patch
        shell_exec / execute_code / delphi_build
        send_message
        web_fetch / memory_fetch   (save_to writes a file)
@@ -791,9 +791,9 @@ begin
     'You are in **PLAN** mode. Read-only tools (read_file, list_dir, grep_files, ' +
     'memory_search, kb_search, web_search, skills_list, skills_view, ' +
     'vault_search, vault_get, session_search, ...) work normally; ' +
-    'mutating tools (write_file, append_file, edit_file, shell_exec, ' +
-    'execute_code, delphi_build, send_message, web_fetch, memory_fetch, ' +
-    'skills_manage, kb_upload, ...) are REFUSED at the dispatch layer.' +
+    'mutating tools (write_file, append_file, edit_file, apply_patch, ' +
+    'shell_exec, execute_code, delphi_build, send_message, web_fetch, ' +
+    'memory_fetch, skills_manage, kb_upload, ...) are REFUSED at the dispatch layer.' +
     sLineBreak + sLineBreak +
     'Note: web_fetch and memory_fetch are mutating because they can ' +
     'persist results to disk (`save_to`). To read a URL in Plan mode, ' +

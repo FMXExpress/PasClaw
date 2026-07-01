@@ -56,6 +56,21 @@ begin
     Fail_(Msg + ' (needle "' + Needle + '" missing from "' + Copy(Haystack, 1, 200) + '")');
 end;
 
+function JEsc(const S: string): string;
+var i: Integer;
+begin
+  Result := '';
+  for i := 1 to Length(S) do
+    case S[i] of
+      '"': Result := Result + '\"';
+      '\': Result := Result + '\\';
+      #10: Result := Result + '\n';
+      #13: ;
+    else
+      Result := Result + S[i];
+    end;
+end;
+
 function DefsHasName(const Defs: TToolDefinitionArray; const Name: string): Boolean;
 var i: Integer;
 begin
@@ -75,7 +90,7 @@ end;
 var
   Reg: TToolRegistry;
   Defs: TToolDefinitionArray;
-  Dir, PathA, PathB, R, Err: string;
+  Dir, PathA, PathB, PathC, PathN, Patch, R, Err: string;
   T: TTool;
 begin
   Dir := JoinPath(GetTempDir, 'pcfsnaming');
@@ -157,10 +172,49 @@ begin
     AssertEqStr(ReadBack(Reg, PathA), 'keepkeep', 'edit_file deletes when new_text omitted');
     WriteLn('  ok: edit_file str-replace (unique / not-found / ambiguous / replace_all / delete)');
 
+    { --- 5. apply_patch: multi-file (update + add + delete) in one call. --- }
+    AssertTrue(DefsHasName(Reg.ToProviderDefs, 'apply_patch'), 'apply_patch advertised');
+    PathC := JoinPath(Dir, 'c.txt');
+    PathN := JoinPath(Dir, 'new.txt');
+    Reg.RunTool('write_file', '{"path":"' + PathA + '","content":"line1\nline2\nline3"}', Err);
+    Reg.RunTool('write_file', '{"path":"' + PathC + '","content":"doomed"}', Err);
+    if FileExists(PathN) then DeleteFile(PathN);
+    Patch :=
+      '*** Begin Patch'#10 +
+      '*** Update File: ' + PathA + #10 +
+      ' line1'#10 +
+      '-line2'#10 +
+      '+LINE2'#10 +
+      ' line3'#10 +
+      '*** Add File: ' + PathN + #10 +
+      '+brand new'#10 +
+      '*** Delete File: ' + PathC + #10 +
+      '*** End Patch'#10;
+    R := Reg.RunTool('apply_patch', '{"patch":"' + JEsc(Patch) + '"}', Err);
+    AssertEqStr(Err, '', 'apply_patch no error');
+    AssertContains(R, '1 added', 'apply_patch reports 1 added');
+    AssertContains(R, '1 updated', 'apply_patch reports 1 updated');
+    AssertContains(R, '1 deleted', 'apply_patch reports 1 deleted');
+    AssertEqStr(ReadBack(Reg, PathA), 'line1' + #10 + 'LINE2' + #10 + 'line3',
+      'apply_patch applied the context hunk');
+    AssertContains(ReadBack(Reg, PathN), 'brand new', 'apply_patch added the new file');
+    AssertFalse(FileExists(PathC), 'apply_patch deleted the file');
+
+    { A patch whose context does not match writes nothing (atomic). }
+    Reg.RunTool('write_file', '{"path":"' + PathA + '","content":"unchanged"}', Err);
+    Reg.RunTool('apply_patch',
+      '{"patch":"' + JEsc('*** Begin Patch'#10'*** Update File: ' + PathA + #10'-nope'#10'+yep'#10'*** End Patch'#10) + '"}',
+      Err);
+    AssertContains(Err, 'context not found', 'apply_patch reports a missing-context failure');
+    AssertEqStr(ReadBack(Reg, PathA), 'unchanged', 'apply_patch wrote nothing on failure');
+    WriteLn('  ok: apply_patch (update+add+delete, atomic on failure)');
+
   finally
     Reg.Free;
     if FileExists(PathA) then DeleteFile(PathA);
     if FileExists(PathB) then DeleteFile(PathB);
+    if FileExists(PathC) then DeleteFile(PathC);
+    if FileExists(PathN) then DeleteFile(PathN);
     RemoveDir(Dir);
   end;
 

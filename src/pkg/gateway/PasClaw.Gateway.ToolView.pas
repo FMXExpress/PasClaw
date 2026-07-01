@@ -215,6 +215,8 @@ begin
       Summary := ArgStr(Obj, 'path');
       if Summary = '' then Summary := FirstPatchPath(ArgStr(Obj, 'patch'));
     end
+    else if Name = 'apply_patch' then
+      Summary := FirstPatchPath(ArgStr(Obj, 'patch'))
     else if Name = 'shell_exec' then
       Summary := ArgStr(Obj, 'command')
     else
