@@ -1240,7 +1240,7 @@ refreshMeta();   /* initial paint; failure (throw OR bad response) arms the prob
    mid-turn. */
 let sessions = [];           // metadata list from the server
 let activeSessionId = null;  // server id, or null for an unsaved new chat
-let activeTurns = [];        // [{role:'u'|'a', text}] for the open chat
+let activeTurns = [];        // [{role:'u'|'a', text, tools?}] for the open chat
 let sessionFilter = "";      // sidebar search (matches title)
 
 async function refreshSessions() {
@@ -1559,6 +1559,34 @@ async function streamAssistant() {
   let assistantText = "";
   const streamToolDetails = [];   // full call/result detail from the SSE comment side-channel
 
+  /* Live render: draw the streaming turn with the SAME expandable tool
+     cards the finished turn gets, instead of the flat ⏺/⎿ marker text.
+     renderAssistantHTML parses the marker lines in assistantText into cards
+     and fills their bodies from the paired side-channel detail -- so a call
+     shows its args immediately and the result drops in when it arrives.
+     Throttled to one paint per animation frame so a fast token stream can't
+     thrash the DOM, and the open/closed state of each card is preserved so
+     expanding one mid-stream doesn't snap shut on the next delta. */
+  let rafPending = false;
+  const paintStream = () => {
+    rafPending = false;
+    /* Cards are parsed from the ⏺ marker lines, which live in assistantText,
+       so there's nothing to draw until some content has arrived. */
+    if (!assistantText) return;
+    const openIdx = new Set();
+    bub.querySelectorAll("details.tool-card").forEach((d, i) => { if (d.open) openIdx.add(i); });
+    bub.classList.add("md");
+    bub.innerHTML = renderAssistantHTML(assistantText, pairToolDetails(streamToolDetails));
+    bub.querySelectorAll("details.tool-card").forEach((d, i) => { if (openIdx.has(i)) d.open = true; });
+    wireCopyButtons(bub);
+    log.scrollTop = log.scrollHeight;
+  };
+  const scheduleStreamPaint = () => {
+    if (rafPending) return;
+    rafPending = true;
+    requestAnimationFrame(paintStream);
+  };
+
   /* Use /v1/chat/completions with stream:true so tool calls + results
      surface as content deltas (the gateway emits ⏺/⎿ markers per
      PasClaw.Gateway.ToolView). */
@@ -1609,7 +1637,7 @@ async function streamAssistant() {
         if (line.startsWith(":")) {
           const c = line.slice(1).trim();
           if (c.startsWith("pasclaw-tool ")) {
-            try { streamToolDetails.push(JSON.parse(c.slice("pasclaw-tool ".length))); } catch {}
+            try { streamToolDetails.push(JSON.parse(c.slice("pasclaw-tool ".length))); scheduleStreamPaint(); } catch {}
           }
           continue;
         }
@@ -1621,8 +1649,7 @@ async function streamAssistant() {
           const delta = (j.choices && j.choices[0] && j.choices[0].delta && j.choices[0].delta.content) || "";
           if (delta) {
             assistantText += delta;
-            bub.textContent = assistantText;   // plain while streaming; markdown on finalise
-            log.scrollTop = log.scrollHeight;
+            scheduleStreamPaint();   // live cards + markdown, throttled to one paint/frame
           }
         } catch { /* ignore parse errors on SSE comments */ }
       }
