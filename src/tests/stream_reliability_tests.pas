@@ -89,6 +89,8 @@ type
   private
     FScript:      array of TLLMResponse;
     FCallCount:   Integer;
+    FLastMsgCount: Integer;   { #messages seen on the most recent Chat call }
+    FLastMsgTail:  string;    { content of the last message on that call }
     FSleepBefore: Integer;  { ms per Chat / ChatStream call }
     FChunkText:   string;   { if non-empty, ChatStream emits this as one chunk
                               before returning the scripted response }
@@ -105,6 +107,9 @@ type
   public
     constructor Create;
     function ChatCallCount: Integer;
+    function LastMsgCount: Integer;
+    function LastMsgTail: string;
+    procedure AddScriptedMalformed;
     procedure SetSleepBeforeMs(MS: Integer);
     procedure SetChunkText(const Text: string);
     procedure SetProtocolOnlyChunks(V: Boolean);
@@ -139,6 +144,23 @@ begin
 end;
 
 function TScriptedProvider.ChatCallCount: Integer; begin Result := FCallCount; end;
+function TScriptedProvider.LastMsgCount: Integer;  begin Result := FLastMsgCount; end;
+function TScriptedProvider.LastMsgTail: string;    begin Result := FLastMsgTail; end;
+
+procedure TScriptedProvider.AddScriptedMalformed;
+{ Gemini's empty MALFORMED_FUNCTION_CALL shape: 200, no content, no tool
+  calls, finish_reason carries the malformed marker. }
+var
+  R: TLLMResponse;
+begin
+  R := Default(TLLMResponse);
+  R.StatusCode   := 200;
+  R.FinishReason := 'MALFORMED_FUNCTION_CALL';
+  R.Content      := '';
+  SetLength(R.ToolCalls, 0);
+  SetLength(FScript, Length(FScript) + 1);
+  FScript[High(FScript)] := R;
+end;
 
 procedure TScriptedProvider.SetSleepBeforeMs(MS: Integer);
 begin FSleepBefore := MS; end;
@@ -187,6 +209,9 @@ var
 begin
   if FSleepBefore > 0 then Sleep(FSleepBefore);
   Inc(FCallCount);
+  FLastMsgCount := Length(Messages);
+  if Length(Messages) > 0 then FLastMsgTail := Messages[High(Messages)].Content
+                          else FLastMsgTail := '';
   if Length(FScript) = 0 then
   begin
     Result := Default(TLLMResponse);
@@ -276,6 +301,79 @@ begin
   SetLength(R.ToolCalls, 1);
   R.ToolCalls[0] := Tc;
   AssertFalse(IsEmptyTurn(R), 'has tool calls not empty turn');
+
+  { Gemini's MALFORMED_FUNCTION_CALL with no content and no tool calls is a
+    retryable empty turn (the fix for the "(no content returned)" dead turn). }
+  R := Default(TLLMResponse);
+  R.StatusCode := 200;
+  R.Content := '';
+  SetLength(R.ToolCalls, 0);
+  R.FinishReason := 'MALFORMED_FUNCTION_CALL';
+  AssertTrue(IsEmptyTurn(R), 'Gemini MALFORMED_FUNCTION_CALL is an empty turn');
+
+  { ...but only when it truly produced nothing: a malformed marker alongside
+    salvaged text or a tool call is not empty. }
+  R.Content := 'partial';
+  AssertFalse(IsEmptyTurn(R), 'MALFORMED with salvaged content is not empty');
+end;
+
+procedure TestMalformedFunctionCallRetriedWithNudge;
+var
+  P: TScriptedProvider;
+  Pi: ILLMProvider;
+  Cfg: TStreamReliabilityConfig;
+  Msgs: array of TMessage;
+  Tools: array of TToolDefinition;
+  R: TLLMResponse;
+begin
+  P := TScriptedProvider.Create;
+  Pi := P;
+  P.AddScriptedMalformed;               { first turn: Gemini malformed call }
+  P.AddScriptedContent('index.html written');  { retry recovers }
+
+  Cfg := DefaultStreamReliabilityConfig;
+  Cfg.EmptyRetryAttempts  := 2;
+  Cfg.EmptyRetryBackoffMs := 50;
+
+  SetLength(Msgs, 1);
+  Msgs[0] := MakeMessage(mrUser, 'build the site');
+  { Advertise write + an incremental editor so the nudge can name real tools. }
+  SetLength(Tools, 2);
+  Tools[0] := Default(TToolDefinition); Tools[0].Name := 'write_file';
+  Tools[1] := Default(TToolDefinition); Tools[1].Name := 'edit_file';
+
+  R := ChatWithEmptyRetry(Pi, Msgs, Tools, 'fake', DefaultChatOptions, Cfg);
+
+  AssertEqStr(R.Content, 'index.html written', 'malformed call retried to a real answer');
+  AssertEqInt(P.ChatCallCount, 2, 'one malformed + one retry');
+  { The retry carried a corrective nudge appended to the history (original 1
+    message + 1 nudge = 2), steering the model to a smaller, valid call. }
+  AssertEqInt(P.LastMsgCount, 2, 'retry history has the corrective nudge appended');
+  { The nudge names ONLY tools present in the Tools list -- here write_file +
+    edit_file, never a tool that wasn't advertised. }
+  AssertTrue(Pos('edit_file', P.LastMsgTail) > 0,
+    'nudge names the registered incremental editor (edit_file)');
+  AssertTrue(Pos('write_file', P.LastMsgTail) > 0,
+    'nudge names the registered writer (write_file)');
+  AssertTrue(Pos('fs_edit_hashline', P.LastMsgTail) = 0,
+    'nudge does NOT name an unregistered tool');
+
+  { With NO incremental editor advertised (e.g. --no-hashline), the nudge
+    falls back to tool-agnostic guidance and names no unavailable tool. }
+  P := TScriptedProvider.Create;
+  Pi := P;
+  P.AddScriptedMalformed;
+  P.AddScriptedContent('done');
+  SetLength(Tools, 1);
+  Tools[0] := Default(TToolDefinition); Tools[0].Name := 'write_file';
+  R := ChatWithEmptyRetry(Pi, Msgs, Tools, 'fake', DefaultChatOptions, Cfg);
+  AssertEqStr(R.Content, 'done', 'malformed retried with no editor advertised');
+  AssertTrue(Pos('fs_edit_hashline', P.LastMsgTail) = 0,
+    'no-editor nudge names no hashline tool');
+  AssertTrue(Pos('edit_file', P.LastMsgTail) = 0,
+    'no-editor nudge names no edit_file');
+  AssertTrue(Pos('smaller tool calls', P.LastMsgTail) > 0,
+    'no-editor nudge falls back to generic split guidance');
 end;
 
 procedure TestChatWithEmptyRetryHappyPath;
@@ -663,6 +761,7 @@ end;
 
 begin
   TestIsEmptyTurn;                       WriteLn('  ok: IsEmptyTurn');
+  TestMalformedFunctionCallRetriedWithNudge; WriteLn('  ok: MALFORMED_FUNCTION_CALL retried with nudge');
   TestChatWithEmptyRetryHappyPath;       WriteLn('  ok: ChatWithEmptyRetry happy path');
   TestChatWithEmptyRetryExhaustion;      WriteLn('  ok: ChatWithEmptyRetry exhaustion');
   TestChatWithEmptyRetryDisabled;        WriteLn('  ok: ChatWithEmptyRetry disabled');

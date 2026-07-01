@@ -87,9 +87,11 @@ function DefaultStreamReliabilityConfig: TStreamReliabilityConfig;
 function LoadStreamReliabilityFromEnv(
   const Defaults: TStreamReliabilityConfig): TStreamReliabilityConfig;
 
-{ The empty-turn shape: provider returned 2xx with no text, no tool
-  calls, and a non-error finish_reason. This is the surface symptom
-  of an upstream brownout. }
+{ The empty-turn shape: provider returned 2xx with no text and no tool
+  calls, and a finish_reason that is either non-error (a brownout: stop /
+  '' / end_turn) or Gemini's MALFORMED_FUNCTION_CALL (an unparseable /
+  oversized function call that yielded nothing usable). Both surface as a
+  turn that produced no work and is worth re-issuing. }
 function IsEmptyTurn(const R: TLLMResponse): Boolean;
 
 { Drop-in wrapper around Provider.Chat that retries empty turns.
@@ -199,7 +201,35 @@ begin
   Result := (R.Content = '')
         and (Length(R.ToolCalls) = 0)
         and ((R.FinishReason = 'stop') or (R.FinishReason = '') or
-             (R.FinishReason = 'end_turn'));
+             (R.FinishReason = 'end_turn') or
+             { Gemini returns MALFORMED_FUNCTION_CALL when it generated a
+               function call it could not itself serialise -- classically a
+               single tool argument that was too large (a whole inline HTML
+               file crammed into fs_write.content). The candidate carries no
+               text and no usable functionCall, so the shape is exactly an
+               empty turn: no content, no tool calls. Without this the turn
+               falls through to RunToolLoop's clean-stop exit and the agent
+               dies with "(no content returned by the model)", forcing the
+               user to hand-type "continue". Treating it as retryable lets
+               ChatWithEmptyRetry re-issue the turn (with a corrective nudge
+               -- see there) instead of silently giving up mid-task. }
+             (R.FinishReason = 'MALFORMED_FUNCTION_CALL'));
+end;
+
+function FirstToolPresent(const Tools: array of TToolDefinition;
+                          const Candidates: array of string): string;
+{ Return the first Candidate name that is actually in the supplied Tools
+  list, or '' when none are. Lets the malformed-call nudge name only tools
+  the model can really call -- a --no-hashline session omits the hashline
+  editor, so a nudge naming it would steer Gemini toward an undeclared
+  function. Candidate order is preference (best incremental option first). }
+var
+  i, j: Integer;
+begin
+  Result := '';
+  for j := 0 to High(Candidates) do
+    for i := 0 to High(Tools) do
+      if Tools[i].Name = Candidates[j] then Exit(Candidates[j]);
 end;
 
 function ChatWithEmptyRetry(Provider: ILLMProvider;
@@ -211,6 +241,10 @@ function ChatWithEmptyRetry(Provider: ILLMProvider;
 var
   Attempt: Integer;
   Backoff: Integer;
+  i: Integer;
+  RetryMsgs: TMessageArray;   { original history + a corrective nudge, built
+                                lazily the first time we retry a malformed call }
+  WriteTool, EditTool, Nudge, WriteClause: string;
 begin
   if Provider = nil then
   begin
@@ -227,15 +261,57 @@ begin
   Attempt := 0;
   Backoff := Cfg.EmptyRetryBackoffMs;
   if Backoff < 50 then Backoff := 50;
+  SetLength(RetryMsgs, 0);
   while (Attempt < Cfg.EmptyRetryAttempts) and
         (Result.StatusCode >= 200) and (Result.StatusCode < 300) and
         IsEmptyTurn(Result) do
   begin
     Inc(Attempt);
-    LogWarn('stream-reliability: empty turn from %s/%s, retry %d/%d after %dms',
-            [Provider.GetName, Model, Attempt, Cfg.EmptyRetryAttempts, Backoff]);
+    { A MALFORMED_FUNCTION_CALL is usually not a brownout -- the model
+      produced a call it could not serialise (typically an oversized
+      argument), so a bare re-send of the identical history tends to
+      reproduce it verbatim. Append a one-shot corrective user turn that
+      tells the model to stop narrating and re-issue a smaller, well-formed
+      call. The "how to write a large file" hint names ONLY tools present in
+      the supplied Tools list (a --no-hashline session has no hashline
+      editor), falling back to a tool-agnostic "split into smaller calls"
+      when no incremental editor is registered. Built once and reused across
+      attempts. Plain brownout empties (finish=stop/'') are genuinely
+      transient and get a clean re-send with no nudge. }
+    if (Result.FinishReason = 'MALFORMED_FUNCTION_CALL')
+       and (Length(RetryMsgs) = 0) then
+    begin
+      Nudge :=
+        'Your previous response was not a valid tool call -- the function ' +
+        'call could not be parsed, usually because a single argument was too ' +
+        'large (for example a whole file crammed into one write). Do NOT ' +
+        'describe the work in prose or paste file contents into the chat. ' +
+        'Re-issue ONE well-formed tool call now.';
+      WriteTool := FirstToolPresent(Tools, ['write_file', 'fs_write']);
+      EditTool  := FirstToolPresent(Tools, ['append_file', 'edit_file', 'fs_edit_hashline']);
+      if EditTool <> '' then
+      begin
+        WriteClause := 'write a short first version';
+        if WriteTool <> '' then WriteClause := WriteClause + ' with ' + WriteTool;
+        Nudge := Nudge + ' If you are creating a large file, ' + WriteClause +
+                 ', then extend it in smaller steps with ' + EditTool +
+                 ' rather than emitting the whole file in one call.';
+      end
+      else
+        Nudge := Nudge + ' If a single argument was too large, split the work ' +
+                 'into smaller tool calls rather than emitting it all at once.';
+      SetLength(RetryMsgs, Length(Messages) + 1);
+      for i := 0 to High(Messages) do RetryMsgs[i] := Messages[i];
+      RetryMsgs[High(RetryMsgs)] := MakeMessage(mrUser, Nudge);
+    end;
+    LogWarn('stream-reliability: empty turn (finish=%s, nudge=%s) from %s/%s, retry %d/%d after %dms',
+            [Result.FinishReason, BoolToStr(Length(RetryMsgs) > 0, True),
+             Provider.GetName, Model, Attempt, Cfg.EmptyRetryAttempts, Backoff]);
     Sleep(Backoff);
-    Result := Provider.Chat(Messages, Tools, Model, Options);
+    if Length(RetryMsgs) > 0 then
+      Result := Provider.Chat(RetryMsgs, Tools, Model, Options)
+    else
+      Result := Provider.Chat(Messages, Tools, Model, Options);
     Backoff := Backoff * 2;
     if Backoff > 16000 then Backoff := 16000;
   end;
