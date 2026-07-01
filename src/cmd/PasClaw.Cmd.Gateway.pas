@@ -200,7 +200,18 @@ begin
       Break;
     end;
   Cfg := LoadConfig(ProfileName);
-  ConfigureSandbox(Cfg.Sandbox, '');
+  { Default the working directory to $PASCLAW_HOME/workspace -- the dir the
+    web UI Files tab browses -- rather than the launch CWD, so a relative
+    write_file("index.html") lands where the operator sees it. An explicit
+    sandbox.workspace still wins. }
+  if Trim(Cfg.Sandbox.Workspace) <> '' then
+    ConfigureSandbox(Cfg.Sandbox, '')
+  else
+  begin
+    { Ensure the default work area exists so shell_exec can start there too. }
+    ForceDirectories(IncludeTrailingPathDelimiter(GetHome) + 'workspace');
+    ConfigureSandbox(Cfg.Sandbox, IncludeTrailingPathDelimiter(GetHome) + 'workspace');
+  end;
   ShellSessionId := '';
   try
     Args := ParseGw(Argv, Cfg);

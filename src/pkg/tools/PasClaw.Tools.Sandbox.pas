@@ -102,6 +102,17 @@ function CanReadPathHTTP(const Path: string; out Reason: string): Boolean;
   ConfigureSandbox has not been called yet. }
 function CurrentWorkspace: string;
 
+{ Resolve a possibly-relative file path to an absolute one. Absolute paths
+  pass through (canonicalised). A RELATIVE path resolves against the
+  configured workspace (CurrentWorkspace) rather than the process's current
+  directory -- so a model that writes `write_file("index.html")` on a gateway
+  / serve run lands the file in the operator's workspace, not wherever the
+  service happened to be launched. When no workspace is configured
+  CurrentWorkspace already defaults to the launch dir, so CLI-in-a-project
+  behaviour (relative = the project dir) is unchanged. Tools call this before
+  the CanRead/CanWritePath gate so the sandbox sees the same resolved path. }
+function ResolveWorkspacePath(const Path: string): string;
+
 { True iff Path canonicalises to a child of Workspace. Exposed for
   testing and for the rare caller that wants to know without going
   through the policy layer. }
@@ -155,6 +166,32 @@ end;
 function CurrentWorkspace: string;
 begin
   Result := GWorkspace;
+end;
+
+function IsAbsolutePath(const P: string): Boolean;
+begin
+  {$IFDEF MSWINDOWS}
+  { Drive-letter (C:\...), or a leading slash / backslash (root or UNC). }
+  Result := ((Length(P) >= 2) and (P[2] = ':')) or
+            ((Length(P) >= 1) and ((P[1] = '\') or (P[1] = '/')));
+  {$ELSE}
+  Result := (Length(P) >= 1) and (P[1] = '/');
+  {$ENDIF}
+end;
+
+function ResolveWorkspacePath(const Path: string): string;
+var
+  Base: string;
+begin
+  if Trim(Path) = '' then Exit(Path);
+  if IsAbsolutePath(Path) then
+    Result := ExpandFileName(Path)
+  else
+  begin
+    Base := GWorkspace;
+    if Trim(Base) = '' then Base := GetCurrentDir;
+    Result := ExpandFileName(IncludeTrailingPathDelimiter(Base) + Path);
+  end;
 end;
 
 function RestrictionActive: Boolean;
