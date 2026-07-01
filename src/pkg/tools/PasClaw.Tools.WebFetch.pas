@@ -395,13 +395,14 @@ begin
   if R = nil then Exit;
   T.Name        := 'web_fetch';
   T.Description :=
-    'Fetch the contents of an HTTP/HTTPS URL. By default returns ' +
-    'readable plain text (strips HTML tags, decodes entities) capped at ' +
-    'max_chars (default 50000). Pass save_to to write the full body to a ' +
-    'file under the workspace instead -- useful for large pages, binary ' +
-    'downloads, or anything that would blow the model''s context. When ' +
-    'save_to is set, the tool result is a short receipt + preview, and ' +
-    'the model uses read_file / grep_files on the saved file.';
+    'Fetch an HTTP/HTTPS URL and return its READABLE PLAIN TEXT: HTML tags ' +
+    'are stripped and entities decoded, capped at max_chars (default 50000 ' +
+    'characters -- raise it, or use save_to, for more). It does NOT run ' +
+    'JavaScript, so a JS-rendered single-page app returns little; for those ' +
+    'fetch a raw/API/README URL instead. Pass save_to to write the FULL body ' +
+    '(no char cap) to a workspace file -- for large pages or binary ' +
+    'downloads -- then read_file / grep_files it; the tool result is just a ' +
+    'receipt + short preview when save_to is set.';
   T.Schema      :=
     '{"type":"object",' +
     '"properties":{' +

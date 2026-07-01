@@ -54,7 +54,9 @@ begin
     { Clean defaults: the opt-in features are off. }
     AssertTrue(not C.MemoryDistillEnabled, 'default MemoryDistillEnabled = False');
     AssertTrue(not C.OrientTaskAware,       'default OrientTaskAware = False');
-    AssertTrue(not C.WebFetchEnabled,       'default WebFetchEnabled = False');
+    { web_fetch is ON by default (its description documents the HTML-strip +
+      50000-char cap, so the model knows what it returns). }
+    AssertTrue(C.WebFetchEnabled,           'default WebFetchEnabled = True');
 
     { Express onboarding choices in code... }
     C.MemoryDistillEnabled := True;

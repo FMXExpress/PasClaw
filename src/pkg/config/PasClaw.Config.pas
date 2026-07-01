@@ -1040,7 +1040,7 @@ begin
   PromptCache.Enabled  := True;  { default-on; see TPromptCacheConfig comment }
   PromptCache.TTL      := '1h';  { 1h cache hits well across back-to-back runs (bench/swe/results/ablation.md). 5m was the historical default; 1h is one of the six zero-prompt-cost behavioral toggles the bench identified as a free upgrade. }
   VaultToolsEnabled    := False; { off by default per the bench-grounded "stock = lean-edit shape" verdict (bench/swe/README.md). Vault entries are never called across the bench's 45+ cells -- the model has them as training data. Onboarding asks (default Y for operators who DO use the vault). }
-  WebFetchEnabled      := False; { off by default for the same reason as VaultToolsEnabled. Also drops memory_fetch (RegisterMemoryFetchTool is gated on EnableWebFetch in NewBuiltinRegistry -- see comment there). Onboarding asks. }
+  WebFetchEnabled      := True;  { on by default: the tool clearly documents that it returns readable plain text (HTML tags stripped, entities decoded) capped at max_chars (default 50000, save_to bypasses), so the model knows what it gets -- and a "read this URL" task shouldn't have to fall back to hand-rolled shell curl + HTML scraping. Also enables memory_fetch (RegisterMemoryFetchTool is gated on EnableWebFetch in NewBuiltinRegistry). Onboarding asks; operators wanting no outbound HTTP from the agent set web_fetch_enabled: false. }
   CronToolEnabled      := False; { off by default -- model-scheduled background jobs are an opt-in autonomy step (runs existing skills only). }
   RelayWaitTimeoutMs   := 0;     { 0 = use the Pascal-side RelayDefaultWaitTimeoutMs (5 min). Operators set higher for flaky workers, lower for fast fallback. }
   MCPProgressiveDisclosure := True;  { on by default -- fat catalogs (Replicate MCP ~50 tools, GitHub MCP ~50+) make lazy reveal the right floor. The prompt cost of every MCP schema every turn dominates the bill on turns that touch zero MCP tools; tool_search loads schemas on demand at a one-turn cost per first-use. Operators with tiny catalogs flip off via onboarding (default N) or hand-edit if the +1 turn isn't worth the savings. Mirrors Claude Code's ToolSearch pattern. No-op when no MCP servers are configured. }
@@ -1321,15 +1321,16 @@ begin
       Root.PutArray('allow_senders', Arr);
     end;
 
-    { vault_tools_enabled, web_fetch_enabled: defaults flipped to OFF
-      in PR #314 (bench/swe/README.md). Emit only the explicit-on so a
-      fresh config stays tidy AND so an operator who answered Y to the
-      onboarding prompt sees the choice round-trip (without this, the
-      Y would silently revert to N on the next LoadConfig). }
+    { vault_tools_enabled defaults OFF (PR #314) -- emit only the explicit-on
+      so a fresh config stays tidy and an operator's Y round-trips. }
     if VaultToolsEnabled then
       Root.PutBool('vault_tools_enabled', True);
-    if WebFetchEnabled then
-      Root.PutBool('web_fetch_enabled', True);
+    { web_fetch_enabled defaults ON. Mirror the default-on fields: emit only
+      the explicit-OFF so an operator who opted OUT round-trips (without this
+      the off choice would silently revert to on next LoadConfig), and a
+      fresh config stays tidy. }
+    if not WebFetchEnabled then
+      Root.PutBool('web_fetch_enabled', False);
     { cron_tool_enabled defaults OFF; emit only the explicit-on so an
       operator who opted into model-scheduled jobs round-trips. }
     if CronToolEnabled then

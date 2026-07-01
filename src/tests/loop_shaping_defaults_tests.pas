@@ -8,7 +8,7 @@ program loop_shaping_defaults_tests;
   reverted them to OFF -- "stock = lean-edit, opt in via onboarding" --
   and the orient-CLI PR keeps orient OFF, CLI-only via --orient):
     VaultToolsEnabled     False   (off; onboarding/--? opt-in)
-    WebFetchEnabled       False   (off; onboarding opt-in)
+    WebFetchEnabled       True    (on; description documents strip + cap)
     CondenseReversible    False   (off since PR #289)
     PromptwareEnabled     True
     VectorSearchEnabled   True
@@ -39,7 +39,7 @@ begin
   C := TConfig.Create;
   try
     AssertTrue(not C.VaultToolsEnabled, 'VaultToolsEnabled defaults to False');
-    AssertTrue(not C.WebFetchEnabled,   'WebFetchEnabled defaults to False');
+    AssertTrue(C.WebFetchEnabled,       'WebFetchEnabled defaults to True');
     AssertTrue(not C.CondenseReversible,'CondenseReversible defaults to False');
     AssertTrue(C.PromptwareEnabled,     'PromptwareEnabled stays True');
     AssertTrue(C.VectorSearchEnabled,   'VectorSearchEnabled stays True');
@@ -88,7 +88,7 @@ begin
   C := TConfig.Create;
   try
     C.VaultToolsEnabled  := True;   { default False -> opt-in }
-    C.WebFetchEnabled    := True;   { default False -> opt-in }
+    C.WebFetchEnabled    := False;  { default True  -> opt-out }
     C.PromptwareEnabled  := False;
     C.VectorSearchEnabled := False;
     C.RenderMarkdown     := False;
@@ -99,7 +99,7 @@ begin
     { Each non-default field must be present in the serialised form,
       otherwise LoadConfig would silently fall back to the default. }
     AssertTrue(Pos('"vault_tools_enabled"',   S) > 0, 'opt-in vault_tools_enabled emitted');
-    AssertTrue(Pos('"web_fetch_enabled"',     S) > 0, 'opt-in web_fetch_enabled emitted');
+    AssertTrue(Pos('"web_fetch_enabled"',     S) > 0, 'opt-out web_fetch_enabled emitted');
     AssertTrue(Pos('"promptware_enabled"',    S) > 0, 'opt-out promptware_enabled emitted');
     AssertTrue(Pos('"vector_search_enabled"', S) > 0, 'opt-out vector_search_enabled emitted');
     AssertTrue(Pos('"render_markdown"',       S) > 0, 'opt-out render_markdown emitted');
@@ -114,7 +114,7 @@ begin
   try
     C2.FromJSON(S);
     AssertTrue(C2.VaultToolsEnabled,        'VaultToolsEnabled round-trips True');
-    AssertTrue(C2.WebFetchEnabled,          'WebFetchEnabled round-trips True');
+    AssertTrue(not C2.WebFetchEnabled,      'WebFetchEnabled round-trips False');
     AssertTrue(not C2.PromptwareEnabled,    'PromptwareEnabled round-trips False');
     AssertTrue(not C2.VectorSearchEnabled,  'VectorSearchEnabled round-trips False');
     AssertTrue(not C2.RenderMarkdown,       'RenderMarkdown round-trips False');
