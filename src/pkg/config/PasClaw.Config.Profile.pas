@@ -166,10 +166,8 @@ const
   Profile_LowToken: string =
     '{' +
     '"_description":"Minimise tokens. Condenser on, output cap, prompt ' +
-    'cache, progressive disclosure, auto-router; web_fetch/memory_fetch ' +
-    'OFF (fewer tool schemas per turn). (MEMORY task-aware orient is off ' +
-    'by default -- enable per-run with --orient.)",' +
-    '"web_fetch_enabled":false,' +
+    'cache, progressive disclosure, auto-router. (MEMORY task-aware ' +
+    'orient is off by default -- enable per-run with --orient.)",' +
     '"condense_reversible":true,' +
     '"tool_output_cap":8192,' +
     '"prompt_cache":{"enabled":true,"ttl":"5m"},' +
