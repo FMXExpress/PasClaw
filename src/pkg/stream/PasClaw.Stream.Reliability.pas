@@ -87,9 +87,11 @@ function DefaultStreamReliabilityConfig: TStreamReliabilityConfig;
 function LoadStreamReliabilityFromEnv(
   const Defaults: TStreamReliabilityConfig): TStreamReliabilityConfig;
 
-{ The empty-turn shape: provider returned 2xx with no text, no tool
-  calls, and a non-error finish_reason. This is the surface symptom
-  of an upstream brownout. }
+{ The empty-turn shape: provider returned 2xx with no text and no tool
+  calls, and a finish_reason that is either non-error (a brownout: stop /
+  '' / end_turn) or Gemini's MALFORMED_FUNCTION_CALL (an unparseable /
+  oversized function call that yielded nothing usable). Both surface as a
+  turn that produced no work and is worth re-issuing. }
 function IsEmptyTurn(const R: TLLMResponse): Boolean;
 
 { Drop-in wrapper around Provider.Chat that retries empty turns.
@@ -199,7 +201,19 @@ begin
   Result := (R.Content = '')
         and (Length(R.ToolCalls) = 0)
         and ((R.FinishReason = 'stop') or (R.FinishReason = '') or
-             (R.FinishReason = 'end_turn'));
+             (R.FinishReason = 'end_turn') or
+             { Gemini returns MALFORMED_FUNCTION_CALL when it generated a
+               function call it could not itself serialise -- classically a
+               single tool argument that was too large (a whole inline HTML
+               file crammed into fs_write.content). The candidate carries no
+               text and no usable functionCall, so the shape is exactly an
+               empty turn: no content, no tool calls. Without this the turn
+               falls through to RunToolLoop's clean-stop exit and the agent
+               dies with "(no content returned by the model)", forcing the
+               user to hand-type "continue". Treating it as retryable lets
+               ChatWithEmptyRetry re-issue the turn (with a corrective nudge
+               -- see there) instead of silently giving up mid-task. }
+             (R.FinishReason = 'MALFORMED_FUNCTION_CALL'));
 end;
 
 function ChatWithEmptyRetry(Provider: ILLMProvider;
@@ -211,6 +225,9 @@ function ChatWithEmptyRetry(Provider: ILLMProvider;
 var
   Attempt: Integer;
   Backoff: Integer;
+  i: Integer;
+  RetryMsgs: TMessageArray;   { original history + a corrective nudge, built
+                                lazily the first time we retry a malformed call }
 begin
   if Provider = nil then
   begin
@@ -227,15 +244,43 @@ begin
   Attempt := 0;
   Backoff := Cfg.EmptyRetryBackoffMs;
   if Backoff < 50 then Backoff := 50;
+  SetLength(RetryMsgs, 0);
   while (Attempt < Cfg.EmptyRetryAttempts) and
         (Result.StatusCode >= 200) and (Result.StatusCode < 300) and
         IsEmptyTurn(Result) do
   begin
     Inc(Attempt);
-    LogWarn('stream-reliability: empty turn from %s/%s, retry %d/%d after %dms',
-            [Provider.GetName, Model, Attempt, Cfg.EmptyRetryAttempts, Backoff]);
+    { A MALFORMED_FUNCTION_CALL is usually not a brownout -- the model
+      produced a call it could not serialise (typically an oversized
+      argument), so a bare re-send of the identical history tends to
+      reproduce it verbatim. Append a one-shot corrective user turn that
+      tells the model to stop narrating and re-issue a smaller, well-formed
+      call (write a stub, then extend with fs_edit_hashline). Built once and
+      reused across attempts. Plain brownout empties (finish=stop/'') are
+      genuinely transient and get a clean re-send with no nudge. }
+    if (Result.FinishReason = 'MALFORMED_FUNCTION_CALL')
+       and (Length(RetryMsgs) = 0) then
+    begin
+      SetLength(RetryMsgs, Length(Messages) + 1);
+      for i := 0 to High(Messages) do RetryMsgs[i] := Messages[i];
+      RetryMsgs[High(RetryMsgs)] := MakeMessage(mrUser,
+        'Your previous response was not a valid tool call -- the function ' +
+        'call could not be parsed, usually because a single argument was too ' +
+        'large (for example a whole file crammed into fs_write.content). Do ' +
+        'NOT describe the work in prose or paste file contents into the chat. ' +
+        'Re-issue ONE well-formed tool call now. If you are creating a large ' +
+        'file, write a short first version with fs_write, then grow it in ' +
+        'steps with fs_edit_hashline instead of emitting the whole file in a ' +
+        'single call.');
+    end;
+    LogWarn('stream-reliability: empty turn (finish=%s, nudge=%s) from %s/%s, retry %d/%d after %dms',
+            [Result.FinishReason, BoolToStr(Length(RetryMsgs) > 0, True),
+             Provider.GetName, Model, Attempt, Cfg.EmptyRetryAttempts, Backoff]);
     Sleep(Backoff);
-    Result := Provider.Chat(Messages, Tools, Model, Options);
+    if Length(RetryMsgs) > 0 then
+      Result := Provider.Chat(RetryMsgs, Tools, Model, Options)
+    else
+      Result := Provider.Chat(Messages, Tools, Model, Options);
     Backoff := Backoff * 2;
     if Backoff > 16000 then Backoff := 16000;
   end;
