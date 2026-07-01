@@ -189,7 +189,7 @@ end;
 function Tool_FSRead(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Path, Body, Reason: string;
-  Plain: Boolean;
+  Hashline: Boolean;
 begin
   ErrMsg := '';
   if not ParseStringArg(ArgsJSON, 'path', Path) then
@@ -208,18 +208,19 @@ begin
     Exit('');
   end;
   Body := ReadFileText(Path);
-  { When hashline is disabled at register time, force plain regardless of
-    the per-call flag: there's no fs_edit_hashline registered to consume
-    a header, so emitting one would just confuse the model. The per-call
-    plain=true escape hatch still works in hashline-on mode. }
-  if not GHashlineEnabled then
-    Plain := True
+  { Plain text is the default -- clean content is what edit_file's
+    old_text/new_text string replacement matches against, and it's what
+    smaller models handle best. The hashline #hash + LINENO:line format is
+    now OPT-IN via a hashline:true arg (mirrors edit_file's advanced patch
+    mode), and only when hashline was enabled at register time (otherwise
+    there's no patch consumer, so a header would just be noise). The legacy
+    plain:true arg is still accepted and, since plain is now the default,
+    is a harmless no-op. }
+  Hashline := GHashlineEnabled and ParseBoolArg(ArgsJSON, 'hashline', False);
+  if Hashline then
+    Result := FormatHashlineRead(Path, Body)
   else
-    Plain := ParseBoolArg(ArgsJSON, 'plain', False);
-  if Plain then
-    Result := Body
-  else
-    Result := FormatHashlineRead(Path, Body);
+    Result := Body;
 end;
 
 function Tool_FSWrite(const ArgsJSON: string; out ErrMsg: string): string;
@@ -253,8 +254,8 @@ begin
       "content":"" explicitly to legitimately clear a file. }
     ErrMsg := 'missing required argument: content. ' +
               'If your previous response was truncated mid-tool_call (model hit max_tokens), ' +
-              're-emit fs_write with the full content as a string, or use fs_edit_hashline ' +
-              'to apply incremental edits. Pass "content":"" explicitly to clear a file.';
+              're-emit write_file with the full content as a string, or build the file ' +
+              'incrementally with append_file / edit_file. Pass "content":"" explicitly to clear a file.';
     Exit('');
   end;
   ParseStringArg(ArgsJSON, 'content', Content);
@@ -767,18 +768,497 @@ begin
   end;
 end;
 
+{ ===== apply_patch: multi-file, context-anchored patches (Codex / OpenClaw
+  apply_patch format) ===================================================== }
+type
+  TLineArray = array of string;
+  TPatchOpKind = (pokAdd, pokUpdate, pokDelete);
+  TPatchAction = record
+    Kind:    TPatchOpKind;
+    Path:    string;
+    MoveTo:  string;
+    Content: string;
+  end;
+  TPatchActionArray = array of TPatchAction;
+
+function ApSplitLF(const S: string): TLineArray;
+{ Split on LF (CRLF/CR normalised first), keeping empty segments so a
+  join round-trips exactly, including a trailing newline. }
+var
+  T: string;
+  i, StartPos: Integer;
+begin
+  SetLength(Result, 0);
+  T := StringReplace(S, #13#10, #10, [rfReplaceAll]);
+  T := StringReplace(T, #13, #10, [rfReplaceAll]);
+  StartPos := 1;
+  for i := 1 to Length(T) do
+    if T[i] = #10 then
+    begin
+      SetLength(Result, Length(Result) + 1);
+      Result[High(Result)] := Copy(T, StartPos, i - StartPos);
+      StartPos := i + 1;
+    end;
+  SetLength(Result, Length(Result) + 1);
+  Result[High(Result)] := Copy(T, StartPos, Length(T) - StartPos + 1);
+end;
+
+function ApJoinLF(const A: TLineArray): string;
+var
+  i: Integer;
+begin
+  Result := '';
+  for i := 0 to High(A) do
+  begin
+    if i > 0 then Result := Result + #10;
+    Result := Result + A[i];
+  end;
+end;
+
+function ApFindBlock(const Hay, Needle: TLineArray; StartAt: Integer): Integer;
+var
+  i, j: Integer;
+  Ok: Boolean;
+begin
+  Result := -1;
+  if Length(Needle) = 0 then Exit(StartAt);
+  if StartAt < 0 then StartAt := 0;
+  for i := StartAt to Length(Hay) - Length(Needle) do
+  begin
+    Ok := True;
+    for j := 0 to High(Needle) do
+      if Hay[i + j] <> Needle[j] then begin Ok := False; Break; end;
+    if Ok then Exit(i);
+  end;
+end;
+
+procedure ApSplice(var Arr: TLineArray; StartIdx, RemoveCount: Integer; const Ins: TLineArray);
+var
+  Res: TLineArray;
+  i, k: Integer;
+begin
+  SetLength(Res, Length(Arr) - RemoveCount + Length(Ins));
+  k := 0;
+  for i := 0 to StartIdx - 1 do begin Res[k] := Arr[i]; Inc(k); end;
+  for i := 0 to High(Ins) do begin Res[k] := Ins[i]; Inc(k); end;
+  for i := StartIdx + RemoveCount to High(Arr) do begin Res[k] := Arr[i]; Inc(k); end;
+  Arr := Res;
+end;
+
+procedure ApAppend(var A: TLineArray; const S: string);
+begin
+  SetLength(A, Length(A) + 1);
+  A[High(A)] := S;
+end;
+
+function ApStarts(const S, Prefix: string): Boolean;
+begin
+  Result := Copy(S, 1, Length(Prefix)) = Prefix;
+end;
+
+function ParseApplyPatch(const PatchText: string; out Actions: TPatchActionArray;
+                         out ErrMsg: string): Boolean;
+var
+  P: TLineArray;
+  n, i, Idx: Integer;
+  Line, Path, MoveTo, Anchor, Reason: string;
+  CurLines, OldB, NewB, Content: TLineArray;
+  CurSearch: Integer;
+  Act: TPatchAction;
+
+  procedure AddAction;
+  begin
+    SetLength(Actions, Length(Actions) + 1);
+    Actions[High(Actions)] := Act;
+  end;
+
+begin
+  Result := False;
+  ErrMsg := '';
+  SetLength(Actions, 0);
+  P := ApSplitLF(PatchText);
+  { Drop the trailing '' ApSplitLF adds when the patch ends in a newline --
+    a split artifact, not a blank line. }
+  if (Length(P) > 0) and (P[High(P)] = '') then SetLength(P, Length(P) - 1);
+  n := Length(P);
+  i := 0;
+  while (i < n) and (Trim(P[i]) = '') do Inc(i);
+  if (i >= n) or (Trim(P[i]) <> '*** Begin Patch') then
+  begin
+    ErrMsg := 'apply_patch: missing "*** Begin Patch" header';
+    Exit;
+  end;
+  Inc(i);
+
+  while i < n do
+  begin
+    Line := P[i];
+    if Trim(Line) = '*** End Patch' then Exit(True);
+
+    if ApStarts(Line, '*** Add File: ') then
+    begin
+      Path := Trim(Copy(Line, Length('*** Add File: ') + 1, MaxInt));
+      Inc(i);
+      SetLength(Content, 0);
+      while (i < n) and (not ApStarts(P[i], '*** ')) do
+      begin
+        if P[i] = '' then
+          ApAppend(Content, '')
+        else if P[i][1] = '+' then
+          ApAppend(Content, Copy(P[i], 2, MaxInt))
+        else
+        begin
+          ErrMsg := 'apply_patch: Add File body lines must start with "+" (' + Path + ')';
+          Exit;
+        end;
+        Inc(i);
+      end;
+      Act.Kind := pokAdd; Act.Path := Path; Act.MoveTo := '';
+      Act.Content := ApJoinLF(Content);
+      if Length(Content) > 0 then Act.Content := Act.Content + #10;
+      AddAction;
+    end
+    else if ApStarts(Line, '*** Delete File: ') then
+    begin
+      Path := Trim(Copy(Line, Length('*** Delete File: ') + 1, MaxInt));
+      Act.Kind := pokDelete; Act.Path := Path; Act.MoveTo := ''; Act.Content := '';
+      AddAction;
+      Inc(i);
+    end
+    else if ApStarts(Line, '*** Update File: ') then
+    begin
+      Path := Trim(Copy(Line, Length('*** Update File: ') + 1, MaxInt));
+      Inc(i);
+      MoveTo := '';
+      if (i < n) and ApStarts(P[i], '*** Move to: ') then
+      begin
+        MoveTo := Trim(Copy(P[i], Length('*** Move to: ') + 1, MaxInt));
+        Inc(i);
+      end;
+      if not CanReadPath(Path, Reason) then begin ErrMsg := 'apply_patch: ' + Reason; Exit; end;
+      if not FileExists(Path) then
+      begin ErrMsg := 'apply_patch: no such file to update: ' + Path; Exit; end;
+      CurLines := ApSplitLF(ReadFileText(Path));
+      CurSearch := 0;
+      while (i < n) and (not ApStarts(P[i], '*** ')) do
+      begin
+        if ApStarts(P[i], '@@') then
+        begin
+          Anchor := Trim(Copy(P[i], 3, MaxInt));
+          Inc(i);
+          if Anchor <> '' then
+          begin
+            Idx := CurSearch;
+            while (Idx < Length(CurLines)) and (Pos(Anchor, CurLines[Idx]) = 0) do Inc(Idx);
+            if Idx < Length(CurLines) then CurSearch := Idx;
+          end;
+          Continue;
+        end;
+        SetLength(OldB, 0); SetLength(NewB, 0);
+        while (i < n) and (not ApStarts(P[i], '@@')) and (not ApStarts(P[i], '*** ')) do
+        begin
+          if P[i] = '' then
+          begin ApAppend(OldB, ''); ApAppend(NewB, ''); end
+          else
+            case P[i][1] of
+              '+': ApAppend(NewB, Copy(P[i], 2, MaxInt));
+              '-': ApAppend(OldB, Copy(P[i], 2, MaxInt));
+              ' ': begin ApAppend(OldB, Copy(P[i], 2, MaxInt)); ApAppend(NewB, Copy(P[i], 2, MaxInt)); end;
+            else
+              begin
+                ErrMsg := 'apply_patch: hunk line must start with " ", "+" or "-" (' + Path + '): ' + P[i];
+                Exit;
+              end;
+            end;
+          Inc(i);
+        end;
+        if Length(OldB) = 0 then
+        begin
+          ErrMsg := 'apply_patch: a hunk in ' + Path + ' has no context or "-" lines to locate the edit';
+          Exit;
+        end;
+        Idx := ApFindBlock(CurLines, OldB, CurSearch);
+        if Idx < 0 then Idx := ApFindBlock(CurLines, OldB, 0);   { anchor may have over-advanced }
+        if Idx < 0 then
+        begin
+          ErrMsg := 'apply_patch: context not found in ' + Path + ' near: ' + OldB[0];
+          Exit;
+        end;
+        ApSplice(CurLines, Idx, Length(OldB), NewB);
+        CurSearch := Idx + Length(NewB);
+      end;
+      Act.Kind := pokUpdate; Act.Path := Path; Act.MoveTo := MoveTo;
+      Act.Content := ApJoinLF(CurLines);
+      AddAction;
+    end
+    else if Trim(Line) = '' then
+      Inc(i)   { tolerate blank lines between sections }
+    else
+    begin
+      ErrMsg := 'apply_patch: unexpected line (want *** Add/Update/Delete File or *** End Patch): ' + Line;
+      Exit;
+    end;
+  end;
+
+  ErrMsg := 'apply_patch: missing "*** End Patch" terminator';
+  Result := False;
+end;
+
+function Tool_FSApplyPatch(const ArgsJSON: string; out ErrMsg: string): string;
+var
+  PatchText, Reason: string;
+  Actions: TPatchActionArray;
+  i, nAdd, nUpd, nDel: Integer;
+begin
+  ErrMsg := '';
+  if not HasJSONKey(ArgsJSON, 'patch') then
+  begin
+    ErrMsg := 'missing required argument: patch';
+    Exit('');
+  end;
+  ParseStringArg(ArgsJSON, 'patch', PatchText);
+  { Parse + locate every hunk BEFORE touching disk. A failure here writes
+    nothing, so a multi-file patch is all-or-nothing. }
+  if not ParseApplyPatch(PatchText, Actions, ErrMsg) then Exit('');
+
+  { Sandbox-gate every target up front, still before any write. Also refuse
+    create-targets that already exist: WriteFileText opens with fmCreate, so
+    an "Add File" (or a "Move to" destination) pointing at an existing path
+    would silently truncate the user's file and report it as "added". Make
+    that a hard failure so a model that used Add File instead of Update File
+    can't clobber content -- and abort before touching disk (atomic). }
+  for i := 0 to High(Actions) do
+  begin
+    if not CanWritePath(Actions[i].Path, Reason) then
+    begin ErrMsg := 'apply_patch: ' + Reason; Exit(''); end;
+    if (Actions[i].MoveTo <> '') and (not CanWritePath(Actions[i].MoveTo, Reason)) then
+    begin ErrMsg := 'apply_patch: ' + Reason; Exit(''); end;
+    if (Actions[i].Kind = pokAdd) and FileExists(Actions[i].Path) then
+    begin
+      ErrMsg := 'apply_patch: Add File target already exists: ' + Actions[i].Path +
+                ' (use "*** Update File" to modify an existing file)';
+      Exit('');
+    end;
+    if (Actions[i].Kind = pokUpdate) and (Actions[i].MoveTo <> '')
+       and FileExists(Actions[i].MoveTo) then
+    begin
+      ErrMsg := 'apply_patch: Move to target already exists: ' + Actions[i].MoveTo;
+      Exit('');
+    end;
+  end;
+
+  nAdd := 0; nUpd := 0; nDel := 0;
+  try
+    for i := 0 to High(Actions) do
+      case Actions[i].Kind of
+        pokAdd:
+          begin
+            SnapshotBeforeWrite(Actions[i].Path);
+            WriteFileText(Actions[i].Path, Actions[i].Content);
+            Inc(nAdd);
+          end;
+        pokDelete:
+          begin
+            SnapshotBeforeWrite(Actions[i].Path);
+            if FileExists(Actions[i].Path) then DeleteFile(Actions[i].Path);
+            Inc(nDel);
+          end;
+        pokUpdate:
+          begin
+            SnapshotBeforeWrite(Actions[i].Path);
+            if Actions[i].MoveTo <> '' then
+            begin
+              SnapshotBeforeWrite(Actions[i].MoveTo);
+              WriteFileText(Actions[i].MoveTo, Actions[i].Content);
+              if FileExists(Actions[i].Path) then DeleteFile(Actions[i].Path);
+            end
+            else
+              WriteFileText(Actions[i].Path, Actions[i].Content);
+            Inc(nUpd);
+          end;
+      end;
+  except
+    on E: Exception do
+    begin
+      ErrMsg := 'apply_patch: ' + E.Message;
+      Exit('');
+    end;
+  end;
+  Result := Format('applied patch: %d added, %d updated, %d deleted', [nAdd, nUpd, nDel]);
+end;
+
+function Tool_FSAppend(const ArgsJSON: string; out ErrMsg: string): string;
+{ append_file: add content to the end of a file (creating it + parent dirs
+  when absent). The incremental-write escape hatch -- build a large file
+  across several turns instead of one oversized write_file arg that a
+  provider may fail to serialise. Unlike write_file it does NOT strip
+  hashline prefixes: an append chunk is content the model just generated,
+  taken verbatim. }
+var
+  Path, Content, Existing, Reason: string;
+begin
+  ErrMsg := '';
+  if not ParseStringArg(ArgsJSON, 'path', Path) then
+  begin
+    ErrMsg := 'missing required argument: path';
+    Exit('');
+  end;
+  if not CanWritePath(Path, Reason) then
+  begin
+    ErrMsg := Reason;
+    Exit('');
+  end;
+  if not HasJSONKey(ArgsJSON, 'content') then
+  begin
+    ErrMsg := 'missing required argument: content. If your previous response was ' +
+              'truncated mid-tool_call (model hit max_tokens), re-emit append_file with ' +
+              'the next chunk as a string.';
+    Exit('');
+  end;
+  ParseStringArg(ArgsJSON, 'content', Content);
+  try
+    if FileExists(Path) then Existing := ReadFileText(Path) else Existing := '';
+    SnapshotBeforeWrite(Path);
+    WriteFileText(Path, Existing + Content);
+    Result := Format('appended %d bytes to %s (now %d bytes)',
+                     [Length(Content), Path, Length(Existing) + Length(Content)]);
+  except
+    on E: Exception do
+    begin
+      ErrMsg := E.Message;
+      Result := '';
+    end;
+  end;
+end;
+
+function CountSubstr(const S, Sub: string): Integer;
+{ Non-overlapping occurrence count. Sub is assumed non-empty. }
+var
+  Rest: string;
+  P: Integer;
+begin
+  Result := 0;
+  Rest := S;
+  repeat
+    P := Pos(Sub, Rest);
+    if P = 0 then Break;
+    Inc(Result);
+    Rest := Copy(Rest, P + Length(Sub), MaxInt);
+  until False;
+end;
+
+function Tool_FSEdit(const ArgsJSON: string; out ErrMsg: string): string;
+{ edit_file: two modes.
+    1. Plain string replacement (default): old_text -> new_text, the form
+       every model authors natively. Requires a unique match unless
+       replace_all is set.
+    2. Hashline patch (advanced): when a `patch` argument is present, defer
+       to the line-anchored applier (Tool_FSEditHashline) for precise
+       multi-hunk edits. }
+var
+  Path, OldText, NewText, Content, Reason: string;
+  ReplaceAll: Boolean;
+  Cnt: Integer;
+begin
+  ErrMsg := '';
+  { Hashline mode wins when a patch is supplied. }
+  if HasJSONKey(ArgsJSON, 'patch') then
+    Exit(Tool_FSEditHashline(ArgsJSON, ErrMsg));
+
+  if not ParseStringArg(ArgsJSON, 'path', Path) then
+  begin
+    ErrMsg := 'missing required argument: path';
+    Exit('');
+  end;
+  if not CanWritePath(Path, Reason) then
+  begin
+    ErrMsg := Reason;
+    Exit('');
+  end;
+  if not HasJSONKey(ArgsJSON, 'old_text') then
+  begin
+    ErrMsg := 'missing required argument: old_text. Provide old_text + new_text for a ' +
+              'string replacement, or a `patch` for a hashline edit.';
+    Exit('');
+  end;
+  ParseStringArg(ArgsJSON, 'old_text', OldText);
+  { new_text may be omitted -> treated as '' (a deletion). }
+  NewText := '';
+  ParseStringArg(ArgsJSON, 'new_text', NewText);
+  ReplaceAll := ParseBoolArg(ArgsJSON, 'replace_all', False);
+  if OldText = '' then
+  begin
+    ErrMsg := 'old_text must not be empty';
+    Exit('');
+  end;
+  if not FileExists(Path) then
+  begin
+    ErrMsg := 'no such file: ' + Path + ' (use write_file to create it)';
+    Exit('');
+  end;
+  Content := ReadFileText(Path);
+  Cnt := CountSubstr(Content, OldText);
+  if Cnt = 0 then
+  begin
+    ErrMsg := 'old_text not found in ' + Path + '. The match must be exact, including ' +
+              'whitespace and indentation; do not include read_file''s "N:" line-number ' +
+              'prefixes in old_text.';
+    Exit('');
+  end;
+  if (Cnt > 1) and (not ReplaceAll) then
+  begin
+    ErrMsg := Format('old_text matches %d times in %s. Add surrounding context to make it ' +
+                     'unique, or pass "replace_all":true to replace every occurrence.',
+                     [Cnt, Path]);
+    Exit('');
+  end;
+  if ReplaceAll then
+    Content := StringReplace(Content, OldText, NewText, [rfReplaceAll])
+  else
+    Content := StringReplace(Content, OldText, NewText, []);
+  try
+    SnapshotBeforeWrite(Path);
+    WriteFileText(Path, Content);
+    Result := Format('edited %s (replaced %d occurrence(s))', [Path, Cnt]);
+  except
+    on E: Exception do
+    begin
+      ErrMsg := E.Message;
+      Result := '';
+    end;
+  end;
+end;
+
 procedure RegisterFSTools(R: TToolRegistry; UseHashline: Boolean);
 var
   T: TTool;
+
+  { Register the canonical tool T, then a hidden back-compat alias under the
+    old name pointing at the same handler. Old configs / sessions / muscle-
+    memory keep working; the model only ever sees the new canonical name. }
+  procedure Emit(const OldName: string);
+  var
+    A: TTool;
+  begin
+    R.Register(T);
+    A := T;
+    A.Name := OldName;
+    R.RegisterHidden(A);
+  end;
+
 begin
   GHashlineEnabled := UseHashline;
 
-  T.Name := 'fs_read';
+  { read_file (was fs_read) }
+  T := Default(TTool);
+  T.Name := 'read_file';
   if UseHashline then
   begin
-    T.Description := 'Read a file. Returns hashline format: a ' + HL_FILE_PREFIX +
-                     'path#hash header followed by LINENO:line per source line. Pass {"plain":true} for raw bytes.';
-    T.Schema      := '{"type":"object","properties":{"path":{"type":"string"},"plain":{"type":"boolean","description":"Return raw file bytes instead of hashline-prefixed output."}},"required":["path"]}';
+    T.Description := 'Read the contents of a file. Returns plain text by default. ' +
+                     'Pass {"hashline":true} for the ' + HL_FILE_PREFIX +
+                     'path#hash header + LINENO:line format used to build an ' +
+                     'edit_file `patch` (advanced).';
+    T.Schema      := '{"type":"object","properties":{"path":{"type":"string"},"hashline":{"type":"boolean","description":"Return the hashline #hash+LINENO format for edit_file patch edits, instead of plain text."}},"required":["path"]}';
   end
   else
   begin
@@ -788,9 +1268,11 @@ begin
   T.Handler  := Tool_FSRead;
   T.IsCore   := True;
   T.Category := tcReadOnly;
-  R.Register(T);
+  Emit('fs_read');
 
-  T.Name := 'fs_write';
+  { write_file (was fs_write) }
+  T := Default(TTool);
+  T.Name := 'write_file';
   if UseHashline then
     T.Description := 'Write a string to a file (overwrites). Creates parent dirs. ' +
                      'Strips hashline LINENO: prefixes from `content` when every non-empty line carries one.'
@@ -800,35 +1282,42 @@ begin
   T.Handler  := Tool_FSWrite;
   T.IsCore   := True;
   T.Category := tcMutating;
+  Emit('fs_write');
+
+  { append_file (new) -- the incremental-write escape hatch for large files. }
+  T := Default(TTool);
+  T.Name        := 'append_file';
+  T.Description := 'Append a string to the end of a file (creates it and parent dirs when missing). ' +
+                   'Use this to build a large file across several turns instead of one huge write_file ' +
+                   'call, which a provider may fail to serialise.';
+  T.Schema      := '{"type":"object","properties":{"path":{"type":"string"},"content":{"type":"string"}},"required":["path","content"]}';
+  T.Handler     := Tool_FSAppend;
+  T.IsCore      := True;
+  T.Category    := tcMutating;
   R.Register(T);
 
-  T.Name        := 'fs_list';
+  { list_dir (was fs_list) }
+  T := Default(TTool);
+  T.Name        := 'list_dir';
   T.Description := 'List entries in a directory. Returns "d name" or "- name  size" lines.';
   T.Schema      := '{"type":"object","properties":{"path":{"type":"string"}},"required":["path"]}';
   T.Handler     := Tool_FSList;
   T.IsCore      := True;
   T.Category    := tcReadOnly;
-  R.Register(T);
+  Emit('fs_list');
 
-  { fs_grep registers UNCONDITIONALLY -- the six ripgrep-inspired
-    optimisations (skip lists, BMH, binary detection, byte-walking,
-    file-size cap, deferred hashing) make it 10-50x faster than
-    shell_exec grep on real codebases, and on Windows it's the only
-    grep equivalent the agent has (Windows ships no grep). The
-    bench's "shell_exec grep wins by 1 turn" finding measured the
-    one-shot UX advantage of `>` redirect on a tiny 8-file fixture --
-    it does NOT generalise to larger repos where fs_grep's speed
-    dominates, and it does not apply at all on Windows. So the gate
-    used to bundle fs_grep with fs_edit_hashline has been split:
-    UseHashline now controls ONLY fs_edit_hashline (plus the hashline
-    format of fs_read), and fs_grep registers unconditionally. }
-  T.Name        := 'fs_grep';
+  { grep_files (was fs_grep) -- registers UNCONDITIONALLY -- the six
+    ripgrep-inspired optimisations (skip lists, BMH, binary detection,
+    byte-walking, file-size cap, deferred hashing) make it 10-50x faster
+    than shell_exec grep on real codebases, and on Windows it's the only
+    grep equivalent the agent has (Windows ships no grep). }
+  T := Default(TTool);
+  T.Name        := 'grep_files';
   T.Description := 'Search files for a substring. Recursive when path is a directory. ' +
                    'Skips dotdirs, well-known build/VCS/deps dirs (.git, node_modules, target, build, ' +
                    'dist, vendor, .venv, __pycache__, .gradle, .next), binary files (NUL-byte detection ' +
                    'in first 1 KiB), and files larger than max_file_bytes (default 10 MiB). Returns ' +
-                   'hashline-formatted matches (one section per file, header + LINENO:line per match) ' +
-                   'so you can paste anchors directly into fs_edit_hashline (when registered).';
+                   'matches with LINENO:line per hit, one section per file.';
   T.Schema      := '{"type":"object","properties":{' +
                    '"path":{"type":"string"},' +
                    '"pattern":{"type":"string"},' +
@@ -839,36 +1328,72 @@ begin
   T.Handler     := Tool_FSGrep;
   T.IsCore      := True;
   T.Category    := tcReadOnly;
-  R.Register(T);
+  Emit('fs_grep');
 
-  { fs_edit_hashline: gated on UseHashline (PR #314 / bench finding --
-    smaller models mis-author the anchor/payload format and burn turns
-    recovering). When UseHashline is False we don't expose the tool at
-    all so the model never sees it in the tool list and doesn't try a
-    hashless patch that we'd reject. }
+  { edit_file (was fs_edit_hashline) -- now registered UNCONDITIONALLY. The
+    default old_text->new_text string-replacement mode works for every
+    model; the hashline `patch` mode is advanced and only advertised (in
+    the schema/description) when UseHashline is on, so smaller models that
+    mis-author the anchor format don't see it. The handler still accepts a
+    patch either way, so the fs_edit_hashline alias keeps working. }
+  T := Default(TTool);
+  T.Name := 'edit_file';
   if UseHashline then
   begin
-    T.Name        := 'fs_edit_hashline';
-    T.Description := 'Apply a hashline-format patch. Begins with a ' + HL_FILE_PREFIX +
-                     'path#hash header, then one or more blocks. Each block is an anchor line ' +
-                     'that is JUST the line number(s) -- "42:" for one line, "7-10:" for a ' +
-                     'range -- with NOTHING after the colon. Do NOT copy fs_read''s "N:content" ' +
-                     'display onto the anchor (write "42:", not "42:  the old text"). The ' +
-                     'anchor is followed by payload lines, and EVERY payload line must start ' +
-                     'with its own marker: ' + HL_PAYLOAD_REPLACE +
-                     ' to replace, ' + HL_PAYLOAD_ABOVE + ' to insert above the anchor, ' +
-                     HL_PAYLOAD_BELOW + ' to insert below. A multi-line replacement repeats ' +
-                     HL_PAYLOAD_REPLACE + ' on every line (a 3-line replacement has three ' +
-                     HL_PAYLOAD_REPLACE + ' lines) -- never a bare line. Example: "' +
-                     HL_FILE_PREFIX + 'foo.pas#ab12" / "10:" / "' + HL_PAYLOAD_REPLACE +
-                     '  new line 10 text". The header hash must match the file on disk; ' +
-                     'stale patches abort without writing.';
-    T.Schema      := '{"type":"object","properties":{"patch":{"type":"string","description":"Hashline-format patch text."}},"required":["patch"]}';
-    T.Handler     := Tool_FSEditHashline;
-    T.IsCore      := True;
-    T.Category    := tcMutating;
-    R.Register(T);
+    T.Description := 'Edit a file. Default: replace an exact snippet -- pass old_text (the existing text, ' +
+                     'verbatim including whitespace) and new_text. The match must be unique unless ' +
+                     'replace_all is set; omit new_text to delete. Advanced: pass a hashline `patch` instead ' +
+                     'for line-anchored multi-hunk edits -- first read the file with {"hashline":true} to ' +
+                     'get the ' + HL_FILE_PREFIX + 'path#hash header, then send "42:" anchors + ' +
+                     HL_PAYLOAD_REPLACE + '/' + HL_PAYLOAD_ABOVE + '/' + HL_PAYLOAD_BELOW +
+                     ' payload markers (header hash must match disk).';
+    T.Schema      := '{"type":"object","properties":{' +
+                     '"path":{"type":"string"},' +
+                     '"old_text":{"type":"string","description":"Exact existing text to replace (verbatim, including whitespace)."},' +
+                     '"new_text":{"type":"string","description":"Replacement text. Omit to delete old_text."},' +
+                     '"replace_all":{"type":"boolean","description":"Replace every occurrence instead of requiring a unique match."},' +
+                     '"patch":{"type":"string","description":"Advanced: a hashline-format patch, used INSTEAD of old_text/new_text."}' +
+                     '}}';
+  end
+  else
+  begin
+    T.Description := 'Edit a file by replacing an exact snippet: pass old_text (the existing text, verbatim ' +
+                     'including whitespace) and new_text. The match must be unique unless replace_all is set; ' +
+                     'omit new_text to delete text.';
+    T.Schema      := '{"type":"object","properties":{' +
+                     '"path":{"type":"string"},' +
+                     '"old_text":{"type":"string","description":"Exact existing text to replace (verbatim, including whitespace)."},' +
+                     '"new_text":{"type":"string","description":"Replacement text. Omit to delete old_text."},' +
+                     '"replace_all":{"type":"boolean","description":"Replace every occurrence instead of requiring a unique match."}' +
+                     '},"required":["path","old_text"]}';
   end;
+  T.Handler  := Tool_FSEdit;
+  T.IsCore   := True;
+  T.Category := tcMutating;
+  Emit('fs_edit_hashline');
+
+  { apply_patch (new) -- multi-file, context-anchored patches in one call. }
+  T := Default(TTool);
+  T.Name := 'apply_patch';
+  T.Description :=
+    'Apply a multi-file patch in ONE call (Codex / OpenClaw apply_patch format). ' +
+    'Wrap everything between a "*** Begin Patch" line and a "*** End Patch" line. ' +
+    'Inside, one or more file sections: "*** Add File: <path>" then the new content ' +
+    'as lines each prefixed with "+"; "*** Delete File: <path>"; or "*** Update File: ' +
+    '<path>" (optionally followed by "*** Move to: <newpath>") then hunks. In a hunk, ' +
+    'optional "@@ <context>" lines help locate the region, then each change line starts ' +
+    'with " " (unchanged context), "-" (remove) or "+" (add). Edits are located by their ' +
+    'context and removed lines, NOT by line number. All-or-nothing: if any hunk fails to ' +
+    'locate, nothing is written. Prefer this over several edit_file calls when a change ' +
+    'spans multiple files or many hunks.';
+  T.Schema :=
+    '{"type":"object","properties":{"patch":{"type":"string",' +
+    '"description":"Full patch text, from *** Begin Patch through *** End Patch."}},' +
+    '"required":["patch"]}';
+  T.Handler  := Tool_FSApplyPatch;
+  T.IsCore   := True;
+  T.Category := tcMutating;
+  R.Register(T);
 end;
 
 end.

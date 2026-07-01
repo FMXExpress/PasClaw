@@ -43,9 +43,10 @@ See [Build](#build) for Delphi / cross-compile / Windows-on-ARM.
 
 | Tool | What it does |
 |---|---|
-| `fs_read` / `fs_write` / `fs_list` | sandboxed filesystem access |
-| `fs_grep` | recursive substring search, returns hashline-formatted matches |
-| `fs_edit_hashline` | patch by line-anchor + file-hash header, race-safe |
+| `read_file` / `write_file` / `append_file` / `list_dir` | sandboxed filesystem access (`append_file` builds large files incrementally) |
+| `grep_files` | recursive substring search, returns line-numbered matches |
+| `edit_file` | `old_text`→`new_text` string replacement (default); optional hashline `patch` mode for line-anchored, hash-verified edits |
+| `apply_patch` | multi-file, context-anchored patch (Codex/OpenClaw format: add/update/delete/move in one atomic call) |
 | `shell_exec` | `/bin/sh -c` (or `cmd.exe`), output capped at 1 MiB, denylist-gated |
 | `web_search` | DuckDuckGo / Brave / Tavily / SearXNG / Perplexity / Gemini-grounding — 6 providers |
 | `web_fetch` | HTTP GET → readable plain text (HTML stripped, entities decoded), SSRF-guarded |
@@ -65,11 +66,11 @@ See [Build](#build) for Delphi / cross-compile / Windows-on-ARM.
 | `skills_list` / `skills_view` / `skill_manage` | self-improving skills (progressive disclosure + model-authored skills; opt-in) |
 | MCP-bridged | every tool a configured MCP server exports — see below |
 
-**Parallel dispatch** — when the model returns multiple `tool_use` blocks in one turn, read-only tools (`web_search`, `web_fetch`, `fs_read`/`grep`/`list`, `memory_search`) fan out on worker threads; mutating tools (`fs_write`, `fs_edit_hashline`, `shell_exec`) stay serial. ~50% wall-clock win on multi-network-tool turns.
+**Parallel dispatch** — when the model returns multiple `tool_use` blocks in one turn, read-only tools (`web_search`, `web_fetch`, `read_file`/`grep_files`/`list_dir`, `memory_search`) fan out on worker threads; mutating tools (`write_file`, `append_file`, `edit_file`, `shell_exec`) stay serial. ~50% wall-clock win on multi-network-tool turns. (The former `fs_read`/`fs_write`/`fs_list`/`fs_grep`/`fs_edit_hashline` names remain as hidden back-compat aliases.)
 
 **MCP** — both transports. Stdio MCP via spawned subprocess + JSON-RPC over pipes, and Streamable HTTP MCP (handles SSE-framed responses, Bearer-token auth). `pasclaw mcp catalog` queries the pasclaw.dev MCP registry (`GET /api/public/v1/mcp`) with a 5 s timeout and falls back to the bundled 5-entry list (`replicate`, `digitalocean-apps`, `digitalocean-databases`, `runpod-docs`, `huggingface`) when the hub is unreachable — source attribution (`hub` / `built-in`) shown in the output. `pasclaw mcp search <q>` searches the hub directly (no fallback — bundled list is too small to search). `pasclaw mcp install <slug>` tries the hub first so any registered server is installable, falls back to the bundled catalog when the hub doesn't have it. Reads the right env var, writes the right Authorization header, never preloaded. **Progressive disclosure** (on by default, `mcp_progressive_disclosure`) keeps fat catalogs cheap: MCP tools register *deferred* (name-only in the prompt), and the model loads schemas on demand via `tool_search` — a one-turn cost only on turns that actually touch MCP, instead of paying for every schema every turn. PasClaw is also an MCP **server** (`POST /mcp`), exposing `memory_search` / `kb_search` / `session_search` to other MCP clients (Claude Desktop, Cursor, Codex).
 
-**Skills** — markdown manifests under `$PASCLAW_HOME/workspace/skills/` advertised in the system prompt; the model loads the body via `fs_read` on demand. Install from GitHub (`pasclaw skills install owner/repo[/path][@ref]` — codeload zip, FPC's `Zipper.TUnZipper` or Delphi's `System.Zip.TZipFile`); from the pasclaw.dev hub (`pasclaw skills install hub:<slug>[@<version>]`, or just `pasclaw skills install <slug>` which tries pasclaw.dev first then falls back to ClawHub); or from ClawHub directly (`pasclaw skills install clawhub:<slug>[@<version>]`). `pasclaw skills search <q>` queries both hubs and aggregates the results (pasclaw.dev first, ClawHub deduped). Malware-flagged skills refused; suspicious-flagged install with a warning.
+**Skills** — markdown manifests under `$PASCLAW_HOME/workspace/skills/` advertised in the system prompt; the model loads the body via `read_file` on demand. Install from GitHub (`pasclaw skills install owner/repo[/path][@ref]` — codeload zip, FPC's `Zipper.TUnZipper` or Delphi's `System.Zip.TZipFile`); from the pasclaw.dev hub (`pasclaw skills install hub:<slug>[@<version>]`, or just `pasclaw skills install <slug>` which tries pasclaw.dev first then falls back to ClawHub); or from ClawHub directly (`pasclaw skills install clawhub:<slug>[@<version>]`). `pasclaw skills search <q>` queries both hubs and aggregates the results (pasclaw.dev first, ClawHub deduped). Malware-flagged skills refused; suspicious-flagged install with a warning.
 
 **Code Vault** — the pasclaw.dev Code Vault hosts Object Pascal source code (sample programs, reusable components, libraries) as GitHub-backed entries. `pasclaw vault search <q>` and `pasclaw vault show <slug>` discover; `pasclaw vault install <slug> [<dest>]` `git clone`s the entry's `repoUrl` into `$PASCLAW_HOME/workspace/vault/<slug>` (or a path you pass). The agent gets two **opt-in** tools — `vault_search` and `vault_get` — registered only when `vault_tools_enabled: true` in config.json; `pasclaw onboard` asks during setup with a default-yes prompt. Both tools are read-only HTTP GETs against the vault registry; obtaining the code itself is a separate `shell_exec git clone` call the model makes after `vault_get` returns the `repoUrl`.
 
@@ -81,7 +82,7 @@ See [Build](#build) for Delphi / cross-compile / Windows-on-ARM.
 
 **Memory** — SQLite FTS5 BM25 index over `workspace/memory/*.md` and `MEMORY.md`. `pasclaw migrate` (re-)indexes; `pasclaw membench --records N` benchmarks. Conversation history compaction (`pasclaw compaction.threshold_tokens`) kicks in mid-loop, summarises the older portion via the same provider, folds the summary into the system prompt, falls back to verbatim on summariser failure (no silent context loss). `memory_fetch(url, name?)` (registered when `web_fetch_enabled: true`) fetches a URL and writes it to `workspace/memory/fetched-<sanitised>.md` with a 4-line provenance header — the body never enters context; the next `memory_search` indexes it via SyncDir. **Auto-dedup**: a second `memory_fetch` against the same URL within 24h short-circuits the HTTP and returns "already indexed (cached Nh ago)" — the existing cached file's `source:` and `fetched_at:` header lines are matched against the request before any network round-trip. Inspired by [chopratejas/headroom](https://github.com/chopratejas/headroom)'s cross-agent memory dedup.
 
-**Working-state snapshot** — each session's `meta.working_state` records the last 8 file paths edited via `fs_write`/`fs_edit_hashline`, the most recent `shell_exec` command, and the most recent tool-call error. Persisted under the session JSON's `meta.working_state` object; rebuilt after every successful tool loop and re-injected as a system-prompt prefix on the next turn. Survives `/quit`-and-resume, compaction, and `pasclaw agent --session <id>` so the agent picks up with structured edit/shell/error context even when the conversation transcript no longer carries it.
+**Working-state snapshot** — each session's `meta.working_state` records the last 8 file paths edited via `write_file`/`append_file`/`edit_file`, the most recent `shell_exec` command, and the most recent tool-call error. Persisted under the session JSON's `meta.working_state` object; rebuilt after every successful tool loop and re-injected as a system-prompt prefix on the next turn. Survives `/quit`-and-resume, compaction, and `pasclaw agent --session <id>` so the agent picks up with structured edit/shell/error context even when the conversation transcript no longer carries it.
 
 **Sandbox + safety** — read/write path allowlists, shell-command denylist (separate `restrict_to_workspace` denylist + `shell_deny_enabled` global), SSRF guard on `web_fetch` (IPv4 blocklist incl. `169.254.169.254`, redirect re-check), hashline patches require matching file-hash header (stale patches abort without writing). TLS required for HTTPS provider/MCP calls via Indy's OpenSSL IO handler.
 
@@ -138,7 +139,7 @@ The running `pasclaw agent --session <id>` drains the queue at the top of its NE
   { "name": "coder",
     "description": "Code editor",
     "system_prompt": "You edit code precisely using hashline patches...",
-    "tools": ["fs_read", "fs_write", "fs_grep", "fs_edit_hashline"] }
+    "tools": ["read_file", "write_file", "grep_files", "edit_file"] }
 ]
 ```
 
@@ -154,7 +155,7 @@ A spawn can also run in the **background** (`spawn_background` → handle; `spaw
 
 **Profiles** — named config layers (`pasclaw profile list/show/use/diff/bench`). Built-ins `baseline | low-token | security | max-build | all-on` plus user JSON under `$PASCLAW_HOME/profiles/` with `_inherits` composition. Precedence: `--profile` > `$PASCLAW_PROFILE` > `config.json`'s `profile` > none. `profile bench` A/B-runs a task across profiles and prints a turn/token/tool-call table.
 
-**Plan / Build mode** — `--mode plan` (or `pasclaw plan`) is a read-only lens: `fs_read` / `fs_grep` / `memory` / `kb` / `session` work, but `fs_write` / `shell_exec` / `execute_code` are blocked, and a `plan_write` tool drafts `workspace/PLAN.md`. `--mode build` (default) is full access. The auto-router never downgrades Plan-mode turns. `pasclaw build` / `pasclaw plan` add a `workspace.zip` in/out handshake for CI / cloud (Replicate, k8s) runs.
+**Plan / Build mode** — `--mode plan` (or `pasclaw plan`) is a read-only lens: `read_file` / `grep_files` / `memory` / `kb` / `session` work, but `write_file` / `edit_file` / `shell_exec` / `execute_code` are blocked, and a `plan_write` tool drafts `workspace/PLAN.md`. `--mode build` (default) is full access. The auto-router never downgrades Plan-mode turns. `pasclaw build` / `pasclaw plan` add a `workspace.zip` in/out handshake for CI / cloud (Replicate, k8s) runs.
 
 **Heartbeat** — `pasclaw heartbeat` is a proactive daemon: on an interval it feeds `workspace/heartbeat.md` to the model, runs a loop, and posts the result to a named channel (or logs it) — agendas, monitors, periodic digests without an inbound trigger.
 

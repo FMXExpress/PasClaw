@@ -390,11 +390,14 @@ var
 begin
   Result := True;
   Err := '';
-  if Name <> 'fs_edit_hashline' then Exit;
+  { edit_file (canonical) + fs_edit_hashline (back-compat alias) can carry a
+    hashline patch; str-replace calls have no `patch` key and fall through
+    the `Patch = ''` guard below untouched. }
+  if (Name <> 'edit_file') and (Name <> 'fs_edit_hashline') then Exit;
   Obj := TJsonObject.Parse(ArgsJSON);
   if Obj = nil then
   begin
-    Err := 'invalid JSON arguments for fs_edit_hashline';
+    Err := 'invalid JSON arguments for edit_file';
     Exit(False);
   end;
   try
@@ -483,7 +486,8 @@ begin
   else
     D.Err := 'no tool registry';
 
-  if (D.Call.Func.Name = 'fs_edit_hashline') and IsPatchFormatError(D.Err) then
+  if ((D.Call.Func.Name = 'edit_file') or (D.Call.Func.Name = 'fs_edit_hashline'))
+     and IsPatchFormatError(D.Err) then
   begin
     LogWarn('tool-retry attempt=1 strategy=raw_hashline normalized_patch_len=%d has_unsupported_tokens=%s class=format_error',
       [Length(NormalizePatchForCompare(RetryArgs)), BoolToStr(False, True)]);

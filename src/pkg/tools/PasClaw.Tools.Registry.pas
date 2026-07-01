@@ -57,6 +57,10 @@ type
       explicit value. This mirrors the existing HandlerObj defensive
       clear: same risk shape, same fix shape. }
     procedure Register(const T: TTool);
+    { Register a hidden back-compat alias (old tool name -> same handler).
+      Dispatches normally via Find / RunTool but is skipped by
+      ToProviderDefs, so the model only ever sees the new canonical name. }
+    procedure RegisterHidden(const T: TTool);
     { Register a tool with an explicit IsDeferred override. Used by
       PasClaw.MCP.Bridge when Cfg.MCPProgressiveDisclosure is on so
       newly-registered MCP tools are stripped from ToProviderDefs
@@ -153,6 +157,22 @@ begin
     False here; MCP -- the only legitimate IsDeferred=True path --
     goes through RegisterDeferred instead. }
   Modified.IsDeferred := False;
+  { Same defensive clear for the Hidden alias flag -- legacy stack-built
+    records never set it, so garbage there could silently drop a core tool
+    from ToProviderDefs. Aliases go through RegisterHidden instead. }
+  Modified.Hidden := False;
+  RegisterImpl(Modified);
+end;
+
+procedure TToolRegistry.RegisterHidden(const T: TTool);
+{ Register a back-compat alias: dispatches via Find / RunTool but is hidden
+  from ToProviderDefs so the model only sees the new canonical name. }
+var
+  Modified: TTool;
+begin
+  Modified := T;
+  Modified.IsDeferred := False;
+  Modified.Hidden     := True;
   RegisterImpl(Modified);
 end;
 
@@ -185,12 +205,25 @@ end;
 
 function TToolRegistry.Names: TStringArray;
 var
-  i: Integer;
+  i, k: Integer;
 begin
   FLock.Acquire;
   try
+    { Skip hidden back-compat aliases. Names feeds model-facing listings --
+      the subagent '*' expansion (BuildFilteredRegistry), the MCP server's
+      tools/list, the TUI/CLI tool rosters -- so an alias here would re-
+      surface the old fs_* name the Hidden flag exists to suppress. Dispatch
+      goes through Find (which still resolves hidden names), so back-compat
+      is unaffected. }
     SetLength(Result, Length(FTools));
-    for i := 0 to High(FTools) do Result[i] := FTools[i].Name;
+    k := 0;
+    for i := 0 to High(FTools) do
+      if not FTools[i].Hidden then
+      begin
+        Result[k] := FTools[i].Name;
+        Inc(k);
+      end;
+    SetLength(Result, k);
   finally
     FLock.Release;
   end;
@@ -240,6 +273,10 @@ begin
         keeps the provider's per-request `tools` array small (and the
         token bill low) while leaving the dispatcher unchanged. }
       if FTools[i].IsDeferred and (not IsRevealedLocked(FTools[i].Name)) then
+        Continue;
+      { Hidden back-compat aliases dispatch but never reach the model's
+        tool list -- only the new canonical name is advertised. }
+      if FTools[i].Hidden then
         Continue;
       Result[k].Name        := FTools[i].Name;
       Result[k].Description := FTools[i].Description;

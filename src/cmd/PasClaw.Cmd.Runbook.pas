@@ -84,7 +84,7 @@ begin
        'visible from .editorconfig / .prettierrc / linter configs, and ' +
        'the recent git history shape (`git log --oneline -10` and ' +
        '`git status`).' + sLineBreak +
-    '2. Use `fs_read` on any small config / docs file you want to quote ' +
+    '2. Use `read_file` on any small config / docs file you want to quote ' +
        'verbatim.' + sLineBreak +
     '3. Write a single ' + TargetFile + ' covering these sections, in ' +
        'this order, with a single one-line description per item ' +
@@ -100,7 +100,7 @@ begin
     '   - Gotchas (the "I would have lost an hour without this" notes -- ' +
        'omit the section if you find nothing)' + sLineBreak +
     sLineBreak +
-    'Use `fs_write` to create the file. Do NOT use ' +
+    'Use `write_file` to create the file. Do NOT use ' +
     '`pasclaw export` or any related tool -- this is a one-shot bootstrap, ' +
     'not a refresh.' + sLineBreak +
     sLineBreak +

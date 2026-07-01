@@ -228,7 +228,7 @@ begin
   PrintLn('                             ignored when --goal is absent.');
   PrintLn('  --workspace-in <zip>       Unzip this into PASCLAW_HOME first.');
   PrintLn('  --workspace-out <zip>      Zip PASCLAW_HOME here after the run.');
-  PrintLn('  --cwd <dir>                cwd for fs_write (default: ');
+  PrintLn('  --cwd <dir>                cwd for write_file (default: ');
   PrintLn('                             $PASCLAW_HOME/workspace).');
   PrintLn('  --home <dir>               Override PASCLAW_HOME (default: env');
   PrintLn('                             or a fresh tempdir).');

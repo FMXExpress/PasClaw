@@ -939,30 +939,33 @@ var
   Choice: string;
 begin
   PrintLn;
-  PrintLn(Ansi.Bold + 'fs_edit_hashline (surgical patches)' + Ansi.Reset);
+  PrintLn(Ansi.Bold + 'edit_file hashline mode (surgical patches)' + Ansi.Reset);
   PrintLn(Ansi.Dim +
-    'Hashline-format anchored edits. Big models (Opus / Sonnet / GPT-4) ' +
-    'use it' + Ansi.Reset);
+    'edit_file always offers old_text->new_text string edits. This adds its ' +
+    'advanced' + Ansi.Reset);
   PrintLn(Ansi.Dim +
-    'correctly; smaller models (Haiku, gpt-4o-mini, Llama 3.x 8B) sometimes ' +
+    'hashline-anchored patch mode (+ line-numbered read_file output). Big ' +
+    'models use' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'it correctly; smaller models (Haiku, gpt-4o-mini, Llama 3.x 8B) sometimes ' +
     'mis-author' + Ansi.Reset);
   PrintLn(Ansi.Dim +
-    'the anchor/payload format and waste turns. Answer N on small-model ' +
-    'deployments;' + Ansi.Reset);
+    'the anchor/payload format. Answer N on small-model deployments; the agent ' +
+    'then' + Ansi.Reset);
   PrintLn(Ansi.Dim +
-    'the agent then uses fs_write rewrites instead. fs_grep is always on.' +
+    'uses string edits + write_file rewrites instead. grep_files is always on.' +
     Ansi.Reset);
   PrintLn;
-  Choice := Trim(LowerCase(ReadLineEcho('  Enable fs_edit_hashline [Y/n]: ')));
+  Choice := Trim(LowerCase(ReadLineEcho('  Enable edit_file hashline mode [Y/n]: ')));
   if (Choice = '') or (Choice = 'y') or (Choice = 'yes') then
   begin
     Cfg.HashlineEnabled := True;
-    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' fs_edit_hashline enabled');
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' edit_file hashline mode enabled');
   end
   else
   begin
     Cfg.HashlineEnabled := False;
-    PrintLn('  ' + Ansi.Dim + '(skipped -- the model uses fs_write rewrites)' + Ansi.Reset);
+    PrintLn('  ' + Ansi.Dim + '(skipped -- the model uses string edits + write_file)' + Ansi.Reset);
   end;
 end;
 

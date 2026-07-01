@@ -61,6 +61,14 @@ type
       ToolSearch pattern. Default False -- all built-in / skill / non-
       MCP tools surface immediately. }
     IsDeferred:  Boolean;
+    { Hidden -- a back-compat alias. When True the tool is a rename shim:
+      Find / RunTool dispatch to it normally so old tool names keep working
+      for existing configs and mid-session calls, but ToProviderDefs skips
+      it so the model only ever sees the new canonical name in its tool
+      list. Unlike IsDeferred, a Hidden tool is never surfaced by
+      tool_search / DeferredNames -- it is permanently invisible to the
+      model. Default False. }
+    Hidden:      Boolean;
   end;
 
   TToolList = array of TTool;

@@ -715,7 +715,7 @@ begin
           fs_read's "N:content" display). Anchors take no trailing text. }
         ErrMsg := Format('line %d: anchor line must be JUST the line number(s) -- ' +
                          '"%s" should be e.g. "10:" or "7-10:" with nothing after ' +
-                         'the colon. Do not copy the "N:content" form from fs_read ' +
+                         'the colon. Do not copy the "N:content" form from read_file ' +
                          'onto the anchor; put the replacement text on the next ' +
                          'line(s) prefixed with %s (replace).',
                          [i + 1, Trim(Lines[i]), HL_PAYLOAD_REPLACE])
