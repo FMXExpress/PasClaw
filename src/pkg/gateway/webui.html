@@ -1327,6 +1327,14 @@ async function activateSession(id) {
       else if (msg.role === "assistant") loaded.push({ role: "a", text: msg.content || "" });
       /* tool/system turns aren't shown in the web transcript */
     }
+    /* Rehydrate the expandable tool-card bodies from the server's opaque
+       tool_details blob (index-aligned to this same user/assistant sequence).
+       Absent for TUI/agent-created sessions -> cards fall back to the ⎿
+       summary embedded in the content, as before. */
+    const td = j.tool_details;
+    if (Array.isArray(td))
+      for (let i = 0; i < loaded.length && i < td.length; i++)
+        if (td[i]) loaded[i].tools = td[i];
   } catch { /* leave empty on a failed load */ }
   if (activeSessionId !== id) return;   // switched away during the await
   activeTurns = loaded;
@@ -1372,11 +1380,17 @@ async function ensureSession() {
   try { await createSession(JSON.stringify({ messages: msgs })); } catch {}
 }
 async function persistActive() {
-  const msgs = activeTurns
-    .filter(t => t.role === "u" || t.role === "a")
-    .map(t => ({ role: t.role === "u" ? "user" : "assistant", content: t.text }));
+  const kept = activeTurns.filter(t => t.role === "u" || t.role === "a");
+  const msgs = kept.map(t => ({ role: t.role === "u" ? "user" : "assistant", content: t.text }));
   if (msgs.length === 0 && !activeSessionId) return;
-  const body = JSON.stringify({ messages: msgs });
+  /* Ride the full tool-call detail (args/results) alongside the transcript as
+     an opaque, index-aligned array so reloaded turns keep full card bodies.
+     The server stores/returns it verbatim; it never re-enters the model's
+     history. Omitted entirely when this chat has no tool detail. */
+  const details = kept.map(t => t.tools || null);
+  const payload = { messages: msgs };
+  if (details.some(d => d)) payload.tool_details = details;
+  const body = JSON.stringify(payload);
   try {
     if (!activeSessionId) {
       await createSession(body);

@@ -127,6 +127,13 @@ type
   public
     Meta:     TSessionMeta;
     Messages: TMessageArray;
+    { Opaque per-turn tool-call detail (full args/results) the web UI streams
+      on its side-channel and stashes here so reloaded turns keep full card
+      bodies. Raw JSON (an array aligned to the flattened message turns);
+      empty when none. The store treats it as an opaque blob -- it is NOT
+      part of the message transcript, so it never reaches the model and
+      doesn't count as a "rich turn" for the overwrite guard. }
+    ToolDetail: string;
     { Create a session handle. When AId is empty, generates a new id
       and leaves FExists False -- caller decides whether to persist
       via Save. When AId is non-empty, attempts to load the file;
@@ -801,6 +808,10 @@ begin
     end;
     Root.PutArray('messages', Arr);
 
+    { Opaque tool-detail blob, emitted verbatim when present. }
+    if Trim(ToolDetail) <> '' then
+      Root.PutRaw('tool_details', ToolDetail);
+
     { Atomic write: tmp file + rename. A crash partway through
       SaveToFile would otherwise leave a half-written JSON that Load
       can't parse, defeating the "your conversation survives Ctrl-C"
@@ -839,6 +850,7 @@ var
 begin
   FExists := False;
   SetLength(Messages, 0);
+  ToolDetail := '';
   Meta := Default(TSessionMeta);
   Meta.Id := AId;
   Path := SessionPath(AId);
@@ -880,6 +892,14 @@ begin
             MsgObj.Free;
           end;
         end;
+      finally
+        Arr.Free;
+      end;
+      { Opaque tool-detail blob (web UI card bodies); kept verbatim. }
+      Arr := Root.ChildArray('tool_details');
+      if Arr <> nil then
+      try
+        ToolDetail := Arr.ToJSON;
       finally
         Arr.Free;
       end;
