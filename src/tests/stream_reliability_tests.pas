@@ -337,7 +337,10 @@ begin
 
   SetLength(Msgs, 1);
   Msgs[0] := MakeMessage(mrUser, 'build the site');
-  SetLength(Tools, 0);
+  { Advertise write + an incremental editor so the nudge can name real tools. }
+  SetLength(Tools, 2);
+  Tools[0] := Default(TToolDefinition); Tools[0].Name := 'write_file';
+  Tools[1] := Default(TToolDefinition); Tools[1].Name := 'edit_file';
 
   R := ChatWithEmptyRetry(Pi, Msgs, Tools, 'fake', DefaultChatOptions, Cfg);
 
@@ -346,8 +349,31 @@ begin
   { The retry carried a corrective nudge appended to the history (original 1
     message + 1 nudge = 2), steering the model to a smaller, valid call. }
   AssertEqInt(P.LastMsgCount, 2, 'retry history has the corrective nudge appended');
-  AssertTrue(Pos('fs_edit_hashline', P.LastMsgTail) > 0,
-    'nudge tells the model to write incrementally with fs_edit_hashline');
+  { The nudge names ONLY tools present in the Tools list -- here write_file +
+    edit_file, never a tool that wasn't advertised. }
+  AssertTrue(Pos('edit_file', P.LastMsgTail) > 0,
+    'nudge names the registered incremental editor (edit_file)');
+  AssertTrue(Pos('write_file', P.LastMsgTail) > 0,
+    'nudge names the registered writer (write_file)');
+  AssertTrue(Pos('fs_edit_hashline', P.LastMsgTail) = 0,
+    'nudge does NOT name an unregistered tool');
+
+  { With NO incremental editor advertised (e.g. --no-hashline), the nudge
+    falls back to tool-agnostic guidance and names no unavailable tool. }
+  P := TScriptedProvider.Create;
+  Pi := P;
+  P.AddScriptedMalformed;
+  P.AddScriptedContent('done');
+  SetLength(Tools, 1);
+  Tools[0] := Default(TToolDefinition); Tools[0].Name := 'write_file';
+  R := ChatWithEmptyRetry(Pi, Msgs, Tools, 'fake', DefaultChatOptions, Cfg);
+  AssertEqStr(R.Content, 'done', 'malformed retried with no editor advertised');
+  AssertTrue(Pos('fs_edit_hashline', P.LastMsgTail) = 0,
+    'no-editor nudge names no hashline tool');
+  AssertTrue(Pos('edit_file', P.LastMsgTail) = 0,
+    'no-editor nudge names no edit_file');
+  AssertTrue(Pos('smaller tool calls', P.LastMsgTail) > 0,
+    'no-editor nudge falls back to generic split guidance');
 end;
 
 procedure TestChatWithEmptyRetryHappyPath;
