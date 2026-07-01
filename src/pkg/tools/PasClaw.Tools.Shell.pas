@@ -94,16 +94,19 @@ begin
     ErrMsg := Reason;
     Exit('');
   end;
-  { Pin the shell's cwd to the workspace when restriction is on. Paired
-    with the cd / chdir / pushd / popd token denylist and the '..'
-    traversal check in ShellAllowed, this closes the relative-path
-    bypass: a sandboxed model has no way to read or write files
-    outside the workspace via shell_exec. When restriction is off,
-    WorkDir is empty and RunOneShot inherits the parent's cwd
-    (legacy behaviour, byte-identical to the previous release). }
-  if RestrictionActive then
-    WorkDir := CurrentWorkspace
-  else
+  { Start the shell in the SAME directory relative file paths resolve to
+    (CurrentWorkspace), so write_file("x") and shell_exec("cat x") agree --
+    otherwise, with restriction off, the FS tools wrote into the workspace
+    while the shell inherited the launch cwd, and the two looked in different
+    places. CurrentWorkspace defaults to the launch dir when no workspace is
+    configured, so CLI runs are byte-identical to before; the gateway/serve
+    default ($PASCLAW_HOME/workspace) now applies to the shell too. When
+    restriction is on this cwd ALSO pins the boundary, paired with the
+    cd / chdir / pushd / popd denylist and the '..' check in ShellAllowed.
+    Fall back to inheriting the parent cwd if the workspace dir does not
+    exist yet (nothing to chdir into). }
+  WorkDir := CurrentWorkspace;
+  if (WorkDir <> '') and (not DirectoryExists(WorkDir)) then
     WorkDir := '';
   LogDebug('shell exec (cwd=%s): %s', [WorkDir, Cmd]);
   ExitCode := RunOneShotViaBackend(GetCurrentSessionId, Cmd, WorkDir, Out_);

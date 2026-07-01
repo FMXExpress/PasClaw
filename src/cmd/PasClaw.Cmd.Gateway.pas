@@ -207,7 +207,11 @@ begin
   if Trim(Cfg.Sandbox.Workspace) <> '' then
     ConfigureSandbox(Cfg.Sandbox, '')
   else
+  begin
+    { Ensure the default work area exists so shell_exec can start there too. }
+    ForceDirectories(IncludeTrailingPathDelimiter(GetHome) + 'workspace');
     ConfigureSandbox(Cfg.Sandbox, IncludeTrailingPathDelimiter(GetHome) + 'workspace');
+  end;
   ShellSessionId := '';
   try
     Args := ParseGw(Argv, Cfg);
