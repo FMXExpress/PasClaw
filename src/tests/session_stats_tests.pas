@@ -257,42 +257,41 @@ begin
 end;
 
 procedure TestStatsCollectionEnabledRoundTrip;
-{ Default False; explicit True survives a JSON Save / Load. We
-  pin both halves because the persistence helper for boolean
-  flags in PasClaw.Config emits ONLY when the value is non-
-  default (to keep fresh config files clean) -- so the default-
-  False case has to round-trip via "field missing, fall back to
-  the default" rather than via an explicit "false". }
+{ Default TRUE since the six-free-toggles PR (#314); an explicit
+  False (opt-out) survives a JSON Save / Load. We pin both halves
+  because the persistence helper emits ONLY the non-default value --
+  the default-on case round-trips via "field missing, fall back to
+  the default", the opt-out via an explicit "false". }
 var
   Cfg1, Cfg2, Cfg3: TConfig;
   Body: string;
 begin
   Cfg1 := TConfig.Create;
   try
-    AssertTrue(not Cfg1.StatsCollectionEnabled,
-               'default is False');
+    AssertTrue(Cfg1.StatsCollectionEnabled,
+               'default is True');
     Body := Cfg1.ToJSON;
   finally
     Cfg1.Free;
   end;
   AssertNotContains(Body, '"stats_collection_enabled"',
-                    'default-off case writes no flag (fresh config stays clean)');
+                    'default-on case writes no flag (fresh config stays clean)');
 
   Cfg2 := TConfig.Create;
   try
-    Cfg2.StatsCollectionEnabled := True;
+    Cfg2.StatsCollectionEnabled := False;
     Body := Cfg2.ToJSON;
   finally
     Cfg2.Free;
   end;
   AssertContains(Body, '"stats_collection_enabled"',
-                 'explicit-on case writes the flag');
+                 'explicit-off case writes the flag');
 
   Cfg3 := TConfig.Create;
   try
     Cfg3.FromJSON(Body);
-    AssertTrue(Cfg3.StatsCollectionEnabled,
-               'flag survives round trip');
+    AssertTrue(not Cfg3.StatsCollectionEnabled,
+               'opt-out survives round trip');
   finally
     Cfg3.Free;
   end;

@@ -38,6 +38,14 @@ const
   EnvHome   = 'PASCLAW_HOME';
   EnvConfig = 'PASCLAW_CONFIG';
 
+  (* Default per-tool-result byte cap (TConfig.ToolOutputCap). 24 KB is
+     roughly 6K tokens -- generous enough that normal reads/greps pass
+     through verbatim, tight enough that one runaway result can't ride in
+     history for the rest of the turn (the pre-cap failure shape: a single
+     fat read inflating EVERY subsequent request). tool_output_get always
+     recovers the full text. 0 disables. *)
+  DefaultToolOutputCap = 24576;
+
 type
   TGatewayConfig = record
     LogLevel: string;
@@ -647,10 +655,10 @@ type
        When > 0, RunToolLoop diverts overlong tool outputs into the
        process-lifetime PasClaw.Tools.OutputCache and replaces the
        in-context body with a head + tail snippet plus a handle the
-       model can dereference via `tool_output_get`. Default 0 = off
-       (legacy verbatim behaviour). Operators flip it on in
-       config.json under "tool_output_cap" -- 8192 is a reasonable
-       starting cap (≈ 2K tokens). *)
+       model can dereference via `tool_output_get`. Default
+       DefaultToolOutputCap (24576 ≈ 6K tokens); 0 turns the cap off
+       (legacy verbatim behaviour) via "tool_output_cap": 0 in
+       config.json. *)
     ToolOutputCap:     Integer;
     (* Persist per-session usage counters (tokens, turns, tool calls,
        truncation savings) into the session JSON so /v1/stats can
@@ -1046,7 +1054,7 @@ begin
   MCPProgressiveDisclosure := True;  { on by default -- fat catalogs (Replicate MCP ~50 tools, GitHub MCP ~50+) make lazy reveal the right floor. The prompt cost of every MCP schema every turn dominates the bill on turns that touch zero MCP tools; tool_search loads schemas on demand at a one-turn cost per first-use. Operators with tiny catalogs flip off via onboarding (default N) or hand-edit if the +1 turn isn't worth the savings. Mirrors Claude Code's ToolSearch pattern. No-op when no MCP servers are configured. }
   RenderMarkdown       := True;  { on by default for terminal surfaces; cmd/serve flips off }
   SubagentsEnabled     := True;  { on by default -- a built-in general-purpose subagent makes `spawn` available with no config. }
-  ToolOutputCap        := 0;     { off by default; operators opt in. See TConfig.ToolOutputCap. }
+  ToolOutputCap        := DefaultToolOutputCap; { on by default -- an uncapped tool result rides in history for the whole turn and was the top context-growth driver (bench/agentloop: 100 KB read -> >100 KB request bodies). tool_output_get recovers the full text; operators opt out with tool_output_cap: 0. }
   StatsCollectionEnabled := True;  { on by default -- zero prompt cost, useful for diagnosing turn-count regressions. Onboarding can flip off for privacy-conscious operators. }
   CheckpointsEnabled     := True;  { on by default -- zero prompt cost, prevents lost work on multi-edit sessions. }
   MemoryDistillEnabled   := False; { opt-in: ~one extra LLM call per turn. }
@@ -1351,10 +1359,10 @@ begin
       across SaveConfig + LoadConfig. }
     if not VectorSearchEnabled then
       Root.PutBool('vector_search_enabled', False);
-    { Tool output cap: emit only when an operator has explicitly
-      opted in. 0 (off) is the default; suppressing it from the
-      JSON keeps fresh config files clean. }
-    if ToolOutputCap > 0 then
+    { Tool output cap: emit only when it differs from the default --
+      including an explicit 0 (opt-OUT), which must round-trip or the
+      next LoadConfig would silently re-enable the cap. }
+    if ToolOutputCap <> DefaultToolOutputCap then
       Root.PutInt('tool_output_cap', ToolOutputCap);
     { stats_collection_enabled, checkpoints_enabled, orient_task_aware:
       defaults flipped to ON in PR #314 (the six free behavioral toggles

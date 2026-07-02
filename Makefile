@@ -767,6 +767,16 @@ test-progress-ledger: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/progress_ledger_tests.pas -o$(BUILDDIR)/progress_ledger_tests
 	@$(BUILDDIR)/progress_ledger_tests
 
+# Deterministic agent-loop harness bench (bench/agentloop) -- pure FPC, no
+# external runtime. Spawns the built binary, plays the scripted model over
+# the relay, asserts on what the loop did. Not part of `make test` (binds a
+# port + spawns a server); run when touching ToolLoop / Stream.Reliability /
+# the gateway loop paths.
+bench-agentloop: $(BIN)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) bench/agentloop/agentloop_bench.pas -o$(BUILDDIR)/agentloop_bench
+	@$(BUILDDIR)/agentloop_bench
+
 # Logger level suppression: pins the contract PasClaw.dpr's
 # IsQuietInvocation branch depends on (SetLogLevel(llError) drops
 # Debug/Info/Warn while keeping Error). Without this regression

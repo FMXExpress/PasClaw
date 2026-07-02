@@ -260,7 +260,7 @@ const
     '"render_markdown":true,' +
     '"promptware_enabled":true,' +
     '"condense_reversible":false,' +
-    '"tool_output_cap":0,' +
+    '"tool_output_cap":24576,' +
     '"stats_collection_enabled":true,' +
     '"checkpoints_enabled":true,' +
     '"checkpoints_keep_last":32,' +
