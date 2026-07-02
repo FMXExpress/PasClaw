@@ -1240,6 +1240,34 @@ begin
   end;
 end;
 
+function Tool_TodoWrite(const ArgsJSON: string; out ErrMsg: string): string;
+{ todo_write -- the model's working checklist for the current task. The
+  handler itself only validates and acknowledges: the REAL consumer is
+  RunToolLoop (PasClaw.Tools.ToolLoop), which watches dispatched calls for
+  this name, keeps the latest checklist in its per-loop progress ledger,
+  and folds it back into the system prompt each iteration. That design
+  needs no shared state between the tool and the loop -- the checklist
+  rides in the call's own arguments -- so concurrent gateway sessions and
+  subagent child loops each track their own list for free. }
+var
+  CL: string;
+  i, Lines: Integer;
+begin
+  ErrMsg := '';
+  if not ParseStringArg(ArgsJSON, 'checklist', CL) then
+  begin
+    ErrMsg := 'missing required argument: checklist. Pass the FULL current ' +
+              'checklist as markdown "- [ ] step" / "- [x] done step" lines; ' +
+              'it replaces the previous one.';
+    Exit('');
+  end;
+  Lines := 1;
+  for i := 1 to Length(CL) do
+    if CL[i] = #10 then Inc(Lines);
+  Result := Format('checklist recorded (%d line(s)); it is shown back to you ' +
+                   'each turn in the progress ledger', [Lines]);
+end;
+
 procedure RegisterFSTools(R: TToolRegistry; UseHashline: Boolean);
 var
   T: TTool;
@@ -1382,6 +1410,28 @@ begin
   T.IsCore   := True;
   T.Category := tcMutating;
   Emit('fs_edit_hashline');
+
+  { todo_write -- task checklist for the progress ledger. Registered here
+    (not in a unit of its own) because RegisterFSTools is the one
+    registration path every surface -- CLI, TUI, serve, gateway, heartbeat,
+    component -- already calls, and subagent child registries inherit it via
+    the '*' expansion. tcReadOnly on purpose: updating the checklist is
+    bookkeeping, so it can run in a parallel batch and never counts as
+    "progress" for the ledger's nothing-written-yet nudge. }
+  T := Default(TTool);
+  T.Name        := 'todo_write';
+  T.Description := 'Maintain your working checklist for the current task. Pass ' +
+                   'the FULL checklist each call as markdown lines ("- [ ] step" / ' +
+                   '"- [x] done step") -- it replaces the previous one and is shown ' +
+                   'back to you every turn in the progress ledger. Write it at the ' +
+                   'start of multi-step work; update it as steps complete.';
+  T.Schema      := '{"type":"object","properties":{"checklist":{"type":"string",' +
+                   '"description":"The complete current checklist, markdown - [ ] / - [x] lines."}},' +
+                   '"required":["checklist"]}';
+  T.Handler     := Tool_TodoWrite;
+  T.IsCore      := True;
+  T.Category    := tcReadOnly;
+  R.Register(T);
 
   { apply_patch (new) -- multi-file, context-anchored patches in one call. }
   T := Default(TTool);

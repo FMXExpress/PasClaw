@@ -464,6 +464,8 @@ begin
         SysPrompt := SysPrompt + sLineBreak + sLineBreak + DeferredSec;
     end;
 
+    { Default-init: locals are not zero-initialized in Pascal, so any field this block doesn't set (e.g. DisableProgressLedger) would read stack garbage. }
+    ChildCfg := Default(TToolLoopConfig);
     ChildCfg.Provider      := FCtx.Provider;
     ChildCfg.Registry      := ChildReg;
     ChildCfg.Model         := Model;
