@@ -93,6 +93,8 @@ var
   GHandler:  THandler;
   GEnvs:     array of string;   { raw envelopes, reset per scenario }
   GMaxBody:  Integer;           { max envelope bytes, reset per scenario }
+  GTotalBody: Int64;            { sum of envelope bytes, reset per scenario }
+  GStep:     Integer;           { policy-model state for ScenarioRealTask }
 
 procedure ResetScenario(H: THandler);
 begin
@@ -101,6 +103,8 @@ begin
     GHandler := H;
     SetLength(GEnvs, 0);
     GMaxBody := 0;
+    GTotalBody := 0;
+    GStep := 0;
   finally
     GLock.Release;
   end;
@@ -197,6 +201,7 @@ begin
     GEnvs[High(GEnvs)] := Data;
     N := Length(GEnvs);
     if Length(Data) > GMaxBody then GMaxBody := Length(Data);
+    Inc(GTotalBody, Length(Data));
     H := GHandler;
   finally
     GLock.Release;
@@ -676,6 +681,125 @@ begin
   Metric('repeatread.growth_bytes_over_2_rereads', Grow);
 end;
 
+function H_RealTask(N: Integer; const EnvJSON: string): string;
+{ A deterministic POLICY, not a fixed script: the same code runs against
+  both binaries and adapts to what the harness offers -- exactly how a
+  real model reads its tool schemas. Where the after-binary provides
+  find_files / start_line / the mini-diff, the policy uses them; where
+  the before-binary doesn't, it falls back to the list_dir ladder and
+  full-file verify re-reads the original failing transcript showed. The
+  60 KB "site dump" is generated locally (shell printf loop) instead of
+  a live fetch so the run is byte-deterministic -- it mirrors the real
+  transcript's fetch -> save -> parse loop. }
+var
+  LastMsg: string;
+begin
+  LastMsg := EnvLastMessage(EnvJSON);
+  case GStep of
+    0: begin GStep := 1;
+         Result := RoundOf([OneCall('list_dir', ArgsObj1('path', '.'))]); end;
+    1: begin GStep := 2;   { "fetch the reference site" -> save a ~68 KB dump.
+         yes|head, not a shell loop: $((...)) trips the deny-substring
+         guard for command substitution. }
+         Result := RoundOf([OneCall('shell_exec', ArgsObj1('command',
+           'yes "pasclaw dev site: tool-calling agent in object pascal, gateway, mcp, skills, sessions, memory pad" | head -800 > site-dump.html; wc -c site-dump.html'))]); end;
+    2: begin GStep := 3;
+         Result := RoundOf([OneCall('read_file', ArgsPathPlain('site-dump.html'))]); end;
+    3: begin GStep := 4;   { "grab the README for feature listings" }
+         Result := RoundOf([OneCall('shell_exec', ArgsObj1('command',
+           'yes "README feature line: agent loop, tools, sessions, gateway" | head -100 > readme-ref.md; wc -c readme-ref.md'))]); end;
+    4: begin GStep := 5;
+         Result := RoundOf([OneCall('read_file', ArgsPathPlain('readme-ref.md'))]); end;
+    5: begin GStep := 6;   { "double-check the dump" -- the classic re-read }
+         Result := RoundOf([OneCall('read_file', ArgsPathPlain('site-dump.html'))]); end;
+    6: begin GStep := 7;
+         Result := RoundOf([OneCall('write_file', ArgsPathContent('index.html',
+           '<!DOCTYPE html>'#10'<html><head><title>PasClaw</title></head>'#10 +
+           '<body>'#10'<h1>PasClaw</h1>'#10'<p>AI agent in Object Pascal.</p>'#10 +
+           '</body></html>'))]); end;
+    7: begin           { locate the deliverable: glob if the harness has it }
+         if Pos('find_files', EnvJSON) > 0 then
+         begin
+           GStep := 9;
+           Result := RoundOf([OneCall('find_files', '{"pattern":"index.*"}')]);
+         end
+         else
+         begin
+           GStep := 8;
+           Result := RoundOf([OneCall('list_dir', ArgsObj1('path', '.'))]);
+         end;
+       end;
+    8: begin GStep := 9;   { ladder's second rung (no glob tool) }
+         Result := RoundOf([OneCall('list_dir', ArgsObj1('path', '.'))]); end;
+    9: begin GStep := 10;  { verify the write: surgical if ranges exist }
+         if Pos('start_line', EnvJSON) > 0 then
+           Result := RoundOf([OneCall('read_file',
+             '{"path":"index.html","start_line":1,"end_line":6}')])
+         else
+           Result := RoundOf([OneCall('read_file', ArgsPathPlain('index.html'))]);
+       end;
+    10: begin GStep := 11;
+         Result := RoundOf([OneCall('edit_file',
+           '{"path":"index.html","old_text":"<title>PasClaw</title>","new_text":"<title>PasClaw v2 -- better than before</title>"}')]); end;
+    11: begin            { trust the mini-diff; re-read blind edits }
+         if Pos('now reads', LastMsg) > 0 then
+         begin
+           GStep := 13;
+           Result := StopOf('done: index.html built in the workspace with the v2 title.');
+         end
+         else
+         begin
+           GStep := 12;
+           Result := RoundOf([OneCall('read_file', ArgsPathPlain('index.html'))]);
+         end;
+       end;
+  else
+    Result := StopOf('done: index.html built in the workspace with the v2 title.');
+  end;
+end;
+
+procedure ScenarioRealTask;
+{ The original failing prompt, end to end, under a policy model. }
+var
+  Answer, Deliv: string;
+  S: TStringList;
+begin
+  WriteLn;
+  WriteLn('== scenario: real-task (the pasclaw.dev build prompt, end to end) ==');
+  ResetScenario(H_RealTask);
+  Answer := Chat('[' + MsgObjJSON('user',
+    'build a better version of https://pasclaw.dev/ -- ' +
+    'https://github.com/fmxexpress/pasclaw/ if you need more feature ' +
+    'listings. you can build it using HTML and HTMX if you need to or just ' +
+    'vanilla javascript. it could be a single inline file or multiple ' +
+    'files. make sure you use the workspace dir to do your work') + ']',
+    'bench-realtask');
+
+  Deliv := '';
+  if FileExists(GHomeDir + '/workspace/index.html') then
+  begin
+    S := TStringList.Create;
+    try
+      S.LoadFromFile(GHomeDir + '/workspace/index.html');
+      Deliv := S.Text;
+    finally
+      S.Free;
+    end;
+  end;
+  { Guard against silently measuring the wrong task: the dump must have
+    been written and its body must have reached the model. }
+  Check(FileExists(GHomeDir + '/workspace/site-dump.html'),
+    'the reference dump was written by the shell step');
+  Check(Has(EnvAt(3), 'pasclaw dev site:'),
+    'the dump body reached the model in the read result');
+  Check(Deliv <> '', 'deliverable index.html exists in the workspace');
+  Check(Has(Deliv, 'v2 -- better than before'), 'edit landed (v2 title)');
+  Check(Has(Answer, 'done:'), 'turn finished with a final answer');
+  Metric('realtask.provider_calls', EnvCount);
+  Metric('realtask.total_request_bytes', GTotalBody);
+  Metric('realtask.max_request_body_bytes', GMaxBody);
+end;
+
 { ---- gateway lifecycle ---------------------------------------------------- }
 var
   GW: TProcess;
@@ -788,6 +912,7 @@ begin
     ScenarioResumeAfterCap;
     ScenarioFatRead;
     ScenarioRepeatRead;
+    ScenarioRealTask;
 
     WriteLn;
     WriteLn('== metrics ==');
