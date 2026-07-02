@@ -516,6 +516,9 @@ begin
   Check(Has(EnvLastMessage(EnvAt(3)), 'bench-demo.html'),
     'find_files locates the file by glob in one call');
   Metric('build-site.provider_calls', EnvCount);
+  { C4 baseline: the fixed per-request overhead every call pays -- system
+    prompt + full tool schemas + one user message. Schema fat shows here. }
+  Metric('build-site.first_request_bytes', Length(EnvAt(0)));
 end;
 
 function H_Malformed(N: Integer; const EnvJSON: string): string;
