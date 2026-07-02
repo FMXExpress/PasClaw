@@ -803,6 +803,43 @@ begin
   Metric('realtask.max_request_body_bytes', GMaxBody);
 end;
 
+function H_ErrorGuidance(N: Integer; const EnvJSON: string): string;
+begin
+  case N of
+    1: Result := RoundOf([OneCall('read_files', '{"path":"whatever.txt"}')]);   { typo'd tool }
+    2: Result := RoundOf([OneCall('read_file', ArgsPathPlain('sub-dir-page.html'))]); { wrong dir }
+  else
+    Result := StopOf('guidance received.');
+  end;
+end;
+
+procedure ScenarioErrorGuidance;
+{ B3: the errors a model actually loops on must carry the next move --
+  through the real gateway dispatch, not just unit-level. }
+var
+  S: TStringList;
+begin
+  WriteLn;
+  WriteLn('== scenario: error-guidance (errors state the next move) ==');
+  ForceDirectories(GHomeDir + '/workspace/pages');
+  S := TStringList.Create;
+  try
+    S.Text := '<p>hi</p>';
+    S.SaveToFile(GHomeDir + '/workspace/pages/sub-dir-page.html');
+  finally
+    S.Free;
+  end;
+  ResetScenario(H_ErrorGuidance);
+  Chat('[' + MsgObjJSON('user', 'open that page file') + ']', 'bench-errs');
+  Check(Has(EnvLastMessage(EnvAt(1)), 'did you mean'),
+    'unknown tool error suggests similar names');
+  Check(Has(EnvLastMessage(EnvAt(1)), 'read_file'),
+    'suggestion includes the real tool name');
+  Check(Has(EnvLastMessage(EnvAt(2)), 'Did you mean') and
+        Has(EnvLastMessage(EnvAt(2)), 'pages/sub-dir-page.html'),
+    'no-such-file error names the actual location');
+end;
+
 { ---- gateway lifecycle ---------------------------------------------------- }
 var
   GW: TProcess;
@@ -916,6 +953,7 @@ begin
     ScenarioFatRead;
     ScenarioRepeatRead;
     ScenarioRealTask;
+    ScenarioErrorGuidance;
 
     WriteLn;
     WriteLn('== metrics ==');
