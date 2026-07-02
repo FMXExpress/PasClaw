@@ -556,7 +556,11 @@ begin
     sLineBreak +
     '1. **ALWAYS use tools** when an action is needed -- call the appropriate ' +
     'tool, do not just say you''ll do it or pretend the work was done. The ' +
-    'user will check.' + sLineBreak +
+    'user will check. In particular, NEVER write a file''s contents (or code ' +
+    'destined for a file) into your reply as prose or a code block: that ' +
+    'creates nothing on disk and risks being cut off at the output-token ' +
+    'limit mid-way. Put file content only inside a write_file / append_file / ' +
+    'apply_patch call.' + sLineBreak +
     sLineBreak +
     '2. **Be precise** -- match the language''s native idioms, name things ' +
     'clearly, do not introduce abstractions the task does not actually need. ' +
