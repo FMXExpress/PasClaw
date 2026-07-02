@@ -774,6 +774,34 @@ begin
     Result := Result + 'Last tool error: ' + Meta.WorkingState.LastError + sLineBreak;
 end;
 
+function ToolDetailEntryCount(const Raw: string): Integer;
+{ Top-level element count of the tool_details blob (a bare JSON array).
+  Unparseable input returns MaxInt so the staleness guard in Save drops it
+  rather than persisting garbage. }
+var
+  Root: TJsonObject;
+  Arr: TJsonArray;
+begin
+  Result := MaxInt;
+  try
+    Root := TJsonObject.Parse('{"d":' + Raw + '}');
+    if Root = nil then Exit;
+    try
+      Arr := Root.ChildArray('d');
+      if Arr <> nil then
+      try
+        Result := Arr.Count;
+      finally
+        Arr.Free;
+      end;
+    finally
+      Root.Free;
+    end;
+  except
+    Result := MaxInt;
+  end;
+end;
+
 procedure TSession.Save;
 var
   Root, MetaObj, MsgObj: TJsonObject;
@@ -808,9 +836,22 @@ begin
     end;
     Root.PutArray('messages', Arr);
 
-    { Opaque tool-detail blob, emitted verbatim when present. }
+    { Opaque tool-detail blob, emitted verbatim when present -- but only
+      when it can still be index-aligned to THIS transcript. Callers other
+      than the web UI's SaveSessionFromBody mutate Messages directly (TUI
+      /clear, resume paths persisting a compacted FinalMessages); a blob
+      with MORE entries than the transcript is definitely stale and would
+      overlay old args/results onto unrelated turns by index on the next
+      web reload -- drop it. A blob with fewer/equal entries stays: the
+      append-only resume case keeps earlier indexes pointing at the same
+      original turns, so their detail remains correct. }
     if Trim(ToolDetail) <> '' then
-      Root.PutRaw('tool_details', ToolDetail);
+    begin
+      if ToolDetailEntryCount(ToolDetail) > Length(Messages) then
+        ToolDetail := ''
+      else
+        Root.PutRaw('tool_details', ToolDetail);
+    end;
 
     { Atomic write: tmp file + rename. A crash partway through
       SaveToFile would otherwise leave a half-written JSON that Load
@@ -920,6 +961,11 @@ end;
 procedure TSession.ClearMessages;
 begin
   SetLength(Messages, 0);
+  { The web UI's tool-card blob is index-aligned to Messages; a cleared
+    transcript makes it meaningless, and leaving it would overlay stale
+    args/results onto whatever turns come next (TUI /clear then chat,
+    reopened in the web UI). }
+  ToolDetail := '';
 end;
 
 procedure TSession.AutoTitle;
