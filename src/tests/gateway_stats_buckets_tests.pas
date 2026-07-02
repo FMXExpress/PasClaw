@@ -263,11 +263,41 @@ begin
   end;
 end;
 
+procedure TestSessionFromUserField;
+{ /v1/chat/completions derives a session from the OpenAI `user` field
+  when no X-PasClaw-Session header is present (OpenClaw-compatible).
+  Pin the contract: stable per value, distinct across values, hashed
+  (raw user string never appears in the id), '' / blank -> stateless. }
+var
+  A, B: string;
+  i: Integer;
+begin
+  AssertEqStr(SessionFromUserField(''), '', 'no user field -> stateless');
+  AssertEqStr(SessionFromUserField('   '), '', 'blank user field -> stateless');
+
+  A := SessionFromUserField('sweetconsole-tasker');
+  B := SessionFromUserField('sweetconsole-tasker');
+  AssertEqStr(A, B, 'same user value -> same session across calls');
+  AssertTrue(A <> SessionFromUserField('sweetconsole-other'),
+             'different user values -> different sessions');
+  AssertEqStr(SessionFromUserField('  sweetconsole-tasker  '), A,
+              'surrounding whitespace does not change the session');
+
+  AssertEqStr(Copy(A, 1, 5), 'user-', 'derived id carries the user- prefix');
+  AssertEqInt(Length(A), 5 + 16, 'user- prefix + 16 hex chars');
+  for i := 6 to Length(A) do
+    AssertTrue(CharInSet(A[i], ['0'..'9', 'a'..'f']),
+               'hash part is lowercase hex');
+  AssertTrue(Pos('sweetconsole', A) = 0,
+             'raw user string never appears in the session id');
+end;
+
 begin
   TestLeadingUnderscoreIdIsSafe;
   TestBucketAccumulatesAcrossCalls;
   TestDistinctBucketsDontInterfere;
   TestRawHelperAccumulatesPassthroughTraffic;
   TestRawHelperRespectsStatsFlag;
+  TestSessionFromUserField;
   WriteLn('gateway_stats_buckets_tests: OK');
 end.
