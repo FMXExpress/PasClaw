@@ -2875,11 +2875,36 @@ end;
 procedure TGatewayServer.SaveSessionFromBody(S: TSession; const Body: string);
 var
   Title, Model: string;
+  BodyObj: TJsonObject;
+  TDArr: TJsonArray;
 begin
   { ChatBodyToMessages owns the JSON parse (and raises EArgumentException
     on bad input, which the callers map to 400); it lives in the store
     unit so it's unit-testable without binding an HTTP listener. }
   S.Messages := ChatBodyToMessages(Body, Title, Model);
+
+  { Optional opaque tool-detail blob (web UI card bodies). Parsed separately
+    -- it is NOT part of the transcript, so it never reaches the model and
+    doesn't trip the rich-turn overwrite guard. The body already validated
+    as JSON above; guard the re-parse anyway. }
+  S.ToolDetail := '';
+  try
+    BodyObj := TJsonObject.Parse(Body);
+    if BodyObj <> nil then
+    try
+      TDArr := BodyObj.ChildArray('tool_details');
+      if TDArr <> nil then
+      try
+        S.ToolDetail := TDArr.ToJSON;
+      finally
+        TDArr.Free;
+      end;
+    finally
+      BodyObj.Free;
+    end;
+  except
+    { absent / malformed -- leave ToolDetail empty }
+  end;
 
   if Title <> '' then S.Meta.Title := Title;
   S.AutoTitle;                          { derive from first user turn if still blank }
@@ -3027,6 +3052,10 @@ begin
         Arr.AddObject(MsgObj);
       end;
       Root.PutArray('messages', Arr);
+      { Opaque tool-detail blob for the web UI to rehydrate expandable card
+        bodies on reload. Absent for TUI/agent-created sessions. }
+      if Trim(S.ToolDetail) <> '' then
+        Root.PutRaw('tool_details', S.ToolDetail);
       WriteJSON(AResp, 200, Root.ToJSON);
     finally
       Root.Free;

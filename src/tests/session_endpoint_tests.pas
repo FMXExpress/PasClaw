@@ -230,6 +230,64 @@ begin
   AssertTrue(not SessionHasRichTurns(Msgs), 'empty transcript is not rich');
 end;
 
+procedure TestToolDetailStalenessGuard;
+{ ToolDetail (the web UI's tool-card blob) is index-aligned to Messages.
+  Paths outside the web UI's own PUT mutate Messages directly (TUI /clear,
+  resume persisting a compacted history), so the store must not persist a
+  blob that can no longer align: ClearMessages drops it, and Save drops a
+  blob with MORE entries than the transcript. The append-only case (blob
+  shorter/equal) survives -- earlier indexes still point at the same turns. }
+const
+  Id = 'endpoint-test-tooldetail';
+var
+  S: TSession;
+begin
+  if FileExists(SessionPath(Id)) then DeleteFile(SessionPath(Id));
+
+  { Aligned blob (2 entries, 2 messages) round-trips. }
+  S := TSession.Create(Id);
+  try
+    SetLength(S.Messages, 2);
+    S.Messages[0] := MakeMessage(mrUser, 'build it');
+    S.Messages[1] := MakeMessage(mrAssistant, 'built.');
+    S.ToolDetail := '[null,[{"name":"write_file","args":"{}","result":"ok"}]]';
+    S.Save;
+  finally
+    S.Free;
+  end;
+  S := TSession.Create(Id);
+  try
+    AssertTrue(Pos('write_file', S.ToolDetail) > 0, 'aligned tool detail round-trips');
+
+    { ClearMessages invalidates the blob (TUI /clear shape). }
+    S.ClearMessages;
+    AssertTrue(S.ToolDetail = '', 'ClearMessages drops the tool detail');
+    S.Save;
+  finally
+    S.Free;
+  end;
+  S := TSession.Create(Id);
+  try
+    AssertTrue(S.ToolDetail = '', 'cleared session persists without tool detail');
+
+    { Transcript rebuilt SHORTER than the blob (compaction / replace shape):
+      Save must drop the stale blob rather than persist a misaligned one. }
+    SetLength(S.Messages, 1);
+    S.Messages[0] := MakeMessage(mrUser, 'fresh start');
+    S.ToolDetail := '[null,null,[{"name":"shell_exec","args":"{}","result":"stale"}]]';
+    S.Save;
+  finally
+    S.Free;
+  end;
+  S := TSession.Create(Id);
+  try
+    AssertTrue(S.ToolDetail = '', 'over-long (stale) tool detail is dropped on save');
+  finally
+    S.Free;
+    if FileExists(SessionPath(Id)) then DeleteFile(SessionPath(Id));
+  end;
+end;
+
 function HomeLooksIsolated: Boolean;
 var
   Home: string;
@@ -251,5 +309,6 @@ begin
   TestRoundTrip;
   TestListSurfacesSession;
   TestRichTurnDetection;
+  TestToolDetailStalenessGuard;
   WriteLn('session_endpoint_tests: OK');
 end.

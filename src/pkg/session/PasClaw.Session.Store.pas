@@ -127,6 +127,13 @@ type
   public
     Meta:     TSessionMeta;
     Messages: TMessageArray;
+    { Opaque per-turn tool-call detail (full args/results) the web UI streams
+      on its side-channel and stashes here so reloaded turns keep full card
+      bodies. Raw JSON (an array aligned to the flattened message turns);
+      empty when none. The store treats it as an opaque blob -- it is NOT
+      part of the message transcript, so it never reaches the model and
+      doesn't count as a "rich turn" for the overwrite guard. }
+    ToolDetail: string;
     { Create a session handle. When AId is empty, generates a new id
       and leaves FExists False -- caller decides whether to persist
       via Save. When AId is non-empty, attempts to load the file;
@@ -767,6 +774,34 @@ begin
     Result := Result + 'Last tool error: ' + Meta.WorkingState.LastError + sLineBreak;
 end;
 
+function ToolDetailEntryCount(const Raw: string): Integer;
+{ Top-level element count of the tool_details blob (a bare JSON array).
+  Unparseable input returns MaxInt so the staleness guard in Save drops it
+  rather than persisting garbage. }
+var
+  Root: TJsonObject;
+  Arr: TJsonArray;
+begin
+  Result := MaxInt;
+  try
+    Root := TJsonObject.Parse('{"d":' + Raw + '}');
+    if Root = nil then Exit;
+    try
+      Arr := Root.ChildArray('d');
+      if Arr <> nil then
+      try
+        Result := Arr.Count;
+      finally
+        Arr.Free;
+      end;
+    finally
+      Root.Free;
+    end;
+  except
+    Result := MaxInt;
+  end;
+end;
+
 procedure TSession.Save;
 var
   Root, MetaObj, MsgObj: TJsonObject;
@@ -800,6 +835,23 @@ begin
       Arr.AddObject(MsgObj);   { takes ownership; sets MsgObj := nil }
     end;
     Root.PutArray('messages', Arr);
+
+    { Opaque tool-detail blob, emitted verbatim when present -- but only
+      when it can still be index-aligned to THIS transcript. Callers other
+      than the web UI's SaveSessionFromBody mutate Messages directly (TUI
+      /clear, resume paths persisting a compacted FinalMessages); a blob
+      with MORE entries than the transcript is definitely stale and would
+      overlay old args/results onto unrelated turns by index on the next
+      web reload -- drop it. A blob with fewer/equal entries stays: the
+      append-only resume case keeps earlier indexes pointing at the same
+      original turns, so their detail remains correct. }
+    if Trim(ToolDetail) <> '' then
+    begin
+      if ToolDetailEntryCount(ToolDetail) > Length(Messages) then
+        ToolDetail := ''
+      else
+        Root.PutRaw('tool_details', ToolDetail);
+    end;
 
     { Atomic write: tmp file + rename. A crash partway through
       SaveToFile would otherwise leave a half-written JSON that Load
@@ -839,6 +891,7 @@ var
 begin
   FExists := False;
   SetLength(Messages, 0);
+  ToolDetail := '';
   Meta := Default(TSessionMeta);
   Meta.Id := AId;
   Path := SessionPath(AId);
@@ -883,6 +936,14 @@ begin
       finally
         Arr.Free;
       end;
+      { Opaque tool-detail blob (web UI card bodies); kept verbatim. }
+      Arr := Root.ChildArray('tool_details');
+      if Arr <> nil then
+      try
+        ToolDetail := Arr.ToJSON;
+      finally
+        Arr.Free;
+      end;
       FExists := True;
     finally
       Root.Free;
@@ -900,6 +961,11 @@ end;
 procedure TSession.ClearMessages;
 begin
   SetLength(Messages, 0);
+  { The web UI's tool-card blob is index-aligned to Messages; a cleared
+    transcript makes it meaningless, and leaving it would overlay stale
+    args/results onto whatever turns come next (TUI /clear then chat,
+    reopened in the web UI). }
+  ToolDetail := '';
 end;
 
 procedure TSession.AutoTitle;
