@@ -1157,6 +1157,55 @@ begin
   until False;
 end;
 
+function EditContextSnippet(const NewContent: string;
+                            FirstChangeOfs, NewTextLen: Integer): string;
+{ Mini-diff feedback: the changed region of the NEW file body with +-3
+  context lines and line numbers, so the model can confirm the edit
+  landed where intended WITHOUT a follow-up full-file read_file (which
+  re-injects the whole body into history). FirstChangeOfs is the 1-based
+  char offset where the replacement begins. Bounded to 12 lines. }
+const
+  CtxLines = 3;
+  MaxLines = 12;
+var
+  Lines: TStringList;
+  i, FirstLine, LastLine, Lo, Hi, Shown: Integer;
+begin
+  Result := '';
+  { 1-based line of the change start = newlines before it + 1. }
+  FirstLine := 1;
+  for i := 1 to FirstChangeOfs - 1 do
+    if (i <= Length(NewContent)) and (NewContent[i] = #10) then Inc(FirstLine);
+  LastLine := FirstLine;
+  for i := FirstChangeOfs to FirstChangeOfs + NewTextLen - 1 do
+    if (i >= 1) and (i <= Length(NewContent)) and (NewContent[i] = #10) then Inc(LastLine);
+
+  Lines := TStringList.Create;
+  try
+    Lines.LineBreak := #10;
+    Lines.StrictDelimiter := True;
+    Lines.Text := StringReplace(NewContent, #13, '', [rfReplaceAll]);
+    Lo := FirstLine - CtxLines; if Lo < 1 then Lo := 1;
+    Hi := LastLine + CtxLines;  if Hi > Lines.Count then Hi := Lines.Count;
+    Shown := 0;
+    for i := Lo to Hi do
+    begin
+      if Shown >= MaxLines then
+      begin
+        Result := Result + Format('  ... (%d more line(s))', [Hi - i + 1]) + #10;
+        Break;
+      end;
+      Result := Result + Format('%6d: %s', [i, Lines[i - 1]]) + #10;
+      Inc(Shown);
+    end;
+    Result := TrimRight(Result);
+    if Result <> '' then
+      Result := Format('now reads (lines %d-%d):', [Lo, Hi]) + #10 + Result;
+  finally
+    Lines.Free;
+  end;
+end;
+
 function Tool_FSEdit(const ArgsJSON: string; out ErrMsg: string): string;
 { edit_file: two modes.
     1. Plain string replacement (default): old_text -> new_text, the form
@@ -1168,7 +1217,7 @@ function Tool_FSEdit(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Path, OldText, NewText, Content, Reason: string;
   ReplaceAll: Boolean;
-  Cnt: Integer;
+  Cnt, FirstOfs: Integer;
 begin
   ErrMsg := '';
   { Hashline mode wins when a patch is supplied. }
@@ -1223,6 +1272,7 @@ begin
                      [Cnt, Path]);
     Exit('');
   end;
+  FirstOfs := Pos(OldText, Content);   { where the (first) change lands }
   if ReplaceAll then
     Content := StringReplace(Content, OldText, NewText, [rfReplaceAll])
   else
@@ -1230,7 +1280,8 @@ begin
   try
     SnapshotBeforeWrite(Path);
     WriteFileText(Path, Content);
-    Result := Format('edited %s (replaced %d occurrence(s))', [Path, Cnt]);
+    Result := Format('edited %s (replaced %d occurrence(s))', [Path, Cnt]) + #10 +
+              EditContextSnippet(Content, FirstOfs, Length(NewText));
   except
     on E: Exception do
     begin

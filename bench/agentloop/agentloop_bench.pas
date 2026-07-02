@@ -446,7 +446,8 @@ begin
     1: Result := RoundOf([
          OneCall('write_file', ArgsPathContent('bench-demo.html', '<h1>bench</h1>')),
          OneCall('todo_write', ArgsObj1('checklist', '- [x] write page'#10'- [ ] verify page'))]);
-    2: Result := RoundOf([OneCall('read_file', ArgsPathPlain('bench-demo.html'))]);
+    2: Result := RoundOf([OneCall('edit_file',
+         '{"path":"bench-demo.html","old_text":"<h1>bench</h1>","new_text":"<h1>bench v2</h1>"}')]);
   else
     Result := StopOf('page written and verified.');
   end;
@@ -497,6 +498,12 @@ begin
   Check(FileExists(GHomeDir + '/workspace/bench-demo.html'),
     'deliverable exists in the workspace');
   Check(Has(Answer, 'page written'), 'final answer surfaced');
+  { B2: the edit's tool result carries the mini-diff snippet, so the model
+    verifies placement without a full-file re-read. }
+  Check(Has(EnvLastMessage(EnvAt(2)), 'now reads (lines'),
+    'edit_file result carries the mini-diff context snippet');
+  Check(Has(EnvLastMessage(EnvAt(2)), 'bench v2'),
+    'snippet shows the changed content');
   Metric('build-site.provider_calls', EnvCount);
 end;
 

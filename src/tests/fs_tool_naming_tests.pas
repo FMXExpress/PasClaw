@@ -179,6 +179,16 @@ begin
     AssertEqStr(Err, '', 'edit_file replace_all no error');
     AssertEqStr(ReadBack(Reg, PathA), 'y y y', 'edit_file replaced all occurrences');
 
+    { mini-diff feedback: the result shows the changed region with line
+      numbers and +-3 context so the model needn't re-read the file. }
+    Reg.RunTool('write_file', '{"path":"' + PathA + '","content":"l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8"}', Err);
+    R := Reg.RunTool('edit_file', '{"path":"' + PathA + '","old_text":"l5","new_text":"L5-CHANGED"}', Err);
+    AssertContains(R, 'now reads (lines 2-8):', 'snippet header with clamped range');
+    AssertContains(R, '5: L5-CHANGED', 'snippet shows the changed line with its number');
+    AssertContains(R, '2: l2', 'snippet includes leading context');
+    AssertContains(R, '8: l8', 'snippet includes trailing context');
+    AssertTrue(Pos('1: l1', R) = 0, 'context is bounded (line 1 outside +-3)');
+
     { delete (omit new_text) }
     Reg.RunTool('write_file', '{"path":"' + PathA + '","content":"keepDROPkeep"}', Err);
     Reg.RunTool('edit_file', '{"path":"' + PathA + '","old_text":"DROP"}', Err);
