@@ -178,6 +178,7 @@ uses
   PasClaw.Agent.Orient,   { task-aware MEMORY slicing (Cfg.OrientTaskAware) }
   PasClaw.Memory.Facts,   { distilled-fact injection (Cfg.MemoryDistillEnabled) }
   PasClaw.Tools.Sandbox,  { CurrentWorkspace -- the working dir the prompt advertises }
+  PasClaw.Agent.ProjectFacts, { deterministic ## Project section (stack/build/test/git) }
   PasClaw.MCP.Disclosure; { deferred-tools section (Cfg.MCPProgressiveDisclosure) }
 
 const
@@ -236,6 +237,14 @@ begin
     sLineBreak +
     '## Runtime' + sLineBreak +
     RuntimeString;
+end;
+
+function PromptWorkDir: string;
+{ The directory relative tool paths resolve to -- the same value the
+  Workspace section advertises (configured workspace, or launch dir). }
+begin
+  Result := CurrentWorkspace;
+  if Trim(Result) = '' then Result := GetCurrentDir;
 end;
 
 function BuildWorkspaceSection: string;
@@ -846,6 +855,15 @@ begin
     Result := AppendSection(Result, BuildPlanModeSection);
   Result := AppendSection(Result, BuildIdentitySection);
   Result := AppendSection(Result, BuildWorkspaceSection);
+  { Deterministic project facts (stack / build / test commands / git
+    branch) detected from the working directory by pure file reads --
+    saves the model its usual "what kind of repo is this" exploration
+    prefix and gives Rule 3's verify-your-changes a concrete command.
+    Skipped when the project carries an AGENTS.md: the operator-authored
+    doc (emitted below as Project Rules) states this better; facts are
+    the zero-config floor. }
+  if FindProjectAgentsMd('') = '' then
+    Result := AppendSection(Result, BuildProjectFactsSection(PromptWorkDir));
   Result := AppendSection(Result,
               BuildMemorySection((Cfg <> nil) and Cfg.OrientTaskAware, TaskHint));
   { Distilled facts (Cfg.MemoryDistillEnabled). Wholesale, after the .md

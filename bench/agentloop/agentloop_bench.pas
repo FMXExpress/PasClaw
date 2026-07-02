@@ -454,18 +454,41 @@ end;
 
 procedure ScenarioBuildSite;
 var
-  Answer, SP2: string;
+  Answer, SP1, SP2: string;
+  S: TStringList;
 begin
   WriteLn;
   WriteLn('== scenario: build-site (goal anchor + ledger fold + deliverable) ==');
+  { B1 fixture: a recognisable project in the workspace -- the ## Project
+    facts (stack, make test, git branch) must reach iteration 1's system
+    prompt with zero exploration calls spent discovering them. }
+  S := TStringList.Create;
+  try
+    S.Text := 'all: build'#10#9'echo hi'#10'build:'#10#9'echo b'#10'test: build'#10#9'echo t'#10;
+    S.SaveToFile(GHomeDir + '/workspace/Makefile');
+  finally
+    S.Free;
+  end;
+  ForceDirectories(GHomeDir + '/workspace/.git');
+  S := TStringList.Create;
+  try
+    S.Text := 'ref: refs/heads/bench-main'#10;
+    S.SaveToFile(GHomeDir + '/workspace/.git/HEAD');
+  finally
+    S.Free;
+  end;
   ResetScenario(H_BuildSite);
   Answer := Chat('[' + MsgObjJSON('user',
     'build a small landing page named bench-demo.html for the demo project') + ']',
     'bench-build');
 
   Check(EnvCount = 3, Format('loop finished in 3 provider calls (got %d)', [EnvCount]));
-  Check(not Has(EnvSystemPrompt(EnvAt(0)), '[progress ledger'),
+  SP1 := EnvSystemPrompt(EnvAt(0));
+  Check(not Has(SP1, '[progress ledger'),
     'iteration 1 system prompt is pristine (prefix-cache preserved)');
+  Check(Has(SP1, '## Project'), 'project facts reach iteration 1');
+  Check(Has(SP1, 'Test:  make test'), 'facts name the verify command (make test)');
+  Check(Has(SP1, 'Git branch: bench-main'), 'facts carry the git branch');
   SP2 := EnvSystemPrompt(EnvAt(1));
   Check(Has(SP2, '[progress ledger'), 'iteration 2 carries the progress ledger');
   Check(Has(SP2, 'bench-demo.html'), 'ledger lists the written file');
