@@ -382,6 +382,24 @@ begin
   end;
 end;
 
+function TruncatedOf(const Text: string): string;
+{ A turn that hit the output ceiling mid-generation: prose content, no
+  tool call, finish_reason=length (the shape Gemini/OpenAI return; the
+  loop also recognises Anthropic's raw 'max_tokens'). Models this as the
+  observed real-world failure -- a model narrating code as prose until it
+  runs out of tokens. }
+var O: TJsonObject;
+begin
+  O := TJsonObject.Create;
+  try
+    O.PutStr('content', Text);
+    O.PutStr('finish_reason', 'length');
+    Result := O.ToJSON;
+  finally
+    O.Free;
+  end;
+end;
+
 { ---- chat driver ---------------------------------------------------------- }
 function MsgObjJSON(const Role, Content: string): string;
 var O: TJsonObject;
@@ -818,6 +836,65 @@ begin
     'no-such-file error names the actual location');
 end;
 
+function H_TruncationRecovery(N: Integer; const EnvJSON: string): string;
+begin
+  case N of
+    { Turn 1: narrate the game as prose and run out of output tokens --
+      no tool call, finish=length. On main the loop returns this as the
+      finished answer and no file lands; the fix must retry instead. }
+    1: Result := TruncatedOf(
+         'Let me build this. ### Player drawing:'#10 +
+         'We draw the ship with rotation. ### Bullets:'#10 +
+         'procedure DrawBullet(X, Y: Integer);'#10 + 'begin'#10 + '  GotoXY(X, Y);');
+    { Turn 2: after the corrective nudge, actually call write_file. }
+    2: Result := RoundOf([OneCall('write_file',
+         ArgsPathContent('game.pas',
+           'program game;'#10 + 'begin'#10 + '  writeln(''ok'');'#10 + 'end.'#10))]);
+  else
+    Result := StopOf('done: wrote game.pas.');
+  end;
+end;
+
+procedure ScenarioTruncationRecovery;
+{ The live Gemini-3.5-Flash failure: a turn that hits the output-token
+  ceiling with no tool call must NOT be treated as a finished answer.
+  On main this scenario fails (loop ends at call 1, no file); with the
+  recovery it nudges toward tool use, retries, and the file lands. }
+var
+  Answer, SP1, SP2: string;
+begin
+  WriteLn;
+  WriteLn('== scenario: truncation-recovery (finish=length + no tool call must not end the turn) ==');
+  if FileExists(GHomeDir + '/workspace/game.pas') then
+    DeleteFile(GHomeDir + '/workspace/game.pas');
+  ResetScenario(H_TruncationRecovery);
+  Answer := Chat('[' + MsgObjJSON('user',
+    'build a small terminal game named game.pas') + ']', 'bench-trunc');
+
+  { Did not terminate on the truncated turn: it retried and delivered. }
+  Check(EnvCount = 3, Format('loop recovered across 3 provider calls (got %d)', [EnvCount]));
+  { Turn 1 is pristine -- no nudge before the truncation happens. }
+  SP1 := EnvSystemPrompt(EnvAt(0));
+  Check(not Has(SP1, 'cut off at the output token limit'),
+    'iteration 1 system prompt carries no truncation nudge yet');
+  { Turn 2 (the retry) carries the corrective nudge steering toward tools. }
+  SP2 := EnvSystemPrompt(EnvAt(1));
+  Check(Has(SP2, 'cut off at the output token limit'),
+    'retry system prompt carries the truncation nudge');
+  Check(Has(SP2, 'write_file') and Has(SP2, 'append_file'),
+    'nudge names the tools to use instead of prose');
+  { The truncated prose blob is dropped, not replayed into the retry. }
+  Check(not Has(SP2, 'DrawBullet'),
+    'the truncated prose is not re-injected into history on retry');
+  { The deliverable actually lands, and the final answer is the stop text,
+    not the half-written ramble. }
+  Check(FileExists(GHomeDir + '/workspace/game.pas'),
+    'deliverable written after recovery');
+  Check(Has(Answer, 'done:') and not Has(Answer, 'DrawBullet'),
+    'final answer is the real result, not the truncated prose');
+  Metric('truncrecovery.provider_calls', EnvCount);
+end;
+
 { ---- gateway lifecycle ---------------------------------------------------- }
 var
   GW: TProcess;
@@ -932,6 +1009,7 @@ begin
     ScenarioRepeatRead;
     ScenarioRealTask;
     ScenarioErrorGuidance;
+    ScenarioTruncationRecovery;
 
     WriteLn;
     WriteLn('== metrics ==');

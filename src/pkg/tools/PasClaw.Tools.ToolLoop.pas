@@ -1148,6 +1148,16 @@ begin
     Result := Result + sLineBreak + 'checklist state:' + sLineBreak + L.Checklist;
 end;
 
+function IsTruncatedFinish(const FR: string): Boolean;
+{ Provider-normalised truncation markers for "the model hit the output
+  token ceiling mid-generation". Gemini maps its native MAX_TOKENS to
+  'length' (PasClaw.Providers.Gemini), OpenAI passes 'length' through,
+  and Anthropic surfaces its raw stop_reason 'max_tokens'. Match all,
+  case-insensitively. }
+begin
+  Result := SameText(FR, 'length') or SameText(FR, 'max_tokens');
+end;
+
 function RunToolLoop(const Cfg: TToolLoopConfig;
                      var Messages: array of TMessage;
                      out Loop: TToolLoopResult): Boolean;
@@ -1156,6 +1166,19 @@ const
     around 4-5 to keep a runaway pusher from growing Hist unbounded.
     Drained messages beyond the cap are logged + dropped. }
   MaxSteeringPerTurn = 4;
+  { Truncation-recovery budget. A turn that hits the output ceiling with
+    no tool call gets a corrective nudge and a bounded number of retries
+    before the loop gives up and returns whatever partial text it has. }
+  MaxTruncRetries = 2;
+  TruncationNudgeText =
+    '[your previous reply was cut off at the output token limit and ' +
+    'contained no tool call, so NOTHING was saved]' + sLineBreak +
+    'Do NOT write file contents or code as prose in your reply -- that is ' +
+    'what just failed. To create or change a file you MUST call a tool: ' +
+    'write_file (whole file), append_file (add to the end -- build a large ' +
+    'file across several turns so you never hit the limit), or edit_file / ' +
+    'apply_patch (targeted changes). Emit the tool call now and keep any ' +
+    'prose to one short line.';
 var
   Iter, i, bi, j, fbi, sti: Integer;
   Tools: TToolDefinitionArray;
@@ -1172,6 +1195,8 @@ var
   LedgerBlock: string;
   ReadPaths, ReadHashes: TArray<string>;   { per-turn read-dedup state (C3) }
   Steers: TSteeringMessageArray;
+  TruncRetries: Integer;      { truncation-recovery: retries spent so far }
+  TruncNudgePending: Boolean; { fold the corrective nudge next iteration }
   InContext: string;       { tool output cap (#PR new): in-context
                              body that lands in Hist after the
                              optional StashAndMaybeTruncate pass }
@@ -1236,6 +1261,8 @@ begin
     Ledger.Goal := ExtractLoopGoal(Messages);
   SetLength(ReadPaths, 0);
   SetLength(ReadHashes, 0);
+  TruncRetries := 0;
+  TruncNudgePending := False;
 
   Iter := 0;
   { When progressive disclosure is on (PasClaw.MCP.Disclosure), the
@@ -1301,6 +1328,19 @@ begin
           LiveOptions.SystemPrompt := LiveOptions.SystemPrompt + sLineBreak + sLineBreak;
         LiveOptions.SystemPrompt := LiveOptions.SystemPrompt + LedgerBlock;
       end;
+    end;
+
+    { Truncation-recovery fold. A prior iteration hit the output ceiling
+      with no tool call (see the no-tool-call branch below); fold a
+      corrective nudge into THIS iteration's system prompt, then clear the
+      flag so a later clean turn doesn't carry it. Ephemeral like the
+      ledger -- restored to PersistentSP after the provider call. }
+    if TruncNudgePending then
+    begin
+      if LiveOptions.SystemPrompt <> '' then
+        LiveOptions.SystemPrompt := LiveOptions.SystemPrompt + sLineBreak + sLineBreak;
+      LiveOptions.SystemPrompt := LiveOptions.SystemPrompt + TruncationNudgeText;
+      TruncNudgePending := False;
     end;
 
     { Mid-loop steering: drain any user follow-ups that arrived
@@ -1565,6 +1605,24 @@ begin
 
     if Length(Resp.ToolCalls) = 0 then
     begin
+      { Truncated mid-turn with no tool call: the model hit the output
+        token ceiling (finish_reason length / max_tokens) -- most often
+        while narrating code as prose instead of calling write_file -- so
+        nothing was saved. Do NOT treat this as a finished answer (the old
+        behaviour returned the half-written ramble as Loop.Content and the
+        turn silently produced no file). Fold a corrective nudge and retry,
+        bounded by MaxTruncRetries. The partial content is intentionally
+        dropped (not appended to Hist) so the truncated prose blob doesn't
+        bloat context on the retry. }
+      if IsTruncatedFinish(Resp.FinishReason) and (TruncRetries < MaxTruncRetries) then
+      begin
+        Inc(TruncRetries);
+        TruncNudgePending := True;
+        LogWarn('toolloop: truncated turn (finish=%s) with no tool call; ' +
+                'nudging toward tool use, retry %d/%d',
+                [Resp.FinishReason, TruncRetries, MaxTruncRetries]);
+        Continue;
+      end;
       Loop.Content    := Resp.Content;
       Loop.Iterations := Iter;
       Loop.FinalMessages    := Hist;
