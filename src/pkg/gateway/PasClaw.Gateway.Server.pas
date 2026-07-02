@@ -374,9 +374,10 @@ type
       no-disk embed; bare `serve` leaves it False to keep disk hot-reload. }
     property ToolsHonorInMemoryConfig: Boolean
       read FToolsHonorInMemoryConfig write FToolsHonorInMemoryConfig;
-    { Cap on tool-loop iterations for /v1/chat/completions. Defaults to 25
-      to match what typical code agents need for read-debug-edit cycles;
-      legacy /v1/chat keeps its 8-iteration cap unchanged. }
+    { Cap on tool-loop iterations for /v1/chat/completions, /v1/responses
+      AND the legacy /v1/chat (which historically had its own 8-iteration
+      cap -- below what one read-plan-edit-verify cycle needs). Defaults to
+      25; --max-iter / max_iterations raise all three together. }
     property MaxIter: Integer read FMaxIter write FMaxIter;
     { Random per-process token that gates /v1/relay/* in addition to
       the main Cfg.Gateway.Token. Printed at startup so external
@@ -4383,6 +4384,8 @@ begin
   { Snapshot provider + fallbacks + default model together (one lock) so a live
     /v1/config swap can't pair the new model with the old provider. }
   SnapshotRuntime(Prim, FB, FBModels, DefModel);
+  { Default-init: locals are not zero-initialized in Pascal, so any field this block doesn't set (e.g. DisableProgressLedger) would read stack garbage. }
+  LoopCfg := Default(TToolLoopConfig);
   LoopCfg.Provider := Prim;
   if LoopCfg.Provider = nil then
   begin
@@ -4396,7 +4399,10 @@ begin
   LoopCfg.Registry      := FRegistry;
   if FToolsHonorInMemoryConfig then LoopCfg.ActiveConfig := FCfg;
   LoopCfg.Model         := DefModel;
-  LoopCfg.MaxIterations := 8;
+  { Same cap as /v1/chat/completions (FMaxIter, default 25; --max-iter /
+    max_iterations raise both). The historical 8 was below what one
+    read-plan-edit-verify cycle needs. }
+  LoopCfg.MaxIterations := FMaxIter;
   LoopCfg.Parallel := True;
   { PR #290: per-request Plan/Build. Defaults to pmBuild when the body
     omits "mode", so OpenAI-compatible clients that don't know about
@@ -5043,6 +5049,8 @@ begin
     { Provider + fallbacks snapshotted together (model is the request's
       ReqModel, resolved at parse). }
     SnapshotRuntime(Prim, FB, FBModels, SnapModel);
+    { Default-init: locals are not zero-initialized in Pascal, so any field this block doesn't set (e.g. DisableProgressLedger) would read stack garbage. }
+    LoopCfg := Default(TToolLoopConfig);
     LoopCfg.Provider := Prim;
     if LoopCfg.Provider = nil then
     begin
@@ -6808,6 +6816,8 @@ begin
         internal tool loop and surface its text. This keeps the
         non-Codex flows (curl /v1/responses with just an input
         string) working as before. }
+      { Default-init: locals are not zero-initialized in Pascal, so any field this block doesn't set (e.g. DisableProgressLedger) would read stack garbage. }
+      LoopCfg := Default(TToolLoopConfig);
       LoopCfg.Provider      := Prim;
       LoopCfg.Registry      := FRegistry;
       if FToolsHonorInMemoryConfig then LoopCfg.ActiveConfig := FCfg;

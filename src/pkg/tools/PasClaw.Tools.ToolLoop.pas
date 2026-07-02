@@ -122,6 +122,18 @@ type
        background subagents installed for this session. Cmd.Agent
        sets this to Session.Meta.Id, same as SteeringKey. *)
     BackgroundDrainKey: string;
+    (* Progress ledger opt-out. The loop tallies what the model has
+       actually done this turn (files written, its todo_write checklist)
+       and folds a compact, CACHE-STABLE block into each iteration's
+       system prompt from iteration 2 onward -- the goal stays in front
+       of the model on long turns (anti goal-drift), and a "you have
+       written nothing yet" progress check fires after several tool
+       calls with zero mutating calls. On a max-iterations stop the
+       full tally lands in Loop.LedgerSummary so FormatMaxIterNotice
+       can tell a resumed turn what NOT to redo. Default False = ledger
+       on everywhere (managed-record zero); embedders and tests that
+       want the pre-ledger prompt shape set True. *)
+    DisableProgressLedger: Boolean;
     (* Tool output truncation cap in bytes. When > 0, RunToolLoop
        runs each tool's ResultText through StashAndMaybeTruncate
        (PasClaw.Tools.OutputCache) before appending it to history:
@@ -207,6 +219,13 @@ type
        when HitMaxIterations -- the "what it was doing when it stopped"
        detail for the notice. Empty otherwise. *)
     PendingToolNames: TArray<string>;
+    (* Progress-ledger tally formatted for the max-iter notice: files
+       written, commands run (with exit codes), files read, checklist
+       state. FormatMaxIterNotice appends it with a "do NOT redo this on
+       continue" instruction, so a resumed turn picks up where it stopped
+       instead of re-exploring. Empty on a clean stop or when
+       Cfg.DisableProgressLedger. *)
+    LedgerSummary: string;
   end;
 
 function RunToolLoop(const Cfg: TToolLoopConfig;
@@ -724,6 +743,17 @@ begin
   if Names <> '' then
     Result := Result + sLineBreak +
       'It was mid-way through: ' + Names + '.';
+  { Progress ledger (A2): tell the RESUMED turn what already happened so
+    "continue" picks up at the next step instead of re-reading the same
+    files and re-running the same commands -- the observed failure mode
+    was a model that restarted exploration after every cap. The block
+    rides in the notice (which lands in the assistant turn and therefore
+    in the carried-over history), so it needs no storage of its own and
+    works identically for CLI, TUI and gateway callers. }
+  if Loop.LedgerSummary <> '' then
+    Result := Result + sLineBreak +
+      'Work already completed before the stop -- do NOT redo any of it ' +
+      'when continuing:' + sLineBreak + Loop.LedgerSummary;
   if Resumable then
   begin
     { History carries over -- a follow-up turn resumes from here. }
@@ -746,6 +776,343 @@ begin
   end;
 end;
 
+{ ===== Progress ledger (goal anchor + resume summary) ====================
+
+  Tallies what the model has ACTUALLY done during one RunToolLoop call.
+  Two consumers:
+
+    1. Per-iteration fold (FormatLedgerBlock) -- a compact block appended
+       ephemerally to the system prompt from iteration 2 onward. Its job
+       is salience, not information: everything in it is already in the
+       history, but on long turns the goal and the "have I produced
+       anything yet?" signal drift out of the model's focus -- the
+       observed failure was 50 tool calls of competent exploration that
+       never wrote the deliverable until a human intervened.
+
+       CACHE STABILITY IS A HARD CONSTRAINT here: the fold lands in the
+       system prompt, which is the very first thing in the provider
+       request, so any byte that changes per-iteration would invalidate
+       the provider's prefix cache on EVERY call. The block therefore
+       carries NO counters or other per-iteration volatiles -- only the
+       goal (constant per turn), the files-written list (changes only on
+       iterations that write, which are rare relative to reads), the
+       model's own checklist (changes only when it calls todo_write) and
+       a STICKY nudge whose wording never varies once triggered. Between
+       changes the folded system prompt is byte-identical across
+       iterations and the prefix cache keeps hitting.
+
+    2. Max-iter summary (FormatLedgerSummary -> Loop.LedgerSummary) --
+       the full tally including commands + read files, appended to
+       FormatMaxIterNotice so a "continue" resumes instead of
+       re-exploring. End-of-turn, so no cache concern; this is where the
+       detail lives. }
+type
+  TProgressLedger = record
+    Goal:          string;            { last substantive user message, squashed }
+    FilesWritten:  TArray<string>;    { unique, capped }
+    FilesRead:     TArray<string>;    { unique names, capped; ReadsTotal counts all }
+    ReadsTotal:    Integer;
+    Commands:      TArray<string>;    { "cmd -- exit=N", keep-last, capped }
+    Checklist:     string;            { verbatim from the model's last todo_write }
+    MutatingCalls: Integer;
+    TotalCalls:    Integer;
+  end;
+
+const
+  LedgerGoalMax      = 300;    { chars of goal echoed per iteration }
+  LedgerMaxFiles     = 12;
+  LedgerMaxReads     = 15;     { read NAMES kept for the resume summary }
+  LedgerMaxCmds      = 6;
+  LedgerChecklistMax = 1200;
+  { After this many tool calls with zero mutating calls, the fold adds the
+    "start writing or answer now" progress check. }
+  LedgerNudgeAfter   = 8;
+
+function LedgerSquash(const S: string; MaxLen: Integer): string;
+{ One-line, bounded: collapse whitespace runs, truncate with ellipsis.
+  Pre-truncates so a pathological multi-megabyte input doesn't feed the
+  O(n) StringReplace passes. }
+var
+  W: string;
+begin
+  W := Copy(S, 1, MaxLen * 4);
+  W := StringReplace(W, #13, ' ', [rfReplaceAll]);
+  W := StringReplace(W, #10, ' ', [rfReplaceAll]);
+  W := StringReplace(W, #9,  ' ', [rfReplaceAll]);
+  while Pos('  ', W) > 0 do
+    W := StringReplace(W, '  ', ' ', [rfReplaceAll]);
+  W := Trim(W);
+  if Length(W) > MaxLen then W := Copy(W, 1, MaxLen) + '...';
+  Result := W;
+end;
+
+procedure LedgerAddUnique(var A: TArray<string>; const S: string; Cap: Integer);
+var
+  i: Integer;
+begin
+  if S = '' then Exit;
+  for i := 0 to High(A) do
+    if A[i] = S then Exit;
+  if Length(A) >= Cap then Exit;
+  SetLength(A, Length(A) + 1);
+  A[High(A)] := S;
+end;
+
+procedure LedgerPushCmd(var A: TArray<string>; const S: string);
+{ Keep-LAST semantics -- the most recent commands are the useful ones for
+  a resume ("the last build failed with exit=2"). }
+var
+  i: Integer;
+begin
+  if S = '' then Exit;
+  if Length(A) >= LedgerMaxCmds then
+  begin
+    for i := 0 to High(A) - 1 do A[i] := A[i + 1];
+    A[High(A)] := S;
+  end
+  else
+  begin
+    SetLength(A, Length(A) + 1);
+    A[High(A)] := S;
+  end;
+end;
+
+function LedgerArg(const ArgsJSON, Key: string): string;
+var
+  Obj: TJsonObject;
+begin
+  Result := '';
+  if Trim(ArgsJSON) = '' then Exit;
+  try
+    Obj := TJsonObject.Parse(ArgsJSON);
+    if Obj = nil then Exit;
+    try
+      Result := Obj.GetStr(Key, '');
+    finally
+      Obj.Free;
+    end;
+  except
+    Result := '';
+  end;
+end;
+
+function ExtractLoopGoal(const Messages: array of TMessage): string;
+{ The task this turn is anchored to: the last SUBSTANTIVE user message.
+  Trailing micro-turns ("continue", "yes", "ok") are skipped so a resumed
+  run anchors to the real task, not to the word "continue"; when every
+  user turn is tiny, the last one wins as a fallback. }
+var
+  i: Integer;
+  T, Fallback: string;
+begin
+  Fallback := '';
+  for i := High(Messages) downto Low(Messages) do
+    if Messages[i].Role = mrUser then
+    begin
+      T := Trim(Messages[i].Content);
+      if Fallback = '' then Fallback := T;
+      if Length(T) >= 24 then
+        Exit(LedgerSquash(T, LedgerGoalMax));
+    end;
+  Result := LedgerSquash(Fallback, LedgerGoalMax);
+end;
+
+function LedgerPatchFirstPath(const Patch: string): string;
+{ Target path from a hashline patch header (first line: <prefix>path#hash). }
+var
+  Line: string;
+  P: Integer;
+begin
+  Line := Patch;
+  P := Pos(#10, Line);
+  if P > 0 then Line := Copy(Line, 1, P - 1);
+  Line := Trim(StringReplace(Line, #13, '', [rfReplaceAll]));
+  if Copy(Line, 1, Length(HL_FILE_PREFIX)) = HL_FILE_PREFIX then
+    Line := Copy(Line, Length(HL_FILE_PREFIX) + 1, MaxInt);
+  P := Pos(HL_FILE_HASH_SEP, Line);
+  if P > 0 then Line := Copy(Line, 1, P - 1);
+  Result := Trim(Line);
+end;
+
+procedure LedgerCollectApplyPatchPaths(var L: TProgressLedger; const Patch: string);
+{ Every Add/Update/Move target in a Codex-format apply_patch envelope. }
+var
+  Rest, Line: string;
+  P: Integer;
+
+  procedure TryPrefix(const Pref: string);
+  begin
+    if Copy(Line, 1, Length(Pref)) = Pref then
+      LedgerAddUnique(L.FilesWritten,
+        LedgerSquash(Copy(Line, Length(Pref) + 1, MaxInt), 120), LedgerMaxFiles);
+  end;
+
+begin
+  Rest := StringReplace(Patch, #13, '', [rfReplaceAll]);
+  while Rest <> '' do
+  begin
+    P := Pos(#10, Rest);
+    if P > 0 then
+    begin
+      Line := Copy(Rest, 1, P - 1);
+      Delete(Rest, 1, P);
+    end
+    else
+    begin
+      Line := Rest;
+      Rest := '';
+    end;
+    TryPrefix('*** Add File: ');
+    TryPrefix('*** Update File: ');
+    TryPrefix('*** Move to: ');
+  end;
+end;
+
+procedure LedgerHarvest(var L: TProgressLedger;
+                        const Dispatches: array of TToolCallDispatch;
+                        Reg: TToolRegistry; PlanMode: Boolean);
+{ Fold one dispatch round into the tally. Failed calls (Err set) and
+  hook-cancelled calls count as calls but record no progress; in plan
+  mode file-write recording is skipped entirely (mutating tools are
+  refused at dispatch, so their "result" is the refusal text). }
+var
+  i, P: Integer;
+  Nm, Args, S, ExitLine: string;
+  T: TTool;
+begin
+  for i := 0 to High(Dispatches) do
+  begin
+    Nm := Dispatches[i].Call.Func.Name;
+    if Nm = '' then Continue;
+    Inc(L.TotalCalls);
+    { Mutating classification via the registry's own category so MCP /
+      skill tools count too; todo_write is tcReadOnly by design, so
+      checklist upkeep never masquerades as progress. }
+    if (not PlanMode) and (Dispatches[i].Err = '')
+       and (not Dispatches[i].Cancelled)
+       and (Reg <> nil) and Reg.Find(Nm, T) and (T.Category = tcMutating) then
+      Inc(L.MutatingCalls);
+    if (Dispatches[i].Err <> '') or Dispatches[i].Cancelled then Continue;
+    Args := Dispatches[i].Call.Func.Arguments;
+
+    if (Nm = 'write_file') or (Nm = 'append_file') or (Nm = 'fs_write') then
+    begin
+      if not PlanMode then
+        LedgerAddUnique(L.FilesWritten,
+          LedgerSquash(LedgerArg(Args, 'path'), 120), LedgerMaxFiles);
+    end
+    else if (Nm = 'edit_file') or (Nm = 'fs_edit_hashline') then
+    begin
+      if not PlanMode then
+      begin
+        S := LedgerArg(Args, 'path');
+        if S = '' then S := LedgerPatchFirstPath(LedgerArg(Args, 'patch'));
+        LedgerAddUnique(L.FilesWritten, LedgerSquash(S, 120), LedgerMaxFiles);
+      end;
+    end
+    else if Nm = 'apply_patch' then
+    begin
+      if not PlanMode then
+        LedgerCollectApplyPatchPaths(L, LedgerArg(Args, 'patch'));
+    end
+    else if (Nm = 'read_file') or (Nm = 'fs_read') then
+    begin
+      Inc(L.ReadsTotal);
+      LedgerAddUnique(L.FilesRead,
+        LedgerSquash(LedgerArg(Args, 'path'), 120), LedgerMaxReads);
+    end
+    else if (Nm = 'shell_exec') or (Nm = 'execute_code') then
+    begin
+      if Nm = 'shell_exec' then S := LedgerArg(Args, 'command')
+                           else S := LedgerArg(Args, 'code');
+      S := LedgerSquash(S, 60);
+      { shell results lead with "exit=N" on the first line. }
+      ExitLine := Dispatches[i].ResultText;
+      P := Pos(#10, ExitLine);
+      if P > 0 then ExitLine := Copy(ExitLine, 1, P - 1);
+      if Copy(ExitLine, 1, 5) = 'exit=' then
+        S := S + ' -- ' + Trim(ExitLine);
+      LedgerPushCmd(L.Commands, S);
+    end
+    else if Nm = 'todo_write' then
+    begin
+      S := LedgerArg(Args, 'checklist');
+      if Trim(S) <> '' then L.Checklist := Copy(S, 1, LedgerChecklistMax);
+    end;
+  end;
+end;
+
+function LedgerJoin(const A: TArray<string>; const Sep: string): string;
+var
+  i: Integer;
+begin
+  Result := '';
+  for i := 0 to High(A) do
+  begin
+    if Result <> '' then Result := Result + Sep;
+    Result := Result + A[i];
+  end;
+end;
+
+function FormatLedgerBlock(const L: TProgressLedger; PlanMode: Boolean): string;
+{ The per-iteration fold. See the cache-stability constraint in the
+  section header: NO counters, no timestamps -- only slow-changing state,
+  so consecutive iterations usually produce a byte-identical system
+  prompt and the provider prefix cache keeps hitting. }
+begin
+  Result := '';
+  if L.TotalCalls = 0 then Exit;
+  Result := '[progress ledger -- this turn so far]';
+  if L.Goal <> '' then
+    Result := Result + sLineBreak + 'Goal: ' + L.Goal;
+  if Length(L.FilesWritten) > 0 then
+    Result := Result + sLineBreak +
+      'Files written/edited: ' + LedgerJoin(L.FilesWritten, ', ')
+  else
+    Result := Result + sLineBreak + 'Files written/edited: (none yet)';
+  if L.Checklist <> '' then
+    Result := Result + sLineBreak +
+      'Your checklist (rewrite with todo_write as steps complete):' +
+      sLineBreak + L.Checklist;
+  { Sticky wording: once triggered it never varies (no counts), so the
+    fold stays cache-stable while the condition holds. It clears itself
+    the moment a mutating call lands -- that iteration rewrites the
+    files line anyway. Plan mode is exempt: producing no files is the
+    entire point of plan mode. }
+  if (not PlanMode) and (L.MutatingCalls = 0)
+     and (L.TotalCalls >= LedgerNudgeAfter) then
+    Result := Result + sLineBreak +
+      'Progress check: many tool calls so far and nothing written. If this ' +
+      'task requires producing code or files, start writing now (write_file ' +
+      'first, then extend with edit_file / append_file); if it is a ' +
+      'read-only question, stop exploring and give your final answer.';
+end;
+
+function FormatLedgerSummary(const L: TProgressLedger): string;
+{ The end-of-turn tally for FormatMaxIterNotice -- full detail, including
+  the read-file names a resumed turn must not re-read. }
+begin
+  Result := '';
+  if L.TotalCalls = 0 then Exit;
+  if Length(L.FilesWritten) > 0 then
+    Result := 'wrote: ' + LedgerJoin(L.FilesWritten, ', ')
+  else
+    Result := 'wrote: (nothing yet)';
+  if Length(L.Commands) > 0 then
+    Result := Result + sLineBreak + 'ran: ' + LedgerJoin(L.Commands, '; ');
+  if L.ReadsTotal > 0 then
+  begin
+    Result := Result + sLineBreak + Format('read %d file(s)', [L.ReadsTotal]);
+    if Length(L.FilesRead) > 0 then
+    begin
+      Result := Result + ': ' + LedgerJoin(L.FilesRead, ', ');
+      if L.ReadsTotal > Length(L.FilesRead) then Result := Result + ', ...';
+    end;
+  end;
+  if L.Checklist <> '' then
+    Result := Result + sLineBreak + 'checklist state:' + sLineBreak + L.Checklist;
+end;
+
 function RunToolLoop(const Cfg: TToolLoopConfig;
                      var Messages: array of TMessage;
                      out Loop: TToolLoopResult): Boolean;
@@ -766,6 +1133,8 @@ var
   Batch: TToolBatch;
   Workers: array of TToolCallWorker;
   Steering, BatchSteering, HistSystem, LastProviderErrText, BgBlock, PersistentSP: string;
+  Ledger: TProgressLedger;
+  LedgerBlock: string;
   Steers: TSteeringMessageArray;
   InContext: string;       { tool output cap (#PR new): in-context
                              body that lands in Hist after the
@@ -824,6 +1193,12 @@ begin
   else
     SetLength(Tools, 0);
 
+  { Progress ledger: anchor this turn to its goal once, up front. The
+    tally itself accumulates per dispatch round below. }
+  Ledger := Default(TProgressLedger);
+  if not Cfg.DisableProgressLedger then
+    Ledger.Goal := ExtractLoopGoal(Messages);
+
   Iter := 0;
   { When progressive disclosure is on (PasClaw.MCP.Disclosure), the
     model can call tool_search mid-loop to reveal deferred tools.
@@ -872,6 +1247,23 @@ begin
       meant to survive into Loop.FinalSystemPrompt; everything the
       ephemeral drains do below is one-turn-only. }
     PersistentSP := LiveOptions.SystemPrompt;
+
+    { Progress-ledger fold (A1). Ephemeral like the drains below --
+      restored to PersistentSP after the provider call. Skipped on
+      iteration 1: there is no progress to report yet, and keeping the
+      first call's system prompt pristine preserves the cross-turn
+      prefix-cache hit (the block only exists on iterations >= 2 and is
+      deliberately cache-stable across them; see FormatLedgerBlock). }
+    if (not Cfg.DisableProgressLedger) and (Iter > 1) then
+    begin
+      LedgerBlock := FormatLedgerBlock(Ledger, Cfg.Mode = pmPlan);
+      if LedgerBlock <> '' then
+      begin
+        if LiveOptions.SystemPrompt <> '' then
+          LiveOptions.SystemPrompt := LiveOptions.SystemPrompt + sLineBreak + sLineBreak;
+        LiveOptions.SystemPrompt := LiveOptions.SystemPrompt + LedgerBlock;
+      end;
+    end;
 
     { Mid-loop steering: drain any user follow-ups that arrived
       while we were busy (CLI `pasclaw steer <id> "..."`, channels
@@ -1412,6 +1804,12 @@ begin
           LiveOptions.SystemPrompt := BatchSteering;
       end;
     end;
+
+    { Progress-ledger harvest: fold this round's dispatches into the
+      tally AFTER all batches joined, so the next iteration's fold (and
+      a max-iter summary) see them. }
+    if not Cfg.DisableProgressLedger then
+      LedgerHarvest(Ledger, Dispatches, Cfg.Registry, Cfg.Mode = pmPlan);
   end;
 
   { Max iterations exhausted; return whatever we last got. The loop only
@@ -1423,6 +1821,8 @@ begin
   Loop.FinalMessages    := Hist;
   Loop.FinalSystemPrompt := LiveOptions.SystemPrompt;
   Loop.HitMaxIterations := Length(Resp.ToolCalls) > 0;
+  if not Cfg.DisableProgressLedger then
+    Loop.LedgerSummary := FormatLedgerSummary(Ledger);
   if Loop.HitMaxIterations then
     Loop.PendingToolNames := CollectToolNames(Resp.ToolCalls);
   Result := True;

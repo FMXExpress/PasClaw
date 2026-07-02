@@ -1326,6 +1326,8 @@ begin
   SetLength(FSession.Messages, Length(FSession.Messages) + 1);
   FSession.Messages[High(FSession.Messages)] := MakeMessage(mrUser, UserText);
 
+  { Default-init: locals are not zero-initialized in Pascal, so any field this block doesn't set (e.g. DisableProgressLedger) would read stack garbage. }
+  Cfg := Default(TToolLoopConfig);
   Cfg.Provider      := FProvider;
   Cfg.Registry      := FRegistry;
   Cfg.Model         := FModel;
@@ -2839,6 +2841,8 @@ begin
   SetLength(Msgs, 1);
   Msgs[0] := MakeMessage(mrUser, Text);
 
+  { Default-init: locals are not zero-initialized in Pascal, so any field this block doesn't set (e.g. DisableProgressLedger) would read stack garbage. }
+  Cfg := Default(TToolLoopConfig);
   Cfg.Provider      := FProvider;
   Cfg.Registry      := FRegistry;
   Cfg.Model         := FModel;
