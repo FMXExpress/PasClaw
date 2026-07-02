@@ -862,7 +862,11 @@ begin
     Skipped when the project carries an AGENTS.md: the operator-authored
     doc (emitted below as Project Rules) states this better; facts are
     the zero-config floor. }
-  if FindProjectAgentsMd('') = '' then
+  { The AGENTS.md check must walk the SAME tree the facts are read from
+    (the workspace) -- with '' it walked the launch cwd, so a workspace
+    AGENTS.md failed to suppress the facts and an unrelated launch-dir
+    AGENTS.md could suppress useful workspace facts. }
+  if FindProjectAgentsMd(PromptWorkDir) = '' then
     Result := AppendSection(Result, BuildProjectFactsSection(PromptWorkDir));
   Result := AppendSection(Result,
               BuildMemorySection((Cfg <> nil) and Cfg.OrientTaskAware, TaskHint));

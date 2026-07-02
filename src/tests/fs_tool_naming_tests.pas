@@ -157,6 +157,11 @@ begin
     AssertTrue(Pos('r4', R) = 0, 'range excludes lines past end_line');
     R := Reg.RunTool('read_file', '{"path":"' + PathA + '","start_line":4,"end_line":99}', Err);
     AssertContains(R, '(lines 4-5 of 5)', 'end_line clamps to the file end');
+    { empty file + range: must not range-check into Lines[-1] }
+    Reg.RunTool('write_file', '{"path":"' + PathA + '","content":""}', Err);
+    R := Reg.RunTool('read_file', '{"path":"' + PathA + '","start_line":1,"end_line":5}', Err);
+    AssertEqStr(Err, '', 'range read of an empty file is not an error');
+    AssertContains(R, '(empty file', 'empty file reports itself instead of crashing');
     WriteLn('  ok: read_file start_line/end_line slices and clamps');
     { restore the fixture the append section below builds on }
     Reg.RunTool('write_file', '{"path":"' + PathA + '","content":"hello"}', Err);

@@ -226,6 +226,9 @@ begin
       Lines.StrictDelimiter := True;
       Lines.Text := StringReplace(Body, #13, '', [rfReplaceAll]);
       Total := Lines.Count;
+      { Empty file: the clamps below would drive StartLn to 0 and the
+        slice loop into Lines[-1] (range-check error). Say it plainly. }
+      if Total = 0 then Exit('(empty file: 0 lines)');
       if StartLn < 1 then StartLn := 1;
       if (EndLn < 1) or (EndLn > Total) then EndLn := Total;
       if StartLn > Total then StartLn := Total;
