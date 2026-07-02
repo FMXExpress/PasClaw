@@ -190,6 +190,8 @@ function Tool_FSRead(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Path, Body, Reason: string;
   Hashline: Boolean;
+  StartLn, EndLn, Total, i: Integer;
+  Lines: TStringList;
 begin
   ErrMsg := '';
   if not ParseStringArg(ArgsJSON, 'path', Path) then
@@ -209,6 +211,36 @@ begin
     Exit('');
   end;
   Body := ReadFileText(Path);
+  { Optional line range (C2): a grep_files hit gives the line number; the
+    follow-up read can be surgical instead of swallowing the whole file
+    into history. 1-based inclusive; bounds are clamped; range implies
+    plain output (hashline headers hash the WHOLE file, so a sliced body
+    must not carry one). }
+  StartLn := Integer(ParseInt64Arg(ArgsJSON, 'start_line', 0));
+  EndLn   := Integer(ParseInt64Arg(ArgsJSON, 'end_line', 0));
+  if (StartLn > 0) or (EndLn > 0) then
+  begin
+    Lines := TStringList.Create;
+    try
+      Lines.LineBreak := #10;
+      Lines.StrictDelimiter := True;
+      Lines.Text := StringReplace(Body, #13, '', [rfReplaceAll]);
+      Total := Lines.Count;
+      if StartLn < 1 then StartLn := 1;
+      if (EndLn < 1) or (EndLn > Total) then EndLn := Total;
+      if StartLn > Total then StartLn := Total;
+      if EndLn < StartLn then EndLn := StartLn;
+      Body := '';
+      for i := StartLn to EndLn do
+      begin
+        if Body <> '' then Body := Body + #10;
+        Body := Body + Lines[i - 1];
+      end;
+      Exit(Format('(lines %d-%d of %d)', [StartLn, EndLn, Total]) + #10 + Body);
+    finally
+      Lines.Free;
+    end;
+  end;
   { Plain text is the default -- clean content is what edit_file's
     old_text/new_text string replacement matches against, and it's what
     smaller models handle best. The hashline #hash + LINENO:line format is
@@ -1348,12 +1380,17 @@ begin
                      'Pass {"hashline":true} for the ' + HL_FILE_PREFIX +
                      'path#hash header + LINENO:line format used to build an ' +
                      'edit_file `patch` (advanced).';
-    T.Schema      := '{"type":"object","properties":{"path":{"type":"string"},"hashline":{"type":"boolean","description":"Return the hashline #hash+LINENO format for edit_file patch edits, instead of plain text."}},"required":["path"]}';
+    T.Schema      := '{"type":"object","properties":{"path":{"type":"string"},' +
+                     '"start_line":{"type":"integer","minimum":1,"description":"First line to return (1-based). Use with end_line to read just the region a grep_files hit pointed at."},' +
+                     '"end_line":{"type":"integer","minimum":1,"description":"Last line to return (inclusive; clamped to the file end)."},' +
+                     '"hashline":{"type":"boolean","description":"Return the hashline #hash+LINENO format for edit_file patch edits, instead of plain text. Ignored when a line range is set."}},"required":["path"]}';
   end
   else
   begin
     T.Description := 'Read the contents of a file from the local filesystem.';
-    T.Schema      := '{"type":"object","properties":{"path":{"type":"string","description":"Absolute or relative path to the file."}},"required":["path"]}';
+    T.Schema      := '{"type":"object","properties":{"path":{"type":"string","description":"Absolute or relative path to the file."},' +
+                     '"start_line":{"type":"integer","minimum":1,"description":"First line to return (1-based)."},' +
+                     '"end_line":{"type":"integer","minimum":1,"description":"Last line to return (inclusive; clamped)."}},"required":["path"]}';
   end;
   T.Handler  := Tool_FSRead;
   T.IsCore   := True;

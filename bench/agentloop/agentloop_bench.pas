@@ -626,6 +626,50 @@ begin
   Check(Has(Turn2, 'finished'), 'turn 2 delivered');
 end;
 
+function H_RepeatRead(N: Integer; const EnvJSON: string): string;
+begin
+  if N <= 3 then
+    Result := RoundOf([OneCall('read_file', ArgsPathPlain('notes.txt'))])
+  else
+    Result := StopOf('reviewed the notes.');
+end;
+
+procedure ScenarioRepeatRead;
+{ C3: re-reading an unchanged file must not re-inject the full body --
+  the second and third reads dedup to a one-line stub, so history growth
+  across the repeat reads is stub-sized, not file-sized. The 8 KB fixture
+  sits below the C1 cap on purpose: what keeps the bodies flat here is
+  the dedup, not the byte cap. }
+var
+  S: TStringList;
+  Body: string;
+  i, Grow: Integer;
+begin
+  WriteLn;
+  WriteLn('== scenario: repeat-read (per-turn dedup keeps history flat) ==');
+  Body := '';
+  for i := 1 to 130 do
+    Body := Body + Format('note %3d: remember the thing about the thing', [i]) + #10;
+  S := TStringList.Create;
+  try
+    S.Text := Body;
+    S.SaveToFile(GHomeDir + '/workspace/notes.txt');
+  finally
+    S.Free;
+  end;
+
+  ResetScenario(H_RepeatRead);
+  Chat('[' + MsgObjJSON('user',
+    'review notes.txt very carefully, twice if you must') + ']', 'bench-repeat');
+  Check(EnvCount = 4, Format('four provider calls (got %d)', [EnvCount]));
+  Check(Has(EnvAt(2), 'unchanged since the earlier read'),
+    'second read deduped to a stub in history');
+  Grow := Length(EnvAt(3)) - Length(EnvAt(1));
+  Check(Grow < 2500,
+    Format('history growth across 2 repeat reads is stub-sized (%d bytes; the file is ~7 KB)', [Grow]));
+  Metric('repeatread.growth_bytes_over_2_rereads', Grow);
+end;
+
 { ---- gateway lifecycle ---------------------------------------------------- }
 var
   GW: TProcess;
@@ -737,6 +781,7 @@ begin
     ScenarioMalformedRecovery;
     ScenarioResumeAfterCap;
     ScenarioFatRead;
+    ScenarioRepeatRead;
 
     WriteLn;
     WriteLn('== metrics ==');

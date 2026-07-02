@@ -148,6 +148,19 @@ begin
     AssertContains(R, '1:hello', 'read_file hashline:true emits LINENO:line');
     WriteLn('  ok: read_file plain by default, hashline:true opts in');
 
+    { --- 2c. read_file line ranges (C2). --- }
+    Reg.RunTool('write_file', '{"path":"' + PathA + '","content":"r1\nr2\nr3\nr4\nr5"}', Err);
+    R := Reg.RunTool('read_file', '{"path":"' + PathA + '","start_line":2,"end_line":3}', Err);
+    AssertContains(R, '(lines 2-3 of 5)', 'range read reports the slice + total');
+    AssertContains(R, 'r2', 'range includes start line');
+    AssertContains(R, 'r3', 'range includes end line');
+    AssertTrue(Pos('r4', R) = 0, 'range excludes lines past end_line');
+    R := Reg.RunTool('read_file', '{"path":"' + PathA + '","start_line":4,"end_line":99}', Err);
+    AssertContains(R, '(lines 4-5 of 5)', 'end_line clamps to the file end');
+    WriteLn('  ok: read_file start_line/end_line slices and clamps');
+    { restore the fixture the append section below builds on }
+    Reg.RunTool('write_file', '{"path":"' + PathA + '","content":"hello"}', Err);
+
     { --- 3. append_file concatenates. --- }
     R := Reg.RunTool('append_file', '{"path":"' + PathA + '","content":" world"}', Err);
     AssertEqStr(Err, '', 'append_file no error');

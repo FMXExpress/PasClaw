@@ -320,6 +320,46 @@ begin
   end;
 end;
 
+procedure TestRepeatReadDedup;
+{ C3: a second identical read of the same unchanged file within one loop
+  is swapped for a one-line stub; a range read (different body) is not. }
+var
+  P: TScripted;
+  Reg: TToolRegistry;
+  Cfg: TToolLoopConfig;
+  Msgs: TMessageArray;
+  Loop: TToolLoopResult;
+  i, Full, Stub: Integer;
+begin
+  Reg := TToolRegistry.Create;
+  try
+    RegisterFSTools(Reg, True);
+    P := TScripted.Create;
+    Cfg := BaseCfg(P);
+    Cfg.Registry := Reg;
+    P.AddToolRound([MkCall('write_file', '{"path":"' + FileA + '","content":"same body here"}')]);
+    P.AddToolRound([MkCall('read_file', '{"path":"' + FileA + '","plain":true}')]);
+    P.AddToolRound([MkCall('read_file', '{"path":"' + FileA + '","plain":true}')]);
+    P.AddStop('done');
+
+    SetLength(Msgs, 1);
+    Msgs[0] := MakeMessage(mrUser, 'read the file twice for no reason at all');
+    AssertTrue(RunToolLoop(Cfg, Msgs, Loop), 'loop ran');
+    Full := 0; Stub := 0;
+    for i := 0 to High(Loop.FinalMessages) do
+      if Loop.FinalMessages[i].Role = mrTool then
+      begin
+        if Pos('same body here', Loop.FinalMessages[i].Content) > 0 then Inc(Full);
+        if Pos('unchanged since the earlier read', Loop.FinalMessages[i].Content) > 0 then Inc(Stub);
+      end;
+    AssertTrue(Full = 1, Format('exactly one full body in history (got %d)', [Full]));
+    AssertTrue(Stub = 1, Format('the repeat read became a stub (got %d)', [Stub]));
+    WriteLn('  ok: repeat read of an unchanged file dedups to a stub');
+  finally
+    Reg.Free;
+  end;
+end;
+
 procedure TestDisableSwitch;
 var
   P: TScripted;
@@ -366,6 +406,7 @@ begin
   TestNudgeAfterReadOnlyCalls;
   TestMaxIterSummaryAndNotice;
   TestGoalSkipsMicroTurns;
+  TestRepeatReadDedup;
   TestDisableSwitch;
 
   if FileExists(FileA) then DeleteFile(FileA);
