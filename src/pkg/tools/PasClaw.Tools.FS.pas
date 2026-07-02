@@ -293,12 +293,19 @@ begin
       if StartLn > Total then StartLn := Total;
       if EndLn < StartLn then EndLn := StartLn;
       Body := '';
+      { F3: number each line so the slice cross-references grep_files'
+        LINENO: hits and edit_file's "now reads (lines A-B)" snippets.
+        Uses the SAME "N:" format as FormatNumberedLine (no space after
+        the colon) so a body copied verbatim into write_file round-trips
+        through StripHashlinePrefixes -- a "N: " separator would survive
+        the stripper and shift the copied line's indentation by one. }
       for i := StartLn to EndLn do
       begin
         if Body <> '' then Body := Body + #10;
-        Body := Body + Lines[i - 1];
+        Body := Body + FormatNumberedLine(i, Lines[i - 1]);
       end;
-      Exit(Format('(lines %d-%d of %d)', [StartLn, EndLn, Total]) + #10 + Body);
+      Exit(Format('(lines %d-%d of %d, numbered "N:" -- strip the prefixes when quoting into edits)',
+                  [StartLn, EndLn, Total]) + #10 + Body);
     finally
       Lines.Free;
     end;
@@ -642,6 +649,7 @@ var
   IgnoreCase: Boolean;
   MaxMatches: Int64;
   MaxFileBytes: Int64;
+  CtxLines: Integer;
   Globs: TStringList;
   Sb: TStringBuilder;
   TotalMatches: Integer;
@@ -655,7 +663,23 @@ var
     Body: string;
     pBody: PByte;
     BodyLen, i, LineStart, LineEnd, LineNo, m: Integer;
+    k, FromLn, Slot, LastEmitted, PendingAfter: Integer;
+    PrevS, PrevE: array of Integer;
     Wrote: Boolean;
+
+    { One output line. Matches keep grep's LINENO:text shape (the anchors
+      edit_file patches and read_file ranges cross-reference); context
+      lines use LINENO-text, grep's own -C convention, so the model (and
+      a hashline patch consumer) can tell them apart at a glance. }
+    procedure EmitLine(No, S, E: Integer; IsMatch: Boolean);
+    begin
+      if IsMatch then
+        Sb.Append(FormatNumberedLine(No, Copy(Body, S + 1, E - S)))
+      else
+        Sb.Append(IntToStr(No)).Append('-').Append(Copy(Body, S + 1, E - S));
+      Sb.Append(#10);
+    end;
+
   begin
     if TotalMatches >= MaxMatches then Exit;
     try
@@ -676,6 +700,18 @@ var
     LineStart := 0;
     LineNo := 0;
     i := 0;
+    { Context bookkeeping (F2): a ring of the last CtxLines line offsets
+      feeds before-context; PendingAfter counts after-context still owed.
+      LastEmitted stops overlapping groups from double-printing a line.
+      All of it costs two integer writes per line when context is on and
+      nothing at all when it's off. }
+    LastEmitted := 0;
+    PendingAfter := 0;
+    if CtxLines > 0 then
+    begin
+      SetLength(PrevS, CtxLines);
+      SetLength(PrevE, CtxLines);
+    end;
     { Byte walker (tier 5). LineStart..LineEnd is the half-open
       byte range for the current line in pBody. We close the line
       either at #10 OR at end-of-buffer (last line with no trailing
@@ -702,13 +738,39 @@ var
                        ComputeFileHash(Body))).Append(#10);
             Wrote := True;
           end;
+          if CtxLines > 0 then
+          begin
+            FromLn := LineNo - CtxLines;
+            if FromLn < LastEmitted + 1 then FromLn := LastEmitted + 1;
+            { Non-contiguous groups inside one file get grep's -- fence. }
+            if (LastEmitted > 0) and (FromLn > LastEmitted + 1) then
+              Sb.Append('--').Append(#10);
+            for k := FromLn to LineNo - 1 do
+            begin
+              Slot := k mod CtxLines;
+              EmitLine(k, PrevS[Slot], PrevE[Slot], False);
+            end;
+          end;
           { Copy() only fires on lines that match -- which is the
             whole point of tier 5. The bulk of the body never
             allocates a per-line string. }
-          Sb.Append(FormatNumberedLine(LineNo,
-                    Copy(Body, LineStart + 1, LineEnd - LineStart))).Append(#10);
+          EmitLine(LineNo, LineStart, LineEnd, True);
+          LastEmitted := LineNo;
+          PendingAfter := CtxLines;
           Inc(TotalMatches);
           if TotalMatches >= MaxMatches then Break;
+        end
+        else if PendingAfter > 0 then
+        begin
+          EmitLine(LineNo, LineStart, LineEnd, False);
+          LastEmitted := LineNo;
+          Dec(PendingAfter);
+        end;
+        if CtxLines > 0 then
+        begin
+          Slot := LineNo mod CtxLines;
+          PrevS[Slot] := LineStart;
+          PrevE[Slot] := LineEnd;
         end;
         LineStart := i + 1;
       end;
@@ -777,6 +839,11 @@ begin
   MaxMatches := 1000;
   MaxFileBytes := ParseInt64Arg(ArgsJSON, 'max_file_bytes', DefaultMaxFileBytes);
   if MaxFileBytes <= 0 then MaxFileBytes := DefaultMaxFileBytes;
+  { F2: ±N context lines per match (grep -C). Capped so a generous ask
+    can't multiply a 1000-match sweep into megabytes of output. }
+  CtxLines := Integer(ParseInt64Arg(ArgsJSON, 'context_lines', 0));
+  if CtxLines < 0 then CtxLines := 0;
+  if CtxLines > 10 then CtxLines := 10;
   IncludeGlob := '';
   ParseStringArg(ArgsJSON, 'include', IncludeGlob);
   Globs := TStringList.Create;
@@ -871,6 +938,75 @@ begin
   end;
 end;
 
+function EditContextSnippet(const NewContent: string;
+                            FirstChangeOfs, NewTextLen: Integer): string;
+{ Mini-diff feedback: the changed region of the NEW file body with +-3
+  context lines and line numbers, so the model can confirm the edit
+  landed where intended WITHOUT a follow-up full-file read_file (which
+  re-injects the whole body into history). FirstChangeOfs is the 1-based
+  char offset where the replacement begins. Bounded to 12 lines.
+  (Declared above the apply_patch section: both edit_file and
+  apply_patch build their result feedback from it.) }
+const
+  CtxLines = 3;
+  MaxLines = 12;
+var
+  Lines: TStringList;
+  i, FirstLine, LastLine, Lo, Hi, Shown: Integer;
+begin
+  Result := '';
+  { 1-based line of the change start = newlines before it + 1. }
+  FirstLine := 1;
+  for i := 1 to FirstChangeOfs - 1 do
+    if (i <= Length(NewContent)) and (NewContent[i] = #10) then Inc(FirstLine);
+  LastLine := FirstLine;
+  for i := FirstChangeOfs to FirstChangeOfs + NewTextLen - 1 do
+    if (i >= 1) and (i <= Length(NewContent)) and (NewContent[i] = #10) then Inc(LastLine);
+
+  Lines := TStringList.Create;
+  try
+    Lines.LineBreak := #10;
+    Lines.StrictDelimiter := True;
+    Lines.Text := StringReplace(NewContent, #13, '', [rfReplaceAll]);
+    Lo := FirstLine - CtxLines; if Lo < 1 then Lo := 1;
+    Hi := LastLine + CtxLines;  if Hi > Lines.Count then Hi := Lines.Count;
+    Shown := 0;
+    for i := Lo to Hi do
+    begin
+      if Shown >= MaxLines then
+      begin
+        Result := Result + Format('  ... (%d more line(s))', [Hi - i + 1]) + #10;
+        Break;
+      end;
+      Result := Result + Format('%6d: %s', [i, Lines[i - 1]]) + #10;
+      Inc(Shown);
+    end;
+    Result := TrimRight(Result);
+    if Result <> '' then
+      Result := Format('now reads (lines %d-%d):', [Lo, Hi]) + #10 + Result;
+  finally
+    Lines.Free;
+  end;
+end;
+
+function LineStartOfs(const S: string; Line: Integer): Integer;
+{ 1-based char offset where 1-based line Line begins. Line past EOF ->
+  Length(S)+1, so an offset subtraction over the result stays sane. }
+var
+  i, Ln: Integer;
+begin
+  Result := 1;
+  Ln := 1;
+  if Line <= 1 then Exit;
+  for i := 1 to Length(S) do
+    if S[i] = #10 then
+    begin
+      Inc(Ln);
+      if Ln = Line then Exit(i + 1);
+    end;
+  Result := Length(S) + 1;
+end;
+
 { ===== apply_patch: multi-file, context-anchored patches (Codex / OpenClaw
   apply_patch format) ===================================================== }
 type
@@ -881,6 +1017,14 @@ type
     Path:    string;
     MoveTo:  string;
     Content: string;
+    { First changed region of an Update, in NEW-content coordinates:
+      1-based line where the first hunk's replacement landed + how many
+      lines it inserted (0 for a pure deletion). Feeds the same
+      EditContextSnippet mini-diff edit_file returns, so the model can
+      confirm placement without re-reading the file. 0 = no snippet
+      (Add / Delete). }
+    SnipLine: Integer;
+    SnipLen:  Integer;
   end;
   TPatchActionArray = array of TPatchAction;
 
@@ -1017,6 +1161,7 @@ begin
         Inc(i);
       end;
       Act.Kind := pokAdd; Act.Path := Path; Act.MoveTo := '';
+      Act.SnipLine := 0; Act.SnipLen := 0;
       Act.Content := ApJoinLF(Content);
       if Length(Content) > 0 then Act.Content := Act.Content + #10;
       AddAction;
@@ -1025,6 +1170,7 @@ begin
     begin
       Path := ResolveWorkspacePath(Trim(Copy(Line, Length('*** Delete File: ') + 1, MaxInt)));
       Act.Kind := pokDelete; Act.Path := Path; Act.MoveTo := ''; Act.Content := '';
+      Act.SnipLine := 0; Act.SnipLen := 0;
       AddAction;
       Inc(i);
     end
@@ -1043,6 +1189,7 @@ begin
       begin ErrMsg := 'apply_patch: no such file to update: ' + Path; Exit; end;
       CurLines := ApSplitLF(ReadFileText(Path));
       CurSearch := 0;
+      Act.SnipLine := 0; Act.SnipLen := 0;
       while (i < n) and (not ApStarts(P[i], '*** ')) do
       begin
         if ApStarts(P[i], '@@') then
@@ -1092,6 +1239,18 @@ begin
           Exit;
         end;
         ApSplice(CurLines, Idx, Length(OldB), NewB);
+        { First hunk per file drives the result snippet. Hunks normally
+          splice strictly below (CurSearch only moves forward), but the
+          over-advanced-anchor fallback above can land a later hunk ABOVE
+          the recorded one -- shift the line number by the delta so it
+          still points at the right region of the final content. }
+        if Act.SnipLine = 0 then
+        begin
+          Act.SnipLine := Idx + 1;
+          Act.SnipLen  := Length(NewB);
+        end
+        else if Idx + 1 < Act.SnipLine then
+          Inc(Act.SnipLine, Length(NewB) - Length(OldB));
         CurSearch := Idx + Length(NewB);
       end;
       Act.Kind := pokUpdate; Act.Path := Path; Act.MoveTo := MoveTo;
@@ -1112,10 +1271,14 @@ begin
 end;
 
 function Tool_FSApplyPatch(const ArgsJSON: string; out ErrMsg: string): string;
+const
+  { Snippets are per updated file; cap them so a sweeping multi-file
+    patch doesn't turn the tool result into a wall of context. }
+  MaxSnippets = 3;
 var
-  PatchText, Reason: string;
+  PatchText, Reason, Snip: string;
   Actions: TPatchActionArray;
-  i, nAdd, nUpd, nDel: Integer;
+  i, nAdd, nUpd, nDel, StartOfs, Snips: Integer;
 begin
   ErrMsg := '';
   if not HasJSONKey(ArgsJSON, 'patch') then
@@ -1192,6 +1355,29 @@ begin
     end;
   end;
   Result := Format('applied patch: %d added, %d updated, %d deleted', [nAdd, nUpd, nDel]);
+  { B2 parity with edit_file: show each updated file's first changed
+    region so the model verifies placement from the tool result instead
+    of re-reading files it just patched. }
+  Snips := 0;
+  for i := 0 to High(Actions) do
+  begin
+    if (Actions[i].Kind <> pokUpdate) or (Actions[i].SnipLine <= 0) then Continue;
+    if Snips >= MaxSnippets then
+    begin
+      Result := Result + #10 + '(more updated files not shown -- read_file a range to inspect them)';
+      Break;
+    end;
+    StartOfs := LineStartOfs(Actions[i].Content, Actions[i].SnipLine);
+    Snip := EditContextSnippet(Actions[i].Content, StartOfs,
+              LineStartOfs(Actions[i].Content,
+                           Actions[i].SnipLine + Actions[i].SnipLen) - StartOfs - 1);
+    if Snip = '' then Continue;
+    if Actions[i].MoveTo <> '' then
+      Result := Result + #10#10 + Actions[i].MoveTo + ' ' + Snip
+    else
+      Result := Result + #10#10 + Actions[i].Path + ' ' + Snip;
+    Inc(Snips);
+  end;
 end;
 
 function Tool_FSFindFiles(const ArgsJSON: string; out ErrMsg: string): string;
@@ -1345,55 +1531,6 @@ begin
     Inc(Result);
     Rest := Copy(Rest, P + Length(Sub), MaxInt);
   until False;
-end;
-
-function EditContextSnippet(const NewContent: string;
-                            FirstChangeOfs, NewTextLen: Integer): string;
-{ Mini-diff feedback: the changed region of the NEW file body with +-3
-  context lines and line numbers, so the model can confirm the edit
-  landed where intended WITHOUT a follow-up full-file read_file (which
-  re-injects the whole body into history). FirstChangeOfs is the 1-based
-  char offset where the replacement begins. Bounded to 12 lines. }
-const
-  CtxLines = 3;
-  MaxLines = 12;
-var
-  Lines: TStringList;
-  i, FirstLine, LastLine, Lo, Hi, Shown: Integer;
-begin
-  Result := '';
-  { 1-based line of the change start = newlines before it + 1. }
-  FirstLine := 1;
-  for i := 1 to FirstChangeOfs - 1 do
-    if (i <= Length(NewContent)) and (NewContent[i] = #10) then Inc(FirstLine);
-  LastLine := FirstLine;
-  for i := FirstChangeOfs to FirstChangeOfs + NewTextLen - 1 do
-    if (i >= 1) and (i <= Length(NewContent)) and (NewContent[i] = #10) then Inc(LastLine);
-
-  Lines := TStringList.Create;
-  try
-    Lines.LineBreak := #10;
-    Lines.StrictDelimiter := True;
-    Lines.Text := StringReplace(NewContent, #13, '', [rfReplaceAll]);
-    Lo := FirstLine - CtxLines; if Lo < 1 then Lo := 1;
-    Hi := LastLine + CtxLines;  if Hi > Lines.Count then Hi := Lines.Count;
-    Shown := 0;
-    for i := Lo to Hi do
-    begin
-      if Shown >= MaxLines then
-      begin
-        Result := Result + Format('  ... (%d more line(s))', [Hi - i + 1]) + #10;
-        Break;
-      end;
-      Result := Result + Format('%6d: %s', [i, Lines[i - 1]]) + #10;
-      Inc(Shown);
-    end;
-    Result := TrimRight(Result);
-    if Result <> '' then
-      Result := Format('now reads (lines %d-%d):', [Lo, Hi]) + #10 + Result;
-  finally
-    Lines.Free;
-  end;
 end;
 
 function Tool_FSEdit(const ArgsJSON: string; out ErrMsg: string): string;
@@ -1601,13 +1738,15 @@ begin
   T.Name        := 'grep_files';
   T.Description := 'Search file CONTENTS for a substring, recursively (skips VCS/build/deps ' +
                    'dirs and binaries). Returns LINENO:line matches grouped per file -- feed ' +
-                   'the line numbers to read_file start_line/end_line. Use find_files to ' +
+                   'the line numbers to read_file start_line/end_line, or pass context_lines ' +
+                   'to see around each match without a follow-up read. Use find_files to ' +
                    'locate files by NAME.';
   T.Schema      := '{"type":"object","properties":{' +
                    '"path":{"type":"string"},' +
                    '"pattern":{"type":"string"},' +
                    '"ignore_case":{"type":"boolean"},' +
                    '"include":{"type":"string","description":"Comma-separated filename glob(s), e.g. *.pas,*.dpr"},' +
+                   '"context_lines":{"type":"integer","minimum":0,"maximum":10,"description":"Also show N lines before/after each match (grep -C). Context lines use LINENO- prefixes; matches keep LINENO:."},' +
                    '"max_file_bytes":{"type":"integer","description":"Skip files larger than this (default 10 MiB)."}' +
                    '},"required":["path","pattern"]}';
   T.Handler     := Tool_FSGrep;
