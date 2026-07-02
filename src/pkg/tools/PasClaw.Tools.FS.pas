@@ -295,14 +295,16 @@ begin
       Body := '';
       { F3: number each line so the slice cross-references grep_files'
         LINENO: hits and edit_file's "now reads (lines A-B)" snippets.
-        The header names the format so the model quotes content, not
-        prefixes, into old_text. }
+        Uses the SAME "N:" format as FormatNumberedLine (no space after
+        the colon) so a body copied verbatim into write_file round-trips
+        through StripHashlinePrefixes -- a "N: " separator would survive
+        the stripper and shift the copied line's indentation by one. }
       for i := StartLn to EndLn do
       begin
         if Body <> '' then Body := Body + #10;
-        Body := Body + IntToStr(i) + ': ' + Lines[i - 1];
+        Body := Body + FormatNumberedLine(i, Lines[i - 1]);
       end;
-      Exit(Format('(lines %d-%d of %d, numbered "N: " -- strip the prefixes when quoting into edits)',
+      Exit(Format('(lines %d-%d of %d, numbered "N:" -- strip the prefixes when quoting into edits)',
                   [StartLn, EndLn, Total]) + #10 + Body);
     finally
       Lines.Free;

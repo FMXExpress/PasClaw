@@ -159,18 +159,35 @@ begin
     Reg.RunTool('write_file', '{"path":"' + PathA + '","content":"r1\nr2\nr3\nr4\nr5"}', Err);
     R := Reg.RunTool('read_file', '{"path":"' + PathA + '","start_line":2,"end_line":3}', Err);
     AssertContains(R, '(lines 2-3 of 5', 'range read reports the slice + total');
-    AssertContains(R, '2: r2', 'range lines carry their line number (grep cross-ref)');
-    AssertContains(R, '3: r3', 'numbering matches the actual line, not the slice index');
+    AssertContains(R, '2:r2', 'range lines carry their line number (grep cross-ref, N: format)');
+    AssertContains(R, '3:r3', 'numbering matches the actual line, not the slice index');
     AssertTrue(Pos('r4', R) = 0, 'range excludes lines past end_line');
     R := Reg.RunTool('read_file', '{"path":"' + PathA + '","start_line":4,"end_line":99}', Err);
     AssertContains(R, '(lines 4-5 of 5', 'end_line clamps to the file end');
-    AssertContains(R, '5: r5', 'clamped tail keeps true line numbers');
+    AssertContains(R, '5:r5', 'clamped tail keeps true line numbers');
+    { Round-trip guard (P2 on #419): ranged output uses the SAME N: format
+      write_file's StripHashlinePrefixes consumes, so a copied indented body
+      keeps its exact indentation. A "N: " separator would leave a stray
+      leading space after stripping. }
+    Reg.RunTool('write_file', '{"path":"' + PathA + '","content":"a\n  indented\nb"}', Err);
+    R := Reg.RunTool('read_file', '{"path":"' + PathA + '","start_line":1,"end_line":3}', Err);
+    AssertContains(R, '2:  indented', 'numbered slice preserves the two-space indent verbatim');
+    { Feed the numbered slice (minus the header) straight back into write_file;
+      the two-space indent must survive the auto-strip untouched. Assert on the
+      indentation specifically -- the strip path appends a trailing newline via
+      TStringList.Text (long-standing), which exact-equality would trip over. }
+    Reg.RunTool('write_file', '{"path":"' + PathB + '","content":"1:a\n2:  indented\n3:b"}', Err);
+    R := ReadBack(Reg, PathB);
+    AssertContains(R, #10 + '  indented' + #10, 'copied numbered body keeps the exact two-space indent');
+    AssertTrue(Pos(#10 + '   indented', R) = 0, 'no stray leading space introduced by the stripper');
+    AssertTrue(Pos('1:a', R) = 0, 'the N: prefixes were stripped, not written literally');
+    if FileExists(PathB) then DeleteFile(PathB);  { the append section below expects PathB absent }
     { empty file + range: must not range-check into Lines[-1] }
     Reg.RunTool('write_file', '{"path":"' + PathA + '","content":""}', Err);
     R := Reg.RunTool('read_file', '{"path":"' + PathA + '","start_line":1,"end_line":5}', Err);
     AssertEqStr(Err, '', 'range read of an empty file is not an error');
     AssertContains(R, '(empty file', 'empty file reports itself instead of crashing');
-    WriteLn('  ok: read_file start_line/end_line slices and clamps');
+    WriteLn('  ok: read_file start_line/end_line slices, clamps, round-trips through write_file');
     { restore the fixture the append section below builds on }
     Reg.RunTool('write_file', '{"path":"' + PathA + '","content":"hello"}', Err);
 
