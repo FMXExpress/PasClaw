@@ -1335,6 +1335,11 @@ begin
   Cfg.Parallel      := True;
   Cfg.Mode          := FMode;  { PR #290: thread current Plan/Build into the dispatch gate }
   Cfg.Options       := DefaultChatOptions;
+  { #414 review: the cap default flipped on, but these builders never set
+    ToolOutputCap, so TUI turns sent oversized tool output verbatim while
+    Cmd.TUI dutifully registered tool_output_get. RouteConfig is the
+    session-lifetime config snapshot the router already uses. }
+  Cfg.ToolOutputCap := RouteConfig.ToolOutputCap;
   Cfg.Options.CacheEnabled := PromptCacheEnabled;
   Cfg.Options.CacheTTL     := PromptCacheTTL;
   if FSession <> nil then
@@ -2849,6 +2854,11 @@ begin
   Cfg.MaxIterations := 6;
   Cfg.Parallel := True;
   Cfg.Options       := DefaultChatOptions;
+  { #414 review: the cap default flipped on, but these builders never set
+    ToolOutputCap, so TUI turns sent oversized tool output verbatim while
+    Cmd.TUI dutifully registered tool_output_get. RouteConfig is the
+    session-lifetime config snapshot the router already uses. }
+  Cfg.ToolOutputCap := RouteConfig.ToolOutputCap;
   Cfg.Options.CacheEnabled := PromptCacheEnabled;
   Cfg.Options.CacheTTL     := PromptCacheTTL;
   Cfg.OnText        := nil;

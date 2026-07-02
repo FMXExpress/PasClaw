@@ -638,7 +638,7 @@ begin
 end;
 
 var
-  BinPath, CfgJSON: string;
+  BinPath, CfgJSON, EnvLine: string;
   S: TStringList;
   Worker: TWorkerThread;
   i: Integer;
@@ -675,8 +675,20 @@ begin
   try
     GW.Executable := BinPath;
     GW.Parameters.Add('gateway');
+    { #414 review: appending PASCLAW_HOME after copying the caller's env
+      produces DUPLICATE entries when the caller has it exported, and
+      typical getenv resolution takes the FIRST -- the spawned gateway
+      would then run against the user's LIVE PasClaw home instead of the
+      throwaway bench home. Skip the caller's PASCLAW_HOME / PASCLAW_CONFIG
+      / NO_COLOR while copying so the bench's values are the only ones. }
     for i := 1 to GetEnvironmentVariableCount do
-      GW.Environment.Add(GetEnvironmentString(i));
+    begin
+      EnvLine := GetEnvironmentString(i);
+      if (Pos('PASCLAW_HOME=', EnvLine) = 1) or
+         (Pos('PASCLAW_CONFIG=', EnvLine) = 1) or
+         (Pos('NO_COLOR=', EnvLine) = 1) then Continue;
+      GW.Environment.Add(EnvLine);
+    end;
     GW.Environment.Add('PASCLAW_HOME=' + GHomeDir);
     GW.Environment.Add('NO_COLOR=1');
     GW.Options := [poUsePipes, poStderrToOutPut];
