@@ -435,6 +435,18 @@ procedure AccumulateGatewayStatsRaw(const Cfg: TConfig;
    slip past the lexical compare. Exposed for tests. *)
 function IsRestrictedFsPath(const Path: string): Boolean;
 
+(* Derive a session id from the OpenAI-standard `user` field (the same
+   trick OpenClaw's gateway uses): when a /v1/chat/completions request
+   carries no X-PasClaw-Session header but does carry `user`, hash it so
+   repeated calls with the same value share an agent session -- a
+   spec-clean client gets continuity without any custom header. Hashed
+   rather than used raw: `user` is arbitrary client data (often an email
+   or account id), and hashing keeps ids filesystem-uniform and keeps the
+   raw value out of session listings and checkpoint paths. '' in -> ''
+   out (no user field means stateless, exactly as before). Exposed for
+   tests. *)
+function SessionFromUserField(const UserVal: string): string;
+
 (* Resolve a /v1/responses request's tool_choice into the
    TChatOptions.ToolChoice convention: '' when absent/unrecognised (the
    provider default applies), 'auto'/'none'/'required', or a tool NAME to
@@ -647,6 +659,21 @@ begin
   for i := 1 to Length(S) do
     if S[i] <> '-' then
       Result := Result + UpCase(S[i]);
+end;
+
+function SessionFromUserField(const UserVal: string): string;
+var
+  Digest: TBytes;
+  i: Integer;
+begin
+  Result := '';
+  if Trim(UserVal) = '' then Exit;
+  Digest := SHA256Bytes(TEncoding.UTF8.GetBytes(Trim(UserVal)));
+  { 8 bytes = 16 hex chars -- ample for distinguishing client sessions,
+    short enough to stay readable in /v1/sessions listings. }
+  Result := 'user-';
+  for i := 0 to 7 do
+    Result := Result + LowerCase(IntToHex(Digest[i], 2));
 end;
 
 function CheckpointSessionId(const ReqSession: string): string;
@@ -4971,7 +4998,7 @@ procedure TGatewayServer.HandleChatCompletions(AContext: TIdContext;
    chunk, and the [DONE] terminator. The non-streaming path is
    unchanged: build the full chat.completion JSON and reply once. *)
 var
-  Body, ReqModel, FinishReason, CompId: string;
+  Body, ReqModel, FinishReason, CompId, ReqSession: string;
   Bytes: TBytes;
   Req, MsgObj: TJsonObject;
   MsgArr: TJsonArray;
@@ -5040,6 +5067,21 @@ begin
     ReqModel    := Req.GetStr('model', FCfg.DefaultModel);
     WantsStream := Req.GetBool('stream', False);
     AWasStreamingRequest := WantsStream;
+    { Session selection: an explicit X-PasClaw-Session header always wins
+      (the web UI and anything else that wants precise control). Without
+      one, derive a stable session from the OpenAI `user` field so
+      spec-compliant clients (SweetConsole, openai-python, ...) share an
+      agent session across calls just by reusing the same user string --
+      OpenClaw-compatible behaviour. Neither present -> '' = stateless,
+      the pre-existing default. }
+    ReqSession := ReqSessionId(ARequest);
+    if ReqSession = '' then
+    begin
+      ReqSession := SessionFromUserField(Req.GetStr('user', ''));
+      if (ReqSession <> '') and FDebugIO then
+        LogDebug('chat/completions: session derived from user field -> %s',
+                 [ReqSession]);
+    end;
     if FDebugIO then
       LogDebug('chat/completions: model=%s stream=%s temperature=%g max_tokens=%d',
                [ReqModel, BoolToStr(WantsStream, True),
@@ -5172,7 +5214,7 @@ begin
       LoopCfg.OnToolCall   := Streamer.NoteToolCall;
       LoopCfg.OnToolResult := Streamer.NoteToolResult;
       Streamer.WriteComment('connected');
-      if not RunCheckpointedLoop(ReqSessionId(ARequest), LoopCfg, Msgs, Loop) then
+      if not RunCheckpointedLoop(ReqSession, LoopCfg, Msgs, Loop) then
       begin
         if FDebugIO then LogDebug('chat/completions -> 502 (tool loop failed)');
         Streamer.WriteError('tool loop failed');
@@ -5245,7 +5287,7 @@ begin
     LoopCfg.OnToolCall   := ActivityCollector.OnToolCall;
     LoopCfg.OnToolResult := ActivityCollector.OnToolResult;
 
-    if not RunCheckpointedLoop(ReqSessionId(ARequest), LoopCfg, Msgs, Loop) then
+    if not RunCheckpointedLoop(ReqSession, LoopCfg, Msgs, Loop) then
     begin
       if FDebugIO then LogDebug('chat/completions -> 502 (tool loop failed)');
       WriteJSON(AResp, 502,
