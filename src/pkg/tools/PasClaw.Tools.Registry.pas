@@ -72,6 +72,9 @@ type
     function  Count: Integer;
     function  ToProviderDefs: TToolDefinitionArray;
     function  RunTool(const Name, ArgsJSON: string; out ErrMsg: string): string;
+    { Up to 3 similar registered names for an unknown-tool error ('' when
+      nothing plausible). Public for tests. }
+    function  SimilarToolNames(const Name: string): string;
     { Progressive-disclosure surface (PasClaw.MCP.Disclosure / tool_search).
 
       DeferredNames returns the registered tool names whose IsDeferred is
@@ -353,6 +356,38 @@ begin
   end;
 end;
 
+function TToolRegistry.SimilarToolNames(const Name: string): string;
+{ Error-message helper: up to 3 registered (non-hidden -- Names already
+  filters aliases) tool names that look like a typo/half-memory of Name,
+  appended to the unknown-tool error so the model's next call is the
+  right one instead of a guess. "Similar" = one contains the other, or a
+  shared 4-char prefix -- cheap, and it catches the real cases
+  (old fs_* era names, singular/plural slips, truncations). }
+var
+  All: TStringArray;
+  i, Hits: Integer;
+  L, C: string;
+begin
+  Result := '';
+  L := LowerCase(Name);
+  if L = '' then Exit;
+  All := Names;
+  Hits := 0;
+  for i := 0 to High(All) do
+  begin
+    C := LowerCase(All[i]);
+    if (Pos(L, C) > 0) or (Pos(C, L) > 0) or
+       ((Length(L) >= 4) and (Copy(C, 1, 4) = Copy(L, 1, 4))) then
+    begin
+      if Result = '' then Result := ' -- did you mean: ' + All[i]
+      else Result := Result + ', ' + All[i];
+      Inc(Hits);
+      if Hits >= 3 then Break;
+    end;
+  end;
+  if Result <> '' then Result := Result + '?';
+end;
+
 function TToolRegistry.RunTool(const Name, ArgsJSON: string; out ErrMsg: string): string;
 var
   T: TTool;
@@ -364,7 +399,7 @@ begin
     every concurrent gateway request through it. }
   if not Find(Name, T) then
   begin
-    ErrMsg := 'unknown tool: ' + Name;
+    ErrMsg := 'unknown tool: ' + Name + SimilarToolNames(Name);
     Exit('');
   end;
   if (not Assigned(T.Handler)) and (not Assigned(T.HandlerObj)) then
