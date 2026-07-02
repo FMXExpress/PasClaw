@@ -68,6 +68,7 @@ type
     Prompts: array of string;
     procedure AddToolRound(const Calls: array of TToolCall);
     procedure AddStop(const Text: string);
+    procedure AddTruncated(const Text: string);
     function Chat(const Messages: array of TMessage;
                   const Tools:    array of TToolDefinition;
                   const Model:    string;
@@ -105,6 +106,20 @@ begin
   R := Default(TLLMResponse);
   R.StatusCode := 200;
   R.FinishReason := 'stop';
+  R.Content := Text;
+  SetLength(Script, Length(Script) + 1);
+  Script[High(Script)] := R;
+end;
+
+procedure TScripted.AddTruncated(const Text: string);
+{ A turn that hit the output ceiling: text content, no tool call,
+  finish_reason=length. }
+var
+  R: TLLMResponse;
+begin
+  R := Default(TLLMResponse);
+  R.StatusCode := 200;
+  R.FinishReason := 'length';
   R.Content := Text;
   SetLength(Script, Length(Script) + 1);
   Script[High(Script)] := R;
@@ -392,6 +407,68 @@ begin
   end;
 end;
 
+procedure TestTruncationRecoveryWithTools;
+{ A truncated (finish=length) no-tool-call turn in a tool-enabled build
+  session must NOT end the loop: fold a nudge, retry, and let the write land. }
+var
+  P: TScripted;
+  Reg: TToolRegistry;
+  Cfg: TToolLoopConfig;
+  Msgs: TMessageArray;
+  Loop: TToolLoopResult;
+begin
+  if FileExists(FileA) then DeleteFile(FileA);
+  Reg := TToolRegistry.Create;
+  try
+    RegisterFSTools(Reg, True);
+    P := TScripted.Create;
+    Cfg := BaseCfg(P);
+    Cfg.Registry := Reg;
+    P.AddTruncated('Let me build this. ### Bullets: procedure DrawBullet(X,Y: Integer); begin');
+    P.AddToolRound([MkCall('write_file', '{"path":"' + FileA + '","content":"ok"}')]);
+    P.AddStop('done');
+
+    SetLength(Msgs, 1);
+    Msgs[0] := MakeMessage(mrUser, 'build a small demo in the workspace');
+    AssertTrue(RunToolLoop(Cfg, Msgs, Loop), 'loop ran');
+    AssertTrue(Length(P.Prompts) = 3,
+      'truncated turn retried, then wrote, then stopped (3 calls)');
+    AssertHas(P.Prompts[1], 'cut off at the output token limit',
+      'retry prompt carries the truncation nudge');
+    AssertHas(P.Prompts[1], 'write_file', 'nudge names the writing tool');
+    AssertTrue(FileExists(FileA), 'deliverable landed after recovery');
+    AssertNot(Loop.Content, 'DrawBullet', 'final content is not the truncated prose');
+    WriteLn('  ok: tool-enabled truncated turn recovers, nudges, and delivers');
+  finally
+    Reg.Free;
+  end;
+end;
+
+procedure TestTruncationNoToolsReturnsContent;
+{ Review fix (P2 on #420): with no writing tool available (Registry=nil /
+  UseTools=False / plan mode), a truncated no-tool-call turn is a long TEXT
+  answer -- its content is the deliverable. It must be returned as-is, NOT
+  dropped and retried against tools that don't exist. }
+var
+  P: TScripted;
+  Cfg: TToolLoopConfig;
+  Msgs: TMessageArray;
+  Loop: TToolLoopResult;
+begin
+  P := TScripted.Create;
+  Cfg := BaseCfg(P);   { Registry stays nil -> no tools on offer }
+  P.AddTruncated('Here is a long explanation that got cut off at the limit');
+  P.AddStop('SHOULD-NOT-REACH');
+  SetLength(Msgs, 1);
+  Msgs[0] := MakeMessage(mrUser, 'explain this topic at length');
+  AssertTrue(RunToolLoop(Cfg, Msgs, Loop), 'loop ran');
+  AssertTrue(Length(P.Prompts) = 1,
+    'no-tools truncated turn is returned, not retried (single provider call)');
+  AssertHas(Loop.Content, 'long explanation that got cut off',
+    'the truncated text is returned as the deliverable');
+  WriteLn('  ok: no-tools truncated answer returned as-is, no nudge, no retry');
+end;
+
 var
   Pol: TSandboxPolicy;
 begin
@@ -408,6 +485,8 @@ begin
   TestGoalSkipsMicroTurns;
   TestRepeatReadDedup;
   TestDisableSwitch;
+  TestTruncationRecoveryWithTools;
+  TestTruncationNoToolsReturnsContent;
 
   if FileExists(FileA) then DeleteFile(FileA);
   RemoveDir(WsDir);

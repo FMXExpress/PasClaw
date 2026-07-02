@@ -1158,6 +1158,26 @@ begin
   Result := SameText(FR, 'length') or SameText(FR, 'max_tokens');
 end;
 
+function HasWritingTool(const Tools: TToolDefinitionArray): Boolean;
+{ True when at least one file-writing tool is on offer this turn. The
+  truncation nudge steers the model toward write_file/append_file/etc, so
+  it only makes sense when such a tool actually exists. In a no-tools or
+  read-only session (Registry=nil, UseTools=False, plan mode) a truncated
+  no-tool-call turn is just a long text answer -- its content IS the
+  deliverable and must be returned, not retried against absent tools. }
+const
+  Writers: array[0..5] of string = (
+    'write_file', 'append_file', 'edit_file', 'apply_patch',
+    'fs_write', 'fs_edit_hashline');
+var
+  i, j: Integer;
+begin
+  Result := False;
+  for i := 0 to High(Tools) do
+    for j := Low(Writers) to High(Writers) do
+      if SameText(Tools[i].Name, Writers[j]) then Exit(True);
+end;
+
 function RunToolLoop(const Cfg: TToolLoopConfig;
                      var Messages: array of TMessage;
                      out Loop: TToolLoopResult): Boolean;
@@ -1614,7 +1634,13 @@ begin
         bounded by MaxTruncRetries. The partial content is intentionally
         dropped (not appended to Hist) so the truncated prose blob doesn't
         bloat context on the retry. }
-      if IsTruncatedFinish(Resp.FinishReason) and (TruncRetries < MaxTruncRetries) then
+      { Gate on a writing tool actually being available and build mode:
+        the nudge steers toward write_file/append_file, so in a no-tools /
+        read-only / plan session the truncated text is the deliverable and
+        must be returned as-is (with finish=length) rather than dropped and
+        retried against tools that don't exist. }
+      if IsTruncatedFinish(Resp.FinishReason) and (TruncRetries < MaxTruncRetries)
+         and (Cfg.Mode <> pmPlan) and HasWritingTool(Tools) then
       begin
         Inc(TruncRetries);
         TruncNudgePending := True;
