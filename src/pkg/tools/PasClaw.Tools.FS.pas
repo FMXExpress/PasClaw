@@ -186,6 +186,65 @@ begin
   Result := False;
 end;
 
+function SuggestSimilarFiles(const MissingPath: string): string;
+{ Error-path helper for "no such file": a bounded walk from the working
+  directory for names containing the missing basename, so the model's
+  next call is the right path instead of another guess. Cap 3 matches,
+  cap 400 dirs visited -- this only ever runs when a read already
+  failed, and a giant tree shouldn't turn one error into a crawl. }
+const
+  MaxHits = 3;
+  MaxDirs = 400;
+var
+  Base, Root, Hits: string;
+  DirsSeen, Found: Integer;
+
+  procedure Walk(const Dir: string);
+  var
+    SR: TSearchRec;
+  begin
+    if (Found >= MaxHits) or (DirsSeen >= MaxDirs) then Exit;
+    Inc(DirsSeen);
+    if FindFirst(Dir + PathDelim + '*', faAnyFile, SR) = 0 then
+    try
+      repeat
+        if (SR.Name = '.') or (SR.Name = '..') then Continue;
+        if (SR.Attr and faDirectory) <> 0 then
+        begin
+          if (SR.Name <> '') and (SR.Name[1] = '.') then Continue;
+          if IsBlockedGrepDir(SR.Name) then Continue;
+          Walk(Dir + PathDelim + SR.Name);
+        end
+        else if MatchesMask(SR.Name, '*' + Base + '*') then
+        begin
+          Inc(Found);
+          if Hits <> '' then Hits := Hits + ', ';
+          Hits := Hits + Copy(Dir + PathDelim + SR.Name, Length(Root) + 2, MaxInt);
+        end;
+        if Found >= MaxHits then Break;
+      until FindNext(SR) <> 0;
+    finally
+      FindClose(SR);
+    end;
+  end;
+
+begin
+  Result := '';
+  Base := ExtractFileName(MissingPath);
+  if Length(Base) < 3 then Exit;   { too short to suggest anything sane }
+  Root := ExcludeTrailingPathDelimiter(ResolveWorkspacePath('.'));
+  if not DirectoryExists(Root) then Exit;
+  Hits := '';
+  DirsSeen := 0;
+  Found := 0;
+  Walk(Root);
+  if Hits <> '' then
+    Result := ' Did you mean: ' + Hits +
+              '? (find_files locates files by name glob.)'
+  else
+    Result := ' Use find_files with a glob (e.g. "*' + Base + '*") to locate it.';
+end;
+
 function Tool_FSRead(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Path, Body, Reason: string;
@@ -207,7 +266,7 @@ begin
   end;
   if not FileExists(Path) then
   begin
-    ErrMsg := 'no such file: ' + Path;
+    ErrMsg := 'no such file: ' + Path + '.' + SuggestSimilarFiles(Path);
     Exit('');
   end;
   Body := ReadFileText(Path);
@@ -1025,7 +1084,11 @@ begin
         if Idx < 0 then Idx := ApFindBlock(CurLines, OldB, 0);   { anchor may have over-advanced }
         if Idx < 0 then
         begin
-          ErrMsg := 'apply_patch: context not found in ' + Path + ' near: ' + OldB[0];
+          ErrMsg := 'apply_patch: context not found in ' + Path + ' near: ' + OldB[0] +
+                    '. The context and "-" lines must match the CURRENT file ' +
+                    'byte-exactly -- re-read the region (read_file with ' +
+                    'start_line/end_line) and rebuild the hunk from what is ' +
+                    'actually there.';
           Exit;
         end;
         ApSplice(CurLines, Idx, Length(OldB), NewB);
@@ -1380,7 +1443,8 @@ begin
   end;
   if not FileExists(Path) then
   begin
-    ErrMsg := 'no such file: ' + Path + ' (use write_file to create it)';
+    ErrMsg := 'no such file: ' + Path + ' (use write_file to create it).' +
+              SuggestSimilarFiles(Path);
     Exit('');
   end;
   Content := ReadFileText(Path);
@@ -1535,17 +1599,16 @@ begin
     grep equivalent the agent has (Windows ships no grep). }
   T := Default(TTool);
   T.Name        := 'grep_files';
-  T.Description := 'Search files for a substring. Recursive when path is a directory. ' +
-                   'Skips dotdirs, well-known build/VCS/deps dirs (.git, node_modules, target, build, ' +
-                   'dist, vendor, .venv, __pycache__, .gradle, .next), binary files (NUL-byte detection ' +
-                   'in first 1 KiB), and files larger than max_file_bytes (default 10 MiB). Returns ' +
-                   'matches with LINENO:line per hit, one section per file.';
+  T.Description := 'Search file CONTENTS for a substring, recursively (skips VCS/build/deps ' +
+                   'dirs and binaries). Returns LINENO:line matches grouped per file -- feed ' +
+                   'the line numbers to read_file start_line/end_line. Use find_files to ' +
+                   'locate files by NAME.';
   T.Schema      := '{"type":"object","properties":{' +
                    '"path":{"type":"string"},' +
                    '"pattern":{"type":"string"},' +
                    '"ignore_case":{"type":"boolean"},' +
                    '"include":{"type":"string","description":"Comma-separated filename glob(s), e.g. *.pas,*.dpr"},' +
-                   '"max_file_bytes":{"type":"integer","description":"Skip files larger than this (default 10485760 = 10 MiB). Override for grepping into giant log files."}' +
+                   '"max_file_bytes":{"type":"integer","description":"Skip files larger than this (default 10 MiB)."}' +
                    '},"required":["path","pattern"]}';
   T.Handler     := Tool_FSGrep;
   T.IsCore      := True;
@@ -1581,13 +1644,15 @@ begin
   T.Name := 'edit_file';
   if UseHashline then
   begin
-    T.Description := 'Edit a file. Default: replace an exact snippet -- pass old_text (the existing text, ' +
-                     'verbatim including whitespace) and new_text. The match must be unique unless ' +
-                     'replace_all is set; omit new_text to delete. Advanced: pass a hashline `patch` instead ' +
-                     'for line-anchored multi-hunk edits -- first read the file with {"hashline":true} to ' +
-                     'get the ' + HL_FILE_PREFIX + 'path#hash header, then send "42:" anchors + ' +
-                     HL_PAYLOAD_REPLACE + '/' + HL_PAYLOAD_ABOVE + '/' + HL_PAYLOAD_BELOW +
-                     ' payload markers (header hash must match disk).';
+    { C4: the full hashline patch grammar used to live here and was re-sent
+      on EVERY request. It now lives where it's needed -- the format-error
+      messages (PreflightToolCall / PasClaw.Hashline validators) teach the
+      exact syntax the moment a patch is malformed. }
+    T.Description := 'Edit a file by replacing an exact snippet: pass old_text (verbatim, ' +
+                     'including whitespace) and new_text; unique match unless replace_all; ' +
+                     'omit new_text to delete. Advanced: a hashline `patch` (read the file ' +
+                     'with hashline:true first) does line-anchored multi-hunk edits; format ' +
+                     'errors reply with the exact patch syntax.';
     T.Schema      := '{"type":"object","properties":{' +
                      '"path":{"type":"string"},' +
                      '"old_text":{"type":"string","description":"Exact existing text to replace (verbatim, including whitespace)."},' +
@@ -1639,16 +1704,12 @@ begin
   T := Default(TTool);
   T.Name := 'apply_patch';
   T.Description :=
-    'Apply a multi-file patch in ONE call (Codex / OpenClaw apply_patch format). ' +
-    'Wrap everything between a "*** Begin Patch" line and a "*** End Patch" line. ' +
-    'Inside, one or more file sections: "*** Add File: <path>" then the new content ' +
-    'as lines each prefixed with "+"; "*** Delete File: <path>"; or "*** Update File: ' +
-    '<path>" (optionally followed by "*** Move to: <newpath>") then hunks. In a hunk, ' +
-    'optional "@@ <context>" lines help locate the region, then each change line starts ' +
-    'with " " (unchanged context), "-" (remove) or "+" (add). Edits are located by their ' +
-    'context and removed lines, NOT by line number. All-or-nothing: if any hunk fails to ' +
-    'locate, nothing is written. Prefer this over several edit_file calls when a change ' +
-    'spans multiple files or many hunks.';
+    'Apply a multi-file patch in ONE call (Codex apply_patch format): "*** Begin Patch" ' +
+    '... "*** End Patch" wrapping "*** Add File:" / "*** Update File:" (+ optional ' +
+    '"*** Move to:") / "*** Delete File:" sections; update hunks use " "/"-"/"+" lines ' +
+    'and optional "@@ context" anchors, located by content not line numbers. ' +
+    'All-or-nothing. Prefer over several edit_file calls for multi-file changes; ' +
+    'format errors reply with the exact expected syntax.';
   T.Schema :=
     '{"type":"object","properties":{"patch":{"type":"string",' +
     '"description":"Full patch text, from *** Begin Patch through *** End Patch."}},' +

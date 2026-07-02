@@ -684,13 +684,17 @@ begin
     begin
       Reason := 'refused: command contains forbidden token "' + Hit +
                 '" (built-in shell denylist; toggle off via sandbox.shell_deny_enabled=false ' +
-                'in config.json -- strongly discouraged)';
+                'in config.json -- strongly discouraged). Rewrite the command without "' + Hit +
+                '", or use the dedicated tools instead (read_file / write_file / edit_file / ' +
+                'find_files / grep_files cover most file work without the shell).';
       Exit(False);
     end;
     if MatchesAnySubstring(Cmd, Hit) then
     begin
       Reason := 'refused: command contains forbidden pattern "' + Hit +
-                '" (built-in shell denylist)';
+                '" (built-in shell denylist). Rewrite without "' + Hit +
+                '" -- e.g. avoid command substitution / pipes-to-shell; plain loops like ' +
+                '`yes X | head -N` or the dedicated file tools usually cover it.';
       Exit(False);
     end;
   end;

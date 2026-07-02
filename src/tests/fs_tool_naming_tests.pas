@@ -27,9 +27,11 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils,
   PasClaw.Utils,
+  PasClaw.Config,
   PasClaw.Providers.Types,
   PasClaw.Tools.Types,
   PasClaw.Tools.Registry,
+  PasClaw.Tools.Sandbox,
   PasClaw.Tools.FS;
 
 procedure Fail_(const Msg: string);
@@ -100,9 +102,14 @@ var
   Defs: TToolDefinitionArray;
   Dir, PathA, PathB, PathC, PathN, Patch, R, Err: string;
   T: TTool;
+  Pol: TSandboxPolicy;
 begin
   Dir := JoinPath(GetTempDir, 'pcfsnaming');
   ForceDirectories(Dir);
+  { Pin the workspace to the fixture dir so the B3 nearest-match walk is
+    deterministic (it searches from the working directory). }
+  Pol := Default(TSandboxPolicy);
+  ConfigureSandbox(Pol, Dir);
   PathA := JoinPath(Dir, 'a.txt');
   PathB := JoinPath(Dir, 'b.txt');
   if FileExists(PathA) then DeleteFile(PathA);
@@ -231,6 +238,29 @@ begin
     AssertContains(R, 'grep_files', 'empty result points at the contents-search sibling');
     WriteLn('  ok: find_files globs by name, skips deps dirs');
 
+    { --- 4c. B3: errors state the next move. --- }
+    { Wrong directory, right name: nearest-match suggestion (deep.pas lives
+      in sub/ from 4b, requested at the root). }
+    Reg.RunTool('read_file', '{"path":"' + JEsc(Dir + PathDelim + 'deep.pas') + '"}', Err);
+    AssertContains(Err, 'Did you mean', 'no-such-file suggests nearby names');
+    AssertContains(Err, 'deep.pas', 'suggestion names the actual location');
+    { Nothing similar: point at find_files instead. }
+    Reg.RunTool('read_file', '{"path":"' + JEsc(Dir + PathDelim + 'zzqq-none.pas') + '"}', Err);
+    AssertContains(Err, 'find_files', 'no-match error points at find_files');
+    { Unknown tool: suggest similar registered names. }
+    Reg.RunTool('read_files', '{}', Err);
+    AssertContains(Err, 'unknown tool', 'unknown tool still errors');
+    AssertContains(Err, 'did you mean', 'unknown tool suggests');
+    AssertContains(Err, 'read_file', 'suggestion includes the real name');
+    { Shell denial carries a remediation. }
+    Pol.ShellDenyEnabled := True;
+    ConfigureSandbox(Pol, Dir);
+    AssertTrue(not ShellAllowed('sudo ls', R), 'denylist still refuses');
+    AssertContains(R, 'dedicated tools', 'denial suggests the tool alternatives');
+    Pol.ShellDenyEnabled := False;
+    ConfigureSandbox(Pol, Dir);
+    WriteLn('  ok: errors carry the next move (nearest file / similar tool / shell alternative)');
+
     { --- 5. apply_patch: multi-file (update + add + delete) in one call. --- }
     AssertTrue(DefsHasName(Reg.ToProviderDefs, 'apply_patch'), 'apply_patch advertised');
     PathC := JoinPath(Dir, 'c.txt');
@@ -265,6 +295,7 @@ begin
       '{"patch":"' + JEsc('*** Begin Patch'#10'*** Update File: ' + PathA + #10'-nope'#10'+yep'#10'*** End Patch'#10) + '"}',
       Err);
     AssertContains(Err, 'context not found', 'apply_patch reports a missing-context failure');
+    AssertContains(Err, 'start_line', 'context failure tells the model to re-read the region');
     AssertEqStr(ReadBack(Reg, PathA), 'unchanged', 'apply_patch wrote nothing on failure');
 
     { Add File onto an existing path must refuse (not silently clobber). PathN

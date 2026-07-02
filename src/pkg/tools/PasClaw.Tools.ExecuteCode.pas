@@ -578,17 +578,11 @@ begin
   GRunners.Add(Runner);
 
   T.Name        := 'execute_code';
-  T.Description := 'Run a multi-line bash or PowerShell script. Use when ' +
-                   'you need a loop, heredoc, or fan-out that would be ' +
-                   'awkward to express as a single shell_exec command. ' +
-                   'Script body is written to a temp file then executed; ' +
-                   'returns combined stdout+stderr and exit code. Subject ' +
-                   'to the same sandbox + denylist as shell_exec. ' +
-                   'INSIDE the script you can call back into any of your ' +
-                   'other tools by running `pasclaw __tool <name> ''<json-args>''` ' +
-                   '-- the call hits the same registry you''re using now. ' +
-                   'Use this to fan out: e.g. list files, then memory_search ' +
-                   'each, then read_file the top hits, all in one script.';
+  T.Description := 'Run a multi-line bash or PowerShell script (loops, heredocs, ' +
+                   'fan-out a single shell_exec can''t express). Returns combined ' +
+                   'stdout+stderr and exit code; same sandbox/denylist as ' +
+                   'shell_exec. Inside the script, `pasclaw __tool <name> ' +
+                   '''<json-args>''` calls back into your own tools.';
   T.Schema      :=
     '{"type":"object",' +
      '"properties":{' +
