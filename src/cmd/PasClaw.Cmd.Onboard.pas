@@ -817,20 +817,27 @@ begin
     'can read back. Useful when a runaway grep can dump megabytes into the ' +
     'context.' + Ansi.Reset);
   PrintLn;
-  Choice := Trim(LowerCase(ReadLineEcho('  Cap tool output [y/N]: ')));
-  if (Choice = 'y') or (Choice = 'yes') then
+  { Default-on since the cap flipped to DefaultToolOutputCap: Enter keeps
+    the default, y customises the byte count, n disables (explicit 0,
+    which round-trips). }
+  Choice := Trim(LowerCase(ReadLineEcho(Format(
+    '  Cap tool output at %d bytes [Y/n/y=custom]: ', [DefaultToolOutputCap]))));
+  if (Choice = 'n') or (Choice = 'no') then
   begin
-    Input := Trim(ReadLineEcho('  Cap (bytes) [8192]: '));
-    Cap := StrToIntDef(Input, 8192);
+    Cfg.ToolOutputCap := 0;
+    PrintLn('  ' + Ansi.Dim + '(uncapped -- set tool_output_cap in config.json to re-enable)' + Ansi.Reset);
+  end
+  else if (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Input := Trim(ReadLineEcho(Format('  Cap (bytes) [%d]: ', [DefaultToolOutputCap])));
+    Cap := StrToIntDef(Input, DefaultToolOutputCap);
     if Cap < 256 then Cap := 256;
     Cfg.ToolOutputCap := Cap;
     PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + Format(' tool output cap = %d bytes', [Cap]));
   end
   else
-  begin
-    Cfg.ToolOutputCap := 0;
-    PrintLn('  ' + Ansi.Dim + '(skipped -- tool output is uncapped; flip tool_output_cap in config.json to enable later)' + Ansi.Reset);
-  end;
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
+            Format(' tool output cap = %d bytes (default)', [DefaultToolOutputCap]));
 end;
 
 procedure PromptOrientTaskAware(Cfg: TConfig);

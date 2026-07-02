@@ -506,6 +506,51 @@ begin
   Check(Has(Answer, 'recovered'), 'turn still delivered after recovery');
 end;
 
+function H_FatRead(N: Integer; const EnvJSON: string): string;
+begin
+  if N = 1 then
+    Result := RoundOf([OneCall('read_file', ArgsPathPlain('big.txt'))])
+  else if N = 2 then
+    Result := RoundOf([OneCall('list_dir', ArgsObj1('path', '.'))])
+  else
+    Result := StopOf('inspected the big file.');
+end;
+
+procedure ScenarioFatRead;
+{ C1: one oversized tool result must not ride verbatim in history for the
+  rest of the turn. With the default ToolOutputCap the 100 KB read is
+  diverted to the output cache (head + tail + tool_output_get handle) and
+  every subsequent request stays flat; without it (tool_output_cap: 0 /
+  pre-C1 builds) request 2 carries the full 100 KB. }
+var
+  S: TStringList;
+  Big: string;
+  i: Integer;
+begin
+  WriteLn;
+  WriteLn('== scenario: fat-read (tool-output cap keeps request bodies flat) ==');
+  Big := '';
+  for i := 1 to 1800 do
+    Big := Big + Format('line %4d: the quick brown fox jumps over the lazy dog again', [i]) + #10;
+  S := TStringList.Create;
+  try
+    S.Text := Big;
+    S.SaveToFile(GHomeDir + '/workspace/big.txt');
+  finally
+    S.Free;
+  end;
+
+  ResetScenario(H_FatRead);
+  Chat('[' + MsgObjJSON('user',
+    'inspect the big data file big.txt and summarise what it contains') + ']',
+    'bench-fatread');
+  Check(Has(EnvAt(1), 'tool_output_get'),
+    'oversized read was capped with a tool_output_get retrieval handle');
+  Check(GMaxBody < 60000,
+    Format('request bodies stay under 60 KB with the cap (max %d)', [GMaxBody]));
+  Metric('fatread.max_request_body_bytes', GMaxBody);
+end;
+
 function H_CapTurn1(N: Integer; const EnvJSON: string): string;
 begin
   if N = 1 then
@@ -649,6 +694,7 @@ begin
     ScenarioBuildSite;
     ScenarioMalformedRecovery;
     ScenarioResumeAfterCap;
+    ScenarioFatRead;
 
     WriteLn;
     WriteLn('== metrics ==');

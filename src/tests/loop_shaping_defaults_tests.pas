@@ -13,7 +13,7 @@ program loop_shaping_defaults_tests;
     PromptwareEnabled     True
     VectorSearchEnabled   True
     RenderMarkdown        True
-    ToolOutputCap         0
+    ToolOutputCap         DefaultToolOutputCap (24576; 0 = explicit opt-out)
     OrientTaskAware       False   (off; opt in per-run with --orient)
 *)
 
@@ -44,7 +44,8 @@ begin
     AssertTrue(C.PromptwareEnabled,     'PromptwareEnabled stays True');
     AssertTrue(C.VectorSearchEnabled,   'VectorSearchEnabled stays True');
     AssertTrue(C.RenderMarkdown,        'RenderMarkdown stays True');
-    AssertTrue(C.ToolOutputCap = 0,     'ToolOutputCap stays 0');
+    AssertTrue(C.ToolOutputCap = DefaultToolOutputCap,
+               'ToolOutputCap defaults to DefaultToolOutputCap (24576)');
     AssertTrue(not C.OrientTaskAware,   'OrientTaskAware stays False');
     AssertTrue(not C.SelfImprovingSkills.SelfManage,
                'SelfImprovingSkills.SelfManage stays False');
@@ -94,7 +95,7 @@ begin
     C.RenderMarkdown     := False;
     C.CondenseReversible := True;
     C.OrientTaskAware    := True;
-    C.ToolOutputCap      := 8192;
+    C.ToolOutputCap      := 0;      { default 24576 -> explicit opt-OUT }
     S := C.ToJSON;
     { Each non-default field must be present in the serialised form,
       otherwise LoadConfig would silently fall back to the default. }
@@ -105,7 +106,7 @@ begin
     AssertTrue(Pos('"render_markdown"',       S) > 0, 'opt-out render_markdown emitted');
     AssertTrue(Pos('"condense_reversible"',   S) > 0, 'opt-in condense_reversible emitted');
     AssertTrue(Pos('"orient_task_aware"',     S) > 0, 'opt-in orient_task_aware emitted');
-    AssertTrue(Pos('"tool_output_cap"',       S) > 0, 'opt-in tool_output_cap emitted');
+    AssertTrue(Pos('"tool_output_cap"',       S) > 0, 'opt-out tool_output_cap emitted');
   finally
     C.Free;
   end;
@@ -120,7 +121,7 @@ begin
     AssertTrue(not C2.RenderMarkdown,       'RenderMarkdown round-trips False');
     AssertTrue(C2.CondenseReversible,       'CondenseReversible round-trips True');
     AssertTrue(C2.OrientTaskAware,          'OrientTaskAware round-trips True');
-    AssertTrue(C2.ToolOutputCap = 8192,     'ToolOutputCap round-trips 8192');
+    AssertTrue(C2.ToolOutputCap = 0,        'ToolOutputCap round-trips the explicit 0 opt-out');
   finally
     C2.Free;
   end;
