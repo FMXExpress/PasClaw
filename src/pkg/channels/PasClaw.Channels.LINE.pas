@@ -284,6 +284,8 @@ begin
     Exit;
   end;
 
+  { Default-init: locals are not zero-initialized; unset fields (e.g. DisableProgressLedger) would read stack garbage. }
+  LoopCfg := Default(TToolLoopConfig);
   LoopCfg.Identity := MakeIdentity('line', SourceId);
   if not IsAllowedSender(LoopCfg.Identity, FCfg.AllowSenders) then
   begin

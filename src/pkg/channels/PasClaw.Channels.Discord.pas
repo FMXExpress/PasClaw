@@ -233,6 +233,8 @@ begin
           Continue;
         end;
 
+        { Default-init: locals are not zero-initialized; unset fields (e.g. DisableProgressLedger) would read stack garbage. }
+        LoopCfg := Default(TToolLoopConfig);
         LoopCfg.Identity := MakeIdentity('discord', AuthorId, AuthorName, FChannel);
         if not IsAllowedSender(LoopCfg.Identity, FCfg.AllowSenders) then
         begin

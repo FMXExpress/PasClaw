@@ -403,6 +403,11 @@ function BuildLoopConfig(const Cfg: TConfig;
                          Handlers: TLoopHandlers;
                          const TaskHint: string = ''): TToolLoopConfig;
 begin
+  { Function results of record type are as uninitialized as locals: any
+    field this builder doesn't set (e.g. DisableProgressLedger) would read
+    garbage and flip features at random on the CLI path. Same fix shape as
+    the gateway/TUI Default-inits. }
+  Result := Default(TToolLoopConfig);
   Result.Provider      := Provider;
   Result.Registry      := Reg;
   Result.Model         := Model;

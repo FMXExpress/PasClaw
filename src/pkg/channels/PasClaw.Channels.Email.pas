@@ -400,6 +400,8 @@ begin
 
             { Run through the agent loop. }
             SetLength(RToolMsgs, 1);
+            { Default-init: locals are not zero-initialized; unset fields (e.g. DisableProgressLedger) would read stack garbage. }
+            LoopCfg := Default(TToolLoopConfig);
             LoopCfg.Identity := MakeIdentity('email', FromAddr);
             if not IsAllowedSender(LoopCfg.Identity, FCfg.AllowSenders) then
             begin
