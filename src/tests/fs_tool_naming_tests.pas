@@ -155,15 +155,16 @@ begin
     AssertContains(R, '1:hello', 'read_file hashline:true emits LINENO:line');
     WriteLn('  ok: read_file plain by default, hashline:true opts in');
 
-    { --- 2c. read_file line ranges (C2). --- }
+    { --- 2c. read_file line ranges (C2), numbered output (F3). --- }
     Reg.RunTool('write_file', '{"path":"' + PathA + '","content":"r1\nr2\nr3\nr4\nr5"}', Err);
     R := Reg.RunTool('read_file', '{"path":"' + PathA + '","start_line":2,"end_line":3}', Err);
-    AssertContains(R, '(lines 2-3 of 5)', 'range read reports the slice + total');
-    AssertContains(R, 'r2', 'range includes start line');
-    AssertContains(R, 'r3', 'range includes end line');
+    AssertContains(R, '(lines 2-3 of 5', 'range read reports the slice + total');
+    AssertContains(R, '2: r2', 'range lines carry their line number (grep cross-ref)');
+    AssertContains(R, '3: r3', 'numbering matches the actual line, not the slice index');
     AssertTrue(Pos('r4', R) = 0, 'range excludes lines past end_line');
     R := Reg.RunTool('read_file', '{"path":"' + PathA + '","start_line":4,"end_line":99}', Err);
-    AssertContains(R, '(lines 4-5 of 5)', 'end_line clamps to the file end');
+    AssertContains(R, '(lines 4-5 of 5', 'end_line clamps to the file end');
+    AssertContains(R, '5: r5', 'clamped tail keeps true line numbers');
     { empty file + range: must not range-check into Lines[-1] }
     Reg.RunTool('write_file', '{"path":"' + PathA + '","content":""}', Err);
     R := Reg.RunTool('read_file', '{"path":"' + PathA + '","start_line":1,"end_line":5}', Err);
@@ -261,6 +262,25 @@ begin
     ConfigureSandbox(Pol, Dir);
     WriteLn('  ok: errors carry the next move (nearest file / similar tool / shell alternative)');
 
+    { --- 4d. F2: grep_files context_lines (grep -C). Matches keep the
+      LINENO: anchor shape; context lines are LINENO- so the two can't be
+      confused; non-contiguous groups get grep's -- fence. --- }
+    Reg.RunTool('write_file', '{"path":"' + JEsc(JoinPath(Dir, 'ctx.txt')) +
+      '","content":"a1\na2\nHIT here\na4\na5\na6\nHIT again\na8"}', Err);
+    R := Reg.RunTool('grep_files', '{"path":"' + JEsc(JoinPath(Dir, 'ctx.txt')) +
+      '","pattern":"HIT","context_lines":1}', Err);
+    AssertEqStr(Err, '', 'grep_files context_lines no error');
+    AssertContains(R, '3:HIT here', 'match keeps the LINENO: anchor prefix');
+    AssertContains(R, '2-a2', 'before-context line carries LINENO-');
+    AssertContains(R, '4-a4', 'after-context line emitted');
+    AssertContains(R, '6-a6', 'second group has its own before-context');
+    AssertContains(R, '--'#10, 'non-contiguous groups separated by a -- fence');
+    AssertTrue(Pos('a5', R) = 0, 'lines outside every context window stay out');
+    R := Reg.RunTool('grep_files', '{"path":"' + JEsc(JoinPath(Dir, 'ctx.txt')) +
+      '","pattern":"HIT"}', Err);
+    AssertTrue(Pos('a2', R) = 0, 'without context_lines the output is matches-only (unchanged)');
+    WriteLn('  ok: grep_files context_lines shows the surroundings inline');
+
     { --- 5. apply_patch: multi-file (update + add + delete) in one call. --- }
     AssertTrue(DefsHasName(Reg.ToProviderDefs, 'apply_patch'), 'apply_patch advertised');
     PathC := JoinPath(Dir, 'c.txt');
@@ -284,6 +304,11 @@ begin
     AssertContains(R, '1 added', 'apply_patch reports 1 added');
     AssertContains(R, '1 updated', 'apply_patch reports 1 updated');
     AssertContains(R, '1 deleted', 'apply_patch reports 1 deleted');
+    { F4: B2 parity -- the update carries the edit_file-style mini-diff
+      of its first changed region, so the model verifies placement from
+      the tool result instead of re-reading the file it just patched. }
+    AssertContains(R, 'now reads (lines', 'apply_patch result carries the mini-diff snippet');
+    AssertContains(R, '2: LINE2', 'snippet shows the replacement on its real line');
     AssertEqStr(ReadBack(Reg, PathA), 'line1' + #10 + 'LINE2' + #10 + 'line3',
       'apply_patch applied the context hunk');
     AssertContains(ReadBack(Reg, PathN), 'brand new', 'apply_patch added the new file');
