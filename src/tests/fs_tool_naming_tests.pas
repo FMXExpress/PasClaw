@@ -208,6 +208,24 @@ begin
     AssertEqStr(ReadBack(Reg, PathA), 'keepkeep', 'edit_file deletes when new_text omitted');
     WriteLn('  ok: edit_file str-replace (unique / not-found / ambiguous / replace_all / delete)');
 
+    { --- 4b. find_files: glob by NAME (D1). --- }
+    AssertTrue(DefsHasName(Reg.ToProviderDefs, 'find_files'), 'find_files advertised');
+    ForceDirectories(Dir + PathDelim + 'sub');
+    ForceDirectories(Dir + PathDelim + 'node_modules');
+    Reg.RunTool('write_file', '{"path":"' + JEsc(Dir + PathDelim + 'sub' + PathDelim + 'deep.pas') + '","content":"x"}', Err);
+    Reg.RunTool('write_file', '{"path":"' + JEsc(Dir + PathDelim + 'top.pas') + '","content":"x"}', Err);
+    Reg.RunTool('write_file', '{"path":"' + JEsc(Dir + PathDelim + 'node_modules' + PathDelim + 'skip.pas') + '","content":"x"}', Err);
+    R := Reg.RunTool('find_files', '{"pattern":"*.pas","path":"' + JEsc(Dir) + '"}', Err);
+    AssertEqStr(Err, '', 'find_files no error');
+    AssertContains(R, '2 file(s) matching', 'finds both .pas files');
+    AssertContains(R, 'top.pas', 'top-level match listed');
+    AssertContains(R, 'deep.pas', 'recursive match listed (relative path)');
+    AssertTrue(Pos('skip.pas', R) = 0, 'node_modules is skipped');
+    R := Reg.RunTool('find_files', '{"pattern":"nosuch.*","path":"' + JEsc(Dir) + '"}', Err);
+    AssertContains(R, 'no files matching', 'empty result explains itself');
+    AssertContains(R, 'grep_files', 'empty result points at the contents-search sibling');
+    WriteLn('  ok: find_files globs by name, skips deps dirs');
+
     { --- 5. apply_patch: multi-file (update + add + delete) in one call. --- }
     AssertTrue(DefsHasName(Reg.ToProviderDefs, 'apply_patch'), 'apply_patch advertised');
     PathC := JoinPath(Dir, 'c.txt');

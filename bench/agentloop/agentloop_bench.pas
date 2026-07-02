@@ -448,6 +448,8 @@ begin
          OneCall('todo_write', ArgsObj1('checklist', '- [x] write page'#10'- [ ] verify page'))]);
     2: Result := RoundOf([OneCall('edit_file',
          '{"path":"bench-demo.html","old_text":"<h1>bench</h1>","new_text":"<h1>bench v2</h1>"}')]);
+  else if N = 3 then
+    Result := RoundOf([OneCall('find_files', '{"pattern":"bench-*.html"}')])
   else
     Result := StopOf('page written and verified.');
   end;
@@ -483,7 +485,7 @@ begin
     'build a small landing page named bench-demo.html for the demo project') + ']',
     'bench-build');
 
-  Check(EnvCount = 3, Format('loop finished in 3 provider calls (got %d)', [EnvCount]));
+  Check(EnvCount = 4, Format('loop finished in 4 provider calls (got %d)', [EnvCount]));
   SP1 := EnvSystemPrompt(EnvAt(0));
   Check(not Has(SP1, '[progress ledger'),
     'iteration 1 system prompt is pristine (prefix-cache preserved)');
@@ -504,6 +506,10 @@ begin
     'edit_file result carries the mini-diff context snippet');
   Check(Has(EnvLastMessage(EnvAt(2)), 'bench v2'),
     'snippet shows the changed content');
+  { D1: one find_files call locates the deliverable by name -- no
+    list_dir ladder. }
+  Check(Has(EnvLastMessage(EnvAt(3)), 'bench-demo.html'),
+    'find_files locates the file by glob in one call');
   Metric('build-site.provider_calls', EnvCount);
 end;
 

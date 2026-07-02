@@ -1128,6 +1128,98 @@ begin
   Result := Format('applied patch: %d added, %d updated, %d deleted', [nAdd, nUpd, nDel]);
 end;
 
+function Tool_FSFindFiles(const ArgsJSON: string; out ErrMsg: string): string;
+{ find_files -- locate files by NAME with a glob, the question grep_files
+  (contents) and list_dir (one level) can't answer without either a
+  known-content guess or a directory-by-directory descent -- the exact
+  fs_list ladder observed in real transcripts. Reuses grep_files' walk
+  discipline: skip dotdirs and the well-known build/VCS/deps dirs, cap
+  the result list. Matches the Glob/Grep tool pair every mature harness
+  ships, so the model's priors already expect it. }
+const
+  DefaultMax = 100;
+  HardMax    = 500;
+var
+  Root, Pattern, Reason, Rel: string;
+  MaxResults, Found: Integer;
+  Hits: TStringList;
+
+  procedure Walk(const Dir: string);
+  var
+    SR: TSearchRec;
+  begin
+    if Found > MaxResults then Exit;
+    if FindFirst(Dir + PathDelim + '*', faAnyFile, SR) = 0 then
+    try
+      repeat
+        if (SR.Name = '.') or (SR.Name = '..') then Continue;
+        if (SR.Attr and faDirectory) <> 0 then
+        begin
+          if (SR.Name <> '') and (SR.Name[1] = '.') then Continue;
+          if IsBlockedGrepDir(SR.Name) then Continue;
+          Walk(Dir + PathDelim + SR.Name);
+        end
+        else if MatchesMask(SR.Name, Pattern) then
+        begin
+          Inc(Found);
+          if Found <= MaxResults then
+          begin
+            Rel := Dir + PathDelim + SR.Name;
+            if Copy(Rel, 1, Length(Root) + 1) = Root + PathDelim then
+              Delete(Rel, 1, Length(Root) + 1);
+            Hits.Add(Rel);
+          end;
+        end;
+        if Found > MaxResults then Break;
+      until FindNext(SR) <> 0;
+    finally
+      FindClose(SR);
+    end;
+  end;
+
+begin
+  ErrMsg := '';
+  Result := '';
+  if not ParseStringArg(ArgsJSON, 'pattern', Pattern) then
+  begin
+    ErrMsg := 'missing required argument: pattern (a filename glob, e.g. "*.pas" or "webui.*")';
+    Exit('');
+  end;
+  if not ParseStringArg(ArgsJSON, 'path', Root) then Root := '.';
+  Root := ResolveWorkspacePath(Root);
+  if not CanReadPath(Root, Reason) then
+  begin
+    ErrMsg := Reason;
+    Exit('');
+  end;
+  if not DirectoryExists(Root) then
+  begin
+    ErrMsg := 'no such directory: ' + Root;
+    Exit('');
+  end;
+  Root := ExcludeTrailingPathDelimiter(Root);
+  MaxResults := Integer(ParseInt64Arg(ArgsJSON, 'max_results', DefaultMax));
+  if MaxResults < 1 then MaxResults := 1;
+  if MaxResults > HardMax then MaxResults := HardMax;
+
+  Found := 0;
+  Hits := TStringList.Create;
+  try
+    Walk(Root);
+    Hits.Sort;
+    if Hits.Count = 0 then
+      Exit(Format('no files matching "%s" under %s (names only -- use grep_files to search contents)',
+                  [Pattern, Root]));
+    Result := Format('%d file(s) matching "%s" under %s:', [Hits.Count, Pattern, Root])
+              + #10 + TrimRight(Hits.Text);
+    if Found > MaxResults then
+      Result := Result + #10 + Format('... (more matches beyond the %d-result cap; narrow the pattern or path)',
+                                      [MaxResults]);
+  finally
+    Hits.Free;
+  end;
+end;
+
 function Tool_FSAppend(const ArgsJSON: string; out ErrMsg: string): string;
 { append_file: add content to the end of a file (creating it + parent dirs
   when absent). The incremental-write escape hatch -- build a large file
@@ -1456,6 +1548,25 @@ begin
   T.IsCore      := True;
   T.Category    := tcReadOnly;
   Emit('fs_grep');
+
+  { find_files (new) -- locate files by NAME; the Glob half of the
+    Glob/Grep pair. }
+  T := Default(TTool);
+  T.Name        := 'find_files';
+  T.Description := 'Find files by NAME with a glob pattern (e.g. "*.pas", "webui.*", ' +
+                   '"Makefile"). Searches recursively from path (default: the working ' +
+                   'directory), skipping VCS/build/deps dirs, and returns matching paths ' +
+                   'one per line. Use this to locate a file before reading it; use ' +
+                   'grep_files to search file CONTENTS instead.';
+  T.Schema      := '{"type":"object","properties":{' +
+                   '"pattern":{"type":"string","description":"Filename glob: * and ? wildcards, matched against the file NAME."},' +
+                   '"path":{"type":"string","description":"Directory to search from (default: the working directory)."},' +
+                   '"max_results":{"type":"integer","minimum":1,"maximum":500,"description":"Cap on returned paths (default 100)."}' +
+                   '},"required":["pattern"]}';
+  T.Handler     := Tool_FSFindFiles;
+  T.IsCore      := True;
+  T.Category    := tcReadOnly;
+  R.Register(T);
 
   { edit_file (was fs_edit_hashline) -- now registered UNCONDITIONALLY. The
     default old_text->new_text string-replacement mode works for every
