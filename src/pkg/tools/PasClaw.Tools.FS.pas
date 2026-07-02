@@ -190,6 +190,8 @@ function Tool_FSRead(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Path, Body, Reason: string;
   Hashline: Boolean;
+  StartLn, EndLn, Total, i: Integer;
+  Lines: TStringList;
 begin
   ErrMsg := '';
   if not ParseStringArg(ArgsJSON, 'path', Path) then
@@ -209,6 +211,39 @@ begin
     Exit('');
   end;
   Body := ReadFileText(Path);
+  { Optional line range (C2): a grep_files hit gives the line number; the
+    follow-up read can be surgical instead of swallowing the whole file
+    into history. 1-based inclusive; bounds are clamped; range implies
+    plain output (hashline headers hash the WHOLE file, so a sliced body
+    must not carry one). }
+  StartLn := Integer(ParseInt64Arg(ArgsJSON, 'start_line', 0));
+  EndLn   := Integer(ParseInt64Arg(ArgsJSON, 'end_line', 0));
+  if (StartLn > 0) or (EndLn > 0) then
+  begin
+    Lines := TStringList.Create;
+    try
+      Lines.LineBreak := #10;
+      Lines.StrictDelimiter := True;
+      Lines.Text := StringReplace(Body, #13, '', [rfReplaceAll]);
+      Total := Lines.Count;
+      { Empty file: the clamps below would drive StartLn to 0 and the
+        slice loop into Lines[-1] (range-check error). Say it plainly. }
+      if Total = 0 then Exit('(empty file: 0 lines)');
+      if StartLn < 1 then StartLn := 1;
+      if (EndLn < 1) or (EndLn > Total) then EndLn := Total;
+      if StartLn > Total then StartLn := Total;
+      if EndLn < StartLn then EndLn := StartLn;
+      Body := '';
+      for i := StartLn to EndLn do
+      begin
+        if Body <> '' then Body := Body + #10;
+        Body := Body + Lines[i - 1];
+      end;
+      Exit(Format('(lines %d-%d of %d)', [StartLn, EndLn, Total]) + #10 + Body);
+    finally
+      Lines.Free;
+    end;
+  end;
   { Plain text is the default -- clean content is what edit_file's
     old_text/new_text string replacement matches against, and it's what
     smaller models handle best. The hashline #hash + LINENO:line format is
@@ -1096,6 +1131,98 @@ begin
   Result := Format('applied patch: %d added, %d updated, %d deleted', [nAdd, nUpd, nDel]);
 end;
 
+function Tool_FSFindFiles(const ArgsJSON: string; out ErrMsg: string): string;
+{ find_files -- locate files by NAME with a glob, the question grep_files
+  (contents) and list_dir (one level) can't answer without either a
+  known-content guess or a directory-by-directory descent -- the exact
+  fs_list ladder observed in real transcripts. Reuses grep_files' walk
+  discipline: skip dotdirs and the well-known build/VCS/deps dirs, cap
+  the result list. Matches the Glob/Grep tool pair every mature harness
+  ships, so the model's priors already expect it. }
+const
+  DefaultMax = 100;
+  HardMax    = 500;
+var
+  Root, Pattern, Reason, Rel: string;
+  MaxResults, Found: Integer;
+  Hits: TStringList;
+
+  procedure Walk(const Dir: string);
+  var
+    SR: TSearchRec;
+  begin
+    if Found > MaxResults then Exit;
+    if FindFirst(Dir + PathDelim + '*', faAnyFile, SR) = 0 then
+    try
+      repeat
+        if (SR.Name = '.') or (SR.Name = '..') then Continue;
+        if (SR.Attr and faDirectory) <> 0 then
+        begin
+          if (SR.Name <> '') and (SR.Name[1] = '.') then Continue;
+          if IsBlockedGrepDir(SR.Name) then Continue;
+          Walk(Dir + PathDelim + SR.Name);
+        end
+        else if MatchesMask(SR.Name, Pattern) then
+        begin
+          Inc(Found);
+          if Found <= MaxResults then
+          begin
+            Rel := Dir + PathDelim + SR.Name;
+            if Copy(Rel, 1, Length(Root) + 1) = Root + PathDelim then
+              Delete(Rel, 1, Length(Root) + 1);
+            Hits.Add(Rel);
+          end;
+        end;
+        if Found > MaxResults then Break;
+      until FindNext(SR) <> 0;
+    finally
+      FindClose(SR);
+    end;
+  end;
+
+begin
+  ErrMsg := '';
+  Result := '';
+  if not ParseStringArg(ArgsJSON, 'pattern', Pattern) then
+  begin
+    ErrMsg := 'missing required argument: pattern (a filename glob, e.g. "*.pas" or "webui.*")';
+    Exit('');
+  end;
+  if not ParseStringArg(ArgsJSON, 'path', Root) then Root := '.';
+  Root := ResolveWorkspacePath(Root);
+  if not CanReadPath(Root, Reason) then
+  begin
+    ErrMsg := Reason;
+    Exit('');
+  end;
+  if not DirectoryExists(Root) then
+  begin
+    ErrMsg := 'no such directory: ' + Root;
+    Exit('');
+  end;
+  Root := ExcludeTrailingPathDelimiter(Root);
+  MaxResults := Integer(ParseInt64Arg(ArgsJSON, 'max_results', DefaultMax));
+  if MaxResults < 1 then MaxResults := 1;
+  if MaxResults > HardMax then MaxResults := HardMax;
+
+  Found := 0;
+  Hits := TStringList.Create;
+  try
+    Walk(Root);
+    Hits.Sort;
+    if Hits.Count = 0 then
+      Exit(Format('no files matching "%s" under %s (names only -- use grep_files to search contents)',
+                  [Pattern, Root]));
+    Result := Format('%d file(s) matching "%s" under %s:', [Hits.Count, Pattern, Root])
+              + #10 + TrimRight(Hits.Text);
+    if Found > MaxResults then
+      Result := Result + #10 + Format('... (more matches beyond the %d-result cap; narrow the pattern or path)',
+                                      [MaxResults]);
+  finally
+    Hits.Free;
+  end;
+end;
+
 function Tool_FSAppend(const ArgsJSON: string; out ErrMsg: string): string;
 { append_file: add content to the end of a file (creating it + parent dirs
   when absent). The incremental-write escape hatch -- build a large file
@@ -1157,6 +1284,55 @@ begin
   until False;
 end;
 
+function EditContextSnippet(const NewContent: string;
+                            FirstChangeOfs, NewTextLen: Integer): string;
+{ Mini-diff feedback: the changed region of the NEW file body with +-3
+  context lines and line numbers, so the model can confirm the edit
+  landed where intended WITHOUT a follow-up full-file read_file (which
+  re-injects the whole body into history). FirstChangeOfs is the 1-based
+  char offset where the replacement begins. Bounded to 12 lines. }
+const
+  CtxLines = 3;
+  MaxLines = 12;
+var
+  Lines: TStringList;
+  i, FirstLine, LastLine, Lo, Hi, Shown: Integer;
+begin
+  Result := '';
+  { 1-based line of the change start = newlines before it + 1. }
+  FirstLine := 1;
+  for i := 1 to FirstChangeOfs - 1 do
+    if (i <= Length(NewContent)) and (NewContent[i] = #10) then Inc(FirstLine);
+  LastLine := FirstLine;
+  for i := FirstChangeOfs to FirstChangeOfs + NewTextLen - 1 do
+    if (i >= 1) and (i <= Length(NewContent)) and (NewContent[i] = #10) then Inc(LastLine);
+
+  Lines := TStringList.Create;
+  try
+    Lines.LineBreak := #10;
+    Lines.StrictDelimiter := True;
+    Lines.Text := StringReplace(NewContent, #13, '', [rfReplaceAll]);
+    Lo := FirstLine - CtxLines; if Lo < 1 then Lo := 1;
+    Hi := LastLine + CtxLines;  if Hi > Lines.Count then Hi := Lines.Count;
+    Shown := 0;
+    for i := Lo to Hi do
+    begin
+      if Shown >= MaxLines then
+      begin
+        Result := Result + Format('  ... (%d more line(s))', [Hi - i + 1]) + #10;
+        Break;
+      end;
+      Result := Result + Format('%6d: %s', [i, Lines[i - 1]]) + #10;
+      Inc(Shown);
+    end;
+    Result := TrimRight(Result);
+    if Result <> '' then
+      Result := Format('now reads (lines %d-%d):', [Lo, Hi]) + #10 + Result;
+  finally
+    Lines.Free;
+  end;
+end;
+
 function Tool_FSEdit(const ArgsJSON: string; out ErrMsg: string): string;
 { edit_file: two modes.
     1. Plain string replacement (default): old_text -> new_text, the form
@@ -1168,7 +1344,7 @@ function Tool_FSEdit(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Path, OldText, NewText, Content, Reason: string;
   ReplaceAll: Boolean;
-  Cnt: Integer;
+  Cnt, FirstOfs: Integer;
 begin
   ErrMsg := '';
   { Hashline mode wins when a patch is supplied. }
@@ -1223,6 +1399,7 @@ begin
                      [Cnt, Path]);
     Exit('');
   end;
+  FirstOfs := Pos(OldText, Content);   { where the (first) change lands }
   if ReplaceAll then
     Content := StringReplace(Content, OldText, NewText, [rfReplaceAll])
   else
@@ -1230,7 +1407,8 @@ begin
   try
     SnapshotBeforeWrite(Path);
     WriteFileText(Path, Content);
-    Result := Format('edited %s (replaced %d occurrence(s))', [Path, Cnt]);
+    Result := Format('edited %s (replaced %d occurrence(s))', [Path, Cnt]) + #10 +
+              EditContextSnippet(Content, FirstOfs, Length(NewText));
   except
     on E: Exception do
     begin
@@ -1297,12 +1475,17 @@ begin
                      'Pass {"hashline":true} for the ' + HL_FILE_PREFIX +
                      'path#hash header + LINENO:line format used to build an ' +
                      'edit_file `patch` (advanced).';
-    T.Schema      := '{"type":"object","properties":{"path":{"type":"string"},"hashline":{"type":"boolean","description":"Return the hashline #hash+LINENO format for edit_file patch edits, instead of plain text."}},"required":["path"]}';
+    T.Schema      := '{"type":"object","properties":{"path":{"type":"string"},' +
+                     '"start_line":{"type":"integer","minimum":1,"description":"First line to return (1-based). Use with end_line to read just the region a grep_files hit pointed at."},' +
+                     '"end_line":{"type":"integer","minimum":1,"description":"Last line to return (inclusive; clamped to the file end)."},' +
+                     '"hashline":{"type":"boolean","description":"Return the hashline #hash+LINENO format for edit_file patch edits, instead of plain text. Ignored when a line range is set."}},"required":["path"]}';
   end
   else
   begin
     T.Description := 'Read the contents of a file from the local filesystem.';
-    T.Schema      := '{"type":"object","properties":{"path":{"type":"string","description":"Absolute or relative path to the file."}},"required":["path"]}';
+    T.Schema      := '{"type":"object","properties":{"path":{"type":"string","description":"Absolute or relative path to the file."},' +
+                     '"start_line":{"type":"integer","minimum":1,"description":"First line to return (1-based)."},' +
+                     '"end_line":{"type":"integer","minimum":1,"description":"Last line to return (inclusive; clamped)."}},"required":["path"]}';
   end;
   T.Handler  := Tool_FSRead;
   T.IsCore   := True;
@@ -1368,6 +1551,25 @@ begin
   T.IsCore      := True;
   T.Category    := tcReadOnly;
   Emit('fs_grep');
+
+  { find_files (new) -- locate files by NAME; the Glob half of the
+    Glob/Grep pair. }
+  T := Default(TTool);
+  T.Name        := 'find_files';
+  T.Description := 'Find files by NAME with a glob pattern (e.g. "*.pas", "webui.*", ' +
+                   '"Makefile"). Searches recursively from path (default: the working ' +
+                   'directory), skipping VCS/build/deps dirs, and returns matching paths ' +
+                   'one per line. Use this to locate a file before reading it; use ' +
+                   'grep_files to search file CONTENTS instead.';
+  T.Schema      := '{"type":"object","properties":{' +
+                   '"pattern":{"type":"string","description":"Filename glob: * and ? wildcards, matched against the file NAME."},' +
+                   '"path":{"type":"string","description":"Directory to search from (default: the working directory)."},' +
+                   '"max_results":{"type":"integer","minimum":1,"maximum":500,"description":"Cap on returned paths (default 100)."}' +
+                   '},"required":["pattern"]}';
+  T.Handler     := Tool_FSFindFiles;
+  T.IsCore      := True;
+  T.Category    := tcReadOnly;
+  R.Register(T);
 
   { edit_file (was fs_edit_hashline) -- now registered UNCONDITIONALLY. The
     default old_text->new_text string-replacement mode works for every

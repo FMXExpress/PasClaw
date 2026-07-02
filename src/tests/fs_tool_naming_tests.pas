@@ -148,6 +148,24 @@ begin
     AssertContains(R, '1:hello', 'read_file hashline:true emits LINENO:line');
     WriteLn('  ok: read_file plain by default, hashline:true opts in');
 
+    { --- 2c. read_file line ranges (C2). --- }
+    Reg.RunTool('write_file', '{"path":"' + PathA + '","content":"r1\nr2\nr3\nr4\nr5"}', Err);
+    R := Reg.RunTool('read_file', '{"path":"' + PathA + '","start_line":2,"end_line":3}', Err);
+    AssertContains(R, '(lines 2-3 of 5)', 'range read reports the slice + total');
+    AssertContains(R, 'r2', 'range includes start line');
+    AssertContains(R, 'r3', 'range includes end line');
+    AssertTrue(Pos('r4', R) = 0, 'range excludes lines past end_line');
+    R := Reg.RunTool('read_file', '{"path":"' + PathA + '","start_line":4,"end_line":99}', Err);
+    AssertContains(R, '(lines 4-5 of 5)', 'end_line clamps to the file end');
+    { empty file + range: must not range-check into Lines[-1] }
+    Reg.RunTool('write_file', '{"path":"' + PathA + '","content":""}', Err);
+    R := Reg.RunTool('read_file', '{"path":"' + PathA + '","start_line":1,"end_line":5}', Err);
+    AssertEqStr(Err, '', 'range read of an empty file is not an error');
+    AssertContains(R, '(empty file', 'empty file reports itself instead of crashing');
+    WriteLn('  ok: read_file start_line/end_line slices and clamps');
+    { restore the fixture the append section below builds on }
+    Reg.RunTool('write_file', '{"path":"' + PathA + '","content":"hello"}', Err);
+
     { --- 3. append_file concatenates. --- }
     R := Reg.RunTool('append_file', '{"path":"' + PathA + '","content":" world"}', Err);
     AssertEqStr(Err, '', 'append_file no error');
@@ -179,11 +197,39 @@ begin
     AssertEqStr(Err, '', 'edit_file replace_all no error');
     AssertEqStr(ReadBack(Reg, PathA), 'y y y', 'edit_file replaced all occurrences');
 
+    { mini-diff feedback: the result shows the changed region with line
+      numbers and +-3 context so the model needn't re-read the file. }
+    Reg.RunTool('write_file', '{"path":"' + PathA + '","content":"l1\nl2\nl3\nl4\nl5\nl6\nl7\nl8"}', Err);
+    R := Reg.RunTool('edit_file', '{"path":"' + PathA + '","old_text":"l5","new_text":"L5-CHANGED"}', Err);
+    AssertContains(R, 'now reads (lines 2-8):', 'snippet header with clamped range');
+    AssertContains(R, '5: L5-CHANGED', 'snippet shows the changed line with its number');
+    AssertContains(R, '2: l2', 'snippet includes leading context');
+    AssertContains(R, '8: l8', 'snippet includes trailing context');
+    AssertTrue(Pos('1: l1', R) = 0, 'context is bounded (line 1 outside +-3)');
+
     { delete (omit new_text) }
     Reg.RunTool('write_file', '{"path":"' + PathA + '","content":"keepDROPkeep"}', Err);
     Reg.RunTool('edit_file', '{"path":"' + PathA + '","old_text":"DROP"}', Err);
     AssertEqStr(ReadBack(Reg, PathA), 'keepkeep', 'edit_file deletes when new_text omitted');
     WriteLn('  ok: edit_file str-replace (unique / not-found / ambiguous / replace_all / delete)');
+
+    { --- 4b. find_files: glob by NAME (D1). --- }
+    AssertTrue(DefsHasName(Reg.ToProviderDefs, 'find_files'), 'find_files advertised');
+    ForceDirectories(Dir + PathDelim + 'sub');
+    ForceDirectories(Dir + PathDelim + 'node_modules');
+    Reg.RunTool('write_file', '{"path":"' + JEsc(Dir + PathDelim + 'sub' + PathDelim + 'deep.pas') + '","content":"x"}', Err);
+    Reg.RunTool('write_file', '{"path":"' + JEsc(Dir + PathDelim + 'top.pas') + '","content":"x"}', Err);
+    Reg.RunTool('write_file', '{"path":"' + JEsc(Dir + PathDelim + 'node_modules' + PathDelim + 'skip.pas') + '","content":"x"}', Err);
+    R := Reg.RunTool('find_files', '{"pattern":"*.pas","path":"' + JEsc(Dir) + '"}', Err);
+    AssertEqStr(Err, '', 'find_files no error');
+    AssertContains(R, '2 file(s) matching', 'finds both .pas files');
+    AssertContains(R, 'top.pas', 'top-level match listed');
+    AssertContains(R, 'deep.pas', 'recursive match listed (relative path)');
+    AssertTrue(Pos('skip.pas', R) = 0, 'node_modules is skipped');
+    R := Reg.RunTool('find_files', '{"pattern":"nosuch.*","path":"' + JEsc(Dir) + '"}', Err);
+    AssertContains(R, 'no files matching', 'empty result explains itself');
+    AssertContains(R, 'grep_files', 'empty result points at the contents-search sibling');
+    WriteLn('  ok: find_files globs by name, skips deps dirs');
 
     { --- 5. apply_patch: multi-file (update + add + delete) in one call. --- }
     AssertTrue(DefsHasName(Reg.ToProviderDefs, 'apply_patch'), 'apply_patch advertised');

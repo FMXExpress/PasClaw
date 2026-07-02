@@ -1042,6 +1042,41 @@ begin
   end;
 end;
 
+procedure DedupRepeatRead(var Paths, Hashes: TArray<string>;
+                          const Nm, Args: string; var Body: string;
+                          const Err: string);
+{ Per-turn read dedup (C3): a model that re-reads an unchanged file "to be
+  safe" re-injects the full body into history every time (a constant in
+  observed transcripts). When THIS loop already returned a byte-identical
+  body for the same path, swap the repeat for a one-line stub pointing at
+  the earlier result. Scoped to one RunToolLoop call -- the state lives in
+  the loop's own locals, so concurrent sessions / subagents can't cross-
+  talk, and a file that CHANGED between reads hashes differently and passes
+  through untouched. }
+var
+  i: Integer;
+  P, H: string;
+begin
+  if (Err <> '') or ((Nm <> 'read_file') and (Nm <> 'fs_read')) then Exit;
+  P := LedgerArg(Args, 'path');
+  if P = '' then Exit;
+  H := ComputeFileHash(Body);
+  for i := 0 to High(Paths) do
+    if Paths[i] = P then
+    begin
+      if Hashes[i] = H then
+        Body := Format('read_file %s: unchanged since the earlier read this ' +
+                       'turn (hash #%s) -- the previous read_file result above ' +
+                       'is still current; do not re-read it again.', [P, H]);
+      Hashes[i] := H;
+      Exit;
+    end;
+  SetLength(Paths, Length(Paths) + 1);
+  SetLength(Hashes, Length(Hashes) + 1);
+  Paths[High(Paths)] := P;
+  Hashes[High(Hashes)] := H;
+end;
+
 function LedgerJoin(const A: TArray<string>; const Sep: string): string;
 var
   i: Integer;
@@ -1135,6 +1170,7 @@ var
   Steering, BatchSteering, HistSystem, LastProviderErrText, BgBlock, PersistentSP: string;
   Ledger: TProgressLedger;
   LedgerBlock: string;
+  ReadPaths, ReadHashes: TArray<string>;   { per-turn read-dedup state (C3) }
   Steers: TSteeringMessageArray;
   InContext: string;       { tool output cap (#PR new): in-context
                              body that lands in Hist after the
@@ -1198,6 +1234,8 @@ begin
   Ledger := Default(TProgressLedger);
   if not Cfg.DisableProgressLedger then
     Ledger.Goal := ExtractLoopGoal(Messages);
+  SetLength(ReadPaths, 0);
+  SetLength(ReadHashes, 0);
 
   Iter := 0;
   { When progressive disclosure is on (PasClaw.MCP.Disclosure), the
@@ -1705,6 +1743,14 @@ begin
               AttachReversibleStashFooter(OrigBody,
                                           Dispatches[Batch[j]].ResultText);
           end;
+
+          { Per-turn read dedup (C3) -- before promptware/cap so the tiny
+            stub skips both. }
+          DedupRepeatRead(ReadPaths, ReadHashes,
+                          Dispatches[Batch[j]].Call.Func.Name,
+                          Dispatches[Batch[j]].Call.Func.Arguments,
+                          Dispatches[Batch[j]].ResultText,
+                          Dispatches[Batch[j]].Err);
 
           { Promptware chokepoint 1 of 3: tool output is the widest
             door for indirect prompt injection (fetched pages, read
