@@ -94,6 +94,40 @@ from cog import BasePredictor, BaseModel, Input, Path, Secret
 WORKSPACE_ZIP_CAP_BYTES = 4 * 1024 * 1024 * 1024
 
 
+# Appended to the build task when deploy_to_cloudflare is on, so the agent
+# knows the deployment contract UP FRONT and produces a deployable Worker
+# project rather than something wrangler can't ship. The deploy step only
+# fires when a wrangler config exists in the workspace; without this nudge a
+# generic "build X" task leaves no wrangler.toml and the deploy silently skips.
+CLOUDFLARE_DEPLOY_DIRECTIVE = (
+    "\n\n---\n"
+    "DEPLOYMENT TARGET (Cloudflare Workers): when you finish, this workspace "
+    "is deployed with `wrangler deploy --temporary`. For that to succeed you "
+    "MUST leave a deployable Cloudflare Worker project in the workspace:\n"
+    "- Write a `wrangler.toml` at the workspace root with `name` (lowercase, "
+    "hyphenated), `compatibility_date = \"2024-11-01\"`, and EITHER "
+    "`main = \"worker.js\"` (a module Worker that `export default`s a `fetch` "
+    "handler) OR an `[assets]` block with `directory = \"./public\"` to serve a "
+    "static site.\n"
+    "- Put a static site's files (index.html, css, js, images) under a "
+    "DEDICATED `public/` (or dist/build/out/site) directory -- do NOT rely on "
+    "serving the workspace root, which also holds internal session data.\n"
+    "Keep the config minimal and standard so `wrangler deploy` accepts it."
+)
+
+# Web-output directory names an agent commonly emits. The deploy-time
+# scaffold fallback ONLY creates a wrangler.toml for one of these dedicated
+# subdirs -- never the workspace root, which also holds sessions/ + memory/
+# (the conversation history); serving that as static assets would publish it.
+#
+# Order matters: BUILT-output dirs come first (dist / build / out / _site) so a
+# project that has both a source `public/` and a compiled `build/` deploys the
+# compiled artifact, not the uncompiled template. Plain served dirs
+# (public / site / www / public_html) follow for no-build static sites.
+_WEB_OUTPUT_DIRS = ("dist", "build", "out", "_site",
+                    "public", "site", "www", "public_html")
+
+
 def _secret_str(s: Optional[Secret]) -> str:
     """Extract the cleartext value from an Optional[Secret] input.
 
@@ -641,6 +675,13 @@ class Predictor(BasePredictor):
             do_build = mode_norm in ("build", "plan build", "plan build goal")
             do_goal  = mode_norm == "plan build goal"
 
+            # Nudge: when we're going to deploy, tell the agent the Cloudflare
+            # contract as part of the task so it emits a wrangler.toml + Worker
+            # (plan mode included, so a chained plan accounts for it too). The
+            # closure below captures `message`, so reassigning it here is enough.
+            if deploy_to_cloudflare and do_build:
+                message = message + CLOUDFLARE_DEPLOY_DIRECTIVE
+
             def invoke_pasclaw(subcmd, extra_args, in_zip_arg, out_zip_arg,
                                 label):
                 """One pasclaw <subcmd> invocation with consistent error
@@ -909,6 +950,60 @@ class Predictor(BasePredictor):
                     best_depth = depth
         return best
 
+    def _scaffold_static_worker(self, home_dir):
+        """Last-resort deploy enabler: if the agent produced a static site in a
+        dedicated web-output subdir but no wrangler config, write a minimal
+        assets-only wrangler.toml at the workspace root pointing at that subdir,
+        and return the workspace root as the project. Returns None when there
+        is nothing safe to scaffold.
+
+        Deliberately conservative -- ONLY a recognised web-output subdir
+        (public/dist/build/out/site/www/...) containing an index.html
+        qualifies. We never point `[assets]` at the workspace root: it also
+        holds sessions/ + memory/ (the conversation history), and serving that
+        as static assets would publish it. If the agent put its site anywhere
+        else, we skip rather than risk a leak -- the nudge is what steers it
+        into a dedicated dir in the first place.
+        """
+        ws_root = os.path.join(home_dir, "workspace")
+        if not os.path.isdir(ws_root):
+            return None
+        ws_real = os.path.realpath(ws_root)
+        for name in _WEB_OUTPUT_DIRS:
+            cand = os.path.join(ws_root, name)
+            # Never trust a SYMLINKED asset dir: `public -> .` (or -> anywhere
+            # outside a real dedicated subdir) would let `[assets]` serve the
+            # workspace root and leak sessions/ + memory/. Reject the link
+            # itself, and require the resolved target to be a real directory
+            # STRICTLY inside the workspace (deeper than the root).
+            if os.path.islink(cand):
+                continue
+            cand_real = os.path.realpath(cand)
+            if not os.path.isdir(cand_real):
+                continue
+            if cand_real == ws_real or \
+               not (cand_real + os.sep).startswith(ws_real + os.sep):
+                continue
+            index_html = os.path.join(cand_real, "index.html")
+            if os.path.islink(index_html) or not os.path.isfile(index_html):
+                continue
+            toml_path = os.path.join(ws_root, "wrangler.toml")
+            if not os.path.exists(toml_path):
+                with open(toml_path, "w") as f:
+                    f.write(
+                        'name = "pasclaw-deploy"\n'
+                        'compatibility_date = "2024-11-01"\n'
+                        "\n[assets]\n"
+                        f'directory = "./{name}"\n'
+                    )
+                print(
+                    "deploy: no wrangler config found; scaffolded an "
+                    f"assets-only wrangler.toml serving ./{name} "
+                    "(index.html detected)."
+                )
+            return ws_root
+        return None
+
     def _extract_urls(self, blob):
         """Pull every https:// URL out of wrangler's text output.
 
@@ -955,12 +1050,19 @@ class Predictor(BasePredictor):
         """
         proj = self._find_wrangler_project(home_dir, operator_override)
         if proj is None:
+            # No config the agent wrote -- try a safe static-site scaffold
+            # (a dedicated public/dist/... dir with an index.html) before
+            # giving up. Never serves the workspace root. See
+            # _scaffold_static_worker.
+            proj = self._scaffold_static_worker(home_dir)
+        if proj is None:
             print(
-                "deploy: no wrangler config (toml/json/jsonc) under "
+                "deploy: no wrangler config (toml/json/jsonc) and no "
+                "static site (public/dist/... with index.html) under "
                 "$PASCLAW_HOME/workspace/; skipping the deploy step."
             )
-            return ("(no wrangler.toml in workspace -- nothing to deploy)",
-                    "(no wrangler.toml in workspace -- nothing to deploy)")
+            return ("(no deployable Worker in workspace -- nothing to deploy)",
+                    "(no deployable Worker in workspace -- nothing to deploy)")
 
         # Per-prediction HOME so wrangler's cache (and any token it
         # might write) lives inside this prediction's scratch dir.
