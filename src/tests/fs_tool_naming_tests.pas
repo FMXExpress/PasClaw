@@ -165,6 +165,19 @@ begin
     R := Reg.RunTool('read_file', '{"path":"' + PathA + '","start_line":4,"end_line":99}', Err);
     AssertContains(R, '(lines 4-5 of 5', 'end_line clamps to the file end');
     AssertContains(R, '5:r5', 'clamped tail keeps true line numbers');
+    { offset/limit aliases: models trained on other harnesses reach for these;
+      offset->start_line, limit->line count. Must scope the read exactly like
+      start_line/end_line rather than being silently ignored (whole-file read). }
+    R := Reg.RunTool('read_file', '{"path":"' + PathA + '","offset":2,"limit":2}', Err);
+    AssertContains(R, '(lines 2-3 of 5', 'offset/limit scopes the read (offset->start, limit->count)');
+    AssertContains(R, '2:r2', 'offset/limit slice carries true line numbers');
+    AssertTrue(Pos('r4', R) = 0, 'offset/limit excludes lines past offset+limit-1');
+    { canonical args win when both are present }
+    R := Reg.RunTool('read_file', '{"path":"' + PathA + '","start_line":1,"end_line":1,"offset":4,"limit":2}', Err);
+    AssertContains(R, '(lines 1-1 of 5', 'start_line/end_line take precedence over offset/limit');
+    { limit alone -> first `limit` lines }
+    R := Reg.RunTool('read_file', '{"path":"' + PathA + '","limit":2}', Err);
+    AssertContains(R, '(lines 1-2 of 5', 'limit without offset reads the first `limit` lines');
     { Round-trip guard (P2 on #419): ranged output uses the SAME N: format
       write_file's StripHashlinePrefixes consumes, so a copied indented body
       keeps its exact indentation. A "N: " separator would leave a stray

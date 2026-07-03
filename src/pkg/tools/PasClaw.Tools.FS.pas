@@ -249,7 +249,7 @@ function Tool_FSRead(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Path, Body, Reason: string;
   Hashline: Boolean;
-  StartLn, EndLn, Total, i: Integer;
+  StartLn, EndLn, Total, i, LimitN: Integer;
   Lines: TStringList;
 begin
   ErrMsg := '';
@@ -277,6 +277,22 @@ begin
     must not carry one). }
   StartLn := Integer(ParseInt64Arg(ArgsJSON, 'start_line', 0));
   EndLn   := Integer(ParseInt64Arg(ArgsJSON, 'end_line', 0));
+  { Aliases: models trained on other harnesses reach for offset/limit by habit
+    (offset = 1-based start line, limit = line count). pasclaw's range args are
+    start_line/end_line; without this, an offset/limit call was silently
+    ignored and read the whole (capped) file -- a wasted turn + context bloat
+    on exactly the surgical read the model intended. Map them on when the
+    canonical args are absent. Same spirit as edit_file's old_string alias. }
+  if StartLn = 0 then StartLn := Integer(ParseInt64Arg(ArgsJSON, 'offset', 0));
+  if EndLn = 0 then
+  begin
+    LimitN := Integer(ParseInt64Arg(ArgsJSON, 'limit', 0));
+    if LimitN > 0 then
+    begin
+      if StartLn > 0 then EndLn := StartLn + LimitN - 1
+      else EndLn := LimitN;   { limit without a start -> first `limit` lines }
+    end;
+  end;
   if (StartLn > 0) or (EndLn > 0) then
   begin
     Lines := TStringList.Create;
@@ -1711,16 +1727,20 @@ begin
                      'path#hash header + LINENO:line format used to build an ' +
                      'edit_file `patch` (advanced).';
     T.Schema      := '{"type":"object","properties":{"path":{"type":"string"},' +
-                     '"start_line":{"type":"integer","minimum":1,"description":"First line to return (1-based). Use with end_line to read just the region a grep_files hit pointed at."},' +
+                     '"start_line":{"type":"integer","minimum":1,"description":"First line to return (1-based). Use with end_line to read just the region a grep_files hit pointed at. Alias: offset."},' +
                      '"end_line":{"type":"integer","minimum":1,"description":"Last line to return (inclusive; clamped to the file end)."},' +
+                     '"offset":{"type":"integer","minimum":1,"description":"Alias for start_line (1-based first line)."},' +
+                     '"limit":{"type":"integer","minimum":1,"description":"Number of lines to return from start_line/offset (an alternative to end_line)."},' +
                      '"hashline":{"type":"boolean","description":"Return the hashline #hash+LINENO format for edit_file patch edits, instead of plain text. Ignored when a line range is set."}},"required":["path"]}';
   end
   else
   begin
     T.Description := 'Read the contents of a file from the local filesystem.';
     T.Schema      := '{"type":"object","properties":{"path":{"type":"string","description":"Absolute or relative path to the file."},' +
-                     '"start_line":{"type":"integer","minimum":1,"description":"First line to return (1-based)."},' +
-                     '"end_line":{"type":"integer","minimum":1,"description":"Last line to return (inclusive; clamped)."}},"required":["path"]}';
+                     '"start_line":{"type":"integer","minimum":1,"description":"First line to return (1-based). Alias: offset."},' +
+                     '"end_line":{"type":"integer","minimum":1,"description":"Last line to return (inclusive; clamped)."},' +
+                     '"offset":{"type":"integer","minimum":1,"description":"Alias for start_line (1-based first line)."},' +
+                     '"limit":{"type":"integer","minimum":1,"description":"Number of lines to return from start_line/offset (an alternative to end_line)."}},"required":["path"]}';
   end;
   T.Handler  := Tool_FSRead;
   T.IsCore   := True;
