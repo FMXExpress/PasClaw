@@ -543,6 +543,51 @@ begin
   end;
 end;
 
+procedure TestSignedToolCallNotElided;
+{ Gemini 3 signs its tool calls (ProviderSignature). Mutating the args
+  would invalidate the echoed signature, so a signed call's big content is
+  left intact even above the threshold. }
+var
+  P: TScripted;
+  Reg: TToolRegistry;
+  Cfg: TToolLoopConfig;
+  Msgs: TMessageArray;
+  Loop: TToolLoopResult;
+  Call: TToolCall;
+  i, k: Integer;
+  FullKept: Boolean;
+begin
+  if FileExists(FileA) then DeleteFile(FileA);
+  Reg := TToolRegistry.Create;
+  try
+    RegisterFSTools(Reg, True);
+    P := TScripted.Create;
+    Cfg := BaseCfg(P);
+    Cfg.Registry := Reg;
+    Call := MkCall('write_file',
+      '{"path":"' + FileA + '","content":"' + StringOfChar('S', 5000) + '"}');
+    Call.ProviderSignature := 'gemini-thought-sig';
+    P.AddToolRound([Call]);
+    P.AddStop('done');
+    SetLength(Msgs, 1);
+    Msgs[0] := MakeMessage(mrUser, 'write a big signed file');
+    AssertTrue(RunToolLoop(Cfg, Msgs, Loop), 'loop ran');
+
+    FullKept := False;
+    for i := 0 to High(Loop.FinalMessages) do
+      for k := 0 to High(Loop.FinalMessages[i].ToolCalls) do
+        if (Loop.FinalMessages[i].ToolCalls[k].ProviderSignature <> '') and
+           (Pos(StringOfChar('S', 4000),
+                Loop.FinalMessages[i].ToolCalls[k].Func.Arguments) > 0) then
+          FullKept := True;
+    AssertTrue(FullKept,
+      'a signed tool call keeps its full args so the thoughtSignature stays valid');
+    WriteLn('  ok: signed (Gemini 3) tool call args are NOT elided');
+  finally
+    Reg.Free;
+  end;
+end;
+
 var
   Pol: TSandboxPolicy;
 begin
@@ -563,6 +608,7 @@ begin
   TestTruncationNoToolsReturnsContent;
   TestElideLargeToolArgsUnit;
   TestHistoryElidesBigWrite;
+  TestSignedToolCallNotElided;
 
   if FileExists(FileA) then DeleteFile(FileA);
   RemoveDir(WsDir);

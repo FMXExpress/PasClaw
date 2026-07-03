@@ -1750,11 +1750,19 @@ begin
       turn so a model's own large write content isn't replayed verbatim on
       every subsequent provider call. Dispatches[] already holds the full
       args (copied above), so the live tool run is unaffected -- only what
-      gets re-sent (and persisted into Loop.FinalMessages) is trimmed. }
+      gets re-sent (and persisted into Loop.FinalMessages) is trimmed.
+
+      SKIP calls that carry a ProviderSignature: Gemini 3 signs the
+      functionCall (thoughtSignature) and the Gemini builder echoes that
+      signature back on replay. Mutating the arguments would send a
+      different payload under the old signature, which Gemini rejects as an
+      invalidly-signed turn -- and dropping the signature 400s too (Gemini
+      requires it). Signed calls keep their exact args + signature. }
     for i := 0 to High(Hist[High(Hist)].ToolCalls) do
-      Hist[High(Hist)].ToolCalls[i].Func.Arguments :=
-        ElideLargeToolArgs(Hist[High(Hist)].ToolCalls[i].Func.Arguments,
-                           ToolArgReplayThreshold);
+      if Hist[High(Hist)].ToolCalls[i].ProviderSignature = '' then
+        Hist[High(Hist)].ToolCalls[i].Func.Arguments :=
+          ElideLargeToolArgs(Hist[High(Hist)].ToolCalls[i].Func.Arguments,
+                             ToolArgReplayThreshold);
 
     { Partition into batches: read-only calls fan out concurrently
       within a batch when Cfg.Parallel is on; mutating calls each
