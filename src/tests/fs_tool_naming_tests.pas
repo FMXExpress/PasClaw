@@ -98,7 +98,7 @@ begin
 end;
 
 var
-  Reg: TToolRegistry;
+  Reg, Reg2: TToolRegistry;
   Defs: TToolDefinitionArray;
   Dir, PathA, PathB, PathC, PathN, Patch, R, Err: string;
   T: TTool;
@@ -236,7 +236,45 @@ begin
     Reg.RunTool('write_file', '{"path":"' + PathA + '","content":"keepDROPkeep"}', Err);
     Reg.RunTool('edit_file', '{"path":"' + PathA + '","old_text":"DROP"}', Err);
     AssertEqStr(ReadBack(Reg, PathA), 'keepkeep', 'edit_file deletes when new_text omitted');
-    WriteLn('  ok: edit_file str-replace (unique / not-found / ambiguous / replace_all / delete)');
+    { old_string/new_string aliases (Claude-family models reach for these). }
+    Reg.RunTool('write_file', '{"path":"' + PathA + '","content":"alpha beta gamma"}', Err);
+    R := Reg.RunTool('edit_file', '{"path":"' + PathA + '","old_string":"beta","new_string":"BETA"}', Err);
+    AssertEqStr(Err, '', 'edit_file accepts old_string/new_string aliases');
+    AssertEqStr(ReadBack(Reg, PathA), 'alpha BETA gamma', 'alias replacement applied');
+    { canonical wins when both present }
+    Reg.RunTool('write_file', '{"path":"' + PathA + '","content":"pick me"}', Err);
+    Reg.RunTool('edit_file', '{"path":"' + PathA +
+      '","old_text":"me","old_string":"pick","new_text":"YOU"}', Err);
+    AssertEqStr(ReadBack(Reg, PathA), 'pick YOU', 'old_text wins over old_string when both given');
+    { alias-only delete (omit new_*) }
+    Reg.RunTool('write_file', '{"path":"' + PathA + '","content":"keepGONEkeep"}', Err);
+    Reg.RunTool('edit_file', '{"path":"' + PathA + '","old_string":"GONE"}', Err);
+    AssertEqStr(ReadBack(Reg, PathA), 'keepkeep', 'old_string delete works with new_* omitted');
+    WriteLn('  ok: edit_file str-replace + old_string/new_string aliases');
+
+    { --- 4a. Schema surfaces the aliases and doesn't over-require them
+      (PR #427 review). A schema-validating / grammar-guided client must be
+      able to emit old_string/new_string and make an alias-only call, so the
+      keys must be declared properties and `required` must not force old_text.
+      The hashline branch declares them; the no-hashline branch (which carried
+      "required":["path","old_text"]) is the one the review flagged. --- }
+    AssertTrue(Reg.Find('edit_file', T), 'edit_file findable for schema check');
+    AssertContains(T.Schema, '"old_string"', 'hashline schema declares old_string alias property');
+    AssertContains(T.Schema, '"new_string"', 'hashline schema declares new_string alias property');
+    Reg2 := TToolRegistry.Create;
+    try
+      RegisterFSTools(Reg2, False);   { --no-hashline mode }
+      AssertTrue(Reg2.Find('edit_file', T), 'no-hashline edit_file findable');
+      AssertContains(T.Schema, '"old_string"', 'no-hashline schema declares old_string alias property');
+      AssertContains(T.Schema, '"new_string"', 'no-hashline schema declares new_string alias property');
+      AssertTrue(Pos('"required":["path","old_text"]', T.Schema) = 0,
+                 'no-hashline schema no longer forces old_text (alias-only calls validate)');
+      AssertContains(T.Schema, '"required":["path"]',
+                 'no-hashline schema still requires path');
+    finally
+      Reg2.Free;
+    end;
+    WriteLn('  ok: edit_file schema declares aliases + does not force old_text');
 
     { --- 4b. find_files: glob by NAME (D1). --- }
     AssertTrue(DefsHasName(Reg.ToProviderDefs, 'find_files'), 'find_files advertised');
