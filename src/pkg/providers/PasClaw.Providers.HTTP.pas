@@ -178,6 +178,81 @@ begin
   Result := (Length(URL) >= 8) and SameText(Copy(URL, 1, 8), 'https://');
 end;
 
+(* The proxy-decision helpers live in the common section (not the Indy backend
+   branch) so a PASCLAW_NETHTTP Delphi build -- which compiles the other
+   backend branch -- still has their implementations for the interface
+   declarations. They are pure string logic with no backend dependency. *)
+
+function ExtractURLHost(const URL: string): string;
+{ Lowercased host of a URL, stripped of scheme, userinfo, port and path.
+  Handles bracketed IPv6 literals ([::1]:8000 -> ::1). }
+var
+  S: string;
+  P: Integer;
+begin
+  S := URL;
+  P := Pos('://', S);
+  if P > 0 then S := Copy(S, P + 3, MaxInt);
+  { Reduce to the authority FIRST (strip the path), then the userinfo. Doing
+    it in this order matters: a path can legitimately contain '@'
+    (e.g. https://api.example.com/users/@me) -- stripping userinfo before the
+    path would otherwise mistake the path '@' for the authority delimiter and
+    return the wrong host, breaking loopback / NO_PROXY matching. }
+  P := Pos('/', S);                { strip path -> authority only }
+  if P > 0 then S := Copy(S, 1, P - 1);
+  P := Pos('@', S);               { strip userinfo (now safely within authority) }
+  if P > 0 then S := Copy(S, P + 1, MaxInt);
+  if (S <> '') and (S[1] = '[') then
+  begin
+    P := Pos(']', S);             { IPv6 literal -- take what's inside brackets }
+    if P > 0 then S := Copy(S, 2, P - 2);
+  end
+  else
+  begin
+    P := Pos(':', S);             { strip :port }
+    if P > 0 then S := Copy(S, 1, P - 1);
+  end;
+  Result := LowerCase(Trim(S));
+end;
+
+function HostBypassesProxy(const Host, NoProxy: string): Boolean;
+{ Loopback always bypasses so local providers (ollama / lmstudio / vllm) and
+  127.0.0.1 callbacks never route through an external proxy. Then honour the
+  NoProxy list, matching the semantics curl / wget / Go use: '*' bypasses
+  everything; an entry matches Host exactly or as a domain suffix (a leading
+  '.' is optional, so both "example.com" and ".example.com" match
+  "api.example.com"). }
+var
+  Raw, Entry: string;
+  Start, i, L: Integer;
+begin
+  Result := True;
+  if (Host = 'localhost') or (Host = '127.0.0.1') or (Host = '::1')
+     or (Copy(Host, 1, 4) = '127.') then Exit;
+
+  if NoProxy <> '' then
+  begin
+    Raw := LowerCase(NoProxy);
+    Start := 1;
+    L := Length(Raw);
+    for i := 1 to L + 1 do
+      if (i > L) or (Raw[i] = ',') then
+      begin
+        Entry := Trim(Copy(Raw, Start, i - Start));
+        Start := i + 1;
+        if Entry = '' then Continue;
+        if Entry = '*' then Exit;
+        while (Entry <> '') and (Entry[1] = '.') do Delete(Entry, 1, 1);
+        if Entry = '' then Continue;
+        if (Host = Entry) or
+           ((Length(Host) > Length(Entry)) and
+            (Copy(Host, Length(Host) - Length(Entry), Length(Entry) + 1)
+             = '.' + Entry)) then Exit;
+      end;
+  end;
+  Result := False;
+end;
+
 {$IF Defined(PASCLAW_NETHTTP) and not Defined(FPC)}
 (* ============================================================
    TNetHTTPClient backend -- Delphi only, opt-in via -DPASCLAW_NETHTTP.
@@ -714,71 +789,6 @@ begin
   ProbeOpenSSL;
   Result := GSSLAvailable;
   if Result then ErrMsg := '' else ErrMsg := OpenSSLHelpMessage;
-end;
-
-function ExtractURLHost(const URL: string): string;
-{ Lowercased host of a URL, stripped of scheme, userinfo, port and path.
-  Handles bracketed IPv6 literals ([::1]:8000 -> ::1). }
-var
-  S: string;
-  P: Integer;
-begin
-  S := URL;
-  P := Pos('://', S);
-  if P > 0 then S := Copy(S, P + 3, MaxInt);
-  P := Pos('@', S);               { strip userinfo }
-  if P > 0 then S := Copy(S, P + 1, MaxInt);
-  P := Pos('/', S);               { strip path }
-  if P > 0 then S := Copy(S, 1, P - 1);
-  if (S <> '') and (S[1] = '[') then
-  begin
-    P := Pos(']', S);             { IPv6 literal -- take what's inside brackets }
-    if P > 0 then S := Copy(S, 2, P - 2);
-  end
-  else
-  begin
-    P := Pos(':', S);             { strip :port }
-    if P > 0 then S := Copy(S, 1, P - 1);
-  end;
-  Result := LowerCase(Trim(S));
-end;
-
-function HostBypassesProxy(const Host, NoProxy: string): Boolean;
-{ Loopback always bypasses so local providers (ollama / lmstudio / vllm) and
-  127.0.0.1 callbacks never route through an external proxy. Then honour the
-  NoProxy list, matching the semantics curl / wget / Go use: '*' bypasses
-  everything; an entry matches Host exactly or as a domain suffix (a leading
-  '.' is optional, so both "example.com" and ".example.com" match
-  "api.example.com"). }
-var
-  Raw, Entry: string;
-  Start, i, L: Integer;
-begin
-  Result := True;
-  if (Host = 'localhost') or (Host = '127.0.0.1') or (Host = '::1')
-     or (Copy(Host, 1, 4) = '127.') then Exit;
-
-  if NoProxy <> '' then
-  begin
-    Raw := LowerCase(NoProxy);
-    Start := 1;
-    L := Length(Raw);
-    for i := 1 to L + 1 do
-      if (i > L) or (Raw[i] = ',') then
-      begin
-        Entry := Trim(Copy(Raw, Start, i - Start));
-        Start := i + 1;
-        if Entry = '' then Continue;
-        if Entry = '*' then Exit;
-        while (Entry <> '') and (Entry[1] = '.') do Delete(Entry, 1, 1);
-        if Entry = '' then Continue;
-        if (Host = Entry) or
-           ((Length(Host) > Length(Entry)) and
-            (Copy(Host, Length(Host) - Length(Entry), Length(Entry) + 1)
-             = '.' + Entry)) then Exit;
-      end;
-  end;
-  Result := False;
 end;
 
 function EnvNoProxy: string;

@@ -39,7 +39,15 @@ begin
   EqS(ExtractURLHost('https://user:pass@host.example.com:443/x'), 'host.example.com', 'strips userinfo + port');
   EqS(ExtractURLHost('http://[::1]:8000/'), '::1', 'unwraps IPv6 literal, strips port');
   EqS(ExtractURLHost('https://API.Example.COM'), 'api.example.com', 'lowercased, no path');
-  WriteLn('  ok: ExtractURLHost parses scheme/userinfo/port/path/IPv6');
+  { Path may legitimately contain '@' -- the authority must be isolated BEFORE
+    userinfo stripping or the host comes out wrong (review P2 on #430). }
+  EqS(ExtractURLHost('http://localhost/@health'), 'localhost',
+      '@ in path does not corrupt the host (loopback still matches)');
+  EqS(ExtractURLHost('https://api.example.com/users/@me'), 'api.example.com',
+      '@ in path does not corrupt the host');
+  EqS(ExtractURLHost('https://user:pass@host.example.com/p/@x'), 'host.example.com',
+      'real userinfo stripped even when the path also has an @');
+  WriteLn('  ok: ExtractURLHost parses scheme/userinfo/port/path/IPv6 (+ @ in path)');
 
   { --- HostBypassesProxy: loopback always bypasses (empty NO_PROXY) --- }
   IsTrue(HostBypassesProxy('localhost', ''),   'localhost bypasses');
