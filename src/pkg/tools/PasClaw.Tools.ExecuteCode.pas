@@ -578,9 +578,12 @@ begin
   GRunners.Add(Runner);
 
   T.Name        := 'execute_code';
-  T.Description := 'Run a multi-line bash or PowerShell script (loops, heredocs, ' +
-                   'fan-out a single shell_exec can''t express). Returns combined ' +
-                   'stdout+stderr and exit code; same sandbox/denylist as ' +
+  T.Description := 'Run a multi-line SHELL script (bash or PowerShell -- set `lang`). ' +
+                   'The body is shell, not program source: to run Python/Node/etc., ' +
+                   'invoke the interpreter from the script -- e.g. `python3 foo.py`, ' +
+                   'or a heredoc `python3 - <<''EOF''` ... `EOF`. Good for loops, ' +
+                   'heredocs, and fan-out a single shell_exec can''t express. Returns ' +
+                   'combined stdout+stderr and exit code; same sandbox/denylist as ' +
                    'shell_exec. Inside the script, `pasclaw __tool <name> ' +
                    '''<json-args>''` calls back into your own tools.';
   T.Schema      :=
