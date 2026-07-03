@@ -68,7 +68,7 @@ type
     Prompts: array of string;
     procedure AddToolRound(const Calls: array of TToolCall);
     procedure AddStop(const Text: string);
-    procedure AddTruncated(const Text: string);
+    procedure AddTruncated(const Text: string; const Finish: string = 'length');
     function Chat(const Messages: array of TMessage;
                   const Tools:    array of TToolDefinition;
                   const Model:    string;
@@ -111,15 +111,15 @@ begin
   Script[High(Script)] := R;
 end;
 
-procedure TScripted.AddTruncated(const Text: string);
-{ A turn that hit the output ceiling: text content, no tool call,
-  finish_reason=length. }
+procedure TScripted.AddTruncated(const Text: string; const Finish: string);
+{ A no-tool-call turn that failed recoverably: text content, no tool call,
+  finish_reason = length (output ceiling) or MALFORMED_FUNCTION_CALL. }
 var
   R: TLLMResponse;
 begin
   R := Default(TLLMResponse);
   R.StatusCode := 200;
-  R.FinishReason := 'length';
+  R.FinishReason := Finish;
   R.Content := Text;
   SetLength(Script, Length(Script) + 1);
   Script[High(Script)] := R;
@@ -407,8 +407,8 @@ begin
   end;
 end;
 
-procedure TestTruncationRecoveryWithTools;
-{ A truncated (finish=length) no-tool-call turn in a tool-enabled build
+procedure RunRecoveryCase(const Finish: string);
+{ A no-tool-call turn that failed for `Finish` in a tool-enabled build
   session must NOT end the loop: fold a nudge, retry, and let the write land. }
 var
   P: TScripted;
@@ -424,24 +424,30 @@ begin
     P := TScripted.Create;
     Cfg := BaseCfg(P);
     Cfg.Registry := Reg;
-    P.AddTruncated('Let me build this. ### Bullets: procedure DrawBullet(X,Y: Integer); begin');
+    P.AddTruncated('Let me build this. ### Bullets: procedure DrawBullet(X,Y: Integer); begin', Finish);
     P.AddToolRound([MkCall('write_file', '{"path":"' + FileA + '","content":"ok"}')]);
     P.AddStop('done');
 
     SetLength(Msgs, 1);
     Msgs[0] := MakeMessage(mrUser, 'build a small demo in the workspace');
-    AssertTrue(RunToolLoop(Cfg, Msgs, Loop), 'loop ran');
+    AssertTrue(RunToolLoop(Cfg, Msgs, Loop), 'loop ran (' + Finish + ')');
     AssertTrue(Length(P.Prompts) = 3,
-      'truncated turn retried, then wrote, then stopped (3 calls)');
-    AssertHas(P.Prompts[1], 'cut off at the output token limit',
-      'retry prompt carries the truncation nudge');
-    AssertHas(P.Prompts[1], 'write_file', 'nudge names the writing tool');
-    AssertTrue(FileExists(FileA), 'deliverable landed after recovery');
-    AssertNot(Loop.Content, 'DrawBullet', 'final content is not the truncated prose');
-    WriteLn('  ok: tool-enabled truncated turn recovers, nudges, and delivers');
+      Finish + ': failed turn retried, then wrote, then stopped (3 calls)');
+    AssertHas(P.Prompts[1], 'no usable tool call',
+      Finish + ': retry prompt carries the recovery nudge');
+    AssertHas(P.Prompts[1], 'write_file', Finish + ': nudge names the writing tool');
+    AssertTrue(FileExists(FileA), Finish + ': deliverable landed after recovery');
+    AssertNot(Loop.Content, 'DrawBullet', Finish + ': final content is not the ramble');
   finally
     Reg.Free;
   end;
+end;
+
+procedure TestTruncationRecoveryWithTools;
+begin
+  RunRecoveryCase('length');                    { output-ceiling truncation }
+  RunRecoveryCase('MALFORMED_FUNCTION_CALL');   { Gemini malformed call + narration }
+  WriteLn('  ok: tool-enabled length + MALFORMED_FUNCTION_CALL turns recover, nudge, and deliver');
 end;
 
 procedure TestTruncationNoToolsReturnsContent;

@@ -1148,14 +1148,23 @@ begin
     Result := Result + sLineBreak + 'checklist state:' + sLineBreak + L.Checklist;
 end;
 
-function IsTruncatedFinish(const FR: string): Boolean;
-{ Provider-normalised truncation markers for "the model hit the output
-  token ceiling mid-generation". Gemini maps its native MAX_TOKENS to
-  'length' (PasClaw.Providers.Gemini), OpenAI passes 'length' through,
-  and Anthropic surfaces its raw stop_reason 'max_tokens'. Match all,
-  case-insensitively. }
+function IsRetryableNoToolFinish(const FR: string): Boolean;
+{ finish_reasons that make a no-tool-call turn a FAILURE to recover from
+  rather than a finished answer. Two shapes, same remedy (retry + a nudge
+  toward a real tool call / chunked writes):
+    - Output-ceiling truncation: 'length' (OpenAI, and Gemini which maps its
+      native MAX_TOKENS here) or 'max_tokens' (Anthropic's raw stop_reason).
+    - Gemini's MALFORMED_FUNCTION_CALL: the model emitted a function call it
+      couldn't serialise -- classically one oversized argument (a whole file
+      crammed into write_file.content). When it ALSO produced narration text
+      (Content<>''), the provider-level empty-turn retry
+      (PasClaw.Stream.Reliability.IsEmptyTurn, which requires Content='')
+      does not fire, so without this the turn exits with the half-narration
+      and nothing on disk (observed live with Gemini 3.5 Flash). }
 begin
-  Result := SameText(FR, 'length') or SameText(FR, 'max_tokens');
+  Result := SameText(FR, 'length')
+         or SameText(FR, 'max_tokens')
+         or SameText(FR, 'MALFORMED_FUNCTION_CALL');
 end;
 
 function HasWritingTool(const Tools: TToolDefinitionArray): Boolean;
@@ -1190,15 +1199,16 @@ const
     no tool call gets a corrective nudge and a bounded number of retries
     before the loop gives up and returns whatever partial text it has. }
   MaxTruncRetries = 2;
-  TruncationNudgeText =
-    '[your previous reply was cut off at the output token limit and ' +
-    'contained no tool call, so NOTHING was saved]' + sLineBreak +
-    'Do NOT write file contents or code as prose in your reply -- that is ' +
-    'what just failed. To create or change a file you MUST call a tool: ' +
-    'write_file (whole file), append_file (add to the end -- build a large ' +
-    'file across several turns so you never hit the limit), or edit_file / ' +
-    'apply_patch (targeted changes). Emit the tool call now and keep any ' +
-    'prose to one short line.';
+  RecoveryNudgeText =
+    '[your previous reply produced no usable tool call -- it was cut off at ' +
+    'the output-token limit, or the function call was too large to parse -- ' +
+    'so NOTHING was saved]' + sLineBreak +
+    'Do NOT write file contents or code as prose in your reply, and do NOT ' +
+    'cram a whole file into one tool call. To create or change a file, call ' +
+    'a tool: write_file (whole file), append_file (add to the end -- build a ' +
+    'large file across several turns so no single call is too big), or ' +
+    'edit_file / apply_patch (targeted changes). Emit ONE tool call now and ' +
+    'keep any prose to one short line.';
 var
   Iter, i, bi, j, fbi, sti: Integer;
   Tools: TToolDefinitionArray;
@@ -1350,16 +1360,17 @@ begin
       end;
     end;
 
-    { Truncation-recovery fold. A prior iteration hit the output ceiling
-      with no tool call (see the no-tool-call branch below); fold a
-      corrective nudge into THIS iteration's system prompt, then clear the
-      flag so a later clean turn doesn't carry it. Ephemeral like the
-      ledger -- restored to PersistentSP after the provider call. }
+    { No-tool-call recovery fold. A prior iteration ended with no usable tool
+      call for a recoverable reason (output-ceiling truncation or a malformed
+      function call -- see the no-tool-call branch below); fold a corrective
+      nudge into THIS iteration's system prompt, then clear the flag so a
+      later clean turn doesn't carry it. Ephemeral like the ledger --
+      restored to PersistentSP after the provider call. }
     if TruncNudgePending then
     begin
       if LiveOptions.SystemPrompt <> '' then
         LiveOptions.SystemPrompt := LiveOptions.SystemPrompt + sLineBreak + sLineBreak;
-      LiveOptions.SystemPrompt := LiveOptions.SystemPrompt + TruncationNudgeText;
+      LiveOptions.SystemPrompt := LiveOptions.SystemPrompt + RecoveryNudgeText;
       TruncNudgePending := False;
     end;
 
@@ -1625,26 +1636,26 @@ begin
 
     if Length(Resp.ToolCalls) = 0 then
     begin
-      { Truncated mid-turn with no tool call: the model hit the output
-        token ceiling (finish_reason length / max_tokens) -- most often
-        while narrating code as prose instead of calling write_file -- so
-        nothing was saved. Do NOT treat this as a finished answer (the old
-        behaviour returned the half-written ramble as Loop.Content and the
-        turn silently produced no file). Fold a corrective nudge and retry,
-        bounded by MaxTruncRetries. The partial content is intentionally
-        dropped (not appended to Hist) so the truncated prose blob doesn't
-        bloat context on the retry. }
-      { Gate on a writing tool actually being available and build mode:
-        the nudge steers toward write_file/append_file, so in a no-tools /
-        read-only / plan session the truncated text is the deliverable and
-        must be returned as-is (with finish=length) rather than dropped and
-        retried against tools that don't exist. }
-      if IsTruncatedFinish(Resp.FinishReason) and (TruncRetries < MaxTruncRetries)
+      { No usable tool call for a recoverable reason: the model hit the
+        output ceiling (finish=length / max_tokens) OR emitted a malformed
+        function call (finish=MALFORMED_FUNCTION_CALL) -- most often while
+        narrating code as prose, or cramming a whole file into one oversized
+        call -- so nothing was saved. Do NOT treat this as a finished answer
+        (the old behaviour returned the half-written ramble as Loop.Content
+        and the turn silently produced no file). Fold a corrective nudge and
+        retry, bounded by MaxTruncRetries. The partial content is dropped
+        (not appended to Hist) so the ramble doesn't bloat the retry.
+
+        Gate on a writing tool being available and build mode: the nudge
+        steers toward write_file/append_file, so in a no-tools / read-only /
+        plan session the text is the deliverable and must be returned as-is
+        rather than dropped and retried against tools that don't exist. }
+      if IsRetryableNoToolFinish(Resp.FinishReason) and (TruncRetries < MaxTruncRetries)
          and (Cfg.Mode <> pmPlan) and HasWritingTool(Tools) then
       begin
         Inc(TruncRetries);
         TruncNudgePending := True;
-        LogWarn('toolloop: truncated turn (finish=%s) with no tool call; ' +
+        LogWarn('toolloop: unrecoverable turn (finish=%s) with no tool call; ' +
                 'nudging toward tool use, retry %d/%d',
                 [Resp.FinishReason, TruncRetries, MaxTruncRetries]);
         Continue;
