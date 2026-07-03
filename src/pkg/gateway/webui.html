@@ -2066,10 +2066,25 @@ function allPatchPaths(patch) {
   return out;
 }
 
+/* Paths touched by an apply_patch envelope ("*** Add/Update File: <p>" and
+   "*** Move to: <p>"). Deletes are skipped -- there's nothing to download. */
+function applyPatchPaths(patch) {
+  const out = [];
+  for (const line of String(patch || "").split("\n")) {
+    const m = /^\*\*\*\s+(?:Add File|Update File|Move to):\s*(.+)$/.exec(line.trim());
+    if (m && m[1].trim()) out.push(m[1].trim());
+  }
+  return out;
+}
+
 /* Files written/edited in the current chat, newest-last, deduped. Prefers the
    full tool args from the side-channel (t.tools); falls back to parsing the
-   visible ⏺ fs_write/fs_edit_hashline card lines for turns reloaded without it
-   (ellipsized paths are skipped -- they'd 404 on download). */
+   visible ⏺ card lines for turns reloaded without it (ellipsized paths are
+   skipped -- they'd 404 on download).
+
+   Tool names must track the verb_noun rename: write_file / append_file /
+   edit_file / apply_patch are the canonical names; fs_write / fs_edit_hashline
+   remain as hidden aliases older sessions may carry. */
 function chatFiles() {
   const out = new Map();
   const add = p => { p = (p || "").trim(); if (p && p.indexOf("…") < 0) out.set(p, true); };
@@ -2078,12 +2093,20 @@ function chatFiles() {
     let used = false;
     for (const d of (t.tools || [])) {
       try {
-        if (d.name === "fs_write") { add(JSON.parse(d.args).path); used = true; }
-        else if (d.name === "fs_edit_hashline") { allPatchPaths(JSON.parse(d.args).patch).forEach(add); used = true; }
+        const a = JSON.parse(d.args);
+        if (d.name === "write_file" || d.name === "append_file" || d.name === "fs_write") {
+          add(a.path); used = true;
+        } else if (d.name === "edit_file" || d.name === "fs_edit_hashline") {
+          if (a.path) add(a.path);              // str-replace mode: {path, old_text, new_text}
+          if (a.patch) allPatchPaths(a.patch).forEach(add); // hashline mode: {patch}
+          used = true;
+        } else if (d.name === "apply_patch") {
+          applyPatchPaths(a.patch).forEach(add); used = true;
+        }
       } catch {}
     }
     if (!used) {
-      const re = /⏺\s*(fs_write|fs_edit_hashline)\(([^)]*)\)/g;
+      const re = /⏺\s*(write_file|append_file|edit_file|fs_write|fs_edit_hashline)\(([^)]*)\)/g;
       let m2; const text = t.text || "";
       while ((m2 = re.exec(text))) add(m2[2]);
     }
