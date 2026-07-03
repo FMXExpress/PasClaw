@@ -258,6 +258,7 @@ uses
   {$ENDIF}
   PasClaw.Config,
   PasClaw.Utils,
+  PasClaw.Hashline,   { HL_FILE_PREFIX / HL_FILE_HASH_SEP for hashline patch headers }
   PasClaw.Logger;
 
 function NowUnix: Int64;
@@ -642,6 +643,53 @@ begin
   end;
 end;
 
+procedure CollectPatchPaths(const PatchText: string; out Paths: TStringArray);
+{ Pull file paths out of a patch body, covering both formats the file
+  tools emit: apply_patch's envelope ("*** Add File: p" / "*** Update
+  File: p" / "*** Move to: p") and the hashline patch header ("|p#hash").
+  Deletes are skipped -- the file is gone, nothing to record as edited. }
+var
+  Lines: TStringList;
+  i: Integer;
+  L, P: string;
+  H: Integer;
+
+  procedure Add(const S: string);
+  begin
+    if Trim(S) = '' then Exit;
+    SetLength(Paths, Length(Paths) + 1);
+    Paths[High(Paths)] := Trim(S);
+  end;
+
+begin
+  SetLength(Paths, 0);
+  if Trim(PatchText) = '' then Exit;
+  Lines := TStringList.Create;
+  try
+    Lines.Text := PatchText;
+    for i := 0 to Lines.Count - 1 do
+    begin
+      L := Trim(Lines[i]);
+      if Copy(L, 1, Length('*** Add File: ')) = '*** Add File: ' then
+        Add(Copy(L, Length('*** Add File: ') + 1, MaxInt))
+      else if Copy(L, 1, Length('*** Update File: ')) = '*** Update File: ' then
+        Add(Copy(L, Length('*** Update File: ') + 1, MaxInt))
+      else if Copy(L, 1, Length('*** Move to: ')) = '*** Move to: ' then
+        Add(Copy(L, Length('*** Move to: ') + 1, MaxInt))
+      else if Copy(L, 1, Length(HL_FILE_PREFIX)) = HL_FILE_PREFIX then
+      begin
+        { hashline patch header: <prefix>path<sep>hash (e.g. ¶src/x.pas#a1b2) }
+        P := Copy(L, Length(HL_FILE_PREFIX) + 1, MaxInt);
+        H := Pos(HL_FILE_HASH_SEP, P);
+        if H > 0 then P := Copy(P, 1, H - 1);
+        Add(P);
+      end;
+    end;
+  finally
+    Lines.Free;
+  end;
+end;
+
 procedure PushEditedFile(var W: TWorkingState; const Path: string);
 { Move-to-front a path: dedupe by exact match, drop the oldest if
   we'd exceed WORKING_STATE_MAX_EDITED. Keeps the array newest-
@@ -668,9 +716,10 @@ end;
 procedure UpdateWorkingStateAfterTurn(var Meta: TSessionMeta;
                                       const Hist: TMessageArray);
 var
-  i, k: Integer;
+  i, k, pp: Integer;
   Call: TToolCall;
   Path, Cmd, Body: string;
+  PatchPaths: TStringArray;
   Changed: Boolean;
 begin
   Changed := False;
@@ -689,6 +738,7 @@ begin
       if (Call.Func.Name = 'write_file') or
          (Call.Func.Name = 'append_file') or
          (Call.Func.Name = 'edit_file') or
+         (Call.Func.Name = 'apply_patch') or
          (Call.Func.Name = 'fs_write') or          { back-compat aliases }
          (Call.Func.Name = 'fs_edit_hashline') then
       begin
@@ -697,6 +747,19 @@ begin
         begin
           PushEditedFile(Meta.WorkingState, Path);
           Changed := True;
+        end
+        else
+        begin
+          { No plain `path` arg -> a patch-carrying call (apply_patch's
+            envelope, or edit_file/fs_edit_hashline in hashline mode). Pull
+            every touched path out of the `patch` body so patch-written
+            files aren't silently dropped from the working state. }
+          CollectPatchPaths(ParseFsArg(Call.Func.Arguments, 'patch'), PatchPaths);
+          for pp := 0 to High(PatchPaths) do
+          begin
+            PushEditedFile(Meta.WorkingState, PatchPaths[pp]);
+            Changed := True;
+          end;
         end;
       end
       else if Call.Func.Name = 'shell_exec' then

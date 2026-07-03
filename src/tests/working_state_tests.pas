@@ -253,10 +253,48 @@ begin
   AssertEqStr(Arr[3].Id, 'a', 'oldest at index 3');
 end;
 
+procedure TestExtractsApplyPatchAndHashlinePaths;
+{ apply_patch writes carry no `path` arg -- their targets live in the
+  `patch` envelope. A hashline edit_file patch likewise starts with a
+  |path#hash header. Both must land in EditedFiles or patch-written files
+  silently vanish from the working state (the bug the webui dropdown had). }
+var
+  Meta: TSessionMeta;
+  Hist: array of TMessage;
+  Found: array[0..2] of Boolean;
+  i, j: Integer;
+  Want: array[0..2] of string;
+begin
+  Meta := Default(TSessionMeta);
+  SetLength(Hist, 2);
+  Hist[0] := MakeAssistantWithToolCall('apply_patch',
+    '{"patch":"*** Begin Patch\n*** Update File: src/game.pas\n*** Add File: src/new.pas\n*** Delete File: src/old.pas\n*** End Patch\n"}');
+  { edit_file in hashline mode: the header is <U+00B6>path#hash. }
+  Hist[1] := MakeAssistantWithToolCall('edit_file',
+    '{"patch":"' + #$C2#$B6 + 'src/hash.pas#a1b2\n@@ -1,1 +1,1 @@\n-a\n+b\n"}');
+  UpdateWorkingStateAfterTurn(Meta, Hist);
+
+  Want[0] := 'src/game.pas';   { Update target }
+  Want[1] := 'src/new.pas';    { Add target }
+  Want[2] := 'src/hash.pas';   { hashline header }
+  for j := 0 to 2 do Found[j] := False;
+  for i := 0 to High(Meta.WorkingState.EditedFiles) do
+  begin
+    { deletes must NOT be tracked }
+    AssertTrue(Meta.WorkingState.EditedFiles[i] <> 'src/old.pas',
+      'deleted file must not appear in the working state');
+    for j := 0 to 2 do
+      if Meta.WorkingState.EditedFiles[i] = Want[j] then Found[j] := True;
+  end;
+  for j := 0 to 2 do
+    AssertTrue(Found[j], 'patch-written path captured: ' + Want[j]);
+end;
+
 begin
   TestExtractsFsWritePaths;
   TestExtractsFsEditPathsAndDedupes;
   TestCapturesShellAndError;
+  TestExtractsApplyPatchAndHashlinePaths;
   TestFormatBlockSkipsEmpty;
   TestFormatBlockRendersFields;
   TestSaveLoadRoundTrip;
