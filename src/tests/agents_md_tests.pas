@@ -17,6 +17,8 @@ uses
   SysUtils, Classes,
   PasClaw.Agent.Prompt,
   PasClaw.Cmd.Init,
+  PasClaw.Config,          { TSandboxPolicy }
+  PasClaw.Tools.Sandbox,   { ConfigureSandbox -- sets CurrentWorkspace }
   PasClaw.Utils;
 
 procedure Fail_(const Msg: string);
@@ -333,6 +335,35 @@ begin
   end;
 end;
 
+procedure TestBuildSectionFromWorkspaceNotCwd;
+{ The gateway/serve/docker case: AGENTS.md lives in the configured WORKSPACE
+  while the process cwd is elsewhere. BuildProjectRulesSection must read the
+  WORKSPACE copy -- it previously read only the launch cwd, so a workspace
+  AGENTS.md was silently never injected. }
+var
+  WsDir, CwdDir, Saved, Section: string;
+  Pol: TSandboxPolicy;
+begin
+  WsDir := MakeTempDir;
+  CwdDir := MakeTempDir;   { a different dir, with NO AGENTS.md }
+  WriteFile_(JoinPath(WsDir, 'AGENTS.md'),
+    '# WS' + sLineBreak + 'Use the log() helper, never print().' + sLineBreak);
+  Saved := GetCurrentDir;
+  try
+    SetCurrentDir(CwdDir);
+    Pol := Default(TSandboxPolicy);
+    ConfigureSandbox(Pol, WsDir);      { CurrentWorkspace := WsDir }
+    Section := BuildProjectRulesSection;
+    AssertContains(Section, 'Use the log() helper',
+      'workspace AGENTS.md is read even when the process cwd is elsewhere');
+  finally
+    SetCurrentDir(Saved);
+    ConfigureSandbox(Default(TSandboxPolicy), '');   { reset workspace }
+    RemoveTree(WsDir);
+    RemoveTree(CwdDir);
+  end;
+end;
+
 begin
   Randomize;
   TestFindMissing;
@@ -347,5 +378,9 @@ begin
   TestDigestShape;
   TestDigestUtf8;
   TestRunInitArgFailures;
+  { Runs LAST: it configures a real sandbox workspace (module-global
+    CurrentWorkspace), which would otherwise leak into the cwd-reliant
+    section tests above. }
+  TestBuildSectionFromWorkspaceNotCwd;
   Writeln('ok - agents.md ingest + init digest tests passed');
 end.

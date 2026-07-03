@@ -588,6 +588,54 @@ begin
   end;
 end;
 
+procedure TestSupersededReadStubbed;
+{ A read_file result made stale by a LATER write of the same path is stubbed
+  in the replayed/persisted history so its obsolete bytes don't ride along. }
+var
+  P: TScripted;
+  Reg: TToolRegistry;
+  Cfg: TToolLoopConfig;
+  Msgs: TMessageArray;
+  Loop: TToolLoopResult;
+  i: Integer;
+  Err: string;
+  Stubbed, StaleBody: Boolean;
+begin
+  Reg := TToolRegistry.Create;
+  try
+    RegisterFSTools(Reg, True);
+    { Seed FileA with >200 bytes so its read result is worth stubbing. }
+    Reg.RunTool('write_file',
+      '{"path":"' + FileA + '","content":"' + StringOfChar('A', 500) + '"}', Err);
+    P := TScripted.Create;
+    Cfg := BaseCfg(P);
+    Cfg.Registry := Reg;
+    P.AddToolRound([MkCall('read_file', '{"path":"' + FileA + '","plain":true}')]);
+    P.AddToolRound([MkCall('write_file', '{"path":"' + FileA + '","content":"rewritten"}')]);
+    P.AddStop('done');
+    SetLength(Msgs, 1);
+    Msgs[0] := MakeMessage(mrUser, 'read then rewrite the file');
+    AssertTrue(RunToolLoop(Cfg, Msgs, Loop), 'loop ran');
+
+    Stubbed := False;
+    StaleBody := False;
+    for i := 0 to High(Loop.FinalMessages) do
+    begin
+      if (Loop.FinalMessages[i].Role = mrTool) and
+         (Pos('superseded read_file', Loop.FinalMessages[i].Content) > 0) then
+        Stubbed := True;
+      if Pos(StringOfChar('A', 300), Loop.FinalMessages[i].Content) > 0 then
+        StaleBody := True;
+    end;
+    AssertTrue(Stubbed, 'the pre-write read_file result was stubbed as superseded');
+    AssertTrue(not StaleBody, 'the stale 500-byte read body is gone from history');
+    AssertTrue(FileExists(FileA), 'file still exists after rewrite (dispatch unaffected)');
+    WriteLn('  ok: read_file result superseded by a later write is stubbed');
+  finally
+    Reg.Free;
+  end;
+end;
+
 var
   Pol: TSandboxPolicy;
 begin
@@ -609,6 +657,7 @@ begin
   TestElideLargeToolArgsUnit;
   TestHistoryElidesBigWrite;
   TestSignedToolCallNotElided;
+  TestSupersededReadStubbed;
 
   if FileExists(FileA) then DeleteFile(FileA);
   RemoveDir(WsDir);

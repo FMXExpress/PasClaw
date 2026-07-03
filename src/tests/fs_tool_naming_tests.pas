@@ -314,7 +314,17 @@ begin
     R := Reg.RunTool('grep_files', '{"path":"' + JEsc(JoinPath(Dir, 'ctx.txt')) +
       '","pattern":"HIT"}', Err);
     AssertTrue(Pos('a2', R) = 0, 'without context_lines the output is matches-only (unchanged)');
-    WriteLn('  ok: grep_files context_lines shows the surroundings inline');
+    { A 0-match regex-shaped pattern (alternation) gets a next-move hint that
+      grep_files is literal-substring, not regex. A plain 0-match does not. }
+    R := Reg.RunTool('grep_files', '{"path":"' + JEsc(JoinPath(Dir, 'ctx.txt')) +
+      '","pattern":"HIT|MISS"}', Err);
+    AssertContains(R, 'no matches', 'alternation pattern finds nothing (literal match)');
+    AssertContains(R, 'LITERAL substring', 'regex-shaped 0-match hints that grep is literal');
+    R := Reg.RunTool('grep_files', '{"path":"' + JEsc(JoinPath(Dir, 'ctx.txt')) +
+      '","pattern":"NOPEPLAIN"}', Err);
+    AssertContains(R, 'no matches', 'plain miss reports no matches');
+    AssertTrue(Pos('LITERAL substring', R) = 0, 'a plain 0-match gets NO regex hint');
+    WriteLn('  ok: grep_files context_lines + regex-shaped 0-match hint');
 
     { --- 5. apply_patch: multi-file (update + add + delete) in one call. --- }
     AssertTrue(DefsHasName(Reg.ToProviderDefs, 'apply_patch'), 'apply_patch advertised');

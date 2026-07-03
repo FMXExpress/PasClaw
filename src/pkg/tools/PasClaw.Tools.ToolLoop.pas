@@ -509,6 +509,67 @@ begin
   end;
 end;
 
+function ArgPathField(const ArgsJSON: string): string;
+{ The `path` string field of a tool-call's JSON args, or '' when absent /
+  unparseable. Self-contained so the supersession helpers below don't depend
+  on LedgerArg (defined later in the unit). }
+var
+  Obj: TJsonObject;
+begin
+  Result := '';
+  Obj := TJsonObject.Parse(ArgsJSON);
+  if Obj = nil then Exit;
+  try Result := Obj.GetStr('path', ''); finally Obj.Free; end;
+end;
+
+function ToolCallNameForId(const Hist: TMessageArray; const CallId: string;
+                           out Path: string): string;
+{ Find the tool_call with Id=CallId across Hist's assistant turns; return its
+  tool name and (out) its `path` argument. '' name when not found. }
+var
+  i, k: Integer;
+begin
+  Result := ''; Path := '';
+  if CallId = '' then Exit;
+  for i := 0 to High(Hist) do
+    if Hist[i].Role = mrAssistant then
+      for k := 0 to High(Hist[i].ToolCalls) do
+        if Hist[i].ToolCalls[k].Id = CallId then
+        begin
+          Result := Hist[i].ToolCalls[k].Func.Name;
+          Path := ArgPathField(Hist[i].ToolCalls[k].Func.Arguments);
+          Exit;
+        end;
+end;
+
+procedure StubSupersededReads(var Hist: TMessageArray; const Path: string);
+{ A write / edit to Path makes any EARLIER read_file result of Path stale --
+  its bytes no longer reflect the file, yet they'd replay on every later
+  turn. Replace those result bodies with a one-line stub. Only touches
+  read_file / fs_read RESULT messages for exactly this path; message
+  structure and tool_call/result pairing are untouched (the model can
+  re-read for the current content, and per-turn read-dedup already covers a
+  repeat read). Idempotent: an already-stubbed result is skipped. }
+const
+  StubMark = '[superseded read_file';
+var
+  i: Integer;
+  Nm, RPath: string;
+begin
+  if Path = '' then Exit;
+  for i := 0 to High(Hist) do
+    if (Hist[i].Role = mrTool) and (Hist[i].ToolCallId <> '')
+       and (Length(Hist[i].Content) > 200)
+       and (Pos(StubMark, Hist[i].Content) = 0) then
+    begin
+      Nm := ToolCallNameForId(Hist, Hist[i].ToolCallId, RPath);
+      if ((Nm = 'read_file') or (Nm = 'fs_read')) and (RPath = Path) then
+        Hist[i].Content := Format('%s %s result -- the file was changed by a ' +
+          'later tool call, so this content is stale; re-read it if you need ' +
+          'the current version]', [StubMark, Path]);
+    end;
+end;
+
 { Run one tool call: PreflightToolCall → Registry.RunTool → fs_edit_hashline
   retry on format errors. Writes ResultText / Err into the dispatch slot.
   Pure with respect to shared state (uses per-call HTTP clients, reads
@@ -1763,6 +1824,21 @@ begin
         Hist[High(Hist)].ToolCalls[i].Func.Arguments :=
           ElideLargeToolArgs(Hist[High(Hist)].ToolCalls[i].Func.Arguments,
                              ToolArgReplayThreshold);
+
+    { Path-keyed supersession: when this turn writes/edits a file, stub any
+      EARLIER read_file result of the same path -- those bytes are now stale
+      and would otherwise replay on every later turn (a read result made
+      obsolete by a later write was observed persisting whole). Uses the
+      call's `path` arg (write_file / append_file / edit_file str-replace);
+      patch-carrying writers keep their reads (path lives in the patch body,
+      and the model may still want the pre-image). }
+    for i := 0 to High(Resp.ToolCalls) do
+      if (Resp.ToolCalls[i].Func.Name = 'write_file') or
+         (Resp.ToolCalls[i].Func.Name = 'append_file') or
+         (Resp.ToolCalls[i].Func.Name = 'edit_file') or
+         (Resp.ToolCalls[i].Func.Name = 'fs_write') then
+        StubSupersededReads(Hist,
+          LedgerArg(Resp.ToolCalls[i].Func.Arguments, 'path'));
 
     { Partition into batches: read-only calls fan out concurrently
       within a batch when Cfg.Parallel is on; mutating calls each
