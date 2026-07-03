@@ -382,18 +382,18 @@ begin
   end;
 end;
 
-function TruncatedOf(const Text: string): string;
-{ A turn that hit the output ceiling mid-generation: prose content, no
-  tool call, finish_reason=length (the shape Gemini/OpenAI return; the
-  loop also recognises Anthropic's raw 'max_tokens'). Models this as the
-  observed real-world failure -- a model narrating code as prose until it
-  runs out of tokens. }
+function TruncatedOf(const Text, Finish: string): string;
+{ A no-tool-call turn that failed recoverably: prose content, no tool call,
+  finish_reason = 'length' (output ceiling; Gemini/OpenAI) or
+  'MALFORMED_FUNCTION_CALL' (Gemini emitted an unparseable / oversized call
+  alongside narration). Both are the observed real-world Gemini 3.5 Flash
+  failure -- narrating code as prose until it runs out or malforms. }
 var O: TJsonObject;
 begin
   O := TJsonObject.Create;
   try
     O.PutStr('content', Text);
-    O.PutStr('finish_reason', 'length');
+    O.PutStr('finish_reason', Finish);
     Result := O.ToJSON;
   finally
     O.Free;
@@ -839,13 +839,15 @@ end;
 function H_TruncationRecovery(N: Integer; const EnvJSON: string): string;
 begin
   case N of
-    { Turn 1: narrate the game as prose and run out of output tokens --
-      no tool call, finish=length. On main the loop returns this as the
-      finished answer and no file lands; the fix must retry instead. }
+    { Turn 1: narrate the game as prose and emit a malformed function call --
+      finish=MALFORMED_FUNCTION_CALL, no usable tool call. This is the exact
+      live Gemini 3.5 Flash failure. On main the loop returns this narration
+      as the finished answer and no file lands; the fix must retry instead. }
     1: Result := TruncatedOf(
          'Let me build this. ### Player drawing:'#10 +
          'We draw the ship with rotation. ### Bullets:'#10 +
-         'procedure DrawBullet(X, Y: Integer);'#10 + 'begin'#10 + '  GotoXY(X, Y);');
+         'procedure DrawBullet(X, Y: Integer);'#10 + 'begin'#10 + '  GotoXY(X, Y);',
+         'MALFORMED_FUNCTION_CALL');
     { Turn 2: after the corrective nudge, actually call write_file. }
     2: Result := RoundOf([OneCall('write_file',
          ArgsPathContent('game.pas',
@@ -864,23 +866,23 @@ var
   Answer, SP1, SP2: string;
 begin
   WriteLn;
-  WriteLn('== scenario: truncation-recovery (finish=length + no tool call must not end the turn) ==');
+  WriteLn('== scenario: recovery (finish=MALFORMED_FUNCTION_CALL + no tool call must not end the turn) ==');
   if FileExists(GHomeDir + '/workspace/game.pas') then
     DeleteFile(GHomeDir + '/workspace/game.pas');
   ResetScenario(H_TruncationRecovery);
   Answer := Chat('[' + MsgObjJSON('user',
     'build a small terminal game named game.pas') + ']', 'bench-trunc');
 
-  { Did not terminate on the truncated turn: it retried and delivered. }
+  { Did not terminate on the malformed turn: it retried and delivered. }
   Check(EnvCount = 3, Format('loop recovered across 3 provider calls (got %d)', [EnvCount]));
-  { Turn 1 is pristine -- no nudge before the truncation happens. }
+  { Turn 1 is pristine -- no nudge before the failure happens. }
   SP1 := EnvSystemPrompt(EnvAt(0));
-  Check(not Has(SP1, 'cut off at the output token limit'),
-    'iteration 1 system prompt carries no truncation nudge yet');
+  Check(not Has(SP1, 'no usable tool call'),
+    'iteration 1 system prompt carries no recovery nudge yet');
   { Turn 2 (the retry) carries the corrective nudge steering toward tools. }
   SP2 := EnvSystemPrompt(EnvAt(1));
-  Check(Has(SP2, 'cut off at the output token limit'),
-    'retry system prompt carries the truncation nudge');
+  Check(Has(SP2, 'no usable tool call'),
+    'retry system prompt carries the recovery nudge');
   Check(Has(SP2, 'write_file') and Has(SP2, 'append_file'),
     'nudge names the tools to use instead of prose');
   { The truncated prose blob is dropped, not replayed into the retry. }
