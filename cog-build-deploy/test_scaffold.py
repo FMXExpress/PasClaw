@@ -82,6 +82,32 @@ def main():
         _fail("no index.html anywhere -> must return None")
     print("  ok: no static site -> no scaffold")
 
+    # 6. Built output preferred over source public/ (review P2). A project with
+    #    both public/index.html (source) and build/index.html (compiled) must
+    #    serve the built artifact.
+    h = tempfile.mkdtemp()
+    _write(h, f"{ws}/public/index.html")
+    _write(h, f"{ws}/build/index.html")
+    pred._scaffold_static_worker(h)
+    body = open(os.path.join(h, ws, "wrangler.toml")).read()
+    if 'directory = "./build"' not in body:
+        _fail("with both public/ and build/, must serve ./build (compiled), not ./public")
+    print("  ok: built output (build/) preferred over source public/")
+
+    # 7. Symlinked asset dir is refused (review P1) -- a `public -> .` link
+    #    must NOT let the scaffold serve the workspace root (sessions/).
+    h = tempfile.mkdtemp()
+    os.makedirs(os.path.join(h, ws), exist_ok=True)
+    _write(h, f"{ws}/sessions/abc.json", '{"secret":"x"}')
+    _write(h, f"{ws}/index.html")  # root index (its dir is the root, itself unsafe)
+    os.symlink(os.path.join(h, ws), os.path.join(h, ws, "public"))  # public -> workspace root
+    proj = pred._scaffold_static_worker(h)
+    if proj is not None:
+        _fail("a symlinked asset dir (public -> workspace root) must be refused")
+    if os.path.exists(os.path.join(h, ws, "wrangler.toml")):
+        _fail("no wrangler.toml may be written for a symlinked asset dir")
+    print("  ok: symlinked asset dir refused (no workspace-root exposure)")
+
     print("test_scaffold: OK")
 
 

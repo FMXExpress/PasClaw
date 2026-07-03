@@ -119,8 +119,13 @@ CLOUDFLARE_DEPLOY_DIRECTIVE = (
 # scaffold fallback ONLY creates a wrangler.toml for one of these dedicated
 # subdirs -- never the workspace root, which also holds sessions/ + memory/
 # (the conversation history); serving that as static assets would publish it.
-_WEB_OUTPUT_DIRS = ("public", "dist", "build", "out", "site", "www", "_site",
-                    "public_html")
+#
+# Order matters: BUILT-output dirs come first (dist / build / out / _site) so a
+# project that has both a source `public/` and a compiled `build/` deploys the
+# compiled artifact, not the uncompiled template. Plain served dirs
+# (public / site / www / public_html) follow for no-build static sites.
+_WEB_OUTPUT_DIRS = ("dist", "build", "out", "_site",
+                    "public", "site", "www", "public_html")
 
 
 def _secret_str(s: Optional[Secret]) -> str:
@@ -963,9 +968,24 @@ class Predictor(BasePredictor):
         ws_root = os.path.join(home_dir, "workspace")
         if not os.path.isdir(ws_root):
             return None
+        ws_real = os.path.realpath(ws_root)
         for name in _WEB_OUTPUT_DIRS:
             cand = os.path.join(ws_root, name)
-            if not os.path.isfile(os.path.join(cand, "index.html")):
+            # Never trust a SYMLINKED asset dir: `public -> .` (or -> anywhere
+            # outside a real dedicated subdir) would let `[assets]` serve the
+            # workspace root and leak sessions/ + memory/. Reject the link
+            # itself, and require the resolved target to be a real directory
+            # STRICTLY inside the workspace (deeper than the root).
+            if os.path.islink(cand):
+                continue
+            cand_real = os.path.realpath(cand)
+            if not os.path.isdir(cand_real):
+                continue
+            if cand_real == ws_real or \
+               not (cand_real + os.sep).startswith(ws_real + os.sep):
+                continue
+            index_html = os.path.join(cand_real, "index.html")
+            if os.path.islink(index_html) or not os.path.isfile(index_html):
                 continue
             toml_path = os.path.join(ws_root, "wrangler.toml")
             if not os.path.exists(toml_path):
