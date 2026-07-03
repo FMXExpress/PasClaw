@@ -256,6 +256,17 @@ function LoopResultText(const Loop: TToolLoopResult): string;
 function FormatMaxIterNotice(const Loop: TToolLoopResult; MaxIter: Integer;
                             const HowToRaise: string; Resumable: Boolean): string;
 
+{ Shrink a tool-call's JSON arguments for REPLAY in history: any top-level
+  string value longer than Threshold bytes is replaced with a short "<elided
+  N bytes ...>" stub, keeping small fields (path, flags) intact. Used to stop
+  a model's own large write_file/apply_patch content from being re-shipped
+  verbatim on every subsequent turn (measured: a 24 KB index.html write
+  ballooned each later request by ~27 KB). Returns the input unchanged when
+  it is already small, unparseable, or has no oversized string field. The
+  live tool DISPATCH always uses the original arguments -- only the copy kept
+  in message history is shrunk. Exposed for tests. }
+function ElideLargeToolArgs(const ArgsJSON: string; Threshold: Integer): string;
+
 type
   (* Late-bound hook so PasClaw.Tools.ToolLoop doesn't have to
      `uses` PasClaw.Agent.SubagentBg (which itself calls
@@ -449,6 +460,53 @@ function MakeToolResult(const ToolCallId, Content: string): TMessage;
 begin
   Result := MakeMessage(mrTool, Content);
   Result.ToolCallId := ToolCallId;
+end;
+
+function ElideLargeToolArgs(const ArgsJSON: string; Threshold: Integer): string;
+var
+  Obj: TJsonObject;
+  Keys: TStringList;
+  i: Integer;
+  K, V: string;
+  Changed: Boolean;
+begin
+  Result := ArgsJSON;
+  { Cheap-out: if the whole arg blob is under the threshold, no single
+    string field can exceed it either. }
+  if Length(ArgsJSON) <= Threshold then Exit;
+  Obj := TJsonObject.Parse(ArgsJSON);
+  if Obj = nil then Exit;   { not an object / malformed -- leave verbatim }
+  try
+    Changed := False;
+    Keys := Obj.Keys;
+    try
+      for i := 0 to Keys.Count - 1 do
+      begin
+        K := Keys[i];
+        { NEVER elide fields a post-dispatch consumer parses back out of the
+          replayed/persisted history: `patch` (Session.Store working-state +
+          the web UI's apply_patch file list read the envelope from it) and
+          `command` (working-state's LastShell). They're normally small; the
+          bloat we're targeting is the `content` blob of a big write_file. }
+        if SameText(K, 'patch') or SameText(K, 'command') then Continue;
+        { GetStr returns '' for non-string values (numbers, bools, nested
+          objects), so only large STRING fields -- content / new_text / code
+          -- are ever elided; path and flags survive. }
+        V := Obj.GetStr(K, '');
+        if Length(V) > Threshold then
+        begin
+          Obj.PutStr(K, Format('<elided: %d bytes; call read_file to get the current content>',
+                               [Length(V)]));
+          Changed := True;
+        end;
+      end;
+    finally
+      Keys.Free;
+    end;
+    if Changed then Result := Obj.ToJSON;
+  finally
+    Obj.Free;
+  end;
 end;
 
 { Run one tool call: PreflightToolCall → Registry.RunTool → fs_edit_hashline
@@ -1209,6 +1267,11 @@ const
     'large file across several turns so no single call is too big), or ' +
     'edit_file / apply_patch (targeted changes). Emit ONE tool call now and ' +
     'keep any prose to one short line.';
+  { A tool-call argument string bigger than this is elided from the history
+    kept for REPLAY (the live dispatch always uses the full args). Keeps a
+    model's own 24 KB write_file/apply_patch content from being re-shipped
+    verbatim on every later turn -- it can read_file if it needs it back. }
+  ToolArgReplayThreshold = 2048;
 var
   Iter, i, bi, j, fbi, sti: Integer;
   Tools: TToolDefinitionArray;
@@ -1682,6 +1745,24 @@ begin
       Dispatches[i].Err        := '';
       Dispatches[i].Cancelled  := False;
     end;
+
+    { Shrink oversized argument blobs in the HISTORY copy of the assistant
+      turn so a model's own large write content isn't replayed verbatim on
+      every subsequent provider call. Dispatches[] already holds the full
+      args (copied above), so the live tool run is unaffected -- only what
+      gets re-sent (and persisted into Loop.FinalMessages) is trimmed.
+
+      SKIP calls that carry a ProviderSignature: Gemini 3 signs the
+      functionCall (thoughtSignature) and the Gemini builder echoes that
+      signature back on replay. Mutating the arguments would send a
+      different payload under the old signature, which Gemini rejects as an
+      invalidly-signed turn -- and dropping the signature 400s too (Gemini
+      requires it). Signed calls keep their exact args + signature. }
+    for i := 0 to High(Hist[High(Hist)].ToolCalls) do
+      if Hist[High(Hist)].ToolCalls[i].ProviderSignature = '' then
+        Hist[High(Hist)].ToolCalls[i].Func.Arguments :=
+          ElideLargeToolArgs(Hist[High(Hist)].ToolCalls[i].Func.Arguments,
+                             ToolArgReplayThreshold);
 
     { Partition into batches: read-only calls fan out concurrently
       within a batch when Cfg.Parallel is on; mutating calls each
