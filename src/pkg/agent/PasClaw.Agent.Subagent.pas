@@ -319,7 +319,9 @@ var
 begin
   Result := 'Fan out to a focused specialist subagent. Pass the agent name '
           + 'and the prompt; the subagent runs its own short tool loop and '
-          + 'returns its reply as the tool_result.';
+          + 'returns its reply as the tool_result. Optionally pass "model" to '
+          + 'run the subagent on a specific model from the same provider '
+          + '(e.g. a faster/cheaper sibling for a simple sub-task).';
   if Length(FSpecs) > 0 then
   begin
     Result := Result + ' Available subagents:';
@@ -336,7 +338,7 @@ end;
 
 function TSpawnTool.BuildSchema: string;
 var
-  Obj, Props, Agent, Prompt: TJsonObject;
+  Obj, Props, Agent, Prompt, ModelP: TJsonObject;
   Enum: TJsonArray;
   Req: TJsonArray;
   i: Integer;
@@ -368,6 +370,18 @@ begin
         Prompt.PutStr('description', 'The prompt to hand the subagent.');
       finally
         Props.PutObject('prompt', Prompt);
+      end;
+
+      ModelP := TJsonObject.Create;
+      try
+        ModelP.PutStr('type', 'string');
+        ModelP.PutStr('description',
+          'Optional: run this subagent on a specific model served by the ' +
+          'active provider (e.g. a faster/cheaper sibling for a simple ' +
+          'sub-task). Omit to use the subagent''s configured model, or the ' +
+          'parent''s.');
+      finally
+        Props.PutObject('model', ModelP);
       end;
     finally
       Obj.PutObject('properties', Props);
@@ -408,7 +422,7 @@ var
   SysPrompt, DeferredSec: string;
   ChildHist: TMessageArray;
   Loop: TToolLoopResult;
-  Model: string;
+  Model, ReqModel: string;
   MaxIter: Integer;
 begin
   Result := '';
@@ -422,6 +436,7 @@ begin
   try
     AgentName := Args.GetStr('agent', '');
     Prompt    := Args.GetStr('prompt', '');
+    ReqModel  := Trim(Args.GetStr('model', ''));
   finally
     Args.Free;
   end;
@@ -442,7 +457,13 @@ begin
     Exit;
   end;
 
-  Model := Spec.Model;
+  { Model precedence: an explicit per-call `model` arg wins, so the spawning
+    model can pick a cheaper/faster sibling from the SAME active provider
+    (e.g. a Haiku researcher spawned from an Opus parent); else the subagent
+    spec's configured Model; else the parent's model. The string is handed to
+    the parent's provider verbatim, so it must be one that provider serves. }
+  Model := ReqModel;
+  if Model = '' then Model := Spec.Model;
   if Model = '' then Model := FCtx.DefaultModel;
   MaxIter := Spec.MaxIter;
   if MaxIter <= 0 then MaxIter := DefaultSubagentMaxIter;
