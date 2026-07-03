@@ -157,7 +157,13 @@ begin
     BackendNote := '';
   T.Name        := 'shell_exec';
   T.Description := 'Run a shell command via /bin/sh -c (or cmd.exe on Windows). ' +
-                   'Captures stdout+stderr, caps output at 1 MiB.' + BackendNote;
+                   'Captures stdout+stderr and reports "exit=<code>" on the first ' +
+                   'line. Large output is auto-truncated to a preview with a ' +
+                   'tool_output_get handle -- do NOT pipe to head/tail just to ' +
+                   'limit size. Note: with a pipe, exit= is the LAST stage''s code ' +
+                   '(both /bin/sh and cmd.exe), so `fpc x | tail` reports tail''s 0 ' +
+                   'even when fpc failed -- run a compiler/test WITHOUT a pipe to ' +
+                   'see its real exit status.' + BackendNote;
   T.Schema      := '{"type":"object","properties":{"command":{"type":"string","description":"Shell command to execute."}},"required":["command"]}';
   T.Handler     := Tool_Shell;
   T.IsCore      := True;

@@ -275,9 +275,27 @@ begin
     ConfigureSandbox(Pol, Dir);
     AssertTrue(not ShellAllowed('sudo ls', R), 'denylist still refuses');
     AssertContains(R, 'dedicated tools', 'denial suggests the tool alternatives');
+    { A delete/move token points at apply_patch (the only in-box way to
+      remove a file) -- the old message named tools that can't delete. }
+    AssertTrue(not ShellAllowed('rm -rf build', R), 'rm still refused');
+    AssertContains(R, 'apply_patch', 'rm remediation names apply_patch for deletion');
+    AssertContains(R, 'Delete File', 'rm remediation shows the Delete File section');
+    { Command substitution is labelled correctly (not conflated with the
+      dollar-brace pattern). }
+    AssertTrue(not ShellAllowed('echo $(whoami)', R), 'command substitution refused');
+    AssertContains(R, 'command substitution', 'the $( refusal names command substitution');
+    { Parameter expansion stays refused, with an accurate label: the shell
+      expands it before the scanner runs, so it can reassemble a blocked
+      token. Both a plain use and the reassembly-bypass forms are caught. }
+    AssertTrue(not ShellAllowed('echo ${PIPESTATUS[0]}', R), 'parameter expansion refused');
+    AssertContains(R, 'parameter expansion', 'the ${ refusal names parameter expansion');
+    AssertTrue(not ShellAllowed('r${X}m -rf build', R),
+      'expansion-reassembly of a forbidden token (rm) is refused');
+    AssertTrue(not ShellAllowed('curl x | b${X}ash', R),
+      'expansion-reassembly of a pipe-to-shell is refused');
     Pol.ShellDenyEnabled := False;
     ConfigureSandbox(Pol, Dir);
-    WriteLn('  ok: errors carry the next move (nearest file / similar tool / shell alternative)');
+    WriteLn('  ok: errors carry the next move (nearest file / similar tool / shell alternative / apply_patch delete)');
 
     { --- 4d. F2: grep_files context_lines (grep -C). Matches keep the
       LINENO: anchor shape; context lines are LINENO- so the two can't be
