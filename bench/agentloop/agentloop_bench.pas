@@ -897,6 +897,61 @@ begin
   Metric('truncrecovery.provider_calls', EnvCount);
 end;
 
+function H_HistElide(N: Integer; const EnvJSON: string): string;
+begin
+  case N of
+    { Turn 1: write a big (40 KB) file. Without elision this whole blob is
+      replayed in turn 2's history and every turn after. }
+    1: Result := RoundOf([OneCall('write_file',
+         ArgsPathContent('big.html', StringOfChar('X', 40000)))]);
+    { Turn 2: a trivial call so a second request is built (which replays the
+      turn-1 write in history). }
+    2: Result := RoundOf([OneCall('find_files', '{"pattern":"big.html"}')]);
+  else
+    Result := StopOf('done: wrote big.html.');
+  end;
+end;
+
+procedure ScenarioHistoryElision;
+{ A model's own large write_file content must NOT be re-shipped verbatim on
+  every later turn: the assistant tool-call args are elided to a stub in the
+  replayed history, while the FULL content still lands on disk. }
+var
+  Answer: string;
+  S: TStringList;
+begin
+  WriteLn;
+  WriteLn('== scenario: history-elision (large write args not replayed verbatim) ==');
+  if FileExists(GHomeDir + '/workspace/big.html') then
+    DeleteFile(GHomeDir + '/workspace/big.html');
+  ResetScenario(H_HistElide);
+  Answer := Chat('[' + MsgObjJSON('user',
+    'write a big html file named big.html') + ']', 'bench-elide');
+
+  Check(EnvCount = 3, Format('loop finished in 3 provider calls (got %d)', [EnvCount]));
+  { Turn 2's request (EnvAt(1)) replays turn 1's write in history. The 40 KB
+    of filler must be gone, replaced by the stub. }
+  Check(not Has(EnvAt(1), StringOfChar('X', 5000)),
+    'the 40 KB write content is NOT replayed verbatim in turn 2');
+  Check(Has(EnvAt(1), 'elided'),
+    'the replayed write arg is stubbed with an <elided ...> marker');
+  Check(Length(EnvAt(1)) < 20000,
+    Format('turn 2 request stays small despite the 40 KB write (%d bytes)',
+           [Length(EnvAt(1))]));
+  { The real file still got the full content -- dispatch used the real args. }
+  Check(FileExists(GHomeDir + '/workspace/big.html'), 'big.html exists on disk');
+  S := TStringList.Create;
+  try
+    S.LoadFromFile(GHomeDir + '/workspace/big.html');
+    Check(Length(S.Text) >= 39000,
+      Format('the FULL 40 KB landed on disk (%d bytes) -- dispatch unaffected',
+             [Length(S.Text)]));
+  finally
+    S.Free;
+  end;
+  Metric('histelide.turn2_request_bytes', Length(EnvAt(1)));
+end;
+
 { ---- gateway lifecycle ---------------------------------------------------- }
 var
   GW: TProcess;
@@ -1012,6 +1067,7 @@ begin
     ScenarioRealTask;
     ScenarioErrorGuidance;
     ScenarioTruncationRecovery;
+    ScenarioHistoryElision;
 
     WriteLn;
     WriteLn('== metrics ==');

@@ -475,6 +475,74 @@ begin
   WriteLn('  ok: no-tools truncated answer returned as-is, no nudge, no retry');
 end;
 
+procedure TestElideLargeToolArgsUnit;
+{ Direct: a big string field is stubbed, small fields survive, and small
+  args are returned verbatim. }
+var
+  Big, Small, Outp: string;
+begin
+  Big := '{"path":"index.html","content":"' + StringOfChar('x', 5000) + '"}';
+  Outp := ElideLargeToolArgs(Big, 2048);
+  AssertHas(Outp, 'index.html', 'path survives elision');
+  AssertHas(Outp, 'elided', 'oversized content is elided');
+  AssertTrue(Pos(StringOfChar('x', 3000), Outp) = 0, 'the 5000-char blob is gone');
+  AssertTrue(Length(Outp) < 300, 'elided args are compact (got ' + IntToStr(Length(Outp)) + ')');
+
+  Small := '{"path":"a.txt","content":"hello","plain":true}';
+  AssertTrue(ElideLargeToolArgs(Small, 2048) = Small, 'small args returned verbatim');
+
+  { A large `patch` is NEVER elided -- Session.Store working-state and the
+    web UI parse the envelope's file paths back out of it. }
+  Big := '{"patch":"*** Begin Patch\n' + StringOfChar('p', 5000) + '\n*** End Patch"}';
+  AssertTrue(ElideLargeToolArgs(Big, 2048) = Big, 'a large patch field is preserved');
+  WriteLn('  ok: ElideLargeToolArgs stubs big content, keeps small + structural (patch) fields');
+end;
+
+procedure TestHistoryElidesBigWrite;
+{ End-to-end: a big write_file lands FULL content on disk (dispatch uses
+  the real args) but the assistant turn kept in Loop.FinalMessages carries
+  the elided stub, so it won't be re-shipped verbatim next turn. }
+var
+  P: TScripted;
+  Reg: TToolRegistry;
+  Cfg: TToolLoopConfig;
+  Msgs: TMessageArray;
+  Loop: TToolLoopResult;
+  i, k: Integer;
+  Elided: Boolean;
+  Disk, Err: string;
+begin
+  if FileExists(FileA) then DeleteFile(FileA);
+  Reg := TToolRegistry.Create;
+  try
+    RegisterFSTools(Reg, True);
+    P := TScripted.Create;
+    Cfg := BaseCfg(P);
+    Cfg.Registry := Reg;
+    P.AddToolRound([MkCall('write_file',
+      '{"path":"' + FileA + '","content":"' + StringOfChar('Z', 5000) + '"}')]);
+    P.AddStop('done');
+    SetLength(Msgs, 1);
+    Msgs[0] := MakeMessage(mrUser, 'write a big file');
+    AssertTrue(RunToolLoop(Cfg, Msgs, Loop), 'loop ran');
+
+    Elided := False;
+    for i := 0 to High(Loop.FinalMessages) do
+      for k := 0 to High(Loop.FinalMessages[i].ToolCalls) do
+        if Pos('elided', Loop.FinalMessages[i].ToolCalls[k].Func.Arguments) > 0 then
+          Elided := True;
+    AssertTrue(Elided, 'big write_file args are elided in the persisted history');
+
+    Disk := Reg.RunTool('read_file', '{"path":"' + FileA + '","plain":true}', Err);
+    AssertTrue(Length(Disk) >= 5000,
+      'file on disk got the FULL content -- dispatch used the real args (got ' +
+      IntToStr(Length(Disk)) + ')');
+    WriteLn('  ok: big write elided in history, full content still written to disk');
+  finally
+    Reg.Free;
+  end;
+end;
+
 var
   Pol: TSandboxPolicy;
 begin
@@ -493,6 +561,8 @@ begin
   TestDisableSwitch;
   TestTruncationRecoveryWithTools;
   TestTruncationNoToolsReturnsContent;
+  TestElideLargeToolArgsUnit;
+  TestHistoryElidesBigWrite;
 
   if FileExists(FileA) then DeleteFile(FileA);
   RemoveDir(WsDir);
