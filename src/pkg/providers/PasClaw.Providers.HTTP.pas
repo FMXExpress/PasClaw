@@ -146,6 +146,16 @@ function MakeHeader(const Name, Value: string): THeaderPair;
   var. Safe to call multiple times -- probing happens once and caches. }
 function EnsureOpenSSL(out ErrMsg: string): Boolean;
 
+{ Lowercased host of a URL (scheme, userinfo, port and path stripped;
+  bracketed IPv6 literals unwrapped). Exposed for testing the proxy path. }
+function ExtractURLHost(const URL: string): string;
+
+{ True when Host must bypass the proxy: loopback always, plus any match
+  against the NoProxy list (comma-separated; '*' = all, exact or domain-
+  suffix match, optional leading '.'). NoProxy is passed in (rather than
+  read from the environment) so the matcher is pure and testable. }
+function HostBypassesProxy(const Host, NoProxy: string): Boolean;
+
 implementation
 
 uses
@@ -166,6 +176,81 @@ end;
 function MakeHTTPS(URL: string): Boolean;
 begin
   Result := (Length(URL) >= 8) and SameText(Copy(URL, 1, 8), 'https://');
+end;
+
+(* The proxy-decision helpers live in the common section (not the Indy backend
+   branch) so a PASCLAW_NETHTTP Delphi build -- which compiles the other
+   backend branch -- still has their implementations for the interface
+   declarations. They are pure string logic with no backend dependency. *)
+
+function ExtractURLHost(const URL: string): string;
+{ Lowercased host of a URL, stripped of scheme, userinfo, port and path.
+  Handles bracketed IPv6 literals ([::1]:8000 -> ::1). }
+var
+  S: string;
+  P: Integer;
+begin
+  S := URL;
+  P := Pos('://', S);
+  if P > 0 then S := Copy(S, P + 3, MaxInt);
+  { Reduce to the authority FIRST (strip the path), then the userinfo. Doing
+    it in this order matters: a path can legitimately contain '@'
+    (e.g. https://api.example.com/users/@me) -- stripping userinfo before the
+    path would otherwise mistake the path '@' for the authority delimiter and
+    return the wrong host, breaking loopback / NO_PROXY matching. }
+  P := Pos('/', S);                { strip path -> authority only }
+  if P > 0 then S := Copy(S, 1, P - 1);
+  P := Pos('@', S);               { strip userinfo (now safely within authority) }
+  if P > 0 then S := Copy(S, P + 1, MaxInt);
+  if (S <> '') and (S[1] = '[') then
+  begin
+    P := Pos(']', S);             { IPv6 literal -- take what's inside brackets }
+    if P > 0 then S := Copy(S, 2, P - 2);
+  end
+  else
+  begin
+    P := Pos(':', S);             { strip :port }
+    if P > 0 then S := Copy(S, 1, P - 1);
+  end;
+  Result := LowerCase(Trim(S));
+end;
+
+function HostBypassesProxy(const Host, NoProxy: string): Boolean;
+{ Loopback always bypasses so local providers (ollama / lmstudio / vllm) and
+  127.0.0.1 callbacks never route through an external proxy. Then honour the
+  NoProxy list, matching the semantics curl / wget / Go use: '*' bypasses
+  everything; an entry matches Host exactly or as a domain suffix (a leading
+  '.' is optional, so both "example.com" and ".example.com" match
+  "api.example.com"). }
+var
+  Raw, Entry: string;
+  Start, i, L: Integer;
+begin
+  Result := True;
+  if (Host = 'localhost') or (Host = '127.0.0.1') or (Host = '::1')
+     or (Copy(Host, 1, 4) = '127.') then Exit;
+
+  if NoProxy <> '' then
+  begin
+    Raw := LowerCase(NoProxy);
+    Start := 1;
+    L := Length(Raw);
+    for i := 1 to L + 1 do
+      if (i > L) or (Raw[i] = ',') then
+      begin
+        Entry := Trim(Copy(Raw, Start, i - Start));
+        Start := i + 1;
+        if Entry = '' then Continue;
+        if Entry = '*' then Exit;
+        while (Entry <> '') and (Entry[1] = '.') do Delete(Entry, 1, 1);
+        if Entry = '' then Continue;
+        if (Host = Entry) or
+           ((Length(Host) > Length(Entry)) and
+            (Copy(Host, Length(Host) - Length(Entry), Length(Entry) + 1)
+             = '.' + Entry)) then Exit;
+      end;
+  end;
+  Result := False;
 end;
 
 {$IF Defined(PASCLAW_NETHTTP) and not Defined(FPC)}
@@ -706,29 +791,33 @@ begin
   if Result then ErrMsg := '' else ErrMsg := OpenSSLHelpMessage;
 end;
 
-{$IFDEF PASCLAW_C2W}
-procedure ApplyBrowserProxy(Http: TIdHTTP; HTTPS: Boolean);
-(* container2wasm in-browser deployment only (compiled with -dPASCLAW_C2W).
+function EnvNoProxy: string;
+begin
+  Result := GetEnvironmentVariable('NO_PROXY');
+  if Result = '' then Result := GetEnvironmentVariable('no_proxy');
+end;
 
-   When PasClaw runs inside a c2w guest with the serverless `c2w-net-proxy`
-   network stack, that proxy injects HTTP_PROXY / HTTPS_PROXY (e.g.
-   http://192.168.127.253:80) into the environment, TLS-terminates HTTPS with
-   its own CA, and re-issues each request through the browser's Fetch API.
-   Indy's TIdHTTP does NOT read those env vars on its own, so without this it
-   would try a direct socket -- which has no egress in the browser. Route the
-   client through the proxy here.
+procedure ApplyEnvProxy(Http: TIdHTTP; const URL: string);
+(* Route the client through an HTTP(S)_PROXY from the environment, the way
+   curl / wget / git / npm / wrangler all do. Indy's TIdHTTP does NOT read
+   these env vars on its own -- without this it opens a direct socket, which
+   fails wherever egress is only available through a proxy (corporate
+   networks, the c2w in-browser guest, sandboxed CI). For an https:// target
+   Indy issues a CONNECT tunnel through the proxy, so the TLS session is still
+   end-to-end to the provider.
 
-   No CA wiring is needed: Indy does not verify the server certificate by
-   default, so the proxy's MITM cert is accepted. (If a future change turns on
-   peer verification, load /.wasmenv/proxy.crt -- c2w sets SSL_CERT_FILE.)
+   HTTPS_PROXY governs https targets, HTTP_PROXY governs http; NO_PROXY (and
+   loopback, always) opts a host out -- see HostBypassesProxy. The proxy URL
+   itself is parsed down to host[:port] (default port 80).
 
-   Off by default: this whole procedure is excluded from normal builds, which
-   keep going direct to the provider. *)
+   No CA wiring is needed for a TLS-terminating (MITM) proxy: Indy does not
+   verify the server certificate by default, so the proxy's re-signed cert is
+   accepted. This generalises the former c2w-only ApplyBrowserProxy. *)
 var
   Raw, Host: string;
   P, Port: Integer;
 begin
-  if HTTPS then
+  if MakeHTTPS(URL) then
   begin
     Raw := GetEnvironmentVariable('HTTPS_PROXY');
     if Raw = '' then Raw := GetEnvironmentVariable('https_proxy');
@@ -739,9 +828,10 @@ begin
     if Raw = '' then Raw := GetEnvironmentVariable('http_proxy');
   end;
   if Raw = '' then Exit;
+  if HostBypassesProxy(ExtractURLHost(URL), EnvNoProxy) then Exit;
 
   { Strip scheme://, any userinfo@, and trailing /path so only host[:port]
-    remains. The proxy URL c2w injects is a plain http://host:port. }
+    remains (proxy URLs are typically a plain http://host:port). }
   P := Pos('://', Raw);
   if P > 0 then Raw := Copy(Raw, P + 3, MaxInt);
   P := Pos('/', Raw);
@@ -765,9 +855,8 @@ begin
   Http.ProxyParams.ProxyServer := Host;
   Http.ProxyParams.ProxyPort   := Port;
 end;
-{$ENDIF}
 
-function NewClient(TimeoutSeconds: Integer; HTTPS: Boolean;
+function NewClient(TimeoutSeconds: Integer; const URL: string;
                    out ErrMsg: string): TIdHTTP;
 var
   SSL: TIdSSLIOHandlerSocketOpenSSL;
@@ -778,10 +867,10 @@ begin
   Result.ReadTimeout    := TimeoutSeconds * 1000;
   Result.HandleRedirects := True;
   Result.Request.UserAgent := 'PasClaw/0.1 (+https://github.com/FMXExpress/PasClaw)';
-  {$IFDEF PASCLAW_C2W}
-  ApplyBrowserProxy(Result, HTTPS);
-  {$ENDIF}
-  if HTTPS then
+  { Honour HTTP(S)_PROXY / NO_PROXY from the environment (all builds, not just
+    c2w) so pasclaw reaches providers through a proxy like every other CLI. }
+  ApplyEnvProxy(Result, URL);
+  if MakeHTTPS(URL) then
   begin
     if not EnsureOpenSSL(ErrMsg) then Exit;
     SSL := TIdSSLIOHandlerSocketOpenSSL.Create(Result);
@@ -799,7 +888,7 @@ var
   Req: TStringStream;
   SSLErr: string;
 begin
-  Http := NewClient(TimeoutSeconds, MakeHTTPS(URL), SSLErr);
+  Http := NewClient(TimeoutSeconds, URL, SSLErr);
   if SSLErr <> '' then
   begin
     Result.StatusCode := -1;
@@ -830,7 +919,7 @@ var
   Req, Resp: TStringStream;
   SSLErr: string;
 begin
-  Http := NewClient(TimeoutSeconds, MakeHTTPS(URL), SSLErr);
+  Http := NewClient(TimeoutSeconds, URL, SSLErr);
   if SSLErr <> '' then
   begin
     Result.StatusCode := -1;
@@ -883,7 +972,7 @@ var
   Http: TIdHTTP;
   SSLErr: string;
 begin
-  Http := NewClient(TimeoutSeconds, MakeHTTPS(URL), SSLErr);
+  Http := NewClient(TimeoutSeconds, URL, SSLErr);
   if SSLErr <> '' then
   begin
     Result.StatusCode := -1;
@@ -949,7 +1038,7 @@ var
   SSLErr: string;
   Adapter: TRedirectAdapter;
 begin
-  Http := NewClient(TimeoutSeconds, MakeHTTPS(URL), SSLErr);
+  Http := NewClient(TimeoutSeconds, URL, SSLErr);
   if SSLErr <> '' then
   begin
     Result.StatusCode  := -1;
@@ -987,7 +1076,7 @@ var
   Req: TStringStream;
   SSLErr: string;
 begin
-  Http := NewClient(TimeoutSeconds, MakeHTTPS(URL), SSLErr);
+  Http := NewClient(TimeoutSeconds, URL, SSLErr);
   if SSLErr <> '' then
   begin
     Result.StatusCode  := -1;
@@ -1027,7 +1116,7 @@ begin
   Result := False;
   StatusCode := 0;
   ErrMsg := '';
-  Http := NewClient(TimeoutSeconds, MakeHTTPS(URL), SSLErr);
+  Http := NewClient(TimeoutSeconds, URL, SSLErr);
   if SSLErr <> '' then
   begin
     StatusCode := -1;
@@ -1076,7 +1165,7 @@ begin
   Result.Body        := '';
   Result.ContentType := '';
   Result.ErrorMsg    := '';
-  Http := NewClient(TimeoutSeconds, MakeHTTPS(URL), SSLErr);
+  Http := NewClient(TimeoutSeconds, URL, SSLErr);
   if SSLErr <> '' then
   begin
     Result.StatusCode := -1;
@@ -1123,7 +1212,7 @@ begin
   Result.Body        := '';
   Result.ContentType := '';
   Result.ErrorMsg    := '';
-  Http := NewClient(TimeoutSeconds, MakeHTTPS(URL), SSLErr);
+  Http := NewClient(TimeoutSeconds, URL, SSLErr);
   if SSLErr <> '' then
   begin
     Result.StatusCode := -1;
