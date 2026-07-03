@@ -636,6 +636,53 @@ begin
   end;
 end;
 
+procedure TestSupersededReadKeptOnDeniedWrite;
+{ P2 on #426: a write that does NOT land (denied in plan mode) must leave the
+  prior read_file result intact -- the file is unchanged and the read is
+  still the model's only valid view of it. }
+var
+  P: TScripted;
+  Reg: TToolRegistry;
+  Cfg: TToolLoopConfig;
+  Msgs: TMessageArray;
+  Loop: TToolLoopResult;
+  i: Integer;
+  Err: string;
+  Stubbed, BodyKept: Boolean;
+begin
+  Reg := TToolRegistry.Create;
+  try
+    RegisterFSTools(Reg, True);
+    Reg.RunTool('write_file',
+      '{"path":"' + FileA + '","content":"' + StringOfChar('B', 500) + '"}', Err);
+    P := TScripted.Create;
+    Cfg := BaseCfg(P);
+    Cfg.Registry := Reg;
+    Cfg.Mode := pmPlan;   { mutating write_file is refused at dispatch }
+    P.AddToolRound([MkCall('read_file', '{"path":"' + FileA + '","plain":true}')]);
+    P.AddToolRound([MkCall('write_file', '{"path":"' + FileA + '","content":"nope"}')]);
+    P.AddStop('done');
+    SetLength(Msgs, 1);
+    Msgs[0] := MakeMessage(mrUser, 'read then (in plan mode) attempt a write');
+    AssertTrue(RunToolLoop(Cfg, Msgs, Loop), 'loop ran');
+
+    Stubbed := False;
+    BodyKept := False;
+    for i := 0 to High(Loop.FinalMessages) do
+    begin
+      if Pos('superseded read_file', Loop.FinalMessages[i].Content) > 0 then
+        Stubbed := True;
+      if Pos(StringOfChar('B', 300), Loop.FinalMessages[i].Content) > 0 then
+        BodyKept := True;
+    end;
+    AssertTrue(not Stubbed, 'a denied write must NOT stub the prior read');
+    AssertTrue(BodyKept, 'the valid read body is still present after the denied write');
+    WriteLn('  ok: a denied/failed write leaves the prior read result intact');
+  finally
+    Reg.Free;
+  end;
+end;
+
 var
   Pol: TSandboxPolicy;
 begin
@@ -658,6 +705,7 @@ begin
   TestHistoryElidesBigWrite;
   TestSignedToolCallNotElided;
   TestSupersededReadStubbed;
+  TestSupersededReadKeptOnDeniedWrite;
 
   if FileExists(FileA) then DeleteFile(FileA);
   RemoveDir(WsDir);

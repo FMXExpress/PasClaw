@@ -1345,6 +1345,7 @@ var
   Batch: TToolBatch;
   Workers: array of TToolCallWorker;
   Steering, BatchSteering, HistSystem, LastProviderErrText, BgBlock, PersistentSP: string;
+  Nm: string;   { supersession: the current dispatch's tool name }
   Ledger: TProgressLedger;
   LedgerBlock: string;
   ReadPaths, ReadHashes: TArray<string>;   { per-turn read-dedup state (C3) }
@@ -1825,21 +1826,6 @@ begin
           ElideLargeToolArgs(Hist[High(Hist)].ToolCalls[i].Func.Arguments,
                              ToolArgReplayThreshold);
 
-    { Path-keyed supersession: when this turn writes/edits a file, stub any
-      EARLIER read_file result of the same path -- those bytes are now stale
-      and would otherwise replay on every later turn (a read result made
-      obsolete by a later write was observed persisting whole). Uses the
-      call's `path` arg (write_file / append_file / edit_file str-replace);
-      patch-carrying writers keep their reads (path lives in the patch body,
-      and the model may still want the pre-image). }
-    for i := 0 to High(Resp.ToolCalls) do
-      if (Resp.ToolCalls[i].Func.Name = 'write_file') or
-         (Resp.ToolCalls[i].Func.Name = 'append_file') or
-         (Resp.ToolCalls[i].Func.Name = 'edit_file') or
-         (Resp.ToolCalls[i].Func.Name = 'fs_write') then
-        StubSupersededReads(Hist,
-          LedgerArg(Resp.ToolCalls[i].Func.Arguments, 'path'));
-
     { Partition into batches: read-only calls fan out concurrently
       within a batch when Cfg.Parallel is on; mutating calls each
       get a batch of one and stay serial. Order across batches is
@@ -2038,6 +2024,30 @@ begin
           else
             Hist[High(Hist)] := MakeToolResult(Dispatches[Batch[j]].Call.Id,
                                                 Dispatches[Batch[j]].ResultText);
+
+          { Path-keyed supersession (post-SUCCESS only): a write/edit that
+            actually landed makes any EARLIER read_file result of the same
+            path stale -- stub it so those obsolete bytes don't replay on
+            every later turn. Runs here, in the Err='' branch and only when
+            the call wasn't cancelled, so a denied (plan mode) / hook-
+            cancelled / sandbox-rejected write leaves the last valid read
+            intact (Codex P2 on #426). Patch-carrying writers keep their
+            reads (path lives in the patch body, and the pre-image may still
+            be wanted). }
+          if (Cfg.Mode <> pmPlan) and (not Dispatches[Batch[j]].Cancelled) then
+          begin
+            { We're in the Err='' branch, so the tool didn't error; sandbox /
+              validation failures set Err and never reach here. The one
+              Err=''-but-didn't-land case is a plan-mode refusal (its message
+              lands in ResultText, Err empty -- see DispatchOneToolCall), so
+              gate on pmPlan explicitly. This mirrors the ledger's own
+              "mutating call landed" predicate. }
+            Nm := Dispatches[Batch[j]].Call.Func.Name;
+            if (Nm = 'write_file') or (Nm = 'append_file')
+               or (Nm = 'edit_file') or (Nm = 'fs_write') then
+              StubSupersededReads(Hist,
+                ArgPathField(Dispatches[Batch[j]].Call.Func.Arguments));
+          end;
         end;
       end;
 
