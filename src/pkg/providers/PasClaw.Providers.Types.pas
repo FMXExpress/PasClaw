@@ -125,6 +125,17 @@ type
     Extra:         string;   { provider-specific JSON object }
   end;
 
+const
+  { Output-token floor for providers that REQUIRE max_tokens (Anthropic)
+    or where omitting it is unsafe (OpenAI-compatible backends -- DeepSeek,
+    MiniMax, some local servers -- default to a SMALL completion budget
+    when the field is absent). Used to substitute a value when a caller
+    leaves TChatOptions.MaxTokens at 0 ("provider default"). 8192 is the
+    long-standing pasclaw/picoclaw/nanobot value, so this preserves the
+    exact prior behaviour for those providers. Providers whose own default
+    is already generous (Gemini) omit the field entirely instead. }
+  DefaultOutputTokenFloor = 8192;
+
 function MsgRoleToString(R: TMsgRole): string;
 function MsgRoleFromString(const S: string): TMsgRole;
 function DefaultChatOptions: TChatOptions;
@@ -161,16 +172,20 @@ begin
     "`temperature` is deprecated for this model" 400 on the newer
     Claude models, which reject the field outright. }
   Result.Temperature   := 0;
-  { 8192 matches picoclaw's config.example.json and the recommended
-    setting across nanobot's docs / examples (HKUDS/nanobot and
-    nanobot-ai/nanobot both ship 8192 in their config examples).
-    The previous 4096 was too tight for code-writing tool calls: a
-    typical Pascal/TS unit easily exceeds 4k tokens in a single
-    tool_use input, and Anthropic returns the partial JSON when the
-    budget runs out -- see PR #41 for the fs_write fallout that
-    motivated this. Callers can still override per-call via
-    --max-tokens or the gateway's max_tokens request field. }
-  Result.MaxTokens     := 8192;
+  { 0 = "let the provider decide" (mirrors how Temperature=0 above means
+    "unset"). A hard 8192 default here was SENT to the provider as the
+    output ceiling on every call -- and since Gemini/OpenAI cap generation
+    at whatever max_tokens they receive, a model asked to emit a whole
+    source file would truncate mid-write at 8192 (observed live: Gemini
+    3.5 Flash narrating a game, hitting finish=length / MALFORMED_FUNCTION_
+    CALL, and producing nothing on disk). With 0, the request builders
+    omit max_tokens for providers whose own default is generous (Gemini),
+    so the model gets its full output budget; providers that require the
+    field or default low (Anthropic; OpenAI-compatible backends) substitute
+    DefaultOutputTokenFloor, preserving the prior 8192 behaviour. Callers
+    still override per-call via --max-tokens or the gateway's max_tokens
+    request field. See PR #41 for the original 4096->8192 fs_write fallout. }
+  Result.MaxTokens     := 0;
   Result.Stream        := False;
   Result.SystemPrompt  := '';
   Result.ThinkingLevel := '';
