@@ -177,6 +177,29 @@ begin
   if Next <> '' then Fail('expected empty result on malformed response body', Next);
 end;
 
+procedure TestMaxTokensFloorAndOverride;
+{ max_tokens is required by Anthropic, so a 0 ("provider default") must be
+  substituted with the floor (8192); an explicit value passes through. }
+var
+  Opts: TChatOptions;
+  Body: string;
+begin
+  Opts := DefaultChatOptions;
+  Opts.CacheEnabled := False;
+  if Opts.MaxTokens <> 0 then
+    Fail('DefaultChatOptions should leave max_tokens unset (0)', IntToStr(Opts.MaxTokens));
+  Body := BuildRequest(OneUserMessage('hi'), NoUserTools, 'claude-opus-4-7',
+                       Opts, NoAnthropicServerTools);
+  AssertContains(Body, '"max_tokens" : 8192',
+    'unset max_tokens substitutes the floor for the required Anthropic field');
+
+  Opts.MaxTokens := 32000;
+  Body := BuildRequest(OneUserMessage('hi'), NoUserTools, 'claude-opus-4-7',
+                       Opts, NoAnthropicServerTools);
+  AssertContains(Body, '"max_tokens" : 32000',
+    'an explicit max_tokens override is honoured verbatim');
+end;
+
 begin
   TestNoServerTools;
   TestServerWebSearchOnly;
@@ -184,5 +207,6 @@ begin
   TestUserToolNameCollisionDropped;
   TestContinuePausedTurnAppendsAssistantBlock;
   TestContinuePausedTurnHandlesMalformedInput;
+  TestMaxTokensFloorAndOverride;
   Writeln('anthropic_server_tools_tests: OK');
 end.

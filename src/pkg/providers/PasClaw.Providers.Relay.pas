@@ -246,7 +246,11 @@ begin
       interface. Anything else stays in TChatOptions on the PasClaw
       side -- workers don't see it. }
     OptsObj := TJsonObject.Create;
-    OptsObj.PutInt ('max_tokens',  Options.MaxTokens);
+    { Omit when 0 ("provider default") -- a worker forwarding to a real
+      backend would otherwise pass max_tokens:0 through and get a 400 /
+      zero-length generation. }
+    if Options.MaxTokens > 0 then
+      OptsObj.PutInt ('max_tokens',  Options.MaxTokens);
     if Options.Temperature > 0 then
       OptsObj.PutStr('temperature', FloatToStr(Options.Temperature));
     if Options.SystemPrompt <> '' then

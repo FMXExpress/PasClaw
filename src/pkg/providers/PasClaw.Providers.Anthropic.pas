@@ -203,7 +203,14 @@ begin
   Root := TJsonObject.Create;
   try
     Root.PutStr('model',      Model);
-    Root.PutInt('max_tokens', Options.MaxTokens);
+    { max_tokens is REQUIRED by the Anthropic API, so a 0 ("provider
+      default") must become a concrete value -- substitute the floor,
+      which is the historical 8192 default and safe for every Claude model
+      pasclaw talks to. }
+    if Options.MaxTokens > 0 then
+      Root.PutInt('max_tokens', Options.MaxTokens)
+    else
+      Root.PutInt('max_tokens', DefaultOutputTokenFloor);
     if Options.Temperature > 0 then Root.PutFloat('temperature', Options.Temperature);
 
     { System prompt: prefer Options.SystemPrompt, else first system message. }

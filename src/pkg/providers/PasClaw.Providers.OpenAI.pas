@@ -176,7 +176,19 @@ begin
   Root := TJsonObject.Create;
   try
     Root.PutStr('model', Model);
-    if Options.MaxTokens > 0 then Root.PutInt('max_tokens', Options.MaxTokens);
+    { Hold the output-token floor when the caller left MaxTokens at 0.
+      api.openai.com would default to the model max if the field were
+      omitted, but OpenAI-COMPATIBLE backends routed through this same
+      builder (DeepSeek, MiniMax, some local servers) default to a SMALL
+      completion budget when it's absent -- omitting would silently shrink
+      their output below the historical 8192. Substituting the floor keeps
+      those backends at their prior behaviour. (Uncapping api.openai.com
+      specifically is a possible follow-up once compat-backend defaults are
+      audited.) }
+    if Options.MaxTokens > 0 then
+      Root.PutInt('max_tokens', Options.MaxTokens)
+    else
+      Root.PutInt('max_tokens', DefaultOutputTokenFloor);
     if Options.Temperature > 0 then Root.PutFloat('temperature', Options.Temperature);
     { Prompt cache anchor. OpenAI's automatic prefix cache buckets
       by `prompt_cache_key` so two threads with similar prefixes
