@@ -712,11 +712,14 @@ begin
     begin
       Reason := 'refused: command contains forbidden token "' + Hit +
                 '" (built-in shell denylist; toggle off via sandbox.shell_deny_enabled=false ' +
-                'in config.json -- strongly discouraged). Rewrite the command without "' + Hit +
-                '". For file work use the dedicated tools: read_file / write_file / ' +
-                'append_file / edit_file / find_files / grep_files, and apply_patch to ' +
-                'DELETE or MOVE a file (a "*** Delete File: <path>" or "*** Move to: <path>" ' +
-                'section) -- there is no `rm`/`del` here by design.';
+                'in config.json -- strongly discouraged). Rewrite without "' + Hit + '". ' +
+                'To DELETE or MOVE a file, call apply_patch with a `patch` argument (note the ' +
+                'arg name) holding a "*** Begin Patch" / "*** Delete File: <path>" (or ' +
+                '"*** Move to: <path>") / "*** End Patch" body -- that is the sanctioned ' +
+                'rm/mv here. To clear BUILD ARTIFACTS (.o files, binaries), run a Makefile ' +
+                'target such as `make clean`: make runs its own rm inside the build, which is ' +
+                'allowed. For other file work use read_file / write_file / append_file / ' +
+                'edit_file / find_files / grep_files.';
       Exit(False);
     end;
     if MatchesAnySubstring(Cmd, Hit) then
