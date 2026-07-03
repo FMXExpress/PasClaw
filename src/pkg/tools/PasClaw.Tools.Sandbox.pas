@@ -417,7 +417,14 @@ const
     '<<eof',
     '<<-eof',
     '$(',             { command substitution }
-    '${',             { parameter expansion with possible injection }
+    (* Parameter expansion (dollar-brace) stays banned. /bin/sh expands it
+       BEFORE running the command, so an unset variable can reassemble a
+       forbidden token the pre-expansion scanner never sees -- r${X}m -rf
+       reduces to `rm`, curl ... | b${X}ash to a pipe-to-shell. The denylist
+       is a conservative speed bump, not an expansion-aware parser, so the
+       blunt ban is the safe closure of that whole reassembly class.
+       Operators who want ${...} can disable the denylist. *)
+    '${',             { parameter expansion -- see note above }
     '`',              { backtick command substitution }
     '| sh',
     '|sh',
@@ -667,6 +674,27 @@ begin
   end;
 end;
 
+function DescribeForbiddenPattern(const Hit: string): string;
+{ Name the actual shell construct a forbidden substring represents, so the
+  refusal message is accurate (the old text called every hit "command
+  substitution", which is wrong for a pipe-to-shell or a heredoc). }
+begin
+  if (Hit = '`') or (Copy(Hit, 1, 2) = '$(') then
+    Result := 'command substitution'
+  else if Hit = '${' then
+    Result := 'parameter expansion, which can reassemble a blocked command after the shell expands it'
+  else if Pos('sh', LowerCase(Hit)) > 0 then   { '| sh', '|bash', '|/bin/sh' }
+    Result := 'pipe-to-shell'
+  else if (Copy(Hit, 1, 2) = '<<') then
+    Result := 'here-document'
+  else if Hit = 'dd if=' then
+    Result := 'raw disk copy'
+  else if Copy(Hit, 1, 5) = ':(){:' then
+    Result := 'fork bomb'
+  else
+    Result := 'blocked shell pattern';
+end;
+
 function ShellAllowed(const Cmd: string; out Reason: string): Boolean;
 var
   Hit, Path: string;
@@ -685,16 +713,18 @@ begin
       Reason := 'refused: command contains forbidden token "' + Hit +
                 '" (built-in shell denylist; toggle off via sandbox.shell_deny_enabled=false ' +
                 'in config.json -- strongly discouraged). Rewrite the command without "' + Hit +
-                '", or use the dedicated tools instead (read_file / write_file / edit_file / ' +
-                'find_files / grep_files cover most file work without the shell).';
+                '". For file work use the dedicated tools: read_file / write_file / ' +
+                'append_file / edit_file / find_files / grep_files, and apply_patch to ' +
+                'DELETE or MOVE a file (a "*** Delete File: <path>" or "*** Move to: <path>" ' +
+                'section) -- there is no `rm`/`del` here by design.';
       Exit(False);
     end;
     if MatchesAnySubstring(Cmd, Hit) then
     begin
       Reason := 'refused: command contains forbidden pattern "' + Hit +
-                '" (built-in shell denylist). Rewrite without "' + Hit +
-                '" -- e.g. avoid command substitution / pipes-to-shell; plain loops like ' +
-                '`yes X | head -N` or the dedicated file tools usually cover it.';
+                '" (' + DescribeForbiddenPattern(Hit) + '; built-in shell denylist). ' +
+                'Rewrite without "' + Hit + '" -- the dedicated file tools, or a plain ' +
+                'command (e.g. `yes X | head -N` instead of a $(...) loop), usually cover it.';
       Exit(False);
     end;
   end;
