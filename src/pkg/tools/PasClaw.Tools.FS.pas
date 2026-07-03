@@ -1826,10 +1826,16 @@ begin
                      'omit new_text to delete. Advanced: a hashline `patch` (read the file ' +
                      'with hashline:true first) does line-anchored multi-hunk edits; format ' +
                      'errors reply with the exact patch syntax.';
+    { old_string/new_string are declared as real properties (see the no-hashline
+      branch below) so schema-guided clients can emit the aliases Claude-family
+      models reach for. This branch has no `required` -- a `patch`-only call is
+      valid -- so alias handling here is purely about declaring the keys. }
     T.Schema      := '{"type":"object","properties":{' +
                      '"path":{"type":"string"},' +
                      '"old_text":{"type":"string","description":"Exact existing text to replace (verbatim, including whitespace). Alias: old_string."},' +
+                     '"old_string":{"type":"string","description":"Alias for old_text."},' +
                      '"new_text":{"type":"string","description":"Replacement text. Omit to delete old_text. Alias: new_string."},' +
+                     '"new_string":{"type":"string","description":"Alias for new_text."},' +
                      '"replace_all":{"type":"boolean","description":"Replace every occurrence instead of requiring a unique match."},' +
                      '"patch":{"type":"string","description":"Advanced: a hashline-format patch, used INSTEAD of old_text/new_text."}' +
                      '}}';
@@ -1839,12 +1845,21 @@ begin
     T.Description := 'Edit a file by replacing an exact snippet: pass old_text (the existing text, verbatim ' +
                      'including whitespace) and new_text. The match must be unique unless replace_all is set; ' +
                      'omit new_text to delete text.';
+    { The alias keys are declared as real properties (not just mentioned in the
+      canonical field's description) so a schema-validating / grammar-guided
+      client can actually emit them. `required` lists only `path`: the old text
+      may arrive under old_text OR old_string, and JSON Schema can't say "one of
+      these two keys" without anyOf (which some constrained-decoding backends
+      don't support), so the handler enforces "old_text or old_string present"
+      with a precise error instead. }
     T.Schema      := '{"type":"object","properties":{' +
                      '"path":{"type":"string"},' +
                      '"old_text":{"type":"string","description":"Exact existing text to replace (verbatim, including whitespace). Alias: old_string."},' +
+                     '"old_string":{"type":"string","description":"Alias for old_text."},' +
                      '"new_text":{"type":"string","description":"Replacement text. Omit to delete old_text. Alias: new_string."},' +
+                     '"new_string":{"type":"string","description":"Alias for new_text."},' +
                      '"replace_all":{"type":"boolean","description":"Replace every occurrence instead of requiring a unique match."}' +
-                     '},"required":["path","old_text"]}';
+                     '},"required":["path"]}';
   end;
   T.Handler  := Tool_FSEdit;
   T.IsCore   := True;
