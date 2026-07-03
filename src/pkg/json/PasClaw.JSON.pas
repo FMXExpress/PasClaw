@@ -142,6 +142,71 @@ begin
   end;
 end;
 
+function SanitizeLenientJSON(const S: string): string;
+{ Repair the one lenient-JSON defect LLM providers commonly emit: a raw
+  control character (a bare newline, tab, ...) sitting INSIDE a double-quoted
+  string. Strict RFC-8259 parsers -- notably FPC's jsonscanner -- reject that
+  as an unterminated string ("string exceeds end of line"), which would
+  otherwise take down a whole agent turn on a provider response that wasn't
+  perfectly escaped. Walk the text tracking string/escape state and replace a
+  bare control char INSIDE a string with its JSON escape. Bytes outside
+  strings (structural whitespace) are untouched, so well-formed input
+  round-trips byte-for-byte -- the parse retry that calls this is a no-op for
+  good JSON and only kicks in after a strict parse has already failed. }
+var
+  i: Integer;
+  C: Char;
+  InStr, Esc: Boolean;
+  SB: TStringBuilder;
+begin
+  InStr := False;
+  Esc   := False;
+  SB := TStringBuilder.Create(Length(S) + 16);
+  try
+    for i := 1 to Length(S) do
+    begin
+      C := S[i];
+      if Esc then
+      begin
+        { prior char was a backslash inside a string -- this char completes
+          the escape sequence; pass it through verbatim. }
+        SB.Append(C);
+        Esc := False;
+        Continue;
+      end;
+      if C = '\' then
+      begin
+        SB.Append(C);
+        if InStr then Esc := True;
+        Continue;
+      end;
+      if C = '"' then
+      begin
+        InStr := not InStr;
+        SB.Append(C);
+        Continue;
+      end;
+      if InStr and (Ord(C) < 32) then
+      begin
+        case C of
+          #8:   SB.Append('\b');
+          #9:   SB.Append('\t');
+          #10:  SB.Append('\n');
+          #12:  SB.Append('\f');
+          #13:  SB.Append('\r');
+        else
+          SB.Append(Format('\u%.4x', [Ord(C)]));
+        end;
+        Continue;
+      end;
+      SB.Append(C);
+    end;
+    Result := SB.ToString;
+  finally
+    SB.Free;
+  end;
+end;
+
 {$IFDEF FPC}
 (* ----- FPC backend (fpjson) ----- *)
 
@@ -163,6 +228,55 @@ destructor TJsonObject.Destroy;
 begin
   if FOwnsBacking and (FBacking <> nil) then FBacking.Free;
   inherited Destroy;
+end;
+
+function FPCParseData(const S: string; out ErrMsg: string): TJSONData;
+{ Strict parse of S to a TJSONData, or nil on any scanner/parser error (with
+  the message in ErrMsg). Handles the DefaultSystemCodePage dance documented
+  on TJsonObject.Parse below. Never raises -- callers decide whether to retry
+  leniently (LenientRetry) or surface the error. }
+var
+  Stream: TStringStream;
+  Parser: TJSONParser;
+  PrevCP: TSystemCodePage;
+begin
+  Result := nil;
+  ErrMsg := '';
+  Stream := TStringStream.Create(S);
+  try
+    PrevCP := DefaultSystemCodePage;
+    if PrevCP <> CP_UTF8 then DefaultSystemCodePage := CP_UTF8;
+    try
+      try
+        Parser := TJSONParser.Create(Stream, [joUTF8]);
+        try
+          Result := Parser.Parse;
+        finally
+          Parser.Free;
+        end;
+      except
+        on E: Exception do begin Result := nil; ErrMsg := E.Message; end;
+      end;
+    finally
+      if PrevCP <> CP_UTF8 then DefaultSystemCodePage := PrevCP;
+    end;
+  finally
+    Stream.Free;
+  end;
+end;
+
+function LenientRetry(const S: string): TJSONData;
+{ Second-chance parse: repair bare control chars inside strings (the common
+  LLM / provider defect) and parse the sanitized text. Returns nil when the
+  text needed no repair (SanitizeLenientJSON was a no-op, so the strict parse
+  already failed for a real reason) or is still invalid after repair. }
+var
+  San, Err: string;
+begin
+  Result := nil;
+  San := SanitizeLenientJSON(S);
+  if San <> S then
+    Result := FPCParseData(San, Err);
 end;
 
 class function TJsonObject.Parse(const S: string): TJsonObject;
@@ -195,34 +309,15 @@ class function TJsonObject.Parse(const S: string): TJsonObject;
    all set the same value, so the race is benign; the window is the
    parser pass itself, which is brief and CPU-bound. *)
 var
-  Stream: TStringStream;
-  Parser: TJSONParser;
   Data: TJSONData;
-  PrevCP: TSystemCodePage;
+  Err: string;
 begin
   Result := nil;
   if Trim(S) = '' then Exit;
-  Stream := TStringStream.Create(S);
-  try
-    PrevCP := DefaultSystemCodePage;
-    if PrevCP <> CP_UTF8 then DefaultSystemCodePage := CP_UTF8;
-    try
-      try
-        Parser := TJSONParser.Create(Stream, [joUTF8]);
-        try
-          Data := Parser.Parse;
-        finally
-          Parser.Free;
-        end;
-      except
-        on E: Exception do raise EPasClawJSON.CreateFmt('JSON parse: %s', [E.Message]);
-      end;
-    finally
-      if PrevCP <> CP_UTF8 then DefaultSystemCodePage := PrevCP;
-    end;
-  finally
-    Stream.Free;
-  end;
+  Data := FPCParseData(S, Err);
+  if Data = nil then Data := LenientRetry(S);
+  if Data = nil then
+    raise EPasClawJSON.CreateFmt('JSON parse: %s', [Err]);
   if not (Data is fpjson.TJSONObject) then
   begin
     Data.Free;
@@ -392,36 +487,18 @@ end;
 
 class function TJsonArray.Parse(const S: string): TJsonArray;
 { See TJsonObject.Parse for why we swap DefaultSystemCodePage to
-  CP_UTF8 around the parser run -- same lossy-scanner interaction. }
+  CP_UTF8 around the parser run -- same lossy-scanner interaction. The
+  strict-then-lenient retry (FPCParseData / LenientRetry) is shared too. }
 var
-  Stream: TStringStream;
-  Parser: TJSONParser;
   Data: TJSONData;
-  PrevCP: TSystemCodePage;
+  Err: string;
 begin
   Result := nil;
   if Trim(S) = '' then Exit;
-  Stream := TStringStream.Create(S);
-  try
-    PrevCP := DefaultSystemCodePage;
-    if PrevCP <> CP_UTF8 then DefaultSystemCodePage := CP_UTF8;
-    try
-      try
-        Parser := TJSONParser.Create(Stream, [joUTF8]);
-        try
-          Data := Parser.Parse;
-        finally
-          Parser.Free;
-        end;
-      except
-        on E: Exception do raise EPasClawJSON.CreateFmt('JSON parse: %s', [E.Message]);
-      end;
-    finally
-      if PrevCP <> CP_UTF8 then DefaultSystemCodePage := PrevCP;
-    end;
-  finally
-    Stream.Free;
-  end;
+  Data := FPCParseData(S, Err);
+  if Data = nil then Data := LenientRetry(S);
+  if Data = nil then
+    raise EPasClawJSON.CreateFmt('JSON parse: %s', [Err]);
   if not (Data is fpjson.TJSONArray) then
   begin
     Data.Free;
@@ -589,6 +666,10 @@ begin
   if Trim(S) = '' then Exit;
   try
     V := System.JSON.TJSONObject.ParseJSONValue(S);
+    { Lenient retry: repair bare control chars inside strings (the common
+      LLM / provider defect) and parse again. See SanitizeLenientJSON. }
+    if V = nil then
+      V := System.JSON.TJSONObject.ParseJSONValue(SanitizeLenientJSON(S));
   except
     on E: Exception do raise EPasClawJSON.CreateFmt('JSON parse: %s', [E.Message]);
   end;
@@ -799,6 +880,9 @@ begin
   if Trim(S) = '' then Exit;
   try
     V := System.JSON.TJSONObject.ParseJSONValue(S);
+    { Lenient retry -- see TJsonObject.Parse / SanitizeLenientJSON. }
+    if V = nil then
+      V := System.JSON.TJSONObject.ParseJSONValue(SanitizeLenientJSON(S));
   except
     on E: Exception do raise EPasClawJSON.CreateFmt('JSON parse: %s', [E.Message]);
   end;
