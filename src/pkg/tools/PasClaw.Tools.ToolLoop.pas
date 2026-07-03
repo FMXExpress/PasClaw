@@ -509,6 +509,67 @@ begin
   end;
 end;
 
+function ArgPathField(const ArgsJSON: string): string;
+{ The `path` string field of a tool-call's JSON args, or '' when absent /
+  unparseable. Self-contained so the supersession helpers below don't depend
+  on LedgerArg (defined later in the unit). }
+var
+  Obj: TJsonObject;
+begin
+  Result := '';
+  Obj := TJsonObject.Parse(ArgsJSON);
+  if Obj = nil then Exit;
+  try Result := Obj.GetStr('path', ''); finally Obj.Free; end;
+end;
+
+function ToolCallNameForId(const Hist: TMessageArray; const CallId: string;
+                           out Path: string): string;
+{ Find the tool_call with Id=CallId across Hist's assistant turns; return its
+  tool name and (out) its `path` argument. '' name when not found. }
+var
+  i, k: Integer;
+begin
+  Result := ''; Path := '';
+  if CallId = '' then Exit;
+  for i := 0 to High(Hist) do
+    if Hist[i].Role = mrAssistant then
+      for k := 0 to High(Hist[i].ToolCalls) do
+        if Hist[i].ToolCalls[k].Id = CallId then
+        begin
+          Result := Hist[i].ToolCalls[k].Func.Name;
+          Path := ArgPathField(Hist[i].ToolCalls[k].Func.Arguments);
+          Exit;
+        end;
+end;
+
+procedure StubSupersededReads(var Hist: TMessageArray; const Path: string);
+{ A write / edit to Path makes any EARLIER read_file result of Path stale --
+  its bytes no longer reflect the file, yet they'd replay on every later
+  turn. Replace those result bodies with a one-line stub. Only touches
+  read_file / fs_read RESULT messages for exactly this path; message
+  structure and tool_call/result pairing are untouched (the model can
+  re-read for the current content, and per-turn read-dedup already covers a
+  repeat read). Idempotent: an already-stubbed result is skipped. }
+const
+  StubMark = '[superseded read_file';
+var
+  i: Integer;
+  Nm, RPath: string;
+begin
+  if Path = '' then Exit;
+  for i := 0 to High(Hist) do
+    if (Hist[i].Role = mrTool) and (Hist[i].ToolCallId <> '')
+       and (Length(Hist[i].Content) > 200)
+       and (Pos(StubMark, Hist[i].Content) = 0) then
+    begin
+      Nm := ToolCallNameForId(Hist, Hist[i].ToolCallId, RPath);
+      if ((Nm = 'read_file') or (Nm = 'fs_read')) and (RPath = Path) then
+        Hist[i].Content := Format('%s %s result -- the file was changed by a ' +
+          'later tool call, so this content is stale; re-read it if you need ' +
+          'the current version]', [StubMark, Path]);
+    end;
+end;
+
 { Run one tool call: PreflightToolCall → Registry.RunTool → fs_edit_hashline
   retry on format errors. Writes ResultText / Err into the dispatch slot.
   Pure with respect to shared state (uses per-call HTTP clients, reads
@@ -1284,6 +1345,7 @@ var
   Batch: TToolBatch;
   Workers: array of TToolCallWorker;
   Steering, BatchSteering, HistSystem, LastProviderErrText, BgBlock, PersistentSP: string;
+  Nm: string;   { supersession: the current dispatch's tool name }
   Ledger: TProgressLedger;
   LedgerBlock: string;
   ReadPaths, ReadHashes: TArray<string>;   { per-turn read-dedup state (C3) }
@@ -1962,6 +2024,30 @@ begin
           else
             Hist[High(Hist)] := MakeToolResult(Dispatches[Batch[j]].Call.Id,
                                                 Dispatches[Batch[j]].ResultText);
+
+          { Path-keyed supersession (post-SUCCESS only): a write/edit that
+            actually landed makes any EARLIER read_file result of the same
+            path stale -- stub it so those obsolete bytes don't replay on
+            every later turn. Runs here, in the Err='' branch and only when
+            the call wasn't cancelled, so a denied (plan mode) / hook-
+            cancelled / sandbox-rejected write leaves the last valid read
+            intact (Codex P2 on #426). Patch-carrying writers keep their
+            reads (path lives in the patch body, and the pre-image may still
+            be wanted). }
+          if (Cfg.Mode <> pmPlan) and (not Dispatches[Batch[j]].Cancelled) then
+          begin
+            { We're in the Err='' branch, so the tool didn't error; sandbox /
+              validation failures set Err and never reach here. The one
+              Err=''-but-didn't-land case is a plan-mode refusal (its message
+              lands in ResultText, Err empty -- see DispatchOneToolCall), so
+              gate on pmPlan explicitly. This mirrors the ledger's own
+              "mutating call landed" predicate. }
+            Nm := Dispatches[Batch[j]].Call.Func.Name;
+            if (Nm = 'write_file') or (Nm = 'append_file')
+               or (Nm = 'edit_file') or (Nm = 'fs_write') then
+              StubSupersededReads(Hist,
+                ArgPathField(Dispatches[Batch[j]].Call.Func.Arguments));
+          end;
         end;
       end;
 

@@ -397,11 +397,22 @@ end;
 
 function BuildProjectRulesSection: string;
 var
-  Path, Body: string;
+  Path, Body, WorkDir: string;
   Original: Integer;
 begin
   Result := '';
-  Path := FindProjectAgentsMd('');
+  { Read AGENTS.md from the WORKSPACE, not the process launch dir. On a
+    gateway / serve / docker deploy the workspace ($PASCLAW_HOME/workspace,
+    or the configured sandbox.workspace) is a different directory than where
+    the binary was launched -- FindProjectAgentsMd('') walked GetCurrentDir,
+    so an operator's workspace AGENTS.md was silently never injected (the
+    project-rules / conventions mechanism was dead on every server path).
+    CurrentWorkspace is the same dir the Workspace section advertises; fall
+    back to the launch dir when no workspace is configured (the CLI case,
+    where launch dir == project and behaviour is unchanged). }
+  WorkDir := CurrentWorkspace;
+  if Trim(WorkDir) = '' then WorkDir := GetCurrentDir;
+  Path := FindProjectAgentsMd(WorkDir);
   if Path = '' then Exit;
   try
     Body := ReadFileText(Path);

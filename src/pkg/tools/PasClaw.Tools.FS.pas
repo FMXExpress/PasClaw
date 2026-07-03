@@ -596,6 +596,19 @@ begin
   Result := False;
 end;
 
+function LooksLikeRegexPattern(const P: string): Boolean;
+{ Heuristic: does the query look like the model reached for regex? grep_files
+  is a LITERAL substring search, so a 0-match on an alternation / regex
+  metachar is almost always a wrong mental model, not a genuine absence.
+  Kept narrow (a bare '.' or '*' in a term does NOT trip it) so the hint
+  only fires when it's very likely the real cause. }
+begin
+  Result := (Pos('|', P) > 0)          { alternation -- the dominant case }
+         or (Pos('.*', P) > 0) or (Pos('.+', P) > 0)
+         or (Pos('\d', P) > 0) or (Pos('\w', P) > 0)
+         or (Pos('\s', P) > 0) or (Pos('\b', P) > 0);
+end;
+
 function Tool_FSGrep(const ArgsJSON: string; out ErrMsg: string): string;
 { Recursive line scan returning hashline-formatted matches. Output looks
   like one section per matched file (¶path#hash header + N:line per
@@ -875,7 +888,15 @@ begin
       Exit('');
     end;
     if TotalMatches = 0 then
-      Result := '(no matches)'
+    begin
+      Result := '(no matches)';
+      { B3-style next-move hint: a 0-match regex-shaped pattern is almost
+        always the model expecting regex from a literal-substring tool. }
+      if LooksLikeRegexPattern(Pattern) then
+        Result := Result + ' -- note: grep_files matches a LITERAL substring, ' +
+          'not a regex. Search one plain term (e.g. "to_csv"), or run it once ' +
+          'per alternative.';
+    end
     else
     begin
       Result := Sb.ToString;
