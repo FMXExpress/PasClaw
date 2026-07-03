@@ -727,6 +727,32 @@ class Predictor(BasePredictor):
                     f"(missing flag? out path unwritable?)."
                 )
 
+            # Validate the workspace archive and surface the REAL failure.
+            #
+            # A run that accomplished nothing -- almost always because every
+            # provider call errored (bad key, wrong model id, rate limit,
+            # network) -- leaves an empty PASCLAW_HOME. pasclaw exits 0 and
+            # packs that as an empty zip; historically it was a corrupt 0-byte
+            # file, which Cog then failed to upload with an OPAQUE error that
+            # hid the actual cause. The real cause is in the model's reply
+            # (text_out), e.g. "gemini error 426: ...". Detect the empty /
+            # unreadable archive here and raise WITH that reply, so the
+            # prediction fails legibly instead of shipping a useless artifact.
+            try:
+                with zipfile.ZipFile(out_zip_path) as _zf:
+                    _entries = _zf.namelist()
+            except zipfile.BadZipFile:
+                _entries = None
+            if not _entries:
+                reply_tail = (text_out or "").strip()[-1500:]
+                raise RuntimeError(
+                    f"pasclaw {mode_norm} produced an empty workspace -- the run "
+                    f"accomplished nothing, so there is no artifact to return. "
+                    f"This is almost always a provider/model error. The model's "
+                    f"final output was:\n"
+                    f"{reply_tail or '(no reply text captured)'}"
+                )
+
             # --- persist both outputs outside scratch ---
             #
             # Cog reads the returned Path values AFTER predict() returns,

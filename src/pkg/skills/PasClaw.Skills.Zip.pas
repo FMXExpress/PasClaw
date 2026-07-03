@@ -346,6 +346,40 @@ begin
   end;
 end;
 
+function WriteEmptyZip(const ZipPath: string; out ErrMsg: string): Boolean;
+{ Emit the canonical 22-byte End-Of-Central-Directory record -- a valid zip
+  that expands to nothing. FPC's TZipper.ZipAllFiles leaves a 0-BYTE file
+  when handed an empty entry set (verified against the cog workspace
+  handshake: an empty PASCLAW_HOME produced a 0-byte "workspace.zip" that
+  is not a valid archive, so `zipfile.is_zipfile` fails and every consumer
+  -- the cog handshake, the gateway export download, a checkpoint restore
+  -- chokes on it). Writing the EOCD ourselves guarantees an
+  empty-but-valid archive instead of a corrupt zero-length one. }
+const
+  { PK\005\006 followed by 18 zero bytes: disk numbers, entry counts, central-
+    directory size/offset, and comment length all zero. }
+  EOCD: array[0..21] of Byte =
+    ($50, $4B, $05, $06, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+var
+  FS: TFileStream;
+begin
+  Result := False;
+  ErrMsg := '';
+  try
+    if ExtractFilePath(ZipPath) <> '' then
+      ForceDirectories(ExtractFilePath(ZipPath));
+    FS := TFileStream.Create(ZipPath, fmCreate);
+    try
+      FS.WriteBuffer(EOCD, SizeOf(EOCD));
+    finally
+      FS.Free;
+    end;
+    Result := True;
+  except
+    on E: Exception do ErrMsg := 'empty-zip write failed: ' + E.Message;
+  end;
+end;
+
 function PackDirToZip(const SrcDir, ZipPath: string;
                       const ExcludeNames: array of string;
                       out ErrMsg: string;
@@ -381,6 +415,13 @@ begin
   try
     try
       CollectFiles(Src, '', ExcludeNames, Files);
+      { Empty directory: TZipper would leave a corrupt 0-byte file, so write
+        a valid empty archive directly instead. See WriteEmptyZip. }
+      if Files.Count = 0 then
+      begin
+        Result := WriteEmptyZip(ZipPath, ErrMsg);
+        Exit;
+      end;
       for i := 0 to Files.Count - 1 do
       begin
         OnDisk := Src + PathDelim + StringReplace(Files[i], '/', PathDelim,
@@ -424,6 +465,13 @@ begin
   try
     try
       CollectFiles(Src, '', ExcludeNames, Files);
+      { Empty directory: emit a valid empty archive directly rather than
+        risk a consumer-hostile output. Parallels the FPC branch. }
+      if Files.Count = 0 then
+      begin
+        Result := WriteEmptyZip(ZipPath, ErrMsg);
+        Exit;
+      end;
       Z.Open(ZipPath, zmWrite);
       for i := 0 to Files.Count - 1 do
       begin
