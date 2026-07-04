@@ -1005,6 +1005,7 @@
       <span class="ob-title">Welcome to <b>PAS<span style="color:var(--mag)">CLAW</span></b></span>
       <button type="button" id="onboard-close" title="Configure later in Settings">✕</button>
     </div>
+    <div id="ob-provider-step">
     <p class="ob-sub">No model provider is configured yet. Pick one and add your API key to start chatting — saved straight to the gateway, no restart needed.</p>
     <div class="ob-field">
       <label for="ob-provider">Provider</label>
@@ -1051,10 +1052,38 @@
       <input type="checkbox" id="ob2-fallback"> Fall back to it when the primary is rate-limited
     </label>
 
+    </div><!-- /ob-provider-step -->
+
+    <!-- Step 2: local memory search + reranking. Shown after the provider is
+         saved; mirrors the CLI onboarder's PromptReranking. -->
+    <div id="ob-mem-step" hidden>
+      <p class="ob-sub">Optional: <b>local memory search</b> lets the agent recall
+        past notes/files semantically (on-device embeddings, nothing leaves the
+        host). Reranking sharpens the results.</p>
+      <label class="ob-check">
+        <input type="checkbox" id="ob-mem-vector" checked> Enable semantic memory search (~90 MB embedder)
+      </label>
+      <div class="ob-field" style="margin-top:.5rem">
+        <label for="ob-mem-backend">Reranking</label>
+        <select id="ob-mem-backend" class="cfg-input">
+          <option value="off">Off</option>
+          <option value="local">Local cross-encoder (bge-reranker-base, ~280 MB)</option>
+          <option value="llm">Use my chat model</option>
+          <option value="auto">Auto</option>
+        </select>
+        <div class="ob-note" id="ob-mem-note"></div>
+      </div>
+      <div id="ob-mem-job" class="ob-note" hidden></div>
+    </div>
+
     <div id="onboard-err" class="ob-err" hidden></div>
     <div id="onboard-actions">
       <button type="button" id="onboard-skip" class="ob-btn-ghost">Skip</button>
       <button type="button" id="onboard-save" class="ob-btn">Save &amp; start</button>
+    </div>
+    <div id="onboard-mem-actions" hidden style="display:flex;justify-content:flex-end;gap:.5rem;margin-top:.6rem">
+      <button type="button" id="onboard-mem-skip" class="ob-btn-ghost">Skip</button>
+      <button type="button" id="onboard-mem-done" class="ob-btn">Finish</button>
     </div>
   </div>
 </div>
@@ -4079,6 +4108,7 @@ async function obPopulate() {
 
 function obShow() {
   obPopulate();
+  obMemReset();   // always open on the provider step
   $("#onboard-err").hidden = true;
   $("#onboard-overlay").hidden = false;
 }
@@ -4154,16 +4184,70 @@ async function obSave() {
       const j = await r.json().catch(() => ({}));
       throw new Error(j.error || ("http " + r.status));
     }
-    obHide();
     sysNote("provider <code>" + escapeHtml(s.display_name) + "</code> configured — you're ready to chat.");
     loadModels();
     refreshMeta();
+    obShowMem(s.kind);   // step 2: local memory search + reranking
   } catch (e) {
     err.textContent = "Save failed: " + String(e && e.message || e);
     err.hidden = false;
   } finally {
     saveBtn.disabled = false; saveBtn.textContent = "Save & start";
   }
+}
+
+/* Onboarding step 2: local memory search + reranking. */
+const OB_LOCAL_KINDS = ["ollama", "lmstudio", "vllm", "relay"];
+function obShowMem(providerKind) {
+  $("#ob-provider-step").hidden = true;
+  $("#onboard-actions").hidden = true;
+  $("#onboard-err").hidden = true;
+  $("#ob-mem-step").hidden = false;
+  $("#onboard-mem-actions").hidden = false;
+  const selfHosted = OB_LOCAL_KINDS.includes((providerKind || "").toLowerCase());
+  // cloud provider -> rerank with the model (no download); self-hosted -> local
+  $("#ob-mem-backend").value = selfHosted ? "local" : "llm";
+  $("#ob-mem-note").textContent = selfHosted
+    ? "Self-hosted: a dedicated local reranker is recommended (doesn't burden your model)."
+    : "Cloud provider: reranking via your model is highest quality, no download.";
+}
+async function obMemDone() {
+  const doneBtn = $("#onboard-mem-done");
+  const vector = $("#ob-mem-vector").checked;
+  const backend = $("#ob-mem-backend").value;
+  const dlRerank = (backend === "local" || backend === "auto");
+  doneBtn.disabled = true; doneBtn.textContent = "Saving…";
+  try {
+    const body = {
+      vector_search_enabled: vector,
+      rerank_search_enabled: backend !== "off",
+      rerank_backend: backend === "off" ? "auto" : backend,
+      rerank_model: "bge-reranker-base",
+      download_embed: vector,
+      download_rerank: dlRerank,
+    };
+    await gwFetch("/v1/memory/provision", { method: "POST",
+      headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+    if (vector || dlRerank) {
+      const job = $("#ob-mem-job"); job.hidden = false; job.textContent = "⏳ downloading models in the background…";
+      // let it run in the background; the Memory ▸ Setup tab shows live progress.
+      sysNote("downloading memory models — track progress in <b>Memory ▸ Setup</b>.");
+    } else {
+      sysNote("memory settings saved.");
+    }
+    obHide();
+  } catch (e) {
+    const job = $("#ob-mem-job"); job.hidden = false; job.textContent = "save failed: " + String(e && e.message || e);
+  } finally {
+    doneBtn.disabled = false; doneBtn.textContent = "Finish";
+  }
+}
+function obMemReset() {
+  $("#ob-provider-step").hidden = false;
+  $("#onboard-actions").hidden = false;
+  $("#ob-mem-step").hidden = true;
+  $("#onboard-mem-actions").hidden = true;
+  $("#ob-mem-job").hidden = true;
 }
 
 $("#ob-provider").addEventListener("change", () => { obApplySpecToForm(); obApplySpec2ToForm(); });
@@ -4179,6 +4263,15 @@ $("#ob2-provider").addEventListener("change", () => {
 $("#onboard-save").addEventListener("click", obSave);
 $("#onboard-close").addEventListener("click", obHide);
 $("#onboard-skip").addEventListener("click", obHide);
+$("#onboard-mem-skip").addEventListener("click", obHide);
+$("#onboard-mem-done").addEventListener("click", obMemDone);
+$("#ob-mem-backend").addEventListener("change", () => {
+  const b = $("#ob-mem-backend").value;
+  const n = $("#ob-mem-note");
+  if (b === "local" || b === "auto") n.textContent = "Downloads bge-reranker-base (~280 MB), runs offline.";
+  else if (b === "llm") n.textContent = "Reranks via your chat model — no download.";
+  else n.textContent = "Reranking off.";
+});
 
 /* Show the wizard on boot when no provider is actually usable (fresh
    install). "Usable" depends on the provider's auth scheme, not just on a
