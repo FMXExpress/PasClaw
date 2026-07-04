@@ -1011,11 +1011,23 @@ begin
   GHomeDir := IncludeTrailingPathDelimiter(GetTempDir) +
               'agentbench-' + IntToStr(GetProcessID);
   ForceDirectories(GHomeDir + '/workspace');
+  { PASCLAW_BENCH_CONFIG_EXTRA: a JSON fragment of extra top-level config keys
+    (no surrounding braces) merged into the base relay config. Lets a run
+    exercise the scenarios under an arbitrary feature config -- e.g. to detect
+    whether enabling reranking / memory-distill / orient / condense / the
+    auto-router / self-improving-skills regresses the loop metrics vs stock.
+    When unset, the base config's auto_router stays disabled (stock). }
   CfgJSON :=
     '{"default_provider":"relay","default_model":"sim",' +
     '"providers":[{"name":"relay","kind":"relay","model":"sim"}],' +
     '"gateway":{"bind_addr":"127.0.0.1","port":' + IntToStr(PORT) + '},' +
-    '"relay_wait_timeout_ms":3600000,"auto_router":{"enabled":false}}';
+    '"relay_wait_timeout_ms":3600000';
+  EnvLine := GetEnvironmentVariable('PASCLAW_BENCH_CONFIG_EXTRA');
+  if Trim(EnvLine) <> '' then
+    CfgJSON := CfgJSON + ',' + Trim(EnvLine)
+  else
+    CfgJSON := CfgJSON + ',"auto_router":{"enabled":false}';
+  CfgJSON := CfgJSON + '}';
   S := TStringList.Create;
   try
     S.Text := CfgJSON;
