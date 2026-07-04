@@ -26,9 +26,9 @@ unit PasClaw.Memory.Rerank.Serve;
 interface
 
 {$IFDEF FPC}
-uses SysUtils;
+uses SysUtils, LocalVector.VectorStore;
 {$ELSE}
-uses System.SysUtils;
+uses System.SysUtils, LocalVector.VectorStore;
 {$ENDIF}
 
 { Choose the reranker model (registry key, e.g. 'ms-marco-minilm' or
@@ -37,12 +37,34 @@ uses System.SysUtils;
   new one loads on the next call. }
 procedure SetLocalRerankModel(const AKey: string);
 
+{ Toggle the retrieval-side rerank stage (config rerank_search_enabled).
+  Propagated from ApplyConfigGlobals, mirroring SetCondenseReversible. This
+  only reflects the operator's intent -- actual reranking still requires the
+  model to be provisioned (RetrievalRerankActive checks both). }
+procedure SetRerankSearchEnabled(AEnabled: Boolean);
+
+{ True when retrieval should rerank: the config toggle is on AND the reranker
+  is loadable for HomeDir. Cheap fast-path (returns False immediately when the
+  toggle is off) so a default install never probes the filesystem. }
+function RetrievalRerankActive(const HomeDir: string): Boolean;
+
 { True when the local ONNX reranker is loadable for HomeDir (model + vocab
   + runtime provisioned). }
 function LocalRerankAvailable(const HomeDir: string): Boolean;
 
 { Active reranker model id (registry key). False when not provisioned. }
 function LocalRerankModelInfo(const HomeDir: string; out ModelId: string): Boolean;
+
+{ Two-stage retrieval helper shared by memory_search and kb_search. When
+  reranking is inactive (toggle off or model not provisioned) this is exactly
+  AStore.Search(Query, AEmbedding, AMode, K). When active it fetches a WIDER
+  first-stage pool (4x K, min 20), rescores each (query, chunk-text) pair with
+  the cross-encoder, and truncates back to K -- promoting the best candidates
+  the bi-encoder RRF ranked lower. Falls back to the RRF order on any rerank
+  failure, and carries the cross-encoder score onto the returned hits. }
+function RerankedStoreSearch(const HomeDir, Query: string;
+  const AEmbedding: TArray<Single>; AStore: IVectorStore;
+  AMode: TSearchMode; K: Integer): TSearchHits;
 
 { Score Documents against Query with the local cross-encoder and return the
   indices ordered by relevance descending, with their 0..1 scores (Order[k]
@@ -67,6 +89,7 @@ var
   GRank:  TReranker = nil;
   GSpec:  TModelSpec;
   GKey:   string = DEFAULT_RERANKER;
+  GSearchEnabled: Boolean = False;   { config rerank_search_enabled mirror }
   GReady: Boolean = False;
   GTried: Boolean = False;
   { True when the latched failure was specifically "artifacts not on disk"
@@ -112,6 +135,19 @@ begin
   finally
     GLock.Release;
   end;
+end;
+
+procedure SetRerankSearchEnabled(AEnabled: Boolean);
+begin
+  { Plain bool write -- read without the lock in the fast path; a torn read is
+    impossible for a Boolean and the worst case is one search using the prior
+    value for a tick after a live config change. }
+  GSearchEnabled := AEnabled;
+end;
+
+function RetrievalRerankActive(const HomeDir: string): Boolean;
+begin
+  Result := GSearchEnabled and LocalRerankAvailable(HomeDir);
 end;
 
 { Load the reranker for HomeDir if not already loaded. Latched. Caller holds
@@ -234,6 +270,53 @@ begin
     Scores[I] := Hits[I].Score;
   end;
   Result := True;
+end;
+
+function RerankedStoreSearch(const HomeDir, Query: string;
+  const AEmbedding: TArray<Single>; AStore: IVectorStore;
+  AMode: TSearchMode; K: Integer): TSearchHits;
+var
+  FetchK, I: Integer;
+  Docs: array of string;
+  Order: TArray<Integer>;
+  Scores: TArray<Single>;
+  Reordered: TSearchHits;
+begin
+  if K <= 0 then
+  begin
+    SetLength(Result, 0);
+    Exit;
+  end;
+
+  if not RetrievalRerankActive(HomeDir) then
+    Exit(AStore.Search(Query, AEmbedding, AMode, K));
+
+  { Widen the first-stage pool so the reranker has candidates to promote. }
+  FetchK := K * 4;
+  if FetchK < 20 then FetchK := 20;
+  Result := AStore.Search(Query, AEmbedding, AMode, FetchK);
+  if Length(Result) > 1 then
+  begin
+    SetLength(Docs, Length(Result));
+    for I := 0 to High(Result) do Docs[I] := Result[I].Text;
+    if LocalRerank(HomeDir, Query, Docs, Order, Scores) then
+    begin
+      SetLength(Reordered, Length(Order));
+      for I := 0 to High(Order) do
+      begin
+        Reordered[I] := Result[Order[I]];
+        { Surface the cross-encoder score so downstream ranking/telemetry
+          reflects the rerank, not the stale RRF score. }
+        Reordered[I].Score := Scores[I];
+      end;
+      Result := Reordered;
+    end;
+    { else: LocalRerank failed -- keep the RRF order untouched. }
+  end;
+
+  { Truncate to the caller's K (the pool was widened only for the reranker). }
+  if Length(Result) > K then
+    SetLength(Result, K);
 end;
 
 initialization

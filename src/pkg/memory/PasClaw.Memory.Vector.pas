@@ -65,7 +65,8 @@ uses
   LocalVector.OrtProvision,
   PasClaw.Config,
   PasClaw.Utils,
-  PasClaw.Logger;
+  PasClaw.Logger,
+  PasClaw.Memory.Rerank.Serve;   { optional cross-encoder rerank stage }
 
 const
   { Bound the embedder's sequence length so a giant memory file doesn't
@@ -339,7 +340,9 @@ begin
       Exit;
     end;
   end;
-  Hits := FStore.Search(Query, Emb, smHybrid, K);
+  { RerankedStoreSearch is a plain hybrid search when reranking is off, and a
+    widen -> cross-encoder rescore -> truncate-to-K pass when it's on. }
+  Hits := RerankedStoreSearch(GetHome, Query, Emb, FStore, smHybrid, K);
   SetLength(Result, Length(Hits));
   for i := 0 to High(Hits) do
   begin

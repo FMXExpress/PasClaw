@@ -20,7 +20,8 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes,
   LocalVector.Models,
-  PasClaw.Memory.Rerank;
+  PasClaw.Memory.Rerank,
+  PasClaw.Memory.Rerank.Serve;
 
 procedure Fail_(const Msg: string); begin WriteLn('FAIL: ' + Msg); Halt(1); end;
 procedure IsTrue(Cond: Boolean; const Msg: string); begin if not Cond then Fail_(Msg); end;
@@ -96,6 +97,21 @@ begin
     Rk.Free;
     DeleteFile(Vocab);
   end;
+
+  { --- retrieval gate composition (ONNX-free): the config toggle AND
+        provisioning must both hold before retrieval reranks. In this test
+        env no reranker model is on disk, so "available" is always false --
+        which is exactly the graceful-no-op property we want to guarantee. --- }
+  SetRerankSearchEnabled(False);
+  IsTrue(not RetrievalRerankActive(GetTempDir),
+    'gate off -> retrieval does not rerank (fast path, no fs probe)');
+  SetRerankSearchEnabled(True);
+  IsTrue(not RetrievalRerankActive(GetTempDir),
+    'gate on but model unprovisioned -> still no rerank (graceful no-op)');
+  IsTrue(not LocalRerankAvailable(GetTempDir),
+    'reranker reports unavailable when the model is not on disk');
+  SetRerankSearchEnabled(False);   { restore }
+  WriteLn('  ok: retrieval rerank gate needs BOTH the toggle and a provisioned model');
 
   WriteLn('rerank_tests: OK');
 end.

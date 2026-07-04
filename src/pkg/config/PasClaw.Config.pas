@@ -981,6 +981,10 @@ uses
                                 see the comment inside LoadConfig }
   PasClaw.Tools.OutputCache,  { LoadConfig propagates condense_reversible
                                 via SetCondenseReversible -- same pattern }
+  PasClaw.Memory.Rerank.Serve, { LoadConfig propagates rerank_model +
+                                rerank_search_enabled -- same pattern. Its
+                                dep cone (LocalVector + onnxruntime) never
+                                imports PasClaw.Config, so no cycle. }
   PasClaw.Otel;               { LoadConfig calls InitOtelFromConfig so
                                 env-var overrides (OTEL_EXPORTER_OTLP_ENDPOINT)
                                 + the diagnostics.otel.* block in config.json
@@ -2285,6 +2289,11 @@ begin
   { Symmetric propagation of the reversible-condensation flag -- OutputCache
     holds the same process-global mirror. }
   SetCondenseReversible(C.CondenseReversible);
+  { Reranker: which cross-encoder to load + whether retrieval reranks. The
+    /v1/rerank endpoint and the memory_search rerank stage both read these
+    process-globals, so this chokepoint keeps them in sync with config.json. }
+  SetLocalRerankModel(C.RerankModel);
+  SetRerankSearchEnabled(C.RerankSearchEnabled);
   { OpenTelemetry traces. No-op when diagnostics.otel.enabled is False AND
     the OTEL_EXPORTER_OTLP_ENDPOINT env var is unset -- so single-shot CLI
     commands like `pasclaw status` pay nothing for the wiring. }
