@@ -155,18 +155,22 @@ begin
   { XLM-RoBERTa cross-encoders (SentencePiece tokenizer, no token_type_ids).
     VocabRelURL points at tokenizer.json (the downloader saves it as the
     model's vocab file; TSPUnigram loads it as JSON). int8-quantised ONNX so it
-    is CPU-practical; NeedsTT=False because RoBERTa has no segment embeddings. }
+    is CPU-practical; NeedsTT=False because RoBERTa has no segment embeddings.
+
+    LICENSING (matters for the DEFAULT): bge-reranker-base is MIT, so it is the
+    default -- commercially usable everywhere. jina-reranker-v2 scores higher on
+    BEIR (see rerank_eval) but is CC-BY-NC-4.0 (NON-commercial): offered as a
+    quality opt-in, never the default. (bge-reranker-v2-m3 is Apache-2.0 and
+    would be a great commercial upgrade, but no public ONNX export exists yet,
+    so it is intentionally NOT registered -- would 404 on download.) }
   else if (K = 'bge-reranker-base') or (K = 'bge-rerank') or (K = 'bge-reranker') then
-    ASpec := MakeRSpec('bge-reranker-base', 'bge-reranker-base (int8)', 'bge-reranker-base',
+    ASpec := MakeRSpec('bge-reranker-base', 'bge-reranker-base (int8, MIT)', 'bge-reranker-base',
       'https://huggingface.co/Xenova/bge-reranker-base/resolve/main/',
       'onnx/model_int8.onnx', 'tokenizer.json', False, False, '~280 MB')
-  else if (K = 'bge-reranker-v2-m3') or (K = 'bge-m3') then
-    ASpec := MakeRSpec('bge-reranker-v2-m3', 'bge-reranker-v2-m3 (int8)', 'bge-reranker-v2-m3',
-      'https://huggingface.co/onnx-community/bge-reranker-v2-m3/resolve/main/',
-      'onnx/model_int8.onnx', 'tokenizer.json', False, False, '~570 MB')
   else if (K = 'jina-reranker-v2') or (K = 'jina-rerank')
      or (K = 'jina-reranker-v2-base-multilingual') then
-    ASpec := MakeRSpec('jina-reranker-v2', 'jina-reranker-v2-base-multilingual (int8)',
+    ASpec := MakeRSpec('jina-reranker-v2',
+      'jina-reranker-v2-base-multilingual (int8, CC-BY-NC non-commercial)',
       'jina-reranker-v2-base-multilingual',
       'https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual/resolve/main/',
       'onnx/model_int8.onnx', 'tokenizer.json', False, False, '~270 MB')
@@ -176,8 +180,8 @@ end;
 
 function RerankerKeys: string;
 begin
-  Result := 'ms-marco-minilm, ms-marco-minilm-l12, bge-reranker-base, ' +
-            'bge-reranker-v2-m3, jina-reranker-v2';
+  Result := 'ms-marco-minilm, ms-marco-minilm-l12, bge-reranker-base (default), ' +
+            'jina-reranker-v2 (non-commercial)';
 end;
 
 { ----- TReranker ----- }

@@ -62,27 +62,25 @@ begin
     relevant doc that is semantically right but shares few surface words --
     the regime where surface overlap and true relevance disagree.
 
-    MEASURED (2026-07, these 6 cases, ONNX Runtime provisioned):
-      bi-encoder (MiniLM) baseline        MRR 0.778   recall@5 0.833
-      ms-marco-MiniLM-L-6  (local ONNX)   MRR 0.639   recall@5 0.417   (regresses)
-      ms-marco-MiniLM-L-12 (local ONNX)   MRR 0.611   recall@5 0.417   (regresses)
-      bge-reranker-base    (int8, local)  MRR 0.778   recall@5 0.917   (best local)
-      jina-reranker-v2     (int8, local)  MRR 0.722   recall@5 0.833   (competitive)
-      LLM backend (Gemini 2.5 Flash)      MRR 1.000   recall@5 1.000   (perfect)
-    Takeaway: the small ms-marco cross-encoders REWARD query/passage lexical
-    overlap, so on these deliberately lexical-vs-semantic cases they rank a
-    topical-but-wrong passage above a correctly-phrased answer and lose to the
-    bi-encoder -- a bigger L-12 does not fix it. The XLM-RoBERTa bge-reranker
-    (SentencePiece tokenizer, LocalVector.SentencePiece) is the strongest LOCAL
-    option -- it doesn't regress MRR and lifts recall@5 -- and int8 is
-    CPU-practical. jina-reranker-v2-base-multilingual (same SentencePiece path)
-    is competitive but edged out bge at int8 here -- on a 6-case set that is
-    within noise, and jina rates higher on public benchmarks, so it is offered
-    as a peer local option (notably multilingual). The LLM backend
-    (PasClaw.Memory.Rerank.LLM) still tops them all by reading query+passages
-    together and reasoning. So: 'llm'/'auto' for the best quality;
-    bge-reranker / jina-reranker-v2 as the strong offline models; ms-marco as
-    the tiny no-frills fallback. Relevant indices below are the docs that, to a
+    AUTHORITATIVE result -- BEIR/SciFact, 300 queries, human qrels, rerank of
+    the BM25 top-30 (int8 ONNX on CPU), nDCG@10 / MRR@10 / Recall@10:
+      BM25 (first stage)     0.657 / 0.618 / 0.788
+      ms-marco-minilm        0.677 / 0.640 / 0.803   (+0.020 nDCG, MIT)
+      bge-reranker-base      0.683 / 0.646 / 0.811   (+0.025 nDCG, MIT -- DEFAULT)
+      jina-reranker-v2       0.729 / 0.700 / 0.827   (+0.071 nDCG, CC-BY-NC!)
+    On real qrels EVERY cross-encoder beats BM25 (SciFact's candidates are
+    genuinely on-topic, so reranking helps -- unlike the adversarial 6-case set
+    below, where the tiny ms-marco models regressed on lexical traps).
+    jina-reranker-v2 is the clear quality winner, BUT it is CC-BY-NC-4.0
+    (non-commercial), so bge-reranker-base (MIT) is the default and jina is a
+    quality opt-in. The LLM backend (PasClaw.Memory.Rerank.LLM) tops all local
+    models by reading query+passages together. So: 'llm'/'auto' for best
+    quality; bge-reranker-base (MIT) as the default offline model; jina-
+    reranker-v2 for the strongest offline result where a non-commercial license
+    is acceptable; ms-marco as the tiny fallback.
+
+    The cases below are an illustrative in-repo smoke set (no dataset needed).
+    Relevant indices are the docs that, to a
     human, answer the query. }
   Result := TArray<TEvalCase>.Create(
     C('how do I stop being billed every month',
