@@ -61,6 +61,7 @@ uses
   LocalVector.Downloader,
   LocalVector.VecProvision,
   LocalVector.OrtProvision,
+  PasClaw.Memory.OrtPosix,
   PasClaw.Memory.Rerank;
 
 var
@@ -191,21 +192,37 @@ end;
 procedure TMemProvThread.Execute;
 var
   Spec: TModelSpec;
-  Cache, K: string;
+  Cache, K, OrtMsg: string;
 begin
+  OrtMsg := '';
   try
     Cache := CacheDir(FHome);
     ForceDirectories(Cache);
+
+    { The ONNX Runtime is needed by BOTH the embedder and the reranker, so
+      provision it whenever either was requested. On Windows the vendored
+      auto-download runs inside EnsureOnnxRuntime; on Linux/macOS that download
+      is unavailable, so fetch the release tarball via EnsurePosixOrt (the same
+      path the CLI uses) -- otherwise the models download but nothing can load
+      them, and the job must NOT report a clean success. }
+    if FEmbed or FRerank then
+    begin
+      SetStatus(mpRunning, 'ONNX Runtime', '');
+      if not OrtLoadable(FHome) then
+      begin
+        {$IFNDEF MSWINDOWS}
+        EnsurePosixOrt(Cache, OrtMsg);
+        {$ENDIF}
+        try EnsureOnnxRuntime(Cache, {AAllowDownload=} True, {AVerbose=} False); except on E: Exception do
+          LogWarn('mem-provision: ort: %s', [E.Message]); end;
+      end;
+    end;
 
     if FEmbed then
     begin
       SetStatus(mpRunning, 'sqlite-vec extension', '');
       try EnsureVec0(Cache, {AAllowDownload=} True, {AVerbose=} False); except on E: Exception do
         LogWarn('mem-provision: vec0: %s', [E.Message]); end;
-
-      SetStatus(mpRunning, 'ONNX Runtime', '');
-      try EnsureOnnxRuntime(Cache, {AAllowDownload=} True, {AVerbose=} False); except on E: Exception do
-        LogWarn('mem-provision: ort: %s', [E.Message]); end;
 
       if FindModelSpec(DEFAULT_MODEL, Spec) then
         DownloadModel(FHome, Spec, 'embedding model (' + Spec.DisplayName + ')')
@@ -223,9 +240,15 @@ begin
         raise Exception.CreateFmt('unknown reranker model "%s"', [K]);
     end;
 
-    SetStatus(mpDone, 'done', '');
-    LogInfo('mem-provision: completed (embed=%s rerank=%s)',
-      [BoolToStr(FEmbed, True), BoolToStr(FRerank, True)]);
+    { Honest final state: models are on disk, but if the ONNX Runtime still
+      isn't loadable they can't be used yet -- say so instead of a bare "done". }
+    if not OrtLoadable(FHome) then
+      SetStatus(mpDone, 'models downloaded, but ONNX Runtime is not loadable -- '
+        + 'install it (Debian: apt install libonnxruntime-dev; macOS: brew install onnxruntime)', '')
+    else
+      SetStatus(mpDone, 'done', '');
+    LogInfo('mem-provision: completed (embed=%s rerank=%s ort=%s)',
+      [BoolToStr(FEmbed, True), BoolToStr(FRerank, True), BoolToStr(OrtLoadable(FHome), True)]);
   except
     on E: Exception do
     begin

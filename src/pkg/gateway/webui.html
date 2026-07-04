@@ -2356,7 +2356,9 @@ function msRenderJob(job) {
   if (!job || job.phase === "idle") { el.hidden = true; if (msPollTimer) { clearInterval(msPollTimer); msPollTimer = null; } return; }
   el.hidden = false;
   if (job.phase === "running") el.innerHTML = '⏳ downloading: ' + escapeHtml(job.step || "…");
-  else if (job.phase === "done") el.innerHTML = '<span style="color:var(--grn)">✓ download complete</span>';
+  else if (job.phase === "done") el.innerHTML = (job.step && /not loadable/.test(job.step))
+    ? '<span style="color:var(--org)">⚠ ' + escapeHtml(job.step) + '</span>'
+    : '<span style="color:var(--grn)">✓ download complete</span>';
   else if (job.phase === "error") el.innerHTML = '<span style="color:var(--red,#e66)">download failed: ' + escapeHtml(job.error || "") + '</span>';
 }
 async function memSetupSave() {
@@ -2371,7 +2373,11 @@ async function memSetupSave() {
     rerank_backend: backend === "off" ? "auto" : backend,
     rerank_model: model,
     download_embed: vector && !st.embed_provisioned,
-    download_rerank: (backend === "local" || backend === "auto") && !st.rerank_provisioned,
+    // Download when the SELECTED model differs from the currently-provisioned
+    // one (st.rerank_provisioned describes st.rerank_model), or none is present.
+    // The server's downloader is idempotent, so a redundant request is a no-op.
+    download_rerank: (backend === "local" || backend === "auto") &&
+                     (model !== st.rerank_model || !st.rerank_provisioned),
   };
   try {
     const r = await (await gwFetch("/v1/memory/provision", { method: "POST",
