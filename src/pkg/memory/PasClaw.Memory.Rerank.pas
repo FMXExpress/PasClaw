@@ -128,7 +128,8 @@ function RerankerIsSentencePiece(const AKey: string): Boolean;
 var K: string;
 begin
   K := LowerCase(Trim(AKey));
-  Result := (Pos('bge-reranker', K) = 1) or (K = 'bge-rerank') or (K = 'bge-m3');
+  Result := (Pos('bge-reranker', K) = 1) or (K = 'bge-rerank') or (K = 'bge-m3')
+         or (Pos('jina-reranker', K) = 1) or (K = 'jina-rerank');
 end;
 
 function FindRerankerSpec(const AKey: string; out ASpec: TModelSpec): Boolean;
@@ -159,13 +160,20 @@ begin
     ASpec := MakeRSpec('bge-reranker-v2-m3', 'bge-reranker-v2-m3 (int8)', 'bge-reranker-v2-m3',
       'https://huggingface.co/onnx-community/bge-reranker-v2-m3/resolve/main/',
       'onnx/model_int8.onnx', 'tokenizer.json', False, False, '~570 MB')
+  else if (K = 'jina-reranker-v2') or (K = 'jina-rerank')
+     or (K = 'jina-reranker-v2-base-multilingual') then
+    ASpec := MakeRSpec('jina-reranker-v2', 'jina-reranker-v2-base-multilingual (int8)',
+      'jina-reranker-v2-base-multilingual',
+      'https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual/resolve/main/',
+      'onnx/model_int8.onnx', 'tokenizer.json', False, False, '~270 MB')
   else
     Result := False;
 end;
 
 function RerankerKeys: string;
 begin
-  Result := 'ms-marco-minilm, ms-marco-minilm-l12, bge-reranker-base, bge-reranker-v2-m3';
+  Result := 'ms-marco-minilm, ms-marco-minilm-l12, bge-reranker-base, ' +
+            'bge-reranker-v2-m3, jina-reranker-v2';
 end;
 
 { ----- TReranker ----- }

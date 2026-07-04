@@ -164,6 +164,11 @@ begin
   IsTrue(RerankerIsSentencePiece('bge-reranker-base'), 'bge-reranker-base is SentencePiece');
   IsTrue(RerankerIsSentencePiece('bge-reranker-v2-m3'), 'bge-reranker-v2-m3 is SentencePiece');
   IsTrue(FindRerankerSpec('bge-reranker-v2-m3', Spec), 'bge-reranker-v2-m3 resolves');
+  { jina-reranker-v2: same XLM-R SentencePiece path, input_ids+attention_mask only }
+  IsTrue(FindRerankerSpec('jina-reranker-v2', Spec), 'jina-reranker-v2 resolves');
+  IsTrue(not Spec.NeedsTokenTypeIds, 'jina (XLM-R) needs no token_type_ids');
+  IsTrue(RerankerIsSentencePiece('jina-reranker-v2'), 'jina-reranker-v2 is SentencePiece');
+  IsTrue(Pos('tokenizer.json', Spec.VocabRelURL) > 0, 'jina vocab is tokenizer.json');
   IsTrue(not FindRerankerSpec('nope', Spec), 'unknown key -> false');
   WriteLn('  ok: reranker registry (ms-marco WordPiece + bge SentencePiece)');
 
