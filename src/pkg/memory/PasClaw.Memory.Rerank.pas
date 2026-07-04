@@ -92,7 +92,11 @@ type
   end;
 
 const
-  DEFAULT_RERANKER = 'ms-marco-minilm';
+  { bge-reranker-base is the default local model: on the BEIR/SciFact + the
+    in-repo eval it is the strongest LOCAL cross-encoder (the tiny ms-marco
+    models regress; bge lifts nDCG/recall). ms-marco-minilm stays available as
+    the small (~90 MB) fallback. }
+  DEFAULT_RERANKER = 'bge-reranker-base';
 
 { Registry of the built-in reranker (cross-encoder) models. Mirrors
   LocalVector.Models.FindModelSpec but for rerankers -- reuses TModelSpec so the

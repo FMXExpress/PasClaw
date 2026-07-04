@@ -1438,6 +1438,25 @@ begin
   end;
 end;
 
+function ProviderIsSelfHosted(Cfg: TConfig): Boolean;
+{ True when the configured default provider is a LOCAL / self-hosted model
+  server (ollama / lmstudio / vllm / relay, or any catalog provider whose auth
+  scheme is asNone -- i.e. no cloud API key). Used to pick the reranking
+  default: self-hosted -> a dedicated local cross-encoder (don't burden the
+  local chat model, and it's faster); cloud/frontier -> rerank via the model
+  itself (best quality, no download). }
+var
+  Spec: TProviderSpec;
+  K: string;
+begin
+  K := LowerCase(Trim(Cfg.DefaultProvider));
+  if (K = 'ollama') or (K = 'lmstudio') or (K = 'vllm') or (K = 'relay') then
+    Exit(True);
+  Result := LookupProvider(K, Spec) and (Spec.Auth.Kind = asNone);
+end;
+
+procedure PromptReranking(Cfg: TConfig); forward;
+
 procedure PromptVectorSearch(Cfg: TConfig);
 { Opt-in toggle for hybrid FTS+vector memory_search. Default YES
   because the hybrid index is what picoclaw / nanobot ship and it's
@@ -1509,45 +1528,114 @@ begin
     PrintLn('  ' + Ansi.Dim +
       '(deferred -- run `pasclaw memory provision` when ready)' + Ansi.Reset);
 
-  { Optional second stage: cross-encoder reranking. Offered right after
-    vector search because it rescores the SAME candidate pool for sharper
-    ordering. Default NO -- it adds another ~90 MB model download and a
-    per-query scoring pass, so it deserves an explicit opt-in. Reuses the
-    ONNX Runtime the embedder already needs. }
+  PromptReranking(Cfg);
+end;
+
+procedure PromptReranking(Cfg: TConfig);
+{ Optional second stage: cross-encoder reranking, offered right after vector
+  search because it rescores the SAME candidate pool for sharper ordering.
+  Provider-aware default:
+    * cloud/frontier provider (has an API key) -> rerank with the model itself
+      (best quality, no download); local cross-encoder offered as a faster/free
+      alternative.
+    * self-hosted server (ollama / lmstudio / vllm / relay) -> a dedicated
+      local cross-encoder (bge-reranker-base) is the default -- it doesn't
+      burden the local chat model and is much faster per query.
+  Always opt-in (default NO on the whole feature). }
+var
+  Choice: string;
+  SelfHosted: Boolean;
+begin
+  SelfHosted := ProviderIsSelfHosted(Cfg);
+
   PrintLn;
   PrintLn(Ansi.Bold + 'Memory: cross-encoder reranking (optional)' + Ansi.Reset);
   PrintLn(Ansi.Dim +
-    'Rescore memory_search / kb_search candidates with a local cross-encoder' +
+    'Rescore memory_search / kb_search candidates for sharper ordering than' +
     Ansi.Reset);
   PrintLn(Ansi.Dim +
-    'for sharper ordering than embeddings alone. Also serves /v1/rerank.' +
-    Ansi.Reset);
-  PrintLn(Ansi.Dim +
-    '    reranker model + vocab   (HuggingFace, ~90 MB; reuses ONNX Runtime)' +
-    Ansi.Reset);
+    'embeddings alone. Also serves the /v1/rerank API.' + Ansi.Reset);
   PrintLn;
-  Choice := Trim(LowerCase(ReadLineEcho('  Enable reranking for retrieval [y/N]: ')));
-  if not ((Choice = 'y') or (Choice = 'yes')) then
+
+  if not SelfHosted then
   begin
-    PrintLn('  ' + Ansi.Dim +
-      '(skipped -- enable later with rerank_search_enabled + ' +
-      '`pasclaw memory provision --rerank`)' + Ansi.Reset);
+    { Cloud provider: LLM reranking is the quality path and needs no download. }
+    PrintLn(Ansi.Dim +
+      '  Your provider (' + Cfg.DefaultProvider + ') can rerank with the model' +
+      Ansi.Reset);
+    PrintLn(Ansi.Dim +
+      '  itself (best quality, no download) or a local cross-encoder' + Ansi.Reset);
+    PrintLn(Ansi.Dim +
+      '  (bge-reranker-base, ~280 MB -- faster + free per query).' + Ansi.Reset);
+    PrintLn;
+    Choice := Trim(LowerCase(ReadLineEcho(
+      '  Reranking: [L]LM (default) / [b]ge-local / [s]kip: ')));
+    if (Choice = 's') or (Choice = 'skip') then
+    begin
+      PrintLn('  ' + Ansi.Dim + '(skipped -- enable later via rerank_search_enabled)' + Ansi.Reset);
+      Exit;
+    end;
+    Cfg.RerankSearchEnabled := True;
+    if (Choice = 'b') or (Choice = 'bge') or (Choice = 'local') then
+    begin
+      Cfg.RerankBackend := 'local';
+      Cfg.RerankModel   := 'bge-reranker-base';
+      PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' local reranking (bge-reranker-base)');
+      PrintLn;
+      Choice := Trim(LowerCase(ReadLineEcho('  Download it now (~280 MB)? [y/N]: ')));
+      if (Choice = 'y') or (Choice = 'yes') then
+      begin
+        PrintLn;
+        Cmd_Memory_Run(['provision', '--rerank-model', 'bge-reranker-base']);
+      end
+      else
+        PrintLn('  ' + Ansi.Dim +
+          '(deferred -- `pasclaw memory provision --rerank-model bge-reranker-base`)' + Ansi.Reset);
+    end
+    else
+    begin
+      { default: LLM backend }
+      Cfg.RerankBackend := 'llm';
+      PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset +
+        ' reranking via your provider (rerank_backend=llm)');
+      PrintLn('  ' + Ansi.Dim +
+        'note: retrieval reranking makes one model call per search; switch to ' +
+        'rerank_backend=local (bge) if you prefer speed/cost.' + Ansi.Reset);
+    end;
     Exit;
   end;
 
-  Cfg.RerankSearchEnabled := True;
-  PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' reranking enabled');
+  { Self-hosted: default to a dedicated local cross-encoder. }
+  PrintLn(Ansi.Dim +
+    '  Recommended for self-hosted setups: a dedicated local cross-encoder' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    '  (bge-reranker-base, ~280 MB) -- faster than your chat model and it' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    '  does not compete with it for the server''s resources.' + Ansi.Reset);
   PrintLn;
-  Choice := Trim(LowerCase(ReadLineEcho('  Download reranker now? [y/N]: ')));
+  Choice := Trim(LowerCase(ReadLineEcho('  Enable local reranking (bge-reranker-base)? [y/N]: ')));
+  if not ((Choice = 'y') or (Choice = 'yes')) then
+  begin
+    PrintLn('  ' + Ansi.Dim +
+      '(skipped -- enable later via rerank_search_enabled + ' +
+      '`pasclaw memory provision --rerank`; or set rerank_backend=llm to use ' +
+      'your local model)' + Ansi.Reset);
+    Exit;
+  end;
+  Cfg.RerankSearchEnabled := True;
+  Cfg.RerankBackend := 'local';
+  Cfg.RerankModel   := 'bge-reranker-base';
+  PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' local reranking (bge-reranker-base)');
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Download it now (~280 MB)? [y/N]: ')));
   if (Choice = 'y') or (Choice = 'yes') then
   begin
     PrintLn;
-    Cmd_Memory_Run(['provision', '--rerank']);
+    Cmd_Memory_Run(['provision', '--rerank-model', 'bge-reranker-base']);
   end
   else
     PrintLn('  ' + Ansi.Dim +
-      '(deferred -- run `pasclaw memory provision --rerank` when ready; ' +
-      'until then retrieval keeps the RRF order)' + Ansi.Reset);
+      '(deferred -- `pasclaw memory provision --rerank-model bge-reranker-base`)' + Ansi.Reset);
 end;
 
 procedure PromptKnowledgebase(Cfg: TConfig);

@@ -151,7 +151,9 @@ var
   QsegLen, DsegLen: Integer;
 begin
   { --- registry --- }
-  IsTrue(FindRerankerSpec('ms-marco-minilm', Spec), 'default reranker resolves');
+  IsTrue(SameText(DEFAULT_RERANKER, 'bge-reranker-base'), 'default reranker is bge-reranker-base');
+  IsTrue(FindRerankerSpec(DEFAULT_RERANKER, Spec), 'DEFAULT_RERANKER resolves');
+  IsTrue(FindRerankerSpec('ms-marco-minilm', Spec), 'ms-marco-minilm resolves (small fallback)');
   IsTrue(Spec.NeedsTokenTypeIds, 'ms-marco cross-encoder needs token_type_ids');
   IsTrue(Pos('ms-marco', LowerCase(Spec.DisplayName)) > 0, 'display name');
   IsTrue(FindRerankerSpec('ms-marco-l12', Spec), 'ms-marco L-12 alias resolves');
