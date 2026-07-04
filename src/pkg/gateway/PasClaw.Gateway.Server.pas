@@ -7167,7 +7167,7 @@ procedure TGatewayServer.HandleRerank(ARequest: TIdHTTPRequestInfo;
   descending, and usage. No outbound call -- the query and documents are
   scored on-host and never leave. }
 var
-  Body, ReqModel, ModelId, OneDoc, Backend: string;
+  Body, ReqModel, ModelId, OneDoc, Backend, RespModel, LLMModel: string;
   Req, Root, Item, DocObj, Usage: TJsonObject;
   DocsArr, ResArr: TJsonArray;
   Docs: array of string;
@@ -7232,6 +7232,14 @@ begin
       when no local model is provisioned. The endpoint is an explicit rerank
       request, so 'off' behaves like 'auto' here (retrieval, not the API, is
       what 'off' silences). }
+    { The request's model is a RERANKER selector for the local backend. Read it
+      up front: it also lets an explicit rerank_backend='llm' caller direct the
+      chat model used for scoring. In 'auto' fallback the value names a reranker
+      (not a chat model), so it is NOT forwarded to the provider there -- that
+      would 404. RespModel is what the response reports: always the model
+      actually used, never a false echo of an unhonored request. }
+    ReqModel := Req.GetStr('model', '');
+
     Backend := LowerCase(Trim(FCfg.RerankBackend));
     if Backend = '' then Backend := 'auto';
     UseLLM := False;
@@ -7242,6 +7250,7 @@ begin
     else { auto / off / unknown }
       UseLLM := not LocalRerankAvailable(GetHome);
 
+    RespModel := '';
     if UseLLM then
     begin
       if not LLMRerankAvailable(FProvider) then
@@ -7252,14 +7261,21 @@ begin
           'provider for the LLM fallback","type":"server_error"}}');
         Exit;
       end;
-      if not LLMRerank(FProvider, '', Query, Docs, 0, 0, Order, Scores) then
+      { Honor an explicit chat-model choice only when the caller explicitly
+        selected the llm backend; auto-fallback's model field is a reranker
+        name, so use the provider default there. }
+      if Backend = 'llm' then LLMModel := ReqModel else LLMModel := '';
+      if not LLMRerank(FProvider, LLMModel, Query, Docs, 0, 0, Order, Scores) then
       begin
         WriteJSON(AResp, 502,
           '{"error":{"message":"LLM rerank failed (provider error or ' +
           'unparseable ranking)","type":"server_error"}}');
         Exit;
       end;
-      ModelId := 'llm:' + FProvider.GetName;
+      if LLMModel <> '' then
+        RespModel := 'llm:' + FProvider.GetName + ':' + LLMModel
+      else
+        RespModel := 'llm:' + FProvider.GetName;
     end
     else
     begin
@@ -7278,9 +7294,12 @@ begin
         Exit;
       end;
       LocalRerankModelInfo(GetHome, ModelId);
+      { Local backend uses the configured model. Echo the caller's requested
+        reranker id when they named one, else the configured model. }
+      if ReqModel <> '' then RespModel := ReqModel
+      else RespModel := 'pasclaw-local-' + ModelId;
     end;
 
-    ReqModel   := Req.GetStr('model', '');
     ReturnDocs := Req.GetBool('return_documents', False);
     { top_n caps how many ranked results are returned; <=0 or absent = all. }
     TopN := Req.GetInt('top_n', 0);
@@ -7309,10 +7328,8 @@ begin
 
       Root := TJsonObject.Create;
       try
-        if ReqModel <> '' then
-          Root.PutStr('model', ReqModel)         { echo the requested model id }
-        else
-          Root.PutStr('model', 'pasclaw-local-' + ModelId);
+        { RespModel is the model actually used (never a false echo). }
+        Root.PutStr('model', RespModel);
         Root.PutArray('results', ResArr);        { takes ownership; ResArr := nil }
         Usage := TJsonObject.Create;
         Usage.PutInt('total_tokens', ApproxTokens);
