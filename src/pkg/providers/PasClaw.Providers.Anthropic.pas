@@ -594,7 +594,12 @@ var
 begin
   if Model <> '' then UseModel := Model else UseModel := FDefaultModel;
   URL  := FAPIBase + '/v1/messages';
-  Body := BuildRequest(Messages, Tools, UseModel, Options, FServerTools);
+  { A caller can force server tools off for one call (the reranker sets this so
+    a rank-these-docs prompt never triggers provider-side web search / fetch). }
+  if Options.DisableServerTools then
+    Body := BuildRequest(Messages, Tools, UseModel, Options, NoAnthropicServerTools)
+  else
+    Body := BuildRequest(Messages, Tools, UseModel, Options, FServerTools);
 
   {$IFDEF PASCLAW_C2W}
   SetLength(Headers, 3);
@@ -833,7 +838,10 @@ begin
   { Force stream:true in the request body. }
   Opts := Options;
   Opts.Stream := True;
-  Body := BuildRequest(Messages, Tools, UseModel, Opts, FServerTools);
+  if Opts.DisableServerTools then
+    Body := BuildRequest(Messages, Tools, UseModel, Opts, NoAnthropicServerTools)
+  else
+    Body := BuildRequest(Messages, Tools, UseModel, Opts, FServerTools);
   Root := TJsonObject.Parse(Body);
   if Root = nil then
   begin

@@ -122,6 +122,13 @@ type
     CacheEnabled:  Boolean;
     CacheTTL:      string;
     CacheKey:      string;
+    (* Suppress provider-side "server tools" (e.g. Gemini google_search
+       grounding) for THIS call, regardless of the provider's configured
+       defaults. Set by callers whose task must not trigger web grounding --
+       notably the LLM reranker, where grounding makes Gemini return empty
+       text (parts:[{text:""}] + groundingMetadata) for a rank-these-passages
+       prompt. Off by default; providers without server tools ignore it. *)
+    DisableServerTools: Boolean;
     Extra:         string;   { provider-specific JSON object }
   end;
 

@@ -352,6 +352,13 @@ type
       host). 503 when the model isn't provisioned. }
     procedure HandleEmbeddings(ARequest: TIdHTTPRequestInfo;
                                AResp: TIdHTTPResponseInfo);
+    { POST /v1/rerank (aliases /rerank, /v2/rerank) -- cross-encoder reranking
+      computed with PasClaw's local ONNX reranker (no outbound call; the query
+      and documents never leave the host). 503 when the reranker isn't
+      provisioned. Response shape follows the de-facto /v1/rerank contract --
+      a results array of index + relevance_score, sorted descending. }
+    procedure HandleRerank(ARequest: TIdHTTPRequestInfo;
+                           AResp: TIdHTTPResponseInfo);
     { GET /v1/providers/catalog -- the static provider catalog (names, default
       base/model, auth requirement) so the web onboarding wizard can offer a
       provider picker without hardcoding the list client-side. No secrets. }
@@ -483,6 +490,8 @@ uses
   PasClaw.Memory.Facts,         { fact store for the web Memory tab (Phase 5b) }
   PasClaw.Memory.Distill,       { TFact + NormaliseFact for manual remember }
   PasClaw.Memory.Facts.Embed,   { Phase 4c: semantic fact embedder }
+  PasClaw.Memory.Rerank.Serve,  { local ONNX cross-encoder for /v1/rerank }
+  PasClaw.Memory.Rerank.LLM,    { LLM fallback reranker (asks the chat model) }
   PasClaw.Providers.Factory,
   PasClaw.Providers.Catalog,   { TProviderSpec for /v1/models discovery }
   PasClaw.Providers.Models,    { DiscoverModels / cache -- /v1/models roster }
@@ -1269,6 +1278,7 @@ begin
       HandleMCPRequest(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/models')  then HandleModels(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/embeddings') then HandleEmbeddings(ARequest, AResponse)
+    else if (ARequest.Command = 'POST') and ((Doc = '/v1/rerank') or (Doc = '/rerank') or (Doc = '/v2/rerank')) then HandleRerank(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/providers/catalog') then HandleProvidersCatalog(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/mcp')     then HandleMCPList(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/cron')    then HandleCronList(AResponse)
@@ -7139,6 +7149,197 @@ begin
       end;
     finally
       DataArr.Free;   { nil after PutArray's ownership transfer -- safe }
+    end;
+  finally
+    Req.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleRerank(ARequest: TIdHTTPRequestInfo;
+                                      AResp: TIdHTTPResponseInfo);
+{ Cross-encoder reranking over PasClaw's local ONNX model. Accepts the
+  de-facto /v1/rerank body -- query (string), documents (array of strings;
+  the "texts" key is accepted as an alias, as TEI uses), optional model,
+  optional top_n (cap the number of results), optional return_documents
+  (echo each doc's text into the result). Returns a top-level object with
+  model, a results array (each element index + relevance_score, plus a
+  document.text when return_documents is set) sorted by relevance
+  descending, and usage. No outbound call -- the query and documents are
+  scored on-host and never leave. }
+var
+  Body, ReqModel, ModelId, OneDoc, Backend, RespModel, LLMModel: string;
+  Req, Root, Item, DocObj, Usage: TJsonObject;
+  DocsArr, ResArr: TJsonArray;
+  Docs: array of string;
+  Order: TArray<Integer>;
+  Scores: TArray<Single>;
+  Query: string;
+  TopN, i, ApproxTokens, Emitted: Integer;
+  ReturnDocs, UseLLM: Boolean;
+begin
+  Body := ReadRequestBody(ARequest);
+  if Trim(Body) = '' then
+  begin
+    WriteJSON(AResp, 400,
+      '{"error":{"message":"empty body","type":"invalid_request_error"}}');
+    Exit;
+  end;
+
+  Req := nil;
+  try
+    try
+      Req := TJsonObject.Parse(Body);
+    except
+      on E: Exception do
+      begin
+        WriteJSON(AResp, 400,
+          '{"error":{"message":"invalid JSON","type":"invalid_request_error"}}');
+        Exit;
+      end;
+    end;
+
+    Query := Req.GetStr('query', '');
+    if Trim(Query) = '' then
+    begin
+      WriteJSON(AResp, 400,
+        '{"error":{"message":"query is required","type":"invalid_request_error"}}');
+      Exit;
+    end;
+
+    { documents (preferred) or texts (TEI alias): an array of strings. }
+    SetLength(Docs, 0);
+    DocsArr := Req.ChildArray('documents');
+    if DocsArr = nil then
+      DocsArr := Req.ChildArray('texts');
+    if DocsArr <> nil then
+      for i := 0 to DocsArr.Count - 1 do
+      begin
+        OneDoc := DocsArr.ItemStr(i, '');
+        SetLength(Docs, Length(Docs) + 1);
+        Docs[High(Docs)] := OneDoc;
+      end;
+
+    if Length(Docs) = 0 then
+    begin
+      WriteJSON(AResp, 400,
+        '{"error":{"message":"documents is required (an array of strings; ' +
+        '\"texts\" is accepted as an alias)","type":"invalid_request_error"}}');
+      Exit;
+    end;
+
+    { Backend selection: 'local' uses only the ONNX model, 'llm' always asks
+      the chat model, 'auto' (default) prefers local and falls back to the LLM
+      when no local model is provisioned. The endpoint is an explicit rerank
+      request, so 'off' behaves like 'auto' here (retrieval, not the API, is
+      what 'off' silences). }
+    { The request's model is a RERANKER selector for the local backend. Read it
+      up front: it also lets an explicit rerank_backend='llm' caller direct the
+      chat model used for scoring. In 'auto' fallback the value names a reranker
+      (not a chat model), so it is NOT forwarded to the provider there -- that
+      would 404. RespModel is what the response reports: always the model
+      actually used, never a false echo of an unhonored request. }
+    ReqModel := Req.GetStr('model', '');
+
+    Backend := LowerCase(Trim(FCfg.RerankBackend));
+    if Backend = '' then Backend := 'auto';
+    UseLLM := False;
+    if Backend = 'llm' then
+      UseLLM := True
+    else if Backend = 'local' then
+      UseLLM := False
+    else { auto / off / unknown }
+      UseLLM := not LocalRerankAvailable(GetHome);
+
+    RespModel := '';
+    if UseLLM then
+    begin
+      if not LLMRerankAvailable(FProvider) then
+      begin
+        WriteJSON(AResp, 503,
+          '{"error":{"message":"no reranker available -- provision a local ' +
+          'model (`pasclaw memory provision --rerank`) or configure a chat ' +
+          'provider for the LLM fallback","type":"server_error"}}');
+        Exit;
+      end;
+      { Honor an explicit chat-model choice only when the caller explicitly
+        selected the llm backend; auto-fallback's model field is a reranker
+        name, so use the provider default there. }
+      if Backend = 'llm' then LLMModel := ReqModel else LLMModel := '';
+      if not LLMRerank(FProvider, LLMModel, Query, Docs, 0, 0, Order, Scores) then
+      begin
+        WriteJSON(AResp, 502,
+          '{"error":{"message":"LLM rerank failed (provider error or ' +
+          'unparseable ranking)","type":"server_error"}}');
+        Exit;
+      end;
+      if LLMModel <> '' then
+        RespModel := 'llm:' + FProvider.GetName + ':' + LLMModel
+      else
+        RespModel := 'llm:' + FProvider.GetName;
+    end
+    else
+    begin
+      if not LocalRerankAvailable(GetHome) then
+      begin
+        WriteJSON(AResp, 503,
+          '{"error":{"message":"local reranker not provisioned -- run ' +
+          '`pasclaw memory provision --rerank`, or set rerank_backend to ' +
+          '\"llm\"/\"auto\" to use the chat model","type":"server_error"}}');
+        Exit;
+      end;
+      if not LocalRerank(GetHome, Query, Docs, Order, Scores) then
+      begin
+        WriteJSON(AResp, 500,
+          '{"error":{"message":"rerank failed","type":"server_error"}}');
+        Exit;
+      end;
+      LocalRerankModelInfo(GetHome, ModelId);
+      { Local backend uses the configured model. Echo the caller's requested
+        reranker id when they named one, else the configured model. }
+      if ReqModel <> '' then RespModel := ReqModel
+      else RespModel := 'pasclaw-local-' + ModelId;
+    end;
+
+    ReturnDocs := Req.GetBool('return_documents', False);
+    { top_n caps how many ranked results are returned; <=0 or absent = all. }
+    TopN := Req.GetInt('top_n', 0);
+    if TopN <= 0 then TopN := Length(Order);
+
+    ApproxTokens := (Length(Query) + 3) div 4;
+    ResArr := TJsonArray.Create;
+    try
+      Emitted := 0;
+      for i := 0 to High(Order) do
+      begin
+        if Emitted >= TopN then Break;
+        Item := TJsonObject.Create;
+        Item.PutInt('index', Order[i]);
+        Item.PutFloat('relevance_score', Scores[i]);
+        if ReturnDocs then
+        begin
+          DocObj := TJsonObject.Create;
+          DocObj.PutStr('text', Docs[Order[i]]);
+          Item.PutObject('document', DocObj);   { takes ownership }
+        end;
+        ResArr.AddObject(Item);                 { takes ownership; Item := nil }
+        Inc(ApproxTokens, (Length(Docs[Order[i]]) + 3) div 4);
+        Inc(Emitted);
+      end;
+
+      Root := TJsonObject.Create;
+      try
+        { RespModel is the model actually used (never a false echo). }
+        Root.PutStr('model', RespModel);
+        Root.PutArray('results', ResArr);        { takes ownership; ResArr := nil }
+        Usage := TJsonObject.Create;
+        Usage.PutInt('total_tokens', ApproxTokens);
+        Root.PutObject('usage', Usage);
+        WriteJSON(AResp, 200, Root.ToJSON);
+      finally
+        Root.Free;
+      end;
+    finally
+      ResArr.Free;   { nil after PutArray's ownership transfer -- safe }
     end;
   finally
     Req.Free;

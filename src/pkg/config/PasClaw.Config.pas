@@ -642,6 +642,30 @@ type
        300+MB of model weights on disk can flip this in
        config.json or answer 'n' at onboarding. *)
     VectorSearchEnabled: Boolean;
+    (* Second-stage reranking of memory_search / kb_search candidates by a
+       local ONNX cross-encoder (PasClaw.Memory.Rerank). Off by default: it
+       needs the reranker model provisioned (`pasclaw memory provision
+       --rerank`) and adds a per-query scoring pass over the candidate pool.
+       When on, retrieval widens the first-stage (RRF) pool, rescores each
+       (query, candidate) pair with the cross-encoder, and truncates back to
+       K -- more precise ordering than the bi-encoder cosine alone. Falls
+       back silently to the RRF order when the reranker isn't loadable, so
+       flipping this on without provisioning is a no-op, never an error. *)
+    RerankSearchEnabled: Boolean;
+    (* Reranker model id (registry key in PasClaw.Memory.Rerank, e.g.
+       'ms-marco-minilm' or 'bge-reranker-base'). Empty = the built-in
+       default (ms-marco-minilm). Selects which cross-encoder the /v1/rerank
+       endpoint and the RerankSearchEnabled retrieval stage load. Set by
+       `pasclaw memory provision --rerank[-model KEY]`. *)
+    RerankModel:         string;
+    (* Which reranker backend to use: 'auto' (default) prefers the local ONNX
+       cross-encoder and falls back to asking the configured chat model when
+       no local model is provisioned; 'local' uses only the ONNX model (503 /
+       no-op when absent); 'llm' always asks the chat model; 'off' disables
+       reranking. The LLM backend (PasClaw.Memory.Rerank.LLM) needs no model
+       download -- a frontier model reranks well but costs one provider call
+       per rerank, so it is the fallback, not the retrieval default. *)
+    RerankBackend:       string;
     (* Render markdown the model emits as ANSI-styled text in the
        terminal (PasClaw.Markdown.Render). On by default -- terminal
        surfaces (pasclaw agent, pasclaw tui) call into it; serve /
@@ -965,6 +989,10 @@ uses
                                 see the comment inside LoadConfig }
   PasClaw.Tools.OutputCache,  { LoadConfig propagates condense_reversible
                                 via SetCondenseReversible -- same pattern }
+  PasClaw.Memory.Rerank.Serve, { LoadConfig propagates rerank_model +
+                                rerank_search_enabled -- same pattern. Its
+                                dep cone (LocalVector + onnxruntime) never
+                                imports PasClaw.Config, so no cycle. }
   PasClaw.Otel;               { LoadConfig calls InitOtelFromConfig so
                                 env-var overrides (OTEL_EXPORTER_OTLP_ENDPOINT)
                                 + the diagnostics.otel.* block in config.json
@@ -1104,6 +1132,9 @@ begin
   SelfImprovingSkills.Distiller.Model        := '';
   Profile := '';   { PR #291: empty == no persisted profile selection }
   VectorSearchEnabled  := True;  { on by default; onboarding asks (default Y) -- see TConfig comment }
+  RerankSearchEnabled  := False; { opt-in: needs the reranker model provisioned }
+  RerankModel          := '';    { empty == built-in default (ms-marco-minilm) }
+  RerankBackend        := 'auto';{ local if provisioned, else the chat model }
   AnthropicServerTools.WebSearch        := False;
   AnthropicServerTools.WebSearchMaxUses := 0;
   AnthropicServerTools.WebFetch         := False;
@@ -1359,6 +1390,14 @@ begin
       across SaveConfig + LoadConfig. }
     if not VectorSearchEnabled then
       Root.PutBool('vector_search_enabled', False);
+    { Reranking: opt-in, so only emit when enabled / customised (keeps the
+      default config.json unchanged for the common case). }
+    if RerankSearchEnabled then
+      Root.PutBool('rerank_search_enabled', True);
+    if RerankModel <> '' then
+      Root.PutStr('rerank_model', RerankModel);
+    if (RerankBackend <> '') and (RerankBackend <> 'auto') then
+      Root.PutStr('rerank_backend', RerankBackend);
     { Tool output cap: emit only when it differs from the default --
       including an explicit 0 (opt-OUT), which must round-trip or the
       next LoadConfig would silently re-enable the cap. }
@@ -1834,6 +1873,10 @@ begin
                                               MCPProgressiveDisclosure);
     RenderMarkdown      := Root.GetBool('render_markdown',       RenderMarkdown);
     VectorSearchEnabled := Root.GetBool('vector_search_enabled', VectorSearchEnabled);
+    RerankSearchEnabled := Root.GetBool('rerank_search_enabled', RerankSearchEnabled);
+    RerankModel         := Root.GetStr('rerank_model', RerankModel);
+    RerankBackend       := LowerCase(Trim(Root.GetStr('rerank_backend', RerankBackend)));
+    if RerankBackend = '' then RerankBackend := 'auto';
     ToolOutputCap       := Integer(Root.GetInt('tool_output_cap', ToolOutputCap));
     StatsCollectionEnabled := Root.GetBool('stats_collection_enabled',
                                            StatsCollectionEnabled);
@@ -2259,6 +2302,11 @@ begin
   { Symmetric propagation of the reversible-condensation flag -- OutputCache
     holds the same process-global mirror. }
   SetCondenseReversible(C.CondenseReversible);
+  { Reranker: which cross-encoder to load + whether retrieval reranks. The
+    /v1/rerank endpoint and the memory_search rerank stage both read these
+    process-globals, so this chokepoint keeps them in sync with config.json. }
+  SetLocalRerankModel(C.RerankModel);
+  SetRerankSearchEnabled(C.RerankSearchEnabled);
   { OpenTelemetry traces. No-op when diagnostics.otel.enabled is False AND
     the OTEL_EXPORTER_OTLP_ENDPOINT env var is unset -- so single-shot CLI
     commands like `pasclaw status` pay nothing for the wiring. }

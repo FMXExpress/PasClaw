@@ -52,6 +52,13 @@ type
     { Encode text into BERT input ids, including [CLS]/[SEP], truncated so the
       whole sequence is at most AMaxLen tokens. }
     function Encode(const AText: UnicodeString; AMaxLen: Integer = 256): TArray<Int64>;
+    { Encode a (query, doc) PAIR for a cross-encoder: "[CLS] query [SEP] doc
+      [SEP]" as input ids, with token_type_ids segmenting query (0) from doc (1).
+      The doc is truncated first (then the query, capped at half the budget) so
+      the packed pair is at most AMaxLen tokens. Added for PasClaw.Memory.Rerank;
+      the bi-encoder Encode above is unchanged. }
+    procedure EncodePair(const AQuery, ADoc: UnicodeString; AMaxLen: Integer;
+      out AIds, ATypeIds: TArray<Int64>);
     property ClsId: Integer read FClsId;
     property SepId: Integer read FSepId;
     property UnkId: Integer read FUnkId;
@@ -381,6 +388,44 @@ begin
     Result := Ids.ToArray;
   finally
     Ids.Free;
+  end;
+end;
+
+procedure TBertTokenizer.EncodePair(const AQuery, ADoc: UnicodeString;
+  AMaxLen: Integer; out AIds, ATypeIds: TArray<Int64>);
+var
+  Q, D: TList<Int64>;
+  Words: TArray<UnicodeString>;
+  Budget, QCap, I, N: Integer;
+begin
+  Q := TList<Int64>.Create;
+  D := TList<Int64>.Create;
+  try
+    Words := BasicTokenize(AQuery);
+    for I := 0 to High(Words) do WordPiece(Words[I], Q);
+    Words := BasicTokenize(ADoc);
+    for I := 0 to High(Words) do WordPiece(Words[I], D);
+
+    // Room for [CLS] + [SEP] + [SEP]. Cap the query at half the budget so a
+    // pathological query can't crowd out the document, then truncate the doc.
+    Budget := AMaxLen - 3;
+    if Budget < 0 then Budget := 0;
+    QCap := Budget div 2;
+    while Q.Count > QCap do Q.Delete(Q.Count - 1);
+    while (Q.Count + D.Count) > Budget do D.Delete(D.Count - 1);
+
+    N := 1 + Q.Count + 1 + D.Count + 1;
+    SetLength(AIds, N);
+    SetLength(ATypeIds, N);
+    AIds[0] := FClsId; ATypeIds[0] := 0;
+    N := 1;
+    for I := 0 to Q.Count - 1 do begin AIds[N] := Q[I]; ATypeIds[N] := 0; Inc(N); end;
+    AIds[N] := FSepId; ATypeIds[N] := 0; Inc(N);   // first [SEP] -> segment A
+    for I := 0 to D.Count - 1 do begin AIds[N] := D[I]; ATypeIds[N] := 1; Inc(N); end;
+    AIds[N] := FSepId; ATypeIds[N] := 1;           // closing [SEP] -> segment B
+  finally
+    Q.Free;
+    D.Free;
   end;
 end;
 

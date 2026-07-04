@@ -830,7 +830,13 @@ var
 begin
   if Model <> '' then UseModel := Model else UseModel := FDefaultModel;
   URL  := FAPIBase + '/v1beta/models/' + UseModel + ':generateContent';
-  Body := BuildRequest(Messages, Tools, UseModel, Options, FServerTools);
+  { A caller can force server tools off for one call (e.g. the reranker, which
+    must not trigger google_search grounding -- grounding returns empty text
+    for a rank-these-passages prompt). }
+  if Options.DisableServerTools then
+    Body := BuildRequest(Messages, Tools, UseModel, Options, NoGeminiServerTools)
+  else
+    Body := BuildRequest(Messages, Tools, UseModel, Options, FServerTools);
 
   SetLength(Headers, 1);
   Headers[0] := MakeHeader('x-goog-api-key', FAPIKey);

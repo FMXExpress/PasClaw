@@ -409,7 +409,12 @@ var
 begin
   if Model <> '' then UseModel := Model else UseModel := FDefaultModel;
   URL  := FAPIBase + FChatPath;
-  Body := BuildOAIRequest(Messages, Tools, UseModel, Options, FServerTools);
+  { A caller can force server tools off for one call (the reranker sets this so
+    a rank-these-docs prompt never triggers provider-side web search). }
+  if Options.DisableServerTools then
+    Body := BuildOAIRequest(Messages, Tools, UseModel, Options, NoOpenAIServerTools)
+  else
+    Body := BuildOAIRequest(Messages, Tools, UseModel, Options, FServerTools);
 
   Headers := BuildAuthHeaders;
 

@@ -150,7 +150,8 @@ uses
   LocalVector.Embedder,
   LocalVector.Tokenizer,
   LocalVector.Models,
-  LocalVector.OrtProvision;
+  LocalVector.OrtProvision,
+  PasClaw.Memory.Rerank.Serve;   { optional cross-encoder rerank stage }
 
 const
   { Extensions indexed by Sync. Lowercase, with dot. Plain-text reads;
@@ -1234,7 +1235,11 @@ begin
   begin
     try
       Emb := EmbedText(Query);
-      VHits := FStore.Search(Query, Emb, smHybrid, K);
+      { Optional cross-encoder rerank: RerankedStoreSearch widens the
+        first-stage pool, rescores (query, chunk) pairs, and truncates back to
+        K when reranking is provisioned/enabled -- otherwise it's a plain
+        hybrid search. Same helper PasClaw.Memory.Vector.Search uses. }
+      VHits := RerankedStoreSearch(GetHome, Query, Emb, FStore, smHybrid, K);
       SetLength(Result, Length(VHits));
       for i := 0 to High(VHits) do
       begin
