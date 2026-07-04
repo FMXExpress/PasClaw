@@ -132,8 +132,7 @@ function RerankerIsSentencePiece(const AKey: string): Boolean;
 var K: string;
 begin
   K := LowerCase(Trim(AKey));
-  Result := (Pos('bge-reranker', K) = 1) or (K = 'bge-rerank') or (K = 'bge-m3')
-         or (Pos('jina-reranker', K) = 1) or (K = 'jina-rerank');
+  Result := (Pos('bge-reranker', K) = 1) or (K = 'bge-rerank') or (K = 'bge-m3');
 end;
 
 function FindRerankerSpec(const AKey: string; out ASpec: TModelSpec): Boolean;
@@ -157,31 +156,32 @@ begin
     model's vocab file; TSPUnigram loads it as JSON). int8-quantised ONNX so it
     is CPU-practical; NeedsTT=False because RoBERTa has no segment embeddings.
 
-    LICENSING (matters for the DEFAULT): bge-reranker-base is MIT, so it is the
-    default -- commercially usable everywhere. jina-reranker-v2 scores higher on
-    BEIR (see rerank_eval) but is CC-BY-NC-4.0 (NON-commercial): offered as a
-    quality opt-in, never the default. (bge-reranker-v2-m3 is Apache-2.0 and
-    would be a great commercial upgrade, but no public ONNX export exists yet,
-    so it is intentionally NOT registered -- would 404 on download.) }
+    LICENSING (matters for the DEFAULT -- an open framework must ship a
+    commercially-usable default): both registered XLM-R rerankers are permissive
+    -- bge-reranker-base is MIT (the light default), bge-reranker-v2-m3 is
+    Apache-2.0 (the stronger, larger quality upgrade). jina-reranker-v2 scores
+    higher on BEIR but is CC-BY-NC-4.0 (non-commercial), so it is deliberately
+    NOT offered -- no non-commercial model ships here. }
   else if (K = 'bge-reranker-base') or (K = 'bge-rerank') or (K = 'bge-reranker') then
     ASpec := MakeRSpec('bge-reranker-base', 'bge-reranker-base (int8, MIT)', 'bge-reranker-base',
       'https://huggingface.co/Xenova/bge-reranker-base/resolve/main/',
       'onnx/model_int8.onnx', 'tokenizer.json', False, False, '~280 MB')
-  else if (K = 'jina-reranker-v2') or (K = 'jina-rerank')
-     or (K = 'jina-reranker-v2-base-multilingual') then
-    ASpec := MakeRSpec('jina-reranker-v2',
-      'jina-reranker-v2-base-multilingual (int8, CC-BY-NC non-commercial)',
-      'jina-reranker-v2-base-multilingual',
-      'https://huggingface.co/jinaai/jina-reranker-v2-base-multilingual/resolve/main/',
-      'onnx/model_int8.onnx', 'tokenizer.json', False, False, '~270 MB')
+  else if (K = 'bge-reranker-v2-m3') or (K = 'bge-m3') then
+    { XLM-R-LARGE (568M). Best open commercial quality, but int8-on-CPU is slow
+      (~100 s per 30-doc rerank in testing) -- practical only on GPU / an
+      accelerated server, not for interactive CPU retrieval. }
+    ASpec := MakeRSpec('bge-reranker-v2-m3', 'bge-reranker-v2-m3 (int8, Apache-2.0, GPU-recommended)',
+      'bge-reranker-v2-m3',
+      'https://huggingface.co/onnx-community/bge-reranker-v2-m3-ONNX/resolve/main/',
+      'onnx/model_int8.onnx', 'tokenizer.json', False, False, '~570 MB (large; slow on CPU)')
   else
     Result := False;
 end;
 
 function RerankerKeys: string;
 begin
-  Result := 'ms-marco-minilm, ms-marco-minilm-l12, bge-reranker-base (default), ' +
-            'jina-reranker-v2 (non-commercial)';
+  Result := 'ms-marco-minilm, ms-marco-minilm-l12, ' +
+            'bge-reranker-base (default), bge-reranker-v2-m3';
 end;
 
 { ----- TReranker ----- }

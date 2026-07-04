@@ -165,13 +165,16 @@ begin
   IsTrue(Pos('tokenizer.json', Spec.VocabRelURL) > 0, 'bge vocab is tokenizer.json');
   IsTrue(RerankerIsSentencePiece('bge-reranker-base'), 'bge-reranker-base is SentencePiece');
   IsTrue(SameText(DEFAULT_RERANKER, 'bge-reranker-base'), 'default is bge-reranker-base (MIT)');
-  { jina-reranker-v2: same XLM-R SentencePiece path, input_ids+attention_mask only }
-  IsTrue(FindRerankerSpec('jina-reranker-v2', Spec), 'jina-reranker-v2 resolves');
-  IsTrue(not Spec.NeedsTokenTypeIds, 'jina (XLM-R) needs no token_type_ids');
-  IsTrue(RerankerIsSentencePiece('jina-reranker-v2'), 'jina-reranker-v2 is SentencePiece');
-  IsTrue(Pos('tokenizer.json', Spec.VocabRelURL) > 0, 'jina vocab is tokenizer.json');
+  { bge-reranker-v2-m3: Apache-2.0 quality upgrade, same XLM-R SentencePiece path }
+  IsTrue(FindRerankerSpec('bge-reranker-v2-m3', Spec), 'bge-reranker-v2-m3 resolves');
+  IsTrue(not Spec.NeedsTokenTypeIds, 'bge-v2-m3 (XLM-R) needs no token_type_ids');
+  IsTrue(RerankerIsSentencePiece('bge-reranker-v2-m3'), 'bge-reranker-v2-m3 is SentencePiece');
+  IsTrue(Pos('tokenizer.json', Spec.VocabRelURL) > 0, 'bge-v2-m3 vocab is tokenizer.json');
+  IsTrue(Pos('Apache', Spec.DisplayName) > 0, 'bge-v2-m3 labeled Apache-2.0');
+  { jina-reranker-v2 is CC-BY-NC (non-commercial) -- deliberately NOT offered }
+  IsTrue(not FindRerankerSpec('jina-reranker-v2', Spec), 'jina (non-commercial) is NOT registered');
   IsTrue(not FindRerankerSpec('nope', Spec), 'unknown key -> false');
-  WriteLn('  ok: reranker registry (ms-marco WordPiece + bge SentencePiece)');
+  WriteLn('  ok: reranker registry (MIT/Apache SentencePiece models; jina dropped)');
 
   Vocab := WriteVocab;
   { model path unused until Score(); EncodePair only needs the tokenizer/vocab. }

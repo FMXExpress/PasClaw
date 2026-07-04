@@ -71,13 +71,15 @@ begin
     On real qrels EVERY cross-encoder beats BM25 (SciFact's candidates are
     genuinely on-topic, so reranking helps -- unlike the adversarial 6-case set
     below, where the tiny ms-marco models regressed on lexical traps).
-    jina-reranker-v2 is the clear quality winner, BUT it is CC-BY-NC-4.0
-    (non-commercial), so bge-reranker-base (MIT) is the default and jina is a
-    quality opt-in. The LLM backend (PasClaw.Memory.Rerank.LLM) tops all local
-    models by reading query+passages together. So: 'llm'/'auto' for best
-    quality; bge-reranker-base (MIT) as the default offline model; jina-
-    reranker-v2 for the strongest offline result where a non-commercial license
-    is acceptable; ms-marco as the tiny fallback.
+    jina-reranker-v2 scored highest but is CC-BY-NC-4.0 (non-commercial) and is
+    therefore NOT shipped. Among the offered (permissive) models bge-reranker-
+    base (MIT) is the default; bge-reranker-v2-m3 (Apache-2.0, XLM-R-large) is
+    the stronger commercial upgrade but int8-on-CPU is ~100 s per 30-doc rerank
+    -- GPU/server only, so not run at full scale here. The LLM backend
+    (PasClaw.Memory.Rerank.LLM) tops all local models by reading query+passages
+    together. So: 'llm'/'auto' for best quality; bge-reranker-base (MIT) as the
+    default CPU-practical offline model; bge-reranker-v2-m3 on a GPU box;
+    ms-marco as the tiny fallback.
 
     The cases below are an illustrative in-repo smoke set (no dataset needed).
     Relevant indices are the docs that, to a
