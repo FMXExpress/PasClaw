@@ -359,6 +359,14 @@ type
       a results array of index + relevance_score, sorted descending. }
     procedure HandleRerank(ARequest: TIdHTTPRequestInfo;
                            AResp: TIdHTTPResponseInfo);
+    { GET /v1/memory/provision -- current memory/reranking config + what's
+      provisioned + any running download job. POST /v1/memory/provision --
+      save the memory config toggles (applied live for reranking) and, when
+      asked, kick off a background download of the embedder / reranker. Drives
+      the web UI's unified Memory dialog. }
+    procedure HandleMemoryProvisionStatus(AResp: TIdHTTPResponseInfo);
+    procedure HandleMemoryProvision(ARequest: TIdHTTPRequestInfo;
+                                    AResp: TIdHTTPResponseInfo);
     { GET /v1/providers/catalog -- the static provider catalog (names, default
       base/model, auth requirement) so the web onboarding wizard can offer a
       provider picker without hardcoding the list client-side. No secrets. }
@@ -490,8 +498,10 @@ uses
   PasClaw.Memory.Facts,         { fact store for the web Memory tab (Phase 5b) }
   PasClaw.Memory.Distill,       { TFact + NormaliseFact for manual remember }
   PasClaw.Memory.Facts.Embed,   { Phase 4c: semantic fact embedder }
+  PasClaw.Memory.Rerank,        { reranker registry: DEFAULT_RERANKER, RerankerKeys }
   PasClaw.Memory.Rerank.Serve,  { local ONNX cross-encoder for /v1/rerank }
   PasClaw.Memory.Rerank.LLM,    { LLM fallback reranker (asks the chat model) }
+  PasClaw.Memory.Provision,     { background embed/reranker provisioning for the web Memory dialog }
   PasClaw.Providers.Factory,
   PasClaw.Providers.Catalog,   { TProviderSpec for /v1/models discovery }
   PasClaw.Providers.Models,    { DiscoverModels / cache -- /v1/models roster }
@@ -1295,6 +1305,8 @@ begin
     else if (ARequest.Command = 'POST') and (Doc = '/v1/workspace/import') then HandleWorkspaceImport(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/kb')       then HandleKBList(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/memory/search') then HandleMemorySearch(ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/memory/provision') then HandleMemoryProvisionStatus(AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/memory/provision') then HandleMemoryProvision(ARequest, AResponse)
     { Distilled-fact routes -- BEFORE the generic /v1/memory/ GET prefix so
       "facts" isn't mistaken for a markdown filename. }
     else if (ARequest.Command = 'GET')    and (Doc = '/v1/memory/facts/export') then HandleMemoryFactsExport(AResponse)
@@ -7340,6 +7352,126 @@ begin
       end;
     finally
       ResArr.Free;   { nil after PutArray's ownership transfer -- safe }
+    end;
+  finally
+    Req.Free;
+  end;
+end;
+
+function MemProvPhaseName(P: TMemProvPhase): string;
+begin
+  case P of
+    mpRunning: Result := 'running';
+    mpDone:    Result := 'done';
+    mpError:   Result := 'error';
+  else         Result := 'idle';
+  end;
+end;
+
+procedure TGatewayServer.HandleMemoryProvisionStatus(AResp: TIdHTTPResponseInfo);
+{ GET /v1/memory/provision -- memory config + provisioned artifacts + job state. }
+var
+  Cfg: TConfig;
+  Home, RModel: string;
+  St: TMemProvStatus;
+  Root, Job: TJsonObject;
+begin
+  Home := GetHome;
+  Cfg := LoadConfig;
+  try
+    RModel := Trim(Cfg.RerankModel);
+    if RModel = '' then RModel := DEFAULT_RERANKER;
+    Root := TJsonObject.Create;
+    try
+      Root.PutBool('vector_search_enabled', Cfg.VectorSearchEnabled);
+      Root.PutBool('rerank_search_enabled', Cfg.RerankSearchEnabled);
+      if Cfg.RerankBackend <> '' then Root.PutStr('rerank_backend', Cfg.RerankBackend)
+                                 else Root.PutStr('rerank_backend', 'auto');
+      Root.PutStr('rerank_model', RModel);
+      Root.PutStr('reranker_keys', RerankerKeys);
+      Root.PutBool('embed_provisioned',  EmbedArtifactsPresent(Home));
+      Root.PutBool('rerank_provisioned', RerankArtifactsPresent(Home, RModel));
+      Root.PutBool('vec_provisioned',    VecExtPresent(Home));
+      Root.PutBool('ort_loadable',       OrtLoadable(Home));
+      Job := TJsonObject.Create;
+      St := MemProvGet;
+      Job.PutStr('phase', MemProvPhaseName(St.Phase));
+      Job.PutStr('step',  St.Step);
+      if St.Error <> '' then Job.PutStr('error', St.Error);
+      Root.PutObject('job', Job);
+      WriteJSON(AResp, 200, Root.ToJSON);
+    finally
+      Root.Free;
+    end;
+  finally
+    Cfg.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleMemoryProvision(ARequest: TIdHTTPRequestInfo;
+                                               AResp: TIdHTTPResponseInfo);
+{ POST /v1/memory/provision -- persist the memory toggles (reranking applied
+  live) and optionally start a background model download. Body (all optional):
+    vector_search_enabled, rerank_search_enabled, rerank_backend, rerank_model,
+    download_embed, download_rerank. }
+var
+  Body: string;
+  Req, Root: TJsonObject;
+  Cfg: TConfig;
+  DoEmbed, DoRerank, Started: Boolean;
+  RModel: string;
+begin
+  Body := ReadRequestBody(ARequest);
+  Req := nil;
+  try
+    if Trim(Body) <> '' then
+      try Req := TJsonObject.Parse(Body); except on E: Exception do Req := nil; end;
+    if Req = nil then Req := TJsonObject.Create;
+
+    Cfg := LoadConfig;
+    try
+      { Absent keys keep the current value (GetX default = current). }
+      Cfg.VectorSearchEnabled := Req.GetBool('vector_search_enabled', Cfg.VectorSearchEnabled);
+      Cfg.RerankSearchEnabled := Req.GetBool('rerank_search_enabled', Cfg.RerankSearchEnabled);
+      Cfg.RerankBackend := LowerCase(Trim(Req.GetStr('rerank_backend', Cfg.RerankBackend)));
+      if Cfg.RerankBackend = '' then Cfg.RerankBackend := 'auto';
+      Cfg.RerankModel := Trim(Req.GetStr('rerank_model', Cfg.RerankModel));
+      try
+        SaveConfig(Cfg);
+        ApplyConfigGlobals(Cfg);   { live-applies SetLocalRerankModel + SetRerankSearchEnabled }
+      except
+        on E: Exception do
+        begin
+          WriteJSON(AResp, 500,
+            '{"error":{"message":"could not save config: ' + JsonEscape(E.Message) +
+            '","type":"server_error"}}');
+          Exit;
+        end;
+      end;
+      RModel := Cfg.RerankModel;
+    finally
+      Cfg.Free;
+    end;
+
+    DoEmbed  := Req.GetBool('download_embed', False);
+    DoRerank := Req.GetBool('download_rerank', False);
+    Started := False;
+    if DoEmbed or DoRerank then
+      Started := MemProvStart(GetHome, DoEmbed, DoRerank, RModel);
+
+    Root := TJsonObject.Create;
+    try
+      Root.PutBool('saved', True);
+      Root.PutBool('job_started', Started);
+      Root.PutBool('job_active', MemProvActive);
+      if (DoEmbed or DoRerank) and (not Started) then
+        Root.PutStr('note', 'a provisioning job is already running')
+      else
+        Root.PutStr('note', 'reranking settings applied live; vector-search + '
+          + 'agent tools pick up on the next restart');
+      WriteJSON(AResp, 200, Root.ToJSON);
+    finally
+      Root.Free;
     end;
   finally
     Req.Free;

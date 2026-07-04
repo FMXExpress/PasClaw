@@ -671,6 +671,37 @@
     <div class="subtabs" id="mem-subtabs">
       <button type="button" data-sub="notes" class="active">Notes &amp; files</button>
       <button type="button" data-sub="facts">Distilled facts</button>
+      <button type="button" data-sub="setup">Setup</button>
+    </div>
+    <div class="subpane" id="subpane-setup">
+      <div id="mem-setup-box" style="max-width:560px">
+        <div class="crumb">memory &amp; reranking setup <span id="mem-setup-status"></span></div>
+        <p class="ob-sub">Local semantic search + optional cross-encoder reranking.
+          Runs on-device; nothing leaves the host. Model downloads happen here.</p>
+        <div class="ob-field">
+          <label><input type="checkbox" id="ms-vector"> Semantic memory search (local embeddings)</label>
+          <div class="ob-note" id="ms-embed-note"></div>
+        </div>
+        <div class="ob-field">
+          <label for="ms-backend">Reranking (2nd-stage, sharper ordering)</label>
+          <select id="ms-backend" class="cfg-input">
+            <option value="off">Off</option>
+            <option value="local">Local cross-encoder</option>
+            <option value="llm">Use my chat model (LLM)</option>
+            <option value="auto">Auto (local if downloaded, else LLM)</option>
+          </select>
+        </div>
+        <div class="ob-field" id="ms-model-field" hidden>
+          <label for="ms-model">Local reranker model</label>
+          <select id="ms-model" class="cfg-input"></select>
+          <div class="ob-note" id="ms-rerank-note"></div>
+        </div>
+        <div id="ms-job" class="ob-note" hidden></div>
+        <div id="ms-err" class="ob-err" hidden></div>
+        <div style="margin-top:.7rem;display:flex;gap:.5rem">
+          <button type="button" id="ms-save" class="ob-btn">Save &amp; download</button>
+        </div>
+      </div>
     </div>
     <div class="subpane" id="subpane-facts">
       <div id="facts-box">
@@ -2252,6 +2283,94 @@ async function saveConfigKeys(patch) {
   await gwFetch("/v1/config", { method: "PUT",
     headers: { "content-type": "application/json" }, body: JSON.stringify(cur) });
 }
+
+/* ===== Memory & reranking setup (memory tab › Setup) ===== */
+let msPollTimer = null;
+function msParseKeys(s) {
+  /* "ms-marco-minilm, bge-reranker-base (default), ..." -> [{val,label}] */
+  return (s || "").split(",").map(x => x.trim()).filter(Boolean).map(x => {
+    const val = x.split(" (")[0].trim();
+    return { val, label: x };
+  });
+}
+async function memSetupLoad() {
+  let st;
+  try { st = await (await gwFetch("/v1/memory/provision")).json(); }
+  catch (e) { $("#mem-setup-status").textContent = "unavailable"; return; }
+  $("#ms-vector").checked = !!st.vector_search_enabled;
+  const emb = st.embed_provisioned, ort = st.ort_loadable;
+  $("#ms-embed-note").innerHTML = emb
+    ? '<span style="color:var(--grn)">✓ embedder downloaded</span>' + (ort ? "" : ' · <span style="color:var(--org)">ONNX Runtime not loadable here</span>')
+    : "not downloaded (~90 MB)";
+  /* backend */
+  const backend = st.rerank_search_enabled ? (st.rerank_backend || "auto") : "off";
+  $("#ms-backend").value = ["off","local","llm","auto"].includes(backend) ? backend : "auto";
+  /* model dropdown */
+  const sel = $("#ms-model"); sel.innerHTML = "";
+  msParseKeys(st.reranker_keys).forEach(k => {
+    const o = document.createElement("option"); o.value = k.val; o.textContent = k.label; sel.appendChild(o);
+  });
+  sel.value = st.rerank_model || "bge-reranker-base";
+  $("#ms-rerank-note").innerHTML = st.rerank_provisioned
+    ? '<span style="color:var(--grn)">✓ reranker downloaded</span>'
+    : "not downloaded";
+  msToggleModelField();
+  /* job */
+  msRenderJob(st.job);
+}
+function msToggleModelField() {
+  const b = $("#ms-backend").value;
+  $("#ms-model-field").hidden = (b !== "local" && b !== "auto");
+}
+function msRenderJob(job) {
+  const el = $("#ms-job");
+  if (!job || job.phase === "idle") { el.hidden = true; if (msPollTimer) { clearInterval(msPollTimer); msPollTimer = null; } return; }
+  el.hidden = false;
+  if (job.phase === "running") el.innerHTML = '⏳ downloading: ' + escapeHtml(job.step || "…");
+  else if (job.phase === "done") el.innerHTML = '<span style="color:var(--grn)">✓ download complete</span>';
+  else if (job.phase === "error") el.innerHTML = '<span style="color:var(--red,#e66)">download failed: ' + escapeHtml(job.error || "") + '</span>';
+}
+async function memSetupSave() {
+  $("#ms-err").hidden = true;
+  const st = await (await gwFetch("/v1/memory/provision")).json();
+  const vector = $("#ms-vector").checked;
+  const backend = $("#ms-backend").value;
+  const model = $("#ms-model").value;
+  const body = {
+    vector_search_enabled: vector,
+    rerank_search_enabled: backend !== "off",
+    rerank_backend: backend === "off" ? "auto" : backend,
+    rerank_model: model,
+    download_embed: vector && !st.embed_provisioned,
+    download_rerank: (backend === "local" || backend === "auto") && !st.rerank_provisioned,
+  };
+  try {
+    const r = await (await gwFetch("/v1/memory/provision", { method: "POST",
+      headers: { "content-type": "application/json" }, body: JSON.stringify(body) })).json();
+    if (body.download_embed || body.download_rerank) {
+      msRenderJob({ phase: "running", step: "starting" });
+      if (msPollTimer) clearInterval(msPollTimer);
+      msPollTimer = setInterval(async () => {
+        const s = await (await gwFetch("/v1/memory/provision")).json();
+        msRenderJob(s.job);
+        if (!s.job || s.job.phase === "done" || s.job.phase === "error" || s.job.phase === "idle") {
+          clearInterval(msPollTimer); msPollTimer = null; memSetupLoad();
+        }
+      }, 1500);
+    } else {
+      sysNote("memory settings saved");
+      memSetupLoad();
+    }
+  } catch (e) {
+    const el = $("#ms-err"); el.hidden = false; el.textContent = "save failed: " + String(e);
+  }
+}
+document.addEventListener("DOMContentLoaded", () => {
+  const b = document.querySelector('#mem-subtabs [data-sub="setup"]');
+  if (b) b.addEventListener("click", memSetupLoad);
+  const bk = $("#ms-backend"); if (bk) bk.addEventListener("change", msToggleModelField);
+  const sv = $("#ms-save"); if (sv) sv.addEventListener("click", memSetupSave);
+});
 
 /* Returns true if the typed text was handled as a slash command. */
 function handleSlash(typed) {
