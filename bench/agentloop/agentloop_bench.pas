@@ -1016,7 +1016,19 @@ begin
     exercise the scenarios under an arbitrary feature config -- e.g. to detect
     whether enabling reranking / memory-distill / orient / condense / the
     auto-router / self-improving-skills regresses the loop metrics vs stock.
-    When unset, the base config's auto_router stays disabled (stock). }
+    When unset, the base config's auto_router stays disabled (stock).
+
+    SCOPE OF WHAT THIS MEASURES: the hook deterministically shapes the request
+    (config globals, prompt assembly, condense/orient context) so per-request
+    body-size and synchronous provider-call deltas are reproducible. It does
+    NOT deterministically measure features that schedule an ASYNC provider call
+    off the turn's critical path -- notably memory_distill_enabled (ScheduleDistill
+    fires AFTER the turn completes) and the self-improving-skills distiller. Those
+    calls race the scenario boundary: the drainer may count them under the wrong
+    scenario, miss them entirely, or hand the distiller a scenario tool-call
+    response instead of a facts-JSON response. Treat provider_calls deltas for
+    async-scheduling features as indicative, not exact; assert on them only with
+    an explicit post-turn drain/quiesce, not on the count-based scenario boundary. }
   CfgJSON :=
     '{"default_provider":"relay","default_model":"sim",' +
     '"providers":[{"name":"relay","kind":"relay","model":"sim"}],' +
