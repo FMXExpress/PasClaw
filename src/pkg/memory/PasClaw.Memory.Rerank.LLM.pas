@@ -164,6 +164,16 @@ begin
   Opts := DefaultChatOptions;
   Opts.Temperature := 0;      { deterministic ordering }
   Opts.Stream      := False;
+  { Never let provider grounding/web-search fire for a rerank: we are ordering
+    the passages we were handed, not searching. With Gemini google_search on,
+    the model returns empty text + groundingMetadata for this prompt. }
+  Opts.DisableServerTools := True;
+  { Thinking models (e.g. gemini-2.5-flash) spend output budget reasoning
+    BEFORE emitting the answer; with a small cap the whole budget goes to
+    thinking and the text part comes back empty. The answer here is only a
+    short index array, but give generous headroom so thinking never starves
+    it. Harmless for non-thinking models -- the array is tiny. }
+  Opts.MaxTokens   := 4096;
   Opts.SystemPrompt :=
     'You are a search result reranker. You are given a query and a numbered ' +
     'list of candidate passages. Order the passages from MOST to LEAST ' +
