@@ -1841,10 +1841,13 @@ begin
       on EVERY request. It now lives where it's needed -- the format-error
       messages (PreflightToolCall / PasClaw.Hashline validators) teach the
       exact syntax the moment a patch is malformed. }
-    T.Description := 'Edit a file by replacing an exact snippet: pass old_text (verbatim, ' +
-                     'including whitespace) and new_text; unique match unless replace_all; ' +
-                     'omit new_text to delete. Advanced: a hashline `patch` (read the file ' +
-                     'with hashline:true first) does line-anchored multi-hunk edits; format ' +
+    T.Description := 'Edit ONE spot in a file by replacing an exact snippet: pass old_text ' +
+                     '(verbatim, including whitespace) and new_text; unique match unless ' +
+                     'replace_all; omit new_text to delete. For a change that spans MULTIPLE ' +
+                     'files, or several separate locations, use apply_patch instead -- one ' +
+                     'atomic call lands them all and is far fewer turns than repeated ' +
+                     'edit_file calls. Advanced: a hashline `patch` (read the file with ' +
+                     'hashline:true first) does line-anchored multi-hunk edits; format ' +
                      'errors reply with the exact patch syntax.';
     { old_string/new_string are declared as real properties (see the no-hashline
       branch below) so schema-guided clients can emit the aliases Claude-family
@@ -1862,9 +1865,11 @@ begin
   end
   else
   begin
-    T.Description := 'Edit a file by replacing an exact snippet: pass old_text (the existing text, verbatim ' +
+    T.Description := 'Edit ONE spot in a file by replacing an exact snippet: pass old_text (the existing text, verbatim ' +
                      'including whitespace) and new_text. The match must be unique unless replace_all is set; ' +
-                     'omit new_text to delete text.';
+                     'omit new_text to delete text. For a change that spans MULTIPLE files, or several separate ' +
+                     'locations, use apply_patch instead -- one atomic call lands them all in far fewer turns ' +
+                     'than repeated edit_file calls.';
     { The alias keys are declared as real properties (not just mentioned in the
       canonical field's description) so a schema-validating / grammar-guided
       client can actually emit them. `required` lists only `path`: the old text
