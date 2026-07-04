@@ -49,11 +49,6 @@ implementation
 
 uses
   SysUtils, Classes,
-  {$IFDEF FPC}
-  fphttpclient, opensslsockets,
-  {$ELSE}
-  System.Net.HttpClient, System.Net.URLClient,
-  {$ENDIF}
   PasClaw.CliUI,
   PasClaw.Utils,
   PasClaw.Config,
@@ -69,6 +64,7 @@ uses
   LocalVector.OrtProvision,
   LocalVector.VecProvision,
   LocalVector.Downloader,
+  PasClaw.Memory.OrtPosix,
   PasClaw.Memory.Rerank;
 
 { Cache directory under PASCLAW_HOME. Built up via nested JoinPath
@@ -177,114 +173,20 @@ begin
 end;
 
 {$IFNDEF MSWINDOWS}
-const
-  { ONNX Runtime release pinned for the POSIX auto-download. The vendored
-    LocalVector.OrtProvision only auto-fetches win-x64; this fills in
-    Linux/macOS so `pasclaw memory provision` is one step on every host.
-    Pinned to a known-good published release (the C API the bindings load
-    is stable across 1.x). }
-  ORT_POSIX_VERSION = '1.20.1';
-
-function HttpDownload(const Url, Dest: string): Boolean;
-{$IFDEF FPC}
-var
-  C: TFPHTTPClient;
-begin
-  Result := False;
-  C := TFPHTTPClient.Create(nil);
-  try
-    C.AllowRedirect := True;
-    C.AddHeader('User-Agent', 'pasclaw');
-    C.Get(Url, Dest);
-    Result := FileExists(Dest);
-  finally
-    C.Free;
-  end;
-end;
-{$ELSE}
-var
-  C: THTTPClient;
-  FS: TFileStream;
-begin
-  Result := False;
-  C := THTTPClient.Create;
-  FS := TFileStream.Create(Dest, fmCreate);
-  try
-    C.Get(Url, FS);
-    Result := FS.Size > 0;
-  finally
-    FS.Free;
-    C.Free;
-  end;
-end;
-{$ENDIF}
-
-function PosixOrtAsset(out Asset, LibGlob, DestName: string): Boolean;
-{ Map this platform to its ONNX Runtime release asset + the library file
-  to extract. Returns False on a platform with no known asset. }
-begin
-  Result := True;
-  {$IFDEF PCLAW_MACOS}
-  Asset    := 'onnxruntime-osx-universal2-' + ORT_POSIX_VERSION + '.tgz';
-  LibGlob  := 'libonnxruntime*.dylib';
-  DestName := 'onnxruntime.dylib';
-  {$else}
-    {$IFDEF CPUAARCH64}
-    Asset := 'onnxruntime-linux-aarch64-' + ORT_POSIX_VERSION + '.tgz';
-    {$ELSE}
-    Asset := 'onnxruntime-linux-x64-' + ORT_POSIX_VERSION + '.tgz';
-    {$ENDIF}
-  LibGlob  := 'libonnxruntime.so.*';
-  DestName := 'onnxruntime.so';
-  {$ENDIF}
-end;
-
 function TryProvisionPosixRuntime: Boolean;
-{ Download the platform's ONNX Runtime release, extract the shared lib,
-  and drop it as the cache onnxruntime.so / .dylib -- exactly where
-  EnsureOnnxRuntime looks. Uses the system `tar` (present on Linux/macOS).
-  Best-effort: returns False (with a status line) on any failure. }
+{ Install the ONNX Runtime shared lib on Linux/macOS. Delegates to the shared,
+  console-free PasClaw.Memory.OrtPosix.EnsurePosixOrt so the CLI and the
+  gateway's web provisioning job run ONE code path; this wrapper only adds the
+  CLI status line. }
 var
-  Asset, LibGlob, DestName, Url, Tgz, Tmp, Dest: string;
+  Msg: string;
 begin
-  Result := False;
-  if not PosixOrtAsset(Asset, LibGlob, DestName) then Exit;
-  ForceDirectories(CacheDir);
-  Dest := JoinPath(CacheDir, DestName);
-  Url  := 'https://github.com/microsoft/onnxruntime/releases/download/v' +
-          ORT_POSIX_VERSION + '/' + Asset;
-  Tgz  := JoinPath(CacheDir, Asset);
-  Tmp  := JoinPath(CacheDir, 'ort-extract');
-
-  try
-    PrintLn('  ' + Ansi.Dim + 'downloading ONNX Runtime ' + ORT_POSIX_VERSION +
-            ' (' + Asset + ') ...' + Ansi.Reset);
-    if not HttpDownload(Url, Tgz) then
-    begin
-      PrintCheckMark(Ansi.Red, '✗', 'ONNX Runtime download failed: ' + Url);
-      Exit;
-    end;
-    { Extract + copy the real (non-symlink) shared lib via system tar. }
-    ExecuteProcess('/bin/sh', ['-c', 'rm -rf "' + Tmp + '" && mkdir -p "' + Tmp +
-      '" && tar -xzf "' + Tgz + '" -C "' + Tmp + '" && cp "$(find "' + Tmp +
-      '" -name ''' + LibGlob + ''' -type f | head -1)" "' + Dest + '"']);
-    Result := FileExists(Dest);
-    if Result then
-      PrintCheckMark(Ansi.Green, '✓', 'ONNX Runtime installed at ' + Dest)
-    else
-      PrintCheckMark(Ansi.Red, '✗',
-        'ONNX Runtime extract failed (no ' + LibGlob + ' in archive)');
-  except
-    on E: Exception do
-      PrintCheckMark(Ansi.Red, '✗', 'ONNX Runtime: ' + E.Message);
-  end;
-  { Tidy the tarball + extract dir; leave only the installed lib. }
-  try
-    if FileExists(Tgz) then DeleteFile(Tgz);
-    ExecuteProcess('/bin/sh', ['-c', 'rm -rf "' + Tmp + '"']);
-  except
-    on E: Exception do ;
-  end;
+  PrintLn('  ' + Ansi.Dim + 'ensuring ONNX Runtime (POSIX release) ...' + Ansi.Reset);
+  Result := EnsurePosixOrt(CacheDir, Msg);
+  if Result then
+    PrintCheckMark(Ansi.Green, '✓', 'ONNX Runtime: ' + Msg)
+  else
+    PrintCheckMark(Ansi.Red, '✗', 'ONNX Runtime: ' + Msg);
 end;
 {$ENDIF}
 
