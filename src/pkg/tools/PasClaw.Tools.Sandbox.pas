@@ -718,8 +718,8 @@ begin
                 '"*** Move to: <path>") / "*** End Patch" body -- that is the sanctioned ' +
                 'rm/mv here. To clear BUILD ARTIFACTS (.o files, binaries), run a Makefile ' +
                 'target such as `make clean`: make runs its own rm inside the build, which is ' +
-                'allowed. For other file work use read_file / write_file / append_file / ' +
-                'edit_file / find_files / grep_files.';
+                'allowed. For other file work use the dedicated tools: read_file / ' +
+                'write_file / append_file / edit_file / find_files / grep_files.';
       Exit(False);
     end;
     if MatchesAnySubstring(Cmd, Hit) then
