@@ -189,7 +189,8 @@ begin
     try
       EnsureOnnxRuntime(Cache, {AAllowDownload=} False, {AVerbose=} False);
       GRank := TReranker.Create(ModelP, VocabP, GSpec.DoLowerCase,
-                                GSpec.NeedsTokenTypeIds);
+                                GSpec.NeedsTokenTypeIds, 512,
+                                RerankerIsSentencePiece(GKey));
       GReady := True;
       LogDebug('rerank-serve: enabled (model=%s)', [GSpec.Key]);
       Result := True;

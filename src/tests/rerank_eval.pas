@@ -66,18 +66,19 @@ begin
       bi-encoder (MiniLM) baseline        MRR 0.778   recall@5 0.833
       ms-marco-MiniLM-L-6  (local ONNX)   MRR 0.639   recall@5 0.417   (regresses)
       ms-marco-MiniLM-L-12 (local ONNX)   MRR 0.611   recall@5 0.417   (regresses)
+      bge-reranker-base    (int8, local)  MRR 0.778   recall@5 0.917   (best local)
       LLM backend (Gemini 2.5 Flash)      MRR 1.000   recall@5 1.000   (perfect)
     Takeaway: the small ms-marco cross-encoders REWARD query/passage lexical
     overlap, so on these deliberately lexical-vs-semantic cases they rank a
     topical-but-wrong passage above a correctly-phrased answer and lose to the
-    bi-encoder -- a bigger L-12 does not fix it. The LLM backend
-    (PasClaw.Memory.Rerank.LLM), which reads query+passages together and
-    reasons, ranks every case perfectly. This is why 'llm' / 'auto' is the
-    recommended rerank_backend and the local ms-marco models are a
-    no-dependency fallback, not the quality tier. (The stronger local rerankers
-    -- bge-reranker-v2-m3 etc. -- would likely match the LLM but need a
-    SentencePiece tokenizer this WordPiece path lacks; see Rerank.pas.)
-    Relevant indices below are the docs that, to a human, answer the query. }
+    bi-encoder -- a bigger L-12 does not fix it. The XLM-RoBERTa bge-reranker
+    (SentencePiece tokenizer, LocalVector.SentencePiece) is the strongest LOCAL
+    option -- it doesn't regress MRR and lifts recall@5 -- and int8 is
+    CPU-practical. The LLM backend (PasClaw.Memory.Rerank.LLM) still tops it by
+    reading query+passages together and reasoning. So: 'llm'/'auto' for the
+    best quality; bge-reranker-base/-v2-m3 as the strong offline model;
+    ms-marco as the tiny no-frills fallback. Relevant indices below are the
+    docs that, to a human, answer the query. }
   Result := TArray<TEvalCase>.Create(
     C('how do I stop being billed every month',
       ['Your subscription renews automatically every month on the billing date.',   { lexical decoy: "billed/month" }

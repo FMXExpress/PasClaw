@@ -156,9 +156,16 @@ begin
   IsTrue(Pos('ms-marco', LowerCase(Spec.DisplayName)) > 0, 'display name');
   IsTrue(FindRerankerSpec('ms-marco-l12', Spec), 'ms-marco L-12 alias resolves');
   IsTrue(Pos('L-12', Spec.DisplayName) > 0, 'L-12 alias maps to the L-12 model');
-  IsTrue(not FindRerankerSpec('bge-reranker', Spec), 'bge (SentencePiece) is NOT registered');
+  IsTrue(not RerankerIsSentencePiece('ms-marco-minilm'), 'ms-marco is WordPiece (not SP)');
+  { bge-reranker: XLM-R, SentencePiece tokenizer, no token_type_ids }
+  IsTrue(FindRerankerSpec('bge-reranker-base', Spec), 'bge-reranker-base resolves');
+  IsTrue(not Spec.NeedsTokenTypeIds, 'bge (XLM-R) needs no token_type_ids');
+  IsTrue(Pos('tokenizer.json', Spec.VocabRelURL) > 0, 'bge vocab is tokenizer.json');
+  IsTrue(RerankerIsSentencePiece('bge-reranker-base'), 'bge-reranker-base is SentencePiece');
+  IsTrue(RerankerIsSentencePiece('bge-reranker-v2-m3'), 'bge-reranker-v2-m3 is SentencePiece');
+  IsTrue(FindRerankerSpec('bge-reranker-v2-m3', Spec), 'bge-reranker-v2-m3 resolves');
   IsTrue(not FindRerankerSpec('nope', Spec), 'unknown key -> false');
-  WriteLn('  ok: reranker registry (ms-marco L-6 default + L-12, SentencePiece models rejected)');
+  WriteLn('  ok: reranker registry (ms-marco WordPiece + bge SentencePiece)');
 
   Vocab := WriteVocab;
   { model path unused until Score(); EncodePair only needs the tokenizer/vocab. }

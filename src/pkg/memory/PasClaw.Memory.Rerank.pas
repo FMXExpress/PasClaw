@@ -36,7 +36,8 @@ uses
   System.SysUtils, System.Math, System.Classes, System.Generics.Collections,
 {$ENDIF}
   onnxruntime_pas_api, onnxruntime,
-  LocalVector.Runtime, LocalVector.Tokenizer, LocalVector.Models;
+  LocalVector.Runtime, LocalVector.Tokenizer, LocalVector.SentencePiece,
+  LocalVector.Models;
 
 type
   ERerankerError = class(Exception);
@@ -52,7 +53,9 @@ type
   private
     FSession: TORTSession;
     FOptions: TORTSessionOptions;
-    FTok: TBertTokenizer;
+    FTok: TBertTokenizer;        { WordPiece (BERT / ms-marco) path }
+    FSP:  TSPUnigram;            { SentencePiece (XLM-R / bge) path }
+    FSentencePiece: Boolean;
     FModelPath, FVocabPath: string;
     FDoLowerCase, FNeedsTokenTypeIds: Boolean;
     FMaxSeq: Integer;
@@ -61,13 +64,19 @@ type
   public
     { AMaxSeq caps the packed pair length -- long candidates are truncated so a
       cross-encoder that pools over one physical batch never rejects the input
-      ("input is too large to process"; cf. LocalAI PR #10104). }
+      ("input is too large to process"; cf. LocalAI PR #10104).
+      ASentencePiece selects the tokenizer: False = BERT WordPiece + [CLS] q
+      [SEP] d [SEP] (ms-marco); True = XLM-R SentencePiece Unigram + <s> q
+      </s></s> d </s> (bge-reranker). AVocabPath is vocab.txt for WordPiece, or
+      a HuggingFace tokenizer.json for SentencePiece. }
     constructor Create(const AModelPath, AVocabPath: string;
-      ADoLowerCase, ANeedsTokenTypeIds: Boolean; AMaxSeq: Integer = 512);
+      ADoLowerCase, ANeedsTokenTypeIds: Boolean; AMaxSeq: Integer = 512;
+      ASentencePiece: Boolean = False);
     destructor Destroy; override;
 
-    { Pack "[CLS] query [SEP] doc [SEP]" into input ids + token_type_ids,
-      truncating doc first (then query) to fit AMaxSeq. Pure -- no ONNX. }
+    { Pack the cross-encoder pair into input ids + token_type_ids, truncating
+      doc first (then query) to fit AMaxSeq. WordPiece: [CLS] q [SEP] d [SEP].
+      SentencePiece: <s> q </s></s> d </s>. Pure -- no ONNX. }
     procedure EncodePair(const AQuery, ADoc: UnicodeString;
       out AIds, ATypeIds: TArray<Int64>);
 
@@ -91,6 +100,9 @@ const
   unused for a cross-encoder. }
 function FindRerankerSpec(const AKey: string; out ASpec: TModelSpec): Boolean;
 function RerankerKeys: string;
+{ True when AKey names an XLM-RoBERTa reranker (bge-*) whose tokenizer is
+  SentencePiece + tokenizer.json, not BERT WordPiece + vocab.txt. }
+function RerankerIsSentencePiece(const AKey: string): Boolean;
 
 implementation
 
@@ -112,6 +124,13 @@ begin
   Result.SizeDesc := ASize;
 end;
 
+function RerankerIsSentencePiece(const AKey: string): Boolean;
+var K: string;
+begin
+  K := LowerCase(Trim(AKey));
+  Result := (Pos('bge-reranker', K) = 1) or (K = 'bge-rerank') or (K = 'bge-m3');
+end;
+
 function FindRerankerSpec(const AKey: string; out ASpec: TModelSpec): Boolean;
 var
   K: string;
@@ -128,42 +147,52 @@ begin
     ASpec := MakeRSpec('ms-marco-minilm-l12', 'ms-marco-MiniLM-L-12-v2', 'ms-marco-MiniLM-L-12-v2',
       'https://huggingface.co/Xenova/ms-marco-MiniLM-L-12-v2/resolve/main/',
       'onnx/model.onnx', 'vocab.txt', True, True, '~130 MB')
+  { XLM-RoBERTa cross-encoders (SentencePiece tokenizer, no token_type_ids).
+    VocabRelURL points at tokenizer.json (the downloader saves it as the
+    model's vocab file; TSPUnigram loads it as JSON). int8-quantised ONNX so it
+    is CPU-practical; NeedsTT=False because RoBERTa has no segment embeddings. }
+  else if (K = 'bge-reranker-base') or (K = 'bge-rerank') or (K = 'bge-reranker') then
+    ASpec := MakeRSpec('bge-reranker-base', 'bge-reranker-base (int8)', 'bge-reranker-base',
+      'https://huggingface.co/Xenova/bge-reranker-base/resolve/main/',
+      'onnx/model_int8.onnx', 'tokenizer.json', False, False, '~280 MB')
+  else if (K = 'bge-reranker-v2-m3') or (K = 'bge-m3') then
+    ASpec := MakeRSpec('bge-reranker-v2-m3', 'bge-reranker-v2-m3 (int8)', 'bge-reranker-v2-m3',
+      'https://huggingface.co/onnx-community/bge-reranker-v2-m3/resolve/main/',
+      'onnx/model_int8.onnx', 'tokenizer.json', False, False, '~570 MB')
   else
     Result := False;
-  { NOTE: the stronger open rerankers -- bge-reranker-base/large,
-    bge-reranker-v2-m3, mxbai-rerank -- are XLM-RoBERTa / DeBERTa models with a
-    SentencePiece tokenizer and no token_type_ids, which this BERT-WordPiece
-    path (TBertTokenizer) cannot produce correctly. They are deliberately NOT
-    registered here: feeding XLM-R text through a WordPiece vocab yields garbage
-    scores. Supporting them needs a SentencePiece tokenizer (future work); until
-    then the LLM rerank backend (PasClaw.Memory.Rerank.LLM) is the high-quality
-    path -- it uses the configured frontier model and needs no local tokenizer. }
 end;
 
 function RerankerKeys: string;
 begin
-  Result := 'ms-marco-minilm, ms-marco-minilm-l12';
+  Result := 'ms-marco-minilm, ms-marco-minilm-l12, bge-reranker-base, bge-reranker-v2-m3';
 end;
 
 { ----- TReranker ----- }
 
 constructor TReranker.Create(const AModelPath, AVocabPath: string;
-  ADoLowerCase, ANeedsTokenTypeIds: Boolean; AMaxSeq: Integer);
+  ADoLowerCase, ANeedsTokenTypeIds: Boolean; AMaxSeq: Integer;
+  ASentencePiece: Boolean);
 begin
   inherited Create;
   FModelPath := AModelPath;
   FVocabPath := AVocabPath;
   FDoLowerCase := ADoLowerCase;
   FNeedsTokenTypeIds := ANeedsTokenTypeIds;
+  FSentencePiece := ASentencePiece;
   if AMaxSeq < 8 then AMaxSeq := 8;
   FMaxSeq := AMaxSeq;
   FLoaded := False;
-  FTok := TBertTokenizer.Create(AVocabPath, ADoLowerCase);
+  if FSentencePiece then
+    FSP := TSPUnigram.Create(AVocabPath)          { AVocabPath is tokenizer.json }
+  else
+    FTok := TBertTokenizer.Create(AVocabPath, ADoLowerCase);
 end;
 
 destructor TReranker.Destroy;
 begin
   FTok.Free;
+  FSP.Free;
   { TORTSession is a managed record; it releases itself. }
   inherited;
 end;
@@ -204,9 +233,12 @@ end;
 procedure TReranker.EncodePair(const AQuery, ADoc: UnicodeString;
   out AIds, ATypeIds: TArray<Int64>);
 begin
-  { The packing lives in the tokenizer (it owns BasicTokenize/WordPiece); this
-    is a thin pass-through carrying the reranker's MaxSeq budget. }
-  FTok.EncodePair(AQuery, ADoc, FMaxSeq, AIds, ATypeIds);
+  { The packing lives in the tokenizer. WordPiece -> [CLS] q [SEP] d [SEP];
+    SentencePiece -> <s> q </s></s> d </s>. Both carry the reranker's MaxSeq. }
+  if FSentencePiece then
+    FSP.EncodePair(AQuery, ADoc, FMaxSeq, AIds, ATypeIds)
+  else
+    FTok.EncodePair(AQuery, ADoc, FMaxSeq, AIds, ATypeIds);
 end;
 
 function TReranker.Score(const AQuery, ADoc: string): Single;
