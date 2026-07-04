@@ -49,6 +49,7 @@ begin
     AssertTrue(not C.OrientTaskAware,   'OrientTaskAware stays False');
     AssertTrue(not C.RerankSearchEnabled, 'RerankSearchEnabled defaults to False');
     AssertTrue(C.RerankModel = '',      'RerankModel defaults to empty (built-in default)');
+    AssertTrue(C.RerankBackend = 'auto','RerankBackend defaults to auto (local, else LLM)');
     AssertTrue(not C.SelfImprovingSkills.SelfManage,
                'SelfImprovingSkills.SelfManage stays False');
   finally
@@ -77,6 +78,7 @@ begin
     AssertTrue(Pos('orient_task_aware',   S) = 0, 'fresh ToJSON omits orient_task_aware');
     AssertTrue(Pos('rerank_search_enabled', S) = 0, 'fresh ToJSON omits rerank_search_enabled');
     AssertTrue(Pos('rerank_model',        S) = 0, 'fresh ToJSON omits rerank_model');
+    AssertTrue(Pos('rerank_backend',      S) = 0, 'fresh ToJSON omits rerank_backend (default auto)');
   finally
     C.Free;
   end;
@@ -101,7 +103,8 @@ begin
     C.OrientTaskAware    := True;
     C.ToolOutputCap      := 0;      { default 24576 -> explicit opt-OUT }
     C.RerankSearchEnabled := True;  { default False -> opt-in }
-    C.RerankModel        := 'bge-reranker-base';  { default '' -> custom }
+    C.RerankModel        := 'ms-marco-minilm-l12';  { default '' -> custom }
+    C.RerankBackend      := 'llm';  { default 'auto' -> custom }
     S := C.ToJSON;
     { Each non-default field must be present in the serialised form,
       otherwise LoadConfig would silently fall back to the default. }
@@ -115,6 +118,7 @@ begin
     AssertTrue(Pos('"tool_output_cap"',       S) > 0, 'opt-out tool_output_cap emitted');
     AssertTrue(Pos('"rerank_search_enabled"', S) > 0, 'opt-in rerank_search_enabled emitted');
     AssertTrue(Pos('"rerank_model"',          S) > 0, 'custom rerank_model emitted');
+    AssertTrue(Pos('"rerank_backend"',        S) > 0, 'custom rerank_backend emitted');
   finally
     C.Free;
   end;
@@ -131,7 +135,8 @@ begin
     AssertTrue(C2.OrientTaskAware,          'OrientTaskAware round-trips True');
     AssertTrue(C2.ToolOutputCap = 0,        'ToolOutputCap round-trips the explicit 0 opt-out');
     AssertTrue(C2.RerankSearchEnabled,      'RerankSearchEnabled round-trips True');
-    AssertTrue(C2.RerankModel = 'bge-reranker-base', 'RerankModel round-trips the custom key');
+    AssertTrue(C2.RerankModel = 'ms-marco-minilm-l12', 'RerankModel round-trips the custom key');
+    AssertTrue(C2.RerankBackend = 'llm',    'RerankBackend round-trips the custom value');
   finally
     C2.Free;
   end;

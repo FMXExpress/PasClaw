@@ -658,6 +658,14 @@ type
        endpoint and the RerankSearchEnabled retrieval stage load. Set by
        `pasclaw memory provision --rerank[-model KEY]`. *)
     RerankModel:         string;
+    (* Which reranker backend to use: 'auto' (default) prefers the local ONNX
+       cross-encoder and falls back to asking the configured chat model when
+       no local model is provisioned; 'local' uses only the ONNX model (503 /
+       no-op when absent); 'llm' always asks the chat model; 'off' disables
+       reranking. The LLM backend (PasClaw.Memory.Rerank.LLM) needs no model
+       download -- a frontier model reranks well but costs one provider call
+       per rerank, so it is the fallback, not the retrieval default. *)
+    RerankBackend:       string;
     (* Render markdown the model emits as ANSI-styled text in the
        terminal (PasClaw.Markdown.Render). On by default -- terminal
        surfaces (pasclaw agent, pasclaw tui) call into it; serve /
@@ -1126,6 +1134,7 @@ begin
   VectorSearchEnabled  := True;  { on by default; onboarding asks (default Y) -- see TConfig comment }
   RerankSearchEnabled  := False; { opt-in: needs the reranker model provisioned }
   RerankModel          := '';    { empty == built-in default (ms-marco-minilm) }
+  RerankBackend        := 'auto';{ local if provisioned, else the chat model }
   AnthropicServerTools.WebSearch        := False;
   AnthropicServerTools.WebSearchMaxUses := 0;
   AnthropicServerTools.WebFetch         := False;
@@ -1387,6 +1396,8 @@ begin
       Root.PutBool('rerank_search_enabled', True);
     if RerankModel <> '' then
       Root.PutStr('rerank_model', RerankModel);
+    if (RerankBackend <> '') and (RerankBackend <> 'auto') then
+      Root.PutStr('rerank_backend', RerankBackend);
     { Tool output cap: emit only when it differs from the default --
       including an explicit 0 (opt-OUT), which must round-trip or the
       next LoadConfig would silently re-enable the cap. }
@@ -1864,6 +1875,8 @@ begin
     VectorSearchEnabled := Root.GetBool('vector_search_enabled', VectorSearchEnabled);
     RerankSearchEnabled := Root.GetBool('rerank_search_enabled', RerankSearchEnabled);
     RerankModel         := Root.GetStr('rerank_model', RerankModel);
+    RerankBackend       := LowerCase(Trim(Root.GetStr('rerank_backend', RerankBackend)));
+    if RerankBackend = '' then RerankBackend := 'auto';
     ToolOutputCap       := Integer(Root.GetInt('tool_output_cap', ToolOutputCap));
     StatsCollectionEnabled := Root.GetBool('stats_collection_enabled',
                                            StatsCollectionEnabled);

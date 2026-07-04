@@ -20,13 +20,112 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes,
   LocalVector.Models,
+  PasClaw.Providers.Intf,
+  PasClaw.Providers.Types,
   PasClaw.Memory.Rerank,
-  PasClaw.Memory.Rerank.Serve;
+  PasClaw.Memory.Rerank.Serve,
+  PasClaw.Memory.Rerank.LLM;
 
 procedure Fail_(const Msg: string); begin WriteLn('FAIL: ' + Msg); Halt(1); end;
 procedure IsTrue(Cond: Boolean; const Msg: string); begin if not Cond then Fail_(Msg); end;
 procedure EqI(Got, Want: Integer; const Msg: string);
 begin if Got <> Want then Fail_(Msg + Format(' (got %d want %d)', [Got, Want])); end;
+
+type
+  { Canned-response provider so LLMRerank can be exercised without a network
+    call: it echoes a fixed Content + StatusCode, the way a real provider
+    returns a ranking (or an error string) from Chat. }
+  TFakeProvider = class(TInterfacedObject, ILLMProvider)
+  private
+    FContent: string;
+    FStatus:  Integer;
+  public
+    constructor Create(const AContent: string; AStatus: Integer);
+    function Chat(const Messages: array of TMessage; const Tools: array of TToolDefinition;
+      const Model: string; const Options: TChatOptions): TLLMResponse;
+    function GetDefaultModel: string;
+    function GetName: string;
+    function SupportsThinking: Boolean;
+    function SupportsNativeSearch: Boolean;
+    function SupportsStreaming: Boolean;
+    function ChatStream(const Messages: array of TMessage; const Tools: array of TToolDefinition;
+      const Model: string; const Options: TChatOptions; OnChunk: TStreamCallback): TLLMResponse;
+  end;
+
+constructor TFakeProvider.Create(const AContent: string; AStatus: Integer);
+begin inherited Create; FContent := AContent; FStatus := AStatus; end;
+
+function TFakeProvider.Chat(const Messages: array of TMessage; const Tools: array of TToolDefinition;
+  const Model: string; const Options: TChatOptions): TLLMResponse;
+begin
+  Result := Default(TLLMResponse);
+  Result.Content := FContent;
+  Result.StatusCode := FStatus;
+end;
+
+function TFakeProvider.GetDefaultModel: string; begin Result := 'fake-model'; end;
+function TFakeProvider.GetName: string; begin Result := 'fake'; end;
+function TFakeProvider.SupportsThinking: Boolean; begin Result := False; end;
+function TFakeProvider.SupportsNativeSearch: Boolean; begin Result := False; end;
+function TFakeProvider.SupportsStreaming: Boolean; begin Result := False; end;
+function TFakeProvider.ChatStream(const Messages: array of TMessage; const Tools: array of TToolDefinition;
+  const Model: string; const Options: TChatOptions; OnChunk: TStreamCallback): TLLMResponse;
+begin Result := Chat(Messages, Tools, Model, Options); end;
+
+function Fake(const C: string; St: Integer): ILLMProvider;
+begin Result := TFakeProvider.Create(C, St); end;
+
+procedure TestLLMRerank;
+var
+  Order: TArray<Integer>;
+  Scores: TArray<Single>;
+  Docs: array of string;
+begin
+  SetLength(Docs, 3);
+  Docs[0] := 'doc zero'; Docs[1] := 'doc one'; Docs[2] := 'doc two';
+
+  { clean array }
+  IsTrue(LLMRerank(Fake('[2, 0, 1]', 200), '', 'q', Docs, 0, 0, Order, Scores),
+    'clean array parses');
+  EqI(Length(Order), 3, 'clean: full permutation');
+  EqI(Order[0], 2, 'clean: best is 2'); EqI(Order[1], 0, 'clean: then 0'); EqI(Order[2], 1, 'clean: then 1');
+  IsTrue((Scores[0] > Scores[1]) and (Scores[1] > Scores[2]), 'clean: scores strictly descending');
+
+  { thinking/prose with a stray early bracket -- pick the group with the MOST
+    indices, not the first one (this is the [1,0,2] bug from the live run). }
+  IsTrue(LLMRerank(Fake('Passage [1] looks off-topic. Final ranking: [2, 0, 1]', 200),
+    '', 'q', Docs, 0, 0, Order, Scores), 'messy prose parses');
+  EqI(Order[0], 2, 'messy: real array wins over stray [1]');
+  EqI(Order[1], 0, 'messy: second is 0');
+
+  { model omits a doc -> it is appended so Order stays a full permutation }
+  IsTrue(LLMRerank(Fake('[2, 0]', 200), '', 'q', Docs, 0, 0, Order, Scores), 'partial parses');
+  EqI(Length(Order), 3, 'partial: omitted doc appended');
+  EqI(Order[2], 1, 'partial: the missing index (1) lands last');
+
+  { top_n truncates }
+  IsTrue(LLMRerank(Fake('[2, 0, 1]', 200), '', 'q', Docs, 2, 0, Order, Scores), 'topN parses');
+  EqI(Length(Order), 2, 'topN=2 keeps two');
+
+  { provider transport error (status=-1, error text in Content) must NOT be
+    parsed as a ranking -- the exact live failure (garbage "1" from status=-1) }
+  IsTrue(not LLMRerank(Fake('gemini error: status=-1 msg=TLS could not load', -1),
+    '', 'q', Docs, 0, 0, Order, Scores), 'transport error -> False, not a bogus order');
+  IsTrue(Length(Order) = 0, 'transport error yields no order');
+
+  { HTTP error status likewise rejected }
+  IsTrue(not LLMRerank(Fake('{"error":"rate limited"}', 429), '', 'q', Docs, 0, 0, Order, Scores),
+    'HTTP 429 -> False');
+
+  { success status but no parseable indices -> False (caller keeps RRF order) }
+  IsTrue(not LLMRerank(Fake('I cannot help with that.', 200), '', 'q', Docs, 0, 0, Order, Scores),
+    'no integers -> False');
+
+  { no provider -> False }
+  IsTrue(not LLMRerank(nil, '', 'q', Docs, 0, 0, Order, Scores), 'nil provider -> False');
+
+  WriteLn('  ok: LLM reranker parses rankings, completes permutations, and rejects error responses');
+end;
 
 function WriteVocab: string;
 var S: TStringList;
@@ -55,9 +154,11 @@ begin
   IsTrue(FindRerankerSpec('ms-marco-minilm', Spec), 'default reranker resolves');
   IsTrue(Spec.NeedsTokenTypeIds, 'ms-marco cross-encoder needs token_type_ids');
   IsTrue(Pos('ms-marco', LowerCase(Spec.DisplayName)) > 0, 'display name');
-  IsTrue(FindRerankerSpec('bge-reranker', Spec), 'bge-reranker alias resolves');
+  IsTrue(FindRerankerSpec('ms-marco-l12', Spec), 'ms-marco L-12 alias resolves');
+  IsTrue(Pos('L-12', Spec.DisplayName) > 0, 'L-12 alias maps to the L-12 model');
+  IsTrue(not FindRerankerSpec('bge-reranker', Spec), 'bge (SentencePiece) is NOT registered');
   IsTrue(not FindRerankerSpec('nope', Spec), 'unknown key -> false');
-  WriteLn('  ok: reranker registry (ms-marco default + bge alias, unknown rejected)');
+  WriteLn('  ok: reranker registry (ms-marco L-6 default + L-12, SentencePiece models rejected)');
 
   Vocab := WriteVocab;
   { model path unused until Score(); EncodePair only needs the tokenizer/vocab. }
@@ -112,6 +213,8 @@ begin
     'reranker reports unavailable when the model is not on disk');
   SetRerankSearchEnabled(False);   { restore }
   WriteLn('  ok: retrieval rerank gate needs BOTH the toggle and a provisioned model');
+
+  TestLLMRerank;
 
   WriteLn('rerank_tests: OK');
 end.

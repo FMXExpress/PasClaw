@@ -491,6 +491,7 @@ uses
   PasClaw.Memory.Distill,       { TFact + NormaliseFact for manual remember }
   PasClaw.Memory.Facts.Embed,   { Phase 4c: semantic fact embedder }
   PasClaw.Memory.Rerank.Serve,  { local ONNX cross-encoder for /v1/rerank }
+  PasClaw.Memory.Rerank.LLM,    { LLM fallback reranker (asks the chat model) }
   PasClaw.Providers.Factory,
   PasClaw.Providers.Catalog,   { TProviderSpec for /v1/models discovery }
   PasClaw.Providers.Models,    { DiscoverModels / cache -- /v1/models roster }
@@ -7166,7 +7167,7 @@ procedure TGatewayServer.HandleRerank(ARequest: TIdHTTPRequestInfo;
   descending, and usage. No outbound call -- the query and documents are
   scored on-host and never leave. }
 var
-  Body, ReqModel, ModelId, OneDoc: string;
+  Body, ReqModel, ModelId, OneDoc, Backend: string;
   Req, Root, Item, DocObj, Usage: TJsonObject;
   DocsArr, ResArr: TJsonArray;
   Docs: array of string;
@@ -7174,7 +7175,7 @@ var
   Scores: TArray<Single>;
   Query: string;
   TopN, i, ApproxTokens, Emitted: Integer;
-  ReturnDocs: Boolean;
+  ReturnDocs, UseLLM: Boolean;
 begin
   Body := ReadRequestBody(ARequest);
   if Trim(Body) = '' then
@@ -7226,23 +7227,59 @@ begin
       Exit;
     end;
 
-    if not LocalRerankAvailable(GetHome) then
+    { Backend selection: 'local' uses only the ONNX model, 'llm' always asks
+      the chat model, 'auto' (default) prefers local and falls back to the LLM
+      when no local model is provisioned. The endpoint is an explicit rerank
+      request, so 'off' behaves like 'auto' here (retrieval, not the API, is
+      what 'off' silences). }
+    Backend := LowerCase(Trim(FCfg.RerankBackend));
+    if Backend = '' then Backend := 'auto';
+    UseLLM := False;
+    if Backend = 'llm' then
+      UseLLM := True
+    else if Backend = 'local' then
+      UseLLM := False
+    else { auto / off / unknown }
+      UseLLM := not LocalRerankAvailable(GetHome);
+
+    if UseLLM then
     begin
-      WriteJSON(AResp, 503,
-        '{"error":{"message":"local reranker not provisioned -- run ' +
-        '`pasclaw memory provision --rerank` to download the ONNX model",' +
-        '"type":"server_error"}}');
-      Exit;
+      if not LLMRerankAvailable(FProvider) then
+      begin
+        WriteJSON(AResp, 503,
+          '{"error":{"message":"no reranker available -- provision a local ' +
+          'model (`pasclaw memory provision --rerank`) or configure a chat ' +
+          'provider for the LLM fallback","type":"server_error"}}');
+        Exit;
+      end;
+      if not LLMRerank(FProvider, '', Query, Docs, 0, 0, Order, Scores) then
+      begin
+        WriteJSON(AResp, 502,
+          '{"error":{"message":"LLM rerank failed (provider error or ' +
+          'unparseable ranking)","type":"server_error"}}');
+        Exit;
+      end;
+      ModelId := 'llm:' + FProvider.GetName;
+    end
+    else
+    begin
+      if not LocalRerankAvailable(GetHome) then
+      begin
+        WriteJSON(AResp, 503,
+          '{"error":{"message":"local reranker not provisioned -- run ' +
+          '`pasclaw memory provision --rerank`, or set rerank_backend to ' +
+          '\"llm\"/\"auto\" to use the chat model","type":"server_error"}}');
+        Exit;
+      end;
+      if not LocalRerank(GetHome, Query, Docs, Order, Scores) then
+      begin
+        WriteJSON(AResp, 500,
+          '{"error":{"message":"rerank failed","type":"server_error"}}');
+        Exit;
+      end;
+      LocalRerankModelInfo(GetHome, ModelId);
     end;
 
-    if not LocalRerank(GetHome, Query, Docs, Order, Scores) then
-    begin
-      WriteJSON(AResp, 500,
-        '{"error":{"message":"rerank failed","type":"server_error"}}');
-      Exit;
-    end;
-
-    LocalRerankModelInfo(GetHome, ModelId);
     ReqModel   := Req.GetStr('model', '');
     ReturnDocs := Req.GetBool('return_documents', False);
     { top_n caps how many ranked results are returned; <=0 or absent = all. }

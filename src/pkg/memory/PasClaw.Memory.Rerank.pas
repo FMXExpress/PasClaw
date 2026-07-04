@@ -123,17 +123,26 @@ begin
     ASpec := MakeRSpec('ms-marco-minilm', 'ms-marco-MiniLM-L-6-v2', 'ms-marco-MiniLM-L-6-v2',
       'https://huggingface.co/Xenova/ms-marco-MiniLM-L-6-v2/resolve/main/',
       'onnx/model.onnx', 'vocab.txt', True, True, '~90 MB')
-  else if (K = 'bge-reranker-base') or (K = 'bge-rerank') or (K = 'bge-reranker') then
-    ASpec := MakeRSpec('bge-reranker-base', 'bge-reranker-base', 'bge-reranker-base',
-      'https://huggingface.co/Xenova/bge-reranker-base/resolve/main/',
-      'onnx/model.onnx', 'vocab.txt', True, True, '~1.1 GB')
+  else if (K = 'ms-marco-minilm-l12') or (K = 'ms-marco-l12')
+     or (K = 'ms-marco-minilm-l-12-v2') then
+    ASpec := MakeRSpec('ms-marco-minilm-l12', 'ms-marco-MiniLM-L-12-v2', 'ms-marco-MiniLM-L-12-v2',
+      'https://huggingface.co/Xenova/ms-marco-MiniLM-L-12-v2/resolve/main/',
+      'onnx/model.onnx', 'vocab.txt', True, True, '~130 MB')
   else
     Result := False;
+  { NOTE: the stronger open rerankers -- bge-reranker-base/large,
+    bge-reranker-v2-m3, mxbai-rerank -- are XLM-RoBERTa / DeBERTa models with a
+    SentencePiece tokenizer and no token_type_ids, which this BERT-WordPiece
+    path (TBertTokenizer) cannot produce correctly. They are deliberately NOT
+    registered here: feeding XLM-R text through a WordPiece vocab yields garbage
+    scores. Supporting them needs a SentencePiece tokenizer (future work); until
+    then the LLM rerank backend (PasClaw.Memory.Rerank.LLM) is the high-quality
+    path -- it uses the configured frontier model and needs no local tokenizer. }
 end;
 
 function RerankerKeys: string;
 begin
-  Result := 'ms-marco-minilm, bge-reranker-base';
+  Result := 'ms-marco-minilm, ms-marco-minilm-l12';
 end;
 
 { ----- TReranker ----- }

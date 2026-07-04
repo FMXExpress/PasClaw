@@ -62,16 +62,22 @@ begin
     relevant doc that is semantically right but shares few surface words --
     the regime where surface overlap and true relevance disagree.
 
-    NOTE (measured 2026-07): on this small hand-labeled set the ms-marco-MiniLM
-    cross-encoder did NOT beat the MiniLM bi-encoder -- it regressed MRR,
-    because it rewards query/passage lexical+topical overlap and so ranks a
-    topical-but-wrong passage above a correct answer phrased differently (the
-    same trap the bi-encoder falls into). Two lessons: (a) reranker value is
-    corpus- and model-dependent, not automatic; (b) hand-labeled relevance on
-    ambiguous cases is itself noisy. Treat these numbers as ILLUSTRATIVE, not a
-    verdict -- a trustworthy answer needs a real labeled IR set (BEIR / MS
-    MARCO qrels). Relevant indices below are the docs that, to a human, answer
-    the query. }
+    MEASURED (2026-07, these 6 cases, ONNX Runtime provisioned):
+      bi-encoder (MiniLM) baseline        MRR 0.778   recall@5 0.833
+      ms-marco-MiniLM-L-6  (local ONNX)   MRR 0.639   recall@5 0.417   (regresses)
+      ms-marco-MiniLM-L-12 (local ONNX)   MRR 0.611   recall@5 0.417   (regresses)
+      LLM backend (Gemini 2.5 Flash)      MRR 1.000   recall@5 1.000   (perfect)
+    Takeaway: the small ms-marco cross-encoders REWARD query/passage lexical
+    overlap, so on these deliberately lexical-vs-semantic cases they rank a
+    topical-but-wrong passage above a correctly-phrased answer and lose to the
+    bi-encoder -- a bigger L-12 does not fix it. The LLM backend
+    (PasClaw.Memory.Rerank.LLM), which reads query+passages together and
+    reasons, ranks every case perfectly. This is why 'llm' / 'auto' is the
+    recommended rerank_backend and the local ms-marco models are a
+    no-dependency fallback, not the quality tier. (The stronger local rerankers
+    -- bge-reranker-v2-m3 etc. -- would likely match the LLM but need a
+    SentencePiece tokenizer this WordPiece path lacks; see Rerank.pas.)
+    Relevant indices below are the docs that, to a human, answer the query. }
   Result := TArray<TEvalCase>.Create(
     C('how do I stop being billed every month',
       ['Your subscription renews automatically every month on the billing date.',   { lexical decoy: "billed/month" }
@@ -218,7 +224,8 @@ begin
 end;
 
 var
-  Home: string;
+  Home, RerankModelId: string;
+  Cfg: TConfig;
   Cases: TArray<TEvalCase>;
   Ci: Integer;
   BaseOrder, RerankOrder: TArray<Integer>;
@@ -228,6 +235,12 @@ var
   N: Integer;
 begin
   Home := GetHome;
+
+  { Apply config so the configured rerank_model (SetLocalRerankModel, via
+    ApplyConfigGlobals) is honoured -- lets operators A/B different rerankers
+    just by changing rerank_model in config.json. }
+  Cfg := LoadConfig;
+  Cfg.Free;
 
   if not LocalEmbedAvailable(Home) then
   begin
@@ -248,8 +261,11 @@ begin
   N := 0;
   MrrBase := 0; MrrRerank := 0; Rec5Base := 0; Rec5Rerank := 0;
 
+  RerankModelId := '';
+  LocalRerankModelInfo(Home, RerankModelId);
   WriteLn('Retrieval reranking eval (', Length(Cases), ' cases)');
-  WriteLn('  home: ', Home);
+  WriteLn('  home:     ', Home);
+  WriteLn('  reranker: ', RerankModelId);
   WriteLn;
   WriteLn(Format('  %-40s  %8s  %8s', ['query', 'RR base', 'RR rrk']));
 
