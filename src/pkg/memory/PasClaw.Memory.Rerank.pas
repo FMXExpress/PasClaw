@@ -51,6 +51,7 @@ type
   TReranker = class
   private
     FSession: TORTSession;
+    FOptions: TORTSessionOptions;
     FTok: TBertTokenizer;
     FModelPath, FVocabPath: string;
     FDoLowerCase, FNeedsTokenTypeIds: Boolean;
@@ -159,16 +160,35 @@ begin
 end;
 
 procedure TReranker.EnsureLoaded(AVerbose: Boolean);
+{$IFDEF MSWINDOWS}
+var Path: widestring;
+{$ELSE}
+var Path: ansistring;
+{$ENDIF}
 begin
   if FLoaded then Exit;
   if not FileExists(FModelPath) then
     raise ERerankerError.CreateFmt('Reranker model not found: %s', [FModelPath]);
-  { Same CPU-EP wiring the embedder needs on ONNX Runtime 1.22+ (no implicit
-    CPU provider). See LocalVector.Embedder.Load. }
-  if not Assigned(DefaultSessionOptions.p_) then
-    ThrowOnError(GetApi().CreateSessionOptions(PPOrtSessionOptions(@DefaultSessionOptions.p_)));
-  ThrowOnError(OrtSessionOptionsAppendExecutionProvider_CPU(DefaultSessionOptions.p_, 1));
-  FSession := TORTSession.Create(FModelPath);
+
+  { CPU-EP wiring for ONNX Runtime 1.22+ (no implicit CPU provider). Unlike the
+    embedder, the reranker uses its OWN session-options object rather than the
+    shared DefaultSessionOptions: both the embedder and the reranker load in the
+    same process (memory_search embeds THEN reranks; a gateway serves both
+    /v1/embeddings and /v1/rerank), and appending the CPU EP to the shared
+    options a second time makes ORT 1.22+ fail with "Provider
+    CPUExecutionProvider has already been registered." A dedicated options
+    object keeps the two independent regardless of load order. }
+  EnsureOrtDefaults;   { make sure DefaultEnv exists once the runtime is loaded }
+  if not Assigned(FOptions.p_) then
+    ThrowOnError(GetApi().CreateSessionOptions(PPOrtSessionOptions(@FOptions.p_)));
+  ThrowOnError(OrtSessionOptionsAppendExecutionProvider_CPU(FOptions.p_, 1));
+  {$IFDEF MSWINDOWS}
+  Path := FModelPath;                          { ORTCHAR_T is wchar_t on Windows }
+  FSession := TORTSession.Create(DefaultEnv, PORTCHAR_T(Path), FOptions);
+  {$ELSE}
+  Path := ansistring(FModelPath);              { ORTCHAR_T is char (UTF-8) on POSIX }
+  FSession := TORTSession.Create(DefaultEnv, PORTCHAR_T(PAnsiChar(Path)), FOptions);
+  {$ENDIF}
   FLoaded := True;
 end;
 

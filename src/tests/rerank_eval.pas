@@ -57,38 +57,83 @@ end;
 
 function BuildCases: TArray<TEvalCase>;
 begin
+  { Deliberately hard cases: each query has strong LEXICAL distractors (docs
+    that share the query's keywords but answer a different question) and a
+    relevant doc that is semantically right but shares few surface words --
+    the regime where surface overlap and true relevance disagree.
+
+    NOTE (measured 2026-07): on this small hand-labeled set the ms-marco-MiniLM
+    cross-encoder did NOT beat the MiniLM bi-encoder -- it regressed MRR,
+    because it rewards query/passage lexical+topical overlap and so ranks a
+    topical-but-wrong passage above a correct answer phrased differently (the
+    same trap the bi-encoder falls into). Two lessons: (a) reranker value is
+    corpus- and model-dependent, not automatic; (b) hand-labeled relevance on
+    ambiguous cases is itself noisy. Treat these numbers as ILLUSTRATIVE, not a
+    verdict -- a trustworthy answer needs a real labeled IR set (BEIR / MS
+    MARCO qrels). Relevant indices below are the docs that, to a human, answer
+    the query. }
   Result := TArray<TEvalCase>.Create(
-    C('how do I cancel my subscription',
-      ['To end your plan, open Settings > Billing and choose Cancel plan.',
-       'Subscriptions renew automatically each month on your billing date.',
-       'Cancel culture has nothing to do with software billing.',
-       'Our cancellation policy: you keep access until the period ends.',
-       'Upgrade your subscription to unlock more seats.'],
+    C('how do I stop being billed every month',
+      ['Your subscription renews automatically every month on the billing date.',   { lexical decoy: "billed/month" }
+       'We accept every major card for monthly billing and annual billing.',        { lexical decoy }
+       'Open Settings, choose your plan, and select End plan to halt renewals.',     { relevant, low overlap }
+       'Monthly usage reports are emailed on the first of every month.',             { decoy }
+       'Billing history shows each monthly charge for the past two years.',          { decoy }
+       'To avoid further charges, turn off auto-renew before the next cycle.',        { relevant, low overlap }
+       'Our monthly newsletter covers billing tips and product news.'],              { decoy }
+      [2, 5]),
+
+    C('the app is slow to start up',
+      ['Startup speed depends on how many extensions load at launch.',              { relevant-ish but generic }
+       'The app store rating improved after our latest update.',                    { decoy: "app" }
+       'Cold launches are slow because the on-disk cache is rebuilt each time; ' +
+         'clear stale plugins to speed the first frame.',                           { relevant, low overlap }
+       'Slow-motion video capture starts at 120 frames per second.',               { decoy: "slow/start" }
+       'Start your free trial today -- no card required.',                          { decoy: "start" }
+       'Disable auto-loading of large workspaces to cut launch time.',             { relevant, low overlap }
+       'The startup company raised a slow but steady seed round.'],                 { decoy: "startup/slow" }
+      [2, 5]),
+
+    C('I never got the confirmation email',
+      ['Check your spam folder -- delivery filters sometimes divert our mail.',      { relevant, low overlap }
+       'Confirmation emails are sent within five minutes of signup.',               { lexical decoy }
+       'You can change the email address on your confirmed account anytime.',        { decoy }
+       'If it still has not arrived, resend it from the account page.',              { relevant, low overlap }
+       'We confirmed your email preferences: newsletters are on.',                  { decoy }
+       'The confirmation number is printed at the top of every email receipt.',      { decoy }
+       'Marketing emails can be turned off without affecting confirmations.'],       { decoy }
       [0, 3]),
 
-    C('why is my build failing with a linker error',
-      ['A linker error usually means a symbol was declared but never defined.',
-       'Builds run nightly on the CI server at 2am UTC.',
-       'To fix "undefined reference", check you linked the library (-l flag).',
-       'The building has three floors and a rooftop garden.',
-       'Compiler warnings are not the same as linker errors.'],
-      [0, 2]),
-
     C('reset a forgotten password',
-      ['Click "Forgot password" on the sign-in page to get a reset link.',
-       'Passwords must be at least 12 characters with a symbol.',
-       'We hash passwords with bcrypt and never store them in plaintext.',
-       'If you did not request a reset, ignore the email.',
-       'Reset the device by holding the power button for 10 seconds.'],
-      [0]),
+      ['Passwords must be at least 12 characters and include a symbol.',            { lexical decoy }
+       'Use the "Forgot password" link on sign-in to receive a recovery link.',      { relevant }
+       'We store passwords hashed with bcrypt, never in plaintext.',                { decoy }
+       'Hold the power button ten seconds to reset the device to factory state.',    { decoy: "reset" }
+       'If you did not request a reset, you can safely ignore that email.',          { decoy: "reset" }
+       'An admin can send you a one-time recovery link from the console.',           { relevant, low overlap }
+       'Reset your usage limits by upgrading to the pro tier.'],                     { decoy: "reset" }
+      [1, 5]),
 
-    C('what is the return policy for opened items',
-      ['Opened items can be returned within 14 days for store credit.',
-       'Return the favor by leaving us a review.',
-       'Unopened items get a full refund within 30 days.',
-       'Items marked final sale cannot be returned once opened.',
-       'Shipping is free on orders over fifty dollars.'],
-      [0, 3])
+    C('why does the build fail to link',
+      ['A build fails to link when a referenced symbol is declared but never ' +
+         'defined -- add the object or library that provides it.',                  { relevant }
+       'Nightly builds run on the CI server at 2am UTC.',                           { decoy: "build" }
+       'The new office building has a rooftop garden and a link bridge.',            { decoy: "building/link" }
+       'Pass the correct -l flags so the linker can find each dependency.',          { relevant, low overlap }
+       'Link your account to GitHub to enable build status badges.',                { decoy: "link/build" }
+       'Compiler warnings are unrelated to linker errors.',                         { decoy }
+       'Faster builds come from caching, not from changing linker flags.'],          { decoy }
+      [0, 3]),
+
+    C('can I get a refund for something I already opened',
+      ['Unopened items qualify for a full refund within 30 days.',                  { lexical decoy: "refund" }
+       'Opened products are eligible only for store credit, not a cash refund.',     { relevant }
+       'Refunds are processed to the original card in five business days.',          { decoy }
+       'Once a sealed item is opened it can be exchanged but not fully refunded.',   { relevant, low overlap }
+       'We opened three new stores this year.',                                     { decoy: "opened" }
+       'Gift receipts let the recipient get store credit for any return.',           { decoy }
+       'Final-sale items are never refundable, opened or not.'],                    { decoy }
+      [1, 3])
   );
 end;
 
@@ -134,6 +179,12 @@ begin
     Result[j + 1] := ti;
   end;
   AOk := True;
+end;
+
+function SignedDelta(V: Double): string;
+begin
+  if V >= 0 then Result := '+' + Format('%.3f', [V])
+  else           Result := Format('%.3f', [V]);
 end;
 
 function IsRel(const ACase: TEvalCase; AIdx: Integer): Boolean;
@@ -235,10 +286,11 @@ begin
   end;
 
   WriteLn;
-  WriteLn(Format('  MRR         base=%.3f  rerank=%.3f  delta=%+.3f',
-    [MrrBase / N, MrrRerank / N, (MrrRerank - MrrBase) / N]));
-  WriteLn(Format('  recall@5    base=%.3f  rerank=%.3f  delta=%+.3f',
-    [Rec5Base / N, Rec5Rerank / N, (Rec5Rerank - Rec5Base) / N]));
+  { FPC's Format has no '+' flag, so sign the delta by hand. }
+  WriteLn(Format('  MRR         base=%.3f  rerank=%.3f  delta=%s',
+    [MrrBase / N, MrrRerank / N, SignedDelta((MrrRerank - MrrBase) / N)]));
+  WriteLn(Format('  recall@5    base=%.3f  rerank=%.3f  delta=%s',
+    [Rec5Base / N, Rec5Rerank / N, SignedDelta((Rec5Rerank - Rec5Base) / N)]));
   WriteLn;
   if MrrRerank >= MrrBase then
     WriteLn('rerank_eval: OK (reranker did not regress MRR)')
