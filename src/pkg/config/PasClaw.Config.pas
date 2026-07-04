@@ -642,6 +642,22 @@ type
        300+MB of model weights on disk can flip this in
        config.json or answer 'n' at onboarding. *)
     VectorSearchEnabled: Boolean;
+    (* Second-stage reranking of memory_search / kb_search candidates by a
+       local ONNX cross-encoder (PasClaw.Memory.Rerank). Off by default: it
+       needs the reranker model provisioned (`pasclaw memory provision
+       --rerank`) and adds a per-query scoring pass over the candidate pool.
+       When on, retrieval widens the first-stage (RRF) pool, rescores each
+       (query, candidate) pair with the cross-encoder, and truncates back to
+       K -- more precise ordering than the bi-encoder cosine alone. Falls
+       back silently to the RRF order when the reranker isn't loadable, so
+       flipping this on without provisioning is a no-op, never an error. *)
+    RerankSearchEnabled: Boolean;
+    (* Reranker model id (registry key in PasClaw.Memory.Rerank, e.g.
+       'ms-marco-minilm' or 'bge-reranker-base'). Empty = the built-in
+       default (ms-marco-minilm). Selects which cross-encoder the /v1/rerank
+       endpoint and the RerankSearchEnabled retrieval stage load. Set by
+       `pasclaw memory provision --rerank[-model KEY]`. *)
+    RerankModel:         string;
     (* Render markdown the model emits as ANSI-styled text in the
        terminal (PasClaw.Markdown.Render). On by default -- terminal
        surfaces (pasclaw agent, pasclaw tui) call into it; serve /
@@ -1104,6 +1120,8 @@ begin
   SelfImprovingSkills.Distiller.Model        := '';
   Profile := '';   { PR #291: empty == no persisted profile selection }
   VectorSearchEnabled  := True;  { on by default; onboarding asks (default Y) -- see TConfig comment }
+  RerankSearchEnabled  := False; { opt-in: needs the reranker model provisioned }
+  RerankModel          := '';    { empty == built-in default (ms-marco-minilm) }
   AnthropicServerTools.WebSearch        := False;
   AnthropicServerTools.WebSearchMaxUses := 0;
   AnthropicServerTools.WebFetch         := False;
@@ -1359,6 +1377,12 @@ begin
       across SaveConfig + LoadConfig. }
     if not VectorSearchEnabled then
       Root.PutBool('vector_search_enabled', False);
+    { Reranking: opt-in, so only emit when enabled / customised (keeps the
+      default config.json unchanged for the common case). }
+    if RerankSearchEnabled then
+      Root.PutBool('rerank_search_enabled', True);
+    if RerankModel <> '' then
+      Root.PutStr('rerank_model', RerankModel);
     { Tool output cap: emit only when it differs from the default --
       including an explicit 0 (opt-OUT), which must round-trip or the
       next LoadConfig would silently re-enable the cap. }
@@ -1834,6 +1858,8 @@ begin
                                               MCPProgressiveDisclosure);
     RenderMarkdown      := Root.GetBool('render_markdown',       RenderMarkdown);
     VectorSearchEnabled := Root.GetBool('vector_search_enabled', VectorSearchEnabled);
+    RerankSearchEnabled := Root.GetBool('rerank_search_enabled', RerankSearchEnabled);
+    RerankModel         := Root.GetStr('rerank_model', RerankModel);
     ToolOutputCap       := Integer(Root.GetInt('tool_output_cap', ToolOutputCap));
     StatsCollectionEnabled := Root.GetBool('stats_collection_enabled',
                                            StatsCollectionEnabled);

@@ -1508,6 +1508,46 @@ begin
   else
     PrintLn('  ' + Ansi.Dim +
       '(deferred -- run `pasclaw memory provision` when ready)' + Ansi.Reset);
+
+  { Optional second stage: cross-encoder reranking. Offered right after
+    vector search because it rescores the SAME candidate pool for sharper
+    ordering. Default NO -- it adds another ~90 MB model download and a
+    per-query scoring pass, so it deserves an explicit opt-in. Reuses the
+    ONNX Runtime the embedder already needs. }
+  PrintLn;
+  PrintLn(Ansi.Bold + 'Memory: cross-encoder reranking (optional)' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'Rescore memory_search / kb_search candidates with a local cross-encoder' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'for sharper ordering than embeddings alone. Also serves /v1/rerank.' +
+    Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    '    reranker model + vocab   (HuggingFace, ~90 MB; reuses ONNX Runtime)' +
+    Ansi.Reset);
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Enable reranking for retrieval [y/N]: ')));
+  if not ((Choice = 'y') or (Choice = 'yes')) then
+  begin
+    PrintLn('  ' + Ansi.Dim +
+      '(skipped -- enable later with rerank_search_enabled + ' +
+      '`pasclaw memory provision --rerank`)' + Ansi.Reset);
+    Exit;
+  end;
+
+  Cfg.RerankSearchEnabled := True;
+  PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' reranking enabled');
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Download reranker now? [y/N]: ')));
+  if (Choice = 'y') or (Choice = 'yes') then
+  begin
+    PrintLn;
+    Cmd_Memory_Run(['provision', '--rerank']);
+  end
+  else
+    PrintLn('  ' + Ansi.Dim +
+      '(deferred -- run `pasclaw memory provision --rerank` when ready; ' +
+      'until then retrieval keeps the RRF order)' + Ansi.Reset);
 end;
 
 procedure PromptKnowledgebase(Cfg: TConfig);

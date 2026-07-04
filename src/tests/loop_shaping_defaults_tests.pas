@@ -47,6 +47,8 @@ begin
     AssertTrue(C.ToolOutputCap = DefaultToolOutputCap,
                'ToolOutputCap defaults to DefaultToolOutputCap (24576)');
     AssertTrue(not C.OrientTaskAware,   'OrientTaskAware stays False');
+    AssertTrue(not C.RerankSearchEnabled, 'RerankSearchEnabled defaults to False');
+    AssertTrue(C.RerankModel = '',      'RerankModel defaults to empty (built-in default)');
     AssertTrue(not C.SelfImprovingSkills.SelfManage,
                'SelfImprovingSkills.SelfManage stays False');
   finally
@@ -73,6 +75,8 @@ begin
     AssertTrue(Pos('render_markdown',     S) = 0, 'fresh ToJSON omits render_markdown');
     AssertTrue(Pos('tool_output_cap',     S) = 0, 'fresh ToJSON omits tool_output_cap');
     AssertTrue(Pos('orient_task_aware',   S) = 0, 'fresh ToJSON omits orient_task_aware');
+    AssertTrue(Pos('rerank_search_enabled', S) = 0, 'fresh ToJSON omits rerank_search_enabled');
+    AssertTrue(Pos('rerank_model',        S) = 0, 'fresh ToJSON omits rerank_model');
   finally
     C.Free;
   end;
@@ -96,6 +100,8 @@ begin
     C.CondenseReversible := True;
     C.OrientTaskAware    := True;
     C.ToolOutputCap      := 0;      { default 24576 -> explicit opt-OUT }
+    C.RerankSearchEnabled := True;  { default False -> opt-in }
+    C.RerankModel        := 'bge-reranker-base';  { default '' -> custom }
     S := C.ToJSON;
     { Each non-default field must be present in the serialised form,
       otherwise LoadConfig would silently fall back to the default. }
@@ -107,6 +113,8 @@ begin
     AssertTrue(Pos('"condense_reversible"',   S) > 0, 'opt-in condense_reversible emitted');
     AssertTrue(Pos('"orient_task_aware"',     S) > 0, 'opt-in orient_task_aware emitted');
     AssertTrue(Pos('"tool_output_cap"',       S) > 0, 'opt-out tool_output_cap emitted');
+    AssertTrue(Pos('"rerank_search_enabled"', S) > 0, 'opt-in rerank_search_enabled emitted');
+    AssertTrue(Pos('"rerank_model"',          S) > 0, 'custom rerank_model emitted');
   finally
     C.Free;
   end;
@@ -122,6 +130,8 @@ begin
     AssertTrue(C2.CondenseReversible,       'CondenseReversible round-trips True');
     AssertTrue(C2.OrientTaskAware,          'OrientTaskAware round-trips True');
     AssertTrue(C2.ToolOutputCap = 0,        'ToolOutputCap round-trips the explicit 0 opt-out');
+    AssertTrue(C2.RerankSearchEnabled,      'RerankSearchEnabled round-trips True');
+    AssertTrue(C2.RerankModel = 'bge-reranker-base', 'RerankModel round-trips the custom key');
   finally
     C2.Free;
   end;

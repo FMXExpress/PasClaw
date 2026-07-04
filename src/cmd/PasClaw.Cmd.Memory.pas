@@ -68,7 +68,8 @@ uses
   LocalVector.Models,
   LocalVector.OrtProvision,
   LocalVector.VecProvision,
-  LocalVector.Downloader;
+  LocalVector.Downloader,
+  PasClaw.Memory.Rerank;
 
 { Cache directory under PASCLAW_HOME. Built up via nested JoinPath
   calls -- NOT as a single `'cache/localvector'` const -- because on
@@ -89,8 +90,12 @@ begin
   PrintLn('Usage: pasclaw memory <subcommand>');
   PrintLn;
   PrintLn('Subcommands:');
-  PrintLn('  provision   Download sqlite-vec, ONNX Runtime, and the default');
-  PrintLn('              embedding model into $PASCLAW_HOME/cache/localvector/');
+  PrintLn('  provision [--rerank] [--rerank-model KEY]');
+  PrintLn('              Download sqlite-vec, ONNX Runtime, and the default');
+  PrintLn('              embedding model into $PASCLAW_HOME/cache/localvector/.');
+  PrintLn('              --rerank also fetches the cross-encoder reranker');
+  PrintLn('              (default ms-marco-minilm) for /v1/rerank; --rerank-model');
+  PrintLn('              picks one (' + RerankerKeys + ').');
   PrintLn('  status      Show which runtime artifacts are present and which');
   PrintLn('              backend memory_search would pick on the next call');
   PrintLn('  distill [session] [--save]');
@@ -362,7 +367,51 @@ begin
   end;
 end;
 
-function RunProvision: Integer;
+function ProvisionRerankerModel(const AKey: string): Boolean;
+{ Downloads (if missing) the cross-encoder reranker model.onnx + vocab.txt
+  for reranker spec AKey into <cache>/models/<spec.SubDir>/. Same shape as
+  ProvisionEmbeddingModel but backed by the reranker registry. Reuses the
+  ONNX Runtime already provisioned for the embedder -- no extra runtime. }
+var
+  Spec: TModelSpec;
+  Dir:  string;
+  D:    TModelDownloader;
+begin
+  Result := False;
+  if not FindRerankerSpec(AKey, Spec) then
+  begin
+    PrintCheckMark(Ansi.Red, '✗',
+      Format('reranker: unknown model "%s" (known: %s)', [AKey, RerankerKeys]));
+    Exit;
+  end;
+
+  Dir := ModelDir(Spec.SubDir);
+  ForceDirectories(Dir);
+
+  D := TModelDownloader.Create(Spec, Dir, {AVerbose=} True);
+  try
+    try
+      D.EnsureFiles;
+      if FileExists(D.ModelPath) and FileExists(D.VocabPath) then
+      begin
+        PrintCheckMark(Ansi.Green, '✓',
+          Format('reranker model %s (%s) installed at %s',
+                 [Spec.DisplayName, Spec.SizeDesc, Dir]));
+        Result := True;
+      end
+      else
+        PrintCheckMark(Ansi.Red, '✗',
+          'reranker model: download reported success but files missing');
+    except
+      on E: Exception do
+        PrintCheckMark(Ansi.Red, '✗', 'reranker model: ' + E.Message);
+    end;
+  finally
+    D.Free;
+  end;
+end;
+
+function RunProvision(const Argv: array of string): Integer;
 { Drives the three provisioning steps in order, prints a summary at
   the end, returns 0 if all three succeeded, 1 if any failed (the
   hybrid backend needs all three).
@@ -371,9 +420,32 @@ function RunProvision: Integer;
   routines (which assume the dir exists) don't trip on the very first
   fresh-install run. }
 var
-  OkVec, OkOrt, OkModel: Boolean;
-  Cache: string;
+  OkVec, OkOrt, OkModel, OkRerank, WantRerank: Boolean;
+  Cache, RerankKey: string;
+  Cfg: TConfig;
+  i: Integer;
 begin
+  { --rerank            also fetch the default cross-encoder reranker.
+    --rerank-model KEY  fetch a specific reranker (implies --rerank). }
+  WantRerank := False;
+  RerankKey  := DEFAULT_RERANKER;
+  i := 0;
+  while i <= High(Argv) do
+  begin
+    if SameText(Argv[i], '--rerank') then
+      WantRerank := True
+    else if SameText(Argv[i], '--rerank-model') then
+    begin
+      WantRerank := True;
+      if i < High(Argv) then
+      begin
+        RerankKey := Argv[i + 1];
+        Inc(i);
+      end;
+    end;
+    Inc(i);
+  end;
+
   Cache := CacheDir;
   ForceDirectories(Cache);
 
@@ -388,8 +460,40 @@ begin
   OkOrt   := ProvisionOnnxRuntime;
   OkModel := ProvisionEmbeddingModel;
 
+  OkRerank := True;
+  if WantRerank then
+  begin
+    PrintLn;
+    PrintLn(Ansi.Bold + 'Reranker (cross-encoder)' + Ansi.Reset);
+    OkRerank := ProvisionRerankerModel(RerankKey);
+    if OkRerank then
+    begin
+      { Persist which reranker was installed so the /v1/rerank endpoint and
+        the retrieval stage load it. Best-effort -- a save failure shouldn't
+        fail an otherwise-successful download. }
+      try
+        Cfg := LoadConfig;
+        try
+          Cfg.RerankModel := LowerCase(Trim(RerankKey));
+          SaveConfig(Cfg);
+          PrintLn('  ' + Ansi.Dim + 'rerank_model set to "' +
+            Cfg.RerankModel + '" in config.json' + Ansi.Reset);
+        finally
+          Cfg.Free;
+        end;
+      except
+        on E: Exception do
+          PrintLn('  ' + Ansi.Yellow + '·' + Ansi.Reset +
+            ' could not persist rerank_model: ' + E.Message);
+      end;
+      PrintLn('  ' + Ansi.Dim +
+        'enable with rerank_search_enabled: true in config.json ' +
+        '(or serve /v1/rerank now).' + Ansi.Reset);
+    end;
+  end;
+
   PrintLn;
-  if OkVec and OkOrt and OkModel then
+  if OkVec and OkOrt and OkModel and OkRerank then
   begin
     PrintLn(Ansi.Green + '✓' + Ansi.Reset +
       ' hybrid backend ready -- memory_search will use FTS + vector on next call');
@@ -409,10 +513,10 @@ function RunStatus: Integer;
   for diagnostics and as the "did the provision actually work" answer
   separate from running memory_search. }
 var
-  Spec: TModelSpec;
-  ModelP, VocabP: string;
+  Spec, RSpec: TModelSpec;
+  ModelP, VocabP, RModelP, RerankKey: string;
   Cfg: TConfig;
-  Active: string;
+  Active, RerankState: string;
 begin
   Cfg := LoadConfig;
   try
@@ -420,12 +524,19 @@ begin
       Active := 'hybrid (when artifacts present) else FTS-only'
     else
       Active := 'FTS-only (vector_search_enabled is false in config.json)';
+    RerankKey := LowerCase(Trim(Cfg.RerankModel));
+    if RerankKey = '' then RerankKey := DEFAULT_RERANKER;
+    if Cfg.RerankSearchEnabled then
+      RerankState := 'on (rerank_search_enabled) -- model ' + RerankKey
+    else
+      RerankState := 'off (rerank_search_enabled is false) -- model ' + RerankKey;
   finally
     Cfg.Free;
   end;
 
   PrintLn(Ansi.Bold + 'memory_search backend' + Ansi.Reset);
   PrintLn('  config setting: ' + Active);
+  PrintLn('  reranking:      ' + RerankState);
   PrintLn('  cache dir:      ' + CacheDir);
   PrintLn;
   PrintLn(Ansi.Bold + 'Runtime artifacts' + Ansi.Reset);
@@ -449,6 +560,21 @@ begin
       PrintCheckMark(Ansi.Green, '✓', 'vocab at ' + VocabP)
     else
       PrintCheckMark(Ansi.Yellow, '·', 'vocab missing at ' + VocabP);
+  end;
+
+  { Reranker (cross-encoder) -- optional second stage. Reported against the
+    configured key (rerank_model) so `status` reflects what serve / retrieval
+    would actually load; a '·' just means it hasn't been provisioned with
+    `memory provision --rerank`. }
+  if FindRerankerSpec(RerankKey, RSpec) then
+  begin
+    RModelP := JoinPath(ModelDir(RSpec.SubDir), 'model.onnx');
+    if FileExists(RModelP) then
+      PrintCheckMark(Ansi.Green, '✓',
+        'reranker ' + RSpec.DisplayName + ' at ' + RModelP)
+    else
+      PrintCheckMark(Ansi.Yellow, '·',
+        'reranker ' + RSpec.DisplayName + ' not provisioned (memory provision --rerank)');
   end;
 
   { ONNX Runtime -- same gate TVectorMemoryIndex.Open calls before
@@ -935,7 +1061,7 @@ begin
     Help;
     Exit(0);
   end;
-  if Sub = 'provision' then Exit(RunProvision);
+  if Sub = 'provision' then Exit(RunProvision(Argv));
   if Sub = 'status'    then Exit(RunStatus);
   if Sub = 'distill'   then Exit(RunDistill(Argv));
   if Sub = 'facts'     then Exit(RunFacts(Argv));
