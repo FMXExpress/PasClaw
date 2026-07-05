@@ -418,9 +418,9 @@ const
     plain literals -- adequate because the patterns themselves are
     just punctuation runs ($(...), `...`, etc.) or fixed token
     sequences (apt install, npm install -g, etc.). }
-  ForbiddenSubstrings: array[0..50] of string = (
-    'dd if=',
-    'dd of=',         { raw device/file overwrite -- reordered past `dd if=` }
+  ForbiddenSubstrings: array[0..49] of string = (
+    'dd if=',         { raw disk READ -- device copy; dd WRITES (of=) are
+                        caught order-independently by DdWritesOutfile below }
     ':(){:|',         { fork bomb }
     '<<eof',
     '<<-eof',
@@ -658,26 +658,90 @@ begin
   Result := False;
 end;
 
-function FirstTokenBasename(const Seg: string): string;
-{ Lowercased basename of a pipeline segment's first token, quotes already
-  stripped by TokenizeCommand. `/usr/bin/python3 -c ...` -> `python3`. }
+function BaseName(const S: string): string;
+{ Lowercased final path component. `/usr/bin/python3` -> `python3`. }
+var p: Integer;
+begin
+  Result := S;
+  p := Length(Result);
+  while (p >= 1) and (Result[p] <> '/') and (Result[p] <> '\') do Dec(p);
+  if p >= 1 then Result := Copy(Result, p + 1, MaxInt);
+  Result := LowerCase(Result);
+end;
+
+function EffectiveSinkBasename(const Seg: string): string;
+{ Basename of a pipeline segment's EFFECTIVE command word, quotes already
+  stripped by TokenizeCommand. Peels an `env` wrapper and its options so
+  `env python3 -c ...` / `/usr/bin/env -u FOO bash` resolve to the real
+  interpreter (python3 / bash) rather than `env` -- otherwise a decode-and-run
+  sink spelled through env slips the Class D guard. env options that take an
+  argument (-u/-C/-S/-P and long forms) skip two tokens; `NAME=value`
+  assignments and other `-`-flags skip one; the first plain word is the
+  command. Conservative: an unrecognised env spelling falls back to `env`. }
 var
   Toks: TStringList;
+  i: Integer;
   T: string;
-  p: Integer;
 begin
   Result := '';
   Toks := TokenizeCommand(Seg);
   try
     if Toks.Count = 0 then Exit;
-    T := Toks[0];
+    Result := BaseName(Toks[0]);
+    if Result <> 'env' then Exit;
+    i := 1;
+    while i < Toks.Count do
+    begin
+      T := LowerCase(Toks[i]);
+      if (T = '-u') or (T = '-c') or (T = '-s') or (T = '-p') or
+         (T = '--unset') or (T = '--chdir') or (T = '--split-string') or
+         (T = '--argv0') then
+        Inc(i, 2)                          { option + its argument }
+      else if (Length(T) > 0) and (T[1] = '-') then
+        Inc(i)                             { flag with no argument (-i, -0, -v) }
+      else if (Pos('=', T) > 0) and (Pos('/', T) = 0) then
+        Inc(i)                             { NAME=value assignment }
+      else
+        Break;                             { first plain word is the command }
+    end;
+    if i < Toks.Count then
+      Result := BaseName(Toks[i])
+    else
+      Result := 'env';                     { `env` with no command word }
   finally
     Toks.Free;
   end;
-  p := Length(T);
-  while (p >= 1) and (T[p] <> '/') and (T[p] <> '\') do Dec(p);
-  if p >= 1 then T := Copy(T, p + 1, MaxInt);
-  Result := LowerCase(T);
+end;
+
+function DdWritesOutfile(const Cmd: string): Boolean;
+{ A `dd` invocation that writes (an `of=` operand) anywhere in its argument
+  list. dd options are order-independent, so `dd bs=1M of=/dev/sda if=/dev/zero`
+  has neither `dd if=` nor `dd of=` as an adjacent substring -- tokenize and
+  flag any command whose tokens include a bare `dd` and an `of=`-prefixed
+  operand. Quotes are already stripped by TokenizeCommand, so `dd 'of=/dev/sda'`
+  is caught too. Fail-safe: a stray `dd` and an unrelated `of=` in the same
+  line over-match, which costs a retry, not a device wipe. }
+var
+  Toks: TStringList;
+  i: Integer;
+  T: string;
+  SawDd, SawOf: Boolean;
+begin
+  Result := False;
+  SawDd := False;
+  SawOf := False;
+  Toks := TokenizeCommand(Cmd);
+  try
+    for i := 0 to Toks.Count - 1 do
+    begin
+      T := LowerCase(Toks[i]);
+      if T = 'dd' then SawDd := True
+      else if Copy(T, 1, 3) = 'of=' then SawOf := True;
+    end;
+  finally
+    Toks.Free;
+  end;
+  Result := SawDd and SawOf;
 end;
 
 function PipesIntoInterpreter(const Cmd: string; out Hit: string): Boolean;
@@ -703,7 +767,7 @@ var
   begin
     Result := False;
     if not Sink then Exit;
-    F := FirstTokenBasename(S);
+    F := EffectiveSinkBasename(S);
     for m := 0 to High(Interps) do
       if F = Interps[m] then
       begin
@@ -822,7 +886,7 @@ begin
     Result := 'find -delete, a recursive rm equivalent'
   else if (Hit = 'sed -i') or (Hit = '--in-place') or (Hit = 'truncate -s') then
     Result := 'in-place file overwrite/truncation -- use edit_file / write_file'
-  else if (Hit = 'dd if=') or (Hit = 'dd of=') then
+  else if Hit = 'dd if=' then
     Result := 'raw disk/device copy'
   else if Pos('sh', LowerCase(Hit)) > 0 then   { '| sh', '|bash', '|/bin/sh' }
     Result := 'pipe-to-shell'
@@ -867,6 +931,14 @@ begin
                 '" (' + DescribeForbiddenPattern(Hit) + '; built-in shell denylist). ' +
                 'Rewrite without "' + Hit + '" -- the dedicated file tools, or a plain ' +
                 'command (e.g. `yes X | head -N` instead of a $(...) loop), usually cover it.';
+      Exit(False);
+    end;
+    if DdWritesOutfile(Cmd) then
+    begin
+      Reason := 'refused: `dd` with an of= operand performs a raw device/file ' +
+                'overwrite (dd options are order-independent, so this is caught ' +
+                'regardless of argument order). To write a file use write_file; ' +
+                'imaging a real device is not something to run from a chat session.';
       Exit(False);
     end;
     if PipesIntoInterpreter(Cmd, Hit) then
