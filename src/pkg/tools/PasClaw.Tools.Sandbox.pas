@@ -365,7 +365,7 @@ const
       additional safety -- the workspace boundary is what they were
       ever meant to protect, so they only matter when that boundary
       exists. *)
-  ForbiddenTokens: array[0..23] of string = (
+  ForbiddenTokens: array[0..26] of string = (
     'sudo',
     'su',
     'rm',          { all rm -- too easy to escape -rf detection }
@@ -381,6 +381,13 @@ const
     'eval',
     'mkfs',
     'diskpart',
+    { GuardFall "Class E" -- destructive long-tail binaries beyond rm that
+      wipe files or block devices. Kept to rare words: `truncate` is a
+      common English token (grep for it) so it lives as a flag substring
+      below, not here. }
+    'shred',       { overwrite-then-delete }
+    'wipefs',      { erase filesystem signatures }
+    'blkdiscard',  { discard all blocks on a device }
     { Windows additions } 'del',
     'erase',
     'rd',
@@ -411,8 +418,9 @@ const
     plain literals -- adequate because the patterns themselves are
     just punctuation runs ($(...), `...`, etc.) or fixed token
     sequences (apt install, npm install -g, etc.). }
-  ForbiddenSubstrings: array[0..43] of string = (
+  ForbiddenSubstrings: array[0..50] of string = (
     'dd if=',
+    'dd of=',         { raw device/file overwrite -- reordered past `dd if=` }
     ':(){:|',         { fork bomb }
     '<<eof',
     '<<-eof',
@@ -426,6 +434,23 @@ const
        Operators who want ${...} can disable the denylist. *)
     '${',             { parameter expansion -- see note above }
     '`',              { backtick command substitution }
+    (* GuardFall "Class B" -- expansions that reassemble a blocked token WITHOUT
+       a brace the '${' rule would catch. $IFS expands to whitespace, so
+       `rm$IFS-rf$IFS/` splits into `rm -rf /` only after the shell runs;
+       `$'...'` (ANSI-C quoting) decodes `\x72\x6d` into `rm`. Neither has a
+       legitimate use in an agent-issued command, so a blunt substring ban is
+       the safe closure. Plain `$VAR` (e.g. `echo $HOME`) is intentionally NOT
+       banned -- only the whitespace/decoder sigils. *)
+    '$ifs',           { IFS field-splitting smuggle }
+    '$''',            { ANSI-C quoting ($'...') -- hex/octal token decode }
+    (* GuardFall "Class E" -- rm-equivalent flags on long-tail utilities. The
+       leading space on ' -delete' keeps `git branch --delete` (a benign
+       double-dash flag) out of the match; find's real flag is space-preceded
+       and single-dash. *)
+    ' -delete',       { `find PATH -delete` == recursive rm }
+    'sed -i',         { in-place file overwrite; use edit_file }
+    '--in-place',     { sed/perl long-form of -i }
+    'truncate -s',    { `truncate -s 0 file` zeroes a file }
     '| sh',
     '|sh',
     '| bash',
@@ -478,7 +503,7 @@ const
 
   { Patterns specifically for writes to block devices. These cause
     instant disk wipes if executed. }
-  ForbiddenDeviceWrites: array[0..7] of string = (
+  ForbiddenDeviceWrites: array[0..15] of string = (
     '> /dev/sd',
     '> /dev/hd',
     '> /dev/vd',
@@ -486,7 +511,17 @@ const
     '> /dev/nvme',
     '> /dev/mmcblk',
     '> /dev/loop',
-    '> /dev/md'
+    '> /dev/md',
+    { No-space redirect forms -- `echo x >/dev/sda` skipped the space-padded
+      patterns above. }
+    '>/dev/sd',
+    '>/dev/hd',
+    '>/dev/vd',
+    '>/dev/xvd',
+    '>/dev/nvme',
+    '>/dev/mmcblk',
+    '>/dev/loop',
+    '>/dev/md'
   );
 
 function IsShellBreak(C: Char): Boolean; inline;
@@ -506,10 +541,30 @@ begin
 end;
 
 function TokenizeCommand(const Cmd: string): TStringList;
-{ Splits on whitespace and shell metacharacters. Caller frees. }
+{ Splits on whitespace and shell metacharacters, then strips quote
+  characters from each token. Caller frees.
+
+  Quote stripping closes GuardFall "Class A" (quote removal): /bin/sh
+  drops adjacent quotes AFTER parsing, so `r''m -rf ~` runs `rm`, but a
+  raw-token match against the string `r''m` never equals `rm`. We mirror
+  bash's quote removal before comparing -- `r''m`, `'rm'`, `r"m"` all
+  collapse to `rm` and hit the denylist. This over-matches quoted literal
+  arguments (e.g. an argument that is literally the word `rm` in quotes),
+  which is the intended fail-safe direction: a false refusal costs a retry,
+  a false allow runs the command. }
 var
   i: Integer;
   Cur: string;
+
+  function StripQuotes(const S: string): string;
+  var j: Integer;
+  begin
+    Result := '';
+    for j := 1 to Length(S) do
+      if (S[j] <> '''') and (S[j] <> '"') then
+        Result := Result + S[j];
+  end;
+
 begin
   Result := TStringList.Create;
   Cur := '';
@@ -517,12 +572,12 @@ begin
   begin
     if IsShellBreak(Cmd[i]) then
     begin
-      if Cur <> '' then begin Result.Add(Cur); Cur := ''; end;
+      if Cur <> '' then begin Result.Add(StripQuotes(Cur)); Cur := ''; end;
     end
     else
       Cur := Cur + Cmd[i];
   end;
-  if Cur <> '' then Result.Add(Cur);
+  if Cur <> '' then Result.Add(StripQuotes(Cur));
 end;
 
 function MatchesAnyTokenForbid(const Cmd: string; out Hit: string): Boolean;
@@ -601,6 +656,82 @@ begin
       Exit(True);
     end;
   Result := False;
+end;
+
+function FirstTokenBasename(const Seg: string): string;
+{ Lowercased basename of a pipeline segment's first token, quotes already
+  stripped by TokenizeCommand. `/usr/bin/python3 -c ...` -> `python3`. }
+var
+  Toks: TStringList;
+  T: string;
+  p: Integer;
+begin
+  Result := '';
+  Toks := TokenizeCommand(Seg);
+  try
+    if Toks.Count = 0 then Exit;
+    T := Toks[0];
+  finally
+    Toks.Free;
+  end;
+  p := Length(T);
+  while (p >= 1) and (T[p] <> '/') and (T[p] <> '\') do Dec(p);
+  if p >= 1 then T := Copy(T, p + 1, MaxInt);
+  Result := LowerCase(T);
+end;
+
+function PipesIntoInterpreter(const Cmd: string; out Hit: string): Boolean;
+{ GuardFall "Class D" -- a decode-and-run pipeline (`echo <b64> | base64 -d
+  | sh`) is three individually benign commands whose composition executes
+  attacker bytes. Rather than substring-match a handful of `| sh` spellings,
+  split the command on pipe boundaries and check whether any SINK segment
+  (anything after a '|') starts with a language interpreter, path-qualified
+  or not. Conservative on '||' too: the RHS of a logical-OR is equally
+  attacker-runnable. The existing '| sh' / '|bash' substrings stay as
+  belt-and-suspenders; this catches python/node/perl/... and `| /bin/sh`. }
+const
+  Interps: array[0..17] of string = (
+    'sh', 'bash', 'dash', 'zsh', 'fish', 'ksh', 'csh', 'tcsh',
+    'python', 'python2', 'python3', 'node', 'nodejs', 'perl', 'ruby',
+    'php', 'lua', 'osascript');
+var
+  i, SegStart: Integer;
+  SawPipe: Boolean;
+
+  function SegIsInterp(const S: string; Sink: Boolean): Boolean;
+  var m: Integer; F: string;
+  begin
+    Result := False;
+    if not Sink then Exit;
+    F := FirstTokenBasename(S);
+    for m := 0 to High(Interps) do
+      if F = Interps[m] then
+      begin
+        Hit := F;
+        Exit(True);
+      end;
+  end;
+
+begin
+  Result := False;
+  Hit := '';
+  SegStart := 1;
+  SawPipe := False;
+  i := 1;
+  while i <= Length(Cmd) do
+  begin
+    if Cmd[i] = '|' then
+    begin
+      { The segment that just ended is a sink iff a pipe preceded it. }
+      if SegIsInterp(Copy(Cmd, SegStart, i - SegStart), SawPipe) then Exit(True);
+      SawPipe := True;
+      if (i < Length(Cmd)) and (Cmd[i + 1] = '|') then Inc(i);  { skip doubled || }
+      SegStart := i + 1;
+    end;
+    Inc(i);
+  end;
+  if SegIsInterp(Copy(Cmd, SegStart, Length(Cmd) - SegStart + 1), SawPipe) then
+    Exit(True);
 end;
 
 function HasTraversalToken(const Cmd: string; out OffendingToken: string): Boolean;
@@ -683,12 +814,20 @@ begin
     Result := 'command substitution'
   else if Hit = '${' then
     Result := 'parameter expansion, which can reassemble a blocked command after the shell expands it'
+  else if Hit = '$ifs' then
+    Result := 'IFS field-splitting, which smuggles whitespace to reassemble a blocked command after expansion'
+  else if Hit = '$''' then
+    Result := 'ANSI-C quoting, which decodes hex/octal escapes into a blocked command'
+  else if Hit = ' -delete' then
+    Result := 'find -delete, a recursive rm equivalent'
+  else if (Hit = 'sed -i') or (Hit = '--in-place') or (Hit = 'truncate -s') then
+    Result := 'in-place file overwrite/truncation -- use edit_file / write_file'
+  else if (Hit = 'dd if=') or (Hit = 'dd of=') then
+    Result := 'raw disk/device copy'
   else if Pos('sh', LowerCase(Hit)) > 0 then   { '| sh', '|bash', '|/bin/sh' }
     Result := 'pipe-to-shell'
   else if (Copy(Hit, 1, 2) = '<<') then
     Result := 'here-document'
-  else if Hit = 'dd if=' then
-    Result := 'raw disk copy'
   else if Copy(Hit, 1, 5) = ':(){:' then
     Result := 'fork bomb'
   else
@@ -728,6 +867,15 @@ begin
                 '" (' + DescribeForbiddenPattern(Hit) + '; built-in shell denylist). ' +
                 'Rewrite without "' + Hit + '" -- the dedicated file tools, or a plain ' +
                 'command (e.g. `yes X | head -N` instead of a $(...) loop), usually cover it.';
+      Exit(False);
+    end;
+    if PipesIntoInterpreter(Cmd, Hit) then
+    begin
+      Reason := 'refused: command pipes into a language interpreter ("' + Hit +
+                '") -- a decode-and-run pipeline (e.g. `curl ... | ' + Hit + '` or ' +
+                '`base64 -d | ' + Hit + '`) executes arbitrary code the denylist never ' +
+                'sees. Run the intended program directly, or fetch with web_fetch and ' +
+                'write the file with write_file instead of piping to a shell.';
       Exit(False);
     end;
   end;
