@@ -447,6 +447,31 @@ begin
     Body;
 end;
 
+function SkillAuthoringPrimer: string;
+{ Compact, always-present "what a skill is + how to make one" block. Without
+  it the agent has NO in-context notion of the skill format: the catalog below
+  only lists skills that already exist, and docs/skills.md is never injected --
+  so "build me a skill" sends the model grepping the codebase for a framework
+  that does not exist. Kept short (it renders on every tool-loaded prompt) and
+  deliberately names write_file, which needs no skills_manage tool (off by
+  default) -- a SKILL.md is just a file the loader picks up on the next run. }
+var
+  Dir: string;
+begin
+  Dir := JoinPath(GetHome, 'workspace/skills');
+  Result :=
+    '### Authoring a skill' + sLineBreak +
+    'A skill is a directory `' + Dir + '/<name>/SKILL.md`: YAML frontmatter ' +
+    '(`name`, `description`, optional `kind: shell|prompt` with a matching ' +
+    '`shell:`/`prompt:` line and single-line JSON `schema`) followed by a ' +
+    'markdown body. Omit `kind` for a knowledge-only skill (a doc you read on ' +
+    'demand); `kind: shell` or `kind: prompt` registers a callable ' +
+    '`skill_<name>` tool. To create one, write that SKILL.md with `write_file` ' +
+    '-- it loads on the next run. You do not need a special tool or to search ' +
+    'the codebase for a "skill" framework; this is the entire format. Full ' +
+    'reference: `docs/skills.md`.';
+end;
+
 function BuildSkillsSection(ProgressiveDisclosure: Boolean): string;
 var
   Skills: TSkillSpecArray;
@@ -459,9 +484,20 @@ begin
   try
     Skills := LoadSkillManifests(GetHome);
   except
+    { Even if manifest loading fails, still teach the format so "build me a
+      skill" works on a clean install. }
+    Result := '## Skills' + sLineBreak + sLineBreak + SkillAuthoringPrimer;
     Exit;
   end;
-  if Length(Skills) = 0 then Exit;
+  if Length(Skills) = 0 then
+  begin
+    { The gap this fixes: a default install has no skills, so the section used
+      to be empty and the agent never learned skills exist or how to author one. }
+    Result := '## Skills' + sLineBreak + sLineBreak +
+      'No skills are installed yet.' + sLineBreak + sLineBreak +
+      SkillAuthoringPrimer;
+    Exit;
+  end;
 
   { Progressive disclosure (Cfg.SelfImprovingSkills.ProgressiveDisclosure):
     don't inline the catalog. Point the model at skills_list / skill_view
@@ -474,7 +510,8 @@ begin
       Format('You have %d skill(s) available. Call `skills_list` to see ' +
              'their names + descriptions, then `skill_view(name)` to load ' +
              'the full instructions for the one that fits the task. Do this ' +
-             'before reinventing a procedure from scratch.', [Length(Skills)]);
+             'before reinventing a procedure from scratch.', [Length(Skills)]) +
+      sLineBreak + sLineBreak + SkillAuthoringPrimer;
     Exit;
   end;
 
@@ -522,6 +559,8 @@ begin
           Lines.Add('- **' + Skills[i].Name + '** -- ' + Desc + '. Read `' + Skills[i].Source + '` for the full instructions.');
       end;
     end;
+    Lines.Add('');
+    Lines.Add(SkillAuthoringPrimer);
     Result := Lines.Text;
     { Strip trailing newline TStringList.Text adds, so the SectionSep
       below doesn't end up with an extra blank line. }
