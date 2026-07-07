@@ -452,13 +452,33 @@ function SkillAuthoringPrimer: string;
   it the agent has NO in-context notion of the skill format: the catalog below
   only lists skills that already exist, and docs/skills.md is never injected --
   so "build me a skill" sends the model grepping the codebase for a framework
-  that does not exist. Kept short (it renders on every tool-loaded prompt) and
-  deliberately names write_file, which needs no skills_manage tool (off by
-  default) -- a SKILL.md is just a file the loader picks up on the next run. }
+  that does not exist. Kept short (it renders on every tool-loaded prompt).
+
+  The "how to create" line is sandbox-aware. Skills load ONLY from
+  $PASCLAW_HOME/workspace/skills, and that dir is normally writable (the
+  sandbox is off by default; under `pasclaw serve` it sits inside the
+  workspace), so plain write_file works and needs no skills_manage tool (off by
+  default). But when restrict_to_workspace pins writes to a project dir that
+  the skills dir is outside of, write_file there is REFUSED -- so advertising it
+  unconditionally would hand the model a path that fails. Probe CanWritePath and
+  switch the advice to skills_manage / an allow_write_paths request in that case
+  (do NOT tell it to write elsewhere -- the loader would never see the file). }
 var
-  Dir: string;
+  Dir, HowTo, Reason: string;
 begin
   Dir := JoinPath(GetHome, 'workspace/skills');
+  if CanWritePath(JoinPath(Dir, 'SKILL.md'), Reason) then
+    HowTo :=
+      'To create one, write that SKILL.md with `write_file` -- it loads on the ' +
+      'next run. You do not need a special tool or to search the codebase for a ' +
+      '"skill" framework; this is the entire format.'
+  else
+    HowTo :=
+      'That directory is outside the active write sandbox, so `write_file` there ' +
+      'is refused. Create the skill with the `skills_manage` tool (it writes to ' +
+      'the skills dir directly), or ask the operator to add `' + Dir + '` to ' +
+      'sandbox.allow_write_paths. Skills load only from that directory, so ' +
+      'writing the file anywhere else will not register it.';
   Result :=
     '### Authoring a skill' + sLineBreak +
     'A skill is a directory `' + Dir + '/<name>/SKILL.md`: YAML frontmatter ' +
@@ -466,10 +486,7 @@ begin
     '`shell:`/`prompt:` line and single-line JSON `schema`) followed by a ' +
     'markdown body. Omit `kind` for a knowledge-only skill (a doc you read on ' +
     'demand); `kind: shell` or `kind: prompt` registers a callable ' +
-    '`skill_<name>` tool. To create one, write that SKILL.md with `write_file` ' +
-    '-- it loads on the next run. You do not need a special tool or to search ' +
-    'the codebase for a "skill" framework; this is the entire format. Full ' +
-    'reference: `docs/skills.md`.';
+    '`skill_<name>` tool. ' + HowTo + ' Full reference: `docs/skills.md`.';
 end;
 
 function BuildSkillsSection(ProgressiveDisclosure: Boolean): string;

@@ -23,6 +23,7 @@ uses
   SysUtils, Classes,
   PasClaw.Config,
   PasClaw.Utils,
+  PasClaw.Tools.Sandbox,
   PasClaw.Agent.Prompt;
 
 var
@@ -45,6 +46,15 @@ begin
   if Pos(Needle, Hay) <= 0 then
   begin
     WriteLn('FAIL [', Why, ']: missing "', Needle, '"');
+    Inc(Failures);
+  end;
+end;
+
+procedure NotContains(const Hay, Needle, Why: string);
+begin
+  if Pos(Needle, Hay) > 0 then
+  begin
+    WriteLn('FAIL [', Why, ']: unexpected "', Needle, '"');
     Inc(Failures);
   end;
 end;
@@ -86,6 +96,36 @@ begin
   Contains(P, 'Authoring a skill', 'present: primer still appended alongside the catalog');
 end;
 
+procedure TestRestrictedSandboxSwitchesAdvice(const Home: string);
+{ Codex #440 P2: when restrict_to_workspace pins writes to a project dir that
+  the skills dir is outside of, write_file to the skills dir is refused -- so
+  the primer must NOT advertise it. Point at skills_manage / allow_write_paths
+  instead. Runs LAST because it mutates the process-global sandbox policy. }
+var
+  Cfg: TConfig;
+  Pol: TSandboxPolicy;
+  Elsewhere, P: string;
+begin
+  Elsewhere := JoinPath(GetTempDir, 'pasclaw-restrict-' + IntToStr(GetProcessID));
+  ForceDirectories(Elsewhere);
+  Cfg := LoadConfig;
+  try
+    Pol := Cfg.Sandbox;
+    Pol.RestrictToWorkspace := True;              { pin writes... }
+    ConfigureSandbox(Pol, Elsewhere);             { ...to a dir the skills dir is NOT under }
+  finally
+    Cfg.Free;
+  end;
+
+  P := PromptNow;
+  Contains(P, 'skills_manage',                    'restricted: routes to skills_manage');
+  Contains(P, 'allow_write_paths',                'restricted: offers the allowlist path');
+  Contains(P, 'refused',                          'restricted: warns write_file is refused');
+  { The writable-branch-only phrasing must be gone so the model is not told to
+    just write_file into a dir where that call fails. }
+  NotContains(P, 'this is the entire format',     'restricted: drops the plain write_file advice');
+end;
+
 var
   Home: string;
 begin
@@ -96,6 +136,7 @@ begin
 
   TestZeroSkillsTeachesFormat;
   TestSkillPresentStillTeachesFormat(Home);
+  TestRestrictedSandboxSwitchesAdvice(Home);
 
   if Failures = 0 then
     WriteLn('skills_prompt_tests: OK')
