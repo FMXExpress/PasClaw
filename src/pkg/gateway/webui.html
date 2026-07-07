@@ -587,6 +587,7 @@
     <button data-tab="mcp">MCP</button>
     <button data-tab="cron">Cron</button>
     <button data-tab="skills">Skills</button>
+    <button data-tab="workflow">Workflow</button>
     <button data-tab="vault">Vault</button>
     <button data-tab="logs">Logs</button>
     <button data-tab="stats">Stats</button>
@@ -973,6 +974,38 @@
           <tbody></tbody>
         </table>
       </details>
+    </div>
+  </div>
+
+  <div id="tab-workflow" class="tab">
+    <div style="display:flex;gap:14px;width:100%;height:100%;overflow:hidden">
+      <div style="flex:0 0 220px;display:flex;flex-direction:column;gap:8px;overflow:auto">
+        <button id="wfNew">+ New workflow</button>
+        <div id="wfList" style="display:flex;flex-direction:column;gap:4px"></div>
+      </div>
+      <div style="flex:1;display:flex;flex-direction:column;gap:10px;overflow:auto">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <input id="wfName" placeholder="workflow name (letters, digits, _ -)" style="flex:1;min-width:180px">
+          <button id="wfSave">Save</button>
+          <button id="wfRun">Run ▶</button>
+          <button id="wfDelete" style="margin-left:auto">Delete</button>
+        </div>
+        <input id="wfDesc" placeholder="description">
+        <input id="wfInputs" placeholder="inputs (comma-separated names, e.g. prompt)">
+        <div style="display:flex;gap:6px;align-items:center">
+          <select id="wfPalette" style="flex:1"><option value="">— add a node from an MCP tool —</option></select>
+          <button id="wfAddNode">Add node</button>
+        </div>
+        <svg id="wfGraph" style="width:100%;height:140px;border:1px solid var(--border,#333);border-radius:6px;background:rgba(127,127,127,.05)"></svg>
+        <div id="wfNodes" style="display:flex;flex-direction:column;gap:8px"></div>
+        <div id="wfEdges" style="display:flex;flex-direction:column;gap:4px"></div>
+        <button id="wfAddEdge" style="align-self:flex-start">+ edge</button>
+        <div id="wfRunPanel" style="display:none;border-top:1px solid var(--border,#333);padding-top:8px">
+          <div id="wfRunInputs" style="display:flex;flex-direction:column;gap:4px;margin-bottom:6px"></div>
+          <pre id="wfResults" style="white-space:pre-wrap;font-size:12px;max-height:240px;overflow:auto"></pre>
+        </div>
+        <div id="wfMsg" style="font-size:12px;opacity:.8"></div>
+      </div>
     </div>
   </div>
 
@@ -2840,6 +2873,7 @@ function initMode() {
 /* ===== Loaders for the read-only tabs (lazy-bound on first show) ===== */
 const tabLoaders = {
   chat() { /* always loaded */ },
+  workflow() { wfInit(); },
   checkpoints() { renderCheckpoints(); },
 
   /* Memory: the workspace/memory/*.md files ARE the memory; the SQLite
@@ -3896,6 +3930,224 @@ function initParams() {
      this for the chat that actually opens. */
   loadParamsForActive();
 }
+
+/* ===== Workflow tab ===== */
+const wf = { tools: [], nodes: [], edges: [], inputs: [], current: null };
+let wfBound = false;
+
+async function wfInit() {
+  if (!wfBound) {
+    wfBound = true;
+    document.getElementById("wfNew").addEventListener("click", wfNewClicked);
+    document.getElementById("wfAddNode").addEventListener("click", wfAddNode);
+    document.getElementById("wfAddEdge").addEventListener("click", () => { wf.edges.push({from:"",to:""}); wfRenderEdges(); wfRenderGraph(); });
+    document.getElementById("wfSave").addEventListener("click", wfSave);
+    document.getElementById("wfRun").addEventListener("click", wfRun);
+    document.getElementById("wfDelete").addEventListener("click", wfDelete);
+  }
+  try {
+    const j = await (await gwFetch("/v1/mcp/tools")).json();
+    wf.tools = j.tools || [];
+  } catch (e) { wf.tools = []; }
+  const pal = document.getElementById("wfPalette");
+  pal.innerHTML = '<option value="">— add a node from an MCP tool —</option>' +
+    wf.tools.map(t => `<option value="${escapeHtml(t.name)}">${escapeHtml(t.name)}</option>`).join("");
+  await wfLoadList();
+  if (!wf.current) wfNewClicked();
+}
+
+async function wfLoadList() {
+  const box = document.getElementById("wfList");
+  try {
+    const j = await (await gwFetch("/v1/workflows")).json();
+    const ws = j.workflows || [];
+    box.innerHTML = ws.length ? "" : '<div style="opacity:.6;font-size:12px">no workflows yet</div>';
+    ws.forEach(w => {
+      const b = document.createElement("button");
+      b.textContent = w.name + " (" + w.nodes + ")";
+      b.style.textAlign = "left";
+      b.addEventListener("click", () => wfLoad(w.id));
+      box.appendChild(b);
+    });
+  } catch (e) { box.innerHTML = '<div style="opacity:.6">workflows disabled or unavailable</div>'; }
+}
+
+function wfNewClicked() {
+  wf.current = null; wf.nodes = []; wf.edges = []; wf.inputs = [];
+  document.getElementById("wfName").value = "";
+  document.getElementById("wfDesc").value = "";
+  document.getElementById("wfInputs").value = "";
+  document.getElementById("wfRunPanel").style.display = "none";
+  wfRenderNodes(); wfRenderEdges(); wfRenderGraph(); wfMsg("");
+}
+
+async function wfLoad(id) {
+  try {
+    const spec = await (await gwFetch("/v1/workflows/" + encodeURIComponent(id))).json();
+    wf.current = spec.id || spec.name;
+    document.getElementById("wfName").value = spec.name || "";
+    document.getElementById("wfDesc").value = spec.description || "";
+    document.getElementById("wfInputs").value = (spec.inputs || []).map(i => i.name).join(", ");
+    wf.nodes = (spec.nodes || []).map(n => ({ id: n.id, tool: n.tool, args: JSON.stringify(n.args || {}, null, 2) }));
+    wf.edges = (spec.edges || []).map(e => ({ from: e.from, to: e.to }));
+    wf.inputs = (spec.inputs || []).map(i => i.name);
+    document.getElementById("wfRunPanel").style.display = "none";
+    wfRenderNodes(); wfRenderEdges(); wfRenderGraph(); wfMsg("loaded " + wf.current);
+  } catch (e) { wfMsg("load failed: " + e); }
+}
+
+function wfAddNode() {
+  const tool = document.getElementById("wfPalette").value;
+  if (!tool) return;
+  const short = tool.split("__").pop().replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "n";
+  let id = short, k = 1;
+  while (wf.nodes.some(n => n.id === id)) id = short + (++k);
+  wf.nodes.push({ id, tool, args: "{}" });
+  wfRenderNodes(); wfRenderGraph();
+}
+
+function wfRenderNodes() {
+  const box = document.getElementById("wfNodes");
+  box.innerHTML = "";
+  wf.nodes.forEach((n, i) => {
+    const card = document.createElement("div");
+    card.style.cssText = "border:1px solid var(--border,#333);border-radius:6px;padding:8px;display:flex;flex-direction:column;gap:4px";
+    card.innerHTML =
+      `<div style="display:flex;gap:6px;align-items:center">
+         <input value="${escapeHtml(n.id)}" data-i="${i}" class="wf-id" style="width:120px">
+         <span style="font-size:12px;opacity:.75">${escapeHtml(n.tool)}</span>
+         <button data-i="${i}" class="wf-del" style="margin-left:auto">✕</button>
+       </div>
+       <textarea data-i="${i}" class="wf-args" rows="3" style="font-family:monospace;font-size:12px" placeholder='{"input":{"prompt":"{{inputs.prompt}}"}}'>${escapeHtml(n.args)}</textarea>`;
+    box.appendChild(card);
+  });
+  box.querySelectorAll(".wf-id").forEach(el => el.addEventListener("input", e => { wf.nodes[+e.target.dataset.i].id = e.target.value; wfRenderEdges(); wfRenderGraph(); }));
+  box.querySelectorAll(".wf-args").forEach(el => el.addEventListener("input", e => { wf.nodes[+e.target.dataset.i].args = e.target.value; }));
+  box.querySelectorAll(".wf-del").forEach(el => el.addEventListener("click", e => { wf.nodes.splice(+e.target.dataset.i, 1); wfRenderNodes(); wfRenderEdges(); wfRenderGraph(); }));
+}
+
+function wfRenderEdges() {
+  const box = document.getElementById("wfEdges");
+  box.innerHTML = "";
+  const opts = () => '<option value=""></option>' + wf.nodes.map(n => `<option value="${escapeHtml(n.id)}">${escapeHtml(n.id)}</option>`).join("");
+  wf.edges.forEach((ed, i) => {
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;gap:6px;align-items:center;font-size:12px";
+    row.innerHTML = `<select data-i="${i}" class="wf-ef">${opts()}</select> →
+      <select data-i="${i}" class="wf-et">${opts()}</select>
+      <button data-i="${i}" class="wf-ed">✕</button>`;
+    box.appendChild(row);
+    row.querySelector(".wf-ef").value = ed.from;
+    row.querySelector(".wf-et").value = ed.to;
+  });
+  box.querySelectorAll(".wf-ef").forEach(el => el.addEventListener("change", e => { wf.edges[+e.target.dataset.i].from = e.target.value; wfRenderGraph(); }));
+  box.querySelectorAll(".wf-et").forEach(el => el.addEventListener("change", e => { wf.edges[+e.target.dataset.i].to = e.target.value; wfRenderGraph(); }));
+  box.querySelectorAll(".wf-ed").forEach(el => el.addEventListener("click", e => { wf.edges.splice(+e.target.dataset.i, 1); wfRenderEdges(); wfRenderGraph(); }));
+}
+
+function wfRenderGraph() {
+  const svg = document.getElementById("wfGraph");
+  const NS = "http://www.w3.org/2000/svg";
+  svg.innerHTML = "";
+  const pos = {};
+  wf.nodes.forEach((n, i) => { pos[n.id] = { x: 12 + i * 150, y: 50 }; });
+  wf.edges.forEach(ed => {
+    const a = pos[ed.from], b = pos[ed.to];
+    if (!a || !b) return;
+    const ln = document.createElementNS(NS, "line");
+    ln.setAttribute("x1", a.x + 130); ln.setAttribute("y1", a.y + 18);
+    ln.setAttribute("x2", b.x); ln.setAttribute("y2", b.y + 18);
+    ln.setAttribute("stroke", "#888"); ln.setAttribute("stroke-width", "2");
+    svg.appendChild(ln);
+  });
+  wf.nodes.forEach(n => {
+    const p = pos[n.id];
+    const r = document.createElementNS(NS, "rect");
+    r.setAttribute("x", p.x); r.setAttribute("y", p.y); r.setAttribute("width", 130); r.setAttribute("height", 36);
+    r.setAttribute("rx", 6); r.setAttribute("fill", "rgba(80,120,200,.25)"); r.setAttribute("stroke", "#6a8fd0");
+    svg.appendChild(r);
+    const t = document.createElementNS(NS, "text");
+    t.setAttribute("x", p.x + 8); t.setAttribute("y", p.y + 22); t.setAttribute("font-size", "12"); t.setAttribute("fill", "currentColor");
+    t.textContent = n.id;
+    svg.appendChild(t);
+  });
+}
+
+function wfBuildSpec() {
+  const name = document.getElementById("wfName").value.trim();
+  const inputs = document.getElementById("wfInputs").value.split(",").map(s => s.trim()).filter(Boolean);
+  const nodes = [];
+  for (const n of wf.nodes) {
+    let args;
+    try { args = JSON.parse(n.args || "{}"); }
+    catch (e) { throw new Error(`node "${n.id}": args is not valid JSON`); }
+    nodes.push({ id: n.id, tool: n.tool, args });
+  }
+  return {
+    name, description: document.getElementById("wfDesc").value,
+    inputs: inputs.map(i => ({ name: i, type: "string", required: true })),
+    nodes, edges: wf.edges.filter(e => e.from && e.to)
+  };
+}
+
+async function wfSave() {
+  let spec;
+  try { spec = wfBuildSpec(); } catch (e) { wfMsg("✗ " + e.message); return; }
+  if (!spec.name) { wfMsg("✗ name is required"); return; }
+  try {
+    const r = await gwFetch("/v1/workflows", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(spec) });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok && j.saved) { wf.current = j.id || spec.name; wfMsg("✓ saved " + wf.current); wfLoadList(); }
+    else wfMsg("✗ " + (j.detail || j.error || ("HTTP " + r.status)));
+  } catch (e) { wfMsg("✗ " + e); }
+}
+
+async function wfDelete() {
+  if (!wf.current) { wfNewClicked(); return; }
+  if (!confirm("Delete workflow " + wf.current + "?")) return;
+  await gwFetch("/v1/workflows/" + encodeURIComponent(wf.current), { method: "DELETE" });
+  wfNewClicked(); wfLoadList();
+}
+
+async function wfRun() {
+  let spec;
+  try { spec = wfBuildSpec(); } catch (e) { wfMsg("✗ " + e.message); return; }
+  if (!spec.name) { wfMsg("✗ save the workflow first"); return; }
+  // ensure the latest edits are persisted before running
+  await wfSave();
+  const panel = document.getElementById("wfRunPanel");
+  const inbox = document.getElementById("wfRunInputs");
+  panel.style.display = "block";
+  inbox.innerHTML = "";
+  const fields = {};
+  spec.inputs.forEach(inp => {
+    const row = document.createElement("div");
+    row.style.cssText = "display:flex;gap:6px;align-items:center";
+    row.innerHTML = `<label style="width:120px;font-size:12px">${escapeHtml(inp.name)}</label>`;
+    const inEl = document.createElement("input");
+    inEl.style.flex = "1";
+    row.appendChild(inEl); inbox.appendChild(row);
+    fields[inp.name] = inEl;
+  });
+  const go = document.createElement("button");
+  go.textContent = "Execute";
+  go.addEventListener("click", async () => {
+    const inputs = {};
+    Object.keys(fields).forEach(k => inputs[k] = fields[k].value);
+    document.getElementById("wfResults").textContent = "running…";
+    try {
+      const r = await gwFetch("/v1/workflows/" + encodeURIComponent(spec.name) + "/run",
+        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(inputs) });
+      const j = await r.json();
+      const lines = (j.nodes || []).map(n => `${n.ok ? "✓" : "✗"} ${n.node} (${n.tool})` + (n.error ? "  ! " + n.error : "") + (n.text ? "\n    " + n.text : ""));
+      document.getElementById("wfResults").textContent =
+        (j.ok ? "OK\n" : "FAILED: " + (j.error || "") + "\n") + lines.join("\n");
+    } catch (e) { document.getElementById("wfResults").textContent = "run error: " + e; }
+  });
+  inbox.appendChild(go);
+}
+
+function wfMsg(m) { document.getElementById("wfMsg").textContent = m; }
 
 /* ===== Misc helpers ===== */
 function escapeHtml(s) {

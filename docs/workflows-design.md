@@ -1,7 +1,14 @@
 # Design: agent-built + manual workflows (Replicate MCP chaining)
 
-Status: **proposal** (Phase 0/1 specced here; Phase 2/3 sketched). Nothing in
-this doc is wired yet except the skill-authoring primer shipped alongside it.
+Status: **implemented** (all phases landed on branch `claude/workflows`).
+Phase 0 (structured MCP output), Phase 1 (engine + store + gateway endpoints +
+agent tools), Phase 2 (Workflow tab: node editor + palette + SVG graph + run),
+and Phase 3 (agent authoring via workflow_save + the `## Workflows` prompt
+section) are wired and tested. The node editor is a form+graph editor (add
+nodes from the MCP-tool palette, edit args, connect edges, live SVG preview,
+run with per-node status); free-form drag-and-drop canvas positioning is the
+one deferred follow-up. The selector `await`/polling hook (open question 2)
+is not yet built — nodes assume the tool returns terminal output.
 
 ## Goal
 
