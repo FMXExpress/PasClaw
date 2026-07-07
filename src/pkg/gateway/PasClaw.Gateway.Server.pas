@@ -534,13 +534,18 @@ var
     surfacing fresh numbers when the operator hits /stats directly
     after a turn. Reset to (0, '') on first call.
 
-    No lock: the gateway's request handling is single-threaded
-    through OnCommandGet, so reads and writes here are serialised.
-    A future async refactor would need to wrap this in a critical
-    section. }
+    GStatsCacheLock guards these two globals. Indy serves each request
+    on its own worker thread (see RunCheckpointedLoop: turns from
+    different sessions run concurrently), and the web UI auto-refreshes
+    /v1/stats, so two threads can hit HandleStats at once -- reading and
+    writing GStatsCacheBody without a lock is a data race (a torn read of
+    the string, or two writers stomping each other). The lock brackets
+    ONLY the tiny read/write of the pair, never the expensive session
+    walk, so it does not serialise the aggregation itself. }
   GStatsCacheUntil:    TDateTime = 0;
   GStatsCacheBody:     string    = '';
   GStatsCacheTtlSecs:  Integer   = 5;
+  GStatsCacheLock:     TCriticalSection = nil;
 
   { Mutex around the per-endpoint stats sessions
     (_gateway_v1_chat / _gateway_v1_chat_completions /
@@ -2778,6 +2783,9 @@ var
   Cur: Int64;
   Root, ProviderObj, ModelObj: TJsonObject;
   ProviderArr, ModelArr: TJsonArray;
+  CachedBody: string;
+  CacheHit:   Boolean;
+  Body:       string;
 
   procedure BumpMap(M: TStringList; const K: string; Delta: Int64);
   var
@@ -2795,9 +2803,23 @@ var
   end;
 
 begin
-  if Now < GStatsCacheUntil then
+  { Serve a still-fresh cached body. Snapshot under the lock, then write
+    outside it -- WriteJSON must not run while holding the mutex. }
+  CacheHit := False;
+  CachedBody := '';
+  GStatsCacheLock.Enter;
+  try
+    if Now < GStatsCacheUntil then
+    begin
+      CachedBody := GStatsCacheBody;
+      CacheHit   := True;
+    end;
+  finally
+    GStatsCacheLock.Leave;
+  end;
+  if CacheHit then
   begin
-    WriteJSON(AResp, 200, GStatsCacheBody);
+    WriteJSON(AResp, 200, CachedBody);
     Exit;
   end;
 
@@ -2879,9 +2901,15 @@ begin
         ModelArr.Free; raise;
       end;
 
-      GStatsCacheBody  := Root.ToJSON;
-      GStatsCacheUntil := IncSecond(Now, GStatsCacheTtlSecs);
-      WriteJSON(AResp, 200, GStatsCacheBody);
+      Body := Root.ToJSON;
+      GStatsCacheLock.Enter;
+      try
+        GStatsCacheBody  := Body;
+        GStatsCacheUntil := IncSecond(Now, GStatsCacheTtlSecs);
+      finally
+        GStatsCacheLock.Leave;
+      end;
+      WriteJSON(AResp, 200, Body);
     finally
       Root.Free;
     end;
@@ -7644,6 +7672,7 @@ initialization
   GProviderSignatureCacheLock := TCriticalSection.Create;
   GProviderSignatureCache     := TStringList.Create;
   GGatewayStatsLock           := TCriticalSection.Create;
+  GStatsCacheLock             := TCriticalSection.Create;
   { Unsorted on purpose: insertion order doubles as FIFO so the
     eviction in RememberProviderSignature (Delete(0)) actually drops
     the OLDEST entry. A sorted+dupIgnore TStringList would order by
@@ -7658,5 +7687,6 @@ finalization
   GProviderSignatureCache.Free;
   GProviderSignatureCacheLock.Free;
   GGatewayStatsLock.Free;
+  GStatsCacheLock.Free;
 
 end.
