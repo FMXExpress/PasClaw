@@ -60,7 +60,8 @@ implementation
 
 uses
   PasClaw.JSON,
-  PasClaw.Logger;
+  PasClaw.Logger,
+  PasClaw.MCP.Result;
 
 constructor TMCPStdioClient.Create(const Name, Cmd, Args: string);
 begin
@@ -362,12 +363,19 @@ end;
 function TMCPStdioClient.CallTool(const ToolName, ArgsJSON: string;
                                   out ResultText, ErrMsg: string): Boolean;
 var
-  Params, RespObj, ResultObj, Block: TJsonObject;
-  ContentArr: TJsonArray;
+  Dummy: string;
+begin
+  Result := CallToolStructured(ToolName, ArgsJSON, ResultText, Dummy, ErrMsg);
+end;
+
+function TMCPStdioClient.CallToolStructured(const ToolName, ArgsJSON: string;
+  out ResultText, ResultJSON, ErrMsg: string): Boolean;
+var
+  Params: TJsonObject;
   Resp: string;
-  i: Integer;
 begin
   ResultText := '';
+  ResultJSON := '';
   ErrMsg := '';
   Params := TJsonObject.Create;
   try
@@ -382,43 +390,7 @@ begin
   finally
     Params.Free;
   end;
-
-  RespObj := TJsonObject.Parse(Resp);
-  if RespObj = nil then Exit(False);
-  try
-    if RespObj.Has('error') then begin ErrMsg := 'tools/call error'; Exit(False); end;
-    ResultObj := RespObj.ChildObject('result');
-    if ResultObj = nil then Exit(False);
-    try
-      ContentArr := ResultObj.ChildArray('content');
-      if ContentArr <> nil then
-      try
-        for i := 0 to ContentArr.Count - 1 do
-        begin
-          Block := ContentArr.ItemObject(i);
-          if Block = nil then Continue;
-          try
-            if Block.GetStr('type', '') = 'text' then
-            begin
-              if ResultText <> '' then ResultText := ResultText + sLineBreak;
-              ResultText := ResultText + Block.GetStr('text', '');
-            end;
-          finally
-            Block.Free;
-          end;
-        end;
-      finally
-        ContentArr.Free;
-      end;
-      if (ResultText = '') and ResultObj.GetBool('isError', False) then
-        ErrMsg := 'tool reported error (no text content)';
-    finally
-      ResultObj.Free;
-    end;
-  finally
-    RespObj.Free;
-  end;
-  Result := ErrMsg = '';
+  Result := ParseToolCallResult(Resp, ResultText, ResultJSON, ErrMsg);
 end;
 
 end.

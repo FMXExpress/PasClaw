@@ -44,6 +44,8 @@ type
     function ListTools(out Tools: TMCPToolArray; out ErrMsg: string): Boolean; override;
     function CallTool(const ToolName, ArgsJSON: string;
                       out ResultText, ErrMsg: string): Boolean; override;
+    function CallToolStructured(const ToolName, ArgsJSON: string;
+                      out ResultText, ResultJSON, ErrMsg: string): Boolean; override;
   end;
 
 implementation
@@ -52,6 +54,7 @@ uses
   PasClaw.JSON,
   PasClaw.Logger,
   PasClaw.Providers.HTTP,
+  PasClaw.MCP.Result,
   PasClaw.MCP.OAuth;
 
 constructor TMCPHttpClient.Create(const Name, URL, AuthHeader: string);
@@ -385,13 +388,19 @@ end;
 function TMCPHttpClient.CallTool(const ToolName, ArgsJSON: string;
                                  out ResultText, ErrMsg: string): Boolean;
 var
+  Dummy: string;
+begin
+  Result := CallToolStructured(ToolName, ArgsJSON, ResultText, Dummy, ErrMsg);
+end;
+
+function TMCPHttpClient.CallToolStructured(const ToolName, ArgsJSON: string;
+  out ResultText, ResultJSON, ErrMsg: string): Boolean;
+var
   Params: TJsonObject;
   Resp: string;
-  RespObj, ResultObj, Block: TJsonObject;
-  ContentArr: TJsonArray;
-  i: Integer;
 begin
   ResultText := '';
+  ResultJSON := '';
   ErrMsg := '';
   Params := TJsonObject.Create;
   try
@@ -406,40 +415,7 @@ begin
   finally
     Params.Free;
   end;
-  RespObj := TJsonObject.Parse(Resp);
-  if RespObj = nil then Exit(False);
-  try
-    if RespObj.Has('error') then begin ErrMsg := 'tools/call error'; Exit(False); end;
-    ResultObj := RespObj.ChildObject('result');
-    if ResultObj = nil then Exit(False);
-    try
-      ContentArr := ResultObj.ChildArray('content');
-      if ContentArr <> nil then
-      try
-        for i := 0 to ContentArr.Count - 1 do
-        begin
-          Block := ContentArr.ItemObject(i);
-          if Block = nil then Continue;
-          try
-            if Block.GetStr('type', '') = 'text' then
-            begin
-              if ResultText <> '' then ResultText := ResultText + sLineBreak;
-              ResultText := ResultText + Block.GetStr('text', '');
-            end;
-          finally
-            Block.Free;
-          end;
-        end;
-      finally
-        ContentArr.Free;
-      end;
-    finally
-      ResultObj.Free;
-    end;
-  finally
-    RespObj.Free;
-  end;
-  Result := True;
+  Result := ParseToolCallResult(Resp, ResultText, ResultJSON, ErrMsg);
 end;
 
 end.
