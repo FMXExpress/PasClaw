@@ -53,6 +53,8 @@ type
     function ListTools(out Tools: TMCPToolArray; out ErrMsg: string): Boolean; override;
     function CallTool(const ToolName, ArgsJSON: string;
                       out ResultText, ErrMsg: string): Boolean; override;
+    function CallToolStructured(const ToolName, ArgsJSON: string;
+                      out ResultText, ResultJSON, ErrMsg: string): Boolean; override;
     procedure Close;
   end;
 
