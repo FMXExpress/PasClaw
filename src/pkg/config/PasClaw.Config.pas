@@ -1419,6 +1419,10 @@ begin
       Root.PutBool('stats_collection_enabled', False);
     if not CheckpointsEnabled then
       Root.PutBool('checkpoints_enabled', False);
+    { Default ON -- emit only the explicit-off so an onboarding "N" (or a
+      locked-down deploy disabling the /v1/workflows surface) round-trips. }
+    if not WorkflowsEnabled then
+      Root.PutBool('workflows_enabled', False);
     { Default OFF -- emit only the explicit-on so an operator opt-in
       (onboarding or hand-edit) sticks across save/load. }
     if MemoryDistillEnabled then

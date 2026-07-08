@@ -903,6 +903,36 @@ begin
   end;
 end;
 
+procedure PromptWorkflows(Cfg: TConfig);
+{ Workflows: the workflow_save/list/run tools + the web UI Workflow tab +
+  /v1/workflows endpoints. On by default -- the tools are inert until a
+  workflow is saved, and the prompt exists so an operator on a locked-down
+  deploy can turn the HTTP surface off without grepping config. }
+var
+  Choice: string;
+begin
+  PrintLn;
+  PrintLn(Ansi.Bold + 'Workflows' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'Let the agent build + run saved tool-chaining pipelines (a DAG of MCP / ' +
+    'LLM / built-in' + Ansi.Reset);
+  PrintLn(Ansi.Dim +
+    'tool calls, e.g. generate -> upscale), editable visually in the web UI ' +
+    'Workflow tab.' + Ansi.Reset);
+  PrintLn;
+  Choice := Trim(LowerCase(ReadLineEcho('  Enable workflows [Y/n]: ')));
+  if (Choice = '') or (Choice = 'y') or (Choice = 'yes') then
+  begin
+    Cfg.WorkflowsEnabled := True;
+    PrintLn('  ' + Ansi.Green + '✓' + Ansi.Reset + ' workflows enabled (Workflow tab + workflow_* tools)');
+  end
+  else
+  begin
+    Cfg.WorkflowsEnabled := False;
+    PrintLn('  ' + Ansi.Dim + '(skipped -- flip workflows_enabled in config.json to enable later)' + Ansi.Reset);
+  end;
+end;
+
 procedure PromptWebFetch(Cfg: TConfig);
 { web_fetch / memory_fetch tools. On by default since PR #289 --
   picoclaw historically uses shell + curl, but PasClaw runs in
@@ -1950,6 +1980,7 @@ begin
       PromptToolOutputCap(Cfg);
       PromptOrientTaskAware(Cfg);
       PromptSelfImprovingSkills(Cfg);
+      PromptWorkflows(Cfg);
     end;
     PromptStatsCollection(Cfg);
     PromptCheckpoints(Cfg);
