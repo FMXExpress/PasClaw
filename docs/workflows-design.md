@@ -54,6 +54,15 @@ Consequences for chaining:
 So typed edge data flow (upstream output field → downstream input field) is not
 possible without extending the one MCP choke point. That extension is Phase 0.
 
+## Node types
+
+A node's `tool` can be:
+- an **MCP tool** (`server__tool`, e.g. `replicate__create_prediction`) → the MCP bridge;
+- the special **`llm`** node → any configured provider (with its API key): `args {provider, model, prompt, system?}` → a one-shot `Chat` → the reply text (bare `{{nodes.ID}}` downstream = that text; or `{{nodes.ID.text}}`);
+- **any other registered tool** (`web_fetch`, …) → the tool registry.
+
+Routing lives in `PasClaw.Workflow.Dispatch.WorkflowDispatch`; the registry and provider config are set once at startup (`SetWorkflowRegistry` from the shared RegisterSkills hook, `SetWorkflowConfig` from the gateway / agent) — the same module-global pattern `ConfigureSandbox` uses, because the engine's caller is a plain function pointer.
+
 ## Architecture
 
 ```

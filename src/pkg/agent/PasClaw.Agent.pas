@@ -366,6 +366,7 @@ uses
   PasClaw.Agent.SkillDistiller,
   PasClaw.Tools.Sandbox,
   PasClaw.Skills.Loader,
+  PasClaw.Workflow.Dispatch,   { SetWorkflowConfig -- llm workflow nodes }
   PasClaw.Agent.Prompt,
   PasClaw.Agent.AutoRouter.Apply,
   { PasClaw.Agent.Subagent moved to the interface uses (TSpawnTool /
@@ -589,6 +590,7 @@ begin
   RegisterSendMessageTool(FRegistry);
   Skills := LoadSkillManifests(GetHome);
   RegisterSkills(FRegistry, Skills);
+  SetWorkflowConfig(FConfig);   { workflow llm nodes -> configured providers }
   { Self-improving skills: skill_manage self-gates on
     Cfg.SelfImprovingSkills.SelfManage. }
   RegisterSkillManageTool(FRegistry, FConfig);
@@ -1071,6 +1073,7 @@ begin
     RegisterSendMessageTool(FRegistry);
     Skills := LoadSkillManifests(GetHome);
     RegisterSkills(FRegistry, Skills);
+    SetWorkflowConfig(FConfig);   { workflow llm nodes -> configured providers }
     RegisterSkillManageTool(FRegistry, FConfig);
     RegisterSkillDisclosureTools(FRegistry, FConfig);
   end;

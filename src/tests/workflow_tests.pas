@@ -14,7 +14,8 @@ program workflow_tests;
 uses
   SysUtils, Classes,
   PasClaw.Workflow,
-  PasClaw.Workflow.Store;
+  PasClaw.Workflow.Store,
+  PasClaw.Workflow.Dispatch;
 
 var
   Failures: Integer = 0;
@@ -186,6 +187,28 @@ begin
   Check(Pos('input', Err) > 0, 'run: error names the missing input');
 end;
 
+procedure TestDispatchRouting;
+{ WorkflowDispatch routes by name: __ -> MCP, llm -> provider, else -> registry.
+  With no registry/config set, each branch returns its own clear error, which
+  proves the routing decision without any network. }
+var t, j, e: string;
+begin
+  SetWorkflowRegistry(nil);
+  SetWorkflowConfig(nil);
+
+  { llm branch -> provider layer (no config set) }
+  Check(not WorkflowDispatch('llm', '{"prompt":"hi"}', t, j, e), 'dispatch: llm without config fails');
+  Check(Pos('provider config', e) > 0, 'dispatch: llm routed to the provider layer');
+
+  { MCP branch -> bridge (no servers connected) }
+  Check(not WorkflowDispatch('replicate__x', '{}', t, j, e), 'dispatch: MCP name fails without servers');
+  Check(Pos('MCP', e) > 0, 'dispatch: __ name routed to the MCP bridge');
+
+  { fallthrough with no registry -> unknown-tool error }
+  Check(not WorkflowDispatch('web_fetch', '{}', t, j, e), 'dispatch: unknown non-MCP tool fails w/o registry');
+  Check(Pos('unknown tool', e) > 0, 'dispatch: else-branch reports unknown tool');
+end;
+
 procedure TestStoreRoundTrip;
 var Spec, Loaded: TWorkflowSpec; Err: string; Sums: TWorkflowSummaryArray; i: Integer; Found: Boolean;
 begin
@@ -209,6 +232,7 @@ begin
   TestSelector;
   TestRunChains;
   TestAwaitPolling;
+  TestDispatchRouting;
   TestRunMissingInput;
   TestStoreRoundTrip;
 

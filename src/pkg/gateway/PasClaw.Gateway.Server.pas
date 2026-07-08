@@ -493,8 +493,8 @@ uses
   PasClaw.Skills.Pending,
   PasClaw.Workflow,
   PasClaw.Workflow.Store,
+  PasClaw.Workflow.Dispatch,  { WorkflowDispatch -- MCP / llm / registry node caller }
   PasClaw.Tools.Types,        { TTool -- MCP tool enumeration for the palette }
-  PasClaw.MCP.Bridge,         { MCPCallStructured -- workflow node tool caller }
   PasClaw.Skills.Zip,       { PackDirToZip -- workspace export download }
   PasClaw.Skills.Install,   { InstallSkillTarget / RemoveSkillFiles / IsSafeSkillName }
   PasClaw.Skills.ClawHub,  { SearchClawHub -- catalog search (clawhub.ai) }
@@ -764,6 +764,9 @@ begin
   FProvider := Provider;
   FRegistry := Registry;
   FMaxIter  := 25;
+  { Give workflow `llm` nodes access to the configured providers (+ their API
+    keys). The registry is wired separately via RegisterWorkflowTools. }
+  SetWorkflowConfig(FCfg);
   { Wire the per-turn checkpoint system into the gateway (it was CLI/TUI-only).
     Init with the per-workspace fallback session; each request re-scopes to its
     chat's session id (X-PasClaw-Session) via ApplyCheckpointSession, then
@@ -2853,7 +2856,7 @@ begin
     begin WriteJSON(AResp, 404, '{"error":' + JsonStr(Err) + '}'); Exit; end;
     InputsJSON := Trim(ReadRequestBody(ARequest));
     if InputsJSON = '' then InputsJSON := '{}';
-    Ok := RunWorkflow(Spec, InputsJSON, @MCPCallStructured, Res, Err);
+    Ok := RunWorkflow(Spec, InputsJSON, @WorkflowDispatch, Res, Err);
     Root := TJsonObject.Create;
     try
       Root.PutBool('ok', Ok);

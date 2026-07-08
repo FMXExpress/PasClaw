@@ -32,7 +32,7 @@ uses
   PasClaw.Tools.Types,
   PasClaw.Workflow,
   PasClaw.Workflow.Store,
-  PasClaw.MCP.Bridge;   { MCPCallStructured -- the node tool caller }
+  PasClaw.Workflow.Dispatch;   { WorkflowDispatch -- routes MCP / llm / registry nodes }
 
 const
   SAVE_SCHEMA =
@@ -129,7 +129,7 @@ begin
   if not LoadWorkflow(Name, Spec, Err) then
   begin ErrMsg := 'workflow_run: ' + Err; Exit; end;
 
-  Ok := RunWorkflow(Spec, InputsJSON, @MCPCallStructured, Res, Err);
+  Ok := RunWorkflow(Spec, InputsJSON, @WorkflowDispatch, Res, Err);
 
   Root := TJsonObject.Create;
   try
@@ -175,12 +175,17 @@ end;
 procedure RegisterWorkflowTools(Reg: TToolRegistry);
 begin
   if Reg = nil then Exit;
+  { Let workflow nodes reach any registered tool (web_fetch, etc.), not just
+    MCP + llm. Config for llm nodes is set separately by the gateway / CLI. }
+  SetWorkflowRegistry(Reg);
 
   Reg1(Reg, 'workflow_save',
     'Author or replace a workflow: a DAG of tool calls whose outputs feed the ' +
     'next node. Pass the full spec (name, nodes[], edges[], optional inputs[]). ' +
-    'Each node calls a registered tool (e.g. an MCP tool like ' +
-    'replicate__create_prediction). Wire data with {{inputs.NAME}} and ' +
+    'A node''s "tool" is an MCP tool (e.g. replicate__create_prediction), the ' +
+    'special "llm" node which calls a configured provider with ' +
+    'args {provider, model, prompt} and returns its text, or any other ' +
+    'registered tool. Wire data with {{inputs.NAME}} and ' +
     '{{nodes.ID.selector}} templates in a node''s args, where selector is a ' +
     'dotted/[i] path into the upstream tool''s JSON result (e.g. ' +
     'structuredContent.output[0]). For an ASYNC tool that returns a pending ' +
