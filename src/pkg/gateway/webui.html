@@ -4096,14 +4096,15 @@ function wfBuildSpec() {
 
 async function wfSave() {
   let spec;
-  try { spec = wfBuildSpec(); } catch (e) { wfMsg("✗ " + e.message); return; }
-  if (!spec.name) { wfMsg("✗ name is required"); return; }
+  try { spec = wfBuildSpec(); } catch (e) { wfMsg("✗ " + e.message); return false; }
+  if (!spec.name) { wfMsg("✗ name is required"); return false; }
   try {
     const r = await gwFetch("/v1/workflows", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(spec) });
     const j = await r.json().catch(() => ({}));
-    if (r.ok && j.saved) { wf.current = j.id || spec.name; wfMsg("✓ saved " + wf.current); wfLoadList(); }
-    else wfMsg("✗ " + (j.detail || j.error || ("HTTP " + r.status)));
-  } catch (e) { wfMsg("✗ " + e); }
+    if (r.ok && j.saved) { wf.current = j.id || spec.name; wfMsg("✓ saved " + wf.current); wfLoadList(); return true; }
+    wfMsg("✗ " + (j.detail || j.error || ("HTTP " + r.status)));
+    return false;
+  } catch (e) { wfMsg("✗ " + e); return false; }
 }
 
 async function wfDelete() {
@@ -4117,8 +4118,9 @@ async function wfRun() {
   let spec;
   try { spec = wfBuildSpec(); } catch (e) { wfMsg("✗ " + e.message); return; }
   if (!spec.name) { wfMsg("✗ save the workflow first"); return; }
-  // ensure the latest edits are persisted before running
-  await wfSave();
+  // ensure the latest edits are persisted before running; abort if the save
+  // failed so Run doesn't execute the previously-saved version under this name
+  if (!(await wfSave())) return;
   const panel = document.getElementById("wfRunPanel");
   const inbox = document.getElementById("wfRunInputs");
   panel.style.display = "block";

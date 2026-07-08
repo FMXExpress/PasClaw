@@ -144,6 +144,11 @@ begin
       O.PutBool('ok', Res[i].Ok);
       if Res[i].Error <> '' then O.PutStr('error', Res[i].Error);
       if Res[i].Text  <> '' then O.PutStr('text', Res[i].Text);
+      { Surface the raw result for structured-only nodes (e.g. an MCP tool that
+        returns only structuredContent / an image URL, so Text is empty) --
+        otherwise the model sees an "ok" node with no observable payload. }
+      if (Res[i].Text = '') and (Res[i].JSON <> '') then
+        O.PutRaw('result', Res[i].JSON);
       Arr.AddObject(O);
     end;
     Root.PutArray('nodes', Arr);
