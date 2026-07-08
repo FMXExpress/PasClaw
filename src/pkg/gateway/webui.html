@@ -978,33 +978,40 @@
   </div>
 
   <div id="tab-workflow" class="tab">
-    <div style="display:flex;gap:14px;width:100%;height:100%;overflow:hidden">
-      <div style="flex:0 0 220px;display:flex;flex-direction:column;gap:8px;overflow:auto">
+    <div style="display:flex;gap:12px;width:100%;height:100%;overflow:hidden">
+      <div style="flex:0 0 200px;display:flex;flex-direction:column;gap:8px;overflow:auto">
         <button id="wfNew">+ New workflow</button>
         <div id="wfList" style="display:flex;flex-direction:column;gap:4px"></div>
       </div>
-      <div style="flex:1;display:flex;flex-direction:column;gap:10px;overflow:auto">
+      <div style="flex:1;display:flex;flex-direction:column;gap:8px;overflow:hidden;min-width:0">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <input id="wfName" placeholder="workflow name (letters, digits, _ -)" style="flex:1;min-width:180px">
+          <input id="wfName" placeholder="workflow name (letters, digits, _ -)" style="flex:1;min-width:160px">
+          <select id="wfPalette" style="flex:0 0 240px"><option value="">— add a node —</option></select>
+          <button id="wfAddNode">+ Node</button>
           <button id="wfSave">Save</button>
           <button id="wfRun">Run ▶</button>
-          <button id="wfDelete" style="margin-left:auto">Delete</button>
+          <button id="wfDelete">Delete</button>
         </div>
-        <input id="wfDesc" placeholder="description">
         <input id="wfInputs" placeholder="inputs (comma-separated names, e.g. prompt)">
-        <div style="display:flex;gap:6px;align-items:center">
-          <select id="wfPalette" style="flex:1"><option value="">— add a node from an MCP tool —</option></select>
-          <button id="wfAddNode">Add node</button>
+        <div style="font-size:11px;opacity:.6">Drag a node by its title to move it; drag from a node's right ● to another node's left ● to connect. Click a node to edit its args.</div>
+        <div id="wfCanvas" style="position:relative;flex:1;min-height:280px;border:1px solid var(--border,#333);border-radius:6px;background:rgba(127,127,127,.05);overflow:auto">
+          <svg id="wfEdgeLayer" style="position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:0"></svg>
         </div>
-        <svg id="wfGraph" style="width:100%;height:140px;border:1px solid var(--border,#333);border-radius:6px;background:rgba(127,127,127,.05)"></svg>
-        <div id="wfNodes" style="display:flex;flex-direction:column;gap:8px"></div>
-        <div id="wfEdges" style="display:flex;flex-direction:column;gap:4px"></div>
-        <button id="wfAddEdge" style="align-self:flex-start">+ edge</button>
-        <div id="wfRunPanel" style="display:none;border-top:1px solid var(--border,#333);padding-top:8px">
+        <div id="wfRunPanel" style="display:none;border-top:1px solid var(--border,#333);padding-top:8px;max-height:34%;overflow:auto">
           <div id="wfRunInputs" style="display:flex;flex-direction:column;gap:4px;margin-bottom:6px"></div>
-          <pre id="wfResults" style="white-space:pre-wrap;font-size:12px;max-height:240px;overflow:auto"></pre>
+          <pre id="wfResults" style="white-space:pre-wrap;font-size:12px"></pre>
         </div>
         <div id="wfMsg" style="font-size:12px;opacity:.8"></div>
+      </div>
+      <div id="wfInspect" style="flex:0 0 260px;display:none;flex-direction:column;gap:6px;border-left:1px solid var(--border,#333);padding-left:10px;overflow:auto">
+        <div style="display:flex;align-items:center;gap:6px">
+          <strong>Node</strong><span id="wfInspTool" style="font-size:11px;opacity:.7"></span>
+          <button id="wfInspDel" style="margin-left:auto">✕ delete</button>
+        </div>
+        <label style="font-size:11px;opacity:.7">id</label>
+        <input id="wfInspId">
+        <label style="font-size:11px;opacity:.7">args (JSON)</label>
+        <textarea id="wfInspArgs" rows="12" style="font-family:monospace;font-size:12px"></textarea>
       </div>
     </div>
   </div>
@@ -3931,24 +3938,30 @@ function initParams() {
   loadParamsForActive();
 }
 
-/* ===== Workflow tab ===== */
-const wf = { tools: [], nodes: [], edges: [], inputs: [], current: null };
+/* ===== Workflow tab (drag-and-drop canvas) ===== */
+const wf = { tools: [], nodes: [], edges: [], inputs: [], current: null, sel: null };
 let wfBound = false;
+let wfConnect = null;   // { from, tmp: <svg line> } while dragging a connection
+
+const NS = "http://www.w3.org/2000/svg";
+const NODE_W = 150, PORT_Y = 20;
 
 async function wfInit() {
   if (!wfBound) {
     wfBound = true;
     document.getElementById("wfNew").addEventListener("click", wfNewClicked);
     document.getElementById("wfAddNode").addEventListener("click", wfAddNode);
-    document.getElementById("wfAddEdge").addEventListener("click", () => { wf.edges.push({from:"",to:""}); wfRenderEdges(); wfRenderGraph(); });
     document.getElementById("wfSave").addEventListener("click", wfSave);
     document.getElementById("wfRun").addEventListener("click", wfRun);
     document.getElementById("wfDelete").addEventListener("click", wfDelete);
+    document.getElementById("wfInspId").addEventListener("change", wfRenameSel);
+    document.getElementById("wfInspArgs").addEventListener("input", e => {
+      const n = wf.nodes.find(x => x.id === wf.sel); if (n) n.args = e.target.value;
+    });
+    document.getElementById("wfInspDel").addEventListener("click", () => { if (wf.sel) wfDeleteNode(wf.sel); });
   }
-  try {
-    const j = await (await gwFetch("/v1/mcp/tools")).json();
-    wf.tools = j.tools || [];
-  } catch (e) { wf.tools = []; }
+  try { wf.tools = (await (await gwFetch("/v1/mcp/tools")).json()).tools || []; }
+  catch (e) { wf.tools = []; }
   const pal = document.getElementById("wfPalette");
   pal.innerHTML = '<option value="">— add a node —</option>' +
     '<option value="replicate">Model (Replicate) — run a model</option>' +
@@ -3956,8 +3969,7 @@ async function wfInit() {
     (wf.tools.length
       ? '<optgroup label="Advanced: raw MCP tools">' +
         wf.tools.map(t => `<option value="${escapeHtml(t.name)}">${escapeHtml(t.name)}</option>`).join("") +
-        '</optgroup>'
-      : '');
+        '</optgroup>' : '');
   await wfLoadList();
   if (!wf.current) wfNewClicked();
 }
@@ -3965,8 +3977,7 @@ async function wfInit() {
 async function wfLoadList() {
   const box = document.getElementById("wfList");
   try {
-    const j = await (await gwFetch("/v1/workflows")).json();
-    const ws = j.workflows || [];
+    const ws = (await (await gwFetch("/v1/workflows")).json()).workflows || [];
     box.innerHTML = ws.length ? "" : '<div style="opacity:.6;font-size:12px">no workflows yet</div>';
     ws.forEach(w => {
       const b = document.createElement("button");
@@ -3979,12 +3990,11 @@ async function wfLoadList() {
 }
 
 function wfNewClicked() {
-  wf.current = null; wf.nodes = []; wf.edges = []; wf.inputs = [];
+  wf.current = null; wf.nodes = []; wf.edges = []; wf.inputs = []; wf.sel = null;
   document.getElementById("wfName").value = "";
-  document.getElementById("wfDesc").value = "";
   document.getElementById("wfInputs").value = "";
   document.getElementById("wfRunPanel").style.display = "none";
-  wfRenderNodes(); wfRenderEdges(); wfRenderGraph(); wfMsg("");
+  wfRender(); wfSelect(null); wfMsg("");
 }
 
 async function wfLoad(id) {
@@ -3992,97 +4002,163 @@ async function wfLoad(id) {
     const spec = await (await gwFetch("/v1/workflows/" + encodeURIComponent(id))).json();
     wf.current = spec.id || spec.name;
     document.getElementById("wfName").value = spec.name || "";
-    document.getElementById("wfDesc").value = spec.description || "";
     document.getElementById("wfInputs").value = (spec.inputs || []).map(i => i.name).join(", ");
-    wf.nodes = (spec.nodes || []).map(n => ({ id: n.id, tool: n.tool, args: JSON.stringify(n.args || {}, null, 2) }));
+    wf.nodes = (spec.nodes || []).map(n => ({
+      id: n.id, tool: n.tool, args: JSON.stringify(n.args || {}, null, 2),
+      x: (typeof n.x === "number" && n.x >= 0) ? n.x : -1,
+      y: (typeof n.y === "number" && n.y >= 0) ? n.y : -1
+    }));
     wf.edges = (spec.edges || []).map(e => ({ from: e.from, to: e.to }));
-    wf.inputs = (spec.inputs || []).map(i => i.name);
+    wfAutoLayout();
     document.getElementById("wfRunPanel").style.display = "none";
-    wfRenderNodes(); wfRenderEdges(); wfRenderGraph(); wfMsg("loaded " + wf.current);
+    wfRender(); wfSelect(null); wfMsg("loaded " + wf.current);
   } catch (e) { wfMsg("load failed: " + e); }
+}
+
+function wfAutoLayout() {
+  // give any node without a position a staggered column slot
+  let col = 0;
+  wf.nodes.forEach(n => {
+    if (n.x < 0 || n.y < 0) { n.x = 20 + col * (NODE_W + 40); n.y = 30 + (col % 2) * 90; col++; }
+  });
 }
 
 function wfAddNode() {
   const tool = document.getElementById("wfPalette").value;
   if (!tool) return;
-  const short = (tool === "llm" || tool === "replicate")
-    ? tool.slice(0, 8)
+  const short = (tool === "llm" || tool === "replicate") ? tool.slice(0, 8)
     : (tool.split("__").pop().replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "n");
   let id = short, k = 1;
   while (wf.nodes.some(n => n.id === id)) id = short + (++k);
   const args =
     tool === "llm"       ? '{\n  "provider": "",\n  "model": "",\n  "prompt": "{{inputs.text}}"\n}' :
-    tool === "replicate" ? '{\n  "version": "",\n  "input": { "prompt": "{{inputs.prompt}}" }\n}' :
-                           "{}";
-  wf.nodes.push({ id, tool, args });
-  wfRenderNodes(); wfRenderGraph();
+    tool === "replicate" ? '{\n  "version": "",\n  "input": { "prompt": "{{inputs.prompt}}" }\n}' : "{}";
+  wf.nodes.push({ id, tool, args, x: 20 + (wf.nodes.length % 4) * (NODE_W + 40), y: 30 + (wf.nodes.length % 3) * 90 });
+  wfRender(); wfSelect(id);
 }
 
-function wfRenderNodes() {
-  const box = document.getElementById("wfNodes");
-  box.innerHTML = "";
-  wf.nodes.forEach((n, i) => {
-    const card = document.createElement("div");
-    card.style.cssText = "border:1px solid var(--border,#333);border-radius:6px;padding:8px;display:flex;flex-direction:column;gap:4px";
-    card.innerHTML =
-      `<div style="display:flex;gap:6px;align-items:center">
-         <input value="${escapeHtml(n.id)}" data-i="${i}" class="wf-id" style="width:120px">
-         <span style="font-size:12px;opacity:.75">${escapeHtml(n.tool)}</span>
-         <button data-i="${i}" class="wf-del" style="margin-left:auto">✕</button>
-       </div>
-       <textarea data-i="${i}" class="wf-args" rows="3" style="font-family:monospace;font-size:12px" placeholder='{"input":{"prompt":"{{inputs.prompt}}"}}'>${escapeHtml(n.args)}</textarea>`;
-    box.appendChild(card);
-  });
-  box.querySelectorAll(".wf-id").forEach(el => el.addEventListener("input", e => { wf.nodes[+e.target.dataset.i].id = e.target.value; wfRenderEdges(); wfRenderGraph(); }));
-  box.querySelectorAll(".wf-args").forEach(el => el.addEventListener("input", e => { wf.nodes[+e.target.dataset.i].args = e.target.value; }));
-  box.querySelectorAll(".wf-del").forEach(el => el.addEventListener("click", e => { wf.nodes.splice(+e.target.dataset.i, 1); wfRenderNodes(); wfRenderEdges(); wfRenderGraph(); }));
+function wfDeleteNode(id) {
+  wf.nodes = wf.nodes.filter(n => n.id !== id);
+  wf.edges = wf.edges.filter(e => e.from !== id && e.to !== id);
+  if (wf.sel === id) wfSelect(null);
+  wfRender();
 }
 
-function wfRenderEdges() {
-  const box = document.getElementById("wfEdges");
-  box.innerHTML = "";
-  const opts = () => '<option value=""></option>' + wf.nodes.map(n => `<option value="${escapeHtml(n.id)}">${escapeHtml(n.id)}</option>`).join("");
-  wf.edges.forEach((ed, i) => {
-    const row = document.createElement("div");
-    row.style.cssText = "display:flex;gap:6px;align-items:center;font-size:12px";
-    row.innerHTML = `<select data-i="${i}" class="wf-ef">${opts()}</select> →
-      <select data-i="${i}" class="wf-et">${opts()}</select>
-      <button data-i="${i}" class="wf-ed">✕</button>`;
-    box.appendChild(row);
-    row.querySelector(".wf-ef").value = ed.from;
-    row.querySelector(".wf-et").value = ed.to;
-  });
-  box.querySelectorAll(".wf-ef").forEach(el => el.addEventListener("change", e => { wf.edges[+e.target.dataset.i].from = e.target.value; wfRenderGraph(); }));
-  box.querySelectorAll(".wf-et").forEach(el => el.addEventListener("change", e => { wf.edges[+e.target.dataset.i].to = e.target.value; wfRenderGraph(); }));
-  box.querySelectorAll(".wf-ed").forEach(el => el.addEventListener("click", e => { wf.edges.splice(+e.target.dataset.i, 1); wfRenderEdges(); wfRenderGraph(); }));
+function wfRenameSel() {
+  const n = wf.nodes.find(x => x.id === wf.sel); if (!n) return;
+  const nid = document.getElementById("wfInspId").value.trim();
+  if (!nid || (nid !== n.id && wf.nodes.some(x => x.id === nid))) { document.getElementById("wfInspId").value = n.id; return; }
+  wf.edges.forEach(e => { if (e.from === n.id) e.from = nid; if (e.to === n.id) e.to = nid; });
+  n.id = nid; wf.sel = nid; wfRender();
 }
 
-function wfRenderGraph() {
-  const svg = document.getElementById("wfGraph");
-  const NS = "http://www.w3.org/2000/svg";
-  svg.innerHTML = "";
-  const pos = {};
-  wf.nodes.forEach((n, i) => { pos[n.id] = { x: 12 + i * 150, y: 50 }; });
-  wf.edges.forEach(ed => {
-    const a = pos[ed.from], b = pos[ed.to];
-    if (!a || !b) return;
-    const ln = document.createElementNS(NS, "line");
-    ln.setAttribute("x1", a.x + 130); ln.setAttribute("y1", a.y + 18);
-    ln.setAttribute("x2", b.x); ln.setAttribute("y2", b.y + 18);
-    ln.setAttribute("stroke", "#888"); ln.setAttribute("stroke-width", "2");
-    svg.appendChild(ln);
-  });
+function wfSelect(id) {
+  wf.sel = id;
+  const insp = document.getElementById("wfInspect");
+  const n = wf.nodes.find(x => x.id === id);
+  if (!n) { insp.style.display = "none"; wfRender(); return; }
+  insp.style.display = "flex";
+  document.getElementById("wfInspTool").textContent = n.tool;
+  document.getElementById("wfInspId").value = n.id;
+  document.getElementById("wfInspArgs").value = n.args;
+  wfRender();
+}
+
+function wfRender() {
+  const canvas = document.getElementById("wfCanvas");
+  // remove existing node elements (keep the svg edge layer)
+  [...canvas.querySelectorAll(".wf-node")].forEach(e => e.remove());
   wf.nodes.forEach(n => {
-    const p = pos[n.id];
-    const r = document.createElementNS(NS, "rect");
-    r.setAttribute("x", p.x); r.setAttribute("y", p.y); r.setAttribute("width", 130); r.setAttribute("height", 36);
-    r.setAttribute("rx", 6); r.setAttribute("fill", "rgba(80,120,200,.25)"); r.setAttribute("stroke", "#6a8fd0");
-    svg.appendChild(r);
-    const t = document.createElementNS(NS, "text");
-    t.setAttribute("x", p.x + 8); t.setAttribute("y", p.y + 22); t.setAttribute("font-size", "12"); t.setAttribute("fill", "currentColor");
-    t.textContent = n.id;
-    svg.appendChild(t);
+    const el = document.createElement("div");
+    el.className = "wf-node"; el.dataset.node = n.id;
+    el.style.cssText = `position:absolute;left:${n.x}px;top:${n.y}px;width:${NODE_W}px;` +
+      `border:1px solid ${n.id === wf.sel ? "#6a8fd0" : "var(--border,#444)"};border-radius:6px;` +
+      `background:var(--bg,#1b1b1b);z-index:1;box-shadow:0 1px 4px rgba(0,0,0,.3);font-size:12px`;
+    const kind = (n.tool === "llm" || n.tool === "replicate") ? n.tool : "tool";
+    el.innerHTML =
+      `<div class="wf-head" style="cursor:move;padding:5px 7px;border-bottom:1px solid var(--border,#444);` +
+        `display:flex;gap:6px;align-items:center;border-radius:6px 6px 0 0;background:rgba(106,143,208,.15)">` +
+        `<span style="font-weight:600">${escapeHtml(n.id)}</span>` +
+        `<span style="opacity:.6;font-size:10px;margin-left:auto">${escapeHtml(kind)}</span></div>` +
+      `<div style="padding:6px 7px;opacity:.7;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(n.tool)}</div>` +
+      `<div class="wf-port wf-in"  data-node="${escapeHtml(n.id)}" title="input"  style="position:absolute;left:-7px;top:${PORT_Y}px;width:12px;height:12px;border-radius:50%;background:#888;border:2px solid var(--bg,#111);cursor:crosshair"></div>` +
+      `<div class="wf-port wf-out" data-node="${escapeHtml(n.id)}" title="output" style="position:absolute;right:-7px;top:${PORT_Y}px;width:12px;height:12px;border-radius:50%;background:#6a8fd0;border:2px solid var(--bg,#111);cursor:crosshair"></div>`;
+    canvas.appendChild(el);
+    el.querySelector(".wf-head").addEventListener("mousedown", ev => wfStartDrag(ev, n));
+    el.addEventListener("click", ev => { if (!el.dataset.dragged) wfSelect(n.id); el.dataset.dragged = ""; });
+    el.querySelector(".wf-out").addEventListener("mousedown", ev => wfStartConnect(ev, n.id));
   });
+  wfDrawEdges();
+}
+
+function wfPortXY(id, which) {
+  const n = wf.nodes.find(x => x.id === id); if (!n) return null;
+  return which === "out" ? { x: n.x + NODE_W, y: n.y + PORT_Y + 6 } : { x: n.x, y: n.y + PORT_Y + 6 };
+}
+
+function wfEdgePath(a, b) {
+  const dx = Math.max(30, Math.abs(b.x - a.x) / 2);
+  return `M ${a.x} ${a.y} C ${a.x + dx} ${a.y}, ${b.x - dx} ${b.y}, ${b.x} ${b.y}`;
+}
+
+function wfDrawEdges() {
+  const svg = document.getElementById("wfEdgeLayer");
+  svg.innerHTML = "";
+  wf.edges.forEach((ed, i) => {
+    const a = wfPortXY(ed.from, "out"), b = wfPortXY(ed.to, "in");
+    if (!a || !b) return;
+    const p = document.createElementNS(NS, "path");
+    p.setAttribute("d", wfEdgePath(a, b));
+    p.setAttribute("fill", "none"); p.setAttribute("stroke", "#6a8fd0"); p.setAttribute("stroke-width", "2");
+    p.style.pointerEvents = "stroke"; p.style.cursor = "pointer";
+    p.addEventListener("click", () => { wf.edges.splice(i, 1); wfRender(); });
+    svg.appendChild(p);
+  });
+}
+
+function wfStartDrag(ev, n) {
+  ev.preventDefault();
+  const el = ev.currentTarget.parentElement;
+  const canvas = document.getElementById("wfCanvas");
+  const r = canvas.getBoundingClientRect();
+  const ox = ev.clientX - r.left - n.x + canvas.scrollLeft, oy = ev.clientY - r.top - n.y + canvas.scrollTop;
+  function move(e) {
+    n.x = Math.max(0, e.clientX - r.left - ox + canvas.scrollLeft);
+    n.y = Math.max(0, e.clientY - r.top - oy + canvas.scrollTop);
+    el.style.left = n.x + "px"; el.style.top = n.y + "px";
+    el.dataset.dragged = "1";
+    wfDrawEdges();
+  }
+  function up() { document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); }
+  document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
+}
+
+function wfStartConnect(ev, fromId) {
+  ev.preventDefault(); ev.stopPropagation();
+  const canvas = document.getElementById("wfCanvas");
+  const r = canvas.getBoundingClientRect();
+  const svg = document.getElementById("wfEdgeLayer");
+  const tmp = document.createElementNS(NS, "path");
+  tmp.setAttribute("fill", "none"); tmp.setAttribute("stroke", "#6a8fd0");
+  tmp.setAttribute("stroke-width", "2"); tmp.setAttribute("stroke-dasharray", "4 3");
+  svg.appendChild(tmp);
+  const a = wfPortXY(fromId, "out");
+  function move(e) {
+    const b = { x: e.clientX - r.left + canvas.scrollLeft, y: e.clientY - r.top + canvas.scrollTop };
+    tmp.setAttribute("d", wfEdgePath(a, b));
+  }
+  function up(e) {
+    document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up);
+    tmp.remove();
+    const tgt = document.elementFromPoint(e.clientX, e.clientY);
+    if (tgt && tgt.classList.contains("wf-in")) {
+      const toId = tgt.dataset.node;
+      if (toId && toId !== fromId && !wf.edges.some(x => x.from === fromId && x.to === toId)) {
+        wf.edges.push({ from: fromId, to: toId }); wfRender();
+      }
+    }
+  }
+  document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
 }
 
 function wfBuildSpec() {
@@ -4093,11 +4169,13 @@ function wfBuildSpec() {
     let args;
     try { args = JSON.parse(n.args || "{}"); }
     catch (e) { throw new Error(`node "${n.id}": args is not valid JSON`); }
-    nodes.push({ id: n.id, tool: n.tool, args });
+    const node = { id: n.id, tool: n.tool, args };
+    if (n.x >= 0) node.x = Math.round(n.x);
+    if (n.y >= 0) node.y = Math.round(n.y);
+    nodes.push(node);
   }
   return {
-    name, description: document.getElementById("wfDesc").value,
-    inputs: inputs.map(i => ({ name: i, type: "string", required: true })),
+    name, inputs: inputs.map(i => ({ name: i, type: "string", required: true })),
     nodes, edges: wf.edges.filter(e => e.from && e.to)
   };
 }
@@ -4110,8 +4188,7 @@ async function wfSave() {
     const r = await gwFetch("/v1/workflows", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(spec) });
     const j = await r.json().catch(() => ({}));
     if (r.ok && j.saved) { wf.current = j.id || spec.name; wfMsg("✓ saved " + wf.current); wfLoadList(); return true; }
-    wfMsg("✗ " + (j.detail || j.error || ("HTTP " + r.status)));
-    return false;
+    wfMsg("✗ " + (j.detail || j.error || ("HTTP " + r.status))); return false;
   } catch (e) { wfMsg("✗ " + e); return false; }
 }
 
@@ -4126,36 +4203,27 @@ async function wfRun() {
   let spec;
   try { spec = wfBuildSpec(); } catch (e) { wfMsg("✗ " + e.message); return; }
   if (!spec.name) { wfMsg("✗ save the workflow first"); return; }
-  // ensure the latest edits are persisted before running; abort if the save
-  // failed so Run doesn't execute the previously-saved version under this name
   if (!(await wfSave())) return;
-  const panel = document.getElementById("wfRunPanel");
-  const inbox = document.getElementById("wfRunInputs");
-  panel.style.display = "block";
-  inbox.innerHTML = "";
+  const panel = document.getElementById("wfRunPanel"), inbox = document.getElementById("wfRunInputs");
+  panel.style.display = "block"; inbox.innerHTML = "";
   const fields = {};
   spec.inputs.forEach(inp => {
     const row = document.createElement("div");
     row.style.cssText = "display:flex;gap:6px;align-items:center";
-    row.innerHTML = `<label style="width:120px;font-size:12px">${escapeHtml(inp.name)}</label>`;
-    const inEl = document.createElement("input");
-    inEl.style.flex = "1";
-    row.appendChild(inEl); inbox.appendChild(row);
-    fields[inp.name] = inEl;
+    row.innerHTML = `<label style="width:110px;font-size:12px">${escapeHtml(inp.name)}</label>`;
+    const inEl = document.createElement("input"); inEl.style.flex = "1";
+    row.appendChild(inEl); inbox.appendChild(row); fields[inp.name] = inEl;
   });
-  const go = document.createElement("button");
-  go.textContent = "Execute";
+  const go = document.createElement("button"); go.textContent = "Execute";
   go.addEventListener("click", async () => {
-    const inputs = {};
-    Object.keys(fields).forEach(k => inputs[k] = fields[k].value);
+    const inputs = {}; Object.keys(fields).forEach(k => inputs[k] = fields[k].value);
     document.getElementById("wfResults").textContent = "running…";
     try {
-      const r = await gwFetch("/v1/workflows/" + encodeURIComponent(spec.name) + "/run",
-        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(inputs) });
-      const j = await r.json();
+      const j = await (await gwFetch("/v1/workflows/" + encodeURIComponent(spec.name) + "/run",
+        { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(inputs) })).json();
       const lines = (j.nodes || []).map(n => `${n.ok ? "✓" : "✗"} ${n.node} (${n.tool})` + (n.error ? "  ! " + n.error : "") + (n.text ? "\n    " + n.text : ""));
       document.getElementById("wfResults").textContent =
-        (j.ok ? "OK\n" : "FAILED: " + (j.error || "") + "\n") + lines.join("\n");
+        (j.ok ? "OK\n" : "FAILED: " + (j.error || "") + "\n") + (j.output ? "output: " + j.output + "\n\n" : "\n") + lines.join("\n");
     } catch (e) { document.getElementById("wfResults").textContent = "run error: " + e; }
   });
   inbox.appendChild(go);
