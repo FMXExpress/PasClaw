@@ -105,6 +105,7 @@ UNIT_DIRS = \
 	src/pkg/tokenizer \
 	src/pkg/tools \
 	src/pkg/mcp \
+	src/pkg/workflow \
 	src/pkg/gateway \
 	src/pkg/channels \
 	src/pkg/crypto \
