@@ -76,6 +76,7 @@ type
     Tool: string;
     ArgsJSON: string;    { args object as a JSON string, with double-brace templates }
     Await: TWorkflowAwait;
+    X, Y: Integer;       { canvas position for the editor; -1 = unset (auto-layout) }
   end;
 
   TWorkflowEdge = record
@@ -244,6 +245,8 @@ begin
         else
           Spec.Nodes[High(Spec.Nodes)].ArgsJSON := '{}';
         ParseAwait(NObj.ChildObject('await'), Spec.Nodes[High(Spec.Nodes)].Await);
+        Spec.Nodes[High(Spec.Nodes)].X := NObj.GetInt('x', -1);
+        Spec.Nodes[High(Spec.Nodes)].Y := NObj.GetInt('y', -1);
       end;
 
     EArr := Root.ChildArray('edges');
@@ -319,6 +322,8 @@ begin
       O.PutRaw('args', Spec.Nodes[i].ArgsJSON);
       if Spec.Nodes[i].Await.Enabled then
         O.PutRaw('await', AwaitToJSON(Spec.Nodes[i].Await));
+      if Spec.Nodes[i].X >= 0 then O.PutInt('x', Spec.Nodes[i].X);
+      if Spec.Nodes[i].Y >= 0 then O.PutInt('y', Spec.Nodes[i].Y);
       Arr.AddObject(O);
     end;
     Root.PutArray('nodes', Arr);
