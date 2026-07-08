@@ -786,9 +786,13 @@ begin
     begin
       Aw.Enabled        := True;
       Aw.PollTool       := 'replicate__get_predictions';
-      Aw.PollArgsJSON   := '{"prediction_id":"{{self.id}}"}';
-      Aw.StatusSelector := 'status';
-      Aw.OutputSelector := 'output[0]';   { image models return output: [url] }
+      { The MCP bridge returns the whole tools/call result object, so an MCP
+        tool's structured fields (id/status/output) live under structuredContent
+        -- NOT at the top level. Select there, or the first poll's self.id and
+        the status/output selectors never resolve against a real MCP result. }
+      Aw.PollArgsJSON   := '{"prediction_id":"{{self.structuredContent.id}}"}';
+      Aw.StatusSelector := 'structuredContent.status';
+      Aw.OutputSelector := 'structuredContent.output[0]';   { image models: output list }
       Aw.IntervalMs     := 2000;
       Aw.TimeoutMs      := 300000;
       SetLength(Aw.Success, 1); Aw.Success[0] := 'succeeded';

@@ -203,18 +203,20 @@ function ReplStub(const ToolName, ArgsJSON: string;
   out ResultText, ResultJSON, ErrMsg: string): Boolean;
 begin
   ResultText := ''; ResultJSON := ''; ErrMsg := '';
+  { MCP bridge shape: the tool's fields live under structuredContent, not at
+    the top level (this is what the replicate defaults must select against). }
   if ToolName = 'replicate__create_predictions' then
   begin
     GReplCreateArgs := ArgsJSON;
-    ResultJSON := '{"id":"p9","status":"starting"}';
+    ResultJSON := '{"structuredContent":{"id":"p9","status":"starting"}}';
   end
   else if ToolName = 'replicate__get_predictions' then
   begin
     Inc(GReplPoll);
     if GReplPoll >= 2 then
-      ResultJSON := '{"status":"succeeded","output":["https://x/final.png"]}'
+      ResultJSON := '{"structuredContent":{"status":"succeeded","output":["https://x/final.png"]}}'
     else
-      ResultJSON := '{"status":"processing"}';
+      ResultJSON := '{"structuredContent":{"status":"processing"}}';
   end;
   Result := True;
 end;
