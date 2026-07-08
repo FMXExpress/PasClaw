@@ -7,8 +7,20 @@ and Phase 3 (agent authoring via workflow_save + the `## Workflows` prompt
 section) are wired and tested. The node editor is a form+graph editor (add
 nodes from the MCP-tool palette, edit args, connect edges, live SVG preview,
 run with per-node status); free-form drag-and-drop canvas positioning is the
-one deferred follow-up. The selector `await`/polling hook (open question 2)
-is not yet built — nodes assume the tool returns terminal output.
+one deferred follow-up.
+
+**Async tools (open question 2 — resolved).** Replicate's hosted MCP
+`create_prediction` is async: it returns a pending prediction id/status, not
+the finished image (the REST API is async by default; sync `Prefer: wait` mode
+exists but caps at ~60s). The engine handles both cases:
+- **Sync/fast:** a node whose tool blocks and returns the final output needs no
+  extra config — the engine just uses what the tool returns.
+- **Async/slow:** add an optional per-node `await` block — a fully generic
+  poll-until-terminal step (configurable poll tool, args with `{{self.SELECTOR}}`
+  referencing the create result, `status_selector`, `success[]`/`failure[]`
+  sets, `interval_ms`, `timeout_ms`). The node's stored result becomes the
+  completed poll response, so downstream selectors read the finished output.
+  Nothing here is Replicate-specific.
 
 ## Goal
 

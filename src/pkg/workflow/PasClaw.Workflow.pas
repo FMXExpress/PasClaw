@@ -48,10 +48,30 @@ type
     Required: Boolean;
   end;
 
+  { Optional poll-until-done step for async tools. Many tools (e.g. Replicate's
+    create_prediction) return a PENDING handle immediately, not the final
+    output. When Enabled, after the node's tool call the engine repeatedly calls
+    PollTool until the status field reaches a terminal state, and the node's
+    result becomes the last poll response (so downstream selectors read the
+    completed output). Fully tool-agnostic -- nothing here is Replicate-specific.
+    In PollArgsJSON, the self.* template kind refers to the node's own initial
+    (create) result. }
+  TWorkflowAwait = record
+    Enabled: Boolean;
+    PollTool: string;          { tool to poll, e.g. replicate__get_predictions }
+    PollArgsJSON: string;      { poll args template; self.* = the create result }
+    StatusSelector: string;    { dotted/[i] path to the status field in a poll result }
+    Success: array of string;  { statuses that mean done }
+    Failure: array of string;  { statuses that mean failed }
+    IntervalMs: Integer;       { delay between polls (0 = no sleep) }
+    TimeoutMs: Integer;        { give up after this much accumulated interval }
+  end;
+
   TWorkflowNode = record
     Id: string;
     Tool: string;
     ArgsJSON: string;    { args object as a JSON string, with double-brace templates }
+    Await: TWorkflowAwait;
   end;
 
   TWorkflowEdge = record
@@ -110,7 +130,11 @@ function EvalSelector(const JSON, Selector: string; out Value: string): Boolean;
   provided input values and prior node results. Missing references become an
   error (Err set, Result=False) rather than a silent empty string. }
 function ResolveArgs(const ArgsTemplate, InputsJSON: string;
-  const Prior: TWorkflowNodeResultArray; out Resolved, Err: string): Boolean;
+  const Prior: TWorkflowNodeResultArray; out Resolved, Err: string): Boolean; overload;
+{ Variant that also resolves the self.* template kind against SelfJSON (a node's
+  own create result), used by the await poll loop. }
+function ResolveArgs(const ArgsTemplate, InputsJSON, SelfJSON: string;
+  const Prior: TWorkflowNodeResultArray; out Resolved, Err: string): Boolean; overload;
 
 { Topologically order the node ids using edges + node-reference templates.
   False (with Err) on a cycle or an edge to an unknown node. }
@@ -131,6 +155,37 @@ uses
   PasClaw.JSON;
 
 { ---------- parse / serialize ---------- }
+
+procedure ParseAwait(AObj: TJsonObject; out A: TWorkflowAwait);
+var SArr: TJsonArray; ArgsObj: TJsonObject; k: Integer;
+begin
+  A.Enabled := False;
+  A.PollTool := '';
+  A.PollArgsJSON := '{}';
+  A.StatusSelector := 'status';
+  A.IntervalMs := 2000;
+  A.TimeoutMs := 300000;
+  SetLength(A.Success, 0);
+  SetLength(A.Failure, 0);
+  if AObj = nil then Exit;
+  A.Enabled := True;
+  A.PollTool := AObj.GetStr('tool', '');
+  ArgsObj := AObj.ChildObject('args');
+  if ArgsObj <> nil then A.PollArgsJSON := ArgsObj.ToJSON;
+  A.StatusSelector := AObj.GetStr('status_selector', 'status');
+  A.IntervalMs := AObj.GetInt('interval_ms', 2000);
+  A.TimeoutMs  := AObj.GetInt('timeout_ms', 300000);
+  SArr := AObj.ChildArray('success');
+  if SArr <> nil then
+    for k := 0 to SArr.Count - 1 do
+    begin SetLength(A.Success, Length(A.Success) + 1); A.Success[High(A.Success)] := SArr.ItemStr(k, ''); end;
+  SArr := AObj.ChildArray('failure');
+  if SArr <> nil then
+    for k := 0 to SArr.Count - 1 do
+    begin SetLength(A.Failure, Length(A.Failure) + 1); A.Failure[High(A.Failure)] := SArr.ItemStr(k, ''); end;
+  if Length(A.Success) = 0 then begin SetLength(A.Success, 1); A.Success[0] := 'succeeded'; end;
+  if Length(A.Failure) = 0 then begin SetLength(A.Failure, 2); A.Failure[0] := 'failed'; A.Failure[1] := 'canceled'; end;
+end;
 
 function ParseWorkflow(const JSON: string; out Spec: TWorkflowSpec; out Err: string): Boolean;
 var
@@ -182,6 +237,7 @@ begin
           Spec.Nodes[High(Spec.Nodes)].ArgsJSON := ArgsObj.ToJSON
         else
           Spec.Nodes[High(Spec.Nodes)].ArgsJSON := '{}';
+        ParseAwait(NObj.ChildObject('await'), Spec.Nodes[High(Spec.Nodes)].Await);
       end;
 
     EArr := Root.ChildArray('edges');
@@ -199,6 +255,28 @@ begin
     Result := True;
   finally
     Root.Free;
+  end;
+end;
+
+function AwaitToJSON(const A: TWorkflowAwait): string;
+var O: TJsonObject; SArr: TJsonArray; k: Integer;
+begin
+  O := TJsonObject.Create;
+  try
+    O.PutStr('tool', A.PollTool);
+    O.PutRaw('args', A.PollArgsJSON);
+    O.PutStr('status_selector', A.StatusSelector);
+    O.PutInt('interval_ms', A.IntervalMs);
+    O.PutInt('timeout_ms', A.TimeoutMs);
+    SArr := TJsonArray.Create;
+    for k := 0 to High(A.Success) do SArr.AddStr(A.Success[k]);
+    O.PutArray('success', SArr);
+    SArr := TJsonArray.Create;
+    for k := 0 to High(A.Failure) do SArr.AddStr(A.Failure[k]);
+    O.PutArray('failure', SArr);
+    Result := O.ToJSON;
+  finally
+    O.Free;
   end;
 end;
 
@@ -232,6 +310,8 @@ begin
       O.PutStr('id', Spec.Nodes[i].Id);
       O.PutStr('tool', Spec.Nodes[i].Tool);
       O.PutRaw('args', Spec.Nodes[i].ArgsJSON);
+      if Spec.Nodes[i].Await.Enabled then
+        O.PutRaw('await', AwaitToJSON(Spec.Nodes[i].Await));
       Arr.AddObject(O);
     end;
     Root.PutArray('nodes', Arr);
@@ -405,6 +485,12 @@ end;
 
 function ResolveArgs(const ArgsTemplate, InputsJSON: string;
   const Prior: TWorkflowNodeResultArray; out Resolved, Err: string): Boolean;
+begin
+  Result := ResolveArgs(ArgsTemplate, InputsJSON, '', Prior, Resolved, Err);
+end;
+
+function ResolveArgs(const ArgsTemplate, InputsJSON, SelfJSON: string;
+  const Prior: TWorkflowNodeResultArray; out Resolved, Err: string): Boolean;
 var
   Placeholders: TStringList;
   i, Dot: Integer;
@@ -437,6 +523,12 @@ begin
         if (Inputs = nil) or (not Inputs.Has(Rest)) then
         begin Err := Format('missing input "%s" for {{%s}}', [Rest, Inner]); Exit; end;
         Val := Inputs.GetStr(Rest, '');
+      end
+      else if Kind = 'self' then
+      begin
+        if not EvalSelector(SelfJSON, Rest, Val) then
+        begin Err := Format('{{%s}}: selector "%s" did not resolve in this node''s result',
+                            [Inner, Rest]); Exit; end;
       end
       else if Kind = 'nodes' then
       begin
@@ -618,6 +710,53 @@ end;
 
 { ---------- run ---------- }
 
+function InStrArray(const S: string; const A: array of string): Boolean;
+var k: Integer;
+begin
+  Result := False;
+  for k := 0 to High(A) do if A[k] = S then Exit(True);
+end;
+
+{ Poll A.PollTool until StatusSelector reaches a terminal state. CreateJSON is
+  the node's initial (create) result -- available in the poll args template as
+  the self.* kind. On success, FinalText/FinalJSON hold the completed result so
+  downstream selectors read the finished output. Elapsed time is approximated
+  by accumulating IntervalMs (deterministic; no wall-clock dependency), with a
+  hard poll ceiling as a backstop. }
+function PollUntilDone(const A: TWorkflowAwait;
+  const CreateJSON, InputsJSON: string; const Prior: TWorkflowNodeResultArray;
+  Caller: TWorkflowToolCallerFn; out FinalText, FinalJSON, Err: string): Boolean;
+const
+  MAX_POLLS = 100000;
+var
+  PollArgs, PText, PJSON, CErr, Status: string;
+  Elapsed, Polls: Integer;
+begin
+  Result := False;
+  FinalText := ''; FinalJSON := ''; Err := '';
+  Elapsed := 0; Polls := 0;
+  if Trim(A.PollTool) = '' then begin Err := 'await: no poll tool'; Exit; end;
+  while True do
+  begin
+    if not ResolveArgs(A.PollArgsJSON, InputsJSON, CreateJSON, Prior, PollArgs, Err) then Exit;
+    if not Caller(A.PollTool, PollArgs, PText, PJSON, CErr) then
+    begin Err := 'await: poll call failed: ' + CErr; Exit; end;
+    if not EvalSelector(PJSON, A.StatusSelector, Status) then
+    begin Err := Format('await: status selector "%s" did not resolve in poll result', [A.StatusSelector]); Exit; end;
+    if InStrArray(Status, A.Success) then
+    begin FinalText := PText; FinalJSON := PJSON; Exit(True); end;
+    if InStrArray(Status, A.Failure) then
+    begin FinalText := PText; FinalJSON := PJSON;
+          Err := Format('await: terminal failure status "%s"', [Status]); Exit; end;
+    Inc(Polls);
+    if A.IntervalMs > 0 then Inc(Elapsed, A.IntervalMs);
+    if (A.TimeoutMs > 0) and (Elapsed >= A.TimeoutMs) then
+    begin Err := Format('await: timed out after %d ms (last status "%s")', [Elapsed, Status]); Exit; end;
+    if Polls >= MAX_POLLS then begin Err := 'await: exceeded max polls'; Exit; end;
+    if A.IntervalMs > 0 then Sleep(A.IntervalMs);
+  end;
+end;
+
 function RunWorkflow(const Spec: TWorkflowSpec; const InputsJSON: string;
   Caller: TWorkflowToolCallerFn; out Results: TWorkflowNodeResultArray;
   out Err: string): Boolean;
@@ -625,6 +764,7 @@ var
   Order: TStringList;
   i, ni: Integer;
   NodeArgs, ResolvedArgs, Text, JSON, CallErr: string;
+  CreateJSON, FinalText, FinalJSON: string;
   NR: TWorkflowNodeResult;
 
   function NodeIndex(const Id: string): Integer;
@@ -661,13 +801,26 @@ begin
       NR.Text   := Text;
       NR.JSON   := JSON;
       NR.Error  := CallErr;
+
+      { Async tools return a pending handle; poll until terminal so the node's
+        stored result is the COMPLETED output that downstream nodes select on. }
+      if NR.Ok and Spec.Nodes[ni].Await.Enabled then
+      begin
+        CreateJSON := JSON;   { distinct from the out params -- no aliasing }
+        if PollUntilDone(Spec.Nodes[ni].Await, CreateJSON, InputsJSON, Results,
+                         Caller, FinalText, FinalJSON, CallErr) then
+        begin NR.Ok := True; NR.Text := FinalText; NR.JSON := FinalJSON; NR.Error := ''; end
+        else
+        begin NR.Ok := False; NR.Error := CallErr; NR.Text := FinalText; NR.JSON := FinalJSON; end;
+      end;
+
       SetLength(Results, Length(Results) + 1);
       Results[High(Results)] := NR;
 
       if not NR.Ok then
       begin
         Err := Format('node "%s" (%s) failed: %s',
-                      [NR.NodeId, NR.Tool, CallErr]);
+                      [NR.NodeId, NR.Tool, NR.Error]);
         Exit;
       end;
     end;

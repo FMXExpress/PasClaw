@@ -183,7 +183,12 @@ begin
     'replicate__create_prediction). Wire data with {{inputs.NAME}} and ' +
     '{{nodes.ID.selector}} templates in a node''s args, where selector is a ' +
     'dotted/[i] path into the upstream tool''s JSON result (e.g. ' +
-    'structuredContent.output[0]).',
+    'structuredContent.output[0]). For an ASYNC tool that returns a pending ' +
+    'handle (e.g. Replicate create_prediction), add an "await" block to the ' +
+    'node: {tool, args (use {{self.SELECTOR}} for the create result, e.g. ' +
+    '{{self.id}}), status_selector, success[], failure[], interval_ms, ' +
+    'timeout_ms} -- the engine polls until a terminal status and the node''s ' +
+    'result becomes the completed output.',
     SAVE_SCHEMA, ToolWorkflowSave, tcMutating);
 
   Reg1(Reg, 'workflow_list',

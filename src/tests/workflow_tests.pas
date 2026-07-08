@@ -19,6 +19,8 @@ uses
 var
   Failures: Integer = 0;
   GUpscaleArgs: string = '';   { captured resolved args of the upscale node }
+  GPollCount: Integer = 0;     { await test: number of poll calls }
+  GLastPollArgs: string = '';  { await test: last resolved poll args }
 
 procedure Check(Cond: Boolean; const Why: string);
 begin
@@ -130,6 +132,51 @@ begin
         'run: final node produced the upscaled URL');
 end;
 
+const
+  AWAIT_WF =
+    '{"name":"await_test","nodes":[' +
+    '{"id":"gen","tool":"replicate__create_prediction","args":{},' +
+     '"await":{"tool":"replicate__get","args":{"id":"{{self.id}}"},' +
+              '"status_selector":"status","success":["succeeded"],"failure":["failed"],' +
+              '"interval_ms":0,"timeout_ms":0}}' +
+    ']}';
+
+{ Async stub: create returns a PENDING prediction; the poll tool returns
+  "processing" once, then "succeeded" with the final output. }
+function AwaitStub(const ToolName, ArgsJSON: string;
+  out ResultText, ResultJSON, ErrMsg: string): Boolean;
+begin
+  ResultText := ''; ResultJSON := ''; ErrMsg := '';
+  if ToolName = 'replicate__create_prediction' then
+    ResultJSON := '{"id":"pred1","status":"starting"}'
+  else if ToolName = 'replicate__get' then
+  begin
+    GLastPollArgs := ArgsJSON;
+    Inc(GPollCount);
+    if GPollCount >= 2 then
+      ResultJSON := '{"status":"succeeded","output":["https://x/done.png"]}'
+    else
+      ResultJSON := '{"status":"processing"}';
+  end;
+  Result := True;
+end;
+
+procedure TestAwaitPolling;
+var Spec: TWorkflowSpec; Err: string; Res: TWorkflowNodeResultArray;
+begin
+  GPollCount := 0; GLastPollArgs := '';
+  Check(ParseWorkflow(AWAIT_WF, Spec, Err), 'await: parse (' + Err + ')');
+  Check(Spec.Nodes[0].Await.Enabled, 'await: parsed the await block');
+  Check(RunWorkflow(Spec, '{}', AwaitStub, Res, Err), 'await: run succeeds (' + Err + ')');
+  Check(GPollCount >= 2, 'await: polled until terminal (>=2 polls)');
+  Check(Pos('pred1', GLastPollArgs) > 0, 'await: poll args carried the pending id via self.id');
+  { The node result must be the COMPLETED poll output, not the pending create. }
+  Check((Length(Res) = 1) and (Pos('done.png', Res[0].JSON) > 0),
+        'await: node result is the finished output');
+  Check((Length(Res) = 1) and (Pos('starting', Res[0].JSON) = 0),
+        'await: pending create result was replaced by the completed one');
+end;
+
 procedure TestRunMissingInput;
 var Spec: TWorkflowSpec; Err: string; Res: TWorkflowNodeResultArray;
 begin
@@ -161,6 +208,7 @@ begin
   TestTopoAndCycle;
   TestSelector;
   TestRunChains;
+  TestAwaitPolling;
   TestRunMissingInput;
   TestStoreRoundTrip;
 
