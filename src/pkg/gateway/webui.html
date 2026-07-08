@@ -3951,8 +3951,13 @@ async function wfInit() {
   } catch (e) { wf.tools = []; }
   const pal = document.getElementById("wfPalette");
   pal.innerHTML = '<option value="">— add a node —</option>' +
-    '<option value="llm">llm (call a configured provider)</option>' +
-    wf.tools.map(t => `<option value="${escapeHtml(t.name)}">${escapeHtml(t.name)}</option>`).join("");
+    '<option value="replicate">Model (Replicate) — run a model</option>' +
+    '<option value="llm">LLM — call a provider</option>' +
+    (wf.tools.length
+      ? '<optgroup label="Advanced: raw MCP tools">' +
+        wf.tools.map(t => `<option value="${escapeHtml(t.name)}">${escapeHtml(t.name)}</option>`).join("") +
+        '</optgroup>'
+      : '');
   await wfLoadList();
   if (!wf.current) wfNewClicked();
 }
@@ -4000,12 +4005,15 @@ async function wfLoad(id) {
 function wfAddNode() {
   const tool = document.getElementById("wfPalette").value;
   if (!tool) return;
-  const short = (tool === "llm" ? "llm" : tool.split("__").pop().replace(/[^a-zA-Z0-9]/g, "").slice(0, 8)) || "n";
+  const short = (tool === "llm" || tool === "replicate")
+    ? tool.slice(0, 8)
+    : (tool.split("__").pop().replace(/[^a-zA-Z0-9]/g, "").slice(0, 8) || "n");
   let id = short, k = 1;
   while (wf.nodes.some(n => n.id === id)) id = short + (++k);
-  const args = tool === "llm"
-    ? '{\n  "provider": "",\n  "model": "",\n  "prompt": "{{inputs.text}}"\n}'
-    : "{}";
+  const args =
+    tool === "llm"       ? '{\n  "provider": "",\n  "model": "",\n  "prompt": "{{inputs.text}}"\n}' :
+    tool === "replicate" ? '{\n  "version": "",\n  "input": { "prompt": "{{inputs.prompt}}" }\n}' :
+                           "{}";
   wf.nodes.push({ id, tool, args });
   wfRenderNodes(); wfRenderGraph();
 }

@@ -187,6 +187,56 @@ begin
   Check(Pos('input', Err) > 0, 'run: error names the missing input');
 end;
 
+const
+  REPLICATE_WF =
+    '{"name":"repl","inputs":[{"name":"prompt","required":true}],' +
+    '"nodes":[{"id":"gen","tool":"replicate",' +
+      '"args":{"version":"v1","input":{"prompt":"{{inputs.prompt}}"}}}]}';
+
+var
+  GReplPoll: Integer = 0;
+  GReplCreateArgs: string = '';
+
+{ Stub the Replicate lifecycle: create_predictions returns a PENDING id, then
+  get_predictions returns processing once, then succeeded with an output array. }
+function ReplStub(const ToolName, ArgsJSON: string;
+  out ResultText, ResultJSON, ErrMsg: string): Boolean;
+begin
+  ResultText := ''; ResultJSON := ''; ErrMsg := '';
+  { MCP bridge shape: the tool's fields live under structuredContent, not at
+    the top level (this is what the replicate defaults must select against). }
+  if ToolName = 'replicate__create_predictions' then
+  begin
+    GReplCreateArgs := ArgsJSON;
+    ResultJSON := '{"structuredContent":{"id":"p9","status":"starting"}}';
+  end
+  else if ToolName = 'replicate__get_predictions' then
+  begin
+    Inc(GReplPoll);
+    if GReplPoll >= 2 then
+      ResultJSON := '{"structuredContent":{"status":"succeeded","output":["https://x/final.png"]}}'
+    else
+      ResultJSON := '{"structuredContent":{"status":"processing"}}';
+  end;
+  Result := True;
+end;
+
+procedure TestReplicateNode;
+var Spec: TWorkflowSpec; Err: string; Res: TWorkflowNodeResultArray;
+begin
+  GReplPoll := 0; GReplCreateArgs := '';
+  Check(ParseWorkflow(REPLICATE_WF, Spec, Err), 'replicate: parse (' + Err + ')');
+  { The "replicate" node is sugar -- one node, no await/get/selector wiring. }
+  Check(RunWorkflow(Spec, '{"prompt":"a horse"}', ReplStub, Res, Err),
+        'replicate: run succeeds (' + Err + ')');
+  Check(GReplPoll >= 2, 'replicate: auto-polled get_predictions until terminal');
+  Check(Pos('a horse', GReplCreateArgs) > 0, 'replicate: create got the templated input');
+  { output[0] lifted into the node text so a bare downstream node ref is the URL. }
+  Check((Length(Res) = 1) and (Res[0].Text = 'https://x/final.png'),
+        'replicate: node text is the finished output URL (got "' +
+        Res[0].Text + '")');
+end;
+
 procedure TestDispatchRouting;
 { WorkflowDispatch routes by name: __ -> MCP, llm -> provider, else -> registry.
   With no registry/config set, each branch returns its own clear error, which
@@ -232,6 +282,7 @@ begin
   TestSelector;
   TestRunChains;
   TestAwaitPolling;
+  TestReplicateNode;
   TestDispatchRouting;
   TestRunMissingInput;
   TestStoreRoundTrip;
