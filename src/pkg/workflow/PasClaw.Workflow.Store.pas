@@ -26,6 +26,9 @@ type
 { Absolute path of the workflows directory (created on demand by save). }
 function WorkflowsDir: string;
 
+{ Absolute path of the JSON file for a given id ('' if the id is unsafe). }
+function WorkflowPath(const Id: string): string;
+
 { Id sanitizer -- same rules as sessions (alnum, -, _, ., no leading dot, no
   traversal). Guards the file path built from a client-supplied id. }
 function IsSafeWorkflowId(const Id: string): Boolean;
@@ -73,6 +76,12 @@ end;
 function PathFor(const Id: string): string;
 begin
   Result := JoinPath(WorkflowsDir, Id + '.json');
+end;
+
+function WorkflowPath(const Id: string): string;
+begin
+  if not IsSafeWorkflowId(Id) then Exit('');
+  Result := PathFor(Id);
 end;
 
 function ListWorkflows: TWorkflowSummaryArray;

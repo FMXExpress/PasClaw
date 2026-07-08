@@ -65,6 +65,10 @@ type
     Failure: array of string;  { statuses that mean failed }
     IntervalMs: Integer;       { delay between polls (0 = no sleep) }
     TimeoutMs: Integer;        { give up after this much accumulated interval }
+    OutputSelector: string;    { after a successful poll, extract this dotted/[i]
+                                 path from the final result into the node's Text
+                                 so a bare node reference downstream yields the
+                                 output (non-fatal: unresolved leaves Text as-is) }
   end;
 
   TWorkflowNode = record
@@ -165,6 +169,7 @@ begin
   A.StatusSelector := 'status';
   A.IntervalMs := 2000;
   A.TimeoutMs := 300000;
+  A.OutputSelector := '';
   SetLength(A.Success, 0);
   SetLength(A.Failure, 0);
   if AObj = nil then Exit;
@@ -173,6 +178,7 @@ begin
   ArgsObj := AObj.ChildObject('args');
   if ArgsObj <> nil then A.PollArgsJSON := ArgsObj.ToJSON;
   A.StatusSelector := AObj.GetStr('status_selector', 'status');
+  A.OutputSelector := AObj.GetStr('output_selector', '');
   A.IntervalMs := AObj.GetInt('interval_ms', 2000);
   A.TimeoutMs  := AObj.GetInt('timeout_ms', 300000);
   SArr := AObj.ChildArray('success');
@@ -266,6 +272,7 @@ begin
     O.PutStr('tool', A.PollTool);
     O.PutRaw('args', A.PollArgsJSON);
     O.PutStr('status_selector', A.StatusSelector);
+    if A.OutputSelector <> '' then O.PutStr('output_selector', A.OutputSelector);
     O.PutInt('interval_ms', A.IntervalMs);
     O.PutInt('timeout_ms', A.TimeoutMs);
     SArr := TJsonArray.Create;
@@ -673,7 +680,7 @@ function ValidateWorkflow(const Spec: TWorkflowSpec;
 var
   i, j: Integer;
   Order: TStringList;
-  Err, DummyT, DummyJ, DummyE: string;
+  Err, DummyT, DummyJ, DummyE, T: string;
   Errs: TStringList;
 begin
   Errs := TStringList.Create;
@@ -689,7 +696,10 @@ begin
       for j := i + 1 to High(Spec.Nodes) do
         if Spec.Nodes[i].Id = Spec.Nodes[j].Id then
           Errs.Add(Format('duplicate node id "%s"', [Spec.Nodes[i].Id]));
-      if Assigned(ToolExists) and (Trim(Spec.Nodes[i].Tool) <> '') then
+      { "llm" and "replicate" are reserved synthetic node types (handled by the
+        dispatcher / engine), not registered tools -- don't probe them. }
+      T := LowerCase(Trim(Spec.Nodes[i].Tool));
+      if Assigned(ToolExists) and (T <> '') and (T <> 'llm') and (T <> 'replicate') then
         if not ToolExists(Spec.Nodes[i].Tool, '', DummyT, DummyJ, DummyE) then
           Errs.Add(Format('node "%s": tool "%s" is not registered',
                           [Spec.Nodes[i].Id, Spec.Nodes[i].Tool]));
@@ -757,6 +767,36 @@ begin
   end;
 end;
 
+procedure PlanNode(const Node: TWorkflowNode; out EffTool: string; out Aw: TWorkflowAwait);
+{ Resolve a node's effective execution tool + await plan. A node whose tool is
+  the reserved word "replicate" is sugar for "run a Replicate model": it expands
+  to create_predictions + an auto-poll of get_predictions until terminal + an
+  output_selector, so the author writes one node carrying the create args
+  (version/model + input) instead of hand-wiring create + get + await +
+  selectors. An explicit await on the node overrides the synthesized one. All
+  the Replicate names/paths are defaults here -- override per-node if a build
+  differs. }
+begin
+  EffTool := Node.Tool;
+  Aw := Node.Await;
+  if LowerCase(Trim(Node.Tool)) = 'replicate' then
+  begin
+    EffTool := 'replicate__create_predictions';
+    if not Aw.Enabled then
+    begin
+      Aw.Enabled        := True;
+      Aw.PollTool       := 'replicate__get_predictions';
+      Aw.PollArgsJSON   := '{"prediction_id":"{{self.id}}"}';
+      Aw.StatusSelector := 'status';
+      Aw.OutputSelector := 'output[0]';   { image models return output: [url] }
+      Aw.IntervalMs     := 2000;
+      Aw.TimeoutMs      := 300000;
+      SetLength(Aw.Success, 1); Aw.Success[0] := 'succeeded';
+      SetLength(Aw.Failure, 2); Aw.Failure[0] := 'failed'; Aw.Failure[1] := 'canceled';
+    end;
+  end;
+end;
+
 function RunWorkflow(const Spec: TWorkflowSpec; const InputsJSON: string;
   Caller: TWorkflowToolCallerFn; out Results: TWorkflowNodeResultArray;
   out Err: string): Boolean;
@@ -764,7 +804,8 @@ var
   Order: TStringList;
   i, ni: Integer;
   NodeArgs, ResolvedArgs, Text, JSON, CallErr: string;
-  CreateJSON, FinalText, FinalJSON: string;
+  CreateJSON, FinalText, FinalJSON, EffTool, OutVal: string;
+  Aw: TWorkflowAwait;
   NR: TWorkflowNodeResult;
 
   function NodeIndex(const Id: string): Integer;
@@ -794,22 +835,30 @@ begin
         Exit;
       end;
 
+      PlanNode(Spec.Nodes[ni], EffTool, Aw);
+
       Text := ''; JSON := ''; CallErr := '';
       NR.NodeId := Spec.Nodes[ni].Id;
-      NR.Tool   := Spec.Nodes[ni].Tool;
-      NR.Ok     := Caller(Spec.Nodes[ni].Tool, ResolvedArgs, Text, JSON, CallErr);
+      NR.Tool   := Spec.Nodes[ni].Tool;   { report the authored tool (e.g. "replicate") }
+      NR.Ok     := Caller(EffTool, ResolvedArgs, Text, JSON, CallErr);
       NR.Text   := Text;
       NR.JSON   := JSON;
       NR.Error  := CallErr;
 
       { Async tools return a pending handle; poll until terminal so the node's
         stored result is the COMPLETED output that downstream nodes select on. }
-      if NR.Ok and Spec.Nodes[ni].Await.Enabled then
+      if NR.Ok and Aw.Enabled then
       begin
         CreateJSON := JSON;   { distinct from the out params -- no aliasing }
-        if PollUntilDone(Spec.Nodes[ni].Await, CreateJSON, InputsJSON, Results,
+        if PollUntilDone(Aw, CreateJSON, InputsJSON, Results,
                          Caller, FinalText, FinalJSON, CallErr) then
-        begin NR.Ok := True; NR.Text := FinalText; NR.JSON := FinalJSON; NR.Error := ''; end
+        begin
+          NR.Ok := True; NR.Text := FinalText; NR.JSON := FinalJSON; NR.Error := '';
+          { Lift the completed output into Text so a bare node reference
+            downstream works. Non-fatal: unresolved leaves the poll text. }
+          if Aw.OutputSelector <> '' then
+            if EvalSelector(FinalJSON, Aw.OutputSelector, OutVal) then NR.Text := OutVal;
+        end
         else
         begin NR.Ok := False; NR.Error := CallErr; NR.Text := FinalText; NR.JSON := FinalJSON; end;
       end;

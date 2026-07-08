@@ -57,6 +57,11 @@ const
 
   LIST_SCHEMA = '{"type":"object","properties":{}}';
 
+  GET_SCHEMA =
+    '{"type":"object","properties":{' +
+    '"name":{"type":"string","description":"saved workflow name"}' +
+    '},"required":["name"]}';
+
 function ToolWorkflowSave(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Spec: TWorkflowSpec;
@@ -69,8 +74,27 @@ begin
   begin ErrMsg := 'workflow_save: invalid workflow:' + sLineBreak + Errs; Exit(''); end;
   if not SaveWorkflow(Spec, Err) then
   begin ErrMsg := 'workflow_save: ' + Err; Exit(''); end;
-  Result := Format('saved workflow "%s" (%d node(s)). Run it with workflow_run.',
-                   [Spec.Name, Length(Spec.Nodes)]);
+  Result := Format('saved workflow "%s" (%d node(s)) -> %s. Run it with ' +
+                   'workflow_run({"name":"%s"}); read it back with workflow_get.',
+                   [Spec.Name, Length(Spec.Nodes),
+                    WorkflowPath(Spec.Id), Spec.Name]);
+end;
+
+function ToolWorkflowGet(const ArgsJSON: string; out ErrMsg: string): string;
+var
+  Args: TJsonObject;
+  Name, Err: string;
+  Spec: TWorkflowSpec;
+begin
+  ErrMsg := '';
+  Name := '';
+  try Args := TJsonObject.Parse(ArgsJSON); except Args := nil; end;
+  if Args <> nil then
+    try Name := Args.GetStr('name', ''); finally Args.Free; end;
+  if Name = '' then begin ErrMsg := 'workflow_get: "name" is required'; Exit(''); end;
+  if not LoadWorkflow(Name, Spec, Err) then
+  begin ErrMsg := 'workflow_get: ' + Err; Exit(''); end;
+  Result := WorkflowToJSON(Spec);
 end;
 
 function ToolWorkflowList(const ArgsJSON: string; out ErrMsg: string): string;
@@ -152,6 +176,12 @@ begin
       Arr.AddObject(O);
     end;
     Root.PutArray('nodes', Arr);
+    { Surface the final output prominently -- the text of the last node that
+      produced one -- so the agent sees the deliverable (e.g. the image URL)
+      without digging through the node list. }
+    for i := High(Res) downto 0 do
+      if Res[i].Text <> '' then
+      begin Root.PutStr('output', Res[i].Text); Break; end;
     Result := Root.ToJSON;
   finally
     Root.Free;
@@ -185,29 +215,34 @@ begin
   SetWorkflowRegistry(Reg);
 
   Reg1(Reg, 'workflow_save',
-    'Author or replace a workflow: a DAG of tool calls whose outputs feed the ' +
-    'next node. Pass the full spec (name, nodes[], edges[], optional inputs[]). ' +
-    'A node''s "tool" is an MCP tool (e.g. replicate__create_prediction), the ' +
-    'special "llm" node which calls a configured provider with ' +
-    'args {provider, model, prompt} and returns its text, or any other ' +
-    'registered tool. Wire data with {{inputs.NAME}} and ' +
-    '{{nodes.ID.selector}} templates in a node''s args, where selector is a ' +
-    'dotted/[i] path into the upstream tool''s JSON result (e.g. ' +
-    'structuredContent.output[0]). For an ASYNC tool that returns a pending ' +
-    'handle (e.g. Replicate create_prediction), add an "await" block to the ' +
-    'node: {tool, args (use {{self.SELECTOR}} for the create result, e.g. ' +
-    '{{self.id}}), status_selector, success[], failure[], interval_ms, ' +
-    'timeout_ms} -- the engine polls until a terminal status and the node''s ' +
-    'result becomes the completed output.',
+    'Author or replace a workflow: a DAG of nodes whose outputs feed the next. ' +
+    'Pass the full spec (name, nodes[], edges[], optional inputs[]); it is ' +
+    'saved under $PASCLAW_HOME/workspace/workflows/<name>.json and the tool ' +
+    'returns the exact path. PREFER these two node types for chaining models: ' +
+    '(1) tool "replicate" -- run ONE Replicate model: args {version|model, ' +
+    'input:{...}}; the engine creates the prediction, polls until done, and the ' +
+    'node output is the result URL (no create/get/await/selector wiring needed). ' +
+    '(2) tool "llm" -- call a configured provider: args {provider, model, ' +
+    'prompt}; output is the reply text. You can also use any raw MCP tool or ' +
+    'registered tool as a node. Wire data between nodes with {{inputs.NAME}} ' +
+    'and {{nodes.ID}} (the upstream node''s output) or {{nodes.ID.selector}} ' +
+    'for a dotted/[i] path into its JSON.',
     SAVE_SCHEMA, ToolWorkflowSave, tcMutating);
 
   Reg1(Reg, 'workflow_list',
-    'List saved workflows (id, name, description, node count).',
+    'List saved workflows (id, name, description, node count). Workflows live ' +
+    'under $PASCLAW_HOME/workspace/workflows/.',
     LIST_SCHEMA, ToolWorkflowList, tcReadOnly);
 
+  Reg1(Reg, 'workflow_get',
+    'Read back a saved workflow''s full JSON spec by name (use this to inspect ' +
+    'or verify a workflow instead of searching the filesystem).',
+    GET_SCHEMA, ToolWorkflowGet, tcReadOnly);
+
   Reg1(Reg, 'workflow_run',
-    'Run a saved workflow by name with inputs; returns per-node status. Nodes ' +
-    'execute in dependency order and pass structured output between each other.',
+    'Run a saved workflow by name with inputs. Returns {ok, output (the final ' +
+    'result URL/text), nodes:[per-node status]}. Nodes execute in dependency ' +
+    'order and pass output between each other.',
     RUN_SCHEMA, ToolWorkflowRun, tcMutating);
 end;
 
