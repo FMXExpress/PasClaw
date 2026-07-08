@@ -593,6 +593,22 @@ begin
   end;
 end;
 
+function BuildWorkflowsSection: string;
+{ Compact pointer to the workflow tools so a "build me an X -> Y pipeline"
+  request resolves to workflow_save rather than the model improvising. }
+begin
+  Result :=
+    '## Workflows' + sLineBreak +
+    'A workflow is a saved DAG of tool calls whose outputs feed the next node ' +
+    '(e.g. an image-generate node -> an upscale node, chaining MCP tools like ' +
+    'replicate__create_prediction). When asked to build or automate a ' +
+    'multi-step tool pipeline, call `workflow_save` with the spec (name, ' +
+    'nodes[], edges[]), wiring data between nodes with {{inputs.NAME}} and ' +
+    '{{nodes.ID.selector}} templates; then `workflow_run` to execute it and ' +
+    '`workflow_list` to see saved ones. Prefer this over hand-running each ' +
+    'step when the user wants a reusable chain.';
+end;
+
 function BuildRulesSection(ToolsEnabled: Boolean): string;
 var
   MemPath: string;
@@ -941,6 +957,11 @@ begin
   if ToolsEnabled then
     Result := AppendSection(Result, BuildSkillsSection(
                 (Cfg <> nil) and Cfg.SelfImprovingSkills.ProgressiveDisclosure));
+  { Workflows: a short pointer so "build me a X->Y workflow" resolves to the
+    workflow_save tool instead of the model improvising. Gated on the same
+    flag that serves the endpoints. }
+  if ToolsEnabled and ((Cfg = nil) or Cfg.WorkflowsEnabled) then
+    Result := AppendSection(Result, BuildWorkflowsSection);
   { Deferred MCP tools (Cfg.MCPProgressiveDisclosure). Lists names only
     -- schemas are loaded on demand by tool_search. Emits empty string
     when disclosure is off or no MCP tools are deferred, so the gated

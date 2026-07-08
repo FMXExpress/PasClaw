@@ -1,7 +1,26 @@
 # Design: agent-built + manual workflows (Replicate MCP chaining)
 
-Status: **proposal** (Phase 0/1 specced here; Phase 2/3 sketched). Nothing in
-this doc is wired yet except the skill-authoring primer shipped alongside it.
+Status: **implemented** (all phases landed on branch `claude/workflows`).
+Phase 0 (structured MCP output), Phase 1 (engine + store + gateway endpoints +
+agent tools), Phase 2 (Workflow tab: node editor + palette + SVG graph + run),
+and Phase 3 (agent authoring via workflow_save + the `## Workflows` prompt
+section) are wired and tested. The node editor is a form+graph editor (add
+nodes from the MCP-tool palette, edit args, connect edges, live SVG preview,
+run with per-node status); free-form drag-and-drop canvas positioning is the
+one deferred follow-up.
+
+**Async tools (open question 2 — resolved).** Replicate's hosted MCP
+`create_prediction` is async: it returns a pending prediction id/status, not
+the finished image (the REST API is async by default; sync `Prefer: wait` mode
+exists but caps at ~60s). The engine handles both cases:
+- **Sync/fast:** a node whose tool blocks and returns the final output needs no
+  extra config — the engine just uses what the tool returns.
+- **Async/slow:** add an optional per-node `await` block — a fully generic
+  poll-until-terminal step (configurable poll tool, args with `{{self.SELECTOR}}`
+  referencing the create result, `status_selector`, `success[]`/`failure[]`
+  sets, `interval_ms`, `timeout_ms`). The node's stored result becomes the
+  completed poll response, so downstream selectors read the finished output.
+  Nothing here is Replicate-specific.
 
 ## Goal
 
@@ -34,6 +53,15 @@ Consequences for chaining:
 
 So typed edge data flow (upstream output field → downstream input field) is not
 possible without extending the one MCP choke point. That extension is Phase 0.
+
+## Node types
+
+A node's `tool` can be:
+- an **MCP tool** (`server__tool`, e.g. `replicate__create_prediction`) → the MCP bridge;
+- the special **`llm`** node → any configured provider (with its API key): `args {provider, model, prompt, system?}` → a one-shot `Chat` → the reply text (bare `{{nodes.ID}}` downstream = that text; or `{{nodes.ID.text}}`);
+- **any other registered tool** (`web_fetch`, …) → the tool registry.
+
+Routing lives in `PasClaw.Workflow.Dispatch.WorkflowDispatch`; the registry and provider config are set once at startup (`SetWorkflowRegistry` from the shared RegisterSkills hook, `SetWorkflowConfig` from the gateway / agent) — the same module-global pattern `ConfigureSandbox` uses, because the engine's caller is a plain function pointer.
 
 ## Architecture
 

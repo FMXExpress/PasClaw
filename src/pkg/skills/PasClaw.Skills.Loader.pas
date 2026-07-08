@@ -107,6 +107,8 @@ function ParseSkillMDText(const Text, SourcePath: string;
 implementation
 
 uses
+  PasClaw.Workflow.Tools,   { workflow_save/list/run -- registered at every
+                              registry-build site alongside skills }
   PasClaw.Utils,
   PasClaw.JSON,
   PasClaw.Logger,
@@ -589,6 +591,12 @@ begin
     Reg.Register(Tool);
     LogDebug('skills: registered %s (slot=%d, kind=%s)', [Skills[i].Name, Slot, K]);
   end;
+
+  { Workflow tools ride the same registry-build hook (RegisterSkills is called
+    at every entry point that builds a tool registry). They are inert until a
+    workflow is saved. The /v1/workflows endpoints are separately gated by
+    config.workflows_enabled. }
+  RegisterWorkflowTools(Reg);
 end;
 
 function RunSkill(Reg: TToolRegistry; const Name, ArgsJSON: string; out ErrMsg: string): string;

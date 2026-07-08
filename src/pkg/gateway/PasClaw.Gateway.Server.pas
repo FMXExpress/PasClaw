@@ -367,6 +367,15 @@ type
     procedure HandleMemoryProvisionStatus(AResp: TIdHTTPResponseInfo);
     procedure HandleMemoryProvision(ARequest: TIdHTTPRequestInfo;
                                     AResp: TIdHTTPResponseInfo);
+    { Workflows: GET /v1/workflows (list) POST /v1/workflows (create+validate);
+      GET/PUT/DELETE /v1/workflows/<id>; POST /v1/workflows/<id>/run runs it
+      synchronously and returns per-node status. GET /v1/mcp/tools enumerates
+      the registered MCP tools (name/description/schema) for the node palette. }
+    procedure HandleWorkflowsList(AResp: TIdHTTPResponseInfo);
+    procedure HandleWorkflowCreate(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
+    procedure HandleWorkflowItem(const Doc: string; ARequest: TIdHTTPRequestInfo;
+                                 AResp: TIdHTTPResponseInfo);
+    procedure HandleMCPTools(AResp: TIdHTTPResponseInfo);
     { GET /v1/providers/catalog -- the static provider catalog (names, default
       base/model, auth requirement) so the web onboarding wizard can offer a
       provider picker without hardcoding the list client-side. No secrets. }
@@ -482,6 +491,10 @@ uses
   PasClaw.Crypto.Random,      { GetRandomBytes -- per-process relay token }
   PasClaw.Skills.Loader,
   PasClaw.Skills.Pending,
+  PasClaw.Workflow,
+  PasClaw.Workflow.Store,
+  PasClaw.Workflow.Dispatch,  { WorkflowDispatch -- MCP / llm / registry node caller }
+  PasClaw.Tools.Types,        { TTool -- MCP tool enumeration for the palette }
   PasClaw.Skills.Zip,       { PackDirToZip -- workspace export download }
   PasClaw.Skills.Install,   { InstallSkillTarget / RemoveSkillFiles / IsSafeSkillName }
   PasClaw.Skills.ClawHub,  { SearchClawHub -- catalog search (clawhub.ai) }
@@ -751,6 +764,9 @@ begin
   FProvider := Provider;
   FRegistry := Registry;
   FMaxIter  := 25;
+  { Give workflow `llm` nodes access to the configured providers (+ their API
+    keys). The registry is wired separately via RegisterWorkflowTools. }
+  SetWorkflowConfig(FCfg);
   { Wire the per-turn checkpoint system into the gateway (it was CLI/TUI-only).
     Init with the per-workspace fallback session; each request re-scopes to its
     chat's session id (X-PasClaw-Session) via ApplyCheckpointSession, then
@@ -1328,6 +1344,10 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/sessions') then HandleSessionsList(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/sessions') then HandleSessionCreate(ARequest, AResponse)
     else if (Copy(Doc, 1, 13) = '/v1/sessions/') then HandleSessionItem(Doc, ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/workflows') then HandleWorkflowsList(AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/workflows') then HandleWorkflowCreate(ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/mcp/tools') then HandleMCPTools(AResponse)
+    else if (Copy(Doc, 1, 14) = '/v1/workflows/') then HandleWorkflowItem(Doc, ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/vault') then HandleVaultSearch(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Copy(Doc, 1, 10) = '/v1/vault/') then HandleVaultGet(Doc, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/fs')      then HandleFSList(ARequest, AResponse)
@@ -2759,6 +2779,168 @@ begin
     LogInfo('gateway: config.json updated via /v1/config (restart to apply)');
     WriteJSON(AResp, 200,
       '{"saved":true,"applied":false,"note":"saved to config.json -- restart pasclaw for changes to take effect"}');
+  end;
+end;
+
+function JsonStr(const S: string): string;
+begin
+  Result := '"' + JsonEscape(S) + '"';
+end;
+
+procedure TGatewayServer.HandleWorkflowsList(AResp: TIdHTTPResponseInfo);
+var
+  Sums: TWorkflowSummaryArray;
+  Root: TJsonObject; Arr: TJsonArray; O: TJsonObject; i: Integer;
+begin
+  if not FCfg.WorkflowsEnabled then begin WriteJSON(AResp, 404, '{"error":"workflows disabled"}'); Exit; end;
+  Sums := ListWorkflows;
+  Root := TJsonObject.Create;
+  try
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Sums) do
+    begin
+      O := TJsonObject.Create;
+      O.PutStr('id', Sums[i].Id);
+      O.PutStr('name', Sums[i].Name);
+      O.PutStr('description', Sums[i].Description);
+      O.PutInt('nodes', Sums[i].NodeCount);
+      Arr.AddObject(O);
+    end;
+    Root.PutArray('workflows', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleWorkflowCreate(ARequest: TIdHTTPRequestInfo;
+  AResp: TIdHTTPResponseInfo);
+var
+  Body, Err, Errs: string; Spec: TWorkflowSpec; Root: TJsonObject;
+begin
+  if not FCfg.WorkflowsEnabled then begin WriteJSON(AResp, 404, '{"error":"workflows disabled"}'); Exit; end;
+  Body := ReadRequestBody(ARequest);
+  if not ParseWorkflow(Body, Spec, Err) then
+  begin WriteJSON(AResp, 400, '{"error":' + JsonStr(Err) + '}'); Exit; end;
+  if not ValidateWorkflow(Spec, nil, Errs) then
+  begin WriteJSON(AResp, 422, '{"error":"validation failed","detail":' + JsonStr(Errs) + '}'); Exit; end;
+  if not SaveWorkflow(Spec, Err) then
+  begin WriteJSON(AResp, 400, '{"error":' + JsonStr(Err) + '}'); Exit; end;
+  Root := TJsonObject.Create;
+  try
+    Root.PutBool('saved', True);
+    Root.PutStr('id', Spec.Id);
+    Root.PutStr('name', Spec.Name);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleWorkflowItem(const Doc: string;
+  ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
+var
+  Rest, Id, Body, Err, Errs, InputsJSON: string;
+  Spec: TWorkflowSpec; Res: TWorkflowNodeResultArray; Ok: Boolean;
+  Root, O: TJsonObject; Arr: TJsonArray; i: Integer;
+begin
+  if not FCfg.WorkflowsEnabled then begin WriteJSON(AResp, 404, '{"error":"workflows disabled"}'); Exit; end;
+  Rest := Copy(Doc, Length('/v1/workflows/') + 1, MaxInt);
+
+  { POST /v1/workflows/<id>/run -- run synchronously, return per-node status. }
+  if (ARequest.Command = 'POST') and (Length(Rest) > 4) and
+     (Copy(Rest, Length(Rest) - 3, 4) = '/run') then
+  begin
+    Id := Copy(Rest, 1, Length(Rest) - 4);
+    if not LoadWorkflow(Id, Spec, Err) then
+    begin WriteJSON(AResp, 404, '{"error":' + JsonStr(Err) + '}'); Exit; end;
+    InputsJSON := Trim(ReadRequestBody(ARequest));
+    if InputsJSON = '' then InputsJSON := '{}';
+    Ok := RunWorkflow(Spec, InputsJSON, @WorkflowDispatch, Res, Err);
+    Root := TJsonObject.Create;
+    try
+      Root.PutBool('ok', Ok);
+      if not Ok then Root.PutStr('error', Err);
+      Arr := TJsonArray.Create;
+      for i := 0 to High(Res) do
+      begin
+        O := TJsonObject.Create;
+        O.PutStr('node', Res[i].NodeId);
+        O.PutStr('tool', Res[i].Tool);
+        O.PutBool('ok', Res[i].Ok);
+        if Res[i].Error <> '' then O.PutStr('error', Res[i].Error);
+        if Res[i].Text  <> '' then O.PutStr('text', Res[i].Text);
+        if Res[i].JSON  <> '' then O.PutRaw('result', Res[i].JSON);
+        Arr.AddObject(O);
+      end;
+      Root.PutArray('nodes', Arr);
+      WriteJSON(AResp, 200, Root.ToJSON);
+    finally
+      Root.Free;
+    end;
+    Exit;
+  end;
+
+  Id := Rest;
+  if ARequest.Command = 'GET' then
+  begin
+    if not LoadWorkflow(Id, Spec, Err) then
+      WriteJSON(AResp, 404, '{"error":' + JsonStr(Err) + '}')
+    else
+      WriteJSON(AResp, 200, WorkflowToJSON(Spec));
+  end
+  else if ARequest.Command = 'PUT' then
+  begin
+    Body := ReadRequestBody(ARequest);
+    if not ParseWorkflow(Body, Spec, Err) then
+    begin WriteJSON(AResp, 400, '{"error":' + JsonStr(Err) + '}'); Exit; end;
+    if Spec.Id = '' then Spec.Id := Id;
+    if not ValidateWorkflow(Spec, nil, Errs) then
+    begin WriteJSON(AResp, 422, '{"error":"validation failed","detail":' + JsonStr(Errs) + '}'); Exit; end;
+    if not SaveWorkflow(Spec, Err) then
+      WriteJSON(AResp, 400, '{"error":' + JsonStr(Err) + '}')
+    else
+      WriteJSON(AResp, 200, '{"saved":true}');
+  end
+  else if ARequest.Command = 'DELETE' then
+  begin
+    if not DeleteWorkflow(Id, Err) then
+      WriteJSON(AResp, 400, '{"error":' + JsonStr(Err) + '}')
+    else
+      WriteJSON(AResp, 200, '{"deleted":true}');
+  end
+  else
+    WriteJSON(AResp, 405, '{"error":"method not allowed"}');
+end;
+
+procedure TGatewayServer.HandleMCPTools(AResp: TIdHTTPResponseInfo);
+var
+  Names: TStringArray; T: TTool; Root: TJsonObject; Arr: TJsonArray;
+  O: TJsonObject; i: Integer;
+begin
+  Root := TJsonObject.Create;
+  try
+    Arr := TJsonArray.Create;
+    if FRegistry <> nil then
+    begin
+      Names := FRegistry.Names;
+      for i := 0 to High(Names) do
+      begin
+        { MCP tools are namespaced server__tool -- surface those for the palette. }
+        if Pos('__', Names[i]) = 0 then Continue;
+        if not FRegistry.Find(Names[i], T) then Continue;
+        O := TJsonObject.Create;
+        O.PutStr('name', T.Name);
+        O.PutStr('description', T.Description);
+        if Trim(T.Schema) <> '' then O.PutRaw('schema', T.Schema)
+        else O.PutRaw('schema', '{"type":"object"}');
+        Arr.AddObject(O);
+      end;
+    end;
+    Root.PutArray('tools', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
   end;
 end;
 

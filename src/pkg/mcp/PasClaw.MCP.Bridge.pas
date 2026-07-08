@@ -74,6 +74,14 @@ type
 function ConnectMCPServers(Cfg: TConfig; Reg: TToolRegistry): TMCPClientList;
 procedure FreeMCPClients(var Clients: TMCPClientList);
 
+{ Invoke a bridged MCP tool by its namespaced registry name (e.g.
+  `replicate__create_prediction`) and return BOTH the flattened text and the
+  raw result-object JSON. The workflow engine uses this to feed one tool's
+  structured output into the next. Returns False (with ErrMsg) when the server
+  is unknown / still connecting / failed, or the call errors. }
+function MCPCallStructured(const NamespacedName, ArgsJSON: string;
+  out ResultText, ResultJSON, ErrMsg: string): Boolean;
+
 implementation
 
 uses
@@ -120,6 +128,10 @@ type
     procedure SetFailed(const Err: string);
     function  CallTool(const ToolName, ArgsJSON: string;
                        out ErrMsg: string): string;
+    { Structured variant used by the workflow engine: returns the raw result
+      object JSON alongside the flattened text. Same state guards as CallTool. }
+    function  CallToolStructured(const ToolName, ArgsJSON: string;
+                       out ResultText, ResultJSON, ErrMsg: string): Boolean;
     function  FindDispatchFor(const ToolName: string): TMCPToolDispatch;
     function  AddDispatch(const ToolName: string): TMCPToolDispatch;
     property Name: string read FName;
@@ -216,12 +228,22 @@ end;
 function TMCPServerState.CallTool(const ToolName, ArgsJSON: string;
                                   out ErrMsg: string): string;
 var
+  Dummy: string;
+begin
+  Result := '';
+  CallToolStructured(ToolName, ArgsJSON, Result, Dummy, ErrMsg);
+end;
+
+function TMCPServerState.CallToolStructured(const ToolName, ArgsJSON: string;
+  out ResultText, ResultJSON, ErrMsg: string): Boolean;
+var
   C: TMCPBaseClient;
   S: TMCPLoadState;
   E: string;
-  OK: Boolean;
 begin
-  Result := '';
+  Result := False;
+  ResultText := '';
+  ResultJSON := '';
   ErrMsg := '';
   FLock.Acquire;
   try
@@ -250,8 +272,8 @@ begin
     ErrMsg := Format('mcp[%s] client missing (internal bridge bug)', [FName]);
     Exit;
   end;
-  OK := C.CallTool(ToolName, ArgsJSON, Result, ErrMsg);
-  if (not OK) and (ErrMsg = '') then ErrMsg := 'mcp call failed';
+  Result := C.CallToolStructured(ToolName, ArgsJSON, ResultText, ResultJSON, ErrMsg);
+  if (not Result) and (ErrMsg = '') then ErrMsg := 'mcp call failed';
 end;
 
 function TMCPServerState.FindDispatchFor(const ToolName: string): TMCPToolDispatch;
@@ -291,6 +313,40 @@ function TMCPToolDispatch.Handler(const ArgsJSON: string;
                                    out ErrMsg: string): string;
 begin
   Result := FState.CallTool(FToolName, ArgsJSON, ErrMsg);
+end;
+
+function MCPCallStructured(const NamespacedName, ArgsJSON: string;
+  out ResultText, ResultJSON, ErrMsg: string): Boolean;
+var
+  i: Integer;
+  St: TMCPServerState;
+  Prefix, Bare: string;
+begin
+  Result := False;
+  ResultText := '';
+  ResultJSON := '';
+  ErrMsg := '';
+  if GStates = nil then
+  begin
+    ErrMsg := 'no MCP servers connected';
+    Exit;
+  end;
+  { Match against the longest applicable server prefix. Server names can
+    themselves contain underscores, so probe FName + '__' rather than
+    splitting on the first '__'. }
+  for i := 0 to GStates.Count - 1 do
+  begin
+    St := TMCPServerState(GStates[i]);
+    Prefix := St.Name + '__';
+    if (Length(NamespacedName) > Length(Prefix)) and
+       (Copy(NamespacedName, 1, Length(Prefix)) = Prefix) then
+    begin
+      Bare := Copy(NamespacedName, Length(Prefix) + 1, MaxInt);
+      Result := St.CallToolStructured(Bare, ArgsJSON, ResultText, ResultJSON, ErrMsg);
+      Exit;
+    end;
+  end;
+  ErrMsg := Format('no MCP tool named "%s" (unknown server prefix)', [NamespacedName]);
 end;
 
 function IsHttpUrl(const S: string): Boolean;

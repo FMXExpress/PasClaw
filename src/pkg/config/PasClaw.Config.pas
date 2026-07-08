@@ -712,6 +712,10 @@ type
        Independent of vector_search_enabled. Costs ~one extra LLM call
        per turn, which is why it's off unless the operator asks. *)
     MemoryDistillEnabled:  Boolean;
+    { Serve the /v1/workflows endpoints (list/create/run) in the gateway. On by
+      default. The workflow_save/list/run agent tools register alongside skills
+      regardless; this flag gates the HTTP surface for locked-down deploys. }
+    WorkflowsEnabled:      Boolean;
     (* Byte budget for the always-on "durable facts" block injected into
        the system prompt when MemoryDistillEnabled. Facts are tiny, so the
        whole active set usually fits; past the budget the newest/highest-
@@ -1086,6 +1090,7 @@ begin
   StatsCollectionEnabled := True;  { on by default -- zero prompt cost, useful for diagnosing turn-count regressions. Onboarding can flip off for privacy-conscious operators. }
   CheckpointsEnabled     := True;  { on by default -- zero prompt cost, prevents lost work on multi-edit sessions. }
   MemoryDistillEnabled   := False; { opt-in: ~one extra LLM call per turn. }
+  WorkflowsEnabled       := True;  { on: tools are inert until a workflow is saved. }
   MemoryFactsBudget      := 2000;  { ~30 facts injected wholesale when distill on. }
   CheckpointsKeepLast    := 32;    { keep last 32 atomic edit checkpoints. }
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
@@ -1414,6 +1419,10 @@ begin
       Root.PutBool('stats_collection_enabled', False);
     if not CheckpointsEnabled then
       Root.PutBool('checkpoints_enabled', False);
+    { Default ON -- emit only the explicit-off so an onboarding "N" (or a
+      locked-down deploy disabling the /v1/workflows surface) round-trips. }
+    if not WorkflowsEnabled then
+      Root.PutBool('workflows_enabled', False);
     { Default OFF -- emit only the explicit-on so an operator opt-in
       (onboarding or hand-edit) sticks across save/load. }
     if MemoryDistillEnabled then
@@ -1882,6 +1891,7 @@ begin
                                            StatsCollectionEnabled);
     CheckpointsEnabled  := Root.GetBool('checkpoints_enabled', CheckpointsEnabled);
     MemoryDistillEnabled := Root.GetBool('memory_distill_enabled', MemoryDistillEnabled);
+    WorkflowsEnabled := Root.GetBool('workflows_enabled', WorkflowsEnabled);
     MemoryFactsBudget    := Root.GetInt('memory_facts_budget', MemoryFactsBudget);
     CheckpointsKeepLast := Integer(Root.GetInt('checkpoints_keep_last',
                                                 CheckpointsKeepLast));
