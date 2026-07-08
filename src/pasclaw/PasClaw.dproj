@@ -70,7 +70,7 @@
         <Manifest_File>None</Manifest_File>
         <DCC_UsePackage>$(DCC_UsePackage)</DCC_UsePackage>
         <!-- Every src/pkg/* directory + src/cmd, relative to src/pasclaw/ -->
-        <DCC_UnitSearchPath>..\cmd;..\pkg\cliui;..\pkg\utils;..\pkg\logger;..\pkg\config;..\pkg\json;..\pkg\providers;..\pkg\stream;..\pkg\tokenizer;..\pkg\tools;..\pkg\mcp;..\pkg\gateway;..\pkg\channels;..\pkg\crypto;..\pkg\net;..\pkg\search;..\pkg\cron;..\pkg\skills;..\pkg\checkpoints;..\pkg\condense;..\pkg\session;..\pkg\identity;..\pkg\agent;..\pkg\memory;..\pkg\memory\localvector;..\pkg\kb;..\pkg\updater;..\pkg\membench;..\pkg\tui;..\pkg\platform;..\pkg\hashline;..\pkg\component;..\pkg\markdown;..\pkg\shell;..\pkg\otel;..\pkg\vendor\dmvcframework;..\pkg\vendor\zpaq;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+        <DCC_UnitSearchPath>..\cmd;..\pkg\cliui;..\pkg\utils;..\pkg\logger;..\pkg\config;..\pkg\json;..\pkg\providers;..\pkg\stream;..\pkg\tokenizer;..\pkg\tools;..\pkg\mcp;..\pkg\workflow;..\pkg\gateway;..\pkg\channels;..\pkg\crypto;..\pkg\net;..\pkg\search;..\pkg\cron;..\pkg\skills;..\pkg\checkpoints;..\pkg\condense;..\pkg\session;..\pkg\identity;..\pkg\agent;..\pkg\memory;..\pkg\memory\localvector;..\pkg\kb;..\pkg\updater;..\pkg\membench;..\pkg\tui;..\pkg\platform;..\pkg\hashline;..\pkg\component;..\pkg\markdown;..\pkg\shell;..\pkg\otel;..\pkg\vendor\dmvcframework;..\pkg\vendor\zpaq;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
         <!--
           DCC_Namespace lets dcc32/dcc64 resolve bare unit names ("SysUtils",
           "Classes", "Windows") back to their fully qualified modern names
@@ -218,12 +218,19 @@
 
         <!-- pkg/mcp -->
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Types.pas"/>
+        <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Result.pas"/>
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.StdioClient.pas"/>
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.HttpClient.pas"/>
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Catalog.pas"/>
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Bridge.pas"/>
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Disclosure.pas"/>
         <DCCReference Include="..\pkg\mcp\PasClaw.MCP.Server.pas"/>
+
+        <!-- pkg/workflow -->
+        <DCCReference Include="..\pkg\workflow\PasClaw.Workflow.pas"/>
+        <DCCReference Include="..\pkg\workflow\PasClaw.Workflow.Store.pas"/>
+        <DCCReference Include="..\pkg\workflow\PasClaw.Workflow.Dispatch.pas"/>
+        <DCCReference Include="..\pkg\workflow\PasClaw.Workflow.Tools.pas"/>
 
         <!-- pkg/gateway -->
         <DCCReference Include="..\pkg\gateway\PasClaw.Gateway.Server.pas"/>
