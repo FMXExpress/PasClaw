@@ -806,7 +806,10 @@ begin
     Aw.IntervalMs     := 2000;
     Aw.TimeoutMs      := 300000;
     SetLength(Aw.Success, 1); Aw.Success[0] := 'succeeded';
-    SetLength(Aw.Failure, 2); Aw.Failure[0] := 'failed'; Aw.Failure[1] := 'canceled';
+    { Replicate terminal-failure states: failed, canceled, and aborted (fail
+      fast on any of them rather than polling to the timeout). }
+    SetLength(Aw.Failure, 3);
+    Aw.Failure[0] := 'failed'; Aw.Failure[1] := 'canceled'; Aw.Failure[2] := 'aborted';
   end;
 end;
 

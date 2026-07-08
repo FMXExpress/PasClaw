@@ -238,6 +238,33 @@ begin
         Res[0].Text + '")');
 end;
 
+function AbortStub(const ToolName, ArgsJSON: string;
+  out ResultText, ResultJSON, ErrMsg: string): Boolean;
+begin
+  ResultText := ''; ResultJSON := ''; ErrMsg := '';
+  if ToolName = 'replicate__create_predictions' then
+    ResultJSON := '{"id":"p9","status":"starting","output":null}'
+  else if ToolName = 'replicate__get_predictions' then
+  begin
+    Inc(GReplPoll);
+    { Replicate can abort before the model starts -- a terminal state. }
+    ResultJSON := '{"id":"p9","status":"aborted","output":null}';
+  end;
+  Result := True;
+end;
+
+procedure TestReplicateAbortedFailsFast;
+var Spec: TWorkflowSpec; Err: string; Res: TWorkflowNodeResultArray;
+begin
+  GReplPoll := 0;
+  ParseWorkflow('{"name":"ab","nodes":[{"id":"gen","tool":"replicate",' +
+    '"args":{"input":{}}}]}', Spec, Err);
+  Check(not RunWorkflow(Spec, '{}', AbortStub, Res, Err),
+        'aborted: run fails');
+  Check(GReplPoll <= 2, 'aborted: terminal status fails fast (no timeout spin), polls=' + IntToStr(GReplPoll));
+  Check(Pos('aborted', Err) > 0, 'aborted: error names the terminal status');
+end;
+
 procedure TestRawCreateAutoPolls;
 { A raw replicate__create_predictions node (no await) must auto-poll too --
   this is the shape the agent built in the field, which returned a pending
@@ -303,6 +330,7 @@ begin
   TestRunChains;
   TestAwaitPolling;
   TestReplicateNode;
+  TestReplicateAbortedFailsFast;
   TestRawCreateAutoPolls;
   TestDispatchRouting;
   TestRunMissingInput;
