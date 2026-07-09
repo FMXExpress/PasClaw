@@ -203,20 +203,21 @@ function ReplStub(const ToolName, ArgsJSON: string;
   out ResultText, ResultJSON, ErrMsg: string): Boolean;
 begin
   ResultText := ''; ResultJSON := ''; ErrMsg := '';
-  { MCP bridge shape: the tool's fields live under structuredContent, not at
-    the top level (this is what the replicate defaults must select against). }
+  { Real Replicate MCP shape (confirmed via a live run): the prediction object
+    is at the TOP level of the result JSON -- id / status / output, no
+    structuredContent wrapper. }
   if ToolName = 'replicate__create_predictions' then
   begin
     GReplCreateArgs := ArgsJSON;
-    ResultJSON := '{"structuredContent":{"id":"p9","status":"starting"}}';
+    ResultJSON := '{"id":"p9","status":"starting","output":null}';
   end
   else if ToolName = 'replicate__get_predictions' then
   begin
     Inc(GReplPoll);
     if GReplPoll >= 2 then
-      ResultJSON := '{"structuredContent":{"status":"succeeded","output":["https://x/final.png"]}}'
+      ResultJSON := '{"id":"p9","status":"succeeded","output":["https://x/final.png"]}'
     else
-      ResultJSON := '{"structuredContent":{"status":"processing"}}';
+      ResultJSON := '{"id":"p9","status":"processing","output":null}';
   end;
   Result := True;
 end;
@@ -235,6 +236,52 @@ begin
   Check((Length(Res) = 1) and (Res[0].Text = 'https://x/final.png'),
         'replicate: node text is the finished output URL (got "' +
         Res[0].Text + '")');
+end;
+
+function AbortStub(const ToolName, ArgsJSON: string;
+  out ResultText, ResultJSON, ErrMsg: string): Boolean;
+begin
+  ResultText := ''; ResultJSON := ''; ErrMsg := '';
+  if ToolName = 'replicate__create_predictions' then
+    ResultJSON := '{"id":"p9","status":"starting","output":null}'
+  else if ToolName = 'replicate__get_predictions' then
+  begin
+    Inc(GReplPoll);
+    { Replicate can abort before the model starts -- a terminal state. }
+    ResultJSON := '{"id":"p9","status":"aborted","output":null}';
+  end;
+  Result := True;
+end;
+
+procedure TestReplicateAbortedFailsFast;
+var Spec: TWorkflowSpec; Err: string; Res: TWorkflowNodeResultArray;
+begin
+  GReplPoll := 0;
+  ParseWorkflow('{"name":"ab","nodes":[{"id":"gen","tool":"replicate",' +
+    '"args":{"input":{}}}]}', Spec, Err);
+  Check(not RunWorkflow(Spec, '{}', AbortStub, Res, Err),
+        'aborted: run fails');
+  Check(GReplPoll <= 2, 'aborted: terminal status fails fast (no timeout spin), polls=' + IntToStr(GReplPoll));
+  Check(Pos('aborted', Err) > 0, 'aborted: error names the terminal status');
+end;
+
+procedure TestRawCreateAutoPolls;
+{ A raw replicate__create_predictions node (no await) must auto-poll too --
+  this is the shape the agent built in the field, which returned a pending
+  prediction (status starting / output null) before this fix. }
+var Spec: TWorkflowSpec; Err: string; Res: TWorkflowNodeResultArray;
+begin
+  GReplPoll := 0;
+  Check(ParseWorkflow(
+    '{"name":"raw","inputs":[{"name":"prompt","required":true}],' +
+    '"nodes":[{"id":"gen","tool":"replicate__create_predictions",' +
+      '"args":{"input":{"prompt":"{{inputs.prompt}}"}}}]}', Spec, Err),
+    'raw: parse (' + Err + ')');
+  Check(RunWorkflow(Spec, '{"prompt":"a horse"}', ReplStub, Res, Err),
+        'raw: run succeeds (' + Err + ')');
+  Check(GReplPoll >= 2, 'raw: bare create_predictions auto-polled to completion');
+  Check((Length(Res) = 1) and (Res[0].Text = 'https://x/final.png'),
+        'raw: node text is the finished output (got "' + Res[0].Text + '")');
 end;
 
 procedure TestDispatchRouting;
@@ -283,6 +330,8 @@ begin
   TestRunChains;
   TestAwaitPolling;
   TestReplicateNode;
+  TestReplicateAbortedFailsFast;
+  TestRawCreateAutoPolls;
   TestDispatchRouting;
   TestRunMissingInput;
   TestStoreRoundTrip;

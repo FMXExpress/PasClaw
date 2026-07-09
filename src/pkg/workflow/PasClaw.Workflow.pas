@@ -11,19 +11,24 @@
       "description": "generate then upscale",
       "inputs": [ {"name":"prompt","type":"string","required":true} ],
       "nodes": [
-        {"id":"gen","tool":"replicate__create_prediction",
-         "args":{"input":{"prompt":"{{inputs.prompt}}"}}},
-        {"id":"up","tool":"replicate__create_prediction",
-         "args":{"input":{"image":"{{nodes.gen.structuredContent.output[0]}}"}}}
+        {"id":"gen","tool":"replicate",
+         "args":{"version":"<id>","input":{"prompt":"{{inputs.prompt}}"}}},
+        {"id":"up","tool":"replicate",
+         "args":{"version":"<id>","input":{"image":"{{nodes.gen}}"}}}
       ],
       "edges": [ {"from":"gen","to":"up"} ]
     }
 
+  The "replicate" node is sugar: it creates the prediction, polls until done,
+  and lifts the result URL into the node's output -- so a bare {{nodes.gen}}
+  downstream is the image URL, with no create/get/await/selector wiring.
+
   Templates in a node's args:
     {{inputs.NAME}}            - a workflow input value
+    {{nodes.ID}}               - an upstream node's output (its text/URL)
     {{nodes.ID.SELECTOR}}      - a value pulled from an upstream node's raw
                                  result JSON via a dotted/[i] selector, e.g.
-                                 structuredContent.output[0] or content[0].text
+                                 output[0] or content[0].text
 
   Execution is a topological walk. Dependencies come from BOTH explicit edges
   AND {{nodes.ID..}} references, so ordering is correct even if an edge was
@@ -776,28 +781,35 @@ procedure PlanNode(const Node: TWorkflowNode; out EffTool: string; out Aw: TWork
   selectors. An explicit await on the node overrides the synthesized one. All
   the Replicate names/paths are defaults here -- override per-node if a build
   differs. }
+var
+  T: string;
 begin
   EffTool := Node.Tool;
   Aw := Node.Await;
-  if LowerCase(Trim(Node.Tool)) = 'replicate' then
+  T := LowerCase(Trim(Node.Tool));
+  if T = 'replicate' then EffTool := 'replicate__create_predictions';
+  { Both the "replicate" sugar node AND a raw replicate__create_predictions node
+    kick off an ASYNC prediction that returns immediately with status "starting"
+    and output null. Chaining that pending handle is never what's wanted, so
+    auto-poll to completion unless the author set an explicit await. }
+  if ((T = 'replicate') or (T = 'replicate__create_predictions')) and (not Aw.Enabled) then
   begin
-    EffTool := 'replicate__create_predictions';
-    if not Aw.Enabled then
-    begin
-      Aw.Enabled        := True;
-      Aw.PollTool       := 'replicate__get_predictions';
-      { The MCP bridge returns the whole tools/call result object, so an MCP
-        tool's structured fields (id/status/output) live under structuredContent
-        -- NOT at the top level. Select there, or the first poll's self.id and
-        the status/output selectors never resolve against a real MCP result. }
-      Aw.PollArgsJSON   := '{"prediction_id":"{{self.structuredContent.id}}"}';
-      Aw.StatusSelector := 'structuredContent.status';
-      Aw.OutputSelector := 'structuredContent.output[0]';   { image models: output list }
-      Aw.IntervalMs     := 2000;
-      Aw.TimeoutMs      := 300000;
-      SetLength(Aw.Success, 1); Aw.Success[0] := 'succeeded';
-      SetLength(Aw.Failure, 2); Aw.Failure[0] := 'failed'; Aw.Failure[1] := 'canceled';
-    end;
+    Aw.Enabled        := True;
+    Aw.PollTool       := 'replicate__get_predictions';
+    { Confirmed against the live Replicate MCP: create/get return the prediction
+      object with id / status / output at the TOP level of the result JSON (not
+      wrapped in structuredContent). Select there. Override via an explicit
+      await block if a different MCP build wraps the fields. }
+    Aw.PollArgsJSON   := '{"prediction_id":"{{self.id}}"}';
+    Aw.StatusSelector := 'status';
+    Aw.OutputSelector := 'output[0]';   { image models return output: [url] }
+    Aw.IntervalMs     := 2000;
+    Aw.TimeoutMs      := 300000;
+    SetLength(Aw.Success, 1); Aw.Success[0] := 'succeeded';
+    { Replicate terminal-failure states: failed, canceled, and aborted (fail
+      fast on any of them rather than polling to the timeout). }
+    SetLength(Aw.Failure, 3);
+    Aw.Failure[0] := 'failed'; Aw.Failure[1] := 'canceled'; Aw.Failure[2] := 'aborted';
   end;
 end;
 
