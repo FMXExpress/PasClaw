@@ -4105,9 +4105,18 @@ async function wfRenderLlmForm(body, n) {
   const prompt = document.createElement("textarea");
   prompt.rows = 5; prompt.value = cur.prompt || "";
   prompt.placeholder = "prompt — use {{inputs.x}} / {{nodes.id}}"; prompt.style.fontFamily = "inherit";
+  // Track whether the model field holds an auto-filled default or a value the
+  // user typed. Only auto-filled defaults get replaced when the provider
+  // changes, so switching providers doesn't leave the previous one's model.
+  let modelAuto = !cur.model;
   const upd = () => wfSetArgs(n, { provider: sel.value, model: model.value, prompt: prompt.value });
-  sel.addEventListener("change", () => { const p = provs.find(x => x.name === sel.value); if (p && !model.value) model.value = p.model || ""; upd(); });
-  model.addEventListener("input", upd); prompt.addEventListener("input", upd);
+  sel.addEventListener("change", () => {
+    const p = provs.find(x => x.name === sel.value);
+    if (modelAuto) model.value = (p && p.model) || "";
+    upd();
+  });
+  model.addEventListener("input", () => { modelAuto = false; upd(); });
+  prompt.addEventListener("input", upd);
   body.appendChild(wfField("provider", sel));
   body.appendChild(wfField("model", model));
   body.appendChild(wfField("prompt", prompt));
