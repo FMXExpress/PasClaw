@@ -4143,6 +4143,7 @@ function wfRenderReplicateForm(body, n) {
     results.innerHTML = '<span style="opacity:.6;font-size:11px">searching…</span>';
     try {
       const j = await (await gwFetch("/v1/replicate/search?q=" + encodeURIComponent(q))).json();
+      if (j && j.ok === false) { results.innerHTML = '<span style="opacity:.6;font-size:11px">' + escapeHtml(j.error || "search unavailable") + '</span>'; return; }
       const models = wfExtractModels(j);
       results.innerHTML = models.length ? "" : '<span style="opacity:.6;font-size:11px">no results (is the Replicate MCP connected + authorized?)</span>';
       models.slice(0, 12).forEach(m => {
