@@ -318,7 +318,7 @@ end;
 function MCPCallStructured(const NamespacedName, ArgsJSON: string;
   out ResultText, ResultJSON, ErrMsg: string): Boolean;
 var
-  i: Integer;
+  i, P: Integer;
   St: TMCPServerState;
   Prefix, Bare: string;
 begin
@@ -346,7 +346,26 @@ begin
       Exit;
     end;
   end;
-  ErrMsg := Format('no MCP tool named "%s" (unknown server prefix)', [NamespacedName]);
+  { Fallback: no exact server-prefix match. This happens when a synthesized
+    name (e.g. the replicate node's replicate__create_predictions) assumes a
+    server name the operator didn't use. Resolve by the BARE tool name -- the
+    part after the first '__' -- against any connected server that registered
+    it, so a renamed Replicate MCP still runs. }
+  P := Pos('__', NamespacedName);
+  if P > 0 then
+  begin
+    Bare := Copy(NamespacedName, P + 2, MaxInt);
+    for i := 0 to GStates.Count - 1 do
+    begin
+      St := TMCPServerState(GStates[i]);
+      if St.FindDispatchFor(Bare) <> nil then
+      begin
+        Result := St.CallToolStructured(Bare, ArgsJSON, ResultText, ResultJSON, ErrMsg);
+        Exit;
+      end;
+    end;
+  end;
+  ErrMsg := Format('no MCP tool named "%s" (no server prefix or bare-name match)', [NamespacedName]);
 end;
 
 function IsHttpUrl(const S: string): Boolean;
