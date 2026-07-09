@@ -376,6 +376,12 @@ type
     procedure HandleWorkflowItem(const Doc: string; ARequest: TIdHTTPRequestInfo;
                                  AResp: TIdHTTPResponseInfo);
     procedure HandleMCPTools(AResp: TIdHTTPResponseInfo);
+    { Node-inspector helpers: configured providers for the llm picker, and a
+      Replicate model search + schema fetch (proxied through the MCP bridge) so
+      the Replicate node can build a form instead of raw JSON. }
+    procedure HandleProvidersList(AResp: TIdHTTPResponseInfo);
+    procedure HandleReplicateSearch(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
+    procedure HandleReplicateModel(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
     { GET /v1/providers/catalog -- the static provider catalog (names, default
       base/model, auth requirement) so the web onboarding wizard can offer a
       provider picker without hardcoding the list client-side. No secrets. }
@@ -494,6 +500,7 @@ uses
   PasClaw.Workflow,
   PasClaw.Workflow.Store,
   PasClaw.Workflow.Dispatch,  { WorkflowDispatch -- MCP / llm / registry node caller }
+  PasClaw.MCP.Bridge,         { MCPCallStructured -- replicate search/model proxy }
   PasClaw.Tools.Types,        { TTool -- MCP tool enumeration for the palette }
   PasClaw.Skills.Zip,       { PackDirToZip -- workspace export download }
   PasClaw.Skills.Install,   { InstallSkillTarget / RemoveSkillFiles / IsSafeSkillName }
@@ -1347,6 +1354,9 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/workflows') then HandleWorkflowsList(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/workflows') then HandleWorkflowCreate(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/mcp/tools') then HandleMCPTools(AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/providers') then HandleProvidersList(AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/replicate/search') then HandleReplicateSearch(ARequest, AResponse)
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/replicate/model') then HandleReplicateModel(ARequest, AResponse)
     else if (Copy(Doc, 1, 14) = '/v1/workflows/') then HandleWorkflowItem(Doc, ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/vault') then HandleVaultSearch(ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Copy(Doc, 1, 10) = '/v1/vault/') then HandleVaultGet(Doc, AResponse)
@@ -7784,6 +7794,80 @@ begin
   finally
     Root.Free;
     Seen.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleProvidersList(AResp: TIdHTTPResponseInfo);
+{ Configured providers (name/kind/model) for the llm node's provider picker.
+  No API keys -- names + default models only. }
+var
+  Root, O: TJsonObject; Arr: TJsonArray; i: Integer;
+begin
+  Root := TJsonObject.Create;
+  try
+    Arr := TJsonArray.Create;
+    for i := 0 to High(FCfg.Providers) do
+    begin
+      O := TJsonObject.Create;
+      O.PutStr('name',  FCfg.Providers[i].Name);
+      O.PutStr('kind',  FCfg.Providers[i].Kind);
+      O.PutStr('model', FCfg.Providers[i].Model);
+      Arr.AddObject(O);
+    end;
+    Root.PutArray('providers', Arr);
+    Root.PutStr('default', FCfg.DefaultProvider);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleReplicateSearch(ARequest: TIdHTTPRequestInfo;
+  AResp: TIdHTTPResponseInfo);
+{ Proxy replicate__search through the MCP bridge for the model picker. Returns
+  the raw structured result for the UI to parse. }
+var
+  Q, Text, JSON, Err: string; Root: TJsonObject;
+begin
+  Q := Trim(ARequest.Params.Values['q']);
+  if Q = '' then begin WriteJSON(AResp, 400, '{"error":"missing q"}'); Exit; end;
+  Root := TJsonObject.Create;
+  try
+    if MCPCallStructured('replicate__search', '{"query":' + JsonStr(Q) + '}', Text, JSON, Err) then
+    begin
+      Root.PutBool('ok', True);
+      if JSON <> '' then Root.PutRaw('result', JSON) else Root.PutStr('text', Text);
+    end
+    else begin Root.PutBool('ok', False); Root.PutStr('error', Err); end;
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleReplicateModel(ARequest: TIdHTTPRequestInfo;
+  AResp: TIdHTTPResponseInfo);
+{ Proxy replicate__get_models -> the model incl its latest_version id and
+  openapi input schema, for building the input form. }
+var
+  Owner, Name, Text, JSON, Err: string; Root: TJsonObject;
+begin
+  Owner := Trim(ARequest.Params.Values['owner']);
+  Name  := Trim(ARequest.Params.Values['name']);
+  if (Owner = '') or (Name = '') then begin WriteJSON(AResp, 400, '{"error":"missing owner/name"}'); Exit; end;
+  Root := TJsonObject.Create;
+  try
+    if MCPCallStructured('replicate__get_models',
+         '{"model_owner":' + JsonStr(Owner) + ',"model_name":' + JsonStr(Name) + '}',
+         Text, JSON, Err) then
+    begin
+      Root.PutBool('ok', True);
+      if JSON <> '' then Root.PutRaw('result', JSON) else Root.PutStr('text', Text);
+    end
+    else begin Root.PutBool('ok', False); Root.PutStr('error', Err); end;
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
   end;
 end;
 

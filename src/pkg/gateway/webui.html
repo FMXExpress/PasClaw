@@ -1011,8 +1011,11 @@
         </div>
         <label style="font-size:11px;opacity:.7">id</label>
         <input id="wfInspId">
-        <label style="font-size:11px;opacity:.7">args (JSON)</label>
-        <textarea id="wfInspArgs" rows="12" style="font-family:monospace;font-size:12px"></textarea>
+        <div id="wfInspBody" style="display:flex;flex-direction:column;gap:6px"></div>
+        <details id="wfInspRawWrap" style="margin-top:4px">
+          <summary style="font-size:11px;opacity:.7;cursor:pointer">raw args (JSON)</summary>
+          <textarea id="wfInspArgs" rows="10" style="width:100%;font-family:monospace;font-size:12px"></textarea>
+        </details>
       </div>
     </div>
   </div>
@@ -4064,7 +4067,152 @@ function wfSelect(id) {
   document.getElementById("wfInspTool").textContent = n.tool;
   document.getElementById("wfInspId").value = n.id;
   document.getElementById("wfInspArgs").value = n.args;
+  const body = document.getElementById("wfInspBody");
+  body.innerHTML = "";
+  if (n.tool === "llm") wfRenderLlmForm(body, n);
+  else if (n.tool === "replicate") wfRenderReplicateForm(body, n);
+  // Raw JSON is the primary editor only for tools without a custom form.
+  document.getElementById("wfInspRawWrap").open = (n.tool !== "llm" && n.tool !== "replicate");
   wfRender();
+}
+
+// ----- inspector form helpers -----
+function wfParseArgs(n) { try { return JSON.parse(n.args || "{}"); } catch (e) { return {}; } }
+function wfSetArgs(n, obj) {
+  n.args = JSON.stringify(obj, null, 2);
+  if (wf.sel === n.id) document.getElementById("wfInspArgs").value = n.args;
+}
+function wfField(label, el) {
+  const d = document.createElement("label");
+  d.style.cssText = "font-size:11px;opacity:.75;display:flex;flex-direction:column;gap:2px";
+  d.appendChild(document.createTextNode(label)); d.appendChild(el);
+  return d;
+}
+
+async function wfRenderLlmForm(body, n) {
+  const cur = wfParseArgs(n);
+  if (!wf.providers) {
+    try { wf.providers = await (await gwFetch("/v1/providers")).json(); }
+    catch (e) { wf.providers = { providers: [] }; }
+  }
+  const provs = wf.providers.providers || [];
+  const sel = document.createElement("select");
+  sel.innerHTML = '<option value="">(default provider)</option>' +
+    provs.map(p => `<option value="${escapeHtml(p.name)}">${escapeHtml(p.name)}${p.model ? " — " + escapeHtml(p.model) : ""}</option>`).join("");
+  sel.value = cur.provider || "";
+  const model = document.createElement("input");
+  model.value = cur.model || ""; model.placeholder = "model (blank = provider default)";
+  const prompt = document.createElement("textarea");
+  prompt.rows = 5; prompt.value = cur.prompt || "";
+  prompt.placeholder = "prompt — use {{inputs.x}} / {{nodes.id}}"; prompt.style.fontFamily = "inherit";
+  // Track whether the model field holds an auto-filled default or a value the
+  // user typed. Only auto-filled defaults get replaced when the provider
+  // changes, so switching providers doesn't leave the previous one's model.
+  let modelAuto = !cur.model;
+  const upd = () => wfSetArgs(n, { provider: sel.value, model: model.value, prompt: prompt.value });
+  sel.addEventListener("change", () => {
+    const p = provs.find(x => x.name === sel.value);
+    if (modelAuto) model.value = (p && p.model) || "";
+    upd();
+  });
+  model.addEventListener("input", () => { modelAuto = false; upd(); });
+  prompt.addEventListener("input", upd);
+  body.appendChild(wfField("provider", sel));
+  body.appendChild(wfField("model", model));
+  body.appendChild(wfField("prompt", prompt));
+}
+
+function wfExtractModels(j) {
+  let r = (j && j.result) || j || {};
+  r = r.structuredContent || r;
+  const arr = r.models || r.results || [];
+  return arr.map(x => { const m = x.model || x; return { owner: m.owner, name: m.name, description: m.description, version: (m.latest_version && m.latest_version.id) || m.version }; })
+            .filter(m => m.owner && m.name);
+}
+
+function wfRenderReplicateForm(body, n) {
+  const cur = wfParseArgs(n);
+  const sbox = document.createElement("input"); sbox.placeholder = "search Replicate models…";
+  const sbtn = document.createElement("button"); sbtn.textContent = "Search";
+  const srow = document.createElement("div"); srow.style.cssText = "display:flex;gap:4px"; srow.appendChild(sbox); srow.appendChild(sbtn);
+  const results = document.createElement("div"); results.style.cssText = "display:flex;flex-direction:column;gap:2px;max-height:130px;overflow:auto";
+  const formArea = document.createElement("div"); formArea.style.cssText = "display:flex;flex-direction:column;gap:5px;border-top:1px solid var(--border,#333);padding-top:5px";
+  body.appendChild(srow); body.appendChild(results); body.appendChild(formArea);
+  const doSearch = async () => {
+    const q = sbox.value.trim(); if (!q) return;
+    results.innerHTML = '<span style="opacity:.6;font-size:11px">searching…</span>';
+    try {
+      const j = await (await gwFetch("/v1/replicate/search?q=" + encodeURIComponent(q))).json();
+      const models = wfExtractModels(j);
+      results.innerHTML = models.length ? "" : '<span style="opacity:.6;font-size:11px">no results (is the Replicate MCP connected + authorized?)</span>';
+      models.slice(0, 12).forEach(m => {
+        const b = document.createElement("button"); b.style.cssText = "text-align:left;font-size:11px";
+        b.textContent = m.owner + "/" + m.name; b.title = m.description || "";
+        b.addEventListener("click", () => wfPickModel(m, n, formArea));
+        results.appendChild(b);
+      });
+    } catch (e) { results.innerHTML = '<span style="opacity:.6;font-size:11px">search failed: ' + escapeHtml(String(e)) + "</span>"; }
+  };
+  sbtn.addEventListener("click", doSearch);
+  sbox.addEventListener("keydown", e => { if (e.key === "Enter") { e.preventDefault(); doSearch(); } });
+  if (cur.version) {
+    const p = document.createElement("div"); p.style.cssText = "font-size:11px;opacity:.7";
+    p.textContent = "current version: " + cur.version + " — search to change the model/fields";
+    formArea.appendChild(p);
+  }
+}
+
+async function wfPickModel(m, n, formArea) {
+  formArea.innerHTML = '<span style="opacity:.6;font-size:11px">loading ' + escapeHtml(m.owner + "/" + m.name) + "…</span>";
+  let schema = null, version = m.version;
+  try {
+    const j = await (await gwFetch("/v1/replicate/model?owner=" + encodeURIComponent(m.owner) + "&name=" + encodeURIComponent(m.name))).json();
+    let r = (j && j.result) || j || {}; r = r.structuredContent || r;
+    const lv = r.latest_version || (r.model && r.model.latest_version) || {};
+    version = lv.id || version;
+    schema = lv.openapi_schema && lv.openapi_schema.components && lv.openapi_schema.components.schemas && lv.openapi_schema.components.schemas.Input;
+  } catch (e) {}
+  wfRenderModelForm(formArea, n, m, version, schema);
+}
+
+function wfRenderModelForm(formArea, n, m, version, schema) {
+  formArea.innerHTML = "";
+  const title = document.createElement("div"); title.style.cssText = "font-size:11px;opacity:.85;font-weight:600";
+  title.textContent = m.owner + "/" + m.name + (version ? " @ " + String(version).slice(0, 8) : "");
+  formArea.appendChild(title);
+  const curInput = (wfParseArgs(n).input) || {};
+  const props = (schema && schema.properties) || {};
+  const req = (schema && schema.required) || [];
+  const keys = Object.keys(props).sort((a, b) => ((props[a]["x-order"] || 0) - (props[b]["x-order"] || 0)));
+  const fields = {};
+  if (!keys.length) {
+    const w = document.createElement("div"); w.style.cssText = "font-size:11px;opacity:.6";
+    w.textContent = "no input schema — set inputs in raw args"; formArea.appendChild(w);
+  }
+  keys.forEach(k => {
+    const p = props[k]; let el;
+    if (p.enum) { el = document.createElement("select"); el.innerHTML = p.enum.map(v => `<option>${escapeHtml(String(v))}</option>`).join(""); }
+    else if (p.type === "boolean") { el = document.createElement("input"); el.type = "checkbox"; }
+    else if (p.type === "integer" || p.type === "number") { el = document.createElement("input"); el.type = "number"; }
+    else { el = document.createElement("input"); el.type = "text"; }
+    const init = (k in curInput) ? curInput[k] : p.default;
+    if (el.type === "checkbox") el.checked = !!init; else if (init !== undefined && init !== null) el.value = init;
+    if (p.description) el.title = p.description;
+    fields[k] = { el, p };
+    formArea.appendChild(wfField(k + (req.includes(k) ? " *" : ""), el));
+    el.addEventListener("input", collect); el.addEventListener("change", collect);
+  });
+  function collect() {
+    const input = {};
+    Object.keys(fields).forEach(k => {
+      const { el, p } = fields[k]; let v = el.type === "checkbox" ? el.checked : el.value;
+      if (v === "" || v === undefined) return;
+      if (p.type === "integer") v = parseInt(v, 10); else if (p.type === "number") v = parseFloat(v);
+      input[k] = v;
+    });
+    wfSetArgs(n, { version: version, input: input });
+  }
+  collect();
 }
 
 function wfRender() {
