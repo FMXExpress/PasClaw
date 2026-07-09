@@ -253,6 +253,39 @@ begin
   Result := True;
 end;
 
+{ Real Replicate MCP shape: the prediction JSON is returned as a STRING in a
+  text content block -- ResultText is the payload, ResultJSON is the wrapper. }
+function TextBlockStub(const ToolName, ArgsJSON: string;
+  out ResultText, ResultJSON, ErrMsg: string): Boolean;
+begin
+  ResultJSON := '{"content":[{"type":"text","text":"..."}]}';   { wrapper (no top-level id) }
+  ErrMsg := '';
+  if ToolName = 'replicate__create_predictions' then
+    ResultText := '{"id":"p9","status":"starting","output":null}'
+  else
+  begin
+    Inc(GReplPoll);
+    if GReplPoll >= 2 then
+      ResultText := '{"id":"p9","status":"succeeded","output":["https://x/tb.png"]}'
+    else
+      ResultText := '{"id":"p9","status":"processing","output":null}';
+  end;
+  Result := True;
+end;
+
+procedure TestReplicateTextBlockUnwrap;
+var Spec: TWorkflowSpec; Err: string; Res: TWorkflowNodeResultArray;
+begin
+  GReplPoll := 0;
+  ParseWorkflow('{"name":"tb","inputs":[{"name":"prompt","required":true}],' +
+    '"nodes":[{"id":"gen","tool":"replicate","args":{"input":{"prompt":"{{inputs.prompt}}"}}}]}', Spec, Err);
+  Check(RunWorkflow(Spec, '{"prompt":"a horse"}', TextBlockStub, Res, Err),
+        'textblock: run succeeds -- {{self.id}} resolves from the text-block payload (' + Err + ')');
+  Check(GReplPoll >= 2, 'textblock: polled to completion');
+  Check((Length(Res) = 1) and (Res[0].Text = 'https://x/tb.png'),
+        'textblock: node output is the finished URL (got "' + Res[0].Text + '")');
+end;
+
 procedure TestReplicateAbortedFailsFast;
 var Spec: TWorkflowSpec; Err: string; Res: TWorkflowNodeResultArray;
 begin
@@ -330,6 +363,7 @@ begin
   TestRunChains;
   TestAwaitPolling;
   TestReplicateNode;
+  TestReplicateTextBlockUnwrap;
   TestReplicateAbortedFailsFast;
   TestRawCreateAutoPolls;
   TestDispatchRouting;

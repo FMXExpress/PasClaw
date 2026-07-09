@@ -382,6 +382,10 @@ type
     procedure HandleProvidersList(AResp: TIdHTTPResponseInfo);
     procedure HandleReplicateSearch(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
     procedure HandleReplicateModel(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
+    { Resolve a registered MCP tool by its bare suffix (after "server__"),
+      preferring a server whose name contains "replicate". '' if none -- so the
+      replicate endpoints work whatever the operator named the MCP server. }
+    function FindMCPToolBySuffix(const Suffix: string): string;
     { GET /v1/providers/catalog -- the static provider catalog (names, default
       base/model, auth requirement) so the web onboarding wizard can offer a
       provider picker without hardcoding the list client-side. No secrets. }
@@ -7822,23 +7826,51 @@ begin
   end;
 end;
 
+function TGatewayServer.FindMCPToolBySuffix(const Suffix: string): string;
+var
+  Names: TStringArray; i: Integer; Suff, Lower: string;
+begin
+  Result := '';
+  if FRegistry = nil then Exit;
+  Suff := LowerCase('__' + Suffix);
+  Names := FRegistry.Names;
+  for i := 0 to High(Names) do
+  begin
+    Lower := LowerCase(Names[i]);
+    if (Length(Lower) > Length(Suff)) and
+       (Copy(Lower, Length(Lower) - Length(Suff) + 1, Length(Suff)) = Suff) then
+    begin
+      if Pos('replicate', Lower) > 0 then Exit(Names[i]);  { prefer a replicate server }
+      if Result = '' then Result := Names[i];              { else first match }
+    end;
+  end;
+end;
+
 procedure TGatewayServer.HandleReplicateSearch(ARequest: TIdHTTPRequestInfo;
   AResp: TIdHTTPResponseInfo);
-{ Proxy replicate__search through the MCP bridge for the model picker. Returns
-  the raw structured result for the UI to parse. }
+{ Proxy the Replicate search tool for the model picker. Returns the UNWRAPPED
+  payload (Replicate returns its data as a JSON string in a text block, so the
+  raw MCP result is a wrapper). }
 var
-  Q, Text, JSON, Err: string; Root: TJsonObject;
+  Q, Tool, Text, JSON, Err: string; Root: TJsonObject;
 begin
   Q := Trim(ARequest.Params.Values['q']);
   if Q = '' then begin WriteJSON(AResp, 400, '{"error":"missing q"}'); Exit; end;
+  Tool := FindMCPToolBySuffix('search');
   Root := TJsonObject.Create;
   try
-    if MCPCallStructured('replicate__search', '{"query":' + JsonStr(Q) + '}', Text, JSON, Err) then
+    if Tool = '' then
+    begin
+      Root.PutBool('ok', False);
+      Root.PutStr('error', 'no MCP "*__search" tool registered -- is the Replicate MCP connected & authorized?');
+    end
+    else if MCPCallStructured(Tool, '{"query":' + JsonStr(Q) + '}', Text, JSON, Err) then
     begin
       Root.PutBool('ok', True);
-      if JSON <> '' then Root.PutRaw('result', JSON) else Root.PutStr('text', Text);
+      Root.PutStr('tool', Tool);
+      Root.PutRaw('result', UnwrapResult(JSON, Text));
     end
-    else begin Root.PutBool('ok', False); Root.PutStr('error', Err); end;
+    else begin Root.PutBool('ok', False); Root.PutStr('tool', Tool); Root.PutStr('error', Err); end;
     WriteJSON(AResp, 200, Root.ToJSON);
   finally
     Root.Free;
@@ -7847,24 +7879,32 @@ end;
 
 procedure TGatewayServer.HandleReplicateModel(ARequest: TIdHTTPRequestInfo;
   AResp: TIdHTTPResponseInfo);
-{ Proxy replicate__get_models -> the model incl its latest_version id and
-  openapi input schema, for building the input form. }
+{ Proxy the Replicate get-models tool -> the model incl latest_version id and
+  openapi input schema, for building the input form. Returns the unwrapped
+  payload (see HandleReplicateSearch). }
 var
-  Owner, Name, Text, JSON, Err: string; Root: TJsonObject;
+  Owner, Name, Tool, Text, JSON, Err: string; Root: TJsonObject;
 begin
   Owner := Trim(ARequest.Params.Values['owner']);
   Name  := Trim(ARequest.Params.Values['name']);
   if (Owner = '') or (Name = '') then begin WriteJSON(AResp, 400, '{"error":"missing owner/name"}'); Exit; end;
+  Tool := FindMCPToolBySuffix('get_models');
   Root := TJsonObject.Create;
   try
-    if MCPCallStructured('replicate__get_models',
+    if Tool = '' then
+    begin
+      Root.PutBool('ok', False);
+      Root.PutStr('error', 'no MCP "*__get_models" tool registered');
+    end
+    else if MCPCallStructured(Tool,
          '{"model_owner":' + JsonStr(Owner) + ',"model_name":' + JsonStr(Name) + '}',
          Text, JSON, Err) then
     begin
       Root.PutBool('ok', True);
-      if JSON <> '' then Root.PutRaw('result', JSON) else Root.PutStr('text', Text);
+      Root.PutStr('tool', Tool);
+      Root.PutRaw('result', UnwrapResult(JSON, Text));
     end
-    else begin Root.PutBool('ok', False); Root.PutStr('error', Err); end;
+    else begin Root.PutBool('ok', False); Root.PutStr('tool', Tool); Root.PutStr('error', Err); end;
     WriteJSON(AResp, 200, Root.ToJSON);
   finally
     Root.Free;

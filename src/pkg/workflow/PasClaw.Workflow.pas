@@ -136,6 +136,14 @@ function ValidateWorkflow(const Spec: TWorkflowSpec;
   when the path does not resolve. }
 function EvalSelector(const JSON, Selector: string; out Value: string): Boolean;
 
+{ Normalize an MCP tool result to its payload object for selector use. MCP
+  servers return a tool's data three ways: as top-level JSON, under
+  structuredContent, or (Replicate) as a JSON STRING inside a text content
+  block. When the flattened Text is itself a JSON object, that IS the payload,
+  so return it -- otherwise id/status/output live buried in content[].text and
+  selectors like self.id never resolve. Falls back to RawJSON. }
+function UnwrapResult(const RawJSON, Text: string): string;
+
 { Resolve inputs.* / nodes.* double-brace templates in ArgsTemplate against the
   provided input values and prior node results. Missing references become an
   error (Err set, Result=False) rather than a silent empty string. }
@@ -730,6 +738,23 @@ end;
 
 { ---------- run ---------- }
 
+function UnwrapResult(const RawJSON, Text: string): string;
+var T: string; Obj: TJsonObject;
+begin
+  Result := RawJSON;
+  T := Trim(Text);
+  { Replicate (and many MCP servers) return the payload as a JSON object string
+    in a text content block, so the flattened Text IS the payload. Prefer it
+    when it parses as an object -- otherwise the wrapper's top level has no
+    id/status/output and selectors miss. }
+  if (T <> '') and (T[1] = '{') then
+  begin
+    Obj := nil;
+    try Obj := TJsonObject.Parse(T); except Obj := nil; end;
+    if Obj <> nil then begin Obj.Free; Exit(T); end;
+  end;
+end;
+
 function InStrArray(const S: string; const A: array of string): Boolean;
 var k: Integer;
 begin
@@ -761,6 +786,7 @@ begin
     if not ResolveArgs(A.PollArgsJSON, InputsJSON, CreateJSON, Prior, PollArgs, Err) then Exit;
     if not Caller(A.PollTool, PollArgs, PText, PJSON, CErr) then
     begin Err := 'await: poll call failed: ' + CErr; Exit; end;
+    PJSON := UnwrapResult(PJSON, PText);   { reach into a text-block payload }
     if not EvalSelector(PJSON, A.StatusSelector, Status) then
     begin Err := Format('await: status selector "%s" did not resolve in poll result', [A.StatusSelector]); Exit; end;
     if InStrArray(Status, A.Success) then
@@ -863,6 +889,9 @@ begin
       NR.Tool   := Spec.Nodes[ni].Tool;   { report the authored tool (e.g. "replicate") }
       NR.Ok     := Caller(EffTool, ResolvedArgs, Text, JSON, CallErr);
       NR.Text   := Text;
+      { Normalize a text-block payload so downstream node selectors and the
+        poll's self.id select against the actual object, not the wrapper. }
+      JSON      := UnwrapResult(JSON, Text);
       NR.JSON   := JSON;
       NR.Error  := CallErr;
 
@@ -870,7 +899,7 @@ begin
         stored result is the COMPLETED output that downstream nodes select on. }
       if NR.Ok and Aw.Enabled then
       begin
-        CreateJSON := JSON;   { distinct from the out params -- no aliasing }
+        CreateJSON := JSON;   { unwrapped create result -- self.id resolves }
         if PollUntilDone(Aw, CreateJSON, InputsJSON, Results,
                          Caller, FinalText, FinalJSON, CallErr) then
         begin
