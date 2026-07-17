@@ -80,6 +80,13 @@ and CI turns those exes into the two setup installers.
    Inno Setup via Chocolatey, runs `iscc` with the matching `/DArch` + version,
    and uploads `PasClaw-<version>-x64-setup.exe` /
    `PasClaw-<version>-x86-setup.exe` back to the same release.
+4. Because the Delphi build is self-contained, the same exe is also a working
+   no-installer binary. The job re-publishes it as
+   `PasClaw-<version>-x64-portable.exe` (and `-x86-`) and **removes the raw
+   `PasClaw-x64.exe` / `PasClaw-x86.exe` upload name**, so the finished release
+   lists intentional downloads (setup + portable) instead of the CI input. A
+   re-run can still find the binary — it falls back to the portable asset when
+   the raw name is gone.
 
 ### Linux tarballs (fully in CI)
 

@@ -67,11 +67,23 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          $tag = '${{ needs.meta.outputs.tag }}'
+          $ver = '${{ needs.meta.outputs.version }}'
           New-Item -ItemType Directory -Force bin | Out-Null
-          foreach ($a in @('PasClaw-x64.exe','PasClaw-x86.exe')) {
-            gh release download '${{ needs.meta.outputs.tag }}' -p $a -D bin
-            if (Test-Path "bin/$a") { Write-Host "got $a" }
-            else { Write-Host "::warning::$a is not attached to the release -- skipping that arch" }
+          # For each arch: prefer the raw upload name you attach (PasClaw-x64.exe),
+          # but fall back to a previously-published portable asset so a re-run
+          # still works after this job renamed the raw input away.
+          foreach ($arch in @('x64','x86')) {
+            $input    = "PasClaw-$arch.exe"
+            $portable = "PasClaw-$ver-$arch-portable.exe"
+            $local    = "bin/PasClaw-$arch.exe"
+            gh release download $tag -p $input -D bin 2>$null
+            if (-not (Test-Path $local)) {
+              gh release download $tag -p $portable -D bin 2>$null
+              if (Test-Path "bin/$portable") { Move-Item "bin/$portable" $local }
+            }
+            if (Test-Path $local) { Write-Host "got $arch" }
+            else { Write-Host "::warning::no $arch binary attached (PasClaw-$arch.exe) -- skipping that arch" }
           }
           if (-not (Test-Path bin\PasClaw-x64.exe) -and -not (Test-Path bin\PasClaw-x86.exe)) {
             throw "neither PasClaw-x64.exe nor PasClaw-x86.exe was attached to the release"
@@ -104,6 +116,28 @@ jobs:
           $files = Get-ChildItem installer\Output\*.exe | ForEach-Object { $_.FullName }
           if ($files) { gh release upload '${{ needs.meta.outputs.tag }}' @files --clobber }
           else { throw "no installers were produced" }
+
+      - name: Publish the self-contained exe as a portable download
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # The Delphi build is self-contained, so the raw exe is a working
+          # no-installer PasClaw. Re-publish it under a clear, versioned name and
+          # remove the raw upload name so the release lists intentional downloads
+          # (setup + portable) rather than the CI input.
+          $tag = '${{ needs.meta.outputs.tag }}'
+          $ver = '${{ needs.meta.outputs.version }}'
+          foreach ($arch in @('x64','x86')) {
+            $local    = "bin/PasClaw-$arch.exe"
+            $portable = "PasClaw-$ver-$arch-portable.exe"
+            if (Test-Path $local) {
+              Copy-Item $local $portable -Force
+              gh release upload $tag $portable --clobber
+              # Drop the raw input name (ignore if it wasn't attached, e.g. a re-run).
+              gh release delete-asset $tag "PasClaw-$arch.exe" --yes 2>$null
+            }
+          }
 
   # --- Linux: compile with FPC and ship a self-contained tarball ------------
   # Runs inside debian:bookworm because that is the exact apt package layout
