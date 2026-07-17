@@ -81,17 +81,27 @@ and CI turns those exes into the two setup installers.
    and uploads `PasClaw-<version>-x64-setup.exe` /
    `PasClaw-<version>-x86-setup.exe` back to the same release.
 
-### Linux tarball (fully in CI)
+### Linux tarballs (fully in CI)
 
 Free Pascal has no license gate, so the hosted runner **compiles the Linux
-binary from source itself** — nothing to upload by hand. The job builds inside
-`debian:bookworm` (the exact apt layout the `Makefile` targets, same as
-`docker/Dockerfile`), then assembles a self-contained
-`pasclaw-<version>-linux-x86_64.tar.gz` containing the `pasclaw` binary,
-bundled OpenSSL 1.0.2 (`libssl`/`libcrypto`, `RPATH=$ORIGIN` — Indy's TLS needs
-1.0.x, which modern distros no longer ship), `LICENSE`, `README.md`, and
-`docs/`. The only runtime dependency left is `libsqlite3` (present on virtually
-every Linux install; `apt install libsqlite3-0` otherwise).
+binaries from source itself** — nothing to upload by hand. A matrix builds both
+architectures on native runners (no cross toolchain):
+
+| Tarball | Runner |
+|---------|--------|
+| `pasclaw-<version>-linux-x86_64.tar.gz`  | `ubuntu-latest` (x64) |
+| `pasclaw-<version>-linux-aarch64.tar.gz` | `ubuntu-24.04-arm` (arm64) |
+
+Each job builds inside `debian:bookworm` (the exact apt layout the `Makefile`
+targets, same as `docker/Dockerfile`; the container auto-pulls the runner's
+arch), then assembles a self-contained tarball containing the `pasclaw` binary,
+arch-matched bundled OpenSSL 1.0.2 (`libssl`/`libcrypto`, `RPATH=$ORIGIN` —
+Indy's TLS needs 1.0.x, which modern distros no longer ship), `LICENSE`,
+`README.md`, and `docs/`. The only runtime dependency left is `libsqlite3`
+(present on virtually every Linux install; `apt install libsqlite3-0`
+otherwise).
+
+> The `ubuntu-24.04-arm` runner is free for public repositories.
 
 To (re-)produce artifacts for an existing release, run the workflow manually
 ("Run workflow") and pass its tag.

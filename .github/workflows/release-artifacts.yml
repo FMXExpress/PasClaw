@@ -110,7 +110,22 @@ jobs:
   # the Makefile targets (same environment as docker/Dockerfile's builder).
   linux-tarball:
     needs: meta
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # x86-64: hosted x64 runner.
+          - runner: ubuntu-latest
+            debarch: amd64      # dpkg arch of the OpenSSL .deb
+            tarch: x86_64       # tarball name suffix (uname -m style)
+          # ARM64: hosted arm64 runner (free for public repos). The
+          # debian:bookworm container auto-pulls its arm64 variant, so apt
+          # gives us an arm64 FPC + the arm64 unit tree -- native build, no
+          # cross toolchain.
+          - runner: ubuntu-24.04-arm
+            debarch: arm64
+            tarch: aarch64
+    runs-on: ${{ matrix.runner }}
     container: debian:bookworm
     env:
       # bookworm's lazarus-src installs to /usr/lib/lazarus/2.2.6/, not the
@@ -144,9 +159,9 @@ jobs:
       - name: Assemble the self-contained tarball
         run: |
           set -e
-          out="pasclaw-${{ needs.meta.outputs.version }}-linux-x86_64"
-          # Fetch OpenSSL 1.0.2 so TLS works out of the box (Indy dlopen).
-          url="https://snapshot.debian.org/archive/debian-archive/${OPENSSL_SNAPSHOT}/debian-security/pool/updates/main/o/openssl1.0/libssl1.0.2_${OPENSSL_DEB_VERSION}_amd64.deb"
+          out="pasclaw-${{ needs.meta.outputs.version }}-linux-${{ matrix.tarch }}"
+          # Fetch OpenSSL 1.0.2 (arch-matched) so TLS works out of the box (Indy dlopen).
+          url="https://snapshot.debian.org/archive/debian-archive/${OPENSSL_SNAPSHOT}/debian-security/pool/updates/main/o/openssl1.0/libssl1.0.2_${OPENSSL_DEB_VERSION}_${{ matrix.debarch }}.deb"
           curl -fsSL --retry 3 --max-time 120 "$url" -o /tmp/libssl.deb
           mkdir -p /tmp/ossl
           dpkg-deb -x /tmp/libssl.deb /tmp/ossl
@@ -166,4 +181,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.meta.outputs.tag }}
-          files: pasclaw-*-linux-x86_64.tar.gz
+          files: pasclaw-${{ needs.meta.outputs.version }}-linux-${{ matrix.tarch }}.tar.gz
