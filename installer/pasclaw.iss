@@ -175,13 +175,13 @@ var
 begin
   if CurUninstallStep = usUninstall then
   begin
-    { The install added {app} to exactly one hive (HKLM for an admin install,
-      HKCU otherwise), but at uninstall we can't reliably tell which: Inno's
-      IsAdminInstallMode reflects the uninstaller's own elevation token, which
-      an admin deployment tool can flip relative to install time. Rather than
-      persist the mode and second-guess it, clean both hives -- each call
-      no-ops when {app} isn't on that hive's PATH, so the real entry is removed
-      and never orphaned. }
+    { The install added the app dir to exactly one hive (HKLM for an admin
+      install, HKCU otherwise), but at uninstall we can't reliably tell which:
+      Inno's IsAdminInstallMode reflects the uninstaller's own elevation token,
+      which an admin deployment tool can flip relative to install time. Rather
+      than persist the mode and second-guess it, clean both hives -- each call
+      no-ops when the dir isn't on that hive's PATH, so the real entry is
+      removed and never orphaned. }
     Dir := ExpandConstant('{app}');
     RemoveDirFromPathIn(HKEY_LOCAL_MACHINE, EnvHKLMKey, Dir);
     RemoveDirFromPathIn(HKEY_CURRENT_USER, EnvHKCUKey, Dir);
