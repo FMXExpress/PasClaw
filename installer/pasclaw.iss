@@ -69,12 +69,16 @@ WizardStyle=modern
 ChangesEnvironment=yes
 UninstallDisplayIcon={app}\{#MyAppExe}
 #if Arch == "x64"
-; 64-bit installer: only on 64-bit Windows, installs to the real Program Files.
-ArchitecturesAllowed=x64
-ArchitecturesInstallIn64BitMode=x64
+; 64-bit installer. "x64compatible" (Inno Setup 6.3+) also lets this native
+; x64 build install and run on Windows on ARM via the OS's built-in x64
+; emulation -- not just on native x64 Windows. Delphi has no Windows-ARM64
+; target, so this emulated x64 build is how PasClaw runs on ARM. Installs to
+; the real 64-bit Program Files.
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 #else
-; 32-bit installer: runs on 32- and 64-bit Windows, installs to Program Files (x86).
-ArchitecturesAllowed=x86
+; 32-bit installer: runs on 32-bit Windows and as a 32-bit app on x64/ARM64.
+ArchitecturesAllowed=x86compatible
 #endif
 
 [Languages]

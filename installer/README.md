@@ -14,6 +14,13 @@ So the installer ships just the exe plus `LICENSE`, `README.md`, and `docs\`. Th
 
 There is a **separate installer per architecture** — `PasClaw-<version>-x64-setup.exe` and `PasClaw-<version>-x86-setup.exe`.
 
+**Windows on ARM:** the x64 installer is marked `x64compatible`, so it also
+installs and runs on Windows on ARM through the OS's built-in x64 emulation.
+Delphi has no native Windows-ARM64 compiler target, so this emulated x64 build
+is how PasClaw runs on ARM — there's no separate ARM64 installer. (The
+`x64compatible` / `x86compatible` identifiers require **Inno Setup 6.3 or
+newer**.)
+
 ## Build
 
 1. Build the Release binary for each target in RAD Studio (or `dcc`), so they land at:
