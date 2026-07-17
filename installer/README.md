@@ -46,6 +46,34 @@ There is a **separate installer per architecture** — `PasClaw-<version>-x64-se
 
 Both installers share one `AppId`, so they're the same application — installing the x86 build over an x64 install (or vice versa) upgrades in place rather than creating a duplicate.
 
+## Packaging in CI (hybrid: you build, CI packages)
+
+GitHub's hosted runners can't run Delphi (no license), but they *can* run Inno
+Setup. So the split is: **you** compile the self-contained `PasClaw.exe` locally
+with Delphi, and CI (`.github/workflows/windows-installer.yml`) turns those exes
+into the two setup installers.
+
+Flow:
+
+1. Build the Release binaries locally (Win64 and/or Win32), as above.
+2. Create a GitHub **Release** (tag like `v0.2.0`) and attach the binaries,
+   named **exactly**:
+
+   | Attach this file | From this build |
+   |------------------|-----------------|
+   | `PasClaw-x64.exe` | `build\delphi\Win64\Release\PasClaw.exe` |
+   | `PasClaw-x86.exe` | `build\delphi\Win32\Release\PasClaw.exe` |
+
+   Attaching just one arch is fine — CI packages whatever is present and warns
+   about the missing one.
+3. Publishing the release triggers the workflow. It downloads those exes,
+   installs Inno Setup via Chocolatey, runs `iscc` with the matching
+   `/DArch` + version, and uploads the results back to the same release:
+   `PasClaw-<version>-x64-setup.exe` and `PasClaw-<version>-x86-setup.exe`.
+
+To re-package an existing release, run the workflow manually ("Run workflow")
+and pass its tag.
+
 ## What the installer does
 
 - Installs to `Program Files\PasClaw` (per-machine, admin) or the per-user
