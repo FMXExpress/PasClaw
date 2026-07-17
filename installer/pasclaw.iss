@@ -121,13 +121,13 @@ begin
   else Result := EnvHKCUKey;
 end;
 
-{ Case-insensitive check for the app dir already being on PATH. }
-function DirOnPath(const Dir: string): Boolean;
+{ Case-insensitive check for the app dir already being on PATH in one hive. }
+function DirOnPathIn(Root: Integer; const SubKey, Dir: string): Boolean;
 var
   Cur: string;
 begin
   Result := False;
-  if not RegQueryStringValue(PathRootKey, PathSubKey, 'Path', Cur) then Exit;
+  if not RegQueryStringValue(Root, SubKey, 'Path', Cur) then Exit;
   Result := Pos(';' + Uppercase(RemoveBackslash(Dir)) + ';',
                 ';' + Uppercase(Cur) + ';') > 0;
 end;
@@ -136,18 +136,23 @@ procedure AddDirToPath(const Dir: string);
 var
   Cur: string;
 begin
-  if DirOnPath(Dir) then Exit;
+  { Install-time: IsAdminInstallMode is authoritative, so add to just the one
+    hive that matches this install's scope. }
+  if DirOnPathIn(PathRootKey, PathSubKey, Dir) then Exit;
   if not RegQueryStringValue(PathRootKey, PathSubKey, 'Path', Cur) then Cur := '';
   if (Cur <> '') and (Copy(Cur, Length(Cur), 1) <> ';') then Cur := Cur + ';';
   RegWriteExpandStringValue(PathRootKey, PathSubKey, 'Path', Cur + RemoveBackslash(Dir));
 end;
 
-procedure RemoveDirFromPath(const Dir: string);
+{ Remove Dir from the PATH stored in one hive. When Dir isn't present the
+  function exits before writing, so calling it on a hive we can only read
+  (e.g. HKLM during a non-elevated user uninstall) is a harmless no-op. }
+procedure RemoveDirFromPathIn(Root: Integer; const SubKey, Dir: string);
 var
   Cur, D, Wrapped: string;
   P: Integer;
 begin
-  if not RegQueryStringValue(PathRootKey, PathSubKey, 'Path', Cur) then Exit;
+  if not RegQueryStringValue(Root, SubKey, 'Path', Cur) then Exit;
   D := RemoveBackslash(Dir);
   Wrapped := ';' + Cur + ';';
   P := Pos(Uppercase(';' + D + ';'), Uppercase(Wrapped));
@@ -155,7 +160,7 @@ begin
   Delete(Wrapped, P, Length(D) + 1);
   if (Length(Wrapped) > 0) and (Wrapped[1] = ';') then Delete(Wrapped, 1, 1);
   if (Length(Wrapped) > 0) and (Wrapped[Length(Wrapped)] = ';') then Delete(Wrapped, Length(Wrapped), 1);
-  RegWriteExpandStringValue(PathRootKey, PathSubKey, 'Path', Wrapped);
+  RegWriteExpandStringValue(Root, SubKey, 'Path', Wrapped);
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -165,7 +170,20 @@ begin
 end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+var
+  Dir: string;
 begin
   if CurUninstallStep = usUninstall then
-    RemoveDirFromPath(ExpandConstant('{app}'));
+  begin
+    { The install added {app} to exactly one hive (HKLM for an admin install,
+      HKCU otherwise), but at uninstall we can't reliably tell which: Inno's
+      IsAdminInstallMode reflects the uninstaller's own elevation token, which
+      an admin deployment tool can flip relative to install time. Rather than
+      persist the mode and second-guess it, clean both hives -- each call
+      no-ops when {app} isn't on that hive's PATH, so the real entry is removed
+      and never orphaned. }
+    Dir := ExpandConstant('{app}');
+    RemoveDirFromPathIn(HKEY_LOCAL_MACHINE, EnvHKLMKey, Dir);
+    RemoveDirFromPathIn(HKEY_CURRENT_USER, EnvHKCUKey, Dir);
+  end;
 end;
