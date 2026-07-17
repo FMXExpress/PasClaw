@@ -46,14 +46,17 @@ There is a **separate installer per architecture** — `PasClaw-<version>-x64-se
 
 Both installers share one `AppId`, so they're the same application — installing the x86 build over an x64 install (or vice versa) upgrades in place rather than creating a duplicate.
 
-## Packaging in CI (hybrid: you build, CI packages)
+## Release artifacts in CI
+
+Publishing a GitHub Release triggers `.github/workflows/release-artifacts.yml`,
+which attaches the downloadable builds. The two platforms are handled
+differently because of tooling licenses:
+
+### Windows installers (hybrid: you build, CI packages)
 
 GitHub's hosted runners can't run Delphi (no license), but they *can* run Inno
-Setup. So the split is: **you** compile the self-contained `PasClaw.exe` locally
-with Delphi, and CI (`.github/workflows/windows-installer.yml`) turns those exes
-into the two setup installers.
-
-Flow:
+Setup. So **you** compile the self-contained `PasClaw.exe` locally with Delphi,
+and CI turns those exes into the two setup installers.
 
 1. Build the Release binaries locally (Win64 and/or Win32), as above.
 2. Create a GitHub **Release** (tag like `v0.2.0`) and attach the binaries,
@@ -66,13 +69,25 @@ Flow:
 
    Attaching just one arch is fine — CI packages whatever is present and warns
    about the missing one.
-3. Publishing the release triggers the workflow. It downloads those exes,
-   installs Inno Setup via Chocolatey, runs `iscc` with the matching
-   `/DArch` + version, and uploads the results back to the same release:
-   `PasClaw-<version>-x64-setup.exe` and `PasClaw-<version>-x86-setup.exe`.
+3. Publishing the release runs the workflow. It downloads those exes, installs
+   Inno Setup via Chocolatey, runs `iscc` with the matching `/DArch` + version,
+   and uploads `PasClaw-<version>-x64-setup.exe` /
+   `PasClaw-<version>-x86-setup.exe` back to the same release.
 
-To re-package an existing release, run the workflow manually ("Run workflow")
-and pass its tag.
+### Linux tarball (fully in CI)
+
+Free Pascal has no license gate, so the hosted runner **compiles the Linux
+binary from source itself** — nothing to upload by hand. The job builds inside
+`debian:bookworm` (the exact apt layout the `Makefile` targets, same as
+`docker/Dockerfile`), then assembles a self-contained
+`pasclaw-<version>-linux-x86_64.tar.gz` containing the `pasclaw` binary,
+bundled OpenSSL 1.0.2 (`libssl`/`libcrypto`, `RPATH=$ORIGIN` — Indy's TLS needs
+1.0.x, which modern distros no longer ship), `LICENSE`, `README.md`, and
+`docs/`. The only runtime dependency left is `libsqlite3` (present on virtually
+every Linux install; `apt install libsqlite3-0` otherwise).
+
+To (re-)produce artifacts for an existing release, run the workflow manually
+("Run workflow") and pass its tag.
 
 ## What the installer does
 

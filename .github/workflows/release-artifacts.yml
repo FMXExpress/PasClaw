@@ -1,0 +1,169 @@
+name: Release artifacts
+
+# Produces the downloadable release binaries when you publish a GitHub Release:
+#
+#   * Windows installers  -- HYBRID. GitHub's hosted runners can't run Delphi
+#     (no license), so YOU build the self-contained PasClaw.exe locally and
+#     attach it to the release; this job just runs Inno Setup against it.
+#   * Linux tarball       -- FULLY IN CI. Free Pascal has no license gate, so
+#     the hosted runner compiles the binary from source itself. Nothing to
+#     upload by hand.
+#
+# Flow:
+#   1. (Windows only) Build Release/Win64 + Release/Win32 of
+#      src\pasclaw\PasClaw.dproj locally.
+#   2. Create a Release (tag e.g. v0.2.0). For the Windows installers, attach
+#      the two exes named exactly:
+#         PasClaw-x64.exe   (the Win64 build)
+#         PasClaw-x86.exe   (the Win32 build)
+#      The Linux tarball needs no attachments -- CI builds it.
+#   3. Publishing the release triggers this workflow, which attaches:
+#         PasClaw-<ver>-x64-setup.exe
+#         PasClaw-<ver>-x86-setup.exe
+#         pasclaw-<ver>-linux-x86_64.tar.gz
+#      (Re-run manually via "Run workflow" and pass the tag if needed.)
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to package (Windows installers also need PasClaw-x64.exe / PasClaw-x86.exe attached)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  # Resolve the release tag + a bare version (strip a leading "v") once, so
+  # both platform jobs agree on the names.
+  meta:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+    steps:
+      - id: v
+        shell: bash
+        run: |
+          tag="${{ github.event.release.tag_name }}"
+          [ -z "$tag" ] && tag="${{ github.event.inputs.tag }}"
+          [ -z "$tag" ] && { echo "no tag resolved"; exit 1; }
+          ver="${tag#v}"
+          echo "tag=$tag"     >> "$GITHUB_OUTPUT"
+          echo "version=$ver" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag version=$ver"
+
+  # --- Windows: package the locally-built Delphi exes into installers -------
+  windows-installers:
+    needs: meta
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download the Delphi-built binaries from the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          New-Item -ItemType Directory -Force bin | Out-Null
+          foreach ($a in @('PasClaw-x64.exe','PasClaw-x86.exe')) {
+            gh release download '${{ needs.meta.outputs.tag }}' -p $a -D bin
+            if (Test-Path "bin/$a") { Write-Host "got $a" }
+            else { Write-Host "::warning::$a is not attached to the release -- skipping that arch" }
+          }
+          if (-not (Test-Path bin\PasClaw-x64.exe) -and -not (Test-Path bin\PasClaw-x86.exe)) {
+            throw "neither PasClaw-x64.exe nor PasClaw-x86.exe was attached to the release"
+          }
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installers
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          $ver  = '${{ needs.meta.outputs.version }}'
+          if (Test-Path bin\PasClaw-x64.exe) {
+            & $iscc /DArch=x64 /DMyAppVersion=$ver "/DSourceExe=$PWD\bin\PasClaw-x64.exe" installer\pasclaw.iss
+            if ($LASTEXITCODE -ne 0) { throw "iscc x64 failed" }
+          }
+          if (Test-Path bin\PasClaw-x86.exe) {
+            & $iscc /DArch=x86 /DMyAppVersion=$ver "/DSourceExe=$PWD\bin\PasClaw-x86.exe" installer\pasclaw.iss
+            if ($LASTEXITCODE -ne 0) { throw "iscc x86 failed" }
+          }
+          Get-ChildItem installer\Output
+
+      - name: Upload installers to the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $files = Get-ChildItem installer\Output\*.exe | ForEach-Object { $_.FullName }
+          if ($files) { gh release upload '${{ needs.meta.outputs.tag }}' @files --clobber }
+          else { throw "no installers were produced" }
+
+  # --- Linux: compile with FPC and ship a self-contained tarball ------------
+  # Runs inside debian:bookworm because that is the exact apt package layout
+  # the Makefile targets (same environment as docker/Dockerfile's builder).
+  linux-tarball:
+    needs: meta
+    runs-on: ubuntu-latest
+    container: debian:bookworm
+    env:
+      # bookworm's lazarus-src installs to /usr/lib/lazarus/2.2.6/, not the
+      # Makefile's 3.0 default (see docker/Dockerfile).
+      LAZUTILS_DIR: /usr/lib/lazarus/2.2.6/components/lazutils
+      # Indy master's TLS path only speaks to OpenSSL 1.0.x; modern distros
+      # ship 3.x, so we bundle the last 1.0.2 next to the binary (RPATH=$ORIGIN),
+      # exactly like the Docker image. Immutable snapshot.debian.org archive.
+      OPENSSL_SNAPSHOT: 20240331T102506Z
+      OPENSSL_DEB_VERSION: 1.0.2u-1~deb9u7
+    steps:
+      - name: Install build + packaging deps
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            fpc fp-units-db fp-units-misc lazarus-src \
+            libsqlite3-dev make git curl ca-certificates \
+            patchelf tar gzip
+          rm -rf /var/lib/apt/lists/*
+
+      - uses: actions/checkout@v4
+
+      - name: Build pasclaw (FPC)
+        run: |
+          git config --global --add safe.directory '*'
+          make get-indy
+          make VERSION='${{ needs.meta.outputs.version }}' LAZUTILS_DIR="$LAZUTILS_DIR"
+          test -x build/pasclaw
+          ./build/pasclaw version
+
+      - name: Assemble the self-contained tarball
+        run: |
+          set -e
+          out="pasclaw-${{ needs.meta.outputs.version }}-linux-x86_64"
+          # Fetch OpenSSL 1.0.2 so TLS works out of the box (Indy dlopen).
+          url="https://snapshot.debian.org/archive/debian-archive/${OPENSSL_SNAPSHOT}/debian-security/pool/updates/main/o/openssl1.0/libssl1.0.2_${OPENSSL_DEB_VERSION}_amd64.deb"
+          curl -fsSL --retry 3 --max-time 120 "$url" -o /tmp/libssl.deb
+          mkdir -p /tmp/ossl
+          dpkg-deb -x /tmp/libssl.deb /tmp/ossl
+          mkdir -p "dist/$out"
+          cp build/pasclaw "dist/$out/"
+          cp /tmp/ossl/usr/lib/*-linux-*/libssl.so.1.0.2    "dist/$out/"
+          cp /tmp/ossl/usr/lib/*-linux-*/libcrypto.so.1.0.2 "dist/$out/"
+          ln -sf libssl.so.1.0.2    "dist/$out/libssl.so"
+          ln -sf libcrypto.so.1.0.2 "dist/$out/libcrypto.so"
+          patchelf --set-rpath '$ORIGIN' "dist/$out/pasclaw"
+          cp LICENSE README.md "dist/$out/"
+          cp -r docs "dist/$out/docs"
+          tar -C dist -czf "$out.tar.gz" "$out"
+          ls -l "$out.tar.gz"
+
+      - name: Upload the tarball to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.meta.outputs.tag }}
+          files: pasclaw-*-linux-x86_64.tar.gz
