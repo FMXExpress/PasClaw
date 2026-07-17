@@ -1,0 +1,40 @@
+name: Installer script check
+
+# Compile-checks installer/pasclaw.iss on every change to it, so syntax errors
+# in the Inno Setup script (e.g. a stray "}" inside a { } comment closing it
+# early) are caught at PR time instead of only when a real release runs ISCC.
+#
+# Uses a throwaway dummy exe for SourceExe so no real Delphi build is needed --
+# this validates the script (including the [Code] Pascal), not the payload.
+
+on:
+  push:
+    paths:
+      - 'installer/**'
+      - '.github/workflows/installer-check.yml'
+  pull_request:
+    paths:
+      - 'installer/**'
+      - '.github/workflows/installer-check.yml'
+
+jobs:
+  compile:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile-check both arches (dummy payload)
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          # ISCC needs the [Files] sources to exist; stand in a dummy for the exe.
+          "dummy" | Out-File -Encoding ascii dummy-pasclaw.exe
+          foreach ($arch in @('x64','x86')) {
+            & $iscc /DArch=$arch /DMyAppVersion=0.0.0 "/DSourceExe=$PWD\dummy-pasclaw.exe" installer\pasclaw.iss
+            if ($LASTEXITCODE -ne 0) { throw "iscc $arch failed to compile installer\pasclaw.iss" }
+          }
+          Write-Host "installer script compiles for x64 and x86"
