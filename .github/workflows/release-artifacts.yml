@@ -93,6 +93,15 @@ jobs:
               $exe = Get-ChildItem "bin/portable-$arch" -Filter *.exe | Select-Object -First 1
               if ($exe) { Copy-Item $exe.FullName $local -Force }
             }
+            elseif ($assets -contains "PasClaw-$ver-$arch-portable.exe") {
+              # Legacy: an earlier run (before portables were zipped) published a
+              # bare portable exe. Use it directly; the portable step below
+              # replaces it with the zip and deletes it.
+              $pexe = "PasClaw-$ver-$arch-portable.exe"
+              gh release download $tag -p $pexe -D bin
+              if ($LASTEXITCODE -ne 0) { throw "download $pexe failed" }
+              Copy-Item "bin/$pexe" $local -Force
+            }
             if (Test-Path $local) { Write-Host "got $arch" }
             else { Write-Host "::warning::no $arch binary on the release -- skipping that arch" }
           }
@@ -156,9 +165,16 @@ jobs:
             Remove-Item 'PasClaw.exe' -Force
             gh release upload $tag $zip --clobber
             if ($LASTEXITCODE -ne 0) { throw "upload $zip failed" }
-            if ($assets -contains "PasClaw-$arch.exe") {
-              gh release delete-asset $tag "PasClaw-$arch.exe" --yes
-              if ($LASTEXITCODE -ne 0) { throw "delete-asset PasClaw-$arch.exe failed" }
+            # Remove the CI-input names now that the zip is up. Both are
+            # conditional on the pre-delete snapshot, so a run where they were
+            # never present (fresh release / already cleaned) is a no-op, not an
+            # error. Covers the raw input and any bare -portable.exe left by an
+            # earlier (pre-zip) run.
+            foreach ($stale in @("PasClaw-$arch.exe", "PasClaw-$ver-$arch-portable.exe")) {
+              if ($assets -contains $stale) {
+                gh release delete-asset $tag $stale --yes
+                if ($LASTEXITCODE -ne 0) { throw "delete-asset $stale failed" }
+              }
             }
           }
 
