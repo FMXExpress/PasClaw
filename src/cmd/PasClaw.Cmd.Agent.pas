@@ -146,6 +146,13 @@ type
        sole stdout payload. Interactive mode ignores this; quiet
        only makes sense for one-shot -m. *)
     Quiet: Boolean;
+    (* --verbose / --brief: controls how much of each tool call's args and
+       result is echoed. Verbose (the default) shows a generous preview so you
+       can see what the agent is actually doing -- close to what --debug gives,
+       minus the HTTP/provider chatter. --brief clips back to a short one-liner
+       per call; --quiet (above) suppresses the per-tool lines entirely and
+       wins over both. *)
+    Verbose: Boolean;
     (* --mode plan|build (PR #290). Default Build (full tool access).
        Plan refuses tcMutating tools at dispatch time -- the model gets
        analysis-only access. The interactive loop also re-checks the
@@ -163,32 +170,50 @@ type
   end;
 
   TLoopHandlers = class
-    Quiet: Boolean;  { when True, OnToolCall / OnToolResult emit nothing.
-                       Set by Cmd_Agent_Run before passing to BuildLoopConfig
-                       so machine-friendly callers (-q / --quiet) get the
-                       assistant reply on stdout with no per-tool decoration. }
+    Quiet: Boolean;    { when True, OnToolCall / OnToolResult emit nothing.
+                         Set by Cmd_Agent_Run before passing to BuildLoopConfig
+                         so machine-friendly callers (-q / --quiet) get the
+                         assistant reply on stdout with no per-tool decoration. }
+    Verbose: Boolean;  { when True (the default), show a generous preview of
+                         each call's args + result; when False (--brief), clip
+                         to a short one-liner. Ignored under Quiet. }
     procedure OnToolCall(const Name, ArgsJSON: string);
     procedure OnToolResult(const Name, ResultText, Err: string);
   end;
 
+const
+  BriefPreviewChars   = 200;    { --brief: a terse one-liner per call/result   }
+  VerbosePreviewChars = 2000;   { default: fuller args/results, close to --debug }
+
+{ Clip S to Max chars, appending an ellipsis when truncated. Byte-oriented like
+  the previous inline Copy() -- a multi-byte codepoint may straddle the cut, but
+  the terminal tolerates it and this matches the pre-existing behaviour. }
+function PreviewCap(const S: string; Max: Integer): string;
+begin
+  if Length(S) <= Max then Result := S
+  else Result := Copy(S, 1, Max) + '…';
+end;
+
 procedure TLoopHandlers.OnToolCall(const Name, ArgsJSON: string);
+var
+  Cap: Integer;
 begin
   if Quiet then Exit;
-  PrintLn(Ansi.Magenta + '› tool ' + Name + Ansi.Reset + ' ' + Copy(ArgsJSON, 1, 200));
+  if Verbose then Cap := VerbosePreviewChars else Cap := BriefPreviewChars;
+  PrintLn(Ansi.Magenta + '› tool ' + Name + Ansi.Reset + ' ' + PreviewCap(ArgsJSON, Cap));
 end;
 
 procedure TLoopHandlers.OnToolResult(const Name, ResultText, Err: string);
 var
-  Preview: string;
+  Cap: Integer;
 begin
   if Quiet then Exit;
   if Err <> '' then
     PrintLn(Ansi.Red + '  ✗ ' + Err + Ansi.Reset)
   else
   begin
-    Preview := ResultText;
-    if Length(Preview) > 200 then Preview := Copy(Preview, 1, 200) + '…';
-    PrintLn(Ansi.Dim + '  ✓ ' + Preview + Ansi.Reset);
+    if Verbose then Cap := VerbosePreviewChars else Cap := BriefPreviewChars;
+    PrintLn(Ansi.Dim + '  ✓ ' + PreviewCap(ResultText, Cap) + Ansi.Reset);
   end;
 end;
 
@@ -208,6 +233,7 @@ begin
   Result.GoalObjective := '';
   Result.GoalMaxIters  := 0;  { 0 = use DefaultGoalMaxIter }
   Result.Quiet         := False;
+  Result.Verbose       := True;   { fuller tool-call previews by default }
   Result.OrientOverride := ooUnset;
 end;
 
@@ -240,6 +266,8 @@ begin
     if Argv[i] = '--goal-objective' then begin if i = High(Argv) then Exit(False); A.GoalObjective := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--goal-max-iters' then begin if i = High(Argv) then Exit(False); A.GoalMaxIters := StrToIntDef(Argv[i + 1], A.GoalMaxIters); Inc(i, 2); Continue; end;
     if (Argv[i] = '--quiet') or (Argv[i] = '-q') then begin A.Quiet := True; Inc(i); Continue; end;
+    if Argv[i] = '--verbose'     then begin A.Verbose := True;  Inc(i); Continue; end;
+    if Argv[i] = '--brief'       then begin A.Verbose := False; Inc(i); Continue; end;
     if Argv[i] = '--session'     then begin if i = High(Argv) then Exit(False); A.Session := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--backend'     then begin if i = High(Argv) then Exit(False); A.BackendOverride := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--mode'        then
@@ -599,6 +627,7 @@ begin
     RunSingleTurn writes to stdout in quiet mode is the assistant's
     final reply (plus a single trailing newline). }
   Handlers.Quiet := A.Quiet;
+  Handlers.Verbose := A.Verbose;
   { Allocate a one-shot session id so the active shell backend
     (docker, ssh, ...) actually isolates this turn. Codex P1 on
     PR #233: an empty SessionId let the docker backend fall back to
@@ -883,6 +912,7 @@ begin
     `not A.Quiet` further down so non-quiet operators still see
     them. }
   Handlers.Quiet := A.Quiet;
+  Handlers.Verbose := A.Verbose;
 
   { Per-process shell-backend session id, same shape as RunSingleTurn.
     Lazy docker container -- only spawned on the first shell tool call. }
@@ -1756,7 +1786,7 @@ begin
   begin
     PrintLnErr('usage: pasclaw agent [-m "msg"] [--model M] [--provider P] [--system S]');
     PrintLnErr('                     [--thinking low|medium|high] [--max-tokens N]');
-    PrintLnErr('                     [--max-iterations N] [--no-tools] [-q|--quiet]');
+    PrintLnErr('                     [--max-iterations N] [--no-tools] [-q|--quiet] [--verbose|--brief]');
     PrintLnErr('                     [--orient|--no-orient] [--mode plan|build] [--plan|--build]');
     PrintLnErr('                     [--profile baseline|low-token|security|max-build|all-on|<custom>]');
     Exit(1);
