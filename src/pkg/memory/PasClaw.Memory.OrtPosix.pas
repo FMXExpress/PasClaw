@@ -31,9 +31,10 @@ implementation
 
 uses
   {$IFDEF FPC}
-  SysUtils, fphttpclient, opensslsockets;
+  SysUtils, Classes, fphttpclient, opensslsockets;
   {$ELSE}
-  System.SysUtils, System.Net.HttpClient, System.Net.URLClient;
+  System.SysUtils, System.Classes, System.Net.HttpClient, System.Net.URLClient
+  {$IFNDEF MSWINDOWS}, Posix.Stdlib{$ENDIF};   { libc system() -- Delphi has no ExecuteProcess }
   {$ENDIF}
 
 const
@@ -103,6 +104,23 @@ end;
 {$ENDIF}
 {$ENDIF}
 
+{$IFNDEF MSWINDOWS}
+{ Run a shell command line via /bin/sh -c; returns the process exit code
+  (0 = success). FPC has SysUtils.ExecuteProcess; Delphi has no equivalent, so
+  on Delphi POSIX we call libc system(), which itself runs the string through
+  /bin/sh -c -- so the caller passes the same command string either way. }
+function RunShell(const ACmd: string): Integer;
+{$IFDEF FPC}
+begin
+  Result := ExecuteProcess('/bin/sh', ['-c', ACmd]);
+end;
+{$ELSE}
+begin
+  Result := Posix.Stdlib.system(PAnsiChar(AnsiString(ACmd)));
+end;
+{$ENDIF}
+{$ENDIF}
+
 function EnsurePosixOrt(const ACacheDir: string; out AMsg: string): Boolean;
 {$IFDEF MSWINDOWS}
 begin
@@ -139,9 +157,9 @@ begin
       Exit(False);
     end;
     { Extract + copy the real (non-symlink) shared lib via system tar. }
-    ExecuteProcess('/bin/sh', ['-c', 'rm -rf "' + Tmp + '" && mkdir -p "' + Tmp +
+    RunShell('rm -rf "' + Tmp + '" && mkdir -p "' + Tmp +
       '" && tar -xzf "' + Tgz + '" -C "' + Tmp + '" && cp "$(find "' + Tmp +
-      '" -name ''' + LibGlob + ''' -type f | head -1)" "' + Dest + '"']);
+      '" -name ''' + LibGlob + ''' -type f | head -1)" "' + Dest + '"');
     Result := FileExists(Dest);
     if Result then AMsg := 'installed at ' + Dest
     else AMsg := 'extract failed (no ' + LibGlob + ' in archive)';
@@ -150,7 +168,7 @@ begin
   end;
   try
     if FileExists(Tgz) then DeleteFile(Tgz);
-    ExecuteProcess('/bin/sh', ['-c', 'rm -rf "' + Tmp + '"']);
+    RunShell('rm -rf "' + Tmp + '"');
   except
     on E: Exception do ;
   end;
