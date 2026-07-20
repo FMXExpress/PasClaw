@@ -34,7 +34,7 @@ uses
   SysUtils, Classes, fphttpclient, opensslsockets;
   {$ELSE}
   System.SysUtils, System.Classes, System.Net.HttpClient, System.Net.URLClient
-  {$IFNDEF MSWINDOWS}, Posix.Stdlib{$ENDIF};   { libc system() -- Delphi has no ExecuteProcess }
+  {$IFNDEF MSWINDOWS}, Posix.Base{$ENDIF};   { libc / _PU for the system() bind below }
   {$ENDIF}
 
 const
@@ -105,6 +105,13 @@ end;
 {$ENDIF}
 
 {$IFNDEF MSWINDOWS}
+{$IFNDEF FPC}
+{ Bind libc system() directly. Posix.Stdlib doesn't expose `system` on all
+  Delphi versions (E2003 on Linux), so declare it against libc ourselves. }
+function PosixSystem(command: MarshaledAString): Integer; cdecl;
+  external libc name _PU + 'system';
+{$ENDIF}
+
 { Run a shell command line via /bin/sh -c; returns the process exit code
   (0 = success). FPC has SysUtils.ExecuteProcess; Delphi has no equivalent, so
   on Delphi POSIX we call libc system(), which itself runs the string through
@@ -116,7 +123,7 @@ begin
 end;
 {$ELSE}
 begin
-  Result := Posix.Stdlib.system(PAnsiChar(AnsiString(ACmd)));
+  Result := PosixSystem(PAnsiChar(AnsiString(ACmd)));
 end;
 {$ENDIF}
 {$ENDIF}
