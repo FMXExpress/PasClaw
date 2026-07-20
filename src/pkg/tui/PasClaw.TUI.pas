@@ -163,6 +163,15 @@ type
     FStatsToolCallNames: array of string;
     FStatsToolCallCount: array of Integer;
     FStatsOpen:          Boolean;
+    { Live tool activity for the in-flight turn. The tool loop runs on a
+      background worker, so OnToolCall/OnToolResult fire off-thread and append
+      here under FToolActivityLock; DrawChatPane (UI thread) reads it while
+      FLoopThread <> nil. Cleared at the start of each turn; once the turn
+      finishes the full transcript renders the tool messages instead.
+      FToolActivityLock is TObject (a TCriticalSection) to keep SyncObjs out of
+      the interface uses -- same opaque-field trick as FLoopThread. }
+    FToolActivityLock:   TObject;
+    FToolActivity:       TArray<string>;
     procedure DrawFrame;
     procedure DrawHeaderBar(W: Integer);
     procedure DrawSessionPane(X, Y, W, H: Integer);
@@ -202,6 +211,9 @@ type
     procedure PersistSession;
     procedure Flash(const Msg: string);
     function CurrentSpinnerChar: Char;
+    { Off-thread tool hooks: append a live call/result line to FToolActivity. }
+    procedure LiveToolCall(const Name, ArgsJSON: string);
+    procedure LiveToolResult(const Name, ResultText, Err: string);
     {$ENDIF}
     {$IFDEF FPC}
     { Legacy line-based REPL surface, used by the FPC build only.
@@ -217,6 +229,11 @@ type
     procedure HandleInitCommand(const Args: string);
     procedure HandleRedoCommand(const Args: string);
     procedure HandleUserInput(const Text: string);
+    { Live tool activity for the line-based REPL: print each call/result as it
+      happens (the worker fires these while the main thread blocks in WaitFor,
+      so it's the sole stdout writer -- no locking needed). }
+    procedure LiveToolCallLine(const Name, ArgsJSON: string);
+    procedure LiveToolResultLine(const Name, ResultText, Err: string);
     {$ENDIF}
     { Common to both builds; declared here (after all fields) so dcc64's
       field-before-method rule isn't broken by the conditional field blocks
@@ -451,6 +468,15 @@ begin
 end;
 
 
+{ Flatten CR/LF to spaces + clip so a tool call/result stays one line. Shared
+  by both TUI surfaces' live tool-activity display. }
+function FlattenClip(const S: string; Max: Integer): string;
+begin
+  Result := StringReplace(StringReplace(S, #13, ' ', [rfReplaceAll]),
+                          #10, ' ', [rfReplaceAll]);
+  if Length(Result) > Max then Result := Copy(Result, 1, Max) + '…';
+end;
+
 constructor TTUI.Create(Provider: ILLMProvider; Registry: TToolRegistry; const Model: string);
 begin
   inherited Create;
@@ -461,6 +487,10 @@ begin
   PromptCacheTTL     := '';
   RenderMarkdownEnabled := True;
   FRouteCfg := nil;
+  {$IFNDEF FPC}
+  FToolActivityLock := TCriticalSection.Create;
+  SetLength(FToolActivity, 0);
+  {$ENDIF}
 end;
 
 { Lazily load + cache the config used by the per-turn auto-router. Shared by
@@ -529,6 +559,11 @@ begin
   end;
   FSession.Free;
   FRouteCfg.Free;
+  { FToolActivityLock is deliberately NOT freed: on the bounded-wait timeout
+    path above a worker is handed to FreeOnTerminate and may still fire
+    OnToolCall/OnToolResult into LiveToolCall during teardown. Freeing the lock
+    here would risk a use-after-free against that racing worker; leaking one
+    critical section at process exit is harmless. }
   inherited Destroy;
 end;
 
@@ -1301,6 +1336,39 @@ begin
   FConfirmDelete := False;
 end;
 
+{ Off-thread tool hooks (fired by the background worker). They only append to
+  FToolActivity under FToolActivityLock -- no drawing, no FSession access -- so
+  they're safe to run on the worker thread. DrawChatPane renders the buffer on
+  the UI thread while the turn is in flight. }
+procedure TTUI.LiveToolCall(const Name, ArgsJSON: string);
+begin
+  TCriticalSection(FToolActivityLock).Acquire;
+  try
+    SetLength(FToolActivity, Length(FToolActivity) + 2);
+    FToolActivity[High(FToolActivity) - 1] := '__HDR__tool ' + Name;
+    FToolActivity[High(FToolActivity)]     := '  -> ' + FlattenClip(ArgsJSON, 200);
+  finally
+    TCriticalSection(FToolActivityLock).Release;
+  end;
+end;
+
+procedure TTUI.LiveToolResult(const Name, ResultText, Err: string);
+var
+  Line: string;
+begin
+  if Err <> '' then
+    Line := '  ✗ ' + FlattenClip(Err, 200)
+  else
+    Line := '  ✓ ' + FlattenClip(ResultText, 200);
+  TCriticalSection(FToolActivityLock).Acquire;
+  try
+    SetLength(FToolActivity, Length(FToolActivity) + 1);
+    FToolActivity[High(FToolActivity)] := Line;
+  finally
+    TCriticalSection(FToolActivityLock).Release;
+  end;
+end;
+
 procedure TTUI.StartTurn(const UserText: string);
 var
   Cfg: TToolLoopConfig;
@@ -1377,13 +1445,19 @@ begin
         Cfg.Options.SystemPrompt;
   end;
   Cfg.OnText        := nil;
-  Cfg.OnToolCall    := nil;
-  Cfg.OnToolResult  := nil;
+  Cfg.OnToolCall    := LiveToolCall;
+  Cfg.OnToolResult  := LiveToolResult;
 
   { Task-difficulty auto-router (opt-in via Config.AutoRouter) -- same path the
     CLI/gateway/component use. No-op unless enabled. Uses the cached config
     snapshot so we don't re-read config.json every turn. }
   ApplyAutoRoute(Cfg, RouteConfig, FSession.Messages, RoutedNm);
+
+  { Reset the live tool-activity buffer for this turn. Once the turn finishes
+    the full transcript (with tool messages) renders instead -- DrawChatPane
+    only shows this buffer while FLoopThread <> nil. }
+  TCriticalSection(FToolActivityLock).Acquire;
+  try SetLength(FToolActivity, 0); finally TCriticalSection(FToolActivityLock).Release; end;
 
   Worker := TRunToolLoopThread.Create(Cfg, FSession.Messages);
   Worker.Start;
@@ -2137,6 +2211,25 @@ begin
       RenderMsgLines(FSession.Messages[i], W,
                      Self.RenderMarkdownEnabled, Lines);
 
+  { While a turn is in flight, append live tool activity beneath the
+    transcript. The worker appends to FToolActivity as tools fire; here we
+    read it (UI thread) under the same lock. Once the turn completes
+    FLoopThread goes nil and the finished transcript -- which now carries the
+    tool messages -- renders instead, so there's no double display. }
+  if FLoopThread <> nil then
+  begin
+    TCriticalSection(FToolActivityLock).Acquire;
+    try
+      for i := 0 to High(FToolActivity) do
+      begin
+        SetLength(Lines, Length(Lines) + 1);
+        Lines[High(Lines)] := FToolActivity[i];
+      end;
+    finally
+      TCriticalSection(FToolActivityLock).Release;
+    end;
+  end;
+
   { Clip scroll to valid range. }
   if FChatScroll < 0 then FChatScroll := 0;
   if FChatScroll > Length(Lines) - ChatH then
@@ -2820,6 +2913,20 @@ begin
     PrintLn(Ansi.Green + Format('/redo %d: restored %d file(s)', [N, Length(Restored)]) + Ansi.Reset);
 end;
 
+procedure TTUI.LiveToolCallLine(const Name, ArgsJSON: string);
+begin
+  PrintLn(Ansi.Magenta + '  › tool ' + Name + Ansi.Reset + ' ' +
+          FlattenClip(ArgsJSON, 200));
+end;
+
+procedure TTUI.LiveToolResultLine(const Name, ResultText, Err: string);
+begin
+  if Err <> '' then
+    PrintLn(Ansi.Red + '  ✗ ' + FlattenClip(Err, 200) + Ansi.Reset)
+  else
+    PrintLn(Ansi.Dim + '  ✓ ' + FlattenClip(ResultText, 200) + Ansi.Reset);
+end;
+
 procedure TTUI.HandleUserInput(const Text: string);
 var
   Msgs: array of TMessage;
@@ -2862,8 +2969,8 @@ begin
   Cfg.Options.CacheEnabled := PromptCacheEnabled;
   Cfg.Options.CacheTTL     := PromptCacheTTL;
   Cfg.OnText        := nil;
-  Cfg.OnToolCall    := nil;
-  Cfg.OnToolResult  := nil;
+  Cfg.OnToolCall    := LiveToolCallLine;
+  Cfg.OnToolResult  := LiveToolResultLine;
   { Background subagents on the FPC line-based path. Codex on
     PR #212: Cmd.TUI registers spawn_background for FPC builds too,
     so without this binding a job would start but its result would
