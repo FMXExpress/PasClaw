@@ -614,6 +614,7 @@
       <div class="chat-toolbar">
         <button class="icon-btn" id="sidebar-toggle" title="Collapse / show the session list">☰</button>
         <button class="icon-btn" id="params-toggle" title="Per-chat parameters">⚙ Params</button>
+        <button class="icon-btn" id="tools-toggle" title="Expand or collapse tool-call details (full args + results) in the transcript">🔧 details ▾</button>
         <span id="params-summary" class="params-summary"></span>
         <span id="sandbox-chip" class="sandbox-chip" style="margin-left:auto" hidden></span>
         <button class="icon-btn" id="chat-undo" title="Undo the last turn's file edits (checkpoints)">↶</button>
@@ -2692,7 +2693,7 @@ function toolCard(call, results, detail) {
     isErr = body.indexOf(TV_ERR) >= 0;
     bodyHtml = "<pre>" + (body ? escapeHtml(body) : "(no result)") + "</pre>";
   }
-  return '<details class="tool-card' + (isErr ? " err" : "") + '">'
+  return '<details class="tool-card' + (isErr ? " err" : "") + '"' + (toolsExpanded ? " open" : "") + '>'
        + '<summary><span class="tc-glyph">' + TV_CALL + "</span>"
        + '<span class="tc-call">' + escapeHtml(call) + "</span></summary>"
        + '<div class="tc-body">' + bodyHtml + "</div>"
@@ -2878,6 +2879,32 @@ function initMode() {
     currentMode = (currentMode === "plan") ? "build" : "plan";
     try { localStorage.setItem(MODE_KEY, currentMode); } catch {}
     applyModeUI();
+  });
+}
+
+/* ===== Tool-detail expansion (default ON) =====
+   The tool-call cards already carry the full args + result/error streamed on
+   the `pasclaw-tool` side-channel -- the same context `--debug` prints on the
+   CLI. Default the cards to expanded so the transcript shows what the agent is
+   actually doing without a click; toolCard() reads `toolsExpanded` to emit the
+   `open` attribute. Persisted, so an operator who finds it noisy can collapse
+   every card globally (and new ones stay collapsed). */
+const TOOLS_KEY = "pasclaw.tooldetails.v1";
+let toolsExpanded = true;
+function applyToolsUI() {
+  const b = $("#tools-toggle");
+  if (b) b.textContent = toolsExpanded ? "🔧 details ▾" : "🔧 details ▸";
+  /* Flip already-rendered cards to match; new cards pick it up via toolCard(). */
+  document.querySelectorAll(".tool-card").forEach(d => { d.open = toolsExpanded; });
+}
+function initToolDetails() {
+  try { toolsExpanded = localStorage.getItem(TOOLS_KEY) !== "0"; } catch {}
+  applyToolsUI();
+  const b = $("#tools-toggle");
+  if (b) b.addEventListener("click", () => {
+    toolsExpanded = !toolsExpanded;
+    try { localStorage.setItem(TOOLS_KEY, toolsExpanded ? "1" : "0"); } catch {}
+    applyToolsUI();
   });
 }
 
@@ -4799,6 +4826,7 @@ async function maybeOnboard() {
 /* ===== Boot ===== */
 initTheme();
 initMode();
+initToolDetails();
 loadModels();
 initParams();
 // Restore the tab named in the URL hash (deep link / reload / bookmark).
