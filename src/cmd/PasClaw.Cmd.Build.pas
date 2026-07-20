@@ -88,6 +88,7 @@ uses
   SysUtils, Classes,
   {$IFDEF MSWINDOWS}Windows,{$ENDIF}
   {$IFNDEF FPC}System.IOUtils,{$ENDIF}
+  {$IF DEFINED(POSIX) AND NOT DEFINED(FPC)}Posix.Base,{$IFEND}   { libc / _PU for setenv }
   PasClaw.CliUI,
   PasClaw.Logger,
   PasClaw.Utils,
@@ -95,20 +96,25 @@ uses
   PasClaw.Cmd.Agent,
   PasClaw.Agent.Prompt;  { ExtractGoalFromPlanFile for --goal flag }
 
-{$IFDEF UNIX}
 { libc setenv is POSIX-portable across glibc / musl / macOS / BSD --
-  FPC's RTL doesn't expose it (only the env-modification helpers in
-  the unitsrc/3.2.2 tree's UnixUtil which aren't packaged on every
-  distro). Declare it directly. }
+  neither FPC's RTL nor (reliably) Delphi's Posix.Stdlib exposes it, so
+  declare it directly against libc. FPC uses `external 'c'`; Delphi POSIX
+  uses the RTL's libc / _PU (Posix.Base), same as the ONNX installer's
+  system() bind. }
+{$IFDEF UNIX}
 function libc_setenv(const Name, Value: PAnsiChar; Overwrite: Integer): Integer;
   cdecl; external 'c' name 'setenv';
 {$ENDIF}
+{$IF DEFINED(POSIX) AND NOT DEFINED(FPC)}
+function libc_setenv(const Name, Value: MarshaledAString; Overwrite: Integer): Integer;
+  cdecl; external libc name _PU + 'setenv';
+{$IFEND}
 
 procedure SetEnv(const Name, Value: string);
 begin
-  {$IFDEF UNIX}
+  {$IF DEFINED(UNIX) OR (DEFINED(POSIX) AND NOT DEFINED(FPC))}
   libc_setenv(PAnsiChar(AnsiString(Name)), PAnsiChar(AnsiString(Value)), 1);
-  {$ENDIF}
+  {$IFEND}
   {$IFDEF MSWINDOWS}
   Windows.SetEnvironmentVariable(PChar(Name), PChar(Value));
   {$ENDIF}

@@ -91,6 +91,9 @@ uses
   {$IFDEF UNIX}
   , BaseUnix, TermIO
   {$ENDIF}
+  {$IF DEFINED(POSIX) AND NOT DEFINED(FPC)}
+  , Posix.Termios   { Delphi/Linux+macOS: tcgetattr/tcsetattr for ECHO control }
+  {$IFEND}
   ;
 
 var
@@ -353,6 +356,30 @@ begin
   if HaveTerm then PrintLn;
 end;
 {$ENDIF}
+{$IF DEFINED(POSIX) AND NOT DEFINED(FPC)}
+{ Delphi on Linux/macOS: same ECHO-off trick via the RTL's Posix.Termios,
+  so a pasted secret isn't echoed to the terminal or its scrollback. }
+var
+  Old, New_: termios;
+  HaveTerm: Boolean;
+begin
+  Print(Prompt);
+  Flush(Output);
+  HaveTerm := tcgetattr(0, Old) = 0;
+  if HaveTerm then
+  begin
+    New_ := Old;
+    New_.c_lflag := New_.c_lflag and not Cardinal(ECHO);
+    tcsetattr(0, TCSANOW, New_);
+  end;
+  try
+    ReadLn(Result);
+  finally
+    if HaveTerm then tcsetattr(0, TCSANOW, Old);
+  end;
+  if HaveTerm then PrintLn;
+end;
+{$IFEND}
 {$IFDEF MSWINDOWS}
 var
   H: THandle;
@@ -376,7 +403,7 @@ begin
   if HaveMode then PrintLn;
 end;
 {$ENDIF}
-{$IF NOT DEFINED(UNIX) AND NOT DEFINED(MSWINDOWS)}
+{$IF NOT DEFINED(UNIX) AND NOT DEFINED(POSIX) AND NOT DEFINED(MSWINDOWS)}
 begin
   { Unknown platform -- fall through to plain echoing read so the
     program still runs. }
