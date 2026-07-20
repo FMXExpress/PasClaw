@@ -70,23 +70,43 @@ jobs:
           $tag = '${{ needs.meta.outputs.tag }}'
           $ver = '${{ needs.meta.outputs.version }}'
           New-Item -ItemType Directory -Force bin | Out-Null
-          # For each arch: prefer the raw upload name you attach (PasClaw-x64.exe),
-          # but fall back to a previously-published portable asset so a re-run
-          # still works after this job renamed the raw input away.
+          # List the release's assets ONCE and act only on names that exist, so
+          # an expected "asset not attached" never surfaces as a failed
+          # `gh release download` exit code (this is a checked pwsh step).
+          $assets = @(gh release view $tag --json assets --jq '.assets[].name')
+          if ($LASTEXITCODE -ne 0) { throw "could not read assets for release $tag" }
           foreach ($arch in @('x64','x86')) {
-            $input    = "PasClaw-$arch.exe"
-            $portable = "PasClaw-$ver-$arch-portable.exe"
-            $local    = "bin/PasClaw-$arch.exe"
-            gh release download $tag -p $input -D bin 2>$null
-            if (-not (Test-Path $local)) {
-              gh release download $tag -p $portable -D bin 2>$null
-              if (Test-Path "bin/$portable") { Move-Item "bin/$portable" $local }
+            $raw   = "PasClaw-$arch.exe"
+            $pzip  = "PasClaw-$ver-$arch-portable.zip"
+            $local = "bin/PasClaw-$arch.exe"
+            if ($assets -contains $raw) {
+              # The exe you attached for CI to package.
+              gh release download $tag -p $raw -D bin
+              if ($LASTEXITCODE -ne 0) { throw "download $raw failed" }
+            }
+            elseif ($assets -contains $pzip) {
+              # Re-run after this workflow already renamed the raw input into a
+              # portable zip: recover the exe from that zip.
+              gh release download $tag -p $pzip -D bin
+              if ($LASTEXITCODE -ne 0) { throw "download $pzip failed" }
+              Expand-Archive -Path "bin/$pzip" -DestinationPath "bin/portable-$arch" -Force
+              $exe = Get-ChildItem "bin/portable-$arch" -Filter *.exe | Select-Object -First 1
+              if ($exe) { Copy-Item $exe.FullName $local -Force }
+            }
+            elseif ($assets -contains "PasClaw-$ver-$arch-portable.exe") {
+              # Legacy: an earlier run (before portables were zipped) published a
+              # bare portable exe. Use it directly; the portable step below
+              # replaces it with the zip and deletes it.
+              $pexe = "PasClaw-$ver-$arch-portable.exe"
+              gh release download $tag -p $pexe -D bin
+              if ($LASTEXITCODE -ne 0) { throw "download $pexe failed" }
+              Copy-Item "bin/$pexe" $local -Force
             }
             if (Test-Path $local) { Write-Host "got $arch" }
-            else { Write-Host "::warning::no $arch binary attached (PasClaw-$arch.exe) -- skipping that arch" }
+            else { Write-Host "::warning::no $arch binary on the release -- skipping that arch" }
           }
           if (-not (Test-Path bin\PasClaw-x64.exe) -and -not (Test-Path bin\PasClaw-x86.exe)) {
-            throw "neither PasClaw-x64.exe nor PasClaw-x86.exe was attached to the release"
+            throw "no PasClaw x64/x86 binary (or portable zip) found on release $tag"
           }
 
       - name: Install Inno Setup
@@ -117,25 +137,44 @@ jobs:
           if ($files) { gh release upload '${{ needs.meta.outputs.tag }}' @files --clobber }
           else { throw "no installers were produced" }
 
-      - name: Publish the self-contained exe as a portable download
+      - name: Publish the self-contained exe as a portable zip
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           # The Delphi build is self-contained, so the raw exe is a working
-          # no-installer PasClaw. Re-publish it under a clear, versioned name and
+          # no-installer PasClaw. Ship it zipped (browsers/AV are happier with a
+          # .zip than a bare .exe) as PasClaw-<ver>-<arch>-portable.zip, and
           # remove the raw upload name so the release lists intentional downloads
           # (setup + portable) rather than the CI input.
           $tag = '${{ needs.meta.outputs.tag }}'
           $ver = '${{ needs.meta.outputs.version }}'
+          # Snapshot the assets BEFORE we delete, so the delete is conditional on
+          # the raw name actually being present -- a re-run (where it's already
+          # gone) must not error out this checked pwsh step.
+          $assets = @(gh release view $tag --json assets --jq '.assets[].name')
+          if ($LASTEXITCODE -ne 0) { throw "could not read assets for release $tag" }
           foreach ($arch in @('x64','x86')) {
-            $local    = "bin/PasClaw-$arch.exe"
-            $portable = "PasClaw-$ver-$arch-portable.exe"
-            if (Test-Path $local) {
-              Copy-Item $local $portable -Force
-              gh release upload $tag $portable --clobber
-              # Drop the raw input name (ignore if it wasn't attached, e.g. a re-run).
-              gh release delete-asset $tag "PasClaw-$arch.exe" --yes 2>$null
+            $local = "bin/PasClaw-$arch.exe"
+            if (-not (Test-Path $local)) { continue }
+            $zip = "PasClaw-$ver-$arch-portable.zip"
+            # Name it PasClaw.exe inside the zip regardless of the arch suffix.
+            Copy-Item $local 'PasClaw.exe' -Force
+            if (Test-Path $zip) { Remove-Item $zip -Force }
+            Compress-Archive -Path 'PasClaw.exe' -DestinationPath $zip
+            Remove-Item 'PasClaw.exe' -Force
+            gh release upload $tag $zip --clobber
+            if ($LASTEXITCODE -ne 0) { throw "upload $zip failed" }
+            # Remove the CI-input names now that the zip is up. Both are
+            # conditional on the pre-delete snapshot, so a run where they were
+            # never present (fresh release / already cleaned) is a no-op, not an
+            # error. Covers the raw input and any bare -portable.exe left by an
+            # earlier (pre-zip) run.
+            foreach ($stale in @("PasClaw-$arch.exe", "PasClaw-$ver-$arch-portable.exe")) {
+              if ($assets -contains $stale) {
+                gh release delete-asset $tag $stale --yes
+                if ($LASTEXITCODE -ne 0) { throw "delete-asset $stale failed" }
+              }
             }
           }
 
