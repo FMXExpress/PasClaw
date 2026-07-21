@@ -3995,6 +3995,9 @@ async function wfInit() {
       const n = wf.nodes.find(x => x.id === wf.sel); if (n) n.args = e.target.value;
     });
     document.getElementById("wfInspDel").addEventListener("click", () => { if (wf.sel) wfDeleteNode(wf.sel); });
+    /* Redraw the Input/Output boxes live as their fields are edited. */
+    document.getElementById("wfInputs").addEventListener("input", wfRender);
+    document.getElementById("wfOutputs").addEventListener("input", wfRender);
   }
   try { wf.tools = (await (await gwFetch("/v1/mcp/tools")).json()).tools || []; }
   catch (e) { wf.tools = []; }
@@ -4251,6 +4254,54 @@ function wfRenderModelForm(formArea, n, m, version, schema) {
   collect();
 }
 
+/* ===== Input / Output boxes (Phase 2) =====
+   The workflow's interface, drawn as first-class boxes on the canvas: an INPUT
+   source on the left listing the declared inputs, and an OUTPUT sink on the
+   right listing the declared outputs. Their fields come from the form editors
+   (#wfInputs / #wfOutputs), and the wires are DERIVED from the templates -- a
+   node that references {{inputs.X}} gets a wire from the Input box; a node named
+   in an output template gets a wire to the Output box. So the canvas is a live
+   diagram of "first model <- input, last model -> output". */
+const IO_W = 134;
+function wfInputNames() {
+  return document.getElementById("wfInputs").value.split(",").map(s => s.trim()).filter(Boolean);
+}
+function wfOutputDefs() {
+  return document.getElementById("wfOutputs").value.split("\n").map(s => s.trim()).filter(Boolean)
+    .map(line => { const eq = line.indexOf("=");
+      return { name: (eq >= 0 ? line.slice(0, eq) : line).trim(),
+               value: (eq >= 0 ? line.slice(eq + 1) : "").trim() }; })
+    .filter(o => o.name);
+}
+function wfOutputBoxX() {
+  let r = 300; wf.nodes.forEach(n => r = Math.max(r, n.x + NODE_W + 60)); return r;
+}
+function wfIOBox(canvas, kind, x, fields) {
+  const el = document.createElement("div");
+  el.className = "wf-io wf-io-" + kind;
+  el.style.cssText = `position:absolute;left:${x}px;top:8px;width:${IO_W}px;border:1px dashed #6a8fd0;` +
+    `border-radius:6px;background:rgba(106,143,208,.08);z-index:1;font-size:11px`;
+  const title = kind === "input" ? "▸ INPUT" : "OUTPUT ▸";
+  let rows = fields.map(f => {
+    const nm = typeof f === "string" ? f : f.name;
+    const tip = kind === "input" ? "{{inputs." + nm + "}}" : (f.value || "");
+    return `<div title="${escapeHtml(tip)}" style="padding:2px 7px;white-space:nowrap;overflow:hidden;` +
+      `text-overflow:ellipsis">${escapeHtml(nm)}</div>`;
+  }).join("");
+  if (!rows) rows = `<div style="padding:2px 7px;opacity:.5">(none yet)</div>`;
+  const port = kind === "input"
+    ? `<div class="wf-port" style="position:absolute;right:-7px;top:${PORT_Y}px;width:12px;height:12px;border-radius:50%;background:#6a8fd0;border:2px solid var(--bg,#111)"></div>`
+    : `<div class="wf-port" style="position:absolute;left:-7px;top:${PORT_Y}px;width:12px;height:12px;border-radius:50%;background:#888;border:2px solid var(--bg,#111)"></div>`;
+  el.innerHTML = `<div style="padding:4px 7px;font-weight:600;border-bottom:1px solid var(--border,#444);` +
+    `opacity:.8">${title}</div>${rows}${port}`;
+  canvas.appendChild(el);
+}
+function wfRenderIOBoxes(canvas) {
+  [...canvas.querySelectorAll(".wf-io")].forEach(e => e.remove());
+  wfIOBox(canvas, "input", 8, wfInputNames());
+  wfIOBox(canvas, "output", wfOutputBoxX(), wfOutputDefs());
+}
+
 function wfRender() {
   const canvas = document.getElementById("wfCanvas");
   // remove existing node elements (keep the svg edge layer)
@@ -4275,6 +4326,7 @@ function wfRender() {
     el.addEventListener("click", ev => { if (!el.dataset.dragged) wfSelect(n.id); el.dataset.dragged = ""; });
     el.querySelector(".wf-out").addEventListener("mousedown", ev => wfStartConnect(ev, n.id));
   });
+  wfRenderIOBoxes(canvas);
   wfDrawEdges();
 }
 
@@ -4297,6 +4349,7 @@ function wfDrawEdges() {
   const canvas = document.getElementById("wfCanvas");
   let cw = canvas.clientWidth, ch = canvas.clientHeight;
   wf.nodes.forEach(n => { cw = Math.max(cw, n.x + NODE_W + 40); ch = Math.max(ch, n.y + 140); });
+  cw = Math.max(cw, wfOutputBoxX() + IO_W + 20);   // keep the Output box + its wire in view
   svg.setAttribute("width", cw);  svg.setAttribute("height", ch);
   svg.style.width = cw + "px";    svg.style.height = ch + "px";
   wf.edges.forEach((ed, i) => {
@@ -4308,6 +4361,25 @@ function wfDrawEdges() {
     p.style.pointerEvents = "stroke"; p.style.cursor = "pointer";
     p.addEventListener("click", () => { wf.edges.splice(i, 1); wfRender(); });
     svg.appendChild(p);
+  });
+  /* Derived Input/Output wires (dashed, non-interactive): drawn from the
+     templates so the interface connections show without hand-drawn edges. */
+  const ioEdge = (a, b) => {
+    if (!a || !b) return;
+    const p = document.createElementNS(NS, "path");
+    p.setAttribute("d", wfEdgePath(a, b));
+    p.setAttribute("fill", "none"); p.setAttribute("stroke", "#6a8fd0"); p.setAttribute("stroke-width", "1.5");
+    p.setAttribute("stroke-dasharray", "4 3"); p.setAttribute("opacity", "0.7");
+    svg.appendChild(p);
+  };
+  const inNames = wfInputNames();
+  const inPort = { x: 8 + IO_W, y: 8 + PORT_Y + 6 };
+  if (inNames.length)
+    wf.nodes.forEach(n => { if (/\{\{\s*inputs\./.test(n.args || "")) ioEdge(inPort, wfPortXY(n.id, "in")); });
+  const outPort = { x: wfOutputBoxX(), y: 8 + PORT_Y + 6 };
+  wfOutputDefs().forEach(o => {
+    const m = (o.value || "").match(/\{\{\s*nodes\.([A-Za-z0-9_\-]+)/);
+    if (m) ioEdge(wfPortXY(m[1], "out"), outPort);
   });
 }
 
