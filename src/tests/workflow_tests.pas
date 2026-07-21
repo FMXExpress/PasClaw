@@ -23,6 +23,7 @@ var
   GPollCount: Integer = 0;     { await test: number of poll calls }
   GLastPollArgs: string = '';  { await test: last resolved poll args }
   GLoopCount: Integer = 0;     { loop test: number of DAG passes }
+  GUntilCount: Integer = 0;    { until-loop test: number of DAG passes }
 
 procedure Check(Cond: Boolean; const Why: string);
 begin
@@ -449,6 +450,40 @@ begin
   Check(ParseWorkflow(SJSON, Spec2, Err) and Spec2.Loop.Enabled, 'loop: survives round-trip');
 end;
 
+{ until-loop stub: returns "go" until the 2nd pass, then "done" -- so a loop
+  whose "until" reads this node's text stops early (at pass 2) rather than
+  running to max. }
+function UntilStub(const ToolName, ArgsJSON: string;
+  out ResultText, ResultJSON, ErrMsg: string): Boolean;
+begin
+  ResultJSON := '{}'; ErrMsg := '';
+  Inc(GUntilCount);
+  if GUntilCount >= 2 then ResultText := 'done' else ResultText := 'go';
+  Result := True;
+end;
+
+{ Loop stops early when the until-condition resolves to an affirmative marker,
+  well before the max cap. }
+procedure TestLoopUntil;
+const
+  UNTIL_WF =
+    '{"name":"untilwf","inputs":[{"name":"x"}],' +
+    '"outputs":[{"name":"out","value":"{{nodes.step}}"}],' +
+    '"nodes":[{"id":"step","tool":"echo","args":{"v":"{{inputs.x}}"}}],' +
+    '"loop":{"max":10,"until":"{{nodes.step}}","feedback":[{"output":"out","input":"x"}]}}';
+var
+  Spec: TWorkflowSpec;
+  Err: string;
+  Res: TWorkflowNodeResultArray;
+begin
+  GUntilCount := 0;
+  Check(ParseWorkflow(UNTIL_WF, Spec, Err), 'until: parse (' + Err + ')');
+  Check(Spec.Loop.UntilTemplate <> '', 'until: template parsed');
+  Check(RunWorkflowRepeated(Spec, '{"x":"a"}', UntilStub, Res, Err), 'until: runs (' + Err + ')');
+  { pass 1 -> "go" (continue), pass 2 -> "done" (until satisfied -> stop). }
+  Check(GUntilCount = 2, 'until: stopped early, not at max (got ' + IntToStr(GUntilCount) + ')');
+end;
+
 begin
   TestParse;
   TestValidate;
@@ -465,6 +500,7 @@ begin
   TestStoreRoundTrip;
   TestOutputs;
   TestLoop;
+  TestLoopUntil;
 
   if Failures = 0 then WriteLn('workflow_tests: OK')
   else begin WriteLn('workflow_tests: ', Failures, ' failure(s)'); Halt(1); end;
