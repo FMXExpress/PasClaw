@@ -50,6 +50,8 @@ uses
   PasClaw.Providers.Intf,
   PasClaw.Tools.Registry,
   PasClaw.Tools.ToolLoop,  { TToolLoopConfig/Result -- RunCheckpointedLoop sig }
+  PasClaw.Agent.Hooks,     { TPasClawHook -- disconnect-abort hook for streaming }
+  PasClaw.Agent.Steering,  { PushSteering/PendingSteeringCount -- /v1/steer + SteeringKey }
   PasClaw.Agent.AutoRouter.Apply,  { ApplyAutoRoute -- per-turn cheap routing }
   PasClaw.Session.Store,
   PasClaw.Gateway.RelayQueue, { TRelayQueue -- FRelayQueue field type }
@@ -382,6 +384,9 @@ type
     procedure HandleProvidersList(AResp: TIdHTTPResponseInfo);
     procedure HandleReplicateSearch(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
     procedure HandleReplicateModel(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
+    { POST /v1/steer -- push a mid-turn steering message into the running turn
+      for the X-PasClaw-Session session (PasClaw.Agent.Steering). }
+    procedure HandleSteer(ARequest: TIdHTTPRequestInfo; AResp: TIdHTTPResponseInfo);
     { Resolve a registered MCP tool by its bare suffix (after "server__"),
       preferring a server whose name contains "replicate". '' if none -- so the
       replicate endpoints work whatever the operator named the MCP server. }
@@ -1312,6 +1317,7 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/status')  then HandleStatus(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/tools')   then HandleTools(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/chat')    then HandleChat(ARequest, AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/steer')   then HandleSteer(ARequest, AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/chat/completions') then
       HandleChatCompletions(AContext, ARequest, AResponse, IsChatCompletionsStream, ResponseStarted)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/responses') then
@@ -1689,6 +1695,46 @@ begin
     WriteJSON(AResp, 200, '{"status":"ok","id":"' + JsonEscape(Id) + '"}')
   else
     WriteJSON(AResp, 400, '{"error":"' + JsonEscape(Err) + '"}');
+end;
+
+procedure TGatewayServer.HandleSteer(ARequest: TIdHTTPRequestInfo;
+                                     AResp: TIdHTTPResponseInfo);
+var
+  Body, Sess, Text: string;
+  Req: TJsonObject;
+begin
+  Sess := ReqSessionId(ARequest);
+  Body := ReadRequestBody(ARequest);
+  Text := '';
+  if Trim(Body) <> '' then
+  begin
+    Req := TJsonObject.Parse(Body);
+    if Req <> nil then
+    try
+      Text := Req.GetStr('text', '');
+      if Sess = '' then Sess := Trim(Req.GetStr('session', ''));
+    finally
+      Req.Free;
+    end;
+  end;
+  if Sess = '' then
+  begin
+    WriteJSON(AResp, 400,
+      '{"error":"steer needs a session (X-PasClaw-Session header or \"session\" field)"}');
+    Exit;
+  end;
+  if Trim(Text) = '' then
+  begin
+    WriteJSON(AResp, 400, '{"error":"steer needs non-empty \"text\""}');
+    Exit;
+  end;
+  { Push into the running turn's steering queue. The tool loop drains it at the
+    next iteration top and folds it in as "[user steering]: ..."; harmless (just
+    queues) if no turn is currently running for this session. }
+  PushSteering(Sess, Text);
+  LogDebug('gateway: /v1/steer queued for session %s (%d pending)',
+           [Sess, PendingSteeringCount(Sess)]);
+  WriteJSON(AResp, 200, Format('{"ok":true,"pending":%d}', [PendingSteeringCount(Sess)]));
 end;
 
 procedure TGatewayServer.HandleSkillInstall(ARequest: TIdHTTPRequestInfo;
@@ -4877,6 +4923,22 @@ type
     property Closed: Boolean read FClosed;
   end;
 
+  { BeforeTurn hook that aborts the tool loop once the SSE client is gone
+    (Stop pressed, tab closed, stream dropped). Checked at each iteration top:
+    when the streamer has already hit a dead socket (Closed) or the connection
+    reads disconnected, it clears ContinueTurn so RunToolLoop exits gracefully
+    -- which releases the session turn lock instead of running the whole turn
+    to completion invisibly. }
+  TDisconnectAbortHook = class(TPasClawHook)
+  private
+    FContext: TIdContext;
+    FStreamer: TSSEStreamer;
+  public
+    constructor Create(AContext: TIdContext; AStreamer: TSSEStreamer);
+    procedure BeforeTurn(var ContinueTurn: Boolean;
+                         var Messages: TMessageArray); override;
+  end;
+
 function EmitSSEResponseHeaders(AContext: TIdContext;
                                 AResp: TIdHTTPResponseInfo): Boolean;
 (* Write the SSE response status line + headers raw via the underlying
@@ -5049,6 +5111,28 @@ begin
   FClosed := True;
   Terminator := TEncoding.UTF8.GetBytes('0'#13#10#13#10);
   WriteSocketBytes(Terminator);
+end;
+
+constructor TDisconnectAbortHook.Create(AContext: TIdContext; AStreamer: TSSEStreamer);
+begin
+  inherited Create;
+  FContext  := AContext;
+  FStreamer := AStreamer;
+end;
+
+procedure TDisconnectAbortHook.BeforeTurn(var ContinueTurn: Boolean;
+                                          var Messages: TMessageArray);
+begin
+  { Streamer.Closed is set the moment a write hits a dead socket (frequent --
+    every tool call/result writes), so it usually flips before Connection does.
+    Also probe the connection directly for the between-writes case. }
+  if ((FStreamer <> nil) and FStreamer.Closed)
+     or (FContext = nil) or (FContext.Connection = nil)
+     or (not FContext.Connection.Connected) then
+  begin
+    ContinueTurn := False;
+    LogDebug('chat/completions: SSE client gone -- aborting tool loop at iteration top');
+  end;
 end;
 
 procedure TSSEStreamer.WriteChunk(const DeltaContent, FinishReason: string);
@@ -5258,6 +5342,7 @@ var
   Streamer: TSSEStreamer;
   StreamStarted, StreamClosed: Boolean;
   ActivityCollector: TToolActivityCollector;
+  AbortHook: TDisconnectAbortHook;
   Prim: ILLMProvider;
   FB: TLLMProviderArray;
   FBModels: TStringArray;
@@ -5271,6 +5356,7 @@ var
   end;
 begin
   Streamer := nil;
+  AbortHook := nil;
   StreamStarted := False;
   StreamClosed := False;
   AWasStreamingRequest := False;
@@ -5459,6 +5545,15 @@ begin
       Streamer := TSSEStreamer.Create(AContext, CompId, ReqModel, FDebugIO);
       LoopCfg.OnToolCall   := Streamer.NoteToolCall;
       LoopCfg.OnToolResult := Streamer.NoteToolResult;
+      { B -- mid-turn steering: key the loop's steering drain to THIS session
+        (raw X-PasClaw-Session) so a /v1/steer POST from the web UI folds into
+        the running turn. Empty session => steering disabled (no-op). }
+      LoopCfg.SteeringKey := ReqSession;
+      { A -- cancel-on-disconnect: abort the loop + release the session turn
+        lock when the SSE client goes away, instead of running to completion
+        invisibly. Freed in the outer finally (mirrors Streamer). }
+      AbortHook := TDisconnectAbortHook.Create(AContext, Streamer);
+      LoopCfg.Hooks := [AbortHook];
       Streamer.WriteComment('connected');
       if not RunCheckpointedLoop(ReqSession, LoopCfg, Msgs, Loop) then
       begin
@@ -5600,6 +5695,7 @@ begin
   finally
     Req.Free;
     if Streamer <> nil then Streamer.Free;
+    if AbortHook <> nil then AbortHook.Free;
     if ActivityCollector <> nil then ActivityCollector.Free;
   end;
 end;

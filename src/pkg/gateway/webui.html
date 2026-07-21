@@ -189,6 +189,11 @@
   #attach-chips:empty{display:none}
   .msg-queue{display:flex;flex-wrap:wrap;gap:.35rem;flex-basis:100%;order:-1}
   .msg-queue:empty{display:none}
+  /* Transient mid-turn steering note (see steerMsg): a dashed, muted line so
+     it reads as an aside injected into the running turn, not a chat bubble. */
+  .row.steer .bub{border:1px dashed rgba(32,246,255,.4);background:rgba(2,10,20,.35);
+    color:var(--cyan);font-size:12px;font-style:italic;opacity:.9}
+  .row.steer.e .bub{border-color:rgba(255,77,109,.5);color:var(--red)}
   .queue-chip{display:inline-flex;align-items:center;gap:.4rem;font-size:11px;color:var(--fg);
     background:rgba(255,159,28,.1);border:1px solid rgba(255,159,28,.32);border-radius:999px;padding:.15rem .55rem}
   .queue-chip button{background:none;border:0;color:var(--red);cursor:pointer;font-size:11px;padding:0;line-height:1}
@@ -1801,12 +1806,6 @@ async function streamAssistant() {
        survive a reload rather than being lost with the failed reply. */
     if (activeTurns.length) persistActive();
     m.focus();
-    /* Type-ahead: send the next queued message now that the turn is done. */
-    if (msgQueue.length) {
-      const next = msgQueue.shift();
-      renderQueue();
-      submitUser(next);
-    }
   }
 }
 
@@ -1822,35 +1821,39 @@ function submitUser(msg) {
    composer is a single line, so multi-line editing keeps normal arrows). A
    leading "/" is a client-side command (the gateway has no slash API). */
 let histIdx = -1, histDraft = "";
-/* Type-ahead queue: messages composed while a reply streams; flushed one per
-   turn from streamAssistant's finally. Enter queues (instead of Stop) while
-   streaming; the Send button (labelled "Stop" then) still aborts. */
-let msgQueue = [];
-function enqueueMsg() {
+/* Mid-turn "talk" = LIVE steering. A message typed while a reply streams is
+   POSTed to /v1/steer, which folds it into the RUNNING turn server-side
+   ("[user steering]: ..." at the next iteration) -- so it reaches the agent
+   immediately instead of waiting for the turn to finish. Enter steers while
+   streaming; the Send button (labelled "Stop") aborts the turn instead. */
+async function steerMsg() {
   const typed = m.value.trim();
   if (!typed && !chatAttachments.length) return;
   const msg = composeMessage(typed);
   m.value = ""; autosizeMsg(); chatAttachments = []; renderAttachChips();
-  msgQueue.push(msg);
-  renderQueue();
+  /* Optimistic echo -- transient: the next renderActive() (turn completion)
+     rebuilds the log from history, which doesn't carry steering notes. */
+  renderSteerNote("↳ steering: " + msg);
+  try {
+    const r = await gwFetch("/v1/steer", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ text: msg })
+    });
+    if (!r.ok) renderSteerNote("(steering failed: http " + r.status + ")", true);
+  } catch (e) {
+    renderSteerNote("(steering failed: " + ((e && e.message) || e) + ")", true);
+  }
 }
-function renderQueue() {
-  const c = $("#msg-queue");
-  if (!c) return;
-  c.innerHTML = "";
-  msgQueue.forEach((msg, i) => {
-    const chip = document.createElement("span");
-    chip.className = "queue-chip";
-    const label = msg.split("\n")[0];
-    chip.innerHTML = '<span title="' + escapeHtml(msg) + '">⏳ ' +
-      escapeHtml(label.length > 56 ? label.slice(0, 56) + "…" : label) + '</span>';
-    const x = document.createElement("button");
-    x.type = "button"; x.textContent = "✕";
-    x.title = "Remove from queue";
-    x.addEventListener("click", () => { msgQueue.splice(i, 1); renderQueue(); });
-    chip.appendChild(x);
-    c.appendChild(chip);
-  });
+function renderSteerNote(text, isErr) {
+  const row = document.createElement("div");
+  row.className = "row steer" + (isErr ? " e" : "");
+  const bub = document.createElement("div");
+  bub.className = "bub";
+  bub.textContent = text;
+  row.appendChild(bub);
+  log.appendChild(row);
+  log.scrollTop = log.scrollHeight;
 }
 const userHistory = () => activeTurns.filter(t => t.role === "u").map(t => t.text);
 function caretToEnd() { m.setSelectionRange(m.value.length, m.value.length); }
@@ -1895,7 +1898,7 @@ m.addEventListener("keydown", e => {
   }
   if (e.key === "Enter" && !e.shiftKey) {
     e.preventDefault();
-    if (streaming) enqueueMsg();   // type-ahead: queue instead of stopping
+    if (streaming) steerMsg();     // live steering: inject into the running turn
     else f.requestSubmit();
     return;
   }
