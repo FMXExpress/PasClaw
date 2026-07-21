@@ -53,6 +53,17 @@ type
     Required: Boolean;
   end;
 
+  (* A declared workflow OUTPUT (the "Output box"): a named field whose value is
+     a double-brace template into the run's inputs / node results, e.g.
+     value = "{{nodes.animate.output[0]}}". Turns a workflow into a function with
+     a typed return -- RunWorkflow's caller gets {name: value} instead of a blob
+     of every node result. *)
+  TWorkflowOutput = record
+    Name: string;
+    ValueTemplate: string;  (* nodes.ID.selector / inputs.NAME template, or literal *)
+    OutputType: string;     (* "string" | "number" | ... (advisory) *)
+  end;
+
   { Optional poll-until-done step for async tools. Many tools (e.g. Replicate's
     create_prediction) return a PENDING handle immediately, not the final
     output. When Enabled, after the node's tool call the engine repeatedly calls
@@ -94,6 +105,7 @@ type
     Name: string;
     Description: string;
     Inputs: array of TWorkflowInput;
+    Outputs: array of TWorkflowOutput;
     Nodes: array of TWorkflowNode;
     Edges: array of TWorkflowEdge;
   end;
@@ -157,6 +169,13 @@ function ResolveArgs(const ArgsTemplate, InputsJSON, SelfJSON: string;
 { Topologically order the node ids using edges + node-reference templates.
   False (with Err) on a cycle or an edge to an unknown node. }
 function TopoOrder(const Spec: TWorkflowSpec; out Order: TStringList; out Err: string): Boolean;
+
+{ Resolve the workflow's declared Outputs[] against the run's inputs + node
+  results into a JSON object of name -> value. Returns an empty object when none
+  are declared. Best-effort: an output whose template doesn't resolve becomes an
+  empty string rather than failing the whole run. }
+function ResolveWorkflowOutputs(const Spec: TWorkflowSpec; const InputsJSON: string;
+  const Results: TWorkflowNodeResultArray): string;
 
 { Run the whole workflow. InputsJSON is an object of input name -> value.
   Executes nodes in topo order, resolving each node's args from prior results,
@@ -243,6 +262,18 @@ begin
         Spec.Inputs[High(Spec.Inputs)].Required  := NObj.GetBool('required', False);
       end;
 
+    IArr := Root.ChildArray('outputs');
+    if IArr <> nil then
+      for i := 0 to IArr.Count - 1 do
+      begin
+        NObj := IArr.ItemObject(i);
+        if NObj = nil then Continue;
+        SetLength(Spec.Outputs, Length(Spec.Outputs) + 1);
+        Spec.Outputs[High(Spec.Outputs)].Name          := NObj.GetStr('name', '');
+        Spec.Outputs[High(Spec.Outputs)].ValueTemplate := NObj.GetStr('value', '');
+        Spec.Outputs[High(Spec.Outputs)].OutputType    := NObj.GetStr('type', 'string');
+      end;
+
     NArr := Root.ChildArray('nodes');
     if NArr <> nil then
       for i := 0 to NArr.Count - 1 do
@@ -325,6 +356,17 @@ begin
       Arr.AddObject(O);
     end;
     Root.PutArray('inputs', Arr);
+
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Spec.Outputs) do
+    begin
+      O := TJsonObject.Create;
+      O.PutStr('name', Spec.Outputs[i].Name);
+      O.PutStr('value', Spec.Outputs[i].ValueTemplate);
+      O.PutStr('type', Spec.Outputs[i].OutputType);
+      Arr.AddObject(O);
+    end;
+    Root.PutArray('outputs', Arr);
 
     Arr := TJsonArray.Create;
     for i := 0 to High(Spec.Nodes) do
@@ -841,6 +883,37 @@ begin
       fast on any of them rather than polling to the timeout). }
     SetLength(Aw.Failure, 3);
     Aw.Failure[0] := 'failed'; Aw.Failure[1] := 'canceled'; Aw.Failure[2] := 'aborted';
+  end;
+end;
+
+function ResolveWorkflowOutputs(const Spec: TWorkflowSpec; const InputsJSON: string;
+  const Results: TWorkflowNodeResultArray): string;
+var
+  Obj, Tmp: TJsonObject;
+  i: Integer;
+  Wrapped, Resolved, RErr, Val: string;
+begin
+  Obj := TJsonObject.Create;
+  try
+    for i := 0 to High(Spec.Outputs) do
+    begin
+      if Trim(Spec.Outputs[i].Name) = '' then Continue;
+      Val := '';
+      { Resolve the value template exactly like node args: wrap it as a JSON
+        string so ResolveArgs substitutes the double-brace placeholders, then
+        read the single value back out. }
+      Wrapped := '{"v":"' + JsonEscape(Spec.Outputs[i].ValueTemplate) + '"}';
+      if ResolveArgs(Wrapped, InputsJSON, Results, Resolved, RErr) then
+      begin
+        try Tmp := TJsonObject.Parse(Resolved); except Tmp := nil; end;
+        if Tmp <> nil then
+        try Val := Tmp.GetStr('v', ''); finally Tmp.Free; end;
+      end;
+      Obj.PutStr(Spec.Outputs[i].Name, Val);
+    end;
+    Result := Obj.ToJSON;
+  finally
+    Obj.Free;
   end;
 end;
 
