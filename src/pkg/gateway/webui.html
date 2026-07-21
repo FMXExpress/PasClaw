@@ -1000,6 +1000,8 @@
         </div>
         <input id="wfDesc" placeholder="description (optional)">
         <input id="wfInputs" placeholder="inputs (comma-separated names, e.g. prompt)">
+        <textarea id="wfOutputs" rows="2" style="font-family:ui-monospace,monospace;font-size:12px"
+          placeholder="outputs — one per line, name = template. e.g.  video_url = {{nodes.animate.output[0]}}"></textarea>
         <div style="font-size:11px;opacity:.6">Drag a node by its title to move it; drag from a node's right ● to another node's left ● to connect. Click a node to edit its args.</div>
         <div id="wfCanvas" style="position:relative;flex:1;min-height:280px;border:1px solid var(--border,#333);border-radius:6px;background:rgba(127,127,127,.05);overflow:auto">
           <svg id="wfEdgeLayer" style="position:absolute;left:0;top:0;pointer-events:none;z-index:0"></svg>
@@ -4028,6 +4030,7 @@ function wfNewClicked() {
   document.getElementById("wfName").value = "";
   document.getElementById("wfDesc").value = "";
   document.getElementById("wfInputs").value = "";
+  document.getElementById("wfOutputs").value = "";
   document.getElementById("wfRunPanel").style.display = "none";
   wfRender(); wfSelect(null); wfMsg("");
 }
@@ -4039,6 +4042,8 @@ async function wfLoad(id) {
     document.getElementById("wfName").value = spec.name || "";
     document.getElementById("wfDesc").value = spec.description || "";
     document.getElementById("wfInputs").value = (spec.inputs || []).map(i => i.name).join(", ");
+    document.getElementById("wfOutputs").value =
+      (spec.outputs || []).map(o => o.name + " = " + (o.value || "")).join("\n");
     wf.nodes = (spec.nodes || []).map(n => ({
       id: n.id, tool: n.tool, args: JSON.stringify(n.args || {}, null, 2),
       x: (typeof n.x === "number" && n.x >= 0) ? n.x : -1,
@@ -4354,6 +4359,18 @@ function wfStartConnect(ev, fromId) {
 function wfBuildSpec() {
   const name = document.getElementById("wfName").value.trim();
   const inputs = document.getElementById("wfInputs").value.split(",").map(s => s.trim()).filter(Boolean);
+  /* Outputs: one "name = template" per line -> [{name, value, type}]. The
+     template is a {{nodes.ID.selector}} / {{inputs.NAME}} expression the engine
+     resolves into the run's structured result. */
+  const outputs = document.getElementById("wfOutputs").value.split("\n")
+    .map(s => s.trim()).filter(Boolean).map(line => {
+      const eq = line.indexOf("=");
+      return {
+        name:  (eq >= 0 ? line.slice(0, eq) : line).trim(),
+        value: (eq >= 0 ? line.slice(eq + 1) : "").trim(),
+        type:  "string"
+      };
+    }).filter(o => o.name);
   const nodes = [];
   for (const n of wf.nodes) {
     let args;
@@ -4367,6 +4384,7 @@ function wfBuildSpec() {
   return {
     name, description: document.getElementById("wfDesc").value,
     inputs: inputs.map(i => ({ name: i, type: "string", required: true })),
+    outputs,
     nodes, edges: wf.edges.filter(e => e.from && e.to)
   };
 }

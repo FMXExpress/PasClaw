@@ -176,12 +176,16 @@ begin
       Arr.AddObject(O);
     end;
     Root.PutArray('nodes', Arr);
-    { Surface the final output prominently -- the text of the last node that
-      produced one -- so the agent sees the deliverable (e.g. the image URL)
-      without digging through the node list. }
-    for i := High(Res) downto 0 do
-      if Res[i].Text <> '' then
-      begin Root.PutStr('output', Res[i].Text); Break; end;
+    { Declared outputs (the "Output box") -> a structured name -> value object,
+      so the workflow reads back as a typed function result. Falls back to the
+      heuristic "text of the last node that produced one" when no outputs are
+      declared, so existing workflows are unchanged. }
+    if Length(Spec.Outputs) > 0 then
+      Root.PutRaw('output', ResolveWorkflowOutputs(Spec, InputsJSON, Res))
+    else
+      for i := High(Res) downto 0 do
+        if Res[i].Text <> '' then
+        begin Root.PutStr('output', Res[i].Text); Break; end;
     Result := Root.ToJSON;
   finally
     Root.Free;

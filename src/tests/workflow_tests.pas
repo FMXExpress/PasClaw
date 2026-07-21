@@ -364,6 +364,34 @@ begin
   Check(not IsSafeWorkflowId('../etc/passwd'), 'store: rejects path traversal id');
 end;
 
+{ Declared outputs (the "Output box"): parse + round-trip + resolution. }
+procedure TestOutputs;
+var
+  Spec: TWorkflowSpec;
+  Err, OutJSON: string;
+  Res: TWorkflowNodeResultArray;
+begin
+  Check(ParseWorkflow(
+    '{"name":"wf","outputs":[{"name":"url","value":"{{nodes.gen.output[0]}}"},' +
+    '{"name":"echo","value":"{{inputs.prompt}}"}],' +
+    '"nodes":[{"id":"gen","tool":"x","args":{}}]}', Spec, Err),
+    'outputs: parse (' + Err + ')');
+  Check(Length(Spec.Outputs) = 2, 'outputs: parsed 2');
+  { Survive a JSON round-trip. (Serialize to a local first -- passing
+    WorkflowToJSON(Spec) directly as arg 1 while Spec is arg 3's `out` param
+    aliases the record FPC zeroes on entry.) }
+  OutJSON := WorkflowToJSON(Spec);
+  Check(ParseWorkflow(OutJSON, Spec, Err), 'outputs: reparse (' + Err + ')');
+  Check(Length(Spec.Outputs) = 2, 'outputs: survive round-trip');
+  { Resolve against synthetic results + inputs. }
+  SetLength(Res, 1);
+  Res[0].NodeId := 'gen'; Res[0].Ok := True;
+  Res[0].JSON := '{"output":["https://x/img.png"]}';
+  OutJSON := ResolveWorkflowOutputs(Spec, '{"prompt":"a cat"}', Res);
+  Check(Pos('https://x/img.png', OutJSON) > 0, 'outputs: node url resolved (got ' + OutJSON + ')');
+  Check(Pos('a cat', OutJSON) > 0, 'outputs: input echoed (got ' + OutJSON + ')');
+end;
+
 begin
   TestParse;
   TestValidate;
@@ -378,6 +406,7 @@ begin
   TestDispatchRouting;
   TestRunMissingInput;
   TestStoreRoundTrip;
+  TestOutputs;
 
   if Failures = 0 then WriteLn('workflow_tests: OK')
   else begin WriteLn('workflow_tests: ', Failures, ' failure(s)'); Halt(1); end;
