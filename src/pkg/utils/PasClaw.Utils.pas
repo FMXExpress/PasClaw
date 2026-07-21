@@ -56,6 +56,9 @@ function HomeDir: string;
 function JoinPath(const A, B: string): string;
 function FileExistsCI(const Path: string): Boolean;
 function ReadFileText(const Path: string): string;
+{ True when B is well-formed UTF-8 (used by ReadFileText to pick a Latin-1
+  fallback for non-UTF-8 files; exposed for tests). }
+function BytesAreValidUTF8(const B: TBytes): Boolean;
 procedure WriteFileText(const Path, Content: string);
 { On Windows, convert '/' to '\' so RTL path parsing (ExtractFilePath,
   ForceDirectories) handles paths the model passes with forward slashes
@@ -275,28 +278,110 @@ begin
   {$ENDIF}
 end;
 
+{ True when B holds a well-formed UTF-8 byte sequence (rejects overlong forms,
+  stray continuation bytes, and > U+10FFFF leads). Used to decide whether a file
+  needs the Latin-1 fallback below. }
+function BytesAreValidUTF8(const B: TBytes): Boolean;
+var
+  i, n, Extra, j: Integer;
+  c: Byte;
+begin
+  i := 0; n := Length(B);
+  while i < n do
+  begin
+    c := B[i];
+    if c < $80 then Extra := 0
+    else if (c and $E0) = $C0 then
+    begin if c < $C2 then Exit(False); Extra := 1; end   { $C0/$C1 -> overlong }
+    else if (c and $F0) = $E0 then Extra := 2
+    else if (c and $F8) = $F0 then
+    begin if c > $F4 then Exit(False); Extra := 3; end    { > U+10FFFF }
+    else Exit(False);                                     { stray continuation / $F5.. }
+    for j := 1 to Extra do
+    begin
+      Inc(i);
+      if (i >= n) or ((B[i] and $C0) <> $80) then Exit(False);
+    end;
+    Inc(i);
+  end;
+  Result := True;
+end;
+
+{ Re-encode arbitrary bytes as UTF-8 by treating each input byte as a Latin-1
+  codepoint (0..255). Total and lossless: every byte maps to a valid UTF-8
+  sequence, so a non-UTF-8 file (e.g. a Windows-1252 PHP source) still reads back
+  as valid, displayable text instead of raising an encoding error. }
+function Latin1BytesToUTF8(const B: TBytes): TBytes;
+var
+  i, o, n: Integer;
+  c: Byte;
+begin
+  n := Length(B);
+  SetLength(Result, n * 2);   { worst case: 2 UTF-8 bytes per input byte }
+  o := 0;
+  for i := 0 to n - 1 do
+  begin
+    c := B[i];
+    if c < $80 then begin Result[o] := c; Inc(o); end
+    else
+    begin
+      Result[o] := $C0 or (c shr 6);   Inc(o);
+      Result[o] := $80 or (c and $3F); Inc(o);
+    end;
+  end;
+  SetLength(Result, o);
+end;
+
+{ Wrap already-UTF-8 bytes as pasclaw's `string` WITHOUT any system-codepage
+  round-trip: on FPC keep the bytes verbatim and tag them CP_UTF8; on Delphi
+  decode to the native UnicodeString. Never raises. }
+function UTF8BytesToStr(const B: TBytes): string;
+begin
+{$IFDEF FPC}
+  SetLength(Result, Length(B));
+  if Length(B) > 0 then Move(B[0], Result[1], Length(B));
+  { The bytes are UTF-8 but a raw AnsiString is tagged CP_0 (system default);
+    retag so downstream TEncoding.UTF8.GetBytes on this string doesn't
+    double-encode. }
+  TagUTF8(Result);
+{$ELSE}
+  Result := TEncoding.UTF8.GetString(B);
+{$ENDIF}
+end;
+
 function ReadFileText(const Path: string): string;
 var
   Strm: TFileStream;
   Bytes: TBytes;
   NPath: string;
+  N: Integer;
 begin
   Result := '';
   NPath := NormalizePathSep(Path);
   if not FileExists(NPath) then Exit;
   Strm := TFileStream.Create(NPath, fmOpenRead or fmShareDenyWrite);
   try
-    SetLength(Bytes, Strm.Size);
-    if Strm.Size > 0 then Strm.ReadBuffer(Bytes[0], Strm.Size);
-    Result := TEncoding.UTF8.GetString(Bytes);
-    { Under FPC, TEncoding.UTF8.GetString returns AnsiString carrying
-      CP_0 (system default) -- the bytes are UTF-8 but the tag isn't.
-      Retag at the boundary so downstream code that calls
-      TEncoding.UTF8.GetBytes on this string doesn't double-encode. }
-    TagUTF8(Result);
+    N := Strm.Size;
+    SetLength(Bytes, N);
+    if N > 0 then Strm.ReadBuffer(Bytes[0], N);
   finally
     Strm.Free;
   end;
+  { Drop a leading UTF-8 BOM so it doesn't surface as a stray char on line 1
+    (which would break edit_file's first-line matching). }
+  if (Length(Bytes) >= 3) and (Bytes[0] = $EF) and (Bytes[1] = $BB) and (Bytes[2] = $BF) then
+    Bytes := Copy(Bytes, 3, Length(Bytes) - 3);
+  { Decode defensively. The old path -- TEncoding.UTF8.GetString then an
+    implicit re-encode of the UnicodeString result back through the system ANSI
+    codepage -- raised EEncodingError ("No mapping for the Unicode character
+    exists in the target multi-byte code page") on Windows for any file
+    character with no mapping in the active codepage (common with legacy 8-bit
+    sources). Instead: pass valid UTF-8 through untouched, and reinterpret a
+    non-UTF-8 file as Latin-1 so it still reads as text and never raises. }
+  if BytesAreValidUTF8(Bytes) then
+    Result := UTF8BytesToStr(Bytes)
+  else
+    Result := UTF8BytesToStr(Latin1BytesToUTF8(Bytes));
 end;
 
 procedure WriteFileText(const Path, Content: string);

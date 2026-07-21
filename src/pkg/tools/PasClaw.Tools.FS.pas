@@ -269,7 +269,15 @@ begin
     ErrMsg := 'no such file: ' + Path + '.' + SuggestSimilarFiles(Path);
     Exit('');
   end;
-  Body := ReadFileText(Path);
+  try
+    Body := ReadFileText(Path);
+  except
+    on E: Exception do
+    begin
+      ErrMsg := 'could not read ' + Path + ': ' + E.ClassName + ': ' + E.Message;
+      Exit('');
+    end;
+  end;
   { Optional line range (C2): a grep_files hit gives the line number; the
     follow-up read can be surgical instead of swallowing the whole file
     into history. 1-based inclusive; bounds are clamped; range implies
