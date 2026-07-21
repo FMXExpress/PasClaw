@@ -129,7 +129,7 @@ end;
 function ToolWorkflowRun(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Args, InputsObj, Root, O: TJsonObject;
-  Name, InputsJSON, Err: string;
+  Name, InputsJSON, Err, OutErrs: string;
   Spec: TWorkflowSpec;
   Res: TWorkflowNodeResultArray;
   Arr: TJsonArray;
@@ -179,9 +179,14 @@ begin
     { Declared outputs (the "Output box") -> a structured name -> value object,
       so the workflow reads back as a typed function result. Falls back to the
       heuristic "text of the last node that produced one" when no outputs are
-      declared, so existing workflows are unchanged. }
+      declared, so existing workflows are unchanged. Any output whose template
+      does not resolve is surfaced under "output_errors" (rather than silently
+      blank) so a mistyped selector is diagnosable. }
     if Length(Spec.Outputs) > 0 then
-      Root.PutRaw('output', ResolveWorkflowOutputs(Spec, InputsJSON, Res))
+    begin
+      Root.PutRaw('output', ResolveWorkflowOutputs(Spec, InputsJSON, Res, OutErrs));
+      if OutErrs <> '' then Root.PutStr('output_errors', OutErrs);
+    end
     else
       for i := High(Res) downto 0 do
         if Res[i].Text <> '' then
@@ -235,8 +240,12 @@ begin
     'the image/video URL as {{nodes.ID.output[0]}} (NOT structuredContent.output[0]). ' +
     'Optional "outputs":[{"name","value":"<template>"}] declares a typed result ' +
     '(workflow_run returns {name:value}). Optional "loop":{"max":N,"until":"<template>",' +
-    '"feedback":[{"output","input"}]} re-runs the DAG up to N times, feeding outputs ' +
-    'back into inputs, stopping when until resolves to true/done.',
+    '"feedback":[{"output","input"}]} re-runs the WHOLE DAG up to N times (hard cap ' +
+    '100), feeding outputs back into inputs each pass. NOTE: every pass re-runs every ' +
+    'node, so a loop over paid model nodes multiplies their cost/latency N-fold -- keep ' +
+    'max small. Looping stops early only when the "until" template resolves to one of: ' +
+    'true / yes / done / 1 / stop / complete (case-insensitive); author it to evaluate ' +
+    'to one of those, otherwise the loop always runs to max.',
     SAVE_SCHEMA, ToolWorkflowSave, tcMutating);
 
   Reg1(Reg, 'workflow_list',

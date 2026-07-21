@@ -4072,7 +4072,7 @@ function wfAutoLayout() {
   // give any node without a position a staggered column slot
   let col = 0;
   wf.nodes.forEach(n => {
-    if (n.x < 0 || n.y < 0) { n.x = 20 + col * (NODE_W + 40); n.y = 30 + (col % 2) * 90; col++; }
+    if (n.x < 0 || n.y < 0) { n.x = IO_GUTTER + col * (NODE_W + 40); n.y = 30 + (col % 2) * 90; col++; }
   });
 }
 
@@ -4086,7 +4086,7 @@ function wfAddNode() {
   const args =
     tool === "llm"       ? '{\n  "provider": "",\n  "model": "",\n  "prompt": "{{inputs.text}}"\n}' :
     tool === "replicate" ? '{\n  "version": "",\n  "input": { "prompt": "{{inputs.prompt}}" }\n}' : "{}";
-  wf.nodes.push({ id, tool, args, x: 20 + (wf.nodes.length % 4) * (NODE_W + 40), y: 30 + (wf.nodes.length % 3) * 90 });
+  wf.nodes.push({ id, tool, args, x: IO_GUTTER + (wf.nodes.length % 4) * (NODE_W + 40), y: 30 + (wf.nodes.length % 3) * 90 });
   wfRender(); wfSelect(id);
 }
 
@@ -4272,6 +4272,9 @@ function wfRenderModelForm(formArea, n, m, version, schema) {
    in an output template gets a wire to the Output box. So the canvas is a live
    diagram of "first model <- input, last model -> output". */
 const IO_W = 134;
+/* Left gutter that new nodes start after, so auto-placed nodes never land under
+   the fixed INPUT box at (8,8). */
+const IO_GUTTER = 8 + IO_W + 20;
 function wfInputNames() {
   return document.getElementById("wfInputs").value.split(",").map(s => s.trim()).filter(Boolean);
 }

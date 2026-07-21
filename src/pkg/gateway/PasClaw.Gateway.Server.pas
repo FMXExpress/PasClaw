@@ -1708,7 +1708,9 @@ begin
   Text := '';
   if Trim(Body) <> '' then
   begin
-    Req := TJsonObject.Parse(Body);
+    { Guard Parse: a malformed body must fall through to the 400s below, not
+      raise and become a 500. }
+    try Req := TJsonObject.Parse(Body); except Req := nil; end;
     if Req <> nil then
     try
       Text := Req.GetStr('text', '');
@@ -5551,9 +5553,12 @@ begin
       LoopCfg.SteeringKey := ReqSession;
       { A -- cancel-on-disconnect: abort the loop + release the session turn
         lock when the SSE client goes away, instead of running to completion
-        invisibly. Freed in the outer finally (mirrors Streamer). }
+        invisibly. BeforeTurn fires at each iteration top, so this aborts before
+        the NEXT model turn -- a single long-running tool call still finishes
+        first (not a hard mid-tool cancel). Freed in the outer finally (mirrors
+        Streamer). Append (don't replace) so any hooks set upstream survive. }
       AbortHook := TDisconnectAbortHook.Create(AContext, Streamer);
-      LoopCfg.Hooks := [AbortHook];
+      LoopCfg.Hooks := LoopCfg.Hooks + [AbortHook];
       Streamer.WriteComment('connected');
       if not RunCheckpointedLoop(ReqSession, LoopCfg, Msgs, Loop) then
       begin

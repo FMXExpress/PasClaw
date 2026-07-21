@@ -193,9 +193,15 @@ function TopoOrder(const Spec: TWorkflowSpec; out Order: TStringList; out Err: s
 { Resolve the workflow's declared Outputs[] against the run's inputs + node
   results into a JSON object of name -> value. Returns an empty object when none
   are declared. Best-effort: an output whose template doesn't resolve becomes an
-  empty string rather than failing the whole run. }
+  empty string rather than failing the whole run.
+
+  The second overload also returns, via ResolveErrs, an sLineBreak-joined list of
+  "<name>: <reason>" for each output that failed to resolve -- so a mistyped
+  selector surfaces as a visible error instead of a silent empty value. }
 function ResolveWorkflowOutputs(const Spec: TWorkflowSpec; const InputsJSON: string;
-  const Results: TWorkflowNodeResultArray): string;
+  const Results: TWorkflowNodeResultArray): string; overload;
+function ResolveWorkflowOutputs(const Spec: TWorkflowSpec; const InputsJSON: string;
+  const Results: TWorkflowNodeResultArray; out ResolveErrs: string): string; overload;
 
 { Run the whole workflow. InputsJSON is an object of input name -> value.
   Executes nodes in topo order, resolving each node's args from prior results,
@@ -971,11 +977,19 @@ end;
 
 function ResolveWorkflowOutputs(const Spec: TWorkflowSpec; const InputsJSON: string;
   const Results: TWorkflowNodeResultArray): string;
+var Dummy: string;
+begin
+  Result := ResolveWorkflowOutputs(Spec, InputsJSON, Results, Dummy);
+end;
+
+function ResolveWorkflowOutputs(const Spec: TWorkflowSpec; const InputsJSON: string;
+  const Results: TWorkflowNodeResultArray; out ResolveErrs: string): string;
 var
   Obj, Tmp: TJsonObject;
   i: Integer;
   Wrapped, Resolved, RErr, Val: string;
 begin
+  ResolveErrs := '';
   Obj := TJsonObject.Create;
   try
     for i := 0 to High(Spec.Outputs) do
@@ -984,13 +998,20 @@ begin
       Val := '';
       { Resolve the value template exactly like node args: wrap it as a JSON
         string so ResolveArgs substitutes the double-brace placeholders, then
-        read the single value back out. }
+        read the single value back out. A template that does not resolve leaves
+        Val empty but records why in ResolveErrs, so a mistyped selector is
+        visible instead of silently blank. }
       Wrapped := '{"v":"' + JsonEscape(Spec.Outputs[i].ValueTemplate) + '"}';
       if ResolveArgs(Wrapped, InputsJSON, Results, Resolved, RErr) then
       begin
         try Tmp := TJsonObject.Parse(Resolved); except Tmp := nil; end;
         if Tmp <> nil then
         try Val := Tmp.GetStr('v', ''); finally Tmp.Free; end;
+      end
+      else
+      begin
+        if ResolveErrs <> '' then ResolveErrs := ResolveErrs + sLineBreak;
+        ResolveErrs := ResolveErrs + Spec.Outputs[i].Name + ': ' + RErr;
       end;
       Obj.PutStr(Spec.Outputs[i].Name, Val);
     end;

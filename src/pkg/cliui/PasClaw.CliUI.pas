@@ -403,6 +403,8 @@ begin
   if HaveMode then PrintLn;
 end;
 {$ENDIF}
+{ Bare/unknown platform (none of Windows, FPC/Unix, or Delphi/POSIX): no way to
+  turn off terminal echo, so fall back to a plain read. }
 {$IF NOT DEFINED(UNIX) AND NOT DEFINED(POSIX) AND NOT DEFINED(MSWINDOWS)}
 begin
   { Unknown platform -- fall through to plain echoing read so the
