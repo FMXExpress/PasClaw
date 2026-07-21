@@ -153,7 +153,7 @@ begin
   if not LoadWorkflow(Name, Spec, Err) then
   begin ErrMsg := 'workflow_run: ' + Err; Exit; end;
 
-  Ok := RunWorkflow(Spec, InputsJSON, @WorkflowDispatch, Res, Err);
+  Ok := RunWorkflowRepeated(Spec, InputsJSON, @WorkflowDispatch, Res, Err);
 
   Root := TJsonObject.Create;
   try
@@ -232,7 +232,11 @@ begin
     'and {{nodes.ID}} (the upstream node''s output) or {{nodes.ID.selector}} ' +
     'for a dotted/[i] path into its JSON. For a raw Replicate model node the ' +
     'output is the prediction object with fields at the TOP level -- reference ' +
-    'the image/video URL as {{nodes.ID.output[0]}} (NOT structuredContent.output[0]).',
+    'the image/video URL as {{nodes.ID.output[0]}} (NOT structuredContent.output[0]). ' +
+    'Optional "outputs":[{"name","value":"<template>"}] declares a typed result ' +
+    '(workflow_run returns {name:value}). Optional "loop":{"max":N,"until":"<template>",' +
+    '"feedback":[{"output","input"}]} re-runs the DAG up to N times, feeding outputs ' +
+    'back into inputs, stopping when until resolves to true/done.',
     SAVE_SCHEMA, ToolWorkflowSave, tcMutating);
 
   Reg1(Reg, 'workflow_list',

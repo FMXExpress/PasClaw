@@ -100,6 +100,25 @@ type
     ToId: string;
   end;
 
+  { One feedback mapping for a loop: after a pass, the named OUTPUT's value is
+    written into the named INPUT for the next pass. }
+  TWorkflowFeedback = record
+    OutputName: string;
+    InputName: string;
+  end;
+
+  (* Bounded looping (Phase 3). When Enabled, RunWorkflowRepeated re-runs the
+     whole DAG up to MaxIterations times; after each pass it feeds declared
+     outputs back into inputs via Feedback, and stops early when UntilTemplate
+     resolves to a "done" value (true/yes/done/1/stop/complete). MaxIterations is
+     a hard cap so the loop always terminates. Empty/Disabled = single pass. *)
+  TWorkflowLoop = record
+    Enabled: Boolean;
+    MaxIterations: Integer;
+    UntilTemplate: string;
+    Feedback: array of TWorkflowFeedback;
+  end;
+
   TWorkflowSpec = record
     Id: string;
     Name: string;
@@ -108,6 +127,7 @@ type
     Outputs: array of TWorkflowOutput;
     Nodes: array of TWorkflowNode;
     Edges: array of TWorkflowEdge;
+    Loop: TWorkflowLoop;
   end;
 
   { Result of running one node. }
@@ -183,6 +203,15 @@ function ResolveWorkflowOutputs(const Spec: TWorkflowSpec; const InputsJSON: str
   the per-node results (in execution order) regardless; Ok is False if any node
   failed or setup errored. }
 function RunWorkflow(const Spec: TWorkflowSpec; const InputsJSON: string;
+  Caller: TWorkflowToolCallerFn; out Results: TWorkflowNodeResultArray;
+  out Err: string): Boolean;
+
+{ Run a workflow honouring Spec.Loop: a single RunWorkflow pass when looping is
+  off, otherwise re-run up to Loop.MaxIterations, feeding declared outputs back
+  into inputs (Loop.Feedback) between passes and stopping early on the
+  until-condition. Returns the LAST pass's Results. Callers that want looping
+  use this instead of RunWorkflow directly. }
+function RunWorkflowRepeated(const Spec: TWorkflowSpec; const InputsJSON: string;
   Caller: TWorkflowToolCallerFn; out Results: TWorkflowNodeResultArray;
   out Err: string): Boolean;
 
@@ -274,6 +303,24 @@ begin
         Spec.Outputs[High(Spec.Outputs)].OutputType    := NObj.GetStr('type', 'string');
       end;
 
+    ArgsObj := Root.ChildObject('loop');
+    if ArgsObj <> nil then
+    begin
+      Spec.Loop.Enabled       := True;
+      Spec.Loop.MaxIterations := ArgsObj.GetInt('max', 1);
+      Spec.Loop.UntilTemplate := ArgsObj.GetStr('until', '');
+      IArr := ArgsObj.ChildArray('feedback');
+      if IArr <> nil then
+        for i := 0 to IArr.Count - 1 do
+        begin
+          NObj := IArr.ItemObject(i);
+          if NObj = nil then Continue;
+          SetLength(Spec.Loop.Feedback, Length(Spec.Loop.Feedback) + 1);
+          Spec.Loop.Feedback[High(Spec.Loop.Feedback)].OutputName := NObj.GetStr('output', '');
+          Spec.Loop.Feedback[High(Spec.Loop.Feedback)].InputName  := NObj.GetStr('input', '');
+        end;
+    end;
+
     NArr := Root.ChildArray('nodes');
     if NArr <> nil then
       for i := 0 to NArr.Count - 1 do
@@ -336,7 +383,7 @@ end;
 
 function WorkflowToJSON(const Spec: TWorkflowSpec): string;
 var
-  Root, O: TJsonObject;
+  Root, O, O2: TJsonObject;
   Arr: TJsonArray;
   i: Integer;
 begin
@@ -392,6 +439,24 @@ begin
       Arr.AddObject(O);
     end;
     Root.PutArray('edges', Arr);
+
+    if Spec.Loop.Enabled then
+    begin
+      O := TJsonObject.Create;
+      O.PutInt('max', Spec.Loop.MaxIterations);
+      if Spec.Loop.UntilTemplate <> '' then O.PutStr('until', Spec.Loop.UntilTemplate);
+      Arr := TJsonArray.Create;
+      for i := 0 to High(Spec.Loop.Feedback) do
+      begin
+        O2 := TJsonObject.Create;
+        O2.PutStr('output', Spec.Loop.Feedback[i].OutputName);
+        O2.PutStr('input',  Spec.Loop.Feedback[i].InputName);
+        Arr.AddObject(O2);
+      end;
+      O.PutArray('feedback', Arr);
+      Root.PutRaw('loop', O.ToJSON);
+      O.Free;
+    end;
 
     Result := Root.ToJSON;
   finally
@@ -932,6 +997,91 @@ begin
     Result := Obj.ToJSON;
   finally
     Obj.Free;
+  end;
+end;
+
+{ Resolve a single double-brace template to its value (wrap + ResolveArgs + read
+  back), used for the loop's until-condition. Empty on any failure. }
+function ResolveOneTemplate(const Tpl, InputsJSON: string;
+  const Results: TWorkflowNodeResultArray): string;
+var
+  Wrapped, Resolved, RErr: string;
+  Tmp: TJsonObject;
+begin
+  Result := '';
+  if Trim(Tpl) = '' then Exit;
+  Wrapped := '{"v":"' + JsonEscape(Tpl) + '"}';
+  if ResolveArgs(Wrapped, InputsJSON, Results, Resolved, RErr) then
+  begin
+    try Tmp := TJsonObject.Parse(Resolved); except Tmp := nil; end;
+    if Tmp <> nil then try Result := Tmp.GetStr('v', ''); finally Tmp.Free; end;
+  end;
+end;
+
+{ The loop's until-condition: a resolved value counts as "done" when it reads
+  as an affirmative marker. }
+function LoopIsDone(const S: string): Boolean;
+var T: string;
+begin
+  T := LowerCase(Trim(S));
+  Result := (T = 'true') or (T = 'yes') or (T = 'done') or (T = '1')
+         or (T = 'stop') or (T = 'complete');
+end;
+
+{ Merge the pass's resolved outputs back into the inputs object per Loop.Feedback
+  (output name -> input name), returning the next pass's inputs JSON. }
+function ApplyLoopFeedback(const InputsJSON, OutputsJSON: string;
+  const Loop: TWorkflowLoop): string;
+var
+  InObj, OutObj: TJsonObject;
+  k: Integer;
+begin
+  Result := InputsJSON;
+  try InObj := TJsonObject.Parse(InputsJSON); except InObj := nil; end;
+  if InObj = nil then InObj := TJsonObject.Create;
+  try
+    try OutObj := TJsonObject.Parse(OutputsJSON); except OutObj := nil; end;
+    try
+      if OutObj <> nil then
+        for k := 0 to High(Loop.Feedback) do
+          if (Loop.Feedback[k].InputName <> '')
+             and OutObj.Has(Loop.Feedback[k].OutputName) then
+            InObj.PutStr(Loop.Feedback[k].InputName,
+                         OutObj.GetStr(Loop.Feedback[k].OutputName, ''));
+    finally
+      OutObj.Free;
+    end;
+    Result := InObj.ToJSON;
+  finally
+    InObj.Free;
+  end;
+end;
+
+function RunWorkflowRepeated(const Spec: TWorkflowSpec; const InputsJSON: string;
+  Caller: TWorkflowToolCallerFn; out Results: TWorkflowNodeResultArray;
+  out Err: string): Boolean;
+var
+  InputsCur, OutJSON: string;
+  Iter, MaxIt: Integer;
+begin
+  if not Spec.Loop.Enabled then
+  begin Result := RunWorkflow(Spec, InputsJSON, Caller, Results, Err); Exit; end;
+
+  MaxIt := Spec.Loop.MaxIterations;
+  if MaxIt < 1 then MaxIt := 1;
+  if MaxIt > 100 then MaxIt := 100;   { hard termination cap }
+  InputsCur := InputsJSON;
+  Result := False;
+  for Iter := 1 to MaxIt do
+  begin
+    Result := RunWorkflow(Spec, InputsCur, Caller, Results, Err);
+    if not Result then Exit;         { fail-fast: return the failing pass }
+    OutJSON := ResolveWorkflowOutputs(Spec, InputsCur, Results);
+    if (Spec.Loop.UntilTemplate <> '')
+       and LoopIsDone(ResolveOneTemplate(Spec.Loop.UntilTemplate, InputsCur, Results)) then
+      Exit;                          { until-condition met -> stop early }
+    if Iter = MaxIt then Exit;       { hit the iteration cap }
+    InputsCur := ApplyLoopFeedback(InputsCur, OutJSON, Spec.Loop);
   end;
 end;
 
