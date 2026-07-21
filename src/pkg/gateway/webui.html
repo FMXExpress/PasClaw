@@ -4284,9 +4284,14 @@ function wfIOBox(canvas, kind, x, fields) {
   const title = kind === "input" ? "▸ INPUT" : "OUTPUT ▸";
   let rows = fields.map(f => {
     const nm = typeof f === "string" ? f : f.name;
-    const tip = kind === "input" ? "{{inputs." + nm + "}}" : (f.value || "");
-    return `<div title="${escapeHtml(tip)}" style="padding:2px 7px;white-space:nowrap;overflow:hidden;` +
-      `text-overflow:ellipsis">${escapeHtml(nm)}</div>`;
+    if (kind === "input")
+      return `<div class="wf-infield" data-in="${escapeHtml(nm)}" ` +
+        `title="click to copy {{inputs.${escapeHtml(nm)}}}" style="padding:2px 7px;white-space:nowrap;` +
+        `overflow:hidden;text-overflow:ellipsis;cursor:copy">${escapeHtml(nm)}</div>`;
+    const wired = f.value ? "" : ` <span style="opacity:.4;font-size:10px">·drop</span>`;
+    return `<div class="wf-outfield" data-out="${escapeHtml(nm)}" ` +
+      `title="drag a node's ● output here to set ${escapeHtml(nm)}${f.value ? " (now: " + escapeHtml(f.value) + ")" : ""}" ` +
+      `style="padding:2px 7px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${escapeHtml(nm)}${wired}</div>`;
   }).join("");
   if (!rows) rows = `<div style="padding:2px 7px;opacity:.5">(none yet)</div>`;
   const port = kind === "input"
@@ -4300,6 +4305,31 @@ function wfRenderIOBoxes(canvas) {
   [...canvas.querySelectorAll(".wf-io")].forEach(e => e.remove());
   wfIOBox(canvas, "input", 8, wfInputNames());
   wfIOBox(canvas, "output", wfOutputBoxX(), wfOutputDefs());
+  /* Click an input field to copy its {{inputs.NAME}} template for pasting into
+     a node's args. (Output fields are drop targets -- see wfStartConnect.) */
+  canvas.querySelectorAll(".wf-infield").forEach(el => el.addEventListener("click", () => {
+    const t = "{{inputs." + el.dataset.in + "}}";
+    (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject())
+      .then(() => wfMsg("copied " + t)).catch(() => wfMsg(t));
+  }));
+}
+
+/* The sensible node-output reference for drag-to-wire: llm nodes emit text
+   (bare {{nodes.ID}}); model/tool nodes emit a prediction object ({{...output[0]}}). */
+function wfDefaultRef(nodeId) {
+  const n = wf.nodes.find(x => x.id === nodeId);
+  return (n && n.tool === "llm") ? `{{nodes.${nodeId}}}` : `{{nodes.${nodeId}.output[0]}}`;
+}
+/* Set (or add) an output field's template from a drag-to-wire drop, writing it
+   back through the #wfOutputs editor so save/load stay the single source. */
+function wfSetOutputTemplate(name, template) {
+  const ta = document.getElementById("wfOutputs");
+  const defs = wfOutputDefs();
+  const hit = defs.find(o => o.name === name);
+  if (hit) hit.value = template; else defs.push({ name, value: template });
+  ta.value = defs.map(o => o.name + " = " + o.value).join("\n");
+  wfRender();
+  wfMsg("wired " + name + " ← " + template);
 }
 
 function wfRender() {
@@ -4418,7 +4448,11 @@ function wfStartConnect(ev, fromId) {
     document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up);
     tmp.remove();
     const tgt = document.elementFromPoint(e.clientX, e.clientY);
-    if (tgt && tgt.classList.contains("wf-in")) {
+    const outField = tgt && tgt.closest && tgt.closest(".wf-outfield");
+    if (outField) {
+      /* Dropped on an Output box field -> author that output's template. */
+      wfSetOutputTemplate(outField.dataset.out, wfDefaultRef(fromId));
+    } else if (tgt && tgt.classList.contains("wf-in")) {
       const toId = tgt.dataset.node;
       if (toId && toId !== fromId && !wf.edges.some(x => x.from === fromId && x.to === toId)) {
         wf.edges.push({ from: fromId, to: toId }); wfRender();
