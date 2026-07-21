@@ -226,7 +226,9 @@ begin
     'prompt}; output is the reply text. You can also use any raw MCP tool or ' +
     'registered tool as a node. Wire data between nodes with {{inputs.NAME}} ' +
     'and {{nodes.ID}} (the upstream node''s output) or {{nodes.ID.selector}} ' +
-    'for a dotted/[i] path into its JSON.',
+    'for a dotted/[i] path into its JSON. For a raw Replicate model node the ' +
+    'output is the prediction object with fields at the TOP level -- reference ' +
+    'the image/video URL as {{nodes.ID.output[0]}} (NOT structuredContent.output[0]).',
     SAVE_SCHEMA, ToolWorkflowSave, tcMutating);
 
   Reg1(Reg, 'workflow_list',
