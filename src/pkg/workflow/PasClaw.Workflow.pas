@@ -442,6 +442,24 @@ begin
     SplitSelector(Selector, Steps);
     if Steps.Count = 0 then Exit;
     Cur := JSON;
+    { Tolerance: agent-authored selectors (and stale examples) often lead with
+      "structuredContent." even though the node output is already the unwrapped
+      top-level payload -- Replicate returns id/status/output at the TOP level
+      (see PlanNode + UnwrapResult), so the wrapper isn't there. If the object
+      has no structuredContent key, drop that leading step and resolve the rest
+      against the top level, so `structuredContent.output[0]` still finds
+      `output[0]`. Only strips when absent, so builds that DO wrap are untouched. }
+    if (Steps.Count >= 1) and (Steps[0] = 'structuredContent') then
+    begin
+      try Obj := TJsonObject.Parse(Cur); except Obj := nil; end;
+      if Obj <> nil then
+      try
+        if not Obj.Has('structuredContent') then Steps.Delete(0);
+      finally
+        Obj.Free;
+      end;
+      if Steps.Count = 0 then Exit;
+    end;
     for i := 0 to Steps.Count - 1 do
     begin
       Step := Steps[i];

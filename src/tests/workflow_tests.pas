@@ -116,6 +116,15 @@ begin
                      'structuredContent.output[0]', V), 'selector: resolves');
   Check(V = 'https://x/a.png', 'selector: correct value (got ' + V + ')');
   Check(not EvalSelector('{"a":{}}', 'a.missing.deep', V), 'selector: missing path fails');
+  { Tolerance: a stale "structuredContent." prefix resolves against the
+    unwrapped top-level payload (agent-authored Replicate selectors). }
+  Check(EvalSelector('{"output":["https://x/b.png"]}',
+                     'structuredContent.output[0]', V), 'selector: tolerates stale structuredContent prefix');
+  Check(V = 'https://x/b.png', 'selector: stale-prefix correct value (got ' + V + ')');
+  { But a real structuredContent wrapper is still honoured (not stripped). }
+  Check(EvalSelector('{"structuredContent":{"output":["https://x/c.png"]}}',
+                     'structuredContent.output[0]', V), 'selector: real wrapper still works');
+  Check(V = 'https://x/c.png', 'selector: real-wrapper value (got ' + V + ')');
 end;
 
 procedure TestRunChains;
