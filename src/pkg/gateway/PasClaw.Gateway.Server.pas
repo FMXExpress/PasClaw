@@ -2916,7 +2916,7 @@ begin
     begin WriteJSON(AResp, 404, '{"error":' + JsonStr(Err) + '}'); Exit; end;
     InputsJSON := Trim(ReadRequestBody(ARequest));
     if InputsJSON = '' then InputsJSON := '{}';
-    Ok := RunWorkflow(Spec, InputsJSON, @WorkflowDispatch, Res, Err);
+    Ok := RunWorkflowRepeated(Spec, InputsJSON, @WorkflowDispatch, Res, Err);
     Root := TJsonObject.Create;
     try
       Root.PutBool('ok', Ok);

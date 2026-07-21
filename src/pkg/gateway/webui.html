@@ -1002,6 +1002,8 @@
         <input id="wfInputs" placeholder="inputs (comma-separated names, e.g. prompt)">
         <textarea id="wfOutputs" rows="2" style="font-family:ui-monospace,monospace;font-size:12px"
           placeholder="outputs — one per line, name = template. e.g.  video_url = {{nodes.animate.output[0]}}"></textarea>
+        <textarea id="wfLoop" rows="2" style="font-family:ui-monospace,monospace;font-size:12px"
+          placeholder="loop (optional) — max = 5 · until = {{nodes.judge.done}} · one feedback per line: output -> input"></textarea>
         <div style="font-size:11px;opacity:.6">Drag a node by its title to move it; drag from a node's right ● to another node's left ● to connect. Click a node to edit its args.</div>
         <div id="wfCanvas" style="position:relative;flex:1;min-height:280px;border:1px solid var(--border,#333);border-radius:6px;background:rgba(127,127,127,.05);overflow:auto">
           <svg id="wfEdgeLayer" style="position:absolute;left:0;top:0;pointer-events:none;z-index:0"></svg>
@@ -4034,6 +4036,7 @@ function wfNewClicked() {
   document.getElementById("wfDesc").value = "";
   document.getElementById("wfInputs").value = "";
   document.getElementById("wfOutputs").value = "";
+  document.getElementById("wfLoop").value = "";
   document.getElementById("wfRunPanel").style.display = "none";
   wfRender(); wfSelect(null); wfMsg("");
 }
@@ -4047,6 +4050,12 @@ async function wfLoad(id) {
     document.getElementById("wfInputs").value = (spec.inputs || []).map(i => i.name).join(", ");
     document.getElementById("wfOutputs").value =
       (spec.outputs || []).map(o => o.name + " = " + (o.value || "")).join("\n");
+    const lp = spec.loop;
+    document.getElementById("wfLoop").value = lp
+      ? ["max = " + (lp.max || 1)]
+          .concat(lp.until ? ["until = " + lp.until] : [])
+          .concat((lp.feedback || []).map(f => f.output + " -> " + f.input)).join("\n")
+      : "";
     wf.nodes = (spec.nodes || []).map(n => ({
       id: n.id, tool: n.tool, args: JSON.stringify(n.args || {}, null, 2),
       x: (typeof n.x === "number" && n.x >= 0) ? n.x : -1,
@@ -4487,12 +4496,30 @@ function wfBuildSpec() {
     if (n.y >= 0) node.y = Math.round(n.y);
     nodes.push(node);
   }
-  return {
+  const spec = {
     name, description: document.getElementById("wfDesc").value,
     inputs: inputs.map(i => ({ name: i, type: "string", required: true })),
     outputs,
     nodes, edges: wf.edges.filter(e => e.from && e.to)
   };
+  const loop = wfBuildLoop();
+  if (loop) spec.loop = loop;
+  return spec;
+}
+
+/* Parse the #wfLoop editor into a loop config, or undefined when blank.
+   Lines: "max = N", "until = <template>", and "output -> input" (feedback). */
+function wfBuildLoop() {
+  const lines = document.getElementById("wfLoop").value.split("\n").map(s => s.trim()).filter(Boolean);
+  if (!lines.length) return undefined;
+  const loop = { max: 1, feedback: [] };
+  let has = false, m;
+  lines.forEach(line => {
+    if (m = line.match(/^max\s*=\s*(\d+)/i))        { loop.max = parseInt(m[1], 10); has = true; }
+    else if (m = line.match(/^until\s*=\s*(.+)$/i)) { loop.until = m[1].trim(); has = true; }
+    else if (m = line.match(/^(.+?)\s*->\s*(.+)$/)) { loop.feedback.push({ output: m[1].trim(), input: m[2].trim() }); has = true; }
+  });
+  return has ? loop : undefined;
 }
 
 async function wfSave() {

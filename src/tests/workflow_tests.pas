@@ -22,6 +22,7 @@ var
   GUpscaleArgs: string = '';   { captured resolved args of the upscale node }
   GPollCount: Integer = 0;     { await test: number of poll calls }
   GLastPollArgs: string = '';  { await test: last resolved poll args }
+  GLoopCount: Integer = 0;     { loop test: number of DAG passes }
 
 procedure Check(Cond: Boolean; const Why: string);
 begin
@@ -392,6 +393,62 @@ begin
   Check(Pos('a cat', OutJSON) > 0, 'outputs: input echoed (got ' + OutJSON + ')');
 end;
 
+{ Loop stub: an "echo" node that appends "!" to its resolved "v" arg, so the
+  value grows one bang per pass when the output is fed back into the input. }
+function LoopStub(const ToolName, ArgsJSON: string;
+  out ResultText, ResultJSON, ErrMsg: string): Boolean;
+var p, q: Integer; s, v: string;
+begin
+  ResultText := ''; ResultJSON := '{}'; ErrMsg := '';
+  Inc(GLoopCount);
+  { args are a one-field object with a string value (spacing varies) -- grab the
+    quoted value after the colon; the value never contains a quote here. }
+  v := '';
+  p := Pos(':', ArgsJSON);
+  if p > 0 then
+  begin
+    s := Copy(ArgsJSON, p + 1, MaxInt);
+    p := Pos('"', s);
+    if p > 0 then
+    begin
+      s := Copy(s, p + 1, MaxInt);
+      q := Pos('"', s);
+      if q > 0 then v := Copy(s, 1, q - 1);
+    end;
+  end;
+  ResultText := v + '!';
+  Result := True;
+end;
+
+{ Bounded looping (Phase 3): max cap, feedback output->input, JSON round-trip. }
+procedure TestLoop;
+const
+  LOOP_WF =
+    '{"name":"loopwf","inputs":[{"name":"x"}],' +
+    '"outputs":[{"name":"out","value":"{{nodes.step}}"}],' +
+    '"nodes":[{"id":"step","tool":"echo","args":{"v":"{{inputs.x}}"}}],' +
+    '"loop":{"max":3,"feedback":[{"output":"out","input":"x"}]}}';
+var
+  Spec, Spec2: TWorkflowSpec;
+  Err, SJSON: string;
+  Res: TWorkflowNodeResultArray;
+begin
+  GLoopCount := 0;
+  Check(ParseWorkflow(LOOP_WF, Spec, Err), 'loop: parse (' + Err + ')');
+  Check(Spec.Loop.Enabled, 'loop: enabled parsed');
+  Check(Spec.Loop.MaxIterations = 3, 'loop: max parsed');
+  Check((Length(Spec.Loop.Feedback) = 1) and (Spec.Loop.Feedback[0].OutputName = 'out')
+        and (Spec.Loop.Feedback[0].InputName = 'x'), 'loop: feedback parsed');
+  Check(RunWorkflowRepeated(Spec, '{"x":"a"}', LoopStub, Res, Err), 'loop: runs (' + Err + ')');
+  Check(GLoopCount = 3, 'loop: ran max passes (got ' + IntToStr(GLoopCount) + ')');
+  { a -> a! -> a!! -> a!!! as the output feeds back into x each pass. }
+  Check((Length(Res) = 1) and (Res[0].Text = 'a!!!'),
+        'loop: feedback accumulated (got ' + Res[0].Text + ')');
+  { Loop block survives a JSON round-trip. }
+  SJSON := WorkflowToJSON(Spec);
+  Check(ParseWorkflow(SJSON, Spec2, Err) and Spec2.Loop.Enabled, 'loop: survives round-trip');
+end;
+
 begin
   TestParse;
   TestValidate;
@@ -407,6 +464,7 @@ begin
   TestRunMissingInput;
   TestStoreRoundTrip;
   TestOutputs;
+  TestLoop;
 
   if Failures = 0 then WriteLn('workflow_tests: OK')
   else begin WriteLn('workflow_tests: ', Failures, ' failure(s)'); Halt(1); end;
