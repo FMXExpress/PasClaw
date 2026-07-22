@@ -53,8 +53,20 @@ begin
   { --- validator sanity --- }
   Check(BytesAreValidUTF8(TBytes.Create($E2, $98, $83)), 'validator: accepts UTF-8 snowman');
   Check(not BytesAreValidUTF8(TBytes.Create($93, $94)), 'validator: rejects cp1252 quotes');
-  Check(not BytesAreValidUTF8(TBytes.Create($C0, $80)), 'validator: rejects overlong');
+  Check(not BytesAreValidUTF8(TBytes.Create($C0, $80)), 'validator: rejects 2-byte overlong');
   Check(BytesAreValidUTF8(TBytes.Create(Ord('a'), Ord('z'))), 'validator: accepts ASCII');
+
+  { --- RFC 3629 boundary cases: reject overlongs, surrogates, out-of-range --- }
+  Check(not BytesAreValidUTF8(TBytes.Create($E0, $80, $80)), 'validator: rejects 3-byte overlong (E0 80 80)');
+  Check(not BytesAreValidUTF8(TBytes.Create($ED, $A0, $80)), 'validator: rejects UTF-16 surrogate (ED A0 80)');
+  Check(not BytesAreValidUTF8(TBytes.Create($F0, $80, $80, $80)), 'validator: rejects 4-byte overlong (F0 80 80 80)');
+  Check(not BytesAreValidUTF8(TBytes.Create($F4, $90, $80, $80)), 'validator: rejects > U+10FFFF (F4 90 80 80)');
+  Check(not BytesAreValidUTF8(TBytes.Create($F5, $80, $80, $80)), 'validator: rejects lead > F4 (F5 ..)');
+  { valid boundary values must still be accepted (no over-rejection) }
+  Check(BytesAreValidUTF8(TBytes.Create($E0, $A0, $80)), 'validator: accepts U+0800 (E0 A0 80)');
+  Check(BytesAreValidUTF8(TBytes.Create($ED, $9F, $BF)), 'validator: accepts U+D7FF (ED 9F BF)');
+  Check(BytesAreValidUTF8(TBytes.Create($F0, $90, $80, $80)), 'validator: accepts U+10000 (F0 90 80 80)');
+  Check(BytesAreValidUTF8(TBytes.Create($F4, $8F, $BF, $BF)), 'validator: accepts U+10FFFF (F4 8F BF BF)');
 
   { --- non-UTF-8 (Windows-1252) file: the crashing case --- }
   Path := IncludeTrailingPathDelimiter(Dir) + 'pasclaw_enc_1252.php';

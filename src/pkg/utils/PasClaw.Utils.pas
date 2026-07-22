@@ -284,23 +284,40 @@ end;
 function BytesAreValidUTF8(const B: TBytes): Boolean;
 var
   i, n, Extra, j: Integer;
-  c: Byte;
+  c, Lo, Hi: Byte;
 begin
   i := 0; n := Length(B);
   while i < n do
   begin
     c := B[i];
+    Lo := $80; Hi := $BF;   { default range for a trailing continuation byte }
     if c < $80 then Extra := 0
     else if (c and $E0) = $C0 then
     begin if c < $C2 then Exit(False); Extra := 1; end   { $C0/$C1 -> overlong }
-    else if (c and $F0) = $E0 then Extra := 2
+    else if (c and $F0) = $E0 then
+    begin
+      Extra := 2;
+      { RFC 3629 boundary on the FIRST trailing byte: E0 rejects overlong
+        (needs A0..BF), ED rejects the UTF-16 surrogate range U+D800..DFFF
+        (needs 80..9F). }
+      if c = $E0 then Lo := $A0
+      else if c = $ED then Hi := $9F;
+    end
     else if (c and $F8) = $F0 then
-    begin if c > $F4 then Exit(False); Extra := 3; end    { > U+10FFFF }
-    else Exit(False);                                     { stray continuation / $F5.. }
+    begin
+      if c > $F4 then Exit(False);                        { $F5..$F7 -> > U+10FFFF }
+      Extra := 3;
+      { F0 rejects overlong (needs 90..BF); F4 caps the last plane at
+        U+10FFFF (needs 80..8F). }
+      if c = $F0 then Lo := $90
+      else if c = $F4 then Hi := $8F;
+    end
+    else Exit(False);                                     { stray continuation / invalid lead }
     for j := 1 to Extra do
     begin
       Inc(i);
-      if (i >= n) or ((B[i] and $C0) <> $80) then Exit(False);
+      if (i >= n) or (B[i] < Lo) or (B[i] > Hi) then Exit(False);
+      Lo := $80; Hi := $BF;   { only the first trailing byte is range-restricted }
     end;
     Inc(i);
   end;
