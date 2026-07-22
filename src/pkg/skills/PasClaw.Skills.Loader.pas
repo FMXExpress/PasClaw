@@ -109,6 +109,8 @@ implementation
 uses
   PasClaw.Workflow.Tools,   { workflow_save/list/run -- registered at every
                               registry-build site alongside skills }
+  PasClaw.Tools.DB,         { db_info/tables/describe/query/execute -- inert
+                              until SetDBConfig supplies a connection }
   PasClaw.Utils,
   PasClaw.JSON,
   PasClaw.Logger,
@@ -597,6 +599,11 @@ begin
     workflow is saved. The /v1/workflows endpoints are separately gated by
     config.workflows_enabled. }
   RegisterWorkflowTools(Reg);
+
+  { Database tools ride the same hook. They are inert until SetDBConfig is given
+    a connection (Phase 2 wires the config.json "database" section at each entry
+    point), so registering them unconditionally here is harmless. }
+  RegisterDBTools(Reg);
 end;
 
 function RunSkill(Reg: TToolRegistry; const Name, ArgsJSON: string; out ErrMsg: string): string;
