@@ -74,6 +74,7 @@ uses
   PasClaw.Session.Store,    { NewSessionId for the shell session id }
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
+  PasClaw.Tools.DB,
   PasClaw.Skills.Manage,
   PasClaw.Skills.Disclosure,
   PasClaw.Cron.Scheduler,
@@ -256,6 +257,7 @@ begin
       if Cfg.CronToolEnabled then RegisterCronTool(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
+      SetDBConfigFromJSON(Cfg.DatabaseJSON);   { db_* connections (inert if no "database" section) }
       RegisterSkillManageTool(Reg, Cfg);
       RegisterSkillDisclosureTools(Reg, Cfg);
       if Length(Skills) > 0 then

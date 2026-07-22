@@ -41,6 +41,7 @@ uses
   PasClaw.Tools.SessionSearch,
   PasClaw.Tools.PlanWrite,
   PasClaw.Tools.SendMessage,
+  PasClaw.Tools.DB,
   PasClaw.Tools.Cron,
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
@@ -307,7 +308,8 @@ function NewBuiltinRegistry(UseHashline: Boolean = True;
                             EnableWebFetch: Boolean = False;
                             EnableOutputCache: Boolean = False;
                             EnableCron: Boolean = False;
-                            EnablePlanWrite: Boolean = False): TToolRegistry;
+                            EnablePlanWrite: Boolean = False;
+                            const DBConfigJSON: string = ''): TToolRegistry;
 var
   Skills: TSkillSpecArray;
 begin
@@ -372,6 +374,9 @@ begin
   RegisterSendMessageTool(Result);
   Skills := LoadSkillManifests(GetHome);
   RegisterSkills(Result, Skills);
+  { Install the configured db_* connections (inert when the "database" section
+    is absent). Process-global, so one call per surface suffices. }
+  SetDBConfigFromJSON(DBConfigJSON);
 end;
 
 { When the operator declared subagents in config.json, install the
@@ -613,7 +618,8 @@ begin
                                 was selected; auto-includes the dedicated
                                 plan_write tool the `pasclaw plan`
                                 command relies on. }
-                              A.Mode = pmPlan);
+                              A.Mode = pmPlan,
+                              Cfg.DatabaseJSON);
     RegisterSkillManageTool(Reg, Cfg);
     RegisterSkillDisclosureTools(Reg, Cfg);
   end;
@@ -893,7 +899,8 @@ begin
                               (Cfg.ToolOutputCap > 0)
                                 or Cfg.CondenseReversible,
                               Cfg.CronToolEnabled,
-                              A.Mode = pmPlan);
+                              A.Mode = pmPlan,
+                              Cfg.DatabaseJSON);
     RegisterSkillManageTool(Reg, Cfg);
     RegisterSkillDisclosureTools(Reg, Cfg);
   end;
@@ -1341,7 +1348,8 @@ begin
                                 was selected; auto-includes the dedicated
                                 plan_write tool the `pasclaw plan`
                                 command relies on. }
-                              A.Mode = pmPlan);
+                              A.Mode = pmPlan,
+                              Cfg.DatabaseJSON);
     RegisterSkillManageTool(Reg, Cfg);
     RegisterSkillDisclosureTools(Reg, Cfg);
   end;

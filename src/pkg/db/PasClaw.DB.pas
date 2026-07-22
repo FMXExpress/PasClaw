@@ -114,11 +114,25 @@ implementation
 uses
   SysUtils, Classes, TypInfo,
   {$IFDEF FPC}
-  DB, sqldb, sqlite3conn, fpjson,
+  DB, sqldb, fpjson,
+  { Each connector unit self-registers its TSQLConnector type. Linking them all
+    keeps one binary multi-engine; the client library (libpq / libmysqlclient /
+    libfb / FreeTDS / Oracle OCI / unixODBC) is loaded lazily at connect time,
+    so a missing lib only fails that connection -- it doesn't break the build or
+    other engines. }
+  sqlite3conn, pqconnection, mysql57conn, mysql80conn,
+  ibconnection, mssqlconn, odbcconn, oracleconnection,
   {$ELSE}
   Data.DB, System.JSON,
   FireDAC.Comp.Client, FireDAC.Stan.Def, FireDAC.Stan.Async,
   FireDAC.Stan.Param, FireDAC.DApt, FireDAC.Phys.SQLite,
+  { Extra FireDAC drivers need RAD Studio Enterprise/Architect. Build with
+    -dPASCLAW_FIREDAC_FULL to link them; the SQLite driver above is in every
+    edition, so the default build stays portable. }
+  {$IFDEF PASCLAW_FIREDAC_FULL}
+  FireDAC.Phys.PG, FireDAC.Phys.MySQL, FireDAC.Phys.MSSQL,
+  FireDAC.Phys.Oracle, FireDAC.Phys.IB, FireDAC.Phys.ODBCBase, FireDAC.Phys.ODBC,
+  {$ENDIF}
   {$ENDIF}
   PasClaw.JSON,
   PasClaw.Logger;
@@ -454,7 +468,8 @@ begin
   D := LowerCase(Trim(Driver));
   if (D = 'sqlite') or (D = 'sqlite3') then Result := 'SQLite3'
   else if (D = 'postgres') or (D = 'postgresql') or (D = 'pg') then Result := 'PostgreSQL'
-  else if D = 'mysql' then Result := 'MySQL 5.7'
+  else if (D = 'mysql') or (D = 'mysql5') or (D = 'mariadb') then Result := 'MySQL 5.7'
+  else if (D = 'mysql8') then Result := 'MySQL 8.0'
   else if (D = 'firebird') or (D = 'interbase') then Result := 'Firebird'
   else if (D = 'mssql') or (D = 'sqlserver') then Result := 'MSSQLServer'
   else if D = 'oracle' then Result := 'Oracle'
@@ -468,7 +483,7 @@ begin
   D := LowerCase(Trim(Driver));
   if (D = 'sqlite') or (D = 'sqlite3') then Result := 'SQLite'
   else if (D = 'postgres') or (D = 'postgresql') or (D = 'pg') then Result := 'PG'
-  else if D = 'mysql' then Result := 'MySQL'
+  else if (D = 'mysql') or (D = 'mysql5') or (D = 'mysql8') or (D = 'mariadb') then Result := 'MySQL'
   else if (D = 'firebird') then Result := 'FB'
   else if (D = 'interbase') then Result := 'IB'
   else if (D = 'mssql') or (D = 'sqlserver') then Result := 'MSSQL'

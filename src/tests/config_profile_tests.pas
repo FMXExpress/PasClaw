@@ -465,6 +465,86 @@ begin
   end;
 end;
 
+(* Phase 2 db tools: the config.json "database" array is kept verbatim in
+   TConfig.DatabaseJSON and re-emitted on save, so a hand-edited list of
+   connections survives a mutating command's save/load round-trip. *)
+procedure TestDatabaseSection;
+var
+  CfgPath: string;
+  C: TConfig;
+begin
+  CfgPath := JoinPath(Home, 'config.json');
+
+  { Case 1: a "database" section loads into DatabaseJSON. }
+  WriteFileText(CfgPath,
+    '{"database":[{"name":"app","driver":"sqlite","database":"app.db","mode":"readonly"}]}');
+  C := LoadConfig('');
+  try
+    AssertTrue(Pos('"app"', C.DatabaseJSON) > 0, 'database section loaded into DatabaseJSON');
+    AssertTrue(Pos('sqlite', C.DatabaseJSON) > 0, 'driver present in DatabaseJSON');
+  finally
+    C.Free;
+  end;
+
+  { Case 2: absent section -> empty DatabaseJSON. }
+  WriteFileText(CfgPath, '{}');
+  C := LoadConfig('');
+  try
+    AssertEqS(C.DatabaseJSON, '', 'no database section -> empty');
+  finally
+    C.Free;
+  end;
+
+  { Case 3: round-trip -- a mutating SaveConfig must not drop the section. }
+  WriteFileText(CfgPath,
+    '{"database":[{"name":"reports","driver":"postgres","database":"rpt","mode":"readwrite"}]}');
+  C := LoadConfig('');
+  try
+    C.DefaultModel := 'claude-opus-4-8';   { an unrelated mutation }
+    SaveConfig(C);
+  finally
+    C.Free;
+  end;
+  C := LoadConfig('');
+  try
+    AssertTrue(Pos('"reports"', C.DatabaseJSON) > 0, 'database section survives save/load');
+    AssertTrue(Pos('postgres', C.DatabaseJSON) > 0, 'driver survives save/load');
+  finally
+    C.Free;
+  end;
+
+  { Case 4: an env-expanded secret must NOT be materialized into config.json on
+    save. SaveConfig/ToJSON persists the PRE-expansion section (DatabaseRawJSON,
+    with the env-marker placeholder), never the runtime DatabaseJSON (with the
+    resolved secret). Tested in-memory so it doesn't depend on the parent
+    process having an env var set. }
+  WriteFileText(CfgPath, '{}');
+  C := LoadConfig('');
+  try
+    C.DatabaseJSON    := '[{"name":"app","driver":"postgres","password":"REAL-SECRET"}]';
+    C.DatabaseRawJSON := '[{"name":"app","driver":"postgres","password":"${DB_PW}"}]';
+    SaveConfig(C);
+  finally
+    C.Free;
+  end;
+  AssertTrue(Pos('REAL-SECRET', ReadFileText(CfgPath)) = 0,
+             'expanded secret is NOT written to config.json');
+  AssertTrue(Pos('${DB_PW}', ReadFileText(CfgPath)) > 0,
+             'placeholder IS preserved in config.json');
+
+  { Case 5: LoadConfig captures the raw section verbatim, incl. an (unset) env
+    marker -- so the placeholder is what would persist. }
+  WriteFileText(CfgPath,
+    '{"database":[{"name":"app","driver":"postgres","password":"${PASCLAW_UNSET_DB_PW}"}]}');
+  C := LoadConfig('');
+  try
+    AssertTrue(Pos('${PASCLAW_UNSET_DB_PW}', C.DatabaseRawJSON) > 0,
+               'raw section keeps the placeholder');
+  finally
+    C.Free;
+  end;
+end;
+
 begin
   { PASCLAW_HOME is set by the Makefile target before launching --
     fpc doesn't ship fpSetenv on every supported version and setting
@@ -493,6 +573,7 @@ begin
     TestOptOutsPersistAcrossRoundTrip;
     TestSelfShadowInherit;
     TestDiffMaterial;
+    TestDatabaseSection;
     WriteLn('ok - config profile tests passed');
   finally
     try RemoveDir(JoinPath(Home, 'profiles')); except end;
