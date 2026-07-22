@@ -111,6 +111,7 @@ UNIT_DIRS = \
 	src/pkg/stream \
 	src/pkg/tokenizer \
 	src/pkg/tools \
+	src/pkg/db \
 	src/pkg/mcp \
 	src/pkg/workflow \
 	src/pkg/gateway \
@@ -174,7 +175,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-read-file-encoding test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
+.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-read-file-encoding test-db-tools test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -319,6 +320,14 @@ test-read-file-encoding: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/read_file_encoding_tests.pas -o$(BUILDDIR)/read_file_encoding_tests
 	@$(BUILDDIR)/read_file_encoding_tests
+
+# Database tools (Phase 1): engine-agnostic seam + agent tools against a
+# throwaway SQLite file -- SQL classification, mode gating, param binding,
+# row cap, identifier validation, redaction.
+test-db-tools: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/db_tools_tests.pas -o$(BUILDDIR)/db_tools_tests
+	@$(BUILDDIR)/db_tools_tests
 
 # Lenient parse: bare control chars inside strings (unescaped LLM JSON) are
 # repaired instead of crashing; valid JSON untouched; bad JSON still errors.
@@ -938,4 +947,4 @@ test-fs-grep-tier5-6: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/fs_grep_tier5_6_tests.pas -o$(BUILDDIR)/fs_grep_tier5_6_tests
 	@$(BUILDDIR)/fs_grep_tier5_6_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-read-file-encoding test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-max-iter-notice test-max-iter-notice test-plan-build-mode test-config-profile test-tool-rpc test-session-search test-subagent-bg test-subagent-default test-subagent-model-arg test-zip-pack test-http-proxy test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-fs-tool-naming test-workspace-paths test-guardfall test-skills-prompt test-mcp-result test-workflow test-progress-ledger test-otel test-logger-level-quiet test-gateway-token test-fs-secret-gate test-config-env-subst test-delphi-build
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-read-file-encoding test-db-tools test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-max-iter-notice test-max-iter-notice test-plan-build-mode test-config-profile test-tool-rpc test-session-search test-subagent-bg test-subagent-default test-subagent-model-arg test-zip-pack test-http-proxy test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-fs-tool-naming test-workspace-paths test-guardfall test-skills-prompt test-mcp-result test-workflow test-progress-ledger test-otel test-logger-level-quiet test-gateway-token test-fs-secret-gate test-config-env-subst test-delphi-build
