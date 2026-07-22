@@ -24,9 +24,11 @@ uses
   PasClaw.MCP.Hub,
   PasClaw.MCP.OAuth,
   PasClaw.MCP.Server,
+  PasClaw.Logger,
   PasClaw.Tools.Registry,
   PasClaw.Tools.Memory,
   PasClaw.Tools.KB,
+  PasClaw.Tools.DB,
   PasClaw.Tools.SessionSearch;
 
 procedure Help;
@@ -46,11 +48,15 @@ begin
   PrintLn('                            MCP server (opens browser, captures callback)');
   PrintLn('  stdio [--allow-write]     run PasClaw as an MCP server over stdio.');
   PrintLn('                            Exposes memory_search / kb_search /');
-  PrintLn('                            session_search (SCARS lives in workspace/memory)');
-  PrintLn('                            to any host that spawns MCP servers as');
+  PrintLn('                            session_search (SCARS lives in workspace/memory),');
+  PrintLn('                            plus db_query / db_tables / db_describe / db_info');
+  PrintLn('                            when a "database" section is configured -- so');
+  PrintLn('                            PasClaw acts as a database MCP server too.');
+  PrintLn('                            To any host that spawns MCP servers as');
   PrintLn('                            subprocesses (Claude Desktop, Cursor, Codex CLI).');
   PrintLn('                            Read-only by default; --allow-write opts in to');
-  PrintLn('                            mutating tools.');
+  PrintLn('                            mutating tools (incl. db_execute, still refused');
+  PrintLn('                            on a readonly connection).');
 end;
 
 function DoList: Integer;
@@ -547,17 +553,22 @@ function DoStdio(const Argv: array of string): Integer;
   errors) so the host keeps the session alive. Logs go to stderr only --
   stdout MUST stay clean JSON-RPC, otherwise the host's parser bails.
 
-  Tool surface: same read-only slice as the HTTP /mcp route --
-  memory_search / memory_get / kb_search / kb_get / session_search.
-  SCARS lives inside workspace/memory/SCARS.md so it's reachable
-  through memory_search; no separate "scars" tool to maintain.
+  Tool surface: the read-only slice of the HTTP /mcp route --
+  memory_search / memory_get / kb_search / kb_get / session_search --
+  plus the db_* tools when a "database" section is configured, which turns
+  PasClaw into a cross-platform database MCP server (db_info / db_tables /
+  db_describe / db_query read-only; db_execute only under --allow-write, and
+  still refused on a readonly connection). SCARS lives inside
+  workspace/memory/SCARS.md so it's reachable through memory_search; no
+  separate "scars" tool to maintain.
   --allow-write also exposes the mutating tools (off by default). }
 var
-  i: Integer;
+  i, NDb: Integer;
   AllowWrite: Boolean;
   Reg: TToolRegistry;
   Srv: TMCPServerCore;
-  Line, Resp: string;
+  Cfg: TConfig;
+  Line, Resp, WriteNote: string;
 begin
   AllowWrite := False;
   for i := 1 to High(Argv) do
@@ -576,6 +587,23 @@ begin
     RegisterMemoryTools(Reg);
     RegisterKBTools(Reg);
     RegisterSessionSearchTool(Reg);
+    { Database tools -- only when the operator configured a "database" section,
+      so a host without one never sees always-erroring db_* tools. Registered
+      here (not via RegisterSkills) to keep the tight, hand-picked surface. The
+      read tools auto-expose (tcReadOnly); db_execute needs --allow-write AND a
+      non-readonly connection. Logs to stderr; stdout stays clean JSON-RPC. }
+    Cfg := LoadConfig;
+    try
+      if Trim(Cfg.DatabaseJSON) <> '' then
+      begin
+        RegisterDBTools(Reg);
+        NDb := SetDBConfigFromJSON(Cfg.DatabaseJSON);
+        if AllowWrite then WriteNote := ' (writes allowed)' else WriteNote := ' (read-only)';
+        LogInfo('mcp stdio: exposing db_* tools for %d connection(s)%s', [NDb, WriteNote]);
+      end;
+    finally
+      Cfg.Free;
+    end;
     Srv := TMCPServerCore.Create(Reg, AllowWrite, '');
     try
       while not Eof(Input) do
