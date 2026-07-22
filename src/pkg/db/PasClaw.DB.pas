@@ -483,7 +483,7 @@ begin
   D := LowerCase(Trim(Driver));
   if (D = 'sqlite') or (D = 'sqlite3') then Result := 'SQLite'
   else if (D = 'postgres') or (D = 'postgresql') or (D = 'pg') then Result := 'PG'
-  else if D = 'mysql' then Result := 'MySQL'
+  else if (D = 'mysql') or (D = 'mysql5') or (D = 'mysql8') or (D = 'mariadb') then Result := 'MySQL'
   else if (D = 'firebird') then Result := 'FB'
   else if (D = 'interbase') then Result := 'IB'
   else if (D = 'mssql') or (D = 'sqlserver') then Result := 'MSSQL'

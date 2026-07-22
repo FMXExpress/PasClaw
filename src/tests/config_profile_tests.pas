@@ -512,6 +512,37 @@ begin
   finally
     C.Free;
   end;
+
+  { Case 4: an env-expanded secret must NOT be materialized into config.json on
+    save. SaveConfig/ToJSON persists the PRE-expansion section (DatabaseRawJSON,
+    with the env-marker placeholder), never the runtime DatabaseJSON (with the
+    resolved secret). Tested in-memory so it doesn't depend on the parent
+    process having an env var set. }
+  WriteFileText(CfgPath, '{}');
+  C := LoadConfig('');
+  try
+    C.DatabaseJSON    := '[{"name":"app","driver":"postgres","password":"REAL-SECRET"}]';
+    C.DatabaseRawJSON := '[{"name":"app","driver":"postgres","password":"${DB_PW}"}]';
+    SaveConfig(C);
+  finally
+    C.Free;
+  end;
+  AssertTrue(Pos('REAL-SECRET', ReadFileText(CfgPath)) = 0,
+             'expanded secret is NOT written to config.json');
+  AssertTrue(Pos('${DB_PW}', ReadFileText(CfgPath)) > 0,
+             'placeholder IS preserved in config.json');
+
+  { Case 5: LoadConfig captures the raw section verbatim, incl. an (unset) env
+    marker -- so the placeholder is what would persist. }
+  WriteFileText(CfgPath,
+    '{"database":[{"name":"app","driver":"postgres","password":"${PASCLAW_UNSET_DB_PW}"}]}');
+  C := LoadConfig('');
+  try
+    AssertTrue(Pos('${PASCLAW_UNSET_DB_PW}', C.DatabaseRawJSON) > 0,
+               'raw section keeps the placeholder');
+  finally
+    C.Free;
+  end;
 end;
 
 begin

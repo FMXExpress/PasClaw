@@ -716,11 +716,16 @@ type
       default. The workflow_save/list/run agent tools register alongside skills
       regardless; this flag gates the HTTP surface for locked-down deploys. }
     WorkflowsEnabled:      Boolean;
-    { Raw JSON of the "database" array (a list of named SQL connections for the
-      db_* tools). Stored verbatim -- PasClaw.Tools.DB.SetDBConfigFromJSON parses
-      it at each entry point -- and re-emitted on save so a hand-edited section
-      round-trips. Empty when no "database" key is present. }
+    (* Raw JSON of the "database" array (a list of named SQL connections for the
+       db_* tools). DatabaseJSON is env-EXPANDED (markers resolved) -- it carries
+       live credentials and is what SetDBConfigFromJSON hands the connector; it
+       is NEVER written back to disk. DatabaseRawJSON is the PRE-expansion
+       section (placeholders intact) and is the one ToJSON re-emits, so an env
+       secret marker survives a save/load round-trip instead of leaking the
+       resolved secret into config.json. Both empty when no "database" key is
+       present. *)
     DatabaseJSON:          string;
+    DatabaseRawJSON:       string;
     (* Byte budget for the always-on "durable facts" block injected into
        the system prompt when MemoryDistillEnabled. Facts are tiny, so the
        whole active set usually fits; past the budget the newest/highest-
@@ -1097,6 +1102,7 @@ begin
   MemoryDistillEnabled   := False; { opt-in: ~one extra LLM call per turn. }
   WorkflowsEnabled       := True;  { on: tools are inert until a workflow is saved. }
   DatabaseJSON           := '';    { no db_* connections until a "database" section is added. }
+  DatabaseRawJSON        := '';    { pre-expansion "database" section, for save. }
   MemoryFactsBudget      := 2000;  { ~30 facts injected wholesale when distill on. }
   CheckpointsKeepLast    := 32;    { keep last 32 atomic edit checkpoints. }
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
@@ -1429,9 +1435,13 @@ begin
       locked-down deploy disabling the /v1/workflows surface) round-trips. }
     if not WorkflowsEnabled then
       Root.PutBool('workflows_enabled', False);
-    { Preserve the raw "database" section verbatim so a hand-edited list of
-      connections survives a save/load round-trip. }
-    if Trim(DatabaseJSON) <> '' then
+    { Persist the PRE-expansion "database" section so an env secret marker
+      round-trips as the placeholder, never the resolved value. Fall back to
+      DatabaseJSON only when there is no raw section (e.g. a programmatically
+      set config, which carries no env markers). }
+    if Trim(DatabaseRawJSON) <> '' then
+      Root.PutRaw('database', DatabaseRawJSON)
+    else if Trim(DatabaseJSON) <> '' then
       Root.PutRaw('database', DatabaseJSON);
     { Default OFF -- emit only the explicit-on so an operator opt-in
       (onboarding or hand-edit) sticks across save/load. }
@@ -2235,19 +2245,33 @@ end;
 
 function LoadConfig(const ProfileOverride: string): TConfig;
 var
-  Path, S, ProfileName, PErr, B: string;
+  Path, S, ProfileName, PErr, B, RawDb: string;
   Bodies: TProfileBodyArray;
   i: Integer;
   HasConfigFile: Boolean;
+  RawRoot: TJsonObject;
+  RawArr: TJsonArray;
 begin
   Result := TConfig.Create;
   Path := GetConfigPath;
   S := '';
+  RawDb := '';
   HasConfigFile := FileExists(Path);
   try
     if HasConfigFile then
     begin
       S := ReadFileText(Path);
+      { Capture the "database" section from the RAW file, BEFORE env expansion,
+        so env-marker placeholders (not the resolved secrets) are what round-
+        trips back to disk on the next SaveConfig. }
+      try RawRoot := TJsonObject.Parse(S); except RawRoot := nil; end;
+      if RawRoot <> nil then
+      try
+        RawArr := RawRoot.ChildArray('database');
+        if RawArr <> nil then RawDb := RawArr.ToJSON;
+      finally
+        RawRoot.Free;
+      end;
       (* Resolve ${VAR_NAME} markers BEFORE FromJSON parses. Lets
          operators keep API keys / bearer tokens / webhook URLs in
          the environment and reference them by name from config.json
@@ -2307,6 +2331,8 @@ begin
           ;
       end;
     end;
+    { The operator file's pre-expansion database section is the one we persist. }
+    Result.DatabaseRawJSON := RawDb;
   finally
     { Propagate config-derived process globals. Centralised in
       ApplyConfigGlobals so code-driven embedders (no LoadConfig) can run
