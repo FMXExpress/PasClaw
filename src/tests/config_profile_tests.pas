@@ -465,6 +465,55 @@ begin
   end;
 end;
 
+(* Phase 2 db tools: the config.json "database" array is kept verbatim in
+   TConfig.DatabaseJSON and re-emitted on save, so a hand-edited list of
+   connections survives a mutating command's save/load round-trip. *)
+procedure TestDatabaseSection;
+var
+  CfgPath: string;
+  C: TConfig;
+begin
+  CfgPath := JoinPath(Home, 'config.json');
+
+  { Case 1: a "database" section loads into DatabaseJSON. }
+  WriteFileText(CfgPath,
+    '{"database":[{"name":"app","driver":"sqlite","database":"app.db","mode":"readonly"}]}');
+  C := LoadConfig('');
+  try
+    AssertTrue(Pos('"app"', C.DatabaseJSON) > 0, 'database section loaded into DatabaseJSON');
+    AssertTrue(Pos('sqlite', C.DatabaseJSON) > 0, 'driver present in DatabaseJSON');
+  finally
+    C.Free;
+  end;
+
+  { Case 2: absent section -> empty DatabaseJSON. }
+  WriteFileText(CfgPath, '{}');
+  C := LoadConfig('');
+  try
+    AssertEqS(C.DatabaseJSON, '', 'no database section -> empty');
+  finally
+    C.Free;
+  end;
+
+  { Case 3: round-trip -- a mutating SaveConfig must not drop the section. }
+  WriteFileText(CfgPath,
+    '{"database":[{"name":"reports","driver":"postgres","database":"rpt","mode":"readwrite"}]}');
+  C := LoadConfig('');
+  try
+    C.DefaultModel := 'claude-opus-4-8';   { an unrelated mutation }
+    SaveConfig(C);
+  finally
+    C.Free;
+  end;
+  C := LoadConfig('');
+  try
+    AssertTrue(Pos('"reports"', C.DatabaseJSON) > 0, 'database section survives save/load');
+    AssertTrue(Pos('postgres', C.DatabaseJSON) > 0, 'driver survives save/load');
+  finally
+    C.Free;
+  end;
+end;
+
 begin
   { PASCLAW_HOME is set by the Makefile target before launching --
     fpc doesn't ship fpSetenv on every supported version and setting
@@ -493,6 +542,7 @@ begin
     TestOptOutsPersistAcrossRoundTrip;
     TestSelfShadowInherit;
     TestDiffMaterial;
+    TestDatabaseSection;
     WriteLn('ok - config profile tests passed');
   finally
     try RemoveDir(JoinPath(Home, 'profiles')); except end;

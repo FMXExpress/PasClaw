@@ -8,9 +8,19 @@ to compile on **both** toolchains:
 - **FPC:** sqldb's `TSQLConnector`, connector type picked from config.
 
 The same binary reaches SQLite, PostgreSQL, MySQL/MariaDB, Firebird, MSSQL,
-Oracle and ODBC once the matching driver/connector is linked. **Phase 1 links
-and tests SQLite on both toolchains;** the other engines are recognised by the
-driver mapping but need their connector unit linked (Phase 2).
+Oracle and ODBC. The client library for a given engine (libpq, libmysqlclient,
+libfbclient, FreeTDS, Oracle OCI, unixODBC) is loaded **lazily at connect time**,
+so one portable binary ships every engine and a missing library only fails that
+one connection — it doesn't break the build or the other engines.
+
+- **FPC:** all connector units are linked by default (SQLite, PostgreSQL,
+  MySQL 5.7/8.0, Firebird/Interbase, MSSQL, Oracle, ODBC).
+- **Delphi:** SQLite is linked in every RAD Studio edition. The other FireDAC
+  drivers need Enterprise/Architect — build with `-dPASCLAW_FIREDAC_FULL` to
+  link them, so the default build stays portable across editions.
+
+Canonical `driver` ids: `sqlite`, `postgres`, `mysql` (or `mysql8`, `mariadb`),
+`mssql`, `firebird`, `oracle`, `odbc`.
 
 ## Tools
 
@@ -42,9 +52,12 @@ omit it for the first (default) one.
 - **Secret hygiene.** `db_info` redacts the password; keep credentials out of
   the file with env substitution.
 
-## Configuration (Phase 2 wires this at each entry point)
+## Configuration
 
-The engine reads a `database` array. Each entry:
+Add a `database` array to `config.json`. It's read at every entry point (CLI
+agent, TUI, gateway, serve), kept verbatim across a config save/load, and parsed
+by `PasClaw.Tools.DB.SetDBConfigFromJSON`; until a connection is installed the
+tools are registered but inert.
 
 ```json
 {
@@ -60,15 +73,16 @@ The engine reads a `database` array. Each entry:
 }
 ```
 
-Fields: `name`, `driver` (`sqlite|postgres|mysql|mssql|firebird|oracle|odbc`),
-`database`, `server`, `port`, `user`, `password`, `params`, `mode`, `max_rows`,
-`timeout_ms`. `PasClaw.Tools.DB.SetDBConfigFromJSON` parses this section; until a
-connection is installed the tools are registered but inert.
+Fields: `name`, `driver`, `database`, `server`, `port`, `user`, `password`,
+`params`, `mode`, `max_rows`, `timeout_ms`. Keep credentials out of the file with
+env substitution; `db_info` redacts the password on the way out.
 
 ## Roadmap
 
-- **Phase 2** — link Postgres/MySQL/ODBC connectors + FireDAC driver links; wire
-  the `database` config section at each entry point.
+- **Phase 1 (done)** — engine-agnostic seam + the five tools + safety model,
+  SQLite backend on both toolchains.
+- **Phase 2 (done)** — link all FPC connectors (+ the `PASCLAW_FIREDAC_FULL`
+  define for Delphi); wire the `database` config section at each entry point.
 - **Phase 3** — project the native tools out through PasClaw's MCP server, so
   PasClaw itself is a cross-platform database MCP server.
 - **Phase 4** — a DeepSQL-style "DBA" layer: schema/stat indexing into the KB,

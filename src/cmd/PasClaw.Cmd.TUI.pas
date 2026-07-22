@@ -42,6 +42,7 @@ uses
   PasClaw.Shell.Backend.Factory,   { InstallShellBackend }
   PasClaw.MCP.Bridge,
   PasClaw.Skills.Loader,
+  PasClaw.Tools.DB,
   PasClaw.Skills.Manage,
   PasClaw.Skills.Disclosure,
   PasClaw.Agent.Subagent,
@@ -193,6 +194,7 @@ begin
       RegisterSendMessageTool(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
+      SetDBConfigFromJSON(Cfg.DatabaseJSON);   { db_* connections (inert if no "database" section) }
       RegisterSkillManageTool(Reg, Cfg);
       RegisterSkillDisclosureTools(Reg, Cfg);
     end;

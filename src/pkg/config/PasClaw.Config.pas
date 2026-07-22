@@ -716,6 +716,11 @@ type
       default. The workflow_save/list/run agent tools register alongside skills
       regardless; this flag gates the HTTP surface for locked-down deploys. }
     WorkflowsEnabled:      Boolean;
+    { Raw JSON of the "database" array (a list of named SQL connections for the
+      db_* tools). Stored verbatim -- PasClaw.Tools.DB.SetDBConfigFromJSON parses
+      it at each entry point -- and re-emitted on save so a hand-edited section
+      round-trips. Empty when no "database" key is present. }
+    DatabaseJSON:          string;
     (* Byte budget for the always-on "durable facts" block injected into
        the system prompt when MemoryDistillEnabled. Facts are tiny, so the
        whole active set usually fits; past the budget the newest/highest-
@@ -1091,6 +1096,7 @@ begin
   CheckpointsEnabled     := True;  { on by default -- zero prompt cost, prevents lost work on multi-edit sessions. }
   MemoryDistillEnabled   := False; { opt-in: ~one extra LLM call per turn. }
   WorkflowsEnabled       := True;  { on: tools are inert until a workflow is saved. }
+  DatabaseJSON           := '';    { no db_* connections until a "database" section is added. }
   MemoryFactsBudget      := 2000;  { ~30 facts injected wholesale when distill on. }
   CheckpointsKeepLast    := 32;    { keep last 32 atomic edit checkpoints. }
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
@@ -1423,6 +1429,10 @@ begin
       locked-down deploy disabling the /v1/workflows surface) round-trips. }
     if not WorkflowsEnabled then
       Root.PutBool('workflows_enabled', False);
+    { Preserve the raw "database" section verbatim so a hand-edited list of
+      connections survives a save/load round-trip. }
+    if Trim(DatabaseJSON) <> '' then
+      Root.PutRaw('database', DatabaseJSON);
     { Default OFF -- emit only the explicit-on so an operator opt-in
       (onboarding or hand-edit) sticks across save/load. }
     if MemoryDistillEnabled then
@@ -1892,6 +1902,9 @@ begin
     CheckpointsEnabled  := Root.GetBool('checkpoints_enabled', CheckpointsEnabled);
     MemoryDistillEnabled := Root.GetBool('memory_distill_enabled', MemoryDistillEnabled);
     WorkflowsEnabled := Root.GetBool('workflows_enabled', WorkflowsEnabled);
+    { Keep the "database" array verbatim; PasClaw.Tools.DB parses it. }
+    Arr := Root.ChildArray('database');
+    if Arr <> nil then DatabaseJSON := Arr.ToJSON;
     MemoryFactsBudget    := Root.GetInt('memory_facts_budget', MemoryFactsBudget);
     CheckpointsKeepLast := Integer(Root.GetInt('checkpoints_keep_last',
                                                 CheckpointsKeepLast));
