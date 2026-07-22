@@ -77,6 +77,19 @@ begin
   Check(ClassifySQL('SELECT ''drop table t''', w) = skReadOnly, 'classify: keyword inside a string literal');
   Check(ClassifySQL('PRAGMA table_info(t)', w) = skReadOnly, 'classify: PRAGMA read');
   Check(ClassifySQL('PRAGMA journal_mode = WAL', w) = skOther, 'classify: PRAGMA write -> other');
+  { writable CTEs: WITH is read-only ONLY when its main statement reads. }
+  Check(ClassifySQL('WITH c AS (SELECT 1) SELECT * FROM c', w) = skReadOnly, 'classify: WITH..SELECT is read');
+  Check(ClassifySQL('WITH c AS (SELECT 1) DELETE FROM t RETURNING *', w) = skDML, 'classify: WITH..DELETE is write');
+  Check(ClassifySQL('with recursive c(x) as (select 1) insert into t select * from c', w) = skDML,
+    'classify: WITH RECURSIVE..INSERT is write');
+  Check(ClassifySQL('WITH a AS (SELECT 1), b AS (SELECT 2) UPDATE t SET x=1', w) = skDML,
+    'classify: multi-CTE ..UPDATE is write');
+  Check(ClassifySQL('WITH c AS (SELECT 1) UPDATE t SET x=1', w) <> skReadOnly, 'classify: WITH..UPDATE not read');
+  { EXPLAIN plans (read); EXPLAIN ANALYZE executes -> classify by inner stmt. }
+  Check(ClassifySQL('EXPLAIN SELECT 1', w) = skReadOnly, 'classify: EXPLAIN plan is read');
+  Check(ClassifySQL('EXPLAIN ANALYZE DELETE FROM t', w) = skDML, 'classify: EXPLAIN ANALYZE DELETE is write');
+  Check(ClassifySQL('EXPLAIN (ANALYZE, VERBOSE) UPDATE t SET x=1', w) = skDML,
+    'classify: EXPLAIN (ANALYZE) UPDATE is write');
 end;
 
 procedure TestStacking;
@@ -150,6 +163,13 @@ begin
     { db_query refuses stacked statements }
     Res := Reg.RunTool('db_query', '{"sql":"SELECT 1; DROP TABLE t"}', Err);
     Check(Err <> '', 'query: refuses statement stacking');
+
+    { db_query refuses a writable CTE (the readonly-bypass this hardening fixes) }
+    Res := Reg.RunTool('db_query', '{"sql":"WITH c AS (SELECT 1) DELETE FROM t"}', Err);
+    Check(Err <> '', 'query: refuses writable CTE (WITH..DELETE)');
+    { and the rows are still there afterwards }
+    Res := Reg.RunTool('db_query', '{"sql":"SELECT COUNT(*) AS n FROM t"}', Err);
+    Check(HasSub(Res, '"n":2'), 'query: writable CTE did not delete rows (got ' + Res + ')');
 
     { db_tables + db_describe }
     Res := Reg.RunTool('db_tables', '{}', Err);

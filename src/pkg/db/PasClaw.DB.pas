@@ -198,30 +198,171 @@ begin
   Result := UpperCase(Copy(S, a, i - a));
 end;
 
+{ Map a single leading verb to its kind. WITH / EXPLAIN are resolved to their
+  effective statement before this is called, so they never reach here. }
+function KindOfVerb(const V: string): TSQLKind;
+begin
+  if (V = 'SELECT') or (V = 'VALUES') or (V = 'SHOW')
+     or (V = 'DESCRIBE') or (V = 'DESC') then
+    Result := skReadOnly
+  else if (V = 'INSERT') or (V = 'UPDATE') or (V = 'DELETE')
+     or (V = 'MERGE') or (V = 'REPLACE') or (V = 'UPSERT') then
+    Result := skDML
+  else if (V = 'CREATE') or (V = 'ALTER') or (V = 'DROP')
+     or (V = 'TRUNCATE') or (V = 'RENAME') then
+    Result := skDDL
+  else
+    Result := skOther;
+end;
+
+{ --- small position scanner over already-cleaned SQL --- }
+procedure SkipWS(const S: string; var i: Integer);
+begin
+  while (i <= Length(S)) and (S[i] <= ' ') do Inc(i);
+end;
+
+function ReadWord(const S: string; var i: Integer): string;
+var a: Integer;
+begin
+  SkipWS(S, i);
+  a := i;
+  while (i <= Length(S)) and
+        (((S[i] >= 'A') and (S[i] <= 'Z')) or ((S[i] >= 'a') and (S[i] <= 'z'))) do
+    Inc(i);
+  Result := UpperCase(Copy(S, a, i - a));
+end;
+
+{ i must point at '('; advance past the matching ')'. False if unbalanced.
+  Comments/string literals are already stripped, so every paren here is real. }
+function SkipParenGroup(const S: string; var i: Integer): Boolean;
+var depth, n: Integer;
+begin
+  Result := False;
+  n := Length(S);
+  if (i > n) or (S[i] <> '(') then Exit;
+  depth := 0;
+  while i <= n do
+  begin
+    if S[i] = '(' then Inc(depth)
+    else if S[i] = ')' then
+    begin
+      Dec(depth);
+      if depth = 0 then begin Inc(i); Exit(True); end;
+    end;
+    Inc(i);
+  end;
+end;
+
+{ Given cleaned SQL that starts with WITH, return the MAIN statement's verb (the
+  statement that follows all CTE definitions). Empty string if the CTE list
+  can't be parsed -- the caller then refuses to certify it as read-only. }
+function ResolveWithVerb(const Clean: string): string;
+var
+  i, save: Integer;
+  w: string;
+begin
+  Result := '';
+  i := 1;
+  if ReadWord(Clean, i) <> 'WITH' then Exit;
+  save := i;
+  if ReadWord(Clean, i) <> 'RECURSIVE' then i := save;   { optional }
+  while True do
+  begin
+    ReadWord(Clean, i);                 { CTE name }
+    SkipWS(Clean, i);
+    if (i <= Length(Clean)) and (Clean[i] = '(') then    { optional (col,...) }
+      if not SkipParenGroup(Clean, i) then Exit;
+    if ReadWord(Clean, i) <> 'AS' then Exit;             { malformed }
+    save := i;                                           { optional [NOT] MATERIALIZED }
+    w := ReadWord(Clean, i);
+    if w = 'NOT' then ReadWord(Clean, i)
+    else if w <> 'MATERIALIZED' then i := save;
+    SkipWS(Clean, i);
+    if (i > Length(Clean)) or (Clean[i] <> '(') then Exit;
+    if not SkipParenGroup(Clean, i) then Exit;           { the CTE body }
+    SkipWS(Clean, i);
+    if (i <= Length(Clean)) and (Clean[i] = ',') then    { another CTE follows }
+    begin Inc(i); Continue; end;
+    Break;
+  end;
+  Result := ReadWord(Clean, i);          { the main statement's verb }
+end;
+
+{ EXPLAIN by itself only plans and is read-only. But "EXPLAIN ANALYZE <stmt>"
+  (PostgreSQL) actually EXECUTES the statement, so its safety is the inner
+  statement's. Return the effective verb: EXPLAIN when it's a plain plan, else
+  the executed inner verb. }
+function ResolveExplainVerb(const Clean: string): string;
+var
+  i, save: Integer;
+  w: string;
+  Analyze: Boolean;
+begin
+  i := 1;
+  if ReadWord(Clean, i) <> 'EXPLAIN' then Exit('EXPLAIN');
+  Analyze := False;
+  { consume EXPLAIN options: ANALYZE, VERBOSE, QUERY PLAN, or a (...) option list }
+  while True do
+  begin
+    SkipWS(Clean, i);
+    if (i <= Length(Clean)) and (Clean[i] = '(') then
+    begin
+      { "EXPLAIN (ANALYZE, ...) stmt" -- ANALYZE inside the option list counts }
+      save := i;
+      if not SkipParenGroup(Clean, i) then Break;
+      if Pos('ANALYZE', UpperCase(Copy(Clean, save, i - save))) > 0 then Analyze := True;
+      Continue;
+    end;
+    save := i;
+    w := ReadWord(Clean, i);
+    if w = 'ANALYZE' then begin Analyze := True; Continue; end;
+    if (w = 'VERBOSE') or (w = 'QUERY') or (w = 'PLAN') then Continue;
+    i := save; Break;   { not an option keyword -> the inner statement starts }
+  end;
+  if not Analyze then Exit('EXPLAIN');   { plain plan -> read-only }
+  w := ReadWord(Clean, i);               { inner statement verb executes }
+  if w = 'WITH' then w := ResolveWithVerb(Copy(Clean, i - Length(w), MaxInt));
+  if w = '' then Exit('');               { unparseable -> caller refuses }
+  Result := w;
+end;
+
 function ClassifySQL(const SQL: string; out FirstWord: string): TSQLKind;
 var
-  Clean: string;
+  Clean, Verb: string;
 begin
   Clean := Trim(StripSQLNoise(SQL));
   FirstWord := LeadingWord(Clean);
   if FirstWord = '' then Exit(skEmpty);
-  if (FirstWord = 'SELECT') or (FirstWord = 'WITH') or (FirstWord = 'EXPLAIN')
-     or (FirstWord = 'SHOW') or (FirstWord = 'VALUES') or (FirstWord = 'DESCRIBE')
-     or (FirstWord = 'DESC') then
-    Exit(skReadOnly);
-  if (FirstWord = 'INSERT') or (FirstWord = 'UPDATE') or (FirstWord = 'DELETE')
-     or (FirstWord = 'MERGE') or (FirstWord = 'REPLACE') or (FirstWord = 'UPSERT') then
-    Exit(skDML);
-  if (FirstWord = 'CREATE') or (FirstWord = 'ALTER') or (FirstWord = 'DROP')
-     or (FirstWord = 'TRUNCATE') or (FirstWord = 'RENAME') then
-    Exit(skDDL);
+
+  { A WITH (CTE) statement is read-only only if its MAIN statement is a read:
+    "WITH c AS (SELECT 1) DELETE FROM t RETURNING *" is a WRITE. Resolve the
+    verb the CTE actually runs; an unparseable CTE is not certified read-only. }
+  if FirstWord = 'WITH' then
+  begin
+    Verb := ResolveWithVerb(Clean);
+    if Verb = '' then begin FirstWord := 'WITH'; Exit(skOther); end;
+    FirstWord := Verb;
+    Exit(KindOfVerb(Verb));
+  end;
+
+  { EXPLAIN plans (read-only) unless it's EXPLAIN ANALYZE, which executes. }
+  if FirstWord = 'EXPLAIN' then
+  begin
+    Verb := ResolveExplainVerb(Clean);
+    if Verb = '' then begin FirstWord := 'EXPLAIN'; Exit(skOther); end;
+    if Verb = 'EXPLAIN' then Exit(skReadOnly);
+    FirstWord := Verb;
+    Exit(KindOfVerb(Verb));
+  end;
+
   { PRAGMA is read-only only in its "PRAGMA name;" form; "PRAGMA name = value"
     mutates. Treat the assignment form as skOther (blocked outside full). }
   if FirstWord = 'PRAGMA' then
   begin
     if Pos('=', Clean) > 0 then Exit(skOther) else Exit(skReadOnly);
   end;
-  Result := skOther;
+
+  Result := KindOfVerb(FirstWord);
 end;
 
 function SQLHasMultipleStatements(const SQL: string): Boolean;
