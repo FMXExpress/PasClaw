@@ -77,14 +77,31 @@ Fields: `name`, `driver`, `database`, `server`, `port`, `user`, `password`,
 `params`, `mode`, `max_rows`, `timeout_ms`. Keep credentials out of the file with
 env substitution; `db_info` redacts the password on the way out.
 
+## PasClaw as a database MCP server
+
+With a `database` section configured, PasClaw projects the db tools out over MCP,
+so any MCP host (Claude Desktop, Cursor, Codex CLI) can query your databases
+through PasClaw:
+
+- **stdio:** `pasclaw mcp stdio` exposes `db_query` / `db_tables` / `db_describe`
+  / `db_info` (read-only). `--allow-write` additionally exposes `db_execute`
+  (still refused on a `readonly` connection). Point a host's MCP config at
+  `pasclaw mcp stdio` as the command.
+- **HTTP:** the gateway's `POST /mcp` route exposes the same tools from its
+  registry.
+
+Two safety layers apply: the MCP server only advertises `tcReadOnly` tools
+unless writes are allowed, and each tool still enforces the connection's mode.
+
 ## Roadmap
 
 - **Phase 1 (done)** — engine-agnostic seam + the five tools + safety model,
   SQLite backend on both toolchains.
 - **Phase 2 (done)** — link all FPC connectors (+ the `PASCLAW_FIREDAC_FULL`
   define for Delphi); wire the `database` config section at each entry point.
-- **Phase 3** — project the native tools out through PasClaw's MCP server, so
-  PasClaw itself is a cross-platform database MCP server.
+- **Phase 3 (done)** — project the native tools out through PasClaw's MCP server
+  (stdio + HTTP `/mcp`), so PasClaw itself is a cross-platform database MCP
+  server.
 - **Phase 4** — a DeepSQL-style "DBA" layer: schema/stat indexing into the KB,
   a plain-English business glossary in memory facts, and a cron+workflow that
   ranks slow queries and proposes indexes.

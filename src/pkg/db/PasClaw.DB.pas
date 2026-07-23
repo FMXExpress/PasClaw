@@ -267,17 +267,38 @@ begin
   end;
 end;
 
-{ Given cleaned SQL that starts with WITH, return the MAIN statement's verb (the
-  statement that follows all CTE definitions). Empty string if the CTE list
-  can't be parsed -- the caller then refuses to certify it as read-only. }
-function ResolveWithVerb(const Clean: string): string;
-var
-  i, save: Integer;
-  w: string;
+{ Danger ordering, so the classifier can pick the WORST kind found across a
+  compound statement (a CTE body + the main statement). Read is safest;
+  anything else disqualifies a statement from db_query. }
+function Severity(K: TSQLKind): Integer;
 begin
-  Result := '';
+  case K of
+    skDDL:   Result := 3;
+    skDML:   Result := 2;
+    skOther: Result := 1;
+  else       Result := 0;   { skReadOnly / skEmpty }
+  end;
+end;
+
+{ Classify a comment/literal-stripped query-expression string. Mutually
+  recursive with ClassifyWithBodies so a CTE body that is itself a WITH is
+  inspected too. FirstWord reports the verb that determined the kind. }
+function ClassifyQueryExpr(const S: string; out FirstWord: string): TSQLKind; forward;
+
+{ A WITH statement is read-only ONLY when every CTE body AND the main statement
+  are reads. PostgreSQL data-modifying CTEs -- "WITH d AS (DELETE FROM t
+  RETURNING *) SELECT * FROM d" -- mutate inside the CTE while the main verb is
+  SELECT, so the body verbs must be classified too. Returns the WORST kind found
+  (skOther on an unparseable CTE list, so it is never certified read-only). }
+function ClassifyWithBodies(const Clean: string; out FirstWord: string): TSQLKind;
+var
+  i, save, bodyStart, bodyLen: Integer;
+  w, subVerb, worstVerb: string;
+  worst, k: TSQLKind;
+begin
+  worst := skReadOnly; worstVerb := 'WITH';
   i := 1;
-  if ReadWord(Clean, i) <> 'WITH' then Exit;
+  if ReadWord(Clean, i) <> 'WITH' then begin FirstWord := 'WITH'; Exit(skOther); end;
   save := i;
   if ReadWord(Clean, i) <> 'RECURSIVE' then i := save;   { optional }
   while True do
@@ -285,88 +306,98 @@ begin
     ReadWord(Clean, i);                 { CTE name }
     SkipWS(Clean, i);
     if (i <= Length(Clean)) and (Clean[i] = '(') then    { optional (col,...) }
-      if not SkipParenGroup(Clean, i) then Exit;
-    if ReadWord(Clean, i) <> 'AS' then Exit;             { malformed }
+      if not SkipParenGroup(Clean, i) then begin FirstWord := 'WITH'; Exit(skOther); end;
+    if ReadWord(Clean, i) <> 'AS' then begin FirstWord := 'WITH'; Exit(skOther); end;
     save := i;                                           { optional [NOT] MATERIALIZED }
     w := ReadWord(Clean, i);
     if w = 'NOT' then ReadWord(Clean, i)
     else if w <> 'MATERIALIZED' then i := save;
     SkipWS(Clean, i);
-    if (i > Length(Clean)) or (Clean[i] <> '(') then Exit;
-    if not SkipParenGroup(Clean, i) then Exit;           { the CTE body }
+    if (i > Length(Clean)) or (Clean[i] <> '(') then begin FirstWord := 'WITH'; Exit(skOther); end;
+    { classify the CTE body's own statement before skipping past it }
+    bodyStart := i + 1;
+    if not SkipParenGroup(Clean, i) then begin FirstWord := 'WITH'; Exit(skOther); end;
+    bodyLen := (i - 1) - bodyStart;     { inside the parens, excluding ')' }
+    k := ClassifyQueryExpr(Copy(Clean, bodyStart, bodyLen), subVerb);
+    if Severity(k) > Severity(worst) then begin worst := k; worstVerb := subVerb; end;
     SkipWS(Clean, i);
     if (i <= Length(Clean)) and (Clean[i] = ',') then    { another CTE follows }
     begin Inc(i); Continue; end;
     Break;
   end;
-  Result := ReadWord(Clean, i);          { the main statement's verb }
+  { the main statement after the CTE list }
+  k := ClassifyQueryExpr(Copy(Clean, i, MaxInt), w);
+  if Severity(k) >= Severity(worst) then begin worst := k; worstVerb := w; end;
+  FirstWord := worstVerb;
+  Result := worst;
 end;
 
-{ EXPLAIN by itself only plans and is read-only. But "EXPLAIN ANALYZE <stmt>"
-  (PostgreSQL) actually EXECUTES the statement, so its safety is the inner
-  statement's. Return the effective verb: EXPLAIN when it's a plain plan, else
-  the executed inner verb. }
-function ResolveExplainVerb(const Clean: string): string;
+function ClassifyQueryExpr(const S: string; out FirstWord: string): TSQLKind;
+var Clean: string;
+begin
+  Clean := Trim(S);
+  FirstWord := LeadingWord(Clean);
+  if FirstWord = '' then Exit(skEmpty);
+  if FirstWord = 'WITH' then Exit(ClassifyWithBodies(Clean, FirstWord));
+  if FirstWord = 'PRAGMA' then
+  begin
+    if Pos('=', Clean) > 0 then Exit(skOther) else Exit(skReadOnly);
+  end;
+  Result := KindOfVerb(FirstWord);
+end;
+
+{ EXPLAIN by itself only plans (read-only). "EXPLAIN ANALYZE <stmt>" /
+  "EXPLAIN (ANALYZE) <stmt>" actually EXECUTE on PostgreSQL. Returns True (with
+  InnerStart at the executed statement) when ANALYZE is present. }
+function ExplainAnalyzeInner(const Clean: string; out InnerStart: Integer): Boolean;
 var
   i, save: Integer;
   w: string;
-  Analyze: Boolean;
 begin
+  Result := False;
+  InnerStart := 0;
   i := 1;
-  if ReadWord(Clean, i) <> 'EXPLAIN' then Exit('EXPLAIN');
-  Analyze := False;
-  { consume EXPLAIN options: ANALYZE, VERBOSE, QUERY PLAN, or a (...) option list }
+  if ReadWord(Clean, i) <> 'EXPLAIN' then Exit;
   while True do
   begin
     SkipWS(Clean, i);
     if (i <= Length(Clean)) and (Clean[i] = '(') then
     begin
-      { "EXPLAIN (ANALYZE, ...) stmt" -- ANALYZE inside the option list counts }
       save := i;
       if not SkipParenGroup(Clean, i) then Break;
-      if Pos('ANALYZE', UpperCase(Copy(Clean, save, i - save))) > 0 then Analyze := True;
+      if Pos('ANALYZE', UpperCase(Copy(Clean, save, i - save))) > 0 then Result := True;
       Continue;
     end;
     save := i;
     w := ReadWord(Clean, i);
-    if w = 'ANALYZE' then begin Analyze := True; Continue; end;
+    if w = 'ANALYZE' then begin Result := True; Continue; end;
     if (w = 'VERBOSE') or (w = 'QUERY') or (w = 'PLAN') then Continue;
-    i := save; Break;   { not an option keyword -> the inner statement starts }
+    i := save; Break;   { the inner statement starts here }
   end;
-  if not Analyze then Exit('EXPLAIN');   { plain plan -> read-only }
-  w := ReadWord(Clean, i);               { inner statement verb executes }
-  if w = 'WITH' then w := ResolveWithVerb(Copy(Clean, i - Length(w), MaxInt));
-  if w = '' then Exit('');               { unparseable -> caller refuses }
-  Result := w;
+  InnerStart := i;
 end;
 
 function ClassifySQL(const SQL: string; out FirstWord: string): TSQLKind;
 var
-  Clean, Verb: string;
+  Clean: string;
+  InnerStart: Integer;
 begin
   Clean := Trim(StripSQLNoise(SQL));
   FirstWord := LeadingWord(Clean);
   if FirstWord = '' then Exit(skEmpty);
 
-  { A WITH (CTE) statement is read-only only if its MAIN statement is a read:
-    "WITH c AS (SELECT 1) DELETE FROM t RETURNING *" is a WRITE. Resolve the
-    verb the CTE actually runs; an unparseable CTE is not certified read-only. }
+  { WITH: read-only only if every CTE body AND the main statement read. }
   if FirstWord = 'WITH' then
-  begin
-    Verb := ResolveWithVerb(Clean);
-    if Verb = '' then begin FirstWord := 'WITH'; Exit(skOther); end;
-    FirstWord := Verb;
-    Exit(KindOfVerb(Verb));
-  end;
+    Exit(ClassifyWithBodies(Clean, FirstWord));
 
-  { EXPLAIN plans (read-only) unless it's EXPLAIN ANALYZE, which executes. }
+  { EXPLAIN plans (read-only) unless EXPLAIN ANALYZE, which executes the inner
+    statement -- classify by that (incl. its CTE bodies). }
   if FirstWord = 'EXPLAIN' then
   begin
-    Verb := ResolveExplainVerb(Clean);
-    if Verb = '' then begin FirstWord := 'EXPLAIN'; Exit(skOther); end;
-    if Verb = 'EXPLAIN' then Exit(skReadOnly);
-    FirstWord := Verb;
-    Exit(KindOfVerb(Verb));
+    if not ExplainAnalyzeInner(Clean, InnerStart) then Exit(skReadOnly);
+    Result := ClassifyQueryExpr(Copy(Clean, InnerStart, MaxInt), FirstWord);
+    if Result = skEmpty then begin FirstWord := 'EXPLAIN'; Result := skReadOnly; end;
+    Exit;
   end;
 
   { PRAGMA is read-only only in its "PRAGMA name;" form; "PRAGMA name = value"

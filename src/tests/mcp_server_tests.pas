@@ -39,6 +39,7 @@ uses
   PasClaw.JSON,
   PasClaw.Tools.Types,
   PasClaw.Tools.Registry,
+  PasClaw.Tools.DB,        { Phase 3: db_* tools projected over MCP }
   PasClaw.MCP.Server;
 
 procedure Fail_(const Msg: string);
@@ -491,6 +492,65 @@ begin
   end;
 end;
 
+(* Phase 3: PasClaw as a database MCP server. With a "database" connection
+   configured, the db_* read tools project through the server core (tcReadOnly
+   auto-exposed), db_execute stays hidden until --allow-write, and a tools/call
+   into db_query returns real rows -- the whole point of the projection. *)
+procedure TestDatabaseToolsProjected;
+var
+  Reg: TToolRegistry;
+  Srv: TMCPServerCore;
+  Resp, Err, DbPath: string;
+begin
+  DbPath := IncludeTrailingPathDelimiter(GetTempDir(False)) + 'pasclaw_mcp_db_test.db';
+  if FileExists(DbPath) then DeleteFile(DbPath);
+  { full-mode SQLite connection so we can seed; path JSON-escaped for Windows }
+  SetDBConfigFromJSON('[{"name":"main","driver":"sqlite","database":"' +
+    StringReplace(DbPath, '\', '\\', [rfReplaceAll]) + '","mode":"full"}]');
+  Reg := TToolRegistry.Create;
+  try
+    RegisterDBTools(Reg);
+    { seed a table + row directly through the registry (not via MCP) }
+    Reg.RunTool('db_execute', '{"sql":"CREATE TABLE t (id INTEGER PRIMARY KEY, name TEXT)"}', Err);
+    AssertEqStr(Err, '', 'seed: create table');
+    Reg.RunTool('db_execute', '{"sql":"INSERT INTO t (id,name) VALUES (1,''alice'')"}', Err);
+    AssertEqStr(Err, '', 'seed: insert row');
+
+    { read-only server (default): db read tools exposed, db_execute hidden }
+    Srv := TMCPServerCore.Create(Reg, False, '');
+    try
+      Resp := Srv.HandleRequest('{"jsonrpc":"2.0","id":1,"method":"tools/list"}');
+      AssertContains(Resp, '"name":"db_query"',    'db_query projected over MCP');
+      AssertContains(Resp, '"name":"db_tables"',   'db_tables projected');
+      AssertContains(Resp, '"name":"db_describe"', 'db_describe projected');
+      AssertContains(Resp, '"name":"db_info"',     'db_info projected');
+      AssertNotContains(Resp, '"name":"db_execute"',
+                        'db_execute hidden without --allow-write');
+
+      { a tools/call into db_query returns the real row }
+      Resp := Srv.HandleRequest('{"jsonrpc":"2.0","id":2,"method":"tools/call",' +
+        '"params":{"name":"db_query","arguments":{"sql":"SELECT name FROM t WHERE id=1"}}}');
+      AssertContains(Resp, 'alice', 'db_query over MCP returns the row');
+      AssertNotContains(Resp, '"isError":true', 'db_query happy path is not an error');
+    finally
+      Srv.Free;
+    end;
+
+    { --allow-write: db_execute now exposed (still mode-gated inside the tool) }
+    Srv := TMCPServerCore.Create(Reg, True, '');
+    try
+      Resp := Srv.HandleRequest('{"jsonrpc":"2.0","id":3,"method":"tools/list"}');
+      AssertContains(Resp, '"name":"db_execute"', 'db_execute exposed under --allow-write');
+    finally
+      Srv.Free;
+    end;
+  finally
+    Reg.Free;
+    SetDBConfigFromJSON('');   { reset the process-global connection set }
+    if FileExists(DbPath) then DeleteFile(DbPath);
+  end;
+end;
+
 begin
   TestInitializeRoundTrip;                  WriteLn('  ok: initialize');
   TestInitializedNotificationHasNoResponse; WriteLn('  ok: initialized notification (no response)');
@@ -505,5 +565,6 @@ begin
   TestAllowListNarrowsSurface;              WriteLn('  ok: allowlist narrows surface');
   TestIdNestedInParamsDoesNotConfuseEcho;   WriteLn('  ok: id-in-params does not leak into echo');
   TestPingRoundTrip;                        WriteLn('  ok: ping round-trip');
+  TestDatabaseToolsProjected;               WriteLn('  ok: db_* tools projected over MCP');
   WriteLn('PASS');
 end.

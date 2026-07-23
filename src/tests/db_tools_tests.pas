@@ -85,6 +85,17 @@ begin
   Check(ClassifySQL('WITH a AS (SELECT 1), b AS (SELECT 2) UPDATE t SET x=1', w) = skDML,
     'classify: multi-CTE ..UPDATE is write');
   Check(ClassifySQL('WITH c AS (SELECT 1) UPDATE t SET x=1', w) <> skReadOnly, 'classify: WITH..UPDATE not read');
+  { data-modifying CTE bodies: the mutation is INSIDE the CTE, main verb is SELECT }
+  Check(ClassifySQL('WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d', w) = skDML,
+    'classify: data-modifying CTE (DELETE body) is a write');
+  Check(ClassifySQL('WITH d AS (INSERT INTO t VALUES (1) RETURNING *) SELECT * FROM d', w) = skDML,
+    'classify: data-modifying CTE (INSERT body) is a write');
+  Check(ClassifySQL('WITH a AS (SELECT 1), b AS (UPDATE t SET x=1 RETURNING *) SELECT * FROM b', w) = skDML,
+    'classify: data-modifying CTE among reads is a write');
+  Check(ClassifySQL('WITH d AS (SELECT 1) SELECT * FROM d', w) = skReadOnly,
+    'classify: all-read CTE stays read');
+  Check(ClassifySQL('EXPLAIN ANALYZE WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d', w) = skDML,
+    'classify: EXPLAIN ANALYZE + data-modifying CTE is a write');
   { EXPLAIN plans (read); EXPLAIN ANALYZE executes -> classify by inner stmt. }
   Check(ClassifySQL('EXPLAIN SELECT 1', w) = skReadOnly, 'classify: EXPLAIN plan is read');
   Check(ClassifySQL('EXPLAIN ANALYZE DELETE FROM t', w) = skDML, 'classify: EXPLAIN ANALYZE DELETE is write');
@@ -167,9 +178,12 @@ begin
     { db_query refuses a writable CTE (the readonly-bypass this hardening fixes) }
     Res := Reg.RunTool('db_query', '{"sql":"WITH c AS (SELECT 1) DELETE FROM t"}', Err);
     Check(Err <> '', 'query: refuses writable CTE (WITH..DELETE)');
-    { and the rows are still there afterwards }
+    { and a data-modifying CTE whose MAIN verb is SELECT is refused too }
+    Res := Reg.RunTool('db_query', '{"sql":"WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d"}', Err);
+    Check(Err <> '', 'query: refuses data-modifying CTE (DELETE body, SELECT main)');
+    { rows must still be there -- neither refused statement ran }
     Res := Reg.RunTool('db_query', '{"sql":"SELECT COUNT(*) AS n FROM t"}', Err);
-    Check(HasSub(Res, '"n":2'), 'query: writable CTE did not delete rows (got ' + Res + ')');
+    Check(HasSub(Res, '"n":2'), 'query: refused CTEs did not delete rows (got ' + Res + ')');
 
     { db_tables + db_describe }
     Res := Reg.RunTool('db_tables', '{}', Err);
