@@ -31,6 +31,8 @@ Canonical `driver` ids: `sqlite`, `postgres`, `mysql` (or `mysql8`, `mariadb`),
 | `db_describe` | read-only | columns of a table: name, type, size, nullable |
 | `db_query` | read-only | run ONE read statement (`SELECT`/`WITH`/`EXPLAIN`) with `:name` params |
 | `db_execute` | mutating | run ONE write (`INSERT`/`UPDATE`/`DELETE`; DDL in `full` mode) |
+| `db_schema` | read-only | schema digest: every table with columns + row counts (grounding for NL→SQL) |
+| `db_explain` | read-only | plan a query (without running it) + flag full table scans + index hint |
 
 All tools take an optional `connection` argument to select a named connection;
 omit it for the first (default) one.
@@ -93,6 +95,46 @@ through PasClaw:
 Two safety layers apply: the MCP server only advertises `tcReadOnly` tools
 unless writes are allowed, and each tool still enforces the connection's mode.
 
+## DBA layer
+
+The `db_schema` / `db_explain` tools plus PasClaw's existing memory, KB, workflow
+and cron machinery compose into a lightweight "always-on DBA" — the DeepSQL idea,
+built from parts you already have:
+
+- **Ground NL→SQL in the real schema.** `db_schema` returns each table's columns
+  and row counts. Read it before writing queries; the agent can also persist the
+  digest into the knowledgebase (`workspace/kb`) so `kb_search` recalls it.
+- **Teach business rules in plain English.** Store definitions with the memory
+  tools — "MRR = sum(amount) where status='active'", "a hotel is *active* when
+  `deleted_at is null`" — and they persist across sessions and surface via
+  `memory_search`, so later queries use your vocabulary.
+- **Optimize slow queries.** `db_explain` plans a query without running it,
+  flags full table scans in `full_scans`, and hints at an index. Apply the index
+  (with `db_execute` on a `full`-mode connection), then re-run `db_explain` to
+  confirm the plan switched to `SEARCH … USING INDEX`.
+- **Automate it.** Wrap the loop in a saved workflow and put it on a cron: pull
+  slow statements (e.g. Postgres `pg_stat_statements`) with `db_query`, run each
+  through `db_explain`, and post the ranked findings + proposed indexes to a
+  channel. For example:
+
+  ```json
+  {
+    "name": "slow_query_audit",
+    "inputs": [{ "name": "min_ms", "type": "number" }],
+    "nodes": [
+      { "id": "slow", "tool": "db_query", "args": {
+          "sql": "SELECT query, mean_exec_time FROM pg_stat_statements WHERE mean_exec_time > :ms ORDER BY mean_exec_time DESC LIMIT 10",
+          "params": { "ms": "{{inputs.min_ms}}" } } },
+      { "id": "advise", "tool": "llm", "args": {
+          "provider": "anthropic",
+          "prompt": "For each slow query below, call db_explain and propose an index. {{nodes.slow}}" } }
+    ]
+  }
+  ```
+
+`db_schema` and `db_explain` are read-only, so they project over MCP too — an
+external host gets schema grounding and query-plan analysis for free.
+
 ## Roadmap
 
 - **Phase 1 (done)** — engine-agnostic seam + the five tools + safety model,
@@ -102,6 +144,6 @@ unless writes are allowed, and each tool still enforces the connection's mode.
 - **Phase 3 (done)** — project the native tools out through PasClaw's MCP server
   (stdio + HTTP `/mcp`), so PasClaw itself is a cross-platform database MCP
   server.
-- **Phase 4** — a DeepSQL-style "DBA" layer: schema/stat indexing into the KB,
-  a plain-English business glossary in memory facts, and a cron+workflow that
-  ranks slow queries and proposes indexes.
+- **Phase 4 (done)** — the DBA layer: `db_schema` (schema/stat digest) and
+  `db_explain` (query-plan + full-scan/index advisor), composing with memory
+  facts (business glossary) and workflow+cron (slow-query audit) as above.
