@@ -130,7 +130,7 @@ end;
 procedure TestToolsLive;
 var
   Reg: TToolRegistry;
-  Err, Res: string;
+  Err, Res, CountBefore: string;
   RW: TDBConn;
 begin
   { fresh db }
@@ -222,6 +222,37 @@ begin
     Res := Reg.RunTool('db_execute', '{"sql":"DROP TABLE t"}', Err);
     Check(Err <> '', 'gating: readwrite refuses DROP (needs full)');
     Check(Pos('full', Err) > 0, 'gating: DDL refusal names full mode');
+
+    { ---- Phase 4 DBA tools ---- }
+    SetDBConfig([RW]);   { back to the seeded full-mode db }
+
+    { db_schema: lists the table + its columns + a row count }
+    Res := Reg.RunTool('db_schema', '{}', Err);
+    Check(Err = '', 'schema: ran (' + Err + ')');
+    Check(HasSub(Res, '"name":"t"'), 'schema: lists table t (got ' + Res + ')');
+    Check(HasSub(Res, '"name":"id"') and HasSub(Res, '"name":"name"'), 'schema: lists columns');
+    Check(Pos('row_count', Res) > 0, 'schema: includes row_count');
+
+    { db_explain: a WHERE on an unindexed column is a full SCAN -> flagged }
+    Res := Reg.RunTool('db_explain', '{"sql":"SELECT * FROM t WHERE name = ''alice''"}', Err);
+    Check(Err = '', 'explain: ran (' + Err + ')');
+    Check(Pos('"plan"', Res) > 0, 'explain: returns a plan');
+    Check(HasSub(Res, '"full_scans":["t"]') or (Pos('"t"', Res) > 0), 'explain: flags the full scan on t (got ' + Res + ')');
+    Check(Pos('hint', Res) > 0, 'explain: gives an index hint');
+
+    { after indexing name, the same query no longer full-scans }
+    Reg.RunTool('db_execute', '{"sql":"CREATE INDEX idx_t_name ON t(name)"}', Err);
+    Check(Err = '', 'explain: create index (' + Err + ')');
+    Res := Reg.RunTool('db_explain', '{"sql":"SELECT * FROM t WHERE name = ''alice''"}', Err);
+    Check(Pos('"full_scans":[]', StringReplace(Res, ' ', '', [rfReplaceAll])) > 0,
+          'explain: indexed query no longer flagged as full scan (got ' + Res + ')');
+
+    { db_explain plans without executing -- an explained DELETE must not delete }
+    CountBefore := Reg.RunTool('db_query', '{"sql":"SELECT COUNT(*) AS n FROM t"}', Err);
+    Reg.RunTool('db_explain', '{"sql":"DELETE FROM t WHERE id=1"}', Err);
+    Res := Reg.RunTool('db_query', '{"sql":"SELECT COUNT(*) AS n FROM t"}', Err);
+    Check(Res = CountBefore, 'explain: planning a DELETE did not run it (before=' +
+          CountBefore + ' after=' + Res + ')');
 
     { no connection configured => clear guidance, not a crash }
     SetDBConfig([]);

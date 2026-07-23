@@ -53,7 +53,7 @@ procedure RegisterDBTools(Reg: TToolRegistry);
 implementation
 
 uses
-  SysUtils,
+  SysUtils, Classes,
   PasClaw.JSON,
   PasClaw.Tools.Types;
 
@@ -342,6 +342,224 @@ begin
   end;
 end;
 
+{ ---- Phase 4: DBA layer (schema digest + query-plan / index advisor) ---- }
+
+{ SELECT COUNT(*) for a table via the read path; -1 on any error (view without
+  count support, permission, etc.). Table is identifier-validated by the caller. }
+function CountRows(Conn: IDBConnection; const Table: string): Int64;
+var
+  RowsJSON, Err: string;
+  RC: Integer;
+  Trunc: Boolean;
+  Arr: TJsonArray;
+  O: TJsonObject;
+begin
+  Result := -1;
+  if not Conn.Query('SELECT COUNT(*) AS n FROM ' + Table, '', 1, RowsJSON, RC, Trunc, Err) then Exit;
+  try Arr := TJsonArray.Parse(RowsJSON); except Arr := nil; end;
+  if Arr = nil then Exit;
+  try
+    if Arr.Count > 0 then
+    begin
+      O := Arr.ItemObject(0);
+      if O <> nil then try Result := O.GetInt('n', -1); finally O.Free; end;
+    end;
+  finally
+    Arr.Free;
+  end;
+end;
+
+{ SQLite plans read-only via "EXPLAIN QUERY PLAN"; other engines use "EXPLAIN". }
+function ExplainPrefix(const Driver: string): string;
+var D: string;
+begin
+  D := LowerCase(Trim(Driver));
+  if (D = 'sqlite') or (D = 'sqlite3') then Result := 'EXPLAIN QUERY PLAN '
+  else Result := 'EXPLAIN ';
+end;
+
+{ Pull table names from a SQLite EXPLAIN QUERY PLAN "detail" that is a full table
+  SCAN (no index). "SCAN t" => full scan; "SEARCH t USING INDEX" and
+  "SCAN t USING COVERING INDEX" are indexed and ignored. Appends to Scans. }
+procedure CollectFullScan(const Detail: string; Scans: TStringList);
+
+  { read the identifier at position i (letters/digits/underscore), advancing i }
+  function WordAt(var i: Integer): string;
+  begin
+    Result := '';
+    while (i <= Length(Detail)) and (Detail[i] = ' ') do Inc(i);
+    while (i <= Length(Detail)) and
+          (((Detail[i] >= 'A') and (Detail[i] <= 'Z')) or
+           ((Detail[i] >= 'a') and (Detail[i] <= 'z')) or
+           ((Detail[i] >= '0') and (Detail[i] <= '9')) or (Detail[i] = '_')) do
+    begin Result := Result + Detail[i]; Inc(i); end;
+  end;
+
+var U, Tbl: string; p, i: Integer;
+begin
+  U := UpperCase(Detail);
+  p := Pos('SCAN ', U);
+  if p = 0 then Exit;
+  if Pos('USING', U) > 0 then Exit;   { covering/secondary index -- not a full scan }
+  i := p + 5;
+  Tbl := WordAt(i);
+  { older SQLite says "SCAN TABLE t", newer just "SCAN t" -- skip the keyword }
+  if UpperCase(Tbl) = 'TABLE' then Tbl := WordAt(i);
+  if (Tbl <> '') and (Scans.IndexOf(Tbl) < 0) then Scans.Add(Tbl);
+end;
+
+function ToolDBSchema(const ArgsJSON: string; out ErrMsg: string): string;
+var
+  Cfg: TDBConn;
+  ConnName, OneTable, Err, ListJSON, ColsJSON: string;
+  WithCounts: Boolean;
+  Conn: IDBConnection;
+  Root, TblObj: TJsonObject;
+  Tables: TJsonArray;
+  Names: TStringList;
+  ListArr: TJsonArray;
+  i, Cap: Integer;
+  RC: Int64;
+begin
+  ErrMsg := '';
+  ConnName   := JsonReadStr(ArgsJSON, 'connection', '');
+  OneTable   := JsonReadStr(ArgsJSON, 'table', '');
+  WithCounts := JsonReadBool(ArgsJSON, 'with_row_counts', True);
+  if not PickConn(ConnName, Cfg, ErrMsg) then Exit('');
+
+  Conn := NewDBConnection;
+  if not Conn.Open(Cfg, Err) then begin ErrMsg := 'db_schema: ' + Err; Exit(''); end;
+  Names := TStringList.Create;
+  try
+    if Trim(OneTable) <> '' then
+      Names.Add(OneTable)
+    else
+    begin
+      if not Conn.ListTables(ListJSON, Err) then
+      begin ErrMsg := 'db_schema: ' + Err; Exit(''); end;
+      try ListArr := TJsonArray.Parse(ListJSON); except ListArr := nil; end;
+      if ListArr <> nil then
+      try
+        for i := 0 to ListArr.Count - 1 do Names.Add(ListArr.ItemStr(i, ''));
+      finally
+        ListArr.Free;
+      end;
+    end;
+
+    Root := TJsonObject.Create;
+    try
+      Root.PutStr('database', Cfg.Name);
+      Root.PutStr('driver', Cfg.Driver);
+      Tables := TJsonArray.Create;
+      Cap := 200;   { keep the digest bounded for large schemas }
+      for i := 0 to Names.Count - 1 do
+      begin
+        if i >= Cap then Break;
+        if Trim(Names[i]) = '' then Continue;
+        TblObj := TJsonObject.Create;
+        TblObj.PutStr('name', Names[i]);
+        if Conn.DescribeTable(Names[i], ColsJSON, Err) then
+          TblObj.PutRaw('columns', ColsJSON)
+        else
+          TblObj.PutRaw('columns', '[]');
+        if WithCounts and IsSafeIdentifier(Names[i]) then
+        begin
+          RC := CountRows(Conn, Names[i]);
+          if RC >= 0 then TblObj.PutInt('row_count', RC);
+        end;
+        Tables.AddObject(TblObj);
+      end;
+      Root.PutArray('tables', Tables);
+      if Names.Count > Cap then
+        Root.PutStr('note', Format('showing first %d of %d tables', [Cap, Names.Count]));
+      Result := Root.ToJSON;
+    finally
+      Root.Free;
+    end;
+  finally
+    Names.Free;
+    Conn.Close;
+  end;
+end;
+
+function ToolDBExplain(const ArgsJSON: string; out ErrMsg: string): string;
+var
+  Cfg: TDBConn;
+  ConnName, SQL, ParamsJSON, Err, PlanJSON: string;
+  Conn: IDBConnection;
+  Root, O: TJsonObject;
+  Plan: TJsonArray;
+  Scans: TStringList;
+  ScanArr: TJsonArray;
+  RC, i, k: Integer;
+  Trunc: Boolean;
+  Keys: TStringList;
+begin
+  ErrMsg := '';
+  ParseCommon(ArgsJSON, ConnName, SQL, ParamsJSON);
+  if Trim(SQL) = '' then begin ErrMsg := 'db_explain: "sql" is required'; Exit(''); end;
+  if not PickConn(ConnName, Cfg, ErrMsg) then Exit('');
+  if SQLHasMultipleStatements(SQL) then
+  begin ErrMsg := 'db_explain: one statement per call'; Exit(''); end;
+
+  Conn := NewDBConnection;
+  if not Conn.Open(Cfg, Err) then begin ErrMsg := 'db_explain: ' + Err; Exit(''); end;
+  Scans := TStringList.Create;
+  try
+    { EXPLAIN / EXPLAIN QUERY PLAN only PLANS -- it never executes the statement,
+      so this is read-only regardless of the query's verb. }
+    if not Conn.Query(ExplainPrefix(Cfg.Driver) + SQL, ParamsJSON, 500,
+                      PlanJSON, RC, Trunc, Err) then
+    begin ErrMsg := 'db_explain: ' + Err; Exit(''); end;
+
+    { Heuristic full-scan detection (SQLite plan "detail" strings). Scan every
+      string field of every plan row so it's tolerant of column-name shape. }
+    try Plan := TJsonArray.Parse(PlanJSON); except Plan := nil; end;
+    if Plan <> nil then
+    try
+      for i := 0 to Plan.Count - 1 do
+      begin
+        O := Plan.ItemObject(i);
+        if O = nil then Continue;
+        try
+          Keys := O.Keys;
+          try
+            for k := 0 to Keys.Count - 1 do
+              CollectFullScan(O.GetStr(Keys[k], ''), Scans);
+          finally
+            Keys.Free;
+          end;
+        finally
+          O.Free;
+        end;
+      end;
+    finally
+      Plan.Free;
+    end;
+
+    Root := TJsonObject.Create;
+    try
+      Root.PutBool('ok', True);
+      Root.PutRaw('plan', PlanJSON);
+      ScanArr := TJsonArray.Create;
+      for i := 0 to Scans.Count - 1 do ScanArr.AddStr(Scans[i]);
+      Root.PutArray('full_scans', ScanArr);
+      if Scans.Count > 0 then
+        Root.PutStr('hint',
+          'full table scan on: ' + Scans.CommaText +
+          ' -- consider an index on the WHERE / JOIN / ORDER BY columns for ' +
+          'those tables, then re-run db_explain to confirm the plan switches to ' +
+          'a SEARCH ... USING INDEX.');
+      Result := Root.ToJSON;
+    finally
+      Root.Free;
+    end;
+  finally
+    Scans.Free;
+    Conn.Close;
+  end;
+end;
+
 const
   CONN_ARG =
     '"connection":{"type":"string","description":"configured connection name; ' +
@@ -366,6 +584,16 @@ const
     '{"type":"object","properties":{' + CONN_ARG + ',' +
     '"sql":{"type":"string","description":"a single write statement (INSERT/UPDATE/DELETE); ' +
       'DDL requires a full-mode connection. Use :name placeholders + params."},' +
+    '"params":{"type":"object","description":"values for :name placeholders"}' +
+    '},"required":["sql"]}';
+  SCHEMA_SCHEMA =
+    '{"type":"object","properties":{' + CONN_ARG + ',' +
+    '"table":{"type":"string","description":"limit to one table (optionally schema.table); omit for the whole schema"},' +
+    '"with_row_counts":{"type":"boolean","description":"include per-table row counts (default true)"}' +
+    '}}';
+  EXPLAIN_SCHEMA =
+    '{"type":"object","properties":{' + CONN_ARG + ',' +
+    '"sql":{"type":"string","description":"the query to analyze. It is PLANNED, not run."},' +
     '"params":{"type":"object","description":"values for :name placeholders"}' +
     '},"required":["sql"]}';
 
@@ -416,6 +644,21 @@ begin
     'connection) and return the affected row count. Refused on a readonly ' +
     'connection. Bind values with :name placeholders + "params".',
     EXECUTE_SCHEMA, ToolDBExecute, tcMutating);
+
+  Reg1(Reg, 'db_schema',
+    'Digest the schema for grounding SQL: every table (or one named table) with ' +
+    'its columns (name/type/nullable) and, by default, its row count. Read this ' +
+    'before writing queries against an unfamiliar database, and store durable ' +
+    'business rules ("MRR = ...", "active = status IN (...)") with the memory ' +
+    'tools so they persist across sessions.',
+    SCHEMA_SCHEMA, ToolDBSchema, tcReadOnly);
+
+  Reg1(Reg, 'db_explain',
+    'Analyze a query WITHOUT running it: returns the engine query plan plus ' +
+    '"full_scans" (tables read without an index) and an index hint. Use it to ' +
+    'diagnose slow queries and validate that a proposed index is actually used ' +
+    '(re-run and confirm the plan switches to SEARCH ... USING INDEX).',
+    EXPLAIN_SCHEMA, ToolDBExplain, tcReadOnly);
 end;
 
 end.
