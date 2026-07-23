@@ -254,6 +254,16 @@ begin
     Check(Res = CountBefore, 'explain: planning a DELETE did not run it (before=' +
           CountBefore + ' after=' + Res + ')');
 
+    { db_explain must reject a smuggled ANALYZE (would become EXPLAIN ANALYZE
+      <write>, which executes on PostgreSQL) -- and must not mutate. }
+    CountBefore := Reg.RunTool('db_query', '{"sql":"SELECT COUNT(*) AS n FROM t"}', Err);
+    Res := Reg.RunTool('db_explain', '{"sql":"ANALYZE DELETE FROM t WHERE id=1"}', Err);
+    Check(Err <> '', 'explain: refuses a smuggled ANALYZE <write>');
+    Res := Reg.RunTool('db_explain', '{"sql":"(ANALYZE) UPDATE t SET name=''z'' WHERE id=2"}', Err);
+    Check(Err <> '', 'explain: refuses (ANALYZE) <write>');
+    Res := Reg.RunTool('db_query', '{"sql":"SELECT COUNT(*) AS n FROM t"}', Err);
+    Check(Res = CountBefore, 'explain: refused ANALYZE attempts did not mutate');
+
     { no connection configured => clear guidance, not a crash }
     SetDBConfig([]);
     Res := Reg.RunTool('db_query', '{"sql":"SELECT 1"}', Err);

@@ -494,6 +494,7 @@ var
   RC, i, k: Integer;
   Trunc: Boolean;
   Keys: TStringList;
+  Stmt, FirstWord: string;
 begin
   ErrMsg := '';
   ParseCommon(ArgsJSON, ConnName, SQL, ParamsJSON);
@@ -502,14 +503,28 @@ begin
   if SQLHasMultipleStatements(SQL) then
   begin ErrMsg := 'db_explain: one statement per call'; Exit(''); end;
 
+  { Classify the CONSTRUCTED statement, not the raw sql. Prepending EXPLAIN keeps
+    a plain query read-only (EXPLAIN plans, doesn't run), but if the caller
+    smuggles ANALYZE into sql -- "ANALYZE DELETE ..." / "(ANALYZE) UPDATE ..." --
+    the result is "EXPLAIN ANALYZE <write>", which PostgreSQL EXECUTES. Require
+    the whole thing to classify read-only before running it; the classifier
+    already resolves EXPLAIN ANALYZE to its inner (executed) verb. }
+  Stmt := ExplainPrefix(Cfg.Driver) + SQL;
+  if ClassifySQL(Stmt, FirstWord) <> skReadOnly then
+  begin
+    ErrMsg := Format('db_explain: refusing "%s" -- EXPLAIN ANALYZE (and similar) ' +
+                     'executes the statement. Pass a plain query to analyze; its ' +
+                     'plan is computed without running it.', [FirstWord]);
+    Exit('');
+  end;
+
   Conn := NewDBConnection;
   if not Conn.Open(Cfg, Err) then begin ErrMsg := 'db_explain: ' + Err; Exit(''); end;
   Scans := TStringList.Create;
   try
-    { EXPLAIN / EXPLAIN QUERY PLAN only PLANS -- it never executes the statement,
-      so this is read-only regardless of the query's verb. }
-    if not Conn.Query(ExplainPrefix(Cfg.Driver) + SQL, ParamsJSON, 500,
-                      PlanJSON, RC, Trunc, Err) then
+    { Stmt is EXPLAIN [QUERY PLAN] <query> and classified read-only above, so it
+      only PLANS -- it never executes the statement. }
+    if not Conn.Query(Stmt, ParamsJSON, 500, PlanJSON, RC, Trunc, Err) then
     begin ErrMsg := 'db_explain: ' + Err; Exit(''); end;
 
     { Heuristic full-scan detection (SQLite plan "detail" strings). Scan every
