@@ -235,7 +235,10 @@ begin
     'not over-engineer.' + sLineBreak +
     sLineBreak +
     '## Runtime' + sLineBreak +
-    RuntimeString;
+    'This PasClaw agent binary was built with ' + RuntimeString + '. That ' +
+    'describes the agent program itself -- NOT the user''s project, toolchain, ' +
+    'or machine. Do not go looking for compilers or build tools (dcc, fpc, ' +
+    'gcc, ...) unless the user''s task actually requires building something.';
 end;
 
 function BuildWorkspaceSection: string;
@@ -643,7 +646,10 @@ begin
     'destined for a file) into your reply as prose or a code block: that ' +
     'creates nothing on disk and risks being cut off at the output-token ' +
     'limit mid-way. Put file content only inside a write_file / append_file / ' +
-    'apply_patch call.' + sLineBreak +
+    'apply_patch call. Conversely, when NO action is needed -- greetings, ' +
+    'small talk, questions you can answer from knowledge -- just reply. Do ' +
+    'not run tools to explore the machine, verify toolchains, or inventory ' +
+    'the environment unprompted.' + sLineBreak +
     sLineBreak +
     '2. **Be precise** -- match the language''s native idioms, name things ' +
     'clearly, do not introduce abstractions the task does not actually need. ' +
