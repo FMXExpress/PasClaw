@@ -1,0 +1,120 @@
+{
+  "persona_id": "alice_synthetic",
+  "description": "LOCOMO-shaped synthetic persona with three sessions and 8 questions across categories. Multi-session content with explicit facts (single-hop), facts that cross sessions (multi-hop), and dates (temporal). Used to smoke-test the bench harness against PasClaw's memory_search retrieval layer without requiring the real LOCOMO download.",
+  "sessions": [
+    {
+      "session_id": "s1",
+      "date": "2024-01-15",
+      "messages": [
+        {"role": "user", "content": "Hi! Long time. I've been thinking about getting a dog."},
+        {"role": "assistant", "content": "Welcome back. What breed are you considering?"},
+        {"role": "user", "content": "Almost certainly a Border Collie. They're intense but I've wanted one since I was a kid."},
+        {"role": "assistant", "content": "They need a lot of exercise. Is your living situation compatible?"},
+        {"role": "user", "content": "Yeah I just moved to Portland Oregon, got a place near Forest Park so trail running is right there."},
+        {"role": "assistant", "content": "Sounds ideal. Any names picked out yet?"},
+        {"role": "user", "content": "Probably Luna. My sister Jenna says it's overused but I don't care."},
+        {"role": "assistant", "content": "Luna is a great name. When are you picking her up?"},
+        {"role": "user", "content": "Breeder said end of February. Pups are 8 weeks then."},
+        {"role": "assistant", "content": "Exciting. Anything else going on?"},
+        {"role": "user", "content": "Job search is wrapping up. Have a final interview Thursday at a robotics company called Acme Robotics."}
+      ]
+    },
+    {
+      "session_id": "s2",
+      "date": "2024-02-28",
+      "messages": [
+        {"role": "user", "content": "I got the job at Acme Robotics! Starting March 11."},
+        {"role": "assistant", "content": "Congratulations! What's your role?"},
+        {"role": "user", "content": "Senior software engineer on the motion planning team. Lots of C++."},
+        {"role": "assistant", "content": "Sounds great. And Luna?"},
+        {"role": "user", "content": "Picked her up two days ago. She's a black-and-white tri color. Already chewed through one shoe."},
+        {"role": "assistant", "content": "Border Collie puppy energy is real. How's the Portland adjustment?"},
+        {"role": "user", "content": "Loving it. Bought a Trek FX3 bike last weekend to commute to Acme's office in Beaverton."},
+        {"role": "assistant", "content": "Smart choice. Any travel plans?"},
+        {"role": "user", "content": "Thinking Japan in June. My friend David lives in Kyoto now, last time I saw him was 2021."}
+      ]
+    },
+    {
+      "session_id": "s3",
+      "date": "2024-04-10",
+      "messages": [
+        {"role": "user", "content": "Quick update. Luna passed her puppy class!"},
+        {"role": "assistant", "content": "Nice. How's work at the new job?"},
+        {"role": "user", "content": "Good. The motion planning team uses ROS 2 plus their own state estimator. Steep ramp."},
+        {"role": "assistant", "content": "And Japan?"},
+        {"role": "user", "content": "Booked. June 8-22. Two weeks. Mostly Kyoto with side trips to Nara and Osaka."},
+        {"role": "assistant", "content": "Two weeks is generous. Staying with David?"},
+        {"role": "user", "content": "First week with him, second week at a ryokan in Hakone."},
+        {"role": "assistant", "content": "Sounds great. Anything else?"},
+        {"role": "user", "content": "Sister Jenna's wedding is in October. I'm in the wedding party."}
+      ]
+    }
+  ],
+  "questions": [
+    {
+      "id": "q1",
+      "category": "single-hop",
+      "question": "What breed of dog does Alice have?",
+      "answer": "Border Collie",
+      "answer_aliases": ["border collie", "Border Collie"],
+      "source_session": "s1"
+    },
+    {
+      "id": "q2",
+      "category": "single-hop",
+      "question": "Where does Alice work?",
+      "answer": "Acme Robotics",
+      "answer_aliases": ["Acme Robotics", "Acme"],
+      "source_session": "s2"
+    },
+    {
+      "id": "q3",
+      "category": "single-hop",
+      "question": "What city did Alice move to?",
+      "answer": "Portland",
+      "answer_aliases": ["Portland", "Portland Oregon", "Portland, Oregon"],
+      "source_session": "s1"
+    },
+    {
+      "id": "q4",
+      "category": "single-hop",
+      "question": "What is Alice's dog's name?",
+      "answer": "Luna",
+      "answer_aliases": ["Luna"],
+      "source_session": "s1"
+    },
+    {
+      "id": "q5",
+      "category": "temporal",
+      "question": "When is Alice traveling to Japan?",
+      "answer": "June 8-22",
+      "answer_aliases": ["June 8-22", "June 8", "June 22", "June"],
+      "source_session": "s3"
+    },
+    {
+      "id": "q6",
+      "category": "multi-hop",
+      "question": "What is the name of the dog Alice bought before starting at her new robotics job?",
+      "answer": "Luna",
+      "answer_aliases": ["Luna"],
+      "source_session": "s1,s2"
+    },
+    {
+      "id": "q7",
+      "category": "multi-hop",
+      "question": "Where does Alice's friend David live, and how is Alice planning to visit him?",
+      "answer": "Kyoto / Japan trip in June",
+      "answer_aliases": ["Kyoto", "Japan"],
+      "source_session": "s2,s3"
+    },
+    {
+      "id": "q8",
+      "category": "adversarial",
+      "question": "What breed of cat does Alice have?",
+      "answer": "Alice does not have a cat",
+      "answer_aliases": ["no cat", "does not have", "doesn't have", "Border Collie"],
+      "source_session": "none",
+      "note": "Alice has a Border Collie, not a cat. The retrieval should surface the dog information; a correct answer requires the model to NOT confabulate a cat."
+    }
+  ]
+}
