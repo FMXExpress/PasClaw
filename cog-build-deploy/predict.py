@@ -410,6 +410,19 @@ class Predictor(BasePredictor):
             "specific one deployed.",
             default="",
         ),
+        install_deps_before_deploy: bool = Input(
+            description="Before `wrangler deploy --temporary`, run "
+            "`npm install` (and `npm run build` when the project's "
+            "package.json declares a build script) in the wrangler "
+            "project dir. Required for any project with dependencies "
+            "or a bundler step (TypeScript + Vite, Hono, etc.) -- "
+            "wrangler bundles the entry point but does NOT install "
+            "node_modules or run build scripts, so without this a "
+            "dep-using Worker fails to bundle / deploys broken and "
+            "crashes at runtime. Set False only for a hand-written, "
+            "zero-dependency single-file Worker that needs no build.",
+            default=True,
+        ),
     ) -> list[Path]:
         """
         Run `pasclaw build` against the unzipped workspace, then ship the
@@ -858,7 +871,8 @@ class Predictor(BasePredictor):
             claim_url    = "(no deployment attempted)"
             if deploy_to_cloudflare and do_build:
                 deployed_url, claim_url = self._deploy_to_cloudflare(
-                    home_dir, wrangler_project_path, scratch
+                    home_dir, wrangler_project_path, scratch,
+                    install_deps=install_deps_before_deploy,
                 )
             elif deploy_to_cloudflare and not do_build:
                 deployed_url = "(no deployment attempted -- plan-only mode)"
@@ -1027,7 +1041,8 @@ class Predictor(BasePredictor):
                     claim = u
         return deployed, claim
 
-    def _deploy_to_cloudflare(self, home_dir, operator_override, scratch):
+    def _deploy_to_cloudflare(self, home_dir, operator_override, scratch,
+                               install_deps=True):
         """Run `wrangler deploy --temporary` and parse the URLs out of stdout.
 
         Runs wrangler with a PER-PREDICTION HOME so the temporary
@@ -1094,6 +1109,76 @@ class Predictor(BasePredictor):
             "WRANGLER_API_TOKEN",
         ):
             env.pop(k, None)
+
+        # ---- npm install + build before deploy ----------------------
+        # `wrangler deploy` auto-bundles the entry point with esbuild,
+        # but it does NOT install dependencies or run a project's build
+        # script. Anything beyond a zero-dependency single-file Worker
+        # therefore fails: a TS/Vite project that imports an npm package
+        # dies at bundle time with "Could not resolve <pkg>" (no
+        # node_modules), and a Workers-Sites project that serves a built
+        # dist/ dir deploys an empty site and the Worker throws at
+        # runtime ("Worker crashed" when you hit the URL). So when the
+        # project has a package.json we run `npm install` and, if a
+        # `build` script exists, `npm run build` first.
+        #
+        # This runs the agent-authored package.json's install/build
+        # scripts (arbitrary code), but the build step already ran
+        # arbitrary agent tool calls and the temp account + container
+        # are throwaway -- consistent with the existing trust model.
+        # node_modules / dist land in the live workspace AFTER pasclaw
+        # build already wrote workspace_out.zip, so they don't bloat
+        # the returned archive. The operator can set install_deps=False
+        # to skip (e.g. a hand-written single-file Worker needing no
+        # deps). Codex follow-up after a real Vite-project deploy
+        # surfaced the "Worker crashed" gap.
+        pkg_json = os.path.join(proj, "package.json")
+        if install_deps and os.path.isfile(pkg_json):
+            print(f"deploy: package.json found in {proj}; running npm install")
+            try:
+                ires = subprocess.run(
+                    ["npm", "install", "--no-audit", "--no-fund"],
+                    cwd=proj, capture_output=True, text=True,
+                    timeout=600, env=env,   # installs can be slow
+                )
+            except subprocess.TimeoutExpired:
+                return ("(deploy failed: npm install timed out after 10 min)",
+                        "(deploy failed: npm install timed out after 10 min)")
+            except FileNotFoundError:
+                return ("(deploy failed: npm not found -- rebuild the cog image)",
+                        "(deploy failed: npm not found -- rebuild the cog image)")
+            if ires.returncode != 0:
+                tail = ((ires.stdout or "") + (ires.stderr or "")).strip().splitlines()[-8:]
+                msg = "(deploy failed: npm install exit %d)\n%s" % (
+                    ires.returncode, "\n".join(tail))
+                return (msg, msg)
+
+            # Run `npm run build` only when the package declares a build
+            # script -- otherwise npm errors "missing script: build".
+            has_build = False
+            try:
+                import json as _json
+                with open(pkg_json) as f:
+                    has_build = bool(_json.load(f).get("scripts", {}).get("build"))
+            except Exception as e:
+                print(f"deploy: could not parse package.json for a build "
+                      f"script ({e}); skipping npm run build")
+            if has_build:
+                print("deploy: running npm run build")
+                try:
+                    bres = subprocess.run(
+                        ["npm", "run", "build"],
+                        cwd=proj, capture_output=True, text=True,
+                        timeout=600, env=env,
+                    )
+                except subprocess.TimeoutExpired:
+                    return ("(deploy failed: npm run build timed out after 10 min)",
+                            "(deploy failed: npm run build timed out after 10 min)")
+                if bres.returncode != 0:
+                    tail = ((bres.stdout or "") + (bres.stderr or "")).strip().splitlines()[-8:]
+                    msg = "(deploy failed: npm run build exit %d)\n%s" % (
+                        bres.returncode, "\n".join(tail))
+                    return (msg, msg)
 
         print(f"deploy: running `wrangler deploy --temporary` in {proj} "
               f"(HOME={wrangler_home})")
