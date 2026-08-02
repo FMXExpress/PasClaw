@@ -486,7 +486,10 @@
   .ob-check input{accent-color:var(--cyan)}
   .ob-err{color:var(--red);font-size:11.5px;margin:.2rem 0 .5rem}
   .ob-err[hidden]{display:none}
-  #onboard-actions{display:flex;justify-content:flex-end;gap:.5rem;margin-top:.6rem}
+  #onboard-actions,#onboard-mem-actions{display:flex;justify-content:flex-end;gap:.5rem;margin-top:.6rem}
+  /* An author-level `display` beats the UA's [hidden]{display:none}, which made
+     BOTH wizard button rows render at once. Re-assert hidden for these rows. */
+  #onboard-actions[hidden],#onboard-mem-actions[hidden]{display:none}
   .ob-btn{background:linear-gradient(120deg,rgba(32,246,255,.22),rgba(255,55,213,.22));
     color:var(--fg);border:1px solid transparent;border-radius:999px;padding:.4rem 1.1rem;
     font:inherit;font-size:12.5px;cursor:pointer}
@@ -1135,7 +1138,7 @@
       <button type="button" id="onboard-skip" class="ob-btn-ghost">Skip</button>
       <button type="button" id="onboard-save" class="ob-btn">Save &amp; start</button>
     </div>
-    <div id="onboard-mem-actions" hidden style="display:flex;justify-content:flex-end;gap:.5rem;margin-top:.6rem">
+    <div id="onboard-mem-actions" hidden>
       <button type="button" id="onboard-mem-skip" class="ob-btn-ghost">Skip</button>
       <button type="button" id="onboard-mem-done" class="ob-btn">Finish</button>
     </div>
@@ -1220,6 +1223,16 @@ async function gwFetch(url, opts) {
   // throw a login prompt in the user's face while they're just viewing the
   // page. They get the raw 401 and degrade quietly.
   if (opts.noPrompt) return r;
+  // Page load fires several requests in parallel; each 401 used to queue its
+  // own modal prompt, so the user was asked for the token N times even after
+  // pasting it correctly on the first dialog. If a token has appeared (or
+  // changed) since THIS request was sent, another caller's prompt already
+  // fixed it -- retry with the stored token instead of prompting again.
+  const fresh = gwToken();
+  if (fresh && fresh !== tok) {
+    headers.set("Authorization", "Bearer " + fresh);
+    return await fetch(url, Object.assign({}, opts, { headers }));
+  }
   // First 401 -> ask once and retry. Don't loop indefinitely; a
   // second 401 after the user supplied a token surfaces the error
   // to the caller normally (rendered as "offline" / "error" in each
