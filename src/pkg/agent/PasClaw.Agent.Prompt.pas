@@ -238,7 +238,9 @@ begin
     'This PasClaw agent binary was built with ' + RuntimeString + '. That ' +
     'describes the agent program itself -- NOT the user''s project, toolchain, ' +
     'or machine. Do not go looking for compilers or build tools (dcc, fpc, ' +
-    'gcc, ...) unless the user''s task actually requires building something.';
+    'gcc, ...) on your own initiative -- only when the user''s task actually ' +
+    'concerns them (building something, or explicitly asking about, installing, ' +
+    'or configuring a toolchain).';
 end;
 
 function BuildWorkspaceSection: string;
