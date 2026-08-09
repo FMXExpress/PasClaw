@@ -96,10 +96,30 @@ const
       '{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}' + #10 +
     '{"type":"user","uuid":"u3","message":{"role":"user","content":"thanks, that fixed it"}}';
 
+const
+  (* pi-agent format: header line, then id/parentId tree entries. Active leaf =
+     last entry (a2); its chain is a2 -> uy -> mc -> a1 -> u1. "ux" is an
+     abandoned sibling of uy; "tr" is a toolResult entry (not a chain member
+     of the leaf path -- hangs off a2's sibling branch? no: keep it as an
+     out-of-chain entry so the walk simply never visits it). *)
+  PI_JSONL =
+    '{"type":"session","version":3,"id":"sess-1","timestamp":"2024-12-03T14:00:00.000Z","cwd":"/tmp/p"}' + #10 +
+    '{"type":"message","id":"u1","parentId":null,"message":{"role":"user","content":"first question"}}' + #10 +
+    '{"type":"message","id":"a1","parentId":"u1","message":{"role":"assistant","content":[' +
+      '{"type":"text","text":"answer one"},' +
+      '{"type":"toolCall","id":"tc1","name":"bash","arguments":"ls"}]}}' + #10 +
+    '{"type":"message","id":"ux","parentId":"a1","message":{"role":"user","content":"ABANDONED path"}}' + #10 +
+    '{"type":"message","id":"tr","parentId":"ux","message":{"role":"toolResult","content":"ignored"}}' + #10 +
+    '{"type":"model_change","id":"mc","parentId":"a1","provider":"openai","modelId":"gpt-4o"}' + #10 +
+    '{"type":"message","id":"uy","parentId":"mc","message":{"role":"user","content":"real followup"}}' + #10 +
+    '{"type":"message","id":"a2","parentId":"uy","message":{"role":"assistant","content":[' +
+      '{"type":"text","text":"final answer"}]}}';
+
 procedure TestDetect;
 begin
   Check(DetectImportFormat(CHATGPT_EXPORT) = ifChatGPT, 'detect: chatgpt');
   Check(DetectImportFormat(CLAUDE_JSONL) = ifClaudeJSONL, 'detect: claude jsonl');
+  Check(DetectImportFormat(PI_JSONL) = ifPiJSONL, 'detect: pi/openclaw jsonl');
   Check(DetectImportFormat('{"messages":[{"role":"user","content":"hi"}]}') = ifNative,
         'detect: native');
   Check(DetectImportFormat('hello world') = ifUnknown, 'detect: garbage unknown');
@@ -135,6 +155,45 @@ begin
     end;
     Check(Pos('ABANDONED', ReadFileText(SessionPath(Ids[0]))) = 0,
           'chatgpt: abandoned branch not imported');
+  finally
+    S.Free;
+  end;
+end;
+
+(* Pi / OpenClaw: tree-structured JSONL. The fixture has an ABANDONED branch
+   (entry "ux" hangs off a1 but the appended-later path goes a1 -> mc
+   (model_change, chain link only) -> uy -> a2), a toolResult entry (skipped),
+   and an assistant whose content mixes a text block with a toolCall block. *)
+procedure TestPiImport;
+var
+  Ids: TImportedIds;
+  Err: string;
+  N: Integer;
+  S: TSession;
+begin
+  WipeStore;
+  N := ImportSessions(PI_JSONL, Ids, Err);
+  Check(N = 1, 'pi: 1 session imported, err=' + Err);
+  if N < 1 then Exit;
+  S := TSession.Create(Ids[0]);
+  try
+    Check(S.MetaExists, 'pi: session persisted');
+    Check(Pos('import:pi', S.Meta.Provider) > 0, 'pi: provider tagged');
+    Check(S.Meta.CreatedAt = 1733184000, 'pi: header date kept (got ' +
+          IntToStr(S.Meta.CreatedAt) + ')');
+    Check(Length(S.Messages) = 4, 'pi: 4 turns on the active branch, got ' +
+          IntToStr(Length(S.Messages)));
+    if Length(S.Messages) = 4 then
+    begin
+      Check(S.Messages[0].Role = mrUser, 'pi: turn 1 role');
+      Check(Pos('first question', S.Messages[0].Content) > 0, 'pi: root user turn');
+      Check(Pos('answer one', S.Messages[1].Content) > 0, 'pi: text block extracted');
+      Check(Pos('toolCall', S.Messages[1].Content) = 0, 'pi: toolCall block skipped');
+      Check(Pos('real followup', S.Messages[2].Content) > 0, 'pi: active branch kept');
+      Check(Pos('final answer', S.Messages[3].Content) > 0, 'pi: leaf turn kept');
+    end;
+    Check(Pos('ABANDONED', ReadFileText(SessionPath(Ids[0]))) = 0,
+          'pi: abandoned branch not imported');
   finally
     S.Free;
   end;
@@ -253,6 +312,7 @@ end;
 begin
   TestDetect;
   TestChatGPTImport;
+  TestPiImport;
   TestClaudeImport;
   TestNativeRoundTripAndMarkdown;
   TestUnknownFormat;

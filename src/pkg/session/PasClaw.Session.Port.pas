@@ -30,6 +30,19 @@
                    A leading summary line becomes the title.
                    One file -> one PasClaw session.
 
+    ifPiJSONL      A Pi / OpenClaw session transcript (.jsonl). Both tools
+                   share the pi-agent session format: line 1 is a header
+                   (type "session" with id/cwd/timestamp), then TREE entries
+                   (id + parentId) -- message entries plus model_change /
+                   compaction / branch_summary / label / custom entries.
+                   The transcript is the parent-chain walk from the LAST
+                   entry (the active leaf in an append-only file) back to
+                   the root, so abandoned branches fall away -- the same
+                   algorithm as the ChatGPT mapping walk. Only user /
+                   assistant text turns import (toolResult / bashExecution
+                   entries and toolCall blocks are skipped for the same
+                   resume-validity reason). One file -> one session.
+
     ifNative       A PasClaw session export (object with a "messages" array,
                    as produced by `pasclaw session export` / the gateway).
                    Re-imported under a fresh id via TSession.LoadFromText,
@@ -60,13 +73,14 @@ unit PasClaw.Session.Port;
 interface
 
 type
-  TImportFormat = (ifUnknown, ifChatGPT, ifClaudeJSONL, ifNative);
+  TImportFormat = (ifUnknown, ifChatGPT, ifClaudeJSONL, ifPiJSONL, ifNative);
   TImportedIds  = array of string;
 
 { Sniff which known export shape Text is. }
 function DetectImportFormat(const Text: string): TImportFormat;
 
-{ Human name for a format ("chatgpt", "claude-code", "pasclaw", "unknown"). }
+{ Human name for a format ("chatgpt", "claude-code", "pi/openclaw", "pasclaw",
+  "unknown"). }
 function ImportFormatName(F: TImportFormat): string;
 
 { Import every conversation found in Text into the session store. Returns the
@@ -83,7 +97,7 @@ function ExportSessionMarkdown(const Id: string; out MD: string;
 implementation
 
 uses
-  SysUtils, Classes,
+  SysUtils, Classes, DateUtils,
   PasClaw.JSON,
   PasClaw.Logger,
   PasClaw.Providers.Types,
@@ -94,6 +108,7 @@ begin
   case F of
     ifChatGPT:     Result := 'chatgpt';
     ifClaudeJSONL: Result := 'claude-code';
+    ifPiJSONL:     Result := 'pi/openclaw';
     ifNative:      Result := 'pasclaw';
   else             Result := 'unknown';
   end;
@@ -152,12 +167,16 @@ begin
   { Object root: PasClaw native export has a top-level "messages" array. }
   if T[1] = '{' then
   begin
-    { A Claude Code transcript is JSONL, so the FIRST LINE alone must parse;
-      a native session file is one pretty-printed object (first line '{'). }
+    { JSONL transcripts sniff by their FIRST LINE alone; a native session
+      file is one pretty-printed object (first line '{'). Pi / OpenClaw files
+      open with a session header line; Claude Code lines carry uuid /
+      message / summary keys. }
     FL := FirstLine(T);
     try Obj := TJsonObject.Parse(FL); except Obj := nil; end;
     if Obj <> nil then
     try
+      if (Obj.GetStr('type', '') = 'session') and Obj.Has('id') then
+        Exit(ifPiJSONL);
       if Obj.Has('type') and (Obj.Has('message') or Obj.Has('summary')
          or Obj.Has('uuid')) then
         Exit(ifClaudeJSONL);
@@ -437,6 +456,168 @@ begin
   Result := 1;
 end;
 
+{ ---- Pi / OpenClaw .jsonl (pi-agent session format) ---- }
+
+function ImportPiJSONL(const Text: string; out Ids: TImportedIds;
+                       out Err: string): Integer;
+type
+  TEntry = record
+    Id:       string;
+    ParentId: string;
+    IsMsg:    Boolean;   { a user/assistant message entry with text }
+    Role:     string;    { 'user' / 'assistant' when IsMsg }
+    Body:     string;
+  end;
+var
+  Lines: TStringList;
+  Obj, Msg, Block: TJsonObject;
+  Blocks: TJsonArray;
+  Entries: array of TEntry;
+  Msgs, Rev: TMessageArray;
+  Kind, Role, Body, BlockText, Cur, Stamp: string;
+  i, b, n, Leaf, Depth: Integer;
+  Created: Int64;
+  Y, Mo, D: Integer;
+begin
+  Result := 0;
+  SetLength(Ids, 0);
+  Err := '';
+  Created := 0;
+  SetLength(Entries, 0);
+
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Text;
+    for i := 0 to Lines.Count - 1 do
+    begin
+      if Trim(Lines[i]) = '' then Continue;
+      try Obj := TJsonObject.Parse(Lines[i]); except Obj := nil; end;
+      if Obj = nil then Continue;   { tolerate stray/garbled lines }
+      try
+        Kind := Obj.GetStr('type', '');
+        if Kind = 'session' then
+        begin
+          { header: keep the calendar date of the start timestamp }
+          Stamp := Obj.GetStr('timestamp', '');
+          if (Length(Stamp) >= 10)
+             and TryStrToInt(Copy(Stamp, 1, 4), Y)
+             and TryStrToInt(Copy(Stamp, 6, 2), Mo)
+             and TryStrToInt(Copy(Stamp, 9, 2), D)
+             and (Mo >= 1) and (Mo <= 12) and (D >= 1) and (D <= 31) then
+            try
+              Created := DateTimeToUnix(EncodeDate(Y, Mo, D), False);
+            except
+              Created := 0;
+            end;
+          Continue;
+        end;
+        if not Obj.Has('id') then Continue;
+        n := Length(Entries);
+        SetLength(Entries, n + 1);
+        Entries[n].Id       := Obj.GetStr('id', '');
+        Entries[n].ParentId := Obj.GetStr('parentId', '');
+        Entries[n].IsMsg    := False;
+        Entries[n].Role     := '';
+        Entries[n].Body     := '';
+        if Kind <> 'message' then Continue;   { model_change / label / ... :
+                                                chain links only }
+        Msg := Obj.ChildObject('message');
+        if Msg = nil then Continue;
+        try
+          Role := LowerCase(Msg.GetStr('role', ''));
+          if (Role <> 'user') and (Role <> 'assistant') then Continue;
+          { content: plain string, or an array of typed blocks -- keep the
+            text blocks, skip thinking / toolCall blocks. }
+          Body := Msg.GetStr('content', '');
+          if Body = '' then
+          begin
+            Blocks := Msg.ChildArray('content');
+            if Blocks <> nil then
+            try
+              for b := 0 to Blocks.Count - 1 do
+              begin
+                Block := Blocks.ItemObject(b);
+                if Block = nil then Continue;
+                try
+                  if Block.GetStr('type', '') = 'text' then
+                  begin
+                    BlockText := Block.GetStr('text', '');
+                    if BlockText = '' then Continue;
+                    if Body <> '' then Body := Body + sLineBreak;
+                    Body := Body + BlockText;
+                  end;
+                finally
+                  Block.Free;
+                end;
+              end;
+            finally
+              Blocks.Free;
+            end;
+          end;
+          if Trim(Body) = '' then Continue;
+          Entries[n].IsMsg := True;
+          Entries[n].Role  := Role;
+          Entries[n].Body  := Body;
+        finally
+          Msg.Free;
+        end;
+      finally
+        Obj.Free;
+      end;
+    end;
+  finally
+    Lines.Free;
+  end;
+
+  if Length(Entries) = 0 then
+  begin
+    Err := 'no entries found in the transcript';
+    Exit;
+  end;
+
+  { The file is append-only, so the LAST entry is the active leaf. Walk its
+    parent chain back to the root -- abandoned branches (entries not on the
+    chain) fall away -- collecting message turns leaf-first, then reverse. }
+  Leaf := High(Entries);
+  SetLength(Rev, 0);
+  Cur := Entries[Leaf].Id;
+  Depth := 0;
+  i := Leaf;
+  while (i >= 0) and (Depth < 100000) do
+  begin
+    if Entries[i].IsMsg then
+    begin
+      SetLength(Rev, Length(Rev) + 1);
+      if Entries[i].Role = 'user' then
+        Rev[High(Rev)] := MakeMessage(mrUser, Entries[i].Body)
+      else
+        Rev[High(Rev)] := MakeMessage(mrAssistant, Entries[i].Body);
+    end;
+    Cur := Entries[i].ParentId;
+    if Cur = '' then Break;
+    { find the parent entry by id (linear scan; sessions are small) }
+    Leaf := -1;
+    for b := High(Entries) downto 0 do
+      if Entries[b].Id = Cur then begin Leaf := b; Break; end;
+    i := Leaf;
+    Inc(Depth);
+  end;
+
+  if Length(Rev) = 0 then
+  begin
+    Err := 'no user/assistant text turns found on the active branch';
+    Exit;
+  end;
+  { reverse leaf-first -> root-first }
+  SetLength(Msgs, Length(Rev));
+  for i := 0 to High(Rev) do
+    Msgs[i] := Rev[High(Rev) - i];
+
+  SetLength(Ids, 1);
+  Ids[0] := SaveImported('', Msgs, Created, 'pi');
+  Result := 1;
+end;
+
 { ---- PasClaw native export ---- }
 
 function ImportNative(const Text: string; out Ids: TImportedIds;
@@ -492,12 +673,14 @@ begin
   case F of
     ifChatGPT:     Result := ImportChatGPT(Text, Ids, Err);
     ifClaudeJSONL: Result := ImportClaudeJSONL(Text, Ids, Err);
+    ifPiJSONL:     Result := ImportPiJSONL(Text, Ids, Err);
     ifNative:      Result := ImportNative(Text, Ids, Err);
   else
     begin
       Result := 0;
       Err := 'unrecognized format -- expected ChatGPT conversations.json, a ' +
-             'Claude Code .jsonl transcript, or a PasClaw session export';
+             'Claude Code / Pi / OpenClaw .jsonl transcript, or a PasClaw ' +
+             'session export';
     end;
   end;
   if Result > 0 then

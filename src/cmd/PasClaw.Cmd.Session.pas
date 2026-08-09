@@ -40,8 +40,9 @@ begin
   PrintLn('  show <id>           show one session: metadata + last N messages');
   PrintLn('  delete <id>         remove the session file from disk');
   PrintLn('  export <id> [--md]  print the session to stdout (raw JSON, or Markdown with --md)');
-  PrintLn('  import <file>       import chats: ChatGPT conversations.json, a Claude Code');
-  PrintLn('                      .jsonl transcript, or a PasClaw session export (auto-detected)');
+  PrintLn('  import <file>       import chats: ChatGPT conversations.json, a Claude Code /');
+  PrintLn('                      Pi / OpenClaw .jsonl transcript, or a PasClaw session');
+  PrintLn('                      export (auto-detected)');
 end;
 
 function FormatAge(Now_, Then_: Int64): string;
