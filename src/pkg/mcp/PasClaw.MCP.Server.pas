@@ -78,8 +78,8 @@ type
     function IsExposed(const Name: string): Boolean;
     function HandleInitialize(const Params, Id: string): string;
     function HandleDiscover(const Id: string): string;
-    function HandleToolsList(const Id: string): string;
-    function HandleToolsCall(const Params, Id: string): string;
+    function HandleToolsList(const Id: string; Modern: Boolean): string;
+    function HandleToolsCall(const Params, Id: string; Modern: Boolean): string;
     function HandlePing(const Id: string): string;
     function ErrorResponse(const Id: string; Code: Integer;
                             const Message: string): string;
@@ -103,7 +103,13 @@ type
         get no response).
       Idempotent + thread-safe (TToolRegistry handles its own locking).
       Never raises; all errors land as JSON-RPC error responses. }
-    function HandleRequest(const ALine: string): string;
+    function HandleRequest(const ALine: string): string; overload;
+    { Transport-aware variant: HttpStatus is the HTTP status an HTTP binding
+      should send with the response -- 400 for UnsupportedProtocolVersionError
+      (per the 2026-07-28 Streamable HTTP rules), 200 otherwise. The stdio
+      loop uses the plain overload and ignores it. }
+    function HandleRequest(const ALine: string;
+                           out HttpStatus: Integer): string; overload;
 
     property AllowMutating: Boolean read FAllowMutating;
   end;
@@ -260,7 +266,7 @@ begin
   end;
 end;
 
-function TMCPServerCore.HandleToolsList(const Id: string): string;
+function TMCPServerCore.HandleToolsList(const Id: string; Modern: Boolean): string;
 var
   ResObj, ToolObj: TJsonObject;
   Arr: TJsonArray;
@@ -291,13 +297,21 @@ begin
       end;
     end;
     ResObj.PutArray('tools', Arr);
+    { Modern (2026-07-28) result schema additionally requires resultType +
+      cache directives; legacy clients get the unchanged 2024-11-05 shape. }
+    if Modern then
+    begin
+      ResObj.PutStr('resultType', 'complete');
+      ResObj.PutInt('ttlMs', 0);
+      ResObj.PutStr('cacheScope', 'private');
+    end;
     Result := SuccessResponse(Id, ResObj.ToJSON);
   finally
     ResObj.Free;
   end;
 end;
 
-function TMCPServerCore.HandleToolsCall(const Params, Id: string): string;
+function TMCPServerCore.HandleToolsCall(const Params, Id: string; Modern: Boolean): string;
 var
   ParamsObj, ArgsObj, ResObj, ContentObj: TJsonObject;
   Arr: TJsonArray;
@@ -359,6 +373,7 @@ begin
       Arr.AddObject(ContentObj);
       ResObj.PutArray('content', Arr);
       ResObj.PutBool('isError', True);
+      if Modern then ResObj.PutStr('resultType', 'complete');
       Result := SuccessResponse(Id, ResObj.ToJSON);
     finally
       ResObj.Free;
@@ -374,6 +389,8 @@ begin
     ContentObj.PutStr('text', Output);
     Arr.AddObject(ContentObj);
     ResObj.PutArray('content', Arr);
+    { Modern result schema requires resultType on call results too. }
+    if Modern then ResObj.PutStr('resultType', 'complete');
     Result := SuccessResponse(Id, ResObj.ToJSON);
   finally
     ResObj.Free;
@@ -456,6 +473,10 @@ begin
     ServerInfo.PutStr('version', FVersion);
     Meta.PutObject('io.modelcontextprotocol/serverInfo', ServerInfo);
     ResObj.PutObject('_meta', Meta);
+    { Required cache directives: ttlMs=0 + private -- our tool surface can
+      change per process (skills/config), so tell clients not to cache. }
+    ResObj.PutInt('ttlMs', 0);
+    ResObj.PutStr('cacheScope', 'private');
     Result := SuccessResponse(Id, ResObj.ToJSON);
   finally
     ResObj.Free;
@@ -464,10 +485,20 @@ end;
 
 function TMCPServerCore.HandleRequest(const ALine: string): string;
 var
+  Ignored: Integer;
+begin
+  Result := HandleRequest(ALine, Ignored);
+end;
+
+function TMCPServerCore.HandleRequest(const ALine: string;
+                                      out HttpStatus: Integer): string;
+var
   Obj, ParamsObj, MetaObj: TJsonObject;
   Method, Id, Params, ReqVer: string;
+  Modern: Boolean;
 begin
   Result := '';
+  HttpStatus := 200;
   if Trim(ALine) = '' then Exit;
 
   Obj := nil;
@@ -492,10 +523,15 @@ begin
     try
       Params := ParamsObj.ToJSON;
       { Modern (2026-07-28) requests declare their protocol version in
-        params._meta on every request -- there is no handshake. }
+        params._meta on every request -- there is no handshake. ChildObject
+        allocates a fresh wrapper; free it or every modern request leaks one. }
       MetaObj := ParamsObj.ChildObject('_meta');
       if MetaObj <> nil then
+      try
         ReqVer := MetaObj.GetStr('io.modelcontextprotocol/protocolVersion', '');
+      finally
+        MetaObj.Free;
+      end;
     finally
       ParamsObj.Free;
     end;
@@ -516,11 +552,15 @@ begin
   if (ReqVer <> '') and (ReqVer <> MCPServerProtocolModern)
      and (ReqVer <> MCPServerProtocolVersion) then
   begin
+    { Streamable HTTP sends this JSON-RPC error with HTTP 400 so proxies /
+      clients see a protocol failure, not a success. stdio ignores the hint. }
+    HttpStatus := 400;
     Result := ErrorResponseData(Id, -32022, 'Unsupported protocol version',
       '{"supported":["' + MCPServerProtocolModern + '","' +
       MCPServerProtocolVersion + '"],"requested":"' + JsonEscape(ReqVer) + '"}');
     Exit;
   end;
+  Modern := ReqVer = MCPServerProtocolModern;
 
   { Notifications: methods that start with "notifications/" carry no
     id, expect no response. Silence is the correct reply. }
@@ -536,8 +576,8 @@ begin
     handshake clients. tools/list & tools/call were stateless all along. }
   if      Method = 'initialize'      then Result := HandleInitialize(Params, Id)
   else if Method = 'server/discover' then Result := HandleDiscover(Id)
-  else if Method = 'tools/list'      then Result := HandleToolsList(Id)
-  else if Method = 'tools/call'      then Result := HandleToolsCall(Params, Id)
+  else if Method = 'tools/list'      then Result := HandleToolsList(Id, Modern)
+  else if Method = 'tools/call'      then Result := HandleToolsCall(Params, Id, Modern)
   else if Method = 'ping'            then Result := HandlePing(Id)
   else
     Result := ErrorResponse(Id, -32601, 'method not found: ' + Method);
