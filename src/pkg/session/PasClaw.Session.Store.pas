@@ -142,6 +142,14 @@ type
     function MetaExists: Boolean;
     procedure Save;
     procedure Load(const AId: string);
+    { Parse a session-file JSON blob (the native export shape) into this
+      handle: meta (title/model/provider/timestamps/working-state/stats),
+      the FULL message transcript including tool_calls / tool_call_id
+      pairings, and the tool-detail blob. Meta.Id falls back to its
+      current value when the blob carries no meta.id. Returns False when
+      Text is not a session object. Load is built on this; Session.Port
+      uses it to re-import exported sessions without stripping rich turns. }
+    function LoadFromText(const Text: string): Boolean;
     { Refresh UpdatedAt to now. Doesn't write -- caller decides when. }
     procedure Touch;
     { Empty Messages, keep Meta (id/title/etc.). Caller decides whether
@@ -948,9 +956,6 @@ procedure TSession.Load(const AId: string);
 var
   Path: string;
   S: TStringList;
-  Root, MetaObj, MsgObj: TJsonObject;
-  Arr: TJsonArray;
-  i: Integer;
 begin
   FExists := False;
   SetLength(Messages, 0);
@@ -964,13 +969,34 @@ begin
   S := TStringList.Create;
   try
     S.LoadFromFile(Path);
-    Root := TJsonObject.Parse(S.Text);
-    if Root = nil then Exit;
+    if LoadFromText(S.Text) then FExists := True;
+  finally
+    S.Free;
+  end;
+end;
+
+function TSession.LoadFromText(const Text: string): Boolean;
+var
+  Root, MetaObj, MsgObj: TJsonObject;
+  Arr: TJsonArray;
+  i: Integer;
+  FallbackId: string;
+begin
+  Result := False;
+  FallbackId := Meta.Id;           { keep the handle's id when the blob has none }
+  SetLength(Messages, 0);
+  ToolDetail := '';
+  try
+    Root := TJsonObject.Parse(Text);
+  except
+    Root := nil;
+  end;
+  if Root = nil then Exit;
     try
       MetaObj := Root.ChildObject('meta');
       if MetaObj <> nil then
       try
-        Meta.Id                   := MetaObj.GetStr('id',                     AId);
+        Meta.Id                   := MetaObj.GetStr('id',                     FallbackId);
         Meta.CreatedAt            := MetaObj.GetInt('created_at',             0);
         Meta.UpdatedAt            := MetaObj.GetInt('updated_at',             0);
         Meta.Title                := MetaObj.GetStr('title',                  '');
@@ -1007,13 +1033,10 @@ begin
       finally
         Arr.Free;
       end;
-      FExists := True;
+      Result := True;
     finally
       Root.Free;
     end;
-  finally
-    S.Free;
-  end;
 end;
 
 procedure TSession.Touch;
