@@ -300,6 +300,77 @@ begin
   Check(not ExportSessionMarkdown('../evil', MD, Err), 'md: unsafe id rejected');
 end;
 
+(* OpenCode: sessions fragmented across a directory tree. The fixture builds
+   storage/session/<proj>/<id>.json + message/<id>/msg_*.json covering all
+   three text layouts: inline "parts" (old), per-part files (new), and a plain
+   "content" string (oldest). A non-user/assistant message is skipped. *)
+procedure TestOpenCodeImport;
+var
+  Base, SDir, MDir, PDir: string;
+  Ids: TImportedIds;
+  Err: string;
+  N: Integer;
+  S: TSession;
+begin
+  WipeStore;
+  Base := JoinPath(GetHome, 'octest');
+  SDir := JoinPath(Base, 'storage/session/projA');
+  MDir := JoinPath(Base, 'storage/message/ses_01');
+  PDir := JoinPath(Base, 'storage/part/ses_01/msg_002');
+  ForceDirectories(SDir);
+  ForceDirectories(MDir);
+  ForceDirectories(PDir);
+
+  WriteFileText(JoinPath(SDir, 'ses_01.json'),
+    '{"id":"ses_01","title":"OC chat","time":{"created":1733184000123}}');
+  { old layout: inline parts }
+  WriteFileText(JoinPath(MDir, 'msg_001.json'),
+    '{"id":"msg_001","sessionID":"ses_01","role":"user",' +
+    '"parts":[{"type":"text","text":"hello from opencode"}]}');
+  { new layout: text lives in per-part files }
+  WriteFileText(JoinPath(MDir, 'msg_002.json'),
+    '{"id":"msg_002","sessionID":"ses_01","role":"assistant"}');
+  WriteFileText(JoinPath(PDir, 'prt_01.json'),
+    '{"id":"prt_01","messageID":"msg_002","type":"step-start"}');
+  WriteFileText(JoinPath(PDir, 'prt_02.json'),
+    '{"id":"prt_02","messageID":"msg_002","type":"text","text":"assistant reply"}');
+  { oldest layout: plain content string; and a non-chat role to skip }
+  WriteFileText(JoinPath(MDir, 'msg_003.json'),
+    '{"id":"msg_003","sessionID":"ses_01","role":"user","content":"plain content"}');
+  WriteFileText(JoinPath(MDir, 'msg_004.json'),
+    '{"id":"msg_004","sessionID":"ses_01","role":"system","content":"SKIPME"}');
+
+  { point at the DATA dir (storage/ resolved internally) }
+  N := ImportOpenCodeDir(Base, Ids, Err);
+  Check(N = 1, 'opencode: 1 session imported, err=' + Err);
+  if N < 1 then Exit;
+  S := TSession.Create(Ids[0]);
+  try
+    Check(S.Meta.Title = 'OC chat', 'opencode: title kept');
+    Check(S.Meta.CreatedAt = 1733184000, 'opencode: ms created normalized (got ' +
+          IntToStr(S.Meta.CreatedAt) + ')');
+    Check(Pos('import:opencode', S.Meta.Provider) > 0, 'opencode: provider tagged');
+    Check(Length(S.Messages) = 3, 'opencode: 3 chat turns, got ' +
+          IntToStr(Length(S.Messages)));
+    if Length(S.Messages) = 3 then
+    begin
+      Check(Pos('hello from opencode', S.Messages[0].Content) > 0, 'opencode: inline parts text');
+      Check(Pos('assistant reply', S.Messages[1].Content) > 0, 'opencode: per-part file text');
+      Check(Pos('step-start', S.Messages[1].Content) = 0, 'opencode: non-text part skipped');
+      Check(Pos('plain content', S.Messages[2].Content) > 0, 'opencode: content-string text');
+    end;
+    Check(Pos('SKIPME', ReadFileText(SessionPath(Ids[0]))) = 0,
+          'opencode: non-chat role skipped');
+  finally
+    S.Free;
+  end;
+
+  { a directory that is not an OpenCode layout errors cleanly }
+  Check(ImportOpenCodeDir(JoinPath(GetHome, 'nowhere'), Ids, Err) = 0,
+        'opencode: bad dir imports nothing');
+  Check(Pos('not an OpenCode data dir', Err) > 0, 'opencode: bad dir names the problem');
+end;
+
 procedure TestUnknownFormat;
 var
   Ids: TImportedIds;
@@ -315,6 +386,7 @@ begin
   TestPiImport;
   TestClaudeImport;
   TestNativeRoundTripAndMarkdown;
+  TestOpenCodeImport;
   TestUnknownFormat;
 
   if Failures = 0 then WriteLn('session_port_tests: OK')

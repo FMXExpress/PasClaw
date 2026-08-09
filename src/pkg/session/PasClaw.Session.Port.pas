@@ -90,6 +90,22 @@ function ImportFormatName(F: TImportFormat): string;
 function ImportSessions(const Text: string; out Ids: TImportedIds;
                         out Err: string): Integer;
 
+(* Import an OpenCode data directory. OpenCode fragments each session across
+   files -- there is no single export blob to hand to ImportSessions:
+
+     storage/session/<projectHash>/<sessionID>.json    metadata (id/title/time)
+     storage/message/<sessionID>/msg_<id>.json         one file per message
+     storage/part/... (newer builds)                   text moved to per-part
+                                                       files (type "text")
+
+   Path may be the OpenCode data dir (~/.local/share/opencode), its storage/
+   subdir, or anything containing session/ + message/. Every session found is
+   assembled (messages ordered by their sortable file names; text taken from
+   inline "parts" (old), per-part files (new), or a plain "content" field) and
+   saved as a PasClaw session. Only user/assistant text turns import. *)
+function ImportOpenCodeDir(const Path: string; out Ids: TImportedIds;
+                           out Err: string): Integer;
+
 { Render a saved session as a Markdown transcript. }
 function ExportSessionMarkdown(const Id: string; out MD: string;
                                out Err: string): Boolean;
@@ -99,6 +115,7 @@ implementation
 uses
   SysUtils, Classes, DateUtils,
   PasClaw.JSON,
+  PasClaw.Utils,
   PasClaw.Logger,
   PasClaw.Providers.Types,
   PasClaw.Session.Store;
@@ -616,6 +633,238 @@ begin
   SetLength(Ids, 1);
   Ids[0] := SaveImported('', Msgs, Created, 'pi');
   Result := 1;
+end;
+
+{ ---- OpenCode data directory ---- }
+
+{ List the plain files directly inside Dir into L (names only), sorted. }
+procedure ListFilesSorted(const Dir: string; L: TStringList);
+var
+  Sr: TSearchRec;
+begin
+  L.Clear;
+  if FindFirst(JoinPath(Dir, '*'), faAnyFile, Sr) = 0 then
+  try
+    repeat
+      if (Sr.Attr and faDirectory) = 0 then L.Add(Sr.Name);
+    until FindNext(Sr) <> 0;
+  finally
+    FindClose(Sr);
+  end;
+  L.Sort;
+end;
+
+{ List the subdirectory names directly inside Dir into L, sorted. }
+procedure ListDirsSorted(const Dir: string; L: TStringList);
+var
+  Sr: TSearchRec;
+begin
+  L.Clear;
+  if FindFirst(JoinPath(Dir, '*'), faAnyFile, Sr) = 0 then
+  try
+    repeat
+      if ((Sr.Attr and faDirectory) <> 0) and (Sr.Name <> '.') and (Sr.Name <> '..') then
+        L.Add(Sr.Name);
+    until FindNext(Sr) <> 0;
+  finally
+    FindClose(Sr);
+  end;
+  L.Sort;
+end;
+
+{ Concatenate the text of type="text" objects in a parts array. Frees nothing
+  of the caller's; frees its own item wrappers. }
+procedure AppendTextParts(Parts: TJsonArray; var Body: string);
+var
+  P: TJsonObject;
+  i: Integer;
+  T: string;
+begin
+  if Parts = nil then Exit;
+  for i := 0 to Parts.Count - 1 do
+  begin
+    P := Parts.ItemObject(i);
+    if P = nil then Continue;
+    try
+      if P.GetStr('type', '') = 'text' then
+      begin
+        T := P.GetStr('text', '');
+        if T = '' then Continue;
+        if Body <> '' then Body := Body + sLineBreak;
+        Body := Body + T;
+      end;
+    finally
+      P.Free;
+    end;
+  end;
+end;
+
+{ Text for one OpenCode message: newer builds keep it in per-part files under
+  any of part/<sessionID>/<msgID>/ or part/<msgID>/; older builds inline a
+  "parts" array in the message file; oldest use a plain "content" string. }
+function OpenCodeMessageText(const Root, SessId, MsgId: string;
+                             MsgObj: TJsonObject): string;
+var
+  Parts: TJsonArray;
+  PartDir, PFile: string;
+  Files: TStringList;
+  PObj: TJsonObject;
+  i: Integer;
+begin
+  Result := '';
+  { (1) inline parts (old) }
+  Parts := MsgObj.ChildArray('parts');
+  if Parts <> nil then
+  try
+    AppendTextParts(Parts, Result);
+  finally
+    Parts.Free;
+  end;
+  if Result <> '' then Exit;
+
+  { (2) per-part files (new) }
+  PartDir := JoinPath(JoinPath(JoinPath(Root, 'part'), SessId), MsgId);
+  if not DirectoryExists(PartDir) then
+    PartDir := JoinPath(JoinPath(Root, 'part'), MsgId);
+  if DirectoryExists(PartDir) then
+  begin
+    Files := TStringList.Create;
+    try
+      ListFilesSorted(PartDir, Files);
+      for i := 0 to Files.Count - 1 do
+      begin
+        PFile := JoinPath(PartDir, Files[i]);
+        try PObj := TJsonObject.Parse(ReadFileText(PFile)); except PObj := nil; end;
+        if PObj = nil then Continue;
+        try
+          { a part file is one part object; wrap it in a 1-element pass }
+          if PObj.GetStr('type', '') = 'text' then
+          begin
+            if Result <> '' then Result := Result + sLineBreak;
+            Result := Result + PObj.GetStr('text', '');
+          end;
+        finally
+          PObj.Free;
+        end;
+      end;
+    finally
+      Files.Free;
+    end;
+  end;
+  if Result <> '' then Exit;
+
+  { (3) plain content string (oldest) }
+  Result := MsgObj.GetStr('content', '');
+end;
+
+function ImportOpenCodeDir(const Path: string; out Ids: TImportedIds;
+                           out Err: string): Integer;
+var
+  Root, SessDir, MsgRoot, ProjDir, SessFile, SessId, Title, Role, Body: string;
+  Projects, SessFiles, MsgFiles: TStringList;
+  SessObj, TimeObj, MsgObj: TJsonObject;
+  Msgs: TMessageArray;
+  pi_, si, mi: Integer;
+  Created: Int64;
+begin
+  Result := 0;
+  SetLength(Ids, 0);
+  Err := '';
+
+  { Accept the data dir, its storage/ subdir, or any dir with session/ +
+    message/ inside. }
+  Root := ExcludeTrailingPathDelimiter(Path);
+  if DirectoryExists(JoinPath(Root, 'storage')) then
+    Root := JoinPath(Root, 'storage');
+  SessDir := JoinPath(Root, 'session');
+  MsgRoot := JoinPath(Root, 'message');
+  if not (DirectoryExists(SessDir) and DirectoryExists(MsgRoot)) then
+  begin
+    Err := 'not an OpenCode data dir (expected session/ and message/ under ' +
+           Root + ')';
+    Exit;
+  end;
+
+  Projects := TStringList.Create;
+  SessFiles := TStringList.Create;
+  MsgFiles := TStringList.Create;
+  try
+    { session/<projectHash>/<sessionID>.json -- but tolerate session files
+      sitting directly in session/ too (pre-project layouts). }
+    ListDirsSorted(SessDir, Projects);
+    Projects.Insert(0, '');   { '' = session/ itself }
+    for pi_ := 0 to Projects.Count - 1 do
+    begin
+      if Projects[pi_] = '' then ProjDir := SessDir
+      else ProjDir := JoinPath(SessDir, Projects[pi_]);
+      ListFilesSorted(ProjDir, SessFiles);
+      for si := 0 to SessFiles.Count - 1 do
+      begin
+        if LowerCase(ExtractFileExt(SessFiles[si])) <> '.json' then Continue;
+        SessFile := JoinPath(ProjDir, SessFiles[si]);
+        try SessObj := TJsonObject.Parse(ReadFileText(SessFile)); except SessObj := nil; end;
+        if SessObj = nil then Continue;
+        try
+          SessId := SessObj.GetStr('id', ChangeFileExt(SessFiles[si], ''));
+          Title  := SessObj.GetStr('title', '');
+          Created := 0;
+          TimeObj := SessObj.ChildObject('time');
+          if TimeObj <> nil then
+          try
+            Created := TimeObj.GetInt('created', 0);
+          finally
+            TimeObj.Free;
+          end;
+          { OpenCode stamps milliseconds; normalize to seconds. }
+          if Created > 100000000000 then Created := Created div 1000;
+        finally
+          SessObj.Free;
+        end;
+
+        { assemble the transcript from message/<sessionID>/*.json, ordered by
+          the sortable message-id file names }
+        if not DirectoryExists(JoinPath(MsgRoot, SessId)) then Continue;
+        ListFilesSorted(JoinPath(MsgRoot, SessId), MsgFiles);
+        SetLength(Msgs, 0);
+        for mi := 0 to MsgFiles.Count - 1 do
+        begin
+          if LowerCase(ExtractFileExt(MsgFiles[mi])) <> '.json' then Continue;
+          try
+            MsgObj := TJsonObject.Parse(
+              ReadFileText(JoinPath(JoinPath(MsgRoot, SessId), MsgFiles[mi])));
+          except
+            MsgObj := nil;
+          end;
+          if MsgObj = nil then Continue;
+          try
+            Role := LowerCase(MsgObj.GetStr('role', ''));
+            if (Role <> 'user') and (Role <> 'assistant') then Continue;
+            Body := OpenCodeMessageText(Root, SessId,
+              MsgObj.GetStr('id', ChangeFileExt(MsgFiles[mi], '')), MsgObj);
+            if Trim(Body) = '' then Continue;
+            if Role = 'user' then PushMsg(Msgs, mrUser, Body)
+            else                  PushMsg(Msgs, mrAssistant, Body);
+          finally
+            MsgObj.Free;
+          end;
+        end;
+
+        if Length(Msgs) = 0 then Continue;
+        SetLength(Ids, Length(Ids) + 1);
+        Ids[High(Ids)] := SaveImported(Title, Msgs, Created, 'opencode');
+        Inc(Result);
+      end;
+    end;
+  finally
+    MsgFiles.Free;
+    SessFiles.Free;
+    Projects.Free;
+  end;
+
+  if Result = 0 then
+    Err := 'no importable OpenCode sessions found under ' + Root
+  else
+    LogInfo('session import: %d session(s) from opencode dir %s', [Result, Root]);
 end;
 
 { ---- PasClaw native export ---- }
