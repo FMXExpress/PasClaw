@@ -551,6 +551,78 @@ begin
   end;
 end;
 
+(* MCP 2026-07-28 stateless era: server/discover, per-request _meta version
+   gate, and modern calls working with no initialize handshake. *)
+procedure TestStatelessDiscoverAndVersionGate;
+var
+  Reg: TToolRegistry;
+  Srv: TMCPServerCore;
+  Resp: string;
+  HttpStatus: Integer;
+begin
+  Reg := TToolRegistry.Create;
+  try
+    RegisterFakeTools(Reg);
+    Srv := TMCPServerCore.Create(Reg, False, '9.9.9');
+    try
+      { server/discover: DiscoverResult shape }
+      Resp := Srv.HandleRequest(
+        '{"jsonrpc":"2.0","id":1,"method":"server/discover","params":{"_meta":{' +
+        '"io.modelcontextprotocol/protocolVersion":"2026-07-28",' +
+        '"io.modelcontextprotocol/clientInfo":{"name":"t","version":"0"}}}}');
+      AssertContains(Resp, '"resultType":"complete"', 'discover: resultType complete');
+      AssertContains(Resp, '2026-07-28', 'discover: modern version listed');
+      AssertContains(Resp, '2024-11-05', 'discover: legacy version listed (dual-era)');
+      AssertContains(Resp, 'supportedVersions', 'discover: supportedVersions present');
+      AssertContains(Resp, 'io.modelcontextprotocol/serverInfo', 'discover: serverInfo meta key');
+      AssertContains(Resp, '"name":"pasclaw"', 'discover: server name');
+      AssertContains(Resp, '"version":"9.9.9"', 'discover: server version');
+      AssertContains(Resp, '"tools":{', 'discover: tools capability');
+      AssertContains(Resp, '"ttlMs":0', 'discover: ttlMs cache directive');
+      AssertContains(Resp, '"cacheScope":"private"', 'discover: cacheScope directive');
+
+      { modern tools/list with per-request _meta and NO initialize first --
+        result carries the modern schema fields }
+      Resp := Srv.HandleRequest(
+        '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{"_meta":{' +
+        '"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}');
+      AssertContains(Resp, '"name":"memory_search"', 'stateless: tools/list works sans handshake');
+      AssertContains(Resp, '"resultType":"complete"', 'stateless: modern list has resultType');
+      AssertContains(Resp, '"ttlMs":0', 'stateless: modern list has ttlMs');
+      AssertContains(Resp, '"cacheScope":"private"', 'stateless: modern list has cacheScope');
+
+      { modern tools/call result carries resultType too }
+      Resp := Srv.HandleRequest(
+        '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{' +
+        '"name":"memory_search","arguments":{"q":"x"},"_meta":{' +
+        '"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}}');
+      AssertContains(Resp, 'mem-result for q=x', 'stateless: modern call dispatches');
+      AssertContains(Resp, '"resultType":"complete"', 'stateless: modern call has resultType');
+
+      { unsupported declared version -> -32022 with supported+requested,
+        and the HTTP-binding status hint is 400 }
+      Resp := Srv.HandleRequest(
+        '{"jsonrpc":"2.0","id":3,"method":"tools/list","params":{"_meta":{' +
+        '"io.modelcontextprotocol/protocolVersion":"1900-01-01"}}}', HttpStatus);
+      AssertContains(Resp, '-32022', 'version gate: UnsupportedProtocolVersionError code');
+      AssertContains(Resp, '"supported"', 'version gate: supported list present');
+      AssertContains(Resp, '"requested":"1900-01-01"', 'version gate: requested echoed');
+      AssertTrue(HttpStatus = 400, 'version gate: HTTP status hint is 400');
+
+      { no _meta version at all -> legacy era, still served, status 200,
+        and NO modern-only fields leak into the legacy shape }
+      Resp := Srv.HandleRequest('{"jsonrpc":"2.0","id":4,"method":"tools/list"}', HttpStatus);
+      AssertContains(Resp, '"name":"memory_search"', 'legacy era: bare tools/list still works');
+      AssertNotContains(Resp, 'resultType', 'legacy era: no modern fields in legacy list');
+      AssertTrue(HttpStatus = 200, 'legacy era: HTTP status hint stays 200');
+    finally
+      Srv.Free;
+    end;
+  finally
+    Reg.Free;
+  end;
+end;
+
 begin
   TestInitializeRoundTrip;                  WriteLn('  ok: initialize');
   TestInitializedNotificationHasNoResponse; WriteLn('  ok: initialized notification (no response)');
@@ -566,5 +638,6 @@ begin
   TestIdNestedInParamsDoesNotConfuseEcho;   WriteLn('  ok: id-in-params does not leak into echo');
   TestPingRoundTrip;                        WriteLn('  ok: ping round-trip');
   TestDatabaseToolsProjected;               WriteLn('  ok: db_* tools projected over MCP');
+  TestStatelessDiscoverAndVersionGate;      WriteLn('  ok: 2026-07-28 stateless (discover + version gate)');
   WriteLn('PASS');
 end.

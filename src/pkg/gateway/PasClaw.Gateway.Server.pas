@@ -1145,8 +1145,10 @@ var
   Bytes: TBytes;
   Core: TMCPServerCore;
   RespLine: string;
+  McpHttpStatus: Integer;
 begin
   Body := '';
+  McpHttpStatus := 200;
   if ARequest.PostStream <> nil then
   begin
     ARequest.PostStream.Position := 0;
@@ -1182,7 +1184,10 @@ begin
     cleared in finally, same contract as DispatchOneToolCall. }
   if FToolsHonorInMemoryConfig then SetActiveConfig(FCfg);
   try
-    RespLine := Core.HandleRequest(Body);
+    { Transport-aware overload: McpHttpStatus is 400 for the 2026-07-28
+      UnsupportedProtocolVersionError (Streamable HTTP requires the JSON-RPC
+      error to ride a 400, not a 200), 200 otherwise. }
+    RespLine := Core.HandleRequest(Body, McpHttpStatus);
   finally
     if FToolsHonorInMemoryConfig then SetActiveConfig(nil);
   end;
@@ -1195,7 +1200,7 @@ begin
   end;
   if FDebugIO then
     LogDebug('mcp -> %s', [Copy(RespLine, 1, 200)]);
-  WriteJSON(AResp, 200, RespLine);
+  WriteJSON(AResp, McpHttpStatus, RespLine);
 end;
 
 { TGatewayServer.WriteSSE removed -- dead method, see class
