@@ -169,6 +169,20 @@ begin
   LogDebug('session_search query=%s k=%d hits=%d', [Query, K, Length(Hits)]);
 end;
 
+{ Truncate S to at most MaxBytes WITHOUT splitting a UTF-8 sequence: back the
+  cut off while the first excluded byte is a continuation byte (10xxxxxx), so
+  the result stays valid UTF-8 (a mid-character cut would corrupt the tool
+  output and can be rejected downstream in provider-request JSON). }
+function Utf8SafeTruncate(const S: string; MaxBytes: Integer): string;
+var
+  n: Integer;
+begin
+  if Length(S) <= MaxBytes then Exit(S);
+  n := MaxBytes;
+  while (n > 0) and ((Byte(S[n + 1]) and $C0) = $80) do Dec(n);
+  Result := Copy(S, 1, n);
+end;
+
 function Tool_SessionRead(const ArgsJSON: string; out ErrMsg: string): string;
 const
   DefaultCount = 20;
@@ -177,10 +191,11 @@ const
   MaxChars     = 8000;
 var
   Id, Query, QueryLC, Body, RoleStr: string;
-  Start, Count, CapChars, i, j, Shown, Matched: Integer;
+  Start, Count, CapChars, i, j, Shown, Matched, ConvIdx: Integer;
   S: TSession;
   Lines: TStringList;
-  Idx: array of Integer;   { message indexes surviving the role/query filter }
+  Idx:  array of Integer;  { message indexes surviving the role/query filter }
+  Ords: array of Integer;  { each survivor's ORIGINAL conversation ordinal }
 begin
   ErrMsg := '';
   Result := '';
@@ -215,17 +230,23 @@ begin
     end;
 
     { Filter pass: skip system turns (compacted prompt blobs, not
-      conversation), apply the optional substring query over content. The
-      surviving ORIGINAL indexes go into Idx so the numbering is stable
-      across calls regardless of filters. }
+      conversation), apply the optional substring query over content. Each
+      survivor keeps its ORIGINAL conversation ordinal (position among all
+      non-system turns) in Ords, so the displayed [N] numbering is stable
+      across calls regardless of query filters. }
     SetLength(Idx, 0);
+    SetLength(Ords, 0);
+    ConvIdx := 0;
     for i := 0 to High(S.Messages) do
     begin
       if S.Messages[i].Role = mrSystem then Continue;
+      Inc(ConvIdx);
       if (QueryLC <> '') and
          (Pos(QueryLC, LowerCase(S.Messages[i].Content)) = 0) then Continue;
       SetLength(Idx, Length(Idx) + 1);
       Idx[High(Idx)] := i;
+      SetLength(Ords, Length(Ords) + 1);
+      Ords[High(Ords)] := ConvIdx;
     end;
     Matched := Length(Idx);
     if Matched = 0 then
@@ -257,8 +278,8 @@ begin
         if (Body = '') and (Length(S.Messages[i].ToolCalls) > 0) then
           Body := '(tool call: ' + S.Messages[i].ToolCalls[0].Func.Name + ')';
         if Length(Body) > CapChars then
-          Body := Copy(Body, 1, CapChars) + '...[truncated]';
-        Lines.Add(Format('[%d] %s: %s', [j + 1, RoleStr, Body]));
+          Body := Utf8SafeTruncate(Body, CapChars) + '...[truncated]';
+        Lines.Add(Format('[%d] %s: %s', [Ords[j], RoleStr, Body]));
         Inc(Shown);
       end;
       if Start - 1 + Shown < Matched then

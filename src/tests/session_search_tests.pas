@@ -29,7 +29,7 @@ program session_search_tests;
 {$IFDEF FPC}{$CODEPAGE UTF8}{$ENDIF}
 
 uses
-  SysUtils, Classes,
+  SysUtils, Classes, StrUtils,
   PasClaw.Utils,
   PasClaw.Config,
   PasClaw.Providers.Types,
@@ -371,6 +371,17 @@ begin
   end;
 end;
 
+{ Whole-string UTF-8 validity via PasClaw.Utils.BytesAreValidUTF8. }
+function StrBytesValidUTF8(const S: string): Boolean;
+var
+  B: TBytes;
+  i: Integer;
+begin
+  SetLength(B, Length(S));
+  for i := 1 to Length(S) do B[i - 1] := Byte(S[i]);
+  Result := BytesAreValidUTF8(B);
+end;
+
 procedure TestSessionReadTool;
 (* session_read: the second half of the cross-session loop. Pins:
    - reads a saved session's messages by id with role labels + title
@@ -414,10 +425,14 @@ begin
     AssertTrue(Pos('[1] user: how did we deploy', Res) > 0, 'read: first user turn numbered');
     AssertTrue(Pos('system prompt blob', Res) = 0, 'read: system content not leaked');
 
-    { query filter }
+    { query filter -- displayed numbering keeps the ORIGINAL conversation
+      ordinal ([2]), not the filtered position ([1]), so references from a
+      filtered read line up with an unfiltered one }
     Res := Reg.RunTool('session_read', '{"session_id":"sess-read","query":"helm"}', Err);
     AssertTrue((Err = '') and (Pos('helm chart', Res) > 0), 'read: query filter matches');
     AssertTrue(Pos('how did we deploy', Res) = 0, 'read: query filter excludes others');
+    AssertTrue(Pos('[2] assistant:', Res) > 0,
+               'read: filtered numbering keeps original ordinal (got ' + Res + ')');
 
     { paging: 2 per page, second page announces continuation }
     Res := Reg.RunTool('session_read', '{"session_id":"sess-read","count":2}', Err);
@@ -428,6 +443,23 @@ begin
     { truncation }
     Res := Reg.RunTool('session_read', '{"session_id":"sess-read","start":4,"max_chars":200}', Err);
     AssertTrue(Pos('...[truncated]', Res) > 0, 'read: long content truncated');
+
+    { UTF-8-safe truncation: an odd max_chars over 2-byte characters would
+      split a sequence with a naive byte Copy; the whole tool output must
+      stay valid UTF-8 }
+    S := TSession.Create('sess-utf8');
+    try
+      S.Meta.Title := 'Unicode';
+      SetLength(S.Messages, 1);
+      S.Messages[0] := MakeMessage(mrUser, DupeString('é', 300));   { 600 bytes }
+      S.Touch;
+      S.Save;
+    finally
+      S.Free;
+    end;
+    Res := Reg.RunTool('session_read', '{"session_id":"sess-utf8","max_chars":101}', Err);
+    AssertTrue(Pos('...[truncated]', Res) > 0, 'read: utf8 content truncated');
+    AssertTrue(StrBytesValidUTF8(Res), 'read: truncation kept output valid UTF-8');
 
     { errors }
     Reg.RunTool('session_read', '{"session_id":"no-such-session"}', Err);
