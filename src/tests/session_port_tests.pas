@@ -176,14 +176,25 @@ var
   S: TSession;
 begin
   WipeStore;
-  { author a session the normal way }
+  { author a RICH session the agent-loop way: an assistant tool_call turn
+    paired with a tool-result turn. A native re-import must keep the pairing,
+    or the copy is invalid to resume against providers. }
   S := TSession.Create('sess-orig');
   try
     S.Meta.Title := 'Original';
-    SetLength(S.Messages, 3);
+    S.Meta.Model := 'orig-model';
+    SetLength(S.Messages, 5);
     S.Messages[0] := MakeMessage(mrSystem,    'system blob');
     S.Messages[1] := MakeMessage(mrUser,      'ping?');
-    S.Messages[2] := MakeMessage(mrAssistant, 'pong!');
+    S.Messages[2] := MakeMessage(mrAssistant, '');
+    SetLength(S.Messages[2].ToolCalls, 1);
+    S.Messages[2].ToolCalls[0].Id := 'call-1';
+    S.Messages[2].ToolCalls[0].Kind := 'function';
+    S.Messages[2].ToolCalls[0].Func.Name := 'shell_exec';
+    S.Messages[2].ToolCalls[0].Func.Arguments := '{"cmd":"echo hi"}';
+    S.Messages[3] := MakeMessage(mrTool, 'hi');
+    S.Messages[3].ToolCallId := 'call-1';
+    S.Messages[4] := MakeMessage(mrAssistant, 'pong!');
     S.Touch;
     S.Save;
   finally
@@ -195,6 +206,30 @@ begin
   N := ImportSessions(Raw, Ids, Err);
   Check(N = 1, 'native: re-import ok, err=' + Err);
   Check((N = 1) and (Ids[0] <> 'sess-orig'), 'native: fresh id assigned');
+  if N = 1 then
+  begin
+    S := TSession.Create(Ids[0]);
+    try
+      Check(S.Meta.Title = 'Original', 'native: title preserved');
+      Check(S.Meta.Model = 'orig-model', 'native: model preserved');
+      Check(Length(S.Messages) = 5, 'native: all turns preserved (got ' +
+            IntToStr(Length(S.Messages)) + ')');
+      if Length(S.Messages) = 5 then
+      begin
+        Check(Length(S.Messages[2].ToolCalls) = 1, 'native: assistant tool_call kept');
+        if Length(S.Messages[2].ToolCalls) = 1 then
+        begin
+          Check(S.Messages[2].ToolCalls[0].Id = 'call-1', 'native: tool_call id kept');
+          Check(S.Messages[2].ToolCalls[0].Func.Name = 'shell_exec',
+                'native: tool_call function kept');
+        end;
+        Check(S.Messages[3].Role = mrTool, 'native: tool turn kept');
+        Check(S.Messages[3].ToolCallId = 'call-1', 'native: tool_call_id pairing kept');
+      end;
+    finally
+      S.Free;
+    end;
+  end;
 
   { markdown export }
   Check(ExportSessionMarkdown('sess-orig', MD, Err), 'md: exports (' + Err + ')');

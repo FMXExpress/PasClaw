@@ -32,7 +32,10 @@
 
     ifNative       A PasClaw session export (object with a "messages" array,
                    as produced by `pasclaw session export` / the gateway).
-                   Re-imported under a fresh id via ChatBodyToMessages.
+                   Re-imported under a fresh id via TSession.LoadFromText,
+                   which preserves meta (title/model) AND rich turns --
+                   assistant tool_calls with their tool_call_id pairings --
+                   so the copy stays valid to resume against providers.
 
   Exports:
 
@@ -165,7 +168,8 @@ begin
     try Obj := TJsonObject.Parse(T); except Obj := nil; end;
     if Obj <> nil then
     try
-      if Obj.ChildArray('messages') <> nil then Exit(ifNative);
+      { Has() only -- ChildArray would allocate a wrapper we'd have to free. }
+      if Obj.Has('messages') then Exit(ifNative);
     finally
       Obj.Free;
     end;
@@ -204,6 +208,11 @@ end;
 { ---- ChatGPT conversations.json ---- }
 
 function ImportOneChatGPT(Conv: TJsonObject; out Id: string): Boolean;
+{ NOTE on wrappers: ChildObject/ChildArray allocate a NEW wrapper object on
+  every call (the wrapper does not own the backing JSON, which lives until the
+  root document is freed) -- so every wrapper taken in these loops must be
+  freed, or a large archive import leaks several objects per message in the
+  long-running gateway. }
 var
   Mapping, Node, Msg, Author, Content: TJsonObject;
   Parts: TJsonArray;
@@ -217,61 +226,89 @@ begin
   Id := '';
   Mapping := Conv.ChildObject('mapping');
   if Mapping = nil then Exit;
-  Cur := Conv.GetStr('current_node', '');
-  if Cur = '' then Exit;
-
-  { Parent-chain walk from the current node to the root = the transcript the
-    user last saw (edited branches fall away). Guard against cycles with a
-    hard depth cap. }
-  Chain := TStringList.Create;
   try
-    i := 0;
-    while (Cur <> '') and (i < 100000) do
-    begin
-      Node := Mapping.ChildObject(Cur);
-      if Node = nil then Break;
-      Chain.Add(Cur);
-      Cur := Node.GetStr('parent', '');
-      Inc(i);
-    end;
+    Cur := Conv.GetStr('current_node', '');
+    if Cur = '' then Exit;
 
-    SetLength(Msgs, 0);
-    for i := Chain.Count - 1 downto 0 do   { root first }
-    begin
-      Node := Mapping.ChildObject(Chain[i]);
-      if Node = nil then Continue;
-      Msg := Node.ChildObject('message');
-      if Msg = nil then Continue;
-      Author := Msg.ChildObject('author');
-      if Author = nil then Continue;
-      Role := LowerCase(Author.GetStr('role', ''));
-      if (Role <> 'user') and (Role <> 'assistant') then Continue;
-      Content := Msg.ChildObject('content');
-      if Content = nil then Continue;
-      { parts: strings for text turns; objects for multimodal (skipped --
-        ItemStr yields '' for non-strings). }
-      Text := '';
-      Parts := Content.ChildArray('parts');
-      if Parts <> nil then
-        for p := 0 to Parts.Count - 1 do
-        begin
-          PartStr := Parts.ItemStr(p, '');
-          if PartStr = '' then Continue;
-          if Text <> '' then Text := Text + sLineBreak;
-          Text := Text + PartStr;
+    { Parent-chain walk from the current node to the root = the transcript the
+      user last saw (edited branches fall away). Guard against cycles with a
+      hard depth cap. }
+    Chain := TStringList.Create;
+    try
+      i := 0;
+      while (Cur <> '') and (i < 100000) do
+      begin
+        Node := Mapping.ChildObject(Cur);
+        if Node = nil then Break;
+        try
+          Chain.Add(Cur);
+          Cur := Node.GetStr('parent', '');
+        finally
+          Node.Free;
         end;
-      if Trim(Text) = '' then Continue;
-      if Role = 'user' then PushMsg(Msgs, mrUser, Text)
-      else                  PushMsg(Msgs, mrAssistant, Text);
-    end;
-  finally
-    Chain.Free;
-  end;
+        Inc(i);
+      end;
 
-  if Length(Msgs) = 0 then Exit;
-  Created := Trunc(Conv.GetFloat('create_time', 0));
-  Id := SaveImported(Conv.GetStr('title', ''), Msgs, Created, 'chatgpt');
-  Result := True;
+      SetLength(Msgs, 0);
+      for i := Chain.Count - 1 downto 0 do   { root first }
+      begin
+        Node := Mapping.ChildObject(Chain[i]);
+        if Node = nil then Continue;
+        try
+          Msg := Node.ChildObject('message');
+        finally
+          Node.Free;
+        end;
+        if Msg = nil then Continue;
+        try
+          Author := Msg.ChildObject('author');
+          if Author = nil then Continue;
+          try
+            Role := LowerCase(Author.GetStr('role', ''));
+          finally
+            Author.Free;
+          end;
+          if (Role <> 'user') and (Role <> 'assistant') then Continue;
+          Content := Msg.ChildObject('content');
+          if Content = nil then Continue;
+          try
+            { parts: strings for text turns; objects for multimodal (skipped --
+              ItemStr yields '' for non-strings). }
+            Text := '';
+            Parts := Content.ChildArray('parts');
+            if Parts <> nil then
+            try
+              for p := 0 to Parts.Count - 1 do
+              begin
+                PartStr := Parts.ItemStr(p, '');
+                if PartStr = '' then Continue;
+                if Text <> '' then Text := Text + sLineBreak;
+                Text := Text + PartStr;
+              end;
+            finally
+              Parts.Free;
+            end;
+          finally
+            Content.Free;
+          end;
+          if Trim(Text) = '' then Continue;
+          if Role = 'user' then PushMsg(Msgs, mrUser, Text)
+          else                  PushMsg(Msgs, mrAssistant, Text);
+        finally
+          Msg.Free;
+        end;
+      end;
+    finally
+      Chain.Free;
+    end;
+
+    if Length(Msgs) = 0 then Exit;
+    Created := Trunc(Conv.GetFloat('create_time', 0));
+    Id := SaveImported(Conv.GetStr('title', ''), Msgs, Created, 'chatgpt');
+    Result := True;
+  finally
+    Mapping.Free;
+  end;
 end;
 
 function ImportChatGPT(const Text: string; out Ids: TImportedIds;
@@ -344,32 +381,40 @@ begin
         if (Kind <> 'user') and (Kind <> 'assistant') then Continue;
         Msg := Obj.ChildObject('message');
         if Msg = nil then Continue;
-        Role := LowerCase(Msg.GetStr('role', Kind));
+        try
+          Role := LowerCase(Msg.GetStr('role', Kind));
 
-        { content: plain string, or an array of typed blocks -- keep the text
-          blocks, skip tool_use / tool_result (no valid tool_call pairing
-          survives an import). }
-        Body := Msg.GetStr('content', '');
-        if Body = '' then
-        begin
-          Blocks := Msg.ChildArray('content');
-          if Blocks <> nil then
-            for b := 0 to Blocks.Count - 1 do
-            begin
-              Block := Blocks.ItemObject(b);
-              if Block = nil then Continue;
-              try
-                if Block.GetStr('type', '') = 'text' then
-                begin
-                  BlockText := Block.GetStr('text', '');
-                  if BlockText = '' then Continue;
-                  if Body <> '' then Body := Body + sLineBreak;
-                  Body := Body + BlockText;
+          { content: plain string, or an array of typed blocks -- keep the text
+            blocks, skip tool_use / tool_result (no valid tool_call pairing
+            survives an import). }
+          Body := Msg.GetStr('content', '');
+          if Body = '' then
+          begin
+            Blocks := Msg.ChildArray('content');
+            if Blocks <> nil then
+            try
+              for b := 0 to Blocks.Count - 1 do
+              begin
+                Block := Blocks.ItemObject(b);
+                if Block = nil then Continue;
+                try
+                  if Block.GetStr('type', '') = 'text' then
+                  begin
+                    BlockText := Block.GetStr('text', '');
+                    if BlockText = '' then Continue;
+                    if Body <> '' then Body := Body + sLineBreak;
+                    Body := Body + BlockText;
+                  end;
+                finally
+                  Block.Free;
                 end;
-              finally
-                Block.Free;
               end;
+            finally
+              Blocks.Free;
             end;
+          end;
+        finally
+          Msg.Free;
         end;
         if Trim(Body) = '' then Continue;
         if Role = 'user' then PushMsg(Msgs, mrUser, Body)
@@ -397,25 +442,43 @@ end;
 function ImportNative(const Text: string; out Ids: TImportedIds;
                       out Err: string): Integer;
 var
-  Msgs: TMessageArray;
-  Title, Model: string;
+  S: TSession;
+  NewId: string;
 begin
   Result := 0;
   SetLength(Ids, 0);
   Err := '';
+  { The session-file deserializer, NOT ChatBodyToMessages: a native export
+    carries meta (title/model/...) under "meta" and rich turns -- assistant
+    tool_calls with their tool_call_id pairings -- that the flattened
+    gateway-body parser would strip, leaving orphaned tool turns that make
+    provider resume requests invalid. LoadFromText keeps all of it. }
+  S := TSession.Create('');          { generates the fresh id up front }
   try
-    Msgs := ChatBodyToMessages(Text, Title, Model);
-  except
-    on E: Exception do begin Err := E.Message; Exit; end;
+    NewId := S.Meta.Id;
+    if not S.LoadFromText(Text) then
+    begin
+      Err := 'not a valid PasClaw session file';
+      Exit;
+    end;
+    if Length(S.Messages) = 0 then
+    begin
+      Err := 'no messages in the session file';
+      Exit;
+    end;
+    { NEVER keep the source id -- an import must create a copy, not
+      overwrite the original session. }
+    S.Meta.Id       := NewId;
+    S.Meta.Provider := 'import:pasclaw';
+    S.AutoTitle;
+    S.Touch;
+    S.Save;
+    SetLength(Ids, 1);
+    Ids[0] := NewId;
+    Result := 1;
+  finally
+    S.Free;
   end;
-  if Length(Msgs) = 0 then
-  begin
-    Err := 'no messages in the session file';
-    Exit;
-  end;
-  SetLength(Ids, 1);
-  Ids[0] := SaveImported(Title, Msgs, 0, 'pasclaw');
-  Result := 1;
 end;
 
 function ImportSessions(const Text: string; out Ids: TImportedIds;
