@@ -85,6 +85,9 @@
   .session-list li .del{float:right;color:var(--red);font-weight:700;opacity:0;padding-left:.5rem}
   .session-list li:hover .del{opacity:.7}
   .session-list li .del:hover{opacity:1}
+  .session-list li .dl{float:right;color:var(--cyan);opacity:0;padding-left:.5rem}
+  .session-list li:hover .dl{opacity:.7}
+  .session-list li .dl:hover{opacity:1}
   /* Draggable divider between the session list and the chat pane. */
   .chat-splitter{flex:0 0 6px;align-self:stretch;cursor:col-resize;
     background:linear-gradient(transparent,rgba(143,92,255,.3),transparent);
@@ -611,8 +614,10 @@
     <aside class="sessions">
       <header>
         <span class="title">Sessions</span>
+        <button class="icon-btn" id="session-import" title="Import chats: ChatGPT conversations.json, Claude Code .jsonl, or a PasClaw session export">⇪</button>
         <button class="icon-btn" id="session-new">+ New</button>
       </header>
+      <input id="session-import-file" type="file" accept=".json,.jsonl,application/json" hidden>
       <input id="session-search" class="session-search" type="search"
              placeholder="search…" autocomplete="off">
       <ul class="session-list" id="session-list"></ul>
@@ -1399,6 +1404,23 @@ async function deleteSession(id) {
   if (activeSessionId === id) newSession();
 }
 
+/* Download a session's portable JSON (via gwFetch so the bearer token rides
+   along -- a bare <a href> would 401 on a token-gated gateway). */
+async function exportSession(id) {
+  try {
+    const r = await gwFetch("/v1/sessions/" + encodeURIComponent(id) + "/export");
+    if (!r.ok) { alert("export failed: " + r.status); return; }
+    const blob = await r.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = id + ".json";
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch (e) {
+    alert("export failed: " + e);
+  }
+}
+
 function renderSessions() {
   const ul = $("#session-list");
   ul.innerHTML = "";
@@ -1416,7 +1438,10 @@ function renderSessions() {
     const del = document.createElement("span");
     del.className = "del"; del.textContent = "×";
     del.addEventListener("click", e => { e.stopPropagation(); deleteSession(s.id); });
-    li.appendChild(span); li.appendChild(del);
+    const dl = document.createElement("span");
+    dl.className = "dl"; dl.textContent = "⬇"; dl.title = "Export session JSON";
+    dl.addEventListener("click", e => { e.stopPropagation(); exportSession(s.id); });
+    li.appendChild(span); li.appendChild(del); li.appendChild(dl);
     li.addEventListener("click", () => activateSession(s.id));
     ul.appendChild(li);
   }
@@ -1535,6 +1560,24 @@ async function persistActive() {
 }
 
 $("#session-new").addEventListener("click", () => newSession());
+/* Import: pick a ChatGPT conversations.json / Claude Code .jsonl / PasClaw
+   export; the gateway auto-detects and converts. */
+$("#session-import").addEventListener("click", () => $("#session-import-file").click());
+$("#session-import-file").addEventListener("change", async e => {
+  const f = e.target.files && e.target.files[0];
+  e.target.value = "";                       // allow re-picking the same file
+  if (!f) return;
+  try {
+    const text = await f.text();
+    const r = await gwFetch("/v1/sessions/import", { method: "POST", body: text });
+    const j = await r.json();
+    if (!r.ok) { alert("import failed: " + (j.error || r.status)); return; }
+    await refreshSessions();
+    if (j.ids && j.ids.length === 1) activateSession(j.ids[0]);
+  } catch (err) {
+    alert("import failed: " + err);
+  }
+});
 $("#session-search").addEventListener("input", e => {
   sessionFilter = e.target.value.trim().toLowerCase();
   renderSessions();

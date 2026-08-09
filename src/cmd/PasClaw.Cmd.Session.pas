@@ -27,17 +27,21 @@ implementation
 uses
   SysUtils, Classes, DateUtils,
   PasClaw.CliUI,
+  PasClaw.Utils,
   PasClaw.Providers.Types,   { TMsgRole = (mrSystem, mrUser, mrAssistant, mrTool) }
   PasClaw.Session.Store,
+  PasClaw.Session.Port,
   PasClaw.Agent.Steering;
 
 procedure PrintHelp;
 begin
-  PrintLn('Usage: pasclaw session <list|show|delete|export> [args]');
+  PrintLn('Usage: pasclaw session <list|show|delete|export|import> [args]');
   PrintLn('  list                list every saved session (id, title, msgs, last used)');
   PrintLn('  show <id>           show one session: metadata + last N messages');
   PrintLn('  delete <id>         remove the session file from disk');
-  PrintLn('  export <id>         print the raw session JSON to stdout');
+  PrintLn('  export <id> [--md]  print the session to stdout (raw JSON, or Markdown with --md)');
+  PrintLn('  import <file>       import chats: ChatGPT conversations.json, a Claude Code');
+  PrintLn('                      .jsonl transcript, or a PasClaw session export (auto-detected)');
 end;
 
 function FormatAge(Now_, Then_: Int64): string;
@@ -163,6 +167,47 @@ begin
   end;
 end;
 
+function DoExportMarkdown(const Id: string): Integer;
+var
+  MD, Err: string;
+begin
+  if ExportSessionMarkdown(Id, MD, Err) then
+  begin
+    Print(MD);
+    Result := 0;
+  end
+  else
+  begin
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + Err);
+    Result := 1;
+  end;
+end;
+
+function DoImport(const Path: string): Integer;
+var
+  Text, Err: string;
+  Ids: TImportedIds;
+  N, i: Integer;
+begin
+  if not FileExists(Path) then
+  begin
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'no such file: ' + Path);
+    Exit(1);
+  end;
+  Text := ReadFileText(Path);
+  N := ImportSessions(Text, Ids, Err);
+  if N = 0 then
+  begin
+    if Err <> '' then PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + Err)
+    else PrintLn('nothing importable found in ' + Path);
+    Exit(1);
+  end;
+  PrintLn(Format('%s✓%s imported %d session(s):', [Ansi.Green, Ansi.Reset, N]));
+  for i := 0 to High(Ids) do
+    PrintLn('  ' + Ids[i] + '   (resume with: pasclaw resume ' + Ids[i] + ')');
+  Result := 0;
+end;
+
 function Cmd_Session_Run(const Argv: array of string): Integer;
 var
   Sub: string;
@@ -172,7 +217,15 @@ begin
   if      Sub = 'list'   then Result := DoList
   else if Sub = 'show'   then begin if Length(Argv) < 2 then begin PrintHelp; Exit(1); end; Result := DoShow  (Argv[1]); end
   else if Sub = 'delete' then begin if Length(Argv) < 2 then begin PrintHelp; Exit(1); end; Result := DoDelete(Argv[1]); end
-  else if Sub = 'export' then begin if Length(Argv) < 2 then begin PrintHelp; Exit(1); end; Result := DoExport(Argv[1]); end
+  else if Sub = 'export' then
+  begin
+    if Length(Argv) < 2 then begin PrintHelp; Exit(1); end;
+    if (Length(Argv) >= 3) and ((Argv[2] = '--md') or (Argv[2] = '--markdown')) then
+      Result := DoExportMarkdown(Argv[1])
+    else
+      Result := DoExport(Argv[1]);
+  end
+  else if Sub = 'import' then begin if Length(Argv) < 2 then begin PrintHelp; Exit(1); end; Result := DoImport(Argv[1]); end
   else                        begin PrintHelp; Result := 1; end;
 end;
 

@@ -54,6 +54,7 @@ uses
   PasClaw.Agent.Steering,  { PushSteering/PendingSteeringCount -- /v1/steer + SteeringKey }
   PasClaw.Agent.AutoRouter.Apply,  { ApplyAutoRoute -- per-turn cheap routing }
   PasClaw.Session.Store,
+  PasClaw.Session.Port,
   PasClaw.Gateway.RelayQueue, { TRelayQueue -- FRelayQueue field type }
   PasClaw.MCP.Server;
 
@@ -259,6 +260,11 @@ type
     procedure HandleSessionItem(const Doc: string;
                                 ARequest: TIdHTTPRequestInfo;
                                 AResp: TIdHTTPResponseInfo);
+    { POST /v1/sessions/import -- body is a foreign chat export (ChatGPT
+      conversations.json / Claude Code .jsonl / PasClaw session JSON,
+      auto-detected); imports into the store and returns the new ids. }
+    procedure HandleSessionsImport(ARequest: TIdHTTPRequestInfo;
+                                   AResp: TIdHTTPResponseInfo);
     { Read a request's POST body as a UTF-8 string ('' when none). }
     function  ReadRequestBody(ARequest: TIdHTTPRequestInfo): string;
     { Fill S.Messages + title/model/provider from a messages/title/model
@@ -1360,6 +1366,7 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/stats')   then HandleStats(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/sessions') then HandleSessionsList(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/sessions') then HandleSessionCreate(ARequest, AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/sessions/import') then HandleSessionsImport(ARequest, AResponse)
     else if (Copy(Doc, 1, 13) = '/v1/sessions/') then HandleSessionItem(Doc, ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/workflows') then HandleWorkflowsList(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/workflows') then HandleWorkflowCreate(ARequest, AResponse)
@@ -3297,13 +3304,55 @@ procedure TGatewayServer.HandleSessionItem(const Doc: string;
                                            ARequest: TIdHTTPRequestInfo;
                                            AResp: TIdHTTPResponseInfo);
 var
-  Id: string;
+  Id, ExportBody, ExportErr: string;
   S: TSession;
   Root, MsgObj: TJsonObject;
   Arr: TJsonArray;
   i: Integer;
 begin
   Id := Copy(Doc, Length('/v1/sessions/') + 1, MaxInt);
+
+  { GET /v1/sessions/<id>/export[?format=md] -- portable download. Default is
+    the raw session JSON (already the OpenAI-messages interchange shape);
+    format=md renders a human-readable Markdown transcript. }
+  if (ARequest.Command = 'GET') and (Length(Id) > 7)
+     and (Copy(Id, Length(Id) - 6, 7) = '/export') then
+  begin
+    Id := Copy(Id, 1, Length(Id) - 7);
+    if not IsSafeSessionId(Id) then
+    begin
+      WriteJSON(AResp, 400, '{"error":"bad session id"}');
+      Exit;
+    end;
+    if LowerCase(ARequest.Params.Values['format']) = 'md' then
+    begin
+      if not ExportSessionMarkdown(Id, ExportBody, ExportErr) then
+      begin
+        WriteJSON(AResp, 404, '{"error":"' + JsonEscape(ExportErr) + '"}');
+        Exit;
+      end;
+      AResp.ResponseNo := 200;
+      AResp.ContentType := 'text/markdown; charset=utf-8';
+      AResp.CharSet := 'utf-8';
+      AResp.ContentDisposition := 'attachment; filename="' + Id + '.md"';
+      WriteBodyStream(AResp, ExportBody);
+    end
+    else
+    begin
+      if not FileExists(SessionPath(Id)) then
+      begin
+        WriteJSON(AResp, 404, '{"error":"not found"}');
+        Exit;
+      end;
+      AResp.ResponseNo := 200;
+      AResp.ContentType := 'application/json; charset=utf-8';
+      AResp.CharSet := 'utf-8';
+      AResp.ContentDisposition := 'attachment; filename="' + Id + '.json"';
+      WriteBodyStream(AResp, ReadFileText(SessionPath(Id)));
+    end;
+    Exit;
+  end;
+
   if not IsSafeSessionId(Id) then
   begin
     WriteJSON(AResp, 400, '{"error":"bad session id"}');
@@ -3383,6 +3432,40 @@ begin
     end;
   finally
     S.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleSessionsImport(ARequest: TIdHTTPRequestInfo;
+                                              AResp: TIdHTTPResponseInfo);
+var
+  Body, Err: string;
+  Ids: TImportedIds;
+  N, i: Integer;
+  Root: TJsonObject;
+  Arr: TJsonArray;
+begin
+  Body := ReadRequestBody(ARequest);
+  if Trim(Body) = '' then
+  begin
+    WriteJSON(AResp, 400, '{"error":"empty body -- POST the export file content"}');
+    Exit;
+  end;
+  N := ImportSessions(Body, Ids, Err);
+  if N = 0 then
+  begin
+    if Err = '' then Err := 'nothing importable found';
+    WriteJSON(AResp, 400, '{"error":"' + JsonEscape(Err) + '"}');
+    Exit;
+  end;
+  Root := TJsonObject.Create;
+  try
+    Root.PutInt('imported', N);
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Ids) do Arr.AddStr(Ids[i]);
+    Root.PutArray('ids', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
   end;
 end;
 
