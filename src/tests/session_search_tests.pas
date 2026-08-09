@@ -34,7 +34,9 @@ uses
   PasClaw.Config,
   PasClaw.Providers.Types,
   PasClaw.Session.Store,
-  PasClaw.Session.Search;
+  PasClaw.Session.Search,
+  PasClaw.Tools.Registry,
+  PasClaw.Tools.SessionSearch;
 
 procedure Fail_(const Msg: string);
 begin
@@ -369,6 +371,76 @@ begin
   end;
 end;
 
+procedure TestSessionReadTool;
+(* session_read: the second half of the cross-session loop. Pins:
+   - reads a saved session's messages by id with role labels + title
+   - system turns are skipped; stable 1-based numbering
+   - "query" filters to matching messages (numbering unchanged)
+   - start/count page through, with a "call again with start=N" tail
+   - long content is truncated to max_chars
+   - bad / unknown ids error with guidance, not a crash *)
+var
+  S: TSession;
+  Reg: TToolRegistry;
+  Res, Err, LongMsg: string;
+begin
+  WipeStore;
+  LongMsg := StringOfChar('x', 3000);
+  S := TSession.Create('sess-read');
+  try
+    S.Meta.Title := 'Read me';
+    S.Meta.Model := 'test-model';
+    SetLength(S.Messages, 5);
+    S.Messages[0] := MakeMessage(mrSystem,    'system prompt blob');
+    S.Messages[1] := MakeMessage(mrUser,      'how did we deploy the gateway');
+    S.Messages[2] := MakeMessage(mrAssistant, 'we used the helm chart with make ship');
+    S.Messages[3] := MakeMessage(mrUser,      'and the port?');
+    S.Messages[4] := MakeMessage(mrAssistant, LongMsg);
+    S.Touch;
+    S.Save;
+  finally
+    S.Free;
+  end;
+
+  Reg := TToolRegistry.Create;
+  try
+    RegisterSessionSearchTool(Reg);
+
+    { basics: title, roles, system skipped (4 conversation messages) }
+    Res := Reg.RunTool('session_read', '{"session_id":"sess-read"}', Err);
+    AssertTrue(Err = '', 'read: no error (' + Err + ')');
+    AssertTrue(Pos('"Read me"', Res) > 0, 'read: title present');
+    AssertTrue(Pos('4 message(s)', Res) > 0, 'read: system turn skipped from count');
+    AssertTrue(Pos('[1] user: how did we deploy', Res) > 0, 'read: first user turn numbered');
+    AssertTrue(Pos('system prompt blob', Res) = 0, 'read: system content not leaked');
+
+    { query filter }
+    Res := Reg.RunTool('session_read', '{"session_id":"sess-read","query":"helm"}', Err);
+    AssertTrue((Err = '') and (Pos('helm chart', Res) > 0), 'read: query filter matches');
+    AssertTrue(Pos('how did we deploy', Res) = 0, 'read: query filter excludes others');
+
+    { paging: 2 per page, second page announces continuation }
+    Res := Reg.RunTool('session_read', '{"session_id":"sess-read","count":2}', Err);
+    AssertTrue(Pos('start=3', Res) > 0, 'read: paging tail points at next start');
+    Res := Reg.RunTool('session_read', '{"session_id":"sess-read","start":3,"count":2}', Err);
+    AssertTrue(Pos('[3] user: and the port?', Res) > 0, 'read: page 2 keeps numbering');
+
+    { truncation }
+    Res := Reg.RunTool('session_read', '{"session_id":"sess-read","start":4,"max_chars":200}', Err);
+    AssertTrue(Pos('...[truncated]', Res) > 0, 'read: long content truncated');
+
+    { errors }
+    Reg.RunTool('session_read', '{"session_id":"no-such-session"}', Err);
+    AssertTrue(Pos('no such session', Err) > 0, 'read: unknown id errors with guidance');
+    Reg.RunTool('session_read', '{"session_id":"../../etc/passwd"}', Err);
+    AssertTrue(Err <> '', 'read: unsafe id rejected');
+    Reg.RunTool('session_read', '{}', Err);
+    AssertTrue(Pos('session_id', Err) > 0, 'read: missing id names the argument');
+  finally
+    Reg.Free;
+  end;
+end;
+
 begin
   TestSearchFindsByContent;
   TestHitCarriesIdAndTitle;
@@ -377,5 +449,6 @@ begin
   TestReindexCatchesSameSecondSave;
   TestRankingPrefersStrongerMatch;
   TestGatewayBucketsExcluded;
+  TestSessionReadTool;
   WriteLn('session_search_tests: OK');
 end.
