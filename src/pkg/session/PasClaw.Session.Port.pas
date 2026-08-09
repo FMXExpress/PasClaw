@@ -486,7 +486,7 @@ type
     Body:     string;
   end;
 var
-  Lines: TStringList;
+  Lines, Lookup: TStringList;
   Obj, Msg, Block: TJsonObject;
   Blocks: TJsonArray;
   Entries: array of TEntry;
@@ -502,6 +502,15 @@ begin
   Created := 0;
   SetLength(Entries, 0);
 
+  { id -> Entries index. Sorted for O(log n) IndexOf so the parent-chain walk
+    is O(n log n) overall -- a linear scan per hop made a long append-only
+    transcript O(n^2) (10k entries ~ 100M comparisons on a synchronous
+    import request). Duplicate ids keep last-wins, matching the old
+    scan-from-the-end behaviour. }
+  Lookup := TStringList.Create;
+  try
+  Lookup.Sorted := True;
+  Lookup.CaseSensitive := True;
   Lines := TStringList.Create;
   try
     Lines.Text := Text;
@@ -533,6 +542,9 @@ begin
         SetLength(Entries, n + 1);
         Entries[n].Id       := Obj.GetStr('id', '');
         Entries[n].ParentId := Obj.GetStr('parentId', '');
+        b := Lookup.IndexOf(Entries[n].Id);
+        if b >= 0 then Lookup.Objects[b] := TObject(PtrInt(n))   { last wins }
+        else Lookup.AddObject(Entries[n].Id, TObject(PtrInt(n)));
         Entries[n].IsMsg    := False;
         Entries[n].Role     := '';
         Entries[n].Body     := '';
@@ -612,12 +624,14 @@ begin
     end;
     Cur := Entries[i].ParentId;
     if Cur = '' then Break;
-    { find the parent entry by id (linear scan; sessions are small) }
-    Leaf := -1;
-    for b := High(Entries) downto 0 do
-      if Entries[b].Id = Cur then begin Leaf := b; Break; end;
-    i := Leaf;
+    { constant-ish parent hop via the sorted id index }
+    b := Lookup.IndexOf(Cur);
+    if b >= 0 then i := PtrInt(Lookup.Objects[b])
+    else i := -1;
     Inc(Depth);
+  end;
+  finally
+    Lookup.Free;
   end;
 
   if Length(Rev) = 0 then
