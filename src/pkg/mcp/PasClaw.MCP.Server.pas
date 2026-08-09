@@ -25,10 +25,19 @@
   fs_write / shell on the operator's box is exactly the bad outcome
   the sandbox layer exists to prevent.
 
-  Implements just enough of the MCP spec for the read-corpus case:
+  Implements just enough of the MCP spec for the read-corpus case, serving
+  BOTH protocol eras from one dispatcher (the core was per-request stateless
+  from day one, so the 2026-07-28 "stateless" revision mostly named what we
+  already did):
 
+    modern (2026-07-28, per-request _meta, no handshake):
+    - server/discover             -> supportedVersions + capabilities + serverInfo
+    - a declared _meta protocol version we don't serve gets
+      UnsupportedProtocolVersionError (-32022) with the supported list
+    legacy (2024-11-05, initialize handshake):
     - initialize                  -> serverInfo + capabilities
     - notifications/initialized   -> ack (no response, void)
+    both eras:
     - ping                        -> {}
     - tools/list                  -> tool descriptors
     - tools/call                  -> dispatch via TToolRegistry
@@ -55,7 +64,8 @@ uses
   PasClaw.Tools.Registry;
 
 const
-  MCPServerProtocolVersion = '2024-11-05';
+  MCPServerProtocolVersion = '2024-11-05';   { legacy (initialize handshake) }
+  MCPServerProtocolModern  = '2026-07-28';   { stateless (per-request _meta) }
   MCPServerName            = 'pasclaw';
 
 type
@@ -67,11 +77,14 @@ type
     FVersion:       string;
     function IsExposed(const Name: string): Boolean;
     function HandleInitialize(const Params, Id: string): string;
+    function HandleDiscover(const Id: string): string;
     function HandleToolsList(const Id: string): string;
     function HandleToolsCall(const Params, Id: string): string;
     function HandlePing(const Id: string): string;
     function ErrorResponse(const Id: string; Code: Integer;
                             const Message: string): string;
+    function ErrorResponseData(const Id: string; Code: Integer;
+                                const Message, DataJSON: string): string;
     function SuccessResponse(const Id, ResultJSON: string): string;
   public
     constructor Create(ARegistry: TToolRegistry; AAllowMutating: Boolean;
@@ -169,6 +182,29 @@ begin
     Err := TJsonObject.Create;
     Err.PutInt('code',    Code);
     Err.PutStr('message', Message);
+    Root.PutObject('error', Err);
+    Result := Root.ToJSON;
+  finally
+    Root.Free;
+  end;
+end;
+
+function TMCPServerCore.ErrorResponseData(const Id: string; Code: Integer;
+                                          const Message, DataJSON: string): string;
+var
+  Root, Err: TJsonObject;
+begin
+  Root := TJsonObject.Create;
+  try
+    Root.PutStr('jsonrpc', '2.0');
+    if (Id = '') or (Id = 'null') then
+      Root.PutRaw('id', 'null')
+    else
+      Root.PutRaw('id', Id);
+    Err := TJsonObject.Create;
+    Err.PutInt('code',    Code);
+    Err.PutStr('message', Message);
+    if DataJSON <> '' then Err.PutRaw('data', DataJSON);
     Root.PutObject('error', Err);
     Result := Root.ToJSON;
   finally
@@ -393,10 +429,43 @@ begin
   Result := IntToStr(I);
 end;
 
+function TMCPServerCore.HandleDiscover(const Id: string): string;
+(* server/discover -- the modern (2026-07-28 stateless) entry point. Modern
+   servers MUST implement it; clients may call it to learn versions +
+   capabilities up front, and dual-era clients use it as the stdio probe
+   that distinguishes a modern server from a legacy one. *)
+var
+  ResObj, Caps, ToolsCap, Meta, ServerInfo: TJsonObject;
+  Vers: TJsonArray;
+begin
+  ResObj := TJsonObject.Create;
+  try
+    ResObj.PutStr('resultType', 'complete');
+    Vers := TJsonArray.Create;
+    Vers.AddStr(MCPServerProtocolModern);
+    Vers.AddStr(MCPServerProtocolVersion);   { dual-era: legacy still served }
+    ResObj.PutArray('supportedVersions', Vers);
+    Caps := TJsonObject.Create;
+    ToolsCap := TJsonObject.Create;
+    ToolsCap.PutBool('listChanged', False);
+    Caps.PutObject('tools', ToolsCap);
+    ResObj.PutObject('capabilities', Caps);
+    Meta := TJsonObject.Create;
+    ServerInfo := TJsonObject.Create;
+    ServerInfo.PutStr('name',    MCPServerName);
+    ServerInfo.PutStr('version', FVersion);
+    Meta.PutObject('io.modelcontextprotocol/serverInfo', ServerInfo);
+    ResObj.PutObject('_meta', Meta);
+    Result := SuccessResponse(Id, ResObj.ToJSON);
+  finally
+    ResObj.Free;
+  end;
+end;
+
 function TMCPServerCore.HandleRequest(const ALine: string): string;
 var
-  Obj, ParamsObj: TJsonObject;
-  Method, Id, Params: string;
+  Obj, ParamsObj, MetaObj: TJsonObject;
+  Method, Id, Params, ReqVer: string;
 begin
   Result := '';
   if Trim(ALine) = '' then Exit;
@@ -416,11 +485,17 @@ begin
   try
     Method := Obj.GetStr('method', '');
     Id     := ExtractIdRaw(Obj);
+    ReqVer := '';
     ParamsObj := Obj.ChildObject('params');
     Params := '';
     if ParamsObj <> nil then
     try
       Params := ParamsObj.ToJSON;
+      { Modern (2026-07-28) requests declare their protocol version in
+        params._meta on every request -- there is no handshake. }
+      MetaObj := ParamsObj.ChildObject('_meta');
+      if MetaObj <> nil then
+        ReqVer := MetaObj.GetStr('io.modelcontextprotocol/protocolVersion', '');
     finally
       ParamsObj.Free;
     end;
@@ -434,6 +509,19 @@ begin
     Exit;
   end;
 
+  { Per-request version gate (modern era). A declared version we don't
+    serve MUST get UnsupportedProtocolVersionError (-32022) listing what we
+    do support, so the client can retry with a mutual version. Requests
+    with no _meta version are legacy-era and flow through unchanged. }
+  if (ReqVer <> '') and (ReqVer <> MCPServerProtocolModern)
+     and (ReqVer <> MCPServerProtocolVersion) then
+  begin
+    Result := ErrorResponseData(Id, -32022, 'Unsupported protocol version',
+      '{"supported":["' + MCPServerProtocolModern + '","' +
+      MCPServerProtocolVersion + '"],"requested":"' + JsonEscape(ReqVer) + '"}');
+    Exit;
+  end;
+
   { Notifications: methods that start with "notifications/" carry no
     id, expect no response. Silence is the correct reply. }
   if (Id = 'null') and (Copy(Method, 1, Length('notifications/')) = 'notifications/') then
@@ -443,10 +531,14 @@ begin
     Exit;
   end;
 
-  if      Method = 'initialize'  then Result := HandleInitialize(Params, Id)
-  else if Method = 'tools/list'  then Result := HandleToolsList(Id)
-  else if Method = 'tools/call'  then Result := HandleToolsCall(Params, Id)
-  else if Method = 'ping'        then Result := HandlePing(Id)
+  { Dual-era dispatch: server/discover + per-request _meta serve modern
+    stateless clients; initialize keeps serving legacy (2024-11-05)
+    handshake clients. tools/list & tools/call were stateless all along. }
+  if      Method = 'initialize'      then Result := HandleInitialize(Params, Id)
+  else if Method = 'server/discover' then Result := HandleDiscover(Id)
+  else if Method = 'tools/list'      then Result := HandleToolsList(Id)
+  else if Method = 'tools/call'      then Result := HandleToolsCall(Params, Id)
+  else if Method = 'ping'            then Result := HandlePing(Id)
   else
     Result := ErrorResponse(Id, -32601, 'method not found: ' + Method);
 end;
