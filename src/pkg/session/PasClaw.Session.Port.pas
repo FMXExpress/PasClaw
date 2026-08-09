@@ -30,6 +30,19 @@
                    A leading summary line becomes the title.
                    One file -> one PasClaw session.
 
+    ifPiJSONL      A Pi / OpenClaw session transcript (.jsonl). Both tools
+                   share the pi-agent session format: line 1 is a header
+                   (type "session" with id/cwd/timestamp), then TREE entries
+                   (id + parentId) -- message entries plus model_change /
+                   compaction / branch_summary / label / custom entries.
+                   The transcript is the parent-chain walk from the LAST
+                   entry (the active leaf in an append-only file) back to
+                   the root, so abandoned branches fall away -- the same
+                   algorithm as the ChatGPT mapping walk. Only user /
+                   assistant text turns import (toolResult / bashExecution
+                   entries and toolCall blocks are skipped for the same
+                   resume-validity reason). One file -> one session.
+
     ifNative       A PasClaw session export (object with a "messages" array,
                    as produced by `pasclaw session export` / the gateway).
                    Re-imported under a fresh id via TSession.LoadFromText,
@@ -60,13 +73,14 @@ unit PasClaw.Session.Port;
 interface
 
 type
-  TImportFormat = (ifUnknown, ifChatGPT, ifClaudeJSONL, ifNative);
+  TImportFormat = (ifUnknown, ifChatGPT, ifClaudeJSONL, ifPiJSONL, ifNative);
   TImportedIds  = array of string;
 
 { Sniff which known export shape Text is. }
 function DetectImportFormat(const Text: string): TImportFormat;
 
-{ Human name for a format ("chatgpt", "claude-code", "pasclaw", "unknown"). }
+{ Human name for a format ("chatgpt", "claude-code", "pi/openclaw", "pasclaw",
+  "unknown"). }
 function ImportFormatName(F: TImportFormat): string;
 
 { Import every conversation found in Text into the session store. Returns the
@@ -76,6 +90,22 @@ function ImportFormatName(F: TImportFormat): string;
 function ImportSessions(const Text: string; out Ids: TImportedIds;
                         out Err: string): Integer;
 
+(* Import an OpenCode data directory. OpenCode fragments each session across
+   files -- there is no single export blob to hand to ImportSessions:
+
+     storage/session/<projectHash>/<sessionID>.json    metadata (id/title/time)
+     storage/message/<sessionID>/msg_<id>.json         one file per message
+     storage/part/... (newer builds)                   text moved to per-part
+                                                       files (type "text")
+
+   Path may be the OpenCode data dir (~/.local/share/opencode), its storage/
+   subdir, or anything containing session/ + message/. Every session found is
+   assembled (messages ordered by their sortable file names; text taken from
+   inline "parts" (old), per-part files (new), or a plain "content" field) and
+   saved as a PasClaw session. Only user/assistant text turns import. *)
+function ImportOpenCodeDir(const Path: string; out Ids: TImportedIds;
+                           out Err: string): Integer;
+
 { Render a saved session as a Markdown transcript. }
 function ExportSessionMarkdown(const Id: string; out MD: string;
                                out Err: string): Boolean;
@@ -83,8 +113,9 @@ function ExportSessionMarkdown(const Id: string; out MD: string;
 implementation
 
 uses
-  SysUtils, Classes,
+  SysUtils, Classes, DateUtils,
   PasClaw.JSON,
+  PasClaw.Utils,
   PasClaw.Logger,
   PasClaw.Providers.Types,
   PasClaw.Session.Store;
@@ -94,6 +125,7 @@ begin
   case F of
     ifChatGPT:     Result := 'chatgpt';
     ifClaudeJSONL: Result := 'claude-code';
+    ifPiJSONL:     Result := 'pi/openclaw';
     ifNative:      Result := 'pasclaw';
   else             Result := 'unknown';
   end;
@@ -152,12 +184,16 @@ begin
   { Object root: PasClaw native export has a top-level "messages" array. }
   if T[1] = '{' then
   begin
-    { A Claude Code transcript is JSONL, so the FIRST LINE alone must parse;
-      a native session file is one pretty-printed object (first line '{'). }
+    { JSONL transcripts sniff by their FIRST LINE alone; a native session
+      file is one pretty-printed object (first line '{'). Pi / OpenClaw files
+      open with a session header line; Claude Code lines carry uuid /
+      message / summary keys. }
     FL := FirstLine(T);
     try Obj := TJsonObject.Parse(FL); except Obj := nil; end;
     if Obj <> nil then
     try
+      if (Obj.GetStr('type', '') = 'session') and Obj.Has('id') then
+        Exit(ifPiJSONL);
       if Obj.Has('type') and (Obj.Has('message') or Obj.Has('summary')
          or Obj.Has('uuid')) then
         Exit(ifClaudeJSONL);
@@ -437,6 +473,414 @@ begin
   Result := 1;
 end;
 
+{ ---- Pi / OpenClaw .jsonl (pi-agent session format) ---- }
+
+function ImportPiJSONL(const Text: string; out Ids: TImportedIds;
+                       out Err: string): Integer;
+type
+  TEntry = record
+    Id:       string;
+    ParentId: string;
+    IsMsg:    Boolean;   { a user/assistant message entry with text }
+    Role:     string;    { 'user' / 'assistant' when IsMsg }
+    Body:     string;
+  end;
+var
+  Lines, Lookup: TStringList;
+  Obj, Msg, Block: TJsonObject;
+  Blocks: TJsonArray;
+  Entries: array of TEntry;
+  Msgs, Rev: TMessageArray;
+  Kind, Role, Body, BlockText, Cur, Stamp: string;
+  i, b, n, Leaf, Depth: Integer;
+  Created: Int64;
+  Y, Mo, D: Integer;
+begin
+  Result := 0;
+  SetLength(Ids, 0);
+  Err := '';
+  Created := 0;
+  SetLength(Entries, 0);
+
+  { id -> Entries index. Sorted for O(log n) IndexOf so the parent-chain walk
+    is O(n log n) overall -- a linear scan per hop made a long append-only
+    transcript O(n^2) (10k entries ~ 100M comparisons on a synchronous
+    import request). Duplicate ids keep last-wins, matching the old
+    scan-from-the-end behaviour. }
+  Lookup := TStringList.Create;
+  try
+  Lookup.Sorted := True;
+  Lookup.CaseSensitive := True;
+  Lines := TStringList.Create;
+  try
+    Lines.Text := Text;
+    for i := 0 to Lines.Count - 1 do
+    begin
+      if Trim(Lines[i]) = '' then Continue;
+      try Obj := TJsonObject.Parse(Lines[i]); except Obj := nil; end;
+      if Obj = nil then Continue;   { tolerate stray/garbled lines }
+      try
+        Kind := Obj.GetStr('type', '');
+        if Kind = 'session' then
+        begin
+          { header: keep the calendar date of the start timestamp }
+          Stamp := Obj.GetStr('timestamp', '');
+          if (Length(Stamp) >= 10)
+             and TryStrToInt(Copy(Stamp, 1, 4), Y)
+             and TryStrToInt(Copy(Stamp, 6, 2), Mo)
+             and TryStrToInt(Copy(Stamp, 9, 2), D)
+             and (Mo >= 1) and (Mo <= 12) and (D >= 1) and (D <= 31) then
+            try
+              Created := DateTimeToUnix(EncodeDate(Y, Mo, D), False);
+            except
+              Created := 0;
+            end;
+          Continue;
+        end;
+        if not Obj.Has('id') then Continue;
+        n := Length(Entries);
+        SetLength(Entries, n + 1);
+        Entries[n].Id       := Obj.GetStr('id', '');
+        Entries[n].ParentId := Obj.GetStr('parentId', '');
+        b := Lookup.IndexOf(Entries[n].Id);
+        if b >= 0 then Lookup.Objects[b] := TObject(PtrInt(n))   { last wins }
+        else Lookup.AddObject(Entries[n].Id, TObject(PtrInt(n)));
+        Entries[n].IsMsg    := False;
+        Entries[n].Role     := '';
+        Entries[n].Body     := '';
+        if Kind <> 'message' then Continue;   { model_change / label / ... :
+                                                chain links only }
+        Msg := Obj.ChildObject('message');
+        if Msg = nil then Continue;
+        try
+          Role := LowerCase(Msg.GetStr('role', ''));
+          if (Role <> 'user') and (Role <> 'assistant') then Continue;
+          { content: plain string, or an array of typed blocks -- keep the
+            text blocks, skip thinking / toolCall blocks. }
+          Body := Msg.GetStr('content', '');
+          if Body = '' then
+          begin
+            Blocks := Msg.ChildArray('content');
+            if Blocks <> nil then
+            try
+              for b := 0 to Blocks.Count - 1 do
+              begin
+                Block := Blocks.ItemObject(b);
+                if Block = nil then Continue;
+                try
+                  if Block.GetStr('type', '') = 'text' then
+                  begin
+                    BlockText := Block.GetStr('text', '');
+                    if BlockText = '' then Continue;
+                    if Body <> '' then Body := Body + sLineBreak;
+                    Body := Body + BlockText;
+                  end;
+                finally
+                  Block.Free;
+                end;
+              end;
+            finally
+              Blocks.Free;
+            end;
+          end;
+          if Trim(Body) = '' then Continue;
+          Entries[n].IsMsg := True;
+          Entries[n].Role  := Role;
+          Entries[n].Body  := Body;
+        finally
+          Msg.Free;
+        end;
+      finally
+        Obj.Free;
+      end;
+    end;
+  finally
+    Lines.Free;
+  end;
+
+  if Length(Entries) = 0 then
+  begin
+    Err := 'no entries found in the transcript';
+    Exit;
+  end;
+
+  { The file is append-only, so the LAST entry is the active leaf. Walk its
+    parent chain back to the root -- abandoned branches (entries not on the
+    chain) fall away -- collecting message turns leaf-first, then reverse. }
+  Leaf := High(Entries);
+  SetLength(Rev, 0);
+  Cur := Entries[Leaf].Id;
+  Depth := 0;
+  i := Leaf;
+  while (i >= 0) and (Depth < 100000) do
+  begin
+    if Entries[i].IsMsg then
+    begin
+      SetLength(Rev, Length(Rev) + 1);
+      if Entries[i].Role = 'user' then
+        Rev[High(Rev)] := MakeMessage(mrUser, Entries[i].Body)
+      else
+        Rev[High(Rev)] := MakeMessage(mrAssistant, Entries[i].Body);
+    end;
+    Cur := Entries[i].ParentId;
+    if Cur = '' then Break;
+    { constant-ish parent hop via the sorted id index }
+    b := Lookup.IndexOf(Cur);
+    if b >= 0 then i := PtrInt(Lookup.Objects[b])
+    else i := -1;
+    Inc(Depth);
+  end;
+  finally
+    Lookup.Free;
+  end;
+
+  if Length(Rev) = 0 then
+  begin
+    Err := 'no user/assistant text turns found on the active branch';
+    Exit;
+  end;
+  { reverse leaf-first -> root-first }
+  SetLength(Msgs, Length(Rev));
+  for i := 0 to High(Rev) do
+    Msgs[i] := Rev[High(Rev) - i];
+
+  SetLength(Ids, 1);
+  Ids[0] := SaveImported('', Msgs, Created, 'pi');
+  Result := 1;
+end;
+
+{ ---- OpenCode data directory ---- }
+
+{ List the plain files directly inside Dir into L (names only), sorted. }
+procedure ListFilesSorted(const Dir: string; L: TStringList);
+var
+  Sr: TSearchRec;
+begin
+  L.Clear;
+  if FindFirst(JoinPath(Dir, '*'), faAnyFile, Sr) = 0 then
+  try
+    repeat
+      if (Sr.Attr and faDirectory) = 0 then L.Add(Sr.Name);
+    until FindNext(Sr) <> 0;
+  finally
+    FindClose(Sr);
+  end;
+  L.Sort;
+end;
+
+{ List the subdirectory names directly inside Dir into L, sorted. }
+procedure ListDirsSorted(const Dir: string; L: TStringList);
+var
+  Sr: TSearchRec;
+begin
+  L.Clear;
+  if FindFirst(JoinPath(Dir, '*'), faAnyFile, Sr) = 0 then
+  try
+    repeat
+      if ((Sr.Attr and faDirectory) <> 0) and (Sr.Name <> '.') and (Sr.Name <> '..') then
+        L.Add(Sr.Name);
+    until FindNext(Sr) <> 0;
+  finally
+    FindClose(Sr);
+  end;
+  L.Sort;
+end;
+
+{ Concatenate the text of type="text" objects in a parts array. Frees nothing
+  of the caller's; frees its own item wrappers. }
+procedure AppendTextParts(Parts: TJsonArray; var Body: string);
+var
+  P: TJsonObject;
+  i: Integer;
+  T: string;
+begin
+  if Parts = nil then Exit;
+  for i := 0 to Parts.Count - 1 do
+  begin
+    P := Parts.ItemObject(i);
+    if P = nil then Continue;
+    try
+      if P.GetStr('type', '') = 'text' then
+      begin
+        T := P.GetStr('text', '');
+        if T = '' then Continue;
+        if Body <> '' then Body := Body + sLineBreak;
+        Body := Body + T;
+      end;
+    finally
+      P.Free;
+    end;
+  end;
+end;
+
+{ Text for one OpenCode message: newer builds keep it in per-part files under
+  any of part/<sessionID>/<msgID>/ or part/<msgID>/; older builds inline a
+  "parts" array in the message file; oldest use a plain "content" string. }
+function OpenCodeMessageText(const Root, SessId, MsgId: string;
+                             MsgObj: TJsonObject): string;
+var
+  Parts: TJsonArray;
+  PartDir, PFile: string;
+  Files: TStringList;
+  PObj: TJsonObject;
+  i: Integer;
+begin
+  Result := '';
+  { (1) inline parts (old) }
+  Parts := MsgObj.ChildArray('parts');
+  if Parts <> nil then
+  try
+    AppendTextParts(Parts, Result);
+  finally
+    Parts.Free;
+  end;
+  if Result <> '' then Exit;
+
+  { (2) per-part files (new) }
+  PartDir := JoinPath(JoinPath(JoinPath(Root, 'part'), SessId), MsgId);
+  if not DirectoryExists(PartDir) then
+    PartDir := JoinPath(JoinPath(Root, 'part'), MsgId);
+  if DirectoryExists(PartDir) then
+  begin
+    Files := TStringList.Create;
+    try
+      ListFilesSorted(PartDir, Files);
+      for i := 0 to Files.Count - 1 do
+      begin
+        PFile := JoinPath(PartDir, Files[i]);
+        try PObj := TJsonObject.Parse(ReadFileText(PFile)); except PObj := nil; end;
+        if PObj = nil then Continue;
+        try
+          { a part file is one part object; wrap it in a 1-element pass }
+          if PObj.GetStr('type', '') = 'text' then
+          begin
+            if Result <> '' then Result := Result + sLineBreak;
+            Result := Result + PObj.GetStr('text', '');
+          end;
+        finally
+          PObj.Free;
+        end;
+      end;
+    finally
+      Files.Free;
+    end;
+  end;
+  if Result <> '' then Exit;
+
+  { (3) plain content string (oldest) }
+  Result := MsgObj.GetStr('content', '');
+end;
+
+function ImportOpenCodeDir(const Path: string; out Ids: TImportedIds;
+                           out Err: string): Integer;
+var
+  Root, SessDir, MsgRoot, ProjDir, SessFile, SessId, Title, Role, Body: string;
+  Projects, SessFiles, MsgFiles: TStringList;
+  SessObj, TimeObj, MsgObj: TJsonObject;
+  Msgs: TMessageArray;
+  pi_, si, mi: Integer;
+  Created: Int64;
+begin
+  Result := 0;
+  SetLength(Ids, 0);
+  Err := '';
+
+  { Accept the data dir, its storage/ subdir, or any dir with session/ +
+    message/ inside. }
+  Root := ExcludeTrailingPathDelimiter(Path);
+  if DirectoryExists(JoinPath(Root, 'storage')) then
+    Root := JoinPath(Root, 'storage');
+  SessDir := JoinPath(Root, 'session');
+  MsgRoot := JoinPath(Root, 'message');
+  if not (DirectoryExists(SessDir) and DirectoryExists(MsgRoot)) then
+  begin
+    Err := 'not an OpenCode data dir (expected session/ and message/ under ' +
+           Root + ')';
+    Exit;
+  end;
+
+  Projects := TStringList.Create;
+  SessFiles := TStringList.Create;
+  MsgFiles := TStringList.Create;
+  try
+    { session/<projectHash>/<sessionID>.json -- but tolerate session files
+      sitting directly in session/ too (pre-project layouts). }
+    ListDirsSorted(SessDir, Projects);
+    Projects.Insert(0, '');   { '' = session/ itself }
+    for pi_ := 0 to Projects.Count - 1 do
+    begin
+      if Projects[pi_] = '' then ProjDir := SessDir
+      else ProjDir := JoinPath(SessDir, Projects[pi_]);
+      ListFilesSorted(ProjDir, SessFiles);
+      for si := 0 to SessFiles.Count - 1 do
+      begin
+        if LowerCase(ExtractFileExt(SessFiles[si])) <> '.json' then Continue;
+        SessFile := JoinPath(ProjDir, SessFiles[si]);
+        try SessObj := TJsonObject.Parse(ReadFileText(SessFile)); except SessObj := nil; end;
+        if SessObj = nil then Continue;
+        try
+          SessId := SessObj.GetStr('id', ChangeFileExt(SessFiles[si], ''));
+          Title  := SessObj.GetStr('title', '');
+          Created := 0;
+          TimeObj := SessObj.ChildObject('time');
+          if TimeObj <> nil then
+          try
+            Created := TimeObj.GetInt('created', 0);
+          finally
+            TimeObj.Free;
+          end;
+          { OpenCode stamps milliseconds; normalize to seconds. }
+          if Created > 100000000000 then Created := Created div 1000;
+        finally
+          SessObj.Free;
+        end;
+
+        { assemble the transcript from message/<sessionID>/*.json, ordered by
+          the sortable message-id file names }
+        if not DirectoryExists(JoinPath(MsgRoot, SessId)) then Continue;
+        ListFilesSorted(JoinPath(MsgRoot, SessId), MsgFiles);
+        SetLength(Msgs, 0);
+        for mi := 0 to MsgFiles.Count - 1 do
+        begin
+          if LowerCase(ExtractFileExt(MsgFiles[mi])) <> '.json' then Continue;
+          try
+            MsgObj := TJsonObject.Parse(
+              ReadFileText(JoinPath(JoinPath(MsgRoot, SessId), MsgFiles[mi])));
+          except
+            MsgObj := nil;
+          end;
+          if MsgObj = nil then Continue;
+          try
+            Role := LowerCase(MsgObj.GetStr('role', ''));
+            if (Role <> 'user') and (Role <> 'assistant') then Continue;
+            Body := OpenCodeMessageText(Root, SessId,
+              MsgObj.GetStr('id', ChangeFileExt(MsgFiles[mi], '')), MsgObj);
+            if Trim(Body) = '' then Continue;
+            if Role = 'user' then PushMsg(Msgs, mrUser, Body)
+            else                  PushMsg(Msgs, mrAssistant, Body);
+          finally
+            MsgObj.Free;
+          end;
+        end;
+
+        if Length(Msgs) = 0 then Continue;
+        SetLength(Ids, Length(Ids) + 1);
+        Ids[High(Ids)] := SaveImported(Title, Msgs, Created, 'opencode');
+        Inc(Result);
+      end;
+    end;
+  finally
+    MsgFiles.Free;
+    SessFiles.Free;
+    Projects.Free;
+  end;
+
+  if Result = 0 then
+    Err := 'no importable OpenCode sessions found under ' + Root
+  else
+    LogInfo('session import: %d session(s) from opencode dir %s', [Result, Root]);
+end;
+
 { ---- PasClaw native export ---- }
 
 function ImportNative(const Text: string; out Ids: TImportedIds;
@@ -492,12 +936,14 @@ begin
   case F of
     ifChatGPT:     Result := ImportChatGPT(Text, Ids, Err);
     ifClaudeJSONL: Result := ImportClaudeJSONL(Text, Ids, Err);
+    ifPiJSONL:     Result := ImportPiJSONL(Text, Ids, Err);
     ifNative:      Result := ImportNative(Text, Ids, Err);
   else
     begin
       Result := 0;
       Err := 'unrecognized format -- expected ChatGPT conversations.json, a ' +
-             'Claude Code .jsonl transcript, or a PasClaw session export';
+             'Claude Code / Pi / OpenClaw .jsonl transcript, or a PasClaw ' +
+             'session export';
     end;
   end;
   if Result > 0 then

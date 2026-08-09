@@ -40,8 +40,9 @@ begin
   PrintLn('  show <id>           show one session: metadata + last N messages');
   PrintLn('  delete <id>         remove the session file from disk');
   PrintLn('  export <id> [--md]  print the session to stdout (raw JSON, or Markdown with --md)');
-  PrintLn('  import <file>       import chats: ChatGPT conversations.json, a Claude Code');
-  PrintLn('                      .jsonl transcript, or a PasClaw session export (auto-detected)');
+  PrintLn('  import <path>       import chats: ChatGPT conversations.json, a Claude Code /');
+  PrintLn('                      Pi / OpenClaw .jsonl transcript, a PasClaw session export');
+  PrintLn('                      (auto-detected), or an OpenCode data DIRECTORY');
 end;
 
 function FormatAge(Now_, Then_: Int64): string;
@@ -189,13 +190,20 @@ var
   Ids: TImportedIds;
   N, i: Integer;
 begin
-  if not FileExists(Path) then
+  { A directory is an OpenCode data dir (sessions fragmented across per-message
+    files); a file is a ChatGPT / Claude Code / Pi / OpenClaw / PasClaw export. }
+  if DirectoryExists(Path) then
+    N := ImportOpenCodeDir(Path, Ids, Err)
+  else if FileExists(Path) then
   begin
-    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'no such file: ' + Path);
+    Text := ReadFileText(Path);
+    N := ImportSessions(Text, Ids, Err);
+  end
+  else
+  begin
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'no such file or directory: ' + Path);
     Exit(1);
   end;
-  Text := ReadFileText(Path);
-  N := ImportSessions(Text, Ids, Err);
   if N = 0 then
   begin
     if Err <> '' then PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + Err)
