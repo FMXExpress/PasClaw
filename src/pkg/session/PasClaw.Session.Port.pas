@@ -543,8 +543,8 @@ begin
         Entries[n].Id       := Obj.GetStr('id', '');
         Entries[n].ParentId := Obj.GetStr('parentId', '');
         b := Lookup.IndexOf(Entries[n].Id);
-        if b >= 0 then Lookup.Objects[b] := TObject(PtrInt(n))   { last wins }
-        else Lookup.AddObject(Entries[n].Id, TObject(PtrInt(n)));
+        if b >= 0 then Lookup.Objects[b] := TObject(NativeInt(n))   { last wins }
+        else Lookup.AddObject(Entries[n].Id, TObject(NativeInt(n)));
         Entries[n].IsMsg    := False;
         Entries[n].Role     := '';
         Entries[n].Body     := '';
@@ -626,7 +626,7 @@ begin
     if Cur = '' then Break;
     { constant-ish parent hop via the sorted id index }
     b := Lookup.IndexOf(Cur);
-    if b >= 0 then i := PtrInt(Lookup.Objects[b])
+    if b >= 0 then i := NativeInt(Lookup.Objects[b])
     else i := -1;
     Inc(Depth);
   end;
