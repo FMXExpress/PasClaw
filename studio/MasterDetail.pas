@@ -1910,7 +1910,13 @@ procedure TMasterDetailForm.ApplyChatMeasure;
   deciding the same thing, both blind to the padding. The user's screenshots
   showed the result: the column started at the left pad and overflowed the
   right one. Margins on the flow itself cannot disagree with its width, and
-  the other two call sites now come here instead of doing their own maths. }
+  the other two call sites now come here instead of doing their own maths.
+
+  The cap follows the sessions drawer. Hiding the drawer is the operator
+  saying "give this conversation the room" -- so the measure yields and the
+  column runs the full width. With the drawer open the classic reading
+  measure holds. Transcript and composer take the SAME pad either way; they
+  can never disagree about how wide the chat is again. }
 var
   Avail: Single;
   Pad: Single;
@@ -1920,7 +1926,10 @@ begin
   Avail := FChatScroll.Width;
   if Avail <= 0 then
     Exit;
-  Pad := (Avail - CHAT_MAX_W) / 2;
+  if FSidebarVisible then
+    Pad := (Avail - CHAT_MAX_W) / 2
+  else
+    Pad := 0;
   if Pad < 0 then
     Pad := 0;
   SetControlMargins(FChatFlow, Pad, 0, Pad, 0);
@@ -2867,6 +2876,18 @@ begin
   end;
   ApplyResponsiveLayout;
   SaveLocalSettings;
+  { The measure just changed regimes (drawer visibility drives the cap), but
+    right now FChatScroll.Width is still the PRE-toggle value -- FMX applies
+    the new alignment later this frame. Re-measure and re-render once the
+    layout has settled; bubbles bake their width in at render time, so a
+    measure change without a re-render leaves every existing bubble at the
+    old width. }
+  TThread.ForceQueue(nil,
+    procedure
+    begin
+      ApplyChatMeasure;
+      RenderChat;
+    end);
 end;
 
 procedure TMasterDetailForm.BuildInterface;
