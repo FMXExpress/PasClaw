@@ -23,7 +23,20 @@ PASS=0
 FAIL=0
 SESSION=""
 TMP="$(mktemp -d)"
-trap 'rm -rf "$TMP"' EXIT
+IMPORTED=""          # ids created by the import checks, removed on exit
+
+# Clean up everything this run created. Without it each invocation would leave
+# three permanent conversations behind in the workspace and the Studio sidebar
+# -- unacceptable for something advertised as a repeatable CI / deploy gate.
+cleanup() {
+  local id
+  for id in $IMPORTED; do
+    curl -sS --max-time "${PASCLAW_SMOKE_TIMEOUT:-8}" -o /dev/null \
+      -X DELETE "${AUTH[@]}" "$BASE/v1/sessions/$id" 2>/dev/null
+  done
+  rm -rf "$TMP"
+}
+trap cleanup EXIT
 
 if [ -n "$TOKEN" ]; then AUTH=(-H "Authorization: Bearer $TOKEN"); else AUTH=(); fi
 
@@ -40,6 +53,14 @@ note() { printf '  \033[2m%s\033[0m\n' "$*"; }
 
 # check <description> <condition-string-found> <haystack>
 has() { case "$3" in *"$2"*) ok "$1";; *) bad "$1 (missing: $2)";; esac; }
+
+# remember the session ids an import returned so cleanup can remove them
+remember() {
+  local ids
+  ids="$(printf '%s' "$1" | tr ',' '\n' | sed -n 's/.*"\([0-9]\{8\}T[0-9]\{6\}-[0-9a-f]*\)".*/\1/p')"
+  [ -n "$ids" ] && IMPORTED="$IMPORTED $ids"
+  return 0
+}
 
 api() { # api METHOD PATH [BODY]
   local m="$1" p="$2" b="${3:-}"
@@ -97,10 +118,12 @@ else bad "export returned nothing"; fi
 R="$(curl -sS --max-time "$MAXT" -X POST "${AUTH[@]}" -H 'Content-Type: application/json' \
       --data-binary @"$TMP/exp.json" "$BASE/v1/sessions/import")"
 has "re-import of our own export succeeds" '"imported"' "$R"
+remember "$R"
 
 CG='[{"title":"cg smoke","create_time":1700000000,"current_node":"a1","mapping":{"r":{"id":"r","message":null,"parent":null,"children":["u1"]},"u1":{"id":"u1","message":{"author":{"role":"user"},"content":{"content_type":"text","parts":["from chatgpt"]}},"parent":"r","children":["a1"]},"a1":{"id":"a1","message":{"author":{"role":"assistant"},"content":{"content_type":"text","parts":["reply"]}},"parent":"u1","children":[]}}}]'
 R="$(api POST /v1/sessions/import "$CG")"
 has "ChatGPT conversations.json imports" '"imported"' "$R"
+remember "$R"
 
 printf '%s\n' \
   '{"type":"summary","summary":"claude smoke","leafUuid":"x"}' \
@@ -110,6 +133,7 @@ printf '%s\n' \
 R="$(curl -sS --max-time "$MAXT" -X POST "${AUTH[@]}" -H 'Content-Type: application/json' \
       --data-binary @"$TMP/cc.jsonl" "$BASE/v1/sessions/import")"
 has "Claude Code .jsonl imports" '"imported"' "$R"
+remember "$R"
 
 R="$(api POST /v1/sessions/import 'not a chat export at all')"
 has "garbage import is refused with a clear error" 'unrecognized' "$R"
@@ -132,9 +156,12 @@ C="$(code POST /mcp '{"jsonrpc":"2.0","id":4,"method":"tools/list","params":{"_m
 [ "$C" = "400" ] && ok "unsupported version -> HTTP 400" || bad "unsupported version -> $C (expected 400)"
 
 say "6. tool surface the Studio tabs rely on"
+# These routes are unconditionally registered and their list handlers return
+# 200 even with no data, so a 404 means the tab's contract is GONE -- treating
+# it as acceptable would let the gate pass on a regressed gateway.
 for ep in /v1/models /v1/skills /v1/mcp/tools /v1/cron /v1/memory /v1/kb; do
   C="$(code GET "$ep")"
-  case "$C" in 200|404) ok "GET $ep -> $C";; *) bad "GET $ep -> $C";; esac
+  [ "$C" = "200" ] && ok "GET $ep -> 200" || bad "GET $ep -> $C (expected 200)"
 done
 # /v1/logs streams (a plain GET follows the log and never closes), so a short
 # cap that returns nothing is the CORRECT outcome here, not a failure.
