@@ -3485,7 +3485,7 @@ end;
 procedure TGatewayServer.HandleSessionsImportDir(ARequest: TIdHTTPRequestInfo;
                                                  AResp: TIdHTTPResponseInfo);
 var
-  Body, DirPath, Err: string;
+  Body, DirPath, Err, Reason: string;
   Ids: TImportedIds;
   N, i: Integer;
   Req, Root: TJsonObject;
@@ -3507,6 +3507,18 @@ begin
   begin
     WriteJSON(AResp, 400,
       '{"error":"import-dir needs a "path" (an OpenCode data directory on the gateway host)"}');
+    Exit;
+  end;
+  { The gateway's invariant is that an HTTP client cannot read arbitrary host
+    paths -- every /v1/fs handler gates on CanReadPathHTTP first. This route
+    reads message files and PERSISTS them as sessions the same client can then
+    fetch back, so skipping the gate would hand any caller (and, when no token
+    is configured, any unauthenticated caller) an arbitrary-file-read
+    primitive. Gate BEFORE the existence check so the response can't be used
+    to probe for paths outside the sandbox either. }
+  if not CanReadPathHTTP(DirPath, Reason) then
+  begin
+    WriteJSON(AResp, 403, '{"error":"' + JsonEscape(Reason) + '"}');
     Exit;
   end;
   if not DirectoryExists(DirPath) then
