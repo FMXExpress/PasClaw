@@ -735,10 +735,6 @@ const
   CHAT_BODY_M = 10;
   CHAT_FLOW_PAD = 8;
   CHAT_TEXT_INSET = CHAT_BODY_M + CHAT_FLOW_PAD;
-  { The transcript scrolls and the composer does not, so the scroll bar's
-    gutter is width the transcript loses and the composer would otherwise
-    keep -- the composer has to give it back to end on the same x. }
-  CHAT_SCROLLBAR_W = 16;
   { the "narrow window" breakpoint -- named because UpdateClearAttachments
     has to agree with ApplyResponsiveLayout about what narrow means }
   UI_NARROW_W = 560;
@@ -1996,7 +1992,15 @@ procedure TMasterDetailForm.ApplyChatMeasure;
   same x. Setting "the same pad" on both, as the first version did, is not
   the same thing: the transcript already carried CHAT_TEXT_INSET that the
   composer did not, so the composer always ran 18px wider on the left and
-  18px + the scroll bar wider on the right. }
+  18px + the scroll bar wider on the right.
+
+  What is deliberately NOT compensated for is the scroll bar's own gutter.
+  Whether it costs the transcript any width depends on it being shown at
+  all, so a fixed allowance is wrong whenever it is absent -- and wrong in
+  the direction that makes the composer narrower than the column above it.
+  The left edges are exact at every width; the right edge of the transcript
+  sits inside the scroll gutter, which is what scrolling content looks
+  like. }
 var
   Avail: Single;
   FlowMargin: Single;
@@ -2036,9 +2040,14 @@ begin
   end;
   SetControlMargins(FChatFlow, FlowMargin, 0, FlowMargin, 0);
   FChatFlow.Width := Max(CHAT_MIN_W, FChatScroll.Width - FlowMargin * 2);
-  { vertical padding preserved; the right side gives back the scroll gutter }
+  { Vertical padding preserved. No scroll-gutter compensation here: whether
+    that gutter costs the transcript any width depends on the scroll bar
+    actually being shown, so a fixed allowance is wrong exactly half the
+    time -- and when it is wrong it makes the composer NARROWER than the
+    column, which reads as a defect. A gutter outside the text column is
+    what scrolling content looks like everywhere. }
   if FComposerLayout <> nil then
-    SetControlPadding(FComposerLayout, Pad, 6, Pad + CHAT_SCROLLBAR_W, 8);
+    SetControlPadding(FComposerLayout, Pad, 6, Pad, 8);
 end;
 
 procedure TMasterDetailForm.ApplyButtonIcon(Button: TButton);
@@ -21917,7 +21926,11 @@ var
 
     AvailableWidth := 640;
     if (FChatFlow <> nil) and (FChatFlow.Width > 0) then
-      AvailableWidth := FChatFlow.Width
+      { INNER width. The flow's own padding is not usable row space, so a row
+        sized to the OUTER width does not fit its content area -- the flow
+        then lays it out oversized and the right-aligned user card runs past
+        the measured column into the scroll box's clipped edge. }
+      AvailableWidth := FChatFlow.Width - CHAT_FLOW_PAD * 2
     else if (FChatScroll <> nil) and (FChatScroll.Width > 0) then
       AvailableWidth := FChatScroll.Width
     else if (FChatList <> nil) and (FChatList.Width > 0) then
@@ -21965,8 +21978,8 @@ var
       TranscriptRow := TLayout.Create(FChatFlow);
       TranscriptRow.Parent := FChatFlow;
       TranscriptRow.Align := TAlignLayout.None;
-      { full flow width: the 6px it used to surrender put the right-hand
-        (user) bubbles off the column ApplyChatMeasure just measured }
+      { AvailableWidth is already the flow's inner width, so the row fills
+        the measured column exactly -- no arbitrary allowance either way }
       TranscriptRow.Width := Max(CHAT_MIN_W, AvailableWidth);
       TranscriptRow.Height := RowHeight;
       TranscriptRow.TagString := Index.ToString;
