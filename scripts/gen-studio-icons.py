@@ -57,6 +57,16 @@ STYLES = [
     ("studio/PasclawLight.style", "xFF4A5563", "claBlack",  "xFF0969DA"),
 ]
 
+# Lookups with NO Embarcadero platform equivalent -- they exist only because
+# this script writes them into the bundled books. MasterDetail.pas must treat
+# them as unavailable when no book is loaded (otherwise an icon-only button
+# blanks its caption and renders empty on the fallback path), so it carries the
+# same list as PASCLAW_ONLY_LOOKUPS and --check verifies the two agree.
+CUSTOM = {"SunToolButton", "MoonToolButton",
+          "ImportToolButton", "ExportToolButton"}
+
+PAS_SOURCE = "studio/MasterDetail.pas"
+
 # legacy marker lines from the first version; stripped on sight (migration)
 LEGACY_MARKERS = {
     "{ --- generated icon button styles: scripts/gen-studio-icons.py --- }",
@@ -148,6 +158,17 @@ _SUN = [ring(0.5, 0.5, 0.30, 0.19)] + [
 _MOON = [arc(0.5, 0.5, 0.42, 50.0, 310.0) +
          arc(0.78, 0.5, 0.322, 268.0, 92.0)]
 
+# import/export: a tray with an arrow entering or leaving it
+_TRAY = [(0.06, 0.60), (0.20, 0.60), (0.20, 0.80), (0.80, 0.80),
+         (0.80, 0.60), (0.94, 0.60), (0.94, 0.96), (0.06, 0.96)]
+_ARROW_INTO = [(0.42, 0.02), (0.58, 0.02), (0.58, 0.34), (0.76, 0.34),
+               (0.50, 0.66), (0.24, 0.34), (0.42, 0.34)]
+
+# pager ends: a double chevron
+_CHEV_L = [[(x, 0.50), (x + 0.26, 0.06), (x + 0.40, 0.14),
+            (x + 0.19, 0.50), (x + 0.40, 0.86), (x + 0.26, 0.94)]
+           for x in (0.06, 0.48)]
+
 # ------------------------------------------------------------------ glyphs --
 # Each entry: lookup name -> list of closed subpaths.
 
@@ -179,6 +200,11 @@ GLYPHS = {
     # lens ring + handle
     "SunToolButton":        _SUN,
     "MoonToolButton":       _MOON,
+
+    "ImportToolButton":     [_TRAY, _ARROW_INTO],
+    "ExportToolButton":     [_TRAY, flip_y([(x, y + 0.36) for x, y in _ARROW_INTO])],
+    "PriorToolButton":      _CHEV_L,
+    "NextToolButton":       [flip_x(s) for s in _CHEV_L],
 
     "SearchToolButton":     [ring(0.42, 0.40, 0.36, 0.23),
                              [(0.60, 0.66), (0.70, 0.56),
@@ -415,9 +441,41 @@ def build(path, fill, hover, focus):
     return "\n".join(lines[:end + 1] + generated + lines[end + 1:])
 
 
+def check_custom_list():
+    """PASCLAW_ONLY_LOOKUPS in the Pascal source must equal CUSTOM."""
+    try:
+        src = open(PAS_SOURCE, encoding="utf-8", errors="replace").read()
+    except OSError as exc:
+        print("%s: cannot read (%s)" % (PAS_SOURCE, exc))
+        return False
+    m = re.search(r"PASCLAW_ONLY_LOOKUPS:\s*array\[[^\]]*\]\s*of\s*string\s*=\s*\(([^)]*)\)",
+                  src, re.S)
+    if not m:
+        print("%s: PASCLAW_ONLY_LOOKUPS not found" % PAS_SOURCE)
+        return False
+    listed = set(re.findall(r"'([^']+)'", m.group(1)))
+    want = {n.lower() for n in CUSTOM}
+    if listed != want:
+        print("%s: PASCLAW_ONLY_LOOKUPS disagrees with this script's CUSTOM set"
+              % PAS_SOURCE)
+        for n in sorted(want - listed):
+            print("    missing from Pascal: %s" % n)
+        for n in sorted(listed - want):
+            print("    not a custom lookup: %s" % n)
+        return False
+    unknown = CUSTOM - set(GLYPHS)
+    if unknown:
+        print("CUSTOM names with no glyph: %s" % ", ".join(sorted(unknown)))
+        return False
+    print("%s: PASCLAW_ONLY_LOOKUPS matches (%d custom)" % (PAS_SOURCE, len(want)))
+    return True
+
+
 def main(argv):
     check = "--check" in argv
     bad = 0
+    if not check_custom_list():
+        bad += 1
     for path, fill, hover, focus in STYLES:
         want = build(path, fill, hover, focus)
         if not validate(want, path):

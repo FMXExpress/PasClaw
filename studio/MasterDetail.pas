@@ -729,6 +729,14 @@ const
   { the "narrow window" breakpoint -- named because UpdateClearAttachments
     has to agree with ApplyResponsiveLayout about what narrow means }
   UI_NARROW_W = 560;
+  (* StyleLookups that exist ONLY in the bundled Pasclaw style books. Every
+     other name ApplyButtonIcon uses comes from Embarcadero's platform table,
+     so it resolves against the platform style too; these have no platform
+     equivalent and must not be trusted when no book is loaded.
+     scripts/gen-studio-icons.py --check verifies this list against the
+     generator's own CUSTOM set, so the two cannot drift. *)
+  PASCLAW_ONLY_LOOKUPS: array[0..3] of string = (
+    'exporttoolbutton', 'importtoolbutton', 'moontoolbutton', 'suntoolbutton');
   WF_IO_W = 104;
   WF_GUTTER = 128;
   WIN_CREATE_ALWAYS = 2;
@@ -1843,8 +1851,13 @@ function TMasterDetailForm.StyleLookupExists(const LookupName: string): Boolean;
    lookup that may not exist: probe first.
 
    StyleBook = nil means no custom book is applied, so the platform style is
-   active and its icon resources are present. With a custom book applied, look
-   in the book's own STYLE GRAPH.
+   active and its PLATFORM icon resources are present -- but only those.
+   PASCLAW_ONLY_LOOKUPS have no platform equivalent (there is no theme-toggle
+   or tray-arrow glyph in Embarcadero's table), so on the fallback path -- a
+   style file missing or failing to load -- they must answer False or the
+   theme and import/export buttons would blank their captions and render as
+   empty controls. With a custom book applied, look in the book's own STYLE
+   GRAPH.
 
    Not in Root: that is TFmxObject.Root, the scene the book belongs to. These
    books are created with the form as owner and no parent, so Root is nil and
@@ -1885,7 +1898,8 @@ begin
   if LookupName = '' then
     Exit(False);
   if StyleBook = nil then
-    Exit(True);            { platform style in use -- its icons exist }
+    { platform style in use: its own icons exist, ours do not }
+    Exit(not MatchText(LowerCase(LookupName), PASCLAW_ONLY_LOOKUPS));
   { Key on the book, not on FDarkStyleEnabled: they agree today, but a cache
     keyed off a second opinion is exactly how these drift. }
   Key := IntToHex(NativeInt(StyleBook), 16) + '|' + LowerCase(LookupName);
@@ -2063,6 +2077,15 @@ begin
   else if SameText(Cap, 'Forget')  then begin Lookup := 'trashtoolbutton'; IconOnly := True; HintText := 'Forget this fact'; end
   else if Cap = 'X'                then begin Lookup := 'trashtoolbutton'; IconOnly := True; HintText := 'Remove'; end
   else if SameText(Cap, 'Up')      then begin Lookup := 'arrowuptoolbutton'; IconOnly := True; HintText := 'Up one directory'; end
+  else if SameText(Cap, 'Import')  then begin Lookup := 'importtoolbutton'; IconOnly := True; HintText := 'Import a session export file'; end
+  else if SameText(Cap, 'Export')  then begin Lookup := 'exporttoolbutton'; IconOnly := True; HintText := 'Export'; end
+  else if SameText(Cap, 'Import Dir') then
+    begin Lookup := 'organizetoolbutton'; IconOnly := True; HintText := 'Import a session directory (OpenCode)'; end
+  { hex viewer pager }
+  else if SameText(Cap, 'First')   then begin Lookup := 'priortoolbutton';  IconOnly := True; HintText := 'First page'; end
+  else if SameText(Cap, 'Last')    then begin Lookup := 'nexttoolbutton';   IconOnly := True; HintText := 'Last page'; end
+  else if SameText(Cap, 'Prev')    then begin Lookup := 'arrowlefttoolbutton';  IconOnly := True; HintText := 'Previous page'; end
+  else if SameText(Cap, 'Next')    then begin Lookup := 'arrowrighttoolbutton'; IconOnly := True; HintText := 'Next page'; end
   { hint-only entries: these stay text (state/disclosure controls), but the
     caption alone does not explain what they disclose }
   else if SameText(Cap, 'Params +') then HintText := 'Show sampling parameters'
@@ -2978,6 +3001,7 @@ var
   NativeBar: TLayout;
   NavHost: TLayout;
   SessionButtons: TLayout;
+  WorkspaceLabel: TLabel;
   SettingsTab: TTabItem;
   SettingsTabs: TTabControl;
   SearchLabel: TLabel;
@@ -3355,6 +3379,16 @@ begin
   NativeBar.Height := 38;
   SetControlMargins(NativeBar, 12, 0, 12, 6);
 
+  { name the row: three unrelated-looking buttons floating in a toolbar read
+    as leftovers; under a label they read as the workspace section }
+  WorkspaceLabel := TLabel.Create(Self);
+  WorkspaceLabel.Parent := NativeBar;
+  WorkspaceLabel.Align := TAlignLayout.Left;
+  WorkspaceLabel.Width := 160;
+  WorkspaceLabel.Text := 'Workspace backup';
+  WorkspaceLabel.TextSettings.VertAlign := TTextAlign.Center;
+  StyleLabel(WorkspaceLabel, UI_CHROME_TEXT, 11, True);
+
   Btn := TButton.Create(Self);
   Btn.Parent := NativeBar;
   Btn.Align := TAlignLayout.Right;
@@ -3422,7 +3456,9 @@ begin
 
   SettingsTab := TTabItem.Create(Self);
   SettingsTab.Parent := SettingsTabs;
-  SettingsTab.Text := 'Config';
+  { 'Advanced', not 'Config': it is the raw gateway JSON, and naming it
+    plainly keeps casual visitors in the Gateway/Providers forms }
+  SettingsTab.Text := 'Advanced';
   BuildConfigEditorPanel(SettingsTab);
   SettingsTabs.TabIndex := 0;
 
@@ -14534,8 +14570,9 @@ begin
   if FCronDetailMemo <> nil then
     FCronDetailMemo.Lines.Text := 'Enter an id, cron spec, skill, args, and optional channel.';
   if FPaneMemos.TryGetValue('cron', Memo) then
-    Memo.Lines.Text := 'New Cron Job' + sLineBreak + '============' +
-      sLineBreak + sLineBreak + 'Enter an id, cron spec, skill, args, and optional channel.';
+    { the title label above this memo already says "New Cron Job" -- an
+      ASCII-underlined repeat of it inside the memo is terminal dressing }
+    Memo.Lines.Text := 'Enter an id, cron spec, skill, args, and optional channel.';
   SetStatus('new cron job');
 end;
 
