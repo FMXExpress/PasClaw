@@ -545,6 +545,7 @@ type
     procedure SaveChatParams(const SessionId: string);
     procedure SaveLocalSettings;
     procedure SavePresetClick(Sender: TObject);
+    procedure ChatCodeCopyClick(Sender: TObject);
     procedure SendClick(Sender: TObject);
     procedure SteerActiveTurn(const SteerText: string);
     procedure SessionExportClick(Sender: TObject);
@@ -673,6 +674,8 @@ const
   UI_TEXT = $FFE6EAF0;
   UI_MUTED = $FF9AA4B2;
   UI_WARN = $FFE5B454;
+  { Bullet glyph per nesting depth, so sub-lists read as sub-lists. }
+  BULLET_GLYPHS: array[0..2] of string = (#$2022, #$25E6, #$25AA);
   WIN_CREATE_ALWAYS = 2;
   WIN_CREATE_NO_WINDOW = $08000000;
   WIN_FILE_ATTRIBUTE_NORMAL = $00000080;
@@ -1068,6 +1071,68 @@ begin
     Result := Trim(Text.ToString);
   finally
     Text.Free;
+  end;
+end;
+
+function MarkdownNeedsBlockRenderer(const Text: string): Boolean;
+{ True when a body contains any construct AddBodyTextBlock / RenderBodyBlocks
+  can lay out. Scans lines with the same rules the renderer applies, instead
+  of sniffing a hand-listed set of substrings -- an inline predicate drifts
+  out of sync with the parser the moment a new block type is added (which is
+  exactly what happened: #### / + items / "2." / "1)" / *** rules parsed but
+  never reached the block renderer). }
+var
+  I: Integer;
+  LineText: string;
+  Lines: TArray<string>;
+  Body: string;
+  K: Integer;
+  Digits: Integer;
+
+  function OnlyRuleChars(const Value, Ch: string): Boolean;
+  begin
+    Result := (Value <> '') and
+      (StringReplace(Value, Ch, '', [rfReplaceAll]) = '');
+  end;
+
+begin
+  Result := False;
+  if Text = '' then
+    Exit;
+  { inline constructs anywhere in the body }
+  if (Pos('`', Text) > 0) or (Pos('](', Text) > 0) or
+    (Pos('**', Text) > 0) or (Pos('~~', Text) > 0) then
+    Exit(True);
+
+  Lines := Text.Replace(#13#10, #10).Replace(#13, #10).Split([#10]);
+  for I := 0 to Length(Lines) - 1 do
+  begin
+    LineText := Trim(Lines[I]);
+    if LineText = '' then
+      Continue;
+    { headings (any level), bullets (-, *, +), blockquotes, table rows }
+    if StartsText('# ', LineText) or StartsText('## ', LineText) or
+      StartsText('### ', LineText) or StartsText('#### ', LineText) or
+      StartsText('- ', LineText) or StartsText('* ', LineText) or
+      StartsText('+ ', LineText) or StartsText('>', LineText) or
+      (Pos('|', LineText) > 0) then
+      Exit(True);
+    { horizontal rules: --- / *** / ___ }
+    Body := StringReplace(LineText, ' ', '', [rfReplaceAll]);
+    if (Length(Body) >= 3) and (OnlyRuleChars(Body, '-') or
+      OnlyRuleChars(Body, '*') or OnlyRuleChars(Body, '_')) then
+      Exit(True);
+    { ordered items: any number, '.' or ')' }
+    Digits := 0;
+    K := 1;
+    while (K <= Length(LineText)) and CharInSet(LineText[K], ['0'..'9']) do
+    begin
+      Inc(K);
+      Inc(Digits);
+    end;
+    if (Digits > 0) and (K + 1 <= Length(LineText)) and
+      CharInSet(LineText[K], ['.', ')']) and (LineText[K + 1] = ' ') then
+      Exit(True);
   end;
 end;
 
@@ -11559,6 +11624,31 @@ begin
     end);
 end;
 
+procedure TMasterDetailForm.ChatCodeCopyClick(Sender: TObject);
+{ Copy button on a chat code block. The code rides in the button's TagString
+  so each block needs no per-instance handler. }
+var
+  Clipboard: IFMXClipboardService;
+  CodeText: string;
+begin
+  CodeText := '';
+  if Sender is TButton then
+    CodeText := TButton(Sender).TagString;
+  if Trim(CodeText) = '' then
+  begin
+    SetStatus('nothing to copy');
+    Exit;
+  end;
+  if TPlatformServices.Current.SupportsPlatformService(IFMXClipboardService,
+    IInterface(Clipboard)) then
+  begin
+    Clipboard.SetClipboard(TValue.From<string>(CodeText));
+    SetStatus('code copied');
+  end
+  else
+    SetStatus('clipboard service unavailable');
+end;
+
 procedure TMasterDetailForm.WorkflowRunResultCopyClick(Sender: TObject);
 var
   Clipboard: IFMXClipboardService;
@@ -19994,8 +20084,44 @@ var
     end;
 
     function CleanInlineMarkdown(const Value: string): string;
+    var
+      Close: Integer;
+      LinkEnd: Integer;
+      Rest: string;
+      Start: Integer;
+      Url: string;
     begin
-      Result := StringReplace(Value, '`', '', [rfReplaceAll]);
+      { Markdown links: FMX TLabel has no rich text, so render "text (url)"
+        rather than dropping the destination the way a bare strip would.
+        Image links keep the same shape minus the leading '!'. }
+      Result := Value;
+      Start := Pos('[', Result);
+      while Start > 0 do
+      begin
+        Close := PosEx(']', Result, Start + 1);
+        if (Close = 0) or (Close + 1 > Length(Result)) or
+          (Result[Close + 1] <> '(') then
+        begin
+          Start := PosEx('[', Result, Start + 1);
+          Continue;
+        end;
+        LinkEnd := PosEx(')', Result, Close + 2);
+        if LinkEnd = 0 then
+          Break;
+        Url := Trim(Copy(Result, Close + 2, LinkEnd - Close - 2));
+        Rest := Copy(Result, Start + 1, Close - Start - 1);
+        if (Start > 1) and (Result[Start - 1] = '!') then
+          Dec(Start);
+        if (Url = '') or SameText(Url, Rest) then
+          Result := Copy(Result, 1, Start - 1) + Rest +
+            Copy(Result, LinkEnd + 1, MaxInt)
+        else
+          Result := Copy(Result, 1, Start - 1) + Rest + ' (' + Url + ')' +
+            Copy(Result, LinkEnd + 1, MaxInt);
+        Start := PosEx('[', Result, Start + Length(Rest));
+      end;
+      Result := StringReplace(Result, '~~', '', [rfReplaceAll]);
+      Result := StringReplace(Result, '`', '', [rfReplaceAll]);
       Result := StringReplace(Result, '**', '', [rfReplaceAll]);
       Result := StringReplace(Result, '__', '', [rfReplaceAll]);
     end;
@@ -20029,6 +20155,157 @@ var
         StyleLabel(SegmentLabel, UI_TEXT, Size, Bold);
     end;
 
+    { A horizontal rule (--- / *** / ___). }
+    procedure AddRuleBlock;
+    var
+      Rule: TRectangle;
+    begin
+      Rule := TRectangle.Create(BodyHost);
+      Rule.Parent := BodyHost;
+      Rule.Align := TAlignLayout.Top;
+      Rule.Height := 1;
+      Rule.HitTest := False;
+      StyleChromeRect(Rule, UI_BORDER, UI_BORDER, 0, False);
+      SetControlMargins(Rule, 0, 8, 0, 8);
+      ContentHeight := ContentHeight + 17;
+    end;
+
+    { A blockquote: accent bar on the left, muted text beside it. }
+    procedure AddQuoteBlock(const Text: string);
+    var
+      Bar: TRectangle;
+      Host: TLayout;
+      Lines: Integer;
+      QuoteLabel: TLabel;
+      QuoteHeight: Single;
+    begin
+      if Trim(Text) = '' then
+        Exit;
+      Lines := EstimateTextLines(Text, Max(20, CharsPerLine - 4));
+      QuoteHeight := Max(28, Lines * 20 + 12);
+      Host := TLayout.Create(BodyHost);
+      Host.Parent := BodyHost;
+      Host.Align := TAlignLayout.Top;
+      Host.Height := QuoteHeight;
+      SetControlMargins(Host, 0, 6, 0, 6);
+
+      Bar := TRectangle.Create(Host);
+      Bar.Parent := Host;
+      Bar.Align := TAlignLayout.Left;
+      Bar.Width := 3;
+      Bar.HitTest := False;
+      StyleChromeRect(Bar, UI_ACCENT_DIM, UI_ACCENT_DIM, 0, False);
+
+      QuoteLabel := TLabel.Create(Host);
+      QuoteLabel.Parent := Host;
+      QuoteLabel.Align := TAlignLayout.Client;
+      QuoteLabel.HitTest := False;
+      QuoteLabel.Text := CleanInlineMarkdown(Trim(Text));
+      QuoteLabel.WordWrap := True;
+      QuoteLabel.TextSettings.VertAlign := TTextAlign.Leading;
+      SetControlMargins(QuoteLabel, 10, 0, 0, 0);
+      StyleLabel(QuoteLabel, UI_MUTED, 12, False);
+      ContentHeight := ContentHeight + QuoteHeight + 12;
+    end;
+
+    { A markdown table: one row layout per line, equal-width cells, bold
+      accent header. Cells are laid out left-to-right so columns line up
+      without relying on a monospace font. }
+    procedure AddTableBlock(Rows: TStrings);
+    var
+      CellLabel: TLabel;
+      CellText: string;
+      Cells: TArray<string>;
+      ColCount: Integer;
+      ColWidth: Single;
+      CharsPerCell: Integer;
+      C: Integer;
+      IsHeader: Boolean;
+      Panel: TRectangle;
+      R: Integer;
+      RowHeights: TArray<Single>;
+      RowHost: TLayout;
+      RowLines: Integer;
+      RowText: string;
+      TableHeight: Single;
+
+      function SplitRow(const Line: string): TArray<string>;
+      var
+        Body: string;
+      begin
+        Body := Trim(Line);
+        if StartsText('|', Body) then
+          Body := Copy(Body, 2, MaxInt);
+        if EndsText('|', Body) then
+          Body := Copy(Body, 1, Length(Body) - 1);
+        Result := Body.Split(['|']);
+      end;
+
+    begin
+      if (Rows = nil) or (Rows.Count = 0) then
+        Exit;
+      ColCount := 1;
+      for R := 0 to Rows.Count - 1 do
+        ColCount := Max(ColCount, Length(SplitRow(Rows[R])));
+
+      { Row heights are computed from the WIDEST cell in each row so long
+        values (URLs, paths, commands, prose) wrap instead of being silently
+        clipped to one line. }
+      ColWidth := Max(60, (Max(240, MaxBubbleWidth - 60)) / ColCount);
+      CharsPerCell := Max(8, Trunc(ColWidth / 7.2));
+      SetLength(RowHeights, Rows.Count);
+      TableHeight := 12;
+      for R := 0 to Rows.Count - 1 do
+      begin
+        Cells := SplitRow(Rows[R]);
+        RowLines := 1;
+        for C := 0 to Length(Cells) - 1 do
+          RowLines := Max(RowLines,
+            EstimateTextLines(Trim(Cells[C]), CharsPerCell));
+        RowHeights[R] := Max(24, RowLines * 18 + 6);
+        TableHeight := TableHeight + RowHeights[R];
+      end;
+
+      Panel := TRectangle.Create(BodyHost);
+      Panel.Parent := BodyHost;
+      Panel.Align := TAlignLayout.Top;
+      Panel.Height := TableHeight;
+      StyleChromeRect(Panel, UI_PANEL, UI_BORDER, 6, False);
+      SetControlMargins(Panel, 0, 6, 0, 6);
+      SetControlPadding(Panel, 8, 6, 8, 6);
+      ContentHeight := ContentHeight + TableHeight + 12;
+
+      for R := 0 to Rows.Count - 1 do
+      begin
+        RowText := Rows[R];
+        IsHeader := R = 0;
+        Cells := SplitRow(RowText);
+        RowHost := TLayout.Create(Panel);
+        RowHost.Parent := Panel;
+        RowHost.Align := TAlignLayout.Top;
+        RowHost.Height := RowHeights[R];
+        for C := 0 to ColCount - 1 do
+        begin
+          if C < Length(Cells) then
+            CellText := Trim(Cells[C])
+          else
+            CellText := '';
+          CellLabel := TLabel.Create(RowHost);
+          CellLabel.Parent := RowHost;
+          CellLabel.Align := TAlignLayout.Left;
+          CellLabel.Width := ColWidth;
+          CellLabel.HitTest := False;
+          CellLabel.Text := CleanInlineMarkdown(CellText);
+          CellLabel.WordWrap := True;
+          CellLabel.TextSettings.VertAlign := TTextAlign.Leading;
+          if IsHeader then
+            StyleLabel(CellLabel, UI_ACCENT, 12, True)
+          else
+            StyleLabel(CellLabel, UI_TEXT, 12, False);
+        end;
+      end;
+    end;
+
     procedure AddBodyTextBlock(const Text: string);
     var
       I: Integer;
@@ -20042,21 +20319,164 @@ var
         Paragraph.Clear;
       end;
 
+      { Leading-space depth of a raw line, in list levels (2 spaces or a tab
+        per level) -- markdown nests sub-lists by indentation. }
+      function IndentDepth(const Raw: string): Integer;
+      var
+        K: Integer;
+        Spaces: Integer;
+      begin
+        Spaces := 0;
+        for K := 1 to Length(Raw) do
+        begin
+          if Raw[K] = ' ' then
+            Inc(Spaces)
+          else if Raw[K] = #9 then
+            Inc(Spaces, 2)
+          else
+            Break;
+        end;
+        Result := Spaces div 2;
+        if Result > 4 then
+          Result := 4;
+      end;
+
+      { "12. text" / "3) text" -> ordered-list item. The old code only matched
+        a literal "1. ", so every item after the first fell through to the
+        paragraph accumulator and lost its line break. }
+      function OrderedMarkerLen(const Line: string): Integer;
+      var
+        K: Integer;
+      begin
+        Result := 0;
+        K := 1;
+        while (K <= Length(Line)) and CharInSet(Line[K], ['0'..'9']) do
+          Inc(K);
+        if (K = 1) or (K > Length(Line)) then
+          Exit;
+        if not CharInSet(Line[K], ['.', ')']) then
+          Exit;
+        Inc(K);
+        if (K > Length(Line)) or (Line[K] <> ' ') then
+          Exit;
+        Result := K;
+      end;
+
+      function IsRule(const Line: string): Boolean;
+      var
+        Body: string;
+      begin
+        Body := StringReplace(Line, ' ', '', [rfReplaceAll]);
+        Result := (Length(Body) >= 3) and
+          ((StringReplace(Body, '-', '', [rfReplaceAll]) = '') or
+           (StringReplace(Body, '*', '', [rfReplaceAll]) = '') or
+           (StringReplace(Body, '_', '', [rfReplaceAll]) = ''));
+      end;
+
+      { A table separator row: |---|:--:|---| }
+      function IsTableSeparator(const Line: string): Boolean;
+      var
+        Body: string;
+      begin
+        Body := StringReplace(Trim(Line), ' ', '', [rfReplaceAll]);
+        if (Body = '') or (Pos('|', Body) = 0) then
+          Exit(False);
+        Body := StringReplace(Body, '|', '', [rfReplaceAll]);
+        Body := StringReplace(Body, ':', '', [rfReplaceAll]);
+        Result := (Body <> '') and (StringReplace(Body, '-', '',
+          [rfReplaceAll]) = '');
+      end;
+
+    var
+      Depth: Integer;
+      MarkerLen: Integer;
+      Quote: TStringBuilder;
+      RawLine: string;
+      TableRows: TStringList;
+
+      procedure FlushQuote;
+      begin
+        if Quote.Length > 0 then
+        begin
+          AddQuoteBlock(Quote.ToString);
+          Quote.Clear;
+        end;
+      end;
+
+      procedure FlushTable;
+      begin
+        if TableRows.Count > 0 then
+        begin
+          AddTableBlock(TableRows);
+          TableRows.Clear;
+        end;
+      end;
+
+      procedure FlushAll;
+      begin
+        FlushParagraph;
+        FlushQuote;
+        FlushTable;
+      end;
+
     begin
       if Trim(Text) = '' then
         Exit;
       Paragraph := TStringBuilder.Create;
+      Quote := TStringBuilder.Create;
+      TableRows := TStringList.Create;
       try
         Lines := Text.Replace(#13#10, #10).Replace(#13, #10).Split([#10]);
         for I := 0 to Length(Lines) - 1 do
         begin
-          LineText := Trim(Lines[I]);
+          RawLine := Lines[I];
+          LineText := Trim(RawLine);
           if LineText = '' then
           begin
-            FlushParagraph;
+            FlushAll;
             Continue;
           end;
-          if StartsText('### ', LineText) then
+
+          { Tables: accumulate consecutive pipe rows, drop the separator.
+            A table is recognised either by a leading '|' or by the NEXT line
+            being a separator row -- "Name | Value" over "--- | ---" is valid
+            markdown and the outer pipes are optional. }
+          if (Pos('|', LineText) > 0) and
+            (StartsText('|', LineText) or (TableRows.Count > 0) or
+             ((I + 1 < Length(Lines)) and IsTableSeparator(Lines[I + 1]))) then
+          begin
+            if IsTableSeparator(LineText) then
+              Continue;
+            FlushParagraph;
+            FlushQuote;
+            TableRows.Add(LineText);
+            Continue;
+          end;
+          FlushTable;
+
+          if StartsText('>', LineText) then
+          begin
+            FlushParagraph;
+            if Quote.Length > 0 then
+              Quote.Append(' ');
+            Quote.Append(Trim(Copy(LineText, 2, MaxInt)));
+            Continue;
+          end;
+          FlushQuote;
+
+          if IsRule(LineText) then
+          begin
+            FlushParagraph;
+            AddRuleBlock;
+            Continue;
+          end;
+
+          if StartsText('#### ', LineText) then
+          begin
+            FlushParagraph;
+            AddTextLabel(Copy(LineText, 6, MaxInt), 12, True, True);
+          end
+          else if StartsText('### ', LineText) then
           begin
             FlushParagraph;
             AddTextLabel(Copy(LineText, 5, MaxInt), 12, True, True);
@@ -20071,38 +20491,82 @@ var
             FlushParagraph;
             AddTextLabel(Copy(LineText, 3, MaxInt), 14, True, True);
           end
-          else if StartsText('- ', LineText) or StartsText('* ', LineText) then
+          else if StartsText('- ', LineText) or StartsText('* ', LineText) or
+            StartsText('+ ', LineText) then
           begin
             FlushParagraph;
-            AddTextLabel('- ' + Copy(LineText, 3, MaxInt), 12, False, False,
-              12);
-          end
-          else if StartsText('1. ', LineText) then
-          begin
-            FlushParagraph;
-            AddTextLabel(LineText, 12, False, False, 12);
+            Depth := IndentDepth(RawLine);
+            AddTextLabel(BULLET_GLYPHS[Min(Depth, 2)] + ' ' +
+              Copy(LineText, 3, MaxInt), 12, False, False, 12 + Depth * 16);
           end
           else
           begin
-            if Paragraph.Length > 0 then
-              Paragraph.Append(' ');
-            Paragraph.Append(LineText);
+            MarkerLen := OrderedMarkerLen(LineText);
+            if MarkerLen > 0 then
+            begin
+              FlushParagraph;
+              Depth := IndentDepth(RawLine);
+              AddTextLabel(LineText, 12, False, False, 12 + Depth * 16);
+            end
+            else
+            begin
+              if Paragraph.Length > 0 then
+                Paragraph.Append(' ');
+              Paragraph.Append(LineText);
+            end;
           end;
         end;
-        FlushParagraph;
+        FlushAll;
       finally
+        TableRows.Free;
+        Quote.Free;
         Paragraph.Free;
       end;
     end;
 
-    procedure AddCodeBlock(const Text: string);
+    procedure AddCodeBlock(const Text: string; const Language: string = '');
     var
+      Bar: TLayout;
       CodeMemo: TMemo;
+      CopyButton: TButton;
+      LangLabel: TLabel;
       Lines: Integer;
     begin
       if Trim(Text) = '' then
         Exit;
-      Lines := Length(Text.Split([sLineBreak]));
+      Lines := Length(Text.Replace(#13#10, #10).Split([#10]));
+
+      { Header bar: language tag on the left, Copy on the right -- the web UI
+        affordance. The button carries the code in TagString so the shared
+        form-level handler can copy it without a closure. }
+      Bar := TLayout.Create(BodyHost);
+      Bar.Parent := BodyHost;
+      Bar.Align := TAlignLayout.Top;
+      Bar.Height := 22;
+      SetControlMargins(Bar, 0, 6, 0, 0);
+
+      LangLabel := TLabel.Create(Bar);
+      LangLabel.Parent := Bar;
+      LangLabel.Align := TAlignLayout.Left;
+      LangLabel.Width := 160;
+      LangLabel.HitTest := False;
+      if Trim(Language) <> '' then
+        LangLabel.Text := LowerCase(Trim(Language))
+      else
+        LangLabel.Text := 'code';
+      LangLabel.TextSettings.VertAlign := TTextAlign.Center;
+      StyleLabel(LangLabel, UI_MUTED, 11, False);
+
+      CopyButton := TButton.Create(Bar);
+      CopyButton.Parent := Bar;
+      CopyButton.Align := TAlignLayout.Right;
+      CopyButton.Width := 62;
+      CopyButton.Height := 22;
+      CopyButton.Text := 'Copy';
+      CopyButton.TagString := Text;
+      CopyButton.OnClick := ChatCodeCopyClick;
+      StyleButton(CopyButton, False);
+
       CodeMemo := TMemo.Create(BodyHost);
       CodeMemo.Parent := BodyHost;
       CodeMemo.Align := TAlignLayout.Top;
@@ -20110,14 +20574,15 @@ var
       CodeMemo.ReadOnly := True;
       CodeMemo.WordWrap := False;
       CodeMemo.Lines.Text := Text;
-      SetControlMargins(CodeMemo, 0, 6, 0, 6);
-      ContentHeight := ContentHeight + CodeMemo.Height + 12;
+      SetControlMargins(CodeMemo, 0, 0, 0, 6);
+      ContentHeight := ContentHeight + CodeMemo.Height + 12 + 22;
       StyleTextControl(CodeMemo, UI_TEXT, 12);
     end;
 
     procedure RenderBodyBlocks;
     var
       Code: TStringBuilder;
+      CodeLang: string;
       I: Integer;
       InCode: Boolean;
       LineText: string;
@@ -20129,6 +20594,7 @@ var
       Code := TStringBuilder.Create;
       try
         InCode := False;
+        CodeLang := '';
         for I := 0 to Length(Lines) - 1 do
         begin
           LineText := Lines[I];
@@ -20136,14 +20602,17 @@ var
           begin
             if InCode then
             begin
-              AddCodeBlock(Code.ToString.TrimRight);
+              AddCodeBlock(Code.ToString.TrimRight, CodeLang);
               Code.Clear;
+              CodeLang := '';
               InCode := False;
             end
             else
             begin
               AddBodyTextBlock(Text.ToString);
               Text.Clear;
+              { ```pascal -> the language tag shown on the block header }
+              CodeLang := Trim(Copy(Trim(LineText), 4, MaxInt));
               InCode := True;
             end;
             Continue;
@@ -20154,7 +20623,7 @@ var
             Text.AppendLine(LineText);
         end;
         if InCode then
-          AddCodeBlock(Code.ToString.TrimRight);
+          AddCodeBlock(Code.ToString.TrimRight, CodeLang);
         AddBodyTextBlock(Text.ToString);
       finally
         Code.Free;
@@ -20410,14 +20879,9 @@ var
       BorderColor := UI_WARN;
       RoleColor := UI_WARN;
     end;
-    HasRichText := HasToolCards or HasToolDetails or (Pos('```', BodyText) > 0) or
-      StartsText('# ', Trim(BodyText)) or StartsText('## ', Trim(BodyText)) or
-      StartsText('### ', Trim(BodyText)) or StartsText('- ', Trim(BodyText)) or
-      StartsText('* ', Trim(BodyText)) or StartsText('1. ', Trim(BodyText)) or
-      (Pos(#10'# ', BodyText) > 0) or (Pos(#10'## ', BodyText) > 0) or
-      (Pos(#10'### ', BodyText) > 0) or (Pos(#10'- ', BodyText) > 0) or
-      (Pos(#10'* ', BodyText) > 0) or (Pos(#10'1. ', BodyText) > 0) or
-      (Pos('`', BodyText) > 0);
+    { One predicate, shared rules -- see MarkdownNeedsBlockRenderer. }
+    HasRichText := HasToolCards or HasToolDetails or
+      (Pos('```', BodyText) > 0) or MarkdownNeedsBlockRenderer(BodyText);
     if InitialText = '' then
       InitialText := '?';
 
