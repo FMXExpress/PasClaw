@@ -573,6 +573,7 @@ type
     procedure StyleButton(Button: TButton; Primary: Boolean = False);
     procedure ApplyButtonIcon(Button: TButton);
     procedure ApplyChatMeasure;
+    function StyleLookupExists(const LookupName: string): Boolean;
     procedure StyleChromeRect(Rect: TRectangle; FillColor: TAlphaColor;
       StrokeColor: TAlphaColor; Radius: Single; Interactive: Boolean);
     procedure UseStyledLabelColor(LabelControl: TLabel);
@@ -1742,6 +1743,51 @@ begin
     LabelControl.TextSettings.Font.Style := [];
 end;
 
+function TMasterDetailForm.StyleLookupExists(const LookupName: string): Boolean;
+(* Does the ACTIVE style actually define this StyleLookup?
+
+   The *toolbutton resources are Embarcadero platform-style names. The bundled
+   Air.style / Light.Style define none of them, so assigning one there leaves
+   the button on the default style -- and blanking its caption for an
+   icon-only face would render a blank button. Never trade a readable caption
+   for a lookup that may not exist: probe first.
+
+   StyleBook = nil means no custom book is applied, so the platform style is
+   active and its icon resources are present. With a custom book applied, walk
+   it for a matching StyleName. *)
+var
+  Found: Boolean;
+
+  procedure Walk(Obj: TFmxObject);
+  var
+    I: Integer;
+  begin
+    if Found or (Obj = nil) then
+      Exit;
+    if SameText(Obj.StyleName, LookupName) then
+    begin
+      Found := True;
+      Exit;
+    end;
+    for I := 0 to Obj.ChildrenCount - 1 do
+    begin
+      Walk(Obj.Children[I]);
+      if Found then
+        Exit;
+    end;
+  end;
+
+begin
+  if LookupName = '' then
+    Exit(False);
+  if StyleBook = nil then
+    Exit(True);            { platform style in use -- its icons exist }
+  Found := False;
+  if StyleBook.Root <> nil then
+    Walk(StyleBook.Root);
+  Result := Found;
+end;
+
 procedure TMasterDetailForm.ApplyChatMeasure;
 { Centre the transcript and the composer on a fixed reading measure: past
   CHAT_MAX_W the surplus becomes equal margins rather than longer lines;
@@ -1778,9 +1824,10 @@ procedure TMasterDetailForm.ApplyButtonIcon(Button: TButton);
 
      - the caption is kept in Hint verbatim, so a bare icon is never a
        mystery and a blank one is still identifiable by hover;
-     - [ui] icon_buttons=false in the INI turns the whole thing off and
-       restores text captions, so a style that lacks these lookups is one
-       setting away from readable rather than a rebuild away.
+     - [ui] icon_buttons=false turns the feature off by preference. It is NOT
+       the safety net: StyleLookupExists below refuses to blank a caption for
+       a lookup the active style does not define, so a style without these
+       resources degrades to plain text on its own.
 
    Mapping lives HERE only, keyed by the caption a button was created with,
    so icon + hint can never drift from each other or from the action. *)
@@ -1792,8 +1839,6 @@ var
 begin
   if (Button = nil) or Button.TagString.StartsWith('noicon') then
     Exit;
-  { Remember the original caption once, so repeated restyles (theme switch)
-    do not read back an already-blanked face. }
   { Already iconified on an earlier pass (theme switch re-runs this walk):
     the face is blank and a hint is showing. Re-deriving from an empty caption
     would just clear the mapping, so stop here.
@@ -1833,6 +1878,14 @@ begin
   begin
     if Button.Text = '' then
       Button.Text := Cap;   { restore when icons are switched off }
+    Exit;
+  end;
+  { The caption is the fallback that keeps the UI usable, so only surrender it
+    once the icon is known to exist. A missing lookup degrades to plain text
+    automatically -- no diagnosis, no INI edit. }
+  if not StyleLookupExists(Lookup) then
+  begin
+    Button.Text := Cap;
     Exit;
   end;
   Button.StyleLookup := Lookup;
