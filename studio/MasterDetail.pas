@@ -210,7 +210,10 @@ type
     FSessionSearch: TEdit;
     FSessionSearchButton: TButton;
     FSessionSearchVisible: Boolean;
-    FGatewayOnline: Boolean;
+    { The gateway identity (URL + token) that last ANSWERED, not a bare
+      boolean: a flag survives an edit to either field and would keep
+      reporting Connected for credentials that have never responded. }
+    FOnlineIdentity: string;
     FSkillCatalogList: TListBox;
     FSkillCatalogPane: TLayout;
     FSkillDetailMemo: TMemo;
@@ -559,6 +562,8 @@ type
     procedure RenderModeButton;
     procedure RenderParamsButton;
     procedure RenderConnectButton;
+    function GatewayIdentity: string;
+    procedure GatewaySettingsChange(Sender: TObject);
     procedure RenderSessionSearchBox;
     procedure SessionSearchToggleClick(Sender: TObject);
     procedure SessionSearchKeyDown(Sender: TObject; var Key: Word;
@@ -2390,12 +2395,9 @@ begin
     FSessionToggleButton.Text := #$2630;
   end;
 
-  { FNewSessionButton is no longer resized here: it lives in the sessions
-    drawer header, whose width does not track the window. Its only variable
-    is whether ApplyButtonIcon resolved the glyph -- if it did not, the
-    caption comes back and needs room for it. }
-  if (FNewSessionButton <> nil) and not IsIconified(FNewSessionButton) then
-    FNewSessionButton.Width := 92;
+  { The drawer-header buttons are not resized here: the drawer's width does
+    not track the window, and both are created at caption width so the
+    icon-less fallback already fits. }
   if FRefreshButton <> nil then
   begin
     FRefreshButton.Width := IfThen(Narrow, 44, IfThen(Compact, 78, 92));
@@ -3184,6 +3186,7 @@ begin
   FTokenEdit.Width := 210;
   FTokenEdit.Password := True;
   FTokenEdit.TextPrompt := 'bearer token';
+  FTokenEdit.OnChange := GatewaySettingsChange;
 
   FTokenShowButton := TButton.Create(Self);
   FTokenShowButton.Parent := FConnectionRow;
@@ -3203,6 +3206,7 @@ begin
   FGatewayEdit.Parent := FConnectionRow;
   FGatewayEdit.Align := TAlignLayout.Client;
   FGatewayEdit.TextPrompt := 'gateway URL';
+  FGatewayEdit.OnChange := GatewaySettingsChange;
 
   FBodyLayout := TLayout.Create(Self);
   FBodyLayout.Parent := Self;
@@ -3237,7 +3241,11 @@ begin
   FNewSessionButton := Btn;
   Btn.Parent := DrawerHeader;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := ICON_BTN_W;
+  { Created at CAPTION width. ApplyButtonIcon only ever shrinks a button, so
+    starting text-safe means the icon-less fallback -- [ui] icon_buttons=false,
+    or a style without the glyph -- is readable instead of a clipped 34px
+    stub, and iconification still lands on ICON_BTN_W. }
+  Btn.Width := 104;
   Btn.Text := '+ Session';      { ApplyButtonIcon swaps in the add glyph }
   Btn.OnClick := NewSessionClick;
   SetControlMargins(Btn, 6, 2, 0, 2);
@@ -3245,7 +3253,7 @@ begin
   FSessionSearchButton := TButton.Create(Self);
   FSessionSearchButton.Parent := DrawerHeader;
   FSessionSearchButton.Align := TAlignLayout.Right;
-  FSessionSearchButton.Width := ICON_BTN_W;
+  FSessionSearchButton.Width := 84;      { caption width; see above }
   FSessionSearchButton.Text := 'Search';
   FSessionSearchButton.OnClick := SessionSearchToggleClick;
   SetControlMargins(FSessionSearchButton, 6, 2, 0, 2);
@@ -12789,18 +12797,35 @@ begin
     SetStatus('model: ' + FSavedModel);
 end;
 
+function TMasterDetailForm.GatewayIdentity: string;
+{ What "connected" is connected TO. Compared against the identity that last
+  answered, so changing either field invalidates the state by itself. }
+begin
+  Result := GatewayBaseUrl + #1;
+  if FTokenEdit <> nil then
+    Result := Result + FTokenEdit.Text;
+end;
+
+procedure TMasterDetailForm.GatewaySettingsChange(Sender: TObject);
+begin
+  RenderConnectButton;
+end;
+
 procedure TMasterDetailForm.RenderConnectButton;
 { The button reported an INTENT ("Connect") forever, including while
   connected, so it never answered the only question it is well placed to
   answer. It now reports the STATE and stays clickable as a reconnect. }
+var
+  Online: Boolean;
 begin
   if FRefreshButton = nil then
     Exit;
+  Online := (FOnlineIdentity <> '') and (FOnlineIdentity = GatewayIdentity);
   if ClientWidth < UI_NARROW_W then
-    FRefreshButton.Text := IfThen(FGatewayOnline, 'Online', 'Go')
+    FRefreshButton.Text := IfThen(Online, 'Online', 'Go')
   else
-    FRefreshButton.Text := IfThen(FGatewayOnline, 'Connected', 'Connect');
-  FRefreshButton.Hint := IfThen(FGatewayOnline,
+    FRefreshButton.Text := IfThen(Online, 'Connected', 'Connect');
+  FRefreshButton.Hint := IfThen(Online,
     'Connected to the gateway - click to reload sessions',
     'Connect to the gateway');
   FRefreshButton.ShowHint := True;
@@ -19752,12 +19777,14 @@ begin
         begin
           if ErrorText <> '' then
           begin
-            FGatewayOnline := False;
+            FOnlineIdentity := '';
             RenderConnectButton;
             SetStatus('offline: ' + ErrorText);
             Exit;
           end;
-          FGatewayOnline := True;
+          { the endpoint that ACTUALLY answered, captured for this request --
+            not whatever the fields happen to hold now }
+          FOnlineIdentity := Base + #1 + Token;
           RenderConnectButton;
           FSessionCache.Clear;
           for I := 0 to Length(Sessions) - 1 do
