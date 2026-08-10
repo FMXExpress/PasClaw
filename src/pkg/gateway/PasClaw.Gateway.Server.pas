@@ -265,6 +265,13 @@ type
       auto-detected); imports into the store and returns the new ids. }
     procedure HandleSessionsImport(ARequest: TIdHTTPRequestInfo;
                                    AResp: TIdHTTPResponseInfo);
+    (* POST /v1/sessions/import-dir -- body carries a "path" string. OpenCode
+       splits a session across per-message files, so there is no single blob
+       to POST; the directory is read SERVER-SIDE (the path is the gateway
+       host's, which is the desktop-studio-to-localhost case). Bearer-gated
+       like the rest. *)
+    procedure HandleSessionsImportDir(ARequest: TIdHTTPRequestInfo;
+                                      AResp: TIdHTTPResponseInfo);
     { Read a request's POST body as a UTF-8 string ('' when none). }
     function  ReadRequestBody(ARequest: TIdHTTPRequestInfo): string;
     { Fill S.Messages + title/model/provider from a messages/title/model
@@ -1372,6 +1379,7 @@ begin
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/sessions') then HandleSessionsList(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/sessions') then HandleSessionCreate(ARequest, AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/sessions/import') then HandleSessionsImport(ARequest, AResponse)
+    else if (ARequest.Command = 'POST') and (Doc = '/v1/sessions/import-dir') then HandleSessionsImportDir(ARequest, AResponse)
     else if (Copy(Doc, 1, 13) = '/v1/sessions/') then HandleSessionItem(Doc, ARequest, AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/workflows') then HandleWorkflowsList(AResponse)
     else if (ARequest.Command = 'POST') and (Doc = '/v1/workflows') then HandleWorkflowCreate(ARequest, AResponse)
@@ -3456,6 +3464,70 @@ begin
     Exit;
   end;
   N := ImportSessions(Body, Ids, Err);
+  if N = 0 then
+  begin
+    if Err = '' then Err := 'nothing importable found';
+    WriteJSON(AResp, 400, '{"error":"' + JsonEscape(Err) + '"}');
+    Exit;
+  end;
+  Root := TJsonObject.Create;
+  try
+    Root.PutInt('imported', N);
+    Arr := TJsonArray.Create;
+    for i := 0 to High(Ids) do Arr.AddStr(Ids[i]);
+    Root.PutArray('ids', Arr);
+    WriteJSON(AResp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleSessionsImportDir(ARequest: TIdHTTPRequestInfo;
+                                                 AResp: TIdHTTPResponseInfo);
+var
+  Body, DirPath, Err, Reason: string;
+  Ids: TImportedIds;
+  N, i: Integer;
+  Req, Root: TJsonObject;
+  Arr: TJsonArray;
+begin
+  Body := ReadRequestBody(ARequest);
+  DirPath := '';
+  if Trim(Body) <> '' then
+  begin
+    try Req := TJsonObject.Parse(Body); except Req := nil; end;
+    if Req <> nil then
+    try
+      DirPath := Trim(Req.GetStr('path', ''));
+    finally
+      Req.Free;
+    end;
+  end;
+  if DirPath = '' then
+  begin
+    WriteJSON(AResp, 400,
+      '{"error":"import-dir needs a "path" (an OpenCode data directory on the gateway host)"}');
+    Exit;
+  end;
+  { The gateway's invariant is that an HTTP client cannot read arbitrary host
+    paths -- every /v1/fs handler gates on CanReadPathHTTP first. This route
+    reads message files and PERSISTS them as sessions the same client can then
+    fetch back, so skipping the gate would hand any caller (and, when no token
+    is configured, any unauthenticated caller) an arbitrary-file-read
+    primitive. Gate BEFORE the existence check so the response can't be used
+    to probe for paths outside the sandbox either. }
+  if not CanReadPathHTTP(DirPath, Reason) then
+  begin
+    WriteJSON(AResp, 403, '{"error":"' + JsonEscape(Reason) + '"}');
+    Exit;
+  end;
+  if not DirectoryExists(DirPath) then
+  begin
+    WriteJSON(AResp, 404,
+      '{"error":"no such directory on the gateway host: ' + JsonEscape(DirPath) + '"}');
+    Exit;
+  end;
+  N := ImportOpenCodeDir(DirPath, Ids, Err);
   if N = 0 then
   begin
     if Err = '' then Err := 'nothing importable found';

@@ -552,6 +552,7 @@ type
     procedure SteerActiveTurn(const SteerText: string);
     procedure SessionExportClick(Sender: TObject);
     procedure SessionImportClick(Sender: TObject);
+    procedure SessionImportDirClick(Sender: TObject);
     procedure SessionListChange(Sender: TObject);
     procedure SessionSearchChange(Sender: TObject);
     procedure SessionSplitterMoved(Sender: TObject);
@@ -2714,6 +2715,16 @@ begin
   Btn.Width := 62;
   Btn.Text := 'Import';
   Btn.OnClick := SessionImportClick;
+  SetControlMargins(Btn, 6, 0, 0, 0);
+
+  { OpenCode keeps a session split across per-message files, so it imports as
+    a DIRECTORY rather than a single export blob. }
+  Btn := TButton.Create(Self);
+  Btn.Parent := SessionButtons;
+  Btn.Align := TAlignLayout.Right;
+  Btn.Width := 74;
+  Btn.Text := 'Import Dir';
+  Btn.OnClick := SessionImportDirClick;
   SetControlMargins(Btn, 6, 0, 0, 0);
 
   FSessionSplitter := TSplitter.Create(Self);
@@ -9459,6 +9470,80 @@ begin
             if CountText = '' then
               CountText := '?';
             SetStatus('imported ' + CountText + ' session(s)');
+            LoadSessions;
+          end;
+        end);
+    end);
+end;
+
+procedure TMasterDetailForm.SessionImportDirClick(Sender: TObject);
+{ Import an OpenCode data directory (~/.local/share/opencode). The gateway
+  reads the directory itself -- OpenCode fragments a session across
+  storage/session + storage/message + storage/part files, so there is no
+  single body to POST. The path is therefore resolved on the GATEWAY HOST,
+  which is the desktop-studio-against-localhost case; a remote gateway needs
+  a path that exists on the server. }
+var
+  Base: string;
+  Body: string;
+  DirPath: string;
+  Payload: TJSONObject;
+  Token: string;
+begin
+  DirPath := '';
+  if not SelectDirectory('Select the OpenCode data directory', '', DirPath) then
+    Exit;
+  DirPath := Trim(DirPath);
+  if DirPath = '' then
+    Exit;
+  Payload := TJSONObject.Create;
+  try
+    Payload.AddPair('path', DirPath);
+    Body := Payload.ToJSON;
+  finally
+    Payload.Free;
+  end;
+  Base := GatewayBaseUrl;
+  Token := FTokenEdit.Text;
+  SetStatus('importing OpenCode sessions...');
+  TTask.Run(
+    procedure
+    var
+      CountText: string;
+      ErrorText: string;
+      ResponseText: string;
+      Root: TJSONValue;
+      Status: Integer;
+    begin
+      CountText := '';
+      try
+        ResponseText := HttpText(Base, Token, '', 'POST',
+          '/v1/sessions/import-dir', Body, 'application/json',
+          'application/json', Status);
+        if not IsHttpOk(Status) then
+          raise Exception.CreateFmt('import-dir HTTP %d: %s',
+            [Status, ResponseText]);
+        Root := TJSONObject.ParseJSONValue(ResponseText);
+        try
+          if Root is TJSONObject then
+            CountText := JsonAsString(TJSONObject(Root), 'imported');
+        finally
+          Root.Free;
+        end;
+      except
+        on E: Exception do
+          ErrorText := E.Message;
+      end;
+      TThread.Queue(nil,
+        procedure
+        begin
+          if ErrorText <> '' then
+            SetStatus('OpenCode import failed: ' + ErrorText)
+          else
+          begin
+            if CountText = '' then
+              CountText := '?';
+            SetStatus('imported ' + CountText + ' OpenCode session(s)');
             LoadSessions;
           end;
         end);
