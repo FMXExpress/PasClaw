@@ -2672,7 +2672,6 @@ end
       Enabled = False
     end
   end
-  { --- generated icon button styles: scripts/gen-studio-icons.py --- }
   object TLayout
     StyleName = 'actiontoolbutton'
     DesignVisible = False
@@ -2796,6 +2795,7 @@ end
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -2931,6 +2931,7 @@ end
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -3064,6 +3065,7 @@ end
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -3196,6 +3198,7 @@ end
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -3328,6 +3331,7 @@ end
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -3460,6 +3464,7 @@ end
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -3592,6 +3597,7 @@ end
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -3724,6 +3730,7 @@ end
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -3864,6 +3871,7 @@ end
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -4021,6 +4029,7 @@ end
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -4152,6 +4161,7 @@ end
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -4284,6 +4294,7 @@ end
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -4414,6 +4425,7 @@ end
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -4569,6 +4581,7 @@ end
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -4725,6 +4738,7 @@ end
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -4855,6 +4869,7 @@ end
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -4866,7 +4881,6 @@ end
         01000000B81E853E8FC2753F010000007B142E3EC3F5A83E}
     end
   end
-  { --- end generated icon button styles --- }
   object TLayout
     StyleName = 'colorbuttonstyle'
     DesignVisible = False
