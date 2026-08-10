@@ -9536,10 +9536,13 @@ begin
     True);
   Item.Text := Id + ' | ' + Tool;
   FWorkflowNodesList.ItemIndex := FWorkflowNodesList.Count - 1;
-  if FWorkflowNodePositions <> nil then
-    FWorkflowNodePositions.AddOrSetValue(Id, PointF(
-      20 + ((FWorkflowNodesList.Count - 1) mod 4) * 150,
-      20 + ((FWorkflowNodesList.Count - 1) div 4) * 78));
+  { Do NOT seed a position here. WorkflowEnsureNodePosition (reached via
+    WorkflowCanvasNodeRect on the next paint, which WorkflowRenderGraph
+    triggers below) is the single source of auto-placement and is the only
+    one that reserves the INPUT-box gutter -- the old hardcoded x=20 seed
+    put the first node straight under the derived INPUT box, and because
+    WorkflowEnsureNodePosition exits when a position already exists, the
+    gutter-aware path never ran for newly added nodes. }
   FWorkflowNodeIdEdit.Text := Id;
   WorkflowRenderGraph;
 end;
