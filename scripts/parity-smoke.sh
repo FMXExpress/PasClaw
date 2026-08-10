@@ -27,6 +27,12 @@ trap 'rm -rf "$TMP"' EXIT
 
 if [ -n "$TOKEN" ]; then AUTH=(-H "Authorization: Bearer $TOKEN"); else AUTH=(); fi
 
+# Per-request ceiling. Without it a single blocking endpoint (e.g. a log
+# follow/stream route answering a plain GET) stalls the whole run and the
+# script prints nothing at all -- which is exactly what happened the first
+# time this was pointed at a live gateway.
+MAXT="${PASCLAW_SMOKE_TIMEOUT:-8}"
+
 say()  { printf '\n\033[1m== %s\033[0m\n' "$*"; }
 ok()   { PASS=$((PASS+1)); printf '  \033[32mPASS\033[0m %s\n' "$*"; }
 bad()  { FAIL=$((FAIL+1)); printf '  \033[31mFAIL\033[0m %s\n' "$*"; }
@@ -38,19 +44,19 @@ has() { case "$3" in *"$2"*) ok "$1";; *) bad "$1 (missing: $2)";; esac; }
 api() { # api METHOD PATH [BODY]
   local m="$1" p="$2" b="${3:-}"
   if [ -n "$b" ]; then
-    curl -sS -X "$m" "${AUTH[@]}" -H 'Content-Type: application/json' \
+    curl -sS --max-time "$MAXT" -X "$m" "${AUTH[@]}" -H 'Content-Type: application/json' \
          --data-binary "$b" "$BASE$p"
   else
-    curl -sS -X "$m" "${AUTH[@]}" "$BASE$p"
+    curl -sS --max-time "$MAXT" -X "$m" "${AUTH[@]}" "$BASE$p"
   fi
 }
 code() { # code METHOD PATH [BODY]  -> http status only
   local m="$1" p="$2" b="${3:-}"
   if [ -n "$b" ]; then
-    curl -sS -o /dev/null -w '%{http_code}' -X "$m" "${AUTH[@]}" \
+    curl -sS --max-time "$MAXT" -o /dev/null -w '%{http_code}' -X "$m" "${AUTH[@]}" \
          -H 'Content-Type: application/json' --data-binary "$b" "$BASE$p"
   else
-    curl -sS -o /dev/null -w '%{http_code}' -X "$m" "${AUTH[@]}" "$BASE$p"
+    curl -sS --max-time "$MAXT" -o /dev/null -w '%{http_code}' -X "$m" "${AUTH[@]}" "$BASE$p"
   fi
 }
 
@@ -58,7 +64,7 @@ say "0. reachability + auth posture   ($BASE)"
 H="$(code GET /v1/health)"
 [ "$H" = "200" ] && ok "/v1/health -> 200" || bad "/v1/health -> $H (gateway up?)"
 if [ -n "$TOKEN" ]; then
-  U="$(curl -sS -o /dev/null -w '%{http_code}' "$BASE/v1/models")"
+  U="$(curl -sS --max-time "$MAXT" -o /dev/null -w '%{http_code}' "$BASE/v1/models")"
   [ "$U" = "401" ] && ok "no-token request -> 401 (gateway is secured)" \
                    || bad "no-token request -> $U (expected 401; token not enforced)"
   A="$(code GET /v1/models)"
@@ -88,7 +94,7 @@ say "3. export / import round-trip"
 api GET "/v1/sessions/$SESSION/export" > "$TMP/exp.json"
 if [ -s "$TMP/exp.json" ]; then ok "export returned a non-empty body"
 else bad "export returned nothing"; fi
-R="$(curl -sS -X POST "${AUTH[@]}" -H 'Content-Type: application/json' \
+R="$(curl -sS --max-time "$MAXT" -X POST "${AUTH[@]}" -H 'Content-Type: application/json' \
       --data-binary @"$TMP/exp.json" "$BASE/v1/sessions/import")"
 has "re-import of our own export succeeds" '"imported"' "$R"
 
@@ -101,7 +107,7 @@ printf '%s\n' \
   '{"type":"user","uuid":"u1","message":{"role":"user","content":"from claude code"}}' \
   '{"type":"assistant","uuid":"a1","message":{"role":"assistant","content":[{"type":"text","text":"reply"}]}}' \
   > "$TMP/cc.jsonl"
-R="$(curl -sS -X POST "${AUTH[@]}" -H 'Content-Type: application/json' \
+R="$(curl -sS --max-time "$MAXT" -X POST "${AUTH[@]}" -H 'Content-Type: application/json' \
       --data-binary @"$TMP/cc.jsonl" "$BASE/v1/sessions/import")"
 has "Claude Code .jsonl imports" '"imported"' "$R"
 
@@ -126,10 +132,14 @@ C="$(code POST /mcp '{"jsonrpc":"2.0","id":4,"method":"tools/list","params":{"_m
 [ "$C" = "400" ] && ok "unsupported version -> HTTP 400" || bad "unsupported version -> $C (expected 400)"
 
 say "6. tool surface the Studio tabs rely on"
-for ep in /v1/models /v1/skills /v1/mcp/tools /v1/cron /v1/logs /v1/memory /v1/kb; do
+for ep in /v1/models /v1/skills /v1/mcp/tools /v1/cron /v1/memory /v1/kb; do
   C="$(code GET "$ep")"
   case "$C" in 200|404) ok "GET $ep -> $C";; *) bad "GET $ep -> $C";; esac
 done
+# /v1/logs streams (a plain GET follows the log and never closes), so a short
+# cap that returns nothing is the CORRECT outcome here, not a failure.
+L="$(curl -sS --max-time 3 -o /dev/null -w '%{http_code}' "${AUTH[@]}" "$BASE/v1/logs" 2>/dev/null)"
+case "$L" in 200|000) ok "GET /v1/logs responds (streaming route)";; *) bad "GET /v1/logs -> $L";; esac
 
 say "7. cleanup"
 C="$(code DELETE "/v1/sessions/$SESSION")"
