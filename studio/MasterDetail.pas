@@ -729,6 +729,14 @@ const
   { the "narrow window" breakpoint -- named because UpdateClearAttachments
     has to agree with ApplyResponsiveLayout about what narrow means }
   UI_NARROW_W = 560;
+  (* StyleLookups that exist ONLY in the bundled Pasclaw style books. Every
+     other name ApplyButtonIcon uses comes from Embarcadero's platform table,
+     so it resolves against the platform style too; these have no platform
+     equivalent and must not be trusted when no book is loaded.
+     scripts/gen-studio-icons.py --check verifies this list against the
+     generator's own CUSTOM set, so the two cannot drift. *)
+  PASCLAW_ONLY_LOOKUPS: array[0..3] of string = (
+    'exporttoolbutton', 'importtoolbutton', 'moontoolbutton', 'suntoolbutton');
   WF_IO_W = 104;
   WF_GUTTER = 128;
   WIN_CREATE_ALWAYS = 2;
@@ -1843,8 +1851,13 @@ function TMasterDetailForm.StyleLookupExists(const LookupName: string): Boolean;
    lookup that may not exist: probe first.
 
    StyleBook = nil means no custom book is applied, so the platform style is
-   active and its icon resources are present. With a custom book applied, look
-   in the book's own STYLE GRAPH.
+   active and its PLATFORM icon resources are present -- but only those.
+   PASCLAW_ONLY_LOOKUPS have no platform equivalent (there is no theme-toggle
+   or tray-arrow glyph in Embarcadero's table), so on the fallback path -- a
+   style file missing or failing to load -- they must answer False or the
+   theme and import/export buttons would blank their captions and render as
+   empty controls. With a custom book applied, look in the book's own STYLE
+   GRAPH.
 
    Not in Root: that is TFmxObject.Root, the scene the book belongs to. These
    books are created with the form as owner and no parent, so Root is nil and
@@ -1885,7 +1898,8 @@ begin
   if LookupName = '' then
     Exit(False);
   if StyleBook = nil then
-    Exit(True);            { platform style in use -- its icons exist }
+    { platform style in use: its own icons exist, ours do not }
+    Exit(not MatchText(LowerCase(LookupName), PASCLAW_ONLY_LOOKUPS));
   { Key on the book, not on FDarkStyleEnabled: they agree today, but a cache
     keyed off a second opinion is exactly how these drift. }
   Key := IntToHex(NativeInt(StyleBook), 16) + '|' + LowerCase(LookupName);
