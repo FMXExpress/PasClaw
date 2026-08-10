@@ -630,6 +630,8 @@ type
     procedure WorkflowCanvasMouseUp(Sender: TObject; Button: TMouseButton;
       Shift: TShiftState; X, Y: Single);
     procedure WorkflowCanvasPaint(Sender: TObject; Canvas: TCanvas);
+    function WorkflowNodeHasEdge(const NodeId: string;
+      Incoming: Boolean): Boolean;
     function WorkflowCanvasNodeRect(Index: Integer; CanvasWidth: Single): TRectF;
     procedure WorkflowEnsureNodePosition(const NodeId: string; Index: Integer;
       CanvasWidth: Single);
@@ -676,6 +678,11 @@ const
   UI_WARN = $FFE5B454;
   { Bullet glyph per nesting depth, so sub-lists read as sub-lists. }
   BULLET_GLYPHS: array[0..2] of string = (#$2022, #$25E6, #$25AA);
+  { Workflow canvas: width of the derived INPUT/OUTPUT boxes and the left
+    gutter auto-placed nodes start after, so a node never lands under the
+    INPUT box (web UI parity). }
+  WF_IO_W = 104;
+  WF_GUTTER = 128;
   WIN_CREATE_ALWAYS = 2;
   WIN_CREATE_NO_WINDOW = $08000000;
   WIN_FILE_ATTRIBUTE_NORMAL = $00000080;
@@ -9529,10 +9536,13 @@ begin
     True);
   Item.Text := Id + ' | ' + Tool;
   FWorkflowNodesList.ItemIndex := FWorkflowNodesList.Count - 1;
-  if FWorkflowNodePositions <> nil then
-    FWorkflowNodePositions.AddOrSetValue(Id, PointF(
-      20 + ((FWorkflowNodesList.Count - 1) mod 4) * 150,
-      20 + ((FWorkflowNodesList.Count - 1) div 4) * 78));
+  { Do NOT seed a position here. WorkflowEnsureNodePosition (reached via
+    WorkflowCanvasNodeRect on the next paint, which WorkflowRenderGraph
+    triggers below) is the single source of auto-placement and is the only
+    one that reserves the INPUT-box gutter -- the old hardcoded x=20 seed
+    put the first node straight under the derived INPUT box, and because
+    WorkflowEnsureNodePosition exits when a position already exists, the
+    gutter-aware path never ran for newly added nodes. }
   FWorkflowNodeIdEdit.Text := Id;
   WorkflowRenderGraph;
 end;
@@ -10213,6 +10223,10 @@ var
   R: TRectF;
   RFrom: TRectF;
   RTo: TRectF;
+  IoNames: TStringList;
+  IoParts: TArray<string>;
+  IoRect: TRectF;
+  OutRect: TRectF;
   Selected: Boolean;
   SelectedId: string;
   TextR: TRectF;
@@ -10259,6 +10273,99 @@ begin
   SelectedId := '';
   if FWorkflowNodesList.Selected <> nil then
     SelectedId := WorkflowTextId(FWorkflowNodesList.Selected.Text);
+
+  { ---- derived INPUT / OUTPUT boxes (web UI parity) ----
+    The boxes are not nodes: they visualise the workflow's declared inputs
+    and outputs. Dashed wires are derived from graph topology -- INPUT feeds
+    every ROOT node (no incoming edge), every LEAF node (no outgoing edge)
+    feeds OUTPUT -- so the canvas shows where data enters and leaves. }
+  IoNames := TStringList.Create;
+  try
+    { INPUT box }
+    IoNames.Clear;
+    if FWorkflowInputsEdit <> nil then
+    begin
+      IoParts := FWorkflowInputsEdit.Text.Split([',']);
+      for I := 0 to Length(IoParts) - 1 do
+      begin
+        EdgeText := Trim(IoParts[I]);
+        if EdgeText <> '' then
+          IoNames.Add(EdgeText);
+      end;
+    end;
+    IoRect := RectF(8, 12, 8 + WF_IO_W, 12 + Max(46, 26 + IoNames.Count * 15));
+    Canvas.Fill.Color := UI_PANEL;
+    Canvas.FillRect(IoRect, 6, 6, [], 0.85);
+    Canvas.Stroke.Color := UI_ACCENT_DIM;
+    Canvas.Stroke.Thickness := 1.2;
+    Canvas.Stroke.Dash := TStrokeDash.Dash;
+    Canvas.DrawRect(IoRect, 6, 6, [], 1);
+    Canvas.Stroke.Dash := TStrokeDash.Solid;
+    Canvas.Fill.Color := UI_ACCENT;
+    Canvas.Font.Size := 10;
+    Canvas.FillText(RectF(IoRect.Left + 8, IoRect.Top + 4, IoRect.Right - 8,
+      IoRect.Top + 20), 'INPUT', False, 1, [], TTextAlign.Leading,
+      TTextAlign.Center);
+    Canvas.Fill.Color := UI_MUTED;
+    for I := 0 to IoNames.Count - 1 do
+      Canvas.FillText(RectF(IoRect.Left + 8, IoRect.Top + 22 + I * 15,
+        IoRect.Right - 6, IoRect.Top + 37 + I * 15), IoNames[I], False, 1, [],
+        TTextAlign.Leading, TTextAlign.Center);
+
+    { OUTPUT box }
+    IoNames.Clear;
+    if FWorkflowOutputsMemo <> nil then
+      for I := 0 to FWorkflowOutputsMemo.Lines.Count - 1 do
+      begin
+        EdgeText := Trim(FWorkflowOutputsMemo.Lines[I]);
+        P := Pos('=', EdgeText);
+        if P > 0 then
+          EdgeText := Trim(Copy(EdgeText, 1, P - 1));
+        if EdgeText <> '' then
+          IoNames.Add(EdgeText);
+      end;
+    OutRect := RectF(Box.Width - WF_IO_W - 8, 12, Box.Width - 8,
+      12 + Max(46, 26 + IoNames.Count * 15));
+    Canvas.Fill.Color := UI_PANEL;
+    Canvas.FillRect(OutRect, 6, 6, [], 0.85);
+    Canvas.Stroke.Color := UI_ACCENT_DIM;
+    Canvas.Stroke.Thickness := 1.2;
+    Canvas.Stroke.Dash := TStrokeDash.Dash;
+    Canvas.DrawRect(OutRect, 6, 6, [], 1);
+    Canvas.Stroke.Dash := TStrokeDash.Solid;
+    Canvas.Fill.Color := UI_ACCENT;
+    Canvas.Font.Size := 10;
+    Canvas.FillText(RectF(OutRect.Left + 8, OutRect.Top + 4, OutRect.Right - 8,
+      OutRect.Top + 20), 'OUTPUT', False, 1, [], TTextAlign.Leading,
+      TTextAlign.Center);
+    Canvas.Fill.Color := UI_MUTED;
+    for I := 0 to IoNames.Count - 1 do
+      Canvas.FillText(RectF(OutRect.Left + 8, OutRect.Top + 22 + I * 15,
+        OutRect.Right - 6, OutRect.Top + 37 + I * 15), IoNames[I], False, 1,
+        [], TTextAlign.Leading, TTextAlign.Center);
+
+    { dashed derived wires: INPUT -> roots, leaves -> OUTPUT }
+    Canvas.Stroke.Color := UI_ACCENT_DIM;
+    Canvas.Stroke.Thickness := 1;
+    Canvas.Stroke.Dash := TStrokeDash.Dash;
+    for I := 0 to FWorkflowNodesList.Count - 1 do
+    begin
+      if FWorkflowNodesList.ListItems[I] = nil then
+        Continue;
+      NodeId := WorkflowTextId(FWorkflowNodesList.ListItems[I].Text);
+      RFrom := WorkflowCanvasNodeRect(I, Box.Width);
+      if not WorkflowNodeHasEdge(NodeId, True) then
+        Canvas.DrawLine(PointF(IoRect.Right,
+          (IoRect.Top + IoRect.Bottom) / 2),
+          PointF(RFrom.Left, (RFrom.Top + RFrom.Bottom) / 2), 0.7);
+      if not WorkflowNodeHasEdge(NodeId, False) then
+        Canvas.DrawLine(PointF(RFrom.Right, (RFrom.Top + RFrom.Bottom) / 2),
+          PointF(OutRect.Left, (OutRect.Top + OutRect.Bottom) / 2), 0.7);
+    end;
+    Canvas.Stroke.Dash := TStrokeDash.Solid;
+  finally
+    IoNames.Free;
+  end;
 
   if FWorkflowEdgesList <> nil then
     for I := 0 to FWorkflowEdgesList.Count - 1 do
@@ -10369,6 +10476,36 @@ begin
   end;
 end;
 
+function TMasterDetailForm.WorkflowNodeHasEdge(const NodeId: string;
+  Incoming: Boolean): Boolean;
+{ True when some edge targets (Incoming) or leaves (not Incoming) NodeId.
+  Roots/leaves are what the derived INPUT/OUTPUT wires attach to. }
+var
+  EdgeText: string;
+  I: Integer;
+  P: Integer;
+begin
+  Result := False;
+  if (FWorkflowEdgesList = nil) or (NodeId = '') then
+    Exit;
+  for I := 0 to FWorkflowEdgesList.Count - 1 do
+  begin
+    if FWorkflowEdgesList.ListItems[I] = nil then
+      Continue;
+    EdgeText := FWorkflowEdgesList.ListItems[I].Text;
+    P := Pos(' -> ', EdgeText);
+    if P <= 0 then
+      Continue;
+    if Incoming then
+    begin
+      if SameText(Trim(Copy(EdgeText, P + 4, MaxInt)), NodeId) then
+        Exit(True);
+    end
+    else if SameText(Trim(Copy(EdgeText, 1, P - 1)), NodeId) then
+      Exit(True);
+  end;
+end;
+
 function TMasterDetailForm.WorkflowCanvasNodeRect(Index: Integer;
   CanvasWidth: Single): TRectF;
 var
@@ -10401,10 +10538,13 @@ begin
     Exit;
   if FWorkflowNodePositions.ContainsKey(NodeId) then
     Exit;
-  Cols := Max(1, Trunc(Max(1, CanvasWidth - 20) / (116 + 18)));
+  { Lay out AFTER the INPUT gutter and before the OUTPUT box so auto-placed
+    nodes never sit under either derived box. }
+  Cols := Max(1, Trunc(Max(1, CanvasWidth - WF_GUTTER - WF_IO_W - 24) /
+    (116 + 18)));
   Col := Index mod Cols;
   Row := Index div Cols;
-  Pos := PointF(10 + Col * (116 + 18), 12 + Row * (42 + 22));
+  Pos := PointF(WF_GUTTER + Col * (116 + 18), 12 + Row * (42 + 22));
   FWorkflowNodePositions.AddOrSetValue(NodeId, Pos);
 end;
 
