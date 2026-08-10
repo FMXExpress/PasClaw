@@ -111,6 +111,7 @@ type
     FSandboxLabel: TLabel;
     FChatTurnEdit: TEdit;
     FLoadingSessions: Boolean;
+    FRestyling: Boolean;          { re-entrancy guard for RestyleCoreControls }
     { last payload each auto-refresh rendered, so an unchanged tick is a
       no-op instead of a clear-and-rebuild -- see StatsTimerTick }
     FLastRelayPayload: string;
@@ -1552,12 +1553,25 @@ end;
 procedure TMasterDetailForm.ThemeClick(Sender: TObject);
 begin
   FDarkStyleEnabled := not FDarkStyleEnabled;
-  ApplyTheme;
-  RestyleCoreControls;
-  RenderChat;
-  RenderAttachments;
-  RenderSessionList;
+  ApplyTheme;                { palette globals + StyleBook swap only }
   SaveLocalSettings;
+  { RestyleCoreControls is REQUIRED here -- ApplyTheme does not call it, and
+    it is the only thing that repaints controls carrying an explicit colour
+    (FPromptMemo would keep the dark theme's near-white ink on the light
+    composer; none of the renders below touch it).
+
+    All four run deferred: they free and rebuild hundreds of controls, and
+    doing that while this button's own click event is still on the stack, in
+    the middle of FMX's style-swap cascade, is the same hazard the walk
+    itself had. Let the frame finish, then restyle, then re-render. }
+  TThread.ForceQueue(nil,
+    procedure
+    begin
+      RestyleCoreControls;
+      RenderChat;
+      RenderAttachments;
+      RenderSessionList;
+    end);
   if FDarkStyleEnabled then
     SetStatus('dark style enabled')
   else if FLightStyleBook <> nil then
@@ -2180,15 +2194,33 @@ begin
 end;
 
 procedure TMasterDetailForm.RestyleCoreControls;
+{ Re-applies the palette to the whole control tree.
+
+  The walk MUST NOT iterate a live children list. Every branch below can
+  rebuild the control's applied style (assigning StyleLookup, StyledSettings,
+  padding or font all mark it for re-application), and in FMX a control's
+  applied style objects ARE its children -- so styling a node can destroy and
+  re-create the very collection the loop is indexing. Assigning StyleBook, as
+  ApplyTheme does immediately before calling this, marks every control in the
+  form for exactly that rebuild.
+
+  That is the theme-switch access violation: intermittent because it needs a
+  rebuild to land inside the loop, and hard to repeat because by the second
+  switch most controls are already settled. Snapshot the children after
+  styling the node, then walk the snapshot, skipping anything the restyle
+  detached. }
   procedure Walk(Obj: TFmxObject);
   var
     Button: TButton;
     Check: TCheckBox;
     Combo: TComboBox;
     I: Integer;
+    Kids: TArray<TFmxObject>;
     LabelControl: TLabel;
     ListBox: TListBox;
   begin
+    if Obj = nil then
+      Exit;
     if Obj is TLabel then
     begin
       LabelControl := TLabel(Obj);
@@ -2226,11 +2258,28 @@ procedure TMasterDetailForm.RestyleCoreControls;
     else if Obj is TMemo then
       StyleTextControl(TControl(Obj), UI_TEXT, 12);
 
+    { snapshot AFTER styling Obj, so it reflects any style rebuild that just
+      happened rather than the collection that rebuild replaced }
+    SetLength(Kids, Obj.ChildrenCount);
     for I := 0 to Obj.ChildrenCount - 1 do
-      Walk(Obj.Children[I]);
+      Kids[I] := Obj.Children[I];
+    for I := 0 to High(Kids) do
+      { Parent still Obj means the node survived this pass; a style rebuild
+        re-parents or drops its old objects, and those must not be followed }
+      if (Kids[I] <> nil) and (Kids[I].Parent = Obj) then
+        Walk(Kids[I]);
   end;
 begin
-  Walk(Self);
+  { A restyle can raise events that call back in here; a nested walk would
+    style half the tree against a collection the outer walk is still holding }
+  if FRestyling then
+    Exit;
+  FRestyling := True;
+  try
+    Walk(Self);
+  finally
+    FRestyling := False;
+  end;
   UpdateNavButtons;
 end;
 
