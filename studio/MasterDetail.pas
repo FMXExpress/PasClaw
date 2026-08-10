@@ -728,6 +728,17 @@ const
     viewports too narrow for both. }
   CHAT_GUTTER = 24;
   CHAT_MIN_W = 320;
+  { Fixed insets the transcript already carries before ApplyChatMeasure adds
+    anything: TranscriptBody's side margin and FChatFlow's own padding. The
+    composer is a sibling of TranscriptBody with neither, so its padding has
+    to make up the difference or the two columns never line up. }
+  CHAT_BODY_M = 10;
+  CHAT_FLOW_PAD = 8;
+  CHAT_TEXT_INSET = CHAT_BODY_M + CHAT_FLOW_PAD;
+  { The transcript scrolls and the composer does not, so the scroll bar's
+    gutter is width the transcript loses and the composer would otherwise
+    keep -- the composer has to give it back to end on the same x. }
+  CHAT_SCROLLBAR_W = 16;
   { the "narrow window" breakpoint -- named because UpdateClearAttachments
     has to agree with ApplyResponsiveLayout about what narrow means }
   UI_NARROW_W = 560;
@@ -1976,31 +1987,37 @@ procedure TMasterDetailForm.ApplyChatMeasure;
   right one. Margins on the flow itself cannot disagree with its width, and
   the other two call sites now come here instead of doing their own maths.
 
-  The cap follows the sessions drawer. Hiding the drawer is the operator
-  saying "give this conversation the room" -- so the measure yields and the
-  column runs the full width. With the drawer open the classic reading
-  measure holds. Transcript and composer take the SAME pad either way; they
-  can never disagree about how wide the chat is again. }
+  The cap holds whether or not the sessions drawer is open. A page does not
+  change width because a side panel closed -- the extra room becomes margin,
+  which is the whole point of a reading measure.
+
+  Both columns are positioned from ONE pad measured from the TAB edge, then
+  each container's own fixed insets are subtracted so the text lands on the
+  same x. Setting "the same pad" on both, as the first version did, is not
+  the same thing: the transcript already carried CHAT_TEXT_INSET that the
+  composer did not, so the composer always ran 18px wider on the left and
+  18px + the scroll bar wider on the right. }
 var
   Avail: Single;
+  FlowMargin: Single;
   MaxPad: Single;
   Pad: Single;
 begin
   if (FChatScroll = nil) or (FChatFlow = nil) then
     Exit;
-  Avail := FChatScroll.Width;
-  if Avail <= 0 then
+  { measure against the TAB, the one width both columns share; the scroll box
+    is already inset by TranscriptBody's margins }
+  Avail := FChatScroll.Width + CHAT_BODY_M * 2;
+  if Avail <= CHAT_BODY_M * 2 then
     Exit;
-  { CHAT_GUTTER is the PREFERRED inset in both regimes -- full-width mode is
-    wider, not edge-to-edge, since text touching the window frame reads as a
-    defect. It is not a hard floor, though: on a viewport narrower than
-    CHAT_MIN_W + two gutters the column would be pushed past the right edge
-    and clipped. Content wins over decoration, so the gutter gives way first
-    and only collapses to nothing once even that is not enough. }
-  if FSidebarVisible then
-    Pad := (Avail - CHAT_MAX_W) / 2
-  else
-    Pad := CHAT_GUTTER;
+  { CHAT_GUTTER is the PREFERRED inset once the window is narrower than the
+    measure -- the column stops centring but still keeps off the frame, since
+    text touching the window edge reads as a defect. It is not a hard floor,
+    though: on a viewport narrower than CHAT_MIN_W + two gutters the column
+    would be pushed past the right edge and clipped. Content wins over
+    decoration, so the gutter gives way first and only collapses to nothing
+    once even that is not enough. }
+  Pad := (Avail - CHAT_MAX_W) / 2;
   if Pad < CHAT_GUTTER then
     Pad := CHAT_GUTTER;
   MaxPad := (Avail - CHAT_MIN_W - 8) / 2;
@@ -2008,12 +2025,20 @@ begin
     Pad := MaxPad;
   if Pad < 0 then
     Pad := 0;
-  SetControlMargins(FChatFlow, Pad, 0, Pad, 0);
-  FChatFlow.Width := Max(CHAT_MIN_W, Avail - Pad * 2 - 8);
-  { same horizontal inset for the composer, PRESERVING its 10/6/10/8 base
-    padding -- the padding version zeroed the vertical part }
+  { The flow starts CHAT_TEXT_INSET in already, so it only adds the rest. If
+    the pad is smaller than that inset the flow can give nothing back, so the
+    composer adopts the inset instead -- still equal, just set by the floor. }
+  FlowMargin := Pad - CHAT_TEXT_INSET;
+  if FlowMargin < 0 then
+  begin
+    FlowMargin := 0;
+    Pad := CHAT_TEXT_INSET;
+  end;
+  SetControlMargins(FChatFlow, FlowMargin, 0, FlowMargin, 0);
+  FChatFlow.Width := Max(CHAT_MIN_W, FChatScroll.Width - FlowMargin * 2);
+  { vertical padding preserved; the right side gives back the scroll gutter }
   if FComposerLayout <> nil then
-    SetControlPadding(FComposerLayout, 10 + Pad, 6, 10 + Pad, 8);
+    SetControlPadding(FComposerLayout, Pad, 6, Pad + CHAT_SCROLLBAR_W, 8);
 end;
 
 procedure TMasterDetailForm.ApplyButtonIcon(Button: TButton);
@@ -3016,13 +3041,13 @@ end;
 procedure TMasterDetailForm.SetSidebarVisible(Value: Boolean; Persist: Boolean);
 { The ONE way the sessions drawer opens or closes.
 
-  Drawer visibility drives the chat measure (hidden = full width, shown =
-  800px capped), so every transition has to re-measure AND re-render: bubbles
-  bake their width in at render time, so a measure change alone leaves them
-  at the old width. Three callers used to flip FSidebarVisible by hand and
-  only one of them re-measured -- picking a session on a compact layout left
-  the transcript capped while the composer went wide, and /sessions reopened
-  the drawer over full-width bubbles.
+  A transition changes the width the chat is measured against, so it has to
+  re-measure AND re-render: bubbles bake their width in at render time, so a
+  measure change alone leaves them at the old width. (The 800px cap itself no
+  longer depends on the drawer -- only the margins around it do -- but the
+  re-render is needed either way.) Three callers used to flip FSidebarVisible
+  by hand and only one of them re-measured, so picking a session on a compact
+  layout left the transcript and the composer disagreeing.
 
   The refresh is deferred because at call time FChatScroll.Width is still the
   PRE-transition value; FMX applies the new alignment later in the frame. }
@@ -21940,7 +21965,9 @@ var
       TranscriptRow := TLayout.Create(FChatFlow);
       TranscriptRow.Parent := FChatFlow;
       TranscriptRow.Align := TAlignLayout.None;
-      TranscriptRow.Width := Max(320, AvailableWidth - 6);
+      { full flow width: the 6px it used to surrender put the right-hand
+        (user) bubbles off the column ApplyChatMeasure just measured }
+      TranscriptRow.Width := Max(CHAT_MIN_W, AvailableWidth);
       TranscriptRow.Height := RowHeight;
       TranscriptRow.TagString := Index.ToString;
       TranscriptRow.HitTest := False;
