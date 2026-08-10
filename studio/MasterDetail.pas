@@ -13146,6 +13146,7 @@ begin
       FToolsToggleButton.Text := 'Tools -'
     else
       FToolsToggleButton.Text := 'Tools +';
+  SaveLocalSettings;   { the toggle is a persisted preference }
   RenderChat;
 end;
 
@@ -13328,6 +13329,8 @@ begin
         FParamsToggleButton.Text := 'Params -'
       else
         FParamsToggleButton.Text := 'Params +';
+    FChatToolsExpanded := Ini.ReadBool('chat', 'tool_details_expanded',
+      FChatToolsExpanded);
     FOnboardingDismissed := Ini.ReadBool('onboarding', 'dismissed', False);
   finally
     Ini.Free;
@@ -13357,6 +13360,10 @@ begin
       FSessionDrawerWidth := FSessionDrawer.Width;
     Ini.WriteInteger('sidebar', 'width', Round(FSessionDrawerWidth));
     Ini.WriteBool('ui', 'dark_style', FDarkStyleEnabled);
+    { Web-UI parity (pasclaw.tooldetails.v1): the tool-card expand/collapse
+      choice is a per-operator preference, not per-session -- it was toggled
+      at runtime but reset to collapsed on every restart. }
+    Ini.WriteBool('chat', 'tool_details_expanded', FChatToolsExpanded);
     Ini.WriteBool('onboarding', 'dismissed', FOnboardingDismissed);
   finally
     Ini.Free;
