@@ -465,6 +465,7 @@ type
     procedure KbSearchClick(Sender: TObject);
     procedure KbSourcesChange(Sender: TObject);
     procedure KbSourcesLoadClick(Sender: TObject);
+    procedure UpdateToolsToggleCaption;
     procedure LoadLocalSettings;
     procedure LoadAirStyle;
     procedure LoadChatParams(const SessionId: string);
@@ -13573,12 +13574,23 @@ end;
 procedure TMasterDetailForm.ChatToolsToggleClick(Sender: TObject);
 begin
   FChatToolsExpanded := not FChatToolsExpanded;
-  if FToolsToggleButton <> nil then
-    if FChatToolsExpanded then
-      FToolsToggleButton.Text := 'Tools -'
-    else
-      FToolsToggleButton.Text := 'Tools +';
+  UpdateToolsToggleCaption;
+  SaveLocalSettings;   { the toggle is a persisted preference }
   RenderChat;
+end;
+
+procedure TMasterDetailForm.UpdateToolsToggleCaption;
+{ Single place that derives the button caption from FChatToolsExpanded, so
+  the label can't drift from the state -- the toggle handler and the
+  settings-restore path both call it. Nil-safe: harmless if the chat tab
+  hasn't been built yet. }
+begin
+  if FToolsToggleButton = nil then
+    Exit;
+  if FChatToolsExpanded then
+    FToolsToggleButton.Text := 'Tools -'
+  else
+    FToolsToggleButton.Text := 'Tools +';
 end;
 
 procedure TMasterDetailForm.ResetParamsClick(Sender: TObject);
@@ -13760,6 +13772,11 @@ begin
         FParamsToggleButton.Text := 'Params -'
       else
         FParamsToggleButton.Text := 'Params +';
+    FChatToolsExpanded := Ini.ReadBool('chat', 'tool_details_expanded',
+      FChatToolsExpanded);
+    { BuildInterface has already created the button captioned "Tools +";
+      restoring an expanded preference must move the label with it. }
+    UpdateToolsToggleCaption;
     FOnboardingDismissed := Ini.ReadBool('onboarding', 'dismissed', False);
   finally
     Ini.Free;
@@ -13789,6 +13806,10 @@ begin
       FSessionDrawerWidth := FSessionDrawer.Width;
     Ini.WriteInteger('sidebar', 'width', Round(FSessionDrawerWidth));
     Ini.WriteBool('ui', 'dark_style', FDarkStyleEnabled);
+    { Web-UI parity (pasclaw.tooldetails.v1): the tool-card expand/collapse
+      choice is a per-operator preference, not per-session -- it was toggled
+      at runtime but reset to collapsed on every restart. }
+    Ini.WriteBool('chat', 'tool_details_expanded', FChatToolsExpanded);
     Ini.WriteBool('onboarding', 'dismissed', FOnboardingDismissed);
   finally
     Ini.Free;
