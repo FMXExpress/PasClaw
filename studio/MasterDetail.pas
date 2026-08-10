@@ -18407,7 +18407,14 @@ begin
     Exit;
   end;
   SelectTabByText('Files');
-  FilesOpenPath(PathText);
+  { A KB hit is a FILE path. FilesOpenPath drives /v1/fs, the directory
+    listing, which the gateway 404s for a non-directory -- so the button
+    switched tabs and then failed. Use the same read/preview dispatch the
+    Files tab's own 'read' action uses. }
+  if IsPreviewImagePath(PathText) then
+    FilesPreviewImagePath(PathText)
+  else
+    FilesReadPath(PathText);
 end;
 
 procedure TMasterDetailForm.KbSourcesChange(Sender: TObject);
