@@ -2684,7 +2684,6 @@ object TStyleContainer
       Enabled = False
     end
   end
-  { --- generated icon button styles: scripts/gen-studio-icons.py --- }
   object TLayout
     StyleName = 'actiontoolbutton'
     Position.X = 310.000000000000000000
@@ -2795,6 +2794,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -2917,6 +2917,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -3037,6 +3038,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -3156,6 +3158,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -3275,6 +3278,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -3394,6 +3398,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -3513,6 +3518,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -3632,6 +3638,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -3759,6 +3766,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -3903,6 +3911,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -4021,6 +4030,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -4140,6 +4150,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -4257,6 +4268,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -4399,6 +4411,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -4542,6 +4555,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -4659,6 +4673,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Stroke.Kind = None
+      WrapMode = Fit
       Height = 15.000000000000000000
       Width = 15.000000000000000000
       Data.Path = {
@@ -4670,7 +4685,6 @@ object TStyleContainer
         01000000B81E853E8FC2753F010000007B142E3EC3F5A83E}
     end
   end
-  { --- end generated icon button styles --- }
   object TLayout
     StyleName = 'popupbuttonstyle'
     Position.X = 310.000000000000000000

@@ -35,6 +35,16 @@ style files.
 
 `--check` regenerates in memory and fails if the files are out of date, so CI
 can catch a hand-edit that diverges from this source of truth.
+
+DFM has NO comment syntax. The first version of this script bracketed its
+output with '{ --- generated --- }' marker lines; to the object-text parser a
+'{' opens BINARY HEX DATA, so TStyleBook.LoadFromFile raised on the marker,
+the loader swallowed the exception, and the app silently fell back to the
+platform default style -- broken theme, dead Light/Dark toggle, and the
+platform's own glyphs where ours should be. Generated blocks are therefore
+identified by their StyleName (the 16 lookup names belong to this script and
+nothing else), and validate() enforces the real parser rule -- everything
+inside braces must be hex -- across the whole file before a byte is written.
 """
 import math
 import re
@@ -47,8 +57,11 @@ STYLES = [
     ("studio/PasclawLight.style", "xFF4A5563"),
 ]
 
-BEGIN = "  { --- generated icon button styles: scripts/gen-studio-icons.py --- }"
-END = "  { --- end generated icon button styles --- }"
+# legacy marker lines from the first version; stripped on sight (migration)
+LEGACY_MARKERS = {
+    "{ --- generated icon button styles: scripts/gen-studio-icons.py --- }",
+    "{ --- end generated icon button styles --- }",
+}
 
 
 # ---------------------------------------------------------------- geometry --
@@ -206,6 +219,7 @@ def path_object(name, fill, indent):
         indent + "  HitTest = False",
         indent + "  Locked = True",
         indent + "  Stroke.Kind = None",
+        indent + "  WrapMode = Fit",
         indent + "  Height = 15.000000000000000000",
         indent + "  Width = 15.000000000000000000",
         indent + "  Data.Path = {",
@@ -250,26 +264,84 @@ def drop_glyph(block):
     return out
 
 
+def strip_generated(lines):
+    """Remove this script's previous output: legacy marker lines, and any
+    object whose StyleName is one of the 16 generated lookup names."""
+    gen_names = {n.lower() for n in GLYPHS}
+    out, i = [], 0
+    while i < len(lines):
+        s = lines[i].strip()
+        if s in LEGACY_MARKERS:
+            i += 1
+            continue
+        if s.startswith("object ") and i + 1 < len(lines):
+            m = re.match(r"^StyleName = '([a-z]+)'$", lines[i + 1].strip())
+            if m and m.group(1) in gen_names:
+                indent = len(lines[i]) - len(lines[i].lstrip())
+                j = i + 1
+                while j < len(lines) and not (
+                        lines[j].strip() == "end"
+                        and (len(lines[j]) - len(lines[j].lstrip())) == indent):
+                    j += 1
+                i = j + 1
+                continue
+        out.append(lines[i])
+        i += 1
+    return out
+
+
+def validate(text, path):
+    """Enforce the object-text parser's brace rule over the whole file.
+
+    DFM text has no comments: '{' opens a binary-data token and everything up
+    to '}' must be hexadecimal. A violation anywhere makes LoadFromFile raise
+    and the app silently fall back to the platform style, so this checks the
+    ENTIRE file -- hand-written parts included -- not just this script's own
+    output. Quoted strings are skipped, as the parser skips them.
+    """
+    errs, i, line, n = [], 0, 1, len(text)
+    while i < n:
+        c = text[i]
+        if c == "\n":
+            line += 1
+        elif c == "'":
+            j = i + 1
+            while j < n and text[j] != "'" and text[j] != "\n":
+                j += 1
+            i = j
+        elif c == "{":
+            j = text.find("}", i + 1)
+            if j < 0:
+                errs.append((line, "unterminated '{' binary-data token"))
+                break
+            blob = text[i + 1:j]
+            if re.search(r"[^0-9A-Fa-f\s]", blob):
+                errs.append(
+                    (line, "non-hex inside {...}: DFM has no comment syntax; "
+                           "braces open binary data"))
+            line += blob.count("\n")
+            i = j
+        i += 1
+    for ln, msg in errs:
+        print("%s(%d): %s" % (path, ln, msg))
+    return not errs
+
+
 def build(path, fill):
     src = open(path, encoding="utf-8", errors="replace").read()
-    lines = src.split("\n")
-
-    # a previous run's output is replaced wholesale, never appended to
-    if BEGIN in lines:
-        lines = lines[:lines.index(BEGIN)] + lines[lines.index(END) + 1:]
+    lines = strip_generated(src.split("\n"))
 
     start, end = block_at(lines, "buttonstyle")
     template = drop_glyph(lines[start:end + 1])
     indent = " " * (len(template[0]) - len(template[0].lstrip()))
 
-    generated = [BEGIN]
+    generated = []
     for name in sorted(GLYPHS):
         clone = list(template)
         clone[1] = indent + "  StyleName = '%s'" % name.lower()
         # the glyph goes last so it paints over the background and the caption
         clone = clone[:-1] + [path_object(name, fill, indent + "  "), clone[-1]]
         generated.extend(clone)
-    generated.append(END)
 
     return "\n".join(lines[:end + 1] + generated + lines[end + 1:])
 
@@ -279,6 +351,11 @@ def main(argv):
     bad = 0
     for path, fill in STYLES:
         want = build(path, fill)
+        if not validate(want, path):
+            print("%s: INVALID -- refusing to %s" %
+                  (path, "pass" if check else "write"))
+            bad += 1
+            continue
         have = open(path, encoding="utf-8", errors="replace").read()
         if want == have:
             print("%s: up to date (%d icons)" % (path, len(GLYPHS)))
