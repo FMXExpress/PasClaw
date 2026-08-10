@@ -9307,9 +9307,9 @@ end;
 procedure TMasterDetailForm.SessionImportClick(Sender: TObject);
 var
   Base: string;
-  Body: string;
   Dialog: TOpenDialog;
   FilePath: string;
+  SessionId: string;
   Token: string;
 begin
   Dialog := TOpenDialog.Create(Self);
@@ -9322,13 +9322,14 @@ begin
   finally
     Dialog.Free;
   end;
-  Body := TFile.ReadAllText(FilePath, TEncoding.UTF8);
   Base := GatewayBaseUrl;
   Token := FTokenEdit.Text;
+  SessionId := FActiveSessionId;
   SetStatus('importing sessions...');
   TTask.Run(
     procedure
     var
+      Body: string;
       CountText: string;
       ErrorText: string;
       ResponseText: string;
@@ -9337,7 +9338,12 @@ begin
     begin
       CountText := '';
       try
-        ResponseText := HttpText(Base, Token, FActiveSessionId, 'POST',
+        { Read on the worker, not the UI thread: a full ChatGPT
+          conversations.json can be hundreds of MB, which would freeze the
+          form -- and read/decode failures belong inside this try so they
+          surface as a status message instead of escaping. }
+        Body := TFile.ReadAllText(FilePath, TEncoding.UTF8);
+        ResponseText := HttpText(Base, Token, SessionId, 'POST',
           '/v1/sessions/import', Body, 'application/json',
           'application/json', Status);
         if not IsHttpOk(Status) then
