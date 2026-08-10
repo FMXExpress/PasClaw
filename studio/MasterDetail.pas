@@ -712,6 +712,7 @@ const
   WIN_STARTF_USESHOWWINDOW = $00000001;
   WIN_STARTF_USESTDHANDLES = $00000100;
   WIN_STILL_ACTIVE = 259;
+  WIN_SW_HIDE = 0;
 
 var
   (* Visual hierarchy, assigned per theme in ApplyTheme. These cannot be
@@ -732,7 +733,6 @@ var
   UI_USER_BORDER: TAlphaColor  = $FF2F4560;
   UI_COMPOSER_FILL: TAlphaColor   = $FF1A1E24; { 3 -- composer }
   UI_COMPOSER_BORDER: TAlphaColor = $FF3BA7FF;
-  WIN_SW_HIDE = 0;
 
 type
   TWinSecurityAttributes = record
@@ -1783,8 +1783,10 @@ begin
   if StyleBook = nil then
     Exit(True);            { platform style in use -- its icons exist }
   Found := False;
-  if StyleBook.Root <> nil then
-    Walk(StyleBook.Root);
+  { TStyleBook.Root is an IRoot, not a TFmxObject -- reach the object behind
+    the interface and only walk it when it really is an FMX node. }
+  if (StyleBook.Root <> nil) and (StyleBook.Root.GetObject is TFmxObject) then
+    Walk(TFmxObject(StyleBook.Root.GetObject));
   Result := Found;
 end;
 
