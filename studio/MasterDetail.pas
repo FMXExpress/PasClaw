@@ -109,6 +109,7 @@ type
     FComposerLayout: TLayout;
     FComposerStatusLabel: TLabel;
     FSandboxLabel: TLabel;
+    FWorkspaceLabel: TLabel;
     FChatTurnEdit: TEdit;
     FLoadingSessions: Boolean;
     { last payload each auto-refresh rendered, so an unchanged tick is a
@@ -2412,6 +2413,16 @@ begin
   if FNavCombo <> nil then
     FNavCombo.Visible := False;
 
+  if FWorkspaceLabel <> nil then
+  begin
+    { The three buttons it labels need ~266px plus the row's margins. Below
+      that the fixed label would overlap them, so it yields: the buttons ARE
+      the function, the label only names it. Their hints still explain them
+      once it is gone. }
+    FWorkspaceLabel.Visible := W >= 450;
+    FWorkspaceLabel.Width := IfThen(FWorkspaceLabel.Visible,
+      IfThen(Compact, 110, 160), 0);
+  end;
   if FModeButton <> nil then
     FModeButton.Width := IfThen(Narrow, 76, 94);
   if FModelCombo <> nil then
@@ -3001,7 +3012,6 @@ var
   NativeBar: TLayout;
   NavHost: TLayout;
   SessionButtons: TLayout;
-  WorkspaceLabel: TLabel;
   SettingsTab: TTabItem;
   SettingsTabs: TTabControl;
   SearchLabel: TLabel;
@@ -3381,13 +3391,13 @@ begin
 
   { name the row: three unrelated-looking buttons floating in a toolbar read
     as leftovers; under a label they read as the workspace section }
-  WorkspaceLabel := TLabel.Create(Self);
-  WorkspaceLabel.Parent := NativeBar;
-  WorkspaceLabel.Align := TAlignLayout.Left;
-  WorkspaceLabel.Width := 160;
-  WorkspaceLabel.Text := 'Workspace backup';
-  WorkspaceLabel.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(WorkspaceLabel, UI_CHROME_TEXT, 11, True);
+  FWorkspaceLabel := TLabel.Create(Self);
+  FWorkspaceLabel.Parent := NativeBar;
+  FWorkspaceLabel.Align := TAlignLayout.Left;
+  FWorkspaceLabel.Width := 160;
+  FWorkspaceLabel.Text := 'Workspace backup';
+  FWorkspaceLabel.TextSettings.VertAlign := TTextAlign.Center;
+  StyleLabel(FWorkspaceLabel, UI_CHROME_TEXT, 11, True);
 
   Btn := TButton.Create(Self);
   Btn.Parent := NativeBar;
