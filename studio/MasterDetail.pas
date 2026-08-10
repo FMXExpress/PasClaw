@@ -691,6 +691,8 @@ const
     ROW while its children kept full height, so the surplus painted over the
     next bubbles. Only pathological content should ever reach this. }
   CHAT_ROW_MAX = 24000;
+  { Square-ish footprint for an icon-only button. }
+  ICON_BTN_W = 34;
   WF_IO_W = 104;
   WF_GUTTER = 128;
   WIN_CREATE_ALWAYS = 2;
@@ -1708,6 +1710,7 @@ procedure TMasterDetailForm.ApplyButtonIcon(Button: TButton);
    so icon + hint can never drift from each other or from the action. *)
 var
   Cap: string;
+  HintText: string;
   Lookup: string;
   IconOnly: Boolean;
 begin
@@ -1715,33 +1718,40 @@ begin
     Exit;
   { Remember the original caption once, so repeated restyles (theme switch)
     do not read back an already-blanked face. }
-  if Button.Hint = '' then
-    Button.Hint := Button.Text;
-  Cap := Trim(Button.Hint);
+  { Already iconified on an earlier pass (theme switch re-runs this walk):
+    the face is blank and a hint is showing. Re-deriving from an empty caption
+    would just clear the mapping, so stop here.
+    NB: TagString is NOT usable as a caption stash -- chat-turn buttons encode
+    their action in it ('copy'#9<index>) and ChatTurnActionClick parses it. }
+  if (Button.Text = '') and Button.ShowHint then
+    Exit;
+  Cap := Trim(Button.Text);
   if Cap = '' then
     Exit;
 
   Lookup := '';
   IconOnly := False;
+  HintText := Cap;
   { Tier 1 -- frequent, unambiguous verbs: icon only. }
-  if SameText(Cap, 'Refresh')      then begin Lookup := 'refreshtoolbutton'; IconOnly := True; end
-  else if SameText(Cap, 'Search')  then begin Lookup := 'searchtoolbutton';  IconOnly := True; end
-  else if SameText(Cap, 'Delete')  then begin Lookup := 'deletetoolbutton';  IconOnly := True; end
+  if SameText(Cap, 'Refresh')      then begin Lookup := 'refreshtoolbutton'; IconOnly := True; HintText := 'Refresh'; end
+  else if SameText(Cap, 'Search')  then begin Lookup := 'searchtoolbutton';  IconOnly := True; HintText := 'Search'; end
+  else if SameText(Cap, 'Delete')  then begin Lookup := 'deletetoolbutton';  IconOnly := True; HintText := 'Delete'; end
   else if SameText(Cap, 'Remove')  then begin Lookup := 'deletetoolbutton';  IconOnly := True; end
   else if SameText(Cap, 'Add')     then begin Lookup := 'addtoolbutton';     IconOnly := True; end
   else if SameText(Cap, 'New')     then begin Lookup := 'addtoolbutton';     IconOnly := True; end
   else if SameText(Cap, 'Clear')   then begin Lookup := 'deletetoolbutton';  IconOnly := True; end
-  else if SameText(Cap, 'Copy')    then begin Lookup := 'organizetoolbutton'; IconOnly := True; end
+  else if SameText(Cap, 'Copy')    then begin Lookup := 'organizetoolbutton'; IconOnly := True; HintText := 'Copy to clipboard'; end
   else if SameText(Cap, 'Save')    then begin Lookup := 'actiontoolbutton';  IconOnly := True; end
   { Tier 2 -- tight rows where width is already squeezed. }
-  else if SameText(Cap, 'Send')    then begin Lookup := 'composetoolbutton'; IconOnly := True; end
-  else if SameText(Cap, 'Stop')    then begin Lookup := 'stoptoolbutton';    IconOnly := True; end
+  else if SameText(Cap, 'Send')    then begin Lookup := 'composetoolbutton'; IconOnly := True; HintText := 'Send (steers the turn while streaming)'; end
+  else if SameText(Cap, 'Stop')    then begin Lookup := 'stoptoolbutton';    IconOnly := True; HintText := 'Stop the running turn'; end
   else if SameText(Cap, 'Undo')    then begin Lookup := 'arrowlefttoolbutton';  IconOnly := True; end
   else if SameText(Cap, 'Redo')    then begin Lookup := 'arrowrighttoolbutton'; IconOnly := True; end
-  else if SameText(Cap, 'Preview') then begin Lookup := 'detailstoolbutton'; IconOnly := True; end;
+  else if SameText(Cap, 'Preview') then begin Lookup := 'detailstoolbutton'; IconOnly := True; HintText := 'Preview'; end;
 
   { Hint is set for EVERY button we recognise, icon or not -- ShowHint alone
     is what makes Hint do anything in FMX, and it was never enabled here. }
+  Button.Hint := HintText;
   Button.ShowHint := True;
   if (Lookup = '') or (not FIconButtons) then
   begin
@@ -1751,7 +1761,14 @@ begin
   end;
   Button.StyleLookup := Lookup;
   if IconOnly then
-    Button.Text := ''
+  begin
+    Button.Text := '';
+    { A face with no text should not keep the width its caption needed --
+      "Copy" at 54px as a bare icon reads as a mis-sized control. Only ever
+      SHRINK, so a deliberately large control keeps its footprint. }
+    if Button.Width > ICON_BTN_W then
+      Button.Width := ICON_BTN_W;
+  end
   else
     Button.Text := Cap;
 end;
