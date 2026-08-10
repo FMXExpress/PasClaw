@@ -208,6 +208,9 @@ type
     FSessionCache: TList<TPasClawSession>;
     FSessionList: TListBox;
     FSessionSearch: TEdit;
+    FSessionSearchButton: TButton;
+    FSessionSearchVisible: Boolean;
+    FGatewayOnline: Boolean;
     FSkillCatalogList: TListBox;
     FSkillCatalogPane: TLayout;
     FSkillDetailMemo: TMemo;
@@ -554,6 +557,12 @@ type
     procedure RenderAttachments;
     procedure RenderChat;
     procedure RenderModeButton;
+    procedure RenderParamsButton;
+    procedure RenderConnectButton;
+    procedure RenderSessionSearchBox;
+    procedure SessionSearchToggleClick(Sender: TObject);
+    procedure SessionSearchKeyDown(Sender: TObject; var Key: Word;
+      var KeyChar: Char; Shift: TShiftState);
     procedure RenderQueue;
     procedure UpdateComposerState;
     procedure RenderSessionList;
@@ -2140,11 +2149,12 @@ begin
   else if SameText(Cap, 'Next')    then begin Lookup := 'arrowrighttoolbutton'; IconOnly := True; HintText := 'Next page'; end
   { hint-only entries: these stay text (state/disclosure controls), but the
     caption alone does not explain what they disclose }
-  else if SameText(Cap, 'Params +') then HintText := 'Show sampling parameters'
-  else if SameText(Cap, 'Params -') then HintText := 'Hide sampling parameters'
+  { Params/mode captions carry their own hints (RenderParamsButton,
+    RenderModeButton) -- they change with state, so a static table cannot
+    describe them }
   else if SameText(Cap, 'Tools +')  then HintText := 'Show tool activity cards'
   else if SameText(Cap, 'Tools -')  then HintText := 'Hide tool activity cards'
-  else if Cap.StartsWith('mode:')   then HintText := 'Toggle build / plan mode';
+  else if SameText(Cap, 'Files')   then begin Lookup := 'organizetoolbutton'; IconOnly := True; HintText := 'Workspace files'; end;
   { 'Save' deliberately has no icon: the platform table offers no save glyph,
     and DoneToolButton -- the near miss -- is one of the tint-less entries, so
     it would render as an empty coloured pill. A caption beats a wrong icon. }
@@ -2380,27 +2390,16 @@ begin
     FSessionToggleButton.Text := #$2630;
   end;
 
-  if FNewSessionButton <> nil then
-  begin
-    { iconified (blank caption + hint) means ApplyButtonIcon owns this
-      button's face -- re-captioning here would put the text back and grow a
-      34px icon button to 104px on every resize }
-    if not IsIconified(FNewSessionButton) then
-    begin
-      FNewSessionButton.Width := IfThen(Narrow, 44, IfThen(Compact, 82, 104));
-      if Narrow then
-        FNewSessionButton.Text := '+'
-      else
-        FNewSessionButton.Text := '+ Session';
-    end;
-  end;
+  { FNewSessionButton is no longer resized here: it lives in the sessions
+    drawer header, whose width does not track the window. Its only variable
+    is whether ApplyButtonIcon resolved the glyph -- if it did not, the
+    caption comes back and needs room for it. }
+  if (FNewSessionButton <> nil) and not IsIconified(FNewSessionButton) then
+    FNewSessionButton.Width := 92;
   if FRefreshButton <> nil then
   begin
     FRefreshButton.Width := IfThen(Narrow, 44, IfThen(Compact, 78, 92));
-    if Narrow then
-      FRefreshButton.Text := 'Go'
-    else
-      FRefreshButton.Text := 'Connect';
+    RenderConnectButton;   { caption follows connection state, not layout }
   end;
   if FThemeButton <> nil then
   begin
@@ -3144,20 +3143,11 @@ begin
   LabelControl.TextSettings.VertAlign := TTextAlign.Center;
   StyleLabel(LabelControl, UI_ACCENT, 13, True);
 
-  Btn := TButton.Create(Self);
-  FNewSessionButton := Btn;
-  Btn.Parent := FHeaderRow;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 104;
-  Btn.Text := '+ Session';
-  Btn.OnClick := NewSessionClick;
-  SetControlMargins(Btn, 8, 0, 0, 0);
-
   FRefreshButton := TButton.Create(Self);
   FRefreshButton.Parent := FHeaderRow;
   FRefreshButton.Align := TAlignLayout.Right;
   FRefreshButton.Width := 92;
-  FRefreshButton.Text := 'Connect';
+  RenderConnectButton;
   FRefreshButton.OnClick := RefreshClick;
   SetControlMargins(FRefreshButton, 8, 0, 0, 0);
 
@@ -3240,20 +3230,42 @@ begin
   DrawerHeader.Align := TAlignLayout.Top;
   DrawerHeader.Height := 34;
 
+  { Creating a session is a SESSIONS action, so it belongs to the sessions
+    header, not the app-wide toolbar. Right-aligned children first, then the
+    title as Client, so the title takes what is left. }
+  Btn := TButton.Create(Self);
+  FNewSessionButton := Btn;
+  Btn.Parent := DrawerHeader;
+  Btn.Align := TAlignLayout.Right;
+  Btn.Width := ICON_BTN_W;
+  Btn.Text := '+ Session';      { ApplyButtonIcon swaps in the add glyph }
+  Btn.OnClick := NewSessionClick;
+  SetControlMargins(Btn, 6, 2, 0, 2);
+
+  FSessionSearchButton := TButton.Create(Self);
+  FSessionSearchButton.Parent := DrawerHeader;
+  FSessionSearchButton.Align := TAlignLayout.Right;
+  FSessionSearchButton.Width := ICON_BTN_W;
+  FSessionSearchButton.Text := 'Search';
+  FSessionSearchButton.OnClick := SessionSearchToggleClick;
+  SetControlMargins(FSessionSearchButton, 6, 2, 0, 2);
+
   SearchLabel := TLabel.Create(Self);
   SearchLabel.Parent := DrawerHeader;
   SearchLabel.Align := TAlignLayout.Client;
   SearchLabel.Text := 'Sessions';
   SearchLabel.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(SearchLabel, UI_TEXT, 12, True);
+  StyleLabel(SearchLabel, UI_CHROME_TEXT, 11, True);
 
+  { the filter box is summoned by the search icon; a permanently open field
+    is a control the list wears whether or not anyone is filtering }
   FSessionSearch := TEdit.Create(Self);
   FSessionSearch.Parent := FSidebar;
   FSessionSearch.Align := TAlignLayout.Top;
-  FSessionSearch.Height := 36;
   FSessionSearch.TextPrompt := 'filter sessions';
   FSessionSearch.OnChange := SessionSearchChange;
-  SetControlMargins(FSessionSearch, 0, 0, 0, 8);
+  FSessionSearch.OnKeyDown := SessionSearchKeyDown;
+  RenderSessionSearchBox;
 
   FSessionList := TListBox.Create(Self);
   FSessionList.Parent := FSidebar;
@@ -3601,14 +3613,12 @@ begin
 
   FParamsToggleButton := TButton.Create(Self);
   FParamsToggleButton.Parent := TopLine;
-  FParamsToggleButton.Align := TAlignLayout.Left;
-  FParamsToggleButton.Width := 82;
-  if FChatParamsVisible then
-    FParamsToggleButton.Text := 'Params -'
-  else
-    FParamsToggleButton.Text := 'Params +';
+  { far right, captioned like the drop-down it actually is }
+  FParamsToggleButton.Align := TAlignLayout.Right;
+  FParamsToggleButton.Width := 92;
   FParamsToggleButton.OnClick := ParamsToggleClick;
-  SetControlMargins(FParamsToggleButton, 0, 0, 8, 0);
+  SetControlMargins(FParamsToggleButton, 6, 0, 0, 0);
+  RenderParamsButton;
 
   FToolsToggleButton := TButton.Create(Self);
   FToolsToggleButton.Parent := TopLine;
@@ -3787,11 +3797,16 @@ begin
   FSystemMemo.OnChange := ChatParamsChanged;
   LoadPromptPresets;
 
+  { Bottom, not Top: turn counts are a footnote about the transcript, and
+    directly above it they were the first thing read on entering the tab.
+    Created before the composer, so it takes the bottom edge and the
+    composer stacks above it. Centred to sit under the reading column. }
   FChatStatsLabel := TLabel.Create(Self);
   FChatStatsLabel.Parent := Tab;
-  FChatStatsLabel.Align := TAlignLayout.Top;
-  FChatStatsLabel.Height := 22;
+  FChatStatsLabel.Align := TAlignLayout.Bottom;
+  FChatStatsLabel.Height := 20;
   FChatStatsLabel.Text := '0 turns';
+  FChatStatsLabel.TextSettings.HorzAlign := TTextAlign.Center;
   FChatStatsLabel.TextSettings.VertAlign := TTextAlign.Center;
   FChatStatsLabel.StyledSettings := FChatStatsLabel.StyledSettings -
     [TStyledSetting.FontColor];
@@ -12774,16 +12789,85 @@ begin
     SetStatus('model: ' + FSavedModel);
 end;
 
+procedure TMasterDetailForm.RenderConnectButton;
+{ The button reported an INTENT ("Connect") forever, including while
+  connected, so it never answered the only question it is well placed to
+  answer. It now reports the STATE and stays clickable as a reconnect. }
+begin
+  if FRefreshButton = nil then
+    Exit;
+  if ClientWidth < UI_NARROW_W then
+    FRefreshButton.Text := IfThen(FGatewayOnline, 'Online', 'Go')
+  else
+    FRefreshButton.Text := IfThen(FGatewayOnline, 'Connected', 'Connect');
+  FRefreshButton.Hint := IfThen(FGatewayOnline,
+    'Connected to the gateway - click to reload sessions',
+    'Connect to the gateway');
+  FRefreshButton.ShowHint := True;
+end;
+
+procedure TMasterDetailForm.RenderSessionSearchBox;
+begin
+  if FSessionSearch = nil then
+    Exit;
+  FSessionSearch.Visible := FSessionSearchVisible;
+  FSessionSearch.Height := IfThen(FSessionSearchVisible, 36, 0);
+  SetControlMargins(FSessionSearch, 0, 0, 0,
+    IfThen(FSessionSearchVisible, 8, 0));
+end;
+
+procedure TMasterDetailForm.SessionSearchToggleClick(Sender: TObject);
+begin
+  FSessionSearchVisible := not FSessionSearchVisible;
+  RenderSessionSearchBox;
+  if FSessionSearchVisible then
+    FSessionSearch.SetFocus
+  else if Trim(FSessionSearch.Text) <> '' then
+  begin
+    { closing the box must clear the filter too, or the list stays filtered
+      by a term with nothing on screen to explain it }
+    FSessionSearch.Text := '';
+    RenderSessionList;
+  end;
+end;
+
+procedure TMasterDetailForm.SessionSearchKeyDown(Sender: TObject;
+  var Key: Word; var KeyChar: Char; Shift: TShiftState);
+begin
+  if Key = vkEscape then
+  begin
+    Key := 0;
+    KeyChar := #0;
+    SessionSearchToggleClick(nil);
+  end;
+end;
+
+procedure TMasterDetailForm.RenderParamsButton;
+{ The ONLY place the params button's caption is decided -- it was set from
+  three (build, toggle, settings load), which is how a disclosure control
+  ends up claiming it is open while its panel is shut. }
+begin
+  if FParamsToggleButton = nil then
+    Exit;
+  if FChatParamsVisible then
+  begin
+    FParamsToggleButton.Text := 'Params ' + #$25B4;
+    FParamsToggleButton.Hint := 'Hide sampling parameters';
+  end
+  else
+  begin
+    FParamsToggleButton.Text := 'Params ' + #$25BE;
+    FParamsToggleButton.Hint := 'Show sampling parameters';
+  end;
+  FParamsToggleButton.ShowHint := True;
+end;
+
 procedure TMasterDetailForm.ParamsToggleClick(Sender: TObject);
 begin
   FChatParamsVisible := not FChatParamsVisible;
   if FChatParamsLayout <> nil then
     FChatParamsLayout.Visible := FChatParamsVisible;
-  if FParamsToggleButton <> nil then
-    if FChatParamsVisible then
-      FParamsToggleButton.Text := 'Params -'
-    else
-      FParamsToggleButton.Text := 'Params +';
+  RenderParamsButton;
   ApplyResponsiveLayout;
   SaveLocalSettings;
   if FChatParamsVisible then
@@ -12796,13 +12880,17 @@ procedure TMasterDetailForm.RenderModeButton;
 begin
   if FModeButton = nil then
     Exit;
+  { the caption is the STATE, not a label for it -- 'mode:' spent a third of
+    the button's width explaining the other two thirds }
   if SameText(FMode, 'plan') then
-    FModeButton.Text := 'mode: plan'
+    FModeButton.Text := 'Plan'
   else
   begin
     FMode := 'build';
-    FModeButton.Text := 'mode: build';
+    FModeButton.Text := 'Build';
   end;
+  FModeButton.Hint := 'Build runs tools; Plan only proposes. Click to switch.';
+  FModeButton.ShowHint := True;
 end;
 
 function TMasterDetailForm.CleanBaseUrl(const Value: string): string;
@@ -14468,11 +14556,7 @@ begin
     ApplyTheme;
     if FChatParamsLayout <> nil then
       FChatParamsLayout.Visible := FChatParamsVisible;
-    if FParamsToggleButton <> nil then
-      if FChatParamsVisible then
-        FParamsToggleButton.Text := 'Params -'
-      else
-        FParamsToggleButton.Text := 'Params +';
+    RenderParamsButton;
     FChatToolsExpanded := Ini.ReadBool('chat', 'tool_details_expanded',
       FChatToolsExpanded);
     { Escape hatch: a style without the platform tool-button lookups renders
@@ -19668,9 +19752,13 @@ begin
         begin
           if ErrorText <> '' then
           begin
+            FGatewayOnline := False;
+            RenderConnectButton;
             SetStatus('offline: ' + ErrorText);
             Exit;
           end;
+          FGatewayOnline := True;
+          RenderConnectButton;
           FSessionCache.Clear;
           for I := 0 to Length(Sessions) - 1 do
             FSessionCache.Add(Sessions[I]);
@@ -19690,7 +19778,6 @@ var
   Filter: string;
   I: Integer;
   Item: TListBoxItem;
-  MetaLabel: TLabel;
   MetaText: string;
   SelectedIndex: Integer;
   Session: TPasClawSession;
@@ -19712,7 +19799,7 @@ begin
       Item.Parent := FSessionList;
       Item.Text := '';
       Item.TagString := Session.Id;
-      Item.Height := 64;
+      Item.Height := 40;
       Item.HitTest := True;
       Item.OnClick := CardListItemClick;
 
@@ -19720,15 +19807,18 @@ begin
       Card.Parent := Item;
       Card.Align := TAlignLayout.Client;
       StyleChromeRect(Card, UI_PANEL_ALT, UI_BORDER, 6, True);
+      { A rule around every row turns a list into a grid -- ten sessions drew
+        ten boxes competing with the ten titles inside them. Only the active
+        session is outlined, because there only one line means something. }
+      Card.Stroke.Kind := TBrushKind.None;
       Card.OnClick := CardListItemClick;
-      SetControlMargins(Card, 0, 3, 0, 3);
-      SetControlPadding(Card, 8, 6, 8, 6);
+      SetControlMargins(Card, 0, 1, 0, 1);
+      SetControlPadding(Card, 8, 4, 8, 4);
 
       TitleLabel := TLabel.Create(Card);
       TitleLabel.Parent := Card;
-      TitleLabel.Align := TAlignLayout.Top;
+      TitleLabel.Align := TAlignLayout.Client;
       TitleLabel.HitTest := False;
-      TitleLabel.Height := 22;
       TitleLabel.Text := Title;
       TitleLabel.WordWrap := False;
       { tier 4 -- the sidebar is navigation chrome; only the transcript gets
@@ -19736,19 +19826,18 @@ begin
         wall of emphasis, which is no emphasis at all. }
       StyleLabel(TitleLabel, UI_CHROME_TEXT, 12, False);
 
+      { The age and the raw id were a second line of text per row, louder
+        than the titles and answering a question nobody asked mid-scan. They
+        move to the hover hint, where they cost nothing until wanted. }
       MetaText := Session.Id;
       if Session.UpdatedAt <> '' then
         MetaText := FriendlyAge(Session.UpdatedAt) + '  |  ' + Session.Id;
-      MetaLabel := TLabel.Create(Card);
-      MetaLabel.Parent := Card;
-      MetaLabel.Align := TAlignLayout.Client;
-      MetaLabel.HitTest := False;
-      MetaLabel.Text := MetaText;
-      MetaLabel.WordWrap := False;
-      StyleLabel(MetaLabel, UI_MUTED, 10, False);
+      Card.Hint := Title + sLineBreak + MetaText;
+      Card.ShowHint := True;
 
       if Session.Id = FActiveSessionId then
       begin
+        Card.Stroke.Kind := TBrushKind.Solid;
         Card.Stroke.Color := UI_ACCENT;
         Card.Fill.Color := UI_ACCENT_DIM;
         SelectedIndex := FSessionList.Count - 1;
@@ -19761,7 +19850,7 @@ begin
       Item := TListBoxItem.Create(FSessionList);
       Item.Parent := FSessionList;
       Item.Text := '';
-      Item.Height := 64;
+      Item.Height := 56;
       Item.HitTest := False;
       TitleLabel := TLabel.Create(Item);
       TitleLabel.Parent := Item;
