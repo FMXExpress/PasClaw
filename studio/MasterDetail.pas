@@ -703,6 +703,26 @@ const
   WIN_STARTF_USESHOWWINDOW = $00000001;
   WIN_STARTF_USESTDHANDLES = $00000100;
   WIN_STILL_ACTIVE = 259;
+
+var
+  (* Visual hierarchy, assigned per theme in ApplyTheme. These cannot be
+     const: the ordering INVERTS between dark and light (chat text is the
+     brightest thing on a dark ground and the darkest on a light one).
+
+     The intent, in priority order:
+       1. assistant chat text  -- the product; the brightest/highest contrast
+       2. the user's turn      -- a bubble that reads as dialogue, not a log
+       3. the composer         -- where you act next, so visibly live
+       4. everything else      -- chrome, deliberately a step down
+     Before this, chat body and every chrome label shared UI_TEXT at the same
+     weight, so nothing in the palette said "this is content, that is
+     furniture" -- which is what made the chat feel flat. *)
+  UI_CHAT_TEXT: TAlphaColor    = $FFF4F7FB;   { 1 -- assistant body }
+  UI_CHROME_TEXT: TAlphaColor  = $FFB9C2CE;   { 4 -- tabs, headers, faces }
+  UI_USER_FILL: TAlphaColor    = $FF1B2430;   { 2 -- user bubble ground }
+  UI_USER_BORDER: TAlphaColor  = $FF2F4560;
+  UI_COMPOSER_FILL: TAlphaColor   = $FF1A1E24; { 3 -- composer }
+  UI_COMPOSER_BORDER: TAlphaColor = $FF3BA7FF;
   WIN_SW_HIDE = 0;
 
 type
@@ -1424,6 +1444,28 @@ end;
 
 procedure TMasterDetailForm.ApplyTheme;
 begin
+  { Hierarchy tokens first -- the walk below repaints with whatever these
+    hold. Dark: chat text brightest, chrome stepped down. Light: inverted,
+    chat text darkest and chrome greyed. }
+  if FDarkStyleEnabled then
+  begin
+    UI_CHAT_TEXT       := $FFF4F7FB;
+    UI_CHROME_TEXT     := $FFB9C2CE;
+    UI_USER_FILL       := $FF1B2430;
+    UI_USER_BORDER     := $FF2F4560;
+    UI_COMPOSER_FILL   := $FF1A1E24;
+    UI_COMPOSER_BORDER := $FF3BA7FF;
+  end
+  else
+  begin
+    UI_CHAT_TEXT       := $FF10151C;
+    UI_CHROME_TEXT     := $FF5C6675;
+    UI_USER_FILL       := $FFEAF1FB;
+    UI_USER_BORDER     := $FFBFD4EE;
+    UI_COMPOSER_FILL   := $FFFFFFFF;
+    UI_COMPOSER_BORDER := $FF3BA7FF;
+  end;
+
   if FDarkStyleEnabled then
     StyleBook := FStyleBook
   else if FLightStyleBook <> nil then
@@ -1833,7 +1875,7 @@ procedure TMasterDetailForm.RestyleCoreControls;
     begin
       LabelControl := TLabel(Obj);
       if TStyledSetting.FontColor in LabelControl.StyledSettings then
-        StyleLabel(LabelControl, UI_TEXT, 12, False);
+        StyleLabel(LabelControl, UI_CHROME_TEXT, 12, False);   { tier 4 }
     end
     else if Obj is TButton then
     begin
@@ -3366,7 +3408,10 @@ begin
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := Composer;
   Chrome.Align := TAlignLayout.Client;
-  StyleChromeRect(Chrome, UI_PANEL, UI_BORDER, 6, False);
+  { tier 3 -- the composer is where you act next, so it reads as live: a
+    lifted ground and an accent border rather than the same panel chrome as
+    every inert surface. }
+  StyleChromeRect(Chrome, UI_COMPOSER_FILL, UI_COMPOSER_BORDER, 6, False);
   Chrome.SendToBack;
 
   FQueueLabel := TLabel.Create(Self);
@@ -20562,7 +20607,7 @@ var
       if Accent then
         StyleLabel(SegmentLabel, UI_ACCENT, Size, Bold)
       else
-        StyleLabel(SegmentLabel, UI_TEXT, Size, Bold);
+        StyleLabel(SegmentLabel, UI_CHAT_TEXT, Size, Bold);   { tier 1 }
     end;
 
     { A horizontal rule (--- / *** / ___). }
@@ -21282,8 +21327,10 @@ var
       RoleText := 'YOU';
       InitialText := 'U';
       BodyText := CompactUserBody(BodyText);
-      FillColor := UI_PANEL_ALT;
-      BorderColor := UI_ACCENT_DIM;
+      { tier 2 -- a distinct ground + border so the user's turn reads as a
+        bubble in a dialogue rather than another row in a log. }
+      FillColor := UI_USER_FILL;
+      BorderColor := UI_USER_BORDER;
       RoleColor := UI_ACCENT;
     end
     else if SameText(RoleValue, 'assistant') then
@@ -21488,7 +21535,7 @@ var
       BodyLabel.WordWrap := True;
       BodyLabel.TextSettings.VertAlign := TTextAlign.Leading;
       SetControlMargins(BodyLabel, 0, 6, 0, 0);
-      StyleLabel(BodyLabel, UI_TEXT, 12, False);
+      StyleLabel(BodyLabel, UI_CHAT_TEXT, 12, False);          { tier 1 }
     end;
 
     if BodyHost <> nil then
