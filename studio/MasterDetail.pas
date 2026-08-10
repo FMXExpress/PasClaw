@@ -579,6 +579,7 @@ type
     function AddSectionHeader(AParent: TFmxObject; const Text: string): TLabel;
     procedure StyleButton(Button: TButton; Primary: Boolean = False);
     procedure ApplyButtonIcon(Button: TButton);
+    procedure ReadIconButtonsPreference;
     procedure ApplyChatMeasure;
     function StyleLookupExists(const LookupName: string): Boolean;
     procedure StyleChromeRect(Rect: TRectangle; FillColor: TAlphaColor;
@@ -1367,6 +1368,14 @@ begin
   FRelayWorkerProcessId := 0;
   FConfigFile := System.IOUtils.TPath.Combine(
     System.IOUtils.TPath.GetDocumentsPath, 'pasclaw-studio.ini');
+  { icon_buttons must be known BEFORE the interface is built: the styling
+    walk blanks captions for icon-only buttons as it goes, and once a caption
+    is gone ApplyButtonIcon cannot re-derive the mapping from it -- so a
+    preference read afterwards (LoadLocalSettings) could switch icons off for
+    future controls only, never restoring the ones already blanked. This is
+    the sole setting consumed while the UI is being created; the rest load
+    normally once it exists. }
+  ReadIconButtonsPreference;
   FAttachments := TList<TChatAttachment>.Create;
   FQueuedPrompts := TQueue<string>.Create;
   FEndpointBodyMemos := TDictionary<string, TMemo>.Create;
@@ -1822,6 +1831,22 @@ begin
     Found := ContainsText(BookText, 'StyleName = ' + QuotedStr(LookupName));
   FStyleLookupCache.Add(Key, Found);
   Result := Found;
+end;
+
+procedure TMasterDetailForm.ReadIconButtonsPreference;
+{ The one setting read before BuildInterface -- see the call site in Create.
+  LoadLocalSettings reads it again later, harmlessly: same key, same file. }
+var
+  Ini: TIniFile;
+begin
+  if not TFile.Exists(FConfigFile) then
+    Exit;
+  Ini := TIniFile.Create(FConfigFile);
+  try
+    FIconButtons := Ini.ReadBool('ui', 'icon_buttons', FIconButtons);
+  finally
+    Ini.Free;
+  end;
 end;
 
 procedure TMasterDetailForm.ApplyChatMeasure;
