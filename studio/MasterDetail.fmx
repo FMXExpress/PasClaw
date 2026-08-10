@@ -1,0 +1,11 @@
+object MasterDetailForm: TMasterDetailForm
+  Left = 0
+  Top = 0
+  Caption = 'PasClaw Studio'
+  ClientHeight = 760
+  ClientWidth = 1180
+  FormFactor.Width = 320
+  FormFactor.Height = 480
+  FormFactor.Devices = [Desktop]
+  DesignerMasterStyle = 0
+end
