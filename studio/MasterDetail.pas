@@ -462,6 +462,7 @@ type
     procedure CheckFirstBootOnboarding;
     procedure KbUploadClick(Sender: TObject);
     procedure KbResultsChange(Sender: TObject);
+    procedure KbResultOpenFileClick(Sender: TObject);
     procedure KbSearchClick(Sender: TObject);
     procedure KbSourcesChange(Sender: TObject);
     procedure KbSourcesLoadClick(Sender: TObject);
@@ -4110,6 +4111,16 @@ begin
   FKBResultsList.Parent := ResultsPane;
   FKBResultsList.Align := TAlignLayout.Client;
   FKBResultsList.OnChange := KbResultsChange;
+
+  { Click-through parity with the web UI: a hit is only useful if you can get
+    to the file it came from. Opens the Files tab at the hit's path. }
+  Btn := TButton.Create(Self);
+  Btn.Parent := ResultsPane;
+  Btn.Align := TAlignLayout.Bottom;
+  Btn.Height := 30;
+  Btn.Text := 'Open in Files';
+  Btn.OnClick := KbResultOpenFileClick;
+  SetControlMargins(Btn, 0, 8, 0, 0);
 
   SourcesPane := TLayout.Create(Self);
   SourcesPane.Parent := Body;
@@ -17125,6 +17136,7 @@ procedure TMasterDetailForm.McpResultSelect(Sender: TObject);
 var
   Detail: string;
   Root: TJSONValue;
+  TextValue: string;
 begin
   if (FMcpResultList = nil) or (FMcpResultList.Selected = nil) or
     (FMcpResultDetailMemo = nil) then
@@ -17134,7 +17146,21 @@ begin
     Detail := FMcpResultList.Selected.Text;
   Root := TJSONObject.ParseJSONValue(Detail);
   try
-    if Root <> nil then
+    if Root is TJSONObject then
+    begin
+      { An MCP text content block is the payload the operator actually wants
+        to read. Showing JsonPretty of {"type":"text","text":"..."} buries it
+        in escapes -- render the text itself, with the raw block underneath
+        for anything a caller still needs (annotations, mime types). }
+      TextValue := JsonAsString(TJSONObject(Root), 'text');
+      if (TextValue <> '') and
+        SameText(JsonAsString(TJSONObject(Root), 'type'), 'text') then
+        Detail := TextValue + sLineBreak + sLineBreak +
+          '--- raw block ---' + sLineBreak + JsonPretty(Root)
+      else
+        Detail := JsonPretty(Root);
+    end
+    else if Root <> nil then
       Detail := JsonPretty(Root);
   finally
     Root.Free;
@@ -18357,6 +18383,31 @@ begin
     Memo.Lines.Text := 'KB Result' + sLineBreak + '=========' + sLineBreak +
       sLineBreak + 'Path:  ' + Parts[0] + sLineBreak + 'Chunk: ' + Parts[1] +
       sLineBreak + sLineBreak + Parts[2];
+end;
+
+procedure TMasterDetailForm.KbResultOpenFileClick(Sender: TObject);
+{ Jump from a KB search hit to the file it came from -- the web UI's
+  result-card click-through. TagString is path<TAB>chunk<TAB>text. }
+var
+  Parts: TArray<string>;
+  PathText: string;
+begin
+  if (FKBResultsList = nil) or (FKBResultsList.Selected = nil) then
+  begin
+    SetStatus('select a KB result first');
+    Exit;
+  end;
+  Parts := FKBResultsList.Selected.TagString.Split([#9]);
+  if Length(Parts) < 1 then
+    Exit;
+  PathText := Trim(Parts[0]);
+  if PathText = '' then
+  begin
+    SetStatus('this result has no source path');
+    Exit;
+  end;
+  SelectTabByText('Files');
+  FilesOpenPath(PathText);
 end;
 
 procedure TMasterDetailForm.KbSourcesChange(Sender: TObject);
