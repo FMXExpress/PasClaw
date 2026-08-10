@@ -1071,6 +1071,68 @@ begin
   end;
 end;
 
+function MarkdownNeedsBlockRenderer(const Text: string): Boolean;
+{ True when a body contains any construct AddBodyTextBlock / RenderBodyBlocks
+  can lay out. Scans lines with the same rules the renderer applies, instead
+  of sniffing a hand-listed set of substrings -- an inline predicate drifts
+  out of sync with the parser the moment a new block type is added (which is
+  exactly what happened: #### / + items / "2." / "1)" / *** rules parsed but
+  never reached the block renderer). }
+var
+  I: Integer;
+  LineText: string;
+  Lines: TArray<string>;
+  Body: string;
+  K: Integer;
+  Digits: Integer;
+
+  function OnlyRuleChars(const Value, Ch: string): Boolean;
+  begin
+    Result := (Value <> '') and
+      (StringReplace(Value, Ch, '', [rfReplaceAll]) = '');
+  end;
+
+begin
+  Result := False;
+  if Text = '' then
+    Exit;
+  { inline constructs anywhere in the body }
+  if (Pos('`', Text) > 0) or (Pos('](', Text) > 0) or
+    (Pos('**', Text) > 0) or (Pos('~~', Text) > 0) then
+    Exit(True);
+
+  Lines := Text.Replace(#13#10, #10).Replace(#13, #10).Split([#10]);
+  for I := 0 to Length(Lines) - 1 do
+  begin
+    LineText := Trim(Lines[I]);
+    if LineText = '' then
+      Continue;
+    { headings (any level), bullets (-, *, +), blockquotes, table rows }
+    if StartsText('# ', LineText) or StartsText('## ', LineText) or
+      StartsText('### ', LineText) or StartsText('#### ', LineText) or
+      StartsText('- ', LineText) or StartsText('* ', LineText) or
+      StartsText('+ ', LineText) or StartsText('>', LineText) or
+      (Pos('|', LineText) > 0) then
+      Exit(True);
+    { horizontal rules: --- / *** / ___ }
+    Body := StringReplace(LineText, ' ', '', [rfReplaceAll]);
+    if (Length(Body) >= 3) and (OnlyRuleChars(Body, '-') or
+      OnlyRuleChars(Body, '*') or OnlyRuleChars(Body, '_')) then
+      Exit(True);
+    { ordered items: any number, '.' or ')' }
+    Digits := 0;
+    K := 1;
+    while (K <= Length(LineText)) and CharInSet(LineText[K], ['0'..'9']) do
+    begin
+      Inc(K);
+      Inc(Digits);
+    end;
+    if (Digits > 0) and (K + 1 <= Length(LineText)) and
+      CharInSet(LineText[K], ['.', ')']) and (LineText[K + 1] = ' ') then
+      Exit(True);
+  end;
+end;
+
 function RawToolDetailsToJson(Items: TStrings): string;
 var
   Arr: TJSONArray;
@@ -19954,11 +20016,14 @@ var
       Cells: TArray<string>;
       ColCount: Integer;
       ColWidth: Single;
+      CharsPerCell: Integer;
       C: Integer;
       IsHeader: Boolean;
       Panel: TRectangle;
       R: Integer;
+      RowHeights: TArray<Single>;
       RowHost: TLayout;
+      RowLines: Integer;
       RowText: string;
       TableHeight: Single;
 
@@ -19980,7 +20045,24 @@ var
       ColCount := 1;
       for R := 0 to Rows.Count - 1 do
         ColCount := Max(ColCount, Length(SplitRow(Rows[R])));
-      TableHeight := Rows.Count * 24 + 12;
+
+      { Row heights are computed from the WIDEST cell in each row so long
+        values (URLs, paths, commands, prose) wrap instead of being silently
+        clipped to one line. }
+      ColWidth := Max(60, (Max(240, MaxBubbleWidth - 60)) / ColCount);
+      CharsPerCell := Max(8, Trunc(ColWidth / 7.2));
+      SetLength(RowHeights, Rows.Count);
+      TableHeight := 12;
+      for R := 0 to Rows.Count - 1 do
+      begin
+        Cells := SplitRow(Rows[R]);
+        RowLines := 1;
+        for C := 0 to Length(Cells) - 1 do
+          RowLines := Max(RowLines,
+            EstimateTextLines(Trim(Cells[C]), CharsPerCell));
+        RowHeights[R] := Max(24, RowLines * 18 + 6);
+        TableHeight := TableHeight + RowHeights[R];
+      end;
 
       Panel := TRectangle.Create(BodyHost);
       Panel.Parent := BodyHost;
@@ -19991,7 +20073,6 @@ var
       SetControlPadding(Panel, 8, 6, 8, 6);
       ContentHeight := ContentHeight + TableHeight + 12;
 
-      ColWidth := Max(60, (Max(240, MaxBubbleWidth - 60)) / ColCount);
       for R := 0 to Rows.Count - 1 do
       begin
         RowText := Rows[R];
@@ -20000,7 +20081,7 @@ var
         RowHost := TLayout.Create(Panel);
         RowHost.Parent := Panel;
         RowHost.Align := TAlignLayout.Top;
-        RowHost.Height := 24;
+        RowHost.Height := RowHeights[R];
         for C := 0 to ColCount - 1 do
         begin
           if C < Length(Cells) then
@@ -20013,8 +20094,8 @@ var
           CellLabel.Width := ColWidth;
           CellLabel.HitTest := False;
           CellLabel.Text := CleanInlineMarkdown(CellText);
-          CellLabel.WordWrap := False;
-          CellLabel.TextSettings.VertAlign := TTextAlign.Center;
+          CellLabel.WordWrap := True;
+          CellLabel.TextSettings.VertAlign := TTextAlign.Leading;
           if IsHeader then
             StyleLabel(CellLabel, UI_ACCENT, 12, True)
           else
@@ -20154,9 +20235,13 @@ var
             Continue;
           end;
 
-          { Tables: accumulate consecutive pipe rows, drop the separator. }
+          { Tables: accumulate consecutive pipe rows, drop the separator.
+            A table is recognised either by a leading '|' or by the NEXT line
+            being a separator row -- "Name | Value" over "--- | ---" is valid
+            markdown and the outer pipes are optional. }
           if (Pos('|', LineText) > 0) and
-            (StartsText('|', LineText) or (TableRows.Count > 0)) then
+            (StartsText('|', LineText) or (TableRows.Count > 0) or
+             ((I + 1 < Length(Lines)) and IsTableSeparator(Lines[I + 1]))) then
           begin
             if IsTableSeparator(LineText) then
               Continue;
@@ -20592,18 +20677,9 @@ var
       BorderColor := UI_WARN;
       RoleColor := UI_WARN;
     end;
-    HasRichText := HasToolCards or HasToolDetails or (Pos('```', BodyText) > 0) or
-      StartsText('# ', Trim(BodyText)) or StartsText('## ', Trim(BodyText)) or
-      StartsText('### ', Trim(BodyText)) or StartsText('- ', Trim(BodyText)) or
-      StartsText('* ', Trim(BodyText)) or StartsText('1. ', Trim(BodyText)) or
-      (Pos(#10'# ', BodyText) > 0) or (Pos(#10'## ', BodyText) > 0) or
-      (Pos(#10'### ', BodyText) > 0) or (Pos(#10'- ', BodyText) > 0) or
-      (Pos(#10'* ', BodyText) > 0) or (Pos(#10'1. ', BodyText) > 0) or
-      (Pos('`', BodyText) > 0) or
-      { tables / blockquotes / rules / links also need the block renderer }
-      (Pos(#10'|', BodyText) > 0) or StartsText('|', Trim(BodyText)) or
-      (Pos(#10'> ', BodyText) > 0) or StartsText('> ', Trim(BodyText)) or
-      (Pos(#10'---', BodyText) > 0) or (Pos('](', BodyText) > 0);
+    { One predicate, shared rules -- see MarkdownNeedsBlockRenderer. }
+    HasRichText := HasToolCards or HasToolDetails or
+      (Pos('```', BodyText) > 0) or MarkdownNeedsBlockRenderer(BodyText);
     if InitialText = '' then
       InitialText := '?';
 
