@@ -546,6 +546,9 @@ type
     procedure SaveLocalSettings;
     procedure SavePresetClick(Sender: TObject);
     procedure SendClick(Sender: TObject);
+    procedure SteerActiveTurn(const SteerText: string);
+    procedure SessionExportClick(Sender: TObject);
+    procedure SessionImportClick(Sender: TObject);
     procedure SessionListChange(Sender: TObject);
     procedure SessionSearchChange(Sender: TObject);
     procedure SessionSplitterMoved(Sender: TObject);
@@ -2615,6 +2618,24 @@ begin
   FDeleteSessionButton.Align := TAlignLayout.Client;
   FDeleteSessionButton.Text := 'Delete Session';
   FDeleteSessionButton.OnClick := DeleteSessionClick;
+
+  { Web-UI parity: per-session export (portable JSON) + import (ChatGPT /
+    Claude Code / Pi / OpenClaw / PasClaw exports, auto-detected server-side). }
+  Btn := TButton.Create(Self);
+  Btn.Parent := SessionButtons;
+  Btn.Align := TAlignLayout.Right;
+  Btn.Width := 62;
+  Btn.Text := 'Export';
+  Btn.OnClick := SessionExportClick;
+  SetControlMargins(Btn, 6, 0, 0, 0);
+
+  Btn := TButton.Create(Self);
+  Btn.Parent := SessionButtons;
+  Btn.Align := TAlignLayout.Right;
+  Btn.Width := 62;
+  Btn.Text := 'Import';
+  Btn.OnClick := SessionImportClick;
+  SetControlMargins(Btn, 6, 0, 0, 0);
 
   FSessionSplitter := TSplitter.Create(Self);
   FSessionSplitter.Parent := FBodyLayout;
@@ -9170,6 +9191,187 @@ begin
             SetStatus('facts export failed')
           else
             SetStatus('facts exported');
+        end);
+    end);
+end;
+
+procedure TMasterDetailForm.SteerActiveTurn(const SteerText: string);
+var
+  Base: string;
+  Body: string;
+  Payload: TJSONObject;
+  SessionId: string;
+  Token: string;
+begin
+  Base := GatewayBaseUrl;
+  Token := FTokenEdit.Text;
+  SessionId := FActiveSessionId;
+  if SessionId = '' then
+  begin
+    SetStatus('steer needs an active session');
+    Exit;
+  end;
+  Payload := TJSONObject.Create;
+  try
+    Payload.AddPair('text', SteerText);
+    Body := Payload.ToJSON;
+  finally
+    Payload.Free;
+  end;
+  SetStatus('steering...');
+  TTask.Run(
+    procedure
+    var
+      ErrorText: string;
+      ResponseText: string;
+      Status: Integer;
+    begin
+      try
+        ResponseText := HttpText(Base, Token, SessionId, 'POST', '/v1/steer',
+          Body, 'application/json', 'application/json', Status);
+        if not IsHttpOk(Status) then
+          raise Exception.CreateFmt('steer HTTP %d: %s',
+            [Status, ResponseText]);
+      except
+        on E: Exception do
+          ErrorText := E.Message;
+      end;
+      TThread.Queue(nil,
+        procedure
+        begin
+          if ErrorText <> '' then
+            SetStatus('steer failed: ' + ErrorText)
+          else
+            SetStatus('steering sent (folds into the running turn)');
+        end);
+    end);
+end;
+
+procedure TMasterDetailForm.SessionExportClick(Sender: TObject);
+var
+  Base: string;
+  Dialog: TSaveDialog;
+  FilePath: string;
+  SessionId: string;
+  Token: string;
+begin
+  SessionId := FActiveSessionId;
+  if SessionId = '' then
+  begin
+    SetStatus('select a session to export');
+    Exit;
+  end;
+  Dialog := TSaveDialog.Create(Self);
+  try
+    Dialog.Filter := 'Session JSON|*.json|All files|*.*';
+    Dialog.FileName := SessionId + '.json';
+    if not Dialog.Execute then
+      Exit;
+    FilePath := Dialog.FileName;
+  finally
+    Dialog.Free;
+  end;
+  Base := GatewayBaseUrl;
+  Token := FTokenEdit.Text;
+  SetStatus('exporting session...');
+  TTask.Run(
+    procedure
+    var
+      ErrorText: string;
+      ResponseText: string;
+      Status: Integer;
+    begin
+      try
+        ResponseText := HttpText(Base, Token, SessionId, 'GET',
+          '/v1/sessions/' + SessionId + '/export', '', '',
+          'application/json', Status);
+        if not IsHttpOk(Status) then
+          raise Exception.CreateFmt('session export HTTP %d: %s',
+            [Status, ResponseText]);
+        TFile.WriteAllText(FilePath, ResponseText, TEncoding.UTF8);
+      except
+        on E: Exception do
+          ErrorText := E.Message;
+      end;
+      TThread.Queue(nil,
+        procedure
+        begin
+          if ErrorText <> '' then
+            SetStatus('session export failed: ' + ErrorText)
+          else
+            SetStatus('session exported to ' + FilePath);
+        end);
+    end);
+end;
+
+procedure TMasterDetailForm.SessionImportClick(Sender: TObject);
+var
+  Base: string;
+  Dialog: TOpenDialog;
+  FilePath: string;
+  SessionId: string;
+  Token: string;
+begin
+  Dialog := TOpenDialog.Create(Self);
+  try
+    Dialog.Filter :=
+      'Chat exports|*.json;*.jsonl|JSON|*.json|JSONL|*.jsonl|All files|*.*';
+    if not Dialog.Execute then
+      Exit;
+    FilePath := Dialog.FileName;
+  finally
+    Dialog.Free;
+  end;
+  Base := GatewayBaseUrl;
+  Token := FTokenEdit.Text;
+  SessionId := FActiveSessionId;
+  SetStatus('importing sessions...');
+  TTask.Run(
+    procedure
+    var
+      Body: string;
+      CountText: string;
+      ErrorText: string;
+      ResponseText: string;
+      Root: TJSONValue;
+      Status: Integer;
+    begin
+      CountText := '';
+      try
+        { Read on the worker, not the UI thread: a full ChatGPT
+          conversations.json can be hundreds of MB, which would freeze the
+          form -- and read/decode failures belong inside this try so they
+          surface as a status message instead of escaping. }
+        Body := TFile.ReadAllText(FilePath, TEncoding.UTF8);
+        ResponseText := HttpText(Base, Token, SessionId, 'POST',
+          '/v1/sessions/import', Body, 'application/json',
+          'application/json', Status);
+        if not IsHttpOk(Status) then
+          raise Exception.CreateFmt('session import HTTP %d: %s',
+            [Status, ResponseText]);
+        Root := TJSONObject.ParseJSONValue(ResponseText);
+        try
+          if Root is TJSONObject then
+            CountText := JsonAsString(TJSONObject(Root), 'imported');
+        finally
+          Root.Free;
+        end;
+      except
+        on E: Exception do
+          ErrorText := E.Message;
+      end;
+      TThread.Queue(nil,
+        procedure
+        begin
+          if ErrorText <> '' then
+            SetStatus('session import failed: ' + ErrorText)
+          else
+          begin
+            if CountText = '' then
+              CountText := '?';
+            SetStatus('imported ' + CountText + ' session(s)');
+            LoadSessions;
+          end;
         end);
     end);
 end;
@@ -21551,6 +21753,17 @@ var
 begin
   if FSending then
   begin
+    { Mid-turn parity with the web UI: a NON-EMPTY composer steers the
+      running turn (POST /v1/steer; the gateway folds it in at the next
+      loop iteration). An empty composer keeps the old behaviour: abort. }
+    Prompt := Trim(FPromptMemo.Lines.Text);
+    if Prompt <> '' then
+    begin
+      SteerActiveTurn(Prompt);
+      FPromptMemo.Lines.Clear;
+      UpdateComposerState;
+      Exit;
+    end;
     FChatAbort := True;
     UpdateComposerState;
     SetStatus('stopping chat...');
