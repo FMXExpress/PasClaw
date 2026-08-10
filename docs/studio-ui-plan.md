@@ -38,8 +38,11 @@ the follow-on work, ordered inside each section.
   tab wraps its whole body in) — same treatment the chat transcript got.
 - ✅ Card-list titles (sessions, cron jobs, skills, MCP results…): regular
   weight.
-- `Delete Session` in the sidebar footer → trash icon + hint, freeing row
-  width for Import/Export.
+- ✅ Sidebar footer: Delete Session → trash; Import / Export / Import Dir →
+  tray and folder icons with hints.
+- ✅ Hex viewer pager: First/Prev/Next/Last → chevrons and arrows.
+- ✅ Settings: `Config` renamed `Advanced`; ZIP row labelled
+  "Workspace backup".
 - `Params +` / `Tools +` → disclosure chevron + label, not a button that
   looks like an action.
 - `mode: build|plan` → segmented two-state control.
@@ -70,8 +73,9 @@ Go merges into the path edit (Enter submits, hidden button). Breadcrumb
 instead of the raw path edit when not focused.
 
 **MCP (Server/Tool/Result)** — `Save Server`, `New`, `Invoke`: fine as
-text (infrequent, consequential). Result tab: render MCP `content[]` text
-blocks like the web UI instead of raw JSON (parity P3).
+text (infrequent, consequential). ✅ Result tab already renders MCP
+`content[]` as typed cards (`McpRenderInvokeResult`) — the parity-doc gap
+was stale.
 
 **Cron** — `New`/`Save`/`Delete` already iconed where safe. The
 detail memo's "New Cron Job ====" ASCII header → real section header.

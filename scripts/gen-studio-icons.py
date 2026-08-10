@@ -148,6 +148,17 @@ _SUN = [ring(0.5, 0.5, 0.30, 0.19)] + [
 _MOON = [arc(0.5, 0.5, 0.42, 50.0, 310.0) +
          arc(0.78, 0.5, 0.322, 268.0, 92.0)]
 
+# import/export: a tray with an arrow entering or leaving it
+_TRAY = [(0.06, 0.60), (0.20, 0.60), (0.20, 0.80), (0.80, 0.80),
+         (0.80, 0.60), (0.94, 0.60), (0.94, 0.96), (0.06, 0.96)]
+_ARROW_INTO = [(0.42, 0.02), (0.58, 0.02), (0.58, 0.34), (0.76, 0.34),
+               (0.50, 0.66), (0.24, 0.34), (0.42, 0.34)]
+
+# pager ends: a double chevron
+_CHEV_L = [[(x, 0.50), (x + 0.26, 0.06), (x + 0.40, 0.14),
+            (x + 0.19, 0.50), (x + 0.40, 0.86), (x + 0.26, 0.94)]
+           for x in (0.06, 0.48)]
+
 # ------------------------------------------------------------------ glyphs --
 # Each entry: lookup name -> list of closed subpaths.
 
@@ -179,6 +190,11 @@ GLYPHS = {
     # lens ring + handle
     "SunToolButton":        _SUN,
     "MoonToolButton":       _MOON,
+
+    "ImportToolButton":     [_TRAY, _ARROW_INTO],
+    "ExportToolButton":     [_TRAY, flip_y([(x, y + 0.36) for x, y in _ARROW_INTO])],
+    "PriorToolButton":      _CHEV_L,
+    "NextToolButton":       [flip_x(s) for s in _CHEV_L],
 
     "SearchToolButton":     [ring(0.42, 0.40, 0.36, 0.23),
                              [(0.60, 0.66), (0.70, 0.56),
