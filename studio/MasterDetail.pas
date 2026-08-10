@@ -592,6 +592,7 @@ type
     function ThemePaintColor(Color: TAlphaColor): TAlphaColor;
     function ThemePaintStroke(Color: TAlphaColor): TAlphaColor;
     function ActiveTabIs(const Caption: string): Boolean;
+    procedure UpdateClearAttachmentsButton;
     function FriendlyAge(const StampText: string): string;
     class function IsIconified(Button: TButton): Boolean; static;
     procedure UseStyledLabelColor(LabelControl: TLabel);
@@ -720,9 +721,14 @@ const
      sits in the middle of it and is close to A4 at 96dpi (794px). Below the
      cap the column simply fills the width, so narrow windows stay normal. *)
   CHAT_MAX_W = 800;
-  { minimum side gutter for the chat column -- keeps text off the window
-    frame even in full-width (drawer hidden) mode }
+  { preferred side gutter for the chat column -- keeps text off the window
+    frame even in full-width (drawer hidden) mode. Yields to CHAT_MIN_W on
+    viewports too narrow for both. }
   CHAT_GUTTER = 24;
+  CHAT_MIN_W = 320;
+  { the "narrow window" breakpoint -- named because UpdateClearAttachments
+    has to agree with ApplyResponsiveLayout about what narrow means }
+  UI_NARROW_W = 560;
   WF_IO_W = 104;
   WF_GUTTER = 128;
   WIN_CREATE_ALWAYS = 2;
@@ -1909,6 +1915,22 @@ begin
   end;
 end;
 
+procedure TMasterDetailForm.UpdateClearAttachmentsButton;
+{ The ONE place that decides whether the clear-attachments button shows.
+
+  Two conditions, two owners, and they disagreed: ApplyResponsiveLayout hid
+  it on a narrow window, while RenderAttachments and UpdateComposerState --
+  which run on every keystroke and every attachment change -- showed it
+  again from the attachment count alone, crowding the narrow composer within
+  a frame of the layout pass hiding it. Both conditions live here now. }
+begin
+  if FClearAttachmentsButton = nil then
+    Exit;
+  FClearAttachmentsButton.Visible :=
+    (FAttachments <> nil) and (FAttachments.Count > 0) and
+    (ClientWidth >= UI_NARROW_W);
+end;
+
 procedure TMasterDetailForm.ApplyChatMeasure;
 { Centre the transcript and the composer on a fixed reading measure: past
   CHAT_MAX_W the surplus becomes equal margins rather than longer lines;
@@ -1929,6 +1951,7 @@ procedure TMasterDetailForm.ApplyChatMeasure;
   can never disagree about how wide the chat is again. }
 var
   Avail: Single;
+  MaxPad: Single;
   Pad: Single;
 begin
   if (FChatScroll = nil) or (FChatFlow = nil) then
@@ -1936,16 +1959,25 @@ begin
   Avail := FChatScroll.Width;
   if Avail <= 0 then
     Exit;
-  { CHAT_GUTTER is the floor in BOTH regimes: full-width mode is wider, not
-    edge-to-edge -- text touching the window frame reads as a defect. }
+  { CHAT_GUTTER is the PREFERRED inset in both regimes -- full-width mode is
+    wider, not edge-to-edge, since text touching the window frame reads as a
+    defect. It is not a hard floor, though: on a viewport narrower than
+    CHAT_MIN_W + two gutters the column would be pushed past the right edge
+    and clipped. Content wins over decoration, so the gutter gives way first
+    and only collapses to nothing once even that is not enough. }
   if FSidebarVisible then
     Pad := (Avail - CHAT_MAX_W) / 2
   else
     Pad := CHAT_GUTTER;
   if Pad < CHAT_GUTTER then
     Pad := CHAT_GUTTER;
+  MaxPad := (Avail - CHAT_MIN_W - 8) / 2;
+  if Pad > MaxPad then
+    Pad := MaxPad;
+  if Pad < 0 then
+    Pad := 0;
   SetControlMargins(FChatFlow, Pad, 0, Pad, 0);
-  FChatFlow.Width := Max(320, Avail - Pad * 2 - 8);
+  FChatFlow.Width := Max(CHAT_MIN_W, Avail - Pad * 2 - 8);
   { same horizontal inset for the composer, PRESERVING its 10/6/10/8 base
     padding -- the padding version zeroed the vertical part }
   if FComposerLayout <> nil then
@@ -2219,7 +2251,7 @@ begin
     Exit;
 
   W := ClientWidth;
-  Narrow := W < 560;
+  Narrow := W < UI_NARROW_W;
   Compact := W < 820;
   ApplyChatMeasure;
   FTopBar.Height := 54;
@@ -2411,10 +2443,7 @@ begin
     FAttachButton.Width := IfThen(Narrow, 76, 86);
   if FClearAttachmentsButton <> nil then
   begin
-    { only exists while there is something to clear -- a permanent trash can
-      beside Send reads as "delete the conversation", not "drop attachments" }
-    FClearAttachmentsButton.Visible := (not Narrow) and
-      (FAttachments <> nil) and (FAttachments.Count > 0);
+    UpdateClearAttachmentsButton;
     if not IsIconified(FClearAttachmentsButton) then
       FClearAttachmentsButton.Width := IfThen(Compact, 64, 74);
   end;
@@ -20513,10 +20542,8 @@ begin
   end;
 
   if FClearAttachmentsButton <> nil then
-  begin
     FClearAttachmentsButton.Enabled := HasAttachments;
-    FClearAttachmentsButton.Visible := HasAttachments;
-  end;
+  UpdateClearAttachmentsButton;
   UpdateComposerState;
 end;
 
@@ -20620,10 +20647,8 @@ begin
   if FAttachButton <> nil then
     FAttachButton.Enabled := not FChatAbort;
   if FClearAttachmentsButton <> nil then
-  begin
     FClearAttachmentsButton.Enabled := HasAttachments and not FChatAbort;
-    FClearAttachmentsButton.Visible := HasAttachments;
-  end;
+  UpdateClearAttachmentsButton;
 
   if FComposerStatusLabel <> nil then
   begin
