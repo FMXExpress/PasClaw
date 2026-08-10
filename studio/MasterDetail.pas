@@ -572,6 +572,7 @@ type
     function AddSectionHeader(AParent: TFmxObject; const Text: string): TLabel;
     procedure StyleButton(Button: TButton; Primary: Boolean = False);
     procedure ApplyButtonIcon(Button: TButton);
+    procedure ApplyChatMeasure;
     procedure StyleChromeRect(Rect: TRectangle; FillColor: TAlphaColor;
       StrokeColor: TAlphaColor; Radius: Single; Interactive: Boolean);
     procedure UseStyledLabelColor(LabelControl: TLabel);
@@ -693,6 +694,13 @@ const
   CHAT_ROW_MAX = 24000;
   { Square-ish footprint for an icon-only button. }
   ICON_BTN_W = 34;
+  (* Reading measure for the conversation column. Long lines are hard to
+     track back to the next line's start, so chat UIs cap the column and
+     centre it, letting extra width become margin instead of longer lines.
+     720-820px is the accepted band (~80-100 characters at this size); 800
+     sits in the middle of it and is close to A4 at 96dpi (794px). Below the
+     cap the column simply fills the width, so narrow windows stay normal. *)
+  CHAT_MAX_W = 800;
   WF_IO_W = 104;
   WF_GUTTER = 128;
   WIN_CREATE_ALWAYS = 2;
@@ -1734,6 +1742,32 @@ begin
     LabelControl.TextSettings.Font.Style := [];
 end;
 
+procedure TMasterDetailForm.ApplyChatMeasure;
+{ Centre the transcript and the composer on a fixed reading measure: past
+  CHAT_MAX_W the surplus becomes equal margins rather than longer lines;
+  below it the column fills the width and behaves like any responsive pane.
+  Implemented as symmetric padding on the existing containers so nothing has
+  to be re-parented -- and the bubble-width maths already derives from
+  FChatFlow.Width, so capping here narrows the bubbles for free. }
+var
+  Avail: Single;
+  Pad: Single;
+begin
+  if FChatScroll = nil then
+    Exit;
+  Avail := FChatScroll.Width;
+  if (Avail <= 0) and (FChatFlow <> nil) then
+    Avail := FChatFlow.Width;
+  if Avail <= 0 then
+    Exit;
+  Pad := (Avail - CHAT_MAX_W) / 2;
+  if Pad < 0 then
+    Pad := 0;
+  SetControlPadding(FChatScroll, Pad, 0, Pad, 0);
+  if FComposerLayout <> nil then
+    SetControlPadding(FComposerLayout, Pad, 0, Pad, 0);
+end;
+
 procedure TMasterDetailForm.ApplyButtonIcon(Button: TButton);
 (* Give recognised buttons a platform icon and ALWAYS a hint.
 
@@ -1958,6 +1992,7 @@ begin
   W := ClientWidth;
   Narrow := W < 560;
   Compact := W < 820;
+  ApplyChatMeasure;
   FTopBar.Height := 54;
   FHeaderRow.Height := 38;
 
