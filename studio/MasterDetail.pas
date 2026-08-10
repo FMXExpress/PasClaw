@@ -17238,10 +17238,12 @@ begin
   try
     if Root is TJSONObject then
     begin
-      { An MCP text content block is the payload the operator actually wants
-        to read. Showing JsonPretty of {"type":"text","text":"..."} buries it
-        in escapes -- render the text itself, with the raw block underneath
-        for anything a caller still needs (annotations, mime types). }
+      (* An MCP text content block is the payload the operator actually wants
+         to read. Pretty-printing the whole block buries it in escapes --
+         render the text itself, with the raw block underneath for anything a
+         caller still needs (annotations, mime types). Paren-star delimiters:
+         a JSON example inside a curly-brace comment ends it at the first
+         '}', which is what broke the dcc64 build. *)
       TextValue := JsonAsString(TJSONObject(Root), 'text');
       if (TextValue <> '') and
         SameText(JsonAsString(TJSONObject(Root), 'type'), 'text') then
