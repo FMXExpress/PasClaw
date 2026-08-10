@@ -97,6 +97,7 @@ type
     FChatParamsVisible: Boolean;
     FChatStatsLabel: TLabel;
     FChatToolsExpanded: Boolean;
+    FIconButtons: Boolean;
     FComposerLayout: TLayout;
     FComposerStatusLabel: TLabel;
     FSandboxLabel: TLabel;
@@ -570,6 +571,9 @@ type
     function AddPaneSplitter(AParent: TFmxObject; AAlign: TAlignLayout): TSplitter;
     function AddSectionHeader(AParent: TFmxObject; const Text: string): TLabel;
     procedure StyleButton(Button: TButton; Primary: Boolean = False);
+    procedure ApplyButtonIcon(Button: TButton);
+    procedure ApplyChatMeasure;
+    function StyleLookupExists(const LookupName: string): Boolean;
     procedure StyleChromeRect(Rect: TRectangle; FillColor: TAlphaColor;
       StrokeColor: TAlphaColor; Radius: Single; Interactive: Boolean);
     procedure UseStyledLabelColor(LabelControl: TLabel);
@@ -689,6 +693,15 @@ const
     ROW while its children kept full height, so the surplus painted over the
     next bubbles. Only pathological content should ever reach this. }
   CHAT_ROW_MAX = 24000;
+  { Square-ish footprint for an icon-only button. }
+  ICON_BTN_W = 34;
+  (* Reading measure for the conversation column. Long lines are hard to
+     track back to the next line's start, so chat UIs cap the column and
+     centre it, letting extra width become margin instead of longer lines.
+     720-820px is the accepted band (~80-100 characters at this size); 800
+     sits in the middle of it and is close to A4 at 96dpi (794px). Below the
+     cap the column simply fills the width, so narrow windows stay normal. *)
+  CHAT_MAX_W = 800;
   WF_IO_W = 104;
   WF_GUTTER = 128;
   WIN_CREATE_ALWAYS = 2;
@@ -699,6 +712,26 @@ const
   WIN_STARTF_USESHOWWINDOW = $00000001;
   WIN_STARTF_USESTDHANDLES = $00000100;
   WIN_STILL_ACTIVE = 259;
+
+var
+  (* Visual hierarchy, assigned per theme in ApplyTheme. These cannot be
+     const: the ordering INVERTS between dark and light (chat text is the
+     brightest thing on a dark ground and the darkest on a light one).
+
+     The intent, in priority order:
+       1. assistant chat text  -- the product; the brightest/highest contrast
+       2. the user's turn      -- a bubble that reads as dialogue, not a log
+       3. the composer         -- where you act next, so visibly live
+       4. everything else      -- chrome, deliberately a step down
+     Before this, chat body and every chrome label shared UI_TEXT at the same
+     weight, so nothing in the palette said "this is content, that is
+     furniture" -- which is what made the chat feel flat. *)
+  UI_CHAT_TEXT: TAlphaColor    = $FFF4F7FB;   { 1 -- assistant body }
+  UI_CHROME_TEXT: TAlphaColor  = $FFB9C2CE;   { 4 -- tabs, headers, faces }
+  UI_USER_FILL: TAlphaColor    = $FF1B2430;   { 2 -- user bubble ground }
+  UI_USER_BORDER: TAlphaColor  = $FF2F4560;
+  UI_COMPOSER_FILL: TAlphaColor   = $FF1A1E24; { 3 -- composer }
+  UI_COMPOSER_BORDER: TAlphaColor = $FF3BA7FF;
   WIN_SW_HIDE = 0;
 
 type
@@ -1320,6 +1353,7 @@ begin
   FSessionDrawerWidth := 280;
   FChatParamsVisible := False;
   FChatToolsExpanded := False;
+  FIconButtons := True;
   FDarkStyleEnabled := True;
   FFileHexPageSize := 16384;
   FRelayWorkerProcessHandle := 0;
@@ -1340,6 +1374,11 @@ begin
 
   LoadAirStyle;
   BuildInterface;
+  { LoadAirStyle's ApplyTheme runs BEFORE the UI exists, and the one inside
+    BuildInterface fires partway through it, so neither walk reaches most
+    controls. Re-apply once the full tree is built -- this is what actually
+    styles the tabs' buttons (and now assigns their icons + hints). }
+  ApplyTheme;
   LoadLocalSettings;
   RestyleCoreControls;
   RenderModeButton;
@@ -1414,6 +1453,28 @@ end;
 
 procedure TMasterDetailForm.ApplyTheme;
 begin
+  { Hierarchy tokens first -- the walk below repaints with whatever these
+    hold. Dark: chat text brightest, chrome stepped down. Light: inverted,
+    chat text darkest and chrome greyed. }
+  if FDarkStyleEnabled then
+  begin
+    UI_CHAT_TEXT       := $FFF4F7FB;
+    UI_CHROME_TEXT     := $FFB9C2CE;
+    UI_USER_FILL       := $FF1B2430;
+    UI_USER_BORDER     := $FF2F4560;
+    UI_COMPOSER_FILL   := $FF1A1E24;
+    UI_COMPOSER_BORDER := $FF3BA7FF;
+  end
+  else
+  begin
+    UI_CHAT_TEXT       := $FF10151C;
+    UI_CHROME_TEXT     := $FF5C6675;
+    UI_USER_FILL       := $FFEAF1FB;
+    UI_USER_BORDER     := $FFBFD4EE;
+    UI_COMPOSER_FILL   := $FFFFFFFF;
+    UI_COMPOSER_BORDER := $FF3BA7FF;
+  end;
+
   if FDarkStyleEnabled then
     StyleBook := FStyleBook
   else if FLightStyleBook <> nil then
@@ -1682,10 +1743,170 @@ begin
     LabelControl.TextSettings.Font.Style := [];
 end;
 
+function TMasterDetailForm.StyleLookupExists(const LookupName: string): Boolean;
+(* Does the ACTIVE style actually define this StyleLookup?
+
+   The *toolbutton resources are Embarcadero platform-style names. The bundled
+   Air.style / Light.Style define none of them, so assigning one there leaves
+   the button on the default style -- and blanking its caption for an
+   icon-only face would render a blank button. Never trade a readable caption
+   for a lookup that may not exist: probe first.
+
+   StyleBook = nil means no custom book is applied, so the platform style is
+   active and its icon resources are present. With a custom book applied, walk
+   it for a matching StyleName. *)
+var
+  Found: Boolean;
+
+  procedure Walk(Obj: TFmxObject);
+  var
+    I: Integer;
+  begin
+    if Found or (Obj = nil) then
+      Exit;
+    if SameText(Obj.StyleName, LookupName) then
+    begin
+      Found := True;
+      Exit;
+    end;
+    for I := 0 to Obj.ChildrenCount - 1 do
+    begin
+      Walk(Obj.Children[I]);
+      if Found then
+        Exit;
+    end;
+  end;
+
+begin
+  if LookupName = '' then
+    Exit(False);
+  if StyleBook = nil then
+    Exit(True);            { platform style in use -- its icons exist }
+  Found := False;
+  if StyleBook.Root <> nil then
+    Walk(StyleBook.Root);
+  Result := Found;
+end;
+
+procedure TMasterDetailForm.ApplyChatMeasure;
+{ Centre the transcript and the composer on a fixed reading measure: past
+  CHAT_MAX_W the surplus becomes equal margins rather than longer lines;
+  below it the column fills the width and behaves like any responsive pane.
+  Implemented as symmetric padding on the existing containers so nothing has
+  to be re-parented -- and the bubble-width maths already derives from
+  FChatFlow.Width, so capping here narrows the bubbles for free. }
+var
+  Avail: Single;
+  Pad: Single;
+begin
+  if FChatScroll = nil then
+    Exit;
+  Avail := FChatScroll.Width;
+  if (Avail <= 0) and (FChatFlow <> nil) then
+    Avail := FChatFlow.Width;
+  if Avail <= 0 then
+    Exit;
+  Pad := (Avail - CHAT_MAX_W) / 2;
+  if Pad < 0 then
+    Pad := 0;
+  SetControlPadding(FChatScroll, Pad, 0, Pad, 0);
+  if FComposerLayout <> nil then
+    SetControlPadding(FComposerLayout, Pad, 0, Pad, 0);
+end;
+
+procedure TMasterDetailForm.ApplyButtonIcon(Button: TButton);
+(* Give recognised buttons a platform icon and ALWAYS a hint.
+
+   StyleLookup names below come from Embarcadero's platform styles. The
+   bundled Air.style / Light.Style do not define them, so if a name fails to
+   resolve FMX falls back to the plain button style -- which for an icon-only
+   button means a blank face. Two safeguards:
+
+     - the caption is kept in Hint verbatim, so a bare icon is never a
+       mystery and a blank one is still identifiable by hover;
+     - [ui] icon_buttons=false turns the feature off by preference. It is NOT
+       the safety net: StyleLookupExists below refuses to blank a caption for
+       a lookup the active style does not define, so a style without these
+       resources degrades to plain text on its own.
+
+   Mapping lives HERE only, keyed by the caption a button was created with,
+   so icon + hint can never drift from each other or from the action. *)
+var
+  Cap: string;
+  HintText: string;
+  Lookup: string;
+  IconOnly: Boolean;
+begin
+  if (Button = nil) or Button.TagString.StartsWith('noicon') then
+    Exit;
+  { Already iconified on an earlier pass (theme switch re-runs this walk):
+    the face is blank and a hint is showing. Re-deriving from an empty caption
+    would just clear the mapping, so stop here.
+    NB: TagString is NOT usable as a caption stash -- chat-turn buttons encode
+    their action in it ('copy'#9<index>) and ChatTurnActionClick parses it. }
+  if (Button.Text = '') and Button.ShowHint then
+    Exit;
+  Cap := Trim(Button.Text);
+  if Cap = '' then
+    Exit;
+
+  Lookup := '';
+  IconOnly := False;
+  HintText := Cap;
+  { Tier 1 -- frequent, unambiguous verbs: icon only. }
+  if SameText(Cap, 'Refresh')      then begin Lookup := 'refreshtoolbutton'; IconOnly := True; HintText := 'Refresh'; end
+  else if SameText(Cap, 'Search')  then begin Lookup := 'searchtoolbutton';  IconOnly := True; HintText := 'Search'; end
+  else if SameText(Cap, 'Delete')  then begin Lookup := 'deletetoolbutton';  IconOnly := True; HintText := 'Delete'; end
+  else if SameText(Cap, 'Remove')  then begin Lookup := 'deletetoolbutton';  IconOnly := True; end
+  else if SameText(Cap, 'Add')     then begin Lookup := 'addtoolbutton';     IconOnly := True; end
+  else if SameText(Cap, 'New')     then begin Lookup := 'addtoolbutton';     IconOnly := True; end
+  else if SameText(Cap, 'Clear')   then begin Lookup := 'deletetoolbutton';  IconOnly := True; end
+  else if SameText(Cap, 'Copy')    then begin Lookup := 'organizetoolbutton'; IconOnly := True; HintText := 'Copy to clipboard'; end
+  else if SameText(Cap, 'Save')    then begin Lookup := 'actiontoolbutton';  IconOnly := True; end
+  { Tier 2 -- tight rows where width is already squeezed. }
+  else if SameText(Cap, 'Send')    then begin Lookup := 'composetoolbutton'; IconOnly := True; HintText := 'Send (steers the turn while streaming)'; end
+  else if SameText(Cap, 'Stop')    then begin Lookup := 'stoptoolbutton';    IconOnly := True; HintText := 'Stop the running turn'; end
+  else if SameText(Cap, 'Undo')    then begin Lookup := 'arrowlefttoolbutton';  IconOnly := True; end
+  else if SameText(Cap, 'Redo')    then begin Lookup := 'arrowrighttoolbutton'; IconOnly := True; end
+  else if SameText(Cap, 'Preview') then begin Lookup := 'detailstoolbutton'; IconOnly := True; HintText := 'Preview'; end;
+
+  { Hint is set for EVERY button we recognise, icon or not -- ShowHint alone
+    is what makes Hint do anything in FMX, and it was never enabled here. }
+  Button.Hint := HintText;
+  Button.ShowHint := True;
+  if (Lookup = '') or (not FIconButtons) then
+  begin
+    if Button.Text = '' then
+      Button.Text := Cap;   { restore when icons are switched off }
+    Exit;
+  end;
+  { The caption is the fallback that keeps the UI usable, so only surrender it
+    once the icon is known to exist. A missing lookup degrades to plain text
+    automatically -- no diagnosis, no INI edit. }
+  if not StyleLookupExists(Lookup) then
+  begin
+    Button.Text := Cap;
+    Exit;
+  end;
+  Button.StyleLookup := Lookup;
+  if IconOnly then
+  begin
+    Button.Text := '';
+    { A face with no text should not keep the width its caption needed --
+      "Copy" at 54px as a bare icon reads as a mis-sized control. Only ever
+      SHRINK, so a deliberately large control keeps its footprint. }
+    if Button.Width > ICON_BTN_W then
+      Button.Width := ICON_BTN_W;
+  end
+  else
+    Button.Text := Cap;
+end;
+
 procedure TMasterDetailForm.StyleButton(Button: TButton; Primary: Boolean);
 begin
   if Button = nil then
     Exit;
+  ApplyButtonIcon(Button);
   Button.StyledSettings := Button.StyledSettings - [TStyledSetting.Size];
   Button.StyledSettings := Button.StyledSettings +
     [TStyledSetting.FontColor, TStyledSetting.Style];
@@ -1741,7 +1962,7 @@ procedure TMasterDetailForm.RestyleCoreControls;
     begin
       LabelControl := TLabel(Obj);
       if TStyledSetting.FontColor in LabelControl.StyledSettings then
-        StyleLabel(LabelControl, UI_TEXT, 12, False);
+        StyleLabel(LabelControl, UI_CHROME_TEXT, 12, False);   { tier 4 }
     end
     else if Obj is TButton then
     begin
@@ -1824,6 +2045,7 @@ begin
   W := ClientWidth;
   Narrow := W < 560;
   Compact := W < 820;
+  ApplyChatMeasure;
   FTopBar.Height := 54;
   FHeaderRow.Height := 38;
 
@@ -3274,7 +3496,10 @@ begin
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := Composer;
   Chrome.Align := TAlignLayout.Client;
-  StyleChromeRect(Chrome, UI_PANEL, UI_BORDER, 6, False);
+  { tier 3 -- the composer is where you act next, so it reads as live: a
+    lifted ground and an accent border rather than the same panel chrome as
+    every inert surface. }
+  StyleChromeRect(Chrome, UI_COMPOSER_FILL, UI_COMPOSER_BORDER, 6, False);
   Chrome.SendToBack;
 
   FQueueLabel := TLabel.Create(Self);
@@ -13875,6 +14100,9 @@ begin
         FParamsToggleButton.Text := 'Params +';
     FChatToolsExpanded := Ini.ReadBool('chat', 'tool_details_expanded',
       FChatToolsExpanded);
+    { Escape hatch: a style without the platform tool-button lookups renders
+      icon-only buttons blank. icon_buttons=false restores text captions. }
+    FIconButtons := Ini.ReadBool('ui', 'icon_buttons', FIconButtons);
     { BuildInterface has already created the button captioned "Tools +";
       restoring an expanded preference must move the label with it. }
     UpdateToolsToggleCaption;
@@ -13911,6 +14139,7 @@ begin
       choice is a per-operator preference, not per-session -- it was toggled
       at runtime but reset to collapsed on every restart. }
     Ini.WriteBool('chat', 'tool_details_expanded', FChatToolsExpanded);
+    Ini.WriteBool('ui', 'icon_buttons', FIconButtons);
     Ini.WriteBool('onboarding', 'dismissed', FOnboardingDismissed);
   finally
     Ini.Free;
@@ -20466,7 +20695,7 @@ var
       if Accent then
         StyleLabel(SegmentLabel, UI_ACCENT, Size, Bold)
       else
-        StyleLabel(SegmentLabel, UI_TEXT, Size, Bold);
+        StyleLabel(SegmentLabel, UI_CHAT_TEXT, Size, Bold);   { tier 1 }
     end;
 
     { A horizontal rule (--- / *** / ___). }
@@ -21186,8 +21415,10 @@ var
       RoleText := 'YOU';
       InitialText := 'U';
       BodyText := CompactUserBody(BodyText);
-      FillColor := UI_PANEL_ALT;
-      BorderColor := UI_ACCENT_DIM;
+      { tier 2 -- a distinct ground + border so the user's turn reads as a
+        bubble in a dialogue rather than another row in a log. }
+      FillColor := UI_USER_FILL;
+      BorderColor := UI_USER_BORDER;
       RoleColor := UI_ACCENT;
     end
     else if SameText(RoleValue, 'assistant') then
@@ -21392,7 +21623,7 @@ var
       BodyLabel.WordWrap := True;
       BodyLabel.TextSettings.VertAlign := TTextAlign.Leading;
       SetControlMargins(BodyLabel, 0, 6, 0, 0);
-      StyleLabel(BodyLabel, UI_TEXT, 12, False);
+      StyleLabel(BodyLabel, UI_CHAT_TEXT, 12, False);          { tier 1 }
     end;
 
     if BodyHost <> nil then
