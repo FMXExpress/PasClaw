@@ -584,6 +584,7 @@ type
     function StyleLookupExists(const LookupName: string): Boolean;
     procedure StyleChromeRect(Rect: TRectangle; FillColor: TAlphaColor;
       StrokeColor: TAlphaColor; Radius: Single; Interactive: Boolean);
+    function ThemePaintColor(Color: TAlphaColor): TAlphaColor;
     procedure UseStyledLabelColor(LabelControl: TLabel);
     procedure StyleLabel(LabelControl: TLabel; Color: TAlphaColor;
       Size: Single; Bold: Boolean);
@@ -1357,6 +1358,9 @@ begin
   Height := 760;
 
   FMode := 'build';
+  { without this, TControl.Hint/ShowHint are inert -- the form gates hint
+    display for every control on it }
+  ShowHint := True;
   FSidebarVisible := True;
   FSessionDrawerWidth := 280;
   FChatParamsVisible := False;
@@ -1736,6 +1740,33 @@ begin
   Rect.YRadius := Radius;
 end;
 
+function TMasterDetailForm.ThemePaintColor(Color: TAlphaColor): TAlphaColor;
+{ The light-theme twin of StyleChromeRect's ThemeFill/ThemeStroke, for code
+  that paints RAW CANVAS instead of styling rectangles. The workflow graph
+  drew every frame with the dark UI_* constants no matter the theme -- which
+  is why its canvas stayed black in light mode: nothing on that path ever
+  consulted FDarkStyleEnabled. Any direct Canvas.Fill/Stroke color that uses
+  the palette constants must come through here. }
+begin
+  Result := Color;
+  if FDarkStyleEnabled then
+    Exit;
+  if Color = UI_BG then
+    Result := $FFF7F9FC
+  else if Color = UI_PANEL then
+    Result := $FFFFFFFF
+  else if Color = UI_PANEL_ALT then
+    Result := $FFF2F5FA
+  else if Color = UI_ACCENT_DIM then
+    Result := $FFDDEBF7
+  else if Color = UI_BORDER then
+    Result := $FFD6DDE8
+  else if Color = UI_TEXT then
+    Result := $FF10151C
+  else if Color = UI_MUTED then
+    Result := $FF5C6675;
+end;
+
 procedure TMasterDetailForm.UseStyledLabelColor(LabelControl: TLabel);
 begin
   if LabelControl <> nil then
@@ -2068,6 +2099,10 @@ procedure TMasterDetailForm.RestyleCoreControls;
     end
     else if Obj is TEdit then
       StyleTextControl(TControl(Obj), UI_TEXT, 12)
+    else if Obj = FPromptMemo then
+      { tier 1 ink, not the style book's grey: what you are typing pulls the
+        eye exactly like the chat text it is about to become }
+      StyleTextControl(TControl(Obj), UI_CHAT_TEXT, 12)
     else if Obj is TMemo then
       StyleTextControl(TControl(Obj), UI_TEXT, 12);
 
@@ -3530,12 +3565,8 @@ begin
   TranscriptBody.Parent := Tab;
   TranscriptBody.Align := TAlignLayout.Client;
   SetControlMargins(TranscriptBody, 10, 0, 10, 8);
-
-  Chrome := TRectangle.Create(Self);
-  Chrome.Parent := TranscriptBody;
-  Chrome.Align := TAlignLayout.Client;
-  StyleChromeRect(Chrome, UI_BG, UI_BORDER, 6, False);
-  Chrome.SendToBack;
+  { no chrome rect here: the transcript is open canvas, not a boxed panel --
+    an outline around the scroll area just competes with the chat text }
 
   FChatTurnList := TListBox.Create(Self);
   FChatTurnList.Parent := TranscriptBody;
@@ -6684,8 +6715,10 @@ var
   Check: TCheckBox;
   Combo: TComboBox;
   Control: TControl;
+  Doomed: TFmxObject;
   Edit: TEdit;
   FieldType: string;
+  FocusObj: TFmxObject;
   I: Integer;
   GroupPanel: TLayout;
   InitObj: TJSONObject;
@@ -6717,8 +6750,25 @@ var
 begin
   if AParent = nil then
     Exit;
+  { This runs from click handlers (workflow New/node select), and freeing a
+    control while an event involving it is still on the stack is the classic
+    FMX access violation -- especially when focus sits in one of the schema
+    edits being destroyed. Drop focus if it lives anywhere under this parent,
+    unparent NOW so the rebuild sees a clean slate, and let Release defer the
+    actual destruction to after the current event. }
+  FocusObj := nil;
+  if Focused <> nil then
+    FocusObj := Focused.GetObject;
+  while (FocusObj <> nil) and (FocusObj <> AParent) do
+    FocusObj := FocusObj.Parent;
+  if (FocusObj <> nil) and (FocusObj = AParent) then
+    Focused := nil;
   while AParent.ChildrenCount > 0 do
-    AParent.Children[0].Free;
+  begin
+    Doomed := AParent.Children[0];
+    Doomed.Parent := nil;
+    Doomed.Release;
+  end;
 
   Root := TJSONObject.ParseJSONValue(SchemaText);
   ArgsRoot := TJSONObject.ParseJSONValue(ArgsText);
@@ -10644,10 +10694,10 @@ begin
     Exit;
   Box := TPaintBox(Sender);
   R := RectF(0, 0, Box.Width, Box.Height);
-  Canvas.Fill.Color := UI_BG;
+  Canvas.Fill.Color := ThemePaintColor(UI_BG);
   Canvas.FillRect(R, 6, 6, [], 1);
 
-  Canvas.Stroke.Color := $FF182234;
+  Canvas.Stroke.Color := ThemePaintColor(UI_BORDER);
   Canvas.Stroke.Thickness := 1;
   GridX := 24;
   while GridX < Box.Width do
@@ -10662,14 +10712,14 @@ begin
     GridY := GridY + 24;
   end;
 
-  Canvas.Stroke.Color := UI_BORDER;
+  Canvas.Stroke.Color := ThemePaintColor(UI_BORDER);
   Canvas.Stroke.Thickness := 1.2;
   Canvas.DrawRect(RectF(R.Left + 0.5, R.Top + 0.5, R.Right - 0.5,
     R.Bottom - 0.5), 6, 6, [], 1);
 
   if (FWorkflowNodesList = nil) or (FWorkflowNodesList.Count = 0) then
   begin
-    Canvas.Fill.Color := UI_MUTED;
+    Canvas.Fill.Color := ThemePaintColor(UI_MUTED);
     Canvas.Font.Size := 11;
     Canvas.FillText(RectF(R.Left + 14, R.Top + 14, R.Right - 14,
       R.Bottom - 14), 'Add workflow nodes to build a runnable graph', False, 1,
@@ -10701,19 +10751,19 @@ begin
       end;
     end;
     IoRect := RectF(8, 12, 8 + WF_IO_W, 12 + Max(46, 26 + IoNames.Count * 15));
-    Canvas.Fill.Color := UI_PANEL;
+    Canvas.Fill.Color := ThemePaintColor(UI_PANEL);
     Canvas.FillRect(IoRect, 6, 6, [], 0.85);
-    Canvas.Stroke.Color := UI_ACCENT_DIM;
+    Canvas.Stroke.Color := ThemePaintColor(UI_ACCENT_DIM);
     Canvas.Stroke.Thickness := 1.2;
     Canvas.Stroke.Dash := TStrokeDash.Dash;
     Canvas.DrawRect(IoRect, 6, 6, [], 1);
     Canvas.Stroke.Dash := TStrokeDash.Solid;
-    Canvas.Fill.Color := UI_ACCENT;
+    Canvas.Fill.Color := ThemePaintColor(UI_ACCENT);
     Canvas.Font.Size := 10;
     Canvas.FillText(RectF(IoRect.Left + 8, IoRect.Top + 4, IoRect.Right - 8,
       IoRect.Top + 20), 'INPUT', False, 1, [], TTextAlign.Leading,
       TTextAlign.Center);
-    Canvas.Fill.Color := UI_MUTED;
+    Canvas.Fill.Color := ThemePaintColor(UI_MUTED);
     for I := 0 to IoNames.Count - 1 do
       Canvas.FillText(RectF(IoRect.Left + 8, IoRect.Top + 22 + I * 15,
         IoRect.Right - 6, IoRect.Top + 37 + I * 15), IoNames[I], False, 1, [],
@@ -10733,26 +10783,26 @@ begin
       end;
     OutRect := RectF(Box.Width - WF_IO_W - 8, 12, Box.Width - 8,
       12 + Max(46, 26 + IoNames.Count * 15));
-    Canvas.Fill.Color := UI_PANEL;
+    Canvas.Fill.Color := ThemePaintColor(UI_PANEL);
     Canvas.FillRect(OutRect, 6, 6, [], 0.85);
-    Canvas.Stroke.Color := UI_ACCENT_DIM;
+    Canvas.Stroke.Color := ThemePaintColor(UI_ACCENT_DIM);
     Canvas.Stroke.Thickness := 1.2;
     Canvas.Stroke.Dash := TStrokeDash.Dash;
     Canvas.DrawRect(OutRect, 6, 6, [], 1);
     Canvas.Stroke.Dash := TStrokeDash.Solid;
-    Canvas.Fill.Color := UI_ACCENT;
+    Canvas.Fill.Color := ThemePaintColor(UI_ACCENT);
     Canvas.Font.Size := 10;
     Canvas.FillText(RectF(OutRect.Left + 8, OutRect.Top + 4, OutRect.Right - 8,
       OutRect.Top + 20), 'OUTPUT', False, 1, [], TTextAlign.Leading,
       TTextAlign.Center);
-    Canvas.Fill.Color := UI_MUTED;
+    Canvas.Fill.Color := ThemePaintColor(UI_MUTED);
     for I := 0 to IoNames.Count - 1 do
       Canvas.FillText(RectF(OutRect.Left + 8, OutRect.Top + 22 + I * 15,
         OutRect.Right - 6, OutRect.Top + 37 + I * 15), IoNames[I], False, 1,
         [], TTextAlign.Leading, TTextAlign.Center);
 
     { dashed derived wires: INPUT -> roots, leaves -> OUTPUT }
-    Canvas.Stroke.Color := UI_ACCENT_DIM;
+    Canvas.Stroke.Color := ThemePaintColor(UI_ACCENT_DIM);
     Canvas.Stroke.Thickness := 1;
     Canvas.Stroke.Dash := TStrokeDash.Dash;
     for I := 0 to FWorkflowNodesList.Count - 1 do
@@ -10793,12 +10843,12 @@ begin
       RTo := WorkflowCanvasNodeRect(ToIndex, Box.Width);
       if SameText(FWorkflowSelectedEdge, EdgeText) then
       begin
-        Canvas.Stroke.Color := UI_ACCENT;
+        Canvas.Stroke.Color := ThemePaintColor(UI_ACCENT);
         Canvas.Stroke.Thickness := 3;
       end
       else
       begin
-        Canvas.Stroke.Color := UI_ACCENT_DIM;
+        Canvas.Stroke.Color := ThemePaintColor(UI_ACCENT_DIM);
         Canvas.Stroke.Thickness := 2;
       end;
       EdgeStart := PointF(RFrom.Right, (RFrom.Top + RFrom.Bottom) / 2);
@@ -10814,7 +10864,7 @@ begin
     if FromIndex >= 0 then
     begin
       RFrom := WorkflowCanvasNodeRect(FromIndex, Box.Width);
-      Canvas.Stroke.Color := UI_ACCENT;
+      Canvas.Stroke.Color := ThemePaintColor(UI_ACCENT);
       Canvas.Stroke.Thickness := 2.5;
       Canvas.DrawLine(PointF(RFrom.Right, (RFrom.Top + RFrom.Bottom) / 2),
         FWorkflowConnectPoint, 1);
@@ -10827,14 +10877,14 @@ begin
     Selected := SameText(NodeId, SelectedId);
     R := WorkflowCanvasNodeRect(I, Box.Width);
     if Selected then
-      Canvas.Fill.Color := UI_ACCENT_DIM
+      Canvas.Fill.Color := ThemePaintColor(UI_ACCENT_DIM)
     else
-      Canvas.Fill.Color := UI_PANEL_ALT;
+      Canvas.Fill.Color := ThemePaintColor(UI_PANEL_ALT);
     Canvas.FillRect(R, 7, 7, [], 1);
     if Selected then
-      Canvas.Stroke.Color := UI_ACCENT
+      Canvas.Stroke.Color := ThemePaintColor(UI_ACCENT)
     else
-      Canvas.Stroke.Color := UI_BORDER;
+      Canvas.Stroke.Color := ThemePaintColor(UI_BORDER);
     Canvas.Stroke.Thickness := 1.4;
     Canvas.DrawRect(R, 7, 7, [], 1);
 
@@ -10845,12 +10895,12 @@ begin
     if NodeTool = '' then
       NodeTool := 'tool';
     TextR := RectF(R.Left + 10, R.Top + 5, R.Right - 10, R.Top + 24);
-    Canvas.Fill.Color := UI_TEXT;
+    Canvas.Fill.Color := ThemePaintColor(UI_TEXT);
     Canvas.Font.Size := 11;
     Canvas.FillText(TextR, NodeText, False, 1, [], TTextAlign.Center,
       TTextAlign.Center);
     TextR := RectF(R.Left + 10, R.Top + 23, R.Right - 10, R.Bottom - 5);
-    Canvas.Fill.Color := UI_MUTED;
+    Canvas.Fill.Color := ThemePaintColor(UI_MUTED);
     Canvas.Font.Size := 9;
     Canvas.FillText(TextR, NodeTool, False, 1, [], TTextAlign.Center,
       TTextAlign.Center);
@@ -10864,11 +10914,11 @@ begin
         R.Left + 6, ((R.Top + R.Bottom) / 2) + 6);
     if (FWorkflowConnectFromId <> '') and
       not SameText(NodeId, FWorkflowConnectFromId) then
-      Canvas.Fill.Color := UI_ACCENT_DIM
+      Canvas.Fill.Color := ThemePaintColor(UI_ACCENT_DIM)
     else
-      Canvas.Fill.Color := UI_MUTED;
+      Canvas.Fill.Color := ThemePaintColor(UI_MUTED);
     Canvas.FillEllipse(PortR, 1);
-    Canvas.Stroke.Color := UI_BG;
+    Canvas.Stroke.Color := ThemePaintColor(UI_BG);
     Canvas.Stroke.Thickness := 1;
     Canvas.DrawEllipse(PortR, 1);
     if SameText(NodeId, FWorkflowConnectFromId) then
@@ -10877,7 +10927,7 @@ begin
     else
       PortR := RectF(R.Right - 6, ((R.Top + R.Bottom) / 2) - 6,
         R.Right + 6, ((R.Top + R.Bottom) / 2) + 6);
-    Canvas.Fill.Color := UI_ACCENT;
+    Canvas.Fill.Color := ThemePaintColor(UI_ACCENT);
     Canvas.FillEllipse(PortR, 1);
     Canvas.DrawEllipse(PortR, 1);
   end;
@@ -12324,7 +12374,8 @@ begin
     Text.AppendLine('Graph');
     Text.AppendLine('=====');
     Text.AppendLine;
-    Text.AppendLine('Inputs: ' + FWorkflowInputsEdit.Text);
+    if FWorkflowInputsEdit <> nil then
+      Text.AppendLine('Inputs: ' + FWorkflowInputsEdit.Text);
     Text.AppendLine;
     Text.AppendLine('Nodes');
     Text.AppendLine('-----');
@@ -19293,6 +19344,10 @@ begin
             FSessionCache.Add(Sessions[I]);
           RenderSessionList;
           SetStatus('connected');
+          { land in the newest conversation, not the empty placeholder card
+            -- connecting should drop you into your chat like the web UI }
+          if (FActiveSessionId = '') and (FSessionCache.Count > 0) then
+            LoadSession(FSessionCache[0].Id);
         end);
     end);
 end;
@@ -19344,7 +19399,9 @@ begin
       TitleLabel.Height := 22;
       TitleLabel.Text := Title;
       TitleLabel.WordWrap := False;
-      StyleLabel(TitleLabel, UI_TEXT, 12, True);
+      { tier 4 -- the sidebar is navigation chrome; only the transcript gets
+        full-strength ink }
+      StyleLabel(TitleLabel, UI_CHROME_TEXT, 12, True);
 
       MetaText := Session.Id;
       if Session.UpdatedAt <> '' then
@@ -20627,8 +20684,6 @@ var
   var
     ActionButton: TButton;
     ActionRow: TLayout;
-    AvatarBox: TRectangle;
-    AvatarLabel: TLabel;
     BodyHost: TLayout;
     BodyLabel: TLabel;
     BodyText: string;
@@ -20639,7 +20694,6 @@ var
     FillColor: TAlphaColor;
     Header: TLayout;
     HeaderCopyButton: TButton;
-    InitialText: string;
     MaxBubbleWidth: Single;
     AvailableWidth: Single;
     MetaLabel: TLabel;
@@ -20649,9 +20703,6 @@ var
     HasToolCards: Boolean;
     HasToolDetails: Boolean;
     RawBodyText: string;
-    RoleColor: TAlphaColor;
-    RoleLabel: TLabel;
-    RoleText: string;
     ToolCardCount: Integer;
     TranscriptItem: TListBoxItem;
     TranscriptRow: TLayout;
@@ -21489,43 +21540,31 @@ var
     BodyText := BodyValue;
     if BodyText = '' then
       BodyText := '(empty)';
-    RoleText := UpperCase(RoleValue);
-    InitialText := Copy(RoleText, 1, 1);
+    { No role captions, no avatar medallions: alignment and ground already
+      say who is speaking (user right + tinted bubble, assistant left on open
+      canvas), the way every chat app does. Labels were chrome shouting the
+      obvious. }
     FillColor := UI_PANEL_ALT;
     BorderColor := UI_BORDER;
-    RoleColor := UI_MUTED;
     if SameText(RoleValue, 'user') then
     begin
-      RoleText := 'YOU';
-      InitialText := 'U';
       BodyText := CompactUserBody(BodyText);
       { tier 2 -- a distinct ground + border so the user's turn reads as a
         bubble in a dialogue rather than another row in a log. }
       FillColor := UI_USER_FILL;
       BorderColor := UI_USER_BORDER;
-      RoleColor := UI_ACCENT;
     end
     else if SameText(RoleValue, 'assistant') then
     begin
-      RoleText := 'PASCLAW';
-      InitialText := 'P';
       BodyText := FormatChatDisplayText(BodyText, FChatToolsExpanded);
       FillColor := UI_PANEL;
       BorderColor := UI_BORDER;
-      RoleColor := UI_ACCENT;
     end
     else if SameText(RoleValue, 'system') then
-    begin
-      RoleText := 'SYSTEM';
-      InitialText := 'S';
       BorderColor := UI_WARN;
-      RoleColor := UI_WARN;
-    end;
     { One predicate, shared rules -- see MarkdownNeedsBlockRenderer. }
     HasRichText := HasToolCards or HasToolDetails or
       (Pos('```', BodyText) > 0) or MarkdownNeedsBlockRenderer(BodyText);
-    if InitialText = '' then
-      InitialText := '?';
 
     AvailableWidth := 640;
     if (FChatFlow <> nil) and (FChatFlow.Width > 0) then
@@ -21602,6 +21641,11 @@ var
       Card.Align := TAlignLayout.Left;
     Card.Width := MaxBubbleWidth;
     StyleChromeRect(Card, FillColor, BorderColor, 8, True);
+    { the assistant speaks on open canvas -- no box line around its text.
+      The user bubble and the system warning border stay; a selected turn
+      still shows the accent outline so selection is visible. }
+    if SameText(RoleValue, 'assistant') and (Index <> SelectedTurn) then
+      Card.Stroke.Kind := TBrushKind.None;
     Card.HitTest := True;
     if SameText(RoleValue, 'assistant') then
       SetControlMargins(Card, 0, 4, 18, 4)
@@ -21609,35 +21653,11 @@ var
       SetControlMargins(Card, 48, 6, 0, 6);
     SetControlPadding(Card, 12, 10, 12, 12);
 
+    { Slim header: just the turn meta and the copy icon, right-aligned. }
     Header := TLayout.Create(Card);
     Header.Parent := Card;
     Header.Align := TAlignLayout.Top;
-    Header.Height := 32;
-
-    AvatarBox := TRectangle.Create(Header);
-    AvatarBox.Parent := Header;
-    AvatarBox.Align := TAlignLayout.Left;
-    AvatarBox.Width := 28;
-    AvatarBox.HitTest := False;
-    StyleChromeRect(AvatarBox, UI_ACCENT_DIM, BorderColor, 14, False);
-    SetControlMargins(AvatarBox, 0, 0, 8, 4);
-
-    AvatarLabel := TLabel.Create(AvatarBox);
-    AvatarLabel.Parent := AvatarBox;
-    AvatarLabel.Align := TAlignLayout.Client;
-    AvatarLabel.HitTest := False;
-    AvatarLabel.Text := InitialText;
-    AvatarLabel.TextSettings.HorzAlign := TTextAlign.Center;
-    AvatarLabel.TextSettings.VertAlign := TTextAlign.Center;
-    StyleLabel(AvatarLabel, UI_TEXT, 11, True);
-
-    RoleLabel := TLabel.Create(Header);
-    RoleLabel.Parent := Header;
-    RoleLabel.Align := TAlignLayout.Client;
-    RoleLabel.HitTest := False;
-    RoleLabel.Text := RoleText;
-    RoleLabel.TextSettings.VertAlign := TTextAlign.Center;
-    StyleLabel(RoleLabel, RoleColor, 12, True);
+    Header.Height := 26;
 
     MetaLabel := TLabel.Create(Header);
     MetaLabel.Parent := Header;
@@ -21645,10 +21665,6 @@ var
     MetaLabel.Width := 110;
     MetaLabel.HitTest := False;
     MetaText := Format('turn %d/%d', [Index + 1, Total]);
-    if SameText(RoleValue, 'assistant') then
-      MetaText := MetaText + ' - reply'
-    else if SameText(RoleValue, 'user') then
-      MetaText := MetaText + ' - prompt';
     MetaLabel.Text := MetaText;
     MetaLabel.TextSettings.HorzAlign := TTextAlign.Trailing;
     MetaLabel.TextSettings.VertAlign := TTextAlign.Center;
@@ -21661,7 +21677,7 @@ var
     HeaderCopyButton.Text := 'Copy';
     HeaderCopyButton.TagString := 'copy' + #9 + Index.ToString;
     HeaderCopyButton.OnClick := ChatTurnActionClick;
-    SetControlMargins(HeaderCopyButton, 8, 2, 0, 4);
+    SetControlMargins(HeaderCopyButton, 8, 1, 0, 1);
     StyleButton(HeaderCopyButton, False);
 
     ActionRow := TLayout.Create(Card);
