@@ -619,6 +619,7 @@ type
     procedure ThemeClick(Sender: TObject);
     procedure TokenClearClick(Sender: TObject);
     procedure TokenToggleClick(Sender: TObject);
+    procedure SetSidebarVisible(Value: Boolean; Persist: Boolean);
     procedure ToggleSessionsClick(Sender: TObject);
     procedure SyncTemperatureTrackFromEdit;
     procedure UpdateLastAssistantTurn(const Text: string);
@@ -1430,8 +1431,11 @@ begin
   LoadLocalSettings;
   RestyleCoreControls;
   RenderModeButton;
-  RenderChat;
+  { layout BEFORE the first render: LoadLocalSettings may have restored a
+    hidden sidebar, and bubbles bake their width in at render time -- drawing
+    them against the pre-layout measure would leave them stale }
   ApplyResponsiveLayout;
+  RenderChat;
   RefreshClick(nil);
 end;
 
@@ -2960,30 +2964,42 @@ begin
     FSessionDrawer.Width := FSessionDrawerWidth;
 end;
 
-procedure TMasterDetailForm.ToggleSessionsClick(Sender: TObject);
+procedure TMasterDetailForm.SetSidebarVisible(Value: Boolean; Persist: Boolean);
+{ The ONE way the sessions drawer opens or closes.
+
+  Drawer visibility drives the chat measure (hidden = full width, shown =
+  800px capped), so every transition has to re-measure AND re-render: bubbles
+  bake their width in at render time, so a measure change alone leaves them
+  at the old width. Three callers used to flip FSidebarVisible by hand and
+  only one of them re-measured -- picking a session on a compact layout left
+  the transcript capped while the composer went wide, and /sessions reopened
+  the drawer over full-width bubbles.
+
+  The refresh is deferred because at call time FChatScroll.Width is still the
+  PRE-transition value; FMX applies the new alignment later in the frame. }
 begin
-  FSidebarVisible := not FSidebarVisible;
+  FSidebarVisible := Value;
   if FSessionDrawer <> nil then
   begin
-    if FSidebarVisible then
+    if Value then
       FSessionDrawer.ShowMaster
     else
       FSessionDrawer.HideMaster;
   end;
   ApplyResponsiveLayout;
-  SaveLocalSettings;
-  { The measure just changed regimes (drawer visibility drives the cap), but
-    right now FChatScroll.Width is still the PRE-toggle value -- FMX applies
-    the new alignment later this frame. Re-measure and re-render once the
-    layout has settled; bubbles bake their width in at render time, so a
-    measure change without a re-render leaves every existing bubble at the
-    old width. }
+  if Persist then
+    SaveLocalSettings;
   TThread.ForceQueue(nil,
     procedure
     begin
       ApplyChatMeasure;
       RenderChat;
     end);
+end;
+
+procedure TMasterDetailForm.ToggleSessionsClick(Sender: TObject);
+begin
+  SetSidebarVisible(not FSidebarVisible, True);
 end;
 
 procedure TMasterDetailForm.BuildInterface;
@@ -19695,12 +19711,13 @@ begin
   if FSessionList.Selected <> nil then
   begin
     LoadSession(FSessionList.Selected.TagString);
+    { closing over the picked session must re-measure too -- LoadSession is
+      async, so waiting for its render left the transcript capped while the
+      composer had already gone full width (and stayed that way if the load
+      failed) }
     if (FSessionDrawer <> nil) and
       (FSessionDrawer.Mode = TMultiViewMode.Drawer) then
-    begin
-      FSidebarVisible := False;
-      FSessionDrawer.HideMaster;
-    end;
+      SetSidebarVisible(False, False);
   end;
 end;
 
@@ -22810,10 +22827,7 @@ begin
 
   if Cmd = 'sessions' then
   begin
-    FSidebarVisible := True;
-    if FSessionDrawer <> nil then
-      FSessionDrawer.ShowMaster;
-    ApplyResponsiveLayout;
+    SetSidebarVisible(True, False);
     LoadSessions;
     SetStatus('sessions');
     Exit;
