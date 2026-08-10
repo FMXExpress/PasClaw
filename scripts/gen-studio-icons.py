@@ -52,9 +52,9 @@ import struct
 import sys
 
 STYLES = [
-    # path,                       icon fill
-    ("studio/PasclawDark.style",  "xFFD6DDE6"),
-    ("studio/PasclawLight.style", "xFF4A5563"),
+    # path,                       icon fill,   hover wash,  focus ring
+    ("studio/PasclawDark.style",  "xFFD6DDE6", "claWhite",  "xFF3BA7FF"),
+    ("studio/PasclawLight.style", "xFF4A5563", "claBlack",  "xFF0969DA"),
 ]
 
 # legacy marker lines from the first version; stripped on sight (migration)
@@ -228,7 +228,7 @@ def path_object(name, fill, indent):
     ])
 
 
-# ----------------------------------------------------------------- cloning --
+# ---------------------------------------------------------------- emission --
 
 def block_at(lines, style_name):
     """(start, end) line indices of the `object T...` whose StyleName matches."""
@@ -246,22 +246,77 @@ def block_at(lines, style_name):
     raise SystemExit("no '%s' block found" % style_name)
 
 
-def drop_glyph(block):
-    """Remove the TGlyph placeholder; the TPath takes its place."""
-    out, i = [], 0
-    while i < len(block):
-        if block[i].strip() == "object TGlyph":
-            indent = len(block[i]) - len(block[i].lstrip())
-            i += 1
-            while i < len(block) and not (
-                    block[i].strip() == "end"
-                    and (len(block[i]) - len(block[i].lstrip())) == indent):
-                i += 1
-            i += 1
-            continue
-        out.append(block[i])
-        i += 1
-    return out
+def icon_style(name, fill, hover, focus, indent):
+    """A FLAT icon button style: glyph, hover wash, focus ring -- no box.
+
+    Deliberately NOT a clone of the theme's buttonstyle: icon buttons carry no
+    border and no gradient face ("can we have them not have an
+    edge/outline"). Affordance comes from the wash, a rounded rectangle that
+    fades in under the pointer (opacity 0 -> 0.10) and presses slightly
+    darker, which is how flat icon buttons behave everywhere else.
+
+    The focus ring is not optional: these buttons have no caption, so a
+    keyboard user Tabbing through them has NOTHING saying which icon Enter
+    will press unless the style shows it. The clone approach inherited the
+    theme's IsFocused glow; the flat style must provide its own.
+    """
+    pad = indent + "  "
+    return "\n".join([
+        indent + "object TLayout",
+        pad + "StyleName = '%s'" % name.lower(),
+        pad + "DesignVisible = False",
+        pad + "Height = 24.000000000000000000",
+        pad + "Width = 34.000000000000000000",
+        pad + "object TRectangle",
+        pad + "  StyleName = 'hoverwash'",
+        pad + "  Align = Contents",
+        pad + "  Fill.Color = " + hover,
+        pad + "  HitTest = False",
+        pad + "  Locked = True",
+        pad + "  Opacity = 0.000000000000000000",
+        pad + "  Stroke.Kind = None",
+        pad + "  XRadius = 6.000000000000000000",
+        pad + "  YRadius = 6.000000000000000000",
+        pad + "  object TFloatAnimation",
+        pad + "    Duration = 0.150000005960464500",
+        pad + "    PropertyName = 'Opacity'",
+        pad + "    StartValue = 0.000000000000000000",
+        pad + "    StopValue = 0.100000001490116100",
+        pad + "    Trigger = 'IsMouseOver=true'",
+        pad + "    TriggerInverse = 'IsMouseOver=false'",
+        pad + "  end",
+        pad + "  object TFloatAnimation",
+        pad + "    Duration = 0.100000001490116100",
+        pad + "    PropertyName = 'Opacity'",
+        pad + "    StartValue = 0.100000001490116100",
+        pad + "    StopValue = 0.200000002980232200",
+        pad + "    Trigger = 'IsPressed=true'",
+        pad + "    TriggerInverse = 'IsPressed=false'",
+        pad + "  end",
+        pad + "end",
+        pad + "object TRectangle",
+        pad + "  StyleName = 'focusring'",
+        pad + "  Align = Contents",
+        pad + "  Fill.Kind = None",
+        pad + "  HitTest = False",
+        pad + "  Locked = True",
+        pad + "  Opacity = 0.000000000000000000",
+        pad + "  Stroke.Color = " + focus,
+        pad + "  Stroke.Thickness = 1.500000000000000000",
+        pad + "  XRadius = 6.000000000000000000",
+        pad + "  YRadius = 6.000000000000000000",
+        pad + "  object TFloatAnimation",
+        pad + "    Duration = 0.100000001490116100",
+        pad + "    PropertyName = 'Opacity'",
+        pad + "    StartValue = 0.000000000000000000",
+        pad + "    StopValue = 1.000000000000000000",
+        pad + "    Trigger = 'IsFocused=true'",
+        pad + "    TriggerInverse = 'IsFocused=false'",
+        pad + "  end",
+        pad + "end",
+        path_object(name, fill, pad),
+        indent + "end",
+    ])
 
 
 def strip_generated(lines):
@@ -327,21 +382,17 @@ def validate(text, path):
     return not errs
 
 
-def build(path, fill):
+def build(path, fill, hover, focus):
     src = open(path, encoding="utf-8", errors="replace").read()
     lines = strip_generated(src.split("\n"))
 
+    # anchor after the theme's own buttonstyle so the icons live beside it
     start, end = block_at(lines, "buttonstyle")
-    template = drop_glyph(lines[start:end + 1])
-    indent = " " * (len(template[0]) - len(template[0].lstrip()))
+    indent = " " * (len(lines[start]) - len(lines[start].lstrip()))
 
     generated = []
     for name in sorted(GLYPHS):
-        clone = list(template)
-        clone[1] = indent + "  StyleName = '%s'" % name.lower()
-        # the glyph goes last so it paints over the background and the caption
-        clone = clone[:-1] + [path_object(name, fill, indent + "  "), clone[-1]]
-        generated.extend(clone)
+        generated.append(icon_style(name, fill, hover, focus, indent))
 
     return "\n".join(lines[:end + 1] + generated + lines[end + 1:])
 
@@ -349,8 +400,8 @@ def build(path, fill):
 def main(argv):
     check = "--check" in argv
     bad = 0
-    for path, fill in STYLES:
-        want = build(path, fill)
+    for path, fill, hover, focus in STYLES:
+        want = build(path, fill, hover, focus)
         if not validate(want, path):
             print("%s: INVALID -- refusing to %s" %
                   (path, "pass" if check else "write"))

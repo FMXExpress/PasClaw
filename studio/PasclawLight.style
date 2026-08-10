@@ -2686,105 +2686,55 @@ object TStyleContainer
   end
   object TLayout
     StyleName = 'actiontoolbutton'
-    Position.X = 310.000000000000000000
-    Position.Y = 335.000000000000000000
-    Size.Width = 91.000000000000000000
-    Size.Height = 24.000000000000000000
-    Size.PlatformDefault = False
-    Visible = False
-    TabOrder = 40
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
     object TRectangle
-      StyleName = 'background'
+      StyleName = 'hoverwash'
       Align = Contents
-      Fill.Color = xFFF6F6F6
+      Fill.Color = claBlack
       HitTest = False
-      Size.Width = 91.000000000000000000
-      Size.Height = 24.000000000000000000
-      Size.PlatformDefault = False
-      Stroke.Color = xFFD5D5D5
-      XRadius = 3.000000000000000000
-      YRadius = 3.000000000000000000
-      object TRectangle
-        Align = Client
-        Corners = [TopLeft, TopRight]
-        Fill.Kind = Gradient
-        Fill.Gradient.Points = <
-          item
-            Color = claWhitesmoke
-            Offset = 0.000000000000000000
-          end
-          item
-            Color = xFFF0F3F6
-            Offset = 1.000000000000000000
-          end>
-        HitTest = False
-        Margins.Bottom = 2.000000000000000000
-        Sides = [Top, Left, Right]
-        Size.Width = 91.000000000000000000
-        Size.Height = 22.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFFD5D5D5
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-      end
-      object TRectangle
-        Align = Client
-        Fill.Color = xFF01BAE9
-        Locked = True
-        HitTest = False
-        Opacity = 0.001000000047497451
-        Size.Width = 91.000000000000000000
-        Size.Height = 24.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFF01BAE9
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-        object TFloatAnimation
-          Duration = 0.200000002980232200
-          PropertyName = 'Opacity'
-          StartValue = 0.001000000047497451
-          StopValue = 1.000000000000000000
-          Trigger = 'IsFocused=true'
-          TriggerInverse = 'IsFocused=false'
-        end
-      end
-      object TInnerGlowEffect
-        Softness = 0.400000005960464500
-        GlowColor = xFF4F4848
-        Opacity = 0.299999982118606600
-        Trigger = 'IsPressed=true'
-        Enabled = False
-      end
-    end
-    object TText
-      StyleName = 'text'
-      Align = Client
       Locked = True
-      HitTest = False
-      Margins.Left = 5.000000000000000000
-      Margins.Top = 2.000000000000000000
-      Margins.Right = 5.000000000000000000
-      Margins.Bottom = 2.000000000000000000
-      Size.Width = 81.000000000000000000
-      Size.Height = 20.000000000000000000
-      Size.PlatformDefault = False
-      Text = 'button'
-      TextSettings.FontColor = xFF828282
-      object TColorAnimation
-        Duration = 0.200000002980232200
-        PropertyName = 'Fill.Color'
-        StartValue = xFF828282
-        StopValue = claWhite
-        Trigger = 'IsFocused=true'
-        TriggerInverse = 'IsFocused=False'
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
       end
     end
-    object TGlowEffect
-      Softness = 0.200000002980232200
-      GlowColor = xFF01BAE9
-      Opacity = 1.000000000000000000
-      Trigger = 'IsFocused=true'
-      Enabled = False
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
     end
     object TPath
       StyleName = 'icon'
@@ -2809,105 +2759,55 @@ object TStyleContainer
   end
   object TLayout
     StyleName = 'addtoolbutton'
-    Position.X = 310.000000000000000000
-    Position.Y = 335.000000000000000000
-    Size.Width = 91.000000000000000000
-    Size.Height = 24.000000000000000000
-    Size.PlatformDefault = False
-    Visible = False
-    TabOrder = 40
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
     object TRectangle
-      StyleName = 'background'
+      StyleName = 'hoverwash'
       Align = Contents
-      Fill.Color = xFFF6F6F6
+      Fill.Color = claBlack
       HitTest = False
-      Size.Width = 91.000000000000000000
-      Size.Height = 24.000000000000000000
-      Size.PlatformDefault = False
-      Stroke.Color = xFFD5D5D5
-      XRadius = 3.000000000000000000
-      YRadius = 3.000000000000000000
-      object TRectangle
-        Align = Client
-        Corners = [TopLeft, TopRight]
-        Fill.Kind = Gradient
-        Fill.Gradient.Points = <
-          item
-            Color = claWhitesmoke
-            Offset = 0.000000000000000000
-          end
-          item
-            Color = xFFF0F3F6
-            Offset = 1.000000000000000000
-          end>
-        HitTest = False
-        Margins.Bottom = 2.000000000000000000
-        Sides = [Top, Left, Right]
-        Size.Width = 91.000000000000000000
-        Size.Height = 22.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFFD5D5D5
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-      end
-      object TRectangle
-        Align = Client
-        Fill.Color = xFF01BAE9
-        Locked = True
-        HitTest = False
-        Opacity = 0.001000000047497451
-        Size.Width = 91.000000000000000000
-        Size.Height = 24.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFF01BAE9
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-        object TFloatAnimation
-          Duration = 0.200000002980232200
-          PropertyName = 'Opacity'
-          StartValue = 0.001000000047497451
-          StopValue = 1.000000000000000000
-          Trigger = 'IsFocused=true'
-          TriggerInverse = 'IsFocused=false'
-        end
-      end
-      object TInnerGlowEffect
-        Softness = 0.400000005960464500
-        GlowColor = xFF4F4848
-        Opacity = 0.299999982118606600
-        Trigger = 'IsPressed=true'
-        Enabled = False
-      end
-    end
-    object TText
-      StyleName = 'text'
-      Align = Client
       Locked = True
-      HitTest = False
-      Margins.Left = 5.000000000000000000
-      Margins.Top = 2.000000000000000000
-      Margins.Right = 5.000000000000000000
-      Margins.Bottom = 2.000000000000000000
-      Size.Width = 81.000000000000000000
-      Size.Height = 20.000000000000000000
-      Size.PlatformDefault = False
-      Text = 'button'
-      TextSettings.FontColor = xFF828282
-      object TColorAnimation
-        Duration = 0.200000002980232200
-        PropertyName = 'Fill.Color'
-        StartValue = xFF828282
-        StopValue = claWhite
-        Trigger = 'IsFocused=true'
-        TriggerInverse = 'IsFocused=False'
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
       end
     end
-    object TGlowEffect
-      Softness = 0.200000002980232200
-      GlowColor = xFF01BAE9
-      Opacity = 1.000000000000000000
-      Trigger = 'IsFocused=true'
-      Enabled = False
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
     end
     object TPath
       StyleName = 'icon'
@@ -2930,105 +2830,55 @@ object TStyleContainer
   end
   object TLayout
     StyleName = 'arrowdowntoolbutton'
-    Position.X = 310.000000000000000000
-    Position.Y = 335.000000000000000000
-    Size.Width = 91.000000000000000000
-    Size.Height = 24.000000000000000000
-    Size.PlatformDefault = False
-    Visible = False
-    TabOrder = 40
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
     object TRectangle
-      StyleName = 'background'
+      StyleName = 'hoverwash'
       Align = Contents
-      Fill.Color = xFFF6F6F6
+      Fill.Color = claBlack
       HitTest = False
-      Size.Width = 91.000000000000000000
-      Size.Height = 24.000000000000000000
-      Size.PlatformDefault = False
-      Stroke.Color = xFFD5D5D5
-      XRadius = 3.000000000000000000
-      YRadius = 3.000000000000000000
-      object TRectangle
-        Align = Client
-        Corners = [TopLeft, TopRight]
-        Fill.Kind = Gradient
-        Fill.Gradient.Points = <
-          item
-            Color = claWhitesmoke
-            Offset = 0.000000000000000000
-          end
-          item
-            Color = xFFF0F3F6
-            Offset = 1.000000000000000000
-          end>
-        HitTest = False
-        Margins.Bottom = 2.000000000000000000
-        Sides = [Top, Left, Right]
-        Size.Width = 91.000000000000000000
-        Size.Height = 22.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFFD5D5D5
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-      end
-      object TRectangle
-        Align = Client
-        Fill.Color = xFF01BAE9
-        Locked = True
-        HitTest = False
-        Opacity = 0.001000000047497451
-        Size.Width = 91.000000000000000000
-        Size.Height = 24.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFF01BAE9
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-        object TFloatAnimation
-          Duration = 0.200000002980232200
-          PropertyName = 'Opacity'
-          StartValue = 0.001000000047497451
-          StopValue = 1.000000000000000000
-          Trigger = 'IsFocused=true'
-          TriggerInverse = 'IsFocused=false'
-        end
-      end
-      object TInnerGlowEffect
-        Softness = 0.400000005960464500
-        GlowColor = xFF4F4848
-        Opacity = 0.299999982118606600
-        Trigger = 'IsPressed=true'
-        Enabled = False
-      end
-    end
-    object TText
-      StyleName = 'text'
-      Align = Client
       Locked = True
-      HitTest = False
-      Margins.Left = 5.000000000000000000
-      Margins.Top = 2.000000000000000000
-      Margins.Right = 5.000000000000000000
-      Margins.Bottom = 2.000000000000000000
-      Size.Width = 81.000000000000000000
-      Size.Height = 20.000000000000000000
-      Size.PlatformDefault = False
-      Text = 'button'
-      TextSettings.FontColor = xFF828282
-      object TColorAnimation
-        Duration = 0.200000002980232200
-        PropertyName = 'Fill.Color'
-        StartValue = xFF828282
-        StopValue = claWhite
-        Trigger = 'IsFocused=true'
-        TriggerInverse = 'IsFocused=False'
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
       end
     end
-    object TGlowEffect
-      Softness = 0.200000002980232200
-      GlowColor = xFF01BAE9
-      Opacity = 1.000000000000000000
-      Trigger = 'IsFocused=true'
-      Enabled = False
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
     end
     object TPath
       StyleName = 'icon'
@@ -3050,105 +2900,55 @@ object TStyleContainer
   end
   object TLayout
     StyleName = 'arrowlefttoolbutton'
-    Position.X = 310.000000000000000000
-    Position.Y = 335.000000000000000000
-    Size.Width = 91.000000000000000000
-    Size.Height = 24.000000000000000000
-    Size.PlatformDefault = False
-    Visible = False
-    TabOrder = 40
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
     object TRectangle
-      StyleName = 'background'
+      StyleName = 'hoverwash'
       Align = Contents
-      Fill.Color = xFFF6F6F6
+      Fill.Color = claBlack
       HitTest = False
-      Size.Width = 91.000000000000000000
-      Size.Height = 24.000000000000000000
-      Size.PlatformDefault = False
-      Stroke.Color = xFFD5D5D5
-      XRadius = 3.000000000000000000
-      YRadius = 3.000000000000000000
-      object TRectangle
-        Align = Client
-        Corners = [TopLeft, TopRight]
-        Fill.Kind = Gradient
-        Fill.Gradient.Points = <
-          item
-            Color = claWhitesmoke
-            Offset = 0.000000000000000000
-          end
-          item
-            Color = xFFF0F3F6
-            Offset = 1.000000000000000000
-          end>
-        HitTest = False
-        Margins.Bottom = 2.000000000000000000
-        Sides = [Top, Left, Right]
-        Size.Width = 91.000000000000000000
-        Size.Height = 22.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFFD5D5D5
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-      end
-      object TRectangle
-        Align = Client
-        Fill.Color = xFF01BAE9
-        Locked = True
-        HitTest = False
-        Opacity = 0.001000000047497451
-        Size.Width = 91.000000000000000000
-        Size.Height = 24.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFF01BAE9
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-        object TFloatAnimation
-          Duration = 0.200000002980232200
-          PropertyName = 'Opacity'
-          StartValue = 0.001000000047497451
-          StopValue = 1.000000000000000000
-          Trigger = 'IsFocused=true'
-          TriggerInverse = 'IsFocused=false'
-        end
-      end
-      object TInnerGlowEffect
-        Softness = 0.400000005960464500
-        GlowColor = xFF4F4848
-        Opacity = 0.299999982118606600
-        Trigger = 'IsPressed=true'
-        Enabled = False
-      end
-    end
-    object TText
-      StyleName = 'text'
-      Align = Client
       Locked = True
-      HitTest = False
-      Margins.Left = 5.000000000000000000
-      Margins.Top = 2.000000000000000000
-      Margins.Right = 5.000000000000000000
-      Margins.Bottom = 2.000000000000000000
-      Size.Width = 81.000000000000000000
-      Size.Height = 20.000000000000000000
-      Size.PlatformDefault = False
-      Text = 'button'
-      TextSettings.FontColor = xFF828282
-      object TColorAnimation
-        Duration = 0.200000002980232200
-        PropertyName = 'Fill.Color'
-        StartValue = xFF828282
-        StopValue = claWhite
-        Trigger = 'IsFocused=true'
-        TriggerInverse = 'IsFocused=False'
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
       end
     end
-    object TGlowEffect
-      Softness = 0.200000002980232200
-      GlowColor = xFF01BAE9
-      Opacity = 1.000000000000000000
-      Trigger = 'IsFocused=true'
-      Enabled = False
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
     end
     object TPath
       StyleName = 'icon'
@@ -3170,105 +2970,55 @@ object TStyleContainer
   end
   object TLayout
     StyleName = 'arrowrighttoolbutton'
-    Position.X = 310.000000000000000000
-    Position.Y = 335.000000000000000000
-    Size.Width = 91.000000000000000000
-    Size.Height = 24.000000000000000000
-    Size.PlatformDefault = False
-    Visible = False
-    TabOrder = 40
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
     object TRectangle
-      StyleName = 'background'
+      StyleName = 'hoverwash'
       Align = Contents
-      Fill.Color = xFFF6F6F6
+      Fill.Color = claBlack
       HitTest = False
-      Size.Width = 91.000000000000000000
-      Size.Height = 24.000000000000000000
-      Size.PlatformDefault = False
-      Stroke.Color = xFFD5D5D5
-      XRadius = 3.000000000000000000
-      YRadius = 3.000000000000000000
-      object TRectangle
-        Align = Client
-        Corners = [TopLeft, TopRight]
-        Fill.Kind = Gradient
-        Fill.Gradient.Points = <
-          item
-            Color = claWhitesmoke
-            Offset = 0.000000000000000000
-          end
-          item
-            Color = xFFF0F3F6
-            Offset = 1.000000000000000000
-          end>
-        HitTest = False
-        Margins.Bottom = 2.000000000000000000
-        Sides = [Top, Left, Right]
-        Size.Width = 91.000000000000000000
-        Size.Height = 22.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFFD5D5D5
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-      end
-      object TRectangle
-        Align = Client
-        Fill.Color = xFF01BAE9
-        Locked = True
-        HitTest = False
-        Opacity = 0.001000000047497451
-        Size.Width = 91.000000000000000000
-        Size.Height = 24.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFF01BAE9
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-        object TFloatAnimation
-          Duration = 0.200000002980232200
-          PropertyName = 'Opacity'
-          StartValue = 0.001000000047497451
-          StopValue = 1.000000000000000000
-          Trigger = 'IsFocused=true'
-          TriggerInverse = 'IsFocused=false'
-        end
-      end
-      object TInnerGlowEffect
-        Softness = 0.400000005960464500
-        GlowColor = xFF4F4848
-        Opacity = 0.299999982118606600
-        Trigger = 'IsPressed=true'
-        Enabled = False
-      end
-    end
-    object TText
-      StyleName = 'text'
-      Align = Client
       Locked = True
-      HitTest = False
-      Margins.Left = 5.000000000000000000
-      Margins.Top = 2.000000000000000000
-      Margins.Right = 5.000000000000000000
-      Margins.Bottom = 2.000000000000000000
-      Size.Width = 81.000000000000000000
-      Size.Height = 20.000000000000000000
-      Size.PlatformDefault = False
-      Text = 'button'
-      TextSettings.FontColor = xFF828282
-      object TColorAnimation
-        Duration = 0.200000002980232200
-        PropertyName = 'Fill.Color'
-        StartValue = xFF828282
-        StopValue = claWhite
-        Trigger = 'IsFocused=true'
-        TriggerInverse = 'IsFocused=False'
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
       end
     end
-    object TGlowEffect
-      Softness = 0.200000002980232200
-      GlowColor = xFF01BAE9
-      Opacity = 1.000000000000000000
-      Trigger = 'IsFocused=true'
-      Enabled = False
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
     end
     object TPath
       StyleName = 'icon'
@@ -3290,105 +3040,55 @@ object TStyleContainer
   end
   object TLayout
     StyleName = 'arrowuptoolbutton'
-    Position.X = 310.000000000000000000
-    Position.Y = 335.000000000000000000
-    Size.Width = 91.000000000000000000
-    Size.Height = 24.000000000000000000
-    Size.PlatformDefault = False
-    Visible = False
-    TabOrder = 40
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
     object TRectangle
-      StyleName = 'background'
+      StyleName = 'hoverwash'
       Align = Contents
-      Fill.Color = xFFF6F6F6
+      Fill.Color = claBlack
       HitTest = False
-      Size.Width = 91.000000000000000000
-      Size.Height = 24.000000000000000000
-      Size.PlatformDefault = False
-      Stroke.Color = xFFD5D5D5
-      XRadius = 3.000000000000000000
-      YRadius = 3.000000000000000000
-      object TRectangle
-        Align = Client
-        Corners = [TopLeft, TopRight]
-        Fill.Kind = Gradient
-        Fill.Gradient.Points = <
-          item
-            Color = claWhitesmoke
-            Offset = 0.000000000000000000
-          end
-          item
-            Color = xFFF0F3F6
-            Offset = 1.000000000000000000
-          end>
-        HitTest = False
-        Margins.Bottom = 2.000000000000000000
-        Sides = [Top, Left, Right]
-        Size.Width = 91.000000000000000000
-        Size.Height = 22.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFFD5D5D5
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-      end
-      object TRectangle
-        Align = Client
-        Fill.Color = xFF01BAE9
-        Locked = True
-        HitTest = False
-        Opacity = 0.001000000047497451
-        Size.Width = 91.000000000000000000
-        Size.Height = 24.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFF01BAE9
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-        object TFloatAnimation
-          Duration = 0.200000002980232200
-          PropertyName = 'Opacity'
-          StartValue = 0.001000000047497451
-          StopValue = 1.000000000000000000
-          Trigger = 'IsFocused=true'
-          TriggerInverse = 'IsFocused=false'
-        end
-      end
-      object TInnerGlowEffect
-        Softness = 0.400000005960464500
-        GlowColor = xFF4F4848
-        Opacity = 0.299999982118606600
-        Trigger = 'IsPressed=true'
-        Enabled = False
-      end
-    end
-    object TText
-      StyleName = 'text'
-      Align = Client
       Locked = True
-      HitTest = False
-      Margins.Left = 5.000000000000000000
-      Margins.Top = 2.000000000000000000
-      Margins.Right = 5.000000000000000000
-      Margins.Bottom = 2.000000000000000000
-      Size.Width = 81.000000000000000000
-      Size.Height = 20.000000000000000000
-      Size.PlatformDefault = False
-      Text = 'button'
-      TextSettings.FontColor = xFF828282
-      object TColorAnimation
-        Duration = 0.200000002980232200
-        PropertyName = 'Fill.Color'
-        StartValue = xFF828282
-        StopValue = claWhite
-        Trigger = 'IsFocused=true'
-        TriggerInverse = 'IsFocused=False'
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
       end
     end
-    object TGlowEffect
-      Softness = 0.200000002980232200
-      GlowColor = xFF01BAE9
-      Opacity = 1.000000000000000000
-      Trigger = 'IsFocused=true'
-      Enabled = False
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
     end
     object TPath
       StyleName = 'icon'
@@ -3410,105 +3110,55 @@ object TStyleContainer
   end
   object TLayout
     StyleName = 'composetoolbutton'
-    Position.X = 310.000000000000000000
-    Position.Y = 335.000000000000000000
-    Size.Width = 91.000000000000000000
-    Size.Height = 24.000000000000000000
-    Size.PlatformDefault = False
-    Visible = False
-    TabOrder = 40
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
     object TRectangle
-      StyleName = 'background'
+      StyleName = 'hoverwash'
       Align = Contents
-      Fill.Color = xFFF6F6F6
+      Fill.Color = claBlack
       HitTest = False
-      Size.Width = 91.000000000000000000
-      Size.Height = 24.000000000000000000
-      Size.PlatformDefault = False
-      Stroke.Color = xFFD5D5D5
-      XRadius = 3.000000000000000000
-      YRadius = 3.000000000000000000
-      object TRectangle
-        Align = Client
-        Corners = [TopLeft, TopRight]
-        Fill.Kind = Gradient
-        Fill.Gradient.Points = <
-          item
-            Color = claWhitesmoke
-            Offset = 0.000000000000000000
-          end
-          item
-            Color = xFFF0F3F6
-            Offset = 1.000000000000000000
-          end>
-        HitTest = False
-        Margins.Bottom = 2.000000000000000000
-        Sides = [Top, Left, Right]
-        Size.Width = 91.000000000000000000
-        Size.Height = 22.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFFD5D5D5
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-      end
-      object TRectangle
-        Align = Client
-        Fill.Color = xFF01BAE9
-        Locked = True
-        HitTest = False
-        Opacity = 0.001000000047497451
-        Size.Width = 91.000000000000000000
-        Size.Height = 24.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFF01BAE9
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-        object TFloatAnimation
-          Duration = 0.200000002980232200
-          PropertyName = 'Opacity'
-          StartValue = 0.001000000047497451
-          StopValue = 1.000000000000000000
-          Trigger = 'IsFocused=true'
-          TriggerInverse = 'IsFocused=false'
-        end
-      end
-      object TInnerGlowEffect
-        Softness = 0.400000005960464500
-        GlowColor = xFF4F4848
-        Opacity = 0.299999982118606600
-        Trigger = 'IsPressed=true'
-        Enabled = False
-      end
-    end
-    object TText
-      StyleName = 'text'
-      Align = Client
       Locked = True
-      HitTest = False
-      Margins.Left = 5.000000000000000000
-      Margins.Top = 2.000000000000000000
-      Margins.Right = 5.000000000000000000
-      Margins.Bottom = 2.000000000000000000
-      Size.Width = 81.000000000000000000
-      Size.Height = 20.000000000000000000
-      Size.PlatformDefault = False
-      Text = 'button'
-      TextSettings.FontColor = xFF828282
-      object TColorAnimation
-        Duration = 0.200000002980232200
-        PropertyName = 'Fill.Color'
-        StartValue = xFF828282
-        StopValue = claWhite
-        Trigger = 'IsFocused=true'
-        TriggerInverse = 'IsFocused=False'
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
       end
     end
-    object TGlowEffect
-      Softness = 0.200000002980232200
-      GlowColor = xFF01BAE9
-      Opacity = 1.000000000000000000
-      Trigger = 'IsFocused=true'
-      Enabled = False
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
     end
     object TPath
       StyleName = 'icon'
@@ -3530,105 +3180,55 @@ object TStyleContainer
   end
   object TLayout
     StyleName = 'detailstoolbutton'
-    Position.X = 310.000000000000000000
-    Position.Y = 335.000000000000000000
-    Size.Width = 91.000000000000000000
-    Size.Height = 24.000000000000000000
-    Size.PlatformDefault = False
-    Visible = False
-    TabOrder = 40
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
     object TRectangle
-      StyleName = 'background'
+      StyleName = 'hoverwash'
       Align = Contents
-      Fill.Color = xFFF6F6F6
+      Fill.Color = claBlack
       HitTest = False
-      Size.Width = 91.000000000000000000
-      Size.Height = 24.000000000000000000
-      Size.PlatformDefault = False
-      Stroke.Color = xFFD5D5D5
-      XRadius = 3.000000000000000000
-      YRadius = 3.000000000000000000
-      object TRectangle
-        Align = Client
-        Corners = [TopLeft, TopRight]
-        Fill.Kind = Gradient
-        Fill.Gradient.Points = <
-          item
-            Color = claWhitesmoke
-            Offset = 0.000000000000000000
-          end
-          item
-            Color = xFFF0F3F6
-            Offset = 1.000000000000000000
-          end>
-        HitTest = False
-        Margins.Bottom = 2.000000000000000000
-        Sides = [Top, Left, Right]
-        Size.Width = 91.000000000000000000
-        Size.Height = 22.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFFD5D5D5
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-      end
-      object TRectangle
-        Align = Client
-        Fill.Color = xFF01BAE9
-        Locked = True
-        HitTest = False
-        Opacity = 0.001000000047497451
-        Size.Width = 91.000000000000000000
-        Size.Height = 24.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFF01BAE9
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-        object TFloatAnimation
-          Duration = 0.200000002980232200
-          PropertyName = 'Opacity'
-          StartValue = 0.001000000047497451
-          StopValue = 1.000000000000000000
-          Trigger = 'IsFocused=true'
-          TriggerInverse = 'IsFocused=false'
-        end
-      end
-      object TInnerGlowEffect
-        Softness = 0.400000005960464500
-        GlowColor = xFF4F4848
-        Opacity = 0.299999982118606600
-        Trigger = 'IsPressed=true'
-        Enabled = False
-      end
-    end
-    object TText
-      StyleName = 'text'
-      Align = Client
       Locked = True
-      HitTest = False
-      Margins.Left = 5.000000000000000000
-      Margins.Top = 2.000000000000000000
-      Margins.Right = 5.000000000000000000
-      Margins.Bottom = 2.000000000000000000
-      Size.Width = 81.000000000000000000
-      Size.Height = 20.000000000000000000
-      Size.PlatformDefault = False
-      Text = 'button'
-      TextSettings.FontColor = xFF828282
-      object TColorAnimation
-        Duration = 0.200000002980232200
-        PropertyName = 'Fill.Color'
-        StartValue = xFF828282
-        StopValue = claWhite
-        Trigger = 'IsFocused=true'
-        TriggerInverse = 'IsFocused=False'
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
       end
     end
-    object TGlowEffect
-      Softness = 0.200000002980232200
-      GlowColor = xFF01BAE9
-      Opacity = 1.000000000000000000
-      Trigger = 'IsFocused=true'
-      Enabled = False
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
     end
     object TPath
       StyleName = 'icon'
@@ -3658,105 +3258,55 @@ object TStyleContainer
   end
   object TLayout
     StyleName = 'infotoolbutton'
-    Position.X = 310.000000000000000000
-    Position.Y = 335.000000000000000000
-    Size.Width = 91.000000000000000000
-    Size.Height = 24.000000000000000000
-    Size.PlatformDefault = False
-    Visible = False
-    TabOrder = 40
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
     object TRectangle
-      StyleName = 'background'
+      StyleName = 'hoverwash'
       Align = Contents
-      Fill.Color = xFFF6F6F6
+      Fill.Color = claBlack
       HitTest = False
-      Size.Width = 91.000000000000000000
-      Size.Height = 24.000000000000000000
-      Size.PlatformDefault = False
-      Stroke.Color = xFFD5D5D5
-      XRadius = 3.000000000000000000
-      YRadius = 3.000000000000000000
-      object TRectangle
-        Align = Client
-        Corners = [TopLeft, TopRight]
-        Fill.Kind = Gradient
-        Fill.Gradient.Points = <
-          item
-            Color = claWhitesmoke
-            Offset = 0.000000000000000000
-          end
-          item
-            Color = xFFF0F3F6
-            Offset = 1.000000000000000000
-          end>
-        HitTest = False
-        Margins.Bottom = 2.000000000000000000
-        Sides = [Top, Left, Right]
-        Size.Width = 91.000000000000000000
-        Size.Height = 22.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFFD5D5D5
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-      end
-      object TRectangle
-        Align = Client
-        Fill.Color = xFF01BAE9
-        Locked = True
-        HitTest = False
-        Opacity = 0.001000000047497451
-        Size.Width = 91.000000000000000000
-        Size.Height = 24.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFF01BAE9
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-        object TFloatAnimation
-          Duration = 0.200000002980232200
-          PropertyName = 'Opacity'
-          StartValue = 0.001000000047497451
-          StopValue = 1.000000000000000000
-          Trigger = 'IsFocused=true'
-          TriggerInverse = 'IsFocused=false'
-        end
-      end
-      object TInnerGlowEffect
-        Softness = 0.400000005960464500
-        GlowColor = xFF4F4848
-        Opacity = 0.299999982118606600
-        Trigger = 'IsPressed=true'
-        Enabled = False
-      end
-    end
-    object TText
-      StyleName = 'text'
-      Align = Client
       Locked = True
-      HitTest = False
-      Margins.Left = 5.000000000000000000
-      Margins.Top = 2.000000000000000000
-      Margins.Right = 5.000000000000000000
-      Margins.Bottom = 2.000000000000000000
-      Size.Width = 81.000000000000000000
-      Size.Height = 20.000000000000000000
-      Size.PlatformDefault = False
-      Text = 'button'
-      TextSettings.FontColor = xFF828282
-      object TColorAnimation
-        Duration = 0.200000002980232200
-        PropertyName = 'Fill.Color'
-        StartValue = xFF828282
-        StopValue = claWhite
-        Trigger = 'IsFocused=true'
-        TriggerInverse = 'IsFocused=False'
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
       end
     end
-    object TGlowEffect
-      Softness = 0.200000002980232200
-      GlowColor = xFF01BAE9
-      Opacity = 1.000000000000000000
-      Trigger = 'IsFocused=true'
-      Enabled = False
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
     end
     object TPath
       StyleName = 'icon'
@@ -3803,105 +3353,55 @@ object TStyleContainer
   end
   object TLayout
     StyleName = 'organizetoolbutton'
-    Position.X = 310.000000000000000000
-    Position.Y = 335.000000000000000000
-    Size.Width = 91.000000000000000000
-    Size.Height = 24.000000000000000000
-    Size.PlatformDefault = False
-    Visible = False
-    TabOrder = 40
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
     object TRectangle
-      StyleName = 'background'
+      StyleName = 'hoverwash'
       Align = Contents
-      Fill.Color = xFFF6F6F6
+      Fill.Color = claBlack
       HitTest = False
-      Size.Width = 91.000000000000000000
-      Size.Height = 24.000000000000000000
-      Size.PlatformDefault = False
-      Stroke.Color = xFFD5D5D5
-      XRadius = 3.000000000000000000
-      YRadius = 3.000000000000000000
-      object TRectangle
-        Align = Client
-        Corners = [TopLeft, TopRight]
-        Fill.Kind = Gradient
-        Fill.Gradient.Points = <
-          item
-            Color = claWhitesmoke
-            Offset = 0.000000000000000000
-          end
-          item
-            Color = xFFF0F3F6
-            Offset = 1.000000000000000000
-          end>
-        HitTest = False
-        Margins.Bottom = 2.000000000000000000
-        Sides = [Top, Left, Right]
-        Size.Width = 91.000000000000000000
-        Size.Height = 22.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFFD5D5D5
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-      end
-      object TRectangle
-        Align = Client
-        Fill.Color = xFF01BAE9
-        Locked = True
-        HitTest = False
-        Opacity = 0.001000000047497451
-        Size.Width = 91.000000000000000000
-        Size.Height = 24.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFF01BAE9
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-        object TFloatAnimation
-          Duration = 0.200000002980232200
-          PropertyName = 'Opacity'
-          StartValue = 0.001000000047497451
-          StopValue = 1.000000000000000000
-          Trigger = 'IsFocused=true'
-          TriggerInverse = 'IsFocused=false'
-        end
-      end
-      object TInnerGlowEffect
-        Softness = 0.400000005960464500
-        GlowColor = xFF4F4848
-        Opacity = 0.299999982118606600
-        Trigger = 'IsPressed=true'
-        Enabled = False
-      end
-    end
-    object TText
-      StyleName = 'text'
-      Align = Client
       Locked = True
-      HitTest = False
-      Margins.Left = 5.000000000000000000
-      Margins.Top = 2.000000000000000000
-      Margins.Right = 5.000000000000000000
-      Margins.Bottom = 2.000000000000000000
-      Size.Width = 81.000000000000000000
-      Size.Height = 20.000000000000000000
-      Size.PlatformDefault = False
-      Text = 'button'
-      TextSettings.FontColor = xFF828282
-      object TColorAnimation
-        Duration = 0.200000002980232200
-        PropertyName = 'Fill.Color'
-        StartValue = xFF828282
-        StopValue = claWhite
-        Trigger = 'IsFocused=true'
-        TriggerInverse = 'IsFocused=False'
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
       end
     end
-    object TGlowEffect
-      Softness = 0.200000002980232200
-      GlowColor = xFF01BAE9
-      Opacity = 1.000000000000000000
-      Trigger = 'IsFocused=true'
-      Enabled = False
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
     end
     object TPath
       StyleName = 'icon'
@@ -3922,105 +3422,55 @@ object TStyleContainer
   end
   object TLayout
     StyleName = 'pausetoolbutton'
-    Position.X = 310.000000000000000000
-    Position.Y = 335.000000000000000000
-    Size.Width = 91.000000000000000000
-    Size.Height = 24.000000000000000000
-    Size.PlatformDefault = False
-    Visible = False
-    TabOrder = 40
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
     object TRectangle
-      StyleName = 'background'
+      StyleName = 'hoverwash'
       Align = Contents
-      Fill.Color = xFFF6F6F6
+      Fill.Color = claBlack
       HitTest = False
-      Size.Width = 91.000000000000000000
-      Size.Height = 24.000000000000000000
-      Size.PlatformDefault = False
-      Stroke.Color = xFFD5D5D5
-      XRadius = 3.000000000000000000
-      YRadius = 3.000000000000000000
-      object TRectangle
-        Align = Client
-        Corners = [TopLeft, TopRight]
-        Fill.Kind = Gradient
-        Fill.Gradient.Points = <
-          item
-            Color = claWhitesmoke
-            Offset = 0.000000000000000000
-          end
-          item
-            Color = xFFF0F3F6
-            Offset = 1.000000000000000000
-          end>
-        HitTest = False
-        Margins.Bottom = 2.000000000000000000
-        Sides = [Top, Left, Right]
-        Size.Width = 91.000000000000000000
-        Size.Height = 22.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFFD5D5D5
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-      end
-      object TRectangle
-        Align = Client
-        Fill.Color = xFF01BAE9
-        Locked = True
-        HitTest = False
-        Opacity = 0.001000000047497451
-        Size.Width = 91.000000000000000000
-        Size.Height = 24.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFF01BAE9
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-        object TFloatAnimation
-          Duration = 0.200000002980232200
-          PropertyName = 'Opacity'
-          StartValue = 0.001000000047497451
-          StopValue = 1.000000000000000000
-          Trigger = 'IsFocused=true'
-          TriggerInverse = 'IsFocused=false'
-        end
-      end
-      object TInnerGlowEffect
-        Softness = 0.400000005960464500
-        GlowColor = xFF4F4848
-        Opacity = 0.299999982118606600
-        Trigger = 'IsPressed=true'
-        Enabled = False
-      end
-    end
-    object TText
-      StyleName = 'text'
-      Align = Client
       Locked = True
-      HitTest = False
-      Margins.Left = 5.000000000000000000
-      Margins.Top = 2.000000000000000000
-      Margins.Right = 5.000000000000000000
-      Margins.Bottom = 2.000000000000000000
-      Size.Width = 81.000000000000000000
-      Size.Height = 20.000000000000000000
-      Size.PlatformDefault = False
-      Text = 'button'
-      TextSettings.FontColor = xFF828282
-      object TColorAnimation
-        Duration = 0.200000002980232200
-        PropertyName = 'Fill.Color'
-        StartValue = xFF828282
-        StopValue = claWhite
-        Trigger = 'IsFocused=true'
-        TriggerInverse = 'IsFocused=False'
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
       end
     end
-    object TGlowEffect
-      Softness = 0.200000002980232200
-      GlowColor = xFF01BAE9
-      Opacity = 1.000000000000000000
-      Trigger = 'IsFocused=true'
-      Enabled = False
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
     end
     object TPath
       StyleName = 'icon'
@@ -4042,105 +3492,55 @@ object TStyleContainer
   end
   object TLayout
     StyleName = 'playtoolbutton'
-    Position.X = 310.000000000000000000
-    Position.Y = 335.000000000000000000
-    Size.Width = 91.000000000000000000
-    Size.Height = 24.000000000000000000
-    Size.PlatformDefault = False
-    Visible = False
-    TabOrder = 40
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
     object TRectangle
-      StyleName = 'background'
+      StyleName = 'hoverwash'
       Align = Contents
-      Fill.Color = xFFF6F6F6
+      Fill.Color = claBlack
       HitTest = False
-      Size.Width = 91.000000000000000000
-      Size.Height = 24.000000000000000000
-      Size.PlatformDefault = False
-      Stroke.Color = xFFD5D5D5
-      XRadius = 3.000000000000000000
-      YRadius = 3.000000000000000000
-      object TRectangle
-        Align = Client
-        Corners = [TopLeft, TopRight]
-        Fill.Kind = Gradient
-        Fill.Gradient.Points = <
-          item
-            Color = claWhitesmoke
-            Offset = 0.000000000000000000
-          end
-          item
-            Color = xFFF0F3F6
-            Offset = 1.000000000000000000
-          end>
-        HitTest = False
-        Margins.Bottom = 2.000000000000000000
-        Sides = [Top, Left, Right]
-        Size.Width = 91.000000000000000000
-        Size.Height = 22.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFFD5D5D5
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-      end
-      object TRectangle
-        Align = Client
-        Fill.Color = xFF01BAE9
-        Locked = True
-        HitTest = False
-        Opacity = 0.001000000047497451
-        Size.Width = 91.000000000000000000
-        Size.Height = 24.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFF01BAE9
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-        object TFloatAnimation
-          Duration = 0.200000002980232200
-          PropertyName = 'Opacity'
-          StartValue = 0.001000000047497451
-          StopValue = 1.000000000000000000
-          Trigger = 'IsFocused=true'
-          TriggerInverse = 'IsFocused=false'
-        end
-      end
-      object TInnerGlowEffect
-        Softness = 0.400000005960464500
-        GlowColor = xFF4F4848
-        Opacity = 0.299999982118606600
-        Trigger = 'IsPressed=true'
-        Enabled = False
-      end
-    end
-    object TText
-      StyleName = 'text'
-      Align = Client
       Locked = True
-      HitTest = False
-      Margins.Left = 5.000000000000000000
-      Margins.Top = 2.000000000000000000
-      Margins.Right = 5.000000000000000000
-      Margins.Bottom = 2.000000000000000000
-      Size.Width = 81.000000000000000000
-      Size.Height = 20.000000000000000000
-      Size.PlatformDefault = False
-      Text = 'button'
-      TextSettings.FontColor = xFF828282
-      object TColorAnimation
-        Duration = 0.200000002980232200
-        PropertyName = 'Fill.Color'
-        StartValue = xFF828282
-        StopValue = claWhite
-        Trigger = 'IsFocused=true'
-        TriggerInverse = 'IsFocused=False'
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
       end
     end
-    object TGlowEffect
-      Softness = 0.200000002980232200
-      GlowColor = xFF01BAE9
-      Opacity = 1.000000000000000000
-      Trigger = 'IsFocused=true'
-      Enabled = False
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
     end
     object TPath
       StyleName = 'icon'
@@ -4160,105 +3560,55 @@ object TStyleContainer
   end
   object TLayout
     StyleName = 'refreshtoolbutton'
-    Position.X = 310.000000000000000000
-    Position.Y = 335.000000000000000000
-    Size.Width = 91.000000000000000000
-    Size.Height = 24.000000000000000000
-    Size.PlatformDefault = False
-    Visible = False
-    TabOrder = 40
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
     object TRectangle
-      StyleName = 'background'
+      StyleName = 'hoverwash'
       Align = Contents
-      Fill.Color = xFFF6F6F6
+      Fill.Color = claBlack
       HitTest = False
-      Size.Width = 91.000000000000000000
-      Size.Height = 24.000000000000000000
-      Size.PlatformDefault = False
-      Stroke.Color = xFFD5D5D5
-      XRadius = 3.000000000000000000
-      YRadius = 3.000000000000000000
-      object TRectangle
-        Align = Client
-        Corners = [TopLeft, TopRight]
-        Fill.Kind = Gradient
-        Fill.Gradient.Points = <
-          item
-            Color = claWhitesmoke
-            Offset = 0.000000000000000000
-          end
-          item
-            Color = xFFF0F3F6
-            Offset = 1.000000000000000000
-          end>
-        HitTest = False
-        Margins.Bottom = 2.000000000000000000
-        Sides = [Top, Left, Right]
-        Size.Width = 91.000000000000000000
-        Size.Height = 22.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFFD5D5D5
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-      end
-      object TRectangle
-        Align = Client
-        Fill.Color = xFF01BAE9
-        Locked = True
-        HitTest = False
-        Opacity = 0.001000000047497451
-        Size.Width = 91.000000000000000000
-        Size.Height = 24.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFF01BAE9
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-        object TFloatAnimation
-          Duration = 0.200000002980232200
-          PropertyName = 'Opacity'
-          StartValue = 0.001000000047497451
-          StopValue = 1.000000000000000000
-          Trigger = 'IsFocused=true'
-          TriggerInverse = 'IsFocused=false'
-        end
-      end
-      object TInnerGlowEffect
-        Softness = 0.400000005960464500
-        GlowColor = xFF4F4848
-        Opacity = 0.299999982118606600
-        Trigger = 'IsPressed=true'
-        Enabled = False
-      end
-    end
-    object TText
-      StyleName = 'text'
-      Align = Client
       Locked = True
-      HitTest = False
-      Margins.Left = 5.000000000000000000
-      Margins.Top = 2.000000000000000000
-      Margins.Right = 5.000000000000000000
-      Margins.Bottom = 2.000000000000000000
-      Size.Width = 81.000000000000000000
-      Size.Height = 20.000000000000000000
-      Size.PlatformDefault = False
-      Text = 'button'
-      TextSettings.FontColor = xFF828282
-      object TColorAnimation
-        Duration = 0.200000002980232200
-        PropertyName = 'Fill.Color'
-        StartValue = xFF828282
-        StopValue = claWhite
-        Trigger = 'IsFocused=true'
-        TriggerInverse = 'IsFocused=False'
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
       end
     end
-    object TGlowEffect
-      Softness = 0.200000002980232200
-      GlowColor = xFF01BAE9
-      Opacity = 1.000000000000000000
-      Trigger = 'IsFocused=true'
-      Enabled = False
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
     end
     object TPath
       StyleName = 'icon'
@@ -4303,105 +3653,55 @@ object TStyleContainer
   end
   object TLayout
     StyleName = 'searchtoolbutton'
-    Position.X = 310.000000000000000000
-    Position.Y = 335.000000000000000000
-    Size.Width = 91.000000000000000000
-    Size.Height = 24.000000000000000000
-    Size.PlatformDefault = False
-    Visible = False
-    TabOrder = 40
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
     object TRectangle
-      StyleName = 'background'
+      StyleName = 'hoverwash'
       Align = Contents
-      Fill.Color = xFFF6F6F6
+      Fill.Color = claBlack
       HitTest = False
-      Size.Width = 91.000000000000000000
-      Size.Height = 24.000000000000000000
-      Size.PlatformDefault = False
-      Stroke.Color = xFFD5D5D5
-      XRadius = 3.000000000000000000
-      YRadius = 3.000000000000000000
-      object TRectangle
-        Align = Client
-        Corners = [TopLeft, TopRight]
-        Fill.Kind = Gradient
-        Fill.Gradient.Points = <
-          item
-            Color = claWhitesmoke
-            Offset = 0.000000000000000000
-          end
-          item
-            Color = xFFF0F3F6
-            Offset = 1.000000000000000000
-          end>
-        HitTest = False
-        Margins.Bottom = 2.000000000000000000
-        Sides = [Top, Left, Right]
-        Size.Width = 91.000000000000000000
-        Size.Height = 22.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFFD5D5D5
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-      end
-      object TRectangle
-        Align = Client
-        Fill.Color = xFF01BAE9
-        Locked = True
-        HitTest = False
-        Opacity = 0.001000000047497451
-        Size.Width = 91.000000000000000000
-        Size.Height = 24.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFF01BAE9
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-        object TFloatAnimation
-          Duration = 0.200000002980232200
-          PropertyName = 'Opacity'
-          StartValue = 0.001000000047497451
-          StopValue = 1.000000000000000000
-          Trigger = 'IsFocused=true'
-          TriggerInverse = 'IsFocused=false'
-        end
-      end
-      object TInnerGlowEffect
-        Softness = 0.400000005960464500
-        GlowColor = xFF4F4848
-        Opacity = 0.299999982118606600
-        Trigger = 'IsPressed=true'
-        Enabled = False
-      end
-    end
-    object TText
-      StyleName = 'text'
-      Align = Client
       Locked = True
-      HitTest = False
-      Margins.Left = 5.000000000000000000
-      Margins.Top = 2.000000000000000000
-      Margins.Right = 5.000000000000000000
-      Margins.Bottom = 2.000000000000000000
-      Size.Width = 81.000000000000000000
-      Size.Height = 20.000000000000000000
-      Size.PlatformDefault = False
-      Text = 'button'
-      TextSettings.FontColor = xFF828282
-      object TColorAnimation
-        Duration = 0.200000002980232200
-        PropertyName = 'Fill.Color'
-        StartValue = xFF828282
-        StopValue = claWhite
-        Trigger = 'IsFocused=true'
-        TriggerInverse = 'IsFocused=False'
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
       end
     end
-    object TGlowEffect
-      Softness = 0.200000002980232200
-      GlowColor = xFF01BAE9
-      Opacity = 1.000000000000000000
-      Trigger = 'IsFocused=true'
-      Enabled = False
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
     end
     object TPath
       StyleName = 'icon'
@@ -4447,105 +3747,55 @@ object TStyleContainer
   end
   object TLayout
     StyleName = 'stoptoolbutton'
-    Position.X = 310.000000000000000000
-    Position.Y = 335.000000000000000000
-    Size.Width = 91.000000000000000000
-    Size.Height = 24.000000000000000000
-    Size.PlatformDefault = False
-    Visible = False
-    TabOrder = 40
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
     object TRectangle
-      StyleName = 'background'
+      StyleName = 'hoverwash'
       Align = Contents
-      Fill.Color = xFFF6F6F6
+      Fill.Color = claBlack
       HitTest = False
-      Size.Width = 91.000000000000000000
-      Size.Height = 24.000000000000000000
-      Size.PlatformDefault = False
-      Stroke.Color = xFFD5D5D5
-      XRadius = 3.000000000000000000
-      YRadius = 3.000000000000000000
-      object TRectangle
-        Align = Client
-        Corners = [TopLeft, TopRight]
-        Fill.Kind = Gradient
-        Fill.Gradient.Points = <
-          item
-            Color = claWhitesmoke
-            Offset = 0.000000000000000000
-          end
-          item
-            Color = xFFF0F3F6
-            Offset = 1.000000000000000000
-          end>
-        HitTest = False
-        Margins.Bottom = 2.000000000000000000
-        Sides = [Top, Left, Right]
-        Size.Width = 91.000000000000000000
-        Size.Height = 22.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFFD5D5D5
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-      end
-      object TRectangle
-        Align = Client
-        Fill.Color = xFF01BAE9
-        Locked = True
-        HitTest = False
-        Opacity = 0.001000000047497451
-        Size.Width = 91.000000000000000000
-        Size.Height = 24.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFF01BAE9
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-        object TFloatAnimation
-          Duration = 0.200000002980232200
-          PropertyName = 'Opacity'
-          StartValue = 0.001000000047497451
-          StopValue = 1.000000000000000000
-          Trigger = 'IsFocused=true'
-          TriggerInverse = 'IsFocused=false'
-        end
-      end
-      object TInnerGlowEffect
-        Softness = 0.400000005960464500
-        GlowColor = xFF4F4848
-        Opacity = 0.299999982118606600
-        Trigger = 'IsPressed=true'
-        Enabled = False
-      end
-    end
-    object TText
-      StyleName = 'text'
-      Align = Client
       Locked = True
-      HitTest = False
-      Margins.Left = 5.000000000000000000
-      Margins.Top = 2.000000000000000000
-      Margins.Right = 5.000000000000000000
-      Margins.Bottom = 2.000000000000000000
-      Size.Width = 81.000000000000000000
-      Size.Height = 20.000000000000000000
-      Size.PlatformDefault = False
-      Text = 'button'
-      TextSettings.FontColor = xFF828282
-      object TColorAnimation
-        Duration = 0.200000002980232200
-        PropertyName = 'Fill.Color'
-        StartValue = xFF828282
-        StopValue = claWhite
-        Trigger = 'IsFocused=true'
-        TriggerInverse = 'IsFocused=False'
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
       end
     end
-    object TGlowEffect
-      Softness = 0.200000002980232200
-      GlowColor = xFF01BAE9
-      Opacity = 1.000000000000000000
-      Trigger = 'IsFocused=true'
-      Enabled = False
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
     end
     object TPath
       StyleName = 'icon'
@@ -4565,105 +3815,55 @@ object TStyleContainer
   end
   object TLayout
     StyleName = 'trashtoolbutton'
-    Position.X = 310.000000000000000000
-    Position.Y = 335.000000000000000000
-    Size.Width = 91.000000000000000000
-    Size.Height = 24.000000000000000000
-    Size.PlatformDefault = False
-    Visible = False
-    TabOrder = 40
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
     object TRectangle
-      StyleName = 'background'
+      StyleName = 'hoverwash'
       Align = Contents
-      Fill.Color = xFFF6F6F6
+      Fill.Color = claBlack
       HitTest = False
-      Size.Width = 91.000000000000000000
-      Size.Height = 24.000000000000000000
-      Size.PlatformDefault = False
-      Stroke.Color = xFFD5D5D5
-      XRadius = 3.000000000000000000
-      YRadius = 3.000000000000000000
-      object TRectangle
-        Align = Client
-        Corners = [TopLeft, TopRight]
-        Fill.Kind = Gradient
-        Fill.Gradient.Points = <
-          item
-            Color = claWhitesmoke
-            Offset = 0.000000000000000000
-          end
-          item
-            Color = xFFF0F3F6
-            Offset = 1.000000000000000000
-          end>
-        HitTest = False
-        Margins.Bottom = 2.000000000000000000
-        Sides = [Top, Left, Right]
-        Size.Width = 91.000000000000000000
-        Size.Height = 22.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFFD5D5D5
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-      end
-      object TRectangle
-        Align = Client
-        Fill.Color = xFF01BAE9
-        Locked = True
-        HitTest = False
-        Opacity = 0.001000000047497451
-        Size.Width = 91.000000000000000000
-        Size.Height = 24.000000000000000000
-        Size.PlatformDefault = False
-        Stroke.Color = xFF01BAE9
-        XRadius = 2.000000000000000000
-        YRadius = 2.000000000000000000
-        object TFloatAnimation
-          Duration = 0.200000002980232200
-          PropertyName = 'Opacity'
-          StartValue = 0.001000000047497451
-          StopValue = 1.000000000000000000
-          Trigger = 'IsFocused=true'
-          TriggerInverse = 'IsFocused=false'
-        end
-      end
-      object TInnerGlowEffect
-        Softness = 0.400000005960464500
-        GlowColor = xFF4F4848
-        Opacity = 0.299999982118606600
-        Trigger = 'IsPressed=true'
-        Enabled = False
-      end
-    end
-    object TText
-      StyleName = 'text'
-      Align = Client
       Locked = True
-      HitTest = False
-      Margins.Left = 5.000000000000000000
-      Margins.Top = 2.000000000000000000
-      Margins.Right = 5.000000000000000000
-      Margins.Bottom = 2.000000000000000000
-      Size.Width = 81.000000000000000000
-      Size.Height = 20.000000000000000000
-      Size.PlatformDefault = False
-      Text = 'button'
-      TextSettings.FontColor = xFF828282
-      object TColorAnimation
-        Duration = 0.200000002980232200
-        PropertyName = 'Fill.Color'
-        StartValue = xFF828282
-        StopValue = claWhite
-        Trigger = 'IsFocused=true'
-        TriggerInverse = 'IsFocused=False'
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
       end
     end
-    object TGlowEffect
-      Softness = 0.200000002980232200
-      GlowColor = xFF01BAE9
-      Opacity = 1.000000000000000000
-      Trigger = 'IsFocused=true'
-      Enabled = False
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
     end
     object TPath
       StyleName = 'icon'

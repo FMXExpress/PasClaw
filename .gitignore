@@ -20,3 +20,4 @@ cog-build*/__pycache__/
 
 # Inno Setup installer output
 installer/Output/
+__pycache__/
