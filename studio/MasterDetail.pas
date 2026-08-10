@@ -1553,16 +1553,21 @@ end;
 procedure TMasterDetailForm.ThemeClick(Sender: TObject);
 begin
   FDarkStyleEnabled := not FDarkStyleEnabled;
-  ApplyTheme;                { swaps StyleBook and restyles the tree itself }
+  ApplyTheme;                { palette globals + StyleBook swap only }
   SaveLocalSettings;
-  { ApplyTheme already ran RestyleCoreControls -- calling it again here just
-    doubled the exposure. The three renders below free and rebuild hundreds
-    of controls; doing that while this button's own click event is still on
-    the stack, in the middle of FMX's style-swap cascade, is the same hazard
-    the walk itself had. Let the frame finish first. }
+  { RestyleCoreControls is REQUIRED here -- ApplyTheme does not call it, and
+    it is the only thing that repaints controls carrying an explicit colour
+    (FPromptMemo would keep the dark theme's near-white ink on the light
+    composer; none of the renders below touch it).
+
+    All four run deferred: they free and rebuild hundreds of controls, and
+    doing that while this button's own click event is still on the stack, in
+    the middle of FMX's style-swap cascade, is the same hazard the walk
+    itself had. Let the frame finish, then restyle, then re-render. }
   TThread.ForceQueue(nil,
     procedure
     begin
+      RestyleCoreControls;
       RenderChat;
       RenderAttachments;
       RenderSessionList;
