@@ -682,6 +682,11 @@ const
   { Workflow canvas: width of the derived INPUT/OUTPUT boxes and the left
     gutter auto-placed nodes start after, so a node never lands under the
     INPUT box (web UI parity). }
+  { Sanity ceiling for a single chat row. Expanded tool sidecars can make a
+    legitimate turn thousands of pixels tall; the old 2200 cap truncated the
+    ROW while its children kept full height, so the surplus painted over the
+    next bubbles. Only pathological content should ever reach this. }
+  CHAT_ROW_MAX = 24000;
   WF_IO_W = 104;
   WF_GUTTER = 128;
   WIN_CREATE_ALWAYS = 2;
@@ -20299,7 +20304,10 @@ var
       if SegmentText = '' then
         Exit;
       Lines := EstimateTextLines(SegmentText, CharsPerLine);
-      SegmentHeight := Min(760, Max(Size + 20, Lines * (Size + 8) + 12));
+      { A TLabel clips to its bounds, so a cap that bites SILENTLY DROPS the
+        tail of a long paragraph. Keep only a pathological-content ceiling. }
+      SegmentHeight := Min(CHAT_ROW_MAX, Max(Size + 20,
+        Lines * (Size + 8) + 12));
       SegmentLabel := TLabel.Create(BodyHost);
       SegmentLabel.Parent := BodyHost;
       SegmentLabel.Align := TAlignLayout.Top;
@@ -20907,12 +20915,15 @@ var
       end;
     end;
 
-    procedure AddToolDetailSection(Panel: TRectangle; const TitleText,
-      DetailText: string);
+    { Returns the vertical space this section actually consumes, so the
+      caller can size the panel to its children instead of guessing. }
+    function AddToolDetailSection(Panel: TRectangle; const TitleText,
+      DetailText: string): Single;
     var
       Memo: TMemo;
       SectionLabel: TLabel;
     begin
+      Result := 0;
       if Trim(DetailText) = '' then
         Exit;
       SectionLabel := TLabel.Create(Panel);
@@ -20932,6 +20943,8 @@ var
       Memo.Lines.Text := DetailText;
       SetControlMargins(Memo, 0, 2, 0, 8);
       StyleTextControl(Memo, UI_TEXT, 11);
+      { label + memo + the 2/8 margins above and below the memo }
+      Result := SectionLabel.Height + Memo.Height + 10;
     end;
 
     procedure RenderToolDetailBlocks;
@@ -20944,6 +20957,7 @@ var
       Panel: TRectangle;
       ResultText: string;
       Root: TJSONValue;
+      SectionsHeight: Single;
       TitleText: string;
     begin
       Root := TJSONObject.ParseJSONValue(ToolDetailsValue);
@@ -20965,16 +20979,10 @@ var
           Panel := TRectangle.Create(BodyHost);
           Panel.Parent := BodyHost;
           Panel.Align := TAlignLayout.Top;
-          if FChatToolsExpanded then
-            Panel.Height := Min(620, Max(116,
-              54 + EstimateTextLines(ArgsText + ResultText + ErrorText,
-              CharsPerLine) * 18))
-          else
-            Panel.Height := 44;
+          Panel.Height := 44;   { header-only; grown below when expanded }
           StyleChromeRect(Panel, UI_PANEL_ALT, UI_ACCENT_DIM, 6, False);
           SetControlMargins(Panel, 0, 6, 0, 6);
           SetControlPadding(Panel, 10, 8, 10, 8);
-          ContentHeight := ContentHeight + Panel.Height + 12;
 
           HeaderLabel := TLabel.Create(Panel);
           HeaderLabel.Parent := Panel;
@@ -20989,10 +20997,23 @@ var
 
           if FChatToolsExpanded then
           begin
-            AddToolDetailSection(Panel, 'ARGS', ArgsText);
-            AddToolDetailSection(Panel, 'RESULT', ResultText);
-            AddToolDetailSection(Panel, 'ERROR', ErrorText);
+            { Sum what the sections REALLY occupy and size the panel to it.
+              The old code guessed the height with a capped estimate that did
+              not match how the sections lay themselves out, so an expanded
+              panel was routinely shorter than its own children -- and since
+              the children are Align.Top with fixed heights, the overflow
+              painted straight over the following chat bubbles. }
+            SectionsHeight := 0;
+            SectionsHeight := SectionsHeight +
+              AddToolDetailSection(Panel, 'ARGS', ArgsText);
+            SectionsHeight := SectionsHeight +
+              AddToolDetailSection(Panel, 'RESULT', ResultText);
+            SectionsHeight := SectionsHeight +
+              AddToolDetailSection(Panel, 'ERROR', ErrorText);
+            { header + sections + the panel's own 8/8 vertical padding }
+            Panel.Height := Max(44, HeaderLabel.Height + SectionsHeight + 16);
           end;
+          ContentHeight := ContentHeight + Panel.Height + 12;
         end;
       finally
         Root.Free;
@@ -21074,7 +21095,10 @@ var
       CharsPerLine := Max(30, Trunc(MaxBubbleWidth / 7.8));
     ToolCardCount := CountToolCards(RawBodyText);
     EstLines := EstimateTextLines(BodyText, CharsPerLine);
-    RowHeight := Min(2200, Max(84, 74 + EstLines * 20));
+    { Sanity ceiling only -- must stay well above any real turn. A cap that
+      bites clips the row while its children keep their full height, which
+      is what makes bubbles overlap. }
+    RowHeight := Min(CHAT_ROW_MAX, Max(84, 74 + EstLines * 20));
     if HasRichText then
       RowHeight := Min(2200, Max(112, RowHeight + 24));
     if HasToolCards then
@@ -21228,7 +21252,7 @@ var
 
     if BodyHost <> nil then
       BodyHost.Height := ContentHeight + 4;
-    RowHeight := Min(2200, Max(76,
+    RowHeight := Min(CHAT_ROW_MAX, Max(76,
       Header.Height + ActionRow.Height + ContentHeight + 38));
     if TranscriptRow <> nil then
     begin
