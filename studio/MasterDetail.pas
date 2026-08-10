@@ -97,6 +97,7 @@ type
     FChatParamsVisible: Boolean;
     FChatStatsLabel: TLabel;
     FChatToolsExpanded: Boolean;
+    FIconButtons: Boolean;
     FComposerLayout: TLayout;
     FComposerStatusLabel: TLabel;
     FSandboxLabel: TLabel;
@@ -570,6 +571,7 @@ type
     function AddPaneSplitter(AParent: TFmxObject; AAlign: TAlignLayout): TSplitter;
     function AddSectionHeader(AParent: TFmxObject; const Text: string): TLabel;
     procedure StyleButton(Button: TButton; Primary: Boolean = False);
+    procedure ApplyButtonIcon(Button: TButton);
     procedure StyleChromeRect(Rect: TRectangle; FillColor: TAlphaColor;
       StrokeColor: TAlphaColor; Radius: Single; Interactive: Boolean);
     procedure UseStyledLabelColor(LabelControl: TLabel);
@@ -1320,6 +1322,7 @@ begin
   FSessionDrawerWidth := 280;
   FChatParamsVisible := False;
   FChatToolsExpanded := False;
+  FIconButtons := True;
   FDarkStyleEnabled := True;
   FFileHexPageSize := 16384;
   FRelayWorkerProcessHandle := 0;
@@ -1340,6 +1343,11 @@ begin
 
   LoadAirStyle;
   BuildInterface;
+  { LoadAirStyle's ApplyTheme runs BEFORE the UI exists, and the one inside
+    BuildInterface fires partway through it, so neither walk reaches most
+    controls. Re-apply once the full tree is built -- this is what actually
+    styles the tabs' buttons (and now assigns their icons + hints). }
+  ApplyTheme;
   LoadLocalSettings;
   RestyleCoreControls;
   RenderModeButton;
@@ -1682,10 +1690,77 @@ begin
     LabelControl.TextSettings.Font.Style := [];
 end;
 
+procedure TMasterDetailForm.ApplyButtonIcon(Button: TButton);
+(* Give recognised buttons a platform icon and ALWAYS a hint.
+
+   StyleLookup names below come from Embarcadero's platform styles. The
+   bundled Air.style / Light.Style do not define them, so if a name fails to
+   resolve FMX falls back to the plain button style -- which for an icon-only
+   button means a blank face. Two safeguards:
+
+     - the caption is kept in Hint verbatim, so a bare icon is never a
+       mystery and a blank one is still identifiable by hover;
+     - [ui] icon_buttons=false in the INI turns the whole thing off and
+       restores text captions, so a style that lacks these lookups is one
+       setting away from readable rather than a rebuild away.
+
+   Mapping lives HERE only, keyed by the caption a button was created with,
+   so icon + hint can never drift from each other or from the action. *)
+var
+  Cap: string;
+  Lookup: string;
+  IconOnly: Boolean;
+begin
+  if (Button = nil) or Button.TagString.StartsWith('noicon') then
+    Exit;
+  { Remember the original caption once, so repeated restyles (theme switch)
+    do not read back an already-blanked face. }
+  if Button.Hint = '' then
+    Button.Hint := Button.Text;
+  Cap := Trim(Button.Hint);
+  if Cap = '' then
+    Exit;
+
+  Lookup := '';
+  IconOnly := False;
+  { Tier 1 -- frequent, unambiguous verbs: icon only. }
+  if SameText(Cap, 'Refresh')      then begin Lookup := 'refreshtoolbutton'; IconOnly := True; end
+  else if SameText(Cap, 'Search')  then begin Lookup := 'searchtoolbutton';  IconOnly := True; end
+  else if SameText(Cap, 'Delete')  then begin Lookup := 'deletetoolbutton';  IconOnly := True; end
+  else if SameText(Cap, 'Remove')  then begin Lookup := 'deletetoolbutton';  IconOnly := True; end
+  else if SameText(Cap, 'Add')     then begin Lookup := 'addtoolbutton';     IconOnly := True; end
+  else if SameText(Cap, 'New')     then begin Lookup := 'addtoolbutton';     IconOnly := True; end
+  else if SameText(Cap, 'Clear')   then begin Lookup := 'deletetoolbutton';  IconOnly := True; end
+  else if SameText(Cap, 'Copy')    then begin Lookup := 'organizetoolbutton'; IconOnly := True; end
+  else if SameText(Cap, 'Save')    then begin Lookup := 'actiontoolbutton';  IconOnly := True; end
+  { Tier 2 -- tight rows where width is already squeezed. }
+  else if SameText(Cap, 'Send')    then begin Lookup := 'composetoolbutton'; IconOnly := True; end
+  else if SameText(Cap, 'Stop')    then begin Lookup := 'stoptoolbutton';    IconOnly := True; end
+  else if SameText(Cap, 'Undo')    then begin Lookup := 'arrowlefttoolbutton';  IconOnly := True; end
+  else if SameText(Cap, 'Redo')    then begin Lookup := 'arrowrighttoolbutton'; IconOnly := True; end
+  else if SameText(Cap, 'Preview') then begin Lookup := 'detailstoolbutton'; IconOnly := True; end;
+
+  { Hint is set for EVERY button we recognise, icon or not -- ShowHint alone
+    is what makes Hint do anything in FMX, and it was never enabled here. }
+  Button.ShowHint := True;
+  if (Lookup = '') or (not FIconButtons) then
+  begin
+    if Button.Text = '' then
+      Button.Text := Cap;   { restore when icons are switched off }
+    Exit;
+  end;
+  Button.StyleLookup := Lookup;
+  if IconOnly then
+    Button.Text := ''
+  else
+    Button.Text := Cap;
+end;
+
 procedure TMasterDetailForm.StyleButton(Button: TButton; Primary: Boolean);
 begin
   if Button = nil then
     Exit;
+  ApplyButtonIcon(Button);
   Button.StyledSettings := Button.StyledSettings - [TStyledSetting.Size];
   Button.StyledSettings := Button.StyledSettings +
     [TStyledSetting.FontColor, TStyledSetting.Style];
@@ -13875,6 +13950,9 @@ begin
         FParamsToggleButton.Text := 'Params +';
     FChatToolsExpanded := Ini.ReadBool('chat', 'tool_details_expanded',
       FChatToolsExpanded);
+    { Escape hatch: a style without the platform tool-button lookups renders
+      icon-only buttons blank. icon_buttons=false restores text captions. }
+    FIconButtons := Ini.ReadBool('ui', 'icon_buttons', FIconButtons);
     { BuildInterface has already created the button captioned "Tools +";
       restoring an expanded preference must move the label with it. }
     UpdateToolsToggleCaption;
@@ -13911,6 +13989,7 @@ begin
       choice is a per-operator preference, not per-session -- it was toggled
       at runtime but reset to collapsed on every restart. }
     Ini.WriteBool('chat', 'tool_details_expanded', FChatToolsExpanded);
+    Ini.WriteBool('ui', 'icon_buttons', FIconButtons);
     Ini.WriteBool('onboarding', 'dismissed', FOnboardingDismissed);
   finally
     Ini.Free;
