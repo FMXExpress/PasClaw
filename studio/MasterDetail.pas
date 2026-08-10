@@ -6,7 +6,8 @@ uses
   System.SysUtils, System.Types, System.UITypes, System.Classes, System.JSON,
   System.Rtti, System.Net.HttpClient, System.Net.URLClient, System.NetEncoding,
   System.Threading, System.Generics.Collections, System.IniFiles,
-  System.IOUtils, System.StrUtils, System.Math, FMX.Types, FMX.Controls, FMX.Forms,
+  System.IOUtils, System.StrUtils, System.Math, System.DateUtils,
+  FMX.Types, FMX.Controls, FMX.Forms,
   FMX.Platform, FMX.Graphics, FMX.Dialogs, FMX.StdCtrls, FMX.Layouts, FMX.ListBox,
   FMX.Memo, FMX.Edit, FMX.TabControl, FMX.Controls.Presentation,
   FMX.ScrollBox, FMX.MultiView, FMX.Objects;
@@ -591,6 +592,9 @@ type
     function ThemePaintColor(Color: TAlphaColor): TAlphaColor;
     function ThemePaintStroke(Color: TAlphaColor): TAlphaColor;
     function ActiveTabIs(const Caption: string): Boolean;
+    procedure UpdateClearAttachmentsButton;
+    function FriendlyAge(const StampText: string): string;
+    class function IsIconified(Button: TButton): Boolean; static;
     procedure UseStyledLabelColor(LabelControl: TLabel);
     procedure StyleLabel(LabelControl: TLabel; Color: TAlphaColor;
       Size: Single; Bold: Boolean);
@@ -717,6 +721,14 @@ const
      sits in the middle of it and is close to A4 at 96dpi (794px). Below the
      cap the column simply fills the width, so narrow windows stay normal. *)
   CHAT_MAX_W = 800;
+  { preferred side gutter for the chat column -- keeps text off the window
+    frame even in full-width (drawer hidden) mode. Yields to CHAT_MIN_W on
+    viewports too narrow for both. }
+  CHAT_GUTTER = 24;
+  CHAT_MIN_W = 320;
+  { the "narrow window" breakpoint -- named because UpdateClearAttachments
+    has to agree with ApplyResponsiveLayout about what narrow means }
+  UI_NARROW_W = 560;
   WF_IO_W = 104;
   WF_GUTTER = 128;
   WIN_CREATE_ALWAYS = 2;
@@ -1617,7 +1629,8 @@ begin
   TitleLabel.Text := TitleText;
   TitleLabel.TextSettings.VertAlign := TTextAlign.Center;
   SetControlMargins(TitleLabel, 10, 6, 10, 0);
-  StyleLabel(TitleLabel, UI_TEXT, 12, True);
+  { regular weight: a list where every title is bold has no emphasis at all }
+  StyleLabel(TitleLabel, UI_TEXT, 12, False);
 
   DetailLabel := TLabel.Create(Card);
   DetailLabel.Parent := Card;
@@ -1699,7 +1712,10 @@ begin
   Result.Text := Text;
   Result.TextSettings.VertAlign := TTextAlign.Center;
   SetControlMargins(Result, 0, 0, 0, 4);
-  StyleLabel(Result, UI_ACCENT, 12, True);
+  { chrome ink, not accent: accent-blue bold headers on every tab were the
+    loudest global habit in the app. The accent is reserved for the primary
+    action and live state. }
+  StyleLabel(Result, UI_CHROME_TEXT, 11, True);
 end;
 
 procedure TMasterDetailForm.StyleChromeRect(Rect: TRectangle;
@@ -1899,6 +1915,22 @@ begin
   end;
 end;
 
+procedure TMasterDetailForm.UpdateClearAttachmentsButton;
+{ The ONE place that decides whether the clear-attachments button shows.
+
+  Two conditions, two owners, and they disagreed: ApplyResponsiveLayout hid
+  it on a narrow window, while RenderAttachments and UpdateComposerState --
+  which run on every keystroke and every attachment change -- showed it
+  again from the attachment count alone, crowding the narrow composer within
+  a frame of the layout pass hiding it. Both conditions live here now. }
+begin
+  if FClearAttachmentsButton = nil then
+    Exit;
+  FClearAttachmentsButton.Visible :=
+    (FAttachments <> nil) and (FAttachments.Count > 0) and
+    (ClientWidth >= UI_NARROW_W);
+end;
+
 procedure TMasterDetailForm.ApplyChatMeasure;
 { Centre the transcript and the composer on a fixed reading measure: past
   CHAT_MAX_W the surplus becomes equal margins rather than longer lines;
@@ -1919,6 +1951,7 @@ procedure TMasterDetailForm.ApplyChatMeasure;
   can never disagree about how wide the chat is again. }
 var
   Avail: Single;
+  MaxPad: Single;
   Pad: Single;
 begin
   if (FChatScroll = nil) or (FChatFlow = nil) then
@@ -1926,14 +1959,25 @@ begin
   Avail := FChatScroll.Width;
   if Avail <= 0 then
     Exit;
+  { CHAT_GUTTER is the PREFERRED inset in both regimes -- full-width mode is
+    wider, not edge-to-edge, since text touching the window frame reads as a
+    defect. It is not a hard floor, though: on a viewport narrower than
+    CHAT_MIN_W + two gutters the column would be pushed past the right edge
+    and clipped. Content wins over decoration, so the gutter gives way first
+    and only collapses to nothing once even that is not enough. }
   if FSidebarVisible then
     Pad := (Avail - CHAT_MAX_W) / 2
   else
-    Pad := 0;
+    Pad := CHAT_GUTTER;
+  if Pad < CHAT_GUTTER then
+    Pad := CHAT_GUTTER;
+  MaxPad := (Avail - CHAT_MIN_W - 8) / 2;
+  if Pad > MaxPad then
+    Pad := MaxPad;
   if Pad < 0 then
     Pad := 0;
   SetControlMargins(FChatFlow, Pad, 0, Pad, 0);
-  FChatFlow.Width := Max(320, Avail - Pad * 2 - 8);
+  FChatFlow.Width := Max(CHAT_MIN_W, Avail - Pad * 2 - 8);
   { same horizontal inset for the composer, PRESERVING its 10/6/10/8 base
     padding -- the padding version zeroed the vertical part }
   if FComposerLayout <> nil then
@@ -2004,7 +2048,28 @@ begin
   else if SameText(Cap, 'Edit')    then begin Lookup := 'composetoolbutton'; IconOnly := True; end
   else if SameText(Cap, 'Run')     then begin Lookup := 'playtoolbutton';    IconOnly := True; end
   else if SameText(Cap, 'Pause')   then begin Lookup := 'pausetoolbutton';   IconOnly := True; end
-  else if SameText(Cap, 'Preview') then begin Lookup := 'detailstoolbutton'; IconOnly := True; HintText := 'Preview'; end;
+  else if SameText(Cap, 'Preview') then begin Lookup := 'detailstoolbutton'; IconOnly := True; HintText := 'Preview'; end
+  { Chrome verbs whose captions were the loudest text on screen. sun/moon are
+    Pasclaw-custom lookups (the platform table has no theme-toggle glyph);
+    they are defined by gen-studio-icons.py in our own books, and the
+    StyleLookupExists probe keeps captions on any style without them. }
+  else if SameText(Cap, '+ Session') or (Cap = '+') then
+    begin Lookup := 'addtoolbutton'; IconOnly := True; HintText := 'New session'; end
+  else if SameText(Cap, 'Attach')  then begin Lookup := 'addtoolbutton';  IconOnly := True; HintText := 'Attach files'; end
+  else if SameText(Cap, 'Light')   then begin Lookup := 'suntoolbutton';  IconOnly := True; HintText := 'Switch to the light style'; end
+  else if SameText(Cap, 'Dark')    then begin Lookup := 'moontoolbutton'; IconOnly := True; HintText := 'Switch to the dark style'; end
+  else if SameText(Cap, 'Delete Session') then
+    begin Lookup := 'trashtoolbutton'; IconOnly := True; HintText := 'Delete session'; end
+  else if SameText(Cap, 'Forget')  then begin Lookup := 'trashtoolbutton'; IconOnly := True; HintText := 'Forget this fact'; end
+  else if Cap = 'X'                then begin Lookup := 'trashtoolbutton'; IconOnly := True; HintText := 'Remove'; end
+  else if SameText(Cap, 'Up')      then begin Lookup := 'arrowuptoolbutton'; IconOnly := True; HintText := 'Up one directory'; end
+  { hint-only entries: these stay text (state/disclosure controls), but the
+    caption alone does not explain what they disclose }
+  else if SameText(Cap, 'Params +') then HintText := 'Show sampling parameters'
+  else if SameText(Cap, 'Params -') then HintText := 'Hide sampling parameters'
+  else if SameText(Cap, 'Tools +')  then HintText := 'Show tool activity cards'
+  else if SameText(Cap, 'Tools -')  then HintText := 'Hide tool activity cards'
+  else if Cap.StartsWith('mode:')   then HintText := 'Toggle build / plan mode';
   { 'Save' deliberately has no icon: the platform table offers no save glyph,
     and DoneToolButton -- the near miss -- is one of the tint-less entries, so
     it would render as an empty coloured pill. A caption beats a wrong icon. }
@@ -2186,7 +2251,7 @@ begin
     Exit;
 
   W := ClientWidth;
-  Narrow := W < 560;
+  Narrow := W < UI_NARROW_W;
   Compact := W < 820;
   ApplyChatMeasure;
   FTopBar.Height := 54;
@@ -2207,11 +2272,17 @@ begin
 
   if FNewSessionButton <> nil then
   begin
-    FNewSessionButton.Width := IfThen(Narrow, 44, IfThen(Compact, 82, 104));
-    if Narrow then
-      FNewSessionButton.Text := '+'
-    else
-      FNewSessionButton.Text := '+ Session';
+    { iconified (blank caption + hint) means ApplyButtonIcon owns this
+      button's face -- re-captioning here would put the text back and grow a
+      34px icon button to 104px on every resize }
+    if not IsIconified(FNewSessionButton) then
+    begin
+      FNewSessionButton.Width := IfThen(Narrow, 44, IfThen(Compact, 82, 104));
+      if Narrow then
+        FNewSessionButton.Text := '+'
+      else
+        FNewSessionButton.Text := '+ Session';
+    end;
   end;
   if FRefreshButton <> nil then
   begin
@@ -2224,7 +2295,8 @@ begin
   if FThemeButton <> nil then
   begin
     FThemeButton.Visible := not Narrow;
-    FThemeButton.Width := IfThen(Compact, 62, 70);
+    if not IsIconified(FThemeButton) then
+      FThemeButton.Width := IfThen(Compact, 62, 70);
   end;
   if FStatusLabel <> nil then
     FStatusLabel.Visible := not Narrow;
@@ -2365,14 +2437,15 @@ begin
   if FTemperatureTrack <> nil then
     FTemperatureTrack.Width := IfThen(Narrow, 140, IfThen(Compact, 170, 210));
   UpdateComposerState;
-  if FSendButton <> nil then
+  if (FSendButton <> nil) and not IsIconified(FSendButton) then
     FSendButton.Width := IfThen(Narrow, 78, 96);
-  if FAttachButton <> nil then
+  if (FAttachButton <> nil) and not IsIconified(FAttachButton) then
     FAttachButton.Width := IfThen(Narrow, 76, 86);
   if FClearAttachmentsButton <> nil then
   begin
-    FClearAttachmentsButton.Visible := not Narrow;
-    FClearAttachmentsButton.Width := IfThen(Compact, 64, 74);
+    UpdateClearAttachmentsButton;
+    if not IsIconified(FClearAttachmentsButton) then
+      FClearAttachmentsButton.Width := IfThen(Compact, 64, 74);
   end;
   if FMaxTokensLabel <> nil then
     FMaxTokensLabel.Visible := not ToolbarCompact;
@@ -3722,6 +3795,7 @@ begin
   FClearAttachmentsButton.Align := TAlignLayout.Right;
   FClearAttachmentsButton.Width := 74;
   FClearAttachmentsButton.Text := 'Clear';
+  FClearAttachmentsButton.Visible := False;   { appears with attachments }
   FClearAttachmentsButton.OnClick := ClearAttachmentsClick;
   SetControlMargins(FClearAttachmentsButton, 8, 0, 0, 0);
 
@@ -3776,7 +3850,6 @@ var
   BodyMemo: TMemo;
   BodyPanel: TLayout;
   Btn: TButton;
-  Chrome: TRectangle;
   Edit: TEdit;
   Info: TLabel;
   MethodCombo: TComboBox;
@@ -3790,12 +3863,8 @@ begin
   Tab.Text := Caption;
   AddNavigationButton(Tab.Text);
 
-  Chrome := TRectangle.Create(Self);
-  Chrome.Parent := Tab;
-  Chrome.Align := TAlignLayout.Client;
-  StyleChromeRect(Chrome, UI_BG, UI_BORDER, 6, False);
-  Chrome.SendToBack;
-
+  { no chrome rect around the tab body: a border around an entire tab is a
+    box around boxes -- borders mark interactive or elevated surfaces only }
   Info := TLabel.Create(Self);
   Info.Parent := Tab;
   Info.Align := TAlignLayout.Top;
@@ -15198,6 +15267,41 @@ begin
     SameText(FTabControl.Tabs[FTabControl.TabIndex].Text, Caption);
 end;
 
+class function TMasterDetailForm.IsIconified(Button: TButton): Boolean;
+{ Blank caption + hint showing is ApplyButtonIcon's signature. While it
+  holds, that system owns the button's face and width -- responsive layout
+  re-captioning or re-widening it would grow a 34px icon into a wide blank
+  pill on every resize. }
+begin
+  Result := (Button <> nil) and (Button.Text = '') and Button.ShowHint;
+end;
+
+function TMasterDetailForm.FriendlyAge(const StampText: string): string;
+{ '2h ago' beats a raw timestamp in a sidebar. The gateway sends unix epoch
+  seconds for session updated_at; ISO 8601 is accepted too since import paths
+  produce it. Anything unparseable comes back verbatim -- never worse than
+  before. }
+var
+  Epoch: Int64;
+  Mins: Int64;
+  Stamp: TDateTime;
+begin
+  Result := StampText;
+  if TryStrToInt64(Trim(StampText), Epoch) and (Epoch > 100000000) then
+    Stamp := TTimeZone.Local.ToLocalTime(UnixToDateTime(Epoch))
+  else if not TryISO8601ToDate(StampText, Stamp, False) then
+    Exit;
+  Mins := MinutesBetween(Now, Stamp);
+  if Mins < 1 then
+    Result := 'just now'
+  else if Mins < 60 then
+    Result := Format('%dm ago', [Mins])
+  else if Mins < 60 * 24 then
+    Result := Format('%dh ago', [Mins div 60])
+  else
+    Result := Format('%dd ago', [Mins div (60 * 24)]);
+end;
+
 procedure TMasterDetailForm.CheckpointListChange(Sender: TObject);
 var
   FileArr: TJSONArray;
@@ -19492,12 +19596,13 @@ begin
       TitleLabel.Text := Title;
       TitleLabel.WordWrap := False;
       { tier 4 -- the sidebar is navigation chrome; only the transcript gets
-        full-strength ink }
-      StyleLabel(TitleLabel, UI_CHROME_TEXT, 12, True);
+        full-strength ink. Regular weight: a column of bold titles reads as a
+        wall of emphasis, which is no emphasis at all. }
+      StyleLabel(TitleLabel, UI_CHROME_TEXT, 12, False);
 
       MetaText := Session.Id;
       if Session.UpdatedAt <> '' then
-        MetaText := Session.UpdatedAt + ' | ' + Session.Id;
+        MetaText := FriendlyAge(Session.UpdatedAt) + '  |  ' + Session.Id;
       MetaLabel := TLabel.Create(Card);
       MetaLabel.Parent := Card;
       MetaLabel.Align := TAlignLayout.Client;
@@ -19512,6 +19617,28 @@ begin
         Card.Fill.Color := UI_ACCENT_DIM;
         SelectedIndex := FSessionList.Count - 1;
       end;
+    end;
+    if FSessionList.Count = 0 then
+    begin
+      { empty state: say what belongs here and how to get one, instead of
+        presenting a silent blank column }
+      Item := TListBoxItem.Create(FSessionList);
+      Item.Parent := FSessionList;
+      Item.Text := '';
+      Item.Height := 64;
+      Item.HitTest := False;
+      TitleLabel := TLabel.Create(Item);
+      TitleLabel.Parent := Item;
+      TitleLabel.Align := TAlignLayout.Client;
+      TitleLabel.HitTest := False;
+      TitleLabel.WordWrap := True;
+      if Filter <> '' then
+        TitleLabel.Text := 'No sessions match the filter.'
+      else
+        TitleLabel.Text :=
+          'No sessions yet. Connect to a gateway, then press + to start one.';
+      SetControlMargins(TitleLabel, 10, 6, 10, 6);
+      StyleLabel(TitleLabel, UI_MUTED, 11, False);
     end;
     FSessionList.ItemIndex := SelectedIndex;
   finally
@@ -20416,6 +20543,7 @@ begin
 
   if FClearAttachmentsButton <> nil then
     FClearAttachmentsButton.Enabled := HasAttachments;
+  UpdateClearAttachmentsButton;
   UpdateComposerState;
 end;
 
@@ -20520,6 +20648,7 @@ begin
     FAttachButton.Enabled := not FChatAbort;
   if FClearAttachmentsButton <> nil then
     FClearAttachmentsButton.Enabled := HasAttachments and not FChatAbort;
+  UpdateClearAttachmentsButton;
 
   if FComposerStatusLabel <> nil then
   begin
