@@ -52,9 +52,9 @@ import struct
 import sys
 
 STYLES = [
-    # path,                       icon fill,   hover wash
-    ("studio/PasclawDark.style",  "xFFD6DDE6", "claWhite"),
-    ("studio/PasclawLight.style", "xFF4A5563", "claBlack"),
+    # path,                       icon fill,   hover wash,  focus ring
+    ("studio/PasclawDark.style",  "xFFD6DDE6", "claWhite",  "xFF3BA7FF"),
+    ("studio/PasclawLight.style", "xFF4A5563", "claBlack",  "xFF0969DA"),
 ]
 
 # legacy marker lines from the first version; stripped on sight (migration)
@@ -246,14 +246,19 @@ def block_at(lines, style_name):
     raise SystemExit("no '%s' block found" % style_name)
 
 
-def icon_style(name, fill, hover, indent):
-    """A FLAT icon button style: glyph + hover wash, nothing else.
+def icon_style(name, fill, hover, focus, indent):
+    """A FLAT icon button style: glyph, hover wash, focus ring -- no box.
 
     Deliberately NOT a clone of the theme's buttonstyle: icon buttons carry no
-    box -- no border, no gradient face ("can we have them not have an
+    border and no gradient face ("can we have them not have an
     edge/outline"). Affordance comes from the wash, a rounded rectangle that
     fades in under the pointer (opacity 0 -> 0.10) and presses slightly
     darker, which is how flat icon buttons behave everywhere else.
+
+    The focus ring is not optional: these buttons have no caption, so a
+    keyboard user Tabbing through them has NOTHING saying which icon Enter
+    will press unless the style shows it. The clone approach inherited the
+    theme's IsFocused glow; the flat style must provide its own.
     """
     pad = indent + "  "
     return "\n".join([
@@ -287,6 +292,26 @@ def icon_style(name, fill, hover, indent):
         pad + "    StopValue = 0.200000002980232200",
         pad + "    Trigger = 'IsPressed=true'",
         pad + "    TriggerInverse = 'IsPressed=false'",
+        pad + "  end",
+        pad + "end",
+        pad + "object TRectangle",
+        pad + "  StyleName = 'focusring'",
+        pad + "  Align = Contents",
+        pad + "  Fill.Kind = None",
+        pad + "  HitTest = False",
+        pad + "  Locked = True",
+        pad + "  Opacity = 0.000000000000000000",
+        pad + "  Stroke.Color = " + focus,
+        pad + "  Stroke.Thickness = 1.500000000000000000",
+        pad + "  XRadius = 6.000000000000000000",
+        pad + "  YRadius = 6.000000000000000000",
+        pad + "  object TFloatAnimation",
+        pad + "    Duration = 0.100000001490116100",
+        pad + "    PropertyName = 'Opacity'",
+        pad + "    StartValue = 0.000000000000000000",
+        pad + "    StopValue = 1.000000000000000000",
+        pad + "    Trigger = 'IsFocused=true'",
+        pad + "    TriggerInverse = 'IsFocused=false'",
         pad + "  end",
         pad + "end",
         path_object(name, fill, pad),
@@ -357,7 +382,7 @@ def validate(text, path):
     return not errs
 
 
-def build(path, fill, hover):
+def build(path, fill, hover, focus):
     src = open(path, encoding="utf-8", errors="replace").read()
     lines = strip_generated(src.split("\n"))
 
@@ -367,7 +392,7 @@ def build(path, fill, hover):
 
     generated = []
     for name in sorted(GLYPHS):
-        generated.append(icon_style(name, fill, hover, indent))
+        generated.append(icon_style(name, fill, hover, focus, indent))
 
     return "\n".join(lines[:end + 1] + generated + lines[end + 1:])
 
@@ -375,8 +400,8 @@ def build(path, fill, hover):
 def main(argv):
     check = "--check" in argv
     bad = 0
-    for path, fill, hover in STYLES:
-        want = build(path, fill, hover)
+    for path, fill, hover, focus in STYLES:
+        want = build(path, fill, hover, focus)
         if not validate(want, path):
             print("%s: INVALID -- refusing to %s" %
                   (path, "pass" if check else "write"))

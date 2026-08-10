@@ -2704,6 +2704,26 @@ end
         TriggerInverse = 'IsPressed=false'
       end
     end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF3BA7FF
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
+    end
     object TPath
       StyleName = 'icon'
       Align = Center
@@ -2757,6 +2777,26 @@ end
         TriggerInverse = 'IsPressed=false'
       end
     end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF3BA7FF
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
+    end
     object TPath
       StyleName = 'icon'
       Align = Center
@@ -2806,6 +2846,26 @@ end
         StopValue = 0.200000002980232200
         Trigger = 'IsPressed=true'
         TriggerInverse = 'IsPressed=false'
+      end
+    end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF3BA7FF
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
       end
     end
     object TPath
@@ -2858,6 +2918,26 @@ end
         TriggerInverse = 'IsPressed=false'
       end
     end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF3BA7FF
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
+    end
     object TPath
       StyleName = 'icon'
       Align = Center
@@ -2906,6 +2986,26 @@ end
         StopValue = 0.200000002980232200
         Trigger = 'IsPressed=true'
         TriggerInverse = 'IsPressed=false'
+      end
+    end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF3BA7FF
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
       end
     end
     object TPath
@@ -2958,6 +3058,26 @@ end
         TriggerInverse = 'IsPressed=false'
       end
     end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF3BA7FF
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
+    end
     object TPath
       StyleName = 'icon'
       Align = Center
@@ -3008,6 +3128,26 @@ end
         TriggerInverse = 'IsPressed=false'
       end
     end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF3BA7FF
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
+    end
     object TPath
       StyleName = 'icon'
       Align = Center
@@ -3056,6 +3196,26 @@ end
         StopValue = 0.200000002980232200
         Trigger = 'IsPressed=true'
         TriggerInverse = 'IsPressed=false'
+      end
+    end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF3BA7FF
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
       end
     end
     object TPath
@@ -3114,6 +3274,26 @@ end
         StopValue = 0.200000002980232200
         Trigger = 'IsPressed=true'
         TriggerInverse = 'IsPressed=false'
+      end
+    end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF3BA7FF
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
       end
     end
     object TPath
@@ -3191,6 +3371,26 @@ end
         TriggerInverse = 'IsPressed=false'
       end
     end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF3BA7FF
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
+    end
     object TPath
       StyleName = 'icon'
       Align = Center
@@ -3238,6 +3438,26 @@ end
         StopValue = 0.200000002980232200
         Trigger = 'IsPressed=true'
         TriggerInverse = 'IsPressed=false'
+      end
+    end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF3BA7FF
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
       end
     end
     object TPath
@@ -3290,6 +3510,26 @@ end
         TriggerInverse = 'IsPressed=false'
       end
     end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF3BA7FF
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
+    end
     object TPath
       StyleName = 'icon'
       Align = Center
@@ -3336,6 +3576,26 @@ end
         StopValue = 0.200000002980232200
         Trigger = 'IsPressed=true'
         TriggerInverse = 'IsPressed=false'
+      end
+    end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF3BA7FF
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
       end
     end
     object TPath
@@ -3409,6 +3669,26 @@ end
         StopValue = 0.200000002980232200
         Trigger = 'IsPressed=true'
         TriggerInverse = 'IsPressed=false'
+      end
+    end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF3BA7FF
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
       end
     end
     object TPath
@@ -3485,6 +3765,26 @@ end
         TriggerInverse = 'IsPressed=false'
       end
     end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF3BA7FF
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
+    end
     object TPath
       StyleName = 'icon'
       Align = Center
@@ -3531,6 +3831,26 @@ end
         StopValue = 0.200000002980232200
         Trigger = 'IsPressed=true'
         TriggerInverse = 'IsPressed=false'
+      end
+    end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF3BA7FF
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
       end
     end
     object TPath

@@ -110,6 +110,10 @@ type
     FSandboxLabel: TLabel;
     FChatTurnEdit: TEdit;
     FLoadingSessions: Boolean;
+    { last payload each auto-refresh rendered, so an unchanged tick is a
+      no-op instead of a clear-and-rebuild -- see StatsTimerTick }
+    FLastRelayPayload: string;
+    FLastStatsPayload: string;
     FLastActivatedTab: string;
     FLogsAbort: Boolean;
     FLogsRunning: Boolean;
@@ -585,6 +589,8 @@ type
     procedure StyleChromeRect(Rect: TRectangle; FillColor: TAlphaColor;
       StrokeColor: TAlphaColor; Radius: Single; Interactive: Boolean);
     function ThemePaintColor(Color: TAlphaColor): TAlphaColor;
+    function ThemePaintStroke(Color: TAlphaColor): TAlphaColor;
+    function ActiveTabIs(const Caption: string): Boolean;
     procedure UseStyledLabelColor(LabelControl: TLabel);
     procedure StyleLabel(LabelControl: TLabel; Color: TAlphaColor;
       Size: Single; Bold: Boolean);
@@ -1765,6 +1771,19 @@ begin
     Result := $FF10151C
   else if Color = UI_MUTED then
     Result := $FF5C6675;
+end;
+
+function TMasterDetailForm.ThemePaintStroke(Color: TAlphaColor): TAlphaColor;
+{ Stroke twin of ThemePaintColor, mirroring StyleChromeRect's deliberate
+  fill/stroke split: an accent-dim SURFACE can be a whisper-pale tint, but an
+  accent-dim LINE at that tint disappears into a white canvas -- which is
+  exactly what happened to the workflow wires and IO outlines when both went
+  through the fill mapping. Lines need the stronger ink. }
+begin
+  if (not FDarkStyleEnabled) and (Color = UI_ACCENT_DIM) then
+    Result := $FF9CDDEC
+  else
+    Result := ThemePaintColor(Color);
 end;
 
 procedure TMasterDetailForm.UseStyledLabelColor(LabelControl: TLabel);
@@ -10697,7 +10716,7 @@ begin
   Canvas.Fill.Color := ThemePaintColor(UI_BG);
   Canvas.FillRect(R, 6, 6, [], 1);
 
-  Canvas.Stroke.Color := ThemePaintColor(UI_BORDER);
+  Canvas.Stroke.Color := ThemePaintStroke(UI_BORDER);
   Canvas.Stroke.Thickness := 1;
   GridX := 24;
   while GridX < Box.Width do
@@ -10712,7 +10731,7 @@ begin
     GridY := GridY + 24;
   end;
 
-  Canvas.Stroke.Color := ThemePaintColor(UI_BORDER);
+  Canvas.Stroke.Color := ThemePaintStroke(UI_BORDER);
   Canvas.Stroke.Thickness := 1.2;
   Canvas.DrawRect(RectF(R.Left + 0.5, R.Top + 0.5, R.Right - 0.5,
     R.Bottom - 0.5), 6, 6, [], 1);
@@ -10753,7 +10772,7 @@ begin
     IoRect := RectF(8, 12, 8 + WF_IO_W, 12 + Max(46, 26 + IoNames.Count * 15));
     Canvas.Fill.Color := ThemePaintColor(UI_PANEL);
     Canvas.FillRect(IoRect, 6, 6, [], 0.85);
-    Canvas.Stroke.Color := ThemePaintColor(UI_ACCENT_DIM);
+    Canvas.Stroke.Color := ThemePaintStroke(UI_ACCENT_DIM);
     Canvas.Stroke.Thickness := 1.2;
     Canvas.Stroke.Dash := TStrokeDash.Dash;
     Canvas.DrawRect(IoRect, 6, 6, [], 1);
@@ -10785,7 +10804,7 @@ begin
       12 + Max(46, 26 + IoNames.Count * 15));
     Canvas.Fill.Color := ThemePaintColor(UI_PANEL);
     Canvas.FillRect(OutRect, 6, 6, [], 0.85);
-    Canvas.Stroke.Color := ThemePaintColor(UI_ACCENT_DIM);
+    Canvas.Stroke.Color := ThemePaintStroke(UI_ACCENT_DIM);
     Canvas.Stroke.Thickness := 1.2;
     Canvas.Stroke.Dash := TStrokeDash.Dash;
     Canvas.DrawRect(OutRect, 6, 6, [], 1);
@@ -10802,7 +10821,7 @@ begin
         [], TTextAlign.Leading, TTextAlign.Center);
 
     { dashed derived wires: INPUT -> roots, leaves -> OUTPUT }
-    Canvas.Stroke.Color := ThemePaintColor(UI_ACCENT_DIM);
+    Canvas.Stroke.Color := ThemePaintStroke(UI_ACCENT_DIM);
     Canvas.Stroke.Thickness := 1;
     Canvas.Stroke.Dash := TStrokeDash.Dash;
     for I := 0 to FWorkflowNodesList.Count - 1 do
@@ -10843,12 +10862,12 @@ begin
       RTo := WorkflowCanvasNodeRect(ToIndex, Box.Width);
       if SameText(FWorkflowSelectedEdge, EdgeText) then
       begin
-        Canvas.Stroke.Color := ThemePaintColor(UI_ACCENT);
+        Canvas.Stroke.Color := ThemePaintStroke(UI_ACCENT);
         Canvas.Stroke.Thickness := 3;
       end
       else
       begin
-        Canvas.Stroke.Color := ThemePaintColor(UI_ACCENT_DIM);
+        Canvas.Stroke.Color := ThemePaintStroke(UI_ACCENT_DIM);
         Canvas.Stroke.Thickness := 2;
       end;
       EdgeStart := PointF(RFrom.Right, (RFrom.Top + RFrom.Bottom) / 2);
@@ -10864,7 +10883,7 @@ begin
     if FromIndex >= 0 then
     begin
       RFrom := WorkflowCanvasNodeRect(FromIndex, Box.Width);
-      Canvas.Stroke.Color := ThemePaintColor(UI_ACCENT);
+      Canvas.Stroke.Color := ThemePaintStroke(UI_ACCENT);
       Canvas.Stroke.Thickness := 2.5;
       Canvas.DrawLine(PointF(RFrom.Right, (RFrom.Top + RFrom.Bottom) / 2),
         FWorkflowConnectPoint, 1);
@@ -10882,9 +10901,9 @@ begin
       Canvas.Fill.Color := ThemePaintColor(UI_PANEL_ALT);
     Canvas.FillRect(R, 7, 7, [], 1);
     if Selected then
-      Canvas.Stroke.Color := ThemePaintColor(UI_ACCENT)
+      Canvas.Stroke.Color := ThemePaintStroke(UI_ACCENT)
     else
-      Canvas.Stroke.Color := ThemePaintColor(UI_BORDER);
+      Canvas.Stroke.Color := ThemePaintStroke(UI_BORDER);
     Canvas.Stroke.Thickness := 1.4;
     Canvas.DrawRect(R, 7, 7, [], 1);
 
@@ -10918,7 +10937,7 @@ begin
     else
       Canvas.Fill.Color := ThemePaintColor(UI_MUTED);
     Canvas.FillEllipse(PortR, 1);
-    Canvas.Stroke.Color := ThemePaintColor(UI_BG);
+    Canvas.Stroke.Color := ThemePaintStroke(UI_BG);
     Canvas.Stroke.Thickness := 1;
     Canvas.DrawEllipse(PortR, 1);
     if SameText(NodeId, FWorkflowConnectFromId) then
@@ -15066,6 +15085,15 @@ begin
             end;
           end;
         begin
+          { unchanged payload -> unchanged UI. Skipping the rebuild is what
+            keeps an idle auto-refresh from freeing rows under the pointer
+            every tick (see StatsTimerTick). }
+          if ErrorText + '|' + ResponseText = FLastStatsPayload then
+          begin
+            SetStatus('stats unchanged');
+            Exit;
+          end;
+          FLastStatsPayload := ErrorText + '|' + ResponseText;
           if FStatsSummaryList <> nil then
             FStatsSummaryList.Clear;
           if FStatsProviderList <> nil then
@@ -15122,11 +15150,31 @@ begin
 end;
 
 procedure TMasterDetailForm.StatsTimerTick(Sender: TObject);
+{ Auto-refresh discipline, here and in RelayTimerTick. The naive tick did a
+  full clear-and-rebuild of the tab's list boxes every interval, forever,
+  even with the app idle on another tab. Freeing rows the pointer is resting
+  on (FMX keeps a hovered-control reference) or that hold the selection is
+  the classic intermittent access violation -- the app "AVs just sitting
+  there". Three rules:
+    1. only refresh the tab you can see (the web UI does the same);
+    2. an unchanged payload repaints nothing (checked in the render closure);
+    3. rebuilds detach OnChange while the old rows die. }
 begin
-  if (FStatsAutoRefreshCheck <> nil) and FStatsAutoRefreshCheck.IsChecked then
-    StatsRefreshClick(nil)
-  else if FStatsTimer <> nil then
-    FStatsTimer.Enabled := False;
+  if (FStatsAutoRefreshCheck = nil) or not FStatsAutoRefreshCheck.IsChecked then
+  begin
+    if FStatsTimer <> nil then
+      FStatsTimer.Enabled := False;
+    Exit;
+  end;
+  if ActiveTabIs('Stats') then
+    StatsRefreshClick(nil);
+end;
+
+function TMasterDetailForm.ActiveTabIs(const Caption: string): Boolean;
+begin
+  Result := (FTabControl <> nil) and (FTabControl.TabIndex >= 0) and
+    (FTabControl.TabIndex < FTabControl.TabCount) and
+    SameText(FTabControl.Tabs[FTabControl.TabIndex].Text, Caption);
 end;
 
 procedure TMasterDetailForm.CheckpointListChange(Sender: TObject);
@@ -15533,11 +15581,16 @@ begin
 end;
 
 procedure TMasterDetailForm.RelayTimerTick(Sender: TObject);
+{ same discipline as StatsTimerTick -- see the comment there }
 begin
-  if (FRelayAutoRefreshCheck <> nil) and FRelayAutoRefreshCheck.IsChecked then
-    RelayRefreshClick(nil)
-  else if FRelayTimer <> nil then
-    FRelayTimer.Enabled := False;
+  if (FRelayAutoRefreshCheck = nil) or not FRelayAutoRefreshCheck.IsChecked then
+  begin
+    if FRelayTimer <> nil then
+      FRelayTimer.Enabled := False;
+    Exit;
+  end;
+  if ActiveTabIs('Relay') then
+    RelayRefreshClick(nil);
 end;
 
 procedure TMasterDetailForm.RelayWorkerListChange(Sender: TObject);
@@ -15674,15 +15727,31 @@ begin
             ValueLabel.TextSettings.VertAlign := TTextAlign.Center;
           end;
         begin
+          { see StatsRefreshClick: identical payload means identical UI, so
+            do not tear down and rebuild rows every 5-second tick }
+          if ErrorText + '|' + ResponseText = FLastRelayPayload then
+          begin
+            SetStatus('relay unchanged');
+            Exit;
+          end;
+          FLastRelayPayload := ErrorText + '|' + ResponseText;
           if FRelayStatsList <> nil then
             FRelayStatsList.Clear;
           if FRelayWorkersList <> nil then
+          begin
+            { the rebuild below reselects row 0 and calls the change handler
+              itself; change events from a list mid-teardown act on dying
+              rows }
+            FRelayWorkersList.OnChange := nil;
             FRelayWorkersList.Clear;
+          end;
           if ErrorText <> '' then
           begin
             if FRelayStatusLabel <> nil then
               FRelayStatusLabel.Text := 'Relay failed: ' + ErrorText;
             SetStatus('relay failed');
+            if FRelayWorkersList <> nil then
+              FRelayWorkersList.OnChange := RelayWorkerListChange;
             Exit;
           end;
           Root := TJSONObject.ParseJSONValue(ResponseText);
@@ -15754,6 +15823,8 @@ begin
             end;
           finally
             Root.Free;
+            if FRelayWorkersList <> nil then
+              FRelayWorkersList.OnChange := RelayWorkerListChange;
           end;
           if FPaneMemos.TryGetValue('relay', Memo) then
             Memo.Lines.Text := 'GET /v1/relay/status' + sLineBreak +
