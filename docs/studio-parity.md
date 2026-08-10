@@ -66,7 +66,29 @@ All three are added by the first parity PR (see below).
 | MCP tab | CRUD + invoke exist; gaps are nested-schema form handling and result presentation. Web renders results as MCP `content[]` text blocks — mirror that. | P3 |
 | Files/KB/Memory | Panels exist; wire click-throughs (memory/kb hit → file preview) like web's result cards. | P3 |
 | Cron/Stats/Checkpoints/Logs | Native versions exist; polish + consistent auto-refresh cadence (web refreshes stats on tab focus + 30s). | P3 |
-| Visual QA | Full tab-by-tab pass on Air.style + Light.Style after IDE save/reload. | P3 |
+| Visual QA | Full tab-by-tab pass on PasclawDark.style + PasclawLight.style after IDE save/reload. | P3 |
+
+## Button icons
+
+`ApplyButtonIcon` assigns `TButton.StyleLookup` using names from the RAD Studio
+DocWiki table *Using Styled and Colored Buttons on Target Platforms* — only
+rows that have both a Windows column and an `IconTintColor` entry, since the
+tint column is what separates a lookup that carries a glyph from one that is
+just a coloured button shape.
+
+A **custom style book replaces the platform style outright**: it does not
+inherit from it, so a lookup the book does not define falls back to that book's
+own `buttonstyle`, not to the platform glyph. PasclawDark/PasclawLight
+therefore have to define those lookups themselves —
+`scripts/gen-studio-icons.py` clones each book's `buttonstyle` per icon name
+and swaps the TGlyph placeholder for a TPath glyph, so the icon buttons keep
+the theme's exact background, hover/press animation and focus glow. Run
+`python3 scripts/gen-studio-icons.py` after editing either style file, or
+`--check` to verify they are current.
+
+`StyleLookupExists` is the backstop: it refuses to blank a caption for a
+lookup the active book does not define, so a style without icon resources
+degrades to plain text instead of blank buttons.
 
 ## Live parity test script (run against a real gateway)
 
