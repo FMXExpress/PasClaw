@@ -98,6 +98,13 @@ type
     FChatStatsLabel: TLabel;
     FChatToolsExpanded: Boolean;
     FIconButtons: Boolean;
+    { StyleLookupExists answers per (active book, lookup) and the answer cannot
+      change while the app runs, but it IS asked once per chat-turn Copy
+      button. Memoise it so a long transcript does not re-scan the style. }
+    FStyleLookupCache: TDictionary<string, Boolean>;
+    { Raw text of each loaded .style, kept for StyleLookupExists' fallback
+      probe -- our own copy, no dependence on TStyleBook exposing its source. }
+    FStyleBookTexts: TDictionary<TStyleBook, string>;
     FComposerLayout: TLayout;
     FComposerStatusLabel: TLabel;
     FSandboxLabel: TLabel;
@@ -1371,6 +1378,8 @@ begin
   FTurns := TList<TChatTurn>.Create;
   FWorkflowNodePositions := TDictionary<string, TPointF>.Create;
   FWorkflowToolSchemas := TDictionary<string, string>.Create;
+  FStyleLookupCache := TDictionary<string, Boolean>.Create;
+  FStyleBookTexts := TDictionary<TStyleBook, string>.Create;
 
   LoadStyleBooks;
   BuildInterface;
@@ -1405,6 +1414,8 @@ begin
   FSessionCache.Free;
   FWorkflowNodePositions.Free;
   FWorkflowToolSchemas.Free;
+  FStyleLookupCache.Free;
+  FStyleBookTexts.Free;
   FNavButtons.Free;
   FPaneMemos.Free;
   FEndpointMethodCombos.Free;
@@ -1437,6 +1448,9 @@ var
         Result := TStyleBook.Create(Self);
         try
           Result.LoadFromFile(Candidate);
+          { keep the source text: StyleLookupExists probes it when the built
+            style graph is not available to walk }
+          FStyleBookTexts.AddOrSetValue(Result, TFile.ReadAllText(Candidate));
           Exit;
         except
           FreeAndNil(Result);
@@ -1754,10 +1768,24 @@ function TMasterDetailForm.StyleLookupExists(const LookupName: string): Boolean;
    lookup that may not exist: probe first.
 
    StyleBook = nil means no custom book is applied, so the platform style is
-   active and its icon resources are present. With a custom book applied, walk
-   it for a matching StyleName. *)
+   active and its icon resources are present. With a custom book applied, look
+   in the book's own STYLE GRAPH.
+
+   Not in Root: that is TFmxObject.Root, the scene the book belongs to. These
+   books are created with the form as owner and no parent, so Root is nil and
+   the probe answered False for every lookup -- captions were kept forever and
+   no icon could ever appear, however complete the style file was. When Root
+   is non-nil it names the form, which is worse: it would search the live
+   control tree instead of the style resources.
+
+   TStyleBook.Style is the loaded graph. Its getter builds from the stored
+   resource on demand, but if that yields nothing the raw file text (stashed
+   by LoadStyleBooks) is still an exact probe -- a style entry is
+   'StyleName = ''<lookup>''' and nothing else in the file spells that. *)
 var
   Found: Boolean;
+  Key: string;
+  BookText: string;
 
   procedure Walk(Obj: TFmxObject);
   var
@@ -1783,11 +1811,16 @@ begin
     Exit(False);
   if StyleBook = nil then
     Exit(True);            { platform style in use -- its icons exist }
+  { Key on the book, not on FDarkStyleEnabled: they agree today, but a cache
+    keyed off a second opinion is exactly how these drift. }
+  Key := IntToHex(NativeInt(StyleBook), 16) + '|' + LowerCase(LookupName);
+  if FStyleLookupCache.TryGetValue(Key, Found) then
+    Exit(Found);
   Found := False;
-  { TStyleBook.Root is an IRoot, not a TFmxObject -- reach the object behind
-    the interface and only walk it when it really is an FMX node. }
-  if (StyleBook.Root <> nil) and (StyleBook.Root.GetObject is TFmxObject) then
-    Walk(TFmxObject(StyleBook.Root.GetObject));
+  Walk(StyleBook.Style);
+  if (not Found) and FStyleBookTexts.TryGetValue(StyleBook, BookText) then
+    Found := ContainsText(BookText, 'StyleName = ' + QuotedStr(LookupName));
+  FStyleLookupCache.Add(Key, Found);
   Result := Found;
 end;
 
