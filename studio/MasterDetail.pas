@@ -1828,26 +1828,32 @@ procedure TMasterDetailForm.ApplyChatMeasure;
 { Centre the transcript and the composer on a fixed reading measure: past
   CHAT_MAX_W the surplus becomes equal margins rather than longer lines;
   below it the column fills the width and behaves like any responsive pane.
-  Implemented as symmetric padding on the existing containers so nothing has
-  to be re-parented -- and the bubble-width maths already derives from
-  FChatFlow.Width, so capping here narrows the bubbles for free. }
+
+  This is the ONLY place the flow's width is decided. The first version set
+  Padding on the scroll box while HandleResize and RenderTranscript each also
+  set FChatFlow.Width from the scroll box's OUTER width -- two other places
+  deciding the same thing, both blind to the padding. The user's screenshots
+  showed the result: the column started at the left pad and overflowed the
+  right one. Margins on the flow itself cannot disagree with its width, and
+  the other two call sites now come here instead of doing their own maths. }
 var
   Avail: Single;
   Pad: Single;
 begin
-  if FChatScroll = nil then
+  if (FChatScroll = nil) or (FChatFlow = nil) then
     Exit;
   Avail := FChatScroll.Width;
-  if (Avail <= 0) and (FChatFlow <> nil) then
-    Avail := FChatFlow.Width;
   if Avail <= 0 then
     Exit;
   Pad := (Avail - CHAT_MAX_W) / 2;
   if Pad < 0 then
     Pad := 0;
-  SetControlPadding(FChatScroll, Pad, 0, Pad, 0);
+  SetControlMargins(FChatFlow, Pad, 0, Pad, 0);
+  FChatFlow.Width := Max(320, Avail - Pad * 2 - 8);
+  { same horizontal inset for the composer, PRESERVING its 10/6/10/8 base
+    padding -- the padding version zeroed the vertical part }
   if FComposerLayout <> nil then
-    SetControlPadding(FComposerLayout, Pad, 0, Pad, 0);
+    SetControlPadding(FComposerLayout, 10 + Pad, 6, 10 + Pad, 8);
 end;
 
 procedure TMasterDetailForm.ApplyButtonIcon(Button: TButton);
@@ -2259,8 +2265,8 @@ begin
     FChatTurnList.Visible := False;
     FChatTurnList.Width := 0;
   end;
-  if (FChatScroll <> nil) and (FChatFlow <> nil) then
-    FChatFlow.Width := Max(320, FChatScroll.Width - 8);
+  { flow width is ApplyChatMeasure's decision (called above) -- setting it
+    here from the unpadded scroll width is what broke the centring }
   if FTemperatureLabel <> nil then
     FTemperatureLabel.Visible := not ToolbarCompact;
   if FTemperatureEdit <> nil then
@@ -21403,7 +21409,11 @@ var
           Panel.Parent := BodyHost;
           Panel.Align := TAlignLayout.Top;
           Panel.Height := 44;   { header-only; grown below when expanded }
-          StyleChromeRect(Panel, UI_PANEL_ALT, UI_ACCENT_DIM, 6, False);
+          { Muted chrome, not accent: the screenshots showed expanded tool
+            cards -- accent borders, accent bold headers -- shouting over the
+            conversation. The hierarchy rule is that CHAT TEXT pulls the eye;
+            tool plumbing is chrome and dresses like it. }
+          StyleChromeRect(Panel, UI_PANEL_ALT, UI_BORDER, 6, False);
           SetControlMargins(Panel, 0, 6, 0, 6);
           SetControlPadding(Panel, 10, 8, 10, 8);
 
@@ -21416,7 +21426,7 @@ var
             HeaderLabel.Text := 'tool detail - ' + TitleText
           else
             HeaderLabel.Text := 'tool detail + ' + TitleText;
-          StyleLabel(HeaderLabel, UI_ACCENT, 12, True);
+          StyleLabel(HeaderLabel, UI_CHROME_TEXT, 11, True);
 
           if FChatToolsExpanded then
           begin
@@ -21759,8 +21769,7 @@ begin
     while FChatFlow.ChildrenCount > 0 do
       FChatFlow.Children[0].Free;
     ChatFlowHeight := 0;
-    if FChatScroll <> nil then
-      FChatFlow.Width := Max(320, FChatScroll.Width - 8);
+    ApplyChatMeasure;   { the one authority on the flow's width + margins }
     if FTurns.Count = 0 then
       AddTranscriptCard(0, 1, 'assistant',
         'Connect to PasClaw, choose or create a session, then describe the code change you want.', '')

@@ -5855,7 +5855,7 @@ object TStyleContainer
         Size.PlatformDefault = False
         object TRectangle
           StyleName = 'selection'
-          Fill.Color = xFF0969DA
+          Fill.Color = x330969DA
           HitTest = False
           Size.Width = 50.000000000000000000
           Size.Height = 50.000000000000000000
@@ -5864,7 +5864,7 @@ object TStyleContainer
         end
         object TRectangle
           StyleName = 'focusedselection'
-          Fill.Color = xFF0969DA
+          Fill.Color = x330969DA
           HitTest = False
           Size.Width = 50.000000000000000000
           Size.Height = 50.000000000000000000
@@ -6147,7 +6147,7 @@ object TStyleContainer
       TextSettings.HorzAlign = Leading
       ShadowVisible = False
       ActiveTrigger = Selected
-      ActiveColor = claWhite
+      ActiveColor = xFF0A3D75
     end
   end
   object TLayout

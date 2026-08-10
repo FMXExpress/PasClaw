@@ -2123,6 +2123,14 @@ end
       Trigger = 'IsFocused=true'
       Enabled = False
     end
+    object TLabel
+      StyleName = 'prompt'
+      Locked = True
+      Opacity = 0.600000023841858000
+      StyledSettings = [Family, Size, Style, Other]
+      TextSettings.FontColor = xFF9AA4B1
+      Visible = False
+    end
   end
   object TLayout
     StyleName = 'spinboxstyle'
@@ -2445,6 +2453,16 @@ end
           Position.X = 1.000000000000000000
           Position.Y = 1.000000000000000000
           Width = 97.999992370605470000
+          object TLabel
+            StyleName = 'prompt'
+            Align = Client
+            Locked = True
+            Opacity = 0.600000023841858000
+            StyledSettings = [Family, Size, Style, Other]
+            TextSettings.FontColor = xFF9AA4B1
+            TextSettings.Trimming = None
+            TabOrder = 0
+          end
         end
         object TScrollBar
           StyleName = 'vscrollbar'
