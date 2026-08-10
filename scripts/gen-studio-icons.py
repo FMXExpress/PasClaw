@@ -133,6 +133,21 @@ _REFRESH_HEAD = wind([polar(0.5, 0.5, 5.0, 0.60),
                       polar(0.5, 0.5, 5.0, 0.15),
                       polar(0.5, 0.5, 52.0, 0.375)], _REFRESH_RING)
 
+# Sun: disc + 8 rays; moon: one closed path -- an outer arc plus a concave
+# return arc, so nonzero winding needs no cancellation tricks. These two are
+# PASCLAW-CUSTOM lookup names (no platform equivalent exists for a theme
+# toggle); they are safe for the same reason every name here is: only styles
+# this generator writes define them, and StyleLookupExists keeps captions on
+# any style that does not.
+_SUN = [ring(0.5, 0.5, 0.30, 0.19)] + [
+    wind([polar(0.5, 0.5, a - 7.0, 0.38), polar(0.5, 0.5, a + 7.0, 0.38),
+          polar(0.5, 0.5, a + 5.0, 0.50), polar(0.5, 0.5, a - 5.0, 0.50)],
+         [(0, 0), (1, 0), (1, 1), (0, 1)])
+    for a in range(0, 360, 45)]
+
+_MOON = [arc(0.5, 0.5, 0.42, 50.0, 310.0) +
+         arc(0.78, 0.5, 0.322, 268.0, 92.0)]
+
 # ------------------------------------------------------------------ glyphs --
 # Each entry: lookup name -> list of closed subpaths.
 
@@ -162,6 +177,9 @@ GLYPHS = {
     "RefreshToolButton":    [_REFRESH_RING, _REFRESH_HEAD],
 
     # lens ring + handle
+    "SunToolButton":        _SUN,
+    "MoonToolButton":       _MOON,
+
     "SearchToolButton":     [ring(0.42, 0.40, 0.36, 0.23),
                              [(0.60, 0.66), (0.70, 0.56),
                               (0.98, 0.84), (0.88, 0.94)]],
@@ -220,8 +238,8 @@ def path_object(name, fill, indent):
         indent + "  Locked = True",
         indent + "  Stroke.Kind = None",
         indent + "  WrapMode = Fit",
-        indent + "  Height = 15.000000000000000000",
-        indent + "  Width = 15.000000000000000000",
+        indent + "  Height = 8.000000000000000000",
+        indent + "  Width = 8.000000000000000000",
         indent + "  Data.Path = {",
         indent + "    " + body + "}",
         indent + "end",
