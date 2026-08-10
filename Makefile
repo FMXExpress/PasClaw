@@ -175,7 +175,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
+.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -320,6 +320,14 @@ test-read-file-encoding: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/read_file_encoding_tests.pas -o$(BUILDDIR)/read_file_encoding_tests
 	@$(BUILDDIR)/read_file_encoding_tests
+
+# Structural lint for the Delphi-only studio sources. FPC cannot compile
+# studio/ (it needs FMX), so nothing else in this repo checks that file --
+# this catches the declaration-shape and comment errors that have actually
+# broken the dcc64 build, without resolving identifiers.
+lint-studio:
+	@python3 scripts/lint-studio.py studio/MasterDetail.pas
+	@python3 scripts/gen-studio-icons.py --check
 
 # Database tools (Phase 1): engine-agnostic seam + agent tools against a
 # throwaway SQLite file -- SQL classification, mode gating, param binding,

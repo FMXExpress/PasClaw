@@ -2123,6 +2123,14 @@ end
       Trigger = 'IsFocused=true'
       Enabled = False
     end
+    object TLabel
+      StyleName = 'prompt'
+      Locked = True
+      Opacity = 0.600000023841858000
+      StyledSettings = [Family, Size, Style, Other]
+      TextSettings.FontColor = xFF9AA4B1
+      Visible = False
+    end
   end
   object TLayout
     StyleName = 'spinboxstyle'
@@ -2445,6 +2453,16 @@ end
           Position.X = 1.000000000000000000
           Position.Y = 1.000000000000000000
           Width = 97.999992370605470000
+          object TLabel
+            StyleName = 'prompt'
+            Align = Client
+            Locked = True
+            Opacity = 0.600000023841858000
+            StyledSettings = [Family, Size, Style, Other]
+            TextSettings.FontColor = xFF9AA4B1
+            TextSettings.Trimming = None
+            TabOrder = 0
+          end
         end
         object TScrollBar
           StyleName = 'vscrollbar'
@@ -2654,6 +2672,2201 @@ end
       Enabled = False
     end
   end
+  { --- generated icon button styles: scripts/gen-studio-icons.py --- }
+  object TLayout
+    StyleName = 'actiontoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Position.X = 376.000000000000000000
+    Position.Y = 489.000000000000000000
+    Width = 91.000000000000000000
+    object TRectangle
+      StyleName = 'background'
+      Align = Contents
+      Fill.Kind = Gradient
+      Fill.Gradient.Points = <
+        item
+          Color = xFF2A3038
+          Offset = 0.000000000000000000
+        end
+        item
+          Color = xFF252B33
+          Offset = 0.474820137023925800
+        end
+        item
+          Color = xFF20242B
+          Offset = 1.000000000000000000
+        end>
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 2.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 2.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 2.000000000000000000
+      Position.Y = 2.000000000000000000
+      Stroke.Color = xFF46505D
+      Width = 87.000000000000000000
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF2A3038
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF2A3038
+        Trigger = 'IsMouseOver=false;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF1B1F25
+        Trigger = 'IsMouseOver=false;IsPressed=true'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF1B1F25
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=true'
+      end
+      object TRectangle
+        Align = Client
+        Fill.Kind = None
+        Height = 24.000000000000000000
+        HitTest = False
+        Margins.Left = -2.000000000000000000
+        Margins.Top = -2.000000000000000000
+        Margins.Right = -2.000000000000000000
+        Margins.Bottom = -2.000000000000000000
+        Position.X = -2.000000000000000000
+        Position.Y = -2.000000000000000000
+        Stroke.Color = xFF252B33
+        Width = 91.000000000000000000
+        object TRectangle
+          Align = Client
+          Fill.Kind = None
+          Height = 22.000000000000000000
+          HitTest = False
+          Margins.Left = 1.000000000000000000
+          Margins.Top = 1.000000000000000000
+          Margins.Right = 1.000000000000000000
+          Margins.Bottom = 1.000000000000000000
+          Position.X = 1.000000000000000000
+          Position.Y = 1.000000000000000000
+          Stroke.Color = xFF2D333B
+          Width = 89.000000000000000000
+        end
+      end
+    end
+    object TText
+      StyleName = 'text'
+      Align = Client
+      Color = claWhite
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 2.000000000000000000
+      Text = 'button'
+      Width = 81.000000000000000000
+    end
+    object TGlowEffect
+      Softness = 0.300000011920929000
+      GlowColor = xFF3BA7FF
+      Opacity = 1.000000000000000000
+      Trigger = 'IsFocused=true'
+      Enabled = False
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFFD6DDE6
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      Height = 15.000000000000000000
+      Width = 15.000000000000000000
+      Data.Path = {
+        1100000000000000CDCC4C3DCDCC4C3D0100000052B81E3FCDCC4C3D01000000
+        52B81E3FEC51383E010000001F856B3EEC51383E010000001F856B3E5C8F423F
+        01000000CDCC4C3D5C8F423F01000000CDCC4C3DCDCC4C3D000000000AD7A33E
+        8FC2753E010000003333733F8FC2753E010000003333733F3333733F01000000
+        0AD7A33E3333733F010000000AD7A33E8FC2753E00000000AE47E13EEC51B83E
+        01000000AE47E13EE17A543F01000000E17A543FE17A543F01000000E17A543F
+        EC51B83E01000000AE47E13EEC51B83E}
+    end
+  end
+  object TLayout
+    StyleName = 'addtoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Position.X = 376.000000000000000000
+    Position.Y = 489.000000000000000000
+    Width = 91.000000000000000000
+    object TRectangle
+      StyleName = 'background'
+      Align = Contents
+      Fill.Kind = Gradient
+      Fill.Gradient.Points = <
+        item
+          Color = xFF2A3038
+          Offset = 0.000000000000000000
+        end
+        item
+          Color = xFF252B33
+          Offset = 0.474820137023925800
+        end
+        item
+          Color = xFF20242B
+          Offset = 1.000000000000000000
+        end>
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 2.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 2.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 2.000000000000000000
+      Position.Y = 2.000000000000000000
+      Stroke.Color = xFF46505D
+      Width = 87.000000000000000000
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF2A3038
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF2A3038
+        Trigger = 'IsMouseOver=false;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF1B1F25
+        Trigger = 'IsMouseOver=false;IsPressed=true'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF1B1F25
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=true'
+      end
+      object TRectangle
+        Align = Client
+        Fill.Kind = None
+        Height = 24.000000000000000000
+        HitTest = False
+        Margins.Left = -2.000000000000000000
+        Margins.Top = -2.000000000000000000
+        Margins.Right = -2.000000000000000000
+        Margins.Bottom = -2.000000000000000000
+        Position.X = -2.000000000000000000
+        Position.Y = -2.000000000000000000
+        Stroke.Color = xFF252B33
+        Width = 91.000000000000000000
+        object TRectangle
+          Align = Client
+          Fill.Kind = None
+          Height = 22.000000000000000000
+          HitTest = False
+          Margins.Left = 1.000000000000000000
+          Margins.Top = 1.000000000000000000
+          Margins.Right = 1.000000000000000000
+          Margins.Bottom = 1.000000000000000000
+          Position.X = 1.000000000000000000
+          Position.Y = 1.000000000000000000
+          Stroke.Color = xFF2D333B
+          Width = 89.000000000000000000
+        end
+      end
+    end
+    object TText
+      StyleName = 'text'
+      Align = Client
+      Color = claWhite
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 2.000000000000000000
+      Text = 'button'
+      Width = 81.000000000000000000
+    end
+    object TGlowEffect
+      Softness = 0.300000011920929000
+      GlowColor = xFF3BA7FF
+      Opacity = 1.000000000000000000
+      Trigger = 'IsFocused=true'
+      Enabled = False
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFFD6DDE6
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      Height = 15.000000000000000000
+      Width = 15.000000000000000000
+      Data.Path = {
+        0D00000000000000EC51B83ECDCC4C3D010000000AD7233FCDCC4C3D01000000
+        0AD7233FEC51B83E010000003333733FEC51B83E010000003333733F0AD7233F
+        010000000AD7233F0AD7233F010000000AD7233F3333733F01000000EC51B83E
+        3333733F01000000EC51B83E0AD7233F01000000CDCC4C3D0AD7233F01000000
+        CDCC4C3DEC51B83E01000000EC51B83EEC51B83E01000000EC51B83ECDCC4C3D}
+    end
+  end
+  object TLayout
+    StyleName = 'arrowdowntoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Position.X = 376.000000000000000000
+    Position.Y = 489.000000000000000000
+    Width = 91.000000000000000000
+    object TRectangle
+      StyleName = 'background'
+      Align = Contents
+      Fill.Kind = Gradient
+      Fill.Gradient.Points = <
+        item
+          Color = xFF2A3038
+          Offset = 0.000000000000000000
+        end
+        item
+          Color = xFF252B33
+          Offset = 0.474820137023925800
+        end
+        item
+          Color = xFF20242B
+          Offset = 1.000000000000000000
+        end>
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 2.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 2.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 2.000000000000000000
+      Position.Y = 2.000000000000000000
+      Stroke.Color = xFF46505D
+      Width = 87.000000000000000000
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF2A3038
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF2A3038
+        Trigger = 'IsMouseOver=false;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF1B1F25
+        Trigger = 'IsMouseOver=false;IsPressed=true'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF1B1F25
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=true'
+      end
+      object TRectangle
+        Align = Client
+        Fill.Kind = None
+        Height = 24.000000000000000000
+        HitTest = False
+        Margins.Left = -2.000000000000000000
+        Margins.Top = -2.000000000000000000
+        Margins.Right = -2.000000000000000000
+        Margins.Bottom = -2.000000000000000000
+        Position.X = -2.000000000000000000
+        Position.Y = -2.000000000000000000
+        Stroke.Color = xFF252B33
+        Width = 91.000000000000000000
+        object TRectangle
+          Align = Client
+          Fill.Kind = None
+          Height = 22.000000000000000000
+          HitTest = False
+          Margins.Left = 1.000000000000000000
+          Margins.Top = 1.000000000000000000
+          Margins.Right = 1.000000000000000000
+          Margins.Bottom = 1.000000000000000000
+          Position.X = 1.000000000000000000
+          Position.Y = 1.000000000000000000
+          Stroke.Color = xFF2D333B
+          Width = 89.000000000000000000
+        end
+      end
+    end
+    object TText
+      StyleName = 'text'
+      Align = Client
+      Color = claWhite
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 2.000000000000000000
+      Text = 'button'
+      Width = 81.000000000000000000
+    end
+    object TGlowEffect
+      Softness = 0.300000011920929000
+      GlowColor = xFF3BA7FF
+      Opacity = 1.000000000000000000
+      Trigger = 'IsFocused=true'
+      Enabled = False
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFFD6DDE6
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      Height = 15.000000000000000000
+      Width = 15.000000000000000000
+      Data.Path = {
+        08000000000000000000003FEC51783F01000000EC51783F0000003F01000000
+        3333333F0000003F010000003333333F8FC2F53C010000009A99993E8FC2F53C
+        010000009A99993E0000003F010000008FC2F53C0000003F010000000000003F
+        EC51783F}
+    end
+  end
+  object TLayout
+    StyleName = 'arrowlefttoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Position.X = 376.000000000000000000
+    Position.Y = 489.000000000000000000
+    Width = 91.000000000000000000
+    object TRectangle
+      StyleName = 'background'
+      Align = Contents
+      Fill.Kind = Gradient
+      Fill.Gradient.Points = <
+        item
+          Color = xFF2A3038
+          Offset = 0.000000000000000000
+        end
+        item
+          Color = xFF252B33
+          Offset = 0.474820137023925800
+        end
+        item
+          Color = xFF20242B
+          Offset = 1.000000000000000000
+        end>
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 2.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 2.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 2.000000000000000000
+      Position.Y = 2.000000000000000000
+      Stroke.Color = xFF46505D
+      Width = 87.000000000000000000
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF2A3038
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF2A3038
+        Trigger = 'IsMouseOver=false;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF1B1F25
+        Trigger = 'IsMouseOver=false;IsPressed=true'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF1B1F25
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=true'
+      end
+      object TRectangle
+        Align = Client
+        Fill.Kind = None
+        Height = 24.000000000000000000
+        HitTest = False
+        Margins.Left = -2.000000000000000000
+        Margins.Top = -2.000000000000000000
+        Margins.Right = -2.000000000000000000
+        Margins.Bottom = -2.000000000000000000
+        Position.X = -2.000000000000000000
+        Position.Y = -2.000000000000000000
+        Stroke.Color = xFF252B33
+        Width = 91.000000000000000000
+        object TRectangle
+          Align = Client
+          Fill.Kind = None
+          Height = 22.000000000000000000
+          HitTest = False
+          Margins.Left = 1.000000000000000000
+          Margins.Top = 1.000000000000000000
+          Margins.Right = 1.000000000000000000
+          Margins.Bottom = 1.000000000000000000
+          Position.X = 1.000000000000000000
+          Position.Y = 1.000000000000000000
+          Stroke.Color = xFF2D333B
+          Width = 89.000000000000000000
+        end
+      end
+    end
+    object TText
+      StyleName = 'text'
+      Align = Client
+      Color = claWhite
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 2.000000000000000000
+      Text = 'button'
+      Width = 81.000000000000000000
+    end
+    object TGlowEffect
+      Softness = 0.300000011920929000
+      GlowColor = xFF3BA7FF
+      Opacity = 1.000000000000000000
+      Trigger = 'IsFocused=true'
+      Enabled = False
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFFD6DDE6
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      Height = 15.000000000000000000
+      Width = 15.000000000000000000
+      Data.Path = {
+        08000000000000008FC2F53C0000003F010000000000003FEC51783F01000000
+        0000003F3333333F01000000EC51783F3333333F01000000EC51783F9A99993E
+        010000000000003F9A99993E010000000000003F8FC2F53C010000008FC2F53C
+        0000003F}
+    end
+  end
+  object TLayout
+    StyleName = 'arrowrighttoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Position.X = 376.000000000000000000
+    Position.Y = 489.000000000000000000
+    Width = 91.000000000000000000
+    object TRectangle
+      StyleName = 'background'
+      Align = Contents
+      Fill.Kind = Gradient
+      Fill.Gradient.Points = <
+        item
+          Color = xFF2A3038
+          Offset = 0.000000000000000000
+        end
+        item
+          Color = xFF252B33
+          Offset = 0.474820137023925800
+        end
+        item
+          Color = xFF20242B
+          Offset = 1.000000000000000000
+        end>
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 2.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 2.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 2.000000000000000000
+      Position.Y = 2.000000000000000000
+      Stroke.Color = xFF46505D
+      Width = 87.000000000000000000
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF2A3038
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF2A3038
+        Trigger = 'IsMouseOver=false;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF1B1F25
+        Trigger = 'IsMouseOver=false;IsPressed=true'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF1B1F25
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=true'
+      end
+      object TRectangle
+        Align = Client
+        Fill.Kind = None
+        Height = 24.000000000000000000
+        HitTest = False
+        Margins.Left = -2.000000000000000000
+        Margins.Top = -2.000000000000000000
+        Margins.Right = -2.000000000000000000
+        Margins.Bottom = -2.000000000000000000
+        Position.X = -2.000000000000000000
+        Position.Y = -2.000000000000000000
+        Stroke.Color = xFF252B33
+        Width = 91.000000000000000000
+        object TRectangle
+          Align = Client
+          Fill.Kind = None
+          Height = 22.000000000000000000
+          HitTest = False
+          Margins.Left = 1.000000000000000000
+          Margins.Top = 1.000000000000000000
+          Margins.Right = 1.000000000000000000
+          Margins.Bottom = 1.000000000000000000
+          Position.X = 1.000000000000000000
+          Position.Y = 1.000000000000000000
+          Stroke.Color = xFF2D333B
+          Width = 89.000000000000000000
+        end
+      end
+    end
+    object TText
+      StyleName = 'text'
+      Align = Client
+      Color = claWhite
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 2.000000000000000000
+      Text = 'button'
+      Width = 81.000000000000000000
+    end
+    object TGlowEffect
+      Softness = 0.300000011920929000
+      GlowColor = xFF3BA7FF
+      Opacity = 1.000000000000000000
+      Trigger = 'IsFocused=true'
+      Enabled = False
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFFD6DDE6
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      Height = 15.000000000000000000
+      Width = 15.000000000000000000
+      Data.Path = {
+        0800000000000000EC51783F0000003F010000000000003FEC51783F01000000
+        0000003F3333333F010000008FC2F53C3333333F010000008FC2F53C9A99993E
+        010000000000003F9A99993E010000000000003F8FC2F53C01000000EC51783F
+        0000003F}
+    end
+  end
+  object TLayout
+    StyleName = 'arrowuptoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Position.X = 376.000000000000000000
+    Position.Y = 489.000000000000000000
+    Width = 91.000000000000000000
+    object TRectangle
+      StyleName = 'background'
+      Align = Contents
+      Fill.Kind = Gradient
+      Fill.Gradient.Points = <
+        item
+          Color = xFF2A3038
+          Offset = 0.000000000000000000
+        end
+        item
+          Color = xFF252B33
+          Offset = 0.474820137023925800
+        end
+        item
+          Color = xFF20242B
+          Offset = 1.000000000000000000
+        end>
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 2.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 2.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 2.000000000000000000
+      Position.Y = 2.000000000000000000
+      Stroke.Color = xFF46505D
+      Width = 87.000000000000000000
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF2A3038
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF2A3038
+        Trigger = 'IsMouseOver=false;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF1B1F25
+        Trigger = 'IsMouseOver=false;IsPressed=true'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF1B1F25
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=true'
+      end
+      object TRectangle
+        Align = Client
+        Fill.Kind = None
+        Height = 24.000000000000000000
+        HitTest = False
+        Margins.Left = -2.000000000000000000
+        Margins.Top = -2.000000000000000000
+        Margins.Right = -2.000000000000000000
+        Margins.Bottom = -2.000000000000000000
+        Position.X = -2.000000000000000000
+        Position.Y = -2.000000000000000000
+        Stroke.Color = xFF252B33
+        Width = 91.000000000000000000
+        object TRectangle
+          Align = Client
+          Fill.Kind = None
+          Height = 22.000000000000000000
+          HitTest = False
+          Margins.Left = 1.000000000000000000
+          Margins.Top = 1.000000000000000000
+          Margins.Right = 1.000000000000000000
+          Margins.Bottom = 1.000000000000000000
+          Position.X = 1.000000000000000000
+          Position.Y = 1.000000000000000000
+          Stroke.Color = xFF2D333B
+          Width = 89.000000000000000000
+        end
+      end
+    end
+    object TText
+      StyleName = 'text'
+      Align = Client
+      Color = claWhite
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 2.000000000000000000
+      Text = 'button'
+      Width = 81.000000000000000000
+    end
+    object TGlowEffect
+      Softness = 0.300000011920929000
+      GlowColor = xFF3BA7FF
+      Opacity = 1.000000000000000000
+      Trigger = 'IsFocused=true'
+      Enabled = False
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFFD6DDE6
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      Height = 15.000000000000000000
+      Width = 15.000000000000000000
+      Data.Path = {
+        08000000000000000000003F8FC2F53C01000000EC51783F0000003F01000000
+        3333333F0000003F010000003333333FEC51783F010000009A99993EEC51783F
+        010000009A99993E0000003F010000008FC2F53C0000003F010000000000003F
+        8FC2F53C}
+    end
+  end
+  object TLayout
+    StyleName = 'composetoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Position.X = 376.000000000000000000
+    Position.Y = 489.000000000000000000
+    Width = 91.000000000000000000
+    object TRectangle
+      StyleName = 'background'
+      Align = Contents
+      Fill.Kind = Gradient
+      Fill.Gradient.Points = <
+        item
+          Color = xFF2A3038
+          Offset = 0.000000000000000000
+        end
+        item
+          Color = xFF252B33
+          Offset = 0.474820137023925800
+        end
+        item
+          Color = xFF20242B
+          Offset = 1.000000000000000000
+        end>
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 2.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 2.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 2.000000000000000000
+      Position.Y = 2.000000000000000000
+      Stroke.Color = xFF46505D
+      Width = 87.000000000000000000
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF2A3038
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF2A3038
+        Trigger = 'IsMouseOver=false;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF1B1F25
+        Trigger = 'IsMouseOver=false;IsPressed=true'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF1B1F25
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=true'
+      end
+      object TRectangle
+        Align = Client
+        Fill.Kind = None
+        Height = 24.000000000000000000
+        HitTest = False
+        Margins.Left = -2.000000000000000000
+        Margins.Top = -2.000000000000000000
+        Margins.Right = -2.000000000000000000
+        Margins.Bottom = -2.000000000000000000
+        Position.X = -2.000000000000000000
+        Position.Y = -2.000000000000000000
+        Stroke.Color = xFF252B33
+        Width = 91.000000000000000000
+        object TRectangle
+          Align = Client
+          Fill.Kind = None
+          Height = 22.000000000000000000
+          HitTest = False
+          Margins.Left = 1.000000000000000000
+          Margins.Top = 1.000000000000000000
+          Margins.Right = 1.000000000000000000
+          Margins.Bottom = 1.000000000000000000
+          Position.X = 1.000000000000000000
+          Position.Y = 1.000000000000000000
+          Stroke.Color = xFF2D333B
+          Width = 89.000000000000000000
+        end
+      end
+    end
+    object TText
+      StyleName = 'text'
+      Align = Client
+      Color = claWhite
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 2.000000000000000000
+      Text = 'button'
+      Width = 81.000000000000000000
+    end
+    object TGlowEffect
+      Softness = 0.300000011920929000
+      GlowColor = xFF3BA7FF
+      Opacity = 1.000000000000000000
+      Trigger = 'IsFocused=true'
+      Enabled = False
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFFD6DDE6
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      Height = 15.000000000000000000
+      Width = 15.000000000000000000
+      Data.Path = {
+        0900000000000000713D4A3FEC51B83D01000000C3F5683F3D0A573E01000000
+        7B14AE3E14AE473F01000000AE47613EC3F5283F01000000713D4A3FEC51B83D
+        00000000AE47613EC3F5283F010000007B14AE3E14AE473F010000008FC2F53D
+        AE47613F01000000AE47613EC3F5283F}
+    end
+  end
+  object TLayout
+    StyleName = 'detailstoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Position.X = 376.000000000000000000
+    Position.Y = 489.000000000000000000
+    Width = 91.000000000000000000
+    object TRectangle
+      StyleName = 'background'
+      Align = Contents
+      Fill.Kind = Gradient
+      Fill.Gradient.Points = <
+        item
+          Color = xFF2A3038
+          Offset = 0.000000000000000000
+        end
+        item
+          Color = xFF252B33
+          Offset = 0.474820137023925800
+        end
+        item
+          Color = xFF20242B
+          Offset = 1.000000000000000000
+        end>
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 2.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 2.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 2.000000000000000000
+      Position.Y = 2.000000000000000000
+      Stroke.Color = xFF46505D
+      Width = 87.000000000000000000
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF2A3038
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF2A3038
+        Trigger = 'IsMouseOver=false;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF1B1F25
+        Trigger = 'IsMouseOver=false;IsPressed=true'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF1B1F25
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=true'
+      end
+      object TRectangle
+        Align = Client
+        Fill.Kind = None
+        Height = 24.000000000000000000
+        HitTest = False
+        Margins.Left = -2.000000000000000000
+        Margins.Top = -2.000000000000000000
+        Margins.Right = -2.000000000000000000
+        Margins.Bottom = -2.000000000000000000
+        Position.X = -2.000000000000000000
+        Position.Y = -2.000000000000000000
+        Stroke.Color = xFF252B33
+        Width = 91.000000000000000000
+        object TRectangle
+          Align = Client
+          Fill.Kind = None
+          Height = 22.000000000000000000
+          HitTest = False
+          Margins.Left = 1.000000000000000000
+          Margins.Top = 1.000000000000000000
+          Margins.Right = 1.000000000000000000
+          Margins.Bottom = 1.000000000000000000
+          Position.X = 1.000000000000000000
+          Position.Y = 1.000000000000000000
+          Stroke.Color = xFF2D333B
+          Width = 89.000000000000000000
+        end
+      end
+    end
+    object TText
+      StyleName = 'text'
+      Align = Client
+      Color = claWhite
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 2.000000000000000000
+      Text = 'button'
+      Width = 81.000000000000000000
+    end
+    object TGlowEffect
+      Softness = 0.300000011920929000
+      GlowColor = xFF3BA7FF
+      Opacity = 1.000000000000000000
+      Trigger = 'IsFocused=true'
+      Enabled = False
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFFD6DDE6
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      Height = 15.000000000000000000
+      Width = 15.000000000000000000
+      Data.Path = {
+        1E000000000000008FC2F53CEC51B83D010000005C8F423EEC51B83D01000000
+        5C8F423E0000803E010000008FC2F53C0000803E010000008FC2F53CEC51B83D
+        00000000E17A943EEC51B83D01000000EC51783FEC51B83D01000000EC51783F
+        0000803E01000000E17A943E0000803E01000000E17A943EEC51B83D00000000
+        8FC2F53C3D0AD73E010000005C8F423E3D0AD73E010000005C8F423EE17A143F
+        010000008FC2F53CE17A143F010000008FC2F53C3D0AD73E00000000E17A943E
+        3D0AD73E01000000EC51783F3D0AD73E01000000EC51783FE17A143F01000000
+        E17A943EE17A143F01000000E17A943E3D0AD73E000000008FC2F53C0000403F
+        010000005C8F423E0000403F010000005C8F423EC3F5683F010000008FC2F53C
+        C3F5683F010000008FC2F53C0000403F00000000E17A943E0000403F01000000
+        EC51783F0000403F01000000EC51783FC3F5683F01000000E17A943EC3F5683F
+        01000000E17A943E0000403F}
+    end
+  end
+  object TLayout
+    StyleName = 'infotoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Position.X = 376.000000000000000000
+    Position.Y = 489.000000000000000000
+    Width = 91.000000000000000000
+    object TRectangle
+      StyleName = 'background'
+      Align = Contents
+      Fill.Kind = Gradient
+      Fill.Gradient.Points = <
+        item
+          Color = xFF2A3038
+          Offset = 0.000000000000000000
+        end
+        item
+          Color = xFF252B33
+          Offset = 0.474820137023925800
+        end
+        item
+          Color = xFF20242B
+          Offset = 1.000000000000000000
+        end>
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 2.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 2.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 2.000000000000000000
+      Position.Y = 2.000000000000000000
+      Stroke.Color = xFF46505D
+      Width = 87.000000000000000000
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF2A3038
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF2A3038
+        Trigger = 'IsMouseOver=false;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF1B1F25
+        Trigger = 'IsMouseOver=false;IsPressed=true'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF1B1F25
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=true'
+      end
+      object TRectangle
+        Align = Client
+        Fill.Kind = None
+        Height = 24.000000000000000000
+        HitTest = False
+        Margins.Left = -2.000000000000000000
+        Margins.Top = -2.000000000000000000
+        Margins.Right = -2.000000000000000000
+        Margins.Bottom = -2.000000000000000000
+        Position.X = -2.000000000000000000
+        Position.Y = -2.000000000000000000
+        Stroke.Color = xFF252B33
+        Width = 91.000000000000000000
+        object TRectangle
+          Align = Client
+          Fill.Kind = None
+          Height = 22.000000000000000000
+          HitTest = False
+          Margins.Left = 1.000000000000000000
+          Margins.Top = 1.000000000000000000
+          Margins.Right = 1.000000000000000000
+          Margins.Bottom = 1.000000000000000000
+          Position.X = 1.000000000000000000
+          Position.Y = 1.000000000000000000
+          Stroke.Color = xFF2D333B
+          Width = 89.000000000000000000
+        end
+      end
+    end
+    object TText
+      StyleName = 'text'
+      Align = Client
+      Color = claWhite
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 2.000000000000000000
+      Text = 'button'
+      Width = 81.000000000000000000
+    end
+    object TGlowEffect
+      Softness = 0.300000011920929000
+      GlowColor = xFF3BA7FF
+      Opacity = 1.000000000000000000
+      Trigger = 'IsFocused=true'
+      Enabled = False
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFFD6DDE6
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      Height = 15.000000000000000000
+      Width = 15.000000000000000000
+      Data.Path = {
+        4D0000000000000048E17A3F0000003F01000000D684783FFA0DD03E01000000
+        BD86713FA4F3A13E01000000C62B663F16ED6E3E01000000A8E3563F6071243E
+        01000000BA44443FD2A1CE3D010000002E062F3F3594673D0100000003F9173F
+        3665EF3C010000000000003F0AD7A33C01000000FA0DD03E3665EF3C01000000
+        A4F3A13E3594673D0100000016ED6E3ED2A1CE3D010000006071243E6071243E
+        01000000D2A1CE3D16ED6E3E010000003594673DA4F3A13E010000003665EF3C
+        FA0DD03E010000000AD7A33C0000003F010000003665EF3C03F9173F01000000
+        3594673D2E062F3F01000000D2A1CE3DBA44443F010000006071243EA8E3563F
+        0100000016ED6E3EC62B663F01000000A4F3A13EBD86713F01000000FA0DD03E
+        D684783F010000000000003F48E17A3F0100000003F9173FD684783F01000000
+        2E062F3FBD86713F01000000BA44443FC62B663F01000000A8E3563FA8E3563F
+        01000000C62B663FBA44443F01000000BD86713F2E062F3F01000000D684783F
+        03F9173F0100000048E17A3F0000003F01000000F6285C3F0000003F01000000
+        A1635A3FC2FA113F010000000E25553FA344233F01000000D4A04C3F8C33333F
+        01000000BE2A413FBE2A413F010000008C33333FD4A04C3F01000000A344233F
+        0E25553F01000000C2FA113FA1635A3F010000000000003FF6285C3F01000000
+        7C0ADC3EA1635A3F01000000BB76B93E0E25553F01000000E898993ED4A04C3F
+        0100000008557B3EBE2A413F01000000AF7C4D3E8C33333F01000000CA6B2B3E
+        A344233F010000007D71163EC2FA113F01000000295C0F3E0000003F01000000
+        7D71163E7C0ADC3E01000000CA6B2B3EBB76B93E01000000AF7C4D3EE898993E
+        0100000008557B3E08557B3E01000000E898993EAF7C4D3E01000000BB76B93E
+        CA6B2B3E010000007C0ADC3E7D71163E010000000000003F295C0F3E01000000
+        C2FA113F7D71163E01000000A344233FCA6B2B3E010000008C33333FAF7C4D3E
+        01000000BE2A413F08557B3E01000000D4A04C3FE898993E010000000E25553F
+        BB76B93E01000000A1635A3F7C0ADC3E01000000F6285C3F0000003F01000000
+        48E17A3F0000003F000000003D0AD73EEC51383E01000000E17A143FEC51383E
+        01000000E17A143F0AD7A33E010000003D0AD73E0AD7A33E010000003D0AD73E
+        EC51383E000000003D0AD73ECDCCCC3E01000000E17A143FCDCCCC3E01000000
+        E17A143F85EB513F010000003D0AD73E85EB513F010000003D0AD73ECDCCCC3E}
+    end
+  end
+  object TLayout
+    StyleName = 'organizetoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Position.X = 376.000000000000000000
+    Position.Y = 489.000000000000000000
+    Width = 91.000000000000000000
+    object TRectangle
+      StyleName = 'background'
+      Align = Contents
+      Fill.Kind = Gradient
+      Fill.Gradient.Points = <
+        item
+          Color = xFF2A3038
+          Offset = 0.000000000000000000
+        end
+        item
+          Color = xFF252B33
+          Offset = 0.474820137023925800
+        end
+        item
+          Color = xFF20242B
+          Offset = 1.000000000000000000
+        end>
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 2.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 2.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 2.000000000000000000
+      Position.Y = 2.000000000000000000
+      Stroke.Color = xFF46505D
+      Width = 87.000000000000000000
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF2A3038
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF2A3038
+        Trigger = 'IsMouseOver=false;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF1B1F25
+        Trigger = 'IsMouseOver=false;IsPressed=true'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF1B1F25
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=true'
+      end
+      object TRectangle
+        Align = Client
+        Fill.Kind = None
+        Height = 24.000000000000000000
+        HitTest = False
+        Margins.Left = -2.000000000000000000
+        Margins.Top = -2.000000000000000000
+        Margins.Right = -2.000000000000000000
+        Margins.Bottom = -2.000000000000000000
+        Position.X = -2.000000000000000000
+        Position.Y = -2.000000000000000000
+        Stroke.Color = xFF252B33
+        Width = 91.000000000000000000
+        object TRectangle
+          Align = Client
+          Fill.Kind = None
+          Height = 22.000000000000000000
+          HitTest = False
+          Margins.Left = 1.000000000000000000
+          Margins.Top = 1.000000000000000000
+          Margins.Right = 1.000000000000000000
+          Margins.Bottom = 1.000000000000000000
+          Position.X = 1.000000000000000000
+          Position.Y = 1.000000000000000000
+          Stroke.Color = xFF2D333B
+          Width = 89.000000000000000000
+        end
+      end
+    end
+    object TText
+      StyleName = 'text'
+      Align = Client
+      Color = claWhite
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 2.000000000000000000
+      Text = 'button'
+      Width = 81.000000000000000000
+    end
+    object TGlowEffect
+      Softness = 0.300000011920929000
+      GlowColor = xFF3BA7FF
+      Opacity = 1.000000000000000000
+      Trigger = 'IsFocused=true'
+      Enabled = False
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFFD6DDE6
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      Height = 15.000000000000000000
+      Width = 15.000000000000000000
+      Data.Path = {
+        07000000000000000AD7233D0AD7233E01000000CDCCCC3E0AD7233E01000000
+        48E1FA3E9A99993E010000008FC2753F9A99993E010000008FC2753FF6285C3F
+        010000000AD7233DF6285C3F010000000AD7233D0AD7233E}
+    end
+  end
+  object TLayout
+    StyleName = 'pausetoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Position.X = 376.000000000000000000
+    Position.Y = 489.000000000000000000
+    Width = 91.000000000000000000
+    object TRectangle
+      StyleName = 'background'
+      Align = Contents
+      Fill.Kind = Gradient
+      Fill.Gradient.Points = <
+        item
+          Color = xFF2A3038
+          Offset = 0.000000000000000000
+        end
+        item
+          Color = xFF252B33
+          Offset = 0.474820137023925800
+        end
+        item
+          Color = xFF20242B
+          Offset = 1.000000000000000000
+        end>
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 2.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 2.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 2.000000000000000000
+      Position.Y = 2.000000000000000000
+      Stroke.Color = xFF46505D
+      Width = 87.000000000000000000
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF2A3038
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF2A3038
+        Trigger = 'IsMouseOver=false;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF1B1F25
+        Trigger = 'IsMouseOver=false;IsPressed=true'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF1B1F25
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=true'
+      end
+      object TRectangle
+        Align = Client
+        Fill.Kind = None
+        Height = 24.000000000000000000
+        HitTest = False
+        Margins.Left = -2.000000000000000000
+        Margins.Top = -2.000000000000000000
+        Margins.Right = -2.000000000000000000
+        Margins.Bottom = -2.000000000000000000
+        Position.X = -2.000000000000000000
+        Position.Y = -2.000000000000000000
+        Stroke.Color = xFF252B33
+        Width = 91.000000000000000000
+        object TRectangle
+          Align = Client
+          Fill.Kind = None
+          Height = 22.000000000000000000
+          HitTest = False
+          Margins.Left = 1.000000000000000000
+          Margins.Top = 1.000000000000000000
+          Margins.Right = 1.000000000000000000
+          Margins.Bottom = 1.000000000000000000
+          Position.X = 1.000000000000000000
+          Position.Y = 1.000000000000000000
+          Stroke.Color = xFF2D333B
+          Width = 89.000000000000000000
+        end
+      end
+    end
+    object TText
+      StyleName = 'text'
+      Align = Client
+      Color = claWhite
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 2.000000000000000000
+      Text = 'button'
+      Width = 81.000000000000000000
+    end
+    object TGlowEffect
+      Softness = 0.300000011920929000
+      GlowColor = xFF3BA7FF
+      Opacity = 1.000000000000000000
+      Trigger = 'IsFocused=true'
+      Enabled = False
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFFD6DDE6
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      Height = 15.000000000000000000
+      Width = 15.000000000000000000
+      Data.Path = {
+        0A00000000000000CDCC4C3E0AD7A33D010000003D0AD73E0AD7A33D01000000
+        3D0AD73E1F856B3F01000000CDCC4C3E1F856B3F01000000CDCC4C3E0AD7A33D
+        00000000E17A143F0AD7A33D01000000CDCC4C3F0AD7A33D01000000CDCC4C3F
+        1F856B3F01000000E17A143F1F856B3F01000000E17A143F0AD7A33D}
+    end
+  end
+  object TLayout
+    StyleName = 'playtoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Position.X = 376.000000000000000000
+    Position.Y = 489.000000000000000000
+    Width = 91.000000000000000000
+    object TRectangle
+      StyleName = 'background'
+      Align = Contents
+      Fill.Kind = Gradient
+      Fill.Gradient.Points = <
+        item
+          Color = xFF2A3038
+          Offset = 0.000000000000000000
+        end
+        item
+          Color = xFF252B33
+          Offset = 0.474820137023925800
+        end
+        item
+          Color = xFF20242B
+          Offset = 1.000000000000000000
+        end>
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 2.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 2.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 2.000000000000000000
+      Position.Y = 2.000000000000000000
+      Stroke.Color = xFF46505D
+      Width = 87.000000000000000000
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF2A3038
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF2A3038
+        Trigger = 'IsMouseOver=false;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF1B1F25
+        Trigger = 'IsMouseOver=false;IsPressed=true'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF1B1F25
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=true'
+      end
+      object TRectangle
+        Align = Client
+        Fill.Kind = None
+        Height = 24.000000000000000000
+        HitTest = False
+        Margins.Left = -2.000000000000000000
+        Margins.Top = -2.000000000000000000
+        Margins.Right = -2.000000000000000000
+        Margins.Bottom = -2.000000000000000000
+        Position.X = -2.000000000000000000
+        Position.Y = -2.000000000000000000
+        Stroke.Color = xFF252B33
+        Width = 91.000000000000000000
+        object TRectangle
+          Align = Client
+          Fill.Kind = None
+          Height = 22.000000000000000000
+          HitTest = False
+          Margins.Left = 1.000000000000000000
+          Margins.Top = 1.000000000000000000
+          Margins.Right = 1.000000000000000000
+          Margins.Bottom = 1.000000000000000000
+          Position.X = 1.000000000000000000
+          Position.Y = 1.000000000000000000
+          Stroke.Color = xFF2D333B
+          Width = 89.000000000000000000
+        end
+      end
+    end
+    object TText
+      StyleName = 'text'
+      Align = Client
+      Color = claWhite
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 2.000000000000000000
+      Text = 'button'
+      Width = 81.000000000000000000
+    end
+    object TGlowEffect
+      Softness = 0.300000011920929000
+      GlowColor = xFF3BA7FF
+      Opacity = 1.000000000000000000
+      Trigger = 'IsFocused=true'
+      Enabled = False
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFFD6DDE6
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      Height = 15.000000000000000000
+      Width = 15.000000000000000000
+      Data.Path = {
+        0400000000000000AE47613E8FC2753D010000001F856B3F0000003F01000000
+        AE47613ED7A3703F01000000AE47613E8FC2753D}
+    end
+  end
+  object TLayout
+    StyleName = 'refreshtoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Position.X = 376.000000000000000000
+    Position.Y = 489.000000000000000000
+    Width = 91.000000000000000000
+    object TRectangle
+      StyleName = 'background'
+      Align = Contents
+      Fill.Kind = Gradient
+      Fill.Gradient.Points = <
+        item
+          Color = xFF2A3038
+          Offset = 0.000000000000000000
+        end
+        item
+          Color = xFF252B33
+          Offset = 0.474820137023925800
+        end
+        item
+          Color = xFF20242B
+          Offset = 1.000000000000000000
+        end>
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 2.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 2.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 2.000000000000000000
+      Position.Y = 2.000000000000000000
+      Stroke.Color = xFF46505D
+      Width = 87.000000000000000000
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF2A3038
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF2A3038
+        Trigger = 'IsMouseOver=false;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF1B1F25
+        Trigger = 'IsMouseOver=false;IsPressed=true'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF1B1F25
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=true'
+      end
+      object TRectangle
+        Align = Client
+        Fill.Kind = None
+        Height = 24.000000000000000000
+        HitTest = False
+        Margins.Left = -2.000000000000000000
+        Margins.Top = -2.000000000000000000
+        Margins.Right = -2.000000000000000000
+        Margins.Bottom = -2.000000000000000000
+        Position.X = -2.000000000000000000
+        Position.Y = -2.000000000000000000
+        Stroke.Color = xFF252B33
+        Width = 91.000000000000000000
+        object TRectangle
+          Align = Client
+          Fill.Kind = None
+          Height = 22.000000000000000000
+          HitTest = False
+          Margins.Left = 1.000000000000000000
+          Margins.Top = 1.000000000000000000
+          Margins.Right = 1.000000000000000000
+          Margins.Bottom = 1.000000000000000000
+          Position.X = 1.000000000000000000
+          Position.Y = 1.000000000000000000
+          Stroke.Color = xFF2D333B
+          Width = 89.000000000000000000
+        end
+      end
+    end
+    object TText
+      StyleName = 'text'
+      Align = Client
+      Color = claWhite
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 2.000000000000000000
+      Text = 'button'
+      Width = 81.000000000000000000
+    end
+    object TGlowEffect
+      Softness = 0.300000011920929000
+      GlowColor = xFF3BA7FF
+      Opacity = 1.000000000000000000
+      Trigger = 'IsFocused=true'
+      Enabled = False
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFFD6DDE6
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      Height = 15.000000000000000000
+      Width = 15.000000000000000000
+      Data.Path = {
+        4700000000000000D0FDD73E67CD683D010000004CBAB73E32EA943D01000000
+        9EF8983E74ADC73D01000000F1B9783EBCD0053E010000002C00453EBBAD2F3E
+        0100000011D8173E3A8E603E010000006865E43DA4B68B3E010000001FB2A93D
+        FB92A93E01000000A7CF803DB73CC93E010000008D30553DCF0AEA3E01000000
+        2D054F3D11A7053F010000001F3E6F3D8C2A163F01000000AF979A3DB137263F
+        01000000C1B1CF3DCF78353F01000000E5E80A3E759C433F01000000B4C0353E
+        2757503F01000000947B673EF1645B3F0100000005888F3ECF8A643F01000000
+        ADAAAD3EEB976B3F01000000E284CD3EA066703F01000000976CEE3E44DD723F
+        0100000010D9073FB0EE723F01000000EF51183F879A703F01000000F848283F
+        37ED6B3F01000000F068373FB9FF643F010000001761453F09F75B3F01000000
+        DBE6513F6103513F0100000060B75C3F395F443F01000000EB98653F0E4E363F
+        01000000115C6C3FF91A273F01000000B9DC703F1F17173F01000000DA02733F
+        FF97063F01000000FAC2723F58EBEB3E01000000FC814C3FE69CF23E01000000
+        91AC4C3F5565043F01000000D13D4B3FBF640F3F01000000613D483FFB111A3F
+        0100000047BB433F0934243F0100000095CF3D3FD1942D3F01000000E799363F
+        4102363F01000000BA402E3F5B4F3D3F01000000A0F0243F2655433F01000000
+        50DB1A3F7AF3473F010000009F36103FAF114B3F01000000603B053F209F4C3F
+        010000006448F43E83934C3F010000009758DE3E16EF4A3F01000000741CC93E
+        9DBA473F010000005905B53E3507433F01000000877EA23EF6ED3C3F01000000
+        E7EA913E6F8F353F01000000F7A2833EF9122D3F01000000EBE56F3EDFA5233F
+        0100000090325E3E767A193F010000005B8A523E08C70E3F01000000872B4D3E
+        B6C4033F01000000C2324E3E8A5CF13E010000008D9A553ECF7DDB3E01000000
+        603B633EFD61C63E0100000078CC763EC379B23E01000000B0F2873E692FA03E
+        010000000F00973E94E48F3E01000000FB3DA83E3FF0813E010000006950BB3E
+        D1396D3E0100000088D1CF3E114E5C3E01000000E053E53E9177513E01000000
+        D0FDD73E67CD683D000000007F1A3B3F6467513E01000000FE40263F734EF93E
+        01000000FC818C3FCB39E53E010000007F1A3B3F6467513E}
+    end
+  end
+  object TLayout
+    StyleName = 'searchtoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Position.X = 376.000000000000000000
+    Position.Y = 489.000000000000000000
+    Width = 91.000000000000000000
+    object TRectangle
+      StyleName = 'background'
+      Align = Contents
+      Fill.Kind = Gradient
+      Fill.Gradient.Points = <
+        item
+          Color = xFF2A3038
+          Offset = 0.000000000000000000
+        end
+        item
+          Color = xFF252B33
+          Offset = 0.474820137023925800
+        end
+        item
+          Color = xFF20242B
+          Offset = 1.000000000000000000
+        end>
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 2.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 2.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 2.000000000000000000
+      Position.Y = 2.000000000000000000
+      Stroke.Color = xFF46505D
+      Width = 87.000000000000000000
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF2A3038
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF2A3038
+        Trigger = 'IsMouseOver=false;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF1B1F25
+        Trigger = 'IsMouseOver=false;IsPressed=true'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF1B1F25
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=true'
+      end
+      object TRectangle
+        Align = Client
+        Fill.Kind = None
+        Height = 24.000000000000000000
+        HitTest = False
+        Margins.Left = -2.000000000000000000
+        Margins.Top = -2.000000000000000000
+        Margins.Right = -2.000000000000000000
+        Margins.Bottom = -2.000000000000000000
+        Position.X = -2.000000000000000000
+        Position.Y = -2.000000000000000000
+        Stroke.Color = xFF252B33
+        Width = 91.000000000000000000
+        object TRectangle
+          Align = Client
+          Fill.Kind = None
+          Height = 22.000000000000000000
+          HitTest = False
+          Margins.Left = 1.000000000000000000
+          Margins.Top = 1.000000000000000000
+          Margins.Right = 1.000000000000000000
+          Margins.Bottom = 1.000000000000000000
+          Position.X = 1.000000000000000000
+          Position.Y = 1.000000000000000000
+          Stroke.Color = xFF2D333B
+          Width = 89.000000000000000000
+        end
+      end
+    end
+    object TText
+      StyleName = 'text'
+      Align = Client
+      Color = claWhite
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 2.000000000000000000
+      Text = 'button'
+      Width = 81.000000000000000000
+    end
+    object TGlowEffect
+      Softness = 0.300000011920929000
+      GlowColor = xFF3BA7FF
+      Opacity = 1.000000000000000000
+      Trigger = 'IsFocused=true'
+      Enabled = False
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFFD6DDE6
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      Height = 15.000000000000000000
+      Width = 15.000000000000000000
+      Data.Path = {
+        480000000000000014AE473FCDCCCC3E01000000BFE8453F49D7A83E01000000
+        2CAA403F8843863E01000000F325383F6ACB4C3E01000000DDAF2C3FA2EE143E
+        01000000ABB81E3F912CCE3D01000000C1C90E3FC70A8A3D01000000C2FFFA3E
+        5B2C403D010000003D0AD73E0AD7233D01000000B914B33E5B2C403D01000000
+        F880903EC70A8A3D010000004B46613E912CCE3D010000008369293EA2EE143E
+        010000005322F73D6ACB4C3E010000008A00B33D8843863E01000000F00B893D
+        49D7A83E010000008FC2753DCDCCCC3E01000000F00B893D51C2F03E01000000
+        8A00B33D09AB093F010000005322F73DF299193F010000008369293E2491273F
+        010000004B46613E3B07333F01000000F880903E748B3B3F01000000B914B33E
+        07CA403F010000003D0AD73E5C8F423F01000000C2FFFA3E07CA403F01000000
+        C1C90E3F748B3B3F01000000ABB81E3F3B07333F01000000DDAF2C3F2491273F
+        01000000F325383FF299193F010000002CAA403F09AB093F01000000BFE8453F
+        51C2F03E0100000014AE473FCDCCCC3E010000006666263FCDCCCC3E01000000
+        C544253F1AC6E33E0100000004EB213F64DDF93E01000000187A1C3FAA1C073F
+        010000008A27153FD208103F01000000633B0C3F605B173F010000006A0D023F
+        4BCC1C3F010000008B03EE3E0D26203F010000003D0AD73EAE47213F01000000
+        F010C03E0D26203F01000000A7F9A93E4BCC1C3F01000000B59D953E605B173F
+        0100000067C5833ED208103F0100000095406A3EAA1C073F01000000E77C543E
+        64DDF93E01000000E015473E1AC6E33E010000005C8F423ECDCCCC3E01000000
+        E015473E7FD3B53E01000000E77C543E36BC9F3E0100000095406A3E45608B3E
+        0100000067C5833EED0F733E01000000B59D953EB4C5553E01000000A7F9A93E
+        0502403E01000000F010C03EFF9A323E010000003D0AD73E7B142E3E01000000
+        8B03EE3EFF9A323E010000006A0D023F0502403E01000000633B0C3FB4C5553E
+        010000008A27153FED0F733E01000000187A1C3F45608B3E0100000004EB213F
+        36BC9F3E01000000C544253F7FD3B53E010000006666263FCDCCCC3E01000000
+        14AE473FCDCCCC3E000000009A99193FC3F5283F010000003333333F295C0F3F
+        0100000048E17A3F3D0A573F01000000AE47613FD7A3703F010000009A99193F
+        C3F5283F}
+    end
+  end
+  object TLayout
+    StyleName = 'stoptoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Position.X = 376.000000000000000000
+    Position.Y = 489.000000000000000000
+    Width = 91.000000000000000000
+    object TRectangle
+      StyleName = 'background'
+      Align = Contents
+      Fill.Kind = Gradient
+      Fill.Gradient.Points = <
+        item
+          Color = xFF2A3038
+          Offset = 0.000000000000000000
+        end
+        item
+          Color = xFF252B33
+          Offset = 0.474820137023925800
+        end
+        item
+          Color = xFF20242B
+          Offset = 1.000000000000000000
+        end>
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 2.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 2.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 2.000000000000000000
+      Position.Y = 2.000000000000000000
+      Stroke.Color = xFF46505D
+      Width = 87.000000000000000000
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF2A3038
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF2A3038
+        Trigger = 'IsMouseOver=false;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF1B1F25
+        Trigger = 'IsMouseOver=false;IsPressed=true'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF1B1F25
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=true'
+      end
+      object TRectangle
+        Align = Client
+        Fill.Kind = None
+        Height = 24.000000000000000000
+        HitTest = False
+        Margins.Left = -2.000000000000000000
+        Margins.Top = -2.000000000000000000
+        Margins.Right = -2.000000000000000000
+        Margins.Bottom = -2.000000000000000000
+        Position.X = -2.000000000000000000
+        Position.Y = -2.000000000000000000
+        Stroke.Color = xFF252B33
+        Width = 91.000000000000000000
+        object TRectangle
+          Align = Client
+          Fill.Kind = None
+          Height = 22.000000000000000000
+          HitTest = False
+          Margins.Left = 1.000000000000000000
+          Margins.Top = 1.000000000000000000
+          Margins.Right = 1.000000000000000000
+          Margins.Bottom = 1.000000000000000000
+          Position.X = 1.000000000000000000
+          Position.Y = 1.000000000000000000
+          Stroke.Color = xFF2D333B
+          Width = 89.000000000000000000
+        end
+      end
+    end
+    object TText
+      StyleName = 'text'
+      Align = Client
+      Color = claWhite
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 2.000000000000000000
+      Text = 'button'
+      Width = 81.000000000000000000
+    end
+    object TGlowEffect
+      Softness = 0.300000011920929000
+      GlowColor = xFF3BA7FF
+      Opacity = 1.000000000000000000
+      Trigger = 'IsFocused=true'
+      Enabled = False
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFFD6DDE6
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      Height = 15.000000000000000000
+      Width = 15.000000000000000000
+      Data.Path = {
+        0500000000000000EC51383EEC51383E0100000085EB513FEC51383E01000000
+        85EB513F85EB513F01000000EC51383E85EB513F01000000EC51383EEC51383E}
+    end
+  end
+  object TLayout
+    StyleName = 'trashtoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Position.X = 376.000000000000000000
+    Position.Y = 489.000000000000000000
+    Width = 91.000000000000000000
+    object TRectangle
+      StyleName = 'background'
+      Align = Contents
+      Fill.Kind = Gradient
+      Fill.Gradient.Points = <
+        item
+          Color = xFF2A3038
+          Offset = 0.000000000000000000
+        end
+        item
+          Color = xFF252B33
+          Offset = 0.474820137023925800
+        end
+        item
+          Color = xFF20242B
+          Offset = 1.000000000000000000
+        end>
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 2.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 2.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 2.000000000000000000
+      Position.Y = 2.000000000000000000
+      Stroke.Color = xFF46505D
+      Width = 87.000000000000000000
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF2A3038
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF2A3038
+        Trigger = 'IsMouseOver=false;IsPressed=false'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF20242B
+        StopValue = xFF1B1F25
+        Trigger = 'IsMouseOver=false;IsPressed=true'
+      end
+      object TColorAnimation
+        Duration = 0.200000002980232200
+        PropertyName = 'Fill.Color'
+        StartValue = xFF1B1F25
+        StopValue = xFF20242B
+        Trigger = 'IsMouseOver=true;IsPressed=true'
+      end
+      object TRectangle
+        Align = Client
+        Fill.Kind = None
+        Height = 24.000000000000000000
+        HitTest = False
+        Margins.Left = -2.000000000000000000
+        Margins.Top = -2.000000000000000000
+        Margins.Right = -2.000000000000000000
+        Margins.Bottom = -2.000000000000000000
+        Position.X = -2.000000000000000000
+        Position.Y = -2.000000000000000000
+        Stroke.Color = xFF252B33
+        Width = 91.000000000000000000
+        object TRectangle
+          Align = Client
+          Fill.Kind = None
+          Height = 22.000000000000000000
+          HitTest = False
+          Margins.Left = 1.000000000000000000
+          Margins.Top = 1.000000000000000000
+          Margins.Right = 1.000000000000000000
+          Margins.Bottom = 1.000000000000000000
+          Position.X = 1.000000000000000000
+          Position.Y = 1.000000000000000000
+          Stroke.Color = xFF2D333B
+          Width = 89.000000000000000000
+        end
+      end
+    end
+    object TText
+      StyleName = 'text'
+      Align = Client
+      Color = claWhite
+      Locked = True
+      Height = 20.000000000000000000
+      HitTest = False
+      Margins.Left = 5.000000000000000000
+      Margins.Top = 2.000000000000000000
+      Margins.Right = 5.000000000000000000
+      Margins.Bottom = 2.000000000000000000
+      Position.X = 5.000000000000000000
+      Position.Y = 2.000000000000000000
+      Text = 'button'
+      Width = 81.000000000000000000
+    end
+    object TGlowEffect
+      Softness = 0.300000011920929000
+      GlowColor = xFF3BA7FF
+      Opacity = 1.000000000000000000
+      Trigger = 'IsFocused=true'
+      Enabled = False
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFFD6DDE6
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      Height = 15.000000000000000000
+      Width = 15.000000000000000000
+      Data.Path = {
+        0F000000000000000AD7A33D7B142E3E010000001F856B3F7B142E3E01000000
+        1F856B3FE17A943E010000000AD7A33DE17A943E010000000AD7A33D7B142E3E
+        00000000A470BD3E0AD7233D01000000AE47213F0AD7233D01000000AE47213F
+        7B142E3E01000000A470BD3E7B142E3E01000000A470BD3E0AD7233D00000000
+        7B142E3EC3F5A83E01000000E17A543FC3F5A83E01000000A4703D3F8FC2753F
+        01000000B81E853E8FC2753F010000007B142E3EC3F5A83E}
+    end
+  end
+  { --- end generated icon button styles --- }
   object TLayout
     StyleName = 'colorbuttonstyle'
     DesignVisible = False
