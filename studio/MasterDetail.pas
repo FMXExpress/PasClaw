@@ -614,6 +614,7 @@ type
     procedure AddPanelChrome(Control: TControl; Alt: Boolean = False);
     function AddPaneSplitter(AParent: TFmxObject; AAlign: TAlignLayout): TSplitter;
     function AddSectionHeader(AParent: TFmxObject; const Text: string): TLabel;
+    procedure AddListEmptyState(List: TListBox; const Msg: string);
     function AddFormRow(AParent: TFmxObject; const LabelText: string;
       Control: TControl; ControlWidth: Single = 0): TLayout;
     function BuildDetailPane(AParent: TFmxObject; out TitleLabel,
@@ -1832,6 +1833,32 @@ begin
     Result.Width := 8
   else
     Result.Height := 8;
+end;
+
+procedure TMasterDetailForm.AddListEmptyState(List: TListBox;
+  const Msg: string);
+{ The sessions-list treatment for every list: an empty list must say what
+  belongs in it and how to get one, because a silent blank column reads as
+  a loading failure. Call after a render pass that produced no rows. }
+var
+  Item: TListBoxItem;
+  Cap: TLabel;
+begin
+  if (List = nil) or (List.Count > 0) then
+    Exit;
+  Item := TListBoxItem.Create(List);
+  Item.Parent := List;
+  Item.Text := '';
+  Item.Height := ROW_CARD;
+  Item.HitTest := False;
+  Cap := TLabel.Create(Item);
+  Cap.Parent := Item;
+  Cap.Align := TAlignLayout.Client;
+  Cap.HitTest := False;
+  Cap.WordWrap := True;
+  Cap.Text := Msg;
+  SetControlMargins(Cap, 10, GAP_S, 10, GAP_S);
+  StyleLabel(Cap, UI_MUTED, TXT_BODY, False);
 end;
 
 function TMasterDetailForm.AddFormRow(AParent: TFmxObject;
@@ -5286,7 +5313,10 @@ begin
   AddPanelChrome(LeftPane, True);
   AddSectionHeader(LeftPane, 'Summary');
 
+  { a 3-up GRID of metric cards, not a single column -- TListBox does this
+    natively via Columns, no layout surgery needed }
   FStatsSummaryList := TListBox.Create(Self);
+  FStatsSummaryList.Columns := 3;
   FStatsSummaryList.Parent := LeftPane;
   FStatsSummaryList.Align := TAlignLayout.Client;
   FStatsSummaryList.ShowCheckboxes := False;
@@ -5615,6 +5645,7 @@ begin
   Btn.OnClick := RelaySnippetCopyClick;
 
   FRelayStatsList := TListBox.Create(Self);
+  FRelayStatsList.Columns := 3;
   FRelayStatsList.Parent := LeftPane;
   FRelayStatsList.Align := TAlignLayout.Client;
 
@@ -10033,6 +10064,8 @@ begin
             Memo.Lines.Text := 'GET /v1/memory/facts' + sLineBreak +
               'HTTP ' + Status.ToString + sLineBreak + sLineBreak +
               FormatMemoryText(ResponseText);
+          AddListEmptyState(FMemoryFactsList,
+            'No facts yet. The agent distils them from conversations, or add one below.');
           SetStatus('memory facts loaded');
         end);
     end);
@@ -15347,6 +15380,8 @@ begin
             Memo.Lines.Text := 'GET /v1/cron' + sLineBreak + 'HTTP ' +
               Status.ToString + sLineBreak + sLineBreak +
               FormatCronText(ResponseText);
+          AddListEmptyState(FCronList,
+            'No cron jobs yet. Fill in the editor and press Save to schedule one.');
           SetStatus('cron loaded');
         end);
     end);
@@ -16175,6 +16210,8 @@ begin
             Memo.Lines.Text := 'GET /v1/checkpoints' + sLineBreak +
               'HTTP ' + Status.ToString + sLineBreak + sLineBreak +
               FormatCheckpointText(ResponseText);
+          AddListEmptyState(FCheckpointList,
+            'No checkpoints yet. They appear as the agent edits workspace files.');
           SetStatus('checkpoints loaded');
         end);
     end);
@@ -18704,6 +18741,8 @@ begin
             Memo.Lines.Text := 'Installed skills:' + sLineBreak +
               SkillsText + sLineBreak + sLineBreak +
               'Pending approval:' + sLineBreak + PendingText;
+          AddListEmptyState(FSkillList,
+            'No skills installed. Open the catalog below and install one.');
           SetStatus('skills loaded');
         end);
     end);
@@ -19170,6 +19209,8 @@ begin
             Memo.Lines.Text := 'GET ' + Endpoint + sLineBreak + 'HTTP ' +
               Status.ToString + sLineBreak + sLineBreak +
               FormatVaultSearchText(ResponseText);
+          AddListEmptyState(FVaultList,
+            'No vault matches. Try a broader search term.');
           SetStatus('vault search loaded');
         end);
     end);
@@ -19645,6 +19686,8 @@ begin
             Memo.Lines.Text := 'GET /v1/kb/search?q=' + Query +
               sLineBreak + 'HTTP ' + Status.ToString + sLineBreak +
               sLineBreak + FormatKbSearchText(ResponseText);
+          AddListEmptyState(FKBResultsList,
+            'No results. Index sources on this tab, then search again.');
           SetStatus('KB search complete');
         end);
     end);
