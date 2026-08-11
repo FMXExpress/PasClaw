@@ -562,6 +562,10 @@ type
     procedure RenderModeButton;
     procedure RenderParamsButton;
     procedure RenderConnectButton;
+    procedure RenderToolsButton;
+    procedure UpdateFooterVisibility;
+    procedure SetIconButton(Button: TButton; const Lookup, HintText,
+      FallbackCaption: string);
     function GatewayIdentity: string;
     procedure GatewaySettingsChange(Sender: TObject);
     procedure RenderSessionSearchBox;
@@ -610,6 +614,7 @@ type
     procedure UpdateClearAttachmentsButton;
     function FriendlyAge(const StampText: string): string;
     class function IsIconified(Button: TButton): Boolean; static;
+    procedure SetButtonWidth(Button: TButton; W: Single);
     procedure UseStyledLabelColor(LabelControl: TLabel);
     procedure StyleLabel(LabelControl: TLabel; Color: TAlphaColor;
       Size: Single; Bold: Boolean);
@@ -758,8 +763,11 @@ const
      equivalent and must not be trusted when no book is loaded.
      scripts/gen-studio-icons.py --check verifies this list against the
      generator's own CUSTOM set, so the two cannot drift. *)
-  PASCLAW_ONLY_LOOKUPS: array[0..3] of string = (
-    'exporttoolbutton', 'importtoolbutton', 'moontoolbutton', 'suntoolbutton');
+  PASCLAW_ONLY_LOOKUPS: array[0..9] of string = (
+    'collapsetoolbutton', 'expandtoolbutton', 'exporttoolbutton',
+    'importtoolbutton', 'linkedtoolbutton', 'menutoolbutton',
+    'moontoolbutton', 'sliderstoolbutton', 'suntoolbutton',
+    'unlinkedtoolbutton');
   WF_IO_W = 104;
   WF_GUTTER = 128;
   WIN_CREATE_ALWAYS = 2;
@@ -2391,8 +2399,7 @@ begin
   if FSessionToggleButton <> nil then
   begin
     FSessionToggleButton.Visible := True;
-    FSessionToggleButton.Width := 42;
-    FSessionToggleButton.Text := #$2630;
+    SetButtonWidth(FSessionToggleButton, 42);
   end;
 
   { The drawer-header buttons are not resized here: the drawer's width does
@@ -2400,14 +2407,13 @@ begin
     icon-less fallback already fits. }
   if FRefreshButton <> nil then
   begin
-    FRefreshButton.Width := IfThen(Narrow, 44, IfThen(Compact, 78, 92));
+    SetButtonWidth(FRefreshButton, IfThen(Narrow, 44, IfThen(Compact, 78, 92)));
     RenderConnectButton;   { caption follows connection state, not layout }
   end;
   if FThemeButton <> nil then
   begin
     FThemeButton.Visible := not Narrow;
-    if not IsIconified(FThemeButton) then
-      FThemeButton.Width := IfThen(Compact, 62, 70);
+    SetButtonWidth(FThemeButton, IfThen(Compact, 62, 70));
   end;
   if FStatusLabel <> nil then
     FStatusLabel.Visible := not Narrow;
@@ -2417,12 +2423,12 @@ begin
   if FTokenShowButton <> nil then
   begin
     FTokenShowButton.Visible := not Narrow;
-    FTokenShowButton.Width := IfThen(Compact, 52, 58);
+    SetButtonWidth(FTokenShowButton, IfThen(Compact, 52, 58));
   end;
   if FTokenClearButton <> nil then
   begin
     FTokenClearButton.Visible := not Narrow;
-    FTokenClearButton.Width := IfThen(Compact, 52, 58);
+    SetButtonWidth(FTokenClearButton, IfThen(Compact, 52, 58));
   end;
 
   if FNavHost <> nil then
@@ -2501,15 +2507,15 @@ begin
     FNavCombo.Visible := False;
 
   if FModeButton <> nil then
-    FModeButton.Width := IfThen(Narrow, 76, 94);
+    SetButtonWidth(FModeButton, IfThen(Narrow, 76, 94));
   if FModelCombo <> nil then
     FModelCombo.Width := IfThen(Narrow, 150, IfThen(Compact, 210, 260));
   if FParamsToggleButton <> nil then
-    FParamsToggleButton.Width := IfThen(Narrow, 64, 82);
+    SetButtonWidth(FParamsToggleButton, IfThen(Narrow, 64, 82));
   if FToolsToggleButton <> nil then
   begin
     FToolsToggleButton.Visible := ChatW >= 560;
-    FToolsToggleButton.Width := IfThen(Narrow, 72, 86);
+    SetButtonWidth(FToolsToggleButton, IfThen(Narrow, 72, 86));
   end;
   if FParamsSummaryLabel <> nil then
   begin
@@ -2525,7 +2531,7 @@ begin
       FChatParamsLayout.Height := 0;
   end;
   if FChatStatsLabel <> nil then
-    FChatStatsLabel.Height := IfThen(Narrow, 0, 22);
+    UpdateFooterVisibility;   { one owner for the footer's size }
   if FSandboxLabel <> nil then
   begin
     FSandboxLabel.Visible := (ClientHeight >= 900) and (ChatW >= 860);
@@ -2548,15 +2554,14 @@ begin
   if FTemperatureTrack <> nil then
     FTemperatureTrack.Width := IfThen(Narrow, 140, IfThen(Compact, 170, 210));
   UpdateComposerState;
-  if (FSendButton <> nil) and not IsIconified(FSendButton) then
-    FSendButton.Width := IfThen(Narrow, 78, 96);
-  if (FAttachButton <> nil) and not IsIconified(FAttachButton) then
-    FAttachButton.Width := IfThen(Narrow, 76, 86);
+  if FSendButton <> nil then
+    SetButtonWidth(FSendButton, IfThen(Narrow, 78, 96));
+  if FAttachButton <> nil then
+    SetButtonWidth(FAttachButton, IfThen(Narrow, 76, 86));
   if FClearAttachmentsButton <> nil then
   begin
     UpdateClearAttachmentsButton;
-    if not IsIconified(FClearAttachmentsButton) then
-      FClearAttachmentsButton.Width := IfThen(Compact, 64, 74);
+    SetButtonWidth(FClearAttachmentsButton, IfThen(Compact, 64, 74));
   end;
   if FMaxTokensLabel <> nil then
     FMaxTokensLabel.Visible := not ToolbarCompact;
@@ -2570,19 +2575,19 @@ begin
   if FPresetNameEdit <> nil then
     FPresetNameEdit.Visible := not Narrow;
   if FPresetSaveButton <> nil then
-    FPresetSaveButton.Width := IfThen(Narrow, 56, 62);
+    SetButtonWidth(FPresetSaveButton, IfThen(Narrow, 56, 62));
   if FParamsResetButton <> nil then
-    FParamsResetButton.Width := IfThen(Narrow, 56, 62);
+    SetButtonWidth(FParamsResetButton, IfThen(Narrow, 56, 62));
   if FPresetDeleteButton <> nil then
-    FPresetDeleteButton.Width := IfThen(Narrow, 58, 68);
+    SetButtonWidth(FPresetDeleteButton, IfThen(Narrow, 58, 68));
   if FUndoButton <> nil then
-    FUndoButton.Width := IfThen(Narrow, 58, 70);
+    SetButtonWidth(FUndoButton, IfThen(Narrow, 58, 70));
   if FRedoButton <> nil then
-    FRedoButton.Width := IfThen(Narrow, 58, 70);
+    SetButtonWidth(FRedoButton, IfThen(Narrow, 58, 70));
   if FChatCopyButton <> nil then
   begin
     FChatCopyButton.Visible := ChatW >= 760;
-    FChatCopyButton.Width := IfThen(ToolbarCompact, 58, 62);
+    SetButtonWidth(FChatCopyButton, IfThen(ToolbarCompact, 58, 62));
   end;
   if FChatTurnEdit <> nil then
     FChatTurnEdit.Width := IfThen(Narrow, 42, 52);
@@ -2943,13 +2948,13 @@ begin
   if FRelayUrlEdit <> nil then
     FRelayUrlEdit.Width := IfThen(Narrow, 170, IfThen(Compact, 230, 300));
   if FRelayShowTokenButton <> nil then
-    FRelayShowTokenButton.Width := IfThen(Narrow, 58, 68);
+    SetButtonWidth(FRelayShowTokenButton, IfThen(Narrow, 58, 68));
   if FRelayWorkerCommandEdit <> nil then
     FRelayWorkerCommandEdit.Width := IfThen(Narrow, 104, IfThen(Compact, 146, 190));
   if FRelayWorkerConnectButton <> nil then
-    FRelayWorkerConnectButton.Width := IfThen(Narrow, 72, 82);
+    SetButtonWidth(FRelayWorkerConnectButton, IfThen(Narrow, 72, 82));
   if FRelayWorkerDisconnectButton <> nil then
-    FRelayWorkerDisconnectButton.Width := IfThen(Narrow, 82, 92);
+    SetButtonWidth(FRelayWorkerDisconnectButton, IfThen(Narrow, 82, 92));
   if FRelayWorkerProfileCombo <> nil then
     FRelayWorkerProfileCombo.Width := IfThen(Narrow, 96, IfThen(Compact, 116, 136));
   if FRelayWorkerIdEdit <> nil then
@@ -3131,8 +3136,9 @@ begin
   FSessionToggleButton.Parent := FHeaderRow;
   FSessionToggleButton.Align := TAlignLayout.Left;
   FSessionToggleButton.Width := 42;
-  FSessionToggleButton.Text := #$2630;
   FSessionToggleButton.OnClick := ToggleSessionsClick;
+  SetIconButton(FSessionToggleButton, 'menutoolbutton',
+    'Show or hide the sessions drawer', #$2630);
   SetControlMargins(FSessionToggleButton, 0, 0, 8, 0);
 
   LabelControl := TLabel.Create(Self);
@@ -3613,12 +3619,9 @@ begin
   TopLine.Height := 44;
   SetControlPadding(TopLine, 10, 5, 10, 3);
 
-  Chrome := TRectangle.Create(Self);
-  Chrome.Parent := TopLine;
-  Chrome.Align := TAlignLayout.Client;
-  StyleChromeRect(Chrome, UI_PANEL, UI_BORDER, 6, False);
-  Chrome.SendToBack;
-
+  { No chrome rect behind the chat toolbar: with the buttons iconified it
+    framed mostly empty space, and an outlined box holding nothing reads as
+    a control that failed to load. The row needs no ground of its own. }
   FParamsToggleButton := TButton.Create(Self);
   FParamsToggleButton.Parent := TopLine;
   { far right, captioned like the drop-down it actually is }
@@ -3632,8 +3635,8 @@ begin
   FToolsToggleButton.Parent := TopLine;
   FToolsToggleButton.Align := TAlignLayout.Left;
   FToolsToggleButton.Width := 86;
-  FToolsToggleButton.Text := 'Tools +';
   FToolsToggleButton.OnClick := ChatToolsToggleClick;
+  RenderToolsButton;
   SetControlMargins(FToolsToggleButton, 0, 0, 8, 0);
 
   FParamsSummaryLabel := TLabel.Create(Self);
@@ -3805,12 +3808,12 @@ begin
   FSystemMemo.OnChange := ChatParamsChanged;
   LoadPromptPresets;
 
-  { Bottom, not Top: turn counts are a footnote about the transcript, and
-    directly above it they were the first thing read on entering the tab.
-    Created before the composer, so it takes the bottom edge and the
-    composer stacks above it. Centred to sit under the reading column. }
+  { A window-level footer, not a tab child: 'below the composer' still left
+    it inside the chat tab's padding, a little adrift. On the form's bottom
+    edge it is unambiguously the last line on screen. It belongs to the
+    chat, so UpdateFooterVisibility hides it on every other tab. }
   FChatStatsLabel := TLabel.Create(Self);
-  FChatStatsLabel.Parent := Tab;
+  FChatStatsLabel.Parent := Self;
   FChatStatsLabel.Align := TAlignLayout.Bottom;
   FChatStatsLabel.Height := 20;
   FChatStatsLabel.Text := '0 turns';
@@ -4164,6 +4167,7 @@ end;
 procedure TMasterDetailForm.TabControlChange(Sender: TObject);
 begin
   UpdateNavButtons;
+  UpdateFooterVisibility;
   ActivateCurrentTab(False);
 end;
 
@@ -12797,6 +12801,38 @@ begin
     SetStatus('model: ' + FSavedModel);
 end;
 
+procedure TMasterDetailForm.SetIconButton(Button: TButton;
+  const Lookup, HintText, FallbackCaption: string);
+{ For buttons whose GLYPH changes with state.
+
+  ApplyButtonIcon cannot do these: it maps caption -> lookup and then exits
+  early once the caption is blank, so a button that has already been
+  iconified can never be re-mapped when its state flips. Their Render*
+  procedures own them instead, and mark them 'noicon' so ApplyButtonIcon
+  keeps its hands off.
+
+  Same safety rule as everywhere else: only surrender the caption once the
+  glyph is known to exist, so a style without it degrades to readable text. }
+begin
+  if Button = nil then
+    Exit;
+  Button.TagString := 'noicon';
+  Button.Hint := HintText;
+  Button.ShowHint := True;
+  if FIconButtons and StyleLookupExists(Lookup) then
+  begin
+    Button.StyleLookup := Lookup;
+    Button.Text := '';
+    if Button.Width > ICON_BTN_W then
+      Button.Width := ICON_BTN_W;
+  end
+  else
+  begin
+    Button.StyleLookup := '';
+    Button.Text := FallbackCaption;
+  end;
+end;
+
 function TMasterDetailForm.GatewayIdentity: string;
 { What "connected" is connected TO. Compared against the identity that last
   answered, so changing either field invalidates the state by itself. }
@@ -12821,14 +12857,12 @@ begin
   if FRefreshButton = nil then
     Exit;
   Online := (FOnlineIdentity <> '') and (FOnlineIdentity = GatewayIdentity);
-  if ClientWidth < UI_NARROW_W then
-    FRefreshButton.Text := IfThen(Online, 'Online', 'Go')
+  if Online then
+    SetIconButton(FRefreshButton, 'linkedtoolbutton',
+      'Connected to the gateway - click to reload sessions', 'Connected')
   else
-    FRefreshButton.Text := IfThen(Online, 'Connected', 'Connect');
-  FRefreshButton.Hint := IfThen(Online,
-    'Connected to the gateway - click to reload sessions',
-    'Connect to the gateway');
-  FRefreshButton.ShowHint := True;
+    SetIconButton(FRefreshButton, 'unlinkedtoolbutton',
+      'Connect to the gateway', 'Connect');
 end;
 
 procedure TMasterDetailForm.RenderSessionSearchBox;
@@ -12867,6 +12901,28 @@ begin
   end;
 end;
 
+procedure TMasterDetailForm.UpdateFooterVisibility;
+{ The turn counter footer describes the transcript, so it only belongs on
+  the tab that shows one. }
+begin
+  if FChatStatsLabel = nil then
+    Exit;
+  FChatStatsLabel.Visible := ActiveTabIs('Chat');
+  FChatStatsLabel.Height := IfThen(FChatStatsLabel.Visible, 20, 0);
+end;
+
+procedure TMasterDetailForm.RenderToolsButton;
+{ Arrows out = expand, arrows in = collapse: the glyph shows what the click
+  DOES, which is the only thing a caption-less control can say. }
+begin
+  if FChatToolsExpanded then
+    SetIconButton(FToolsToggleButton, 'collapsetoolbutton',
+      'Collapse the tool activity cards', 'Tools ' + #$25B4)
+  else
+    SetIconButton(FToolsToggleButton, 'expandtoolbutton',
+      'Expand the tool activity cards', 'Tools ' + #$25BE);
+end;
+
 procedure TMasterDetailForm.RenderParamsButton;
 { The ONLY place the params button's caption is decided -- it was set from
   three (build, toggle, settings load), which is how a disclosure control
@@ -12874,17 +12930,10 @@ procedure TMasterDetailForm.RenderParamsButton;
 begin
   if FParamsToggleButton = nil then
     Exit;
-  if FChatParamsVisible then
-  begin
-    FParamsToggleButton.Text := 'Params ' + #$25B4;
-    FParamsToggleButton.Hint := 'Hide sampling parameters';
-  end
-  else
-  begin
-    FParamsToggleButton.Text := 'Params ' + #$25BE;
-    FParamsToggleButton.Hint := 'Show sampling parameters';
-  end;
-  FParamsToggleButton.ShowHint := True;
+  SetIconButton(FParamsToggleButton, 'sliderstoolbutton',
+    IfThen(FChatParamsVisible, 'Hide sampling parameters',
+    'Show sampling parameters'),
+    IfThen(FChatParamsVisible, 'Params ' + #$25B4, 'Params ' + #$25BE));
 end;
 
 procedure TMasterDetailForm.ParamsToggleClick(Sender: TObject);
@@ -14394,17 +14443,11 @@ begin
 end;
 
 procedure TMasterDetailForm.UpdateToolsToggleCaption;
-{ Single place that derives the button caption from FChatToolsExpanded, so
-  the label can't drift from the state -- the toggle handler and the
-  settings-restore path both call it. Nil-safe: harmless if the chat tab
-  hasn't been built yet. }
+{ Single place that derives the button's FACE from FChatToolsExpanded, so it
+  can't drift from the state -- the toggle handler and the settings-restore
+  path both call it. Nil-safe via SetIconButton. }
 begin
-  if FToolsToggleButton = nil then
-    Exit;
-  if FChatToolsExpanded then
-    FToolsToggleButton.Text := 'Tools -'
-  else
-    FToolsToggleButton.Text := 'Tools +';
+  RenderToolsButton;
 end;
 
 procedure TMasterDetailForm.ResetParamsClick(Sender: TObject);
@@ -15510,6 +15553,22 @@ begin
   Result := (FTabControl <> nil) and (FTabControl.TabIndex >= 0) and
     (FTabControl.TabIndex < FTabControl.TabCount) and
     SameText(FTabControl.Tabs[FTabControl.TabIndex].Text, Caption);
+end;
+
+procedure TMasterDetailForm.SetButtonWidth(Button: TButton; W: Single);
+{ The ONE place a responsive width is applied to a button.
+
+  An iconified button's width belongs to the icon system (ICON_BTN_W), and
+  the layout pass runs on construction, on every resize, and right after a
+  toggle -- so any width it writes wins. Guarding each call site was tried
+  and failed the way per-site rules always do here: two of them were added
+  with the icons and the two that already existed were missed, leaving
+  Params and Tools as wide, mostly empty pills. The rule lives here now, so
+  a new call site cannot forget it. }
+begin
+  if (Button = nil) or IsIconified(Button) then
+    Exit;
+  Button.Width := W;
 end;
 
 class function TMasterDetailForm.IsIconified(Button: TButton): Boolean;
@@ -21896,7 +21955,7 @@ var
 
     { Returns the vertical space this section actually consumes, so the
       caller can size the panel to its children instead of guessing. }
-    function AddToolDetailSection(Panel: TRectangle; const TitleText,
+    function AddToolDetailSection(Host: TFmxObject; const TitleText,
       DetailText: string): Single;
     var
       Memo: TMemo;
@@ -21905,15 +21964,15 @@ var
       Result := 0;
       if Trim(DetailText) = '' then
         Exit;
-      SectionLabel := TLabel.Create(Panel);
-      SectionLabel.Parent := Panel;
+      SectionLabel := TLabel.Create(Host);
+      SectionLabel.Parent := Host;
       SectionLabel.Align := TAlignLayout.Top;
       SectionLabel.Height := 20;
       SectionLabel.HitTest := False;
       SectionLabel.Text := TitleText;
       StyleLabel(SectionLabel, UI_MUTED, 10, True);
-      Memo := TMemo.Create(Panel);
-      Memo.Parent := Panel;
+      Memo := TMemo.Create(Host);
+      Memo.Parent := Host;
       Memo.Align := TAlignLayout.Top;
       Memo.Height := Min(190, Max(58,
         EstimateTextLines(DetailText, CharsPerLine) * 18 + 24));
@@ -21935,6 +21994,7 @@ var
       I: Integer;
       Panel: TRectangle;
       ResultText: string;
+      SectionHost: TLayout;
       Root: TJSONValue;
       SectionsHeight: Single;
       TitleText: string;
@@ -21967,6 +22027,12 @@ var
           SetControlMargins(Panel, 0, 6, 0, 6);
           SetControlPadding(Panel, 10, 8, 10, 8);
 
+          { The header is a Top sibling and the sections live in a CLIENT
+            host, so the header's position no longer depends on how FMX
+            orders Align.Top siblings -- Client takes whatever is left after
+            the Top children, whichever way that iteration runs. Relying on
+            sibling order is what put the tool name underneath its own
+            output. }
           HeaderLabel := TLabel.Create(Panel);
           HeaderLabel.Parent := Panel;
           HeaderLabel.Align := TAlignLayout.Top;
@@ -21986,13 +22052,16 @@ var
               panel was routinely shorter than its own children -- and since
               the children are Align.Top with fixed heights, the overflow
               painted straight over the following chat bubbles. }
+            SectionHost := TLayout.Create(Panel);
+            SectionHost.Parent := Panel;
+            SectionHost.Align := TAlignLayout.Client;
             SectionsHeight := 0;
             SectionsHeight := SectionsHeight +
-              AddToolDetailSection(Panel, 'ARGS', ArgsText);
+              AddToolDetailSection(SectionHost, 'ARGS', ArgsText);
             SectionsHeight := SectionsHeight +
-              AddToolDetailSection(Panel, 'RESULT', ResultText);
+              AddToolDetailSection(SectionHost, 'RESULT', ResultText);
             SectionsHeight := SectionsHeight +
-              AddToolDetailSection(Panel, 'ERROR', ErrorText);
+              AddToolDetailSection(SectionHost, 'ERROR', ErrorText);
             { header + sections + the panel's own 8/8 vertical padding }
             Panel.Height := Max(44, HeaderLabel.Height + SectionsHeight + 16);
           end;
@@ -22139,17 +22208,8 @@ var
     Header.Align := TAlignLayout.Top;
     Header.Height := 26;
 
-    MetaLabel := TLabel.Create(Header);
-    MetaLabel.Parent := Header;
-    MetaLabel.Align := TAlignLayout.Right;
-    MetaLabel.Width := 110;
-    MetaLabel.HitTest := False;
-    MetaText := Format('turn %d/%d', [Index + 1, Total]);
-    MetaLabel.Text := MetaText;
-    MetaLabel.TextSettings.HorzAlign := TTextAlign.Trailing;
-    MetaLabel.TextSettings.VertAlign := TTextAlign.Center;
-    StyleLabel(MetaLabel, UI_MUTED, 11, False);
-
+    { Copy is created FIRST so it takes the outermost right slot; the turn
+      meta then sits to its left, reading "turn 3/8  [copy]" left to right. }
     HeaderCopyButton := TButton.Create(Header);
     HeaderCopyButton.Parent := Header;
     HeaderCopyButton.Align := TAlignLayout.Right;
@@ -22159,6 +22219,19 @@ var
     HeaderCopyButton.OnClick := ChatTurnActionClick;
     SetControlMargins(HeaderCopyButton, 8, 1, 0, 1);
     StyleButton(HeaderCopyButton, False);
+
+    MetaLabel := TLabel.Create(Header);
+    MetaLabel.Parent := Header;
+    MetaLabel.Align := TAlignLayout.Right;
+    MetaLabel.Width := 96;
+    MetaLabel.HitTest := False;
+    MetaText := Format('turn %d/%d', [Index + 1, Total]);
+    MetaLabel.Text := MetaText;
+    MetaLabel.TextSettings.HorzAlign := TTextAlign.Trailing;
+    MetaLabel.TextSettings.VertAlign := TTextAlign.Center;
+    { same tier as the turn-count footer -- both are notes about the
+      transcript, not part of it }
+    StyleLabel(MetaLabel, UI_MUTED, 10, False);
 
     ActionRow := TLayout.Create(Card);
     ActionRow.Parent := Card;

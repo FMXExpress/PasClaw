@@ -63,7 +63,10 @@ STYLES = [
 # blanks its caption and renders empty on the fallback path), so it carries the
 # same list as PASCLAW_ONLY_LOOKUPS and --check verifies the two agree.
 CUSTOM = {"SunToolButton", "MoonToolButton",
-          "ImportToolButton", "ExportToolButton"}
+          "ImportToolButton", "ExportToolButton",
+          "MenuToolButton", "SlidersToolButton",
+          "ExpandToolButton", "CollapseToolButton",
+          "LinkedToolButton", "UnlinkedToolButton"}
 
 PAS_SOURCE = "studio/MasterDetail.pas"
 
@@ -169,6 +172,29 @@ _CHEV_L = [[(x, 0.50), (x + 0.26, 0.06), (x + 0.40, 0.14),
             (x + 0.19, 0.50), (x + 0.40, 0.86), (x + 0.26, 0.94)]
            for x in (0.06, 0.48)]
 
+# Chrome controls that carry no caption at all. Each is a shape that has to
+# survive at 8px, so they are built from bars, discs and blunt arrows -- a
+# chain link or a plug would be mush at this size.
+_MENU = [rect(0.05, 0.13, 0.95, 0.27),
+         rect(0.05, 0.43, 0.95, 0.57),
+         rect(0.05, 0.73, 0.95, 0.87)]
+
+# two tracks, each with its handle at a different position
+_SLIDERS = [rect(0.04, 0.17, 0.96, 0.29), rect(0.58, 0.07, 0.78, 0.39),
+            rect(0.04, 0.61, 0.96, 0.73), rect(0.22, 0.51, 0.42, 0.83)]
+
+# arrows leaving the centre (expand) and arriving at it (collapse)
+_ARROW_OUT_L = [(0.02, 0.50), (0.30, 0.20), (0.30, 0.39),
+                (0.46, 0.39), (0.46, 0.61), (0.30, 0.61), (0.30, 0.80)]
+_EXPAND = [_ARROW_OUT_L, flip_x(_ARROW_OUT_L)]
+_ARROW_IN_L = [(0.46, 0.50), (0.18, 0.20), (0.18, 0.39),
+               (0.02, 0.39), (0.02, 0.61), (0.18, 0.61), (0.18, 0.80)]
+_COLLAPSE = [_ARROW_IN_L, flip_x(_ARROW_IN_L)]
+
+# live = solid, offline = hollow; the oldest status convention there is
+_LINKED = [arc(0.5, 0.5, 0.35, 0.0, 360.0)]
+_UNLINKED = [ring(0.5, 0.5, 0.37, 0.21)]
+
 # ------------------------------------------------------------------ glyphs --
 # Each entry: lookup name -> list of closed subpaths.
 
@@ -198,6 +224,13 @@ GLYPHS = {
     "RefreshToolButton":    [_REFRESH_RING, _REFRESH_HEAD],
 
     # lens ring + handle
+    "MenuToolButton":       _MENU,
+    "SlidersToolButton":    _SLIDERS,
+    "ExpandToolButton":     _EXPAND,
+    "CollapseToolButton":   _COLLAPSE,
+    "LinkedToolButton":     _LINKED,
+    "UnlinkedToolButton":   _UNLINKED,
+
     "SunToolButton":        _SUN,
     "MoonToolButton":       _MOON,
 
