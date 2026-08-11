@@ -3080,9 +3080,20 @@ begin
     SaveLocalSettings;
   TThread.ForceQueue(nil,
     procedure
+    var
+      PriorWidth: Single;
     begin
+      { Re-measure always; re-RENDER only if the column actually moved.
+        Since the cap stopped following the drawer, hiding it on any window
+        wider than the measure changes the margins and nothing else -- the
+        bubbles are already the right width. Rebuilding every one of them to
+        discover that is what made the toggle lag. }
+      PriorWidth := 0;
+      if FChatFlow <> nil then
+        PriorWidth := FChatFlow.Width;
       ApplyChatMeasure;
-      RenderChat;
+      if (FChatFlow <> nil) and (Abs(FChatFlow.Width - PriorWidth) > 0.5) then
+        RenderChat;
     end);
 end;
 
@@ -19871,6 +19882,7 @@ var
   TitleLabel: TLabel;
 begin
   FLoadingSessions := True;
+  FSessionList.BeginUpdate;
   try
     FSessionList.Clear;
     Filter := Trim(LowerCase(FSessionSearch.Text));
@@ -19953,6 +19965,7 @@ begin
     end;
     FSessionList.ItemIndex := SelectedIndex;
   finally
+    FSessionList.EndUpdate;
     FLoadingSessions := False;
   end;
 end;
@@ -21957,9 +21970,22 @@ var
       caller can size the panel to its children instead of guessing. }
     function AddToolDetailSection(Host: TFmxObject; const TitleText,
       DetailText: string): Single;
+    { A TMemo is by far the most expensive control the transcript builds --
+      model, presentation layer, two scroll bars and a caret each -- and an
+      expanded transcript wants three per tool call. Output short enough to
+      fit without scrolling gets a TLabel instead, which is most of them and
+      costs a fraction; anything long keeps the memo so it stays scrollable
+      and selectable. }
+    const
+      SECTION_LINE_H = 18;
+      NO_SCROLL_LINES = 9;      { fits inside the 190px memo cap }
     var
+      Body: TControl;
+      BodyHeight: Single;
+      Lines: Integer;
       Memo: TMemo;
       SectionLabel: TLabel;
+      TextLabel: TLabel;
     begin
       Result := 0;
       if Trim(DetailText) = '' then
@@ -21971,18 +21997,37 @@ var
       SectionLabel.HitTest := False;
       SectionLabel.Text := TitleText;
       StyleLabel(SectionLabel, UI_MUTED, 10, True);
-      Memo := TMemo.Create(Host);
-      Memo.Parent := Host;
-      Memo.Align := TAlignLayout.Top;
-      Memo.Height := Min(190, Max(58,
-        EstimateTextLines(DetailText, CharsPerLine) * 18 + 24));
-      Memo.ReadOnly := True;
-      Memo.WordWrap := True;
-      Memo.Lines.Text := DetailText;
-      SetControlMargins(Memo, 0, 2, 0, 8);
-      StyleTextControl(Memo, UI_TEXT, 11);
-      { label + memo + the 2/8 margins above and below the memo }
-      Result := SectionLabel.Height + Memo.Height + 10;
+
+      Lines := EstimateTextLines(DetailText, CharsPerLine);
+      BodyHeight := Min(190, Max(58, Lines * SECTION_LINE_H + 24));
+      if Lines <= NO_SCROLL_LINES then
+      begin
+        TextLabel := TLabel.Create(Host);
+        TextLabel.Parent := Host;
+        TextLabel.Align := TAlignLayout.Top;
+        TextLabel.Height := BodyHeight;
+        TextLabel.HitTest := False;
+        TextLabel.WordWrap := True;
+        TextLabel.Text := DetailText;
+        TextLabel.TextSettings.VertAlign := TTextAlign.Leading;
+        StyleLabel(TextLabel, UI_TEXT, 11, False);
+        Body := TextLabel;
+      end
+      else
+      begin
+        Memo := TMemo.Create(Host);
+        Memo.Parent := Host;
+        Memo.Align := TAlignLayout.Top;
+        Memo.Height := BodyHeight;
+        Memo.ReadOnly := True;
+        Memo.WordWrap := True;
+        Memo.Lines.Text := DetailText;
+        StyleTextControl(Memo, UI_TEXT, 11);
+        Body := Memo;
+      end;
+      SetControlMargins(Body, 0, 2, 0, 8);
+      { label + body + the 2/8 margins above and below the body }
+      Result := SectionLabel.Height + BodyHeight + 10;
     end;
 
     procedure RenderToolDetailBlocks;
@@ -22360,28 +22405,38 @@ begin
 
   if FChatFlow <> nil then
   begin
-    while FChatFlow.ChildrenCount > 0 do
-      FChatFlow.Children[0].Free;
-    ChatFlowHeight := 0;
-    ApplyChatMeasure;   { the one authority on the flow's width + margins }
-    if FTurns.Count = 0 then
-      AddTranscriptCard(0, 1, 'assistant',
-        'Connect to PasClaw, choose or create a session, then describe the code change you want.', '')
-    else
-      for I := 0 to FTurns.Count - 1 do
-      begin
-        Turn := FTurns[I];
-        AddTranscriptCard(I, FTurns.Count, Turn.Role, Turn.Text,
-          Turn.ToolDetails);
-      end;
+    { One realign for the whole rebuild instead of one per control. A long
+      session with expanded tool cards creates thousands of controls, and
+      without this every single Free and Create realigns the flow. }
+    FChatFlow.BeginUpdate;
+    try
+      { Free from the END: removing index 0 shifts the entire children list
+        down on every iteration, which turns clearing a long transcript into
+        quadratic work before a single new control is built. }
+      while FChatFlow.ChildrenCount > 0 do
+        FChatFlow.Children[FChatFlow.ChildrenCount - 1].Free;
+      ChatFlowHeight := 0;
+      ApplyChatMeasure;   { the one authority on the flow's width + margins }
+      if FTurns.Count = 0 then
+        AddTranscriptCard(0, 1, 'assistant',
+          'Connect to PasClaw, choose or create a session, then describe the code change you want.', '')
+      else
+        for I := 0 to FTurns.Count - 1 do
+        begin
+          Turn := FTurns[I];
+          AddTranscriptCard(I, FTurns.Count, Turn.Role, Turn.Text,
+            Turn.ToolDetails);
+        end;
+      if FChatScroll <> nil then
+        FChatFlow.Height := Max(FChatScroll.Height, ChatFlowHeight + 8)
+      else
+        FChatFlow.Height := ChatFlowHeight + 8;
+    finally
+      FChatFlow.EndUpdate;
+    end;
     if FChatScroll <> nil then
-    begin
-      FChatFlow.Height := Max(FChatScroll.Height, ChatFlowHeight + 8);
       FChatScroll.ViewportPosition := PointF(0,
         Max(0, FChatFlow.Height - FChatScroll.Height));
-    end
-    else
-      FChatFlow.Height := ChatFlowHeight + 8;
   end
   else if FChatList <> nil then
   begin

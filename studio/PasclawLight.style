@@ -3147,7 +3147,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Opacity = 0.000000000000000000
-      Stroke.Color = xFF0969DA
+      Stroke.Color = xFF3B6EA8
       Stroke.Thickness = 1.500000000000000000
       XRadius = 6.000000000000000000
       YRadius = 6.000000000000000000
@@ -3163,7 +3163,7 @@ object TStyleContainer
     object TPath
       StyleName = 'icon'
       Align = Center
-      Fill.Color = xFF4A5563
+      Fill.Color = xFF5C5851
       Fill.Kind = Solid
       HitTest = False
       Locked = True
@@ -3368,7 +3368,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Opacity = 0.000000000000000000
-      Stroke.Color = xFF0969DA
+      Stroke.Color = xFF3B6EA8
       Stroke.Thickness = 1.500000000000000000
       XRadius = 6.000000000000000000
       YRadius = 6.000000000000000000
@@ -3384,7 +3384,7 @@ object TStyleContainer
     object TPath
       StyleName = 'icon'
       Align = Center
-      Fill.Color = xFF4A5563
+      Fill.Color = xFF5C5851
       Fill.Kind = Solid
       HitTest = False
       Locked = True
@@ -3682,7 +3682,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Opacity = 0.000000000000000000
-      Stroke.Color = xFF0969DA
+      Stroke.Color = xFF3B6EA8
       Stroke.Thickness = 1.500000000000000000
       XRadius = 6.000000000000000000
       YRadius = 6.000000000000000000
@@ -3698,7 +3698,7 @@ object TStyleContainer
     object TPath
       StyleName = 'icon'
       Align = Center
-      Fill.Color = xFF4A5563
+      Fill.Color = xFF5C5851
       Fill.Kind = Solid
       HitTest = False
       Locked = True
@@ -3760,7 +3760,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Opacity = 0.000000000000000000
-      Stroke.Color = xFF0969DA
+      Stroke.Color = xFF3B6EA8
       Stroke.Thickness = 1.500000000000000000
       XRadius = 6.000000000000000000
       YRadius = 6.000000000000000000
@@ -3776,7 +3776,7 @@ object TStyleContainer
     object TPath
       StyleName = 'icon'
       Align = Center
-      Fill.Color = xFF4A5563
+      Fill.Color = xFF5C5851
       Fill.Kind = Solid
       HitTest = False
       Locked = True
@@ -4459,7 +4459,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Opacity = 0.000000000000000000
-      Stroke.Color = xFF0969DA
+      Stroke.Color = xFF3B6EA8
       Stroke.Thickness = 1.500000000000000000
       XRadius = 6.000000000000000000
       YRadius = 6.000000000000000000
@@ -4475,7 +4475,7 @@ object TStyleContainer
     object TPath
       StyleName = 'icon'
       Align = Center
-      Fill.Color = xFF4A5563
+      Fill.Color = xFF5C5851
       Fill.Kind = Solid
       HitTest = False
       Locked = True
@@ -4780,7 +4780,7 @@ object TStyleContainer
       HitTest = False
       Locked = True
       Opacity = 0.000000000000000000
-      Stroke.Color = xFF0969DA
+      Stroke.Color = xFF3B6EA8
       Stroke.Thickness = 1.500000000000000000
       XRadius = 6.000000000000000000
       YRadius = 6.000000000000000000
@@ -4796,7 +4796,7 @@ object TStyleContainer
     object TPath
       StyleName = 'icon'
       Align = Center
-      Fill.Color = xFF4A5563
+      Fill.Color = xFF5C5851
       Fill.Kind = Solid
       HitTest = False
       Locked = True
