@@ -359,7 +359,7 @@ type
     FWorkflowHoverEdge: string;    { edge text under the cursor (idle hover) }
     FWorkflowRunNodeOk: TDictionary<string, Boolean>;
     FWorkflowRunNodePreview: TDictionary<string, string>;
-    FWorkflowSubTabs: TTabControl;  { Designer | Settings, for + Node }
+    FWorkflowSubTabs: TTabControl;  { Designer | Configure }
     FWorkflowPalettePanel: TRectangle;
     FWorkflowPaletteEdit: TEdit;
     FWorkflowPaletteList: TListBox;
@@ -735,6 +735,7 @@ type
       const Item: TListBoxItem);
     procedure WorkflowDuplicateSelectedNode;
     procedure WorkflowAddNodeToolbarClick(Sender: TObject);
+    procedure WorkflowOpenEditor(const Target: string);
     function WorkflowPositionTaken(const P: TPointF): Boolean;
     function WorkflowFreeSlot(const P: TPointF): TPointF;
     procedure OpenFilesTabAt(const Path: string);
@@ -7035,7 +7036,9 @@ begin
 
   SettingsTab := TTabItem.Create(Self);
   SettingsTab.Parent := WorkflowTabs;
-  SettingsTab.Text := 'Settings';
+  { It is not a settings screen -- it is where a node's tool, model and args
+    are configured, and calling it Settings is why nobody found it. }
+  SettingsTab.Text := 'Configure';
 
   SettingsPane := TVertScrollBox.Create(Self);
   SettingsPane.Parent := SettingsTab;
@@ -7430,21 +7433,41 @@ begin
   Title.TextSettings.VertAlign := TTextAlign.Center;
   StyleLabel(Title, UI_ACCENT, TXT_TITLE, True);
 
+  { ORDER MATTERS, and it is the whole bug here. FMX aligns children in
+    child-index order, each one shrinking the rect left for the next, so a
+    Client sibling created BEFORE a Bottom one swallows the entire
+    remainder and the Bottom control is laid out into nothing -- it ends up
+    behind the memo, which is what "the status log is under the rest of the
+    controls" describes. Same family as the AddPanelChrome Client-vs-
+    Contents bug. The Bottom-docked summary is therefore built FIRST, and
+    the Client memo (which must take whatever is left) comes last. }
+  { Bottom children dock in child order too -- the FIRST one takes the very
+    bottom edge and later ones stack above it -- so the memo is built before
+    the caption that must sit on top of it. }
+  FWorkflowGraphMemo := TMemo.Create(Self);
+  FWorkflowGraphMemo.Parent := RightPane;
+  FWorkflowGraphMemo.Align := TAlignLayout.Bottom;
+  FWorkflowGraphMemo.Height := 96;
+  FWorkflowGraphMemo.ReadOnly := True;
+  FWorkflowGraphMemo.WordWrap := True;
+  SetControlMargins(FWorkflowGraphMemo, 0, GAP_XS, 0, 0);
+
+  Title := TLabel.Create(Self);
+  Title.Parent := RightPane;
+  Title.Align := TAlignLayout.Bottom;
+  Title.Height := ROW_TEXT;
+  Title.Text := 'Graph summary';
+  Title.TextSettings.VertAlign := TTextAlign.Center;
+  StyleLabel(Title, UI_ACCENT, TXT_TITLE, True);
+  SetControlMargins(Title, 0, GAP_S, 0, 0);
+
   FWorkflowRunDetailMemo := TMemo.Create(Self);
   FWorkflowRunDetailMemo.Parent := RightPane;
   FWorkflowRunDetailMemo.Align := TAlignLayout.Client;
-  FWorkflowRunDetailMemo.Height := 74;
   FWorkflowRunDetailMemo.ReadOnly := True;
   FWorkflowRunDetailMemo.WordWrap := True;
   FWorkflowRunDetailMemo.Lines.Text := 'Select a workflow run result to inspect full output.';
   SetControlMargins(FWorkflowRunDetailMemo, 0, GAP_XS, 0, 0);
-
-  FWorkflowGraphMemo := TMemo.Create(Self);
-  FWorkflowGraphMemo.Parent := RightPane;
-  FWorkflowGraphMemo.Align := TAlignLayout.Bottom;
-  FWorkflowGraphMemo.Height := ROW_CARD;
-  FWorkflowGraphMemo.WordWrap := True;
-  SetControlMargins(FWorkflowGraphMemo, 0, GAP_S, 0, 0);
 
   Title := TLabel.Create(Self);
   Title.Parent := MiddlePane;
@@ -7455,6 +7478,18 @@ begin
   Title.StyledSettings := Title.StyledSettings - [TStyledSetting.FontColor];
   UseStyledLabelColor(Title);
   SetControlMargins(Title, 0, GAP_S, 0, 0);
+
+  { The canvas gestures are not guessable, and the web client already
+    carries the same one-liner over its canvas. Say them once, in place. }
+  Title := TLabel.Create(Self);
+  Title.Parent := MiddlePane;
+  Title.Align := TAlignLayout.Top;
+  Title.Height := ROW_TEXT;
+  Title.Text := 'Double-click: empty space adds a node, a node configures ' +
+    'it. Drag a node''s right dot to connect.';
+  Title.TextSettings.VertAlign := TTextAlign.Center;
+  Title.TextSettings.Trimming := TTextTrimming.Character;
+  StyleLabel(Title, UI_MUTED, TXT_CAPTION, False);
 
   FWorkflowCanvas := TPaintBox.Create(Self);
   FWorkflowCanvas.Parent := MiddlePane;
@@ -12205,6 +12240,59 @@ begin
     FWorkflowCanvas.Repaint;
 end;
 
+procedure TMasterDetailForm.WorkflowOpenEditor(const Target: string);
+{ Take the operator to the controls that configure whatever they
+  double-clicked. The canvas and the editor live on different sub-tabs, so
+  a click on a node had nowhere to lead: selecting it silently filled in
+  fields on a tab that was not on screen. n8n/ComfyUI both open a node's
+  settings on double-click; this is that gesture, plus the same treatment
+  for the derived INPUT/OUTPUT boxes. }
+var
+  Focus: TControl;
+  Note: string;
+begin
+  WorkflowHidePalette;
+  Focus := nil;
+  if Target = 'inputs' then
+  begin
+    Focus := FWorkflowInputsEdit;
+    Note := 'workflow inputs: comma-separated names';
+  end
+  else if Target = 'outputs' then
+  begin
+    Focus := FWorkflowOutputsMemo;
+    Note := 'workflow outputs: one per line, name = template';
+  end
+  else
+  begin
+    { a node: the tool picker is the top of its form, and for a replicate
+      node the model search sits directly under it }
+    Focus := FWorkflowToolCombo;
+    if (FWorkflowNodesList <> nil) and (FWorkflowNodesList.Selected <> nil) then
+    begin
+      Note := 'configuring node ' +
+        WorkflowTextId(FWorkflowNodesList.Selected.Text);
+      { name the next action for the node type that has one -- picking a
+        model is the whole job of a replicate node }
+      if SameText(WorkflowTextTool(FWorkflowNodesList.Selected.Text),
+        'replicate') then
+      begin
+        Note := Note + ' - use Search to pick a model';
+        if (FWorkflowReplicateSearchEdit <> nil) and
+          FWorkflowReplicateSearchEdit.CanFocus then
+          Focus := FWorkflowReplicateSearchEdit;
+      end;
+    end
+    else
+      Note := 'select a node to configure';
+  end;
+  if FWorkflowSubTabs <> nil then
+    FWorkflowSubTabs.TabIndex := 1;   { Configure }
+  if (Focus <> nil) and Focus.CanFocus then
+    Focus.SetFocus;
+  SetStatus(Note);
+end;
+
 procedure TMasterDetailForm.WorkflowDuplicateSelectedNode;
 var
   Args: string;
@@ -12361,15 +12449,30 @@ begin
   R := WorkflowIORect(WF_ID_INPUT, Box.Width, Box.Height);
   if (X >= R.Left) and (X <= R.Right) and (Y >= R.Top) and (Y <= R.Bottom) then
   begin
+    { the boxes are derived from the workflow's declared inputs/outputs, so
+      "configure this box" means editing those fields -- take the operator
+      to them rather than leaving a box that only drags }
+    if ssDouble in Shift then
+    begin
+      WorkflowOpenEditor('inputs');
+      Exit;
+    end;
     FWorkflowDraggingId := WF_ID_INPUT;
     FWorkflowDragOffset := PointF(X - R.Left, Y - R.Top);
+    SetStatus('INPUT: drag to move, double-click to edit the workflow inputs');
     Exit;
   end;
   R := WorkflowIORect(WF_ID_OUTPUT, Box.Width, Box.Height);
   if (X >= R.Left) and (X <= R.Right) and (Y >= R.Top) and (Y <= R.Bottom) then
   begin
+    if ssDouble in Shift then
+    begin
+      WorkflowOpenEditor('outputs');
+      Exit;
+    end;
     FWorkflowDraggingId := WF_ID_OUTPUT;
     FWorkflowDragOffset := PointF(X - R.Left, Y - R.Top);
+    SetStatus('OUTPUT: drag to move, double-click to edit the workflow outputs');
     Exit;
   end;
   for I := 0 to FWorkflowNodesList.Count - 1 do
@@ -12399,12 +12502,22 @@ begin
     if (X >= R.Left) and (X <= R.Right) and (Y >= R.Top) and
       (Y <= R.Bottom) then
     begin
+      { select FIRST -- the editor panes read the selected node, so opening
+        them before the selection lands would configure the previous node }
       if FWorkflowNodesList.ItemIndex <> I then
         FWorkflowNodesList.ItemIndex := I
       else
         WorkflowNodeSelect(nil);
+      if ssDouble in Shift then
+      begin
+        WorkflowOpenEditor('node');
+        Box.Repaint;
+        Exit;
+      end;
       FWorkflowDraggingId := WorkflowTextId(NodeItem.Text);
       FWorkflowDragOffset := PointF(X - R.Left, Y - R.Top);
+      SetStatus('node ' + WorkflowTextId(NodeItem.Text) +
+        ': drag to move, double-click to configure it');
       Box.Repaint;
       Exit;
     end;
