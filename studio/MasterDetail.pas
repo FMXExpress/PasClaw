@@ -85,6 +85,9 @@ type
     FFileViewerPane: TLayout;
     FFileViewerStatusLabel: TLabel;
     FConnectionRow: TLayout;
+    { the one-pixel rule under the title bar; held so ApplyTheme can repaint
+      it, since a raw TRectangle brush is invisible to the restyle walk }
+    FHeaderRule: TRectangle;
     FGatewayEdit: TEdit;
     FHeaderRow: TLayout;
     FCheckpointCurrentTurn: Int64;
@@ -561,6 +564,7 @@ type
     procedure RenderChat;
     procedure RenderModeButton;
     procedure RenderParamsButton;
+    procedure ApplyHeaderRuleTheme;
     procedure RenderConnectButton;
     procedure RenderToolsButton;
     procedure UpdateFooterVisibility;
@@ -722,6 +726,10 @@ const
   UI_ACCENT_DIM = $FF1D3347;
   UI_BG = $FF111316;
   UI_BORDER = $FF2D333B;
+  { A rule BETWEEN things, softer than a border AROUND something. Reusing
+    UI_BORDER for separators is what made the header rule read as a hard
+    line across the window. }
+  UI_SEPARATOR = $FF23282F;
   UI_PANEL = $FF181B20;
   UI_PANEL_ALT = $FF20242B;
   UI_TEXT = $FFE6EAF0;
@@ -1626,6 +1634,9 @@ begin
     else
       FThemeButton.Text := 'Dark';
   end;
+  { raw brushes are invisible to the restyle walk, so the theme pass has to
+    repaint them by name }
+  ApplyHeaderRuleTheme;
 end;
 
 procedure TMasterDetailForm.ThemeClick(Sender: TObject);
@@ -1783,7 +1794,13 @@ begin
     Exit;
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := Control;
-  Chrome.Align := TAlignLayout.Client;
+  { Contents, NOT Client. A background has to FRAME the panel, and Client
+    makes it compete with its own siblings for space -- it takes whatever is
+    left over after the Top-aligned rows and outlines THAT. On Settings /
+    Gateway the visible result was an empty rounded box sitting under the
+    form instead of a border around it. Contents fills the parent's content
+    rect and takes part in no such negotiation. }
+  Chrome.Align := TAlignLayout.Contents;
   if Alt then
     StyleChromeRect(Chrome, UI_PANEL_ALT, UI_BORDER, 6, False)
   else
@@ -1977,7 +1994,9 @@ begin
   else if Color = UI_ACCENT then
     { the light book's retoned accent -- a Pascal-drawn accent has to be the
       same blue as a styled one, or the two disagree on the same screen }
-    Result := $FF3B6EA8;
+    Result := $FF3B6EA8
+  else if Color = UI_SEPARATOR then
+    Result := $FFE6E2DA;
 end;
 
 function TMasterDetailForm.ThemePaintStroke(Color: TAlphaColor): TAlphaColor;
@@ -3254,8 +3273,10 @@ var
   NavHost: TLayout;
   SessionButtons: TLayout;
   WorkspaceLabel: TLabel;
+  ActionRow: TLayout;
   SettingsTab: TTabItem;
   SettingsTabs: TTabControl;
+  TokenRow: TLayout;
   SearchLabel: TLabel;
 begin
   Fill.Color := UI_BG;
@@ -3268,11 +3289,26 @@ begin
   FTopBar.Height := ROW_CARD;
   SetControlPadding(FTopBar, 10, GAP_S, 10, GAP_S);
 
-  Chrome := TRectangle.Create(Self);
-  Chrome.Parent := FTopBar;
-  Chrome.Align := TAlignLayout.Client;
-  StyleChromeRect(Chrome, UI_PANEL, UI_BORDER, 0, False);
-  Chrome.SendToBack;
+  { A separator, not a box. This was a full rectangle outline around the top
+    bar: three of its four edges hug the window frame and the fourth reads as
+    a stray dark rule under the title, which is exactly how it was reported.
+    A header deserves a hairline beneath it, so that is all this draws -- and
+    at UI_BORDER strength on a light ground it was too heavy, so it takes the
+    softer separator tone. }
+  FHeaderRule := TRectangle.Create(Self);
+  FHeaderRule.Parent := FTopBar;
+  FHeaderRule.Align := TAlignLayout.Bottom;
+  FHeaderRule.Height := 1;
+  FHeaderRule.HitTest := False;
+  FHeaderRule.Stroke.Kind := TBrushKind.None;
+  FHeaderRule.Fill.Kind := TBrushKind.Solid;
+  FHeaderRule.SendToBack;
+  { colour comes from ApplyTheme, not from here: BuildInterface runs while
+    FDarkStyleEnabled is still True, so a colour resolved at this point is
+    the DARK one, and a restored ui.dark_style=false would never repaint it
+    -- RestyleCoreControls walks labels and controls, not TRectangle
+    brushes. Held as a field so the theme pass can reach it. }
+  ApplyHeaderRuleTheme;
 
   FHeaderRow := TLayout.Create(Self);
   FHeaderRow.Parent := FTopBar;
@@ -3378,7 +3414,7 @@ begin
 
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := FSidebar;
-  Chrome.Align := TAlignLayout.Client;
+  Chrome.Align := TAlignLayout.Contents;
   StyleChromeRect(Chrome, UI_PANEL, UI_BORDER, 0, False);
   Chrome.SendToBack;
 
@@ -3499,7 +3535,7 @@ begin
 
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := NavHost;
-  Chrome.Align := TAlignLayout.Client;
+  Chrome.Align := TAlignLayout.Contents;
   StyleChromeRect(Chrome, UI_PANEL, UI_BORDER, 6, False);
   Chrome.SendToBack;
 
@@ -3696,30 +3732,57 @@ begin
   GatewayTab.Parent := SettingsTabs;
   GatewayTab.Text := 'Gateway';
 
+  { Phase 2 of docs/studio-metrics-plan.md. Was: one 104px panel guessing its
+    own height, with a URL box, a Connect button, a token box, Show and a
+    trash icon all crammed onto a single unlabelled row -- nothing said which
+    box was which, and the fixed height had no relationship to the contents.
+
+    Now two labelled rows on the shared form grid. The panel sizes itself
+    from them, so the guess is gone, and each field is named. }
   GatewayBody := TLayout.Create(Self);
   GatewayBody.Parent := GatewayTab;
   GatewayBody.Align := TAlignLayout.Top;
-  GatewayBody.Height := 104;
-  SetControlPadding(GatewayBody, GAP_M, 10, GAP_M, GAP_M);
+  SetControlPadding(GatewayBody, GAP_M, GAP_M, GAP_M, GAP_M);
   AddPanelChrome(GatewayBody, False);
   AddSectionHeader(GatewayBody, 'Gateway connection');
 
-  FConnectionRow.Parent := GatewayBody;
-  FConnectionRow.Align := TAlignLayout.Top;
-  FConnectionRow.Visible := True;
-  FConnectionRow.Height := ROW_BAR;
-  SetControlMargins(FConnectionRow, 0, GAP_S, 0, 0);
-  SetControlMargins(FTokenEdit, GAP_S, 0, 0, 0);
-  SetControlMargins(FTokenShowButton, GAP_S, 0, 0, 0);
-  SetControlMargins(FTokenClearButton, GAP_S, 0, 0, 0);
+  { FConnectionRow is a construction-time holder only: the four controls are
+    created into it before the Settings tab exists, and every one of them is
+    re-parented onto a form row below. It stays hidden on the form -- moving
+    an emptied layout into the panel would add a phantom row. }
+  AddFormRow(GatewayBody, 'Server URL', FGatewayEdit);
+  TokenRow := AddFormRow(GatewayBody, 'Bearer token', nil);
+
+  FTokenEdit.Parent := TokenRow;
+  FTokenEdit.Align := TAlignLayout.Client;
+  FTokenEdit.Height := H_INPUT;
+  SetControlMargins(FTokenEdit, 0, GAP_XS div 2, 0, GAP_XS div 2);
+
+  FTokenShowButton.Parent := TokenRow;
+  FTokenShowButton.Align := TAlignLayout.Right;
+  SetControlMargins(FTokenShowButton, GAP_S, GAP_XS div 2, 0, GAP_XS div 2);
+
+  FTokenClearButton.Parent := TokenRow;
+  FTokenClearButton.Align := TAlignLayout.Right;
+  SetControlMargins(FTokenClearButton, GAP_S, GAP_XS div 2, 0, GAP_XS div 2);
+
+  ActionRow := TLayout.Create(Self);
+  ActionRow.Parent := GatewayBody;
+  ActionRow.Align := TAlignLayout.Top;
+  ActionRow.Height := ROW_BAR;
+  SetControlMargins(ActionRow, FORM_LABEL_W + GAP_M, GAP_XS, 0, 0);
 
   Btn := TButton.Create(Self);
-  Btn.Parent := FConnectionRow;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 82;
+  Btn.Parent := ActionRow;
+  Btn.Align := TAlignLayout.Left;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Connect';
   Btn.OnClick := RefreshClick;
-  SetControlMargins(Btn, GAP_S, 0, 0, 0);
+
+  { header + three rows + the panel's own vertical padding, so the panel can
+    never disagree with what it contains }
+  GatewayBody.Height := ROW_TEXT + GAP_XS + ROW_FORM * 2 + ROW_BAR +
+                        GAP_XS * 3 + GAP_M * 2;
 
   SettingsTab := TTabItem.Create(Self);
   SettingsTab.Parent := SettingsTabs;
@@ -3833,7 +3896,7 @@ begin
 
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := Params;
-  Chrome.Align := TAlignLayout.Client;
+  Chrome.Align := TAlignLayout.Contents;
   StyleChromeRect(Chrome, UI_PANEL, UI_BORDER, 6, False);
   Chrome.SendToBack;
 
@@ -4027,7 +4090,7 @@ begin
 
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := Composer;
-  Chrome.Align := TAlignLayout.Client;
+  Chrome.Align := TAlignLayout.Contents;
   { tier 3 -- the composer is where you act next, so it reads as live: a
     lifted ground and an accent border rather than the same panel chrome as
     every inert surface. }
@@ -5697,66 +5760,59 @@ begin
   ServerTab.Parent := Tabs;
   ServerTab.Text := 'Server';
 
-  Row := TLayout.Create(Self);
-  Row.Parent := ServerTab;
-  Row.Align := TAlignLayout.Top;
-  Row.Height := ROW_BAR;
-  SetControlMargins(Row, 0, GAP_S, 0, 0);
+  { Phase 2 of docs/studio-metrics-plan.md. Was: name, Enabled, New, Save and
+    Remove all on one row, then command and args sharing a second, none of
+    them labelled -- and 'args' at a hand-picked 280px next to a Client-width
+    'command' so the two moved independently on resize.
 
-  Btn := TButton.Create(Self);
-  Btn.Parent := Row;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 92;
-  Btn.Text := 'Remove';
-  Btn.OnClick := McpServerRemoveClick;
-  SetControlMargins(Btn, GAP_S, 0, 0, 0);
-
-  Btn := TButton.Create(Self);
-  Btn.Parent := Row;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 118;
-  Btn.Text := 'Save Server';
-  Btn.OnClick := McpServerSaveClick;
-  SetControlMargins(Btn, GAP_S, 0, 0, 0);
-
-  Btn := TButton.Create(Self);
-  Btn.Parent := Row;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 74;
-  Btn.Text := 'New';
-  Btn.OnClick := McpServerClearClick;
-  SetControlMargins(Btn, GAP_S, 0, 0, 0);
-
-  FMcpServerEnabledCheck := TCheckBox.Create(Self);
-  FMcpServerEnabledCheck.Parent := Row;
-  FMcpServerEnabledCheck.Align := TAlignLayout.Right;
-  FMcpServerEnabledCheck.Width := 82;
-  FMcpServerEnabledCheck.Text := 'Enabled';
-  FMcpServerEnabledCheck.IsChecked := True;
-  SetControlMargins(FMcpServerEnabledCheck, GAP_S, 0, 0, 0);
-
+    Fields on the grid, actions on their own bar. The action row goes LAST so
+    the form reads top-down as name, command, args, then what to do with
+    them. }
   FMcpServerNameEdit := TEdit.Create(Self);
-  FMcpServerNameEdit.Parent := Row;
-  FMcpServerNameEdit.Align := TAlignLayout.Client;
   FMcpServerNameEdit.TextPrompt := 'MCP server name';
-
-  Row := TLayout.Create(Self);
-  Row.Parent := ServerTab;
-  Row.Align := TAlignLayout.Top;
-  Row.Height := ROW_BAR;
-  SetControlMargins(Row, 0, GAP_S, 0, 0);
-
-  FMcpServerArgsEdit := TEdit.Create(Self);
-  FMcpServerArgsEdit.Parent := Row;
-  FMcpServerArgsEdit.Align := TAlignLayout.Right;
-  FMcpServerArgsEdit.Width := 280;
-  FMcpServerArgsEdit.TextPrompt := 'args';
-  SetControlMargins(FMcpServerArgsEdit, GAP_S, 0, 0, 0);
+  AddFormRow(ServerTab, 'Name', FMcpServerNameEdit);
 
   FMcpServerCmdEdit := TEdit.Create(Self);
-  FMcpServerCmdEdit.Parent := Row;
-  FMcpServerCmdEdit.Align := TAlignLayout.Client;
   FMcpServerCmdEdit.TextPrompt := 'command';
+  AddFormRow(ServerTab, 'Command', FMcpServerCmdEdit);
+
+  FMcpServerArgsEdit := TEdit.Create(Self);
+  FMcpServerArgsEdit.TextPrompt := 'args';
+  AddFormRow(ServerTab, 'Args', FMcpServerArgsEdit);
+
+  FMcpServerEnabledCheck := TCheckBox.Create(Self);
+  FMcpServerEnabledCheck.Text := 'Enabled';
+  FMcpServerEnabledCheck.IsChecked := True;
+  AddFormRow(ServerTab, 'State', FMcpServerEnabledCheck, 140);
+
+  Row := TLayout.Create(Self);
+  Row.Parent := ServerTab;
+  Row.Align := TAlignLayout.Top;
+  Row.Height := ROW_BAR;
+  SetControlMargins(Row, FORM_LABEL_W + GAP_M, GAP_XS, 0, GAP_S);
+
+  Btn := TButton.Create(Self);
+  Btn.Parent := Row;
+  Btn.Align := TAlignLayout.Left;
+  Btn.Width := BTN_W_M;
+  Btn.Text := 'Save Server';
+  Btn.OnClick := McpServerSaveClick;
+  SetControlMargins(Btn, 0, 0, GAP_S, 0);
+
+  Btn := TButton.Create(Self);
+  Btn.Parent := Row;
+  Btn.Align := TAlignLayout.Left;
+  Btn.Width := BTN_W_S;
+  Btn.Text := 'New';
+  Btn.OnClick := McpServerClearClick;
+  SetControlMargins(Btn, 0, 0, GAP_S, 0);
+
+  Btn := TButton.Create(Self);
+  Btn.Parent := Row;
+  Btn.Align := TAlignLayout.Left;
+  Btn.Width := BTN_W_S;
+  Btn.Text := 'Remove';
+  Btn.OnClick := McpServerRemoveClick;
 
   AddSectionHeader(ServerTab, 'Environment');
 
@@ -6199,44 +6255,33 @@ begin
   UseStyledLabelColor(Title);
   SetControlMargins(Title, 0, 0, 0, GAP_S);
 
-  Row := TLayout.Create(Self);
-  Row.Parent := Panel;
-  Row.Align := TAlignLayout.Top;
-  Row.Height := ROW_LIST;
-
+  { Phase 2 of docs/studio-metrics-plan.md. Was: a checkbox, two combos and
+    an edit sharing ONE row at four hand-picked widths, with nothing naming
+    any of them -- the plan called this the poster child, and it was. Each
+    control now sits on a labelled row of the shared grid. }
   FMemoryVectorCheck := TCheckBox.Create(Self);
-  FMemoryVectorCheck.Parent := Row;
-  FMemoryVectorCheck.Align := TAlignLayout.Left;
-  FMemoryVectorCheck.Width := 210;
-  FMemoryVectorCheck.Text := 'Semantic vector search';
+  FMemoryVectorCheck.Text := 'Enabled';
   FMemoryVectorCheck.IsChecked := True;
-  SetControlMargins(FMemoryVectorCheck, 0, 0, GAP_S, 0);
+  AddFormRow(Panel, 'Vector search', FMemoryVectorCheck, 140);
 
   FMemoryBackendCombo := TComboBox.Create(Self);
-  FMemoryBackendCombo.Parent := Row;
-  FMemoryBackendCombo.Align := TAlignLayout.Left;
-  FMemoryBackendCombo.Width := 132;
   FMemoryBackendCombo.Items.Add('off');
   FMemoryBackendCombo.Items.Add('local');
   FMemoryBackendCombo.Items.Add('llm');
   FMemoryBackendCombo.Items.Add('auto');
   FMemoryBackendCombo.ItemIndex := 3;
-  SetControlMargins(FMemoryBackendCombo, 0, 0, GAP_S, 0);
+  AddFormRow(Panel, 'Backend', FMemoryBackendCombo, 140);
 
   FMemoryModelCombo := TComboBox.Create(Self);
-  FMemoryModelCombo.Parent := Row;
-  FMemoryModelCombo.Align := TAlignLayout.Right;
-  FMemoryModelCombo.Width := 220;
   FMemoryModelCombo.Items.Add('bge-reranker-base');
   FMemoryModelCombo.ItemIndex := 0;
   FMemoryModelCombo.OnChange := MemoryModelChoiceChange;
-  SetControlMargins(FMemoryModelCombo, GAP_S, 0, 0, 0);
+  AddFormRow(Panel, 'Reranker', FMemoryModelCombo, 220);
 
   FMemoryRerankModelEdit := TEdit.Create(Self);
-  FMemoryRerankModelEdit.Parent := Row;
-  FMemoryRerankModelEdit.Align := TAlignLayout.Client;
   FMemoryRerankModelEdit.Text := 'bge-reranker-base';
   FMemoryRerankModelEdit.TextPrompt := 'local reranker model';
+  AddFormRow(Panel, 'Model name', FMemoryRerankModelEdit);
 
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
@@ -6628,7 +6673,7 @@ begin
   SetControlPadding(Panel, 10, GAP_S, 10, 10);
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := Panel;
-  Chrome.Align := TAlignLayout.Client;
+  Chrome.Align := TAlignLayout.Contents;
   StyleChromeRect(Chrome, UI_PANEL, UI_BORDER, 6, False);
   Chrome.SendToBack;
 
@@ -6768,7 +6813,7 @@ begin
   SetControlPadding(LeftPane, GAP_S, GAP_S, GAP_S, GAP_S);
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := LeftPane;
-  Chrome.Align := TAlignLayout.Client;
+  Chrome.Align := TAlignLayout.Contents;
   StyleChromeRect(Chrome, UI_PANEL_ALT, UI_BORDER, 6, False);
   Chrome.SendToBack;
 
@@ -6793,7 +6838,7 @@ begin
   SetControlPadding(MiddlePane, GAP_S, GAP_S, GAP_S, GAP_S);
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := MiddlePane;
-  Chrome.Align := TAlignLayout.Client;
+  Chrome.Align := TAlignLayout.Contents;
   StyleChromeRect(Chrome, UI_PANEL_ALT, UI_BORDER, 6, False);
   Chrome.SendToBack;
 
@@ -6849,7 +6894,7 @@ begin
   SetControlPadding(Row, GAP_S, GAP_S, GAP_S, GAP_S);
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := Row;
-  Chrome.Align := TAlignLayout.Client;
+  Chrome.Align := TAlignLayout.Contents;
   StyleChromeRect(Chrome, UI_PANEL, UI_BORDER, 6, False);
   Chrome.SendToBack;
 
@@ -6974,7 +7019,7 @@ begin
   SetControlPadding(RightPane, GAP_S, GAP_S, GAP_S, GAP_S);
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := RightPane;
-  Chrome.Align := TAlignLayout.Client;
+  Chrome.Align := TAlignLayout.Contents;
   StyleChromeRect(Chrome, UI_PANEL_ALT, UI_BORDER, 6, False);
   Chrome.SendToBack;
 
@@ -12998,6 +13043,12 @@ end;
 procedure TMasterDetailForm.GatewaySettingsChange(Sender: TObject);
 begin
   RenderConnectButton;
+end;
+
+procedure TMasterDetailForm.ApplyHeaderRuleTheme;
+begin
+  if FHeaderRule <> nil then
+    FHeaderRule.Fill.Color := ThemePaintColor(UI_SEPARATOR);
 end;
 
 procedure TMasterDetailForm.RenderConnectButton;

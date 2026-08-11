@@ -141,10 +141,18 @@ not ASCII).
 
 ## Sequencing (each lands as its own PR, `make lint-studio` gated)
 
-1. **Tokens + helpers** (`AddFormRow`, `BuildDetailPane`, gap unification
+Status: **phase 1 done** (#506), **phase 2 done**. Phases 3-6 not started.
+
+1. ✅ **Tokens + helpers** (`AddFormRow`, `BuildDetailPane`, gap unification
    6→8). Mechanical; biggest diff, lowest risk.
 2. **Settings + Memory Setup + MCP Server** — the three worst forms, all
    pure `AddFormRow` consumers. Visible payoff immediately.
+   - ✅ Settings/Gateway: two labelled rows on the grid, panel sized from
+     them, the `Height := 104` guess gone.
+   - ✅ Memory Setup: the checkbox/two combos/edit that shared one row at
+     four hand-picked widths are four labelled rows.
+   - ✅ MCP Server: name/command/args/state on the grid, actions on their
+     own bar below them.
 3. **Detail panes** — the 31 `====` views through `BuildDetailPane`
    (Cron, Checkpoints, Files, Skills, Memory Notes, Relay).
 4. **Workflow inspectors + generated schema forms.**
@@ -152,6 +160,34 @@ not ASCII).
 6. **Sweep**: delete the then-unused ad-hoc constants; census re-run goes in
    the PR description as proof (target: 4 font sizes, 4 gaps, 3 paddings,
    4 row heights).
+
+## Found while executing (not in the original census)
+
+**Backgrounds were laid out as content.** `AddPanelChrome` gave its rect
+`Align.Client`, so a "background" competed with its own siblings for space:
+it took what was left after the Top-aligned rows and drew its outline around
+THAT. On Settings/Gateway the visible result was an empty rounded box under
+the form rather than a border around it — reported as *"why is that box
+there?"*. `Contents` fills the parent's content rect and takes part in no
+such negotiation. 42 `AddPanelChrome` call sites plus 11 direct rects were
+affected, so stray outlines elsewhere in the app very likely have the same
+cause.
+
+**Static chrome never re-themes.** `StyleChromeRect` resolves its colours at
+CALL time, and `RestyleCoreControls` walks labels and controls but not
+`TRectangle` brushes — so anything built once during `BuildInterface` keeps
+the palette that was current then, which is always the DARK one (the theme
+preference is read afterwards, in `LoadLocalSettings`). The header rule hit
+this and is fixed by being held as a field and repainted from `ApplyTheme`.
+Other static chrome very likely has the same defect. A general fix wants a
+registry of themeable rects, but must not hold pointers to the ones that are
+rebuilt per render (chat cards, schema forms) or it will dangle — worth its
+own PR rather than a rushed hook here.
+
+**A separator was drawn as a border.** The top bar carried a full rectangle
+outline; three edges hug the window frame and the fourth reads as a stray
+dark rule under the title. Rules BETWEEN things want their own token
+(`UI_SEPARATOR`), softer than the border AROUND something.
 
 Not in scope: transcript virtualisation (perf, separate track), web-UI
 feature parity (tracked in `studio-parity.md`), dark/light palette (done).
