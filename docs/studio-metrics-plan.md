@@ -141,7 +141,8 @@ not ASCII).
 
 ## Sequencing (each lands as its own PR, `make lint-studio` gated)
 
-Status: **phase 1 done** (#506), **phase 2 done**. Phases 3-6 not started.
+Status: **all six phases executed** (1: #506, 2: #510, 3-6: one PR).
+Closing census below.
 
 1. ✅ **Tokens + helpers** (`AddFormRow`, `BuildDetailPane`, gap unification
    6→8). Mechanical; biggest diff, lowest risk.
@@ -157,9 +158,27 @@ Status: **phase 1 done** (#506), **phase 2 done**. Phases 3-6 not started.
    (Cron, Checkpoints, Files, Skills, Memory Notes, Relay).
 4. **Workflow inspectors + generated schema forms.**
 5. **Lists/cards rhythm + empty states + Stats/Relay metric cards.**
-6. **Sweep**: delete the then-unused ad-hoc constants; census re-run goes in
-   the PR description as proof (target: 4 font sizes, 4 gaps, 3 paddings,
-   4 row heights).
+6. ✅ **Sweep**: 76 of 77 hand-tuned button widths onto the S/M/L tokens
+   (eight long-caption buttons keep measured widths -- snapping 'Install
+   Selected' to 104px clips it); census re-run below.
+
+## Closing census (vs the opening one)
+
+| dimension | opened at | closed at |
+|---|---|---|
+| raw font sizes | 8 values, 47 mixed sites | **0** |
+| raw row heights (20-60px band) | 11 values | **3 single-use content sizes** |
+| raw gap literals | 6px x97 vs 8px x78 | **hairline insets (1-3px) + PAD_PANEL's 10 only** |
+| button widths | 22 values, 77 sites | **3 tokens + 8 caption-measured** |
+| ASCII underlines | 31 (94 counting sections) | **0** |
+| token consumption | 0 | **785 sites** |
+
+Also marked done on the way: 3 (the underline idiom is gone -- titles that
+duplicated adjacent labels were already dropped, sections read as 'Title:'),
+4 (workflow node editor, LLM/replicate inspectors and generated schema forms
+on the shared gutter, inspector height SUMMED from its rows), 5 (empty
+states on cron/checkpoints/skills/vault/facts/KB, metric cards on a native
+3-up TListBox grid).
 
 ## Found while executing (not in the original census)
 

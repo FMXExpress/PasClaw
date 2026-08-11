@@ -614,6 +614,7 @@ type
     procedure AddPanelChrome(Control: TControl; Alt: Boolean = False);
     function AddPaneSplitter(AParent: TFmxObject; AAlign: TAlignLayout): TSplitter;
     function AddSectionHeader(AParent: TFmxObject; const Text: string): TLabel;
+    procedure AddListEmptyState(List: TListBox; const Msg: string);
     function AddFormRow(AParent: TFmxObject; const LabelText: string;
       Control: TControl; ControlWidth: Single = 0): TLayout;
     function BuildDetailPane(AParent: TFmxObject; out TitleLabel,
@@ -1832,6 +1833,32 @@ begin
     Result.Width := 8
   else
     Result.Height := 8;
+end;
+
+procedure TMasterDetailForm.AddListEmptyState(List: TListBox;
+  const Msg: string);
+{ The sessions-list treatment for every list: an empty list must say what
+  belongs in it and how to get one, because a silent blank column reads as
+  a loading failure. Call after a render pass that produced no rows. }
+var
+  Item: TListBoxItem;
+  Cap: TLabel;
+begin
+  if (List = nil) or (List.Count > 0) then
+    Exit;
+  Item := TListBoxItem.Create(List);
+  Item.Parent := List;
+  Item.Text := '';
+  Item.Height := ROW_CARD;
+  Item.HitTest := False;
+  Cap := TLabel.Create(Item);
+  Cap.Parent := Item;
+  Cap.Align := TAlignLayout.Client;
+  Cap.HitTest := False;
+  Cap.WordWrap := True;
+  Cap.Text := Msg;
+  SetControlMargins(Cap, 10, GAP_S, 10, GAP_S);
+  StyleLabel(Cap, UI_MUTED, TXT_BODY, False);
 end;
 
 function TMasterDetailForm.AddFormRow(AParent: TFmxObject;
@@ -3505,7 +3532,7 @@ begin
     starting text-safe means the icon-less fallback -- [ui] icon_buttons=false,
     or a style without the glyph -- is readable instead of a clipped 34px
     stub, and iconification still lands on ICON_BTN_W. }
-  Btn.Width := 104;
+  Btn.Width := BTN_W_L;
   Btn.Text := '+ Session';      { ApplyButtonIcon swaps in the add glyph }
   Btn.OnClick := NewSessionClick;
   SetControlMargins(Btn, GAP_S, 2, 0, 2);
@@ -3557,7 +3584,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := SessionButtons;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 62;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Export';
   Btn.OnClick := SessionExportClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -3565,7 +3592,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := SessionButtons;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 62;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Import';
   Btn.OnClick := SessionImportClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -3575,7 +3602,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := SessionButtons;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 74;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Import Dir';
   Btn.OnClick := SessionImportDirClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -3694,7 +3721,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := NativeBar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 64;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Clear';
   Btn.OnClick := LogsClearClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -3702,7 +3729,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := NativeBar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 64;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Stop';
   Btn.TagString := 'stop';
   Btn.OnClick := LogsClick;
@@ -3711,7 +3738,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := NativeBar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 64;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Tail';
   Btn.TagString := 'start';
   Btn.OnClick := LogsClick;
@@ -3771,7 +3798,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := NativeBar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 82;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Save ZIP';
   Btn.OnClick := WorkspaceExportClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -3779,7 +3806,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := NativeBar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 88;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Import ZIP';
   Btn.OnClick := WorkspaceImportClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -3787,7 +3814,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := NativeBar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Onboard';
   Btn.OnClick := OnboardingShowClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -3934,7 +3961,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := TopLine;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 70;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Files';
   Btn.OnClick := ChatFilesClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4332,7 +4359,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Bar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 68;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Run';
   Btn.TagString := Key;
   Btn.OnClick := EndpointRunClick;
@@ -4595,7 +4622,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 104;
+  Btn.Width := BTN_W_L;
   Btn.Text := 'Download';
   Btn.OnClick := FilesDownloadSelectedClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4603,7 +4630,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 74;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Preview';
   Btn.OnClick := FilesBrowseClick;
   Btn.TagString := 'read';
@@ -4612,7 +4639,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 58;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Up';
   Btn.OnClick := FilesBrowseClick;
   Btn.TagString := 'up';
@@ -4621,7 +4648,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 92;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Browse';
   Btn.OnClick := FilesBrowseClick;
   Btn.TagString := 'browse';
@@ -4686,7 +4713,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 62;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Copy';
   Btn.OnClick := FileDetailCopyClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4694,7 +4721,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 58;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Hex';
   Btn.OnClick := FilesBrowseClick;
   Btn.TagString := 'peek';
@@ -4719,7 +4746,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := FFileHexToolbar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 58;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Last';
   Btn.OnClick := FilesHexLastClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4727,7 +4754,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := FFileHexToolbar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 58;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Next';
   Btn.OnClick := FilesHexNextClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4735,7 +4762,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := FFileHexToolbar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 58;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Prev';
   Btn.OnClick := FilesHexPrevClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4743,7 +4770,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := FFileHexToolbar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 58;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'First';
   Btn.OnClick := FilesHexFirstClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4789,7 +4816,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 76;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Search';
   Btn.OnClick := MemorySearchClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4797,7 +4824,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 74;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Refresh';
   Btn.OnClick := MemoryFilesLoadClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4844,7 +4871,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 62;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Copy';
   Btn.OnClick := MemoryFileDetailCopyClick;
 
@@ -4887,7 +4914,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 66;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Add';
   Btn.OnClick := MemoryFactAddClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4906,7 +4933,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 70;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Forget';
   Btn.OnClick := MemoryFactDeleteClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4914,7 +4941,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 82;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Export';
   Btn.OnClick := MemoryFactsExportClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4922,7 +4949,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 76;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Refresh';
   Btn.OnClick := MemoryFactsLoadClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4965,7 +4992,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Upload';
   Btn.OnClick := KbUploadClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4973,7 +5000,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 80;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Sources';
   Btn.OnClick := KbSourcesLoadClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4981,7 +5008,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 72;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Search';
   Btn.OnClick := KbSearchClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -5070,7 +5097,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 92;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Refresh';
   Btn.OnClick := CronRefreshClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -5078,7 +5105,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 92;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Remove';
   Btn.OnClick := CronRemoveClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -5086,7 +5113,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 62;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Save';
   Btn.OnClick := CronSaveClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -5094,7 +5121,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 54;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'New';
   Btn.OnClick := CronClearClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -5250,7 +5277,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 82;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Refresh';
   Btn.OnClick := StatsRefreshClick;
 
@@ -5286,7 +5313,13 @@ begin
   AddPanelChrome(LeftPane, True);
   AddSectionHeader(LeftPane, 'Summary');
 
+  { a GRID of metric cards, not a single column -- TListBox does this
+    natively via Columns. TWO, not the plan's three: the pane is a fixed
+    320px, and after its padding, the scrollbar and each card's own padding,
+    three columns leave ~75px per caption -- 'Output tokens' clips. Two
+    leave ~124px, which holds every caption AddSummary renders. }
   FStatsSummaryList := TListBox.Create(Self);
+  FStatsSummaryList.Columns := 2;
   FStatsSummaryList.Parent := LeftPane;
   FStatsSummaryList.Align := TAlignLayout.Client;
   FStatsSummaryList.ShowCheckboxes := False;
@@ -5341,7 +5374,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 70;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Revert';
   Btn.TagString := 'revert';
   Btn.OnClick := CheckpointActionClick;
@@ -5350,7 +5383,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 62;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Redo';
   Btn.TagString := 'redo';
   Btn.OnClick := CheckpointActionClick;
@@ -5359,7 +5392,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 62;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Undo';
   Btn.TagString := 'undo';
   Btn.OnClick := CheckpointActionClick;
@@ -5368,7 +5401,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 92;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Refresh';
   Btn.OnClick := CheckpointRefreshClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -5451,7 +5484,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 92;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Refresh';
   Btn.OnClick := RelayRefreshClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -5610,11 +5643,12 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 74;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Copy';
   Btn.OnClick := RelaySnippetCopyClick;
 
   FRelayStatsList := TListBox.Create(Self);
+  FRelayStatsList.Columns := 2;   { same 320px pane arithmetic as Stats }
   FRelayStatsList.Parent := LeftPane;
   FRelayStatsList.Align := TAlignLayout.Client;
 
@@ -5985,7 +6019,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 92;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Invoke';
   Btn.OnClick := McpToolInvokeClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6048,7 +6082,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 62;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Copy';
   Btn.OnClick := McpResultCopyClick;
 
@@ -6103,7 +6137,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 72;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Remove';
   Btn.OnClick := SkillsRemoveClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6111,7 +6145,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Install';
   Btn.OnClick := SkillsInstallClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6119,7 +6153,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Refresh';
   Btn.OnClick := SkillsRefreshClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6147,7 +6181,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 76;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Search';
   Btn.OnClick := SkillsSearchClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6187,7 +6221,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 70;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Reject';
   Btn.OnClick := SkillsRejectClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6195,7 +6229,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 76;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Approve';
   Btn.OnClick := SkillsApproveClick;
 
@@ -6283,7 +6317,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 92;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Build With';
   Btn.OnClick := VaultBuildWithClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6291,7 +6325,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 76;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Search';
   Btn.OnClick := VaultSearchClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6356,7 +6390,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 62;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Copy';
   Btn.OnClick := VaultDetailCopyClick;
 
@@ -6449,7 +6483,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 92;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Load Setup';
   Btn.OnClick := MemorySetupLoadClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6504,7 +6538,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 76;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Delete';
   Btn.OnClick := ConfigDeleteValueClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6512,7 +6546,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Add Item';
   Btn.OnClick := ConfigAddArrayItemClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6520,7 +6554,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 70;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Apply';
   Btn.OnClick := ConfigApplyValueClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6528,7 +6562,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Refresh';
   Btn.OnClick := ConfigRefreshClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6550,7 +6584,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 66;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Models';
   Btn.TagString := 'default_model';
   Btn.OnClick := ConfigQuickSectionClick;
@@ -6559,7 +6593,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 68;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Router';
   Btn.TagString := 'auto_router';
   Btn.OnClick := ConfigQuickSectionClick;
@@ -6568,7 +6602,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 76;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Sandbox';
   Btn.TagString := 'sandbox';
   Btn.OnClick := ConfigQuickSectionClick;
@@ -6577,7 +6611,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 58;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Cron';
   Btn.TagString := 'cron';
   Btn.OnClick := ConfigQuickSectionClick;
@@ -6586,7 +6620,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 58;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'MCP';
   Btn.TagString := 'mcp_servers';
   Btn.OnClick := ConfigQuickSectionClick;
@@ -6595,7 +6629,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Providers';
   Btn.TagString := 'providers';
   Btn.OnClick := ConfigQuickSectionClick;
@@ -6834,7 +6868,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 82;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Delete';
   Btn.OnClick := WorkflowDeleteClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6842,7 +6876,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 76;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Run';
   Btn.OnClick := WorkflowRunClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6850,7 +6884,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Save';
   Btn.OnClick := WorkflowSaveClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6858,7 +6892,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Load';
   Btn.OnClick := WorkflowLoadClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6866,7 +6900,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 104;
+  Btn.Width := BTN_W_L;
   Btn.Text := 'Load Tools';
   Btn.OnClick := WorkflowLoadToolsClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6874,7 +6908,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 76;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'New';
   Btn.OnClick := WorkflowNewClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6991,54 +7025,56 @@ begin
   StyleChromeRect(Chrome, UI_PANEL_ALT, UI_BORDER, 6, False);
   Chrome.SendToBack;
 
-  Row := TLayout.Create(Self);
-  Row.Parent := SettingsPane;
-  Row.Align := TAlignLayout.Top;
-  Row.Height := ROW_BAR;
-
-  Btn := TButton.Create(Self);
-  Btn.Parent := Row;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
-  Btn.Text := 'Delete';
-  Btn.OnClick := WorkflowDeleteNodeClick;
-  SetControlMargins(Btn, GAP_S, 0, 0, 0);
-
-  Btn := TButton.Create(Self);
-  Btn.Parent := Row;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 86;
-  Btn.Text := 'Update';
-  Btn.OnClick := WorkflowUpdateNodeClick;
-  SetControlMargins(Btn, GAP_S, 0, 0, 0);
-
-  Btn := TButton.Create(Self);
-  Btn.Parent := Row;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 70;
-  Btn.Text := 'Add';
-  Btn.OnClick := WorkflowAddNodeClick;
-  SetControlMargins(Btn, GAP_S, 0, 0, 0);
-
+  { Phase 4: the node editor packed a combo, an edit and three buttons onto
+    one row; nothing was labelled. Fields on the grid, actions on a bar. }
   FWorkflowToolCombo := TComboBox.Create(Self);
-  FWorkflowToolCombo.Parent := Row;
-  FWorkflowToolCombo.Align := TAlignLayout.Left;
-  FWorkflowToolCombo.Width := 168;
   FWorkflowToolCombo.Items.Add('llm');
   FWorkflowToolCombo.Items.Add('replicate');
   FWorkflowToolCombo.ItemIndex := 0;
   FWorkflowToolCombo.OnChange := WorkflowToolChange;
-  SetControlMargins(FWorkflowToolCombo, 0, 0, GAP_S, 0);
+  AddFormRow(SettingsPane, 'Tool', FWorkflowToolCombo, 168);
 
   FWorkflowNodeIdEdit := TEdit.Create(Self);
-  FWorkflowNodeIdEdit.Parent := Row;
-  FWorkflowNodeIdEdit.Align := TAlignLayout.Client;
   FWorkflowNodeIdEdit.TextPrompt := 'node id';
+  AddFormRow(SettingsPane, 'Node id', FWorkflowNodeIdEdit);
 
   Row := TLayout.Create(Self);
   Row.Parent := SettingsPane;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 220;
+  Row.Height := ROW_BAR;
+  SetControlMargins(Row, FORM_LABEL_W + GAP_M, 0, 0, 0);
+
+  Btn := TButton.Create(Self);
+  Btn.Parent := Row;
+  Btn.Align := TAlignLayout.Left;
+  Btn.Width := BTN_W_S;
+  Btn.Text := 'Add';
+  Btn.OnClick := WorkflowAddNodeClick;
+  SetControlMargins(Btn, 0, 0, GAP_S, 0);
+
+  Btn := TButton.Create(Self);
+  Btn.Parent := Row;
+  Btn.Align := TAlignLayout.Left;
+  Btn.Width := BTN_W_M;
+  Btn.Text := 'Update';
+  Btn.OnClick := WorkflowUpdateNodeClick;
+  SetControlMargins(Btn, 0, 0, GAP_S, 0);
+
+  Btn := TButton.Create(Self);
+  Btn.Parent := Row;
+  Btn.Align := TAlignLayout.Left;
+  Btn.Width := BTN_W_S;
+  Btn.Text := 'Delete';
+  Btn.OnClick := WorkflowDeleteNodeClick;
+
+  Row := TLayout.Create(Self);
+  Row.Parent := SettingsPane;
+  Row.Align := TAlignLayout.Top;
+  { mode label + 2 llm rows + 3 replicate rows + action bar + prompt memo +
+    the panel's own padding. Summed, not guessed: the schema group panel
+    already taught this file what a guessed container height does. }
+  Row.Height := ROW_TEXT + (ROW_FORM + GAP_XS) * 5 + ROW_BAR + GAP_XS +
+                72 + GAP_S * 3;
   SetControlMargins(Row, 0, GAP_S, 0, 0);
   SetControlPadding(Row, GAP_S, GAP_S, GAP_S, GAP_S);
   Chrome := TRectangle.Create(Self);
@@ -7055,38 +7091,36 @@ begin
   FWorkflowInspectorModeLabel.TextSettings.VertAlign := TTextAlign.Center;
   StyleLabel(FWorkflowInspectorModeLabel, UI_ACCENT, TXT_TITLE, True);
 
-  EdgeRow := TLayout.Create(Self);
-  EdgeRow.Parent := Row;
-  EdgeRow.Align := TAlignLayout.Top;
-  EdgeRow.Height := ROW_BAR;
-
-  Btn := TButton.Create(Self);
-  Btn.Parent := EdgeRow;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 92;
-  Btn.Text := 'Apply Form';
-  Btn.OnClick := WorkflowApplyInspectorClick;
-  SetControlMargins(Btn, GAP_S, 0, 0, 0);
-
-  Btn := TButton.Create(Self);
-  Btn.Parent := EdgeRow;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 96;
-  Btn.Text := 'Providers';
-  Btn.OnClick := WorkflowProviderModelClick;
-  SetControlMargins(Btn, GAP_S, 0, 0, 0);
-
+  { provider + model each on a labelled row; Apply/Providers move to a bar
+    at the bottom of the inspector rather than crowding the provider row }
   FWorkflowLlmProviderEdit := TEdit.Create(Self);
-  FWorkflowLlmProviderEdit.Parent := EdgeRow;
-  FWorkflowLlmProviderEdit.Align := TAlignLayout.Left;
-  FWorkflowLlmProviderEdit.Width := 130;
   FWorkflowLlmProviderEdit.TextPrompt := 'provider';
-  SetControlMargins(FWorkflowLlmProviderEdit, 0, 0, GAP_S, 0);
+  AddFormRow(Row, 'Provider', FWorkflowLlmProviderEdit, 150);
 
   FWorkflowLlmModelEdit := TEdit.Create(Self);
-  FWorkflowLlmModelEdit.Parent := EdgeRow;
-  FWorkflowLlmModelEdit.Align := TAlignLayout.Client;
   FWorkflowLlmModelEdit.TextPrompt := 'model';
+  AddFormRow(Row, 'Model', FWorkflowLlmModelEdit);
+
+  EdgeRow := TLayout.Create(Self);
+  EdgeRow.Parent := Row;
+  EdgeRow.Align := TAlignLayout.Bottom;
+  EdgeRow.Height := ROW_BAR;
+  SetControlMargins(EdgeRow, FORM_LABEL_W + GAP_M, GAP_XS, 0, 0);
+
+  Btn := TButton.Create(Self);
+  Btn.Parent := EdgeRow;
+  Btn.Align := TAlignLayout.Left;
+  Btn.Width := BTN_W_M;
+  Btn.Text := 'Apply Form';
+  Btn.OnClick := WorkflowApplyInspectorClick;
+  SetControlMargins(Btn, 0, 0, GAP_S, 0);
+
+  Btn := TButton.Create(Self);
+  Btn.Parent := EdgeRow;
+  Btn.Align := TAlignLayout.Left;
+  Btn.Width := BTN_W_M;
+  Btn.Text := 'Providers';
+  Btn.OnClick := WorkflowProviderModelClick;
 
   FWorkflowLlmPromptMemo := TMemo.Create(Self);
   FWorkflowLlmPromptMemo.Parent := Row;
@@ -7095,38 +7129,33 @@ begin
   FWorkflowLlmPromptMemo.WordWrap := True;
   SetControlMargins(FWorkflowLlmPromptMemo, 0, GAP_S, 0, 0);
 
-  EdgeRow := TLayout.Create(Self);
-  EdgeRow.Parent := Row;
-  EdgeRow.Align := TAlignLayout.Bottom;
-  EdgeRow.Height := ROW_BAR;
-  SetControlMargins(EdgeRow, 0, GAP_S, 0, 0);
-
+  { replicate fields: version and prompt on labelled rows; the model search
+    keeps its edit + button pair on the search row }
   FWorkflowReplicateVersionEdit := TEdit.Create(Self);
-  FWorkflowReplicateVersionEdit.Parent := EdgeRow;
-  FWorkflowReplicateVersionEdit.Align := TAlignLayout.Left;
-  FWorkflowReplicateVersionEdit.Width := 160;
   FWorkflowReplicateVersionEdit.TextPrompt := 'replicate version';
-  SetControlMargins(FWorkflowReplicateVersionEdit, 0, 0, GAP_S, 0);
+  AddFormRow(Row, 'Version', FWorkflowReplicateVersionEdit);
+
+  FWorkflowReplicatePromptEdit := TEdit.Create(Self);
+  FWorkflowReplicatePromptEdit.TextPrompt := 'replicate input.prompt';
+  AddFormRow(Row, 'Prompt', FWorkflowReplicatePromptEdit);
+
+  EdgeRow := AddFormRow(Row, 'Search', nil);
 
   Btn := TButton.Create(Self);
   Btn.Parent := EdgeRow;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 64;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Search';
+  Btn.TagString := 'noicon';
   Btn.OnClick := WorkflowReplicateSearchClick;
-  SetControlMargins(Btn, GAP_S, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 1, 0, 1);
 
   FWorkflowReplicateSearchEdit := TEdit.Create(Self);
   FWorkflowReplicateSearchEdit.Parent := EdgeRow;
-  FWorkflowReplicateSearchEdit.Align := TAlignLayout.Right;
-  FWorkflowReplicateSearchEdit.Width := 128;
+  FWorkflowReplicateSearchEdit.Align := TAlignLayout.Client;
+  FWorkflowReplicateSearchEdit.Height := H_INPUT;
   FWorkflowReplicateSearchEdit.TextPrompt := 'model search';
-  SetControlMargins(FWorkflowReplicateSearchEdit, GAP_S, 0, 0, 0);
-
-  FWorkflowReplicatePromptEdit := TEdit.Create(Self);
-  FWorkflowReplicatePromptEdit.Parent := EdgeRow;
-  FWorkflowReplicatePromptEdit.Align := TAlignLayout.Client;
-  FWorkflowReplicatePromptEdit.TextPrompt := 'replicate input.prompt';
+  SetControlMargins(FWorkflowReplicateSearchEdit, 0, 1, 0, 1);
 
   FWorkflowReplicateResultsList := TListBox.Create(Self);
   FWorkflowReplicateResultsList.Parent := SettingsPane;
@@ -7182,7 +7211,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := EdgeRow;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Delete';
   Btn.OnClick := WorkflowDeleteEdgeClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -7190,7 +7219,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := EdgeRow;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 66;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Add';
   Btn.OnClick := WorkflowAddEdgeClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -7223,7 +7252,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := EdgeRow;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 104;
+  Btn.Width := BTN_W_L;
   Btn.Text := 'Refresh Inputs';
   Btn.OnClick := WorkflowRunInputsClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -7269,7 +7298,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := EdgeRow;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 62;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Copy';
   Btn.OnClick := WorkflowRunResultCopyClick;
 
@@ -7527,7 +7556,12 @@ begin
           LabelControl := TLabel.Create(Self);
           LabelControl.Parent := NestedRow;
           LabelControl.Align := TAlignLayout.Left;
-          LabelControl.Width := 132;
+          { slightly narrower than FORM_LABEL_W: the group panel's own
+            padding already indents the row, and the shared gutter is
+            measured from the TAB edge, not the group's }
+          LabelControl.Width := FORM_LABEL_W - GAP_S;
+          LabelControl.TextSettings.HorzAlign := TTextAlign.Trailing;
+          SetControlMargins(LabelControl, 0, 0, GAP_M, 0);
           LabelControl.Text := NestedPair.JsonString.Value;
           if NestedRequired then
             LabelControl.Text := LabelControl.Text + ' *';
@@ -7611,10 +7645,14 @@ begin
         Row.Height := ROW_BAR;
       SetControlMargins(Row, 0, 0, 0, GAP_XS);
 
+      { the SHARED form gutter: a generated schema row must be
+        indistinguishable from a hand-built AddFormRow one }
       LabelControl := TLabel.Create(Self);
       LabelControl.Parent := Row;
       LabelControl.Align := TAlignLayout.Left;
-      LabelControl.Width := 140;
+      LabelControl.Width := FORM_LABEL_W;
+      LabelControl.TextSettings.HorzAlign := TTextAlign.Trailing;
+      SetControlMargins(LabelControl, 0, 0, GAP_M, 0);
       LabelControl.Text := Pair.JsonString.Value;
       if SameText(FieldType, 'array') and
         (SameText(ItemType, 'string') or SameText(ItemType, 'number') or
@@ -8860,16 +8898,13 @@ begin
     Text := TStringBuilder.Create;
     try
       Text.AppendLine('Configuration');
-      Text.AppendLine('=============');
       Text.AppendLine;
-      Text.AppendLine('Defaults');
-      Text.AppendLine('--------');
+      Text.AppendLine('Defaults:');
       Text.AppendLine(Format('%-22s %s', ['Provider', JsonAsString(Obj, 'default_provider')]));
       Text.AppendLine(Format('%-22s %s', ['Model', JsonAsString(Obj, 'default_model')]));
       Text.AppendLine;
 
-      Text.AppendLine('Providers');
-      Text.AppendLine('---------');
+      Text.AppendLine('Providers:');
       Value := Obj.GetValue('providers');
       if Value is TJSONArray then
       begin
@@ -8895,8 +8930,7 @@ begin
         Text.AppendLine('(none)');
 
       Text.AppendLine;
-      Text.AppendLine('Memory and retrieval');
-      Text.AppendLine('--------------------');
+      Text.AppendLine('Memory and retrieval:');
       if Obj.GetValue('memory_search_enabled') <> nil then
         Text.AppendLine(Format('%-22s %s', ['Memory search', BoolToStr(JsonAsBool(Obj, 'memory_search_enabled'), True)]));
       if Obj.GetValue('vector_search_enabled') <> nil then
@@ -8909,8 +8943,7 @@ begin
         Text.AppendLine(Format('%-22s %s', ['Rerank model', JsonAsString(Obj, 'rerank_model')]));
 
       Text.AppendLine;
-      Text.AppendLine('Runtime features');
-      Text.AppendLine('----------------');
+      Text.AppendLine('Runtime features:');
       if Obj.GetValue('stats_collection_enabled') <> nil then
         Text.AppendLine(Format('%-22s %s', ['Stats collection', BoolToStr(JsonAsBool(Obj, 'stats_collection_enabled'), True)]));
       if Obj.GetValue('checkpoints_enabled') <> nil then
@@ -8922,8 +8955,7 @@ begin
       if Value is TJSONArray then
       begin
         Text.AppendLine;
-        Text.AppendLine('Fallbacks');
-        Text.AppendLine('---------');
+        Text.AppendLine('Fallbacks:');
         Arr := TJSONArray(Value);
         if Arr.Count = 0 then
           Text.AppendLine('(none)')
@@ -8936,8 +8968,7 @@ begin
       if Value is TJSONArray then
       begin
         Text.AppendLine;
-        Text.AppendLine('MCP servers');
-        Text.AppendLine('-----------');
+        Text.AppendLine('MCP servers:');
         Arr := TJSONArray(Value);
         if Arr.Count = 0 then
           Text.AppendLine('(none)')
@@ -8955,8 +8986,7 @@ begin
       end;
 
       Text.AppendLine;
-      Text.AppendLine('Raw JSON');
-      Text.AppendLine('--------');
+      Text.AppendLine('Raw JSON:');
       Text.Append(JsonText);
       Result := Text.ToString;
     finally
@@ -8985,10 +9015,8 @@ begin
     Text := TStringBuilder.Create;
     try
       Text.AppendLine('Memory and Reranking Setup');
-      Text.AppendLine('==========================');
       Text.AppendLine;
-      Text.AppendLine('Semantic memory');
-      Text.AppendLine('---------------');
+      Text.AppendLine('Semantic memory:');
       Text.AppendLine(Format('%-24s %s', ['Vector search',
         BoolToStr(JsonAsBool(Obj, 'vector_search_enabled'), True)]));
       Text.AppendLine(Format('%-24s %s', ['Embedder downloaded',
@@ -8997,8 +9025,7 @@ begin
         BoolToStr(JsonAsBool(Obj, 'ort_loadable'), True)]));
 
       Text.AppendLine;
-      Text.AppendLine('Reranking');
-      Text.AppendLine('---------');
+      Text.AppendLine('Reranking:');
       Text.AppendLine(Format('%-24s %s', ['Enabled',
         BoolToStr(JsonAsBool(Obj, 'rerank_search_enabled'), True)]));
       Text.AppendLine(Format('%-24s %s', ['Backend',
@@ -9012,8 +9039,7 @@ begin
           JsonAsString(Obj, 'reranker_keys')]));
 
       Text.AppendLine;
-      Text.AppendLine('Provisioning job');
-      Text.AppendLine('----------------');
+      Text.AppendLine('Provisioning job:');
       Value := Obj.GetValue('job');
       if Value is TJSONObject then
       begin
@@ -9029,8 +9055,7 @@ begin
         Text.AppendLine('(idle)');
 
       Text.AppendLine;
-      Text.AppendLine('Raw JSON');
-      Text.AppendLine('--------');
+      Text.AppendLine('Raw JSON:');
       Text.Append(JsonText);
       Result := Text.ToString;
     finally
@@ -9060,7 +9085,6 @@ begin
     Text := TStringBuilder.Create;
     try
       Text.AppendLine('Models');
-      Text.AppendLine('======');
       Text.AppendLine;
       Value := Obj.GetValue('data');
       if Value is TJSONArray then
@@ -9084,8 +9108,7 @@ begin
       else
         Text.AppendLine('(model data missing)');
 
-      Text.AppendLine('Raw JSON');
-      Text.AppendLine('--------');
+      Text.AppendLine('Raw JSON:');
       Text.Append(JsonText);
       Result := Text.ToString;
     finally
@@ -9118,7 +9141,6 @@ begin
       if Value is TJSONArray then
       begin
         Text.AppendLine('Provider Catalog');
-        Text.AppendLine('================');
         Text.AppendLine;
         Arr := TJSONArray(Value);
         Text.AppendLine(Format('%d provider kind(s)', [Arr.Count]));
@@ -9148,7 +9170,6 @@ begin
       else
       begin
         Text.AppendLine('Configured Providers');
-        Text.AppendLine('====================');
         Text.AppendLine;
         Text.AppendLine(Format('%-14s %s', ['Default',
           JsonAsString(Obj, 'default')]));
@@ -9174,8 +9195,7 @@ begin
           Text.AppendLine('(provider list missing)');
       end;
 
-      Text.AppendLine('Raw JSON');
-      Text.AppendLine('--------');
+      Text.AppendLine('Raw JSON:');
       Text.Append(JsonText);
       Result := Text.ToString;
     finally
@@ -9201,15 +9221,13 @@ begin
     Text := TStringBuilder.Create;
     try
       Text.AppendLine('Gateway Status');
-      Text.AppendLine('==============');
       Text.AppendLine;
       Text.AppendLine(Format('%-18s %s', ['Provider',
         JsonAsString(Obj, 'default_provider')]));
       Text.AppendLine(Format('%-18s %s', ['Model',
         JsonAsString(Obj, 'default_model')]));
       Text.AppendLine;
-      Text.AppendLine('Configured Surface');
-      Text.AppendLine('------------------');
+      Text.AppendLine('Configured Surface:');
       Text.AppendLine(Format('%-18s %s', ['Providers',
         JsonAsInt64(Obj, 'providers').ToString]));
       Text.AppendLine(Format('%-18s %s', ['MCP servers',
@@ -9221,8 +9239,7 @@ begin
       Text.AppendLine(Format('%-18s %s', ['Skills',
         JsonAsInt64(Obj, 'skills').ToString]));
       Text.AppendLine;
-      Text.AppendLine('Raw JSON');
-      Text.AppendLine('--------');
+      Text.AppendLine('Raw JSON:');
       Text.Append(JsonText);
       Result := Text.ToString;
     finally
@@ -9255,7 +9272,6 @@ begin
       if Value is TJSONArray then
       begin
         Text.AppendLine('Memory Files');
-        Text.AppendLine('============');
         Text.AppendLine;
         Arr := TJSONArray(Value);
         Text.AppendLine(Format('%d file(s)', [Arr.Count]));
@@ -9278,7 +9294,6 @@ begin
         if Value is TJSONArray then
         begin
           Text.AppendLine('Memory Search Results');
-          Text.AppendLine('=====================');
           Text.AppendLine;
           Arr := TJSONArray(Value);
           Text.AppendLine(Format('%d hit(s)', [Arr.Count]));
@@ -9302,7 +9317,6 @@ begin
           if Value is TJSONArray then
           begin
             Text.AppendLine('Distilled Facts');
-            Text.AppendLine('===============');
             Text.AppendLine;
             Text.AppendLine('Enabled: ' + BoolToStr(JsonAsBool(Obj, 'enabled'), True));
             Text.AppendLine;
@@ -9334,8 +9348,7 @@ begin
       end;
 
       Text.AppendLine;
-      Text.AppendLine('Raw JSON');
-      Text.AppendLine('--------');
+      Text.AppendLine('Raw JSON:');
       Text.Append(JsonText);
       Result := Text.ToString;
     finally
@@ -9366,14 +9379,12 @@ begin
     Text := TStringBuilder.Create;
     try
       Text.AppendLine('Knowledge Base');
-      Text.AppendLine('==============');
       Text.AppendLine;
       Value := Obj.GetValue('stats');
       if Value is TJSONObject then
       begin
         Stats := TJSONObject(Value);
-        Text.AppendLine('Stats');
-        Text.AppendLine('-----');
+        Text.AppendLine('Stats:');
         Text.AppendLine(Format('%-18s %s', ['Sources', JsonAsInt64(Stats, 'sources').ToString]));
         Text.AppendLine(Format('%-18s %s', ['Files', JsonAsInt64(Stats, 'files').ToString]));
         Text.AppendLine(Format('%-18s %s', ['Chunks', JsonAsInt64(Stats, 'chunks').ToString]));
@@ -9381,8 +9392,7 @@ begin
         Text.AppendLine;
       end;
 
-      Text.AppendLine('Sources');
-      Text.AppendLine('-------');
+      Text.AppendLine('Sources:');
       Value := Obj.GetValue('sources');
       if Value is TJSONArray then
       begin
@@ -9403,8 +9413,7 @@ begin
         Text.AppendLine('(none)');
 
       Text.AppendLine;
-      Text.AppendLine('Raw JSON');
-      Text.AppendLine('--------');
+      Text.AppendLine('Raw JSON:');
       Text.Append(JsonText);
       Result := Text.ToString;
     finally
@@ -9435,7 +9444,6 @@ begin
     Text := TStringBuilder.Create;
     try
       Text.AppendLine('Knowledge Base Search');
-      Text.AppendLine('=====================');
       Text.AppendLine;
       Value := Obj.GetValue('hits');
       if not (Value is TJSONArray) then
@@ -9467,8 +9475,7 @@ begin
       else
         Text.AppendLine(JsonText);
 
-      Text.AppendLine('Raw JSON');
-      Text.AppendLine('--------');
+      Text.AppendLine('Raw JSON:');
       Text.Append(JsonText);
       Result := Text.ToString;
     finally
@@ -9962,11 +9969,10 @@ begin
           if FPaneMemos.TryGetValue('memory', Memo) then
             Memo.Lines.Text := 'GET /v1/memory/' + Name + sLineBreak +
               'HTTP ' + Status.ToString + sLineBreak + sLineBreak +
-              'Memory File: ' + Name + sLineBreak +
-              '====================' + sLineBreak + sLineBreak + Content;
+              'Memory File: ' + Name + sLineBreak + sLineBreak + Content;
           if FMemoryFileDetailMemo <> nil then
             FMemoryFileDetailMemo.Lines.Text := 'Memory File: ' + Name +
-              sLineBreak + '====================' + sLineBreak + sLineBreak +
+              sLineBreak + sLineBreak +
               Content;
           SetStatus('memory file loaded');
         end);
@@ -10061,6 +10067,8 @@ begin
             Memo.Lines.Text := 'GET /v1/memory/facts' + sLineBreak +
               'HTTP ' + Status.ToString + sLineBreak + sLineBreak +
               FormatMemoryText(ResponseText);
+          AddListEmptyState(FMemoryFactsList,
+            'No facts yet. The agent distils them from conversations, or add one below.');
           SetStatus('memory facts loaded');
         end);
     end);
@@ -12996,13 +13004,11 @@ begin
   Text := TStringBuilder.Create;
   try
     Text.AppendLine('Graph');
-    Text.AppendLine('=====');
     Text.AppendLine;
     if FWorkflowInputsEdit <> nil then
       Text.AppendLine('Inputs: ' + FWorkflowInputsEdit.Text);
     Text.AppendLine;
-    Text.AppendLine('Nodes');
-    Text.AppendLine('-----');
+    Text.AppendLine('Nodes:');
     if (FWorkflowNodesList = nil) or (FWorkflowNodesList.Count = 0) then
       Text.AppendLine('(none)')
     else
@@ -13018,8 +13024,7 @@ begin
           Text.AppendLine(FWorkflowNodesList.ListItems[I].Text);
       end;
     Text.AppendLine;
-    Text.AppendLine('Edges');
-    Text.AppendLine('-----');
+    Text.AppendLine('Edges:');
     if (FWorkflowEdgesList = nil) or (FWorkflowEdgesList.Count = 0) then
       Text.AppendLine('(none)')
     else
@@ -13666,7 +13671,6 @@ begin
       if Value is TJSONArray then
       begin
         Text.AppendLine('Installed Skills');
-        Text.AppendLine('================');
         Text.AppendLine;
         Arr := TJSONArray(Value);
         Text.AppendLine(Format('%d installed skill(s)', [Arr.Count]));
@@ -13695,7 +13699,6 @@ begin
         if Value is TJSONArray then
         begin
           Text.AppendLine('Pending Skills');
-          Text.AppendLine('==============');
           Text.AppendLine;
           Arr := TJSONArray(Value);
           Text.AppendLine(Format('%d pending proposal(s)', [Arr.Count]));
@@ -13727,7 +13730,6 @@ begin
           if Value is TJSONArray then
           begin
             Text.AppendLine('Skill Catalog Results');
-            Text.AppendLine('=====================');
             Text.AppendLine;
             Arr := TJSONArray(Value);
             Text.AppendLine(Format('%d result(s)', [Arr.Count]));
@@ -13756,8 +13758,7 @@ begin
         end;
       end;
 
-      Text.AppendLine('Raw JSON');
-      Text.AppendLine('--------');
+      Text.AppendLine('Raw JSON:');
       Text.Append(JsonText);
       Result := Text.ToString;
     finally
@@ -13791,10 +13792,8 @@ begin
     Text := TStringBuilder.Create;
     try
       Text.AppendLine('Relay Status');
-      Text.AppendLine('============');
       Text.AppendLine;
-      Text.AppendLine('Summary');
-      Text.AppendLine('-------');
+      Text.AppendLine('Summary:');
       Text.AppendLine(Format('%-24s %s', ['Connected workers', JsonAsInt64(Obj, 'connected_workers').ToString]));
       Text.AppendLine(Format('%-24s %s', ['Pending', JsonAsInt64(Obj, 'pending_requests').ToString]));
       Text.AppendLine(Format('%-24s %s', ['In-flight', JsonAsInt64(Obj, 'inflight_requests').ToString]));
@@ -13803,8 +13802,7 @@ begin
       Text.AppendLine(Format('%-24s %s', ['Failed', JsonAsInt64(Obj, 'total_failed').ToString]));
 
       Text.AppendLine;
-      Text.AppendLine('Connected workers');
-      Text.AppendLine('-----------------');
+      Text.AppendLine('Connected workers:');
       Value := Obj.GetValue('workers');
       if Value is TJSONArray then
       begin
@@ -13840,14 +13838,12 @@ begin
         Text.AppendLine('(none)');
 
       Text.AppendLine;
-      Text.AppendLine('Worker connection');
-      Text.AppendLine('-----------------');
+      Text.AppendLine('Worker connection:');
       Text.AppendLine('Workers connect outbound to ' + GatewayBaseUrl + '/v1/relay/poll and return results to /v1/relay/respond/<id>.');
       Text.AppendLine('Use the Token button to fetch the relay-scoped worker token.');
 
       Text.AppendLine;
-      Text.AppendLine('Raw JSON');
-      Text.AppendLine('--------');
+      Text.AppendLine('Raw JSON:');
       Text.Append(JsonText);
       Result := Text.ToString;
     finally
@@ -13885,7 +13881,6 @@ begin
     Text := TStringBuilder.Create;
     try
       Text.AppendLine('Relay Worker Token');
-      Text.AppendLine('==================');
       Text.AppendLine;
       Text.AppendLine('This token is scoped to /v1/relay/* and is intended for outbound workers.');
       Text.AppendLine;
@@ -13895,38 +13890,31 @@ begin
       else
         Text.AppendLine('Token:   ' + SnippetToken + ' (hidden)');
       Text.AppendLine;
-      Text.AppendLine('Worker endpoints');
-      Text.AppendLine('----------------');
+      Text.AppendLine('Worker endpoints:');
       Text.AppendLine('GET  ' + Gateway + '/v1/relay/poll');
       Text.AppendLine('POST ' + Gateway + '/v1/relay/respond/<id>');
       Text.AppendLine;
-      Text.AppendLine('Built-in FMX worker');
-      Text.AppendLine('-------------------');
+      Text.AppendLine('Built-in FMX worker:');
       Text.AppendLine('Use the command, provider, model, and worker id fields above, then Connect.');
       Text.AppendLine('Model "*" advertises wildcard capability; blank uses the worker provider default.');
       Text.AppendLine;
-      Text.AppendLine('PasClaw CLI');
-      Text.AppendLine('-----------');
+      Text.AppendLine('PasClaw CLI:');
       Text.AppendLine('pasclaw relay --gateway-url ' + Gateway + ' --gateway-token ' + SnippetToken);
       Text.AppendLine;
-      Text.AppendLine('Windows cmd');
-      Text.AppendLine('-----------');
+      Text.AppendLine('Windows cmd:');
       Text.AppendLine('set PASCLAW_GATEWAY_URL=' + Gateway);
       Text.AppendLine('set PASCLAW_RELAY_TOKEN=' + SnippetToken);
       Text.AppendLine('pasclaw relay');
       Text.AppendLine;
-      Text.AppendLine('PowerShell');
-      Text.AppendLine('----------');
+      Text.AppendLine('PowerShell:');
       Text.AppendLine('$env:PASCLAW_GATEWAY_URL="' + Gateway + '"');
       Text.AppendLine('$env:PASCLAW_RELAY_TOKEN="' + SnippetToken + '"');
       Text.AppendLine('pasclaw relay');
       Text.AppendLine;
-      Text.AppendLine('curl smoke test');
-      Text.AppendLine('---------------');
+      Text.AppendLine('curl smoke test:');
       Text.AppendLine('curl -H "Authorization: Bearer ' + SnippetToken + '" "' + Gateway + '/v1/relay/poll?worker_id=fmx-smoke&caps=chat"');
       Text.AppendLine;
-      Text.AppendLine('Python worker skeleton');
-      Text.AppendLine('----------------------');
+      Text.AppendLine('Python worker skeleton:');
       Text.AppendLine('import requests');
       Text.AppendLine('URL = "' + Gateway + '"');
       Text.AppendLine('headers = {"Authorization": "Bearer ' + SnippetToken + '", "X-Relay-Worker-Id": "py-worker-1", "X-Relay-Capabilities": "chat"}');
@@ -13936,17 +13924,14 @@ begin
       Text.AppendLine('        continue');
       Text.AppendLine('    # parse the request, run local inference, then respond to /v1/relay/respond/<id>');
       Text.AppendLine;
-      Text.AppendLine('Replicate cog-relay');
-      Text.AppendLine('-------------------');
+      Text.AppendLine('Replicate cog-relay:');
       Text.AppendLine('replicate.run("your-handle/pasclaw-relay", input={"gateway_url": "' + Gateway + '", "gateway_token": "' + SnippetToken + '"})');
       Text.AppendLine;
-      Text.AppendLine('Worker protocol');
-      Text.AppendLine('---------------');
+      Text.AppendLine('Worker protocol:');
       Text.AppendLine('Workers poll outbound, run the requested local/provider task, then POST the result to /v1/relay/respond/<id>.');
       Text.AppendLine('Use worker_id and caps to distinguish local runtimes, GPU hosts, tools, and model families.');
       Text.AppendLine;
-      Text.AppendLine('Raw JSON');
-      Text.AppendLine('--------');
+      Text.AppendLine('Raw JSON:');
       Text.Append(JsonText);
       Result := Text.ToString;
     finally
@@ -13980,7 +13965,6 @@ begin
     Text := TStringBuilder.Create;
     try
       Text.AppendLine('Stats');
-      Text.AppendLine('=====');
       Text.AppendLine;
       if not JsonAsBool(Obj, 'stats_collection_enabled') then
       begin
@@ -13988,8 +13972,7 @@ begin
         Text.AppendLine;
       end;
 
-      Text.AppendLine('Summary');
-      Text.AppendLine('-------');
+      Text.AppendLine('Summary:');
       Text.AppendLine(Format('%-28s %s', ['Sessions', JsonAsInt64(Obj, 'sessions').ToString]));
       Text.AppendLine(Format('%-28s %s', ['Turns', JsonAsInt64(Obj, 'turns').ToString]));
       Text.AppendLine(Format('%-28s %s', ['Tool calls', JsonAsInt64(Obj, 'tool_calls').ToString]));
@@ -14001,8 +13984,7 @@ begin
       Text.AppendLine(Format('%-28s %s (%s)', ['Truncation bytes saved', BytesSaved.ToString, FormatBytes(BytesSaved)]));
 
       Text.AppendLine;
-      Text.AppendLine('Tokens by provider');
-      Text.AppendLine('------------------');
+      Text.AppendLine('Tokens by provider:');
       Value := Obj.GetValue('by_provider');
       if Value is TJSONArray then
       begin
@@ -14028,8 +14010,7 @@ begin
         Text.AppendLine('(none)');
 
       Text.AppendLine;
-      Text.AppendLine('Tokens by model');
-      Text.AppendLine('---------------');
+      Text.AppendLine('Tokens by model:');
       Value := Obj.GetValue('by_model');
       if Value is TJSONArray then
       begin
@@ -14055,8 +14036,7 @@ begin
         Text.AppendLine('(none)');
 
       Text.AppendLine;
-      Text.AppendLine('Raw JSON');
-      Text.AppendLine('--------');
+      Text.AppendLine('Raw JSON:');
       Text.Append(JsonText);
       Result := Text.ToString;
     finally
@@ -14086,7 +14066,6 @@ begin
     Text := TStringBuilder.Create;
     try
       Text.AppendLine('Workflow Run');
-      Text.AppendLine('============');
       Text.AppendLine;
       if JsonAsBool(Obj, 'ok') then
         Text.AppendLine('Status: OK')
@@ -14097,13 +14076,11 @@ begin
       if JsonAsString(Obj, 'output') <> '' then
       begin
         Text.AppendLine;
-        Text.AppendLine('Output');
-        Text.AppendLine('------');
+        Text.AppendLine('Output:');
         Text.AppendLine(JsonAsString(Obj, 'output'));
       end;
       Text.AppendLine;
-      Text.AppendLine('Nodes');
-      Text.AppendLine('-----');
+      Text.AppendLine('Nodes:');
       Value := Obj.GetValue('nodes');
       if Value is TJSONArray then
       begin
@@ -14132,8 +14109,7 @@ begin
       else
         Text.AppendLine('(none)');
       Text.AppendLine;
-      Text.AppendLine('Raw JSON');
-      Text.AppendLine('--------');
+      Text.AppendLine('Raw JSON:');
       Text.Append(JsonText);
       Result := Text.ToString;
     finally
@@ -14163,14 +14139,12 @@ begin
     Text := TStringBuilder.Create;
     try
       Text.AppendLine('Files');
-      Text.AppendLine('=====');
       Text.AppendLine;
       Text.AppendLine('Path:      ' + JsonAsString(Obj, 'path'));
       Text.AppendLine('Workspace: ' + JsonAsString(Obj, 'workspace_root'));
       Text.AppendLine('Launch:    ' + JsonAsString(Obj, 'cwd_root'));
       Text.AppendLine;
-      Text.AppendLine('Entries');
-      Text.AppendLine('-------');
+      Text.AppendLine('Entries:');
       Value := Obj.GetValue('entries');
       if Value is TJSONArray then
       begin
@@ -14216,7 +14190,6 @@ begin
     Text := TStringBuilder.Create;
     try
       Text.AppendLine('File Preview');
-      Text.AppendLine('============');
       Text.AppendLine;
       Text.AppendLine('Path: ' + JsonAsString(Obj, 'path'));
       if JsonAsBool(Obj, 'binary') then
@@ -14259,7 +14232,6 @@ begin
     Text := TStringBuilder.Create;
     try
       Text.AppendLine('Cron Entries');
-      Text.AppendLine('============');
       Text.AppendLine;
       Value := TJSONObject(Root).GetValue('entries');
       if Value is TJSONArray then
@@ -14317,7 +14289,6 @@ begin
     Text := TStringBuilder.Create;
     try
       Text.AppendLine('Checkpoints');
-      Text.AppendLine('===========');
       Text.AppendLine;
       Text.AppendLine(Format('%-16s %s', ['Enabled',
         BoolToStr(JsonAsBool(Obj, 'enabled'), True)]));
@@ -14390,7 +14361,6 @@ begin
       if Value is TJSONArray then
       begin
         Text.AppendLine('MCP Servers');
-        Text.AppendLine('===========');
         Text.AppendLine;
         Arr := TJSONArray(Value);
         if Arr.Count = 0 then
@@ -14415,7 +14385,6 @@ begin
         if not (Value is TJSONArray) then
           Value := Obj.GetValue('data');
         Text.AppendLine('MCP Tools');
-        Text.AppendLine('=========');
         Text.AppendLine;
         if Value is TJSONArray then
         begin
@@ -14472,7 +14441,6 @@ begin
       begin
         ErrorObj := TJSONObject(Value);
         Text.AppendLine('MCP Tool Error');
-        Text.AppendLine('==============');
         Text.AppendLine;
         Text.AppendLine('Code:    ' + JsonAsString(ErrorObj, 'code'));
         Text.AppendLine('Message: ' + JsonAsString(ErrorObj, 'message'));
@@ -14480,8 +14448,7 @@ begin
         if Value <> nil then
         begin
           Text.AppendLine;
-          Text.AppendLine('Data');
-          Text.AppendLine('----');
+          Text.AppendLine('Data:');
           Text.AppendLine(JsonPretty(Value));
         end;
       end
@@ -14494,7 +14461,6 @@ begin
           ResultObj := Obj;
 
         Text.AppendLine('MCP Tool Result');
-        Text.AppendLine('===============');
         Text.AppendLine;
         Text.AppendLine('isError: ' + BoolToStr(JsonAsBool(ResultObj, 'isError'), True));
 
@@ -14539,15 +14505,13 @@ begin
         if Value <> nil then
         begin
           Text.AppendLine;
-          Text.AppendLine('Structured content');
-          Text.AppendLine('------------------');
+          Text.AppendLine('Structured content:');
           Text.AppendLine(JsonPretty(Value));
         end;
       end;
 
       Text.AppendLine;
-      Text.AppendLine('Raw JSON');
-      Text.AppendLine('--------');
+      Text.AppendLine('Raw JSON:');
       Text.Append(JsonText);
       Result := Text.ToString;
     finally
@@ -14575,7 +14539,6 @@ begin
     Text := TStringBuilder.Create;
     try
       Text.AppendLine('Code Vault Search');
-      Text.AppendLine('=================');
       Text.AppendLine;
       Value := TJSONObject(Root).GetValue('results');
       if Value is TJSONArray then
@@ -14636,15 +14599,13 @@ begin
       if JsonAsString(Obj, 'installSnippet') <> '' then
       begin
         Text.AppendLine;
-        Text.AppendLine('Install');
-        Text.AppendLine('-------');
+        Text.AppendLine('Install:');
         Text.AppendLine(JsonAsString(Obj, 'installSnippet'));
       end;
       if JsonAsString(Obj, 'descriptionMarkdown') <> '' then
       begin
         Text.AppendLine;
-        Text.AppendLine('Description');
-        Text.AppendLine('-----------');
+        Text.AppendLine('Description:');
         Text.AppendLine(JsonAsString(Obj, 'descriptionMarkdown'));
       end;
       Result := Text.ToString;
@@ -15312,7 +15273,6 @@ begin
     Text := TStringBuilder.Create;
     try
       Text.AppendLine('Cron Job');
-      Text.AppendLine('========');
       Text.AppendLine;
       Text.AppendLine(Format('%-12s %s', ['Id', JsonAsString(Obj, 'id')]));
       Text.AppendLine(Format('%-12s %s', ['Spec', JsonAsString(Obj, 'spec')]));
@@ -15321,12 +15281,10 @@ begin
       Text.AppendLine(Format('%-12s %s', ['Enabled',
         BoolToStr(JsonAsBool(Obj, 'enabled'), True)]));
       Text.AppendLine;
-      Text.AppendLine('Args');
-      Text.AppendLine('----');
+      Text.AppendLine('Args:');
       Text.AppendLine(Args);
       Text.AppendLine;
-      Text.AppendLine('Raw JSON');
-      Text.AppendLine('--------');
+      Text.AppendLine('Raw JSON:');
       Text.Append(Obj.ToJSON);
       Memo.Lines.Text := Text.ToString;
     finally
@@ -15425,6 +15383,8 @@ begin
             Memo.Lines.Text := 'GET /v1/cron' + sLineBreak + 'HTTP ' +
               Status.ToString + sLineBreak + sLineBreak +
               FormatCronText(ResponseText);
+          AddListEmptyState(FCronList,
+            'No cron jobs yet. Fill in the editor and press Save to schedule one.');
           SetStatus('cron loaded');
         end);
     end);
@@ -16047,8 +16007,7 @@ begin
       Lines.AppendLine('Turn: ' + JsonAsInt64(Obj, 'turn').ToString);
       Lines.AppendLine('Timestamp: ' + JsonAsString(Obj, 'ts'));
       Lines.AppendLine;
-      Lines.AppendLine('Files');
-      Lines.AppendLine('-----');
+      Lines.AppendLine('Files:');
       Value := Obj.GetValue('files');
       if Value is TJSONArray then
       begin
@@ -16254,6 +16213,8 @@ begin
             Memo.Lines.Text := 'GET /v1/checkpoints' + sLineBreak +
               'HTTP ' + Status.ToString + sLineBreak + sLineBreak +
               FormatCheckpointText(ResponseText);
+          AddListEmptyState(FCheckpointList,
+            'No checkpoints yet. They appear as the agent edits workspace files.');
           SetStatus('checkpoints loaded');
         end);
     end);
@@ -17562,13 +17523,12 @@ begin
           if FPaneMemos.TryGetValue('files', Memo) then
             Memo.Lines.Text := 'GET ' + Endpoint + sLineBreak + 'HTTP ' +
               Status.ToString + sLineBreak + sLineBreak + 'Image preview' +
-              sLineBreak + '=============' + sLineBreak + sLineBreak +
+              sLineBreak + sLineBreak +
               'Path: ' + Path + sLineBreak + 'Size: ' +
               FormatBytes(Length(Bytes));
           if FFileDetailMemo <> nil then
           begin
-            FFileDetailMemo.Lines.Text := 'Image preview' + sLineBreak +
-              '=============' + sLineBreak + sLineBreak + 'Path: ' + Path +
+            FFileDetailMemo.Lines.Text := 'Image preview' + sLineBreak + sLineBreak + 'Path: ' + Path +
               sLineBreak + 'Size: ' + FormatBytes(Length(Bytes));
             FFileDetailMemo.Visible := False;
           end;
@@ -17685,7 +17645,7 @@ begin
           if FFileHexLabel <> nil then
             FFileHexLabel.Text := Format('Hex: bytes %d-%d of %d',
               [ResponseOffset, EndOffset, Total]);
-          DetailText := 'Hex Viewer' + sLineBreak + '==========' +
+          DetailText := 'Hex Viewer' +
             sLineBreak + sLineBreak + 'Path: ' + Path + sLineBreak +
             Format('Bytes %d-%d of %d', [ResponseOffset, EndOffset, Total]) +
             sLineBreak + sLineBreak + HexDumpText(Bytes, ResponseOffset);
@@ -18113,14 +18073,13 @@ begin
       FMcpServerEnabledCheck.IsChecked := JsonAsBool(Obj, 'enabled');
 
     if FPaneMemos.TryGetValue('mcp', Memo) then
-      Memo.Lines.Text := 'MCP Server' + sLineBreak +
-        '==========' + sLineBreak + sLineBreak +
+      Memo.Lines.Text := 'MCP Server' + sLineBreak + sLineBreak +
         Format('%-10s %s', ['Name', JsonAsString(Obj, 'name')]) +
         sLineBreak + Format('%-10s %s', ['Enabled',
         BoolToStr(JsonAsBool(Obj, 'enabled'), True)]) + sLineBreak +
         Format('%-10s %s', ['Command', JsonAsString(Obj, 'cmd')]) +
         sLineBreak + Format('%-10s %s', ['Args', JsonAsString(Obj, 'args')]) +
-        sLineBreak + sLineBreak + 'Env' + sLineBreak + '---' + sLineBreak +
+        sLineBreak + sLineBreak + 'Env:' + sLineBreak +
         JsonAsString(Obj, 'env');
   finally
     Root.Free;
@@ -18445,16 +18404,14 @@ begin
         BuildSchemaForm(FMcpSchemaForm, Parts[2], '{}', False);
       if FPaneMemos.TryGetValue('mcp', Memo) then
       begin
-        Memo.Lines.Text := 'MCP Tool' + sLineBreak +
-          '========' + sLineBreak + sLineBreak +
+        Memo.Lines.Text := 'MCP Tool' + sLineBreak + sLineBreak +
           'Name: ' + Parts[0] + sLineBreak;
         if Length(Parts) > 1 then
           Memo.Lines.Add('Description: ' + Parts[1]);
         if Length(Parts) > 2 then
         begin
           Memo.Lines.Add('');
-          Memo.Lines.Add('Schema');
-          Memo.Lines.Add('------');
+          Memo.Lines.Add('Schema:');
           Memo.Lines.Add(Parts[2]);
         end;
       end;
@@ -18784,10 +18741,11 @@ begin
             end;
           end;
           if FPaneMemos.TryGetValue('skills', Memo) then
-            Memo.Lines.Text := 'Installed skills' + sLineBreak +
-              '----------------' + sLineBreak + SkillsText + sLineBreak +
-              sLineBreak + 'Pending approval' + sLineBreak +
-              '----------------' + sLineBreak + PendingText;
+            Memo.Lines.Text := 'Installed skills:' + sLineBreak +
+              SkillsText + sLineBreak + sLineBreak +
+              'Pending approval:' + sLineBreak + PendingText;
+          AddListEmptyState(FSkillList,
+            'No skills installed. Open the catalog below and install one.');
           SetStatus('skills loaded');
         end);
     end);
@@ -19058,15 +19016,13 @@ var
         if JsonAsString(Obj, 'summary') <> '' then
         begin
           Text.AppendLine;
-          Text.AppendLine('Summary');
-          Text.AppendLine('-------');
+          Text.AppendLine('Summary:');
           Text.AppendLine(JsonAsString(Obj, 'summary'));
         end;
         if JsonAsString(Obj, 'description') <> '' then
         begin
           Text.AppendLine;
-          Text.AppendLine('Description');
-          Text.AppendLine('-----------');
+          Text.AppendLine('Description:');
           Text.AppendLine(JsonAsString(Obj, 'description'));
         end;
         AddJsonSection('Permissions', 'permissions');
@@ -19074,8 +19030,7 @@ var
         AddJsonSection('Files', 'files');
         AddJsonSection('Manifest', 'manifest');
         Text.AppendLine;
-        Text.AppendLine('Raw JSON');
-        Text.AppendLine('--------');
+        Text.AppendLine('Raw JSON:');
         Text.Append(JsonText);
         Result := Text.ToString;
       finally
@@ -19257,6 +19212,8 @@ begin
             Memo.Lines.Text := 'GET ' + Endpoint + sLineBreak + 'HTTP ' +
               Status.ToString + sLineBreak + sLineBreak +
               FormatVaultSearchText(ResponseText);
+          AddListEmptyState(FVaultList,
+            'No vault matches. Try a broader search term.');
           SetStatus('vault search loaded');
         end);
     end);
@@ -19732,6 +19689,8 @@ begin
             Memo.Lines.Text := 'GET /v1/kb/search?q=' + Query +
               sLineBreak + 'HTTP ' + Status.ToString + sLineBreak +
               sLineBreak + FormatKbSearchText(ResponseText);
+          AddListEmptyState(FKBResultsList,
+            'No results. Index sources on this tab, then search again.');
           SetStatus('KB search complete');
         end);
     end);
@@ -19748,7 +19707,7 @@ begin
   if Length(Parts) < 3 then
     Exit;
   if FPaneMemos.TryGetValue('kb', Memo) then
-    Memo.Lines.Text := 'KB Result' + sLineBreak + '=========' + sLineBreak +
+    Memo.Lines.Text := 'KB Result' + sLineBreak +
       sLineBreak + 'Path:  ' + Parts[0] + sLineBreak + 'Chunk: ' + Parts[1] +
       sLineBreak + sLineBreak + Parts[2];
 end;
@@ -19805,7 +19764,6 @@ begin
     Text := TStringBuilder.Create;
     try
       Text.AppendLine('KB Source');
-      Text.AppendLine('=========');
       Text.AppendLine;
       Text.AppendLine(Format('%-10s %s', ['Root', JsonAsString(Obj, 'root')]));
       Text.AppendLine(Format('%-10s %d', ['Files', JsonAsInt64(Obj, 'files')]));
@@ -19813,8 +19771,7 @@ begin
       if JsonAsString(Obj, 'updated_at') <> '' then
         Text.AppendLine(Format('%-10s %s', ['Updated', JsonAsString(Obj, 'updated_at')]));
       Text.AppendLine;
-      Text.AppendLine('Raw JSON');
-      Text.AppendLine('--------');
+      Text.AppendLine('Raw JSON:');
       Text.Append(Obj.ToJSON);
       Memo.Lines.Text := Text.ToString;
     finally
@@ -19910,12 +19867,11 @@ begin
                 Uploaded := JsonAsString(TJSONObject(Root), 'uploaded');
                 Files := JsonAsInt64(TJSONObject(Root), 'indexed_files');
                 Chunks := JsonAsInt64(TJSONObject(Root), 'indexed_chunks');
-                Summary := 'KB Upload' + sLineBreak + '=========' +
+                Summary := 'KB Upload' +
                   sLineBreak + sLineBreak + 'Uploaded: ' + Uploaded +
                   sLineBreak + 'Indexed files: ' + Files.ToString +
                   sLineBreak + 'Indexed chunks: ' + Chunks.ToString +
-                  sLineBreak + sLineBreak + 'Raw JSON' + sLineBreak +
-                  '--------' + sLineBreak + ResponseText;
+                  sLineBreak + sLineBreak + 'Raw JSON:' + sLineBreak + ResponseText;
                 if FKBStatusLabel <> nil then
                   FKBStatusLabel.Text := Format('indexed %s: %d file(s), %d chunk(s)',
                     [Uploaded, Files, Chunks]);
@@ -20946,7 +20902,6 @@ begin
   Text := TStringBuilder.Create;
   try
     Text.AppendLine('Chat Files');
-    Text.AppendLine('==========');
     Text.AppendLine;
     if Length(Paths) = 0 then
       Text.AppendLine('No file write/edit paths were detected in this chat yet.')
