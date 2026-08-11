@@ -614,6 +614,7 @@ type
     procedure UpdateClearAttachmentsButton;
     function FriendlyAge(const StampText: string): string;
     class function IsIconified(Button: TButton): Boolean; static;
+    procedure SetButtonWidth(Button: TButton; W: Single);
     procedure UseStyledLabelColor(LabelControl: TLabel);
     procedure StyleLabel(LabelControl: TLabel; Color: TAlphaColor;
       Size: Single; Bold: Boolean);
@@ -2398,10 +2399,7 @@ begin
   if FSessionToggleButton <> nil then
   begin
     FSessionToggleButton.Visible := True;
-    { width and caption belong to SetIconButton -- writing the glyph char
-      back here would give the icon a text face again on every resize }
-    if not IsIconified(FSessionToggleButton) then
-      FSessionToggleButton.Width := 42;
+    SetButtonWidth(FSessionToggleButton, 42);
   end;
 
   { The drawer-header buttons are not resized here: the drawer's width does
@@ -2409,14 +2407,13 @@ begin
     icon-less fallback already fits. }
   if FRefreshButton <> nil then
   begin
-    FRefreshButton.Width := IfThen(Narrow, 44, IfThen(Compact, 78, 92));
+    SetButtonWidth(FRefreshButton, IfThen(Narrow, 44, IfThen(Compact, 78, 92)));
     RenderConnectButton;   { caption follows connection state, not layout }
   end;
   if FThemeButton <> nil then
   begin
     FThemeButton.Visible := not Narrow;
-    if not IsIconified(FThemeButton) then
-      FThemeButton.Width := IfThen(Compact, 62, 70);
+    SetButtonWidth(FThemeButton, IfThen(Compact, 62, 70));
   end;
   if FStatusLabel <> nil then
     FStatusLabel.Visible := not Narrow;
@@ -2426,12 +2423,12 @@ begin
   if FTokenShowButton <> nil then
   begin
     FTokenShowButton.Visible := not Narrow;
-    FTokenShowButton.Width := IfThen(Compact, 52, 58);
+    SetButtonWidth(FTokenShowButton, IfThen(Compact, 52, 58));
   end;
   if FTokenClearButton <> nil then
   begin
     FTokenClearButton.Visible := not Narrow;
-    FTokenClearButton.Width := IfThen(Compact, 52, 58);
+    SetButtonWidth(FTokenClearButton, IfThen(Compact, 52, 58));
   end;
 
   if FNavHost <> nil then
@@ -2510,15 +2507,15 @@ begin
     FNavCombo.Visible := False;
 
   if FModeButton <> nil then
-    FModeButton.Width := IfThen(Narrow, 76, 94);
+    SetButtonWidth(FModeButton, IfThen(Narrow, 76, 94));
   if FModelCombo <> nil then
     FModelCombo.Width := IfThen(Narrow, 150, IfThen(Compact, 210, 260));
   if FParamsToggleButton <> nil then
-    FParamsToggleButton.Width := IfThen(Narrow, 64, 82);
+    SetButtonWidth(FParamsToggleButton, IfThen(Narrow, 64, 82));
   if FToolsToggleButton <> nil then
   begin
     FToolsToggleButton.Visible := ChatW >= 560;
-    FToolsToggleButton.Width := IfThen(Narrow, 72, 86);
+    SetButtonWidth(FToolsToggleButton, IfThen(Narrow, 72, 86));
   end;
   if FParamsSummaryLabel <> nil then
   begin
@@ -2557,15 +2554,14 @@ begin
   if FTemperatureTrack <> nil then
     FTemperatureTrack.Width := IfThen(Narrow, 140, IfThen(Compact, 170, 210));
   UpdateComposerState;
-  if (FSendButton <> nil) and not IsIconified(FSendButton) then
-    FSendButton.Width := IfThen(Narrow, 78, 96);
-  if (FAttachButton <> nil) and not IsIconified(FAttachButton) then
-    FAttachButton.Width := IfThen(Narrow, 76, 86);
+  if FSendButton <> nil then
+    SetButtonWidth(FSendButton, IfThen(Narrow, 78, 96));
+  if FAttachButton <> nil then
+    SetButtonWidth(FAttachButton, IfThen(Narrow, 76, 86));
   if FClearAttachmentsButton <> nil then
   begin
     UpdateClearAttachmentsButton;
-    if not IsIconified(FClearAttachmentsButton) then
-      FClearAttachmentsButton.Width := IfThen(Compact, 64, 74);
+    SetButtonWidth(FClearAttachmentsButton, IfThen(Compact, 64, 74));
   end;
   if FMaxTokensLabel <> nil then
     FMaxTokensLabel.Visible := not ToolbarCompact;
@@ -2579,19 +2575,19 @@ begin
   if FPresetNameEdit <> nil then
     FPresetNameEdit.Visible := not Narrow;
   if FPresetSaveButton <> nil then
-    FPresetSaveButton.Width := IfThen(Narrow, 56, 62);
+    SetButtonWidth(FPresetSaveButton, IfThen(Narrow, 56, 62));
   if FParamsResetButton <> nil then
-    FParamsResetButton.Width := IfThen(Narrow, 56, 62);
+    SetButtonWidth(FParamsResetButton, IfThen(Narrow, 56, 62));
   if FPresetDeleteButton <> nil then
-    FPresetDeleteButton.Width := IfThen(Narrow, 58, 68);
+    SetButtonWidth(FPresetDeleteButton, IfThen(Narrow, 58, 68));
   if FUndoButton <> nil then
-    FUndoButton.Width := IfThen(Narrow, 58, 70);
+    SetButtonWidth(FUndoButton, IfThen(Narrow, 58, 70));
   if FRedoButton <> nil then
-    FRedoButton.Width := IfThen(Narrow, 58, 70);
+    SetButtonWidth(FRedoButton, IfThen(Narrow, 58, 70));
   if FChatCopyButton <> nil then
   begin
     FChatCopyButton.Visible := ChatW >= 760;
-    FChatCopyButton.Width := IfThen(ToolbarCompact, 58, 62);
+    SetButtonWidth(FChatCopyButton, IfThen(ToolbarCompact, 58, 62));
   end;
   if FChatTurnEdit <> nil then
     FChatTurnEdit.Width := IfThen(Narrow, 42, 52);
@@ -2952,13 +2948,13 @@ begin
   if FRelayUrlEdit <> nil then
     FRelayUrlEdit.Width := IfThen(Narrow, 170, IfThen(Compact, 230, 300));
   if FRelayShowTokenButton <> nil then
-    FRelayShowTokenButton.Width := IfThen(Narrow, 58, 68);
+    SetButtonWidth(FRelayShowTokenButton, IfThen(Narrow, 58, 68));
   if FRelayWorkerCommandEdit <> nil then
     FRelayWorkerCommandEdit.Width := IfThen(Narrow, 104, IfThen(Compact, 146, 190));
   if FRelayWorkerConnectButton <> nil then
-    FRelayWorkerConnectButton.Width := IfThen(Narrow, 72, 82);
+    SetButtonWidth(FRelayWorkerConnectButton, IfThen(Narrow, 72, 82));
   if FRelayWorkerDisconnectButton <> nil then
-    FRelayWorkerDisconnectButton.Width := IfThen(Narrow, 82, 92);
+    SetButtonWidth(FRelayWorkerDisconnectButton, IfThen(Narrow, 82, 92));
   if FRelayWorkerProfileCombo <> nil then
     FRelayWorkerProfileCombo.Width := IfThen(Narrow, 96, IfThen(Compact, 116, 136));
   if FRelayWorkerIdEdit <> nil then
@@ -15557,6 +15553,22 @@ begin
   Result := (FTabControl <> nil) and (FTabControl.TabIndex >= 0) and
     (FTabControl.TabIndex < FTabControl.TabCount) and
     SameText(FTabControl.Tabs[FTabControl.TabIndex].Text, Caption);
+end;
+
+procedure TMasterDetailForm.SetButtonWidth(Button: TButton; W: Single);
+{ The ONE place a responsive width is applied to a button.
+
+  An iconified button's width belongs to the icon system (ICON_BTN_W), and
+  the layout pass runs on construction, on every resize, and right after a
+  toggle -- so any width it writes wins. Guarding each call site was tried
+  and failed the way per-site rules always do here: two of them were added
+  with the icons and the two that already existed were missed, leaving
+  Params and Tools as wide, mostly empty pills. The rule lives here now, so
+  a new call site cannot forget it. }
+begin
+  if (Button = nil) or IsIconified(Button) then
+    Exit;
+  Button.Width := W;
 end;
 
 class function TMasterDetailForm.IsIconified(Button: TButton): Boolean;
