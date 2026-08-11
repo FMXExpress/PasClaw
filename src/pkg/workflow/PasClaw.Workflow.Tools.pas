@@ -19,20 +19,157 @@ unit PasClaw.Workflow.Tools;
 interface
 
 uses
-  PasClaw.Tools.Registry;
+  PasClaw.Tools.Registry,
+  PasClaw.Workflow;          { TWorkflowSpec, for the exposed output seam }
 
 { Register workflow_save / workflow_list / workflow_run on Reg. }
 procedure RegisterWorkflowTools(Reg: TToolRegistry);
 
+{ Exposed for the unit tests: the output-writing seam takes client-supplied
+  names and directories, so its refusals are contract, not detail. }
+function WriteRunOutputs(const Spec: TWorkflowSpec;
+  const OutputJSON, RunStamp: string; out WrittenDir, WriteErr: string): Boolean;
+function SanitizeWorkflowFileName(const Name: string): string;
+
 implementation
 
 uses
-  SysUtils,
+  SysUtils, Classes,
   PasClaw.JSON,
   PasClaw.Tools.Types,
-  PasClaw.Workflow,
+  PasClaw.Tools.Sandbox,       { ResolveWorkspacePath / PathInsideDirectory }
   PasClaw.Workflow.Store,
   PasClaw.Workflow.Dispatch;   { WorkflowDispatch -- routes MCP / llm / registry nodes }
+
+{ An output NAME becomes a file name, and names come from client-authored
+  specs -- so anything path-ish is flattened rather than trusted. }
+function SanitizeWorkflowFileName(const Name: string): string;
+var
+  i: Integer;
+begin
+  Result := '';
+  for i := 1 to Length(Name) do
+    if CharInSet(Name[i], ['a'..'z', 'A'..'Z', '0'..'9', '-', '_']) then
+      Result := Result + Name[i]
+    else
+      Result := Result + '_';
+  if Result = '' then
+    Result := 'output';
+end;
+
+{ Write a run's resolved outputs to disk, ComfyUI-style: results become
+  files you can find, not text scrolled off a results pane.
+
+    <workspace>/<output_dir or workflows/<id>>/<yyyymmddThhmmss>/
+        output.json            always: the typed name -> value object
+        <name>.txt|.md         one per output whose value is textual
+
+  The per-run timestamped subfolder is deliberate: a re-run must never
+  clobber the previous run's artifacts. URL-valued outputs stay in
+  output.json as URLs -- downloading remote artifacts is its own feature,
+  not smuggled in here.
+
+  output_dir comes from CLIENTS, so it is canonicalised and refused if it
+  escapes the workspace -- same posture as the store's id guard. Failure to
+  write is reported in the run result but does not fail the run: the
+  outputs still exist in the result JSON. }
+function WriteRunOutputs(const Spec: TWorkflowSpec;
+  const OutputJSON, RunStamp: string; out WrittenDir, WriteErr: string): Boolean;
+var
+  Rel, Base, RunDir, Name, Val, Ext: string;
+  Root: TJsonObject;
+  Keys: TStringList;
+  i, Suffix: Integer;
+  SL: TStringList;
+begin
+  Result := False;
+  WrittenDir := '';
+  WriteErr := '';
+  Rel := Spec.OutputDir;
+  if Rel = '' then
+    Rel := 'workflows/' + Spec.Id;
+
+  Base := ResolveWorkspacePath(Rel);
+  if not PathInsideDirectory(Base, ResolveWorkspacePath('.')) then
+  begin
+    WriteErr := 'output_dir escapes the workspace: ' + Spec.OutputDir;
+    Exit;
+  end;
+
+  try
+    ForceDirectories(Base);
+    { The run stamp has second resolution, so two runs in the same second
+      would select the SAME directory and interleave their files -- exactly
+      the clobbering the per-run subfolder exists to prevent. CreateDir is
+      the reservation: mkdir is atomic, it fails when the name is already
+      taken, and the loser walks to -2, -3, ... until a name is its own. }
+    RunDir := IncludeTrailingPathDelimiter(Base) + RunStamp;
+    Suffix := 1;
+    while not CreateDir(RunDir) do
+    begin
+      if not DirectoryExists(RunDir) then
+        raise Exception.Create('cannot create run directory ' + RunDir);
+      Inc(Suffix);
+      if Suffix > 10000 then
+        raise Exception.Create('run directory suffixes exhausted for ' + RunStamp);
+      RunDir := IncludeTrailingPathDelimiter(Base) + RunStamp + '-' + IntToStr(Suffix);
+    end;
+    SL := TStringList.Create;
+    try
+      SL.Text := OutputJSON;
+      SL.SaveToFile(IncludeTrailingPathDelimiter(RunDir) + 'output.json',
+        TEncoding.UTF8);
+    finally
+      SL.Free;
+    end;
+
+    Root := nil;
+    try
+      Root := TJsonObject.Parse(OutputJSON);
+    except
+      Root := nil;   { non-object output: output.json alone is the record }
+    end;
+    if Root <> nil then
+    try
+      Keys := Root.Keys;
+      try
+        for i := 0 to Keys.Count - 1 do
+        begin
+          Name := Keys[i];
+          { only textual scalars become their own files }
+          if (Root.ChildObject(Name) <> nil) or (Root.ChildArray(Name) <> nil) then
+            Continue;
+          Val := Root.GetStr(Name, '');
+          if Val = '' then
+            Continue;
+          { crude but honest sniff; the authoritative copy is output.json }
+          if (Pos('# ', Val) = 1) or (Pos(#10'#', Val) > 0) then
+            Ext := '.md'
+          else
+            Ext := '.txt';
+          SL := TStringList.Create;
+          try
+            SL.Text := Val;
+            SL.SaveToFile(IncludeTrailingPathDelimiter(RunDir) +
+              SanitizeWorkflowFileName(Name) + Ext, TEncoding.UTF8);
+          finally
+            SL.Free;
+          end;
+        end;
+      finally
+        Keys.Free;
+      end;
+    finally
+      Root.Free;
+    end;
+
+    WrittenDir := RunDir;
+    Result := True;
+  except
+    on E: Exception do
+      WriteErr := 'output write failed: ' + E.Message;
+  end;
+end;
 
 const
   SAVE_SCHEMA =
@@ -130,6 +267,7 @@ function ToolWorkflowRun(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Args, InputsObj, Root, O: TJsonObject;
   Name, InputsJSON, Err, OutErrs: string;
+  OutJSON, OutDirWritten, OutDirErr: string;
   Spec: TWorkflowSpec;
   Res: TWorkflowNodeResultArray;
   Arr: TJsonArray;
@@ -184,8 +322,15 @@ begin
       blank) so a mistyped selector is diagnosable. }
     if Length(Spec.Outputs) > 0 then
     begin
-      Root.PutRaw('output', ResolveWorkflowOutputs(Spec, InputsJSON, Res, OutErrs));
+      OutJSON := ResolveWorkflowOutputs(Spec, InputsJSON, Res, OutErrs);
+      Root.PutRaw('output', OutJSON);
       if OutErrs <> '' then Root.PutStr('output_errors', OutErrs);
+      { the direct ask: results land in a findable workspace folder }
+      if WriteRunOutputs(Spec, OutJSON,
+           FormatDateTime('yyyymmdd"T"hhnnss', Now), OutDirWritten, OutDirErr) then
+        Root.PutStr('output_dir', OutDirWritten)
+      else if OutDirErr <> '' then
+        Root.PutStr('output_dir_error', OutDirErr);
     end
     else
       for i := High(Res) downto 0 do

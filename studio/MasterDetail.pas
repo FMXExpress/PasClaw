@@ -322,6 +322,13 @@ type
     FWorkflowCanvas: TPaintBox;
     FWorkflowDraggingId: string;
     FWorkflowDragOffset: TPointF;
+    { The canvas view transform: screen = logical + pan. Zoom is deferred,
+      but every consumer already goes through Wf*To* so adding a scale later
+      touches TWO functions, not thirty call sites. }
+    FWorkflowPan: TPointF;
+    FWorkflowPanning: Boolean;
+    FWorkflowPanMouse: TPointF;    { mouse position when the pan started }
+    FWorkflowPanOrigin: TPointF;   { pan value when the pan started }
     FWorkflowGraphMemo: TMemo;
     FWorkflowEditorPanel: TLayout;
     FWorkflowInspectorModeLabel: TLabel;
@@ -697,6 +704,13 @@ type
     procedure WorkflowCanvasPaint(Sender: TObject; Canvas: TCanvas);
     function WorkflowNodeHasEdge(const NodeId: string;
       Incoming: Boolean): Boolean;
+    function WfToScreen(const P: TPointF): TPointF;
+    function WfToLogical(const P: TPointF): TPointF;
+    function WorkflowIORect(const Which: string;
+      CanvasWidth, CanvasHeight: Single): TRectF;
+    procedure WorkflowFitView;
+    procedure WorkflowFitViewClick(Sender: TObject);
+    procedure OpenFilesTabAt(const Path: string);
     function WorkflowCanvasNodeRect(Index: Integer; CanvasWidth: Single): TRectF;
     procedure WorkflowEnsureNodePosition(const NodeId: string; Index: Integer;
       CanvasWidth: Single);
@@ -837,6 +851,10 @@ const
     'unlinkedtoolbutton');
   WF_IO_W = 104;
   WF_GUTTER = 128;
+  { reserved position-dictionary ids for the movable INPUT/OUTPUT boxes --
+    kept impossible as node ids (nodes are sanitised identifiers) }
+  WF_ID_INPUT  = '__input__';
+  WF_ID_OUTPUT = '__output__';
   WIN_CREATE_ALWAYS = 2;
   WIN_CREATE_NO_WINDOW = $08000000;
   WIN_FILE_ATTRIBUTE_NORMAL = $00000080;
@@ -6913,6 +6931,16 @@ begin
   Btn.OnClick := WorkflowNewClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
+  Btn := TButton.Create(Self);
+  Btn.Parent := Row;
+  Btn.Align := TAlignLayout.Right;
+  Btn.Width := BTN_W_S;
+  Btn.Text := 'Fit';
+  Btn.Hint := 'Bring the whole graph back into view';
+  Btn.ShowHint := True;
+  Btn.OnClick := WorkflowFitViewClick;
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
+
   FWorkflowPickerCombo := TComboBox.Create(Self);
   FWorkflowPickerCombo.Parent := Row;
   FWorkflowPickerCombo.Align := TAlignLayout.Left;
@@ -6956,6 +6984,15 @@ begin
   FWorkflowInputsEdit.Text := 'prompt';
   FWorkflowInputsEdit.TextPrompt := 'inputs, comma separated';
   SetControlMargins(FWorkflowInputsEdit, GAP_S, 0, 0, 0);
+
+  { where runs land on disk (engine default: workflows/<id> when empty).
+    A visible contract, not a hidden convention. }
+  FWorkflowOutputDirEdit := TEdit.Create(Self);
+  FWorkflowOutputDirEdit.Parent := Row;
+  FWorkflowOutputDirEdit.Align := TAlignLayout.Right;
+  FWorkflowOutputDirEdit.Width := 200;
+  FWorkflowOutputDirEdit.TextPrompt := 'output folder (workflows/<id>)';
+  SetControlMargins(FWorkflowOutputDirEdit, GAP_S, 0, 0, 0);
 
   FWorkflowDescEdit := TEdit.Create(Self);
   FWorkflowDescEdit.Parent := Row;
@@ -11331,13 +11368,17 @@ begin
 
   Canvas.Stroke.Color := ThemePaintStroke(UI_BORDER);
   Canvas.Stroke.Thickness := 1;
-  GridX := 24;
+  { the grid moves with the pan (mod its pitch), which is what makes the
+    space read as moving rather than the content sliding over a static mat }
+  GridX := 24 + FWorkflowPan.X - Int(FWorkflowPan.X / 24) * 24 - 24;
+  if GridX < 0 then GridX := GridX + 24;
   while GridX < Box.Width do
   begin
     Canvas.DrawLine(PointF(GridX, 0), PointF(GridX, Box.Height), 0.35);
     GridX := GridX + 24;
   end;
-  GridY := 24;
+  GridY := 24 + FWorkflowPan.Y - Int(FWorkflowPan.Y / 24) * 24 - 24;
+  if GridY < 0 then GridY := GridY + 24;
   while GridY < Box.Height do
   begin
     Canvas.DrawLine(PointF(0, GridY), PointF(Box.Width, GridY), 0.35);
@@ -11382,7 +11423,8 @@ begin
           IoNames.Add(EdgeText);
       end;
     end;
-    IoRect := RectF(8, 12, 8 + WF_IO_W, 12 + Max(46, 26 + IoNames.Count * 15));
+    IoRect := WorkflowIORect(WF_ID_INPUT, Box.Width, Box.Height);
+    IoRect.Bottom := IoRect.Top + Max(46, 26 + IoNames.Count * 15);
     Canvas.Fill.Color := ThemePaintColor(UI_PANEL);
     Canvas.FillRect(IoRect, 6, 6, [], 0.85);
     Canvas.Stroke.Color := ThemePaintStroke(UI_ACCENT_DIM);
@@ -11413,8 +11455,9 @@ begin
         if EdgeText <> '' then
           IoNames.Add(EdgeText);
       end;
-    OutRect := RectF(Box.Width - WF_IO_W - 8, 12, Box.Width - 8,
-      12 + Max(46, 26 + IoNames.Count * 15));
+    OutRect := WorkflowIORect(WF_ID_OUTPUT, Box.Width, Box.Height);
+    OutRect := RectF(OutRect.Left, OutRect.Top, OutRect.Left + WF_IO_W,
+      OutRect.Top + Max(46, 26 + IoNames.Count * 15));
     Canvas.Fill.Color := ThemePaintColor(UI_PANEL);
     Canvas.FillRect(OutRect, 6, 6, [], 0.85);
     Canvas.Stroke.Color := ThemePaintStroke(UI_ACCENT_DIM);
@@ -11595,11 +11638,91 @@ begin
   end;
 end;
 
+function TMasterDetailForm.WfToScreen(const P: TPointF): TPointF;
+begin
+  Result := PointF(P.X + FWorkflowPan.X, P.Y + FWorkflowPan.Y);
+end;
+
+function TMasterDetailForm.WfToLogical(const P: TPointF): TPointF;
+begin
+  Result := PointF(P.X - FWorkflowPan.X, P.Y - FWorkflowPan.Y);
+end;
+
+{ The INPUT / OUTPUT boxes as movable citizens of the same space. Their
+  logical positions live in the positions dictionary under reserved ids;
+  the defaults reproduce the old fixed left/right placement, so an
+  untouched workflow looks exactly as before. }
+function TMasterDetailForm.WorkflowIORect(const Which: string;
+  CanvasWidth, CanvasHeight: Single): TRectF;
+var
+  Pos: TPointF;
+  P: TPointF;
+begin
+  if (FWorkflowNodePositions = nil) or
+    (not FWorkflowNodePositions.TryGetValue(Which, Pos)) then
+  begin
+    if Which = WF_ID_INPUT then
+      Pos := PointF(8, 12)
+    else
+      Pos := PointF(Max(120, CanvasWidth - WF_IO_W - 8), 12);
+    if FWorkflowNodePositions <> nil then
+      FWorkflowNodePositions.AddOrSetValue(Which, Pos);
+  end;
+  P := WfToScreen(Pos);
+  Result := RectF(P.X, P.Y, P.X + WF_IO_W, P.Y + 46);
+end;
+
+procedure TMasterDetailForm.OpenFilesTabAt(const Path: string);
+{ Jump to a workspace folder in the Files tab -- run outputs link here. }
+begin
+  SelectTabByText('Files');
+  if FFilePathEdit <> nil then
+    FFilePathEdit.Text := Path;
+  FilesOpenPath(Path);
+end;
+
+procedure TMasterDetailForm.WorkflowFitViewClick(Sender: TObject);
+begin
+  WorkflowFitView;
+end;
+
+procedure TMasterDetailForm.WorkflowFitView;
+{ Pan so the whole graph is visible from its top-left. The escape hatch for
+  "I panned my graph off into space", and cheap: positions are logical, so
+  fitting is just choosing a pan. }
+var
+  Pair: TPair<string, TPointF>;
+  MinX, MinY: Single;
+  Found: Boolean;
+begin
+  MinX := 0; MinY := 0; Found := False;
+  if FWorkflowNodePositions <> nil then
+    for Pair in FWorkflowNodePositions do
+    begin
+      if not Found then
+      begin
+        MinX := Pair.Value.X; MinY := Pair.Value.Y; Found := True;
+      end
+      else
+      begin
+        MinX := Min(MinX, Pair.Value.X);
+        MinY := Min(MinY, Pair.Value.Y);
+      end;
+    end;
+  if Found then
+    FWorkflowPan := PointF(16 - MinX, 16 - MinY)
+  else
+    FWorkflowPan := PointF(0, 0);
+  if FWorkflowCanvas <> nil then
+    FWorkflowCanvas.Repaint;
+end;
+
 function TMasterDetailForm.WorkflowCanvasNodeRect(Index: Integer;
   CanvasWidth: Single): TRectF;
 var
   NodeId: string;
   Pos: TPointF;
+  P: TPointF;
 begin
   Result := RectF(0, 0, 0, 0);
   if (FWorkflowNodesList = nil) or (Index < 0) or
@@ -11612,7 +11735,10 @@ begin
   if (FWorkflowNodePositions = nil) or
     (not FWorkflowNodePositions.TryGetValue(NodeId, Pos)) then
     Pos := PointF(10, 12);
-  Result := RectF(Pos.X, Pos.Y, Pos.X + 116, Pos.Y + 42);
+  { SCREEN rect: every consumer is paint or hit-testing, both of which live
+    in screen space. The stored position stays logical. }
+  P := WfToScreen(Pos);
+  Result := RectF(P.X, P.Y, P.X + 116, P.Y + 42);
 end;
 
 procedure TMasterDetailForm.WorkflowEnsureNodePosition(const NodeId: string;
@@ -11703,6 +11829,23 @@ begin
       end;
     end;
   FWorkflowSelectedEdge := '';
+  { the INPUT/OUTPUT boxes drag like nodes -- they are citizens of the same
+    space now, not chrome. They cannot be connect-sources, so only the
+    body hit matters. }
+  R := WorkflowIORect(WF_ID_INPUT, Box.Width, Box.Height);
+  if (X >= R.Left) and (X <= R.Right) and (Y >= R.Top) and (Y <= R.Bottom) then
+  begin
+    FWorkflowDraggingId := WF_ID_INPUT;
+    FWorkflowDragOffset := PointF(X - R.Left, Y - R.Top);
+    Exit;
+  end;
+  R := WorkflowIORect(WF_ID_OUTPUT, Box.Width, Box.Height);
+  if (X >= R.Left) and (X <= R.Right) and (Y >= R.Top) and (Y <= R.Bottom) then
+  begin
+    FWorkflowDraggingId := WF_ID_OUTPUT;
+    FWorkflowDragOffset := PointF(X - R.Left, Y - R.Top);
+    Exit;
+  end;
   for I := 0 to FWorkflowNodesList.Count - 1 do
   begin
     NodeItem := FWorkflowNodesList.ListItems[I];
@@ -11740,6 +11883,11 @@ begin
       Exit;
     end;
   end;
+  { nothing hit: drag the SPACE. This is the gesture every node-graph tool
+    shares, and what turns a boxed diagram into a virtual canvas. }
+  FWorkflowPanning := True;
+  FWorkflowPanMouse := PointF(X, Y);
+  FWorkflowPanOrigin := FWorkflowPan;
 end;
 
 procedure TMasterDetailForm.WorkflowCanvasMouseMove(Sender: TObject;
@@ -11757,10 +11905,20 @@ begin
     Box.Repaint;
     Exit;
   end;
+  if FWorkflowPanning then
+  begin
+    FWorkflowPan := PointF(FWorkflowPanOrigin.X + (X - FWorkflowPanMouse.X),
+      FWorkflowPanOrigin.Y + (Y - FWorkflowPanMouse.Y));
+    Box.Repaint;
+    Exit;
+  end;
   if (FWorkflowDraggingId = '') or (FWorkflowNodePositions = nil) then
     Exit;
-  Pos := PointF(Max(0, Min(Box.Width - 116, X - FWorkflowDragOffset.X)),
-    Max(0, Y - FWorkflowDragOffset.Y));
+  { LOGICAL position, unclamped: the old Min(Box.Width - 116, ...) was the
+    wall that made the canvas feel boxed in -- there IS no edge now, and
+    fit-view is the way back if something is pushed far out }
+  Pos := WfToLogical(PointF(X - FWorkflowDragOffset.X,
+    Y - FWorkflowDragOffset.Y));
   FWorkflowNodePositions.AddOrSetValue(FWorkflowDraggingId, Pos);
   Box.Repaint;
 end;
@@ -11772,6 +11930,7 @@ var
   TargetIndex: Integer;
   TargetId: string;
 begin
+  FWorkflowPanning := False;
   if (FWorkflowConnectFromId <> '') and (Sender is TPaintBox) then
   begin
     Box := TPaintBox(Sender);
@@ -12005,6 +12164,7 @@ var
   Item: TListBoxItem;
   KeyName: string;
   LineText: string;
+  UiObj: TJSONObject;
   Lines: TArray<string>;
   LoopObj: TJSONObject;
   Name: string;
@@ -12035,6 +12195,9 @@ begin
   try
     Spec.AddPair('name', Name);
     Spec.AddPair('description', FWorkflowDescEdit.Text);
+    if (FWorkflowOutputDirEdit <> nil) and
+       (Trim(FWorkflowOutputDirEdit.Text) <> '') then
+      Spec.AddPair('output_dir', Trim(FWorkflowOutputDirEdit.Text));
 
     Inputs := FWorkflowInputsEdit.Text.Split([',']);
     for I := 0 to Length(Inputs) - 1 do
@@ -12151,6 +12314,8 @@ begin
         Node.AddPair('x', TJSONNumber.Create(Round(NodePos.X)));
         Node.AddPair('y', TJSONNumber.Create(Round(NodePos.Y)));
         Nodes.AddElement(Node);
+        { node x/y ride on the node itself -- the web client's existing
+          convention; the ui block below carries what has no node to ride }
         Node := nil;
       finally
         ArgsRoot.Free;
@@ -12182,6 +12347,22 @@ begin
       OutputsArr := nil;
     end;
     Spec.AddPair('nodes', Nodes);
+    { view state: pan + the movable INPUT/OUTPUT box positions. Nodes carry
+      their own x/y (the web convention); these have no node to ride on. }
+    UiObj := TJSONObject.Create;
+    UiObj.AddPair('pan_x', TJSONNumber.Create(Round(FWorkflowPan.X)));
+    UiObj.AddPair('pan_y', TJSONNumber.Create(Round(FWorkflowPan.Y)));
+    if FWorkflowNodePositions.TryGetValue(WF_ID_INPUT, NodePos) then
+    begin
+      UiObj.AddPair('in_x', TJSONNumber.Create(Round(NodePos.X)));
+      UiObj.AddPair('in_y', TJSONNumber.Create(Round(NodePos.Y)));
+    end;
+    if FWorkflowNodePositions.TryGetValue(WF_ID_OUTPUT, NodePos) then
+    begin
+      UiObj.AddPair('out_x', TJSONNumber.Create(Round(NodePos.X)));
+      UiObj.AddPair('out_y', TJSONNumber.Create(Round(NodePos.Y)));
+    end;
+    Spec.AddPair('ui', UiObj);
     Nodes := nil;
     Spec.AddPair('edges', Edges);
     Edges := nil;
@@ -12246,6 +12427,8 @@ begin
     if FWorkflowNameEdit.Text = '' then
       FWorkflowNameEdit.Text := JsonAsString(SpecObj, 'id');
     FWorkflowDescEdit.Text := JsonAsString(SpecObj, 'description');
+    if FWorkflowOutputDirEdit <> nil then
+      FWorkflowOutputDirEdit.Text := JsonAsString(SpecObj, 'output_dir');
     FWorkflowInputsEdit.Text := '';
     if FWorkflowOutputsMemo <> nil then
       FWorkflowOutputsMemo.Lines.Clear;
@@ -12255,6 +12438,25 @@ begin
     FWorkflowEdgesList.Clear;
     if FWorkflowNodePositions <> nil then
       FWorkflowNodePositions.Clear;
+    { restore the view AFTER the wipe -- an earlier draft restored first and
+      the Clear silently discarded it. Missing ui (older files, web saves)
+      keeps the defaults, which reproduce the old fixed layout. }
+    FWorkflowPan := PointF(0, 0);
+    Value := SpecObj.GetValue('ui');
+    if Value is TJSONObject then
+    begin
+      FWorkflowPan := PointF(
+        JsonAsInt64(TJSONObject(Value), 'pan_x'),
+        JsonAsInt64(TJSONObject(Value), 'pan_y'));
+      if TJSONObject(Value).GetValue('in_x') <> nil then
+        FWorkflowNodePositions.AddOrSetValue(WF_ID_INPUT, PointF(
+          JsonAsInt64(TJSONObject(Value), 'in_x'),
+          JsonAsInt64(TJSONObject(Value), 'in_y')));
+      if TJSONObject(Value).GetValue('out_x') <> nil then
+        FWorkflowNodePositions.AddOrSetValue(WF_ID_OUTPUT, PointF(
+          JsonAsInt64(TJSONObject(Value), 'out_x'),
+          JsonAsInt64(TJSONObject(Value), 'out_y')));
+    end;
     FWorkflowDraggingId := '';
     FWorkflowConnectFromId := '';
 
@@ -12907,6 +13109,13 @@ begin
     (FWorkflowRunDetailMemo = nil) then
     Exit;
   Detail := FWorkflowRunResultsList.Selected.TagString;
+  { the Output-files card carries an action, not a payload: jump to the
+    folder in the Files tab }
+  if Detail.StartsWith('opendir' + #9) then
+  begin
+    OpenFilesTabAt(Copy(Detail, Length('opendir' + #9) + 1, MaxInt));
+    Exit;
+  end;
   if Trim(Detail) = '' then
     Detail := FWorkflowRunResultsList.Selected.Text;
   Root := TJSONObject.ParseJSONValue(Detail);
@@ -12959,6 +13168,16 @@ begin
       Detail := 'No top-level output returned.';
     AddCardListItem(FWorkflowRunResultsList, Title, Copy(Detail, 1, 220),
       JsonText, 64, JsonAsBool(Obj, 'ok'));
+
+    { the engine reports where it wrote this run's outputs; make the folder
+      one click away instead of a path to retype in the Files tab }
+    if JsonAsString(Obj, 'output_dir') <> '' then
+      AddCardListItem(FWorkflowRunResultsList, 'Output files',
+        JsonAsString(Obj, 'output_dir'),
+        'opendir' + #9 + JsonAsString(Obj, 'output_dir'), 54, True)
+    else if JsonAsString(Obj, 'output_dir_error') <> '' then
+      AddCardListItem(FWorkflowRunResultsList, 'Output files not written',
+        JsonAsString(Obj, 'output_dir_error'), '', 54, False);
 
     Value := Obj.GetValue('nodes');
     if Value is TJSONArray then

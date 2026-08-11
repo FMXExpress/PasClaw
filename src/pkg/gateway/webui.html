@@ -1007,6 +1007,7 @@
           <button id="wfDelete">Delete</button>
         </div>
         <input id="wfDesc" placeholder="description (optional)">
+        <input id="wfOutputDir" placeholder="output folder (workflows/&lt;id&gt;)" title="Where runs write their outputs, under the workspace. Empty = workflows/<id>/<timestamp>.">
         <input id="wfInputs" placeholder="inputs (comma-separated names, e.g. prompt)">
         <textarea id="wfOutputs" rows="2" style="font-family:ui-monospace,monospace;font-size:12px"
           placeholder="outputs — one per line, name = template. e.g.  video_url = {{nodes.animate.output[0]}}"></textarea>
@@ -4036,6 +4037,10 @@ function initParams() {
 const wf = { tools: [], nodes: [], edges: [], inputs: [], current: null, sel: null };
 let wfBound = false;
 let wfConnect = null;   // { from, tmp: <svg line> } while dragging a connection
+/* Movable INPUT/OUTPUT box positions (logical, like node x/y). null means
+   "the classic left/right defaults" -- older specs and Studio saves without a
+   ui block land there and look exactly as before. */
+let wfIO = { inx: null, iny: null, outx: null, outy: null };
 
 const NS = "http://www.w3.org/2000/svg";
 const NODE_W = 150, PORT_Y = 20;
@@ -4046,6 +4051,7 @@ async function wfInit() {
     document.getElementById("wfNew").addEventListener("click", wfNewClicked);
     document.getElementById("wfAddNode").addEventListener("click", wfAddNode);
     document.getElementById("wfSave").addEventListener("click", wfSave);
+    document.getElementById("wfCanvas").addEventListener("mousedown", wfStartPan);
     document.getElementById("wfRun").addEventListener("click", wfRun);
     document.getElementById("wfDelete").addEventListener("click", wfDelete);
     document.getElementById("wfInspId").addEventListener("change", wfRenameSel);
@@ -4118,6 +4124,11 @@ async function wfLoad(id) {
       y: (typeof n.y === "number" && n.y >= 0) ? n.y : -1
     }));
     wf.edges = (spec.edges || []).map(e => ({ from: e.from, to: e.to }));
+    const odirEl = document.getElementById("wfOutputDir");
+    if (odirEl) odirEl.value = spec.output_dir || "";
+    const ui = spec.ui || {};
+    wfIO = { inx: ui.in_x ?? null, iny: ui.in_y ?? null,
+             outx: ui.out_x ?? null, outy: ui.out_y ?? null };
     wfAutoLayout();
     document.getElementById("wfRunPanel").style.display = "none";
     wfRender(); wfSelect(null); wfMsg("loaded " + wf.current);
@@ -4344,10 +4355,11 @@ function wfOutputDefs() {
 function wfOutputBoxX() {
   let r = 300; wf.nodes.forEach(n => r = Math.max(r, n.x + NODE_W + 60)); return r;
 }
-function wfIOBox(canvas, kind, x, fields) {
+function wfIOBox(canvas, kind, x, y, fields) {
   const el = document.createElement("div");
   el.className = "wf-io wf-io-" + kind;
-  el.style.cssText = `position:absolute;left:${x}px;top:8px;width:${IO_W}px;border:1px dashed #6a8fd0;` +
+  el.dataset.kind = kind;
+  el.style.cssText = `position:absolute;left:${x}px;top:${y}px;width:${IO_W}px;border:1px dashed #6a8fd0;` +
     `border-radius:6px;background:rgba(106,143,208,.08);z-index:1;font-size:11px`;
   const title = kind === "input" ? "▸ INPUT" : "OUTPUT ▸";
   let rows = fields.map(f => {
@@ -4365,14 +4377,53 @@ function wfIOBox(canvas, kind, x, fields) {
   const port = kind === "input"
     ? `<div class="wf-port" style="position:absolute;right:-7px;top:${PORT_Y}px;width:12px;height:12px;border-radius:50%;background:#6a8fd0;border:2px solid var(--bg,#111)"></div>`
     : `<div class="wf-port" style="position:absolute;left:-7px;top:${PORT_Y}px;width:12px;height:12px;border-radius:50%;background:#888;border:2px solid var(--bg,#111)"></div>`;
-  el.innerHTML = `<div style="padding:4px 7px;font-weight:600;border-bottom:1px solid var(--border,#444);` +
-    `opacity:.8">${title}</div>${rows}${port}`;
+  el.innerHTML = `<div class="wf-io-head" style="padding:4px 7px;font-weight:600;border-bottom:1px solid var(--border,#444);` +
+    `opacity:.8;cursor:move">${title}</div>${rows}${port}`;
   canvas.appendChild(el);
+}
+
+function wfStartIODrag(ev, el) {
+  ev.preventDefault();
+  const kind = el.dataset.kind;
+  const canvas = document.getElementById("wfCanvas");
+  const r = canvas.getBoundingClientRect();
+  const startX = parseFloat(el.style.left) || 0, startY = parseFloat(el.style.top) || 0;
+  const ox = ev.clientX - r.left - startX + canvas.scrollLeft,
+        oy = ev.clientY - r.top  - startY + canvas.scrollTop;
+  function move(e) {
+    const x = Math.max(0, e.clientX - r.left - ox + canvas.scrollLeft);
+    const y = Math.max(0, e.clientY - r.top  - oy + canvas.scrollTop);
+    el.style.left = x + "px"; el.style.top = y + "px";
+    if (kind === "input") { wfIO.inx = x; wfIO.iny = y; }
+    else { wfIO.outx = x; wfIO.outy = y; }
+    wfDrawEdges();
+  }
+  function up() { document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); }
+  document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
+}
+
+/* Drag empty canvas to pan (scroll-based: the sheet grows as things are
+   pushed right/down, and dragging the background moves the viewport). */
+function wfStartPan(ev) {
+  const canvas = document.getElementById("wfCanvas");
+  if (ev.target !== canvas && ev.target.id !== "wfEdgeLayer") return;
+  ev.preventDefault();
+  const sx = ev.clientX, sy = ev.clientY,
+        ox = canvas.scrollLeft, oy = canvas.scrollTop;
+  function move(e) {
+    canvas.scrollLeft = ox - (e.clientX - sx);
+    canvas.scrollTop  = oy - (e.clientY - sy);
+  }
+  function up() { document.removeEventListener("mousemove", move); document.removeEventListener("mouseup", up); }
+  document.addEventListener("mousemove", move); document.addEventListener("mouseup", up);
 }
 function wfRenderIOBoxes(canvas) {
   [...canvas.querySelectorAll(".wf-io")].forEach(e => e.remove());
-  wfIOBox(canvas, "input", 8, wfInputNames());
-  wfIOBox(canvas, "output", wfOutputBoxX(), wfOutputDefs());
+  wfIOBox(canvas, "input", (wfIO.inx ?? 8), (wfIO.iny ?? 8), wfInputNames());
+  wfIOBox(canvas, "output", (wfIO.outx ?? wfOutputBoxX()), (wfIO.outy ?? 8), wfOutputDefs());
+  /* the IO boxes drag like nodes -- citizens of the space, not chrome */
+  canvas.querySelectorAll(".wf-io .wf-io-head").forEach(h =>
+    h.addEventListener("mousedown", ev => wfStartIODrag(ev, h.closest(".wf-io"))));
   /* Click an input field to copy its {{inputs.NAME}} template for pasting into
      a node's args. (Output fields are drop targets -- see wfStartConnect.) */
   canvas.querySelectorAll(".wf-infield").forEach(el => el.addEventListener("click", () => {
@@ -4561,6 +4612,15 @@ function wfBuildSpec() {
     outputs,
     nodes, edges: wf.edges.filter(e => e.from && e.to)
   };
+  const odir = (document.getElementById("wfOutputDir") || {}).value;
+  if (odir && odir.trim()) spec.output_dir = odir.trim();
+  /* view state: node x/y ride on the nodes; the ui block carries what has
+     no node to ride on. Shared shape with Studio, so the two clients cannot
+     corrupt each other's layouts. */
+  const ui = {};
+  if (wfIO.inx  != null) { ui.in_x = Math.round(wfIO.inx);  ui.in_y = Math.round(wfIO.iny); }
+  if (wfIO.outx != null) { ui.out_x = Math.round(wfIO.outx); ui.out_y = Math.round(wfIO.outy); }
+  if (Object.keys(ui).length) spec.ui = ui;
   const loop = wfBuildLoop();
   if (loop) spec.loop = loop;
   return spec;
@@ -4624,7 +4684,11 @@ async function wfRun() {
         { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(inputs) })).json();
       const lines = (j.nodes || []).map(n => `${n.ok ? "✓" : "✗"} ${n.node} (${n.tool})` + (n.error ? "  ! " + n.error : "") + (n.text ? "\n    " + n.text : ""));
       document.getElementById("wfResults").textContent =
-        (j.ok ? "OK\n" : "FAILED: " + (j.error || "") + "\n") + (j.output ? "output: " + j.output + "\n\n" : "\n") + lines.join("\n");
+        (j.ok ? "OK\n" : "FAILED: " + (j.error || "") + "\n") +
+        (j.output ? "output: " + j.output + "\n" : "") +
+        (j.output_dir ? "output files: " + j.output_dir + "\n" : "") +
+        (j.output_dir_error ? "output files NOT written: " + j.output_dir_error + "\n" : "") +
+        "\n" + lines.join("\n");
     } catch (e) { document.getElementById("wfResults").textContent = "run error: " + e; }
   });
   inbox.appendChild(go);
