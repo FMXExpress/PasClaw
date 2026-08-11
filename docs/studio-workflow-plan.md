@@ -32,8 +32,9 @@ can find*, not text in a results pane.
 
 - The canvas is a `TPaintBox` painted immediate-mode — actually the RIGHT
   substrate for this: a view transform is two additions per point.
-- **Positions are not persisted at all**: they live in an in-memory
-  dictionary; save/load a workflow and the layout evaporates.
+- ~~Positions are not persisted~~ **Correction found while building**: node
+  x/y DO round-trip through the spec (both clients, same convention). What
+  was missing was pan, the IO positions, and any space beyond the viewport.
 - Dragging clamps to the paintbox: `Min(Box.Width - 116, X)` — there is no
   space beyond the viewport, which is why the graph feels boxed in.
 - INPUT/OUTPUT are painted chrome at fixed rects, not movable objects.
@@ -45,7 +46,7 @@ can find*, not text in a results pane.
 
 ## The plan
 
-### P1 — the virtual canvas (the direct ask)
+### P1 — the virtual canvas (the direct ask) — ✅ built (Studio + web)
 - **View transform**: `FWorkflowPan: TPointF` (zoom deferred; the transform
   is written zoom-ready as `screen = logical + pan`). ALL painting and ALL
   hit-testing go through two helpers — `WfToScreen`/`WfToLogical` — so a
@@ -67,7 +68,7 @@ can find*, not text in a results pane.
 - Fit-view button on the workflow toolbar (cheap, and the escape hatch for
   "I panned my graph off into space").
 
-### P2 — the output contract (the direct ask, ComfyUI-style)
+### P2 — the output contract (the direct ask, ComfyUI-style) — ✅ built (engine + both clients)
 - `output_dir` field on the spec (engine: parse + carry; unknown-field
   round-trip means old files stay valid). Default when absent:
   `workflows/<workflow-id>/` under the workspace.
