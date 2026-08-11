@@ -3109,6 +3109,79 @@ object TStyleContainer
     end
   end
   object TLayout
+    StyleName = 'collapsetoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
+    object TRectangle
+      StyleName = 'hoverwash'
+      Align = Contents
+      Fill.Color = claBlack
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
+      end
+    end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFF4A5563
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      WrapMode = Fit
+      Height = 8.000000000000000000
+      Width = 8.000000000000000000
+      Data.Path = {
+        10000000000000001F85EB3E0000003F01000000EC51383ECDCC4C3E01000000
+        EC51383E14AEC73E010000000AD7A33C14AEC73E010000000AD7A33CF6281C3F
+        01000000EC51383EF6281C3F01000000EC51383ECDCC4C3F010000001F85EB3E
+        0000003F00000000713D0A3F0000003F0100000085EB513FCDCC4C3E01000000
+        85EB513F14AEC73E0100000048E17A3F14AEC73E0100000048E17A3FF6281C3F
+        0100000085EB513FF6281C3F0100000085EB513FCDCC4C3F01000000713D0A3F
+        0000003F}
+    end
+  end
+  object TLayout
     StyleName = 'composetoolbutton'
     DesignVisible = False
     Height = 24.000000000000000000
@@ -3254,6 +3327,79 @@ object TStyleContainer
         C3F5683F010000008FC2F53C0000403F00000000E17A943E0000403F01000000
         EC51783F0000403F01000000EC51783FC3F5683F01000000E17A943EC3F5683F
         01000000E17A943E0000403F}
+    end
+  end
+  object TLayout
+    StyleName = 'expandtoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
+    object TRectangle
+      StyleName = 'hoverwash'
+      Align = Contents
+      Fill.Color = claBlack
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
+      end
+    end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFF4A5563
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      WrapMode = Fit
+      Height = 8.000000000000000000
+      Width = 8.000000000000000000
+      Data.Path = {
+        10000000000000000AD7A33C0000003F010000009A99993ECDCC4C3E01000000
+        9A99993E14AEC73E010000001F85EB3E14AEC73E010000001F85EB3EF6281C3F
+        010000009A99993EF6281C3F010000009A99993ECDCC4C3F010000000AD7A33C
+        0000003F0000000048E17A3F0000003F010000003333333FCDCC4C3E01000000
+        3333333F14AEC73E01000000713D0A3F14AEC73E01000000713D0A3FF6281C3F
+        010000003333333FF6281C3F010000003333333FCDCC4C3F0100000048E17A3F
+        0000003F}
     end
   end
   object TLayout
@@ -3495,6 +3641,156 @@ object TStyleContainer
         01000000E17A143F0AD7A33E010000003D0AD73E0AD7A33E010000003D0AD73E
         EC51383E000000003D0AD73ECDCCCC3E01000000E17A143FCDCCCC3E01000000
         E17A143F85EB513F010000003D0AD73E85EB513F010000003D0AD73ECDCCCC3E}
+    end
+  end
+  object TLayout
+    StyleName = 'linkedtoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
+    object TRectangle
+      StyleName = 'hoverwash'
+      Align = Contents
+      Fill.Color = claBlack
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
+      end
+    end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFF4A5563
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      WrapMode = Fit
+      Height = 8.000000000000000000
+      Width = 8.000000000000000000
+      Data.Path = {
+        1E000000000000009A99593F0000003F01000000825A573FCF1FD83E01000000
+        10BA503F7F3FB23E01000000560D463F4845903E010000005CDD373FA6CA673E
+        0100000040E0263FBF173D3E0100000019F0133FF995223E010000000000003F
+        9A99193E01000000CF1FD83EF995223E010000007F3FB23EBF173D3E01000000
+        4845903EA6CA673E01000000A6CA673E4845903E01000000BF173D3E7F3FB23E
+        01000000F995223ECF1FD83E010000009A99193E0000003F01000000F995223E
+        19F0133F01000000BF173D3E40E0263F01000000A6CA673E5CDD373F01000000
+        4845903E560D463F010000007F3FB23E10BA503F01000000CF1FD83E825A573F
+        010000000000003F9A99593F0100000019F0133F825A573F0100000040E0263F
+        10BA503F010000005CDD373F560D463F01000000560D463F5CDD373F01000000
+        10BA503F40E0263F01000000825A573F19F0133F010000009A99593F0000003F
+        010000009A99593F0000003F}
+    end
+  end
+  object TLayout
+    StyleName = 'menutoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
+    object TRectangle
+      StyleName = 'hoverwash'
+      Align = Contents
+      Fill.Color = claBlack
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
+      end
+    end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFF4A5563
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      WrapMode = Fit
+      Height = 8.000000000000000000
+      Width = 8.000000000000000000
+      Data.Path = {
+        0F00000000000000CDCC4C3DB81E053E010000003333733FB81E053E01000000
+        3333733F713D8A3E01000000CDCC4C3D713D8A3E01000000CDCC4C3DB81E053E
+        00000000CDCC4C3DF628DC3E010000003333733FF628DC3E010000003333733F
+        85EB113F01000000CDCC4C3D85EB113F01000000CDCC4C3DF628DC3E00000000
+        CDCC4C3D48E13A3F010000003333733F48E13A3F010000003333733F52B85E3F
+        01000000CDCC4C3D52B85E3F01000000CDCC4C3D48E13A3F}
     end
   end
   object TLayout
@@ -4125,6 +4421,80 @@ object TStyleContainer
     end
   end
   object TLayout
+    StyleName = 'sliderstoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
+    object TRectangle
+      StyleName = 'hoverwash'
+      Align = Contents
+      Fill.Color = claBlack
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
+      end
+    end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFF4A5563
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      WrapMode = Fit
+      Height = 8.000000000000000000
+      Width = 8.000000000000000000
+      Data.Path = {
+        14000000000000000AD7233D7B142E3E010000008FC2753F7B142E3E01000000
+        8FC2753FE17A943E010000000AD7233DE17A943E010000000AD7233D7B142E3E
+        00000000E17A143F295C8F3D0100000014AE473F295C8F3D0100000014AE473F
+        14AEC73E01000000E17A143F14AEC73E01000000E17A143F295C8F3D00000000
+        0AD7233DF6281C3F010000008FC2753FF6281C3F010000008FC2753F48E13A3F
+        010000000AD7233D48E13A3F010000000AD7233DF6281C3F00000000AE47613E
+        5C8F023F010000003D0AD73E5C8F023F010000003D0AD73EE17A543F01000000
+        AE47613EE17A543F01000000AE47613E5C8F023F}
+    end
+  end
+  object TLayout
     StyleName = 'stoptoolbutton'
     DesignVisible = False
     Height = 24.000000000000000000
@@ -4369,6 +4739,98 @@ object TStyleContainer
         7B142E3E01000000A470BD3E7B142E3E01000000A470BD3E0AD7233D00000000
         7B142E3EC3F5A83E01000000E17A543FC3F5A83E01000000A4703D3F8FC2753F
         01000000B81E853E8FC2753F010000007B142E3EC3F5A83E}
+    end
+  end
+  object TLayout
+    StyleName = 'unlinkedtoolbutton'
+    DesignVisible = False
+    Height = 24.000000000000000000
+    Width = 34.000000000000000000
+    object TRectangle
+      StyleName = 'hoverwash'
+      Align = Contents
+      Fill.Color = claBlack
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Kind = None
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.150000005960464500
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 0.100000001490116100
+        Trigger = 'IsMouseOver=true'
+        TriggerInverse = 'IsMouseOver=false'
+      end
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.100000001490116100
+        StopValue = 0.200000002980232200
+        Trigger = 'IsPressed=true'
+        TriggerInverse = 'IsPressed=false'
+      end
+    end
+    object TRectangle
+      StyleName = 'focusring'
+      Align = Contents
+      Fill.Kind = None
+      HitTest = False
+      Locked = True
+      Opacity = 0.000000000000000000
+      Stroke.Color = xFF0969DA
+      Stroke.Thickness = 1.500000000000000000
+      XRadius = 6.000000000000000000
+      YRadius = 6.000000000000000000
+      object TFloatAnimation
+        Duration = 0.100000001490116100
+        PropertyName = 'Opacity'
+        StartValue = 0.000000000000000000
+        StopValue = 1.000000000000000000
+        Trigger = 'IsFocused=true'
+        TriggerInverse = 'IsFocused=false'
+      end
+    end
+    object TPath
+      StyleName = 'icon'
+      Align = Center
+      Fill.Color = xFF4A5563
+      Fill.Kind = Solid
+      HitTest = False
+      Locked = True
+      Stroke.Kind = None
+      WrapMode = Fit
+      Height = 8.000000000000000000
+      Width = 8.000000000000000000
+      Data.Path = {
+        430000000000000052B85E3F0000003F0100000065E65C3FC60ADB3E01000000
+        8782573F2481B73E01000000BEC14E3FB6C0963E0100000027FA423F6517743E
+        01000000A59F343F09F9443E010000006E3F243FE5F5213E010000009D7A123F
+        6B660C3E010000000000003FB81E053E01000000C60ADB3E6B660C3E01000000
+        2481B73EE5F5213E01000000B6C0963E09F9443E010000006517743E6517743E
+        0100000009F9443EB6C0963E01000000E5F5213E2481B73E010000006B660C3E
+        C60ADB3E01000000B81E053E0000003F010000006B660C3E9D7A123F01000000
+        E5F5213E6E3F243F0100000009F9443EA59F343F010000006517743E27FA423F
+        01000000B6C0963EBEC14E3F010000002481B73E8782573F01000000C60ADB3E
+        65E65C3F010000000000003F52B85E3F010000009D7A123F65E65C3F01000000
+        6E3F243F8782573F01000000A59F343FBEC14E3F0100000027FA423F27FA423F
+        01000000BEC14E3FA59F343F010000008782573F6E3F243F0100000065E65C3F
+        9D7A123F0100000052B85E3F0000003F010000008FC2353F0000003F01000000
+        1EBA343FF17C0A3F01000000F3AA313FB492143F0100000027B32C3F12DE1D3F
+        010000009903263F9903263F0100000012DE1D3F27B32C3F01000000B492143F
+        F3AA313F01000000F17C0A3F1EBA343F010000000000003F8FC2353F01000000
+        1E06EB3E1EBA343F0100000098DAD63EF3AA313F01000000DD43C43E27B32C3F
+        01000000CDF8B33E9903263F01000000B399A63E12DE1D3F010000001BAA9C3E
+        B492143F01000000C48B963EF17C0A3F01000000E17A943E0000003F01000000
+        C48B963E1E06EB3E010000001BAA9C3E98DAD63E01000000B399A63EDD43C43E
+        01000000CDF8B33ECDF8B33E01000000DD43C43EB399A63E0100000098DAD63E
+        1BAA9C3E010000001E06EB3EC48B963E010000000000003FE17A943E01000000
+        F17C0A3FC48B963E01000000B492143F1BAA9C3E0100000012DE1D3FB399A63E
+        010000009903263FCDF8B33E0100000027B32C3FDD43C43E01000000F3AA313F
+        98DAD63E010000001EBA343F1E06EB3E010000008FC2353F0000003F01000000
+        52B85E3F0000003F}
     end
   end
   object TLayout
