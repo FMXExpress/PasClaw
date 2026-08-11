@@ -57,10 +57,11 @@ their own software around their own needs** — the spam filter, the invoice
 reconciler, the reading tracker — and those apps accumulate. The desktop is the
 inventory of what you've built (icons = your apps), Workspaces separate the
 areas of your life (work / home / a client), and the suite grows by asking. The
-productivity suite is therefore *seeded, not shipped*: a handful of starter
-projects (notes, todo, file finder) that are themselves agent-built apps the
-user can open, inspect, and remake — demonstrating that nothing on this desktop
-is closed software.
+productivity suite is therefore *seeded, not shipped*: a system suite of
+starter apps (§2c — Brain, Notes, Tasks, Calendar, Deep Research, Library,
+Cookbook, Mail) that are themselves agent-built apps the user can open,
+inspect, and remake — demonstrating that nothing on this desktop is closed
+software.
 
 ---
 
@@ -263,6 +264,55 @@ Gemini grounding) currently ends as chat text. On a desktop, it ends as a
 
 ---
 
+## 2c. The system suite: productivity apps for normal people
+
+[Odysseus](https://github.com/odysseus-dev/odysseus) is the proof that this
+category works for non-engineers: a self-hosted AI workspace whose rail reads
+**Calendar, Cookbook, Deep Research, Library, Brain, Notes, Tasks** — plus
+Email and Documents. Not a console; a set of everyday apps a normal person
+recognizes, with the agent inside each one. That is the essence PasClaw
+Desktop needs, and the striking thing is that **PasClaw already has nearly
+every backing surface** — today they're exposed as engineer-facing tabs and
+`/v1/*` endpoints. The desktop's job is to re-present them as system apps.
+
+The suite (each an icon on every fresh desktop, each a `TRetroWindow` /
+window div, each with a period face):
+
+| Suite app | Odysseus analog | PasClaw backing (exists today unless marked NEW) | Period face |
+|---|---|---|---|
+| **Brain** | Brain (memory view/edit) | memory pkg: `workspace/memory/*.md`, facts db, `/v1/memory*`, hybrid FTS+vector search | Cardfile (Win 3.1) / Rolodex — flip through what it knows about you, tear up a card to make it forget |
+| **Notes** | Notes | NEW app, trivial: markdown files in `workspace/memory/notes/` — which means **notes are agent-readable memory for free** (indexed by `memory_search`) | Notepad / Stickies |
+| **Tasks** | Tasks (todos + scheduled) | the §1 Task layer + cron; NEW: personal todos as tasks in a built-in "Personal" project, so *your* todo list and the agent's build board are one system | checklist window; taskbar flash on due |
+| **Calendar** | Calendar (CalDAV, reminders, scheduled agent runs) | cron store + `/v1/cron` (scheduled agent jobs are already first-class); NEW: month/week rendering, reminders; CalDAV sync later | Calendar.exe (Win 3.x) / Mac desk-accessory calendar |
+| **Deep Research** | Deep Research | §2b answer pages *are* this — multi-step `web_search`/`web_fetch` → report page with sources; NEW: a named multi-step mode (plan → read → synthesize) with a progress dialog | the Browser window's "research" mode; flying-pages dialog while it reads |
+| **Library** | Library (chat/doc archive) | session store + `session_search`, `pages/` history, KB (`/v1/kb*`), checkpoints | file cabinet / card catalog — everything ever made, searchable |
+| **Cookbook** | Cookbook (model recommendations + serving) | 26-provider catalog incl. Ollama/LM Studio/vLLM, fallback chains, auto-router; NEW: plain-language presentation ("fast+cheap / smart / private-local") with hardware-aware local-model suggestions | Control Panel |
+| **Mail** | Email (IMAP triage, drafts) | Email channel (SMTP send + IMAP poll) already exists; NEW: inbox UI with agent triage/summaries/reply drafts | the era's mail client, finally with a working "answer this for me" |
+
+Rules that make the suite deliver Odysseus's essence rather than its surface:
+
+- **Suite apps are for people who will never open a config file.** Each one
+  must be usable with zero setup beyond what onboarding already collected;
+  anything needing credentials (Mail, CalDAV) asks in-window, in plain
+  language, and stores per-workspace.
+- **The agent is inside each app, not beside it.** Brain's search box answers
+  questions; Tasks accepts "remind me Thursday" as a new row; Calendar accepts
+  "schedule the report every Monday 9am" and writes the cron entry; Mail's
+  triage runs as background jobs. The suite is the trust ladder in practice —
+  observe → draft → act-with-approval — one app at a time.
+- **Suite apps are blueprints, not firmware.** Every one is built the same way
+  user apps are (§2: `app.json`, served windows, state store) and lives in a
+  visible project the user can open, inspect, and ask the agent to remake —
+  "make Notes show a word count", "give Calendar a week view". This is the §0
+  promise ("nothing on this desktop is closed software") made concrete, and it
+  is the real Odysseus lesson: that suite was shaped by a non-engineer asking
+  for what they needed. PasClaw Desktop ships the asking as a feature.
+- **Workspace-scoped like everything else.** Each workspace has its own Brain,
+  Notes, Tasks, Calendar — switching to the "home" workspace switches whose
+  life is on screen.
+
+---
+
 ## 3. Web UI: the retro desktop in the browser
 
 New standalone page served by the gateway (keep the existing `webui.html` untouched
@@ -347,7 +397,8 @@ window-lifetime tracking, and F11 kiosk mode.
 | **4b. Answer pages** | `POST /v1/pages`, `pages/` history project, Browser-window search box, pages over workspace/API data, sources chrome, page→app promotion | gateway, both clients, promptware |
 | **5. FMX desktop v1** | `desktop/` project from the RetroDesktop demo: gateway client, tree, chat + app windows, style/skin picker, workspace pager | new top-level dir, shared client unit |
 | **6. Polish** | full palette set from shared generator, per-workspace desktop state persistence, native app build/launch (`fpc`/`delphi_build`), all-in-one FMX mode, blueprint export/import, docs | styles repo + both clients |
-| **7. Period-native AI** | wizard/dialog/progress rendering of agent output in both clients, per-style personality overlays (promptware), agent-aware File Manager window, seeded starter projects (notes/todo/finder as agent-built apps) | both clients, promptware |
+| **7. System suite v1** | §2c apps in dependency order: Notes + Brain (thin UIs over memory), Tasks + Calendar (task layer + cron), Library (session/page/KB search), Deep Research mode on answer pages | both clients, gateway |
+| **8. System suite v2 + period-native AI** | Cookbook, Mail (IMAP channel → inbox UI), suite apps as remakeable blueprints; wizard/dialog/progress rendering of agent output, per-style personality overlays (promptware), agent-aware File Manager window | both clients, promptware |
 
 Phases 3 and 5 are independent once 1–2 land; 4 slots between them and is where the
 product thesis lives.
