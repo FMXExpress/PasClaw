@@ -6991,54 +6991,56 @@ begin
   StyleChromeRect(Chrome, UI_PANEL_ALT, UI_BORDER, 6, False);
   Chrome.SendToBack;
 
-  Row := TLayout.Create(Self);
-  Row.Parent := SettingsPane;
-  Row.Align := TAlignLayout.Top;
-  Row.Height := ROW_BAR;
-
-  Btn := TButton.Create(Self);
-  Btn.Parent := Row;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
-  Btn.Text := 'Delete';
-  Btn.OnClick := WorkflowDeleteNodeClick;
-  SetControlMargins(Btn, GAP_S, 0, 0, 0);
-
-  Btn := TButton.Create(Self);
-  Btn.Parent := Row;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 86;
-  Btn.Text := 'Update';
-  Btn.OnClick := WorkflowUpdateNodeClick;
-  SetControlMargins(Btn, GAP_S, 0, 0, 0);
-
-  Btn := TButton.Create(Self);
-  Btn.Parent := Row;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 70;
-  Btn.Text := 'Add';
-  Btn.OnClick := WorkflowAddNodeClick;
-  SetControlMargins(Btn, GAP_S, 0, 0, 0);
-
+  { Phase 4: the node editor packed a combo, an edit and three buttons onto
+    one row; nothing was labelled. Fields on the grid, actions on a bar. }
   FWorkflowToolCombo := TComboBox.Create(Self);
-  FWorkflowToolCombo.Parent := Row;
-  FWorkflowToolCombo.Align := TAlignLayout.Left;
-  FWorkflowToolCombo.Width := 168;
   FWorkflowToolCombo.Items.Add('llm');
   FWorkflowToolCombo.Items.Add('replicate');
   FWorkflowToolCombo.ItemIndex := 0;
   FWorkflowToolCombo.OnChange := WorkflowToolChange;
-  SetControlMargins(FWorkflowToolCombo, 0, 0, GAP_S, 0);
+  AddFormRow(SettingsPane, 'Tool', FWorkflowToolCombo, 168);
 
   FWorkflowNodeIdEdit := TEdit.Create(Self);
-  FWorkflowNodeIdEdit.Parent := Row;
-  FWorkflowNodeIdEdit.Align := TAlignLayout.Client;
   FWorkflowNodeIdEdit.TextPrompt := 'node id';
+  AddFormRow(SettingsPane, 'Node id', FWorkflowNodeIdEdit);
 
   Row := TLayout.Create(Self);
   Row.Parent := SettingsPane;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 220;
+  Row.Height := ROW_BAR;
+  SetControlMargins(Row, FORM_LABEL_W + GAP_M, 0, 0, 0);
+
+  Btn := TButton.Create(Self);
+  Btn.Parent := Row;
+  Btn.Align := TAlignLayout.Left;
+  Btn.Width := BTN_W_S;
+  Btn.Text := 'Add';
+  Btn.OnClick := WorkflowAddNodeClick;
+  SetControlMargins(Btn, 0, 0, GAP_S, 0);
+
+  Btn := TButton.Create(Self);
+  Btn.Parent := Row;
+  Btn.Align := TAlignLayout.Left;
+  Btn.Width := BTN_W_M;
+  Btn.Text := 'Update';
+  Btn.OnClick := WorkflowUpdateNodeClick;
+  SetControlMargins(Btn, 0, 0, GAP_S, 0);
+
+  Btn := TButton.Create(Self);
+  Btn.Parent := Row;
+  Btn.Align := TAlignLayout.Left;
+  Btn.Width := BTN_W_S;
+  Btn.Text := 'Delete';
+  Btn.OnClick := WorkflowDeleteNodeClick;
+
+  Row := TLayout.Create(Self);
+  Row.Parent := SettingsPane;
+  Row.Align := TAlignLayout.Top;
+  { mode label + 2 llm rows + 3 replicate rows + action bar + prompt memo +
+    the panel's own padding. Summed, not guessed: the schema group panel
+    already taught this file what a guessed container height does. }
+  Row.Height := ROW_TEXT + (ROW_FORM + GAP_XS) * 5 + ROW_BAR + GAP_XS +
+                72 + GAP_S * 3;
   SetControlMargins(Row, 0, GAP_S, 0, 0);
   SetControlPadding(Row, GAP_S, GAP_S, GAP_S, GAP_S);
   Chrome := TRectangle.Create(Self);
@@ -7055,38 +7057,36 @@ begin
   FWorkflowInspectorModeLabel.TextSettings.VertAlign := TTextAlign.Center;
   StyleLabel(FWorkflowInspectorModeLabel, UI_ACCENT, TXT_TITLE, True);
 
-  EdgeRow := TLayout.Create(Self);
-  EdgeRow.Parent := Row;
-  EdgeRow.Align := TAlignLayout.Top;
-  EdgeRow.Height := ROW_BAR;
-
-  Btn := TButton.Create(Self);
-  Btn.Parent := EdgeRow;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 92;
-  Btn.Text := 'Apply Form';
-  Btn.OnClick := WorkflowApplyInspectorClick;
-  SetControlMargins(Btn, GAP_S, 0, 0, 0);
-
-  Btn := TButton.Create(Self);
-  Btn.Parent := EdgeRow;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 96;
-  Btn.Text := 'Providers';
-  Btn.OnClick := WorkflowProviderModelClick;
-  SetControlMargins(Btn, GAP_S, 0, 0, 0);
-
+  { provider + model each on a labelled row; Apply/Providers move to a bar
+    at the bottom of the inspector rather than crowding the provider row }
   FWorkflowLlmProviderEdit := TEdit.Create(Self);
-  FWorkflowLlmProviderEdit.Parent := EdgeRow;
-  FWorkflowLlmProviderEdit.Align := TAlignLayout.Left;
-  FWorkflowLlmProviderEdit.Width := 130;
   FWorkflowLlmProviderEdit.TextPrompt := 'provider';
-  SetControlMargins(FWorkflowLlmProviderEdit, 0, 0, GAP_S, 0);
+  AddFormRow(Row, 'Provider', FWorkflowLlmProviderEdit, 150);
 
   FWorkflowLlmModelEdit := TEdit.Create(Self);
-  FWorkflowLlmModelEdit.Parent := EdgeRow;
-  FWorkflowLlmModelEdit.Align := TAlignLayout.Client;
   FWorkflowLlmModelEdit.TextPrompt := 'model';
+  AddFormRow(Row, 'Model', FWorkflowLlmModelEdit);
+
+  EdgeRow := TLayout.Create(Self);
+  EdgeRow.Parent := Row;
+  EdgeRow.Align := TAlignLayout.Bottom;
+  EdgeRow.Height := ROW_BAR;
+  SetControlMargins(EdgeRow, FORM_LABEL_W + GAP_M, GAP_XS, 0, 0);
+
+  Btn := TButton.Create(Self);
+  Btn.Parent := EdgeRow;
+  Btn.Align := TAlignLayout.Left;
+  Btn.Width := BTN_W_M;
+  Btn.Text := 'Apply Form';
+  Btn.OnClick := WorkflowApplyInspectorClick;
+  SetControlMargins(Btn, 0, 0, GAP_S, 0);
+
+  Btn := TButton.Create(Self);
+  Btn.Parent := EdgeRow;
+  Btn.Align := TAlignLayout.Left;
+  Btn.Width := BTN_W_M;
+  Btn.Text := 'Providers';
+  Btn.OnClick := WorkflowProviderModelClick;
 
   FWorkflowLlmPromptMemo := TMemo.Create(Self);
   FWorkflowLlmPromptMemo.Parent := Row;
@@ -7095,38 +7095,33 @@ begin
   FWorkflowLlmPromptMemo.WordWrap := True;
   SetControlMargins(FWorkflowLlmPromptMemo, 0, GAP_S, 0, 0);
 
-  EdgeRow := TLayout.Create(Self);
-  EdgeRow.Parent := Row;
-  EdgeRow.Align := TAlignLayout.Bottom;
-  EdgeRow.Height := ROW_BAR;
-  SetControlMargins(EdgeRow, 0, GAP_S, 0, 0);
-
+  { replicate fields: version and prompt on labelled rows; the model search
+    keeps its edit + button pair on the search row }
   FWorkflowReplicateVersionEdit := TEdit.Create(Self);
-  FWorkflowReplicateVersionEdit.Parent := EdgeRow;
-  FWorkflowReplicateVersionEdit.Align := TAlignLayout.Left;
-  FWorkflowReplicateVersionEdit.Width := 160;
   FWorkflowReplicateVersionEdit.TextPrompt := 'replicate version';
-  SetControlMargins(FWorkflowReplicateVersionEdit, 0, 0, GAP_S, 0);
+  AddFormRow(Row, 'Version', FWorkflowReplicateVersionEdit);
+
+  FWorkflowReplicatePromptEdit := TEdit.Create(Self);
+  FWorkflowReplicatePromptEdit.TextPrompt := 'replicate input.prompt';
+  AddFormRow(Row, 'Prompt', FWorkflowReplicatePromptEdit);
+
+  EdgeRow := AddFormRow(Row, 'Search', nil);
 
   Btn := TButton.Create(Self);
   Btn.Parent := EdgeRow;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 64;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Search';
+  Btn.TagString := 'noicon';
   Btn.OnClick := WorkflowReplicateSearchClick;
-  SetControlMargins(Btn, GAP_S, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 1, 0, 1);
 
   FWorkflowReplicateSearchEdit := TEdit.Create(Self);
   FWorkflowReplicateSearchEdit.Parent := EdgeRow;
-  FWorkflowReplicateSearchEdit.Align := TAlignLayout.Right;
-  FWorkflowReplicateSearchEdit.Width := 128;
+  FWorkflowReplicateSearchEdit.Align := TAlignLayout.Client;
+  FWorkflowReplicateSearchEdit.Height := H_INPUT;
   FWorkflowReplicateSearchEdit.TextPrompt := 'model search';
-  SetControlMargins(FWorkflowReplicateSearchEdit, GAP_S, 0, 0, 0);
-
-  FWorkflowReplicatePromptEdit := TEdit.Create(Self);
-  FWorkflowReplicatePromptEdit.Parent := EdgeRow;
-  FWorkflowReplicatePromptEdit.Align := TAlignLayout.Client;
-  FWorkflowReplicatePromptEdit.TextPrompt := 'replicate input.prompt';
+  SetControlMargins(FWorkflowReplicateSearchEdit, 0, 1, 0, 1);
 
   FWorkflowReplicateResultsList := TListBox.Create(Self);
   FWorkflowReplicateResultsList.Parent := SettingsPane;
@@ -7527,7 +7522,12 @@ begin
           LabelControl := TLabel.Create(Self);
           LabelControl.Parent := NestedRow;
           LabelControl.Align := TAlignLayout.Left;
-          LabelControl.Width := 132;
+          { slightly narrower than FORM_LABEL_W: the group panel's own
+            padding already indents the row, and the shared gutter is
+            measured from the TAB edge, not the group's }
+          LabelControl.Width := FORM_LABEL_W - GAP_S;
+          LabelControl.TextSettings.HorzAlign := TTextAlign.Trailing;
+          SetControlMargins(LabelControl, 0, 0, GAP_M, 0);
           LabelControl.Text := NestedPair.JsonString.Value;
           if NestedRequired then
             LabelControl.Text := LabelControl.Text + ' *';
@@ -7611,10 +7611,14 @@ begin
         Row.Height := ROW_BAR;
       SetControlMargins(Row, 0, 0, 0, GAP_XS);
 
+      { the SHARED form gutter: a generated schema row must be
+        indistinguishable from a hand-built AddFormRow one }
       LabelControl := TLabel.Create(Self);
       LabelControl.Parent := Row;
       LabelControl.Align := TAlignLayout.Left;
-      LabelControl.Width := 140;
+      LabelControl.Width := FORM_LABEL_W;
+      LabelControl.TextSettings.HorzAlign := TTextAlign.Trailing;
+      SetControlMargins(LabelControl, 0, 0, GAP_M, 0);
       LabelControl.Text := Pair.JsonString.Value;
       if SameText(FieldType, 'array') and
         (SameText(ItemType, 'string') or SameText(ItemType, 'number') or
