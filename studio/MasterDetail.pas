@@ -1554,12 +1554,12 @@ begin
   end
   else
   begin
-    UI_CHAT_TEXT       := $FF10151C;
-    UI_CHROME_TEXT     := $FF5C6675;
-    UI_USER_FILL       := $FFEAF1FB;
-    UI_USER_BORDER     := $FFBFD4EE;
-    UI_COMPOSER_FILL   := $FFFFFFFF;
-    UI_COMPOSER_BORDER := $FF3BA7FF;
+    UI_CHAT_TEXT       := $FF171615;
+    UI_CHROME_TEXT     := $FF6F6B62;
+    UI_USER_FILL       := $FFF2F0EC;
+    UI_USER_BORDER     := $FFC3D5EA;
+    UI_COMPOSER_FILL   := $FFF9F8F6;
+    UI_COMPOSER_BORDER := $FF6E9ACC;
   end;
 
   if FDarkStyleEnabled then
@@ -1782,13 +1782,13 @@ procedure TMasterDetailForm.StyleChromeRect(Rect: TRectangle;
     if FDarkStyleEnabled then
       Exit;
     if Color = UI_BG then
-      Result := $FFF7F9FC
+      Result := $FFF6F5F2
     else if Color = UI_PANEL then
-      Result := $FFFFFFFF
+      Result := $FFF9F8F6
     else if Color = UI_PANEL_ALT then
-      Result := $FFF2F5FA
+      Result := $FFF4F2EF
     else if Color = UI_ACCENT_DIM then
-      Result := $FFE5F7FC;
+      Result := $FFF1EEEA;
   end;
   function ThemeStroke(Color: TAlphaColor): TAlphaColor;
   begin
@@ -1796,11 +1796,11 @@ procedure TMasterDetailForm.StyleChromeRect(Rect: TRectangle;
     if FDarkStyleEnabled then
       Exit;
     if Color = UI_BORDER then
-      Result := $FFD6DDE8
+      Result := $FFE4E1DA
     else if Color = UI_ACCENT_DIM then
-      Result := $FF9CDDEC
+      Result := $FFA8C2E0
     else if Color = UI_BG then
-      Result := $FFFFFFFF;
+      Result := $FFF9F8F6;
   end;
 begin
   if Rect = nil then
@@ -1829,19 +1829,19 @@ begin
   if FDarkStyleEnabled then
     Exit;
   if Color = UI_BG then
-    Result := $FFF7F9FC
+    Result := $FFF6F5F2
   else if Color = UI_PANEL then
-    Result := $FFFFFFFF
+    Result := $FFF9F8F6
   else if Color = UI_PANEL_ALT then
-    Result := $FFF2F5FA
+    Result := $FFF4F2EF
   else if Color = UI_ACCENT_DIM then
-    Result := $FFDDEBF7
+    Result := $FFE0E9F4
   else if Color = UI_BORDER then
-    Result := $FFD6DDE8
+    Result := $FFE4E1DA
   else if Color = UI_TEXT then
-    Result := $FF10151C
+    Result := $FF171615
   else if Color = UI_MUTED then
-    Result := $FF5C6675;
+    Result := $FF6F6B62;
 end;
 
 function TMasterDetailForm.ThemePaintStroke(Color: TAlphaColor): TAlphaColor;
@@ -1852,7 +1852,7 @@ function TMasterDetailForm.ThemePaintStroke(Color: TAlphaColor): TAlphaColor;
   through the fill mapping. Lines need the stronger ink. }
 begin
   if (not FDarkStyleEnabled) and (Color = UI_ACCENT_DIM) then
-    Result := $FF9CDDEC
+    Result := $FFA8C2E0
   else
     Result := ThemePaintColor(Color);
 end;

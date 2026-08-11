@@ -328,6 +328,7 @@ test-read-file-encoding: | $(BUILDDIR)
 lint-studio:
 	@python3 scripts/lint-studio.py studio/MasterDetail.pas
 	@python3 scripts/gen-studio-icons.py --check
+	@python3 scripts/retone-light.py --check
 
 # Database tools (Phase 1): engine-agnostic seam + agent tools against a
 # throwaway SQLite file -- SQL classification, mode gating, param binding,
