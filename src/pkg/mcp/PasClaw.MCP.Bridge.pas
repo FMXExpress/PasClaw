@@ -88,6 +88,7 @@ uses
   SyncObjs,
   PasClaw.Logger,
   PasClaw.MCP.Cache,
+  PasClaw.MCP.Compact,
   PasClaw.MCP.Disclosure;
 
 type
@@ -121,8 +122,9 @@ type
     FError:       string;
     FDispatchLock: TCriticalSection;  { guards FDispatches concurrent grow/scan }
     FDispatches:  TList;              { TList of TMCPToolDispatch -- owned }
+    FCompact:     Boolean;            { snapshot of Cfg.MCPCompactResults }
   public
-    constructor Create(const AName: string);
+    constructor Create(const AName: string; ACompact: Boolean = False);
     destructor  Destroy; override;
     procedure SetReady(C: TMCPBaseClient);
     procedure SetFailed(const Err: string);
@@ -173,12 +175,13 @@ const
 var
   GStates: TList;  { TList of TMCPServerState -- owned; freed in FreeMCPClients }
 
-constructor TMCPServerState.Create(const AName: string);
+constructor TMCPServerState.Create(const AName: string; ACompact: Boolean);
 begin
   inherited Create;
   FLock         := TCriticalSection.Create;
   FDispatchLock := TCriticalSection.Create;
   FDispatches   := TList.Create;
+  FCompact := ACompact;
   FName   := AName;
   FClient := nil;
   FState  := lsLoading;
@@ -238,6 +241,7 @@ function TMCPServerState.CallToolStructured(const ToolName, ArgsJSON: string;
   out ResultText, ResultJSON, ErrMsg: string): Boolean;
 var
   C: TMCPBaseClient;
+  Compacted: string;
   S: TMCPLoadState;
   E: string;
 begin
@@ -274,6 +278,16 @@ begin
   end;
   Result := C.CallToolStructured(ToolName, ArgsJSON, ResultText, ResultJSON, ErrMsg);
   if (not Result) and (ErrMsg = '') then ErrMsg := 'mcp call failed';
+  { A tool result is re-sent on every later turn, so a row-shaped answer pays
+    its JSON key repetition once per turn for the rest of the conversation.
+    Rectangular results become a table; everything else is returned untouched
+    (PasClaw.MCP.Compact holds the refusal rules).
+
+    Only ResultText moves. ResultJSON keeps the server's original object, so
+    structured consumers -- workflow chaining off structuredContent, the
+    Studio result cards -- are unaffected. }
+  if Result and FCompact and CompactifyResultText(ResultText, Compacted) then
+    ResultText := Compacted;
 end;
 
 function TMCPServerState.FindDispatchFor(const ToolName: string): TMCPToolDispatch;
@@ -592,7 +606,8 @@ begin
   begin
     if not Cfg.MCPServers[i].Enabled then Continue;
 
-    State := TMCPServerState.Create(Cfg.MCPServers[i].Name);
+    State := TMCPServerState.Create(Cfg.MCPServers[i].Name,
+                                    Cfg.MCPCompactResults);
     GStates.Add(State);
 
     { Cache pass: register cached tools with the state in lsLoading. }
