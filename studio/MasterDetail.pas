@@ -3532,7 +3532,7 @@ begin
     starting text-safe means the icon-less fallback -- [ui] icon_buttons=false,
     or a style without the glyph -- is readable instead of a clipped 34px
     stub, and iconification still lands on ICON_BTN_W. }
-  Btn.Width := 104;
+  Btn.Width := BTN_W_L;
   Btn.Text := '+ Session';      { ApplyButtonIcon swaps in the add glyph }
   Btn.OnClick := NewSessionClick;
   SetControlMargins(Btn, GAP_S, 2, 0, 2);
@@ -3584,7 +3584,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := SessionButtons;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 62;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Export';
   Btn.OnClick := SessionExportClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -3592,7 +3592,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := SessionButtons;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 62;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Import';
   Btn.OnClick := SessionImportClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -3602,7 +3602,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := SessionButtons;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 74;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Import Dir';
   Btn.OnClick := SessionImportDirClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -3721,7 +3721,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := NativeBar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 64;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Clear';
   Btn.OnClick := LogsClearClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -3729,7 +3729,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := NativeBar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 64;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Stop';
   Btn.TagString := 'stop';
   Btn.OnClick := LogsClick;
@@ -3738,7 +3738,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := NativeBar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 64;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Tail';
   Btn.TagString := 'start';
   Btn.OnClick := LogsClick;
@@ -3798,7 +3798,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := NativeBar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 82;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Save ZIP';
   Btn.OnClick := WorkspaceExportClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -3806,7 +3806,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := NativeBar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 88;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Import ZIP';
   Btn.OnClick := WorkspaceImportClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -3814,7 +3814,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := NativeBar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Onboard';
   Btn.OnClick := OnboardingShowClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -3961,7 +3961,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := TopLine;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 70;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Files';
   Btn.OnClick := ChatFilesClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4359,7 +4359,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Bar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 68;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Run';
   Btn.TagString := Key;
   Btn.OnClick := EndpointRunClick;
@@ -4622,7 +4622,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 104;
+  Btn.Width := BTN_W_L;
   Btn.Text := 'Download';
   Btn.OnClick := FilesDownloadSelectedClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4630,7 +4630,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 74;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Preview';
   Btn.OnClick := FilesBrowseClick;
   Btn.TagString := 'read';
@@ -4639,7 +4639,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 58;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Up';
   Btn.OnClick := FilesBrowseClick;
   Btn.TagString := 'up';
@@ -4648,7 +4648,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 92;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Browse';
   Btn.OnClick := FilesBrowseClick;
   Btn.TagString := 'browse';
@@ -4713,7 +4713,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 62;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Copy';
   Btn.OnClick := FileDetailCopyClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4721,7 +4721,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 58;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Hex';
   Btn.OnClick := FilesBrowseClick;
   Btn.TagString := 'peek';
@@ -4746,7 +4746,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := FFileHexToolbar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 58;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Last';
   Btn.OnClick := FilesHexLastClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4754,7 +4754,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := FFileHexToolbar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 58;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Next';
   Btn.OnClick := FilesHexNextClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4762,7 +4762,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := FFileHexToolbar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 58;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Prev';
   Btn.OnClick := FilesHexPrevClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4770,7 +4770,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := FFileHexToolbar;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 58;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'First';
   Btn.OnClick := FilesHexFirstClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4816,7 +4816,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 76;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Search';
   Btn.OnClick := MemorySearchClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4824,7 +4824,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 74;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Refresh';
   Btn.OnClick := MemoryFilesLoadClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4871,7 +4871,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 62;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Copy';
   Btn.OnClick := MemoryFileDetailCopyClick;
 
@@ -4914,7 +4914,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 66;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Add';
   Btn.OnClick := MemoryFactAddClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4933,7 +4933,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 70;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Forget';
   Btn.OnClick := MemoryFactDeleteClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4941,7 +4941,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 82;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Export';
   Btn.OnClick := MemoryFactsExportClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4949,7 +4949,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 76;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Refresh';
   Btn.OnClick := MemoryFactsLoadClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -4992,7 +4992,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Upload';
   Btn.OnClick := KbUploadClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -5000,7 +5000,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 80;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Sources';
   Btn.OnClick := KbSourcesLoadClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -5008,7 +5008,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 72;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Search';
   Btn.OnClick := KbSearchClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -5097,7 +5097,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 92;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Refresh';
   Btn.OnClick := CronRefreshClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -5105,7 +5105,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 92;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Remove';
   Btn.OnClick := CronRemoveClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -5113,7 +5113,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 62;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Save';
   Btn.OnClick := CronSaveClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -5121,7 +5121,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 54;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'New';
   Btn.OnClick := CronClearClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -5277,7 +5277,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 82;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Refresh';
   Btn.OnClick := StatsRefreshClick;
 
@@ -5371,7 +5371,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 70;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Revert';
   Btn.TagString := 'revert';
   Btn.OnClick := CheckpointActionClick;
@@ -5380,7 +5380,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 62;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Redo';
   Btn.TagString := 'redo';
   Btn.OnClick := CheckpointActionClick;
@@ -5389,7 +5389,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 62;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Undo';
   Btn.TagString := 'undo';
   Btn.OnClick := CheckpointActionClick;
@@ -5398,7 +5398,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 92;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Refresh';
   Btn.OnClick := CheckpointRefreshClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -5481,7 +5481,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 92;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Refresh';
   Btn.OnClick := RelayRefreshClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -5640,7 +5640,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 74;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Copy';
   Btn.OnClick := RelaySnippetCopyClick;
 
@@ -6016,7 +6016,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 92;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Invoke';
   Btn.OnClick := McpToolInvokeClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6079,7 +6079,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 62;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Copy';
   Btn.OnClick := McpResultCopyClick;
 
@@ -6134,7 +6134,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 72;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Remove';
   Btn.OnClick := SkillsRemoveClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6142,7 +6142,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Install';
   Btn.OnClick := SkillsInstallClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6150,7 +6150,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Refresh';
   Btn.OnClick := SkillsRefreshClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6178,7 +6178,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 76;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Search';
   Btn.OnClick := SkillsSearchClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6218,7 +6218,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 70;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Reject';
   Btn.OnClick := SkillsRejectClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6226,7 +6226,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 76;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Approve';
   Btn.OnClick := SkillsApproveClick;
 
@@ -6314,7 +6314,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 92;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Build With';
   Btn.OnClick := VaultBuildWithClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6322,7 +6322,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 76;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Search';
   Btn.OnClick := VaultSearchClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6387,7 +6387,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 62;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Copy';
   Btn.OnClick := VaultDetailCopyClick;
 
@@ -6480,7 +6480,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 92;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Load Setup';
   Btn.OnClick := MemorySetupLoadClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6535,7 +6535,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 76;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Delete';
   Btn.OnClick := ConfigDeleteValueClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6543,7 +6543,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Add Item';
   Btn.OnClick := ConfigAddArrayItemClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6551,7 +6551,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 70;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Apply';
   Btn.OnClick := ConfigApplyValueClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6559,7 +6559,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Refresh';
   Btn.OnClick := ConfigRefreshClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6581,7 +6581,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 66;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Models';
   Btn.TagString := 'default_model';
   Btn.OnClick := ConfigQuickSectionClick;
@@ -6590,7 +6590,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 68;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Router';
   Btn.TagString := 'auto_router';
   Btn.OnClick := ConfigQuickSectionClick;
@@ -6599,7 +6599,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 76;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Sandbox';
   Btn.TagString := 'sandbox';
   Btn.OnClick := ConfigQuickSectionClick;
@@ -6608,7 +6608,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 58;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Cron';
   Btn.TagString := 'cron';
   Btn.OnClick := ConfigQuickSectionClick;
@@ -6617,7 +6617,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 58;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'MCP';
   Btn.TagString := 'mcp_servers';
   Btn.OnClick := ConfigQuickSectionClick;
@@ -6626,7 +6626,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Providers';
   Btn.TagString := 'providers';
   Btn.OnClick := ConfigQuickSectionClick;
@@ -6865,7 +6865,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 82;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Delete';
   Btn.OnClick := WorkflowDeleteClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6873,7 +6873,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 76;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Run';
   Btn.OnClick := WorkflowRunClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6881,7 +6881,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Save';
   Btn.OnClick := WorkflowSaveClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6889,7 +6889,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Load';
   Btn.OnClick := WorkflowLoadClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6897,7 +6897,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 104;
+  Btn.Width := BTN_W_L;
   Btn.Text := 'Load Tools';
   Btn.OnClick := WorkflowLoadToolsClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -6905,7 +6905,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 76;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'New';
   Btn.OnClick := WorkflowNewClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -7208,7 +7208,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := EdgeRow;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 78;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Delete';
   Btn.OnClick := WorkflowDeleteEdgeClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -7216,7 +7216,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := EdgeRow;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 66;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Add';
   Btn.OnClick := WorkflowAddEdgeClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -7249,7 +7249,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := EdgeRow;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 104;
+  Btn.Width := BTN_W_L;
   Btn.Text := 'Refresh Inputs';
   Btn.OnClick := WorkflowRunInputsClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
@@ -7295,7 +7295,7 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := EdgeRow;
   Btn.Align := TAlignLayout.Right;
-  Btn.Width := 62;
+  Btn.Width := BTN_W_S;
   Btn.Text := 'Copy';
   Btn.OnClick := WorkflowRunResultCopyClick;
 
