@@ -85,6 +85,9 @@ type
     FFileViewerPane: TLayout;
     FFileViewerStatusLabel: TLabel;
     FConnectionRow: TLayout;
+    { the one-pixel rule under the title bar; held so ApplyTheme can repaint
+      it, since a raw TRectangle brush is invisible to the restyle walk }
+    FHeaderRule: TRectangle;
     FGatewayEdit: TEdit;
     FHeaderRow: TLayout;
     FCheckpointCurrentTurn: Int64;
@@ -561,6 +564,7 @@ type
     procedure RenderChat;
     procedure RenderModeButton;
     procedure RenderParamsButton;
+    procedure ApplyHeaderRuleTheme;
     procedure RenderConnectButton;
     procedure RenderToolsButton;
     procedure UpdateFooterVisibility;
@@ -1630,6 +1634,9 @@ begin
     else
       FThemeButton.Text := 'Dark';
   end;
+  { raw brushes are invisible to the restyle walk, so the theme pass has to
+    repaint them by name }
+  ApplyHeaderRuleTheme;
 end;
 
 procedure TMasterDetailForm.ThemeClick(Sender: TObject);
@@ -3288,15 +3295,20 @@ begin
     A header deserves a hairline beneath it, so that is all this draws -- and
     at UI_BORDER strength on a light ground it was too heavy, so it takes the
     softer separator tone. }
-  Chrome := TRectangle.Create(Self);
-  Chrome.Parent := FTopBar;
-  Chrome.Align := TAlignLayout.Bottom;
-  Chrome.Height := 1;
-  Chrome.HitTest := False;
-  Chrome.Stroke.Kind := TBrushKind.None;
-  Chrome.Fill.Kind := TBrushKind.Solid;
-  Chrome.Fill.Color := ThemePaintColor(UI_SEPARATOR);
-  Chrome.SendToBack;
+  FHeaderRule := TRectangle.Create(Self);
+  FHeaderRule.Parent := FTopBar;
+  FHeaderRule.Align := TAlignLayout.Bottom;
+  FHeaderRule.Height := 1;
+  FHeaderRule.HitTest := False;
+  FHeaderRule.Stroke.Kind := TBrushKind.None;
+  FHeaderRule.Fill.Kind := TBrushKind.Solid;
+  FHeaderRule.SendToBack;
+  { colour comes from ApplyTheme, not from here: BuildInterface runs while
+    FDarkStyleEnabled is still True, so a colour resolved at this point is
+    the DARK one, and a restored ui.dark_style=false would never repaint it
+    -- RestyleCoreControls walks labels and controls, not TRectangle
+    brushes. Held as a field so the theme pass can reach it. }
+  ApplyHeaderRuleTheme;
 
   FHeaderRow := TLayout.Create(Self);
   FHeaderRow.Parent := FTopBar;
@@ -5748,66 +5760,59 @@ begin
   ServerTab.Parent := Tabs;
   ServerTab.Text := 'Server';
 
-  Row := TLayout.Create(Self);
-  Row.Parent := ServerTab;
-  Row.Align := TAlignLayout.Top;
-  Row.Height := ROW_BAR;
-  SetControlMargins(Row, 0, GAP_S, 0, 0);
+  { Phase 2 of docs/studio-metrics-plan.md. Was: name, Enabled, New, Save and
+    Remove all on one row, then command and args sharing a second, none of
+    them labelled -- and 'args' at a hand-picked 280px next to a Client-width
+    'command' so the two moved independently on resize.
 
-  Btn := TButton.Create(Self);
-  Btn.Parent := Row;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 92;
-  Btn.Text := 'Remove';
-  Btn.OnClick := McpServerRemoveClick;
-  SetControlMargins(Btn, GAP_S, 0, 0, 0);
-
-  Btn := TButton.Create(Self);
-  Btn.Parent := Row;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 118;
-  Btn.Text := 'Save Server';
-  Btn.OnClick := McpServerSaveClick;
-  SetControlMargins(Btn, GAP_S, 0, 0, 0);
-
-  Btn := TButton.Create(Self);
-  Btn.Parent := Row;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 74;
-  Btn.Text := 'New';
-  Btn.OnClick := McpServerClearClick;
-  SetControlMargins(Btn, GAP_S, 0, 0, 0);
-
-  FMcpServerEnabledCheck := TCheckBox.Create(Self);
-  FMcpServerEnabledCheck.Parent := Row;
-  FMcpServerEnabledCheck.Align := TAlignLayout.Right;
-  FMcpServerEnabledCheck.Width := 82;
-  FMcpServerEnabledCheck.Text := 'Enabled';
-  FMcpServerEnabledCheck.IsChecked := True;
-  SetControlMargins(FMcpServerEnabledCheck, GAP_S, 0, 0, 0);
-
+    Fields on the grid, actions on their own bar. The action row goes LAST so
+    the form reads top-down as name, command, args, then what to do with
+    them. }
   FMcpServerNameEdit := TEdit.Create(Self);
-  FMcpServerNameEdit.Parent := Row;
-  FMcpServerNameEdit.Align := TAlignLayout.Client;
   FMcpServerNameEdit.TextPrompt := 'MCP server name';
-
-  Row := TLayout.Create(Self);
-  Row.Parent := ServerTab;
-  Row.Align := TAlignLayout.Top;
-  Row.Height := ROW_BAR;
-  SetControlMargins(Row, 0, GAP_S, 0, 0);
-
-  FMcpServerArgsEdit := TEdit.Create(Self);
-  FMcpServerArgsEdit.Parent := Row;
-  FMcpServerArgsEdit.Align := TAlignLayout.Right;
-  FMcpServerArgsEdit.Width := 280;
-  FMcpServerArgsEdit.TextPrompt := 'args';
-  SetControlMargins(FMcpServerArgsEdit, GAP_S, 0, 0, 0);
+  AddFormRow(ServerTab, 'Name', FMcpServerNameEdit);
 
   FMcpServerCmdEdit := TEdit.Create(Self);
-  FMcpServerCmdEdit.Parent := Row;
-  FMcpServerCmdEdit.Align := TAlignLayout.Client;
   FMcpServerCmdEdit.TextPrompt := 'command';
+  AddFormRow(ServerTab, 'Command', FMcpServerCmdEdit);
+
+  FMcpServerArgsEdit := TEdit.Create(Self);
+  FMcpServerArgsEdit.TextPrompt := 'args';
+  AddFormRow(ServerTab, 'Args', FMcpServerArgsEdit);
+
+  FMcpServerEnabledCheck := TCheckBox.Create(Self);
+  FMcpServerEnabledCheck.Text := 'Enabled';
+  FMcpServerEnabledCheck.IsChecked := True;
+  AddFormRow(ServerTab, 'State', FMcpServerEnabledCheck, 140);
+
+  Row := TLayout.Create(Self);
+  Row.Parent := ServerTab;
+  Row.Align := TAlignLayout.Top;
+  Row.Height := ROW_BAR;
+  SetControlMargins(Row, FORM_LABEL_W + GAP_M, GAP_XS, 0, GAP_S);
+
+  Btn := TButton.Create(Self);
+  Btn.Parent := Row;
+  Btn.Align := TAlignLayout.Left;
+  Btn.Width := BTN_W_M;
+  Btn.Text := 'Save Server';
+  Btn.OnClick := McpServerSaveClick;
+  SetControlMargins(Btn, 0, 0, GAP_S, 0);
+
+  Btn := TButton.Create(Self);
+  Btn.Parent := Row;
+  Btn.Align := TAlignLayout.Left;
+  Btn.Width := BTN_W_S;
+  Btn.Text := 'New';
+  Btn.OnClick := McpServerClearClick;
+  SetControlMargins(Btn, 0, 0, GAP_S, 0);
+
+  Btn := TButton.Create(Self);
+  Btn.Parent := Row;
+  Btn.Align := TAlignLayout.Left;
+  Btn.Width := BTN_W_S;
+  Btn.Text := 'Remove';
+  Btn.OnClick := McpServerRemoveClick;
 
   AddSectionHeader(ServerTab, 'Environment');
 
@@ -6250,44 +6255,33 @@ begin
   UseStyledLabelColor(Title);
   SetControlMargins(Title, 0, 0, 0, GAP_S);
 
-  Row := TLayout.Create(Self);
-  Row.Parent := Panel;
-  Row.Align := TAlignLayout.Top;
-  Row.Height := ROW_LIST;
-
+  { Phase 2 of docs/studio-metrics-plan.md. Was: a checkbox, two combos and
+    an edit sharing ONE row at four hand-picked widths, with nothing naming
+    any of them -- the plan called this the poster child, and it was. Each
+    control now sits on a labelled row of the shared grid. }
   FMemoryVectorCheck := TCheckBox.Create(Self);
-  FMemoryVectorCheck.Parent := Row;
-  FMemoryVectorCheck.Align := TAlignLayout.Left;
-  FMemoryVectorCheck.Width := 210;
-  FMemoryVectorCheck.Text := 'Semantic vector search';
+  FMemoryVectorCheck.Text := 'Enabled';
   FMemoryVectorCheck.IsChecked := True;
-  SetControlMargins(FMemoryVectorCheck, 0, 0, GAP_S, 0);
+  AddFormRow(Panel, 'Vector search', FMemoryVectorCheck, 140);
 
   FMemoryBackendCombo := TComboBox.Create(Self);
-  FMemoryBackendCombo.Parent := Row;
-  FMemoryBackendCombo.Align := TAlignLayout.Left;
-  FMemoryBackendCombo.Width := 132;
   FMemoryBackendCombo.Items.Add('off');
   FMemoryBackendCombo.Items.Add('local');
   FMemoryBackendCombo.Items.Add('llm');
   FMemoryBackendCombo.Items.Add('auto');
   FMemoryBackendCombo.ItemIndex := 3;
-  SetControlMargins(FMemoryBackendCombo, 0, 0, GAP_S, 0);
+  AddFormRow(Panel, 'Backend', FMemoryBackendCombo, 140);
 
   FMemoryModelCombo := TComboBox.Create(Self);
-  FMemoryModelCombo.Parent := Row;
-  FMemoryModelCombo.Align := TAlignLayout.Right;
-  FMemoryModelCombo.Width := 220;
   FMemoryModelCombo.Items.Add('bge-reranker-base');
   FMemoryModelCombo.ItemIndex := 0;
   FMemoryModelCombo.OnChange := MemoryModelChoiceChange;
-  SetControlMargins(FMemoryModelCombo, GAP_S, 0, 0, 0);
+  AddFormRow(Panel, 'Reranker', FMemoryModelCombo, 220);
 
   FMemoryRerankModelEdit := TEdit.Create(Self);
-  FMemoryRerankModelEdit.Parent := Row;
-  FMemoryRerankModelEdit.Align := TAlignLayout.Client;
   FMemoryRerankModelEdit.Text := 'bge-reranker-base';
   FMemoryRerankModelEdit.TextPrompt := 'local reranker model';
+  AddFormRow(Panel, 'Model name', FMemoryRerankModelEdit);
 
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
@@ -13049,6 +13043,12 @@ end;
 procedure TMasterDetailForm.GatewaySettingsChange(Sender: TObject);
 begin
   RenderConnectButton;
+end;
+
+procedure TMasterDetailForm.ApplyHeaderRuleTheme;
+begin
+  if FHeaderRule <> nil then
+    FHeaderRule.Fill.Color := ThemePaintColor(UI_SEPARATOR);
 end;
 
 procedure TMasterDetailForm.RenderConnectButton;

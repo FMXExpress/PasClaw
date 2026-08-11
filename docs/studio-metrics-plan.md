@@ -141,8 +141,7 @@ not ASCII).
 
 ## Sequencing (each lands as its own PR, `make lint-studio` gated)
 
-Status: **phase 1 done** (#506), **phase 2 in progress** — Settings/Gateway
-landed, Memory Setup and MCP Server still to come. Phases 3-6 not started.
+Status: **phase 1 done** (#506), **phase 2 done**. Phases 3-6 not started.
 
 1. ✅ **Tokens + helpers** (`AddFormRow`, `BuildDetailPane`, gap unification
    6→8). Mechanical; biggest diff, lowest risk.
@@ -150,7 +149,10 @@ landed, Memory Setup and MCP Server still to come. Phases 3-6 not started.
    pure `AddFormRow` consumers. Visible payoff immediately.
    - ✅ Settings/Gateway: two labelled rows on the grid, panel sized from
      them, the `Height := 104` guess gone.
-   - ⬜ Memory Setup, ⬜ MCP Server.
+   - ✅ Memory Setup: the checkbox/two combos/edit that shared one row at
+     four hand-picked widths are four labelled rows.
+   - ✅ MCP Server: name/command/args/state on the grid, actions on their
+     own bar below them.
 3. **Detail panes** — the 31 `====` views through `BuildDetailPane`
    (Cron, Checkpoints, Files, Skills, Memory Notes, Relay).
 4. **Workflow inspectors + generated schema forms.**
@@ -170,6 +172,17 @@ there?"*. `Contents` fills the parent's content rect and takes part in no
 such negotiation. 42 `AddPanelChrome` call sites plus 11 direct rects were
 affected, so stray outlines elsewhere in the app very likely have the same
 cause.
+
+**Static chrome never re-themes.** `StyleChromeRect` resolves its colours at
+CALL time, and `RestyleCoreControls` walks labels and controls but not
+`TRectangle` brushes — so anything built once during `BuildInterface` keeps
+the palette that was current then, which is always the DARK one (the theme
+preference is read afterwards, in `LoadLocalSettings`). The header rule hit
+this and is fixed by being held as a field and repainted from `ApplyTheme`.
+Other static chrome very likely has the same defect. A general fix wants a
+registry of themeable rects, but must not hold pointers to the ones that are
+rebuilt per render (chat cards, schema forms) or it will dangle — worth its
+own PR rather than a rushed hook here.
 
 **A separator was drawn as a border.** The top bar carried a full rectangle
 outline; three edges hug the window frame and the fourth reads as a stray
