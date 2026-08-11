@@ -565,6 +565,7 @@ type
     procedure RenderModeButton;
     procedure RenderParamsButton;
     procedure ApplyHeaderRuleTheme;
+    procedure ReapplyChromeTheme(Obj: TFmxObject);
     procedure RenderConnectButton;
     procedure RenderToolsButton;
     procedure UpdateFooterVisibility;
@@ -1637,6 +1638,7 @@ begin
   { raw brushes are invisible to the restyle walk, so the theme pass has to
     repaint them by name }
   ApplyHeaderRuleTheme;
+  ReapplyChromeTheme(Self);
 end;
 
 procedure TMasterDetailForm.ThemeClick(Sender: TObject);
@@ -1922,6 +1924,59 @@ begin
   StyleLabel(Result, UI_CHROME_TEXT, TXT_BODY, True);
 end;
 
+{ Chrome roles, remembered ON the rect so the theme pass can re-apply them.
+
+  StyleChromeRect resolves colours at CALL time, and almost every chrome rect
+  is built once in BuildInterface -- which runs BEFORE LoadLocalSettings reads
+  ui.dark_style. So every static rect baked in the DARK palette and no later
+  theme change repainted it: RestyleCoreControls walks labels and controls,
+  not TRectangle brushes. The composer showed this as a black slab the moment
+  the Align fix made its rect actually cover its panel.
+
+  The role lives in the rect's Tag rather than in a registry of pointers. A
+  registry would have to hold rects that ARE freed and rebuilt per render --
+  chat cards, schema forms -- and would dangle the first time one went away.
+  Data carried on the object dies with the object. Tag is otherwise unused in
+  this unit. }
+const
+  CHROME_TAG_MAGIC = $C40000;
+
+function ChromeRoleOf(Color: TAlphaColor): Integer;
+begin
+  if Color = UI_BG then Result := 1
+  else if Color = UI_PANEL then Result := 2
+  else if Color = UI_PANEL_ALT then Result := 3
+  else if Color = UI_ACCENT_DIM then Result := 4
+  else if Color = UI_BORDER then Result := 5
+  else if Color = UI_ACCENT then Result := 6
+  { the composer and user-bubble tokens are per-theme VARS, so the role has
+    to resolve them freshly rather than remember a value -- the composer is
+    the surface that exposed this bug }
+  else if Color = UI_COMPOSER_FILL then Result := 7
+  else if Color = UI_COMPOSER_BORDER then Result := 8
+  else if Color = UI_USER_FILL then Result := 9
+  else if Color = UI_USER_BORDER then Result := 10
+  else Result := 0;              { not a themed role: left exactly as given }
+end;
+
+function ChromeColorOf(Role: Integer): TAlphaColor;
+begin
+  case Role of
+    1: Result := UI_BG;
+    2: Result := UI_PANEL;
+    3: Result := UI_PANEL_ALT;
+    4: Result := UI_ACCENT_DIM;
+    5: Result := UI_BORDER;
+    6: Result := UI_ACCENT;
+    7: Result := UI_COMPOSER_FILL;
+    8: Result := UI_COMPOSER_BORDER;
+    9: Result := UI_USER_FILL;
+   10: Result := UI_USER_BORDER;
+  else
+    Result := 0;
+  end;
+end;
+
 procedure TMasterDetailForm.StyleChromeRect(Rect: TRectangle;
   FillColor: TAlphaColor; StrokeColor: TAlphaColor; Radius: Single;
   Interactive: Boolean);
@@ -1954,6 +2009,9 @@ procedure TMasterDetailForm.StyleChromeRect(Rect: TRectangle;
 begin
   if Rect = nil then
     Exit;
+  { record what this rect MEANT, so ReapplyChromeTheme can redo it }
+  Rect.Tag := CHROME_TAG_MAGIC or (ChromeRoleOf(FillColor) shl 4) or
+              ChromeRoleOf(StrokeColor);
   Rect.HitTest := Interactive;
   Rect.Fill.Color := ThemeFill(FillColor);
   Rect.Stroke.Color := ThemeStroke(StrokeColor);
@@ -13043,6 +13101,39 @@ end;
 procedure TMasterDetailForm.GatewaySettingsChange(Sender: TObject);
 begin
   RenderConnectButton;
+end;
+
+procedure TMasterDetailForm.ReapplyChromeTheme(Obj: TFmxObject);
+{ Re-run StyleChromeRect for every rect that recorded a role, using the
+  palette that is current NOW. Walks a snapshot of the children for the same
+  reason RestyleCoreControls does: re-styling can rebuild a control's applied
+  style, and that mutates the very list being indexed. }
+var
+  i, Tag, FillRole, StrokeRole: Integer;
+  Kids: TArray<TFmxObject>;
+  R: TRectangle;
+begin
+  if Obj = nil then
+    Exit;
+  if Obj is TRectangle then
+  begin
+    R := TRectangle(Obj);
+    Tag := R.Tag;
+    if (Tag and $FF0000) = CHROME_TAG_MAGIC then
+    begin
+      FillRole := (Tag shr 4) and $F;
+      StrokeRole := Tag and $F;
+      if (FillRole > 0) or (StrokeRole > 0) then
+        StyleChromeRect(R, ChromeColorOf(FillRole), ChromeColorOf(StrokeRole),
+          R.XRadius, R.HitTest);
+    end;
+  end;
+  SetLength(Kids, Obj.ChildrenCount);
+  for i := 0 to Obj.ChildrenCount - 1 do
+    Kids[i] := Obj.Children[i];
+  for i := 0 to High(Kids) do
+    if (Kids[i] <> nil) and (Kids[i].Parent = Obj) then
+      ReapplyChromeTheme(Kids[i]);
 end;
 
 procedure TMasterDetailForm.ApplyHeaderRuleTheme;
