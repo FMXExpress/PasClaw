@@ -343,6 +343,7 @@ type
     FWorkflowNodeIdEdit: TEdit;
     FWorkflowNodePositions: TDictionary<string, TPointF>;
     FWorkflowNodesList: TListBox;
+    FWorkflowOutputDirEdit: TEdit;
     FWorkflowOutputsMemo: TMemo;
     FWorkflowPickerCombo: TComboBox;
     FWorkflowReplicateResultsList: TListBox;
