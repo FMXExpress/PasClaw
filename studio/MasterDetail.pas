@@ -572,6 +572,8 @@ type
     procedure ApplyHeaderRuleTheme;
     procedure ApplyOnboardingTheme;
     procedure ReapplyChromeTheme(Obj: TFmxObject);
+    class procedure SetChromeRoles(Rect: TRectangle;
+      FillRole, StrokeRole: Integer); static;
     procedure RenderConnectButton;
     procedure RenderToolsButton;
     procedure UpdateFooterVisibility;
@@ -1949,20 +1951,25 @@ const
   CHROME_TAG_MAGIC = $C40000;
 
 function ChromeRoleOf(Color: TAlphaColor): Integer;
+{ The per-theme VAR tokens are tested FIRST: they are the ones that change
+  value between themes, so misclassifying them survives a switch.
+
+  Ordering is a heuristic, not a proof: classification is by VALUE, and two
+  tokens can be equal -- in the dark palette UI_COMPOSER_BORDER and
+  UI_ACCENT are both $FF3BA7FF, so a colour alone cannot say which was
+  meant. Any call site styling with a token that collides must state its
+  roles explicitly via SetChromeRoles after styling; the composer does. }
 begin
-  if Color = UI_BG then Result := 1
+  if Color = UI_COMPOSER_FILL then Result := 7
+  else if Color = UI_COMPOSER_BORDER then Result := 8
+  else if Color = UI_USER_FILL then Result := 9
+  else if Color = UI_USER_BORDER then Result := 10
+  else if Color = UI_BG then Result := 1
   else if Color = UI_PANEL then Result := 2
   else if Color = UI_PANEL_ALT then Result := 3
   else if Color = UI_ACCENT_DIM then Result := 4
   else if Color = UI_BORDER then Result := 5
   else if Color = UI_ACCENT then Result := 6
-  { the composer and user-bubble tokens are per-theme VARS, so the role has
-    to resolve them freshly rather than remember a value -- the composer is
-    the surface that exposed this bug }
-  else if Color = UI_COMPOSER_FILL then Result := 7
-  else if Color = UI_COMPOSER_BORDER then Result := 8
-  else if Color = UI_USER_FILL then Result := 9
-  else if Color = UI_USER_BORDER then Result := 10
   else Result := 0;              { not a themed role: left exactly as given }
 end;
 
@@ -2017,8 +2024,7 @@ begin
   if Rect = nil then
     Exit;
   { record what this rect MEANT, so ReapplyChromeTheme can redo it }
-  Rect.Tag := CHROME_TAG_MAGIC or (ChromeRoleOf(FillColor) shl 4) or
-              ChromeRoleOf(StrokeColor);
+  SetChromeRoles(Rect, ChromeRoleOf(FillColor), ChromeRoleOf(StrokeColor));
   Rect.HitTest := Interactive;
   Rect.Fill.Color := ThemeFill(FillColor);
   Rect.Stroke.Color := ThemeStroke(StrokeColor);
@@ -4160,6 +4166,10 @@ begin
     lifted ground and an accent border rather than the same panel chrome as
     every inert surface. }
   StyleChromeRect(Chrome, UI_COMPOSER_FILL, UI_COMPOSER_BORDER, 6, False);
+  { stated explicitly: in the dark palette UI_COMPOSER_BORDER equals
+    UI_ACCENT by VALUE, so classification alone records the wrong stroke
+    role and a theme switch would repaint this border bright accent blue }
+  SetChromeRoles(Chrome, 7, 8);
   Chrome.SendToBack;
 
   FQueueLabel := TLabel.Create(Self);
@@ -5780,6 +5790,11 @@ begin
       FOnboardingPrimaryButton.Text := 'Set up provider';
       FOnboardingPrimaryButton.OnClick := OnboardingProviderClick;
     end;
+    { every branch owns the WHOLE card. Step two renames Skip to Finish, so
+      reopening the wizard at step one showed a Finish button whose click
+      actually advanced -- a caption lying about its action. }
+    if FOnboardingSkipButton <> nil then
+      FOnboardingSkipButton.Text := 'Skip';
   end
   else
   begin
@@ -13183,6 +13198,15 @@ end;
 procedure TMasterDetailForm.GatewaySettingsChange(Sender: TObject);
 begin
   RenderConnectButton;
+end;
+
+class procedure TMasterDetailForm.SetChromeRoles(Rect: TRectangle;
+  FillRole, StrokeRole: Integer);
+{ The ONE encoder of the role tag. Call sites use it directly only when the
+  colour value is ambiguous -- see ChromeRoleOf. }
+begin
+  if Rect <> nil then
+    Rect.Tag := CHROME_TAG_MAGIC or (FillRole shl 4) or StrokeRole;
 end;
 
 procedure TMasterDetailForm.ReapplyChromeTheme(Obj: TFmxObject);
