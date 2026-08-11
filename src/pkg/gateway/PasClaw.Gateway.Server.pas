@@ -168,6 +168,12 @@ type
     procedure HandleStatus(AResp: TIdHTTPResponseInfo);
     procedure HandleTools(AResp: TIdHTTPResponseInfo);
     procedure HandleMCPList(AResp: TIdHTTPResponseInfo);
+    { Desktop client surface -- see PasClaw.Gateway.Desktop. Returns True
+      when it consumed the request. Streams a file when the route resolved
+      one (app assets, rendered pages); otherwise writes the JSON body. }
+    function HandleDesktop(ARequest: TIdHTTPRequestInfo;
+                           AResp: TIdHTTPResponseInfo;
+                           const Doc: string): Boolean;
     procedure HandleCronList(AResp: TIdHTTPResponseInfo);
     procedure HandleSkillsList(AResp: TIdHTTPResponseInfo);
     { Install a skill (POST /v1/skills with a JSON target field) into
@@ -555,6 +561,8 @@ uses
   PasClaw.Vault.Client,     { SearchVault / GetVaultEntry -- /v1/vault browse }
   PasClaw.Gateway.ToolView,
   PasClaw.Gateway.WebUI,
+  PasClaw.Gateway.Desktop,  { desktop client surface: workspaces, projects,
+                              tasks, jobs, apps, pages }
   PasClaw.Gateway.Auth,     { CheckGatewayAuth -- bearer-token middleware
                               fired at the top of OnCommandGet. Off when
                               Cfg.Gateway.Token is empty (the default);
@@ -1330,7 +1338,14 @@ begin
   end;
 
   try
-    if      (ARequest.Command = 'GET')  and (Doc = '/v1/health')  then HandleHealth(AResponse)
+    { Desktop surface (workspaces / projects / tasks / jobs / apps / pages).
+      Consulted first and self-contained: PasClaw.Gateway.Desktop returns
+      False for anything it doesn't own, so the chain below is unchanged.
+      It runs INSIDE the auth gate above, so every desktop route is
+      bearer-protected exactly like the rest of /v1/*. }
+    if HandleDesktop(ARequest, AResponse, Doc) then
+      { handled }
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/health')  then HandleHealth(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/version') then HandleVersion(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/status')  then HandleStatus(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/tools')   then HandleTools(AResponse)
@@ -1576,6 +1591,83 @@ begin
   finally
     Root.Free;
   end;
+end;
+
+function TGatewayServer.HandleDesktop(ARequest: TIdHTTPRequestInfo;
+  AResp: TIdHTTPResponseInfo; const Doc: string): Boolean;
+{ Bridge between Indy and the transport-agnostic desktop router. Reads the
+  request body, calls DesktopRoute, then either streams the resolved file or
+  writes the JSON it produced. }
+var
+  Resp: TDesktopResponse;
+  Body: string;
+  Bytes: TBytes;
+  Strm: TFileStream;
+  Lines: TStringList;
+  i: Integer;
+begin
+  Result := False;
+  if not IsDesktopPath(Doc) then Exit;
+
+  Body := '';
+  if ARequest.PostStream <> nil then
+  begin
+    ARequest.PostStream.Position := 0;
+    SetLength(Bytes, ARequest.PostStream.Size);
+    if ARequest.PostStream.Size > 0 then
+      ARequest.PostStream.ReadBuffer(Bytes[0], ARequest.PostStream.Size);
+    Body := TEncoding.UTF8.GetString(Bytes);
+  end;
+  { Indy only leaves a PostStream when the content type is one it does not
+    parse. A body sent as application/x-www-form-urlencoded -- which is what
+    curl and a bare fetch() default to -- has already been consumed into
+    UnparsedParams, so read it back from there rather than 400ing on a
+    request whose body plainly arrived. }
+  if (Trim(Body) = '') and (ARequest.UnparsedParams <> '') then
+    Body := ARequest.UnparsedParams;
+
+  if not DesktopRoute(ARequest.Command, Doc, ARequest.QueryParams, Body, Resp) then
+    Exit;
+  Result := True;
+
+  { Route-supplied headers (CSP, nosniff) ride along on file responses. }
+  if Resp.Headers <> '' then
+  begin
+    Lines := TStringList.Create;
+    try
+      Lines.Text := Resp.Headers;
+      for i := 0 to Lines.Count - 1 do
+        if Pos(':', Lines[i]) > 1 then
+          AResp.CustomHeaders.AddValue(
+            Trim(Copy(Lines[i], 1, Pos(':', Lines[i]) - 1)),
+            Trim(Copy(Lines[i], Pos(':', Lines[i]) + 1, MaxInt)));
+    finally
+      Lines.Free;
+    end;
+  end;
+
+  if Resp.FilePath <> '' then
+  begin
+    { Stream from disk -- app assets and rendered pages can be large, and
+      re-encoding them through a string would corrupt binary types. Indy
+      frees the stream it is handed. }
+    try
+      Strm := TFileStream.Create(Resp.FilePath, fmOpenRead or fmShareDenyWrite);
+    except
+      WriteJSON(AResp, 404, '{"error":"not found"}');
+      Exit;
+    end;
+    AResp.ResponseNo     := Resp.Status;
+    AResp.ContentType    := Resp.ContentType;
+    AResp.ContentStream  := Strm;
+    AResp.FreeContentStream := True;
+    Exit;
+  end;
+
+  AResp.ResponseNo  := Resp.Status;
+  AResp.ContentType := Resp.ContentType;
+  AResp.CharSet     := 'utf-8';
+  WriteBodyStream(AResp, Resp.Body);
 end;
 
 procedure TGatewayServer.HandleCronList(AResp: TIdHTTPResponseInfo);

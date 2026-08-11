@@ -138,6 +138,7 @@ UNIT_DIRS = \
 	src/pkg/component \
 	src/pkg/markdown \
 	src/pkg/otel \
+	src/pkg/projects \
 	src/cmd
 
 # Indy unit + include dirs (only used when building under FPC).
@@ -175,7 +176,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
+.PHONY: all clean run test smoke test-workspaces test-projects test-apps test-desktop-routes test-desktop test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -381,6 +382,39 @@ test-cron-tool: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/cron_tool_tests.pas -o$(BUILDDIR)/cron_tool_tests
 	@PASCLAW_HOME=$(BUILDDIR)/cron-tool-test-home $(BUILDDIR)/cron_tool_tests
+
+# Desktop stack. Each runs against its own throwaway PASCLAW_HOME so the
+# workspace directories they create never touch the developer's ~/.pasclaw.
+test-workspaces: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	@rm -rf $(BUILDDIR)/workspaces-test-home
+	$(FPC) $(FPCFLAGS) src/tests/workspaces_tests.pas -o$(BUILDDIR)/workspaces_tests
+	@PASCLAW_HOME=$(BUILDDIR)/workspaces-test-home $(BUILDDIR)/workspaces_tests
+	@# Second pass against the home the first built: PASCLAW_WORKSPACE must
+	@# outrank the active_workspace the first pass persisted.
+	@PASCLAW_HOME=$(BUILDDIR)/workspaces-test-home PASCLAW_WORKSPACE=workspace3 \
+		$(BUILDDIR)/workspaces_tests
+
+test-projects: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	@rm -rf $(BUILDDIR)/projects-test-home
+	$(FPC) $(FPCFLAGS) src/tests/projects_tests.pas -o$(BUILDDIR)/projects_tests
+	@PASCLAW_HOME=$(BUILDDIR)/projects-test-home $(BUILDDIR)/projects_tests
+
+test-apps: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	@rm -rf $(BUILDDIR)/apps-test-home
+	$(FPC) $(FPCFLAGS) src/tests/apps_tests.pas -o$(BUILDDIR)/apps_tests
+	@PASCLAW_HOME=$(BUILDDIR)/apps-test-home $(BUILDDIR)/apps_tests
+
+test-desktop-routes: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	@rm -rf $(BUILDDIR)/desktop-routes-test-home
+	$(FPC) $(FPCFLAGS) src/tests/desktop_routes_tests.pas -o$(BUILDDIR)/desktop_routes_tests
+	@PASCLAW_HOME=$(BUILDDIR)/desktop-routes-test-home $(BUILDDIR)/desktop_routes_tests
+
+# Everything the desktop client depends on, in dependency order.
+test-desktop: test-workspaces test-projects test-apps test-desktop-routes
 
 # Provider catalog rows + ChatPath override (Perplexity uses /chat/completions).
 test-provider-catalog: | $(BUILDDIR)

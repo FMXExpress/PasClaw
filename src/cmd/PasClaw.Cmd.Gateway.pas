@@ -38,6 +38,7 @@ uses
   PasClaw.Tools.SessionSearch,
   PasClaw.Tools.SendMessage,
   PasClaw.Tools.Cron,             { cron tool -- gated on cron_tool_enabled }
+  PasClaw.Projects.Tools,         { project / task -- the desktop board }
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
@@ -286,6 +287,10 @@ begin
       { send_message self-gates on Cfg.Channels. Codex P2 on PR #230. }
       RegisterSendMessageTool(Reg);
       if Cfg.CronToolEnabled then RegisterCronTool(Reg);
+      { project/task: the desktop board. Always on -- they only write
+        manifests under the active workspace, and the desktop clients are
+        useless without them. }
+      RegisterProjectTools(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
       SetDBConfigFromJSON(Cfg.DatabaseJSON);   { db_* connections (inert if no "database" section) }

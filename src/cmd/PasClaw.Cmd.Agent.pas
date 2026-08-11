@@ -43,6 +43,7 @@ uses
   PasClaw.Tools.SendMessage,
   PasClaw.Tools.DB,
   PasClaw.Tools.Cron,
+  PasClaw.Projects.Tools,
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
@@ -358,6 +359,10 @@ begin
     autonomy. In `agent` there's no live scheduler, so additions apply the
     next time serve/gateway runs. }
   if EnableCron then RegisterCronTool(Result);
+  { project/task: the desktop board. Registered unconditionally so a CLI
+    session and a desktop session share one set of projects -- work started
+    in the terminal shows up on the desktop tree and vice versa. }
+  RegisterProjectTools(Result);
   { plan_write registers when running in pmPlan mode (Cmd.Plan and
     `pasclaw agent --mode plan` both arrive here with the flag set).
     The tool is tcReadOnly even though it writes the one plan-meta

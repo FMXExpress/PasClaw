@@ -60,6 +60,7 @@ uses
   PasClaw.Tools.SessionSearch,
   PasClaw.Tools.SendMessage,
   PasClaw.Tools.Cron,             { cron tool -- gated on cron_tool_enabled }
+  PasClaw.Projects.Tools,         { project / task -- the desktop board }
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
@@ -255,6 +256,8 @@ begin
       { cron tool: opt-in (model-scheduled background jobs). Runs existing
         skills only; the running scheduler picks up its config edits live. }
       if Cfg.CronToolEnabled then RegisterCronTool(Reg);
+      { project/task: the desktop board (see Cmd.Gateway). }
+      RegisterProjectTools(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
       SetDBConfigFromJSON(Cfg.DatabaseJSON);   { db_* connections (inert if no "database" section) }
