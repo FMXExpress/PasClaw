@@ -739,6 +739,8 @@ const
   CHAT_ROW_MAX = 24000;
   { Square-ish footprint for an icon-only button. }
   ICON_BTN_W = 34;
+  { the session-row rail: wide enough to read as a bubble at row scale }
+  SESSION_GLYPH_W = 15;
 
   (* ---- METRIC TOKENS -------------------------------------------------
      A census of this file found eight font sizes, eleven values used as a
@@ -778,6 +780,10 @@ const
   BTN_W_S = 64;
   BTN_W_M = 88;
   BTN_W_L = 104;
+
+  { Path data for glyphs the code draws itself, generated alongside the
+    button styles so a shape cannot differ between the two. }
+{$I PasclawGlyphs.inc}
   (* Reading measure for the conversation column. Long lines are hard to
      track back to the next line's start, so chat UIs cap the column and
      centre it, letting extra width become margin instead of longer lines.
@@ -20005,6 +20011,7 @@ procedure TMasterDetailForm.RenderSessionList;
 var
   Card: TRectangle;
   Filter: string;
+  Glyph: TPath;
   I: Integer;
   Item: TListBoxItem;
   MetaText: string;
@@ -20045,6 +20052,29 @@ begin
       SetControlMargins(Card, 0, 1, 0, 1);
       SetControlPadding(Card, GAP_S, GAP_XS, GAP_S, GAP_XS);
 
+      { A leading rail. Titles are ragged by nature -- they are whatever the
+        first message said -- so a fixed mark at the start of every row gives
+        the eye a column to run down instead of a jagged left edge.
+
+        It carries the ACTIVE state as well: the selected session's bubble
+        takes the accent while the rest stay muted, so selection reads from
+        the rail even where the card's outline is clipped or scrolled. A mark
+        that also answers a question earns its place; pure decoration on
+        every row would just be noise with extra steps. }
+      Glyph := TPath.Create(Card);
+      Glyph.Parent := Card;
+      Glyph.Align := TAlignLayout.Left;
+      Glyph.Width := SESSION_GLYPH_W;
+      Glyph.HitTest := False;
+      Glyph.Data.Data := GLYPH_SESSION;
+      Glyph.WrapMode := TPathWrapMode.Fit;
+      Glyph.Stroke.Kind := TBrushKind.None;
+      Glyph.Fill.Kind := TBrushKind.Solid;
+      Glyph.Fill.Color := UI_MUTED;
+      { the bubble is wider than tall; inset vertically so it sits on the
+        text's optical centre rather than filling the row }
+      SetControlMargins(Glyph, 0, GAP_XS + 1, GAP_S, GAP_XS + 1);
+
       TitleLabel := TLabel.Create(Card);
       TitleLabel.Parent := Card;
       TitleLabel.Align := TAlignLayout.Client;
@@ -20067,6 +20097,7 @@ begin
 
       if Session.Id = FActiveSessionId then
       begin
+        Glyph.Fill.Color := UI_ACCENT;
         Card.Stroke.Kind := TBrushKind.Solid;
         Card.Stroke.Color := UI_ACCENT;
         Card.Fill.Color := UI_ACCENT_DIM;
