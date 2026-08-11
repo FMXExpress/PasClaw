@@ -173,6 +173,39 @@ pasclaw cron remove  daily-summary
 
 See [Cron](./cron.md).
 
+## workspace
+
+```sh
+pasclaw workspace list
+pasclaw workspace new "Home"      # creates workspace2
+pasclaw workspace use workspace2
+```
+
+A workspace is an isolated agent world -- its own memory, sessions, skills and
+projects. The original `workspace/` directory is #1; new ones are siblings
+(`workspace2`, `workspace3`, ...). `$PASCLAW_WORKSPACE` overrides the active
+one for a single process without touching config.json.
+
+See [Desktop](./desktop.md).
+
+## project
+
+```sh
+pasclaw project list
+pasclaw project new "Spam Filter"
+pasclaw project show spam-filter
+pasclaw project rm  spam-filter
+pasclaw project seed                    # install the system suite
+pasclaw project export notes > notes.json
+pasclaw project import notes.json
+```
+
+Projects hold the apps PasClaw builds for you plus the tasks and jobs it works
+through; the desktop clients show the same board. `export` writes a blueprint
+(the software, never the data or secrets) to stdout.
+
+See [Desktop](./desktop.md).
+
 ## mcp
 
 ```sh

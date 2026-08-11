@@ -8,7 +8,7 @@ The main `README.md` at the repo root is the landing page. These docs go deeper.
 
 - [Getting started](./getting-started.md) — install with FPC or Delphi, run `pasclaw onboard`, send your first message.
 - [Configuration](./configuration.md) — `~/.pasclaw/config.json` shape, environment variables, `$PASCLAW_HOME` layout.
-- [Commands](./commands.md) — the 27 top-level commands, their flags, and what each one writes to disk.
+- [Commands](./commands.md) — the top-level commands, their flags, and what each one writes to disk.
 
 ## Capabilities
 
@@ -26,6 +26,7 @@ The main `README.md` at the repo root is the landing page. These docs go deeper.
 ## Interfaces
 
 - [Gateway and OpenAI-compatible API](./gateway.md) — `/v1/chat/completions`, `/v1/responses`, `/v1/mcp`, embedded web UI, route table.
+- [Desktop](./desktop.md) — the desktop client: workspaces, projects/tasks/jobs, the app factory, answer pages, and the system suite.
 - [Chat channels](./channels.md) — Telegram, Discord, Slack, Teams, LINE, WhatsApp, Matrix, IRC, Email.
 - [Embedding in your own app](./embedding.md) — `TPasClawAgent` / `TPasClawServer` `TComponent`s for VCL/FMX/CLI binaries.
 

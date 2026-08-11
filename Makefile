@@ -413,8 +413,16 @@ test-desktop-routes: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/desktop_routes_tests.pas -o$(BUILDDIR)/desktop_routes_tests
 	@PASCLAW_HOME=$(BUILDDIR)/desktop-routes-test-home $(BUILDDIR)/desktop_routes_tests
 
+# The shared native-client library (studio/ + desktop/ drive the gateway
+# through it). Needs a LIVE gateway; skips itself when PASCLAW_TEST_GATEWAY
+# is unset so `make test` stays green without one.
+test-client-api: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/client_api_tests.pas -o$(BUILDDIR)/client_api_tests
+	@$(BUILDDIR)/client_api_tests
+
 # Everything the desktop client depends on, in dependency order.
-test-desktop: test-workspaces test-projects test-apps test-desktop-routes
+test-desktop: test-workspaces test-projects test-apps test-desktop-routes test-client-api
 
 # Provider catalog rows + ChatPath override (Perplexity uses /chat/completions).
 test-provider-catalog: | $(BUILDDIR)

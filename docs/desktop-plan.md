@@ -403,20 +403,44 @@ window-lifetime tracking, and F11 kiosk mode.
 
 ## 5. Phases
 
-| Phase | Deliverable | Touches |
-|---|---|---|
-| **1. Workspaces** | `PasClaw.Workspaces.pas`, path-resolution refactor, `workspaceN` dirs, `/v1/workspaces*`, CLI `pasclaw workspace list/create/switch`, tests | config, session, memory, cron, skills, gateway |
-| **2. Projects/Tasks/Jobs** | `PasClaw.Projects.Store/Tools.pas`, REST routes, `/v1/desktop/events` SSE, job↔session/subagent linkage, tests | new pkg, gateway, agent |
-| **3. Web desktop v1** | `desktop.html`: window manager, project tree, taskbar, per-project chat, jobs window, 3 palettes (Win95, ClaudeCodeDark, Synthwave) | gateway |
-| **4. App factory** | `app.json`, runners (html serve + python run), `page` kind, per-app state store (`/v1/apps/<p>/state`), builder-mode skill/prompt, app windows with live reload, inline artifact cards with ▶ Run in chat | new pkg, gateway, promptware |
-| **4b. Answer pages** | `POST /v1/pages`, `pages/` history project, Browser-window search box, pages over workspace/API data, sources chrome, page→app promotion | gateway, both clients, promptware |
-| **5. FMX desktop v1** | `desktop/` project from the RetroDesktop demo: gateway client, tree, chat + app windows, style/skin picker, workspace pager | new top-level dir, shared client unit |
-| **6. Polish** | full palette set from shared generator, per-workspace desktop state persistence, native app build/launch (`fpc`/`delphi_build`), all-in-one FMX mode, blueprint export/import, docs | styles repo + both clients |
-| **7. System suite v1** | §2c apps in dependency order: Notes + Brain (thin UIs over memory), Tasks + Calendar (task layer + cron), Library (session/page/KB search), Deep Research mode on answer pages | both clients, gateway |
-| **8. System suite v2 + period-native AI** | Cookbook, Mail (IMAP channel → inbox UI), suite apps as remakeable blueprints; wizard/dialog/progress rendering of agent output, per-style personality overlays (promptware), agent-aware File Manager window | both clients, promptware |
+Status as of the implementation pass: phases 1–5 and the CLI/suite parts of
+7 are **built and tested** (`make test-desktop`, plus browser-driven checks of
+the web client); see [`desktop.md`](desktop.md) for how to use them. What is
+explicitly **not** done is listed under "Not yet built" below.
 
+| Phase | Deliverable | Touches | Status |
+|---|---|---|---|
+| **1. Workspaces** | `PasClaw.Workspaces.pas`, path-resolution refactor, `workspaceN` dirs, `/v1/workspaces*`, CLI `pasclaw workspace list/create/switch`, tests | config, session, memory, cron, skills, gateway | done |
+| **2. Projects/Tasks/Jobs** | `PasClaw.Projects.Store/Tools.pas`, REST routes, `/v1/desktop/events` SSE, job↔session/subagent linkage, tests | new pkg, gateway, agent | done |
+| **3. Web desktop v1** | `desktop.html`: window manager, project tree, taskbar, per-project chat, jobs window, 3 palettes (Win95, ClaudeCodeDark, Synthwave) | gateway | done |
+| **4. App factory** | `app.json`, runners (html serve + python run), `page` kind, per-app state store (`/v1/apps/<p>/state`), builder-mode skill/prompt, app windows with live reload, inline artifact cards with ▶ Run in chat | new pkg, gateway, promptware | done |
+| **4b. Answer pages** | `POST /v1/pages`, `pages/` history project, Browser-window search box, pages over workspace/API data, sources chrome, page→app promotion | gateway, both clients, promptware | done |
+| **5. FMX desktop v1** | `desktop/` project from the RetroDesktop demo: gateway client, tree, chat + app windows, style/skin picker, workspace pager | new top-level dir, shared client unit | written; needs Delphi to compile |
+| **6. Polish** | full palette set from shared generator, per-workspace desktop state persistence, native app build/launch (`fpc`/`delphi_build`), all-in-one FMX mode, blueprint export/import, docs | styles repo + both clients | partial: palettes generated, blueprints done |
+| **7. System suite v1** | §2c apps in dependency order: Notes + Brain (thin UIs over memory), Tasks + Calendar (task layer + cron), Library (session/page/KB search), Deep Research mode on answer pages | both clients, gateway | partial: Notes/To Do/Brain seeded |
+| **8. System suite v2 + period-native AI** | Cookbook, Mail (IMAP channel → inbox UI), suite apps as remakeable blueprints; wizard/dialog/progress rendering of agent output, per-style personality overlays (promptware), agent-aware File Manager window | both clients, promptware | not started |
 Phases 3 and 5 are independent once 1–2 land; 4 slots between them and is where the
 product thesis lives.
+
+### Not yet built
+
+Honest list of what the plan describes and the implementation does not yet do:
+
+- **Running `python` / `fpc` / `delphi` apps.** The manifest carries `run` and
+  `build`, the desktop reports the kind, and the plumbing refuses to pretend —
+  but nothing spawns the process yet. Only `page` and `html` apps open.
+- **`/v1/desktop/events` (SSE).** The clients poll instead. Live job progress
+  arrives on refresh rather than being pushed.
+- **The rest of the suite** — Calendar, Deep Research as a named mode, Library
+  beyond the pages list, Cookbook, Mail.
+- **Period-native agent output** (§7/§8): plans as wizards, questions as
+  message boxes, per-style personality overlays.
+- **Per-workspace window-layout persistence**, and the FMX client's
+  all-in-one mode (embedding `TPasClawServer` so the app *is* PasClaw).
+- **Page generation end to end.** `POST /v1/pages` renders and stores
+  correctly and the route is wired, but the generator callback the gateway
+  injects is not implemented, so a live gateway answers 503 until a caller
+  supplies a rendered body.
 
 ## 6. Risks / open questions
 
