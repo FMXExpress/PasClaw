@@ -573,6 +573,20 @@ type
        returns "No deferred tools" and the system-prompt section
        emits empty. *)
     MCPProgressiveDisclosure: Boolean;
+    (* MCPCompactResults -- re-encode rectangular MCP tool results as a
+       table before they enter the conversation.
+
+       A result is re-sent on every later turn, so an array of objects pays
+       for its repeated column names once per turn for the rest of the
+       session. Measured on a representative row result: 55% fewer
+       characters, and only the text the model reads changes -- the raw
+       result JSON is untouched, so structured consumers are unaffected.
+
+       Conservative by construction: only genuinely rectangular, all-scalar
+       results convert, delimiters inside values are escaped, and a
+       conversion that would not come out shorter is declined. See
+       PasClaw.MCP.Compact. *)
+    MCPCompactResults: Boolean;
     Crons:      array of TCronEntry;
     Skills:     array of TSkillEntry;
     Subagents:  TSubagentSpecArray;  { see comment on the type alias }
@@ -1093,6 +1107,7 @@ begin
   WebFetchEnabled      := True;  { on by default: the tool clearly documents that it returns readable plain text (HTML tags stripped, entities decoded) capped at max_chars (default 50000, save_to bypasses), so the model knows what it gets -- and a "read this URL" task shouldn't have to fall back to hand-rolled shell curl + HTML scraping. Also enables memory_fetch (RegisterMemoryFetchTool is gated on EnableWebFetch in NewBuiltinRegistry). Onboarding asks; operators wanting no outbound HTTP from the agent set web_fetch_enabled: false. }
   CronToolEnabled      := False; { off by default -- model-scheduled background jobs are an opt-in autonomy step (runs existing skills only). }
   RelayWaitTimeoutMs   := 0;     { 0 = use the Pascal-side RelayDefaultWaitTimeoutMs (5 min). Operators set higher for flaky workers, lower for fast fallback. }
+  MCPCompactResults := True;  { on by default: the conversion is refused unless the result is rectangular, all-scalar and genuinely shorter, so the failure mode is "no change" rather than a mangled result. Flip off if a server's rows must reach the model as literal JSON. }
   MCPProgressiveDisclosure := True;  { on by default -- fat catalogs (Replicate MCP ~50 tools, GitHub MCP ~50+) make lazy reveal the right floor. The prompt cost of every MCP schema every turn dominates the bill on turns that touch zero MCP tools; tool_search loads schemas on demand at a one-turn cost per first-use. Operators with tiny catalogs flip off via onboarding (default N) or hand-edit if the +1 turn isn't worth the savings. Mirrors Claude Code's ToolSearch pattern. No-op when no MCP servers are configured. }
   RenderMarkdown       := True;  { on by default for terminal surfaces; cmd/serve flips off }
   SubagentsEnabled     := True;  { on by default -- a built-in general-purpose subagent makes `spawn` available with no config. }
@@ -1900,6 +1915,8 @@ begin
                                                 RelayWaitTimeoutMs));
     MCPProgressiveDisclosure := Root.GetBool('mcp_progressive_disclosure',
                                               MCPProgressiveDisclosure);
+    MCPCompactResults := Root.GetBool('mcp_compact_results',
+                                      MCPCompactResults);
     RenderMarkdown      := Root.GetBool('render_markdown',       RenderMarkdown);
     VectorSearchEnabled := Root.GetBool('vector_search_enabled', VectorSearchEnabled);
     RerankSearchEnabled := Root.GetBool('rerank_search_enabled', RerankSearchEnabled);
