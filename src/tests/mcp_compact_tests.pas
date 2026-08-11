@@ -8,6 +8,9 @@ program mcp_compact_tests;
     - an object wrapping the rows under a conventional key is found
     - values containing the delimiter, a backslash or a newline survive
       escaping, so a cell can never invent a column
+    - wrapper SIBLINGS (next_cursor, total) survive the conversion, and a
+      sibling that is itself a container refuses it outright -- an agent
+      reads the compacted text, so a dropped cursor strands it mid-pagination
     - REFUSALS, which matter more than the conversions: ragged rows, nested
       values, too few rows, too few columns, free text and malformed JSON
       all come back untouched rather than half-reshaped
@@ -98,6 +101,28 @@ begin
     CompactifyResultText('{"results":' + RowsJSON(8) + '}', Out_));
 end;
 
+procedure TestSiblingsPreserved;
+var
+  Out_: string;
+begin
+  WriteLn('wrapper siblings (a dropped cursor strands the agent)');
+  Check('converts with a cursor present', CompactifyResultText(
+    '{"rows":' + RowsJSON(10) + ',"next_cursor":"abc123","total":250}', Out_));
+  Check('next_cursor survives', Pos('next_cursor: abc123', Out_) > 0);
+  Check('total survives',       Pos('total: 250', Out_) > 0);
+  Check('siblings precede the table',
+    Pos('next_cursor: abc123', Out_) < Pos('table 10x4:', Out_));
+  Check('a cursor containing a pipe is NOT escaped (it is opaque)',
+    CompactifyResultText('{"rows":' + RowsJSON(10) + ',"cur":"a|b"}', Out_)
+    and (Pos('cur: a|b', Out_) > 0));
+  Check('a container sibling refuses the whole conversion',
+    not CompactifyResultText(
+      '{"rows":' + RowsJSON(10) + ',"meta":{"page":1}}', Out_));
+  Check('an array sibling refuses too',
+    not CompactifyResultText(
+      '{"rows":' + RowsJSON(10) + ',"warnings":["x"]}', Out_));
+end;
+
 procedure TestEscaping;
 var
   Out_: string;
@@ -162,6 +187,7 @@ begin
   WriteLn('PasClaw.MCP.Compact');
   TestConverts;
   TestWrapped;
+  TestSiblingsPreserved;
   TestEscaping;
   TestRefusals;
   TestNotShorterDeclined;

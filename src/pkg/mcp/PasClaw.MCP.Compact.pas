@@ -37,6 +37,11 @@
     two-row table can easily be longer than its JSON.
   * Delimiters inside values are escaped, so a value containing '|' cannot
     invent a column. This is the failure a naive join would ship.
+  * Nothing is dropped. A wrapper's SIBLING fields -- next_cursor, total,
+    warnings -- are carried through above the table, and a sibling that is
+    itself an object or array refuses the whole conversion. An agent reads
+    the compacted text, not the preserved JSON, so a silently discarded
+    cursor would strand it mid-pagination with no way to notice.
   * Only the TEXT handed to the model is affected. Callers keep the raw
     result JSON, so structured consumers are unaffected.
 }
@@ -122,6 +127,30 @@ begin
   { null, or a type no accessor admits to: an empty cell }
 end;
 
+{ Escaping for a metadata line, which has no columns to protect. The pipe is
+  deliberately NOT escaped here: a cursor is an opaque token the model has to
+  hand back verbatim, and a '\|' it copied faithfully would be the wrong
+  cursor. Inside a table the delimiter must be escaped or the row loses its
+  shape -- that trade-off is forced there and avoidable here. }
+function EscapeMeta(const Value: string): string;
+var
+  i: Integer;
+  ch: Char;
+begin
+  Result := '';
+  for i := 1 to Length(Value) do
+  begin
+    ch := Value[i];
+    case ch of
+      '\': Result := Result + '\\';
+      #10: Result := Result + '\n';
+      #13: ;
+    else
+      Result := Result + ch;
+    end;
+  end;
+end;
+
 function EscapeCell(const Value: string): string;
 var
   i: Integer;
@@ -144,7 +173,8 @@ end;
 
 { The rows array, whether the payload is a bare array or an object wrapping
   one. Returns nil when there is no single obvious candidate. }
-function FindRows(const Text: string; out Owner: TJsonObject): TJsonArray;
+function FindRows(const Text: string; out Owner: TJsonObject;
+  out RowsKey: string): TJsonArray;
 const
   { the names servers actually use for "the rows" }
   WRAPPERS: array[0..5] of string =
@@ -156,6 +186,7 @@ var
 begin
   Result := nil;
   Owner := nil;
+  RowsKey := '';
   Trimmed := Trim(Text);
   if Trimmed = '' then
     Exit;
@@ -185,6 +216,7 @@ begin
     if Arr <> nil then
     begin
       Result := Arr;
+      RowsKey := WRAPPERS[i];
       Exit;
     end;
   end;
@@ -223,19 +255,51 @@ begin
   Result := True;
 end;
 
+{ Sibling fields of the rows array, as 'key: value' lines.
+
+  Returns False when a sibling is itself an object or array: those cannot be
+  rendered faithfully on one line, and a conversion that cannot carry all of
+  the result must not happen at all. }
+function CollectSiblings(Owner: TJsonObject; const RowsKey: string;
+  Lines: TStringList): Boolean;
+var
+  Keys: TStringList;
+  i: Integer;
+  Key: string;
+begin
+  Result := False;
+  if Owner = nil then
+    Exit(True);
+  Keys := Owner.Keys;
+  try
+    for i := 0 to Keys.Count - 1 do
+    begin
+      Key := Keys[i];
+      if Key = RowsKey then
+        Continue;
+      if (Owner.ChildObject(Key) <> nil) or (Owner.ChildArray(Key) <> nil) then
+        Exit;
+      Lines.Add(EscapeMeta(Key) + ': ' + EscapeMeta(CellText(Owner, Key)));
+    end;
+  finally
+    Keys.Free;
+  end;
+  Result := True;
+end;
+
 function CompactifyResultText(const Text: string; out Compact: string): Boolean;
 var
   Rows: TJsonArray;
   Owner, Row, First: TJsonObject;
   Cols: TStringList;
   SB: TStringList;
-  Line: string;
+  Line, RowsKey: string;
   r, c: Integer;
 begin
   Result := False;
   Compact := '';
   Owner := nil;
-  Rows := FindRows(Text, Owner);
+  Rows := FindRows(Text, Owner, RowsKey);
   try
     if (Rows = nil) or (Rows.Count < COMPACT_MIN_ROWS) then
       Exit;
@@ -251,6 +315,11 @@ begin
 
       SB := TStringList.Create;
       try
+        { siblings FIRST, and their presence is what decides whether the
+          conversion may happen at all -- a next_cursor dropped here strands
+          the agent mid-pagination with nothing on screen to explain it }
+        if not CollectSiblings(Owner, RowsKey, SB) then
+          Exit;
         { self-describing header: the model is told the shape before the
           data, so it never has to infer that a bare row list is tabular }
         Line := '';
