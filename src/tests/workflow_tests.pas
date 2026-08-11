@@ -13,6 +13,9 @@ program workflow_tests;
 
 uses
   SysUtils, Classes,
+  PasClaw.Utils,           { GetHome / JoinPath -- to pin the test workspace }
+  PasClaw.Config,          { TSandboxPolicy }
+  PasClaw.Tools.Sandbox,   { ConfigureSandbox }
   PasClaw.Workflow,
   PasClaw.Workflow.Store,
   PasClaw.Workflow.Tools,
@@ -520,6 +523,29 @@ begin
   Check(GUntilCount = 2, 'until: stopped early, not at max (got ' + IntToStr(GUntilCount) + ')');
 end;
 
+{ Without this, ResolveWorkspacePath falls back to the process CWD and the
+  output-writing test litters run directories into whatever folder the tests
+  were launched from -- which turned out to be the repo checkout. Pin the
+  sandbox workspace to the same isolated home the store uses ($PASCLAW_HOME,
+  set by `make test-workflow`). }
+procedure PinWorkspaceToTestHome;
+var
+  Pol: TSandboxPolicy;
+  WS: string;
+begin
+  Pol.RestrictToWorkspace       := False;
+  Pol.AllowReadOutsideWorkspace := True;
+  Pol.Workspace                 := '';
+  SetLength(Pol.AllowReadPaths, 0);
+  SetLength(Pol.AllowWritePaths, 0);
+  SetLength(Pol.CustomShellDeny, 0);
+  Pol.ShellDenyEnabled          := False;
+  Pol.BlockPrivateNetworks      := False;
+  WS := JoinPath(GetHome, 'workspace');
+  ForceDirectories(WS);
+  ConfigureSandbox(Pol, WS);
+end;
+
 { ---- output writing: refusals are the contract ---------------------------- }
 procedure TestOutputWriting;
 var
@@ -598,6 +624,7 @@ begin
 end;
 
 begin
+  PinWorkspaceToTestHome;
   TestParse;
   TestValidate;
   TestTopoAndCycle;
