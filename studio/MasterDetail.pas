@@ -355,6 +355,13 @@ type
     FWorkflowRunResultsList: TListBox;
     FWorkflowRunStatusLabel: TLabel;
     FWorkflowSelectedEdge: string;
+    FWorkflowHoverEdge: string;    { edge text under the cursor (idle hover) }
+    FWorkflowRunNodeOk: TDictionary<string, Boolean>;
+    FWorkflowRunNodePreview: TDictionary<string, string>;
+    FWorkflowPalettePanel: TRectangle;
+    FWorkflowPaletteEdit: TEdit;
+    FWorkflowPaletteList: TListBox;
+    FWorkflowPaletteDrop: TPointF;  { logical spot the palette will drop a node }
     FWorkflowSchemaForm: TVertScrollBox;
     FWorkflowToolCombo: TComboBox;
     FWorkflowToolSchemas: TDictionary<string, string>;
@@ -710,6 +717,21 @@ type
       CanvasWidth, CanvasHeight: Single): TRectF;
     procedure WorkflowFitView;
     procedure WorkflowFitViewClick(Sender: TObject);
+    procedure WorkflowDrawWire(Canvas: TCanvas; const A, B: TPointF;
+      Opacity: Single);
+    function WorkflowWireHit(const A, B: TPointF; X, Y: Single): Boolean;
+    function WorkflowEdgeAtPoint(X, Y: Single; CanvasWidth: Single): Integer;
+    function WfSnap(const P: TPointF): TPointF;
+    procedure WorkflowShowPalette(const CanvasPt: TPointF);
+    procedure WorkflowHidePalette;
+    procedure WorkflowPaletteRefresh;
+    procedure WorkflowPaletteFilterChange(Sender: TObject);
+    procedure WorkflowPaletteAdd(const Tool: string);
+    procedure WorkflowPaletteEditKeyDown(Sender: TObject; var Key: Word;
+      var KeyChar: Char; Shift: TShiftState);
+    procedure WorkflowPaletteItemClick(const Sender: TCustomListBox;
+      const Item: TListBoxItem);
+    procedure WorkflowDuplicateSelectedNode;
     procedure OpenFilesTabAt(const Path: string);
     function WorkflowCanvasNodeRect(Index: Integer; CanvasWidth: Single): TRectF;
     procedure WorkflowEnsureNodePosition(const NodeId: string; Index: Integer;
@@ -855,6 +877,12 @@ const
     kept impossible as node ids (nodes are sanitised identifiers) }
   WF_ID_INPUT  = '__input__';
   WF_ID_OUTPUT = '__output__';
+  WF_GRID = 24;              { canvas grid pitch; drops snap to it }
+  { run-badge fills. Saturated status hues that read on BOTH palettes, so they
+    bypass ThemePaintColor deliberately -- mapping them per-theme would mute
+    the one signal that must stay loud. }
+  WF_BADGE_OK  = $FF43B97F;
+  WF_BADGE_ERR = $FFE0565A;
   WIN_CREATE_ALWAYS = 2;
   WIN_CREATE_NO_WINDOW = $08000000;
   WIN_FILE_ATTRIBUTE_NORMAL = $00000080;
@@ -1532,6 +1560,8 @@ begin
   FSessionCache := TList<TPasClawSession>.Create;
   FTurns := TList<TChatTurn>.Create;
   FWorkflowNodePositions := TDictionary<string, TPointF>.Create;
+  FWorkflowRunNodeOk := TDictionary<string, Boolean>.Create;
+  FWorkflowRunNodePreview := TDictionary<string, string>.Create;
   FWorkflowToolSchemas := TDictionary<string, string>.Create;
   FStyleLookupCache := TDictionary<string, Boolean>.Create;
   FStyleBookTexts := TDictionary<TStyleBook, string>.Create;
@@ -1571,6 +1601,8 @@ begin
   FTurns.Free;
   FSessionCache.Free;
   FWorkflowNodePositions.Free;
+  FWorkflowRunNodeOk.Free;
+  FWorkflowRunNodePreview.Free;
   FWorkflowToolSchemas.Free;
   FStyleLookupCache.Free;
   FStyleBookTexts.Free;
@@ -2616,8 +2648,6 @@ procedure TMasterDetailForm.FormKeyDown(Sender: TObject; var Key: Word;
 var
   ActiveTab: string;
 begin
-  if (Key <> vkDelete) and (Key <> vkBack) then
-    Exit;
   if (Focused is TEdit) or (Focused is TMemo) or (Focused is TComboBox) then
     Exit;
   if (FTabControl = nil) or (FTabControl.TabIndex < 0) or
@@ -2627,10 +2657,25 @@ begin
   if not SameText(ActiveTab, 'Workflow') then
     Exit;
 
-  if (FWorkflowEdgesList <> nil) and (FWorkflowEdgesList.Selected <> nil) then
-    WorkflowDeleteEdgeClick(nil)
-  else if (FWorkflowNodesList <> nil) and (FWorkflowNodesList.Selected <> nil) then
-    WorkflowDeleteNodeClick(nil)
+  { canvas shortcuts (n8n/ComfyUI conventions): Del removes the selection,
+    Ctrl+D duplicates the selected node, F fits the view. Guarded above so
+    none of them fire while typing in a field. }
+  if (Key = vkDelete) or (Key = vkBack) then
+  begin
+    if (FWorkflowEdgesList <> nil) and (FWorkflowEdgesList.Selected <> nil) then
+      WorkflowDeleteEdgeClick(nil)
+    else if (FWorkflowNodesList <> nil) and
+      (FWorkflowNodesList.Selected <> nil) then
+      WorkflowDeleteNodeClick(nil)
+    else
+      Exit;
+  end
+  else if (ssCtrl in Shift) and
+    ((Key = vkD) or (KeyChar = 'd') or (KeyChar = 'D')) then
+    WorkflowDuplicateSelectedNode
+  else if (Shift = []) and
+    ((Key = vkF) or (KeyChar = 'f') or (KeyChar = 'F')) then
+    WorkflowFitView
   else
     Exit;
   Key := 0;
@@ -10588,9 +10633,15 @@ begin
     FWorkflowEdgesList.Clear;
   if FWorkflowNodePositions <> nil then
     FWorkflowNodePositions.Clear;
+  if FWorkflowRunNodeOk <> nil then
+    FWorkflowRunNodeOk.Clear;
+  if FWorkflowRunNodePreview <> nil then
+    FWorkflowRunNodePreview.Clear;
   FWorkflowDraggingId := '';
   FWorkflowConnectFromId := '';
   FWorkflowSelectedEdge := '';
+  FWorkflowHoverEdge := '';
+  WorkflowHidePalette;
   if FWorkflowToolCombo <> nil then
     FWorkflowToolCombo.ItemIndex := FWorkflowToolCombo.Items.IndexOf('llm');
   if FWorkflowNodeIdEdit <> nil then
@@ -11353,6 +11404,8 @@ var
   IoParts: TArray<string>;
   IoRect: TRectF;
   OutRect: TRectF;
+  RunOk: Boolean;
+  RunPreview: string;
   Selected: Boolean;
   SelectedId: string;
   TextR: TRectF;
@@ -11487,11 +11540,12 @@ begin
       NodeId := WorkflowTextId(FWorkflowNodesList.ListItems[I].Text);
       RFrom := WorkflowCanvasNodeRect(I, Box.Width);
       if not WorkflowNodeHasEdge(NodeId, True) then
-        Canvas.DrawLine(PointF(IoRect.Right,
+        WorkflowDrawWire(Canvas, PointF(IoRect.Right,
           (IoRect.Top + IoRect.Bottom) / 2),
           PointF(RFrom.Left, (RFrom.Top + RFrom.Bottom) / 2), 0.7);
       if not WorkflowNodeHasEdge(NodeId, False) then
-        Canvas.DrawLine(PointF(RFrom.Right, (RFrom.Top + RFrom.Bottom) / 2),
+        WorkflowDrawWire(Canvas,
+          PointF(RFrom.Right, (RFrom.Top + RFrom.Bottom) / 2),
           PointF(OutRect.Left, (OutRect.Top + OutRect.Bottom) / 2), 0.7);
     end;
     Canvas.Stroke.Dash := TStrokeDash.Solid;
@@ -11521,6 +11575,11 @@ begin
         Canvas.Stroke.Color := ThemePaintStroke(UI_ACCENT);
         Canvas.Stroke.Thickness := 3;
       end
+      else if SameText(FWorkflowHoverEdge, EdgeText) then
+      begin
+        Canvas.Stroke.Color := ThemePaintStroke(UI_ACCENT);
+        Canvas.Stroke.Thickness := 2.4;
+      end
       else
       begin
         Canvas.Stroke.Color := ThemePaintStroke(UI_ACCENT_DIM);
@@ -11528,9 +11587,21 @@ begin
       end;
       EdgeStart := PointF(RFrom.Right, (RFrom.Top + RFrom.Bottom) / 2);
       EdgeEnd := PointF(RTo.Left, (RTo.Top + RTo.Bottom) / 2);
-      Canvas.DrawLine(EdgeStart, EdgeEnd, 0.95);
+      WorkflowDrawWire(Canvas, EdgeStart, EdgeEnd, 0.95);
+      { the bezier ends on a horizontal tangent, so the old arrowhead still
+        points the right way }
       Canvas.DrawLine(EdgeEnd, PointF(EdgeEnd.X - 9, EdgeEnd.Y - 5), 0.95);
       Canvas.DrawLine(EdgeEnd, PointF(EdgeEnd.X - 9, EdgeEnd.Y + 5), 0.95);
+      { hovered or selected wires light their endpoints too }
+      if SameText(FWorkflowSelectedEdge, EdgeText) or
+        SameText(FWorkflowHoverEdge, EdgeText) then
+      begin
+        Canvas.Fill.Color := ThemePaintColor(UI_ACCENT);
+        Canvas.FillEllipse(RectF(EdgeStart.X - 4, EdgeStart.Y - 4,
+          EdgeStart.X + 4, EdgeStart.Y + 4), 1);
+        Canvas.FillEllipse(RectF(EdgeEnd.X - 4, EdgeEnd.Y - 4,
+          EdgeEnd.X + 4, EdgeEnd.Y + 4), 1);
+      end;
     end;
 
   if FWorkflowConnectFromId <> '' then
@@ -11541,8 +11612,11 @@ begin
       RFrom := WorkflowCanvasNodeRect(FromIndex, Box.Width);
       Canvas.Stroke.Color := ThemePaintStroke(UI_ACCENT);
       Canvas.Stroke.Thickness := 2.5;
-      Canvas.DrawLine(PointF(RFrom.Right, (RFrom.Top + RFrom.Bottom) / 2),
+      Canvas.Stroke.Dash := TStrokeDash.Dash;
+      WorkflowDrawWire(Canvas,
+        PointF(RFrom.Right, (RFrom.Top + RFrom.Bottom) / 2),
         FWorkflowConnectPoint, 1);
+      Canvas.Stroke.Dash := TStrokeDash.Solid;
     end;
   end;
 
@@ -11579,6 +11653,33 @@ begin
     Canvas.Font.Size := TXT_CAPTION;
     Canvas.FillText(TextR, NodeTool, False, 1, [], TTextAlign.Center,
       TTextAlign.Center);
+
+    { last-run status: a small badge on the node plus the first line of its
+      output under the box -- debugging without leaving the canvas }
+    if (FWorkflowRunNodeOk <> nil) and
+      FWorkflowRunNodeOk.TryGetValue(NodeId, RunOk) then
+    begin
+      if RunOk then
+        Canvas.Fill.Color := WF_BADGE_OK
+      else
+        Canvas.Fill.Color := WF_BADGE_ERR;
+      Canvas.FillEllipse(RectF(R.Right - 12, R.Top + 4, R.Right - 4,
+        R.Top + 12), 1);
+      Canvas.Stroke.Color := ThemePaintStroke(UI_BG);
+      Canvas.Stroke.Thickness := 1;
+      Canvas.DrawEllipse(RectF(R.Right - 12, R.Top + 4, R.Right - 4,
+        R.Top + 12), 1);
+      if (FWorkflowRunNodePreview <> nil) and
+        FWorkflowRunNodePreview.TryGetValue(NodeId, RunPreview) and
+        (RunPreview <> '') then
+      begin
+        Canvas.Fill.Color := ThemePaintColor(UI_MUTED);
+        Canvas.Font.Size := TXT_CAPTION;
+        Canvas.FillText(RectF(R.Left, R.Bottom + 2, R.Right + 40,
+          R.Bottom + 16), RunPreview, False, 0.9, [], TTextAlign.Leading,
+          TTextAlign.Center);
+      end;
+    end;
 
     if (FWorkflowConnectFromId <> '') and
       not SameText(NodeId, FWorkflowConnectFromId) then
@@ -11763,71 +11864,360 @@ begin
   FWorkflowNodePositions.AddOrSetValue(NodeId, Pos);
 end;
 
+procedure TMasterDetailForm.WorkflowDrawWire(Canvas: TCanvas;
+  const A, B: TPointF; Opacity: Single);
+{ Every wire on the canvas is a cubic bezier with horizontal tangents --
+  the shape all the surveyed node-graph tools share, and most of why their
+  graphs read as graphs instead of diagrams. Uses the CURRENT stroke, so
+  callers keep owning color/thickness/dash. }
+var
+  DX: Single;
+  Path: TPathData;
+begin
+  DX := Max(30, Abs(B.X - A.X) / 2);
+  Path := TPathData.Create;
+  try
+    Path.MoveTo(A);
+    Path.CurveTo(PointF(A.X + DX, A.Y), PointF(B.X - DX, B.Y), B);
+    Canvas.DrawPath(Path, Opacity);
+  finally
+    Path.Free;
+  end;
+end;
+
+function TMasterDetailForm.WorkflowWireHit(const A, B: TPointF;
+  X, Y: Single): Boolean;
+{ Curve-aware hit test: sample the SAME bezier WorkflowDrawWire paints and
+  measure against the chords. A straight-line test against a curved wire
+  misses exactly where the curve bows away -- the spot users aim for. }
+const
+  SAMPLES = 24;
+var
+  C1: TPointF;
+  C2: TPointF;
+  Dist: Single;
+  DX: Single;
+  I: Integer;
+  LenSq: Single;
+  P: TPointF;
+  Q: TPointF;
+  U: Single;
+
+  function BezPoint(T: Single): TPointF;
+  var
+    MT: Single;
+  begin
+    MT := 1 - T;
+    Result.X := MT * MT * MT * A.X + 3 * MT * MT * T * C1.X +
+      3 * MT * T * T * C2.X + T * T * T * B.X;
+    Result.Y := MT * MT * MT * A.Y + 3 * MT * MT * T * C1.Y +
+      3 * MT * T * T * C2.Y + T * T * T * B.Y;
+  end;
+
+begin
+  Result := False;
+  DX := Max(30, Abs(B.X - A.X) / 2);
+  C1 := PointF(A.X + DX, A.Y);
+  C2 := PointF(B.X - DX, B.Y);
+  P := A;
+  for I := 1 to SAMPLES do
+  begin
+    Q := BezPoint(I / SAMPLES);
+    LenSq := Sqr(Q.X - P.X) + Sqr(Q.Y - P.Y);
+    if LenSq > 0 then
+    begin
+      U := Max(0, Min(1, ((X - P.X) * (Q.X - P.X) +
+        (Y - P.Y) * (Q.Y - P.Y)) / LenSq));
+      Dist := Sqrt(Sqr(X - (P.X + U * (Q.X - P.X))) +
+        Sqr(Y - (P.Y + U * (Q.Y - P.Y))));
+      if Dist <= 8 then
+        Exit(True);
+    end;
+    P := Q;
+  end;
+end;
+
+function TMasterDetailForm.WorkflowEdgeAtPoint(X, Y: Single;
+  CanvasWidth: Single): Integer;
+{ Index (in the edges list) of the wire under the point, or -1. The single
+  owner for mouse-down selection AND hover, so the two can never disagree
+  about what is hit. }
+var
+  EdgeText: string;
+  FromIndex: Integer;
+  I: Integer;
+  P: Integer;
+  RFrom: TRectF;
+  RTo: TRectF;
+  ToIndex: Integer;
+begin
+  Result := -1;
+  if FWorkflowEdgesList = nil then
+    Exit;
+  for I := 0 to FWorkflowEdgesList.Count - 1 do
+  begin
+    if FWorkflowEdgesList.ListItems[I] = nil then
+      Continue;
+    EdgeText := FWorkflowEdgesList.ListItems[I].Text;
+    P := Pos(' -> ', EdgeText);
+    if P <= 0 then
+      Continue;
+    FromIndex := WorkflowNodeIndexById(Copy(EdgeText, 1, P - 1));
+    ToIndex := WorkflowNodeIndexById(Copy(EdgeText, P + 4, MaxInt));
+    if (FromIndex < 0) or (ToIndex < 0) then
+      Continue;
+    RFrom := WorkflowCanvasNodeRect(FromIndex, CanvasWidth);
+    RTo := WorkflowCanvasNodeRect(ToIndex, CanvasWidth);
+    if WorkflowWireHit(PointF(RFrom.Right, (RFrom.Top + RFrom.Bottom) / 2),
+      PointF(RTo.Left, (RTo.Top + RTo.Bottom) / 2), X, Y) then
+      Exit(I);
+  end;
+end;
+
+function TMasterDetailForm.WfSnap(const P: TPointF): TPointF;
+begin
+  Result := PointF(Round(P.X / WF_GRID) * WF_GRID,
+    Round(P.Y / WF_GRID) * WF_GRID);
+end;
+
+{ ---- the add-node palette: double-click empty canvas, type, Enter ---- }
+
+procedure TMasterDetailForm.WorkflowShowPalette(const CanvasPt: TPointF);
+var
+  ParentCtl: TControl;
+  PX: Single;
+  PY: Single;
+begin
+  if (FWorkflowCanvas = nil) or (FWorkflowCanvas.ParentControl = nil) then
+    Exit;
+  ParentCtl := FWorkflowCanvas.ParentControl;
+  { remember WHERE the palette was summoned: the node lands at that spot,
+    not in the auto-layout column -- creating at the cursor is the point }
+  FWorkflowPaletteDrop := WfSnap(WfToLogical(CanvasPt));
+  if FWorkflowPalettePanel = nil then
+  begin
+    FWorkflowPalettePanel := TRectangle.Create(Self);
+    FWorkflowPalettePanel.Width := 210;
+    FWorkflowPalettePanel.Height := 232;
+    StyleChromeRect(FWorkflowPalettePanel, UI_PANEL, UI_BORDER, 6, False);
+
+    FWorkflowPaletteEdit := TEdit.Create(Self);
+    FWorkflowPaletteEdit.Parent := FWorkflowPalettePanel;
+    FWorkflowPaletteEdit.Align := TAlignLayout.Top;
+    FWorkflowPaletteEdit.Height := H_INPUT;
+    FWorkflowPaletteEdit.TextPrompt := 'search tools';
+    FWorkflowPaletteEdit.OnChangeTracking := WorkflowPaletteFilterChange;
+    FWorkflowPaletteEdit.OnKeyDown := WorkflowPaletteEditKeyDown;
+    SetControlMargins(FWorkflowPaletteEdit, GAP_S, GAP_S, GAP_S, GAP_XS);
+
+    FWorkflowPaletteList := TListBox.Create(Self);
+    FWorkflowPaletteList.Parent := FWorkflowPalettePanel;
+    FWorkflowPaletteList.Align := TAlignLayout.Client;
+    FWorkflowPaletteList.OnItemClick := WorkflowPaletteItemClick;
+    SetControlMargins(FWorkflowPaletteList, GAP_S, 0, GAP_S, GAP_S);
+  end;
+  FWorkflowPalettePanel.Parent := ParentCtl;
+  PX := FWorkflowCanvas.Position.X + CanvasPt.X;
+  PY := FWorkflowCanvas.Position.Y + CanvasPt.Y;
+  PX := Max(0, Min(PX, ParentCtl.Width - FWorkflowPalettePanel.Width));
+  PY := Max(0, Min(PY, ParentCtl.Height - FWorkflowPalettePanel.Height));
+  FWorkflowPalettePanel.Position.X := PX;
+  FWorkflowPalettePanel.Position.Y := PY;
+  FWorkflowPalettePanel.Visible := True;
+  FWorkflowPalettePanel.BringToFront;
+  FWorkflowPaletteEdit.Text := '';
+  WorkflowPaletteRefresh;
+  FWorkflowPaletteEdit.SetFocus;
+end;
+
+procedure TMasterDetailForm.WorkflowHidePalette;
+begin
+  if FWorkflowPalettePanel <> nil then
+    FWorkflowPalettePanel.Visible := False;
+end;
+
+procedure TMasterDetailForm.WorkflowPaletteFilterChange(Sender: TObject);
+begin
+  WorkflowPaletteRefresh;
+end;
+
+procedure TMasterDetailForm.WorkflowPaletteRefresh;
+{ The palette lists exactly what the Tool combo offers (llm / replicate /
+  every gateway tool once loaded) -- one source, so the two entry paths can
+  never disagree about what exists. }
+var
+  Filter: string;
+  I: Integer;
+  Name: string;
+begin
+  if (FWorkflowPaletteList = nil) or (FWorkflowToolCombo = nil) then
+    Exit;
+  Filter := LowerCase(Trim(FWorkflowPaletteEdit.Text));
+  FWorkflowPaletteList.BeginUpdate;
+  try
+    FWorkflowPaletteList.Clear;
+    for I := 0 to FWorkflowToolCombo.Items.Count - 1 do
+    begin
+      Name := FWorkflowToolCombo.Items[I];
+      if (Filter = '') or (Pos(Filter, LowerCase(Name)) > 0) then
+        FWorkflowPaletteList.Items.Add(Name);
+    end;
+  finally
+    FWorkflowPaletteList.EndUpdate;
+  end;
+  if FWorkflowPaletteList.Count > 0 then
+    FWorkflowPaletteList.ItemIndex := 0;
+end;
+
+procedure TMasterDetailForm.WorkflowPaletteEditKeyDown(Sender: TObject;
+  var Key: Word; var KeyChar: Char; Shift: TShiftState);
+begin
+  if Key = vkEscape then
+  begin
+    WorkflowHidePalette;
+    Key := 0;
+  end
+  else if Key = vkReturn then
+  begin
+    if (FWorkflowPaletteList <> nil) and
+      (FWorkflowPaletteList.Selected <> nil) then
+      WorkflowPaletteAdd(FWorkflowPaletteList.Selected.Text);
+    Key := 0;
+  end
+  else if (Key = vkDown) and (FWorkflowPaletteList <> nil) and
+    (FWorkflowPaletteList.ItemIndex < FWorkflowPaletteList.Count - 1) then
+  begin
+    FWorkflowPaletteList.ItemIndex := FWorkflowPaletteList.ItemIndex + 1;
+    Key := 0;
+  end
+  else if (Key = vkUp) and (FWorkflowPaletteList <> nil) and
+    (FWorkflowPaletteList.ItemIndex > 0) then
+  begin
+    FWorkflowPaletteList.ItemIndex := FWorkflowPaletteList.ItemIndex - 1;
+    Key := 0;
+  end;
+end;
+
+procedure TMasterDetailForm.WorkflowPaletteItemClick(
+  const Sender: TCustomListBox; const Item: TListBoxItem);
+begin
+  if Item <> nil then
+    WorkflowPaletteAdd(Item.Text);
+end;
+
+procedure TMasterDetailForm.WorkflowPaletteAdd(const Tool: string);
+var
+  Drop: TPointF;
+  Idx: Integer;
+  NewId: string;
+begin
+  Drop := FWorkflowPaletteDrop;
+  WorkflowHidePalette;
+  if (Tool = '') or (FWorkflowToolCombo = nil) then
+    Exit;
+  Idx := FWorkflowToolCombo.Items.IndexOf(Tool);
+  if Idx < 0 then
+  begin
+    FWorkflowToolCombo.Items.Add(Tool);
+    Idx := FWorkflowToolCombo.Items.Count - 1;
+  end;
+  FWorkflowToolCombo.ItemIndex := Idx;
+  { the palette always creates with FRESH default args -- WorkflowToolChange
+    leaves the args memo alone while a node is selected, and inheriting the
+    selected node's args here would be a surprise }
+  if FWorkflowNodeIdEdit <> nil then
+    FWorkflowNodeIdEdit.Text := '';
+  if FWorkflowNodeArgsMemo <> nil then
+    FWorkflowNodeArgsMemo.Lines.Text := WorkflowDefaultArgs(Tool);
+  WorkflowAddNodeClick(nil);
+  { AddNodeClick leaves the generated id in the id edit; drop that node at
+    the summon point instead of the auto-layout slot }
+  NewId := Trim(FWorkflowNodeIdEdit.Text);
+  if (NewId <> '') and (FWorkflowNodePositions <> nil) then
+    FWorkflowNodePositions.AddOrSetValue(NewId, Drop);
+  if FWorkflowCanvas <> nil then
+    FWorkflowCanvas.Repaint;
+end;
+
+procedure TMasterDetailForm.WorkflowDuplicateSelectedNode;
+var
+  Args: string;
+  Item: TListBoxItem;
+  N: Integer;
+  NewId: string;
+  NewItem: TListBoxItem;
+  OldId: string;
+  Pos: TPointF;
+  Tool: string;
+begin
+  if (FWorkflowNodesList = nil) or (FWorkflowNodesList.Selected = nil) then
+  begin
+    SetStatus('select a node to duplicate');
+    Exit;
+  end;
+  Item := FWorkflowNodesList.Selected;
+  OldId := WorkflowTextId(Item.Text);
+  Tool := WorkflowTextTool(Item.Text);
+  if Tool = '' then
+    Tool := 'tool';
+  Args := Item.TagString;
+  N := 2;
+  NewId := OldId + '2';
+  while WorkflowNodeIndexById(NewId) >= 0 do
+  begin
+    Inc(N);
+    NewId := OldId + N.ToString;
+  end;
+  NewItem := AddCardListItem(FWorkflowNodesList, NewId, Tool + ' node', Args,
+    58, True);
+  NewItem.Text := NewId + ' | ' + Tool;
+  if (FWorkflowNodePositions <> nil) and
+    FWorkflowNodePositions.TryGetValue(OldId, Pos) then
+    FWorkflowNodePositions.AddOrSetValue(NewId,
+      PointF(Pos.X + WF_GRID, Pos.Y + WF_GRID));
+  FWorkflowNodesList.ItemIndex := FWorkflowNodesList.Count - 1;
+  WorkflowRenderGraph;
+  SetStatus('duplicated ' + OldId + ' as ' + NewId);
+end;
+
 procedure TMasterDetailForm.WorkflowCanvasMouseDown(Sender: TObject;
   Button: TMouseButton; Shift: TShiftState; X, Y: Single);
 var
   Box: TPaintBox;
-  Dist: Single;
   EdgeText: string;
   FromId: string;
-  FromIndex: Integer;
   I: Integer;
-  LenSq: Single;
   MidY: Single;
   NodeItem: TListBoxItem;
   P: Integer;
-  P1: TPointF;
-  P2: TPointF;
   PortR: TRectF;
   R: TRectF;
-  RFrom: TRectF;
-  RTo: TRectF;
-  T: Single;
   ToId: string;
-  ToIndex: Integer;
 begin
   if not (Sender is TPaintBox) or (FWorkflowNodesList = nil) then
     Exit;
   Box := TPaintBox(Sender);
+  WorkflowHidePalette;
   FWorkflowDraggingId := '';
   FWorkflowConnectFromId := '';
-  if FWorkflowEdgesList <> nil then
-    for I := 0 to FWorkflowEdgesList.Count - 1 do
-    begin
-      EdgeText := FWorkflowEdgesList.ListItems[I].Text;
-      P := Pos(' -> ', EdgeText);
-      if P <= 0 then
-        Continue;
-      FromId := Copy(EdgeText, 1, P - 1);
-      ToId := Copy(EdgeText, P + 4, MaxInt);
-      FromIndex := WorkflowNodeIndexById(FromId);
-      ToIndex := WorkflowNodeIndexById(ToId);
-      if (FromIndex < 0) or (ToIndex < 0) then
-        Continue;
-      RFrom := WorkflowCanvasNodeRect(FromIndex, Box.Width);
-      RTo := WorkflowCanvasNodeRect(ToIndex, Box.Width);
-      P1 := PointF(RFrom.Right, (RFrom.Top + RFrom.Bottom) / 2);
-      P2 := PointF(RTo.Left, (RTo.Top + RTo.Bottom) / 2);
-      LenSq := Sqr(P2.X - P1.X) + Sqr(P2.Y - P1.Y);
-      if LenSq <= 0 then
-        Continue;
-      T := Max(0, Min(1, ((X - P1.X) * (P2.X - P1.X) +
-        (Y - P1.Y) * (P2.Y - P1.Y)) / LenSq));
-      Dist := Sqrt(Sqr(X - (P1.X + T * (P2.X - P1.X))) +
-        Sqr(Y - (P1.Y + T * (P2.Y - P1.Y))));
-      if Dist <= 8 then
-      begin
-        FWorkflowSelectedEdge := EdgeText;
-        FWorkflowEdgesList.ItemIndex := I;
-        if FWorkflowEdgeFromEdit <> nil then
-          FWorkflowEdgeFromEdit.Text := FromId;
-        if FWorkflowEdgeToEdit <> nil then
-          FWorkflowEdgeToEdit.Text := ToId;
-        SetStatus('selected edge ' + EdgeText);
-        Box.Repaint;
-        Exit;
-      end;
-    end;
+  { wires are beziers now, so the hit test follows the curve }
+  I := WorkflowEdgeAtPoint(X, Y, Box.Width);
+  if I >= 0 then
+  begin
+    EdgeText := FWorkflowEdgesList.ListItems[I].Text;
+    P := Pos(' -> ', EdgeText);
+    FromId := Copy(EdgeText, 1, P - 1);
+    ToId := Copy(EdgeText, P + 4, MaxInt);
+    FWorkflowSelectedEdge := EdgeText;
+    FWorkflowEdgesList.ItemIndex := I;
+    if FWorkflowEdgeFromEdit <> nil then
+      FWorkflowEdgeFromEdit.Text := FromId;
+    if FWorkflowEdgeToEdit <> nil then
+      FWorkflowEdgeToEdit.Text := ToId;
+    SetStatus('selected edge ' + EdgeText);
+    Box.Repaint;
+    Exit;
+  end;
   FWorkflowSelectedEdge := '';
   { the INPUT/OUTPUT boxes drag like nodes -- they are citizens of the same
     space now, not chrome. They cannot be connect-sources, so only the
@@ -11883,8 +12273,16 @@ begin
       Exit;
     end;
   end;
-  { nothing hit: drag the SPACE. This is the gesture every node-graph tool
-    shares, and what turns a boxed diagram into a virtual canvas. }
+  { nothing hit: a double-click opens the add-node palette AT that spot
+    (n8n/ComfyUI's primary create gesture); a single click drags the SPACE.
+    ssDouble rides on the second MouseDown, which is why no OnDblClick
+    handler is needed -- and it carries the coordinates OnDblClick lacks. }
+  if ssDouble in Shift then
+  begin
+    FWorkflowPanning := False;
+    WorkflowShowPalette(PointF(X, Y));
+    Exit;
+  end;
   FWorkflowPanning := True;
   FWorkflowPanMouse := PointF(X, Y);
   FWorkflowPanOrigin := FWorkflowPan;
@@ -11894,6 +12292,8 @@ procedure TMasterDetailForm.WorkflowCanvasMouseMove(Sender: TObject;
   Shift: TShiftState; X, Y: Single);
 var
   Box: TPaintBox;
+  HoverIdx: Integer;
+  HoverText: string;
   Pos: TPointF;
 begin
   if not (Sender is TPaintBox) then
@@ -11913,7 +12313,20 @@ begin
     Exit;
   end;
   if (FWorkflowDraggingId = '') or (FWorkflowNodePositions = nil) then
+  begin
+    { idle: track which wire is under the cursor so it can light up --
+      repaint only on a state CHANGE, so plain mouse travel stays free }
+    HoverText := '';
+    HoverIdx := WorkflowEdgeAtPoint(X, Y, Box.Width);
+    if (HoverIdx >= 0) and (FWorkflowEdgesList <> nil) then
+      HoverText := FWorkflowEdgesList.ListItems[HoverIdx].Text;
+    if not SameText(HoverText, FWorkflowHoverEdge) then
+    begin
+      FWorkflowHoverEdge := HoverText;
+      Box.Repaint;
+    end;
     Exit;
+  end;
   { LOGICAL position, unclamped: the old Min(Box.Width - 116, ...) was the
     wall that made the canvas feel boxed in -- there IS no edge now, and
     fit-view is the way back if something is pushed far out }
@@ -11927,6 +12340,7 @@ procedure TMasterDetailForm.WorkflowCanvasMouseUp(Sender: TObject;
   Button: TMouseButton; Shift: TShiftState; X, Y: Single);
 var
   Box: TPaintBox;
+  Pos: TPointF;
   TargetIndex: Integer;
   TargetId: string;
 begin
@@ -11957,6 +12371,11 @@ begin
 
   if FWorkflowDraggingId <> '' then
   begin
+    { snap the DROP to the grid (drag itself stays free -- snapping mid-drag
+      makes the node stutter under the cursor) }
+    if (FWorkflowNodePositions <> nil) and
+      FWorkflowNodePositions.TryGetValue(FWorkflowDraggingId, Pos) then
+      FWorkflowNodePositions.AddOrSetValue(FWorkflowDraggingId, WfSnap(Pos));
     FWorkflowDraggingId := '';
     WorkflowRenderGraph;
   end;
@@ -12438,6 +12857,12 @@ begin
     FWorkflowEdgesList.Clear;
     if FWorkflowNodePositions <> nil then
       FWorkflowNodePositions.Clear;
+    { run badges belong to a RUN, not the freshly loaded spec }
+    if FWorkflowRunNodeOk <> nil then
+      FWorkflowRunNodeOk.Clear;
+    if FWorkflowRunNodePreview <> nil then
+      FWorkflowRunNodePreview.Clear;
+    FWorkflowHoverEdge := '';
     { restore the view AFTER the wipe -- an earlier draft restored first and
       the Clear silently discarded it. Missing ui (older files, web saves)
       keeps the defaults, which reproduce the old fixed layout. }
@@ -13136,6 +13561,7 @@ var
   Detail: string;
   I: Integer;
   Obj: TJSONObject;
+  P: Integer;
   Root: TJSONValue;
   Row: TJSONObject;
   Title: string;
@@ -13144,6 +13570,12 @@ begin
   if FWorkflowRunResultsList = nil then
     Exit;
   FWorkflowRunResultsList.Clear;
+  { per-node canvas badges reset with every run render -- stale ticks from
+    the previous run would claim nodes this run never reached }
+  if FWorkflowRunNodeOk <> nil then
+    FWorkflowRunNodeOk.Clear;
+  if FWorkflowRunNodePreview <> nil then
+    FWorkflowRunNodePreview.Clear;
   if FWorkflowRunStatusLabel <> nil then
     FWorkflowRunStatusLabel.Text := 'Run results - HTTP ' + Status.ToString;
 
@@ -13199,6 +13631,22 @@ begin
             Detail := IfThen(JsonAsBool(Row, 'ok'), 'OK', 'No result text');
           AddCardListItem(FWorkflowRunResultsList, Title, Copy(Detail, 1, 220),
             Row.ToJSON, 64, JsonAsBool(Row, 'ok'));
+          { feed the canvas badges: status + the first line of output }
+          if (JsonAsString(Row, 'node') <> '') and
+            (FWorkflowRunNodeOk <> nil) then
+          begin
+            FWorkflowRunNodeOk.AddOrSetValue(JsonAsString(Row, 'node'),
+              JsonAsBool(Row, 'ok'));
+            Detail := Trim(Detail);
+            P := Pos(#10, Detail);
+            if P > 0 then
+              Detail := Trim(Copy(Detail, 1, P - 1));
+            if Length(Detail) > 34 then
+              Detail := Copy(Detail, 1, 31) + '...';
+            if FWorkflowRunNodePreview <> nil then
+              FWorkflowRunNodePreview.AddOrSetValue(JsonAsString(Row, 'node'),
+                Detail);
+          end;
         end;
     end;
     if FWorkflowRunResultsList.Count > 0 then
@@ -13209,6 +13657,8 @@ begin
   finally
     Root.Free;
   end;
+  if FWorkflowCanvas <> nil then
+    FWorkflowCanvas.Repaint;
 end;
 
 procedure TMasterDetailForm.WorkflowRenderGraph;
