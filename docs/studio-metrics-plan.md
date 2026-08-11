@@ -44,7 +44,19 @@ H_INPUT   = 28;      // TEdit/TComboBox inside a ROW_FORM
 PAD_PANEL : 12,10,12,12   // tab-level panels
 PAD_CARD  : 8,6,8,6       // list cards
 PAD_BAR   : 8,4,8,4       // toolbars
+
+{ button widths — TEXT buttons only }
+BTN_W_S = 64;  BTN_W_M = 88;  BTN_W_L = 104;
 ```
+
+**ICON_BTN_W (34) is not part of this scale and does not move.** Icon-only
+buttons are already sized by `SetIconButton`, and `SetButtonWidth`
+deliberately ignores them — that guard is what stopped the layout pass
+resetting Params and Tools to text widths. So the width tokens above apply
+to buttons that still carry a caption; anywhere a control is icon-only,
+34px stands and the correct change is *no change*. Any plan line that reads
+"S-token width" for an already-iconified control is wrong: those keep
+ICON_BTN_W.
 
 Mechanics: helpers own application (`AddFormRow`, `AddToolbar`,
 `SetButtonWidth` already exists) so a new call site *cannot* pick its own
@@ -81,8 +93,11 @@ every field currently free-floats at a different width.
 snippet TXT_CAPTION muted); upload row de-crowded (Sources/Upload/Search on
 one bar with tokens).
 
-**Files** — toolbar `ROW_BAR`; hex pager buttons S-token width; the
-path edit full-width `H_INPUT`; detail/preview headers via `BuildDetailPane`.
+**Files** — toolbar `ROW_BAR`; the path edit full-width `H_INPUT`;
+detail/preview headers via `BuildDetailPane`. The hex pager
+(First/Prev/Next/Last) is already icon-only at ICON_BTN_W and stays there —
+`SetButtonWidth` ignores iconified buttons by design, so assigning a text
+width token would be a silent no-op. Its only change is the row rhythm.
 
 **MCP** — *Server*: `AddFormRow` (name/url/enabled). *Tool*: schema form
 rows are generated — point the generator at `AddFormRow` so generated and
@@ -99,8 +114,8 @@ keep the warning tint; `====` memos out.
 five inspectors × free-floated fields); node/edge lists to `ROW_LIST`;
 run-inputs memo keeps memo (it's real JSON editing).
 
-**Vault** — rows to `ROW_LIST` with eye/trash at S-width; add form to
-`AddFormRow`.
+**Vault** — rows to `ROW_LIST`, eye/trash stay at ICON_BTN_W (icon-only);
+add form to `AddFormRow`.
 
 **Logs** — toolbar `ROW_BAR`; body stays a memo (it *is* a log); status
 line TXT_CAPTION.
@@ -108,8 +123,9 @@ line TXT_CAPTION.
 **Stats** — numerals TXT_DISPLAY, labels TXT_CAPTION; summary cards on one
 fixed 3-up grid at `ROW_LIST`×1.4; token tables right-align numerics.
 
-**Checkpoints** — pager cluster S-width segment; detail via
-`BuildDetailPane` (turn/timestamp/files as rows, not ASCII).
+**Checkpoints** — pager cluster keeps ICON_BTN_W (icon-only), grouped as
+one segment; detail via `BuildDetailPane` (turn/timestamp/files as rows,
+not ASCII).
 
 **Relay** — status metrics same card treatment as Stats; worker form to
 `AddFormRow`; token row gets the eye toggle.
