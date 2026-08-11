@@ -4176,6 +4176,7 @@ function wfCreateNode(tool, x, y) {
   const args =
     tool === "llm"       ? '{\n  "provider": "",\n  "model": "",\n  "prompt": "{{inputs.text}}"\n}' :
     tool === "replicate" ? '{\n  "version": "",\n  "input": { "prompt": "{{inputs.prompt}}" }\n}' : "{}";
+  delete wfRunStatus[id];   // a brand-new node has never run
   wf.nodes.push({ id, tool, args, x, y });
   wfRender(); wfSelect(id);
 }
@@ -4233,7 +4234,12 @@ function wfDuplicateSel() {
   const n = wf.nodes.find(x => x.id === wf.sel); if (!n) return;
   let id = n.id + "2", k = 2;
   while (wf.nodes.some(x => x.id === id)) id = n.id + (++k);
-  wf.nodes.push({ id, tool: n.tool, args: n.args, x: n.x + WF_GRID, y: n.y + WF_GRID });
+  /* walk the diagonal until a slot is FREE -- duplicating the same source
+     twice must not stack the copies into one apparent node */
+  let x = n.x + WF_GRID, y = n.y + WF_GRID;
+  while (wf.nodes.some(m => m.x === x && m.y === y)) { x += WF_GRID; y += WF_GRID; }
+  delete wfRunStatus[id];   // a fresh copy has never run
+  wf.nodes.push({ id, tool: n.tool, args: n.args, x, y });
   wfRender(); wfSelect(id);
 }
 
@@ -4268,6 +4274,9 @@ function wfKeydown(e) {
 function wfDeleteNode(id) {
   wf.nodes = wf.nodes.filter(n => n.id !== id);
   wf.edges = wf.edges.filter(e => e.from !== id && e.to !== id);
+  /* the run result dies with the node -- a later node that happens to get
+     the same generated id must not inherit a badge it never earned */
+  delete wfRunStatus[id];
   if (wf.sel === id) wfSelect(null);
   wfRender();
 }
@@ -4277,6 +4286,8 @@ function wfRenameSel() {
   const nid = document.getElementById("wfInspId").value.trim();
   if (!nid || (nid !== n.id && wf.nodes.some(x => x.id === nid))) { document.getElementById("wfInspId").value = n.id; return; }
   wf.edges.forEach(e => { if (e.from === n.id) e.from = nid; if (e.to === n.id) e.to = nid; });
+  /* same node, new name: its badge travels with it */
+  if (wfRunStatus[n.id]) { wfRunStatus[nid] = wfRunStatus[n.id]; delete wfRunStatus[n.id]; }
   n.id = nid; wf.sel = nid; wfRender();
 }
 

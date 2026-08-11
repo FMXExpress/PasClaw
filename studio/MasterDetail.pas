@@ -732,6 +732,7 @@ type
     procedure WorkflowPaletteItemClick(const Sender: TCustomListBox;
       const Item: TListBoxItem);
     procedure WorkflowDuplicateSelectedNode;
+    function WorkflowPositionTaken(const P: TPointF): Boolean;
     procedure OpenFilesTabAt(const Path: string);
     function WorkflowCanvasNodeRect(Index: Integer; CanvasWidth: Single): TRectF;
     procedure WorkflowEnsureNodePosition(const NodeId: string; Index: Integer;
@@ -10712,6 +10713,12 @@ begin
   Item := AddCardListItem(FWorkflowNodesList, Id, Tool + ' node', Args, 58,
     True);
   Item.Text := Id + ' | ' + Tool;
+  { a brand-new node has never run -- shed any badge a same-named
+    predecessor left behind }
+  if FWorkflowRunNodeOk <> nil then
+    FWorkflowRunNodeOk.Remove(Id);
+  if FWorkflowRunNodePreview <> nil then
+    FWorkflowRunNodePreview.Remove(Id);
   FWorkflowNodesList.ItemIndex := FWorkflowNodesList.Count - 1;
   { Do NOT seed a position here. WorkflowEnsureNodePosition (reached via
     WorkflowCanvasNodeRect on the next paint, which WorkflowRenderGraph
@@ -12171,13 +12178,39 @@ begin
   NewItem := AddCardListItem(FWorkflowNodesList, NewId, Tool + ' node', Args,
     58, True);
   NewItem.Text := NewId + ' | ' + Tool;
+  { a fresh copy has never run }
+  if FWorkflowRunNodeOk <> nil then
+    FWorkflowRunNodeOk.Remove(NewId);
+  if FWorkflowRunNodePreview <> nil then
+    FWorkflowRunNodePreview.Remove(NewId);
   if (FWorkflowNodePositions <> nil) and
     FWorkflowNodePositions.TryGetValue(OldId, Pos) then
-    FWorkflowNodePositions.AddOrSetValue(NewId,
-      PointF(Pos.X + WF_GRID, Pos.Y + WF_GRID));
+  begin
+    { walk the diagonal until a slot is FREE -- duplicating the same source
+      twice must not stack the copies into one apparent node }
+    Pos := PointF(Pos.X + WF_GRID, Pos.Y + WF_GRID);
+    while WorkflowPositionTaken(Pos) do
+      Pos := PointF(Pos.X + WF_GRID, Pos.Y + WF_GRID);
+    FWorkflowNodePositions.AddOrSetValue(NewId, Pos);
+  end;
   FWorkflowNodesList.ItemIndex := FWorkflowNodesList.Count - 1;
   WorkflowRenderGraph;
   SetStatus('duplicated ' + OldId + ' as ' + NewId);
+end;
+
+function TMasterDetailForm.WorkflowPositionTaken(const P: TPointF): Boolean;
+{ True when some node/IO box already sits (within half a grid step) at the
+  logical point -- the free-slot probe for duplicate placement. }
+var
+  Pair: TPair<string, TPointF>;
+begin
+  Result := False;
+  if FWorkflowNodePositions = nil then
+    Exit;
+  for Pair in FWorkflowNodePositions do
+    if (Abs(Pair.Value.X - P.X) < WF_GRID / 2) and
+      (Abs(Pair.Value.Y - P.Y) < WF_GRID / 2) then
+      Exit(True);
 end;
 
 procedure TMasterDetailForm.WorkflowCanvasMouseDown(Sender: TObject;
@@ -12399,6 +12432,8 @@ var
   NewId: string;
   OldId: string;
   P: Integer;
+  RunOk: Boolean;
+  RunPreview: string;
   ToId: string;
   Tool: string;
 begin
@@ -12437,6 +12472,19 @@ begin
       FWorkflowNodePositions.Remove(OldId);
       FWorkflowNodePositions.AddOrSetValue(NewId, FWorkflowDragOffset);
     end;
+    { same node, new name: its run badge travels with it }
+    if (FWorkflowRunNodeOk <> nil) and
+      FWorkflowRunNodeOk.TryGetValue(OldId, RunOk) then
+    begin
+      FWorkflowRunNodeOk.Remove(OldId);
+      FWorkflowRunNodeOk.AddOrSetValue(NewId, RunOk);
+    end;
+    if (FWorkflowRunNodePreview <> nil) and
+      FWorkflowRunNodePreview.TryGetValue(OldId, RunPreview) then
+    begin
+      FWorkflowRunNodePreview.Remove(OldId);
+      FWorkflowRunNodePreview.AddOrSetValue(NewId, RunPreview);
+    end;
     for I := 0 to FWorkflowEdgesList.Count - 1 do
     begin
       EdgeItem := FWorkflowEdgesList.ListItems[I];
@@ -12473,6 +12521,12 @@ begin
   Item.Free;
   if FWorkflowNodePositions <> nil then
     FWorkflowNodePositions.Remove(Id);
+  { the run result dies with the node -- a later node that happens to get
+    the same generated id must not inherit a badge it never earned }
+  if FWorkflowRunNodeOk <> nil then
+    FWorkflowRunNodeOk.Remove(Id);
+  if FWorkflowRunNodePreview <> nil then
+    FWorkflowRunNodePreview.Remove(Id);
   for I := FWorkflowEdgesList.Count - 1 downto 0 do
   begin
     EdgeItem := FWorkflowEdgesList.ListItems[I];
