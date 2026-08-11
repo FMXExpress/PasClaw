@@ -35,6 +35,20 @@ import sys
 
 TARGET = "studio/PasclawLight.style"
 
+# FMX named colours (TAlphaColorRec) that appear in this book. They are just
+# literals under another spelling, and skipping them left 16 claWhite and 10
+# claWhitesmoke references pure white and cool while --check happily reported
+# the file fully retoned. Only the 'cla' prefix is a colour: 'clearbutton' and
+# 'clearingeditstyle' are STYLE NAMES and must not be touched.
+NAMED = {
+    "claBlack": "FF000000",
+    "claWhite": "FFFFFFFF",
+    "claWhitesmoke": "FFF5F5F5",
+    "claGainsboro": "FFDCDCDC",
+    "claGray": "FF808080",
+    "claNull": "00000000",
+}
+
 # Classification must be a FIXED POINT: the output of a rule has to fall back
 # into the same rule, or a second run would keep transforming. Neutrals land on
 # a warm hue outside the accent band, and accents land inside it, so both are
@@ -132,23 +146,43 @@ def retone(hexstr):
 
 
 def transform(text):
+    """Retone every colour, however it is spelled. Returns (text, map, unknown)."""
     seen = {}
+    unknown = set()
 
-    def repl(m):
-        src = m.group(1)
+    def repl_hex(m):
+        src = m.group(1).upper()
         if src not in seen:
             seen[src] = retone(src)
         return "x" + seen[src]
 
-    return re.sub(r"\bx([0-9A-Fa-f]{8})\b", repl, text), seen
+    def repl_named(m):
+        name = m.group(0)
+        hexval = NAMED.get(name)
+        if hexval is None:
+            unknown.add(name)
+            return name
+        out = retone(hexval)
+        if out == hexval:
+            # identity (claBlack, claNull): leave the name alone rather than
+            # churn it into a literal -- gen-studio-icons.py writes claBlack
+            # into this same file, and rewriting it here would set the two
+            # generators fighting over the same bytes.
+            return name
+        seen[hexval] = out
+        return "x" + out
+
+    text = re.sub(r"\bx([0-9A-Fa-f]{8})\b", repl_hex, text)
+    text = re.sub(r"\bcla[A-Za-z]\w*\b", repl_named, text)
+    return text, seen, unknown
 
 
 def main(argv):
     text = open(TARGET, encoding="utf-8", errors="replace").read()
-    out, mapping = transform(text)
+    out, mapping, unknown = transform(text)
 
     # idempotence: the output must be a fixed point of the same transform
-    again, _ = transform(out)
+    again, _, _ = transform(out)
     if again != out:
         print("NOT IDEMPOTENT -- retoning twice changes the file")
         return 1
@@ -159,6 +193,14 @@ def main(argv):
         for s, d in rows:
             print("x%-9s -> x%-9s" % (s, d))
         print("%d distinct colours, %d changed" % (len(mapping), len(rows)))
+
+    if unknown:
+        # an unrecognised colour constant would pass straight through and sit
+        # outside the palette unnoticed, which is the exact failure this fix
+        # is for -- refuse rather than half-retone.
+        print("unknown FMX colour constants (add to NAMED): %s"
+              % ", ".join(sorted(unknown)))
+        return 1
 
     if "--check" in argv:
         if out != text:

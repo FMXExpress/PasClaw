@@ -260,7 +260,7 @@ object TStyleContainer
           Offset = 0.000000000000000000
         end
         item
-          Color = claWhite
+          Color = xFFF9F8F6
           Offset = 1.000000000000000000
         end>
       Locked = True
@@ -487,7 +487,7 @@ object TStyleContainer
     Size.Width = 101.000000000000000000
     Size.Height = 27.000000000000000000
     Size.PlatformDefault = False
-    Stroke.Color = claWhite
+    Stroke.Color = xFFF9F8F6
     Visible = False
     object TSizeGrip
       StyleName = 'sizegrip'
@@ -760,7 +760,7 @@ object TStyleContainer
       Size.Width = 131.000000000000000000
       Size.Height = 92.000000000000000000
       Size.PlatformDefault = False
-      Stroke.Color = claGainsboro
+      Stroke.Color = xFFE2DED6
       XRadius = 4.000000000000000000
       YRadius = 4.000000000000000000
       object TRectangle
@@ -777,7 +777,7 @@ object TStyleContainer
         Size.Width = 129.000000000000000000
         Size.Height = 89.000000000000000000
         Size.PlatformDefault = False
-        Stroke.Color = claWhite
+        Stroke.Color = xFFF9F8F6
         XRadius = 3.000000000000000000
         YRadius = 3.000000000000000000
       end
@@ -827,7 +827,7 @@ object TStyleContainer
         Fill.Kind = Gradient
         Fill.Gradient.Points = <
           item
-            Color = claWhitesmoke
+            Color = xFFF3F2EE
             Offset = 0.000000000000000000
           end
           item
@@ -853,7 +853,7 @@ object TStyleContainer
               Offset = 0.000000000000000000
             end
             item
-              Color = claWhitesmoke
+              Color = xFFF3F2EE
               Offset = 1.000000000000000000
             end>
           HitTest = False
@@ -1027,7 +1027,7 @@ object TStyleContainer
           Offset = 0.000000000000000000
         end
         item
-          Color = claWhite
+          Color = xFFF9F8F6
           Offset = 1.000000000000000000
         end>
       Locked = True
@@ -1039,7 +1039,7 @@ object TStyleContainer
       object TColorAnimation
         Duration = 0.000000999999997475
         PropertyName = 'Fill.Color'
-        StartValue = claWhite
+        StartValue = xFFF9F8F6
         StopValue = xFFF3F2EE
         Trigger = 'IsSelected=false'
       end
@@ -1108,7 +1108,7 @@ object TStyleContainer
           Offset = 0.000000000000000000
         end
         item
-          Color = claWhite
+          Color = xFFF9F8F6
           Offset = 1.000000000000000000
         end>
       Locked = True
@@ -1121,7 +1121,7 @@ object TStyleContainer
       object TColorAnimation
         Duration = 0.000000999999997475
         PropertyName = 'Fill.Color'
-        StartValue = claWhite
+        StartValue = xFFF9F8F6
         StopValue = xFFF3F2EE
         Trigger = 'IsSelected=false'
       end
@@ -1414,7 +1414,7 @@ object TStyleContainer
           object TColorAnimation
             Duration = 0.100000001490116100
             PropertyName = 'Fill.Color'
-            StartValue = claWhite
+            StartValue = xFFF9F8F6
             StopValue = xFF3B6EA8
             Trigger = 'IsChecked=true'
           end
@@ -1422,7 +1422,7 @@ object TStyleContainer
             Duration = 0.100000001490116100
             PropertyName = 'Fill.Color'
             StartValue = xFF3B6EA8
-            StopValue = claWhite
+            StopValue = xFFF9F8F6
             Trigger = 'IsChecked=false'
           end
         end
@@ -1900,7 +1900,7 @@ object TStyleContainer
           Duration = 0.200000002980232200
           PropertyName = 'Fill.Color'
           StartValue = xFF938C7F
-          StopValue = claWhite
+          StopValue = xFFF9F8F6
           Trigger = 'IsSelected=true'
           TriggerInverse = 'IsSelected=False'
         end
@@ -1999,7 +1999,7 @@ object TStyleContainer
         Size.Width = 121.000000000000000000
         Size.Height = 8.000000000000000000
         Size.PlatformDefault = False
-        Stroke.Color = claWhite
+        Stroke.Color = xFFF9F8F6
       end
     end
     object TRectangle
@@ -2031,7 +2031,7 @@ object TStyleContainer
         Size.Width = 8.000000000000000000
         Size.Height = 5.000000953674316000
         Size.PlatformDefault = False
-        Stroke.Color = claWhite
+        Stroke.Color = xFFF9F8F6
       end
     end
     object TThumb
@@ -2092,7 +2092,7 @@ object TStyleContainer
         Fill.Kind = Gradient
         Fill.Gradient.Points = <
           item
-            Color = claWhitesmoke
+            Color = xFFF3F2EE
             Offset = 0.000000000000000000
           end
           item
@@ -2596,7 +2596,7 @@ object TStyleContainer
         Fill.Kind = Gradient
         Fill.Gradient.Points = <
           item
-            Color = claWhitesmoke
+            Color = xFFF3F2EE
             Offset = 0.000000000000000000
           end
           item
@@ -2671,7 +2671,7 @@ object TStyleContainer
         Duration = 0.200000002980232200
         PropertyName = 'Fill.Color'
         StartValue = xFF8C8578
-        StopValue = claWhite
+        StopValue = xFFF9F8F6
         Trigger = 'IsFocused=true'
         TriggerInverse = 'IsFocused=False'
       end
@@ -4502,7 +4502,7 @@ object TStyleContainer
       Size.Width = 79.000000000000000000
       Size.Height = 14.000000000000000000
       Size.PlatformDefault = False
-      Stroke.Color = claGray
+      Stroke.Color = xFF8A8376
       XRadius = 3.000000000000000000
       YRadius = 3.000000000000000000
     end
@@ -4544,7 +4544,7 @@ object TStyleContainer
       Fill.Kind = Gradient
       Fill.Gradient.Points = <
         item
-          Color = claWhitesmoke
+          Color = xFFF3F2EE
           Offset = 0.000000000000000000
         end
         item
@@ -4622,7 +4622,7 @@ object TStyleContainer
         Fill.Kind = Gradient
         Fill.Gradient.Points = <
           item
-            Color = claWhitesmoke
+            Color = xFFF3F2EE
             Offset = 0.000000000000000000
           end
           item
@@ -5039,7 +5039,7 @@ object TStyleContainer
       Fill.Kind = Gradient
       Fill.Gradient.Points = <
         item
-          Color = claWhite
+          Color = xFFF9F8F6
           Offset = 0.000000000000000000
         end
         item
@@ -5073,7 +5073,7 @@ object TStyleContainer
       Fill.Kind = Gradient
       Fill.Gradient.Points = <
         item
-          Color = claWhite
+          Color = xFFF9F8F6
           Offset = 0.000000000000000000
         end
         item
@@ -5367,7 +5367,7 @@ object TStyleContainer
         Fill.Kind = Gradient
         Fill.Gradient.Points = <
           item
-            Color = claWhitesmoke
+            Color = xFFF3F2EE
             Offset = 0.000000000000000000
           end
           item
@@ -5455,7 +5455,7 @@ object TStyleContainer
         Fill.Kind = Gradient
         Fill.Gradient.Points = <
           item
-            Color = claWhitesmoke
+            Color = xFFF3F2EE
             Offset = 0.000000000000000000
           end
           item
@@ -5651,7 +5651,7 @@ object TStyleContainer
       Fill.Kind = Gradient
       Fill.Gradient.Points = <
         item
-          Color = claWhitesmoke
+          Color = xFFF3F2EE
           Offset = 0.000000000000000000
         end
         item
@@ -6165,7 +6165,7 @@ object TStyleContainer
       Fill.Kind = Gradient
       Fill.Gradient.Points = <
         item
-          Color = claWhitesmoke
+          Color = xFFF3F2EE
           Offset = 0.000000000000000000
         end
         item
@@ -6534,7 +6534,7 @@ object TStyleContainer
       Size.Width = 52.000000000000000000
       Size.Height = 51.000000000000000000
       Size.PlatformDefault = False
-      Stroke.Color = claWhite
+      Stroke.Color = xFFF9F8F6
     end
     object TLayout
       StyleName = 'content'
