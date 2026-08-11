@@ -359,6 +359,7 @@ type
     FWorkflowHoverEdge: string;    { edge text under the cursor (idle hover) }
     FWorkflowRunNodeOk: TDictionary<string, Boolean>;
     FWorkflowRunNodePreview: TDictionary<string, string>;
+    FWorkflowSubTabs: TTabControl;  { Designer | Settings, for + Node }
     FWorkflowPalettePanel: TRectangle;
     FWorkflowPaletteEdit: TEdit;
     FWorkflowPaletteList: TListBox;
@@ -733,7 +734,9 @@ type
     procedure WorkflowPaletteItemClick(const Sender: TCustomListBox;
       const Item: TListBoxItem);
     procedure WorkflowDuplicateSelectedNode;
+    procedure WorkflowAddNodeToolbarClick(Sender: TObject);
     function WorkflowPositionTaken(const P: TPointF): Boolean;
+    function WorkflowFreeSlot(const P: TPointF): TPointF;
     procedure OpenFilesTabAt(const Path: string);
     function WorkflowCanvasNodeRect(Index: Integer; CanvasWidth: Single): TRectF;
     procedure WorkflowEnsureNodePosition(const NodeId: string; Index: Integer;
@@ -6988,6 +6991,21 @@ begin
   Btn.OnClick := WorkflowFitViewClick;
   SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
+  { The one control this tab was missing. Node CREATION lived only on the
+    Settings sub-tab (the Tool combo + Add button are parented there), so the
+    Designer -- the tab that opens by default, with the canvas on it -- had
+    no way to add a node at all. Reported as, exactly, "there is NO WAY TO
+    ADD A NODE". Creation belongs next to the canvas. }
+  Btn := TButton.Create(Self);
+  Btn.Parent := Row;
+  Btn.Align := TAlignLayout.Right;
+  Btn.Width := BTN_W_M;
+  Btn.Text := '+ Node';
+  Btn.Hint := 'Add a node to the canvas (or double-click the canvas)';
+  Btn.ShowHint := True;
+  Btn.OnClick := WorkflowAddNodeToolbarClick;
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
+
   FWorkflowPickerCombo := TComboBox.Create(Self);
   FWorkflowPickerCombo.Parent := Row;
   FWorkflowPickerCombo.Align := TAlignLayout.Left;
@@ -7003,6 +7021,7 @@ begin
   WorkflowTabs := TTabControl.Create(Self);
   WorkflowTabs.Parent := Panel;
   WorkflowTabs.Align := TAlignLayout.Client;
+  FWorkflowSubTabs := WorkflowTabs;
   SetControlMargins(WorkflowTabs, 0, GAP_S, 0, 0);
 
   DesignerTab := TTabItem.Create(Self);
@@ -7110,7 +7129,20 @@ begin
   Chrome.SendToBack;
 
   { Phase 4: the node editor packed a combo, an edit and three buttons onto
-    one row; nothing was labelled. Fields on the grid, actions on a bar. }
+    one row; nothing was labelled. Fields on the grid, actions on a bar.
+    NOTE the parent: these rows land on SettingsPane (the Settings sub-tab),
+    NOT the Designer beside them. That split is why the Designer needs its
+    own add-node affordance -- see the toolbar button and the canvas
+    double-click. Everything here edits the SELECTED node. }
+  Title := TLabel.Create(Self);
+  Title.Parent := SettingsPane;
+  Title.Align := TAlignLayout.Top;
+  Title.Height := ROW_TEXT;
+  Title.Text := 'Node editor';
+  Title.TextSettings.VertAlign := TTextAlign.Center;
+  StyleLabel(Title, UI_ACCENT, TXT_TITLE, True);
+  SetControlMargins(Title, 0, GAP_S, 0, 0);
+
   FWorkflowToolCombo := TComboBox.Create(Self);
   FWorkflowToolCombo.Items.Add('llm');
   FWorkflowToolCombo.Items.Add('replicate');
@@ -11399,6 +11431,7 @@ var
   FromIndex: Integer;
   GridX: Single;
   GridY: Single;
+  HasNodes: Boolean;
   I: Integer;
   NodeId: string;
   NodeText: string;
@@ -11451,18 +11484,15 @@ begin
   Canvas.DrawRect(RectF(R.Left + 0.5, R.Top + 0.5, R.Right - 0.5,
     R.Bottom - 0.5), 6, 6, [], 1);
 
-  if (FWorkflowNodesList = nil) or (FWorkflowNodesList.Count = 0) then
-  begin
-    Canvas.Fill.Color := ThemePaintColor(UI_MUTED);
-    Canvas.Font.Size := TXT_BODY;
-    Canvas.FillText(RectF(R.Left + 14, R.Top + 14, R.Right - 14,
-      R.Bottom - 14), 'Add workflow nodes to build a runnable graph', False, 1,
-      [], TTextAlign.Center, TTextAlign.Center);
-    Exit;
-  end;
+  { An empty workflow used to bail out HERE, before the INPUT/OUTPUT boxes
+    were drawn -- so a new workflow looked like an empty box with one line
+    of text, and the line said what to do without saying HOW. Draw the
+    boxes always: the interface is real before any node exists, and the
+    empty state now names both gestures that create one. }
+  HasNodes := (FWorkflowNodesList <> nil) and (FWorkflowNodesList.Count > 0);
 
   SelectedId := '';
-  if FWorkflowNodesList.Selected <> nil then
+  if HasNodes and (FWorkflowNodesList.Selected <> nil) then
     SelectedId := WorkflowTextId(FWorkflowNodesList.Selected.Text);
 
   { ---- derived INPUT / OUTPUT boxes (web UI parity) ----
@@ -11541,6 +11571,7 @@ begin
     Canvas.Stroke.Color := ThemePaintStroke(UI_ACCENT_DIM);
     Canvas.Stroke.Thickness := 1;
     Canvas.Stroke.Dash := TStrokeDash.Dash;
+    if HasNodes then
     for I := 0 to FWorkflowNodesList.Count - 1 do
     begin
       if FWorkflowNodesList.ListItems[I] = nil then
@@ -11559,6 +11590,19 @@ begin
     Canvas.Stroke.Dash := TStrokeDash.Solid;
   finally
     IoNames.Free;
+  end;
+
+  { the empty state: say HOW a node is created, in both the gestures that
+    do it, rather than only that one is needed }
+  if not HasNodes then
+  begin
+    Canvas.Fill.Color := ThemePaintColor(UI_MUTED);
+    Canvas.Font.Size := TXT_BODY;
+    Canvas.FillText(RectF(R.Left + 14, R.Top + 14, R.Right - 14, R.Bottom - 14),
+      'Double-click anywhere to add a node' + sLineBreak +
+      'or press "+ Node" on the toolbar above', True, 1, [],
+      TTextAlign.Center, TTextAlign.Center);
+    Exit;
   end;
 
   if FWorkflowEdgesList <> nil then
@@ -12142,7 +12186,12 @@ begin
     the summon point instead of the auto-layout slot }
   NewId := Trim(FWorkflowNodeIdEdit.Text);
   if (NewId <> '') and (FWorkflowNodePositions <> nil) then
-    FWorkflowNodePositions.AddOrSetValue(NewId, Drop);
+  begin
+    { drop the auto-layout slot the render may already have seeded, so the
+      new node is not compared against ITSELF when hunting a free spot }
+    FWorkflowNodePositions.Remove(NewId);
+    FWorkflowNodePositions.AddOrSetValue(NewId, WorkflowFreeSlot(Drop));
+  end;
   if FWorkflowCanvas <> nil then
     FWorkflowCanvas.Repaint;
 end;
@@ -12199,6 +12248,19 @@ begin
   SetStatus('duplicated ' + OldId + ' as ' + NewId);
 end;
 
+procedure TMasterDetailForm.WorkflowAddNodeToolbarClick(Sender: TObject);
+{ The toolbar's add-node button: the discoverable twin of the double-click
+  gesture. It has to reach the Designer sub-tab first -- pressed from
+  Settings it would otherwise pop the palette over an off-screen canvas. }
+begin
+  if (FWorkflowSubTabs <> nil) and (FWorkflowSubTabs.TabIndex <> 0) then
+    FWorkflowSubTabs.TabIndex := 0;
+  if FWorkflowCanvas = nil then
+    Exit;
+  WorkflowShowPalette(PointF(FWorkflowCanvas.Width / 2,
+    FWorkflowCanvas.Height / 2));
+end;
+
 function TMasterDetailForm.WorkflowPositionTaken(const P: TPointF): Boolean;
 { True when some node/IO box already sits (within half a grid step) at the
   logical point -- the free-slot probe for duplicate placement. }
@@ -12212,6 +12274,16 @@ begin
     if (Abs(Pair.Value.X - P.X) < WF_GRID / 2) and
       (Abs(Pair.Value.Y - P.Y) < WF_GRID / 2) then
       Exit(True);
+end;
+
+function TMasterDetailForm.WorkflowFreeSlot(const P: TPointF): TPointF;
+{ Walk the diagonal from P until nothing is sitting there. The toolbar's
+  + Node always drops at the canvas centre, so without this the second one
+  would land exactly on the first and look like nothing happened. }
+begin
+  Result := P;
+  while WorkflowPositionTaken(Result) do
+    Result := PointF(Result.X + WF_GRID, Result.Y + WF_GRID);
 end;
 
 procedure TMasterDetailForm.WorkflowCanvasMouseDown(Sender: TObject;
