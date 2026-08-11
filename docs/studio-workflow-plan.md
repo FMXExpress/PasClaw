@@ -85,28 +85,34 @@ can find*, not text in a results pane.
 - Studio: an "Output folder" form row (grid, like the rest); run results
   panel links the folder so it opens in the Files tab.
 
-### P3 — wires that feel physical
+### P3 — wires that feel physical — ✅ built (Studio + web)
 - Bezier wires (cubic, horizontal tangents) instead of straight lines —
   every surveyed tool; it is most of why their graphs read as graphs.
+  (The web already had them; Studio's canvas now draws every wire — edges,
+  derived IO wires, the drag-feedback wire — through one `WorkflowDrawWire`.)
 - Drag from an output port shows the wire following the cursor from
-  mousedown (today the feedback wire only exists after a click); drop on a
-  node/port connects, drop on space cancels.
-- Hover highlights the wire + its endpoints; Del deletes the selected wire
-  (selection exists today).
+  mousedown; drop on a node/port connects, drop on space cancels. (Both
+  clients already had the live wire; Studio's is now a dashed bezier.)
+- Hover highlights the wire + its endpoints; Del deletes the selected wire.
+  Studio's hit test samples the same bezier the paint draws
+  (`WorkflowWireHit`), so selection and hover cannot disagree with pixels.
 
-### P4 — the node experience
-- Per-node status after a run: a small badge (ok / failed / skipped) from
-  the run result, and the first line of the node's output as a preview
-  under the node title — n8n/ComfyUI's single best affordance for
-  debugging without leaving the canvas.
+### P4 — the node experience — ✅ built (Studio + web)
+- Per-node status after a run: a badge dot (ok / failed) from the run
+  result, and the first line of the node's output as a preview under the
+  node — cleared on load/new, because badges belong to a run, not a spec.
 - Searchable add-node palette on double-click at the cursor (creates the
-  node AT that spot), replacing tool-combo + Add as the primary path (the
-  form remains for editing).
+  node AT that spot, snapped). One source of truth for what exists: the
+  same tool list the combo/select offers. The form remains for editing.
 
-### P5 — canvas conveniences
-- Snap-to-grid on drop (24px, the existing grid); box-select; Ctrl+D
-  duplicate; Del deletes selection (nodes today only via list); fit-view
-  keyboard (F). Zoom-to-cursor lands here once the P1 transform has soaked.
+### P5 — canvas conveniences — ✅ built except box-select (Studio + web)
+- Snap-to-grid on DROP (24px, the existing grid — mid-drag snapping
+  stutters, so the drag stays free); Ctrl+D duplicate (+1 grid offset);
+  Del deletes selection; fit-view on F. All keyboard shortcuts are inert
+  while focus is in a text field.
+- Box-select and zoom-to-cursor deliberately deferred: multi-selection
+  wants a selection-set model both canvases lack, and zoom multiplies
+  every rect through the transform — each is its own reviewable change.
 
 ### deferred, deliberately
 Minimap and subgraphs are real but heavy; neither unblocks daily use.
