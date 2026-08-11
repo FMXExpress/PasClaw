@@ -128,6 +128,12 @@ type
       REFUSES anything that escapes the workspace -- the value arrives from
       clients. }
     OutputDir: string;
+    { The editors' layout state (pan, IN/OUT box positions) as a raw JSON
+      object -- carried opaquely so the store's parse -> serialize round trip
+      (SaveWorkflow rebuilds the document from this record) cannot erase a
+      layout the client saved. The engine never interprets it; new UI fields
+      cost no engine change. Empty = absent. }
+    UiJSON: string;
     Inputs: array of TWorkflowInput;
     Outputs: array of TWorkflowOutput;
     Nodes: array of TWorkflowNode;
@@ -288,6 +294,8 @@ begin
     Spec.Name        := Trim(Root.GetStr('name', ''));
     Spec.Description := Root.GetStr('description', '');
     Spec.OutputDir   := Trim(Root.GetStr('output_dir', ''));
+    ArgsObj := Root.ChildObject('ui');
+    if ArgsObj <> nil then Spec.UiJSON := ArgsObj.ToJSON;
     if Spec.Id = '' then Spec.Id := Spec.Name;
     if Spec.Name = '' then begin Err := 'workflow: "name" is required'; Exit; end;
 
@@ -404,6 +412,9 @@ begin
     Root.PutStr('id', Spec.Id);
     Root.PutStr('name', Spec.Name);
     Root.PutStr('description', Spec.Description);
+    if Spec.OutputDir <> '' then Root.PutStr('output_dir', Spec.OutputDir);
+    { layout state, carried opaquely -- see the field's comment }
+    if Spec.UiJSON <> '' then Root.PutRaw('ui', Spec.UiJSON);
 
     Arr := TJsonArray.Create;
     for i := 0 to High(Spec.Inputs) do

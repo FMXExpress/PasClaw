@@ -61,10 +61,12 @@ can find*, not text in a results pane.
   follow them. They stay non-deletable (they are derived from the spec's
   inputs/outputs, as today).
 - **Persistence**: positions + pan saved *in the workflow JSON* under a
-  `ui` object (`ui.positions`, `ui.pan`) — the store round-trips unknown
-  fields today, so the gateway needs no change. Every surveyed tool saves
-  layout in the document; losing layout on reload is the single most
-  janky-feeling defect the tab has.
+  `ui` object. **Correction (Codex P1)**: the store does NOT round-trip
+  unknown fields — `SaveWorkflow` rebuilds the document from the typed
+  spec, so the engine now carries `ui` (and `output_dir`) explicitly as an
+  opaque field on `TWorkflowSpec`, pinned by a save/load round-trip test.
+  Every surveyed tool saves layout in the document; losing layout on
+  reload is the single most janky-feeling defect the tab has.
 - Fit-view button on the workflow toolbar (cheap, and the escape hatch for
   "I panned my graph off into space").
 

@@ -79,7 +79,7 @@ var
   Rel, Base, RunDir, Name, Val, Ext: string;
   Root: TJsonObject;
   Keys: TStringList;
-  i: Integer;
+  i, Suffix: Integer;
   SL: TStringList;
 begin
   Result := False;
@@ -96,9 +96,24 @@ begin
     Exit;
   end;
 
-  RunDir := IncludeTrailingPathDelimiter(Base) + RunStamp;
   try
-    ForceDirectories(RunDir);
+    ForceDirectories(Base);
+    { The run stamp has second resolution, so two runs in the same second
+      would select the SAME directory and interleave their files -- exactly
+      the clobbering the per-run subfolder exists to prevent. CreateDir is
+      the reservation: mkdir is atomic, it fails when the name is already
+      taken, and the loser walks to -2, -3, ... until a name is its own. }
+    RunDir := IncludeTrailingPathDelimiter(Base) + RunStamp;
+    Suffix := 1;
+    while not CreateDir(RunDir) do
+    begin
+      if not DirectoryExists(RunDir) then
+        raise Exception.Create('cannot create run directory ' + RunDir);
+      Inc(Suffix);
+      if Suffix > 10000 then
+        raise Exception.Create('run directory suffixes exhausted for ' + RunStamp);
+      RunDir := IncludeTrailingPathDelimiter(Base) + RunStamp + '-' + IntToStr(Suffix);
+    end;
     SL := TStringList.Create;
     try
       SL.Text := OutputJSON;

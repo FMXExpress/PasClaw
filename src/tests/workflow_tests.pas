@@ -367,6 +367,41 @@ begin
   Check(not IsSafeWorkflowId('../etc/passwd'), 'store: rejects path traversal id');
 end;
 
+{ The store REBUILDS the document from the typed spec (SaveWorkflow ->
+  WorkflowToJSON), so anything the parser drops is erased on every save.
+  That bit the editors' layout state once (Codex P1 on PR #513): pan and
+  IN/OUT positions saved under "ui" vanished on the next gateway round trip.
+  Pin the full editor payload -- ui, output_dir, node x/y -- through the
+  actual save/load seam, not just the serializer pair. }
+procedure TestEditorStateRoundTrip;
+const
+  WF_WITH_UI =
+    '{"id":"uiwf","name":"uiwf","output_dir":"art/renders",' +
+    '"ui":{"pan_x":-120,"pan_y":40,"in_x":8,"in_y":200,"out_x":640,"out_y":200},' +
+    '"nodes":[{"id":"gen","tool":"x","args":{},"x":260,"y":140}]}';
+var
+  Spec, Loaded: TWorkflowSpec;
+  Err: string;
+begin
+  Check(ParseWorkflow(WF_WITH_UI, Spec, Err), 'ui: parse (' + Err + ')');
+  Check(Spec.UiJSON <> '', 'ui: parser carries the ui object');
+  Check(Spec.OutputDir = 'art/renders', 'ui: output_dir parsed');
+  Check(SaveWorkflow(Spec, Err), 'ui: save (' + Err + ')');
+  Check(LoadWorkflow('uiwf', Loaded, Err), 'ui: load (' + Err + ')');
+  Check(Pos('"pan_x"', Loaded.UiJSON) > 0, 'ui: pan survives the store round trip');
+  Check(Pos('"in_x"', Loaded.UiJSON) > 0, 'ui: IO positions survive the store round trip');
+  Check(Loaded.OutputDir = 'art/renders', 'ui: output_dir survives the store round trip');
+  Check((Length(Loaded.Nodes) = 1) and (Loaded.Nodes[0].X = 260) and (Loaded.Nodes[0].Y = 140),
+        'ui: node x/y survive the store round trip');
+  { a spec with NO editor state must not grow the keys }
+  Check(Pos('"ui"', WorkflowToJSON(Loaded)) > 0, 'ui: serializer emits ui when present');
+  DeleteWorkflow('uiwf', Err);
+  Check(ParseWorkflow('{"name":"plain","nodes":[{"id":"a","tool":"x","args":{}}]}', Spec, Err),
+        'ui: plain parse (' + Err + ')');
+  Check(Pos('"ui"', WorkflowToJSON(Spec)) = 0, 'ui: absent state writes no ui key');
+  Check(Pos('"output_dir"', WorkflowToJSON(Spec)) = 0, 'ui: absent output_dir writes no key');
+end;
+
 { Declared outputs (the "Output box"): parse + round-trip + resolution. }
 procedure TestOutputs;
 var
@@ -489,7 +524,10 @@ end;
 procedure TestOutputWriting;
 var
   Spec: TWorkflowSpec;
-  Dir, Err: string;
+  Dir, Dir2, Err: string;
+  SL: TStringList;
+  SR: TSearchRec;
+  Found: Boolean;
 begin
   FillChar(Spec, SizeOf(Spec), 0);
   Spec.Id := 'wf-out-test';
@@ -509,6 +547,39 @@ begin
     'second run writes');
   Check(FileExists(IncludeTrailingPathDelimiter(Dir) + 'output.json'),
     'second run has its own folder');
+
+  { the stamp has second resolution, so two runs CAN share one -- each must
+    still get its own directory (Codex P2: same-second runs interleaved) }
+  Check(WriteRunOutputs(Spec, '{"story":"first"}', '20260811T111111', Dir, Err),
+    'same-stamp run 1 writes: ' + Err);
+  Check(WriteRunOutputs(Spec, '{"story":"second"}', '20260811T111111', Dir2, Err),
+    'same-stamp run 2 writes: ' + Err);
+  Check(Dir <> Dir2, 'same-stamp runs land in distinct dirs (' + Dir2 + ')');
+  Check(Pos('20260811T111111', Dir2) > 0, 'collision dir keeps the stamp prefix');
+  SL := TStringList.Create;
+  try
+    SL.LoadFromFile(IncludeTrailingPathDelimiter(Dir) + 'story.txt');
+    Check(Pos('first', SL.Text) > 0, 'first same-stamp run not clobbered');
+  finally
+    SL.Free;
+  end;
+
+  { end to end: an output NAMED like a traversal must land INSIDE the run
+    dir -- the sanitizer at the write site is the guard, so prove it there,
+    not only as a string property }
+  Check(WriteRunOutputs(Spec, '{"../../hostile":"gotcha"}',
+    '20260811T000003', Dir, Err), 'hostile-named output run writes: ' + Err);
+  Check(not FileExists(ExpandFileName(IncludeTrailingPathDelimiter(Dir) +
+    '../../hostile.txt')), 'no file escaped the run dir');
+  Found := False;
+  if FindFirst(IncludeTrailingPathDelimiter(Dir) + '*.txt', faAnyFile, SR) = 0 then
+  begin
+    repeat
+      if Pos('hostile', SR.Name) > 0 then Found := True;
+    until FindNext(SR) <> 0;
+    FindClose(SR);
+  end;
+  Check(Found, 'hostile name flattened into a file inside the run dir');
 
   { hostile output_dir refused }
   Spec.OutputDir := '../../outside';
@@ -540,6 +611,7 @@ begin
   TestDispatchRouting;
   TestRunMissingInput;
   TestStoreRoundTrip;
+  TestEditorStateRoundTrip;
   TestOutputs;
   TestLoop;
   TestLoopUntil;
