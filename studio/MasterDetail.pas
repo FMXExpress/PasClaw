@@ -877,6 +877,11 @@ const
     'moontoolbutton', 'sliderstoolbutton', 'suntoolbutton',
     'unlinkedtoolbutton');
   WF_IO_W = 104;
+  WF_IO_H = 46;      { the IO box's base height before its fields grow it }
+  { The painted size of a node box. The occupancy test measures with these,
+    so "is this slot free" can never drift from what is actually drawn. }
+  WF_NODE_W = 116;
+  WF_NODE_H = 42;
   WF_GUTTER = 128;
   { reserved position-dictionary ids for the movable INPUT/OUTPUT boxes --
     kept impossible as node ids (nodes are sanitised identifiers) }
@@ -11891,7 +11896,7 @@ begin
   { SCREEN rect: every consumer is paint or hit-testing, both of which live
     in screen space. The stored position stays logical. }
   P := WfToScreen(Pos);
-  Result := RectF(P.X, P.Y, P.X + 116, P.Y + 42);
+  Result := RectF(P.X, P.Y, P.X + WF_NODE_W, P.Y + WF_NODE_H);
 end;
 
 procedure TMasterDetailForm.WorkflowEnsureNodePosition(const NodeId: string;
@@ -11909,11 +11914,15 @@ begin
   { Lay out AFTER the INPUT gutter and before the OUTPUT box so auto-placed
     nodes never sit under either derived box. }
   Cols := Max(1, Trunc(Max(1, CanvasWidth - WF_GUTTER - WF_IO_W - 24) /
-    (116 + 18)));
+    (WF_NODE_W + 18)));
   Col := Index mod Cols;
   Row := Index div Cols;
-  Pos := PointF(WF_GUTTER + Col * (116 + 18), 12 + Row * (42 + 22));
-  FWorkflowNodePositions.AddOrSetValue(NodeId, Pos);
+  Pos := PointF(WF_GUTTER + Col * (WF_NODE_W + 18),
+    12 + Row * (WF_NODE_H + 22));
+  { the index-derived slot can already be occupied once nodes have been
+    deleted or hand-placed (indexes shift, positions do not), so clear it
+    through the same owner every other placement path uses }
+  FWorkflowNodePositions.AddOrSetValue(NodeId, WorkflowFreeSlot(Pos));
 end;
 
 procedure TMasterDetailForm.WorkflowDrawWire(Canvas: TCanvas;
@@ -12235,14 +12244,11 @@ begin
     FWorkflowRunNodePreview.Remove(NewId);
   if (FWorkflowNodePositions <> nil) and
     FWorkflowNodePositions.TryGetValue(OldId, Pos) then
-  begin
-    { walk the diagonal until a slot is FREE -- duplicating the same source
-      twice must not stack the copies into one apparent node }
-    Pos := PointF(Pos.X + WF_GRID, Pos.Y + WF_GRID);
-    while WorkflowPositionTaken(Pos) do
-      Pos := PointF(Pos.X + WF_GRID, Pos.Y + WF_GRID);
-    FWorkflowNodePositions.AddOrSetValue(NewId, Pos);
-  end;
+    { same free-slot owner as the palette: a copy that lands on top of its
+      own original is the bug this exists to prevent, and "on top" means
+      overlapping boxes, not a shared anchor }
+    FWorkflowNodePositions.AddOrSetValue(NewId,
+      WorkflowFreeSlot(PointF(Pos.X + WF_GRID, Pos.Y + WF_GRID)));
   FWorkflowNodesList.ItemIndex := FWorkflowNodesList.Count - 1;
   WorkflowRenderGraph;
   SetStatus('duplicated ' + OldId + ' as ' + NewId);
@@ -12262,28 +12268,52 @@ begin
 end;
 
 function TMasterDetailForm.WorkflowPositionTaken(const P: TPointF): Boolean;
-{ True when some node/IO box already sits (within half a grid step) at the
-  logical point -- the free-slot probe for duplicate placement. }
+{ True when a node dropped at P would OVERLAP something already on the
+  canvas. Measured as rectangle intersection against the painted sizes, not
+  as anchor proximity: anchors 24px apart read as "different spots" while
+  116x42 boxes still cover 92x18 of each other, which is what an operator
+  sees as one obscured node. The reserved IO ids measure as IO boxes, so a
+  new node never lands under INPUT/OUTPUT either. }
 var
+  Candidate: TRectF;
+  Other: TRectF;
   Pair: TPair<string, TPointF>;
 begin
   Result := False;
   if FWorkflowNodePositions = nil then
     Exit;
+  Candidate := RectF(P.X, P.Y, P.X + WF_NODE_W, P.Y + WF_NODE_H);
   for Pair in FWorkflowNodePositions do
-    if (Abs(Pair.Value.X - P.X) < WF_GRID / 2) and
-      (Abs(Pair.Value.Y - P.Y) < WF_GRID / 2) then
+  begin
+    if (Pair.Key = WF_ID_INPUT) or (Pair.Key = WF_ID_OUTPUT) then
+      Other := RectF(Pair.Value.X, Pair.Value.Y,
+        Pair.Value.X + WF_IO_W, Pair.Value.Y + WF_IO_H)
+    else
+      Other := RectF(Pair.Value.X, Pair.Value.Y,
+        Pair.Value.X + WF_NODE_W, Pair.Value.Y + WF_NODE_H);
+    if Candidate.IntersectsWith(Other) then
       Exit(True);
+  end;
 end;
 
 function TMasterDetailForm.WorkflowFreeSlot(const P: TPointF): TPointF;
-{ Walk the diagonal from P until nothing is sitting there. The toolbar's
-  + Node always drops at the canvas centre, so without this the second one
-  would land exactly on the first and look like nothing happened. }
+{ Walk the diagonal from P until the slot is genuinely clear. The toolbar's
+  add-node button always drops at the canvas centre, so without this the
+  second press would bury its node under the first. The step is a grid
+  pitch (positions stay snapped and near the drop point) and the walk is
+  bounded -- a pathological graph must not spin the paint thread. }
+const
+  MAX_STEPS = 200;
+var
+  Steps: Integer;
 begin
   Result := P;
-  while WorkflowPositionTaken(Result) do
+  Steps := 0;
+  while WorkflowPositionTaken(Result) and (Steps < MAX_STEPS) do
+  begin
     Result := PointF(Result.X + WF_GRID, Result.Y + WF_GRID);
+    Inc(Steps);
+  end;
 end;
 
 procedure TMasterDetailForm.WorkflowCanvasMouseDown(Sender: TObject;
