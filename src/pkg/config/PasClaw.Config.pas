@@ -1690,6 +1690,14 @@ begin
     if not MCPProgressiveDisclosure then
       Root.PutBool('mcp_progressive_disclosure', False);
 
+    { mcp_compact_results: same shape, same reason. Loading it without
+      writing it back meant any command that calls SaveConfig regenerated
+      the file WITHOUT the key, so the next load restored the default True
+      and quietly re-enabled result rewriting against the operator's
+      explicit choice. Emit only the OFF, so on-keepers keep a clean file. }
+    if not MCPCompactResults then
+      Root.PutBool('mcp_compact_results', False);
+
     Arr := TJsonArray.Create;
     for i := 0 to High(Crons) do
     begin
