@@ -722,6 +722,10 @@ const
   UI_ACCENT_DIM = $FF1D3347;
   UI_BG = $FF111316;
   UI_BORDER = $FF2D333B;
+  { A rule BETWEEN things, softer than a border AROUND something. Reusing
+    UI_BORDER for separators is what made the header rule read as a hard
+    line across the window. }
+  UI_SEPARATOR = $FF23282F;
   UI_PANEL = $FF181B20;
   UI_PANEL_ALT = $FF20242B;
   UI_TEXT = $FFE6EAF0;
@@ -1783,7 +1787,13 @@ begin
     Exit;
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := Control;
-  Chrome.Align := TAlignLayout.Client;
+  { Contents, NOT Client. A background has to FRAME the panel, and Client
+    makes it compete with its own siblings for space -- it takes whatever is
+    left over after the Top-aligned rows and outlines THAT. On Settings /
+    Gateway the visible result was an empty rounded box sitting under the
+    form instead of a border around it. Contents fills the parent's content
+    rect and takes part in no such negotiation. }
+  Chrome.Align := TAlignLayout.Contents;
   if Alt then
     StyleChromeRect(Chrome, UI_PANEL_ALT, UI_BORDER, 6, False)
   else
@@ -1977,7 +1987,9 @@ begin
   else if Color = UI_ACCENT then
     { the light book's retoned accent -- a Pascal-drawn accent has to be the
       same blue as a styled one, or the two disagree on the same screen }
-    Result := $FF3B6EA8;
+    Result := $FF3B6EA8
+  else if Color = UI_SEPARATOR then
+    Result := $FFE6E2DA;
 end;
 
 function TMasterDetailForm.ThemePaintStroke(Color: TAlphaColor): TAlphaColor;
@@ -3254,8 +3266,10 @@ var
   NavHost: TLayout;
   SessionButtons: TLayout;
   WorkspaceLabel: TLabel;
+  ActionRow: TLayout;
   SettingsTab: TTabItem;
   SettingsTabs: TTabControl;
+  TokenRow: TLayout;
   SearchLabel: TLabel;
 begin
   Fill.Color := UI_BG;
@@ -3268,10 +3282,20 @@ begin
   FTopBar.Height := ROW_CARD;
   SetControlPadding(FTopBar, 10, GAP_S, 10, GAP_S);
 
+  { A separator, not a box. This was a full rectangle outline around the top
+    bar: three of its four edges hug the window frame and the fourth reads as
+    a stray dark rule under the title, which is exactly how it was reported.
+    A header deserves a hairline beneath it, so that is all this draws -- and
+    at UI_BORDER strength on a light ground it was too heavy, so it takes the
+    softer separator tone. }
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := FTopBar;
-  Chrome.Align := TAlignLayout.Client;
-  StyleChromeRect(Chrome, UI_PANEL, UI_BORDER, 0, False);
+  Chrome.Align := TAlignLayout.Bottom;
+  Chrome.Height := 1;
+  Chrome.HitTest := False;
+  Chrome.Stroke.Kind := TBrushKind.None;
+  Chrome.Fill.Kind := TBrushKind.Solid;
+  Chrome.Fill.Color := ThemePaintColor(UI_SEPARATOR);
   Chrome.SendToBack;
 
   FHeaderRow := TLayout.Create(Self);
@@ -3378,7 +3402,7 @@ begin
 
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := FSidebar;
-  Chrome.Align := TAlignLayout.Client;
+  Chrome.Align := TAlignLayout.Contents;
   StyleChromeRect(Chrome, UI_PANEL, UI_BORDER, 0, False);
   Chrome.SendToBack;
 
@@ -3499,7 +3523,7 @@ begin
 
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := NavHost;
-  Chrome.Align := TAlignLayout.Client;
+  Chrome.Align := TAlignLayout.Contents;
   StyleChromeRect(Chrome, UI_PANEL, UI_BORDER, 6, False);
   Chrome.SendToBack;
 
@@ -3696,30 +3720,57 @@ begin
   GatewayTab.Parent := SettingsTabs;
   GatewayTab.Text := 'Gateway';
 
+  { Phase 2 of docs/studio-metrics-plan.md. Was: one 104px panel guessing its
+    own height, with a URL box, a Connect button, a token box, Show and a
+    trash icon all crammed onto a single unlabelled row -- nothing said which
+    box was which, and the fixed height had no relationship to the contents.
+
+    Now two labelled rows on the shared form grid. The panel sizes itself
+    from them, so the guess is gone, and each field is named. }
   GatewayBody := TLayout.Create(Self);
   GatewayBody.Parent := GatewayTab;
   GatewayBody.Align := TAlignLayout.Top;
-  GatewayBody.Height := 104;
-  SetControlPadding(GatewayBody, GAP_M, 10, GAP_M, GAP_M);
+  SetControlPadding(GatewayBody, GAP_M, GAP_M, GAP_M, GAP_M);
   AddPanelChrome(GatewayBody, False);
   AddSectionHeader(GatewayBody, 'Gateway connection');
 
-  FConnectionRow.Parent := GatewayBody;
-  FConnectionRow.Align := TAlignLayout.Top;
-  FConnectionRow.Visible := True;
-  FConnectionRow.Height := ROW_BAR;
-  SetControlMargins(FConnectionRow, 0, GAP_S, 0, 0);
-  SetControlMargins(FTokenEdit, GAP_S, 0, 0, 0);
-  SetControlMargins(FTokenShowButton, GAP_S, 0, 0, 0);
-  SetControlMargins(FTokenClearButton, GAP_S, 0, 0, 0);
+  { FConnectionRow is a construction-time holder only: the four controls are
+    created into it before the Settings tab exists, and every one of them is
+    re-parented onto a form row below. It stays hidden on the form -- moving
+    an emptied layout into the panel would add a phantom row. }
+  AddFormRow(GatewayBody, 'Server URL', FGatewayEdit);
+  TokenRow := AddFormRow(GatewayBody, 'Bearer token', nil);
+
+  FTokenEdit.Parent := TokenRow;
+  FTokenEdit.Align := TAlignLayout.Client;
+  FTokenEdit.Height := H_INPUT;
+  SetControlMargins(FTokenEdit, 0, GAP_XS div 2, 0, GAP_XS div 2);
+
+  FTokenShowButton.Parent := TokenRow;
+  FTokenShowButton.Align := TAlignLayout.Right;
+  SetControlMargins(FTokenShowButton, GAP_S, GAP_XS div 2, 0, GAP_XS div 2);
+
+  FTokenClearButton.Parent := TokenRow;
+  FTokenClearButton.Align := TAlignLayout.Right;
+  SetControlMargins(FTokenClearButton, GAP_S, GAP_XS div 2, 0, GAP_XS div 2);
+
+  ActionRow := TLayout.Create(Self);
+  ActionRow.Parent := GatewayBody;
+  ActionRow.Align := TAlignLayout.Top;
+  ActionRow.Height := ROW_BAR;
+  SetControlMargins(ActionRow, FORM_LABEL_W + GAP_M, GAP_XS, 0, 0);
 
   Btn := TButton.Create(Self);
-  Btn.Parent := FConnectionRow;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 82;
+  Btn.Parent := ActionRow;
+  Btn.Align := TAlignLayout.Left;
+  Btn.Width := BTN_W_M;
   Btn.Text := 'Connect';
   Btn.OnClick := RefreshClick;
-  SetControlMargins(Btn, GAP_S, 0, 0, 0);
+
+  { header + three rows + the panel's own vertical padding, so the panel can
+    never disagree with what it contains }
+  GatewayBody.Height := ROW_TEXT + GAP_XS + ROW_FORM * 2 + ROW_BAR +
+                        GAP_XS * 3 + GAP_M * 2;
 
   SettingsTab := TTabItem.Create(Self);
   SettingsTab.Parent := SettingsTabs;
@@ -3833,7 +3884,7 @@ begin
 
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := Params;
-  Chrome.Align := TAlignLayout.Client;
+  Chrome.Align := TAlignLayout.Contents;
   StyleChromeRect(Chrome, UI_PANEL, UI_BORDER, 6, False);
   Chrome.SendToBack;
 
@@ -4027,7 +4078,7 @@ begin
 
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := Composer;
-  Chrome.Align := TAlignLayout.Client;
+  Chrome.Align := TAlignLayout.Contents;
   { tier 3 -- the composer is where you act next, so it reads as live: a
     lifted ground and an accent border rather than the same panel chrome as
     every inert surface. }
@@ -6628,7 +6679,7 @@ begin
   SetControlPadding(Panel, 10, GAP_S, 10, 10);
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := Panel;
-  Chrome.Align := TAlignLayout.Client;
+  Chrome.Align := TAlignLayout.Contents;
   StyleChromeRect(Chrome, UI_PANEL, UI_BORDER, 6, False);
   Chrome.SendToBack;
 
@@ -6768,7 +6819,7 @@ begin
   SetControlPadding(LeftPane, GAP_S, GAP_S, GAP_S, GAP_S);
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := LeftPane;
-  Chrome.Align := TAlignLayout.Client;
+  Chrome.Align := TAlignLayout.Contents;
   StyleChromeRect(Chrome, UI_PANEL_ALT, UI_BORDER, 6, False);
   Chrome.SendToBack;
 
@@ -6793,7 +6844,7 @@ begin
   SetControlPadding(MiddlePane, GAP_S, GAP_S, GAP_S, GAP_S);
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := MiddlePane;
-  Chrome.Align := TAlignLayout.Client;
+  Chrome.Align := TAlignLayout.Contents;
   StyleChromeRect(Chrome, UI_PANEL_ALT, UI_BORDER, 6, False);
   Chrome.SendToBack;
 
@@ -6849,7 +6900,7 @@ begin
   SetControlPadding(Row, GAP_S, GAP_S, GAP_S, GAP_S);
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := Row;
-  Chrome.Align := TAlignLayout.Client;
+  Chrome.Align := TAlignLayout.Contents;
   StyleChromeRect(Chrome, UI_PANEL, UI_BORDER, 6, False);
   Chrome.SendToBack;
 
@@ -6974,7 +7025,7 @@ begin
   SetControlPadding(RightPane, GAP_S, GAP_S, GAP_S, GAP_S);
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := RightPane;
-  Chrome.Align := TAlignLayout.Client;
+  Chrome.Align := TAlignLayout.Contents;
   StyleChromeRect(Chrome, UI_PANEL_ALT, UI_BORDER, 6, False);
   Chrome.SendToBack;
 
