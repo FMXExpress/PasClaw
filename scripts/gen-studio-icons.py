@@ -54,7 +54,10 @@ import sys
 STYLES = [
     # path,                       icon fill,   hover wash,  focus ring
     ("studio/PasclawDark.style",  "xFFD6DDE6", "claWhite",  "xFF3BA7FF"),
-    ("studio/PasclawLight.style", "xFF4A5563", "claBlack",  "xFF0969DA"),
+    # already in the retoned gamut -- scripts/retone-light.py owns this book's
+    # palette, so writing pre-retone values here would make the two generators
+    # fight over the same bytes and neither --check could ever pass
+    ("studio/PasclawLight.style", "xFF5C5851", "claBlack",  "xFF3B6EA8"),
 ]
 
 # Lookups with NO Embarcadero platform equivalent -- they exist only because
