@@ -601,6 +601,10 @@ type
     procedure AddPanelChrome(Control: TControl; Alt: Boolean = False);
     function AddPaneSplitter(AParent: TFmxObject; AAlign: TAlignLayout): TSplitter;
     function AddSectionHeader(AParent: TFmxObject; const Text: string): TLabel;
+    function AddFormRow(AParent: TFmxObject; const LabelText: string;
+      Control: TControl; ControlWidth: Single = 0): TLayout;
+    function BuildDetailPane(AParent: TFmxObject; out TitleLabel,
+      MetaLabel: TLabel): TLayout;
     procedure StyleButton(Button: TButton; Primary: Boolean = False);
     procedure ApplyButtonIcon(Button: TButton);
     procedure ReadIconButtonsPreference;
@@ -735,6 +739,45 @@ const
   CHAT_ROW_MAX = 24000;
   { Square-ish footprint for an icon-only button. }
   ICON_BTN_W = 34;
+
+  (* ---- METRIC TOKENS -------------------------------------------------
+     A census of this file found eight font sizes, eleven values used as a
+     "row" height, fourteen padding signatures and two competing gap units
+     (6px at 97 sites, 8px at 78). None of that was decided; it accumulated.
+     These are the only numbers the UI may use, and helpers below apply them
+     so a new call site cannot invent a twelfth row height.
+     Plan and census: docs/studio-metrics-plan.md *)
+
+  { Type scale. Four sizes, and nothing sets Font.Size directly. }
+  TXT_CAPTION = 10;   { meta lines, column headers, footnotes }
+  TXT_BODY    = 11;   { the default for everything }
+  TXT_TITLE   = 12;   { section headers and emphasised items }
+  TXT_DISPLAY = 18;   { stats numerals only }
+
+  { Spacing, on a 4px grid. The 6-vs-8 split is resolved in favour of 8:
+    6 was never a deliberate choice, and one grid beats two. }
+  GAP_XS = 4;
+  GAP_S  = 8;
+  GAP_M  = 12;
+  GAP_L  = 16;
+
+  { Vertical rhythm. The only heights a row may take. }
+  ROW_BAR  = 36;      { toolbars and action rows }
+  ROW_FORM = 32;      { a label + input pair }
+  ROW_LIST = 40;      { single-line list item }
+  ROW_CARD = 56;      { two-line list card }
+  H_INPUT  = 28;      { edit/combo inside a ROW_FORM }
+  ROW_TEXT = 22;      { one line of body text: labels, meta, footers }
+
+  { The label column every form shares. Alignment is what makes a form read
+    as designed rather than assembled, and it cannot happen while fifty
+    edits each pick their own width. }
+  FORM_LABEL_W = 110;
+
+  { Button widths. Three, plus caption-measured for anything longer. }
+  BTN_W_S = 64;
+  BTN_W_M = 88;
+  BTN_W_L = 104;
   (* Reading measure for the conversation column. Long lines are hard to
      track back to the next line's start, so chat UIs cap the column and
      centre it, letting extra width become margin instead of longer lines.
@@ -1670,7 +1713,7 @@ begin
   Card := TRectangle.Create(Result);
   Card.Parent := Result;
   Card.Align := TAlignLayout.Client;
-  SetControlMargins(Card, 4, 3, 4, 3);
+  SetControlMargins(Card, GAP_XS, 3, GAP_XS, 3);
   StyleChromeRect(Card, FillColor, UI_BORDER, 6, True);
   Card.OnClick := CardListItemClick;
   if not Accent then
@@ -1679,13 +1722,13 @@ begin
   TitleLabel := TLabel.Create(Card);
   TitleLabel.Parent := Card;
   TitleLabel.Align := TAlignLayout.Top;
-  TitleLabel.Height := 22;
+  TitleLabel.Height := ROW_TEXT;
   TitleLabel.HitTest := False;
   TitleLabel.Text := TitleText;
   TitleLabel.TextSettings.VertAlign := TTextAlign.Center;
-  SetControlMargins(TitleLabel, 10, 6, 10, 0);
+  SetControlMargins(TitleLabel, 10, GAP_S, 10, 0);
   { regular weight: a list where every title is bold has no emphasis at all }
-  StyleLabel(TitleLabel, UI_TEXT, 12, False);
+  StyleLabel(TitleLabel, UI_TEXT, TXT_TITLE, False);
 
   DetailLabel := TLabel.Create(Card);
   DetailLabel.Parent := Card;
@@ -1693,8 +1736,8 @@ begin
   DetailLabel.HitTest := False;
   DetailLabel.WordWrap := True;
   DetailLabel.Text := DetailText;
-  SetControlMargins(DetailLabel, 10, 0, 10, 6);
-  StyleLabel(DetailLabel, UI_MUTED, 11, False);
+  SetControlMargins(DetailLabel, 10, 0, 10, GAP_S);
+  StyleLabel(DetailLabel, UI_MUTED, TXT_BODY, False);
 end;
 
 procedure TMasterDetailForm.CardListItemClick(Sender: TObject);
@@ -1757,20 +1800,103 @@ begin
     Result.Height := 8;
 end;
 
+function TMasterDetailForm.AddFormRow(AParent: TFmxObject;
+  const LabelText: string; Control: TControl;
+  ControlWidth: Single): TLayout;
+{ One label + one input, on the shared grid.
+
+  Fifty edits in this file each picked their own width and sat next to a
+  label of whatever length, which is why no form in the app lines up. The
+  label column is fixed at FORM_LABEL_W and right-aligned, so labels meet
+  their inputs on a common edge no matter how long the text is.
+
+  ControlWidth = 0 means "fill the row", which is what most inputs want;
+  pass a width only for things that genuinely have a natural size (a
+  spin-ish number, a short code). }
+var
+  Cap: TLabel;
+begin
+  Result := TLayout.Create(Self);
+  Result.Parent := AParent;
+  Result.Align := TAlignLayout.Top;
+  Result.Height := ROW_FORM;
+  SetControlMargins(Result, 0, 0, 0, GAP_XS);
+
+  Cap := TLabel.Create(Result);
+  Cap.Parent := Result;
+  Cap.Align := TAlignLayout.Left;
+  Cap.Width := FORM_LABEL_W;
+  Cap.Height := ROW_FORM;
+  Cap.HitTest := False;
+  Cap.Text := LabelText;
+  Cap.TextSettings.HorzAlign := TTextAlign.Trailing;
+  Cap.TextSettings.VertAlign := TTextAlign.Center;
+  SetControlMargins(Cap, 0, 0, GAP_M, 0);
+  StyleLabel(Cap, UI_CHROME_TEXT, TXT_BODY, False);
+
+  if Control <> nil then
+  begin
+    Control.Parent := Result;
+    if ControlWidth > 0 then
+    begin
+      Control.Align := TAlignLayout.Left;
+      Control.Width := ControlWidth;
+    end
+    else
+      Control.Align := TAlignLayout.Client;
+    Control.Height := H_INPUT;
+    { centre the input in the taller row rather than letting it stretch }
+    SetControlMargins(Control, 0, (ROW_FORM - H_INPUT) / 2, 0,
+      (ROW_FORM - H_INPUT) / 2);
+  end;
+end;
+
+function TMasterDetailForm.BuildDetailPane(AParent: TFmxObject;
+  out TitleLabel, MetaLabel: TLabel): TLayout;
+{ Title + meta + a body area, replacing the ASCII-underlined memo views.
+
+  Thirty-one places in this file drew a heading by printing '====' under it
+  into a read-only memo. That is terminal output pretending to be a UI: it
+  cannot use the type scale, cannot be selected as a heading, and wraps at
+  the wrong places. The caller fills the returned labels and parents its
+  body control to the result. }
+begin
+  Result := TLayout.Create(Self);
+  Result.Parent := AParent;
+  Result.Align := TAlignLayout.Client;
+
+  TitleLabel := TLabel.Create(Result);
+  TitleLabel.Parent := Result;
+  TitleLabel.Align := TAlignLayout.Top;
+  TitleLabel.Height := ROW_LIST - GAP_M;
+  TitleLabel.HitTest := False;
+  TitleLabel.TextSettings.VertAlign := TTextAlign.Center;
+  StyleLabel(TitleLabel, UI_TEXT, TXT_TITLE, True);
+
+  MetaLabel := TLabel.Create(Result);
+  MetaLabel.Parent := Result;
+  MetaLabel.Align := TAlignLayout.Top;
+  MetaLabel.Height := ROW_FORM - GAP_S;
+  MetaLabel.HitTest := False;
+  MetaLabel.TextSettings.VertAlign := TTextAlign.Center;
+  SetControlMargins(MetaLabel, 0, 0, 0, GAP_S);
+  StyleLabel(MetaLabel, UI_MUTED, TXT_CAPTION, False);
+end;
+
 function TMasterDetailForm.AddSectionHeader(AParent: TFmxObject;
   const Text: string): TLabel;
 begin
   Result := TLabel.Create(Self);
   Result.Parent := AParent;
   Result.Align := TAlignLayout.Top;
-  Result.Height := 24;
+  Result.Height := ROW_TEXT;
   Result.Text := Text;
   Result.TextSettings.VertAlign := TTextAlign.Center;
-  SetControlMargins(Result, 0, 0, 0, 4);
+  SetControlMargins(Result, 0, 0, 0, GAP_XS);
   { chrome ink, not accent: accent-blue bold headers on every tab were the
     loudest global habit in the app. The accent is reserved for the primary
     action and live state. }
-  StyleLabel(Result, UI_CHROME_TEXT, 11, True);
+  StyleLabel(Result, UI_CHROME_TEXT, TXT_BODY, True);
 end;
 
 procedure TMasterDetailForm.StyleChromeRect(Rect: TRectangle;
@@ -2282,7 +2408,7 @@ procedure TMasterDetailForm.RestyleCoreControls;
     begin
       LabelControl := TLabel(Obj);
       if TStyledSetting.FontColor in LabelControl.StyledSettings then
-        StyleLabel(LabelControl, UI_CHROME_TEXT, 12, False);   { tier 4 }
+        StyleLabel(LabelControl, UI_CHROME_TEXT, TXT_TITLE, False);   { tier 4 }
     end
     else if Obj is TButton then
     begin
@@ -2294,7 +2420,7 @@ procedure TMasterDetailForm.RestyleCoreControls;
       Check := TCheckBox(Obj);
       Check.StyledSettings := Check.StyledSettings - [TStyledSetting.Size];
       Check.StyledSettings := Check.StyledSettings + [TStyledSetting.FontColor];
-      Check.TextSettings.Font.Size := 12;
+      Check.TextSettings.Font.Size := TXT_TITLE;
     end
     else if Obj is TComboBox then
     begin
@@ -2307,13 +2433,13 @@ procedure TMasterDetailForm.RestyleCoreControls;
       SetControlPadding(ListBox, 2, 2, 2, 2);
     end
     else if Obj is TEdit then
-      StyleTextControl(TControl(Obj), UI_TEXT, 12)
+      StyleTextControl(TControl(Obj), UI_TEXT, TXT_TITLE)
     else if Obj = FPromptMemo then
       { tier 1 ink, not the style book's grey: what you are typing pulls the
         eye exactly like the chat text it is about to become }
-      StyleTextControl(TControl(Obj), UI_CHAT_TEXT, 12)
+      StyleTextControl(TControl(Obj), UI_CHAT_TEXT, TXT_TITLE)
     else if Obj is TMemo then
-      StyleTextControl(TControl(Obj), UI_TEXT, 12);
+      StyleTextControl(TControl(Obj), UI_TEXT, TXT_TITLE);
 
     { snapshot AFTER styling Obj, so it reflects any style rebuild that just
       happened rather than the collection that rebuild replaced }
@@ -2387,8 +2513,8 @@ begin
   Narrow := W < UI_NARROW_W;
   Compact := W < 820;
   ApplyChatMeasure;
-  FTopBar.Height := 54;
-  FHeaderRow.Height := 38;
+  FTopBar.Height := ROW_CARD;
+  FHeaderRow.Height := ROW_BAR;
 
   if FTitleLabel <> nil then
   begin
@@ -2467,9 +2593,9 @@ begin
       FSessionDrawer.Position.Y := 0;
       FSessionDrawer.Mode := TMultiViewMode.Drawer;
       FSessionDrawer.BringToFront;
-      SetControlPadding(FSidebar, 8, 8, 8, 8);
+      SetControlPadding(FSidebar, GAP_S, GAP_S, GAP_S, GAP_S);
       if FTabControl <> nil then
-        SetControlMargins(FTabControl, 8, 8, 8, 8);
+        SetControlMargins(FTabControl, GAP_S, GAP_S, GAP_S, GAP_S);
       if FSidebarVisible then
         FSessionDrawer.ShowMaster
       else
@@ -2479,7 +2605,7 @@ begin
     begin
       FSessionDrawer.Align := TAlignLayout.Left;
       FSessionDrawer.Mode := TMultiViewMode.Panel;
-      SetControlPadding(FSidebar, 10, 10, 8, 10);
+      SetControlPadding(FSidebar, 10, 10, GAP_S, 10);
       if FSidebarVisible then
       begin
         FSessionDrawer.Visible := True;
@@ -2611,13 +2737,13 @@ begin
     begin
       FFileLeftPane.Align := TAlignLayout.Top;
       FFileLeftPane.Height := 214;
-      SetControlMargins(FFileLeftPane, 0, 0, 0, 8);
+      SetControlMargins(FFileLeftPane, 0, 0, 0, GAP_S);
     end
     else
     begin
       FFileLeftPane.Align := TAlignLayout.Left;
       FFileLeftPane.Width := IfThen(Compact, 300, 360);
-      SetControlMargins(FFileLeftPane, 0, 0, 8, 0);
+      SetControlMargins(FFileLeftPane, 0, 0, GAP_S, 0);
     end;
   end;
   if FFilePaneSplitter <> nil then
@@ -2647,13 +2773,13 @@ begin
     begin
       FMcpLeftPane.Align := TAlignLayout.Top;
       FMcpLeftPane.Height := IfThen(Narrow, 170, 210);
-      SetControlMargins(FMcpLeftPane, 0, 0, 0, 8);
+      SetControlMargins(FMcpLeftPane, 0, 0, 0, GAP_S);
     end
     else
     begin
       FMcpLeftPane.Align := TAlignLayout.Left;
       FMcpLeftPane.Width := 340;
-      SetControlMargins(FMcpLeftPane, 0, 0, 8, 0);
+      SetControlMargins(FMcpLeftPane, 0, 0, GAP_S, 0);
     end;
   end;
   if FMcpSplitter <> nil then
@@ -2693,13 +2819,13 @@ begin
     begin
       FMemoryFilesPane.Align := TAlignLayout.Top;
       FMemoryFilesPane.Height := 220;
-      SetControlMargins(FMemoryFilesPane, 0, 0, 0, 8);
+      SetControlMargins(FMemoryFilesPane, 0, 0, 0, GAP_S);
     end
     else
     begin
       FMemoryFilesPane.Align := TAlignLayout.Left;
       FMemoryFilesPane.Width := IfThen(Compact, 280, 340);
-      SetControlMargins(FMemoryFilesPane, 0, 0, 8, 0);
+      SetControlMargins(FMemoryFilesPane, 0, 0, GAP_S, 0);
     end;
   end;
   if FMemoryFileDetailMemo <> nil then
@@ -2718,7 +2844,7 @@ begin
     begin
       FKBSourcesPane.Align := TAlignLayout.Bottom;
       FKBSourcesPane.Height := 104;
-      SetControlMargins(FKBSourcesPane, 0, 8, 0, 0);
+      SetControlMargins(FKBSourcesPane, 0, GAP_S, 0, 0);
     end
     else
     begin
@@ -2733,13 +2859,13 @@ begin
     begin
       FVaultListPane.Align := TAlignLayout.Top;
       FVaultListPane.Height := IfThen(Narrow, 150, 190);
-      SetControlMargins(FVaultListPane, 0, 0, 0, 8);
+      SetControlMargins(FVaultListPane, 0, 0, 0, GAP_S);
     end
     else
     begin
       FVaultListPane.Align := TAlignLayout.Left;
       FVaultListPane.Width := 320;
-      SetControlMargins(FVaultListPane, 0, 0, 8, 0);
+      SetControlMargins(FVaultListPane, 0, 0, GAP_S, 0);
     end;
   end;
   if FVaultList <> nil then
@@ -2752,13 +2878,13 @@ begin
     begin
       FConfigListPane.Align := TAlignLayout.Top;
       FConfigListPane.Height := 108;
-      SetControlMargins(FConfigListPane, 0, 0, 0, 8);
+      SetControlMargins(FConfigListPane, 0, 0, 0, GAP_S);
     end
     else
     begin
       FConfigListPane.Align := TAlignLayout.Left;
       FConfigListPane.Width := 360;
-      SetControlMargins(FConfigListPane, 0, 0, 8, 0);
+      SetControlMargins(FConfigListPane, 0, 0, GAP_S, 0);
     end;
   end;
   if FConfigEditorPane <> nil then
@@ -2769,13 +2895,13 @@ begin
     begin
       FStatsLeftPane.Align := TAlignLayout.Top;
       FStatsLeftPane.Height := 140;
-      SetControlMargins(FStatsLeftPane, 0, 0, 0, 8);
+      SetControlMargins(FStatsLeftPane, 0, 0, 0, GAP_S);
     end
     else
     begin
       FStatsLeftPane.Align := TAlignLayout.Left;
       FStatsLeftPane.Width := 320;
-      SetControlMargins(FStatsLeftPane, 0, 0, 8, 0);
+      SetControlMargins(FStatsLeftPane, 0, 0, GAP_S, 0);
     end;
   end;
   if FStatsRightPane <> nil then
@@ -2790,13 +2916,13 @@ begin
     begin
       FCheckpointListPane.Align := TAlignLayout.Top;
       FCheckpointListPane.Height := IfThen(Narrow, 160, 210);
-      SetControlMargins(FCheckpointListPane, 0, 0, 0, 8);
+      SetControlMargins(FCheckpointListPane, 0, 0, 0, GAP_S);
     end
     else
     begin
       FCheckpointListPane.Align := TAlignLayout.Left;
       FCheckpointListPane.Width := 330;
-      SetControlMargins(FCheckpointListPane, 0, 0, 8, 0);
+      SetControlMargins(FCheckpointListPane, 0, 0, GAP_S, 0);
     end;
   end;
   if FCheckpointSplitter <> nil then
@@ -2822,13 +2948,13 @@ begin
     begin
       FSkillLeftPane.Align := TAlignLayout.Top;
       FSkillLeftPane.Height := IfThen(Narrow, 250, 290);
-      SetControlMargins(FSkillLeftPane, 0, 0, 0, 8);
+      SetControlMargins(FSkillLeftPane, 0, 0, 0, GAP_S);
     end
     else
     begin
       FSkillLeftPane.Align := TAlignLayout.Left;
       FSkillLeftPane.Width := 300;
-      SetControlMargins(FSkillLeftPane, 0, 0, 8, 0);
+      SetControlMargins(FSkillLeftPane, 0, 0, GAP_S, 0);
     end;
   end;
   if FSkillSplitter <> nil then
@@ -2850,7 +2976,7 @@ begin
   begin
     FSkillPendingPane.Align := TAlignLayout.Bottom;
     FSkillPendingPane.Height := IfThen(Narrow, 126, 190);
-    SetControlMargins(FSkillPendingPane, 0, 8, 0, 0);
+    SetControlMargins(FSkillPendingPane, 0, GAP_S, 0, 0);
   end;
   if FSkillCatalogPane <> nil then
     FSkillCatalogPane.Align := TAlignLayout.Client;
@@ -2862,13 +2988,13 @@ begin
     begin
       FRelayLeftPane.Align := TAlignLayout.Top;
       FRelayLeftPane.Height := IfThen(Narrow, 180, 230);
-      SetControlMargins(FRelayLeftPane, 0, 0, 0, 8);
+      SetControlMargins(FRelayLeftPane, 0, 0, 0, GAP_S);
     end
     else
     begin
       FRelayLeftPane.Align := TAlignLayout.Left;
       FRelayLeftPane.Width := 320;
-      SetControlMargins(FRelayLeftPane, 0, 0, 8, 0);
+      SetControlMargins(FRelayLeftPane, 0, 0, GAP_S, 0);
     end;
   end;
   if FRelaySplitter <> nil then
@@ -2897,13 +3023,13 @@ begin
     begin
       FCronListPane.Align := TAlignLayout.Top;
       FCronListPane.Height := IfThen(Narrow, 170, 220);
-      SetControlMargins(FCronListPane, 0, 0, 0, 8);
+      SetControlMargins(FCronListPane, 0, 0, 0, GAP_S);
     end
     else
     begin
       FCronListPane.Align := TAlignLayout.Left;
       FCronListPane.Width := 330;
-      SetControlMargins(FCronListPane, 0, 0, 8, 0);
+      SetControlMargins(FCronListPane, 0, 0, GAP_S, 0);
     end;
   end;
   if FCronSplitter <> nil then
@@ -2996,13 +3122,13 @@ begin
     begin
       FWorkflowRightPane.Align := TAlignLayout.Bottom;
       FWorkflowRightPane.Height := IfThen(Narrow, 260, 220);
-      SetControlMargins(FWorkflowRightPane, 0, 8, 0, 0);
+      SetControlMargins(FWorkflowRightPane, 0, GAP_S, 0, 0);
     end
     else
     begin
       FWorkflowRightPane.Align := TAlignLayout.Right;
       FWorkflowRightPane.Width := 280;
-      SetControlMargins(FWorkflowRightPane, 8, 0, 0, 0);
+      SetControlMargins(FWorkflowRightPane, GAP_S, 0, 0, 0);
     end;
   end;
   if FWorkflowSchemaForm <> nil then
@@ -3129,8 +3255,8 @@ begin
   FTopBar := TLayout.Create(Self);
   FTopBar.Parent := Self;
   FTopBar.Align := TAlignLayout.Top;
-  FTopBar.Height := 54;
-  SetControlPadding(FTopBar, 10, 8, 10, 8);
+  FTopBar.Height := ROW_CARD;
+  SetControlPadding(FTopBar, 10, GAP_S, 10, GAP_S);
 
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := FTopBar;
@@ -3141,7 +3267,7 @@ begin
   FHeaderRow := TLayout.Create(Self);
   FHeaderRow.Parent := FTopBar;
   FHeaderRow.Align := TAlignLayout.Top;
-  FHeaderRow.Height := 38;
+  FHeaderRow.Height := ROW_BAR;
 
   FSessionToggleButton := TButton.Create(Self);
   FSessionToggleButton.Parent := FHeaderRow;
@@ -3150,7 +3276,7 @@ begin
   FSessionToggleButton.OnClick := ToggleSessionsClick;
   SetIconButton(FSessionToggleButton, 'menutoolbutton',
     'Show or hide the sessions drawer', #$2630);
-  SetControlMargins(FSessionToggleButton, 0, 0, 8, 0);
+  SetControlMargins(FSessionToggleButton, 0, 0, GAP_S, 0);
 
   LabelControl := TLabel.Create(Self);
   FTitleLabel := LabelControl;
@@ -3160,7 +3286,7 @@ begin
   LabelControl.Text := 'PASCLAW STUDIO';
   LabelControl.TextSettings.HorzAlign := TTextAlign.Leading;
   LabelControl.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(LabelControl, UI_ACCENT, 13, True);
+  StyleLabel(LabelControl, UI_ACCENT, TXT_TITLE, True);
 
   FRefreshButton := TButton.Create(Self);
   FRefreshButton.Parent := FHeaderRow;
@@ -3168,7 +3294,7 @@ begin
   FRefreshButton.Width := 92;
   RenderConnectButton;
   FRefreshButton.OnClick := RefreshClick;
-  SetControlMargins(FRefreshButton, 8, 0, 0, 0);
+  SetControlMargins(FRefreshButton, GAP_S, 0, 0, 0);
 
   FThemeButton := TButton.Create(Self);
   FThemeButton.Parent := FHeaderRow;
@@ -3176,7 +3302,7 @@ begin
   FThemeButton.Width := 70;
   FThemeButton.Text := 'Light';
   FThemeButton.OnClick := ThemeClick;
-  SetControlMargins(FThemeButton, 8, 0, 0, 0);
+  SetControlMargins(FThemeButton, GAP_S, 0, 0, 0);
   ApplyTheme;
 
   FStatusLabel := TLabel.Create(Self);
@@ -3188,7 +3314,7 @@ begin
   FStatusLabel.StyledSettings := FStatusLabel.StyledSettings -
     [TStyledSetting.FontColor];
   UseStyledLabelColor(FStatusLabel);
-  SetControlMargins(FStatusLabel, 8, 0, 12, 0);
+  SetControlMargins(FStatusLabel, GAP_S, 0, GAP_M, 0);
 
   FConnectionRow := TLayout.Create(Self);
   FConnectionRow.Parent := Self;
@@ -3238,7 +3364,7 @@ begin
   FSidebar := TLayout.Create(Self);
   FSidebar.Parent := FSessionDrawer;
   FSidebar.Align := TAlignLayout.Client;
-  SetControlPadding(FSidebar, 12, 12, 10, 12);
+  SetControlPadding(FSidebar, GAP_M, GAP_M, 10, GAP_M);
 
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := FSidebar;
@@ -3249,7 +3375,7 @@ begin
   DrawerHeader := TLayout.Create(Self);
   DrawerHeader.Parent := FSidebar;
   DrawerHeader.Align := TAlignLayout.Top;
-  DrawerHeader.Height := 34;
+  DrawerHeader.Height := ROW_BAR;
 
   { Creating a session is a SESSIONS action, so it belongs to the sessions
     header, not the app-wide toolbar. Right-aligned children first, then the
@@ -3265,7 +3391,7 @@ begin
   Btn.Width := 104;
   Btn.Text := '+ Session';      { ApplyButtonIcon swaps in the add glyph }
   Btn.OnClick := NewSessionClick;
-  SetControlMargins(Btn, 6, 2, 0, 2);
+  SetControlMargins(Btn, GAP_S, 2, 0, 2);
 
   FSessionSearchButton := TButton.Create(Self);
   FSessionSearchButton.Parent := DrawerHeader;
@@ -3273,14 +3399,14 @@ begin
   FSessionSearchButton.Width := 84;      { caption width; see above }
   FSessionSearchButton.Text := 'Search';
   FSessionSearchButton.OnClick := SessionSearchToggleClick;
-  SetControlMargins(FSessionSearchButton, 6, 2, 0, 2);
+  SetControlMargins(FSessionSearchButton, GAP_S, 2, 0, 2);
 
   SearchLabel := TLabel.Create(Self);
   SearchLabel.Parent := DrawerHeader;
   SearchLabel.Align := TAlignLayout.Client;
   SearchLabel.Text := 'Sessions';
   SearchLabel.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(SearchLabel, UI_CHROME_TEXT, 11, True);
+  StyleLabel(SearchLabel, UI_CHROME_TEXT, TXT_BODY, True);
 
   { the filter box is summoned by the search icon; a permanently open field
     is a control the list wears whether or not anyone is filtering }
@@ -3300,8 +3426,8 @@ begin
   SessionButtons := TLayout.Create(Self);
   SessionButtons.Parent := FSidebar;
   SessionButtons.Align := TAlignLayout.Bottom;
-  SessionButtons.Height := 40;
-  SetControlMargins(SessionButtons, 0, 8, 0, 0);
+  SessionButtons.Height := ROW_LIST;
+  SetControlMargins(SessionButtons, 0, GAP_S, 0, 0);
 
   FDeleteSessionButton := TButton.Create(Self);
   FDeleteSessionButton.Parent := SessionButtons;
@@ -3317,7 +3443,7 @@ begin
   Btn.Width := 62;
   Btn.Text := 'Export';
   Btn.OnClick := SessionExportClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := SessionButtons;
@@ -3325,7 +3451,7 @@ begin
   Btn.Width := 62;
   Btn.Text := 'Import';
   Btn.OnClick := SessionImportClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   { OpenCode keeps a session split across per-message files, so it imports as
     a DIRECTORY rather than a single export blob. }
@@ -3335,7 +3461,7 @@ begin
   Btn.Width := 74;
   Btn.Text := 'Import Dir';
   Btn.OnClick := SessionImportDirClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FSessionSplitter := TSplitter.Create(Self);
   FSessionSplitter.Parent := FBodyLayout;
@@ -3393,7 +3519,7 @@ begin
   MemoryTabs.Parent := EndpointBar.Parent;
   MemoryTabs.Align := TAlignLayout.Client;
   MemoryTabs.TabPosition := TTabPosition.Top;
-  SetControlMargins(MemoryTabs, 12, 8, 12, 8);
+  SetControlMargins(MemoryTabs, GAP_M, GAP_S, GAP_M, GAP_S);
 
   MemoryTab := TTabItem.Create(Self);
   MemoryTab.Parent := MemoryTabs;
@@ -3445,8 +3571,8 @@ begin
   NativeBar := TLayout.Create(Self);
   NativeBar.Parent := EndpointBar.Parent;
   NativeBar.Align := TAlignLayout.Top;
-  NativeBar.Height := 34;
-  SetControlMargins(NativeBar, 12, 0, 12, 6);
+  NativeBar.Height := ROW_BAR;
+  SetControlMargins(NativeBar, GAP_M, 0, GAP_M, GAP_S);
 
   Btn := TButton.Create(Self);
   Btn.Parent := NativeBar;
@@ -3454,7 +3580,7 @@ begin
   Btn.Width := 64;
   Btn.Text := 'Clear';
   Btn.OnClick := LogsClearClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := NativeBar;
@@ -3463,7 +3589,7 @@ begin
   Btn.Text := 'Stop';
   Btn.TagString := 'stop';
   Btn.OnClick := LogsClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := NativeBar;
@@ -3472,25 +3598,25 @@ begin
   Btn.Text := 'Tail';
   Btn.TagString := 'start';
   Btn.OnClick := LogsClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FLogsStatusLabel := TLabel.Create(Self);
   FLogsStatusLabel.Parent := NativeBar;
   FLogsStatusLabel.Align := TAlignLayout.Client;
-  FLogsStatusLabel.Height := 26;
+  FLogsStatusLabel.Height := H_INPUT;
   FLogsStatusLabel.Text := 'disconnected';
   FLogsStatusLabel.TextSettings.VertAlign := TTextAlign.Center;
   FLogsStatusLabel.StyledSettings := FLogsStatusLabel.StyledSettings -
     [TStyledSetting.FontColor];
   UseStyledLabelColor(FLogsStatusLabel);
-  SetControlMargins(FLogsStatusLabel, 8, 0, 8, 4);
+  SetControlMargins(FLogsStatusLabel, GAP_S, 0, GAP_S, GAP_XS);
 
   if FPaneMemos.TryGetValue('logs', LogMemo) then
   begin
     LogMemo.Parent := EndpointBar.Parent;
     LogMemo.Align := TAlignLayout.Client;
     LogMemo.Visible := True;
-    SetControlMargins(LogMemo, 12, 0, 12, 10);
+    SetControlMargins(LogMemo, GAP_M, 0, GAP_M, 10);
   end;
 
   EndpointBar := BuildEndpointTab('stats', 'Stats', '/v1/stats',
@@ -3512,8 +3638,8 @@ begin
   NativeBar := TLayout.Create(Self);
   NativeBar.Parent := EndpointBar.Parent;
   NativeBar.Align := TAlignLayout.Top;
-  NativeBar.Height := 38;
-  SetControlMargins(NativeBar, 12, 0, 12, 6);
+  NativeBar.Height := ROW_BAR;
+  SetControlMargins(NativeBar, GAP_M, 0, GAP_M, GAP_S);
 
   { name the row: three unrelated-looking buttons floating in a toolbar read
     as leftovers; under a label they read as the workspace section }
@@ -3523,7 +3649,7 @@ begin
   WorkspaceLabel.Width := 160;
   WorkspaceLabel.Text := 'Workspace backup';
   WorkspaceLabel.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(WorkspaceLabel, UI_CHROME_TEXT, 11, True);
+  StyleLabel(WorkspaceLabel, UI_CHROME_TEXT, TXT_BODY, True);
 
   Btn := TButton.Create(Self);
   Btn.Parent := NativeBar;
@@ -3531,7 +3657,7 @@ begin
   Btn.Width := 82;
   Btn.Text := 'Save ZIP';
   Btn.OnClick := WorkspaceExportClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := NativeBar;
@@ -3539,7 +3665,7 @@ begin
   Btn.Width := 88;
   Btn.Text := 'Import ZIP';
   Btn.OnClick := WorkspaceImportClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := NativeBar;
@@ -3547,14 +3673,14 @@ begin
   Btn.Width := 78;
   Btn.Text := 'Onboard';
   Btn.OnClick := OnboardingShowClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   SettingsTabs := TTabControl.Create(Self);
   FSettingsTabs := SettingsTabs;
   SettingsTabs.Parent := EndpointBar.Parent;
   SettingsTabs.Align := TAlignLayout.Client;
   SettingsTabs.TabPosition := TTabPosition.Top;
-  SetControlMargins(SettingsTabs, 12, 8, 12, 8);
+  SetControlMargins(SettingsTabs, GAP_M, GAP_S, GAP_M, GAP_S);
 
   GatewayTab := TTabItem.Create(Self);
   GatewayTab.Parent := SettingsTabs;
@@ -3564,18 +3690,18 @@ begin
   GatewayBody.Parent := GatewayTab;
   GatewayBody.Align := TAlignLayout.Top;
   GatewayBody.Height := 104;
-  SetControlPadding(GatewayBody, 12, 10, 12, 12);
+  SetControlPadding(GatewayBody, GAP_M, 10, GAP_M, GAP_M);
   AddPanelChrome(GatewayBody, False);
   AddSectionHeader(GatewayBody, 'Gateway connection');
 
   FConnectionRow.Parent := GatewayBody;
   FConnectionRow.Align := TAlignLayout.Top;
   FConnectionRow.Visible := True;
-  FConnectionRow.Height := 38;
-  SetControlMargins(FConnectionRow, 0, 8, 0, 0);
-  SetControlMargins(FTokenEdit, 8, 0, 0, 0);
-  SetControlMargins(FTokenShowButton, 8, 0, 0, 0);
-  SetControlMargins(FTokenClearButton, 8, 0, 0, 0);
+  FConnectionRow.Height := ROW_BAR;
+  SetControlMargins(FConnectionRow, 0, GAP_S, 0, 0);
+  SetControlMargins(FTokenEdit, GAP_S, 0, 0, 0);
+  SetControlMargins(FTokenShowButton, GAP_S, 0, 0, 0);
+  SetControlMargins(FTokenClearButton, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := FConnectionRow;
@@ -3583,7 +3709,7 @@ begin
   Btn.Width := 82;
   Btn.Text := 'Connect';
   Btn.OnClick := RefreshClick;
-  SetControlMargins(Btn, 8, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   SettingsTab := TTabItem.Create(Self);
   SettingsTab.Parent := SettingsTabs;
@@ -3627,7 +3753,7 @@ begin
   TopLine := TLayout.Create(Self);
   TopLine.Parent := Tab;
   TopLine.Align := TAlignLayout.Top;
-  TopLine.Height := 44;
+  TopLine.Height := ROW_LIST;
   SetControlPadding(TopLine, 10, 5, 10, 3);
 
   { No chrome rect behind the chat toolbar: with the buttons iconified it
@@ -3639,7 +3765,7 @@ begin
   FParamsToggleButton.Align := TAlignLayout.Right;
   FParamsToggleButton.Width := 92;
   FParamsToggleButton.OnClick := ParamsToggleClick;
-  SetControlMargins(FParamsToggleButton, 6, 0, 0, 0);
+  SetControlMargins(FParamsToggleButton, GAP_S, 0, 0, 0);
   RenderParamsButton;
 
   FToolsToggleButton := TButton.Create(Self);
@@ -3648,7 +3774,7 @@ begin
   FToolsToggleButton.Width := 86;
   FToolsToggleButton.OnClick := ChatToolsToggleClick;
   RenderToolsButton;
-  SetControlMargins(FToolsToggleButton, 0, 0, 8, 0);
+  SetControlMargins(FToolsToggleButton, 0, 0, GAP_S, 0);
 
   FParamsSummaryLabel := TLabel.Create(Self);
   FParamsSummaryLabel.Parent := TopLine;
@@ -3659,7 +3785,7 @@ begin
   FParamsSummaryLabel.StyledSettings := FParamsSummaryLabel.StyledSettings -
     [TStyledSetting.FontColor];
   FParamsSummaryLabel.TextSettings.FontColor := $FFB5C3D5;
-  SetControlMargins(FParamsSummaryLabel, 0, 0, 8, 0);
+  SetControlMargins(FParamsSummaryLabel, 0, 0, GAP_S, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := TopLine;
@@ -3667,7 +3793,7 @@ begin
   Btn.Width := 70;
   Btn.Text := 'Files';
   Btn.OnClick := ChatFilesClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FRedoButton := TButton.Create(Self);
   FRedoButton.Parent := TopLine;
@@ -3676,7 +3802,7 @@ begin
   FRedoButton.Text := 'Redo';
   FRedoButton.TagString := 'redo';
   FRedoButton.OnClick := ChatCheckpointClick;
-  SetControlMargins(FRedoButton, 6, 0, 0, 0);
+  SetControlMargins(FRedoButton, GAP_S, 0, 0, 0);
 
   FUndoButton := TButton.Create(Self);
   FUndoButton.Parent := TopLine;
@@ -3685,7 +3811,7 @@ begin
   FUndoButton.Text := 'Undo';
   FUndoButton.TagString := 'undo';
   FUndoButton.OnClick := ChatCheckpointClick;
-  SetControlMargins(FUndoButton, 6, 0, 0, 0);
+  SetControlMargins(FUndoButton, GAP_S, 0, 0, 0);
 
   Params := TLayout.Create(Self);
   FChatParamsLayout := Params;
@@ -3693,7 +3819,7 @@ begin
   Params.Align := TAlignLayout.Top;
   Params.Height := IfThen(FChatParamsVisible, 126, 0);
   Params.Visible := FChatParamsVisible;
-  SetControlPadding(Params, 10, 4, 10, 6);
+  SetControlPadding(Params, 10, GAP_XS, 10, GAP_S);
 
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := Params;
@@ -3704,8 +3830,8 @@ begin
   PresetRow := TLayout.Create(Self);
   PresetRow.Parent := Params;
   PresetRow.Align := TAlignLayout.Top;
-  PresetRow.Height := 34;
-  SetControlPadding(PresetRow, 0, 0, 0, 6);
+  PresetRow.Height := ROW_BAR;
+  SetControlPadding(PresetRow, 0, 0, 0, GAP_S);
 
   FPromptPresetCombo := TComboBox.Create(Self);
   FPromptPresetCombo.Parent := PresetRow;
@@ -3714,7 +3840,7 @@ begin
   FPromptPresetCombo.Items.Add('Preset -');
   FPromptPresetCombo.ItemIndex := 0;
   FPromptPresetCombo.OnChange := PromptPresetChange;
-  SetControlMargins(FPromptPresetCombo, 0, 0, 8, 0);
+  SetControlMargins(FPromptPresetCombo, 0, 0, GAP_S, 0);
 
   FPresetDeleteButton := TButton.Create(Self);
   FPresetDeleteButton.Parent := PresetRow;
@@ -3722,7 +3848,7 @@ begin
   FPresetDeleteButton.Width := 68;
   FPresetDeleteButton.Text := 'Delete';
   FPresetDeleteButton.OnClick := DeletePresetClick;
-  SetControlMargins(FPresetDeleteButton, 6, 0, 0, 0);
+  SetControlMargins(FPresetDeleteButton, GAP_S, 0, 0, 0);
 
   FPresetSaveButton := TButton.Create(Self);
   FPresetSaveButton.Parent := PresetRow;
@@ -3730,7 +3856,7 @@ begin
   FPresetSaveButton.Width := 62;
   FPresetSaveButton.Text := 'Save';
   FPresetSaveButton.OnClick := SavePresetClick;
-  SetControlMargins(FPresetSaveButton, 6, 0, 0, 0);
+  SetControlMargins(FPresetSaveButton, GAP_S, 0, 0, 0);
 
   FParamsResetButton := TButton.Create(Self);
   FParamsResetButton.Parent := PresetRow;
@@ -3738,7 +3864,7 @@ begin
   FParamsResetButton.Width := 62;
   FParamsResetButton.Text := 'Reset';
   FParamsResetButton.OnClick := ResetParamsClick;
-  SetControlMargins(FParamsResetButton, 6, 0, 0, 0);
+  SetControlMargins(FParamsResetButton, GAP_S, 0, 0, 0);
 
   FPresetNameEdit := TEdit.Create(Self);
   FPresetNameEdit.Parent := PresetRow;
@@ -3748,8 +3874,8 @@ begin
   SamplingRow := TLayout.Create(Self);
   SamplingRow.Parent := Params;
   SamplingRow.Align := TAlignLayout.Top;
-  SamplingRow.Height := 34;
-  SetControlMargins(SamplingRow, 0, 4, 0, 6);
+  SamplingRow.Height := ROW_BAR;
+  SetControlMargins(SamplingRow, 0, GAP_XS, 0, GAP_S);
 
   L := TLabel.Create(Self);
   L.Parent := SamplingRow;
@@ -3758,7 +3884,7 @@ begin
   L.Text := 'Temperature';
   L.TextSettings.VertAlign := TTextAlign.Center;
   L.TextSettings.HorzAlign := TTextAlign.Trailing;
-  StyleLabel(L, UI_MUTED, 11, False);
+  StyleLabel(L, UI_MUTED, TXT_BODY, False);
   SetControlMargins(L, 0, 0, 10, 0);
 
   FTemperatureTrack := TTrackBar.Create(Self);
@@ -3769,7 +3895,7 @@ begin
   FTemperatureTrack.Max := 2;
   FTemperatureTrack.Value := 1;
   FTemperatureTrack.OnChange := TemperatureTrackChange;
-  SetControlMargins(FTemperatureTrack, 0, 0, 12, 0);
+  SetControlMargins(FTemperatureTrack, 0, 0, GAP_M, 0);
 
   L := TLabel.Create(Self);
   FTemperatureLabel := L;
@@ -3779,8 +3905,8 @@ begin
   L.Text := 'Temp';
   L.TextSettings.VertAlign := TTextAlign.Center;
   L.TextSettings.HorzAlign := TTextAlign.Trailing;
-  StyleLabel(L, UI_MUTED, 11, False);
-  SetControlMargins(L, 0, 0, 6, 0);
+  StyleLabel(L, UI_MUTED, TXT_BODY, False);
+  SetControlMargins(L, 0, 0, GAP_S, 0);
 
   FTemperatureEdit := TEdit.Create(Self);
   FTemperatureEdit.Parent := SamplingRow;
@@ -3799,8 +3925,8 @@ begin
   L.Text := 'Max tokens';
   L.TextSettings.VertAlign := TTextAlign.Center;
   L.TextSettings.HorzAlign := TTextAlign.Trailing;
-  StyleLabel(L, UI_MUTED, 11, False);
-  SetControlMargins(L, 0, 0, 6, 0);
+  StyleLabel(L, UI_MUTED, TXT_BODY, False);
+  SetControlMargins(L, 0, 0, GAP_S, 0);
 
   FMaxTokensEdit := TEdit.Create(Self);
   FMaxTokensEdit.Parent := SamplingRow;
@@ -3809,7 +3935,7 @@ begin
   FMaxTokensEdit.KeyboardType := TVirtualKeyboardType.NumberPad;
   FMaxTokensEdit.TextPrompt := 'default';
   FMaxTokensEdit.OnChange := ChatParamsChanged;
-  SetControlMargins(FMaxTokensEdit, 0, 0, 12, 0);
+  SetControlMargins(FMaxTokensEdit, 0, 0, GAP_M, 0);
 
   FSystemMemo := TMemo.Create(Self);
   FSystemMemo.Parent := Params;
@@ -3826,30 +3952,30 @@ begin
   FChatStatsLabel := TLabel.Create(Self);
   FChatStatsLabel.Parent := Self;
   FChatStatsLabel.Align := TAlignLayout.Bottom;
-  FChatStatsLabel.Height := 20;
+  FChatStatsLabel.Height := ROW_TEXT;
   FChatStatsLabel.Text := '0 turns';
   FChatStatsLabel.TextSettings.HorzAlign := TTextAlign.Center;
   FChatStatsLabel.TextSettings.VertAlign := TTextAlign.Center;
   FChatStatsLabel.StyledSettings := FChatStatsLabel.StyledSettings -
     [TStyledSetting.FontColor];
   FChatStatsLabel.TextSettings.FontColor := UI_MUTED;
-  SetControlMargins(FChatStatsLabel, 8, 0, 8, 0);
+  SetControlMargins(FChatStatsLabel, GAP_S, 0, GAP_S, 0);
 
   FSandboxLabel := TLabel.Create(Self);
   FSandboxLabel.Parent := Tab;
   FSandboxLabel.Align := TAlignLayout.Top;
-  FSandboxLabel.Height := 22;
+  FSandboxLabel.Height := ROW_TEXT;
   FSandboxLabel.Text := 'shell: unknown';
   FSandboxLabel.TextSettings.VertAlign := TTextAlign.Center;
   FSandboxLabel.StyledSettings := FSandboxLabel.StyledSettings -
     [TStyledSetting.FontColor];
   FSandboxLabel.TextSettings.FontColor := $FFFFD166;
-  SetControlMargins(FSandboxLabel, 8, 0, 8, 0);
+  SetControlMargins(FSandboxLabel, GAP_S, 0, GAP_S, 0);
 
   TranscriptBody := TLayout.Create(Self);
   TranscriptBody.Parent := Tab;
   TranscriptBody.Align := TAlignLayout.Client;
-  SetControlMargins(TranscriptBody, 10, 0, 10, 8);
+  SetControlMargins(TranscriptBody, 10, 0, 10, GAP_S);
   { no chrome rect here: the transcript is open canvas, not a boxed panel --
     an outline around the scroll area just competes with the chat text }
 
@@ -3872,7 +3998,7 @@ begin
   FChatFlow.FlowDirection := TFlowDirection.LeftToRight;
   FChatFlow.Width := 640;
   FChatFlow.Height := 0;
-  SetControlPadding(FChatFlow, 8, 8, 8, 8);
+  SetControlPadding(FChatFlow, GAP_S, GAP_S, GAP_S, GAP_S);
 
   FChatList := TListBox.Create(Self);
   FChatList.Parent := TranscriptBody;
@@ -3887,7 +4013,7 @@ begin
   Composer.Parent := Tab;
   Composer.Align := TAlignLayout.Bottom;
   Composer.Height := 176;
-  SetControlPadding(Composer, 10, 6, 10, 8);
+  SetControlPadding(Composer, 10, GAP_S, 10, GAP_S);
 
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := Composer;
@@ -3901,7 +4027,7 @@ begin
   FQueueLabel := TLabel.Create(Self);
   FQueueLabel.Parent := Composer;
   FQueueLabel.Align := TAlignLayout.Top;
-  FQueueLabel.Height := 24;
+  FQueueLabel.Height := ROW_TEXT;
   FQueueLabel.Visible := False;
   FQueueLabel.TextSettings.VertAlign := TTextAlign.Center;
   FQueueLabel.StyledSettings := FQueueLabel.StyledSettings -
@@ -3911,7 +4037,7 @@ begin
   FAttachmentLabel := TLabel.Create(Self);
   FAttachmentLabel.Parent := Composer;
   FAttachmentLabel.Align := TAlignLayout.Top;
-  FAttachmentLabel.Height := 24;
+  FAttachmentLabel.Height := ROW_TEXT;
   FAttachmentLabel.Visible := False;
   FAttachmentLabel.TextSettings.VertAlign := TTextAlign.Center;
   FAttachmentLabel.StyledSettings := FAttachmentLabel.StyledSettings -
@@ -3929,14 +4055,14 @@ begin
   SendPanel.Parent := Composer;
   SendPanel.Align := TAlignLayout.Bottom;
   SendPanel.Height := 42;
-  SetControlPadding(SendPanel, 0, 6, 0, 0);
+  SetControlPadding(SendPanel, 0, GAP_S, 0, 0);
 
   FModeButton := TButton.Create(Self);
   FModeButton.Parent := SendPanel;
   FModeButton.Align := TAlignLayout.Left;
   FModeButton.Width := 96;
   FModeButton.OnClick := ModeClick;
-  SetControlMargins(FModeButton, 0, 0, 8, 0);
+  SetControlMargins(FModeButton, 0, 0, GAP_S, 0);
 
   FAttachButton := TButton.Create(Self);
   FAttachButton.Parent := SendPanel;
@@ -3944,7 +4070,7 @@ begin
   FAttachButton.Width := 82;
   FAttachButton.Text := 'Attach';
   FAttachButton.OnClick := AttachFilesClick;
-  SetControlMargins(FAttachButton, 0, 0, 8, 0);
+  SetControlMargins(FAttachButton, 0, 0, GAP_S, 0);
 
   FModelCombo := TComboBox.Create(Self);
   FModelCombo.Parent := SendPanel;
@@ -3953,7 +4079,7 @@ begin
   FModelCombo.Items.Add('default model');
   FModelCombo.ItemIndex := 0;
   FModelCombo.OnChange := ModelComboChange;
-  SetControlMargins(FModelCombo, 0, 0, 8, 0);
+  SetControlMargins(FModelCombo, 0, 0, GAP_S, 0);
 
   FSendButton := TButton.Create(Self);
   FSendButton.Parent := SendPanel;
@@ -3969,7 +4095,7 @@ begin
   FClearAttachmentsButton.Text := 'Clear';
   FClearAttachmentsButton.Visible := False;   { appears with attachments }
   FClearAttachmentsButton.OnClick := ClearAttachmentsClick;
-  SetControlMargins(FClearAttachmentsButton, 8, 0, 0, 0);
+  SetControlMargins(FClearAttachmentsButton, GAP_S, 0, 0, 0);
 
   FComposerStatusLabel := TLabel.Create(Self);
   FComposerStatusLabel.Parent := SendPanel;
@@ -4045,7 +4171,7 @@ begin
   Info.Text := Description;
   Info.WordWrap := True;
   Info.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(Info, UI_MUTED, 11, False);
+  StyleLabel(Info, UI_MUTED, TXT_BODY, False);
   SetControlMargins(Info, 0, 0, 0, 0);
 
   Bar := TLayout.Create(Self);
@@ -4062,7 +4188,7 @@ begin
   Btn.Text := 'Run';
   Btn.TagString := Key;
   Btn.OnClick := EndpointRunClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   MethodCombo := TComboBox.Create(Self);
   MethodCombo.Parent := Bar;
@@ -4073,7 +4199,7 @@ begin
   MethodCombo.Items.Add('PUT');
   MethodCombo.Items.Add('DELETE');
   MethodCombo.ItemIndex := 0;
-  SetControlMargins(MethodCombo, 6, 0, 0, 0);
+  SetControlMargins(MethodCombo, GAP_S, 0, 0, 0);
   FEndpointMethodCombos.Add(Key, MethodCombo);
 
   Edit := TEdit.Create(Self);
@@ -4087,24 +4213,24 @@ begin
   BodyPanel.Align := TAlignLayout.Bottom;
   BodyPanel.Height := 0;
   BodyPanel.Visible := False;
-  SetControlMargins(BodyPanel, 12, 0, 12, 10);
-  SetControlPadding(BodyPanel, 10, 6, 10, 8);
+  SetControlMargins(BodyPanel, GAP_M, 0, GAP_M, 10);
+  SetControlPadding(BodyPanel, 10, GAP_S, 10, GAP_S);
   AddPanelChrome(BodyPanel, True);
 
   BodyLabel := TLabel.Create(Self);
   BodyLabel.Parent := BodyPanel;
   BodyLabel.Align := TAlignLayout.Top;
-  BodyLabel.Height := 22;
+  BodyLabel.Height := ROW_TEXT;
   BodyLabel.Text := 'Request body';
   BodyLabel.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(BodyLabel, UI_MUTED, 11, True);
+  StyleLabel(BodyLabel, UI_MUTED, TXT_BODY, True);
 
   BodyMemo := TMemo.Create(Self);
   BodyMemo.Parent := BodyPanel;
   BodyMemo.Align := TAlignLayout.Client;
   BodyMemo.TextPrompt := 'JSON body for POST/PUT. GET /v1/config loads editable JSON here.';
   BodyMemo.WordWrap := False;
-  SetControlMargins(BodyMemo, 0, 4, 0, 0);
+  SetControlMargins(BodyMemo, 0, GAP_XS, 0, 0);
   FEndpointBodyMemos.Add(Key, BodyMemo);
 
   ResponsePanel := TLayout.Create(Self);
@@ -4112,17 +4238,17 @@ begin
   ResponsePanel.Align := TAlignLayout.None;
   ResponsePanel.Height := 0;
   ResponsePanel.Visible := False;
-  SetControlMargins(ResponsePanel, 12, 0, 12, 10);
-  SetControlPadding(ResponsePanel, 10, 8, 10, 10);
+  SetControlMargins(ResponsePanel, GAP_M, 0, GAP_M, 10);
+  SetControlPadding(ResponsePanel, 10, GAP_S, 10, 10);
   AddPanelChrome(ResponsePanel, False);
 
   ResponseLabel := TLabel.Create(Self);
   ResponseLabel.Parent := ResponsePanel;
   ResponseLabel.Align := TAlignLayout.Top;
-  ResponseLabel.Height := 22;
+  ResponseLabel.Height := ROW_TEXT;
   ResponseLabel.Text := 'Response';
   ResponseLabel.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(ResponseLabel, UI_MUTED, 11, True);
+  StyleLabel(ResponseLabel, UI_MUTED, TXT_BODY, True);
 
   Memo := TMemo.Create(Self);
   Memo.Parent := ResponsePanel;
@@ -4130,7 +4256,7 @@ begin
   Memo.WordWrap := False;
   Memo.Lines.Text := Description + sLineBreak + sLineBreak +
     'Endpoint: ' + Endpoint;
-  SetControlMargins(Memo, 0, 4, 0, 0);
+  SetControlMargins(Memo, 0, GAP_XS, 0, 0);
   FPaneMemos.Add(Key, Memo);
 
   Result := Bar;
@@ -4151,11 +4277,11 @@ begin
   Btn.Parent := FNavScroll;
   Btn.Align := TAlignLayout.Left;
   Btn.Width := Max(76, 34 + Length(Caption) * 8);
-  Btn.Height := 32;
+  Btn.Height := ROW_FORM;
   Btn.Text := Caption;
   Btn.TagString := Caption;
   Btn.OnClick := NavButtonClick;
-  SetControlMargins(Btn, 0, 0, 6, 0);
+  SetControlMargins(Btn, 0, 0, GAP_S, 0);
   StyleButton(Btn, False);
   FNavButtons.Add(Key, Btn);
   if (FNavCombo <> nil) and (FNavCombo.Items.IndexOf(Caption) < 0) then
@@ -4310,13 +4436,13 @@ begin
   Panel := TLayout.Create(Self);
   Panel.Parent := AParent;
   Panel.Align := TAlignLayout.Client;
-  SetControlPadding(Panel, 12, 8, 12, 10);
+  SetControlPadding(Panel, GAP_M, GAP_S, GAP_M, 10);
   AddPanelChrome(Panel, False);
 
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 36;
+  Row.Height := ROW_BAR;
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4324,7 +4450,7 @@ begin
   Btn.Width := 104;
   Btn.Text := 'Download';
   Btn.OnClick := FilesDownloadSelectedClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4333,7 +4459,7 @@ begin
   Btn.Text := 'Preview';
   Btn.OnClick := FilesBrowseClick;
   Btn.TagString := 'read';
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4342,7 +4468,7 @@ begin
   Btn.Text := 'Up';
   Btn.OnClick := FilesBrowseClick;
   Btn.TagString := 'up';
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4351,7 +4477,7 @@ begin
   Btn.Text := 'Browse';
   Btn.OnClick := FilesBrowseClick;
   Btn.TagString := 'browse';
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FFilePathEdit := TEdit.Create(Self);
   FFilePathEdit.Parent := Row;
@@ -4361,15 +4487,15 @@ begin
   Body := TLayout.Create(Self);
   Body.Parent := Panel;
   Body.Align := TAlignLayout.Client;
-  SetControlMargins(Body, 0, 8, 0, 0);
+  SetControlMargins(Body, 0, GAP_S, 0, 0);
 
   LeftPane := TLayout.Create(Self);
   LeftPane.Parent := Body;
   LeftPane.Align := TAlignLayout.Left;
   LeftPane.Width := 320;
   FFileLeftPane := LeftPane;
-  SetControlMargins(LeftPane, 0, 0, 8, 0);
-  SetControlPadding(LeftPane, 8, 8, 8, 8);
+  SetControlMargins(LeftPane, 0, 0, GAP_S, 0);
+  SetControlPadding(LeftPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(LeftPane, True);
   AddSectionHeader(LeftPane, 'Roots');
 
@@ -4382,13 +4508,13 @@ begin
   FFileViewerStatusLabel := TLabel.Create(Self);
   FFileViewerStatusLabel.Parent := LeftPane;
   FFileViewerStatusLabel.Align := TAlignLayout.Top;
-  FFileViewerStatusLabel.Height := 28;
+  FFileViewerStatusLabel.Height := H_INPUT;
   FFileViewerStatusLabel.Text := '(home)';
   FFileViewerStatusLabel.TextSettings.VertAlign := TTextAlign.Center;
   FFileViewerStatusLabel.StyledSettings := FFileViewerStatusLabel.StyledSettings -
     [TStyledSetting.FontColor];
   UseStyledLabelColor(FFileViewerStatusLabel);
-  SetControlMargins(FFileViewerStatusLabel, 0, 6, 0, 2);
+  SetControlMargins(FFileViewerStatusLabel, 0, GAP_S, 0, 2);
 
   FFileList := TListBox.Create(Self);
   FFileList.Parent := LeftPane;
@@ -4401,13 +4527,13 @@ begin
   RightPane.Parent := Body;
   RightPane.Align := TAlignLayout.Client;
   FFileViewerPane := RightPane;
-  SetControlPadding(RightPane, 8, 8, 8, 8);
+  SetControlPadding(RightPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(RightPane, True);
 
   Row := TLayout.Create(Self);
   Row.Parent := RightPane;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 34;
+  Row.Height := ROW_BAR;
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4415,7 +4541,7 @@ begin
   Btn.Width := 62;
   Btn.Text := 'Copy';
   Btn.OnClick := FileDetailCopyClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4424,7 +4550,7 @@ begin
   Btn.Text := 'Hex';
   Btn.OnClick := FilesBrowseClick;
   Btn.TagString := 'peek';
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FFileHexLabel := TLabel.Create(Self);
   FFileHexLabel.Parent := Row;
@@ -4438,9 +4564,9 @@ begin
   FFileHexToolbar := TLayout.Create(Self);
   FFileHexToolbar.Parent := RightPane;
   FFileHexToolbar.Align := TAlignLayout.Top;
-  FFileHexToolbar.Height := 34;
+  FFileHexToolbar.Height := ROW_BAR;
   FFileHexToolbar.Visible := False;
-  SetControlMargins(FFileHexToolbar, 0, 6, 0, 0);
+  SetControlMargins(FFileHexToolbar, 0, GAP_S, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := FFileHexToolbar;
@@ -4448,7 +4574,7 @@ begin
   Btn.Width := 58;
   Btn.Text := 'Last';
   Btn.OnClick := FilesHexLastClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := FFileHexToolbar;
@@ -4456,7 +4582,7 @@ begin
   Btn.Width := 58;
   Btn.Text := 'Next';
   Btn.OnClick := FilesHexNextClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := FFileHexToolbar;
@@ -4464,7 +4590,7 @@ begin
   Btn.Width := 58;
   Btn.Text := 'Prev';
   Btn.OnClick := FilesHexPrevClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := FFileHexToolbar;
@@ -4472,14 +4598,14 @@ begin
   Btn.Width := 58;
   Btn.Text := 'First';
   Btn.OnClick := FilesHexFirstClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FFilePreviewImage := TImage.Create(Self);
   FFilePreviewImage.Parent := RightPane;
   FFilePreviewImage.Align := TAlignLayout.Client;
   FFilePreviewImage.Visible := False;
   FFilePreviewImage.WrapMode := TImageWrapMode.Fit;
-  SetControlMargins(FFilePreviewImage, 0, 6, 0, 0);
+  SetControlMargins(FFilePreviewImage, 0, GAP_S, 0, 0);
 
   FFileDetailMemo := TMemo.Create(Self);
   FFileDetailMemo.Parent := RightPane;
@@ -4487,7 +4613,7 @@ begin
   FFileDetailMemo.ReadOnly := True;
   FFileDetailMemo.WordWrap := False;
   FFileDetailMemo.Lines.Text := 'Select a file from the browser to preview text, images, or binary hex pages here.';
-  SetControlMargins(FFileDetailMemo, 0, 6, 0, 0);
+  SetControlMargins(FFileDetailMemo, 0, GAP_S, 0, 0);
 
   AddPaneSplitter(AParent, TAlignLayout.Top);
 end;
@@ -4504,13 +4630,13 @@ begin
   Panel := TLayout.Create(Self);
   Panel.Parent := AParent;
   Panel.Align := TAlignLayout.Client;
-  SetControlPadding(Panel, 12, 8, 12, 10);
+  SetControlPadding(Panel, GAP_M, GAP_S, GAP_M, 10);
   AddPanelChrome(Panel, False);
 
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 38;
+  Row.Height := ROW_BAR;
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4518,7 +4644,7 @@ begin
   Btn.Width := 76;
   Btn.Text := 'Search';
   Btn.OnClick := MemorySearchClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4526,7 +4652,7 @@ begin
   Btn.Width := 74;
   Btn.Text := 'Refresh';
   Btn.OnClick := MemoryFilesLoadClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FMemorySearchEdit := TEdit.Create(Self);
   FMemorySearchEdit.Parent := Row;
@@ -4536,15 +4662,15 @@ begin
   Body := TLayout.Create(Self);
   Body.Parent := Panel;
   Body.Align := TAlignLayout.Client;
-  SetControlMargins(Body, 0, 8, 0, 0);
+  SetControlMargins(Body, 0, GAP_S, 0, 0);
 
   FilesPane := TLayout.Create(Self);
   FilesPane.Parent := Body;
   FilesPane.Align := TAlignLayout.Left;
   FilesPane.Width := 320;
   FMemoryFilesPane := FilesPane;
-  SetControlMargins(FilesPane, 0, 0, 8, 0);
-  SetControlPadding(FilesPane, 8, 8, 8, 8);
+  SetControlMargins(FilesPane, 0, 0, GAP_S, 0);
+  SetControlPadding(FilesPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(FilesPane, True);
   AddSectionHeader(FilesPane, 'Memory files');
 
@@ -4559,13 +4685,13 @@ begin
   ViewerPane.Parent := Body;
   ViewerPane.Align := TAlignLayout.Client;
   FMemoryFactsPane := ViewerPane;
-  SetControlPadding(ViewerPane, 8, 8, 8, 8);
+  SetControlPadding(ViewerPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(ViewerPane, True);
 
   Row := TLayout.Create(Self);
   Row.Parent := ViewerPane;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 32;
+  Row.Height := ROW_FORM;
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4590,7 +4716,7 @@ begin
   FMemoryFileDetailMemo.ReadOnly := True;
   FMemoryFileDetailMemo.WordWrap := False;
   FMemoryFileDetailMemo.Lines.Text := 'Select a memory file or search result to preview it here.';
-  SetControlMargins(FMemoryFileDetailMemo, 0, 6, 0, 0);
+  SetControlMargins(FMemoryFileDetailMemo, 0, GAP_S, 0, 0);
 end;
 
 procedure TMasterDetailForm.BuildMemoryFactsPanel(AParent: TFmxObject);
@@ -4602,13 +4728,13 @@ begin
   Panel := TLayout.Create(Self);
   Panel.Parent := AParent;
   Panel.Align := TAlignLayout.Client;
-  SetControlPadding(Panel, 12, 8, 12, 10);
+  SetControlPadding(Panel, GAP_M, GAP_S, GAP_M, 10);
   AddPanelChrome(Panel, False);
 
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 38;
+  Row.Height := ROW_BAR;
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4616,7 +4742,7 @@ begin
   Btn.Width := 66;
   Btn.Text := 'Add';
   Btn.OnClick := MemoryFactAddClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FMemoryFactEdit := TEdit.Create(Self);
   FMemoryFactEdit.Parent := Row;
@@ -4626,8 +4752,8 @@ begin
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 34;
-  SetControlMargins(Row, 0, 6, 0, 0);
+  Row.Height := ROW_BAR;
+  SetControlMargins(Row, 0, GAP_S, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4635,7 +4761,7 @@ begin
   Btn.Width := 70;
   Btn.Text := 'Forget';
   Btn.OnClick := MemoryFactDeleteClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4643,7 +4769,7 @@ begin
   Btn.Width := 82;
   Btn.Text := 'Export';
   Btn.OnClick := MemoryFactsExportClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4651,7 +4777,7 @@ begin
   Btn.Width := 76;
   Btn.Text := 'Refresh';
   Btn.OnClick := MemoryFactsLoadClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FMemoryFactsStatusLabel := TLabel.Create(Self);
   FMemoryFactsStatusLabel.Parent := Row;
@@ -4665,7 +4791,7 @@ begin
   FMemoryFactsList := TListBox.Create(Self);
   FMemoryFactsList.Parent := Panel;
   FMemoryFactsList.Align := TAlignLayout.Client;
-  SetControlMargins(FMemoryFactsList, 0, 8, 0, 0);
+  SetControlMargins(FMemoryFactsList, 0, GAP_S, 0, 0);
 end;
 
 procedure TMasterDetailForm.BuildKbPanel(AParent: TFmxObject);
@@ -4680,13 +4806,13 @@ begin
   Panel := TLayout.Create(Self);
   Panel.Parent := AParent;
   Panel.Align := TAlignLayout.Client;
-  SetControlPadding(Panel, 12, 8, 12, 10);
+  SetControlPadding(Panel, GAP_M, GAP_S, GAP_M, 10);
   AddPanelChrome(Panel, False);
 
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 38;
+  Row.Height := ROW_BAR;
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4694,7 +4820,7 @@ begin
   Btn.Width := 78;
   Btn.Text := 'Upload';
   Btn.OnClick := KbUploadClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4702,7 +4828,7 @@ begin
   Btn.Width := 80;
   Btn.Text := 'Sources';
   Btn.OnClick := KbSourcesLoadClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4710,7 +4836,7 @@ begin
   Btn.Width := 72;
   Btn.Text := 'Search';
   Btn.OnClick := KbSearchClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FKBSearchEdit := TEdit.Create(Self);
   FKBSearchEdit.Parent := Row;
@@ -4720,7 +4846,7 @@ begin
   FKBStatusLabel := TLabel.Create(Self);
   FKBStatusLabel.Parent := Panel;
   FKBStatusLabel.Align := TAlignLayout.Top;
-  FKBStatusLabel.Height := 24;
+  FKBStatusLabel.Height := ROW_TEXT;
   FKBStatusLabel.Text := 'Load KB sources or run a search.';
   FKBStatusLabel.TextSettings.VertAlign := TTextAlign.Center;
   FKBStatusLabel.StyledSettings := FKBStatusLabel.StyledSettings -
@@ -4730,14 +4856,14 @@ begin
   Body := TLayout.Create(Self);
   Body.Parent := Panel;
   Body.Align := TAlignLayout.Client;
-  SetControlMargins(Body, 0, 4, 0, 0);
+  SetControlMargins(Body, 0, GAP_XS, 0, 0);
 
   ResultsPane := TLayout.Create(Self);
   ResultsPane.Parent := Body;
   ResultsPane.Align := TAlignLayout.Client;
   FKBResultsPane := ResultsPane;
-  SetControlMargins(ResultsPane, 0, 0, 8, 0);
-  SetControlPadding(ResultsPane, 8, 8, 8, 8);
+  SetControlMargins(ResultsPane, 0, 0, GAP_S, 0);
+  SetControlPadding(ResultsPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(ResultsPane, True);
   AddSectionHeader(ResultsPane, 'Search results');
 
@@ -4751,17 +4877,17 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := ResultsPane;
   Btn.Align := TAlignLayout.Bottom;
-  Btn.Height := 30;
+  Btn.Height := ROW_FORM;
   Btn.Text := 'Open in Files';
   Btn.OnClick := KbResultOpenFileClick;
-  SetControlMargins(Btn, 0, 8, 0, 0);
+  SetControlMargins(Btn, 0, GAP_S, 0, 0);
 
   SourcesPane := TLayout.Create(Self);
   SourcesPane.Parent := Body;
   SourcesPane.Align := TAlignLayout.Right;
   SourcesPane.Width := 330;
   FKBSourcesPane := SourcesPane;
-  SetControlPadding(SourcesPane, 8, 8, 8, 8);
+  SetControlPadding(SourcesPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(SourcesPane, True);
   AddSectionHeader(SourcesPane, 'Indexed sources');
 
@@ -4785,13 +4911,13 @@ begin
   Panel := TLayout.Create(Self);
   Panel.Parent := AParent;
   Panel.Align := TAlignLayout.Client;
-  SetControlPadding(Panel, 12, 8, 12, 10);
+  SetControlPadding(Panel, GAP_M, GAP_S, GAP_M, 10);
   AddPanelChrome(Panel, False);
 
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 38;
+  Row.Height := ROW_BAR;
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4799,7 +4925,7 @@ begin
   Btn.Width := 92;
   Btn.Text := 'Refresh';
   Btn.OnClick := CronRefreshClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4807,7 +4933,7 @@ begin
   Btn.Width := 92;
   Btn.Text := 'Remove';
   Btn.OnClick := CronRemoveClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4815,7 +4941,7 @@ begin
   Btn.Width := 62;
   Btn.Text := 'Save';
   Btn.OnClick := CronSaveClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4823,7 +4949,7 @@ begin
   Btn.Width := 54;
   Btn.Text := 'New';
   Btn.OnClick := CronClearClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FCronStatusLabel := TLabel.Create(Self);
   FCronStatusLabel.Parent := Row;
@@ -4837,15 +4963,15 @@ begin
   Body := TLayout.Create(Self);
   Body.Parent := Panel;
   Body.Align := TAlignLayout.Client;
-  SetControlMargins(Body, 0, 8, 0, 0);
+  SetControlMargins(Body, 0, GAP_S, 0, 0);
 
   ListPane := TLayout.Create(Self);
   ListPane.Parent := Body;
   ListPane.Align := TAlignLayout.Left;
   ListPane.Width := 330;
   FCronListPane := ListPane;
-  SetControlMargins(ListPane, 0, 0, 8, 0);
-  SetControlPadding(ListPane, 8, 8, 8, 8);
+  SetControlMargins(ListPane, 0, 0, GAP_S, 0);
+  SetControlPadding(ListPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(ListPane, True);
   AddSectionHeader(ListPane, 'Schedules');
 
@@ -4860,14 +4986,14 @@ begin
   EditorPane.Parent := Body;
   EditorPane.Align := TAlignLayout.Client;
   FCronEditorPane := EditorPane;
-  SetControlPadding(EditorPane, 8, 8, 8, 8);
+  SetControlPadding(EditorPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(EditorPane, True);
   AddSectionHeader(EditorPane, 'Job editor');
 
   Row := TLayout.Create(Self);
   Row.Parent := EditorPane;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 36;
+  Row.Height := ROW_BAR;
 
   FCronEnabledCheck := TCheckBox.Create(Self);
   FCronEnabledCheck.Parent := Row;
@@ -4875,14 +5001,14 @@ begin
   FCronEnabledCheck.Width := 88;
   FCronEnabledCheck.Text := 'Enabled';
   FCronEnabledCheck.IsChecked := True;
-  SetControlMargins(FCronEnabledCheck, 6, 0, 0, 0);
+  SetControlMargins(FCronEnabledCheck, GAP_S, 0, 0, 0);
 
   FCronSpecEdit := TEdit.Create(Self);
   FCronSpecEdit.Parent := Row;
   FCronSpecEdit.Align := TAlignLayout.Right;
   FCronSpecEdit.Width := 170;
   FCronSpecEdit.TextPrompt := 'cron spec';
-  SetControlMargins(FCronSpecEdit, 6, 0, 0, 0);
+  SetControlMargins(FCronSpecEdit, GAP_S, 0, 0, 0);
 
   FCronIdEdit := TEdit.Create(Self);
   FCronIdEdit.Parent := Row;
@@ -4892,15 +5018,15 @@ begin
   Row := TLayout.Create(Self);
   Row.Parent := EditorPane;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 36;
-  SetControlMargins(Row, 0, 8, 0, 0);
+  Row.Height := ROW_BAR;
+  SetControlMargins(Row, 0, GAP_S, 0, 0);
 
   FCronArgsEdit := TEdit.Create(Self);
   FCronArgsEdit.Parent := Row;
   FCronArgsEdit.Align := TAlignLayout.Right;
   FCronArgsEdit.Width := 310;
   FCronArgsEdit.TextPrompt := 'args string or JSON text';
-  SetControlMargins(FCronArgsEdit, 6, 0, 0, 0);
+  SetControlMargins(FCronArgsEdit, GAP_S, 0, 0, 0);
 
   FCronSkillEdit := TEdit.Create(Self);
   FCronSkillEdit.Parent := Row;
@@ -4910,15 +5036,15 @@ begin
   Row := TLayout.Create(Self);
   Row.Parent := EditorPane;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 36;
-  SetControlMargins(Row, 0, 8, 0, 0);
+  Row.Height := ROW_BAR;
+  SetControlMargins(Row, 0, GAP_S, 0, 0);
 
   FCronChannelKindEdit := TEdit.Create(Self);
   FCronChannelKindEdit.Parent := Row;
   FCronChannelKindEdit.Align := TAlignLayout.Left;
   FCronChannelKindEdit.Width := 132;
   FCronChannelKindEdit.TextPrompt := 'channel kind';
-  SetControlMargins(FCronChannelKindEdit, 0, 0, 6, 0);
+  SetControlMargins(FCronChannelKindEdit, 0, 0, GAP_S, 0);
 
   FCronChannelTargetEdit := TEdit.Create(Self);
   FCronChannelTargetEdit.Parent := Row;
@@ -4930,25 +5056,25 @@ begin
   FCronDetailTitleLabel := TLabel.Create(Self);
   FCronDetailTitleLabel.Parent := EditorPane;
   FCronDetailTitleLabel.Align := TAlignLayout.Top;
-  FCronDetailTitleLabel.Height := 28;
+  FCronDetailTitleLabel.Height := H_INPUT;
   FCronDetailTitleLabel.Text := 'Cron Detail';
   FCronDetailTitleLabel.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(FCronDetailTitleLabel, UI_ACCENT, 12, True);
+  StyleLabel(FCronDetailTitleLabel, UI_ACCENT, TXT_TITLE, True);
 
   FCronDetailMetaLabel := TLabel.Create(Self);
   FCronDetailMetaLabel.Parent := EditorPane;
   FCronDetailMetaLabel.Align := TAlignLayout.Top;
-  FCronDetailMetaLabel.Height := 24;
+  FCronDetailMetaLabel.Height := ROW_TEXT;
   FCronDetailMetaLabel.Text := 'Select a cron job';
   FCronDetailMetaLabel.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(FCronDetailMetaLabel, UI_MUTED, 11, False);
+  StyleLabel(FCronDetailMetaLabel, UI_MUTED, TXT_BODY, False);
 
   FCronDetailMemo := TMemo.Create(Self);
   FCronDetailMemo.Parent := EditorPane;
   FCronDetailMemo.Align := TAlignLayout.Client;
   FCronDetailMemo.ReadOnly := True;
   FCronDetailMemo.WordWrap := True;
-  SetControlMargins(FCronDetailMemo, 0, 6, 0, 0);
+  SetControlMargins(FCronDetailMemo, 0, GAP_S, 0, 0);
 
   AddPaneSplitter(AParent, TAlignLayout.Top);
 end;
@@ -4965,13 +5091,13 @@ begin
   Panel := TLayout.Create(Self);
   Panel.Parent := AParent;
   Panel.Align := TAlignLayout.Client;
-  SetControlPadding(Panel, 12, 8, 12, 10);
+  SetControlPadding(Panel, GAP_M, GAP_S, GAP_M, 10);
   AddPanelChrome(Panel, False);
 
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 36;
+  Row.Height := ROW_BAR;
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -4986,7 +5112,7 @@ begin
   FStatsAutoRefreshCheck.Width := 118;
   FStatsAutoRefreshCheck.Text := 'Auto refresh';
   FStatsAutoRefreshCheck.OnClick := StatsRefreshClick;
-  SetControlMargins(FStatsAutoRefreshCheck, 6, 0, 0, 0);
+  SetControlMargins(FStatsAutoRefreshCheck, GAP_S, 0, 0, 0);
 
   FStatsStatusLabel := TLabel.Create(Self);
   FStatsStatusLabel.Parent := Row;
@@ -5000,15 +5126,15 @@ begin
   Body := TLayout.Create(Self);
   Body.Parent := Panel;
   Body.Align := TAlignLayout.Client;
-  SetControlMargins(Body, 0, 6, 0, 0);
+  SetControlMargins(Body, 0, GAP_S, 0, 0);
 
   LeftPane := TLayout.Create(Self);
   LeftPane.Parent := Body;
   LeftPane.Align := TAlignLayout.Left;
   LeftPane.Width := 320;
   FStatsLeftPane := LeftPane;
-  SetControlMargins(LeftPane, 0, 0, 8, 0);
-  SetControlPadding(LeftPane, 8, 8, 8, 8);
+  SetControlMargins(LeftPane, 0, 0, GAP_S, 0);
+  SetControlPadding(LeftPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(LeftPane, True);
   AddSectionHeader(LeftPane, 'Summary');
 
@@ -5023,7 +5149,7 @@ begin
   RightPane.Parent := Body;
   RightPane.Align := TAlignLayout.Client;
   FStatsRightPane := RightPane;
-  SetControlPadding(RightPane, 8, 8, 8, 8);
+  SetControlPadding(RightPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(RightPane, True);
   AddSectionHeader(RightPane, 'Tokens by provider');
 
@@ -5056,13 +5182,13 @@ begin
   Panel := TLayout.Create(Self);
   Panel.Parent := AParent;
   Panel.Align := TAlignLayout.Client;
-  SetControlPadding(Panel, 12, 8, 12, 10);
+  SetControlPadding(Panel, GAP_M, GAP_S, GAP_M, 10);
   AddPanelChrome(Panel, False);
 
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 38;
+  Row.Height := ROW_BAR;
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5071,7 +5197,7 @@ begin
   Btn.Text := 'Revert';
   Btn.TagString := 'revert';
   Btn.OnClick := CheckpointActionClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5080,7 +5206,7 @@ begin
   Btn.Text := 'Redo';
   Btn.TagString := 'redo';
   Btn.OnClick := CheckpointActionClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5089,7 +5215,7 @@ begin
   Btn.Text := 'Undo';
   Btn.TagString := 'undo';
   Btn.OnClick := CheckpointActionClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5097,7 +5223,7 @@ begin
   Btn.Width := 92;
   Btn.Text := 'Refresh';
   Btn.OnClick := CheckpointRefreshClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FCheckpointStatusLabel := TLabel.Create(Self);
   FCheckpointStatusLabel.Parent := Row;
@@ -5111,15 +5237,15 @@ begin
   Body := TLayout.Create(Self);
   Body.Parent := Panel;
   Body.Align := TAlignLayout.Client;
-  SetControlMargins(Body, 0, 8, 0, 0);
+  SetControlMargins(Body, 0, GAP_S, 0, 0);
 
   ListPane := TLayout.Create(Self);
   ListPane.Parent := Body;
   ListPane.Align := TAlignLayout.Left;
   ListPane.Width := 330;
   FCheckpointListPane := ListPane;
-  SetControlMargins(ListPane, 0, 0, 8, 0);
-  SetControlPadding(ListPane, 8, 8, 8, 8);
+  SetControlMargins(ListPane, 0, 0, GAP_S, 0);
+  SetControlPadding(ListPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(ListPane, True);
   AddSectionHeader(ListPane, 'Checkpoint timeline');
 
@@ -5134,7 +5260,7 @@ begin
   DetailPane.Parent := Body;
   DetailPane.Align := TAlignLayout.Client;
   FCheckpointDetailPane := DetailPane;
-  SetControlPadding(DetailPane, 8, 8, 8, 8);
+  SetControlPadding(DetailPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(DetailPane, True);
   AddSectionHeader(DetailPane, 'Selected checkpoint');
 
@@ -5158,13 +5284,13 @@ begin
   Panel := TLayout.Create(Self);
   Panel.Parent := AParent;
   Panel.Align := TAlignLayout.Client;
-  SetControlPadding(Panel, 12, 8, 12, 10);
+  SetControlPadding(Panel, GAP_M, GAP_S, GAP_M, 10);
   AddPanelChrome(Panel, False);
 
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 36;
+  Row.Height := ROW_BAR;
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5172,7 +5298,7 @@ begin
   Btn.Width := 112;
   Btn.Text := 'Worker Token';
   Btn.OnClick := RelayTokenClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5180,7 +5306,7 @@ begin
   Btn.Width := 92;
   Btn.Text := 'Refresh';
   Btn.OnClick := RelayRefreshClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FRelayAutoRefreshCheck := TCheckBox.Create(Self);
   FRelayAutoRefreshCheck.Parent := Row;
@@ -5188,7 +5314,7 @@ begin
   FRelayAutoRefreshCheck.Width := 118;
   FRelayAutoRefreshCheck.Text := 'Auto refresh';
   FRelayAutoRefreshCheck.OnClick := RelayRefreshClick;
-  SetControlMargins(FRelayAutoRefreshCheck, 6, 0, 0, 0);
+  SetControlMargins(FRelayAutoRefreshCheck, GAP_S, 0, 0, 0);
 
   FRelayStatusLabel := TLabel.Create(Self);
   FRelayStatusLabel.Parent := Row;
@@ -5202,8 +5328,8 @@ begin
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 34;
-  SetControlMargins(Row, 0, 6, 0, 0);
+  Row.Height := ROW_BAR;
+  SetControlMargins(Row, 0, GAP_S, 0, 0);
 
   FRelayUrlEdit := TEdit.Create(Self);
   FRelayUrlEdit.Parent := Row;
@@ -5211,7 +5337,7 @@ begin
   FRelayUrlEdit.Width := 300;
   FRelayUrlEdit.TextPrompt := 'relay gateway URL';
   FRelayUrlEdit.OnChange := RelayRenderSnippets;
-  SetControlMargins(FRelayUrlEdit, 0, 0, 8, 0);
+  SetControlMargins(FRelayUrlEdit, 0, 0, GAP_S, 0);
 
   FRelayShowTokenButton := TButton.Create(Self);
   FRelayShowTokenButton.Parent := Row;
@@ -5219,7 +5345,7 @@ begin
   FRelayShowTokenButton.Width := 68;
   FRelayShowTokenButton.Text := 'Show';
   FRelayShowTokenButton.OnClick := RelayTokenToggleClick;
-  SetControlMargins(FRelayShowTokenButton, 8, 0, 0, 0);
+  SetControlMargins(FRelayShowTokenButton, GAP_S, 0, 0, 0);
 
   FRelayTokenEdit := TEdit.Create(Self);
   FRelayTokenEdit.Parent := Row;
@@ -5230,8 +5356,8 @@ begin
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 34;
-  SetControlMargins(Row, 0, 6, 0, 0);
+  Row.Height := ROW_BAR;
+  SetControlMargins(Row, 0, GAP_S, 0, 0);
 
   FRelayWorkerCommandEdit := TEdit.Create(Self);
   FRelayWorkerCommandEdit.Parent := Row;
@@ -5240,7 +5366,7 @@ begin
   FRelayWorkerCommandEdit.Text := 'pasclaw';
   FRelayWorkerCommandEdit.TextPrompt := 'worker command';
   FRelayWorkerCommandEdit.OnChange := RelayRenderSnippets;
-  SetControlMargins(FRelayWorkerCommandEdit, 0, 0, 8, 0);
+  SetControlMargins(FRelayWorkerCommandEdit, 0, 0, GAP_S, 0);
 
   FRelayWorkerDisconnectButton := TButton.Create(Self);
   FRelayWorkerDisconnectButton.Parent := Row;
@@ -5248,7 +5374,7 @@ begin
   FRelayWorkerDisconnectButton.Width := 92;
   FRelayWorkerDisconnectButton.Text := 'Disconnect';
   FRelayWorkerDisconnectButton.OnClick := RelayWorkerDisconnectClick;
-  SetControlMargins(FRelayWorkerDisconnectButton, 6, 0, 0, 0);
+  SetControlMargins(FRelayWorkerDisconnectButton, GAP_S, 0, 0, 0);
 
   FRelayWorkerConnectButton := TButton.Create(Self);
   FRelayWorkerConnectButton.Parent := Row;
@@ -5256,7 +5382,7 @@ begin
   FRelayWorkerConnectButton.Width := 82;
   FRelayWorkerConnectButton.Text := 'Connect';
   FRelayWorkerConnectButton.OnClick := RelayWorkerConnectClick;
-  SetControlMargins(FRelayWorkerConnectButton, 6, 0, 0, 0);
+  SetControlMargins(FRelayWorkerConnectButton, GAP_S, 0, 0, 0);
 
   FRelayWorkerProviderEdit := TEdit.Create(Self);
   FRelayWorkerProviderEdit.Parent := Row;
@@ -5267,8 +5393,8 @@ begin
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 34;
-  SetControlMargins(Row, 0, 6, 0, 0);
+  Row.Height := ROW_BAR;
+  SetControlMargins(Row, 0, GAP_S, 0, 0);
 
   FRelayWorkerProfileCombo := TComboBox.Create(Self);
   FRelayWorkerProfileCombo.Parent := Row;
@@ -5278,7 +5404,7 @@ begin
   FRelayWorkerProfileCombo.Items.Add('LocalPal');
   FRelayWorkerProfileCombo.ItemIndex := 0;
   FRelayWorkerProfileCombo.OnChange := RelayWorkerProfileChange;
-  SetControlMargins(FRelayWorkerProfileCombo, 0, 0, 8, 0);
+  SetControlMargins(FRelayWorkerProfileCombo, 0, 0, GAP_S, 0);
 
   FRelayWorkerIdEdit := TEdit.Create(Self);
   FRelayWorkerIdEdit.Parent := Row;
@@ -5287,7 +5413,7 @@ begin
   FRelayWorkerIdEdit.Text := 'fmx-' + IntToStr(WinGetCurrentProcessId);
   FRelayWorkerIdEdit.TextPrompt := 'worker id';
   FRelayWorkerIdEdit.OnChange := RelayRenderSnippets;
-  SetControlMargins(FRelayWorkerIdEdit, 0, 0, 8, 0);
+  SetControlMargins(FRelayWorkerIdEdit, 0, 0, GAP_S, 0);
 
   FRelayWorkerModelEdit := TEdit.Create(Self);
   FRelayWorkerModelEdit.Parent := Row;
@@ -5302,20 +5428,20 @@ begin
   FRelayWorkerLogMemo.ReadOnly := True;
   FRelayWorkerLogMemo.WordWrap := False;
   FRelayWorkerLogMemo.Lines.Text := 'Local relay worker idle.';
-  SetControlMargins(FRelayWorkerLogMemo, 0, 6, 0, 0);
+  SetControlMargins(FRelayWorkerLogMemo, 0, GAP_S, 0, 0);
 
   Body := TLayout.Create(Self);
   Body.Parent := Panel;
   Body.Align := TAlignLayout.Client;
-  SetControlMargins(Body, 0, 6, 0, 0);
+  SetControlMargins(Body, 0, GAP_S, 0, 0);
 
   LeftPane := TLayout.Create(Self);
   LeftPane.Parent := Body;
   LeftPane.Align := TAlignLayout.Left;
   LeftPane.Width := 320;
   FRelayLeftPane := LeftPane;
-  SetControlMargins(LeftPane, 0, 0, 8, 0);
-  SetControlPadding(LeftPane, 8, 8, 8, 8);
+  SetControlMargins(LeftPane, 0, 0, GAP_S, 0);
+  SetControlPadding(LeftPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(LeftPane, True);
   AddSectionHeader(LeftPane, 'Status and Setup');
 
@@ -5325,13 +5451,13 @@ begin
   FRelaySnippetsMemo.Height := 170;
   FRelaySnippetsMemo.ReadOnly := True;
   FRelaySnippetsMemo.WordWrap := False;
-  SetControlMargins(FRelaySnippetsMemo, 0, 8, 0, 0);
+  SetControlMargins(FRelaySnippetsMemo, 0, GAP_S, 0, 0);
 
   Row := TLayout.Create(Self);
   Row.Parent := LeftPane;
   Row.Align := TAlignLayout.Bottom;
-  Row.Height := 32;
-  SetControlMargins(Row, 0, 8, 0, 0);
+  Row.Height := ROW_FORM;
+  SetControlMargins(Row, 0, GAP_S, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5352,7 +5478,7 @@ begin
   RightPane.Parent := Body;
   RightPane.Align := TAlignLayout.Client;
   FRelayRightPane := RightPane;
-  SetControlPadding(RightPane, 8, 8, 8, 8);
+  SetControlPadding(RightPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(RightPane, True);
   AddSectionHeader(RightPane, 'Workers');
 
@@ -5363,23 +5489,23 @@ begin
   FRelayWorkerDetailMemo.ReadOnly := True;
   FRelayWorkerDetailMemo.WordWrap := True;
   FRelayWorkerDetailMemo.Lines.Text := 'Select a worker to inspect activity and advertised capabilities.';
-  SetControlMargins(FRelayWorkerDetailMemo, 0, 8, 0, 0);
+  SetControlMargins(FRelayWorkerDetailMemo, 0, GAP_S, 0, 0);
 
   FRelayWorkerDetailMetaLabel := TLabel.Create(Self);
   FRelayWorkerDetailMetaLabel.Parent := RightPane;
   FRelayWorkerDetailMetaLabel.Align := TAlignLayout.Bottom;
-  FRelayWorkerDetailMetaLabel.Height := 22;
+  FRelayWorkerDetailMetaLabel.Height := ROW_TEXT;
   FRelayWorkerDetailMetaLabel.Text := 'Select a worker';
   FRelayWorkerDetailMetaLabel.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(FRelayWorkerDetailMetaLabel, UI_MUTED, 11, False);
+  StyleLabel(FRelayWorkerDetailMetaLabel, UI_MUTED, TXT_BODY, False);
 
   FRelayWorkerDetailTitleLabel := TLabel.Create(Self);
   FRelayWorkerDetailTitleLabel.Parent := RightPane;
   FRelayWorkerDetailTitleLabel.Align := TAlignLayout.Bottom;
-  FRelayWorkerDetailTitleLabel.Height := 26;
+  FRelayWorkerDetailTitleLabel.Height := H_INPUT;
   FRelayWorkerDetailTitleLabel.Text := 'Worker Detail';
   FRelayWorkerDetailTitleLabel.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(FRelayWorkerDetailTitleLabel, UI_ACCENT, 12, True);
+  StyleLabel(FRelayWorkerDetailTitleLabel, UI_ACCENT, TXT_TITLE, True);
 
   FRelayWorkersList := TListBox.Create(Self);
   FRelayWorkersList.Parent := RightPane;
@@ -5430,13 +5556,13 @@ begin
   Title := TLabel.Create(Self);
   Title.Parent := Card;
   Title.Align := TAlignLayout.Top;
-  Title.Height := 44;
+  Title.Height := ROW_LIST;
   Title.Text := 'PasClaw first-boot setup';
   Title.StyledSettings := Title.StyledSettings -
     [TStyledSetting.FontColor, TStyledSetting.Style, TStyledSetting.Size];
   UseStyledLabelColor(Title);
   Title.TextSettings.Font.Style := [TFontStyle.fsBold];
-  Title.TextSettings.Font.Size := 20;
+  Title.TextSettings.Font.Size := TXT_DISPLAY;
 
   FOnboardingStatusLabel := TLabel.Create(Self);
   FOnboardingStatusLabel.Parent := Card;
@@ -5456,17 +5582,17 @@ begin
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Top;
-  Btn.Height := 36;
+  Btn.Height := ROW_BAR;
   Btn.Text := 'Configure Provider';
   Btn.OnClick := OnboardingProviderClick;
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
   Btn.Align := TAlignLayout.Top;
-  Btn.Height := 36;
+  Btn.Height := ROW_BAR;
   Btn.Text := 'Memory and Reranking';
   Btn.OnClick := OnboardingMemoryClick;
-  SetControlMargins(Btn, 0, 8, 0, 0);
+  SetControlMargins(Btn, 0, GAP_S, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5474,7 +5600,7 @@ begin
   Btn.Width := 88;
   Btn.Text := 'Finish';
   Btn.OnClick := OnboardingFinishClick;
-  SetControlMargins(Btn, 8, 56, 0, 0);
+  SetControlMargins(Btn, GAP_S, 56, 0, 0);
 end;
 
 procedure TMasterDetailForm.BuildMcpPanel(AParent: TFmxObject);
@@ -5497,13 +5623,13 @@ begin
   Panel.Parent := AParent;
   Panel.Align := TAlignLayout.Client;
   FMcpPanel := Panel;
-  SetControlPadding(Panel, 12, 8, 12, 10);
+  SetControlPadding(Panel, GAP_M, GAP_S, GAP_M, 10);
   AddPanelChrome(Panel, False);
 
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 38;
+  Row.Height := ROW_BAR;
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5511,7 +5637,7 @@ begin
   Btn.Width := 124;
   Btn.Text := 'Load Tools';
   Btn.OnClick := McpToolsClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5519,22 +5645,22 @@ begin
   Btn.Width := 132;
   Btn.Text := 'Load Servers';
   Btn.OnClick := McpRefreshClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   AddSectionHeader(Row, 'MCP servers and tools');
 
   Body := TLayout.Create(Self);
   Body.Parent := Panel;
   Body.Align := TAlignLayout.Client;
-  SetControlMargins(Body, 0, 8, 0, 0);
+  SetControlMargins(Body, 0, GAP_S, 0, 0);
 
   LeftPane := TLayout.Create(Self);
   LeftPane.Parent := Body;
   LeftPane.Align := TAlignLayout.Left;
   LeftPane.Width := 340;
   FMcpLeftPane := LeftPane;
-  SetControlMargins(LeftPane, 0, 0, 8, 0);
-  SetControlPadding(LeftPane, 8, 8, 8, 8);
+  SetControlMargins(LeftPane, 0, 0, GAP_S, 0);
+  SetControlPadding(LeftPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(LeftPane, True);
   AddSectionHeader(LeftPane, 'Registry');
 
@@ -5549,7 +5675,7 @@ begin
   RightPane.Parent := Body;
   RightPane.Align := TAlignLayout.Client;
   FMcpRightPane := RightPane;
-  SetControlPadding(RightPane, 8, 8, 8, 8);
+  SetControlPadding(RightPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(RightPane, True);
 
   Tabs := TTabControl.Create(Self);
@@ -5564,8 +5690,8 @@ begin
   Row := TLayout.Create(Self);
   Row.Parent := ServerTab;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 38;
-  SetControlMargins(Row, 0, 8, 0, 0);
+  Row.Height := ROW_BAR;
+  SetControlMargins(Row, 0, GAP_S, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5573,7 +5699,7 @@ begin
   Btn.Width := 92;
   Btn.Text := 'Remove';
   Btn.OnClick := McpServerRemoveClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5581,7 +5707,7 @@ begin
   Btn.Width := 118;
   Btn.Text := 'Save Server';
   Btn.OnClick := McpServerSaveClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5589,7 +5715,7 @@ begin
   Btn.Width := 74;
   Btn.Text := 'New';
   Btn.OnClick := McpServerClearClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FMcpServerEnabledCheck := TCheckBox.Create(Self);
   FMcpServerEnabledCheck.Parent := Row;
@@ -5597,7 +5723,7 @@ begin
   FMcpServerEnabledCheck.Width := 82;
   FMcpServerEnabledCheck.Text := 'Enabled';
   FMcpServerEnabledCheck.IsChecked := True;
-  SetControlMargins(FMcpServerEnabledCheck, 6, 0, 0, 0);
+  SetControlMargins(FMcpServerEnabledCheck, GAP_S, 0, 0, 0);
 
   FMcpServerNameEdit := TEdit.Create(Self);
   FMcpServerNameEdit.Parent := Row;
@@ -5607,15 +5733,15 @@ begin
   Row := TLayout.Create(Self);
   Row.Parent := ServerTab;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 38;
-  SetControlMargins(Row, 0, 8, 0, 0);
+  Row.Height := ROW_BAR;
+  SetControlMargins(Row, 0, GAP_S, 0, 0);
 
   FMcpServerArgsEdit := TEdit.Create(Self);
   FMcpServerArgsEdit.Parent := Row;
   FMcpServerArgsEdit.Align := TAlignLayout.Right;
   FMcpServerArgsEdit.Width := 280;
   FMcpServerArgsEdit.TextPrompt := 'args';
-  SetControlMargins(FMcpServerArgsEdit, 8, 0, 0, 0);
+  SetControlMargins(FMcpServerArgsEdit, GAP_S, 0, 0, 0);
 
   FMcpServerCmdEdit := TEdit.Create(Self);
   FMcpServerCmdEdit.Parent := Row;
@@ -5629,7 +5755,7 @@ begin
   FMcpServerEnvMemo.Align := TAlignLayout.Client;
   FMcpServerEnvMemo.WordWrap := False;
   FMcpServerEnvMemo.TextPrompt := 'env string, JSON, or KEY=VALUE lines';
-  SetControlMargins(FMcpServerEnvMemo, 0, 4, 0, 0);
+  SetControlMargins(FMcpServerEnvMemo, 0, GAP_XS, 0, 0);
 
   ToolTab := TTabItem.Create(Self);
   ToolTab.Parent := Tabs;
@@ -5638,8 +5764,8 @@ begin
   Row := TLayout.Create(Self);
   Row.Parent := ToolTab;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 38;
-  SetControlMargins(Row, 0, 8, 0, 0);
+  Row.Height := ROW_BAR;
+  SetControlMargins(Row, 0, GAP_S, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5647,7 +5773,7 @@ begin
   Btn.Width := 92;
   Btn.Text := 'Invoke';
   Btn.OnClick := McpToolInvokeClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5655,7 +5781,7 @@ begin
   Btn.Width := 118;
   Btn.Text := 'Apply Form';
   Btn.OnClick := McpSchemaApplyClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FMcpToolCombo := TComboBox.Create(Self);
   FMcpToolCombo.Parent := Row;
@@ -5667,7 +5793,7 @@ begin
   ArgsPanel.Align := TAlignLayout.Bottom;
   ArgsPanel.Height := 150;
   FMcpArgsPanel := ArgsPanel;
-  SetControlMargins(ArgsPanel, 0, 8, 0, 0);
+  SetControlMargins(ArgsPanel, 0, GAP_S, 0, 0);
   SetControlPadding(ArgsPanel, 0, 0, 0, 0);
   AddSectionHeader(ArgsPanel, 'Arguments JSON');
 
@@ -5681,7 +5807,7 @@ begin
   SchemaPanel.Parent := ToolTab;
   SchemaPanel.Align := TAlignLayout.Client;
   FMcpSchemaPanel := SchemaPanel;
-  SetControlMargins(SchemaPanel, 0, 8, 0, 0);
+  SetControlMargins(SchemaPanel, 0, GAP_S, 0, 0);
   SetControlPadding(SchemaPanel, 0, 0, 0, 0);
   AddSectionHeader(SchemaPanel, 'Tool form');
 
@@ -5697,12 +5823,12 @@ begin
   ResultPanel.Parent := ResultTab;
   ResultPanel.Align := TAlignLayout.Client;
   FMcpResultPanel := ResultPanel;
-  SetControlMargins(ResultPanel, 0, 8, 0, 0);
+  SetControlMargins(ResultPanel, 0, GAP_S, 0, 0);
 
   Row := TLayout.Create(Self);
   Row.Parent := ResultPanel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 32;
+  Row.Height := ROW_FORM;
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5716,7 +5842,7 @@ begin
   FMcpResultStatusLabel.Align := TAlignLayout.Client;
   FMcpResultStatusLabel.Text := 'MCP invoke result';
   FMcpResultStatusLabel.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(FMcpResultStatusLabel, UI_ACCENT, 12, True);
+  StyleLabel(FMcpResultStatusLabel, UI_ACCENT, TXT_TITLE, True);
 
   FMcpResultDetailMemo := TMemo.Create(Self);
   FMcpResultDetailMemo.Parent := ResultPanel;
@@ -5725,7 +5851,7 @@ begin
   FMcpResultDetailMemo.ReadOnly := True;
   FMcpResultDetailMemo.WordWrap := True;
   FMcpResultDetailMemo.Lines.Text := 'Invoke a tool to inspect its result.';
-  SetControlMargins(FMcpResultDetailMemo, 0, 8, 0, 0);
+  SetControlMargins(FMcpResultDetailMemo, 0, GAP_S, 0, 0);
 
   FMcpResultList := TListBox.Create(Self);
   FMcpResultList.Parent := ResultPanel;
@@ -5751,13 +5877,13 @@ begin
   Panel := TLayout.Create(Self);
   Panel.Parent := AParent;
   Panel.Align := TAlignLayout.Client;
-  SetControlPadding(Panel, 12, 8, 12, 10);
+  SetControlPadding(Panel, GAP_M, GAP_S, GAP_M, 10);
   AddPanelChrome(Panel, False);
 
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 38;
+  Row.Height := ROW_BAR;
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5765,7 +5891,7 @@ begin
   Btn.Width := 72;
   Btn.Text := 'Remove';
   Btn.OnClick := SkillsRemoveClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5773,7 +5899,7 @@ begin
   Btn.Width := 78;
   Btn.Text := 'Install';
   Btn.OnClick := SkillsInstallClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5781,7 +5907,7 @@ begin
   Btn.Width := 78;
   Btn.Text := 'Refresh';
   Btn.OnClick := SkillsRefreshClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FSkillInstallEdit := TEdit.Create(Self);
   FSkillInstallEdit.Parent := Row;
@@ -5791,8 +5917,8 @@ begin
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 38;
-  SetControlMargins(Row, 0, 8, 0, 0);
+  Row.Height := ROW_BAR;
+  SetControlMargins(Row, 0, GAP_S, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5801,7 +5927,7 @@ begin
   Btn.Text := 'Install Selected';
   Btn.OnClick := SkillsInstallClick;
   Btn.TagString := 'catalog';
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5809,7 +5935,7 @@ begin
   Btn.Width := 76;
   Btn.Text := 'Search';
   Btn.OnClick := SkillsSearchClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FSkillSearchEdit := TEdit.Create(Self);
   FSkillSearchEdit.Parent := Row;
@@ -5819,15 +5945,15 @@ begin
   Body := TLayout.Create(Self);
   Body.Parent := Panel;
   Body.Align := TAlignLayout.Client;
-  SetControlMargins(Body, 0, 8, 0, 0);
+  SetControlMargins(Body, 0, GAP_S, 0, 0);
 
   LeftPane := TLayout.Create(Self);
   LeftPane.Parent := Body;
   LeftPane.Align := TAlignLayout.Left;
   LeftPane.Width := 300;
   FSkillLeftPane := LeftPane;
-  SetControlMargins(LeftPane, 0, 0, 8, 0);
-  SetControlPadding(LeftPane, 8, 8, 8, 8);
+  SetControlMargins(LeftPane, 0, 0, GAP_S, 0);
+  SetControlPadding(LeftPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(LeftPane, True);
 
   PendingPane := TLayout.Create(Self);
@@ -5835,13 +5961,13 @@ begin
   PendingPane.Align := TAlignLayout.Bottom;
   PendingPane.Height := 190;
   FSkillPendingPane := PendingPane;
-  SetControlMargins(PendingPane, 0, 8, 0, 0);
+  SetControlMargins(PendingPane, 0, GAP_S, 0, 0);
   AddSectionHeader(PendingPane, 'Pending approvals');
 
   Row := TLayout.Create(Self);
   Row.Parent := PendingPane;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 34;
+  Row.Height := ROW_BAR;
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5849,7 +5975,7 @@ begin
   Btn.Width := 70;
   Btn.Text := 'Reject';
   Btn.OnClick := SkillsRejectClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5862,7 +5988,7 @@ begin
   FSkillPendingList.Parent := PendingPane;
   FSkillPendingList.Align := TAlignLayout.Client;
   FSkillPendingList.OnChange := SkillsListChange;
-  SetControlMargins(FSkillPendingList, 0, 6, 0, 0);
+  SetControlMargins(FSkillPendingList, 0, GAP_S, 0, 0);
 
   InstalledPane := TLayout.Create(Self);
   InstalledPane.Parent := LeftPane;
@@ -5881,7 +6007,7 @@ begin
   CatalogPane.Parent := Body;
   CatalogPane.Align := TAlignLayout.Client;
   FSkillCatalogPane := CatalogPane;
-  SetControlPadding(CatalogPane, 8, 8, 8, 8);
+  SetControlPadding(CatalogPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(CatalogPane, True);
   AddSectionHeader(CatalogPane, 'Catalog results');
 
@@ -5892,23 +6018,23 @@ begin
   FSkillDetailMemo.ReadOnly := True;
   FSkillDetailMemo.WordWrap := True;
   FSkillDetailMemo.Lines.Text := '';
-  SetControlMargins(FSkillDetailMemo, 0, 8, 0, 0);
+  SetControlMargins(FSkillDetailMemo, 0, GAP_S, 0, 0);
 
   FSkillDetailMetaLabel := TLabel.Create(Self);
   FSkillDetailMetaLabel.Parent := CatalogPane;
   FSkillDetailMetaLabel.Align := TAlignLayout.Bottom;
-  FSkillDetailMetaLabel.Height := 24;
+  FSkillDetailMetaLabel.Height := ROW_TEXT;
   FSkillDetailMetaLabel.Text := 'Select a skill';
   FSkillDetailMetaLabel.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(FSkillDetailMetaLabel, UI_MUTED, 11, False);
+  StyleLabel(FSkillDetailMetaLabel, UI_MUTED, TXT_BODY, False);
 
   FSkillDetailTitleLabel := TLabel.Create(Self);
   FSkillDetailTitleLabel.Parent := CatalogPane;
   FSkillDetailTitleLabel.Align := TAlignLayout.Bottom;
-  FSkillDetailTitleLabel.Height := 28;
+  FSkillDetailTitleLabel.Height := H_INPUT;
   FSkillDetailTitleLabel.Text := 'Skill Detail';
   FSkillDetailTitleLabel.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(FSkillDetailTitleLabel, UI_ACCENT, 12, True);
+  StyleLabel(FSkillDetailTitleLabel, UI_ACCENT, TXT_TITLE, True);
 
   FSkillCatalogList := TListBox.Create(Self);
   FSkillCatalogList.Parent := CatalogPane;
@@ -5931,13 +6057,13 @@ begin
   Panel := TLayout.Create(Self);
   Panel.Parent := AParent;
   Panel.Align := TAlignLayout.Client;
-  SetControlPadding(Panel, 12, 8, 12, 10);
+  SetControlPadding(Panel, GAP_M, GAP_S, GAP_M, 10);
   AddPanelChrome(Panel, False);
 
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 38;
+  Row.Height := ROW_BAR;
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5945,7 +6071,7 @@ begin
   Btn.Width := 92;
   Btn.Text := 'Build With';
   Btn.OnClick := VaultBuildWithClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -5953,7 +6079,7 @@ begin
   Btn.Width := 76;
   Btn.Text := 'Search';
   Btn.OnClick := VaultSearchClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FVaultSearchEdit := TEdit.Create(Self);
   FVaultSearchEdit.Parent := Row;
@@ -5964,15 +6090,15 @@ begin
   Body := TLayout.Create(Self);
   Body.Parent := Panel;
   Body.Align := TAlignLayout.Client;
-  SetControlMargins(Body, 0, 6, 0, 0);
+  SetControlMargins(Body, 0, GAP_S, 0, 0);
 
   ListPane := TLayout.Create(Self);
   ListPane.Parent := Body;
   ListPane.Align := TAlignLayout.Left;
   ListPane.Width := 320;
   FVaultListPane := ListPane;
-  SetControlMargins(ListPane, 0, 0, 8, 0);
-  SetControlPadding(ListPane, 8, 8, 8, 8);
+  SetControlMargins(ListPane, 0, 0, GAP_S, 0);
+  SetControlPadding(ListPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(ListPane, True);
   AddSectionHeader(ListPane, 'Search results');
 
@@ -5987,30 +6113,30 @@ begin
   DetailPane.Parent := Body;
   DetailPane.Align := TAlignLayout.Client;
   FVaultDetailPane := DetailPane;
-  SetControlPadding(DetailPane, 10, 8, 10, 8);
+  SetControlPadding(DetailPane, 10, GAP_S, 10, GAP_S);
   AddPanelChrome(DetailPane, True);
 
   FVaultTitleLabel := TLabel.Create(Self);
   FVaultTitleLabel.Parent := DetailPane;
   FVaultTitleLabel.Align := TAlignLayout.Top;
-  FVaultTitleLabel.Height := 28;
+  FVaultTitleLabel.Height := H_INPUT;
   FVaultTitleLabel.Text := 'Select a vault entry';
   FVaultTitleLabel.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(FVaultTitleLabel, UI_ACCENT, 14, True);
+  StyleLabel(FVaultTitleLabel, UI_ACCENT, TXT_TITLE, True);
 
   FVaultMetaLabel := TLabel.Create(Self);
   FVaultMetaLabel.Parent := DetailPane;
   FVaultMetaLabel.Align := TAlignLayout.Top;
-  FVaultMetaLabel.Height := 34;
+  FVaultMetaLabel.Height := ROW_BAR;
   FVaultMetaLabel.Text := 'Search Code Vault and choose a result.';
   FVaultMetaLabel.WordWrap := True;
-  StyleLabel(FVaultMetaLabel, UI_MUTED, 11, False);
+  StyleLabel(FVaultMetaLabel, UI_MUTED, TXT_BODY, False);
 
   Row := TLayout.Create(Self);
   Row.Parent := DetailPane;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 30;
-  SetControlMargins(Row, 0, 4, 0, 0);
+  Row.Height := ROW_FORM;
+  SetControlMargins(Row, 0, GAP_XS, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6024,7 +6150,7 @@ begin
   Title.Align := TAlignLayout.Client;
   Title.Text := 'Detail';
   Title.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(Title, UI_ACCENT, 12, True);
+  StyleLabel(Title, UI_ACCENT, TXT_TITLE, True);
 
   FVaultDetailMemo := TMemo.Create(Self);
   FVaultDetailMemo.Parent := DetailPane;
@@ -6046,27 +6172,27 @@ begin
   Panel := TLayout.Create(Self);
   Panel.Parent := AParent;
   Panel.Align := TAlignLayout.Client;
-  SetControlPadding(Panel, 12, 8, 12, 10);
+  SetControlPadding(Panel, GAP_M, GAP_S, GAP_M, 10);
   AddPanelChrome(Panel, False);
 
   Title := AddSectionHeader(Panel, 'Memory and reranking setup');
-  Title.Height := 26;
+  Title.Height := H_INPUT;
 
   Title := TLabel.Create(Self);
   Title.Parent := Panel;
   Title.Align := TAlignLayout.Top;
-  Title.Height := 44;
+  Title.Height := ROW_LIST;
   Title.Text := 'Configure local semantic search, reranking, and model downloads for this workspace.';
   Title.WordWrap := True;
   Title.TextSettings.VertAlign := TTextAlign.Center;
   Title.StyledSettings := Title.StyledSettings - [TStyledSetting.FontColor];
   UseStyledLabelColor(Title);
-  SetControlMargins(Title, 0, 0, 0, 8);
+  SetControlMargins(Title, 0, 0, 0, GAP_S);
 
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 40;
+  Row.Height := ROW_LIST;
 
   FMemoryVectorCheck := TCheckBox.Create(Self);
   FMemoryVectorCheck.Parent := Row;
@@ -6074,7 +6200,7 @@ begin
   FMemoryVectorCheck.Width := 210;
   FMemoryVectorCheck.Text := 'Semantic vector search';
   FMemoryVectorCheck.IsChecked := True;
-  SetControlMargins(FMemoryVectorCheck, 0, 0, 8, 0);
+  SetControlMargins(FMemoryVectorCheck, 0, 0, GAP_S, 0);
 
   FMemoryBackendCombo := TComboBox.Create(Self);
   FMemoryBackendCombo.Parent := Row;
@@ -6085,7 +6211,7 @@ begin
   FMemoryBackendCombo.Items.Add('llm');
   FMemoryBackendCombo.Items.Add('auto');
   FMemoryBackendCombo.ItemIndex := 3;
-  SetControlMargins(FMemoryBackendCombo, 0, 0, 8, 0);
+  SetControlMargins(FMemoryBackendCombo, 0, 0, GAP_S, 0);
 
   FMemoryModelCombo := TComboBox.Create(Self);
   FMemoryModelCombo.Parent := Row;
@@ -6094,7 +6220,7 @@ begin
   FMemoryModelCombo.Items.Add('bge-reranker-base');
   FMemoryModelCombo.ItemIndex := 0;
   FMemoryModelCombo.OnChange := MemoryModelChoiceChange;
-  SetControlMargins(FMemoryModelCombo, 8, 0, 0, 0);
+  SetControlMargins(FMemoryModelCombo, GAP_S, 0, 0, 0);
 
   FMemoryRerankModelEdit := TEdit.Create(Self);
   FMemoryRerankModelEdit.Parent := Row;
@@ -6105,8 +6231,8 @@ begin
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 40;
-  SetControlMargins(Row, 0, 6, 0, 0);
+  Row.Height := ROW_LIST;
+  SetControlMargins(Row, 0, GAP_S, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6114,7 +6240,7 @@ begin
   Btn.Width := 116;
   Btn.Text := 'Save && download';
   Btn.OnClick := MemorySetupSaveClick;
-  SetControlMargins(Btn, 8, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6122,7 +6248,7 @@ begin
   Btn.Width := 92;
   Btn.Text := 'Load Setup';
   Btn.OnClick := MemorySetupLoadClick;
-  SetControlMargins(Btn, 8, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FMemoryDownloadEmbedCheck := TCheckBox.Create(Self);
   FMemoryDownloadEmbedCheck.Parent := Row;
@@ -6130,7 +6256,7 @@ begin
   FMemoryDownloadEmbedCheck.Width := 180;
   FMemoryDownloadEmbedCheck.Text := 'Download embedder';
   FMemoryDownloadEmbedCheck.IsChecked := True;
-  SetControlMargins(FMemoryDownloadEmbedCheck, 0, 0, 8, 0);
+  SetControlMargins(FMemoryDownloadEmbedCheck, 0, 0, GAP_S, 0);
 
   FMemoryDownloadRerankCheck := TCheckBox.Create(Self);
   FMemoryDownloadRerankCheck.Parent := Row;
@@ -6163,13 +6289,13 @@ begin
   Panel.Parent := AParent;
   Panel.Align := TAlignLayout.Top;
   Panel.Height := 390;
-  SetControlPadding(Panel, 12, 8, 12, 10);
+  SetControlPadding(Panel, GAP_M, GAP_S, GAP_M, 10);
   AddPanelChrome(Panel, False);
 
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 36;
+  Row.Height := ROW_BAR;
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6177,7 +6303,7 @@ begin
   Btn.Width := 76;
   Btn.Text := 'Delete';
   Btn.OnClick := ConfigDeleteValueClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6185,7 +6311,7 @@ begin
   Btn.Width := 78;
   Btn.Text := 'Add Item';
   Btn.OnClick := ConfigAddArrayItemClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6193,7 +6319,7 @@ begin
   Btn.Width := 70;
   Btn.Text := 'Apply';
   Btn.OnClick := ConfigApplyValueClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6201,7 +6327,7 @@ begin
   Btn.Width := 78;
   Btn.Text := 'Refresh';
   Btn.OnClick := ConfigRefreshClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Title := TLabel.Create(Self);
   Title.Parent := Row;
@@ -6214,8 +6340,8 @@ begin
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 34;
-  SetControlMargins(Row, 0, 6, 0, 0);
+  Row.Height := ROW_BAR;
+  SetControlMargins(Row, 0, GAP_S, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6224,7 +6350,7 @@ begin
   Btn.Text := 'Models';
   Btn.TagString := 'default_model';
   Btn.OnClick := ConfigQuickSectionClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6233,7 +6359,7 @@ begin
   Btn.Text := 'Router';
   Btn.TagString := 'auto_router';
   Btn.OnClick := ConfigQuickSectionClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6242,7 +6368,7 @@ begin
   Btn.Text := 'Sandbox';
   Btn.TagString := 'sandbox';
   Btn.OnClick := ConfigQuickSectionClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6251,7 +6377,7 @@ begin
   Btn.Text := 'Cron';
   Btn.TagString := 'cron';
   Btn.OnClick := ConfigQuickSectionClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6260,7 +6386,7 @@ begin
   Btn.Text := 'MCP';
   Btn.TagString := 'mcp_servers';
   Btn.OnClick := ConfigQuickSectionClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6269,7 +6395,7 @@ begin
   Btn.Text := 'Providers';
   Btn.TagString := 'providers';
   Btn.OnClick := ConfigQuickSectionClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Title := TLabel.Create(Self);
   Title.Parent := Row;
@@ -6282,15 +6408,15 @@ begin
   Body := TLayout.Create(Self);
   Body.Parent := Panel;
   Body.Align := TAlignLayout.Client;
-  SetControlMargins(Body, 0, 6, 0, 0);
+  SetControlMargins(Body, 0, GAP_S, 0, 0);
 
   ListPane := TLayout.Create(Self);
   ListPane.Parent := Body;
   ListPane.Align := TAlignLayout.Left;
   ListPane.Width := 360;
   FConfigListPane := ListPane;
-  SetControlMargins(ListPane, 0, 0, 8, 0);
-  SetControlPadding(ListPane, 8, 8, 8, 8);
+  SetControlMargins(ListPane, 0, 0, GAP_S, 0);
+  SetControlPadding(ListPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(ListPane, True);
   AddSectionHeader(ListPane, 'Config tree');
 
@@ -6305,14 +6431,14 @@ begin
   EditorPane.Parent := Body;
   EditorPane.Align := TAlignLayout.Client;
   FConfigEditorPane := EditorPane;
-  SetControlPadding(EditorPane, 8, 8, 8, 8);
+  SetControlPadding(EditorPane, GAP_S, GAP_S, GAP_S, GAP_S);
   AddPanelChrome(EditorPane, True);
   AddSectionHeader(EditorPane, 'Selected value');
 
   FConfigPathEdit := TEdit.Create(Self);
   FConfigPathEdit.Parent := EditorPane;
   FConfigPathEdit.Align := TAlignLayout.Top;
-  FConfigPathEdit.Height := 34;
+  FConfigPathEdit.Height := ROW_BAR;
   FConfigPathEdit.TextPrompt := 'selected config path';
   FConfigPathEdit.ReadOnly := True;
 
@@ -6321,7 +6447,7 @@ begin
   FConfigValueMemo.Align := TAlignLayout.Client;
   FConfigValueMemo.WordWrap := False;
   FConfigValueMemo.TextPrompt := 'selected value JSON or scalar text';
-  SetControlMargins(FConfigValueMemo, 0, 6, 0, 0);
+  SetControlMargins(FConfigValueMemo, 0, GAP_S, 0, 0);
 end;
 
 procedure TMasterDetailForm.BuildProviderSetupPanel(AParent: TFmxObject);
@@ -6333,20 +6459,20 @@ begin
   Panel := TLayout.Create(Self);
   Panel.Parent := AParent;
   Panel.Align := TAlignLayout.Client;
-  SetControlPadding(Panel, 12, 8, 12, 10);
+  SetControlPadding(Panel, GAP_M, GAP_S, GAP_M, 10);
   AddPanelChrome(Panel, False);
 
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 38;
+  Row.Height := ROW_BAR;
 
   FProviderCombo := TComboBox.Create(Self);
   FProviderCombo.Parent := Row;
   FProviderCombo.Align := TAlignLayout.Left;
   FProviderCombo.Width := 170;
   FProviderCombo.OnChange := ProviderComboChange;
-  SetControlMargins(FProviderCombo, 0, 0, 8, 0);
+  SetControlMargins(FProviderCombo, 0, 0, GAP_S, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6354,7 +6480,7 @@ begin
   Btn.Width := 108;
   Btn.Text := 'Save Provider';
   Btn.OnClick := ProviderSaveClick;
-  SetControlMargins(Btn, 8, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6362,7 +6488,7 @@ begin
   Btn.Width := 112;
   Btn.Text := 'Load Catalog';
   Btn.OnClick := ProviderCatalogClick;
-  SetControlMargins(Btn, 8, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FProviderNotesLabel := TLabel.Create(Self);
   FProviderNotesLabel.Parent := Row;
@@ -6376,15 +6502,15 @@ begin
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 38;
-  SetControlMargins(Row, 0, 6, 0, 0);
+  Row.Height := ROW_BAR;
+  SetControlMargins(Row, 0, GAP_S, 0, 0);
 
   FProviderModelEdit := TEdit.Create(Self);
   FProviderModelEdit.Parent := Row;
   FProviderModelEdit.Align := TAlignLayout.Right;
   FProviderModelEdit.Width := 230;
   FProviderModelEdit.TextPrompt := 'model';
-  SetControlMargins(FProviderModelEdit, 8, 0, 0, 0);
+  SetControlMargins(FProviderModelEdit, GAP_S, 0, 0, 0);
 
   FProviderKeyEdit := TEdit.Create(Self);
   FProviderKeyEdit.Parent := Row;
@@ -6392,7 +6518,7 @@ begin
   FProviderKeyEdit.Width := 240;
   FProviderKeyEdit.Password := True;
   FProviderKeyEdit.TextPrompt := 'API key';
-  SetControlMargins(FProviderKeyEdit, 0, 0, 8, 0);
+  SetControlMargins(FProviderKeyEdit, 0, 0, GAP_S, 0);
 
   FProviderBaseEdit := TEdit.Create(Self);
   FProviderBaseEdit.Parent := Row;
@@ -6402,8 +6528,8 @@ begin
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 38;
-  SetControlMargins(Row, 0, 6, 0, 0);
+  Row.Height := ROW_BAR;
+  SetControlMargins(Row, 0, GAP_S, 0, 0);
 
   FProviderSecondaryCombo := TComboBox.Create(Self);
   FProviderSecondaryCombo.Parent := Row;
@@ -6412,7 +6538,7 @@ begin
   FProviderSecondaryCombo.Items.Add('(none)');
   FProviderSecondaryCombo.ItemIndex := 0;
   FProviderSecondaryCombo.OnChange := ProviderSecondaryComboChange;
-  SetControlMargins(FProviderSecondaryCombo, 0, 0, 8, 0);
+  SetControlMargins(FProviderSecondaryCombo, 0, 0, GAP_S, 0);
 
   FProviderSecondaryKeyEdit := TEdit.Create(Self);
   FProviderSecondaryKeyEdit.Parent := Row;
@@ -6420,14 +6546,14 @@ begin
   FProviderSecondaryKeyEdit.Width := 190;
   FProviderSecondaryKeyEdit.Password := True;
   FProviderSecondaryKeyEdit.TextPrompt := 'secondary key';
-  SetControlMargins(FProviderSecondaryKeyEdit, 8, 0, 0, 0);
+  SetControlMargins(FProviderSecondaryKeyEdit, GAP_S, 0, 0, 0);
 
   FProviderSecondaryModelEdit := TEdit.Create(Self);
   FProviderSecondaryModelEdit.Parent := Row;
   FProviderSecondaryModelEdit.Align := TAlignLayout.Right;
   FProviderSecondaryModelEdit.Width := 220;
   FProviderSecondaryModelEdit.TextPrompt := 'secondary model';
-  SetControlMargins(FProviderSecondaryModelEdit, 8, 0, 0, 0);
+  SetControlMargins(FProviderSecondaryModelEdit, GAP_S, 0, 0, 0);
 
   FProviderSecondaryBaseEdit := TEdit.Create(Self);
   FProviderSecondaryBaseEdit.Parent := Row;
@@ -6437,15 +6563,15 @@ begin
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 34;
-  SetControlMargins(Row, 0, 6, 0, 0);
+  Row.Height := ROW_BAR;
+  SetControlMargins(Row, 0, GAP_S, 0, 0);
 
   FProviderRouteCheck := TCheckBox.Create(Self);
   FProviderRouteCheck.Parent := Row;
   FProviderRouteCheck.Align := TAlignLayout.Left;
   FProviderRouteCheck.Width := 238;
   FProviderRouteCheck.Text := 'Route easy turns to secondary';
-  SetControlMargins(FProviderRouteCheck, 0, 0, 8, 0);
+  SetControlMargins(FProviderRouteCheck, 0, 0, GAP_S, 0);
 
   FProviderFallbackCheck := TCheckBox.Create(Self);
   FProviderFallbackCheck.Parent := Row;
@@ -6456,7 +6582,7 @@ begin
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Client;
-  SetControlMargins(Row, 0, 4, 0, 0);
+  SetControlMargins(Row, 0, GAP_XS, 0, 0);
 
   FProviderNotesLabel := TLabel.Create(Self);
   FProviderNotesLabel.Parent := Row;
@@ -6489,7 +6615,7 @@ begin
   Panel.Parent := AParent;
   Panel.Align := TAlignLayout.Client;
   FWorkflowEditorPanel := Panel;
-  SetControlPadding(Panel, 10, 8, 10, 10);
+  SetControlPadding(Panel, 10, GAP_S, 10, 10);
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := Panel;
   Chrome.Align := TAlignLayout.Client;
@@ -6499,7 +6625,7 @@ begin
   Row := TLayout.Create(Self);
   Row.Parent := Panel;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 40;
+  Row.Height := ROW_LIST;
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6507,7 +6633,7 @@ begin
   Btn.Width := 82;
   Btn.Text := 'Delete';
   Btn.OnClick := WorkflowDeleteClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6515,7 +6641,7 @@ begin
   Btn.Width := 76;
   Btn.Text := 'Run';
   Btn.OnClick := WorkflowRunClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6523,7 +6649,7 @@ begin
   Btn.Width := 78;
   Btn.Text := 'Save';
   Btn.OnClick := WorkflowSaveClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6531,7 +6657,7 @@ begin
   Btn.Width := 78;
   Btn.Text := 'Load';
   Btn.OnClick := WorkflowLoadClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6539,7 +6665,7 @@ begin
   Btn.Width := 104;
   Btn.Text := 'Load Tools';
   Btn.OnClick := WorkflowLoadToolsClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6547,14 +6673,14 @@ begin
   Btn.Width := 76;
   Btn.Text := 'New';
   Btn.OnClick := WorkflowNewClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FWorkflowPickerCombo := TComboBox.Create(Self);
   FWorkflowPickerCombo.Parent := Row;
   FWorkflowPickerCombo.Align := TAlignLayout.Left;
   FWorkflowPickerCombo.Width := 160;
   FWorkflowPickerCombo.OnChange := WorkflowPickerChange;
-  SetControlMargins(FWorkflowPickerCombo, 0, 0, 8, 0);
+  SetControlMargins(FWorkflowPickerCombo, 0, 0, GAP_S, 0);
 
   FWorkflowNameEdit := TEdit.Create(Self);
   FWorkflowNameEdit.Parent := Row;
@@ -6564,7 +6690,7 @@ begin
   WorkflowTabs := TTabControl.Create(Self);
   WorkflowTabs.Parent := Panel;
   WorkflowTabs.Align := TAlignLayout.Client;
-  SetControlMargins(WorkflowTabs, 0, 6, 0, 0);
+  SetControlMargins(WorkflowTabs, 0, GAP_S, 0, 0);
 
   DesignerTab := TTabItem.Create(Self);
   DesignerTab.Parent := WorkflowTabs;
@@ -6577,12 +6703,12 @@ begin
   SettingsPane := TVertScrollBox.Create(Self);
   SettingsPane.Parent := SettingsTab;
   SettingsPane.Align := TAlignLayout.Client;
-  SetControlPadding(SettingsPane, 8, 8, 8, 10);
+  SetControlPadding(SettingsPane, GAP_S, GAP_S, GAP_S, 10);
 
   Row := TLayout.Create(Self);
   Row.Parent := SettingsPane;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 36;
+  Row.Height := ROW_BAR;
   SetControlMargins(Row, 0, 0, 0, 0);
 
   FWorkflowInputsEdit := TEdit.Create(Self);
@@ -6591,7 +6717,7 @@ begin
   FWorkflowInputsEdit.Width := 270;
   FWorkflowInputsEdit.Text := 'prompt';
   FWorkflowInputsEdit.TextPrompt := 'inputs, comma separated';
-  SetControlMargins(FWorkflowInputsEdit, 8, 0, 0, 0);
+  SetControlMargins(FWorkflowInputsEdit, GAP_S, 0, 0, 0);
 
   FWorkflowDescEdit := TEdit.Create(Self);
   FWorkflowDescEdit.Parent := Row;
@@ -6602,7 +6728,7 @@ begin
   Row.Parent := SettingsPane;
   Row.Align := TAlignLayout.Top;
   Row.Height := 72;
-  SetControlMargins(Row, 0, 8, 0, 0);
+  SetControlMargins(Row, 0, GAP_S, 0, 0);
 
   FWorkflowOutputsMemo := TMemo.Create(Self);
   FWorkflowOutputsMemo.Parent := Row;
@@ -6610,7 +6736,7 @@ begin
   FWorkflowOutputsMemo.Width := 360;
   FWorkflowOutputsMemo.WordWrap := False;
   FWorkflowOutputsMemo.TextPrompt := 'outputs, one per line: name = {{nodes.node.output}}';
-  SetControlMargins(FWorkflowOutputsMemo, 0, 0, 8, 0);
+  SetControlMargins(FWorkflowOutputsMemo, 0, 0, GAP_S, 0);
 
   FWorkflowLoopMemo := TMemo.Create(Self);
   FWorkflowLoopMemo.Parent := Row;
@@ -6621,15 +6747,15 @@ begin
   Body := TLayout.Create(Self);
   Body.Parent := DesignerTab;
   Body.Align := TAlignLayout.Client;
-  SetControlMargins(Body, 0, 8, 0, 0);
+  SetControlMargins(Body, 0, GAP_S, 0, 0);
 
   LeftPane := TLayout.Create(Self);
   LeftPane.Parent := Body;
   LeftPane.Align := TAlignLayout.Left;
   LeftPane.Width := 180;
   FWorkflowLeftPane := LeftPane;
-  SetControlMargins(LeftPane, 0, 0, 8, 0);
-  SetControlPadding(LeftPane, 8, 8, 8, 8);
+  SetControlMargins(LeftPane, 0, 0, GAP_S, 0);
+  SetControlPadding(LeftPane, GAP_S, GAP_S, GAP_S, GAP_S);
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := LeftPane;
   Chrome.Align := TAlignLayout.Client;
@@ -6639,10 +6765,10 @@ begin
   Title := TLabel.Create(Self);
   Title.Parent := LeftPane;
   Title.Align := TAlignLayout.Top;
-  Title.Height := 24;
+  Title.Height := ROW_TEXT;
   Title.Text := 'Nodes';
   Title.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(Title, UI_ACCENT, 12, True);
+  StyleLabel(Title, UI_ACCENT, TXT_TITLE, True);
 
   FWorkflowNodesList := TListBox.Create(Self);
   FWorkflowNodesList.Parent := LeftPane;
@@ -6654,7 +6780,7 @@ begin
   MiddlePane := TLayout.Create(Self);
   MiddlePane.Parent := Body;
   MiddlePane.Align := TAlignLayout.Client;
-  SetControlPadding(MiddlePane, 8, 8, 8, 8);
+  SetControlPadding(MiddlePane, GAP_S, GAP_S, GAP_S, GAP_S);
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := MiddlePane;
   Chrome.Align := TAlignLayout.Client;
@@ -6664,7 +6790,7 @@ begin
   Row := TLayout.Create(Self);
   Row.Parent := SettingsPane;
   Row.Align := TAlignLayout.Top;
-  Row.Height := 36;
+  Row.Height := ROW_BAR;
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6672,7 +6798,7 @@ begin
   Btn.Width := 78;
   Btn.Text := 'Delete';
   Btn.OnClick := WorkflowDeleteNodeClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6680,7 +6806,7 @@ begin
   Btn.Width := 86;
   Btn.Text := 'Update';
   Btn.OnClick := WorkflowUpdateNodeClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := Row;
@@ -6688,7 +6814,7 @@ begin
   Btn.Width := 70;
   Btn.Text := 'Add';
   Btn.OnClick := WorkflowAddNodeClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FWorkflowToolCombo := TComboBox.Create(Self);
   FWorkflowToolCombo.Parent := Row;
@@ -6698,7 +6824,7 @@ begin
   FWorkflowToolCombo.Items.Add('replicate');
   FWorkflowToolCombo.ItemIndex := 0;
   FWorkflowToolCombo.OnChange := WorkflowToolChange;
-  SetControlMargins(FWorkflowToolCombo, 0, 0, 8, 0);
+  SetControlMargins(FWorkflowToolCombo, 0, 0, GAP_S, 0);
 
   FWorkflowNodeIdEdit := TEdit.Create(Self);
   FWorkflowNodeIdEdit.Parent := Row;
@@ -6709,8 +6835,8 @@ begin
   Row.Parent := SettingsPane;
   Row.Align := TAlignLayout.Top;
   Row.Height := 220;
-  SetControlMargins(Row, 0, 8, 0, 0);
-  SetControlPadding(Row, 8, 6, 8, 8);
+  SetControlMargins(Row, 0, GAP_S, 0, 0);
+  SetControlPadding(Row, GAP_S, GAP_S, GAP_S, GAP_S);
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := Row;
   Chrome.Align := TAlignLayout.Client;
@@ -6720,15 +6846,15 @@ begin
   FWorkflowInspectorModeLabel := TLabel.Create(Self);
   FWorkflowInspectorModeLabel.Parent := Row;
   FWorkflowInspectorModeLabel.Align := TAlignLayout.Top;
-  FWorkflowInspectorModeLabel.Height := 24;
+  FWorkflowInspectorModeLabel.Height := ROW_TEXT;
   FWorkflowInspectorModeLabel.Text := 'LLM inspector';
   FWorkflowInspectorModeLabel.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(FWorkflowInspectorModeLabel, UI_ACCENT, 12, True);
+  StyleLabel(FWorkflowInspectorModeLabel, UI_ACCENT, TXT_TITLE, True);
 
   EdgeRow := TLayout.Create(Self);
   EdgeRow.Parent := Row;
   EdgeRow.Align := TAlignLayout.Top;
-  EdgeRow.Height := 34;
+  EdgeRow.Height := ROW_BAR;
 
   Btn := TButton.Create(Self);
   Btn.Parent := EdgeRow;
@@ -6736,7 +6862,7 @@ begin
   Btn.Width := 92;
   Btn.Text := 'Apply Form';
   Btn.OnClick := WorkflowApplyInspectorClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := EdgeRow;
@@ -6744,14 +6870,14 @@ begin
   Btn.Width := 96;
   Btn.Text := 'Providers';
   Btn.OnClick := WorkflowProviderModelClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FWorkflowLlmProviderEdit := TEdit.Create(Self);
   FWorkflowLlmProviderEdit.Parent := EdgeRow;
   FWorkflowLlmProviderEdit.Align := TAlignLayout.Left;
   FWorkflowLlmProviderEdit.Width := 130;
   FWorkflowLlmProviderEdit.TextPrompt := 'provider';
-  SetControlMargins(FWorkflowLlmProviderEdit, 0, 0, 8, 0);
+  SetControlMargins(FWorkflowLlmProviderEdit, 0, 0, GAP_S, 0);
 
   FWorkflowLlmModelEdit := TEdit.Create(Self);
   FWorkflowLlmModelEdit.Parent := EdgeRow;
@@ -6763,20 +6889,20 @@ begin
   FWorkflowLlmPromptMemo.Align := TAlignLayout.Client;
   FWorkflowLlmPromptMemo.TextPrompt := 'LLM prompt, e.g. {{inputs.prompt}}';
   FWorkflowLlmPromptMemo.WordWrap := True;
-  SetControlMargins(FWorkflowLlmPromptMemo, 0, 6, 0, 0);
+  SetControlMargins(FWorkflowLlmPromptMemo, 0, GAP_S, 0, 0);
 
   EdgeRow := TLayout.Create(Self);
   EdgeRow.Parent := Row;
   EdgeRow.Align := TAlignLayout.Bottom;
-  EdgeRow.Height := 34;
-  SetControlMargins(EdgeRow, 0, 6, 0, 0);
+  EdgeRow.Height := ROW_BAR;
+  SetControlMargins(EdgeRow, 0, GAP_S, 0, 0);
 
   FWorkflowReplicateVersionEdit := TEdit.Create(Self);
   FWorkflowReplicateVersionEdit.Parent := EdgeRow;
   FWorkflowReplicateVersionEdit.Align := TAlignLayout.Left;
   FWorkflowReplicateVersionEdit.Width := 160;
   FWorkflowReplicateVersionEdit.TextPrompt := 'replicate version';
-  SetControlMargins(FWorkflowReplicateVersionEdit, 0, 0, 8, 0);
+  SetControlMargins(FWorkflowReplicateVersionEdit, 0, 0, GAP_S, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := EdgeRow;
@@ -6784,14 +6910,14 @@ begin
   Btn.Width := 64;
   Btn.Text := 'Search';
   Btn.OnClick := WorkflowReplicateSearchClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FWorkflowReplicateSearchEdit := TEdit.Create(Self);
   FWorkflowReplicateSearchEdit.Parent := EdgeRow;
   FWorkflowReplicateSearchEdit.Align := TAlignLayout.Right;
   FWorkflowReplicateSearchEdit.Width := 128;
   FWorkflowReplicateSearchEdit.TextPrompt := 'model search';
-  SetControlMargins(FWorkflowReplicateSearchEdit, 6, 0, 0, 0);
+  SetControlMargins(FWorkflowReplicateSearchEdit, GAP_S, 0, 0, 0);
 
   FWorkflowReplicatePromptEdit := TEdit.Create(Self);
   FWorkflowReplicatePromptEdit.Parent := EdgeRow;
@@ -6801,24 +6927,24 @@ begin
   FWorkflowReplicateResultsList := TListBox.Create(Self);
   FWorkflowReplicateResultsList.Parent := SettingsPane;
   FWorkflowReplicateResultsList.Align := TAlignLayout.Top;
-  FWorkflowReplicateResultsList.Height := 56;
+  FWorkflowReplicateResultsList.Height := ROW_CARD;
   FWorkflowReplicateResultsList.OnChange := WorkflowReplicatePickClick;
-  SetControlMargins(FWorkflowReplicateResultsList, 0, 6, 0, 0);
+  SetControlMargins(FWorkflowReplicateResultsList, 0, GAP_S, 0, 0);
 
   FWorkflowSchemaForm := TVertScrollBox.Create(Self);
   FWorkflowSchemaForm.Parent := SettingsPane;
   FWorkflowSchemaForm.Align := TAlignLayout.Top;
   FWorkflowSchemaForm.Height := 88;
-  SetControlMargins(FWorkflowSchemaForm, 0, 6, 0, 0);
+  SetControlMargins(FWorkflowSchemaForm, 0, GAP_S, 0, 0);
 
   Title := TLabel.Create(Self);
   Title.Parent := SettingsPane;
   Title.Align := TAlignLayout.Top;
-  Title.Height := 22;
+  Title.Height := ROW_TEXT;
   Title.Text := 'Node args JSON';
   Title.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(Title, UI_ACCENT, 12, True);
-  SetControlMargins(Title, 0, 6, 0, 0);
+  StyleLabel(Title, UI_ACCENT, TXT_TITLE, True);
+  SetControlMargins(Title, 0, GAP_S, 0, 0);
 
   FWorkflowNodeArgsMemo := TMemo.Create(Self);
   FWorkflowNodeArgsMemo.Parent := SettingsPane;
@@ -6826,7 +6952,7 @@ begin
   FWorkflowNodeArgsMemo.Height := 72;
   FWorkflowNodeArgsMemo.WordWrap := False;
   FWorkflowNodeArgsMemo.Lines.Text := WorkflowDefaultArgs('llm');
-  SetControlMargins(FWorkflowNodeArgsMemo, 0, 4, 0, 0);
+  SetControlMargins(FWorkflowNodeArgsMemo, 0, GAP_XS, 0, 0);
   WorkflowLoadInspectorFromNode('llm', FWorkflowNodeArgsMemo.Lines.Text);
 
   RightPane := TLayout.Create(Self);
@@ -6834,8 +6960,8 @@ begin
   RightPane.Align := TAlignLayout.Right;
   RightPane.Width := 280;
   FWorkflowRightPane := RightPane;
-  SetControlMargins(RightPane, 8, 0, 0, 0);
-  SetControlPadding(RightPane, 8, 8, 8, 8);
+  SetControlMargins(RightPane, GAP_S, 0, 0, 0);
+  SetControlPadding(RightPane, GAP_S, GAP_S, GAP_S, GAP_S);
   Chrome := TRectangle.Create(Self);
   Chrome.Parent := RightPane;
   Chrome.Align := TAlignLayout.Client;
@@ -6847,7 +6973,7 @@ begin
   EdgeRow := TLayout.Create(Self);
   EdgeRow.Parent := RightPane;
   EdgeRow.Align := TAlignLayout.Top;
-  EdgeRow.Height := 36;
+  EdgeRow.Height := ROW_BAR;
 
   Btn := TButton.Create(Self);
   Btn.Parent := EdgeRow;
@@ -6855,7 +6981,7 @@ begin
   Btn.Width := 78;
   Btn.Text := 'Delete';
   Btn.OnClick := WorkflowDeleteEdgeClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := EdgeRow;
@@ -6863,14 +6989,14 @@ begin
   Btn.Width := 66;
   Btn.Text := 'Add';
   Btn.OnClick := WorkflowAddEdgeClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   FWorkflowEdgeToEdit := TEdit.Create(Self);
   FWorkflowEdgeToEdit.Parent := EdgeRow;
   FWorkflowEdgeToEdit.Align := TAlignLayout.Right;
   FWorkflowEdgeToEdit.Width := 92;
   FWorkflowEdgeToEdit.TextPrompt := 'to';
-  SetControlMargins(FWorkflowEdgeToEdit, 6, 0, 0, 0);
+  SetControlMargins(FWorkflowEdgeToEdit, GAP_S, 0, 0, 0);
 
   FWorkflowEdgeFromEdit := TEdit.Create(Self);
   FWorkflowEdgeFromEdit.Parent := EdgeRow;
@@ -6882,13 +7008,13 @@ begin
   FWorkflowEdgesList.Align := TAlignLayout.Top;
   FWorkflowEdgesList.Height := 72;
   FWorkflowEdgesList.OnChange := WorkflowEdgeSelect;
-  SetControlMargins(FWorkflowEdgesList, 0, 6, 0, 0);
+  SetControlMargins(FWorkflowEdgesList, 0, GAP_S, 0, 0);
 
   EdgeRow := TLayout.Create(Self);
   EdgeRow.Parent := RightPane;
   EdgeRow.Align := TAlignLayout.Top;
-  EdgeRow.Height := 30;
-  SetControlMargins(EdgeRow, 0, 6, 0, 0);
+  EdgeRow.Height := ROW_FORM;
+  SetControlMargins(EdgeRow, 0, GAP_S, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := EdgeRow;
@@ -6896,14 +7022,14 @@ begin
   Btn.Width := 104;
   Btn.Text := 'Refresh Inputs';
   Btn.OnClick := WorkflowRunInputsClick;
-  SetControlMargins(Btn, 6, 0, 0, 0);
+  SetControlMargins(Btn, GAP_S, 0, 0, 0);
 
   Title := TLabel.Create(Self);
   Title.Parent := EdgeRow;
   Title.Align := TAlignLayout.Client;
   Title.Text := 'Run inputs';
   Title.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(Title, UI_ACCENT, 12, True);
+  StyleLabel(Title, UI_ACCENT, TXT_TITLE, True);
 
   FWorkflowRunInputsMemo := TMemo.Create(Self);
   FWorkflowRunInputsMemo.Parent := RightPane;
@@ -6911,16 +7037,16 @@ begin
   FWorkflowRunInputsMemo.Height := 50;
   FWorkflowRunInputsMemo.WordWrap := False;
   FWorkflowRunInputsMemo.Lines.Text := '{"prompt": ""}';
-  SetControlMargins(FWorkflowRunInputsMemo, 0, 6, 0, 0);
+  SetControlMargins(FWorkflowRunInputsMemo, 0, GAP_S, 0, 0);
 
   FWorkflowRunStatusLabel := TLabel.Create(Self);
   FWorkflowRunStatusLabel.Parent := RightPane;
   FWorkflowRunStatusLabel.Align := TAlignLayout.Top;
-  FWorkflowRunStatusLabel.Height := 24;
+  FWorkflowRunStatusLabel.Height := ROW_TEXT;
   FWorkflowRunStatusLabel.Text := 'Run results';
   FWorkflowRunStatusLabel.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(FWorkflowRunStatusLabel, UI_ACCENT, 12, True);
-  SetControlMargins(FWorkflowRunStatusLabel, 0, 6, 0, 0);
+  StyleLabel(FWorkflowRunStatusLabel, UI_ACCENT, TXT_TITLE, True);
+  SetControlMargins(FWorkflowRunStatusLabel, 0, GAP_S, 0, 0);
 
   FWorkflowRunResultsList := TListBox.Create(Self);
   FWorkflowRunResultsList.Parent := RightPane;
@@ -6933,8 +7059,8 @@ begin
   EdgeRow := TLayout.Create(Self);
   EdgeRow.Parent := RightPane;
   EdgeRow.Align := TAlignLayout.Top;
-  EdgeRow.Height := 30;
-  SetControlMargins(EdgeRow, 0, 6, 0, 0);
+  EdgeRow.Height := ROW_FORM;
+  SetControlMargins(EdgeRow, 0, GAP_S, 0, 0);
 
   Btn := TButton.Create(Self);
   Btn.Parent := EdgeRow;
@@ -6948,7 +7074,7 @@ begin
   Title.Align := TAlignLayout.Client;
   Title.Text := 'Selected result';
   Title.TextSettings.VertAlign := TTextAlign.Center;
-  StyleLabel(Title, UI_ACCENT, 12, True);
+  StyleLabel(Title, UI_ACCENT, TXT_TITLE, True);
 
   FWorkflowRunDetailMemo := TMemo.Create(Self);
   FWorkflowRunDetailMemo.Parent := RightPane;
@@ -6957,24 +7083,24 @@ begin
   FWorkflowRunDetailMemo.ReadOnly := True;
   FWorkflowRunDetailMemo.WordWrap := True;
   FWorkflowRunDetailMemo.Lines.Text := 'Select a workflow run result to inspect full output.';
-  SetControlMargins(FWorkflowRunDetailMemo, 0, 4, 0, 0);
+  SetControlMargins(FWorkflowRunDetailMemo, 0, GAP_XS, 0, 0);
 
   FWorkflowGraphMemo := TMemo.Create(Self);
   FWorkflowGraphMemo.Parent := RightPane;
   FWorkflowGraphMemo.Align := TAlignLayout.Bottom;
-  FWorkflowGraphMemo.Height := 56;
+  FWorkflowGraphMemo.Height := ROW_CARD;
   FWorkflowGraphMemo.WordWrap := True;
-  SetControlMargins(FWorkflowGraphMemo, 0, 6, 0, 0);
+  SetControlMargins(FWorkflowGraphMemo, 0, GAP_S, 0, 0);
 
   Title := TLabel.Create(Self);
   Title.Parent := MiddlePane;
   Title.Align := TAlignLayout.Top;
-  Title.Height := 24;
+  Title.Height := ROW_TEXT;
   Title.Text := 'Graph canvas';
   Title.TextSettings.VertAlign := TTextAlign.Center;
   Title.StyledSettings := Title.StyledSettings - [TStyledSetting.FontColor];
   UseStyledLabelColor(Title);
-  SetControlMargins(Title, 0, 6, 0, 0);
+  SetControlMargins(Title, 0, GAP_S, 0, 0);
 
   FWorkflowCanvas := TPaintBox.Create(Self);
   FWorkflowCanvas.Parent := MiddlePane;
@@ -6984,7 +7110,7 @@ begin
   FWorkflowCanvas.OnMouseDown := WorkflowCanvasMouseDown;
   FWorkflowCanvas.OnMouseMove := WorkflowCanvasMouseMove;
   FWorkflowCanvas.OnMouseUp := WorkflowCanvasMouseUp;
-  SetControlMargins(FWorkflowCanvas, 0, 6, 0, 0);
+  SetControlMargins(FWorkflowCanvas, 0, GAP_S, 0, 0);
 
   WorkflowTabs.TabIndex := 0;
   WorkflowRenderGraph;
@@ -7094,7 +7220,7 @@ begin
       Row := TLayout.Create(Self);
       Row.Parent := AParent;
       Row.Align := TAlignLayout.Top;
-      Row.Height := 30;
+      Row.Height := ROW_FORM;
       LabelControl := TLabel.Create(Self);
       LabelControl.Parent := Row;
       LabelControl.Align := TAlignLayout.Client;
@@ -7148,19 +7274,19 @@ begin
         GroupPanel.Parent := AParent;
         GroupPanel.Align := TAlignLayout.Top;
         GroupPanel.Height := Max(42, 38 + NestedCount * 38);
-        SetControlMargins(GroupPanel, 0, 0, 0, 6);
-        SetControlPadding(GroupPanel, 8, 6, 8, 6);
+        SetControlMargins(GroupPanel, 0, 0, 0, GAP_S);
+        SetControlPadding(GroupPanel, GAP_S, GAP_S, GAP_S, GAP_S);
         AddPanelChrome(GroupPanel, True);
 
         LabelControl := TLabel.Create(Self);
         LabelControl.Parent := GroupPanel;
         LabelControl.Align := TAlignLayout.Top;
-        LabelControl.Height := 24;
+        LabelControl.Height := ROW_TEXT;
         LabelControl.Text := Pair.JsonString.Value;
         if Required then
           LabelControl.Text := LabelControl.Text + ' *';
         LabelControl.TextSettings.VertAlign := TTextAlign.Center;
-        StyleLabel(LabelControl, UI_ACCENT, 12, True);
+        StyleLabel(LabelControl, UI_ACCENT, TXT_TITLE, True);
 
         for NestedPair in NestedProps do
         begin
@@ -7188,8 +7314,8 @@ begin
           NestedRow := TLayout.Create(Self);
           NestedRow.Parent := GroupPanel;
           NestedRow.Align := TAlignLayout.Top;
-          NestedRow.Height := 34;
-          SetControlMargins(NestedRow, 0, 0, 0, 4);
+          NestedRow.Height := ROW_BAR;
+          SetControlMargins(NestedRow, 0, 0, 0, GAP_XS);
 
           LabelControl := TLabel.Create(Self);
           LabelControl.Parent := NestedRow;
@@ -7272,8 +7398,8 @@ begin
       if SameText(FieldType, 'object') or SameText(FieldType, 'array') then
         Row.Height := 94
       else
-        Row.Height := 34;
-      SetControlMargins(Row, 0, 0, 0, 4);
+        Row.Height := ROW_BAR;
+      SetControlMargins(Row, 0, 0, 0, GAP_XS);
 
       LabelControl := TLabel.Create(Self);
       LabelControl.Parent := Row;
@@ -7350,7 +7476,7 @@ begin
           Memo.Lines.Text := '{}'
         else
           Memo.Lines.Text := '[]';
-        StyleTextControl(Memo, UI_TEXT, 12);
+        StyleTextControl(Memo, UI_TEXT, TXT_TITLE);
         Control := Memo;
       end
       else
@@ -7603,7 +7729,7 @@ var
     if JsonEditorPreview(Value) <> '' then
       Item.Text := Item.Text + '  ' + JsonEditorPreview(Value);
     Item.TagString := Path + #9 + JsonEditorKind(Value);
-    Item.Height := 30;
+    Item.Height := ROW_FORM;
 
     if Value is TJSONObject then
     begin
@@ -11002,7 +11128,7 @@ begin
   if (FWorkflowNodesList = nil) or (FWorkflowNodesList.Count = 0) then
   begin
     Canvas.Fill.Color := ThemePaintColor(UI_MUTED);
-    Canvas.Font.Size := 11;
+    Canvas.Font.Size := TXT_BODY;
     Canvas.FillText(RectF(R.Left + 14, R.Top + 14, R.Right - 14,
       R.Bottom - 14), 'Add workflow nodes to build a runnable graph', False, 1,
       [], TTextAlign.Center, TTextAlign.Center);
@@ -11041,7 +11167,7 @@ begin
     Canvas.DrawRect(IoRect, 6, 6, [], 1);
     Canvas.Stroke.Dash := TStrokeDash.Solid;
     Canvas.Fill.Color := ThemePaintColor(UI_ACCENT);
-    Canvas.Font.Size := 10;
+    Canvas.Font.Size := TXT_CAPTION;
     Canvas.FillText(RectF(IoRect.Left + 8, IoRect.Top + 4, IoRect.Right - 8,
       IoRect.Top + 20), 'INPUT', False, 1, [], TTextAlign.Leading,
       TTextAlign.Center);
@@ -11073,7 +11199,7 @@ begin
     Canvas.DrawRect(OutRect, 6, 6, [], 1);
     Canvas.Stroke.Dash := TStrokeDash.Solid;
     Canvas.Fill.Color := ThemePaintColor(UI_ACCENT);
-    Canvas.Font.Size := 10;
+    Canvas.Font.Size := TXT_CAPTION;
     Canvas.FillText(RectF(OutRect.Left + 8, OutRect.Top + 4, OutRect.Right - 8,
       OutRect.Top + 20), 'OUTPUT', False, 1, [], TTextAlign.Leading,
       TTextAlign.Center);
@@ -11178,12 +11304,12 @@ begin
       NodeTool := 'tool';
     TextR := RectF(R.Left + 10, R.Top + 5, R.Right - 10, R.Top + 24);
     Canvas.Fill.Color := ThemePaintColor(UI_TEXT);
-    Canvas.Font.Size := 11;
+    Canvas.Font.Size := TXT_BODY;
     Canvas.FillText(TextR, NodeText, False, 1, [], TTextAlign.Center,
       TTextAlign.Center);
     TextR := RectF(R.Left + 10, R.Top + 23, R.Right - 10, R.Bottom - 5);
     Canvas.Fill.Color := ThemePaintColor(UI_MUTED);
-    Canvas.Font.Size := 9;
+    Canvas.Font.Size := TXT_CAPTION;
     Canvas.FillText(TextR, NodeTool, False, 1, [], TTextAlign.Center,
       TTextAlign.Center);
 
@@ -11590,7 +11716,7 @@ begin
   Item := TListBoxItem.Create(FWorkflowEdgesList);
   Item.Parent := FWorkflowEdgesList;
   Item.Text := Text;
-  Item.Height := 30;
+  Item.Height := ROW_FORM;
   FWorkflowEdgesList.ItemIndex := FWorkflowEdgesList.Count - 1;
   FWorkflowSelectedEdge := Text;
   if FWorkflowEdgeFromEdit <> nil then
@@ -12060,7 +12186,7 @@ begin
           Item.Parent := FWorkflowEdgesList;
           Item.Text := JsonAsString(Obj, 'from') + ' -> ' +
             JsonAsString(Obj, 'to');
-          Item.Height := 30;
+          Item.Height := ROW_FORM;
         end;
     end;
   finally
@@ -15379,7 +15505,7 @@ begin
             It := TListBoxItem.Create(FStatsSummaryList);
             It.Parent := FStatsSummaryList;
             It.Text := '';
-            It.Height := 54;
+            It.Height := ROW_CARD;
             It.HitTest := False;
 
             Card := TRectangle.Create(It);
@@ -15396,7 +15522,7 @@ begin
             NameLabel.Text := Name;
             NameLabel.StyledSettings := NameLabel.StyledSettings - [TStyledSetting.Size];
             UseStyledLabelColor(NameLabel);
-            NameLabel.TextSettings.Font.Size := 11;
+            NameLabel.TextSettings.Font.Size := TXT_BODY;
 
             ValueLabel := TLabel.Create(Card);
             ValueLabel.Parent := Card;
@@ -15406,7 +15532,7 @@ begin
               [TStyledSetting.FontColor, TStyledSetting.Size,
               TStyledSetting.Style];
             UseStyledLabelColor(ValueLabel);
-            ValueLabel.TextSettings.Font.Size := 17;
+            ValueLabel.TextSettings.Font.Size := TXT_DISPLAY;
             ValueLabel.TextSettings.Font.Style := [TFontStyle.fsBold];
             ValueLabel.TextSettings.VertAlign := TTextAlign.Center;
           end;
@@ -15797,13 +15923,13 @@ begin
                     StyleChromeRect(Card, UI_PANEL_ALT, UI_BORDER, 4, True);
                     Card.OnClick := CardListItemClick;
                     SetControlMargins(Card, 0, 3, 0, 3);
-                    SetControlPadding(Card, 10, 6, 10, 6);
+                    SetControlPadding(Card, 10, GAP_S, 10, GAP_S);
 
                     TurnLabel := TLabel.Create(Card);
                     TurnLabel.Parent := Card;
                     TurnLabel.Align := TAlignLayout.Top;
                     TurnLabel.HitTest := False;
-                    TurnLabel.Height := 22;
+                    TurnLabel.Height := ROW_TEXT;
                     TurnLabel.Text := Format('Turn %d',
                       [JsonAsInt64(Row, 'turn')]);
                     TurnLabel.StyledSettings := TurnLabel.StyledSettings -
@@ -15821,7 +15947,7 @@ begin
                     MetaLabel.StyledSettings := MetaLabel.StyledSettings -
                       [TStyledSetting.Size];
                     UseStyledLabelColor(MetaLabel);
-                    MetaLabel.TextSettings.Font.Size := 11;
+                    MetaLabel.TextSettings.Font.Size := TXT_BODY;
 
                     FileLabel := TLabel.Create(Card);
                     FileLabel.Parent := Card;
@@ -15832,7 +15958,7 @@ begin
                     FileLabel.StyledSettings := FileLabel.StyledSettings -
                       [TStyledSetting.Size];
                     UseStyledLabelColor(FileLabel);
-                    FileLabel.TextSettings.Font.Size := 11;
+                    FileLabel.TextSettings.Font.Size := TXT_BODY;
                   end;
               end;
               if (FCheckpointList <> nil) and (FCheckpointList.Count > 0) then
@@ -16136,14 +16262,14 @@ begin
             It := TListBoxItem.Create(FRelayStatsList);
             It.Parent := FRelayStatsList;
             It.Text := '';
-            It.Height := 58;
+            It.Height := ROW_CARD;
 
             Card := TRectangle.Create(It);
             Card.Parent := It;
             Card.Align := TAlignLayout.Client;
             StyleChromeRect(Card, UI_PANEL_ALT, UI_BORDER, 4, False);
             SetControlMargins(Card, 0, 3, 0, 3);
-            SetControlPadding(Card, 10, 6, 10, 6);
+            SetControlPadding(Card, 10, GAP_S, 10, GAP_S);
 
             NameLabel := TLabel.Create(Card);
             NameLabel.Parent := Card;
@@ -16152,7 +16278,7 @@ begin
             NameLabel.Text := Name;
             NameLabel.StyledSettings := NameLabel.StyledSettings - [TStyledSetting.Size];
             UseStyledLabelColor(NameLabel);
-            NameLabel.TextSettings.Font.Size := 11;
+            NameLabel.TextSettings.Font.Size := TXT_BODY;
 
             ValueLabel := TLabel.Create(Card);
             ValueLabel.Parent := Card;
@@ -16162,7 +16288,7 @@ begin
               [TStyledSetting.FontColor, TStyledSetting.Size,
               TStyledSetting.Style];
             UseStyledLabelColor(ValueLabel);
-            ValueLabel.TextSettings.Font.Size := 18;
+            ValueLabel.TextSettings.Font.Size := TXT_DISPLAY;
             ValueLabel.TextSettings.Font.Style := [TFontStyle.fsBold];
             ValueLabel.TextSettings.VertAlign := TTextAlign.Center;
           end;
@@ -16820,13 +16946,13 @@ begin
             StyleChromeRect(Card, UI_PANEL_ALT, UI_BORDER, 4, True);
             Card.OnClick := CardListItemClick;
             SetControlMargins(Card, 0, 3, 0, 3);
-            SetControlPadding(Card, 10, 6, 10, 6);
+            SetControlPadding(Card, 10, GAP_S, 10, GAP_S);
 
             NameLabel := TLabel.Create(Card);
             NameLabel.Parent := Card;
             NameLabel.Align := TAlignLayout.Top;
             NameLabel.HitTest := False;
-            NameLabel.Height := 22;
+            NameLabel.Height := ROW_TEXT;
             NameLabel.Text := DisplayName;
             NameLabel.StyledSettings := NameLabel.StyledSettings -
               [TStyledSetting.FontColor, TStyledSetting.Style];
@@ -16850,7 +16976,7 @@ begin
             MetaLabel.StyledSettings := MetaLabel.StyledSettings -
               [TStyledSetting.Size];
             UseStyledLabelColor(MetaLabel);
-            MetaLabel.TextSettings.Font.Size := 11;
+            MetaLabel.TextSettings.Font.Size := TXT_BODY;
           end;
         begin
           if ErrorText <> '' then
@@ -16880,7 +17006,7 @@ begin
                   else
                     Item.Text := 'Workspace  ' + WorkspaceRoot;
                   Item.TagString := WorkspaceRoot;
-                  Item.Height := 30;
+                  Item.Height := ROW_FORM;
                   Item.HitTest := True;
                   Item.OnClick := CardListItemClick;
                 end;
@@ -16894,7 +17020,7 @@ begin
                   else
                     Item.Text := 'Launch  ' + CwdRoot;
                   Item.TagString := CwdRoot;
-                  Item.Height := 30;
+                  Item.Height := ROW_FORM;
                   Item.HitTest := True;
                   Item.OnClick := CardListItemClick;
                 end;
@@ -19897,7 +20023,7 @@ begin
       Item.Parent := FSessionList;
       Item.Text := '';
       Item.TagString := Session.Id;
-      Item.Height := 40;
+      Item.Height := ROW_LIST;
       Item.HitTest := True;
       Item.OnClick := CardListItemClick;
 
@@ -19911,7 +20037,7 @@ begin
       Card.Stroke.Kind := TBrushKind.None;
       Card.OnClick := CardListItemClick;
       SetControlMargins(Card, 0, 1, 0, 1);
-      SetControlPadding(Card, 8, 4, 8, 4);
+      SetControlPadding(Card, GAP_S, GAP_XS, GAP_S, GAP_XS);
 
       TitleLabel := TLabel.Create(Card);
       TitleLabel.Parent := Card;
@@ -19922,7 +20048,7 @@ begin
       { tier 4 -- the sidebar is navigation chrome; only the transcript gets
         full-strength ink. Regular weight: a column of bold titles reads as a
         wall of emphasis, which is no emphasis at all. }
-      StyleLabel(TitleLabel, UI_CHROME_TEXT, 12, False);
+      StyleLabel(TitleLabel, UI_CHROME_TEXT, TXT_TITLE, False);
 
       { The age and the raw id were a second line of text per row, louder
         than the titles and answering a question nobody asked mid-scan. They
@@ -19948,7 +20074,7 @@ begin
       Item := TListBoxItem.Create(FSessionList);
       Item.Parent := FSessionList;
       Item.Text := '';
-      Item.Height := 56;
+      Item.Height := ROW_CARD;
       Item.HitTest := False;
       TitleLabel := TLabel.Create(Item);
       TitleLabel.Parent := Item;
@@ -19960,8 +20086,8 @@ begin
       else
         TitleLabel.Text :=
           'No sessions yet. Connect to a gateway, then press + to start one.';
-      SetControlMargins(TitleLabel, 10, 6, 10, 6);
-      StyleLabel(TitleLabel, UI_MUTED, 11, False);
+      SetControlMargins(TitleLabel, 10, GAP_S, 10, GAP_S);
+      StyleLabel(TitleLabel, UI_MUTED, TXT_BODY, False);
     end;
     FSessionList.ItemIndex := SelectedIndex;
   finally
@@ -20388,7 +20514,7 @@ var
     MenuItem.Parent := FChatFilesList;
     MenuItem.Text := Caption;
     MenuItem.TagString := Action + #9 + ActionPath;
-    MenuItem.Height := 36;
+    MenuItem.Height := ROW_BAR;
     MenuItem.OnClick := ChatFileActionClick;
   end;
 
@@ -20404,7 +20530,7 @@ var
     Btn.Text := Caption;
     Btn.TagString := Action + #9 + ActionPath;
     Btn.OnClick := ChatFileActionClick;
-    SetControlMargins(Btn, 0, 0, 6, 0);
+    SetControlMargins(Btn, 0, 0, GAP_S, 0);
   end;
 
   procedure AddMenuFile(const ActionPath: string);
@@ -20433,12 +20559,12 @@ var
     Card.Align := TAlignLayout.Client;
     StyleChromeRect(Card, UI_PANEL_ALT, UI_BORDER, 4, False);
     SetControlMargins(Card, 0, 3, 0, 3);
-    SetControlPadding(Card, 10, 6, 10, 6);
+    SetControlPadding(Card, 10, GAP_S, 10, GAP_S);
 
     NameLabel := TLabel.Create(Card);
     NameLabel.Parent := Card;
     NameLabel.Align := TAlignLayout.Top;
-    NameLabel.Height := 22;
+    NameLabel.Height := ROW_TEXT;
     NameLabel.Text := FileName;
     NameLabel.StyledSettings := NameLabel.StyledSettings - [TStyledSetting.Style];
     UseStyledLabelColor(NameLabel);
@@ -20447,18 +20573,18 @@ var
     PathLabel := TLabel.Create(Card);
     PathLabel.Parent := Card;
     PathLabel.Align := TAlignLayout.Top;
-    PathLabel.Height := 22;
+    PathLabel.Height := ROW_TEXT;
     PathLabel.Text := ActionPath;
     PathLabel.WordWrap := False;
     PathLabel.StyledSettings := PathLabel.StyledSettings -
       [TStyledSetting.FontColor, TStyledSetting.Size];
     PathLabel.TextSettings.FontColor := $FF9AA4BF;
-    PathLabel.TextSettings.Font.Size := 10;
+    PathLabel.TextSettings.Font.Size := TXT_CAPTION;
 
     Actions := TLayout.Create(Card);
     Actions.Parent := Card;
     Actions.Align := TAlignLayout.Client;
-    SetControlMargins(Actions, 0, 6, 0, 0);
+    SetControlMargins(Actions, 0, GAP_S, 0, 0);
 
     AddActionButton(Actions, 'Preview', 'preview', ActionPath, 68);
     AddActionButton(Actions, 'Save', 'save', ActionPath, 56);
@@ -20479,7 +20605,7 @@ begin
       Item := TListBoxItem.Create(FChatFilesList);
       Item.Parent := FChatFilesList;
       Item.Text := 'No file write/edit paths detected in this chat.';
-      Item.Height := 38;
+      Item.Height := ROW_BAR;
     end
     else
     begin
@@ -20529,7 +20655,7 @@ begin
           else
             Item.Text := Path;
           Item.TagString := Path + #9 + 'file' + #9 + '0';
-          Item.Height := 30;
+          Item.Height := ROW_FORM;
         end;
       end;
     end;
@@ -20803,7 +20929,7 @@ begin
     FAttachmentLabel.Visible := HasAttachments;
     if HasAttachments then
     begin
-      FAttachmentLabel.Height := 24;
+      FAttachmentLabel.Height := ROW_TEXT;
       FAttachmentLabel.Text := AttachmentSummary;
     end
     else
@@ -20832,8 +20958,8 @@ begin
         Chip.Parent := FAttachmentStrip;
         Chip.Align := TAlignLayout.Left;
         Chip.Width := Min(260, Max(152, Length(NameText) * 7 + 96));
-        SetControlMargins(Chip, 0, 3, 8, 3);
-        SetControlPadding(Chip, 10, 5, 8, 5);
+        SetControlMargins(Chip, 0, 3, GAP_S, 3);
+        SetControlPadding(Chip, 10, 5, GAP_S, 5);
         StyleChromeRect(Chip, UI_ACCENT_DIM, UI_ACCENT, 6, False);
 
         RemoveButton := TButton.Create(Chip);
@@ -20843,7 +20969,7 @@ begin
         RemoveButton.Text := 'X';
         RemoveButton.TagString := I.ToString;
         RemoveButton.OnClick := AttachmentRemoveClick;
-        SetControlMargins(RemoveButton, 8, 1, 0, 1);
+        SetControlMargins(RemoveButton, GAP_S, 1, 0, 1);
         StyleButton(RemoveButton, False);
 
         TitleLabel := TLabel.Create(Chip);
@@ -20852,14 +20978,14 @@ begin
         TitleLabel.Height := 16;
         TitleLabel.HitTest := False;
         TitleLabel.Text := Format('%d  %s', [I + 1, NameText]);
-        StyleLabel(TitleLabel, UI_TEXT, 11, True);
+        StyleLabel(TitleLabel, UI_TEXT, TXT_BODY, True);
 
         DetailLabel := TLabel.Create(Chip);
         DetailLabel.Parent := Chip;
         DetailLabel.Align := TAlignLayout.Client;
         DetailLabel.HitTest := False;
         DetailLabel.Text := FormatBytes(Length(Attachment.Content));
-        StyleLabel(DetailLabel, UI_MUTED, 10, False);
+        StyleLabel(DetailLabel, UI_MUTED, TXT_CAPTION, False);
       end;
     end
     else
@@ -20892,7 +21018,7 @@ begin
     Preview := StringReplace(Preview, #10, ' ', [rfReplaceAll]);
     if Length(Preview) > 96 then
       Preview := Copy(Preview, 1, 93) + '...';
-    FQueueLabel.Height := 24;
+    FQueueLabel.Height := ROW_TEXT;
     FQueueLabel.Text := Format('Queued: %d - next: %s', [Count, Preview]);
   end
   else
@@ -21010,7 +21136,7 @@ begin
       StatusText := 'Ready';
 
     FComposerStatusLabel.Text := StatusText;
-    StyleLabel(FComposerStatusLabel, StatusColor, 11, False);
+    StyleLabel(FComposerStatusLabel, StatusColor, TXT_BODY, False);
   end;
 end;
 
@@ -21296,7 +21422,7 @@ var
       ActionButton.Text := Caption;
       ActionButton.TagString := Action + #9 + Index.ToString;
       ActionButton.OnClick := ChatTurnActionClick;
-      SetControlMargins(ActionButton, 0, 0, 8, 0);
+      SetControlMargins(ActionButton, 0, 0, GAP_S, 0);
       StyleButton(ActionButton, False);
     end;
 
@@ -21386,7 +21512,7 @@ var
       Rule.Height := 1;
       Rule.HitTest := False;
       StyleChromeRect(Rule, UI_BORDER, UI_BORDER, 0, False);
-      SetControlMargins(Rule, 0, 8, 0, 8);
+      SetControlMargins(Rule, 0, GAP_S, 0, GAP_S);
       ContentHeight := ContentHeight + 17;
     end;
 
@@ -21407,7 +21533,7 @@ var
       Host.Parent := BodyHost;
       Host.Align := TAlignLayout.Top;
       Host.Height := QuoteHeight;
-      SetControlMargins(Host, 0, 6, 0, 6);
+      SetControlMargins(Host, 0, GAP_S, 0, GAP_S);
 
       Bar := TRectangle.Create(Host);
       Bar.Parent := Host;
@@ -21424,7 +21550,7 @@ var
       QuoteLabel.WordWrap := True;
       QuoteLabel.TextSettings.VertAlign := TTextAlign.Leading;
       SetControlMargins(QuoteLabel, 10, 0, 0, 0);
-      StyleLabel(QuoteLabel, UI_MUTED, 12, False);
+      StyleLabel(QuoteLabel, UI_MUTED, TXT_TITLE, False);
       ContentHeight := ContentHeight + QuoteHeight + 12;
     end;
 
@@ -21491,8 +21617,8 @@ var
       Panel.Align := TAlignLayout.Top;
       Panel.Height := TableHeight;
       StyleChromeRect(Panel, UI_PANEL, UI_BORDER, 6, False);
-      SetControlMargins(Panel, 0, 6, 0, 6);
-      SetControlPadding(Panel, 8, 6, 8, 6);
+      SetControlMargins(Panel, 0, GAP_S, 0, GAP_S);
+      SetControlPadding(Panel, GAP_S, GAP_S, GAP_S, GAP_S);
       ContentHeight := ContentHeight + TableHeight + 12;
 
       for R := 0 to Rows.Count - 1 do
@@ -21519,9 +21645,9 @@ var
           CellLabel.WordWrap := True;
           CellLabel.TextSettings.VertAlign := TTextAlign.Leading;
           if IsHeader then
-            StyleLabel(CellLabel, UI_ACCENT, 12, True)
+            StyleLabel(CellLabel, UI_ACCENT, TXT_TITLE, True)
           else
-            StyleLabel(CellLabel, UI_TEXT, 12, False);
+            StyleLabel(CellLabel, UI_TEXT, TXT_TITLE, False);
         end;
       end;
     end;
@@ -21762,8 +21888,8 @@ var
       Bar := TLayout.Create(BodyHost);
       Bar.Parent := BodyHost;
       Bar.Align := TAlignLayout.Top;
-      Bar.Height := 22;
-      SetControlMargins(Bar, 0, 6, 0, 0);
+      Bar.Height := ROW_TEXT;
+      SetControlMargins(Bar, 0, GAP_S, 0, 0);
 
       LangLabel := TLabel.Create(Bar);
       LangLabel.Parent := Bar;
@@ -21775,13 +21901,13 @@ var
       else
         LangLabel.Text := 'code';
       LangLabel.TextSettings.VertAlign := TTextAlign.Center;
-      StyleLabel(LangLabel, UI_MUTED, 11, False);
+      StyleLabel(LangLabel, UI_MUTED, TXT_BODY, False);
 
       CopyButton := TButton.Create(Bar);
       CopyButton.Parent := Bar;
       CopyButton.Align := TAlignLayout.Right;
       CopyButton.Width := 62;
-      CopyButton.Height := 22;
+      CopyButton.Height := ROW_TEXT;
       CopyButton.Text := 'Copy';
       CopyButton.TagString := Text;
       CopyButton.OnClick := ChatCodeCopyClick;
@@ -21794,9 +21920,9 @@ var
       CodeMemo.ReadOnly := True;
       CodeMemo.WordWrap := False;
       CodeMemo.Lines.Text := Text;
-      SetControlMargins(CodeMemo, 0, 0, 0, 6);
+      SetControlMargins(CodeMemo, 0, 0, 0, GAP_S);
       ContentHeight := ContentHeight + CodeMemo.Height + 12 + 22;
-      StyleTextControl(CodeMemo, UI_TEXT, 12);
+      StyleTextControl(CodeMemo, UI_TEXT, TXT_TITLE);
     end;
 
     procedure RenderBodyBlocks;
@@ -21888,20 +22014,20 @@ var
       if FChatToolsExpanded then
         Panel.Height := Min(420, Max(112, EstimateTextLines(DetailText, CharsPerLine) * 20 + 76))
       else
-        Panel.Height := 44;
+        Panel.Height := ROW_LIST;
       StyleChromeRect(Panel, UI_PANEL, UI_ACCENT_DIM, 6, False);
-      SetControlMargins(Panel, 0, 6, 0, 6);
-      SetControlPadding(Panel, 10, 8, 10, 8);
+      SetControlMargins(Panel, 0, GAP_S, 0, GAP_S);
+      SetControlPadding(Panel, 10, GAP_S, 10, GAP_S);
       ContentHeight := ContentHeight + Panel.Height + 12;
 
       HeaderLabel := TLabel.Create(Panel);
       HeaderLabel.Parent := Panel;
       HeaderLabel.Align := TAlignLayout.Top;
-      HeaderLabel.Height := 24;
+      HeaderLabel.Height := ROW_TEXT;
       HeaderLabel.HitTest := False;
       HeaderLabel.Text := TitleText;
       HeaderLabel.TextSettings.VertAlign := TTextAlign.Center;
-      StyleLabel(HeaderLabel, UI_ACCENT, 12, True);
+      StyleLabel(HeaderLabel, UI_ACCENT, TXT_TITLE, True);
 
       if FChatToolsExpanded and (DetailText <> '') then
       begin
@@ -21911,8 +22037,8 @@ var
         DetailMemo.ReadOnly := True;
         DetailMemo.WordWrap := True;
         DetailMemo.Lines.Text := DetailText;
-        SetControlMargins(DetailMemo, 0, 4, 0, 0);
-        StyleTextControl(DetailMemo, UI_TEXT, 11);
+        SetControlMargins(DetailMemo, 0, GAP_XS, 0, 0);
+        StyleTextControl(DetailMemo, UI_TEXT, TXT_BODY);
       end;
     end;
 
@@ -21993,10 +22119,10 @@ var
       SectionLabel := TLabel.Create(Host);
       SectionLabel.Parent := Host;
       SectionLabel.Align := TAlignLayout.Top;
-      SectionLabel.Height := 20;
+      SectionLabel.Height := ROW_TEXT;
       SectionLabel.HitTest := False;
       SectionLabel.Text := TitleText;
-      StyleLabel(SectionLabel, UI_MUTED, 10, True);
+      StyleLabel(SectionLabel, UI_MUTED, TXT_CAPTION, True);
 
       Lines := EstimateTextLines(DetailText, CharsPerLine);
       BodyHeight := Min(190, Max(58, Lines * SECTION_LINE_H + 24));
@@ -22010,7 +22136,7 @@ var
         TextLabel.WordWrap := True;
         TextLabel.Text := DetailText;
         TextLabel.TextSettings.VertAlign := TTextAlign.Leading;
-        StyleLabel(TextLabel, UI_TEXT, 11, False);
+        StyleLabel(TextLabel, UI_TEXT, TXT_BODY, False);
         Body := TextLabel;
       end
       else
@@ -22022,10 +22148,10 @@ var
         Memo.ReadOnly := True;
         Memo.WordWrap := True;
         Memo.Lines.Text := DetailText;
-        StyleTextControl(Memo, UI_TEXT, 11);
+        StyleTextControl(Memo, UI_TEXT, TXT_BODY);
         Body := Memo;
       end;
-      SetControlMargins(Body, 0, 2, 0, 8);
+      SetControlMargins(Body, 0, 2, 0, GAP_S);
       { label + body + the 2/8 margins above and below the body }
       Result := SectionLabel.Height + BodyHeight + 10;
     end;
@@ -22063,14 +22189,14 @@ var
           Panel := TRectangle.Create(BodyHost);
           Panel.Parent := BodyHost;
           Panel.Align := TAlignLayout.Top;
-          Panel.Height := 44;   { header-only; grown below when expanded }
+          Panel.Height := ROW_LIST;   { header-only; grown below when expanded }
           { Muted chrome, not accent: the screenshots showed expanded tool
             cards -- accent borders, accent bold headers -- shouting over the
             conversation. The hierarchy rule is that CHAT TEXT pulls the eye;
             tool plumbing is chrome and dresses like it. }
           StyleChromeRect(Panel, UI_PANEL_ALT, UI_BORDER, 6, False);
-          SetControlMargins(Panel, 0, 6, 0, 6);
-          SetControlPadding(Panel, 10, 8, 10, 8);
+          SetControlMargins(Panel, 0, GAP_S, 0, GAP_S);
+          SetControlPadding(Panel, 10, GAP_S, 10, GAP_S);
 
           { The header is a Top sibling and the sections live in a CLIENT
             host, so the header's position no longer depends on how FMX
@@ -22081,13 +22207,13 @@ var
           HeaderLabel := TLabel.Create(Panel);
           HeaderLabel.Parent := Panel;
           HeaderLabel.Align := TAlignLayout.Top;
-          HeaderLabel.Height := 24;
+          HeaderLabel.Height := ROW_TEXT;
           HeaderLabel.HitTest := False;
           if FChatToolsExpanded then
             HeaderLabel.Text := 'tool detail - ' + TitleText
           else
             HeaderLabel.Text := 'tool detail + ' + TitleText;
-          StyleLabel(HeaderLabel, UI_CHROME_TEXT, 11, True);
+          StyleLabel(HeaderLabel, UI_CHROME_TEXT, TXT_BODY, True);
 
           if FChatToolsExpanded then
           begin
@@ -22242,16 +22368,16 @@ var
       Card.Stroke.Kind := TBrushKind.None;
     Card.HitTest := True;
     if SameText(RoleValue, 'assistant') then
-      SetControlMargins(Card, 0, 4, 18, 4)
+      SetControlMargins(Card, 0, GAP_XS, 18, GAP_XS)
     else
-      SetControlMargins(Card, 48, 6, 0, 6);
-    SetControlPadding(Card, 12, 10, 12, 12);
+      SetControlMargins(Card, 48, GAP_S, 0, GAP_S);
+    SetControlPadding(Card, GAP_M, 10, GAP_M, GAP_M);
 
     { Slim header: just the turn meta and the copy icon, right-aligned. }
     Header := TLayout.Create(Card);
     Header.Parent := Card;
     Header.Align := TAlignLayout.Top;
-    Header.Height := 26;
+    Header.Height := H_INPUT;
 
     { Copy is created FIRST so it takes the outermost right slot; the turn
       meta then sits to its left, reading "turn 3/8  [copy]" left to right. }
@@ -22262,7 +22388,7 @@ var
     HeaderCopyButton.Text := 'Copy';
     HeaderCopyButton.TagString := 'copy' + #9 + Index.ToString;
     HeaderCopyButton.OnClick := ChatTurnActionClick;
-    SetControlMargins(HeaderCopyButton, 8, 1, 0, 1);
+    SetControlMargins(HeaderCopyButton, GAP_S, 1, 0, 1);
     StyleButton(HeaderCopyButton, False);
 
     MetaLabel := TLabel.Create(Header);
@@ -22276,7 +22402,7 @@ var
     MetaLabel.TextSettings.VertAlign := TTextAlign.Center;
     { same tier as the turn-count footer -- both are notes about the
       transcript, not part of it }
-    StyleLabel(MetaLabel, UI_MUTED, 10, False);
+    StyleLabel(MetaLabel, UI_MUTED, TXT_CAPTION, False);
 
     ActionRow := TLayout.Create(Card);
     ActionRow.Parent := Card;
@@ -22301,7 +22427,7 @@ var
       BodyHost.Parent := Card;
       BodyHost.Align := TAlignLayout.Top;
       BodyHost.Height := 0;
-      SetControlMargins(BodyHost, 0, 4, 0, 0);
+      SetControlMargins(BodyHost, 0, GAP_XS, 0, 0);
       if HasToolCards then
         RenderToolCardBlocks
       else
@@ -22320,8 +22446,8 @@ var
       BodyLabel.Text := BodyText;
       BodyLabel.WordWrap := True;
       BodyLabel.TextSettings.VertAlign := TTextAlign.Leading;
-      SetControlMargins(BodyLabel, 0, 6, 0, 0);
-      StyleLabel(BodyLabel, UI_CHAT_TEXT, 12, False);          { tier 1 }
+      SetControlMargins(BodyLabel, 0, GAP_S, 0, 0);
+      StyleLabel(BodyLabel, UI_CHAT_TEXT, TXT_TITLE, False);          { tier 1 }
     end;
 
     if BodyHost <> nil then
@@ -22925,7 +23051,7 @@ var
     Item.Parent := FSlashList;
     Item.Text := '/' + Cmd + '   ' + Description;
     Item.TagString := Cmd;
-    Item.Height := 32;
+    Item.Height := ROW_FORM;
     Item.OnClick := SlashCommandItemClick;
     Inc(MatchCount);
   end;
