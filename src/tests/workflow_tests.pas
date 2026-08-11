@@ -15,6 +15,7 @@ uses
   SysUtils, Classes,
   PasClaw.Workflow,
   PasClaw.Workflow.Store,
+  PasClaw.Workflow.Tools,
   PasClaw.Workflow.Dispatch;
 
 var
@@ -484,6 +485,47 @@ begin
   Check(GUntilCount = 2, 'until: stopped early, not at max (got ' + IntToStr(GUntilCount) + ')');
 end;
 
+{ ---- output writing: refusals are the contract ---------------------------- }
+procedure TestOutputWriting;
+var
+  Spec: TWorkflowSpec;
+  Dir, Err: string;
+begin
+  FillChar(Spec, SizeOf(Spec), 0);
+  Spec.Id := 'wf-out-test';
+  Spec.OutputDir := '';
+
+  { default dir: workflows/<id>/<stamp>, output.json + per-output text file }
+  Check(WriteRunOutputs(Spec, '{"story":"once upon a time","n":"42"}',
+    '20260811T000000', Dir, Err), 'default output dir writes: ' + Err);
+  Check(FileExists(IncludeTrailingPathDelimiter(Dir) + 'output.json'),
+    'output.json exists');
+  Check(FileExists(IncludeTrailingPathDelimiter(Dir) + 'story.txt'),
+    'textual output becomes its own file');
+  Check(Pos('workflows', Dir) > 0, 'default lands under workflows/');
+
+  { a second run must not clobber the first }
+  Check(WriteRunOutputs(Spec, '{"story":"again"}', '20260811T000001', Dir, Err),
+    'second run writes');
+  Check(FileExists(IncludeTrailingPathDelimiter(Dir) + 'output.json'),
+    'second run has its own folder');
+
+  { hostile output_dir refused }
+  Spec.OutputDir := '../../outside';
+  Check(not WriteRunOutputs(Spec, '{"a":"b"}', '20260811T000002', Dir, Err),
+    'traversal refused');
+  Check(Pos('escapes', Err) > 0, 'refusal names the reason');
+
+  { hostile output NAME flattened, not trusted }
+  { assert the PROPERTIES, not an exact string: what matters is that no
+    path separator or dot survives, not the underscore count }
+  Check((Pos('/', SanitizeWorkflowFileName('../../etc/passwd')) = 0) and
+        (Pos('.', SanitizeWorkflowFileName('../../etc/passwd')) = 0) and
+        (Pos('\\', SanitizeWorkflowFileName('..\\evil')) = 0),
+    'path-ish output name flattened');
+  Check(SanitizeWorkflowFileName('') = 'output', 'empty name gets a default');
+end;
+
 begin
   TestParse;
   TestValidate;
@@ -501,7 +543,10 @@ begin
   TestOutputs;
   TestLoop;
   TestLoopUntil;
+  TestOutputWriting;
 
   if Failures = 0 then WriteLn('workflow_tests: OK')
-  else begin WriteLn('workflow_tests: ', Failures, ' failure(s)'); Halt(1); end;
+  else 
+
+begin WriteLn('workflow_tests: ', Failures, ' failure(s)'); Halt(1); end;
 end.

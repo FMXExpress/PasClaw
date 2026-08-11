@@ -123,6 +123,11 @@ type
     Id: string;
     Name: string;
     Description: string;
+    { Where a run's resolved outputs are written, relative to the workspace.
+      Empty means the default workflows/<id>. The writer canonicalises and
+      REFUSES anything that escapes the workspace -- the value arrives from
+      clients. }
+    OutputDir: string;
     Inputs: array of TWorkflowInput;
     Outputs: array of TWorkflowOutput;
     Nodes: array of TWorkflowNode;
@@ -282,6 +287,7 @@ begin
     Spec.Id          := Root.GetStr('id', '');
     Spec.Name        := Trim(Root.GetStr('name', ''));
     Spec.Description := Root.GetStr('description', '');
+    Spec.OutputDir   := Trim(Root.GetStr('output_dir', ''));
     if Spec.Id = '' then Spec.Id := Spec.Name;
     if Spec.Name = '' then begin Err := 'workflow: "name" is required'; Exit; end;
 
