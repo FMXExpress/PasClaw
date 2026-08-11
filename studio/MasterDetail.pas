@@ -5313,10 +5313,13 @@ begin
   AddPanelChrome(LeftPane, True);
   AddSectionHeader(LeftPane, 'Summary');
 
-  { a 3-up GRID of metric cards, not a single column -- TListBox does this
-    natively via Columns, no layout surgery needed }
+  { a GRID of metric cards, not a single column -- TListBox does this
+    natively via Columns. TWO, not the plan's three: the pane is a fixed
+    320px, and after its padding, the scrollbar and each card's own padding,
+    three columns leave ~75px per caption -- 'Output tokens' clips. Two
+    leave ~124px, which holds every caption AddSummary renders. }
   FStatsSummaryList := TListBox.Create(Self);
-  FStatsSummaryList.Columns := 3;
+  FStatsSummaryList.Columns := 2;
   FStatsSummaryList.Parent := LeftPane;
   FStatsSummaryList.Align := TAlignLayout.Client;
   FStatsSummaryList.ShowCheckboxes := False;
@@ -5645,7 +5648,7 @@ begin
   Btn.OnClick := RelaySnippetCopyClick;
 
   FRelayStatsList := TListBox.Create(Self);
-  FRelayStatsList.Columns := 3;
+  FRelayStatsList.Columns := 2;   { same 320px pane arithmetic as Stats }
   FRelayStatsList.Parent := LeftPane;
   FRelayStatsList.Align := TAlignLayout.Client;
 
