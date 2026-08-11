@@ -21968,6 +21968,18 @@ var
 
     { Returns the vertical space this section actually consumes, so the
       caller can size the panel to its children instead of guessing. }
+    function IsPlainAscii(const Text: string): Boolean;
+    { Character count only models width for single-column ASCII. A tab has
+      no fixed width either, so it is refused with the rest. }
+    var
+      I: Integer;
+    begin
+      for I := 1 to Length(Text) do
+        if (Text[I] > #126) or (Text[I] = #9) then
+          Exit(False);
+      Result := True;
+    end;
+
     function AddToolDetailSection(Host: TFmxObject; const TitleText,
       DetailText: string): Single;
     { A TMemo is by far the most expensive control the transcript builds --
@@ -21998,9 +22010,20 @@ var
       SectionLabel.Text := TitleText;
       StyleLabel(SectionLabel, UI_MUTED, 10, True);
 
-      Lines := EstimateTextLines(DetailText, CharsPerLine);
+      { Decide against a DELIBERATELY narrow budget, and size from the same
+        pessimistic count. EstimateTextLines divides by an average character
+        width, so a line of wide glyphs wraps sooner than it predicts -- and
+        a label cannot scroll, so an optimistic guess hides output for good.
+        Three-quarters of the budget covers that spread, and non-ASCII text
+        is refused outright because one character can be two columns wide
+        (or more) and no character count models it.
+
+        Half the budget, not three quarters: modelled against a line of all
+        'W' -- about 1.6x the average glyph -- three quarters still came out
+        one line short, and one line short is one line lost. }
+      Lines := EstimateTextLines(DetailText, Max(18, CharsPerLine div 2));
       BodyHeight := Min(190, Max(58, Lines * SECTION_LINE_H + 24));
-      if Lines <= NO_SCROLL_LINES then
+      if (Lines <= NO_SCROLL_LINES) and IsPlainAscii(DetailText) then
       begin
         TextLabel := TLabel.Create(Host);
         TextLabel.Parent := Host;
