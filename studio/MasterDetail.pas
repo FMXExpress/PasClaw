@@ -7136,7 +7136,7 @@ var
   ItemType: string;
   LabelControl: TLabel;
   Memo: TMemo;
-  NestedCount: Integer;
+  NestedHeight: Single;
   NestedInitObj: TJSONObject;
   NestedInitValue: TJSONValue;
   NestedPair: TJSONPair;
@@ -7265,15 +7265,17 @@ begin
         NestedInitObj := nil;
         if InitValue is TJSONObject then
           NestedInitObj := TJSONObject(InitValue);
-        NestedCount := 0;
-        for NestedPair in NestedProps do
-          if NestedPair.JsonValue is TJSONObject then
-            Inc(NestedCount);
-
         GroupPanel := TLayout.Create(Self);
         GroupPanel.Parent := AParent;
         GroupPanel.Align := TAlignLayout.Top;
-        GroupPanel.Height := Max(42, 38 + NestedCount * 38);
+        { Height is assigned AFTER the rows exist, from what they actually
+          consumed. It used to be predicted as 38 + n*38, which stopped
+          matching the moment the rows moved onto the row rhythm: they now
+          stride ROW_BAR + GAP_XS = 40, so the panel fell 2px short per
+          property and its last control overflowed into the next form row.
+          A container that guesses its children's size is the same defect
+          the tool cards had; measuring cannot drift. }
+        NestedHeight := 0;
         SetControlMargins(GroupPanel, 0, 0, 0, GAP_S);
         SetControlPadding(GroupPanel, GAP_S, GAP_S, GAP_S, GAP_S);
         AddPanelChrome(GroupPanel, True);
@@ -7316,6 +7318,7 @@ begin
           NestedRow.Align := TAlignLayout.Top;
           NestedRow.Height := ROW_BAR;
           SetControlMargins(NestedRow, 0, 0, 0, GAP_XS);
+          NestedHeight := NestedHeight + ROW_BAR + GAP_XS;
 
           LabelControl := TLabel.Create(Self);
           LabelControl.Parent := NestedRow;
@@ -7375,6 +7378,9 @@ begin
           end;
           Control.HitTest := True;
         end;
+        { header + the panel's own vertical padding + the rows }
+        GroupPanel.Height := Max(ROW_LIST,
+          ROW_TEXT + GAP_S * 2 + NestedHeight);
         Continue;
       end;
 
@@ -23119,7 +23125,10 @@ begin
 
   FSlashPopup.PlacementTarget := FPromptMemo;
   FSlashPopup.Width := Min(520.0, Max(300.0, FPromptMemo.Width));
-  FSlashPopup.Height := Min(260.0, Max(54.0, MatchCount * 32.0 + 8.0));
+  { stride from the token the items are built with, not a copy of its
+    value -- they agreed only by coincidence }
+  FSlashPopup.Height := Min(260.0,
+    Max(54.0, MatchCount * ROW_FORM + GAP_S));
   FSlashList.ItemIndex := 0;
   FSlashPopup.IsOpen := True;
 end;
