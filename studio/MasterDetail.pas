@@ -308,6 +308,9 @@ type
     FOnboardingCard: TRectangle;
     FOnboardingOverlay: TLayout;
     FOnboardingStatusLabel: TLabel;
+    FOnboardingPrimaryButton: TButton;
+    FOnboardingSkipButton: TButton;
+    FOnboardingStep: Integer;      { 0 = provider, 1 = memory }
     FUndoButton: TButton;
     FRedoButton: TButton;
     FWorkflowConnectFromId: string;
@@ -531,8 +534,10 @@ type
     procedure OnboardingFinishClick(Sender: TObject);
     procedure OnboardingMemoryClick(Sender: TObject);
     procedure OnboardingProviderClick(Sender: TObject);
+    procedure OnboardingSkipClick(Sender: TObject);
+    procedure RenderOnboardingStep;
     procedure OnboardingShowClick(Sender: TObject);
-    procedure ShowOnboarding(const StatusText: string);
+    procedure ShowOnboarding;
     procedure ParamsToggleClick(Sender: TObject);
     function ParseSessionTurns(const JsonText: string): TArray<TChatTurn>;
     procedure PromptChange(Sender: TObject);
@@ -565,6 +570,10 @@ type
     procedure RenderModeButton;
     procedure RenderParamsButton;
     procedure ApplyHeaderRuleTheme;
+    procedure ApplyOnboardingTheme;
+    procedure ReapplyChromeTheme(Obj: TFmxObject);
+    class procedure SetChromeRoles(Rect: TRectangle;
+      FillRole, StrokeRole: Integer); static;
     procedure RenderConnectButton;
     procedure RenderToolsButton;
     procedure UpdateFooterVisibility;
@@ -1637,6 +1646,8 @@ begin
   { raw brushes are invisible to the restyle walk, so the theme pass has to
     repaint them by name }
   ApplyHeaderRuleTheme;
+  ApplyOnboardingTheme;
+  ReapplyChromeTheme(Self);
 end;
 
 procedure TMasterDetailForm.ThemeClick(Sender: TObject);
@@ -1922,6 +1933,64 @@ begin
   StyleLabel(Result, UI_CHROME_TEXT, TXT_BODY, True);
 end;
 
+{ Chrome roles, remembered ON the rect so the theme pass can re-apply them.
+
+  StyleChromeRect resolves colours at CALL time, and almost every chrome rect
+  is built once in BuildInterface -- which runs BEFORE LoadLocalSettings reads
+  ui.dark_style. So every static rect baked in the DARK palette and no later
+  theme change repainted it: RestyleCoreControls walks labels and controls,
+  not TRectangle brushes. The composer showed this as a black slab the moment
+  the Align fix made its rect actually cover its panel.
+
+  The role lives in the rect's Tag rather than in a registry of pointers. A
+  registry would have to hold rects that ARE freed and rebuilt per render --
+  chat cards, schema forms -- and would dangle the first time one went away.
+  Data carried on the object dies with the object. Tag is otherwise unused in
+  this unit. }
+const
+  CHROME_TAG_MAGIC = $C40000;
+
+function ChromeRoleOf(Color: TAlphaColor): Integer;
+{ The per-theme VAR tokens are tested FIRST: they are the ones that change
+  value between themes, so misclassifying them survives a switch.
+
+  Ordering is a heuristic, not a proof: classification is by VALUE, and two
+  tokens can be equal -- in the dark palette UI_COMPOSER_BORDER and
+  UI_ACCENT are both $FF3BA7FF, so a colour alone cannot say which was
+  meant. Any call site styling with a token that collides must state its
+  roles explicitly via SetChromeRoles after styling; the composer does. }
+begin
+  if Color = UI_COMPOSER_FILL then Result := 7
+  else if Color = UI_COMPOSER_BORDER then Result := 8
+  else if Color = UI_USER_FILL then Result := 9
+  else if Color = UI_USER_BORDER then Result := 10
+  else if Color = UI_BG then Result := 1
+  else if Color = UI_PANEL then Result := 2
+  else if Color = UI_PANEL_ALT then Result := 3
+  else if Color = UI_ACCENT_DIM then Result := 4
+  else if Color = UI_BORDER then Result := 5
+  else if Color = UI_ACCENT then Result := 6
+  else Result := 0;              { not a themed role: left exactly as given }
+end;
+
+function ChromeColorOf(Role: Integer): TAlphaColor;
+begin
+  case Role of
+    1: Result := UI_BG;
+    2: Result := UI_PANEL;
+    3: Result := UI_PANEL_ALT;
+    4: Result := UI_ACCENT_DIM;
+    5: Result := UI_BORDER;
+    6: Result := UI_ACCENT;
+    7: Result := UI_COMPOSER_FILL;
+    8: Result := UI_COMPOSER_BORDER;
+    9: Result := UI_USER_FILL;
+   10: Result := UI_USER_BORDER;
+  else
+    Result := 0;
+  end;
+end;
+
 procedure TMasterDetailForm.StyleChromeRect(Rect: TRectangle;
   FillColor: TAlphaColor; StrokeColor: TAlphaColor; Radius: Single;
   Interactive: Boolean);
@@ -1954,6 +2023,8 @@ procedure TMasterDetailForm.StyleChromeRect(Rect: TRectangle;
 begin
   if Rect = nil then
     Exit;
+  { record what this rect MEANT, so ReapplyChromeTheme can redo it }
+  SetChromeRoles(Rect, ChromeRoleOf(FillColor), ChromeRoleOf(StrokeColor));
   Rect.HitTest := Interactive;
   Rect.Fill.Color := ThemeFill(FillColor);
   Rect.Stroke.Color := ThemeStroke(StrokeColor);
@@ -4095,6 +4166,10 @@ begin
     lifted ground and an accent border rather than the same panel chrome as
     every inert surface. }
   StyleChromeRect(Chrome, UI_COMPOSER_FILL, UI_COMPOSER_BORDER, 6, False);
+  { stated explicitly: in the dark palette UI_COMPOSER_BORDER equals
+    UI_ACCENT by VALUE, so classification alone records the wrong stroke
+    role and a theme switch would repaint this border bright accent blue }
+  SetChromeRoles(Chrome, 7, 8);
   Chrome.SendToBack;
 
   FQueueLabel := TLabel.Create(Self);
@@ -5617,63 +5692,137 @@ begin
   Shade.Fill.Color := $E6000000;
   Shade.Stroke.Kind := TBrushKind.None;
 
+  { The web card's structure: a welcome header with a close, ONE step at a
+    time, and right-aligned ghost-skip + primary actions -- not three loose
+    full-width buttons doing tab navigation with no narrative. The real
+    provider and memory FORMS stay where they live (Settings/Providers and
+    Memory/Setup): duplicating them into the overlay would make two owners
+    of one form, which is the defect class this codebase keeps paying for.
+    The overlay is the GUIDE; the step buttons take you to the real form,
+    and ProviderSaveClick brings you back for step two. }
   Card := TRectangle.Create(Self);
   FOnboardingCard := Card;
   Card.Parent := FOnboardingOverlay;
   Card.Align := TAlignLayout.Center;
-  Card.Width := 560;
-  Card.Height := 320;
-  StyleChromeRect(Card, UI_PANEL, UI_BORDER, 8, False);
+  Card.Width := 460;
+  Card.Height := 250;
+  { NOT StyleChromeRect: the panel role resolves its fill to Kind=None
+    (panels normally sit on the window ground), but a floating card over the
+    shade must PAINT its ground or the shade bleeds through -- and the role
+    re-apply on theme change would put Kind=None back. Named repaint instead,
+    same pattern as the header rule. }
+  Card.XRadius := 8;
+  Card.YRadius := 8;
+  Card.HitTest := False;
+  ApplyOnboardingTheme;
   SetControlPadding(Card, 22, 20, 22, 20);
 
+  Row := TLayout.Create(Self);
+  Row.Parent := Card;
+  Row.Align := TAlignLayout.Top;
+  Row.Height := ROW_LIST;
+
   Title := TLabel.Create(Self);
-  Title.Parent := Card;
-  Title.Align := TAlignLayout.Top;
-  Title.Height := ROW_LIST;
-  Title.Text := 'PasClaw first-boot setup';
+  Title.Parent := Row;
+  Title.Align := TAlignLayout.Client;
+  Title.Text := 'Welcome to PasClaw';
   Title.StyledSettings := Title.StyledSettings -
     [TStyledSetting.FontColor, TStyledSetting.Style, TStyledSetting.Size];
   UseStyledLabelColor(Title);
   Title.TextSettings.Font.Style := [TFontStyle.fsBold];
   Title.TextSettings.Font.Size := TXT_DISPLAY;
 
+  Btn := TButton.Create(Self);
+  Btn.Parent := Row;
+  Btn.Align := TAlignLayout.Right;
+  Btn.Width := ICON_BTN_W;
+  Btn.Text := #$2715;
+  Btn.TagString := 'noicon';
+  Btn.Hint := 'Configure later in Settings';
+  Btn.ShowHint := True;
+  Btn.OnClick := OnboardingFinishClick;
+
   FOnboardingStatusLabel := TLabel.Create(Self);
   FOnboardingStatusLabel.Parent := Card;
   FOnboardingStatusLabel.Align := TAlignLayout.Client;
   FOnboardingStatusLabel.WordWrap := True;
-  FOnboardingStatusLabel.Text :=
-    'Configure a provider first, then optionally enable local memory search and reranking.';
+  FOnboardingStatusLabel.TextSettings.VertAlign := TTextAlign.Leading;
   FOnboardingStatusLabel.StyledSettings :=
     FOnboardingStatusLabel.StyledSettings - [TStyledSetting.FontColor];
   UseStyledLabelColor(FOnboardingStatusLabel);
+  SetControlMargins(FOnboardingStatusLabel, 0, GAP_S, 0, GAP_S);
 
   Row := TLayout.Create(Self);
   Row.Parent := Card;
   Row.Align := TAlignLayout.Bottom;
-  Row.Height := 96;
+  Row.Height := ROW_BAR;
 
-  Btn := TButton.Create(Self);
-  Btn.Parent := Row;
-  Btn.Align := TAlignLayout.Top;
-  Btn.Height := ROW_BAR;
-  Btn.Text := 'Configure Provider';
-  Btn.OnClick := OnboardingProviderClick;
+  FOnboardingPrimaryButton := TButton.Create(Self);
+  FOnboardingPrimaryButton.Parent := Row;
+  FOnboardingPrimaryButton.Align := TAlignLayout.Right;
+  FOnboardingPrimaryButton.Width := 150;
+  SetControlMargins(FOnboardingPrimaryButton, GAP_S, 0, 0, 0);
 
-  Btn := TButton.Create(Self);
-  Btn.Parent := Row;
-  Btn.Align := TAlignLayout.Top;
-  Btn.Height := ROW_BAR;
-  Btn.Text := 'Memory and Reranking';
-  Btn.OnClick := OnboardingMemoryClick;
-  SetControlMargins(Btn, 0, GAP_S, 0, 0);
+  FOnboardingSkipButton := TButton.Create(Self);
+  FOnboardingSkipButton.Parent := Row;
+  FOnboardingSkipButton.Align := TAlignLayout.Right;
+  FOnboardingSkipButton.Width := BTN_W_S;
+  FOnboardingSkipButton.Text := 'Skip';
+  FOnboardingSkipButton.TagString := 'noicon';
+  FOnboardingSkipButton.OnClick := OnboardingSkipClick;
 
-  Btn := TButton.Create(Self);
-  Btn.Parent := Row;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 88;
-  Btn.Text := 'Finish';
-  Btn.OnClick := OnboardingFinishClick;
-  SetControlMargins(Btn, GAP_S, 56, 0, 0);
+  RenderOnboardingStep;
+end;
+
+procedure TMasterDetailForm.RenderOnboardingStep;
+{ ONE owner for what the card says and does, mirroring the web wizard's two
+  steps. The copy is the web card's copy so the two clients read the same. }
+begin
+  if FOnboardingStatusLabel = nil then
+    Exit;
+  if FOnboardingStep <= 0 then
+  begin
+    FOnboardingStatusLabel.Text :=
+      'No model provider is configured yet. Pick one and add your API key ' +
+      'to start chatting - saved straight to the gateway, no restart needed.';
+    if FOnboardingPrimaryButton <> nil then
+    begin
+      FOnboardingPrimaryButton.Text := 'Set up provider';
+      FOnboardingPrimaryButton.OnClick := OnboardingProviderClick;
+    end;
+    { every branch owns the WHOLE card. Step two renames Skip to Finish, so
+      reopening the wizard at step one showed a Finish button whose click
+      actually advanced -- a caption lying about its action. }
+    if FOnboardingSkipButton <> nil then
+      FOnboardingSkipButton.Text := 'Skip';
+  end
+  else
+  begin
+    FOnboardingStatusLabel.Text :=
+      'Optional: local memory search lets the agent recall past notes and ' +
+      'files semantically - on-device embeddings, nothing leaves the host. ' +
+      'Reranking sharpens the results.';
+    if FOnboardingPrimaryButton <> nil then
+    begin
+      FOnboardingPrimaryButton.Text := 'Memory setup';
+      FOnboardingPrimaryButton.OnClick := OnboardingMemoryClick;
+    end;
+    if FOnboardingSkipButton <> nil then
+      FOnboardingSkipButton.Text := 'Finish';
+  end;
+end;
+
+procedure TMasterDetailForm.OnboardingSkipClick(Sender: TObject);
+{ Skip on step one advances to step two, matching the web wizard; skip on
+  step two (captioned Finish) ends onboarding. }
+begin
+  if FOnboardingStep <= 0 then
+  begin
+    FOnboardingStep := 1;
+    RenderOnboardingStep;
+  end
+  else
+    OnboardingFinishClick(Sender);
 end;
 
 procedure TMasterDetailForm.BuildMcpPanel(AParent: TFmxObject);
@@ -8678,10 +8827,16 @@ begin
             Memo.Lines.Text := 'PUT /v1/config' + sLineBreak + 'HTTP ' +
               Status.ToString + sLineBreak + sLineBreak + ResponseText;
           SetStatus('provider saved');
+          { the web wizard advances to its memory step once the provider is
+            saved; mirror that instead of leaving onboarding dangling }
           LoadModels;
+          { the web wizard advances to its memory step once the provider is
+            saved; mirror that instead of leaving onboarding dangling }
           if not FOnboardingDismissed then
-            ShowOnboarding(
-              'Provider saved. Configure memory search and reranking next, or finish onboarding.');
+          begin
+            FOnboardingStep := 1;
+            ShowOnboarding;
+          end;
         end);
     end);
 end;
@@ -13045,6 +13200,62 @@ begin
   RenderConnectButton;
 end;
 
+class procedure TMasterDetailForm.SetChromeRoles(Rect: TRectangle;
+  FillRole, StrokeRole: Integer);
+{ The ONE encoder of the role tag. Call sites use it directly only when the
+  colour value is ambiguous -- see ChromeRoleOf. }
+begin
+  if Rect <> nil then
+    Rect.Tag := CHROME_TAG_MAGIC or (FillRole shl 4) or StrokeRole;
+end;
+
+procedure TMasterDetailForm.ReapplyChromeTheme(Obj: TFmxObject);
+{ Re-run StyleChromeRect for every rect that recorded a role, using the
+  palette that is current NOW. Walks a snapshot of the children for the same
+  reason RestyleCoreControls does: re-styling can rebuild a control's applied
+  style, and that mutates the very list being indexed. }
+var
+  i, Tag, FillRole, StrokeRole: Integer;
+  Kids: TArray<TFmxObject>;
+  R: TRectangle;
+begin
+  if Obj = nil then
+    Exit;
+  if Obj is TRectangle then
+  begin
+    R := TRectangle(Obj);
+    Tag := R.Tag;
+    if (Tag and $FF0000) = CHROME_TAG_MAGIC then
+    begin
+      FillRole := (Tag shr 4) and $F;
+      StrokeRole := Tag and $F;
+      if (FillRole > 0) or (StrokeRole > 0) then
+        StyleChromeRect(R, ChromeColorOf(FillRole), ChromeColorOf(StrokeRole),
+          R.XRadius, R.HitTest);
+    end;
+  end;
+  SetLength(Kids, Obj.ChildrenCount);
+  for i := 0 to Obj.ChildrenCount - 1 do
+    Kids[i] := Obj.Children[i];
+  for i := 0 to High(Kids) do
+    if (Kids[i] <> nil) and (Kids[i].Parent = Obj) then
+      ReapplyChromeTheme(Kids[i]);
+end;
+
+procedure TMasterDetailForm.ApplyOnboardingTheme;
+{ The onboarding card floats over the dim shade, so unlike every other panel
+  it has to paint an opaque ground -- and repaint it on theme change, which
+  the role system cannot do for it because the panel role deliberately maps
+  to an unpainted fill. }
+begin
+  if FOnboardingCard = nil then
+    Exit;
+  FOnboardingCard.Fill.Kind := TBrushKind.Solid;
+  FOnboardingCard.Fill.Color := ThemePaintColor(UI_PANEL);
+  FOnboardingCard.Stroke.Kind := TBrushKind.Solid;
+  FOnboardingCard.Stroke.Color := ThemePaintStroke(UI_BORDER);
+end;
+
 procedure TMasterDetailForm.ApplyHeaderRuleTheme;
 begin
   if FHeaderRule <> nil then
@@ -16788,12 +16999,14 @@ begin
     RelayWorkerUpdateControls;
 end;
 
-procedure TMasterDetailForm.ShowOnboarding(const StatusText: string);
+procedure TMasterDetailForm.ShowOnboarding;
+{ The card's copy belongs to RenderOnboardingStep alone. The old StatusText
+  parameter was a second writer of the same label, and the two disagreed the
+  moment the step machinery landed. }
 begin
   if FOnboardingOverlay = nil then
     Exit;
-  if FOnboardingStatusLabel <> nil then
-    FOnboardingStatusLabel.Text := StatusText;
+  RenderOnboardingStep;
   FOnboardingOverlay.Visible := True;
   FOnboardingOverlay.BringToFront;
 end;
@@ -16801,8 +17014,8 @@ end;
 procedure TMasterDetailForm.OnboardingShowClick(Sender: TObject);
 begin
   FOnboardingDismissed := False;
-  ShowOnboarding(
-    'Configure the default provider, then open memory setup for local search and reranking. Use Finish when the gateway is ready.');
+  FOnboardingStep := 0;      { reopening starts the wizard over }
+  ShowOnboarding;
 end;
 
 procedure TMasterDetailForm.OnboardingProviderClick(Sender: TObject);
@@ -16912,8 +17125,7 @@ begin
           if ErrorText <> '' then
             Exit;
           if NeedsOnboarding and (not FOnboardingDismissed) then
-            ShowOnboarding(
-              'No complete default provider is configured yet. Start with provider setup, then optionally enable memory search and reranking.');
+            ShowOnboarding;
         end);
     end);
 end;
@@ -23319,7 +23531,8 @@ begin
 
   if Cmd = 'onboard' then
   begin
-    ShowOnboarding('Configure a provider first, then optionally enable memory search and reranking.');
+    FOnboardingStep := 0;
+    ShowOnboarding;
     SetStatus('onboarding');
     Exit;
   end;
