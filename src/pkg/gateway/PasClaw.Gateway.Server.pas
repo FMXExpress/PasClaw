@@ -1432,6 +1432,31 @@ begin
       AResponse.FreeContentStream := True;
       AResponse.ContentLength     := AResponse.ContentStream.Size;
     end
+    else if Doc = '/favicon.ico' then
+    begin
+      { An SVG favicon, served inline. Without it every page the gateway
+        serves -- including app iframes and rendered pages -- logs a 404 in
+        the console, which reads as a bug to anyone who opens devtools. }
+      AResponse.ResponseNo  := 200;
+      AResponse.ContentType := 'image/svg+xml';
+      WriteBodyStream(AResponse,
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">' +
+        '<rect width="16" height="16" fill="#c0c0c0" stroke="#000"/>' +
+        '<rect x="1" y="1" width="14" height="4" fill="#000080"/>' +
+        '<rect x="2" y="7" width="9" height="1.5" fill="#808080"/>' +
+        '<rect x="2" y="10" width="6" height="1.5" fill="#808080"/></svg>');
+    end
+    else if (Doc = '/desktop') or (Doc = '/desktop/') then
+    begin
+      { The desktop client. A separate page rather than a mode of the classic
+        UI: they are different paradigms, and both stay useful. }
+      AResponse.ResponseNo  := 200;
+      AResponse.ContentType := 'text/html; charset=utf-8';
+      AResponse.CharSet     := 'utf-8';
+      AResponse.ContentStream     := DesktopUIStream;
+      AResponse.FreeContentStream := True;
+      AResponse.ContentLength     := AResponse.ContentStream.Size;
+    end
     else if Doc = '/v1' then
       WriteJSON(AResponse, 200,
         '{"name":"pasclaw","routes":["/v1/health","/v1/version","/v1/status","/v1/tools","/v1/chat","/v1/chat/completions","/v1/responses","/v1/models","/v1/embeddings"]}')

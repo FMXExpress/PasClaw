@@ -28,22 +28,21 @@ uses
   SysUtils, Classes, Types;
 
 function WebUIStream: TStream;   { caller owns and frees }
+{ The desktop client page, served at /desktop. Same resource pattern. }
+function DesktopUIStream: TStream;   { caller owns and frees }
 
 implementation
 
-function WebUIStream: TStream;
-const
-  Fallback: AnsiString =
-    '<!doctype html><html><body><h1>PasClaw</h1>' +
-    '<p>UI resource missing - recompile with `make webui.res && make`.</p>' +
-    '</body></html>';
+{ Both pages load the same way; only the resource name differs. }
+function ResourceStream(const ResName: string;
+  const Fallback: AnsiString): TStream;
 var
   Src: TResourceStream;
   Mem: TMemoryStream;
 begin
   Mem := TMemoryStream.Create;
   try
-    Src := TResourceStream.Create(HInstance, 'PASCLAW_WEBUI_HTML', PChar(RT_RCDATA));
+    Src := TResourceStream.Create(HInstance, PChar(ResName), PChar(RT_RCDATA));
     try
       if Src.Size > 0 then Mem.CopyFrom(Src, 0);
     finally
@@ -55,6 +54,24 @@ begin
   end;
   Mem.Position := 0;
   Result := Mem;
+end;
+
+function DesktopUIStream: TStream;
+begin
+  Result := ResourceStream('PASCLAW_DESKTOP_HTML',
+    '<!doctype html><html><body><h1>PasClaw Desktop</h1>' +
+    '<p>Desktop resource missing - recompile with `make webui-res && make`.</p>' +
+    '</body></html>');
+end;
+
+function WebUIStream: TStream;
+const
+  Fallback: AnsiString =
+    '<!doctype html><html><body><h1>PasClaw</h1>' +
+    '<p>UI resource missing - recompile with `make webui.res && make`.</p>' +
+    '</body></html>';
+begin
+  Result := ResourceStream('PASCLAW_WEBUI_HTML', Fallback);
 end;
 
 end.

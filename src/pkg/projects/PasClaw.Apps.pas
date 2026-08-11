@@ -93,6 +93,23 @@ function ResolveAssetPath(const Project, RelPath: string): string;
 { MIME type for a served asset. }
 function AssetContentType(const Path: string): string;
 
+(* The app SDK, served virtually at /apps/<project>/pasclaw.js.
+
+   An html app is sandboxed WITHOUT allow-same-origin, so it sits in an opaque
+   origin and cannot fetch this gateway directly -- which is the point: if it
+   could, it would also be same-origin with the desktop page and could read the
+   operator's bearer token out of localStorage.
+
+   So state goes through a broker. Inside the desktop the SDK posts a message
+   to the parent, which performs the call scoped to THIS project and posts the
+   answer back. Opened standalone (a plain tab, or the FMX client's browser
+   window) the page is genuinely same-origin, and the SDK falls back to fetch.
+   The app author writes the same two calls either way.
+
+   Injected with the project name so an app cannot address another app's
+   store even by editing its own copy of the SDK -- the broker re-checks. *)
+function AppSDK(const Project: string): string;
+
 { Content-Security-Policy for served app content. `page` kind gets a
   script-free policy; `html` may run its own inline scripts but may not
   reach any other origin. Neither may be framed by a foreign site. }
@@ -381,6 +398,65 @@ begin
   else if E = '.woff'  then Result := 'font/woff'
   else if E = '.woff2' then Result := 'font/woff2'
   else Result := 'text/plain; charset=utf-8';
+end;
+
+function AppSDK(const Project: string): string;
+begin
+  Result :=
+    '/* PasClaw app SDK -- generated per project, served at pasclaw.js. */' + #10 +
+    '(function () {' + #10 +
+    '  var PROJECT = ' + AnsiQuotedStr(Project, '"') + ';' + #10 +
+    '  var framed = (window.parent && window.parent !== window);' + #10 +
+    '  var seq = 0, waiting = {};' + #10 +
+    '  if (framed) {' + #10 +
+    '    window.addEventListener("message", function (e) {' + #10 +
+    '      var m = e.data;' + #10 +
+    '      if (!m || m.__pasclaw !== "reply" || !waiting[m.id]) return;' + #10 +
+    '      var w = waiting[m.id]; delete waiting[m.id];' + #10 +
+    '      if (m.error) w.reject(new Error(m.error)); else w.resolve(m.value);' + #10 +
+    '    });' + #10 +
+    '  }' + #10 +
+    '  function ask(op, key, value) {' + #10 +
+    '    if (!framed) {' + #10 +
+    '      var url = "/v1/apps/" + PROJECT + "/state/" + encodeURIComponent(key);' + #10 +
+    '      if (op === "get") {' + #10 +
+    '        return fetch(url).then(function (r) {' + #10 +
+    '          if (!r.ok) throw new Error("http " + r.status);' + #10 +
+    '          return r.json().then(function (j) {' + #10 +
+    '            return j.exists ? j.value : null; });' + #10 +
+    '        });' + #10 +
+    '      }' + #10 +
+    '      if (op === "set")' + #10 +
+    '        return fetch(url, { method: "PUT", body: value }).then(function (r) {' + #10 +
+    '          if (!r.ok) throw new Error("http " + r.status); return true; });' + #10 +
+    '      return fetch(url, { method: "DELETE" }).then(function () { return true; });' + #10 +
+    '    }' + #10 +
+    '    var id = ++seq;' + #10 +
+    '    return new Promise(function (resolve, reject) {' + #10 +
+    '      waiting[id] = { resolve: resolve, reject: reject };' + #10 +
+    '      window.parent.postMessage(' + #10 +
+    '        { __pasclaw: "state", id: id, op: op, key: key, value: value }, "*");' + #10 +
+    '      setTimeout(function () {' + #10 +
+    '        if (waiting[id]) { delete waiting[id]; reject(new Error("timeout")); }' + #10 +
+    '      }, 10000);' + #10 +
+    '    });' + #10 +
+    '  }' + #10 +
+    '  window.pasclaw = {' + #10 +
+    '    project: PROJECT,' + #10 +
+    '    /* Raw string value, or null when unset. */' + #10 +
+    '    get: function (key) { return ask("get", key); },' + #10 +
+    '    set: function (key, value) { return ask("set", key, String(value)); },' + #10 +
+    '    remove: function (key) { return ask("del", key); },' + #10 +
+    '    /* JSON convenience -- what most apps actually want. */' + #10 +
+    '    getJSON: function (key, fallback) {' + #10 +
+    '      return ask("get", key).then(function (v) {' + #10 +
+    '        if (v === null || v === undefined || v === "") return fallback;' + #10 +
+    '        try { return JSON.parse(v); } catch (e) { return fallback; }' + #10 +
+    '      }, function () { return fallback; });' + #10 +
+    '    },' + #10 +
+    '    setJSON: function (key, obj) { return ask("set", key, JSON.stringify(obj)); }' + #10 +
+    '  };' + #10 +
+    '})();' + #10;
 end;
 
 function AppContentSecurityPolicy(Kind: TAppKind): string;

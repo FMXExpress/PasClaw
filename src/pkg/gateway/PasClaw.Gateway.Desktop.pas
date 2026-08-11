@@ -1008,15 +1008,19 @@ begin
     Key := Segs[4];
     if Method = 'GET' then
     begin
-      if not StateGet(Project, Key, Val) then
-      begin
-        ReplyErr(Resp, 404, 'no such key');
-        Exit;
-      end;
+      { An unset key is a normal answer, not an error: every app's first run
+        reads keys it has never written. Answering 404 made browsers log a
+        console error on every cold start, which reads as a broken app. }
       Root := TJsonObject.Create;
       try
-        Root.PutStr('key', Key);
-        Root.PutStr('value', Val);
+        Root.PutStr ('key', Key);
+        if StateGet(Project, Key, Val) then
+        begin
+          Root.PutBool('exists', True);
+          Root.PutStr ('value', Val);
+        end
+        else
+          Root.PutBool('exists', False);
         ReplyJSON(Resp, 200, Root.ToJSON);
       finally
         Root.Free;
@@ -1098,7 +1102,20 @@ begin
       Exit;
     end;
 
+    { pasclaw.js is virtual: generated per project rather than read from
+      disk, so every app has the SDK without shipping a copy of it. A real
+      file of that name in the app directory still wins, so an app can
+      override it if it ever needs to. }
     Full := ResolveAssetPath(Project, Rel);
+    if (Full = '') and SameText(Rel, 'pasclaw.js') then
+    begin
+      Resp.Status      := 200;
+      Resp.ContentType := 'application/javascript; charset=utf-8';
+      Resp.Body        := AppSDK(Project);
+      Resp.FilePath    := '';
+      Resp.Headers     := 'X-Content-Type-Options: nosniff';
+      Exit;
+    end;
     if Full = '' then
     begin
       ReplyErr(Resp, 404, 'not found');

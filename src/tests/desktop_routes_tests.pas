@@ -307,10 +307,19 @@ begin
   ExpectStatus('PUT', '/v1/apps/spam-filter/state/rules', '["a","b"]', 200, 'state put');
   ExpectField('GET', '/v1/apps/spam-filter/state/rules', '', 'value', '["a","b"]',
               'state round-trips verbatim');
-  ExpectStatus('GET', '/v1/apps/spam-filter/state/missing', '', 404, 'missing key is a 404');
+  { An unset key answers 200 with exists:false -- an app's first run reads
+    keys it has never written, and a 404 there makes every cold start log a
+    console error. }
+  ExpectStatus('GET', '/v1/apps/spam-filter/state/missing', '', 200,
+               'missing key is not an error');
+  ExpectBodyContains('GET', '/v1/apps/spam-filter/state/missing', '',
+                     '"exists":false', 'missing key reports exists:false');
+  ExpectBodyContains('GET', '/v1/apps/spam-filter/state/rules', '',
+                     '"exists":true', 'present key reports exists:true');
   ExpectBodyContains('GET', '/v1/apps/spam-filter/state', '', 'rules', 'state key list');
   ExpectStatus('DELETE', '/v1/apps/spam-filter/state/rules', '', 200, 'state delete');
-  ExpectStatus('GET', '/v1/apps/spam-filter/state/rules', '', 404, 'deleted key is gone');
+  ExpectBodyContains('GET', '/v1/apps/spam-filter/state/rules', '',
+                     '"exists":false', 'deleted key is gone');
   ExpectStatus('PUT', '/v1/apps/nope/state/k', 'v', 400, 'state on a missing project');
 
   { ------------------------------------------------------------ blueprints -- }
