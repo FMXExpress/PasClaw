@@ -190,6 +190,21 @@ a thin runtime:
   overlay on. "Make the filter stricter" → agent edits `app/`, job completes,
   desktop gets an `app-updated` SSE event, the app window reloads. That reload loop
   is what makes it feel like Lovable.
+- **Inline artifacts: the play button.** ChatGPT's canvas proved the gesture: when
+  the model emits an HTML page in chat, it renders *inline in the conversation*
+  with a play/preview affordance — no detour through files. PasClaw Desktop makes
+  that the seam between chat and desktop. Whenever a turn produces or updates a
+  page/app (detected from the tool stream: `write_file` into an `app/` dir, a
+  `page-ready` event), the chat transcript shows an **artifact card** — name, kind
+  icon, live thumbnail — with a **▶ Run** button. Run opens it as a real desktop
+  window (iframe / `TWebBrowser` on `/apps/...`); in period terms the card is an
+  embedded desktop icon in the conversation, and ▶ is double-click. The card stays
+  pinned at the turn that made it, so scrolling back through a session is
+  scrolling through *versions* — click an old card to open that checkpoint's
+  build (the checkpoints pkg already snapshots per-turn file state). Fenced
+  ```html blocks in plain chat get the same treatment ephemerally: render inline,
+  ▶ promotes to a project. One gesture everywhere: **the agent shows software; ▶
+  makes it real.**
 - **Example flow** (the email case): *"Build me an app that connects to my IMAP and
   filters spam"* → agent creates project `spam-filter`, tasks (connect, classify,
   UI), runs jobs; produces a Python app with a small web UI; desktop pops a window
@@ -393,7 +408,7 @@ window-lifetime tracking, and F11 kiosk mode.
 | **1. Workspaces** | `PasClaw.Workspaces.pas`, path-resolution refactor, `workspaceN` dirs, `/v1/workspaces*`, CLI `pasclaw workspace list/create/switch`, tests | config, session, memory, cron, skills, gateway |
 | **2. Projects/Tasks/Jobs** | `PasClaw.Projects.Store/Tools.pas`, REST routes, `/v1/desktop/events` SSE, job↔session/subagent linkage, tests | new pkg, gateway, agent |
 | **3. Web desktop v1** | `desktop.html`: window manager, project tree, taskbar, per-project chat, jobs window, 3 palettes (Win95, ClaudeCodeDark, Synthwave) | gateway |
-| **4. App factory** | `app.json`, runners (html serve + python run), `page` kind, per-app state store (`/v1/apps/<p>/state`), builder-mode skill/prompt, app windows with live reload | new pkg, gateway, promptware |
+| **4. App factory** | `app.json`, runners (html serve + python run), `page` kind, per-app state store (`/v1/apps/<p>/state`), builder-mode skill/prompt, app windows with live reload, inline artifact cards with ▶ Run in chat | new pkg, gateway, promptware |
 | **4b. Answer pages** | `POST /v1/pages`, `pages/` history project, Browser-window search box, pages over workspace/API data, sources chrome, page→app promotion | gateway, both clients, promptware |
 | **5. FMX desktop v1** | `desktop/` project from the RetroDesktop demo: gateway client, tree, chat + app windows, style/skin picker, workspace pager | new top-level dir, shared client unit |
 | **6. Polish** | full palette set from shared generator, per-workspace desktop state persistence, native app build/launch (`fpc`/`delphi_build`), all-in-one FMX mode, blueprint export/import, docs | styles repo + both clients |
