@@ -1973,7 +1973,11 @@ begin
   else if Color = UI_TEXT then
     Result := $FF171615
   else if Color = UI_MUTED then
-    Result := $FF6F6B62;
+    Result := $FF6F6B62
+  else if Color = UI_ACCENT then
+    { the light book's retoned accent -- a Pascal-drawn accent has to be the
+      same blue as a styled one, or the two disagree on the same screen }
+    Result := $FF3B6EA8;
 end;
 
 function TMasterDetailForm.ThemePaintStroke(Color: TAlphaColor): TAlphaColor;
@@ -20070,7 +20074,10 @@ begin
       Glyph.WrapMode := TPathWrapMode.Fit;
       Glyph.Stroke.Kind := TBrushKind.None;
       Glyph.Fill.Kind := TBrushKind.Solid;
-      Glyph.Fill.Color := UI_MUTED;
+      { A raw TPath brush does NOT inherit the style book's foreground the
+        way a styled label does, so it has to be mapped explicitly -- this is
+        precisely what ThemePaintColor is for. }
+      Glyph.Fill.Color := ThemePaintColor(UI_MUTED);
       { the bubble is wider than tall; inset vertically so it sits on the
         text's optical centre rather than filling the row }
       SetControlMargins(Glyph, 0, GAP_XS + 1, GAP_S, GAP_XS + 1);
@@ -20097,10 +20104,13 @@ begin
 
       if Session.Id = FActiveSessionId then
       begin
-        Glyph.Fill.Color := UI_ACCENT;
+        Glyph.Fill.Color := ThemePaintColor(UI_ACCENT);
         Card.Stroke.Kind := TBrushKind.Solid;
-        Card.Stroke.Color := UI_ACCENT;
-        Card.Fill.Color := UI_ACCENT_DIM;
+        { These overwrite what StyleChromeRect just theme-mapped, so they
+          have to map too. Unmapped, the ACTIVE card took the dark theme's
+          UI_ACCENT_DIM -- a near-black navy -- as its fill on light paper. }
+        Card.Stroke.Color := ThemePaintStroke(UI_ACCENT);
+        Card.Fill.Color := ThemePaintColor(UI_ACCENT_DIM);
         SelectedIndex := FSessionList.Count - 1;
       end;
     end;
