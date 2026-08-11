@@ -308,6 +308,9 @@ type
     FOnboardingCard: TRectangle;
     FOnboardingOverlay: TLayout;
     FOnboardingStatusLabel: TLabel;
+    FOnboardingPrimaryButton: TButton;
+    FOnboardingSkipButton: TButton;
+    FOnboardingStep: Integer;      { 0 = provider, 1 = memory }
     FUndoButton: TButton;
     FRedoButton: TButton;
     FWorkflowConnectFromId: string;
@@ -531,8 +534,10 @@ type
     procedure OnboardingFinishClick(Sender: TObject);
     procedure OnboardingMemoryClick(Sender: TObject);
     procedure OnboardingProviderClick(Sender: TObject);
+    procedure OnboardingSkipClick(Sender: TObject);
+    procedure RenderOnboardingStep;
     procedure OnboardingShowClick(Sender: TObject);
-    procedure ShowOnboarding(const StatusText: string);
+    procedure ShowOnboarding;
     procedure ParamsToggleClick(Sender: TObject);
     function ParseSessionTurns(const JsonText: string): TArray<TChatTurn>;
     procedure PromptChange(Sender: TObject);
@@ -565,6 +570,7 @@ type
     procedure RenderModeButton;
     procedure RenderParamsButton;
     procedure ApplyHeaderRuleTheme;
+    procedure ApplyOnboardingTheme;
     procedure ReapplyChromeTheme(Obj: TFmxObject);
     procedure RenderConnectButton;
     procedure RenderToolsButton;
@@ -1638,6 +1644,7 @@ begin
   { raw brushes are invisible to the restyle walk, so the theme pass has to
     repaint them by name }
   ApplyHeaderRuleTheme;
+  ApplyOnboardingTheme;
   ReapplyChromeTheme(Self);
 end;
 
@@ -5675,63 +5682,132 @@ begin
   Shade.Fill.Color := $E6000000;
   Shade.Stroke.Kind := TBrushKind.None;
 
+  { The web card's structure: a welcome header with a close, ONE step at a
+    time, and right-aligned ghost-skip + primary actions -- not three loose
+    full-width buttons doing tab navigation with no narrative. The real
+    provider and memory FORMS stay where they live (Settings/Providers and
+    Memory/Setup): duplicating them into the overlay would make two owners
+    of one form, which is the defect class this codebase keeps paying for.
+    The overlay is the GUIDE; the step buttons take you to the real form,
+    and ProviderSaveClick brings you back for step two. }
   Card := TRectangle.Create(Self);
   FOnboardingCard := Card;
   Card.Parent := FOnboardingOverlay;
   Card.Align := TAlignLayout.Center;
-  Card.Width := 560;
-  Card.Height := 320;
-  StyleChromeRect(Card, UI_PANEL, UI_BORDER, 8, False);
+  Card.Width := 460;
+  Card.Height := 250;
+  { NOT StyleChromeRect: the panel role resolves its fill to Kind=None
+    (panels normally sit on the window ground), but a floating card over the
+    shade must PAINT its ground or the shade bleeds through -- and the role
+    re-apply on theme change would put Kind=None back. Named repaint instead,
+    same pattern as the header rule. }
+  Card.XRadius := 8;
+  Card.YRadius := 8;
+  Card.HitTest := False;
+  ApplyOnboardingTheme;
   SetControlPadding(Card, 22, 20, 22, 20);
 
+  Row := TLayout.Create(Self);
+  Row.Parent := Card;
+  Row.Align := TAlignLayout.Top;
+  Row.Height := ROW_LIST;
+
   Title := TLabel.Create(Self);
-  Title.Parent := Card;
-  Title.Align := TAlignLayout.Top;
-  Title.Height := ROW_LIST;
-  Title.Text := 'PasClaw first-boot setup';
+  Title.Parent := Row;
+  Title.Align := TAlignLayout.Client;
+  Title.Text := 'Welcome to PasClaw';
   Title.StyledSettings := Title.StyledSettings -
     [TStyledSetting.FontColor, TStyledSetting.Style, TStyledSetting.Size];
   UseStyledLabelColor(Title);
   Title.TextSettings.Font.Style := [TFontStyle.fsBold];
   Title.TextSettings.Font.Size := TXT_DISPLAY;
 
+  Btn := TButton.Create(Self);
+  Btn.Parent := Row;
+  Btn.Align := TAlignLayout.Right;
+  Btn.Width := ICON_BTN_W;
+  Btn.Text := #$2715;
+  Btn.TagString := 'noicon';
+  Btn.Hint := 'Configure later in Settings';
+  Btn.ShowHint := True;
+  Btn.OnClick := OnboardingFinishClick;
+
   FOnboardingStatusLabel := TLabel.Create(Self);
   FOnboardingStatusLabel.Parent := Card;
   FOnboardingStatusLabel.Align := TAlignLayout.Client;
   FOnboardingStatusLabel.WordWrap := True;
-  FOnboardingStatusLabel.Text :=
-    'Configure a provider first, then optionally enable local memory search and reranking.';
+  FOnboardingStatusLabel.TextSettings.VertAlign := TTextAlign.Leading;
   FOnboardingStatusLabel.StyledSettings :=
     FOnboardingStatusLabel.StyledSettings - [TStyledSetting.FontColor];
   UseStyledLabelColor(FOnboardingStatusLabel);
+  SetControlMargins(FOnboardingStatusLabel, 0, GAP_S, 0, GAP_S);
 
   Row := TLayout.Create(Self);
   Row.Parent := Card;
   Row.Align := TAlignLayout.Bottom;
-  Row.Height := 96;
+  Row.Height := ROW_BAR;
 
-  Btn := TButton.Create(Self);
-  Btn.Parent := Row;
-  Btn.Align := TAlignLayout.Top;
-  Btn.Height := ROW_BAR;
-  Btn.Text := 'Configure Provider';
-  Btn.OnClick := OnboardingProviderClick;
+  FOnboardingPrimaryButton := TButton.Create(Self);
+  FOnboardingPrimaryButton.Parent := Row;
+  FOnboardingPrimaryButton.Align := TAlignLayout.Right;
+  FOnboardingPrimaryButton.Width := 150;
+  SetControlMargins(FOnboardingPrimaryButton, GAP_S, 0, 0, 0);
 
-  Btn := TButton.Create(Self);
-  Btn.Parent := Row;
-  Btn.Align := TAlignLayout.Top;
-  Btn.Height := ROW_BAR;
-  Btn.Text := 'Memory and Reranking';
-  Btn.OnClick := OnboardingMemoryClick;
-  SetControlMargins(Btn, 0, GAP_S, 0, 0);
+  FOnboardingSkipButton := TButton.Create(Self);
+  FOnboardingSkipButton.Parent := Row;
+  FOnboardingSkipButton.Align := TAlignLayout.Right;
+  FOnboardingSkipButton.Width := BTN_W_S;
+  FOnboardingSkipButton.Text := 'Skip';
+  FOnboardingSkipButton.TagString := 'noicon';
+  FOnboardingSkipButton.OnClick := OnboardingSkipClick;
 
-  Btn := TButton.Create(Self);
-  Btn.Parent := Row;
-  Btn.Align := TAlignLayout.Right;
-  Btn.Width := 88;
-  Btn.Text := 'Finish';
-  Btn.OnClick := OnboardingFinishClick;
-  SetControlMargins(Btn, GAP_S, 56, 0, 0);
+  RenderOnboardingStep;
+end;
+
+procedure TMasterDetailForm.RenderOnboardingStep;
+{ ONE owner for what the card says and does, mirroring the web wizard's two
+  steps. The copy is the web card's copy so the two clients read the same. }
+begin
+  if FOnboardingStatusLabel = nil then
+    Exit;
+  if FOnboardingStep <= 0 then
+  begin
+    FOnboardingStatusLabel.Text :=
+      'No model provider is configured yet. Pick one and add your API key ' +
+      'to start chatting - saved straight to the gateway, no restart needed.';
+    if FOnboardingPrimaryButton <> nil then
+    begin
+      FOnboardingPrimaryButton.Text := 'Set up provider';
+      FOnboardingPrimaryButton.OnClick := OnboardingProviderClick;
+    end;
+  end
+  else
+  begin
+    FOnboardingStatusLabel.Text :=
+      'Optional: local memory search lets the agent recall past notes and ' +
+      'files semantically - on-device embeddings, nothing leaves the host. ' +
+      'Reranking sharpens the results.';
+    if FOnboardingPrimaryButton <> nil then
+    begin
+      FOnboardingPrimaryButton.Text := 'Memory setup';
+      FOnboardingPrimaryButton.OnClick := OnboardingMemoryClick;
+    end;
+    if FOnboardingSkipButton <> nil then
+      FOnboardingSkipButton.Text := 'Finish';
+  end;
+end;
+
+procedure TMasterDetailForm.OnboardingSkipClick(Sender: TObject);
+{ Skip on step one advances to step two, matching the web wizard; skip on
+  step two (captioned Finish) ends onboarding. }
+begin
+  if FOnboardingStep <= 0 then
+  begin
+    FOnboardingStep := 1;
+    RenderOnboardingStep;
+  end
+  else
+    OnboardingFinishClick(Sender);
 end;
 
 procedure TMasterDetailForm.BuildMcpPanel(AParent: TFmxObject);
@@ -8736,10 +8812,16 @@ begin
             Memo.Lines.Text := 'PUT /v1/config' + sLineBreak + 'HTTP ' +
               Status.ToString + sLineBreak + sLineBreak + ResponseText;
           SetStatus('provider saved');
+          { the web wizard advances to its memory step once the provider is
+            saved; mirror that instead of leaving onboarding dangling }
           LoadModels;
+          { the web wizard advances to its memory step once the provider is
+            saved; mirror that instead of leaving onboarding dangling }
           if not FOnboardingDismissed then
-            ShowOnboarding(
-              'Provider saved. Configure memory search and reranking next, or finish onboarding.');
+          begin
+            FOnboardingStep := 1;
+            ShowOnboarding;
+          end;
         end);
     end);
 end;
@@ -13136,6 +13218,20 @@ begin
       ReapplyChromeTheme(Kids[i]);
 end;
 
+procedure TMasterDetailForm.ApplyOnboardingTheme;
+{ The onboarding card floats over the dim shade, so unlike every other panel
+  it has to paint an opaque ground -- and repaint it on theme change, which
+  the role system cannot do for it because the panel role deliberately maps
+  to an unpainted fill. }
+begin
+  if FOnboardingCard = nil then
+    Exit;
+  FOnboardingCard.Fill.Kind := TBrushKind.Solid;
+  FOnboardingCard.Fill.Color := ThemePaintColor(UI_PANEL);
+  FOnboardingCard.Stroke.Kind := TBrushKind.Solid;
+  FOnboardingCard.Stroke.Color := ThemePaintStroke(UI_BORDER);
+end;
+
 procedure TMasterDetailForm.ApplyHeaderRuleTheme;
 begin
   if FHeaderRule <> nil then
@@ -16879,12 +16975,14 @@ begin
     RelayWorkerUpdateControls;
 end;
 
-procedure TMasterDetailForm.ShowOnboarding(const StatusText: string);
+procedure TMasterDetailForm.ShowOnboarding;
+{ The card's copy belongs to RenderOnboardingStep alone. The old StatusText
+  parameter was a second writer of the same label, and the two disagreed the
+  moment the step machinery landed. }
 begin
   if FOnboardingOverlay = nil then
     Exit;
-  if FOnboardingStatusLabel <> nil then
-    FOnboardingStatusLabel.Text := StatusText;
+  RenderOnboardingStep;
   FOnboardingOverlay.Visible := True;
   FOnboardingOverlay.BringToFront;
 end;
@@ -16892,8 +16990,8 @@ end;
 procedure TMasterDetailForm.OnboardingShowClick(Sender: TObject);
 begin
   FOnboardingDismissed := False;
-  ShowOnboarding(
-    'Configure the default provider, then open memory setup for local search and reranking. Use Finish when the gateway is ready.');
+  FOnboardingStep := 0;      { reopening starts the wizard over }
+  ShowOnboarding;
 end;
 
 procedure TMasterDetailForm.OnboardingProviderClick(Sender: TObject);
@@ -17003,8 +17101,7 @@ begin
           if ErrorText <> '' then
             Exit;
           if NeedsOnboarding and (not FOnboardingDismissed) then
-            ShowOnboarding(
-              'No complete default provider is configured yet. Start with provider setup, then optionally enable memory search and reranking.');
+            ShowOnboarding;
         end);
     end);
 end;
@@ -23410,7 +23507,8 @@ begin
 
   if Cmd = 'onboard' then
   begin
-    ShowOnboarding('Configure a provider first, then optionally enable memory search and reranking.');
+    FOnboardingStep := 0;
+    ShowOnboarding;
     SetStatus('onboarding');
     Exit;
   end;
