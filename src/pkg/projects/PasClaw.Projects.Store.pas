@@ -152,7 +152,8 @@ implementation
 uses
   PasClaw.Utils,
   PasClaw.JSON,
-  PasClaw.Workspaces;
+  PasClaw.Workspaces,
+  PasClaw.Desktop.Events;
 
 { ------------------------------------------------------------------ names -- }
 
@@ -448,6 +449,7 @@ begin
   finally
     Obj.Free;
   end;
+  PublishProjects;
   Result := Slug;
 end;
 
@@ -529,7 +531,9 @@ begin
   end;
   Result := RemoveTree(Dir);
   if not Result then
-    Err := 'could not remove ' + Dir;
+    Err := 'could not remove ' + Dir
+  else
+    PublishProjects;
 end;
 
 { ------------------------------------------------------------------ tasks -- }
@@ -662,6 +666,7 @@ begin
   finally
     Obj.Free;
   end;
+  PublishTask(Project, Id, 'todo');
   Result := Id;
 end;
 
@@ -706,6 +711,7 @@ begin
   finally
     Obj.Free;
   end;
+  PublishTask(Project, UpperCase(TaskId), LowerCase(Trim(AStatus)));
   Result := True;
 end;
 
@@ -833,14 +839,19 @@ begin
     lighting up without the model having to set the status itself. }
   UpdateTask(Project, TaskId, '', '-', 'active', Err);
   Err := '';
+  PublishJob(Project, UpperCase(TaskId), Id, 'running');
   Result := Id;
 end;
 
 function UpdateJob(const Project, TaskId, JobId, AStatus, ASummary,
   ASessionId: string; out Err: string): Boolean;
 var
-  Dir, Path, St: string;
+  Dir, Path, St, Ignored: string;
   Obj: TJsonObject;
+  Others: TJobInfoArray;
+  T: TTaskInfo;
+  I: Integer;
+  Busy: Boolean;
 begin
   Err := '';
   Result := False;
@@ -887,6 +898,36 @@ begin
   finally
     Obj.Free;
   end;
+  if St <> '' then
+    PublishJob(Project, UpperCase(TaskId), UpperCase(JobId), St);
+
+  (* A task is done when its last job is. Opening a job makes the task
+     active (CreateJob), so the symmetric rule belongs here rather than in
+     any one caller -- the `task` tool, an HTTP PATCH and the gateway's job
+     runner all finish jobs, and before this only the tool closed the task.
+
+     Two guards: a task with another job still in flight stays active, and a
+     task the user marked BLOCKED is not quietly reopened as done -- only an
+     active task closes itself. *)
+  if (St = 'done') or (St = 'failed') or (St = 'cancelled') then
+  begin
+    Others := ListJobs(Project, TaskId);
+    Busy := False;
+    for I := 0 to High(Others) do
+      if Others[I].Status in [jsQueued, jsRunning] then
+      begin
+        Busy := True;
+        Break;
+      end;
+    if not Busy and GetTask(Project, TaskId, T) and (T.Status = tsActive) then
+    begin
+      if St = 'done' then
+        UpdateTask(Project, TaskId, '', '-', 'done', Ignored)
+      else
+        { A failed run leaves work to do -- back to todo, not done. }
+        UpdateTask(Project, TaskId, '', '-', 'todo', Ignored);
+    end;
+  end;
   Result := True;
 end;
 
@@ -908,6 +949,7 @@ begin
   finally
     CloseFile(F);
   end;
+  PublishJobLog(Project, UpperCase(TaskId), UpperCase(JobId), Line);
 end;
 
 function ReadJobLog(const Project, TaskId, JobId: string): string;

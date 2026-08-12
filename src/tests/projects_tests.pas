@@ -147,9 +147,33 @@ begin
   ExpectTrue(J.Ended <> '', 'end stamped');
   ExpectStr(J.Summary, 'built it', 'summary persisted');
 
+  { A task with another job still in flight must NOT close when one finishes. }
   ExpectStr(CreateJob('spam-filter', 'T0002', '', Err), 'J0002', 'job ids increment');
   Jobs := ListJobs('spam-filter', 'T0002');
   ExpectInt(Length(Jobs), 2, 'two jobs on the task');
+  ExpectTrue(GetTask('spam-filter', 'T0002', T), 'task reloads');
+  ExpectTrue(T.Status = tsActive, 'a second open job reactivates the task');
+  ExpectTrue(UpdateJob('spam-filter', 'T0002', 'J0002', 'done', '-', '-', Err),
+             'second job done');
+  ExpectTrue(GetTask('spam-filter', 'T0002', T), 'task reloads');
+  ExpectTrue(T.Status = tsDone, 'task closes once its LAST job finishes');
+
+  { A failed run leaves work to do: back to todo, never done. }
+  CreateTask('spam-filter', 'Flaky step', '', Err);
+  CreateJob('spam-filter', 'T0003', '', Err);
+  ExpectTrue(UpdateJob('spam-filter', 'T0003', 'J0001', 'failed', 'boom', '-', Err),
+             'job reported failed');
+  ExpectTrue(GetTask('spam-filter', 'T0003', T), 'task reloads');
+  ExpectTrue(T.Status = tsTodo, 'a failed job returns its task to todo');
+
+  { A blocked task is not quietly reopened by a finishing job. }
+  CreateTask('spam-filter', 'Blocked step', '', Err);
+  CreateJob('spam-filter', 'T0004', '', Err);
+  UpdateTask('spam-filter', 'T0004', '', '-', 'blocked', Err);
+  ExpectTrue(UpdateJob('spam-filter', 'T0004', 'J0001', 'done', '-', '-', Err),
+             'job done on a blocked task');
+  ExpectTrue(GetTask('spam-filter', 'T0004', T), 'task reloads');
+  ExpectTrue(T.Status = tsBlocked, 'a blocked task stays blocked');
 
   { ---------------------------------------------------------------- tools -- }
   Out_ := Tool_Project('{"action":"list"}', Err);

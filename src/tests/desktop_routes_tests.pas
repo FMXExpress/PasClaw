@@ -322,6 +322,60 @@ begin
                      '"exists":false', 'deleted key is gone');
   ExpectStatus('PUT', '/v1/apps/nope/state/k', 'v', 400, 'state on a missing project');
 
+  { ------------------------------------------------- run consent + surfaces -- }
+  { An html app is served, never run -- asking to run one is a 400, not a
+    silently-spawned process. }
+  ExpectStatus('POST', '/v1/apps/spam-filter/run', '{"confirm":true}', 400,
+               'a servable app has nothing to run');
+
+  { A process app must not start without explicit consent, and the refusal
+    has to hand back the command so a client can show what it is asking
+    about. This is the containment story for model-authored `run` lines. }
+  CreateProject('Proc App', 'proc-app', '', Err);
+  WriteFileText(JoinPath(ProjectAppDir('proc-app'), 'app.json'),
+    '{"name":"Proc","kind":"python","entry":"main.py","run":"python3 main.py {port}"}');
+  WriteFileText(JoinPath(ProjectAppDir('proc-app'), 'main.py'), 'print(1)');
+  ExpectStatus('POST', '/v1/apps/proc-app/run', '{}', 409,
+               'running without confirmation is refused');
+  ExpectBodyContains('POST', '/v1/apps/proc-app/run', '{}', 'python3 main.py',
+                     'the refusal shows the command being consented to');
+  ExpectBodyContains('POST', '/v1/apps/proc-app/run', '{}', '"needs_confirm":true',
+                     'and marks itself as a consent prompt');
+  ExpectStatus('POST', '/v1/apps/proc-app/stop', '', 400, 'stopping a stopped app');
+  ExpectStatus('GET', '/v1/apps/proc-app/runlog', '', 200, 'run log readable');
+  ExpectBodyContains('GET', '/v1/apps/proc-app', '', '"run_state":"stopped"',
+                     'manifest carries run state for process kinds');
+
+  { The allowlisted read surface: apps get these projections and nothing
+    else. The refusal is what keeps it a window rather than a hole. }
+  ExpectStatus('GET', '/v1/apps/spam-filter/read/cron',      '', 200, 'read cron');
+  ExpectStatus('GET', '/v1/apps/spam-filter/read/projects',  '', 200, 'read projects');
+  ExpectStatus('GET', '/v1/apps/spam-filter/read/pages',     '', 200, 'read pages');
+  ExpectStatus('GET', '/v1/apps/spam-filter/read/providers', '', 200, 'read providers');
+  ExpectStatus('GET', '/v1/apps/spam-filter/read/sessions',  '', 200, 'read sessions');
+  ExpectStatus('GET', '/v1/apps/spam-filter/read/config',    '', 404,
+               'config is NOT a readable surface');
+  ExpectStatus('GET', '/v1/apps/spam-filter/read/../../etc', '', 404,
+               'traversal is not a surface');
+  ExpectStatus('POST', '/v1/apps/spam-filter/read/cron', '', 405,
+               'the read surface is read-only');
+  ExpectBodyContains('GET', '/v1/apps/spam-filter/read/projects', '',
+                     'spam-filter', 'the projects surface carries real data');
+  { A provider's key must never reach an app -- only whether one is set. }
+  ExpectBodyContains('GET', '/v1/apps/spam-filter/read/providers', '',
+                     '"surface":"providers"', 'providers surface labelled');
+
+  { The virtual SDK is served per project and carries that project's name. }
+  if Req('GET', '/apps/spam-filter/pasclaw.js', '', R) then
+  begin
+    ExpectTrue(R.Status = 200, 'the SDK is served');
+    ExpectTrue(Pos('"spam-filter"', R.Body) > 0, 'SDK is scoped to its project');
+    ExpectTrue(Pos('getJSON', R.Body) > 0, 'SDK exposes the state helpers');
+    ExpectTrue(Pos('read:', R.Body) > 0, 'SDK exposes the read helper');
+  end
+  else
+    Fail_('SDK route not handled');
+
   { ------------------------------------------------------------ blueprints -- }
   if Req('GET', '/v1/projects/spam-filter/blueprint', '', R) then
   begin

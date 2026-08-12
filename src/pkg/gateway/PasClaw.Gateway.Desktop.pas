@@ -70,7 +70,11 @@ uses
   PasClaw.JSON,
   PasClaw.Workspaces,
   PasClaw.Projects.Store,
-  PasClaw.Apps;
+  PasClaw.Apps,
+  PasClaw.Apps.Runner,
+  PasClaw.Desktop.Events,
+  PasClaw.Config,           { cron entries + provider names for the read surface }
+  PasClaw.Session.Store;    { session list for the Library app }
 
 var
   GJobRunner: TJobRunner = nil;
@@ -910,6 +914,123 @@ end;
 
 { ---- /v1/apps + /apps ---- }
 
+(* The allowlisted read surfaces. Each is a small projection built here from
+   a store this unit already depends on -- deliberately NOT a proxy to the
+   gateway's own handlers, because a proxy would inherit whatever those
+   handlers ever start returning. Adding a surface has to be a deliberate
+   edit to this function. *)
+function ReadSurface(const Surface: string;
+  out Resp: TDesktopResponse): Boolean;
+var
+  Root, Item: TJsonObject;
+  Arr: TJsonArray;
+  Cfg: TConfig;
+  I: Integer;
+  Metas: TSessionMetaArray;
+  Pages_: TPageInfoArray;
+  Projs: TProjectInfoArray;
+begin
+  Result := True;
+  Root := TJsonObject.Create;
+  try
+    Arr := TJsonArray.Create;
+
+    if Surface = 'cron' then
+    begin
+      Cfg := LoadConfig;
+      for I := 0 to High(Cfg.Crons) do
+      begin
+        Item := TJsonObject.Create;
+        Item.PutStr ('id',      Cfg.Crons[I].Id);
+        Item.PutStr ('spec',    Cfg.Crons[I].Spec);
+        Item.PutStr ('skill',   Cfg.Crons[I].Skill);
+        Item.PutStr ('args',    Cfg.Crons[I].Args);
+        Item.PutBool('enabled', Cfg.Crons[I].Enabled);
+        Arr.AddObject(Item);
+      end;
+    end
+    else if Surface = 'sessions' then
+    begin
+      Metas := ListSessions(False);
+      for I := 0 to High(Metas) do
+      begin
+        Item := TJsonObject.Create;
+        Item.PutStr('id',       Metas[I].Id);
+        Item.PutStr('title',    Metas[I].Title);
+        Item.PutStr('model',    Metas[I].Model);
+        Item.PutStr('provider', Metas[I].Provider);
+        Item.PutInt('updated',  Metas[I].UpdatedAt);
+        Arr.AddObject(Item);
+      end;
+    end
+    else if Surface = 'providers' then
+    begin
+      { Names and models only. An api_key must never leave the server, and
+        the surface that cannot carry it is the one that never will. }
+      Cfg := LoadConfig;
+      for I := 0 to High(Cfg.Providers) do
+      begin
+        Item := TJsonObject.Create;
+        Item.PutStr ('name',  Cfg.Providers[I].Name);
+        Item.PutStr ('kind',  Cfg.Providers[I].Kind);
+        Item.PutStr ('model', Cfg.Providers[I].Model);
+        Item.PutBool('has_key', Trim(Cfg.Providers[I].APIKey) <> '');
+        Arr.AddObject(Item);
+      end;
+      Root.PutStr('default', Cfg.DefaultProvider);
+      Root.PutStr('default_model', Cfg.DefaultModel);
+    end
+    else if Surface = 'pages' then
+    begin
+      Pages_ := ListPages;
+      for I := 0 to High(Pages_) do
+      begin
+        Item := PageJSON(Pages_[I]);
+        Arr.AddObject(Item);
+      end;
+    end
+    else if Surface = 'projects' then
+    begin
+      Projs := ListProjects;
+      for I := 0 to High(Projs) do
+      begin
+        Item := ProjectJSON(Projs[I]);
+        Arr.AddObject(Item);
+      end;
+    end
+    else
+    begin
+      Arr.Free;
+      ReplyErr(Resp, 404, 'no such surface: ' + Surface +
+               ' (cron, sessions, providers, pages, projects)');
+      Exit;
+    end;
+
+    Root.PutArray('items', Arr);
+    Root.PutStr('surface', Surface);
+    ReplyJSON(Resp, 200, Root.ToJSON);
+  finally
+    Root.Free;
+  end;
+end;
+
+{ Serialise a run record for the clients. }
+function RunJSON(const R: TRunInfo): TJsonObject;
+begin
+  Result := TJsonObject.Create;
+  Result.PutStr('project',  R.Project);
+  Result.PutStr('state',    RunStateToStr(R.State));
+  Result.PutInt('port',     R.Port);
+  Result.PutStr('started',  R.Started);
+  Result.PutInt('exit_code', R.ExitCode);
+  Result.PutStr('command',  R.Command);
+  if R.Error <> '' then Result.PutStr('error', R.Error);
+  { An app that serves HTTP is reachable directly; the desktop points a
+    window at this. }
+  if (R.State = rsRunning) and (R.Port > 0) then
+    Result.PutStr('url', 'http://127.0.0.1:' + IntToStr(R.Port) + '/');
+end;
+
 function RouteAppAPI(const Method, Doc, Body: string;
   out Resp: TDesktopResponse): Boolean;
 var
@@ -917,9 +1038,12 @@ var
   Project, Key, Val, Err: string;
   Info: TAppInfo;
   Root: TJsonObject;
+  Obj: TJsonObject;
   Arr: TJsonArray;
   Keys: TStringList;
   I: Integer;
+  Consented: Boolean;
+  Run: TRunInfo;
 begin
   Result := True;
   Segs := PathSegments(Doc);
@@ -966,10 +1090,126 @@ begin
         Root.PutStr ('env',     Info.EnvKeys);
         if AppIsServable(Info) then
           Root.PutStr('url', '/apps/' + Project + '/');
+        { Process kinds carry their run state here so the desktop can render
+          a Run / Stop button without a second round trip. }
+        if Info.Exists and not AppIsServable(Info) then
+        begin
+          Run := AppRunInfo(Project);
+          Root.PutStr('run_state', RunStateToStr(Run.State));
+          Root.PutInt('run_port',  Run.Port);
+          Root.PutStr('run_command', PlannedCommand(Project, Err));
+          if Run.Port > 0 then
+            Root.PutStr('run_url',
+              'http://127.0.0.1:' + IntToStr(Run.Port) + '/');
+        end;
         ReplyJSON(Resp, 200, Root.ToJSON);
       finally
         Root.Free;
       end;
+      Exit;
+    end;
+
+    { /v1/apps/<p>/run|stop|runlog -- the process kinds. }
+    if LowerCase(Segs[3]) = 'run' then
+    begin
+      if Method <> 'POST' then
+      begin
+        ReplyErr(Resp, 405, 'method not allowed');
+        Exit;
+      end;
+      Obj := BodyObj(Body);
+      try
+        Consented := (Obj <> nil) and Obj.GetBool('confirm', False);
+      finally
+        Obj.Free;
+      end;
+      if not Consented then
+      begin
+        { Answer with the command the user is being asked to approve, so a
+          client can show it verbatim before asking again with confirm. }
+        Root := TJsonObject.Create;
+        try
+          Root.PutStr('error', 'running this app needs explicit confirmation');
+          Root.PutStr('command', PlannedCommand(Project, Err));
+          if Err <> '' then Root.PutStr('detail', Err);
+          Root.PutBool('needs_confirm', True);
+          ReplyJSON(Resp, 409, Root.ToJSON);
+        finally
+          Root.Free;
+        end;
+        Exit;
+      end;
+      if not StartApp(Project, True, Run, Err) then
+      begin
+        ReplyErr(Resp, 400, Err);
+        Exit;
+      end;
+      PublishApp(Project, RunStateToStr(Run.State), Run.Port);
+      Root := RunJSON(Run);
+      try
+        ReplyJSON(Resp, 200, Root.ToJSON);
+      finally
+        Root.Free;
+      end;
+      Exit;
+    end;
+
+    if LowerCase(Segs[3]) = 'stop' then
+    begin
+      if Method <> 'POST' then
+      begin
+        ReplyErr(Resp, 405, 'method not allowed');
+        Exit;
+      end;
+      if not StopApp(Project, Err) then
+      begin
+        ReplyErr(Resp, 400, Err);
+        Exit;
+      end;
+      PublishApp(Project, 'stopped', 0);
+      ReplyOK(Resp);
+      Exit;
+    end;
+
+    if LowerCase(Segs[3]) = 'runlog' then
+    begin
+      if Method <> 'GET' then
+      begin
+        ReplyErr(Resp, 405, 'method not allowed');
+        Exit;
+      end;
+      Root := TJsonObject.Create;
+      try
+        Root.PutStr('log', AppRunLog(Project));
+        ReplyJSON(Resp, 200, Root.ToJSON);
+      finally
+        Root.Free;
+      end;
+      Exit;
+    end;
+
+    { /v1/apps/<p>/read/<surface> -- a NARROW, ALLOWLISTED read window onto
+      the agent's own surfaces.
+
+      The suite apps (Calendar over cron, Library over sessions and pages,
+      Cookbook over the provider catalog) are ordinary sandboxed apps, and a
+      sandboxed app cannot call /v1/* itself. Rather than punching a general
+      hole, this route exposes a fixed set of read-only projections and
+      nothing else -- no /v1/config, no secrets, no writes. The allowlist is
+      enforced HERE, server-side, so it holds however the app is opened. }
+    if LowerCase(Segs[3]) = 'read' then
+    begin
+      if Method <> 'GET' then
+      begin
+        ReplyErr(Resp, 405, 'method not allowed');
+        Exit;
+      end;
+      if Segs.Count < 5 then
+      begin
+        ReplyErr(Resp, 404, 'name a surface: cron, sessions, providers, pages, projects');
+        Exit;
+      end;
+      Result := ReadSurface(LowerCase(Segs[4]), Resp);
       Exit;
     end;
 

@@ -189,9 +189,221 @@ const
     '(async()=>{facts=await pasclaw.getJSON("facts",[]);paint();})();' +
     '</' + 'script></body></html>';
 
+  { Calendar -- the agent's scheduled work, as a month you can read. Cron is
+    already the mechanism; what was missing was somewhere to see it. }
+  CalendarHTML =
+    '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
+    '<title>Calendar</title>' + CommonCSS +
+    '<style>table.cal{border-collapse:collapse;width:100%;table-layout:fixed}' +
+    'table.cal th{background:#c0c0c0;border:1px solid #808080;font-size:11px;padding:2px}' +
+    'table.cal td{border:1px solid #c0c0c0;height:52px;vertical-align:top;' +
+    'font-size:11px;padding:2px}' +
+    'table.cal td.today{background:#ffffcc;border-color:#000080}' +
+    'table.cal td.pad{background:#f4f4f4}' +
+    '.ev{background:#000080;color:#fff;padding:0 2px;margin-top:1px;' +
+    'overflow:hidden;white-space:nowrap}' +
+    '</style></head><body>' +
+    '<h1>Calendar</h1>' +
+    '<div class="row"><button id="prev">&lt;</button>' +
+    '<b id="mon" style="flex:1 1 auto;text-align:center"></b>' +
+    '<button id="next">&gt;</button></div>' +
+    '<table class="cal"><thead><tr>' +
+    '<th>Mon</th><th>Tue</th><th>Wed</th><th>Thu</th><th>Fri</th>' +
+    '<th>Sat</th><th>Sun</th></tr></thead><tbody id="grid"></tbody></table>' +
+    '<h1 style="margin-top:10px">Scheduled</h1>' +
+    '<ul id="jobs"></ul>' +
+    '<div class="row" style="margin-top:8px">' +
+    '<input type="text" id="t" placeholder="Note for the selected day">' +
+    '<button id="add">Add</button></div>' +
+    '<script src="pasclaw.js"></' + 'script>' +
+    '<script>' +
+    'let cur=new Date(),notes={},crons=[],sel=null;' +
+    'const $=s=>document.querySelector(s);' +
+    'const key=d=>d.toISOString().slice(0,10);' +
+    'async function save(){await pasclaw.setJSON("notes",notes);}' +
+    'function paintJobs(){const ul=$("#jobs");ul.innerHTML="";' +
+    'if(!crons.length){const li=document.createElement("li");li.className="muted";' +
+    'li.textContent="No scheduled agent jobs yet.";ul.appendChild(li);return;}' +
+    'crons.forEach(c=>{const li=document.createElement("li");' +
+    'const sp=document.createElement("span");sp.className="txt";' +
+    'sp.textContent=c.spec+"   "+c.skill+(c.enabled?"":"  (disabled)");' +
+    'li.appendChild(sp);ul.appendChild(li);});}' +
+    'function paint(){' +
+    'const y=cur.getFullYear(),m=cur.getMonth();' +
+    '$("#mon").textContent=cur.toLocaleString(undefined,{month:"long",year:"numeric"});' +
+    'const first=new Date(y,m,1);' +
+    'const lead=(first.getDay()+6)%7;' +
+    'const days=new Date(y,m+1,0).getDate();' +
+    'const today=key(new Date());' +
+    'const tb=$("#grid");tb.innerHTML="";' +
+    'let row=document.createElement("tr");' +
+    'for(let i=0;i<lead;i++){const td=document.createElement("td");' +
+    'td.className="pad";row.appendChild(td);}' +
+    'for(let d=1;d<=days;d++){' +
+    'const date=new Date(y,m,d),k=key(date);' +
+    'const td=document.createElement("td");' +
+    'if(k===today)td.className="today";' +
+    'const num=document.createElement("div");num.textContent=d;td.appendChild(num);' +
+    '(notes[k]||[]).forEach(n=>{const e=document.createElement("div");' +
+    'e.className="ev";e.textContent=n;e.title=n;td.appendChild(e);});' +
+    'td.onclick=()=>{sel=k;document.querySelectorAll("td").forEach(x=>' +
+    'x.style.outline="");td.style.outline="2px solid #000080";};' +
+    'row.appendChild(td);' +
+    'if((lead+d)%7===0){tb.appendChild(row);row=document.createElement("tr");}}' +
+    'if(row.children.length)tb.appendChild(row);}' +
+    '$("#prev").onclick=()=>{cur=new Date(cur.getFullYear(),cur.getMonth()-1,1);paint();};' +
+    '$("#next").onclick=()=>{cur=new Date(cur.getFullYear(),cur.getMonth()+1,1);paint();};' +
+    '$("#add").onclick=async()=>{const v=$("#t").value.trim();' +
+    'if(!v)return;const k=sel||key(new Date());' +
+    '(notes[k]=notes[k]||[]).push(v);$("#t").value="";paint();await save();};' +
+    '(async()=>{notes=await pasclaw.getJSON("notes",{});' +
+    'try{crons=await pasclaw.read("cron");}catch(e){crons=[];}' +
+    'paint();paintJobs();})();' +
+    '</' + 'script></body></html>';
+
+  { Library -- everything ever made, searchable: generated pages, past
+    sessions, and the projects themselves. }
+  LibraryHTML =
+    '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
+    '<title>Library</title>' + CommonCSS +
+    '<style>.tabs{display:flex;gap:2px;margin-bottom:6px}' +
+    '.tabs button.on{border-color:#404040 #fff #fff #404040;font-weight:bold}' +
+    'li a{color:#000080}</style></head><body>' +
+    '<h1>Library</h1>' +
+    '<div class="tabs">' +
+    '<button data-k="pages" class="on">Pages</button>' +
+    '<button data-k="sessions">Sessions</button>' +
+    '<button data-k="projects">Projects</button></div>' +
+    '<div class="row"><input type="text" id="q" placeholder="Filter"></div>' +
+    '<ul id="list"></ul>' +
+    '<div class="muted" id="count">&nbsp;</div>' +
+    '<script src="pasclaw.js"></' + 'script>' +
+    '<script>' +
+    'let kind="pages",items=[];' +
+    'const $=s=>document.querySelector(s);' +
+    'function label(it){' +
+    'if(kind==="pages")return[it.title,(it.source_count||0)+" source(s)",it.created||""];' +
+    'if(kind==="sessions")return[it.title||it.id,it.model||"",it.id];' +
+    'return[it.title||it.name,(it.tasks||0)+" task(s)",it.has_app?"[app]":""];}' +
+    'function paint(){const f=$("#q").value.toLowerCase();const ul=$("#list");' +
+    'ul.innerHTML="";let n=0;' +
+    'items.forEach(it=>{const p=label(it);' +
+    'if(f&&!p.join(" ").toLowerCase().includes(f))return;n++;' +
+    'const li=document.createElement("li");' +
+    'const sp=document.createElement("span");sp.className="txt";' +
+    'if(kind==="pages"){const a=document.createElement("a");' +
+    'a.href="/pages/"+it.id+"/";a.target="_blank";a.rel="noopener";' +
+    'a.textContent=p[0];sp.appendChild(a);' +
+    'sp.appendChild(document.createTextNode("  "+p[1]));}' +
+    'else sp.textContent=p[0]+"   "+p[1];' +
+    'const m=document.createElement("span");m.className="muted";m.textContent=p[2]||"";' +
+    'li.appendChild(sp);li.appendChild(m);ul.appendChild(li);});' +
+    '$("#count").textContent=n+" of "+items.length;}' +
+    'async function load(){try{items=await pasclaw.read(kind);}catch(e){items=[];}' +
+    'paint();}' +
+    'document.querySelectorAll(".tabs button").forEach(b=>{b.onclick=()=>{' +
+    'document.querySelectorAll(".tabs button").forEach(x=>x.className="");' +
+    'b.className="on";kind=b.dataset.k;load();};});' +
+    '$("#q").oninput=paint;' +
+    'load();' +
+    '</' + 'script></body></html>';
+
+  { Cookbook -- the provider catalog in plain language. The routing itself is
+    real (fallback chains, the auto-router); this is the window onto it. }
+  CookbookHTML =
+    '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
+    '<title>Cookbook</title>' + CommonCSS +
+    '<style>.card{border:1px solid #808080;border-top-color:#fff;' +
+    'border-left-color:#fff;padding:6px 8px;margin-bottom:6px;background:#f4f4f4}' +
+    '.card h3{margin:0 0 2px;font-size:12px}.ok{color:#006000}.no{color:#a00}' +
+    '</style></head><body>' +
+    '<h1>Cookbook</h1>' +
+    '<div class="muted">Which model answers, and what it costs you in speed ' +
+    'or privacy. Change these with <b>pasclaw onboard</b>.</div>' +
+    '<h1 style="margin-top:10px">Configured</h1>' +
+    '<div id="list"></div>' +
+    '<h1 style="margin-top:10px">Worth knowing</h1>' +
+    '<div class="card"><h3>Fast and cheap</h3>' +
+    '<div class="muted">Groq, Cerebras, DeepSeek, or a smaller model on the ' +
+    'provider you already use. Good for routine turns.</div></div>' +
+    '<div class="card"><h3>Most capable</h3>' +
+    '<div class="muted">Anthropic Claude or OpenAI GPT flagships. Worth it ' +
+    'when the task is genuinely hard.</div></div>' +
+    '<div class="card"><h3>Private and local</h3>' +
+    '<div class="muted">Ollama, LM Studio or vLLM on your own machine. ' +
+    'Nothing leaves the house; you trade some capability for that.</div></div>' +
+    '<script src="pasclaw.js"></' + 'script>' +
+    '<script>' +
+    'const $=s=>document.querySelector(s);' +
+    '(async()=>{let ps=[];try{ps=await pasclaw.read("providers");}catch(e){}' +
+    'const host=$("#list");' +
+    'if(!ps.length){const d=document.createElement("div");d.className="muted";' +
+    'd.textContent="No providers configured yet. Run pasclaw onboard.";' +
+    'host.appendChild(d);return;}' +
+    'ps.forEach(p=>{const d=document.createElement("div");d.className="card";' +
+    'const h=document.createElement("h3");h.textContent=p.name;d.appendChild(h);' +
+    'const m=document.createElement("div");m.className="muted";' +
+    'm.textContent=(p.model||"(default model)")+"  -  "+(p.kind||p.name);' +
+    'd.appendChild(m);' +
+    'const k=document.createElement("div");' +
+    'k.className=p.has_key?"ok":"no";' +
+    'k.textContent=p.has_key?"key configured":"no key set";' +
+    'd.appendChild(k);host.appendChild(d);});})();' +
+    '</' + 'script></body></html>';
+
+  { Mail -- an inbox the agent triages. The IMAP/SMTP channel already exists;
+    this is where its output lands. Until that channel is configured it says
+    so rather than pretending to be an email client. }
+  MailHTML =
+    '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
+    '<title>Mail</title>' + CommonCSS +
+    '<style>li.unread .txt{font-weight:bold}' +
+    '.tag{font-size:10px;background:#000080;color:#fff;padding:0 3px;' +
+    'margin-right:4px}</style></head><body>' +
+    '<h1>Mail</h1>' +
+    '<div class="muted" id="hint"></div>' +
+    '<div class="row" style="margin-top:6px">' +
+    '<input type="text" id="t" placeholder="Subject to triage">' +
+    '<button id="add">Add</button></div>' +
+    '<ul id="list"></ul>' +
+    '<div class="muted" id="count">&nbsp;</div>' +
+    '<script src="pasclaw.js"></' + 'script>' +
+    '<script>' +
+    'let items=[];' +
+    'const $=s=>document.querySelector(s);' +
+    'const TAGS=["FYI","Request","Decision","Deadline","Risk"];' +
+    'async function save(){await pasclaw.setJSON("items",items);}' +
+    'function paint(){const ul=$("#list");ul.innerHTML="";' +
+    'if(!items.length){const li=document.createElement("li");li.className="muted";' +
+    'li.textContent="Nothing here yet.";ul.appendChild(li);}' +
+    'items.forEach((it,i)=>{const li=document.createElement("li");' +
+    'if(!it.read)li.className="unread";' +
+    'const sp=document.createElement("span");sp.className="txt";' +
+    'const tg=document.createElement("span");tg.className="tag";' +
+    'tg.textContent=it.tag||"FYI";sp.appendChild(tg);' +
+    'sp.appendChild(document.createTextNode(it.subject));' +
+    'sp.onclick=async()=>{it.read=!it.read;paint();await save();};' +
+    'const cyc=document.createElement("span");cyc.className="x";cyc.textContent="#";' +
+    'cyc.title="Change category";' +
+    'cyc.onclick=async()=>{const n=(TAGS.indexOf(it.tag||"FYI")+1)%TAGS.length;' +
+    'it.tag=TAGS[n];paint();await save();};' +
+    'const x=document.createElement("span");x.className="x";' +
+    'x.textContent=String.fromCharCode(0x2715);' +
+    'x.onclick=async()=>{items.splice(i,1);paint();await save();};' +
+    'li.appendChild(sp);li.appendChild(cyc);li.appendChild(x);ul.appendChild(li);});' +
+    'const u=items.filter(i=>!i.read).length;' +
+    '$("#count").textContent=items.length?u+" unread of "+items.length:"";}' +
+    '$("#add").onclick=async()=>{const v=$("#t").value.trim();if(!v)return;' +
+    'items.unshift({subject:v,tag:"FYI",read:false});$("#t").value="";' +
+    'paint();await save();};' +
+    '$("#t").addEventListener("keydown",e=>{if(e.key==="Enter")$("#add").click();});' +
+    '$("#hint").textContent="PasClaw can poll IMAP and send replies -- see the Email channel in docs/channels.md. Once it is configured, ask PasClaw in this project to file triaged mail here.";' +
+    '(async()=>{items=await pasclaw.getJSON("items",[]);paint();})();' +
+    '</' + 'script></body></html>';
+
 function SuiteApps: TSuiteApps;
 begin
-  SetLength(Result, 3);
+  SetLength(Result, 7);
 
   Result[0].Name        := 'notes';
   Result[0].Title       := 'Notes';
@@ -210,13 +422,41 @@ begin
   Result[2].Description := 'What PasClaw remembers about you, as cards you ' +
                            'can tear up. Part of the system suite.';
   Result[2].Icon        := 'brain';
+
+  Result[3].Name        := 'calendar';
+  Result[3].Title       := 'Calendar';
+  Result[3].Description := 'Your month, plus the agent''s scheduled jobs. ' +
+                           'Part of the system suite.';
+  Result[3].Icon        := 'page';
+
+  Result[4].Name        := 'library';
+  Result[4].Title       := 'Library';
+  Result[4].Description := 'Every page, session and project, searchable. ' +
+                           'Part of the system suite.';
+  Result[4].Icon        := 'disk';
+
+  Result[5].Name        := 'cookbook';
+  Result[5].Title       := 'Cookbook';
+  Result[5].Description := 'Which model answers, in plain language. ' +
+                           'Part of the system suite.';
+  Result[5].Icon        := 'gear';
+
+  Result[6].Name        := 'mail';
+  Result[6].Title       := 'Mail';
+  Result[6].Description := 'An inbox the agent triages. Part of the system ' +
+                           'suite.';
+  Result[6].Icon        := 'Mail';
 end;
 
 function BodyFor(const Name: string): string;
 begin
-  if      Name = 'notes' then Result := NotesHTML
-  else if Name = 'todo'  then Result := TodoHTML
-  else if Name = 'brain' then Result := BrainHTML
+  if      Name = 'notes'    then Result := NotesHTML
+  else if Name = 'todo'     then Result := TodoHTML
+  else if Name = 'brain'    then Result := BrainHTML
+  else if Name = 'calendar' then Result := CalendarHTML
+  else if Name = 'library'  then Result := LibraryHTML
+  else if Name = 'cookbook' then Result := CookbookHTML
+  else if Name = 'mail'     then Result := MailHTML
   else Result := '';
 end;
 

@@ -1016,6 +1016,46 @@ h1,h2,h3 { margin: 0 0 6px; font-size: 12px; }
 
 iframe.app { width: 100%; height: 100%; border: 0; background: var(--window); display: block; }
 
+/* ---- period-native agent output ----
+   The agent speaks in the era's own furniture: a plan arrives as a wizard,
+   a question as a message box, work in progress as a progress dialog. All of
+   it is built from the same role variables as everything else, so it reskins
+   with the style like real chrome would. */
+.wizard { display: flex; flex-direction: column; height: 100%; }
+.wizard .page { flex: 1 1 auto; overflow: auto; padding: 8px; }
+.wizard .steps { margin: 0; padding-left: 20px; }
+.wizard .steps li { margin: 3px 0; }
+.wizard .steps li.cur { font-weight: bold; }
+.wizard .foot {
+  flex: 0 0 auto; display: flex; gap: 4px; justify-content: flex-end;
+  padding: 5px 4px 2px; margin-top: 3px;
+  box-shadow: inset 0 2px 0 -1px var(--shadow), inset 0 3px 0 -2px var(--highlight);
+}
+.wizard .side {
+  float: left; width: 78px; height: 92px; margin: 0 10px 6px 0;
+  background: var(--titlea);
+  background-image: linear-gradient(160deg, var(--titlea), var(--titlea2));
+}
+.msgbox { display: flex; gap: 10px; padding: 10px 8px 4px; }
+.msgbox .ico { width: 32px; height: 32px; flex: 0 0 32px; }
+.msgbox .text { flex: 1 1 auto; white-space: pre-wrap; }
+.msgfoot {
+  display: flex; gap: 5px; justify-content: center; padding: 6px 4px 4px;
+}
+.prog { padding: 10px; }
+.prog .bar {
+  height: 18px; margin-top: 8px; padding: 2px; background: var(--window);
+  box-shadow: inset 1px 1px 0 0 var(--shadow), inset -1px -1px 0 0 var(--highlight),
+              inset 2px 2px 0 0 var(--darkshadow), inset -2px -2px 0 0 var(--light);
+}
+/* The blocks are the era's detail: a progress bar was chunks, not a sweep. */
+.prog .fill {
+  height: 100%; background-image:
+    repeating-linear-gradient(90deg, var(--progress) 0 9px, transparent 9px 11px);
+  transition: width .25s steps(4);
+}
+.prog .what { font-size: 11px; margin-top: 5px; color: var(--disabledtext); }
+
 /* Sources strip echo in the Browser window's status bar. */
 .grounded  { color: var(--text); }
 .ungrounded{ color: #a00; font-weight: bold; }
@@ -1765,6 +1805,15 @@ function openChat(project) {
     send.disabled = false;
     history.push({ role: "assistant", content: acc });
 
+    /* Period-native output: if the turn emitted a UI block, show the
+       furniture and strip it from the visible text. Unrecognised or
+       malformed blocks stay as text -- an answer must never vanish. */
+    const ui = extractUIBlocks(acc);
+    if (ui.blocks.length) {
+      body.textContent = ui.text;
+      ui.blocks.forEach(b => renderUIBlock(b, project));
+    }
+
     /* Did this turn leave a runnable app behind? Ask the gateway rather
        than trusting the transcript. */
     try {
@@ -1783,6 +1832,8 @@ function openChat(project) {
   ta.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
   });
+  /* Let a dialog's answer continue this conversation (see renderUIBlock). */
+  w.__submitText = text => { ta.value = text; submit(); };
   setTimeout(() => ta.focus(), 0);
   return w;
 }
@@ -1790,7 +1841,32 @@ function openChat(project) {
 /* The builder-mode overlay. Kept client-side for now so it is visible and
    editable next to the UI that depends on it; the plan moves it into a
    shipped skill (skills/app-factory) so it becomes promptware. */
+/* Per-style personality. The plan's idea: a desktop that looks like System 6
+   should not answer like a 2020s chatbot. This costs nothing -- it is a
+   sentence appended to the system prompt -- and it is what makes the style
+   picker feel like it changes the machine rather than the paint. */
+const STYLE_VOICE = {
+  AppleSystem: "Answer the way a 1984 Macintosh would: few words, plain " +
+    "nouns, no exclamation. The machine is polite and very small.",
+  MacOS9:      "Answer warmly and briefly, like Mac OS 9 Help.",
+  Win31:       "Answer like a Windows 3.1 manual: numbered, literal, dry.",
+  Win95:       "Answer like a Windows 95 wizard: short steps, plain language.",
+  Win98:       "Answer like a Windows 98 wizard: short steps, plain language.",
+  NeXTSTEP:    "Answer precisely and technically, like NeXTSTEP documentation.",
+  BeOS:        "Answer briskly and a little playfully, like BeOS release notes.",
+  Amiga13:     "Answer tersely, like an Amiga Workbench requester.",
+  Amiga20:     "Answer tersely, like an Amiga Workbench requester.",
+  GEM:         "Answer in very few words, like a GEM desk accessory.",
+  Synthwave:   "Answer with a little neon swagger -- brief, confident, " +
+    "never purple. You are a 1984 that never happened.",
+  Phosphor:    "Answer like an amber terminal: terse, monospaced in spirit, " +
+    "no decoration.",
+  ClaudeCode:     "Answer plainly and concisely, like a good CLI.",
+  ClaudeCodeDark: "Answer plainly and concisely, like a good CLI.",
+};
+
 function builderPrompt(project) {
+  const voice = STYLE_VOICE[S.style];
   return [
     `You are working inside the PasClaw Desktop project "${project}".`,
     `Deliverables are APPS, not essays. When the user asks for something,`,
@@ -1815,7 +1891,235 @@ function builderPrompt(project) {
     `Keep the board current with the project and task tools as you work:`,
     `create tasks for the steps, and report each job when it finishes.`,
     `Be brief in chat -- the app is the answer.`,
-  ].join("\n");
+    ``,
+    `THIS DESKTOP RENDERS STRUCTURED OUTPUT AS REAL UI. When you would`,
+    `otherwise write a numbered plan, emit a fenced block instead and the`,
+    `user gets a wizard whose Next button approves each step (and whose`,
+    `Finish turns the steps into tasks on the board):`,
+    "```pasclaw-ui",
+    `{"ui":"wizard","title":"Plan","steps":[{"title":"...","body":"..."}]}`,
+    "```",
+    `When you need a decision, ask with buttons rather than prose -- the`,
+    `chosen label comes back as the user's next message:`,
+    "```pasclaw-ui",
+    `{"ui":"ask","text":"Use IMAP or the Gmail API?",`,
+    ` "buttons":[{"label":"IMAP","value":"IMAP"},{"label":"Gmail API","value":"Gmail API"}]}`,
+    "```",
+    `Use these sparingly and only when they fit; ordinary prose is fine.`,
+    voice ? `` : ``,
+    voice ? `VOICE: ${voice}` : ``,
+  ].filter(l => l !== null && l !== undefined).join("\n");
+}
+
+/* ==========================================================================
+   Period-native agent output
+
+   The §0 idea, made concrete: the agent does not answer a plan with a
+   markdown list, it answers with a WIZARD whose pages are the steps and
+   whose Next button is your approval. A question is a message box with real
+   buttons. Work in progress is the progress dialog with the chunky bar.
+
+   These are ordinary desktop windows built from the same palette, so they
+   look native in all 27 styles. They are driven from the chat stream: the
+   client recognises structured output (a fenced ```pasclaw-ui block, or a
+   plan the model wrote through plan_write) and renders furniture instead of
+   text. Anything it does not recognise stays plain text -- an unrecognised
+   answer must never disappear.
+   ========================================================================== */
+
+/* A wizard. Steps is an array of {title, body}; onFinish gets the step list
+   back so the caller can turn approved steps into tasks. */
+function showWizard(opts) {
+  const steps = (opts.steps || []).filter(Boolean);
+  if (!steps.length) return null;
+  let i = 0;
+
+  const w = createWindow({
+    title: opts.title || "Wizard", width: 460, height: 320,
+    icon: "page", max: false, pad: false,
+  });
+  const wrap = el("div", "wizard");
+  const page = el("div", "page");
+  const foot = el("div", "foot");
+  const back = el("button", "btn", "< Back");
+  const next = el("button", "btn", "Next >");
+  const cancel = el("button", "btn", "Cancel");
+  foot.appendChild(back); foot.appendChild(next); foot.appendChild(cancel);
+  wrap.appendChild(page); wrap.appendChild(foot);
+  w.body.appendChild(wrap);
+  w.body.style.padding = "3px";
+
+  function paint() {
+    page.textContent = "";
+    page.appendChild(el("div", "side"));
+    const st = steps[i];
+    page.appendChild(el("h3", null, st.title || `Step ${i + 1}`));
+    if (st.body) page.appendChild(el("p", null, st.body));
+    /* The overview list doubles as the plan: you can see the whole shape
+       while you approve one step at a time. */
+    const ol = el("ol", "steps");
+    steps.forEach((s2, n) => {
+      const li = el("li", n === i ? "cur" : null, s2.title || `Step ${n + 1}`);
+      ol.appendChild(li);
+    });
+    page.appendChild(ol);
+    back.disabled = i === 0;
+    next.textContent = i === steps.length - 1 ? "Finish" : "Next >";
+    setTitle(w, `${opts.title || "Wizard"} -- step ${i + 1} of ${steps.length}`);
+  }
+  back.addEventListener("click", () => { if (i > 0) { i--; paint(); } });
+  next.addEventListener("click", () => {
+    if (i < steps.length - 1) { i++; paint(); return; }
+    closeWindow(w);
+    if (opts.onFinish) opts.onFinish(steps);
+  });
+  cancel.addEventListener("click", () => closeWindow(w));
+  paint();
+  return w;
+}
+
+/* A message box. buttons is an array of {label, value}; onPick gets the
+   value. Kind picks the glyph: info | warn | stop | ask. */
+function showMessage(opts) {
+  const w = createWindow({
+    title: opts.title || "Message", width: 360, height: 168,
+    icon: "page", max: false, min: false, pad: false,
+  });
+  const box = el("div", "msgbox");
+  const ico = el("div", "ico");
+  ico.innerHTML = MSG_ICONS[opts.kind] || MSG_ICONS.info;
+  box.appendChild(ico);
+  box.appendChild(el("div", "text", opts.text || ""));
+  w.body.appendChild(box);
+
+  const foot = el("div", "msgfoot");
+  const buttons = opts.buttons || [{ label: "OK", value: true }];
+  buttons.forEach((b, n) => {
+    const btn = el("button", "btn", b.label);
+    btn.style.minWidth = "78px";
+    btn.addEventListener("click", () => {
+      closeWindow(w);
+      if (opts.onPick) opts.onPick(b.value);
+    });
+    foot.appendChild(btn);
+    if (n === 0) setTimeout(() => btn.focus(), 0);
+  });
+  w.body.appendChild(foot);
+  return w;
+}
+
+const MSG_ICONS = {
+  info: `<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="13" fill="var(--titlea)"
+    stroke="var(--darkshadow)"/><text x="16" y="23" text-anchor="middle"
+    font-size="19" font-weight="bold" fill="var(--titleatext)">i</text></svg>`,
+  ask: `<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="13" fill="var(--titlea)"
+    stroke="var(--darkshadow)"/><text x="16" y="24" text-anchor="middle"
+    font-size="20" font-weight="bold" fill="var(--titleatext)">?</text></svg>`,
+  warn: `<svg viewBox="0 0 32 32"><path d="M16 3 L30 28 H2 Z" fill="#ffd700"
+    stroke="var(--darkshadow)"/><text x="16" y="26" text-anchor="middle"
+    font-size="18" font-weight="bold" fill="#000">!</text></svg>`,
+  stop: `<svg viewBox="0 0 32 32"><circle cx="16" cy="16" r="13" fill="#c00"
+    stroke="var(--darkshadow)"/><rect x="7" y="13" width="18" height="6" fill="#fff"/></svg>`,
+};
+
+/* The progress dialog. Returns a handle with .set(pct, what) and .done(). */
+function showProgress(opts) {
+  const w = createWindow({
+    title: opts.title || "Working", width: 340, height: 150,
+    icon: "page", max: false, pad: false,
+  });
+  const box = el("div", "prog");
+  box.appendChild(el("div", null, opts.text || "Working..."));
+  const bar = el("div", "bar");
+  const fill = el("div", "fill");
+  fill.style.width = "0%";
+  bar.appendChild(fill);
+  box.appendChild(bar);
+  const what = el("div", "what", "");
+  box.appendChild(what);
+  w.body.appendChild(box);
+  return {
+    window: w,
+    set(pct, note) {
+      fill.style.width = Math.max(0, Math.min(100, pct)) + "%";
+      if (note != null) what.textContent = note;
+    },
+    done() { try { closeWindow(w); } catch {} },
+  };
+}
+
+/* ---- recognising structured output in a chat reply ----
+
+   The contract is deliberately tiny and optional: a fenced block
+
+     ```pasclaw-ui
+     {"ui":"wizard","title":"Plan","steps":[{"title":"..","body":".."}]}
+     ```
+
+   renders as furniture. Everything outside the block stays visible as text,
+   so a model that ignores the convention loses nothing, and a malformed
+   block degrades to the raw text rather than vanishing. */
+function extractUIBlocks(text) {
+  const out = { text: text, blocks: [] };
+  const re = /```pasclaw-ui\s*([\s\S]*?)```/g;
+  let m;
+  while ((m = re.exec(text)) !== null) {
+    try {
+      const obj = JSON.parse(m[1]);
+      if (obj && obj.ui) out.blocks.push(obj);
+    } catch { continue; }   /* malformed: leave it as visible text */
+  }
+  if (out.blocks.length)
+    out.text = text.replace(re, (whole, body) => {
+      try { JSON.parse(body); return ""; } catch { return whole; }
+    }).trim();
+  return out;
+}
+
+/* Render one recognised block. Project is passed so a wizard's approved
+   steps can become real tasks on that project's board. */
+function renderUIBlock(block, project) {
+  if (block.ui === "wizard") {
+    return showWizard({
+      title: block.title || "Plan",
+      steps: block.steps || [],
+      onFinish: async steps => {
+        if (!project) return;
+        /* Approving a plan is what creates the tasks. That is the whole
+           gesture: Next, Next, Finish -> a board. */
+        for (const st of steps) {
+          try {
+            await api(`/v1/projects/${project}/tasks`, {
+              method: "POST",
+              body: { title: st.title || "Step", notes: st.body || "" },
+            });
+          } catch {}
+        }
+        await loadProjects();
+        if (S.tree[project]) { await loadTasks(project); paintTree(); }
+        showMessage({
+          title: "Plan accepted", kind: "info",
+          text: `${steps.length} task(s) added to ${project}.`,
+        });
+      },
+    });
+  }
+  if (block.ui === "message" || block.ui === "ask") {
+    return showMessage({
+      title: block.title || "PasClaw",
+      kind: block.kind || (block.ui === "ask" ? "ask" : "info"),
+      text: block.text || "",
+      buttons: block.buttons || [{ label: "OK", value: true }],
+      onPick: v => {
+        /* An answered question goes back as the next chat turn, so the
+           conversation continues where the dialog left off. */
+        if (block.reply === false || !project) return;
+        const w = WINS.get("chat:" + project);
+        if (w && w.__submitText) w.__submitText(String(v));
+      },
+    });
+  }
+  return null;
 }
 
 /* ==========================================================================
@@ -1854,6 +2158,12 @@ window.addEventListener("message", async ev => {
     } else if (m.op === "del") {
       await api(url, { method: "DELETE" });
       reply({ value: true });
+    } else if (m.op === "read") {
+      /* The allowlist lives on the server; we just forward the name so an
+         app cannot reach past it by talking to us instead. */
+      const j = await api(`/v1/apps/${encodeURIComponent(project)}/read/` +
+                          encodeURIComponent(String(m.key || "")));
+      reply({ value: j.items || [] });
     } else {
       reply({ error: "unknown op" });
     }

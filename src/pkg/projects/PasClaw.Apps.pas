@@ -418,6 +418,13 @@ begin
     '  }' + #10 +
     '  function ask(op, key, value) {' + #10 +
     '    if (!framed) {' + #10 +
+    '      if (op === "read") {' + #10 +
+    '        return fetch("/v1/apps/" + PROJECT + "/read/" +' + #10 +
+    '                     encodeURIComponent(key)).then(function (r) {' + #10 +
+    '          if (!r.ok) throw new Error("http " + r.status);' + #10 +
+    '          return r.json().then(function (j) { return j.items || []; });' + #10 +
+    '        });' + #10 +
+    '      }' + #10 +
     '      var url = "/v1/apps/" + PROJECT + "/state/" + encodeURIComponent(key);' + #10 +
     '      if (op === "get") {' + #10 +
     '        return fetch(url).then(function (r) {' + #10 +
@@ -454,7 +461,11 @@ begin
     '        try { return JSON.parse(v); } catch (e) { return fallback; }' + #10 +
     '      }, function () { return fallback; });' + #10 +
     '    },' + #10 +
-    '    setJSON: function (key, obj) { return ask("set", key, JSON.stringify(obj)); }' + #10 +
+    '    setJSON: function (key, obj) { return ask("set", key, JSON.stringify(obj)); },' + #10 +
+    '    /* Read one of the gateway ALLOWLISTED surfaces: cron, sessions,' + #10 +
+    '       providers, pages, projects. Returns the items array. Anything' + #10 +
+    '       else is refused server-side. */' + #10 +
+    '    read: function (surface) { return ask("read", surface); }' + #10 +
     '  };' + #10 +
     '})();' + #10;
 end;

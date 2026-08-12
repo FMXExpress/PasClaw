@@ -100,12 +100,42 @@ Five kinds, cheapest first:
 |---|---|---|
 | `page` | A static HTML document, **no scripts**. What an answer page is. | Served, opened in a window |
 | `html` | A self-contained page **with** scripts, using the state store below. | Served, opened in a window |
-| `python` | A script run through the shell backend. | Runs as a process |
-| `fpc` | Compiled with `fpc`, launched natively. | Runs as a process |
-| `delphi` | Built via `delphi_build` on a host with RAD Studio. | Runs as a process |
+| `python` | A script the runner spawns. | `POST /v1/apps/<p>/run` |
+| `fpc` | `build` runs first (`fpc ...`), then the binary. | `POST /v1/apps/<p>/run` |
+| `delphi` | `build` via a RAD Studio toolchain, then the binary. | `POST /v1/apps/<p>/run` |
 
 `permissions.network` and `permissions.env` are **shown to the user before
 the app opens**, not buried in a file nobody reads.
+
+### Running the process kinds
+
+```
+POST /v1/apps/<project>/run     {"confirm": true}   -> {state, port, url, command}
+POST /v1/apps/<project>/stop
+GET  /v1/apps/<project>/runlog  -> combined stdout+stderr, capped
+```
+
+Running an agent-written `run` line is arbitrary code execution on your
+machine. That is the deal the app factory makes — the same one `shell_exec`
+already makes — and the runner is explicit about it:
+
+- **Nothing starts without consent.** A `run` without `"confirm": true`
+  answers **409** and hands back the exact command, so a client can show the
+  user what they are approving. A confirmation that hides the command is
+  theatre.
+- The child's cwd is the project's `app/` directory.
+- **Secrets never come from `app.json`.** An app declaring
+  `permissions.env` gets those names filled from `projects/<n>/app/.env`, a
+  file only you write. Nothing else from the parent environment is inherited,
+  so an app cannot read your provider keys just by existing.
+- A `{port}` in the `run` line gets a free port (8700+) and the app's URL
+  comes back in the response; `$PORT` is also set.
+- One child per project, tracked and killable. Every child is stopped when
+  the gateway stops.
+
+What the runner does **not** do yet: run the child inside the Docker shell
+backend. That backend's `Exec` is one-shot, so a long-lived server would have
+no handle to stop. Until that is wired, a `python` app runs on the host.
 
 ### Persistence without a backend
 
@@ -133,6 +163,18 @@ generates per project:
   await pasclaw.setJSON("books", books);
 </script>
 ```
+
+The SDK also exposes a **narrow read window** onto the agent's own surfaces,
+which is what the Calendar, Library and Cookbook suite apps are built on:
+
+```js
+const crons = await pasclaw.read("cron");      // also: sessions, providers,
+const pages = await pasclaw.read("pages");     //       projects
+```
+
+The allowlist is enforced **server-side** in `PasClaw.Gateway.Desktop`, so it
+holds however the app is opened. There is no `config` surface and no write
+side; a provider entry reports `has_key: true/false` and never the key.
 
 **Why the indirection.** App frames are sandboxed *without*
 `allow-same-origin`, so generated code cannot reach the desktop's DOM or the
@@ -164,6 +206,31 @@ backend and they run containerized.
 
 ---
 
+## Live updates
+
+```
+GET /v1/desktop/events        Server-Sent Events
+```
+
+The board changes while you watch it, so the clients subscribe rather than
+poll. Events are small JSON objects with a monotonic `seq`:
+
+```json
+{"seq":42,"ts":"...","type":"job","project":"spam-filter",
+ "task":"T0001","id":"J0001","status":"running"}
+```
+
+Types: `projects`, `project`, `task`, `job`, `joblog`, `app`, `page`,
+`workspace`, plus `hello` on connect and `gap` after an overflow.
+
+Each subscriber has a **bounded queue (256), oldest dropped**. A browser tab
+that stops reading cannot grow the server's memory; when it overflows it gets
+a `{"type":"gap"}` marker instead of the lost events, and the correct client
+response to a gap is to refetch what it displays. There is no replay buffer —
+the state is on disk and cheap to re-read.
+
+---
+
 ## Answer pages
 
 A search or a question about your own data ends as an HTML **document**, not
@@ -189,9 +256,17 @@ workspace.
   attributes and `javascript:` URLs before framing, and served under a
   script-free CSP.
 
-Generating a page needs a gateway with an agent attached. Without one the
-route answers **503** and says so; a caller may also POST a rendered `body`
-directly, which is what the agent loop itself does.
+Generation runs the real agent loop: the gateway registers its page
+generator at startup (`InstallDesktopCallbacks`), so `POST /v1/pages` with a
+`query` researches and renders. A gateway with **no provider configured**
+answers 503 and says so; a caller may also POST a rendered `body` directly.
+
+The same wiring backs `POST /v1/projects/<n>/tasks/<t>/run`, which opens a
+job, runs a turn on its own thread (the HTTP call returns the job id
+immediately), streams output into the job log, and closes the job. A task
+whose **last** job finishes is closed automatically — `done` when the job
+succeeded, back to `todo` when it failed. A task you marked `blocked` is
+never quietly reopened.
 
 ---
 
@@ -221,13 +296,57 @@ point of a blueprint is that the recipient gets their **own** copy to remake.
 pasclaw project seed
 ```
 
-Installs **Notes**, **To Do** and **Brain** into the active workspace.
+Installs seven apps into the active workspace:
+
+| App | What it shows | Built on |
+|---|---|---|
+| **Notes** | A notepad | the state store |
+| **To Do** | Your own list, separate from the agent's board | the state store |
+| **Brain** | What PasClaw remembers, as cards you can tear up | the state store |
+| **Calendar** | Your month, plus the agent's scheduled jobs | `read("cron")` |
+| **Library** | Every page, session and project, filterable | `read("pages"/"sessions"/"projects")` |
+| **Cookbook** | Which model answers, in plain language | `read("providers")` |
+| **Mail** | An inbox the agent triages | the state store + the Email channel |
 
 They are not built in. Each is an ordinary project with an ordinary
 `app.json`, using the same `html` kind and the same state store your own apps
 use — so you can open Notes, read its source, and ask PasClaw to add a word
 count, and it is not a special case when you do. Seeding never overwrites an
 existing project, so a suite app you have remade survives an upgrade.
+
+---
+
+## Period-native output
+
+The desktop renders structured agent output as **real UI**, not markdown.
+When a reply contains a fenced block:
+
+````
+```pasclaw-ui
+{"ui":"wizard","title":"Plan","steps":[{"title":"...","body":"..."}]}
+```
+````
+
+…the user gets a wizard whose **Next** button approves each step and whose
+**Finish** turns the steps into real tasks on the board. A decision arrives
+as a message box with buttons, and the chosen label comes back as the user's
+next chat turn:
+
+````
+```pasclaw-ui
+{"ui":"ask","text":"IMAP or the Gmail API?",
+ "buttons":[{"label":"IMAP","value":"IMAP"},{"label":"Gmail API","value":"Gmail API"}]}
+```
+````
+
+The convention is optional and fail-safe: text outside the block stays
+visible, and a malformed block degrades to raw text rather than vanishing.
+The builder prompt teaches it, so no model change is needed.
+
+Each style also carries a short **voice** appended to the system prompt —
+Apple System answers like a 1984 Macintosh, Win95 like a wizard, Synthwave
+with a little neon. It costs one sentence and is what makes the style picker
+feel like it changes the machine rather than the paint.
 
 ---
 
@@ -251,6 +370,11 @@ Every route below sits inside the gateway's existing bearer-auth gate.
 | GET | `/v1/projects/<n>/tasks/<t>/jobs/<j>/log` | tail |
 | GET | `/v1/apps/<project>` | app manifest |
 | GET/PUT/DELETE | `/v1/apps/<p>/state/<key>` | per-app state |
+| POST | `/v1/apps/<p>/run` | start a process app (needs `confirm`) |
+| POST | `/v1/apps/<p>/stop` | stop it |
+| GET | `/v1/apps/<p>/runlog` | its captured output |
+| GET | `/v1/apps/<p>/read/<surface>` | allowlisted read window |
+| GET | `/v1/desktop/events` | SSE: board changes |
 | GET | `/apps/<project>/…` | app assets (+ virtual `pasclaw.js`) |
 | GET/POST | `/v1/pages` | history / generate |
 | GET/DELETE | `/v1/pages/<id>` | inspect / remove |
@@ -291,3 +415,17 @@ library against a live gateway when `PASCLAW_TEST_GATEWAY` is set, and skips
 itself otherwise.
 
 The FireMonkey client needs Delphi and is not part of `make`.
+
+## Known limits
+
+Stated plainly rather than left to be discovered:
+
+- **Process apps run on the host**, not in the Docker shell backend (see
+  above). Treat a `run` line the way you treat `shell_exec`.
+- **Open apps through the desktop.** An `html` app opened as a *top-level*
+  page is same-origin with the gateway, so it can reach `/v1/*` and read a
+  token you stored in the desktop's `localStorage`. Inside the desktop it is
+  sandboxed into an opaque origin and can do neither. If your gateway is
+  token-gated, treat generated apps as trusted-only when opened standalone.
+- **The FMX client is unbuilt here.** It has no Delphi in CI; the shared
+  client library it depends on is tested, the UI is not.

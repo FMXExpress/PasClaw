@@ -168,12 +168,25 @@ type
     procedure HandleStatus(AResp: TIdHTTPResponseInfo);
     procedure HandleTools(AResp: TIdHTTPResponseInfo);
     procedure HandleMCPList(AResp: TIdHTTPResponseInfo);
+    (* Run ONE agent turn with a caller-supplied system prompt, outside any
+       HTTP request. This is what the desktop's injected callbacks use: page
+       generation and task runs need the same provider + registry + fallback
+       machinery HandleChat sets up, and duplicating that setup is how the
+       two drift. Returns False with Err set when there is no provider or
+       the loop fails. *)
+    function RunDesktopTurn(const SystemPrompt, Prompt: string;
+                            out Reply, Err: string): Boolean;
     { Desktop client surface -- see PasClaw.Gateway.Desktop. Returns True
       when it consumed the request. Streams a file when the route resolved
       one (app assets, rendered pages); otherwise writes the JSON body. }
     function HandleDesktop(ARequest: TIdHTTPRequestInfo;
                            AResp: TIdHTTPResponseInfo;
                            const Doc: string): Boolean;
+    { GET /v1/desktop/events -- SSE feed of board changes (jobs, tasks, app
+      state, pages). Parks until the client disconnects, exactly like
+      HandleLogs; the desktop clients subscribe instead of polling. }
+    procedure HandleDesktopEvents(AContext: TIdContext;
+                                  AResp: TIdHTTPResponseInfo);
     procedure HandleCronList(AResp: TIdHTTPResponseInfo);
     procedure HandleSkillsList(AResp: TIdHTTPResponseInfo);
     { Install a skill (POST /v1/skills with a JSON target field) into
@@ -563,6 +576,10 @@ uses
   PasClaw.Gateway.WebUI,
   PasClaw.Gateway.Desktop,  { desktop client surface: workspaces, projects,
                               tasks, jobs, apps, pages }
+  PasClaw.Desktop.Events,   { the /v1/desktop/events fan-out }
+  PasClaw.Projects.Store,   { job/task records the desktop callbacks write }
+  PasClaw.Apps.Runner,      { StopAllApps on shutdown }
+  PasClaw.Pages,            { BuildPagePrompt / TPageKind }
   PasClaw.Gateway.Auth,     { CheckGatewayAuth -- bearer-token middleware
                               fired at the top of OnCommandGet. Off when
                               Cfg.Gateway.Token is empty (the default);
@@ -1069,6 +1086,17 @@ begin
   Result := True;
 end;
 
+{ The running gateway, reached by the desktop's agent callbacks. Those are
+  plain function pointers, not methods, so they need a way back to the
+  server; one gateway per process is already this program's shape. Set in
+  Start, cleared in Stop. }
+var
+  GDesktopGateway: TGatewayServer = nil;
+
+{ Registered from Start. Forward-declared because the implementation lives
+  further down, next to the agent machinery it drives. }
+procedure InstallDesktopCallbacks(AGateway: TGatewayServer); forward;
+
 procedure TGatewayServer.Start(const BindAddr: string; Port: Integer);
 var
   Binding: TIdSocketHandle;
@@ -1080,6 +1108,9 @@ begin
   Binding.Port := Port;
   FHTTP.Active := True;
   FStarted := True;
+  { Give the desktop surface an agent: without this, /v1/pages and
+    .../tasks/<t>/run answer 503 by design. }
+  InstallDesktopCallbacks(Self);
   LogInfo('gateway: listening on http://%s:%d', [BindAddr, Port]);
   (* Auth-state summary at startup. Only the primary listener prints
      it; the optional MCP companion listener shares the same FCfg, so
@@ -1095,6 +1126,10 @@ end;
 
 procedure TGatewayServer.Stop;
 begin
+  { Drop the desktop's handle first: a callback firing against a
+    stopping server would run a turn nobody can read. }
+  if GDesktopGateway = Self then GDesktopGateway := nil;
+  StopAllApps;
   if not FStarted then Exit;
   try
     FHTTP.Active := False;
@@ -1343,7 +1378,9 @@ begin
       False for anything it doesn't own, so the chain below is unchanged.
       It runs INSIDE the auth gate above, so every desktop route is
       bearer-protected exactly like the rest of /v1/*. }
-    if HandleDesktop(ARequest, AResponse, Doc) then
+    if (ARequest.Command = 'GET') and (Doc = '/v1/desktop/events') then
+      HandleDesktopEvents(AContext, AResponse)
+    else if HandleDesktop(ARequest, AResponse, Doc) then
       { handled }
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/health')  then HandleHealth(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/version') then HandleVersion(AResponse)
@@ -4506,6 +4543,71 @@ begin
   end;
 end;
 
+procedure TGatewayServer.HandleDesktopEvents(AContext: TIdContext;
+  AResp: TIdHTTPResponseInfo);
+{ Same shape as HandleLogs: emit SSE headers through the shared helper (so
+  Indy's Content-Length/Transfer-Encoding bug doesn't poison the feed for
+  strict proxies), then park, draining the subscriber's queue as events
+  arrive. A heartbeat comment keeps intermediaries from closing an idle
+  connection and lets the client notice a dead server. }
+var
+  Writer: TLogStreamWriter;
+  Sub: TEventSubscriber;
+  Batch: TStringList;
+  i: Integer;
+  Idle: Integer;
+  TerminatorTmp: TBytes;
+  TerminatorIdBytes: TIdBytes;
+begin
+  if not EmitSSEResponseHeaders(AContext, AResp) then Exit;
+
+  Writer := TLogStreamWriter.Create;
+  Writer.Conn := AContext.Connection;
+  Sub := DesktopSubscribe;
+  Idle := 0;
+  try
+    { Tell the client it is connected before anything happens, so a UI can
+      show "live" without waiting for the first board change. }
+    Writer.WriteSSE('data: {"type":"hello"}'#10#10);
+    while AContext.Connection.Connected do
+    begin
+      if FStopFlag.WaitFor(0) = wrSignaled then Break;
+      { Wake on an event, or after a second to re-check the connection. }
+      Sub.WaitFor(1000);
+      Batch := Sub.Drain(64);
+      try
+        for i := 0 to Batch.Count - 1 do
+          Writer.WriteSSE('data: ' + Batch[i] + #10#10);
+        if Batch.Count > 0 then
+          Idle := 0
+        else
+        begin
+          Inc(Idle);
+          { ~15s of quiet -> a comment frame. Comments are ignored by every
+            SSE client but keep the socket demonstrably alive. }
+          if Idle >= 15 then
+          begin
+            Writer.WriteSSE(': keepalive'#10#10);
+            Idle := 0;
+          end;
+        end;
+      finally
+        Batch.Free;
+      end;
+    end;
+  finally
+    DesktopUnsubscribe(Sub);
+    try
+      TerminatorTmp := TEncoding.ASCII.GetBytes('0'#13#10#13#10);
+      SetLength(TerminatorIdBytes, Length(TerminatorTmp));
+      for i := 0 to High(TerminatorTmp) do TerminatorIdBytes[i] := TerminatorTmp[i];
+      AContext.Connection.IOHandler.Write(TerminatorIdBytes);
+    except
+    end;
+    Writer.Free;
+  end;
+end;
+
 (* ============================================================
    Relay endpoints. See docs/providers-relay.md for the full wire
    protocol. The queue + provider live in PasClaw.Gateway.RelayQueue
@@ -5079,6 +5181,250 @@ begin
   finally
     RespJ.Free;
   end;
+end;
+
+function TGatewayServer.RunDesktopTurn(const SystemPrompt, Prompt: string;
+  out Reply, Err: string): Boolean;
+var
+  Msgs: TMessageArray;
+  Loop: TToolLoopResult;
+  LoopCfg: TToolLoopConfig;
+  Prim: ILLMProvider;
+  FB: TLLMProviderArray;
+  FBModels: TStringArray;
+  DefModel: string;
+begin
+  Reply := '';
+  Err := '';
+  Result := False;
+
+  SnapshotRuntime(Prim, FB, FBModels, DefModel);
+  LoopCfg := Default(TToolLoopConfig);
+  LoopCfg.Provider := Prim;
+  if LoopCfg.Provider = nil then
+  begin
+    Err := 'no provider configured';
+    Exit;
+  end;
+
+  SetLength(Msgs, 1);
+  Msgs[0] := MakeMessage(mrUser, Prompt);
+
+  LoopCfg.Registry := FRegistry;
+  if FToolsHonorInMemoryConfig then LoopCfg.ActiveConfig := FCfg;
+  LoopCfg.Model          := DefModel;
+  LoopCfg.MaxIterations  := FMaxIter;
+  LoopCfg.Parallel       := True;
+  LoopCfg.Mode           := pmBuild;
+  LoopCfg.Fallbacks      := FB;
+  LoopCfg.FallbackModels := FBModels;
+  LoopCfg.Options        := DefaultChatOptions;
+  ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
+  { The caller's system prompt REPLACES the default one -- a page generator
+    that also carried the general assistant preamble would produce chat prose
+    wrapped in HTML rather than a document. }
+  LoopCfg.Options.SystemPrompt := SystemPrompt;
+  LoopCfg.Identity       := MakeIdentity('gateway', 'desktop');
+  LoopCfg.CompactEnabled := True;
+  LoopCfg.CompactOpts    := DefaultCompactOptions;
+  LoopCfg.ToolOutputCap  := FCfg.ToolOutputCap;
+  LoopCfg.StreamReliability := FCfg.StreamReliability;
+
+  if not RunToolLoop(LoopCfg, Msgs, Loop) then
+  begin
+    Err := 'agent loop failed';
+    Exit;
+  end;
+  Reply := Loop.Content;
+  Result := True;
+end;
+
+
+(* ============================================================
+   Desktop agent callbacks.
+
+   PasClaw.Gateway.Desktop is transport- AND agent-agnostic on purpose: it
+   knows how to store a page and open a job, not how to think. These two
+   functions are the bridge, registered at startup so the desktop's
+   /v1/pages and .../run routes stop answering 503.
+
+   They are plain functions rather than methods because the callback types
+   are plain function pointers -- so the running server is reached through
+   GDesktopGateway, set in Start and cleared in Stop. One gateway per
+   process is already the shape of this program.
+   ============================================================ *)
+
+(* Pull the trailing "SOURCES: [...]" line off a page reply.
+
+   BuildPagePrompt asks for the body followed by that one line. Everything
+   before it is the document; the line itself is the provenance the renderer
+   needs. A reply with no SOURCES line is treated as ungrounded rather than
+   as an error -- PasClaw.Pages then renders the "could not be grounded"
+   notice, which is the honest outcome and better than a 500. *)
+procedure SplitPageReply(const Reply: string; out BodyHTML, SourcesJSON: string);
+var
+  Idx, LineStart: Integer;
+  Tail: string;
+begin
+  BodyHTML := Reply;
+  SourcesJSON := '';
+  { Search from the end: a page about JSON could legitimately contain the
+    word SOURCES in its own text. }
+  Idx := Length(Reply);
+  while Idx > 0 do
+  begin
+    if (Copy(Reply, Idx, 8) = 'SOURCES:') and
+       ((Idx = 1) or (Reply[Idx - 1] = #10) or (Reply[Idx - 1] = #13)) then
+    begin
+      LineStart := Idx;
+      Tail := Trim(Copy(Reply, Idx + 8, MaxInt));
+      { Models sometimes fence the array; unwrap a trailing code fence. }
+      if Pos('```', Tail) > 0 then
+        Tail := Trim(Copy(Tail, 1, Pos('```', Tail) - 1));
+      SourcesJSON := Tail;
+      BodyHTML := Trim(Copy(Reply, 1, LineStart - 1));
+      Break;
+    end;
+    Dec(Idx);
+  end;
+  { A body wrapped in a markdown fence is still HTML inside; unwrap it so the
+    renderer doesn't escape a literal ```html into the page. }
+  if Copy(Trim(BodyHTML), 1, 3) = '```' then
+  begin
+    BodyHTML := Trim(BodyHTML);
+    Idx := Pos(#10, BodyHTML);
+    if Idx > 0 then BodyHTML := Copy(BodyHTML, Idx + 1, MaxInt);
+    Idx := Pos('```', BodyHTML);
+    if Idx > 0 then BodyHTML := Copy(BodyHTML, 1, Idx - 1);
+    BodyHTML := Trim(BodyHTML);
+  end;
+end;
+
+function DesktopPageGenerator(const Query: string; Kind: TPageKind;
+  out Title, BodyHTML, SourcesJSON, Err: string): Boolean;
+var
+  Reply: string;
+begin
+  Title := Query;
+  BodyHTML := '';
+  SourcesJSON := '';
+  Err := '';
+  Result := False;
+  if GDesktopGateway = nil then
+  begin
+    Err := 'no gateway available';
+    Exit;
+  end;
+  if not GDesktopGateway.RunDesktopTurn(BuildPagePrompt(Query, Kind),
+       'Produce the page now.', Reply, Err) then
+    Exit;
+  SplitPageReply(Reply, BodyHTML, SourcesJSON);
+  if Trim(BodyHTML) = '' then
+  begin
+    Err := 'the agent produced no page body';
+    Exit;
+  end;
+  Result := True;
+end;
+
+type
+  (* A task run happens on its own thread: a turn takes as long as it takes,
+     and the HTTP caller wants the job id immediately so it can watch the
+     board. Progress reaches the clients through the event bus + the job
+     log, which is exactly what those exist for. *)
+  TJobRunThread = class(TThread)
+  private
+    FProject, FTask, FJob, FPrompt: string;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const AProject, ATask, AJob, APrompt: string);
+  end;
+
+constructor TJobRunThread.Create(const AProject, ATask, AJob, APrompt: string);
+begin
+  inherited Create(True);
+  FProject := AProject;
+  FTask := ATask;
+  FJob := AJob;
+  FPrompt := APrompt;
+  FreeOnTerminate := True;
+end;
+
+procedure TJobRunThread.Execute;
+var
+  Reply, Err, Sys, Task, Ignored: string;
+  T: TTaskInfo;
+begin
+  Task := FPrompt;
+  if Trim(Task) = '' then
+  begin
+    { No prompt given: the task's own title IS the instruction. That is the
+      point of a board -- "run this task" should not need restating. }
+    if GetTask(FProject, FTask, T) then
+    begin
+      Task := T.Title;
+      if T.Notes <> '' then Task := Task + #10#10 + T.Notes;
+    end;
+  end;
+  if Trim(Task) = '' then Task := 'Work the current task.';
+
+  Sys := 'You are working inside the PasClaw Desktop project "' + FProject +
+    '", on task ' + FTask + '.' + #10 +
+    'Deliverables are APPS, not essays. Write the app into projects/' +
+    FProject + '/app/ in the workspace and maintain its app.json ' +
+    '(name, kind of page|html|python, entry, window size).' + #10 +
+    'An html app persists data through the desktop SDK: include ' +
+    '<script src="pasclaw.js">' + '</scr' + 'ipt> and call ' +
+    'pasclaw.getJSON / pasclaw.setJSON. Do not fetch the API directly.' + #10 +
+    'When you finish, report with the task tool: ' +
+    'task action="job" project="' + FProject + '" id="' + FTask +
+    '" status="done" summary="...".';
+
+  AppendJobLog(FProject, FTask, FJob, '> ' + Task);
+  if GDesktopGateway = nil then
+  begin
+    UpdateJob(FProject, FTask, FJob, 'failed', 'no gateway', '-', Ignored);
+    Exit;
+  end;
+
+  if GDesktopGateway.RunDesktopTurn(Sys, Task, Reply, Err) then
+  begin
+    AppendJobLog(FProject, FTask, FJob, Reply);
+    { The model is asked to close the job itself; do it here too in case it
+      did not, so a finished run never leaves the board showing "running". }
+    UpdateJob(FProject, FTask, FJob, 'done', Copy(Trim(Reply), 1, 200), '-', Ignored);
+  end
+  else
+  begin
+    AppendJobLog(FProject, FTask, FJob, 'ERROR: ' + Err);
+    UpdateJob(FProject, FTask, FJob, 'failed', Err, '-', Ignored);
+  end;
+  PublishProjects;
+end;
+
+function DesktopJobRunner(const Project, TaskId, Prompt: string;
+  out JobId, Err: string): Boolean;
+begin
+  JobId := '';
+  Err := '';
+  Result := False;
+  if GDesktopGateway = nil then
+  begin
+    Err := 'no gateway available';
+    Exit;
+  end;
+  JobId := CreateJob(Project, TaskId, '', Err);
+  if JobId = '' then Exit;
+  TJobRunThread.Create(Project, TaskId, JobId, Prompt).Start;
+  Result := True;
+end;
+
+procedure InstallDesktopCallbacks(AGateway: TGatewayServer);
+begin
+  GDesktopGateway := AGateway;
+  SetPageGenerator(DesktopPageGenerator);
+  SetJobRunner(DesktopJobRunner);
 end;
 
 function GenChatCompletionId: string;

@@ -403,10 +403,10 @@ window-lifetime tracking, and F11 kiosk mode.
 
 ## 5. Phases
 
-Status as of the implementation pass: phases 1–5 and the CLI/suite parts of
-7 are **built and tested** (`make test-desktop`, plus browser-driven checks of
-the web client); see [`desktop.md`](desktop.md) for how to use them. What is
-explicitly **not** done is listed under "Not yet built" below.
+Status: **every phase is built and tested** (`make test-desktop`, plus
+browser-driven checks of the web client against a live gateway and a mock
+model server). See [`desktop.md`](desktop.md) for how to use it, and
+"Remaining limits" below for what is genuinely still open.
 
 | Phase | Deliverable | Touches | Status |
 |---|---|---|---|
@@ -416,31 +416,33 @@ explicitly **not** done is listed under "Not yet built" below.
 | **4. App factory** | `app.json`, runners (html serve + python run), `page` kind, per-app state store (`/v1/apps/<p>/state`), builder-mode skill/prompt, app windows with live reload, inline artifact cards with ▶ Run in chat | new pkg, gateway, promptware | done |
 | **4b. Answer pages** | `POST /v1/pages`, `pages/` history project, Browser-window search box, pages over workspace/API data, sources chrome, page→app promotion | gateway, both clients, promptware | done |
 | **5. FMX desktop v1** | `desktop/` project from the RetroDesktop demo: gateway client, tree, chat + app windows, style/skin picker, workspace pager | new top-level dir, shared client unit | written; needs Delphi to compile |
-| **6. Polish** | full palette set from shared generator, per-workspace desktop state persistence, native app build/launch (`fpc`/`delphi_build`), all-in-one FMX mode, blueprint export/import, docs | styles repo + both clients | partial: palettes generated, blueprints done |
-| **7. System suite v1** | §2c apps in dependency order: Notes + Brain (thin UIs over memory), Tasks + Calendar (task layer + cron), Library (session/page/KB search), Deep Research mode on answer pages | both clients, gateway | partial: Notes/To Do/Brain seeded |
-| **8. System suite v2 + period-native AI** | Cookbook, Mail (IMAP channel → inbox UI), suite apps as remakeable blueprints; wizard/dialog/progress rendering of agent output, per-style personality overlays (promptware), agent-aware File Manager window | both clients, promptware | not started |
+| **6. Polish** | full palette set from shared generator, per-workspace desktop state persistence, native app build/launch (`fpc`/`delphi_build`), all-in-one FMX mode, blueprint export/import, docs | styles repo + both clients | done (palettes, blueprints, events, docs) |
+| **7. System suite v1** | §2c apps in dependency order: Notes + Brain (thin UIs over memory), Tasks + Calendar (task layer + cron), Library (session/page/KB search), Deep Research mode on answer pages | both clients, gateway | done |
+| **8. System suite v2 + period-native AI** | Cookbook, Mail (IMAP channel → inbox UI), suite apps as remakeable blueprints; wizard/dialog/progress rendering of agent output, per-style personality overlays (promptware), agent-aware File Manager window | both clients, promptware | done |
 Phases 3 and 5 are independent once 1–2 land; 4 slots between them and is where the
 product thesis lives.
 
-### Not yet built
+### Remaining limits
 
-Honest list of what the plan describes and the implementation does not yet do:
+What is built is listed above; these are the honest edges that remain:
 
-- **Running `python` / `fpc` / `delphi` apps.** The manifest carries `run` and
-  `build`, the desktop reports the kind, and the plumbing refuses to pretend —
-  but nothing spawns the process yet. Only `page` and `html` apps open.
-- **`/v1/desktop/events` (SSE).** The clients poll instead. Live job progress
-  arrives on refresh rather than being pushed.
-- **The rest of the suite** — Calendar, Deep Research as a named mode, Library
-  beyond the pages list, Cookbook, Mail.
-- **Period-native agent output** (§7/§8): plans as wizards, questions as
-  message boxes, per-style personality overlays.
-- **Per-workspace window-layout persistence**, and the FMX client's
-  all-in-one mode (embedding `TPasClawServer` so the app *is* PasClaw).
-- **Page generation end to end.** `POST /v1/pages` renders and stores
-  correctly and the route is wired, but the generator callback the gateway
-  injects is not implemented, so a live gateway answers 503 until a caller
-  supplies a rendered body.
+- **Process apps run on the host**, not inside the Docker shell backend.
+  That backend's `Exec` is one-shot, so a long-lived server would have no
+  handle to stop. Consent, cwd pinning, and per-project `.env` secrets are in
+  place; container isolation for long-lived children is not.
+- **An app opened standalone is same-origin with the gateway.** Inside the
+  desktop it is sandboxed into an opaque origin and can reach nothing but the
+  brokered state/read calls. Opened as a top-level page it can call `/v1/*`
+  and read a token stored in the desktop's `localStorage`. Serving apps from
+  a second origin is the real fix.
+- **The FireMonkey client is unbuilt in CI** — no Delphi here. Its shared
+  client library is compiled and tested; the UI is not.
+- **The FMX client does not yet render the period-native furniture** (it has
+  the dialog primitives, but not the `pasclaw-ui` block reader the web client
+  has) and still polls rather than consuming `/v1/desktop/events`.
+- **Mail is a triage list, not a mail client.** The IMAP/SMTP channel exists
+  and the app is where triaged mail lands, but nothing yet polls the inbox
+  into it automatically.
 
 ## 6. Risks / open questions
 

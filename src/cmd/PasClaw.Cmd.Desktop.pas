@@ -127,7 +127,8 @@ begin
   PrintLn('  new <title>          create a project');
   PrintLn('  show <name>          its tasks, jobs and app');
   PrintLn('  rm <name>            delete a project and everything in it');
-  PrintLn('  seed                 install the system suite (Notes, To Do, Brain)');
+  PrintLn('  seed                 install the system suite (Notes, To Do, Brain,');
+  PrintLn('                       Calendar, Library, Cookbook, Mail)');
   PrintLn('  export <name>        write its blueprint to stdout');
   PrintLn('  import <file>        create a project from a blueprint file');
   PrintLn('');

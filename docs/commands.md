@@ -195,7 +195,7 @@ pasclaw project list
 pasclaw project new "Spam Filter"
 pasclaw project show spam-filter
 pasclaw project rm  spam-filter
-pasclaw project seed                    # install the system suite
+pasclaw project seed                    # install the system suite (7 apps)
 pasclaw project export notes > notes.json
 pasclaw project import notes.json
 ```
