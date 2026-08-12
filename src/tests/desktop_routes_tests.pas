@@ -51,6 +51,12 @@ begin
   Result := DesktopRoute(Method, Doc, '', Body, Resp);
 end;
 
+function Req2(const Method, Doc, Query, Body: string;
+  out Resp: TDesktopResponse): Boolean;
+begin
+  Result := DesktopRoute(Method, Doc, Query, Body, Resp);
+end;
+
 { Assert a route answers with the given status. }
 procedure ExpectStatus(const Method, Doc, Body: string; Want: Integer;
   const Msg: string);
@@ -685,6 +691,38 @@ begin
                      'and the good state survives the bad write');
 
   ExpectStatus('DELETE', '/v1/desktop/state', '', 405, 'no delete verb');
+
+  { --------------------------------------------------------- desktops -- }
+  (* Desktops are VIEWS inside the workspace: numbered layouts on a pager.
+     The property under test is that switching one moves nothing but the
+     window arrangement -- each desktop's layout is its own document. *)
+  ExpectBodyContains('GET', '/v1/desktop/desktops', '', '"current":1',
+                     'a fresh workspace has one desktop');
+  ExpectStatus('POST', '/v1/desktop/desktops', '{"current":2}', 200,
+               'asking for the next number up creates it');
+  ExpectBodyContains('GET', '/v1/desktop/desktops', '', '"count":2',
+                     'and the count grew');
+  ExpectStatus('POST', '/v1/desktop/desktops', '{"current":7}', 400,
+               'but not by skipping ahead');
+  ExpectStatus('POST', '/v1/desktop/desktops', '{"current":0}', 400,
+               'and zero is not a desktop');
+
+  { Layouts are per desktop. Write one on 2, one on 1 via ?desktop=,
+    and prove they do not bleed. }
+  ExpectStatus('PUT', '/v1/desktop/state', '{"v":1,"windows":[{"fn":"files"}]}',
+               200, 'the current desktop (2) takes a layout');
+  if Req2('PUT', '/v1/desktop/state', 'desktop=1',
+          '{"v":1,"windows":[{"fn":"library"}]}', R) then
+    ExpectTrue(R.Status = 200, 'desktop 1 takes a layout by name');
+  ExpectBodyContains('GET', '/v1/desktop/state', '', 'files',
+                     'the current desktop reads its own layout');
+  if Req2('GET', '/v1/desktop/state', 'desktop=1', '', R) then
+    ExpectTrue(Pos('library', R.Body) > 0, 'desktop 1 kept its own');
+  ExpectStatus('POST', '/v1/desktop/desktops', '{"current":1}', 200,
+               'switch back to desktop 1');
+  ExpectBodyContains('GET', '/v1/desktop/state', '', 'library',
+                     'and the default now reads desktop 1');
+
 
   { ------------------------------------------------------ research mode -- }
   (* Deep research is a distinct KIND, not a longer search. The prompt is

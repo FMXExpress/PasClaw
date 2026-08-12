@@ -159,6 +159,7 @@ type
     procedure NewProjectClick(Sender: TObject);
     procedure RefreshClick(Sender: TObject);
     procedure NextWorkspaceClick(Sender: TObject);
+    procedure NextDesktopClick(Sender: TObject);
     procedure TreeDblClick(Sender: TObject);
     procedure IconOpen(Sender: TObject);
     procedure StyleChange(Sender: TObject);
@@ -603,9 +604,19 @@ begin
 
   B := TButton.Create(Self);
   B.Parent := Bar;
+  B.Align := TAlignLayout.Left;
+  B.Margins.Left := 4;
+  B.Width := 64;
+  B.Text := 'Desk >';
+  B.Hint := 'Next desktop -- same workspace, different arrangement';
+  B.OnClick := NextDesktopClick;
+
+  B := TButton.Create(Self);
+  B.Parent := Bar;
   B.Align := TAlignLayout.Client;
   B.Margins.Left := 4;
   B.Text := 'WS >';
+  B.Hint := 'Next WORKSPACE -- changes what PasClaw remembers';
   B.Hint := 'Next workspace (Ctrl+Alt+Right)';
   B.OnClick := NextWorkspaceClick;
 
@@ -940,6 +951,32 @@ procedure TFormMain.RefreshClick(Sender: TObject);
 begin
   RefreshWorkspaces;
   RefreshProjects;
+end;
+
+(* Cycle desktops: save the arrangement being left, advance (wrapping,
+   creating desktop 2 the first time), restore the one entered. Cheap and
+   invisible to the agent -- the whole difference from WS >. *)
+procedure TFormMain.NextDesktopClick(Sender: TObject);
+var
+  Cur, Cnt, Target: Integer;
+begin
+  if not FClient.Desktops(Cur, Cnt) then Exit;
+  SaveDesktopState;
+  if Cnt < 2 then Target := 2         { first press creates a second desktop }
+  else if Cur >= Cnt then Target := 1
+  else Target := Cur + 1;
+  if not FClient.SwitchDesktop(Target, Cur, Cnt) then Exit;
+  while FDesktop.WindowCount > 0 do
+    FDesktop.Windows[0].Close;
+  FChatWins.Clear; FChatLogs.Clear; FChatInputs.Clear; FAppWins.Clear;
+  FRunWins.Clear; FRunLogs.Clear; FRunHeads.Clear;
+  FStylePicker := nil; FLibraryWin := nil;
+  FFilesWin := nil; FFilesList := nil; FFilesPath := nil;
+  FBrowserWin := nil; FBrowserQuery := nil; FBrowserStatus := nil;
+  FBrowserSearch := nil; FBrowserDeep := nil; FBrowserPromote := nil;
+  FBrowserView := nil; FCurrentPage := '';
+  RestoreDesktopState;
+  Say(Format('Desktop %d of %d', [Cur, Cnt]));
 end;
 
 procedure TFormMain.NextWorkspaceClick(Sender: TObject);

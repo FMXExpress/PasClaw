@@ -146,26 +146,81 @@ const
   { An app entry is a page or a script. Anything past this is not one. }
   MaxEntryBytes   = 2 * 1024 * 1024;
 
-{ Where the active workspace keeps its desktop layout. }
-function DesktopStatePath: string;
+(* Desktops inside a workspace: numbered layouts, like the Linux pager --
+   but INSIDE the wall, because which windows are on screen is a view and
+   must never be the isolation boundary. desktop 1 is state.json (the
+   pre-desktops file, so an existing layout just becomes desktop 1);
+   desktop N>1 is stateN.json. desktops.json holds {current, count}. *)
+const
+  MaxDesktops = 9;
+
+function DesktopMetaPath: string;
 begin
-  Result := JoinPath(WorkspaceSubdir('desktop'), 'state.json');
+  Result := JoinPath(WorkspaceSubdir('desktop'), 'desktops.json');
 end;
 
-function ReadDesktopState(out Body: string): Boolean;
+procedure ReadDesktopMeta(out Current, Count: Integer);
+var
+  Obj: TJsonObject;
+begin
+  Current := 1;
+  Count := 1;
+  if not FileExists(DesktopMetaPath) then Exit;
+  try
+    Obj := TJsonObject.Parse(ReadFileText(DesktopMetaPath));
+  except
+    Exit;
+  end;
+  if Obj = nil then Exit;
+  try
+    Current := Integer(Obj.GetInt('current', 1));
+    Count   := Integer(Obj.GetInt('count', 1));
+  finally
+    Obj.Free;
+  end;
+  if Count < 1 then Count := 1;
+  if Count > MaxDesktops then Count := MaxDesktops;
+  if (Current < 1) or (Current > Count) then Current := 1;
+end;
+
+procedure WriteDesktopMeta(Current, Count: Integer);
+begin
+  if EnsureDir(WorkspaceSubdir('desktop')) then
+    WriteFileText(DesktopMetaPath,
+      '{"current":' + IntToStr(Current) + ',"count":' + IntToStr(Count) + '}');
+end;
+
+{ Layout file for one desktop of the active workspace. 0 = the current one. }
+function DesktopStatePath(N: Integer = 0): string;
+var
+  Cur, Cnt: Integer;
+begin
+  if N <= 0 then
+  begin
+    ReadDesktopMeta(Cur, Cnt);
+    N := Cur;
+  end;
+  if N = 1 then
+    Result := JoinPath(WorkspaceSubdir('desktop'), 'state.json')
+  else
+    Result := JoinPath(WorkspaceSubdir('desktop'), 'state' + IntToStr(N) + '.json');
+end;
+
+function ReadDesktopState(N: Integer; out Body: string): Boolean;
 begin
   Body := '';
   Result := False;
-  if not FileExists(DesktopStatePath) then Exit;
+  if not FileExists(DesktopStatePath(N)) then Exit;
   try
-    Body := ReadFileText(DesktopStatePath);
+    Body := ReadFileText(DesktopStatePath(N));
   except
     Exit;
   end;
   Result := Trim(Body) <> '';
 end;
 
-function WriteDesktopState(const Body: string; out Err: string): Boolean;
+function WriteDesktopState(N: Integer; const Body: string;
+  out Err: string): Boolean;
 begin
   Err := '';
   Result := False;
@@ -175,7 +230,7 @@ begin
     Exit;
   end;
   try
-    WriteFileText(DesktopStatePath, Body);
+    WriteFileText(DesktopStatePath(N), Body);
   except
     on E: Exception do
     begin
@@ -442,6 +497,7 @@ function IsDesktopPath(const Doc: string): Boolean;
 begin
   Result := (Doc = '/v1/desktop/config')
          or (Doc = '/v1/desktop/state')
+         or (Doc = '/v1/desktop/desktops')
          or HasPrefix(Doc, '/v1/workspaces')
          or HasPrefix(Doc, '/v1/projects')
          or HasPrefix(Doc, '/v1/apps')
@@ -2373,6 +2429,7 @@ function DesktopRoute(const Method, Doc, Query, Body: string;
   out Resp: TDesktopResponse): Boolean;
 var
   M, StateBody, StateErr: string;
+  CurDesk, CntDesk, NewDesk: Integer;
   Root: TJsonObject;
 begin
   Reply(Resp, 404, 'application/json; charset=utf-8', '{"error":"not found"}');
@@ -2389,11 +2446,56 @@ begin
      is, and a gateway that tried to schema it would have to be edited every
      time the client learned a new window kind. Bounded, though -- this is a
      layout, and anything megabyte-sized is a bug or an attempt. *)
-  if Doc = '/v1/desktop/state' then
+  (* GET/POST /v1/desktop/desktops -- the pager. {current, count}; POST
+     {"current": n} switches, growing count when n is the next number up.
+     Bounded at MaxDesktops because a pager with 40 slots is not a pager. *)
+  if Doc = '/v1/desktop/desktops' then
   begin
+    ReadDesktopMeta(CurDesk, CntDesk);
     if M = 'GET' then
     begin
-      if not ReadDesktopState(StateBody) then StateBody := '{}';
+      ReplyJSON(Resp, 200, '{"current":' + IntToStr(CurDesk) +
+                           ',"count":' + IntToStr(CntDesk) + '}');
+      Exit(True);
+    end;
+    if M = 'POST' then
+    begin
+      Root := BodyObj(Body);
+      if Root = nil then
+      begin
+        ReplyErr(Resp, 400, 'expected {"current": n}');
+        Exit(True);
+      end;
+      try
+        NewDesk := Integer(Root.GetInt('current', 0));
+      finally
+        Root.Free;
+      end;
+      if (NewDesk < 1) or (NewDesk > CntDesk + 1) or (NewDesk > MaxDesktops) then
+      begin
+        ReplyErr(Resp, 400, Format('desktop must be 1..%d (or %d to add one)',
+                 [CntDesk, CntDesk + 1]));
+        Exit(True);
+      end;
+      if NewDesk > CntDesk then CntDesk := NewDesk;
+      WriteDesktopMeta(NewDesk, CntDesk);
+      ReplyJSON(Resp, 200, '{"current":' + IntToStr(NewDesk) +
+                           ',"count":' + IntToStr(CntDesk) + '}');
+      Exit(True);
+    end;
+    ReplyErr(Resp, 405, 'method not allowed');
+    Exit(True);
+  end;
+
+  if Doc = '/v1/desktop/state' then
+  begin
+    { ?desktop=N names a layout explicitly; without it, the current one.
+      The default is what keeps old clients working: they save and restore
+      "the layout" and never learn desktops exist. }
+    NewDesk := StrToIntDef(QueryValue(Query, 'desktop'), 0);
+    if M = 'GET' then
+    begin
+      if not ReadDesktopState(NewDesk, StateBody) then StateBody := '{}';
       ReplyJSON(Resp, 200, StateBody);
       Exit(True);
     end;
@@ -2413,7 +2515,7 @@ begin
         Exit(True);
       end;
       Root.Free;
-      if not WriteDesktopState(Body, StateErr) then
+      if not WriteDesktopState(NewDesk, Body, StateErr) then
       begin
         ReplyErr(Resp, 500, StateErr);
         Exit(True);

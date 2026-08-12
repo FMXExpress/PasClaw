@@ -65,16 +65,35 @@ has indexed, and what its sandbox can reach all switch together, and
 workspace rather than merely not finding anything.
 
 Single-workspace installs are untouched: every path resolves byte-for-byte
-to what it was before (also pinned by test). Two caveats: **one gateway
+to what it was before (also pinned by test). One caveat: **one gateway
 serves one active workspace at a time** — for truly concurrent work in two
-workspaces, run two gateways on different ports — and cron jobs run in
-whichever workspace is active when they fire.
-[`workspaces-plan.md`](workspaces-plan.md) covers what remains (desktops
-inside a workspace, per-workspace profiles, workspace-tagged cron).
+workspaces, run two gateways on different ports.
+[`workspaces-plan.md`](workspaces-plan.md) has the full design story.
 
-In the desktop, the taskbar's `[1] [2] [3]` pager switches workspaces
-(Ctrl+Alt+←/→). Switching closes the current desktop's windows — they belong
-to the workspace, not to the browser tab.
+**Desktops live inside a workspace.** The taskbar pager `[1] [2] [+]`
+(Ctrl+Alt+←/→) switches *desktops*: numbered window arrangements, cheap,
+instant, invisible to the agent. Each keeps its own layout, saved on the
+gateway. Switching *workspaces* moved to the menu (**Switch Workspace…**)
+behind a confirmation that names what it does — because after the isolation
+work it genuinely changes what PasClaw remembers, and the consequential
+action should not have the one-click gesture.
+
+**A workspace can name its profile:**
+
+```sh
+pasclaw workspace bind workspace2 security
+```
+
+Working in `workspace2` then applies the `security` profile's config —
+per-business providers, keys or sandbox settings with no new mechanism.
+Precedence: `--profile` / `$PASCLAW_PROFILE` still win; the binding beats
+the global `profile` field.
+
+**Cron fires as its workspace.** New entries are stamped with the workspace
+they were created in, and the scheduler pins its thread there for the
+firing — business B's nightly job runs with B's memory and notes even while
+you are looking at A. Entries created before tagging keep the old
+behaviour (whatever workspace is active).
 
 ### Projects, tasks and jobs
 

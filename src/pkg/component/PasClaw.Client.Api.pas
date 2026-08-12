@@ -261,6 +261,11 @@ type
        arranged in one is the layout the other opens with. *)
     function DesktopState: string;
     function SetDesktopState(const JSON: string): Boolean;
+    (* Desktops inside the workspace: numbered layouts, like a pager.
+       Switching one is cheap and invisible to the agent -- the whole
+       difference from a workspace switch. *)
+    function Desktops(out Current, Count: Integer): Boolean;
+    function SwitchDesktop(N: Integer; out Current, Count: Integer): Boolean;
 
     { ---- chat ---- }
     (* Stream one turn through /v1/chat/completions. History is a JSON array
@@ -1295,6 +1300,42 @@ begin
     Result := '';
   end;
   if Trim(Result) = '' then Result := '{}';
+end;
+
+function TPasClawClient.Desktops(out Current, Count: Integer): Boolean;
+var
+  Body: string;
+begin
+  Current := 1;
+  Count := 1;
+  Result := False;
+  try
+    Body := GetJSON('/v1/desktop/desktops');
+  except
+    Exit;
+  end;
+  Current := Integer(JsonReadInt(Body, 'current', 1));
+  Count   := Integer(JsonReadInt(Body, 'count', 1));
+  Result := True;
+end;
+
+function TPasClawClient.SwitchDesktop(N: Integer;
+  out Current, Count: Integer): Boolean;
+var
+  Body: string;
+begin
+  Current := 1;
+  Count := 1;
+  Result := False;
+  try
+    Body := Request('POST', '/v1/desktop/desktops',
+                    '{"current":' + IntToStr(N) + '}');
+  except
+    Exit;
+  end;
+  Current := Integer(JsonReadInt(Body, 'current', 1));
+  Count   := Integer(JsonReadInt(Body, 'count', 1));
+  Result := True;
 end;
 
 function TPasClawClient.SetDesktopState(const JSON: string): Boolean;

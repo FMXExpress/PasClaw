@@ -229,6 +229,12 @@ type
     Enabled:       Boolean;
     ChannelKind:   string;   { 'discord' | 'slack' | 'teams' | 'webhook' | 'line' | 'whatsapp' | '' }
     ChannelTarget: string;   { webhook URL, LINE userId, WhatsApp phone, etc. }
+    (* Which workspace the job fires AS -- its memory, sessions, skills.
+       '' = the active workspace at fire time (the pre-tagging behaviour,
+       kept for existing entries). New entries are stamped on creation,
+       because "runs in whatever world happens to be open" is exactly the
+       property the workspace wall exists to remove. *)
+    Workspace:     string;
   end;
 
   TSkillEntry = record
@@ -1235,6 +1241,7 @@ begin
   Result.PutBool('enabled', C.Enabled);
   if C.ChannelKind   <> '' then Result.PutStr('channel_kind',   C.ChannelKind);
   if C.ChannelTarget <> '' then Result.PutStr('channel_target', C.ChannelTarget);
+  if C.Workspace     <> '' then Result.PutStr('workspace',      C.Workspace);
 end;
 
 function SkillToJSON(const S: TSkillEntry): TJsonObject;
@@ -2165,6 +2172,7 @@ begin
           Crons[i].Skill         := Item.GetStr ('skill',          '');
           Crons[i].Args          := Item.GetStr ('args',           '');
           Crons[i].Enabled       := Item.GetBool('enabled',        True);
+          Crons[i].Workspace     := Item.GetStr ('workspace',      '');
           Crons[i].ChannelKind   := Item.GetStr ('channel_kind',   '');
           Crons[i].ChannelTarget := Item.GetStr ('channel_target', '');
         finally
@@ -2335,6 +2343,14 @@ begin
     ProfileName := ProfileOverride;
     if ProfileName = '' then
       ProfileName := GetEnvironmentVariable('PASCLAW_PROFILE');
+    (* Workspace -> profile binding. A workspace may name the profile it
+       works under ("business B uses the b-corp keys"), stored as
+       config.json's workspace_profiles object. Sits BELOW the explicit
+       selectors -- naming a profile on the command line should always win
+       -- and ABOVE the global "profile" field, because the binding is the
+       more specific statement. *)
+    if (ProfileName = '') and HasConfigFile then
+      ProfileName := ExtractWorkspaceProfile(S);
     if (ProfileName = '') and HasConfigFile then
       ProfileName := ExtractProfileField(S);
     if ProfileName <> '' then

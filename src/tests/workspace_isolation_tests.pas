@@ -26,6 +26,7 @@ uses
   SysUtils,
   PasClaw.Utils,
   PasClaw.Config,
+  PasClaw.Config.Profile,
   PasClaw.Workspaces,
   PasClaw.Session.Store,
   PasClaw.Memory.Facts,
@@ -175,6 +176,34 @@ begin
              'Business A''s note survived untouched');
   ExpectTrue(FileExists(JoinPath(SessionsDir, 'ws1-session.json')),
              'Business A''s session survived untouched');
+
+  { -------------------------------------------- workspace -> profile -- }
+  (* Phase 7: a workspace names the profile it works under. Below the
+     explicit selectors (CLI/env must win), above the global field. *)
+  ExpectStr(ExtractWorkspaceProfile(
+    '{"active_workspace":"workspace2",' +
+    '"workspace_profiles":{"workspace2":"security"}}'), 'security',
+    'the active workspace''s binding is found');
+  ExpectStr(ExtractWorkspaceProfile(
+    '{"workspace_profiles":{"workspace2":"security"}}'), '',
+    'no binding for the default workspace, no profile');
+  ExpectStr(ExtractWorkspaceProfile('{"active_workspace":"../etc"}'), '',
+    'a malformed name never reaches the map');
+
+  { ------------------------------------------------- cron thread pin -- }
+  (* Phase 8: the scheduler pins its thread to a tagged entry's workspace
+     for the duration of a firing. The pin outranks env and config, and
+     clearing it restores whatever they said. *)
+  SetThreadWorkspace('workspace2');
+  ExpectStr(ActiveWorkspaceName, 'workspace2', 'the pin wins');
+  ExpectStr(SessionsDir, JoinPath(Home, 'workspace2/sessions'),
+            'and every store follows it');
+  SetThreadWorkspace('../etc');
+  ExpectStr(ActiveWorkspaceName, 'workspace2',
+            'a malformed pin is refused, not applied');
+  SetThreadWorkspace('');
+  ExpectStr(ActiveWorkspaceName, 'workspace',
+            'clearing the pin restores the configured workspace');
 
   if Failures = 0 then
     WriteLn('workspace_isolation_tests: OK')

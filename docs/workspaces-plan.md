@@ -220,7 +220,19 @@ precedent: checkpoints already propagate a context handle across threads
 
 ## 7. Phasing
 
-**Status: phases 1–5 are built** — one commit routed every hardcoded
+**Status: all eight phases are built.** Phases 6–8 landed as: desktops are
+numbered layouts inside the workspace (`/v1/desktop/desktops`, the pager and
+Ctrl+Alt+arrows page them, workspace switching moved behind a named
+confirmation); `pasclaw workspace bind <ws> <profile>` applies a profile per
+workspace via `workspace_profiles` in config.json; and cron entries are
+stamped with their creating workspace, fired under a thread-scoped pin
+(`SetThreadWorkspace`) so a tagged job runs as its own world without racing
+concurrent requests. Remaining honest limits: a *prompt-kind* cron skill
+that shells out spawns children with the process env, not the pin — noted,
+not hidden; and per-request workspace scoping (§6.2 option 1) is still the
+direction, one-gateway-per-workspace the shipped answer for concurrency.
+
+**Earlier status: phases 1–5 are built** — one commit routed every hardcoded
 `workspace/` path through `ActiveWorkspaceName` (memory, sessions, skills,
 KB, checkpoints, cron state, heartbeat, steering, workflows, PLAN.md, the
 Docker shell mapping, the sandbox browse root), a runtime switch repoints

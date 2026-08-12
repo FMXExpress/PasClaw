@@ -71,6 +71,16 @@ function WorkspaceSlot(const Name: string): Integer;
   config.json's active_workspace, else 'workspace'. Never returns ''. }
 function ActiveWorkspaceName: string;
 
+(* Pin THIS THREAD to a workspace, overriding env and config. '' clears.
+
+   Exists for the cron scheduler: a job tagged for business B must fire as B
+   -- B's memory, B's sessions -- even while the user is looking at A. An
+   env-var swap would be process-global and race with concurrent requests;
+   a threadvar cannot leak past the thread that set it. Callers bracket the
+   work and clear in a finally. *)
+procedure SetThreadWorkspace(const Name: string);
+function ThreadWorkspace: string;
+
 { Absolute path of the active workspace. The replacement for every
   JoinPath(GetHome, 'workspace') in the tree. }
 function ActiveWorkspaceRoot: string;
@@ -110,6 +120,12 @@ var
      The gateway installs a handler at startup; nil (the default) is fine
      for one-shot commands, which resolve paths per call anyway. *)
   OnWorkspaceSwitched: procedure(const NewRoot: string) = nil;
+
+(* Bind a workspace to a profile (config.json's workspace_profiles map).
+   Raw-JSON edit like the cron tool's, so an active profile's resolved
+   values are not baked into the file. '' removes the binding. *)
+function BindWorkspaceProfile(const Name, Profile: string;
+  out Err: string): Boolean;
 
 { Display label for a workspace, falling back to a generated one
   ('Workspace 1'). }
@@ -174,11 +190,30 @@ begin
   Result := JoinPath(GetHome, Name);
 end;
 
+threadvar
+  GThreadWorkspace: string;
+
+procedure SetThreadWorkspace(const Name: string);
+begin
+  if (Name = '') or IsWorkspaceName(Name) then
+    GThreadWorkspace := Name;
+end;
+
+function ThreadWorkspace: string;
+begin
+  Result := GThreadWorkspace;
+end;
+
 function ActiveWorkspaceName: string;
 var
   Env, Cfg, Body: string;
   Obj: TJsonObject;
 begin
+  { Highest precedence: a per-thread pin (the cron scheduler firing a
+    tagged job). Above the env var, because the env var is "this whole
+    process" and the pin is "this specific piece of work". }
+  if GThreadWorkspace <> '' then
+    Exit(GThreadWorkspace);
   Env := Trim(GetEnvironmentVariable(EnvWorkspace));
   if (Env <> '') and IsWorkspaceName(Env) then
     Exit(Env);
@@ -449,6 +484,47 @@ begin
   Result := True;
   if Assigned(OnWorkspaceSwitched) then
     OnWorkspaceSwitched(WorkspaceRoot(Name));
+end;
+
+
+function BindWorkspaceProfile(const Name, Profile: string;
+  out Err: string): Boolean;
+var
+  Root, Map: TJsonObject;
+  Body: string;
+begin
+  Err := '';
+  Result := False;
+  if not IsWorkspaceName(Name) then
+  begin
+    Err := 'not a workspace name: ' + Name;
+    Exit;
+  end;
+  Root := nil;
+  if FileExists(GetConfigPath) then
+  begin
+    Body := ReadFileText(GetConfigPath);
+    if Trim(Body) <> '' then
+      try Root := TJsonObject.Parse(Body); except Root := nil; end;
+  end;
+  if Root = nil then Root := TJsonObject.Create;
+  try
+    Map := Root.ChildObject('workspace_profiles');
+    if Map = nil then
+    begin
+      { PutObject takes ownership (nils its var arg), so build the map,
+        hand it over, and re-fetch the live reference. }
+      Map := TJsonObject.Create;
+      Root.PutObject('workspace_profiles', Map);
+      Map := Root.ChildObject('workspace_profiles');
+    end;
+    if Profile = '' then Map.Remove(Name)
+    else Map.PutStr(Name, Profile);
+    WriteFileText(GetConfigPath, Root.ToJSON);
+    Result := True;
+  finally
+    Root.Free;
+  end;
 end;
 
 end.

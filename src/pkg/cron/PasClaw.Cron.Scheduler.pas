@@ -52,6 +52,7 @@ type
 implementation
 
 uses
+  PasClaw.Workspaces,
   DateUtils,
   PasClaw.Logger,
   PasClaw.Cron.Expr,
@@ -126,6 +127,11 @@ begin
   FCronsPath  := GetConfigPath;
   FCronsMtime := 0;
   FileAge(FCronsPath, FCronsMtime);
+end;
+
+function IfThenWs(const Ws: string): string;
+begin
+  if Ws = '' then Result := '' else Result := ' workspace=' + Ws;
 end;
 
 procedure TCronScheduler.ReloadCronsIfChanged;
@@ -228,9 +234,21 @@ begin
     ShouldFire := (Next > 0) and (Next <= Now_);
     if not ShouldFire then Continue;
 
-    LogInfo('cron[%s]: firing skill=%s args=%s',
-            [Entry.Id, Entry.Skill, Entry.Args]);
-    Output := RunSkill(FRegistry, Entry.Skill, Entry.Args, Err);
+    LogInfo('cron[%s]: firing skill=%s args=%s%s',
+            [Entry.Id, Entry.Skill, Entry.Args,
+             IfThenWs(Entry.Workspace)]);
+    (* A tagged job fires AS its workspace: memory, sessions, notes and
+       skills all resolve there for the duration, via the thread pin --
+       process-global state would race with concurrent requests. Untagged
+       entries keep the old behaviour (whatever workspace is active). *)
+    if Entry.Workspace <> '' then
+      SetThreadWorkspace(Entry.Workspace);
+    try
+      Output := RunSkill(FRegistry, Entry.Skill, Entry.Args, Err);
+    finally
+      if Entry.Workspace <> '' then
+        SetThreadWorkspace('');
+    end;
 
     if Err <> '' then
       LogWarn('cron[%s]: skill error: %s', [Entry.Id, Err])

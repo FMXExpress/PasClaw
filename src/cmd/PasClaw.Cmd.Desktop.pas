@@ -57,6 +57,8 @@ begin
   PrintLn('  list              show every workspace and which is active');
   PrintLn('  new [label]       create the next workspace (workspace2, ...)');
   PrintLn('  use <name>        switch the active workspace');
+  PrintLn('  bind <name> <profile>   the profile this workspace works under');
+  PrintLn('                          ("" clears; CLI --profile still wins)');
   PrintLn('');
   PrintLn('A workspace is an isolated agent world: its own memory, sessions,');
   PrintLn('skills and projects. The original workspace/ directory is #1.');
@@ -93,6 +95,30 @@ begin
     Name_ := CreateWorkspace(Name_);
     PrintLn('Created ' + Name_ + ' (' + WorkspaceLabel(Name_) + ')');
     PrintLn('Switch to it with: pasclaw workspace use ' + Name_);
+    Exit;
+  end;
+
+  if Sub = 'bind' then
+  begin
+    if Length(Argv) < 3 then
+    begin
+      PrintLn('Usage: pasclaw workspace bind <name> <profile>');
+      Exit(1);
+    end;
+    if not IsWorkspaceName(Argv[1]) then
+    begin
+      PrintLn('error: not a workspace name: ' + Argv[1]);
+      Exit(1);
+    end;
+    if not BindWorkspaceProfile(Argv[1], Argv[2], Err) then
+    begin
+      PrintLn('error: ' + Err);
+      Exit(1);
+    end;
+    if Argv[2] = '' then
+      PrintLn('Cleared the profile binding for ' + Argv[1])
+    else
+      PrintLn(Argv[1] + ' now works under the "' + Argv[2] + '" profile.');
     Exit;
   end;
 

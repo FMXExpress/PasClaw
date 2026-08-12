@@ -1093,7 +1093,7 @@ iframe.app { width: 100%; height: 100%; border: 0; background: var(--window); di
   <div class="tb-sep"></div>
   <div id="tasks"></div>
   <div class="tb-sep"></div>
-  <div id="pager" title="Workspaces (Ctrl+Alt+Left / Right)"></div>
+  <div id="pager" title="Desktops (Ctrl+Alt+Left / Right)"></div>
   <div id="clock" class="thin"></div>
 </div>
 
@@ -1434,18 +1434,44 @@ function paintTaskbar() {
     host.appendChild(b);
   }
 
+  /* The pager pages DESKTOPS -- views inside this workspace. Cheap,
+     instant, invisible to the agent. Workspaces moved to the menu, because
+     switching one changes what PasClaw remembers and the consequential
+     action should not have the one-click gesture. */
   const pg = $("#pager");
   pg.textContent = "";
-  S.workspaces.forEach(ws => {
-    const b = el("button", "pgbtn btn" + (ws.active ? " on" : ""), String(ws.slot));
-    b.title = ws.label + (ws.projects ? ` -- ${ws.projects} project(s)` : "");
-    b.addEventListener("click", () => switchWorkspace(ws.name));
+  for (let n = 1; n <= (S.deskCount || 1); n++) {
+    const b = el("button", "pgbtn btn" + (n === (S.desk || 1) ? " on" : ""), String(n));
+    b.title = `Desktop ${n}`;
+    b.addEventListener("click", () => switchDesktop(n));
     pg.appendChild(b);
-  });
-  const add = el("button", "pgbtn btn", "+");
-  add.title = "New workspace";
-  add.addEventListener("click", newWorkspace);
-  pg.appendChild(add);
+  }
+  if ((S.deskCount || 1) < 9) {
+    const add = el("button", "pgbtn btn", "+");
+    add.title = "New desktop";
+    add.addEventListener("click", () => switchDesktop((S.deskCount || 1) + 1));
+    pg.appendChild(add);
+  }
+}
+
+async function loadDesktops() {
+  try {
+    const j = await api("/v1/desktop/desktops");
+    S.desk = j.current; S.deskCount = j.count;
+  } catch { S.desk = 1; S.deskCount = 1; }
+}
+
+async function switchDesktop(n) {
+  if (n === S.desk) return;
+  /* Save the arrangement being left, swap the current pointer, restore the
+     one being entered. Nothing the agent can see changes -- that is the
+     entire difference from a workspace switch. */
+  try { await api("/v1/desktop/state", { method: "PUT", body: captureDesktop() }); } catch {}
+  const j = await api("/v1/desktop/desktops", { method: "POST", body: { current: n } });
+  S.desk = j.current; S.deskCount = j.count;
+  for (const w of Array.from(WINS.values())) closeWindow(w);
+  paintTaskbar();
+  await restoreDesktop();
 }
 
 function tick() {
@@ -1603,6 +1629,7 @@ const MENU = [
   { label: "Library",           icon: "brain",  fn: openLibrary },
   { label: "File Manager",      icon: "folder", fn: () => openFiles() },
   { sep: true },
+  { label: "Switch Workspace...", icon: "disk", fn: pickWorkspace },
   { label: "New Workspace",     icon: "disk",   fn: newWorkspace },
   { label: "Display Properties", icon: "gear",  fn: openDisplay },
   { sep: true },
@@ -1643,16 +1670,28 @@ async function loadWorkspaces() {
 
 async function switchWorkspace(name) {
   if (name === S.active) return;
-  /* Switching desktops closes this one's windows: they belong to the
-     workspace, not to the browser tab. */
+  /* A workspace is a WALL, not a view: memory, sessions, skills and files
+     all change. Deliberate gesture, named consequence. */
+  if (!confirm(`Switch to ${name}?\n\nThis changes what PasClaw remembers: ` +
+               `memory, sessions, skills and files are all per-workspace.`)) return;
   for (const w of Array.from(WINS.values())) closeWindow(w);
   await api("/v1/workspaces/activate", { method: "POST", body: { name } });
   S.tree = {}; S.selected = null;
   await loadWorkspaces();
   await loadProjects();
-  /* Each workspace has its own desktop, which is the point of the pager:
-     switching is meant to feel like walking into a different room. */
+  await loadDesktops();
+  /* Each workspace has its own desktops: switching is walking into a
+     different room, arranged as you left it. */
   await restoreDesktop();
+}
+
+async function pickWorkspace() {
+  const names = S.workspaces.map(w => `${w.slot}: ${w.label}${w.active ? " (current)" : ""}`);
+  const pick = prompt("Switch workspace -- this changes what PasClaw remembers.\n\n" +
+                      names.join("\n") + "\n\nNumber:", "");
+  if (pick === null) return;
+  const ws = S.workspaces.find(w => String(w.slot) === pick.trim());
+  if (ws && !ws.active) switchWorkspace(ws.name);
 }
 
 async function newWorkspace() {
@@ -1665,10 +1704,8 @@ async function newWorkspace() {
 document.addEventListener("keydown", e => {
   if (!(e.ctrlKey && e.altKey)) return;
   if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-  const i = S.workspaces.findIndex(w => w.active);
-  if (i < 0) return;
-  const j = e.key === "ArrowLeft" ? i - 1 : i + 1;
-  if (j >= 0 && j < S.workspaces.length) { e.preventDefault(); switchWorkspace(S.workspaces[j].name); }
+  const n = (S.desk || 1) + (e.key === "ArrowLeft" ? -1 : 1);
+  if (n >= 1 && n <= (S.deskCount || 1)) { e.preventDefault(); switchDesktop(n); }
 });
 
 /* ==========================================================================
@@ -2989,6 +3026,7 @@ async function boot() {
     } catch {}
     await loadWorkspaces();
     await loadProjects();
+    await loadDesktops();
     /* Only after the first load succeeds -- subscribing before we know the
        token works would just produce a reconnect loop behind an auth wall. */
     subscribeEvents();

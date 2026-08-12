@@ -45,11 +45,13 @@ uses
   PasClaw.Logger,
   PasClaw.Config,
   PasClaw.Cron.Expr,
+  PasClaw.Workspaces,
   PasClaw.Skills.Loader;
 
 type
   TCronRow = record
     Id, Spec, Skill, Args, ChannelKind, ChannelTarget: string;
+    Workspace: string;
     Enabled: Boolean;
   end;
   TCronRows = array of TCronRow;
@@ -109,6 +111,7 @@ begin
         Result[N].Enabled       := Item.GetBool('enabled',        True);
         Result[N].ChannelKind   := Item.GetStr ('channel_kind',   '');
         Result[N].ChannelTarget := Item.GetStr ('channel_target', '');
+        Result[N].Workspace     := Item.GetStr ('workspace',      '');
         Inc(N);
       finally
         Item.Free;
@@ -138,6 +141,7 @@ begin
     Item.PutBool('enabled', Rows[i].Enabled);
     if Rows[i].ChannelKind   <> '' then Item.PutStr('channel_kind',   Rows[i].ChannelKind);
     if Rows[i].ChannelTarget <> '' then Item.PutStr('channel_target', Rows[i].ChannelTarget);
+    if Rows[i].Workspace     <> '' then Item.PutStr('workspace',      Rows[i].Workspace);
     Arr.AddObject(Item);
   end;
   Root.PutArray('crons', Arr);   { overwrites the existing key }
@@ -243,6 +247,11 @@ begin
       Rows[High(Rows)].Skill   := Skill;
       Rows[High(Rows)].Args    := SkArgs;
       Rows[High(Rows)].Enabled := True;
+      { Stamp the workspace the entry was created IN. "Runs in whatever
+        world happens to be open at fire time" is exactly the property the
+        workspace wall exists to remove; existing untagged entries keep
+        that old behaviour, new ones do not get it by accident. }
+      Rows[High(Rows)].Workspace := ActiveWorkspaceName;
       WriteCrons(Root, Rows);
       LogInfo('cron tool: scheduled %s (skill=%s spec=%s)', [Id, Skill, Spec]);
       Result := Format('Scheduled cron "%s": skill "%s" on "%s". A running ' +
