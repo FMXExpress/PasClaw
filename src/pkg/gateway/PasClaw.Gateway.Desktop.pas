@@ -90,6 +90,12 @@ uses
   PasClaw.Desktop.Events,
   PasClaw.Config,           { cron entries + provider names for the read surface }
   PasClaw.Suite.Mail,       { the mail-sync action }
+  PasClaw.Suite.Notes,      { the notes surface + note-save/note-delete }
+  PasClaw.Memory.Facts,     { the memory surface -- what Brain shows }
+  PasClaw.Memory.Distill,   { TFact, for a fact the user types themselves }
+  PasClaw.Tools.Cron,       { Tool_Cron -- Calendar schedules through it }
+  PasClaw.Skills.Loader,    { the skills surface -- what Calendar may schedule }
+  DateUtils,                { DateTimeToUnix }
   PasClaw.Session.Store;    { session list for the Library app }
 
 var
@@ -962,12 +968,84 @@ end;
 
 { ---- /v1/apps + /apps ---- }
 
+(* Open the fact store the AGENT uses and hand back its active facts.
+
+   Note the path: DefaultFactsDbPath(GetHome), which resolves to
+   <home>/workspace/memory/facts.db regardless of the active workspace.
+   That is a pre-existing wart -- distilled facts are the one part of the
+   agent's state that Phase 1 did not make workspace-scoped -- and Brain
+   deliberately inherits it rather than routing through WorkspaceSubdir.
+   Showing workspace2's facts while the model is primed with workspace1's
+   would be a prettier lie than the one we are here to fix. When facts
+   become per-workspace, this follows for free. *)
+function ActiveFacts_(const Today: string): TStoredFactArray;
+var
+  Store: IFactStore;
+begin
+  SetLength(Result, 0);
+  Store := NewFactStore;
+  { No store yet is the normal state of a fresh install, not an error: the
+    file appears the first time distillation runs. Brain shows an empty
+    Rolodex and says so. }
+  if not Store.Open(DefaultFactsDbPath(GetHome)) then Exit;
+  try
+    Result := Store.ActiveFacts(Today);
+  finally
+    Store.Close;
+  end;
+end;
+
+{ Forget one. Supersede rather than Delete: the fact stops being active (so
+  it leaves the prompt, which is what the user asked for) but the row
+  survives, so "why did it stop knowing that" is answerable later. }
+function ForgetFact(Id: Int64): Boolean;
+var
+  Store: IFactStore;
+begin
+  Result := False;
+  Store := NewFactStore;
+  if not Store.Open(DefaultFactsDbPath(GetHome)) then Exit;
+  try
+    Result := Store.Supersede(Id);
+  finally
+    Store.Close;
+  end;
+end;
+
+(* Remember one, typed by the user rather than distilled from a transcript.
+
+   scope=user, kind=static, confidence=1.0: the user said it themselves, so
+   it is not a guess about them and it does not decay. Distillation's job is
+   inferring facts; this is the user stating one, and the store should not
+   treat the two the same. *)
+function RememberFact(const Text: string): Boolean;
+var
+  Store: IFactStore;
+  F: TFact;
+begin
+  Result := False;
+  Store := NewFactStore;
+  if not Store.Open(DefaultFactsDbPath(GetHome)) then Exit;
+  try
+    F.Text          := Text;
+    F.Kind          := 'static';
+    F.Scope         := 'user';
+    F.Confidence    := 1.0;
+    F.EventDate     := '';
+    F.Expires       := '';
+    F.SourceSession := 'brain';
+    Result := Store.Add(F, DateTimeToUnix(Now, False)) > 0;
+  finally
+    Store.Close;
+  end;
+end;
+
 (* The allowlisted read surfaces. Each is a small projection built here from
    a store this unit already depends on -- deliberately NOT a proxy to the
    gateway's own handlers, because a proxy would inherit whatever those
    handlers ever start returning. Adding a surface has to be a deliberate
    edit to this function. *)
-function ReadSurface(const Surface: string;
+function ReadSurface(const Project, Surface: string;
   out Resp: TDesktopResponse): Boolean;
 var
   Root, Item: TJsonObject;
@@ -977,6 +1055,10 @@ var
   Metas: TSessionMetaArray;
   Pages_: TPageInfoArray;
   Projs: TProjectInfoArray;
+  Facts: TStoredFactArray;
+  Notes_: TNoteInfoArray;
+  Skills_: TSkillSpecArray;
+  Tasks_: TTaskInfoArray;
 begin
   Result := True;
   Root := TJsonObject.Create;
@@ -1046,11 +1128,90 @@ begin
         Arr.AddObject(Item);
       end;
     end
+    (* memory -- the distilled facts the agent carries into every turn.
+
+       This is what makes the Brain app honest. Without it Brain shows what
+       you typed into Brain, which is a notepad wearing the word "memory".
+       With it, the cards on screen ARE the block the model is primed with,
+       so tearing one up changes what the assistant knows.
+
+       Active facts only: a superseded or expired fact is not in the prompt,
+       so showing it would misrepresent what PasClaw currently believes. *)
+    else if Surface = 'memory' then
+    begin
+      Facts := ActiveFacts_(FormatDateTime('yyyy-mm-dd', Now));
+      for I := 0 to High(Facts) do
+      begin
+        Item := TJsonObject.Create;
+        Item.PutInt('id',         Facts[I].Id);
+        Item.PutStr('text',       Facts[I].Text);
+        Item.PutStr('kind',       Facts[I].Kind);
+        Item.PutStr('scope',      Facts[I].Scope);
+        Item.PutStr('event_date', Facts[I].EventDate);
+        Item.PutStr('expires',    Facts[I].Expires);
+        Item.PutStr('source',     Facts[I].SourceSession);
+        Arr.AddObject(Item);
+      end;
+    end
+    (* notes -- markdown files under <workspace>/memory/notes.
+
+       Deliberately a surface rather than app state: a note written here is
+       a file in the directory the memory index walks, so it is searchable
+       by the agent the moment it is saved. That is the entire point of
+       moving Notes out of the state store. *)
+    else if Surface = 'notes' then
+    begin
+      Notes_ := ListNotes;
+      for I := 0 to High(Notes_) do
+      begin
+        Item := TJsonObject.Create;
+        Item.PutStr('name',     Notes_[I].Name);
+        Item.PutStr('title',    Notes_[I].Title);
+        Item.PutStr('body',     Notes_[I].Body);
+        Item.PutStr('modified', Notes_[I].Modified);
+        Arr.AddObject(Item);
+      end;
+    end
+    (* skills -- what can actually be scheduled.
+
+       Calendar needs this to offer a choice rather than a text box: a cron
+       entry naming a skill that isn't installed is an entry that silently
+       never fires, and a normal person has no way to find that out. Name
+       and description only; the shell command and prompt body stay out of
+       an app's reach. *)
+    else if Surface = 'skills' then
+    begin
+      Skills_ := LoadSkillManifests(GetHome);
+      for I := 0 to High(Skills_) do
+      begin
+        Item := TJsonObject.Create;
+        Item.PutStr('name',        Skills_[I].Name);
+        Item.PutStr('description', Skills_[I].Description);
+        Item.PutStr('kind',        Skills_[I].Kind);
+        Arr.AddObject(Item);
+      end;
+    end
+    (* tasks -- the board, scoped to the app that asked.
+
+       Note the Project argument: unlike the other surfaces this one is not
+       global, and a to-do app must not be able to read another project's
+       task list by naming it. The scoping comes from the route, which knows
+       which app is calling; the app never gets to say. *)
+    else if Surface = 'tasks' then
+    begin
+      Tasks_ := ListTasks(Project);
+      for I := 0 to High(Tasks_) do
+      begin
+        Item := TaskJSON(Tasks_[I]);
+        Arr.AddObject(Item);
+      end;
+    end
     else
     begin
       Arr.Free;
       ReplyErr(Resp, 404, 'no such surface: ' + Surface +
-               ' (cron, sessions, providers, pages, projects)');
+               ' (cron, sessions, providers, pages, projects, memory, notes,' +
+               ' skills, tasks)');
       Exit;
     end;
 
@@ -1062,17 +1223,249 @@ begin
   end;
 end;
 
-(* The allowlisted actions. One entry today; the shape is what matters --
-   an app names an action, the server decides whether that action exists and
-   whether this project may run it. *)
-function RunAppAction(const Project, Action: string;
+(* The allowlisted actions: how a sandboxed app asks for a side effect.
+
+   Every entry is a pair -- an action name AND the project allowed to run
+   it. The pairing is the security property, not the name list: without it
+   any app could drive `memory-forget` or `note-save` and edit what the
+   assistant remembers. Widening this is a deliberate edit, never an
+   emergent one.
+
+   Body is the raw request body, so an action can take an argument. It is
+   attacker-controlled text from a sandboxed frame; each handler parses
+   what it needs and validates it itself. *)
+function RunAppAction(const Project, Action, Body: string;
   out Resp: TDesktopResponse): Boolean;
 var
-  Root: TJsonObject;
+  Root, Arg: TJsonObject;
   Filed: Integer;
-  Err: string;
+  Err, Slug, Out_: string;
 begin
   Result := True;
+
+  (* Brain: forget a fact. The premise of the Rolodex metaphor is that
+     tearing up a card actually does something, so this has to reach the
+     store the model is primed from -- not a copy of it. *)
+  if (Action = 'memory-forget') or (Action = 'memory-remember') then
+  begin
+    if Project <> 'brain' then
+    begin
+      ReplyErr(Resp, 404, Action + ' belongs to the brain app');
+      Exit;
+    end;
+    if Action = 'memory-remember' then
+    begin
+      Arg := BodyObj(Body);
+      try
+        if (Arg = nil) or (Trim(Arg.GetStr('text', '')) = '') then
+        begin
+          ReplyErr(Resp, 400, 'remember what? send {"text": "..."}');
+          Exit;
+        end;
+        if not RememberFact(Trim(Arg.GetStr('text', ''))) then
+        begin
+          { No fact store means memory has never been provisioned here.
+            Say that rather than "failed" -- it is a setup state with a
+            known fix, not a malfunction. }
+          ReplyErr(Resp, 503, 'no fact store yet (run: pasclaw memory provision)');
+          Exit;
+        end;
+        ReplyOK(Resp);
+      finally
+        Arg.Free;
+      end;
+      Exit;
+    end;
+    Arg := BodyObj(Body);
+    try
+      if (Arg = nil) or (Arg.GetInt('id', 0) <= 0) then
+      begin
+        ReplyErr(Resp, 400, 'which fact? send {"id": <n>}');
+        Exit;
+      end;
+      if not ForgetFact(Arg.GetInt('id', 0)) then
+      begin
+        ReplyErr(Resp, 404, 'no such fact');
+        Exit;
+      end;
+      ReplyOK(Resp);
+    finally
+      Arg.Free;
+    end;
+    Exit;
+  end;
+
+  (* Notes: write and delete markdown under <workspace>/memory/notes.
+
+     This is the only action that puts app-authored text on disk in the
+     directory the memory index walks, which is exactly the point -- and
+     exactly why the slug is derived server-side by SaveNote rather than
+     taken from the request. The app names a note; it never names a file. *)
+  if (Action = 'note-save') or (Action = 'note-delete') then
+  begin
+    if Project <> 'notes' then
+    begin
+      ReplyErr(Resp, 404, Action + ' belongs to the notes app');
+      Exit;
+    end;
+    Arg := BodyObj(Body);
+    try
+      if Arg = nil then
+      begin
+        ReplyErr(Resp, 400, 'expected a JSON body');
+        Exit;
+      end;
+      if Action = 'note-delete' then
+      begin
+        if not DeleteNote(Arg.GetStr('name', ''), Err) then
+        begin
+          ReplyErr(Resp, 400, Err);
+          Exit;
+        end;
+        ReplyOK(Resp);
+        Exit;
+      end;
+      Slug := SaveNote(Arg.GetStr('name', ''), Arg.GetStr('title', ''),
+                       Arg.GetStr('body', ''), Err);
+      if Slug = '' then
+      begin
+        ReplyErr(Resp, 400, Err);
+        Exit;
+      end;
+      Root := TJsonObject.Create;
+      try
+        Root.PutStr('name', Slug);
+        ReplyJSON(Resp, 200, Root.ToJSON);
+      finally
+        Root.Free;
+      end;
+    finally
+      Arg.Free;
+    end;
+    Exit;
+  end;
+
+  (* Calendar: schedule and unschedule agent work.
+
+     This delegates to Tool_Cron -- the same handler the model's `cron` tool
+     uses -- rather than editing config.json here. One implementation means
+     the spec validation, the skill-must-exist check, and the raw-JSON edit
+     (which deliberately avoids baking an active profile's resolved values
+     into the file) are the ones already tested by test-cron-tool.
+
+     Note it calls the HANDLER, not the registered tool. `cron_tool_enabled`
+     gates whether the MODEL may schedule work unprompted; a person clicking
+     a button in their own calendar is a different actor asking a different
+     question, and gating the user behind a switch meant for the agent would
+     be a category error. *)
+  if (Action = 'cron-add') or (Action = 'cron-remove') then
+  begin
+    if Project <> 'calendar' then
+    begin
+      ReplyErr(Resp, 404, Action + ' belongs to the calendar app');
+      Exit;
+    end;
+    Arg := BodyObj(Body);
+    try
+      if Arg = nil then
+      begin
+        ReplyErr(Resp, 400, 'expected a JSON body');
+        Exit;
+      end;
+      { Rebuild the tool's argument object rather than forwarding the body:
+        the app names three fields and gets exactly three fields, so it
+        cannot smuggle a fourth (a channel target, say) into a handler that
+        would honour it. }
+      Root := TJsonObject.Create;
+      try
+        if Action = 'cron-add' then
+        begin
+          Root.PutStr('action', 'add');
+          Root.PutStr('spec',   Arg.GetStr('spec', ''));
+          Root.PutStr('skill',  Arg.GetStr('skill', ''));
+          Root.PutStr('args',   Arg.GetStr('args', ''));
+        end
+        else
+        begin
+          Root.PutStr('action', 'remove');
+          Root.PutStr('id',     Arg.GetStr('id', ''));
+        end;
+        Out_ := Tool_Cron(Root.ToJSON, Err);
+      finally
+        Root.Free;
+      end;
+      if Err <> '' then
+      begin
+        { The tool's own message names what was wrong -- a malformed spec, a
+          skill that isn't installed. Pass it through rather than replacing
+          it with something vaguer. }
+        ReplyErr(Resp, 400, Err);
+        Exit;
+      end;
+      Root := TJsonObject.Create;
+      try
+        Root.PutStr('result', Out_);
+        ReplyJSON(Resp, 200, Root.ToJSON);
+      finally
+        Root.Free;
+      end;
+    finally
+      Arg.Free;
+    end;
+    Exit;
+  end;
+
+  (* To Do: the user's list and the agent's board are the same board.
+
+     A task created here is an ordinary task in the todo project -- it shows
+     in the desktop tree, the agent can see it, and closing it closes the
+     same record. That unification is the plan's point; a private list in
+     app state would have been easier and would have meant nothing. *)
+  if (Action = 'task-add') or (Action = 'task-done') then
+  begin
+    if Project <> 'todo' then
+    begin
+      ReplyErr(Resp, 404, Action + ' belongs to the to-do app');
+      Exit;
+    end;
+    Arg := BodyObj(Body);
+    try
+      if Arg = nil then
+      begin
+        ReplyErr(Resp, 400, 'expected a JSON body');
+        Exit;
+      end;
+      if Action = 'task-add' then
+      begin
+        Slug := CreateTask('todo', Arg.GetStr('title', ''),
+                           Arg.GetStr('notes', ''), Err);
+        if Slug = '' then
+        begin
+          ReplyErr(Resp, 400, Err);
+          Exit;
+        end;
+        Root := TJsonObject.Create;
+        try
+          Root.PutStr('id', Slug);
+          ReplyJSON(Resp, 200, Root.ToJSON);
+        finally
+          Root.Free;
+        end;
+        Exit;
+      end;
+      if not UpdateTask('todo', Arg.GetStr('id', ''), '-', '-',
+                        Arg.GetStr('status', 'done'), Err) then
+      begin
+        ReplyErr(Resp, 400, Err);
+        Exit;
+      end;
+      ReplyOK(Resp);
+    finally
+      Arg.Free;
+    end;
+    Exit;
+  end;
+
   if Action = 'mail-sync' then
   begin
     { Scoped to the Mail app: any other project asking to fill the mail store
@@ -1313,7 +1706,7 @@ begin
         ReplyErr(Resp, 404, 'name an action');
         Exit;
       end;
-      Result := RunAppAction(Project, LowerCase(Segs[4]), Resp);
+      Result := RunAppAction(Project, LowerCase(Segs[4]), Body, Resp);
       Exit;
     end;
 
@@ -1329,7 +1722,7 @@ begin
         ReplyErr(Resp, 404, 'name a surface: cron, sessions, providers, pages, projects');
         Exit;
       end;
-      Result := ReadSurface(LowerCase(Segs[4]), Resp);
+      Result := ReadSurface(Project, LowerCase(Segs[4]), Resp);
       Exit;
     end;
 

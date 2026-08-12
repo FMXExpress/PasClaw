@@ -703,7 +703,14 @@ begin
     Obj.PutStr('created', NowIsoUtc);
   end;
   try
-    if Trim(ATitle)  <> '' then Obj.PutStr('title', Trim(ATitle));
+    { Two "leave this alone" spellings, because two callers grew them
+      independently: '' (nothing supplied) and '-' (the route layer's
+      explicit sentinel, since an absent JSON key must not clear text the
+      user wrote). Accept both for every field. Titling a task '-' is not a
+      thing anyone wants; silently wiping a title because a caller used the
+      other unit's sentinel is a thing that already happened once. }
+    if (Trim(ATitle) <> '') and (Trim(ATitle) <> '-') then
+      Obj.PutStr('title', Trim(ATitle));
     if Trim(AStatus) <> '' then Obj.PutStr('status', LowerCase(Trim(AStatus)));
     if ANotes <> '-' then Obj.PutStr('notes', ANotes);
     Obj.PutStr('updated', NowIsoUtc);

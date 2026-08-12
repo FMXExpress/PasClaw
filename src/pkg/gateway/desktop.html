@@ -2179,8 +2179,12 @@ window.addEventListener("message", async ev => {
       await api(url, { method: "DELETE" });
       reply({ value: true });
     } else if (m.op === "action") {
+      /* The arg rides as the body. We forward it verbatim -- the allowlist
+         and the argument validation both live on the server, so the broker
+         has no opinion to add and no chance to get one wrong. */
       const j = await api(`/v1/apps/${encodeURIComponent(project)}/action/` +
-                          encodeURIComponent(String(m.key || "")), { method: "POST" });
+                          encodeURIComponent(String(m.key || "")),
+                          { method: "POST", body: m.value || "" });
       reply({ value: j });
     } else if (m.op === "read") {
       /* The allowlist lives on the server; we just forward the name so an

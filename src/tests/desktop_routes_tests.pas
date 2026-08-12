@@ -22,6 +22,8 @@ uses
   PasClaw.Projects.Store,
   PasClaw.Apps,
   PasClaw.Pages,
+  PasClaw.Suite,
+  PasClaw.Suite.Notes,
   PasClaw.Gateway.Desktop;
 
 var
@@ -388,6 +390,109 @@ begin
                      'and says so in a form the app can render');
   ExpectTrue(IsAppScopedPath('/v1/apps/mail/action/mail-sync'),
              'actions are reachable from the apps origin');
+
+  { ------------------------------------------------- memory + notes -- }
+  (* The two surfaces that make Brain and Notes honest. Brain over its own
+     state store would be a notepad wearing the word "memory"; these assert
+     that the app is looking at the agent's own data and can change it. *)
+  ExpectStatus('GET', '/v1/apps/brain/read/memory', '', 200,
+               'the memory surface exists');
+  ExpectBodyContains('GET', '/v1/apps/brain/read/memory', '', '"surface":"memory"',
+                     'and is labelled');
+  ExpectStatus('POST', '/v1/apps/brain/action/memory-remember',
+               '{"text":"Ships on Fridays"}', 200, 'Brain can remember');
+  ExpectBodyContains('GET', '/v1/apps/brain/read/memory', '', 'Ships on Fridays',
+                     'and the fact comes back on the surface the app reads');
+
+  { Scope, again: these are the actions that edit what the assistant knows,
+    so the wrong project asking must get nowhere. }
+  ExpectStatus('POST', '/v1/apps/notes/action/memory-forget', '{"id":1}', 404,
+               'only Brain may forget');
+  ExpectStatus('POST', '/v1/apps/brain/action/note-save', '{"title":"x"}', 404,
+               'only Notes may write notes');
+  ExpectStatus('POST', '/v1/apps/brain/action/memory-forget', '{}', 400,
+               'forget needs to say which fact');
+
+  { Notes land as markdown in the memory directory -- that IS the feature,
+    so assert the file, not just the response. }
+  ExpectStatus('POST', '/v1/apps/notes/action/note-save',
+               '{"title":"Invoice terms","body":"Net 30."}', 200, 'note saved');
+  ExpectTrue(FileExists(JoinPath(NotesDir, 'invoice-terms.md')),
+             'a note is a markdown file the agent can read');
+  ExpectBodyContains('GET', '/v1/apps/notes/read/notes', '', 'Invoice terms',
+                     'and shows up on the notes surface');
+
+  (* The slug is the only path from a text box to a filename. Every one of
+     these must fail to name a file -- and they fail by not being in the
+     alphabet at all, which is why this is a whitelist and not a list of
+     traversal patterns to block. *)
+  ExpectStatus('POST', '/v1/apps/notes/action/note-save',
+               '{"name":"../../../../escaped","title":"x","body":"y"}', 400,
+               'ESCAPE: traversal in a note name');
+  ExpectStatus('POST', '/v1/apps/notes/action/note-save',
+               '{"name":"/etc/passwd","title":"x","body":"y"}', 400,
+               'ESCAPE: absolute path in a note name');
+  ExpectTrue(not FileExists(JoinPath(GetHome, 'escaped.md')),
+             'ESCAPE: nothing was written outside the notes directory');
+
+  { A title of pure punctuation still has to produce a usable filename
+    rather than '', which would resolve to the notes directory itself. }
+  ExpectTrue(SlugForNote('!!!') <> '', 'an unsluggable title still gets a name');
+  ExpectStr(SlugForNote('Hello, World!'), 'hello-world', 'ordinary slug');
+  ExpectStr(SlugForNote('  spaced  out  '), 'spaced-out', 'no leading/trailing dashes');
+
+  { Deleting twice is not an error -- the caller wanted it gone and it is. }
+  ExpectStatus('POST', '/v1/apps/notes/action/note-delete',
+               '{"name":"invoice-terms"}', 200, 'note deleted');
+  ExpectStatus('POST', '/v1/apps/notes/action/note-delete',
+               '{"name":"invoice-terms"}', 200, 'deleting it again is fine');
+
+  { ------------------------------------------- calendar + to-do actions -- }
+  { These two act on real records, so the suite has to be installed for
+    there to be anything to act on. }
+  SeedSuite(Err);
+  ExpectTrue(ProjectExists('todo'), 'the to-do app is a project');
+  (* Calendar schedules through Tool_Cron, so the interesting assertions are
+     that a bad schedule is REFUSED rather than silently accepted. A cron
+     entry with a malformed spec, or one naming a skill nobody installed,
+     never fires -- and a normal person has no way to discover that. *)
+  ExpectStatus('POST', '/v1/apps/calendar/action/cron-add',
+               '{"spec":"nonsense","skill":"whatever"}', 400,
+               'a malformed cron spec is refused');
+  ExpectStatus('POST', '/v1/apps/calendar/action/cron-add',
+               '{"spec":"0 9 * * 1","skill":"not-installed"}', 400,
+               'scheduling an uninstalled skill is refused');
+  ExpectStatus('POST', '/v1/apps/todo/action/cron-add',
+               '{"spec":"0 9 * * 1","skill":"x"}', 404,
+               'only Calendar may schedule');
+  ExpectStatus('GET', '/v1/apps/calendar/read/skills', '', 200,
+               'the skills surface exists so Calendar can offer a choice');
+
+  (* To Do writes to the REAL board -- that unification is the feature, so
+     assert against the store rather than the response. *)
+  ExpectStatus('POST', '/v1/apps/todo/action/task-add',
+               '{"title":"Renew the domain"}', 200, 'to-do adds a task');
+  ExpectBodyContains('GET', '/v1/projects/todo/tasks', '', 'Renew the domain',
+                     'and it is an ordinary task on the project board');
+  ExpectBodyContains('GET', '/v1/apps/todo/read/tasks', '', 'Renew the domain',
+                     'visible on the app surface too');
+  ExpectStatus('POST', '/v1/apps/calendar/action/task-add', '{"title":"x"}', 404,
+               'only To Do may add to its board');
+
+  { The tasks surface is scoped by the ROUTE, not by anything the app says --
+    an app cannot read another project's board by naming it. }
+  ExpectBodyContains('GET', '/v1/apps/calendar/read/tasks', '', '"items":[]',
+                     'the tasks surface is scoped to the calling app');
+
+  (* Ticking the checkbox must not wipe the title. It did once: the store
+     spells "leave this field alone" as '' for the title and '-' for the
+     notes, and a caller using the wrong one silently cleared the text. *)
+  ExpectStatus('POST', '/v1/apps/todo/action/task-done',
+               '{"id":"T0001","status":"done"}', 200, 'to-do closes a task');
+  ExpectBodyContains('GET', '/v1/apps/todo/read/tasks', '', 'Renew the domain',
+                     'closing a task keeps its title');
+  ExpectBodyContains('GET', '/v1/apps/todo/read/tasks', '', '"status":"done"',
+                     'and actually closes it');
 
   { The apps-origin split. IsAppScopedPath decides what the --apps-port
     listener will serve; everything it excludes is unreachable from an app's

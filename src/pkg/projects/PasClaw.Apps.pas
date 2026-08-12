@@ -439,8 +439,11 @@ begin
     '      }' + #10 +
     '      if (op === "action") {' + #10 +
     '        return fetch("/v1/apps/" + PROJECT + "/action/" +' + #10 +
-    '                     encodeURIComponent(key), { method: "POST" })' + #10 +
-    '          .then(function (r) { return r.json(); });' + #10 +
+    '                     encodeURIComponent(key),' + #10 +
+    '                     { method: "POST", body: value || "" })' + #10 +
+    '          .then(function (r) { return r.json().then(function (j) {' + #10 +
+    '            if (!r.ok) throw new Error(j.error || ("http " + r.status));' + #10 +
+    '            return j; }); });' + #10 +
     '      }' + #10 +
     '      var url = "/v1/apps/" + PROJECT + "/state/" + encodeURIComponent(key);' + #10 +
     '      if (op === "get") {' + #10 +
@@ -483,8 +486,14 @@ begin
     '       providers, pages, projects. Returns the items array. Anything' + #10 +
     '       else is refused server-side. */' + #10 +
     '    read: function (surface) { return ask("read", surface); },' + #10 +
-    '    /* Run one of the gateway ALLOWLISTED actions for this app. */' + #10 +
-    '    action: function (name) { return ask("action", name); }' + #10 +
+    '    /* Run one of the gateway ALLOWLISTED actions for this app. The' + #10 +
+    '       optional arg is sent as the JSON request body; the server' + #10 +
+    '       decides what each action accepts. Rejects with the server''s' + #10 +
+    '       own message so an app can show it rather than "failed". */' + #10 +
+    '    action: function (name, arg) {' + #10 +
+    '      return ask("action", name,' + #10 +
+    '                 arg === undefined ? "" : JSON.stringify(arg));' + #10 +
+    '    }' + #10 +
     '  };' + #10 +
     '})();' + #10;
 end;

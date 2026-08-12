@@ -88,13 +88,21 @@ const
     'textarea{width:100%;min-height:120px;resize:vertical}' +
     '</style>';
 
-  { Notes -- markdown files would be nicer, but the state store keeps this
-    honest about what an html app can do unaided. }
+  (* Notes -- markdown files under <workspace>/memory/notes.
+
+     Deliberately NOT the state store. A note kept in app state is invisible
+     to the agent; a note kept as markdown in the memory directory is
+     indexed by memory_search the moment it is saved. So writing a note here
+     is the cheapest way to tell PasClaw something durable, and that is the
+     app's entire reason to exist. *)
   NotesHTML =
     '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
     '<title>Notes</title>' + CommonCSS + '</head><body>' +
     '<h1>Notes</h1>' +
-    '<div class="row"><input type="text" id="t" placeholder="Note title">' +
+    '<div class="muted">Saved as markdown in workspace memory -- ' +
+    'PasClaw can read these.</div>' +
+    '<div class="row" style="margin-top:8px">' +
+    '<input type="text" id="t" placeholder="Note title">' +
     '<button id="add">New</button></div>' +
     '<div class="row"><select id="sel" style="flex:1 1 auto"></select>' +
     '<button id="del">Delete</button></div>' +
@@ -104,30 +112,50 @@ const
     '<script>' +
     'let notes=[],cur=-1,timer=null;' +
     'const $=s=>document.querySelector(s);' +
+    'async function load(sel){try{notes=await pasclaw.read("notes");}' +
+    'catch(e){notes=[];}' +
+    'cur=notes.length?Math.max(0,notes.findIndex(n=>n.name===sel)):-1;' +
+    'if(cur<0&&notes.length)cur=0;paint();}' +
     'function paint(){const sel=$("#sel");sel.innerHTML="";' +
     'notes.forEach((n,i)=>{const o=document.createElement("option");' +
-    'o.value=i;o.textContent=n.title||"(untitled)";sel.appendChild(o);});' +
+    'o.value=i;o.textContent=n.title||n.name;sel.appendChild(o);});' +
     'if(cur>=0&&cur<notes.length){sel.value=cur;$("#body").value=notes[cur].body||"";}' +
     'else $("#body").value="";}' +
-    'async function save(){await pasclaw.setJSON("notes",notes);' +
-    '$("#status").textContent="Saved "+new Date().toLocaleTimeString();}' +
+    { The slug comes back from the server -- an app names a note, never a
+      file -- so a new note has to adopt the name it was given. }
+    'async function save(){if(cur<0)return;const n=notes[cur];' +
+    'try{const r=await pasclaw.action("note-save",' +
+    '{name:n.name||"",title:n.title||"",body:$("#body").value});' +
+    'n.name=r.name;$("#status").textContent="Saved "+new Date().toLocaleTimeString();}' +
+    'catch(e){$("#status").textContent="Could not save: "+e.message;}}' +
     '$("#add").onclick=async()=>{const t=$("#t").value.trim()||"Untitled";' +
-    'notes.push({title:t,body:""});cur=notes.length-1;$("#t").value="";paint();await save();};' +
-    '$("#del").onclick=async()=>{if(cur<0)return;notes.splice(cur,1);' +
-    'cur=Math.min(cur,notes.length-1);paint();await save();};' +
+    '$("#t").value="";' +
+    'try{const r=await pasclaw.action("note-save",{title:t,body:""});' +
+    'await load(r.name);}catch(e){$("#status").textContent=e.message;}};' +
+    '$("#del").onclick=async()=>{if(cur<0)return;' +
+    'try{await pasclaw.action("note-delete",{name:notes[cur].name});' +
+    'await load(null);}catch(e){$("#status").textContent=e.message;}};' +
     '$("#sel").onchange=()=>{cur=parseInt($("#sel").value,10);paint();};' +
-    '$("#body").oninput=()=>{if(cur<0)return;notes[cur].body=$("#body").value;' +
-    'clearTimeout(timer);timer=setTimeout(save,600);};' +
-    '(async()=>{notes=await pasclaw.getJSON("notes",[]);' +
-    'if(notes.length)cur=0;paint();})();' +
+    '$("#body").oninput=()=>{if(cur<0)return;' +
+    'clearTimeout(timer);timer=setTimeout(save,700);};' +
+    'load(null);' +
     '</' + 'script></body></html>';
 
-  { Todo -- the user's own list, separate from the agent's task board. }
+  (* To Do -- the user's list and the agent's board, unified.
+
+     A task added here is an ordinary task in the todo project: it appears
+     in the desktop tree, the agent can list it with the `task` tool, and
+     closing it closes the same record. That is the point. A private list in
+     app state would have been three lines shorter and would have left the
+     user with two todo lists that know nothing about each other. *)
   TodoHTML =
     '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
     '<title>To Do</title>' + CommonCSS + '</head><body>' +
     '<h1>To Do</h1>' +
-    '<div class="row"><input type="text" id="t" placeholder="What needs doing?">' +
+    '<div class="muted">The same list PasClaw sees -- ask it to work one ' +
+    'and it knows which.</div>' +
+    '<div class="row" style="margin-top:8px">' +
+    '<input type="text" id="t" placeholder="What needs doing?">' +
     '<button id="add">Add</button></div>' +
     '<ul id="list"></ul>' +
     '<div class="muted" id="count">&nbsp;</div>' +
@@ -135,58 +163,86 @@ const
     '<script>' +
     'let items=[];' +
     'const $=s=>document.querySelector(s);' +
-    'async function save(){await pasclaw.setJSON("items",items);}' +
+    'async function load(){try{items=await pasclaw.read("tasks");}' +
+    'catch(e){items=[];$("#count").textContent="Could not read the board: "' +
+    '+e.message;return;}paint();}' +
     'function paint(){const ul=$("#list");ul.innerHTML="";' +
-    'items.forEach((it,i)=>{const li=document.createElement("li");' +
-    'if(it.done)li.className="done";' +
-    'const cb=document.createElement("input");cb.type="checkbox";cb.checked=!!it.done;' +
-    'cb.onchange=async()=>{it.done=cb.checked;paint();await save();};' +
-    'const sp=document.createElement("span");sp.className="txt";sp.textContent=it.text;' +
-    'const x=document.createElement("span");x.className="x";x.textContent=String.fromCharCode(0x2715);' +
-    'x.onclick=async()=>{items.splice(i,1);paint();await save();};' +
-    'li.appendChild(cb);li.appendChild(sp);li.appendChild(x);ul.appendChild(li);});' +
-    'const open=items.filter(i=>!i.done).length;' +
-    '$("#count").textContent=items.length?open+" open of "+items.length:"Nothing yet.";}' +
+    'items.forEach(it=>{const done=it.status==="done";' +
+    'const li=document.createElement("li");if(done)li.className="done";' +
+    'const cb=document.createElement("input");cb.type="checkbox";cb.checked=done;' +
+    'cb.onchange=async()=>{try{await pasclaw.action("task-done",' +
+    '{id:it.id,status:cb.checked?"done":"todo"});await load();}' +
+    'catch(e){$("#count").textContent=e.message;}};' +
+    'const sp=document.createElement("span");sp.className="txt";' +
+    'sp.textContent=it.title;' +
+    { The board has an "active" state the app has no checkbox for -- show
+      it rather than flattening the agent's work into done/not-done. }
+    'if(it.status==="active"){const w=document.createElement("span");' +
+    'w.className="muted";w.textContent="  (PasClaw is on it)";' +
+    'sp.appendChild(w);}' +
+    'li.appendChild(cb);li.appendChild(sp);ul.appendChild(li);});' +
+    'const open=items.filter(i=>i.status!=="done").length;' +
+    '$("#count").textContent=items.length?open+" open of "+items.length' +
+    ':"Nothing yet.";}' +
     '$("#add").onclick=async()=>{const v=$("#t").value.trim();if(!v)return;' +
-    'items.push({text:v,done:false});$("#t").value="";paint();await save();};' +
+    '$("#t").value="";' +
+    'try{await pasclaw.action("task-add",{title:v});await load();}' +
+    'catch(e){$("#count").textContent=e.message;}};' +
     '$("#t").addEventListener("keydown",e=>{if(e.key==="Enter")$("#add").click();});' +
-    '(async()=>{items=await pasclaw.getJSON("items",[]);paint();})();' +
+    'load();' +
     '</' + 'script></body></html>';
 
-  { Brain -- what the agent knows about you, as cards you can tear up. Reads
-    the same memory the agent reads, through the gateway. }
+  (* Brain -- the distilled facts the model is actually primed with.
+
+     This reads the SAME fact store the agent reads, so a card on screen is
+     a line in the system prompt. That equivalence is the whole app: tearing
+     up a card supersedes the fact, and the next turn genuinely does not
+     know it. A Brain over its own private list would be a notepad wearing
+     the word "memory". *)
   BrainHTML =
     '<!doctype html><html lang="en"><head><meta charset="utf-8">' +
     '<title>Brain</title>' + CommonCSS + '</head><body>' +
     '<h1>Brain</h1>' +
-    '<div class="muted">What PasClaw remembers. Notes you add here are ' +
-    'written to workspace memory, so the agent can recall them.</div>' +
+    '<div class="muted">What PasClaw remembers about you. These are the ' +
+    'facts it carries into every conversation -- tear one up and it ' +
+    'forgets.</div>' +
     '<div class="row" style="margin-top:8px">' +
     '<input type="text" id="t" placeholder="Something to remember">' +
     '<button id="add">Remember</button></div>' +
     '<ul id="list"></ul>' +
+    '<div class="muted" id="note">&nbsp;</div>' +
     '<script src="pasclaw.js"></' + 'script>' +
     '<script>' +
     'let facts=[];' +
     'const $=s=>document.querySelector(s);' +
-    'async function save(){await pasclaw.setJSON("facts",facts);}' +
+    'async function load(){try{facts=await pasclaw.read("memory");}' +
+    'catch(e){facts=[];$("#note").textContent="Could not read memory: "' +
+    '+e.message;}paint();}' +
     'function paint(){const ul=$("#list");ul.innerHTML="";' +
     'if(!facts.length){const li=document.createElement("li");' +
-    'li.className="muted";li.textContent="Nothing yet.";ul.appendChild(li);return;}' +
-    'facts.forEach((f,i)=>{const li=document.createElement("li");' +
+    'li.className="muted";' +
+    'li.textContent="Nothing remembered yet. PasClaw fills this in as you ' +
+    'talk to it, or you can add something above.";' +
+    'ul.appendChild(li);return;}' +
+    'facts.forEach(f=>{const li=document.createElement("li");' +
     'const sp=document.createElement("span");sp.className="txt";' +
     'sp.textContent=f.text+"  ";' +
-    'const w=document.createElement("span");w.className="muted";w.textContent=f.when||"";' +
+    'const w=document.createElement("span");w.className="muted";' +
+    'w.textContent=[f.scope,f.event_date||f.expires||""].' +
+    'filter(Boolean).join(" ");' +
     'sp.appendChild(w);' +
-    'const x=document.createElement("span");x.className="x";x.textContent=String.fromCharCode(0x2715);' +
-    'x.title="Forget this";' +
-    'x.onclick=async()=>{facts.splice(i,1);paint();await save();};' +
+    'const x=document.createElement("span");x.className="x";' +
+    'x.textContent=String.fromCharCode(0x2715);x.title="Forget this";' +
+    'x.onclick=async()=>{try{await pasclaw.action("memory-forget",{id:f.id});' +
+    'await load();}catch(e){$("#note").textContent=e.message;}};' +
     'li.appendChild(sp);li.appendChild(x);ul.appendChild(li);});}' +
     '$("#add").onclick=async()=>{const v=$("#t").value.trim();if(!v)return;' +
-    'facts.push({text:v,when:new Date().toISOString().slice(0,10)});' +
-    '$("#t").value="";paint();await save();};' +
+    '$("#t").value="";' +
+    'try{await pasclaw.action("memory-remember",{text:v});await load();' +
+    '$("#note").textContent="";}' +
+    'catch(e){$("#note").textContent=e.message;}};' +
     '$("#t").addEventListener("keydown",e=>{if(e.key==="Enter")$("#add").click();});' +
-    '(async()=>{facts=await pasclaw.getJSON("facts",[]);paint();})();' +
+    'load();' +
     '</' + 'script></body></html>';
 
   { Calendar -- the agent's scheduled work, as a month you can read. Cron is
@@ -212,6 +268,17 @@ const
     '<th>Sat</th><th>Sun</th></tr></thead><tbody id="grid"></tbody></table>' +
     '<h1 style="margin-top:10px">Scheduled</h1>' +
     '<ul id="jobs"></ul>' +
+    '<div class="row">' +
+    '<select id="sk" title="Which skill to run"></select>' +
+    '<select id="wd" title="How often">' +
+    '<option value="*">Every day</option>' +
+    '<option value="1">Mondays</option><option value="2">Tuesdays</option>' +
+    '<option value="3">Wednesdays</option><option value="4">Thursdays</option>' +
+    '<option value="5">Fridays</option><option value="6">Saturdays</option>' +
+    '<option value="0">Sundays</option></select>' +
+    '<input type="time" id="tm" value="09:00" style="flex:0 0 auto">' +
+    '<button id="sched">Schedule</button></div>' +
+    '<div class="muted" id="snote">&nbsp;</div>' +
     '<div class="row" style="margin-top:8px">' +
     '<input type="text" id="t" placeholder="Note for the selected day">' +
     '<button id="add">Add</button></div>' +
@@ -256,9 +323,30 @@ const
     '$("#add").onclick=async()=>{const v=$("#t").value.trim();' +
     'if(!v)return;const k=sel||key(new Date());' +
     '(notes[k]=notes[k]||[]).push(v);$("#t").value="";paint();await save();};' +
+    { A cron entry that names a skill nobody installed is an entry that
+      silently never fires, so offer the installed set rather than a text
+      box the user can get wrong. }
+    'async function loadSkills(){let sk=[];' +
+    'try{sk=await pasclaw.read("skills");}catch(e){}' +
+    'const el=$("#sk");el.innerHTML="";' +
+    'if(!sk.length){const o=document.createElement("option");' +
+    'o.textContent="(no skills installed)";o.value="";el.appendChild(o);' +
+    '$("#sched").disabled=true;return;}' +
+    'sk.forEach(s=>{const o=document.createElement("option");' +
+    'o.value=s.name;o.textContent=s.name;o.title=s.description||"";' +
+    'el.appendChild(o);});}' +
+    'async function loadCrons(){try{crons=await pasclaw.read("cron");}' +
+    'catch(e){crons=[];}paintJobs();}' +
+    { Build the 5-field spec from the two pickers. The server validates it
+      again -- this is convenience, not the check. }
+    '$("#sched").onclick=async()=>{const sk=$("#sk").value;if(!sk)return;' +
+    'const t=($("#tm").value||"09:00").split(":");' +
+    'const spec=parseInt(t[1],10)+" "+parseInt(t[0],10)+" * * "+$("#wd").value;' +
+    'try{await pasclaw.action("cron-add",{spec:spec,skill:sk,args:""});' +
+    '$("#snote").textContent="Scheduled "+sk+" ("+spec+")";await loadCrons();}' +
+    'catch(e){$("#snote").textContent=e.message;}};' +
     '(async()=>{notes=await pasclaw.getJSON("notes",{});' +
-    'try{crons=await pasclaw.read("cron");}catch(e){crons=[];}' +
-    'paint();paintJobs();})();' +
+    'await loadSkills();await loadCrons();paint();})();' +
     '</' + 'script></body></html>';
 
   { Library -- everything ever made, searchable: generated pages, past
