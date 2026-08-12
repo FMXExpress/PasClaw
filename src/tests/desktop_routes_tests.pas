@@ -365,6 +365,46 @@ begin
   ExpectBodyContains('GET', '/v1/apps/spam-filter/read/providers', '',
                      '"surface":"providers"', 'providers surface labelled');
 
+  { The apps-origin split. IsAppScopedPath decides what the --apps-port
+    listener will serve; everything it excludes is unreachable from an app's
+    own origin, which is the whole point of the second listener. }
+  ExpectTrue(IsAppScopedPath('/v1/apps/spam-filter/state/rules'),
+             'an app may reach its own state');
+  ExpectTrue(IsAppScopedPath('/v1/apps/spam-filter/read/cron'),
+             'an app may reach its read window');
+  ExpectTrue(not IsAppScopedPath('/v1/apps/spam-filter'),
+             'the manifest is desktop business, not app business');
+  ExpectTrue(not IsAppScopedPath('/v1/apps/spam-filter/run'),
+             'an app may NOT start a process');
+  ExpectTrue(not IsAppScopedPath('/v1/projects'),
+             'an app may NOT read the board');
+  ExpectTrue(not IsAppScopedPath('/v1/config'),
+             'an app may NOT read config');
+  ExpectTrue(not IsAppScopedPath('/v1/chat/completions'),
+             'an app may NOT talk to the model');
+
+  { The desktop learns the arrangement rather than guessing it. }
+  ExpectStatus('GET', '/v1/desktop/config', '', 200, 'desktop config route');
+  ExpectBodyContains('GET', '/v1/desktop/config', '', '"apps_isolated":false',
+                     'a single-listener gateway reports apps are NOT isolated');
+  SetAppsOrigin('http://127.0.0.1:9999');
+  ExpectBodyContains('GET', '/v1/desktop/config', '', '"apps_isolated":true',
+                     'and reports isolation once an apps origin is set');
+  ExpectBodyContains('GET', '/v1/desktop/config', '', '127.0.0.1:9999',
+                     'carrying the origin the client must use');
+  SetAppsOrigin('');
+
+  { When apps live on their own origin the desktop must still be allowed to
+    frame them, or the isolation would break the product. }
+  ExpectTrue(Pos('frame-ancestors ''self''',
+                 AppContentSecurityPolicy(akHtml)) > 0,
+             'by default only same-origin framing');
+  SetFrameParentOrigin('http://127.0.0.1:8910');
+  ExpectTrue(Pos('frame-ancestors ''self'' http://127.0.0.1:8910',
+                 AppContentSecurityPolicy(akHtml)) > 0,
+             'the desktop origin is named once apps are isolated');
+  SetFrameParentOrigin('');
+
   { The virtual SDK is served per project and carries that project's name. }
   if Req('GET', '/apps/spam-filter/pasclaw.js', '', R) then
   begin

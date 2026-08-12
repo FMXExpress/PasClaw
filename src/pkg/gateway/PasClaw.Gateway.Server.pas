@@ -128,6 +128,17 @@ type
     FMCPAllowMutating: Boolean;
     FMCPAllowList:     array of string;
     FMCPOnly:          Boolean;
+    (* Apps-only listener. When a gateway is spun up with --apps-port, this
+       second listener serves ONLY generated app content -- /apps/*, /pages/*,
+       and each app's own state + read surface -- and 404s everything else.
+
+       The point is the ORIGIN, not the routes. An `html` app served from the
+       same origin as /desktop is same-origin with the desktop page, which
+       means it can read the operator's bearer token out of the desktop's
+       localStorage. Served from a different port it is a different origin:
+       separate storage, no reach into the desktop's DOM, and the postMessage
+       broker still works because postMessage is cross-origin by design. *)
+    FAppsOnly:         Boolean;
     function  GetOrCreateMCPInbound: TMCPServerCore;
     procedure HandleMCPRequest(ARequest: TIdHTTPRequestInfo;
                                 AResp: TIdHTTPResponseInfo);
@@ -471,6 +482,7 @@ type
       the MCP surface so a heavy /v1/responses streaming load
       can't compete with MCP requests for Indy worker threads. }
     procedure SetMCPOnly(V: Boolean);
+    procedure SetAppsOnly(V: Boolean);
     procedure Start(const BindAddr: string; Port: Integer);
     procedure Stop;
     procedure WaitForStop;
@@ -1031,6 +1043,11 @@ begin
   FMCPOnly := V;
 end;
 
+procedure TGatewayServer.SetAppsOnly(V: Boolean);
+begin
+  FAppsOnly := V;
+end;
+
 function TGatewayServer.GetOrCreateMCPInbound: TMCPServerCore;
 begin
   FMCPInboundLock.Acquire;
@@ -1360,6 +1377,35 @@ begin
     else 404s -- the operator wired the second listener for
     isolation, and silently fanning out /v1/chat traffic to it
     would defeat the purpose. }
+  (* Apps-only listener: generated-app content and nothing else. The list
+     is deliberately short and checked by prefix -- adding a route here
+     widens what model-authored code can reach from its own origin, so it
+     should be a deliberate edit. Note what is NOT here: /v1/chat, /v1/config,
+     /v1/fs, the project board, and the desktop page itself. *)
+  if FAppsOnly then
+  begin
+    if HasPrefix(Doc, '/apps/') or HasPrefix(Doc, '/pages/') or
+       IsAppScopedPath(Doc) then
+    begin
+      if not HandleDesktop(ARequest, AResponse, Doc) then
+        WriteJSON(AResponse, 404, '{"error":"not found"}');
+    end
+    else if (ARequest.Command = 'GET') and (Doc = '/v1/health') then
+      HandleHealth(AResponse)
+    else if Doc = '/favicon.ico' then
+    begin
+      AResponse.ResponseNo  := 200;
+      AResponse.ContentType := 'image/svg+xml';
+      WriteBodyStream(AResponse,
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">' +
+        '<rect width="16" height="16" fill="#c0c0c0" stroke="#000"/></svg>');
+    end
+    else
+      WriteJSON(AResponse, 404,
+        '{"error":"apps-only listener; app content is served here, the API is not"}');
+    Exit;
+  end;
+
   if FMCPOnly then
   begin
     if (ARequest.Command = 'POST') and

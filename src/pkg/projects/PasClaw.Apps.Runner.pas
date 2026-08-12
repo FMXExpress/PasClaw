@@ -427,7 +427,15 @@ begin
     Result := 'python3 ' + Info.Entry;
   end;
   if Result = '' then
+  begin
     Err := 'app.json has no "run" command for this kind';
+    Exit;
+  end;
+  (* The port isn't claimed until the app starts, so show a placeholder a
+     person reads as one -- the raw brace token in a consent prompt looks
+     like the command is broken. Paren-star: the token itself would close a
+     curly-brace comment. *)
+  Result := StringReplace(Result, '{port}', '<port>', [rfReplaceAll, rfIgnoreCase]);
 end;
 
 function StartApp(const Project: string; Consented: Boolean;

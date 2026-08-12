@@ -53,9 +53,24 @@ type
 procedure SetJobRunner(Runner: TJobRunner);
 procedure SetPageGenerator(Gen: TPageGenerator);
 
+(* The origin generated apps are served from. Empty (the default) means "the
+   same origin as everything else", which is the simple arrangement and the
+   one where an app shares storage with the desktop page. Set by the gateway
+   when --apps-port spins up a separate listener; the desktop reads it from
+   /v1/desktop/config and points its iframes there. *)
+procedure SetAppsOrigin(const Origin: string);
+function AppsOrigin: string;
+
 { True when Doc is a path this unit owns -- used by the gateway to decide
   whether to consult us at all (and to keep auth gating in one place). }
 function IsDesktopPath(const Doc: string): Boolean;
+
+(* True for the per-app routes an app may call FROM ITS OWN ORIGIN: its state
+   store and its allowlisted read window. The apps-only listener (--apps-port)
+   serves these and nothing else, so an app opened standalone on that origin
+   can still persist its data without being able to reach /v1/chat, the
+   project board, or the desktop's stored token. *)
+function IsAppScopedPath(const Doc: string): Boolean;
 
 { Handle a request. Returns False when the path isn't ours. Method is
   'GET'/'POST'/'PATCH'/'DELETE'; Doc is the path with no query string;
@@ -79,6 +94,7 @@ uses
 var
   GJobRunner: TJobRunner = nil;
   GPageGen: TPageGenerator = nil;
+  GAppsOrigin: string = '';
 
 procedure SetJobRunner(Runner: TJobRunner);
 begin
@@ -88,6 +104,16 @@ end;
 procedure SetPageGenerator(Gen: TPageGenerator);
 begin
   GPageGen := Gen;
+end;
+
+procedure SetAppsOrigin(const Origin: string);
+begin
+  GAppsOrigin := Origin;
+end;
+
+function AppsOrigin: string;
+begin
+  Result := GAppsOrigin;
 end;
 
 { ---------------------------------------------------------------- helpers -- }
@@ -316,9 +342,30 @@ end;
 
 { --------------------------------------------------------------- routing -- }
 
+function IsAppScopedPath(const Doc: string): Boolean;
+var
+  Segs: TStringList;
+  Tail: string;
+begin
+  Result := False;
+  if not HasPrefix(Doc, '/v1/apps/') then Exit;
+  Segs := PathSegments(Doc);
+  try
+    { v1 / apps / <project> / (state|read) [/ <key>] -- the manifest route
+      (3 segments) is deliberately NOT included: it carries the declared
+      permissions and window geometry, which is desktop business. }
+    if Segs.Count < 4 then Exit;
+    Tail := LowerCase(Segs[3]);
+    Result := (Tail = 'state') or (Tail = 'read');
+  finally
+    Segs.Free;
+  end;
+end;
+
 function IsDesktopPath(const Doc: string): Boolean;
 begin
-  Result := HasPrefix(Doc, '/v1/workspaces')
+  Result := (Doc = '/v1/desktop/config')
+         or HasPrefix(Doc, '/v1/workspaces')
          or HasPrefix(Doc, '/v1/projects')
          or HasPrefix(Doc, '/v1/apps')
          or HasPrefix(Doc, '/v1/pages')
@@ -1566,13 +1613,40 @@ end;
 
 { ------------------------------------------------------------------ entry -- }
 
+{ The machine app processes actually run on. The desktop shows this so a
+  user opening a remote gateway knows a "local" app is not on their laptop. }
+function LocalHostName: string;
+begin
+  Result := GetEnvironmentVariable('HOSTNAME');
+  if Result = '' then Result := GetEnvironmentVariable('COMPUTERNAME');
+  if Result = '' then Result := 'this host';
+end;
+
 function DesktopRoute(const Method, Doc, Query, Body: string;
   out Resp: TDesktopResponse): Boolean;
 var
   M: string;
+  Root: TJsonObject;
 begin
   Reply(Resp, 404, 'application/json; charset=utf-8', '{"error":"not found"}');
   M := UpperCase(Trim(Method));
+
+  { GET /v1/desktop/config -- what the client needs to know about THIS
+    gateway before it renders: where apps are served from, and whether that
+    is a separate origin. }
+  if (Doc = '/v1/desktop/config') and (M = 'GET') then
+  begin
+    Root := TJsonObject.Create;
+    try
+      Root.PutStr ('apps_origin',   GAppsOrigin);
+      Root.PutBool('apps_isolated', GAppsOrigin <> '');
+      Root.PutStr ('host',          LocalHostName);
+      ReplyJSON(Resp, 200, Root.ToJSON);
+    finally
+      Root.Free;
+    end;
+    Exit(True);
+  end;
 
   if HasPrefix(Doc, '/v1/workspaces') then
     Exit(RouteWorkspaces(M, Doc, Body, Resp));

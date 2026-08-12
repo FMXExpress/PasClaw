@@ -39,6 +39,8 @@ uses
   PasClaw.Tools.SendMessage,
   PasClaw.Tools.Cron,             { cron tool -- gated on cron_tool_enabled }
   PasClaw.Projects.Tools,         { project / task -- the desktop board }
+  PasClaw.Gateway.Desktop,        { SetAppsOrigin -- the apps listener's origin }
+  PasClaw.Apps,                   { SetFrameParentOrigin -- who may frame apps }
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
@@ -100,6 +102,9 @@ type
       share the gateway's tool registry so memory_search /
       kb_search / session_search are one source of truth. }
     MCPPort:        Integer;
+    { --apps-port: a second listener that serves generated app content from
+      its OWN ORIGIN, so an app cannot read the desktop's stored token. }
+    AppsPort:       Integer;
     MCPAllowWrite:  Boolean;
   end;
 
@@ -133,6 +138,7 @@ begin
   Result.NoTools       := False;
   Result.NoHashline    := False;
   Result.MCPPort       := 0;
+  Result.AppsPort      := 0;
   Result.MCPAllowWrite := False;
   i := 0;
   while i <= High(Argv) do
@@ -163,6 +169,7 @@ begin
     if Argv[i] = '--no-tools'     then begin Result.NoTools    := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline'  then begin Result.NoHashline := True; Inc(i); Continue; end;
     if Argv[i] = '--mcp-port'     then begin if i < High(Argv) then Result.MCPPort := StrToIntDef(Argv[i + 1], 0); Inc(i, 2); Continue; end;
+    if Argv[i] = '--apps-port'    then begin if i < High(Argv) then Result.AppsPort := StrToIntDef(Argv[i + 1], 0); Inc(i, 2); Continue; end;
     if Argv[i] = '--mcp-allow-write' then begin Result.MCPAllowWrite := True; Inc(i); Continue; end;
     Inc(i);
   end;
@@ -176,7 +183,7 @@ var
   Err: string;
   Reg: TToolRegistry;
   MCPClients: TMCPClientList;
-  Server, MCPServer: TGatewayServer;
+  Server, MCPServer, AppsServer: TGatewayServer;
   Telegram: TTelegramChannel;
   Line: TLineBot;
   WhatsApp: TWhatsAppBot;
@@ -335,6 +342,17 @@ begin
       MCPServer.SetMCPAllowMutating(Args.MCPAllowWrite);
       MCPServer.SetMCPOnly(True);
     end;
+    (* Optional apps origin. Generated apps are model-authored code; served
+       from the main port they are same-origin with /desktop and can read the
+       operator's token out of its localStorage. A second port is a second
+       origin, which is the actual fix -- separate storage, no reach into the
+       desktop's DOM, and postMessage still crosses freely. *)
+    AppsServer := nil;
+    if Args.AppsPort > 0 then
+    begin
+      AppsServer := TGatewayServer.Create(Cfg, Provider, Reg);
+      AppsServer.SetAppsOnly(True);
+    end;
     Telegram := nil;
     Line     := nil;
     WhatsApp := nil;
@@ -409,12 +427,28 @@ begin
       Server.Start(Args.Addr, Args.Port);
       if MCPServer <> nil then
         MCPServer.Start(Args.Addr, Args.MCPPort);
+      if AppsServer <> nil then
+      begin
+        AppsServer.Start(Args.Addr, Args.AppsPort);
+        { The desktop needs to know where to point its iframes. Publishing it
+          here rather than letting the client guess means a mismatch is a
+          visible configuration error, not a silent fallback to the insecure
+          same-origin arrangement. }
+        SetAppsOrigin(Format('http://%s:%d', [Args.Addr, Args.AppsPort]));
+        { ...and tell the app listener which single origin may frame its
+          content, or its own frame-ancestors rule would lock the desktop
+          out of displaying the apps it owns. }
+        SetFrameParentOrigin(Format('http://%s:%d', [Args.Addr, Args.Port]));
+      end;
 
       PrintLn(Ansi.Bold + 'Gateway up.' + Ansi.Reset);
       PrintLn(Format('  http://%s:%d/v1/health', [Args.Addr, Args.Port]));
       PrintLn(Format('  http://%s:%d/v1/tools',  [Args.Addr, Args.Port]));
       PrintLn(Format('  POST http://%s:%d/v1/chat   {"message":"..."}',
                      [Args.Addr, Args.Port]));
+      if AppsServer <> nil then
+        PrintLn(Format('  http://%s:%d/apps/   (apps origin -- generated apps served here)',
+                       [Args.Addr, Args.AppsPort]));
       if MCPServer <> nil then
         PrintLn(Format('  POST http://%s:%d/mcp   (dedicated MCP listener)',
                        [Args.Addr, Args.MCPPort]))
@@ -464,6 +498,7 @@ begin
       if MCPServer <> nil then MCPServer.Stop;
       Server.Free;
       if MCPServer <> nil then MCPServer.Free;
+      if AppsServer <> nil then AppsServer.Free;
       if Scheduler <> nil then Scheduler.Free;
       FreeMCPClients(MCPClients);
       if Reg <> nil then Reg.Free;

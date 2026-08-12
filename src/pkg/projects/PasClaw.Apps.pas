@@ -115,6 +115,14 @@ function AppSDK(const Project: string): string;
   reach any other origin. Neither may be framed by a foreign site. }
 function AppContentSecurityPolicy(Kind: TAppKind): string;
 
+(* The origin allowed to FRAME app content, besides the app's own.
+
+   When apps are served from their own port (the isolated arrangement), the
+   desktop is a different origin -- so a bare `frame-ancestors 'self'` would
+   stop the desktop displaying its own apps. This names the one page that may
+   embed them. Empty (the default) keeps the strict same-origin rule. *)
+procedure SetFrameParentOrigin(const Origin: string);
+
 { ---- per-app state store ---- }
 
 function StateGet(const Project, Key: string; out Value: string): Boolean;
@@ -151,6 +159,10 @@ const
 
   MaxStateValue = 1024 * 1024;      { 1 MiB per key }
   MaxBlueprintFile = 512 * 1024;    { skip anything bigger when exporting }
+
+var
+  { The desktop's origin, when apps are served from a separate one. }
+  GFrameParent: string = '';
 
 function AppKindToStr(K: TAppKind): string;
 begin
@@ -470,16 +482,26 @@ begin
     '})();' + #10;
 end;
 
+procedure SetFrameParentOrigin(const Origin: string);
+begin
+  GFrameParent := Origin;
+end;
+
 function AppContentSecurityPolicy(Kind: TAppKind): string;
+var
+  Ancestors: string;
 begin
   { Common to both: no plugins, no base-tag rewriting, no foreign framing,
     and no form posts anywhere. Images/styles may be inline or data: URIs. }
+  Ancestors := '''self''';
+  if GFrameParent <> '' then
+    Ancestors := Ancestors + ' ' + GFrameParent;
   Result := 'default-src ''none''; ' +
             'img-src ''self'' data: blob:; ' +
             'style-src ''self'' ''unsafe-inline''; ' +
             'font-src ''self'' data:; ' +
             'base-uri ''none''; form-action ''none''; ' +
-            'frame-ancestors ''self''';
+            'frame-ancestors ' + Ancestors;
   case Kind of
     akPage:
       { A page is a document. No scripts at all, and no network of any kind --

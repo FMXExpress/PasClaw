@@ -1122,7 +1122,12 @@ async function api(path, opts = {}) {
   try { json = text ? JSON.parse(text) : null; } catch { /* not json */ }
   if (!r.ok) {
     const msg = (json && json.error) || text || ("http " + r.status);
-    const e = new Error(msg); e.status = r.status; throw e;
+    const e = new Error(msg);
+    e.status = r.status;
+    /* Carry the whole body: a 409 consent refusal returns the command the
+       caller must show before asking again. */
+    e.detail = json;
+    throw e;
   }
   return json;
 }
@@ -1136,7 +1141,22 @@ const S = {
   projects: [], tree: {},          /* project -> { open, tasks: [...] } */
   selected: null,
   styles: [], style: "Win95",
+  /* Where generated apps are served from. Empty means the same origin as
+     this page -- workable, but then an app shares localStorage with the
+     desktop. A gateway started with --apps-port reports a separate origin
+     here and app frames go there instead. */
+  appsOrigin: "", appsIsolated: false,
+  /* The machine app PROCESSES run on. Not necessarily this machine: open a
+     remote gateway and a "local" app is local to the server, not to you.
+     The UI says so rather than letting the desktop metaphor imply it. */
+  host: "",
 };
+
+/* Absolute URL for an app's content, honouring the apps origin. */
+function appURL(project, suffix) {
+  return (S.appsOrigin || "") + "/apps/" + encodeURIComponent(project) +
+         "/" + (suffix || "");
+}
 
 const $  = (s, r = document) => r.querySelector(s);
 const el = (tag, cls, txt) => {
@@ -2178,8 +2198,10 @@ async function openApp(project) {
   catch (e) { alert(e.message); return; }
   if (!app.exists) { alert("This project has no app yet."); return; }
   if (!app.servable) {
-    alert(`This app is kind "${app.kind}", which runs as a process rather than in a window.\n` +
-          `Open its project chat and ask PasClaw to run it.`);
+    /* A process kind. It does not render in a window -- it RUNS, on the
+       machine the gateway is on. That distinction matters enough to have its
+       own window rather than an alert. */
+    openProcessApp(project, app);
     return;
   }
   /* Declared permissions are shown before the app is opened, not buried in
@@ -2202,7 +2224,7 @@ async function openApp(project) {
   frame.addEventListener("load", () => {
     if (frame.contentWindow) FRAME_PROJECT.set(frame.contentWindow, project);
   });
-  frame.src = "/apps/" + encodeURIComponent(project) + "/?t=" + Date.now();
+  frame.src = appURL(project) + "?t=" + Date.now();
   w.body.appendChild(frame);
   /* Register the frame NOW, not on load: the SDK inside the app posts its
      first state read while the document is still parsing, which is before
@@ -2215,7 +2237,7 @@ async function openApp(project) {
   const bar = el("div", "statusbar thin");
   const reload = el("button", "btn", "Reload");
   reload.addEventListener("click", () => {
-    frame.src = "/apps/" + encodeURIComponent(project) + "/?t=" + Date.now();
+    frame.src = appURL(project) + "?t=" + Date.now();
     if (frame.contentWindow) FRAME_PROJECT.set(frame.contentWindow, project);
   });
   bar.appendChild(reload);
@@ -2224,6 +2246,126 @@ async function openApp(project) {
   bar.appendChild(chat);
   bar.appendChild(el("span", "muted", app.kind + (app.network ? " -- net: " + app.network : "")));
   w.node.appendChild(bar);
+  return w;
+}
+
+/* A process app: python / fpc / delphi. These are not documents, so there is
+   nothing to render -- the window is a control panel. It states plainly WHERE
+   the process runs, because the desktop metaphor otherwise implies "here",
+   and with a remote gateway that is wrong. */
+async function openProcessApp(project, app) {
+  const w = createWindow({
+    key: "proc:" + project, title: (app.name || project) + " -- Run",
+    width: 520, height: 340, icon: "app", pad: false,
+  });
+
+  const head = el("div");
+  head.style.cssText = "padding:6px 6px 0";
+  head.appendChild(el("div", null, `${app.name || project}  [${app.kind}]`));
+  const where = el("div", "muted",
+    S.host ? `Runs on the PasClaw host: ${S.host}` : "Runs on the PasClaw host");
+  head.appendChild(where);
+  const cmd = el("div", "muted", "");
+  cmd.style.cssText = "font-family:monospace;word-break:break-all;margin-top:3px";
+  head.appendChild(cmd);
+  if (app.network) head.appendChild(el("div", "muted", "declares network: " + app.network));
+  if (app.env) head.appendChild(el("div", "muted",
+    "expects env: " + app.env + "  (put these in the project's app/.env)"));
+  w.body.appendChild(head);
+
+  const bar = el("div");
+  bar.style.cssText = "display:flex;gap:4px;padding:6px";
+  const runBtn = el("button", "btn", "Run");
+  const stopBtn = el("button", "btn", "Stop");
+  const openBtn = el("button", "btn", "Open");
+  openBtn.disabled = true;
+  const state = el("span", "muted", "");
+  state.style.cssText = "align-self:center;margin-left:6px";
+  bar.appendChild(runBtn); bar.appendChild(stopBtn);
+  bar.appendChild(openBtn); bar.appendChild(state);
+  w.body.appendChild(bar);
+
+  const log = el("div", "log in");
+  log.style.cssText = "margin:0 6px 6px;height:calc(100% - 132px);" +
+                      "white-space:pre-wrap;font-family:monospace;font-size:11px";
+  w.body.appendChild(log);
+
+  let url = null;
+  function render(info) {
+    state.textContent = info.state + (info.port ? `  port ${info.port}` : "");
+    cmd.textContent = info.command || app.run_command || "";
+    runBtn.disabled = info.state === "running";
+    stopBtn.disabled = info.state !== "running";
+    url = info.url || (info.port ? `http://127.0.0.1:${info.port}/` : null);
+    openBtn.disabled = !url;
+  }
+
+  async function refresh() {
+    try {
+      const m = await api("/v1/apps/" + project);
+      render({ state: m.run_state || "stopped", port: m.run_port || 0,
+               command: m.run_command, url: m.run_url });
+      const l = await api(`/v1/apps/${project}/runlog`);
+      const atEnd = log.scrollTop + log.clientHeight >= log.scrollHeight - 4;
+      log.textContent = l.log || "";
+      if (atEnd) log.scrollTop = log.scrollHeight;
+    } catch {}
+  }
+
+  runBtn.addEventListener("click", async () => {
+    runBtn.disabled = true;
+    try {
+      /* First ask WITHOUT confirm: the gateway answers 409 with the exact
+         command, which is what we show the user. Consent to a hidden command
+         is not consent. */
+      let planned = app.run_command || "";
+      try {
+        await api(`/v1/apps/${project}/run`, { method: "POST", body: {} });
+      } catch (e) {
+        if (e.status === 409 && e.detail && e.detail.command) planned = e.detail.command;
+      }
+      const lines = [
+        `Run this app?`, ``,
+        `  ${planned || "(command unknown)"}`, ``,
+        S.host ? `It runs on the PasClaw host (${S.host}), not necessarily on this machine.`
+               : `It runs on the PasClaw host, not necessarily on this machine.`,
+      ];
+      if (app.network) lines.push(``, `It declares network access to: ${app.network}`);
+      if (!confirm(lines.join("\n"))) { runBtn.disabled = false; return; }
+      const info = await api(`/v1/apps/${project}/run`,
+                            { method: "POST", body: { confirm: true } });
+      render(info);
+      /* An app that serves HTTP is worth opening straight away. */
+      if (info.url) openBtn.click();
+    } catch (e) {
+      log.textContent += "\n" + e.message;
+    }
+    refresh();
+  });
+
+  stopBtn.addEventListener("click", async () => {
+    try { await api(`/v1/apps/${project}/stop`, { method: "POST" }); } catch (e) {}
+    refresh();
+  });
+
+  openBtn.addEventListener("click", () => {
+    if (!url) return;
+    /* A process app that serves HTTP gets a browser window like any page.
+       It is NOT sandboxed as an app frame -- it is a server the user chose
+       to run, on a port only they can reach. */
+    const v = createWindow({
+      key: "procview:" + project, title: (app.name || project),
+      width: app.width || 640, height: (app.height || 480) + 8,
+      icon: "globe", pad: false,
+    });
+    const f = el("iframe", "app");
+    f.src = url;
+    v.body.appendChild(f);
+  });
+
+  await refresh();
+  const timer = setInterval(refresh, 3000);
+  w.onClose = () => clearInterval(timer);
   return w;
 }
 
@@ -2410,6 +2552,14 @@ async function boot() {
   buildMenu();
   initDock();
   try {
+    /* Ask the gateway how it is arranged before rendering anything that
+       depends on it. A gateway too old to answer just leaves the defaults. */
+    try {
+      const cfg = await api("/v1/desktop/config");
+      S.appsOrigin = cfg.apps_origin || "";
+      S.appsIsolated = !!cfg.apps_isolated;
+      S.host = cfg.host || "";
+    } catch {}
     await loadWorkspaces();
     await loadProjects();
   } catch (e) {
