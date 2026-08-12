@@ -9,9 +9,10 @@ actually broken the Delphi build, all of which are visible from the token
 stream without resolving a single identifier.
 
 Checks
-  1. brace-comment termination: a { } comment whose body contains a JSON-ish
-     fragment almost certainly ended at the example's own '}', leaving prose
-     to be parsed as code.  (E2003 'buries'/'escapes')
+  1. brace-comment termination: braces do not nest, so a { } comment whose
+     body still contains a '{' already ended at the example's own '}',
+     leaving prose to be parsed as code.  (E2003 'buries'/'escapes',
+     E2070 'where', E2038 '}')
   2. const/var section shape: an initialiser '=' on a bare name inside a var
      section, or a ':' declaration inside a const section -- the signature of
      a var block inserted into the middle of a const block.
@@ -86,10 +87,19 @@ def main(path):
             # a compiler directive is not a comment
             if body.startswith("$"):
                 continue
-            if ('{"' in body) or ('":' in body) or ("{{" in body):
+            # Braces do NOT nest in Delphi, so `body` above is the comment's
+            # REAL extent: it stopped at the first '}'. Any '{' still inside
+            # it therefore means the author wrote a brace pair in prose and
+            # the comment already ended early, spilling the remainder into
+            # the compiler as code. The old rule only recognised QUOTED JSON
+            # ('{"', '":', '{{'), so a bare `{ok, tool, result}` sailed
+            # through and broke the build (E2070 'where' / E2038 '}').
+            # Checking for '{' at all is the general form of the same rule.
+            if "{" in body:
                 findings.append(
-                    (ln, "brace-comment holds a JSON fragment; it ended at the "
-                         "example's own '}' -- use (* *)"))
+                    (ln, "brace-comment contains '{': it ended at the "
+                         "example's own '}' and the rest parses as code "
+                         "-- use (* *)"))
             continue
 
         line = text.strip()
