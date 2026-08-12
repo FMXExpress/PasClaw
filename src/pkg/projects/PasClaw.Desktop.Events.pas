@@ -77,6 +77,14 @@ procedure PublishApp(const Project, State: string; Port: Integer);
 procedure PublishPage(const PageId, Title: string; Sources: Integer);
 procedure PublishWorkspace(const Name: string);
 
+(* Progress while a research page is being built.
+
+   A deep-research turn runs for minutes across many searches and fetches,
+   and a spinner that says nothing for that long is indistinguishable from a
+   hang. This carries what the agent is doing RIGHT NOW -- which tool, on
+   what -- so the progress dialog shows work rather than patience. *)
+procedure PublishPageProgress(const Phase, Detail: string);
+
 implementation
 
 uses
@@ -287,6 +295,14 @@ begin
   PublishRaw('{"type":"workspace","name":"' + Esc(Name) + '"}');
 end;
 
+procedure PublishPageProgress(const Phase, Detail: string);
+begin
+  { Detail is bounded here rather than at the call site: a tool argument can
+    be a whole document, and this is a status line, not a log. }
+  PublishRaw('{"type":"page-progress","phase":"' + Esc(Phase) +
+             '","detail":"' + Esc(Copy(Detail, 1, 200)) + '"}');
+end;
+
 initialization
   GLock := TCriticalSection.Create;
   GSubs := TList.Create;
@@ -296,5 +312,6 @@ finalization
     finalized those connections are gone. Free the list, not the items. }
   FreeAndNil(GSubs);
   FreeAndNil(GLock);
+
 
 end.

@@ -41,7 +41,7 @@ uses
   SysUtils, Classes, StrUtils;
 
 type
-  TPageKind = (pkSearch, pkData, pkReport);
+  TPageKind = (pkSearch, pkData, pkReport, pkResearch);
 
   TPageSource = record
     Title: string;
@@ -130,9 +130,10 @@ uses
 function PageKindToStr(K: TPageKind): string;
 begin
   case K of
-    pkData:   Result := 'data';
-    pkReport: Result := 'report';
-    else      Result := 'search';
+    pkData:     Result := 'data';
+    pkReport:   Result := 'report';
+    pkResearch: Result := 'research';
+    else        Result := 'search';
   end;
 end;
 
@@ -141,8 +142,9 @@ var
   L: string;
 begin
   L := LowerCase(Trim(S));
-  if      L = 'data'   then Result := pkData
-  else if L = 'report' then Result := pkReport
+  if      L = 'data'     then Result := pkData
+  else if L = 'report'   then Result := pkReport
+  else if L = 'research' then Result := pkResearch
   else Result := pkSearch;
 end;
 
@@ -194,6 +196,35 @@ begin
       S := S +
         'Compose a report from what you have already gathered this turn. ' +
         'Attribute each section to its source.'#10;
+    (* Deep research. The difference from pkSearch is not "try harder" --
+       it is a named three-phase shape the model is told to follow, because
+       one search-and-summarise pass is what pkSearch already does and
+       asking for more of it produces a longer version of the same answer.
+
+       PLAN forces the question to be decomposed before anything is read,
+       so the reading is directed rather than opportunistic. READ demands
+       breadth AND disagreement, because a report assembled from sources
+       that all agree is usually a report assembled from one source and its
+       copies. SYNTHESISE separates what was found from what it means, so
+       the reader can tell which is which. *)
+    pkResearch:
+      S := S +
+        'This is a DEEP RESEARCH request. Work in three phases and do not ' +
+        'skip ahead.'#10#10 +
+        '1. PLAN. Before searching, break the request into the specific ' +
+        'sub-questions that would have to be answered for the whole thing ' +
+        'to be answered. State them.'#10 +
+        '2. READ. Search for each sub-question separately, and web_fetch ' +
+        'the promising results -- a snippet is not a source. Aim for ' +
+        'several INDEPENDENT sources, not several pages repeating one. ' +
+        'Where they disagree, read enough to say why.'#10 +
+        '3. SYNTHESISE. Structure the page by sub-question, not by source. ' +
+        'Keep what you found separate from what you conclude from it, and ' +
+        'mark disagreement between sources where you found it.'#10#10 +
+        'Cite inline with <a href="...">, using the real URLs you fetched. ' +
+        'Where the evidence is thin, say so in the section it belongs to ' +
+        'rather than at the end -- a caveat readers meet after the claim ' +
+        'has done its work is a caveat that arrived too late.'#10;
   end;
 
   Result := S + #10 +

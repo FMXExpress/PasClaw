@@ -432,7 +432,9 @@ begin
     '    if (!framed) {' + #10 +
     '      if (op === "read") {' + #10 +
     '        return fetch("/v1/apps/" + PROJECT + "/read/" +' + #10 +
-    '                     encodeURIComponent(key)).then(function (r) {' + #10 +
+    '                     encodeURIComponent(key) +' + #10 +
+    '                     (value ? "?q=" + encodeURIComponent(value) : "")' + #10 +
+    '                    ).then(function (r) {' + #10 +
     '          if (!r.ok) throw new Error("http " + r.status);' + #10 +
     '          return r.json().then(function (j) { return j.items || []; });' + #10 +
     '        });' + #10 +
@@ -483,9 +485,11 @@ begin
     '    },' + #10 +
     '    setJSON: function (key, obj) { return ask("set", key, JSON.stringify(obj)); },' + #10 +
     '    /* Read one of the gateway ALLOWLISTED surfaces: cron, sessions,' + #10 +
-    '       providers, pages, projects. Returns the items array. Anything' + #10 +
-    '       else is refused server-side. */' + #10 +
-    '    read: function (surface) { return ask("read", surface); },' + #10 +
+    '       providers, pages, projects, memory, notes, skills, tasks, kb,' + #10 +
+    '       checkpoints. Returns the items array; anything else is refused' + #10 +
+    '       server-side. One surface (kb) takes a query; the rest ignore' + #10 +
+    '       it. */' + #10 +
+    '    read: function (surface, q) { return ask("read", surface, q); },' + #10 +
     '    /* Run one of the gateway ALLOWLISTED actions for this app. The' + #10 +
     '       optional arg is sent as the JSON request body; the server' + #10 +
     '       decides what each action accepts. Rejects with the server''s' + #10 +

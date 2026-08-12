@@ -361,10 +361,12 @@ const
     '<div class="tabs">' +
     '<button data-k="pages" class="on">Pages</button>' +
     '<button data-k="sessions">Sessions</button>' +
-    '<button data-k="projects">Projects</button></div>' +
+    '<button data-k="projects">Projects</button>' +
+    '<button data-k="kb">Knowledgebase</button></div>' +
     '<div class="row"><input type="text" id="q" placeholder="Filter"></div>' +
     '<ul id="list"></ul>' +
     '<div class="muted" id="count">&nbsp;</div>' +
+    '<div class="muted" id="undo">&nbsp;</div>' +
     '<script src="pasclaw.js"></' + 'script>' +
     '<script>' +
     'let kind="pages",items=[];' +
@@ -372,6 +374,7 @@ const
     'function label(it){' +
     'if(kind==="pages")return[it.title,(it.source_count||0)+" source(s)",it.created||""];' +
     'if(kind==="sessions")return[it.title||it.id,it.model||"",it.id];' +
+    'if(kind==="kb")return[it.path,it.text||"",it.chunk?("#"+it.chunk):""];' +
     'return[it.title||it.name,(it.tasks||0)+" task(s)",it.has_app?"[app]":""];}' +
     'function paint(){const f=$("#q").value.toLowerCase();const ul=$("#list");' +
     'ul.innerHTML="";let n=0;' +
@@ -387,13 +390,28 @@ const
     'const m=document.createElement("span");m.className="muted";m.textContent=p[2]||"";' +
     'li.appendChild(sp);li.appendChild(m);ul.appendChild(li);});' +
     '$("#count").textContent=n+" of "+items.length;}' +
-    'async function load(){try{items=await pasclaw.read(kind);}catch(e){items=[];}' +
-    'paint();}' +
+    { The knowledgebase is searched SERVER-side -- an index exists precisely
+      because filtering a list in the browser does not scale to documents --
+      so its tab sends the box to the surface instead of filtering locally. }
+    'async function load(){' +
+    'try{items=await pasclaw.read(kind,kind==="kb"?$("#q").value.trim():"");}' +
+    'catch(e){items=[];}paint();}' +
+    { How far back undo reaches. Not a list: checkpoints are per-turn
+      snapshots, and the question a person has is "can I still get back to
+      before this went wrong". }
+    'async function undoLine(){let c=null;' +
+    'try{c=(await pasclaw.read("checkpoints"))[0];}catch(e){}' +
+    'if(!c){$("#undo").textContent="";return;}' +
+    '$("#undo").textContent=c.enabled' +
+    '?("Undo reaches back "+c.turns+" turn(s)"' +
+    '+(c.turns?" (turns "+c.oldest+"-"+c.newest+")":"")' +
+    '+(c.can_redo?"; redo available":""))' +
+    ':"Checkpoints are off -- nothing to undo.";}' +
     'document.querySelectorAll(".tabs button").forEach(b=>{b.onclick=()=>{' +
     'document.querySelectorAll(".tabs button").forEach(x=>x.className="");' +
     'b.className="on";kind=b.dataset.k;load();};});' +
-    '$("#q").oninput=paint;' +
-    'load();' +
+    '$("#q").oninput=()=>{if(kind==="kb")load();else paint();};' +
+    'load();undoLine();' +
     '</' + 'script></body></html>';
 
   { Cookbook -- the provider catalog in plain language. The routing itself is

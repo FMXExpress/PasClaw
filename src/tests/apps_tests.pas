@@ -11,7 +11,7 @@ program apps_tests;
 {$H+}
 
 uses
-  SysUtils, Classes,
+  SysUtils, Classes, StrUtils,
   PasClaw.Utils,
   PasClaw.Config,
   PasClaw.Workspaces,
@@ -43,6 +43,21 @@ procedure ExpectContains(const Haystack, Needle, Msg: string);
 begin
   if Pos(Needle, Haystack) = 0 then
     Fail_(Msg + ' -- "' + Needle + '" not in: ' + Copy(Haystack, 1, 400));
+end;
+
+{ How many times Needle occurs in Hay. }
+function CountSub(const Hay, Needle: string): Integer;
+var
+  At, P: Integer;
+begin
+  Result := 0;
+  At := 1;
+  repeat
+    P := PosEx(Needle, Hay, At);
+    if P = 0 then Break;
+    Inc(Result);
+    At := P + Length(Needle);
+  until False;
 end;
 
 procedure ExpectMissing(const Haystack, Needle, Msg: string);
@@ -264,6 +279,21 @@ begin
   finally
     DArgs.Free;
   end;
+
+  (* The SDK is shipped as a Pascal string, which means a mistyped JS
+     comment is a compile-clean way to break EVERY app at once -- the SDK is
+     the first script each one loads, so a stray */ takes the whole suite
+     down and nothing in Pascal notices. This counts the delimiters.
+
+     Not a parser. It is the specific mistake that actually happened
+     (an edit left two closing delimiters for one opening one), and the
+     cheapest check that would have caught it. *)
+  Resolved := AppSDK('spam-filter');
+  ExpectTrue(CountSub(Resolved, '/*') = CountSub(Resolved, '*/'),
+             'the SDK has balanced JS comment delimiters');
+  ExpectContains(Resolved, 'window.pasclaw', 'and defines the SDK object');
+  ExpectContains(Resolved, 'action:', 'with the action verb');
+  ExpectContains(Resolved, 'read:', 'and the read window');
 
   (* An endpoint we cannot read must count as LOCAL. There is no docker on
      this machine, so the probe fails -- and calling that "remote" would

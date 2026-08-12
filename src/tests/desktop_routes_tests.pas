@@ -636,6 +636,24 @@ begin
   ExpectTrue(Pos('example.com/x', Blueprint) > 0, 'sources footer present');
   ExpectTrue(Pos('ok', Blueprint) > 0, 'legitimate content survives');
 
+  { ------------------------------------------------------ research mode -- }
+  (* Deep research is a distinct KIND, not a longer search. The prompt is
+     where the difference lives, so assert the three phases are actually
+     demanded -- a prompt that merely said "try harder" would produce a
+     longer version of the same one-pass answer. *)
+  ExpectStr(PageKindToStr(StrToPageKind('research')), 'research',
+            'research round-trips as a kind');
+  ExpectTrue(Pos('DEEP RESEARCH', BuildPagePrompt('x', pkResearch)) > 0,
+             'the research prompt names itself');
+  ExpectTrue((Pos('1. PLAN', BuildPagePrompt('x', pkResearch)) > 0) and
+             (Pos('2. READ', BuildPagePrompt('x', pkResearch)) > 0) and
+             (Pos('3. SYNTHESISE', BuildPagePrompt('x', pkResearch)) > 0),
+             'and lays out the three phases');
+  ExpectTrue(Pos('INDEPENDENT', BuildPagePrompt('x', pkResearch)) > 0,
+             'and demands independent sources, not one source repeated');
+  ExpectTrue(Pos('DEEP RESEARCH', BuildPagePrompt('x', pkSearch)) = 0,
+             'an ordinary search is not silently upgraded');
+
   { ----------------------------------------------------- page promotion -- }
   (* "Make this interactive" -- a page becomes an app you own. The copy is
      the design: a page is the record of an answer at a time, so promotion

@@ -1450,6 +1450,57 @@ function tick() {
 setInterval(tick, 15000); tick();
 
 /* ==========================================================================
+   Live updates
+
+   The board changes because the AGENT changed it -- a job finished, a page
+   landed, an app started -- so the desktop subscribes rather than asking
+   every few seconds. EventSource cannot set an Authorization header, which
+   is why the gateway also accepts ?token=.
+
+   Polling stays as the fallback, not as the plan: a proxy that buffers SSE,
+   or a browser that has run out of connections, should degrade to a slower
+   desktop rather than a frozen one.
+   ========================================================================== */
+
+const EV = { src: null, handlers: {}, live: false };
+
+function onDesktopEvent(type, fn) {
+  (EV.handlers[type] = EV.handlers[type] || []).push(fn);
+}
+
+function subscribeEvents() {
+  if (!window.EventSource) return;
+  const t = token();
+  const url = "/v1/desktop/events" + (t ? "?token=" + encodeURIComponent(t) : "");
+  let src;
+  try { src = new EventSource(url); } catch { return; }
+  EV.src = src;
+
+  src.addEventListener("open", () => { EV.live = true; });
+  src.addEventListener("error", () => {
+    /* EventSource reconnects on its own; all we do is stop claiming to be
+       live so the poll keeps covering us in the meantime. */
+    EV.live = false;
+  });
+  src.addEventListener("message", e => {
+    let ev;
+    try { ev = JSON.parse(e.data); } catch { return; }
+    /* A gap means our queue overflowed and events were dropped. The only
+       honest response is to re-read rather than to carry on from a state
+       that may be wrong. */
+    if (ev.type === "gap") { loadProjects().catch(() => {}); return; }
+    (EV.handlers[ev.type] || []).forEach(fn => { try { fn(ev); } catch {} });
+  });
+}
+
+/* The board's own events: anything that changes the project set repaints
+   the icons and the tree. */
+onDesktopEvent("projects", () => loadProjects().catch(() => {}));
+onDesktopEvent("project",  () => loadProjects().catch(() => {}));
+onDesktopEvent("task",     () => loadProjects().catch(() => {}));
+onDesktopEvent("job",      () => loadProjects().catch(() => {}));
+
+/* ==========================================================================
    Menu
    ========================================================================== */
 
@@ -2191,7 +2242,8 @@ window.addEventListener("message", async ev => {
       /* The allowlist lives on the server; we just forward the name so an
          app cannot reach past it by talking to us instead. */
       const j = await api(`/v1/apps/${encodeURIComponent(project)}/read/` +
-                          encodeURIComponent(String(m.key || "")));
+                          encodeURIComponent(String(m.key || "")) +
+                          (m.value ? "?q=" + encodeURIComponent(String(m.value)) : ""));
       reply({ value: j.items || [] });
     } else {
       reply({ error: "unknown op" });
@@ -2443,13 +2495,19 @@ function openBrowser(pageId) {
   q.placeholder = "Ask anything -- the answer comes back as a page";
   q.style.flex = "1 1 auto";
   const go = el("button", "btn", "Search");
+  /* Deep research is a different act, so it gets a different button rather
+     than a checkbox nobody finds: plan the sub-questions, read several
+     independent sources, then synthesise. It takes minutes, which is why it
+     narrates. */
+  const deep = el("button", "btn", "Research");
+  deep.title = "Plan, read several sources, and write a longer sourced report";
   /* The promotion gesture. A page is a document; this is the one click that
      turns it into software you own -- the plan's whole pitch in miniature.
      Disabled until there is a page to promote. */
   const mk = el("button", "btn", "Make interactive");
   mk.title = "Copy this page into a project as an app you can change";
   mk.disabled = true;
-  bar.appendChild(q); bar.appendChild(go); bar.appendChild(mk);
+  bar.appendChild(q); bar.appendChild(go); bar.appendChild(deep); bar.appendChild(mk);
   w.body.appendChild(bar);
 
   const frame = el("iframe", "app");
@@ -2473,23 +2531,49 @@ function openBrowser(pageId) {
       n ? `GROUNDED -- ${n} source${n === 1 ? "" : "s"}` : "UNGROUNDED -- no sources"));
   }
 
-  async function search() {
+  async function search(kind) {
     const query = q.value.trim();
     if (!query) return;
-    go.disabled = true;
-    status.textContent = "Searching...";
+    go.disabled = true; deep.disabled = true;
+    status.textContent = kind === "research" ? "Researching..." : "Searching...";
+
+    /* Research narrates. The bar is deliberately NOT a percentage of
+       anything -- nobody knows how many sources the question needs -- so it
+       creeps toward, but never reaches, done. A fake 100% is worse than an
+       honest "still going". */
+    let prog = null, seen = 0, off = null;
+    if (kind === "research") {
+      prog = showProgress({ title: "Deep research", text: query });
+      off = ev => {
+        seen++;
+        prog.set(Math.min(90, seen * 7),
+                 ev.phase + (ev.detail ? ": " + ev.detail.slice(0, 60) : ""));
+      };
+      onDesktopEvent("page-progress", off);
+      if (!EV.live) prog.set(5, "working (no live feed from this gateway)");
+    }
+
     try {
-      const j = await api("/v1/pages", { method: "POST", body: { query, kind: "search" } });
+      const j = await api("/v1/pages", { method: "POST", body: { query, kind } });
       const page = await api("/v1/pages/" + j.id);
       show(page);
     } catch (e) {
       status.textContent = "";
       status.appendChild(el("span", "ungrounded", e.message));
     }
-    go.disabled = false;
+    if (prog) {
+      /* Drop the handler with the dialog; a second research run should not
+         drive a closed window. */
+      const list = EV.handlers["page-progress"] || [];
+      const at = list.indexOf(off);
+      if (at >= 0) list.splice(at, 1);
+      prog.done();
+    }
+    go.disabled = false; deep.disabled = false;
   }
-  go.addEventListener("click", search);
-  q.addEventListener("keydown", e => { if (e.key === "Enter") search(); });
+  go.addEventListener("click", () => search("search"));
+  deep.addEventListener("click", () => search("research"));
+  q.addEventListener("keydown", e => { if (e.key === "Enter") search("search"); });
 
   mk.addEventListener("click", async () => {
     if (!current) return;
@@ -2732,6 +2816,9 @@ async function boot() {
     } catch {}
     await loadWorkspaces();
     await loadProjects();
+    /* Only after the first load succeeds -- subscribing before we know the
+       token works would just produce a reconnect loop behind an auth wall. */
+    subscribeEvents();
   } catch (e) {
     /* A bearer-gated gateway is the usual cause; say so plainly rather than
        leaving an empty desktop with no explanation. */

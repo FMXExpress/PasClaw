@@ -95,6 +95,8 @@ uses
   PasClaw.Memory.Distill,   { TFact, for a fact the user types themselves }
   PasClaw.Tools.Cron,       { Tool_Cron -- Calendar schedules through it }
   PasClaw.Skills.Loader,    { the skills surface -- what Calendar may schedule }
+  PasClaw.KB.Index,         { the kb surface -- Library searches it }
+  PasClaw.Checkpoints,      { the checkpoints surface -- how far undo reaches }
   DateUtils,                { DateTimeToUnix }
   PasClaw.Session.Store;    { session list for the Library app }
 
@@ -1051,7 +1053,7 @@ end;
    gateway's own handlers, because a proxy would inherit whatever those
    handlers ever start returning. Adding a surface has to be a deliberate
    edit to this function. *)
-function ReadSurface(const Project, Surface: string;
+function ReadSurface(const Project, Surface, Query: string;
   out Resp: TDesktopResponse): Boolean;
 var
   Root, Item: TJsonObject;
@@ -1065,6 +1067,11 @@ var
   Notes_: TNoteInfoArray;
   Skills_: TSkillSpecArray;
   Tasks_: TTaskInfoArray;
+  KB: IKBIndex;
+  Hits: TKBHitArray;
+  Srcs: TKBSourceArray;
+  Q: string;
+  OldestTurn, NewestTurn: Integer;
 begin
   Result := True;
   Root := TJsonObject.Create;
@@ -1212,12 +1219,70 @@ begin
         Arr.AddObject(Item);
       end;
     end
+    (* kb -- the knowledgebase, searched.
+
+       The only surface that takes an argument, because a knowledgebase
+       listing is useless and a knowledgebase search is the whole point.
+       Empty query returns the sources and the counts, which is what the
+       Library shows before you type anything. *)
+    else if Surface = 'kb' then
+    begin
+      Q := Trim(QueryValue(Query, 'q'));
+      KB := NewKBIndex;
+      if KB.Open(DefaultKBDbPath) then
+      try
+        if Q <> '' then
+        begin
+          Hits := KB.Search(Q, 20);
+          for I := 0 to High(Hits) do
+          begin
+            Item := TJsonObject.Create;
+            Item.PutStr('path',  Hits[I].Path);
+            Item.PutStr('text',  Copy(Hits[I].Snippet, 1, 600));
+            Item.PutInt('chunk', Hits[I].ChunkNo);
+            Arr.AddObject(Item);
+          end;
+        end
+        else
+        begin
+          Srcs := KB.GetSources;
+          for I := 0 to High(Srcs) do
+          begin
+            Item := TJsonObject.Create;
+            Item.PutStr('path', Srcs[I].Root);
+            Item.PutStr('text', Format('%d file(s), %d chunk(s) indexed',
+                                       [Srcs[I].Files, Srcs[I].Chunks]));
+            Item.PutInt('chunk', 0);
+            Arr.AddObject(Item);
+          end;
+        end;
+      finally
+        KB.Close;
+      end;
+      { No kb.db is the normal state of an install that has never run
+        `pasclaw kb add`, so an empty list is the honest answer, not a 500. }
+    end
+    (* checkpoints -- how far back the undo goes.
+
+       Not a file list: checkpoints are per-turn snapshots, so what a person
+       wants to know is "can I still get back to before this went wrong",
+       and that is a range and a backend, not rows. *)
+    else if Surface = 'checkpoints' then
+    begin
+      Item := TJsonObject.Create;
+      Item.PutBool('enabled', CheckpointsEnabled);
+      Item.PutInt ('turns',   CountSnapshottedTurns(OldestTurn, NewestTurn));
+      Item.PutInt ('oldest',  OldestTurn);
+      Item.PutInt ('newest',  NewestTurn);
+      Item.PutBool('can_redo', CanRedo);
+      Arr.AddObject(Item);
+    end
     else
     begin
       Arr.Free;
       ReplyErr(Resp, 404, 'no such surface: ' + Surface +
                ' (cron, sessions, providers, pages, projects, memory, notes,' +
-               ' skills, tasks)');
+               ' skills, tasks, kb, checkpoints)');
       Exit;
     end;
 
@@ -1528,7 +1593,7 @@ begin
     Result.PutStr('url', 'http://127.0.0.1:' + IntToStr(R.Port) + '/');
 end;
 
-function RouteAppAPI(const Method, Doc, Body: string;
+function RouteAppAPI(const Method, Doc, Query, Body: string;
   out Resp: TDesktopResponse): Boolean;
 var
   Segs: TStringList;
@@ -1728,7 +1793,7 @@ begin
         ReplyErr(Resp, 404, 'name a surface: cron, sessions, providers, pages, projects');
         Exit;
       end;
-      Result := ReadSurface(Project, LowerCase(Segs[4]), Resp);
+      Result := ReadSurface(Project, LowerCase(Segs[4]), Query, Resp);
       Exit;
     end;
 
@@ -2162,7 +2227,7 @@ begin
   end;
 
   if HasPrefix(Doc, '/v1/apps') then
-    Exit(RouteAppAPI(M, Doc, Body, Resp));
+    Exit(RouteAppAPI(M, Doc, Query, Body, Resp));
 
   if HasPrefix(Doc, '/v1/pages') then
     Exit(RoutePagesAPI(M, Doc, Body, Resp));

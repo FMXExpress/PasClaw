@@ -186,7 +186,13 @@ type
        two drift. Returns False with Err set when there is no provider or
        the loop fails. *)
     function RunDesktopTurn(const SystemPrompt, Prompt: string;
+                            Narrate: Boolean;
                             out Reply, Err: string): Boolean;
+    { OnToolCall sink for a narrated turn -- turns each tool call into a
+      page-progress event so the desktop can show work rather than a
+      spinner. A method, not a closure: the loop's hook is a method
+      pointer. }
+    procedure NarrateToolCall(const Name, ArgsJSON: string);
     { Desktop client surface -- see PasClaw.Gateway.Desktop. Returns True
       when it consumed the request. Streams a file when the route resolved
       one (app assets, rendered pages); otherwise writes the JSON body. }
@@ -5229,8 +5235,28 @@ begin
   end;
 end;
 
+(* Translate a tool call into a line a person would recognise.
+
+   The tool NAME is the honest signal -- it is what actually happened -- and
+   the argument is trimmed to the part that identifies the target. No
+   invented narration: if a tool we have no phrasing for fires, the user
+   sees its real name rather than a soothing generality. *)
+procedure TGatewayServer.NarrateToolCall(const Name, ArgsJSON: string);
+var
+  Phase, Detail: string;
+begin
+  Detail := ArgsJSON;
+  if      Name = 'web_search' then Phase := 'Searching'
+  else if Name = 'web_fetch'  then Phase := 'Reading'
+  else if Name = 'fs_read'    then Phase := 'Reading a file'
+  else if Name = 'fs_grep'    then Phase := 'Searching your files'
+  else if Name = 'memory_search' then Phase := 'Checking what I remember'
+  else Phase := Name;
+  PublishPageProgress(Phase, Detail);
+end;
+
 function TGatewayServer.RunDesktopTurn(const SystemPrompt, Prompt: string;
-  out Reply, Err: string): Boolean;
+  Narrate: Boolean; out Reply, Err: string): Boolean;
 var
   Msgs: TMessageArray;
   Loop: TToolLoopResult;
@@ -5275,6 +5301,9 @@ begin
   LoopCfg.CompactOpts    := DefaultCompactOptions;
   LoopCfg.ToolOutputCap  := FCfg.ToolOutputCap;
   LoopCfg.StreamReliability := FCfg.StreamReliability;
+  { Only deep research narrates. An ordinary page comes back fast enough
+    that a progress feed would be noise on the event bus. }
+  if Narrate then LoopCfg.OnToolCall := NarrateToolCall;
 
   if not RunToolLoop(LoopCfg, Msgs, Loop) then
   begin
@@ -5361,9 +5390,13 @@ begin
     Err := 'no gateway available';
     Exit;
   end;
+  if Kind = pkResearch then
+    PublishPageProgress('Planning', Query);
   if not GDesktopGateway.RunDesktopTurn(BuildPagePrompt(Query, Kind),
-       'Produce the page now.', Reply, Err) then
+       'Produce the page now.', Kind = pkResearch, Reply, Err) then
     Exit;
+  if Kind = pkResearch then
+    PublishPageProgress('Writing', 'assembling the report');
   SplitPageReply(Reply, BodyHTML, SourcesJSON);
   if Trim(BodyHTML) = '' then
   begin
@@ -5434,7 +5467,7 @@ begin
     Exit;
   end;
 
-  if GDesktopGateway.RunDesktopTurn(Sys, Task, Reply, Err) then
+  if GDesktopGateway.RunDesktopTurn(Sys, Task, False, Reply, Err) then
   begin
     AppendJobLog(FProject, FTask, FJob, Reply);
     { The model is asked to close the job itself; do it here too in case it
