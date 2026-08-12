@@ -9,10 +9,18 @@ actually broken the Delphi build, all of which are visible from the token
 stream without resolving a single identifier.
 
 Checks
-  1. brace-comment termination: braces do not nest, so a { } comment whose
-     body still contains a '{' already ended at the example's own '}',
-     leaving prose to be parsed as code.  (E2003 'buries'/'escapes',
-     E2070 'where', E2038 '}')
+  1. early comment termination: neither comment form nests, so a comment
+     that quotes its own delimiters ends at the inner close and the rest of
+     the prose is parsed as code. Detected by the WRECKAGE -- a closing '}'
+     or '*)' reaching code, which is the compiler's own E2038 -- and not by
+     an opener inside a comment body, which is valid prose and flagging it
+     blocks legitimate comments.  (E2003 'buries'/'escapes', E2070 'where',
+     E2070 'form', E2038)
+  1b. unterminated string: a quote still open at end of line cannot be valid
+     Pascal. It is worth its own report, and it is also how the escaped
+     prose above usually presents -- a contraction's apostrophe opens a
+     "string" that swallows the intended terminator, hiding it from 1.
+     (E2052 unterminated string)
   2. const/var section shape: an initialiser '=' on a bare name inside a var
      section, or a ':' declaration inside a const section -- the signature of
      a var block inserted into the middle of a const block.
@@ -40,11 +48,20 @@ def scan(src):
             i += 1
             continue
         if c == "'":                                   # string literal
+            # Pascal string literals CANNOT span lines, so a quote still open
+            # at the newline is itself the error (E2052) -- and it is the
+            # other half of the early-comment wreckage: prose spilled out of
+            # a comment usually carries a contraction, whose apostrophe opens
+            # a "string" that swallows the intended terminator before the
+            # stray-close check can ever see it. Stopping at the newline both
+            # reports that and resyncs the scan onto the next line.
+            start = line
             i += 1
-            while i < n and src[i] != "'":
-                if src[i] == "\n":
-                    line += 1
+            while i < n and src[i] != "'" and src[i] != "\n":
                 i += 1
+            if i >= n or src[i] == "\n":
+                yield (start, STR, "unterminated")
+                continue           # leave the newline for the branch above
             i += 1
             continue
         if c == "(" and i + 1 < n and src[i + 1] == "*":
@@ -84,49 +101,46 @@ def main(path):
     in_type = False
 
     for ln, kind, text in scan(src):
-        if kind == BRACE:
-            body = text.strip()
-            # a compiler directive is not a comment
-            if body.startswith("$"):
-                continue
-            # Braces do NOT nest in Delphi, so `body` above is the comment's
-            # REAL extent: it stopped at the first '}'. Any '{' still inside
-            # it therefore means the author wrote a brace pair in prose and
-            # the comment already ended early, spilling the remainder into
-            # the compiler as code. The old rule only recognised QUOTED JSON
-            # ('{"', '":', '{{'), so a bare `{ok, tool, result}` sailed
-            # through and broke the build (E2070 'where' / E2038 '}').
-            # Checking for '{' at all is the general form of the same rule.
-            if "{" in body:
-                findings.append(
-                    (ln, "brace-comment contains '{': it ended at the "
-                         "example's own '}' and the rest parses as code "
-                         "-- use a paren-star comment"))
+        # Comments themselves prove nothing. An opener sitting inside a
+        # comment body is NOT evidence of a problem: same-style comments do
+        # not nest, so `(* mentions (* an opener *)` and `{ mentions { one }`
+        # are both perfectly valid -- the single close terminates the
+        # comment and the inner opener is ordinary prose. Earlier revisions
+        # of this rule flagged exactly those and would have blocked valid
+        # Studio comments (Codex P2 on PR #520).
+        #
+        # What IS evidence is the wreckage: when a comment ends before its
+        # author meant it to, the trailing prose becomes code AND the
+        # intended terminator arrives with nothing to close. So look for a
+        # closing delimiter reaching CODE. The scanner consumes well-formed
+        # comments whole and skips string literals, and valid Pascal has no
+        # bare '}' or '*)' outside them -- which is precisely what dcc64
+        # reports as E2038 "Illegal character in input file".
+        if kind in (BRACE, PAREN):
             continue
 
-        if kind == PAREN:
-            # NB: read `text`, not `body` -- `body` is bound only in the
-            # BRACE branch above, so using it here silently tests the
-            # PREVIOUS brace comment and the rule never fires.
-            paren_body = text.strip()
-            # Paren-star comments do not nest either, so the same reasoning
-            # applies: the body stopped at the first close, and an opener
-            # still inside it means the comment already ended there. This is
-            # not hypothetical -- the comment ADDED to explain the brace rule
-            # named both delimiters literally and broke the build itself
-            # (E2070 'form' / E2052 unterminated string). Describe the
-            # delimiters in words inside a comment of the same kind.
-            if "(*" in paren_body:
-                findings.append(
-                    (ln, "paren-star comment contains an inner '(*': it "
-                         "ended at the first close and the rest parses as "
-                         "code -- name the delimiters in words"))
+        # The other half of the wreckage. A quote left open at end of line
+        # cannot be valid Pascal, and when prose escapes a comment its
+        # contraction ("doesn't") opens exactly this -- swallowing the
+        # intended terminator so the stray-close check below never sees it
+        # (Codex P2 on PR #521).
+        if kind == STR:
+            findings.append(
+                (ln, "string literal not closed before end of line -- often "
+                     "prose that escaped a comment that ended early"))
             continue
 
         line = text.strip()
         low = line.lower()
         if not line:
             continue
+
+        stray = "}" if "}" in line else ("*)" if "*)" in line else "")
+        if stray:
+            findings.append(
+                (ln, "stray '%s' in code: an earlier comment ended before it "
+                     "was meant to and its remainder is being parsed as code"
+                     % stray))
 
         # track declaration sections at column 0 only (unit level)
         if re.match(r"^(const|var|type|implementation|interface)\b", low) and not text.startswith(" "):
