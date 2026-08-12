@@ -4726,9 +4726,15 @@ function wfStartConnect(ev, fromId) {
     tmp.remove();
     const tgt = document.elementFromPoint(e.clientX, e.clientY);
     const outField = tgt && tgt.closest && tgt.closest(".wf-outfield");
+    const outBox = tgt && tgt.closest && tgt.closest('.wf-io[data-kind="output"]');
     if (outField) {
       /* Dropped on an Output box field -> author that output's template. */
       wfSetOutputTemplate(outField.dataset.out, wfDefaultRef(fromId));
+    } else if (outBox) {
+      /* Dropped on the Output BOX itself -> declare a new output fed by this
+         node. Without this the box is only a target once an output already
+         exists, so a workflow with none declared had nowhere to drop. */
+      wfSetOutputTemplate(fromId, wfDefaultRef(fromId));
     } else if (tgt && tgt.classList.contains("wf-in")) {
       const toId = tgt.dataset.node;
       if (toId && toId !== fromId && !wf.edges.some(x => x.from === fromId && x.to === toId)) {

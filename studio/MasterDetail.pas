@@ -361,6 +361,27 @@ type
     FWorkflowRunNodeOk: TDictionary<string, Boolean>;
     FWorkflowRunNodePreview: TDictionary<string, string>;
     FWorkflowSubTabs: TTabControl;  { Designer | Configure }
+    { The inline node form: a node's own fields, edited ON the canvas. Built
+      once and re-populated per node -- rebuilding controls per open would
+      churn the FMX tree on every double-click. }
+    FWorkflowNodeFormPanel: TRectangle;
+    FWorkflowNodeFormIdEdit: TEdit;
+    FWorkflowNodeFormEdit1: TEdit;
+    FWorkflowNodeFormEdit2: TEdit;
+    FWorkflowNodeFormMemo: TMemo;
+    FWorkflowNodeFormCap1: TLabel;
+    FWorkflowNodeFormCap2: TLabel;
+    FWorkflowNodeFormMemoCap: TLabel;
+    FWorkflowNodeFormRow1: TLayout;
+    FWorkflowNodeFormRow2: TLayout;
+    FWorkflowNodeFormTitle: TLabel;
+    FWorkflowNodeFormNodeId: string;
+    FWorkflowNodeFormTool: string;
+    { True when this node's args are owned by a GENERATED schema form, which
+      WorkflowApplyInspectorClick prefers over raw JSON. Editing JSON here
+      would be silently discarded on Apply, so the inline form shows it
+      read-only and sends the operator to the generated form instead. }
+    FWorkflowNodeFormArgsLocked: Boolean;
     FWorkflowPalettePanel: TRectangle;
     FWorkflowPaletteEdit: TEdit;
     FWorkflowPaletteList: TListBox;
@@ -633,7 +654,10 @@ type
     function AddSectionHeader(AParent: TFmxObject; const Text: string): TLabel;
     procedure AddListEmptyState(List: TListBox; const Msg: string);
     function AddFormRow(AParent: TFmxObject; const LabelText: string;
-      Control: TControl; ControlWidth: Single = 0): TLayout;
+      Control: TControl; ControlWidth: Single = 0): TLayout; overload;
+    function AddFormRow(AParent: TFmxObject; const LabelText: string;
+      Control: TControl; ControlWidth: Single;
+      out Caption: TLabel): TLayout; overload;
     function BuildDetailPane(AParent: TFmxObject; out TitleLabel,
       MetaLabel: TLabel): TLayout;
     procedure StyleButton(Button: TButton; Primary: Boolean = False);
@@ -751,6 +775,14 @@ type
     procedure WorkflowProviderModelClick(Sender: TObject);
     procedure WorkflowReplicatePickClick(Sender: TObject);
     procedure WorkflowReplicateSearchClick(Sender: TObject);
+    function WorkflowFindModelArray(Value: TJSONValue): TJSONArray;
+    procedure WorkflowWireNodeToOutput(const NodeId: string);
+    procedure WorkflowShowNodeForm(const NodeId: string; const At: TPointF);
+    procedure WorkflowHideNodeForm;
+    procedure WorkflowNodeFormApplyClick(Sender: TObject);
+    procedure WorkflowNodeFormCloseClick(Sender: TObject);
+    procedure WorkflowNodeFormFullEditorClick(Sender: TObject);
+    procedure WorkflowNodeFormOutputClick(Sender: TObject);
     procedure WorkflowRunClick(Sender: TObject);
     procedure WorkflowRunInputsClick(Sender: TObject);
     procedure WorkflowSaveClick(Sender: TObject);
@@ -1926,6 +1958,18 @@ end;
 function TMasterDetailForm.AddFormRow(AParent: TFmxObject;
   const LabelText: string; Control: TControl;
   ControlWidth: Single): TLayout;
+var
+  Ignored: TLabel;
+begin
+  Result := AddFormRow(AParent, LabelText, Control, ControlWidth, Ignored);
+end;
+
+function TMasterDetailForm.AddFormRow(AParent: TFmxObject;
+  const LabelText: string; Control: TControl; ControlWidth: Single;
+  out Caption: TLabel): TLayout;
+{ Same row, but handing back its caption -- for the one surface whose
+  labels change with the node type (the inline node form). Reaching into
+  Children to find the label would break the moment a row grows chrome. }
 { One label + one input, on the shared grid.
 
   Fifty edits in this file each picked their own width and sat next to a
@@ -1956,6 +2000,7 @@ begin
   Cap.TextSettings.VertAlign := TTextAlign.Center;
   SetControlMargins(Cap, 0, 0, GAP_M, 0);
   StyleLabel(Cap, UI_CHROME_TEXT, TXT_BODY, False);
+  Caption := Cap;
 
   if Control <> nil then
   begin
@@ -7498,8 +7543,8 @@ begin
   Title.Parent := MiddlePane;
   Title.Align := TAlignLayout.Top;
   Title.Height := ROW_TEXT;
-  Title.Text := 'Double-click: empty space adds a node, a node configures ' +
-    'it. Drag a node''s right dot to connect.';
+  Title.Text := 'Double-click empty space to add a node, or a node to edit ' +
+    'it here. Drag its right dot to another node - or onto OUTPUT.';
   Title.TextSettings.VertAlign := TTextAlign.Center;
   Title.TextSettings.Trimming := TTextTrimming.Character;
   StyleLabel(Title, UI_MUTED, TXT_CAPTION, False);
@@ -10729,6 +10774,7 @@ begin
   FWorkflowSelectedEdge := '';
   FWorkflowHoverEdge := '';
   WorkflowHidePalette;
+  WorkflowHideNodeForm;
   if FWorkflowToolCombo <> nil then
     FWorkflowToolCombo.ItemIndex := FWorkflowToolCombo.Items.IndexOf('llm');
   if FWorkflowNodeIdEdit <> nil then
@@ -11210,6 +11256,331 @@ begin
     end);
 end;
 
+procedure TMasterDetailForm.WorkflowShowNodeForm(const NodeId: string;
+  const At: TPointF);
+{ A node's fields, ON the node -- the reported "the nodes themself should be
+  like a small mini form with the fields in it".
+
+  It is a VIEW over the existing inspector controls, not a second editor:
+  Apply copies these values into those controls and calls the same
+  WorkflowApplyInspectorClick that the Configure tab uses, so the JSON that
+  args become is shaped in exactly one place. Two owners of one arg shape is
+  the bug this codebase keeps re-learning. }
+var
+  Bar: TLayout;
+  Btn: TButton;
+  Idx: Integer;
+  Host: TControl;
+  PX, PY: Single;
+  Row: TLayout;
+begin
+  if (FWorkflowCanvas = nil) or (FWorkflowCanvas.ParentControl = nil) or
+    (NodeId = '') then
+    Exit;
+  Host := FWorkflowCanvas.ParentControl;
+  WorkflowHidePalette;
+
+  { select it first: the inspector controls this form reads are filled by
+    WorkflowNodeSelect }
+  Idx := WorkflowNodeIndexById(NodeId);
+  if Idx < 0 then
+    Exit;
+  if FWorkflowNodesList.ItemIndex <> Idx then
+    FWorkflowNodesList.ItemIndex := Idx
+  else
+    WorkflowNodeSelect(nil);
+
+  if FWorkflowNodeFormPanel = nil then
+  begin
+    FWorkflowNodeFormPanel := TRectangle.Create(Self);
+    FWorkflowNodeFormPanel.Width := 320;
+    FWorkflowNodeFormPanel.Height := 292;
+    StyleChromeRect(FWorkflowNodeFormPanel, UI_PANEL, UI_ACCENT_DIM, 6, False);
+    SetControlPadding(FWorkflowNodeFormPanel, GAP_S, GAP_S, GAP_S, GAP_S);
+
+    Row := TLayout.Create(Self);
+    Row.Parent := FWorkflowNodeFormPanel;
+    Row.Align := TAlignLayout.Top;
+    Row.Height := ROW_BAR;
+
+    Btn := TButton.Create(Self);
+    Btn.Parent := Row;
+    Btn.Align := TAlignLayout.Right;
+    Btn.Width := BTN_W_S;
+    Btn.Text := 'Close';
+    Btn.OnClick := WorkflowNodeFormCloseClick;
+
+    FWorkflowNodeFormTitle := TLabel.Create(Self);
+    FWorkflowNodeFormTitle.Parent := Row;
+    FWorkflowNodeFormTitle.Align := TAlignLayout.Client;
+    FWorkflowNodeFormTitle.TextSettings.VertAlign := TTextAlign.Center;
+    StyleLabel(FWorkflowNodeFormTitle, UI_ACCENT, TXT_TITLE, True);
+
+    FWorkflowNodeFormIdEdit := TEdit.Create(Self);
+    AddFormRow(FWorkflowNodeFormPanel, 'Node id', FWorkflowNodeFormIdEdit);
+
+    FWorkflowNodeFormEdit1 := TEdit.Create(Self);
+    FWorkflowNodeFormRow1 := AddFormRow(FWorkflowNodeFormPanel, 'Field',
+      FWorkflowNodeFormEdit1, 0, FWorkflowNodeFormCap1);
+
+    FWorkflowNodeFormEdit2 := TEdit.Create(Self);
+    FWorkflowNodeFormRow2 := AddFormRow(FWorkflowNodeFormPanel, 'Field',
+      FWorkflowNodeFormEdit2, 0, FWorkflowNodeFormCap2);
+
+    FWorkflowNodeFormMemoCap := TLabel.Create(Self);
+    FWorkflowNodeFormMemoCap.Parent := FWorkflowNodeFormPanel;
+    FWorkflowNodeFormMemoCap.Align := TAlignLayout.Top;
+    FWorkflowNodeFormMemoCap.Height := ROW_TEXT;
+    FWorkflowNodeFormMemoCap.TextSettings.VertAlign := TTextAlign.Center;
+    StyleLabel(FWorkflowNodeFormMemoCap, UI_CHROME_TEXT, TXT_BODY, False);
+
+    { Bottom before Client: the button bar must claim its strip before the
+      memo takes the remainder, or the bar lands behind it. }
+    Bar := TLayout.Create(Self);
+    Bar.Parent := FWorkflowNodeFormPanel;
+    Bar.Align := TAlignLayout.Bottom;
+    Bar.Height := ROW_BAR;
+
+    Btn := TButton.Create(Self);
+    Btn.Parent := Bar;
+    Btn.Align := TAlignLayout.Left;
+    Btn.Width := BTN_W_S;
+    Btn.Text := 'Apply';
+    Btn.OnClick := WorkflowNodeFormApplyClick;
+    SetControlMargins(Btn, 0, GAP_XS, GAP_S, 0);
+
+    Btn := TButton.Create(Self);
+    Btn.Parent := Bar;
+    Btn.Align := TAlignLayout.Left;
+    Btn.Width := BTN_W_L;
+    Btn.Text := 'Use as output';
+    Btn.Hint := 'Declare a workflow output fed by this node';
+    Btn.ShowHint := True;
+    Btn.OnClick := WorkflowNodeFormOutputClick;
+    SetControlMargins(Btn, 0, GAP_XS, GAP_S, 0);
+
+    Btn := TButton.Create(Self);
+    Btn.Parent := Bar;
+    Btn.Align := TAlignLayout.Client;
+    Btn.Text := 'More...';
+    Btn.Hint := 'Open the full node editor on the Configure tab';
+    Btn.ShowHint := True;
+    Btn.OnClick := WorkflowNodeFormFullEditorClick;
+    SetControlMargins(Btn, 0, GAP_XS, 0, 0);
+
+    FWorkflowNodeFormMemo := TMemo.Create(Self);
+    FWorkflowNodeFormMemo.Parent := FWorkflowNodeFormPanel;
+    FWorkflowNodeFormMemo.Align := TAlignLayout.Client;
+    FWorkflowNodeFormMemo.WordWrap := True;
+    SetControlMargins(FWorkflowNodeFormMemo, 0, 0, 0, GAP_XS);
+  end;
+
+  FWorkflowNodeFormNodeId := NodeId;
+  FWorkflowNodeFormTool := ComboSelectedText(FWorkflowToolCombo);
+  if FWorkflowNodeFormTool = '' then
+    FWorkflowNodeFormTool := 'llm';
+  FWorkflowNodeFormTitle.Text := FWorkflowNodeFormTool + ' node';
+  FWorkflowNodeFormIdEdit.Text := NodeId;
+
+  { populate from the inspector -- one source for what a node's args mean }
+  FWorkflowNodeFormArgsLocked := False;
+  if SameText(FWorkflowNodeFormTool, 'llm') then
+  begin
+    FWorkflowNodeFormRow1.Visible := True;
+    FWorkflowNodeFormRow2.Visible := True;
+    FWorkflowNodeFormCap1.Text := 'Provider';
+    FWorkflowNodeFormCap2.Text := 'Model';
+    FWorkflowNodeFormMemoCap.Text := 'Prompt';
+    if FWorkflowLlmProviderEdit <> nil then
+      FWorkflowNodeFormEdit1.Text := FWorkflowLlmProviderEdit.Text;
+    if FWorkflowLlmModelEdit <> nil then
+      FWorkflowNodeFormEdit2.Text := FWorkflowLlmModelEdit.Text;
+    if FWorkflowLlmPromptMemo <> nil then
+      FWorkflowNodeFormMemo.Lines.Text := FWorkflowLlmPromptMemo.Lines.Text;
+  end
+  else if SameText(FWorkflowNodeFormTool, 'replicate') then
+  begin
+    FWorkflowNodeFormRow1.Visible := True;
+    FWorkflowNodeFormRow2.Visible := False;
+    FWorkflowNodeFormCap1.Text := 'Version';
+    FWorkflowNodeFormMemoCap.Text := 'Prompt';
+    if FWorkflowReplicateVersionEdit <> nil then
+      FWorkflowNodeFormEdit1.Text := FWorkflowReplicateVersionEdit.Text;
+    if FWorkflowReplicatePromptEdit <> nil then
+      FWorkflowNodeFormMemo.Lines.Text := FWorkflowReplicatePromptEdit.Text;
+  end
+  else
+  begin
+    { anything else edits its args as JSON, which is what the Configure tab
+      falls back to as well -- UNLESS a generated schema form owns them }
+    FWorkflowNodeFormRow1.Visible := False;
+    FWorkflowNodeFormRow2.Visible := False;
+    FWorkflowNodeFormArgsLocked := SchemaFormHasFields(FWorkflowSchemaForm);
+    if FWorkflowNodeFormArgsLocked then
+      FWorkflowNodeFormMemoCap.Text := 'Args (generated form - edit in More...)'
+    else
+      FWorkflowNodeFormMemoCap.Text := 'Args JSON';
+    if FWorkflowNodeArgsMemo <> nil then
+      FWorkflowNodeFormMemo.Lines.Text := FWorkflowNodeArgsMemo.Lines.Text;
+  end;
+  { read-only rather than editable-then-ignored: Apply prefers the generated
+    form, so an inline edit would vanish without a word }
+  FWorkflowNodeFormMemo.ReadOnly := FWorkflowNodeFormArgsLocked;
+
+  FWorkflowNodeFormPanel.Parent := Host;
+  PX := FWorkflowCanvas.Position.X + At.X;
+  PY := FWorkflowCanvas.Position.Y + At.Y;
+  PX := Max(0, Min(PX, Host.Width - FWorkflowNodeFormPanel.Width));
+  PY := Max(0, Min(PY, Host.Height - FWorkflowNodeFormPanel.Height));
+  FWorkflowNodeFormPanel.Position.X := PX;
+  FWorkflowNodeFormPanel.Position.Y := PY;
+  FWorkflowNodeFormPanel.Visible := True;
+  FWorkflowNodeFormPanel.BringToFront;
+  if FWorkflowNodeFormMemo.CanFocus then
+    FWorkflowNodeFormMemo.SetFocus;
+  SetStatus('editing node ' + NodeId + ' - Apply to save');
+end;
+
+procedure TMasterDetailForm.WorkflowHideNodeForm;
+begin
+  if FWorkflowNodeFormPanel <> nil then
+    FWorkflowNodeFormPanel.Visible := False;
+  FWorkflowNodeFormNodeId := '';
+end;
+
+procedure TMasterDetailForm.WorkflowNodeFormCloseClick(Sender: TObject);
+begin
+  WorkflowHideNodeForm;
+end;
+
+procedure TMasterDetailForm.WorkflowNodeFormFullEditorClick(Sender: TObject);
+begin
+  WorkflowHideNodeForm;
+  WorkflowOpenEditor('node');
+end;
+
+procedure TMasterDetailForm.WorkflowNodeFormOutputClick(Sender: TObject);
+begin
+  if FWorkflowNodeFormNodeId <> '' then
+    WorkflowWireNodeToOutput(FWorkflowNodeFormNodeId);
+  if FWorkflowCanvas <> nil then
+    FWorkflowCanvas.Repaint;
+end;
+
+procedure TMasterDetailForm.WorkflowNodeFormApplyClick(Sender: TObject);
+{ Push the inline values into the inspector controls, then let the ONE
+  existing applier turn them into args JSON and update the node. }
+begin
+  if (FWorkflowNodeFormPanel = nil) or (FWorkflowNodeFormNodeId = '') then
+    Exit;
+  if SameText(FWorkflowNodeFormTool, 'llm') then
+  begin
+    if FWorkflowLlmProviderEdit <> nil then
+      FWorkflowLlmProviderEdit.Text := Trim(FWorkflowNodeFormEdit1.Text);
+    if FWorkflowLlmModelEdit <> nil then
+      FWorkflowLlmModelEdit.Text := Trim(FWorkflowNodeFormEdit2.Text);
+    if FWorkflowLlmPromptMemo <> nil then
+      FWorkflowLlmPromptMemo.Lines.Text := FWorkflowNodeFormMemo.Lines.Text;
+  end
+  else if SameText(FWorkflowNodeFormTool, 'replicate') then
+  begin
+    if FWorkflowReplicateVersionEdit <> nil then
+      FWorkflowReplicateVersionEdit.Text := Trim(FWorkflowNodeFormEdit1.Text);
+    if FWorkflowReplicatePromptEdit <> nil then
+      FWorkflowReplicatePromptEdit.Text := FWorkflowNodeFormMemo.Lines.Text;
+  end
+  else if (FWorkflowNodeArgsMemo <> nil) and (not FWorkflowNodeFormArgsLocked) then
+    FWorkflowNodeArgsMemo.Lines.Text := FWorkflowNodeFormMemo.Lines.Text;
+
+  { the id edit is what WorkflowUpdateNodeClick renames from }
+  if FWorkflowNodeIdEdit <> nil then
+    FWorkflowNodeIdEdit.Text := Trim(FWorkflowNodeFormIdEdit.Text);
+  WorkflowApplyInspectorClick(nil);
+  FWorkflowNodeFormNodeId := Trim(FWorkflowNodeFormIdEdit.Text);
+  if FWorkflowCanvas <> nil then
+    FWorkflowCanvas.Repaint;
+end;
+
+procedure TMasterDetailForm.WorkflowWireNodeToOutput(const NodeId: string);
+{ Declare (or re-point) a workflow output fed by NodeId. The outputs memo
+  stays the single source of truth -- this edits the same "name = template"
+  lines an operator can type by hand, so the two ways of authoring an output
+  cannot drift. An llm node's text IS its result; model/tool nodes return a
+  prediction object whose first output is the artefact. }
+var
+  Existing: Integer;
+  I: Integer;
+  LineText: string;
+  Template: string;
+  Tool: string;
+begin
+  if (NodeId = '') or (FWorkflowOutputsMemo = nil) then
+    Exit;
+  Tool := '';
+  I := WorkflowNodeIndexById(NodeId);
+  if (I >= 0) and (FWorkflowNodesList <> nil) and
+    (FWorkflowNodesList.ListItems[I] <> nil) then
+    Tool := WorkflowTextTool(FWorkflowNodesList.ListItems[I].Text);
+  if SameText(Tool, 'llm') then
+    Template := '{{nodes.' + NodeId + '}}'
+  else
+    Template := '{{nodes.' + NodeId + '.output[0]}}';
+
+  Existing := -1;
+  for I := 0 to FWorkflowOutputsMemo.Lines.Count - 1 do
+  begin
+    LineText := Trim(FWorkflowOutputsMemo.Lines[I]);
+    if LineText = '' then
+      Continue;
+    if SameText(Trim(Copy(LineText, 1, Pos('=', LineText + '=') - 1)),
+      NodeId) then
+    begin
+      Existing := I;
+      Break;
+    end;
+  end;
+  LineText := NodeId + ' = ' + Template;
+  if Existing >= 0 then
+    FWorkflowOutputsMemo.Lines[Existing] := LineText
+  else
+    FWorkflowOutputsMemo.Lines.Add(LineText);
+  SetStatus('output "' + NodeId + '" now takes ' + Template);
+end;
+
+function TMasterDetailForm.WorkflowFindModelArray(
+  Value: TJSONValue): TJSONArray;
+{ The gateway hands back {ok, tool, result} where result is the UNWRAPPED
+  Replicate payload, and different Replicate MCP builds put the rows under
+  models / results / data -- or return a bare array. The old code probed
+  only three top-level names plus result.models, so a build that answers
+  result.results produced an empty list and no complaint. Probe every shape
+  at both levels instead of betting on one. }
+const
+  ROW_KEYS: array[0..2] of string = ('models', 'results', 'data');
+var
+  Inner: TJSONValue;
+  K: Integer;
+  Obj: TJSONObject;
+begin
+  Result := nil;
+  if Value is TJSONArray then
+    Exit(TJSONArray(Value));
+  if not (Value is TJSONObject) then
+    Exit;
+  Obj := TJSONObject(Value);
+  for K := 0 to High(ROW_KEYS) do
+  begin
+    Inner := Obj.GetValue(ROW_KEYS[K]);
+    if Inner is TJSONArray then
+      Exit(TJSONArray(Inner));
+  end;
+  { descend through the proxy's envelope -- each step goes strictly deeper,
+    so this terminates }
+  Inner := Obj.GetValue('result');
+  if Inner <> nil then
+    Result := WorkflowFindModelArray(Inner);
+end;
+
 procedure TMasterDetailForm.WorkflowReplicateSearchClick(Sender: TObject);
 var
   Base: string;
@@ -11253,6 +11624,7 @@ begin
         procedure
         var
           Arr: TJSONArray;
+          BodyError: string;
           I: Integer;
           Item: TListBoxItem;
           Obj: TJSONObject;
@@ -11261,7 +11633,6 @@ begin
           Root: TJSONValue;
           Row: TJSONObject;
           Version: string;
-          Value: TJSONValue;
         begin
           if FWorkflowReplicateResultsList <> nil then
             FWorkflowReplicateResultsList.Clear;
@@ -11270,37 +11641,22 @@ begin
             SetStatus('Replicate search failed: ' + ErrorText);
             Exit;
           end;
+          BodyError := '';
           Root := TJSONObject.ParseJSONValue(ResponseText);
           try
             Arr := nil;
             if Root is TJSONObject then
             begin
               Obj := TJSONObject(Root);
-              Value := Obj.GetValue('models');
-              if Value is TJSONArray then
-                Arr := TJSONArray(Value);
-              if Arr = nil then
-              begin
-                Value := Obj.GetValue('results');
-                if Value is TJSONArray then
-                  Arr := TJSONArray(Value);
-              end;
-              if Arr = nil then
-              begin
-                Value := Obj.GetValue('data');
-                if Value is TJSONArray then
-                  Arr := TJSONArray(Value);
-              end;
-              if Arr = nil then
-              begin
-                Value := Obj.GetValue('result');
-                if Value is TJSONObject then
-                begin
-                  Value := TJSONObject(Value).GetValue('models');
-                  if Value is TJSONArray then
-                    Arr := TJSONArray(Value);
-                end;
-              end;
+              { The proxy answers HTTP 200 even when it could NOT run the
+                search -- an unconnected Replicate MCP comes back as
+                {ok:false, error:...}. That was read as "no rows", so the
+                list emptied and the status still claimed success: the
+                reported "did a search and nothing happened". }
+              if (Obj.GetValue('ok') <> nil) and (not JsonAsBool(Obj, 'ok')) then
+                BodyError := JsonAsString(Obj, 'error')
+              else
+                Arr := WorkflowFindModelArray(Obj);
             end;
             if (Arr <> nil) and (FWorkflowReplicateResultsList <> nil) then
               for I := 0 to Min(Arr.Count - 1, 11) do
@@ -11338,7 +11694,17 @@ begin
               'GET /v1/replicate/search?q=' + Query + sLineBreak +
               'HTTP ' + Status.ToString + sLineBreak + sLineBreak +
               ResponseText;
-          SetStatus('Replicate search loaded');
+          { Say what actually happened. "loaded" over an empty list is why
+            this read as broken rather than as unconfigured. }
+          if BodyError <> '' then
+            SetStatus('Replicate search failed: ' + BodyError)
+          else if (FWorkflowReplicateResultsList = nil) or
+            (FWorkflowReplicateResultsList.Count = 0) then
+            SetStatus('no Replicate models matched "' + Query +
+              '" (is the Replicate MCP server connected?)')
+          else
+            SetStatus(FWorkflowReplicateResultsList.Count.ToString +
+              ' model(s) found - click one to use it');
         end);
     end);
 end;
@@ -12265,6 +12631,7 @@ var
   Note: string;
 begin
   WorkflowHidePalette;
+  WorkflowHideNodeForm;
   Focus := nil;
   if Target = 'inputs' then
   begin
@@ -12435,6 +12802,9 @@ begin
     Exit;
   Box := TPaintBox(Sender);
   WorkflowHidePalette;
+  { any canvas press dismisses the inline form; the double-click branch
+    below re-opens it for the node that was hit }
+  WorkflowHideNodeForm;
   FWorkflowDraggingId := '';
   FWorkflowConnectFromId := '';
   { wires are beziers now, so the hit test follows the curve }
@@ -12523,7 +12893,9 @@ begin
         WorkflowNodeSelect(nil);
       if ssDouble in Shift then
       begin
-        WorkflowOpenEditor('node');
+        { the node's own fields, right where the node is }
+        WorkflowShowNodeForm(WorkflowTextId(NodeItem.Text),
+          PointF(R.Right + GAP_S, R.Top));
         Box.Repaint;
         Exit;
       end;
@@ -12603,6 +12975,7 @@ procedure TMasterDetailForm.WorkflowCanvasMouseUp(Sender: TObject;
 var
   Box: TPaintBox;
   Pos: TPointF;
+  R: TRectF;
   TargetIndex: Integer;
   TargetId: string;
 begin
@@ -12610,6 +12983,19 @@ begin
   if (FWorkflowConnectFromId <> '') and (Sender is TPaintBox) then
   begin
     Box := TPaintBox(Sender);
+    { Dropping on the OUTPUT box declares a workflow output fed by this node
+      -- the web client has had this since P2 and Studio had no way at all
+      to say "this node's result is the answer", which is why the OUTPUT box
+      looked decorative. }
+    R := WorkflowIORect(WF_ID_OUTPUT, Box.Width, Box.Height);
+    if (X >= R.Left) and (X <= R.Right) and (Y >= R.Top) and (Y <= R.Bottom) then
+    begin
+      WorkflowWireNodeToOutput(FWorkflowConnectFromId);
+      FWorkflowConnectFromId := '';
+      Box.Repaint;
+      WorkflowRenderGraph;
+      Exit;
+    end;
     TargetIndex := WorkflowNodeIndexAtPoint(X, Y, Box.Width, True);
     if TargetIndex < 0 then
       TargetIndex := WorkflowNodeIndexAtPoint(X, Y, Box.Width, False);
@@ -13146,6 +13532,8 @@ begin
     if FWorkflowRunNodePreview <> nil then
       FWorkflowRunNodePreview.Clear;
     FWorkflowHoverEdge := '';
+    { the form edits a node from the workflow being replaced }
+    WorkflowHideNodeForm;
     { restore the view AFTER the wipe -- an earlier draft restored first and
       the Clear silently discarded it. Missing ui (older files, web saves)
       keeps the defaults, which reproduce the old fixed layout. }
