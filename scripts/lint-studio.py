@@ -9,9 +9,10 @@ actually broken the Delphi build, all of which are visible from the token
 stream without resolving a single identifier.
 
 Checks
-  1. brace-comment termination: a { } comment whose body contains a JSON-ish
-     fragment almost certainly ended at the example's own '}', leaving prose
-     to be parsed as code.  (E2003 'buries'/'escapes')
+  1. brace-comment termination: braces do not nest, so a { } comment whose
+     body still contains a '{' already ended at the example's own '}',
+     leaving prose to be parsed as code.  (E2003 'buries'/'escapes',
+     E2070 'where', E2038 '}')
   2. const/var section shape: an initialiser '=' on a bare name inside a var
      section, or a ':' declaration inside a const section -- the signature of
      a var block inserted into the middle of a const block.
@@ -47,12 +48,14 @@ def scan(src):
             i += 1
             continue
         if c == "(" and i + 1 < n and src[i + 1] == "*":
-            i += 2
-            while i + 1 < n and not (src[i] == "*" and src[i + 1] == ")"):
-                if src[i] == "\n":
+            start, j, body = line, i + 2, []
+            while j + 1 < n and not (src[j] == "*" and src[j + 1] == ")"):
+                if src[j] == "\n":
                     line += 1
-                i += 1
-            i += 2
+                body.append(src[j])
+                j += 1
+            yield (start, PAREN, "".join(body))
+            i = j + 2
             continue
         if c == "/" and i + 1 < n and src[i + 1] == "/":
             while i < n and src[i] != "\n":
@@ -86,10 +89,38 @@ def main(path):
             # a compiler directive is not a comment
             if body.startswith("$"):
                 continue
-            if ('{"' in body) or ('":' in body) or ("{{" in body):
+            # Braces do NOT nest in Delphi, so `body` above is the comment's
+            # REAL extent: it stopped at the first '}'. Any '{' still inside
+            # it therefore means the author wrote a brace pair in prose and
+            # the comment already ended early, spilling the remainder into
+            # the compiler as code. The old rule only recognised QUOTED JSON
+            # ('{"', '":', '{{'), so a bare `{ok, tool, result}` sailed
+            # through and broke the build (E2070 'where' / E2038 '}').
+            # Checking for '{' at all is the general form of the same rule.
+            if "{" in body:
                 findings.append(
-                    (ln, "brace-comment holds a JSON fragment; it ended at the "
-                         "example's own '}' -- use (* *)"))
+                    (ln, "brace-comment contains '{': it ended at the "
+                         "example's own '}' and the rest parses as code "
+                         "-- use a paren-star comment"))
+            continue
+
+        if kind == PAREN:
+            # NB: read `text`, not `body` -- `body` is bound only in the
+            # BRACE branch above, so using it here silently tests the
+            # PREVIOUS brace comment and the rule never fires.
+            paren_body = text.strip()
+            # Paren-star comments do not nest either, so the same reasoning
+            # applies: the body stopped at the first close, and an opener
+            # still inside it means the comment already ended there. This is
+            # not hypothetical -- the comment ADDED to explain the brace rule
+            # named both delimiters literally and broke the build itself
+            # (E2070 'form' / E2052 unterminated string). Describe the
+            # delimiters in words inside a comment of the same kind.
+            if "(*" in paren_body:
+                findings.append(
+                    (ln, "paren-star comment contains an inner '(*': it "
+                         "ended at the first close and the rest parses as "
+                         "code -- name the delimiters in words"))
             continue
 
         line = text.strip()
