@@ -15,6 +15,8 @@
                        page; the JS inside is responsible for
                        attaching the token to subsequent
                        /v1/* fetches)
+    /desktop           desktop shell HTML -- same rationale as /,
+                       and it hosts the token-entry dialog itself
     /v1/health         health probes (k8s liveness, load balancer)
     /v1/version        build metadata (frequently scraped)
     /webhooks/*        per-channel webhook receivers carry their
@@ -118,6 +120,14 @@ begin
     a bearer header because the browser issues it before any JS
     runs. Same as Grafana's behaviour. }
   if Doc = '/' then Exit(True);
+
+  { Desktop shell HTML -- same deal as '/'. A browser navigating to
+    /desktop cannot attach the bearer stored in localStorage, and the
+    page IS the thing that holds the token-entry dialog: returning it
+    as 401 locks the user out of the very UI that would let them
+    authenticate. The JS inside attaches the token to every /v1/*
+    fetch it makes. }
+  if (Doc = '/desktop') or (Doc = '/desktop/') then Exit(True);
 
   { Health probe -- k8s readiness/liveness, load-balancer pings.
     Returning 401 here would route the platform's probe into the

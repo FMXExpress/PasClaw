@@ -2340,19 +2340,18 @@ begin
        fields win. FromJSON is merge-style (every GetX call defaults
        to the current TConfig value), so multiple applies layer
        cleanly. *)
-    ProfileName := ProfileOverride;
-    if ProfileName = '' then
-      ProfileName := GetEnvironmentVariable('PASCLAW_PROFILE');
-    (* Workspace -> profile binding. A workspace may name the profile it
-       works under ("business B uses the b-corp keys"), stored as
-       config.json's workspace_profiles object. Sits BELOW the explicit
-       selectors -- naming a profile on the command line should always win
-       -- and ABOVE the global "profile" field, because the binding is the
-       more specific statement. *)
-    if (ProfileName = '') and HasConfigFile then
-      ProfileName := ExtractWorkspaceProfile(S);
-    if (ProfileName = '') and HasConfigFile then
-      ProfileName := ExtractProfileField(S);
+    (* The whole chain lives in ResolveProfileName so a caller that needs
+       to know what this process resolved (the gateway, warning that a
+       runtime workspace switch wants a profile it cannot adopt in flight)
+       reads the same answer instead of re-implementing the order. It
+       includes the workspace -> profile binding: a workspace may name the
+       profile it works under ("business B uses the b-corp keys"), stored
+       as config.json's workspace_profiles object, below the explicit
+       selectors and above the global "profile" field. *)
+    if HasConfigFile then
+      ProfileName := ResolveProfileName(S, ProfileOverride)
+    else
+      ProfileName := ResolveProfileName('', ProfileOverride);
     if ProfileName <> '' then
     begin
       if ResolveProfileBodies(GetHome, ProfileName, Bodies, PErr) then

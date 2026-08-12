@@ -248,11 +248,12 @@ When both are present, the header wins (logs may capture the query string; the h
 
 ### Exempt routes
 
-These four route families bypass the bearer check even when `gateway.token` is set:
+These five route families bypass the bearer check even when `gateway.token` is set:
 
 | Route | Why exempt |
 |---|---|
 | `GET /` | Web UI HTML. Browsers can't attach a Bearer header on the initial GET; the JS inside attaches the token to subsequent `/v1/*` fetches. |
+| `GET /desktop` | Desktop shell HTML — same reason as `/`, and this page hosts the token-entry dialog itself, so returning it as 401 would lock you out of the UI that lets you authenticate. Its `/v1/desktop/*` data routes are **not** exempt. |
 | `GET /v1/health` | k8s liveness / readiness probes. A 401 would route the platform's probe into "instance unhealthy" even when the gateway is up. |
 | `GET /v1/version` | Build metadata. Frequently scraped; pinning a token wouldn't protect anything sensitive. |
 | `/webhooks/<channel>` | LINE / WhatsApp / Slack inbound paths. Upstream channels can't supply the gateway bearer; they carry their own per-channel signature secret instead (`x-line-signature`, `x-hub-signature-256`, etc.). |
@@ -260,6 +261,8 @@ These four route families bypass the bearer check even when `gateway.token` is s
 ### What's gated
 
 Everything else, including `/v1/logs`, `/v1/stats`, `/v1/config`, `/v1/fs`, `/v1/fs/read`, `/mcp`, `/v1/mcp/rpc`. The `/v1/logs` ring buffer leaks per-tool argument bytes; `/v1/config` carries masked API keys + bot tokens; `/v1/fs/read` returns file contents up to 256 KB. Locking these down behind the token is the whole point.
+
+One deliberate exception, scoped to a listener rather than a route: on the `--apps-port` listener, the app surface it exists to serve (`/apps/*`, `/pages/*`, and the per-app `state`/`read`/`action` paths) answers without a bearer. That origin is where model-authored app code runs, and it is designed never to hold the operator token — see [Serving apps from their own origin](desktop.md#serving-apps-from-their-own-origin). Every other route on that listener still 401s, and the main port is unaffected.
 
 ### Identity stamping
 

@@ -123,6 +123,22 @@ function ExtractProfileField(const ConfigJSON: string): string;
    underneath Workspaces and cannot use it. *)
 function ExtractWorkspaceProfile(const ConfigJSON: string): string;
 
+(* The profile name that WOULD be applied for the given raw config text and
+   an explicit override (CLI --profile; '' when none), following the whole
+   precedence chain in one place:
+
+     1. Override      (CLI --profile)
+     2. $PASCLAW_PROFILE
+     3. the active workspace's binding (workspace_profiles)
+     4. the global "profile" field
+
+   LoadConfig uses it to decide what to apply. Callers that need to know
+   what a running process resolved -- e.g. the gateway, to warn that a
+   runtime workspace switch wants a profile it cannot adopt mid-flight --
+   use it so the answer is derived from the same chain rather than a
+   re-implementation that can drift. Returns '' when no layer names one. *)
+function ResolveProfileName(const ConfigJSON, Override: string): string;
+
 { Look up one profile's raw JSON body + a TProfileSpec describing it.
   No inheritance resolution -- this is the leaf operation
   ResolveProfileBodies recurses against. Returns False on unknown
@@ -650,6 +666,19 @@ begin
   finally
     O.Free;
   end;
+end;
+
+function ResolveProfileName(const ConfigJSON, Override: string): string;
+begin
+  Result := Trim(Override);
+  if Result <> '' then Exit;
+  Result := Trim(GetEnvironmentVariable('PASCLAW_PROFILE'));
+  if Result <> '' then Exit;
+  { Below the explicit selectors, above the global field: the binding is
+    the more specific statement about this workspace. }
+  Result := ExtractWorkspaceProfile(ConfigJSON);
+  if Result <> '' then Exit;
+  Result := ExtractProfileField(ConfigJSON);
 end;
 
 end.

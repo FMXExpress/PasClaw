@@ -69,11 +69,13 @@ function RunnerBackendName: string;
 
 function RunStateToStr(S: TRunState): string;
 
-(* The command StartApp would run, with the {port} placeholder substituted.
-   Exposed so the desktop can show the user exactly what they are consenting
-   to BEFORE they consent -- a confirmation that hides the command is
-   theatre. Paren-star delimiters: the placeholder's brace would close a
-   curly-brace comment early. *)
+(* Everything StartApp would execute, with the {port} placeholder
+   substituted: the manifest's build line first (when present, one per
+   line) and then the run command. Exposed so the desktop can show the
+   user exactly what they are consenting to BEFORE they consent -- a
+   confirmation that hides any of the commands is theatre. Paren-star
+   delimiters: the placeholder's brace would close a curly-brace comment
+   early. *)
 function PlannedCommand(const Project: string; out Err: string): string;
 
 { Build (when the manifest has a `build`) and start the app. Refuses unless
@@ -805,6 +807,12 @@ begin
     Err := 'app.json has no "run" command for this kind';
     Exit;
   end;
+  { The manifest's build line is executed through a shell before the run
+    command, on the same consent -- so it belongs in the plan. Showing
+    only the run line would let a model-authored manifest hide arbitrary
+    shell in `build` behind a benign-looking confirmation. }
+  if Trim(Info.Build) <> '' then
+    Result := Trim(Info.Build) + LineEnding + Result;
   (* The port isn't claimed until the app starts, so show a placeholder a
      person reads as one -- the raw brace token in a consent prompt looks
      like the command is broken. Paren-star: the token itself would close a

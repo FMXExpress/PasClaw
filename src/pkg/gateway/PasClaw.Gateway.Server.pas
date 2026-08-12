@@ -1358,7 +1358,22 @@ begin
     to a compromised worker, the worst they can do is pull jobs
     and POST responses -- they can't impersonate the operator
     against the rest of the API. }
-  if (not CheckGatewayAuth(GetEffectiveGatewayToken(FCfg),
+  (* Apps-origin carve-out: on the --apps-port listener, the routes the
+     listener exists to serve bypass the operator bearer. The second origin
+     exists so model-authored app code can NEVER see the operator token --
+     the desktop iframe deliberately embeds apps without it, and the
+     standalone SDK's fetches carry none -- so gating these routes on that
+     token is a contradiction: the only way to make them work would be to
+     hand the untrusted origin the very credential the split protects.
+     What this opens is exactly the apps surface and nothing else: app/page
+     content plus the per-app state/read/action SDK (IsAppScopedPath). The
+     main listener is untouched -- there these same paths still require the
+     bearer. Operators who need the apps origin private keep it on
+     localhost or in front of their own proxy auth. *)
+  if (not (FAppsOnly and
+           (HasPrefix(Doc, '/apps/') or HasPrefix(Doc, '/pages/') or
+            IsAppScopedPath(Doc))))
+     and (not CheckGatewayAuth(GetEffectiveGatewayToken(FCfg),
                             ARequest.Command, Doc,
                             ARequest.RawHeaders.Values['Authorization'],
                             ARequest.Params.Values['token']))
@@ -5414,7 +5429,7 @@ type
      log, which is exactly what those exist for. *)
   TJobRunThread = class(TThread)
   private
-    FProject, FTask, FJob, FPrompt: string;
+    FProject, FTask, FJob, FPrompt, FWorkspace: string;
   protected
     procedure Execute; override;
   public
@@ -5428,6 +5443,13 @@ begin
   FTask := ATask;
   FJob := AJob;
   FPrompt := APrompt;
+  (* The workspace the operator started this job in, captured on the
+     REQUEST thread while it is still unambiguous. A run outlives the
+     click that began it, so an operator who switches workspace mid-run
+     would otherwise redirect a job already in flight: its later store
+     and file access would land in the other business's world. Pinned in
+     Execute below. *)
+  FWorkspace := ActiveWorkspaceName;
   FreeOnTerminate := True;
 end;
 
@@ -5436,6 +5458,11 @@ var
   Reply, Err, Sys, Task, Ignored: string;
   T: TTaskInfo;
 begin
+  { Pin first: everything below resolves paths through the active
+    workspace, and this thread's answer must stay the one it started
+    with regardless of what the operator does in the UI meanwhile. }
+  SetThreadWorkspace(FWorkspace);
+  try
   Task := FPrompt;
   if Trim(Task) = '' then
   begin
@@ -5481,6 +5508,9 @@ begin
     UpdateJob(FProject, FTask, FJob, 'failed', Err, '-', Ignored);
   end;
   PublishProjects;
+  finally
+    SetThreadWorkspace('');
+  end;
 end;
 
 function DesktopJobRunner(const Project, TaskId, Prompt: string;

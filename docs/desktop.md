@@ -390,6 +390,17 @@ and frames apps from there. Apps keep working when you *don't* pass
 upgrade, not a requirement. If your gateway is token-gated and you open
 generated apps standalone, use it.
 
+**The apps port is not bearer-gated, by construction.** The whole point of
+the second origin is that app code never sees the operator token: the
+desktop frames apps without it, and the standalone SDK sends none. Gating
+those routes on that token would mean handing the untrusted origin the very
+credential the split exists to protect. So on the `--apps-port` listener the
+app surface — `/apps/*`, `/pages/*`, and the per-app `state`/`read`/`action`
+paths — answers without a bearer, and everything else on it still 401s. The
+main port is unchanged: the same paths require the token there. Keep the
+apps port on localhost, or behind your own proxy auth, if that origin needs
+to be private.
+
 ---
 
 ## Live updates

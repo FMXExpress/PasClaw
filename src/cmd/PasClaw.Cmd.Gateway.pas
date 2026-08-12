@@ -68,7 +68,9 @@ uses
   PasClaw.Channels.WhatsApp,
   PasClaw.Channels.Matrix,
   PasClaw.Channels.IRC,
-  PasClaw.Channels.Email;
+  PasClaw.Channels.Email,
+  PasClaw.Config.Profile,   { ResolveProfileName -- the boot-vs-binding check }
+  PasClaw.Utils;            { ReadFileText }
 
 type
   TGwArgs = record
@@ -109,13 +111,35 @@ type
     MCPAllowWrite:  Boolean;
   end;
 
+var
+  { The profile this gateway process actually booted under. Only used to
+    tell the operator when a runtime switch lands somewhere that wanted a
+    different one -- see RepointSandbox. }
+  GBootProfile: string = '';
+
 procedure RepointSandbox(const NewRoot: string);
 var
   Cfg: TConfig;
+  Bound, Running: string;
 begin
   ForceDirectories(NewRoot);
   Cfg := LoadConfig;
   ConfigureSandbox(Cfg.Sandbox, NewRoot);
+  (* A workspace can name the profile it works under, but a profile is
+     resolved once at boot: it decides the tool list and the model, which
+     in-flight requests are already holding. Rather than swap those
+     underneath them, say plainly that the binding is not in effect --
+     silently running business B under business A's profile is the
+     failure worth avoiding. *)
+  Bound := ResolveProfileName(ReadFileText(GetConfigPath), '');
+  if (Bound <> '') and (Bound <> GBootProfile) then
+  begin
+    if GBootProfile = '' then Running := '(none)' else Running := GBootProfile;
+    LogWarn('workspace: this workspace is bound to profile "%s" but the ' +
+            'gateway is running under "%s" -- restart the gateway (or run ' +
+            'a second one) for the binding to take effect',
+            [Bound, Running]);
+  end;
 end;
 
 function ParseGw(const Argv: array of string; const Cfg: TConfig): TGwArgs;
@@ -219,6 +243,9 @@ begin
       Break;
     end;
   Cfg := LoadConfig(ProfileName);
+  { What this process actually resolved, so a later workspace switch can
+    say whether the new workspace's binding is in effect. }
+  GBootProfile := ResolveProfileName(ReadFileText(GetConfigPath), ProfileName);
   { Default the working directory to $PASCLAW_HOME/workspace -- the dir the
     web UI Files tab browses -- rather than the launch CWD, so a relative
     write_file("index.html") lands where the operator sees it. An explicit
