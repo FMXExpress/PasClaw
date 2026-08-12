@@ -11571,12 +11571,16 @@ end;
 
 function TMasterDetailForm.WorkflowFindModelArray(
   Value: TJSONValue): TJSONArray;
-{ The gateway hands back {ok, tool, result} where result is the UNWRAPPED
-  Replicate payload, and different Replicate MCP builds put the rows under
-  models / results / data -- or return a bare array. The old code probed
-  only three top-level names plus result.models, so a build that answers
-  result.results produced an empty list and no complaint. Probe every shape
-  at both levels instead of betting on one. }
+(* The gateway hands back {ok, tool, result} where result is the UNWRAPPED
+   Replicate payload, and different Replicate MCP builds put the rows under
+   models / results / data -- or return a bare array. The old code probed
+   only three top-level names plus result.models, so a build that answers
+   result.results produced an empty list and no complaint. Probe every shape
+   at both levels instead of betting on one.
+
+   NOTE the (* *) form: this text shows a brace pair, and Delphi's { }
+   comments do NOT nest -- a { } version ends at the example's own '}' and
+   spills the rest into the compiler as code. *)
 const
   ROW_KEYS: array[0..2] of string = ('models', 'results', 'data');
 var
@@ -11670,11 +11674,11 @@ begin
             if Root is TJSONObject then
             begin
               Obj := TJSONObject(Root);
-              { The proxy answers HTTP 200 even when it could NOT run the
-                search -- an unconnected Replicate MCP comes back as
-                {ok:false, error:...}. That was read as "no rows", so the
-                list emptied and the status still claimed success: the
-                reported "did a search and nothing happened". }
+              (* The proxy answers HTTP 200 even when it could NOT run the
+                 search -- an unconnected Replicate MCP comes back as
+                 {ok:false, error:...}. That was read as "no rows", so the
+                 list emptied and the status still claimed success: the
+                 reported "did a search and nothing happened". *)
               if (Obj.GetValue('ok') <> nil) and (not JsonAsBool(Obj, 'ok')) then
                 BodyError := JsonAsString(Obj, 'error')
               else
