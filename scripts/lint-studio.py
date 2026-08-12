@@ -15,7 +15,12 @@ Checks
      or '*)' reaching code, which is the compiler's own E2038 -- and not by
      an opener inside a comment body, which is valid prose and flagging it
      blocks legitimate comments.  (E2003 'buries'/'escapes', E2070 'where',
-     E2070 'form', E2052 unterminated string, E2038)
+     E2070 'form', E2038)
+  1b. unterminated string: a quote still open at end of line cannot be valid
+     Pascal. It is worth its own report, and it is also how the escaped
+     prose above usually presents -- a contraction's apostrophe opens a
+     "string" that swallows the intended terminator, hiding it from 1.
+     (E2052 unterminated string)
   2. const/var section shape: an initialiser '=' on a bare name inside a var
      section, or a ':' declaration inside a const section -- the signature of
      a var block inserted into the middle of a const block.
@@ -43,11 +48,20 @@ def scan(src):
             i += 1
             continue
         if c == "'":                                   # string literal
+            # Pascal string literals CANNOT span lines, so a quote still open
+            # at the newline is itself the error (E2052) -- and it is the
+            # other half of the early-comment wreckage: prose spilled out of
+            # a comment usually carries a contraction, whose apostrophe opens
+            # a "string" that swallows the intended terminator before the
+            # stray-close check can ever see it. Stopping at the newline both
+            # reports that and resyncs the scan onto the next line.
+            start = line
             i += 1
-            while i < n and src[i] != "'":
-                if src[i] == "\n":
-                    line += 1
+            while i < n and src[i] != "'" and src[i] != "\n":
                 i += 1
+            if i >= n or src[i] == "\n":
+                yield (start, STR, "unterminated")
+                continue           # leave the newline for the branch above
             i += 1
             continue
         if c == "(" and i + 1 < n and src[i + 1] == "*":
@@ -103,6 +117,17 @@ def main(path):
         # bare '}' or '*)' outside them -- which is precisely what dcc64
         # reports as E2038 "Illegal character in input file".
         if kind in (BRACE, PAREN):
+            continue
+
+        # The other half of the wreckage. A quote left open at end of line
+        # cannot be valid Pascal, and when prose escapes a comment its
+        # contraction ("doesn't") opens exactly this -- swallowing the
+        # intended terminator so the stray-close check below never sees it
+        # (Codex P2 on PR #521).
+        if kind == STR:
+            findings.append(
+                (ln, "string literal not closed before end of line -- often "
+                     "prose that escaped a comment that ended early"))
             continue
 
         line = text.strip()
