@@ -4575,11 +4575,18 @@ function wfRenderIOBoxes(canvas) {
   }));
 }
 
-/* The sensible node-output reference for drag-to-wire: llm nodes emit text
-   (bare {{nodes.ID}}); model/tool nodes emit a prediction object ({{...output[0]}}). */
+/* The node-output reference for drag-to-wire. The ENGINE decides which one
+   resolves: PlanNode auto-polls exactly these two tool names and lifts
+   output[0] into the node's text for them. Every other node -- generic MCP
+   tools, registered tools, llm -- exposes its result AS that text and may
+   have no output array at all, so a selector there resolves to nothing and
+   the output silently comes back empty. Bare is the safe default. */
+const WF_PREDICTION_TOOLS = ["replicate", "replicate__create_predictions"];
 function wfDefaultRef(nodeId) {
   const n = wf.nodes.find(x => x.id === nodeId);
-  return (n && n.tool === "llm") ? `{{nodes.${nodeId}}}` : `{{nodes.${nodeId}.output[0]}}`;
+  const t = (n && n.tool || "").trim().toLowerCase();
+  return WF_PREDICTION_TOOLS.includes(t)
+    ? `{{nodes.${nodeId}.output[0]}}` : `{{nodes.${nodeId}}}`;
 }
 /* Set (or add) an output field's template from a drag-to-wire drop, writing it
    back through the #wfOutputs editor so save/load stay the single source. */
@@ -4726,9 +4733,15 @@ function wfStartConnect(ev, fromId) {
     tmp.remove();
     const tgt = document.elementFromPoint(e.clientX, e.clientY);
     const outField = tgt && tgt.closest && tgt.closest(".wf-outfield");
+    const outBox = tgt && tgt.closest && tgt.closest('.wf-io[data-kind="output"]');
     if (outField) {
       /* Dropped on an Output box field -> author that output's template. */
       wfSetOutputTemplate(outField.dataset.out, wfDefaultRef(fromId));
+    } else if (outBox) {
+      /* Dropped on the Output BOX itself -> declare a new output fed by this
+         node. Without this the box is only a target once an output already
+         exists, so a workflow with none declared had nowhere to drop. */
+      wfSetOutputTemplate(fromId, wfDefaultRef(fromId));
     } else if (tgt && tgt.classList.contains("wf-in")) {
       const toId = tgt.dataset.node;
       if (toId && toId !== fromId && !wf.edges.some(x => x.from === fromId && x.to === toId)) {
