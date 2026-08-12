@@ -475,6 +475,11 @@ const
     'Sync</button></div>' +
     '<ul id="list"></ul>' +
     '<div class="muted" id="count">&nbsp;</div>' +
+    '<div id="draftbox" style="display:none">' +
+    '<div class="muted" id="dsub">&nbsp;</div>' +
+    '<textarea id="draft" rows="8"></textarea>' +
+    '<div class="muted">Nothing is sent. Copy this into your mail client.' +
+    '</div></div>' +
     '<script src="pasclaw.js"></' + 'script>' +
     '<script>' +
     'let items=[];' +
@@ -497,10 +502,15 @@ const
     'cyc.title="Change category";' +
     'cyc.onclick=async()=>{const n=(TAGS.indexOf(it.tag||"FYI")+1)%TAGS.length;' +
     'it.tag=TAGS[n];paint();await save();};' +
+    { Per-message and on demand: triage is free, this is a model call. }
+    'const dr=document.createElement("span");dr.className="x";' +
+    'dr.textContent="\u270e";dr.title="Summarise and draft a reply";' +
+    'dr.onclick=()=>draft(it);' +
     'const x=document.createElement("span");x.className="x";' +
     'x.textContent=String.fromCharCode(0x2715);' +
     'x.onclick=async()=>{items.splice(i,1);paint();await save();};' +
-    'li.appendChild(sp);li.appendChild(cyc);li.appendChild(x);ul.appendChild(li);});' +
+    'li.appendChild(sp);li.appendChild(dr);li.appendChild(cyc);' +
+    'li.appendChild(x);ul.appendChild(li);});' +
     'const u=items.filter(i=>!i.read).length;' +
     '$("#count").textContent=items.length?u+" unread of "+items.length:"";}' +
     '$("#add").onclick=async()=>{const v=$("#t").value.trim();if(!v)return;' +
@@ -516,7 +526,21 @@ const
     '"No new mail.");}}' +
     'catch(e){$("#hint").textContent=String(e.message||e);}' +
     '$("#sync").disabled=false;};' +
-    '$("#hint").textContent="PasClaw can poll IMAP and send replies -- see the Email channel in docs/channels.md. Once it is configured, ask PasClaw in this project to file triaged mail here.";' +
+    { The draft is kept ON the item, so it survives a repaint and a reload
+      and does not have to be regenerated to be re-read. }
+    'async function draft(it){' +
+    '$("#draftbox").style.display="block";' +
+    '$("#dsub").textContent=it.subject;' +
+    'if(it.draft){$("#draft").value=it.draft;return;}' +
+    '$("#draft").value="Reading it...";' +
+    'try{const r=await pasclaw.action("mail-draft",' +
+    '{subject:it.subject,from:it.from||"",excerpt:it.excerpt||""});' +
+    'it.draft=(r&&r.text)||"";$("#draft").value=it.draft;await save();}' +
+    'catch(e){$("#draft").value=String(e.message||e);}}' +
+    '$("#draft").oninput=()=>{const s=$("#dsub").textContent;' +
+    'const it=items.find(x=>x.subject===s);' +
+    'if(it){it.draft=$("#draft").value;save();}};' +
+    '$("#hint").textContent="Sync fills this from IMAP. The pencil summarises a message and drafts a reply -- nothing is ever sent from here.";' +
     '(async()=>{items=await pasclaw.getJSON("items",[]);paint();})();' +
     '</' + 'script></body></html>';
 

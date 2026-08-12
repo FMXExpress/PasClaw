@@ -1259,9 +1259,14 @@ function createWindow(opts) {
     id: ++winSeq, key: o.key, node: n, bar, body, title: o.title,
     icon: o.icon, minimized: false, maximized: false, prev: null,
     onClose: o.onClose, onActive: null,
+    /* How to bring this window back after a reload. Only windows that CAN
+       be reconstructed carry one -- a progress dialog or a wizard is tied
+       to work that is over, and restoring it would be a lie about state. */
+    restore: o.restore || null,
   };
   WINS.set(o.key || ("w" + w.id), w);
   n.__win = w;
+  if (w.restore) saveDesktop();
 
   if (o.resizable) {
     ["n","s","w","e","nw","ne","sw","se"].forEach(d => {
@@ -1329,6 +1334,7 @@ function closeWindow(w) {
   w.node.remove();
   for (const [k, v] of WINS) if (v === w) WINS.delete(k);
   paintTaskbar();
+  saveDesktop();
 }
 
 function startDrag(e, w) {
@@ -1361,6 +1367,7 @@ function startDrag(e, w) {
     document.body.classList.remove("dragging");
     /* Edge maximize: shoved against the top of the stage. */
     if (!w.maximized && ev.clientY - r.top <= 2) toggleMax(w);
+    saveDesktop();
   };
   document.addEventListener("mousemove", move);
   document.addEventListener("mouseup", up);
@@ -1500,6 +1507,90 @@ onDesktopEvent("project",  () => loadProjects().catch(() => {}));
 onDesktopEvent("task",     () => loadProjects().catch(() => {}));
 onDesktopEvent("job",      () => loadProjects().catch(() => {}));
 
+
+/* ==========================================================================
+   Desktop state -- the arrangement belongs to the workspace
+
+   Saved on the SERVER, per workspace, not in localStorage: switching to the
+   "home" workspace should bring back the home desktop from any browser
+   pointed at this gateway. Only windows that carry a `restore` descriptor
+   come back; a progress dialog or a wizard is tied to work that is over, and
+   reopening one would be a lie about state.
+   ========================================================================== */
+
+const RESTORERS = {
+  chat:    a  => openChat(a),
+  app:     a  => openApp(a),
+  browser: a  => openBrowser(a || undefined),
+  library: () => openLibrary(),
+  files:   a  => openFiles(a || undefined),
+};
+
+let saveTimer = null;
+let restoring = false;
+
+function captureDesktop() {
+  const wins = [];
+  for (const w of WINS.values()) {
+    if (!w.restore || !RESTORERS[w.restore.fn]) continue;
+    const g = w.maximized && w.prev ? w.prev : w.node.style;
+    wins.push({
+      fn: w.restore.fn, arg: w.restore.arg || "",
+      x: parseInt(g.left, 10) || 0, y: parseInt(g.top, 10) || 0,
+      w: parseInt(g.width, 10) || 0, h: parseInt(g.height, 10) || 0,
+      max: !!w.maximized, min: !!w.minimized,
+    });
+  }
+  return {
+    v: 1,
+    style: S.style || "",
+    /* The dock is not a window, but whether you have it open is part of how
+       your desktop is arranged. */
+    dock: !$("#dock").classList.contains("hidden"),
+    windows: wins,
+  };
+}
+
+/* Debounced: a drag fires this on every mouseup, and a restore fires it once
+   per window it opens. Neither deserves a request each. */
+function saveDesktop() {
+  if (restoring) return;
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    api("/v1/desktop/state", { method: "PUT", body: captureDesktop() })
+      .catch(() => { /* a desktop that cannot save its layout still works */ });
+  }, 700);
+}
+
+async function restoreDesktop() {
+  let st = null;
+  try { st = await api("/v1/desktop/state"); } catch { return; }
+  if (!st) return;
+  restoring = true;
+  try { if (st.dock === false) hideDock(); else if (st.dock === true) openTree(); } catch {}
+  if (!Array.isArray(st.windows) || !st.windows.length) { restoring = false; return; }
+  try {
+    for (const d of st.windows) {
+      const fn = RESTORERS[d.fn];
+      if (!fn) continue;
+      let w;
+      try { w = await fn(d.arg); } catch { continue; }
+      if (!w || !w.node) continue;
+      if (d.w > 0) {
+        Object.assign(w.node.style, {
+          left: d.x + "px", top: d.y + "px",
+          width: d.w + "px", height: d.h + "px",
+        });
+      }
+      if (d.max) toggleMax(w);
+      if (d.min) minimizeWindow(w);
+    }
+  } finally {
+    restoring = false;
+  }
+  paintTaskbar();
+}
+
 /* ==========================================================================
    Menu
    ========================================================================== */
@@ -1559,6 +1650,9 @@ async function switchWorkspace(name) {
   S.tree = {}; S.selected = null;
   await loadWorkspaces();
   await loadProjects();
+  /* Each workspace has its own desktop, which is the point of the pager:
+     switching is meant to feel like walking into a different room. */
+  await restoreDesktop();
 }
 
 async function newWorkspace() {
@@ -1765,6 +1859,7 @@ function openChat(project) {
   const w = createWindow({
     key: "chat:" + project, title: (p ? p.title : project) + " -- Chat",
     width: 520, height: 420, icon: "chat", pad: false,
+    restore: { fn: "chat", arg: project },
   });
 
   const wrap = el("div", "chat");
@@ -1790,23 +1885,90 @@ function openChat(project) {
     return b;
   }
 
+  /* Every card in this conversation, oldest first. A card is only "old"
+     once a later turn made another one, which is why this list exists
+     rather than a flag on each card. */
+  const cards = [];
+
   /* An artifact card: the turn produced or updated something runnable.
      Pinned to the message that made it, so scrolling back through a
-     conversation is scrolling back through versions. */
-  function addArtifact(kind, name, opener) {
+     conversation is scrolling back through versions -- and an old card
+     opens the version THAT turn produced, not whatever the app is now.
+
+     The body is captured when the card is made, because there is nowhere
+     else to get it from later: the app directory holds one file and each
+     turn overwrites it. */
+  function addArtifact(kind, name, opener, body) {
     const card = el("div", "artifact");
     const g = el("div", "ico");
     g.innerHTML = icon(kind === "page" ? "page" : "app");
     card.appendChild(g);
     const meta = el("div", "meta");
     meta.appendChild(el("div", "nm", name));
-    meta.appendChild(el("div", "kd", kind === "page" ? "page -- document" : "app -- " + kind));
+    const kd = el("div", "kd", kind === "page" ? "page -- document" : "app -- " + kind);
+    meta.appendChild(kd);
     card.appendChild(meta);
-    const run = el("button", "btn", "▶ Run");
-    run.addEventListener("click", opener);
+    const run = el("button", "btn", "\u25b6 Run");
+    const rec = { card, kd, run, body: body || "", opener };
+    /* Everything before this one is now a previous version. */
+    cards.forEach(c => markOld(c));
+    cards.push(rec);
+    run.addEventListener("click", () => {
+      if (rec.old) openVersion(rec); else rec.opener();
+    });
     card.appendChild(run);
     log.appendChild(card);
     log.scrollTop = log.scrollHeight;
+  }
+
+  function markOld(rec) {
+    if (rec.old) return;
+    rec.old = true;
+    rec.kd.textContent += "  \u2014 earlier version";
+    /* A card with nothing captured cannot show a version, so it stops
+       claiming it can rather than opening the current app and pretending
+       that is what this turn made. */
+    if (!rec.body) { rec.run.disabled = true; rec.run.title = "not captured"; }
+    else rec.run.textContent = "\u25b6 View";
+  }
+
+  /* Open a captured version, read-only, in its own window. Nothing on disk
+     is touched until Restore is pressed -- looking at an old draft should
+     not be a decision. */
+  function openVersion(rec) {
+    const w = createWindow({
+      title: "Earlier version", width: 620, height: 460, icon: "page", pad: false,
+    });
+    const bar = el("div");
+    bar.style.cssText = "display:flex;gap:4px;padding:3px;align-items:center";
+    bar.appendChild(el("div", "muted", "This is what that turn produced."));
+    const spacer = el("div"); spacer.style.flex = "1 1 auto"; bar.appendChild(spacer);
+    const restore = el("button", "btn", "Restore this version");
+    bar.appendChild(restore);
+    w.body.appendChild(bar);
+
+    /* srcdoc + the same sandbox the live app gets: an old version is model
+       output too, and being old does not make it trusted. */
+    const frame = el("iframe", "app");
+    frame.setAttribute("sandbox", "allow-scripts allow-forms");
+    frame.style.height = "calc(100% - 30px)";
+    frame.srcdoc = rec.body;
+    w.body.appendChild(frame);
+
+    restore.addEventListener("click", async () => {
+      if (!confirm("Put this version back as the current app?\n\n" +
+                   "The version on disk now will be replaced.")) return;
+      restore.disabled = true;
+      try {
+        await api(`/v1/apps/${project}/entry`, { method: "PUT", body: rec.body });
+        closeWindow(w);
+        rec.opener();
+      } catch (e) {
+        addMsg("desktop", "Could not restore: " + e.message);
+        restore.disabled = false;
+      }
+    });
+    return w;
   }
 
   async function submit() {
@@ -1891,7 +2053,14 @@ function openChat(project) {
     try {
       const app = await api("/v1/apps/" + project);
       if (app && app.exists && app.ready) {
-        addArtifact(app.kind, app.name || project, () => openApp(project));
+        /* Capture the body this turn produced. Best effort: a card without
+           it still runs the live app, it just cannot show history. */
+        let body = "";
+        try {
+          const r = await fetch(`/apps/${project}/${app.entry}`);
+          if (r.ok) body = await r.text();
+        } catch {}
+        addArtifact(app.kind, app.name || project, () => openApp(project), body);
       } else if (touchedApp) {
         addMsg("desktop", "The app was written but has no runnable entry yet.");
       }
@@ -2275,6 +2444,7 @@ async function openApp(project) {
     key: "app:" + project, title: app.name || project,
     width: app.width || 640, height: (app.height || 480) + 26,
     icon: "app", pad: false,
+    restore: { fn: "app", arg: project },
   });
   const frame = el("iframe", "app");
   /* The app is model-authored code. Sandboxed here AND served under a CSP by
@@ -2487,7 +2657,8 @@ async function openJobLog(project, task, job) {
 
 function openBrowser(pageId) {
   const w = createWindow({ key: "browser", title: "Browser", width: 620, height: 460,
-                           icon: "globe", pad: false });
+                           icon: "globe", pad: false,
+                           restore: { fn: "browser", arg: pageId || "" } });
   const bar = el("div");
   bar.style.cssText = "display:flex;gap:4px;padding:3px";
   const q = el("input", "fld");
@@ -2613,7 +2784,8 @@ function openBrowser(pageId) {
 
 function openFiles(startPath) {
   const w = createWindow({ key: "files", title: "File Manager", width: 640,
-                           height: 440, icon: "folder", pad: false });
+                           height: 440, icon: "folder", pad: false,
+                           restore: { fn: "files", arg: startPath || "" } });
   const bar = el("div");
   bar.style.cssText = "display:flex;gap:4px;padding:3px;align-items:center";
   const up = el("button", "btn", "Up");
@@ -2716,7 +2888,8 @@ async function openFileView(pathStr, name) {
 
 async function openLibrary() {
   const w = createWindow({ key: "library", title: "Library", width: 460, height: 380,
-                           icon: "brain", pad: false });
+                           icon: "brain", pad: false,
+                           restore: { fn: "library" } });
   const list = el("div", "list in");
   list.style.height = "100%";
   w.body.appendChild(list);
@@ -2819,6 +2992,7 @@ async function boot() {
     /* Only after the first load succeeds -- subscribing before we know the
        token works would just produce a reconnect loop behind an auth wall. */
     subscribeEvents();
+    await restoreDesktop();
   } catch (e) {
     /* A bearer-gated gateway is the usual cause; say so plainly rather than
        leaving an empty desktop with no explanation. */

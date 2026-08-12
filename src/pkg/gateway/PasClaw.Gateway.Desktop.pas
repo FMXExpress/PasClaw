@@ -50,8 +50,16 @@ type
   TPageGenerator = function(const Query: string; Kind: TPageKind;
     out Title, BodyHTML, SourcesJSON, Err: string): Boolean;
 
+  (* One agent turn, plain text in and out. The general-purpose sibling of
+     the two above: Mail's summarise-and-draft needs a model but not a page
+     and not a job, and inventing a third bespoke callback shape for every
+     such feature would be the wrong trade. *)
+  TTextGenerator = function(const SystemPrompt, Prompt: string;
+    out Reply, Err: string): Boolean;
+
 procedure SetJobRunner(Runner: TJobRunner);
 procedure SetPageGenerator(Gen: TPageGenerator);
+procedure SetTextGenerator(Gen: TTextGenerator);
 
 (* The origin generated apps are served from. Empty (the default) means "the
    same origin as everything else", which is the simple arrangement and the
@@ -103,6 +111,7 @@ uses
 var
   GJobRunner: TJobRunner = nil;
   GPageGen: TPageGenerator = nil;
+  GTextGen: TTextGenerator = nil;
   GAppsOrigin: string = '';
 
 procedure SetJobRunner(Runner: TJobRunner);
@@ -115,6 +124,11 @@ begin
   GPageGen := Gen;
 end;
 
+procedure SetTextGenerator(Gen: TTextGenerator);
+begin
+  GTextGen := Gen;
+end;
+
 procedure SetAppsOrigin(const Origin: string);
 begin
   GAppsOrigin := Origin;
@@ -123,6 +137,53 @@ end;
 function AppsOrigin: string;
 begin
   Result := GAppsOrigin;
+end;
+
+const
+  { A window layout, not a document store. Anything past this is a mistake
+    or an attempt to use the gateway as one. }
+  MaxDesktopState = 256 * 1024;
+  { An app entry is a page or a script. Anything past this is not one. }
+  MaxEntryBytes   = 2 * 1024 * 1024;
+
+{ Where the active workspace keeps its desktop layout. }
+function DesktopStatePath: string;
+begin
+  Result := JoinPath(WorkspaceSubdir('desktop'), 'state.json');
+end;
+
+function ReadDesktopState(out Body: string): Boolean;
+begin
+  Body := '';
+  Result := False;
+  if not FileExists(DesktopStatePath) then Exit;
+  try
+    Body := ReadFileText(DesktopStatePath);
+  except
+    Exit;
+  end;
+  Result := Trim(Body) <> '';
+end;
+
+function WriteDesktopState(const Body: string; out Err: string): Boolean;
+begin
+  Err := '';
+  Result := False;
+  if not EnsureDir(WorkspaceSubdir('desktop')) then
+  begin
+    Err := 'could not create the desktop directory';
+    Exit;
+  end;
+  try
+    WriteFileText(DesktopStatePath, Body);
+  except
+    on E: Exception do
+    begin
+      Err := 'could not write the desktop state: ' + E.Message;
+      Exit;
+    end;
+  end;
+  Result := True;
 end;
 
 { ---------------------------------------------------------------- helpers -- }
@@ -380,6 +441,7 @@ end;
 function IsDesktopPath(const Doc: string): Boolean;
 begin
   Result := (Doc = '/v1/desktop/config')
+         or (Doc = '/v1/desktop/state')
          or HasPrefix(Doc, '/v1/workspaces')
          or HasPrefix(Doc, '/v1/projects')
          or HasPrefix(Doc, '/v1/apps')
@@ -1537,6 +1599,74 @@ begin
     Exit;
   end;
 
+  (* Mail: summarise a message and draft a reply.
+
+     The half of Mail that was missing. Triage is a keyword pass and costs
+     nothing; this costs a model call, so it is per-message and on demand --
+     a button, not a timer.
+
+     NOTHING IS SENT. The draft lands in the app for the user to read, edit
+     and send themselves from their own mail client. Sending would need SMTP
+     credentials, a consent gesture, and an undo -- and a feature that
+     quietly acquires the ability to email people on your behalf is not a
+     feature anyone asked for. The email channel is where "PasClaw answers
+     your mail" lives, deliberately behind its own configuration. *)
+  if Action = 'mail-draft' then
+  begin
+    if Project <> MailProject then
+    begin
+      ReplyErr(Resp, 404, 'mail-draft belongs to the mail app');
+      Exit;
+    end;
+    if not Assigned(GTextGen) then
+    begin
+      ReplyErr(Resp, 503, 'this gateway has no model configured');
+      Exit;
+    end;
+    Arg := BodyObj(Body);
+    try
+      if Arg = nil then
+      begin
+        ReplyErr(Resp, 400, 'expected a JSON body');
+        Exit;
+      end;
+      Slug := Trim(Arg.GetStr('subject', ''));
+      if Slug = '' then
+      begin
+        ReplyErr(Resp, 400, 'which message? send its subject');
+        Exit;
+      end;
+      if not GTextGen(
+        'You are helping someone work through their inbox. Answer in ' +
+        'exactly two parts and nothing else:'#10 +
+        'SUMMARY: one sentence saying what this message wants.'#10 +
+        'DRAFT: a short reply they could send, in their voice, plain text, ' +
+        'no greeting boilerplate beyond what a colleague would write.'#10#10 +
+        'If the message does not warrant a reply, say so in the DRAFT ' +
+        'rather than inventing one. If the excerpt is too thin to work ' +
+        'from, say that too -- a confident draft written from a subject ' +
+        'line is worse than an admission.',
+        'From: ' + Arg.GetStr('from', '') + #10 +
+        'Subject: ' + Slug + #10#10 +
+        Arg.GetStr('excerpt', '(no body text was captured)'),
+        Out_, Err) then
+      begin
+        ReplyErr(Resp, 502, Err);
+        Exit;
+      end;
+      Root := TJsonObject.Create;
+      try
+        Root.PutStr('text', Out_);
+        ReplyJSON(Resp, 200, Root.ToJSON);
+      finally
+        Root.Free;
+      end;
+    finally
+      Arg.Free;
+    end;
+    Exit;
+  end;
+
   if Action = 'mail-sync' then
   begin
     { Scoped to the Mail app: any other project asking to fill the mail store
@@ -1597,8 +1727,8 @@ function RouteAppAPI(const Method, Doc, Query, Body: string;
   out Resp: TDesktopResponse): Boolean;
 var
   Segs: TStringList;
-  Project, Key, Val, Err: string;
-  Info: TAppInfo;
+  Project, Key, Val, Err, Path: string;
+  Info, App: TAppInfo;
   Root: TJsonObject;
   Obj: TJsonObject;
   Arr: TJsonArray;
@@ -1778,6 +1908,54 @@ begin
         Exit;
       end;
       Result := RunAppAction(Project, LowerCase(Segs[4]), Body, Resp);
+      Exit;
+    end;
+
+    (* PUT /v1/apps/<p>/entry -- put an earlier version of the app back.
+
+       The chat keeps an artifact card per turn, so scrolling back through a
+       conversation is scrolling back through versions; this is what makes an
+       old card actionable rather than decorative.
+
+       Deliberately narrow. It writes ONE file -- the entry the manifest
+       already declares -- resolved through the same two-barrier resolver
+       that serves it, so this cannot become a way to write anywhere in the
+       project. And it is NOT app-scoped: an app must not be able to rewrite
+       itself, only the desktop may hand it a previous body. *)
+    if LowerCase(Segs[3]) = 'entry' then
+    begin
+      if Method <> 'PUT' then
+      begin
+        ReplyErr(Resp, 405, 'method not allowed');
+        Exit;
+      end;
+      if not GetApp(Project, App) or not App.Exists then
+      begin
+        ReplyErr(Resp, 404, 'no app');
+        Exit;
+      end;
+      if Length(Body) > MaxEntryBytes then
+      begin
+        ReplyErr(Resp, 413, 'that is too large for an app entry');
+        Exit;
+      end;
+      Path := ResolveAssetPath(Project, App.Entry);
+      if Path = '' then
+      begin
+        ReplyErr(Resp, 400, 'the manifest entry does not resolve');
+        Exit;
+      end;
+      try
+        WriteFileText(Path, Body);
+      except
+        on E: Exception do
+        begin
+          ReplyErr(Resp, 500, 'could not write the entry: ' + E.Message);
+          Exit;
+        end;
+      end;
+      PublishApp(Project, 'updated', 0);
+      ReplyOK(Resp);
       Exit;
     end;
 
@@ -2194,11 +2372,58 @@ end;
 function DesktopRoute(const Method, Doc, Query, Body: string;
   out Resp: TDesktopResponse): Boolean;
 var
-  M: string;
+  M, StateBody, StateErr: string;
   Root: TJsonObject;
 begin
   Reply(Resp, 404, 'application/json; charset=utf-8', '{"error":"not found"}');
   M := UpperCase(Trim(Method));
+
+  (* GET/PUT /v1/desktop/state -- the desktop's own layout.
+
+     Server-side rather than localStorage, and per WORKSPACE rather than per
+     browser, because the arrangement of windows belongs to the world you
+     are working in. Switching to the "home" workspace should bring back the
+     home desktop, from any browser, on any machine pointed at this gateway.
+
+     The body is opaque to us: the client decides what a restorable window
+     is, and a gateway that tried to schema it would have to be edited every
+     time the client learned a new window kind. Bounded, though -- this is a
+     layout, and anything megabyte-sized is a bug or an attempt. *)
+  if Doc = '/v1/desktop/state' then
+  begin
+    if M = 'GET' then
+    begin
+      if not ReadDesktopState(StateBody) then StateBody := '{}';
+      ReplyJSON(Resp, 200, StateBody);
+      Exit(True);
+    end;
+    if M = 'PUT' then
+    begin
+      if Length(Body) > MaxDesktopState then
+      begin
+        ReplyErr(Resp, 413, 'desktop state is too large');
+        Exit(True);
+      end;
+      { Parse-check before writing: a truncated PUT must not leave a state
+        file that makes every future load fail. }
+      Root := BodyObj(Body);
+      if Root = nil then
+      begin
+        ReplyErr(Resp, 400, 'desktop state must be a JSON object');
+        Exit(True);
+      end;
+      Root.Free;
+      if not WriteDesktopState(Body, StateErr) then
+      begin
+        ReplyErr(Resp, 500, StateErr);
+        Exit(True);
+      end;
+      ReplyOK(Resp);
+      Exit(True);
+    end;
+    ReplyErr(Resp, 405, 'method not allowed');
+    Exit(True);
+  end;
 
   { GET /v1/desktop/config -- what the client needs to know about THIS
     gateway before it renders: where apps are served from, and whether that

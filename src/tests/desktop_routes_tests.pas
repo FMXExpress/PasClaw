@@ -636,6 +636,56 @@ begin
   ExpectTrue(Pos('example.com/x', Blueprint) > 0, 'sources footer present');
   ExpectTrue(Pos('ok', Blueprint) > 0, 'legitimate content survives');
 
+  { --------------------------------------------------- artifact versions -- }
+  (* An old artifact card opens the version THAT turn produced, and can put
+     it back. The write is deliberately narrow: one file, the entry the
+     manifest already declares, resolved through the same two-barrier
+     resolver that serves it. *)
+  ExpectStatus('PUT', '/v1/apps/spam-filter/entry',
+               '<!doctype html><h1>v2</h1>', 200, 'an earlier version restores');
+  ExpectTrue(Pos('v2', ReadFileText(JoinPath(ProjectAppDir('spam-filter'),
+                                             'index.html'))) > 0,
+             'and lands in the entry file');
+  ExpectStatus('GET', '/v1/apps/spam-filter/entry', '', 405,
+               'entry is write-only -- reading it is what /apps/ is for');
+  ExpectStatus('PUT', '/v1/apps/nope/entry', 'x', 404,
+               'a project with no app has no entry to restore');
+
+  { An app must not be able to rewrite ITSELF: the apps-origin listener has
+    to refuse this path, or a generated page could edit its own source. }
+  ExpectTrue(not IsAppScopedPath('/v1/apps/spam-filter/entry'),
+             'ESCAPE: an app may NOT write its own entry');
+
+  { ------------------------------------------------------- mail drafts -- }
+  (* The "answer this for me" half. Nothing is SENT from here -- the draft
+     lands in the app for the user to send from their own client -- so the
+     assertions are about scope and about failing honestly when there is no
+     model, not about delivery. *)
+  ExpectStatus('POST', '/v1/apps/notes/action/mail-draft', '{"subject":"x"}', 404,
+               'only Mail may draft');
+  ExpectStatus('POST', '/v1/apps/mail/action/mail-draft', '{}', 503,
+               'no model configured is a 503, not a fabricated draft');
+
+  { ---------------------------------------------------- desktop state -- }
+  (* The layout belongs to the WORKSPACE, not the browser: switching to the
+     "home" workspace should bring back the home desktop from any machine
+     pointed at this gateway. *)
+  ExpectStatus('GET', '/v1/desktop/state', '', 200, 'a fresh desktop has state');
+  ExpectBodyContains('GET', '/v1/desktop/state', '', '{}',
+                     'and it is empty rather than a 404');
+  ExpectStatus('PUT', '/v1/desktop/state',
+               '{"v":1,"windows":[{"fn":"library"}]}', 200, 'state saves');
+  ExpectBodyContains('GET', '/v1/desktop/state', '', 'library',
+                     'and comes back');
+
+  { A truncated PUT must not leave a state file that breaks every load. }
+  ExpectStatus('PUT', '/v1/desktop/state', '{"v":1,"windows":', 400,
+               'malformed state is refused before it is written');
+  ExpectBodyContains('GET', '/v1/desktop/state', '', 'library',
+                     'and the good state survives the bad write');
+
+  ExpectStatus('DELETE', '/v1/desktop/state', '', 405, 'no delete verb');
+
   { ------------------------------------------------------ research mode -- }
   (* Deep research is a distinct KIND, not a longer search. The prompt is
      where the difference lives, so assert the three phases are actually

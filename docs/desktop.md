@@ -19,7 +19,8 @@ is how to use what is built.
 
 ```sh
 pasclaw gateway                 # http://127.0.0.1:8088
-pasclaw project seed            # optional: install Notes, To Do, Brain
+pasclaw project seed            # install the system suite
+pasclaw mail sync               # optional: fill Mail from IMAP
 ```
 
 Open <http://127.0.0.1:8088/desktop>. The classic chat UI is still at `/`.
@@ -137,9 +138,10 @@ already makes — and the runner is explicit about it:
 in a container instead of on your machine:
 
 ```
-docker run -d --rm --name pasclaw-app-<project> \
+docker create --rm --name pasclaw-app-<project> \
   -v <project>/app:/app -w /app -p 127.0.0.1:<port>:<port> \
   [-e DECLARED_NAME=...] <image> sh -c "<the run line>"
+docker start pasclaw-app-<project>
 ```
 
 Only the app's own directory is mounted, and the port is published to
@@ -149,11 +151,26 @@ privileged and nothing is on the host network.
 
 This deliberately drives the `docker` CLI rather than reusing the shell
 backend's `Exec`, which is one-shot: a long-lived server started through it
-would have no handle to stop. `docker run -d` returns a container id, so
+would have no handle to stop. A created-then-started container has an id, so
 `stop` and `runlog` have something to address.
 
-Every run record carries `backend: "host" | "docker"` and the run window
-shows it, so you always know which side of the boundary your app is on.
+**A remote daemon works, with one limit.** `docker context use` or
+`DOCKER_HOST` points the CLI somewhere else, and PasClaw asks docker where it
+is rather than reading the environment — a context switch repoints the CLI
+without touching env vars, and guessing wrong here fails silently. When the
+daemon is remote:
+
+- the app directory is **copied in** with `docker cp` instead of bind-mounted,
+  because a `-v` path resolves on the *daemon's* filesystem and would leave
+  the app looking at an empty `/app`;
+- an app that **serves a port is refused**, with the reason. A published port
+  binds the daemon's loopback, which this gateway cannot reach, and publishing
+  `0.0.0.0` instead would expose your app to that host's whole network.
+  Console apps still run.
+
+Every run record carries `backend: "host" | "docker" | "docker-remote"` and
+the run window shows it, so you always know which side of which boundary your
+app is on.
 
 ### Which machine is "local"
 
@@ -212,9 +229,23 @@ The SDK also exposes a **narrow read window** onto the agent's own surfaces,
 which is what the Calendar, Library and Cookbook suite apps are built on:
 
 ```js
-const crons = await pasclaw.read("cron");      // also: sessions, providers,
-const pages = await pasclaw.read("pages");     //       projects
+const crons = await pasclaw.read("cron");
+const hits  = await pasclaw.read("kb", "expenses");   // kb takes a query
 ```
+
+| Surface | What it is |
+|---|---|
+| `cron` | scheduled agent jobs |
+| `sessions` | the session list |
+| `providers` | the model catalogue, `has_key` only — never the key |
+| `pages` | answer-page history |
+| `projects` | the board |
+| `memory` | the distilled facts the model is primed with |
+| `notes` | markdown notes under `memory/notes/` |
+| `skills` | what can be scheduled |
+| `tasks` | the calling project's tasks (scoped by the route, not the app) |
+| `kb` | the knowledgebase — searched server-side; takes a query |
+| `checkpoints` | how far undo reaches |
 
 The allowlist is enforced **server-side** in `PasClaw.Gateway.Desktop`, so it
 holds however the app is opened. There is no `config` surface and no write
@@ -225,14 +256,26 @@ Mail has to be able to go and fetch. So there is a third verb, and it is an
 allowlist too:
 
 ```js
-const r = await pasclaw.action("mail-sync");   // {filed: 3}
+const r = await pasclaw.action("mail-sync");             // {filed: 3}
+await pasclaw.action("note-save", { title, body });      // args ride as JSON
 ```
 
 `POST /v1/apps/<project>/action/<name>` runs only names the gateway
-implements, and only for the project each one belongs to. An unknown action
-and a real action asked for by the wrong project both answer **404** — the
-scope check is the part that matters, since without it any app could drive
-`mail-sync` and write JSON of its choosing into Mail's store.
+implements, and only for the project each one belongs to:
+
+| Action | Whose | What it does |
+|---|---|---|
+| `memory-remember` / `memory-forget` | Brain | edit the facts the model is primed with |
+| `note-save` / `note-delete` | Notes | write markdown under `memory/notes/` |
+| `task-add` / `task-done` | To Do | edit the real project board |
+| `cron-add` / `cron-remove` | Calendar | schedule an installed skill |
+| `mail-sync` | Mail | fetch from IMAP |
+| `mail-draft` | Mail | summarise a message and draft a reply |
+
+An unknown action and a real action asked for by the wrong project both
+answer **404**. The pairing is the security property, not the name list:
+without it any app could drive `memory-forget` and edit what the assistant
+knows about you.
 
 **Why the indirection.** App frames are sandboxed *without*
 `allow-same-origin`, so generated code cannot reach the desktop's DOM or the
@@ -330,9 +373,10 @@ as chat text: sections, tables, comparison grids, citations as real links —
 the layout chosen to fit the answer.
 
 ```
-POST   /v1/pages     {"query": "...", "kind": "search|data|report"}
-GET    /v1/pages     history
-GET    /pages/<id>/  the rendered document
+POST   /v1/pages                {"query": "...", "kind": "search|data|report|research"}
+GET    /v1/pages                history
+GET    /pages/<id>/             the rendered document
+POST   /v1/pages/<id>/promote   turn it into an app
 ```
 
 Pages live in `<workspace>/pages/`, so browsing history is part of the
@@ -352,6 +396,37 @@ Generation runs the real agent loop: the gateway registers its page
 generator at startup (`InstallDesktopCallbacks`), so `POST /v1/pages` with a
 `query` researches and renders. A gateway with **no provider configured**
 answers 503 and says so; a caller may also POST a rendered `body` directly.
+
+### Deep research
+
+`kind: "research"` (the Browser's **Research** button) is not a longer
+search — it is a named three-phase shape the model is told to follow:
+
+1. **Plan.** Break the request into sub-questions *before* searching, so the
+   reading is directed rather than opportunistic.
+2. **Read.** Search each sub-question separately and fetch the promising
+   results — a snippet is not a source. Several *independent* sources, and
+   where they disagree, enough reading to say why.
+3. **Synthesise.** Structure the page by sub-question rather than by source,
+   keeping what was found separate from what it means.
+
+It runs for minutes, so it narrates: each tool call becomes a
+`page-progress` event on `/v1/desktop/events`, and the Browser shows a
+progress dialog with what the agent is doing right now. The bar creeps
+toward but never reaches done — nobody knows how many sources a question
+needs, and a fake 100% is worse than an honest "still going".
+
+### Make this interactive
+
+`POST /v1/pages/<id>/promote` copies a page into a new project as an `html`
+app. The **Make interactive** button in the Browser does it in one click,
+opens the app, and puts its icon on the desktop.
+
+The copy is the design. A page is the record of an answer at a time, so
+editing it in place would falsify the history; the app is the part that
+changes. Two things travel with it: the sources footer (provenance does not
+stop mattering because a document became editable) and a `pasclaw.js` tag,
+so the first "now make it sort by date" has an SDK to reach for.
 
 The same wiring backs `POST /v1/projects/<n>/tasks/<t>/run`, which opens a
 job, runs a turn on its own thread (the HTTP call returns the job id
@@ -392,16 +467,25 @@ Installs seven apps into the active workspace:
 
 | App | What it shows | Built on |
 |---|---|---|
-| **Notes** | A notepad | the state store |
-| **To Do** | Your own list, separate from the agent's board | the state store |
-| **Brain** | What PasClaw remembers, as cards you can tear up | the state store |
-| **Calendar** | Your month, plus the agent's scheduled jobs | `read("cron")` |
-| **Library** | Every page, session and project, filterable | `read("pages"/"sessions"/"projects")` |
+| **Notes** | A notepad whose notes PasClaw can read | markdown in `memory/notes/` |
+| **To Do** | Your list and the agent's board, unified | the real task store |
+| **Brain** | What PasClaw remembers, as cards you can tear up | the fact store the model is primed from |
+| **Calendar** | Your month, the agent's scheduled jobs, and a way to add one | `read("cron")` + `cron-add` |
+| **Library** | Every page, session, project and indexed document | `read("pages"/"sessions"/"projects"/"kb"/"checkpoints")` |
 | **Cookbook** | Which model answers, in plain language | `read("providers")` |
-| **Mail** | An inbox the agent triages | the state store + the Email channel |
+| **Mail** | An inbox the agent triages, summarises and drafts replies for | IMAP + `mail-draft` |
 
-They are not built in. Each is an ordinary project with an ordinary
-`app.json`, using the same `html` kind and the same state store your own apps
+**They are not toys over private state.** Brain reads the same fact store the
+model is primed from, so tearing up a card genuinely makes the next turn not
+know it. A note is a markdown file in the directory the memory index walks,
+so writing one is the cheapest way to tell PasClaw something durable. A to-do
+is an ordinary task on the project board — the agent can see it and close it.
+Calendar writes real `crons[]` entries. That equivalence is the point; a
+suite over its own copies would have been easier and would have meant
+nothing.
+
+Each is an ordinary project with an ordinary
+`app.json`, using the same `html` kind and the same surfaces your own apps
 use — so you can open Notes, read its source, and ask PasClaw to add a word
 count, and it is not a special case when you do. Seeding never overwrites an
 existing project, so a suite app you have remade survives an upgrade.
@@ -509,14 +593,19 @@ Every route below sits inside the gateway's existing bearer-auth gate.
 | POST | `/v1/apps/<p>/stop` | stop it |
 | GET | `/v1/apps/<p>/runlog` | its captured output |
 | GET | `/v1/apps/<p>/read/<surface>` | allowlisted read window |
-| POST | `/v1/apps/<p>/action/<name>` | allowlisted side effect (`mail-sync`) |
+| POST | `/v1/apps/<p>/action/<name>` | allowlisted side effect, scoped per app |
+| PUT | `/v1/apps/<p>/entry` | put an earlier version of the app back |
 | GET | `/v1/desktop/events` | SSE: board changes |
 | GET | `/v1/desktop/config` | how apps are served (origin, isolation) |
+| GET/PUT | `/v1/desktop/state` | the workspace's window layout |
+| POST | `/v1/pages/<id>/promote` | page -> app |
 | GET | `/apps/<project>/…` | app assets (+ virtual `pasclaw.js`) |
 | GET/POST | `/v1/pages` | history / generate |
 | GET/DELETE | `/v1/pages/<id>` | inspect / remove |
 | GET | `/pages/<id>/` | rendered document |
 | GET | `/desktop` | the web desktop client |
+
+`/v1/fs` (already part of the gateway) backs the **File Manager** window.
 
 ---
 
@@ -571,15 +660,31 @@ Stated plainly rather than left to be discovered:
   the same deal `shell_exec` makes, and the run window tells you which one
   you got — but it is still the deal.
 - **Docker mode is unverified end to end here.** The argv is pinned by test;
-  no container has actually been started in this environment.
-- **The IMAP fetch half is unverified.** Triage and the merge are tested; the
-  socket conversation with a real server is not, because there is no server
-  to talk to here.
+  no container has actually been started in this environment, local or
+  remote.
+- **The IMAP fetch half is unverified.** Triage, the merge and the excerpt
+  capture are tested; the socket conversation with a real server is not,
+  because there is no server to talk to here.
 - **Triage is keywords, not comprehension.** "Re: the thing" is FYI, and a
   politely-worded emergency will sort under Request. One click fixes it, and
-  the agent can re-tag properly on request.
+  the pencil will re-read the message properly.
+- **Mail never sends.** Drafts land in the app for you to send from your own
+  client. Sending would need SMTP credentials, a consent gesture and an
+  undo; the email channel is where "PasClaw answers your mail" lives,
+  deliberately behind its own configuration.
+- **Deep research holds the HTTP request open** for the length of the turn.
+  The progress feed keeps the UI honest, but a proxy with a short timeout in
+  front of the gateway will cut it off.
+- **Artifact versions are per conversation.** A card captures what its turn
+  produced, in that browser tab; closing the chat loses the history. The
+  checkpoints package is the durable answer and is not wired to this yet.
 - **Standalone apps need `--apps-port`.** Without it, an app opened as a
   top-level page is same-origin with the gateway. Inside the desktop it is
   sandboxed either way.
+- **Facts are not workspace-scoped.** Brain deliberately reads the same
+  `workspace/memory/facts.db` the agent does, which does not follow the
+  active workspace. Showing workspace2's facts while the model is primed
+  with workspace1's would be a prettier lie.
 - **The FMX client is unbuilt here.** It has no Delphi in CI; the shared
-  client library it depends on is tested, the UI is not.
+  client library it depends on is tested, the UI is not — and it does not
+  yet have the File Manager, the Research button, or artifact versions.

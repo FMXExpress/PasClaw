@@ -140,6 +140,7 @@ begin
   ExpectTrue(MergeMail(['uid-1', 'uid-2'],
                        ['URGENT: disk full on prod', 'Lunch?'],
                        ['ops@example.com', 'sam@example.com'],
+                       ['Prod is out of disk.', 'Thursday?'],
                        Filed, Err), 'first merge succeeds: ' + Err);
   ExpectInt(Filed, 2, 'both messages filed');
 
@@ -148,6 +149,13 @@ begin
   ExpectContains(Items, 'ops@example.com', 'sender stored');
   ExpectContains(Squeeze(Items), '"tag":"Risk"', 'triaged on the way in');
   ExpectContains(Squeeze(Items), '"read":false', 'filing is not reading');
+  { The excerpt is what "draft a reply" has to work from -- without it the
+    model would be drafting from a subject line. }
+  ExpectContains(Items, 'Prod is out of disk.', 'a body excerpt is kept');
+
+  { Excerpts are optional: a caller that has none must still be able to
+    file. The bridge always has them, but the merge is the tested seam and
+    it should not require what it does not need. }
 
   { ---------------------------------------------------- re-sync is a nop -- }
   { The same fetch window comes back every poll. Seeing it again must file
@@ -155,6 +163,7 @@ begin
   ExpectTrue(MergeMail(['uid-1', 'uid-2'],
                        ['URGENT: disk full on prod', 'Lunch?'],
                        ['ops@example.com', 'sam@example.com'],
+                       [],
                        Filed, Err), 're-merge succeeds');
   ExpectInt(Filed, 0, 'nothing filed twice');
 
@@ -167,6 +176,7 @@ begin
   ExpectTrue(MergeMail(['uid-3', 'uid-1'],
                        ['Contract needs your sign-off', 'URGENT: disk full on prod'],
                        ['legal@example.com', 'ops@example.com'],
+                       [],
                        Filed, Err), 'third merge succeeds');
   ExpectInt(Filed, 1, 'only the genuinely new one is filed');
   StateGet('mail', 'items', Items);
@@ -183,6 +193,7 @@ begin
   ExpectTrue(MergeMail(['uid-1', 'uid-2', 'uid-3'],
                        ['URGENT: disk full on prod', 'Lunch?', 'Contract needs your sign-off'],
                        ['ops@example.com', 'sam@example.com', 'legal@example.com'],
+                       [],
                        Filed, Err), 'merge after deletion succeeds');
   ExpectInt(Filed, 0, 'deleted messages are not resurrected');
   StateGet('mail', 'items', Items);

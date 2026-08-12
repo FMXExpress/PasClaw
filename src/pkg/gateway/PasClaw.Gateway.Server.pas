@@ -5499,11 +5499,29 @@ begin
   Result := True;
 end;
 
+{ One turn, plain text in and out -- what Mail's summarise-and-draft needs.
+  Not narrated: a single short turn is over before a progress feed would say
+  anything useful. }
+function DesktopTextGenerator(const SystemPrompt, Prompt: string;
+  out Reply, Err: string): Boolean;
+begin
+  Reply := '';
+  Err := '';
+  Result := False;
+  if GDesktopGateway = nil then
+  begin
+    Err := 'no gateway available';
+    Exit;
+  end;
+  Result := GDesktopGateway.RunDesktopTurn(SystemPrompt, Prompt, False, Reply, Err);
+end;
+
 procedure InstallDesktopCallbacks(AGateway: TGatewayServer);
 begin
   GDesktopGateway := AGateway;
   SetPageGenerator(DesktopPageGenerator);
   SetJobRunner(DesktopJobRunner);
+  SetTextGenerator(DesktopTextGenerator);
 end;
 
 function GenChatCompletionId: string;

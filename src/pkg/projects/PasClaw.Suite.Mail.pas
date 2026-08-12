@@ -58,7 +58,7 @@ function TriageSubject(const Subject: string): string;
   skipping anything the UID ledger has seen. This is the half of SyncMail with
   no network in it -- and the half where the idempotence lives -- so it is
   exposed for tests, which have no IMAP server to talk to. }
-function MergeMail(const UIDs, Subjects, Froms: array of string;
+function MergeMail(const UIDs, Subjects, Froms, Excerpts: array of string;
   out Filed: Integer; out Err: string): Boolean;
 
 implementation
@@ -69,7 +69,7 @@ uses
   PasClaw.Logger,
   PasClaw.Apps,
   PasClaw.Projects.Store,
-  IdIMAP4, IdMessage, IdSSLOpenSSL, IdExplicitTLSClientServerBase;
+  IdIMAP4, IdMessage, IdText, IdSSLOpenSSL, IdExplicitTLSClientServerBase;
 
 const
   { Newest N. Small on purpose: see the RetrievePeek note below -- each one
@@ -122,8 +122,37 @@ type
     UID:     string;
     Subject: string;
     From_:   string;
+    { A bounded slice of the body. RetrievePeek already pulled the whole
+      message, so keeping some of it costs nothing extra -- and without it
+      the "draft a reply" action would be drafting from a subject line. }
+    Excerpt: string;
   end;
   TMailItems = array of TMailItem;
+
+(* A bounded slice of readable body text.
+
+   Plain text where there is any: a multipart message keeps its text part in
+   MessageParts, and the HTML alternative is not worth un-tagging here for
+   what is a preview. A message we cannot read plainly gets an empty excerpt
+   rather than a wall of markup, and the draft action says it has little to
+   go on instead of pretending. *)
+function ExcerptOf(Msg: TIdMessage): string;
+const
+  MaxExcerpt = 1500;
+var
+  I: Integer;
+begin
+  Result := Trim(Msg.Body.Text);
+  if Result = '' then
+    for I := 0 to Msg.MessageParts.Count - 1 do
+      if Msg.MessageParts[I] is TIdText then
+      begin
+        Result := Trim(TIdText(Msg.MessageParts[I]).Body.Text);
+        if Result <> '' then Break;
+      end;
+  if Length(Result) > MaxExcerpt then
+    Result := Copy(Result, 1, MaxExcerpt) + #10'[...]';
+end;
 
 { Read the inbox's newest headers. Peek only -- see the unit comment. }
 function FetchHeaders(out Items: TMailItems; out Err: string): Boolean;
@@ -190,6 +219,7 @@ begin
               Items[N].UID := IntToStr(I) + '|' + Msg.Subject;
             Items[N].Subject := Msg.Subject;
             Items[N].From_   := Msg.From.Address;
+            Items[N].Excerpt := ExcerptOf(Msg);
             Inc(N);
           finally
             Msg.Free;
@@ -213,7 +243,7 @@ begin
   end;
 end;
 
-function MergeMail(const UIDs, Subjects, Froms: array of string;
+function MergeMail(const UIDs, Subjects, Froms, Excerpts: array of string;
   out Filed: Integer; out Err: string): Boolean;
 var
   Seen, Existing: string;
@@ -255,6 +285,8 @@ begin
         Obj.PutStr ('from',    Froms[I]);
         Obj.PutStr ('tag',     TriageSubject(Subjects[I]));
         Obj.PutBool('read',    False);
+        if I <= High(Excerpts) then
+          Obj.PutStr('excerpt', Excerpts[I]);
         NewArr.AddObject(Obj);
         Inc(Filed);
       end;
@@ -300,7 +332,7 @@ end;
 function SyncMail(out Filed: Integer; out Err: string): Boolean;
 var
   Items: TMailItems;
-  UIDs, Subjects, Froms: array of string;
+  UIDs, Subjects, Froms, Excerpts: array of string;
   I: Integer;
 begin
   Filed := 0;
@@ -315,13 +347,15 @@ begin
   SetLength(UIDs, Length(Items));
   SetLength(Subjects, Length(Items));
   SetLength(Froms, Length(Items));
+  SetLength(Excerpts, Length(Items));
   for I := 0 to High(Items) do
   begin
     UIDs[I]     := Items[I].UID;
     Subjects[I] := Items[I].Subject;
     Froms[I]    := Items[I].From_;
+    Excerpts[I] := Items[I].Excerpt;
   end;
-  Result := MergeMail(UIDs, Subjects, Froms, Filed, Err);
+  Result := MergeMail(UIDs, Subjects, Froms, Excerpts, Filed, Err);
 end;
 
 end.

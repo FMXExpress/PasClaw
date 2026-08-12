@@ -403,13 +403,12 @@ window-lifetime tracking, and F11 kiosk mode.
 
 ## 5. Phases
 
-Status: **every phase has landed and the whole thing works end to end**
-(`make test-desktop`, plus browser-driven checks of the web client against a
-live gateway and a mock model server). But "the phase landed" is a coarser
-claim than "every line of the phase's description is built", and the two came
-apart in phases 6–8 — the skeleton of each is real and several details are
-not. "Still open" below is the honest list, and it is not short.
-See [`desktop.md`](desktop.md) for how to use what exists.
+Status: **every phase has landed, and the audit that follows the table has
+been worked through** (`make test`, plus browser-driven checks of the web
+client against a live gateway and a mock model server that really calls
+tools). "Still open" below is what is genuinely left — mostly things this
+container cannot verify rather than things that are missing.
+See [`desktop.md`](desktop.md) for how to use it.
 
 | Phase | Deliverable | Touches | Status |
 |---|---|---|---|
@@ -427,66 +426,47 @@ product thesis lives.
 
 ### Still open
 
-The four items this section used to list are closed: process apps run in a
-container under `shell_backend: docker`, apps get their own origin with
-`--apps-port`, both clients consume `/v1/desktop/events` and render
-`pasclaw-ui` blocks, and Mail fills itself from IMAP. What follows is
-everything in the sections above that is described but not built.
+Everything this section listed a revision ago is now built. Brain and Notes
+read the agent's own memory; Calendar and To Do write to the real cron and
+the real board; page promotion, the File Manager, deep research, Mail's
+drafts, artifact versions and per-workspace desktop state all exist; the web
+client is on the event stream; and the Docker path no longer assumes a local
+daemon.
 
-**The suite apps are cut off from the agent's own data.** This is the
-biggest gap and it undercuts §2c's premise:
+What remains splits into three honest categories.
 
-- **Brain reads its own state store, not memory.** §2c specifies the memory
-  package — `workspace/memory/*.md`, the facts db, hybrid FTS+vector search
-  behind `/v1/memory*`. As built, Brain shows what you typed into Brain. The
-  app whose entire point is "what PasClaw remembers" currently remembers
-  nothing the agent knows. Needs a `memory` read surface next to `cron`,
-  `sessions`, `providers`, `pages` and `projects`.
-- **Notes are not memory either.** §2c's whole trick was storing them as
-  markdown under `workspace/memory/notes/` so `memory_search` indexes them
-  for free. In the state store they are invisible to the agent.
-- **Library is partial** — sessions, pages and projects, but not the KB or
-  checkpoints.
-
-**The agent is beside the suite apps, not inside them.** §2c is explicit:
-Calendar should accept "schedule the report every Monday 9am" and write the
-cron entry; Tasks should accept "remind me Thursday"; Brain's search box
-should answer. All of them currently read and display. The mechanism now
-exists — the allowlisted `action` verb built for `mail-sync` — so this is
-wiring, not architecture.
-
-**Missing pieces named in the plan:**
-
-- **Page → app promotion** (§2b). "Make this interactive" turning a page into
-  an `html` project. The plan calls this "the product's whole pitch in
-  miniature"; there is no route and no gesture for it.
-- **The File Manager window** (§0, phase 8). The `/v1/fs` surface exists;
-  nothing renders it, so "files are alive" is still just a paragraph.
-- **Deep Research as a named mode** (§2c). Answer pages do one-shot
-  retrieval; the planned plan-read-synthesize mode with a progress dialog
-  does not exist.
-- **Mail's second half.** Triage is built; summaries and reply drafts — the
-  "answer this for me" the section leads with — are not.
-- **Artifact cards do not carry versions.** They pin per turn as designed,
-  but clicking an old card does not open that checkpoint's build.
-- **Per-workspace desktop state** (phase 6). Window positions and layout do
-  not survive a reload.
-- **CalDAV sync** — the plan already says "later", noted here so it is not
-  mistaken for an oversight.
-
-**One bug, not a gap.** The Docker path assumes a *local* daemon. The CLI
-inherits `DOCKER_HOST`, so a remote daemon is reachable, but `-v
-<appdir>:/app` resolves on the daemon's filesystem and `-p 127.0.0.1:...`
-publishes on the daemon's loopback. Against a remote daemon an app would
-start with an empty `/app` and an unreachable URL, quietly. The fix is the
-one the shell backend already uses: `docker cp` the app directory in, and
-derive the reachable host from `DOCKER_HOST` instead of assuming loopback.
-
-**And what cannot be checked here:** no Docker daemon, no IMAP server, and no
-Delphi in this container. The `docker run` argv is pinned by test, the mail
+**Unverified, not unbuilt.** This container has no Docker daemon, no IMAP
+server and no Delphi. The `docker run` argv is pinned by test, the mail
 bridge is split so the merge half is testable without a server, and the FMX
-client's shared library is compiled and tested — but the FMX UI itself is
-1,682 lines that have never been through a compiler.
+client's shared library is compiled and tested — but no container has been
+started, no mailbox opened, and the FMX UI is ~1,700 lines that have never
+been through a compiler.
+
+**The FMX client trails the web one.** It has the SSE watcher and the
+`pasclaw-ui` reader, but not the File Manager, the Research button, page
+promotion or artifact versions. Those are web-client features today; the
+shared client library is where they would go to be shared.
+
+**Deliberate stopping points, not gaps:**
+
+- **Mail never sends.** Drafts are drafts. Acquiring the ability to email
+  people on your behalf should be a decision the user makes explicitly, and
+  the email channel is where that decision already lives.
+- **Triage is keywords.** A per-message model call on a 15-minute timer is a
+  real cost for a guess one click fixes. The pencil is the considered read;
+  the timer is the fast one.
+- **Deep research is synchronous.** The turn holds the request open. The
+  progress feed keeps that honest, but a short-timeout proxy will cut it —
+  making it a background job with a ticket is the fix when someone hits it.
+- **Artifact versions live in the conversation**, not on disk: a card holds
+  what its turn produced, in that tab. The checkpoints package is the
+  durable answer and is not wired to it yet.
+- **Facts are not workspace-scoped.** Brain reads the same `facts.db` the
+  agent does, which does not follow the active workspace — a pre-existing
+  wart that Brain inherits on purpose, because showing one workspace's facts
+  while the model is primed with another's would be a prettier lie.
+- **One active workspace per gateway process.** Switching repoints; N live
+  workspaces is an extension the per-workspace store already handles.
 
 ## 6. Risks / open questions
 
