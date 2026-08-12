@@ -57,12 +57,14 @@ projects without editing your config.
 
 **What a workspace actually separates, today.** Projects, answer pages and
 the desktop layout. *Not* memory, sessions or skills: those still resolve to
-`$PASCLAW_HOME/workspace/...` whichever workspace is active, because routing
-them through the workspace resolver would be a cross-cutting change to
-PasClaw's own behaviour and this work deliberately stayed out of that. A
-`workspaceN` directory gets the full layout created for it, so the day that
-refactor lands nothing has to move -- but until then, switching workspaces
-switches your boards, not the agent's memory.
+`$PASCLAW_HOME/workspace/...` whichever workspace is active. So a workspace
+is a set of boards, not a wall — do not use one to keep two clients' work
+apart, because the agent's memory does not move when you switch.
+
+[`workspaces-plan.md`](workspaces-plan.md) is the plan for making it a real
+wall, and for putting the virtual-desktop half of the metaphor where it
+belongs: as **desktops inside a workspace**, which is the part that should
+be cheap to flick between.
 
 In the desktop, the taskbar's `[1] [2] [3]` pager switches workspaces
 (Ctrl+Alt+←/→). Switching closes the current desktop's windows — they belong
