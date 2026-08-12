@@ -89,6 +89,7 @@ uses
   PasClaw.Apps.Runner,
   PasClaw.Desktop.Events,
   PasClaw.Config,           { cron entries + provider names for the read surface }
+  PasClaw.Suite.Mail,       { the mail-sync action }
   PasClaw.Session.Store;    { session list for the Library app }
 
 var
@@ -356,7 +357,7 @@ begin
       permissions and window geometry, which is desktop business. }
     if Segs.Count < 4 then Exit;
     Tail := LowerCase(Segs[3]);
-    Result := (Tail = 'state') or (Tail = 'read');
+    Result := (Tail = 'state') or (Tail = 'read') or (Tail = 'action');
   finally
     Segs.Free;
   end;
@@ -1061,6 +1062,55 @@ begin
   end;
 end;
 
+(* The allowlisted actions. One entry today; the shape is what matters --
+   an app names an action, the server decides whether that action exists and
+   whether this project may run it. *)
+function RunAppAction(const Project, Action: string;
+  out Resp: TDesktopResponse): Boolean;
+var
+  Root: TJsonObject;
+  Filed: Integer;
+  Err: string;
+begin
+  Result := True;
+  if Action = 'mail-sync' then
+  begin
+    { Scoped to the Mail app: any other project asking to fill the mail store
+      would be writing into somebody else's app. }
+    if Project <> MailProject then
+    begin
+      ReplyErr(Resp, 404, 'mail-sync belongs to the mail app');
+      Exit;
+    end;
+    Root := TJsonObject.Create;
+    try
+      if not SyncMail(Filed, Err) then
+      begin
+        Root.PutStr('error', Err);
+        Root.PutBool('configured', MailConfigured);
+        { Neither failure is the caller's fault, so neither is a 4xx. No IMAP
+          credentials is a service that isn't set up yet (503); credentials
+          that fail at the far end is an upstream that let us down (502). The
+          app shows the message either way, but the status is what a proxy or
+          a log reads, and mislabelling this as a bad request would send
+          anyone debugging it to look at the wrong side. }
+        if not MailConfigured then
+          ReplyJSON(Resp, 503, Root.ToJSON)
+        else
+          ReplyJSON(Resp, 502, Root.ToJSON);
+        Exit;
+      end;
+      Root.PutInt ('filed', Filed);
+      Root.PutBool('configured', True);
+      ReplyJSON(Resp, 200, Root.ToJSON);
+    finally
+      Root.Free;
+    end;
+    Exit;
+  end;
+  ReplyErr(Resp, 404, 'no such action: ' + Action);
+end;
+
 { Serialise a run record for the clients. }
 function RunJSON(const R: TRunInfo): TJsonObject;
 begin
@@ -1071,6 +1121,7 @@ begin
   Result.PutStr('started',  R.Started);
   Result.PutInt('exit_code', R.ExitCode);
   Result.PutStr('command',  R.Command);
+  Result.PutStr('backend',  R.Backend);
   if R.Error <> '' then Result.PutStr('error', R.Error);
   { An app that serves HTTP is reachable directly; the desktop points a
     window at this. }
@@ -1142,6 +1193,7 @@ begin
         if Info.Exists and not AppIsServable(Info) then
         begin
           Run := AppRunInfo(Project);
+          Root.PutStr('run_backend', Run.Backend);
           Root.PutStr('run_state', RunStateToStr(Run.State));
           Root.PutInt('run_port',  Run.Port);
           Root.PutStr('run_command', PlannedCommand(Project, Err));
@@ -1244,6 +1296,27 @@ begin
       hole, this route exposes a fixed set of read-only projections and
       nothing else -- no /v1/config, no secrets, no writes. The allowlist is
       enforced HERE, server-side, so it holds however the app is opened. }
+    (* /v1/apps/<p>/action/<name> -- the ALLOWLISTED write counterpart to the
+       read window. An app cannot call the API, so this is how the Mail app
+       asks for a sync. Same rule as the read surface: the names are listed
+       here and nothing else resolves, so widening the surface is a
+       deliberate edit rather than an emergent property. *)
+    if LowerCase(Segs[3]) = 'action' then
+    begin
+      if Method <> 'POST' then
+      begin
+        ReplyErr(Resp, 405, 'method not allowed');
+        Exit;
+      end;
+      if Segs.Count < 5 then
+      begin
+        ReplyErr(Resp, 404, 'name an action');
+        Exit;
+      end;
+      Result := RunAppAction(Project, LowerCase(Segs[4]), Resp);
+      Exit;
+    end;
+
     if LowerCase(Segs[3]) = 'read' then
     begin
       if Method <> 'GET' then

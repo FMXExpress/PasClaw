@@ -27,6 +27,7 @@ interface
 
 function Cmd_Workspace_Run(const Argv: array of string): Integer;
 function Cmd_Project_Run(const Argv: array of string): Integer;
+function Cmd_Mail_Run(const Argv: array of string): Integer;
 
 implementation
 
@@ -37,7 +38,8 @@ uses
   PasClaw.Workspaces,
   PasClaw.Projects.Store,
   PasClaw.Apps,
-  PasClaw.Suite;
+  PasClaw.Suite,
+  PasClaw.Suite.Mail;
 
 { Conditional string. StrUtils has one, but a local helper keeps this unit's
   uses clause to the things it actually depends on. }
@@ -308,6 +310,57 @@ begin
   end;
 
   ProjectUsage;
+  Result := 1;
+end;
+
+{ ----------------------------------------------------------------- mail -- }
+
+{
+  pasclaw mail sync
+
+  The same bridge the Mail app's Sync button drives, at the prompt -- which
+  is what makes it schedulable:
+
+    pasclaw cron add "*/15 * * * *" "pasclaw mail sync"
+
+  It reads headers with BODY.PEEK[] and files them into the Mail app's list.
+  Nothing is sent, nothing is answered, and nothing is marked read on the
+  server. That last part is why this can run beside the Email channel
+  without stealing its unseen set.
+}
+function Cmd_Mail_Run(const Argv: array of string): Integer;
+var
+  Sub, Err: string;
+  Filed: Integer;
+begin
+  Sub := '';
+  if Length(Argv) > 0 then Sub := LowerCase(Argv[0]);
+
+  if (Sub = '') or (Sub = 'sync') then
+  begin
+    if not MailConfigured then
+    begin
+      PrintLn('IMAP is not configured.');
+      PrintLn('Set PASCLAW_EMAIL_IMAP_HOST, _USER and _PASS (the same');
+      PrintLn('credentials the email channel uses) and run this again.');
+      Exit(1);
+    end;
+    if not SyncMail(Filed, Err) then
+    begin
+      PrintLn('error: ' + Err);
+      Exit(1);
+    end;
+    if Filed = 0 then
+      PrintLn('No new mail.')
+    else
+      PrintLn(Format('Filed %d new message(s) into the Mail app.', [Filed]));
+    Exit(0);
+  end;
+
+  PrintLn('Usage: pasclaw mail sync');
+  PrintLn('');
+  PrintLn('Fills the Mail app''s inbox from IMAP and triages each subject.');
+  PrintLn('Read-only: it never marks anything \Seen and never sends.');
   Result := 1;
 end;
 

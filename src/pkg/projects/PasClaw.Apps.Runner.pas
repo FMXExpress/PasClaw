@@ -28,10 +28,13 @@
       environment is added.
     - One child per project, tracked, killable, and reaped on shutdown.
 
-  What it does NOT do: run the child inside the Docker shell backend. That
-  backend's Exec is one-shot, so a long-lived server has no handle to stop;
-  wiring it properly is a separate piece of work. Until then a `python` app
-  runs on the host, and the docs say so.
+  Where the child runs. With shell_backend = docker it runs in a container;
+  otherwise it runs on the host. The container path does NOT reuse the shell
+  backend's Exec -- that is one-shot, and a long-lived server started through
+  it would have no handle to stop. It drives the docker CLI directly instead,
+  so `docker run -d` returns a container id that stop and logs can address.
+  Either way the run record reports which one happened, because "it works on
+  my machine" is a different sentence depending on whose machine it is.
 *)
 unit PasClaw.Apps.Runner;
 
@@ -56,7 +59,13 @@ type
     ExitCode: Integer;
     Command:  string;    { what was actually run, after substitution }
     Error:    string;
+    Backend:  string;    { 'host' or 'docker' -- where it actually ran }
   end;
+
+{ Where the runner will put the next child: 'host' or 'docker'. Reported to
+  the clients so the desktop can say "in a container" rather than implying a
+  bare host process. }
+function RunnerBackendName: string;
 
 function RunStateToStr(S: TRunState): string;
 
@@ -88,12 +97,21 @@ function RunningApps: TStringList;   { caller frees }
   leave orphaned app processes behind. }
 procedure StopAllApps;
 
+(* The argv handed to `docker run` for a project. Exposed because this
+   command IS the isolation policy -- which directory is mounted, where the
+   port is published, which image -- and that should be assertable in a test
+   on a machine with no Docker, not only reviewable by running it. *)
+procedure BuildDockerRunArgs(const Project, AppDir, Cmd, Image: string;
+  Port: Integer; Env: TStrings; Args: TStringList);
+
 implementation
 
 uses
   PasClaw.Utils,
   PasClaw.Logger,
   PasClaw.Platform,
+  PasClaw.Config,
+  PasClaw.Shell.Backend,   { TShellBackendKind -- which boundary we run in }
   PasClaw.Projects.Store,
   IdTCPClient;
 
@@ -120,6 +138,9 @@ type
     Project:  string;
     Proc:     TStdioProcess;
     Drain:    TDrainThread;
+    { Non-empty when the child is a container rather than a host process.
+      The two are mutually exclusive; whichever is set is how we stop it. }
+    Container: string;
     Port:     Integer;
     State:    TRunState;
     Started:  string;
@@ -223,6 +244,194 @@ begin
   Result := 0;
 end;
 
+{ ----------------------------------------------------------------- docker -- }
+
+(* Run a command as argv and wait for it, capturing combined output. Needed
+   because the platform's RunOneShot takes a SHELL STRING, and the docker
+   argv carries a user-supplied run line we must not hand to a shell for
+   re-splitting -- the whole point of passing argv is that quoting cannot go
+   wrong on the way in. *)
+function RunArgs(const Exe: string; Args: TStrings; const WorkDir: string;
+  out Output: string): Integer;
+var
+  P: TStdioProcess;
+  Buf: array[0..4095] of Byte;
+  N, Spins: Integer;
+  Chunk: AnsiString;
+begin
+  Output := '';
+  Result := -1;
+  P := TStdioProcess.Create;
+  try
+    if not P.Spawn(Exe, Args, True, WorkDir, nil) then
+    begin
+      Output := 'could not start ' + Exe;
+      Exit;
+    end;
+    Spins := 0;
+    { Bounded: a docker CLI call that never returns must not park a request
+      thread forever. ~30s at 50ms per empty read. }
+    while (Spins < 600) do
+    begin
+      N := P.ReadAvailable(Buf, SizeOf(Buf));
+      if N > 0 then
+      begin
+        SetLength(Chunk, N);
+        Move(Buf[0], Chunk[1], N);
+        Output := Output + string(Chunk);
+        Spins := 0;
+        Continue;
+      end;
+      if not P.Running then Break;
+      Inc(Spins);
+      Sleep(50);
+    end;
+    if P.Running then
+    begin
+      P.Terminate;
+      Output := Output + #10 + '(timed out)';
+      Exit;
+    end;
+    Result := P.ExitCode;
+  finally
+    P.Free;
+  end;
+end;
+
+
+(* Docker mode. Deliberately drives the CLI rather than reusing the shell
+   backend: that backend's Exec is one-shot, so a server started through it
+   would run with no handle to stop. `docker run -d` returns a container id,
+   which is exactly the handle we need. *)
+
+function DockerConfigured: Boolean;
+var
+  Cfg: TConfig;
+begin
+  Cfg := LoadConfig;
+  Result := Cfg.ShellBackend = sbDocker;
+end;
+
+function RunnerBackendName: string;
+begin
+  if DockerConfigured then Result := 'docker' else Result := 'host';
+end;
+
+function DockerImage: string;
+var
+  Cfg: TConfig;
+begin
+  Cfg := LoadConfig;
+  Result := Trim(Cfg.ShellBackendDocker.Image);
+  if Result = '' then Result := 'debian:bookworm-slim';
+end;
+
+{ A stable, obviously-ours container name so an orphan is identifiable in
+  `docker ps` and a restart can reclaim or clear it. }
+function ContainerNameFor(const Project: string): string;
+begin
+  Result := 'pasclaw-app-' + Project;
+end;
+
+(* Build the argv for the detached run. Split out from the spawn so it can be
+   asserted in a test on a machine with no Docker -- the shape of this command
+   IS the isolation policy, and it should not be reviewable only by running
+   it. *)
+procedure BuildDockerRunArgs(const Project, AppDir, Cmd, Image: string;
+  Port: Integer; Env: TStrings; Args: TStringList);
+var
+  I: Integer;
+begin
+  Args.Clear;
+  Args.Add('run');
+  Args.Add('-d');                       { detached: the id comes back on stdout }
+  Args.Add('--rm');                     { no corpse to clean up after a stop }
+  Args.Add('--name'); Args.Add(ContainerNameFor(Project));
+  { The app directory is the ONLY mount. Not the workspace, not the home. }
+  Args.Add('-v'); Args.Add(AppDir + ':/app');
+  Args.Add('-w'); Args.Add('/app');
+  { Published to loopback only -- an app the user ran for themselves should
+    not become reachable from their network because Docker helpfully bound
+    0.0.0.0. }
+  if Port > 0 then
+  begin
+    Args.Add('-p');
+    Args.Add('127.0.0.1:' + IntToStr(Port) + ':' + IntToStr(Port));
+  end;
+  if Env <> nil then
+    for I := 0 to Env.Count - 1 do
+      if Trim(Env[I]) <> '' then
+      begin
+        Args.Add('-e');
+        Args.Add(Env[I]);
+      end;
+  Args.Add(Image);
+  { sh -c so the manifest's run line keeps working unchanged: inside a
+    container of its own, a shell is not the risk it is on the host. }
+  Args.Add('sh');
+  Args.Add('-c');
+  Args.Add(Cmd);
+end;
+
+function DockerRun(const Project, AppDir, Cmd: string; Port: Integer;
+  Env: TStrings; out ContainerId, Err: string): Boolean;
+var
+  Args: TStringList;
+  Line, Out_: string;
+  RC: Integer;
+begin
+  ContainerId := '';
+  Err := '';
+  Result := False;
+  Args := TStringList.Create;
+  try
+    BuildDockerRunArgs(Project, AppDir, Cmd, DockerImage, Port, Env, Args);
+    { A previous run that died badly can leave the name taken. }
+    RunOneShot('docker rm -f ' + ContainerNameFor(Project), AppDir, Out_);
+
+    Line := 'docker';
+    RC := RunArgs(Line, Args, AppDir, Out_);
+    if RC <> 0 then
+    begin
+      Err := 'docker run failed: ' + Copy(Trim(Out_), 1, 400);
+      Exit;
+    end;
+    ContainerId := Trim(Out_);
+    if ContainerId = '' then ContainerId := ContainerNameFor(Project);
+    Result := True;
+  finally
+    Args.Free;
+  end;
+end;
+
+function DockerLogs(const Project: string): string;
+var
+  Out_: string;
+begin
+  Result := '';
+  if RunOneShot('docker logs --tail 500 ' + ContainerNameFor(Project), '', Out_) = 0 then
+    Result := Out_;
+end;
+
+function DockerAlive(const Project: string): Boolean;
+var
+  Out_: string;
+begin
+  Result := False;
+  if RunOneShot('docker inspect -f {{.State.Running}} ' +
+                ContainerNameFor(Project), '', Out_) <> 0 then Exit;
+  Result := Pos('true', LowerCase(Out_)) > 0;
+end;
+
+procedure DockerStop(const Project: string);
+var
+  Out_: string;
+begin
+  { -t 3: give the app a moment to close its listener, then take it. }
+  RunOneShot('docker stop -t 3 ' + ContainerNameFor(Project), '', Out_);
+  RunOneShot('docker rm -f ' + ContainerNameFor(Project), '', Out_);
+end;
+
 { ------------------------------------------------------------------ drain -- }
 
 constructor TDrainThread.Create(const AProject: string);
@@ -238,8 +447,52 @@ var
   N: Integer;
   S: AnsiString;
   R: TRunning;
-  Alive: Boolean;
+  Alive, IsContainer: Boolean;
+  Logs: string;
 begin
+  { A container has no pipe to drain: its output lives in the daemon and is
+    read back with `docker logs`. Poll it on a slower beat -- shelling out
+    twice a second would cost more than the output is worth. }
+  GLock.Acquire;
+  try
+    R := FindRunning(FProject);
+    IsContainer := (R <> nil) and (R.Container <> '');
+  finally
+    GLock.Release;
+  end;
+
+  if IsContainer then
+  begin
+    while not Terminated do
+    begin
+      Logs := DockerLogs(FProject);
+      Alive := DockerAlive(FProject);
+      GLock.Acquire;
+      try
+        R := FindRunning(FProject);
+        if R = nil then Break;
+        if Logs <> '' then
+        begin
+          { docker logs returns the whole tail each time, so replace rather
+            than append -- appending would duplicate every line per poll. }
+          R.Log := '$ docker run (' + DockerImage + ')  ' + R.Command + #10 + Logs;
+          if Length(R.Log) > MaxLogBytes then
+            R.Log := Copy(R.Log, Length(R.Log) - (MaxLogBytes div 2), MaxInt);
+        end;
+        if (not Alive) and (R.State = rsRunning) then
+        begin
+          R.State := rsExited;
+          LogInfo('app %s container exited', [FProject]);
+        end;
+      finally
+        GLock.Release;
+      end;
+      if not Alive then Break;
+      Sleep(1500);
+    end;
+    Exit;
+  end;
+
   while not Terminated do
   begin
     N := 0;
@@ -303,6 +556,7 @@ begin
     end;
   end;
 end;
+
 
 { ------------------------------------------------------------------ start -- }
 
@@ -443,7 +697,7 @@ function StartApp(const Project: string; Consented: Boolean;
 var
   App: TAppInfo;
   R: TRunning;
-  AppDir, Cmd, Exe, Out_: string;
+  AppDir, Cmd, Exe, Out_, ContainerId: string;
   Args, Env: TStringList;
   Port, RC: Integer;
 begin
@@ -452,6 +706,7 @@ begin
   FillChar(Info, SizeOf(Info), 0);
   Info.Project := Project; Info.State := rsStopped;
   Info.Started := ''; Info.Command := ''; Info.Error := '';
+  Info.Backend := RunnerBackendName;
 
   if not GetApp(Project, App) or not App.Exists then
   begin
@@ -550,6 +805,49 @@ begin
   Args := TStringList.Create;
   Env  := BuildEnv(Project, App, Port);
   try
+    { Docker mode: a detached container instead of a host child. The command
+      is unchanged -- what changes is the boundary it runs inside. }
+    if DockerConfigured then
+    begin
+      R := TRunning.Create;
+      R.Project := Project;
+      R.Port    := Port;
+      R.Command := Cmd;
+      R.Started := NowIsoUtc;
+      R.Log     := '$ docker run (' + DockerImage + ')  ' + Cmd + #10;
+      if not DockerRun(Project, AppDir, Cmd, Port, Env, ContainerId, Err) then
+      begin
+        R.State := rsFailed;
+        R.Error := Err;
+        R.Log := R.Log + Err + #10;
+        GLock.Acquire;
+        try
+          GApps.AddObject(Project, R);
+        finally
+          GLock.Release;
+        end;
+        Info := AppRunInfo(Project);
+        Exit;
+      end;
+      R.Container := ContainerId;
+      R.State := rsRunning;
+      GLock.Acquire;
+      try
+        GApps.AddObject(Project, R);
+      finally
+        GLock.Release;
+      end;
+      R.Drain := TDrainThread.Create(Project);
+      R.Drain.Start;
+      if Port > 0 then
+        LogInfo('app %s started in a container on port %d: %s', [Project, Port, Cmd])
+      else
+        LogInfo('app %s started in a container: %s', [Project, Cmd]);
+      Info := AppRunInfo(Project);
+      Result := Info.State = rsRunning;
+      Exit;
+    end;
+
     Exe := SplitCommand(Cmd, Args);
     if Exe = '' then
     begin
@@ -623,7 +921,9 @@ begin
   end;
   { Freed outside the lock: TRunning.Destroy joins the drain thread, which
     takes the same lock. }
-  if (R.Proc <> nil) and R.Proc.Running then
+  if R.Container <> '' then
+    DockerStop(Project)
+  else if (R.Proc <> nil) and R.Proc.Running then
     R.Proc.Terminate;
   R.Free;
   LogInfo('app %s stopped', [Project]);
@@ -638,6 +938,7 @@ begin
   Result.Project := Project;
   Result.State := rsStopped;
   Result.Started := ''; Result.Command := ''; Result.Error := '';
+  Result.Backend := RunnerBackendName;
   GLock.Acquire;
   try
     R := FindRunning(Project);
@@ -648,6 +949,7 @@ begin
     Result.ExitCode := R.ExitCode;
     Result.Command  := R.Command;
     Result.Error    := R.Error;
+    if R.Container <> '' then Result.Backend := 'docker' else Result.Backend := 'host';
   finally
     GLock.Release;
   end;

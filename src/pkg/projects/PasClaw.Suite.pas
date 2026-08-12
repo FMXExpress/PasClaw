@@ -364,7 +364,9 @@ const
     '<div class="muted" id="hint"></div>' +
     '<div class="row" style="margin-top:6px">' +
     '<input type="text" id="t" placeholder="Subject to triage">' +
-    '<button id="add">Add</button></div>' +
+    '<button id="add">Add</button>' +
+    '<button id="sync" title="Fetch new mail from the configured IMAP inbox">' +
+    'Sync</button></div>' +
     '<ul id="list"></ul>' +
     '<div class="muted" id="count">&nbsp;</div>' +
     '<script src="pasclaw.js"></' + 'script>' +
@@ -382,6 +384,8 @@ const
     'const tg=document.createElement("span");tg.className="tag";' +
     'tg.textContent=it.tag||"FYI";sp.appendChild(tg);' +
     'sp.appendChild(document.createTextNode(it.subject));' +
+    'if(it.from){const fr=document.createElement("span");fr.className="muted";' +
+    'fr.textContent="  "+it.from;sp.appendChild(fr);}' +
     'sp.onclick=async()=>{it.read=!it.read;paint();await save();};' +
     'const cyc=document.createElement("span");cyc.className="x";cyc.textContent="#";' +
     'cyc.title="Change category";' +
@@ -397,6 +401,15 @@ const
     'items.unshift({subject:v,tag:"FYI",read:false});$("#t").value="";' +
     'paint();await save();};' +
     '$("#t").addEventListener("keydown",e=>{if(e.key==="Enter")$("#add").click();});' +
+    '$("#sync").onclick=async()=>{' +
+    '$("#sync").disabled=true;$("#hint").textContent="Checking the inbox...";' +
+    'try{const r=await pasclaw.action("mail-sync");' +
+    'if(r&&r.error){$("#hint").textContent=r.error;}' +
+    'else{items=await pasclaw.getJSON("items",[]);paint();' +
+    '$("#hint").textContent=(r&&r.filed?("Filed "+r.filed+" new message(s)."):' +
+    '"No new mail.");}}' +
+    'catch(e){$("#hint").textContent=String(e.message||e);}' +
+    '$("#sync").disabled=false;};' +
     '$("#hint").textContent="PasClaw can poll IMAP and send replies -- see the Email channel in docs/channels.md. Once it is configured, ask PasClaw in this project to file triaged mail here.";' +
     '(async()=>{items=await pasclaw.getJSON("items",[]);paint();})();' +
     '</' + 'script></body></html>';

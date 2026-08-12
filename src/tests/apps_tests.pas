@@ -16,7 +16,8 @@ uses
   PasClaw.Config,
   PasClaw.Workspaces,
   PasClaw.Projects.Store,
-  PasClaw.Apps;
+  PasClaw.Apps,
+  PasClaw.Apps.Runner;
 
 var
   Failures: Integer = 0;
@@ -62,6 +63,8 @@ var
   Err, Slug, AppDir, Blueprint, Val, Resolved: string;
   Info: TAppInfo;
   Keys: TStringList;
+  DArgs, Env: TStringList;
+  Joined: string;
   Tasks: TTaskInfoArray;
 begin
   Slug := CreateProject('Spam Filter', '', 'filter mail', Err);
@@ -204,6 +207,50 @@ begin
   ExpectTrue(FileExists(JoinPath(ProjectAppDir('evil'), 'ok.html')), 'safe file written');
   ExpectTrue(not FileExists(JoinPath(GetHome, 'escaped.html')),
              'ESCAPE: traversal path in a blueprint must not be written');
+
+  { ------------------------------------------------ docker run policy -- }
+  { The argv the runner hands `docker run` is the isolation policy in
+    executable form: which directory is mounted, where the port is
+    published, what image. Asserted here so it is reviewable on a machine
+    with no Docker -- otherwise the only way to check it is to run it. }
+  DArgs := TStringList.Create;
+  try
+    BuildDockerRunArgs('spam-filter', '/home/u/.pasclaw/workspace/projects/spam-filter/app',
+                       'python3 main.py 8700', 'debian:bookworm-slim', 8700, nil, DArgs);
+    Joined := DArgs.Text;
+    ExpectContains(Joined, '-d', 'detached, so the id is the stop handle');
+    ExpectContains(Joined, '--rm', 'no corpse left behind');
+    ExpectContains(Joined, 'pasclaw-app-spam-filter', 'identifiable container name');
+    ExpectContains(Joined,
+      '/home/u/.pasclaw/workspace/projects/spam-filter/app:/app',
+      'the app directory is mounted');
+    ExpectContains(Joined, '127.0.0.1:8700:8700',
+      'the port is published to LOOPBACK, never 0.0.0.0');
+    ExpectContains(Joined, 'debian:bookworm-slim', 'the configured image is used');
+    { Nothing broader than the app dir may be mounted -- a workspace or home
+      mount would hand the container everything. }
+    ExpectMissing(Joined, '.pasclaw:/', 'the home directory is NOT mounted');
+    ExpectMissing(Joined, '--privileged', 'not privileged');
+    ExpectMissing(Joined, '--network host', 'not on the host network');
+
+    { No port -> no publish rule at all. }
+    BuildDockerRunArgs('spam-filter', '/tmp/app', 'python3 worker.py',
+                       'debian:bookworm-slim', 0, nil, DArgs);
+    ExpectMissing(DArgs.Text, '-p', 'a console app publishes no port');
+
+    { Declared env travels as -e pairs, one per name. }
+    Env := TStringList.Create;
+    try
+      Env.Add('IMAP_PASSWORD=hunter2');
+      BuildDockerRunArgs('spam-filter', '/tmp/app', 'python3 main.py',
+                         'debian:bookworm-slim', 0, Env, DArgs);
+      ExpectContains(DArgs.Text, 'IMAP_PASSWORD=hunter2', 'declared env passed through');
+    finally
+      Env.Free;
+    end;
+  finally
+    DArgs.Free;
+  end;
 
   if Failures = 0 then
     WriteLn('apps_tests: OK')

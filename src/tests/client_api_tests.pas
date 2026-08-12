@@ -32,9 +32,22 @@ begin
   if not Cond then Fail_(Msg);
 end;
 
+procedure ExpectStr(const Got, Want, Msg: string);
+begin
+  if Got <> Want then
+    Fail_(Msg + ' -- got "' + Got + '", want "' + Want + '"');
+end;
+
+procedure ExpectInt(Got, Want: Integer; const Msg: string);
+begin
+  if Got <> Want then
+    Fail_(Msg + ' -- got ' + IntToStr(Got) + ', want ' + IntToStr(Want));
+end;
+
 var
   C: TPasClawClient;
-  Base, Ver, Slug, TaskId, Val: string;
+  Base, Ver, Slug, TaskId, Val, Visible: string;
+  Blocks: TUIBlocks;
   WS: TWorkspaceRows;
   PR: TProjectRows;
   TR: TTaskRows;
@@ -43,10 +56,87 @@ var
   I: Integer;
   Found: Boolean;
 begin
+  { ---- UI block parsing: pure string work, so it runs with no gateway ---- }
+  { The happy path: prose around a wizard block. }
+  ParseUIBlocks(
+    'Here is the plan.'#10#10 +
+    '```pasclaw-ui'#10 +
+    '{"ui":"wizard","title":"Plan","steps":[' +
+    '{"title":"One","body":"first"},{"title":"Two","body":"second"}]}'#10 +
+    '```'#10#10 +
+    'Tell me if it is wrong.',
+    Visible, Blocks);
+  ExpectInt(Length(Blocks), 1, 'one block recognised');
+  ExpectTrue(Blocks[0].Kind = ubWizard, 'recognised as a wizard');
+  ExpectStr(Blocks[0].Title, 'Plan', 'title parsed');
+  ExpectInt(Length(Blocks[0].Steps), 2, 'both steps parsed');
+  ExpectStr(Blocks[0].Steps[1].Title, 'Two', 'step order preserved');
+  ExpectTrue(Pos('Here is the plan', Visible) > 0, 'prose before survives');
+  ExpectTrue(Pos('Tell me if it is wrong', Visible) > 0, 'prose after survives');
+  ExpectTrue(Pos('pasclaw-ui', Visible) = 0, 'the block itself is removed');
+
+  { A question with buttons. }
+  ParseUIBlocks(
+    '```pasclaw-ui'#10 +
+    '{"ui":"ask","text":"IMAP or Gmail?","buttons":[' +
+    '{"label":"IMAP","value":"IMAP"},{"label":"Gmail API","value":"Gmail API"}]}'#10 +
+    '```',
+    Visible, Blocks);
+  ExpectInt(Length(Blocks), 1, 'ask block recognised');
+  ExpectTrue(Blocks[0].Kind = ubAsk, 'kind is ask');
+  ExpectInt(Length(Blocks[0].Buttons), 2, 'both buttons parsed');
+  ExpectStr(Blocks[0].Buttons[1].Caption, 'Gmail API', 'button label parsed');
+  ExpectStr(Blocks[0].Kind_, 'ask', 'icon kind defaults to ask');
+
+  { ---- the fail-safe rules: an answer must never disappear ---- }
+  { Malformed JSON stays visible rather than vanishing. }
+  ParseUIBlocks('before'#10'```pasclaw-ui'#10'{not json'#10'```'#10'after',
+                Visible, Blocks);
+  ExpectInt(Length(Blocks), 0, 'malformed block is not rendered');
+  ExpectTrue(Pos('not json', Visible) > 0, 'and is left in the visible text');
+  ExpectTrue(Pos('before', Visible) > 0, 'with its surroundings intact');
+  ExpectTrue(Pos('after', Visible) > 0, 'on both sides');
+
+  { An unterminated fence must not swallow the rest of the reply. }
+  ParseUIBlocks('keep me'#10'```pasclaw-ui'#10'{"ui":"wizard"}', Visible, Blocks);
+  ExpectInt(Length(Blocks), 0, 'unterminated block is not rendered');
+  ExpectTrue(Pos('keep me', Visible) > 0, 'and the reply before it survives');
+
+  { An unknown ui type is not our business -- leave it alone. }
+  ParseUIBlocks('```pasclaw-ui'#10'{"ui":"hologram"}'#10'```', Visible, Blocks);
+  ExpectInt(Length(Blocks), 0, 'unknown ui type ignored');
+  ExpectTrue(Pos('hologram', Visible) > 0, 'and left visible');
+
+  { A wizard with no steps would render an empty window; refuse it. }
+  ParseUIBlocks('```pasclaw-ui'#10'{"ui":"wizard","steps":[]}'#10'```', Visible, Blocks);
+  ExpectInt(Length(Blocks), 0, 'a stepless wizard is refused');
+
+  { A message with no buttons gets one, so it can be dismissed. }
+  ParseUIBlocks('```pasclaw-ui'#10'{"ui":"message","text":"done"}'#10'```',
+                Visible, Blocks);
+  ExpectInt(Length(Blocks), 1, 'message recognised');
+  ExpectInt(Length(Blocks[0].Buttons), 1, 'a dismiss button is supplied');
+
+  { Plain prose is returned untouched -- the common case must cost nothing. }
+  ParseUIBlocks('just an ordinary answer', Visible, Blocks);
+  ExpectInt(Length(Blocks), 0, 'no blocks in plain prose');
+  ExpectStr(Visible, 'just an ordinary answer', 'text returned verbatim');
+
+  { Two blocks in one reply. }
+  ParseUIBlocks(
+    '```pasclaw-ui'#10'{"ui":"message","text":"a"}'#10'```'#10 +
+    'middle'#10 +
+    '```pasclaw-ui'#10'{"ui":"message","text":"b"}'#10'```',
+    Visible, Blocks);
+  ExpectInt(Length(Blocks), 2, 'both blocks recognised');
+  ExpectTrue(Pos('middle', Visible) > 0, 'text between them survives');
+
   Base := GetEnvironmentVariable('PASCLAW_TEST_GATEWAY');
   if Trim(Base) = '' then
   begin
-    WriteLn('client_api_tests: skipped (set PASCLAW_TEST_GATEWAY to run)');
+    WriteLn('client_api_tests: UI parsing OK; live half skipped ' +
+            '(set PASCLAW_TEST_GATEWAY to run it)');
+    if Failures > 0 then Halt(1);
     Halt(0);
   end;
 

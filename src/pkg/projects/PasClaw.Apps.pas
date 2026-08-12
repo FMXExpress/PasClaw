@@ -437,6 +437,11 @@ begin
     '          return r.json().then(function (j) { return j.items || []; });' + #10 +
     '        });' + #10 +
     '      }' + #10 +
+    '      if (op === "action") {' + #10 +
+    '        return fetch("/v1/apps/" + PROJECT + "/action/" +' + #10 +
+    '                     encodeURIComponent(key), { method: "POST" })' + #10 +
+    '          .then(function (r) { return r.json(); });' + #10 +
+    '      }' + #10 +
     '      var url = "/v1/apps/" + PROJECT + "/state/" + encodeURIComponent(key);' + #10 +
     '      if (op === "get") {' + #10 +
     '        return fetch(url).then(function (r) {' + #10 +
@@ -477,7 +482,9 @@ begin
     '    /* Read one of the gateway ALLOWLISTED surfaces: cron, sessions,' + #10 +
     '       providers, pages, projects. Returns the items array. Anything' + #10 +
     '       else is refused server-side. */' + #10 +
-    '    read: function (surface) { return ask("read", surface); }' + #10 +
+    '    read: function (surface) { return ask("read", surface); },' + #10 +
+    '    /* Run one of the gateway ALLOWLISTED actions for this app. */' + #10 +
+    '    action: function (name) { return ask("action", name); }' + #10 +
     '  };' + #10 +
     '})();' + #10;
 end;

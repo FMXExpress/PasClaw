@@ -2178,6 +2178,10 @@ window.addEventListener("message", async ev => {
     } else if (m.op === "del") {
       await api(url, { method: "DELETE" });
       reply({ value: true });
+    } else if (m.op === "action") {
+      const j = await api(`/v1/apps/${encodeURIComponent(project)}/action/` +
+                          encodeURIComponent(String(m.key || "")), { method: "POST" });
+      reply({ value: j });
     } else if (m.op === "read") {
       /* The allowlist lives on the server; we just forward the name so an
          app cannot reach past it by talking to us instead. */
@@ -2262,9 +2266,15 @@ async function openProcessApp(project, app) {
   const head = el("div");
   head.style.cssText = "padding:6px 6px 0";
   head.appendChild(el("div", null, `${app.name || project}  [${app.kind}]`));
+  const inDocker = (app.run_backend === "docker");
   const where = el("div", "muted",
-    S.host ? `Runs on the PasClaw host: ${S.host}` : "Runs on the PasClaw host");
+    (inDocker ? "Runs in a container on the PasClaw host"
+              : "Runs as a process on the PasClaw host") +
+    (S.host ? `: ${S.host}` : ""));
   head.appendChild(where);
+  if (!inDocker)
+    head.appendChild(el("div", "muted",
+      "Set shell_backend to \"docker\" to run apps in a container instead."));
   const cmd = el("div", "muted", "");
   cmd.style.cssText = "font-family:monospace;word-break:break-all;margin-top:3px";
   head.appendChild(cmd);
@@ -2331,6 +2341,9 @@ async function openProcessApp(project, app) {
                : `It runs on the PasClaw host, not necessarily on this machine.`,
       ];
       if (app.network) lines.push(``, `It declares network access to: ${app.network}`);
+      lines.push(``, inDocker
+        ? `It runs inside a container; only its app/ directory is mounted.`
+        : `It runs directly on that machine, with the same reach you have.`);
       if (!confirm(lines.join("\n"))) { runBtn.disabled = false; return; }
       const info = await api(`/v1/apps/${project}/run`,
                             { method: "POST", body: { confirm: true } });

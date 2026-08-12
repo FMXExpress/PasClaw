@@ -73,6 +73,58 @@ type
   { Called for each streamed chunk of an assistant reply. Set Abort to stop. }
   TChatChunkProc = procedure(const Chunk: string; var Abort: Boolean) of object;
 
+  (* ---- period-native output ----
+
+     The web desktop renders structured agent output as real UI: a plan
+     becomes a wizard, a question becomes a message box. The CONVENTION is a
+     fenced ```pasclaw-ui block carrying one JSON object; recognising it is
+     pure string work, so it lives here rather than in either client. That
+     way the FMX desktop renders the same furniture from the same rules, and
+     the rules are testable without a UI toolkit.
+
+     Fail-safe by construction: text outside a block is untouched, and a
+     block that does not parse is LEFT IN the visible text rather than
+     silently swallowed. An answer must never disappear. *)
+  TUIBlockKind = (ubNone, ubWizard, ubMessage, ubAsk);
+
+  TUIStep = record
+    Title: string;
+    Body:  string;
+  end;
+  TUISteps = array of TUIStep;
+
+  TUIButton = record
+    Caption: string;
+    Value:   string;
+  end;
+  TUIButtons = array of TUIButton;
+
+  TUIBlock = record
+    Kind:    TUIBlockKind;
+    Title:   string;
+    Text:    string;
+    Kind_:   string;      { info | ask | warn | stop, for message boxes }
+    Steps:   TUISteps;
+    Buttons: TUIButtons;
+  end;
+  TUIBlocks = array of TUIBlock;
+
+  { One desktop event off /v1/desktop/events. }
+  TDesktopEvent = record
+    Seq:     Int64;
+    EvType:  string;   { projects | project | task | job | joblog | app | page |
+                         workspace | hello | gap }
+    Project: string;
+    Task:    string;
+    Id:      string;
+    Status:  string;
+    Line:    string;
+    Raw:     string;
+  end;
+
+  { Called for each event as it arrives. Set Stop to end the subscription. }
+  TDesktopEventProc = procedure(const Ev: TDesktopEvent; var Stop: Boolean) of object;
+
   TPasClawClient = class
   private
     FBaseURL: string;
@@ -130,7 +182,18 @@ type
        Returns the full reply. *)
     function Chat(const HistoryJSON, System_: string;
       OnChunk: TChatChunkProc): string;
+
+    (* Subscribe to /v1/desktop/events and pump until the callback stops it or
+       the connection drops. BLOCKS -- run it on its own thread. The FMX
+       client does exactly that, which is how its tree updates while an agent
+       works instead of waiting for a refresh click. *)
+    procedure WatchEvents(OnEvent: TDesktopEventProc);
   end;
+
+(* Split an assistant reply into the text a human reads and the UI blocks a
+   client should render. Both clients call this on every finished turn. *)
+procedure ParseUIBlocks(const Reply: string; out VisibleText: string;
+  out Blocks: TUIBlocks);
 
 implementation
 
@@ -238,6 +301,234 @@ begin
     raise EAbort.Create('chat aborted by caller');
 end;
 
+
+{ ------------------------------------------------------- UI block parsing -- }
+
+function ParseOneUIBlock(const JSONText: string; out Block: TUIBlock): Boolean;
+var
+  Obj, Item: TJsonObject;
+  Arr: TJsonArray;
+  I, N: Integer;
+  UI: string;
+begin
+  Result := False;
+  FillChar(Block, SizeOf(Block), 0);
+  Block.Kind := ubNone;
+  Block.Title := ''; Block.Text := ''; Block.Kind_ := '';
+  SetLength(Block.Steps, 0);
+  SetLength(Block.Buttons, 0);
+
+  try
+    Obj := TJsonObject.Parse(JSONText);
+  except
+    Exit;   { unparseable -> the caller leaves it as visible text }
+  end;
+  try
+    UI := LowerCase(Trim(Obj.GetStr('ui', '')));
+    if      UI = 'wizard'  then Block.Kind := ubWizard
+    else if UI = 'message' then Block.Kind := ubMessage
+    else if UI = 'ask'     then Block.Kind := ubAsk
+    else Exit;
+
+    Block.Title := Obj.GetStr('title', '');
+    Block.Text  := Obj.GetStr('text', '');
+    Block.Kind_ := LowerCase(Obj.GetStr('kind', ''));
+    if Block.Kind_ = '' then
+      if Block.Kind = ubAsk then Block.Kind_ := 'ask' else Block.Kind_ := 'info';
+
+    Arr := Obj.ChildArray('steps');
+    if Arr <> nil then
+    begin
+      SetLength(Block.Steps, Arr.Count);
+      N := 0;
+      for I := 0 to Arr.Count - 1 do
+      begin
+        Item := Arr.ItemObject(I);
+        if Item = nil then Continue;
+        Block.Steps[N].Title := Item.GetStr('title', '');
+        Block.Steps[N].Body  := Item.GetStr('body', '');
+        if (Block.Steps[N].Title = '') and (Block.Steps[N].Body = '') then Continue;
+        Inc(N);
+      end;
+      SetLength(Block.Steps, N);
+    end;
+
+    Arr := Obj.ChildArray('buttons');
+    if Arr <> nil then
+    begin
+      SetLength(Block.Buttons, Arr.Count);
+      N := 0;
+      for I := 0 to Arr.Count - 1 do
+      begin
+        Item := Arr.ItemObject(I);
+        if Item = nil then Continue;
+        Block.Buttons[N].Caption := Item.GetStr('label', '');
+        Block.Buttons[N].Value   := Item.GetStr('value', Block.Buttons[N].Caption);
+        if Block.Buttons[N].Caption = '' then Continue;
+        Inc(N);
+      end;
+      SetLength(Block.Buttons, N);
+    end;
+
+    { A wizard with no steps is not a wizard; rendering an empty one would be
+      worse than leaving the text. }
+    if (Block.Kind = ubWizard) and (Length(Block.Steps) = 0) then Exit;
+    { A question with no buttons gets one, so it can at least be dismissed. }
+    if (Block.Kind in [ubMessage, ubAsk]) and (Length(Block.Buttons) = 0) then
+    begin
+      SetLength(Block.Buttons, 1);
+      Block.Buttons[0].Caption := 'OK';
+      Block.Buttons[0].Value   := 'OK';
+    end;
+    Result := True;
+  finally
+    Obj.Free;
+  end;
+end;
+
+procedure ParseUIBlocks(const Reply: string; out VisibleText: string;
+  out Blocks: TUIBlocks);
+const
+  Fence = '```pasclaw-ui';
+var
+  Rest, Body, Before: string;
+  P, Q: Integer;
+  Block: TUIBlock;
+begin
+  VisibleText := Reply;
+  SetLength(Blocks, 0);
+  if Pos(Fence, Reply) = 0 then Exit;
+
+  VisibleText := '';
+  Rest := Reply;
+  repeat
+    P := Pos(Fence, Rest);
+    if P = 0 then
+    begin
+      VisibleText := VisibleText + Rest;
+      Break;
+    end;
+    Before := Copy(Rest, 1, P - 1);
+    Rest := Copy(Rest, P + Length(Fence), MaxInt);
+    { Body runs to the closing fence. An unterminated block is malformed:
+      put the whole thing back rather than swallowing the rest of the reply. }
+    Q := Pos('```', Rest);
+    if Q = 0 then
+    begin
+      VisibleText := VisibleText + Before + Fence + Rest;
+      Break;
+    end;
+    Body := Copy(Rest, 1, Q - 1);
+    Rest := Copy(Rest, Q + 3, MaxInt);
+
+    if ParseOneUIBlock(Body, Block) then
+    begin
+      SetLength(Blocks, Length(Blocks) + 1);
+      Blocks[High(Blocks)] := Block;
+      VisibleText := VisibleText + Before;
+    end
+    else
+      { Not a block we understand -- leave it where the model put it. }
+      VisibleText := VisibleText + Before + Fence + Body + '```';
+  until False;
+  VisibleText := Trim(VisibleText);
+end;
+
+{ ----------------------------------------------------------- event stream -- }
+
+type
+  (* Feeds /v1/desktop/events into the caller's callback as frames arrive.
+     Same shape as TSSEStream above; different payload. *)
+  TEventStream = class(TStream)
+  private
+    FBuf: string;
+    FOnEvent: TDesktopEventProc;
+    FStop: Boolean;
+    procedure Consume(const Data: string);
+  public
+    constructor Create(AOnEvent: TDesktopEventProc);
+    function Write(const Buffer; Count: Longint): Longint; override;
+    function Read(var Buffer; Count: Longint): Longint; override;
+    function Seek(Offset: Longint; Origin: Word): Longint; override;
+    property Stopped: Boolean read FStop;
+  end;
+
+constructor TEventStream.Create(AOnEvent: TDesktopEventProc);
+begin
+  inherited Create;
+  FOnEvent := AOnEvent;
+end;
+
+function TEventStream.Read(var Buffer; Count: Longint): Longint;
+begin
+  Result := 0;
+end;
+
+function TEventStream.Seek(Offset: Longint; Origin: Word): Longint;
+begin
+  Result := 0;
+end;
+
+procedure TEventStream.Consume(const Data: string);
+var
+  NL: Integer;
+  Line, Payload: string;
+  Obj: TJsonObject;
+  Ev: TDesktopEvent;
+begin
+  FBuf := FBuf + Data;
+  repeat
+    NL := Pos(#10, FBuf);
+    if NL = 0 then Break;
+    Line := Copy(FBuf, 1, NL - 1);
+    Delete(FBuf, 1, NL);
+    Line := StringReplace(Line, #13, '', [rfReplaceAll]);
+    if (Line = '') or (Line[1] = ':') then Continue;   { blank / keepalive }
+    if not HasPrefix(Line, 'data:') then Continue;
+    Payload := Trim(Copy(Line, 6, MaxInt));
+    if Payload = '' then Continue;
+
+    FillChar(Ev, SizeOf(Ev), 0);
+    Ev.EvType := ''; Ev.Project := ''; Ev.Task := '';
+    Ev.Id := ''; Ev.Status := ''; Ev.Line := '';
+    Ev.Raw := Payload;
+    try
+      Obj := TJsonObject.Parse(Payload);
+    except
+      Continue;
+    end;
+    try
+      Ev.Seq     := Obj.GetInt('seq', 0);
+      Ev.EvType  := Obj.GetStr('type', '');
+      Ev.Project := Obj.GetStr('project', '');
+      Ev.Task    := Obj.GetStr('task', '');
+      Ev.Id      := Obj.GetStr('id', '');
+      Ev.Status  := Obj.GetStr('status', '');
+      Ev.Line    := Obj.GetStr('line', '');
+    finally
+      Obj.Free;
+    end;
+    if Assigned(FOnEvent) then
+      FOnEvent(Ev, FStop);
+    if FStop then Break;
+  until False;
+end;
+
+function TEventStream.Write(const Buffer; Count: Longint): Longint;
+var
+  S: AnsiString;
+begin
+  Result := Count;
+  if Count <= 0 then Exit;
+  SetLength(S, Count);
+  Move(Buffer, S[1], Count);
+  Consume(string(S));
+  { Indy offers no cancel hook on the content stream, so a caller-requested
+    stop unwinds through an exception the subscriber catches. }
+  if FStop then
+    raise EAbort.Create('event subscription stopped by caller');
+end;
+
 { --------------------------------------------------------------- client -- }
 
 constructor TPasClawClient.Create(const ABaseURL: string);
@@ -262,6 +553,32 @@ begin
   { A gateway reached over https (a tunnel, a remote box) needs the TLS
     handler; a local http gateway never touches it. }
   Result.IOHandler := TIdSSLIOHandlerSocketOpenSSL.Create(Result);
+end;
+
+procedure TPasClawClient.WatchEvents(OnEvent: TDesktopEventProc);
+var
+  Http: TIdHTTP;
+  Sink: TEventStream;
+begin
+  FLastError := '';
+  Sink := TEventStream.Create(OnEvent);
+  Http := NewHttp(FToken, 0);
+  try
+    { No read timeout: this connection is SUPPOSED to stay open and quiet.
+      The gateway sends a keepalive comment every ~15s, so a genuinely dead
+      socket still surfaces as a read error rather than hanging forever. }
+    Http.ReadTimeout := 0;
+    Http.Request.Accept := 'text/event-stream';
+    try
+      Http.Get(FBaseURL + '/v1/desktop/events', Sink);
+    except
+      on E: EAbort do ;      { caller asked to stop }
+      on E: Exception do FLastError := E.Message;
+    end;
+  finally
+    Http.Free;
+    Sink.Free;
+  end;
 end;
 
 function TPasClawClient.Request(const Method, Path, Body: string): string;

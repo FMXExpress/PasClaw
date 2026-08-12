@@ -365,6 +365,30 @@ begin
   ExpectBodyContains('GET', '/v1/apps/spam-filter/read/providers', '',
                      '"surface":"providers"', 'providers surface labelled');
 
+  { The action surface. `read` and `state` cannot make anything happen, so
+    an app that needs a side effect -- Mail fetching from IMAP -- needs a
+    third verb. It is an ALLOWLIST, and these are the two ways it says no:
+    an action nobody implements, and a real action asked for by a project it
+    does not belong to. The second is the interesting one -- without the
+    scope check, any app could drive mail-sync and write attacker-chosen
+    JSON into the Mail app's store. }
+  ExpectStatus('POST', '/v1/apps/spam-filter/action/mail-sync', '', 404,
+               'a real action is refused to a project that does not own it');
+  ExpectStatus('POST', '/v1/apps/spam-filter/action/rm-rf', '', 404,
+               'an unknown action is not an action');
+  ExpectStatus('POST', '/v1/apps/mail/action/rm-rf', '', 404,
+               'not even for the app that owns the surface');
+  { The allowlisted call for the owning project reaches the bridge. There is
+    no IMAP server here, so the honest answer is 503 -- a service that is not
+    configured, not a request that was wrong. }
+  ExpectStatus('POST', '/v1/apps/mail/action/mail-sync', '', 503,
+               'mail-sync reaches the bridge and reports it is unconfigured');
+  ExpectBodyContains('POST', '/v1/apps/mail/action/mail-sync', '',
+                     '"configured":false',
+                     'and says so in a form the app can render');
+  ExpectTrue(IsAppScopedPath('/v1/apps/mail/action/mail-sync'),
+             'actions are reachable from the apps origin');
+
   { The apps-origin split. IsAppScopedPath decides what the --apps-port
     listener will serve; everything it excludes is unreachable from an app's
     own origin, which is the whole point of the second listener. }

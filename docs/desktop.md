@@ -133,9 +133,53 @@ already makes — and the runner is explicit about it:
 - One child per project, tracked and killable. Every child is stopped when
   the gateway stops.
 
-What the runner does **not** do yet: run the child inside the Docker shell
-backend. That backend's `Exec` is one-shot, so a long-lived server would have
-no handle to stop. Until that is wired, a `python` app runs on the host.
+**Where it runs.** Set `shell_backend: docker` in config and the child runs
+in a container instead of on your machine:
+
+```
+docker run -d --rm --name pasclaw-app-<project> \
+  -v <project>/app:/app -w /app -p 127.0.0.1:<port>:<port> \
+  [-e DECLARED_NAME=...] <image> sh -c "<the run line>"
+```
+
+Only the app's own directory is mounted, and the port is published to
+**loopback**, never `0.0.0.0` — a containerised app must not become reachable
+from your network because Docker helpfully bound a wildcard. Nothing is
+privileged and nothing is on the host network.
+
+This deliberately drives the `docker` CLI rather than reusing the shell
+backend's `Exec`, which is one-shot: a long-lived server started through it
+would have no handle to stop. `docker run -d` returns a container id, so
+`stop` and `runlog` have something to address.
+
+Every run record carries `backend: "host" | "docker"` and the run window
+shows it, so you always know which side of the boundary your app is on.
+
+### Which machine is "local"
+
+The two clients are not symmetric, and pretending otherwise would be the
+kind of lie that costs you an afternoon:
+
+| | FireMonkey client | Web client |
+|---|---|---|
+| `html` / `page` apps | in the app's own browser view — **your machine** | in the browser — **your machine** |
+| `python` / `fpc` / `delphi` apps | spawned by the gateway it is talking to | spawned by the gateway it is talking to |
+
+If you run `pasclaw gateway` on the same machine as the client, everything is
+local and the distinction never comes up. Point either client at a gateway on
+another box and it splits: HTML apps still run in front of you, because a web
+page runs where it is rendered, while a process app runs where the gateway is,
+because that is the machine with the filesystem, the ports and the compiler.
+
+So the web UI cannot build you a *native* app that runs on your machine —
+there is nowhere to put it. What it can build is HTML apps that run in your
+browser, and console or server apps that run on the gateway host and show
+their output (or their port) in a window. The FireMonkey client, run beside a
+local gateway, is the configuration where "PasClaw builds software for this
+computer" is literally true.
+
+The run window names the host, and `GET /v1/desktop/config` reports it, so a
+client never has to assume.
 
 ### Persistence without a backend
 
@@ -176,6 +220,20 @@ The allowlist is enforced **server-side** in `PasClaw.Gateway.Desktop`, so it
 holds however the app is opened. There is no `config` surface and no write
 side; a provider entry reports `has_key: true/false` and never the key.
 
+Reading and writing cannot make anything *happen*, and some apps need that —
+Mail has to be able to go and fetch. So there is a third verb, and it is an
+allowlist too:
+
+```js
+const r = await pasclaw.action("mail-sync");   // {filed: 3}
+```
+
+`POST /v1/apps/<project>/action/<name>` runs only names the gateway
+implements, and only for the project each one belongs to. An unknown action
+and a real action asked for by the wrong project both answer **404** — the
+scope check is the part that matters, since without it any app could drive
+`mail-sync` and write JSON of its choosing into Mail's store.
+
 **Why the indirection.** App frames are sandboxed *without*
 `allow-same-origin`, so generated code cannot reach the desktop's DOM or the
 operator's bearer token. That also puts them in an opaque origin, which blocks
@@ -188,7 +246,7 @@ falls back to `fetch`. Same two calls either way.
 ### Containment
 
 Generated apps are model-authored code, written from text that web pages may
-have influenced. Three layers hold them:
+have influenced. Four layers hold them:
 
 1. **Path resolution** — `/apps/<project>/...` resolves only inside that
    project's `app/` directory, and only for an allowlisted extension set.
@@ -199,10 +257,44 @@ have influenced. Three layers hold them:
    Neither may be framed by a foreign site.
 3. **Sandbox** — the desktop frames apps with `sandbox="allow-scripts
    allow-forms"`, no same-origin.
+4. **A second origin** — see below.
 
 Running `python` / `fpc` / `delphi` apps is arbitrary code execution by
 design, scoped the way `shell_exec` already is — configure the Docker shell
 backend and they run containerized.
+
+#### Serving apps from their own origin
+
+Inside the desktop an app is sandboxed and harmless. Opened as a *top-level*
+page — a plain browser tab, "Open in browser" — it is same-origin with the
+gateway, which means it can call `/v1/*` and read whatever the desktop left in
+`localStorage`, including your bearer token. Sandboxing cannot help there;
+there is no frame.
+
+The fix is a boundary the browser already enforces. Give apps a **second
+port**, and they are a different origin:
+
+```sh
+pasclaw gateway --port 8080 --apps-port 8081
+```
+
+That second listener serves `/apps/*` and exactly three API paths —
+`state`, `read` and `action`, each scoped to the app that asked. It refuses
+`/v1/chat/completions`, `/v1/config`, the project board, `run`, and
+everything else; the allowlist is a function (`IsAppScopedPath`) with tests
+on both halves. An app that goes looking for the desktop's `localStorage`
+now gets a `SecurityError`, because it is not the desktop's origin.
+
+The desktop learns the arrangement rather than assuming it:
+
+```
+GET /v1/desktop/config -> {"apps_isolated": true, "apps_origin": "http://127.0.0.1:8081"}
+```
+
+and frames apps from there. Apps keep working when you *don't* pass
+`--apps-port` — one origin, sandboxed frames, as before — so this is an
+upgrade, not a requirement. If your gateway is token-gated and you open
+generated apps standalone, use it.
 
 ---
 
@@ -314,6 +406,49 @@ use — so you can open Notes, read its source, and ask PasClaw to add a word
 count, and it is not a special case when you do. Seeding never overwrites an
 existing project, so a suite app you have remade survives an upgrade.
 
+### Filling Mail from your inbox
+
+Mail starts as a list you can type into. Point it at IMAP — the same
+credentials the email channel uses — and it fills itself:
+
+```sh
+export PASCLAW_EMAIL_IMAP_HOST=imap.example.com   # _PORT defaults to 993
+export PASCLAW_EMAIL_IMAP_USER=you@example.com
+export PASCLAW_EMAIL_IMAP_PASS=...
+
+pasclaw mail sync          # or press Sync in the app
+```
+
+Each subject gets a category — **Risk**, **Deadline**, **Decision**,
+**Request**, **FYI** — from a keyword pass, and you can cycle it with a
+click. The rules are deliberately dumb and there is no model call: this runs
+on a timer, and paying for a guess you can correct in one click is a bad
+trade. Ask the agent to re-tag them properly when it matters.
+
+Two properties are worth knowing about, because they are what make it safe to
+leave running:
+
+- **It never marks anything read.** Fetches use `BODY.PEEK[]`, not
+  `RFC822.HEADER` — which RFC 3501 says sets `\Seen`. Listing your inbox must
+  not mark it read, and it must not drain the email channel's unseen set out
+  from under it. The cost is that a peek pulls the whole message, so it takes
+  the newest 25 rather than the mailbox.
+- **It files each message once.** A UID ledger means re-syncing the same
+  window changes nothing, and a message you *deleted* from the list stays
+  deleted. Deleting is a decision; a sync that quietly overruled it would be
+  worse than missing mail.
+
+This is not the email channel. That one routes each message **through the
+agent loop and replies over SMTP** — a bot answering your mail. This only
+reads headers and files them: no agent, no reply, nothing sent. They share
+credentials and can run side by side.
+
+For a hands-off inbox, put it on the cron:
+
+```sh
+pasclaw cron add "*/15 * * * *" "pasclaw mail sync"
+```
+
 ---
 
 ## Period-native output
@@ -374,7 +509,9 @@ Every route below sits inside the gateway's existing bearer-auth gate.
 | POST | `/v1/apps/<p>/stop` | stop it |
 | GET | `/v1/apps/<p>/runlog` | its captured output |
 | GET | `/v1/apps/<p>/read/<surface>` | allowlisted read window |
+| POST | `/v1/apps/<p>/action/<name>` | allowlisted side effect (`mail-sync`) |
 | GET | `/v1/desktop/events` | SSE: board changes |
+| GET | `/v1/desktop/config` | how apps are served (origin, isolation) |
 | GET | `/apps/<project>/…` | app assets (+ virtual `pasclaw.js`) |
 | GET/POST | `/v1/pages` | history / generate |
 | GET/DELETE | `/v1/pages/<id>` | inspect / remove |
@@ -409,10 +546,19 @@ make test-desktop
 
 Covers the workspace layer (including the back-compat path), the project
 store and tools, the app factory (with the full path-traversal suite at both
-the resolver and the routing layer), the HTTP surface, and blueprint data
-hygiene. `test-client-api` additionally exercises the shared native-client
-library against a live gateway when `PASCLAW_TEST_GATEWAY` is set, and skips
-itself otherwise.
+the resolver and the routing layer), the `docker run` argv the runner builds,
+the HTTP surface including the action allowlist, the mail bridge's triage
+rules and its idempotent merge, and blueprint data hygiene. It also runs as
+part of plain `make test`. `test-client-api` additionally exercises the
+shared native-client library against a live gateway when
+`PASCLAW_TEST_GATEWAY` is set, and skips itself otherwise.
+
+Two things are asserted rather than executed here, on purpose, because the
+alternative is that nobody checks them at all: the `docker run` argv (the
+isolation policy in executable form — which directory is mounted, where the
+port is published, what is *not* passed) is pinned as a string on machines
+with no Docker, and the IMAP bridge is split so the merge half — where the
+idempotence lives — is testable without a mail server.
 
 The FireMonkey client needs Delphi and is not part of `make`.
 
@@ -420,12 +566,20 @@ The FireMonkey client needs Delphi and is not part of `make`.
 
 Stated plainly rather than left to be discovered:
 
-- **Process apps run on the host**, not in the Docker shell backend (see
-  above). Treat a `run` line the way you treat `shell_exec`.
-- **Open apps through the desktop.** An `html` app opened as a *top-level*
-  page is same-origin with the gateway, so it can reach `/v1/*` and read a
-  token you stored in the desktop's `localStorage`. Inside the desktop it is
-  sandboxed into an opaque origin and can do neither. If your gateway is
-  token-gated, treat generated apps as trusted-only when opened standalone.
+- **A `run` line is arbitrary code execution.** With `shell_backend: docker`
+  it happens in a container; otherwise it happens on your machine. That is
+  the same deal `shell_exec` makes, and the run window tells you which one
+  you got — but it is still the deal.
+- **Docker mode is unverified end to end here.** The argv is pinned by test;
+  no container has actually been started in this environment.
+- **The IMAP fetch half is unverified.** Triage and the merge are tested; the
+  socket conversation with a real server is not, because there is no server
+  to talk to here.
+- **Triage is keywords, not comprehension.** "Re: the thing" is FYI, and a
+  politely-worded emergency will sort under Request. One click fixes it, and
+  the agent can re-tag properly on request.
+- **Standalone apps need `--apps-port`.** Without it, an app opened as a
+  top-level page is same-origin with the gateway. Inside the desktop it is
+  sandboxed either way.
 - **The FMX client is unbuilt here.** It has no Delphi in CI; the shared
   client library it depends on is tested, the UI is not.

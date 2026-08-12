@@ -141,7 +141,7 @@ const
 var
   Sub, Fl: array of string;
 begin
-  SetLength(Sub, 33);
+  SetLength(Sub, 34);
   Sub[0]  := 'config       View/edit configuration';
   Sub[1]  := 'onboard      Initialize config & workspace';
   Sub[2]  := 'agent        Chat with the assistant (line-by-line)';
@@ -174,7 +174,8 @@ begin
   Sub[29] := 'relay        Pull-worker for /v1/relay -- forwards jobs through the local provider';
   Sub[30] := 'workspace    List/create/switch workspaces (separate agent worlds)';
   Sub[31] := 'project      List/create/inspect desktop projects and their apps';
-  Sub[32] := 'version      Show version info';
+  Sub[32] := 'mail         Sync the Mail app''s inbox from IMAP (for cron)';
+  Sub[33] := 'version      Show version info';
 
   SetLength(Fl, 2);
   Fl[0] := '--no-color   Disable colored output (also: NO_COLOR env)';
@@ -197,6 +198,7 @@ begin
   else if Cmd = 'cron'     then Result := Cmd_Cron_Run(Argv)
   else if Cmd = 'workspace' then Result := Cmd_Workspace_Run(Argv)
   else if Cmd = 'project'  then Result := Cmd_Project_Run(Argv)
+  else if Cmd = 'mail'     then Result := Cmd_Mail_Run(Argv)
   else if Cmd = 'mcp'      then Result := Cmd_MCP_Run(Argv)
   else if Cmd = 'migrate'  then Result := Cmd_Migrate_Run(Argv)
   else if Cmd = 'skills'   then Result := Cmd_Skills_Run(Argv)

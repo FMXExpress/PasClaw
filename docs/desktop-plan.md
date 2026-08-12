@@ -424,25 +424,33 @@ product thesis lives.
 
 ### Remaining limits
 
-What is built is listed above; these are the honest edges that remain:
+Every item that was on this list has been closed. Process apps run in a
+container when `shell_backend: docker` is set; apps get their own origin with
+`--apps-port`; both clients read `/v1/desktop/events` and render
+`pasclaw-ui` blocks; and Mail fills itself from IMAP via `pasclaw mail sync`
+or its Sync button.
 
-- **Process apps run on the host**, not inside the Docker shell backend.
-  That backend's `Exec` is one-shot, so a long-lived server would have no
-  handle to stop. Consent, cwd pinning, and per-project `.env` secrets are in
-  place; container isolation for long-lived children is not.
-- **An app opened standalone is same-origin with the gateway.** Inside the
-  desktop it is sandboxed into an opaque origin and can reach nothing but the
-  brokered state/read calls. Opened as a top-level page it can call `/v1/*`
-  and read a token stored in the desktop's `localStorage`. Serving apps from
-  a second origin is the real fix.
-- **The FireMonkey client is unbuilt in CI** — no Delphi here. Its shared
-  client library is compiled and tested; the UI is not.
-- **The FMX client does not yet render the period-native furniture** (it has
-  the dialog primitives, but not the `pasclaw-ui` block reader the web client
-  has) and still polls rather than consuming `/v1/desktop/events`.
-- **Mail is a triage list, not a mail client.** The IMAP/SMTP channel exists
-  and the app is where triaged mail lands, but nothing yet polls the inbox
-  into it automatically.
+What remains is not unbuilt work but **unverified** work, which is a
+different claim and worth keeping separate:
+
+- **No Docker in this environment.** The `docker run` argv is pinned by test
+  — mount, loopback port publishing, image, and the absence of `--privileged`
+  and `--network host` — but no container has been started here.
+- **No IMAP server here.** The bridge is split so the merge half (triage
+  ordering, the UID ledger, deletion staying deleted) is tested without one;
+  the Indy `TIdIMAP4` conversation itself is not exercised.
+- **No Delphi here.** The FireMonkey client compiles nowhere in CI. Its
+  shared client library — including the SSE watcher and the `pasclaw-ui`
+  parser it now uses — is compiled and tested; the UI is not.
+
+And two design edges that are choices rather than gaps:
+
+- **Triage is keywords, not comprehension.** A per-message model call on a
+  15-minute timer is a real cost for a guess the user fixes with one click,
+  so the fast path is dumb on purpose and the agent re-tags on request.
+- **One active workspace per gateway process.** Switching repoints; N live
+  workspaces is an extension the per-workspace store handles already, not a
+  rewrite.
 
 ## 6. Risks / open questions
 

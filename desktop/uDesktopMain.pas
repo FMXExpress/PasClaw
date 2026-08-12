@@ -27,7 +27,7 @@ uses
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs,
   FMX.StdCtrls, FMX.Layouts, FMX.ListBox, FMX.Edit, FMX.Memo, FMX.Styles,
   FMX.Objects, FMX.TreeView, FMX.WebBrowser, FMX.ScrollBox,
-  FMX.Controls.Presentation,
+  FMX.Controls.Presentation, FMX.Objects,
   FMX.RetroWindows, FMX.RetroSkins,
   PasClaw.Client.Api;
 
@@ -87,6 +87,22 @@ type
     FDialogAccept: TNotifyEvent;
     FPendingProject: string;
 
+    { The live wizard: its steps, where we are, and the project whose board
+      Finish will add tasks to. }
+    FWizWin: TRetroWindow;
+    FWizSteps: TUISteps;
+    FWizIndex: Integer;
+    FWizProject: string;
+    FWizTitle: string;
+    FWizPage: TLayout;
+    FWizBack, FWizNext: TButton;
+
+    { Events arrive on a worker thread; the UI is touched only from the main
+      one. The worker sets a flag, a timer drains it. }
+    FEventThread: TThread;
+    FEventDirty: Boolean;
+    FEventTimer: TTimer;
+
     function FindStyleDir: string;
     procedure BuildDesktop;
     procedure BuildDock;
@@ -128,6 +144,25 @@ type
     procedure OpenLibrary;
     procedure SendChat(Sender: TObject);
     procedure ChatChunk(const Chunk: string; var Abort: Boolean);
+
+    { Live board updates. The client subscribes to /v1/desktop/events on its
+      own thread and refreshes when something it displays changes, so the
+      tree moves while the agent works instead of waiting for a click. }
+    procedure StartEventWatch;
+    procedure OnDesktopEvent(const Ev: TDesktopEvent; var Stop: Boolean);
+    procedure ApplyPendingEvents;
+    procedure EventTimerTick(Sender: TObject);
+
+    { Period-native output, same convention as the web client -- the parsing
+      is shared (PasClaw.Client.Api.ParseUIBlocks), only the rendering is
+      FireMonkey. }
+    procedure RenderUIBlocks(const Project: string; const Blocks: TUIBlocks);
+    procedure ShowWizard(const Project: string; const Block: TUIBlock);
+    procedure ShowAsk(const Project: string; const Block: TUIBlock);
+    procedure WizardBack(Sender: TObject);
+    procedure WizardNext(Sender: TObject);
+    procedure AskButtonClick(Sender: TObject);
+    procedure PaintWizard;
 
     procedure Say(const Msg: string);
     function TrackWindow(AWindow: TRetroWindow): TRetroWindow;
@@ -228,10 +263,18 @@ begin
   Say('Connected to PasClaw ' + Ver + ' at ' + Gateway);
   RefreshWorkspaces;
   RefreshProjects;
+  StartEventWatch;
 end;
 
 procedure TFormMain.FormDestroy(Sender: TObject);
 begin
+  { Stop the watcher before the client it reads through goes away. }
+  if FEventThread <> nil then
+  begin
+    FEventThread.Terminate;
+    FEventThread.WaitFor;
+    FreeAndNil(FEventThread);
+  end;
   FreeAndNil(FClient);
   FreeAndNil(FSnapshots);
   FreeAndNil(FBrowsers);
@@ -766,6 +809,301 @@ begin
   end;
 end;
 
+{ ------------------------------------------------------------- live board -- }
+
+type
+  { Runs TPasClawClient.WatchEvents, which blocks. Terminating the thread
+    stops the subscription through the callback's Stop flag. }
+  TEventWatchThread = class(TThread)
+  private
+    FForm: TFormMain;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(AForm: TFormMain);
+  end;
+
+constructor TEventWatchThread.Create(AForm: TFormMain);
+begin
+  inherited Create(True);
+  FForm := AForm;
+  FreeOnTerminate := False;
+end;
+
+procedure TEventWatchThread.Execute;
+begin
+  while not Terminated do
+  begin
+    { WatchEvents returns when the connection drops. Reconnect, because a
+      gateway restart should not leave the desktop silently stale. }
+    try
+      FForm.FClient.WatchEvents(FForm.OnDesktopEvent);
+    except
+      { a dead gateway is not an error worth a dialog -- retry quietly }
+    end;
+    if Terminated then Break;
+    Sleep(3000);
+  end;
+end;
+
+procedure TFormMain.OnDesktopEvent(const Ev: TDesktopEvent; var Stop: Boolean);
+begin
+  { Worker thread: touch NOTHING but the flag. FMX controls are main-thread
+    only, and a repaint from here would be a race at best. }
+  Stop := (FEventThread = nil) or FEventThread.CheckTerminated;
+  if Ev.EvType = '' then Exit;
+  if (Ev.EvType = 'hello') or (Ev.EvType = 'joblog') then Exit;
+  FEventDirty := True;
+end;
+
+procedure TFormMain.ApplyPendingEvents;
+begin
+  if not FEventDirty then Exit;
+  FEventDirty := False;
+  { Coarse on purpose: the board is small and re-reading it is cheap, so a
+    full refresh beats maintaining an incremental model that can drift. }
+  RefreshProjects;
+end;
+
+procedure TFormMain.EventTimerTick(Sender: TObject);
+begin
+  ApplyPendingEvents;
+end;
+
+procedure TFormMain.StartEventWatch;
+begin
+  FEventTimer := TTimer.Create(Self);
+  FEventTimer.Interval := 700;
+  FEventTimer.OnTimer := EventTimerTick;
+  FEventTimer.Enabled := True;
+
+  FEventThread := TEventWatchThread.Create(Self);
+  FEventThread.Start;
+end;
+
+{ -------------------------------------------------- period-native output -- }
+
+procedure TFormMain.RenderUIBlocks(const Project: string;
+  const Blocks: TUIBlocks);
+var
+  I: Integer;
+begin
+  for I := 0 to High(Blocks) do
+    case Blocks[I].Kind of
+      ubWizard:            ShowWizard(Project, Blocks[I]);
+      ubMessage, ubAsk:    ShowAsk(Project, Blocks[I]);
+    end;
+end;
+
+procedure TFormMain.PaintWizard;
+var
+  Lbl: TLabel;
+  I: Integer;
+  Side: TRectangle;
+begin
+  if (FWizPage = nil) or (FWizWin = nil) then Exit;
+  while FWizPage.ChildrenCount > 0 do
+    FWizPage.Children[0].Free;
+
+  { The blue side panel: every wizard of the era had one, and it is what
+    makes this read as a wizard rather than a form. }
+  Side := TRectangle.Create(FWizPage);
+  Side.Parent := FWizPage;
+  Side.Align := TAlignLayout.Left;
+  Side.Width := 78;
+  Side.Margins.Rect := TRectF.Create(0, 0, 10, 0);
+  Side.Stroke.Kind := TBrushKind.None;
+
+  Lbl := TLabel.Create(FWizPage);
+  Lbl.Parent := FWizPage;
+  Lbl.Align := TAlignLayout.Top;
+  Lbl.Height := 22;
+  Lbl.StyledSettings := Lbl.StyledSettings - [TStyledSetting.Style];
+  Lbl.TextSettings.Font.Style := [TFontStyle.fsBold];
+  Lbl.Text := FWizSteps[FWizIndex].Title;
+
+  Lbl := TLabel.Create(FWizPage);
+  Lbl.Parent := FWizPage;
+  Lbl.Align := TAlignLayout.Top;
+  Lbl.Height := 44;
+  Lbl.WordWrap := True;
+  Lbl.Text := FWizSteps[FWizIndex].Body;
+
+  { The whole plan stays visible while one step is approved. }
+  for I := 0 to High(FWizSteps) do
+  begin
+    Lbl := TLabel.Create(FWizPage);
+    Lbl.Parent := FWizPage;
+    Lbl.Align := TAlignLayout.Top;
+    Lbl.Height := 18;
+    Lbl.Text := IntToStr(I + 1) + '. ' + FWizSteps[I].Title;
+    if I = FWizIndex then
+    begin
+      Lbl.StyledSettings := Lbl.StyledSettings - [TStyledSetting.Style];
+      Lbl.TextSettings.Font.Style := [TFontStyle.fsBold];
+    end;
+  end;
+
+  FWizBack.Enabled := FWizIndex > 0;
+  if FWizIndex = High(FWizSteps) then
+    FWizNext.Text := 'Finish'
+  else
+    FWizNext.Text := 'Next >';
+  FWizWin.Caption := Format('%s -- step %d of %d',
+    [FWizTitle, FWizIndex + 1, Length(FWizSteps)]);
+end;
+
+procedure TFormMain.WizardBack(Sender: TObject);
+begin
+  if FWizIndex > 0 then
+  begin
+    Dec(FWizIndex);
+    PaintWizard;
+  end;
+end;
+
+procedure TFormMain.WizardNext(Sender: TObject);
+var
+  I: Integer;
+  Ignored: string;
+begin
+  if FWizIndex < High(FWizSteps) then
+  begin
+    Inc(FWizIndex);
+    PaintWizard;
+    Exit;
+  end;
+  { Finish: the approved plan becomes the board. That gesture -- Next, Next,
+    Finish -> real tasks -- is the whole point of rendering it as a wizard. }
+  for I := 0 to High(FWizSteps) do
+    if Trim(FWizSteps[I].Title) <> '' then
+      FClient.CreateTask(FWizProject, FWizSteps[I].Title);
+  Ignored := '';
+  if FWizWin <> nil then FWizWin.Close;
+  FWizWin := nil;
+  RefreshProjects;
+  Say(Format('%d task(s) added to %s.', [Length(FWizSteps), FWizProject]));
+end;
+
+procedure TFormMain.ShowWizard(const Project: string; const Block: TUIBlock);
+var
+  Wrap, Foot: TLayout;
+  B: TButton;
+begin
+  if Length(Block.Steps) = 0 then Exit;
+  if FWizWin <> nil then FWizWin.Close;
+
+  FWizProject := Project;
+  FWizSteps := Block.Steps;
+  FWizIndex := 0;
+  FWizTitle := Block.Title;
+  if FWizTitle = '' then FWizTitle := 'Plan';
+
+  FWizWin := TrackWindow(FDesktop.CreateWindow(FWizTitle, 460, 320));
+  FWizWin.ShowMax := False;
+
+  Wrap := TLayout.Create(FWizWin);
+  Wrap.Parent := FWizWin.Client;
+  Wrap.Align := TAlignLayout.Client;
+
+  Foot := TLayout.Create(FWizWin);
+  Foot.Parent := FWizWin.Client;
+  Foot.Align := TAlignLayout.Bottom;
+  Foot.Height := 34;
+
+  B := TButton.Create(FWizWin);
+  B.Parent := Foot;
+  B.Align := TAlignLayout.Right;
+  B.Width := 80;
+  B.Margins.Rect := TRectF.Create(4, 4, 8, 4);
+  B.Text := 'Cancel';
+  B.OnClick := DialogCancel;
+
+  FWizNext := TButton.Create(FWizWin);
+  FWizNext.Parent := Foot;
+  FWizNext.Align := TAlignLayout.Right;
+  FWizNext.Width := 80;
+  FWizNext.Margins.Rect := TRectF.Create(4, 4, 0, 4);
+  FWizNext.Text := 'Next >';
+  FWizNext.Default := True;
+  FWizNext.OnClick := WizardNext;
+
+  FWizBack := TButton.Create(FWizWin);
+  FWizBack.Parent := Foot;
+  FWizBack.Align := TAlignLayout.Right;
+  FWizBack.Width := 80;
+  FWizBack.Margins.Rect := TRectF.Create(4, 4, 0, 4);
+  FWizBack.Text := '< Back';
+  FWizBack.OnClick := WizardBack;
+
+  FWizPage := TLayout.Create(FWizWin);
+  FWizPage.Parent := Wrap;
+  FWizPage.Align := TAlignLayout.Client;
+  FWizPage.Padding.Rect := TRectF.Create(8, 8, 8, 4);
+
+  PaintWizard;
+end;
+
+procedure TFormMain.AskButtonClick(Sender: TObject);
+var
+  Answer, Project: string;
+  Input: TMemo;
+begin
+  Answer := (Sender as TButton).TagString;
+  Project := FPendingProject;
+  if FDialogWin <> nil then FDialogWin.Close;
+  FDialogWin := nil;
+  if (Project = '') or (Answer = '') then Exit;
+  { The chosen label continues the conversation -- the dialog IS the turn. }
+  if FChatInputs.TryGetValue(Project, Input) and (Input <> nil) then
+  begin
+    Input.Text := Answer;
+    OpenChat(Project);
+  end;
+end;
+
+procedure TFormMain.ShowAsk(const Project: string; const Block: TUIBlock);
+var
+  W: TRetroWindow;
+  L: TLabel;
+  Row: TLayout;
+  B: TButton;
+  I: Integer;
+begin
+  FPendingProject := Project;
+  W := TrackWindow(FDesktop.CreateWindow(
+    IfThenStr(Block.Title <> '', Block.Title, 'PasClaw'), 380, 170));
+  W.ShowMax := False;
+  W.ShowMin := False;
+  W.Sizeable := False;
+  FDialogWin := W;
+
+  Row := TLayout.Create(W);
+  Row.Parent := W.Client;
+  Row.Align := TAlignLayout.Bottom;
+  Row.Height := 34;
+
+  for I := High(Block.Buttons) downto 0 do
+  begin
+    B := TButton.Create(W);
+    B.Parent := Row;
+    B.Align := TAlignLayout.Right;
+    B.Width := 88;
+    B.Margins.Rect := TRectF.Create(4, 4, 4, 4);
+    B.Text := Block.Buttons[I].Caption;
+    B.TagString := Block.Buttons[I].Value;
+    B.OnClick := AskButtonClick;
+    if I = 0 then B.Default := True;
+  end;
+
+  L := TLabel.Create(W);
+  L.Parent := W.Client;
+  L.Align := TAlignLayout.Client;
+  L.Margins.Rect := TRectF.Create(10, 10, 10, 4);
+  L.WordWrap := True;
+  L.Text := Block.Text;
+end;
+
 { ------------------------------------------------------------------ chat -- }
 
 procedure TFormMain.OpenChat(const Project: string);
@@ -822,6 +1160,11 @@ begin
   Log.Lines.Add('Describe the app you want. PasClaw builds it into this ' +
                 'project and it opens as a window.');
   Log.Lines.Add('');
+end;
+
+function IfThenStr(Cond: Boolean; const Yes, No: string): string;
+begin
+  if Cond then Result := Yes else Result := No;
 end;
 
 { Escape a string for embedding in a JSON literal. Chat text routinely
@@ -888,10 +1231,11 @@ end;
 
 procedure TFormMain.SendChat(Sender: TObject);
 var
-  Project, Text, Reply, Hist, Inner: string;
+  Project, Text, Reply, Hist, Inner, Visible: string;
   Log, Input: TMemo;
   Row: TProjectRow;
   App: TAppRow;
+  Blocks: TUIBlocks;
 begin
   Project := (Sender as TButton).TagString;
   if not FChatLogs.TryGetValue(Project, Log) then Exit;
@@ -930,6 +1274,17 @@ begin
 
   if (Reply = '') and (FClient.LastError <> '') then
     Log.Lines.Add('(' + FClient.LastError + ')');
+
+  { Period-native output: a plan renders as a wizard, a question as a dialog,
+    and the block itself never appears as text. Same parser the web client
+    uses -- see PasClaw.Client.Api.ParseUIBlocks. }
+  ParseUIBlocks(Reply, Visible, Blocks);
+  if Length(Blocks) > 0 then
+  begin
+    { Rewrite the streamed text without the block. }
+    Log.Lines.Add('  [' + IntToStr(Length(Blocks)) + ' dialog(s) opened]');
+    RenderUIBlocks(Project, Blocks);
+  end;
   Log.Lines.Add('');
 
   Hist := Copy(Hist, 1, Length(Hist) - 1) +
