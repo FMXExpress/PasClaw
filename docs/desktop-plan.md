@@ -403,10 +403,13 @@ window-lifetime tracking, and F11 kiosk mode.
 
 ## 5. Phases
 
-Status: **every phase is built and tested** (`make test-desktop`, plus
-browser-driven checks of the web client against a live gateway and a mock
-model server). See [`desktop.md`](desktop.md) for how to use it, and
-"Remaining limits" below for what is genuinely still open.
+Status: **every phase has landed and the whole thing works end to end**
+(`make test-desktop`, plus browser-driven checks of the web client against a
+live gateway and a mock model server). But "the phase landed" is a coarser
+claim than "every line of the phase's description is built", and the two came
+apart in phases 6–8 — the skeleton of each is real and several details are
+not. "Still open" below is the honest list, and it is not short.
+See [`desktop.md`](desktop.md) for how to use what exists.
 
 | Phase | Deliverable | Touches | Status |
 |---|---|---|---|
@@ -422,35 +425,68 @@ model server). See [`desktop.md`](desktop.md) for how to use it, and
 Phases 3 and 5 are independent once 1–2 land; 4 slots between them and is where the
 product thesis lives.
 
-### Remaining limits
+### Still open
 
-Every item that was on this list has been closed. Process apps run in a
-container when `shell_backend: docker` is set; apps get their own origin with
-`--apps-port`; both clients read `/v1/desktop/events` and render
-`pasclaw-ui` blocks; and Mail fills itself from IMAP via `pasclaw mail sync`
-or its Sync button.
+The four items this section used to list are closed: process apps run in a
+container under `shell_backend: docker`, apps get their own origin with
+`--apps-port`, both clients consume `/v1/desktop/events` and render
+`pasclaw-ui` blocks, and Mail fills itself from IMAP. What follows is
+everything in the sections above that is described but not built.
 
-What remains is not unbuilt work but **unverified** work, which is a
-different claim and worth keeping separate:
+**The suite apps are cut off from the agent's own data.** This is the
+biggest gap and it undercuts §2c's premise:
 
-- **No Docker in this environment.** The `docker run` argv is pinned by test
-  — mount, loopback port publishing, image, and the absence of `--privileged`
-  and `--network host` — but no container has been started here.
-- **No IMAP server here.** The bridge is split so the merge half (triage
-  ordering, the UID ledger, deletion staying deleted) is tested without one;
-  the Indy `TIdIMAP4` conversation itself is not exercised.
-- **No Delphi here.** The FireMonkey client compiles nowhere in CI. Its
-  shared client library — including the SSE watcher and the `pasclaw-ui`
-  parser it now uses — is compiled and tested; the UI is not.
+- **Brain reads its own state store, not memory.** §2c specifies the memory
+  package — `workspace/memory/*.md`, the facts db, hybrid FTS+vector search
+  behind `/v1/memory*`. As built, Brain shows what you typed into Brain. The
+  app whose entire point is "what PasClaw remembers" currently remembers
+  nothing the agent knows. Needs a `memory` read surface next to `cron`,
+  `sessions`, `providers`, `pages` and `projects`.
+- **Notes are not memory either.** §2c's whole trick was storing them as
+  markdown under `workspace/memory/notes/` so `memory_search` indexes them
+  for free. In the state store they are invisible to the agent.
+- **Library is partial** — sessions, pages and projects, but not the KB or
+  checkpoints.
 
-And two design edges that are choices rather than gaps:
+**The agent is beside the suite apps, not inside them.** §2c is explicit:
+Calendar should accept "schedule the report every Monday 9am" and write the
+cron entry; Tasks should accept "remind me Thursday"; Brain's search box
+should answer. All of them currently read and display. The mechanism now
+exists — the allowlisted `action` verb built for `mail-sync` — so this is
+wiring, not architecture.
 
-- **Triage is keywords, not comprehension.** A per-message model call on a
-  15-minute timer is a real cost for a guess the user fixes with one click,
-  so the fast path is dumb on purpose and the agent re-tags on request.
-- **One active workspace per gateway process.** Switching repoints; N live
-  workspaces is an extension the per-workspace store handles already, not a
-  rewrite.
+**Missing pieces named in the plan:**
+
+- **Page → app promotion** (§2b). "Make this interactive" turning a page into
+  an `html` project. The plan calls this "the product's whole pitch in
+  miniature"; there is no route and no gesture for it.
+- **The File Manager window** (§0, phase 8). The `/v1/fs` surface exists;
+  nothing renders it, so "files are alive" is still just a paragraph.
+- **Deep Research as a named mode** (§2c). Answer pages do one-shot
+  retrieval; the planned plan-read-synthesize mode with a progress dialog
+  does not exist.
+- **Mail's second half.** Triage is built; summaries and reply drafts — the
+  "answer this for me" the section leads with — are not.
+- **Artifact cards do not carry versions.** They pin per turn as designed,
+  but clicking an old card does not open that checkpoint's build.
+- **Per-workspace desktop state** (phase 6). Window positions and layout do
+  not survive a reload.
+- **CalDAV sync** — the plan already says "later", noted here so it is not
+  mistaken for an oversight.
+
+**One bug, not a gap.** The Docker path assumes a *local* daemon. The CLI
+inherits `DOCKER_HOST`, so a remote daemon is reachable, but `-v
+<appdir>:/app` resolves on the daemon's filesystem and `-p 127.0.0.1:...`
+publishes on the daemon's loopback. Against a remote daemon an app would
+start with an empty `/app` and an unreachable URL, quietly. The fix is the
+one the shell backend already uses: `docker cp` the app directory in, and
+derive the reachable host from `DOCKER_HOST` instead of assuming loopback.
+
+**And what cannot be checked here:** no Docker daemon, no IMAP server, and no
+Delphi in this container. The `docker run` argv is pinned by test, the mail
+bridge is split so the merge half is testable without a server, and the FMX
+client's shared library is compiled and tested — but the FMX UI itself is
+1,682 lines that have never been through a compiler.
 
 ## 6. Risks / open questions
 
