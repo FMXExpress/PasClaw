@@ -435,17 +435,22 @@ daemon.
 
 What remains splits into three honest categories.
 
-**Unverified, not unbuilt.** This container has no Docker daemon, no IMAP
-server and no Delphi. The `docker run` argv is pinned by test, the mail
-bridge is split so the merge half is testable without a server, and the FMX
-client's shared library is compiled and tested — but no container has been
-started, no mailbox opened, and the FMX UI is ~1,700 lines that have never
-been through a compiler.
+**Unverified, not unbuilt.** The build environment has no Docker daemon, no
+mailbox to connect to, and no Delphi. The `docker run` argv is pinned by
+test, and the mail bridge is split at the network boundary so the half with
+the rules in it is testable without an account — but no container has been
+started and no inbox opened. (PasClaw speaks IMAP as a *client*; nothing
+here implements or needs a server.)
 
-**The FMX client trails the web one.** It has the SSE watcher and the
-`pasclaw-ui` reader, but not the File Manager, the Research button, page
-promotion or artifact versions. Those are web-client features today; the
-shared client library is where they would go to be shared.
+**The FMX client is at parity on paper, unbuilt in fact.** It now has the
+Browser (search, research with a narrated progress dialog, promotion), the
+File Manager, the Run window for process apps, artifact versions, and the
+same per-workspace saved layout -- so a desktop arranged in one client opens
+in the other. Everything with a rule in it went into the shared client
+library, which FPC compiles and CI now exercises against a gateway it starts
+itself; the FMX unit is widget wiring. That split was deliberate, because no
+CI here has Delphi and the less that lives in the UI file, the less is
+written blind. It still has to be compiled once by someone with RAD Studio.
 
 **Deliberate stopping points, not gaps:**
 

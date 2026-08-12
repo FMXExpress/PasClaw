@@ -663,8 +663,9 @@ Stated plainly rather than left to be discovered:
   no container has actually been started in this environment, local or
   remote.
 - **The IMAP fetch half is unverified.** Triage, the merge and the excerpt
-  capture are tested; the socket conversation with a real server is not,
-  because there is no server to talk to here.
+  capture are tested; the conversation with a real mailbox is not, because
+  no account is configured in the build environment. PasClaw is an IMAP
+  *client* -- there is no server component here and none is wanted.
 - **Triage is keywords, not comprehension.** "Re: the thing" is FYI, and a
   politely-worded emergency will sort under Request. One click fixes it, and
   the pencil will re-read the message properly.
@@ -685,6 +686,9 @@ Stated plainly rather than left to be discovered:
   `workspace/memory/facts.db` the agent does, which does not follow the
   active workspace. Showing workspace2's facts while the model is primed
   with workspace1's would be a prettier lie.
-- **The FMX client is unbuilt here.** It has no Delphi in CI; the shared
-  client library it depends on is tested, the UI is not — and it does not
-  yet have the File Manager, the Research button, or artifact versions.
+- **The FMX client is unbuilt here.** No CI in this repo has Delphi. It is at
+  feature parity with the web client on paper -- Browser with Research and
+  promotion, File Manager, Run window, artifact versions, saved layout -- and
+  the library underneath it is compiled and live-tested, but the UI file
+  itself has never been through a compiler. Expect a round of errors the
+  first time it is opened in RAD Studio.

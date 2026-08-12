@@ -77,12 +77,30 @@ Environment:
   because they belong to the workspace, not to the client.
 - **Chat window** — per project, streaming. It sends the builder-mode system
   prompt, so the agent's deliverable is an app rather than an essay. When a
-  turn leaves a runnable app behind, the window opens it.
+  turn leaves a runnable app behind, the window opens it. **Versions** opens
+  the app as an earlier turn produced it, and can put that version back.
 - **App window** — the app in a `TWebBrowser`. An app that declares network
   access asks before it opens.
+- **Run window** — for `python` / `fpc` / `delphi` apps, which are programs
+  rather than documents. It shows the exact command *before* asking, names
+  which of the three places it will run in (this host, a container, a remote
+  Docker host), and tails the output live.
+- **Browser** — a question in, a page out. **Search** is one pass;
+  **Research** is the three-phase deep mode, which runs for minutes and
+  narrates what it is doing in a progress dialog. **Make interactive**
+  promotes the page you are looking at into an app you own.
+- **File Manager** — the workspace directory, over `/v1/fs`. Read-only: that
+  surface is already sandbox-checked and filters secret-bearing files, and a
+  browse window is not the place to invent a delete button.
+- **Library** — pages, sessions, projects, the knowledgebase and how far undo
+  reaches.
 - **Display Properties** — every `.style` in the styles directory, plus that
   style's color schemes (skins). Switching reskins the whole shell, chrome
   included, at runtime.
+
+The **window layout is saved per workspace** on the gateway, not locally, so
+it survives a restart and follows you between the two clients: arrange a
+desktop in the browser and this app opens with it.
 
 **F11** toggles fullscreen — the shell mode.
 
@@ -103,15 +121,39 @@ Environment:
 - **Windows report their own death** through `FreeNotification`, so closing
   one clears its dictionary entries rather than leaving a dangling pointer
   for the next Restore to walk.
+- **Logic lives in the client library, not here.** Everything with a rule in
+  it — what a run record means, how a directory listing is shaped, which
+  page kinds exist — is in `PasClaw.Client.Api`, which FPC compiles and CI
+  tests against a live gateway. This unit is widget wiring. That split is
+  deliberate: no CI here has Delphi, so the less that lives in this file, the
+  less is written blind.
+- **The page request runs off the UI thread.** The gateway holds the request
+  open for the whole turn — minutes, for research — and Indy blocks. Doing it
+  inline would freeze the form, which would mean the progress dialog the mode
+  exists to show could never repaint.
 
 ## Tests
 
-The UI needs Delphi and is not covered by `make test`. The half that isn't UI
-— the client library both native clients share — is:
+The UI needs Delphi and is not covered by `make test`. Two things cover what
+can be covered without it:
 
 ```sh
-pasclaw gateway --port 8088 &
-PASCLAW_TEST_GATEWAY=http://127.0.0.1:8088 make test-client-api
+make test-client-api      # the shared library, against a gateway it starts
+make lint-pascal-shape    # a method implemented but never declared
 ```
 
-It skips itself (green) when `PASCLAW_TEST_GATEWAY` is unset.
+`test-client-api` starts its own gateway on a throwaway home and exercises
+the routes this client depends on — projects, tasks, app state, files, pages
+and promotion, desktop state, the run surface — then stops it again. It used
+to skip itself unless you supplied a gateway, which meant the half that
+matters most for the native client was never actually run.
+
+`lint-pascal-shape` is a shape check, not a compiler. It catches a method
+implemented but never declared — the mistake that survives review and dies
+at the compiler — and it runs over the whole tree so it stays calibrated
+against files that do compile. Two other checks were tried and removed for
+crying wolf; the script says which and why.
+
+**Neither is a substitute for building it.** The UI in this file has never
+been through a compiler in this repo's CI. Expect a round of errors the first
+time you open it in RAD Studio, and please push the fixes.

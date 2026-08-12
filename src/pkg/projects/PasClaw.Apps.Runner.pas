@@ -1069,7 +1069,12 @@ begin
     Result.ExitCode := R.ExitCode;
     Result.Command  := R.Command;
     Result.Error    := R.Error;
-    if R.Container <> '' then Result.Backend := 'docker' else Result.Backend := 'host';
+    { A container tells us it is docker; only the endpoint tells us WHERE.
+      Reporting a remote container as plain 'docker' would have the clients
+      say "on the PasClaw host" about a machine that is not it. }
+    if R.Container = '' then Result.Backend := 'host'
+    else if DockerIsRemote then Result.Backend := 'docker-remote'
+    else Result.Backend := 'docker';
   finally
     GLock.Release;
   end;

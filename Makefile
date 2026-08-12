@@ -176,7 +176,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke test-workspaces test-projects test-apps test-mail test-desktop-routes test-desktop test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
+.PHONY: all clean run test smoke lint-pascal-shape test-workspaces test-projects test-apps test-mail test-desktop-routes test-desktop test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -407,6 +407,15 @@ test-apps: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/apps_tests.pas -o$(BUILDDIR)/apps_tests
 	@PASCLAW_HOME=$(BUILDDIR)/apps-test-home $(BUILDDIR)/apps_tests
 
+# A shape check for the units no CI here can compile -- chiefly the
+# FireMonkey client, which needs Delphi. It catches a method implemented but
+# never declared, which is the mistake that survives review and dies at the
+# compiler. Runs over the whole tree so it stays calibrated against files
+# that DO compile.
+lint-pascal-shape:
+	@python3 scripts/check-pascal-shape.py $$(find src desktop -name '*.pas' -o -name '*.dpr')
+	@echo "pascal shape: OK"
+
 # The IMAP -> Mail bridge, minus the socket: triage rules and the merge that
 # has to stay idempotent across every poll.
 test-mail: | $(BUILDDIR)
@@ -424,13 +433,26 @@ test-desktop-routes: | $(BUILDDIR)
 # The shared native-client library (studio/ + desktop/ drive the gateway
 # through it). Needs a LIVE gateway; skips itself when PASCLAW_TEST_GATEWAY
 # is unset so `make test` stays green without one.
-test-client-api: | $(BUILDDIR)
+# The library the FMX client is built on. Its live half needs a gateway, and
+# skipping it by default meant the half that matters most for the native
+# client -- files, pages, promote, desktop state, the run surface -- was
+# never exercised. So this target STARTS one, on a port unlikely to clash,
+# against a throwaway home, and stops it again.
+test-client-api: $(BIN) | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/client_api_tests.pas -o$(BUILDDIR)/client_api_tests
-	@$(BUILDDIR)/client_api_tests
+	@rm -rf $(BUILDDIR)/client-api-home
+	@PASCLAW_HOME=$(BUILDDIR)/client-api-home $(BIN) project seed >/dev/null 2>&1 || true
+	@PASCLAW_HOME=$(BUILDDIR)/client-api-home $(BIN) gateway --port 8791 \
+		>$(BUILDDIR)/client-api-gateway.log 2>&1 & echo $$! > $(BUILDDIR)/client-api.pid
+	@i=0; until curl -sf -o /dev/null http://127.0.0.1:8791/v1/health || [ $$i -ge 40 ]; do \
+		i=$$((i+1)); sleep 0.25; done
+	@PASCLAW_TEST_GATEWAY=http://127.0.0.1:8791 $(BUILDDIR)/client_api_tests; \
+		rc=$$?; kill `cat $(BUILDDIR)/client-api.pid` 2>/dev/null || true; \
+		rm -f $(BUILDDIR)/client-api.pid; exit $$rc
 
 # Everything the desktop client depends on, in dependency order.
-test-desktop: test-workspaces test-projects test-apps test-mail test-desktop-routes test-client-api
+test-desktop: lint-pascal-shape test-workspaces test-projects test-apps test-mail test-desktop-routes test-client-api
 
 # Provider catalog rows + ChatPath override (Perplexity uses /chat/completions).
 test-provider-catalog: | $(BUILDDIR)

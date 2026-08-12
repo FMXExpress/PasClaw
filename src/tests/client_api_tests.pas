@@ -55,6 +55,10 @@ var
   A: TAppRow;
   I: Integer;
   Found: Boolean;
+  Dir: TDirListing;
+  Run: TRunRow;
+  PageId: string;
+  PG: TPageRows;
 begin
   { ---- UI block parsing: pure string work, so it runs with no gateway ---- }
   { The happy path: prose around a wizard block. }
@@ -180,6 +184,56 @@ begin
 
     ExpectTrue(C.AppURL(Slug) = Base + '/apps/' + Slug + '/', 'app URL composed');
     ExpectTrue(C.PageURL('P0001') = Base + '/pages/P0001/', 'page URL composed');
+
+    { ------------------------------------------------- files -------- }
+    (* The File Manager's whole backing. Sandbox-checked and
+       secret-filtered server-side, so the client shows exactly what the
+       operator surface will show and cannot be talked into more. *)
+    ExpectTrue(C.ListDir('', Dir), 'the default directory lists');
+    ExpectTrue(Dir.Path <> '', 'and reports where it landed');
+    Found := False;
+    for I := 0 to High(Dir.Rows) do
+      if Dir.Rows[I].Name = 'projects' then Found := True;
+    ExpectTrue(Found, 'the workspace listing has projects/');
+    Found := False;
+    for I := 0 to High(Dir.Rows) do
+      if Dir.Rows[I].Name = 'config.json' then Found := True;
+    ExpectTrue(not Found, 'and never a secret-bearing file');
+    ExpectTrue(C.ListDir(Dir.Path + '/projects', Dir), 'a subdirectory lists');
+
+    { ------------------------------------------------- desktop state -- }
+    (* Per workspace, on the gateway. Both desktops read the same document,
+       so a layout arranged in one opens in the other. *)
+    ExpectTrue(C.SetDesktopState('{"v":1,"windows":[{"fn":"library"}]}'),
+               'desktop state saves');
+    ExpectTrue(Pos('library', C.DesktopState) > 0, 'and reads back');
+    ExpectTrue(not C.SetDesktopState('{"v":1,'), 'malformed state is refused');
+    ExpectTrue(Pos('library', C.DesktopState) > 0,
+               'and the good state survives the bad write');
+
+    { ------------------------------------------------ pages + promote -- }
+    ExpectTrue(C.CreatePageOfKind('client api page', pkeReport, PageId) or
+               (PageId = ''),
+               'a page request either lands or fails cleanly');
+    if PageId <> '' then
+    begin
+      ExpectTrue(C.PromotePage(PageId, Val), 'a page promotes to a project');
+      ExpectTrue(Val <> '', 'and names the project it became');
+      { The page is a record of an answer at a time -- promotion copies it
+        and must leave it in the history. }
+      Found := False;
+      PG := C.Pages;
+      for I := 0 to High(PG) do
+        if PG[I].Id = PageId then Found := True;
+      ExpectTrue(Found, 'and the page is still there afterwards');
+      C.DeleteProject(Val);
+    end;
+
+    { ------------------------------------------------- process apps ---- }
+    { No app on this project, so the run surface must say so rather than
+      starting something. }
+    ExpectTrue(not C.RunApp(Slug, Run, Val), 'running an appless project fails');
+    ExpectTrue(Val <> '', 'with a reason: ' + Val);
 
     ExpectTrue(C.DeleteProject(Slug), 'project deleted');
     ExpectTrue(not C.Project(Slug, P), 'deleted project is gone');

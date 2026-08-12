@@ -23,7 +23,7 @@ interface
 
 uses
   System.SysUtils, System.Types, System.UITypes, System.Classes,
-  System.IOUtils, System.Generics.Collections,
+  System.IOUtils, System.StrUtils, System.Generics.Collections,
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs,
   FMX.StdCtrls, FMX.Layouts, FMX.ListBox, FMX.Edit, FMX.Memo, FMX.Styles,
   FMX.Objects, FMX.TreeView, FMX.WebBrowser, FMX.ScrollBox,
@@ -67,6 +67,9 @@ type
 
     FStylePicker: TRetroWindow;
     FLibraryWin: TRetroWindow;
+    FFilesWin: TRetroWindow;
+    FBrowserWin: TRetroWindow;
+    FProgressWin: TRetroWindow;
     { One chat / app / log window per project, so reopening focuses rather
       than stacking duplicates. Windows announce their own death through
       FreeNotification -- see Notification. }
@@ -77,6 +80,43 @@ type
     FChatHistory: TDictionary<string, string>;
     FBrowsers: TObjectList<TWebBrowser>;
     FSnapshots: TDictionary<TWebBrowser, TImage>;
+
+    { ---- File Manager ---- }
+    FFilesList: TListBox;
+    FFilesPath: TEdit;
+    FFilesDir: TDirListing;
+
+    { ---- Browser ---- }
+    FBrowserQuery: TEdit;
+    FBrowserView: TWebBrowser;
+    FBrowserStatus: TLabel;
+    FBrowserSearch, FBrowserDeep, FBrowserPromote: TButton;
+    FCurrentPage: string;
+
+    { ---- deep-research progress ----
+      A research turn runs for minutes across many searches. The label shows
+      what the agent is doing RIGHT NOW, fed by page-progress events, because
+      a dialog that says nothing for that long is indistinguishable from a
+      hang. }
+    FProgressText: TLabel;
+    FProgressLine: string;
+
+    { ---- process apps ----
+      One Run window per project, same rule as chat and app windows. }
+    FRunWins: TDictionary<string, TRetroWindow>;
+    FRunLogs: TDictionary<string, TMemo>;
+    FRunHeads: TDictionary<string, TLabel>;
+    FRunTimer: TTimer;
+
+    (* ---- artifact versions ----
+       What each turn's app body was, newest last, per project. A card in the
+       transcript is only meaningful if it can still show what THAT turn
+       produced -- the app directory holds one file and every turn overwrites
+       it, so if this does not capture it, nothing can. *)
+    FVersions: TObjectDictionary<string, TStringList>;
+    FVersionWin: TRetroWindow;
+    FVersionBody: string;
+    FVersionProject: string;
 
     FProjects: TProjectRows;
     FWorkspaces: TWorkspaceRows;
@@ -102,6 +142,10 @@ type
     FEventThread: TThread;
     FEventDirty: Boolean;
     FEventTimer: TTimer;
+    FLayoutDirty: Boolean;
+    { True while RestoreDesktopState is opening windows, so restoring does
+      not immediately save a half-built layout back over the real one. }
+    FRestoring: Boolean;
 
     function FindStyleDir: string;
     procedure BuildDesktop;
@@ -142,6 +186,52 @@ type
     procedure OpenApp(const Project: string);
     procedure OpenJobLog(const Project, TaskId, JobId: string);
     procedure OpenLibrary;
+
+    { ---- File Manager ---- }
+    procedure OpenFiles;
+    procedure FilesShow(const Path: string);
+    procedure FilesOpenSel(Sender: TObject);
+    procedure FilesUpClick(Sender: TObject);
+    procedure FilesHomeClick(Sender: TObject);
+    procedure FilesPathKey(Sender: TObject; var Key: Word;
+      var KeyChar: WideChar; Shift: TShiftState);
+    procedure OpenFileView(const Path, Name: string);
+
+    { ---- Browser ---- }
+    procedure OpenBrowser(const PageId: string);
+    procedure BrowserSearchClick(Sender: TObject);
+    procedure BrowserDeepClick(Sender: TObject);
+    procedure BrowserPromoteClick(Sender: TObject);
+    procedure RunPageQuery(Kind: TPageKindSel);
+    procedure ShowPage(const PageId: string);
+    procedure ShowProgress(const Caption, Text_: string);
+    procedure CloseProgress;
+
+    { ---- process apps ---- }
+    procedure OpenRun(const Project: string);
+    procedure RunStartClick(Sender: TObject);
+    procedure RunStopClick(Sender: TObject);
+    procedure RunConfirmed(Sender: TObject);
+    procedure RunTimerTick(Sender: TObject);
+    procedure RefreshRun(const Project: string);
+
+    { ---- artifact versions ---- }
+    procedure CaptureVersion(const Project: string);
+    procedure AddArtifactCard(const Project: string);
+    procedure ViewVersionClick(Sender: TObject);
+    procedure RestoreVersionClick(Sender: TObject);
+    procedure RestoreConfirmed(Sender: TObject);
+
+    { ---- desktop state ---- }
+    procedure SaveDesktopState;
+    procedure RestoreDesktopState;
+    { Mark the layout changed; the event timer flushes it. Saving inline on
+      every open and close would put a blocking PUT in the middle of opening
+      a window. }
+    procedure MarkLayoutDirty;
+
+    procedure FilesClick(Sender: TObject);
+    procedure BrowserClick(Sender: TObject);
     procedure SendChat(Sender: TObject);
     procedure ChatChunk(const Chunk: string; var Abort: Boolean);
 
@@ -233,6 +323,18 @@ begin
   FChatHistory := TDictionary<string, string>.Create;
   FBrowsers   := TObjectList<TWebBrowser>.Create(False);
   FSnapshots  := TDictionary<TWebBrowser, TImage>.Create;
+  FRunWins    := TDictionary<string, TRetroWindow>.Create;
+  FRunLogs    := TDictionary<string, TMemo>.Create;
+  FRunHeads   := TDictionary<string, TLabel>.Create;
+  { Owns its lists: each holds one project's captured app bodies. }
+  FVersions   := TObjectDictionary<string, TStringList>.Create([doOwnsValues]);
+
+  { One poll for every Run window. A child's output arrives when it arrives,
+    and N timers would be N of the same question. Off until something runs. }
+  FRunTimer := TTimer.Create(Self);
+  FRunTimer.Interval := 1200;
+  FRunTimer.Enabled := False;
+  FRunTimer.OnTimer := RunTimerTick;
 
   Gateway := GetEnvironmentVariable('PASCLAW_GATEWAY');
   if Gateway = '' then Gateway := DefaultGateway;
@@ -264,6 +366,8 @@ begin
   RefreshWorkspaces;
   RefreshProjects;
   StartEventWatch;
+  { The layout this workspace was left in, from whichever client left it. }
+  RestoreDesktopState;
 end;
 
 procedure TFormMain.FormDestroy(Sender: TObject);
@@ -275,7 +379,18 @@ begin
     FEventThread.WaitFor;
     FreeAndNil(FEventThread);
   end;
+  { Save before the client goes: the layout is stored on the gateway, so
+    there is no writing it once the connection is gone. }
+  try
+    SaveDesktopState;
+  except
+    { A desktop that cannot record its layout still closes. }
+  end;
   FreeAndNil(FClient);
+  FreeAndNil(FVersions);
+  FreeAndNil(FRunHeads);
+  FreeAndNil(FRunLogs);
+  FreeAndNil(FRunWins);
   FreeAndNil(FSnapshots);
   FreeAndNil(FBrowsers);
   FreeAndNil(FChatHistory);
@@ -315,6 +430,8 @@ var
 begin
   inherited;
   if Operation <> TOperation.opRemove then Exit;
+  { A window closing is a layout change like any other. }
+  if AComponent is TRetroWindow then MarkLayoutDirty;
 
   if AComponent = FStylePicker then
   begin
@@ -327,6 +444,49 @@ begin
   begin
     FLibraryWin := nil;
     Exit;
+  end;
+  if AComponent = FFilesWin then
+  begin
+    FFilesWin := nil;
+    FFilesList := nil;    { owned by the window, dying with it }
+    FFilesPath := nil;
+    Exit;
+  end;
+  if AComponent = FBrowserWin then
+  begin
+    FBrowserWin := nil;
+    FBrowserQuery := nil;
+    FBrowserStatus := nil;
+    FBrowserSearch := nil;
+    FBrowserDeep := nil;
+    FBrowserPromote := nil;
+    { The view is also in FBrowsers/FSnapshots; the loop below clears those. }
+    FBrowserView := nil;
+    FCurrentPage := '';
+    Exit;
+  end;
+  if AComponent = FProgressWin then
+  begin
+    FProgressWin := nil;
+    FProgressText := nil;
+    Exit;
+  end;
+  if AComponent = FVersionWin then
+  begin
+    FVersionWin := nil;
+    Exit;
+  end;
+
+  Keys := FRunWins.Keys.ToArray;
+  for I := 0 to High(Keys) do
+  begin
+    Key := Keys[I];
+    if FRunWins[Key] = AComponent then
+    begin
+      FRunWins.Remove(Key);
+      FRunLogs.Remove(Key);       { memo and label were owned by the window }
+      FRunHeads.Remove(Key);
+    end;
   end;
 
   Keys := FChatWins.Keys.ToArray;
@@ -374,7 +534,7 @@ end;
 procedure TFormMain.BuildDock;
 var
   Head: TLabel;
-  Bar: TLayout;
+  Bar, Bar2: TLayout;
   B: TButton;
 begin
   { The dock is a plain left-aligned layout rather than a TRetroWindow: it is
@@ -412,6 +572,34 @@ begin
   B.Width := 64;
   B.Text := 'Refresh';
   B.OnClick := RefreshClick;
+
+  { A second row: the windows that are not per project. }
+  Bar2 := TLayout.Create(Self);
+  Bar2.Parent := FDock;
+  Bar2.Align := TAlignLayout.Bottom;
+  Bar2.Height := 30;
+
+  B := TButton.Create(Self);
+  B.Parent := Bar2;
+  B.Align := TAlignLayout.Left;
+  B.Width := 74;
+  B.Text := 'Browser';
+  B.OnClick := BrowserClick;
+
+  B := TButton.Create(Self);
+  B.Parent := Bar2;
+  B.Align := TAlignLayout.Left;
+  B.Margins.Left := 4;
+  B.Width := 60;
+  B.Text := 'Files';
+  B.OnClick := FilesClick;
+
+  B := TButton.Create(Self);
+  B.Parent := Bar2;
+  B.Align := TAlignLayout.Client;
+  B.Margins.Left := 4;
+  B.Text := 'Library';
+  B.OnClick := LibraryClick;
 
   B := TButton.Create(Self);
   B.Parent := Bar;
@@ -764,13 +952,27 @@ begin
     if FWorkspaces[I].Active then Cur := I;
   Cur := (Cur + 1) mod Length(FWorkspaces);
 
+  { Save THIS workspace's arrangement before leaving it -- switching is
+    meant to feel like walking into a different room, which only works if
+    the room you left is still as you left it. }
+  SaveDesktopState;
+
   { Switching desktops closes this one's windows -- they belong to the
     workspace, not to the client. }
   while FDesktop.WindowCount > 0 do
     FDesktop.Windows[0].Close;
   FStylePicker := nil;
   FLibraryWin := nil;
+  FFilesWin := nil; FFilesList := nil; FFilesPath := nil;
+  FBrowserWin := nil; FBrowserQuery := nil; FBrowserStatus := nil;
+  FBrowserSearch := nil; FBrowserDeep := nil; FBrowserPromote := nil;
+  FBrowserView := nil; FCurrentPage := '';
+  FProgressWin := nil; FProgressText := nil;
+  FVersionWin := nil;
   FChatWins.Clear; FChatLogs.Clear; FChatInputs.Clear; FAppWins.Clear;
+  FRunWins.Clear; FRunLogs.Clear; FRunHeads.Clear;
+  { Versions belong to a conversation, and the conversations just closed. }
+  FVersions.Clear;
 
   if not FClient.ActivateWorkspace(FWorkspaces[Cur].Name) then
   begin
@@ -779,6 +981,7 @@ begin
   end;
   RefreshWorkspaces;
   RefreshProjects;
+  RestoreDesktopState;
 end;
 
 procedure TFormMain.IconOpen(Sender: TObject);
@@ -853,11 +1056,38 @@ begin
   Stop := (FEventThread = nil) or FEventThread.CheckTerminated;
   if Ev.EvType = '' then Exit;
   if (Ev.EvType = 'hello') or (Ev.EvType = 'joblog') then Exit;
+  (* Research narration. Still worker-thread rules -- this only writes a
+     string; the timer paints it. Without this a deep-research run shows a
+     dialog that says nothing for minutes, which is indistinguishable from a
+     hang. *)
+  if Ev.EvType = 'page-progress' then
+  begin
+    FProgressLine := Ev.Status;
+    if Ev.Line <> '' then FProgressLine := FProgressLine + ': ' + Ev.Line;
+    Exit;
+  end;
   FEventDirty := True;
+end;
+
+procedure TFormMain.MarkLayoutDirty;
+begin
+  if not FRestoring then FLayoutDirty := True;
 end;
 
 procedure TFormMain.ApplyPendingEvents;
 begin
+  if FLayoutDirty then
+  begin
+    FLayoutDirty := False;
+    try
+      SaveDesktopState;
+    except
+      { A desktop that cannot record its layout still works. }
+    end;
+  end;
+  { Main thread: safe to paint. }
+  if (FProgressText <> nil) and (FProgressText.Text <> FProgressLine) then
+    FProgressText.Text := FProgressLine;
   if not FEventDirty then Exit;
   FEventDirty := False;
   { Coarse on purpose: the board is small and re-reading it is cheap, so a
@@ -1111,7 +1341,7 @@ var
   W: TRetroWindow;
   Log, Input: TMemo;
   Bar: TLayout;
-  Send: TButton;
+  Send, Vers: TButton;
   Row: TProjectRow;
   Title: string;
 begin
@@ -1140,6 +1370,19 @@ begin
   Send.Text := 'Send';
   Send.TagString := Project;
   Send.OnClick := SendChat;
+
+  { Every turn that touches the app leaves a version behind; this opens the
+    most recent earlier one. The transcript names them, so the button is the
+    door rather than the record. }
+  Vers := TButton.Create(W);
+  Vers.Parent := Bar;
+  Vers.Align := TAlignLayout.Right;
+  Vers.Width := 76;
+  Vers.Margins.Left := 4;
+  Vers.Text := 'Versions';
+  Vers.TagString := Project;
+  Vers.OnClick := ViewVersionClick;
+  MarkLayoutDirty;
 
   Input := TMemo.Create(W);
   Input.Parent := Bar;
@@ -1294,10 +1537,24 @@ begin
   { Did the turn leave a runnable app behind? Ask the gateway rather than
     trusting the transcript. }
   RefreshProjects;
-  if FClient.App(Project, App) and App.Exists and App.Ready and App.Servable then
+  if FClient.App(Project, App) and App.Exists and App.Ready then
   begin
-    Log.Lines.Add('>> "' + App.Name + '" is ready. Opening it.');
-    OpenApp(Project);
+    { Pin what this turn produced to the turn that produced it, so scrolling
+      back through the conversation is scrolling back through versions. }
+    AddArtifactCard(Project);
+    if App.Servable then
+    begin
+      Log.Lines.Add('>> "' + App.Name + '" is ready. Opening it.');
+      OpenApp(Project);
+    end
+    else
+    begin
+      { python/fpc/delphi: a program, not a document. It gets the Run window
+        rather than a browser view, and nothing starts without consent. }
+      Log.Lines.Add(Format('>> "%s" is a %s app -- opening its Run window.',
+                           [App.Name, App.Kind]));
+      OpenRun(Project);
+    end;
   end
   else if ProjectByName(Project, Row) and Row.HasApp then
     Log.Lines.Add('>> The app was written but has no runnable entry yet.');
@@ -1413,6 +1670,7 @@ begin
   Browser.URL := FClient.AppURL(Project);
   FBrowsers.Add(Browser);
   FSnapshots.AddOrSetValue(Browser, Snap);
+  MarkLayoutDirty;
 end;
 
 { Yes on the permission dialog: reopen with the prompt suppressed. The
@@ -1485,6 +1743,7 @@ begin
     Exit;
   end;
   FLibraryWin := TrackWindow(FDesktop.CreateWindow('Library', 420, 340));
+  MarkLayoutDirty;
   LB := TListBox.Create(FLibraryWin);
   LB.Parent := FLibraryWin.Client;
   LB.Align := TAlignLayout.Client;
@@ -1503,6 +1762,868 @@ begin
     for I := 0 to High(Pages) do
       LB.Items.Add(Format('%s -- %d source(s)  %s',
         [Pages[I].Title, Pages[I].SourceCount, Pages[I].Created]));
+end;
+
+{ ----------------------------------------------------- process apps -- }
+
+{ Conditional string. StrUtils has one; a local helper keeps this unit's
+  uses clause to what it actually needs. }
+function IfThenStr(Cond: Boolean; const Yes, No: string): string;
+begin
+  if Cond then Result := Yes else Result := No;
+end;
+
+
+(*
+  The Run window.
+
+  A `python`/`fpc`/`delphi` app is a program the agent wrote, and starting it
+  is arbitrary code execution -- the same deal shell_exec already makes. So
+  the window shows the exact command BEFORE asking, names which of the three
+  places it will run in, and keeps a live tail of its output.
+*)
+procedure TFormMain.OpenRun(const Project: string);
+var
+  W: TRetroWindow;
+  Bar: TLayout;
+  B: TButton;
+  Head: TLabel;
+  M: TMemo;
+begin
+  if FRunWins.TryGetValue(Project, W) and (W <> nil) then
+  begin
+    W.Restore;
+    RefreshRun(Project);
+    Exit;
+  end;
+  W := TrackWindow(FDesktop.CreateWindow(Project + ' -- Run', 520, 360));
+  FRunWins.AddOrSetValue(Project, W);
+
+  Head := TLabel.Create(W);
+  Head.Parent := W.Client;
+  Head.Align := TAlignLayout.Top;
+  Head.Height := 56;
+  Head.Margins.Rect := TRectF.Create(8, 6, 8, 0);
+  Head.WordWrap := True;
+  FRunHeads.AddOrSetValue(Project, Head);
+
+  Bar := TLayout.Create(W);
+  Bar.Parent := W.Client;
+  Bar.Align := TAlignLayout.Top;
+  Bar.Height := 30;
+
+  B := TButton.Create(W);
+  B.Parent := Bar;
+  B.Align := TAlignLayout.Left;
+  B.Width := 60;
+  B.Margins.Rect := TRectF.Create(6, 3, 0, 3);
+  B.Text := 'Run';
+  B.TagString := Project;
+  B.OnClick := RunStartClick;
+
+  B := TButton.Create(W);
+  B.Parent := Bar;
+  B.Align := TAlignLayout.Left;
+  B.Width := 60;
+  B.Margins.Rect := TRectF.Create(6, 3, 0, 3);
+  B.Text := 'Stop';
+  B.TagString := Project;
+  B.OnClick := RunStopClick;
+
+  M := TMemo.Create(W);
+  M.Parent := W.Client;
+  M.Align := TAlignLayout.Client;
+  M.ReadOnly := True;
+  FRunLogs.AddOrSetValue(Project, M);
+
+  RefreshRun(Project);
+end;
+
+{ Where an app runs, in the words a person would use. Three genuinely
+  different places, and a remote daemon is the one that surprises people:
+  the app's files and ports are on a machine that is neither this one nor
+  necessarily the gateway's. }
+function BackendPhrase(const Backend: string): string;
+begin
+  if Backend = 'docker-remote' then
+    Result := 'in a container on a REMOTE Docker host'
+  else if Backend = 'docker' then
+    Result := 'in a container on the PasClaw host'
+  else
+    Result := 'as a process on the PasClaw host';
+end;
+
+procedure TFormMain.RefreshRun(const Project: string);
+var
+  Run: TRunRow;
+  Head: TLabel;
+  M: TMemo;
+  Log: string;
+begin
+  if not FClient.RunState(Project, Run) then Exit;
+  if FRunHeads.TryGetValue(Project, Head) and (Head <> nil) then
+    Head.Text := Format('%s -- runs %s%s%s',
+      [Run.State, BackendPhrase(Run.Backend),
+       IfThenStr(Run.URL <> '', sLineBreak + Run.URL, ''),
+       IfThenStr(Run.Error <> '', sLineBreak + Run.Error, '')]);
+  if FRunLogs.TryGetValue(Project, M) and (M <> nil) then
+  begin
+    Log := FClient.RunLog(Project);
+    { Only touch the memo when it changed: reassigning Text every second
+      would fight the user's scroll position for no reason. }
+    if M.Text <> Log then M.Text := Log;
+  end;
+end;
+
+procedure TFormMain.RunStartClick(Sender: TObject);
+var
+  Project, Cmd: string;
+  Run: TRunRow;
+  App: TAppRow;
+begin
+  if not (Sender is TButton) then Exit;
+  Project := TButton(Sender).TagString;
+  if Project = '' then Exit;
+
+  { Ask WITHOUT consent first, purely to get the command back. A
+    confirmation that hides what it is confirming is theatre. }
+  if not FClient.PlannedCommand(Project, Cmd) then
+    Cmd := '(the gateway did not say)';
+  FClient.App(Project, App);
+  { The run record carries the backend even when nothing is running, so the
+    consent dialog can name where it WILL run rather than where it did. }
+  FClient.RunState(Project, Run);
+  FPendingProject := Project;
+  Confirm('Run app',
+    Format('This runs a program PasClaw wrote:' + sLineBreak + sLineBreak +
+           '  %s' + sLineBreak + sLineBreak +
+           'It runs %s.%s' + sLineBreak + sLineBreak + 'Run it?',
+      [Cmd, BackendPhrase(Run.Backend),
+       IfThenStr(App.Network <> '',
+                 sLineBreak + 'It declares network access to: ' + App.Network,
+                 '')]),
+    RunConfirmed);
+end;
+
+procedure TFormMain.RunConfirmed(Sender: TObject);
+var
+  Run: TRunRow;
+  Err: string;
+begin
+  if FPendingProject = '' then Exit;
+  if not FClient.RunApp(FPendingProject, Run, Err) then
+    Say('Could not start it: ' + Err)
+  else
+  begin
+    RefreshRun(FPendingProject);
+    if FRunTimer <> nil then FRunTimer.Enabled := True;
+  end;
+  FPendingProject := '';
+end;
+
+procedure TFormMain.RunStopClick(Sender: TObject);
+var
+  Project: string;
+begin
+  if not (Sender is TButton) then Exit;
+  Project := TButton(Sender).TagString;
+  if Project = '' then Exit;
+  FClient.StopApp(Project);
+  RefreshRun(Project);
+end;
+
+{ One timer for every Run window: a child's output arrives whenever it
+  arrives, and N timers would be N of the same poll. }
+procedure TFormMain.RunTimerTick(Sender: TObject);
+var
+  Key: string;
+  Keys: TArray<string>;
+  W: TRetroWindow;
+begin
+  if FRunWins.Count = 0 then
+  begin
+    if FRunTimer <> nil then FRunTimer.Enabled := False;
+    Exit;
+  end;
+  Keys := FRunWins.Keys.ToArray;
+  for Key in Keys do
+    if FRunWins.TryGetValue(Key, W) and (W <> nil) then
+      RefreshRun(Key);
+end;
+
+{ ------------------------------------------------ artifact versions -- }
+
+(*
+  Every turn that leaves a runnable app behind adds a card to the chat, and
+  the card holds the body THAT turn produced. Scrolling back through a
+  conversation is then scrolling back through versions.
+
+  The capture has to happen at the time, because there is nowhere to get it
+  from later: the app directory holds one file and each turn overwrites it.
+*)
+procedure TFormMain.CaptureVersion(const Project: string);
+var
+  L: TStringList;
+  Body: string;
+begin
+  Body := FClient.AppEntry(Project);
+  if Body = '' then Exit;
+  if not FVersions.TryGetValue(Project, L) or (L = nil) then
+  begin
+    L := TStringList.Create;
+    FVersions.AddOrSetValue(Project, L);
+  end;
+  { Identical bodies are not a new version -- a turn that talked without
+    touching the app should not look like one that rewrote it. }
+  if (L.Count > 0) and (L[L.Count - 1] = Body) then Exit;
+  L.Add(Body);
+end;
+
+procedure TFormMain.AddArtifactCard(const Project: string);
+var
+  Log: TMemo;
+  App: TAppRow;
+  L: TStringList;
+  N: Integer;
+begin
+  if not FClient.App(Project, App) then Exit;
+  if not (App.Exists and App.Ready) then Exit;
+  CaptureVersion(Project);
+  if not FChatLogs.TryGetValue(Project, Log) or (Log = nil) then Exit;
+
+  N := 0;
+  if FVersions.TryGetValue(Project, L) and (L <> nil) then N := L.Count;
+
+  (* The transcript is a TMemo, so a "card" is a line, not a widget. It says
+     which version it is, and the Versions button on the chat window opens
+     the one you pick. Poorer than the web client's card, honestly -- but a
+     line that tells the truth beats a widget that cannot exist in a memo. *)
+  Log.Lines.Add('');
+  Log.Lines.Add(Format('[%s] %s -- version %d. Use "Versions" to open it.',
+                       [App.Kind, App.Name, N]));
+end;
+
+procedure TFormMain.ViewVersionClick(Sender: TObject);
+var
+  Project: string;
+  L: TStringList;
+  W: TRetroWindow;
+  M: TMemo;
+  Row: TLayout;
+  B: TButton;
+  Idx: Integer;
+begin
+  if not (Sender is TButton) then Exit;
+  Project := TButton(Sender).TagString;
+  if not FVersions.TryGetValue(Project, L) or (L = nil) or (L.Count = 0) then
+  begin
+    Say('No earlier versions captured in this conversation yet.');
+    Exit;
+  end;
+  { The most recent EARLIER one -- the current app is already open. }
+  Idx := L.Count - 2;
+  if Idx < 0 then Idx := 0;
+  FVersionBody := L[Idx];
+  FVersionProject := Project;
+
+  W := TrackWindow(FDesktop.CreateWindow('Earlier version', 560, 420));
+  FVersionWin := W;
+
+  Row := TLayout.Create(W);
+  Row.Parent := W.Client;
+  Row.Align := TAlignLayout.Bottom;
+  Row.Height := 32;
+
+  B := TButton.Create(W);
+  B.Parent := Row;
+  B.Align := TAlignLayout.Right;
+  B.Width := 150;
+  B.Margins.Rect := TRectF.Create(4, 3, 6, 3);
+  B.Text := 'Restore this version';
+  B.TagString := Project;
+  B.OnClick := RestoreVersionClick;
+
+  { Source rather than a rendered view. A TWebBrowser can only load a URL,
+    and this body is not at one -- writing it to a temp file to render it
+    would put model output on disk outside the app directory, which is
+    exactly what the containment rules exist to prevent. }
+  M := TMemo.Create(W);
+  M.Parent := W.Client;
+  M.Align := TAlignLayout.Client;
+  M.ReadOnly := True;
+  M.Text := FVersionBody;
+end;
+
+procedure TFormMain.RestoreVersionClick(Sender: TObject);
+begin
+  if FVersionBody = '' then Exit;
+  Confirm('Restore version',
+    'Put this version back as the current app?' + sLineBreak +
+    'The version on disk now will be replaced.', RestoreConfirmed);
+end;
+
+procedure TFormMain.RestoreConfirmed(Sender: TObject);
+begin
+  if (FVersionProject = '') or (FVersionBody = '') then Exit;
+  if not FClient.PutAppEntry(FVersionProject, FVersionBody) then
+  begin
+    Say('Could not restore it: ' + FClient.LastError);
+    Exit;
+  end;
+  if FVersionWin <> nil then
+    FVersionWin.Close;
+  FVersionWin := nil;
+  OpenApp(FVersionProject);
+end;
+
+{ -------------------------------------------------- desktop state -- }
+
+(*
+  The window layout belongs to the WORKSPACE, and both desktops read the
+  same document on the gateway -- so a layout arranged in the web client is
+  the layout this one opens with, and switching workspaces really does feel
+  like walking into a different room.
+
+  Only windows that can be reconstructed are saved. A progress dialog or a
+  confirmation is tied to work that is over; reopening one would be a lie
+  about state.
+*)
+procedure TFormMain.SaveDesktopState;
+var
+  Body, Key: string;
+  Keys: TArray<string>;
+  W: TRetroWindow;
+  First: Boolean;
+
+  procedure Add(const Fn, Arg: string);
+  begin
+    if not First then Body := Body + ',';
+    First := False;
+    Body := Body + '{"fn":"' + Fn + '","arg":"' + Arg + '"}';
+  end;
+
+begin
+  if FClient = nil then Exit;
+  Body := '';
+  First := True;
+  if FLibraryWin <> nil then Add('library', '');
+  if FFilesWin <> nil then Add('files', FFilesDir.Path);
+  if FBrowserWin <> nil then Add('browser', FCurrentPage);
+  Keys := FChatWins.Keys.ToArray;
+  for Key in Keys do
+    if FChatWins.TryGetValue(Key, W) and (W <> nil) then Add('chat', Key);
+  Keys := FAppWins.Keys.ToArray;
+  for Key in Keys do
+    if FAppWins.TryGetValue(Key, W) and (W <> nil) then Add('app', Key);
+  FClient.SetDesktopState('{"v":1,"client":"fmx","windows":[' + Body + ']}');
+end;
+
+procedure TFormMain.RestoreDesktopState;
+var
+  State, Fn, Arg: string;
+  P, Q: Integer;
+begin
+  if FClient = nil then Exit;
+  State := FClient.DesktopState;
+  if (State = '') or (Pos('"windows"', State) = 0) then Exit;
+
+  (* Hand-scan rather than parse. The client library has a JSON parser and
+     this could use it -- but the shape here is fixed and flat, and one
+     malformed layout must not be able to stop the desktop from opening. *)
+  FRestoring := True;
+  try
+    P := 1;
+    repeat
+      P := PosEx('{"fn":"', State, P);
+      if P = 0 then Break;
+      Inc(P, 7);
+      Q := PosEx('"', State, P);
+      if Q = 0 then Break;
+      Fn := Copy(State, P, Q - P);
+
+      Arg := '';
+      P := PosEx('"arg":"', State, Q);
+      if P > 0 then
+      begin
+        Inc(P, 7);
+        Q := PosEx('"', State, P);
+        if Q > 0 then
+        begin
+          Arg := Copy(State, P, Q - P);
+          P := Q;
+        end;
+      end
+      else
+        P := Q;
+
+      if Fn = 'library' then OpenLibrary
+      else if Fn = 'files' then OpenFiles
+      else if Fn = 'browser' then OpenBrowser(Arg)
+      else if (Fn = 'chat') and (Arg <> '') then OpenChat(Arg)
+      else if (Fn = 'app') and (Arg <> '') then OpenApp(Arg);
+    until P = 0;
+  finally
+    FRestoring := False;
+  end;
+end;
+
+{ ---------------------------------------------------------- browser -- }
+
+(*
+  Browser -- a question in, a page out.
+
+  Two buttons because they are two different acts. Search is one pass and
+  comes back quickly. Research is the named three-phase mode -- plan the
+  sub-questions, read several independent sources, synthesise -- which runs
+  for minutes and therefore narrates.
+*)
+procedure TFormMain.OpenBrowser(const PageId: string);
+var
+  Bar: TLayout;
+  Host: TLayout;
+  Snap: TImage;
+begin
+  if FBrowserWin <> nil then
+  begin
+    FBrowserWin.Restore;
+    if PageId <> '' then ShowPage(PageId);
+    Exit;
+  end;
+  FBrowserWin := TrackWindow(FDesktop.CreateWindow('Browser', 620, 460));
+  FBrowserWin.OnActiveChanged := BrowserActiveChanged;
+
+  Bar := TLayout.Create(FBrowserWin);
+  Bar.Parent := FBrowserWin.Client;
+  Bar.Align := TAlignLayout.Top;
+  Bar.Height := 30;
+
+  FBrowserSearch := TButton.Create(FBrowserWin);
+  FBrowserSearch.Parent := Bar;
+  FBrowserSearch.Align := TAlignLayout.Right;
+  FBrowserSearch.Width := 70;
+  FBrowserSearch.Margins.Rect := TRectF.Create(0, 3, 3, 3);
+  FBrowserSearch.Text := 'Search';
+  FBrowserSearch.OnClick := BrowserSearchClick;
+
+  FBrowserDeep := TButton.Create(FBrowserWin);
+  FBrowserDeep.Parent := Bar;
+  FBrowserDeep.Align := TAlignLayout.Right;
+  FBrowserDeep.Width := 80;
+  FBrowserDeep.Margins.Rect := TRectF.Create(0, 3, 3, 3);
+  FBrowserDeep.Text := 'Research';
+  FBrowserDeep.Hint := 'Plan, read several sources, and write a longer sourced report';
+  FBrowserDeep.OnClick := BrowserDeepClick;
+
+  FBrowserPromote := TButton.Create(FBrowserWin);
+  FBrowserPromote.Parent := Bar;
+  FBrowserPromote.Align := TAlignLayout.Right;
+  FBrowserPromote.Width := 110;
+  FBrowserPromote.Margins.Rect := TRectF.Create(0, 3, 3, 3);
+  FBrowserPromote.Text := 'Make interactive';
+  FBrowserPromote.Enabled := False;
+  FBrowserPromote.OnClick := BrowserPromoteClick;
+
+  FBrowserQuery := TEdit.Create(FBrowserWin);
+  FBrowserQuery.Parent := Bar;
+  FBrowserQuery.Align := TAlignLayout.Client;
+  FBrowserQuery.Margins.Rect := TRectF.Create(3, 3, 3, 3);
+  FBrowserQuery.TextPrompt := 'Ask anything -- the answer comes back as a page';
+
+  FBrowserStatus := TLabel.Create(FBrowserWin);
+  FBrowserStatus.Parent := FBrowserWin.Client;
+  FBrowserStatus.Align := TAlignLayout.Bottom;
+  FBrowserStatus.Height := 20;
+  FBrowserStatus.Margins.Rect := TRectF.Create(6, 0, 6, 2);
+  FBrowserStatus.Text := '';
+
+  Host := TLayout.Create(FBrowserWin);
+  Host.Parent := FBrowserWin.Client;
+  Host.Align := TAlignLayout.Client;
+
+  { Same snapshot trick the app windows use: TWebBrowser is a native control
+    that draws above all FMX content, so an inactive window has to show a
+    picture of itself instead. }
+  Snap := TImage.Create(FBrowserWin);
+  Snap.Parent := Host;
+  Snap.Align := TAlignLayout.Client;
+  Snap.WrapMode := TImageWrapMode.Stretch;
+  Snap.Visible := False;
+
+  FBrowserView := TWebBrowser.Create(FBrowserWin);
+  FBrowserView.Parent := Host;
+  FBrowserView.Align := TAlignLayout.Client;
+{$IFDEF MSWINDOWS}
+  FBrowserView.WindowsEngine := TWindowsEngine.EdgeIfAvailable;
+{$ENDIF}
+  FBrowsers.Add(FBrowserView);
+  FSnapshots.AddOrSetValue(FBrowserView, Snap);
+  MarkLayoutDirty;
+
+  if PageId <> '' then ShowPage(PageId);
+end;
+
+procedure TFormMain.ShowPage(const PageId: string);
+var
+  Pages: TPageRows;
+  I: Integer;
+  N: Integer;
+begin
+  FCurrentPage := PageId;
+  if FBrowserView <> nil then
+    FBrowserView.URL := FClient.PageURL(PageId);
+  if FBrowserPromote <> nil then FBrowserPromote.Enabled := PageId <> '';
+
+  { The sources strip, echoed into the status bar. A page that could not be
+    grounded says so on its face; saying it here too means the user sees it
+    without scrolling to the footer. }
+  N := -1;
+  Pages := FClient.Pages;
+  for I := 0 to High(Pages) do
+    if Pages[I].Id = PageId then
+    begin
+      N := Pages[I].SourceCount;
+      if FBrowserWin <> nil then FBrowserWin.Caption := Pages[I].Title;
+      Break;
+    end;
+  if FBrowserStatus = nil then Exit;
+  if N < 0 then FBrowserStatus.Text := ''
+  else if N = 0 then FBrowserStatus.Text := 'UNGROUNDED -- no sources'
+  else FBrowserStatus.Text := Format('GROUNDED -- %d source(s)', [N]);
+end;
+
+(*
+  Ask for a page, off the UI thread.
+
+  This HAS to be threaded. The gateway holds the request open for the whole
+  turn -- minutes, for research -- and Indy's client blocks. Doing it inline
+  would freeze the form, which means the progress dialog this mode exists to
+  show could never repaint: the user would get a frozen window with a stale
+  label, which is worse than no dialog at all.
+
+  So: the request runs on its own thread, the event timer keeps painting
+  progress on the main one, and the result is marshalled back with
+  TThread.Queue.
+*)
+procedure TFormMain.RunPageQuery(Kind: TPageKindSel);
+var
+  Query: string;
+  Deep: Boolean;
+begin
+  if FBrowserQuery = nil then Exit;
+  Query := Trim(FBrowserQuery.Text);
+  if Query = '' then Exit;
+  Deep := Kind = pkeResearch;
+
+  FBrowserSearch.Enabled := False;
+  FBrowserDeep.Enabled := False;
+  if Deep then
+  begin
+    FProgressLine := 'Planning...';
+    ShowProgress('Deep research', Query);
+  end
+  else if FBrowserStatus <> nil then
+    FBrowserStatus.Text := 'Searching...';
+
+  TThread.CreateAnonymousThread(
+    procedure
+    var
+      Id, Err: string;
+      Ok: Boolean;
+    begin
+      Ok := False;
+      Err := '';
+      try
+        Ok := FClient.CreatePageOfKind(Query, Kind, Id);
+        if not Ok then Err := FClient.LastError;
+      except
+        on E: Exception do Err := E.Message;
+      end;
+      TThread.Queue(nil,
+        procedure
+        begin
+          CloseProgress;
+          if FBrowserSearch <> nil then FBrowserSearch.Enabled := True;
+          if FBrowserDeep <> nil then FBrowserDeep.Enabled := True;
+          if Ok then
+            ShowPage(Id)
+          else if FBrowserStatus <> nil then
+            FBrowserStatus.Text := 'Could not produce a page: ' + Err;
+        end);
+    end).Start;
+end;
+
+procedure TFormMain.BrowserSearchClick(Sender: TObject);
+begin
+  RunPageQuery(pkeSearch);
+end;
+
+procedure TFormMain.BrowserDeepClick(Sender: TObject);
+begin
+  RunPageQuery(pkeResearch);
+end;
+
+(* "Make interactive" -- the page becomes an app you own.
+
+   A copy, deliberately: a page is the record of an answer at a time, so
+   editing it in place would falsify the history. The page stays in the
+   Library; the app is the part that changes. *)
+procedure TFormMain.BrowserPromoteClick(Sender: TObject);
+var
+  Project: string;
+begin
+  if FCurrentPage = '' then Exit;
+  if not FClient.PromotePage(FCurrentPage, Project) then
+  begin
+    if FBrowserStatus <> nil then
+      FBrowserStatus.Text := 'Could not promote it: ' + FClient.LastError;
+    Exit;
+  end;
+  RefreshProjects;
+  OpenApp(Project);
+  if FBrowserStatus <> nil then
+    FBrowserStatus.Text := 'Now a project: ' + Project +
+                           ' -- ask PasClaw to change it';
+end;
+
+procedure TFormMain.ShowProgress(const Caption, Text_: string);
+var
+  L: TLabel;
+begin
+  CloseProgress;
+  FProgressWin := TrackWindow(FDesktop.CreateWindow(Caption, 360, 150));
+  FProgressWin.ShowMax := False;
+  FProgressWin.ShowMin := False;
+  FProgressWin.Sizeable := False;
+
+  L := TLabel.Create(FProgressWin);
+  L.Parent := FProgressWin.Client;
+  L.Align := TAlignLayout.Top;
+  L.Height := 44;
+  L.Margins.Rect := TRectF.Create(10, 10, 10, 0);
+  L.Text := Text_;
+  L.WordWrap := True;
+
+  FProgressText := TLabel.Create(FProgressWin);
+  FProgressText.Parent := FProgressWin.Client;
+  FProgressText.Align := TAlignLayout.Client;
+  FProgressText.Margins.Rect := TRectF.Create(10, 4, 10, 10);
+  FProgressText.Text := FProgressLine;
+  FProgressText.WordWrap := True;
+end;
+
+procedure TFormMain.CloseProgress;
+begin
+  { Close, not Free: the desktop owns its windows and RemoveWindow is what
+    unhooks one properly. Notification clears the fields when it goes. }
+  if FProgressWin <> nil then
+    FProgressWin.Close;
+  FProgressWin := nil;
+  FProgressText := nil;
+end;
+
+procedure TFormMain.BrowserClick(Sender: TObject);
+begin
+  OpenBrowser('');
+end;
+
+{ ------------------------------------------------------------ files -- }
+
+(*
+  File Manager -- the workspace directory, as a directory.
+
+  The plan's "files are alive": the agent's own working files sit on the
+  desktop rather than behind a tool call. Read-only on purpose. /v1/fs is
+  sandbox-checked and filters secret-bearing files (config.json, .env, TLS
+  keys) server-side, so this window shows exactly what the operator surface
+  is willing to show -- and a browse window is not the place to invent a
+  delete button.
+*)
+procedure TFormMain.OpenFiles;
+var
+  Bar: TLayout;
+  B: TButton;
+begin
+  if FFilesWin <> nil then
+  begin
+    FFilesWin.Restore;
+    Exit;
+  end;
+  FFilesWin := TrackWindow(FDesktop.CreateWindow('File Manager', 560, 400));
+
+  Bar := TLayout.Create(FFilesWin);
+  Bar.Parent := FFilesWin.Client;
+  Bar.Align := TAlignLayout.Top;
+  Bar.Height := 30;
+
+  B := TButton.Create(FFilesWin);
+  B.Parent := Bar;
+  B.Align := TAlignLayout.Left;
+  B.Width := 50;
+  B.Margins.Rect := TRectF.Create(3, 3, 0, 3);
+  B.Text := 'Up';
+  B.OnClick := FilesUpClick;
+
+  B := TButton.Create(FFilesWin);
+  B.Parent := Bar;
+  B.Align := TAlignLayout.Left;
+  B.Width := 84;
+  B.Margins.Rect := TRectF.Create(3, 3, 0, 3);
+  B.Text := 'Workspace';
+  B.OnClick := FilesHomeClick;
+
+  FFilesPath := TEdit.Create(FFilesWin);
+  FFilesPath.Parent := Bar;
+  FFilesPath.Align := TAlignLayout.Client;
+  FFilesPath.Margins.Rect := TRectF.Create(3, 3, 3, 3);
+  FFilesPath.OnKeyDown := FilesPathKey;
+
+  FFilesList := TListBox.Create(FFilesWin);
+  FFilesList.Parent := FFilesWin.Client;
+  FFilesList.Align := TAlignLayout.Client;
+  FFilesList.OnDblClick := FilesOpenSel;
+  MarkLayoutDirty;
+
+  { Empty path = "wherever you think I should start". The gateway answers
+    with the workspace when it can read it, which is the useful default on a
+    fresh install where nothing else exists yet. }
+  FilesShow('');
+end;
+
+procedure TFormMain.FilesShow(const Path: string);
+var
+  I: Integer;
+  Row: TFileRow;
+  Line: string;
+begin
+  if FFilesList = nil then Exit;
+  if not FClient.ListDir(Path, FFilesDir) then
+  begin
+    Say('Could not read that directory: ' + FClient.LastError);
+    Exit;
+  end;
+  if FFilesPath <> nil then FFilesPath.Text := FFilesDir.Path;
+  FFilesList.Items.Clear;
+  if Length(FFilesDir.Rows) = 0 then
+  begin
+    FFilesList.Items.Add('(empty)');
+    Exit;
+  end;
+  { Directories first, then files -- the order every one of these managers
+    used, and the order that makes double-clicking predictable. }
+  for I := 0 to High(FFilesDir.Rows) do
+  begin
+    Row := FFilesDir.Rows[I];
+    if not Row.IsDir then Continue;
+    FFilesList.Items.Add('[' + Row.Name + ']');
+  end;
+  for I := 0 to High(FFilesDir.Rows) do
+  begin
+    Row := FFilesDir.Rows[I];
+    if Row.IsDir then Continue;
+    Line := Row.Name;
+    while Length(Line) < 40 do Line := Line + ' ';
+    FFilesList.Items.Add(Line + IntToStr(Row.Size));
+  end;
+end;
+
+{ The selected row's name, or '' -- undoing the display formatting above. }
+function SelectedFileName(LB: TListBox; out IsDir: Boolean): string;
+var
+  S: string;
+  P: Integer;
+begin
+  Result := '';
+  IsDir := False;
+  if (LB = nil) or (LB.ItemIndex < 0) then Exit;
+  S := LB.Items[LB.ItemIndex];
+  if S = '(empty)' then Exit;
+  if (Length(S) > 1) and (S[1] = '[') and (S[Length(S)] = ']') then
+  begin
+    IsDir := True;
+    Result := Copy(S, 2, Length(S) - 2);
+    Exit;
+  end;
+  { A file row is "<name padded to 40><size>"; the name ends at the run of
+    spaces we added. A name containing a double space would confuse this, so
+    take everything up to the LAST double space rather than the first. }
+  P := Pos('  ', S);
+  if P > 0 then Result := TrimRight(Copy(S, 1, P - 1)) else Result := TrimRight(S);
+end;
+
+procedure TFormMain.FilesOpenSel(Sender: TObject);
+var
+  Name_: string;
+  IsDir: Boolean;
+  Base: string;
+begin
+  Name_ := SelectedFileName(FFilesList, IsDir);
+  if Name_ = '' then Exit;
+  Base := FFilesDir.Path;
+  if (Base <> '') and (Base[Length(Base)] <> '/') and
+     (Base[Length(Base)] <> '\') then
+    Base := Base + '/';
+  if IsDir then FilesShow(Base + Name_)
+  else OpenFileView(Base + Name_, Name_);
+end;
+
+procedure TFormMain.FilesUpClick(Sender: TObject);
+var
+  S: string;
+  I, Cut: Integer;
+begin
+  S := FFilesDir.Path;
+  if S = '' then Exit;
+  { Walk back to the last separator, without assuming which one the server
+    used -- this client talks to Windows gateways too. }
+  Cut := 0;
+  for I := 1 to Length(S) - 1 do
+    if (S[I] = '/') or (S[I] = '\') then Cut := I;
+  if Cut > 1 then FilesShow(Copy(S, 1, Cut - 1));
+end;
+
+procedure TFormMain.FilesHomeClick(Sender: TObject);
+begin
+  if FFilesDir.WorkspaceRoot <> '' then FilesShow(FFilesDir.WorkspaceRoot);
+end;
+
+procedure TFormMain.FilesPathKey(Sender: TObject; var Key: Word;
+  var KeyChar: WideChar; Shift: TShiftState);
+begin
+  if (Key = vkReturn) and (FFilesPath <> nil) then
+    FilesShow(Trim(FFilesPath.Text));
+end;
+
+(* A file, in a document window. Binary files say so rather than rendering as
+   mojibake, and a truncated read admits it -- a viewer that quietly shows
+   the first slice of a log is worse than one that says it did. *)
+procedure TFormMain.OpenFileView(const Path, Name: string);
+var
+  W: TRetroWindow;
+  M: TMemo;
+  Body: string;
+  Binary, Truncated: Boolean;
+begin
+  W := TrackWindow(FDesktop.CreateWindow(Name, 560, 420));
+  M := TMemo.Create(W);
+  M.Parent := W.Client;
+  M.Align := TAlignLayout.Client;
+  M.ReadOnly := True;
+  if not FClient.ReadFile_(Path, Body, Binary, Truncated) then
+  begin
+    M.Text := 'Could not read it: ' + FClient.LastError;
+    Exit;
+  end;
+  if Binary then
+    M.Text := '(binary file)'
+  else if Truncated then
+    M.Text := Body + sLineBreak + sLineBreak + '[truncated]'
+  else
+    M.Text := Body;
+end;
+
+procedure TFormMain.FilesClick(Sender: TObject);
+begin
+  OpenFiles;
 end;
 
 { ---------------------------------------------------------- style picker -- }

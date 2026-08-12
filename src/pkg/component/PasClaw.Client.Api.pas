@@ -29,6 +29,13 @@ type
   EPasClawClient = class(Exception)
   public
     Status: Integer;
+    (* The whole response body, not just the "error" field.
+
+       A 409 from the run route is the clearest case: refusing to start
+       without consent, it hands back the exact command the caller must show
+       the user. Reducing that to its error string would throw away the only
+       part that matters. *)
+    Body: string;
   end;
 
   TWorkspaceRow = record
@@ -69,6 +76,35 @@ type
     SourceCount: Integer;
   end;
   TPageRows = array of TPageRow;
+
+  { What a running process app is doing. Backend is 'host', 'docker' or
+    'docker-remote' -- three genuinely different places, and the user should
+    never have to guess which one their app is in. }
+  TRunRow = record
+    Project, State, Started, Command, Backend, Error, URL: string;
+    Port, ExitCode: Integer;
+  end;
+
+  { One row of a directory listing from /v1/fs. }
+  TFileRow = record
+    Name: string;
+    Size: Int64;
+    IsDir: Boolean;
+  end;
+  TFileRows = array of TFileRow;
+
+  { A directory: its path, its rows, and the two roots the gateway offers as
+    quick-switch destinations. }
+  TDirListing = record
+    Path:          string;
+    WorkspaceRoot: string;
+    CwdRoot:       string;
+    Rows:          TFileRows;
+  end;
+
+  { The kinds of answer page. Research is the multi-step mode -- plan, read
+    several independent sources, synthesise -- and the one that narrates. }
+  TPageKindSel = (pkeSearch, pkeData, pkeReport, pkeResearch);
 
   { Called for each streamed chunk of an assistant reply. Set Abort to stop. }
   TChatChunkProc = procedure(const Chunk: string; var Abort: Boolean) of object;
@@ -113,7 +149,7 @@ type
   TDesktopEvent = record
     Seq:     Int64;
     EvType:  string;   { projects | project | task | job | joblog | app | page |
-                         workspace | hello | gap }
+                         page-progress | workspace | hello | gap }
     Project: string;
     Task:    string;
     Id:      string;
@@ -168,12 +204,63 @@ type
     function StateGet(const Project, Key: string; out Value: string): Boolean;
     function StateSet(const Project, Key, Value: string): Boolean;
 
+    { ---- process apps ---- }
+    (* Start a process app. Consent is not a formality: without it the
+       gateway answers 409 and hands back the exact command, which is what a
+       client must show the user BEFORE asking. PlannedCommand gets that
+       command without starting anything. *)
+    function PlannedCommand(const Project: string; out Cmd: string): Boolean;
+    function RunApp(const Project: string; out Row: TRunRow;
+      out Err: string): Boolean;
+    function StopApp(const Project: string): Boolean;
+    function RunState(const Project: string; out Row: TRunRow): Boolean;
+    function RunLog(const Project: string): string;
+
+    (* Read and replace an app's entry file. The pair behind artifact
+       versions: a client captures the body a turn produced and can put it
+       back later. PutAppEntry writes ONE file -- the entry the manifest
+       already declares. *)
+    function AppEntry(const Project: string): string;
+    function PutAppEntry(const Project, Body: string): Boolean;
+
+    { ---- files ---- }
+    (* Browse the workspace. Sandbox-checked and secret-filtered server-side,
+       so a client shows exactly what the operator surface will show. Pass an
+       empty path for the gateway's default landing directory.
+
+       Listing is `var`, not `out`, on purpose. The natural way to descend is
+       ListDir(D.Path + '/sub', D) -- and with an `out` parameter the
+       compiler is free to clear D BEFORE evaluating that expression, so the
+       path silently becomes '/sub'. That cost an afternoon once; `var` makes
+       the idiom mean what it reads like. *)
+    function ListDir(const Path: string; var Listing: TDirListing): Boolean;
+    (* Read a file. Binary says so rather than handing back mojibake, and
+       Truncated says so rather than quietly showing the first slice of a
+       log as if it were the whole thing. *)
+    function ReadFile_(const Path: string; out Content: string;
+      out Binary, Truncated: Boolean): Boolean;
+
     { ---- pages ---- }
     function Pages: TPageRows;
     function PageURL(const Id: string): string;
     { Ask the gateway to research a query and render it as a page. Returns the
       new page id. Needs a gateway with an agent attached. }
     function CreatePage(const Query: string; out Id: string): Boolean;
+    { The same, with the mode chosen. Research takes minutes and narrates
+      through page-progress events; the others come back in one go. }
+    function CreatePageOfKind(const Query: string; Kind: TPageKindSel;
+      out Id: string): Boolean;
+    (* "Make this interactive" -- copy a page into a new project as an html
+       app. The page stays in the history: it is the record of an answer at a
+       time, and the app is the part that changes. *)
+    function PromotePage(const PageId: string; out Project: string): Boolean;
+
+    { ---- desktop state ---- }
+    (* The window layout, stored per WORKSPACE on the gateway rather than per
+       client. Both desktops read and write the same document, so a layout
+       arranged in one is the layout the other opens with. *)
+    function DesktopState: string;
+    function SetDesktopState(const JSON: string): Boolean;
 
     { ---- chat ---- }
     (* Stream one turn through /v1/chat/completions. History is a JSON array
@@ -505,6 +592,14 @@ begin
       Ev.Id      := Obj.GetStr('id', '');
       Ev.Status  := Obj.GetStr('status', '');
       Ev.Line    := Obj.GetStr('line', '');
+      { page-progress carries its own two fields. Mapping them onto Status
+        and Line keeps the record flat -- a client that shows "what is it
+        doing" reads the same two fields whatever produced them. }
+      if Ev.EvType = 'page-progress' then
+      begin
+        Ev.Status := Obj.GetStr('phase', '');
+        Ev.Line   := Obj.GetStr('detail', '');
+      end;
     finally
       Obj.Free;
     end;
@@ -618,6 +713,7 @@ begin
         FLastError := JsonReadStr(E.ErrorMessage, 'error', E.Message);
         E2 := EPasClawClient.Create(FLastError);
         E2.Status := E.ErrorCode;
+        E2.Body   := E.ErrorMessage;
         raise E2;
       end;
       on E: Exception do
@@ -964,6 +1060,254 @@ begin
   end;
 end;
 
+{ ---- process apps ---- }
+
+(* Percent-encode a path for a query string. Deliberately a whitelist of the
+   unreserved set: a Windows path carries backslashes and a colon, and a
+   filename can carry anything at all, so listing what is SAFE is the only
+   version of this that stays correct. *)
+function UrlEncode_(const S: string): string;
+var
+  I: Integer;
+  C: Char;
+begin
+  Result := '';
+  for I := 1 to Length(S) do
+  begin
+    C := S[I];
+    if (C in ['A'..'Z', 'a'..'z', '0'..'9', '-', '_', '.', '~', '/']) then
+      Result := Result + C
+    else
+      Result := Result + '%' + IntToHex(Ord(C), 2);
+  end;
+end;
+
+{ Fill a run record from the gateway's JSON. Shared by run/stop/state so the
+  three cannot drift into reporting different shapes of the same thing. }
+procedure FillRun(Obj: TJsonObject; out Row: TRunRow);
+begin
+  Row.Project  := Obj.GetStr('project', '');
+  Row.State    := Obj.GetStr('state', 'stopped');
+  Row.Started  := Obj.GetStr('started', '');
+  Row.Command  := Obj.GetStr('command', '');
+  Row.Backend  := Obj.GetStr('backend', 'host');
+  Row.Error    := Obj.GetStr('error', '');
+  Row.URL      := Obj.GetStr('url', '');
+  Row.Port     := Integer(Obj.GetInt('port', 0));
+  Row.ExitCode := Integer(Obj.GetInt('exit_code', 0));
+end;
+
+function TPasClawClient.PlannedCommand(const Project: string;
+  out Cmd: string): Boolean;
+var
+  Body: string;
+begin
+  Cmd := '';
+  Result := False;
+  (* Deliberately asks WITHOUT confirm. The 409 is not a failure here, it is
+     the answer: it carries the exact command, which is the thing a consent
+     dialog has to show. A confirmation that hides the command is theatre. *)
+  Body := '';
+  try
+    Body := Request('POST', '/v1/apps/' + Project + '/run', '{}');
+  except
+    on E: EPasClawClient do
+      Body := E.Body;
+  end;
+  Cmd := JsonReadStr(Body, 'command', '');
+  Result := Cmd <> '';
+end;
+
+function TPasClawClient.RunApp(const Project: string; out Row: TRunRow;
+  out Err: string): Boolean;
+var
+  Obj: TJsonObject;
+begin
+  FillChar(Row, SizeOf(Row), 0);
+  Err := '';
+  Result := False;
+  try
+    Obj := TJsonObject.Parse(
+      Request('POST', '/v1/apps/' + Project + '/run', '{"confirm":true}'));
+  except
+    on E: EPasClawClient do
+    begin
+      Err := E.Message;
+      Exit;
+    end;
+    on E: Exception do
+    begin
+      Err := E.Message;
+      Exit;
+    end;
+  end;
+  try
+    FillRun(Obj, Row);
+    Err := Row.Error;
+    Result := True;
+  finally
+    Obj.Free;
+  end;
+end;
+
+function TPasClawClient.StopApp(const Project: string): Boolean;
+begin
+  Result := False;
+  try
+    Request('POST', '/v1/apps/' + Project + '/stop', '{}');
+    Result := True;
+  except
+    Result := False;
+  end;
+end;
+
+function TPasClawClient.RunState(const Project: string; out Row: TRunRow): Boolean;
+var
+  Obj: TJsonObject;
+begin
+  FillChar(Row, SizeOf(Row), 0);
+  Result := False;
+  try
+    Obj := TJsonObject.Parse(GetJSON('/v1/apps/' + Project + '/run'));
+  except
+    Exit;
+  end;
+  try
+    FillRun(Obj, Row);
+    Result := True;
+  finally
+    Obj.Free;
+  end;
+end;
+
+function TPasClawClient.RunLog(const Project: string): string;
+begin
+  Result := JsonReadStr(GetJSON('/v1/apps/' + Project + '/runlog'), 'log', '');
+end;
+
+function TPasClawClient.AppEntry(const Project: string): string;
+var
+  Row: TAppRow;
+begin
+  Result := '';
+  if not App(Project, Row) then Exit;
+  if (not Row.Exists) or (Row.Entry = '') then Exit;
+  { The served asset, not a JSON wrapper -- this is the file itself. }
+  try
+    Result := Request('GET', '/apps/' + Project + '/' + Row.Entry, '');
+  except
+    Result := '';
+  end;
+end;
+
+function TPasClawClient.PutAppEntry(const Project, Body: string): Boolean;
+begin
+  Result := False;
+  try
+    Request('PUT', '/v1/apps/' + Project + '/entry', Body);
+    Result := True;
+  except
+    Result := False;
+  end;
+end;
+
+{ ---- files ---- }
+
+function TPasClawClient.ListDir(const Path: string;
+  var Listing: TDirListing): Boolean;
+var
+  Root: TJsonObject;
+  Arr: TJsonArray;
+  Item: TJsonObject;
+  I: Integer;
+  Q: string;
+begin
+  Listing.Path := '';
+  Listing.WorkspaceRoot := '';
+  Listing.CwdRoot := '';
+  SetLength(Listing.Rows, 0);
+  Result := False;
+  if Path <> '' then Q := '/v1/fs?path=' + UrlEncode_(Path) else Q := '/v1/fs';
+  try
+    Root := TJsonObject.Parse(GetJSON(Q));
+  except
+    Exit;
+  end;
+  try
+    Listing.Path          := Root.GetStr('path', '');
+    Listing.WorkspaceRoot := Root.GetStr('workspace_root', '');
+    Listing.CwdRoot       := Root.GetStr('cwd_root', '');
+    Arr := Root.ChildArray('entries');
+    if Arr <> nil then
+    begin
+      SetLength(Listing.Rows, Arr.Count);
+      for I := 0 to Arr.Count - 1 do
+      begin
+        Item := Arr.ItemObject(I);
+        if Item = nil then Continue;
+        Listing.Rows[I].Name  := Item.GetStr('name', '');
+        Listing.Rows[I].Size  := Item.GetInt('size', 0);
+        Listing.Rows[I].IsDir := Item.GetBool('dir', False);
+      end;
+    end;
+    Result := True;
+  finally
+    Root.Free;
+  end;
+end;
+
+function TPasClawClient.ReadFile_(const Path: string; out Content: string;
+  out Binary, Truncated: Boolean): Boolean;
+var
+  Root: TJsonObject;
+begin
+  Content := '';
+  Binary := False;
+  Truncated := False;
+  Result := False;
+  try
+    Root := TJsonObject.Parse(GetJSON('/v1/fs/read?path=' + UrlEncode_(Path)));
+  except
+    Exit;
+  end;
+  try
+    Binary    := Root.GetBool('binary', False);
+    Truncated := Root.GetBool('truncated', False);
+    Content   := Root.GetStr('content', '');
+    Result    := True;
+  finally
+    Root.Free;
+  end;
+end;
+
+{ ---- desktop state ---- }
+
+function TPasClawClient.DesktopState: string;
+begin
+  { An empty object is the honest answer for a desktop nobody has arranged
+    yet, and it is also what a gateway too old to know the route leaves us
+    with -- either way the caller opens an empty desktop rather than an
+    error. }
+  Result := '';
+  try
+    Result := GetJSON('/v1/desktop/state');
+  except
+    Result := '';
+  end;
+  if Trim(Result) = '' then Result := '{}';
+end;
+
+function TPasClawClient.SetDesktopState(const JSON: string): Boolean;
+begin
+  Result := False;
+  try
+    Request('PUT', '/v1/desktop/state', JSON);
+    Result := True;
+  except
+    Result := False;
+  end;
+end;
+
 { ---- pages ---- }
 
 function TPasClawClient.Pages: TPageRows;
@@ -999,6 +1343,50 @@ end;
 function TPasClawClient.PageURL(const Id: string): string;
 begin
   Result := FBaseURL + '/pages/' + Id + '/';
+end;
+
+function PageKindName(K: TPageKindSel): string;
+begin
+  case K of
+    pkeData:     Result := 'data';
+    pkeReport:   Result := 'report';
+    pkeResearch: Result := 'research';
+    else         Result := 'search';
+  end;
+end;
+
+function TPasClawClient.CreatePageOfKind(const Query: string; Kind: TPageKindSel;
+  out Id: string): Boolean;
+var
+  Req: TJsonObject;
+begin
+  Id := '';
+  Req := TJsonObject.Create;
+  try
+    Req.PutStr('query', Query);
+    Req.PutStr('kind', PageKindName(Kind));
+    try
+      Id := JsonReadStr(Request('POST', '/v1/pages', Req.ToJSON), 'id', '');
+    except
+      Id := '';
+    end;
+  finally
+    Req.Free;
+  end;
+  Result := Id <> '';
+end;
+
+function TPasClawClient.PromotePage(const PageId: string;
+  out Project: string): Boolean;
+begin
+  Project := '';
+  try
+    Project := JsonReadStr(
+      Request('POST', '/v1/pages/' + PageId + '/promote', '{}'), 'project', '');
+  except
+    Project := '';
+  end;
+  Result := Project <> '';
 end;
 
 function TPasClawClient.CreatePage(const Query: string; out Id: string): Boolean;
