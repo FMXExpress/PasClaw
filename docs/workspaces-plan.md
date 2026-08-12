@@ -231,10 +231,12 @@ concurrent requests. Shell-skill children inherit the pin too: `RunShell`
 passes `PASCLAW_WORKSPACE=<pin>` as child-only env, so a spawned process
 doing its own workspace resolution sees the pinned workspace, not the
 config default (proven by the wsprobe test in
-`workspace_isolation_tests`). Remaining honest limits: a *prompt-kind*
-cron skill goes through the model, and whatever the model's tools spawn
-is scoped by the agent process, not the pin; and per-request workspace
-scoping (§6.2 option 1) is still the direction,
+`workspace_isolation_tests`). (An earlier draft flagged *prompt-kind*
+cron skills as a gap; on inspection there is none — fired from cron they
+only render their template and log/post it, no model call and no child
+processes. The model consumes prompt skills during normal agent turns,
+which run as the gateway's active workspace.) Remaining honest limit:
+per-request workspace scoping (§6.2 option 1) is still the direction,
 one-gateway-per-workspace the shipped answer for concurrency.
 
 **Earlier status: phases 1–5 are built** — one commit routed every hardcoded
