@@ -11496,7 +11496,20 @@ begin
   if FWorkflowNodeIdEdit <> nil then
     FWorkflowNodeIdEdit.Text := Trim(FWorkflowNodeFormIdEdit.Text);
   WorkflowApplyInspectorClick(nil);
-  FWorkflowNodeFormNodeId := Trim(FWorkflowNodeFormIdEdit.Text);
+  { Read the identity back off the LIST, never off the edit that requested
+    it: WorkflowUpdateNodeClick refuses a blank or duplicate id and leaves
+    the node as it was, so trusting the request would point this form at a
+    node it is not editing -- and "Use as output" would then wire the OTHER
+    node that already owns that id. The list item is the only thing that
+    knows which rename actually happened. }
+  if (FWorkflowNodesList <> nil) and (FWorkflowNodesList.Selected <> nil) then
+  begin
+    FWorkflowNodeFormNodeId :=
+      WorkflowTextId(FWorkflowNodesList.Selected.Text);
+    { and show the id that survived, so a rejected rename does not sit in
+      the field looking applied }
+    FWorkflowNodeFormIdEdit.Text := FWorkflowNodeFormNodeId;
+  end;
   if FWorkflowCanvas <> nil then
     FWorkflowCanvas.Repaint;
 end;
@@ -11521,10 +11534,19 @@ begin
   if (I >= 0) and (FWorkflowNodesList <> nil) and
     (FWorkflowNodesList.ListItems[I] <> nil) then
     Tool := WorkflowTextTool(FWorkflowNodesList.ListItems[I].Text);
-  if SameText(Tool, 'llm') then
-    Template := '{{nodes.' + NodeId + '}}'
+  { Which reference actually resolves is decided by the ENGINE, not by
+    "is it an llm". PlanNode auto-polls exactly two tool names and lifts
+    output[0] into the node's text for them; every other node -- generic MCP
+    tools, registered tools, llm -- exposes its result as that text and may
+    carry no output array at all, so a selector there resolves to nothing
+    and the declared output silently comes back empty. Bare is the safe
+    default; the selector is the exception, for the one shape that
+    guarantees it. }
+  Tool := LowerCase(Trim(Tool));
+  if (Tool = 'replicate') or (Tool = 'replicate__create_predictions') then
+    Template := '{{nodes.' + NodeId + '.output[0]}}'
   else
-    Template := '{{nodes.' + NodeId + '.output[0]}}';
+    Template := '{{nodes.' + NodeId + '}}';
 
   Existing := -1;
   for I := 0 to FWorkflowOutputsMemo.Lines.Count - 1 do

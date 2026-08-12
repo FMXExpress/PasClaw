@@ -4575,11 +4575,18 @@ function wfRenderIOBoxes(canvas) {
   }));
 }
 
-/* The sensible node-output reference for drag-to-wire: llm nodes emit text
-   (bare {{nodes.ID}}); model/tool nodes emit a prediction object ({{...output[0]}}). */
+/* The node-output reference for drag-to-wire. The ENGINE decides which one
+   resolves: PlanNode auto-polls exactly these two tool names and lifts
+   output[0] into the node's text for them. Every other node -- generic MCP
+   tools, registered tools, llm -- exposes its result AS that text and may
+   have no output array at all, so a selector there resolves to nothing and
+   the output silently comes back empty. Bare is the safe default. */
+const WF_PREDICTION_TOOLS = ["replicate", "replicate__create_predictions"];
 function wfDefaultRef(nodeId) {
   const n = wf.nodes.find(x => x.id === nodeId);
-  return (n && n.tool === "llm") ? `{{nodes.${nodeId}}}` : `{{nodes.${nodeId}.output[0]}}`;
+  const t = (n && n.tool || "").trim().toLowerCase();
+  return WF_PREDICTION_TOOLS.includes(t)
+    ? `{{nodes.${nodeId}.output[0]}}` : `{{nodes.${nodeId}}}`;
 }
 /* Set (or add) an output field's template from a drag-to-wire drop, writing it
    back through the #wfOutputs editor so save/load stay the single source. */
