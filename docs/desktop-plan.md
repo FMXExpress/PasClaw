@@ -69,7 +69,7 @@ software.
 
 | Level | What it is | Where it lives | Desktop metaphor |
 |---|---|---|---|
-| **Workspace** | An isolated agent world: its own memory, sessions, skills, projects. PasClaw has exactly one today (`$PASCLAW_HOME/workspace`); we allow N. | `$PASCLAW_HOME/workspace` (default), `$PASCLAW_HOME/workspace2`, `workspace3`, … | A virtual desktop (Linux workspaces / macOS Spaces). Switching workspace switches the whole desktop. |
+| **Workspace** | *Designed as* an isolated agent world (own memory, sessions, skills, projects). **As built: projects, pages and desktop layout only** — see "Still open". | `$PASCLAW_HOME/workspace` (default), `$PASCLAW_HOME/workspace2`, `workspace3`, … | A virtual desktop (Linux workspaces / macOS Spaces). Switching workspace switches the boards. |
 | **Project** | A thing being built — usually an app the agent is producing, plus its docs/data. | `<workspace>/projects/<name>/` | A node in the left-side tree; opening it opens its windows. |
 | **Task** | A unit of intent inside a project ("add IMAP polling", "filter spam"). Has status, description, an ordered job list. | `<workspace>/projects/<name>/tasks/<id>/` | A row in the project's Task window / tree child node. |
 | **Job** | One agent run executing (part of) a task — maps to a session + tool loop, or a background subagent. Has transcript, artifacts, exit status. | `<workspace>/projects/<name>/tasks/<id>/jobs/<id>/` | A progress row; double-click opens its live log window. |
@@ -433,6 +433,15 @@ drafts, artifact versions and per-workspace desktop state all exist; the web
 client is on the event stream; and the Docker path no longer assumes a local
 daemon.
 
+**One thing this work deliberately did NOT do: change PasClaw.** The agent
+package is untouched -- no system prompt, no promptware, no orient preamble,
+no tool-loop change -- and so is the config's existing surface. The whole
+branch is ~23k insertions against 15 deletions, and none of those deletions
+are behaviour. The one place it leaked was the `project`/`task` tools, which
+were registered unconditionally in `agent`, `serve` and `gateway`; they are
+now behind `desktop_tools_enabled` (default off), so a session that never
+opens a desktop sees exactly the tool list it saw before.
+
 What remains splits into three honest categories.
 
 **Unverified, not unbuilt.** The build environment has no Docker daemon, no
@@ -472,6 +481,14 @@ written blind. It still has to be compiled once by someone with RAD Studio.
   while the model is primed with another's would be a prettier lie.
 - **One active workspace per gateway process.** Switching repoints; N live
   workspaces is an extension the per-workspace store already handles.
+- **Workspaces do not yet separate memory, sessions or skills.** §1 called
+  the path-resolution refactor "the one cross-cutting refactor in the plan
+  and the first thing to land". It deliberately did NOT land: the brief was
+  to add a desktop without changing PasClaw's own behaviour, and repointing
+  the session store, the memory index and the skills directory is exactly
+  that kind of change. `PasClaw.Workspaces` exists and creates the full
+  layout, so the refactor is a wiring job whenever it is wanted -- but today
+  a workspace separates boards, not the agent's memory.
 
 ## 6. Risks / open questions
 

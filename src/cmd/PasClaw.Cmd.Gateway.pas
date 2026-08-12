@@ -297,7 +297,9 @@ begin
       { project/task: the desktop board. Always on -- they only write
         manifests under the active workspace, and the desktop clients are
         useless without them. }
-      RegisterProjectTools(Reg);
+      { project/task: opt-in, same reasoning as the cron tool above. The
+        desktop works without it -- it drives the board over HTTP. }
+      if Cfg.DesktopToolsEnabled then RegisterProjectTools(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
       SetDBConfigFromJSON(Cfg.DatabaseJSON);   { db_* connections (inert if no "database" section) }

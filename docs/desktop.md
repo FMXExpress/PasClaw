@@ -33,7 +33,7 @@ For the native client, see [`desktop/README.md`](../desktop/README.md).
 
 | Level | What it is | Where it lives |
 |---|---|---|
-| **Workspace** | An isolated agent world — its own memory, sessions, skills and projects. Switching one is like switching virtual desktops. | `$PASCLAW_HOME/workspace`, `workspace2`, `workspace3`, … |
+| **Workspace** | A separate set of projects, pages and desktop layout. Switching one is like switching virtual desktops. | `$PASCLAW_HOME/workspace`, `workspace2`, `workspace3`, … |
 | **Project** | A thing being built, usually an app, plus its tasks. | `<workspace>/projects/<name>/` |
 | **Task** | A unit of intent inside a project. | `.../tasks/T0001/` |
 | **Job** | One agent run working a task. | `.../tasks/T0001/jobs/J0001/` |
@@ -52,8 +52,17 @@ pasclaw workspace use workspace2
 ```
 
 `$PASCLAW_WORKSPACE` overrides the active workspace for a single process,
-which is how a subagent or a second gateway runs in another world without
-editing your config.
+which is how a subagent or a second gateway runs against another set of
+projects without editing your config.
+
+**What a workspace actually separates, today.** Projects, answer pages and
+the desktop layout. *Not* memory, sessions or skills: those still resolve to
+`$PASCLAW_HOME/workspace/...` whichever workspace is active, because routing
+them through the workspace resolver would be a cross-cutting change to
+PasClaw's own behaviour and this work deliberately stayed out of that. A
+`workspaceN` directory gets the full layout created for it, so the day that
+refactor lands nothing has to move -- but until then, switching workspaces
+switches your boards, not the agent's memory.
 
 In the desktop, the taskbar's `[1] [2] [3]` pager switches workspaces
 (Ctrl+Alt+←/→). Switching closes the current desktop's windows — they belong
@@ -67,12 +76,24 @@ pasclaw project new "Spam Filter"
 pasclaw project show spam-filter
 ```
 
-The agent manages the same board itself through two tools:
+The agent can manage the same board itself through two tools, **off by
+default**:
+
+```json
+{ "desktop_tools_enabled": true }
+```
 
 | Tool | Actions |
 |---|---|
 | `project` | `list`, `create`, `get`, `update` |
 | `task` | `list`, `create`, `update`, `job` |
+
+The desktop does not need them — both clients drive the board over HTTP, and
+everything in this document works with the flag off. They exist for when you
+want the *model* to open and close its own tasks. Off by default on purpose:
+PasClaw's behaviour should not change for someone who never opens a desktop,
+and two extra tools in the schema is two extra tools the model reads every
+turn. Same opt-in shape as `cron_tool_enabled`.
 
 Jobs are opened by the runtime when a turn starts working a task, so the
 model only has to close them. Opening a job marks its task **active**;

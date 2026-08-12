@@ -256,8 +256,8 @@ begin
       { cron tool: opt-in (model-scheduled background jobs). Runs existing
         skills only; the running scheduler picks up its config edits live. }
       if Cfg.CronToolEnabled then RegisterCronTool(Reg);
-      { project/task: the desktop board (see Cmd.Gateway). }
-      RegisterProjectTools(Reg);
+      { project/task: opt-in, see Cmd.Gateway. }
+      if Cfg.DesktopToolsEnabled then RegisterProjectTools(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
       SetDBConfigFromJSON(Cfg.DatabaseJSON);   { db_* connections (inert if no "database" section) }
