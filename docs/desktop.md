@@ -55,16 +55,22 @@ pasclaw workspace use workspace2
 which is how a subagent or a second gateway runs against another set of
 projects without editing your config.
 
-**What a workspace actually separates, today.** Projects, answer pages and
-the desktop layout. *Not* memory, sessions or skills: those still resolve to
-`$PASCLAW_HOME/workspace/...` whichever workspace is active. So a workspace
-is a set of boards, not a wall — do not use one to keep two clients' work
-apart, because the agent's memory does not move when you switch.
+**A workspace is a wall.** Memory (facts, notes, MEMORY.md), sessions,
+skills, the knowledgebase, checkpoints, cron state, projects, pages and the
+desktop layout are all per-workspace. Business A in workspace 1 and business
+B in workspace 2 do not know each other: what the agent remembers, what it
+has indexed, and what its sandbox can reach all switch together, and
+`workspace_isolation_tests` proves it — including that with
+`restrict_to_workspace` on, the sandbox *refuses* a read into the other
+workspace rather than merely not finding anything.
 
-[`workspaces-plan.md`](workspaces-plan.md) is the plan for making it a real
-wall, and for putting the virtual-desktop half of the metaphor where it
-belongs: as **desktops inside a workspace**, which is the part that should
-be cheap to flick between.
+Single-workspace installs are untouched: every path resolves byte-for-byte
+to what it was before (also pinned by test). Two caveats: **one gateway
+serves one active workspace at a time** — for truly concurrent work in two
+workspaces, run two gateways on different ports — and cron jobs run in
+whichever workspace is active when they fire.
+[`workspaces-plan.md`](workspaces-plan.md) covers what remains (desktops
+inside a workspace, per-workspace profiles, workspace-tagged cron).
 
 In the desktop, the taskbar's `[1] [2] [3]` pager switches workspaces
 (Ctrl+Alt+←/→). Switching closes the current desktop's windows — they belong

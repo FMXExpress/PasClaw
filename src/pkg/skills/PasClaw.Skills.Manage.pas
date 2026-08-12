@@ -97,6 +97,7 @@ function GuardScan(const Text: string; const Extra: array of string;
 implementation
 
 uses
+  PasClaw.Workspaces,
   StrUtils,
   PasClaw.Utils,
   PasClaw.JSON,
@@ -178,7 +179,7 @@ end;
 
 function SkillsRoot(const HomeDir: string): string;
 begin
-  Result := JoinPath(HomeDir, 'workspace/skills');
+  Result := JoinPath(HomeDir, ActiveWorkspaceName + '/skills');
 end;
 
 function PendingRoot(const HomeDir: string): string;

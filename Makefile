@@ -424,6 +424,15 @@ test-mail: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/mail_tests.pas -o$(BUILDDIR)/mail_tests
 	@PASCLAW_HOME=$(BUILDDIR)/mail-test-home $(BUILDDIR)/mail_tests
 
+# The wall: business A in workspace 1 and business B in workspace 2 must not
+# know each other. Includes the no-op half -- single-workspace paths must be
+# byte-identical to the pre-refactor strings.
+test-workspace-isolation: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	@rm -rf $(BUILDDIR)/isolation-test-home
+	$(FPC) $(FPCFLAGS) src/tests/workspace_isolation_tests.pas -o$(BUILDDIR)/workspace_isolation_tests
+	@PASCLAW_HOME=$(BUILDDIR)/isolation-test-home $(BUILDDIR)/workspace_isolation_tests
+
 test-desktop-routes: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	@rm -rf $(BUILDDIR)/desktop-routes-test-home
@@ -452,7 +461,7 @@ test-client-api: $(BIN) | $(BUILDDIR)
 		rm -f $(BUILDDIR)/client-api.pid; exit $$rc
 
 # Everything the desktop client depends on, in dependency order.
-test-desktop: lint-pascal-shape test-workspaces test-projects test-apps test-mail test-desktop-routes test-client-api
+test-desktop: lint-pascal-shape test-workspaces test-projects test-apps test-mail test-workspace-isolation test-desktop-routes test-client-api
 
 # Provider catalog rows + ChatPath override (Perplexity uses /chat/completions).
 test-provider-catalog: | $(BUILDDIR)

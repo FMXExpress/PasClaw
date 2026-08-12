@@ -46,6 +46,7 @@ function Cmd_Serve_Run(const Argv: array of string): Integer;
 implementation
 
 uses
+  PasClaw.Workspaces,
   SysUtils,
   PasClaw.Config, PasClaw.CliUI, PasClaw.Logger,
   PasClaw.Providers.Intf,
@@ -133,6 +134,18 @@ begin
   if Result.MaxIter < 1 then Result.MaxIter := 1;
 end;
 
+{ Handler for a runtime workspace switch: repoint the sandbox at the new
+  root. Unit-level, because a nested procedure cannot be assigned to a
+  procedure-type variable. }
+procedure RepointSandbox(const NewRoot: string);
+var
+  Cfg: TConfig;
+begin
+  ForceDirectories(NewRoot);
+  Cfg := LoadConfig;
+  ConfigureSandbox(Cfg.Sandbox, NewRoot);
+end;
+
 function Cmd_Serve_Run(const Argv: array of string): Integer;
 var
   Cfg: TConfig;
@@ -168,8 +181,11 @@ begin
   else
   begin
     { Ensure the default work area exists so shell_exec can start there too. }
-    ForceDirectories(IncludeTrailingPathDelimiter(GetHome) + 'workspace');
-    ConfigureSandbox(Cfg.Sandbox, IncludeTrailingPathDelimiter(GetHome) + 'workspace');
+    ForceDirectories(IncludeTrailingPathDelimiter(GetHome) + ActiveWorkspaceName);
+    ConfigureSandbox(Cfg.Sandbox, IncludeTrailingPathDelimiter(GetHome) + ActiveWorkspaceName);
+    { serve mounts the same desktop routes as gateway, so a runtime switch
+      must repoint the sandbox here too. }
+    OnWorkspaceSwitched := RepointSandbox;
   end;
   ShellSessionId := '';
   Scheduler := nil;   { so the finally is safe if we Exit before starting it }

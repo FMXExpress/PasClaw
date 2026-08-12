@@ -134,6 +134,7 @@ const
 implementation
 
 uses
+  PasClaw.Workspaces,
   DateUtils, StrUtils,
   {$IFDEF FPC}
   sqldb, sqlite3conn,
@@ -171,7 +172,7 @@ const
 
 function DefaultKBDbPath: string;
 begin
-  Result := JoinPath(JoinPath(GetHome, 'workspace'), 'kb.db');
+  Result := JoinPath(JoinPath(GetHome, ActiveWorkspaceName), 'kb.db');
 end;
 
 (* ======================= pure helpers ================================ *)

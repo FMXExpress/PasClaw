@@ -257,6 +257,7 @@ procedure AccumulateTurnStats(var Meta: TSessionMeta;
 implementation
 
 uses
+  PasClaw.Workspaces,
   DateUtils,
   {$IFDEF MSWINDOWS}
   { Lets dcc64 inline SysUtils.RenameFile (used by Save's atomic
@@ -381,7 +382,7 @@ end;
 
 function SessionsDir: string;
 begin
-  Result := JoinPath(GetHome, 'workspace/sessions');
+  Result := JoinPath(GetHome, ActiveWorkspaceName + '/sessions');
 end;
 
 function SessionPath(const Id: string): string;

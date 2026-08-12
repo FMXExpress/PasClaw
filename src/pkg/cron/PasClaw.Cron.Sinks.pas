@@ -48,6 +48,7 @@ function PostCronToChannel(const Kind, Target, Text: string): Boolean;
 implementation
 
 uses
+  PasClaw.Workspaces,
   PasClaw.Utils,
   PasClaw.Config,
   PasClaw.Logger,
@@ -61,7 +62,7 @@ uses
 function DailyNotePath: string;
 begin
   Result := JoinPath(GetHome,
-              'workspace/memory/' +
+              ActiveWorkspaceName + '/memory/' +
               FormatDateTime('yyyy-mm-dd', Now) + '.md');
 end;
 

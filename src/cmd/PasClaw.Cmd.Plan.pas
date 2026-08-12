@@ -78,6 +78,7 @@ const
 implementation
 
 uses
+  PasClaw.Workspaces,
   SysUtils, Classes,
   {$IFDEF MSWINDOWS}Windows,{$ENDIF}
   PasClaw.CliUI,
@@ -492,7 +493,7 @@ begin
       { 2. cwd. }
       Cwd := A.Cwd;
       if Cwd = '' then
-        Cwd := JoinPath(Home, 'workspace');
+        Cwd := JoinPath(Home, ActiveWorkspaceName);
       if not ForceDirectories(Cwd) then
       begin
         PrintErr('plan: cannot create cwd: ' + Cwd);

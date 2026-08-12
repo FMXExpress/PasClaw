@@ -43,6 +43,7 @@ function RunMembench(const Opts: TMembenchOpts): TMembenchResult;
 implementation
 
 uses
+  PasClaw.Workspaces,
   Classes, DateUtils,
   {$IFNDEF FPC}IOUtils,{$ENDIF}
   PasClaw.Memory,
@@ -120,7 +121,7 @@ begin
   SessionId := 'membench-' + FormatDateTime('yyyymmdd-hhnnsszzz', Now);
   Log := NewMemoryLog(Home, SessionId);
   { Match the path NewMemoryLog actually wrote -- native separators throughout. }
-  Path := JoinPath(JoinPath(JoinPath(Home, 'workspace'), 'memory'), SessionId + '.ndjson');
+  Path := JoinPath(JoinPath(JoinPath(Home, ActiveWorkspaceName), 'memory'), SessionId + '.ndjson');
   Result.Path := Path;
 
   Payload := MakePayload(Opts.ContentSize);

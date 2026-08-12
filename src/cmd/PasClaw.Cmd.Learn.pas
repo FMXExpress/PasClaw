@@ -87,6 +87,7 @@ procedure ReadExistingScars(const Path: string;
 implementation
 
 uses
+  PasClaw.Workspaces,
   SysUtils, DateUtils,                { Classes already in interface uses
                                         for TStringList in the ReadExistingScars
                                         signature; pulling it in again here
@@ -571,7 +572,7 @@ begin
     Exit;
   end;
 
-  Path := JoinPath(JoinPath(GetHome, 'workspace/memory'), 'MEMORY.md');
+  Path := JoinPath(JoinPath(GetHome, ActiveWorkspaceName + '/memory'), 'MEMORY.md');
   if not DirectoryExists(ExtractFilePath(Path)) then
     ForceDirectories(ExtractFilePath(Path));
 
@@ -778,7 +779,7 @@ var
   i, FreshCount, SkippedCount: Integer;
   Anchor, Sig: string;
 begin
-  Path := JoinPath(JoinPath(GetHome, 'workspace/memory'), 'SCARS.md');
+  Path := JoinPath(JoinPath(GetHome, ActiveWorkspaceName + '/memory'), 'SCARS.md');
   if not DirectoryExists(ExtractFilePath(Path)) then
     ForceDirectories(ExtractFilePath(Path));
 

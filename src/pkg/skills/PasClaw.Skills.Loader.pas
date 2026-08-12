@@ -107,6 +107,7 @@ function ParseSkillMDText(const Text, SourcePath: string;
 implementation
 
 uses
+  PasClaw.Workspaces,
   PasClaw.Workflow.Tools,   { workflow_save/list/run -- registered at every
                               registry-build site alongside skills }
   PasClaw.Tools.DB,         { db_info/tables/describe/query/execute -- inert
@@ -525,7 +526,7 @@ var
   i: Integer;
 begin
   SetLength(Result, 0);
-  Root := JoinPath(HomeDir, 'workspace/skills');
+  Root := JoinPath(HomeDir, ActiveWorkspaceName + '/skills');
   if not DirectoryExists(Root) then Exit;
   { Per-directory SKILL.md takes priority -- that is the format every new
     skill (picoclaw, nanobot, ClawHub, Anthropic agent-skills) ships in. }

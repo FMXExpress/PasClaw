@@ -177,6 +177,7 @@ function HexToEmb(const S: string): TArray<Single>;
 implementation
 
 uses
+  PasClaw.Workspaces,
   {$IFDEF FPC}
   sqldb, sqlite3conn,
   {$ELSE}
@@ -189,7 +190,7 @@ uses
 
 function DefaultFactsDbPath(const HomeDir: string): string;
 begin
-  Result := JoinPath(JoinPath(JoinPath(HomeDir, 'workspace'), 'memory'), 'facts.db');
+  Result := JoinPath(JoinPath(JoinPath(HomeDir, ActiveWorkspaceName), 'memory'), 'facts.db');
 end;
 
 const

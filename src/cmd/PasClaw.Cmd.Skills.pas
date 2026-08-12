@@ -41,6 +41,7 @@ function Cmd_Skills_Run(const Argv: array of string): Integer;
 implementation
 
 uses
+  PasClaw.Workspaces,
   SysUtils, Classes, PasClaw.Config, PasClaw.CliUI, PasClaw.Utils, PasClaw.Logger,
   PasClaw.Skills.Loader,
   PasClaw.Skills.GitHub,
@@ -201,7 +202,7 @@ begin
   Specs := LoadSkillManifests(GetHome);
   if Length(Specs) = 0 then
   begin
-    PrintLn('(no skills found at ' + JoinPath(GetHome, 'workspace/skills') + ')');
+    PrintLn('(no skills found at ' + JoinPath(GetHome, ActiveWorkspaceName + '/skills') + ')');
     PrintLn('Add one: mkdir -p ~/.pasclaw/workspace/skills/<name>; place a SKILL.md inside.');
     Exit(0);
   end;
@@ -225,7 +226,7 @@ function DoInstallGitHub(const Target: string): Integer;
 var
   DestRoot, Installed, ErrMsg: string;
 begin
-  DestRoot := JoinPath(GetHome, 'workspace/skills');
+  DestRoot := JoinPath(GetHome, ActiveWorkspaceName + '/skills');
   PrintLn('Fetching ' + Target + ' …');
   if not InstallFromGitHub(Target, DestRoot, Installed, ErrMsg) then
   begin
@@ -267,7 +268,7 @@ var
   Slug, Version, DestRoot, Installed, ErrMsg: string;
 begin
   SplitSlugAtVersion(Target, Slug, Version);
-  DestRoot := JoinPath(GetHome, 'workspace/skills');
+  DestRoot := JoinPath(GetHome, ActiveWorkspaceName + '/skills');
   if Version <> '' then
     PrintLn('Fetching clawhub:' + Slug + ' @' + Version + ' …')
   else
@@ -294,7 +295,7 @@ var
   Slug, Version, DestRoot, Installed, ErrMsg: string;
 begin
   SplitSlugAtVersion(Target, Slug, Version);
-  DestRoot := JoinPath(GetHome, 'workspace/skills');
+  DestRoot := JoinPath(GetHome, ActiveWorkspaceName + '/skills');
   if Version <> '' then
     PrintLn('Fetching pasclaw.dev: ' + Slug + ' @' + Version + ' …')
   else
@@ -341,7 +342,7 @@ var
   HubNotFound, ClawNotFound: Boolean;
 begin
   SplitSlugAtVersion(Argv[1], Slug, Version);
-  DestRoot := JoinPath(GetHome, 'workspace/skills');
+  DestRoot := JoinPath(GetHome, ActiveWorkspaceName + '/skills');
 
   if Version <> '' then
     PrintLn('Fetching pasclaw.dev: ' + Slug + ' @' + Version + ' …')
@@ -581,7 +582,7 @@ begin
   end;
   RemovedFiles := False;
 
-  WorkspaceDir := JoinPath(GetHome, 'workspace/skills');
+  WorkspaceDir := JoinPath(GetHome, ActiveWorkspaceName + '/skills');
   LegacyJSON   := JoinPath(WorkspaceDir, Argv[1] + '.json');
   if FileExists(LegacyJSON) then
   begin

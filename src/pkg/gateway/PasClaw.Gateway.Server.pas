@@ -547,6 +547,7 @@ function ResolveResponsesToolChoice(Req: TJsonObject): string;
 implementation
 
 uses
+  PasClaw.Workspaces,
   DateUtils,
   {$IFDEF FPC}{$IFDEF UNIX}BaseUnix,{$ENDIF}{$ENDIF}
   IdTCPConnection,
@@ -846,7 +847,7 @@ begin
     concurrently. No-op when disabled. }
   CC.Enabled   := FCfg.CheckpointsEnabled;
   CC.SessionId := CheckpointSessionId('');
-  CC.Root      := JoinPath(GetHome, 'workspace/checkpoints');
+  CC.Root      := JoinPath(GetHome, ActiveWorkspaceName + '/checkpoints');
   CC.KeepLast  := FCfg.CheckpointsKeepLast;
   InitCheckpoints(CC);
   { Phase 4c: best-effort load the local embedder so distilled-fact dedup
@@ -1988,7 +1989,7 @@ begin
     WriteJSON(AResp, 400, '{"error":"missing field: target"}');
     Exit;
   end;
-  DestRoot := JoinPath(GetHome, 'workspace/skills');
+  DestRoot := JoinPath(GetHome, ActiveWorkspaceName + '/skills');
   if not InstallSkillTarget(Target, DestRoot, Name, Err) then
   begin
     WriteJSON(AResp, 502, '{"error":"' + JsonEscape(Err) + '"}');
@@ -2110,7 +2111,7 @@ var
   Strm: TMemoryStream;
   FS: TFileStream;
 begin
-  WsDir := JoinPath(GetHome, 'workspace');
+  WsDir := JoinPath(GetHome, ActiveWorkspaceName);
   if not DirectoryExists(WsDir) then
   begin
     WriteJSON(AResp, 404, '{"error":"no workspace directory yet"}');
@@ -2265,7 +2266,7 @@ begin
   end;
 
   Stamp    := FormatDateTime('yyyymmdd-hhnnss', Now);
-  WsDir    := JoinPath(GetHome, 'workspace');
+  WsDir    := JoinPath(GetHome, ActiveWorkspaceName);
   ZipPath  := JoinPath(GetHome, 'workspace-import-' + Stamp + '.zip');
   StageDir := JoinPath(GetHome, 'workspace-import-stage-' + Stamp);
   try
@@ -2454,7 +2455,7 @@ begin
     Exit;
   end;
 
-  Dir := JoinPath(GetHome, 'workspace/kb-files');
+  Dir := JoinPath(GetHome, ActiveWorkspaceName + '/kb-files');
   if not ForceDirectories(Dir) then
   begin
     WriteJSON(AResp, 500, '{"error":"could not create workspace/kb-files"}');
@@ -2555,7 +2556,7 @@ begin
     WriteJSON(AResp, 400, '{"error":"unsafe skill name"}');
     Exit;
   end;
-  DestRoot := JoinPath(GetHome, 'workspace/skills');
+  DestRoot := JoinPath(GetHome, ActiveWorkspaceName + '/skills');
   if RemoveSkillFiles(DestRoot, Name) then
   begin
     LogInfo('gateway: removed skill %s via /v1/skills', [Name]);
@@ -2577,7 +2578,7 @@ begin
   Root := TJsonObject.Create;
   try
     Arr := TJsonArray.Create;
-    Dir := JoinPath(GetHome, 'workspace/memory');
+    Dir := JoinPath(GetHome, ActiveWorkspaceName + '/memory');
     if DirectoryExists(Dir) then
     begin
       if FindFirst(JoinPath(Dir, '*.md'), faAnyFile, SR) = 0 then
@@ -2623,7 +2624,7 @@ begin
   if K < 1   then K := DefaultK;
   if K > MaxK then K := MaxK;
 
-  Dir := JoinPath(GetHome, 'workspace/memory');
+  Dir := JoinPath(GetHome, ActiveWorkspaceName + '/memory');
   if not DirectoryExists(Dir) then
   begin
     WriteJSON(AResp, 200, '{"hits":[]}');   { no memory written yet }
@@ -2692,7 +2693,7 @@ begin
     WriteJSON(AResp, 400, '{"error":"bad name"}');
     Exit;
   end;
-  Path := JoinPath(JoinPath(GetHome, 'workspace/memory'), Name);
+  Path := JoinPath(JoinPath(GetHome, ActiveWorkspaceName + '/memory'), Name);
   if not FileExists(Path) then
   begin
     WriteJSON(AResp, 404, '{"error":"not found"}');
@@ -3918,7 +3919,7 @@ begin
     offer a switch to) it even on a fresh web-only / Docker boot where no
     agent has run yet to create it. Best-effort; a failure just means the
     workspace button won't appear. }
-  WsRoot := JoinPath(GetHome, 'workspace');
+  WsRoot := JoinPath(GetHome, ActiveWorkspaceName);
   ForceDirectories(WsRoot);
   Path := ARequest.Params.Values['path'];
   if Path = '' then
@@ -4311,7 +4312,7 @@ var
 begin
   CC.Enabled   := FCfg.CheckpointsEnabled;
   CC.SessionId := CheckpointSessionId(ReqSession);
-  CC.Root      := JoinPath(GetHome, 'workspace/checkpoints');
+  CC.Root      := JoinPath(GetHome, ActiveWorkspaceName + '/checkpoints');
   CC.KeepLast  := FCfg.CheckpointsKeepLast;
   InitCheckpoints(CC);
 end;

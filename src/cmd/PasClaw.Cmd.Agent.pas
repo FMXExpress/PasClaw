@@ -24,6 +24,7 @@ function Cmd_Agent_Run(const Argv: array of string): Integer;
 implementation
 
 uses
+  PasClaw.Workspaces,
   SysUtils, Classes,
   PasClaw.Config, PasClaw.Utils, PasClaw.CliUI, PasClaw.Logger,
   PasClaw.Memory.AutoDistill,
@@ -1188,7 +1189,7 @@ var
     if Session = nil then Exit;
     CC.Enabled   := Cfg.CheckpointsEnabled;
     CC.SessionId := Session.Meta.Id;
-    CC.Root      := JoinPath(GetHome, 'workspace/checkpoints');
+    CC.Root      := JoinPath(GetHome, ActiveWorkspaceName + '/checkpoints');
     CC.KeepLast  := Cfg.CheckpointsKeepLast;
     InitCheckpoints(CC);
   end;

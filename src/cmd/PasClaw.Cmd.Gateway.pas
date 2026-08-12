@@ -24,6 +24,7 @@ function Cmd_Gateway_Run(const Argv: array of string): Integer;
 implementation
 
 uses
+  PasClaw.Workspaces,
   SysUtils,
   PasClaw.Config, PasClaw.CliUI, PasClaw.Logger,
   PasClaw.Providers.Intf,
@@ -107,6 +108,15 @@ type
     AppsPort:       Integer;
     MCPAllowWrite:  Boolean;
   end;
+
+procedure RepointSandbox(const NewRoot: string);
+var
+  Cfg: TConfig;
+begin
+  ForceDirectories(NewRoot);
+  Cfg := LoadConfig;
+  ConfigureSandbox(Cfg.Sandbox, NewRoot);
+end;
 
 function ParseGw(const Argv: array of string; const Cfg: TConfig): TGwArgs;
 var
@@ -218,9 +228,14 @@ begin
   else
   begin
     { Ensure the default work area exists so shell_exec can start there too. }
-    ForceDirectories(IncludeTrailingPathDelimiter(GetHome) + 'workspace');
-    ConfigureSandbox(Cfg.Sandbox, IncludeTrailingPathDelimiter(GetHome) + 'workspace');
+    ForceDirectories(IncludeTrailingPathDelimiter(GetHome) + ActiveWorkspaceName);
+    ConfigureSandbox(Cfg.Sandbox, IncludeTrailingPathDelimiter(GetHome) + ActiveWorkspaceName);
   end;
+  { A runtime workspace switch must repoint the sandbox too, or the Files
+    browser and shell cwd keep serving the OLD workspace. Mirrors the
+    startup logic: an explicit sandbox.workspace still wins. }
+  if Trim(Cfg.Sandbox.Workspace) = '' then
+    OnWorkspaceSwitched := RepointSandbox;
   ShellSessionId := '';
   try
     Args := ParseGw(Argv, Cfg);

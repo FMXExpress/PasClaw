@@ -220,6 +220,16 @@ precedent: checkpoints already propagate a context handle across threads
 
 ## 7. Phasing
 
+**Status: phases 1–5 are built** — one commit routed every hardcoded
+`workspace/` path through `ActiveWorkspaceName` (memory, sessions, skills,
+KB, checkpoints, cron state, heartbeat, steering, workflows, PLAN.md, the
+Docker shell mapping, the sandbox browse root), a runtime switch repoints
+the live gateway's sandbox via `OnWorkspaceSwitched`, and
+`workspace_isolation_tests` pins both halves: the leak (including sandbox
+refusal) and the single-workspace no-op. Skills shipped workspace-scoped
+rather than two-tier. Phases 6–8 (desktops-in-workspace, profile binding,
+cron tagging) remain.
+
 Each step ships on its own and leaves the tree green.
 
 | # | Step | Ships |

@@ -55,6 +55,7 @@ function RejectPending(const HomeDir, Id: string; out ErrMsg: string): Boolean;
 implementation
 
 uses
+  PasClaw.Workspaces,
   PasClaw.Utils,
   PasClaw.JSON,
   PasClaw.Logger,
@@ -63,12 +64,12 @@ uses
 
 function PendingRoot(const HomeDir: string): string;
 begin
-  Result := JoinPath(JoinPath(HomeDir, 'workspace/skills'), '.pending');
+  Result := JoinPath(JoinPath(HomeDir, ActiveWorkspaceName + '/skills'), '.pending');
 end;
 
 function SkillDir(const HomeDir, Name: string): string;
 begin
-  Result := JoinPath(JoinPath(HomeDir, 'workspace/skills'), Name);
+  Result := JoinPath(JoinPath(HomeDir, ActiveWorkspaceName + '/skills'), Name);
 end;
 
 (* Local recursive delete -- a pending dir holds a couple of files but a

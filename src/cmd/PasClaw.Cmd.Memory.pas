@@ -48,6 +48,7 @@ function Cmd_Memory_Run(const Argv: array of string): Integer;
 implementation
 
 uses
+  PasClaw.Workspaces,
   SysUtils, Classes,
   PasClaw.CliUI,
   PasClaw.Utils,
@@ -523,7 +524,7 @@ end;
 
 function MemoryDir: string;
 begin
-  Result := JoinPath(JoinPath(GetHome, 'workspace'), 'memory');
+  Result := JoinPath(JoinPath(GetHome, ActiveWorkspaceName), 'memory');
 end;
 
 function LatestSessionId: string;

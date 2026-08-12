@@ -100,6 +100,17 @@ function CreateWorkspaceSlot(Slot: Integer; const ALabel: string = ''): string;
   the name is malformed or the directory doesn't exist. }
 function SetActiveWorkspace(const Name: string; out Err: string): Boolean;
 
+var
+  (* Called after a successful switch, with the new workspace's ROOT path.
+
+     Exists for one reason: a long-running gateway configures its sandbox
+     (and anything else path-shaped) at startup, and a runtime switch would
+     otherwise leave those pointing into the OLD workspace -- the browse
+     root still showing business A while the stores write into business B.
+     The gateway installs a handler at startup; nil (the default) is fine
+     for one-shot commands, which resolve paths per call anyway. *)
+  OnWorkspaceSwitched: procedure(const NewRoot: string) = nil;
+
 { Display label for a workspace, falling back to a generated one
   ('Workspace 1'). }
 function WorkspaceLabel(const Name: string): string;
@@ -436,6 +447,8 @@ begin
      (Trim(GetEnvironmentVariable(EnvWorkspace)) <> Name) then
     Err := 'saved, but $' + EnvWorkspace + ' overrides it for this process';
   Result := True;
+  if Assigned(OnWorkspaceSwitched) then
+    OnWorkspaceSwitched(WorkspaceRoot(Name));
 end;
 
 end.
