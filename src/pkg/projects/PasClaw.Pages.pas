@@ -38,7 +38,7 @@ unit PasClaw.Pages;
 interface
 
 uses
-  SysUtils, Classes;
+  SysUtils, Classes, StrUtils;
 
 type
   TPageKind = (pkSearch, pkData, pkReport);
@@ -97,12 +97,35 @@ function DeletePage(const Id: string; out Err: string): Boolean;
    curly-brace comment early. *)
 function ParseSources(const JSONArray: string): TPageSourceArray;
 
+(* Promote a page into an app.
+
+   "Make this interactive" is the plan's pitch in miniature: the thing the
+   agent just showed you stops being a document you read and becomes
+   software you own. Mechanically it is a copy -- the rendered page becomes
+   a new project's app/index.html with kind `html` -- and the copying is
+   deliberate. A page is the record of an answer at a time; editing it in
+   place would falsify the history. The app is the part that changes.
+
+   Two things travel with it on purpose:
+
+     - The sources footer. Provenance does not stop mattering because the
+       document became editable.
+     - A pasclaw.js tag. The page has no scripts (it was sanitised), so the
+       app starts inert -- but the SDK is wired for the first "now make it
+       sort by date".
+
+   Returns the new project slug, or '' with Err set. *)
+function PromotePage(const PageId, PreferredName: string;
+  out Err: string): string;
+
 implementation
 
 uses
   PasClaw.Utils,
   PasClaw.JSON,
-  PasClaw.Workspaces;
+  PasClaw.Workspaces,
+  PasClaw.Projects.Store,
+  PasClaw.Apps;
 
 function PageKindToStr(K: TPageKind): string;
 begin
@@ -659,6 +682,99 @@ begin
   Result := RemoveDir(Dir);
   if not Result then
     Err := 'could not remove ' + Dir;
+end;
+
+
+(* Insert the SDK tag before </body>, once.
+
+   Anchored to the LAST closing tag, case-insensitively: a document that
+   quotes "</body>" in its own prose -- a page about HTML, which this
+   feature will produce sooner or later -- must not get a script spliced
+   into the middle of it. *)
+function WithSDKTag(const Doc: string): string;
+const
+  Tag = '<script src="pasclaw.js"></scr' + 'ipt>';
+var
+  P, At: Integer;
+  Low_: string;
+begin
+  Result := Doc;
+  if Pos('pasclaw.js', LowerCase(Doc)) > 0 then Exit;
+  Low_ := LowerCase(Doc);
+  P := 0;
+  At := 1;
+  repeat
+    At := PosEx('</body>', Low_, At);
+    if At = 0 then Break;
+    P := At;
+    Inc(At, 7);
+  until False;
+  if P <= 0 then
+  begin
+    { No closing tag to anchor to -- append rather than drop the tag. }
+    Result := Doc + sLineBreak + Tag;
+    Exit;
+  end;
+  Result := Copy(Doc, 1, P - 1) + Tag + sLineBreak + Copy(Doc, P, MaxInt);
+end;
+
+function PromotePage(const PageId, PreferredName: string;
+  out Err: string): string;
+var
+  Info: TPageInfo;
+  Doc, Slug, Title: string;
+  App: TAppInfo;
+begin
+  Result := '';
+  Err := '';
+  if not GetPage(PageId, Info) then
+  begin
+    Err := 'no such page: ' + PageId;
+    Exit;
+  end;
+  if not FileExists(Info.Path) then
+  begin
+    Err := 'that page has no rendered document';
+    Exit;
+  end;
+  Doc := ReadFileText(Info.Path);
+  if Trim(Doc) = '' then
+  begin
+    Err := 'that page is empty';
+    Exit;
+  end;
+
+  Title := Trim(Info.Title);
+  if Title = '' then Title := Trim(Info.Query);
+  if Title = '' then Title := 'Page ' + PageId;
+
+  Slug := CreateProject(Title, PreferredName, Info.Query, Err);
+  if Slug = '' then Exit;
+
+  try
+    WriteFileText(JoinPath(ProjectAppDir(Slug), 'index.html'), WithSDKTag(Doc));
+  except
+    on E: Exception do
+    begin
+      Err := 'could not write the app: ' + E.Message;
+      Exit;
+    end;
+  end;
+
+  App.Project := Slug;
+  App.Name    := Title;
+  App.Kind    := akHtml;
+  App.Entry   := 'index.html';
+  App.Run     := '';
+  App.Build   := '';
+  App.Width   := 720;
+  App.Height  := 560;
+  App.Icon    := 'Document';
+  App.Network := '';
+  App.EnvKeys := '';
+  if not WriteApp(Slug, App, Err) then Exit;
+
+  Result := Slug;
 end;
 
 end.

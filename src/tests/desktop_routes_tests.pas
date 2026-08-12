@@ -162,6 +162,7 @@ var
   Obj: TJsonObject;
   Sources: TPageSourceArray;
   PageId: string;
+  AppInfo: TAppInfo;
 begin
   { --------------------------------------------------------- unowned paths -- }
   ExpectTrue(not Req('GET', '/v1/health', '', R), 'health is not ours');
@@ -634,6 +635,39 @@ begin
   ExpectTrue(Pos('javascript:', LowerCase(Blueprint)) = 0, 'javascript: URLs neutralised');
   ExpectTrue(Pos('example.com/x', Blueprint) > 0, 'sources footer present');
   ExpectTrue(Pos('ok', Blueprint) > 0, 'legitimate content survives');
+
+  { ----------------------------------------------------- page promotion -- }
+  (* "Make this interactive" -- a page becomes an app you own. The copy is
+     the design: a page is the record of an answer at a time, so promotion
+     must leave it exactly as generated. *)
+  SetLength(Sources, 1);
+  Sources[0].Title := 'Tracker';
+  Sources[0].URL   := 'https://example.com/bugs';
+  PageId := SavePage('Open bugs by age', 'open bugs by age', pkReport,
+                     '<h2>Open bugs</h2><p>Four over 30 days.</p>', Sources, Err);
+  ExpectTrue(PageId <> '', 'a page to promote');
+
+  ExpectStatus('POST', '/v1/pages/' + PageId + '/promote', '', 200,
+               'a page promotes to an app');
+  ExpectTrue(ProjectExists('open-bugs-by-age'), 'and lands as a real project');
+  ExpectTrue(GetApp('open-bugs-by-age', AppInfo) and AppInfo.Exists,
+             'with an app manifest');
+  ExpectStr(AppKindToStr(AppInfo.Kind), 'html',
+            'as html -- a page is inert, an app can move');
+
+  Blueprint := ReadFileText(JoinPath(ProjectAppDir('open-bugs-by-age'),
+                                     'index.html'));
+  ExpectTrue(Pos('example.com/bugs', Blueprint) > 0,
+             'provenance survives promotion -- it does not stop mattering');
+  ExpectTrue(Pos('pasclaw.js', Blueprint) > 0,
+             'and the SDK is wired for the first "now make it sortable"');
+
+  { The page is a record, not a draft. Promotion must not touch it. }
+  ExpectStatus('GET', '/pages/' + PageId + '/', '', 200,
+               'the page is still there afterwards');
+
+  ExpectStatus('POST', '/v1/pages/P9999/promote', '', 400,
+               'promoting a page that does not exist is a 400, not a crash');
 
   { ------------------------------------------------- workspace scoping again -- }
   { The board a client sees must follow the active workspace. }

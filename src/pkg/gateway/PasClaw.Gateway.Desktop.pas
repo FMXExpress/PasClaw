@@ -247,6 +247,12 @@ begin
     Result := '-';
 end;
 
+{ A string field from an optional body object -- '' when either is absent. }
+function IfEmpty(Obj: TJsonObject; const Key: string): string;
+begin
+  if Obj = nil then Result := '' else Result := Trim(Obj.GetStr(Key, ''));
+end;
+
 function BodyObj(const Body: string): TJsonObject;
 begin
   Result := nil;
@@ -1900,7 +1906,7 @@ var
   Arr: TJsonArray;
   List: TPageInfoArray;
   I: Integer;
-  Id, Query, Err, Title, BodyHTML, SourcesJSON: string;
+  Id, Query, Err, Title, BodyHTML, SourcesJSON, Slug: string;
   Kind: TPageKind;
   Info: TPageInfo;
   Sources: TPageSourceArray;
@@ -1992,6 +1998,38 @@ begin
       finally
         Obj.Free;
       end;
+      Exit;
+    end;
+
+    (* POST /v1/pages/<id>/promote -- "make this interactive".
+
+       The page is copied into a new project as an `html` app; the page
+       itself stays in the history untouched, because it is the record of an
+       answer at a time and editing it in place would falsify it. *)
+    if (Method = 'POST') and (Segs.Count = 4) and
+       (LowerCase(Segs[3]) = 'promote') then
+    begin
+      Obj := BodyObj(Body);
+      try
+        Slug := PromotePage(Segs[2],
+                  IfEmpty(Obj, 'name'), Err);
+      finally
+        Obj.Free;
+      end;
+      if Slug = '' then
+      begin
+        ReplyErr(Resp, 400, Err);
+        Exit;
+      end;
+      Root := TJsonObject.Create;
+      try
+        Root.PutStr('project', Slug);
+        Root.PutStr('url', '/apps/' + Slug + '/index.html');
+        ReplyJSON(Resp, 200, Root.ToJSON);
+      finally
+        Root.Free;
+      end;
+      PublishProjects;
       Exit;
     end;
 

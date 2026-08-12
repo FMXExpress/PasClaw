@@ -1459,6 +1459,7 @@ const MENU = [
   { sep: true },
   { label: "Browser",           icon: "globe",  fn: () => openBrowser() },
   { label: "Library",           icon: "brain",  fn: openLibrary },
+  { label: "File Manager",      icon: "folder", fn: () => openFiles() },
   { sep: true },
   { label: "New Workspace",     icon: "disk",   fn: newWorkspace },
   { label: "Display Properties", icon: "gear",  fn: openDisplay },
@@ -2270,12 +2271,22 @@ async function openProcessApp(project, app) {
   const head = el("div");
   head.style.cssText = "padding:6px 6px 0";
   head.appendChild(el("div", null, `${app.name || project}  [${app.kind}]`));
-  const inDocker = (app.run_backend === "docker");
+  /* Three places an app can run, and the user should never have to guess
+     which. A remote daemon is the one that surprises people: the app's
+     files and ports are on a machine that is neither this browser nor the
+     gateway. */
+  const remoteDocker = (app.run_backend === "docker-remote");
+  const inDocker = (app.run_backend === "docker") || remoteDocker;
   const where = el("div", "muted",
-    (inDocker ? "Runs in a container on the PasClaw host"
-              : "Runs as a process on the PasClaw host") +
-    (S.host ? `: ${S.host}` : ""));
+    (remoteDocker ? "Runs in a container on a remote Docker host"
+     : inDocker   ? "Runs in a container on the PasClaw host"
+                  : "Runs as a process on the PasClaw host") +
+    (!remoteDocker && S.host ? `: ${S.host}` : ""));
   head.appendChild(where);
+  if (remoteDocker)
+    head.appendChild(el("div", "muted",
+      "Its files are copied in, not mounted, and it cannot publish a port " +
+      "back to this machine \u2014 console apps only."));
   if (!inDocker)
     head.appendChild(el("div", "muted",
       "Set shell_backend to \"docker\" to run apps in a container instead."));
@@ -2345,7 +2356,9 @@ async function openProcessApp(project, app) {
                : `It runs on the PasClaw host, not necessarily on this machine.`,
       ];
       if (app.network) lines.push(``, `It declares network access to: ${app.network}`);
-      lines.push(``, inDocker
+      lines.push(``, remoteDocker
+        ? `It runs inside a container on a REMOTE Docker host; its files are copied there.`
+        : inDocker
         ? `It runs inside a container; only its app/ directory is mounted.`
         : `It runs directly on that machine, with the same reach you have.`);
       if (!confirm(lines.join("\n"))) { runBtn.disabled = false; return; }
@@ -2430,7 +2443,13 @@ function openBrowser(pageId) {
   q.placeholder = "Ask anything -- the answer comes back as a page";
   q.style.flex = "1 1 auto";
   const go = el("button", "btn", "Search");
-  bar.appendChild(q); bar.appendChild(go);
+  /* The promotion gesture. A page is a document; this is the one click that
+     turns it into software you own -- the plan's whole pitch in miniature.
+     Disabled until there is a page to promote. */
+  const mk = el("button", "btn", "Make interactive");
+  mk.title = "Copy this page into a project as an app you can change";
+  mk.disabled = true;
+  bar.appendChild(q); bar.appendChild(go); bar.appendChild(mk);
   w.body.appendChild(bar);
 
   const frame = el("iframe", "app");
@@ -2441,7 +2460,11 @@ function openBrowser(pageId) {
   const status = el("div", "statusbar thin");
   w.node.appendChild(status);
 
+  let current = null;
+
   function show(page) {
+    current = page;
+    mk.disabled = false;
     frame.src = "/pages/" + page.id + "/";
     setTitle(w, page.title || "Browser");
     status.textContent = "";
@@ -2468,8 +2491,138 @@ function openBrowser(pageId) {
   go.addEventListener("click", search);
   q.addEventListener("keydown", e => { if (e.key === "Enter") search(); });
 
+  mk.addEventListener("click", async () => {
+    if (!current) return;
+    mk.disabled = true;
+    status.textContent = "Making it into an app...";
+    try {
+      const j = await api(`/v1/pages/${current.id}/promote`, { method: "POST" });
+      /* The page stays where it was; the app is the new thing. Open it and
+         refresh the desktop so its icon is there too. */
+      await loadProjects();
+      openApp(j.project);
+      status.textContent = "";
+      status.appendChild(el("span", "grounded",
+        `Now a project: ${j.project} \u2014 ask PasClaw to change it`));
+    } catch (e) {
+      status.textContent = "";
+      status.appendChild(el("span", "ungrounded", e.message));
+    }
+    mk.disabled = false;
+  });
+
   if (pageId) api("/v1/pages/" + pageId).then(show).catch(() => {});
   else setTimeout(() => q.focus(), 0);
+  return w;
+}
+
+/* ==========================================================================
+   File Manager -- the workspace directory, as a directory
+
+   The plan's "files are alive": the agent's own working files are on the
+   desktop rather than behind a tool call. Read-only on purpose. /v1/fs is
+   sandbox-checked and filters secret-bearing files (config.json, .env, TLS
+   keys) server-side, so this window shows exactly what the operator surface
+   is willing to show and nothing more -- and a browse window is not the
+   place to invent a delete button.
+   ========================================================================== */
+
+function openFiles(startPath) {
+  const w = createWindow({ key: "files", title: "File Manager", width: 640,
+                           height: 440, icon: "folder", pad: false });
+  const bar = el("div");
+  bar.style.cssText = "display:flex;gap:4px;padding:3px;align-items:center";
+  const up = el("button", "btn", "Up");
+  const wsBtn = el("button", "btn", "Workspace");
+  const where = el("input", "fld");
+  where.type = "text";
+  where.style.cssText = "flex:1 1 auto;font-family:monospace";
+  bar.appendChild(up); bar.appendChild(wsBtn); bar.appendChild(where);
+  w.body.appendChild(bar);
+
+  const list = el("div");
+  list.style.cssText = "overflow:auto;height:calc(100% - 30px)";
+  w.body.appendChild(list);
+  const status = el("div", "statusbar thin", "");
+  w.node.appendChild(status);
+
+  let cwd = startPath || "";
+  let wsRoot = "";
+
+  /* Parent directory, without assuming a separator the server did not use. */
+  function parentOf(pathStr) {
+    const sep = pathStr.includes("\\") && !pathStr.includes("/") ? "\\" : "/";
+    const cut = pathStr.replace(/[\/\\]+$/, "").lastIndexOf(sep);
+    return cut > 0 ? pathStr.slice(0, cut) : pathStr;
+  }
+
+  async function show(pathStr) {
+    status.textContent = "Reading...";
+    try {
+      const j = await api("/v1/fs" + (pathStr ? "?path=" + encodeURIComponent(pathStr) : ""));
+      cwd = j.path;
+      wsRoot = j.workspace_root || "";
+      wsBtn.disabled = !wsRoot;
+      where.value = cwd;
+      list.textContent = "";
+      const rows = (j.entries || []).slice().sort((a, b) =>
+        (a.dir === b.dir) ? a.name.localeCompare(b.name) : (a.dir ? -1 : 1));
+      if (!rows.length) list.appendChild(el("div", "row muted", "(empty)"));
+      rows.forEach(e => {
+        const r = el("div", "row");
+        r.style.cssText = "display:flex;gap:6px;padding:2px 6px;cursor:default";
+        const ic = el("span");
+        ic.style.cssText = "width:16px;height:16px;flex:0 0 16px";
+        ic.innerHTML = icon(e.dir ? "folder" : "page");
+        const nm = el("span", null, e.name);
+        nm.style.flex = "1 1 auto";
+        const sz = el("span", "muted", e.dir ? "" : String(e.size));
+        r.appendChild(ic); r.appendChild(nm); r.appendChild(sz);
+        r.addEventListener("dblclick", () => {
+          if (e.dir) show(cwd.replace(/[\/\\]+$/, "") + "/" + e.name);
+          else openFileView(cwd.replace(/[\/\\]+$/, "") + "/" + e.name, e.name);
+        });
+        list.appendChild(r);
+      });
+      status.textContent = rows.length + " item" + (rows.length === 1 ? "" : "s");
+    } catch (err) {
+      list.textContent = "";
+      list.appendChild(el("div", "row muted", err.message));
+      status.textContent = "";
+    }
+  }
+
+  up.addEventListener("click", () => show(parentOf(cwd)));
+  wsBtn.addEventListener("click", () => { if (wsRoot) show(wsRoot); });
+  where.addEventListener("keydown", e => { if (e.key === "Enter") show(where.value.trim()); });
+  show(startPath || "");
+  return w;
+}
+
+/* A file, in a document window. Binary files say so rather than rendering
+   as mojibake, and a truncated read says it was truncated -- a viewer that
+   quietly shows you the first 64KB of a log is worse than one that admits
+   to it. */
+async function openFileView(pathStr, name) {
+  const w = createWindow({ title: name || "File", width: 620, height: 440,
+                           icon: "page", pad: false });
+  const pre = el("pre");
+  pre.style.cssText = "margin:0;padding:6px;overflow:auto;height:100%;" +
+                      "white-space:pre-wrap;word-break:break-word;font-size:11px";
+  w.body.appendChild(pre);
+  const status = el("div", "statusbar thin", "");
+  w.node.appendChild(status);
+  try {
+    const j = await api("/v1/fs/read?path=" + encodeURIComponent(pathStr));
+    if (j.binary) {
+      pre.textContent = "(binary file, " + j.size + " bytes)";
+    } else {
+      pre.textContent = j.content || "";
+      if (j.truncated) status.textContent = "truncated";
+    }
+  } catch (e) {
+    pre.textContent = e.message;
+  }
   return w;
 }
 

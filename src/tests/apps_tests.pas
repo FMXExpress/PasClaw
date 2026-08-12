@@ -216,9 +216,11 @@ begin
   DArgs := TStringList.Create;
   try
     BuildDockerRunArgs('spam-filter', '/home/u/.pasclaw/workspace/projects/spam-filter/app',
-                       'python3 main.py 8700', 'debian:bookworm-slim', 8700, nil, DArgs);
+                       'python3 main.py 8700', 'debian:bookworm-slim', 8700, nil,
+                       True, DArgs);
     Joined := DArgs.Text;
-    ExpectContains(Joined, '-d', 'detached, so the id is the stop handle');
+    ExpectContains(Joined, 'create',
+      'created rather than run, so files can land before anything starts');
     ExpectContains(Joined, '--rm', 'no corpse left behind');
     ExpectContains(Joined, 'pasclaw-app-spam-filter', 'identifiable container name');
     ExpectContains(Joined,
@@ -235,15 +237,26 @@ begin
 
     { No port -> no publish rule at all. }
     BuildDockerRunArgs('spam-filter', '/tmp/app', 'python3 worker.py',
-                       'debian:bookworm-slim', 0, nil, DArgs);
+                       'debian:bookworm-slim', 0, nil, True, DArgs);
     ExpectMissing(DArgs.Text, '-p', 'a console app publishes no port');
+
+    (* Remote daemon: no bind mount. A -v path resolves on the DAEMON's
+       filesystem, so against a remote daemon it names something that is not
+       there and the app comes up against an empty /app -- silently. The
+       caller copies the directory in instead. *)
+    BuildDockerRunArgs('spam-filter', '/tmp/app', 'python3 worker.py',
+                       'debian:bookworm-slim', 0, nil, False, DArgs);
+    ExpectMissing(DArgs.Text, '/tmp/app:/app',
+      'no bind mount when the daemon is elsewhere');
+    ExpectContains(DArgs.Text, '-w' + sLineBreak + '/app',
+      'but the working directory is still /app');
 
     { Declared env travels as -e pairs, one per name. }
     Env := TStringList.Create;
     try
       Env.Add('IMAP_PASSWORD=hunter2');
       BuildDockerRunArgs('spam-filter', '/tmp/app', 'python3 main.py',
-                         'debian:bookworm-slim', 0, Env, DArgs);
+                         'debian:bookworm-slim', 0, Env, True, DArgs);
       ExpectContains(DArgs.Text, 'IMAP_PASSWORD=hunter2', 'declared env passed through');
     finally
       Env.Free;
@@ -251,6 +264,16 @@ begin
   finally
     DArgs.Free;
   end;
+
+  (* An endpoint we cannot read must count as LOCAL. There is no docker on
+     this machine, so the probe fails -- and calling that "remote" would
+     refuse to run apps on a perfectly ordinary local Docker just because
+     the probe did. Failing safe here means failing towards the behaviour
+     that has always worked. *)
+  ExpectTrue(not DockerIsRemote,
+             'an unreadable docker endpoint is treated as local');
+  ExpectStr(RunnerBackendName, 'host',
+            'and with shell_backend unset the runner is on the host');
 
   if Failures = 0 then
     WriteLn('apps_tests: OK')

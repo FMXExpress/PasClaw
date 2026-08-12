@@ -100,9 +100,18 @@ procedure StopAllApps;
 (* The argv handed to `docker run` for a project. Exposed because this
    command IS the isolation policy -- which directory is mounted, where the
    port is published, which image -- and that should be assertable in a test
-   on a machine with no Docker, not only reviewable by running it. *)
+   on a machine with no Docker, not only reviewable by running it.
+
+   Mount decides how the app's files reach the container. See DockerIsRemote
+   for why that is not a constant. *)
 procedure BuildDockerRunArgs(const Project, AppDir, Cmd, Image: string;
-  Port: Integer; Env: TStrings; Args: TStringList);
+  Port: Integer; Env: TStrings; Mount: Boolean; Args: TStringList);
+
+(* The daemon this process will actually talk to, and whether it is on
+   another machine. Exposed so the gateway can say so rather than making the
+   user infer it from an app that came up empty. *)
+function DockerEndpoint: string;
+function DockerIsRemote: Boolean;
 
 implementation
 
@@ -314,7 +323,10 @@ end;
 
 function RunnerBackendName: string;
 begin
-  if DockerConfigured then Result := 'docker' else Result := 'host';
+  if not DockerConfigured then Exit('host');
+  { Two very different places, and the difference is the user's to know:
+    with a remote daemon the app's files and ports are on another machine. }
+  if DockerIsRemote then Result := 'docker-remote' else Result := 'docker';
 end;
 
 function DockerImage: string;
@@ -324,6 +336,52 @@ begin
   Cfg := LoadConfig;
   Result := Trim(Cfg.ShellBackendDocker.Image);
   if Result = '' then Result := 'debian:bookworm-slim';
+end;
+
+var
+  GEndpoint: string = #1;   { #1 = not probed yet; '' is a real answer }
+
+(* Where the daemon lives.
+
+   Asks docker rather than reading DOCKER_HOST, because `docker context use`
+   repoints the CLI without touching the environment -- an env-var check
+   would call a remote daemon local and produce exactly the silent failure
+   this function exists to prevent. One probe, cached for the process. *)
+function DockerEndpoint: string;
+var
+  Args: TStringList;
+  Out_: string;
+begin
+  if GEndpoint <> #1 then Exit(GEndpoint);
+  GEndpoint := '';
+  Args := TStringList.Create;
+  try
+    Args.Add('context');
+    Args.Add('inspect');
+    Args.Add('--format');
+    Args.Add('{{.Endpoints.docker.Host}}');
+    if RunArgs('docker', Args, '', Out_) = 0 then
+      GEndpoint := Trim(Out_);
+  finally
+    Args.Free;
+  end;
+  Result := GEndpoint;
+end;
+
+(* True when the daemon is on another machine.
+
+   Local means a unix socket or a Windows named pipe -- the two spellings of
+   "this kernel". Anything else (tcp://, ssh://) is somewhere the app's
+   files are not and the app's ports would not be. An endpoint we could not
+   read at all counts as local: assuming remote would refuse to run apps on
+   a perfectly ordinary local Docker just because the probe failed. *)
+function DockerIsRemote: Boolean;
+var
+  E: string;
+begin
+  E := LowerCase(DockerEndpoint);
+  Result := (E <> '') and
+            (Pos('unix://', E) <> 1) and (Pos('npipe://', E) <> 1);
 end;
 
 { A stable, obviously-ours container name so an orphan is identifiable in
@@ -338,17 +396,27 @@ end;
    IS the isolation policy, and it should not be reviewable only by running
    it. *)
 procedure BuildDockerRunArgs(const Project, AppDir, Cmd, Image: string;
-  Port: Integer; Env: TStrings; Args: TStringList);
+  Port: Integer; Env: TStrings; Mount: Boolean; Args: TStringList);
 var
   I: Integer;
 begin
   Args.Clear;
-  Args.Add('run');
-  Args.Add('-d');                       { detached: the id comes back on stdout }
+  { create, not run: with a remote daemon the files have to be copied in
+    before anything starts, and `docker run` gives no window to do that. The
+    caller starts it once the copy lands. }
+  Args.Add('create');
   Args.Add('--rm');                     { no corpse to clean up after a stop }
   Args.Add('--name'); Args.Add(ContainerNameFor(Project));
-  { The app directory is the ONLY mount. Not the workspace, not the home. }
-  Args.Add('-v'); Args.Add(AppDir + ':/app');
+  (* The app directory is the ONLY mount -- not the workspace, not the home.
+
+     And only when the daemon is local. A bind mount resolves on the
+     DAEMON's filesystem, so against a remote daemon this path names
+     something that isn't there and the app comes up against an empty /app.
+     Silently. The caller copies the directory in instead. *)
+  if Mount then
+  begin
+    Args.Add('-v'); Args.Add(AppDir + ':/app');
+  end;
   Args.Add('-w'); Args.Add('/app');
   { Published to loopback only -- an app the user ran for themselves should
     not become reachable from their network because Docker helpfully bound
@@ -379,25 +447,77 @@ var
   Args: TStringList;
   Line, Out_: string;
   RC: Integer;
+  Remote: Boolean;
 begin
   ContainerId := '';
   Err := '';
   Result := False;
+  Remote := DockerIsRemote;
+
+  (* A port cannot be published usefully OR safely to a remote daemon.
+
+     -p 127.0.0.1:N:N binds the DAEMON's loopback, which this process cannot
+     reach -- the app would come up and the window would point at nothing.
+     Publishing 0.0.0.0 instead would make it reachable, and also make it
+     reachable to everyone else on that host's network, which is not what
+     anyone asked for by typing `docker context use`. So: refuse, and say
+     which of the two fixes applies. *)
+  if Remote and (Port > 0) then
+  begin
+    Err := 'this app serves HTTP on a port, and the Docker daemon is on ' +
+           'another machine (' + DockerEndpoint + '). A published port ' +
+           'would bind that machine''s loopback, not this one. Run the ' +
+           'gateway on the Docker host, or point it at a local daemon.';
+    Exit;
+  end;
+
   Args := TStringList.Create;
   try
-    BuildDockerRunArgs(Project, AppDir, Cmd, DockerImage, Port, Env, Args);
     { A previous run that died badly can leave the name taken. }
     RunOneShot('docker rm -f ' + ContainerNameFor(Project), AppDir, Out_);
 
+    { create -> (copy) -> start. Bind-mounting is better when it works --
+      the app sees edits live and its writes land back in the project -- so
+      keep it for a local daemon and copy only when we have to. }
+    BuildDockerRunArgs(Project, AppDir, Cmd, DockerImage, Port, Env,
+                       not Remote, Args);
     Line := 'docker';
     RC := RunArgs(Line, Args, AppDir, Out_);
     if RC <> 0 then
     begin
-      Err := 'docker run failed: ' + Copy(Trim(Out_), 1, 400);
+      Err := 'docker create failed: ' + Copy(Trim(Out_), 1, 400);
       Exit;
     end;
     ContainerId := Trim(Out_);
     if ContainerId = '' then ContainerId := ContainerNameFor(Project);
+
+    if Remote then
+    begin
+      { Copies the directory ITSELF as /app -- docker cp creates the
+        destination when it does not exist, which it does not, because
+        nothing was mounted there. }
+      Args.Clear;
+      Args.Add('cp');
+      Args.Add(ExcludeTrailingPathDelimiter(AppDir));
+      Args.Add(ContainerNameFor(Project) + ':/app');
+      if RunArgs('docker', Args, '', Out_) <> 0 then
+      begin
+        Err := 'could not copy the app into the container: ' +
+               Copy(Trim(Out_), 1, 400);
+        RunOneShot('docker rm -f ' + ContainerNameFor(Project), '', Out_);
+        Exit;
+      end;
+    end;
+
+    Args.Clear;
+    Args.Add('start');
+    Args.Add(ContainerNameFor(Project));
+    if RunArgs('docker', Args, '', Out_) <> 0 then
+    begin
+      Err := 'docker start failed: ' + Copy(Trim(Out_), 1, 400);
+      RunOneShot('docker rm -f ' + ContainerNameFor(Project), '', Out_);
+      Exit;
+    end;
     Result := True;
   finally
     Args.Free;
