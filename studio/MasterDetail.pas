@@ -330,6 +330,7 @@ type
     FWorkflowPanMouse: TPointF;    { mouse position when the pan started }
     FWorkflowPanOrigin: TPointF;   { pan value when the pan started }
     FWorkflowGraphMemo: TMemo;
+    FWorkflowGraphLabel: TLabel;   { hides/shows WITH the memo above }
     FWorkflowEditorPanel: TLayout;
     FWorkflowInspectorModeLabel: TLabel;
     FWorkflowInputsEdit: TEdit;
@@ -3292,10 +3293,21 @@ begin
     FWorkflowReplicateVersionEdit.Width := IfThen(Narrow, 132, 172);
   if FWorkflowReplicateSearchEdit <> nil then
     FWorkflowReplicateSearchEdit.Width := IfThen(Narrow, 108, 140);
+  { The graph summary and its caption are ONE decision -- showing a caption
+    over a zero-height memo is exactly the half-state this used to produce.
+    It was hidden unconditionally at every width, which quietly made
+    WorkflowRenderGraph's output unreachable: the code kept writing a
+    summary nobody could read. It earns its space except when the window is
+    genuinely narrow, where the run results matter more. }
   if FWorkflowGraphMemo <> nil then
   begin
-    FWorkflowGraphMemo.Visible := False;
-    FWorkflowGraphMemo.Height := 0;
+    FWorkflowGraphMemo.Visible := not Narrow;
+    FWorkflowGraphMemo.Height := IfThen(Narrow, 0, IfThen(Compact, 72, 96));
+  end;
+  if FWorkflowGraphLabel <> nil then
+  begin
+    FWorkflowGraphLabel.Visible := not Narrow;
+    FWorkflowGraphLabel.Height := IfThen(Narrow, 0, ROW_TEXT);
   end;
   if FWorkflowPickerCombo <> nil then
   begin
@@ -7460,6 +7472,7 @@ begin
   Title.TextSettings.VertAlign := TTextAlign.Center;
   StyleLabel(Title, UI_ACCENT, TXT_TITLE, True);
   SetControlMargins(Title, 0, GAP_S, 0, 0);
+  FWorkflowGraphLabel := Title;
 
   FWorkflowRunDetailMemo := TMemo.Create(Self);
   FWorkflowRunDetailMemo.Parent := RightPane;
