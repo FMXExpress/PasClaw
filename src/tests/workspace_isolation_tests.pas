@@ -34,6 +34,7 @@ uses
   PasClaw.Suite.Notes,
   PasClaw.KB.Index,
   PasClaw.Skills.Loader,
+  PasClaw.Tools.Registry,
   PasClaw.Tools.Sandbox,
   DateUtils;
 
@@ -77,6 +78,29 @@ begin
   finally
     Store.Close;
   end;
+end;
+
+(* Register a probe skill and fire it through the real RunSkill path, so
+   the assertion covers the actual spawn -- not a reimplementation of it.
+   The manifest is written first because skills bind at registry build:
+   under the pin, LoadSkillManifests scans the pinned workspace's skills
+   dir, which is exactly the wall this test is guarding. *)
+function RunSkillShellProbe: string;
+var
+  Err: string;
+  Reg: TToolRegistry;
+begin
+  WriteFileText(JoinPath(GetHome, ActiveWorkspaceName + '/skills/wsprobe.json'),
+    '{"name":"wsprobe","description":"echo the workspace env",' +
+    '"kind":"shell","shell":"echo ws=$PASCLAW_WORKSPACE"}');
+  Reg := TToolRegistry.Create;
+  try
+    RegisterSkills(Reg, LoadSkillManifests(GetHome));
+    Result := RunSkill(Reg, 'wsprobe', '{}', Err);
+  finally
+    Reg.Free;
+  end;
+  if Err <> '' then Result := Result + ' [' + Err + ']';
 end;
 
 function CountFacts: Integer;
@@ -204,6 +228,19 @@ begin
   SetThreadWorkspace('');
   ExpectStr(ActiveWorkspaceName, 'workspace',
             'clearing the pin restores the configured workspace');
+
+  (* And the pin must survive the PROCESS boundary: a shell skill fired by
+     the scheduler spawns children, and a child resolving the workspace
+     itself must see the pin, not the config default. RunShell passes it as
+     $PASCLAW_WORKSPACE -- child-only env, nothing process-global. *)
+  SetThreadWorkspace('workspace2');
+  try
+    ExpectTrue(Pos('workspace2',
+      RunSkillShellProbe) > 0,
+      'a child process spawned under the pin sees the pinned workspace');
+  finally
+    SetThreadWorkspace('');
+  end;
 
   if Failures = 0 then
     WriteLn('workspace_isolation_tests: OK')

@@ -92,8 +92,11 @@ the global `profile` field.
 **Cron fires as its workspace.** New entries are stamped with the workspace
 they were created in, and the scheduler pins its thread there for the
 firing — business B's nightly job runs with B's memory and notes even while
-you are looking at A. Entries created before tagging keep the old
-behaviour (whatever workspace is active).
+you are looking at A. Shell skills carry the pin across the process
+boundary too: children are spawned with `PASCLAW_WORKSPACE` set to the
+pinned workspace, so a script that asks PasClaw for its workspace gets the
+right answer. Entries created before tagging keep the old behaviour
+(whatever workspace is active).
 
 ### Projects, tasks and jobs
 
