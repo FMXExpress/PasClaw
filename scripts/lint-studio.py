@@ -48,12 +48,14 @@ def scan(src):
             i += 1
             continue
         if c == "(" and i + 1 < n and src[i + 1] == "*":
-            i += 2
-            while i + 1 < n and not (src[i] == "*" and src[i + 1] == ")"):
-                if src[i] == "\n":
+            start, j, body = line, i + 2, []
+            while j + 1 < n and not (src[j] == "*" and src[j + 1] == ")"):
+                if src[j] == "\n":
                     line += 1
-                i += 1
-            i += 2
+                body.append(src[j])
+                j += 1
+            yield (start, PAREN, "".join(body))
+            i = j + 2
             continue
         if c == "/" and i + 1 < n and src[i + 1] == "/":
             while i < n and src[i] != "\n":
@@ -99,7 +101,26 @@ def main(path):
                 findings.append(
                     (ln, "brace-comment contains '{': it ended at the "
                          "example's own '}' and the rest parses as code "
-                         "-- use (* *)"))
+                         "-- use a paren-star comment"))
+            continue
+
+        if kind == PAREN:
+            # NB: read `text`, not `body` -- `body` is bound only in the
+            # BRACE branch above, so using it here silently tests the
+            # PREVIOUS brace comment and the rule never fires.
+            paren_body = text.strip()
+            # Paren-star comments do not nest either, so the same reasoning
+            # applies: the body stopped at the first close, and an opener
+            # still inside it means the comment already ended there. This is
+            # not hypothetical -- the comment ADDED to explain the brace rule
+            # named both delimiters literally and broke the build itself
+            # (E2070 'form' / E2052 unterminated string). Describe the
+            # delimiters in words inside a comment of the same kind.
+            if "(*" in paren_body:
+                findings.append(
+                    (ln, "paren-star comment contains an inner '(*': it "
+                         "ended at the first close and the rest parses as "
+                         "code -- name the delimiters in words"))
             continue
 
         line = text.strip()

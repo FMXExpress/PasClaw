@@ -11578,9 +11578,11 @@ function TMasterDetailForm.WorkflowFindModelArray(
    result.results produced an empty list and no complaint. Probe every shape
    at both levels instead of betting on one.
 
-   NOTE the (* *) form: this text shows a brace pair, and Delphi's { }
-   comments do NOT nest -- a { } version ends at the example's own '}' and
-   spills the rest into the compiler as code. *)
+   Why the paren-star comment form: this text shows a brace pair, and brace
+   comments do NOT nest, so a brace version ends at the example's own
+   closing brace and spills the rest into the compiler as code. Paren-star
+   does not nest either -- naming these delimiters literally inside a
+   comment of the same kind is what broke the build last time. *)
 const
   ROW_KEYS: array[0..2] of string = ('models', 'results', 'data');
 var
