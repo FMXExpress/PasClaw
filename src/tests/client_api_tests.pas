@@ -88,6 +88,7 @@ var
   Raw: TBytes;
   Total: Int64;
   Tracer: TTracer;
+  Msgs: TChatMessages;
 begin
   { ---- UI block parsing: pure string work, so it runs with no gateway ---- }
   { The happy path: prose around a wizard block. }
@@ -163,6 +164,28 @@ begin
     Visible, Blocks);
   ExpectInt(Length(Blocks), 2, 'both blocks recognised');
   ExpectTrue(Pos('middle', Visible) > 0, 'text between them survives');
+
+  { ---- chat message decoding: also pure, also no gateway needed ---- }
+  (* The bug this guards: a hand-rolled scanner that knew \n and \" but not
+     \uXXXX turned every accented letter and dash in a reopened conversation
+     into literal escape text. Model prose is full of both. *)
+  Msgs := ParseChatMessages(
+    '[{"role":"user","content":"caf\u00e9 \u2014 na\u00efve"},' +
+    '{"role":"assistant","content":"line1\nline2 \"quoted\" back\\slash"}]');
+  ExpectInt(Length(Msgs), 2, 'both messages decoded');
+  ExpectStr(Msgs[0].Role, 'user', 'role decoded');
+  ExpectTrue(Pos('\u', Msgs[0].Content) = 0,
+             'no escape sequence survives into the text');
+  ExpectTrue(Pos('caf', Msgs[0].Content) = 1, 'and the text starts as written');
+  ExpectTrue(Pos(#10, Msgs[1].Content) > 0, 'a newline is a newline');
+  ExpectTrue(Pos('"quoted"', Msgs[1].Content) > 0, 'quotes are unescaped');
+  ExpectTrue(Pos('back\slash', Msgs[1].Content) > 0, 'and so are backslashes');
+
+  { Malformed input yields nothing rather than raising: one odd session must
+    not stop a window from opening. }
+  ExpectInt(Length(ParseChatMessages('[{"role":')), 0, 'truncated array is empty');
+  ExpectInt(Length(ParseChatMessages('')), 0, 'empty input is empty');
+  ExpectInt(Length(ParseChatMessages('[]')), 0, 'empty array is empty');
 
   Base := GetEnvironmentVariable('PASCLAW_TEST_GATEWAY');
   if Trim(Base) = '' then

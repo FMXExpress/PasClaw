@@ -79,8 +79,8 @@ type
       the current style like the rest of the shell instead of arriving as an
       out-of-period native menu. One at a time, closed on choice. }
     FMenuWin: TRetroWindow;
-    FMenuList: TListBox;
-    FMenuActions: TStringList;   { parallel to FMenuList.Items }
+    { Action per row, indexed by the Tag each row button carries. }
+    FMenuActions: TStringList;
 
     { ---- the Projects window ----
       The tree used to be a permanent left dock with no chrome, sitting
@@ -372,6 +372,9 @@ const
   { A conversation reopened from the Library, filed under its session id.
     Same reserved-colon rule as above. }
   SessionChatPrefix = ':session:';
+  { One menu row: tall enough to hit with a mouse, short enough that the
+    whole launcher fits without scrolling on an ordinary board. }
+  MenuRowHeight = 22;
 
 { Conditional string. StrUtils has one; a local helper keeps this unit's
   uses clause to what it actually needs. Declared here, above every caller,
@@ -611,7 +614,6 @@ begin
   if AComponent = FMenuWin then
   begin
     FMenuWin := nil;
-    FMenuList := nil;
     Exit;
   end;
 
@@ -839,6 +841,16 @@ begin
     Icon := FDesktop.CreateIcon(FProjects[I].Title);
     Icon.Tag := I;
     Icon.OnOpen := IconOpen;
+    (* Behind the windows.
+
+       FMX z-order is creation order, and this list is rebuilt every time
+       the board changes -- so icons made after a window exists land on top
+       of it, which is how they ended up painted over Display Properties at
+       startup. The window manager already assumes icons sit below every
+       window: its cycle-windows code refuses SendToBack for exactly this
+       reason, since that would drop the window behind them. This keeps the
+       assumption true after a refresh. *)
+    Icon.SendToBack;
   end;
   FDesktop.ArrangeIcons;
   Say(Format('%d project(s)', [Length(FProjects)]));
@@ -1102,20 +1114,64 @@ begin
   begin
     FMenuWin.Close;
     FMenuWin := nil;
-    FMenuList := nil;
   end;
 end;
 
+(* Build the Menu.
+
+   Rows are BUTTONS in a scrolled layout, not a TListBox. A list box tracks
+   a selection -- it highlights what you clicked and keeps highlighting it,
+   with no notion of what the pointer is over -- so the menu had no hover
+   focus, which is most of what makes a launcher feel like one. Buttons get
+   rollover from the style engine, and every .style in the set paints its
+   own period-correct hover, so this follows the skin instead of inventing
+   a highlight colour that would be wrong in 26 looks out of 27.
+
+   Rebuilt on every open because the bottom half is live: every project and
+   its app. A menu showing yesterday's projects is worse than none. *)
 procedure TFormMain.BuildMenu;
 var
-  I, J: Integer;
+  I, H: Integer;
   Apps: TAppRow;
   Row: TProjectRow;
+  Box: TVertScrollBox;
+  Content: TLayout;
+  Y: Single;
 
-  procedure Item(const Caption, Action: string);
+  procedure Item(const Caption, Action: string; Indent: Boolean);
+  var
+    B: TButton;
+    L: Single;
   begin
-    FMenuList.Items.Add(Caption);
+    if Indent then L := 18 else L := 2;
+    B := TButton.Create(FMenuWin);
+    B.Parent := Content;
+    B.Position.Point := PointF(L, Y);
+    B.Width := 230 - L;
+    B.Height := MenuRowHeight;
+    B.Text := Caption;
+    { Left-aligned like a menu, not centred like a dialog button. }
+    B.StyledSettings := B.StyledSettings - [TStyledSetting.Other];
+    B.TextSettings.HorzAlign := TTextAlign.Leading;
+    { The row carries its own index, so there is no selection to consult
+      and nothing to go stale if the menu is rebuilt underneath it. }
+    B.Tag := FMenuActions.Count;
+    B.OnClick := MenuPick;
     FMenuActions.Add(Action);
+    Y := Y + MenuRowHeight + 1;
+  end;
+
+  procedure Sep;
+  var
+    Ln: TLine;
+  begin
+    Ln := TLine.Create(FMenuWin);
+    Ln.Parent := Content;
+    Ln.LineType := TLineType.Top;
+    Ln.Position.Point := PointF(6, Y + 3);
+    Ln.Width := 222;
+    Ln.Height := 2;
+    Y := Y + 9;
   end;
 
 begin
@@ -1123,52 +1179,60 @@ begin
   if FMenuActions = nil then FMenuActions := TStringList.Create;
   FMenuActions.Clear;
 
-  FMenuWin := TrackWindow(FDesktop.CreateWindow('PasClaw', 260, 420));
-  FMenuList := TListBox.Create(FMenuWin);
-  FMenuList.Parent := FMenuWin.Client;
-  FMenuList.Align := TAlignLayout.Client;
-  FMenuList.OnClick := MenuPick;
+  FMenuWin := TrackWindow(FDesktop.CreateWindow('PasClaw', 250, 420));
+  FMenuWin.ShowMax := False;
 
-  Item('Chat',                'chat');
-  Item('Browser',             'browser');
-  Item('Files',               'files');
-  Item('Library',             'library');
-  Item('Log',                 'log');
-  Item('-',                   '');
-  Item('Projects',            'tree');
-  Item('New Project...',      'newproject');
-  Item('-',                   '');
+  { Scrolled: the project list has no fixed length, and a menu taller than
+    the screen is not a menu. }
+  Box := TVertScrollBox.Create(FMenuWin);
+  Box.Parent := FMenuWin.Client;
+  Box.Align := TAlignLayout.Client;
 
-  { The live half. A project with an app gets the app on its own line
-    underneath, indented -- FMX's TListBox has no submenus, and a one-level
-    indent reads the same without pretending to be a tree. }
+  Content := TLayout.Create(FMenuWin);
+  Content.Parent := Box;
+  Content.Align := TAlignLayout.Top;
+  Content.Width := 238;
+
+  Y := 2;
+  Item('Chat',            'chat',       False);
+  Item('Browser',         'browser',    False);
+  Item('Files',           'files',      False);
+  Item('Library',         'library',    False);
+  Item('Log',             'log',        False);
+  Sep;
+  Item('Projects',        'tree',       False);
+  Item('New Project...',  'newproject', False);
+  Sep;
+
+  { The live half: every project, with its app under it. This is how the
+    seeded suite -- Notes, Calendar, Mail -- is reachable without knowing
+    they are ordinary projects. }
   for I := 0 to High(FProjects) do
   begin
     Row := FProjects[I];
-    Item(Row.Title, 'project:' + Row.Name);
+    Item(Row.Title, 'project:' + Row.Name, False);
     if not Row.HasApp then Continue;
-    { Ask the gateway what the app actually is: the board row knows there is
-      one, the app record knows its name and whether it runs or opens. }
     if not FClient.App(Row.Name, Apps) then Continue;
     if not Apps.Exists then Continue;
     if Apps.Servable then
-      Item('    ' + Apps.Name, 'app:' + Row.Name)
+      Item(Apps.Name, 'app:' + Row.Name, True)
     else
-      Item('    ' + Apps.Name + ' (run)', 'run:' + Row.Name);
+      Item(Apps.Name + '  (run)', 'run:' + Row.Name, True);
   end;
-  if Length(FProjects) > 0 then Item('-', '');
+  if Length(FProjects) > 0 then Sep;
 
-  Item('Switch Workspace...',  'pickws');
-  Item('New Workspace...',     'newws');
-  Item('Display Properties',   'display');
+  Item('Switch Workspace...', 'pickws',  False);
+  Item('New Workspace...',    'newws',   False);
+  Item('Display Properties',  'display', False);
 
-  { Sit the menu at the bottom-left, where a launcher belongs, and give it
-    only the height it needs. }
-  J := FMenuList.Items.Count * 20 + 40;
-  if J > Round(FDesktop.Height) - 60 then J := Round(FDesktop.Height) - 60;
-  if J < 120 then J := 120;
-  FMenuWin.Height := J;
-  FMenuWin.Position.Point := PointF(8, FDesktop.Height - J - 44);
+  Content.Height := Y + 4;
+
+  { Bottom-left, where a launcher belongs, and only as tall as it needs. }
+  H := Round(Y) + 44;
+  if H > Round(FDesktop.Height) - 60 then H := Round(FDesktop.Height) - 60;
+  if H < 140 then H := 140;
+  FMenuWin.Height := H;
+  FMenuWin.Position.Point := PointF(8, FDesktop.Height - H - 44);
 end;
 
 procedure TFormMain.MenuPick(Sender: TObject);
@@ -1176,11 +1240,11 @@ var
   Idx, I: Integer;
   Action, Arg: string;
 begin
-  if FMenuList = nil then Exit;
-  Idx := FMenuList.ItemIndex;
-  if (Idx < 0) or (Idx >= FMenuActions.Count) then Exit;
+  if not (Sender is TButton) then Exit;
+  Idx := TButton(Sender).Tag;
+  if (FMenuActions = nil) or (Idx < 0) or (Idx >= FMenuActions.Count) then Exit;
   Action := FMenuActions[Idx];
-  if Action = '' then Exit;        { separator }
+  if Action = '' then Exit;
 
   Arg := '';
   I := Pos(':', Action);
@@ -2084,51 +2148,6 @@ begin
   Log.Lines.Add('');
 end;
 
-(* Pull role/content pairs out of a messages array.
-
-   Hand-scanned for the same reason RestoreDesktopState is: the shape is
-   fixed and flat, and one odd session must not be able to stop the Library
-   from opening. Roles and contents come back as a name=value list, which
-   keeps the pairing intact without a second parallel structure. *)
-procedure SplitChatMessages(const ArrayJSON: string; Into: TStringList);
-var
-  P, Q: Integer;
-  Role, Content: string;
-begin
-  if Into = nil then Exit;
-  Into.Clear;
-  P := 1;
-  repeat
-    P := PosEx('"role":"', ArrayJSON, P);
-    if P = 0 then Break;
-    Inc(P, 8);
-    Q := PosEx('"', ArrayJSON, P);
-    if Q = 0 then Break;
-    Role := Copy(ArrayJSON, P, Q - P);
-
-    P := PosEx('"content":"', ArrayJSON, Q);
-    if P = 0 then Break;
-    Inc(P, 11);
-    Q := P;
-    { Walk to the closing quote, honouring backslash escapes so a message
-      containing \" does not end early. }
-    while Q <= Length(ArrayJSON) do
-    begin
-      if ArrayJSON[Q] = '\' then Inc(Q, 2)
-      else if ArrayJSON[Q] = '"' then Break
-      else Inc(Q);
-    end;
-    if Q > Length(ArrayJSON) then Break;
-    Content := Copy(ArrayJSON, P, Q - P);
-    Content := StringReplace(Content, '\n', sLineBreak, [rfReplaceAll]);
-    Content := StringReplace(Content, '\"', '"', [rfReplaceAll]);
-    Content := StringReplace(Content, '\\', '\', [rfReplaceAll]);
-    { Tool and system turns are machinery, not conversation. }
-    if (Role = 'user') or (Role = 'assistant') then
-      Into.Add(Role + '=' + Content);
-    P := Q;
-  until False;
-end;
 
 
 { Escape a string for embedding in a JSON literal. Chat text routinely
@@ -2400,8 +2419,8 @@ procedure TFormMain.OpenSessionChat(const SessionId: string);
 var
   Key: string;
   Log: TMemo;
-  Hist, Visible: string;
-  Msgs: TStringList;
+  Hist: string;
+  Msgs: TChatMessages;
   I: Integer;
 begin
   if Trim(SessionId) = '' then Exit;
@@ -2419,29 +2438,29 @@ begin
   if not FChatLogs.TryGetValue(Key, Log) then Exit;
   if Log = nil then Exit;
 
-  Msgs := TStringList.Create;
-  try
-    SplitChatMessages(Hist, Msgs);
-    if Msgs.Count = 0 then
-    begin
-      Log.Lines.Add('(this session has no messages)');
-      Exit;
-    end;
-    Log.Lines.Clear;
-    for I := 0 to Msgs.Count - 1 do
-    begin
-      { Names(I) is the role, ValueFromIndex(I) the content. }
-      Visible := Msgs.ValueFromIndex[I];
-      if Msgs.Names[I] = 'user' then
-        Log.Lines.Add('> ' + Visible)
-      else
-        Log.Lines.Add(Visible);
-      Log.Lines.Add('');
-    end;
-    Log.GoToTextEnd;
-  finally
-    Msgs.Free;
+  (* Decoded by the client library, through the real JSON parser.
+
+     The hand-rolled scanner this replaces knew \n and \" but not \uXXXX,
+     so every accented letter, dash and emoji in a reopened conversation
+     arrived as literal escape text -- and model prose is made of those. *)
+  Msgs := ParseChatMessages(Hist);
+  if Length(Msgs) = 0 then
+  begin
+    Log.Lines.Add('(this session has no messages)');
+    Exit;
   end;
+  Log.Lines.Clear;
+  for I := 0 to High(Msgs) do
+  begin
+    { Tool and system turns are machinery, not conversation. }
+    if (Msgs[I].Role <> 'user') and (Msgs[I].Role <> 'assistant') then Continue;
+    if Msgs[I].Role = 'user' then
+      Log.Lines.Add('> ' + Msgs[I].Content)
+    else
+      Log.Lines.Add(Msgs[I].Content);
+    Log.Lines.Add('');
+  end;
+  Log.GoToTextEnd;
 end;
 
 procedure TFormMain.OpenApp(const Project: string);
@@ -2691,7 +2710,24 @@ var
   B: TButton;
   Head: TLabel;
   M: TMemo;
+  RunApp_: TAppRow;
 begin
+  (* A SERVED app does not get a Run window.
+
+     This window is for process apps -- python, fpc, delphi -- which are
+     programs to start and stop. A `page` or `html` app is a document: there
+     is no command, so Run had nothing to do and pressing it did nothing
+     visible, which is the worst of both. Send it where it can be opened.
+
+     Belt and braces with the Menu, which routes by the same flag: if a
+     manifest is mislabelled, or the app record could not be read, this is
+     where it surfaces instead of a dead button. *)
+  if FClient.App(Project, RunApp_) and RunApp_.Exists and RunApp_.Servable then
+  begin
+    OpenApp(Project);
+    Exit;
+  end;
+
   if FRunWins.TryGetValue(Project, W) and (W <> nil) then
   begin
     W.Restore;
@@ -2760,13 +2796,20 @@ var
   Run: TRunRow;
   Head: TLabel;
   M: TMemo;
-  Log: string;
+  Log, Kind: string;
+  AppRow: TAppRow;
 begin
   SetClientContext('Run: ' + Project);
   if not FClient.RunState(Project, Run) then Exit;
+  { Name the kind. A Run button that does nothing is a puzzle; "this app
+    declares kind=python" is a fact you can act on -- usually by fixing a
+    manifest the model wrote wrong. }
+  Kind := '';
+  if FClient.App(Project, AppRow) and AppRow.Exists then Kind := AppRow.Kind;
   if FRunHeads.TryGetValue(Project, Head) and (Head <> nil) then
-    Head.Text := Format('%s -- runs %s%s%s',
+    Head.Text := Format('%s -- runs %s%s%s%s',
       [Run.State, BackendPhrase(Run.Backend),
+       IfThenStr(Kind <> '', '   [kind=' + Kind + ']', ''),
        IfThenStr(Run.URL <> '', sLineBreak + Run.URL, ''),
        IfThenStr(Run.Error <> '', sLineBreak + Run.Error, '')]);
   if FRunLogs.TryGetValue(Project, M) and (M <> nil) then

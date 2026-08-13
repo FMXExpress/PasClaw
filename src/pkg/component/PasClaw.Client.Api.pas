@@ -85,6 +85,13 @@ type
   end;
   TSessionRows = array of TSessionRow;
 
+  { One turn of a conversation, decoded. }
+  TChatMessage = record
+    Role:    string;   { user | assistant | system | tool }
+    Content: string;
+  end;
+  TChatMessages = array of TChatMessage;
+
   { What a running process app is doing. Backend is 'host', 'docker' or
     'docker-remote' -- three genuinely different places, and the user should
     never have to guess which one their app is in. }
@@ -439,6 +446,19 @@ type
 procedure ParseUIBlocks(const Reply: string; out VisibleText: string;
   out Blocks: TUIBlocks);
 
+(* Decode a [{role,content}] array into records.
+
+   Through the real JSON parser rather than a hand-scan for escapes. A
+   scanner that knows about \n and \" but not \uXXXX turns every accented
+   letter, dash and emoji in a reopened conversation into literal escape
+   text -- which is exactly what a transcript full of model prose is made
+   of. The parser already decodes the whole escape set, including surrogate
+   pairs, so there is no second implementation to disagree with it.
+
+   A malformed array yields an empty result rather than raising: one odd
+   session must not be able to stop a window from opening. *)
+function ParseChatMessages(const ArrayJSON: string): TChatMessages;
+
 (* ---- the calling context ----
 
    Names whoever is about to make requests, so a trace can say which window
@@ -460,6 +480,54 @@ uses
   PasClaw.Utils,
   DateUtils,                 { MilliSecondsBetween -- request timing }
   IdHTTP, IdGlobal, IdSSLOpenSSL, IdComponent;
+
+function ParseChatMessages(const ArrayJSON: string): TChatMessages;
+var
+  Arr: TJsonArray;
+  Root, Item: TJsonObject;
+  I, N: Integer;
+begin
+  SetLength(Result, 0);
+  if Trim(ArrayJSON) = '' then Exit;
+  Arr := nil;
+  Root := nil;
+  try
+    { The parser's entry point is an object, so wrap the array in one. }
+    Root := TJsonObject.Parse('{"m":' + ArrayJSON + '}');
+  except
+    Exit;
+  end;
+  if Root = nil then Exit;
+  try
+    (* ChildArray and ItemObject hand back NON-OWNING wrappers -- see
+       CreateWrapping(D, False) in PasClaw.JSON -- so every one of them is
+       the caller's to free. A transcript is the worst place to forget:
+       reopening long conversations is exactly what the Library invites,
+       and the desktop process is long-lived, so a wrapper per message per
+       open accumulates for the life of the app. One wrapper per iteration,
+       freed in a finally; the array freed before the root. *)
+    Arr := Root.ChildArray('m');
+    if Arr = nil then Exit;
+    SetLength(Result, Arr.Count);
+    N := 0;
+    for I := 0 to Arr.Count - 1 do
+    begin
+      Item := Arr.ItemObject(I);
+      if Item = nil then Continue;
+      try
+        Result[N].Role    := Item.GetStr('role', '');
+        Result[N].Content := Item.GetStr('content', '');
+      finally
+        Item.Free;
+      end;
+      if Result[N].Role <> '' then Inc(N);
+    end;
+    SetLength(Result, N);
+  finally
+    Arr.Free;
+    Root.Free;
+  end;
+end;
 
 threadvar
   GContext: string;
