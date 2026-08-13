@@ -99,6 +99,11 @@ type
     FLogPending: TStringList;     { worker appends, timer drains }
     FLogLock: TCriticalSection;
     FLogStop: Boolean;
+    { The segment currently being written, so a header is emitted only when
+      the origin actually changes. Decided at DRAIN time, on the main
+      thread: queueing happens from several threads and the order they
+      interleave in is only settled once they are in the list. }
+    FLogSegment: string;
 
     { ---- hex viewer ----
       A binary file is worth looking at; "(binary file)" is not a viewer.
@@ -183,6 +188,9 @@ type
     FEventDirty: Boolean;
     FEventTimer: TTimer;
     FLayoutDirty: Boolean;
+    { Set the moment teardown begins. Notification and the timers consult it
+      so nothing touches state that FormDestroy has already released. }
+    FClosing: Boolean;
     { True while RestoreDesktopState is opening windows, so restoring does
       not immediately save a half-built layout back over the real one. }
     FRestoring: Boolean;
@@ -247,6 +255,9 @@ type
     { ---- Log ---- }
     procedure OpenLog;
     procedure LogLine(const Level, Text_: string; var Stop: Boolean);
+    procedure ClientTrace(const Origin, Method, Path: string;
+      Status, Millis: Integer; const Note: string);
+    procedure QueueLogEntry(const Kind, Origin, Text_: string);
     procedure DrainLogLines;
     procedure StopLogWatch;
 
@@ -434,6 +445,10 @@ begin
   if Gateway = '' then Gateway := DefaultGateway;
   FClient := TPasClawClient.Create(Gateway);
   FClient.Token := GetEnvironmentVariable('PASCLAW_TOKEN');
+  { Always on. Tracing you have to enable is tracing you do not have when
+    the thing you wanted to see already happened; the Log window is where
+    it surfaces, and nothing accumulates while that window is closed. }
+  FClient.OnTrace := ClientTrace;
 
   FStyleDir := FindStyleDir;
   BuildDesktop;
@@ -471,6 +486,23 @@ end;
 
 procedure TFormMain.FormDestroy(Sender: TObject);
 begin
+  (* Order matters here, and getting it wrong is an access violation on
+     close rather than anything subtle.
+
+     1. Say we are closing, so Notification stops doing bookkeeping against
+        fields that are about to be freed -- it fires once per owned
+        component as the form comes apart, which is after this runs.
+     2. Stop the timers, or a tick lands mid-teardown and repaints windows
+        that are going away.
+     3. Stop the watcher threads, which read through the client.
+     4. Save, while the client still exists -- the layout lives on the
+        gateway, so there is no writing it afterwards.
+     5. Only then free anything. *)
+  FClosing := True;
+
+  if FEventTimer <> nil then FEventTimer.Enabled := False;
+  if FRunTimer <> nil then FRunTimer.Enabled := False;
+
   { Stop the watchers before the client they read through goes away. }
   if FEventThread <> nil then
   begin
@@ -534,6 +566,17 @@ var
 begin
   inherited;
   if Operation <> TOperation.opRemove then Exit;
+
+  (* Teardown.
+
+     This fires for every component the form owns as the form is destroyed
+     -- which happens AFTER FormDestroy has freed the dictionaries below.
+     Reading them then dereferences nil, and closing the app raised an
+     access violation every time. FormDestroy sets FClosing before it frees
+     anything, so from that point the bookkeeping here is not merely
+     unnecessary but wrong: everything it would tidy up is already gone. *)
+  if FClosing then Exit;
+
   { A window closing is a layout change like any other. }
   if AComponent is TRetroWindow then MarkLayoutDirty;
 
@@ -613,6 +656,10 @@ begin
     FVersionWin := nil;
     Exit;
   end;
+
+  { Streamed before FormCreate ran, so nothing below exists yet. They are
+    all constructed together, so one check covers the three loops. }
+  if FRunWins = nil then Exit;
 
   Keys := FRunWins.Keys.ToArray;
   for I := 0 to High(Keys) do
@@ -749,6 +796,7 @@ var
   I: Integer;
   Icon: TRetroDesktopIcon;
 begin
+  SetClientContext('Board');
   try
     FProjects := FClient.Projects;
   except
@@ -1051,6 +1099,7 @@ var
   end;
 
 begin
+  SetClientContext('Menu');
   if FMenuActions = nil then FMenuActions := TStringList.Create;
   FMenuActions.Clear;
 
@@ -1508,31 +1557,65 @@ begin
   end;
 end;
 
-procedure TFormMain.LogLine(const Level, Text_: string; var Stop: Boolean);
+(* Queue one line for the Log window.
+
+   Called from several threads -- the gateway tail has its own, a research
+   turn traces from another -- so this only appends. Kind and Origin travel
+   with the text rather than being rendered in, because whether a line needs
+   a segment header depends on what came immediately before it, and that is
+   only knowable once the interleaving is settled. *)
+procedure TFormMain.QueueLogEntry(const Kind, Origin, Text_: string);
 begin
-  { Worker thread. Queue the line and return -- the timer paints. }
-  Stop := FLogStop;
-  if Stop then Exit;
-  if FLogLock = nil then Exit;
+  if (FLogLock = nil) or (FLogPending = nil) then Exit;
   FLogLock.Acquire;
   try
-    if FLogPending <> nil then
-    begin
-      FLogPending.Add('[' + Level + '] ' + Text_);
-      { A gateway under load can outrun the timer; the window is a tail, so
-        dropping the oldest queued lines is better than growing without
-        bound. }
-      while FLogPending.Count > 2000 do FLogPending.Delete(0);
-    end;
+    FLogPending.Add(Kind + #9 + Origin + #9 + Text_);
+    { A busy gateway can outrun the timer; the window is a tail, so dropping
+      the oldest queued lines beats growing without bound. }
+    while FLogPending.Count > 2000 do FLogPending.Delete(0);
   finally
     FLogLock.Release;
   end;
 end;
 
+procedure TFormMain.LogLine(const Level, Text_: string; var Stop: Boolean);
+begin
+  { Worker thread. Queue and return -- the timer paints. }
+  Stop := FLogStop or FClosing;
+  if Stop then Exit;
+  QueueLogEntry('S', '', '[' + Level + '] ' + Text_);
+end;
+
+(* Every request the client makes, as it completes.
+
+   This is the half the gateway's own log cannot give you. Its log is
+   filtered server-side before anything is recorded, so a client cannot ask
+   it for more; and even at debug it reports what the SERVER did, never
+   which window wanted it. Here the origin is known exactly, because the
+   caller set it before making the call.
+
+   Runs on whichever thread made the request, so it queues like the rest. *)
+procedure TFormMain.ClientTrace(const Origin, Method, Path: string;
+  Status, Millis: Integer; const Note: string);
+var
+  Line: string;
+begin
+  if FClosing then Exit;
+  Line := Format('%-6s %s', [Method, Path]);
+  if Status > 0 then
+    Line := Line + '  ' + IntToStr(Status)
+  else
+    Line := Line + '  ---';        { never got an answer }
+  Line := Line + Format('  %dms', [Millis]);
+  if Trim(Note) <> '' then Line := Line + '  ' + Note;
+  QueueLogEntry('C', Origin, Line);
+end;
+
 procedure TFormMain.DrainLogLines;
 var
   Batch: TStringList;
-  I: Integer;
+  I, T1, T2: Integer;
+  Entry, Kind, Origin, Text_, Rest, Seg: string;
 begin
   if (FLogLock = nil) or (FLogPending = nil) then Exit;
   if FLogMemo = nil then Exit;
@@ -1549,7 +1632,38 @@ begin
     FLogMemo.Lines.BeginUpdate;
     try
       for I := 0 to Batch.Count - 1 do
-        FLogMemo.Lines.Add(Batch[I]);
+      begin
+        Entry := Batch[I];
+        { kind TAB origin TAB text -- see QueueLogEntry }
+        T1 := Pos(#9, Entry);
+        if T1 = 0 then Continue;
+        Kind := Copy(Entry, 1, T1 - 1);
+        Rest := Copy(Entry, T1 + 1, MaxInt);
+        T2 := Pos(#9, Rest);
+        if T2 = 0 then Continue;
+        Origin := Copy(Rest, 1, T2 - 1);
+        Text_ := Copy(Rest, T2 + 1, MaxInt);
+
+        (* Segment blocks. Client traffic is grouped under whoever made it
+           and gateway lines under the gateway, with a header only when the
+           source actually changes -- a header per line would be noise, and
+           none at all is the undifferentiated stream this exists to
+           replace. *)
+        if Kind = 'S' then Seg := 'gateway'
+        else if Origin = '' then Seg := 'client'
+        else Seg := Origin;
+        if Seg <> FLogSegment then
+        begin
+          FLogSegment := Seg;
+          FLogMemo.Lines.Add('');
+          if Length(Seg) < 58 then
+            FLogMemo.Lines.Add('---- ' + Seg + ' ' +
+              StringOfChar('-', 58 - Length(Seg)))
+          else
+            FLogMemo.Lines.Add('---- ' + Seg + ' ----');
+        end;
+        FLogMemo.Lines.Add('  ' + Text_);
+      end;
       while FLogMemo.Lines.Count > 5000 do FLogMemo.Lines.Delete(0);
     finally
       FLogMemo.Lines.EndUpdate;
@@ -2100,6 +2214,7 @@ var
   App: TAppRow;
   Blocks: TUIBlocks;
 begin
+  SetClientContext('Chat');
   Project := (Sender as TButton).TagString;
   if not FChatLogs.TryGetValue(Project, Log) then Exit;
   if not FChatInputs.TryGetValue(Project, Input) then Exit;
@@ -2284,6 +2399,7 @@ var
   Browser: TWebBrowser;
   Snap: TImage;
 begin
+  SetClientContext('App: ' + Project);
   if FAppWins.TryGetValue(Project, W) and (W <> nil) then
   begin
     W.Restore;
@@ -2425,6 +2541,7 @@ var
   I: Integer;
   Title: string;
 begin
+  SetClientContext('Library');
   if FLibraryWin <> nil then
   begin
     FLibraryWin.Restore;
@@ -2592,6 +2709,7 @@ var
   M: TMemo;
   Log: string;
 begin
+  SetClientContext('Run: ' + Project);
   if not FClient.RunState(Project, Run) then Exit;
   if FRunHeads.TryGetValue(Project, Head) and (Head <> nil) then
     Head.Text := Format('%s -- runs %s%s%s',
@@ -3161,6 +3279,13 @@ begin
       Ok: Boolean;
       Marshal: TThreadProcedure;
     begin
+      { Set INSIDE the thread: the context is per thread, so tagging it on
+        the caller would attribute this call to whatever the main thread
+        was doing when the button was pressed. }
+      if Kind = pkeResearch then
+        SetClientContext('Browser (research)')
+      else
+        SetClientContext('Browser');
       Ok := False;
       Err := '';
       try
@@ -3279,6 +3404,7 @@ var
   Bar: TLayout;
   B: TButton;
 begin
+  SetClientContext('Files');
   if FFilesWin <> nil then
   begin
     FFilesWin.Restore;
@@ -3331,6 +3457,7 @@ var
   Row: TFileRow;
   Line: string;
 begin
+  SetClientContext('Files');
   if FFilesList = nil then Exit;
   if not FClient.ListDir(Path, FFilesDir) then
   begin

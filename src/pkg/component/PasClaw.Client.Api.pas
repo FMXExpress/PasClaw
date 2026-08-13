@@ -130,6 +130,29 @@ type
   TToolTraceProc = procedure(const Kind, Name, Detail: string;
     IsErr: Boolean) of object;
 
+  (* ---- request tracing ----
+
+     Every call this client makes to the gateway, reported as it completes.
+
+     This is the half of the picture the gateway's own log cannot give you.
+     Its log is filtered server-side by log level before anything is
+     recorded, so a client asking for more detail cannot get it; and even at
+     debug it says what the SERVER did, never what a particular window
+     asked for. Tracing here is unconditional, costs a callback, and answers
+     the question a desktop actually raises -- "what did this window just
+     do, and what came back".
+
+     Origin is the context the call was made under (see SetClientContext):
+     which window, which conversation. Without it a busy desktop's traffic
+     is one undifferentiated stream, because a single shared client serves
+     every window.
+
+     Millis is wall time for the whole call. Status is the HTTP status, or 0
+     when the request never got an answer -- in which case Note carries the
+     reason. *)
+  TRequestTraceProc = procedure(const Origin, Method, Path: string;
+    Status, Millis: Integer; const Note: string) of object;
+
   (* ---- period-native output ----
 
      The web desktop renders structured agent output as real UI: a plan
@@ -194,6 +217,9 @@ type
     FTimeoutMs: Integer;
     FModelTimeoutMs: Integer;
     FLastError: string;
+    FOnTrace: TRequestTraceProc;
+    procedure Trace(const Method, Path: string; Status, Millis: Integer;
+      const Note: string);
     function Request(const Method, Path, Body: string): string;
     function RequestT(const Method, Path, Body: string;
       TimeoutMs: Integer): string;
@@ -219,6 +245,10 @@ type
     property TimeoutMs: Integer read FTimeoutMs write FTimeoutMs;
     property ModelTimeoutMs: Integer read FModelTimeoutMs write FModelTimeoutMs;
     property LastError: string read FLastError;
+    (* Set it and every call this client makes is reported. Nothing else
+       turns it on: tracing that needs enabling is tracing you do not have
+       when the thing you wanted to see already happened. *)
+    property OnTrace: TRequestTraceProc read FOnTrace write FOnTrace;
 
     function Ping(out Version: string): Boolean;
 
@@ -378,12 +408,40 @@ type
 procedure ParseUIBlocks(const Reply: string; out VisibleText: string;
   out Blocks: TUIBlocks);
 
+(* ---- the calling context ----
+
+   Names whoever is about to make requests, so a trace can say which window
+   or conversation a call came from. Per THREAD, not per client: one client
+   object serves every window, and the deep-research call runs on its own
+   thread while the main one keeps serving the board -- a single shared
+   field would attribute whichever finished last to whoever set it first.
+
+   Callers set it at the top of an operation and are not required to clear
+   it; the next Set on that thread replaces it. '' means unattributed,
+   which a trace should render rather than hide. *)
+procedure SetClientContext(const Name: string);
+function ClientContext: string;
+
 implementation
 
 uses
   PasClaw.JSON,
   PasClaw.Utils,
+  DateUtils,                 { MilliSecondsBetween -- request timing }
   IdHTTP, IdGlobal, IdSSLOpenSSL, IdComponent;
+
+threadvar
+  GContext: string;
+
+procedure SetClientContext(const Name: string);
+begin
+  GContext := Name;
+end;
+
+function ClientContext: string;
+begin
+  Result := GContext;
+end;
 
 type
   { Indy hands us the body as it arrives; this feeds the caller's callback
@@ -1016,11 +1074,13 @@ var
   Http: TIdHTTP;
   Mem: TMemoryStream;
   Hdr: string;
+  Started: TDateTime;
 begin
   Result := False;
   SetLength(Data, 0);
   Total := 0;
   FLastError := '';
+  Started := Now;
   Http := NewHttp(FToken, FTimeoutMs);
   Mem  := TMemoryStream.Create;
   try
@@ -1033,9 +1093,13 @@ begin
       on E: Exception do
       begin
         FLastError := E.Message;
+        Trace('GET', '/v1/fs/peek', 0,
+              MilliSecondsBetween(Now, Started), E.Message);
         Exit;
       end;
     end;
+    Trace('GET', '/v1/fs/peek', Http.ResponseCode,
+          MilliSecondsBetween(Now, Started), Path);
     Hdr := Http.Response.RawHeaders.Values['X-File-Total'];
     Total := StrToInt64Def(Trim(Hdr), Mem.Size);
     SetLength(Data, Mem.Size);
@@ -1082,6 +1146,17 @@ begin
   Result := RequestT(Method, Path, Body, FTimeoutMs);
 end;
 
+procedure TPasClawClient.Trace(const Method, Path: string;
+  Status, Millis: Integer; const Note: string);
+begin
+  if not Assigned(FOnTrace) then Exit;
+  try
+    FOnTrace(ClientContext, Method, Path, Status, Millis, Note);
+  except
+    { A trace listener must never be able to fail the call it is watching. }
+  end;
+end;
+
 function TPasClawClient.RequestT(const Method, Path, Body: string;
   TimeoutMs: Integer): string;
 var
@@ -1089,9 +1164,12 @@ var
   Req: TStringStream;
   Resp: TStringStream;
   E2: EPasClawClient;
+  Started: TDateTime;
+  Ms: Integer;
 begin
   Result := '';
   FLastError := '';
+  Started := Now;
   Http := NewHttp(FToken, TimeoutMs);
   Req  := nil;
   Resp := TStringStream.Create('');
@@ -1112,12 +1190,18 @@ begin
       else
         raise EPasClawClient.Create('unsupported method ' + Method);
       Result := Resp.DataString;
+      Trace(Method, Path, Http.ResponseCode,
+            MilliSecondsBetween(Now, Started), '');
     except
       on E: EIdHTTPProtocolException do
       begin
         { The gateway's error bodies are JSON with an "error" field; surface
           that rather than Indy's generic status text. }
         FLastError := JsonReadStr(E.ErrorMessage, 'error', E.Message);
+        { Traced before the raise: a failed call is the one most worth
+          seeing, and the caller may swallow this exception. }
+        Trace(Method, Path, E.ErrorCode,
+              MilliSecondsBetween(Now, Started), FLastError);
         E2 := EPasClawClient.Create(FLastError);
         E2.Status := E.ErrorCode;
         E2.Body   := E.ErrorMessage;
@@ -1126,6 +1210,7 @@ begin
       on E: Exception do
       begin
         FLastError := E.Message;
+        Trace(Method, Path, 0, MilliSecondsBetween(Now, Started), E.Message);
         E2 := EPasClawClient.Create(E.Message);
         E2.Status := 0;
         raise E2;
@@ -1874,6 +1959,8 @@ end;
 function TPasClawClient.Chat(const HistoryJSON, System_: string;
   OnChunk: TChatChunkProc; OnTool: TToolTraceProc): string;
 var
+  Started: TDateTime;
+  Code: Integer;
   Http: TIdHTTP;
   Req: TStringStream;
   Sink: TSSEStream;
@@ -1889,6 +1976,7 @@ begin
   Root := TJsonObject.Create;
   Sink := TSSEStream.Create(OnChunk, OnTool);
   Req  := nil;
+  Started := Now;
   { A streamed turn carries its own liveness: chunks keep arriving, and a
     socket that dies still raises. A read timeout here only ever fires on a
     model that is thinking hard, which is not an error. }
@@ -1942,6 +2030,12 @@ begin
         FLastError := E.Message;
     end;
     Result := Sink.Text;
+    { One line for the whole turn. Chunks are the interesting part while it
+      runs and the chat window already shows them; the trace records what
+      the call was and how long it took. }
+    if FLastError = '' then Code := 200 else Code := 0;
+    Trace('POST', '/v1/chat/completions', Code,
+          MilliSecondsBetween(Now, Started), FLastError);
   finally
     Http.Free;
     Req.Free;

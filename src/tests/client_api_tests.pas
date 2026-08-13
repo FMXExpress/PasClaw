@@ -21,6 +21,30 @@ uses
 
 var Failures: Integer = 0;
 
+type
+  { Catches OnTrace so the assertions can look at what was reported. A class
+    because the callback is a method pointer. }
+  TTracer = class
+  public
+    Count: Integer;
+    LastOrigin, LastMethod, LastPath, LastNote: string;
+    LastStatus, LastMillis: Integer;
+    procedure Note(const Origin, Method, Path: string;
+      Status, Millis: Integer; const ANote: string);
+  end;
+
+procedure TTracer.Note(const Origin, Method, Path: string;
+  Status, Millis: Integer; const ANote: string);
+begin
+  Inc(Count);
+  LastOrigin := Origin;
+  LastMethod := Method;
+  LastPath   := Path;
+  LastStatus := Status;
+  LastMillis := Millis;
+  LastNote   := ANote;
+end;
+
 procedure Fail_(const Msg: string);
 begin
   WriteLn('FAIL: ' + Msg);
@@ -63,6 +87,7 @@ var
   Sess: TSessionRows;
   Raw: TBytes;
   Total: Int64;
+  Tracer: TTracer;
 begin
   { ---- UI block parsing: pure string work, so it runs with no gateway ---- }
   { The happy path: prose around a wizard block. }
@@ -236,6 +261,40 @@ begin
     ExpectTrue(C.SwitchDesktop(1, Cur, Cnt), 'switch back');
     ExpectTrue(Pos('library', C.DesktopState) > 0,
                'and the arrangement is there on return');
+
+    { -------------------------------------------------- request trace -- }
+    (* The Log window's client-side half. This is the part the gateway's own
+       log cannot supply: what a given WINDOW asked for, whatever the
+       server's log level is set to. *)
+    Tracer := TTracer.Create;
+    try
+      C.OnTrace := Tracer.Note;
+      SetClientContext('Library');
+      C.Projects;
+      ExpectTrue(Tracer.Count = 1, 'a call is traced exactly once');
+      ExpectStr(Tracer.LastOrigin, 'Library',
+                'and carries the context it was made under');
+      ExpectStr(Tracer.LastMethod, 'GET', 'with its method');
+      ExpectTrue(Pos('/v1/projects', Tracer.LastPath) = 1, 'and its path');
+      ExpectInt(Tracer.LastStatus, 200, 'and the status it got back');
+
+      { A failure is the case most worth seeing, so it must trace too --
+        even though the call raises and the caller may swallow it. }
+      SetClientContext('Files');
+      try
+        C.Project('no-such-project-here', P);
+      except
+        { expected }
+      end;
+      ExpectTrue(Tracer.Count = 2, 'a failed call is traced as well');
+      ExpectStr(Tracer.LastOrigin, 'Files', 'under its own context');
+      ExpectTrue(Tracer.LastStatus <> 200, 'and does not claim success');
+
+      SetClientContext('');
+      C.OnTrace := nil;
+    finally
+      Tracer.Free;
+    end;
 
     { ------------------------------------------------------- sessions -- }
     { Empty is a fine answer on a fresh home; the contract is that it
