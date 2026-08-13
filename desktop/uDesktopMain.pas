@@ -191,6 +191,9 @@ type
     { Set the moment teardown begins. Notification and the timers consult it
       so nothing touches state that FormDestroy has already released. }
     FClosing: Boolean;
+    { True once RestoreDesktopState has opened at least one window, so a
+      first run can tell "nothing was saved" from "the user closed it all". }
+    FRestoredAnything: Boolean;
     { True while RestoreDesktopState is opening windows, so restoring does
       not immediately save a half-built layout back over the real one. }
     FRestoring: Boolean;
@@ -366,6 +369,9 @@ const
   { The key the project-less chat window is filed under. A colon cannot
     appear in a project slug, so this can never collide with a real one. }
   PlainChatKey = ':chat';
+  { A conversation reopened from the Library, filed under its session id.
+    Same reserved-colon rule as above. }
+  SessionChatPrefix = ':session:';
 
 { Conditional string. StrUtils has one; a local helper keeps this unit's
   uses clause to what it actually needs. Declared here, above every caller,
@@ -374,6 +380,15 @@ function IfThenStr(Cond: Boolean; const Yes, No: string): string;
 begin
   if Cond then Result := Yes else Result := No;
 end;
+
+{ True for the synthetic chat keys -- the project-less window and any
+  reopened Library session. A project slug can never start with a colon, so
+  this cannot swallow a real project. }
+function IsSyntheticChat(const Key: string): Boolean;
+begin
+  Result := (Key = '') or ((Length(Key) > 0) and (Key[1] = ':'));
+end;
+
 
 { The chat window whose stream is currently being pumped. Set around the
   blocking Chat call so ChatChunk knows where to append. }
@@ -476,11 +491,16 @@ begin
   StartEventWatch;
   { The layout this workspace was left in, from whichever client left it. }
   RestoreDesktopState;
-  { A first run has no saved layout and would otherwise open to bare
-    wallpaper with no way in that is not the Menu. Give it the project
-    window; anyone who closes it has said what they want and gets an empty
-    desktop from then on. }
-  if (FDesktop.WindowCount = 0) and (FTreeWin = nil) then
+  (* A first run has no saved layout and would otherwise open to bare
+     wallpaper with no way in that is not the Menu. Give it the project
+     window; anyone who closes it has said what they want and gets an empty
+     desktop from then on.
+
+     Asked as "did the restore open anything", not "are there no windows":
+     BuildStylePicker has already created the (hidden) Display Properties
+     window by this point, so a window count is never zero and the test
+     would never fire. *)
+  if not FRestoredAnything then
     OpenTree;
 end;
 
@@ -1677,15 +1697,21 @@ end;
 procedure TFormMain.StopLogWatch;
 begin
   FLogStop := True;
-  if FLogThread <> nil then
-  begin
-    FLogThread.Terminate;
-    { The subscription blocks in Indy until the next byte or the socket
-      drops; the flag above makes the callback stop it at the first line.
-      Waiting here is what keeps the client alive until it does. }
-    FLogThread.WaitFor;
-    FreeAndNil(FLogThread);
-  end;
+  if FLogThread = nil then Exit;
+  FLogThread.Terminate;
+  (* Cut the socket BEFORE joining.
+
+     The flag above is only consulted when a line arrives, and /v1/logs
+     parks silently between log records -- it sends no keepalive, unlike
+     the desktop event stream. With no read timeout, which is correct for
+     a tail, a quiet gateway leaves the watcher blocked inside Indy with
+     nothing to wake it, and joining it here would hang the UI for as long
+     as the gateway stayed quiet: closing the Log window, switching
+     workspace or quitting would all appear to freeze. Cancelling reaches
+     the socket, so the read fails immediately and the thread unwinds. *)
+  if FClient <> nil then FClient.CancelLogs;
+  FLogThread.WaitFor;
+  FreeAndNil(FLogThread);
 end;
 
 procedure TFormMain.OnDesktopEvent(const Ev: TDesktopEvent; var Stop: Boolean);
@@ -1995,6 +2021,8 @@ begin
 
   if Project = PlainChatKey then
     Title := 'PasClaw'
+  else if Copy(Project, 1, Length(SessionChatPrefix)) = SessionChatPrefix then
+    Title := 'Session ' + Copy(Project, Length(SessionChatPrefix) + 1, MaxInt)
   else
   begin
     Title := Project;
@@ -2047,7 +2075,7 @@ begin
   if not FChatHistory.ContainsKey(Project) then
     FChatHistory.AddOrSetValue(Project, '[]');
 
-  if Project = PlainChatKey then
+  if IsSyntheticChat(Project) then
     Log.Lines.Add('Ask PasClaw anything. This window is not tied to a ' +
                   'project, so nothing here builds an app.')
   else
@@ -2134,15 +2162,17 @@ end;
 
 { The builder overlay. Same text the browser client sends, for the same
   reason: the deliverable is software, not an essay. }
-(* The system prompt a project chat sends.
+(* The system prompt a chat sends.
 
-   Empty for the project-less window: that one is a plain conversation, and
-   telling the model to deliver an app when there is no project to put one
-   in would produce files in whatever directory it guessed. The gateway's
-   own default prompt applies there, which is the point of it. *)
+   Empty for every synthetic key, not just the plain-chat one. A session
+   reopened from the Library is filed under ':session:<id>', and sending the
+   builder prompt for it told the model to write an app into
+   projects/:session:<id>/app/ -- a path that cannot exist -- instead of
+   just continuing the conversation. The gateway's own default prompt
+   applies to these, which is the point of them. *)
 function BuilderPrompt(const Project: string): string;
 begin
-  if (Project = '') or (Project = PlainChatKey) then Exit('');
+  if IsSyntheticChat(Project) then Exit('');
   Result :=
     'You are working inside the PasClaw Desktop project "' + Project + '".' + sLineBreak +
     'Deliverables are APPS, not essays. When the user asks for something, ' +
@@ -2208,11 +2238,12 @@ end;
 
 procedure TFormMain.SendChat(Sender: TObject);
 var
-  Project, Text, Reply, Hist, Inner, Visible: string;
+  Project, Text, Reply, Hist, Inner, Visible, SessId: string;
   Log, Input: TMemo;
   Row: TProjectRow;
   App: TAppRow;
   Blocks: TUIBlocks;
+  Conflict: Boolean;
 begin
   SetClientContext('Chat');
   Project := (Sender as TButton).TagString;
@@ -2268,6 +2299,28 @@ begin
   Hist := Copy(Hist, 1, Length(Hist) - 1) +
           ',{"role":"assistant","content":"' + JsonStr(Reply) + '"}]';
   FChatHistory.AddOrSetValue(Project, Hist);
+
+  (* A reopened session has to be written back, or it was never really
+     reopened: chat completions is stateless, so the continued conversation
+     lives only in the dictionary above and dies with the window. The
+     gateway refuses (409) when the session holds a rich agent transcript --
+     flattening tool and system turns to role/content would destroy what
+     terminal resume needs -- and that refusal is worth reporting rather
+     than retrying or hiding. *)
+  if Copy(Project, 1, Length(SessionChatPrefix)) = SessionChatPrefix then
+  begin
+    SessId := Copy(Project, Length(SessionChatPrefix) + 1, MaxInt);
+    if not FClient.SaveSessionHistory(SessId, Hist, '', Conflict) then
+    begin
+      if Conflict then
+        Log.Lines.Add('[this session has tool turns from an agent run; ' +
+                      'new messages here are not being saved into it]')
+      else
+        Log.Lines.Add('[could not save this turn into the session: ' +
+                      FClient.LastError + ']');
+      Log.Lines.Add('');
+    end;
+  end;
 
   { Did the turn leave a runnable app behind? Ask the gateway rather than
     trusting the transcript. }
@@ -2352,7 +2405,7 @@ var
   I: Integer;
 begin
   if Trim(SessionId) = '' then Exit;
-  Key := ':session:' + SessionId;
+  Key := SessionChatPrefix + SessionId;
   OpenChat(Key);
 
   { Already open and already populated -- focusing it is the whole job. }
@@ -3108,6 +3161,7 @@ begin
         OpenRun(Arg);
         if not FRunWins.TryGetValue(Arg, Opened) then Opened := nil;
       end;
+      if Opened <> nil then FRestoredAnything := True;
       PlaceIt(Opened);
     until P = 0;
   finally
@@ -3582,13 +3636,31 @@ begin
   Ext := LowerCase(ExtractFileExt(Name));
   if (Ext = '.html') or (Ext = '.htm') then
   begin
+    (* Read it THROUGH the gateway and hand the browser the markup.
+
+       Path is a path on the gateway's filesystem, which is only also this
+       machine's when the gateway happens to be local -- point
+       PASCLAW_GATEWAY at another box and a file:// URL asks the local
+       browser for a file that is not there. Going through /v1/fs keeps
+       remote gateways working, carries the bearer token the browser
+       control cannot set, and sidesteps escaping every space and hash in
+       the path into a URL. *)
+    if not FClient.ReadFile_(Path, Body, Binary, Truncated) then
+    begin
+      Say('Could not read ' + Name + ': ' + FClient.LastError);
+      Exit;
+    end;
     OpenBrowser('');
     if FBrowserView <> nil then
     begin
-      { A local file, so navigate the control at it directly rather than
-        going back through the gateway for something already on disk. }
-      FBrowserView.Navigate('file://' + Path);
-      if FBrowserStatus <> nil then FBrowserStatus.Text := Path;
+      FBrowserView.LoadFromStrings(Body, Path);
+      if FBrowserStatus <> nil then
+      begin
+        if Truncated then
+          FBrowserStatus.Text := Path + '  [truncated]'
+        else
+          FBrowserStatus.Text := Path;
+      end;
     end;
     Exit;
   end;

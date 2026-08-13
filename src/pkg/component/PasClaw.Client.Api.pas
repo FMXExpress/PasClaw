@@ -23,7 +23,7 @@ unit PasClaw.Client.Api;
 interface
 
 uses
-  SysUtils, Classes;
+  SysUtils, Classes, SyncObjs;
 
 type
   EPasClawClient = class(Exception)
@@ -218,6 +218,19 @@ type
     FModelTimeoutMs: Integer;
     FLastError: string;
     FOnTrace: TRequestTraceProc;
+    (* The live /v1/logs connection, so it can be cut from another thread.
+
+       /v1/logs parks until something is logged and sends no keepalive
+       (unlike /v1/desktop/events). With no read timeout -- correct for a
+       tail -- a quiet gateway leaves the watcher blocked inside Indy with
+       nothing to wake it, so a flag the callback checks is never reached
+       and joining that thread hangs the UI for as long as the gateway
+       stays quiet. Cancellation has to reach the SOCKET. *)
+    { TIdHTTP, held as TObject: this unit keeps the transport out of its
+      interface deliberately, and a cancel only needs to call Disconnect. }
+    FLogHttp: TObject;
+    FLogLock: TCriticalSection;
+    FLogCancelled: Boolean;
     procedure Trace(const Method, Path: string; Status, Millis: Integer;
       const Note: string);
     function Request(const Method, Path, Body: string): string;
@@ -226,6 +239,7 @@ type
     function GetJSON(const Path: string): string;
   public
     constructor Create(const ABaseURL: string = 'http://127.0.0.1:8088');
+    destructor Destroy; override;
     { Base URL without a trailing slash; setting it normalises. }
     property BaseURL: string read FBaseURL write FBaseURL;
     property Token: string read FToken write FToken;
@@ -381,6 +395,20 @@ type
        array when the session is gone or unreadable: an unopenable session
        should give you a blank window, not an exception. *)
     function SessionHistory(const Id: string): string;
+    (* Write a conversation back.
+
+       Chat completions is stateless: a reopened session continues only in
+       whatever the client holds in memory, so without this the follow-up
+       turns are lost the moment the window closes -- the session looks
+       resumed and then silently isn't.
+
+       Conflict comes back True when the gateway REFUSES the write because
+       the session holds a rich agent transcript (tool and system turns).
+       That refusal is deliberate -- flattening it to role/content would
+       destroy the structure terminal resume needs -- so a caller should
+       report it rather than retry. *)
+    function SaveSessionHistory(const Id, MessagesJSON, Title: string;
+      out Conflict: Boolean): Boolean;
 
     { ---- logs ---- }
     (* Subscribe to /v1/logs. Same shape as WatchEvents -- BLOCKS, so run it
@@ -393,6 +421,9 @@ type
        cannot be recovered here. Debug output needs gateway.log_level set to
        "debug" on the server. *)
     procedure WatchLogs(OnLine: TLogLineProc);
+    (* Cut the log subscription now, from any thread. Safe to call when
+       none is running. Call this BEFORE joining the watcher thread. *)
+    procedure CancelLogs;
 
     { ---- raw bytes ---- }
     (* A bounded window of a file's bytes, for the hex viewer: a binary file
@@ -855,6 +886,7 @@ begin
   FBaseURL := ABaseURL;
   while (FBaseURL <> '') and (FBaseURL[Length(FBaseURL)] = '/') do
     SetLength(FBaseURL, Length(FBaseURL) - 1);
+  FLogLock := TCriticalSection.Create;
   FTimeoutMs := 30000;
   FModelTimeoutMs := 20 * 60 * 1000;   { deep research runs for minutes }
 end;
@@ -880,6 +912,13 @@ end;
    separate and never infinite: a gateway that is not listening should fail
    in seconds, whatever the body clock says, or the UI hangs on a typo in
    the address. *)
+destructor TPasClawClient.Destroy;
+begin
+  CancelLogs;
+  FreeAndNil(FLogLock);
+  inherited;
+end;
+
 function NewHttp(const Token: string; ReadTimeoutMs: Integer;
   ConnectTimeoutMs: Integer = 15000): TIdHTTP;
 begin
@@ -988,20 +1027,60 @@ var
 begin
   FLastError := '';
   Sink := TLogStream.Create(OnLine);
+  { A previous cancel must not silence errors on this one. }
+  FLogCancelled := False;
   Http := NewHttp(FToken, 0);
   try
     { Same deal as WatchEvents: an open, mostly-idle connection. }
     Http.ReadTimeout := 0;
     Http.Request.Accept := 'text/event-stream';
+    { Publish the handle so CancelLogs can reach it while we block below. }
+    FLogLock.Acquire;
+    try
+      FLogHttp := Http;
+    finally
+      FLogLock.Release;
+    end;
     try
       Http.Get(FBaseURL + '/v1/logs', Sink);
     except
       on E: EAbort do ;      { caller asked to stop }
-      on E: Exception do FLastError := E.Message;
+      { A cancel arrives here as a socket error, which is the intended
+        outcome and not worth recording as a failure. }
+      on E: Exception do
+        if not FLogCancelled then FLastError := E.Message;
     end;
   finally
+    FLogLock.Acquire;
+    try
+      FLogHttp := nil;
+    finally
+      FLogLock.Release;
+    end;
     Http.Free;
     Sink.Free;
+  end;
+end;
+
+procedure TPasClawClient.CancelLogs;
+var
+  H: TObject;
+begin
+  if FLogLock = nil then Exit;
+  FLogCancelled := True;
+  FLogLock.Acquire;
+  try
+    H := FLogHttp;
+  finally
+    FLogLock.Release;
+  end;
+  if H = nil then Exit;
+  { Disconnecting from another thread is how Indy cancels a blocked read:
+    the reader surfaces a socket error and unwinds. Swallowed because a
+    race with normal completion is a no-op, not a problem. }
+  try
+    TIdHTTP(H).Disconnect(False);
+  except
   end;
 end;
 
@@ -1065,6 +1144,29 @@ begin
     if Arr <> nil then Result := Arr.ToJSON;
   finally
     Root.Free;
+  end;
+end;
+
+function TPasClawClient.SaveSessionHistory(const Id, MessagesJSON,
+  Title: string; out Conflict: Boolean): Boolean;
+var
+  Body: string;
+begin
+  Result := False;
+  Conflict := False;
+  if Trim(Id) = '' then Exit;
+  Body := '{"messages":' + MessagesJSON;
+  if Trim(Title) <> '' then
+    Body := Body + ',"title":"' + JsonEscape(Title) + '"';
+  Body := Body + '}';
+  try
+    Request('PUT', '/v1/sessions/' + UrlEncode_(Id), Body);
+    Result := True;
+  except
+    on E: EPasClawClient do
+      Conflict := E.Status = 409;
+    on E: Exception do
+      ;
   end;
 end;
 

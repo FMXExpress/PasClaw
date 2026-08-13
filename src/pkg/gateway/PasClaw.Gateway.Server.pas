@@ -4550,6 +4550,7 @@ var
   Tag, Body, Line: string;
   TerminatorTmp: TBytes;
   TerminatorIdBytes: TIdBytes;
+  Idle: Integer;
 begin
   { SSE stream -- emit the recent buffer up front, then subscribe
     for live tail. The handler doesn't return until the client
@@ -4589,11 +4590,28 @@ begin
 
   Token := SubscribeLog(Writer.OnLog);
   try
-    { Park here until the client disconnects. WaitFor on the stop
-      event lets a server-side shutdown wake us cleanly too. }
+    (* Park here until the client disconnects. WaitFor on the stop
+       event lets a server-side shutdown wake us cleanly too.
+
+       A keepalive comment every ~15s, matching /v1/desktop/events. A log
+       stream can be silent for a long time, and a silent socket is
+       indistinguishable from a dead one: without this, an idle proxy is
+       free to drop the connection and a client waiting on a byte that
+       never comes has nothing to time out against. *)
+    Idle := 0;
     while AContext.Connection.Connected do
     begin
       if FStopFlag.WaitFor(1000) = wrSignaled then Break;
+      Inc(Idle);
+      if Idle >= 15 then
+      begin
+        Idle := 0;
+        try
+          Writer.WriteSSE(': keepalive'#10#10);
+        except
+          Break;    { the client is gone; stop pretending otherwise }
+        end;
+      end;
     end;
   finally
     UnsubscribeLog(Token);
