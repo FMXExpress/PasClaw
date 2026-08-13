@@ -101,7 +101,8 @@ Environment:
   workspace, not to the client — the arrangement is saved against the
   desktop you are leaving and comes back when you return, geometry
   included.
-- **Chat window** — per project, streaming, with the model's tool use shown
+- **Chat window** — per project, streaming, **rendering markdown** (headings,
+  lists, code blocks, links) and with the model's tool use shown
   inline as it works: asking for an app should not look like a long silence
   followed by a sentence. It sends the builder-mode system prompt, so the
   agent's deliverable is an app rather than an essay. **Chat** on the Menu
@@ -115,10 +116,14 @@ Environment:
   rather than documents. It shows the exact command *before* asking, names
   which of the three places it will run in (this host, a container, a remote
   Docker host), and tails the output live.
-- **Browser** — a question in, a page out. **Search** is one pass;
-  **Research** is the three-phase deep mode, which runs for minutes and
-  narrates what it is doing in a progress dialog. **Make interactive**
-  promotes the page you are looking at into an app you own.
+- **Browser** — a question in, a page out, in **tabs**. Asking again with a
+  page open *revises that page*; **New** opens an empty tab where a question
+  starts a fresh one. **Search** is one pass. **Research** is the deep mode —
+  it plans, reads several sources and synthesises — and opens a **chat
+  window** rather than a progress box: it runs for minutes, narrates as it
+  goes, and a follow-up there continues the report instead of starting over.
+  **Make interactive** promotes the page you are looking at into an app you
+  own.
 - **File Manager** — the workspace directory, over `/v1/fs`. Read-only: that
   surface is already sandbox-checked and filters secret-bearing files, and a
   browse window is not the place to invent a delete button. Opening a file
