@@ -27,6 +27,7 @@ interface
 uses
   System.SysUtils, System.Types, System.UITypes, System.Classes,
   System.IOUtils, System.StrUtils, System.Generics.Collections,
+  System.SyncObjs,
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs,
   FMX.StdCtrls, FMX.Layouts, FMX.ListBox, FMX.Edit, FMX.Memo, FMX.Styles,
   FMX.Objects, FMX.TreeView, FMX.WebBrowser, FMX.ScrollBox,
@@ -55,7 +56,6 @@ type
   private
     FClient: TPasClawClient;
     FDesktop: TRetroDesktop;
-    FDock: TLayout;
     FTree: TTreeView;
     FStatus: TLabel;
     FNodeRefs: TObjectList<TNodeRef>;
@@ -73,6 +73,48 @@ type
     FFilesWin: TRetroWindow;
     FBrowserWin: TRetroWindow;
     FProgressWin: TRetroWindow;
+
+    { ---- the Menu ----
+      A popup built as a window, because everything else here is: it wears
+      the current style like the rest of the shell instead of arriving as an
+      out-of-period native menu. One at a time, closed on choice. }
+    FMenuWin: TRetroWindow;
+    FMenuList: TListBox;
+    FMenuActions: TStringList;   { parallel to FMenuList.Items }
+
+    { ---- the Projects window ----
+      The tree used to be a permanent left dock with no chrome, sitting
+      under the desktop icons it duplicates. It is a window now, opened from
+      the Menu like everything else. }
+    FTreeWin: TRetroWindow;
+
+    { ---- Library ---- }
+    FLibraryList: TListBox;
+    FLibraryKinds: TStringList;   { "page:<id>" / "session:<id>", by row }
+
+    { ---- Log ---- }
+    FLogWin: TRetroWindow;
+    FLogMemo: TMemo;
+    FLogThread: TThread;
+    FLogPending: TStringList;     { worker appends, timer drains }
+    FLogLock: TCriticalSection;
+    FLogStop: Boolean;
+    { The segment currently being written, so a header is emitted only when
+      the origin actually changes. Decided at DRAIN time, on the main
+      thread: queueing happens from several threads and the order they
+      interleave in is only settled once they are in the list. }
+    FLogSegment: string;
+
+    { ---- hex viewer ----
+      A binary file is worth looking at; "(binary file)" is not a viewer.
+      Paged over /v1/fs/peek so opening a huge one costs a window, not a
+      download. }
+    FHexWin: TRetroWindow;
+    FHexMemo: TMemo;
+    FHexPath: string;
+    FHexOffset: Int64;
+    FHexTotal: Int64;
+    FHexPos: TLabel;
     { One chat / app / log window per project, so reopening focuses rather
       than stacking duplicates. Windows announce their own death through
       FreeNotification -- see Notification. }
@@ -146,13 +188,18 @@ type
     FEventDirty: Boolean;
     FEventTimer: TTimer;
     FLayoutDirty: Boolean;
+    { Set the moment teardown begins. Notification and the timers consult it
+      so nothing touches state that FormDestroy has already released. }
+    FClosing: Boolean;
+    { True once RestoreDesktopState has opened at least one window, so a
+      first run can tell "nothing was saved" from "the user closed it all". }
+    FRestoredAnything: Boolean;
     { True while RestoreDesktopState is opening windows, so restoring does
       not immediately save a half-built layout back over the real one. }
     FRestoring: Boolean;
 
     function FindStyleDir: string;
     procedure BuildDesktop;
-    procedure BuildDock;
     procedure BuildStylePicker;
     procedure RefreshWorkspaces;
     procedure RefreshProjects;
@@ -190,6 +237,38 @@ type
     procedure OpenApp(const Project: string);
     procedure OpenJobLog(const Project, TaskId, JobId: string);
     procedure OpenLibrary;
+    procedure LibraryDblClick(Sender: TObject);
+    procedure OpenSessionChat(const SessionId: string);
+
+    { ---- the Menu ---- }
+    (* Built fresh on every open rather than once at startup: half of it is
+       the live project list, with each project's apps under it, and a menu
+       that showed yesterday's projects would be worse than no menu. *)
+    procedure BuildMenu;
+    procedure MenuPick(Sender: TObject);
+    procedure CloseMenu;
+    procedure OpenTree;
+    procedure OpenPlainChat;
+    procedure PickWorkspaceClick(Sender: TObject);
+    procedure NewWorkspaceClick(Sender: TObject);
+    procedure NewWorkspaceAccepted(Sender: TObject);
+    procedure PickWorkspaceAccepted(Sender: TObject);
+    procedure OpenDisplayProperties;
+
+    { ---- Log ---- }
+    procedure OpenLog;
+    procedure LogLine(const Level, Text_: string; var Stop: Boolean);
+    procedure ClientTrace(const Origin, Method, Path: string;
+      Status, Millis: Integer; const Note: string);
+    procedure QueueLogEntry(const Kind, Origin, Text_: string);
+    procedure DrainLogLines;
+    procedure StopLogWatch;
+
+    { ---- hex viewer ---- }
+    procedure OpenHex(const Path: string);
+    procedure HexRender;
+    procedure HexPrevClick(Sender: TObject);
+    procedure HexNextClick(Sender: TObject);
 
     { ---- File Manager ---- }
     procedure OpenFiles;
@@ -228,7 +307,9 @@ type
 
     { ---- desktop state ---- }
     procedure SaveDesktopState;
+    procedure SaveDesktopStateTo(Desk: Integer);
     procedure RestoreDesktopState;
+    procedure CloseAllWindows;
     { Mark the layout changed; the event timer flushes it. Saving inline on
       every open and close would put a blocking PUT in the middle of opening
       a window. }
@@ -238,6 +319,7 @@ type
     procedure BrowserClick(Sender: TObject);
     procedure SendChat(Sender: TObject);
     procedure ChatChunk(const Chunk: string; var Abort: Boolean);
+    procedure ChatTool(const Kind, Name, Detail: string; IsErr: Boolean);
 
     { Live board updates. The client subscribes to /v1/desktop/events on its
       own thread and refreshes when something it displays changes, so the
@@ -284,6 +366,12 @@ type
 const
   NoSkin = '(style default)';
   DefaultGateway = 'http://127.0.0.1:8088';
+  { The key the project-less chat window is filed under. A colon cannot
+    appear in a project slug, so this can never collide with a real one. }
+  PlainChatKey = ':chat';
+  { A conversation reopened from the Library, filed under its session id.
+    Same reserved-colon rule as above. }
+  SessionChatPrefix = ':session:';
 
 { Conditional string. StrUtils has one; a local helper keeps this unit's
   uses clause to what it actually needs. Declared here, above every caller,
@@ -292,6 +380,15 @@ function IfThenStr(Cond: Boolean; const Yes, No: string): string;
 begin
   if Cond then Result := Yes else Result := No;
 end;
+
+{ True for the synthetic chat keys -- the project-less window and any
+  reopened Library session. A project slug can never start with a colon, so
+  this cannot swallow a real project. }
+function IsSyntheticChat(const Key: string): Boolean;
+begin
+  Result := (Key = '') or ((Length(Key) > 0) and (Key[1] = ':'));
+end;
+
 
 { The chat window whose stream is currently being pumped. Set around the
   blocking Chat call so ChatChunk knows where to append. }
@@ -363,10 +460,13 @@ begin
   if Gateway = '' then Gateway := DefaultGateway;
   FClient := TPasClawClient.Create(Gateway);
   FClient.Token := GetEnvironmentVariable('PASCLAW_TOKEN');
+  { Always on. Tracing you have to enable is tracing you do not have when
+    the thing you wanted to see already happened; the Log window is where
+    it surfaces, and nothing accumulates while that window is closed. }
+  FClient.OnTrace := ClientTrace;
 
   FStyleDir := FindStyleDir;
   BuildDesktop;
-  BuildDock;
   BuildStylePicker;
 
   if FStyleDir <> '' then
@@ -391,17 +491,46 @@ begin
   StartEventWatch;
   { The layout this workspace was left in, from whichever client left it. }
   RestoreDesktopState;
+  (* A first run has no saved layout and would otherwise open to bare
+     wallpaper with no way in that is not the Menu. Give it the project
+     window; anyone who closes it has said what they want and gets an empty
+     desktop from then on.
+
+     Asked as "did the restore open anything", not "are there no windows":
+     BuildStylePicker has already created the (hidden) Display Properties
+     window by this point, so a window count is never zero and the test
+     would never fire. *)
+  if not FRestoredAnything then
+    OpenTree;
 end;
 
 procedure TFormMain.FormDestroy(Sender: TObject);
 begin
-  { Stop the watcher before the client it reads through goes away. }
+  (* Order matters here, and getting it wrong is an access violation on
+     close rather than anything subtle.
+
+     1. Say we are closing, so Notification stops doing bookkeeping against
+        fields that are about to be freed -- it fires once per owned
+        component as the form comes apart, which is after this runs.
+     2. Stop the timers, or a tick lands mid-teardown and repaints windows
+        that are going away.
+     3. Stop the watcher threads, which read through the client.
+     4. Save, while the client still exists -- the layout lives on the
+        gateway, so there is no writing it afterwards.
+     5. Only then free anything. *)
+  FClosing := True;
+
+  if FEventTimer <> nil then FEventTimer.Enabled := False;
+  if FRunTimer <> nil then FRunTimer.Enabled := False;
+
+  { Stop the watchers before the client they read through goes away. }
   if FEventThread <> nil then
   begin
     FEventThread.Terminate;
     FEventThread.WaitFor;
     FreeAndNil(FEventThread);
   end;
+  StopLogWatch;
   { Save before the client goes: the layout is stored on the gateway, so
     there is no writing it once the connection is gone. }
   try
@@ -422,6 +551,10 @@ begin
   FreeAndNil(FAppWins);
   FreeAndNil(FChatWins);
   FreeAndNil(FNodeRefs);
+  FreeAndNil(FLogPending);
+  FreeAndNil(FLogLock);
+  FreeAndNil(FMenuActions);
+  FreeAndNil(FLibraryKinds);
 end;
 
 procedure TFormMain.FormKeyDown(Sender: TObject; var Key: Word;
@@ -453,6 +586,17 @@ var
 begin
   inherited;
   if Operation <> TOperation.opRemove then Exit;
+
+  (* Teardown.
+
+     This fires for every component the form owns as the form is destroyed
+     -- which happens AFTER FormDestroy has freed the dictionaries below.
+     Reading them then dereferences nil, and closing the app raised an
+     access violation every time. FormDestroy sets FClosing before it frees
+     anything, so from that point the bookkeeping here is not merely
+     unnecessary but wrong: everything it would tidy up is already gone. *)
+  if FClosing then Exit;
+
   { A window closing is a layout change like any other. }
   if AComponent is TRetroWindow then MarkLayoutDirty;
 
@@ -461,6 +605,39 @@ begin
     FStylePicker := nil;
     FStyleList := nil;    { owned by the picker, dying with it }
     FSkinList := nil;
+    Exit;
+  end;
+
+  if AComponent = FMenuWin then
+  begin
+    FMenuWin := nil;
+    FMenuList := nil;
+    Exit;
+  end;
+
+  if AComponent = FTreeWin then
+  begin
+    FTreeWin := nil;
+    FTree := nil;         { owned by the window }
+    FStatus := nil;
+    Exit;
+  end;
+
+  if AComponent = FLogWin then
+  begin
+    FLogWin := nil;
+    FLogMemo := nil;
+    { Closing the window ends the subscription: an unread tail is a
+      connection the gateway holds open for nobody. }
+    StopLogWatch;
+    Exit;
+  end;
+
+  if AComponent = FHexWin then
+  begin
+    FHexWin := nil;
+    FHexMemo := nil;
+    FHexPos := nil;
     Exit;
   end;
   if AComponent = FLibraryWin then
@@ -499,6 +676,10 @@ begin
     FVersionWin := nil;
     Exit;
   end;
+
+  { Streamed before FormCreate ran, so nothing below exists yet. They are
+    all constructed together, so one check covers the three loops. }
+  if FRunWins = nil then Exit;
 
   Keys := FRunWins.Keys.ToArray;
   for I := 0 to High(Keys) do
@@ -554,110 +735,64 @@ begin
   FDesktop.Taskbar.AddMenuTitle('View').OnClick := RefreshClick;
 end;
 
-procedure TFormMain.BuildDock;
+(* The Projects window.
+
+   This was a permanent left dock: a bare TLayout with no chrome, pinned to
+   the edge, sitting on top of the desktop icons that name the same
+   projects. Two lists of one thing, one of them unmovable and neither of
+   them looking like part of the shell.
+
+   It is a window now, opened from the Menu like Files or Library, so it can
+   be moved, sized, closed and restored -- and the icons have the desktop to
+   themselves. The status line moved into it; a shell with nowhere to speak
+   would have to fall back on message boxes. *)
+procedure TFormMain.OpenTree;
 var
-  Head: TLabel;
-  Bar, Bar2: TLayout;
+  Bar: TLayout;
   B: TButton;
 begin
-  { The dock is a plain left-aligned layout rather than a TRetroWindow: it is
-    the shell's permanent edge, the same decision the browser client made. }
-  FDock := TLayout.Create(Self);
-  FDock.Parent := FDesktop;
-  FDock.Align := TAlignLayout.Left;
-  FDock.Width := 240;
-  FDock.Padding.Rect := TRectF.Create(4, 4, 4, 4);
+  if FTreeWin <> nil then
+  begin
+    FTreeWin.Restore;
+    Exit;
+  end;
+  FTreeWin := TrackWindow(FDesktop.CreateWindow('Projects', 260, 420));
+  MarkLayoutDirty;
 
-  Head := TLabel.Create(Self);
-  Head.Parent := FDock;
-  Head.Align := TAlignLayout.Top;
-  Head.Height := 20;
-  Head.Text := 'Projects';
-  Head.StyledSettings := Head.StyledSettings - [TStyledSetting.Style];
-  Head.TextSettings.Font.Style := [TFontStyle.fsBold];
-
-  Bar := TLayout.Create(Self);
-  Bar.Parent := FDock;
+  Bar := TLayout.Create(FTreeWin);
+  Bar.Parent := FTreeWin.Client;
   Bar.Align := TAlignLayout.Bottom;
   Bar.Height := 30;
 
-  B := TButton.Create(Self);
+  B := TButton.Create(FTreeWin);
   B.Parent := Bar;
   B.Align := TAlignLayout.Left;
   B.Width := 108;
   B.Text := 'New Project';
   B.OnClick := NewProjectClick;
 
-  B := TButton.Create(Self);
+  B := TButton.Create(FTreeWin);
   B.Parent := Bar;
-  B.Align := TAlignLayout.Left;
+  B.Align := TAlignLayout.Client;
   B.Margins.Left := 4;
-  B.Width := 64;
   B.Text := 'Refresh';
   B.OnClick := RefreshClick;
 
-  { A second row: the windows that are not per project. }
-  Bar2 := TLayout.Create(Self);
-  Bar2.Parent := FDock;
-  Bar2.Align := TAlignLayout.Bottom;
-  Bar2.Height := 30;
-
-  B := TButton.Create(Self);
-  B.Parent := Bar2;
-  B.Align := TAlignLayout.Left;
-  B.Width := 74;
-  B.Text := 'Browser';
-  B.OnClick := BrowserClick;
-
-  B := TButton.Create(Self);
-  B.Parent := Bar2;
-  B.Align := TAlignLayout.Left;
-  B.Margins.Left := 4;
-  B.Width := 60;
-  B.Text := 'Files';
-  B.OnClick := FilesClick;
-
-  B := TButton.Create(Self);
-  B.Parent := Bar2;
-  B.Align := TAlignLayout.Client;
-  B.Margins.Left := 4;
-  B.Text := 'Library';
-  B.OnClick := LibraryClick;
-
-  B := TButton.Create(Self);
-  B.Parent := Bar;
-  B.Align := TAlignLayout.Left;
-  B.Margins.Left := 4;
-  B.Width := 64;
-  B.Text := 'Desk >';
-  B.Hint := 'Next desktop -- same workspace, different arrangement';
-  B.OnClick := NextDesktopClick;
-
-  B := TButton.Create(Self);
-  B.Parent := Bar;
-  B.Align := TAlignLayout.Client;
-  B.Margins.Left := 4;
-  B.Text := 'WS >';
-  B.Hint := 'Next WORKSPACE -- changes what PasClaw remembers';
-  B.Hint := 'Next workspace (Ctrl+Alt+Right)';
-  B.OnClick := NextWorkspaceClick;
-
-  FStatus := TLabel.Create(Self);
-  FStatus.Parent := FDock;
+  FStatus := TLabel.Create(FTreeWin);
+  FStatus.Parent := FTreeWin.Client;
   FStatus.Align := TAlignLayout.Bottom;
   FStatus.Height := 32;
   FStatus.Margins.Bottom := 2;
   FStatus.WordWrap := True;
   FStatus.Text := '';
 
-  FTree := TTreeView.Create(Self);
-  FTree.Parent := FDock;
+  FTree := TTreeView.Create(FTreeWin);
+  FTree.Parent := FTreeWin.Client;
   FTree.Align := TAlignLayout.Client;
   FTree.OnDblClick := TreeDblClick;
+
+  RebuildTree;
 end;
-
-{ --------------------------------------------------------------- refresh -- }
-
 procedure TFormMain.RefreshWorkspaces;
 var
   I: Integer;
@@ -681,6 +816,7 @@ var
   I: Integer;
   Icon: TRetroDesktopIcon;
 begin
+  SetClientContext('Board');
   try
     FProjects := FClient.Projects;
   except
@@ -729,6 +865,10 @@ var
   end;
 
 begin
+  { The tree lives in a window that can be closed. Nothing else here needs
+    it to exist, so a closed Projects window means there is simply nothing
+    to rebuild -- not a reason for the board refresh to fault. }
+  if FTree = nil then Exit;
   FTree.Clear;
   FNodeRefs.Clear;   { owns the refs; clearing frees the previous generation }
 
@@ -934,12 +1074,233 @@ end;
 
 { --------------------------------------------------------------- commands -- }
 
+(* The Menu.
+
+   A list in a small window rather than a native TPopupMenu: a native one
+   arrives in the host OS's own chrome, which on a shell whose entire point
+   is wearing a 1995 face is the one wrong-looking thing on screen. This is
+   a TRetroWindow like every other, so it is skinned by the same .style.
+
+   Rebuilt on every open because the bottom half is live: every project, and
+   under each one its app. That is also the answer to "I built three apps
+   and cannot find them" -- Notes, Calendar and the rest are ordinary
+   projects with ordinary apps, and this is where you reach them without
+   knowing that. *)
 procedure TFormMain.MenuClick(Sender: TObject);
+begin
+  if FMenuWin <> nil then
+  begin
+    CloseMenu;      { second click on Menu closes it, as a Start button does }
+    Exit;
+  end;
+  BuildMenu;
+end;
+
+procedure TFormMain.CloseMenu;
+begin
+  if FMenuWin <> nil then
+  begin
+    FMenuWin.Close;
+    FMenuWin := nil;
+    FMenuList := nil;
+  end;
+end;
+
+procedure TFormMain.BuildMenu;
+var
+  I, J: Integer;
+  Apps: TAppRow;
+  Row: TProjectRow;
+
+  procedure Item(const Caption, Action: string);
+  begin
+    FMenuList.Items.Add(Caption);
+    FMenuActions.Add(Action);
+  end;
+
+begin
+  SetClientContext('Menu');
+  if FMenuActions = nil then FMenuActions := TStringList.Create;
+  FMenuActions.Clear;
+
+  FMenuWin := TrackWindow(FDesktop.CreateWindow('PasClaw', 260, 420));
+  FMenuList := TListBox.Create(FMenuWin);
+  FMenuList.Parent := FMenuWin.Client;
+  FMenuList.Align := TAlignLayout.Client;
+  FMenuList.OnClick := MenuPick;
+
+  Item('Chat',                'chat');
+  Item('Browser',             'browser');
+  Item('Files',               'files');
+  Item('Library',             'library');
+  Item('Log',                 'log');
+  Item('-',                   '');
+  Item('Projects',            'tree');
+  Item('New Project...',      'newproject');
+  Item('-',                   '');
+
+  { The live half. A project with an app gets the app on its own line
+    underneath, indented -- FMX's TListBox has no submenus, and a one-level
+    indent reads the same without pretending to be a tree. }
+  for I := 0 to High(FProjects) do
+  begin
+    Row := FProjects[I];
+    Item(Row.Title, 'project:' + Row.Name);
+    if not Row.HasApp then Continue;
+    { Ask the gateway what the app actually is: the board row knows there is
+      one, the app record knows its name and whether it runs or opens. }
+    if not FClient.App(Row.Name, Apps) then Continue;
+    if not Apps.Exists then Continue;
+    if Apps.Servable then
+      Item('    ' + Apps.Name, 'app:' + Row.Name)
+    else
+      Item('    ' + Apps.Name + ' (run)', 'run:' + Row.Name);
+  end;
+  if Length(FProjects) > 0 then Item('-', '');
+
+  Item('Switch Workspace...',  'pickws');
+  Item('New Workspace...',     'newws');
+  Item('Display Properties',   'display');
+
+  { Sit the menu at the bottom-left, where a launcher belongs, and give it
+    only the height it needs. }
+  J := FMenuList.Items.Count * 20 + 40;
+  if J > Round(FDesktop.Height) - 60 then J := Round(FDesktop.Height) - 60;
+  if J < 120 then J := 120;
+  FMenuWin.Height := J;
+  FMenuWin.Position.Point := PointF(8, FDesktop.Height - J - 44);
+end;
+
+procedure TFormMain.MenuPick(Sender: TObject);
+var
+  Idx, I: Integer;
+  Action, Arg: string;
+begin
+  if FMenuList = nil then Exit;
+  Idx := FMenuList.ItemIndex;
+  if (Idx < 0) or (Idx >= FMenuActions.Count) then Exit;
+  Action := FMenuActions[Idx];
+  if Action = '' then Exit;        { separator }
+
+  Arg := '';
+  I := Pos(':', Action);
+  if I > 0 then
+  begin
+    Arg := Copy(Action, I + 1, MaxInt);
+    Action := Copy(Action, 1, I - 1);
+  end;
+
+  { Close first: every branch below opens a window, and the menu should be
+    gone by the time it appears. }
+  CloseMenu;
+
+  if Action = 'chat' then OpenPlainChat
+  else if Action = 'browser' then OpenBrowser('')
+  else if Action = 'files' then OpenFiles
+  else if Action = 'library' then OpenLibrary
+  else if Action = 'log' then OpenLog
+  else if Action = 'tree' then OpenTree
+  else if Action = 'newproject' then NewProjectClick(nil)
+  else if Action = 'pickws' then PickWorkspaceClick(nil)
+  else if Action = 'newws' then NewWorkspaceClick(nil)
+  else if Action = 'display' then OpenDisplayProperties
+  else if (Action = 'project') and (Arg <> '') then OpenChat(Arg)
+  else if (Action = 'app') and (Arg <> '') then OpenApp(Arg)
+  else if (Action = 'run') and (Arg <> '') then OpenRun(Arg);
+end;
+
+procedure TFormMain.OpenDisplayProperties;
 begin
   if FStylePicker = nil then
     BuildStylePicker;
   if FStylePicker <> nil then
     FStylePicker.Restore;
+end;
+
+(* A chat with no project attached.
+
+   Every other chat window here is a BUILDER: it sends a system prompt that
+   says "your deliverable is an app in this project's directory", which is
+   the right default for a desktop whose premise is software-not-text, and
+   the wrong one for "what is the syntax for a Pascal set". This is the
+   plain one -- no project, no builder prompt, just a conversation. It uses
+   the reserved key below so it cannot collide with a project named 'chat'
+   (project names are slugs and cannot contain a colon). *)
+procedure TFormMain.OpenPlainChat;
+begin
+  OpenChat(PlainChatKey);
+end;
+
+procedure TFormMain.PickWorkspaceClick(Sender: TObject);
+var
+  I: Integer;
+  Menu: string;
+begin
+  RefreshWorkspaces;
+  if Length(FWorkspaces) = 0 then Exit;
+  Menu := '';
+  for I := 0 to High(FWorkspaces) do
+  begin
+    Menu := Menu + IntToStr(FWorkspaces[I].Slot) + ': ' + FWorkspaces[I].Label_;
+    if FWorkspaces[I].Active then Menu := Menu + ' (current)';
+    Menu := Menu + sLineBreak;
+  end;
+  { A workspace is a wall, not a view -- name the consequence in the prompt
+    rather than after the fact. }
+  AskText('Switch Workspace',
+          'This changes what PasClaw remembers: memory, sessions, skills' +
+          sLineBreak + 'and files are all per workspace.' + sLineBreak +
+          sLineBreak + Menu + 'Number:',
+          '', PickWorkspaceAccepted);
+end;
+
+procedure TFormMain.PickWorkspaceAccepted(Sender: TObject);
+var
+  I, Slot: Integer;
+begin
+  if FDialogEdit = nil then Exit;
+  Slot := StrToIntDef(Trim(FDialogEdit.Text), 0);
+  DialogCancel(Sender);
+  if Slot <= 0 then Exit;
+  for I := 0 to High(FWorkspaces) do
+    if (FWorkspaces[I].Slot = Slot) and (not FWorkspaces[I].Active) then
+    begin
+      SaveDesktopState;
+      CloseAllWindows;
+      FVersions.Clear;
+      if not FClient.ActivateWorkspace(FWorkspaces[I].Name) then
+      begin
+        Say('Could not switch workspace: ' + FClient.LastError);
+        Exit;
+      end;
+      RefreshWorkspaces;
+      RefreshProjects;
+      RestoreDesktopState;
+      Exit;
+    end;
+end;
+
+procedure TFormMain.NewWorkspaceClick(Sender: TObject);
+begin
+  AskText('New Workspace', 'What should this workspace be called?', '',
+          NewWorkspaceAccepted);
+end;
+
+procedure TFormMain.NewWorkspaceAccepted(Sender: TObject);
+var
+  Name_: string;
+begin
+  if FDialogEdit = nil then Exit;
+  Name_ := Trim(FDialogEdit.Text);
+  DialogCancel(Sender);
+  if Name_ = '' then Exit;
+  if FClient.CreateWorkspace(Name_) = '' then
+  begin
+    Say('Could not create workspace: ' + FClient.LastError);
+    Exit;
+  end;
+  RefreshWorkspaces;
+  Say('Workspace "' + Name_ + '" created. Switch to it from the Menu.');
 end;
 
 procedure TFormMain.NewProjectClick(Sender: TObject);
@@ -980,25 +1341,60 @@ end;
    invisible to the agent -- the whole difference from WS >. *)
 procedure TFormMain.NextDesktopClick(Sender: TObject);
 var
-  Cur, Cnt, Target: Integer;
+  Cur, Cnt, Target, Leaving: Integer;
 begin
   if not FClient.Desktops(Cur, Cnt) then Exit;
-  SaveDesktopState;
+  Leaving := Cur;
+  { Named, not "current": the switch below moves what current means, and an
+    autosave queued by the closing windows would otherwise land here. }
+  SaveDesktopStateTo(Leaving);
   if Cnt < 2 then Target := 2         { first press creates a second desktop }
   else if Cur >= Cnt then Target := 1
   else Target := Cur + 1;
   if not FClient.SwitchDesktop(Target, Cur, Cnt) then Exit;
-  while FDesktop.WindowCount > 0 do
-    FDesktop.Windows[0].Close;
-  FChatWins.Clear; FChatLogs.Clear; FChatInputs.Clear; FAppWins.Clear;
+  CloseAllWindows;
+  RestoreDesktopState;
+  Say(Format('Desktop %d of %d', [Cur, Cnt]));
+end;
+
+(* Tear down every window and forget every handle to one.
+
+   Three call sites needed this and each kept its own list of fields to nil,
+   which is a bug waiting for the next window kind: miss one and it becomes
+   a dangling pointer the next Restore walks into. One place to update.
+
+   FRestoring is held for the duration so the closes cannot mark the layout
+   dirty -- the layout was already saved, deliberately, to a named desk. *)
+procedure TFormMain.CloseAllWindows;
+var
+  WasRestoring: Boolean;
+begin
+  WasRestoring := FRestoring;
+  FRestoring := True;
+  try
+    while FDesktop.WindowCount > 0 do
+      FDesktop.Windows[0].Close;
+  finally
+    FRestoring := WasRestoring;
+  end;
+  FChatWins.Clear; FChatLogs.Clear; FChatInputs.Clear; FChatHistory.Clear;
+  FAppWins.Clear;
   FRunWins.Clear; FRunLogs.Clear; FRunHeads.Clear;
-  FStylePicker := nil; FLibraryWin := nil;
+  FStylePicker := nil; FStyleList := nil; FSkinList := nil;
+  FLibraryWin := nil; FLibraryList := nil;
+  FTreeWin := nil; FTree := nil;
+  FLogWin := nil; FLogMemo := nil;
   FFilesWin := nil; FFilesList := nil; FFilesPath := nil;
+  FHexWin := nil; FHexMemo := nil;
   FBrowserWin := nil; FBrowserQuery := nil; FBrowserStatus := nil;
   FBrowserSearch := nil; FBrowserDeep := nil; FBrowserPromote := nil;
   FBrowserView := nil; FCurrentPage := '';
-  RestoreDesktopState;
-  Say(Format('Desktop %d of %d', [Cur, Cnt]));
+  FProgressWin := nil; FProgressText := nil;
+  FVersionWin := nil;
+  FMenuWin := nil;
+  { The layout is now empty by construction; do not let that be written
+    over the desk we are about to arrive at before it is restored. }
+  FLayoutDirty := False;
 end;
 
 procedure TFormMain.NextWorkspaceClick(Sender: TObject);
@@ -1013,23 +1409,13 @@ begin
 
   { Save THIS workspace's arrangement before leaving it -- switching is
     meant to feel like walking into a different room, which only works if
-    the room you left is still as you left it. }
+    the room you left is still as you left it. The state route is per
+    workspace, so this lands on the one we are still in. }
   SaveDesktopState;
 
-  { Switching desktops closes this one's windows -- they belong to the
+  { Switching workspaces closes this one's windows -- they belong to the
     workspace, not to the client. }
-  while FDesktop.WindowCount > 0 do
-    FDesktop.Windows[0].Close;
-  FStylePicker := nil;
-  FLibraryWin := nil;
-  FFilesWin := nil; FFilesList := nil; FFilesPath := nil;
-  FBrowserWin := nil; FBrowserQuery := nil; FBrowserStatus := nil;
-  FBrowserSearch := nil; FBrowserDeep := nil; FBrowserPromote := nil;
-  FBrowserView := nil; FCurrentPage := '';
-  FProgressWin := nil; FProgressText := nil;
-  FVersionWin := nil;
-  FChatWins.Clear; FChatLogs.Clear; FChatInputs.Clear; FAppWins.Clear;
-  FRunWins.Clear; FRunLogs.Clear; FRunHeads.Clear;
+  CloseAllWindows;
   { Versions belong to a conversation, and the conversations just closed. }
   FVersions.Clear;
 
@@ -1061,6 +1447,7 @@ procedure TFormMain.TreeDblClick(Sender: TObject);
 var
   Ref: TNodeRef;
 begin
+  if FTree = nil then Exit;
   if (FTree.Selected = nil) or (FTree.Selected.TagObject = nil) then Exit;
   Ref := FTree.Selected.TagObject as TNodeRef;
   case Ref.Kind of
@@ -1077,6 +1464,18 @@ type
   { Runs TPasClawClient.WatchEvents, which blocks. Terminating the thread
     stops the subscription through the callback's Stop flag. }
   TEventWatchThread = class(TThread)
+  private
+    FForm: TFormMain;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(AForm: TFormMain);
+  end;
+
+  { The same pattern for /v1/logs. Only alive while the Log window is open:
+    an idle subscription costs the gateway a held connection, and nobody is
+    reading it. }
+  TLogWatchThread = class(TThread)
   private
     FForm: TFormMain;
   protected
@@ -1106,6 +1505,213 @@ begin
     if Terminated then Break;
     Sleep(3000);
   end;
+end;
+
+constructor TLogWatchThread.Create(AForm: TFormMain);
+begin
+  inherited Create(True);
+  FForm := AForm;
+  FreeOnTerminate := False;
+end;
+
+procedure TLogWatchThread.Execute;
+begin
+  while not Terminated do
+  begin
+    try
+      FForm.FClient.WatchLogs(FForm.LogLine);
+    except
+      { same deal as events: a dead gateway is a retry, not a dialog }
+    end;
+    if Terminated then Break;
+    Sleep(3000);
+  end;
+end;
+
+(* The Log window.
+
+   /v1/logs is the gateway's own ring buffer replayed and then tailed live,
+   which is the same thing `pasclaw gateway` prints to its terminal -- worth
+   having on the desktop when the gateway is on another machine, or started
+   by something that swallowed its output.
+
+   What it CANNOT do is show more than the gateway recorded. Log level is a
+   server-side filter applied before the buffer, so a debug line that was
+   never emitted cannot be recovered by asking differently here. The header
+   says so, because the alternative is a level control that appears to do
+   something and does not. *)
+procedure TFormMain.OpenLog;
+var
+  Head: TLabel;
+begin
+  if FLogWin <> nil then
+  begin
+    FLogWin.Restore;
+    Exit;
+  end;
+  FLogWin := TrackWindow(FDesktop.CreateWindow('Log', 620, 380));
+  MarkLayoutDirty;
+
+  Head := TLabel.Create(FLogWin);
+  Head.Parent := FLogWin.Client;
+  Head.Align := TAlignLayout.Top;
+  Head.Height := 32;
+  Head.WordWrap := True;
+  Head.Text := 'Live from the gateway. Debug lines appear here only when ' +
+               'the GATEWAY runs at debug -- set gateway.log_level to ' +
+               '"debug" in config.json and restart it.';
+
+  FLogMemo := TMemo.Create(FLogWin);
+  FLogMemo.Parent := FLogWin.Client;
+  FLogMemo.Align := TAlignLayout.Client;
+  FLogMemo.ReadOnly := True;
+  FLogMemo.WordWrap := False;
+
+  if FLogPending = nil then FLogPending := TStringList.Create;
+  if FLogLock = nil then FLogLock := TCriticalSection.Create;
+  FLogStop := False;
+  if FLogThread = nil then
+  begin
+    FLogThread := TLogWatchThread.Create(Self);
+    FLogThread.Start;
+  end;
+end;
+
+(* Queue one line for the Log window.
+
+   Called from several threads -- the gateway tail has its own, a research
+   turn traces from another -- so this only appends. Kind and Origin travel
+   with the text rather than being rendered in, because whether a line needs
+   a segment header depends on what came immediately before it, and that is
+   only knowable once the interleaving is settled. *)
+procedure TFormMain.QueueLogEntry(const Kind, Origin, Text_: string);
+begin
+  if (FLogLock = nil) or (FLogPending = nil) then Exit;
+  FLogLock.Acquire;
+  try
+    FLogPending.Add(Kind + #9 + Origin + #9 + Text_);
+    { A busy gateway can outrun the timer; the window is a tail, so dropping
+      the oldest queued lines beats growing without bound. }
+    while FLogPending.Count > 2000 do FLogPending.Delete(0);
+  finally
+    FLogLock.Release;
+  end;
+end;
+
+procedure TFormMain.LogLine(const Level, Text_: string; var Stop: Boolean);
+begin
+  { Worker thread. Queue and return -- the timer paints. }
+  Stop := FLogStop or FClosing;
+  if Stop then Exit;
+  QueueLogEntry('S', '', '[' + Level + '] ' + Text_);
+end;
+
+(* Every request the client makes, as it completes.
+
+   This is the half the gateway's own log cannot give you. Its log is
+   filtered server-side before anything is recorded, so a client cannot ask
+   it for more; and even at debug it reports what the SERVER did, never
+   which window wanted it. Here the origin is known exactly, because the
+   caller set it before making the call.
+
+   Runs on whichever thread made the request, so it queues like the rest. *)
+procedure TFormMain.ClientTrace(const Origin, Method, Path: string;
+  Status, Millis: Integer; const Note: string);
+var
+  Line: string;
+begin
+  if FClosing then Exit;
+  Line := Format('%-6s %s', [Method, Path]);
+  if Status > 0 then
+    Line := Line + '  ' + IntToStr(Status)
+  else
+    Line := Line + '  ---';        { never got an answer }
+  Line := Line + Format('  %dms', [Millis]);
+  if Trim(Note) <> '' then Line := Line + '  ' + Note;
+  QueueLogEntry('C', Origin, Line);
+end;
+
+procedure TFormMain.DrainLogLines;
+var
+  Batch: TStringList;
+  I, T1, T2: Integer;
+  Entry, Kind, Origin, Text_, Rest, Seg: string;
+begin
+  if (FLogLock = nil) or (FLogPending = nil) then Exit;
+  if FLogMemo = nil then Exit;
+  Batch := TStringList.Create;
+  try
+    FLogLock.Acquire;
+    try
+      if FLogPending.Count = 0 then Exit;
+      Batch.Assign(FLogPending);
+      FLogPending.Clear;
+    finally
+      FLogLock.Release;
+    end;
+    FLogMemo.Lines.BeginUpdate;
+    try
+      for I := 0 to Batch.Count - 1 do
+      begin
+        Entry := Batch[I];
+        { kind TAB origin TAB text -- see QueueLogEntry }
+        T1 := Pos(#9, Entry);
+        if T1 = 0 then Continue;
+        Kind := Copy(Entry, 1, T1 - 1);
+        Rest := Copy(Entry, T1 + 1, MaxInt);
+        T2 := Pos(#9, Rest);
+        if T2 = 0 then Continue;
+        Origin := Copy(Rest, 1, T2 - 1);
+        Text_ := Copy(Rest, T2 + 1, MaxInt);
+
+        (* Segment blocks. Client traffic is grouped under whoever made it
+           and gateway lines under the gateway, with a header only when the
+           source actually changes -- a header per line would be noise, and
+           none at all is the undifferentiated stream this exists to
+           replace. *)
+        if Kind = 'S' then Seg := 'gateway'
+        else if Origin = '' then Seg := 'client'
+        else Seg := Origin;
+        if Seg <> FLogSegment then
+        begin
+          FLogSegment := Seg;
+          FLogMemo.Lines.Add('');
+          if Length(Seg) < 58 then
+            FLogMemo.Lines.Add('---- ' + Seg + ' ' +
+              StringOfChar('-', 58 - Length(Seg)))
+          else
+            FLogMemo.Lines.Add('---- ' + Seg + ' ----');
+        end;
+        FLogMemo.Lines.Add('  ' + Text_);
+      end;
+      while FLogMemo.Lines.Count > 5000 do FLogMemo.Lines.Delete(0);
+    finally
+      FLogMemo.Lines.EndUpdate;
+    end;
+    FLogMemo.GoToTextEnd;
+  finally
+    Batch.Free;
+  end;
+end;
+
+procedure TFormMain.StopLogWatch;
+begin
+  FLogStop := True;
+  if FLogThread = nil then Exit;
+  FLogThread.Terminate;
+  (* Cut the socket BEFORE joining.
+
+     The flag above is only consulted when a line arrives, and /v1/logs
+     parks silently between log records -- it sends no keepalive, unlike
+     the desktop event stream. With no read timeout, which is correct for
+     a tail, a quiet gateway leaves the watcher blocked inside Indy with
+     nothing to wake it, and joining it here would hang the UI for as long
+     as the gateway stayed quiet: closing the Log window, switching
+     workspace or quitting would all appear to freeze. Cancelling reaches
+     the socket, so the read fails immediately and the thread unwinds. *)
+  if FClient <> nil then FClient.CancelLogs;
+  FLogThread.WaitFor;
+  FreeAndNil(FLogThread);
 end;
 
 procedure TFormMain.OnDesktopEvent(const Ev: TDesktopEvent; var Stop: Boolean);
@@ -1157,6 +1763,9 @@ end;
 procedure TFormMain.EventTimerTick(Sender: TObject);
 begin
   ApplyPendingEvents;
+  { Log lines arrive on their own thread and are painted here, on the main
+    one, for the same reason board events are. }
+  DrainLogLines;
 end;
 
 procedure TFormMain.StartEventWatch;
@@ -1410,8 +2019,15 @@ begin
     Exit;
   end;
 
-  Title := Project;
-  if ProjectByName(Project, Row) then Title := Row.Title;
+  if Project = PlainChatKey then
+    Title := 'PasClaw'
+  else if Copy(Project, 1, Length(SessionChatPrefix)) = SessionChatPrefix then
+    Title := 'Session ' + Copy(Project, Length(SessionChatPrefix) + 1, MaxInt)
+  else
+  begin
+    Title := Project;
+    if ProjectByName(Project, Row) then Title := Row.Title;
+  end;
   W := TrackWindow(FDesktop.CreateWindow(Title + ' -- Chat', 520, 420));
   FChatWins.AddOrSetValue(Project, W);
 
@@ -1459,9 +2075,59 @@ begin
   if not FChatHistory.ContainsKey(Project) then
     FChatHistory.AddOrSetValue(Project, '[]');
 
-  Log.Lines.Add('Describe the app you want. PasClaw builds it into this ' +
-                'project and it opens as a window.');
+  if IsSyntheticChat(Project) then
+    Log.Lines.Add('Ask PasClaw anything. This window is not tied to a ' +
+                  'project, so nothing here builds an app.')
+  else
+    Log.Lines.Add('Describe the app you want. PasClaw builds it into this ' +
+                  'project and it opens as a window.');
   Log.Lines.Add('');
+end;
+
+(* Pull role/content pairs out of a messages array.
+
+   Hand-scanned for the same reason RestoreDesktopState is: the shape is
+   fixed and flat, and one odd session must not be able to stop the Library
+   from opening. Roles and contents come back as a name=value list, which
+   keeps the pairing intact without a second parallel structure. *)
+procedure SplitChatMessages(const ArrayJSON: string; Into: TStringList);
+var
+  P, Q: Integer;
+  Role, Content: string;
+begin
+  if Into = nil then Exit;
+  Into.Clear;
+  P := 1;
+  repeat
+    P := PosEx('"role":"', ArrayJSON, P);
+    if P = 0 then Break;
+    Inc(P, 8);
+    Q := PosEx('"', ArrayJSON, P);
+    if Q = 0 then Break;
+    Role := Copy(ArrayJSON, P, Q - P);
+
+    P := PosEx('"content":"', ArrayJSON, Q);
+    if P = 0 then Break;
+    Inc(P, 11);
+    Q := P;
+    { Walk to the closing quote, honouring backslash escapes so a message
+      containing \" does not end early. }
+    while Q <= Length(ArrayJSON) do
+    begin
+      if ArrayJSON[Q] = '\' then Inc(Q, 2)
+      else if ArrayJSON[Q] = '"' then Break
+      else Inc(Q);
+    end;
+    if Q > Length(ArrayJSON) then Break;
+    Content := Copy(ArrayJSON, P, Q - P);
+    Content := StringReplace(Content, '\n', sLineBreak, [rfReplaceAll]);
+    Content := StringReplace(Content, '\"', '"', [rfReplaceAll]);
+    Content := StringReplace(Content, '\\', '\', [rfReplaceAll]);
+    { Tool and system turns are machinery, not conversation. }
+    if (Role = 'user') or (Role = 'assistant') then
+      Into.Add(Role + '=' + Content);
+    P := Q;
+  until False;
 end;
 
 
@@ -1496,8 +2162,17 @@ end;
 
 { The builder overlay. Same text the browser client sends, for the same
   reason: the deliverable is software, not an essay. }
+(* The system prompt a chat sends.
+
+   Empty for every synthetic key, not just the plain-chat one. A session
+   reopened from the Library is filed under ':session:<id>', and sending the
+   builder prompt for it told the model to write an app into
+   projects/:session:<id>/app/ -- a path that cannot exist -- instead of
+   just continuing the conversation. The gateway's own default prompt
+   applies to these, which is the point of them. *)
 function BuilderPrompt(const Project: string): string;
 begin
+  if IsSyntheticChat(Project) then Exit('');
   Result :=
     'You are working inside the PasClaw Desktop project "' + Project + '".' + sLineBreak +
     'Deliverables are APPS, not essays. When the user asks for something, ' +
@@ -1527,14 +2202,50 @@ begin
   Application.ProcessMessages;
 end;
 
+(* What the model is DOING, in the transcript.
+
+   Asking for an app used to look like a long silence and then a sentence,
+   with no sign of the file writes, the manifest edit and the board updates
+   that were the actual work -- and when it went wrong, nothing to look at.
+   Each call is one line in, its result one line out, indented so the prose
+   still reads as the conversation.
+
+   Deliberately terse: the gateway already caps args and results before they
+   reach here, and a chat window is not a log viewer. The Log window is, and
+   it is one Menu item away. *)
+procedure TFormMain.ChatTool(const Kind, Name, Detail: string; IsErr: Boolean);
+var
+  Line: string;
+begin
+  if GStreamingLog = nil then Exit;
+  if Kind = 'call' then
+  begin
+    Line := '  * ' + Name;
+    if Trim(Detail) <> '' then Line := Line + ' ' + Detail;
+  end
+  else if IsErr then
+    Line := '    ! ' + Trim(Detail)
+  else
+  begin
+    Line := Trim(Detail);
+    if Line = '' then Exit;      { a silent success needs no second line }
+    Line := '    ' + Line;
+  end;
+  GStreamingLog.Lines.Add(Line);
+  GStreamingLog.GoToTextEnd;
+  Application.ProcessMessages;
+end;
+
 procedure TFormMain.SendChat(Sender: TObject);
 var
-  Project, Text, Reply, Hist, Inner, Visible: string;
+  Project, Text, Reply, Hist, Inner, Visible, SessId: string;
   Log, Input: TMemo;
   Row: TProjectRow;
   App: TAppRow;
   Blocks: TUIBlocks;
+  Conflict: Boolean;
 begin
+  SetClientContext('Chat');
   Project := (Sender as TButton).TagString;
   if not FChatLogs.TryGetValue(Project, Log) then Exit;
   if not FChatInputs.TryGetValue(Project, Input) then Exit;
@@ -1562,7 +2273,7 @@ begin
   try
     (Sender as TButton).Enabled := False;
     try
-      Reply := FClient.Chat(Hist, BuilderPrompt(Project), ChatChunk);
+      Reply := FClient.Chat(Hist, BuilderPrompt(Project), ChatChunk, ChatTool);
     finally
       (Sender as TButton).Enabled := True;
     end;
@@ -1588,6 +2299,28 @@ begin
   Hist := Copy(Hist, 1, Length(Hist) - 1) +
           ',{"role":"assistant","content":"' + JsonStr(Reply) + '"}]';
   FChatHistory.AddOrSetValue(Project, Hist);
+
+  (* A reopened session has to be written back, or it was never really
+     reopened: chat completions is stateless, so the continued conversation
+     lives only in the dictionary above and dies with the window. The
+     gateway refuses (409) when the session holds a rich agent transcript --
+     flattening tool and system turns to role/content would destroy what
+     terminal resume needs -- and that refusal is worth reporting rather
+     than retrying or hiding. *)
+  if Copy(Project, 1, Length(SessionChatPrefix)) = SessionChatPrefix then
+  begin
+    SessId := Copy(Project, Length(SessionChatPrefix) + 1, MaxInt);
+    if not FClient.SaveSessionHistory(SessId, Hist, '', Conflict) then
+    begin
+      if Conflict then
+        Log.Lines.Add('[this session has tool turns from an agent run; ' +
+                      'new messages here are not being saved into it]')
+      else
+        Log.Lines.Add('[could not save this turn into the session: ' +
+                      FClient.LastError + ']');
+      Log.Lines.Add('');
+    end;
+  end;
 
   { Did the turn leave a runnable app behind? Ask the gateway rather than
     trusting the transcript. }
@@ -1656,6 +2389,61 @@ begin
   end;
 end;
 
+(* Reopen a saved conversation from the Library.
+
+   Its history comes back from the gateway so the next message continues it
+   rather than starting over; the transcript is replayed into the window so
+   there is something to read on arrival. Filed under a key derived from the
+   session id, which cannot collide with a project slug (slugs have no
+   colon), so a reopened session and a project chat can be open at once. *)
+procedure TFormMain.OpenSessionChat(const SessionId: string);
+var
+  Key: string;
+  Log: TMemo;
+  Hist, Visible: string;
+  Msgs: TStringList;
+  I: Integer;
+begin
+  if Trim(SessionId) = '' then Exit;
+  Key := SessionChatPrefix + SessionId;
+  OpenChat(Key);
+
+  { Already open and already populated -- focusing it is the whole job. }
+  if FChatHistory.TryGetValue(Key, Hist) and (Trim(Hist) <> '[]') and
+     (Trim(Hist) <> '') then Exit;
+
+  Hist := FClient.SessionHistory(SessionId);
+  if Trim(Hist) = '' then Hist := '[]';
+  FChatHistory.AddOrSetValue(Key, Hist);
+
+  if not FChatLogs.TryGetValue(Key, Log) then Exit;
+  if Log = nil then Exit;
+
+  Msgs := TStringList.Create;
+  try
+    SplitChatMessages(Hist, Msgs);
+    if Msgs.Count = 0 then
+    begin
+      Log.Lines.Add('(this session has no messages)');
+      Exit;
+    end;
+    Log.Lines.Clear;
+    for I := 0 to Msgs.Count - 1 do
+    begin
+      { Names(I) is the role, ValueFromIndex(I) the content. }
+      Visible := Msgs.ValueFromIndex[I];
+      if Msgs.Names[I] = 'user' then
+        Log.Lines.Add('> ' + Visible)
+      else
+        Log.Lines.Add(Visible);
+      Log.Lines.Add('');
+    end;
+    Log.GoToTextEnd;
+  finally
+    Msgs.Free;
+  end;
+end;
+
 procedure TFormMain.OpenApp(const Project: string);
 var
   W: TRetroWindow;
@@ -1664,6 +2452,7 @@ var
   Browser: TWebBrowser;
   Snap: TImage;
 begin
+  SetClientContext('App: ' + Project);
   if FAppWins.TryGetValue(Project, W) and (W <> nil) then
   begin
     W.Restore;
@@ -1786,37 +2575,102 @@ begin
     M.Text := '(no output yet)';
 end;
 
+(* The Library: what this workspace has accumulated.
+
+   Two kinds of thing, because they answer different questions. Pages are
+   what you looked up; sessions are what you talked about. Listing only the
+   first made the window look like a search history and left every past
+   conversation unreachable from the UI.
+
+   Rows are inert without somewhere to go, so each one is double-clickable:
+   a page opens in the Browser, a session opens as a chat. FLibraryKinds
+   runs parallel to the visible list because the caption is for reading and
+   the id is for acting on -- packing an id into the caption and parsing it
+   back out is how you end up with a project named "-- 3 source(s)". *)
 procedure TFormMain.OpenLibrary;
 var
-  LB: TListBox;
   Pages: TPageRows;
+  Sess: TSessionRows;
   I: Integer;
+  Title: string;
 begin
+  SetClientContext('Library');
   if FLibraryWin <> nil then
   begin
     FLibraryWin.Restore;
     Exit;
   end;
-  FLibraryWin := TrackWindow(FDesktop.CreateWindow('Library', 420, 340));
+  FLibraryWin := TrackWindow(FDesktop.CreateWindow('Library', 460, 380));
   MarkLayoutDirty;
-  LB := TListBox.Create(FLibraryWin);
-  LB.Parent := FLibraryWin.Client;
-  LB.Align := TAlignLayout.Client;
+  if FLibraryKinds = nil then FLibraryKinds := TStringList.Create;
+  FLibraryKinds.Clear;
+
+  FLibraryList := TListBox.Create(FLibraryWin);
+  FLibraryList.Parent := FLibraryWin.Client;
+  FLibraryList.Align := TAlignLayout.Client;
+  FLibraryList.OnDblClick := LibraryDblClick;
+
+  FLibraryList.Items.Add('-- Pages --');
+  FLibraryKinds.Add('');
   try
     Pages := FClient.Pages;
   except
-    on E: Exception do
-    begin
-      LB.Items.Add('Could not list pages: ' + E.Message);
-      Exit;
-    end;
+    SetLength(Pages, 0);
   end;
   if Length(Pages) = 0 then
-    LB.Items.Add('(no pages yet)')
+  begin
+    FLibraryList.Items.Add('  (none yet -- ask something in the Browser)');
+    FLibraryKinds.Add('');
+  end
   else
     for I := 0 to High(Pages) do
-      LB.Items.Add(Format('%s -- %d source(s)  %s',
+    begin
+      FLibraryList.Items.Add(Format('  %s -- %d source(s)  %s',
         [Pages[I].Title, Pages[I].SourceCount, Pages[I].Created]));
+      FLibraryKinds.Add('page:' + Pages[I].Id);
+    end;
+
+  FLibraryList.Items.Add('');
+  FLibraryKinds.Add('');
+  FLibraryList.Items.Add('-- Sessions --');
+  FLibraryKinds.Add('');
+  try
+    Sess := FClient.Sessions;
+  except
+    SetLength(Sess, 0);
+  end;
+  if Length(Sess) = 0 then
+  begin
+    FLibraryList.Items.Add('  (none yet)');
+    FLibraryKinds.Add('');
+  end
+  else
+    for I := 0 to High(Sess) do
+    begin
+      Title := Sess[I].Title;
+      if Trim(Title) = '' then Title := Sess[I].Id;
+      FLibraryList.Items.Add('  ' + Title +
+        IfThenStr(Sess[I].Model <> '', '  [' + Sess[I].Model + ']', ''));
+      FLibraryKinds.Add('session:' + Sess[I].Id);
+    end;
+end;
+
+procedure TFormMain.LibraryDblClick(Sender: TObject);
+var
+  Idx, C: Integer;
+  Kind, Id: string;
+begin
+  if (FLibraryList = nil) or (FLibraryKinds = nil) then Exit;
+  Idx := FLibraryList.ItemIndex;
+  if (Idx < 0) or (Idx >= FLibraryKinds.Count) then Exit;
+  Kind := FLibraryKinds[Idx];
+  if Kind = '' then Exit;          { a heading, not a row }
+  C := Pos(':', Kind);
+  if C = 0 then Exit;
+  Id := Copy(Kind, C + 1, MaxInt);
+  Kind := Copy(Kind, 1, C - 1);
+  if Kind = 'page' then OpenBrowser(Id)
+  else if Kind = 'session' then OpenSessionChat(Id);
 end;
 
 { ----------------------------------------------------- process apps -- }
@@ -1908,6 +2762,7 @@ var
   M: TMemo;
   Log: string;
 begin
+  SetClientContext('Run: ' + Project);
   if not FClient.RunState(Project, Run) then Exit;
   if FRunHeads.TryGetValue(Project, Head) and (Head <> nil) then
     Head.Text := Format('%s -- runs %s%s%s',
@@ -2137,39 +2992,106 @@ end;
   about state.
 *)
 procedure TFormMain.SaveDesktopState;
+begin
+  { Unnumbered means "wherever we are", which is right for an autosave
+    during ordinary work. Switching desks must not use this -- see
+    SaveDesktopStateTo. }
+  SaveDesktopStateTo(0);
+end;
+
+(* Write the layout to a NAMED desktop.
+
+   Paging desks is save-here-then-switch-there, and "here" stops being
+   current the moment the switch lands. Saving to "current" therefore races
+   the switch: an autosave queued by the closing windows fires afterwards
+   and writes an empty layout over the desk the user just left, which is
+   exactly how an arrangement disappears. Naming the number retires the
+   question instead of trying to order around it.
+
+   Geometry travels with each window now. Reopening the right windows in
+   the wrong places is still losing your desktop, just less obviously. *)
+procedure TFormMain.SaveDesktopStateTo(Desk: Integer);
 var
   Body, Key: string;
   Keys: TArray<string>;
   W: TRetroWindow;
   First: Boolean;
 
-  procedure Add(const Fn, Arg: string);
+  procedure Add(const Fn, Arg: string; Win: TRetroWindow);
   begin
     if not First then Body := Body + ',';
     First := False;
-    Body := Body + '{"fn":"' + Fn + '","arg":"' + Arg + '"}';
+    Body := Body + '{"fn":"' + Fn + '","arg":"' + JsonStr(Arg) + '"';
+    if Win <> nil then
+      Body := Body + Format(',"x":%d,"y":%d,"w":%d,"h":%d',
+        [Round(Win.Position.X), Round(Win.Position.Y),
+         Round(Win.Width), Round(Win.Height)]);
+    Body := Body + '}';
   end;
 
 begin
   if FClient = nil then Exit;
   Body := '';
   First := True;
-  if FLibraryWin <> nil then Add('library', '');
-  if FFilesWin <> nil then Add('files', FFilesDir.Path);
-  if FBrowserWin <> nil then Add('browser', FCurrentPage);
+  if FTreeWin    <> nil then Add('projects', '', FTreeWin);
+  if FLibraryWin <> nil then Add('library', '', FLibraryWin);
+  if FFilesWin   <> nil then Add('files', FFilesDir.Path, FFilesWin);
+  if FBrowserWin <> nil then Add('browser', FCurrentPage, FBrowserWin);
+  if FLogWin     <> nil then Add('log', '', FLogWin);
   Keys := FChatWins.Keys.ToArray;
   for Key in Keys do
-    if FChatWins.TryGetValue(Key, W) and (W <> nil) then Add('chat', Key);
+    if FChatWins.TryGetValue(Key, W) and (W <> nil) then Add('chat', Key, W);
   Keys := FAppWins.Keys.ToArray;
   for Key in Keys do
-    if FAppWins.TryGetValue(Key, W) and (W <> nil) then Add('app', Key);
-  FClient.SetDesktopState('{"v":1,"client":"fmx","windows":[' + Body + ']}');
+    if FAppWins.TryGetValue(Key, W) and (W <> nil) then Add('app', Key, W);
+  Keys := FRunWins.Keys.ToArray;
+  for Key in Keys do
+    if FRunWins.TryGetValue(Key, W) and (W <> nil) then Add('run', Key, W);
+  FClient.SetDesktopStateFor(Desk,
+    '{"v":1,"client":"fmx","windows":[' + Body + ']}');
 end;
 
 procedure TFormMain.RestoreDesktopState;
 var
-  State, Fn, Arg: string;
-  P, Q: Integer;
+  State, Fn, Arg, Geo: string;
+  P, Q, R, Brace: Integer;
+  Opened: TRetroWindow;
+
+  { One integer field out of the record we are standing in. Absent means
+    "wherever the window manager wants it", which is what a layout saved
+    before geometry existed gets. }
+  function GeoInt(const Name: string; Def: Integer): Integer;
+  var
+    A, B: Integer;
+  begin
+    Result := Def;
+    A := Pos('"' + Name + '":', Geo);
+    if A = 0 then Exit;
+    Inc(A, Length(Name) + 3);
+    B := A;
+    while (B <= Length(Geo)) and
+          (CharInSet(Geo[B], ['0'..'9', '-'])) do Inc(B);
+    if B > A then Result := StrToIntDef(Copy(Geo, A, B - A), Def);
+  end;
+
+  procedure PlaceIt(W: TRetroWindow);
+  var
+    X, Y, Wd, Ht: Integer;
+  begin
+    if W = nil then Exit;
+    X  := GeoInt('x', -1);
+    Y  := GeoInt('y', -1);
+    Wd := GeoInt('w', -1);
+    Ht := GeoInt('h', -1);
+    if (Wd > 40) and (Ht > 40) then
+    begin
+      W.Width  := Wd;
+      W.Height := Ht;
+    end;
+    if (X >= 0) and (Y >= 0) then
+      W.Position.Point := PointF(X, Y);
+  end;
+
 begin
   if FClient = nil then Exit;
   State := FClient.DesktopState;
@@ -2204,11 +3126,43 @@ begin
       else
         P := Q;
 
-      if Fn = 'library' then OpenLibrary
-      else if Fn = 'files' then OpenFiles
-      else if Fn = 'browser' then OpenBrowser(Arg)
-      else if (Fn = 'chat') and (Arg <> '') then OpenChat(Arg)
-      else if (Fn = 'app') and (Arg <> '') then OpenApp(Arg);
+      { The rest of this record is where the window goes. Bounded to the
+        record we are in so the next window's numbers cannot be read as
+        this one's. }
+      Brace := PosEx('}', State, P);
+      R := PosEx('{"fn":"', State, P);
+      if (R > 0) and ((Brace = 0) or (R < Brace)) then Brace := R;
+      if Brace > P then Geo := Copy(State, P, Brace - P) else Geo := '';
+
+      Opened := nil;
+      if Fn = 'library' then begin OpenLibrary; Opened := FLibraryWin; end
+      else if Fn = 'projects' then begin OpenTree; Opened := FTreeWin; end
+      else if Fn = 'files' then
+      begin
+        { The saved directory, not the default one. }
+        if Arg <> '' then FFilesDir.Path := Arg;
+        OpenFiles;
+        Opened := FFilesWin;
+      end
+      else if Fn = 'log' then begin OpenLog; Opened := FLogWin; end
+      else if Fn = 'browser' then begin OpenBrowser(Arg); Opened := FBrowserWin; end
+      else if (Fn = 'chat') and (Arg <> '') then
+      begin
+        OpenChat(Arg);
+        if not FChatWins.TryGetValue(Arg, Opened) then Opened := nil;
+      end
+      else if (Fn = 'app') and (Arg <> '') then
+      begin
+        OpenApp(Arg);
+        if not FAppWins.TryGetValue(Arg, Opened) then Opened := nil;
+      end
+      else if (Fn = 'run') and (Arg <> '') then
+      begin
+        OpenRun(Arg);
+        if not FRunWins.TryGetValue(Arg, Opened) then Opened := nil;
+      end;
+      if Opened <> nil then FRestoredAnything := True;
+      PlaceIt(Opened);
     until P = 0;
   finally
     FRestoring := False;
@@ -2379,6 +3333,13 @@ begin
       Ok: Boolean;
       Marshal: TThreadProcedure;
     begin
+      { Set INSIDE the thread: the context is per thread, so tagging it on
+        the caller would attribute this call to whatever the main thread
+        was doing when the button was pressed. }
+      if Kind = pkeResearch then
+        SetClientContext('Browser (research)')
+      else
+        SetClientContext('Browser');
       Ok := False;
       Err := '';
       try
@@ -2497,6 +3458,7 @@ var
   Bar: TLayout;
   B: TButton;
 begin
+  SetClientContext('Files');
   if FFilesWin <> nil then
   begin
     FFilesWin.Restore;
@@ -2549,6 +3511,7 @@ var
   Row: TFileRow;
   Line: string;
 begin
+  SetClientContext('Files');
   if FFilesList = nil then Exit;
   if not FClient.ListDir(Path, FFilesDir) then
   begin
@@ -2650,29 +3613,208 @@ end;
 (* A file, in a document window. Binary files say so rather than rendering as
    mojibake, and a truncated read admits it -- a viewer that quietly shows
    the first slice of a log is worse than one that says it did. *)
+(* Open a file the way its contents deserve.
+
+   Three viewers, chosen by what the thing is rather than by one fallback
+   for everything:
+
+     .html / .htm -> the Browser, rendered. The desktop already has a
+       browser window and a page IS a document; showing its source in a
+       memo was the client refusing to do the obvious thing.
+     binary       -> the hex view. "(binary file)" is a diagnosis, not a
+       viewer, and the gateway already serves byte windows for exactly
+       this (the classic web UI has had a hex dump over the same route
+       all along).
+     anything else-> text, as before. *)
 procedure TFormMain.OpenFileView(const Path, Name: string);
 var
   W: TRetroWindow;
   M: TMemo;
-  Body: string;
+  Body, Ext: string;
   Binary, Truncated: Boolean;
 begin
+  Ext := LowerCase(ExtractFileExt(Name));
+  if (Ext = '.html') or (Ext = '.htm') then
+  begin
+    (* Read it THROUGH the gateway and hand the browser the markup.
+
+       Path is a path on the gateway's filesystem, which is only also this
+       machine's when the gateway happens to be local -- point
+       PASCLAW_GATEWAY at another box and a file:// URL asks the local
+       browser for a file that is not there. Going through /v1/fs keeps
+       remote gateways working, carries the bearer token the browser
+       control cannot set, and sidesteps escaping every space and hash in
+       the path into a URL. *)
+    if not FClient.ReadFile_(Path, Body, Binary, Truncated) then
+    begin
+      Say('Could not read ' + Name + ': ' + FClient.LastError);
+      Exit;
+    end;
+    OpenBrowser('');
+    if FBrowserView <> nil then
+    begin
+      FBrowserView.LoadFromStrings(Body, Path);
+      if FBrowserStatus <> nil then
+      begin
+        if Truncated then
+          FBrowserStatus.Text := Path + '  [truncated]'
+        else
+          FBrowserStatus.Text := Path;
+      end;
+    end;
+    Exit;
+  end;
+
+  if not FClient.ReadFile_(Path, Body, Binary, Truncated) then
+  begin
+    W := TrackWindow(FDesktop.CreateWindow(Name, 560, 420));
+    M := TMemo.Create(W);
+    M.Parent := W.Client;
+    M.Align := TAlignLayout.Client;
+    M.ReadOnly := True;
+    M.Text := 'Could not read it: ' + FClient.LastError;
+    Exit;
+  end;
+
+  if Binary then
+  begin
+    OpenHex(Path);
+    Exit;
+  end;
+
   W := TrackWindow(FDesktop.CreateWindow(Name, 560, 420));
   M := TMemo.Create(W);
   M.Parent := W.Client;
   M.Align := TAlignLayout.Client;
   M.ReadOnly := True;
-  if not FClient.ReadFile_(Path, Body, Binary, Truncated) then
-  begin
-    M.Text := 'Could not read it: ' + FClient.LastError;
-    Exit;
-  end;
-  if Binary then
-    M.Text := '(binary file)'
-  else if Truncated then
+  if Truncated then
     M.Text := Body + sLineBreak + sLineBreak + '[truncated]'
   else
     M.Text := Body;
+end;
+
+(* The hex view.
+
+   Paged over /v1/fs/peek: one window of bytes at a time, so opening a
+   500 MB file costs a window rather than a download. The gateway caps a
+   window at 64 KB; this asks for a screenful. *)
+procedure TFormMain.OpenHex(const Path: string);
+var
+  Bar: TLayout;
+  B: TButton;
+begin
+  FHexPath := Path;
+  FHexOffset := 0;
+  if FHexWin = nil then
+  begin
+    FHexWin := TrackWindow(FDesktop.CreateWindow('Hex', 620, 400));
+
+    Bar := TLayout.Create(FHexWin);
+    Bar.Parent := FHexWin.Client;
+    Bar.Align := TAlignLayout.Bottom;
+    Bar.Height := 30;
+
+    B := TButton.Create(FHexWin);
+    B.Parent := Bar;
+    B.Align := TAlignLayout.Left;
+    B.Width := 70;
+    B.Text := '< Prev';
+    B.OnClick := HexPrevClick;
+
+    B := TButton.Create(FHexWin);
+    B.Parent := Bar;
+    B.Align := TAlignLayout.Left;
+    B.Margins.Left := 4;
+    B.Width := 70;
+    B.Text := 'Next >';
+    B.OnClick := HexNextClick;
+
+    FHexPos := TLabel.Create(FHexWin);
+    FHexPos.Parent := Bar;
+    FHexPos.Align := TAlignLayout.Client;
+    FHexPos.Margins.Left := 8;
+
+    FHexMemo := TMemo.Create(FHexWin);
+    FHexMemo.Parent := FHexWin.Client;
+    FHexMemo.Align := TAlignLayout.Client;
+    FHexMemo.ReadOnly := True;
+    FHexMemo.WordWrap := False;
+  end;
+  FHexWin.Caption := 'Hex -- ' + ExtractFileName(Path);
+  FHexWin.Restore;
+  HexRender;
+end;
+
+procedure TFormMain.HexRender;
+const
+  Window_ = 1024;      { 64 rows of 16 -- a screenful, not a download }
+  Row = 16;
+var
+  Data: TBytes;
+  Total: Int64;
+  I, J, N: Integer;
+  Hex, Asc, Line: string;
+  Lines: TStringList;
+  B: Byte;
+begin
+  if (FHexMemo = nil) or (FClient = nil) then Exit;
+  if not FClient.PeekFile(FHexPath, FHexOffset, Window_, Data, Total) then
+  begin
+    FHexMemo.Text := 'Could not read it: ' + FClient.LastError;
+    Exit;
+  end;
+  FHexTotal := Total;
+  N := Length(Data);
+  Lines := TStringList.Create;
+  try
+    I := 0;
+    while I < N do
+    begin
+      Hex := '';
+      Asc := '';
+      for J := 0 to Row - 1 do
+      begin
+        if I + J < N then
+        begin
+          B := Data[I + J];
+          Hex := Hex + IntToHex(B, 2) + ' ';
+          { Printable ASCII only -- a control byte rendered as itself would
+            reflow the column it is supposed to sit in. }
+          if (B >= 32) and (B < 127) then
+            Asc := Asc + Chr(B)
+          else
+            Asc := Asc + '.';
+        end
+        else
+          Hex := Hex + '   ';
+        if J = 7 then Hex := Hex + ' ';
+      end;
+      Line := IntToHex(FHexOffset + I, 8) + '  ' + Hex + ' |' + Asc + '|';
+      Lines.Add(Line);
+      Inc(I, Row);
+    end;
+    if Lines.Count = 0 then Lines.Add('(empty)');
+    FHexMemo.Text := Lines.Text;
+  finally
+    Lines.Free;
+  end;
+  if FHexPos <> nil then
+    FHexPos.Text := Format('%d - %d of %d bytes',
+      [FHexOffset, FHexOffset + N, FHexTotal]);
+end;
+
+procedure TFormMain.HexPrevClick(Sender: TObject);
+begin
+  FHexOffset := FHexOffset - 1024;
+  if FHexOffset < 0 then FHexOffset := 0;
+  HexRender;
+end;
+
+procedure TFormMain.HexNextClick(Sender: TObject);
+begin
+  if FHexOffset + 1024 >= FHexTotal then Exit;
+  FHexOffset := FHexOffset + 1024;
+  HexRender;
 end;
 
 procedure TFormMain.FilesClick(Sender: TObject);
@@ -2761,7 +3903,6 @@ var
   Pane: TLayout;
   Lbl: TLabel;
   FileName, Item: string;
-  B: TButton;
 begin
   FStylePicker := TrackWindow(
     FDesktop.CreateWindow('Display Properties', 260, 420));
@@ -2772,13 +3913,8 @@ begin
   Pane.Height := 190;
   Pane.Parent := FStylePicker.Client;
 
-  B := TButton.Create(FStylePicker);
-  B.Parent := Pane;
-  B.Align := TAlignLayout.Bottom;
-  B.Height := 26;
-  B.Text := 'Library';
-  B.OnClick := LibraryClick;
-
+  { No stray Library button here any more -- Display Properties is where
+    you pick a look, and the Library has its own Menu item. }
   Lbl := TLabel.Create(FStylePicker);
   Lbl.Align := TAlignLayout.Top;
   Lbl.Height := 18;

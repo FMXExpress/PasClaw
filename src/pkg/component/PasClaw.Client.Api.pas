@@ -23,7 +23,7 @@ unit PasClaw.Client.Api;
 interface
 
 uses
-  SysUtils, Classes;
+  SysUtils, Classes, SyncObjs;
 
 type
   EPasClawClient = class(Exception)
@@ -77,6 +77,14 @@ type
   end;
   TPageRows = array of TPageRow;
 
+  { One saved conversation. The Library lists these beside pages, and
+    opening one is how you get back into a chat you left. }
+  TSessionRow = record
+    Id, Title, Model, Provider: string;
+    Updated: Int64;
+  end;
+  TSessionRows = array of TSessionRow;
+
   { What a running process app is doing. Backend is 'host', 'docker' or
     'docker-remote' -- three genuinely different places, and the user should
     never have to guess which one their app is in. }
@@ -108,6 +116,42 @@ type
 
   { Called for each streamed chunk of an assistant reply. Set Abort to stop. }
   TChatChunkProc = procedure(const Chunk: string; var Abort: Boolean) of object;
+
+  (* Called as the model uses a tool, if the caller wants to watch.
+
+     The gateway already narrates tool use as SSE comments beside the text
+     stream; without somewhere to send them a client shows prose only, so
+     "build me an app" looks like a long silence followed by an answer, with
+     no sign of the dozen file writes that actually did the work.
+
+     Kind is 'call' or 'result'. For a call, Detail is the (capped) argument
+     summary; for a result it is the result text, or the error when Err is
+     True. *)
+  TToolTraceProc = procedure(const Kind, Name, Detail: string;
+    IsErr: Boolean) of object;
+
+  (* ---- request tracing ----
+
+     Every call this client makes to the gateway, reported as it completes.
+
+     This is the half of the picture the gateway's own log cannot give you.
+     Its log is filtered server-side by log level before anything is
+     recorded, so a client asking for more detail cannot get it; and even at
+     debug it says what the SERVER did, never what a particular window
+     asked for. Tracing here is unconditional, costs a callback, and answers
+     the question a desktop actually raises -- "what did this window just
+     do, and what came back".
+
+     Origin is the context the call was made under (see SetClientContext):
+     which window, which conversation. Without it a busy desktop's traffic
+     is one undifferentiated stream, because a single shared client serves
+     every window.
+
+     Millis is wall time for the whole call. Status is the HTTP status, or 0
+     when the request never got an answer -- in which case Note carries the
+     reason. *)
+  TRequestTraceProc = procedure(const Origin, Method, Path: string;
+    Status, Millis: Integer; const Note: string) of object;
 
   (* ---- period-native output ----
 
@@ -161,21 +205,64 @@ type
   { Called for each event as it arrives. Set Stop to end the subscription. }
   TDesktopEventProc = procedure(const Ev: TDesktopEvent; var Stop: Boolean) of object;
 
+  { One line off the gateway's log stream, already split into its level tag
+    and body so a viewer can colour or filter without re-parsing. }
+  TLogLineProc = procedure(const Level, Text_: string;
+    var Stop: Boolean) of object;
+
   TPasClawClient = class
   private
     FBaseURL: string;
     FToken: string;
     FTimeoutMs: Integer;
+    FModelTimeoutMs: Integer;
     FLastError: string;
+    FOnTrace: TRequestTraceProc;
+    (* The live /v1/logs connection, so it can be cut from another thread.
+
+       /v1/logs parks until something is logged and sends no keepalive
+       (unlike /v1/desktop/events). With no read timeout -- correct for a
+       tail -- a quiet gateway leaves the watcher blocked inside Indy with
+       nothing to wake it, so a flag the callback checks is never reached
+       and joining that thread hangs the UI for as long as the gateway
+       stays quiet. Cancellation has to reach the SOCKET. *)
+    { TIdHTTP, held as TObject: this unit keeps the transport out of its
+      interface deliberately, and a cancel only needs to call Disconnect. }
+    FLogHttp: TObject;
+    FLogLock: TCriticalSection;
+    FLogCancelled: Boolean;
+    procedure Trace(const Method, Path: string; Status, Millis: Integer;
+      const Note: string);
     function Request(const Method, Path, Body: string): string;
+    function RequestT(const Method, Path, Body: string;
+      TimeoutMs: Integer): string;
     function GetJSON(const Path: string): string;
   public
     constructor Create(const ABaseURL: string = 'http://127.0.0.1:8088');
+    destructor Destroy; override;
     { Base URL without a trailing slash; setting it normalises. }
     property BaseURL: string read FBaseURL write FBaseURL;
     property Token: string read FToken write FToken;
+    (* Two clocks, because there are two kinds of call.
+
+       A board read is a database hit: if it has not answered in seconds,
+       something is wrong and failing fast is the useful behaviour. A call
+       that goes through the MODEL is a different animal -- deep research
+       plans, reads several sources and synthesises, and the gateway holds
+       the request open with nothing on the wire for the whole turn. Judging
+       that by the same clock is what made the Browser give up mid-answer.
+
+       Still bounded rather than infinite: a genuinely dead gateway should
+       eventually surface as an error rather than a window that waits
+       forever. Streaming calls have their own liveness signal (chunks keep
+       arriving) and set no read timeout at all. *)
     property TimeoutMs: Integer read FTimeoutMs write FTimeoutMs;
+    property ModelTimeoutMs: Integer read FModelTimeoutMs write FModelTimeoutMs;
     property LastError: string read FLastError;
+    (* Set it and every call this client makes is reported. Nothing else
+       turns it on: tracing that needs enabling is tracing you do not have
+       when the thing you wanted to see already happened. *)
+    property OnTrace: TRequestTraceProc read FOnTrace write FOnTrace;
 
     function Ping(out Version: string): Boolean;
 
@@ -261,6 +348,17 @@ type
        arranged in one is the layout the other opens with. *)
     function DesktopState: string;
     function SetDesktopState(const JSON: string): Boolean;
+    (* The same two, against a NAMED desktop instead of whichever is current.
+
+       Paging desks is save-here then switch-there, and "here" stops being
+       current the moment the switch lands. Anything that saves without
+       naming the desktop -- a deferred autosave that fires after the
+       switch, say -- writes the wrong layout to the wrong desk, and the
+       arrangement the user had is simply gone. Naming the number removes
+       the ordering question entirely. N < 1 means "current", so these are
+       a superset of the two above. *)
+    function DesktopStateFor(N: Integer): string;
+    function SetDesktopStateFor(N: Integer; const JSON: string): Boolean;
     (* Desktops inside the workspace: numbered layouts, like a pager.
        Switching one is cheap and invisible to the agent -- the whole
        difference from a workspace switch. *)
@@ -273,13 +371,67 @@ type
        leading system message. OnChunk receives assistant text as it arrives.
        Returns the full reply. *)
     function Chat(const HistoryJSON, System_: string;
-      OnChunk: TChatChunkProc): string;
+      OnChunk: TChatChunkProc): string; overload;
+    (* The same turn, with the model's tool use narrated. Separate overload
+       rather than a nil-able extra parameter on the one above so existing
+       callers are untouched. *)
+    function Chat(const HistoryJSON, System_: string;
+      OnChunk: TChatChunkProc; OnTool: TToolTraceProc): string; overload;
 
     (* Subscribe to /v1/desktop/events and pump until the callback stops it or
        the connection drops. BLOCKS -- run it on its own thread. The FMX
        client does exactly that, which is how its tree updates while an agent
        works instead of waiting for a refresh click. *)
     procedure WatchEvents(OnEvent: TDesktopEventProc);
+
+    { ---- library ---- }
+    (* Saved conversations, newest first as the gateway orders them. Pages
+       answer "what did I look up"; these answer "what did I talk about",
+       and the Library window wants both. *)
+    function Sessions: TSessionRows;
+    (* One session's messages, as the JSON array a chat window seeds its
+       history from -- the same [{role,content}] shape Chat sends back, so
+       reopening a conversation is loading it, not re-deriving it. Empty
+       array when the session is gone or unreadable: an unopenable session
+       should give you a blank window, not an exception. *)
+    function SessionHistory(const Id: string): string;
+    (* Write a conversation back.
+
+       Chat completions is stateless: a reopened session continues only in
+       whatever the client holds in memory, so without this the follow-up
+       turns are lost the moment the window closes -- the session looks
+       resumed and then silently isn't.
+
+       Conflict comes back True when the gateway REFUSES the write because
+       the session holds a rich agent transcript (tool and system turns).
+       That refusal is deliberate -- flattening it to role/content would
+       destroy the structure terminal resume needs -- so a caller should
+       report it rather than retry. *)
+    function SaveSessionHistory(const Id, MessagesJSON, Title: string;
+      out Conflict: Boolean): Boolean;
+
+    { ---- logs ---- }
+    (* Subscribe to /v1/logs. Same shape as WatchEvents -- BLOCKS, so run it
+       on its own thread -- and the gateway replays its recent ring buffer
+       before going live, so a viewer opens with history rather than waiting
+       for the next line.
+
+       What arrives is bounded by the GATEWAY's log level, not by anything
+       a client can ask for: a line below that level was never recorded and
+       cannot be recovered here. Debug output needs gateway.log_level set to
+       "debug" on the server. *)
+    procedure WatchLogs(OnLine: TLogLineProc);
+    (* Cut the log subscription now, from any thread. Safe to call when
+       none is running. Call this BEFORE joining the watcher thread. *)
+    procedure CancelLogs;
+
+    { ---- raw bytes ---- }
+    (* A bounded window of a file's bytes, for the hex viewer: a binary file
+       is worth looking at, and downloading a 2 GB one to show 256 bytes of
+       it is not. Total comes back as the file's real size so a viewer can
+       page. Len is capped at 64 KB by the gateway. *)
+    function PeekFile(const Path: string; Offset, Len: Int64;
+      out Data: TBytes; out Total: Int64): Boolean;
   end;
 
 (* Split an assistant reply into the text a human reads and the UI blocks a
@@ -287,12 +439,40 @@ type
 procedure ParseUIBlocks(const Reply: string; out VisibleText: string;
   out Blocks: TUIBlocks);
 
+(* ---- the calling context ----
+
+   Names whoever is about to make requests, so a trace can say which window
+   or conversation a call came from. Per THREAD, not per client: one client
+   object serves every window, and the deep-research call runs on its own
+   thread while the main one keeps serving the board -- a single shared
+   field would attribute whichever finished last to whoever set it first.
+
+   Callers set it at the top of an operation and are not required to clear
+   it; the next Set on that thread replaces it. '' means unattributed,
+   which a trace should render rather than hide. *)
+procedure SetClientContext(const Name: string);
+function ClientContext: string;
+
 implementation
 
 uses
   PasClaw.JSON,
   PasClaw.Utils,
+  DateUtils,                 { MilliSecondsBetween -- request timing }
   IdHTTP, IdGlobal, IdSSLOpenSSL, IdComponent;
+
+threadvar
+  GContext: string;
+
+procedure SetClientContext(const Name: string);
+begin
+  GContext := Name;
+end;
+
+function ClientContext: string;
+begin
+  Result := GContext;
+end;
 
 type
   { Indy hands us the body as it arrives; this feeds the caller's callback
@@ -302,10 +482,13 @@ type
     FBuf: string;
     FText: string;
     FOnChunk: TChatChunkProc;
+    FOnTool: TToolTraceProc;
     FAbort: Boolean;
     procedure Consume(const Data: string);
+    procedure HandleToolComment(const Payload: string);
   public
-    constructor Create(AOnChunk: TChatChunkProc);
+    constructor Create(AOnChunk: TChatChunkProc;
+      AOnTool: TToolTraceProc = nil);
     function Write(const Buffer; Count: Longint): Longint; override;
     function Read(var Buffer; Count: Longint): Longint; override;
     function Seek(Offset: Longint; Origin: Word): Longint; override;
@@ -313,10 +496,51 @@ type
     property Aborted: Boolean read FAbort;
   end;
 
-constructor TSSEStream.Create(AOnChunk: TChatChunkProc);
+constructor TSSEStream.Create(AOnChunk: TChatChunkProc;
+  AOnTool: TToolTraceProc);
 begin
   inherited Create;
   FOnChunk := AOnChunk;
+  FOnTool := AOnTool;
+end;
+
+(* One ": pasclaw-tool {...}" comment off the chat stream.
+
+   These ride the SSE channel as comments precisely so a client that does
+   not care keeps working: an OpenAI-compatible consumer skips them without
+   knowing they exist. A client that DOES care gets the model's working
+   shown. *)
+procedure TSSEStream.HandleToolComment(const Payload: string);
+var
+  Obj: TJsonObject;
+  Kind, Name, Detail: string;
+  IsErr: Boolean;
+begin
+  if not Assigned(FOnTool) then Exit;
+  try
+    Obj := TJsonObject.Parse(Payload);
+  except
+    Exit;
+  end;
+  if Obj = nil then Exit;
+  try
+    Kind := Obj.GetStr('t', '');
+    Name := Obj.GetStr('name', '');
+    if Kind = 'call' then
+    begin
+      Detail := Obj.GetStr('args', '');
+      IsErr := False;
+    end
+    else
+    begin
+      Detail := Obj.GetStr('err', '');
+      IsErr := Detail <> '';
+      if not IsErr then Detail := Obj.GetStr('result', '');
+    end;
+    if Name <> '' then FOnTool(Kind, Name, Detail, IsErr);
+  finally
+    Obj.Free;
+  end;
 end;
 
 function TSSEStream.Read(var Buffer; Count: Longint): Longint;
@@ -343,10 +567,18 @@ begin
     Line := Copy(FBuf, 1, NL - 1);
     Delete(FBuf, 1, NL);
     Line := StringReplace(Line, #13, '', [rfReplaceAll]);
-    (* The gateway's ": pasclaw-tool ..." SSE comments carry tool detail the
-       desktop surfaces elsewhere; the text stream ignores them. Paren-star
-       delimiters because a brace in the example would close the comment. *)
-    if (Line = '') or (Line[1] = ':') then Continue;
+    (* The gateway's ": pasclaw-tool ..." SSE comments carry tool detail.
+       Routed to the trace callback when a caller wants it, skipped
+       otherwise -- which is what keeps a plain OpenAI client working
+       against this stream. Paren-star delimiters because a brace in the
+       example would close the comment. *)
+    if Line = '' then Continue;
+    if Line[1] = ':' then
+    begin
+      if HasPrefix(Line, ': pasclaw-tool ') then
+        HandleToolComment(Trim(Copy(Line, 16, MaxInt)));
+      Continue;
+    end;
     if not HasPrefix(Line, 'data:') then Continue;
     Payload := Trim(Copy(Line, 6, MaxInt));
     if (Payload = '') or (Payload = '[DONE]') then Continue;
@@ -545,6 +777,23 @@ type
     property Stopped: Boolean read FStop;
   end;
 
+  { The same sink shape for /v1/logs. Separate class rather than a mode flag
+    on the one above: the payloads have nothing in common -- one is a JSON
+    object, one is a bracketed line -- and a stream that had to ask which it
+    was would be harder to read than two that each know. }
+  TLogStream = class(TStream)
+  private
+    FBuf: string;
+    FOnLine: TLogLineProc;
+    FStop: Boolean;
+    procedure Consume(const Data: string);
+  public
+    constructor Create(AOnLine: TLogLineProc);
+    function Write(const Buffer; Count: Longint): Longint; override;
+    function Read(var Buffer; Count: Longint): Longint; override;
+    function Seek(Offset: Longint; Origin: Word): Longint; override;
+  end;
+
 constructor TEventStream.Create(AOnEvent: TDesktopEventProc);
 begin
   inherited Create;
@@ -637,15 +886,46 @@ begin
   FBaseURL := ABaseURL;
   while (FBaseURL <> '') and (FBaseURL[Length(FBaseURL)] = '/') do
     SetLength(FBaseURL, Length(FBaseURL) - 1);
+  FLogLock := TCriticalSection.Create;
   FTimeoutMs := 30000;
+  FModelTimeoutMs := 20 * 60 * 1000;   { deep research runs for minutes }
 end;
 
-function NewHttp(const Token: string; TimeoutMs: Integer): TIdHTTP;
+function UrlEncode_(const S: string): string;
+var
+  I: Integer;
+  C: Char;
+begin
+  Result := '';
+  for I := 1 to Length(S) do
+  begin
+    C := S[I];
+    if (C in ['A'..'Z', 'a'..'z', '0'..'9', '-', '_', '.', '~', '/']) then
+      Result := Result + C
+    else
+      Result := Result + '%' + IntToHex(Ord(C), 2);
+  end;
+end;
+
+(* ReadTimeoutMs of 0 means "wait indefinitely for the body" -- correct for
+   a stream whose liveness is the arrival of chunks. ConnectTimeout is kept
+   separate and never infinite: a gateway that is not listening should fail
+   in seconds, whatever the body clock says, or the UI hangs on a typo in
+   the address. *)
+destructor TPasClawClient.Destroy;
+begin
+  CancelLogs;
+  FreeAndNil(FLogLock);
+  inherited;
+end;
+
+function NewHttp(const Token: string; ReadTimeoutMs: Integer;
+  ConnectTimeoutMs: Integer = 15000): TIdHTTP;
 begin
   Result := TIdHTTP.Create(nil);
   Result.HandleRedirects := True;
-  Result.ConnectTimeout  := TimeoutMs;
-  Result.ReadTimeout     := TimeoutMs;
+  Result.ConnectTimeout  := ConnectTimeoutMs;
+  Result.ReadTimeout     := ReadTimeoutMs;
   Result.Request.ContentType := 'application/json';
   Result.Request.Accept      := 'application/json';
   if Token <> '' then
@@ -653,6 +933,288 @@ begin
   { A gateway reached over https (a tunnel, a remote box) needs the TLS
     handler; a local http gateway never touches it. }
   Result.IOHandler := TIdSSLIOHandlerSocketOpenSSL.Create(Result);
+end;
+
+constructor TLogStream.Create(AOnLine: TLogLineProc);
+begin
+  inherited Create;
+  FOnLine := AOnLine;
+end;
+
+function TLogStream.Read(var Buffer; Count: Longint): Longint;
+begin
+  Result := 0;
+end;
+
+function TLogStream.Seek(Offset: Longint; Origin: Word): Longint;
+begin
+  Result := 0;
+end;
+
+function TLogStream.Write(const Buffer; Count: Longint): Longint;
+var
+  S: AnsiString;
+begin
+  Result := Count;
+  if Count <= 0 then Exit;
+  SetLength(S, Count);
+  Move(Buffer, S[1], Count);
+  Consume(string(S));
+  if FStop then
+    raise EAbort.Create('log subscription stopped by caller');
+end;
+
+procedure TLogStream.Consume(const Data: string);
+var
+  NL, Close_: Integer;
+  Line, Payload, Level, Body: string;
+  Obj: TJsonObject;
+begin
+  FBuf := FBuf + Data;
+  repeat
+    NL := Pos(#10, FBuf);
+    if NL = 0 then Break;
+    Line := Copy(FBuf, 1, NL - 1);
+    Delete(FBuf, 1, NL);
+    Line := StringReplace(Line, #13, '', [rfReplaceAll]);
+    if (Line = '') or (Line[1] = ':') then Continue;   { blank / keepalive }
+    if not HasPrefix(Line, 'data:') then Continue;
+    Payload := Trim(Copy(Line, 6, MaxInt));
+    if Payload = '' then Continue;
+
+    { The gateway JSON-escapes the line but does not quote it. Round-tripping
+      it through the parser as a one-field object is cheaper than a second
+      unescaper that could disagree with the first. }
+    Obj := nil;
+    try
+      Obj := TJsonObject.Parse('{"m":"' + Payload + '"}');
+    except
+      Obj := nil;
+    end;
+    if Obj <> nil then
+    begin
+      try
+        Payload := Obj.GetStr('m', Payload);
+      finally
+        Obj.Free;
+      end;
+    end;
+
+    { "[info] listening on ..." -> level + body. A line that does not carry
+      a tag is still a line; it is shown at info rather than dropped. }
+    Level := 'info';
+    Body  := Payload;
+    if (Payload <> '') and (Payload[1] = '[') then
+    begin
+      Close_ := Pos(']', Payload);
+      if Close_ > 2 then
+      begin
+        Level := Copy(Payload, 2, Close_ - 2);
+        Body  := TrimLeft(Copy(Payload, Close_ + 1, MaxInt));
+      end;
+    end;
+
+    if Assigned(FOnLine) then
+      FOnLine(Level, Body, FStop);
+    if FStop then Break;
+  until False;
+end;
+
+procedure TPasClawClient.WatchLogs(OnLine: TLogLineProc);
+var
+  Http: TIdHTTP;
+  Sink: TLogStream;
+begin
+  FLastError := '';
+  Sink := TLogStream.Create(OnLine);
+  { A previous cancel must not silence errors on this one. }
+  FLogCancelled := False;
+  Http := NewHttp(FToken, 0);
+  try
+    { Same deal as WatchEvents: an open, mostly-idle connection. }
+    Http.ReadTimeout := 0;
+    Http.Request.Accept := 'text/event-stream';
+    { Publish the handle so CancelLogs can reach it while we block below. }
+    FLogLock.Acquire;
+    try
+      FLogHttp := Http;
+    finally
+      FLogLock.Release;
+    end;
+    try
+      Http.Get(FBaseURL + '/v1/logs', Sink);
+    except
+      on E: EAbort do ;      { caller asked to stop }
+      { A cancel arrives here as a socket error, which is the intended
+        outcome and not worth recording as a failure. }
+      on E: Exception do
+        if not FLogCancelled then FLastError := E.Message;
+    end;
+  finally
+    FLogLock.Acquire;
+    try
+      FLogHttp := nil;
+    finally
+      FLogLock.Release;
+    end;
+    Http.Free;
+    Sink.Free;
+  end;
+end;
+
+procedure TPasClawClient.CancelLogs;
+var
+  H: TObject;
+begin
+  if FLogLock = nil then Exit;
+  FLogCancelled := True;
+  FLogLock.Acquire;
+  try
+    H := FLogHttp;
+  finally
+    FLogLock.Release;
+  end;
+  if H = nil then Exit;
+  { Disconnecting from another thread is how Indy cancels a blocked read:
+    the reader surfaces a socket error and unwinds. Swallowed because a
+    race with normal completion is a no-op, not a problem. }
+  try
+    TIdHTTP(H).Disconnect(False);
+  except
+  end;
+end;
+
+function TPasClawClient.Sessions: TSessionRows;
+var
+  Body: string;
+  Root: TJsonObject;
+  Arr: TJsonArray;
+  Item: TJsonObject;
+  I, N: Integer;
+begin
+  SetLength(Result, 0);
+  Body := GetJSON('/v1/sessions');
+  if Trim(Body) = '' then Exit;
+  try
+    Root := TJsonObject.Parse(Body);
+  except
+    Exit;
+  end;
+  if Root = nil then Exit;
+  try
+    Arr := Root.ChildArray('sessions');
+    if Arr = nil then Exit;
+    N := 0;
+    SetLength(Result, Arr.Count);
+    for I := 0 to Arr.Count - 1 do
+    begin
+      Item := Arr.ItemObject(I);
+      if Item = nil then Continue;
+      Result[N].Id       := Item.GetStr('id', '');
+      Result[N].Title    := Item.GetStr('title', '');
+      Result[N].Model    := Item.GetStr('model', '');
+      Result[N].Provider := Item.GetStr('provider', '');
+      Result[N].Updated  := Item.GetInt('updated', 0);
+      if Result[N].Id <> '' then Inc(N);
+    end;
+    SetLength(Result, N);
+  finally
+    Root.Free;
+  end;
+end;
+
+function TPasClawClient.SessionHistory(const Id: string): string;
+var
+  Body: string;
+  Root: TJsonObject;
+  Arr: TJsonArray;
+begin
+  Result := '[]';
+  if Trim(Id) = '' then Exit;
+  Body := GetJSON('/v1/sessions/' + UrlEncode_(Id));
+  if Trim(Body) = '' then Exit;
+  try
+    Root := TJsonObject.Parse(Body);
+  except
+    Exit;
+  end;
+  if Root = nil then Exit;
+  try
+    Arr := Root.ChildArray('messages');
+    if Arr <> nil then Result := Arr.ToJSON;
+  finally
+    Root.Free;
+  end;
+end;
+
+function TPasClawClient.SaveSessionHistory(const Id, MessagesJSON,
+  Title: string; out Conflict: Boolean): Boolean;
+var
+  Body: string;
+begin
+  Result := False;
+  Conflict := False;
+  if Trim(Id) = '' then Exit;
+  Body := '{"messages":' + MessagesJSON;
+  if Trim(Title) <> '' then
+    Body := Body + ',"title":"' + JsonEscape(Title) + '"';
+  Body := Body + '}';
+  try
+    Request('PUT', '/v1/sessions/' + UrlEncode_(Id), Body);
+    Result := True;
+  except
+    on E: EPasClawClient do
+      Conflict := E.Status = 409;
+    on E: Exception do
+      ;
+  end;
+end;
+
+function TPasClawClient.PeekFile(const Path: string; Offset, Len: Int64;
+  out Data: TBytes; out Total: Int64): Boolean;
+var
+  Http: TIdHTTP;
+  Mem: TMemoryStream;
+  Hdr: string;
+  Started: TDateTime;
+begin
+  Result := False;
+  SetLength(Data, 0);
+  Total := 0;
+  FLastError := '';
+  Started := Now;
+  Http := NewHttp(FToken, FTimeoutMs);
+  Mem  := TMemoryStream.Create;
+  try
+    { Raw bytes, not JSON -- this is the one route whose body is the file. }
+    Http.Request.Accept := 'application/octet-stream';
+    try
+      Http.Get(FBaseURL + '/v1/fs/peek?path=' + UrlEncode_(Path) +
+               '&offset=' + IntToStr(Offset) + '&len=' + IntToStr(Len), Mem);
+    except
+      on E: Exception do
+      begin
+        FLastError := E.Message;
+        Trace('GET', '/v1/fs/peek', 0,
+              MilliSecondsBetween(Now, Started), E.Message);
+        Exit;
+      end;
+    end;
+    Trace('GET', '/v1/fs/peek', Http.ResponseCode,
+          MilliSecondsBetween(Now, Started), Path);
+    Hdr := Http.Response.RawHeaders.Values['X-File-Total'];
+    Total := StrToInt64Def(Trim(Hdr), Mem.Size);
+    SetLength(Data, Mem.Size);
+    if Mem.Size > 0 then
+    begin
+      Mem.Position := 0;
+      Mem.ReadBuffer(Data[0], Mem.Size);
+    end;
+    Result := True;
+  finally
+    Mem.Free;
+    Http.Free;
+  end;
 end;
 
 procedure TPasClawClient.WatchEvents(OnEvent: TDesktopEventProc);
@@ -682,15 +1244,35 @@ begin
 end;
 
 function TPasClawClient.Request(const Method, Path, Body: string): string;
+begin
+  Result := RequestT(Method, Path, Body, FTimeoutMs);
+end;
+
+procedure TPasClawClient.Trace(const Method, Path: string;
+  Status, Millis: Integer; const Note: string);
+begin
+  if not Assigned(FOnTrace) then Exit;
+  try
+    FOnTrace(ClientContext, Method, Path, Status, Millis, Note);
+  except
+    { A trace listener must never be able to fail the call it is watching. }
+  end;
+end;
+
+function TPasClawClient.RequestT(const Method, Path, Body: string;
+  TimeoutMs: Integer): string;
 var
   Http: TIdHTTP;
   Req: TStringStream;
   Resp: TStringStream;
   E2: EPasClawClient;
+  Started: TDateTime;
+  Ms: Integer;
 begin
   Result := '';
   FLastError := '';
-  Http := NewHttp(FToken, FTimeoutMs);
+  Started := Now;
+  Http := NewHttp(FToken, TimeoutMs);
   Req  := nil;
   Resp := TStringStream.Create('');
   try
@@ -710,12 +1292,18 @@ begin
       else
         raise EPasClawClient.Create('unsupported method ' + Method);
       Result := Resp.DataString;
+      Trace(Method, Path, Http.ResponseCode,
+            MilliSecondsBetween(Now, Started), '');
     except
       on E: EIdHTTPProtocolException do
       begin
         { The gateway's error bodies are JSON with an "error" field; surface
           that rather than Indy's generic status text. }
         FLastError := JsonReadStr(E.ErrorMessage, 'error', E.Message);
+        { Traced before the raise: a failed call is the one most worth
+          seeing, and the caller may swallow this exception. }
+        Trace(Method, Path, E.ErrorCode,
+              MilliSecondsBetween(Now, Started), FLastError);
         E2 := EPasClawClient.Create(FLastError);
         E2.Status := E.ErrorCode;
         E2.Body   := E.ErrorMessage;
@@ -724,6 +1312,7 @@ begin
       on E: Exception do
       begin
         FLastError := E.Message;
+        Trace(Method, Path, 0, MilliSecondsBetween(Now, Started), E.Message);
         E2 := EPasClawClient.Create(E.Message);
         E2.Status := 0;
         raise E2;
@@ -1071,22 +1660,6 @@ end;
    unreserved set: a Windows path carries backslashes and a colon, and a
    filename can carry anything at all, so listing what is SAFE is the only
    version of this that stays correct. *)
-function UrlEncode_(const S: string): string;
-var
-  I: Integer;
-  C: Char;
-begin
-  Result := '';
-  for I := 1 to Length(S) do
-  begin
-    C := S[I];
-    if (C in ['A'..'Z', 'a'..'z', '0'..'9', '-', '_', '.', '~', '/']) then
-      Result := Result + C
-    else
-      Result := Result + '%' + IntToHex(Ord(C), 2);
-  end;
-end;
-
 { Fill a run record from the gateway's JSON. Shared by run/stop/state so the
   three cannot drift into reporting different shapes of the same thing. }
 procedure FillRun(Obj: TJsonObject; out Row: TRunRow);
@@ -1340,13 +1913,38 @@ end;
 
 function TPasClawClient.SetDesktopState(const JSON: string): Boolean;
 begin
+  Result := SetDesktopStateFor(0, JSON);
+end;
+
+function TPasClawClient.SetDesktopStateFor(N: Integer;
+  const JSON: string): Boolean;
+var
+  Path: string;
+begin
   Result := False;
+  Path := '/v1/desktop/state';
+  if N >= 1 then Path := Path + '?desktop=' + IntToStr(N);
   try
-    Request('PUT', '/v1/desktop/state', JSON);
+    Request('PUT', Path, JSON);
     Result := True;
   except
     Result := False;
   end;
+end;
+
+function TPasClawClient.DesktopStateFor(N: Integer): string;
+var
+  Path: string;
+begin
+  Result := '';
+  Path := '/v1/desktop/state';
+  if N >= 1 then Path := Path + '?desktop=' + IntToStr(N);
+  try
+    Result := GetJSON(Path);
+  except
+    Result := '';
+  end;
+  if Trim(Result) = '' then Result := '{}';
 end;
 
 { ---- pages ---- }
@@ -1407,7 +2005,9 @@ begin
     Req.PutStr('query', Query);
     Req.PutStr('kind', PageKindName(Kind));
     try
-      Id := JsonReadStr(Request('POST', '/v1/pages', Req.ToJSON), 'id', '');
+      { The model clock: this call IS a turn. }
+      Id := JsonReadStr(
+        RequestT('POST', '/v1/pages', Req.ToJSON, FModelTimeoutMs), 'id', '');
     except
       Id := '';
     end;
@@ -1454,7 +2054,15 @@ end;
 
 function TPasClawClient.Chat(const HistoryJSON, System_: string;
   OnChunk: TChatChunkProc): string;
+begin
+  Result := Chat(HistoryJSON, System_, OnChunk, nil);
+end;
+
+function TPasClawClient.Chat(const HistoryJSON, System_: string;
+  OnChunk: TChatChunkProc; OnTool: TToolTraceProc): string;
 var
+  Started: TDateTime;
+  Code: Integer;
   Http: TIdHTTP;
   Req: TStringStream;
   Sink: TSSEStream;
@@ -1468,9 +2076,13 @@ begin
   FLastError := '';
 
   Root := TJsonObject.Create;
-  Sink := TSSEStream.Create(OnChunk);
+  Sink := TSSEStream.Create(OnChunk, OnTool);
   Req  := nil;
-  Http := NewHttp(FToken, FTimeoutMs);
+  Started := Now;
+  { A streamed turn carries its own liveness: chunks keep arriving, and a
+    socket that dies still raises. A read timeout here only ever fires on a
+    model that is thinking hard, which is not an error. }
+  Http := NewHttp(FToken, 0);
   try
     Msgs := TJsonArray.Create;
     { A system message leads the array -- the gateway lets a client system
@@ -1520,6 +2132,12 @@ begin
         FLastError := E.Message;
     end;
     Result := Sink.Text;
+    { One line for the whole turn. Chunks are the interesting part while it
+      runs and the chat window already shows them; the trace records what
+      the call was and how long it took. }
+    if FLastError = '' then Code := 200 else Code := 0;
+    Trace('POST', '/v1/chat/completions', Code,
+          MilliSecondsBetween(Now, Started), FLastError);
   finally
     Http.Free;
     Req.Free;
