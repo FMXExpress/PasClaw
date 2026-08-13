@@ -1,0 +1,29 @@
+; Cabernet 8 -- from classic-stylesheets themes/cde/skins/cabernet-8.css
+name=Cabernet 8
+family=cde
+[colors]
+accent=D88775
+darker=5A2D38
+darkshadow=5A2D38
+desktop=456256
+face=B65C71
+faceactive=9A4E60
+focusring=D88775
+frameface=B65C71
+highlight=DEB5BF
+hover=D88775
+inputdark=232C2D
+inputlight=ABB4B5
+light=DEB5BF
+progress=D88775
+shadow=5A2D38
+text=FFFFFF
+titleA=D88775
+titleAText=FFFFFF
+titleAdark=70463D
+titleAlight=EDCAC2
+titleI=638A7A
+titleIText=FFFFFF
+titleIdark=30443C
+titleIlight=B8CAC2
+window=4B5E61

@@ -1,0 +1,15 @@
+; Bordeaux -- from classic-stylesheets themes/win3x/skins/bordeaux.css
+name=Bordeaux
+family=win31
+[colors]
+desktop=800040
+frameface=8000F8
+progress=800080
+selection=800080
+selectiontext=FFFFFF
+text=000000
+titleA=800080
+titleAText=FFFFFF
+titleI=C0C0C0
+titleIText=000000
+window=FFFFFF

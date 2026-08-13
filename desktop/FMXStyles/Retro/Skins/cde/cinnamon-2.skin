@@ -1,0 +1,29 @@
+; Cinnamon 2 -- from classic-stylesheets themes/cde/skins/cinnamon-2.css
+name=Cinnamon 2
+family=cde
+[colors]
+accent=836960
+darker=3B3535
+darkshadow=3B3535
+desktop=796E6D
+face=796E6D
+faceactive=665D5C
+focusring=836960
+frameface=796E6D
+highlight=C1BCBC
+hover=836960
+inputdark=3B3535
+inputlight=C1BCBC
+light=C1BCBC
+progress=836960
+shadow=3B3535
+text=FFFFFF
+titleA=836960
+titleAText=FFFFFF
+titleAdark=3F332E
+titleAlight=C6BAB6
+titleI=796E6D
+titleIText=FFFFFF
+titleIdark=3B3535
+titleIlight=C1BCBC
+window=796E6D

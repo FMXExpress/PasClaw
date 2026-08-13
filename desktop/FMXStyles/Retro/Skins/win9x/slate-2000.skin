@@ -1,0 +1,25 @@
+; Slate 2000 -- from classic-stylesheets themes/win9x/skins/slate-2000.css
+name=Slate 2000
+family=win9x
+[colors]
+black=000000
+darker=000000
+darkshadow=000000
+desktop=414141
+dot=000000
+face=9DB9C8
+frameface=9DB9C8
+highlight=CEDCE3
+light=9DB9C8
+progress=558097
+selection=558097
+selectiontext=FFFFFF
+shadow=558097
+text=000000
+titleA=558097
+titleA2=88B8D8
+titleAText=FFFFFF
+titleI=808080
+titleI2=A0BCC8
+titleIText=C0C0C0
+window=FFFFFF

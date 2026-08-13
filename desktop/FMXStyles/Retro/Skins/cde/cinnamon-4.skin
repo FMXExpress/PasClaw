@@ -1,0 +1,29 @@
+; Cinnamon 4 -- from classic-stylesheets themes/cde/skins/cinnamon-4.css
+name=Cinnamon 4
+family=cde
+[colors]
+accent=B14B50
+darker=473332
+darkshadow=473332
+desktop=796E6D
+face=926866
+faceactive=7C5856
+focusring=B14B50
+frameface=926866
+highlight=CDBAB9
+hover=B14B50
+inputdark=3F332E
+inputlight=C6BAB6
+light=CDBAB9
+progress=B14B50
+shadow=473332
+text=FFFFFF
+titleA=B14B50
+titleAText=FFFFFF
+titleAdark=562426
+titleAlight=DBACAF
+titleI=926866
+titleIText=FFFFFF
+titleIdark=473332
+titleIlight=CDBAB9
+window=836960

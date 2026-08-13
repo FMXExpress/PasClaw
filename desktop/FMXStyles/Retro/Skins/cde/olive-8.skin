@@ -1,0 +1,29 @@
+; Olive 8 -- from classic-stylesheets themes/cde/skins/olive-8.css
+name=Olive 8
+family=cde
+[colors]
+accent=83835A
+darker=70675D
+darkshadow=70675D
+desktop=877987
+face=CDBDAA
+faceactive=AEA090
+focusring=83835A
+frameface=CDBDAA
+highlight=E9E2DA
+hover=83835A
+inputdark=716B65
+inputlight=EAE5E0
+light=E9E2DA
+progress=83835A
+shadow=70675D
+text=000000
+titleA=83835A
+titleAText=FFFFFF
+titleAdark=40402C
+titleAlight=C6C6B4
+titleI=C3C3B9
+titleIText=000000
+titleIdark=6B6B65
+titleIlight=E5E5E1
+window=CEC2B8

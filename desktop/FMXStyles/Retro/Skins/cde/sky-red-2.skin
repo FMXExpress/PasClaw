@@ -1,0 +1,29 @@
+; Sky Red 2 -- from classic-stylesheets themes/cde/skins/sky-red-2.css
+name=Sky Red 2
+family=cde
+[colors]
+accent=E1EBE1
+darker=38565D
+darkshadow=38565D
+desktop=6DA7B4
+face=6DA7B4
+faceactive=5C8D99
+focusring=E1EBE1
+frameface=6DA7B4
+highlight=BED8DD
+hover=E1EBE1
+inputdark=38565D
+inputlight=BED8DD
+light=BED8DD
+progress=E1EBE1
+shadow=38565D
+text=FFFFFF
+titleA=E1EBE1
+titleAText=000000
+titleAdark=828882
+titleAlight=F2F6F2
+titleI=6DA7B4
+titleIText=FFFFFF
+titleIdark=38565D
+titleIlight=BED8DD
+window=6DA7B4

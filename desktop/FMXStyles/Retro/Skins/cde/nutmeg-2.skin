@@ -1,0 +1,29 @@
+; Nutmeg 2 -- from classic-stylesheets themes/cde/skins/nutmeg-2.css
+name=Nutmeg 2
+family=cde
+[colors]
+accent=CDB2A6
+darker=514541
+darkshadow=514541
+desktop=9F8881
+face=9F8881
+faceactive=87736D
+focusring=CDB2A6
+frameface=9F8881
+highlight=D4CAC6
+hover=CDB2A6
+inputdark=514541
+inputlight=D4CAC6
+light=D4CAC6
+progress=CDB2A6
+shadow=514541
+text=FFFFFF
+titleA=CDB2A6
+titleAText=000000
+titleAdark=6F605A
+titleAlight=E9DED8
+titleI=9F8881
+titleIText=FFFFFF
+titleIdark=514541
+titleIlight=D4CAC6
+window=9F8881

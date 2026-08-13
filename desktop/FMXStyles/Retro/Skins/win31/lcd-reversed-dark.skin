@@ -1,0 +1,15 @@
+; LCD Reversed Dark -- from classic-stylesheets themes/win3x/skins/lcd-reversed-dark.css
+name=LCD Reversed Dark
+family=win31
+[colors]
+desktop=000000
+frameface=808000
+progress=000080
+selection=000080
+selectiontext=FFFFFF
+text=FFFFFF
+titleA=808000
+titleAText=000000
+titleI=000080
+titleIText=808080
+window=800000

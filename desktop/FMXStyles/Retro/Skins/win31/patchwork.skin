@@ -1,0 +1,15 @@
+; Patchwork -- from classic-stylesheets themes/win3x/skins/patchwork.css
+name=Patchwork
+family=win31
+[colors]
+desktop=B84490
+frameface=48B060
+progress=00FCF8
+selection=00FCF8
+selectiontext=000000
+text=000000
+titleA=80FCF8
+titleAText=000000
+titleI=FFFFFF
+titleIText=000000
+window=FFFFFF

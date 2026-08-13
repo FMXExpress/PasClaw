@@ -1,0 +1,29 @@
+; Sand 4 -- from classic-stylesheets themes/cde/skins/sand-4.css
+name=Sand 4
+family=cde
+[colors]
+accent=EABE93
+darker=6C5F5F
+darkshadow=6C5F5F
+desktop=8EA2C1
+face=C7AFAF
+faceactive=A99494
+focusring=EABE93
+frameface=C7AFAF
+highlight=E7DCDC
+hover=EABE93
+inputdark=78787B
+inputlight=EDEDEF
+light=E7DCDC
+progress=EABE93
+shadow=6C5F5F
+text=000000
+titleA=EABE93
+titleAText=000000
+titleAdark=806850
+titleAlight=F6E3D1
+titleI=C7AFAF
+titleIText=000000
+titleIdark=6C5F5F
+titleIlight=E7DCDC
+window=D4D4DA

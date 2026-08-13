@@ -1,0 +1,7 @@
+; Lollipop -- from classic-stylesheets themes/macos9/skins/lollipop.css
+name=Lollipop
+family=mac9
+[colors]
+desktop=21A5B5
+progress=0099CC
+selection=61D7E3

@@ -1,0 +1,25 @@
+; Brick 2000 -- from classic-stylesheets themes/win9x/skins/brick-2000.css
+name=Brick 2000
+family=win9x
+[colors]
+black=000000
+darker=000000
+darkshadow=000000
+desktop=420000
+dot=000000
+face=C2BFA5
+frameface=C2BFA5
+highlight=E1E0D2
+light=C2BFA5
+progress=8D8961
+selection=8D8961
+selectiontext=FFFFFF
+shadow=8D8961
+text=000000
+titleA=800000
+titleA2=B07440
+titleAText=E1E0D2
+titleI=8D8961
+titleI2=C8B870
+titleIText=E1E0D2
+window=FFFFFF

@@ -1,0 +1,34 @@
+; Slate Paper -- Claude Code color scheme
+name=Slate Paper
+family=paper
+[colors]
+accent=D97757
+black=4E5158
+btnborder=DDDEE4
+btngrad1=F4F5F7
+btngrad2=E9EAEE
+capglyph=858890
+darker=B9BCC2
+desktop=B9BCC2
+dot=D97757
+face=E9EAEE
+focusring=DDDEE4
+frameface=E9EAEE
+highlight=DDDEE4
+hover=D97757
+inputborder=B4B7BF
+light=F4F5F7
+pressface=A9ACB4
+progress=D97757
+selection=DDDEE4
+selectiontext=191A1C
+shadow=A9ACB4
+text=191A1C
+titleA=DDDEE4
+titleA2=CBCDD5
+titleAText=191A1C
+titleI=F0F1F4
+titleI2=E9EAEE
+titleIText=858890
+track=B9BCC2
+window=FAFAFB

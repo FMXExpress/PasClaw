@@ -1,0 +1,29 @@
+; Tundra 4 -- from classic-stylesheets themes/cde/skins/tundra-4.css
+name=Tundra 4
+family=cde
+[colors]
+accent=F1BC7F
+darker=554D42
+darkshadow=554D42
+desktop=7C92B9
+face=A59680
+faceactive=8C7F6C
+focusring=F1BC7F
+frameface=A59680
+highlight=D7D0C6
+hover=F1BC7F
+inputdark=393D30
+inputlight=C0C4B8
+light=D7D0C6
+progress=F1BC7F
+shadow=554D42
+text=FFFFFF
+titleA=F1BC7F
+titleAText=000000
+titleAdark=836645
+titleAlight=F9E2C8
+titleI=A59680
+titleIText=FFFFFF
+titleIdark=554D42
+titleIlight=D7D0C6
+window=767E63

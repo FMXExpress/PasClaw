@@ -1,0 +1,25 @@
+; Maple 2000 -- from classic-stylesheets themes/win9x/skins/maple-2000.css
+name=Maple 2000
+family=win9x
+[colors]
+black=000000
+darker=000000
+darkshadow=000000
+desktop=000000
+dot=000000
+face=E0CC98
+frameface=E0CC98
+highlight=F0E8D0
+light=E0CC98
+progress=C8A848
+selection=C8A848
+selectiontext=000000
+shadow=C09C38
+text=000000
+titleA=800000
+titleA2=C09C38
+titleAText=FFFFFF
+titleI=C6A646
+titleI2=E0C888
+titleIText=F0ECD8
+window=FFFFFF

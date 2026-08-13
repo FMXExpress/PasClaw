@@ -1,0 +1,29 @@
+; Arizona 8 -- from classic-stylesheets themes/cde/skins/arizona-8.css
+name=Arizona 8
+family=cde
+[colors]
+accent=FFAB78
+darker=64403E
+darkshadow=64403E
+desktop=DEB394
+face=C37D79
+faceactive=A56A66
+focusring=FFAB78
+frameface=C37D79
+highlight=E4C5C3
+hover=FFAB78
+inputdark=422A36
+inputlight=C8B2BD
+light=E4C5C3
+progress=FFAB78
+shadow=64403E
+text=FFFFFF
+titleA=FFAB78
+titleAText=000000
+titleAdark=8A5D41
+titleAlight=FFDBC5
+titleI=A86B79
+titleIText=FFFFFF
+titleIdark=54353C
+titleIlight=D7BCC2
+window=885770

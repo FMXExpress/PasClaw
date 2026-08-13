@@ -1,0 +1,29 @@
+; Clay 8 -- from classic-stylesheets themes/cde/skins/clay-8.css
+name=Clay 8
+family=cde
+[colors]
+accent=FFAAAA
+darker=5B4B4B
+darkshadow=5B4B4B
+desktop=5A8B8D
+face=AF9191
+faceactive=947B7B
+focusring=FFAAAA
+frameface=AF9191
+highlight=DBCECE
+hover=FFAAAA
+inputdark=443030
+inputlight=CAB8B8
+light=DBCECE
+progress=FFAAAA
+shadow=5B4B4B
+text=FFFFFF
+titleA=FFAAAA
+titleAText=000000
+titleAdark=8D5E5E
+titleAlight=FFDBDB
+titleI=968282
+titleIText=FFFFFF
+titleIdark=4C4141
+titleIlight=D0C7C7
+window=8C6464

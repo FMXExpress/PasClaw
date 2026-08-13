@@ -1,0 +1,34 @@
+; Emerald Grid -- NEON/OS color scheme
+name=Emerald Grid
+family=synth
+[colors]
+accent=9BFFD9
+black=D6FFF0
+btnborder=2EE6A6
+btngrad1=114036
+btngrad2=0A2A21
+capglyph=5F9C86
+darker=02100C
+desktop=02100C
+dot=9BFFD9
+face=0A2A21
+focusring=2EE6A6
+frameface=0A2A21
+highlight=2EE6A6
+hover=9BFFD9
+inputborder=2A7A63
+light=114036
+pressface=1B5C4C
+progress=9BFFD9
+selection=2EE6A6
+selectiontext=03150F
+shadow=1B5C4C
+text=D6FFF0
+titleA=2EE6A6
+titleA2=2EC6E6
+titleAText=03150F
+titleI=0B2018
+titleI2=0A2A21
+titleIText=5F9C86
+track=02100C
+window=051A14

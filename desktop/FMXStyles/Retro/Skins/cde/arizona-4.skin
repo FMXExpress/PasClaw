@@ -1,0 +1,29 @@
+; Arizona 4 -- from classic-stylesheets themes/cde/skins/arizona-4.css
+name=Arizona 4
+family=cde
+[colors]
+accent=FFAB78
+darker=54353C
+darkshadow=54353C
+desktop=DEB394
+face=A86B79
+faceactive=8E5A66
+focusring=FFAB78
+frameface=A86B79
+highlight=D7BCC2
+hover=FFAB78
+inputdark=422A36
+inputlight=C8B2BD
+light=D7BCC2
+progress=FFAB78
+shadow=54353C
+text=FFFFFF
+titleA=FFAB78
+titleAText=000000
+titleAdark=8A5D41
+titleAlight=FFDBC5
+titleI=A86B79
+titleIText=FFFFFF
+titleIdark=54353C
+titleIlight=D7BCC2
+window=885770

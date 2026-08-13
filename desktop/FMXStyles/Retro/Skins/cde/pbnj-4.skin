@@ -1,0 +1,29 @@
+; PBnJ 4 -- from classic-stylesheets themes/cde/skins/pbnj-4.css
+name=PBnJ 4
+family=cde
+[colors]
+accent=B65C61
+darker=786A62
+darkshadow=786A62
+desktop=DEA17F
+face=D9C1B2
+faceactive=B8A497
+focusring=B65C61
+frameface=D9C1B2
+highlight=EEE4DE
+hover=B65C61
+inputdark=8B8379
+inputlight=F9F3EC
+light=EEE4DE
+progress=B65C61
+shadow=786A62
+text=000000
+titleA=B65C61
+titleAText=FFFFFF
+titleAdark=5A2D30
+titleAlight=DEB5B7
+titleI=D9C1B2
+titleIText=000000
+titleIdark=786A62
+titleIlight=EEE4DE
+window=F1E3D2

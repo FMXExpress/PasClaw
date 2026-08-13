@@ -1,0 +1,34 @@
+; Solar Flare -- NEON/OS color scheme
+name=Solar Flare
+family=synth
+[colors]
+accent=FFE580
+black=FFF1CF
+btnborder=FFC400
+btngrad1=3E2B0E
+btngrad2=281B08
+capglyph=B39755
+darker=100A02
+desktop=100A02
+dot=FFE580
+face=281B08
+focusring=FFC400
+frameface=281B08
+highlight=FFC400
+hover=FFE580
+inputborder=8A6614
+light=3E2B0E
+pressface=5B4116
+progress=FFE580
+selection=FFC400
+selectiontext=1A1002
+shadow=5B4116
+text=FFF1CF
+titleA=FFC400
+titleA2=FF6B2C
+titleAText=1A1002
+titleI=221607
+titleI2=281B08
+titleIText=B39755
+track=100A02
+window=1B1104

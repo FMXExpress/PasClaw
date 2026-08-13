@@ -1,0 +1,15 @@
+; LCD -- from classic-stylesheets themes/win3x/skins/lcd.css
+name=LCD
+family=win31
+[colors]
+desktop=808080
+frameface=000080
+progress=000080
+selection=000080
+selectiontext=FFFFFF
+text=000000
+titleA=000080
+titleAText=FFFFFF
+titleI=C0C0C0
+titleIText=000000
+window=C0C0C0

@@ -1,0 +1,29 @@
+; Beige Rose 8 -- from classic-stylesheets themes/cde/skins/beige-rose-8.css
+name=Beige Rose 8
+family=cde
+[colors]
+accent=618888
+darker=4A4A4A
+darkshadow=4A4A4A
+desktop=B78989
+face=919191
+faceactive=7B7B7B
+focusring=618888
+frameface=919191
+highlight=CECECE
+hover=618888
+inputdark=8C8A89
+inputlight=F8F7F6
+light=CECECE
+progress=618888
+shadow=4A4A4A
+text=000000
+titleA=618888
+titleAText=FFFFFF
+titleAdark=304343
+titleAlight=B7C9C9
+titleI=D1C0AE
+titleIText=000000
+titleIdark=73695F
+titleIlight=EBE4DC
+window=F0ECEB

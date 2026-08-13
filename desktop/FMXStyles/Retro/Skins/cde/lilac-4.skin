@@ -1,0 +1,29 @@
+; Lilac 4 -- from classic-stylesheets themes/cde/skins/lilac-4.css
+name=Lilac 4
+family=cde
+[colors]
+accent=D3D178
+darker=57575B
+darkshadow=57575B
+desktop=A692B7
+face=A5A5AC
+faceactive=8C8C92
+focusring=D3D178
+frameface=A5A5AC
+highlight=D7D7DA
+hover=D3D178
+inputdark=6C6C6F
+inputlight=E5E5E8
+light=D7D7DA
+progress=D3D178
+shadow=57575B
+text=000000
+titleA=D3D178
+titleAText=000000
+titleAdark=727141
+titleAlight=ECEBC5
+titleI=A5A5AC
+titleIText=FFFFFF
+titleIdark=57575B
+titleIlight=D7D7DA
+window=C3C3C9

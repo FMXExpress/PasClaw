@@ -1,0 +1,34 @@
+; Hot Chrome -- NEON/OS color scheme
+name=Hot Chrome
+family=synth
+[colors]
+accent=9FE8FF
+black=E7EDF3
+btnborder=FF2D78
+btngrad1=323A44
+btngrad2=1F252C
+capglyph=8494A2
+darker=0B0D10
+desktop=0B0D10
+dot=9FE8FF
+face=1F252C
+focusring=FF2D78
+frameface=1F252C
+highlight=FF2D78
+hover=9FE8FF
+inputborder=5C6A78
+light=323A44
+pressface=4A5561
+progress=9FE8FF
+selection=FF2D78
+selectiontext=FFFFFF
+shadow=4A5561
+text=E7EDF3
+titleA=FF2D78
+titleA2=C8D2DC
+titleAText=FFFFFF
+titleI=1A2027
+titleI2=1F252C
+titleIText=8494A2
+track=0B0D10
+window=14181D

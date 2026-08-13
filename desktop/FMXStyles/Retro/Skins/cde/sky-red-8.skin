@@ -1,0 +1,29 @@
+; Sky Red 8 -- from classic-stylesheets themes/cde/skins/sky-red-8.css
+name=Sky Red 8
+family=cde
+[colors]
+accent=CC686F
+darker=384956
+darkshadow=384956
+desktop=6DA7B4
+face=6E91AA
+faceactive=5D7B90
+focusring=CC686F
+frameface=6E91AA
+highlight=BECED9
+hover=CC686F
+inputdark=828882
+inputlight=F2F6F2
+light=BECED9
+progress=CC686F
+shadow=384956
+text=000000
+titleA=CC686F
+titleAText=FFFFFF
+titleAdark=673438
+titleAlight=E8BBBE
+titleI=AFC0C2
+titleIText=000000
+titleIdark=5F686A
+titleIlight=DCE4E4
+window=E1EBE1

@@ -1,0 +1,25 @@
+; Rainy Day 2000 -- from classic-stylesheets themes/win9x/skins/rainy-day-2000.css
+name=Rainy Day 2000
+family=win9x
+[colors]
+black=000000
+darker=000000
+darkshadow=000000
+desktop=000000
+dot=000000
+face=8098B0
+frameface=8098B0
+highlight=C0CCD8
+light=8098B0
+progress=506478
+selection=506478
+selectiontext=FFFFFF
+shadow=4E657C
+text=000000
+titleA=4F657D
+titleA2=80B4D0
+titleAText=FFFFFF
+titleI=808080
+titleI2=B0BCD0
+titleIText=C1CCD9
+window=FFFFFF

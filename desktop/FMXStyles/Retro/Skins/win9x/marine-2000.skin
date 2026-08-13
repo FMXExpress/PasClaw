@@ -1,0 +1,25 @@
+; Marine 2000 -- from classic-stylesheets themes/win9x/skins/marine-2000.css
+name=Marine 2000
+family=win9x
+[colors]
+black=000000
+darker=000000
+darkshadow=000000
+desktop=2C4E47
+dot=000000
+face=88C0B8
+frameface=88C0B8
+highlight=C4DFDB
+light=88C0B8
+progress=000080
+selection=000080
+selectiontext=FFFFFF
+shadow=4B8D84
+text=000000
+titleA=000080
+titleA2=18B4C0
+titleAText=FFFFFF
+titleI=489088
+titleI2=78CCD8
+titleIText=C0C0C0
+window=C8E0D8

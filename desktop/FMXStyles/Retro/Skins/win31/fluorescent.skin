@@ -1,0 +1,15 @@
+; Fluorescent -- from classic-stylesheets themes/win3x/skins/fluorescent.css
+name=Fluorescent
+family=win31
+[colors]
+desktop=000000
+frameface=00FC00
+progress=000000
+selection=000000
+selectiontext=FFFFFF
+text=000000
+titleA=F800F8
+titleAText=000000
+titleI=C0C0C0
+titleIText=000000
+window=FFFFFF

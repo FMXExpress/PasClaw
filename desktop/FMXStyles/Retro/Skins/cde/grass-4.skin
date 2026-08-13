@@ -1,0 +1,29 @@
+; Grass 4 -- from classic-stylesheets themes/cde/skins/grass-4.css
+name=Grass 4
+family=cde
+[colors]
+accent=D4C77D
+darker=686C64
+darkshadow=686C64
+desktop=5E9C7B
+face=BEC6B7
+faceactive=A1A89B
+focusring=D4C77D
+frameface=BEC6B7
+highlight=E3E6E0
+hover=D4C77D
+inputdark=838D83
+inputlight=F3FAF3
+light=E3E6E0
+progress=D4C77D
+shadow=686C64
+text=000000
+titleA=D4C77D
+titleAText=000000
+titleAdark=736C43
+titleAlight=ECE7C7
+titleI=BEC6B7
+titleIText=000000
+titleIdark=686C64
+titleIlight=E3E6E0
+window=E2F3E2

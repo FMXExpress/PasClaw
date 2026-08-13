@@ -1,0 +1,25 @@
+; Storm -- from classic-stylesheets themes/win9x/skins/storm.css
+name=Storm
+family=win9x
+[colors]
+black=000000
+darker=000000
+darkshadow=000000
+desktop=000000
+dot=000000
+face=C0C0C0
+frameface=C0C0C0
+highlight=FFFFFF
+light=C0C0C0
+progress=800080
+selection=800080
+selectiontext=FFFFFF
+shadow=808080
+text=000000
+titleA=800080
+titleA2=800080
+titleAText=FFFFFF
+titleI=808080
+titleI2=808080
+titleIText=C0C0C0
+window=FFFFFF

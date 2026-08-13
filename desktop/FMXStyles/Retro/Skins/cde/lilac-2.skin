@@ -1,0 +1,29 @@
+; Lilac 2 -- from classic-stylesheets themes/cde/skins/lilac-2.css
+name=Lilac 2
+family=cde
+[colors]
+accent=C3C3C9
+darker=574D60
+darkshadow=574D60
+desktop=A692B7
+face=A692B7
+faceactive=8D7C9B
+focusring=C3C3C9
+frameface=A692B7
+highlight=D8CFDF
+hover=C3C3C9
+inputdark=574D60
+inputlight=D8CFDF
+light=D8CFDF
+progress=C3C3C9
+shadow=574D60
+text=FFFFFF
+titleA=C3C3C9
+titleAText=000000
+titleAdark=6C6C6F
+titleAlight=E5E5E8
+titleI=A692B7
+titleIText=FFFFFF
+titleIdark=574D60
+titleIlight=D8CFDF
+window=A692B7

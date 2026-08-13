@@ -1,0 +1,7 @@
+; Bubbles -- from classic-stylesheets themes/macos9/skins/bubbles.css
+name=Bubbles
+family=mac9
+[colors]
+desktop=4AADA5
+progress=308F91
+selection=99FFFF

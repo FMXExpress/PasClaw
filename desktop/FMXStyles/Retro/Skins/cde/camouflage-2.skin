@@ -1,0 +1,29 @@
+; Camouflage 2 -- from classic-stylesheets themes/cde/skins/camouflage-2.css
+name=Camouflage 2
+family=cde
+[colors]
+accent=82829B
+darker=483D3D
+darkshadow=483D3D
+desktop=907B7B
+face=907B7B
+faceactive=7A6868
+focusring=82829B
+frameface=907B7B
+highlight=CDC3C3
+hover=82829B
+inputdark=483D3D
+inputlight=CDC3C3
+light=CDC3C3
+progress=82829B
+shadow=483D3D
+text=FFFFFF
+titleA=82829B
+titleAText=FFFFFF
+titleAdark=41414E
+titleAlight=C7C7D2
+titleI=907B7B
+titleIText=FFFFFF
+titleIdark=483D3D
+titleIlight=CDC3C3
+window=907B7B

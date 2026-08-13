@@ -1,0 +1,7 @@
+; Blueberry Union -- from classic-stylesheets themes/macos9/skins/blueberry-union.css
+name=Blueberry Union
+family=mac9
+[colors]
+desktop=3EB2B0
+progress=0099CC
+selection=99FFFF

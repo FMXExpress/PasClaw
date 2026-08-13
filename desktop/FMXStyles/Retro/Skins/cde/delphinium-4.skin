@@ -1,0 +1,29 @@
+; Delphinium 4 -- from classic-stylesheets themes/cde/skins/delphinium-4.css
+name=Delphinium 4
+family=cde
+[colors]
+accent=85C4ED
+darker=6F6F6F
+darkshadow=6F6F6F
+desktop=858CD9
+face=C8C8C8
+faceactive=AAAAAA
+focusring=85C4ED
+frameface=C8C8C8
+highlight=E7E7E7
+hover=85C4ED
+inputdark=99998A
+inputlight=CCCCB8
+light=E7E7E7
+progress=85C4ED
+shadow=6F6F6F
+text=000000
+titleA=85C4ED
+titleAText=000000
+titleAdark=486B81
+titleAlight=CAE5F7
+titleI=C8C8C8
+titleIText=000000
+titleIdark=6F6F6F
+titleIlight=E7E7E7
+window=FFFFE6

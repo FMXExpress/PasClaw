@@ -1,0 +1,29 @@
+; Beige Rose 4 -- from classic-stylesheets themes/cde/skins/beige-rose-4.css
+name=Beige Rose 4
+family=cde
+[colors]
+accent=618888
+darker=73695F
+darkshadow=73695F
+desktop=B78989
+face=D1C0AE
+faceactive=B1A393
+focusring=618888
+frameface=D1C0AE
+highlight=EBE4DC
+hover=618888
+inputdark=8C8A89
+inputlight=F8F7F6
+light=EBE4DC
+progress=618888
+shadow=73695F
+text=000000
+titleA=618888
+titleAText=FFFFFF
+titleAdark=304343
+titleAlight=B7C9C9
+titleI=D1C0AE
+titleIText=000000
+titleIdark=73695F
+titleIlight=EBE4DC
+window=F0ECEB

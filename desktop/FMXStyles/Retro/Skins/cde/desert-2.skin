@@ -1,0 +1,29 @@
+; Desert 2 -- from classic-stylesheets themes/cde/skins/desert-2.css
+name=Desert 2
+family=cde
+[colors]
+accent=FDFDFA
+darker=47494E
+darkshadow=47494E
+desktop=8C8F98
+face=8C8F98
+faceactive=777981
+focusring=FDFDFA
+frameface=8C8F98
+highlight=CCCDD1
+hover=FDFDFA
+inputdark=47494E
+inputlight=CCCDD1
+light=CCCDD1
+progress=FDFDFA
+shadow=47494E
+text=FFFFFF
+titleA=FDFDFA
+titleAText=000000
+titleAdark=979796
+titleAlight=CACAC8
+titleI=8C8F98
+titleIText=FFFFFF
+titleIdark=47494E
+titleIlight=CCCDD1
+window=8C8F98

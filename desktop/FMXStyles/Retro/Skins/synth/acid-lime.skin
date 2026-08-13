@@ -1,0 +1,34 @@
+; Acid Lime -- NEON/OS color scheme
+name=Acid Lime
+family=synth
+[colors]
+accent=E4FF7A
+black=E6F7D4
+btnborder=B6FF2E
+btngrad1=233318
+btngrad2=16210E
+capglyph=7E9968
+darker=070A05
+desktop=070A05
+dot=E4FF7A
+face=16210E
+focusring=B6FF2E
+frameface=16210E
+highlight=B6FF2E
+hover=E4FF7A
+inputborder=4C7433
+light=233318
+pressface=36502A
+progress=E4FF7A
+selection=B6FF2E
+selectiontext=0B1206
+shadow=36502A
+text=E6F7D4
+titleA=B6FF2E
+titleA2=55E08A
+titleAText=0B1206
+titleI=1A2711
+titleI2=16210E
+titleIText=7E9968
+track=070A05
+window=0D1408

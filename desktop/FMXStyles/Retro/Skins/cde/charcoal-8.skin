@@ -1,0 +1,29 @@
+; Charcoal 8 -- from classic-stylesheets themes/cde/skins/charcoal-8.css
+name=Charcoal 8
+family=cde
+[colors]
+accent=87B4B0
+darker=414242
+darkshadow=414242
+desktop=696363
+face=828585
+faceactive=6E7171
+focusring=87B4B0
+frameface=828585
+highlight=C6C8C8
+hover=87B4B0
+inputdark=433535
+inputlight=C9BCBC
+light=C6C8C8
+progress=87B4B0
+shadow=414242
+text=FFFFFF
+titleA=87B4B0
+titleAText=FFFFFF
+titleAdark=475F5D
+titleAlight=CADEDC
+titleI=767279
+titleIText=FFFFFF
+titleIdark=3A383B
+titleIlight=C0BEC2
+window=896D6D

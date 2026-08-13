@@ -1,0 +1,29 @@
+; Sea Foam 4 -- from classic-stylesheets themes/cde/skins/sea-foam-4.css
+name=Sea Foam 4
+family=cde
+[colors]
+accent=AACBDB
+darker=585958
+darkshadow=585958
+desktop=7DB7BB
+face=A7A8A7
+faceactive=8D8E8D
+focusring=AACBDB
+frameface=A7A8A7
+highlight=D8D9D8
+hover=AACBDB
+inputdark=505D5E
+inputlight=D1DCDD
+light=D8D9D8
+progress=AACBDB
+shadow=585958
+text=FFFFFF
+titleA=AACBDB
+titleAText=000000
+titleAdark=5E7079
+titleAlight=DBE9EF
+titleI=A7A8A7
+titleIText=FFFFFF
+titleIdark=585958
+titleIlight=D8D9D8
+window=97B0B2

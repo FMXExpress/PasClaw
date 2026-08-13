@@ -1,0 +1,29 @@
+; Arizona 2 -- from classic-stylesheets themes/cde/skins/arizona-2.css
+name=Arizona 2
+family=cde
+[colors]
+accent=885770
+darker=786150
+darkshadow=786150
+desktop=DEB394
+face=DEB394
+faceactive=BC987D
+focusring=885770
+frameface=DEB394
+highlight=F0DED1
+hover=885770
+inputdark=786150
+inputlight=F0DED1
+light=F0DED1
+progress=885770
+shadow=786150
+text=000000
+titleA=885770
+titleAText=FFFFFF
+titleAdark=422A36
+titleAlight=C8B2BD
+titleI=DEB394
+titleIText=000000
+titleIdark=786150
+titleIlight=F0DED1
+window=DEB394

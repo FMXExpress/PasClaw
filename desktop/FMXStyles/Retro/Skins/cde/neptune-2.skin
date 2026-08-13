@@ -1,0 +1,29 @@
+; Neptune 2 -- from classic-stylesheets themes/cde/skins/neptune-2.css
+name=Neptune 2
+family=cde
+[colors]
+accent=7889A5
+darker=142336
+darkshadow=142336
+desktop=2D4E76
+face=2D4E76
+faceactive=264264
+focusring=7889A5
+frameface=2D4E76
+highlight=9CABBE
+hover=7889A5
+inputdark=142336
+inputlight=9CABBE
+light=9CABBE
+progress=7889A5
+shadow=142336
+text=FFFFFF
+titleA=7889A5
+titleAText=FFFFFF
+titleAdark=3D4553
+titleAlight=C2CAD6
+titleI=2D4E76
+titleIText=FFFFFF
+titleIdark=142336
+titleIlight=9CABBE
+window=2D4E76

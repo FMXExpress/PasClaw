@@ -1,0 +1,29 @@
+; Black White -- from classic-stylesheets themes/cde/skins/black-white.css
+name=Black White
+family=cde
+[colors]
+accent=000000
+darker=4C4C4C
+darkshadow=4C4C4C
+desktop=FFFFFF
+face=000000
+faceactive=262626
+focusring=000000
+frameface=000000
+highlight=7F7F7F
+hover=000000
+inputdark=4C4C4C
+inputlight=7F7F7F
+light=7F7F7F
+progress=000000
+shadow=4C4C4C
+text=FFFFFF
+titleA=000000
+titleAText=FFFFFF
+titleAdark=4C4C4C
+titleAlight=7F7F7F
+titleI=FFFFFF
+titleIText=000000
+titleIdark=999999
+titleIlight=CCCCCC
+window=000000

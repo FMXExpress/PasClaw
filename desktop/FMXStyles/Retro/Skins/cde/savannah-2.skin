@@ -1,0 +1,29 @@
+; Savannah 2 -- from classic-stylesheets themes/cde/skins/savannah-2.css
+name=Savannah 2
+family=cde
+[colors]
+accent=D2BFA8
+darker=56606B
+darkshadow=56606B
+desktop=A0B2C8
+face=A0B2C8
+faceactive=8897AA
+focusring=D2BFA8
+frameface=A0B2C8
+highlight=D6DDE7
+hover=D2BFA8
+inputdark=56606B
+inputlight=D6DDE7
+light=D6DDE7
+progress=D2BFA8
+shadow=56606B
+text=FFFFFF
+titleA=D2BFA8
+titleAText=000000
+titleAdark=73685C
+titleAlight=EBE3DA
+titleI=A0B2C8
+titleIText=FFFFFF
+titleIdark=56606B
+titleIlight=D6DDE7
+window=A0B2C8

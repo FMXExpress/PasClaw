@@ -1,0 +1,29 @@
+; Soft Blue 4 -- from classic-stylesheets themes/cde/skins/soft-blue-4.css
+name=Soft Blue 4
+family=cde
+[colors]
+accent=7FA9EB
+darker=3C5750
+darkshadow=3C5750
+desktop=5B85D0
+face=76A99C
+faceactive=648F84
+focusring=7FA9EB
+frameface=76A99C
+highlight=C2D9D3
+hover=7FA9EB
+inputdark=343434
+inputlight=BBBBBB
+light=C2D9D3
+progress=7FA9EB
+shadow=3C5750
+text=FFFFFF
+titleA=7FA9EB
+titleAText=FFFFFF
+titleAdark=445A7D
+titleAlight=C7D9F6
+titleI=76A99C
+titleIText=FFFFFF
+titleIdark=3C5750
+titleIlight=C2D9D3
+window=6C6C6C

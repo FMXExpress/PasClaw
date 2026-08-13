@@ -1,0 +1,29 @@
+; Charcoal 4 -- from classic-stylesheets themes/cde/skins/charcoal-4.css
+name=Charcoal 4
+family=cde
+[colors]
+accent=87B4B0
+darker=3A383B
+darkshadow=3A383B
+desktop=696363
+face=767279
+faceactive=646066
+focusring=87B4B0
+frameface=767279
+highlight=C0BEC2
+hover=87B4B0
+inputdark=433535
+inputlight=C9BCBC
+light=C0BEC2
+progress=87B4B0
+shadow=3A383B
+text=FFFFFF
+titleA=87B4B0
+titleAText=FFFFFF
+titleAdark=475F5D
+titleAlight=CADEDC
+titleI=767279
+titleIText=FFFFFF
+titleIdark=3A383B
+titleIlight=C0BEC2
+window=896D6D

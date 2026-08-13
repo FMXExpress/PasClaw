@@ -1,0 +1,29 @@
+; Sand 8 -- from classic-stylesheets themes/cde/skins/sand-8.css
+name=Sand 8
+family=cde
+[colors]
+accent=EABE93
+darker=594242
+darkshadow=594242
+desktop=8EA2C1
+face=AF8181
+faceactive=946D6D
+focusring=EABE93
+frameface=AF8181
+highlight=DBC7C7
+hover=EABE93
+inputdark=78787B
+inputlight=EDEDEF
+light=DBC7C7
+progress=EABE93
+shadow=594242
+text=000000
+titleA=EABE93
+titleAText=000000
+titleAdark=806850
+titleAlight=F6E3D1
+titleI=C7AFAF
+titleIText=000000
+titleIdark=6C5F5F
+titleIlight=E7DCDC
+window=D4D4DA

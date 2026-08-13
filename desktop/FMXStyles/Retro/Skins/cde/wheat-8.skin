@@ -1,0 +1,29 @@
+; Wheat 8 -- from classic-stylesheets themes/cde/skins/wheat-8.css
+name=Wheat 8
+family=cde
+[colors]
+accent=D1A57A
+darker=51757B
+darkshadow=51757B
+desktop=486D7F
+face=94D5DF
+faceactive=7DB5BD
+focusring=D1A57A
+frameface=94D5DF
+highlight=D1EDF1
+hover=D1A57A
+inputdark=69696C
+inputlight=E3E4E6
+light=D1EDF1
+progress=D1A57A
+shadow=51757B
+text=000000
+titleA=D1A57A
+titleAText=FFFFFF
+titleAdark=6F5740
+titleAlight=EBD7C5
+titleI=DBC291
+titleIText=000000
+titleIdark=776A4F
+titleIlight=EFE5D0
+window=BFC0C5

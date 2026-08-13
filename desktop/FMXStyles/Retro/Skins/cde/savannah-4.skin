@@ -1,0 +1,29 @@
+; Savannah 4 -- from classic-stylesheets themes/cde/skins/savannah-4.css
+name=Savannah 4
+family=cde
+[colors]
+accent=DA9A68
+darker=5F5A4E
+darkshadow=5F5A4E
+desktop=A0B2C8
+face=B4AA94
+faceactive=99907D
+focusring=DA9A68
+frameface=B4AA94
+highlight=DEDAD0
+hover=DA9A68
+inputdark=73685C
+inputlight=EBE3DA
+light=DEDAD0
+progress=DA9A68
+shadow=5F5A4E
+text=000000
+titleA=DA9A68
+titleAText=FFFFFF
+titleAdark=725136
+titleAlight=EED2BD
+titleI=B4AA94
+titleIText=FFFFFF
+titleIdark=5F5A4E
+titleIlight=DEDAD0
+window=D2BFA8

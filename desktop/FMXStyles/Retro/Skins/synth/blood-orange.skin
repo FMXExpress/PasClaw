@@ -1,0 +1,34 @@
+; Blood Orange -- NEON/OS color scheme
+name=Blood Orange
+family=synth
+[colors]
+accent=FF9166
+black=FFE3D4
+btnborder=FF5A2E
+btngrad1=42190F
+btngrad2=2A100A
+capglyph=B57A63
+darker=120503
+desktop=120503
+dot=FF9166
+face=2A100A
+focusring=FF5A2E
+frameface=2A100A
+highlight=FF5A2E
+hover=FF9166
+inputborder=8A3B22
+light=42190F
+pressface=5E2716
+progress=FF9166
+selection=FF5A2E
+selectiontext=1A0603
+shadow=5E2716
+text=FFE3D4
+titleA=FF5A2E
+titleA2=FFC04D
+titleAText=1A0603
+titleI=24110B
+titleI2=2A100A
+titleIText=B57A63
+track=120503
+window=1D0906

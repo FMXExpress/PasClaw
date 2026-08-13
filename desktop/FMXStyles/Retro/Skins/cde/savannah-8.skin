@@ -1,0 +1,29 @@
+; Savannah 8 -- from classic-stylesheets themes/cde/skins/savannah-8.css
+name=Savannah 8
+family=cde
+[colors]
+accent=DA9A68
+darker=6B605B
+darkshadow=6B605B
+desktop=A0B2C8
+face=C6B2A8
+faceactive=A8978E
+focusring=DA9A68
+frameface=C6B2A8
+highlight=E6DDD9
+hover=DA9A68
+inputdark=73685C
+inputlight=EBE3DA
+light=E6DDD9
+progress=DA9A68
+shadow=6B605B
+text=000000
+titleA=DA9A68
+titleAText=FFFFFF
+titleAdark=725136
+titleAlight=EED2BD
+titleI=B4AA94
+titleIText=FFFFFF
+titleIdark=5F5A4E
+titleIlight=DEDAD0
+window=D2BFA8

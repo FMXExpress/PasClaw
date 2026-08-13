@@ -1,0 +1,29 @@
+; Clay 2 -- from classic-stylesheets themes/cde/skins/clay-2.css
+name=Clay 2
+family=cde
+[colors]
+accent=8C6464
+darker=2C4546
+darkshadow=2C4546
+desktop=5A8B8D
+face=5A8B8D
+faceactive=4C7677
+focusring=8C6464
+frameface=5A8B8D
+highlight=B4CACB
+hover=8C6464
+inputdark=2C4546
+inputlight=B4CACB
+light=B4CACB
+progress=8C6464
+shadow=2C4546
+text=FFFFFF
+titleA=8C6464
+titleAText=FFFFFF
+titleAdark=443030
+titleAlight=CAB8B8
+titleI=5A8B8D
+titleIText=FFFFFF
+titleIdark=2C4546
+titleIlight=B4CACB
+window=5A8B8D

@@ -1,0 +1,29 @@
+; Soft Blue 8 -- from classic-stylesheets themes/cde/skins/soft-blue-8.css
+name=Soft Blue 8
+family=cde
+[colors]
+accent=7FA9EB
+darker=51757B
+darkshadow=51757B
+desktop=5B85D0
+face=94D5DF
+faceactive=7DB5BD
+focusring=7FA9EB
+frameface=94D5DF
+highlight=D1EDF1
+hover=7FA9EB
+inputdark=343434
+inputlight=BBBBBB
+light=D1EDF1
+progress=7FA9EB
+shadow=51757B
+text=FFFFFF
+titleA=7FA9EB
+titleAText=FFFFFF
+titleAdark=445A7D
+titleAlight=C7D9F6
+titleI=76A99C
+titleIText=FFFFFF
+titleIdark=3C5750
+titleIlight=C2D9D3
+window=6C6C6C

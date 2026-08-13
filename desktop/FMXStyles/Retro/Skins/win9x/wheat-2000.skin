@@ -1,0 +1,25 @@
+; Wheat 2000 -- from classic-stylesheets themes/win9x/skins/wheat-2000.css
+name=Wheat 2000
+family=win9x
+[colors]
+black=000000
+darker=000000
+darkshadow=000000
+desktop=00401D
+dot=000000
+face=E0E0A0
+frameface=E0E0A0
+highlight=F0F0D0
+light=E0E0A0
+progress=808000
+selection=808000
+selectiontext=FFFFFF
+shadow=C0C03F
+text=000000
+titleA=808000
+titleA2=C8B048
+titleAText=FFFFFF
+titleI=BCBC41
+titleI2=B8B880
+titleIText=E8E6D5
+window=FFFFFF

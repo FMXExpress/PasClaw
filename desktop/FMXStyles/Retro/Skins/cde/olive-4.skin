@@ -1,0 +1,29 @@
+; Olive 4 -- from classic-stylesheets themes/cde/skins/olive-4.css
+name=Olive 4
+family=cde
+[colors]
+accent=83835A
+darker=6B6B65
+darkshadow=6B6B65
+desktop=877987
+face=C3C3B9
+faceactive=A5A59D
+focusring=83835A
+frameface=C3C3B9
+highlight=E5E5E1
+hover=83835A
+inputdark=716B65
+inputlight=EAE5E0
+light=E5E5E1
+progress=83835A
+shadow=6B6B65
+text=000000
+titleA=83835A
+titleAText=FFFFFF
+titleAdark=40402C
+titleAlight=C6C6B4
+titleI=C3C3B9
+titleIText=000000
+titleIdark=6B6B65
+titleIlight=E5E5E1
+window=CEC2B8

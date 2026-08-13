@@ -1,0 +1,29 @@
+; Northern Sky 4 -- from classic-stylesheets themes/cde/skins/northern-sky-4.css
+name=Northern Sky 4
+family=cde
+[colors]
+accent=A47591
+darker=0C2A31
+darkshadow=0C2A31
+desktop=0C5A87
+face=1B5D6C
+faceactive=164F5B
+focusring=A47591
+frameface=1B5D6C
+highlight=93B2B9
+hover=A47591
+inputdark=002737
+inputlight=86AFC0
+light=93B2B9
+progress=A47591
+shadow=0C2A31
+text=FFFFFF
+titleA=A47591
+titleAText=FFFFFF
+titleAdark=533B49
+titleAlight=D6C1CE
+titleI=1B5D6C
+titleIText=FFFFFF
+titleIdark=0C2A31
+titleIlight=93B2B9
+window=00577A

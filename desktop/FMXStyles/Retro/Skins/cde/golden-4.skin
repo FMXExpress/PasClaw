@@ -1,0 +1,29 @@
+; Golden 4 -- from classic-stylesheets themes/cde/skins/golden-4.css
+name=Golden 4
+family=cde
+[colors]
+accent=FAAD49
+darker=253043
+darkshadow=253043
+desktop=BE826F
+face=4D648D
+faceactive=415577
+focusring=FAAD49
+frameface=4D648D
+highlight=ADB7CA
+hover=FAAD49
+inputdark=212E24
+inputlight=A9B6AC
+light=ADB7CA
+progress=FAAD49
+shadow=253043
+text=FFFFFF
+titleA=FAAD49
+titleAText=FFFFFF
+titleAdark=855C26
+titleAlight=FCDBB0
+titleI=4D648D
+titleIText=FFFFFF
+titleIdark=253043
+titleIlight=ADB7CA
+window=47634F

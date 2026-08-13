@@ -1,0 +1,7 @@
+; Grape Gravity -- from classic-stylesheets themes/macos9/skins/grape-gravity.css
+name=Grape Gravity
+family=mac9
+[colors]
+desktop=965CD2
+progress=996699
+selection=FFCCFF

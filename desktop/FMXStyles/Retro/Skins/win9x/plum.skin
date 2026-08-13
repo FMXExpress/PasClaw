@@ -1,0 +1,25 @@
+; Plum -- from classic-stylesheets themes/win9x/skins/plum.css
+name=Plum
+family=win9x
+[colors]
+black=000000
+darker=000000
+darkshadow=000000
+desktop=402840
+dot=000000
+face=A89890
+frameface=A89890
+highlight=D8D0C8
+light=A89890
+progress=284848
+selection=284848
+selectiontext=D8D0C8
+shadow=786058
+text=000000
+titleA=484060
+titleA2=484060
+titleAText=F8F0F8
+titleI=786058
+titleI2=786058
+titleIText=D0C8C0
+window=D8D0C8

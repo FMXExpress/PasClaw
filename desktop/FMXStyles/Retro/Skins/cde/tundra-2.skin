@@ -1,0 +1,29 @@
+; Tundra 2 -- from classic-stylesheets themes/cde/skins/tundra-2.css
+name=Tundra 2
+family=cde
+[colors]
+accent=767E63
+darker=404B5F
+darkshadow=404B5F
+desktop=7C92B9
+face=7C92B9
+faceactive=697C9D
+focusring=767E63
+frameface=7C92B9
+highlight=C5CEE0
+hover=767E63
+inputdark=404B5F
+inputlight=C5CEE0
+light=C5CEE0
+progress=767E63
+shadow=404B5F
+text=FFFFFF
+titleA=767E63
+titleAText=FFFFFF
+titleAdark=393D30
+titleAlight=C0C4B8
+titleI=7C92B9
+titleIText=FFFFFF
+titleIdark=404B5F
+titleIlight=C5CEE0
+window=7C92B9

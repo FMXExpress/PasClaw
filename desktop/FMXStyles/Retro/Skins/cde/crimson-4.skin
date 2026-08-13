@@ -1,0 +1,29 @@
+; Crimson 4 -- from classic-stylesheets themes/cde/skins/crimson-4.css
+name=Crimson 4
+family=cde
+[colors]
+accent=B24D7A
+darker=5E6069
+darkshadow=5E6069
+desktop=718BA5
+face=AEB2C3
+faceactive=9397A5
+focusring=B24D7A
+frameface=AEB2C3
+highlight=DCDDE5
+hover=B24D7A
+inputdark=99948B
+inputlight=CCC5BA
+light=DCDDE5
+progress=B24D7A
+shadow=5E6069
+text=000000
+titleA=B24D7A
+titleAText=FFFFFF
+titleAdark=58263C
+titleAlight=DCAEC2
+titleI=AEB2C3
+titleIText=000000
+titleIdark=5E6069
+titleIlight=DCDDE5
+window=FFF7E9

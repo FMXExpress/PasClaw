@@ -1,0 +1,29 @@
+; Orchid 2 -- from classic-stylesheets themes/cde/skins/orchid-2.css
+name=Orchid 2
+family=cde
+[colors]
+accent=8282AB
+darker=5A5A6E
+darkshadow=5A5A6E
+desktop=A8A8CD
+face=A8A8CD
+faceactive=8E8EAE
+focusring=8282AB
+frameface=A8A8CD
+highlight=D9D9E9
+hover=8282AB
+inputdark=5A5A6E
+inputlight=D9D9E9
+light=D9D9E9
+progress=8282AB
+shadow=5A5A6E
+text=FFFFFF
+titleA=8282AB
+titleAText=FFFFFF
+titleAdark=424257
+titleAlight=C7C7D9
+titleI=A8A8CD
+titleIText=FFFFFF
+titleIdark=5A5A6E
+titleIlight=D9D9E9
+window=A8A8CD

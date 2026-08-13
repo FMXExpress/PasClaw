@@ -1,0 +1,25 @@
+; 2000 -- from classic-stylesheets themes/win9x/skins/2000.css
+name=2000
+family=win9x
+[colors]
+black=000000
+darker=404040
+darkshadow=000000
+desktop=3A6EA5
+dot=000000
+face=C0C0C0
+frameface=C0C0C0
+highlight=FFFFFF
+light=D4D0C8
+progress=0A246A
+selection=0A246A
+selectiontext=FFFFFF
+shadow=808080
+text=000000
+titleA=0A246A
+titleA2=A6CAF0
+titleAText=FFFFFF
+titleI=808080
+titleI2=C0C0C0
+titleIText=C0C0C0
+window=FFFFFF

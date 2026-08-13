@@ -1,0 +1,34 @@
+; Tokyo Rain -- NEON/OS color scheme
+name=Tokyo Rain
+family=synth
+[colors]
+accent=7BF7FF
+black=D8ECFF
+btnborder=2BD9FF
+btngrad1=1B3157
+btngrad2=11203A
+capglyph=6E8FB8
+darker=04070F
+desktop=04070F
+dot=7BF7FF
+face=11203A
+focusring=2BD9FF
+frameface=11203A
+highlight=2BD9FF
+hover=7BF7FF
+inputborder=2F6293
+light=1B3157
+pressface=27446F
+progress=7BF7FF
+selection=2BD9FF
+selectiontext=03121C
+shadow=27446F
+text=D8ECFF
+titleA=2BD9FF
+titleA2=2B6BFF
+titleAText=03121C
+titleI=142744
+titleI2=11203A
+titleIText=6E8FB8
+track=04070F
+window=0A1020

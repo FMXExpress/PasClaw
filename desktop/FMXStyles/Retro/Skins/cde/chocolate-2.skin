@@ -1,0 +1,29 @@
+; Chocolate 2 -- from classic-stylesheets themes/cde/skins/chocolate-2.css
+name=Chocolate 2
+family=cde
+[colors]
+accent=967878
+darker=45455A
+darkshadow=45455A
+desktop=8787AF
+face=8787AF
+faceactive=727294
+focusring=967878
+frameface=8787AF
+highlight=C9C9DB
+hover=967878
+inputdark=45455A
+inputlight=C9C9DB
+light=C9C9DB
+progress=967878
+shadow=45455A
+text=FFFFFF
+titleA=967878
+titleAText=FFFFFF
+titleAdark=4B3C3C
+titleAlight=CFC2C2
+titleI=8787AF
+titleIText=FFFFFF
+titleIdark=45455A
+titleIlight=C9C9DB
+window=8787AF

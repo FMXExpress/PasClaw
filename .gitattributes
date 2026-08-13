@@ -1,2 +1,9 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Retro style files carry byte offsets in their .rolemap siblings: TRetroSkins
+# rejects a style whose size disagrees with the map, and every skin patches
+# colors at a recorded offset. Line-ending translation shifts every one of
+# those offsets, so these must reach disk byte-for-byte on every platform --
+# normalization is what makes all 221 skins unusable outside Windows.
+*.style -text

@@ -1,0 +1,29 @@
+; Mustard 2 -- from classic-stylesheets themes/cde/skins/mustard-2.css
+name=Mustard 2
+family=cde
+[colors]
+accent=5C6A58
+darker=253043
+darkshadow=253043
+desktop=4D648D
+face=4D648D
+faceactive=415577
+focusring=5C6A58
+frameface=4D648D
+highlight=ADB7CA
+hover=5C6A58
+inputdark=253043
+inputlight=ADB7CA
+light=ADB7CA
+progress=5C6A58
+shadow=253043
+text=FFFFFF
+titleA=5C6A58
+titleAText=FFFFFF
+titleAdark=2B3229
+titleAlight=B3BAB1
+titleI=4D648D
+titleIText=FFFFFF
+titleIdark=253043
+titleIlight=ADB7CA
+window=4D648D

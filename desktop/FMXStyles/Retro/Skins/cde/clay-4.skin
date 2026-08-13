@@ -1,0 +1,29 @@
+; Clay 4 -- from classic-stylesheets themes/cde/skins/clay-4.css
+name=Clay 4
+family=cde
+[colors]
+accent=FFAAAA
+darker=4C4141
+darkshadow=4C4141
+desktop=5A8B8D
+face=968282
+faceactive=7F6E6E
+focusring=FFAAAA
+frameface=968282
+highlight=D0C7C7
+hover=FFAAAA
+inputdark=443030
+inputlight=CAB8B8
+light=D0C7C7
+progress=FFAAAA
+shadow=4C4141
+text=FFFFFF
+titleA=FFAAAA
+titleAText=000000
+titleAdark=8D5E5E
+titleAlight=FFDBDB
+titleI=968282
+titleIText=FFFFFF
+titleIdark=4C4141
+titleIlight=D0C7C7
+window=8C6464

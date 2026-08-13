@@ -1,0 +1,18 @@
+; Plasma Power Saver -- from classic-stylesheets themes/win3x/skins/plasma-power-saver.css
+name=Plasma Power Saver
+family=win31
+[colors]
+black=C0C0C0
+darker=C0C0C0
+desktop=000000
+dot=C0C0C0
+frameface=800000
+progress=FFFFFF
+selection=FFFFFF
+selectiontext=000000
+text=FFFFFF
+titleA=000080
+titleAText=000000
+titleI=C0C0C0
+titleIText=000000
+window=000000

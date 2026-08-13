@@ -1,0 +1,29 @@
+; Delphinium 2 -- from classic-stylesheets themes/cde/skins/delphinium-2.css
+name=Delphinium 2
+family=cde
+[colors]
+accent=FFFFE6
+darker=454971
+darkshadow=454971
+desktop=858CD9
+face=858CD9
+faceactive=7177B8
+focusring=FFFFE6
+frameface=858CD9
+highlight=C9CCEE
+hover=FFFFE6
+inputdark=454971
+inputlight=C9CCEE
+light=C9CCEE
+progress=FFFFE6
+shadow=454971
+text=FFFFFF
+titleA=FFFFE6
+titleAText=000000
+titleAdark=99998A
+titleAlight=CCCCB8
+titleI=858CD9
+titleIText=FFFFFF
+titleIdark=454971
+titleIlight=C9CCEE
+window=858CD9

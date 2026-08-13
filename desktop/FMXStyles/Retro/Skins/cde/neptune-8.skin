@@ -1,0 +1,29 @@
+; Neptune 8 -- from classic-stylesheets themes/cde/skins/neptune-8.css
+name=Neptune 8
+family=cde
+[colors]
+accent=A2E5C6
+darker=313E4A
+darkshadow=313E4A
+desktop=2D4E76
+face=637E95
+faceactive=546B7E
+focusring=A2E5C6
+frameface=637E95
+highlight=B8C4CF
+hover=A2E5C6
+inputdark=3D4553
+inputlight=C2CAD6
+light=B8C4CF
+progress=A2E5C6
+shadow=313E4A
+text=FFFFFF
+titleA=A2E5C6
+titleAText=000000
+titleAdark=5A7F6E
+titleAlight=D7F4E6
+titleI=3F938D
+titleIText=FFFFFF
+titleIdark=1F4845
+titleIlight=A7CDCB
+window=7889A5

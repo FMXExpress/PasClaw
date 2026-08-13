@@ -1,0 +1,29 @@
+; Broica 2 -- from classic-stylesheets themes/cde/skins/broica-2.css
+name=Broica 2
+family=cde
+[colors]
+accent=686F82
+darker=474E58
+darkshadow=474E58
+desktop=8998AA
+face=8998AA
+faceactive=748190
+focusring=686F82
+frameface=8998AA
+highlight=CBD1D9
+hover=686F82
+inputdark=474E58
+inputlight=CBD1D9
+light=CBD1D9
+progress=686F82
+shadow=474E58
+text=FFFFFF
+titleA=686F82
+titleAText=FFFFFF
+titleAdark=32363F
+titleAlight=BABDC6
+titleI=8998AA
+titleIText=FFFFFF
+titleIdark=474E58
+titleIlight=CBD1D9
+window=8998AA
