@@ -117,6 +117,19 @@ type
   { Called for each streamed chunk of an assistant reply. Set Abort to stop. }
   TChatChunkProc = procedure(const Chunk: string; var Abort: Boolean) of object;
 
+  (* Called as the model uses a tool, if the caller wants to watch.
+
+     The gateway already narrates tool use as SSE comments beside the text
+     stream; without somewhere to send them a client shows prose only, so
+     "build me an app" looks like a long silence followed by an answer, with
+     no sign of the dozen file writes that actually did the work.
+
+     Kind is 'call' or 'result'. For a call, Detail is the (capped) argument
+     summary; for a result it is the result text, or the error when Err is
+     True. *)
+  TToolTraceProc = procedure(const Kind, Name, Detail: string;
+    IsErr: Boolean) of object;
+
   (* ---- period-native output ----
 
      The web desktop renders structured agent output as real UI: a plan
@@ -314,7 +327,12 @@ type
        leading system message. OnChunk receives assistant text as it arrives.
        Returns the full reply. *)
     function Chat(const HistoryJSON, System_: string;
-      OnChunk: TChatChunkProc): string;
+      OnChunk: TChatChunkProc): string; overload;
+    (* The same turn, with the model's tool use narrated. Separate overload
+       rather than a nil-able extra parameter on the one above so existing
+       callers are untouched. *)
+    function Chat(const HistoryJSON, System_: string;
+      OnChunk: TChatChunkProc; OnTool: TToolTraceProc): string; overload;
 
     (* Subscribe to /v1/desktop/events and pump until the callback stops it or
        the connection drops. BLOCKS -- run it on its own thread. The FMX
@@ -327,6 +345,12 @@ type
        answer "what did I look up"; these answer "what did I talk about",
        and the Library window wants both. *)
     function Sessions: TSessionRows;
+    (* One session's messages, as the JSON array a chat window seeds its
+       history from -- the same [{role,content}] shape Chat sends back, so
+       reopening a conversation is loading it, not re-deriving it. Empty
+       array when the session is gone or unreadable: an unopenable session
+       should give you a blank window, not an exception. *)
+    function SessionHistory(const Id: string): string;
 
     { ---- logs ---- }
     (* Subscribe to /v1/logs. Same shape as WatchEvents -- BLOCKS, so run it
@@ -369,10 +393,13 @@ type
     FBuf: string;
     FText: string;
     FOnChunk: TChatChunkProc;
+    FOnTool: TToolTraceProc;
     FAbort: Boolean;
     procedure Consume(const Data: string);
+    procedure HandleToolComment(const Payload: string);
   public
-    constructor Create(AOnChunk: TChatChunkProc);
+    constructor Create(AOnChunk: TChatChunkProc;
+      AOnTool: TToolTraceProc = nil);
     function Write(const Buffer; Count: Longint): Longint; override;
     function Read(var Buffer; Count: Longint): Longint; override;
     function Seek(Offset: Longint; Origin: Word): Longint; override;
@@ -380,10 +407,51 @@ type
     property Aborted: Boolean read FAbort;
   end;
 
-constructor TSSEStream.Create(AOnChunk: TChatChunkProc);
+constructor TSSEStream.Create(AOnChunk: TChatChunkProc;
+  AOnTool: TToolTraceProc);
 begin
   inherited Create;
   FOnChunk := AOnChunk;
+  FOnTool := AOnTool;
+end;
+
+(* One ": pasclaw-tool {...}" comment off the chat stream.
+
+   These ride the SSE channel as comments precisely so a client that does
+   not care keeps working: an OpenAI-compatible consumer skips them without
+   knowing they exist. A client that DOES care gets the model's working
+   shown. *)
+procedure TSSEStream.HandleToolComment(const Payload: string);
+var
+  Obj: TJsonObject;
+  Kind, Name, Detail: string;
+  IsErr: Boolean;
+begin
+  if not Assigned(FOnTool) then Exit;
+  try
+    Obj := TJsonObject.Parse(Payload);
+  except
+    Exit;
+  end;
+  if Obj = nil then Exit;
+  try
+    Kind := Obj.GetStr('t', '');
+    Name := Obj.GetStr('name', '');
+    if Kind = 'call' then
+    begin
+      Detail := Obj.GetStr('args', '');
+      IsErr := False;
+    end
+    else
+    begin
+      Detail := Obj.GetStr('err', '');
+      IsErr := Detail <> '';
+      if not IsErr then Detail := Obj.GetStr('result', '');
+    end;
+    if Name <> '' then FOnTool(Kind, Name, Detail, IsErr);
+  finally
+    Obj.Free;
+  end;
 end;
 
 function TSSEStream.Read(var Buffer; Count: Longint): Longint;
@@ -410,10 +478,18 @@ begin
     Line := Copy(FBuf, 1, NL - 1);
     Delete(FBuf, 1, NL);
     Line := StringReplace(Line, #13, '', [rfReplaceAll]);
-    (* The gateway's ": pasclaw-tool ..." SSE comments carry tool detail the
-       desktop surfaces elsewhere; the text stream ignores them. Paren-star
-       delimiters because a brace in the example would close the comment. *)
-    if (Line = '') or (Line[1] = ':') then Continue;
+    (* The gateway's ": pasclaw-tool ..." SSE comments carry tool detail.
+       Routed to the trace callback when a caller wants it, skipped
+       otherwise -- which is what keeps a plain OpenAI client working
+       against this stream. Paren-star delimiters because a brace in the
+       example would close the comment. *)
+    if Line = '' then Continue;
+    if Line[1] = ':' then
+    begin
+      if HasPrefix(Line, ': pasclaw-tool ') then
+        HandleToolComment(Trim(Copy(Line, 16, MaxInt)));
+      Continue;
+    end;
     if not HasPrefix(Line, 'data:') then Continue;
     Payload := Trim(Copy(Line, 6, MaxInt));
     if (Payload = '') or (Payload = '[DONE]') then Continue;
@@ -905,6 +981,30 @@ begin
       if Result[N].Id <> '' then Inc(N);
     end;
     SetLength(Result, N);
+  finally
+    Root.Free;
+  end;
+end;
+
+function TPasClawClient.SessionHistory(const Id: string): string;
+var
+  Body: string;
+  Root: TJsonObject;
+  Arr: TJsonArray;
+begin
+  Result := '[]';
+  if Trim(Id) = '' then Exit;
+  Body := GetJSON('/v1/sessions/' + UrlEncode_(Id));
+  if Trim(Body) = '' then Exit;
+  try
+    Root := TJsonObject.Parse(Body);
+  except
+    Exit;
+  end;
+  if Root = nil then Exit;
+  try
+    Arr := Root.ChildArray('messages');
+    if Arr <> nil then Result := Arr.ToJSON;
   finally
     Root.Free;
   end;
@@ -1767,6 +1867,12 @@ end;
 
 function TPasClawClient.Chat(const HistoryJSON, System_: string;
   OnChunk: TChatChunkProc): string;
+begin
+  Result := Chat(HistoryJSON, System_, OnChunk, nil);
+end;
+
+function TPasClawClient.Chat(const HistoryJSON, System_: string;
+  OnChunk: TChatChunkProc; OnTool: TToolTraceProc): string;
 var
   Http: TIdHTTP;
   Req: TStringStream;
@@ -1781,7 +1887,7 @@ begin
   FLastError := '';
 
   Root := TJsonObject.Create;
-  Sink := TSSEStream.Create(OnChunk);
+  Sink := TSSEStream.Create(OnChunk, OnTool);
   Req  := nil;
   { A streamed turn carries its own liveness: chunks keep arriving, and a
     socket that dies still raises. A read timeout here only ever fires on a

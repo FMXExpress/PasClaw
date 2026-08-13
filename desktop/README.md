@@ -83,15 +83,30 @@ Environment:
 
 ## What's on screen
 
-- **Dock (left)** — the Projects → Tasks → Jobs tree. Double-click a project
-  to open its app (or its chat, if it hasn't built one yet); double-click a
-  job to tail its log.
+- **Menu** — the launcher, and the way into everything. Chat, Browser,
+  Files, Library, Log, Projects, New Project, workspace switching and
+  Display Properties, then every project in this workspace with its app
+  listed underneath — click the app and it opens. That last part is how you
+  reach the suite (Notes, Calendar, Mail and the rest): they are ordinary
+  projects with ordinary apps, and the Menu saves you having to know that.
+- **Projects window** — the Projects → Tasks → Jobs tree. Double-click a
+  project to open its app (or its chat, if it hasn't built one yet);
+  double-click a job to tail its log. Opened from the Menu; it was a fixed
+  left dock with no chrome, sitting on top of the desktop icons that name
+  the same projects.
 - **Desktop icons** — one per project, same double-click behavior.
-- **Taskbar** — open windows, plus `WS >` to move to the next workspace
-  (also Ctrl+Alt+Right). Switching workspaces closes this desktop's windows,
-  because they belong to the workspace, not to the client.
-- **Chat window** — per project, streaming. It sends the builder-mode system
-  prompt, so the agent's deliverable is an app rather than an essay. When a
+- **Taskbar** — open windows, plus `Desk >` to page virtual desktops and
+  `WS >` to move to the next workspace (also Ctrl+Alt+Right). Switching
+  either closes this desktop's windows, because they belong to the
+  workspace, not to the client — the arrangement is saved against the
+  desktop you are leaving and comes back when you return, geometry
+  included.
+- **Chat window** — per project, streaming, with the model's tool use shown
+  inline as it works: asking for an app should not look like a long silence
+  followed by a sentence. It sends the builder-mode system prompt, so the
+  agent's deliverable is an app rather than an essay. **Chat** on the Menu
+  opens the project-less one instead — no builder prompt, just a
+  conversation. When a
   turn leaves a runnable app behind, the window opens it. **Versions** opens
   the app as an earlier turn produced it, and can put that version back.
 - **App window** — the app in a `TWebBrowser`. An app that declares network
@@ -106,9 +121,21 @@ Environment:
   promotes the page you are looking at into an app you own.
 - **File Manager** — the workspace directory, over `/v1/fs`. Read-only: that
   surface is already sandbox-checked and filters secret-bearing files, and a
-  browse window is not the place to invent a delete button.
-- **Library** — pages, sessions, projects, the knowledgebase and how far undo
-  reaches.
+  browse window is not the place to invent a delete button. Opening a file
+  picks a viewer by what it is: `.html` renders in the Browser, a binary
+  file opens a paged hex dump over `/v1/fs/peek` (a window of bytes at a
+  time, so a huge file costs a window rather than a download), anything else
+  opens as text.
+- **Library** — what this workspace has accumulated: pages (what you looked
+  up) and sessions (what you talked about). Double-click a page to read it
+  in the Browser, a session to reopen that conversation with its history
+  loaded.
+- **Log** — the gateway's own log, replayed and then tailed live. Useful
+  when the gateway is on another machine or was started by something that
+  swallowed its output. It can only show what the gateway recorded: log
+  level is a server-side filter applied before the buffer, so debug lines
+  need `gateway.log_level` set to `"debug"` in `config.json` and a restart.
+  No client-side switch can recover a line that was never emitted.
 - **Display Properties** — every `.style` in the styles directory, plus that
   style's color schemes (skins). Switching reskins the whole shell, chrome
   included, at runtime.
