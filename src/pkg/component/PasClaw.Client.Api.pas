@@ -77,6 +77,14 @@ type
   end;
   TPageRows = array of TPageRow;
 
+  { One saved conversation. The Library lists these beside pages, and
+    opening one is how you get back into a chat you left. }
+  TSessionRow = record
+    Id, Title, Model, Provider: string;
+    Updated: Int64;
+  end;
+  TSessionRows = array of TSessionRow;
+
   { What a running process app is doing. Backend is 'host', 'docker' or
     'docker-remote' -- three genuinely different places, and the user should
     never have to guess which one their app is in. }
@@ -161,20 +169,42 @@ type
   { Called for each event as it arrives. Set Stop to end the subscription. }
   TDesktopEventProc = procedure(const Ev: TDesktopEvent; var Stop: Boolean) of object;
 
+  { One line off the gateway's log stream, already split into its level tag
+    and body so a viewer can colour or filter without re-parsing. }
+  TLogLineProc = procedure(const Level, Text_: string;
+    var Stop: Boolean) of object;
+
   TPasClawClient = class
   private
     FBaseURL: string;
     FToken: string;
     FTimeoutMs: Integer;
+    FModelTimeoutMs: Integer;
     FLastError: string;
     function Request(const Method, Path, Body: string): string;
+    function RequestT(const Method, Path, Body: string;
+      TimeoutMs: Integer): string;
     function GetJSON(const Path: string): string;
   public
     constructor Create(const ABaseURL: string = 'http://127.0.0.1:8088');
     { Base URL without a trailing slash; setting it normalises. }
     property BaseURL: string read FBaseURL write FBaseURL;
     property Token: string read FToken write FToken;
+    (* Two clocks, because there are two kinds of call.
+
+       A board read is a database hit: if it has not answered in seconds,
+       something is wrong and failing fast is the useful behaviour. A call
+       that goes through the MODEL is a different animal -- deep research
+       plans, reads several sources and synthesises, and the gateway holds
+       the request open with nothing on the wire for the whole turn. Judging
+       that by the same clock is what made the Browser give up mid-answer.
+
+       Still bounded rather than infinite: a genuinely dead gateway should
+       eventually surface as an error rather than a window that waits
+       forever. Streaming calls have their own liveness signal (chunks keep
+       arriving) and set no read timeout at all. *)
     property TimeoutMs: Integer read FTimeoutMs write FTimeoutMs;
+    property ModelTimeoutMs: Integer read FModelTimeoutMs write FModelTimeoutMs;
     property LastError: string read FLastError;
 
     function Ping(out Version: string): Boolean;
@@ -261,6 +291,17 @@ type
        arranged in one is the layout the other opens with. *)
     function DesktopState: string;
     function SetDesktopState(const JSON: string): Boolean;
+    (* The same two, against a NAMED desktop instead of whichever is current.
+
+       Paging desks is save-here then switch-there, and "here" stops being
+       current the moment the switch lands. Anything that saves without
+       naming the desktop -- a deferred autosave that fires after the
+       switch, say -- writes the wrong layout to the wrong desk, and the
+       arrangement the user had is simply gone. Naming the number removes
+       the ordering question entirely. N < 1 means "current", so these are
+       a superset of the two above. *)
+    function DesktopStateFor(N: Integer): string;
+    function SetDesktopStateFor(N: Integer; const JSON: string): Boolean;
     (* Desktops inside the workspace: numbered layouts, like a pager.
        Switching one is cheap and invisible to the agent -- the whole
        difference from a workspace switch. *)
@@ -280,6 +321,32 @@ type
        client does exactly that, which is how its tree updates while an agent
        works instead of waiting for a refresh click. *)
     procedure WatchEvents(OnEvent: TDesktopEventProc);
+
+    { ---- library ---- }
+    (* Saved conversations, newest first as the gateway orders them. Pages
+       answer "what did I look up"; these answer "what did I talk about",
+       and the Library window wants both. *)
+    function Sessions: TSessionRows;
+
+    { ---- logs ---- }
+    (* Subscribe to /v1/logs. Same shape as WatchEvents -- BLOCKS, so run it
+       on its own thread -- and the gateway replays its recent ring buffer
+       before going live, so a viewer opens with history rather than waiting
+       for the next line.
+
+       What arrives is bounded by the GATEWAY's log level, not by anything
+       a client can ask for: a line below that level was never recorded and
+       cannot be recovered here. Debug output needs gateway.log_level set to
+       "debug" on the server. *)
+    procedure WatchLogs(OnLine: TLogLineProc);
+
+    { ---- raw bytes ---- }
+    (* A bounded window of a file's bytes, for the hex viewer: a binary file
+       is worth looking at, and downloading a 2 GB one to show 256 bytes of
+       it is not. Total comes back as the file's real size so a viewer can
+       page. Len is capped at 64 KB by the gateway. *)
+    function PeekFile(const Path: string; Offset, Len: Int64;
+      out Data: TBytes; out Total: Int64): Boolean;
   end;
 
 (* Split an assistant reply into the text a human reads and the UI blocks a
@@ -545,6 +612,23 @@ type
     property Stopped: Boolean read FStop;
   end;
 
+  { The same sink shape for /v1/logs. Separate class rather than a mode flag
+    on the one above: the payloads have nothing in common -- one is a JSON
+    object, one is a bracketed line -- and a stream that had to ask which it
+    was would be harder to read than two that each know. }
+  TLogStream = class(TStream)
+  private
+    FBuf: string;
+    FOnLine: TLogLineProc;
+    FStop: Boolean;
+    procedure Consume(const Data: string);
+  public
+    constructor Create(AOnLine: TLogLineProc);
+    function Write(const Buffer; Count: Longint): Longint; override;
+    function Read(var Buffer; Count: Longint): Longint; override;
+    function Seek(Offset: Longint; Origin: Word): Longint; override;
+  end;
+
 constructor TEventStream.Create(AOnEvent: TDesktopEventProc);
 begin
   inherited Create;
@@ -638,14 +722,37 @@ begin
   while (FBaseURL <> '') and (FBaseURL[Length(FBaseURL)] = '/') do
     SetLength(FBaseURL, Length(FBaseURL) - 1);
   FTimeoutMs := 30000;
+  FModelTimeoutMs := 20 * 60 * 1000;   { deep research runs for minutes }
 end;
 
-function NewHttp(const Token: string; TimeoutMs: Integer): TIdHTTP;
+function UrlEncode_(const S: string): string;
+var
+  I: Integer;
+  C: Char;
+begin
+  Result := '';
+  for I := 1 to Length(S) do
+  begin
+    C := S[I];
+    if (C in ['A'..'Z', 'a'..'z', '0'..'9', '-', '_', '.', '~', '/']) then
+      Result := Result + C
+    else
+      Result := Result + '%' + IntToHex(Ord(C), 2);
+  end;
+end;
+
+(* ReadTimeoutMs of 0 means "wait indefinitely for the body" -- correct for
+   a stream whose liveness is the arrival of chunks. ConnectTimeout is kept
+   separate and never infinite: a gateway that is not listening should fail
+   in seconds, whatever the body clock says, or the UI hangs on a typo in
+   the address. *)
+function NewHttp(const Token: string; ReadTimeoutMs: Integer;
+  ConnectTimeoutMs: Integer = 15000): TIdHTTP;
 begin
   Result := TIdHTTP.Create(nil);
   Result.HandleRedirects := True;
-  Result.ConnectTimeout  := TimeoutMs;
-  Result.ReadTimeout     := TimeoutMs;
+  Result.ConnectTimeout  := ConnectTimeoutMs;
+  Result.ReadTimeout     := ReadTimeoutMs;
   Result.Request.ContentType := 'application/json';
   Result.Request.Accept      := 'application/json';
   if Token <> '' then
@@ -653,6 +760,195 @@ begin
   { A gateway reached over https (a tunnel, a remote box) needs the TLS
     handler; a local http gateway never touches it. }
   Result.IOHandler := TIdSSLIOHandlerSocketOpenSSL.Create(Result);
+end;
+
+constructor TLogStream.Create(AOnLine: TLogLineProc);
+begin
+  inherited Create;
+  FOnLine := AOnLine;
+end;
+
+function TLogStream.Read(var Buffer; Count: Longint): Longint;
+begin
+  Result := 0;
+end;
+
+function TLogStream.Seek(Offset: Longint; Origin: Word): Longint;
+begin
+  Result := 0;
+end;
+
+function TLogStream.Write(const Buffer; Count: Longint): Longint;
+var
+  S: AnsiString;
+begin
+  Result := Count;
+  if Count <= 0 then Exit;
+  SetLength(S, Count);
+  Move(Buffer, S[1], Count);
+  Consume(string(S));
+  if FStop then
+    raise EAbort.Create('log subscription stopped by caller');
+end;
+
+procedure TLogStream.Consume(const Data: string);
+var
+  NL, Close_: Integer;
+  Line, Payload, Level, Body: string;
+  Obj: TJsonObject;
+begin
+  FBuf := FBuf + Data;
+  repeat
+    NL := Pos(#10, FBuf);
+    if NL = 0 then Break;
+    Line := Copy(FBuf, 1, NL - 1);
+    Delete(FBuf, 1, NL);
+    Line := StringReplace(Line, #13, '', [rfReplaceAll]);
+    if (Line = '') or (Line[1] = ':') then Continue;   { blank / keepalive }
+    if not HasPrefix(Line, 'data:') then Continue;
+    Payload := Trim(Copy(Line, 6, MaxInt));
+    if Payload = '' then Continue;
+
+    { The gateway JSON-escapes the line but does not quote it. Round-tripping
+      it through the parser as a one-field object is cheaper than a second
+      unescaper that could disagree with the first. }
+    Obj := nil;
+    try
+      Obj := TJsonObject.Parse('{"m":"' + Payload + '"}');
+    except
+      Obj := nil;
+    end;
+    if Obj <> nil then
+    begin
+      try
+        Payload := Obj.GetStr('m', Payload);
+      finally
+        Obj.Free;
+      end;
+    end;
+
+    { "[info] listening on ..." -> level + body. A line that does not carry
+      a tag is still a line; it is shown at info rather than dropped. }
+    Level := 'info';
+    Body  := Payload;
+    if (Payload <> '') and (Payload[1] = '[') then
+    begin
+      Close_ := Pos(']', Payload);
+      if Close_ > 2 then
+      begin
+        Level := Copy(Payload, 2, Close_ - 2);
+        Body  := TrimLeft(Copy(Payload, Close_ + 1, MaxInt));
+      end;
+    end;
+
+    if Assigned(FOnLine) then
+      FOnLine(Level, Body, FStop);
+    if FStop then Break;
+  until False;
+end;
+
+procedure TPasClawClient.WatchLogs(OnLine: TLogLineProc);
+var
+  Http: TIdHTTP;
+  Sink: TLogStream;
+begin
+  FLastError := '';
+  Sink := TLogStream.Create(OnLine);
+  Http := NewHttp(FToken, 0);
+  try
+    { Same deal as WatchEvents: an open, mostly-idle connection. }
+    Http.ReadTimeout := 0;
+    Http.Request.Accept := 'text/event-stream';
+    try
+      Http.Get(FBaseURL + '/v1/logs', Sink);
+    except
+      on E: EAbort do ;      { caller asked to stop }
+      on E: Exception do FLastError := E.Message;
+    end;
+  finally
+    Http.Free;
+    Sink.Free;
+  end;
+end;
+
+function TPasClawClient.Sessions: TSessionRows;
+var
+  Body: string;
+  Root: TJsonObject;
+  Arr: TJsonArray;
+  Item: TJsonObject;
+  I, N: Integer;
+begin
+  SetLength(Result, 0);
+  Body := GetJSON('/v1/sessions');
+  if Trim(Body) = '' then Exit;
+  try
+    Root := TJsonObject.Parse(Body);
+  except
+    Exit;
+  end;
+  if Root = nil then Exit;
+  try
+    Arr := Root.ChildArray('sessions');
+    if Arr = nil then Exit;
+    N := 0;
+    SetLength(Result, Arr.Count);
+    for I := 0 to Arr.Count - 1 do
+    begin
+      Item := Arr.ItemObject(I);
+      if Item = nil then Continue;
+      Result[N].Id       := Item.GetStr('id', '');
+      Result[N].Title    := Item.GetStr('title', '');
+      Result[N].Model    := Item.GetStr('model', '');
+      Result[N].Provider := Item.GetStr('provider', '');
+      Result[N].Updated  := Item.GetInt('updated', 0);
+      if Result[N].Id <> '' then Inc(N);
+    end;
+    SetLength(Result, N);
+  finally
+    Root.Free;
+  end;
+end;
+
+function TPasClawClient.PeekFile(const Path: string; Offset, Len: Int64;
+  out Data: TBytes; out Total: Int64): Boolean;
+var
+  Http: TIdHTTP;
+  Mem: TMemoryStream;
+  Hdr: string;
+begin
+  Result := False;
+  SetLength(Data, 0);
+  Total := 0;
+  FLastError := '';
+  Http := NewHttp(FToken, FTimeoutMs);
+  Mem  := TMemoryStream.Create;
+  try
+    { Raw bytes, not JSON -- this is the one route whose body is the file. }
+    Http.Request.Accept := 'application/octet-stream';
+    try
+      Http.Get(FBaseURL + '/v1/fs/peek?path=' + UrlEncode_(Path) +
+               '&offset=' + IntToStr(Offset) + '&len=' + IntToStr(Len), Mem);
+    except
+      on E: Exception do
+      begin
+        FLastError := E.Message;
+        Exit;
+      end;
+    end;
+    Hdr := Http.Response.RawHeaders.Values['X-File-Total'];
+    Total := StrToInt64Def(Trim(Hdr), Mem.Size);
+    SetLength(Data, Mem.Size);
+    if Mem.Size > 0 then
+    begin
+      Mem.Position := 0;
+      Mem.ReadBuffer(Data[0], Mem.Size);
+    end;
+    Result := True;
+  finally
+    Mem.Free;
+    Http.Free;
+  end;
 end;
 
 procedure TPasClawClient.WatchEvents(OnEvent: TDesktopEventProc);
@@ -682,6 +978,12 @@ begin
 end;
 
 function TPasClawClient.Request(const Method, Path, Body: string): string;
+begin
+  Result := RequestT(Method, Path, Body, FTimeoutMs);
+end;
+
+function TPasClawClient.RequestT(const Method, Path, Body: string;
+  TimeoutMs: Integer): string;
 var
   Http: TIdHTTP;
   Req: TStringStream;
@@ -690,7 +992,7 @@ var
 begin
   Result := '';
   FLastError := '';
-  Http := NewHttp(FToken, FTimeoutMs);
+  Http := NewHttp(FToken, TimeoutMs);
   Req  := nil;
   Resp := TStringStream.Create('');
   try
@@ -1071,22 +1373,6 @@ end;
    unreserved set: a Windows path carries backslashes and a colon, and a
    filename can carry anything at all, so listing what is SAFE is the only
    version of this that stays correct. *)
-function UrlEncode_(const S: string): string;
-var
-  I: Integer;
-  C: Char;
-begin
-  Result := '';
-  for I := 1 to Length(S) do
-  begin
-    C := S[I];
-    if (C in ['A'..'Z', 'a'..'z', '0'..'9', '-', '_', '.', '~', '/']) then
-      Result := Result + C
-    else
-      Result := Result + '%' + IntToHex(Ord(C), 2);
-  end;
-end;
-
 { Fill a run record from the gateway's JSON. Shared by run/stop/state so the
   three cannot drift into reporting different shapes of the same thing. }
 procedure FillRun(Obj: TJsonObject; out Row: TRunRow);
@@ -1340,13 +1626,38 @@ end;
 
 function TPasClawClient.SetDesktopState(const JSON: string): Boolean;
 begin
+  Result := SetDesktopStateFor(0, JSON);
+end;
+
+function TPasClawClient.SetDesktopStateFor(N: Integer;
+  const JSON: string): Boolean;
+var
+  Path: string;
+begin
   Result := False;
+  Path := '/v1/desktop/state';
+  if N >= 1 then Path := Path + '?desktop=' + IntToStr(N);
   try
-    Request('PUT', '/v1/desktop/state', JSON);
+    Request('PUT', Path, JSON);
     Result := True;
   except
     Result := False;
   end;
+end;
+
+function TPasClawClient.DesktopStateFor(N: Integer): string;
+var
+  Path: string;
+begin
+  Result := '';
+  Path := '/v1/desktop/state';
+  if N >= 1 then Path := Path + '?desktop=' + IntToStr(N);
+  try
+    Result := GetJSON(Path);
+  except
+    Result := '';
+  end;
+  if Trim(Result) = '' then Result := '{}';
 end;
 
 { ---- pages ---- }
@@ -1407,7 +1718,9 @@ begin
     Req.PutStr('query', Query);
     Req.PutStr('kind', PageKindName(Kind));
     try
-      Id := JsonReadStr(Request('POST', '/v1/pages', Req.ToJSON), 'id', '');
+      { The model clock: this call IS a turn. }
+      Id := JsonReadStr(
+        RequestT('POST', '/v1/pages', Req.ToJSON, FModelTimeoutMs), 'id', '');
     except
       Id := '';
     end;
@@ -1470,7 +1783,10 @@ begin
   Root := TJsonObject.Create;
   Sink := TSSEStream.Create(OnChunk);
   Req  := nil;
-  Http := NewHttp(FToken, FTimeoutMs);
+  { A streamed turn carries its own liveness: chunks keep arriving, and a
+    socket that dies still raises. A read timeout here only ever fires on a
+    model that is thinking hard, which is not an error. }
+  Http := NewHttp(FToken, 0);
   try
     Msgs := TJsonArray.Create;
     { A system message leads the array -- the gateway lets a client system

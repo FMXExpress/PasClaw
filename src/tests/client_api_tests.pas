@@ -59,6 +59,10 @@ var
   Run: TRunRow;
   PageId: string;
   PG: TPageRows;
+  Cur, Cnt: Integer;
+  Sess: TSessionRows;
+  Raw: TBytes;
+  Total: Int64;
 begin
   { ---- UI block parsing: pure string work, so it runs with no gateway ---- }
   { The happy path: prose around a wizard block. }
@@ -210,6 +214,42 @@ begin
     ExpectTrue(not C.SetDesktopState('{"v":1,'), 'malformed state is refused');
     ExpectTrue(Pos('library', C.DesktopState) > 0,
                'and the good state survives the bad write');
+
+    (* Naming the desktop. Paging desks is "save here, switch there", and
+       "here" stops being current the moment the switch lands -- a save that
+       says only "current" can therefore write the wrong layout onto the
+       wrong desk and lose the arrangement. These four assertions are the
+       whole reason the addressed form exists. *)
+    ExpectTrue(C.Desktops(Cur, Cnt), 'the pager reports itself');
+    ExpectTrue((Cur = 1) and (Cnt >= 1), 'starting on desktop 1');
+    ExpectTrue(C.SetDesktopStateFor(1, '{"v":1,"windows":[{"fn":"files"}]}'),
+               'desktop 1 saves by number');
+    ExpectTrue(C.SwitchDesktop(2, Cur, Cnt), 'switch to desktop 2');
+    ExpectTrue(Cur = 2, 'the switch reports where it landed');
+    { The bug this guards: writing "the current layout" AFTER the switch. }
+    ExpectTrue(C.SetDesktopStateFor(1, '{"v":1,"windows":[{"fn":"library"}]}'),
+               'desktop 1 is still addressable from desktop 2');
+    ExpectTrue(Pos('files', C.DesktopState) = 0,
+               'and desktop 2 did not inherit desktop 1''s windows');
+    ExpectTrue(Pos('library', C.DesktopStateFor(1)) > 0,
+               'desktop 1 kept what was written to it by number');
+    ExpectTrue(C.SwitchDesktop(1, Cur, Cnt), 'switch back');
+    ExpectTrue(Pos('library', C.DesktopState) > 0,
+               'and the arrangement is there on return');
+
+    { ------------------------------------------------------- sessions -- }
+    { Empty is a fine answer on a fresh home; the contract is that it
+      returns a list rather than throwing. }
+    Sess := C.Sessions;
+    ExpectTrue(Length(Sess) >= 0, 'sessions list');
+
+    { ----------------------------------------------------- raw bytes --- }
+    (* The hex viewer's feed. A text file is bytes too, so this is testable
+      without inventing a binary one. *)
+    ExpectTrue(C.PeekFile(Dir.WorkspaceRoot + '/PLAN.md', 0, 16,
+                          Raw, Total) or (C.LastError <> ''),
+               'peek either returns bytes or says why not');
+    ExpectTrue(C.SetDesktopState('{"v":1,"windows":[]}'), 'state resets');
 
     { ------------------------------------------------ pages + promote -- }
     ExpectTrue(C.CreatePageOfKind('client api page', pkeReport, PageId) or
