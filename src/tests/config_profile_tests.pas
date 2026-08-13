@@ -25,6 +25,7 @@ uses
   SysUtils,
   PasClaw.Config,
   PasClaw.Config.Profile,
+  PasClaw.Providers.Catalog,
   PasClaw.Utils;
 
 procedure Fail_(const Msg: string);
@@ -191,6 +192,31 @@ begin
   finally
     DeleteFile(JoinPath(ProfilesDir, 'low-token.json'));
   end;
+end;
+
+(* The fast-model table.
+
+   Not a capability probe -- no API answers "which of your models is
+   cheapest" -- so it is a table, and a table goes stale. What must hold is
+   the SHAPE: a provider we know returns something, one we do not returns
+   empty so the caller keeps the model it already had rather than being
+   handed a guess that does not exist on that account. *)
+procedure TestFastModelCatalog;
+begin
+  AssertTrue(FastModelFor('gemini') <> '', 'gemini has a fast model');
+  AssertTrue(Pos('lite', LowerCase(FastModelFor('gemini'))) > 0,
+             'and it is a lite one');
+  AssertTrue(FastModelFor('anthropic') <> '', 'anthropic has one');
+  AssertTrue(FastModelFor('openai') <> '', 'openai has one');
+  AssertTrue(FastModelFor('GEMINI') = FastModelFor('gemini'),
+             'the lookup is case-insensitive');
+  AssertTrue(FastModelFor('  gemini  ') = FastModelFor('gemini'),
+             'and tolerates surrounding space');
+  { A proxy whose model names are the upstream's cannot be guessed at. }
+  AssertEqS(FastModelFor('litellm'), '', 'a proxy gets no guess');
+  AssertEqS(FastModelFor('ollama'), '', 'nor does a local server');
+  AssertEqS(FastModelFor(''), '', 'nor does an unnamed provider');
+  AssertEqS(FastModelFor('nonesuch'), '', 'nor an unknown one');
 end;
 
 procedure TestExtractProfileField;
@@ -585,6 +611,7 @@ begin
     TestResolveInherits;
     TestUnknownProfile;
     TestUserProfileShadowsBuiltin;
+    TestFastModelCatalog;
     TestExtractProfileField;
     TestResolveProfileNamePrecedence;
     TestLoadConfigAppliesProfile;

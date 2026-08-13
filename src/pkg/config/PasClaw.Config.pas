@@ -634,6 +634,17 @@ type
        flip cron_tool_enabled=true in config.json. The running scheduler
        picks up the model's edits within one tick (config mtime watch). *)
     CronToolEnabled:   Boolean;
+    (* The model to use for work that does not need the good one.
+
+       Answer pages are the case that prompted it: a one-shot search page
+       is summarise-and-format, and running it on the flagship costs more
+       and takes longer for a page no better. Empty means "work it out" --
+       the auto-router's easy tier if one is configured, else a known small
+       model for the provider in use, else the main model unchanged.
+
+       Deep research does NOT use it. That one plans, reads several sources
+       and synthesises, which is the reasoning the main model is for. *)
+    FastModel:         string;
     (* The desktop board's `project` / `task` tools.
 
        Off by default, and deliberately so: PasClaw's behaviour should not
@@ -1120,6 +1131,7 @@ begin
   PromptCache.TTL      := '1h';  { 1h cache hits well across back-to-back runs (bench/swe/results/ablation.md). 5m was the historical default; 1h is one of the six zero-prompt-cost behavioral toggles the bench identified as a free upgrade. }
   VaultToolsEnabled    := False; { off by default per the bench-grounded "stock = lean-edit shape" verdict (bench/swe/README.md). Vault entries are never called across the bench's 45+ cells -- the model has them as training data. Onboarding asks (default Y for operators who DO use the vault). }
   WebFetchEnabled      := True;  { on by default: the tool clearly documents that it returns readable plain text (HTML tags stripped, entities decoded) capped at max_chars (default 50000, save_to bypasses), so the model knows what it gets -- and a "read this URL" task shouldn't have to fall back to hand-rolled shell curl + HTML scraping. Also enables memory_fetch (RegisterMemoryFetchTool is gated on EnableWebFetch in NewBuiltinRegistry). Onboarding asks; operators wanting no outbound HTTP from the agent set web_fetch_enabled: false. }
+  FastModel            := '';    { empty = resolve one; see TConfig.FastModel }
   CronToolEnabled      := False; { off by default -- model-scheduled background jobs are an opt-in autonomy step (runs existing skills only). }
   DesktopToolsEnabled  := False; { off by default -- see the field comment: the desktop works without it. }
   RelayWaitTimeoutMs   := 0;     { 0 = use the Pascal-side RelayDefaultWaitTimeoutMs (5 min). Operators set higher for flaky workers, lower for fast fallback. }
@@ -1419,6 +1431,7 @@ begin
       fresh config stays tidy. }
     if not WebFetchEnabled then
       Root.PutBool('web_fetch_enabled', False);
+    if FastModel <> '' then Root.PutStr('fast_model', FastModel);
     { cron_tool_enabled defaults OFF; emit only the explicit-on so an
       operator who opted into model-scheduled jobs round-trips. }
     if CronToolEnabled then
@@ -1938,6 +1951,7 @@ begin
     VaultToolsEnabled   := Root.GetBool('vault_tools_enabled',   VaultToolsEnabled);
     WebFetchEnabled     := Root.GetBool('web_fetch_enabled',     WebFetchEnabled);
     CronToolEnabled     := Root.GetBool('cron_tool_enabled',     CronToolEnabled);
+    FastModel           := Root.GetStr ('fast_model',            FastModel);
     DesktopToolsEnabled := Root.GetBool('desktop_tools_enabled', DesktopToolsEnabled);
     RelayWaitTimeoutMs  := Integer(Root.GetInt('relay_wait_timeout_ms',
                                                 RelayWaitTimeoutMs));
