@@ -447,6 +447,11 @@ test-desktop-routes: | $(BUILDDIR)
 # client -- files, pages, promote, desktop state, the run surface -- was
 # never exercised. So this target STARTS one, on a port unlikely to clash,
 # against a throwaway home, and stops it again.
+test-client-markdown: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/client_markdown_tests.pas -o$(BUILDDIR)/client_markdown_tests
+	@$(BUILDDIR)/client_markdown_tests
+
 test-client-api: $(BIN) | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/client_api_tests.pas -o$(BUILDDIR)/client_api_tests
@@ -461,7 +466,7 @@ test-client-api: $(BIN) | $(BUILDDIR)
 		rm -f $(BUILDDIR)/client-api.pid; exit $$rc
 
 # Everything the desktop client depends on, in dependency order.
-test-desktop: lint-pascal-shape test-workspaces test-projects test-apps test-mail test-workspace-isolation test-desktop-routes test-client-api
+test-desktop: lint-pascal-shape test-workspaces test-projects test-apps test-mail test-workspace-isolation test-desktop-routes test-client-markdown test-client-api
 
 # Provider catalog rows + ChatPath override (Perplexity uses /chat/completions).
 test-provider-catalog: | $(BUILDDIR)

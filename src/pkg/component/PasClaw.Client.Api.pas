@@ -343,7 +343,16 @@ type
     { The same, with the mode chosen. Research takes minutes and narrates
       through page-progress events; the others come back in one go. }
     function CreatePageOfKind(const Query: string; Kind: TPageKindSel;
-      out Id: string): Boolean;
+      out Id: string): Boolean; overload;
+    (* The same, continuing an existing page.
+
+       RevisePageId names the page the user is looking at, making this
+       question a change to that document rather than a new topic -- which
+       is what a follow-up in a browser almost always means. The result is
+       still a NEW page: the old one is the record of an answer at a time
+       and has to survive to stay true. Pass '' for an ordinary question. *)
+    function CreatePageOfKind(const Query: string; Kind: TPageKindSel;
+      const RevisePageId: string; out Id: string): Boolean; overload;
     (* "Make this interactive" -- copy a page into a new project as an html
        app. The page stays in the history: it is the record of an answer at a
        time, and the app is the part that changes. *)
@@ -2064,6 +2073,12 @@ end;
 
 function TPasClawClient.CreatePageOfKind(const Query: string; Kind: TPageKindSel;
   out Id: string): Boolean;
+begin
+  Result := CreatePageOfKind(Query, Kind, '', Id);
+end;
+
+function TPasClawClient.CreatePageOfKind(const Query: string; Kind: TPageKindSel;
+  const RevisePageId: string; out Id: string): Boolean;
 var
   Req: TJsonObject;
 begin
@@ -2072,6 +2087,7 @@ begin
   try
     Req.PutStr('query', Query);
     Req.PutStr('kind', PageKindName(Kind));
+    if Trim(RevisePageId) <> '' then Req.PutStr('revise', RevisePageId);
     try
       { The model clock: this call IS a turn. }
       Id := JsonReadStr(

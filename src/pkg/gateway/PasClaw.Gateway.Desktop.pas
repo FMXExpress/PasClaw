@@ -46,8 +46,14 @@ type
   TJobRunner = function(const Project, TaskId, Prompt: string;
     out JobId, Err: string): Boolean;
 
-  { Produces a page body + a SOURCES JSON array for a query. }
+  (* Produces a page body + a SOURCES JSON array for a query.
+
+     RevisePageId names an existing page when the query is a FOLLOW-UP to
+     it: the generator then edits that document rather than starting a new
+     topic. Empty for an ordinary question, which is the common case and
+     costs nothing. *)
   TPageGenerator = function(const Query: string; Kind: TPageKind;
+    const RevisePageId: string;
     out Title, BodyHTML, SourcesJSON, Err: string): Boolean;
 
   (* One agent turn, plain text in and out. The general-purpose sibling of
@@ -2205,9 +2211,9 @@ var
   Arr: TJsonArray;
   List: TPageInfoArray;
   I: Integer;
-  Id, Query, Err, Title, BodyHTML, SourcesJSON, Slug: string;
+  Id, Query, Err, Title, BodyHTML, SourcesJSON, Slug, Revise: string;
   Kind: TPageKind;
-  Info: TPageInfo;
+  Info, PriorInfo: TPageInfo;
   Sources: TPageSourceArray;
 begin
   Result := True;
@@ -2248,6 +2254,14 @@ begin
           Exit;
         end;
         Kind := StrToPageKind(Obj.GetStr('kind', 'search'));
+        (* "revise": "<page id>" -- this question continues that page.
+
+           Validated here rather than trusted: an id naming a page that does
+           not exist is treated as an ordinary new question, because
+           refusing the whole request over a stale tab id would lose the
+           user's actual question. *)
+        Revise := Trim(Obj.GetStr('revise', ''));
+        if (Revise <> '') and not GetPage(Revise, PriorInfo) then Revise := '';
 
         { A caller may supply the rendered body itself (the agent loop does
           exactly this once it has run the search), or ask us to generate. }
@@ -2271,7 +2285,8 @@ begin
               'pages; POST a rendered "body" instead');
             Exit;
           end;
-          if not GPageGen(Query, Kind, Title, BodyHTML, SourcesJSON, Err) then
+          if not GPageGen(Query, Kind, Revise, Title, BodyHTML,
+                          SourcesJSON, Err) then
           begin
             ReplyErr(Resp, 500, Err);
             Exit;
