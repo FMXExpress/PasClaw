@@ -71,6 +71,21 @@ function PageDir(const Id: string): string;      { '' when Id is malformed }
   visible in one file. }
 function BuildPagePrompt(const Query: string; Kind: TPageKind): string;
 
+(* The prompt for REVISING an existing page.
+
+   A browser where every question throws away the last answer is a search
+   box, not a browser. When a page is open, a follow-up usually means "the
+   same document, changed" -- add a column, drop the caveats, sort it the
+   other way -- and starting from scratch loses both the content and
+   whatever the model got right the first time.
+
+   PriorHTML is the rendered body of the page being revised. It is handed
+   back to the model as the thing to edit, which is also why revision stays
+   a NEW page rather than an in-place edit: a page is the record of an
+   answer at a time, and the old one has to survive to stay true. *)
+function BuildRevisePrompt(const PriorQuery, Followup: string;
+  Kind: TPageKind; const PriorHTML: string): string;
+
 { Wrap a model-authored body in the page shell: styling that inherits the
   desktop's palette, a title header, and the mandatory sources footer.
   BodyHTML is sanitised here -- callers pass raw model output. }
@@ -172,6 +187,30 @@ begin
 end;
 
 { ----------------------------------------------------------------- prompt -- }
+
+function BuildRevisePrompt(const PriorQuery, Followup: string;
+  Kind: TPageKind; const PriorHTML: string): string;
+const
+  { Enough of the old page for the model to work from without spending the
+    whole context window on markup it is about to rewrite. }
+  MaxPrior = 24 * 1024;
+var
+  Prior: string;
+begin
+  Prior := PriorHTML;
+  if Length(Prior) > MaxPrior then
+    Prior := Copy(Prior, 1, MaxPrior) + sLineBreak + '<!-- truncated -->';
+  Result :=
+    BuildPagePrompt(Followup, Kind) + sLineBreak + sLineBreak +
+    'REVISION. You are not starting a new document. The user is looking at ' +
+    'a page you produced for the question "' + PriorQuery + '", and has ' +
+    'now asked: "' + Followup + '".' + sLineBreak +
+    'Treat that as a change to the page below, not a new topic. Keep what ' +
+    'still answers the question, change what the follow-up asks for, and ' +
+    'return the COMPLETE revised body -- not a diff and not a fragment.' +
+    sLineBreak + sLineBreak +
+    'The page as it stands:' + sLineBreak + Prior;
+end;
 
 function BuildPagePrompt(const Query: string; Kind: TPageKind): string;
 var

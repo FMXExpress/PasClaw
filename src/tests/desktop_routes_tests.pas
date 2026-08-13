@@ -152,10 +152,17 @@ begin
   Result := JobId <> '';
 end;
 
+{ Records what the route handed the generator, so the assertions can check
+  that a follow-up actually arrived as one. }
+var
+  GLastRevise: string = '';
+
 function StubPageGen(const Query: string; Kind: TPageKind;
+  const RevisePageId: string;
   out Title, BodyHTML, SourcesJSON, Err: string): Boolean;
 begin
   Err := '';
+  GLastRevise := RevisePageId;
   Title := 'About ' + Query;
   BodyHTML := '<p>Answer about ' + Query + '</p>';
   SourcesJSON := '[{"title":"Example","url":"https://example.com/a"}]';
@@ -592,9 +599,45 @@ begin
   begin
     ExpectTrue(R.Status = 200, 'page generated via the hook');
     ExpectTrue(Pos('"source_count":1', Squeeze(R.Body)) > 0, 'sources counted');
+    ExpectTrue(GLastRevise = '',
+               'an ordinary question revises nothing');
+    { The id of the page just made, for the follow-up below. }
+    PageId := JsonReadStr(R.Body, 'id', '');
   end
   else
     Fail_('page generation route not handled');
+
+  (* Follow-up. A browser where every question throws away the last answer
+     is a search box; asking again with a page open should CHANGE it. The
+     route's job is to recognise the id and pass it on -- what the model
+     does with it is the prompt's business, not this test's. *)
+  GLastRevise := 'not-called';
+  if Req('POST', '/v1/pages',
+         '{"query":"now sort it by date","revise":"' + PageId + '"}', R) then
+  begin
+    ExpectTrue(R.Status = 200, 'a follow-up produces a page');
+    ExpectTrue(GLastRevise = PageId,
+               'and the generator is told which page it revises');
+    { Still a NEW page: the old one is the record of an answer at a time
+      and editing it in place would falsify it. }
+    ExpectTrue(JsonReadStr(R.Body, 'id', '') <> PageId,
+               'revision writes a new page rather than overwriting');
+  end
+  else
+    Fail_('revise request not handled');
+
+  { An id naming no page must not fail the whole request -- a stale tab is
+    not a reason to lose the question. }
+  GLastRevise := 'not-called';
+  if Req('POST', '/v1/pages',
+         '{"query":"anything","revise":"P9999"}', R) then
+  begin
+    ExpectTrue(R.Status = 200, 'a stale revise id still answers');
+    ExpectTrue(GLastRevise = '', 'and is treated as a new question');
+  end
+  else
+    Fail_('stale revise request not handled');
+
   SetPageGenerator(nil);
 
   ExpectBodyContains('GET', '/v1/pages', '', 'P0001', 'pages listed');

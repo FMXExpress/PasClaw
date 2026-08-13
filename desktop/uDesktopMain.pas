@@ -31,9 +31,10 @@ uses
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs,
   FMX.StdCtrls, FMX.Layouts, FMX.ListBox, FMX.Edit, FMX.Memo, FMX.Styles,
   FMX.Objects, FMX.TreeView, FMX.WebBrowser, FMX.ScrollBox,
-  FMX.Controls.Presentation,
+  FMX.Controls.Presentation, FMX.TabControl,
   FMX.RetroWindows, FMX.RetroSkins,
-  PasClaw.Client.Api;
+  PasClaw.Client.Api,
+  PasClaw.Client.Markdown;
 
 type
   { What a tree node stands for -- the tree carries projects, their tasks and
@@ -121,6 +122,20 @@ type
     FChatWins: TDictionary<string, TRetroWindow>;
     FAppWins: TDictionary<string, TRetroWindow>;
     FChatLogs: TDictionary<string, TMemo>;
+    (* The transcript as DATA, plus the browser that renders it.
+
+       Chat used to be a TMemo, which shows markdown as its own asterisks
+       and hashes and cannot do much with a code block. Turns are kept as
+       role + text here and re-rendered to HTML when one completes, so the
+       window shows formatted prose without the client having to lay out
+       rich text itself.
+
+       The memo stays, for streaming only: chunks arrive many times a
+       second and rebuilding a document per chunk would be unusable. It is
+       shown while a turn is in flight and hidden once the finished turn
+       joins the transcript. *)
+    FChatTurns: TObjectDictionary<string, TStringList>;
+    FChatViews: TDictionary<string, TWebBrowser>;
     FChatInputs: TDictionary<string, TMemo>;
     FChatHistory: TDictionary<string, string>;
     FBrowsers: TObjectList<TWebBrowser>;
@@ -135,8 +150,22 @@ type
     FBrowserQuery: TEdit;
     FBrowserView: TWebBrowser;
     FBrowserStatus: TLabel;
-    FBrowserSearch, FBrowserDeep, FBrowserPromote: TButton;
+    FBrowserSearch, FBrowserDeep, FBrowserPromote, FBrowserNew: TButton;
     FCurrentPage: string;
+    (* Tabs over ONE browser control.
+
+       Not one control per tab: TWebBrowser is a native window that paints
+       above all FMX content, which is why an inactive one has to be swapped
+       for a snapshot -- multiplying that by the number of open tabs
+       multiplies the trick and the ways it goes wrong. A tab is a page id;
+       switching one navigates the single view.
+
+       This is also what makes follow-up questions work. With a page in the
+       current tab, asking again REVISES it; New opens an empty tab, where
+       asking starts a fresh page. Two obvious gestures instead of a mode. *)
+    FBrowserTabs: TTabControl;
+    FBrowserTabPages: TStringList;   { page id per tab, by index }
+    FBrowserSwitching: Boolean;
 
     { ---- deep-research progress ----
       A research turn runs for minutes across many searches. The label shows
@@ -282,6 +311,9 @@ type
 
     { ---- Browser ---- }
     procedure OpenBrowser(const PageId: string);
+    procedure BrowserNewTabClick(Sender: TObject);
+    procedure BrowserTabChange(Sender: TObject);
+    function NewBrowserTab(const Caption: string): Integer;
     procedure BrowserSearchClick(Sender: TObject);
     procedure BrowserDeepClick(Sender: TObject);
     procedure BrowserPromoteClick(Sender: TObject);
@@ -320,6 +352,11 @@ type
     procedure SendChat(Sender: TObject);
     procedure ChatChunk(const Chunk: string; var Abort: Boolean);
     procedure ChatTool(const Kind, Name, Detail: string; IsErr: Boolean);
+    { ---- transcript rendering ---- }
+    function StyleColor(const Role, Fallback: string): string;
+    procedure AppendTurn(const Project, Role, Text_: string);
+    procedure RenderTranscript(const Project: string);
+    procedure ShowStreaming(const Project: string; Streaming: Boolean);
 
     { Live board updates. The client subscribes to /v1/desktop/events on its
       own thread and refreshes when something it displays changes, so the
@@ -397,6 +434,9 @@ end;
   blocking Chat call so ChatChunk knows where to append. }
 var
   GStreamingLog: TMemo = nil;
+  { Which conversation the streaming turn belongs to, so tool lines can join
+    its transcript as well as its live view. }
+  GStreamingProject: string = '';
 
 { ------------------------------------------------------------- lifecycle -- }
 
@@ -442,6 +482,8 @@ begin
   FChatWins   := TDictionary<string, TRetroWindow>.Create;
   FAppWins    := TDictionary<string, TRetroWindow>.Create;
   FChatLogs   := TDictionary<string, TMemo>.Create;
+  FChatTurns  := TObjectDictionary<string, TStringList>.Create([doOwnsValues]);
+  FChatViews  := TDictionary<string, TWebBrowser>.Create;
   FChatInputs := TDictionary<string, TMemo>.Create;
   FChatHistory := TDictionary<string, string>.Create;
   FBrowsers   := TObjectList<TWebBrowser>.Create(False);
@@ -550,6 +592,8 @@ begin
   FreeAndNil(FBrowsers);
   FreeAndNil(FChatHistory);
   FreeAndNil(FChatInputs);
+  FreeAndNil(FChatViews);
+  FreeAndNil(FChatTurns);
   FreeAndNil(FChatLogs);
   FreeAndNil(FAppWins);
   FreeAndNil(FChatWins);
@@ -558,6 +602,7 @@ begin
   FreeAndNil(FLogLock);
   FreeAndNil(FMenuActions);
   FreeAndNil(FLibraryKinds);
+  FreeAndNil(FBrowserTabPages);
 end;
 
 procedure TFormMain.FormKeyDown(Sender: TObject; var Key: Word;
@@ -664,6 +709,9 @@ begin
     FBrowserPromote := nil;
     { The view is also in FBrowsers/FSnapshots; the loop below clears those. }
     FBrowserView := nil;
+    FBrowserNew := nil;
+    FBrowserTabs := nil;
+    if FBrowserTabPages <> nil then FBrowserTabPages.Clear;
     FCurrentPage := '';
     Exit;
   end;
@@ -703,6 +751,8 @@ begin
     begin
       FChatWins.Remove(Key);
       FChatLogs.Remove(Key);      { memos were owned by the window }
+      FChatViews.Remove(Key);
+      FChatTurns.Remove(Key);
       FChatInputs.Remove(Key);
     end;
   end;
@@ -1442,6 +1492,7 @@ begin
     FRestoring := WasRestoring;
   end;
   FChatWins.Clear; FChatLogs.Clear; FChatInputs.Clear; FChatHistory.Clear;
+  FChatViews.Clear; FChatTurns.Clear;
   FAppWins.Clear;
   FRunWins.Clear; FRunLogs.Clear; FRunHeads.Clear;
   FStylePicker := nil; FStyleList := nil; FSkinList := nil;
@@ -1452,7 +1503,9 @@ begin
   FHexWin := nil; FHexMemo := nil;
   FBrowserWin := nil; FBrowserQuery := nil; FBrowserStatus := nil;
   FBrowserSearch := nil; FBrowserDeep := nil; FBrowserPromote := nil;
+  FBrowserNew := nil; FBrowserTabs := nil;
   FBrowserView := nil; FCurrentPage := '';
+  if FBrowserTabPages <> nil then FBrowserTabPages.Clear;
   FProgressWin := nil; FProgressText := nil;
   FVersionWin := nil;
   FMenuWin := nil;
@@ -2076,6 +2129,7 @@ var
   Send, Vers: TButton;
   Row: TProjectRow;
   Title: string;
+  View: TWebBrowser;
 begin
   if FChatWins.TryGetValue(Project, W) and (W <> nil) then
   begin
@@ -2129,23 +2183,39 @@ begin
   Input.TextSettings.WordWrap := True;
   FChatInputs.AddOrSetValue(Project, Input);
 
+  { The settled transcript, formatted. Created before the memo so the memo
+    sits on top of it while streaming. }
+  View := TWebBrowser.Create(W);
+  View.Parent := W.Client;
+  View.Align := TAlignLayout.Client;
+  FChatViews.AddOrSetValue(Project, View);
+  FBrowsers.Add(View);
+
+  { The live one. Same slot, shown only while a turn is in flight. }
   Log := TMemo.Create(W);
   Log.Parent := W.Client;
   Log.Align := TAlignLayout.Client;
   Log.ReadOnly := True;
   Log.TextSettings.WordWrap := True;
+  Log.Visible := False;
   FChatLogs.AddOrSetValue(Project, Log);
 
   if not FChatHistory.ContainsKey(Project) then
     FChatHistory.AddOrSetValue(Project, '[]');
 
-  if IsSyntheticChat(Project) then
-    Log.Lines.Add('Ask PasClaw anything. This window is not tied to a ' +
-                  'project, so nothing here builds an app.')
-  else
-    Log.Lines.Add('Describe the app you want. PasClaw builds it into this ' +
-                  'project and it opens as a window.');
-  Log.Lines.Add('');
+  if not FChatTurns.ContainsKey(Project) then
+  begin
+    if IsSyntheticChat(Project) then
+      AppendTurn(Project, 'assistant',
+        'Ask PasClaw anything. This window is not tied to a project, so ' +
+        'nothing here builds an app.')
+    else
+      AppendTurn(Project, 'assistant',
+        'Describe the app you want. PasClaw builds it into this project ' +
+        'and it opens as a window.');
+  end;
+  RenderTranscript(Project);
+  ShowStreaming(Project, False);
 end;
 
 
@@ -2210,6 +2280,168 @@ begin
     'and be brief in chat -- the app is the answer.';
 end;
 
+
+(* One colour of the current theme, as "#rrggbb".
+
+   The chat pane is an HTML document, so it needs real colour values rather
+   than a style lookup -- and a pane that stayed white inside a Windows 3.1
+   desktop would be the one thing on screen ignoring the theme.
+
+   Two sources, both already in the tree. With a skin selected, the .skin
+   file IS a palette: "face=C0C0C0" and friends. Without one, the style's
+   own colours live in the .style, and its .rolemap records the byte offset
+   of every colour literal -- which is how the skin engine patches them, and
+   just as good for reading one out. Falls back to the caller's value when
+   neither is available, so a missing styles directory costs the theme, not
+   the window. *)
+function TFormMain.StyleColor(const Role, Fallback: string): string;
+var
+  Lines: TStringList;
+  I, Ofs: Integer;
+  Key, Val, MapFile, Line: string;
+  FS: TFileStream;
+  Buf: array[0..8] of Byte;
+begin
+  Result := Fallback;
+
+  { A skin, if one is chosen: plain name=RRGGBB text. }
+  if (FSkinFile <> '') and TFile.Exists(FSkinFile) then
+  begin
+    Lines := TStringList.Create;
+    try
+      try
+        Lines.LoadFromFile(FSkinFile);
+      except
+        Exit;
+      end;
+      for I := 0 to Lines.Count - 1 do
+      begin
+        Line := Trim(Lines[I]);
+        if (Line = '') or (Line[1] = ';') or (Line[1] = '[') then Continue;
+        Key := Trim(Copy(Line, 1, Pos('=', Line) - 1));
+        if not SameText(Key, Role) then Continue;
+        Val := Trim(Copy(Line, Pos('=', Line) + 1, MaxInt));
+        if Length(Val) = 6 then Exit('#' + Val);
+      end;
+    finally
+      Lines.Free;
+    end;
+    Exit;
+  end;
+
+  { Otherwise the style itself, at the offset its role map records. }
+  if (FStyleFile = '') or not TFile.Exists(FStyleFile) then Exit;
+  MapFile := ChangeFileExt(FStyleFile, '.rolemap');
+  if not TFile.Exists(MapFile) then Exit;
+  Lines := TStringList.Create;
+  try
+    try
+      Lines.LoadFromFile(MapFile);
+    except
+      Exit;
+    end;
+    Ofs := -1;
+    for I := 0 to Lines.Count - 1 do
+    begin
+      Line := Trim(Lines[I]);
+      if Pos('=', Line) = 0 then Continue;
+      Key := Trim(Copy(Line, 1, Pos('=', Line) - 1));
+      if not SameText(Key, Role) then Continue;
+      Val := Trim(Copy(Line, Pos('=', Line) + 1, MaxInt));
+      if Pos(',', Val) > 0 then Val := Copy(Val, 1, Pos(',', Val) - 1);
+      Ofs := StrToIntDef(Trim(Val), -1);
+      Break;
+    end;
+    if Ofs < 0 then Exit;
+    try
+      FS := TFileStream.Create(FStyleFile, fmOpenRead or fmShareDenyWrite);
+      try
+        if Ofs + 9 > FS.Size then Exit;
+        FS.Position := Ofs;
+        FS.ReadBuffer(Buf, 9);
+      finally
+        FS.Free;
+      end;
+    except
+      Exit;
+    end;
+    { The literal is xAARRGGBB; the alpha byte is not ours to keep. }
+    if Chr(Buf[0]) <> 'x' then Exit;
+    Result := '#' + Chr(Buf[3]) + Chr(Buf[4]) + Chr(Buf[5]) +
+                    Chr(Buf[6]) + Chr(Buf[7]) + Chr(Buf[8]);
+  finally
+    Lines.Free;
+  end;
+end;
+
+{ Record a completed turn. Role is 'user', 'assistant' or 'tool'. }
+procedure TFormMain.AppendTurn(const Project, Role, Text_: string);
+var
+  L: TStringList;
+begin
+  if FChatTurns = nil then Exit;
+  if not FChatTurns.TryGetValue(Project, L) then
+  begin
+    L := TStringList.Create;
+    FChatTurns.Add(Project, L);
+  end;
+  { Tab-separated so a turn containing newlines stays one entry. }
+  L.Add(Role + #9 + StringReplace(Text_, #9, '  ', [rfReplaceAll]));
+end;
+
+(* Rebuild the whole transcript as an HTML document.
+
+   Whole-document rather than incremental: a conversation is tens of turns,
+   the markdown pass is string work, and the alternative is maintaining a
+   DOM through a browser control's scripting bridge for no visible gain. *)
+procedure TFormMain.RenderTranscript(const Project: string);
+var
+  View: TWebBrowser;
+  L: TStringList;
+  I, T: Integer;
+  Body, Role, Text_, Entry: string;
+begin
+  if not FChatViews.TryGetValue(Project, View) then Exit;
+  if View = nil then Exit;
+  Body := '';
+  if FChatTurns.TryGetValue(Project, L) then
+    for I := 0 to L.Count - 1 do
+    begin
+      Entry := L[I];
+      T := Pos(#9, Entry);
+      if T = 0 then Continue;
+      Role  := Copy(Entry, 1, T - 1);
+      Text_ := Copy(Entry, T + 1, MaxInt);
+      if Role = 'user' then
+        Body := Body + '<div class="turn"><span class="who">You</span><br>' +
+                MarkdownToHTML(Text_) + '</div>'
+      else if Role = 'tool' then
+        Body := Body + '<div class="tool">' + HtmlEscape(Text_) + '</div>'
+      else if Role = 'toolerr' then
+        Body := Body + '<div class="tool err">' + HtmlEscape(Text_) + '</div>'
+      else
+        Body := Body + '<div class="turn">' + MarkdownToHTML(Text_) + '</div>';
+    end;
+  View.LoadFromStrings(
+    ChatDocumentHTML(Body,
+      StyleColor('face',   '#c0c0c0'),
+      StyleColor('text',   '#000000'),
+      StyleColor('titleA', '#000080'),
+      StyleColor('light',  '#e8e8e8')), '');
+end;
+
+{ Streaming shows the live memo; a settled transcript shows the document. }
+procedure TFormMain.ShowStreaming(const Project: string; Streaming: Boolean);
+var
+  M: TMemo;
+  View: TWebBrowser;
+begin
+  if FChatLogs.TryGetValue(Project, M) and (M <> nil) then
+    M.Visible := Streaming;
+  if FChatViews.TryGetValue(Project, View) and (View <> nil) then
+    View.Visible := not Streaming;
+end;
+
 procedure TFormMain.ChatChunk(const Chunk: string; var Abort: Boolean);
 begin
   Abort := False;
@@ -2252,6 +2484,14 @@ begin
   end;
   GStreamingLog.Lines.Add(Line);
   GStreamingLog.GoToTextEnd;
+  { Also kept, so the settled transcript still shows what the turn did. }
+  if GStreamingProject <> '' then
+  begin
+    if IsErr then
+      AppendTurn(GStreamingProject, 'toolerr', Trim(Line))
+    else
+      AppendTurn(GStreamingProject, 'tool', Trim(Line));
+  end;
   Application.ProcessMessages;
 end;
 
@@ -2272,9 +2512,12 @@ begin
   if Text = '' then Exit;
   Input.Text := '';
 
-  Log.Lines.Add('you: ' + Text);
-  Log.Lines.Add('');
-  Log.Lines.Add('pasclaw: ');
+  { The turn joins the transcript; the memo is only the live view of the
+    reply being streamed, so it starts empty each time. }
+  AppendTurn(Project, 'user', Text);
+  RenderTranscript(Project);
+  Log.Text := '';
+  ShowStreaming(Project, True);
 
   { History as a JSON array of role/content objects -- the shape
     /v1/chat/completions wants. Built by hand so this unit needs no JSON
@@ -2289,6 +2532,7 @@ begin
   Hist := '[' + Inner + '{"role":"user","content":"' + JsonStr(Text) + '"}]';
 
   GStreamingLog := Log;
+  GStreamingProject := Project;
   try
     (Sender as TButton).Enabled := False;
     try
@@ -2298,22 +2542,33 @@ begin
     end;
   finally
     GStreamingLog := nil;
+    GStreamingProject := '';
   end;
 
   if (Reply = '') and (FClient.LastError <> '') then
-    Log.Lines.Add('(' + FClient.LastError + ')');
+    AppendTurn(Project, 'toolerr', FClient.LastError);
 
   { Period-native output: a plan renders as a wizard, a question as a dialog,
     and the block itself never appears as text. Same parser the web client
     uses -- see PasClaw.Client.Api.ParseUIBlocks. }
   ParseUIBlocks(Reply, Visible, Blocks);
+  { The reply joins the transcript WITHOUT its ui blocks -- those became
+    windows, and showing their JSON as well would be showing the machinery
+    twice. }
+  if Trim(Visible) <> '' then
+    AppendTurn(Project, 'assistant', Visible)
+  else if (Reply <> '') and (Length(Blocks) = 0) then
+    AppendTurn(Project, 'assistant', Reply);
   if Length(Blocks) > 0 then
   begin
-    { Rewrite the streamed text without the block. }
-    Log.Lines.Add('  [' + IntToStr(Length(Blocks)) + ' dialog(s) opened]');
+    AppendTurn(Project, 'tool',
+      Format('%d dialog(s) opened', [Length(Blocks)]));
     RenderUIBlocks(Project, Blocks);
   end;
-  Log.Lines.Add('');
+
+  { Back to the formatted view, now that the turn has settled. }
+  RenderTranscript(Project);
+  ShowStreaming(Project, False);
 
   Hist := Copy(Hist, 1, Length(Hist) - 1) +
           ',{"role":"assistant","content":"' + JsonStr(Reply) + '"}]';
@@ -2332,12 +2587,13 @@ begin
     if not FClient.SaveSessionHistory(SessId, Hist, '', Conflict) then
     begin
       if Conflict then
-        Log.Lines.Add('[this session has tool turns from an agent run; ' +
-                      'new messages here are not being saved into it]')
+        AppendTurn(Project, 'toolerr',
+          'this session has tool turns from an agent run; new messages ' +
+          'here are not being saved into it')
       else
-        Log.Lines.Add('[could not save this turn into the session: ' +
-                      FClient.LastError + ']');
-      Log.Lines.Add('');
+        AppendTurn(Project, 'toolerr',
+          'could not save this turn into the session: ' + FClient.LastError);
+      RenderTranscript(Project);
     end;
   end;
 
@@ -3268,11 +3524,29 @@ begin
   FBrowserPromote.Enabled := False;
   FBrowserPromote.OnClick := BrowserPromoteClick;
 
+  FBrowserNew := TButton.Create(FBrowserWin);
+  FBrowserNew.Parent := Bar;
+  FBrowserNew.Align := TAlignLayout.Right;
+  FBrowserNew.Width := 44;
+  FBrowserNew.Margins.Rect := TRectF.Create(0, 3, 3, 3);
+  FBrowserNew.Text := 'New';
+  FBrowserNew.Hint := 'Open an empty tab -- the next question starts a new page';
+  FBrowserNew.OnClick := BrowserNewTabClick;
+
   FBrowserQuery := TEdit.Create(FBrowserWin);
   FBrowserQuery.Parent := Bar;
   FBrowserQuery.Align := TAlignLayout.Client;
   FBrowserQuery.Margins.Rect := TRectF.Create(3, 3, 3, 3);
   FBrowserQuery.TextPrompt := 'Ask anything -- the answer comes back as a page';
+
+  if FBrowserTabPages = nil then FBrowserTabPages := TStringList.Create;
+  FBrowserTabPages.Clear;
+  FBrowserTabs := TTabControl.Create(FBrowserWin);
+  FBrowserTabs.Parent := FBrowserWin.Client;
+  FBrowserTabs.Align := TAlignLayout.Top;
+  FBrowserTabs.Height := 26;
+  FBrowserTabs.TabPosition := TTabPosition.Top;
+  FBrowserTabs.OnChange := BrowserTabChange;
 
   FBrowserStatus := TLabel.Create(FBrowserWin);
   FBrowserStatus.Parent := FBrowserWin.Client;
@@ -3304,7 +3578,60 @@ begin
   FSnapshots.AddOrSetValue(FBrowserView, Snap);
   MarkLayoutDirty;
 
+  NewBrowserTab('New tab');
   if PageId <> '' then ShowPage(PageId);
+end;
+
+(* Add a tab and select it. The tab items hold no content -- the single
+   browser below them does -- so this is bookkeeping plus a caption. *)
+function TFormMain.NewBrowserTab(const Caption: string): Integer;
+var
+  Item: TTabItem;
+begin
+  Result := -1;
+  if (FBrowserTabs = nil) or (FBrowserTabPages = nil) then Exit;
+  FBrowserSwitching := True;
+  try
+    Item := FBrowserTabs.Add;
+    Item.Text := Caption;
+    FBrowserTabPages.Add('');
+    FBrowserTabs.ActiveTab := Item;
+    Result := FBrowserTabs.TabCount - 1;
+  finally
+    FBrowserSwitching := False;
+  end;
+end;
+
+procedure TFormMain.BrowserNewTabClick(Sender: TObject);
+begin
+  NewBrowserTab('New tab');
+  FCurrentPage := '';
+  if FBrowserView <> nil then
+    FBrowserView.LoadFromStrings(
+      ChatDocumentHTML('<p>Ask a question. The answer comes back as a page.</p>',
+        StyleColor('face', '#c0c0c0'), StyleColor('text', '#000000'),
+        StyleColor('titleA', '#000080'), StyleColor('light', '#e8e8e8')), '');
+  if FBrowserPromote <> nil then FBrowserPromote.Enabled := False;
+  if FBrowserStatus <> nil then FBrowserStatus.Text := '';
+  if FBrowserQuery <> nil then FBrowserQuery.SetFocus;
+end;
+
+procedure TFormMain.BrowserTabChange(Sender: TObject);
+var
+  I: Integer;
+begin
+  { Ignore the change we caused ourselves while building a tab. }
+  if FBrowserSwitching then Exit;
+  if (FBrowserTabs = nil) or (FBrowserTabPages = nil) then Exit;
+  I := FBrowserTabs.TabIndex;
+  if (I < 0) or (I >= FBrowserTabPages.Count) then Exit;
+  if FBrowserTabPages[I] = '' then
+  begin
+    FCurrentPage := '';
+    if FBrowserPromote <> nil then FBrowserPromote.Enabled := False;
+    Exit;
+  end;
+  ShowPage(FBrowserTabPages[I]);
 end;
 
 procedure TFormMain.ShowPage(const PageId: string);
@@ -3318,6 +3645,15 @@ begin
     FBrowserView.URL := FClient.PageURL(PageId);
   if FBrowserPromote <> nil then FBrowserPromote.Enabled := PageId <> '';
 
+  { The active tab now holds this page, so switching away and back returns
+    to it and a follow-up question knows what it is revising. }
+  if (FBrowserTabs <> nil) and (FBrowserTabPages <> nil) then
+  begin
+    I := FBrowserTabs.TabIndex;
+    if (I >= 0) and (I < FBrowserTabPages.Count) then
+      FBrowserTabPages[I] := PageId;
+  end;
+
   { The sources strip, echoed into the status bar. A page that could not be
     grounded says so on its face; saying it here too means the user sees it
     without scrolling to the footer. }
@@ -3328,6 +3664,12 @@ begin
     begin
       N := Pages[I].SourceCount;
       if FBrowserWin <> nil then FBrowserWin.Caption := Pages[I].Title;
+      { Name the tab after the page, trimmed -- a tab strip of full titles
+        is a tab strip you cannot read. }
+      if (FBrowserTabs <> nil) and (FBrowserTabs.TabIndex >= 0) and
+         (FBrowserTabs.TabIndex < FBrowserTabs.TabCount) then
+        FBrowserTabs.Tabs[FBrowserTabs.TabIndex].Text :=
+          Copy(Pages[I].Title, 1, 22);
       Break;
     end;
   if FBrowserStatus = nil then Exit;
@@ -3351,13 +3693,20 @@ end;
 *)
 procedure TFormMain.RunPageQuery(Kind: TPageKindSel);
 var
-  Query: string;
+  Query, Revise: string;
   Deep: Boolean;
 begin
   if FBrowserQuery = nil then Exit;
   Query := Trim(FBrowserQuery.Text);
   if Query = '' then Exit;
   Deep := Kind = pkeResearch;
+
+  (* A question asked with a page open is a follow-up to THAT page.
+
+     Captured here, on the UI thread, because the tab can change while the
+     turn runs -- and the answer belongs to the page the question was asked
+     from, not to whichever tab happens to be in front minutes later. *)
+  Revise := FCurrentPage;
 
   FBrowserSearch.Enabled := False;
   FBrowserDeep.Enabled := False;
@@ -3367,7 +3716,12 @@ begin
     ShowProgress('Deep research', Query);
   end
   else if FBrowserStatus <> nil then
-    FBrowserStatus.Text := 'Searching...';
+  begin
+    if Revise <> '' then
+      FBrowserStatus.Text := 'Revising this page...'
+    else
+      FBrowserStatus.Text := 'Searching...';
+  end;
 
   TThread.CreateAnonymousThread(
     procedure
@@ -3386,7 +3740,9 @@ begin
       Ok := False;
       Err := '';
       try
-        Ok := FClient.CreatePageOfKind(Query, Kind, Id);
+        { Revise is the page in the tab this question was asked from. An
+          empty tab means a new page, which is what New is for. }
+        Ok := FClient.CreatePageOfKind(Query, Kind, Revise, Id);
         if not Ok then Err := FClient.LastError;
       except
         on E: Exception do Err := E.Message;
