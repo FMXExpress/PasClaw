@@ -5410,9 +5410,11 @@ begin
 end;
 
 function DesktopPageGenerator(const Query: string; Kind: TPageKind;
+  const RevisePageId: string;
   out Title, BodyHTML, SourcesJSON, Err: string): Boolean;
 var
-  Reply: string;
+  Reply, Prompt, Prior: string;
+  PriorInfo: TPageInfo;
 begin
   Title := Query;
   BodyHTML := '';
@@ -5426,7 +5428,25 @@ begin
   end;
   if Kind = pkResearch then
     PublishPageProgress('Planning', Query);
-  if not GDesktopGateway.RunDesktopTurn(BuildPagePrompt(Query, Kind),
+
+  (* A follow-up edits the page it follows. Falls back to an ordinary page
+     whenever the prior one cannot be read -- a missing file should cost the
+     context, not the answer. *)
+  Prompt := BuildPagePrompt(Query, Kind);
+  if (Trim(RevisePageId) <> '') and GetPage(RevisePageId, PriorInfo) then
+  begin
+    Prior := '';
+    if (PriorInfo.Path <> '') and FileExists(PriorInfo.Path) then
+      Prior := ReadFileText(PriorInfo.Path);
+    if Trim(Prior) <> '' then
+    begin
+      Prompt := BuildRevisePrompt(PriorInfo.Query, Query, Kind, Prior);
+      LogDebug('page: revising %s (%d bytes of prior body)',
+               [RevisePageId, Length(Prior)]);
+    end;
+  end;
+
+  if not GDesktopGateway.RunDesktopTurn(Prompt,
        'Produce the page now.', Kind = pkResearch, Reply, Err) then
     Exit;
   if Kind = pkResearch then

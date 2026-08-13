@@ -430,6 +430,13 @@ the state is on disk and cheap to re-read.
 
 ## Answer pages
 
+**Follow-ups.** `POST /v1/pages` takes an optional `revise` naming a page
+this question continues. The generator is handed that document and returns a
+complete revised body — as a *new* page, because a page is the record of an
+answer at a time and editing it in place would falsify it. An id naming no
+page is treated as an ordinary new question rather than failing the request.
+
+
 A search or a question about your own data ends as an HTML **document**, not
 as chat text: sections, tables, comparison grids, citations as real links —
 the layout chosen to fit the answer.
