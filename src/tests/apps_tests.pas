@@ -333,6 +333,40 @@ begin
   ExpectTrue(Info.Kind = akHtml, 'an html entry WITH a script is html');
   ExpectTrue(AppIsServable(Info), 'still opens in a window');
 
+  (* A document whose only script is an inline handler runs script too, and
+     under `page`'s script-free CSP every one of those handlers is dead --
+     an app that opens and does nothing. There is no <script> tag anywhere
+     in this file. *)
+  WriteFileText(JoinPath(AppDir, 'index.html'),
+    '<button onclick="go()">Go</button>');
+  ExpectTrue(GetApp('spam-filter', Info), 'reload');
+  ExpectTrue(Info.Kind = akHtml, 'an inline onclick handler is html, not page');
+
+  WriteFileText(JoinPath(AppDir, 'index.html'),
+    '<body onload = "start()"><p>hi</p></body>');
+  ExpectTrue(GetApp('spam-filter', Info), 'reload');
+  ExpectTrue(Info.Kind = akHtml, 'so is onload, spaces around the = and all');
+
+  { And prose that merely contains "on" followed by an equals is not a
+    handler -- the sniff is anchored, not a substring search. }
+  WriteFileText(JoinPath(AppDir, 'index.html'),
+    '<p>reason=none, season=two</p>');
+  ExpectTrue(GetApp('spam-filter', Info), 'reload');
+  ExpectTrue(Info.Kind = akPage, 'but "reason=" in prose is still a page');
+
+  (* The entry name comes out of a model-written manifest, so it is a path
+     from an untrusted source and gets the same containment as any served
+     asset -- BEFORE it is opened. Sniffing a traversal entry would have read
+     a file outside the app directory to decide a policy. *)
+  WriteFileText(JoinPath(AppDir, 'app.json'),
+    '{"name":"Escape","entry":"../../../../etc/passwd.html"}');
+  ExpectTrue(GetApp('spam-filter', Info), 'a traversal entry loads');
+  ExpectTrue(Info.Kind = akPage,
+             'and is never read -- the tighter policy, no file access');
+
+  WriteFileText(JoinPath(AppDir, 'index.html'),
+    '<h1>app</h1><script>var x=1;</script>');
+
   { A word the model chose that we do not know is not a reason to fail. }
   WriteFileText(JoinPath(AppDir, 'app.json'),
     '{"name":"Web","kind":"web","entry":"index.html"}');
@@ -361,9 +395,21 @@ begin
   ExpectTrue(Info.Kind = akPython, 'a .py entry with a command is python');
   ExpectTrue(AppIsRunnable(Info), 'and is runnable');
 
+  { A command-less PYTHON app is still runnable, because PlannedCommand
+    synthesises `python3 <entry>` for exactly this case. The predicate has to
+    agree with the runner or it takes the Run button away from apps that have
+    always worked. }
   WriteFileText(JoinPath(AppDir, 'app.json'),
-    '{"name":"Broken","kind":"python","entry":"main.py"}');
+    '{"name":"Implicit","kind":"python","entry":"main.py"}');
   ExpectTrue(GetApp('spam-filter', Info), 'a command-less python manifest loads');
+  ExpectTrue(AppIsRunnable(Info),
+             'and is runnable -- the runner synthesises python3 main.py');
+
+  { The other process kinds have nothing to synthesise, so no command really
+    does mean no Run button -- that is the 400 this prevents. }
+  WriteFileText(JoinPath(AppDir, 'app.json'),
+    '{"name":"Broken","kind":"fpc","entry":"main.pas"}');
+  ExpectTrue(GetApp('spam-filter', Info), 'a command-less fpc manifest loads');
   ExpectTrue(not AppIsRunnable(Info),
              'but is NOT runnable -- the runner would refuse it');
 

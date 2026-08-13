@@ -203,11 +203,93 @@ end;
 
 function AppIsRunnable(const Info: TAppInfo): Boolean;
 begin
-  { Not "is it a process kind" but "is there a command": an app the runner
-    would refuse must never be offered a Run button. That refusal --
-    "app.json has no run command" -- is the whole of this. }
+  { Not "is it a process kind" but "would the runner start something": an app
+    the runner would refuse must never be offered a Run button. That refusal
+    -- "app.json has no run command" -- is the whole of this.
+
+    So this has to mirror PlannedCommand exactly, including the part where a
+    python app with no run line gets `python3 <entry>` synthesised for it.
+    Demanding an explicit command here would have taken the Run button away
+    from every python app that has always worked without one. }
   Result := Info.Exists and (Info.Kind in [akPython, akFpc, akDelphi]) and
-            (Trim(Info.Run) <> '');
+            ((Trim(Info.Run) <> '') or (Info.Kind = akPython));
+end;
+
+{ Reject any path that could leave the app directory. Checked on the raw
+  request text BEFORE it is joined to anything: '..' segments, absolute
+  paths, drive letters, backslashes and NULs all disqualify it outright.
+  Belt and braces -- the resolved path is re-checked against the app dir
+  prefix afterwards too. }
+function IsSafeRelPath(const P: string): Boolean;
+var
+  I: Integer;
+  Parts: TStringList;
+begin
+  Result := False;
+  if P = '' then Exit;
+  if Pos(#0, P) > 0 then Exit;
+  if Pos('\', P) > 0 then Exit;
+  if P[1] = '/' then Exit;
+  if (Length(P) > 1) and (P[2] = ':') then Exit;
+  Parts := SplitToList(P, '/');
+  try
+    for I := 0 to Parts.Count - 1 do
+    begin
+      if Parts[I] = '' then Exit;      { '//' or a trailing slash }
+      if Parts[I] = '.' then Exit;
+      if Parts[I] = '..' then Exit;
+    end;
+  finally
+    Parts.Free;
+  end;
+  Result := True;
+end;
+
+(* Does this document run script of its own?
+
+   `<script` is the obvious form and not the only one. A generated page that
+   wires its buttons up with onclick="" and does the rest in an onload=""
+   handler contains no script tag at all, and under `page`'s script-free CSP
+   every one of those handlers is dead -- an app that opens and does nothing.
+
+   So look for an inline event attribute too: whitespace, `on`, letters, `=`.
+   That is deliberately generic (onclick, onload, onsubmit, oninput, and the
+   next one someone invents) and deliberately anchored on the preceding space
+   so ordinary prose like "reason=" cannot trip it.
+
+   Guessing wrong in this direction costs a looser policy on a document that
+   did not need one. Guessing wrong the other way ships a broken app. *)
+function BodyRunsScript(const Body: string): Boolean;
+var
+  I, J, N: Integer;
+begin
+  Result := True;
+  if Pos('<script', Body) > 0 then Exit;
+  if Pos('javascript:', Body) > 0 then Exit;
+
+  N := Length(Body);
+  I := 1;
+  while I < N - 2 do
+  begin
+    if ((Body[I] = ' ') or (Body[I] = #9) or (Body[I] = #10) or
+        (Body[I] = #13)) and (Body[I + 1] = 'o') and (Body[I + 2] = 'n') then
+    begin
+      J := I + 3;
+      while (J <= N) and (Body[J] >= 'a') and (Body[J] <= 'z') do
+        Inc(J);
+      if J > I + 3 then                { at least one letter after "on" }
+      begin
+        while (J <= N) and ((Body[J] = ' ') or (Body[J] = #9)) do
+          Inc(J);
+        if (J <= N) and (Body[J] = '=') then Exit;
+      end;
+      I := J;
+      Continue;
+    end;
+    Inc(I);
+  end;
+
+  Result := False;
 end;
 
 (* Work out what an app IS when its manifest does not say usably.
@@ -222,7 +304,7 @@ end;
 
      a run command            -> a process app, typed by its entry
      an .html/.htm entry      -> a document; html when the file actually
-                                 contains a script, else page
+                                 runs script of its own, else page
      a .py entry              -> python
 
    The script sniff decides page vs html rather than defaulting, because
@@ -236,7 +318,7 @@ end;
    author's call to make and ours to honour. *)
 function InferAppKind(const Dir: string; const Info: TAppInfo): TAppKind;
 var
-  Ext, Body, EntryPath: string;
+  Ext, Body, EntryPath, DirNorm: string;
 begin
   Result := Info.Kind;
   if Result <> akNone then Exit;          { the manifest said; respect it }
@@ -255,10 +337,20 @@ begin
 
   if (Ext = '.html') or (Ext = '.htm') then
   begin
+    { The entry name comes out of a model-written manifest, so it is treated
+      like any other untrusted path: the same two barriers ResolveAssetPath
+      uses, applied before the file is opened rather than after. An entry that
+      escapes the app directory is never read -- and since nothing outside the
+      directory can be served either, the tighter script-free policy is the
+      honest answer for it. }
+    if not IsSafeRelPath(Info.Entry) then Exit(akPage);
     EntryPath := JoinPath(Dir, Info.Entry);
+    DirNorm := IncludeTrailingPathDelimiter(NormalizePathSep(Dir));
+    if not HasPrefix(NormalizePathSep(EntryPath), DirNorm) then Exit(akPage);
+
     Body := '';
     if FileExists(EntryPath) then Body := LowerCase(ReadFileText(EntryPath));
-    if Pos('<script', Body) > 0 then Exit(akHtml);
+    if BodyRunsScript(Body) then Exit(akHtml);
     Exit(akPage);
   end;
 
@@ -406,36 +498,6 @@ begin
   for I := Low(ServableExts) to High(ServableExts) do
     if L = ServableExts[I] then Exit(True);
   Result := False;
-end;
-
-{ Reject any path that could leave the app directory. Checked on the raw
-  request text BEFORE it is joined to anything: '..' segments, absolute
-  paths, drive letters, backslashes and NULs all disqualify it outright.
-  Belt and braces -- the resolved path is re-checked against the app dir
-  prefix afterwards too. }
-function IsSafeRelPath(const P: string): Boolean;
-var
-  I: Integer;
-  Parts: TStringList;
-begin
-  Result := False;
-  if P = '' then Exit;
-  if Pos(#0, P) > 0 then Exit;
-  if Pos('\', P) > 0 then Exit;
-  if P[1] = '/' then Exit;
-  if (Length(P) > 1) and (P[2] = ':') then Exit;
-  Parts := SplitToList(P, '/');
-  try
-    for I := 0 to Parts.Count - 1 do
-    begin
-      if Parts[I] = '' then Exit;      { '//' or a trailing slash }
-      if Parts[I] = '.' then Exit;
-      if Parts[I] = '..' then Exit;
-    end;
-  finally
-    Parts.Free;
-  end;
-  Result := True;
 end;
 
 function ResolveAssetPath(const Project, RelPath: string): string;
