@@ -484,34 +484,48 @@ uses
 function ParseChatMessages(const ArrayJSON: string): TChatMessages;
 var
   Arr: TJsonArray;
-  Item: TJsonObject;
+  Root, Item: TJsonObject;
   I, N: Integer;
 begin
   SetLength(Result, 0);
   if Trim(ArrayJSON) = '' then Exit;
   Arr := nil;
+  Root := nil;
   try
     { The parser's entry point is an object, so wrap the array in one. }
-    Item := TJsonObject.Parse('{"m":' + ArrayJSON + '}');
+    Root := TJsonObject.Parse('{"m":' + ArrayJSON + '}');
   except
     Exit;
   end;
-  if Item = nil then Exit;
+  if Root = nil then Exit;
   try
-    Arr := Item.ChildArray('m');
+    (* ChildArray and ItemObject hand back NON-OWNING wrappers -- see
+       CreateWrapping(D, False) in PasClaw.JSON -- so every one of them is
+       the caller's to free. A transcript is the worst place to forget:
+       reopening long conversations is exactly what the Library invites,
+       and the desktop process is long-lived, so a wrapper per message per
+       open accumulates for the life of the app. One wrapper per iteration,
+       freed in a finally; the array freed before the root. *)
+    Arr := Root.ChildArray('m');
     if Arr = nil then Exit;
     SetLength(Result, Arr.Count);
     N := 0;
     for I := 0 to Arr.Count - 1 do
     begin
-      if Arr.ItemObject(I) = nil then Continue;
-      Result[N].Role    := Arr.ItemObject(I).GetStr('role', '');
-      Result[N].Content := Arr.ItemObject(I).GetStr('content', '');
+      Item := Arr.ItemObject(I);
+      if Item = nil then Continue;
+      try
+        Result[N].Role    := Item.GetStr('role', '');
+        Result[N].Content := Item.GetStr('content', '');
+      finally
+        Item.Free;
+      end;
       if Result[N].Role <> '' then Inc(N);
     end;
     SetLength(Result, N);
   finally
-    Item.Free;
+    Arr.Free;
+    Root.Free;
   end;
 end;
 
