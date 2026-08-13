@@ -433,9 +433,12 @@ the state is on disk and cheap to re-read.
 **Which model.** A search, data or report page runs on the *fast* model:
 these are summarise-and-format jobs, and the flagship makes them slower and
 dearer without making them better. The model is resolved as `fast_model`
-from config, then `auto_router.easy_model` when that router is on, then a
+from config, then the auto-router's easy tier when that router is on, then a
 known small model for the provider in use, then the main model unchanged —
-so it works out of the box and can be pinned. **Research keeps the main
+so it works out of the box and can be pinned. The easy tier moves its
+**provider** along with its model: `easy_model` is an override on
+`easy_provider`, so a Groq tier under an Anthropic primary switches both or
+neither. **Research keeps the main
 model**: it plans, reads several sources and synthesises, and downgrading
 that would show.
 

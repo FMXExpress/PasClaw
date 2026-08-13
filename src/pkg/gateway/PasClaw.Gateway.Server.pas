@@ -185,16 +185,32 @@ type
        machinery HandleChat sets up, and duplicating that setup is how the
        two drift. Returns False with Err set when there is no provider or
        the loop fails. *)
-    (* The model for work that does not need the good one, or '' to keep
-       the current one. Order is explicit-then-inferred: what the operator
-       configured, then what they already declared cheap for the
-       auto-router, then a known small model for the provider in use. *)
-    function ResolveFastModel: string;
+    (* The model for work that does not need the good one, and the provider
+       it belongs to.
+
+       Both, because a model name means nothing without one. The
+       auto-router's cheap tier is a PROVIDER plus an optional model
+       override on it -- Groq under an Anthropic primary is the whole point
+       of that setting -- so taking the name alone and sending it to the
+       primary asks Anthropic for a Llama and gets a non-retryable 404.
+
+       ProviderName is '' when the fast model belongs to the primary, which
+       is the common case and needs no provider swap. Model is '' when
+       there is nothing to change at all. *)
+    procedure ResolveFastModel(out ProviderName, Model: string);
+    { The same, WITHOUT taking FApplyLock -- for callers that already hold
+      it. Everything it reads (DefaultProvider, Providers, AutoRouter) is
+      mutated in place by ApplyProviderConfig under that lock. }
+    procedure ResolveFastModelLocked(out ProviderName, Model: string);
     function RunDesktopTurn(const SystemPrompt, Prompt: string;
                             Narrate: Boolean;
                             out Reply, Err: string): Boolean; overload;
+    (* UseFastModel asks for the cheap tier. A flag rather than a model
+       string on purpose: resolving it here, inside the same lock as the
+       provider snapshot, is what keeps the model and the provider it
+       belongs to from being chosen a moment apart. *)
     function RunDesktopTurn(const SystemPrompt, Prompt: string;
-                            Narrate: Boolean; const ModelOverride: string;
+                            Narrate: Boolean; UseFastModel: Boolean;
                             out Reply, Err: string): Boolean; overload;
     { OnToolCall sink for a narrated turn -- turns each tool call into a
       page-progress event so the desktop can show work rather than a
@@ -287,6 +303,10 @@ type
     { Lock-guarded snapshot of the live provider state (rebuilt on config write):
       primary, fallback chain, and default model copied together so a swap can't
       split them across a starting request. }
+    procedure SnapshotRuntimeFast(out Prim: ILLMProvider;
+      out FB: TLLMProviderArray; out FBModels: TStringArray;
+      out DefModel: string; out FastProv: ILLMProvider;
+      out FastModel: string);
     procedure SnapshotRuntime(out Prim: ILLMProvider; out FB: TLLMProviderArray;
                               out FBModels: TStringArray; out DefModel: string);
     { Rebuild + swap the live provider/fallbacks from a saved config. Returns
@@ -928,6 +948,53 @@ begin
   FRelayQueue.Free;
   FApplyLock.Free;
   inherited Destroy;
+end;
+
+(* The same snapshot, plus the fast tier resolved inside the SAME lock.
+
+   Separate calls would not do. ApplyProviderConfig rewrites
+   DefaultProvider, Providers and AutoRouter in place while holding this
+   lock, so a page request that resolved its fast model in one acquisition
+   and its provider in another could pair the old tier's model with the new
+   primary -- the exact mismatch the pairing exists to prevent, arrived at
+   from the other direction.
+
+   FastProv comes back nil when the fast model belongs to the primary,
+   which is the common case; it is built here, under the lock, because
+   construction reads the same config fields. That is allocation and
+   parsing, no network. *)
+procedure TGatewayServer.SnapshotRuntimeFast(out Prim: ILLMProvider;
+  out FB: TLLMProviderArray; out FBModels: TStringArray;
+  out DefModel: string; out FastProv: ILLMProvider; out FastModel: string);
+var
+  FastName, Err: string;
+begin
+  FastProv := nil;
+  FastModel := '';
+  FApplyLock.Acquire;
+  try
+    Prim     := FProvider;
+    FB       := Copy(FFallbacks);
+    FBModels := Copy(FFallbackModels);
+    DefModel := FCfg.DefaultModel;
+
+    ResolveFastModelLocked(FastName, FastModel);
+    if FastName <> '' then
+    begin
+      { A named provider that cannot be built is a misconfiguration, not a
+        reason to fail the page: fall back to the primary with no override,
+        which is what happened before any of this existed. }
+      if not NewProviderFromConfig(FCfg, FastName, FastProv, Err) then
+      begin
+        LogWarn('page: fast provider "%s" could not be built (%s) -- ' +
+                'using the primary', [FastName, Err]);
+        FastProv := nil;
+        FastModel := '';
+      end;
+    end;
+  finally
+    FApplyLock.Release;
+  end;
 end;
 
 procedure TGatewayServer.SnapshotRuntime(out Prim: ILLMProvider;
@@ -5297,27 +5364,53 @@ begin
   PublishPageProgress(Phase, Detail);
 end;
 
-function TGatewayServer.ResolveFastModel: string;
+procedure TGatewayServer.ResolveFastModel(out ProviderName, Model: string);
+begin
+  FApplyLock.Acquire;
+  try
+    ResolveFastModelLocked(ProviderName, Model);
+  finally
+    FApplyLock.Release;
+  end;
+end;
+
+procedure TGatewayServer.ResolveFastModelLocked(out ProviderName,
+  Model: string);
 var
-  Prim: ILLMProvider;
-  FB: TLLMProviderArray;
-  FBModels: TStringArray;
-  DefModel, Kind: string;
+  Kind: string;
   I: Integer;
 begin
-  { 1. Said so outright. }
-  Result := Trim(FCfg.FastModel);
-  if Result <> '' then Exit;
+  ProviderName := '';
+  Model := '';
+
+  { 1. Said so outright. A bare model name is understood to be the
+       primary's -- there is no second provider named here to mean
+       anything else. }
+  Model := Trim(FCfg.FastModel);
+  if Model <> '' then Exit;
 
   { 2. Already declared a cheap tier for the difficulty router -- the same
        judgement, made once. Only when that router is switched on: a model
-       named in a disabled section is a leftover, not a preference. }
-  if FCfg.AutoRouter.Enabled and (Trim(FCfg.AutoRouter.EasyModel) <> '') then
-    Exit(Trim(FCfg.AutoRouter.EasyModel));
+       named in a disabled section is a leftover, not a preference.
+
+       The provider travels WITH the model. EasyModel is an override on
+       EasyProvider, so an easy tier on another provider (Groq beneath an
+       Anthropic primary, say) has to switch both or the name is sent to a
+       provider that has never heard of it. An easy tier that names only a
+       provider is still useful: that provider's own default model. }
+  if FCfg.AutoRouter.Enabled and
+     ((Trim(FCfg.AutoRouter.EasyProvider) <> '') or
+      (Trim(FCfg.AutoRouter.EasyModel) <> '')) then
+  begin
+    ProviderName := Trim(FCfg.AutoRouter.EasyProvider);
+    Model := Trim(FCfg.AutoRouter.EasyModel);
+    Exit;
+  end;
 
   { 3. A known small model for whichever provider is actually in use. The
        primary's kind, not the first one configured: fallbacks exist
-       precisely because the first entry may be the one that is down. }
+       precisely because the first entry may be the one that is down. This
+       one is always the primary's own, so no provider swap. }
   Kind := '';
   for I := 0 to High(FCfg.Providers) do
     if SameText(FCfg.Providers[I].Name, FCfg.DefaultProvider) then
@@ -5325,39 +5418,43 @@ begin
       Kind := FCfg.Providers[I].Kind;
       Break;
     end;
-  if Kind = '' then
-  begin
-    SnapshotRuntime(Prim, FB, FBModels, DefModel);
-    if Length(FCfg.Providers) > 0 then Kind := FCfg.Providers[0].Kind;
-  end;
-  Result := FastModelFor(Kind);
+  if (Kind = '') and (Length(FCfg.Providers) > 0) then
+    Kind := FCfg.Providers[0].Kind;
+  Model := FastModelFor(Kind);
 end;
 
 function TGatewayServer.RunDesktopTurn(const SystemPrompt, Prompt: string;
   Narrate: Boolean; out Reply, Err: string): Boolean;
 begin
-  Result := RunDesktopTurn(SystemPrompt, Prompt, Narrate, '', Reply, Err);
+  Result := RunDesktopTurn(SystemPrompt, Prompt, Narrate, False, Reply, Err);
 end;
 
 function TGatewayServer.RunDesktopTurn(const SystemPrompt, Prompt: string;
-  Narrate: Boolean; const ModelOverride: string;
+  Narrate: Boolean; UseFastModel: Boolean;
   out Reply, Err: string): Boolean;
 var
   Msgs: TMessageArray;
   Loop: TToolLoopResult;
   LoopCfg: TToolLoopConfig;
-  Prim: ILLMProvider;
+  Prim, FastProv: ILLMProvider;
   FB: TLLMProviderArray;
   FBModels: TStringArray;
-  DefModel: string;
+  DefModel, FastModel: string;
 begin
   Reply := '';
   Err := '';
   Result := False;
 
-  SnapshotRuntime(Prim, FB, FBModels, DefModel);
+  SnapshotRuntimeFast(Prim, FB, FBModels, DefModel, FastProv, FastModel);
   LoopCfg := Default(TToolLoopConfig);
   LoopCfg.Provider := Prim;
+  (* The cheap tier, when asked for and when there is one. Provider and
+     model move together or not at all: the auto-router's easy model is an
+     override ON its easy provider, so sending that name to the primary
+     asks a provider for a model it has never heard of -- a 400 or 404 that
+     is not eligible for fallback. *)
+  if UseFastModel and (FastProv <> nil) then
+    LoopCfg.Provider := FastProv;
   if LoopCfg.Provider = nil then
   begin
     Err := 'no provider configured';
@@ -5370,9 +5467,7 @@ begin
   LoopCfg.Registry := FRegistry;
   if FToolsHonorInMemoryConfig then LoopCfg.ActiveConfig := FCfg;
   LoopCfg.Model          := DefModel;
-  { A caller may ask for a different model -- see ResolveFastModel. Empty
-    keeps the configured one, which is every other caller. }
-  if Trim(ModelOverride) <> '' then LoopCfg.Model := Trim(ModelOverride);
+  if UseFastModel and (FastModel <> '') then LoopCfg.Model := FastModel;
   LoopCfg.MaxIterations  := FMaxIter;
   LoopCfg.Parallel       := True;
   LoopCfg.Mode           := pmBuild;
@@ -5467,7 +5562,7 @@ function DesktopPageGenerator(const Query: string; Kind: TPageKind;
   const RevisePageId: string;
   out Title, BodyHTML, SourcesJSON, Err: string): Boolean;
 var
-  Reply, Prompt, Prior, FastModel: string;
+  Reply, Prompt, Prior: string;
   PriorInfo: TPageInfo;
 begin
   Title := Query;
@@ -5510,17 +5605,14 @@ begin
      several sources and synthesises -- that is the reasoning the main
      model is for, and downgrading it would show. A REVISION follows the
      kind it was asked under, which is what keeps "sort it by date" cheap
-     on a search page and thorough on a report. *)
-  FastModel := '';
-  if Kind <> pkResearch then
-  begin
-    FastModel := GDesktopGateway.ResolveFastModel;
-    if FastModel <> '' then
-      LogDebug('page: %s on %s', [PageKindToStr(Kind), FastModel]);
-  end;
+     on a search page and thorough on a report.
 
+     Asked for as a flag: which model that turns out to be, and which
+     provider it belongs to, are resolved inside the turn's own provider
+     snapshot so the two cannot be chosen a moment apart. *)
   if not GDesktopGateway.RunDesktopTurn(Prompt,
-       'Produce the page now.', Kind = pkResearch, FastModel, Reply, Err) then
+       'Produce the page now.', Kind = pkResearch, Kind <> pkResearch,
+       Reply, Err) then
     Exit;
   if Kind = pkResearch then
     PublishPageProgress('Writing', 'assembling the report');
