@@ -272,9 +272,25 @@ implementation
 
 {$R *.fmx}
 
+type
+  (* FMX.Objects declares a TPath too -- the vector shape control -- and it
+     comes after System.IOUtils in this unit's uses clause, so a bare TPath
+     resolves to the shape, and Combine on it is "undeclared identifier".
+     Alias the one we mean rather than depending on uses-clause order, which
+     is the kind of thing a later edit silently breaks. *)
+  TIOPath = System.IOUtils.TPath;
+
 const
   NoSkin = '(style default)';
   DefaultGateway = 'http://127.0.0.1:8088';
+
+{ Conditional string. StrUtils has one; a local helper keeps this unit's
+  uses clause to what it actually needs. Declared here, above every caller,
+  because Pascal resolves top-down. }
+function IfThenStr(Cond: Boolean; const Yes, No: string): string;
+begin
+  if Cond then Result := Yes else Result := No;
+end;
 
 { The chat window whose stream is currently being pumped. Set around the
   blocking Chat call so ChatChunk knows where to append. }
@@ -299,12 +315,12 @@ begin
   Dir := ExtractFilePath(ParamStr(0));
   for I := 1 to 7 do
   begin
-    if TDirectory.Exists(TPath.Combine(Dir, 'FMXStyles' + PathDelim + 'Retro')) then
-      Exit(TPath.Combine(Dir, 'FMXStyles' + PathDelim + 'Retro'));
-    if TDirectory.Exists(TPath.Combine(Dir,
+    if TDirectory.Exists(TIOPath.Combine(Dir, 'FMXStyles' + PathDelim + 'Retro')) then
+      Exit(TIOPath.Combine(Dir, 'FMXStyles' + PathDelim + 'Retro'));
+    if TDirectory.Exists(TIOPath.Combine(Dir,
          'Cross-Platform-Retro-OS-Styles' + PathDelim + 'FMXStyles' +
          PathDelim + 'Retro')) then
-      Exit(TPath.Combine(Dir, 'Cross-Platform-Retro-OS-Styles' + PathDelim +
+      Exit(TIOPath.Combine(Dir, 'Cross-Platform-Retro-OS-Styles' + PathDelim +
          'FMXStyles' + PathDelim + 'Retro'));
     Dir := ExtractFilePath(ExcludeTrailingPathDelimiter(Dir));
     if Dir = '' then Break;
@@ -351,7 +367,7 @@ begin
 
   if FStyleDir <> '' then
   begin
-    Win95 := TPath.Combine(FStyleDir, 'Win95.style');
+    Win95 := TIOPath.Combine(FStyleDir, 'Win95.style');
     if TFile.Exists(Win95) then
     begin
       FStyleFile := Win95;
@@ -1444,10 +1460,6 @@ begin
   Log.Lines.Add('');
 end;
 
-function IfThenStr(Cond: Boolean; const Yes, No: string): string;
-begin
-  if Cond then Result := Yes else Result := No;
-end;
 
 { Escape a string for embedding in a JSON literal. Chat text routinely
   carries newlines and quotes, and an unescaped control character would make
@@ -1804,13 +1816,6 @@ begin
 end;
 
 { ----------------------------------------------------- process apps -- }
-
-{ Conditional string. StrUtils has one; a local helper keeps this unit's
-  uses clause to what it actually needs. }
-function IfThenStr(Cond: Boolean; const Yes, No: string): string;
-begin
-  if Cond then Result := Yes else Result := No;
-end;
 
 
 (*
@@ -2368,6 +2373,7 @@ begin
     var
       Id, Err: string;
       Ok: Boolean;
+      Marshal: TThreadProcedure;
     begin
       Ok := False;
       Err := '';
@@ -2377,7 +2383,11 @@ begin
       except
         on E: Exception do Err := E.Message;
       end;
-      TThread.Queue(nil,
+      { Typed local rather than an inline literal: Queue is overloaded on
+        TThreadMethod and TThreadProcedure, and an anonymous method written
+        straight into the call is ambiguous between them (E2250). Naming the
+        type leaves exactly one candidate. }
+      Marshal :=
         procedure
         begin
           CloseProgress;
@@ -2387,7 +2397,8 @@ begin
             ShowPage(Id)
           else if FBrowserStatus <> nil then
             FBrowserStatus.Text := 'Could not produce a page: ' + Err;
-        end);
+        end;
+      TThread.Queue(nil, Marshal);
     end).Start;
 end;
 
@@ -2670,18 +2681,21 @@ end;
 procedure TFormMain.ApplyCurrentStyle;
 var
   StyleFile, SkinFile: string;
+  Deferred: TThreadProcedure;
 begin
   StyleFile := FStyleFile;
   SkinFile := FSkinFile;
   if StyleFile = '' then Exit;
   { Defer the switch until the current event has unwound: applying a style
     mid-event frees the style objects under the mouse and FMX's hover refresh
-    then walks freed memory. }
-  TThread.ForceQueue(nil,
+    then walks freed memory. Typed local for the same overload reason as
+    TThread.Queue in RunPageQuery. }
+  Deferred :=
     procedure
     begin
       TRetroSkins.Apply(StyleFile, SkinFile);
-    end);
+    end;
+  TThread.ForceQueue(nil, Deferred);
 end;
 
 procedure TFormMain.FillSkinList;
@@ -2715,7 +2729,7 @@ var
 begin
   if FFillingLists or (FStyleList = nil) or (FStyleList.ItemIndex < 0) or
      (FStyleDir = '') then Exit;
-  StyleFile := TPath.Combine(FStyleDir,
+  StyleFile := TIOPath.Combine(FStyleDir,
     FStyleList.Items[FStyleList.ItemIndex] + '.style');
   if not TFile.Exists(StyleFile) then Exit;
   FStyleFile := StyleFile;
@@ -2778,7 +2792,7 @@ begin
   if FStyleDir <> '' then
     for FileName in TDirectory.GetFiles(FStyleDir, '*.style') do
     begin
-      Item := TPath.GetFileNameWithoutExtension(FileName);
+      Item := TIOPath.GetFileNameWithoutExtension(FileName);
       LB.Items.Add(Item);
     end
   else
@@ -2790,7 +2804,7 @@ begin
   try
     if FStyleFile <> '' then
       LB.ItemIndex := LB.Items.IndexOf(
-        TPath.GetFileNameWithoutExtension(FStyleFile));
+        TIOPath.GetFileNameWithoutExtension(FStyleFile));
   finally
     FFillingLists := False;
   end;
