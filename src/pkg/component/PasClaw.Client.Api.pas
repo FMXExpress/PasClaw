@@ -293,13 +293,35 @@ type
     function Project(const Name: string; out Row: TProjectRow): Boolean;
     function CreateProject(const Title: string): string;
     function DeleteProject(const Name: string): Boolean;
+    (* Rename a project, or replace its description.
+
+       An EMPTY string means "leave that field alone": the key is left out of
+       the request entirely, and the store treats an absent key as unchanged.
+       So renaming does not require knowing the description, which is what a
+       rename dialog has. *)
+    function UpdateProject(const Name, Title, Description: string): Boolean;
 
     { ---- tasks + jobs ---- }
     function Tasks(const Project: string): TTaskRows;
     function CreateTask(const Project, Title: string): string;
     function UpdateTaskStatus(const Project, TaskId, Status: string): Boolean;
+    { Title, Notes and Status, each optional on the same "empty means leave
+      it alone" rule as UpdateProject. }
+    function UpdateTask(const Project, TaskId, Title, Notes,
+      Status: string): Boolean;
     function Jobs(const Project, TaskId: string): TJobRows;
     function JobLog(const Project, TaskId, JobId: string): string;
+    (* Start an agent turn ON A TASK, which is what opens a job under it.
+
+       This is the step that made tasks and jobs feel like two disconnected
+       lists: a task sat there with no way to act on it, and jobs appeared
+       only when something else happened to create one. Prompt may be empty,
+       in which case the agent works from the task's own title and notes.
+
+       Needs a gateway with an agent attached; without one it answers 503 and
+       Err says so rather than the call looking like it worked. *)
+    function RunTask(const Project, TaskId, Prompt: string;
+      out JobId, Err: string): Boolean;
 
     { ---- apps ---- }
     function App(const Project: string; out Row: TAppRow): Boolean;
@@ -1579,6 +1601,26 @@ begin
   end;
 end;
 
+function TPasClawClient.UpdateProject(const Name, Title,
+  Description: string): Boolean;
+var
+  Req: TJsonObject;
+begin
+  Req := TJsonObject.Create;
+  try
+    if Title <> '' then Req.PutStr('title', Title);
+    if Description <> '' then Req.PutStr('description', Description);
+    Result := True;
+    try
+      Request('PATCH', '/v1/projects/' + Name, Req.ToJSON);
+    except
+      Result := False;
+    end;
+  finally
+    Req.Free;
+  end;
+end;
+
 { ---- tasks + jobs ---- }
 
 function TPasClawClient.Tasks(const Project: string): TTaskRows;
@@ -1625,17 +1667,56 @@ begin
 end;
 
 function TPasClawClient.UpdateTaskStatus(const Project, TaskId, Status: string): Boolean;
+begin
+  Result := UpdateTask(Project, TaskId, '', '', Status);
+end;
+
+function TPasClawClient.UpdateTask(const Project, TaskId, Title, Notes,
+  Status: string): Boolean;
 var
   Req: TJsonObject;
 begin
   Req := TJsonObject.Create;
   try
-    Req.PutStr('status', Status);
+    if Title <> ''  then Req.PutStr('title', Title);
+    if Notes <> ''  then Req.PutStr('notes', Notes);
+    if Status <> '' then Req.PutStr('status', Status);
     Result := True;
     try
       Request('PATCH', '/v1/projects/' + Project + '/tasks/' + TaskId, Req.ToJSON);
     except
       Result := False;
+    end;
+  finally
+    Req.Free;
+  end;
+end;
+
+function TPasClawClient.RunTask(const Project, TaskId, Prompt: string;
+  out JobId, Err: string): Boolean;
+var
+  Req: TJsonObject;
+begin
+  JobId := '';
+  Err := '';
+  Result := False;
+  Req := TJsonObject.Create;
+  try
+    if Prompt <> '' then Req.PutStr('prompt', Prompt);
+    try
+      { Returns as soon as the job is OPEN, not when the turn finishes: the
+        gateway runs it on its own thread and reports progress through
+        desktop events. So the ordinary clock is the right one here -- a
+        client that blocked for the whole turn would be waiting on something
+        this call deliberately does not wait for. }
+      JobId := JsonReadStr(
+        Request('POST', '/v1/projects/' + Project + '/tasks/' + TaskId + '/run',
+                Req.ToJSON), 'job', '');
+      Result := JobId <> '';
+      if not Result then Err := 'the gateway started no job';
+    except
+      on E: Exception do
+        Err := E.Message;
     end;
   finally
     Req.Free;

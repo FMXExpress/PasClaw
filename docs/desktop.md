@@ -129,6 +129,30 @@ Jobs are opened by the runtime when a turn starts working a task, so the
 model only has to close them. Opening a job marks its task **active**;
 reporting a job **done** closes the task. The desktop tree shows this live.
 
+**Seeing it, and acting on it.** The **Projects** window is the whole chain
+in one place — project → app / tasks → jobs — and every level is
+double-clickable: a project opens its app or its chat, an app opens (or, for
+a process app, opens its Run window), a task opens the project chat, a job
+opens its log. Its buttons act on whatever is selected:
+
+| Button | What it does |
+|---|---|
+| **Open** | The same as double-clicking the selected row |
+| **New Task** | Add a task to the selected project |
+| **Run Task** | Put PasClaw to work on the selected task — **this is what opens a job under it** |
+| **Status** | Cycle the selected task: todo → active → done |
+| **New Project** / **Edit App** | Create a project; edit the selected project's app source |
+| **Rename** / **Delete** / **Refresh** | The selected project's title, the project itself, the board |
+
+Run Task is the link that used to be missing from the desktop: without it a
+task was a note to itself, and jobs only ever appeared because something
+else happened to create one. The gateway answers as soon as the job is
+*open* and runs the turn on its own thread, so the tree fills in through
+live events rather than the window blocking for the length of the turn.
+
+The menu lists each project's **Tasks (n open of m)** under it, which opens
+the Projects window with that project selected and expanded.
+
 ---
 
 ## Apps
@@ -735,6 +759,11 @@ Every route below sits inside the gateway's existing bearer-auth gate.
 | GET | `/desktop` | the web desktop client |
 
 `/v1/fs` (already part of the gateway) backs the **File Manager** window.
+Opening an `.html` file from it loads it in a **new Browser tab** rather than
+over whatever you were reading, and the tab remembers the *path*, so coming
+back to it re-reads the file. It is fetched through `/v1/fs`, not as a
+`file://` URL: a remote gateway's files are not on this machine, and the
+browser control cannot send the bearer token.
 
 ---
 

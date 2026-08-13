@@ -45,7 +45,7 @@ uses
 type
   { What a tree node stands for -- the tree carries projects, their tasks and
     their jobs in one control, so each node remembers its own identity. }
-  TNodeKind = (nkProject, nkTask, nkJob);
+  TNodeKind = (nkProject, nkApp, nkTask, nkJob);
 
   TNodeRef = class(TObject)
     Kind: TNodeKind;
@@ -53,6 +53,9 @@ type
     TaskId: string;
     JobId: string;
     HasApp: Boolean;
+    { On an app node: would the runner start something. Decides whether Open
+      means "show the document" or "open the Run window". }
+    Runnable: Boolean;
   end;
 
   TFormMain = class(TForm)
@@ -170,7 +173,17 @@ type
        current tab, asking again REVISES it; New opens an empty tab, where
        asking starts a fresh page. Two obvious gestures instead of a mode. *)
     FBrowserTabs: TTabControl;
-    FBrowserTabPages: TStringList;   { page id per tab, by index }
+    (* What each tab is showing, by index. Two kinds, prefixed:
+
+         ''             an empty tab
+         page:<id>      a page from the library
+         file:<path>    a local .html opened from the File Manager
+
+       Prefixed rather than "a page id, and '' means empty", because a tab
+       holding a file used to be indistinguishable from an empty one --
+       switching away and back showed the blank-tab placeholder and the file
+       was simply gone. *)
+    FBrowserTabPages: TStringList;
     FBrowserSwitching: Boolean;
 
     { ---- deep-research progress ----
@@ -211,6 +224,22 @@ type
     FDialogEdit: TEdit;
     FDialogAccept: TNotifyEvent;
     FPendingProject: string;
+    (* What the Projects window's buttons are about to act on.
+
+       Captured when the button is pressed, not read back when OK is: the
+       dialogs are non-modal TRetroWindows, so between the two the user can
+       click a different node -- or an arriving desktop event can rebuild the
+       tree under them, which frees the very TNodeRef the handler would have
+       consulted. *)
+    FTreeProject: string;
+    FTreeTask: string;
+
+    { ---- app source editor ----
+      One at a time. The manifest's entry file, over /v1/apps/<p>/entry --
+      the same pair artifact versions use to capture and restore a body. }
+    FAppSrcWin: TRetroWindow;
+    FAppSrcMemo: TMemo;
+    FAppSrcProject: string;
 
     { The live wizard: its steps, where we are, and the project whose board
       Finish will add tasks to. }
@@ -304,6 +333,8 @@ type
     procedure OpenApp(const Project: string);
     procedure OpenJobLog(const Project, TaskId, JobId: string);
     procedure OpenLibrary;
+    procedure FillLibrary;
+    procedure LibraryRefreshClick(Sender: TObject);
     procedure LibraryDblClick(Sender: TObject);
     procedure OpenSessionChat(const SessionId: string);
 
@@ -315,6 +346,29 @@ type
     procedure MenuPick(Sender: TObject);
     procedure CloseMenu;
     procedure OpenTree;
+    { The same window, opened ON a project: its node selected and expanded,
+      so "Tasks" in the menu lands on the task list rather than on a tree
+      the user then has to find their project in. }
+    procedure OpenTreeAt(const Project: string);
+    { ---- the Projects window's actions ----
+      The tree already showed project -> task -> job. What it had no way to
+      do was ACT on any of it: no way to add a task, none to start one, none
+      to see the app that hangs off the same project. These are that. }
+    function SelectedRef(out Ref: TNodeRef): Boolean;
+    procedure OpenSelected;
+    procedure TreeOpenClick(Sender: TObject);
+    procedure TreeNewTaskClick(Sender: TObject);
+    procedure TreeNewTaskAccepted(Sender: TObject);
+    procedure TreeRunTaskClick(Sender: TObject);
+    procedure TreeRunTaskAccepted(Sender: TObject);
+    procedure TreeStatusClick(Sender: TObject);
+    procedure TreeRenameClick(Sender: TObject);
+    procedure TreeRenameAccepted(Sender: TObject);
+    procedure TreeDeleteClick(Sender: TObject);
+    procedure TreeDeleteConfirmed(Sender: TObject);
+    procedure TreeOpenAppSourceClick(Sender: TObject);
+    procedure OpenAppSource(const Project: string);
+    procedure AppSourceSaveClick(Sender: TObject);
     procedure OpenPlainChat;
     procedure PickWorkspaceClick(Sender: TObject);
     procedure NewWorkspaceClick(Sender: TObject);
@@ -360,6 +414,8 @@ type
     procedure RunPageQuery(Kind: TPageKindSel);
     procedure ShowPage(const PageId: string);
     procedure ShowPageInTab(const PageId: string; TabIndex: Integer);
+    procedure ShowFileInBrowser(const Path, Name: string);
+    function TabIsEmpty(Index: Integer): Boolean;
     procedure ShowProgress(const Caption, Text_: string);
     procedure CloseProgress;
 
@@ -779,6 +835,7 @@ begin
   if AComponent = FLibraryWin then
   begin
     FLibraryWin := nil;
+    FLibraryList := nil;   { owned by the window, dying with it }
     Exit;
   end;
   if AComponent = FFilesWin then
@@ -813,6 +870,13 @@ begin
   if AComponent = FVersionWin then
   begin
     FVersionWin := nil;
+    Exit;
+  end;
+  if AComponent = FAppSrcWin then
+  begin
+    FAppSrcWin := nil;
+    FAppSrcMemo := nil;    { owned by the window, dying with it }
+    FAppSrcProject := '';
     Exit;
   end;
 
@@ -886,38 +950,83 @@ end;
    It is a window now, opened from the Menu like Files or Library, so it can
    be moved, sized, closed and restored -- and the icons have the desktop to
    themselves. The status line moved into it; a shell with nowhere to speak
-   would have to fall back on message boxes. *)
+   would have to fall back on message boxes.
+
+   And it is where the WHOLE hierarchy is visible at once:
+
+     workspace -> project -> app / tasks -> jobs
+
+   The tree drew most of those levels from the start. What it could not do
+   was act on any of them, which made the bottom half read as a read-out
+   rather than a place. There was no way to add a task, no way to start one
+   -- so jobs only ever appeared because something else happened to create
+   one -- and the app hanging off the same project was not in the tree at
+   all, reachable only through the menu.
+
+   The button rows are that, and they are selection-driven: whichever node
+   is selected decides which of them apply. Run Task is the important one --
+   it is the step that turns a task into a job, and without it the last link
+   in the chain was invisible from the desktop. *)
 procedure TFormMain.OpenTree;
 var
   Bar: TLayout;
-  B: TButton;
+
+  { A button on a row, left to right. Three rows because nine actions do not
+    fit in one at any width this window should be. Bottom-aligned rows stack
+    in creation order, first at the very bottom -- so these are built from
+    the least-used row upwards, leaving the common ones nearest the tree. }
+  procedure Act(Row: TLayout; const Caption, AHint: string;
+    AOnClick: TNotifyEvent; W: Single);
+  var
+    Btn: TButton;
+  begin
+    Btn := TButton.Create(FTreeWin);
+    Btn.Parent := Row;
+    Btn.Align := TAlignLayout.Left;
+    Btn.Width := W;
+    Btn.Margins.Rect := TRectF.Create(3, 2, 0, 2);
+    Btn.Text := Caption;
+    Btn.Hint := AHint;
+    Btn.OnClick := AOnClick;
+  end;
+
 begin
   if FTreeWin <> nil then
   begin
     FTreeWin.Restore;
     Exit;
   end;
-  FTreeWin := TrackWindow(FDesktop.CreateWindow('Projects', 260, 420));
+  FTreeWin := TrackWindow(FDesktop.CreateWindow('Projects', 380, 460));
   MarkLayoutDirty;
 
   Bar := TLayout.Create(FTreeWin);
   Bar.Parent := FTreeWin.Client;
   Bar.Align := TAlignLayout.Bottom;
   Bar.Height := 30;
+  Act(Bar, 'Rename',   'Rename the selected project', TreeRenameClick, 74);
+  Act(Bar, 'Delete',   'Delete the selected project and everything under it',
+      TreeDeleteClick, 66);
+  Act(Bar, 'Refresh',  'Re-read the board', RefreshClick, 72);
 
-  B := TButton.Create(FTreeWin);
-  B.Parent := Bar;
-  B.Align := TAlignLayout.Left;
-  B.Width := 108;
-  B.Text := 'New Project';
-  B.OnClick := NewProjectClick;
+  Bar := TLayout.Create(FTreeWin);
+  Bar.Parent := FTreeWin.Client;
+  Bar.Align := TAlignLayout.Bottom;
+  Bar.Height := 30;
+  Act(Bar, 'New Project', '', NewProjectClick, 106);
+  Act(Bar, 'Edit App',    'Edit the selected project''s app source',
+      TreeOpenAppSourceClick, 84);
 
-  B := TButton.Create(FTreeWin);
-  B.Parent := Bar;
-  B.Align := TAlignLayout.Client;
-  B.Margins.Left := 4;
-  B.Text := 'Refresh';
-  B.OnClick := RefreshClick;
+  Bar := TLayout.Create(FTreeWin);
+  Bar.Parent := FTreeWin.Client;
+  Bar.Align := TAlignLayout.Bottom;
+  Bar.Height := 30;
+  Act(Bar, 'Open',     'Open whatever is selected', TreeOpenClick, 60);
+  Act(Bar, 'New Task', 'Add a task to the selected project',
+      TreeNewTaskClick, 82);
+  Act(Bar, 'Run Task', 'Put PasClaw to work on the selected task -- this is '
+      + 'what opens a job under it', TreeRunTaskClick, 82);
+  Act(Bar, 'Status',   'Cycle the selected task: todo -> active -> done',
+      TreeStatusClick, 68);
 
   FStatus := TLabel.Create(FTreeWin);
   FStatus.Parent := FTreeWin.Client;
@@ -998,10 +1107,12 @@ end;
 procedure TFormMain.RebuildTree;
 var
   I, J, K: Integer;
-  PNode, TNode, JNode: TTreeViewItem;
+  PNode, TNode, JNode, ANode: TTreeViewItem;
   Tasks: TTaskRows;
   Jobs: TJobRows;
   Ref: TNodeRef;
+  AppRow: TAppRow;
+  AppText: string;
 
   function NewRef(AKind: TNodeKind; const P, T, Jb: string;
     AHasApp: Boolean): TNodeRef;
@@ -1034,6 +1145,34 @@ begin
                   FProjects[I].HasApp and FProjects[I].AppReady);
     PNode.TagObject := Ref;
 
+    (* The app, as a node of its own.
+
+       It belongs to the project exactly as its tasks do, and leaving it out
+       of the tree is what made the chain look like it stopped: a project
+       could have an app you could only reach through the menu, so nothing on
+       screen ever showed the two hanging off the same thing.
+
+       Says which way it opens, because the two are genuinely different -- a
+       document opens in a window, a program is started and stopped. *)
+    AppText := '';
+    if FProjects[I].HasApp then
+    begin
+      if FClient.App(FProjects[I].Name, AppRow) and AppRow.Exists then
+      begin
+        AppText := 'App: ' + AppRow.Name + '  [' + AppRow.Kind + ']';
+        if AppRow.Runnable then AppText := AppText + '  (run)';
+      end;
+      if AppText <> '' then
+      begin
+        ANode := TTreeViewItem.Create(FTree);
+        ANode.Parent := PNode;
+        ANode.Text := AppText;
+        Ref := NewRef(nkApp, FProjects[I].Name, '', '', True);
+        Ref.Runnable := AppRow.Runnable;
+        ANode.TagObject := Ref;
+      end;
+    end;
+
     Tasks := nil;
     try
       Tasks := FClient.Tasks(FProjects[I].Name);
@@ -1065,7 +1204,7 @@ begin
                                   Jobs[K].Id, False);
       end;
     end;
-    PNode.IsExpanded := Length(Tasks) > 0;
+    PNode.IsExpanded := (Length(Tasks) > 0) or (AppText <> '');
   end;
 end;
 
@@ -1337,19 +1476,28 @@ begin
   Item('Browser',         'browser',    False);
   Item('Files',           'files',      False);
   Item('Library',         'library',    False);
+  { Sessions live in the Library beside pages, which is right but not
+    findable -- "where are my conversations" is not a question anyone
+    answers with the word Library. Both entries, same window. }
+  Item('Sessions',        'library',    False);
   Item('Log',             'log',        False);
   Sep;
   Item('Projects',        'tree',       False);
   Item('New Project...',  'newproject', False);
   Sep;
 
-  { The live half: every project, with its app under it. This is how the
-    seeded suite -- Notes, Calendar, Mail -- is reachable without knowing
-    they are ordinary projects. }
+  { The live half: every project, with its app and its task list under it.
+    This is how the seeded suite -- Notes, Calendar, Mail -- is reachable
+    without knowing they are ordinary projects. }
   for I := 0 to High(FProjects) do
   begin
     Row := FProjects[I];
     Item(Row.Title, 'project:' + Row.Name, False);
+    { Tasks under the project that owns them, so the level below a project
+      is reachable in one gesture instead of Projects-then-find-the-row. }
+    if Row.Tasks > 0 then
+      Item(Format('Tasks (%d open of %d)', [Row.OpenTasks, Row.Tasks]),
+           'tasks:' + Row.Name, True);
     if not Row.HasApp then Continue;
     if not FClient.App(Row.Name, Apps) then Continue;
     if not Apps.Exists then Continue;
@@ -1412,6 +1560,7 @@ begin
   else if Action = 'library' then OpenLibrary
   else if Action = 'log' then OpenLog
   else if Action = 'tree' then OpenTree
+  else if (Action = 'tasks') and (Arg <> '') then OpenTreeAt(Arg)
   else if Action = 'newproject' then NewProjectClick(nil)
   else if Action = 'pickws' then PickWorkspaceClick(nil)
   else if Action = 'newws' then NewWorkspaceClick(nil)
@@ -1659,19 +1808,321 @@ begin
     OpenChat(FProjects[Idx].Name);
 end;
 
-procedure TFormMain.TreeDblClick(Sender: TObject);
+procedure TFormMain.OpenTreeAt(const Project: string);
+var
+  I: Integer;
+  Item: TTreeViewItem;
+begin
+  OpenTree;
+  if FTree = nil then Exit;
+  for I := 0 to FTree.Count - 1 do
+  begin
+    Item := FTree.Items[I];
+    if (Item = nil) or not (Item.TagObject is TNodeRef) then Continue;
+    if TNodeRef(Item.TagObject).Project <> Project then Continue;
+    Item.IsExpanded := True;
+    FTree.Selected := Item;
+    Exit;
+  end;
+end;
+
+function TFormMain.SelectedRef(out Ref: TNodeRef): Boolean;
+begin
+  Ref := nil;
+  Result := (FTree <> nil) and (FTree.Selected <> nil) and
+            (FTree.Selected.TagObject is TNodeRef);
+  if Result then Ref := TNodeRef(FTree.Selected.TagObject);
+end;
+
+{ Double-click and the Open button are the same act, so they are the same
+  code -- the two drifting apart is exactly how a tree ends up with a menu
+  that does something subtly different from the row it names. }
+procedure TFormMain.OpenSelected;
 var
   Ref: TNodeRef;
 begin
-  if FTree = nil then Exit;
-  if (FTree.Selected = nil) or (FTree.Selected.TagObject = nil) then Exit;
-  Ref := FTree.Selected.TagObject as TNodeRef;
+  if not SelectedRef(Ref) then Exit;
   case Ref.Kind of
     nkProject:
       if Ref.HasApp then OpenApp(Ref.Project) else OpenChat(Ref.Project);
+    nkApp:
+      { Runnable, not "is it a page": an app the runner would refuse must go
+        down the open path, or the Run window opens on a dead button. }
+      if Ref.Runnable then OpenRun(Ref.Project) else OpenApp(Ref.Project);
     nkTask: OpenChat(Ref.Project);
     nkJob:  OpenJobLog(Ref.Project, Ref.TaskId, Ref.JobId);
   end;
+end;
+
+procedure TFormMain.TreeDblClick(Sender: TObject);
+begin
+  OpenSelected;
+end;
+
+procedure TFormMain.TreeOpenClick(Sender: TObject);
+begin
+  OpenSelected;
+end;
+
+procedure TFormMain.TreeNewTaskClick(Sender: TObject);
+var
+  Ref: TNodeRef;
+begin
+  if not SelectedRef(Ref) then
+  begin
+    Say('Select a project first.');
+    Exit;
+  end;
+  { Every node knows its project, so a task can be added with a job selected
+    -- the tree is a hierarchy and asking the user to click the right level
+    of it first is a rule with no reason behind it. }
+  FTreeProject := Ref.Project;
+  AskText('New task', 'What needs doing in ' + Ref.Project + '?', '',
+          TreeNewTaskAccepted);
+end;
+
+procedure TFormMain.TreeNewTaskAccepted(Sender: TObject);
+var
+  Title, Id: string;
+begin
+  if (FDialogEdit = nil) or (FTreeProject = '') then Exit;
+  Title := Trim(FDialogEdit.Text);
+  if Title = '' then Exit;
+  Id := FClient.CreateTask(FTreeProject, Title);
+  if Id = '' then
+  begin
+    Say('Could not add the task: ' + FClient.LastError);
+    Exit;
+  end;
+  Say('Added ' + Id + ' to ' + FTreeProject);
+  RefreshProjects;
+end;
+
+(* Run Task -- the step the desktop was missing.
+
+   A task with no way to start it is a note to self. This is what opens a
+   job under it: the gateway spawns the turn on its own thread and answers
+   as soon as the job exists, so the tree fills in through desktop events
+   rather than this call sitting on the UI thread for the whole turn.
+
+   The prompt is optional. Left empty the agent works from the task's own
+   title and notes, which is the common case and the reason the task was
+   written down in the first place. *)
+procedure TFormMain.TreeRunTaskClick(Sender: TObject);
+var
+  Ref: TNodeRef;
+begin
+  if not SelectedRef(Ref) then Exit;
+  if Ref.TaskId = '' then
+  begin
+    Say('Select a task (or a job under one) to run.');
+    Exit;
+  end;
+  FTreeProject := Ref.Project;
+  FTreeTask := Ref.TaskId;
+  AskText('Run task', 'Anything to add? Leave it empty to work from the ' +
+          'task itself.', '', TreeRunTaskAccepted);
+end;
+
+procedure TFormMain.TreeRunTaskAccepted(Sender: TObject);
+var
+  Prompt, JobId, Err: string;
+begin
+  if (FTreeProject = '') or (FTreeTask = '') then Exit;
+  Prompt := '';
+  if FDialogEdit <> nil then Prompt := Trim(FDialogEdit.Text);
+  if not FClient.RunTask(FTreeProject, FTreeTask, Prompt, JobId, Err) then
+  begin
+    Say('Could not start it: ' + Err);
+    Exit;
+  end;
+  Say(Format('%s/%s -- job %s started', [FTreeProject, FTreeTask, JobId]));
+  RefreshProjects;
+end;
+
+{ todo -> active -> done -> todo. A cycle rather than a menu because there
+  are three states and the button says which one is next by what it does. }
+procedure TFormMain.TreeStatusClick(Sender: TObject);
+var
+  Ref: TNodeRef;
+  Tasks: TTaskRows;
+  I: Integer;
+  Next: string;
+begin
+  if not SelectedRef(Ref) then Exit;
+  if Ref.TaskId = '' then
+  begin
+    Say('Select a task to change its status.');
+    Exit;
+  end;
+  Next := 'active';
+  Tasks := FClient.Tasks(Ref.Project);
+  for I := 0 to High(Tasks) do
+    if Tasks[I].Id = Ref.TaskId then
+    begin
+      if Tasks[I].Status = 'todo' then Next := 'active'
+      else if Tasks[I].Status = 'active' then Next := 'done'
+      else Next := 'todo';
+      Break;
+    end;
+  if not FClient.UpdateTaskStatus(Ref.Project, Ref.TaskId, Next) then
+  begin
+    Say('Could not update it: ' + FClient.LastError);
+    Exit;
+  end;
+  Say(Ref.TaskId + ' is now ' + Next);
+  RefreshProjects;
+end;
+
+procedure TFormMain.TreeRenameClick(Sender: TObject);
+var
+  Ref: TNodeRef;
+  Row: TProjectRow;
+  Current: string;
+begin
+  if not SelectedRef(Ref) then Exit;
+  FTreeProject := Ref.Project;
+  Current := Ref.Project;
+  if ProjectByName(Ref.Project, Row) then Current := Row.Title;
+  AskText('Rename project', 'Title for ' + Ref.Project, Current,
+          TreeRenameAccepted);
+end;
+
+procedure TFormMain.TreeRenameAccepted(Sender: TObject);
+var
+  Title: string;
+begin
+  if (FDialogEdit = nil) or (FTreeProject = '') then Exit;
+  Title := Trim(FDialogEdit.Text);
+  if Title = '' then Exit;
+  { The TITLE changes; the name -- the slug everything on disk is keyed by
+    -- does not. Renaming the key would break every window, task path and
+    app URL already pointing at it. }
+  if not FClient.UpdateProject(FTreeProject, Title, '') then
+  begin
+    Say('Could not rename it: ' + FClient.LastError);
+    Exit;
+  end;
+  RefreshProjects;
+end;
+
+procedure TFormMain.TreeDeleteClick(Sender: TObject);
+var
+  Ref: TNodeRef;
+begin
+  if not SelectedRef(Ref) then Exit;
+  FTreeProject := Ref.Project;
+  Confirm('Delete project',
+    Format('Delete "%s" and everything under it -- its tasks, jobs and app?' +
+           sLineBreak + sLineBreak + 'This cannot be undone.', [Ref.Project]),
+    TreeDeleteConfirmed);
+end;
+
+procedure TFormMain.TreeDeleteConfirmed(Sender: TObject);
+var
+  Name: string;
+begin
+  Name := FTreeProject;
+  FTreeProject := '';
+  if Name = '' then Exit;
+  if not FClient.DeleteProject(Name) then
+  begin
+    Say('Could not delete it: ' + FClient.LastError);
+    Exit;
+  end;
+  Say('Deleted ' + Name);
+  RefreshProjects;
+end;
+
+procedure TFormMain.TreeOpenAppSourceClick(Sender: TObject);
+var
+  Ref: TNodeRef;
+begin
+  if not SelectedRef(Ref) then Exit;
+  OpenAppSource(Ref.Project);
+end;
+
+(* Edit the app's source.
+
+   The entry file the manifest declares -- index.html, main.py -- read and
+   written through the same pair artifact versions use. One file, not the
+   directory: the manifest names an entry, and an editor that let you
+   silently create files beside it would be a file manager wearing the wrong
+   name.
+
+   The manifest itself is deliberately not editable here. It carries the
+   declared network permissions, and a window that let those be widened
+   without the agent's involvement would undo the point of showing them
+   before an app opens. Ask PasClaw to change the manifest. *)
+procedure TFormMain.OpenAppSource(const Project: string);
+var
+  App: TAppRow;
+  Head: TLabel;
+  Bar: TLayout;
+  B: TButton;
+  Old: TRetroWindow;
+begin
+  SetClientContext('App source: ' + Project);
+  if not FClient.App(Project, App) or not App.Exists then
+  begin
+    Say(Project + ' has no app yet -- ask PasClaw to build one.');
+    Exit;
+  end;
+
+  { Let go of the previous editor BEFORE closing it. Closing arrives back
+    through Notification, and if that ran after the new window was already in
+    the field it would clear the one just opened. }
+  Old := FAppSrcWin;
+  FAppSrcWin := nil;
+  FAppSrcMemo := nil;
+  if Old <> nil then Old.Close;
+
+  FAppSrcProject := Project;
+  FAppSrcWin := TrackWindow(FDesktop.CreateWindow(
+    Project + ' -- ' + App.Entry, 560, 420));
+  MarkLayoutDirty;
+
+  Head := TLabel.Create(FAppSrcWin);
+  Head.Parent := FAppSrcWin.Client;
+  Head.Align := TAlignLayout.Top;
+  Head.Height := 34;
+  Head.Margins.Rect := TRectF.Create(8, 4, 8, 0);
+  Head.WordWrap := True;
+  Head.Text := Format('%s   kind=%s   entry=%s%s',
+    [App.Name, App.Kind, App.Entry,
+     IfThenStr(App.Network <> '', '   network=' + App.Network, '')]);
+
+  Bar := TLayout.Create(FAppSrcWin);
+  Bar.Parent := FAppSrcWin.Client;
+  Bar.Align := TAlignLayout.Bottom;
+  Bar.Height := 30;
+
+  B := TButton.Create(FAppSrcWin);
+  B.Parent := Bar;
+  B.Align := TAlignLayout.Left;
+  B.Width := 70;
+  B.Margins.Rect := TRectF.Create(4, 2, 0, 2);
+  B.Text := 'Save';
+  B.OnClick := AppSourceSaveClick;
+
+  FAppSrcMemo := TMemo.Create(FAppSrcWin);
+  FAppSrcMemo.Parent := FAppSrcWin.Client;
+  FAppSrcMemo.Align := TAlignLayout.Client;
+  FAppSrcMemo.Text := FClient.AppEntry(Project);
+end;
+
+procedure TFormMain.AppSourceSaveClick(Sender: TObject);
+begin
+  if (FAppSrcMemo = nil) or (FAppSrcProject = '') then Exit;
+  { Capture first: the saved body becomes a version like any turn's would,
+    so an edit that breaks the app is as recoverable as one the agent made. }
+  CaptureVersion(FAppSrcProject);
+  if not FClient.PutAppEntry(FAppSrcProject, FAppSrcMemo.Text) then
+  begin
+    Say('Could not save it: ' + FClient.LastError);
+    Exit;
+  end;
+  Say('Saved ' + FAppSrcProject);
 end;
 
 { ------------------------------------------------------------- live board -- }
@@ -2531,6 +2982,11 @@ begin
 
   { The settled transcript, formatted. }
   View := TWebBrowser.Create(W);
+{$IFDEF MSWINDOWS}
+  { The transcript is a modern document too -- and the one place unicode in
+    the model's own words has to survive. Before Parent: see OpenApp. }
+  View.WindowsEngine := TWindowsEngine.EdgeIfAvailable;
+{$ENDIF}
   View.Parent := ChatHost;
   View.Align := TAlignLayout.Client;
   FChatViews.AddOrSetValue(Project, View);
@@ -3147,14 +3603,20 @@ begin
   Snap.Visible := False;
 
   Browser := TWebBrowser.Create(W);
-  Browser.Parent := Host;
-  Browser.Align := TAlignLayout.Client;
 {$IFDEF MSWINDOWS}
-  { WebView2 where it exists: the legacy engine renders modern pages badly
-    enough to misrepresent an app the agent just wrote. Must be set before
-    the handle exists, i.e. before Parent. }
+  (* WebView2 where it exists: the legacy engine is IE-era and renders a
+     modern document -- flexbox, grid, ES6, fetch -- badly enough to
+     misrepresent the app the agent just wrote.
+
+     BEFORE Parent, and that is the whole of it. Assigning Parent is what
+     creates the native handle, and the engine is chosen when the handle is
+     created; setting the property afterwards changes a field nothing reads
+     again. It was set after Parent here, so every app window has been
+     running on the legacy engine while appearing to ask for Edge. *)
   Browser.WindowsEngine := TWindowsEngine.EdgeIfAvailable;
 {$ENDIF}
+  Browser.Parent := Host;
+  Browser.Align := TAlignLayout.Client;
   Browser.URL := FClient.AppURL(Project);
   FBrowsers.Add(Browser);
   FSnapshots.AddOrSetValue(Browser, Snap);
@@ -3193,11 +3655,11 @@ begin
   Snap.Visible := False;
 
   Browser := TWebBrowser.Create(W);
+{$IFDEF MSWINDOWS}
+  Browser.WindowsEngine := TWindowsEngine.EdgeIfAvailable;   { before Parent }
+{$ENDIF}
   Browser.Parent := Host;
   Browser.Align := TAlignLayout.Client;
-{$IFDEF MSWINDOWS}
-  Browser.WindowsEngine := TWindowsEngine.EdgeIfAvailable;
-{$ENDIF}
   Browser.URL := FClient.AppURL(Project);
   FBrowsers.Add(Browser);
   FSnapshots.AddOrSetValue(Browser, Snap);
@@ -3227,32 +3689,66 @@ end;
    conversation unreachable from the UI.
 
    Rows are inert without somewhere to go, so each one is double-clickable:
-   a page opens in the Browser, a session opens as a chat. FLibraryKinds
-   runs parallel to the visible list because the caption is for reading and
-   the id is for acting on -- packing an id into the caption and parsing it
-   back out is how you end up with a project named "-- 3 source(s)". *)
+   a page opens in the Browser, a session opens as a chat. *)
 procedure TFormMain.OpenLibrary;
+var
+  Bar: TLayout;
+  B: TButton;
+begin
+  SetClientContext('Library');
+  if FLibraryWin <> nil then
+  begin
+    { Refill on the way back up. The window is built once, so a Library
+      reopened after an afternoon's work showed the pages and conversations
+      it had when it was first opened and none of the ones since. }
+    FLibraryWin.Restore;
+    FillLibrary;
+    Exit;
+  end;
+  FLibraryWin := TrackWindow(FDesktop.CreateWindow('Library', 460, 380));
+  MarkLayoutDirty;
+
+  Bar := TLayout.Create(FLibraryWin);
+  Bar.Parent := FLibraryWin.Client;
+  Bar.Align := TAlignLayout.Bottom;
+  Bar.Height := 30;
+
+  B := TButton.Create(FLibraryWin);
+  B.Parent := Bar;
+  B.Align := TAlignLayout.Left;
+  B.Width := 80;
+  B.Margins.Rect := TRectF.Create(4, 2, 0, 2);
+  B.Text := 'Refresh';
+  B.OnClick := LibraryRefreshClick;
+
+  FLibraryList := TListBox.Create(FLibraryWin);
+  FLibraryList.Parent := FLibraryWin.Client;
+  FLibraryList.Align := TAlignLayout.Client;
+  FLibraryList.OnDblClick := LibraryDblClick;
+
+  FillLibrary;
+end;
+
+procedure TFormMain.LibraryRefreshClick(Sender: TObject);
+begin
+  FillLibrary;
+end;
+
+{ The two lists, rebuilt wholesale. FLibraryKinds runs parallel to the
+  visible list because the caption is for reading and the id is for acting
+  on -- packing an id into the caption and parsing it back out is how you
+  end up with a project named "-- 3 source(s)". }
+procedure TFormMain.FillLibrary;
 var
   Pages: TPageRows;
   Sess: TSessionRows;
   I: Integer;
   Title: string;
 begin
-  SetClientContext('Library');
-  if FLibraryWin <> nil then
-  begin
-    FLibraryWin.Restore;
-    Exit;
-  end;
-  FLibraryWin := TrackWindow(FDesktop.CreateWindow('Library', 460, 380));
-  MarkLayoutDirty;
+  if FLibraryList = nil then Exit;
   if FLibraryKinds = nil then FLibraryKinds := TStringList.Create;
   FLibraryKinds.Clear;
-
-  FLibraryList := TListBox.Create(FLibraryWin);
-  FLibraryList.Parent := FLibraryWin.Client;
-  FLibraryList.Align := TAlignLayout.Client;
-  FLibraryList.OnDblClick := LibraryDblClick;
+  FLibraryList.Items.Clear;
 
   FLibraryList.Items.Add('-- Pages --');
   FLibraryKinds.Add('');
@@ -3949,11 +4445,11 @@ begin
   Snap.Visible := False;
 
   FBrowserView := TWebBrowser.Create(FBrowserWin);
+{$IFDEF MSWINDOWS}
+  FBrowserView.WindowsEngine := TWindowsEngine.EdgeIfAvailable;  { before Parent }
+{$ENDIF}
   FBrowserView.Parent := Host;
   FBrowserView.Align := TAlignLayout.Client;
-{$IFDEF MSWINDOWS}
-  FBrowserView.WindowsEngine := TWindowsEngine.EdgeIfAvailable;
-{$ENDIF}
   FBrowsers.Add(FBrowserView);
   FSnapshots.AddOrSetValue(FBrowserView, Snap);
   MarkLayoutDirty;
@@ -3982,6 +4478,14 @@ begin
   end;
 end;
 
+{ True when this tab is holding nothing, so something new may take it over
+  rather than pushing another tab onto the strip. }
+function TFormMain.TabIsEmpty(Index: Integer): Boolean;
+begin
+  Result := (FBrowserTabPages <> nil) and (Index >= 0) and
+            (Index < FBrowserTabPages.Count) and (FBrowserTabPages[Index] = '');
+end;
+
 { What an empty tab looks like. Shared by New and by selecting one, which
   is what stopped the two from drifting apart. }
 procedure TFormMain.ShowBlankTab;
@@ -4007,13 +4511,15 @@ end;
 procedure TFormMain.BrowserTabChange(Sender: TObject);
 var
   I: Integer;
+  Target, Path: string;
 begin
   { Ignore the change we caused ourselves while building a tab. }
   if FBrowserSwitching then Exit;
   if (FBrowserTabs = nil) or (FBrowserTabPages = nil) then Exit;
   I := FBrowserTabs.TabIndex;
   if (I < 0) or (I >= FBrowserTabPages.Count) then Exit;
-  if FBrowserTabPages[I] = '' then
+  Target := FBrowserTabPages[I];
+  if Target = '' then
   begin
     { Clear the VIEW too, not just the bookkeeping. Leaving the last page
       on screen under an empty tab meant the user could ask a follow-up
@@ -4022,7 +4528,17 @@ begin
     ShowBlankTab;
     Exit;
   end;
-  ShowPage(FBrowserTabPages[I]);
+  if Copy(Target, 1, 5) = 'file:' then
+  begin
+    { A file tab re-reads on selection rather than caching the markup: it is
+      one small read through the gateway, and a file that changed on disk
+      should show what it says now. }
+    Path := Copy(Target, 6, MaxInt);
+    ShowFileInBrowser(Path, ExtractFileName(Path));
+    Exit;
+  end;
+  if Copy(Target, 1, 5) = 'page:' then Target := Copy(Target, 6, MaxInt);
+  ShowPage(Target);
 end;
 
 (* Put a finished page in the tab that asked for it.
@@ -4049,6 +4565,51 @@ begin
   ShowPage(PageId);
 end;
 
+(* Show a local .html in the CURRENT tab.
+
+   Read THROUGH the gateway and handed to the browser as markup. Path is a
+   path on the gateway's filesystem, which is only also this machine's when
+   the gateway happens to be local -- point PASCLAW_GATEWAY at another box
+   and a file:// URL asks the local browser for a file that is not there.
+   Going through /v1/fs keeps remote gateways working, carries the bearer
+   token the browser control cannot set, and sidesteps escaping every space
+   and hash in the path into a URL.
+
+   The tab REMEMBERS the path, not the markup, so coming back to this tab
+   re-reads the file. FCurrentPage is cleared because this is not a page:
+   "Make interactive" and follow-up revision both act on a page id, and a
+   file must not inherit whichever one was last shown. *)
+procedure TFormMain.ShowFileInBrowser(const Path, Name: string);
+var
+  Body: string;
+  Binary, Truncated: Boolean;
+  I: Integer;
+begin
+  if FBrowserView = nil then Exit;
+  if not FClient.ReadFile_(Path, Body, Binary, Truncated) then
+  begin
+    Say('Could not read ' + Name + ': ' + FClient.LastError);
+    Exit;
+  end;
+
+  FCurrentPage := '';
+  FBrowserView.LoadFromStrings(Body, Path);
+  if FBrowserPromote <> nil then FBrowserPromote.Enabled := False;
+  if FBrowserWin <> nil then FBrowserWin.Caption := Name;
+  if FBrowserStatus <> nil then
+  begin
+    if Truncated then FBrowserStatus.Text := Path + '  [truncated]'
+    else FBrowserStatus.Text := Path;
+  end;
+
+  if (FBrowserTabs = nil) or (FBrowserTabPages = nil) then Exit;
+  I := FBrowserTabs.TabIndex;
+  if (I < 0) or (I >= FBrowserTabPages.Count) then Exit;
+  FBrowserTabPages[I] := 'file:' + Path;
+  if I < FBrowserTabs.TabCount then
+    FBrowserTabs.Tabs[I].Text := Copy(Name, 1, 22);
+end;
+
 procedure TFormMain.ShowPage(const PageId: string);
 var
   Pages: TPageRows;
@@ -4066,7 +4627,10 @@ begin
   begin
     I := FBrowserTabs.TabIndex;
     if (I >= 0) and (I < FBrowserTabPages.Count) then
-      FBrowserTabPages[I] := PageId;
+    begin
+      if PageId = '' then FBrowserTabPages[I] := ''
+      else FBrowserTabPages[I] := 'page:' + PageId;
+    end;
   end;
 
   { The sources strip, echoed into the status bar. A page that could not be
@@ -4538,32 +5102,21 @@ begin
   Ext := LowerCase(ExtractFileExt(Name));
   if (Ext = '.html') or (Ext = '.htm') then
   begin
-    (* Read it THROUGH the gateway and hand the browser the markup.
+    (* A NEW tab, not the one you were reading.
 
-       Path is a path on the gateway's filesystem, which is only also this
-       machine's when the gateway happens to be local -- point
-       PASCLAW_GATEWAY at another box and a file:// URL asks the local
-       browser for a file that is not there. Going through /v1/fs keeps
-       remote gateways working, carries the bearer token the browser
-       control cannot set, and sidesteps escaping every space and hash in
-       the path into a URL. *)
-    if not FClient.ReadFile_(Path, Body, Binary, Truncated) then
-    begin
-      Say('Could not read ' + Name + ': ' + FClient.LastError);
-      Exit;
-    end;
+       Opening a file used to load it over whatever the Browser was already
+       showing -- so looking up one file cost you the page or file in front
+       of you, with no way back. Tabs exist precisely so two documents can be
+       open at once, and a file is a document like any other.
+
+       The exception is a browser that was not open a moment ago: it starts
+       with one empty tab, and adding a second so the first can stay blank
+       would be pedantry. Reuse it when nothing is in it. *)
     OpenBrowser('');
-    if FBrowserView <> nil then
-    begin
-      FBrowserView.LoadFromStrings(Body, Path);
-      if FBrowserStatus <> nil then
-      begin
-        if Truncated then
-          FBrowserStatus.Text := Path + '  [truncated]'
-        else
-          FBrowserStatus.Text := Path;
-      end;
-    end;
+    if (FBrowserTabs <> nil) and (FBrowserTabPages <> nil) and
+       not TabIsEmpty(FBrowserTabs.TabIndex) then
+      NewBrowserTab(Copy(Name, 1, 22));
+    ShowFileInBrowser(Path, Name);
     Exit;
   end;
 
