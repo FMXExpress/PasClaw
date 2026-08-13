@@ -1277,10 +1277,12 @@ begin
     if not Row.HasApp then Continue;
     if not FClient.App(Row.Name, Apps) then Continue;
     if not Apps.Exists then Continue;
-    if Apps.Servable then
-      Item(Apps.Name, 'app:' + Row.Name, True)
+    { Runnable, not "not servable": an app with no run command belongs on
+      the open path even when its kind says otherwise. }
+    if Apps.Runnable then
+      Item(Apps.Name + '  (run)', 'run:' + Row.Name, True)
     else
-      Item(Apps.Name + '  (run)', 'run:' + Row.Name, True);
+      Item(Apps.Name, 'app:' + Row.Name, True);
   end;
   if Length(FProjects) > 0 then Sep;
 
@@ -3045,19 +3047,29 @@ var
   M: TMemo;
   RunApp_: TAppRow;
 begin
-  (* A SERVED app does not get a Run window.
+  (* An app the runner would refuse does not get a Run window.
 
      This window is for process apps -- python, fpc, delphi -- which are
-     programs to start and stop. A `page` or `html` app is a document: there
-     is no command, so Run had nothing to do and pressing it did nothing
-     visible, which is the worst of both. Send it where it can be opened.
+     programs to start and stop. Asking it to run a document produced
+     "app.json has no run command", a 400 the user can do nothing with, in
+     a window whose only control was the button that caused it.
 
-     Belt and braces with the Menu, which routes by the same flag: if a
-     manifest is mislabelled, or the app record could not be read, this is
-     where it surfaces instead of a dead button. *)
-  if FClient.App(Project, RunApp_) and RunApp_.Exists and RunApp_.Servable then
+     Asked as "would the runner start something", not "is this a page":
+     a manifest whose kind the model wrote as "web" or left out entirely is
+     neither, and the previous test -- servable -- let exactly that case
+     through to the dead button. If there is nothing to run, the thing to
+     do with an app is open it. *)
+  if FClient.App(Project, RunApp_) and RunApp_.Exists and
+     (not RunApp_.Runnable) then
   begin
-    OpenApp(Project);
+    if RunApp_.Servable then
+      OpenApp(Project)
+    else
+      { Neither servable nor runnable: say what is wrong with the manifest
+        rather than opening an empty window about it. }
+      Say(Format('%s has an app PasClaw cannot open or run: kind="%s", ' +
+                 'entry="%s", no run command.',
+                 [Project, RunApp_.Kind, RunApp_.Entry]));
     Exit;
   end;
 

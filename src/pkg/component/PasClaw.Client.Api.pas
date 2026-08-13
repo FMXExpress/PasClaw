@@ -66,7 +66,10 @@ type
   TJobRows = array of TJobRow;
 
   TAppRow = record
-    Exists, Ready, Servable: Boolean;
+    { Runnable is "the runner would start something", not "this is a
+      process kind": an app with no run command must never be offered a Run
+      button, because the runner refuses it with a 400. }
+    Exists, Ready, Servable, Runnable: Boolean;
     Name, Kind, Entry, Icon, Network, Env, URL: string;
     Width, Height: Integer;
   end;
@@ -1681,6 +1684,7 @@ begin
     Row.Exists   := Obj.GetBool('exists', False);
     Row.Ready    := Obj.GetBool('ready', False);
     Row.Servable := Obj.GetBool('servable', False);
+    Row.Runnable := Obj.GetBool('runnable', False);
     Row.Name     := Obj.GetStr('name', Project);
     Row.Kind     := Obj.GetStr('kind', '');
     Row.Entry    := Obj.GetStr('entry', '');

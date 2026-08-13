@@ -305,6 +305,118 @@ begin
   ExpectStr(RunnerBackendName, 'host',
             'and with shell_backend unset the runner is on the host');
 
+  (* ---- the manifest does not have to be perfect ----
+
+     `kind` is written by a model. One that writes "web", or "type" instead
+     of "kind", or nothing at all, used to produce an app that was neither
+     servable nor runnable -- so the desktop offered the only thing left, a
+     Run button, and the runner answered "app.json has no run command". An
+     HTML app you could not open because of one word.
+
+     The evidence is on disk, so these assert that it is used. *)
+  WriteFileText(JoinPath(AppDir, 'app.json'),
+    '{"name":"No Kind","entry":"index.html"}');
+  WriteFileText(JoinPath(AppDir, 'index.html'), '<h1>static</h1>');
+  ExpectTrue(GetApp('spam-filter', Info), 'a kind-less manifest loads');
+  ExpectTrue(Info.Kind = akPage,
+             'an html entry with no scripts is a page');
+  ExpectTrue(AppIsServable(Info), 'and it opens in a window');
+  ExpectTrue(not AppIsRunnable(Info), 'and is never offered a Run button');
+
+  { Scripts in the file mean the html kind, whose CSP allows them. Sniffed
+    rather than assumed either way: granting scripts to a file that has
+    none loosens the policy for nothing, refusing them to a file that has
+    them ships a broken app. }
+  WriteFileText(JoinPath(AppDir, 'index.html'),
+    '<h1>app</h1><script>var x=1;</script>');
+  ExpectTrue(GetApp('spam-filter', Info), 'reload');
+  ExpectTrue(Info.Kind = akHtml, 'an html entry WITH a script is html');
+  ExpectTrue(AppIsServable(Info), 'still opens in a window');
+
+  (* A document whose only script is an inline handler runs script too, and
+     under `page`'s script-free CSP every one of those handlers is dead --
+     an app that opens and does nothing. There is no <script> tag anywhere
+     in this file. *)
+  WriteFileText(JoinPath(AppDir, 'index.html'),
+    '<button onclick="go()">Go</button>');
+  ExpectTrue(GetApp('spam-filter', Info), 'reload');
+  ExpectTrue(Info.Kind = akHtml, 'an inline onclick handler is html, not page');
+
+  WriteFileText(JoinPath(AppDir, 'index.html'),
+    '<body onload = "start()"><p>hi</p></body>');
+  ExpectTrue(GetApp('spam-filter', Info), 'reload');
+  ExpectTrue(Info.Kind = akHtml, 'so is onload, spaces around the = and all');
+
+  { And prose that merely contains "on" followed by an equals is not a
+    handler -- the sniff is anchored, not a substring search. }
+  WriteFileText(JoinPath(AppDir, 'index.html'),
+    '<p>reason=none, season=two</p>');
+  ExpectTrue(GetApp('spam-filter', Info), 'reload');
+  ExpectTrue(Info.Kind = akPage, 'but "reason=" in prose is still a page');
+
+  (* The entry name comes out of a model-written manifest, so it is a path
+     from an untrusted source and gets the same containment as any served
+     asset -- BEFORE it is opened. Sniffing a traversal entry would have read
+     a file outside the app directory to decide a policy. *)
+  WriteFileText(JoinPath(AppDir, 'app.json'),
+    '{"name":"Escape","entry":"../../../../etc/passwd.html"}');
+  ExpectTrue(GetApp('spam-filter', Info), 'a traversal entry loads');
+  ExpectTrue(Info.Kind = akPage,
+             'and is never read -- the tighter policy, no file access');
+
+  WriteFileText(JoinPath(AppDir, 'index.html'),
+    '<h1>app</h1><script>var x=1;</script>');
+
+  { A word the model chose that we do not know is not a reason to fail. }
+  WriteFileText(JoinPath(AppDir, 'app.json'),
+    '{"name":"Web","kind":"web","entry":"index.html"}');
+  ExpectTrue(GetApp('spam-filter', Info), 'an unknown kind loads');
+  ExpectTrue(Info.Kind = akHtml, 'and is worked out from the entry');
+
+  { "type" is the other word models reach for. }
+  WriteFileText(JoinPath(AppDir, 'app.json'),
+    '{"name":"Typed","type":"html","entry":"index.html"}');
+  ExpectTrue(GetApp('spam-filter', Info), 'a "type" manifest loads');
+  ExpectTrue(Info.Kind = akHtml, 'and "type" reads as a synonym for "kind"');
+
+  { An explicit kind is the author's call and is NOT second-guessed, even
+    when the file would suggest otherwise. }
+  WriteFileText(JoinPath(AppDir, 'app.json'),
+    '{"name":"Strict","kind":"page","entry":"index.html"}');
+  ExpectTrue(GetApp('spam-filter', Info), 'an explicit kind loads');
+  ExpectTrue(Info.Kind = akPage,
+             'and stays page even though the file has a script');
+
+  { A run command means a program, and one WITHOUT a command is not
+    runnable however it is labelled -- that is the 400 this prevents. }
+  WriteFileText(JoinPath(AppDir, 'app.json'),
+    '{"name":"Prog","entry":"main.py","run":"python3 main.py"}');
+  ExpectTrue(GetApp('spam-filter', Info), 'a run manifest loads');
+  ExpectTrue(Info.Kind = akPython, 'a .py entry with a command is python');
+  ExpectTrue(AppIsRunnable(Info), 'and is runnable');
+
+  { A command-less PYTHON app is still runnable, because PlannedCommand
+    synthesises `python3 <entry>` for exactly this case. The predicate has to
+    agree with the runner or it takes the Run button away from apps that have
+    always worked. }
+  WriteFileText(JoinPath(AppDir, 'app.json'),
+    '{"name":"Implicit","kind":"python","entry":"main.py"}');
+  ExpectTrue(GetApp('spam-filter', Info), 'a command-less python manifest loads');
+  ExpectTrue(AppIsRunnable(Info),
+             'and is runnable -- the runner synthesises python3 main.py');
+
+  { The other process kinds have nothing to synthesise, so no command really
+    does mean no Run button -- that is the 400 this prevents. }
+  WriteFileText(JoinPath(AppDir, 'app.json'),
+    '{"name":"Broken","kind":"fpc","entry":"main.pas"}');
+  ExpectTrue(GetApp('spam-filter', Info), 'a command-less fpc manifest loads');
+  ExpectTrue(not AppIsRunnable(Info),
+             'but is NOT runnable -- the runner would refuse it');
+
+  { Restore something sane for the assertions that follow. }
+  WriteFileText(JoinPath(AppDir, 'app.json'),
+    '{"name":"Spam Filter","kind":"html","entry":"index.html"}');
+
   (* CONSENT. StartApp runs the manifest's `build` line through a shell
      before the run command, on the same single approval -- so a plan that
      showed only the run line would let a model-authored manifest hide

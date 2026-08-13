@@ -1838,6 +1838,10 @@ begin
         Root.PutStr ('icon',   Info.Icon);
         Root.PutBool('ready',  Info.EntryExists);
         Root.PutBool('servable', AppIsServable(Info));
+        { What the runner would ACTUALLY do. A client that decides from
+          `kind` alone offers Run for a process app with no command and
+          gets a 400 the user can do nothing with. }
+        Root.PutBool('runnable', AppIsRunnable(Info));
         { Declared permissions travel to the client so the desktop can show
           them before the user opens or runs the app. }
         Root.PutStr ('network', Info.Network);
