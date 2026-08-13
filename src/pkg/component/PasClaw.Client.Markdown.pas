@@ -94,56 +94,122 @@ begin
   Result := Result + Rest;
 end;
 
-{ [text](url) -> an anchor. Only http/https/mailto: a javascript: URL in a
-  model reply is either a mistake or an attack, and neither should be
-  clickable. }
-function LinkUp(const S: string): string;
-var
-  P, Close_, Open_, End_: Integer;
-  Text_, URL, Low_: string;
-begin
-  Result := S;
-  P := 1;
-  repeat
-    P := PosEx('[', Result, P);
-    if P = 0 then Break;
-    Close_ := PosEx(']', Result, P);
-    if Close_ = 0 then Break;
-    Open_ := Close_ + 1;
-    if (Open_ > Length(Result)) or (Result[Open_] <> '(') then
-    begin
-      P := Close_ + 1;
-      Continue;
-    end;
-    End_ := PosEx(')', Result, Open_);
-    if End_ = 0 then Break;
-    Text_ := Copy(Result, P + 1, Close_ - P - 1);
-    URL   := Trim(Copy(Result, Open_ + 1, End_ - Open_ - 1));
-    Low_  := LowerCase(URL);
-    if (Pos('http://', Low_) = 1) or (Pos('https://', Low_) = 1) or
-       (Pos('mailto:', Low_) = 1) then
-    begin
-      Result := Copy(Result, 1, P - 1) +
-                '<a href="' + URL + '">' + Text_ + '</a>' +
-                Copy(Result, End_ + 1, MaxInt);
-      P := P + Length(Text_) + Length(URL) + 15;
-    end
-    else
-      P := Close_ + 1;      { not a URL we will make clickable }
-  until False;
-end;
+(* Inline markup within one already-escaped line.
 
-{ Inline markup within one already-escaped line. Code first: text inside
-  backticks must not then be read as bold or italic. }
+   Doing this as a chain of passes over the same string was wrong, and
+   quietly so. Each pass ran over the OUTPUT of the last, so the two things
+   that are supposed to be literal were not:
+
+     `**x**`                  the emphasis pass reached inside the code
+                              span and bolded it
+     [d](https://e.com/a_b_c) the italic pass ate the underscores in the
+                              URL, and LinkUp then linked a mangled one
+
+   Both are ordinary in model output -- code samples contain asterisks, and
+   real URLs contain underscores. So the two protected things are lifted
+   out FIRST, replaced by placeholders that contain no markdown characters,
+   and put back after the emphasis passes have run. A placeholder uses a
+   control character no escaped HTML text can contain, so it cannot be
+   produced by the input. *)
 function RenderInlineHTML(const S: string): string;
+const
+  Sentinel = #1;      { cannot appear: HtmlEscape ran, and this is a line }
+var
+  Held: TStringList;
+
+  { Park a finished fragment and return its placeholder. }
+  function Hold(const Fragment: string): string;
+  begin
+    Held.Add(Fragment);
+    Result := Sentinel + IntToStr(Held.Count - 1) + Sentinel;
+  end;
+
+  { Pull out `code` spans, already rendered. }
+  function HoldCode(const T: string): string;
+  var
+    P, Q: Integer;
+    Rest: string;
+  begin
+    Result := '';
+    Rest := T;
+    repeat
+      P := Pos('`', Rest);
+      if P = 0 then Break;
+      Q := PosEx('`', Rest, P + 1);
+      if Q = 0 then Break;                { unpaired -- leave it alone }
+      Result := Result + Copy(Rest, 1, P - 1) +
+                Hold('<code>' + Copy(Rest, P + 1, Q - P - 1) + '</code>');
+      Rest := Copy(Rest, Q + 1, MaxInt);
+    until False;
+    Result := Result + Rest;
+  end;
+
+  { Pull out whole links, already rendered, so neither the visible text nor
+    the URL is touched by what follows. }
+  function HoldLinks(const T: string): string;
+  var
+    P, Close_, Open_, End_: Integer;
+    Text_, URL, Low_, Rest: string;
+  begin
+    Result := '';
+    Rest := T;
+    repeat
+      P := Pos('[', Rest);
+      if P = 0 then Break;
+      Close_ := PosEx(']', Rest, P);
+      if Close_ = 0 then Break;
+      Open_ := Close_ + 1;
+      if (Open_ > Length(Rest)) or (Rest[Open_] <> '(') then
+      begin
+        Result := Result + Copy(Rest, 1, Close_);
+        Rest := Copy(Rest, Close_ + 1, MaxInt);
+        Continue;
+      end;
+      End_ := PosEx(')', Rest, Open_);
+      if End_ = 0 then Break;
+      Text_ := Copy(Rest, P + 1, Close_ - P - 1);
+      URL   := Trim(Copy(Rest, Open_ + 1, End_ - Open_ - 1));
+      Low_  := LowerCase(URL);
+      if (Pos('http://', Low_) = 1) or (Pos('https://', Low_) = 1) or
+         (Pos('mailto:', Low_) = 1) then
+        Result := Result + Copy(Rest, 1, P - 1) +
+                  Hold('<a href="' + URL + '">' + Text_ + '</a>')
+      else
+        { Not a scheme we will make clickable: keep the characters, drop
+          nothing, and let the emphasis passes treat it as ordinary text. }
+        Result := Result + Copy(Rest, 1, End_);
+      Rest := Copy(Rest, End_ + 1, MaxInt);
+    until False;
+    Result := Result + Rest;
+  end;
+
+  { Put the parked fragments back. }
+  function Restore(const T: string): string;
+  var
+    I: Integer;
+  begin
+    Result := T;
+    for I := 0 to Held.Count - 1 do
+      Result := StringReplace(Result, Sentinel + IntToStr(I) + Sentinel,
+                              Held[I], [rfReplaceAll]);
+  end;
+
 begin
-  Result := WrapPairs(S, '`', 'code');
-  Result := WrapPairs(Result, '**', 'strong');
-  Result := WrapPairs(Result, '__', 'strong');
-  Result := WrapPairs(Result, '*', 'em');
-  Result := WrapPairs(Result, '_', 'em');
-  Result := WrapPairs(Result, '~~', 'del');
-  Result := LinkUp(Result);
+  Held := TStringList.Create;
+  try
+    { Order matters: links first, so a URL containing a backtick cannot be
+      mistaken for a code span. }
+    Result := HoldLinks(S);
+    Result := HoldCode(Result);
+    Result := WrapPairs(Result, '**', 'strong');
+    Result := WrapPairs(Result, '__', 'strong');
+    Result := WrapPairs(Result, '*', 'em');
+    Result := WrapPairs(Result, '_', 'em');
+    Result := WrapPairs(Result, '~~', 'del');
+    Result := Restore(Result);
+  finally
+    Held.Free;
+  end;
 end;
 
 function IsBullet(const L: string; out Body: string): Boolean;

@@ -111,6 +111,32 @@ begin
   H := MarkdownToHTML('```'#10'<script>x</script>'#10'```');
   ExpectLacks(H, '<script>', 'a script tag inside a fence is still escaped');
 
+  { ------------------------------------- protected spans stay protected -- }
+  (* Each inline pass used to run over the previous pass's OUTPUT, so the
+     two things that must stay literal did not. Both cases are ordinary in
+     model output: code samples contain asterisks, real URLs contain
+     underscores. *)
+  H := MarkdownToHTML('use `**not bold**` here');
+  ExpectHas(H, '<code>**not bold**</code>',
+            'emphasis does not reach inside a code span');
+  ExpectLacks(H, '<strong>not bold</strong>',
+              'and the asterisks are not markup');
+
+  H := MarkdownToHTML('[docs](https://example.com/a_b_c)');
+  ExpectHas(H, 'href="https://example.com/a_b_c"',
+            'underscores in a URL survive the italic pass');
+  ExpectLacks(H, '<em>b</em>', 'they are not read as emphasis');
+
+  H := MarkdownToHTML('see [a_b](https://e.com/x_y) and *real* emphasis');
+  ExpectHas(H, 'href="https://e.com/x_y"', 'the URL is intact');
+  ExpectHas(H, '<em>real</em>', 'while emphasis outside a link still works');
+
+  { A code span next to a link: neither may capture the other. }
+  H := MarkdownToHTML('`a` then [t](https://e.com/p) then `b`');
+  ExpectHas(H, '<code>a</code>', 'first code span');
+  ExpectHas(H, '<code>b</code>', 'second code span');
+  ExpectHas(H, 'href="https://e.com/p"', 'and the link between them');
+
   { ------------------------------------------------ nothing disappears -- }
   { An unmatched marker is a character, not an instruction. }
   H := MarkdownToHTML('2 * 3 = 6');

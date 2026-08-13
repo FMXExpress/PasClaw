@@ -312,6 +312,7 @@ type
     { ---- Browser ---- }
     procedure OpenBrowser(const PageId: string);
     procedure BrowserNewTabClick(Sender: TObject);
+    procedure ShowBlankTab;
     procedure BrowserTabChange(Sender: TObject);
     function NewBrowserTab(const Caption: string): Integer;
     procedure BrowserSearchClick(Sender: TObject);
@@ -319,6 +320,7 @@ type
     procedure BrowserPromoteClick(Sender: TObject);
     procedure RunPageQuery(Kind: TPageKindSel);
     procedure ShowPage(const PageId: string);
+    procedure ShowPageInTab(const PageId: string; TabIndex: Integer);
     procedure ShowProgress(const Caption, Text_: string);
     procedure CloseProgress;
 
@@ -412,6 +414,8 @@ const
   { One menu row: tall enough to hit with a mouse, short enough that the
     whole launcher fits without scrolling on an ordinary board. }
   MenuRowHeight = 22;
+  { Marks a chat transcript that is hidden because its turn is streaming. }
+  StreamingTag = 'streaming';
 
 { Conditional string. StrUtils has one; a local helper keeps this unit's
   uses clause to what it actually needs. Declared here, above every caller,
@@ -2130,6 +2134,8 @@ var
   Row: TProjectRow;
   Title: string;
   View: TWebBrowser;
+  ChatHost: TLayout;
+  ChatSnap: TImage;
 begin
   if FChatWins.TryGetValue(Project, W) and (W <> nil) then
   begin
@@ -2183,17 +2189,38 @@ begin
   Input.TextSettings.WordWrap := True;
   FChatInputs.AddOrSetValue(Project, Input);
 
-  { The settled transcript, formatted. Created before the memo so the memo
-    sits on top of it while streaming. }
+  (* Host + snapshot, the same arrangement the app and Browser windows use.
+
+     TWebBrowser is a NATIVE control: it paints above all FMX content, so an
+     inactive window would keep showing its transcript on top of whatever
+     covers it. BrowserActiveChanged freezes it into a TImage when the
+     window loses focus -- but only for browsers it can find, which means
+     living inside a host layout under W.Client, being registered in
+     FSnapshots, and the window actually raising the event. Adding it to
+     FBrowsers alone did none of those. *)
+  W.OnActiveChanged := BrowserActiveChanged;
+
+  ChatHost := TLayout.Create(W);
+  ChatHost.Parent := W.Client;
+  ChatHost.Align := TAlignLayout.Client;
+
+  ChatSnap := TImage.Create(W);
+  ChatSnap.Parent := ChatHost;
+  ChatSnap.Align := TAlignLayout.Client;
+  ChatSnap.WrapMode := TImageWrapMode.Stretch;
+  ChatSnap.Visible := False;
+
+  { The settled transcript, formatted. }
   View := TWebBrowser.Create(W);
-  View.Parent := W.Client;
+  View.Parent := ChatHost;
   View.Align := TAlignLayout.Client;
   FChatViews.AddOrSetValue(Project, View);
   FBrowsers.Add(View);
+  FSnapshots.AddOrSetValue(View, ChatSnap);
 
   { The live one. Same slot, shown only while a turn is in flight. }
   Log := TMemo.Create(W);
-  Log.Parent := W.Client;
+  Log.Parent := ChatHost;
   Log.Align := TAlignLayout.Client;
   Log.ReadOnly := True;
   Log.TextSettings.WordWrap := True;
@@ -2439,7 +2466,12 @@ begin
   if FChatLogs.TryGetValue(Project, M) and (M <> nil) then
     M.Visible := Streaming;
   if FChatViews.TryGetValue(Project, View) and (View <> nil) then
+  begin
     View.Visible := not Streaming;
+    { Marked so the focus handler does not un-hide the transcript over the
+      live memo when the window is clicked mid-turn. }
+    if Streaming then View.TagString := StreamingTag else View.TagString := '';
+  end;
 end;
 
 procedure TFormMain.ChatChunk(const Chunk: string; var Abort: Boolean);
@@ -2648,7 +2680,9 @@ begin
     if W.Active then
     begin
       Snap.Visible := False;
-      B.Visible := True;
+      { A chat window streaming a reply is showing its memo; restoring the
+        transcript here would paint it over the live text. }
+      B.Visible := B.TagString <> StreamingTag;
     end
     else
     begin
@@ -3602,9 +3636,10 @@ begin
   end;
 end;
 
-procedure TFormMain.BrowserNewTabClick(Sender: TObject);
+{ What an empty tab looks like. Shared by New and by selecting one, which
+  is what stopped the two from drifting apart. }
+procedure TFormMain.ShowBlankTab;
 begin
-  NewBrowserTab('New tab');
   FCurrentPage := '';
   if FBrowserView <> nil then
     FBrowserView.LoadFromStrings(
@@ -3613,6 +3648,13 @@ begin
         StyleColor('titleA', '#000080'), StyleColor('light', '#e8e8e8')), '');
   if FBrowserPromote <> nil then FBrowserPromote.Enabled := False;
   if FBrowserStatus <> nil then FBrowserStatus.Text := '';
+  if FBrowserWin <> nil then FBrowserWin.Caption := 'Browser';
+end;
+
+procedure TFormMain.BrowserNewTabClick(Sender: TObject);
+begin
+  NewBrowserTab('New tab');
+  ShowBlankTab;
   if FBrowserQuery <> nil then FBrowserQuery.SetFocus;
 end;
 
@@ -3627,11 +3669,38 @@ begin
   if (I < 0) or (I >= FBrowserTabPages.Count) then Exit;
   if FBrowserTabPages[I] = '' then
   begin
-    FCurrentPage := '';
-    if FBrowserPromote <> nil then FBrowserPromote.Enabled := False;
+    { Clear the VIEW too, not just the bookkeeping. Leaving the last page
+      on screen under an empty tab meant the user could ask a follow-up
+      while apparently looking at that page, and get a new topic instead --
+      the one thing tabs exist to make unambiguous. }
+    ShowBlankTab;
     Exit;
   end;
   ShowPage(FBrowserTabPages[I]);
+end;
+
+(* Put a finished page in the tab that asked for it.
+
+   Selecting that tab as well, deliberately: the answer is what the user
+   asked for and hiding it in a background tab to avoid disturbing them
+   would be its own surprise. What must NOT happen is the result landing in
+   a tab that asked something else. When the tab is gone -- closed while the
+   turn ran -- the page still opens, in whatever is current, rather than
+   being thrown away. *)
+procedure TFormMain.ShowPageInTab(const PageId: string; TabIndex: Integer);
+begin
+  if (FBrowserTabs <> nil) and (TabIndex >= 0) and
+     (TabIndex < FBrowserTabs.TabCount) and
+     (FBrowserTabs.TabIndex <> TabIndex) then
+  begin
+    FBrowserSwitching := True;      { this is not a user tab change }
+    try
+      FBrowserTabs.TabIndex := TabIndex;
+    finally
+      FBrowserSwitching := False;
+    end;
+  end;
+  ShowPage(PageId);
 end;
 
 procedure TFormMain.ShowPage(const PageId: string);
@@ -3695,18 +3764,24 @@ procedure TFormMain.RunPageQuery(Kind: TPageKindSel);
 var
   Query, Revise: string;
   Deep: Boolean;
+  FromTab: Integer;
 begin
   if FBrowserQuery = nil then Exit;
   Query := Trim(FBrowserQuery.Text);
   if Query = '' then Exit;
   Deep := Kind = pkeResearch;
 
-  (* A question asked with a page open is a follow-up to THAT page.
+  (* A question asked with a page open is a follow-up to THAT page, and the
+     answer belongs to the TAB it was asked from.
 
-     Captured here, on the UI thread, because the tab can change while the
-     turn runs -- and the answer belongs to the page the question was asked
-     from, not to whichever tab happens to be in front minutes later. *)
+     Both captured here, on the UI thread. A research turn runs for minutes
+     and the user is free to switch tabs or open a new one meanwhile;
+     capturing only the page meant the result landed in whatever tab
+     happened to be in front when it arrived, replacing an unrelated page
+     and leaving the next follow-up revising the wrong one. *)
   Revise := FCurrentPage;
+  FromTab := -1;
+  if FBrowserTabs <> nil then FromTab := FBrowserTabs.TabIndex;
 
   FBrowserSearch.Enabled := False;
   FBrowserDeep.Enabled := False;
@@ -3758,7 +3833,7 @@ begin
           if FBrowserSearch <> nil then FBrowserSearch.Enabled := True;
           if FBrowserDeep <> nil then FBrowserDeep.Enabled := True;
           if Ok then
-            ShowPage(Id)
+            ShowPageInTab(Id, FromTab)
           else if FBrowserStatus <> nil then
             FBrowserStatus.Text := 'Could not produce a page: ' + Err;
         end;
