@@ -210,13 +210,16 @@ function PortInUse(Port: Integer): Boolean;
 var
   C: TIdTCPClient;
 begin
-  Result := False;
   C := TIdTCPClient.Create(nil);
   try
-    C.Host := '127.0.0.1';
-    C.Port := Port;
-    C.ConnectTimeout := 250;
+    { The property writes are inside the try so every path out of this
+      function assigns Result exactly once -- a leading Result := False
+      would be dead on both branches below, which Delphi reports as
+      H2077. }
     try
+      C.Host := '127.0.0.1';
+      C.Port := Port;
+      C.ConnectTimeout := 250;
       C.Connect;
       Result := True;      { someone answered -- taken }
       C.Disconnect;
@@ -811,8 +814,10 @@ begin
     command, on the same consent -- so it belongs in the plan. Showing
     only the run line would let a model-authored manifest hide arbitrary
     shell in `build` behind a benign-looking confirmation. }
+  { sLineBreak, not LineEnding: the latter is FPC-only and this unit is
+    compiled by Delphi too. }
   if Trim(Info.Build) <> '' then
-    Result := Trim(Info.Build) + LineEnding + Result;
+    Result := Trim(Info.Build) + sLineBreak + Result;
   (* The port isn't claimed until the app starts, so show a placeholder a
      person reads as one -- the raw brace token in a consent prompt looks
      like the command is broken. Paren-star: the token itself would close a
