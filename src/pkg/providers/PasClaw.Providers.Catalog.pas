@@ -87,6 +87,24 @@ function AllProviderSpecs: TProviderSpecArray;
   kind exists. Convenience for callers that don't need the full spec. }
 function DefaultBaseFor(const Kind: string): string;
 
+(* The quick, cheap model of a provider family, or '' when we do not know
+   one.
+
+   Some work does not need the good model. A one-shot search page is a
+   summarise-and-format job: the flagship costs more, takes longer, and
+   produces a page no better than the small model's -- which is why the
+   hosted assistants people compare this to run their quick answers on a
+   Flash Lite or a mini. Deep research is the opposite and keeps the main
+   model; it plans, reads several sources and synthesises, which is exactly
+   the reasoning the big model is for.
+
+   Names, not capability probes: there is no API that answers "which of
+   your models is cheapest", so this is a table, and a table goes stale.
+   It is therefore the LAST resort -- an explicit fast_model, then the
+   auto-router's easy tier, then this -- and an unknown provider returns ''
+   so the caller keeps the model it already had rather than guessing. *)
+function FastModelFor(const Kind: string): string;
+
 implementation
 
 uses
@@ -394,6 +412,26 @@ begin
     end;
     Result[j] := Tmp;
   end;
+end;
+
+function FastModelFor(const Kind: string): string;
+var
+  K: string;
+begin
+  K := LowerCase(Trim(Kind));
+  if K = 'gemini' then Result := 'gemini-3.5-flash-lite'
+  else if K = 'anthropic' then Result := 'claude-haiku-4-5-20251001'
+  else if K = 'openai' then Result := 'gpt-4o-mini'
+  else if K = 'groq' then Result := 'llama-3.1-8b-instant'
+  else if K = 'mistral' then Result := 'mistral-small-latest'
+  else if K = 'deepseek' then Result := 'deepseek-chat'
+  else if K = 'together' then Result := 'meta-llama/Llama-3.2-3B-Instruct-Turbo'
+  else if K = 'openrouter' then Result := 'google/gemini-2.5-flash-lite'
+  else
+    { Unknown, or a proxy whose model names are the upstream's (litellm,
+      ollama, lmstudio, a local server): no guess is better than a wrong
+      one, and the caller keeps whatever it had. }
+    Result := '';
 end;
 
 function DefaultBaseFor(const Kind: string): string;

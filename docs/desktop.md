@@ -430,11 +430,22 @@ the state is on disk and cheap to re-read.
 
 ## Answer pages
 
+**Which model.** A search, data or report page runs on the *fast* model:
+these are summarise-and-format jobs, and the flagship makes them slower and
+dearer without making them better. The model is resolved as `fast_model`
+from config, then `auto_router.easy_model` when that router is on, then a
+known small model for the provider in use, then the main model unchanged —
+so it works out of the box and can be pinned. **Research keeps the main
+model**: it plans, reads several sources and synthesises, and downgrading
+that would show.
+
 **Follow-ups.** `POST /v1/pages` takes an optional `revise` naming a page
 this question continues. The generator is handed that document and returns a
 complete revised body — as a *new* page, because a page is the record of an
 answer at a time and editing it in place would falsify it. An id naming no
 page is treated as an ordinary new question rather than failing the request.
+A revision runs on whichever model its *kind* calls for, so a follow-up on a
+search page stays quick and one on a report stays thorough.
 
 
 A search or a question about your own data ends as an HTML **document**, not
