@@ -1,0 +1,29 @@
+; Camouflage 8 -- from classic-stylesheets themes/cde/skins/camouflage-8.css
+name=Camouflage 8
+family=cde
+[colors]
+accent=ACBEB4
+darker=47473C
+darkshadow=47473C
+desktop=907B7B
+face=8E8E77
+faceactive=787865
+focusring=ACBEB4
+frameface=8E8E77
+highlight=CCCCC2
+hover=ACBEB4
+inputdark=41414E
+inputlight=C7C7D2
+light=CCCCC2
+progress=ACBEB4
+shadow=47473C
+text=FFFFFF
+titleA=ACBEB4
+titleAText=000000
+titleAdark=5D6761
+titleAlight=DBE3DE
+titleI=6E7D76
+titleIText=FFFFFF
+titleIdark=363D3A
+titleIlight=BDC4C0
+window=82829B

@@ -1,0 +1,25 @@
+; Spruce -- from classic-stylesheets themes/win9x/skins/spruce.css
+name=Spruce
+family=win9x
+[colors]
+black=000000
+darker=000000
+darkshadow=000000
+desktop=213F21
+dot=000000
+face=A2C8A9
+frameface=A2C8A9
+highlight=D0E3D3
+light=A2C8A9
+progress=A0A848
+selection=A0A848
+selectiontext=FFFFFF
+shadow=599764
+text=000000
+titleA=599764
+titleA2=599764
+titleAText=FFFFFF
+titleI=808080
+titleI2=808080
+titleIText=D0E3D3
+window=FFFFFF

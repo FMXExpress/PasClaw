@@ -1,0 +1,29 @@
+; South West 8 -- from classic-stylesheets themes/cde/skins/south-west-8.css
+name=South West 8
+family=cde
+[colors]
+accent=FF7D79
+darker=5B3725
+darkshadow=5B3725
+desktop=C09B80
+face=B86F4B
+faceactive=9C5E3F
+focusring=FF7D79
+frameface=B86F4B
+highlight=DEBEAD
+hover=FF7D79
+inputdark=5B4644
+inputlight=DCCAC9
+light=DEBEAD
+progress=FF7D79
+shadow=5B3725
+text=FFFFFF
+titleA=FF7D79
+titleAText=FFFFFF
+titleAdark=874240
+titleAlight=FFC6C4
+titleI=A97561
+titleIText=FFFFFF
+titleIdark=543A30
+titleIlight=D8C0B7
+window=B18885

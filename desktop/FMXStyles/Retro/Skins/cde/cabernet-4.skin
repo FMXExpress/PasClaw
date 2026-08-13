@@ -1,0 +1,29 @@
+; Cabernet 4 -- from classic-stylesheets themes/cde/skins/cabernet-4.css
+name=Cabernet 4
+family=cde
+[colors]
+accent=D88775
+darker=30443C
+darkshadow=30443C
+desktop=456256
+face=638A7A
+faceactive=547567
+focusring=D88775
+frameface=638A7A
+highlight=B8CAC2
+hover=D88775
+inputdark=232C2D
+inputlight=ABB4B5
+light=B8CAC2
+progress=D88775
+shadow=30443C
+text=FFFFFF
+titleA=D88775
+titleAText=FFFFFF
+titleAdark=70463D
+titleAlight=EDCAC2
+titleI=638A7A
+titleIText=FFFFFF
+titleIdark=30443C
+titleIlight=B8CAC2
+window=4B5E61

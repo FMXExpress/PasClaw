@@ -1,0 +1,29 @@
+; Broica 8 -- from classic-stylesheets themes/cde/skins/broica-8.css
+name=Broica 8
+family=cde
+[colors]
+accent=EDA870
+darker=6B605B
+darkshadow=6B605B
+desktop=8998AA
+face=C6B2A8
+faceactive=A8978E
+focusring=EDA870
+frameface=C6B2A8
+highlight=E6DDD9
+hover=EDA870
+inputdark=32363F
+inputlight=BABDC6
+light=E6DDD9
+progress=EDA870
+shadow=6B605B
+text=FFFFFF
+titleA=EDA870
+titleAText=FFFFFF
+titleAdark=7F5A3C
+titleAlight=F7D9C1
+titleI=999999
+titleIText=FFFFFF
+titleIdark=4F4F4F
+titleIlight=D2D2D2
+window=686F82

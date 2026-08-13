@@ -17,8 +17,11 @@ again:
 cp <styles-repo>/Source/FMX.Retro*.pas desktop/retro/
 ```
 
-The `.style` files themselves are **not** vendored — they are 6.7 MB of
-runtime assets, not a build dependency. `FindStyleDir` in `uDesktopMain.pas`
-locates them at runtime (`$RETRO_STYLES_DIR`, then a walk up from the exe);
-without them the desktop still runs, in FireMonkey's default look, and the
-style picker says where to get them.
+The `.style` files are vendored too, from the same upstream, but they live
+in [`../FMXStyles/Retro`](../FMXStyles/Retro) rather than here — that path is
+what `FindStyleDir` looks for at runtime, and keeping the upstream layout
+means refreshing them is a straight copy:
+
+```sh
+cp -r <styles-repo>/FMXStyles/Retro desktop/FMXStyles/
+```

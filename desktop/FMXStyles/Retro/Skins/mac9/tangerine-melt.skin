@@ -1,0 +1,7 @@
+; Tangerine Melt -- from classic-stylesheets themes/macos9/skins/tangerine-melt.css
+name=Tangerine Melt
+family=mac9
+[colors]
+desktop=F8A73C
+progress=B5E040
+selection=FFFF99

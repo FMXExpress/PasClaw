@@ -1,0 +1,29 @@
+; Mustard 8 -- from classic-stylesheets themes/cde/skins/mustard-8.css
+name=Mustard 8
+family=cde
+[colors]
+accent=D5802E
+darker=453F52
+darkshadow=453F52
+desktop=4D648D
+face=887CA3
+faceactive=73698A
+focusring=D5802E
+frameface=887CA3
+highlight=C9C4D5
+hover=D5802E
+inputdark=2B3229
+inputlight=B3BAB1
+light=C9C4D5
+progress=D5802E
+shadow=453F52
+text=FFFFFF
+titleA=D5802E
+titleAText=FFFFFF
+titleAdark=6B4017
+titleAlight=ECC6A1
+titleI=B75F5F
+titleIText=FFFFFF
+titleIdark=5A2F2F
+titleIlight=DEB6B6
+window=5C6A58

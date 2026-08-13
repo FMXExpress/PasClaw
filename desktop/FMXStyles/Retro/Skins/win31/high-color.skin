@@ -1,0 +1,15 @@
+; High Color -- from classic-stylesheets themes/win3x/skins/high-color.css
+name=High Color
+family=win31
+[colors]
+desktop=A0A0A0
+frameface=C0C0C0
+progress=A0C8F0
+selection=A0C8F0
+selectiontext=000000
+text=000000
+titleA=A0C8F0
+titleAText=000000
+titleI=FFFFFF
+titleIText=000000
+window=FFFFFF

@@ -1,0 +1,25 @@
+; Teal 2000 -- from classic-stylesheets themes/win9x/skins/teal-2000.css
+name=Teal 2000
+family=win9x
+[colors]
+black=000000
+darker=000000
+darkshadow=000000
+desktop=004040
+dot=000000
+face=C0C0C0
+frameface=C0C0C0
+highlight=FFFFFF
+light=C0C0C0
+progress=008080
+selection=008080
+selectiontext=FFFFFF
+shadow=808080
+text=000000
+titleA=008080
+titleA2=00CCD8
+titleAText=FFFFFF
+titleI=808080
+titleI2=98C8B8
+titleIText=FFFBF0
+window=FFFFFF

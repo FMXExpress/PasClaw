@@ -1,0 +1,29 @@
+; Alpine 8 -- from classic-stylesheets themes/cde/skins/alpine-8.css
+name=Alpine 8
+family=cde
+[colors]
+accent=AFBFFB
+darker=634B3E
+darkshadow=634B3E
+desktop=7AB9D8
+face=BF9279
+faceactive=A27C66
+focusring=AFBFFB
+frameface=BF9279
+highlight=E2CFC4
+hover=AFBFFB
+inputdark=69696C
+inputlight=E3E4E6
+light=E2CFC4
+progress=AFBFFB
+shadow=634B3E
+text=000000
+titleA=AFBFFB
+titleAText=000000
+titleAdark=616A8C
+titleAlight=DDE4FD
+titleI=78AAB8
+titleIText=FFFFFF
+titleIdark=3E5960
+titleIlight=C3D9DF
+window=BFC0C5

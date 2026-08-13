@@ -1,0 +1,15 @@
+; Black Leather Jacket -- from classic-stylesheets themes/win3x/skins/black-leather-jacket.css
+name=Black Leather Jacket
+family=win31
+[colors]
+desktop=000000
+frameface=808080
+progress=000000
+selection=000000
+selectiontext=FFFFFF
+text=000000
+titleA=400080
+titleAText=FFFFFF
+titleI=808080
+titleIText=000000
+window=FFFFFF

@@ -1,0 +1,29 @@
+; Summer 8 -- from classic-stylesheets themes/cde/skins/summer-8.css
+name=Summer 8
+family=cde
+[colors]
+accent=FF5664
+darker=4A8280
+darkshadow=4A8280
+desktop=829FFF
+face=86EAE7
+faceactive=71C6C4
+focusring=FF5664
+frameface=86EAE7
+highlight=CCF6F4
+hover=FF5664
+inputdark=999999
+inputlight=CCCCCC
+light=CCF6F4
+progress=FF5664
+shadow=4A8280
+text=000000
+titleA=FF5664
+titleAText=FFFFFF
+titleAdark=822C33
+titleAlight=FFB4BA
+titleI=FFD690
+titleIText=000000
+titleIdark=8F7851
+titleIlight=FFEDD0
+window=FFFFFF

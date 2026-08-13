@@ -1,0 +1,29 @@
+; Summer 2 -- from classic-stylesheets themes/cde/skins/summer-2.css
+name=Summer 2
+family=cde
+[colors]
+accent=FFFFFF
+darker=455589
+darkshadow=455589
+desktop=829FFF
+face=829FFF
+faceactive=6E87D8
+focusring=FFFFFF
+frameface=829FFF
+highlight=C9D5FF
+hover=FFFFFF
+inputdark=455589
+inputlight=C9D5FF
+light=C9D5FF
+progress=FFFFFF
+shadow=455589
+text=FFFFFF
+titleA=FFFFFF
+titleAText=000000
+titleAdark=999999
+titleAlight=CCCCCC
+titleI=829FFF
+titleIText=FFFFFF
+titleIdark=455589
+titleIlight=C9D5FF
+window=829FFF

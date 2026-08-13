@@ -1,0 +1,29 @@
+; Golden 8 -- from classic-stylesheets themes/cde/skins/golden-8.css
+name=Golden 8
+family=cde
+[colors]
+accent=FAAD49
+darker=3B3E53
+darkshadow=3B3E53
+desktop=BE826F
+face=757CA6
+faceactive=63698D
+focusring=FAAD49
+frameface=757CA6
+highlight=C1C4D7
+hover=FAAD49
+inputdark=212E24
+inputlight=A9B6AC
+light=C1C4D7
+progress=FAAD49
+shadow=3B3E53
+text=FFFFFF
+titleA=FAAD49
+titleAText=FFFFFF
+titleAdark=855C26
+titleAlight=FCDBB0
+titleI=4D648D
+titleIText=FFFFFF
+titleIdark=253043
+titleIlight=ADB7CA
+window=47634F

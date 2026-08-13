@@ -17,28 +17,33 @@ fill the screen and *be* the desktop.
 - **RAD Studio / Delphi** with FireMonkey (Win64, macOS or Linux). This is a
   Delphi project; FPC has no FMX, so it is not part of `make`.
 
-That is the whole list. Everything the project compiles is in this
-repository: the three PasClaw units it shares with the CLI, and the retro
-window manager vendored under [`retro/`](retro/) (MIT, from
-[Cross-Platform-Retro-OS-Styles](https://github.com/FMXExpress/Cross-Platform-Retro-OS-Styles)
-— see [`retro/README.md`](retro/README.md) for how to refresh it). Clone
-PasClaw, open the `.dproj`, build.
+That is the whole list. Clone PasClaw, open the `.dproj`, build, run — the
+27 styles are there and the picker is populated on first launch. Everything
+the project needs is in this repository:
 
-### Styles are optional
+| What | Where | From |
+|---|---|---|
+| Shared client library | `../src/pkg/{component,json,utils}` | this repo |
+| Retro window manager | [`retro/`](retro/) | vendored, MIT |
+| 27 styles + 221 skins | [`FMXStyles/Retro/`](FMXStyles/Retro) | vendored, MIT |
 
-The `.style` files are **not** vendored — 6.7 MB of runtime assets is not a
-build dependency. Without them the desktop runs in FireMonkey's default look
-and Display Properties says where to get them. To get the 27 retro looks,
-clone the styles repo anywhere and point at it:
+Both vendored pieces come from
+[Cross-Platform-Retro-OS-Styles](https://github.com/FMXExpress/Cross-Platform-Retro-OS-Styles);
+[`retro/README.md`](retro/README.md) says how to refresh either.
+
+### Using a different styles checkout
+
+If you are working on the styles themselves, point the app at your copy and
+it will use that instead of the vendored set:
 
 ```sh
-git clone https://github.com/FMXExpress/Cross-Platform-Retro-OS-Styles.git
-export RETRO_STYLES_DIR=<that checkout>/FMXStyles/Retro
+export RETRO_STYLES_DIR=<styles-repo>/FMXStyles/Retro
 ```
 
-A sibling checkout is found without the variable: `FindStyleDir` walks up
-from the exe looking for `FMXStyles/Retro` or
-`Cross-Platform-Retro-OS-Styles/FMXStyles/Retro`.
+Without the variable, `FindStyleDir` walks up from the exe looking for
+`FMXStyles/Retro` — which finds the vendored copy — or
+`Cross-Platform-Retro-OS-Styles/FMXStyles/Retro`, which finds a sibling
+checkout.
 
 ## Running
 
@@ -56,7 +61,7 @@ Environment:
 |---|---|
 | `PASCLAW_GATEWAY` | Gateway base URL (default `http://127.0.0.1:8088`) |
 | `PASCLAW_TOKEN` | Bearer token, when the gateway is token-gated |
-| `RETRO_STYLES_DIR` | Path to `FMXStyles/Retro` if it isn't a sibling checkout |
+| `RETRO_STYLES_DIR` | A styles directory to use instead of the vendored one |
 
 ## What's on screen
 
@@ -105,7 +110,9 @@ desktop in the browser and this app opens with it.
   and taskbar docking per style. This unit builds a client on top of them.
   They are copied into `retro/`, not edited: a `..\..\` path to a sibling
   checkout meant the project only opened on a machine that happened to have
-  one, and failed with `F1026 File not found` everywhere else.
+  one, and failed with `F1026 File not found` everywhere else. The styles
+  are copied for the same reason in its runtime form — the app compiled but
+  came up with no looks to switch between, which is not a working desktop.
 - **Dialogs are `TRetroWindow`s**, not `InputQuery` / `MessageDlg`. They wear
   the current style like everything else, and they are the same furniture the
   agent's own questions will use when the period-native output work lands

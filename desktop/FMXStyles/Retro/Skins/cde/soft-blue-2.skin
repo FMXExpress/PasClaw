@@ -1,0 +1,29 @@
+; Soft Blue 2 -- from classic-stylesheets themes/cde/skins/soft-blue-2.css
+name=Soft Blue 2
+family=cde
+[colors]
+accent=6C6C6C
+darker=2E436A
+darkshadow=2E436A
+desktop=5B85D0
+face=5B85D0
+faceactive=4D71B0
+focusring=6C6C6C
+frameface=5B85D0
+highlight=B6C8EA
+hover=6C6C6C
+inputdark=2E436A
+inputlight=B6C8EA
+light=B6C8EA
+progress=6C6C6C
+shadow=2E436A
+text=FFFFFF
+titleA=6C6C6C
+titleAText=FFFFFF
+titleAdark=343434
+titleAlight=BBBBBB
+titleI=5B85D0
+titleIText=FFFFFF
+titleIdark=2E436A
+titleIlight=B6C8EA
+window=5B85D0

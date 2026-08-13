@@ -1,0 +1,29 @@
+; Mustard 4 -- from classic-stylesheets themes/cde/skins/mustard-4.css
+name=Mustard 4
+family=cde
+[colors]
+accent=D5802E
+darker=5A2F2F
+darkshadow=5A2F2F
+desktop=4D648D
+face=B75F5F
+faceactive=9B5050
+focusring=D5802E
+frameface=B75F5F
+highlight=DEB6B6
+hover=D5802E
+inputdark=2B3229
+inputlight=B3BAB1
+light=DEB6B6
+progress=D5802E
+shadow=5A2F2F
+text=FFFFFF
+titleA=D5802E
+titleAText=FFFFFF
+titleAdark=6B4017
+titleAlight=ECC6A1
+titleI=B75F5F
+titleIText=FFFFFF
+titleIdark=5A2F2F
+titleIlight=DEB6B6
+window=5C6A58

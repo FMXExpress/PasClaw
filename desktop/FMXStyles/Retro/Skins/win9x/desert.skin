@@ -1,0 +1,25 @@
+; Desert -- from classic-stylesheets themes/win9x/skins/desert.css
+name=Desert
+family=win9x
+[colors]
+black=000000
+darker=000000
+darkshadow=000000
+desktop=A28D68
+dot=000000
+face=D5CCBB
+frameface=D5CCBB
+highlight=EAE6DD
+light=D5CCBB
+progress=008080
+selection=008080
+selectiontext=FFFFFF
+shadow=A28D68
+text=000000
+titleA=008080
+titleA2=008080
+titleAText=FFFFFF
+titleI=A28D68
+titleI2=A28D68
+titleIText=FFFFFF
+window=FFFFFF

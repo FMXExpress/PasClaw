@@ -1,0 +1,34 @@
+; Ink and Milk -- Claude Code color scheme
+name=Ink and Milk
+family=paper
+[colors]
+accent=191919
+black=3D3D3D
+btnborder=191919
+btngrad1=FFFFFF
+btngrad2=F4F4F4
+capglyph=8A8A8A
+darker=E8E8E8
+desktop=E8E8E8
+dot=191919
+face=F4F4F4
+focusring=191919
+frameface=F4F4F4
+highlight=191919
+hover=191919
+inputborder=C4C4C4
+light=FFFFFF
+pressface=D4D4D4
+progress=191919
+selection=191919
+selectiontext=FFFFFF
+shadow=D4D4D4
+text=111111
+titleA=191919
+titleA2=2E2E2E
+titleAText=FFFFFF
+titleI=FAFAFA
+titleI2=F4F4F4
+titleIText=8A8A8A
+track=E8E8E8
+window=FFFFFF

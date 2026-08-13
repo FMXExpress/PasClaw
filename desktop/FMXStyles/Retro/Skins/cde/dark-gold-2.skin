@@ -1,0 +1,29 @@
+; Dark Gold 2 -- from classic-stylesheets themes/cde/skins/dark-gold-2.css
+name=Dark Gold 2
+family=cde
+[colors]
+accent=FFFFE2
+darker=272834
+darkshadow=272834
+desktop=535570
+face=535570
+faceactive=46485F
+focusring=FFFFE2
+frameface=535570
+highlight=AFB0BC
+hover=FFFFE2
+inputdark=272834
+inputlight=AFB0BC
+light=AFB0BC
+progress=FFFFE2
+shadow=272834
+text=FFFFFF
+titleA=FFFFE2
+titleAText=000000
+titleAdark=999987
+titleAlight=CCCCB4
+titleI=535570
+titleIText=FFFFFF
+titleIdark=272834
+titleIlight=AFB0BC
+window=535570

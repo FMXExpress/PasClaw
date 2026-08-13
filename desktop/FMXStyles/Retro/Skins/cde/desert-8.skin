@@ -1,0 +1,29 @@
+; Desert 8 -- from classic-stylesheets themes/cde/skins/desert-8.css
+name=Desert 8
+family=cde
+[colors]
+accent=E5B793
+darker=545C60
+darkshadow=545C60
+desktop=8C8F98
+face=9FAEB5
+faceactive=879399
+focusring=E5B793
+frameface=9FAEB5
+highlight=D5DBDE
+hover=E5B793
+inputdark=979796
+inputlight=CACAC8
+light=D5DBDE
+progress=E5B793
+shadow=545C60
+text=000000
+titleA=E5B793
+titleAText=000000
+titleAdark=7D6450
+titleAlight=F3E0D0
+titleI=C2BBA7
+titleIText=000000
+titleIdark=69655A
+titleIlight=E4E1D9
+window=FDFDFA

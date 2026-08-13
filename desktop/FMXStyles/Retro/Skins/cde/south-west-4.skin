@@ -1,0 +1,29 @@
+; South West 4 -- from classic-stylesheets themes/cde/skins/south-west-4.css
+name=South West 4
+family=cde
+[colors]
+accent=FF7D79
+darker=543A30
+darkshadow=543A30
+desktop=C09B80
+face=A97561
+faceactive=8F6352
+focusring=FF7D79
+frameface=A97561
+highlight=D8C0B7
+hover=FF7D79
+inputdark=5B4644
+inputlight=DCCAC9
+light=D8C0B7
+progress=FF7D79
+shadow=543A30
+text=FFFFFF
+titleA=FF7D79
+titleAText=FFFFFF
+titleAdark=874240
+titleAlight=FFC6C4
+titleI=A97561
+titleIText=FFFFFF
+titleIdark=543A30
+titleIlight=D8C0B7
+window=B18885

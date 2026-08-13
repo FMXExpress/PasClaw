@@ -1,0 +1,29 @@
+; Gray Scale 4 -- from classic-stylesheets themes/cde/skins/gray-scale-4.css
+name=Gray Scale 4
+family=cde
+[colors]
+accent=C3C3C3
+darker=3B3A3A
+darkshadow=3B3A3A
+desktop=BDBDBD
+face=787777
+faceactive=666565
+focusring=C3C3C3
+frameface=787777
+highlight=C1C1C1
+hover=C3C3C3
+inputdark=4C4C4B
+inputlight=CFCFCF
+light=C1C1C1
+progress=C3C3C3
+shadow=3B3A3A
+text=FFFFFF
+titleA=C3C3C3
+titleAText=000000
+titleAdark=6B6B6B
+titleAlight=E5E5E5
+titleI=787777
+titleIText=FFFFFF
+titleIdark=3B3A3A
+titleIlight=C1C1C1
+window=949493

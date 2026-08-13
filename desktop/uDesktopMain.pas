@@ -15,10 +15,11 @@ unit uDesktopMain;
   real OS windows behind a real style engine, and F11 kiosk mode so the app
   can BE the desktop.
 
-  The window manager itself (FMX.RetroWindows / FMX.RetroSkins) is vendored
-  under desktop/retro/ so this project builds from a plain checkout. The
-  .style files are runtime assets, not a build dependency: FindStyleDir
-  locates them if they are around, and the desktop runs without them.
+  Both halves of that are vendored so the app works from a plain checkout:
+  the window manager under desktop/retro/, and the 27 styles with their
+  skins under desktop/FMXStyles/Retro/. FindStyleDir still honours
+  $RETRO_STYLES_DIR and a sibling checkout of the styles repo, for anyone
+  developing the styles themselves.
 *)
 
 interface
@@ -294,8 +295,11 @@ begin
   if (Env <> '') and TDirectory.Exists(Env) then
     Exit(Env);
 
-  { Otherwise walk up from the exe looking for the sibling checkout, the same
-    way the RetroDesktop demo does. }
+  { Otherwise walk up from the exe. The styles ship in desktop\FMXStyles\
+    Retro, which this finds three levels up from the default
+    desktop\<Platform>\<Config>\ output directory; the second form still
+    picks up a sibling checkout of the styles repo, the way the RetroDesktop
+    demo does, so a developer working from that checkout is unaffected. }
   Dir := ExtractFilePath(ParamStr(0));
   for I := 1 to 7 do
   begin

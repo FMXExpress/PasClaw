@@ -1,0 +1,29 @@
+; Sky Red 4 -- from classic-stylesheets themes/cde/skins/sky-red-4.css
+name=Sky Red 4
+family=cde
+[colors]
+accent=CC686F
+darker=5F686A
+darkshadow=5F686A
+desktop=6DA7B4
+face=AFC0C2
+faceactive=94A3A4
+focusring=CC686F
+frameface=AFC0C2
+highlight=DCE4E4
+hover=CC686F
+inputdark=828882
+inputlight=F2F6F2
+light=DCE4E4
+progress=CC686F
+shadow=5F686A
+text=000000
+titleA=CC686F
+titleAText=FFFFFF
+titleAdark=673438
+titleAlight=E8BBBE
+titleI=AFC0C2
+titleIText=000000
+titleIdark=5F686A
+titleIlight=DCE4E4
+window=E1EBE1

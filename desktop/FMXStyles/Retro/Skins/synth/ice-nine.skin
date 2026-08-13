@@ -1,0 +1,34 @@
+; Ice Nine -- NEON/OS color scheme
+name=Ice Nine
+family=synth
+[colors]
+accent=E4F6FF
+black=DCEBFA
+btnborder=8FD8FF
+btngrad1=22334D
+btngrad2=142033
+capglyph=7690AD
+darker=060B14
+desktop=060B14
+dot=E4F6FF
+face=142033
+focusring=8FD8FF
+frameface=142033
+highlight=8FD8FF
+hover=E4F6FF
+inputborder=3E5C82
+light=22334D
+pressface=33496B
+progress=E4F6FF
+selection=8FD8FF
+selectiontext=07101C
+shadow=33496B
+text=DCEBFA
+titleA=8FD8FF
+titleA2=C9E9FF
+titleAText=07101C
+titleI=16243A
+titleI2=142033
+titleIText=7690AD
+track=060B14
+window=0C1422

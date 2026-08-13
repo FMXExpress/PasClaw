@@ -1,0 +1,25 @@
+; Rainy Day -- from classic-stylesheets themes/win9x/skins/rainy-day.css
+name=Rainy Day
+family=win9x
+[colors]
+black=000000
+darker=000000
+darkshadow=000000
+desktop=000000
+dot=000000
+face=8098B0
+frameface=8098B0
+highlight=C0CCD8
+light=8098B0
+progress=506478
+selection=506478
+selectiontext=FFFFFF
+shadow=4E657C
+text=000000
+titleA=4F647E
+titleA2=4F647E
+titleAText=FFFFFF
+titleI=808080
+titleI2=808080
+titleIText=C1CCD9
+window=FFFFFF

@@ -1,0 +1,25 @@
+; Eggplant -- from classic-stylesheets themes/win9x/skins/eggplant.css
+name=Eggplant
+family=win9x
+[colors]
+black=000000
+darker=000000
+darkshadow=000000
+desktop=400040
+dot=000000
+face=90B0A8
+frameface=90B0A8
+highlight=C8D8D8
+light=90B0A8
+progress=387470
+selection=387470
+selectiontext=FFFFFF
+shadow=588078
+text=000000
+titleA=588078
+titleA2=588078
+titleAText=FFFFFF
+titleI=90B0A8
+titleI2=90B0A8
+titleIText=588078
+window=FFFFFF

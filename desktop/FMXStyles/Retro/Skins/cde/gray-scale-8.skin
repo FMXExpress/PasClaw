@@ -1,0 +1,29 @@
+; Gray Scale 8 -- from classic-stylesheets themes/cde/skins/gray-scale-8.css
+name=Gray Scale 8
+family=cde
+[colors]
+accent=C3C3C3
+darker=666666
+darkshadow=666666
+desktop=BDBDBD
+face=BCBCBC
+faceactive=9F9F9F
+focusring=C3C3C3
+frameface=BCBCBC
+highlight=E2E2E2
+hover=C3C3C3
+inputdark=4C4C4B
+inputlight=CFCFCF
+light=E2E2E2
+progress=C3C3C3
+shadow=666666
+text=FFFFFF
+titleA=C3C3C3
+titleAText=000000
+titleAdark=6B6B6B
+titleAlight=E5E5E5
+titleI=787777
+titleIText=FFFFFF
+titleIdark=3B3A3A
+titleIlight=C1C1C1
+window=949493

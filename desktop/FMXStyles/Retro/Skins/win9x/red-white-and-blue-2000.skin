@@ -1,0 +1,25 @@
+; Red White And Blue 2000 -- from classic-stylesheets themes/win9x/skins/red-white-and-blue-2000.css
+name=Red White And Blue 2000
+family=win9x
+[colors]
+black=000000
+darker=000000
+darkshadow=000000
+desktop=000042
+dot=000000
+face=C0C0C0
+frameface=C0C0C0
+highlight=FFFFFF
+light=C0C0C0
+progress=800000
+selection=800000
+selectiontext=FFFFFF
+shadow=808080
+text=000000
+titleA=800000
+titleA2=0010A8
+titleAText=FFFFFF
+titleI=808080
+titleI2=BABEC9
+titleIText=C0C0C0
+window=FFFFFF

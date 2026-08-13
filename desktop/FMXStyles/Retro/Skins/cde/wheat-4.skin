@@ -1,0 +1,29 @@
+; Wheat 4 -- from classic-stylesheets themes/cde/skins/wheat-4.css
+name=Wheat 4
+family=cde
+[colors]
+accent=D1A57A
+darker=776A4F
+darkshadow=776A4F
+desktop=486D7F
+face=DBC291
+faceactive=BAA47B
+focusring=D1A57A
+frameface=DBC291
+highlight=EFE5D0
+hover=D1A57A
+inputdark=69696C
+inputlight=E3E4E6
+light=EFE5D0
+progress=D1A57A
+shadow=776A4F
+text=000000
+titleA=D1A57A
+titleAText=FFFFFF
+titleAdark=6F5740
+titleAlight=EBD7C5
+titleI=DBC291
+titleIText=000000
+titleIdark=776A4F
+titleIlight=EFE5D0
+window=BFC0C5

@@ -1,0 +1,29 @@
+; Summer 4 -- from classic-stylesheets themes/cde/skins/summer-4.css
+name=Summer 4
+family=cde
+[colors]
+accent=FF5664
+darker=8F7851
+darkshadow=8F7851
+desktop=829FFF
+face=FFD690
+faceactive=D8B57A
+focusring=FF5664
+frameface=FFD690
+highlight=FFEDD0
+hover=FF5664
+inputdark=999999
+inputlight=CCCCCC
+light=FFEDD0
+progress=FF5664
+shadow=8F7851
+text=000000
+titleA=FF5664
+titleAText=FFFFFF
+titleAdark=822C33
+titleAlight=FFB4BA
+titleI=FFD690
+titleIText=000000
+titleIdark=8F7851
+titleIlight=FFEDD0
+window=FFFFFF

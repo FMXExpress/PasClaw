@@ -1,0 +1,29 @@
+; Urchin 2 -- from classic-stylesheets themes/cde/skins/urchin-2.css
+name=Urchin 2
+family=cde
+[colors]
+accent=0C6864
+darker=363343
+darkshadow=363343
+desktop=706889
+face=706889
+faceactive=5F5874
+focusring=0C6864
+frameface=706889
+highlight=BDBAC9
+hover=0C6864
+inputdark=363343
+inputlight=BDBAC9
+light=BDBAC9
+progress=0C6864
+shadow=363343
+text=FFFFFF
+titleA=0C6864
+titleAText=FFFFFF
+titleAdark=052F2D
+titleAlight=8CB7B5
+titleI=706889
+titleIText=FFFFFF
+titleIdark=363343
+titleIlight=BDBAC9
+window=706889

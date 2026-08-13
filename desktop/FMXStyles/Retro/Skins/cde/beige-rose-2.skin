@@ -1,0 +1,29 @@
+; Beige Rose 2 -- from classic-stylesheets themes/cde/skins/beige-rose-2.css
+name=Beige Rose 2
+family=cde
+[colors]
+accent=F0ECEB
+darker=5E4747
+darkshadow=5E4747
+desktop=B78989
+face=B78989
+faceactive=9B7474
+focusring=F0ECEB
+frameface=B78989
+highlight=DFCBCB
+hover=F0ECEB
+inputdark=5E4747
+inputlight=DFCBCB
+light=DFCBCB
+progress=F0ECEB
+shadow=5E4747
+text=FFFFFF
+titleA=F0ECEB
+titleAText=000000
+titleAdark=8C8A89
+titleAlight=F8F7F6
+titleI=B78989
+titleIText=FFFFFF
+titleIdark=5E4747
+titleIlight=DFCBCB
+window=B78989

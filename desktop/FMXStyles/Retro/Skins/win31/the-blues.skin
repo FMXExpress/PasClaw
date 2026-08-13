@@ -1,0 +1,15 @@
+; The Blues -- from classic-stylesheets themes/win3x/skins/the-blues.css
+name=The Blues
+family=win31
+[colors]
+desktop=004080
+frameface=C0C0C0
+progress=000080
+selection=000080
+selectiontext=FFFFFF
+text=000000
+titleA=000080
+titleAText=FFFFFF
+titleI=C0C0C0
+titleIText=000000
+window=FFFFFF

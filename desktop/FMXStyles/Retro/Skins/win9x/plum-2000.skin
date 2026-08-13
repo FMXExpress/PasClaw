@@ -1,0 +1,25 @@
+; Plum 2000 -- from classic-stylesheets themes/win9x/skins/plum-2000.css
+name=Plum 2000
+family=win9x
+[colors]
+black=000000
+darker=000000
+darkshadow=000000
+desktop=402840
+dot=000000
+face=A89890
+frameface=A89890
+highlight=D8D0C8
+light=A89890
+progress=008080
+selection=008080
+selectiontext=D8D0C8
+shadow=786058
+text=000000
+titleA=484060
+titleA2=A084B8
+titleAText=F8F0F8
+titleI=786058
+titleI2=A89878
+titleIText=A89890
+window=D8D0C8

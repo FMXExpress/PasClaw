@@ -1,0 +1,25 @@
+; Marine -- from classic-stylesheets themes/win9x/skins/marine.css
+name=Marine
+family=win9x
+[colors]
+black=000000
+darker=000000
+darkshadow=000000
+desktop=2C4E47
+dot=000000
+face=88C0B8
+frameface=88C0B8
+highlight=C4DFDB
+light=88C0B8
+progress=006CC8
+selection=006CC8
+selectiontext=FFFFFF
+shadow=4B8D84
+text=000000
+titleA=000080
+titleA2=000080
+titleAText=FFFFFF
+titleI=4B8D84
+titleI2=4B8D84
+titleIText=D0CCD0
+window=C8E0D8

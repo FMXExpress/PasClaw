@@ -1,0 +1,29 @@
+; South West 2 -- from classic-stylesheets themes/cde/skins/south-west-2.css
+name=South West 2
+family=cde
+[colors]
+accent=B18885
+darker=645143
+darkshadow=645143
+desktop=C09B80
+face=C09B80
+faceactive=A3836C
+focusring=B18885
+frameface=C09B80
+highlight=E3D3C7
+hover=B18885
+inputdark=645143
+inputlight=E3D3C7
+light=E3D3C7
+progress=B18885
+shadow=645143
+text=FFFFFF
+titleA=B18885
+titleAText=FFFFFF
+titleAdark=5B4644
+titleAlight=DCCAC9
+titleI=C09B80
+titleIText=FFFFFF
+titleIdark=645143
+titleIlight=E3D3C7
+window=C09B80

@@ -1,0 +1,29 @@
+; Sand 2 -- from classic-stylesheets themes/cde/skins/sand-2.css
+name=Sand 2
+family=cde
+[colors]
+accent=D4D4DA
+darker=4B5566
+darkshadow=4B5566
+desktop=8EA2C1
+face=8EA2C1
+faceactive=7889A4
+focusring=D4D4DA
+frameface=8EA2C1
+highlight=CDD6E3
+hover=D4D4DA
+inputdark=4B5566
+inputlight=CDD6E3
+light=CDD6E3
+progress=D4D4DA
+shadow=4B5566
+text=FFFFFF
+titleA=D4D4DA
+titleAText=000000
+titleAdark=78787B
+titleAlight=EDEDEF
+titleI=8EA2C1
+titleIText=FFFFFF
+titleIdark=4B5566
+titleIlight=CDD6E3
+window=8EA2C1

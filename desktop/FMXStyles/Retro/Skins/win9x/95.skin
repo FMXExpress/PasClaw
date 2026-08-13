@@ -1,0 +1,25 @@
+; 95 -- from classic-stylesheets themes/win9x/skins/95.css
+name=95
+family=win9x
+[colors]
+black=000000
+darker=404040
+darkshadow=000000
+desktop=008080
+dot=000000
+face=C0C0C0
+frameface=C0C0C0
+highlight=FFFFFF
+light=DFDFDF
+progress=000080
+selection=000080
+selectiontext=FFFFFF
+shadow=808080
+text=000000
+titleA=000080
+titleA2=000080
+titleAText=FFFFFF
+titleI=808080
+titleI2=808080
+titleIText=C0C0C0
+window=FFFFFF

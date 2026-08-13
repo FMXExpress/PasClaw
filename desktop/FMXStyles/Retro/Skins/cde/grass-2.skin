@@ -1,0 +1,29 @@
+; Grass 2 -- from classic-stylesheets themes/cde/skins/grass-2.css
+name=Grass 2
+family=cde
+[colors]
+accent=E2F3E2
+darker=2E4D3D
+darkshadow=2E4D3D
+desktop=5E9C7B
+face=5E9C7B
+faceactive=4F8468
+focusring=E2F3E2
+frameface=5E9C7B
+highlight=B6D2C3
+hover=E2F3E2
+inputdark=2E4D3D
+inputlight=B6D2C3
+light=B6D2C3
+progress=E2F3E2
+shadow=2E4D3D
+text=FFFFFF
+titleA=E2F3E2
+titleAText=000000
+titleAdark=838D83
+titleAlight=F3FAF3
+titleI=5E9C7B
+titleIText=FFFFFF
+titleIdark=2E4D3D
+titleIlight=B6D2C3
+window=5E9C7B

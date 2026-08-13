@@ -1,0 +1,29 @@
+; Santa Fe 2 -- from classic-stylesheets themes/cde/skins/santa-fe-2.css
+name=Santa Fe 2
+family=cde
+[colors]
+accent=CEAF9A
+darker=64554A
+darkshadow=64554A
+desktop=BDA28D
+face=BDA28D
+faceactive=A08977
+focusring=CEAF9A
+frameface=BDA28D
+highlight=E2D6CD
+hover=CEAF9A
+inputdark=64554A
+inputlight=E2D6CD
+light=E2D6CD
+progress=CEAF9A
+shadow=64554A
+text=FFFFFF
+titleA=CEAF9A
+titleAText=000000
+titleAdark=6F5E53
+titleAlight=E9DCD3
+titleI=BDA28D
+titleIText=FFFFFF
+titleIdark=64554A
+titleIlight=E2D6CD
+window=BDA28D

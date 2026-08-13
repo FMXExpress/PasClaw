@@ -1,0 +1,29 @@
+; Gray Scale 2 -- from classic-stylesheets themes/cde/skins/gray-scale-2.css
+name=Gray Scale 2
+family=cde
+[colors]
+accent=949493
+darker=676767
+darkshadow=676767
+desktop=BDBDBD
+face=BDBDBD
+faceactive=A0A0A0
+focusring=949493
+frameface=BDBDBD
+highlight=E2E2E2
+hover=949493
+inputdark=676767
+inputlight=E2E2E2
+light=E2E2E2
+progress=949493
+shadow=676767
+text=000000
+titleA=949493
+titleAText=FFFFFF
+titleAdark=4C4C4B
+titleAlight=CFCFCF
+titleI=BDBDBD
+titleIText=000000
+titleIdark=676767
+titleIlight=E2E2E2
+window=BDBDBD

@@ -1,0 +1,29 @@
+; Olive 2 -- from classic-stylesheets themes/cde/skins/olive-2.css
+name=Olive 2
+family=cde
+[colors]
+accent=CEC2B8
+darker=433C43
+darkshadow=433C43
+desktop=877987
+face=877987
+faceactive=726672
+focusring=CEC2B8
+frameface=877987
+highlight=C9C2C9
+hover=CEC2B8
+inputdark=433C43
+inputlight=C9C2C9
+light=C9C2C9
+progress=CEC2B8
+shadow=433C43
+text=FFFFFF
+titleA=CEC2B8
+titleAText=000000
+titleAdark=716B65
+titleAlight=EAE5E0
+titleI=877987
+titleIText=FFFFFF
+titleIdark=433C43
+titleIlight=C9C2C9
+window=877987

@@ -1,0 +1,29 @@
+; Alpine 4 -- from classic-stylesheets themes/cde/skins/alpine-4.css
+name=Alpine 4
+family=cde
+[colors]
+accent=AFBFFB
+darker=3E5960
+darkshadow=3E5960
+desktop=7AB9D8
+face=78AAB8
+faceactive=66909C
+focusring=AFBFFB
+frameface=78AAB8
+highlight=C3D9DF
+hover=AFBFFB
+inputdark=69696C
+inputlight=E3E4E6
+light=C3D9DF
+progress=AFBFFB
+shadow=3E5960
+text=000000
+titleA=AFBFFB
+titleAText=000000
+titleAdark=616A8C
+titleAlight=DDE4FD
+titleI=78AAB8
+titleIText=FFFFFF
+titleIdark=3E5960
+titleIlight=C3D9DF
+window=BFC0C5

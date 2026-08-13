@@ -1,0 +1,29 @@
+; Charcoal 2 -- from classic-stylesheets themes/cde/skins/charcoal-2.css
+name=Charcoal 2
+family=cde
+[colors]
+accent=896D6D
+darker=322F2F
+darkshadow=322F2F
+desktop=696363
+face=696363
+faceactive=595454
+focusring=896D6D
+frameface=696363
+highlight=B9B7B7
+hover=896D6D
+inputdark=322F2F
+inputlight=B9B7B7
+light=B9B7B7
+progress=896D6D
+shadow=322F2F
+text=FFFFFF
+titleA=896D6D
+titleAText=FFFFFF
+titleAdark=433535
+titleAlight=C9BCBC
+titleI=696363
+titleIText=FFFFFF
+titleIdark=322F2F
+titleIlight=B9B7B7
+window=696363

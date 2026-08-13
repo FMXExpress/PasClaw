@@ -1,0 +1,29 @@
+; Dark Gold 4 -- from classic-stylesheets themes/cde/skins/dark-gold-4.css
+name=Dark Gold 4
+family=cde
+[colors]
+accent=B89663
+darker=3C3D3F
+darkshadow=3C3D3F
+desktop=535570
+face=7A7C7F
+faceactive=67696B
+focusring=B89663
+frameface=7A7C7F
+highlight=C2C3C5
+hover=B89663
+inputdark=999987
+inputlight=CCCCB4
+light=C2C3C5
+progress=B89663
+shadow=3C3D3F
+text=000000
+titleA=B89663
+titleAText=FFFFFF
+titleAdark=5E4D32
+titleAlight=DFD0B9
+titleI=7A7C7F
+titleIText=FFFFFF
+titleIdark=3C3D3F
+titleIlight=C2C3C5
+window=FFFFE2

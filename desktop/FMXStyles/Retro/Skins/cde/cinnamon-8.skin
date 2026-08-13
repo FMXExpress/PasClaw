@@ -1,0 +1,29 @@
+; Cinnamon 8 -- from classic-stylesheets themes/cde/skins/cinnamon-8.css
+name=Cinnamon 8
+family=cde
+[colors]
+accent=B14B50
+darker=4C3330
+darkshadow=4C3330
+desktop=796E6D
+face=9B6862
+faceactive=835853
+focusring=B14B50
+frameface=9B6862
+highlight=D1BAB7
+hover=B14B50
+inputdark=3F332E
+inputlight=C6BAB6
+light=D1BAB7
+progress=B14B50
+shadow=4C3330
+text=FFFFFF
+titleA=B14B50
+titleAText=FFFFFF
+titleAdark=562426
+titleAlight=DBACAF
+titleI=926866
+titleIText=FFFFFF
+titleIdark=473332
+titleIlight=CDBAB9
+window=836960

@@ -1,0 +1,29 @@
+; Cabernet 2 -- from classic-stylesheets themes/cde/skins/cabernet-2.css
+name=Cabernet 2
+family=cde
+[colors]
+accent=4B5E61
+darker=202D28
+darkshadow=202D28
+desktop=456256
+face=456256
+faceactive=3A5349
+focusring=4B5E61
+frameface=456256
+highlight=A8B5B0
+hover=4B5E61
+inputdark=202D28
+inputlight=A8B5B0
+light=A8B5B0
+progress=4B5E61
+shadow=202D28
+text=FFFFFF
+titleA=4B5E61
+titleAText=FFFFFF
+titleAdark=232C2D
+titleAlight=ABB4B5
+titleI=456256
+titleIText=FFFFFF
+titleIdark=202D28
+titleIlight=A8B5B0
+window=456256

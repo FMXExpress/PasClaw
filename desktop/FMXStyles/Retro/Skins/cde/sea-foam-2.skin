@@ -1,0 +1,29 @@
+; Sea Foam 2 -- from classic-stylesheets themes/cde/skins/sea-foam-2.css
+name=Sea Foam 2
+family=cde
+[colors]
+accent=97B0B2
+darker=426063
+darkshadow=426063
+desktop=7DB7BB
+face=7DB7BB
+faceactive=6A9B9E
+focusring=97B0B2
+frameface=7DB7BB
+highlight=C6DFE1
+hover=97B0B2
+inputdark=426063
+inputlight=C6DFE1
+light=C6DFE1
+progress=97B0B2
+shadow=426063
+text=FFFFFF
+titleA=97B0B2
+titleAText=FFFFFF
+titleAdark=505D5E
+titleAlight=D1DCDD
+titleI=7DB7BB
+titleIText=FFFFFF
+titleIdark=426063
+titleIlight=C6DFE1
+window=7DB7BB

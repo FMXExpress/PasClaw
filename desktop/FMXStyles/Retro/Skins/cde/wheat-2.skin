@@ -1,0 +1,29 @@
+; Wheat 2 -- from classic-stylesheets themes/cde/skins/wheat-2.css
+name=Wheat 2
+family=cde
+[colors]
+accent=BFC0C5
+darker=22343C
+darkshadow=22343C
+desktop=486D7F
+face=486D7F
+faceactive=3D5C6B
+focusring=BFC0C5
+frameface=486D7F
+highlight=AABBC4
+hover=BFC0C5
+inputdark=22343C
+inputlight=AABBC4
+light=AABBC4
+progress=BFC0C5
+shadow=22343C
+text=FFFFFF
+titleA=BFC0C5
+titleAText=000000
+titleAdark=69696C
+titleAlight=E3E4E6
+titleI=486D7F
+titleIText=FFFFFF
+titleIdark=22343C
+titleIlight=AABBC4
+window=486D7F

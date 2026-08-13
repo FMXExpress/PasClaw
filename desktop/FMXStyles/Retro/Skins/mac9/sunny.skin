@@ -1,0 +1,7 @@
+; Sunny -- from classic-stylesheets themes/macos9/skins/sunny.css
+name=Sunny
+family=mac9
+[colors]
+desktop=EFEF6B
+progress=427B7B
+selection=CEFFFF

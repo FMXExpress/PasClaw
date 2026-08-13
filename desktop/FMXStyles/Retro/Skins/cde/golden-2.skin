@@ -1,0 +1,29 @@
+; Golden 2 -- from classic-stylesheets themes/cde/skins/golden-2.css
+name=Golden 2
+family=cde
+[colors]
+accent=47634F
+darker=614238
+darkshadow=614238
+desktop=BE826F
+face=BE826F
+faceactive=A16E5E
+focusring=47634F
+frameface=BE826F
+highlight=E2C7BF
+hover=47634F
+inputdark=614238
+inputlight=E2C7BF
+light=E2C7BF
+progress=47634F
+shadow=614238
+text=FFFFFF
+titleA=47634F
+titleAText=FFFFFF
+titleAdark=212E24
+titleAlight=A9B6AC
+titleI=BE826F
+titleIText=FFFFFF
+titleIdark=614238
+titleIlight=E2C7BF
+window=BE826F

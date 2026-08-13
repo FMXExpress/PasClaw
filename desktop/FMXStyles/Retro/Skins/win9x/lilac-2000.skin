@@ -1,0 +1,25 @@
+; Lilac 2000 -- from classic-stylesheets themes/win9x/skins/lilac-2000.css
+name=Lilac 2000
+family=win9x
+[colors]
+black=000000
+darker=000000
+darkshadow=000000
+desktop=000000
+dot=000000
+face=AEA8D9
+frameface=AEA8D9
+highlight=D8D5EC
+light=AEA8D9
+progress=5A4EB1
+selection=5A4EB1
+selectiontext=FFFFFF
+shadow=5A4EB1
+text=000000
+titleA=5A4EB1
+titleA2=B68FCB
+titleAText=FFFFFF
+titleI=808080
+titleI2=B8B4D0
+titleIText=FFFFFF
+window=FFFFFF

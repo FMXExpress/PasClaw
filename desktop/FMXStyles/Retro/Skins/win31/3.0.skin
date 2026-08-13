@@ -1,0 +1,22 @@
+; 3.0 -- from classic-stylesheets themes/win3x/skins/3.0.css
+name=3.0
+family=win31
+[colors]
+black=000000
+darker=000000
+desktop=C0C0C0
+dot=000000
+face=C0C0C0
+frameface=808080
+highlight=FFFFFF
+light=FFFFFF
+progress=000000
+selection=000000
+selectiontext=FFFFFF
+shadow=808080
+text=000000
+titleA=5780A8
+titleAText=FFFFFF
+titleI=FFFFFF
+titleIText=000000
+window=FFFFFF

@@ -1,0 +1,29 @@
+; Northern Sky 2 -- from classic-stylesheets themes/cde/skins/northern-sky-2.css
+name=Northern Sky 2
+family=cde
+[colors]
+accent=00577A
+darker=05293E
+darkshadow=05293E
+desktop=0C5A87
+face=0C5A87
+faceactive=0A4C72
+focusring=00577A
+frameface=0C5A87
+highlight=8CB1C6
+hover=00577A
+inputdark=05293E
+inputlight=8CB1C6
+light=8CB1C6
+progress=00577A
+shadow=05293E
+text=FFFFFF
+titleA=00577A
+titleAText=FFFFFF
+titleAdark=002737
+titleAlight=86AFC0
+titleI=0C5A87
+titleIText=FFFFFF
+titleIdark=05293E
+titleIlight=8CB1C6
+window=0C5A87

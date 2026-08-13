@@ -1,0 +1,29 @@
+; Crimson 2 -- from classic-stylesheets themes/cde/skins/crimson-2.css
+name=Crimson 2
+family=cde
+[colors]
+accent=FFF7E9
+darker=394653
+darkshadow=394653
+desktop=718BA5
+face=718BA5
+faceactive=60768C
+focusring=FFF7E9
+frameface=718BA5
+highlight=BFCBD6
+hover=FFF7E9
+inputdark=394653
+inputlight=BFCBD6
+light=BFCBD6
+progress=FFF7E9
+shadow=394653
+text=FFFFFF
+titleA=FFF7E9
+titleAText=000000
+titleAdark=99948B
+titleAlight=CCC5BA
+titleI=718BA5
+titleIText=FFFFFF
+titleIdark=394653
+titleIlight=BFCBD6
+window=718BA5

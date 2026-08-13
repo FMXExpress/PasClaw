@@ -1,0 +1,29 @@
+; Crimson 8 -- from classic-stylesheets themes/cde/skins/crimson-8.css
+name=Crimson 8
+family=cde
+[colors]
+accent=B24D7A
+darker=355552
+darkshadow=355552
+desktop=718BA5
+face=68A6A0
+faceactive=588D88
+focusring=B24D7A
+frameface=68A6A0
+highlight=BCD7D4
+hover=B24D7A
+inputdark=99948B
+inputlight=CCC5BA
+light=BCD7D4
+progress=B24D7A
+shadow=355552
+text=000000
+titleA=B24D7A
+titleAText=FFFFFF
+titleAdark=58263C
+titleAlight=DCAEC2
+titleI=AEB2C3
+titleIText=000000
+titleIdark=5E6069
+titleIlight=DCDDE5
+window=FFF7E9

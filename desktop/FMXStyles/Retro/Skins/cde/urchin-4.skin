@@ -1,0 +1,29 @@
+; Urchin 4 -- from classic-stylesheets themes/cde/skins/urchin-4.css
+name=Urchin 4
+family=cde
+[colors]
+accent=D5A591
+darker=073A39
+darkshadow=073A39
+desktop=706889
+face=0F7C7A
+faceactive=0C6967
+focusring=D5A591
+frameface=0F7C7A
+highlight=8FC2C1
+hover=D5A591
+inputdark=052F2D
+inputlight=8CB7B5
+light=8FC2C1
+progress=D5A591
+shadow=073A39
+text=FFFFFF
+titleA=D5A591
+titleAText=FFFFFF
+titleAdark=72584D
+titleAlight=ECD8CF
+titleI=0F7C7A
+titleIText=FFFFFF
+titleIdark=073A39
+titleIlight=8FC2C1
+window=0C6864

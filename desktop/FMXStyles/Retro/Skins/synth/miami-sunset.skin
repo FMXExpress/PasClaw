@@ -1,0 +1,34 @@
+; Miami Sunset -- NEON/OS color scheme
+name=Miami Sunset
+family=synth
+[colors]
+accent=0FF0FC
+black=E8DEFF
+btnborder=FF2E97
+btngrad1=3A2168
+btngrad2=241447
+capglyph=9B8AC4
+darker=0D0620
+desktop=0D0620
+dot=0FF0FC
+face=241447
+focusring=FF2E97
+frameface=241447
+highlight=FF2E97
+hover=0FF0FC
+inputborder=7A4FD4
+light=3A2168
+pressface=4B2E7A
+progress=0FF0FC
+selection=FF2E97
+selectiontext=FFFFFF
+shadow=4B2E7A
+text=E8DEFF
+titleA=FF2E97
+titleA2=FF9E3D
+titleAText=FFFFFF
+titleI=2A1A4D
+titleI2=241447
+titleIText=9B8AC4
+track=0D0620
+window=1A0B33

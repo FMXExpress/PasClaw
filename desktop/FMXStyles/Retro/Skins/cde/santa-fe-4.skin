@@ -1,0 +1,29 @@
+; Santa Fe 4 -- from classic-stylesheets themes/cde/skins/santa-fe-4.css
+name=Santa Fe 4
+family=cde
+[colors]
+accent=EF9D9D
+darker=415959
+darkshadow=415959
+desktop=BDA28D
+face=7EABAB
+faceactive=6B9191
+focusring=EF9D9D
+frameface=7EABAB
+highlight=C6DADA
+hover=EF9D9D
+inputdark=6F5E53
+inputlight=E9DCD3
+light=C6DADA
+progress=EF9D9D
+shadow=415959
+text=000000
+titleA=EF9D9D
+titleAText=000000
+titleAdark=815555
+titleAlight=F8D5D5
+titleI=7EABAB
+titleIText=FFFFFF
+titleIdark=415959
+titleIlight=C6DADA
+window=CEAF9A

@@ -1,0 +1,29 @@
+; Tundra 8 -- from classic-stylesheets themes/cde/skins/tundra-8.css
+name=Tundra 8
+family=cde
+[colors]
+accent=F1BC7F
+darker=434C41
+darkshadow=434C41
+desktop=7C92B9
+face=859680
+faceactive=717F6C
+focusring=F1BC7F
+frameface=859680
+highlight=C8D0C6
+hover=F1BC7F
+inputdark=393D30
+inputlight=C0C4B8
+light=C8D0C6
+progress=F1BC7F
+shadow=434C41
+text=FFFFFF
+titleA=F1BC7F
+titleAText=000000
+titleAdark=836645
+titleAlight=F9E2C8
+titleI=A59680
+titleIText=FFFFFF
+titleIdark=554D42
+titleIlight=D7D0C6
+window=767E63

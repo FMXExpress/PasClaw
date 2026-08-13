@@ -1,0 +1,29 @@
+; Alpine 2 -- from classic-stylesheets themes/cde/skins/alpine-2.css
+name=Alpine 2
+family=cde
+[colors]
+accent=BFC0C5
+darker=416373
+darkshadow=416373
+desktop=7AB9D8
+face=7AB9D8
+faceactive=679DB7
+focusring=BFC0C5
+frameface=7AB9D8
+highlight=C5E0EE
+hover=BFC0C5
+inputdark=416373
+inputlight=C5E0EE
+light=C5E0EE
+progress=BFC0C5
+shadow=416373
+text=FFFFFF
+titleA=BFC0C5
+titleAText=000000
+titleAdark=69696C
+titleAlight=E3E4E6
+titleI=7AB9D8
+titleIText=FFFFFF
+titleIdark=416373
+titleIlight=C5E0EE
+window=7AB9D8

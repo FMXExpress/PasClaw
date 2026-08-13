@@ -1,0 +1,29 @@
+; Northern Sky 8 -- from classic-stylesheets themes/cde/skins/northern-sky-8.css
+name=Northern Sky 8
+family=cde
+[colors]
+accent=A47591
+darker=1E252A
+darkshadow=1E252A
+desktop=0C5A87
+face=41525C
+faceactive=37454E
+focusring=A47591
+frameface=41525C
+highlight=A5ADB2
+hover=A47591
+inputdark=002737
+inputlight=86AFC0
+light=A5ADB2
+progress=A47591
+shadow=1E252A
+text=FFFFFF
+titleA=A47591
+titleAText=FFFFFF
+titleAdark=533B49
+titleAlight=D6C1CE
+titleI=1B5D6C
+titleIText=FFFFFF
+titleIdark=0C2A31
+titleIlight=93B2B9
+window=00577A

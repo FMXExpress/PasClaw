@@ -1,0 +1,29 @@
+; Desert 4 -- from classic-stylesheets themes/cde/skins/desert-4.css
+name=Desert 4
+family=cde
+[colors]
+accent=E5B793
+darker=69655A
+darkshadow=69655A
+desktop=8C8F98
+face=C2BBA7
+faceactive=A49E8D
+focusring=E5B793
+frameface=C2BBA7
+highlight=E4E1D9
+hover=E5B793
+inputdark=979796
+inputlight=CACAC8
+light=E4E1D9
+progress=E5B793
+shadow=69655A
+text=000000
+titleA=E5B793
+titleAText=000000
+titleAdark=7D6450
+titleAlight=F3E0D0
+titleI=C2BBA7
+titleIText=000000
+titleIdark=69655A
+titleIlight=E4E1D9
+window=FDFDFA

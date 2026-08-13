@@ -1,0 +1,29 @@
+; Chocolate 4 -- from classic-stylesheets themes/cde/skins/chocolate-4.css
+name=Chocolate 4
+family=cde
+[colors]
+accent=A9A9FF
+darker=384646
+darkshadow=384646
+desktop=8787AF
+face=708C8D
+faceactive=5F7777
+focusring=A9A9FF
+frameface=708C8D
+highlight=BECBCB
+hover=A9A9FF
+inputdark=4B3C3C
+inputlight=CFC2C2
+light=BECBCB
+progress=A9A9FF
+shadow=384646
+text=FFFFFF
+titleA=A9A9FF
+titleAText=000000
+titleAdark=5D5D8C
+titleAlight=DADAFF
+titleI=708C8D
+titleIText=FFFFFF
+titleIdark=384646
+titleIlight=BECBCB
+window=967878

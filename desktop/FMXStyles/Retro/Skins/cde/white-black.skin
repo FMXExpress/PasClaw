@@ -1,0 +1,29 @@
+; White Black -- from classic-stylesheets themes/cde/skins/white-black.css
+name=White Black
+family=cde
+[colors]
+accent=FFFFFF
+darker=999999
+darkshadow=999999
+desktop=000000
+face=FFFFFF
+faceactive=D8D8D8
+focusring=FFFFFF
+frameface=FFFFFF
+highlight=CCCCCC
+hover=FFFFFF
+inputdark=999999
+inputlight=CCCCCC
+light=CCCCCC
+progress=FFFFFF
+shadow=999999
+text=000000
+titleA=FFFFFF
+titleAText=000000
+titleAdark=999999
+titleAlight=CCCCCC
+titleI=000000
+titleIText=FFFFFF
+titleIdark=4C4C4C
+titleIlight=7F7F7F
+window=FFFFFF

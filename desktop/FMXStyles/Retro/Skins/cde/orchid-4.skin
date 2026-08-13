@@ -1,0 +1,29 @@
+; Orchid 4 -- from classic-stylesheets themes/cde/skins/orchid-4.css
+name=Orchid 4
+family=cde
+[colors]
+accent=B9B9FF
+darker=515161
+darkshadow=515161
+desktop=A8A8CD
+face=9B9BB9
+faceactive=83839D
+focusring=B9B9FF
+frameface=9B9BB9
+highlight=D3D3E0
+hover=B9B9FF
+inputdark=424257
+inputlight=C7C7D9
+light=D3D3E0
+progress=B9B9FF
+shadow=515161
+text=FFFFFF
+titleA=B9B9FF
+titleAText=000000
+titleAdark=67678E
+titleAlight=E1E1FF
+titleI=9B9BB9
+titleIText=FFFFFF
+titleIdark=515161
+titleIlight=D3D3E0
+window=8282AB
