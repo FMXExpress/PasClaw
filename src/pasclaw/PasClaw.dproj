@@ -80,7 +80,7 @@
         <Manifest_File>None</Manifest_File>
         <DCC_UsePackage>$(DCC_UsePackage)</DCC_UsePackage>
         <!-- Every src/pkg/* directory + src/cmd, relative to src/pasclaw/ -->
-        <DCC_UnitSearchPath>..\cmd;..\pkg\cliui;..\pkg\utils;..\pkg\logger;..\pkg\config;..\pkg\json;..\pkg\providers;..\pkg\stream;..\pkg\tokenizer;..\pkg\tools;..\pkg\db;..\pkg\mcp;..\pkg\workflow;..\pkg\gateway;..\pkg\channels;..\pkg\crypto;..\pkg\net;..\pkg\search;..\pkg\cron;..\pkg\skills;..\pkg\checkpoints;..\pkg\condense;..\pkg\session;..\pkg\identity;..\pkg\agent;..\pkg\memory;..\pkg\memory\localvector;..\pkg\kb;..\pkg\updater;..\pkg\membench;..\pkg\tui;..\pkg\platform;..\pkg\hashline;..\pkg\component;..\pkg\markdown;..\pkg\shell;..\pkg\otel;..\pkg\vendor\dmvcframework;..\pkg\vendor\zpaq;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+        <DCC_UnitSearchPath>..\cmd;..\pkg\cliui;..\pkg\utils;..\pkg\logger;..\pkg\config;..\pkg\json;..\pkg\providers;..\pkg\stream;..\pkg\tokenizer;..\pkg\tools;..\pkg\db;..\pkg\mcp;..\pkg\workflow;..\pkg\gateway;..\pkg\channels;..\pkg\crypto;..\pkg\net;..\pkg\search;..\pkg\cron;..\pkg\skills;..\pkg\checkpoints;..\pkg\condense;..\pkg\session;..\pkg\identity;..\pkg\agent;..\pkg\memory;..\pkg\memory\localvector;..\pkg\kb;..\pkg\updater;..\pkg\membench;..\pkg\tui;..\pkg\platform;..\pkg\hashline;..\pkg\component;..\pkg\markdown;..\pkg\projects;..\pkg\shell;..\pkg\otel;..\pkg\vendor\dmvcframework;..\pkg\vendor\zpaq;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
         <!--
           DCC_Namespace lets dcc32/dcc64 resolve bare unit names ("SysUtils",
           "Classes", "Windows") back to their fully qualified modern names
@@ -373,6 +373,16 @@
 
         <!-- pkg/markdown (markdown -> ANSI terminal renderer) -->
         <DCCReference Include="..\pkg\markdown\PasClaw.Markdown.Render.pas"/>
+        <DCCReference Include="..\pkg\projects\PasClaw.Workspaces.pas"/>
+        <DCCReference Include="..\pkg\projects\PasClaw.Projects.Store.pas"/>
+        <DCCReference Include="..\pkg\projects\PasClaw.Projects.Tools.pas"/>
+        <DCCReference Include="..\pkg\projects\PasClaw.Apps.pas"/>
+        <DCCReference Include="..\pkg\projects\PasClaw.Apps.Runner.pas"/>
+        <DCCReference Include="..\pkg\projects\PasClaw.Pages.pas"/>
+        <DCCReference Include="..\pkg\projects\PasClaw.Desktop.Events.pas"/>
+        <DCCReference Include="..\pkg\projects\PasClaw.Suite.pas"/>
+        <DCCReference Include="..\pkg\projects\PasClaw.Suite.Mail.pas"/>
+        <DCCReference Include="..\pkg\projects\PasClaw.Suite.Notes.pas"/>
 
         <!-- pkg/vendor/dmvcframework (Apache-2.0, Delphi-only) -->
         <DCCReference Include="..\pkg\vendor\dmvcframework\LoggerPro.AnsiColors.pas"/>
