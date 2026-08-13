@@ -1900,6 +1900,12 @@ begin
       end;
       if not StartApp(Project, True, Run, Err) then
       begin
+        { A launch that never got off the ground is a terminal state like any
+          other, and the stream is how every OTHER client finds out. Only the
+          caller sees this 400; without the event, a second desktop watching
+          the same workspace would sit on "stopped" with no idea a start had
+          been attempted and failed. }
+        PublishApp(Project, 'failed', 0);
         ReplyErr(Resp, 400, Err);
         Exit;
       end;
@@ -2304,6 +2310,16 @@ begin
           ReplyErr(Resp, 500, Err);
           Exit;
         end;
+        (* Announce it. PublishPage existed and nothing called it, so the one
+           event on the whole stream that marks the END of the longest thing
+           the gateway does -- a research turn, minutes of it -- was never
+           emitted. The requesting client got its answer in the response and
+           every other client learned nothing.
+
+           Published before replying, deliberately: a subscriber that is also
+           the requester should not be able to render the page and only then
+           be told it exists. *)
+        PublishPage(Id, Title, Length(Sources));
         Root := TJsonObject.Create;
         try
           Root.PutStr('id', Id);

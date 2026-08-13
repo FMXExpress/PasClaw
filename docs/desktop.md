@@ -420,12 +420,19 @@ poll. Events are small JSON objects with a monotonic `seq`:
 Types: `projects`, `project`, `task`, `job`, `joblog`, `app`, `page`,
 `workspace`, plus `hello` on connect and `gap` after an overflow.
 
-**A process app that dies announces it.** The runner publishes
-`{"type":"app","state":"exited"}` when a child ends on its own, rather than
-only recording it in a state field a client has to poll for. Before this the
-Run window learned about a crashed app on its next tick and anything not
-polling never learned at all — which is no basis for telling someone their
-app stopped.
+**Every terminal state reaches the stream.** Three of them used to be
+missing, which meant the events a client would most want to act on were the
+ones it never got:
+
+- `{"type":"app","state":"exited"}` when a child ends on its own. Previously
+  only recorded in a state field, so the Run window learned about a crashed
+  app on its next tick and anything not polling never learned at all.
+- `{"type":"app","state":"failed"}` when a launch cannot start. Only the
+  caller saw the 400; a second desktop on the same workspace sat on
+  "stopped" with no idea a start had been attempted.
+- `{"type":"page"}` when a page is saved. `PublishPage` existed and nothing
+  called it, so the end of the longest thing the gateway does — a research
+  turn, minutes of it — was announced to nobody.
 
 ### Notifications (FireMonkey client)
 
@@ -448,9 +455,16 @@ at it, the tree updating in front of you *is* the notification. Anything
 queued while it had focus is dropped rather than held, so alt-tabbing away
 does not produce a burst about things you already watched.
 
-**Menu → Notifications: on/off**, remembered with the desktop layout. On a
-system with no notification centre the row says `unavailable` rather than
-offering a switch that does nothing.
+**Menu → Notifications: on/off**, remembered in `~/PasClaw/desktop.ini` —
+*not* in the desktop layout. The layout is shared: both clients read and
+write one state document per workspace, and the web client's writer replaces
+it wholesale, so a preference parked in there would survive exactly until
+someone opened `/desktop`. It does not belong there anyway — a layout
+follows you between clients, while whether *this machine's* notification
+centre gets used is about this machine.
+
+On a system with no notification centre the row says `unavailable` rather
+than offering a switch that does nothing.
 
 Each subscriber has a **bounded queue (256), oldest dropped**. A browser tab
 that stops reading cannot grow the server's memory; when it overflows it gets

@@ -27,7 +27,7 @@ interface
 uses
   System.SysUtils, System.Types, System.UITypes, System.Classes,
   System.IOUtils, System.StrUtils, System.Generics.Collections,
-  System.SyncObjs,
+  System.SyncObjs, System.IniFiles,
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs,
   FMX.StdCtrls, FMX.Layouts, FMX.ListBox, FMX.Edit, FMX.Memo, FMX.Styles,
   FMX.Objects, FMX.TreeView, FMX.WebBrowser, FMX.ScrollBox,
@@ -402,6 +402,22 @@ type
     procedure EventTimerTick(Sender: TObject);
 
     { ---- notifications ---- }
+    (* Where the switch lives.
+
+       NOT in the desktop layout, which is shared: both clients read and
+       write one state document per workspace, and the web client's writer
+       replaces it wholesale with the four fields it knows about -- so a
+       `notify` field parked in there survives exactly until someone opens
+       /desktop, and a user who turned notifications off finds them back on.
+
+       It does not belong there anyway. A layout is about a workspace and is
+       meant to follow you between clients; whether THIS machine's
+       notification centre gets used is about this machine. A local file is
+       the honest home for it, and the right one for the next per-machine
+       preference too. *)
+    function PrefsPath: string;
+    procedure LoadPrefs;
+    procedure SavePrefs;
     { Decide whether this event is worth telling someone about, and queue it
       if so. Called on the EVENT thread: pure string work, no controls. }
     procedure NoteEvent(const Ev: TDesktopEvent);
@@ -554,6 +570,7 @@ begin
   FNotifyLock := TCriticalSection.Create;
   FNotify := TNotificationCenter.Create(Self);
   FNotifyOn := FNotify.Supported;
+  LoadPrefs;
 
   { One poll for every Run window. A child's output arrives when it arrives,
     and N timers would be N of the same question. Off until something runs. }
@@ -1930,6 +1947,51 @@ begin
   FEventDirty := True;
 end;
 
+function TFormMain.PrefsPath: string;
+begin
+  Result := TIOPath.Combine(TIOPath.Combine(TIOPath.GetHomePath, 'PasClaw'),
+                            'desktop.ini');
+end;
+
+procedure TFormMain.LoadPrefs;
+var
+  Ini: TIniFile;
+begin
+  { The default is what FormCreate already worked out from the platform, so
+    an absent file -- a first run -- keeps it. A machine with no notification
+    centre cannot be talked into having one by a settings file. }
+  if not TFile.Exists(PrefsPath) then Exit;
+  try
+    Ini := TIniFile.Create(PrefsPath);
+    try
+      FNotifyOn := FNotifyOn and Ini.ReadBool('ui', 'notifications', True);
+    finally
+      Ini.Free;
+    end;
+  except
+    { An unreadable preferences file is not a reason to fail to start. }
+  end;
+end;
+
+procedure TFormMain.SavePrefs;
+var
+  Ini: TIniFile;
+begin
+  try
+    TDirectory.CreateDirectory(ExtractFilePath(PrefsPath));
+    Ini := TIniFile.Create(PrefsPath);
+    try
+      Ini.WriteBool('ui', 'notifications', FNotifyOn);
+      Ini.UpdateFile;
+    finally
+      Ini.Free;
+    end;
+  except
+    { A preference that could not be written is a preference that does not
+      persist, not a reason to stop. }
+  end;
+end;
+
 (* Which events are worth interrupting someone for.
 
    The test is "did something END", not "did something change". A job going
@@ -2081,7 +2143,7 @@ begin
       FNotifyLock.Release;
     end;
   end;
-  MarkLayoutDirty;
+  SavePrefs;
   Say('Notifications ' + IfThenStr(FNotifyOn, 'on', 'off'));
 end;
 
@@ -3657,12 +3719,8 @@ begin
   Keys := FRunWins.Keys.ToArray;
   for Key in Keys do
     if FRunWins.TryGetValue(Key, W) and (W <> nil) then Add('run', Key, W);
-  { A preference rather than a window, but it rides along here because this
-    is the only thing the client already persists -- and a switch that
-    forgets itself every launch is a switch you turn off once a day. }
   FClient.SetDesktopStateFor(Desk,
-    '{"v":1,"client":"fmx","notify":' + IfThenStr(FNotifyOn, '1', '0') +
-    ',"windows":[' + Body + ']}');
+    '{"v":1,"client":"fmx","windows":[' + Body + ']}');
 end;
 
 procedure TFormMain.RestoreDesktopState;
@@ -3711,13 +3769,6 @@ begin
   State := FClient.DesktopState;
   if (State = '') or (Pos('"windows"', State) = 0) then Exit;
 
-  { The notification switch, read the same hand-scanned way as everything
-    else here. Absent means a layout saved before the switch existed, which
-    keeps the default -- and the default cannot be "on" on a machine with no
-    notification centre, so it is anded with what FormCreate found. }
-  if Pos('"notify":0', State) > 0 then FNotifyOn := False
-  else if Pos('"notify":1', State) > 0 then
-    FNotifyOn := (FNotify <> nil) and FNotify.Supported;
 
   (* Hand-scan rather than parse. The client library has a JSON parser and
      this could use it -- but the shape here is fixed and flat, and one
