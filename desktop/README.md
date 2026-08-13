@@ -17,9 +17,10 @@ fill the screen and *be* the desktop.
 - **RAD Studio / Delphi** with FireMonkey (Win64, macOS or Linux). This is a
   Delphi project; FPC has no FMX, so it is not part of `make`.
 
-That is the whole list. Clone PasClaw, open the `.dproj`, build, run — the
-27 styles are there and the picker is populated on first launch. Everything
-the project needs is in this repository:
+That is the whole list. Clone PasClaw, open the `.dproj`, build, run — on a
+**local build** the 27 styles are there and the picker is populated on first
+launch. (Remote macOS / Linux targets need one extra step; see below.)
+Everything the project needs is in this repository:
 
 | What | Where | From |
 |---|---|---|
@@ -44,6 +45,23 @@ Without the variable, `FindStyleDir` walks up from the exe looking for
 `FMXStyles/Retro` — which finds the vendored copy — or
 `Cross-Platform-Retro-OS-Styles/FMXStyles/Retro`, which finds a sibling
 checkout.
+
+### Remote targets (macOS / Linux over PAServer)
+
+The walk-up finds the styles because the executable sits inside this
+checkout. Build for a remote target and it does not: RAD Studio ships the
+binary to the PAServer machine, which has no copy of the repository, so
+`FindStyleDir` comes back empty and the picker says so. The styles are data
+the project does not know it owns — nothing in `PasclawDesktop.dproj`
+deploys them.
+
+Either copy `FMXStyles/Retro` next to the deployed binary on that machine,
+or set `RETRO_STYLES_DIR` there. Adding ~280 per-file deployment entries to
+the `.dproj` would do it too, but hand-maintaining that list against an
+upstream refresh is worse than the two-line workaround.
+
+Only local Win64 has actually been run; the remote paths are reasoned from
+how PAServer deployment works, not observed.
 
 ## Running
 
