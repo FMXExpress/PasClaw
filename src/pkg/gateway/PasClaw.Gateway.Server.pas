@@ -185,9 +185,17 @@ type
        machinery HandleChat sets up, and duplicating that setup is how the
        two drift. Returns False with Err set when there is no provider or
        the loop fails. *)
+    (* The model for work that does not need the good one, or '' to keep
+       the current one. Order is explicit-then-inferred: what the operator
+       configured, then what they already declared cheap for the
+       auto-router, then a known small model for the provider in use. *)
+    function ResolveFastModel: string;
     function RunDesktopTurn(const SystemPrompt, Prompt: string;
                             Narrate: Boolean;
-                            out Reply, Err: string): Boolean;
+                            out Reply, Err: string): Boolean; overload;
+    function RunDesktopTurn(const SystemPrompt, Prompt: string;
+                            Narrate: Boolean; const ModelOverride: string;
+                            out Reply, Err: string): Boolean; overload;
     { OnToolCall sink for a narrated turn -- turns each tool call into a
       page-progress event so the desktop can show work rather than a
       spinner. A method, not a closure: the loop's hook is a method
@@ -5289,8 +5297,51 @@ begin
   PublishPageProgress(Phase, Detail);
 end;
 
+function TGatewayServer.ResolveFastModel: string;
+var
+  Prim: ILLMProvider;
+  FB: TLLMProviderArray;
+  FBModels: TStringArray;
+  DefModel, Kind: string;
+  I: Integer;
+begin
+  { 1. Said so outright. }
+  Result := Trim(FCfg.FastModel);
+  if Result <> '' then Exit;
+
+  { 2. Already declared a cheap tier for the difficulty router -- the same
+       judgement, made once. Only when that router is switched on: a model
+       named in a disabled section is a leftover, not a preference. }
+  if FCfg.AutoRouter.Enabled and (Trim(FCfg.AutoRouter.EasyModel) <> '') then
+    Exit(Trim(FCfg.AutoRouter.EasyModel));
+
+  { 3. A known small model for whichever provider is actually in use. The
+       primary's kind, not the first one configured: fallbacks exist
+       precisely because the first entry may be the one that is down. }
+  Kind := '';
+  for I := 0 to High(FCfg.Providers) do
+    if SameText(FCfg.Providers[I].Name, FCfg.DefaultProvider) then
+    begin
+      Kind := FCfg.Providers[I].Kind;
+      Break;
+    end;
+  if Kind = '' then
+  begin
+    SnapshotRuntime(Prim, FB, FBModels, DefModel);
+    if Length(FCfg.Providers) > 0 then Kind := FCfg.Providers[0].Kind;
+  end;
+  Result := FastModelFor(Kind);
+end;
+
 function TGatewayServer.RunDesktopTurn(const SystemPrompt, Prompt: string;
   Narrate: Boolean; out Reply, Err: string): Boolean;
+begin
+  Result := RunDesktopTurn(SystemPrompt, Prompt, Narrate, '', Reply, Err);
+end;
+
+function TGatewayServer.RunDesktopTurn(const SystemPrompt, Prompt: string;
+  Narrate: Boolean; const ModelOverride: string;
+  out Reply, Err: string): Boolean;
 var
   Msgs: TMessageArray;
   Loop: TToolLoopResult;
@@ -5319,6 +5370,9 @@ begin
   LoopCfg.Registry := FRegistry;
   if FToolsHonorInMemoryConfig then LoopCfg.ActiveConfig := FCfg;
   LoopCfg.Model          := DefModel;
+  { A caller may ask for a different model -- see ResolveFastModel. Empty
+    keeps the configured one, which is every other caller. }
+  if Trim(ModelOverride) <> '' then LoopCfg.Model := Trim(ModelOverride);
   LoopCfg.MaxIterations  := FMaxIter;
   LoopCfg.Parallel       := True;
   LoopCfg.Mode           := pmBuild;
@@ -5413,7 +5467,7 @@ function DesktopPageGenerator(const Query: string; Kind: TPageKind;
   const RevisePageId: string;
   out Title, BodyHTML, SourcesJSON, Err: string): Boolean;
 var
-  Reply, Prompt, Prior: string;
+  Reply, Prompt, Prior, FastModel: string;
   PriorInfo: TPageInfo;
 begin
   Title := Query;
@@ -5446,8 +5500,22 @@ begin
     end;
   end;
 
+  (* Quick kinds run on the fast model; research does not.
+
+     A search page is summarise-and-format, and the flagship makes it
+     slower and dearer without making it better. Research plans, reads
+     several sources and synthesises -- that is the reasoning the main
+     model is for, and downgrading it would show. *)
+  FastModel := '';
+  if Kind <> pkResearch then
+  begin
+    FastModel := GDesktopGateway.ResolveFastModel;
+    if FastModel <> '' then
+      LogDebug('page: %s on %s', [PageKindToStr(Kind), FastModel]);
+  end;
+
   if not GDesktopGateway.RunDesktopTurn(Prompt,
-       'Produce the page now.', Kind = pkResearch, Reply, Err) then
+       'Produce the page now.', Kind = pkResearch, FastModel, Reply, Err) then
     Exit;
   if Kind = pkResearch then
     PublishPageProgress('Writing', 'assembling the report');

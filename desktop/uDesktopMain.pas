@@ -174,6 +174,11 @@ type
       hang. }
     FProgressText: TLabel;
     FProgressLine: string;
+    { The research conversation, and the report it last produced. }
+    FResearchKey: string;
+    FResearchPage: string;
+    FResearchRunning: Boolean;
+    FResearchLastLine: string;
 
     { ---- process apps ----
       One Run window per project, same rule as chat and app windows. }
@@ -316,6 +321,7 @@ type
     function NewBrowserTab(const Caption: string): Integer;
     procedure BrowserSearchClick(Sender: TObject);
     procedure BrowserDeepClick(Sender: TObject);
+    procedure StartResearch(const Query, RevisePageId: string);
     procedure BrowserPromoteClick(Sender: TObject);
     procedure RunPageQuery(Kind: TPageKindSel);
     procedure ShowPage(const PageId: string);
@@ -409,6 +415,9 @@ const
   { A conversation reopened from the Library, filed under its session id.
     Same reserved-colon rule as above. }
   SessionChatPrefix = ':session:';
+  { The research conversation. Reserved-colon like the others, so it can
+    never collide with a project slug. }
+  ResearchChatKey = ':research';
   { One menu row: tall enough to hit with a mouse, short enough that the
     whole launcher fits without scrolling on an ordinary board. }
   MenuRowHeight = 22;
@@ -1857,6 +1866,8 @@ begin
 end;
 
 procedure TFormMain.ApplyPendingEvents;
+var
+  ResLog: TMemo;
 begin
   if FLayoutDirty then
   begin
@@ -1870,6 +1881,20 @@ begin
   { Main thread: safe to paint. }
   if (FProgressText <> nil) and (FProgressText.Text <> FProgressLine) then
     FProgressText.Text := FProgressLine;
+
+  (* The same narration, into the research conversation. Research runs for
+     minutes; a window that said nothing for that long would be
+     indistinguishable from a hang, which is the reason the progress feed
+     exists at all. *)
+  if FResearchRunning and (FProgressLine <> FResearchLastLine) then
+  begin
+    FResearchLastLine := FProgressLine;
+    if FChatLogs.TryGetValue(FResearchKey, ResLog) and (ResLog <> nil) then
+    begin
+      ResLog.Lines.Add(FProgressLine);
+      ResLog.GoToTextEnd;
+    end;
+  end;
   if not FEventDirty then Exit;
   FEventDirty := False;
   { Coarse on purpose: the board is small and re-reading it is cheap, so a
@@ -2137,7 +2162,9 @@ begin
     Exit;
   end;
 
-  if Project = PlainChatKey then
+  if Project = ResearchChatKey then
+    Title := 'Research'
+  else if Project = PlainChatKey then
     Title := 'PasClaw'
   else if Copy(Project, 1, Length(SessionChatPrefix)) = SessionChatPrefix then
     Title := 'Session ' + Copy(Project, Length(SessionChatPrefix) + 1, MaxInt)
@@ -2511,6 +2538,22 @@ begin
   Text := Trim(Input.Text);
   if Text = '' then Exit;
   Input.Text := '';
+
+  (* In the research window, a follow-up is more research -- and it revises
+     the report already on screen, which is what "ask another question here"
+     promised. Sending it to the chat endpoint instead would answer in prose
+     and quietly abandon the document. *)
+  if Project = ResearchChatKey then
+  begin
+    if FResearchRunning then
+    begin
+      AppendTurn(Project, 'toolerr', 'still working -- one at a time');
+      RenderTranscript(Project);
+      Exit;
+    end;
+    StartResearch(Text, FResearchPage);
+    Exit;
+  end;
 
   { The turn joins the transcript; the memo is only the live view of the
     reply being streamed, so it starts empty each time. }
@@ -3771,9 +3814,91 @@ begin
   RunPageQuery(pkeSearch);
 end;
 
+(* Research opens a CONVERSATION, not a progress box.
+
+   Search is "question in, page out" -- seconds, one shot, and the little
+   dialog suits it. Research is the other thing entirely: it plans, reads
+   several sources and synthesises, running for minutes and narrating as it
+   goes. That is a conversation with a long first turn, and a modal box that
+   disappears when it finishes throws away the narration along with any
+   ability to ask a follow-up.
+
+   So the report lands in a chat window: the plan and each step arrive as
+   they happen, the finished page arrives as a line you can click, and the
+   next question continues from there rather than starting over. *)
 procedure TFormMain.BrowserDeepClick(Sender: TObject);
+var
+  Query: string;
 begin
-  RunPageQuery(pkeResearch);
+  if FBrowserQuery = nil then Exit;
+  Query := Trim(FBrowserQuery.Text);
+  if Query = '' then Exit;
+  FBrowserQuery.Text := '';
+  StartResearch(Query, FCurrentPage);
+end;
+
+procedure TFormMain.StartResearch(const Query, RevisePageId: string);
+var
+  Log: TMemo;
+begin
+  FResearchKey := ResearchChatKey;
+  OpenChat(FResearchKey);
+  AppendTurn(FResearchKey, 'user', Query);
+  if RevisePageId <> '' then
+    AppendTurn(FResearchKey, 'tool',
+      'revising the open page rather than starting a new one')
+  else
+    AppendTurn(FResearchKey, 'tool', 'planning');
+  RenderTranscript(FResearchKey);
+
+  { The live view carries the narration while the turn runs. }
+  if FChatLogs.TryGetValue(FResearchKey, Log) and (Log <> nil) then
+  begin
+    Log.Text := '';
+    Log.Lines.Add('> ' + Query);
+    Log.Lines.Add('');
+  end;
+  ShowStreaming(FResearchKey, True);
+  FResearchRunning := True;
+  FProgressLine := 'Planning...';
+
+  TThread.CreateAnonymousThread(
+    procedure
+    var
+      Id, Err: string;
+      Ok: Boolean;
+      Done_: TThreadProcedure;
+    begin
+      SetClientContext('Research');
+      Ok := False;
+      Err := '';
+      try
+        Ok := FClient.CreatePageOfKind(Query, pkeResearch, RevisePageId, Id);
+        if not Ok then Err := FClient.LastError;
+      except
+        on E: Exception do Err := E.Message;
+      end;
+      Done_ :=
+        procedure
+        begin
+          FResearchRunning := False;
+          if Ok then
+          begin
+            AppendTurn(FResearchKey, 'assistant',
+              'The report is ready: **' + Query + '**' + sLineBreak +
+              sLineBreak + 'It is open in the Browser. Ask another ' +
+              'question here and it revises that report.');
+            FResearchPage := Id;
+            OpenBrowser(Id);
+          end
+          else
+            AppendTurn(FResearchKey, 'toolerr',
+              'the research turn failed: ' + Err);
+          RenderTranscript(FResearchKey);
+          ShowStreaming(FResearchKey, False);
+        end;
+      TThread.Queue(nil, Done_);
+    end).Start;
 end;
 
 (* "Make interactive" -- the page becomes an app you own.
