@@ -35,6 +35,7 @@ function Cmd_Vault_Run(const Argv: array of string): Integer;
 implementation
 
 uses
+  PasClaw.Workspaces,
   SysUtils, Classes,
   PasClaw.Platform,
   PasClaw.Config,
@@ -214,7 +215,7 @@ begin
   if Length(Argv) >= 3 then
     DestDir := Argv[2]
   else
-    DestDir := JoinPath(GetHome, 'workspace/vault/' + Slug);
+    DestDir := JoinPath(GetHome, ActiveWorkspaceName + '/vault/');
 
   if DirectoryExists(DestDir) then
   begin

@@ -1,0 +1,14 @@
+object FormMain: TFormMain
+  Left = 0
+  Top = 0
+  Caption = 'PasClaw Desktop'
+  ClientHeight = 720
+  ClientWidth = 1100
+  FormFactor.Width = 320
+  FormFactor.Height = 480
+  FormFactor.Devices = [Desktop]
+  OnCreate = FormCreate
+  OnDestroy = FormDestroy
+  OnKeyDown = FormKeyDown
+  DesignerMasterStyle = 0
+end

@@ -128,6 +128,17 @@ type
     FMCPAllowMutating: Boolean;
     FMCPAllowList:     array of string;
     FMCPOnly:          Boolean;
+    (* Apps-only listener. When a gateway is spun up with --apps-port, this
+       second listener serves ONLY generated app content -- /apps/*, /pages/*,
+       and each app's own state + read surface -- and 404s everything else.
+
+       The point is the ORIGIN, not the routes. An `html` app served from the
+       same origin as /desktop is same-origin with the desktop page, which
+       means it can read the operator's bearer token out of the desktop's
+       localStorage. Served from a different port it is a different origin:
+       separate storage, no reach into the desktop's DOM, and the postMessage
+       broker still works because postMessage is cross-origin by design. *)
+    FAppsOnly:         Boolean;
     function  GetOrCreateMCPInbound: TMCPServerCore;
     procedure HandleMCPRequest(ARequest: TIdHTTPRequestInfo;
                                 AResp: TIdHTTPResponseInfo);
@@ -168,6 +179,31 @@ type
     procedure HandleStatus(AResp: TIdHTTPResponseInfo);
     procedure HandleTools(AResp: TIdHTTPResponseInfo);
     procedure HandleMCPList(AResp: TIdHTTPResponseInfo);
+    (* Run ONE agent turn with a caller-supplied system prompt, outside any
+       HTTP request. This is what the desktop's injected callbacks use: page
+       generation and task runs need the same provider + registry + fallback
+       machinery HandleChat sets up, and duplicating that setup is how the
+       two drift. Returns False with Err set when there is no provider or
+       the loop fails. *)
+    function RunDesktopTurn(const SystemPrompt, Prompt: string;
+                            Narrate: Boolean;
+                            out Reply, Err: string): Boolean;
+    { OnToolCall sink for a narrated turn -- turns each tool call into a
+      page-progress event so the desktop can show work rather than a
+      spinner. A method, not a closure: the loop's hook is a method
+      pointer. }
+    procedure NarrateToolCall(const Name, ArgsJSON: string);
+    { Desktop client surface -- see PasClaw.Gateway.Desktop. Returns True
+      when it consumed the request. Streams a file when the route resolved
+      one (app assets, rendered pages); otherwise writes the JSON body. }
+    function HandleDesktop(ARequest: TIdHTTPRequestInfo;
+                           AResp: TIdHTTPResponseInfo;
+                           const Doc: string): Boolean;
+    { GET /v1/desktop/events -- SSE feed of board changes (jobs, tasks, app
+      state, pages). Parks until the client disconnects, exactly like
+      HandleLogs; the desktop clients subscribe instead of polling. }
+    procedure HandleDesktopEvents(AContext: TIdContext;
+                                  AResp: TIdHTTPResponseInfo);
     procedure HandleCronList(AResp: TIdHTTPResponseInfo);
     procedure HandleSkillsList(AResp: TIdHTTPResponseInfo);
     { Install a skill (POST /v1/skills with a JSON target field) into
@@ -452,6 +488,7 @@ type
       the MCP surface so a heavy /v1/responses streaming load
       can't compete with MCP requests for Indy worker threads. }
     procedure SetMCPOnly(V: Boolean);
+    procedure SetAppsOnly(V: Boolean);
     procedure Start(const BindAddr: string; Port: Integer);
     procedure Stop;
     procedure WaitForStop;
@@ -510,6 +547,7 @@ function ResolveResponsesToolChoice(Req: TJsonObject): string;
 implementation
 
 uses
+  PasClaw.Workspaces,
   DateUtils,
   {$IFDEF FPC}{$IFDEF UNIX}BaseUnix,{$ENDIF}{$ENDIF}
   IdTCPConnection,
@@ -555,6 +593,12 @@ uses
   PasClaw.Vault.Client,     { SearchVault / GetVaultEntry -- /v1/vault browse }
   PasClaw.Gateway.ToolView,
   PasClaw.Gateway.WebUI,
+  PasClaw.Gateway.Desktop,  { desktop client surface: workspaces, projects,
+                              tasks, jobs, apps, pages }
+  PasClaw.Desktop.Events,   { the /v1/desktop/events fan-out }
+  PasClaw.Projects.Store,   { job/task records the desktop callbacks write }
+  PasClaw.Apps.Runner,      { StopAllApps on shutdown }
+  PasClaw.Pages,            { BuildPagePrompt / TPageKind }
   PasClaw.Gateway.Auth,     { CheckGatewayAuth -- bearer-token middleware
                               fired at the top of OnCommandGet. Off when
                               Cfg.Gateway.Token is empty (the default);
@@ -803,7 +847,7 @@ begin
     concurrently. No-op when disabled. }
   CC.Enabled   := FCfg.CheckpointsEnabled;
   CC.SessionId := CheckpointSessionId('');
-  CC.Root      := JoinPath(GetHome, 'workspace/checkpoints');
+  CC.Root      := JoinPath(GetHome, ActiveWorkspaceName + '/checkpoints');
   CC.KeepLast  := FCfg.CheckpointsKeepLast;
   InitCheckpoints(CC);
   { Phase 4c: best-effort load the local embedder so distilled-fact dedup
@@ -1006,6 +1050,11 @@ begin
   FMCPOnly := V;
 end;
 
+procedure TGatewayServer.SetAppsOnly(V: Boolean);
+begin
+  FAppsOnly := V;
+end;
+
 function TGatewayServer.GetOrCreateMCPInbound: TMCPServerCore;
 begin
   FMCPInboundLock.Acquire;
@@ -1061,6 +1110,17 @@ begin
   Result := True;
 end;
 
+{ The running gateway, reached by the desktop's agent callbacks. Those are
+  plain function pointers, not methods, so they need a way back to the
+  server; one gateway per process is already this program's shape. Set in
+  Start, cleared in Stop. }
+var
+  GDesktopGateway: TGatewayServer = nil;
+
+{ Registered from Start. Forward-declared because the implementation lives
+  further down, next to the agent machinery it drives. }
+procedure InstallDesktopCallbacks(AGateway: TGatewayServer); forward;
+
 procedure TGatewayServer.Start(const BindAddr: string; Port: Integer);
 var
   Binding: TIdSocketHandle;
@@ -1072,6 +1132,9 @@ begin
   Binding.Port := Port;
   FHTTP.Active := True;
   FStarted := True;
+  { Give the desktop surface an agent: without this, /v1/pages and
+    .../tasks/<t>/run answer 503 by design. }
+  InstallDesktopCallbacks(Self);
   LogInfo('gateway: listening on http://%s:%d', [BindAddr, Port]);
   (* Auth-state summary at startup. Only the primary listener prints
      it; the optional MCP companion listener shares the same FCfg, so
@@ -1087,6 +1150,10 @@ end;
 
 procedure TGatewayServer.Stop;
 begin
+  { Drop the desktop's handle first: a callback firing against a
+    stopping server would run a turn nobody can read. }
+  if GDesktopGateway = Self then GDesktopGateway := nil;
+  StopAllApps;
   if not FStarted then Exit;
   try
     FHTTP.Active := False;
@@ -1291,7 +1358,22 @@ begin
     to a compromised worker, the worst they can do is pull jobs
     and POST responses -- they can't impersonate the operator
     against the rest of the API. }
-  if (not CheckGatewayAuth(GetEffectiveGatewayToken(FCfg),
+  (* Apps-origin carve-out: on the --apps-port listener, the routes the
+     listener exists to serve bypass the operator bearer. The second origin
+     exists so model-authored app code can NEVER see the operator token --
+     the desktop iframe deliberately embeds apps without it, and the
+     standalone SDK's fetches carry none -- so gating these routes on that
+     token is a contradiction: the only way to make them work would be to
+     hand the untrusted origin the very credential the split protects.
+     What this opens is exactly the apps surface and nothing else: app/page
+     content plus the per-app state/read/action SDK (IsAppScopedPath). The
+     main listener is untouched -- there these same paths still require the
+     bearer. Operators who need the apps origin private keep it on
+     localhost or in front of their own proxy auth. *)
+  if (not (FAppsOnly and
+           (HasPrefix(Doc, '/apps/') or HasPrefix(Doc, '/pages/') or
+            IsAppScopedPath(Doc))))
+     and (not CheckGatewayAuth(GetEffectiveGatewayToken(FCfg),
                             ARequest.Command, Doc,
                             ARequest.RawHeaders.Values['Authorization'],
                             ARequest.Params.Values['token']))
@@ -1317,6 +1399,35 @@ begin
     else 404s -- the operator wired the second listener for
     isolation, and silently fanning out /v1/chat traffic to it
     would defeat the purpose. }
+  (* Apps-only listener: generated-app content and nothing else. The list
+     is deliberately short and checked by prefix -- adding a route here
+     widens what model-authored code can reach from its own origin, so it
+     should be a deliberate edit. Note what is NOT here: /v1/chat, /v1/config,
+     /v1/fs, the project board, and the desktop page itself. *)
+  if FAppsOnly then
+  begin
+    if HasPrefix(Doc, '/apps/') or HasPrefix(Doc, '/pages/') or
+       IsAppScopedPath(Doc) then
+    begin
+      if not HandleDesktop(ARequest, AResponse, Doc) then
+        WriteJSON(AResponse, 404, '{"error":"not found"}');
+    end
+    else if (ARequest.Command = 'GET') and (Doc = '/v1/health') then
+      HandleHealth(AResponse)
+    else if Doc = '/favicon.ico' then
+    begin
+      AResponse.ResponseNo  := 200;
+      AResponse.ContentType := 'image/svg+xml';
+      WriteBodyStream(AResponse,
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">' +
+        '<rect width="16" height="16" fill="#c0c0c0" stroke="#000"/></svg>');
+    end
+    else
+      WriteJSON(AResponse, 404,
+        '{"error":"apps-only listener; app content is served here, the API is not"}');
+    Exit;
+  end;
+
   if FMCPOnly then
   begin
     if (ARequest.Command = 'POST') and
@@ -1330,7 +1441,16 @@ begin
   end;
 
   try
-    if      (ARequest.Command = 'GET')  and (Doc = '/v1/health')  then HandleHealth(AResponse)
+    { Desktop surface (workspaces / projects / tasks / jobs / apps / pages).
+      Consulted first and self-contained: PasClaw.Gateway.Desktop returns
+      False for anything it doesn't own, so the chain below is unchanged.
+      It runs INSIDE the auth gate above, so every desktop route is
+      bearer-protected exactly like the rest of /v1/*. }
+    if (ARequest.Command = 'GET') and (Doc = '/v1/desktop/events') then
+      HandleDesktopEvents(AContext, AResponse)
+    else if HandleDesktop(ARequest, AResponse, Doc) then
+      { handled }
+    else if (ARequest.Command = 'GET')  and (Doc = '/v1/health')  then HandleHealth(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/version') then HandleVersion(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/status')  then HandleStatus(AResponse)
     else if (ARequest.Command = 'GET')  and (Doc = '/v1/tools')   then HandleTools(AResponse)
@@ -1414,6 +1534,31 @@ begin
       { Hand Indy a raw byte stream loaded from the embedded resource -- no
         string encoding involved. }
       AResponse.ContentStream     := WebUIStream;
+      AResponse.FreeContentStream := True;
+      AResponse.ContentLength     := AResponse.ContentStream.Size;
+    end
+    else if Doc = '/favicon.ico' then
+    begin
+      { An SVG favicon, served inline. Without it every page the gateway
+        serves -- including app iframes and rendered pages -- logs a 404 in
+        the console, which reads as a bug to anyone who opens devtools. }
+      AResponse.ResponseNo  := 200;
+      AResponse.ContentType := 'image/svg+xml';
+      WriteBodyStream(AResponse,
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">' +
+        '<rect width="16" height="16" fill="#c0c0c0" stroke="#000"/>' +
+        '<rect x="1" y="1" width="14" height="4" fill="#000080"/>' +
+        '<rect x="2" y="7" width="9" height="1.5" fill="#808080"/>' +
+        '<rect x="2" y="10" width="6" height="1.5" fill="#808080"/></svg>');
+    end
+    else if (Doc = '/desktop') or (Doc = '/desktop/') then
+    begin
+      { The desktop client. A separate page rather than a mode of the classic
+        UI: they are different paradigms, and both stay useful. }
+      AResponse.ResponseNo  := 200;
+      AResponse.ContentType := 'text/html; charset=utf-8';
+      AResponse.CharSet     := 'utf-8';
+      AResponse.ContentStream     := DesktopUIStream;
       AResponse.FreeContentStream := True;
       AResponse.ContentLength     := AResponse.ContentStream.Size;
     end
@@ -1576,6 +1721,83 @@ begin
   finally
     Root.Free;
   end;
+end;
+
+function TGatewayServer.HandleDesktop(ARequest: TIdHTTPRequestInfo;
+  AResp: TIdHTTPResponseInfo; const Doc: string): Boolean;
+{ Bridge between Indy and the transport-agnostic desktop router. Reads the
+  request body, calls DesktopRoute, then either streams the resolved file or
+  writes the JSON it produced. }
+var
+  Resp: TDesktopResponse;
+  Body: string;
+  Bytes: TBytes;
+  Strm: TFileStream;
+  Lines: TStringList;
+  i: Integer;
+begin
+  Result := False;
+  if not IsDesktopPath(Doc) then Exit;
+
+  Body := '';
+  if ARequest.PostStream <> nil then
+  begin
+    ARequest.PostStream.Position := 0;
+    SetLength(Bytes, ARequest.PostStream.Size);
+    if ARequest.PostStream.Size > 0 then
+      ARequest.PostStream.ReadBuffer(Bytes[0], ARequest.PostStream.Size);
+    Body := TEncoding.UTF8.GetString(Bytes);
+  end;
+  { Indy only leaves a PostStream when the content type is one it does not
+    parse. A body sent as application/x-www-form-urlencoded -- which is what
+    curl and a bare fetch() default to -- has already been consumed into
+    UnparsedParams, so read it back from there rather than 400ing on a
+    request whose body plainly arrived. }
+  if (Trim(Body) = '') and (ARequest.UnparsedParams <> '') then
+    Body := ARequest.UnparsedParams;
+
+  if not DesktopRoute(ARequest.Command, Doc, ARequest.QueryParams, Body, Resp) then
+    Exit;
+  Result := True;
+
+  { Route-supplied headers (CSP, nosniff) ride along on file responses. }
+  if Resp.Headers <> '' then
+  begin
+    Lines := TStringList.Create;
+    try
+      Lines.Text := Resp.Headers;
+      for i := 0 to Lines.Count - 1 do
+        if Pos(':', Lines[i]) > 1 then
+          AResp.CustomHeaders.AddValue(
+            Trim(Copy(Lines[i], 1, Pos(':', Lines[i]) - 1)),
+            Trim(Copy(Lines[i], Pos(':', Lines[i]) + 1, MaxInt)));
+    finally
+      Lines.Free;
+    end;
+  end;
+
+  if Resp.FilePath <> '' then
+  begin
+    { Stream from disk -- app assets and rendered pages can be large, and
+      re-encoding them through a string would corrupt binary types. Indy
+      frees the stream it is handed. }
+    try
+      Strm := TFileStream.Create(Resp.FilePath, fmOpenRead or fmShareDenyWrite);
+    except
+      WriteJSON(AResp, 404, '{"error":"not found"}');
+      Exit;
+    end;
+    AResp.ResponseNo     := Resp.Status;
+    AResp.ContentType    := Resp.ContentType;
+    AResp.ContentStream  := Strm;
+    AResp.FreeContentStream := True;
+    Exit;
+  end;
+
+  AResp.ResponseNo  := Resp.Status;
+  AResp.ContentType := Resp.ContentType;
+  AResp.CharSet     := 'utf-8';
+  WriteBodyStream(AResp, Resp.Body);
 end;
 
 procedure TGatewayServer.HandleCronList(AResp: TIdHTTPResponseInfo);
@@ -1782,7 +2004,7 @@ begin
     WriteJSON(AResp, 400, '{"error":"missing field: target"}');
     Exit;
   end;
-  DestRoot := JoinPath(GetHome, 'workspace/skills');
+  DestRoot := JoinPath(GetHome, ActiveWorkspaceName + '/skills');
   if not InstallSkillTarget(Target, DestRoot, Name, Err) then
   begin
     WriteJSON(AResp, 502, '{"error":"' + JsonEscape(Err) + '"}');
@@ -1904,7 +2126,7 @@ var
   Strm: TMemoryStream;
   FS: TFileStream;
 begin
-  WsDir := JoinPath(GetHome, 'workspace');
+  WsDir := JoinPath(GetHome, ActiveWorkspaceName);
   if not DirectoryExists(WsDir) then
   begin
     WriteJSON(AResp, 404, '{"error":"no workspace directory yet"}');
@@ -2059,7 +2281,7 @@ begin
   end;
 
   Stamp    := FormatDateTime('yyyymmdd-hhnnss', Now);
-  WsDir    := JoinPath(GetHome, 'workspace');
+  WsDir    := JoinPath(GetHome, ActiveWorkspaceName);
   ZipPath  := JoinPath(GetHome, 'workspace-import-' + Stamp + '.zip');
   StageDir := JoinPath(GetHome, 'workspace-import-stage-' + Stamp);
   try
@@ -2248,7 +2470,7 @@ begin
     Exit;
   end;
 
-  Dir := JoinPath(GetHome, 'workspace/kb-files');
+  Dir := JoinPath(GetHome, ActiveWorkspaceName + '/kb-files');
   if not ForceDirectories(Dir) then
   begin
     WriteJSON(AResp, 500, '{"error":"could not create workspace/kb-files"}');
@@ -2349,7 +2571,7 @@ begin
     WriteJSON(AResp, 400, '{"error":"unsafe skill name"}');
     Exit;
   end;
-  DestRoot := JoinPath(GetHome, 'workspace/skills');
+  DestRoot := JoinPath(GetHome, ActiveWorkspaceName + '/skills');
   if RemoveSkillFiles(DestRoot, Name) then
   begin
     LogInfo('gateway: removed skill %s via /v1/skills', [Name]);
@@ -2371,7 +2593,7 @@ begin
   Root := TJsonObject.Create;
   try
     Arr := TJsonArray.Create;
-    Dir := JoinPath(GetHome, 'workspace/memory');
+    Dir := JoinPath(GetHome, ActiveWorkspaceName + '/memory');
     if DirectoryExists(Dir) then
     begin
       if FindFirst(JoinPath(Dir, '*.md'), faAnyFile, SR) = 0 then
@@ -2417,7 +2639,7 @@ begin
   if K < 1   then K := DefaultK;
   if K > MaxK then K := MaxK;
 
-  Dir := JoinPath(GetHome, 'workspace/memory');
+  Dir := JoinPath(GetHome, ActiveWorkspaceName + '/memory');
   if not DirectoryExists(Dir) then
   begin
     WriteJSON(AResp, 200, '{"hits":[]}');   { no memory written yet }
@@ -2486,7 +2708,7 @@ begin
     WriteJSON(AResp, 400, '{"error":"bad name"}');
     Exit;
   end;
-  Path := JoinPath(JoinPath(GetHome, 'workspace/memory'), Name);
+  Path := JoinPath(JoinPath(GetHome, ActiveWorkspaceName + '/memory'), Name);
   if not FileExists(Path) then
   begin
     WriteJSON(AResp, 404, '{"error":"not found"}');
@@ -3712,7 +3934,7 @@ begin
     offer a switch to) it even on a fresh web-only / Docker boot where no
     agent has run yet to create it. Best-effort; a failure just means the
     workspace button won't appear. }
-  WsRoot := JoinPath(GetHome, 'workspace');
+  WsRoot := JoinPath(GetHome, ActiveWorkspaceName);
   ForceDirectories(WsRoot);
   Path := ARequest.Params.Values['path'];
   if Path = '' then
@@ -4105,7 +4327,7 @@ var
 begin
   CC.Enabled   := FCfg.CheckpointsEnabled;
   CC.SessionId := CheckpointSessionId(ReqSession);
-  CC.Root      := JoinPath(GetHome, 'workspace/checkpoints');
+  CC.Root      := JoinPath(GetHome, ActiveWorkspaceName + '/checkpoints');
   CC.KeepLast  := FCfg.CheckpointsKeepLast;
   InitCheckpoints(CC);
 end;
@@ -4378,6 +4600,71 @@ begin
     { Best-effort terminator chunk so the client sees a clean
       end-of-stream. Same TBytes→TIdBytes conversion as the header
       write above -- Delphi dcc64 enforces the type match. }
+    try
+      TerminatorTmp := TEncoding.ASCII.GetBytes('0'#13#10#13#10);
+      SetLength(TerminatorIdBytes, Length(TerminatorTmp));
+      for i := 0 to High(TerminatorTmp) do TerminatorIdBytes[i] := TerminatorTmp[i];
+      AContext.Connection.IOHandler.Write(TerminatorIdBytes);
+    except
+    end;
+    Writer.Free;
+  end;
+end;
+
+procedure TGatewayServer.HandleDesktopEvents(AContext: TIdContext;
+  AResp: TIdHTTPResponseInfo);
+{ Same shape as HandleLogs: emit SSE headers through the shared helper (so
+  Indy's Content-Length/Transfer-Encoding bug doesn't poison the feed for
+  strict proxies), then park, draining the subscriber's queue as events
+  arrive. A heartbeat comment keeps intermediaries from closing an idle
+  connection and lets the client notice a dead server. }
+var
+  Writer: TLogStreamWriter;
+  Sub: TEventSubscriber;
+  Batch: TStringList;
+  i: Integer;
+  Idle: Integer;
+  TerminatorTmp: TBytes;
+  TerminatorIdBytes: TIdBytes;
+begin
+  if not EmitSSEResponseHeaders(AContext, AResp) then Exit;
+
+  Writer := TLogStreamWriter.Create;
+  Writer.Conn := AContext.Connection;
+  Sub := DesktopSubscribe;
+  Idle := 0;
+  try
+    { Tell the client it is connected before anything happens, so a UI can
+      show "live" without waiting for the first board change. }
+    Writer.WriteSSE('data: {"type":"hello"}'#10#10);
+    while AContext.Connection.Connected do
+    begin
+      if FStopFlag.WaitFor(0) = wrSignaled then Break;
+      { Wake on an event, or after a second to re-check the connection. }
+      Sub.WaitFor(1000);
+      Batch := Sub.Drain(64);
+      try
+        for i := 0 to Batch.Count - 1 do
+          Writer.WriteSSE('data: ' + Batch[i] + #10#10);
+        if Batch.Count > 0 then
+          Idle := 0
+        else
+        begin
+          Inc(Idle);
+          { ~15s of quiet -> a comment frame. Comments are ignored by every
+            SSE client but keep the socket demonstrably alive. }
+          if Idle >= 15 then
+          begin
+            Writer.WriteSSE(': keepalive'#10#10);
+            Idle := 0;
+          end;
+        end;
+      finally
+        Batch.Free;
+      end;
+    end;
+  finally
+    DesktopUnsubscribe(Sub);
     try
       TerminatorTmp := TEncoding.ASCII.GetBytes('0'#13#10#13#10);
       SetLength(TerminatorIdBytes, Length(TerminatorTmp));
@@ -4962,6 +5249,310 @@ begin
   finally
     RespJ.Free;
   end;
+end;
+
+(* Translate a tool call into a line a person would recognise.
+
+   The tool NAME is the honest signal -- it is what actually happened -- and
+   the argument is trimmed to the part that identifies the target. No
+   invented narration: if a tool we have no phrasing for fires, the user
+   sees its real name rather than a soothing generality. *)
+procedure TGatewayServer.NarrateToolCall(const Name, ArgsJSON: string);
+var
+  Phase, Detail: string;
+begin
+  Detail := ArgsJSON;
+  if      Name = 'web_search' then Phase := 'Searching'
+  else if Name = 'web_fetch'  then Phase := 'Reading'
+  else if Name = 'fs_read'    then Phase := 'Reading a file'
+  else if Name = 'fs_grep'    then Phase := 'Searching your files'
+  else if Name = 'memory_search' then Phase := 'Checking what I remember'
+  else Phase := Name;
+  PublishPageProgress(Phase, Detail);
+end;
+
+function TGatewayServer.RunDesktopTurn(const SystemPrompt, Prompt: string;
+  Narrate: Boolean; out Reply, Err: string): Boolean;
+var
+  Msgs: TMessageArray;
+  Loop: TToolLoopResult;
+  LoopCfg: TToolLoopConfig;
+  Prim: ILLMProvider;
+  FB: TLLMProviderArray;
+  FBModels: TStringArray;
+  DefModel: string;
+begin
+  Reply := '';
+  Err := '';
+  Result := False;
+
+  SnapshotRuntime(Prim, FB, FBModels, DefModel);
+  LoopCfg := Default(TToolLoopConfig);
+  LoopCfg.Provider := Prim;
+  if LoopCfg.Provider = nil then
+  begin
+    Err := 'no provider configured';
+    Exit;
+  end;
+
+  SetLength(Msgs, 1);
+  Msgs[0] := MakeMessage(mrUser, Prompt);
+
+  LoopCfg.Registry := FRegistry;
+  if FToolsHonorInMemoryConfig then LoopCfg.ActiveConfig := FCfg;
+  LoopCfg.Model          := DefModel;
+  LoopCfg.MaxIterations  := FMaxIter;
+  LoopCfg.Parallel       := True;
+  LoopCfg.Mode           := pmBuild;
+  LoopCfg.Fallbacks      := FB;
+  LoopCfg.FallbackModels := FBModels;
+  LoopCfg.Options        := DefaultChatOptions;
+  ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
+  { The caller's system prompt REPLACES the default one -- a page generator
+    that also carried the general assistant preamble would produce chat prose
+    wrapped in HTML rather than a document. }
+  LoopCfg.Options.SystemPrompt := SystemPrompt;
+  LoopCfg.Identity       := MakeIdentity('gateway', 'desktop');
+  LoopCfg.CompactEnabled := True;
+  LoopCfg.CompactOpts    := DefaultCompactOptions;
+  LoopCfg.ToolOutputCap  := FCfg.ToolOutputCap;
+  LoopCfg.StreamReliability := FCfg.StreamReliability;
+  { Only deep research narrates. An ordinary page comes back fast enough
+    that a progress feed would be noise on the event bus. }
+  if Narrate then LoopCfg.OnToolCall := NarrateToolCall;
+
+  if not RunToolLoop(LoopCfg, Msgs, Loop) then
+  begin
+    Err := 'agent loop failed';
+    Exit;
+  end;
+  Reply := Loop.Content;
+  Result := True;
+end;
+
+
+(* ============================================================
+   Desktop agent callbacks.
+
+   PasClaw.Gateway.Desktop is transport- AND agent-agnostic on purpose: it
+   knows how to store a page and open a job, not how to think. These two
+   functions are the bridge, registered at startup so the desktop's
+   /v1/pages and .../run routes stop answering 503.
+
+   They are plain functions rather than methods because the callback types
+   are plain function pointers -- so the running server is reached through
+   GDesktopGateway, set in Start and cleared in Stop. One gateway per
+   process is already the shape of this program.
+   ============================================================ *)
+
+(* Pull the trailing "SOURCES: [...]" line off a page reply.
+
+   BuildPagePrompt asks for the body followed by that one line. Everything
+   before it is the document; the line itself is the provenance the renderer
+   needs. A reply with no SOURCES line is treated as ungrounded rather than
+   as an error -- PasClaw.Pages then renders the "could not be grounded"
+   notice, which is the honest outcome and better than a 500. *)
+procedure SplitPageReply(const Reply: string; out BodyHTML, SourcesJSON: string);
+var
+  Idx, LineStart: Integer;
+  Tail: string;
+begin
+  BodyHTML := Reply;
+  SourcesJSON := '';
+  { Search from the end: a page about JSON could legitimately contain the
+    word SOURCES in its own text. }
+  Idx := Length(Reply);
+  while Idx > 0 do
+  begin
+    if (Copy(Reply, Idx, 8) = 'SOURCES:') and
+       ((Idx = 1) or (Reply[Idx - 1] = #10) or (Reply[Idx - 1] = #13)) then
+    begin
+      LineStart := Idx;
+      Tail := Trim(Copy(Reply, Idx + 8, MaxInt));
+      { Models sometimes fence the array; unwrap a trailing code fence. }
+      if Pos('```', Tail) > 0 then
+        Tail := Trim(Copy(Tail, 1, Pos('```', Tail) - 1));
+      SourcesJSON := Tail;
+      BodyHTML := Trim(Copy(Reply, 1, LineStart - 1));
+      Break;
+    end;
+    Dec(Idx);
+  end;
+  { A body wrapped in a markdown fence is still HTML inside; unwrap it so the
+    renderer doesn't escape a literal ```html into the page. }
+  if Copy(Trim(BodyHTML), 1, 3) = '```' then
+  begin
+    BodyHTML := Trim(BodyHTML);
+    Idx := Pos(#10, BodyHTML);
+    if Idx > 0 then BodyHTML := Copy(BodyHTML, Idx + 1, MaxInt);
+    Idx := Pos('```', BodyHTML);
+    if Idx > 0 then BodyHTML := Copy(BodyHTML, 1, Idx - 1);
+    BodyHTML := Trim(BodyHTML);
+  end;
+end;
+
+function DesktopPageGenerator(const Query: string; Kind: TPageKind;
+  out Title, BodyHTML, SourcesJSON, Err: string): Boolean;
+var
+  Reply: string;
+begin
+  Title := Query;
+  BodyHTML := '';
+  SourcesJSON := '';
+  Err := '';
+  Result := False;
+  if GDesktopGateway = nil then
+  begin
+    Err := 'no gateway available';
+    Exit;
+  end;
+  if Kind = pkResearch then
+    PublishPageProgress('Planning', Query);
+  if not GDesktopGateway.RunDesktopTurn(BuildPagePrompt(Query, Kind),
+       'Produce the page now.', Kind = pkResearch, Reply, Err) then
+    Exit;
+  if Kind = pkResearch then
+    PublishPageProgress('Writing', 'assembling the report');
+  SplitPageReply(Reply, BodyHTML, SourcesJSON);
+  if Trim(BodyHTML) = '' then
+  begin
+    Err := 'the agent produced no page body';
+    Exit;
+  end;
+  Result := True;
+end;
+
+type
+  (* A task run happens on its own thread: a turn takes as long as it takes,
+     and the HTTP caller wants the job id immediately so it can watch the
+     board. Progress reaches the clients through the event bus + the job
+     log, which is exactly what those exist for. *)
+  TJobRunThread = class(TThread)
+  private
+    FProject, FTask, FJob, FPrompt, FWorkspace: string;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const AProject, ATask, AJob, APrompt: string);
+  end;
+
+constructor TJobRunThread.Create(const AProject, ATask, AJob, APrompt: string);
+begin
+  inherited Create(True);
+  FProject := AProject;
+  FTask := ATask;
+  FJob := AJob;
+  FPrompt := APrompt;
+  (* The workspace the operator started this job in, captured on the
+     REQUEST thread while it is still unambiguous. A run outlives the
+     click that began it, so an operator who switches workspace mid-run
+     would otherwise redirect a job already in flight: its later store
+     and file access would land in the other business's world. Pinned in
+     Execute below. *)
+  FWorkspace := ActiveWorkspaceName;
+  FreeOnTerminate := True;
+end;
+
+procedure TJobRunThread.Execute;
+var
+  Reply, Err, Sys, Task, Ignored: string;
+  T: TTaskInfo;
+begin
+  { Pin first: everything below resolves paths through the active
+    workspace, and this thread's answer must stay the one it started
+    with regardless of what the operator does in the UI meanwhile. }
+  SetThreadWorkspace(FWorkspace);
+  try
+  Task := FPrompt;
+  if Trim(Task) = '' then
+  begin
+    { No prompt given: the task's own title IS the instruction. That is the
+      point of a board -- "run this task" should not need restating. }
+    if GetTask(FProject, FTask, T) then
+    begin
+      Task := T.Title;
+      if T.Notes <> '' then Task := Task + #10#10 + T.Notes;
+    end;
+  end;
+  if Trim(Task) = '' then Task := 'Work the current task.';
+
+  Sys := 'You are working inside the PasClaw Desktop project "' + FProject +
+    '", on task ' + FTask + '.' + #10 +
+    'Deliverables are APPS, not essays. Write the app into projects/' +
+    FProject + '/app/ in the workspace and maintain its app.json ' +
+    '(name, kind of page|html|python, entry, window size).' + #10 +
+    'An html app persists data through the desktop SDK: include ' +
+    '<script src="pasclaw.js">' + '</scr' + 'ipt> and call ' +
+    'pasclaw.getJSON / pasclaw.setJSON. Do not fetch the API directly.' + #10 +
+    'When you finish, report with the task tool: ' +
+    'task action="job" project="' + FProject + '" id="' + FTask +
+    '" status="done" summary="...".';
+
+  AppendJobLog(FProject, FTask, FJob, '> ' + Task);
+  if GDesktopGateway = nil then
+  begin
+    UpdateJob(FProject, FTask, FJob, 'failed', 'no gateway', '-', Ignored);
+    Exit;
+  end;
+
+  if GDesktopGateway.RunDesktopTurn(Sys, Task, False, Reply, Err) then
+  begin
+    AppendJobLog(FProject, FTask, FJob, Reply);
+    { The model is asked to close the job itself; do it here too in case it
+      did not, so a finished run never leaves the board showing "running". }
+    UpdateJob(FProject, FTask, FJob, 'done', Copy(Trim(Reply), 1, 200), '-', Ignored);
+  end
+  else
+  begin
+    AppendJobLog(FProject, FTask, FJob, 'ERROR: ' + Err);
+    UpdateJob(FProject, FTask, FJob, 'failed', Err, '-', Ignored);
+  end;
+  PublishProjects;
+  finally
+    SetThreadWorkspace('');
+  end;
+end;
+
+function DesktopJobRunner(const Project, TaskId, Prompt: string;
+  out JobId, Err: string): Boolean;
+begin
+  JobId := '';
+  Err := '';
+  Result := False;
+  if GDesktopGateway = nil then
+  begin
+    Err := 'no gateway available';
+    Exit;
+  end;
+  JobId := CreateJob(Project, TaskId, '', Err);
+  if JobId = '' then Exit;
+  TJobRunThread.Create(Project, TaskId, JobId, Prompt).Start;
+  Result := True;
+end;
+
+{ One turn, plain text in and out -- what Mail's summarise-and-draft needs.
+  Not narrated: a single short turn is over before a progress feed would say
+  anything useful. }
+function DesktopTextGenerator(const SystemPrompt, Prompt: string;
+  out Reply, Err: string): Boolean;
+begin
+  Reply := '';
+  Err := '';
+  Result := False;
+  if GDesktopGateway = nil then
+  begin
+    Err := 'no gateway available';
+    Exit;
+  end;
+  Result := GDesktopGateway.RunDesktopTurn(SystemPrompt, Prompt, False, Reply, Err);
+end;
+
+procedure InstallDesktopCallbacks(AGateway: TGatewayServer);
+begin
+  GDesktopGateway := AGateway;
+  SetPageGenerator(DesktopPageGenerator);
+  SetJobRunner(DesktopJobRunner);
+  SetTextGenerator(DesktopTextGenerator);
 end;
 
 function GenChatCompletionId: string;

@@ -130,6 +130,7 @@ function NetworkBlockingActive: Boolean;
 implementation
 
 uses
+  PasClaw.Workspaces,
   PasClaw.Logger,
   PasClaw.Tools.Regex;
 
@@ -157,8 +158,11 @@ begin
   GWorkspace := ExcludeTrailingPathDelimiter(ExpandFileName(GWorkspace));
   { Independent of the sandbox workspace -- always the agent's data home, so
     the operator Files browser can reach it from any launch directory. }
+  { Follows the ACTIVE workspace: the operator browse root is where the
+    agent's data lives, and after multi-workspace isolation that is no
+    longer always <home>/workspace. }
   GOperatorBrowseRoot := ExcludeTrailingPathDelimiter(ExpandFileName(
-    IncludeTrailingPathDelimiter(GetHome) + 'workspace'));
+    IncludeTrailingPathDelimiter(GetHome) + ActiveWorkspaceName));
   if Policy.RestrictToWorkspace then
     LogDebug('sandbox: restrict_to_workspace=true workspace=%s', [GWorkspace]);
 end;

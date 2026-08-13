@@ -45,6 +45,7 @@ procedure RegisterSessionSearchTool(R: TToolRegistry);
 implementation
 
 uses
+  PasClaw.Workspaces,
   SysUtils, Classes,
   PasClaw.JSON,
   PasClaw.Utils,
@@ -97,7 +98,7 @@ end;
 
 function SessionsDir_: string;
 begin
-  Result := JoinPath(GetHome, 'workspace/sessions');
+  Result := JoinPath(GetHome, ActiveWorkspaceName + '/sessions');
 end;
 
 function IndexDbPath: string;

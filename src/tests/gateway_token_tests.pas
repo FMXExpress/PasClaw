@@ -194,6 +194,14 @@ procedure TestIsExemptRouteShape;
 begin
   AssertTrue(IsExemptRoute('GET',  '/'),
              '/ is exempt');
+  AssertTrue(IsExemptRoute('GET',  '/desktop'),
+             '/desktop is exempt -- it hosts the token-entry dialog');
+  AssertTrue(IsExemptRoute('GET',  '/desktop/'),
+             '/desktop/ (trailing slash) is exempt too');
+  AssertTrue(not IsExemptRoute('GET', '/desktopX'),
+             'similar-looking path does not silently match /desktop');
+  AssertTrue(not IsExemptRoute('GET', '/v1/desktop/state'),
+             'the desktop DATA routes are NOT exempt -- only the shell HTML');
   AssertTrue(IsExemptRoute('GET',  '/v1/health'),
              '/v1/health is exempt');
   AssertTrue(IsExemptRoute('GET',  '/v1/version'),
@@ -379,7 +387,7 @@ begin
   TestExtractBearerTokenParses;
   WriteLn('  ok: ExtractBearerToken parses standard + lowercase + whitespace variants');
   TestIsExemptRouteShape;
-  WriteLn('  ok: IsExemptRoute names exactly the four families documented in the unit comment');
+  WriteLn('  ok: IsExemptRoute names exactly the five families documented in the unit comment');
   TestTokenLengthDoesNotLeakViaShortCircuit;
   WriteLn('  ok: first-byte and last-byte mismatch both return False (no early short-circuit)');
   TestEffectiveTokenContract;

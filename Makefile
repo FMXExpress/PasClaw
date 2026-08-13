@@ -138,6 +138,7 @@ UNIT_DIRS = \
 	src/pkg/component \
 	src/pkg/markdown \
 	src/pkg/otel \
+	src/pkg/projects \
 	src/cmd
 
 # Indy unit + include dirs (only used when building under FPC).
@@ -175,7 +176,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
+.PHONY: all clean run test smoke lint-pascal-shape test-workspaces test-projects test-apps test-mail test-desktop-routes test-desktop test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -184,7 +185,7 @@ WEBUI_RES = src/pkg/gateway/webui.res
 
 webui-res: $(WEBUI_RES)
 
-$(WEBUI_RES): src/pkg/gateway/webui.rc src/pkg/gateway/webui.html
+$(WEBUI_RES): src/pkg/gateway/webui.rc src/pkg/gateway/webui.html src/pkg/gateway/desktop.html
 	cd src/pkg/gateway && fpcres -of res -o webui.res webui.rc
 	@# {$R webui.res} is baked into PasClaw.Gateway.WebUI's object at unit-
 	@# compile time. An incremental build that only regenerates the .res
@@ -381,6 +382,86 @@ test-cron-tool: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/cron_tool_tests.pas -o$(BUILDDIR)/cron_tool_tests
 	@PASCLAW_HOME=$(BUILDDIR)/cron-tool-test-home $(BUILDDIR)/cron_tool_tests
+
+# Desktop stack. Each runs against its own throwaway PASCLAW_HOME so the
+# workspace directories they create never touch the developer's ~/.pasclaw.
+test-workspaces: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	@rm -rf $(BUILDDIR)/workspaces-test-home
+	$(FPC) $(FPCFLAGS) src/tests/workspaces_tests.pas -o$(BUILDDIR)/workspaces_tests
+	@PASCLAW_HOME=$(BUILDDIR)/workspaces-test-home $(BUILDDIR)/workspaces_tests
+	@# Second pass against the home the first built: PASCLAW_WORKSPACE must
+	@# outrank the active_workspace the first pass persisted.
+	@PASCLAW_HOME=$(BUILDDIR)/workspaces-test-home PASCLAW_WORKSPACE=workspace3 \
+		$(BUILDDIR)/workspaces_tests
+
+test-projects: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	@rm -rf $(BUILDDIR)/projects-test-home
+	$(FPC) $(FPCFLAGS) src/tests/projects_tests.pas -o$(BUILDDIR)/projects_tests
+	@PASCLAW_HOME=$(BUILDDIR)/projects-test-home $(BUILDDIR)/projects_tests
+
+test-apps: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	@rm -rf $(BUILDDIR)/apps-test-home
+	$(FPC) $(FPCFLAGS) src/tests/apps_tests.pas -o$(BUILDDIR)/apps_tests
+	@PASCLAW_HOME=$(BUILDDIR)/apps-test-home $(BUILDDIR)/apps_tests
+
+# A shape check for the units no CI here can compile -- chiefly the
+# FireMonkey client, which needs Delphi. It catches a method implemented but
+# never declared, which is the mistake that survives review and dies at the
+# compiler. Runs over the whole tree so it stays calibrated against files
+# that DO compile.
+lint-pascal-shape:
+	@python3 scripts/check-pascal-shape.py $$(find src desktop -name '*.pas' -o -name '*.dpr')
+	@echo "pascal shape: OK"
+
+# The IMAP -> Mail bridge, minus the socket: triage rules and the merge that
+# has to stay idempotent across every poll.
+test-mail: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	@rm -rf $(BUILDDIR)/mail-test-home
+	$(FPC) $(FPCFLAGS) src/tests/mail_tests.pas -o$(BUILDDIR)/mail_tests
+	@PASCLAW_HOME=$(BUILDDIR)/mail-test-home $(BUILDDIR)/mail_tests
+
+# The wall: business A in workspace 1 and business B in workspace 2 must not
+# know each other. Includes the no-op half -- single-workspace paths must be
+# byte-identical to the pre-refactor strings.
+test-workspace-isolation: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	@rm -rf $(BUILDDIR)/isolation-test-home
+	$(FPC) $(FPCFLAGS) src/tests/workspace_isolation_tests.pas -o$(BUILDDIR)/workspace_isolation_tests
+	@PASCLAW_HOME=$(BUILDDIR)/isolation-test-home $(BUILDDIR)/workspace_isolation_tests
+
+test-desktop-routes: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	@rm -rf $(BUILDDIR)/desktop-routes-test-home
+	$(FPC) $(FPCFLAGS) src/tests/desktop_routes_tests.pas -o$(BUILDDIR)/desktop_routes_tests
+	@PASCLAW_HOME=$(BUILDDIR)/desktop-routes-test-home $(BUILDDIR)/desktop_routes_tests
+
+# The shared native-client library (studio/ + desktop/ drive the gateway
+# through it). Needs a LIVE gateway; skips itself when PASCLAW_TEST_GATEWAY
+# is unset so `make test` stays green without one.
+# The library the FMX client is built on. Its live half needs a gateway, and
+# skipping it by default meant the half that matters most for the native
+# client -- files, pages, promote, desktop state, the run surface -- was
+# never exercised. So this target STARTS one, on a port unlikely to clash,
+# against a throwaway home, and stops it again.
+test-client-api: $(BIN) | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/client_api_tests.pas -o$(BUILDDIR)/client_api_tests
+	@rm -rf $(BUILDDIR)/client-api-home
+	@PASCLAW_HOME=$(BUILDDIR)/client-api-home $(BIN) project seed >/dev/null 2>&1 || true
+	@PASCLAW_HOME=$(BUILDDIR)/client-api-home $(BIN) gateway --port 8791 \
+		>$(BUILDDIR)/client-api-gateway.log 2>&1 & echo $$! > $(BUILDDIR)/client-api.pid
+	@i=0; until curl -sf -o /dev/null http://127.0.0.1:8791/v1/health || [ $$i -ge 40 ]; do \
+		i=$$((i+1)); sleep 0.25; done
+	@PASCLAW_TEST_GATEWAY=http://127.0.0.1:8791 $(BUILDDIR)/client_api_tests; \
+		rc=$$?; kill `cat $(BUILDDIR)/client-api.pid` 2>/dev/null || true; \
+		rm -f $(BUILDDIR)/client-api.pid; exit $$rc
+
+# Everything the desktop client depends on, in dependency order.
+test-desktop: lint-pascal-shape test-workspaces test-projects test-apps test-mail test-workspace-isolation test-desktop-routes test-client-api
 
 # Provider catalog rows + ChatPath override (Perplexity uses /chat/completions).
 test-provider-catalog: | $(BUILDDIR)
@@ -979,4 +1060,4 @@ test-fs-grep-tier5-6: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/fs_grep_tier5_6_tests.pas -o$(BUILDDIR)/fs_grep_tier5_6_tests
 	@$(BUILDDIR)/fs_grep_tier5_6_tests
 
-test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-read-file-encoding test-db-tools test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-max-iter-notice test-max-iter-notice test-plan-build-mode test-config-profile test-tool-rpc test-session-search test-session-port test-subagent-bg test-subagent-default test-subagent-model-arg test-zip-pack test-http-proxy test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-fs-tool-naming test-workspace-paths test-guardfall test-skills-prompt test-mcp-result test-mcp-compact test-config-mcp-flags test-workflow test-progress-ledger test-otel test-logger-level-quiet test-gateway-token test-fs-secret-gate test-config-env-subst test-delphi-build
+test: smoke test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-read-file-encoding test-db-tools test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-working-state test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-max-iter-notice test-max-iter-notice test-plan-build-mode test-config-profile test-tool-rpc test-session-search test-session-port test-subagent-bg test-subagent-default test-subagent-model-arg test-zip-pack test-http-proxy test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-fs-tool-naming test-workspace-paths test-guardfall test-skills-prompt test-mcp-result test-mcp-compact test-config-mcp-flags test-workflow test-progress-ledger test-otel test-logger-level-quiet test-gateway-token test-fs-secret-gate test-config-env-subst test-delphi-build test-desktop

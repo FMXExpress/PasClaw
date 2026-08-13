@@ -23,6 +23,7 @@ function Cmd_Onboard_Run(const Argv: array of string): Integer;
 implementation
 
 uses
+  PasClaw.Workspaces,
   SysUtils,
   PasClaw.Config,
   PasClaw.Config.Profile,    { ResolveProfileBodies for PromptStarterProfile -- PR #291 }
@@ -1864,9 +1865,9 @@ begin
     LogError('failed to create home dir: %s', [Home]);
     Exit(1);
   end;
-  EnsureDir(JoinPath(Home, 'workspace'));
-  EnsureDir(JoinPath(Home, 'workspace/memory'));
-  EnsureDir(JoinPath(Home, 'workspace/skills'));
+  EnsureDir(JoinPath(Home, ActiveWorkspaceName));
+  EnsureDir(JoinPath(Home, ActiveWorkspaceName + '/memory'));
+  EnsureDir(JoinPath(Home, ActiveWorkspaceName + '/skills'));
   EnsureDir(JoinPath(Home, 'logs'));
 
   if FileExists(CfgPath) then

@@ -54,6 +54,7 @@ function DefaultCronStatePath: string;
 implementation
 
 uses
+  PasClaw.Workspaces,
   DateUtils,
   {$IFDEF MSWINDOWS}
   { Lets dcc64 inline SysUtils.RenameFile -- 4 RenameFile calls in
@@ -68,7 +69,7 @@ uses
 
 function DefaultCronStatePath: string;
 begin
-  Result := JoinPath(GetHome, 'workspace/cron/state.json');
+  Result := JoinPath(GetHome, ActiveWorkspaceName + '/cron/state.json');
 end;
 
 constructor TCronState.Create(const Path: string);

@@ -39,6 +39,7 @@ procedure RegisterMemoryTools(R: TToolRegistry);
 implementation
 
 uses
+  PasClaw.Workspaces,
   Classes,
   PasClaw.JSON,
   PasClaw.Utils,
@@ -91,7 +92,7 @@ end;
 
 function MemoryDir: string;
 begin
-  Result := JoinPath(GetHome, 'workspace/memory');
+  Result := JoinPath(GetHome, ActiveWorkspaceName + '/memory');
 end;
 
 function IndexDbPath: string;

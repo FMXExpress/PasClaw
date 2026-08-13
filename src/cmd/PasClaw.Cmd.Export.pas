@@ -63,6 +63,7 @@ function RenderExportBody(const Target: string): string;
 implementation
 
 uses
+  PasClaw.Workspaces,
   SysUtils, Classes,
   PasClaw.CliUI,
   PasClaw.Config,
@@ -120,7 +121,7 @@ function MemorySection: string;
 var
   Body: string;
 begin
-  Body := ReadFileIfExists(JoinPath(JoinPath(GetHome, 'workspace/memory'),
+  Body := ReadFileIfExists(JoinPath(JoinPath(GetHome, ActiveWorkspaceName + '/memory'),
                                     'MEMORY.md'));
   if Trim(Body) = '' then Exit('');
   Result := '## Project memory' + sLineBreak +
@@ -136,7 +137,7 @@ function ScarsSection: string;
 var
   Body: string;
 begin
-  Body := ReadFileIfExists(JoinPath(JoinPath(GetHome, 'workspace/memory'),
+  Body := ReadFileIfExists(JoinPath(JoinPath(GetHome, ActiveWorkspaceName + '/memory'),
                                     'SCARS.md'));
   if Trim(Body) = '' then Exit('');
   Result := '## Recurring failures (SCARS)' + sLineBreak +
@@ -160,7 +161,7 @@ var
 begin
   Result := TStringList.Create;
   Result.Sorted := True;
-  Root := JoinPath(GetHome, 'workspace/skills');
+  Root := JoinPath(GetHome, ActiveWorkspaceName + '/skills');
   if not DirectoryExists(Root) then Exit;
   if FindFirst(IncludeTrailingPathDelimiter(Root) + '*', faAnyFile,
                Search) = 0 then

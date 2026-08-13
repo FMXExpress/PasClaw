@@ -81,6 +81,7 @@ const
 implementation
 
 uses
+  PasClaw.Workspaces,
   PasClaw.JSON,
   PasClaw.Utils,
   PasClaw.Config,
@@ -89,7 +90,7 @@ uses
 
 function ResolvePlanPath: string;
 begin
-  Result := JoinPath(JoinPath(GetHome, 'workspace'), PLAN_FILENAME);
+  Result := JoinPath(JoinPath(GetHome, ActiveWorkspaceName), PLAN_FILENAME);
 end;
 
 function ParseContentArg(const ArgsJSON: string;

@@ -98,6 +98,7 @@ function DefaultHeartbeatPath: string;
 implementation
 
 uses
+  PasClaw.Workspaces,
   PasClaw.Utils,
   PasClaw.Logger,
   PasClaw.Providers.Types,
@@ -121,7 +122,7 @@ const
 
 function DefaultHeartbeatPath: string;
 begin
-  Result := JoinPath(GetHome, 'workspace/heartbeat.md');
+  Result := JoinPath(GetHome, ActiveWorkspaceName + '/heartbeat.md');
 end;
 
 type

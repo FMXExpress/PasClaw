@@ -7,3 +7,7 @@
    users get the same single-file ship out of RAD Studio. */
 
 PASCLAW_WEBUI_HTML RCDATA "webui.html"
+
+/* The desktop client (docs/desktop-plan.md), served at /desktop. Same
+   single-file rule as the classic UI above. */
+PASCLAW_DESKTOP_HTML RCDATA "desktop.html"

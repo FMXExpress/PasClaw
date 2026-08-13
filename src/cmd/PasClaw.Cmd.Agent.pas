@@ -24,6 +24,7 @@ function Cmd_Agent_Run(const Argv: array of string): Integer;
 implementation
 
 uses
+  PasClaw.Workspaces,
   SysUtils, Classes,
   PasClaw.Config, PasClaw.Utils, PasClaw.CliUI, PasClaw.Logger,
   PasClaw.Memory.AutoDistill,
@@ -43,6 +44,7 @@ uses
   PasClaw.Tools.SendMessage,
   PasClaw.Tools.DB,
   PasClaw.Tools.Cron,
+  PasClaw.Projects.Tools,
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
@@ -309,7 +311,8 @@ function NewBuiltinRegistry(UseHashline: Boolean = True;
                             EnableOutputCache: Boolean = False;
                             EnableCron: Boolean = False;
                             EnablePlanWrite: Boolean = False;
-                            const DBConfigJSON: string = ''): TToolRegistry;
+                            const DBConfigJSON: string = '';
+                            EnableDesktopTools: Boolean = False): TToolRegistry;
 var
   Skills: TSkillSpecArray;
 begin
@@ -358,6 +361,15 @@ begin
     autonomy. In `agent` there's no live scheduler, so additions apply the
     next time serve/gateway runs. }
   if EnableCron then RegisterCronTool(Result);
+  (* project/task: the desktop board. OPT-IN (Cfg.DesktopToolsEnabled).
+
+     The desktop clients drive this board over HTTP and do not need the
+     tools to exist; they are here only for when you want the MODEL to
+     manage the board itself. Off by default because PasClaw's behaviour
+     should not change for someone who never opens a desktop -- two extra
+     tools in the schema is two extra tools the model reads every turn. *)
+  if EnableDesktopTools then
+    RegisterProjectTools(Result);
   { plan_write registers when running in pmPlan mode (Cmd.Plan and
     `pasclaw agent --mode plan` both arrive here with the flag set).
     The tool is tcReadOnly even though it writes the one plan-meta
@@ -619,7 +631,8 @@ begin
                                 plan_write tool the `pasclaw plan`
                                 command relies on. }
                               A.Mode = pmPlan,
-                              Cfg.DatabaseJSON);
+                              Cfg.DatabaseJSON,
+                              Cfg.DesktopToolsEnabled);
     RegisterSkillManageTool(Reg, Cfg);
     RegisterSkillDisclosureTools(Reg, Cfg);
   end;
@@ -900,7 +913,8 @@ begin
                                 or Cfg.CondenseReversible,
                               Cfg.CronToolEnabled,
                               A.Mode = pmPlan,
-                              Cfg.DatabaseJSON);
+                              Cfg.DatabaseJSON,
+                              Cfg.DesktopToolsEnabled);
     RegisterSkillManageTool(Reg, Cfg);
     RegisterSkillDisclosureTools(Reg, Cfg);
   end;
@@ -1175,7 +1189,7 @@ var
     if Session = nil then Exit;
     CC.Enabled   := Cfg.CheckpointsEnabled;
     CC.SessionId := Session.Meta.Id;
-    CC.Root      := JoinPath(GetHome, 'workspace/checkpoints');
+    CC.Root      := JoinPath(GetHome, ActiveWorkspaceName + '/checkpoints');
     CC.KeepLast  := Cfg.CheckpointsKeepLast;
     InitCheckpoints(CC);
   end;
@@ -1349,7 +1363,8 @@ begin
                                 plan_write tool the `pasclaw plan`
                                 command relies on. }
                               A.Mode = pmPlan,
-                              Cfg.DatabaseJSON);
+                              Cfg.DatabaseJSON,
+                              Cfg.DesktopToolsEnabled);
     RegisterSkillManageTool(Reg, Cfg);
     RegisterSkillDisclosureTools(Reg, Cfg);
   end;

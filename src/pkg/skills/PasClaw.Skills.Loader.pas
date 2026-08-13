@@ -107,6 +107,7 @@ function ParseSkillMDText(const Text, SourcePath: string;
 implementation
 
 uses
+  PasClaw.Workspaces,
   PasClaw.Workflow.Tools,   { workflow_save/list/run -- registered at every
                               registry-build site alongside skills }
   PasClaw.Tools.DB,         { db_info/tables/describe/query/execute -- inert
@@ -224,8 +225,28 @@ begin
 end;
 
 function RunShell(const Cmd: string; out ExitCode: Integer): string;
+var
+  Env: TStringList;
 begin
-  ExitCode := RunOneShot(Cmd, Result);
+  (* When this thread is pinned to a workspace (the cron scheduler firing a
+     tagged job), the pin must survive the process boundary: a child that
+     runs `pasclaw memory add` or resolves paths itself would otherwise see
+     the CONFIG default and write into the wrong world. $PASCLAW_WORKSPACE
+     is the variable the resolver already honours, and passing it as
+     child-only env means it applies to exactly this spawn -- nothing
+     process-global changes, so concurrent requests cannot be polluted. *)
+  if ThreadWorkspace <> '' then
+  begin
+    Env := TStringList.Create;
+    try
+      Env.Add('PASCLAW_WORKSPACE=' + ThreadWorkspace);
+      ExitCode := RunOneShotWithEnv(Cmd, '', Env, Result);
+    finally
+      Env.Free;
+    end;
+  end
+  else
+    ExitCode := RunOneShot(Cmd, Result);
 end;
 
 function RunShellSkill(Slot: Integer; const ArgsJSON: string; out ErrMsg: string): string;
@@ -525,7 +546,7 @@ var
   i: Integer;
 begin
   SetLength(Result, 0);
-  Root := JoinPath(HomeDir, 'workspace/skills');
+  Root := JoinPath(HomeDir, ActiveWorkspaceName + '/skills');
   if not DirectoryExists(Root) then Exit;
   { Per-directory SKILL.md takes priority -- that is the format every new
     skill (picoclaw, nanobot, ClawHub, Anthropic agent-skills) ships in. }

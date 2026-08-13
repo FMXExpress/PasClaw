@@ -171,6 +171,7 @@ function HasSystemMessage(const Messages: array of TMessage): Boolean;
 implementation
 
 uses
+  PasClaw.Workspaces,
   Classes,
   PasClaw.Utils,
   PasClaw.Logger,         { LogWarn for BuildActivePlanSection's PLAN.md read failures }
@@ -261,8 +262,8 @@ begin
     'Your working directory is: ' + WorkDir + sLineBreak +
     'Relative file paths (e.g. write_file "index.html") resolve here; pass an '
     + 'absolute path to write elsewhere.' + sLineBreak +
-    '- Memory: ' + JoinPath(Home, 'workspace/memory/MEMORY.md') + sLineBreak +
-    '- Skills: ' + JoinPath(Home, 'workspace/skills') + '/{skill-name}/SKILL.md' + sLineBreak +
+    '- Memory: ' + JoinPath(Home, ActiveWorkspaceName + '/memory/MEMORY.md') + sLineBreak +
+    '- Skills: ' + JoinPath(Home, ActiveWorkspaceName + '/skills') + '/{skill-name}/SKILL.md' + sLineBreak +
     '- Logs:   ' + JoinPath(Home, 'logs');
 end;
 
@@ -360,7 +361,7 @@ var
 begin
   Result := '';
   Slicing := TaskAware and (Trim(TaskHint) <> '');
-  MemoryDir := JoinPath(GetHome, 'workspace/memory');
+  MemoryDir := JoinPath(GetHome, ActiveWorkspaceName + '/memory');
 
   AppendFile('MEMORY.md (durable)', JoinPath(MemoryDir, 'MEMORY.md'));
 
@@ -471,7 +472,7 @@ function SkillAuthoringPrimer: string;
 var
   Dir, HowTo, Reason: string;
 begin
-  Dir := JoinPath(GetHome, 'workspace/skills');
+  Dir := JoinPath(GetHome, ActiveWorkspaceName + '/skills');
   if CanWritePath(JoinPath(Dir, 'SKILL.md'), Reason) then
     HowTo :=
       'To create one, write that SKILL.md with `write_file` -- it loads on the ' +
@@ -638,7 +639,7 @@ begin
     Exit;
   end;
 
-  MemPath := JoinPath(GetHome, 'workspace/memory/MEMORY.md');
+  MemPath := JoinPath(GetHome, ActiveWorkspaceName + '/memory/MEMORY.md');
   Result :=
     '## Rules' + sLineBreak +
     sLineBreak +
@@ -670,7 +671,7 @@ begin
     '5. **Memory** -- when the user mentions something worth keeping across ' +
     'sessions (preferences, project facts, conventions), update ' +
     MemPath + ' for durable notes the user owns, or append a dated ' +
-    'entry to ' + JoinPath(GetHome, 'workspace/memory') +
+    'entry to ' + JoinPath(GetHome, ActiveWorkspaceName + '/memory') +
     '/{today}.md (e.g. ' + FormatDateTime('yyyy-mm-dd', Now) +
     '.md) for episodic context. Use `memory_search` before answering ' +
     'questions about prior conversations or project facts you might ' +
@@ -753,7 +754,7 @@ var
 
 begin
   Result := '';
-  Path := JoinPath(JoinPath(HomeOverride, 'workspace'), 'PLAN.md');
+  Path := JoinPath(JoinPath(HomeOverride, ActiveWorkspaceName), 'PLAN.md');
   if not FileExists(Path) then Exit;
   try
     Body := ReadFileText(Path);
@@ -828,7 +829,7 @@ begin
   if NoPlan then Exit;
   if Mode = pmPlan then Exit;
 
-  Path := JoinPath(JoinPath(GetHome, 'workspace'), 'PLAN.md');
+  Path := JoinPath(JoinPath(GetHome, ActiveWorkspaceName), 'PLAN.md');
   if not FileExists(Path) then Exit;
   try
     Body := Trim(ReadFileText(Path));

@@ -229,6 +229,12 @@ type
     Enabled:       Boolean;
     ChannelKind:   string;   { 'discord' | 'slack' | 'teams' | 'webhook' | 'line' | 'whatsapp' | '' }
     ChannelTarget: string;   { webhook URL, LINE userId, WhatsApp phone, etc. }
+    (* Which workspace the job fires AS -- its memory, sessions, skills.
+       '' = the active workspace at fire time (the pre-tagging behaviour,
+       kept for existing entries). New entries are stamped on creation,
+       because "runs in whatever world happens to be open" is exactly the
+       property the workspace wall exists to remove. *)
+    Workspace:     string;
   end;
 
   TSkillEntry = record
@@ -628,6 +634,15 @@ type
        flip cron_tool_enabled=true in config.json. The running scheduler
        picks up the model's edits within one tick (config mtime watch). *)
     CronToolEnabled:   Boolean;
+    (* The desktop board's `project` / `task` tools.
+
+       Off by default, and deliberately so: PasClaw's behaviour should not
+       change for someone who never opens a desktop. Two extra tools in the
+       schema is two extra tools the model reads on every request, and the
+       CLI has no board to show. The desktop clients drive the same store
+       over HTTP without needing this -- turn it on only when you want the
+       MODEL to manage the board itself. *)
+    DesktopToolsEnabled: Boolean;
     (* Per-Chat() wait timeout in milliseconds for the relay provider
        (PasClaw.Providers.Relay -- the pull-worker pattern). 0 = use
        the Pascal default RelayDefaultWaitTimeoutMs (5 minutes).
@@ -1106,6 +1121,7 @@ begin
   VaultToolsEnabled    := False; { off by default per the bench-grounded "stock = lean-edit shape" verdict (bench/swe/README.md). Vault entries are never called across the bench's 45+ cells -- the model has them as training data. Onboarding asks (default Y for operators who DO use the vault). }
   WebFetchEnabled      := True;  { on by default: the tool clearly documents that it returns readable plain text (HTML tags stripped, entities decoded) capped at max_chars (default 50000, save_to bypasses), so the model knows what it gets -- and a "read this URL" task shouldn't have to fall back to hand-rolled shell curl + HTML scraping. Also enables memory_fetch (RegisterMemoryFetchTool is gated on EnableWebFetch in NewBuiltinRegistry). Onboarding asks; operators wanting no outbound HTTP from the agent set web_fetch_enabled: false. }
   CronToolEnabled      := False; { off by default -- model-scheduled background jobs are an opt-in autonomy step (runs existing skills only). }
+  DesktopToolsEnabled  := False; { off by default -- see the field comment: the desktop works without it. }
   RelayWaitTimeoutMs   := 0;     { 0 = use the Pascal-side RelayDefaultWaitTimeoutMs (5 min). Operators set higher for flaky workers, lower for fast fallback. }
   MCPCompactResults := True;  { on by default: the conversion is refused unless the result is rectangular, all-scalar and genuinely shorter, so the failure mode is "no change" rather than a mangled result. Flip off if a server's rows must reach the model as literal JSON. }
   MCPProgressiveDisclosure := True;  { on by default -- fat catalogs (Replicate MCP ~50 tools, GitHub MCP ~50+) make lazy reveal the right floor. The prompt cost of every MCP schema every turn dominates the bill on turns that touch zero MCP tools; tool_search loads schemas on demand at a one-turn cost per first-use. Operators with tiny catalogs flip off via onboarding (default N) or hand-edit if the +1 turn isn't worth the savings. Mirrors Claude Code's ToolSearch pattern. No-op when no MCP servers are configured. }
@@ -1225,6 +1241,7 @@ begin
   Result.PutBool('enabled', C.Enabled);
   if C.ChannelKind   <> '' then Result.PutStr('channel_kind',   C.ChannelKind);
   if C.ChannelTarget <> '' then Result.PutStr('channel_target', C.ChannelTarget);
+  if C.Workspace     <> '' then Result.PutStr('workspace',      C.Workspace);
 end;
 
 function SkillToJSON(const S: TSkillEntry): TJsonObject;
@@ -1406,6 +1423,8 @@ begin
       operator who opted into model-scheduled jobs round-trips. }
     if CronToolEnabled then
       Root.PutBool('cron_tool_enabled', True);
+    if DesktopToolsEnabled then
+      Root.PutBool('desktop_tools_enabled', True);
     { relay_wait_timeout_ms: 0 (the default) means "use the Pascal-
       side RelayDefaultWaitTimeoutMs"; only emit when the operator
       set a non-default value so future bumps to the constant flow
@@ -1919,6 +1938,7 @@ begin
     VaultToolsEnabled   := Root.GetBool('vault_tools_enabled',   VaultToolsEnabled);
     WebFetchEnabled     := Root.GetBool('web_fetch_enabled',     WebFetchEnabled);
     CronToolEnabled     := Root.GetBool('cron_tool_enabled',     CronToolEnabled);
+    DesktopToolsEnabled := Root.GetBool('desktop_tools_enabled', DesktopToolsEnabled);
     RelayWaitTimeoutMs  := Integer(Root.GetInt('relay_wait_timeout_ms',
                                                 RelayWaitTimeoutMs));
     MCPProgressiveDisclosure := Root.GetBool('mcp_progressive_disclosure',
@@ -2152,6 +2172,7 @@ begin
           Crons[i].Skill         := Item.GetStr ('skill',          '');
           Crons[i].Args          := Item.GetStr ('args',           '');
           Crons[i].Enabled       := Item.GetBool('enabled',        True);
+          Crons[i].Workspace     := Item.GetStr ('workspace',      '');
           Crons[i].ChannelKind   := Item.GetStr ('channel_kind',   '');
           Crons[i].ChannelTarget := Item.GetStr ('channel_target', '');
         finally
@@ -2319,11 +2340,18 @@ begin
        fields win. FromJSON is merge-style (every GetX call defaults
        to the current TConfig value), so multiple applies layer
        cleanly. *)
-    ProfileName := ProfileOverride;
-    if ProfileName = '' then
-      ProfileName := GetEnvironmentVariable('PASCLAW_PROFILE');
-    if (ProfileName = '') and HasConfigFile then
-      ProfileName := ExtractProfileField(S);
+    (* The whole chain lives in ResolveProfileName so a caller that needs
+       to know what this process resolved (the gateway, warning that a
+       runtime workspace switch wants a profile it cannot adopt in flight)
+       reads the same answer instead of re-implementing the order. It
+       includes the workspace -> profile binding: a workspace may name the
+       profile it works under ("business B uses the b-corp keys"), stored
+       as config.json's workspace_profiles object, below the explicit
+       selectors and above the global "profile" field. *)
+    if HasConfigFile then
+      ProfileName := ResolveProfileName(S, ProfileOverride)
+    else
+      ProfileName := ResolveProfileName('', ProfileOverride);
     if ProfileName <> '' then
     begin
       if ResolveProfileBodies(GetHome, ProfileName, Bodies, PErr) then

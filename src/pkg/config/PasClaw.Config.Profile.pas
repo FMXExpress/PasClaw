@@ -116,6 +116,29 @@ function ResolveProfileBodies(const HomeDir, Name: string;
   whether to apply a profile. }
 function ExtractProfileField(const ConfigJSON: string): string;
 
+(* The profile the ACTIVE workspace is bound to, or ''. Reads the same raw
+   config text LoadConfig already holds; the active name resolves the same
+   way PasClaw.Workspaces does it (env override, then active_workspace,
+   then 'workspace') -- duplicated here in miniature because Config sits
+   underneath Workspaces and cannot use it. *)
+function ExtractWorkspaceProfile(const ConfigJSON: string): string;
+
+(* The profile name that WOULD be applied for the given raw config text and
+   an explicit override (CLI --profile; '' when none), following the whole
+   precedence chain in one place:
+
+     1. Override      (CLI --profile)
+     2. $PASCLAW_PROFILE
+     3. the active workspace's binding (workspace_profiles)
+     4. the global "profile" field
+
+   LoadConfig uses it to decide what to apply. Callers that need to know
+   what a running process resolved -- e.g. the gateway, to warn that a
+   runtime workspace switch wants a profile it cannot adopt mid-flight --
+   use it so the answer is derived from the same chain rather than a
+   re-implementation that can drift. Returns '' when no layer names one. *)
+function ResolveProfileName(const ConfigJSON, Override: string): string;
+
 { Look up one profile's raw JSON body + a TProfileSpec describing it.
   No inheritance resolution -- this is the leaf operation
   ResolveProfileBodies recurses against. Returns False on unknown
@@ -604,6 +627,58 @@ begin
   finally
     O.Free;
   end;
+end;
+
+{ 'workspace' or 'workspaceN' -- the shape PasClaw.Workspaces accepts. }
+function LooksLikeWorkspaceName(const S: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  if Copy(S, 1, 9) <> 'workspace' then Exit;
+  for I := 10 to Length(S) do
+    if not (S[I] in ['0'..'9']) then Exit;
+  Result := True;
+end;
+
+function ExtractWorkspaceProfile(const ConfigJSON: string): string;
+var
+  O, Map: TJsonObject;
+  Name: string;
+begin
+  Result := '';
+  if Trim(ConfigJSON) = '' then Exit;
+  Name := Trim(GetEnvironmentVariable('PASCLAW_WORKSPACE'));
+  try
+    O := TJsonObject.Parse(ConfigJSON);
+  except
+    Exit;
+  end;
+  if O = nil then Exit;
+  try
+    if (Name = '') or not LooksLikeWorkspaceName(Name) then
+      Name := Trim(O.GetStr('active_workspace', ''));
+    if (Name = '') or not LooksLikeWorkspaceName(Name) then
+      Name := 'workspace';
+    Map := O.ChildObject('workspace_profiles');
+    if Map <> nil then
+      Result := Trim(Map.GetStr(Name, ''));
+  finally
+    O.Free;
+  end;
+end;
+
+function ResolveProfileName(const ConfigJSON, Override: string): string;
+begin
+  Result := Trim(Override);
+  if Result <> '' then Exit;
+  Result := Trim(GetEnvironmentVariable('PASCLAW_PROFILE'));
+  if Result <> '' then Exit;
+  { Below the explicit selectors, above the global field: the binding is
+    the more specific statement about this workspace. }
+  Result := ExtractWorkspaceProfile(ConfigJSON);
+  if Result <> '' then Exit;
+  Result := ExtractProfileField(ConfigJSON);
 end;
 
 end.

@@ -75,6 +75,7 @@ function SteeringPath(const SessionKey: string): string;
 implementation
 
 uses
+  PasClaw.Workspaces,
   Classes, DateUtils,
   {$IFDEF MSWINDOWS}
   { Lets dcc64 inline SysUtils.RenameFile (used by the .drain
@@ -89,7 +90,7 @@ uses
 
 function SteeringDir: string;
 begin
-  Result := JoinPath(GetHome, 'workspace/steering');
+  Result := JoinPath(GetHome, ActiveWorkspaceName + '/steering');
 end;
 
 function SteeringPath(const SessionKey: string): string;

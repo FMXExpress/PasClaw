@@ -49,11 +49,12 @@ function DeleteWorkflow(const Id: string; out Err: string): Boolean;
 implementation
 
 uses
+  PasClaw.Workspaces,
   PasClaw.Utils, PasClaw.Config;
 
 function WorkflowsDir: string;
 begin
-  Result := JoinPath(GetHome, 'workspace/workflows');
+  Result := JoinPath(GetHome, ActiveWorkspaceName + '/workflows');
 end;
 
 function IsSafeWorkflowId(const Id: string): Boolean;

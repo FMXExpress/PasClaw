@@ -59,6 +59,7 @@ procedure RegisterMemoryFetchTool(R: TToolRegistry);
 implementation
 
 uses
+  PasClaw.Workspaces,
   Classes, StrUtils, DateUtils,
   PasClaw.JSON,
   PasClaw.Config,
@@ -225,7 +226,7 @@ end;
 
 function MemoryDir: string;
 begin
-  Result := JoinPath(GetHome, 'workspace/memory');
+  Result := JoinPath(GetHome, ActiveWorkspaceName + '/memory');
 end;
 
 function LooksTextual(const ContentType: string): Boolean;

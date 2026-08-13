@@ -85,6 +85,7 @@ const
 implementation
 
 uses
+  PasClaw.Workspaces,
   SysUtils, Classes,
   {$IFDEF MSWINDOWS}Windows,{$ENDIF}
   {$IFNDEF FPC}System.IOUtils,{$ENDIF}
@@ -512,10 +513,10 @@ begin
     LogInfo('build: --no-plan set, leaving PLAN.md in place');
     Exit;
   end;
-  PlanPath := JoinPath(JoinPath(Home, 'workspace'), 'PLAN.md');
+  PlanPath := JoinPath(JoinPath(Home, ActiveWorkspaceName), 'PLAN.md');
   if not SysUtils.FileExists(PlanPath) then Exit;
 
-  ArchiveDir := JoinPath(JoinPath(JoinPath(Home, 'workspace'), 'memory'), 'plans');
+  ArchiveDir := JoinPath(JoinPath(JoinPath(Home, ActiveWorkspaceName), 'memory'), 'plans');
   if not ForceDirectories(ArchiveDir) then
   begin
     LogWarn('build: cannot create plan archive dir %s -- leaving PLAN.md in place',
@@ -617,7 +618,7 @@ begin
       { 2. cwd. }
       Cwd := A.Cwd;
       if Cwd = '' then
-        Cwd := JoinPath(Home, 'workspace');
+        Cwd := JoinPath(Home, ActiveWorkspaceName);
       if not ForceDirectories(Cwd) then
       begin
         PrintErr('build: cannot create cwd: ' + Cwd);

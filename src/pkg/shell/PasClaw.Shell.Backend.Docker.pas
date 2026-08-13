@@ -114,6 +114,7 @@ function DockerCliReachable(out ErrMsg: string): Boolean;
 implementation
 
 uses
+  PasClaw.Workspaces,
   PasClaw.Logger,
   PasClaw.Platform,
   PasClaw.Utils,
@@ -199,7 +200,7 @@ begin
   {$IFDEF MSWINDOWS}
   if HostPath = '' then Exit('');
   Home := GetHome;
-  if MapUnderRoot(HostPath, JoinPath(Home, 'workspace'), '/workspace', M) then Exit(M);
+  if MapUnderRoot(HostPath, JoinPath(Home, ActiveWorkspaceName), '/workspace', M) then Exit(M);
   if MapUnderRoot(HostPath, JoinPath(Home, 'tmp'), '/pasclaw/tmp', M) then Exit(M);
   if MapUnderRoot(HostPath, JoinPath(Home, 'run'), '/pasclaw/run', M) then Exit(M);
   { Unknown root: best-effort POSIXify. Only meaningful if the operator
@@ -291,9 +292,9 @@ begin
                    'as %s/NAME (do not reuse the C:\ path or repeat "workspace"). ' +
                    'Prefer paths relative to the working directory.',
                    [FOpts.Image, FOpts.Network,
-                    ContainerPath(JoinPath(GetHome, 'workspace')),
-                    JoinPath(GetHome, 'workspace'),
-                    ContainerPath(JoinPath(GetHome, 'workspace'))]);
+                    ContainerPath(JoinPath(GetHome, ActiveWorkspaceName)),
+                    JoinPath(GetHome, ActiveWorkspaceName),
+                    ContainerPath(JoinPath(GetHome, ActiveWorkspaceName))]);
   {$ELSE}
   Result := Format('runs inside a per-session Docker container (image=%s, network=%s; ' +
                    'workspace bind-mounted at the same path so the model sees the ' +
@@ -376,7 +377,7 @@ var
   WorkspacePath, Out_: string;
   ExitCode, i: Integer;
 begin
-  WorkspacePath := JoinPath(GetHome, 'workspace');
+  WorkspacePath := JoinPath(GetHome, ActiveWorkspaceName);
   Args := TStringList.Create;
   try
     Args.Add('run');

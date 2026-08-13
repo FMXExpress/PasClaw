@@ -41,6 +41,7 @@ function NewMemoryLog(const HomeDir, SessionId: string): TMemoryLog;
 implementation
 
 uses
+  PasClaw.Workspaces,
   DateUtils,
   PasClaw.Utils,
   PasClaw.JSON;
@@ -62,7 +63,7 @@ begin
     PathDelim. A literal 'workspace/memory' would leave a forward slash
     inside an otherwise-backslash path on Windows, and ForceDirectories
     fails to create the second segment in that case. }
-  Dir := JoinPath(JoinPath(HomeDir, 'workspace'), 'memory');
+  Dir := JoinPath(JoinPath(HomeDir, ActiveWorkspaceName), 'memory');
   EnsureDir(Dir);
   Path := JoinPath(Dir, SessionId + '.ndjson');
   Result := TMemoryLog.Create(Path, SessionId);

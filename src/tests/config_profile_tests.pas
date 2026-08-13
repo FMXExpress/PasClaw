@@ -203,6 +203,26 @@ begin
   AssertEqS(ExtractProfileField('not-json'), '', 'malformed returns empty');
 end;
 
+(* One resolver owns the precedence chain, so LoadConfig and any caller
+   asking "what did this process resolve" cannot drift apart. *)
+procedure TestResolveProfileNamePrecedence;
+const
+  Bound = '{"active_workspace":"workspace2",' +
+          '"workspace_profiles":{"workspace2":"security"},' +
+          '"profile":"low-token"}';
+begin
+  AssertEqS(ResolveProfileName(Bound, 'stock'), 'stock',
+            'an explicit --profile beats every other layer');
+  AssertEqS(ResolveProfileName(Bound, ''), 'security',
+            'the active workspace''s binding beats the global field');
+  AssertEqS(ResolveProfileName('{"profile":"low-token"}', ''), 'low-token',
+            'with no binding, the global field applies');
+  AssertEqS(ResolveProfileName('{}', ''), '',
+            'nothing named anywhere resolves to no profile');
+  AssertEqS(ResolveProfileName('', ''), '',
+            'no config file at all resolves to no profile');
+end;
+
 procedure TestLoadConfigAppliesProfile;
 var
   CfgPath: string;
@@ -566,6 +586,7 @@ begin
     TestUnknownProfile;
     TestUserProfileShadowsBuiltin;
     TestExtractProfileField;
+    TestResolveProfileNamePrecedence;
     TestLoadConfigAppliesProfile;
     TestLoadConfigInheritsChain;
     TestProfileWithoutConfigFile;

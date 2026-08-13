@@ -39,6 +39,7 @@ function InstallShellBackend(const Cfg: TConfig;
 implementation
 
 uses
+  PasClaw.Workspaces,
   PasClaw.Utils,                 { JoinPath -- workspace cwd align (GetHome is in PasClaw.Config) }
   PasClaw.Tools.Sandbox,         { ConfigureSandbox -- re-point GWorkspace after the chdir }
   PasClaw.Shell.Backend.Local,
@@ -95,7 +96,7 @@ begin
           find the exe dir) and can't navigate. chdir-ing here makes fs_*'s
           "." == the container's /workspace. Docker-only; the local backend
           leaves the operator's launch cwd untouched. }
-        WsHost := JoinPath(GetHome, 'workspace');
+        WsHost := JoinPath(GetHome, ActiveWorkspaceName);
         if not DirectoryExists(WsHost) then ForceDirectories(WsHost);
         if DirectoryExists(WsHost) then
         begin

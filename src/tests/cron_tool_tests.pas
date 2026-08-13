@@ -85,6 +85,11 @@ begin
   ExpectOK('{"action":"list"}', 'job1', 'list shows the job');
 
   { Duplicate id is refused. }
+  { Phase 8: a new entry is stamped with the workspace it was created in,
+    so it fires AS that workspace forever after -- not as whatever world
+    happens to be open at fire time. }
+  ConfigContains('"workspace"', 'the entry carries its creating workspace');
+
   ExpectErr('{"action":"add","spec":"0 9 * * *","skill":"hello","id":"job1"}',
             'already exists', 'duplicate id refused');
 

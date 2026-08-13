@@ -24,6 +24,7 @@ function Cmd_Gateway_Run(const Argv: array of string): Integer;
 implementation
 
 uses
+  PasClaw.Workspaces,
   SysUtils,
   PasClaw.Config, PasClaw.CliUI, PasClaw.Logger,
   PasClaw.Providers.Intf,
@@ -38,6 +39,9 @@ uses
   PasClaw.Tools.SessionSearch,
   PasClaw.Tools.SendMessage,
   PasClaw.Tools.Cron,             { cron tool -- gated on cron_tool_enabled }
+  PasClaw.Projects.Tools,         { project / task -- the desktop board }
+  PasClaw.Gateway.Desktop,        { SetAppsOrigin -- the apps listener's origin }
+  PasClaw.Apps,                   { SetFrameParentOrigin -- who may frame apps }
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
@@ -64,7 +68,9 @@ uses
   PasClaw.Channels.WhatsApp,
   PasClaw.Channels.Matrix,
   PasClaw.Channels.IRC,
-  PasClaw.Channels.Email;
+  PasClaw.Channels.Email,
+  PasClaw.Config.Profile,   { ResolveProfileName -- the boot-vs-binding check }
+  PasClaw.Utils;            { ReadFileText }
 
 type
   TGwArgs = record
@@ -99,8 +105,42 @@ type
       share the gateway's tool registry so memory_search /
       kb_search / session_search are one source of truth. }
     MCPPort:        Integer;
+    { --apps-port: a second listener that serves generated app content from
+      its OWN ORIGIN, so an app cannot read the desktop's stored token. }
+    AppsPort:       Integer;
     MCPAllowWrite:  Boolean;
   end;
+
+var
+  { The profile this gateway process actually booted under. Only used to
+    tell the operator when a runtime switch lands somewhere that wanted a
+    different one -- see RepointSandbox. }
+  GBootProfile: string = '';
+
+procedure RepointSandbox(const NewRoot: string);
+var
+  Cfg: TConfig;
+  Bound, Running: string;
+begin
+  ForceDirectories(NewRoot);
+  Cfg := LoadConfig;
+  ConfigureSandbox(Cfg.Sandbox, NewRoot);
+  (* A workspace can name the profile it works under, but a profile is
+     resolved once at boot: it decides the tool list and the model, which
+     in-flight requests are already holding. Rather than swap those
+     underneath them, say plainly that the binding is not in effect --
+     silently running business B under business A's profile is the
+     failure worth avoiding. *)
+  Bound := ResolveProfileName(ReadFileText(GetConfigPath), '');
+  if (Bound <> '') and (Bound <> GBootProfile) then
+  begin
+    if GBootProfile = '' then Running := '(none)' else Running := GBootProfile;
+    LogWarn('workspace: this workspace is bound to profile "%s" but the ' +
+            'gateway is running under "%s" -- restart the gateway (or run ' +
+            'a second one) for the binding to take effect',
+            [Bound, Running]);
+  end;
+end;
 
 function ParseGw(const Argv: array of string; const Cfg: TConfig): TGwArgs;
 var
@@ -132,6 +172,7 @@ begin
   Result.NoTools       := False;
   Result.NoHashline    := False;
   Result.MCPPort       := 0;
+  Result.AppsPort      := 0;
   Result.MCPAllowWrite := False;
   i := 0;
   while i <= High(Argv) do
@@ -162,6 +203,7 @@ begin
     if Argv[i] = '--no-tools'     then begin Result.NoTools    := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline'  then begin Result.NoHashline := True; Inc(i); Continue; end;
     if Argv[i] = '--mcp-port'     then begin if i < High(Argv) then Result.MCPPort := StrToIntDef(Argv[i + 1], 0); Inc(i, 2); Continue; end;
+    if Argv[i] = '--apps-port'    then begin if i < High(Argv) then Result.AppsPort := StrToIntDef(Argv[i + 1], 0); Inc(i, 2); Continue; end;
     if Argv[i] = '--mcp-allow-write' then begin Result.MCPAllowWrite := True; Inc(i); Continue; end;
     Inc(i);
   end;
@@ -175,7 +217,7 @@ var
   Err: string;
   Reg: TToolRegistry;
   MCPClients: TMCPClientList;
-  Server, MCPServer: TGatewayServer;
+  Server, MCPServer, AppsServer: TGatewayServer;
   Telegram: TTelegramChannel;
   Line: TLineBot;
   WhatsApp: TWhatsAppBot;
@@ -201,6 +243,9 @@ begin
       Break;
     end;
   Cfg := LoadConfig(ProfileName);
+  { What this process actually resolved, so a later workspace switch can
+    say whether the new workspace's binding is in effect. }
+  GBootProfile := ResolveProfileName(ReadFileText(GetConfigPath), ProfileName);
   { Default the working directory to $PASCLAW_HOME/workspace -- the dir the
     web UI Files tab browses -- rather than the launch CWD, so a relative
     write_file("index.html") lands where the operator sees it. An explicit
@@ -210,9 +255,14 @@ begin
   else
   begin
     { Ensure the default work area exists so shell_exec can start there too. }
-    ForceDirectories(IncludeTrailingPathDelimiter(GetHome) + 'workspace');
-    ConfigureSandbox(Cfg.Sandbox, IncludeTrailingPathDelimiter(GetHome) + 'workspace');
+    ForceDirectories(IncludeTrailingPathDelimiter(GetHome) + ActiveWorkspaceName);
+    ConfigureSandbox(Cfg.Sandbox, IncludeTrailingPathDelimiter(GetHome) + ActiveWorkspaceName);
   end;
+  { A runtime workspace switch must repoint the sandbox too, or the Files
+    browser and shell cwd keep serving the OLD workspace. Mirrors the
+    startup logic: an explicit sandbox.workspace still wins. }
+  if Trim(Cfg.Sandbox.Workspace) = '' then
+    OnWorkspaceSwitched := RepointSandbox;
   ShellSessionId := '';
   try
     Args := ParseGw(Argv, Cfg);
@@ -286,6 +336,12 @@ begin
       { send_message self-gates on Cfg.Channels. Codex P2 on PR #230. }
       RegisterSendMessageTool(Reg);
       if Cfg.CronToolEnabled then RegisterCronTool(Reg);
+      { project/task: the desktop board. Always on -- they only write
+        manifests under the active workspace, and the desktop clients are
+        useless without them. }
+      { project/task: opt-in, same reasoning as the cron tool above. The
+        desktop works without it -- it drives the board over HTTP. }
+      if Cfg.DesktopToolsEnabled then RegisterProjectTools(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
       SetDBConfigFromJSON(Cfg.DatabaseJSON);   { db_* connections (inert if no "database" section) }
@@ -329,6 +385,17 @@ begin
       MCPServer := TGatewayServer.Create(Cfg, Provider, Reg);
       MCPServer.SetMCPAllowMutating(Args.MCPAllowWrite);
       MCPServer.SetMCPOnly(True);
+    end;
+    (* Optional apps origin. Generated apps are model-authored code; served
+       from the main port they are same-origin with /desktop and can read the
+       operator's token out of its localStorage. A second port is a second
+       origin, which is the actual fix -- separate storage, no reach into the
+       desktop's DOM, and postMessage still crosses freely. *)
+    AppsServer := nil;
+    if Args.AppsPort > 0 then
+    begin
+      AppsServer := TGatewayServer.Create(Cfg, Provider, Reg);
+      AppsServer.SetAppsOnly(True);
     end;
     Telegram := nil;
     Line     := nil;
@@ -404,12 +471,28 @@ begin
       Server.Start(Args.Addr, Args.Port);
       if MCPServer <> nil then
         MCPServer.Start(Args.Addr, Args.MCPPort);
+      if AppsServer <> nil then
+      begin
+        AppsServer.Start(Args.Addr, Args.AppsPort);
+        { The desktop needs to know where to point its iframes. Publishing it
+          here rather than letting the client guess means a mismatch is a
+          visible configuration error, not a silent fallback to the insecure
+          same-origin arrangement. }
+        SetAppsOrigin(Format('http://%s:%d', [Args.Addr, Args.AppsPort]));
+        { ...and tell the app listener which single origin may frame its
+          content, or its own frame-ancestors rule would lock the desktop
+          out of displaying the apps it owns. }
+        SetFrameParentOrigin(Format('http://%s:%d', [Args.Addr, Args.Port]));
+      end;
 
       PrintLn(Ansi.Bold + 'Gateway up.' + Ansi.Reset);
       PrintLn(Format('  http://%s:%d/v1/health', [Args.Addr, Args.Port]));
       PrintLn(Format('  http://%s:%d/v1/tools',  [Args.Addr, Args.Port]));
       PrintLn(Format('  POST http://%s:%d/v1/chat   {"message":"..."}',
                      [Args.Addr, Args.Port]));
+      if AppsServer <> nil then
+        PrintLn(Format('  http://%s:%d/apps/   (apps origin -- generated apps served here)',
+                       [Args.Addr, Args.AppsPort]));
       if MCPServer <> nil then
         PrintLn(Format('  POST http://%s:%d/mcp   (dedicated MCP listener)',
                        [Args.Addr, Args.MCPPort]))
@@ -459,6 +542,7 @@ begin
       if MCPServer <> nil then MCPServer.Stop;
       Server.Free;
       if MCPServer <> nil then MCPServer.Free;
+      if AppsServer <> nil then AppsServer.Free;
       if Scheduler <> nil then Scheduler.Free;
       FreeMCPClients(MCPClients);
       if Reg <> nil then Reg.Free;
