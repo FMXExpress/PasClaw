@@ -200,6 +200,13 @@ type
   TUIBlocks = array of TUIBlock;
 
   { One desktop event off /v1/desktop/events. }
+  (* One event off /v1/desktop/events, flattened.
+
+     Status and Line are the two general slots, filled from whichever field
+     the event type happens to use: `app` states, `page-progress` phases and
+     job statuses all land in Status; a job log line, a page title and a
+     progress detail all land in Line. Raw is the untouched JSON for anything
+     this record does not model. *)
   TDesktopEvent = record
     Seq:     Int64;
     EvType:  string;   { projects | project | task | job | joblog | app | page |
@@ -207,8 +214,8 @@ type
     Project: string;
     Task:    string;
     Id:      string;
-    Status:  string;
-    Line:    string;
+    Status:  string;   { job/task status, app run state, progress phase }
+    Line:    string;   { job log line, page title, progress detail }
     Raw:     string;
   end;
 
@@ -926,14 +933,23 @@ begin
       Ev.Id      := Obj.GetStr('id', '');
       Ev.Status  := Obj.GetStr('status', '');
       Ev.Line    := Obj.GetStr('line', '');
-      { page-progress carries its own two fields. Mapping them onto Status
-        and Line keeps the record flat -- a client that shows "what is it
-        doing" reads the same two fields whatever produced them. }
+      (* Three event types name their fields differently. Mapping them onto
+         Status and Line keeps the record flat -- a client that asks "what
+         happened, and what is it called" reads the same two fields whatever
+         produced them, instead of re-parsing Raw per type.
+
+         Without this, `app` events arrived with an empty Status and `page`
+         events with nothing but an id: everything a client would say about
+         them was in the JSON and not in the record. *)
       if Ev.EvType = 'page-progress' then
       begin
         Ev.Status := Obj.GetStr('phase', '');
         Ev.Line   := Obj.GetStr('detail', '');
-      end;
+      end
+      else if Ev.EvType = 'app' then
+        Ev.Status := Obj.GetStr('state', '')
+      else if Ev.EvType = 'page' then
+        Ev.Line := Obj.GetStr('title', '');
     finally
       Obj.Free;
     end;

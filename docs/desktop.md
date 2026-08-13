@@ -420,6 +420,38 @@ poll. Events are small JSON objects with a monotonic `seq`:
 Types: `projects`, `project`, `task`, `job`, `joblog`, `app`, `page`,
 `workspace`, plus `hello` on connect and `gap` after an overflow.
 
+**A process app that dies announces it.** The runner publishes
+`{"type":"app","state":"exited"}` when a child ends on its own, rather than
+only recording it in a state field a client has to poll for. Before this the
+Run window learned about a crashed app on its next tick and anything not
+polling never learned at all — which is no basis for telling someone their
+app stopped.
+
+### Notifications (FireMonkey client)
+
+Long work finishes while you are looking at something else, which is the
+whole reason the FMX client turns three of these events into OS
+notifications through `TNotificationCenter`:
+
+| Event | Notification |
+|---|---|
+| a job reaching `done` / `failed` | **Job done** / **Job failed** — an agent turn on a task, minutes later |
+| a `page` arriving | **Report ready**, titled with the question it answers |
+| an app reaching `exited` / `failed` | **App stopped** / **App failed** |
+
+Terminal outcomes only. A job going from queued to running, a task turning
+active, the board being refetched — those are the tree's business, and a
+toast per step would train you to dismiss them without reading.
+
+And **only when the desktop is not the active window**. If you are looking
+at it, the tree updating in front of you *is* the notification. Anything
+queued while it had focus is dropped rather than held, so alt-tabbing away
+does not produce a burst about things you already watched.
+
+**Menu → Notifications: on/off**, remembered with the desktop layout. On a
+system with no notification centre the row says `unavailable` rather than
+offering a switch that does nothing.
+
 Each subscriber has a **bounded queue (256), oldest dropped**. A browser tab
 that stops reading cannot grow the server's memory; when it overflows it gets
 a `{"type":"gap"}` marker instead of the lost events, and the correct client
