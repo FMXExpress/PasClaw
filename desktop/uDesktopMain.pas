@@ -15,8 +15,10 @@ unit uDesktopMain;
   real OS windows behind a real style engine, and F11 kiosk mode so the app
   can BE the desktop.
 
-  Requires a sibling checkout of the styles repo -- see desktop/README.md.
-  Nothing from it is vendored here.
+  The window manager itself (FMX.RetroWindows / FMX.RetroSkins) is vendored
+  under desktop/retro/ so this project builds from a plain checkout. The
+  .style files are runtime assets, not a build dependency: FindStyleDir
+  locates them if they are around, and the desktop runs without them.
 *)
 
 interface
@@ -27,7 +29,7 @@ uses
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs,
   FMX.StdCtrls, FMX.Layouts, FMX.ListBox, FMX.Edit, FMX.Memo, FMX.Styles,
   FMX.Objects, FMX.TreeView, FMX.WebBrowser, FMX.ScrollBox,
-  FMX.Controls.Presentation, FMX.Objects,
+  FMX.Controls.Presentation,
   FMX.RetroWindows, FMX.RetroSkins,
   PasClaw.Client.Api;
 

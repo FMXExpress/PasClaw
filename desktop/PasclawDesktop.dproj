@@ -9,7 +9,7 @@
         <Platform Condition="'$(Platform)'==''">Win64</Platform>
         <TargetedPlatforms>693395</TargetedPlatforms>
         <AppType>Application</AppType>
-        <DCC_UnitSearchPath>..\src\pkg\component;..\src\pkg\json;..\src\pkg\utils;..\..\Cross-Platform-Retro-OS-Styles\Source;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
+        <DCC_UnitSearchPath>..\src\pkg\component;..\src\pkg\json;..\src\pkg\utils;retro;$(DCC_UnitSearchPath)</DCC_UnitSearchPath>
         <ProjectName Condition="'$(ProjectName)'==''">PasclawDesktop</ProjectName>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Config)'=='Base' or '$(Base)'!=''">
@@ -327,8 +327,8 @@
         <DCCReference Include="..\src\pkg\component\PasClaw.Client.Api.pas"/>
         <DCCReference Include="..\src\pkg\json\PasClaw.JSON.pas"/>
         <DCCReference Include="..\src\pkg\utils\PasClaw.Utils.pas"/>
-        <DCCReference Include="..\..\Cross-Platform-Retro-OS-Styles\Source\FMX.RetroWindows.pas"/>
-        <DCCReference Include="..\..\Cross-Platform-Retro-OS-Styles\Source\FMX.RetroSkins.pas"/>
+        <DCCReference Include="retro\FMX.RetroWindows.pas"/>
+        <DCCReference Include="retro\FMX.RetroSkins.pas"/>
         <None Include="PasclawDark.style"/>
         <None Include="PasclawLight.style"/>
         <BuildConfiguration Include="Base">
