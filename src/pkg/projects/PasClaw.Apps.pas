@@ -85,6 +85,13 @@ function WriteApp(const Project: string; const Info: TAppInfo;
   anything (page/html). }
 function AppIsServable(const Info: TAppInfo): Boolean;
 
+(* True when the runner would actually start something.
+
+   A client that offers Run for anything else gets "app.json has no run
+   command" back, which is a 400 the user can do nothing with. Asking this
+   first turns that into an app that simply opens instead. *)
+function AppIsRunnable(const Info: TAppInfo): Boolean;
+
 { Map a request path under /apps/<project>/... to a real file inside the
   app directory. Returns '' when the project is unknown, the app has no
   files, the path escapes the app dir, or the extension isn't servable. }
@@ -194,6 +201,70 @@ begin
   Result := Info.Exists and (Info.Kind in [akPage, akHtml]);
 end;
 
+function AppIsRunnable(const Info: TAppInfo): Boolean;
+begin
+  { Not "is it a process kind" but "is there a command": an app the runner
+    would refuse must never be offered a Run button. That refusal --
+    "app.json has no run command" -- is the whole of this. }
+  Result := Info.Exists and (Info.Kind in [akPython, akFpc, akDelphi]) and
+            (Trim(Info.Run) <> '');
+end;
+
+(* Work out what an app IS when its manifest does not say usably.
+
+   `kind` is written by the model, and a model that writes "web", "static",
+   "webapp" or nothing at all produced a manifest that mapped to akNone --
+   which is neither servable nor runnable. The desktop then offered the only
+   thing left, a Run button, and the runner answered "app.json has no run
+   command". An HTML app you cannot open because of one word.
+
+   The evidence is already on disk, so use it rather than failing:
+
+     a run command            -> a process app, typed by its entry
+     an .html/.htm entry      -> a document; html when the file actually
+                                 contains a script, else page
+     a .py entry              -> python
+
+   The script sniff decides page vs html rather than defaulting, because
+   the two differ only in their Content-Security-Policy: `page` is
+   script-free. Granting scripts to a file that has none would loosen the
+   policy for nothing; refusing them to a file that has them would ship a
+   broken app. Reading the entry answers it exactly.
+
+   Nothing here overrides a manifest that DOES name a kind -- an explicit
+   `page` stays script-free even if the file has a script tag, which is the
+   author's call to make and ours to honour. *)
+function InferAppKind(const Dir: string; const Info: TAppInfo): TAppKind;
+var
+  Ext, Body, EntryPath: string;
+begin
+  Result := Info.Kind;
+  if Result <> akNone then Exit;          { the manifest said; respect it }
+
+  Ext := LowerCase(ExtractFileExt(Info.Entry));
+
+  { A run command means a program, whatever else is true. }
+  if Trim(Info.Run) <> '' then
+  begin
+    if Ext = '.py' then Exit(akPython);
+    if (Ext = '.pas') or (Ext = '.lpr') or (Ext = '.dpr') then Exit(akFpc);
+    Exit(akPython);   { the overwhelmingly common generated case }
+  end;
+
+  if Ext = '.py' then Exit(akPython);
+
+  if (Ext = '.html') or (Ext = '.htm') then
+  begin
+    EntryPath := JoinPath(Dir, Info.Entry);
+    Body := '';
+    if FileExists(EntryPath) then Body := LowerCase(ReadFileText(EntryPath));
+    if Pos('<script', Body) > 0 then Exit(akHtml);
+    Exit(akPage);
+  end;
+
+  Result := akNone;
+end;
+
 function GetApp(const Project: string; out Info: TAppInfo): Boolean;
 var
   Dir, Path: string;
@@ -229,6 +300,11 @@ begin
     Info.Entry  := Obj.GetStr('entry', '');
     Info.Run    := Obj.GetStr('run', '');
     Info.Build  := Obj.GetStr('build', '');
+    { "type" is what a model reaches for about as often as "kind"; reading
+      it as a synonym costs nothing and saves a manifest from being
+      unopenable over a word. }
+    if Info.Kind = akNone then
+      Info.Kind := StrToAppKind(Obj.GetStr('type', ''));
 
     Win := Obj.ChildObject('window');
     if Win <> nil then
@@ -272,6 +348,10 @@ begin
     end;
   if Info.Entry <> '' then
     Info.EntryExists := FileExists(JoinPath(Dir, Info.Entry));
+
+  { Last, because it reads the entry file: a manifest that did not name a
+    usable kind gets one worked out from what is actually there. }
+  Info.Kind := InferAppKind(Dir, Info);
   Result := True;
 end;
 
