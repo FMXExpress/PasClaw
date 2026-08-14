@@ -120,6 +120,10 @@ type
     Stats:                TSessionStats;
   end;
   TSessionMetaArray = array of TSessionMeta;
+  { For callers that hold a reference into a live TSession.Meta --
+    e.g. the compaction OnBefore hook, which flushes working state
+    into the session about to lose the transcript it came from. }
+  PSessionMeta = ^TSessionMeta;
 
   TSession = class
   private

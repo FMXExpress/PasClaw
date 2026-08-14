@@ -180,8 +180,13 @@ type
     Verbose: Boolean;  { when True (the default), show a generous preview of
                          each call's args + result; when False (--brief), clip
                          to a short one-liner. Ignored under Quiet. }
+    MetaRef: PSessionMeta; { the persisted session's meta, when there is one.
+                             Compaction flushes working state into it before
+                             dropping history; nil (one-shot runs) disables
+                             the flush, not the compaction. }
     procedure OnToolCall(const Name, ArgsJSON: string);
     procedure OnToolResult(const Name, ResultText, Err: string);
+    procedure OnBeforeCompact(const Messages: array of TMessage);
   end;
 
 const
@@ -195,6 +200,25 @@ function PreviewCap(const S: string; Max: Integer): string;
 begin
   if Length(S) <= Max then Result := S
   else Result := Copy(S, 1, Max) + '…';
+end;
+
+(* Fired by CompactMessages with the FULL history, just before the
+   older half is summarised away. UpdateWorkingStateAfterTurn normally
+   runs at end of turn -- so a mid-turn compaction used to drop tool
+   calls the working state had never seen, and the paths they edited
+   were gone from the transcript AND from the snapshot built to
+   outlive it. Flushing here closes that gap. Persisting is left to
+   the ordinary end-of-turn PersistSession; this only updates the
+   in-memory meta the turn will save anyway. *)
+procedure TLoopHandlers.OnBeforeCompact(const Messages: array of TMessage);
+var
+  Arr: TMessageArray;
+  i: Integer;
+begin
+  if MetaRef = nil then Exit;
+  SetLength(Arr, Length(Messages));
+  for i := 0 to High(Messages) do Arr[i] := Messages[i];
+  UpdateWorkingStateAfterTurn(MetaRef^, Arr);
 end;
 
 procedure TLoopHandlers.OnToolCall(const Name, ArgsJSON: string);
@@ -494,14 +518,23 @@ begin
   Result.OnText        := nil;
   Result.OnToolCall    := Handlers.OnToolCall;
   Result.OnToolResult  := Handlers.OnToolResult;
-  { Conversation-history compaction: on by default with picoclaw-ish
-    defaults (80K-token threshold, last 8 turns preserved). The tool
-    loop only pays the cost of a summariser round when the running
-    history actually trips the threshold, so short conversations
-    are unaffected. Channels that thread their own RunToolLoop
-    config can opt in the same way. }
-  Result.CompactEnabled := True;
+  { Conversation-history compaction: on by default, tunable via the
+    "compaction" block in config.json. The tool loop only pays the
+    cost of a summariser round when the running history actually
+    trips the threshold, so short conversations are unaffected. }
+  Result.CompactEnabled := Cfg.Compaction.Enabled;
   Result.CompactOpts    := DefaultCompactOptions;
+  Result.CompactOpts.ThresholdTokens    := Cfg.Compaction.ThresholdTokens;
+  Result.CompactOpts.RetainBudgetTokens := Cfg.Compaction.RetainBudgetTokens;
+  Result.CompactOpts.KeepRecentTurns    := Cfg.Compaction.KeepRecentTurns;
+  Result.CompactOpts.SummaryBudget      := Cfg.Compaction.SummaryBudget;
+  { Before a compaction drops the transcript's older half, refresh
+    the session's working state from it -- the paths edited and
+    commands run in that half would otherwise vanish from both the
+    history AND the cross-turn snapshot that exists to outlive it.
+    Only wired when a session is being persisted; MetaRef is nil on
+    one-shot runs, and the handler does nothing then. }
+  Result.CompactOpts.OnBefore := Handlers.OnBeforeCompact;
   { Forward the tool-output truncation cap (per-tool-result bytes)
     from config. 0 = off (legacy verbatim behaviour); when an
     operator sets it, RunToolLoop diverts oversize results to the
@@ -672,6 +705,7 @@ begin
   if A.Session <> '' then
   begin
     PersistedSession := TSession.Create(A.Session);
+    Handlers.MetaRef := @PersistedSession.Meta;
     OneShotSessionId := A.Session;
   end
   else
@@ -1383,6 +1417,7 @@ begin
       Codex P1 on PR #117: making this opt-in defeated the whole
       "history survives restarts" point. }
     Session := TSession.Create(A.Session);
+    Handlers.MetaRef := @Session.Meta;
     RewireCheckpoints;
     { Tell the active shell backend a session is starting so docker
       can spawn its per-session container BEFORE the first tool
@@ -1427,6 +1462,9 @@ begin
           ClearSteering(Session.Meta.Id);
           Session.Free;
           Session := TSession.Create('');   { fresh id }
+          { MetaRef pointed into the freed session; re-aim it before
+            any compaction can flush working state into dead memory. }
+          Handlers.MetaRef := @Session.Meta;
           RewireCheckpoints;
           PrintLn(Ansi.Dim + '(new session ' + Session.Meta.Id + ')' + Ansi.Reset);
         end
@@ -1580,6 +1618,10 @@ begin
           Continue;
         end;
         CompactOptsLocal := DefaultCompactOptions;
+        CompactOptsLocal.RetainBudgetTokens := Cfg.Compaction.RetainBudgetTokens;
+        CompactOptsLocal.KeepRecentTurns    := Cfg.Compaction.KeepRecentTurns;
+        CompactOptsLocal.SummaryBudget      := Cfg.Compaction.SummaryBudget;
+        CompactOptsLocal.OnBefore           := Handlers.OnBeforeCompact;
         CompactOptsLocal.ThresholdTokens := 1;  { force the slice }
         CompactedLiveOpts := DefaultChatOptions;
         ApplyPromptCacheConfig(CompactedLiveOpts, Cfg.PromptCache);

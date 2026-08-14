@@ -171,6 +171,18 @@ type
         Flip to False only when you actually need the model to
         reach private addresses (local dev mode, intranet
         scraping) and have weighed the credentials-leak risk.   *)
+  { Conversation-history compaction. Field meanings and defaults live
+    with the mechanism (PasClaw.Agent.Compact); this record only
+    carries the operator's overrides from config.json's "compaction"
+    block to the call sites. }
+  TCompactionConfig = record
+    Enabled:            Boolean;
+    ThresholdTokens:    Integer;   { trigger: compact above this estimate }
+    RetainBudgetTokens: Integer;   { retention: recent history kept verbatim }
+    KeepRecentTurns:    Integer;   { floor: never keep fewer messages }
+    SummaryBudget:      Integer;   { the summariser is told to stay under }
+  end;
+
   TSandboxPolicy = record
     RestrictToWorkspace:       Boolean;
     AllowReadOutsideWorkspace: Boolean;
@@ -593,6 +605,15 @@ type
        conversion that would not come out shorter is declined. See
        PasClaw.MCP.Compact. *)
     MCPCompactResults: Boolean;
+    (* Compaction -- conversation-history compaction knobs, threaded
+       into every RunToolLoop site (CLI agent, gateway chat, desktop
+       page generation). The "compaction" block was DOCUMENTED long
+       before anything read it: sessions.md described these keys while
+       all four call sites hardcoded DefaultCompactOptions, so setting
+       them silently did nothing. The mechanics -- what the threshold
+       triggers, what the retention budget keeps, where the summary
+       lives -- are PasClaw.Agent.Compact's header. *)
+    Compaction: TCompactionConfig;
     Crons:      array of TCronEntry;
     Skills:     array of TSkillEntry;
     Subagents:  TSubagentSpecArray;  { see comment on the type alias }
@@ -1136,6 +1157,16 @@ begin
   DesktopToolsEnabled  := False; { off by default -- see the field comment: the desktop works without it. }
   RelayWaitTimeoutMs   := 0;     { 0 = use the Pascal-side RelayDefaultWaitTimeoutMs (5 min). Operators set higher for flaky workers, lower for fast fallback. }
   MCPCompactResults := True;  { on by default: the conversion is refused unless the result is rectangular, all-scalar and genuinely shorter, so the failure mode is "no change" rather than a mangled result. Flip off if a server's rows must reach the model as literal JSON. }
+  { Compaction defaults MUST match DefaultCompactOptions in
+    PasClaw.Agent.Compact -- these are what the call sites pass when
+    the config block is absent, and two disagreeing defaults would
+    mean behaviour depends on which path built the options. Asserted
+    by compact_tests. }
+  Compaction.Enabled            := True;
+  Compaction.ThresholdTokens    := 80000;
+  Compaction.RetainBudgetTokens := 20000;
+  Compaction.KeepRecentTurns    := 8;
+  Compaction.SummaryBudget      := 800;
   MCPProgressiveDisclosure := True;  { on by default -- fat catalogs (Replicate MCP ~50 tools, GitHub MCP ~50+) make lazy reveal the right floor. The prompt cost of every MCP schema every turn dominates the bill on turns that touch zero MCP tools; tool_search loads schemas on demand at a one-turn cost per first-use. Operators with tiny catalogs flip off via onboarding (default N) or hand-edit if the +1 turn isn't worth the savings. Mirrors Claude Code's ToolSearch pattern. No-op when no MCP servers are configured. }
   RenderMarkdown       := True;  { on by default for terminal surfaces; cmd/serve flips off }
   SubagentsEnabled     := True;  { on by default -- a built-in general-purpose subagent makes `spawn` available with no config. }
@@ -1730,6 +1761,26 @@ begin
     if not MCPCompactResults then
       Root.PutBool('mcp_compact_results', False);
 
+    { compaction: same emit-only-when-changed shape. A block of five
+      defaults in every config.json would read as five decisions the
+      operator never made; writing it only when something differs
+      keeps the file to what was actually chosen -- while still
+      round-tripping every override through SaveConfig. }
+    if (not Compaction.Enabled) or
+       (Compaction.ThresholdTokens    <> 80000) or
+       (Compaction.RetainBudgetTokens <> 20000) or
+       (Compaction.KeepRecentTurns    <> 8) or
+       (Compaction.SummaryBudget      <> 800) then
+    begin
+      Tmp := TJsonObject.Create;
+      Tmp.PutBool('enabled',              Compaction.Enabled);
+      Tmp.PutInt ('threshold_tokens',     Compaction.ThresholdTokens);
+      Tmp.PutInt ('retain_budget_tokens', Compaction.RetainBudgetTokens);
+      Tmp.PutInt ('recent_turns',         Compaction.KeepRecentTurns);
+      Tmp.PutInt ('summary_budget',       Compaction.SummaryBudget);
+      Root.PutObject('compaction', Tmp);
+    end;
+
     Arr := TJsonArray.Create;
     for i := 0 to High(Crons) do
     begin
@@ -1959,6 +2010,17 @@ begin
                                               MCPProgressiveDisclosure);
     MCPCompactResults := Root.GetBool('mcp_compact_results',
                                       MCPCompactResults);
+    Obj := Root.ChildObject('compaction');
+    if Obj <> nil then
+    try
+      Compaction.Enabled            := Obj.GetBool('enabled',              Compaction.Enabled);
+      Compaction.ThresholdTokens    := Integer(Obj.GetInt('threshold_tokens',     Compaction.ThresholdTokens));
+      Compaction.RetainBudgetTokens := Integer(Obj.GetInt('retain_budget_tokens', Compaction.RetainBudgetTokens));
+      Compaction.KeepRecentTurns    := Integer(Obj.GetInt('recent_turns',         Compaction.KeepRecentTurns));
+      Compaction.SummaryBudget      := Integer(Obj.GetInt('summary_budget',       Compaction.SummaryBudget));
+    finally
+      Obj.Free;
+    end;
     RenderMarkdown      := Root.GetBool('render_markdown',       RenderMarkdown);
     VectorSearchEnabled := Root.GetBool('vector_search_enabled', VectorSearchEnabled);
     RerankSearchEnabled := Root.GetBool('rerank_search_enabled', RerankSearchEnabled);

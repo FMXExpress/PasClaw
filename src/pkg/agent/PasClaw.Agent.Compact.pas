@@ -11,12 +11,36 @@
   Picoclaw does this; we left a stub in the Phase A memory PR notes.
 
   Shape:
-    TCompactOptions     tuning knobs (token threshold, recent-turn
-                         count, summariser budget, memory-flush
-                         callback).
-    NeedsCompact        cheap token-count check; tool loop calls
-                         each iteration before the LLM round.
-    CompactMessages     does the work; signature explained below.
+    TCompactOptions         tuning knobs (token threshold, retention
+                             budget, recent-turn floor, summariser
+                             budget, memory-flush callback).
+    NeedsCompact            cheap token-count check; tool loop calls
+                             each iteration before the LLM round.
+    CompactMessages         does the work; signature explained below.
+    IsContextOverflowError  classifies a provider error as "the
+                             context window overflowed", so the loop
+                             can compact reactively and retry.
+
+  The summary is a ROLLING RECORD, not a chain:
+    The first compaction appends a "[Conversation summary so far]"
+    block to the system prompt. Every later compaction REPLACES that
+    block -- and feeds the old summary to the summariser as the head
+    of its input, so the new block folds the old record and the newer
+    turns into one. Without both halves of that, repeat compactions
+    appended block after block into a prompt the trigger never
+    counted: the second summary described only the turns since the
+    first, the stack grew without bound, and nothing ever noticed.
+    NeedsCompact takes the system prompt for the same reason -- a
+    summary that has moved in there still occupies context.
+
+  Retention is a token budget, not a message count:
+    RetainBudgetTokens decides the cut -- walk back from the newest
+    message until the budget is spent. A fixed count keeps 200 tokens
+    or 200K depending on what the messages are; a tail of fat tool
+    results used to survive compaction nearly whole, which meant
+    compacting could fail to shrink anything. KeepRecentTurns remains
+    as a FLOOR (never keep fewer than N messages), so one giant tool
+    result cannot reduce the tail to nothing.
 
   Why the summary lives in Options.SystemPrompt, not as an mrSystem
   message (PR #87 Codex P1):
@@ -64,9 +88,12 @@
 
   Defaults match what most Claude / GPT-4 deployments tolerate:
     ThresholdTokens     80_000   (compact well before the 100/200K cap)
-    KeepRecentTurns     8        (last 4 user+assistant pairs)
+    RetainBudgetTokens  20_000   (recent history kept verbatim)
+    KeepRecentTurns     8        (floor: never keep fewer messages)
     SummaryBudget       800      (tokens; the summariser is told to
                                   stay under this)
+  All four are configurable via the "compaction" block in config.json;
+  these are the values used when the block is absent.
 *)
 unit PasClaw.Agent.Compact;
 
@@ -84,21 +111,40 @@ type
   TCompactBeforeCallback = procedure(const Messages: array of TMessage) of object;
 
   TCompactOptions = record
-    ThresholdTokens: Integer;
-    KeepRecentTurns: Integer;
-    SummaryBudget:   Integer;
-    OnBefore:        TCompactBeforeCallback;
+    ThresholdTokens:    Integer;
+    RetainBudgetTokens: Integer;
+    KeepRecentTurns:    Integer;
+    SummaryBudget:      Integer;
+    OnBefore:           TCompactBeforeCallback;
   end;
 
 function DefaultCompactOptions: TCompactOptions;
 
-(* True iff the combined message bodies estimate above
-   ThresholdTokens. Cheap -- uses the existing 4-chars-per-token
-   heuristic from PasClaw.Tokenizer. Returns False unconditionally
-   if Threshold <= 0 so a misconfigured threshold disables the
-   feature instead of compacting on every call. *)
+(* True iff the combined message bodies PLUS the system prompt
+   estimate above ThresholdTokens. Cheap -- uses the existing
+   4-chars-per-token heuristic from PasClaw.Tokenizer. The system
+   prompt counts because compaction itself grows it: the summary
+   lives there, and a trigger that cannot see the summary would let
+   repeat compactions accumulate context it never measures. Returns
+   False unconditionally if Threshold <= 0 so a misconfigured
+   threshold disables the feature instead of compacting on every
+   call. *)
 function NeedsCompact(const Messages: array of TMessage;
+                      const SystemPrompt: string;
                       Threshold: Integer): Boolean;
+
+(* True when a provider response says the CONTEXT WINDOW overflowed --
+   the request was too big, as opposed to failed. Matched on the error
+   text because every provider words it differently (Anthropic:
+   "prompt is too long", OpenAI: "context_length_exceeded", Gemini:
+   "input token count ... exceeds"); the status code only gates the
+   check, since a 2xx cannot be an overflow. Conservative on purpose:
+   a false negative is today's behaviour (the error surfaces), a
+   false positive spends a pointless summary call. The tool loop uses
+   this to compact reactively and retry once -- the safety net for
+   the estimator above running low on token-dense content. *)
+function IsContextOverflowError(StatusCode: Integer;
+                                const ErrText: string): Boolean;
 
 (* Returns a compacted message list AND updates Options.SystemPrompt
    to carry the summary + caller's preserved system instructions.
@@ -107,26 +153,31 @@ function NeedsCompact(const Messages: array of TMessage;
         Messages verbatim and leave Options untouched.
      2. Extract every leading mrSystem message; concatenate their
         bodies for the SystemPrompt rebuild later.
-     3. Pick the cut on the NON-system portion: keep the last
-        KeepRecentTurns. Walk the cut backward over any leading
-        mrTool messages in the tail so a tool_call/tool_result
-        pair is never split.
-     4. Cap the prefix at SUMMARY_INPUT_CAP_TOKENS by dropping
+     3. Split any existing "[Conversation summary so far]" block off
+        Options.SystemPrompt -- the base is rebuilt on, the old
+        summary becomes the head of the summariser's input.
+     4. Pick the cut on the NON-system portion: keep the newest
+        messages that fit RetainBudgetTokens, with KeepRecentTurns as
+        a floor. Walk the cut forward over any leading mrTool
+        messages in the tail so a tool_call/tool_result pair is
+        never split.
+     5. Cap the prefix at SUMMARY_INPUT_CAP_TOKENS by dropping
         oldest messages until under cap -- prevents the summariser
         from inheriting the same context-overflow we're trying to
-        prevent.
-     5. Fire OnBefore (if set) with the full original list so the
+        prevent. The old summary is not subject to the cap; it is
+        the record of everything already dropped once.
+     6. Fire OnBefore (if set) with the full original list so the
         memory subsystem can persist anything important before we
         drop it.
-     6. Call Provider.Chat with a single summary-instruction
+     7. Call Provider.Chat with a single summary-instruction
         message; on failure return verbatim with a log warn.
-     7. Build the new Options.SystemPrompt:
-          [original Options.SystemPrompt]
+     8. Build the new Options.SystemPrompt:
+          [base prompt, old summary block removed]
           [caller's leading mrSystem messages, verbatim]
           [Conversation summary so far]
           [summary text]
         Empty sections are skipped.
-     8. Result Messages = preserved tail only -- no mrSystem
+     9. Result Messages = preserved tail only -- no mrSystem
         entries (they all moved into Options.SystemPrompt).
 *)
 function CompactMessages(Provider: ILLMProvider; const Model: string;
@@ -147,27 +198,60 @@ const
      summariser call still fits. *)
   SUMMARY_INPUT_CAP_TOKENS = 60000;
 
+  { The block CompactMessages owns inside Options.SystemPrompt. It is
+    always the LAST section (rebuilds append it last, and nothing else
+    writes below it), which is what lets SplitSummaryBlock treat
+    everything after the marker as the summary. }
+  SummaryMarker = '[Conversation summary so far]';
+
 function DefaultCompactOptions: TCompactOptions;
 begin
-  Result.ThresholdTokens := 80000;
-  Result.KeepRecentTurns := 8;
-  Result.SummaryBudget   := 800;
-  Result.OnBefore        := nil;
+  Result.ThresholdTokens    := 80000;
+  Result.RetainBudgetTokens := 20000;
+  Result.KeepRecentTurns    := 8;
+  Result.SummaryBudget      := 800;
+  Result.OnBefore           := nil;
 end;
 
 function NeedsCompact(const Messages: array of TMessage;
+                      const SystemPrompt: string;
                       Threshold: Integer): Boolean;
 var
   i, Total: Integer;
 begin
   Result := False;
   if Threshold <= 0 then Exit;
-  Total := 0;
+  Total := EstimateTokens(SystemPrompt);
+  if Total >= Threshold then Exit(True);
   for i := 0 to High(Messages) do
   begin
     Total := Total + EstimateTokens(Messages[i].Content) + 4;   { envelope }
     if Total >= Threshold then Exit(True);
   end;
+end;
+
+function IsContextOverflowError(StatusCode: Integer;
+                                const ErrText: string): Boolean;
+var
+  T: string;
+begin
+  Result := False;
+  { A success cannot be an overflow, whatever the body says. }
+  if (StatusCode >= 200) and (StatusCode < 300) then Exit;
+  T := LowerCase(ErrText);
+  if T = '' then Exit;
+  { One phrase per known provider wording, plus the generic forms.
+    Substrings, not JSON fields: the text arrives as an error body,
+    an exception message, or a provider's own prose, and all three
+    reach here flattened. }
+  Result :=
+    (Pos('prompt is too long', T) > 0) or                { Anthropic }
+    (Pos('context_length_exceeded', T) > 0) or           { OpenAI }
+    (Pos('maximum context length', T) > 0) or            { OpenAI prose }
+    (Pos('exceeds the maximum number of tokens', T) > 0) or  { Gemini }
+    (Pos('input token count', T) > 0) and (Pos('exceed', T) > 0) or
+    (Pos('context window', T) > 0) and (Pos('exceed', T) > 0) or
+    (Pos('too many tokens', T) > 0);
 end;
 
 function FormatRole(R: TMsgRole): string;
@@ -181,7 +265,23 @@ begin
   end;
 end;
 
-function BuildSummaryPrompt(const Slice: array of TMessage;
+(* The summariser's instruction.
+
+   Sectioned rather than free-form: under a tight budget a flat note
+   sheds whatever the model deems least interesting, and what it deems
+   least interesting is usually the open questions. Named sections make
+   the omission visible -- an empty "Open questions" is a statement, a
+   note that never mentions them is a gap. The framing is a handoff
+   briefing: the next reader is the same agent, minutes later, with no
+   other record of this part of the conversation.
+
+   PrevSummary is the ROLLING RECORD -- the block a previous compaction
+   wrote, which the caller has just cut out of the system prompt. It
+   goes first, as record rather than transcript, and the instruction is
+   to fold, not to append: the output must be one record, under one
+   budget, covering both. *)
+function BuildSummaryPrompt(const PrevSummary: string;
+                             const Slice: array of TMessage;
                              Budget: Integer): string;
 var
   i: Integer;
@@ -194,14 +294,50 @@ begin
     Lines := Lines + Trim(Slice[i].Content) + sLineBreak + sLineBreak;
   end;
   Result :=
-    'Summarise the conversation below into a concise running record. ' +
-    'Preserve: key user facts and preferences, decisions made, code ' +
-    'paths or symbols referenced, errors encountered, and open questions. ' +
-    'Drop: small talk, redundant restatements, tool output that has been ' +
-    'superseded. Stay under ' + IntToStr(Budget) + ' tokens. Write as a ' +
-    'compact note, not a dialogue.' + sLineBreak + sLineBreak +
-    '--- conversation ---' + sLineBreak + sLineBreak +
+    'Update the running record of this conversation -- a handoff ' +
+    'briefing from this stretch of work to the next. Write these ' +
+    'sections, each as terse prose or short bullets:' + sLineBreak +
+    'Goal: what the user is trying to get done.' + sLineBreak +
+    'Progress: what has been produced or settled so far.' + sLineBreak +
+    'Key decisions: choices made and the constraint behind each.' + sLineBreak +
+    'Errors encountered: what failed and what the fix was.' + sLineBreak +
+    'Open questions: anything raised and not yet resolved.' + sLineBreak +
+    'Preserve key user facts and preferences, and code paths or ' +
+    'symbols referenced. Drop small talk, redundant restatements, and ' +
+    'tool output that has been superseded. Stay under ' +
+    IntToStr(Budget) + ' tokens total. Write the record, nothing else.';
+  if Trim(PrevSummary) <> '' then
+    Result := Result + sLineBreak + sLineBreak +
+      '--- the record so far (fold it in; do not repeat it verbatim) ---' +
+      sLineBreak + sLineBreak + Trim(PrevSummary);
+  Result := Result + sLineBreak + sLineBreak +
+    '--- newer conversation to fold in ---' + sLineBreak + sLineBreak +
     Lines;
+end;
+
+(* Split an existing summary block off a system prompt.
+
+   Base gets everything before the marker (trailing whitespace
+   trimmed), PrevSummary the text after it. When the marker is absent
+   the whole prompt is Base and PrevSummary is '' -- the first
+   compaction. This is the other half of the rolling record: without
+   it, every compaction APPENDED a block after the last one, the
+   second summary only described the turns since the first, and the
+   prompt grew without bound in a place the trigger never measured. *)
+procedure SplitSummaryBlock(const SystemPrompt: string;
+                              out Base, PrevSummary: string);
+var
+  P: Integer;
+begin
+  P := Pos(SummaryMarker, SystemPrompt);
+  if P = 0 then
+  begin
+    Base := SystemPrompt;
+    PrevSummary := '';
+    Exit;
+  end;
+  Base := TrimRight(Copy(SystemPrompt, 1, P - 1));
+  PrevSummary := Trim(Copy(SystemPrompt, P + Length(SummaryMarker), MaxInt));
 end;
 
 (* Returns the slice of NonSystem starting at the cut where every
@@ -287,13 +423,13 @@ function CompactMessages(Provider: ILLMProvider; const Model: string;
                          var Options: TChatOptions;
                          const Opts: TCompactOptions): TMessageArray;
 var
-  KeepLen, Cut, i, OutIdx: Integer;
+  KeepLen, Cut, BudgetCut, TailTokens, i, OutIdx: Integer;
   LeadingSystems, Body, Prefix, CappedPrefix: TMessageArray;
   OneCall: array of TMessage;
   EmptyTools: array of TToolDefinition;
   CallOptions: TChatOptions;
   Resp: TLLMResponse;
-  Summary, NewSystem, CallerSystemText: string;
+  Summary, NewSystem, CallerSystemText, BasePrompt, PrevSummary: string;
 begin
   Result := nil;
   KeepLen := Opts.KeepRecentTurns;
@@ -321,7 +457,31 @@ begin
       LogWarn('compact: OnBefore raised %s: %s -- continuing', [E.ClassName, E.Message]);
   end;
 
+  { The cut: the token budget decides, the message count is a floor.
+
+    Walk back from the newest message accumulating estimated tokens;
+    the first message that would blow RetainBudgetTokens is where the
+    tail ends. A fixed count cannot do this job -- eight one-liners
+    and eight 30K tool results are both "8 messages", and keeping the
+    latter verbatim meant compaction could fire and shrink nothing,
+    then fire again on a body too short to slice. The floor pulls the
+    other way: however fat the tail, at least KeepLen messages
+    survive, so the model always sees some literal recent turns. }
   Cut := Length(Body) - KeepLen;
+  if Opts.RetainBudgetTokens > 0 then
+  begin
+    BudgetCut := Length(Body);
+    TailTokens := 0;
+    for i := High(Body) downto 0 do
+    begin
+      TailTokens := TailTokens + EstimateTokens(Body[i].Content) + 4;
+      if TailTokens > Opts.RetainBudgetTokens then Break;
+      BudgetCut := i;
+    end;
+    { A small tail moves the cut earlier (keep more); a fat tail
+      would move it later, and the floor holds it where it is. }
+    if BudgetCut < Cut then Cut := BudgetCut;
+  end;
   Cut := ShiftCutPastToolResults(Body, Cut);
   if Cut <= 0 then
   begin
@@ -342,9 +502,16 @@ begin
     Exit(ReturnVerbatim(Messages));
   end;
 
+  { The old summary block comes OUT of the prompt and INTO the
+    summariser's input. Split before the call so a failure below
+    leaves Options untouched -- BasePrompt/PrevSummary are locals
+    until the rebuild. }
+  SplitSummaryBlock(Options.SystemPrompt, BasePrompt, PrevSummary);
+
   SetLength(OneCall, 1);
   OneCall[0] := MakeMessage(mrUser,
-                            BuildSummaryPrompt(CappedPrefix, Opts.SummaryBudget));
+                            BuildSummaryPrompt(PrevSummary, CappedPrefix,
+                                               Opts.SummaryBudget));
 
   CallOptions := DefaultChatOptions;
   { Inherit cache policy from the caller's Options -- caller already
@@ -380,20 +547,23 @@ begin
     request builders silently drop in-message mrSystem entries
     when Options.SystemPrompt is set (Codex P1). Sections, joined
     by blank lines, skipped when empty:
-      [original Options.SystemPrompt]
+      [base prompt -- the old summary block already split off]
       [caller's leading mrSystem messages, verbatim]
-      [Conversation summary so far] block
+      [Conversation summary so far] block, exactly ONE
     The caller's policy is preserved BIT-FOR-BIT, never run through
-    the summariser. }
+    the summariser. Building on BasePrompt rather than the raw
+    prompt is what makes the summary a rolling record: the previous
+    block was removed above and its content folded into Summary, so
+    repeat compactions converge instead of stacking blocks. }
   CallerSystemText := JoinSystemBodies(LeadingSystems);
-  NewSystem := Trim(Options.SystemPrompt);
+  NewSystem := Trim(BasePrompt);
   if CallerSystemText <> '' then
   begin
     if NewSystem <> '' then NewSystem := NewSystem + sLineBreak + sLineBreak;
     NewSystem := NewSystem + CallerSystemText;
   end;
   if NewSystem <> '' then NewSystem := NewSystem + sLineBreak + sLineBreak;
-  NewSystem := NewSystem + '[Conversation summary so far]' + sLineBreak + Summary;
+  NewSystem := NewSystem + SummaryMarker + sLineBreak + Summary;
   Options.SystemPrompt := NewSystem;
 
   { New body = preserved tail only (no system messages -- they live
