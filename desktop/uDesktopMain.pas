@@ -27,11 +27,11 @@ interface
 uses
   System.SysUtils, System.Types, System.UITypes, System.Classes,
   System.IOUtils, System.StrUtils, System.Generics.Collections,
-  System.SyncObjs,
+  System.SyncObjs, System.IniFiles,
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs,
   FMX.StdCtrls, FMX.Layouts, FMX.ListBox, FMX.Edit, FMX.Memo, FMX.Styles,
   FMX.Objects, FMX.TreeView, FMX.WebBrowser, FMX.ScrollBox,
-  FMX.Controls.Presentation, FMX.TabControl,
+  FMX.Controls.Presentation, FMX.TabControl, FMX.Notification,
   FMX.RetroWindows, FMX.RetroSkins,
   PasClaw.Client.Api,
   PasClaw.Client.Markdown;
@@ -216,6 +216,33 @@ type
     FWizPage: TLayout;
     FWizBack, FWizNext: TButton;
 
+    (* ---- notifications ----
+
+       Work that finishes while you are looking at something else is the
+       whole reason this exists. An agent turn on a task takes minutes, deep
+       research takes longer, and a process app can die twenty seconds after
+       you start it -- and the tree quietly updating is no use to someone in
+       another window.
+
+       Only terminal outcomes: a job that landed, a report that is ready, an
+       app that stopped on its own. Everything else the board reports is a
+       step along the way, and a toast per step would train you to dismiss
+       them without reading, which is worse than not having them.
+
+       And only when the desktop is NOT the active window. If you are
+       looking at it, the tree updating in front of you IS the notification;
+       a toast on top of that is noise about something you just watched
+       happen.
+
+       Events arrive on a worker thread and TNotificationCenter is
+       main-thread only, so these queue here and the event timer presents
+       them -- the same shape the log tail already uses. *)
+    FNotify: TNotificationCenter;
+    FNotifyOn: Boolean;
+    FNotifyPending: TStringList;   { Title#1Body, oldest first }
+    FNotifyLock: TCriticalSection;
+    FNotifySeq: Integer;
+
     { Events arrive on a worker thread; the UI is touched only from the main
       one. The worker sets a flag, a timer drains it. }
     FEventThread: TThread;
@@ -374,6 +401,32 @@ type
     procedure ApplyPendingEvents;
     procedure EventTimerTick(Sender: TObject);
 
+    { ---- notifications ---- }
+    (* Where the switch lives.
+
+       NOT in the desktop layout, which is shared: both clients read and
+       write one state document per workspace, and the web client's writer
+       replaces it wholesale with the four fields it knows about -- so a
+       `notify` field parked in there survives exactly until someone opens
+       /desktop, and a user who turned notifications off finds them back on.
+
+       It does not belong there anyway. A layout is about a workspace and is
+       meant to follow you between clients; whether THIS machine's
+       notification centre gets used is about this machine. A local file is
+       the honest home for it, and the right one for the next per-machine
+       preference too. *)
+    function PrefsPath: string;
+    procedure LoadPrefs;
+    procedure SavePrefs;
+    { Decide whether this event is worth telling someone about, and queue it
+      if so. Called on the EVENT thread: pure string work, no controls. }
+    procedure NoteEvent(const Ev: TDesktopEvent);
+    { Queue one. Safe from any thread. }
+    procedure QueueNotification(const Title, Body: string);
+    { Present whatever is queued. Main thread only. }
+    procedure DrainNotifications;
+    procedure ToggleNotifications;
+
     { Period-native output, same convention as the web client -- the parsing
       is shared (PasClaw.Client.Api.ParseUIBlocks), only the rendering is
       FireMonkey. }
@@ -507,6 +560,18 @@ begin
   { Owns its lists: each holds one project's captured app bodies. }
   FVersions   := TObjectDictionary<string, TStringList>.Create([doOwnsValues]);
 
+  (* Notifications, on by default and switchable from the Menu.
+
+     TNotificationCenter is not available everywhere -- and on a machine
+     where it is not, Supported says so and PresentNotification would be a
+     silent no-op. Asking once here means the Menu can say "not available on
+     this system" instead of offering a switch that does nothing. *)
+  FNotifyPending := TStringList.Create;
+  FNotifyLock := TCriticalSection.Create;
+  FNotify := TNotificationCenter.Create(Self);
+  FNotifyOn := FNotify.Supported;
+  LoadPrefs;
+
   { One poll for every Run window. A child's output arrives when it arrives,
     and N timers would be N of the same question. Off until something runs. }
   FRunTimer := TTimer.Create(Self);
@@ -613,6 +678,11 @@ begin
   FreeAndNil(FNodeRefs);
   FreeAndNil(FLogPending);
   FreeAndNil(FLogLock);
+  { The centre itself is owned by the form and dies with it; these two are
+    ours. After the event thread has been joined above, nothing can still be
+    queueing into them. }
+  FreeAndNil(FNotifyPending);
+  FreeAndNil(FNotifyLock);
   FreeAndNil(FMenuActions);
   FreeAndNil(FLibraryKinds);
   FreeAndNil(FBrowserTabPages);
@@ -1289,6 +1359,13 @@ begin
   Item('Switch Workspace...', 'pickws',  False);
   Item('New Workspace...',    'newws',   False);
   Item('Display Properties',  'display', False);
+  { Says its current state rather than what it will do. A row reading
+    "Notifications: on" is a fact you can check at a glance; one reading
+    "Turn notifications off" makes you work out which way round it is. }
+  if (FNotify <> nil) and FNotify.Supported then
+    Item('Notifications: ' + IfThenStr(FNotifyOn, 'on', 'off'), 'notify', False)
+  else
+    Item('Notifications: unavailable', '', False);
 
   Content.Height := Y + 4;
 
@@ -1333,6 +1410,7 @@ begin
   else if Action = 'pickws' then PickWorkspaceClick(nil)
   else if Action = 'newws' then NewWorkspaceClick(nil)
   else if Action = 'display' then OpenDisplayProperties
+  else if Action = 'notify' then ToggleNotifications
   else if (Action = 'project') and (Arg <> '') then OpenChat(Arg)
   else if (Action = 'app') and (Arg <> '') then OpenApp(Arg)
   else if (Action = 'run') and (Arg <> '') then OpenRun(Arg);
@@ -1863,7 +1941,210 @@ begin
     if Ev.Line <> '' then FProgressLine := FProgressLine + ': ' + Ev.Line;
     Exit;
   end;
+  { Still worker-thread rules: this only builds strings and appends them to
+    a locked list. The timer presents them. }
+  NoteEvent(Ev);
   FEventDirty := True;
+end;
+
+function TFormMain.PrefsPath: string;
+begin
+  Result := TIOPath.Combine(TIOPath.Combine(TIOPath.GetHomePath, 'PasClaw'),
+                            'desktop.ini');
+end;
+
+procedure TFormMain.LoadPrefs;
+var
+  Ini: TIniFile;
+begin
+  { The default is what FormCreate already worked out from the platform, so
+    an absent file -- a first run -- keeps it. A machine with no notification
+    centre cannot be talked into having one by a settings file. }
+  if not TFile.Exists(PrefsPath) then Exit;
+  try
+    Ini := TIniFile.Create(PrefsPath);
+    try
+      FNotifyOn := FNotifyOn and Ini.ReadBool('ui', 'notifications', True);
+    finally
+      Ini.Free;
+    end;
+  except
+    { An unreadable preferences file is not a reason to fail to start. }
+  end;
+end;
+
+procedure TFormMain.SavePrefs;
+var
+  Ini: TIniFile;
+begin
+  try
+    TDirectory.CreateDirectory(ExtractFilePath(PrefsPath));
+    Ini := TIniFile.Create(PrefsPath);
+    try
+      Ini.WriteBool('ui', 'notifications', FNotifyOn);
+      Ini.UpdateFile;
+    finally
+      Ini.Free;
+    end;
+  except
+    { A preference that could not be written is a preference that does not
+      persist, not a reason to stop. }
+  end;
+end;
+
+(* Which events are worth interrupting someone for.
+
+   The test is "did something END", not "did something change". A job going
+   from queued to running, a task turning active, the board being refetched
+   -- all of those are the tree's business and none of them is news. What is
+   news is the three ways long work stops:
+
+     a job landed          an agent turn on a task, minutes later
+     a report is ready     deep research, longer still
+     an app stopped        a process app that died on its own
+
+   The last one only reaches here because the runner now announces it; until
+   it did, the only record of a crashed app was a state field the Run window
+   polled for. *)
+procedure TFormMain.NoteEvent(const Ev: TDesktopEvent);
+var
+  Where: string;
+begin
+  if not FNotifyOn then Exit;
+
+  if Ev.EvType = 'job' then
+  begin
+    if (Ev.Status <> 'done') and (Ev.Status <> 'failed') then Exit;
+    Where := Ev.Project;
+    if Ev.Task <> '' then Where := Where + ' / ' + Ev.Task;
+    if Ev.Status = 'failed' then
+      QueueNotification('Job failed', Where + ' -- ' + Ev.Id + ' did not finish')
+    else
+      QueueNotification('Job done', Where + ' -- ' + Ev.Id);
+    Exit;
+  end;
+
+  if Ev.EvType = 'page' then
+  begin
+    { The title, when the event carried one; a page id tells the user
+      nothing about which question just came back. }
+    if Trim(Ev.Line) <> '' then
+      QueueNotification('Report ready', Ev.Line)
+    else
+      QueueNotification('Report ready', 'A page is waiting in the Library');
+    Exit;
+  end;
+
+  if Ev.EvType = 'app' then
+  begin
+    { `stopped` is what you get for pressing Stop, so it is not news. }
+    if (Ev.Status <> 'exited') and (Ev.Status <> 'failed') then Exit;
+    if Ev.Status = 'failed' then
+      QueueNotification('App failed', Ev.Project + ' could not start')
+    else
+      QueueNotification('App stopped', Ev.Project + ' exited on its own');
+  end;
+end;
+
+procedure TFormMain.QueueNotification(const Title, Body: string);
+begin
+  if FNotifyPending = nil then Exit;
+  if FNotifyLock = nil then Exit;
+  FNotifyLock.Acquire;
+  try
+    { Bounded, like the log tail. If a burst arrives while the desktop is in
+      the foreground -- where they are all going to be discarded anyway --
+      the list must not grow without limit waiting for a tick. }
+    if FNotifyPending.Count >= 32 then FNotifyPending.Delete(0);
+    FNotifyPending.Add(Title + #1 + Body);
+  finally
+    FNotifyLock.Release;
+  end;
+end;
+
+(* Present what is queued -- main thread, from the event timer.
+
+   The focus test happens HERE rather than at queue time, because the queue
+   is filled from the event thread and "is this window active" is a question
+   only the main thread may ask. The cost is up to one tick of lag, which
+   nobody can perceive on something that took minutes.
+
+   Anything queued while the desktop was in front of you is DROPPED, not
+   held: you were looking at the tree when it happened, and a toast that
+   arrives when you finally alt-tab away would be telling you about
+   something you already watched. *)
+procedure TFormMain.DrainNotifications;
+var
+  Batch: TStringList;
+  I, Sep: Integer;
+  Item: string;
+  N: TNotification;
+begin
+  if (FNotifyPending = nil) or (FNotifyLock = nil) then Exit;
+  Batch := nil;
+  FNotifyLock.Acquire;
+  try
+    if FNotifyPending.Count = 0 then Exit;
+    if Active or not FNotifyOn or (FNotify = nil) then
+    begin
+      FNotifyPending.Clear;
+      Exit;
+    end;
+    Batch := TStringList.Create;
+    Batch.Assign(FNotifyPending);
+    FNotifyPending.Clear;
+  finally
+    FNotifyLock.Release;
+  end;
+
+  try
+    for I := 0 to Batch.Count - 1 do
+    begin
+      Item := Batch[I];
+      Sep := Pos(#1, Item);
+      if Sep = 0 then Continue;
+      N := FNotify.CreateNotification;
+      try
+        (* A name that never repeats. Presenting two notifications under one
+           name REPLACES the first on every platform that keys them, so two
+           finished jobs would show as one -- and the one you would lose is
+           the older, which is the one you were least likely to have seen. *)
+        Inc(FNotifySeq);
+        N.Name := 'pasclaw-' + IntToStr(FNotifySeq);
+        N.Title := Copy(Item, 1, Sep - 1);
+        N.AlertBody := Copy(Item, Sep + 1, MaxInt);
+        FNotify.PresentNotification(N);
+      finally
+        N.Free;
+      end;
+    end;
+  finally
+    Batch.Free;
+  end;
+end;
+
+procedure TFormMain.ToggleNotifications;
+begin
+  if (FNotify = nil) or not FNotify.Supported then
+  begin
+    Say('This system has no notification centre for PasClaw to use.');
+    Exit;
+  end;
+  FNotifyOn := not FNotifyOn;
+  { Queued-but-unshown notifications belong to the setting that was on when
+    they arrived; switching off is a request for silence, including about
+    the last few seconds. }
+  if not FNotifyOn then
+  begin
+    FNotifyLock.Acquire;
+    try
+      FNotifyPending.Clear;
+    finally
+      FNotifyLock.Release;
+    end;
+  end;
+  SavePrefs;
+  Say('Notifications ' + IfThenStr(FNotifyOn, 'on', 'off'));
 end;
 
 procedure TFormMain.MarkLayoutDirty;
@@ -1914,6 +2195,9 @@ begin
   { Log lines arrive on their own thread and are painted here, on the main
     one, for the same reason board events are. }
   DrainLogLines;
+  { And notifications, which are the same problem again: queued by the event
+    thread, presented by this one. }
+  DrainNotifications;
 end;
 
 procedure TFormMain.StartEventWatch;
@@ -3484,6 +3768,7 @@ begin
   if FClient = nil then Exit;
   State := FClient.DesktopState;
   if (State = '') or (Pos('"windows"', State) = 0) then Exit;
+
 
   (* Hand-scan rather than parse. The client library has a JSON parser and
      this could use it -- but the shape here is fixed and flat, and one

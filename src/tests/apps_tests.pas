@@ -11,13 +11,19 @@ program apps_tests;
 {$H+}
 
 uses
+  { The runner spawns a drain thread per started app, and on FPC/Linux the
+    pthreads driver has to be linked in BEFORE anything that touches
+    TThread -- without it, starting an app aborts with "this binary has no
+    thread support compiled in". }
+  {$IFDEF FPC}{$IFDEF UNIX}cthreads,{$ENDIF}{$ENDIF}
   SysUtils, Classes, StrUtils,
   PasClaw.Utils,
   PasClaw.Config,
   PasClaw.Workspaces,
   PasClaw.Projects.Store,
   PasClaw.Apps,
-  PasClaw.Apps.Runner;
+  PasClaw.Apps.Runner,
+  PasClaw.Desktop.Events;
 
 var
   Failures: Integer = 0;
@@ -81,6 +87,11 @@ var
   DArgs, Env: TStringList;
   Joined: string;
   Tasks: TTaskInfoArray;
+  I, Waited: Integer;
+  Saw: Boolean;
+  Sub: TEventSubscriber;
+  Lines: TStringList;
+  RunInfo: TRunInfo;
 begin
   Slug := CreateProject('Spam Filter', '', 'filter mail', Err);
   ExpectStr(Slug, 'spam-filter', 'project created');
@@ -442,6 +453,53 @@ begin
     '"run":"python3 main.py"}');
   ExpectStr(PlannedCommand('spam-filter', Err), 'python3 main.py',
             'an app with no build step plans exactly its run command');
+
+  (* An app that ends on its own has to SAY so.
+
+     The only record of a child dying used to be a state field, so a client
+     learned about it on its next poll and anything not polling never learned
+     at all -- which is no basis for telling someone their app crashed. The
+     drain thread announces it on the event stream now, and this is that
+     round trip: subscribe, run something that exits immediately, wait for
+     the announcement.
+
+     Subscribed BEFORE the app starts, deliberately: PublishRaw does no work
+     when nobody is listening, so a subscriber that arrives afterwards would
+     find an empty queue and prove nothing. *)
+{$IFDEF UNIX}
+  Sub := DesktopSubscribe;
+  try
+    WriteFileText(JoinPath(AppDir, 'app.json'),
+      '{"name":"Blink","kind":"python","entry":"main.py","run":"/bin/true"}');
+    if StartApp('spam-filter', True, RunInfo, Err) then
+    begin
+      Saw := False;
+      Waited := 0;
+      { Up to ~6s. The drain thread polls, so the announcement is not
+        instant; bounded so a broken runner fails the test rather than
+        hanging the suite. }
+      while (not Saw) and (Waited < 120) do
+      begin
+        Sub.WaitFor(50);
+        Lines := Sub.Drain(64);
+        try
+          for I := 0 to Lines.Count - 1 do
+            if (Pos('"type":"app"', Lines[I]) > 0) and
+               (Pos('"state":"exited"', Lines[I]) > 0) then Saw := True;
+        finally
+          Lines.Free;
+        end;
+        Inc(Waited);
+      end;
+      ExpectTrue(Saw, 'an app that exits on its own announces it');
+    end
+    else
+      WriteLn('  (skipped: no probe app could be started -- ' + Err + ')');
+    StopApp('spam-filter', Err);
+  finally
+    DesktopUnsubscribe(Sub);
+  end;
+{$ENDIF}
 
   if Failures = 0 then
     WriteLn('apps_tests: OK')

@@ -14,6 +14,9 @@ program desktop_routes_tests;
 {$H+}
 
 uses
+  { Starting an app spawns a drain thread, and on FPC/Linux the pthreads
+    driver has to be linked in before anything that touches TThread. }
+  {$IFDEF FPC}{$IFDEF UNIX}cthreads,{$ENDIF}{$ENDIF}
   SysUtils, Classes,
   PasClaw.Utils,
   PasClaw.JSON,
@@ -24,6 +27,8 @@ uses
   PasClaw.Pages,
   PasClaw.Suite,
   PasClaw.Suite.Notes,
+  PasClaw.Apps.Runner,
+  PasClaw.Desktop.Events,
   PasClaw.Gateway.Desktop;
 
 var
@@ -169,9 +174,33 @@ begin
   Result := True;
 end;
 
+{ Drain a subscriber until Needle shows up or the wait runs out. Bounded so
+  a missing event fails the test rather than hanging the suite. }
+function SawEvent(Sub: TEventSubscriber; const Needle: string): Boolean;
+var
+  Lines: TStringList;
+  I, Waited: Integer;
+begin
+  Result := False;
+  Waited := 0;
+  while (not Result) and (Waited < 60) do
+  begin
+    Sub.WaitFor(50);
+    Lines := Sub.Drain(128);
+    try
+      for I := 0 to Lines.Count - 1 do
+        if Pos(Needle, Lines[I]) > 0 then Result := True;
+    finally
+      Lines.Free;
+    end;
+    Inc(Waited);
+  end;
+end;
+
 var
   R: TDesktopResponse;
   Err, AppDir, Slug, Blueprint: string;
+  Sub: TEventSubscriber;
   Obj: TJsonObject;
   Sources: TPageSourceArray;
   PageId: string;
@@ -580,6 +609,43 @@ begin
   ExpectTrue(ProjectExists('copied'), 'imported project exists');
   ExpectStatus('POST', '/v1/projects/import', '{"name":"x"}', 400,
                'import without a blueprint is a 400');
+
+  (* ---- what the event stream says about the two things that FINISH ----
+
+     Both of these had a publisher and no caller, so the stream was silent
+     about exactly the transitions a client would want to act on: a page
+     landing (the end of a research turn, minutes of it) and a launch that
+     never got off the ground. The requesting client saw the outcome in its
+     own response and every other client saw nothing at all.
+
+     Subscribed for the whole section, drained after each act: PublishRaw
+     does no work when nobody is listening, so this has to be in place before
+     the route runs. *)
+  Sub := DesktopSubscribe;
+  try
+    { A page, generated through the hook. }
+    SetPageGenerator(StubPageGen);
+    ExpectStatus('POST', '/v1/pages', '{"query":"event probe"}', 200,
+                 'page generated');
+    SetPageGenerator(nil);
+    ExpectTrue(SawEvent(Sub, '"type":"page"'),
+               'a finished page announces itself');
+
+    (* And a launch that fails. Its own project, not spam-filter's: this
+       manifest names a program that does not exist, and later assertions
+       here still need spam-filter's real app. *)
+    Slug := CreateProject('Launch Probe', '', '', Err);
+    EnsureDir(ProjectAppDir(Slug));
+    WriteFileText(JoinPath(ProjectAppDir(Slug), 'app.json'),
+      '{"name":"Nope","kind":"python","entry":"main.py",' +
+      '"run":"/nonexistent/definitely-not-here"}');
+    ExpectStatus('POST', '/v1/apps/' + Slug + '/run', '{"confirm":true}', 400,
+                 'a launch that cannot start is a 400');
+    ExpectTrue(SawEvent(Sub, '"state":"failed"'),
+               'and the failure reaches the stream, not just the caller');
+  finally
+    DesktopUnsubscribe(Sub);
+  end;
 
   { ----------------------------------------------------------------- pages -- }
   ExpectStatus('GET', '/v1/pages', '', 200, 'list pages');

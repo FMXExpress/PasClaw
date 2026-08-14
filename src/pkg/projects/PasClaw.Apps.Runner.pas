@@ -124,6 +124,7 @@ uses
   PasClaw.Config,
   PasClaw.Shell.Backend,   { TShellBackendKind -- which boundary we run in }
   PasClaw.Projects.Store,
+  PasClaw.Desktop.Events,  { so an app that dies on its own says so }
   IdTCPClient;
 
 const
@@ -574,7 +575,29 @@ var
   R: TRunning;
   Alive, IsContainer: Boolean;
   Logs: string;
+  (* An app that dies on its own has to SAY so.
+
+     Until now the only record of it was a state field a client had to poll
+     for, so the desktop learned about a crashed app on its next tick and
+     anything not polling never learned at all. Announcing it on the event
+     stream puts it beside every other thing the board reports.
+
+     Published after the lock is released, never inside it: PublishRaw takes
+     the event module's own lock, and holding two global locks at once is
+     how a deadlock gets written by accident. *)
+  Exited: Boolean;
+
+  procedure AnnounceExit;
+  begin
+    if not Exited then Exit;
+    Exited := False;
+    { Port 0: the app is gone, so it is not listening on anything. The exit
+      code stays where it already is, on the run state a client reads. }
+    PublishApp(FProject, 'exited', 0);
+  end;
+
 begin
+  Exited := False;
   { A container has no pipe to drain: its output lives in the daemon and is
     read back with `docker logs`. Poll it on a slower beat -- shelling out
     twice a second would cost more than the output is worth. }
@@ -607,11 +630,13 @@ begin
         if (not Alive) and (R.State = rsRunning) then
         begin
           R.State := rsExited;
+          Exited := True;
           LogInfo('app %s container exited', [FProject]);
         end;
       finally
         GLock.Release;
       end;
+      AnnounceExit;
       if not Alive then Break;
       Sleep(1500);
     end;
@@ -643,12 +668,14 @@ begin
         begin
           R.State := rsExited;
           R.ExitCode := R.Proc.ExitCode;
+          Exited := True;
           LogInfo('app %s exited with code %d', [FProject, R.ExitCode]);
         end;
       end;
     finally
       GLock.Release;
     end;
+    AnnounceExit;
     if R = nil then Break;
     { Only idle when there was nothing to read; a chatty child should be
       drained as fast as it writes. }
