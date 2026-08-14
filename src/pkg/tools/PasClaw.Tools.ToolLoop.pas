@@ -294,6 +294,12 @@ type
 function PartitionToolBatches(const Calls: array of TToolCall;
                               Reg: TToolRegistry): TToolBatchArray;
 
+{ Copy of Hist with the current date/time appended to the trailing user
+  message; the input is never mutated. Public for tests -- WHERE the clock
+  lands is the part with a cost attached (the system block carries the
+  cache_control breakpoint), so it is worth asserting rather than assuming. }
+function HistWithTurnClock(const Hist: TMessageArray): TMessageArray;
+
 implementation
 
 uses
@@ -304,6 +310,7 @@ uses
   PasClaw.Tools.OutputCache,
   PasClaw.Condense.JSON,
   PasClaw.Promptware,       { injection scan on tool results -- chokepoint 1 }
+  PasClaw.Utils,            { NowStampWithZone -- the per-turn clock }
   PasClaw.Otel;             (* agent.turn / chat / execute_tool spans.
                                All helpers are no-ops when OTel is
                                disabled, so the wiring costs ~5 ns per
@@ -758,6 +765,46 @@ begin
       if Result <> '' then Result := Result + sLineBreak + sLineBreak;
       Result := Result + Hist[i].Content;
     end;
+end;
+
+function HistWithTurnClock(const Hist: TMessageArray): TMessageArray;
+(* Return a copy of the history with the current date/time appended to the
+   trailing user message. Nothing is written back: the caller's Hist is what
+   gets persisted, and a transcript should not accumulate a stamp per turn.
+
+   WHY IT GOES HERE AND NOT IN THE SYSTEM PROMPT
+   ---------------------------------------------
+   The system block carries the cache_control breakpoint (see
+   PasClaw.Providers.Anthropic.BuildRequest), so a clock in the system
+   prompt would invalidate the provider's prefix cache on EVERY call --
+   which is exactly why the progress ledger's header states "NO counters,
+   no timestamps" as a hard constraint. The messages array sits after both
+   the system and last-tool breakpoints, so a value that changes every turn
+   costs nothing there.
+
+   WHY THE TRAILING USER MESSAGE AND NOT A NEW ONE
+   -----------------------------------------------
+   A trailing mrSystem message would be hoisted into the system prompt by
+   the Anthropic provider (it scans Messages for the first mrSystem when
+   Options.SystemPrompt is empty) -- straight back into the cached prefix.
+   A brand-new mrUser message appended after tool results would sit between
+   a tool_use and its tool_result. Extending the message that is already
+   there avoids both.
+
+   Result: fresh once per TURN rather than per iteration. Within one turn
+   the clock moves by seconds to minutes while the model is working, which
+   is below the resolution any of this is used at, and it keeps the tool
+   iterations byte-stable for providers that cache further in. *)
+var
+  Last: Integer;
+begin
+  Result := Copy(Hist, 0, Length(Hist));   { true copy: element-wise }
+  Last := High(Result);
+  if Last < 0 then Exit;
+  if Result[Last].Role <> mrUser then Exit;
+  if Trim(Result[Last].Content) = '' then Exit;
+  Result[Last].Content := Result[Last].Content + sLineBreak + sLineBreak +
+    '[current date/time: ' + NowStampWithZone + ']';
 end;
 
 function PartitionToolBatches(const Calls: array of TToolCall;
@@ -1636,7 +1683,11 @@ begin
         { Empty-turn auto-retry. When StreamReliability.EmptyRetryAttempts
           is 0 (default record zero, the legacy shape) ChatWithEmptyRetry
           is a one-shot call -- identical to the pre-PR behaviour. }
-        Resp := ChatWithEmptyRetry(Cfg.Provider, Hist, Tools, Cfg.Model,
+        { The clock rides in the messages array, after the cache
+          breakpoints -- see HistWithTurnClock. Hist itself is untouched,
+          so the persisted transcript stays clean. }
+        Resp := ChatWithEmptyRetry(Cfg.Provider, HistWithTurnClock(Hist),
+                                    Tools, Cfg.Model,
                                     LiveOptions, Cfg.StreamReliability);
       except
         on E: Exception do
