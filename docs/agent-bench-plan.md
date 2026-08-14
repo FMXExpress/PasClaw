@@ -8,116 +8,113 @@ The week's optimization work (parallel-batch rule #537, SerialOnly #538,
 MCP compact results, progressive disclosure, the turn clock #543) shipped
 on mechanistic arguments: *this should reduce round trips / tokens /
 races*. None of it has a measured effect. That is the gap this plan
-closes — not by building a benchmark from scratch, but by wiring together
-the substantial pieces that already exist.
+closes — almost entirely by **extending a harness that already exists**.
 
-## Census: what already exists (measured, not assumed)
+> **Revision note.** The first draft of this plan proposed a new
+> `make bench-loop` target and an in-process scenario suite. That was
+> written from an incomplete census: `bench/agentloop/` already exists and
+> already implements most of it. Codex caught this on PR #544 along with
+> three concrete design errors, all corrected below. The corrections are
+> kept visible because "we already had one" is the single most useful
+> thing this document can tell the next person.
+
+## Census: what already exists (verified against the tree)
 
 | asset | where | state |
 |---|---|---|
-| Scripted in-process provider (`TScripted: ILLMProvider`, AddToolRound / AddStop / AddTruncated) | `src/tests/progress_ledger_tests.pas` | working, test-local |
-| Per-turn metric taps: `Iterations`, `TotalUsage` (incl. **CacheRead/CacheCreated tokens**), `Truncations`, `TruncatedBytesSaved`, `ToolCallsDispatched`, `HitMaxIterations` | `TToolLoopResult` | populated every turn; surfaced in TUI `/stats` + gateway usage |
-| Context hygiene: per-turn hash-aware read dedup (`DedupRepeatRead`, C3), stale-read stubbing after writes (`StubSupersededReads`), output caps (`OutputCache`), compaction | `PasClaw.Tools.ToolLoop` | shipped, untested for *effect* |
-| Loop seams exported for tests | `PartitionToolBatches`, `HistWithTurnClock` | unit-benchable today |
+| **`make bench-agentloop` — deterministic loop harness, 9 scenarios** | `bench/agentloop/` | **working today.** Spawns the built binary, plays a scripted model over the relay provider, asserts on what the loop did. Zero API cost, fully reproducible |
+| Its scenarios | `build-site`, `malformed-recovery`, `fatread`, `resume-after-cap`, `repeatread`, `realtask`, `error-guidance`, `truncation-recovery`, `history-elision` | already cover ledger fold + iteration-1 pristine, output cap, C3 repeat-read dedup, compaction, resume ledger |
+| Its metrics | `provider_calls`, `first_request_bytes`, `max_request_body_bytes`, `total_request_bytes`, `growth_bytes_over_2_rereads` | context growth is *already* measured |
+| Scripted in-process provider (`TScripted: ILLMProvider`) | `src/tests/progress_ledger_tests.pas` | second, lighter substrate — in-process, no port/binary |
+| Per-turn metric taps: `Iterations`, `TotalUsage` (incl. cache read/created), `Truncations`, `TruncatedBytesSaved`, `ToolCallsDispatched`, `HitMaxIterations` | `TToolLoopResult` | populated on every real turn; surfaced in TUI `/stats` + gateway |
+| Context hygiene: `DedupRepeatRead` (C3, per-turn, hash-aware), `StubSupersededReads`, `OutputCache`, compaction | `PasClaw.Tools.ToolLoop` | shipped |
+| Exported loop seam: `PartitionToolBatches` | `PasClaw.Tools.ToolLoop` | unit-benchable today |
+| Exported loop seam: `HistWithTurnClock` | PR **#543**, *not yet on main* | **prerequisite, not an asset** — scenarios using it are blocked on that merge |
+| SWE-shaped fixture bench: 13 fixtures, oracles, ablation grid | PR **#313** (`bench/swe/`) | **orphaned — no merge base with main.** `bench/agentloop/README.md` already links `../swe`, so that link dangles on main today |
+| LOCOMO-shaped memory recall bench | PR **#308** (`bench/locomo/`) | same situation |
 | `pasclaw membench` | `src/pkg/membench` | I/O throughput only |
-| SWE-shaped fixture bench: 13 fixtures + oracle tests, ablation grid, stub provider over HTTP, Pareto report | PR **#313** (`bench/swe/`) | **orphaned history — no merge base with main.** Mine it, don't merge it |
-| LOCOMO-shaped memory recall bench | PR **#308** (`bench/locomo/`) | same situation, same treatment |
 
-**Correction to the earlier Bullet evaluation:** it claimed PasClaw has "no
-re-read guard". Wrong — `DedupRepeatRead` (C3) dedupes repeat reads of
-unchanged files within a turn, and `StubSupersededReads` retires stale
-reads after writes. What is genuinely missing is *cross-turn* dedup, and —
-everywhere — measurement.
+**Two corrections to earlier claims of mine.** (1) The Bullet evaluation
+said PasClaw has "no re-read guard" — wrong; `DedupRepeatRead` and
+`StubSupersededReads` both exist, and `repeatread` already benches the
+first. (2) `HistWithTurnClock` was listed as benchable today; it lives on
+an open PR.
 
 ## What "inside yourself" can and cannot measure
 
-Two boundaries, stated up front rather than discovered later:
-
-- **Harness-level properties** (round trips, bytes, parallelism, prompt
-  byte-stability, hygiene behaviors, cost accounting) are fully measurable
-  in-sandbox with a scripted provider. The model is held constant by
-  *being a script*, so every delta is attributable to the harness. This is
-  most of the plan.
+- **Harness properties** (round trips, bytes, parallelism, prompt
+  byte-stability, hygiene behaviours) are fully measurable in-sandbox —
+  the model is held constant *by being a script*, so every delta is
+  attributable to the harness. This is most of the plan and needs no key.
 - **Model-dependent effects** (does rule 7 actually change how a model
-  batches; does disclosure change which tools it picks) need a live
-  provider. The sandbox reaches the network through the HTTPS proxy, so
-  this tier runs here too — but only once an API key is configured. It is
-  a costed, opt-in tier, not a prerequisite: the harness tiers land first
-  and stand alone.
+  batches; does disclosure change tool choice) need a live provider. The
+  sandbox reaches the network through the HTTPS proxy, so this runs here
+  too — but it is a costed, opt-in tier, never a prerequisite.
 
 ## The plan
 
-### P0 — the bench record (plumbing; taps exist)
-One opt-in flag (`PASCLAW_BENCH_JSONL=<path>`): at end of each turn the
-loop appends one NDJSON record — everything already in `TToolLoopResult`,
-plus two new cheap counters:
-- per-iteration request size in bytes, and
-- **prefix stability**: was this iteration's system prompt byte-identical
-  to the previous one's (the ledger's "NO counters, no timestamps" hard
-  constraint, turned from a comment into a measured invariant).
-No behavior change; a record per turn.
+### P1 — extend `bench/agentloop` (no new target, no new harness)
 
-### P1 — in-process loop bench as a CI gate (`make bench-loop`)
-Promote `TScripted` out of the ledger test into a shared unit and drive
-`RunToolLoop` through scenario scripts, each with a committed budget the
-run must meet — a benchmark that *fails*, not one that prints:
+The existing target stays the one entry point. What is missing are
+scenarios for the things shipped this week, each with a committed budget
+so the bench **fails** rather than prints:
 
-| scenario | budget it pins |
-|---|---|
-| 3 sleeping read-only tools in one scripted response | wall time ≈ max(tool), not sum — parallel dispatch works end-to-end, not just in `PartitionToolBatches` |
-| 50-iteration scripted turn | system prompt byte-identical across iterations 2..50 (prefix-cache proxy) |
-| repeat read of an unchanged file | second result is the C3 dedup stub |
-| write then re-read of the same path | `StubSupersededReads` fired |
-| oversized tool outputs | history growth ≤ cap-derived budget; `TruncatedBytesSaved` > 0 |
-| SerialOnly writer between reads | three batches, writer alone (#538's property, end-to-end) |
+| new scenario | what it pins | why it is new |
+|---|---|---|
+| `parallel-batch` | three sleeping read-only tools in one scripted response finish in ≈ max(tool), not sum | `PartitionToolBatches` is unit-tested; that it actually runs concurrently *end to end* is not |
+| `serial-writer` | a `SerialOnly` writer between two reads yields three batches, writer alone | #538's property, currently only asserted at the unit seam |
+| `superseded-read` | script **read → write** of one path, then assert the *earlier* read body was replaced by the stub | corrected: `StubSupersededReads` rewrites reads that came **before** a write. The first draft had this backwards (write → read), which would have tested nothing |
+| `prefix-stability` | the folded system prompt is byte-identical **within a ledger-state-stable window**, and the one permitted transition happens exactly at `LedgerNudgeAfter` (8 calls) and nowhere else | corrected: a flat "iterations 2..50 identical" budget fails *by design* — `FormatLedgerBlock` adds sticky nudge text once `TotalCalls >= 8`. The budget must model the transition, not forbid it |
+| `turn-clock` | every request in a tool-using turn carries the clock, and all carry the *same* reading | **blocked on #543 merging**; the seam does not exist on main |
 
-Budgets live in a committed baseline JSON; a regression turns the target
-red. This is where "the harness got slower/noisier" becomes visible at PR
-time instead of at the operator's desk.
+### P0 — production bench record (distinct from bench metrics)
 
-### P2 — mine the orphaned fixture bench (PR #313 → `bench/swe/` on main)
-The 13 fixtures, oracle tests, ablation grid and Pareto report are real
-work sitting on a branch that can never merge (no common ancestor).
-Extract with `git checkout origin/claude/swe-bench-harness-v2 -- bench/swe`
-onto a fresh branch, re-verify its runner against today's CLI flags, and
-land it as the fixture tier: pass-rate × cost frontier across settings
-(`ablation.json`), scripted provider, no network. Then close #313 with a
-pointer to the landed commit, and give #308 (`bench/locomo/`) the same
-mine-or-close treatment against `memory_search`.
+`bench/agentloop` emits `Metric(...)` lines *at bench time*. P0 is
+different: an opt-in `PASCLAW_BENCH_JSONL=<path>` that appends one NDJSON
+record per **real** turn from the taps already in `TToolLoopResult`, so
+field behaviour can be compared against bench expectations. Small, and it
+is what makes P3 measurable at all.
+
+### P2 — mine the orphaned fixture benches
+
+`bench/swe/` (13 fixtures, oracles, ablation grid) is real work on a
+branch that can never merge — and `bench/agentloop/README.md` already
+links to it, so main ships a dangling reference. Extract with
+`git checkout origin/claude/swe-bench-harness-v2 -- bench/swe` onto a
+fresh branch, re-verify the runner against today's CLI flags, land it,
+close #313 pointing at the landed commit. Same treatment for #308.
 
 ### P3 — the live-model tier (opt-in, needs a key)
+
 10–20 curated tasks *on this repo* with deterministic oracles (build
-passes, grep asserts a symbol, test goes green) — the shape of work this
-session actually did. Sweep the shipped levers A/B and report per variant:
-pass rate, `Iterations` (round trips — the Bullet number), `TotalUsage`,
-cache-read ratio, wall time:
+passes, grep asserts a symbol, test goes green). Sweep the shipped levers
+A/B, reporting per variant: pass rate, `Iterations` (round trips — the
+Bullet number), `TotalUsage`, cache-read ratio, wall time:
+
 - rule 7 (batch prompt) on/off — *the* unmeasured claim from #537
-- progressive disclosure on/off — token delta
-- MCP compact results on/off — token delta on tool-heavy tasks
+- progressive disclosure on/off, MCP compact results on/off — token delta
 - autorouter weight presets
 
-Gated on an API key in config; the harness prints a cost estimate before
-running and refuses without an explicit `--spend` acknowledgment.
+Prints a cost estimate and refuses without an explicit `--spend`.
 
 ### P4 — the backlog the bench adjudicates
-Ranked hypotheses, each landing **only with its bench delta attached**:
-1. Cross-turn read dedup (C3 is per-turn; `FinalMessages` already flows
-   back, so the state could persist).
-2. Attachment/screenshot eviction (stale binary blobs have no
-   `StubSupersededReads` equivalent).
-3. Condense trigger tuning (threshold vs. measured token headroom).
-4. Tool-description budget (the catalog is part of every request; measure
-   its share of request bytes in P0 data first).
+
+Each lands **only with its bench delta attached**: cross-turn read dedup
+(C3 is per-turn), attachment/screenshot eviction (no `StubSupersededReads`
+equivalent for binaries), condense trigger tuning, tool-description budget
+(measure its share of request bytes from P0 data first).
 
 ## Sequencing
 
-P0 → P1 land together (one PR: record + gate). P2 is independent and
-parallel. P3 waits on a key and on P0's record format. P4 items are
-individual PRs, each blocked on showing its number from P1/P2/P3.
+P1 first — it is additive to a working harness and needs nothing else.
+P0 next (independent, small). P2 is parallel and independent. The
+`turn-clock` scenario waits on #543. P3 waits on a key and on P0's record
+format. P4 items are individual PRs, each blocked on showing a number.
 
 ## Non-goals
 
 - Vendoring public SWE-bench/Terminal-Bench datasets (Docker + licensing;
-  #313's README already made this call and it stands).
+  #313's README made this call and it stands).
 - LLM-as-judge scoring — every oracle here is deterministic.
-- Benchmarking Studio/UI (different track entirely).
+- A second loop-bench harness or target name. There is one:
+  `make bench-agentloop`.
