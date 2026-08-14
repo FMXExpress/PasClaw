@@ -982,9 +982,18 @@ begin
   end;
 end;
 
-function H_ParNoop(N: Integer; const EnvJSON: string): string;
+function H_ParTrivial(N: Integer; const EnvJSON: string): string;
+{ Same SHAPE as the measured turns -- one tool round, then stop, so two
+  provider calls -- but the tool does almost no work. Subtracting this
+  cancels all harness cost including the second relay round trip. A
+  no-tool turn made only ONE call, so the difference smuggled a round
+  trip into the "grep cost" and a serial implementation could have slipped
+  past the ratio (Codex P1, PR #545). }
 begin
-  Result := StopOf('nothing to do.');
+  if N = 1 then
+    Result := RoundOf([OneCall('list_dir', ArgsObj1('path', PAR_DIR))])
+  else
+    Result := StopOf('listed.');
 end;
 
 function H_ParOne(N: Integer; const EnvJSON: string): string;
@@ -1019,7 +1028,7 @@ end;
 procedure ScenarioParallelBatch;
 var
   T0: QWord;
-  tNoop, tSingle, tThree, tSplit, Work: Int64;
+  tBase, tSingle, tThree, tSplit, Work: Int64;
 begin
   WriteLn;
   WriteLn('== scenario: parallel-batch (read-only fan-out + SerialOnly split) ==');
@@ -1030,16 +1039,13 @@ begin
   ResetScenario(H_ParOne);
   Chat('[' + MsgObjJSON('user', 'warm the corpus') + ']', 'bench-par-warm');
 
-  { Fixed cost of a turn that calls no tools at all: two provider
-    round trips through the gateway and the relay. It dominates these
-    timings -- the first draft of this scenario compared raw turn times
-    and mis-read a correct 2x split as 1.3x, because ~400 ms of every
-    number was harness, not work. Subtract it and the ratios mean what
-    they say. }
-  ResetScenario(H_ParNoop);
+  { Baseline: identical turn shape, negligible tool work. Every timing
+    below subtracts it, so gateway + relay + BOTH provider round trips
+    cancel and what remains is grep work. }
+  ResetScenario(H_ParTrivial);
   T0 := GetTickCount64;
-  Chat('[' + MsgObjJSON('user', 'do nothing') + ']', 'bench-par-noop');
-  tNoop := Int64(GetTickCount64 - T0);
+  Chat('[' + MsgObjJSON('user', 'list the dir') + ']', 'bench-par-base');
+  tBase := Int64(GetTickCount64 - T0);
 
   ResetScenario(H_ParOne);
   T0 := GetTickCount64;
@@ -1056,8 +1062,8 @@ begin
   Chat('[' + MsgObjJSON('user', 'grep, write, grep') + ']', 'bench-par-split');
   tSplit := Int64(GetTickCount64 - T0);
 
-  Work := tSingle - tNoop;          { one grep's worth of actual work }
-  Metric('parallel.turn_overhead_ms', tNoop);
+  Work := tSingle - tBase;          { one grep's work, harness removed }
+  Metric('parallel.turn_baseline_ms', tBase);
   Metric('parallel.single_ms', tSingle);
   Metric('parallel.three_ms',  tThree);
   Metric('parallel.split_ms',  tSplit);
@@ -1072,16 +1078,16 @@ begin
 
   { Three read-only calls in one response run CONCURRENTLY: the round costs
     about one grep, not three. Serial execution would land near 3x. }
-  Check((tThree - tNoop) < Work * 2,
-    Format('three read-only greps batch in parallel (%d ms of work < 2x %d ms)',
-           [tThree - tNoop, Work]));
+  Check((tThree - tBase) < Work * 2,
+    Format('three read-only greps batch in parallel (%d ms of work < 2x %d ms; ' +
+           'serial would be ~3x)', [tThree - tBase, Work]));
 
   { ...and a SerialOnly writer between two greps forces them apart, so that
     round costs about TWO greps. If todo_write were treated as parallel-safe
     this would collapse toward tSingle like the case above. }
-  Check((tSplit - tNoop) > (Work * 3) div 2,
+  Check((tSplit - tBase) > (Work * 3) div 2,
     Format('a SerialOnly writer splits the round (%d ms of work > 1.5x %d ms)',
-           [tSplit - tNoop, Work]));
+           [tSplit - tBase, Work]));
   Check(FileExists(GHomeDir + '/workspace/' + PAR_DIR + '/f1.txt'),
     'corpus survived the run');
 end;
