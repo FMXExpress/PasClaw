@@ -69,10 +69,72 @@ type
       tool_search / DeferredNames -- it is permanently invisible to the
       model. Default False. }
     Hidden:      Boolean;
+    (* SerialOnly -- "never share a parallel batch", independent of Category.
+
+       Category was carrying two unrelated meanings at once. ToolLoop reads
+       it as "safe to run concurrently" when it coalesces a round's calls
+       into one parallel batch; the plan-mode gate and the read-only MCP
+       server read it as "does not really mutate, so allow it". Those
+       disagree for any tool that writes but is deliberately labelled
+       tcReadOnly to pass the gate -- PasClaw.Tools.PlanWrite documents
+       exactly that trade, and memory_search inherits it by accident
+       because Tool_MemorySearch calls IMemoryIndex.SyncDir, which
+       reindexes files and deletes rows in .index.db. Two of those in one
+       batch are two writers on one SQLite file (Codex, PR #537).
+
+       Splitting the meanings rather than re-categorising is what keeps
+       both users correct: Category still answers "may it run in plan
+       mode / be exposed read-only", SerialOnly answers "may it run beside
+       something else".
+
+       Do NOT set this field at a registration site: it is derived from
+       ToolIsSerialOnly by TToolRegistry.RegisterImpl, which ignores
+       whatever the incoming record held. The first version of this change
+       did let sites assign it, defended by polarity -- garbage-True only
+       costs a batch slot, where the inverse field would have made
+       uninitialised memory a data race. That reasoning was wrong in the
+       way that matters: ~34 sites build TTool as a bare stack record and
+       never touch this field, so "merely" losing batching would have been
+       random and silent, in the exact machinery the field exists to
+       enable. Safe is not the same as correct (Codex, PR #538). *)
+    SerialOnly:  Boolean;
   end;
 
   TToolList = array of TTool;
 
+{ The authoritative set of tools that must never share a parallel batch.
+
+  This is a LIST rather than a per-registration flag because the flag it
+  feeds is read by the batcher, and ~34 registration sites build TTool as a
+  bare stack record and assign fields one at a time -- exactly the shape
+  that left HandlerObj holding stack garbage until RegisterImpl started
+  clearing it defensively. An uninitialised Boolean is a bug whichever way
+  it points: a parallel-safe tool that randomly reads True would silently
+  lose the batching this exists to enable. So TToolRegistry.RegisterImpl
+  derives SerialOnly from here and ignores whatever the caller's record
+  happened to contain, which cannot be corrupted by an unassigned field.
+
+  A tool belongs here when it writes shared state despite being tcReadOnly
+  -- a category it carries so it can pass the plan-mode gate and the
+  read-only MCP server, neither of which cares about concurrency. }
+function ToolIsSerialOnly(const Name: string): Boolean;
+
 implementation
+
+function ToolIsSerialOnly(const Name: string): Boolean;
+begin
+  { memory_search -- Tool_MemorySearch calls IMemoryIndex.SyncDir before
+      searching, which reindexes changed files and drops rows for deleted
+      ones: writes and commits against .index.db. Two searches in one batch
+      (two different queries is an ordinary ask) are two writers on that
+      file, and the loser gets a locking error instead of results.
+    plan_write   -- writes workspace/PLAN.md. PasClaw.Tools.PlanWrite
+      documents choosing tcReadOnly precisely to pass the pmPlan gate.
+    todo_write   -- rewrites the checklist file wholesale; two concurrent
+      whole-file replacements of one path is the same hazard. }
+  Result := SameText(Name, 'memory_search')
+         or SameText(Name, 'plan_write')
+         or SameText(Name, 'todo_write');
+end;
 
 end.

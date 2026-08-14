@@ -210,6 +210,9 @@ begin
     even though the handler writes a file. Justified by the fixed
     target path; the tool is not a general write primitive. }
   T.Category    := tcReadOnly;
+  { ...and because it writes a file, it must not share a parallel batch.
+    Declared once in ToolIsSerialOnly (PasClaw.Tools.Types), applied by
+    the registry. }
   R.Register(T);
   LogInfo('plan_write: registered (plan mode)');
 end;
