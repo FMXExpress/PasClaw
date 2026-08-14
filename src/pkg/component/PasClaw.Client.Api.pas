@@ -248,6 +248,18 @@ type
     FLogHttp: TObject;
     FLogLock: TCriticalSection;
     FLogCancelled: Boolean;
+    (* Every request currently on the wire, for the same reason as above but
+       for ALL of them: a client cannot be freed while a thread is inside
+       one, and a caller waiting for that to happen needs a way to make it
+       happen NOW rather than at the mercy of a gateway that may take
+       minutes -- a research turn is minutes by design.
+
+       TIdHTTP handles, held as TObject: this unit keeps the transport out
+       of its interface deliberately, and a cancel only needs Disconnect. *)
+    FLive: TList;
+    FLiveLock: TCriticalSection;
+    procedure TrackHttp(H: TObject);
+    procedure UntrackHttp(H: TObject);
     procedure Trace(const Method, Path: string; Status, Millis: Integer;
       const Note: string);
     function Request(const Method, Path, Body: string): string;
@@ -472,6 +484,17 @@ type
     (* Cut the log subscription now, from any thread. Safe to call when
        none is running. Call this BEFORE joining the watcher thread. *)
     procedure CancelLogs;
+    (* Cut every request currently in flight.
+
+       For shutdown. A caller closing while a minutes-long call is out has
+       two options -- wait for it, or free the client under it -- and both
+       are wrong. This is the third: reach the sockets, so those threads
+       unwind in milliseconds and the wait that follows actually ends.
+
+       Only what is on the wire NOW. A request started afterwards is a new
+       request and runs normally, which is what lets a shutdown cancel its
+       stragglers and still write one last thing. *)
+    procedure CancelAll;
 
     { ---- raw bytes ---- }
     (* A bounded window of a file's bytes, for the hex viewer: a binary file
@@ -1005,6 +1028,8 @@ begin
   while (FBaseURL <> '') and (FBaseURL[Length(FBaseURL)] = '/') do
     SetLength(FBaseURL, Length(FBaseURL) - 1);
   FLogLock := TCriticalSection.Create;
+  FLiveLock := TCriticalSection.Create;
+  FLive := TList.Create;
   FTimeoutMs := 30000;
   FModelTimeoutMs := 20 * 60 * 1000;   { deep research runs for minutes }
 end;
@@ -1033,8 +1058,74 @@ end;
 destructor TPasClawClient.Destroy;
 begin
   CancelLogs;
+  CancelAll;
   FreeAndNil(FLogLock);
+  FreeAndNil(FLive);
+  FreeAndNil(FLiveLock);
   inherited;
+end;
+
+{ ---- cancellation ----
+
+  A request registers itself for as long as it is on the wire, so a cancel
+  from another thread can reach the socket. Registration is cheap -- a
+  pointer in a locked list -- and unconditional, because the call that
+  matters is exactly the one nobody predicted would be slow. }
+
+procedure TPasClawClient.TrackHttp(H: TObject);
+begin
+  if (FLiveLock = nil) or (FLive = nil) then Exit;
+  FLiveLock.Acquire;
+  try
+    FLive.Add(H);
+  finally
+    FLiveLock.Release;
+  end;
+end;
+
+procedure TPasClawClient.UntrackHttp(H: TObject);
+var
+  I: Integer;
+begin
+  if (FLiveLock = nil) or (FLive = nil) then Exit;
+  FLiveLock.Acquire;
+  try
+    I := FLive.IndexOf(H);
+    if I >= 0 then FLive.Delete(I);
+  finally
+    FLiveLock.Release;
+  end;
+end;
+
+procedure TPasClawClient.CancelAll;
+var
+  Copy_: TList;
+  I: Integer;
+begin
+  if (FLiveLock = nil) or (FLive = nil) then Exit;
+  { Copied under the lock and disconnected outside it: Disconnect can block
+    briefly, and holding the lock across it would stall every request trying
+    to unregister itself -- the very threads this is trying to release. }
+  Copy_ := TList.Create;
+  try
+    FLiveLock.Acquire;
+    try
+      for I := 0 to FLive.Count - 1 do
+        Copy_.Add(FLive[I]);
+    finally
+      FLiveLock.Release;
+    end;
+    for I := 0 to Copy_.Count - 1 do
+      { Disconnecting from another thread is how Indy cancels a blocked
+        read: the reader surfaces a socket error and unwinds. Swallowed
+        because a race with normal completion is a no-op, not a problem. }
+      try
+        TIdHTTP(Copy_[I]).Disconnect(False);
+      except
+      end;
+  finally
+    Copy_.Free;
+  end;
 end;
 
 function NewHttp(const Token: string; ReadTimeoutMs: Integer;
@@ -1302,6 +1393,7 @@ begin
   FLastError := '';
   Started := Now;
   Http := NewHttp(FToken, FTimeoutMs);
+  TrackHttp(Http);
   Mem  := TMemoryStream.Create;
   try
     { Raw bytes, not JSON -- this is the one route whose body is the file. }
@@ -1331,6 +1423,7 @@ begin
     Result := True;
   finally
     Mem.Free;
+    UntrackHttp(Http);
     Http.Free;
   end;
 end;
@@ -1343,6 +1436,7 @@ begin
   FLastError := '';
   Sink := TEventStream.Create(OnEvent);
   Http := NewHttp(FToken, 0);
+  TrackHttp(Http);
   try
     { No read timeout: this connection is SUPPOSED to stay open and quiet.
       The gateway sends a keepalive comment every ~15s, so a genuinely dead
@@ -1356,6 +1450,7 @@ begin
       on E: Exception do FLastError := E.Message;
     end;
   finally
+    UntrackHttp(Http);
     Http.Free;
     Sink.Free;
   end;
@@ -1391,6 +1486,8 @@ begin
   FLastError := '';
   Started := Now;
   Http := NewHttp(FToken, TimeoutMs);
+  { Registered for the length of the call so a shutdown can cut it. }
+  TrackHttp(Http);
   Req  := nil;
   Resp := TStringStream.Create('');
   try
@@ -1437,6 +1534,7 @@ begin
       end;
     end;
   finally
+    UntrackHttp(Http);
     Resp.Free;
     Req.Free;
     Http.Free;
@@ -2266,8 +2364,13 @@ begin
   Started := Now;
   { A streamed turn carries its own liveness: chunks keep arriving, and a
     socket that dies still raises. A read timeout here only ever fires on a
-    model that is thinking hard, which is not an error. }
+    model that is thinking hard, which is not an error.
+
+    Which is exactly why it is registered: with no read timeout there is
+    nothing else that will ever end this call, so a shutdown has to be able
+    to reach the socket. }
   Http := NewHttp(FToken, 0);
+  TrackHttp(Http);
   try
     Msgs := TJsonArray.Create;
     { A system message leads the array -- the gateway lets a client system
@@ -2324,6 +2427,7 @@ begin
     Trace('POST', '/v1/chat/completions', Code,
           MilliSecondsBetween(Now, Started), FLastError);
   finally
+    UntrackHttp(Http);
     Http.Free;
     Req.Free;
     Sink.Free;

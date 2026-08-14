@@ -809,6 +809,72 @@ idempotence lives — is testable without a mail server.
 
 The FireMonkey client needs Delphi and is not part of `make`.
 
+## Off the UI thread (FireMonkey client)
+
+Every call into `TPasClawClient` is a blocking HTTP round trip, and most of
+them used to run on the UI thread from a button handler. Locally that is a
+stutter; against a gateway on another machine it is a frozen window.
+
+One helper carries all of them:
+
+```pascal
+Async('Files',
+  procedure begin  { the blocking call, results into captured locals }  end,
+  procedure begin  { paint them, on the UI thread }                     end);
+```
+
+It enforces the three rules no call site should have to remember:
+
+- **The client context is set inside the worker.** It is per-thread, so
+  tagging it on the caller would attribute the call to whatever the main
+  thread happened to be doing when the button was pressed.
+- **An exception in the work half cannot vanish or kill the process** — it
+  lands in the Log window, named with its context.
+- **The done half never runs after teardown**, and `FormDestroy` releases
+  in-flight work before freeing the client. Waiting alone is not enough: a
+  research turn is minutes *by design*, so any patience short enough to
+  close a window promptly is short enough to expire while one is still out —
+  and then free the client under it anyway. So the sockets are **cut** first
+  (`TPasClawClient.CancelAll`, which every request registers itself with for
+  the length of its call), and the bounded wait after that is expected to
+  succeed rather than hoped to.
+
+Two rules for the call sites themselves:
+
+- A completion that paints into a window it did not create asks
+  `WindowAlive` first. A window can be closed while its answer is in flight,
+  and *reading a field of one of its controls to find out* is already the
+  bug — the check compares pointer values against the window manager's live
+  list and never dereferences.
+- Anything polled or event-driven is **coalesced**: the board refresh and
+  the Run-window poll each keep one request in flight, because an agent
+  writing files produces a burst of events and a fixed timer beat can be
+  shorter than the round trip it starts. Coalescing is not dropping — a
+  request that arrives while one is out is remembered and run afterwards,
+  since the answer already on the wire predates the change that prompted it.
+- **Answers that can be overtaken are stamped and checked.** Directory
+  listings carry a generation number, the hex pager checks its offset, the
+  sources strip checks the page, and a file tab checks it is still the tab
+  in front. Without that, navigating twice quickly lands you back where you
+  came from when the slower answer arrives last.
+- **Writes that must not reorder are serialised.** The layout save keeps one
+  PUT in flight and the next one supersedes rather than queues, because the
+  route has no ordering token and an older write finishing last would
+  persist window positions the user had already moved away from.
+- **Ordering against another call means sharing its worker.** Switching
+  workspace captures the departing layout on the UI thread and sends it as
+  the first act of the same worker that activates the new one — `/v1/desktop/state`
+  is scoped to whichever workspace is active when it *arrives*, so two
+  independent workers would race to write one workspace's windows into
+  another.
+
+Three things are still synchronous and are named here rather than left to be
+discovered: the chat turn (`SendChat`), the tree rebuild — one call per
+project for its tasks and one per task for its jobs — and the menu's
+per-project manifest reads.
+
+---
+
 ## Known limits
 
 Stated plainly rather than left to be discovered:

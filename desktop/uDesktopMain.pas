@@ -151,6 +151,9 @@ type
     FSnapshots: TDictionary<TWebBrowser, TImage>;
 
     { ---- File Manager ---- }
+    { Bumped per navigation, so a listing that arrives after a later one
+      knows it has been overtaken and stays quiet. }
+    FFilesGen: Integer;
     FFilesList: TListBox;
     FFilesPath: TEdit;
     FFilesDir: TDirListing;
@@ -205,6 +208,11 @@ type
     FRunLogs: TDictionary<string, TMemo>;
     FRunHeads: TDictionary<string, TLabel>;
     FRunTimer: TTimer;
+    { Projects whose poll is still out. The timer fires on a fixed beat and
+      a round of it can outlast that beat on a slow gateway; without this,
+      the second round starts on top of the first and requests queue up
+      faster than they finish. }
+    FRunBusy: TList<string>;
 
     (* ---- artifact versions ----
        What each turn's app body was, newest last, per project. A card in the
@@ -292,6 +300,21 @@ type
     { Set the moment teardown begins. Notification and the timers consult it
       so nothing touches state that FormDestroy has already released. }
     FClosing: Boolean;
+    { How many workers are currently inside the client. Interlocked, and the
+      one thing FormDestroy waits on before freeing it. }
+    FInFlight: Integer;
+    { True while a board refresh is out. Main thread only, so a plain
+      Boolean is enough. }
+    FBoardBusy: Boolean;
+    { An event arrived while one was out, so the answer in flight predates
+      it. Refresh again when it lands rather than dropping the change. }
+    FBoardAgain: Boolean;
+    { The layout write in flight, and the one waiting behind it. Only the
+      newest is worth sending, so this supersedes rather than queues. }
+    FStateBusy: Boolean;
+    FStatePending: Boolean;
+    FStatePendingBody: string;
+    FStatePendingDesk: Integer;
     { True once RestoreDesktopState has opened at least one window, so a
       first run can tell "nothing was saved" from "the user closed it all". }
     FRestoredAnything: Boolean;
@@ -304,6 +327,11 @@ type
     procedure BuildStylePicker;
     procedure RefreshWorkspaces;
     procedure RefreshProjects;
+    { The painting halves of the two above, for callers that already have
+      the data. }
+    procedure ApplyWorkspaces;
+    procedure ApplyProjects;
+    procedure SwitchToWorkspace(const Name_: string);
     procedure RebuildTree;
 
     procedure MenuClick(Sender: TObject);
@@ -336,9 +364,15 @@ type
 
     procedure OpenChat(const Project: string);
     procedure OpenApp(const Project: string);
+    { The window, from a manifest already read. Shared by the ordinary path
+      and the one that had to ask about declared permissions first. }
+    procedure BuildAppWindow(const Project: string; const App: TAppRow);
     procedure OpenJobLog(const Project, TaskId, JobId: string);
     procedure OpenLibrary;
+    { Fetch both lists off-thread, then hand them to PaintLibrary. }
     procedure FillLibrary;
+    { The painting half, from rows already fetched. }
+    procedure PaintLibrary(const Pages: TPageRows; const Sess: TSessionRows);
     procedure LibraryRefreshClick(Sender: TObject);
     procedure LibraryDblClick(Sender: TObject);
     procedure OpenSessionChat(const SessionId: string);
@@ -373,6 +407,9 @@ type
     procedure TreeDeleteConfirmed(Sender: TObject);
     procedure TreeOpenAppSourceClick(Sender: TObject);
     procedure OpenAppSource(const Project: string);
+    { The editor window, from a manifest and body already read. }
+    procedure BuildAppSourceWindow(const Project: string; const App: TAppRow;
+      const Body: string);
     function AppSourceDirty: Boolean;
     procedure AppSourceDiscarded(Sender: TObject);
     procedure AppSourceSaveClick(Sender: TObject);
@@ -395,12 +432,16 @@ type
     { ---- hex viewer ---- }
     procedure OpenHex(const Path: string);
     procedure HexRender;
+    { The painting half, from a window of bytes already fetched. }
+    procedure HexPaint(const Data: TBytes; Total, Offset: Int64);
     procedure HexPrevClick(Sender: TObject);
     procedure HexNextClick(Sender: TObject);
 
     { ---- File Manager ---- }
     procedure OpenFiles;
     procedure FilesShow(const Path: string);
+    { The painting half, from FFilesDir as it already stands. }
+    procedure PaintFiles;
     procedure FilesOpenSel(Sender: TObject);
     procedure FilesUpClick(Sender: TObject);
     procedure FilesHomeClick(Sender: TObject);
@@ -425,12 +466,16 @@ type
     { Record which file the active tab holds -- including when reading it
       failed, so the tab can be tried again. }
     procedure SetFileTab(const Path, Name: string);
+    { True when the tab in front is still the one that asked for this file. }
+    function TabHoldsFile(const Path: string): Boolean;
     function TabIsEmpty(Index: Integer): Boolean;
     procedure ShowProgress(const Caption, Text_: string);
     procedure CloseProgress;
 
     { ---- process apps ---- }
     procedure OpenRun(const Project: string);
+    { The window, once the manifest has said it should exist. }
+    procedure BuildRunWindow(const Project: string);
     procedure RunStartClick(Sender: TObject);
     procedure RunStopClick(Sender: TObject);
     procedure RunConfirmed(Sender: TObject);
@@ -446,8 +491,22 @@ type
 
     { ---- desktop state ---- }
     procedure SaveDesktopState;
-    procedure SaveDesktopStateTo(Desk: Integer);
+    procedure SaveDesktopStateNow;
+    { Sync only at teardown, where the client is about to be freed and there
+      is no "later" to send it in. Everywhere else the PUT goes off-thread:
+      this fires from the event timer whenever the layout is dirty. }
+    procedure SaveDesktopStateTo(Desk: Integer; Sync: Boolean = False);
+    { The layout as a document, without sending it. Walking the windows is
+      UI-thread work; a caller that needs the send ORDERED against something
+      else captures here and sends it itself. }
+    function CaptureDesktopState: string;
+    procedure SendDesktopState(Desk: Integer; const Body: string);
     procedure RestoreDesktopState;
+    { The painting half: reopens the windows a layout document names. Split
+      out so a caller that already fetched the document -- a workspace
+      switch, which fetches everything in one trip -- can hand it straight
+      over instead of asking the gateway a second time. }
+    procedure RestoreDesktopStateFrom(const State: string);
     procedure CloseAllWindows;
     { Mark the layout changed; the event timer flushes it. Saving inline on
       every open and close would put a blocking PUT in the middle of opening
@@ -509,6 +568,17 @@ type
     procedure WizardNext(Sender: TObject);
     procedure AskButtonClick(Sender: TObject);
     procedure PaintWizard;
+
+    { ---- off-thread work ----
+      See the comment on the implementation. Work runs on its own thread,
+      Done on the UI thread afterwards; FInFlight is what teardown waits on
+      so the client is never freed out from under a call. }
+    procedure Async(const Context: string; const Work, Done: TProc);
+    procedure WaitForAsync(TimeoutMs: Integer);
+    { True while the window is still open. Every completion that paints into
+      a window it did not create asks this first -- see the implementation
+      for why reading a field of the control is not an acceptable substitute. }
+    function WindowAlive(W: TRetroWindow): Boolean;
 
     procedure Say(const Msg: string);
     function TrackWindow(AWindow: TRetroWindow): TRetroWindow;
@@ -576,7 +646,125 @@ var
     its transcript as well as its live view. }
   GStreamingProject: string = '';
 
+(* Is the UI still there?
+
+   A unit-level variable rather than a field, and that is the whole point:
+   a completion that arrives after the form has gone must not read a FIELD
+   OF THE FORM to discover that the form has gone. This outlives it. *)
+var
+  GUIAlive: Boolean = True;
+
 { ------------------------------------------------------------- lifecycle -- }
+
+(* ------------------------------------------------------------ off-thread --
+
+   Every call into TPasClawClient is a blocking HTTP round trip, and until
+   now most of them ran on the UI thread from a button handler. Locally that
+   is a stutter; against a gateway on another machine it is a frozen window,
+   and for a chat turn -- minutes of it -- the desktop simply stops being a
+   desktop.
+
+   The pattern was already here twice, in RunPageQuery and StartResearch,
+   written out longhand each time. This is that pattern with a name:
+
+     Async('Files',
+       procedure begin  ...the blocking call, results into captured locals  end,
+       procedure begin  ...paint them, on the UI thread                     end);
+
+   Three rules it enforces so no call site has to remember them:
+
+     - The client CONTEXT is set inside the worker. It is per-thread, so
+       tagging it on the caller would attribute the call to whatever the
+       main thread happened to be doing when the button was pressed.
+     - An exception in Work cannot kill the process or vanish; it lands in
+       the Log window, named with its context.
+     - Done never runs after teardown, and FormDestroy will not free the
+       client while a worker is still inside it.
+
+   One dedicated thread per call rather than a pool: these are long blocking
+   I/O waits, few at a time, and a pool exists to avoid thread churn for work
+   that is neither. It also matches what RunPageQuery already does.
+
+   The caller captures its own results. Delphi closures capture VARIABLES,
+   not values, so a local declared in the Work closure is shared with the
+   Done closure -- which is exactly how a result gets from one to the other,
+   and exactly why a loop variable must never be captured this way. *)
+procedure TFormMain.Async(const Context: string; const Work, Done: TProc);
+begin
+  if FClosing then Exit;
+  TInterlocked.Increment(FInFlight);
+  TThread.CreateAnonymousThread(
+    procedure
+    var
+      Marshal: TThreadProcedure;
+      Failure: string;
+    begin
+      Failure := '';
+      try
+        try
+          SetClientContext(Context);
+          if Assigned(Work) then Work();
+        except
+          on E: Exception do Failure := E.ClassName + ': ' + E.Message;
+        end;
+      finally
+        { Before the marshal, not after: this count is what FormDestroy waits
+          on, and what it is really asking is "is anyone still inside the
+          client". By here, nobody is. }
+        TInterlocked.Decrement(FInFlight);
+      end;
+      if not GUIAlive then Exit;
+      { Typed local rather than an inline literal: Queue is overloaded on
+        TThreadMethod and TThreadProcedure, and an anonymous method written
+        straight into the call is ambiguous between them (E2250). Naming the
+        type leaves exactly one candidate. }
+      Marshal :=
+        procedure
+        begin
+          if not GUIAlive then Exit;
+          if Failure <> '' then
+            QueueLogEntry('C', Context, 'async failed -- ' + Failure);
+          if Assigned(Done) then Done();
+        end;
+      TThread.Queue(nil, Marshal);
+    end).Start;
+end;
+
+(* Is this window still open?
+
+   The question every completion has to ask before it paints. A window that
+   opens now and fills in when the answer arrives can be closed in between,
+   taking its controls with it -- so a captured TMemo may be freed memory by
+   the time the Done half runs, and testing it by reading one of its fields
+   is already the bug.
+
+   This compares POINTER VALUES against the window manager's live list and
+   never dereferences the candidate, which is what makes it safe to ask
+   about a window that may not exist any more. *)
+function TFormMain.WindowAlive(W: TRetroWindow): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  if (W = nil) or (FDesktop = nil) or FClosing then Exit;
+  for I := 0 to FDesktop.WindowCount - 1 do
+    if FDesktop.Windows[I] = W then Exit(True);
+end;
+
+{ Block until nothing is inside the client, or the patience runs out. Called
+  once, from FormDestroy, immediately before the client is freed. }
+procedure TFormMain.WaitForAsync(TimeoutMs: Integer);
+var
+  Waited: Integer;
+begin
+  Waited := 0;
+  while (TInterlocked.CompareExchange(FInFlight, 0, 0) > 0) and
+        (Waited < TimeoutMs) do
+  begin
+    Sleep(10);
+    Inc(Waited, 10);
+  end;
+end;
 
 function TFormMain.FindStyleDir: string;
 var
@@ -612,7 +800,7 @@ end;
 
 procedure TFormMain.FormCreate(Sender: TObject);
 var
-  Gateway, Win95, Ver: string;
+  Gateway, Win95, Ver, State: string;
 begin
   Caption := 'PasClaw Desktop';
 
@@ -629,6 +817,7 @@ begin
   FRunWins    := TDictionary<string, TRetroWindow>.Create;
   FRunLogs    := TDictionary<string, TMemo>.Create;
   FRunHeads   := TDictionary<string, TLabel>.Create;
+  FRunBusy    := TList<string>.Create;
   { Owns its lists: each holds one project's captured app bodies. }
   FVersions   := TObjectDictionary<string, TStringList>.Create([doOwnsValues]);
 
@@ -675,28 +864,54 @@ begin
     end;
   end;
 
-  if not FClient.Ping(Ver) then
-  begin
-    Say('No gateway at ' + Gateway + '. Start one with: pasclaw gateway');
-    Exit;
-  end;
-  Say('Connected to PasClaw ' + Ver + ' at ' + Gateway);
-  RefreshWorkspaces;
-  RefreshProjects;
-  StartEventWatch;
-  { The layout this workspace was left in, from whichever client left it. }
-  RestoreDesktopState;
-  (* A first run has no saved layout and would otherwise open to bare
-     wallpaper with no way in that is not the Menu. Give it the project
-     window; anyone who closes it has said what they want and gets an empty
-     desktop from then on.
+  (* Startup, in ONE trip and off the UI thread.
 
-     Asked as "did the restore open anything", not "are there no windows":
-     BuildStylePicker has already created the (hidden) Display Properties
-     window by this point, so a window count is never zero and the test
-     would never fire. *)
-  if not FRestoredAnything then
-    OpenTree;
+     This used to be four blocking calls in a row before the form was ever
+     shown, so a gateway that was slow -- or on another machine, or not
+     running -- meant an application that appeared to hang at launch with no
+     window to say why. Now the shell comes up immediately and fills in.
+
+     One Async rather than four, because the order matters: the layout can
+     only be restored once the board it names is loaded. *)
+  Ver := '';
+  State := '';
+  Async('Startup',
+    procedure
+    begin
+      if not FClient.Ping(Ver) then
+      begin
+        Ver := '';
+        Exit;
+      end;
+      FWorkspaces := FClient.Workspaces;
+      FProjects := FClient.Projects;
+      State := FClient.DesktopState;
+    end,
+    procedure
+    begin
+      if Ver = '' then
+      begin
+        Say('No gateway at ' + Gateway + '. Start one with: pasclaw gateway');
+        Exit;
+      end;
+      Say('Connected to PasClaw ' + Ver + ' at ' + Gateway);
+      ApplyWorkspaces;
+      ApplyProjects;
+      StartEventWatch;
+      { The layout this workspace was left in, from whichever client left it. }
+      RestoreDesktopStateFrom(State);
+      (* A first run has no saved layout and would otherwise open to bare
+         wallpaper with no way in that is not the Menu. Give it the project
+         window; anyone who closes it has said what they want and gets an
+         empty desktop from then on.
+
+         Asked as "did the restore open anything", not "are there no
+         windows": BuildStylePicker has already created the (hidden) Display
+         Properties window by this point, so a window count is never zero and
+         the test would never fire. *)
+      if not FRestoredAnything then
+        OpenTree;
+    end);
 end;
 
 procedure TFormMain.FormDestroy(Sender: TObject);
@@ -714,6 +929,9 @@ begin
         gateway, so there is no writing it afterwards.
      5. Only then free anything. *)
   FClosing := True;
+  { Read by completions that may already be in flight, and it has to outlive
+    this object for them to read it safely -- see GUIAlive. }
+  GUIAlive := False;
 
   if FEventTimer <> nil then FEventTimer.Enabled := False;
   if FRunTimer <> nil then FRunTimer.Enabled := False;
@@ -726,15 +944,33 @@ begin
     FreeAndNil(FEventThread);
   end;
   StopLogWatch;
+  (* And release the off-thread work, which is the other thing holding the
+     client. Freeing it while a worker is mid-request is a use-after-free
+     with a network round trip's worth of window to hit it in.
+
+     Waiting alone is not enough, and a bounded wait alone is worse than
+     useless: a research turn is minutes BY DESIGN, so any patience short
+     enough to close a window promptly is short enough to expire while one
+     is still out -- and then free the client under it anyway. So CUT the
+     sockets first. Every request registers itself for the length of its
+     call, so this reaches all of them and the threads unwind in
+     milliseconds rather than at the gateway's convenience.
+
+     The wait after it is then expected to succeed, and is bounded only
+     because a desktop must close even when something has gone wrong. *)
+  if FClient <> nil then FClient.CancelAll;
+  WaitForAsync(5000);
   { Save before the client goes: the layout is stored on the gateway, so
-    there is no writing it once the connection is gone. }
+    there is no writing it once the connection is gone -- which is why this
+    is the one save that waits. }
   try
-    SaveDesktopState;
+    SaveDesktopStateNow;
   except
     { A desktop that cannot record its layout still closes. }
   end;
   FreeAndNil(FClient);
   FreeAndNil(FVersions);
+  FreeAndNil(FRunBusy);
   FreeAndNil(FRunHeads);
   FreeAndNil(FRunLogs);
   FreeAndNil(FRunWins);
@@ -1054,39 +1290,83 @@ begin
 
   RebuildTree;
 end;
-procedure TFormMain.RefreshWorkspaces;
+(* Fetch and paint, split in two.
+
+   Everything that talks to the gateway is off the UI thread now, so the
+   halves are separate: the Refresh pair fetch and then hand over, and the
+   Apply pair are pure painting from what is already in the fields. A caller
+   that has already fetched -- switching workspace does, in one trip --
+   calls the Apply half directly rather than asking again. *)
+procedure TFormMain.ApplyWorkspaces;
 var
   I: Integer;
 begin
-  try
-    FWorkspaces := FClient.Workspaces;
-  except
-    on E: Exception do
-    begin
-      Say('Could not list workspaces: ' + E.Message);
-      Exit;
-    end;
-  end;
   for I := 0 to High(FWorkspaces) do
     if FWorkspaces[I].Active then
       Caption := 'PasClaw Desktop -- ' + FWorkspaces[I].Label_;
 end;
 
+procedure TFormMain.RefreshWorkspaces;
+begin
+  Async('Workspaces',
+    procedure
+    begin
+      FWorkspaces := FClient.Workspaces;
+    end,
+    procedure
+    begin
+      ApplyWorkspaces;
+    end);
+end;
+
 procedure TFormMain.RefreshProjects;
+begin
+  (* Coalesced, and coalescing is not the same as dropping.
+
+     This is driven by the event stream, and an agent writing files produces
+     a burst -- so without a guard the timer starts a second fetch on top of
+     an unfinished first and queues requests faster than the gateway answers
+     them. One in flight, then.
+
+     But the request that arrives while one is out cannot simply be
+     discarded. The timer has already cleared FEventDirty by the time it
+     calls this, and the response in flight was produced BEFORE the event
+     that prompted the second call -- so the change it reported would be
+     absent from the answer and nothing would ever ask again. The board
+     would sit stale until something else happened to poke it.
+
+     So: remember that one was asked for, and go round once more. *)
+  if FBoardBusy then
+  begin
+    FBoardAgain := True;
+    Exit;
+  end;
+  FBoardBusy := True;
+  Async('Board',
+    procedure
+    begin
+      FProjects := FClient.Projects;
+    end,
+    procedure
+    begin
+      FBoardBusy := False;
+      ApplyProjects;
+      if not FBoardAgain then Exit;
+      FBoardAgain := False;
+      { Something changed while that was on the wire, and this answer
+        predates it. One more, which coalesces again in its turn. }
+      RefreshProjects;
+    end);
+end;
+
+procedure TFormMain.ApplyProjects;
 var
   I: Integer;
   Icon: TRetroDesktopIcon;
 begin
-  SetClientContext('Board');
-  try
-    FProjects := FClient.Projects;
-  except
-    on E: Exception do
-    begin
-      Say('Could not list projects: ' + E.Message);
-      Exit;
-    end;
-  end;
+  { Still synchronous, and still the most expensive thing on this thread:
+    one call per project for its tasks and one per task for its jobs. That
+    is the next piece of work, not this one. }
   RebuildTree;
 
   { Desktop icons, one per project. Rebuilt wholesale: the set is small and
@@ -1605,26 +1885,40 @@ begin
 end;
 
 procedure TFormMain.PickWorkspaceClick(Sender: TObject);
-var
-  I: Integer;
-  Menu: string;
 begin
-  RefreshWorkspaces;
-  if Length(FWorkspaces) = 0 then Exit;
-  Menu := '';
-  for I := 0 to High(FWorkspaces) do
-  begin
-    Menu := Menu + IntToStr(FWorkspaces[I].Slot) + ': ' + FWorkspaces[I].Label_;
-    if FWorkspaces[I].Active then Menu := Menu + ' (current)';
-    Menu := Menu + sLineBreak;
-  end;
-  { A workspace is a wall, not a view -- name the consequence in the prompt
-    rather than after the fact. }
-  AskText('Switch Workspace',
-          'This changes what PasClaw remembers: memory, sessions, skills' +
-          sLineBreak + 'and files are all per workspace.' + sLineBreak +
-          sLineBreak + Menu + 'Number:',
-          '', PickWorkspaceAccepted);
+  { Fetch first and open the dialog with the answer, rather than opening it
+    against whatever the last refresh left behind. Refreshing is a round
+    trip now, so reading FWorkspaces on the next line would read the OLD
+    list -- the exact bug that turning a call asynchronous introduces if the
+    caller is not moved with it. }
+  Async('Workspaces',
+    procedure
+    begin
+      FWorkspaces := FClient.Workspaces;
+    end,
+    procedure
+    var
+      I: Integer;
+      Menu: string;
+    begin
+      ApplyWorkspaces;
+      if Length(FWorkspaces) = 0 then Exit;
+      Menu := '';
+      for I := 0 to High(FWorkspaces) do
+      begin
+        Menu := Menu + IntToStr(FWorkspaces[I].Slot) + ': ' +
+                FWorkspaces[I].Label_;
+        if FWorkspaces[I].Active then Menu := Menu + ' (current)';
+        Menu := Menu + sLineBreak;
+      end;
+      { A workspace is a wall, not a view -- name the consequence in the
+        prompt rather than after the fact. }
+      AskText('Switch Workspace',
+              'This changes what PasClaw remembers: memory, sessions, skills' +
+              sLineBreak + 'and files are all per workspace.' + sLineBreak +
+              sLineBreak + Menu + 'Number:',
+              '', PickWorkspaceAccepted);
+    end);
 end;
 
 procedure TFormMain.PickWorkspaceAccepted(Sender: TObject);
@@ -1638,19 +1932,69 @@ begin
   for I := 0 to High(FWorkspaces) do
     if (FWorkspaces[I].Slot = Slot) and (not FWorkspaces[I].Active) then
     begin
-      SaveDesktopState;
-      CloseAllWindows;
-      FVersions.Clear;
-      if not FClient.ActivateWorkspace(FWorkspaces[I].Name) then
-      begin
-        Say('Could not switch workspace: ' + FClient.LastError);
-        Exit;
-      end;
-      RefreshWorkspaces;
-      RefreshProjects;
-      RestoreDesktopState;
+      SwitchToWorkspace(FWorkspaces[I].Name);
       Exit;
     end;
+end;
+
+(* Switching workspace is four round trips with the desktop torn down in the
+   middle, so on the UI thread it was the longest freeze in the app that was
+   not a chat turn -- and it happened with every window already closed, which
+   is the worst possible moment to stop repainting.
+
+   Shared by the menu and by Ctrl+Alt+Right rather than written twice: the
+   two had already drifted once, and a switch that half-works from one of
+   them is a workspace showing another workspace's windows. *)
+procedure TFormMain.SwitchToWorkspace(const Name_: string);
+var
+  Ok: Boolean;
+  Err, State, Leaving: string;
+begin
+  (* The departing layout is written IN THE SAME WORKER, before the switch.
+
+     /v1/desktop/state is scoped to whichever workspace is active when it
+     arrives. Saving asynchronously and then activating meant the two were
+     racing: a slow PUT could land after the activation and write the OLD
+     workspace's windows into the NEW one -- and the DesktopState read below
+     would then restore that. A workspace switch would corrupt the
+     workspace you switched to.
+
+     So the body is captured here, on the UI thread, while the windows still
+     exist, and sent by the worker as its first act. Ordering by putting
+     both in one thread, rather than by hoping. *)
+  Leaving := CaptureDesktopState;
+  CloseAllWindows;
+  FVersions.Clear;
+  Ok := False;
+  Err := '';
+  State := '';
+  Async('Workspace',
+    procedure
+    begin
+      if Leaving <> '' then FClient.SetDesktopStateFor(0, Leaving);
+      Ok := FClient.ActivateWorkspace(Name_);
+      if not Ok then
+      begin
+        Err := FClient.LastError;
+        Exit;
+      end;
+      { Fetched here rather than by RestoreDesktopState below, so the whole
+        switch is ONE trip off the UI thread instead of one plus another. }
+      FWorkspaces := FClient.Workspaces;
+      FProjects := FClient.Projects;
+      State := FClient.DesktopState;
+    end,
+    procedure
+    begin
+      if not Ok then
+      begin
+        Say('Could not switch workspace: ' + Err);
+        Exit;
+      end;
+      ApplyWorkspaces;
+      ApplyProjects;
+      RestoreDesktopStateFrom(State);
+    end);
 end;
 
 procedure TFormMain.NewWorkspaceClick(Sender: TObject);
@@ -1661,19 +2005,30 @@ end;
 
 procedure TFormMain.NewWorkspaceAccepted(Sender: TObject);
 var
-  Name_: string;
+  Name_, Created, Err: string;
 begin
   if FDialogEdit = nil then Exit;
   Name_ := Trim(FDialogEdit.Text);
   DialogCancel(Sender);
   if Name_ = '' then Exit;
-  if FClient.CreateWorkspace(Name_) = '' then
-  begin
-    Say('Could not create workspace: ' + FClient.LastError);
-    Exit;
-  end;
-  RefreshWorkspaces;
-  Say('Workspace "' + Name_ + '" created. Switch to it from the Menu.');
+  Created := '';
+  Err := '';
+  Async('Workspaces',
+    procedure
+    begin
+      Created := FClient.CreateWorkspace(Name_);
+      if Created = '' then Err := FClient.LastError;
+    end,
+    procedure
+    begin
+      if Created = '' then
+      begin
+        Say('Could not create workspace: ' + Err);
+        Exit;
+      end;
+      RefreshWorkspaces;
+      Say('Workspace "' + Name_ + '" created. Switch to it from the Menu.');
+    end);
 end;
 
 procedure TFormMain.NewProjectClick(Sender: TObject);
@@ -1684,23 +2039,29 @@ end;
 
 procedure TFormMain.NewProjectAccepted(Sender: TObject);
 var
-  Title, Slug: string;
+  Title, Slug, Err: string;
 begin
   if FDialogEdit = nil then Exit;
   Title := Trim(FDialogEdit.Text);
   if Title = '' then Exit;
-  try
-    Slug := FClient.CreateProject(Title);
-    if Slug = '' then
+  Slug := '';
+  Err := '';
+  Async('Board',
+    procedure
     begin
-      Say('Could not create the project: ' + FClient.LastError);
-      Exit;
-    end;
-    RefreshProjects;
-    OpenChat(Slug);
-  except
-    on E: Exception do Say('Could not create the project: ' + E.Message);
-  end;
+      Slug := FClient.CreateProject(Title);
+      if Slug = '' then Err := FClient.LastError;
+    end,
+    procedure
+    begin
+      if Slug = '' then
+      begin
+        Say('Could not create the project: ' + Err);
+        Exit;
+      end;
+      RefreshProjects;
+      OpenChat(Slug);
+    end);
 end;
 
 procedure TFormMain.RefreshClick(Sender: TObject);
@@ -1714,20 +2075,52 @@ end;
    invisible to the agent -- the whole difference from WS >. *)
 procedure TFormMain.NextDesktopClick(Sender: TObject);
 var
-  Cur, Cnt, Target, Leaving: Integer;
+  Cur, Cnt: Integer;
+  Ok: Boolean;
+  State: string;
 begin
-  if not FClient.Desktops(Cur, Cnt) then Exit;
-  Leaving := Cur;
-  { Named, not "current": the switch below moves what current means, and an
-    autosave queued by the closing windows would otherwise land here. }
-  SaveDesktopStateTo(Leaving);
-  if Cnt < 2 then Target := 2         { first press creates a second desktop }
-  else if Cur >= Cnt then Target := 1
-  else Target := Cur + 1;
-  if not FClient.SwitchDesktop(Target, Cur, Cnt) then Exit;
-  CloseAllWindows;
-  RestoreDesktopState;
-  Say(Format('Desktop %d of %d', [Cur, Cnt]));
+  Cur := 0;
+  Cnt := 0;
+  Ok := False;
+  State := '';
+  (* Read where we are, THEN save, THEN switch -- and the middle step has to
+     happen on the UI thread between the other two, because it walks the
+     live window list. So this is two async steps with a synchronous save
+     pinned between them, rather than one closure doing all three. *)
+  Async('Desktops',
+    procedure
+    begin
+      Ok := FClient.Desktops(Cur, Cnt);
+    end,
+    procedure
+    var
+      Target, Leaving: Integer;
+    begin
+      if not Ok then Exit;
+      Leaving := Cur;
+      { Named, not "current": the switch below moves what current means, and
+        an autosave queued by the closing windows would otherwise land
+        here. }
+      SaveDesktopStateTo(Leaving);
+      if Cnt < 2 then Target := 2       { first press creates a second desktop }
+      else if Cur >= Cnt then Target := 1
+      else Target := Cur + 1;
+      Ok := False;
+      Async('Desktops',
+        procedure
+        begin
+          Ok := FClient.SwitchDesktop(Target, Cur, Cnt);
+          { The arriving desk's layout, in the same trip. }
+          if Ok then State := FClient.DesktopState;
+        end,
+        procedure
+        begin
+          if not Ok then Exit;
+          CloseAllWindows;
+          RestoreDesktopStateFrom(State);
+          Say(Format('Desktop %d of %d', [Cur, Cnt]));
+        end);
+    end);
 end;
 
 (* Tear down every window and forget every handle to one.
@@ -1782,27 +2175,11 @@ begin
   for I := 0 to High(FWorkspaces) do
     if FWorkspaces[I].Active then Cur := I;
   Cur := (Cur + 1) mod Length(FWorkspaces);
-
-  { Save THIS workspace's arrangement before leaving it -- switching is
-    meant to feel like walking into a different room, which only works if
-    the room you left is still as you left it. The state route is per
-    workspace, so this lands on the one we are still in. }
-  SaveDesktopState;
-
-  { Switching workspaces closes this one's windows -- they belong to the
-    workspace, not to the client. }
-  CloseAllWindows;
-  { Versions belong to a conversation, and the conversations just closed. }
-  FVersions.Clear;
-
-  if not FClient.ActivateWorkspace(FWorkspaces[Cur].Name) then
-  begin
-    Say('Could not switch workspace: ' + FClient.LastError);
-    Exit;
-  end;
-  RefreshWorkspaces;
-  RefreshProjects;
-  RestoreDesktopState;
+  { Saving this workspace's arrangement, closing its windows and clearing
+    the versions all happen in SwitchToWorkspace -- switching is meant to
+    feel like walking into a different room, which only works if the room
+    you left is still as you left it, and that is one rule, in one place. }
+  SwitchToWorkspace(FWorkspaces[Cur].Name);
 end;
 
 procedure TFormMain.IconOpen(Sender: TObject);
@@ -1894,19 +2271,30 @@ end;
 
 procedure TFormMain.TreeNewTaskAccepted(Sender: TObject);
 var
-  Title, Id: string;
+  Title, Id, Project, Err: string;
 begin
   if (FDialogEdit = nil) or (FTreeProject = '') then Exit;
   Title := Trim(FDialogEdit.Text);
   if Title = '' then Exit;
-  Id := FClient.CreateTask(FTreeProject, Title);
-  if Id = '' then
-  begin
-    Say('Could not add the task: ' + FClient.LastError);
-    Exit;
-  end;
-  Say('Added ' + Id + ' to ' + FTreeProject);
-  RefreshProjects;
+  Project := FTreeProject;
+  Id := '';
+  Err := '';
+  Async('Board',
+    procedure
+    begin
+      Id := FClient.CreateTask(Project, Title);
+      if Id = '' then Err := FClient.LastError;
+    end,
+    procedure
+    begin
+      if Id = '' then
+      begin
+        Say('Could not add the task: ' + Err);
+        Exit;
+      end;
+      Say('Added ' + Id + ' to ' + Project);
+      RefreshProjects;
+    end);
 end;
 
 (* Run Task -- the step the desktop was missing.
@@ -1937,18 +2325,32 @@ end;
 
 procedure TFormMain.TreeRunTaskAccepted(Sender: TObject);
 var
-  Prompt, JobId, Err: string;
+  Prompt, JobId, Err, Project, Task: string;
+  Ok: Boolean;
 begin
   if (FTreeProject = '') or (FTreeTask = '') then Exit;
   Prompt := '';
   if FDialogEdit <> nil then Prompt := Trim(FDialogEdit.Text);
-  if not FClient.RunTask(FTreeProject, FTreeTask, Prompt, JobId, Err) then
-  begin
-    Say('Could not start it: ' + Err);
-    Exit;
-  end;
-  Say(Format('%s/%s -- job %s started', [FTreeProject, FTreeTask, JobId]));
-  RefreshProjects;
+  Project := FTreeProject;
+  Task := FTreeTask;
+  JobId := '';
+  Err := '';
+  Ok := False;
+  Async('Board',
+    procedure
+    begin
+      Ok := FClient.RunTask(Project, Task, Prompt, JobId, Err);
+    end,
+    procedure
+    begin
+      if not Ok then
+      begin
+        Say('Could not start it: ' + Err);
+        Exit;
+      end;
+      Say(Format('%s/%s -- job %s started', [Project, Task, JobId]));
+      RefreshProjects;
+    end);
 end;
 
 { todo -> active -> done -> todo. A cycle rather than a menu because there
@@ -1956,9 +2358,8 @@ end;
 procedure TFormMain.TreeStatusClick(Sender: TObject);
 var
   Ref: TNodeRef;
-  Tasks: TTaskRows;
-  I: Integer;
-  Next: string;
+  Next, Project, Task, Err: string;
+  Ok: Boolean;
 begin
   if not SelectedRef(Ref) then Exit;
   if Ref.TaskId = '' then
@@ -1966,23 +2367,42 @@ begin
     Say('Select a task to change its status.');
     Exit;
   end;
+  { Read the current status and write the next one in ONE trip: two calls
+    on a click is two stalls, and the tree ref they depend on can be freed
+    by a board refresh between them. }
+  Project := Ref.Project;
+  Task := Ref.TaskId;
   Next := 'active';
-  Tasks := FClient.Tasks(Ref.Project);
-  for I := 0 to High(Tasks) do
-    if Tasks[I].Id = Ref.TaskId then
+  Ok := False;
+  Err := '';
+  Async('Board',
+    procedure
+    var
+      Tasks: TTaskRows;
+      J: Integer;
     begin
-      if Tasks[I].Status = 'todo' then Next := 'active'
-      else if Tasks[I].Status = 'active' then Next := 'done'
-      else Next := 'todo';
-      Break;
-    end;
-  if not FClient.UpdateTaskStatus(Ref.Project, Ref.TaskId, Next) then
-  begin
-    Say('Could not update it: ' + FClient.LastError);
-    Exit;
-  end;
-  Say(Ref.TaskId + ' is now ' + Next);
-  RefreshProjects;
+      Tasks := FClient.Tasks(Project);
+      for J := 0 to High(Tasks) do
+        if Tasks[J].Id = Task then
+        begin
+          if Tasks[J].Status = 'todo' then Next := 'active'
+          else if Tasks[J].Status = 'active' then Next := 'done'
+          else Next := 'todo';
+          Break;
+        end;
+      Ok := FClient.UpdateTaskStatus(Project, Task, Next);
+      if not Ok then Err := FClient.LastError;
+    end,
+    procedure
+    begin
+      if not Ok then
+      begin
+        Say('Could not update it: ' + Err);
+        Exit;
+      end;
+      Say(Task + ' is now ' + Next);
+      RefreshProjects;
+    end);
 end;
 
 procedure TFormMain.TreeRenameClick(Sender: TObject);
@@ -2001,7 +2421,8 @@ end;
 
 procedure TFormMain.TreeRenameAccepted(Sender: TObject);
 var
-  Title: string;
+  Title, Project, Err: string;
+  Ok: Boolean;
 begin
   if (FDialogEdit = nil) or (FTreeProject = '') then Exit;
   Title := Trim(FDialogEdit.Text);
@@ -2009,12 +2430,24 @@ begin
   { The TITLE changes; the name -- the slug everything on disk is keyed by
     -- does not. Renaming the key would break every window, task path and
     app URL already pointing at it. }
-  if not FClient.UpdateProject(FTreeProject, Title, '') then
-  begin
-    Say('Could not rename it: ' + FClient.LastError);
-    Exit;
-  end;
-  RefreshProjects;
+  Project := FTreeProject;
+  Ok := False;
+  Err := '';
+  Async('Board',
+    procedure
+    begin
+      Ok := FClient.UpdateProject(Project, Title, '');
+      if not Ok then Err := FClient.LastError;
+    end,
+    procedure
+    begin
+      if not Ok then
+      begin
+        Say('Could not rename it: ' + Err);
+        Exit;
+      end;
+      RefreshProjects;
+    end);
 end;
 
 procedure TFormMain.TreeDeleteClick(Sender: TObject);
@@ -2031,18 +2464,32 @@ end;
 
 procedure TFormMain.TreeDeleteConfirmed(Sender: TObject);
 var
-  Name: string;
+  Name, Err: string;
+  Ok: Boolean;
 begin
   Name := FTreeProject;
   FTreeProject := '';
   if Name = '' then Exit;
-  if not FClient.DeleteProject(Name) then
-  begin
-    Say('Could not delete it: ' + FClient.LastError);
-    Exit;
-  end;
-  Say('Deleted ' + Name);
-  RefreshProjects;
+  Ok := False;
+  Err := '';
+  { The route stops a running app before removing the project, so this one
+    can legitimately take a moment. }
+  Async('Board',
+    procedure
+    begin
+      Ok := FClient.DeleteProject(Name);
+      if not Ok then Err := FClient.LastError;
+    end,
+    procedure
+    begin
+      if not Ok then
+      begin
+        Say('Could not delete it: ' + Err);
+        Exit;
+      end;
+      Say('Deleted ' + Name);
+      RefreshProjects;
+    end);
 end;
 
 procedure TFormMain.TreeOpenAppSourceClick(Sender: TObject);
@@ -2068,10 +2515,8 @@ end;
 procedure TFormMain.OpenAppSource(const Project: string);
 var
   App: TAppRow;
-  Head: TLabel;
-  Bar: TLayout;
-  B: TButton;
-  Old: TRetroWindow;
+  Body: string;
+  Ok: Boolean;
 begin
   SetClientContext('App source: ' + Project);
 
@@ -2105,12 +2550,34 @@ begin
     Exit;
   end;
 
-  if not FClient.App(Project, App) or not App.Exists then
-  begin
-    Say(Project + ' has no app yet -- ask PasClaw to build one.');
-    Exit;
-  end;
+  { Manifest AND body in one trip -- two calls on a click is two stalls. }
+  Ok := False;
+  Body := '';
+  Async('App source: ' + Project,
+    procedure
+    begin
+      Ok := FClient.App(Project, App) and App.Exists;
+      if Ok then Body := FClient.AppEntry(Project);
+    end,
+    procedure
+    begin
+      if not Ok then
+      begin
+        Say(Project + ' has no app yet -- ask PasClaw to build one.');
+        Exit;
+      end;
+      BuildAppSourceWindow(Project, App, Body);
+    end);
+end;
 
+procedure TFormMain.BuildAppSourceWindow(const Project: string;
+  const App: TAppRow; const Body: string);
+var
+  Head: TLabel;
+  Bar: TLayout;
+  B: TButton;
+  Old: TRetroWindow;
+begin
   { Let go of the previous editor BEFORE closing it. Closing arrives back
     through Notification, and if that ran after the new window was already in
     the field it would clear the one just opened. }
@@ -2151,7 +2618,7 @@ begin
   FAppSrcMemo := TMemo.Create(FAppSrcWin);
   FAppSrcMemo.Parent := FAppSrcWin.Client;
   FAppSrcMemo.Align := TAlignLayout.Client;
-  FAppSrcMemo.Text := FClient.AppEntry(Project);
+  FAppSrcMemo.Text := Body;
   { What was loaded, so "has this been edited" is a comparison rather than a
     guess. FMX's TMemo has no dependable Modified flag to lean on, and the
     body is small enough that holding a second copy costs nothing. }
@@ -2179,20 +2646,41 @@ begin
 end;
 
 procedure TFormMain.AppSourceSaveClick(Sender: TObject);
+var
+  Project, Body, Err: string;
+  Ok: Boolean;
 begin
   if (FAppSrcMemo = nil) or (FAppSrcProject = '') then Exit;
-  { Capture first: the saved body becomes a version like any turn's would,
-    so an edit that breaks the app is as recoverable as one the agent made. }
-  CaptureVersion(FAppSrcProject);
-  if not FClient.PutAppEntry(FAppSrcProject, FAppSrcMemo.Text) then
-  begin
-    Say('Could not save it: ' + FClient.LastError);
-    Exit;
-  end;
-  { Saved is the new baseline, or the window would go on claiming edits it
-    has already written. }
-  FAppSrcLoaded := FAppSrcMemo.Text;
-  Say('Saved ' + FAppSrcProject);
+  Project := FAppSrcProject;
+  Body := FAppSrcMemo.Text;
+  Ok := False;
+  Err := '';
+  Async('App source: ' + Project,
+    procedure
+    begin
+      { Capture first: the saved body becomes a version like any turn's
+        would, so an edit that breaks the app is as recoverable as one the
+        agent made. Both calls in the one worker, in that order. }
+      CaptureVersion(Project);
+      Ok := FClient.PutAppEntry(Project, Body);
+      if not Ok then Err := FClient.LastError;
+    end,
+    procedure
+    begin
+      if not Ok then
+      begin
+        Say('Could not save it: ' + Err);
+        Exit;
+      end;
+      { Saved is the new baseline, or the window would go on claiming edits
+        it has already written -- but only if this is still the same body in
+        the same editor, since the user can type while a save is on the
+        wire. }
+      if (FAppSrcMemo <> nil) and (FAppSrcProject = Project) and
+         (FAppSrcMemo.Text = Body) then
+        FAppSrcLoaded := Body;
+      Say('Saved ' + Project);
+    end);
 end;
 
 { ------------------------------------------------------------- live board -- }
@@ -2821,8 +3309,9 @@ end;
 
 procedure TFormMain.WizardNext(Sender: TObject);
 var
-  I: Integer;
-  Ignored: string;
+  I, Count: Integer;
+  Project: string;
+  Titles: TStringList;
 begin
   if FWizIndex < High(FWizSteps) then
   begin
@@ -2831,15 +3320,37 @@ begin
     Exit;
   end;
   { Finish: the approved plan becomes the board. That gesture -- Next, Next,
-    Finish -> real tasks -- is the whole point of rendering it as a wizard. }
+    Finish -> real tasks -- is the whole point of rendering it as a wizard.
+
+    One round trip PER STEP, so a ten-step plan was ten of them on the
+    click. The window closes immediately and the tasks appear as they land. }
+  Titles := TStringList.Create;
   for I := 0 to High(FWizSteps) do
     if Trim(FWizSteps[I].Title) <> '' then
-      FClient.CreateTask(FWizProject, FWizSteps[I].Title);
-  Ignored := '';
+      Titles.Add(FWizSteps[I].Title);
+  Count := Titles.Count;
+  Project := FWizProject;
   if FWizWin <> nil then FWizWin.Close;
   FWizWin := nil;
-  RefreshProjects;
-  Say(Format('%d task(s) added to %s.', [Length(FWizSteps), FWizProject]));
+  Async('Board',
+    procedure
+    var
+      J: Integer;
+    begin
+      try
+        for J := 0 to Titles.Count - 1 do
+          FClient.CreateTask(Project, Titles[J]);
+      finally
+        { Owned by the worker: the UI thread is long past this point, and a
+          list freed on the caller's side would be freed mid-loop. }
+        Titles.Free;
+      end;
+    end,
+    procedure
+    begin
+      RefreshProjects;
+      Say(Format('%d task(s) added to %s.', [Count, Project]));
+    end);
 end;
 
 procedure TFormMain.ShowWizard(const Project: string; const Block: TUIBlock);
@@ -3568,11 +4079,8 @@ end;
    colon), so a reopened session and a project chat can be open at once. *)
 procedure TFormMain.OpenSessionChat(const SessionId: string);
 var
-  Key: string;
+  Key, Hist: string;
   Log: TMemo;
-  Hist: string;
-  Msgs: TChatMessages;
-  I: Integer;
 begin
   if Trim(SessionId) = '' then Exit;
   Key := SessionChatPrefix + SessionId;
@@ -3582,82 +4090,133 @@ begin
   if FChatHistory.TryGetValue(Key, Hist) and (Trim(Hist) <> '[]') and
      (Trim(Hist) <> '') then Exit;
 
-  Hist := FClient.SessionHistory(SessionId);
-  if Trim(Hist) = '' then Hist := '[]';
-  FChatHistory.AddOrSetValue(Key, Hist);
+  { The window is already open by here; the conversation arrives into it. }
+  if FChatLogs.TryGetValue(Key, Log) and (Log <> nil) then
+    Log.Lines.Add('(loading...)');
 
-  if not FChatLogs.TryGetValue(Key, Log) then Exit;
-  if Log = nil then Exit;
+  Hist := '';
+  Async('Session: ' + SessionId,
+    procedure
+    begin
+      Hist := FClient.SessionHistory(SessionId);
+    end,
+    procedure
+    var
+      Msgs: TChatMessages;
+      I: Integer;
+      Into: TMemo;
+    begin
+      { The chat window keyed by this session may have been closed while the
+        history was in flight; the dictionary is emptied as it goes. }
+      if not FChatWins.ContainsKey(Key) then Exit;
+      if Trim(Hist) = '' then Hist := '[]';
+      FChatHistory.AddOrSetValue(Key, Hist);
+      if not FChatLogs.TryGetValue(Key, Into) then Exit;
+      if Into = nil then Exit;
 
-  (* Decoded by the client library, through the real JSON parser.
+      (* Decoded by the client library, through the real JSON parser.
 
-     The hand-rolled scanner this replaces knew \n and \" but not \uXXXX,
-     so every accented letter, dash and emoji in a reopened conversation
-     arrived as literal escape text -- and model prose is made of those. *)
-  Msgs := ParseChatMessages(Hist);
-  if Length(Msgs) = 0 then
-  begin
-    Log.Lines.Add('(this session has no messages)');
-    Exit;
-  end;
-  Log.Lines.Clear;
-  for I := 0 to High(Msgs) do
-  begin
-    { Tool and system turns are machinery, not conversation. }
-    if (Msgs[I].Role <> 'user') and (Msgs[I].Role <> 'assistant') then Continue;
-    if Msgs[I].Role = 'user' then
-      Log.Lines.Add('> ' + Msgs[I].Content)
-    else
-      Log.Lines.Add(Msgs[I].Content);
-    Log.Lines.Add('');
-  end;
-  Log.GoToTextEnd;
+         The hand-rolled scanner this replaces knew \n and \" but not
+         \uXXXX, so every accented letter, dash and emoji in a reopened
+         conversation arrived as literal escape text -- and model prose is
+         made of those. *)
+      Msgs := ParseChatMessages(Hist);
+      Into.Lines.Clear;
+      if Length(Msgs) = 0 then
+      begin
+        Into.Lines.Add('(this session has no messages)');
+        Exit;
+      end;
+      for I := 0 to High(Msgs) do
+      begin
+        { Tool and system turns are machinery, not conversation. }
+        if (Msgs[I].Role <> 'user') and (Msgs[I].Role <> 'assistant') then
+          Continue;
+        if Msgs[I].Role = 'user' then
+          Into.Lines.Add('> ' + Msgs[I].Content)
+        else
+          Into.Lines.Add(Msgs[I].Content);
+        Into.Lines.Add('');
+      end;
+      Into.GoToTextEnd;
+    end);
 end;
 
+(* Open a servable app in a window.
+
+   Two round trips before anything appears -- reading the manifest, then the
+   browser fetching the app itself -- and the first of them used to run on
+   the click. The window cannot be built before the manifest arrives (its
+   size, title and declared permissions all come from it), so this is a
+   fetch and then a build rather than a window that fills in. *)
 procedure TFormMain.OpenApp(const Project: string);
 var
   W: TRetroWindow;
   App: TAppRow;
-  Host: TLayout;
-  Browser: TWebBrowser;
-  Snap: TImage;
+  Ok: Boolean;
+  Err: string;
 begin
-  SetClientContext('App: ' + Project);
   if FAppWins.TryGetValue(Project, W) and (W <> nil) then
   begin
     W.Restore;
     Exit;
   end;
-  if not FClient.App(Project, App) then
-  begin
-    Say('Could not read the app manifest: ' + FClient.LastError);
-    Exit;
-  end;
-  if not App.Exists then
-  begin
-    Say('This project has no app yet -- ask PasClaw to build one.');
-    OpenChat(Project);
-    Exit;
-  end;
-  if not App.Servable then
-  begin
-    Say(Format('"%s" is kind %s, which runs as a process rather than in a window.',
-               [App.Name, App.Kind]));
-    Exit;
-  end;
-  { Declared permissions are shown BEFORE the app opens, not buried in a
-    manifest nobody reads. The answer arrives asynchronously, so the rest of
-    the open happens in OpenAppConfirmed. }
-  if App.Network <> '' then
-  begin
-    FPendingProject := Project;
-    Confirm('Open app',
-      Format('"%s" declares network access to:' + sLineBreak + '  %s' +
-             sLineBreak + sLineBreak + 'Open it?', [App.Name, App.Network]),
-      OpenAppConfirmed);
-    Exit;
-  end;
+  Ok := False;
+  Err := '';
+  Async('App: ' + Project,
+    procedure
+    begin
+      Ok := FClient.App(Project, App);
+      if not Ok then Err := FClient.LastError;
+    end,
+    procedure
+    begin
+      if not Ok then
+      begin
+        Say('Could not read the app manifest: ' + Err);
+        Exit;
+      end;
+      if not App.Exists then
+      begin
+        Say('This project has no app yet -- ask PasClaw to build one.');
+        OpenChat(Project);
+        Exit;
+      end;
+      if not App.Servable then
+      begin
+        Say(Format('"%s" is kind %s, which runs as a process rather than in ' +
+                   'a window.', [App.Name, App.Kind]));
+        Exit;
+      end;
+      { Declared permissions are shown BEFORE the app opens, not buried in a
+        manifest nobody reads. The answer arrives asynchronously, so the rest
+        of the open happens in OpenAppConfirmed. }
+      if App.Network <> '' then
+      begin
+        FPendingProject := Project;
+        Confirm('Open app',
+          Format('"%s" declares network access to:' + sLineBreak + '  %s' +
+                 sLineBreak + sLineBreak + 'Open it?', [App.Name, App.Network]),
+          OpenAppConfirmed);
+        Exit;
+      end;
+      { Opened a second time while the manifest was in flight. }
+      if FAppWins.ContainsKey(Project) then Exit;
+      BuildAppWindow(Project, App);
+    end);
+end;
 
+(* The window itself, given a manifest that has already been read and
+   consented to. One copy: the consent path and the ordinary path built the
+   same window twice, and the two had already drifted -- only one of them
+   registered its browser for the snapshot trick. *)
+procedure TFormMain.BuildAppWindow(const Project: string; const App: TAppRow);
+var
+  W: TRetroWindow;
+  Host: TLayout;
+  Browser: TWebBrowser;
+  Snap: TImage;
+begin
   W := TrackWindow(FDesktop.CreateWindow(App.Name, App.Width, App.Height + 24));
   FAppWins.AddOrSetValue(Project, W);
   W.OnActiveChanged := BrowserActiveChanged;
@@ -3666,6 +4225,8 @@ begin
   Host.Parent := W.Client;
   Host.Align := TAlignLayout.Client;
 
+  { TWebBrowser is a native control that draws above all FMX content, so an
+    inactive window has to show a picture of itself instead. }
   Snap := TImage.Create(W);
   Snap.Parent := Host;
   Snap.Align := TAlignLayout.Client;
@@ -3681,7 +4242,7 @@ begin
      BEFORE Parent, and that is the whole of it. Assigning Parent is what
      creates the native handle, and the engine is chosen when the handle is
      created; setting the property afterwards changes a field nothing reads
-     again. It was set after Parent here, so every app window has been
+     again. It was set after Parent here, so every app window had been
      running on the legacy engine while appearing to ask for Edge. *)
   Browser.WindowsEngine := TWindowsEngine.EdgeIfAvailable;
 {$ENDIF}
@@ -3693,62 +4254,61 @@ begin
   MarkLayoutDirty;
 end;
 
-{ Yes on the permission dialog: reopen with the prompt suppressed. The
+{ Yes on the permission dialog: build the window the manifest described. The
   suppression is one shot -- reopening the app later asks again. }
 procedure TFormMain.OpenAppConfirmed(Sender: TObject);
 var
   Project: string;
-  W: TRetroWindow;
   App: TAppRow;
-  Host: TLayout;
-  Browser: TWebBrowser;
-  Snap: TImage;
+  Ok: Boolean;
 begin
   Project := FPendingProject;
   FPendingProject := '';
   if Project = '' then Exit;
-  if not FClient.App(Project, App) then Exit;
-  if not (App.Exists and App.Servable) then Exit;
-
-  W := TrackWindow(FDesktop.CreateWindow(App.Name, App.Width, App.Height + 24));
-  FAppWins.AddOrSetValue(Project, W);
-  W.OnActiveChanged := BrowserActiveChanged;
-
-  Host := TLayout.Create(W);
-  Host.Parent := W.Client;
-  Host.Align := TAlignLayout.Client;
-
-  Snap := TImage.Create(W);
-  Snap.Parent := Host;
-  Snap.Align := TAlignLayout.Client;
-  Snap.WrapMode := TImageWrapMode.Stretch;
-  Snap.Visible := False;
-
-  Browser := TWebBrowser.Create(W);
-{$IFDEF MSWINDOWS}
-  Browser.WindowsEngine := TWindowsEngine.EdgeIfAvailable;   { before Parent }
-{$ENDIF}
-  Browser.Parent := Host;
-  Browser.Align := TAlignLayout.Client;
-  Browser.URL := FClient.AppURL(Project);
-  FBrowsers.Add(Browser);
-  FSnapshots.AddOrSetValue(Browser, Snap);
+  if FAppWins.ContainsKey(Project) then Exit;
+  Ok := False;
+  Async('App: ' + Project,
+    procedure
+    begin
+      Ok := FClient.App(Project, App);
+    end,
+    procedure
+    begin
+      if not Ok then Exit;
+      if not (App.Exists and App.Servable) then Exit;
+      if FAppWins.ContainsKey(Project) then Exit;
+      BuildAppWindow(Project, App);
+    end);
 end;
 
 procedure TFormMain.OpenJobLog(const Project, TaskId, JobId: string);
 var
   W: TRetroWindow;
   M: TMemo;
+  Body: string;
 begin
+  { The window opens NOW and fills in. Opening it after the fetch would mean
+    a double-click that appears to do nothing until the log arrives. }
   W := TrackWindow(FDesktop.CreateWindow(
     Format('%s %s/%s', [Project, TaskId, JobId]), 520, 300));
   M := TMemo.Create(W);
   M.Parent := W.Client;
   M.Align := TAlignLayout.Client;
   M.ReadOnly := True;
-  M.Text := FClient.JobLog(Project, TaskId, JobId);
-  if Trim(M.Text) = '' then
-    M.Text := '(no output yet)';
+  M.Text := '(reading...)';
+  Body := '';
+  Async('Job: ' + Project,
+    procedure
+    begin
+      Body := FClient.JobLog(Project, TaskId, JobId);
+    end,
+    procedure
+    begin
+      { The window can be closed while the log is on its way, taking the
+        memo with it. }
+      if not WindowAlive(W) then Exit;
+      if Trim(Body) = '' then M.Text := '(no output yet)' else M.Text := Body;
+    end);
 end;
 
 (* The Library: what this workspace has accumulated.
@@ -3812,6 +4372,37 @@ procedure TFormMain.FillLibrary;
 var
   Pages: TPageRows;
   Sess: TSessionRows;
+begin
+  if FLibraryList = nil then Exit;
+  { Two round trips, and the window used to wait for both before showing
+    anything. }
+  SetLength(Pages, 0);
+  SetLength(Sess, 0);
+  Async('Library',
+    procedure
+    begin
+      try
+        Pages := FClient.Pages;
+      except
+        SetLength(Pages, 0);
+      end;
+      try
+        Sess := FClient.Sessions;
+      except
+        SetLength(Sess, 0);
+      end;
+    end,
+    procedure
+    begin
+      { Closed while the two lists were on their way. }
+      if not WindowAlive(FLibraryWin) then Exit;
+      PaintLibrary(Pages, Sess);
+    end);
+end;
+
+procedure TFormMain.PaintLibrary(const Pages: TPageRows;
+  const Sess: TSessionRows);
+var
   I: Integer;
   Title: string;
 begin
@@ -3822,11 +4413,6 @@ begin
 
   FLibraryList.Items.Add('-- Pages --');
   FLibraryKinds.Add('');
-  try
-    Pages := FClient.Pages;
-  except
-    SetLength(Pages, 0);
-  end;
   if Length(Pages) = 0 then
   begin
     FLibraryList.Items.Add('  (none yet -- ask something in the Browser)');
@@ -3844,11 +4430,6 @@ begin
   FLibraryKinds.Add('');
   FLibraryList.Items.Add('-- Sessions --');
   FLibraryKinds.Add('');
-  try
-    Sess := FClient.Sessions;
-  except
-    SetLength(Sess, 0);
-  end;
   if Length(Sess) = 0 then
   begin
     FLibraryList.Items.Add('  (none yet)');
@@ -3897,10 +4478,6 @@ end;
 procedure TFormMain.OpenRun(const Project: string);
 var
   W: TRetroWindow;
-  Bar: TLayout;
-  B: TButton;
-  Head: TLabel;
-  M: TMemo;
   RunApp_: TAppRow;
 begin
   (* An app the runner would refuse does not get a Run window.
@@ -3915,26 +4492,48 @@ begin
      neither, and the previous test -- servable -- let exactly that case
      through to the dead button. If there is nothing to run, the thing to
      do with an app is open it. *)
-  if FClient.App(Project, RunApp_) and RunApp_.Exists and
-     (not RunApp_.Runnable) then
-  begin
-    if RunApp_.Servable then
-      OpenApp(Project)
-    else
-      { Neither servable nor runnable: say what is wrong with the manifest
-        rather than opening an empty window about it. }
-      Say(Format('%s has an app PasClaw cannot open or run: kind="%s", ' +
-                 'entry="%s", no run command.',
-                 [Project, RunApp_.Kind, RunApp_.Entry]));
-    Exit;
-  end;
-
   if FRunWins.TryGetValue(Project, W) and (W <> nil) then
   begin
     W.Restore;
     RefreshRun(Project);
     Exit;
   end;
+
+  { The manifest decides whether this window should exist at all, so it has
+    to be read before anything is built -- off this thread, and the window
+    follows in BuildRunWindow. }
+  Async('Run: ' + Project,
+    procedure
+    begin
+      FClient.App(Project, RunApp_);
+    end,
+    procedure
+    begin
+      if RunApp_.Exists and (not RunApp_.Runnable) then
+      begin
+        if RunApp_.Servable then
+          OpenApp(Project)
+        else
+          { Neither servable nor runnable: say what is wrong with the
+            manifest rather than opening an empty window about it. }
+          Say(Format('%s has an app PasClaw cannot open or run: kind="%s", ' +
+                     'entry="%s", no run command.',
+                     [Project, RunApp_.Kind, RunApp_.Entry]));
+        Exit;
+      end;
+      if FRunWins.ContainsKey(Project) then Exit;
+      BuildRunWindow(Project);
+    end);
+end;
+
+procedure TFormMain.BuildRunWindow(const Project: string);
+var
+  W: TRetroWindow;
+  Bar: TLayout;
+  B: TButton;
+  Head: TLabel;
+  M: TMemo;
+begin
   W := TrackWindow(FDesktop.CreateWindow(Project + ' -- Run', 520, 360));
   FRunWins.AddOrSetValue(Project, W);
 
@@ -3992,80 +4591,142 @@ begin
     Result := 'as a process on the PasClaw host';
 end;
 
+(* Three round trips, and they used to be three round trips ON THE UI THREAD
+   every 1.2 seconds for as long as any Run window was open. That is not a
+   pause you notice once; it is a permanent stutter in the whole desktop,
+   and it is why dragging a window while an app ran felt like dragging it
+   through treacle.
+
+   FRunBusy keeps the poll from stacking: on a slow gateway a round of this
+   can outlast the timer interval, and starting a second round on top of an
+   unfinished one would queue requests faster than they complete. *)
 procedure TFormMain.RefreshRun(const Project: string);
 var
   Run: TRunRow;
-  Head: TLabel;
-  M: TMemo;
   Log, Kind: string;
-  AppRow: TAppRow;
+  Ok: Boolean;
 begin
-  SetClientContext('Run: ' + Project);
-  if not FClient.RunState(Project, Run) then Exit;
-  { Name the kind. A Run button that does nothing is a puzzle; "this app
-    declares kind=python" is a fact you can act on -- usually by fixing a
-    manifest the model wrote wrong. }
+  if FRunBusy.Contains(Project) then Exit;
+  FRunBusy.Add(Project);
+  Ok := False;
+  Log := '';
   Kind := '';
-  if FClient.App(Project, AppRow) and AppRow.Exists then Kind := AppRow.Kind;
-  if FRunHeads.TryGetValue(Project, Head) and (Head <> nil) then
-    Head.Text := Format('%s -- runs %s%s%s%s',
-      [Run.State, BackendPhrase(Run.Backend),
-       IfThenStr(Kind <> '', '   [kind=' + Kind + ']', ''),
-       IfThenStr(Run.URL <> '', sLineBreak + Run.URL, ''),
-       IfThenStr(Run.Error <> '', sLineBreak + Run.Error, '')]);
-  if FRunLogs.TryGetValue(Project, M) and (M <> nil) then
-  begin
-    Log := FClient.RunLog(Project);
-    { Only touch the memo when it changed: reassigning Text every second
-      would fight the user's scroll position for no reason. }
-    if M.Text <> Log then M.Text := Log;
-  end;
+  Async('Run: ' + Project,
+    procedure
+    var
+      AppRow: TAppRow;
+    begin
+      Ok := FClient.RunState(Project, Run);
+      if not Ok then Exit;
+      { Name the kind. A Run button that does nothing is a puzzle; "this app
+        declares kind=python" is a fact you can act on -- usually by fixing a
+        manifest the model wrote wrong. }
+      if FClient.App(Project, AppRow) and AppRow.Exists then Kind := AppRow.Kind;
+      Log := FClient.RunLog(Project);
+    end,
+    procedure
+    var
+      Head: TLabel;
+      M: TMemo;
+    begin
+      FRunBusy.Remove(Project);
+      if not Ok then Exit;
+      if FRunHeads.TryGetValue(Project, Head) and (Head <> nil) then
+        Head.Text := Format('%s -- runs %s%s%s%s',
+          [Run.State, BackendPhrase(Run.Backend),
+           IfThenStr(Kind <> '', '   [kind=' + Kind + ']', ''),
+           IfThenStr(Run.URL <> '', sLineBreak + Run.URL, ''),
+           IfThenStr(Run.Error <> '', sLineBreak + Run.Error, '')]);
+      if FRunLogs.TryGetValue(Project, M) and (M <> nil) then
+        { Only touch the memo when it changed: reassigning Text every second
+          would fight the user's scroll position for no reason. }
+        if M.Text <> Log then M.Text := Log;
+    end);
 end;
 
+(* Three round trips before the dialog can even be phrased, and they ran on
+   the click. The button stayed down and the window stopped painting for as
+   long as the gateway took to answer all three -- on the one gesture whose
+   entire purpose is to show the user something before they consent. *)
 procedure TFormMain.RunStartClick(Sender: TObject);
 var
-  Project, Cmd: string;
-  Run: TRunRow;
-  App: TAppRow;
+  Project, Cmd, Network, Backend: string;
 begin
   if not (Sender is TButton) then Exit;
   Project := TButton(Sender).TagString;
   if Project = '' then Exit;
+  TButton(Sender).Enabled := False;
 
-  { Ask WITHOUT consent first, purely to get the command back. A
-    confirmation that hides what it is confirming is theatre. }
-  if not FClient.PlannedCommand(Project, Cmd) then
-    Cmd := '(the gateway did not say)';
-  FClient.App(Project, App);
-  { The run record carries the backend even when nothing is running, so the
-    consent dialog can name where it WILL run rather than where it did. }
-  FClient.RunState(Project, Run);
-  FPendingProject := Project;
-  Confirm('Run app',
-    Format('This runs a program PasClaw wrote:' + sLineBreak + sLineBreak +
-           '  %s' + sLineBreak + sLineBreak +
-           'It runs %s.%s' + sLineBreak + sLineBreak + 'Run it?',
-      [Cmd, BackendPhrase(Run.Backend),
-       IfThenStr(App.Network <> '',
-                 sLineBreak + 'It declares network access to: ' + App.Network,
-                 '')]),
-    RunConfirmed);
+  Cmd := '';
+  Network := '';
+  Backend := '';
+  Async('Run: ' + Project,
+    procedure
+    var
+      Run: TRunRow;
+      App: TAppRow;
+    begin
+      { Ask WITHOUT consent first, purely to get the command back. A
+        confirmation that hides what it is confirming is theatre. }
+      if not FClient.PlannedCommand(Project, Cmd) then
+        Cmd := '(the gateway did not say)';
+      if FClient.App(Project, App) then Network := App.Network;
+      { The run record carries the backend even when nothing is running, so
+        the consent dialog can name where it WILL run rather than where it
+        did. }
+      FClient.RunState(Project, Run);
+      Backend := Run.Backend;
+    end,
+    procedure
+    begin
+      { Sender is only safe to touch while its window is still open -- the
+        button belongs to that window and dies with it, and the answer can
+        arrive after the user has closed it. FRunWins is emptied by
+        Notification as the window goes, so it is the test. }
+      if FRunWins.ContainsKey(Project) and (Sender is TButton) then
+        TButton(Sender).Enabled := True;
+      FPendingProject := Project;
+      Confirm('Run app',
+        Format('This runs a program PasClaw wrote:' + sLineBreak + sLineBreak +
+               '  %s' + sLineBreak + sLineBreak +
+               'It runs %s.%s' + sLineBreak + sLineBreak + 'Run it?',
+          [Cmd, BackendPhrase(Backend),
+           IfThenStr(Network <> '',
+                     sLineBreak + 'It declares network access to: ' + Network,
+                     '')]),
+        RunConfirmed);
+    end);
 end;
 
 procedure TFormMain.RunConfirmed(Sender: TObject);
 var
-  Run: TRunRow;
-  Err: string;
+  Project, Err: string;
+  Ok: Boolean;
 begin
-  if FPendingProject = '' then Exit;
-  if not FClient.RunApp(FPendingProject, Run, Err) then
-    Say('Could not start it: ' + Err)
-  else
-  begin
-    RefreshRun(FPendingProject);
-    if FRunTimer <> nil then FRunTimer.Enabled := True;
-  end;
+  Project := FPendingProject;
   FPendingProject := '';
+  if Project = '' then Exit;
+  Ok := False;
+  Err := '';
+  Async('Run: ' + Project,
+    procedure
+    var
+      Run: TRunRow;
+    begin
+      { A build step runs before the process starts, so this is the one call
+        here that can legitimately take a while. }
+      Ok := FClient.RunApp(Project, Run, Err);
+    end,
+    procedure
+    begin
+      if not Ok then
+      begin
+        Say('Could not start it: ' + Err);
+        Exit;
+      end;
+      RefreshRun(Project);
+      if FRunTimer <> nil then FRunTimer.Enabled := True;
+    end);
 end;
 
 procedure TFormMain.RunStopClick(Sender: TObject);
@@ -4075,8 +4736,18 @@ begin
   if not (Sender is TButton) then Exit;
   Project := TButton(Sender).TagString;
   if Project = '' then Exit;
-  FClient.StopApp(Project);
-  RefreshRun(Project);
+  TButton(Sender).Enabled := False;
+  Async('Run: ' + Project,
+    procedure
+    begin
+      FClient.StopApp(Project);
+    end,
+    procedure
+    begin
+      if FRunWins.ContainsKey(Project) and (Sender is TButton) then
+        TButton(Sender).Enabled := True;
+      RefreshRun(Project);
+    end);
 end;
 
 { One timer for every Run window: a child's output arrives whenever it
@@ -4210,17 +4881,32 @@ begin
 end;
 
 procedure TFormMain.RestoreConfirmed(Sender: TObject);
+var
+  Project, Body, Err: string;
+  Ok: Boolean;
 begin
-  if (FVersionProject = '') or (FVersionBody = '') then Exit;
-  if not FClient.PutAppEntry(FVersionProject, FVersionBody) then
-  begin
-    Say('Could not restore it: ' + FClient.LastError);
-    Exit;
-  end;
-  if FVersionWin <> nil then
-    FVersionWin.Close;
-  FVersionWin := nil;
-  OpenApp(FVersionProject);
+  Project := FVersionProject;
+  Body := FVersionBody;
+  if (Project = '') or (Body = '') then Exit;
+  Ok := False;
+  Err := '';
+  Async('Versions',
+    procedure
+    begin
+      Ok := FClient.PutAppEntry(Project, Body);
+      if not Ok then Err := FClient.LastError;
+    end,
+    procedure
+    begin
+      if not Ok then
+      begin
+        Say('Could not restore it: ' + Err);
+        Exit;
+      end;
+      if FVersionWin <> nil then FVersionWin.Close;
+      FVersionWin := nil;
+      OpenApp(Project);
+    end);
 end;
 
 { -------------------------------------------------- desktop state -- }
@@ -4243,6 +4929,13 @@ begin
   SaveDesktopStateTo(0);
 end;
 
+{ The one that must not be deferred: called from FormDestroy, with the
+  client's last moments. }
+procedure TFormMain.SaveDesktopStateNow;
+begin
+  SaveDesktopStateTo(0, True);
+end;
+
 (* Write the layout to a NAMED desktop.
 
    Paging desks is save-here-then-switch-there, and "here" stops being
@@ -4254,7 +4947,7 @@ end;
 
    Geometry travels with each window now. Reopening the right windows in
    the wrong places is still losing your desktop, just less obviously. *)
-procedure TFormMain.SaveDesktopStateTo(Desk: Integer);
+function TFormMain.CaptureDesktopState: string;
 var
   Body, Key: string;
   Keys: TArray<string>;
@@ -4274,6 +4967,7 @@ var
   end;
 
 begin
+  Result := '';
   if FClient = nil then Exit;
   Body := '';
   First := True;
@@ -4291,13 +4985,112 @@ begin
   Keys := FRunWins.Keys.ToArray;
   for Key in Keys do
     if FRunWins.TryGetValue(Key, W) and (W <> nil) then Add('run', Key, W);
-  FClient.SetDesktopStateFor(Desk,
-    '{"v":1,"client":"fmx","windows":[' + Body + ']}');
+  Result := '{"v":1,"client":"fmx","windows":[' + Body + ']}';
+end;
+
+(* Send a captured layout.
+
+   Walking the windows has to happen on the UI thread; sending the result
+   does not, and this fires from the event timer every time the layout is
+   dirty -- a blocking PUT on a beat, which is a stutter you feel while
+   dragging a window, exactly when you are least willing to.
+
+   SERIALISED, not merely asynchronous. Consecutive dirty ticks against a
+   slow gateway would otherwise put several writes on the wire at once, and
+   the route has no ordering token -- so an older PUT finishing last would
+   persist window positions the user had already moved away from, and the
+   next launch would restore them. One in flight; a save requested meanwhile
+   replaces the pending body rather than joining a queue, because only the
+   most recent layout is worth writing.
+
+   Teardown is the exception: the client is about to be freed and there is
+   no "later" left, so that one call waits. *)
+procedure TFormMain.SaveDesktopStateTo(Desk: Integer; Sync: Boolean = False);
+var
+  Body: string;
+begin
+  Body := CaptureDesktopState;
+  if (Body = '') or (FClient = nil) then Exit;
+
+  if Sync then
+  begin
+    FClient.SetDesktopStateFor(Desk, Body);
+    Exit;
+  end;
+
+  if FStateBusy then
+  begin
+    { Supersede whatever was waiting: an intermediate arrangement nobody
+      ever saw again is not worth a round trip. }
+    FStatePendingBody := Body;
+    FStatePendingDesk := Desk;
+    FStatePending := True;
+    Exit;
+  end;
+  FStateBusy := True;
+  Async('Desktop state',
+    procedure
+    begin
+      FClient.SetDesktopStateFor(Desk, Body);
+    end,
+    procedure
+    begin
+      FStateBusy := False;
+      if not FStatePending then Exit;
+      FStatePending := False;
+      { Whatever arrived while that one was on the wire, sent now -- and
+        through this same path, so a third change during THIS write
+        supersedes again rather than stacking. }
+      SendDesktopState(FStatePendingDesk, FStatePendingBody);
+    end);
+end;
+
+{ The send half on its own, for the deferred write above. }
+procedure TFormMain.SendDesktopState(Desk: Integer; const Body: string);
+begin
+  if (FClient = nil) or (Body = '') then Exit;
+  if FStateBusy then
+  begin
+    FStatePendingBody := Body;
+    FStatePendingDesk := Desk;
+    FStatePending := True;
+    Exit;
+  end;
+  FStateBusy := True;
+  Async('Desktop state',
+    procedure
+    begin
+      FClient.SetDesktopStateFor(Desk, Body);
+    end,
+    procedure
+    begin
+      FStateBusy := False;
+      if not FStatePending then Exit;
+      FStatePending := False;
+      SendDesktopState(FStatePendingDesk, FStatePendingBody);
+    end);
 end;
 
 procedure TFormMain.RestoreDesktopState;
 var
-  State, Fn, Arg, Geo: string;
+  State: string;
+begin
+  if FClient = nil then Exit;
+  State := '';
+  Async('Desktop state',
+    procedure
+    begin
+      State := FClient.DesktopState;
+    end,
+    procedure
+    begin
+      RestoreDesktopStateFrom(State);
+    end);
+end;
+
+procedure TFormMain.RestoreDesktopStateFrom(const State: string);
+var
+  Fn, Arg, Geo: string;
   P, Q, R, Brace: Integer;
   Opened: TRetroWindow;
 
@@ -4337,10 +5130,7 @@ var
   end;
 
 begin
-  if FClient = nil then Exit;
-  State := FClient.DesktopState;
   if (State = '') or (Pos('"windows"', State) = 0) then Exit;
-
 
   (* Hand-scan rather than parse. The client library has a JSON parser and
      this could use it -- but the shape here is fixed and flat, and one
@@ -4652,53 +5442,86 @@ end;
 procedure TFormMain.ShowFileInBrowser(const Path, Name: string);
 var
   Body, Err: string;
-  Binary, Truncated: Boolean;
+  Binary, Truncated, Ok: Boolean;
 begin
   if FBrowserView = nil then Exit;
 
   (* Clear the page state FIRST, and unconditionally.
 
      A file that has been deleted, renamed or made unreadable since its tab
-     was opened used to return here before any of that happened -- so
-     selecting the tab left the PREVIOUS tab's document on screen, with
-     FCurrentPage still naming it. Asking a follow-up then revised a page
-     the user was not looking at, from a tab that was showing a file. That
-     is precisely the ambiguity tabs exist to remove. *)
+     was opened used to return early -- so selecting the tab left the
+     PREVIOUS tab's document on screen, with FCurrentPage still naming it.
+     Asking a follow-up then revised a page the user was not looking at,
+     from a tab that was showing a file. That is precisely the ambiguity
+     tabs exist to remove.
+
+     Cleared before the read rather than after it, and for the same reason:
+     the read is a round trip now, and a page that stayed revisable for the
+     length of it would be the same bug with a shorter window. *)
   FCurrentPage := '';
   if FBrowserPromote <> nil then FBrowserPromote.Enabled := False;
   if FBrowserWin <> nil then FBrowserWin.Caption := Name;
-
-  if not FClient.ReadFile_(Path, Body, Binary, Truncated) then
-  begin
-    Err := FClient.LastError;
-    Say('Could not read ' + Name + ': ' + Err);
-    { Say what happened IN the tab, rather than leaving the last document
-      standing as if it were this one. The tab keeps its path, so Refresh --
-      or fixing the file -- brings it back. }
-    FBrowserView.LoadFromStrings(
-      ChatDocumentHTML('<p><b>' + HtmlEscape(Name) + '</b> could not be read.' +
-        '</p><p>' + HtmlEscape(Err) + '</p><p>' + HtmlEscape(Path) + '</p>',
-        StyleColor('face', '#c0c0c0'), StyleColor('text', '#000000'),
-        StyleColor('titleA', '#000080'), StyleColor('light', '#e8e8e8')), '');
-    if FBrowserStatus <> nil then
-      FBrowserStatus.Text := Path + '  [unreadable]';
-    SetFileTab(Path, Name);
-    Exit;
-  end;
-
-  FBrowserView.LoadFromStrings(Body, Path);
-  if FBrowserStatus <> nil then
-  begin
-    if Truncated then FBrowserStatus.Text := Path + '  [truncated]'
-    else FBrowserStatus.Text := Path;
-  end;
+  { The tab owns this path from here, whatever the read says. }
   SetFileTab(Path, Name);
+
+  Body := '';
+  Err := '';
+  Ok := False;
+  Binary := False;
+  Truncated := False;
+  Async('Files',
+    procedure
+    begin
+      Ok := FClient.ReadFile_(Path, Body, Binary, Truncated);
+      if not Ok then Err := FClient.LastError;
+    end,
+    procedure
+    begin
+      if not WindowAlive(FBrowserWin) then Exit;
+      if FBrowserView = nil then Exit;
+      { The user may have changed tabs while this was in flight; an answer
+        about a file nobody is looking at must not paint over the one they
+        are. }
+      if not TabHoldsFile(Path) then Exit;
+
+      if not Ok then
+      begin
+        Say('Could not read ' + Name + ': ' + Err);
+        { Say what happened IN the tab, rather than leaving the last document
+          standing as if it were this one. The tab keeps its path, so
+          reselecting it -- or fixing the file -- tries again. }
+        FBrowserView.LoadFromStrings(
+          ChatDocumentHTML('<p><b>' + HtmlEscape(Name) +
+            '</b> could not be read.</p><p>' + HtmlEscape(Err) + '</p><p>' +
+            HtmlEscape(Path) + '</p>',
+            StyleColor('face', '#c0c0c0'), StyleColor('text', '#000000'),
+            StyleColor('titleA', '#000080'), StyleColor('light', '#e8e8e8')), '');
+        if FBrowserStatus <> nil then
+          FBrowserStatus.Text := Path + '  [unreadable]';
+        Exit;
+      end;
+
+      FBrowserView.LoadFromStrings(Body, Path);
+      if FBrowserStatus <> nil then
+      begin
+        if Truncated then FBrowserStatus.Text := Path + '  [truncated]'
+        else FBrowserStatus.Text := Path;
+      end;
+    end);
 end;
 
-{ Mark the active tab as holding this file. Shared by the two exits above,
-  because a tab that failed to read still has to remember WHICH file it
-  failed to read -- otherwise selecting it again shows the blank-tab
-  placeholder and the path is gone for good. }
+{ True when the tab in front is the one that asked for this file. }
+function TFormMain.TabHoldsFile(const Path: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  if (FBrowserTabs = nil) or (FBrowserTabPages = nil) then Exit;
+  I := FBrowserTabs.TabIndex;
+  if (I < 0) or (I >= FBrowserTabPages.Count) then Exit;
+  Result := FBrowserTabPages[I] = 'file:' + Path;
+end;
+
 procedure TFormMain.SetFileTab(const Path, Name: string);
 var
   I: Integer;
@@ -4714,8 +5537,7 @@ end;
 procedure TFormMain.ShowPage(const PageId: string);
 var
   Pages: TPageRows;
-  I: Integer;
-  N: Integer;
+  I, Tab: Integer;
 begin
   FCurrentPage := PageId;
   if FBrowserView <> nil then
@@ -4734,28 +5556,48 @@ begin
     end;
   end;
 
-  { The sources strip, echoed into the status bar. A page that could not be
-    grounded says so on its face; saying it here too means the user sees it
-    without scrolling to the footer. }
-  N := -1;
-  Pages := FClient.Pages;
-  for I := 0 to High(Pages) do
-    if Pages[I].Id = PageId then
+  (* The sources strip, echoed into the status bar. A page that could not be
+     grounded says so on its face; saying it here too means the user sees it
+     without scrolling to the footer.
+
+     This is a whole page listing fetched to read one row out of it, and it
+     ran on every page view. Off-thread now, and the browser is already
+     loading the document while it goes -- which is the right order anyway:
+     the page appears first, its provenance a moment later. *)
+  Tab := -1;
+  if FBrowserTabs <> nil then Tab := FBrowserTabs.TabIndex;
+  SetLength(Pages, 0);
+  Async('Browser',
+    procedure
     begin
-      N := Pages[I].SourceCount;
-      if FBrowserWin <> nil then FBrowserWin.Caption := Pages[I].Title;
-      { Name the tab after the page, trimmed -- a tab strip of full titles
-        is a tab strip you cannot read. }
-      if (FBrowserTabs <> nil) and (FBrowserTabs.TabIndex >= 0) and
-         (FBrowserTabs.TabIndex < FBrowserTabs.TabCount) then
-        FBrowserTabs.Tabs[FBrowserTabs.TabIndex].Text :=
-          Copy(Pages[I].Title, 1, 22);
-      Break;
-    end;
-  if FBrowserStatus = nil then Exit;
-  if N < 0 then FBrowserStatus.Text := ''
-  else if N = 0 then FBrowserStatus.Text := 'UNGROUNDED -- no sources'
-  else FBrowserStatus.Text := Format('GROUNDED -- %d source(s)', [N]);
+      Pages := FClient.Pages;
+    end,
+    procedure
+    var
+      J, N: Integer;
+    begin
+      if not WindowAlive(FBrowserWin) then Exit;
+      { The user may have moved on while the listing was in flight; a strip
+        about a page nobody is looking at is worse than none. }
+      if FCurrentPage <> PageId then Exit;
+      N := -1;
+      for J := 0 to High(Pages) do
+        if Pages[J].Id = PageId then
+        begin
+          N := Pages[J].SourceCount;
+          FBrowserWin.Caption := Pages[J].Title;
+          { Name the tab after the page, trimmed -- a tab strip of full
+            titles is a tab strip you cannot read. }
+          if (FBrowserTabs <> nil) and (Tab >= 0) and
+             (Tab < FBrowserTabs.TabCount) then
+            FBrowserTabs.Tabs[Tab].Text := Copy(Pages[J].Title, 1, 22);
+          Break;
+        end;
+      if FBrowserStatus = nil then Exit;
+      if N < 0 then FBrowserStatus.Text := ''
+      else if N = 0 then FBrowserStatus.Text := 'UNGROUNDED -- no sources'
+      else FBrowserStatus.Text := Format('GROUNDED -- %d source(s)', [N]);
+    end);
 end;
 
 (*
@@ -4773,8 +5615,8 @@ end;
 *)
 procedure TFormMain.RunPageQuery(Kind: TPageKindSel);
 var
-  Query, Revise: string;
-  Deep: Boolean;
+  Query, Revise, Id, Err: string;
+  Deep, Ok: Boolean;
   FromTab: Integer;
 begin
   if FBrowserQuery = nil then Exit;
@@ -4809,47 +5651,27 @@ begin
       FBrowserStatus.Text := 'Searching...';
   end;
 
-  TThread.CreateAnonymousThread(
+  Id := '';
+  Err := '';
+  Ok := False;
+  Async(IfThenStr(Kind = pkeResearch, 'Browser (research)', 'Browser'),
     procedure
-    var
-      Id, Err: string;
-      Ok: Boolean;
-      Marshal: TThreadProcedure;
     begin
-      { Set INSIDE the thread: the context is per thread, so tagging it on
-        the caller would attribute this call to whatever the main thread
-        was doing when the button was pressed. }
-      if Kind = pkeResearch then
-        SetClientContext('Browser (research)')
-      else
-        SetClientContext('Browser');
-      Ok := False;
-      Err := '';
-      try
-        { Revise is the page in the tab this question was asked from. An
-          empty tab means a new page, which is what New is for. }
-        Ok := FClient.CreatePageOfKind(Query, Kind, Revise, Id);
-        if not Ok then Err := FClient.LastError;
-      except
-        on E: Exception do Err := E.Message;
-      end;
-      { Typed local rather than an inline literal: Queue is overloaded on
-        TThreadMethod and TThreadProcedure, and an anonymous method written
-        straight into the call is ambiguous between them (E2250). Naming the
-        type leaves exactly one candidate. }
-      Marshal :=
-        procedure
-        begin
-          CloseProgress;
-          if FBrowserSearch <> nil then FBrowserSearch.Enabled := True;
-          if FBrowserDeep <> nil then FBrowserDeep.Enabled := True;
-          if Ok then
-            ShowPageInTab(Id, FromTab)
-          else if FBrowserStatus <> nil then
-            FBrowserStatus.Text := 'Could not produce a page: ' + Err;
-        end;
-      TThread.Queue(nil, Marshal);
-    end).Start;
+      { Revise is the page in the tab this question was asked from. An empty
+        tab means a new page, which is what New is for. }
+      Ok := FClient.CreatePageOfKind(Query, Kind, Revise, Id);
+      if not Ok then Err := FClient.LastError;
+    end,
+    procedure
+    begin
+      CloseProgress;
+      if FBrowserSearch <> nil then FBrowserSearch.Enabled := True;
+      if FBrowserDeep <> nil then FBrowserDeep.Enabled := True;
+      if Ok then
+        ShowPageInTab(Id, FromTab)
+      else if FBrowserStatus <> nil then
+        FBrowserStatus.Text := 'Could not produce a page: ' + Err;
+    end);
 end;
 
 procedure TFormMain.BrowserSearchClick(Sender: TObject);
@@ -4883,6 +5705,8 @@ end;
 procedure TFormMain.StartResearch(const Query, RevisePageId: string);
 var
   Log: TMemo;
+  Id, Err: string;
+  Ok: Boolean;
 begin
   FResearchKey := ResearchChatKey;
   OpenChat(FResearchKey);
@@ -4905,43 +5729,37 @@ begin
   FResearchRunning := True;
   FProgressLine := 'Planning...';
 
-  TThread.CreateAnonymousThread(
+  Id := '';
+  Err := '';
+  Ok := False;
+  { Through the shared helper rather than a hand-rolled thread. Research is
+    the LONGEST call the desktop makes -- minutes -- so it is the one that
+    most needs to be counted at teardown: closing the window mid-turn used
+    to free the client out from under it. }
+  Async('Research',
     procedure
-    var
-      Id, Err: string;
-      Ok: Boolean;
-      Done_: TThreadProcedure;
     begin
-      SetClientContext('Research');
-      Ok := False;
-      Err := '';
-      try
-        Ok := FClient.CreatePageOfKind(Query, pkeResearch, RevisePageId, Id);
-        if not Ok then Err := FClient.LastError;
-      except
-        on E: Exception do Err := E.Message;
-      end;
-      Done_ :=
-        procedure
-        begin
-          FResearchRunning := False;
-          if Ok then
-          begin
-            AppendTurn(FResearchKey, 'assistant',
-              'The report is ready: **' + Query + '**' + sLineBreak +
-              sLineBreak + 'It is open in the Browser. Ask another ' +
-              'question here and it revises that report.');
-            FResearchPage := Id;
-            OpenBrowser(Id);
-          end
-          else
-            AppendTurn(FResearchKey, 'toolerr',
-              'the research turn failed: ' + Err);
-          RenderTranscript(FResearchKey);
-          ShowStreaming(FResearchKey, False);
-        end;
-      TThread.Queue(nil, Done_);
-    end).Start;
+      Ok := FClient.CreatePageOfKind(Query, pkeResearch, RevisePageId, Id);
+      if not Ok then Err := FClient.LastError;
+    end,
+    procedure
+    begin
+      FResearchRunning := False;
+      if Ok then
+      begin
+        AppendTurn(FResearchKey, 'assistant',
+          'The report is ready: **' + Query + '**' + sLineBreak +
+          sLineBreak + 'It is open in the Browser. Ask another ' +
+          'question here and it revises that report.');
+        FResearchPage := Id;
+        OpenBrowser(Id);
+      end
+      else
+        AppendTurn(FResearchKey, 'toolerr',
+          'the research turn failed: ' + Err);
+      RenderTranscript(FResearchKey);
+      ShowStreaming(FResearchKey, False);
+    end);
 end;
 
 (* "Make interactive" -- the page becomes an app you own.
@@ -4951,20 +5769,40 @@ end;
    Library; the app is the part that changes. *)
 procedure TFormMain.BrowserPromoteClick(Sender: TObject);
 var
-  Project: string;
+  Project, PageId, Err: string;
+  Ok: Boolean;
 begin
   if FCurrentPage = '' then Exit;
-  if not FClient.PromotePage(FCurrentPage, Project) then
-  begin
-    if FBrowserStatus <> nil then
-      FBrowserStatus.Text := 'Could not promote it: ' + FClient.LastError;
-    Exit;
-  end;
-  RefreshProjects;
-  OpenApp(Project);
-  if FBrowserStatus <> nil then
-    FBrowserStatus.Text := 'Now a project: ' + Project +
-                           ' -- ask PasClaw to change it';
+  PageId := FCurrentPage;
+  Project := '';
+  Err := '';
+  Ok := False;
+  if FBrowserPromote <> nil then FBrowserPromote.Enabled := False;
+  if FBrowserStatus <> nil then FBrowserStatus.Text := 'Making it a project...';
+  { Copying a page into a new project writes files and seeds a manifest --
+    server-side work, not a lookup. }
+  Async('Browser',
+    procedure
+    begin
+      Ok := FClient.PromotePage(PageId, Project);
+      if not Ok then Err := FClient.LastError;
+    end,
+    procedure
+    begin
+      if not WindowAlive(FBrowserWin) then Exit;
+      if FBrowserPromote <> nil then FBrowserPromote.Enabled := True;
+      if not Ok then
+      begin
+        if FBrowserStatus <> nil then
+          FBrowserStatus.Text := 'Could not promote it: ' + Err;
+        Exit;
+      end;
+      RefreshProjects;
+      OpenApp(Project);
+      if FBrowserStatus <> nil then
+        FBrowserStatus.Text := 'Now a project: ' + Project +
+                               ' -- ask PasClaw to change it';
+    end);
 end;
 
 procedure TFormMain.ShowProgress(const Caption, Text_: string);
@@ -5074,17 +5912,53 @@ end;
 
 procedure TFormMain.FilesShow(const Path: string);
 var
+  Listing: TDirListing;
+  Ok: Boolean;
+  Err: string;
+  Gen: Integer;
+begin
+  if FFilesList = nil then Exit;
+  Listing := FFilesDir;
+  Listing.Path := Path;
+  Ok := False;
+  Err := '';
+  (* A directory on a remote gateway -- or a big one anywhere -- is not
+     instant, and typing a path used to lock the window until it answered.
+
+     Generation-stamped, because double-clicking down a tree starts several
+     of these and they do not have to finish in order. An older listing
+     applied last would replace the newer one and walk the user back to a
+     directory they had already left -- so each request carries the number
+     it was issued with, and only the newest is allowed to paint. *)
+  Inc(FFilesGen);
+  Gen := FFilesGen;
+  Async('Files',
+    procedure
+    begin
+      Ok := FClient.ListDir(Path, Listing);
+      if not Ok then Err := FClient.LastError;
+    end,
+    procedure
+    begin
+      if not WindowAlive(FFilesWin) then Exit;
+      if Gen <> FFilesGen then Exit;      { overtaken by a later navigation }
+      if not Ok then
+      begin
+        Say('Could not read that directory: ' + Err);
+        Exit;
+      end;
+      FFilesDir := Listing;
+      PaintFiles;
+    end);
+end;
+
+procedure TFormMain.PaintFiles;
+var
   I: Integer;
   Row: TFileRow;
   Line: string;
 begin
-  SetClientContext('Files');
   if FFilesList = nil then Exit;
-  if not FClient.ListDir(Path, FFilesDir) then
-  begin
-    Say('Could not read that directory: ' + FClient.LastError);
-    Exit;
-  end;
   if FFilesPath <> nil then FFilesPath.Text := FFilesDir.Path;
   FFilesList.Items.Clear;
   if Length(FFilesDir.Rows) = 0 then
@@ -5195,24 +6069,28 @@ end;
      anything else-> text, as before. *)
 procedure TFormMain.OpenFileView(const Path, Name: string);
 var
-  W: TRetroWindow;
-  M: TMemo;
-  Body, Ext: string;
-  Binary, Truncated: Boolean;
+  Body, Ext, Err: string;
+  Binary, Truncated, Ok: Boolean;
+  IsDoc: Boolean;
 begin
   Ext := LowerCase(ExtractFileExt(Name));
+
+  (* A NEW tab, not the one you were reading.
+
+     Opening a file used to load it over whatever the Browser was already
+     showing -- so looking up one file cost you the page or file in front of
+     you, with no way back. Tabs exist precisely so two documents can be open
+     at once, and a file is a document like any other.
+
+     The exception is a browser that was not open a moment ago: it starts
+     with one empty tab, and adding a second so the first can stay blank
+     would be pedantry. Reuse it when nothing is in it.
+
+     No read here: ShowFileInBrowser does it, off-thread, and is also what a
+     tab calls when it is selected again. Reading in both places would mean
+     two round trips for one double-click. *)
   if (Ext = '.html') or (Ext = '.htm') then
   begin
-    (* A NEW tab, not the one you were reading.
-
-       Opening a file used to load it over whatever the Browser was already
-       showing -- so looking up one file cost you the page or file in front
-       of you, with no way back. Tabs exist precisely so two documents can be
-       open at once, and a file is a document like any other.
-
-       The exception is a browser that was not open a moment ago: it starts
-       with one empty tab, and adding a second so the first can stay blank
-       would be pedantry. Reuse it when nothing is in it. *)
     OpenBrowser('');
     if (FBrowserTabs <> nil) and (FBrowserTabPages <> nil) and
        not TabIsEmpty(FBrowserTabs.TabIndex) then
@@ -5221,32 +6099,48 @@ begin
     Exit;
   end;
 
-  if not FClient.ReadFile_(Path, Body, Binary, Truncated) then
-  begin
-    W := TrackWindow(FDesktop.CreateWindow(Name, 560, 420));
-    M := TMemo.Create(W);
-    M.Parent := W.Client;
-    M.Align := TAlignLayout.Client;
-    M.ReadOnly := True;
-    M.Text := 'Could not read it: ' + FClient.LastError;
-    Exit;
-  end;
+  IsDoc := False;
+  Body := '';
+  Err := '';
+  Ok := False;
+  Binary := False;
+  Truncated := False;
 
-  if Binary then
-  begin
-    OpenHex(Path);
-    Exit;
-  end;
+  (* Everything else, read off this thread. Path is a path on the GATEWAY's
+     filesystem, so this is a network round trip -- which is why
+     double-clicking a large file used to stop the desktop dead. *)
+  Async('Files',
+    procedure
+    begin
+      Ok := FClient.ReadFile_(Path, Body, Binary, Truncated);
+      if not Ok then Err := FClient.LastError;
+    end,
+    procedure
+    var
+      W: TRetroWindow;
+      M: TMemo;
+    begin
 
-  W := TrackWindow(FDesktop.CreateWindow(Name, 560, 420));
-  M := TMemo.Create(W);
-  M.Parent := W.Client;
-  M.Align := TAlignLayout.Client;
-  M.ReadOnly := True;
-  if Truncated then
-    M.Text := Body + sLineBreak + sLineBreak + '[truncated]'
-  else
-    M.Text := Body;
+      { Binary reads back as binary rather than mojibake, and gets the pager
+        instead of a text window. }
+      if Ok and Binary then
+      begin
+        OpenHex(Path);
+        Exit;
+      end;
+
+      W := TrackWindow(FDesktop.CreateWindow(Name, 560, 420));
+      M := TMemo.Create(W);
+      M.Parent := W.Client;
+      M.Align := TAlignLayout.Client;
+      M.ReadOnly := True;
+      if not Ok then
+        M.Text := 'Could not read it: ' + Err
+      else if Truncated then
+        M.Text := Body + sLineBreak + sLineBreak + '[truncated]'
+      else
+        M.Text := Body;
+    end);
 end;
 
 (* The hex view.
@@ -5312,13 +6206,49 @@ var
   Hex, Asc, Line: string;
   Lines: TStringList;
   B: Byte;
+  Ok: Boolean;
+  Err: string;
+  Offset: Int64;
 begin
   if (FHexMemo = nil) or (FClient = nil) then Exit;
-  if not FClient.PeekFile(FHexPath, FHexOffset, Window_, Data, Total) then
-  begin
-    FHexMemo.Text := 'Could not read it: ' + FClient.LastError;
-    Exit;
-  end;
+  Offset := FHexOffset;
+  Ok := False;
+  Err := '';
+  SetLength(Data, 0);
+  Total := 0;
+  { Paging a 500 MB file is a round trip per screenful; on the UI thread that
+    was a stall per press of Next. }
+  Async('Hex',
+    procedure
+    begin
+      Ok := FClient.PeekFile(FHexPath, Offset, Window_, Data, Total);
+      if not Ok then Err := FClient.LastError;
+    end,
+    procedure
+    begin
+      if not WindowAlive(FHexWin) then Exit;
+      if not Ok then
+      begin
+        FHexMemo.Text := 'Could not read it: ' + Err;
+        Exit;
+      end;
+      { The user may have paged on again while this was in flight; the
+        answer to an older question must not overwrite the newer view. }
+      if Offset <> FHexOffset then Exit;
+      HexPaint(Data, Total, Offset);
+    end);
+end;
+
+procedure TFormMain.HexPaint(const Data: TBytes; Total, Offset: Int64);
+const
+  Row = 16;
+var
+  I, J, N: Integer;
+  Hex, Asc, Line: string;
+  Lines: TStringList;
+  B: Byte;
+begin
+  if FHexMemo = nil then Exit;
   FHexTotal := Total;
   N := Length(Data);
   Lines := TStringList.Create;
@@ -5345,7 +6275,7 @@ begin
           Hex := Hex + '   ';
         if J = 7 then Hex := Hex + ' ';
       end;
-      Line := IntToHex(FHexOffset + I, 8) + '  ' + Hex + ' |' + Asc + '|';
+      Line := IntToHex(Offset + I, 8) + '  ' + Hex + ' |' + Asc + '|';
       Lines.Add(Line);
       Inc(I, Row);
     end;
@@ -5356,7 +6286,7 @@ begin
   end;
   if FHexPos <> nil then
     FHexPos.Text := Format('%d - %d of %d bytes',
-      [FHexOffset, FHexOffset + N, FHexTotal]);
+      [Offset, Offset + N, FHexTotal]);
 end;
 
 procedure TFormMain.HexPrevClick(Sender: TObject);
