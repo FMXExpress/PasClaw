@@ -277,6 +277,31 @@ begin
     Check('a listed writer is marked SerialOnly regardless of the caller',
       Reg.Find('memory_search', T) and T.SerialOnly);
 
+    { RegisterDeferred is the MCP path (RegisterToolViaDispatch uses it),
+      and RegisterHidden the alias path. Both funnel through RegisterImpl,
+      but "funnels through" is an implementation claim -- assert it, since
+      MCP/HTTP tools are exactly the ones that would pay for a spurious
+      serial batch. }
+    T.Name        := 'mcp__fake__query';
+    T.Description := 'stub';
+    T.Schema      := '{"type":"object","properties":{}}';
+    T.Handler     := StubHandler;
+    T.HandlerObj  := nil;
+    T.IsCore      := False;
+    T.Category    := tcReadOnly;
+    T.IsDeferred  := False;
+    T.Hidden      := False;
+    T.SerialOnly  := True;          { <- stack garbage stand-in }
+    Reg.RegisterDeferred(T, True);
+    Check('RegisterDeferred (the MCP path) normalises too',
+      Reg.Find('mcp__fake__query', T) and (not T.SerialOnly));
+
+    T.Name        := 'fake_alias';
+    T.SerialOnly  := True;
+    Reg.RegisterHidden(T);
+    Check('RegisterHidden normalises too',
+      Reg.Find('fake_alias', T) and (not T.SerialOnly));
+
     { the decision that matters: the stack-built reader still batches }
     SetLength(Calls, 2);
     Calls[0].Func.Name := 'fake_reader'; Calls[0].Func.Arguments := '{}';
