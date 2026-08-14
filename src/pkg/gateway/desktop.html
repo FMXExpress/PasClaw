@@ -1059,6 +1059,30 @@ iframe.app { width: 100%; height: 100%; border: 0; background: var(--window); di
 /* Sources strip echo in the Browser window's status bar. */
 .grounded  { color: var(--text); }
 .ungrounded{ color: #a00; font-weight: bold; }
+
+/* The desktop ask field: the background is the first place to type. Sits
+   under the windows (z below .win's counter) and out of the icons' way. */
+#ask {
+  position: absolute; left: 50%; top: 34%;
+  transform: translate(-50%, -50%);
+  width: min(480px, 70%);
+  z-index: 0;
+}
+#askrow { display: flex; gap: 4px; }
+#askrow input { flex: 1 1 auto; }
+#chips {
+  display: flex; flex-wrap: wrap; gap: 4px;
+  justify-content: center; margin-top: 6px;
+}
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; cursor: pointer;
+  background: var(--face); color: var(--text);
+  border: 1px solid var(--shadow); border-radius: 999px;
+  font-size: 11px; user-select: none;
+}
+.chip:hover { background: var(--light); }
+.chip svg { width: 12px; height: 12px; }
 </style>
 </head>
 <body>
@@ -1078,6 +1102,15 @@ iframe.app { width: 100%; height: 100%; border: 0; background: var(--window); di
   </div>
   <div id="stage">
     <div id="icons"></div>
+    <div id="ask">
+      <div id="askrow">
+        <input id="askfld" type="text"
+               placeholder="Ask anything -- the answer opens as a page">
+        <button id="askgo" class="btn">Ask</button>
+        <button id="askdeep" class="btn" title="Plan, read several sources, and write a longer sourced report">Research</button>
+      </div>
+      <div id="chips"></div>
+    </div>
   </div>
 </div>
 
@@ -1739,6 +1772,7 @@ async function loadProjects() {
   const j = await api("/v1/projects");
   S.projects = j.projects || [];
   paintIcons();
+  paintChips();
   paintTree();
 }
 
@@ -1766,6 +1800,71 @@ function paintIcons() {
       else openChat(p.name);
     });
     host.appendChild(n);
+  });
+}
+
+/* ==========================================================================
+   The desktop ask field + chips
+
+   The background is the first place to type: a question goes to the
+   Browser (which opens already answering it), and the chips underneath
+   are the suite -- Notes, Calendar, Brain and the rest -- plus the
+   Library. The suite always existed, but only `pasclaw project seed`
+   installed it, so a desktop-only user had no way to even learn it was
+   there; when it isn't installed, the one chip offers to install it.
+   ========================================================================== */
+
+function askFromDesktop(kind) {
+  const fld = $("#askfld");
+  const query = fld.value.trim();
+  if (!query) return;
+  fld.value = "";
+  const existing = WINS.get("browser");
+  if (existing && existing.__ask) {
+    restoreWindow(existing); focusWindow(existing);
+    existing.__ask(query, kind);
+  }
+  else openBrowser(undefined, query, kind);
+}
+
+function paintChips() {
+  const host = $("#chips");
+  if (!host) return;
+  host.textContent = "";
+
+  function chip(label, iconName, fn, title) {
+    const c = el("span", "chip");
+    const g = el("span"); g.innerHTML = icon(iconName);
+    c.appendChild(g);
+    c.appendChild(el("span", null, label));
+    if (title) c.title = title;
+    c.addEventListener("click", fn);
+    host.appendChild(c);
+    return c;
+  }
+
+  const suite = S.projects.filter(p => p.suite && p.has_app);
+  suite.forEach(p =>
+    chip(p.title || p.name, "app", () => openApp(p.name)));
+  if (!suite.length)
+    chip("Install Notes, Calendar & the suite...", "disk", async ev => {
+      try {
+        const j = await api("/v1/suite", { method: "POST" });
+        await loadProjects();
+        showMessage({ title: "Suite installed", kind: "info",
+          text: `${j.created} app(s) added. They are ordinary projects -- ` +
+                `open one and ask PasClaw to change it.` });
+      } catch (e) { alert(e.message); }
+    }, "Notes, Calendar, Mail and the rest -- one click, once");
+  chip("Library", "brain", openLibrary,
+       "Pages and sessions this workspace has accumulated");
+}
+
+function initAsk() {
+  $("#askgo").addEventListener("click", () => askFromDesktop("search"));
+  $("#askdeep").addEventListener("click", () => askFromDesktop("research"));
+  $("#askfld").addEventListener("keydown", e => {
+    if (e.key === "Enter") askFromDesktop("search");
   });
 }
 
@@ -2226,6 +2325,17 @@ function buildChatUI(project, host) {
           if (r.ok) body = await r.text();
         } catch {}
         addArtifact(app.kind, app.name || project, () => openApp(project), body);
+        /* The lovable loop: chat on the left, the app RUNNING on the right,
+           updated after each turn. A turn that touched the app reloads the
+           open app window in place -- or opens it, if this is the dock's
+           project pane, where seeing the result is the whole arrangement.
+           A turn that didn't touch it (a question, a task) moves nothing. */
+        if (touchedApp && app.servable) {
+          const aw = WINS.get("app:" + project);
+          if (aw && aw.__reloadApp) aw.__reloadApp();
+          else if (DOCK_CHATS.get(project) &&
+                   S.dockProject === project) openApp(project);
+        }
       } else if (touchedApp) {
         addMsg("desktop", "The app was written but has no runnable entry yet.");
       }
@@ -2644,10 +2754,14 @@ async function openApp(project) {
 
   const bar = el("div", "statusbar thin");
   const reload = el("button", "btn", "Reload");
-  reload.addEventListener("click", () => {
+  const doReload = () => {
     frame.src = appURL(project) + "?t=" + Date.now();
     if (frame.contentWindow) FRAME_PROJECT.set(frame.contentWindow, project);
-  });
+  };
+  reload.addEventListener("click", doReload);
+  /* Let a finished chat turn refresh this window in place -- the live
+     preview half of the chat-left, app-right loop. */
+  w.__reloadApp = doReload;
   bar.appendChild(reload);
   const chat = el("button", "btn", "Chat");
   chat.addEventListener("click", () => openChat(project));
@@ -2832,7 +2946,7 @@ async function openJobLog(project, task, job) {
    Browser -- search that returns a page
    ========================================================================== */
 
-function openBrowser(pageId) {
+function openBrowser(pageId, initialQuery, initialKind) {
   const w = createWindow({ key: "browser", title: "Browser", width: 620, height: 460,
                            icon: "globe", pad: false,
                            restore: { fn: "browser", arg: pageId || "" } });
@@ -2922,6 +3036,10 @@ function openBrowser(pageId) {
   go.addEventListener("click", () => search("search"));
   deep.addEventListener("click", () => search("research"));
   q.addEventListener("keydown", e => { if (e.key === "Enter") search("search"); });
+  /* The desktop ask field routes questions here when this window is already
+     open -- createWindow returns the live singleton without re-running this
+     builder, so the question has to arrive through the window itself. */
+  w.__ask = (query, kind) => { q.value = query; search(kind || "search"); };
 
   mk.addEventListener("click", async () => {
     if (!current) return;
@@ -2944,6 +3062,12 @@ function openBrowser(pageId) {
   });
 
   if (pageId) api("/v1/pages/" + pageId).then(show).catch(() => {});
+  else if (initialQuery) {
+    /* Asked from the desktop background: the Browser opens already working
+       on the question rather than presenting an empty field to retype into. */
+    q.value = initialQuery;
+    search(initialKind || "search");
+  }
   else setTimeout(() => q.focus(), 0);
   return w;
 }
@@ -3155,6 +3279,7 @@ async function boot() {
   try { applyStyle(localStorage.getItem(STYLE_KEY) || "Win95"); } catch { applyStyle("Win95"); }
   buildMenu();
   initDock();
+  initAsk();
   try {
     /* Ask the gateway how it is arranged before rendering anything that
        depends on it. A gateway too old to answer just leaves the defaults. */

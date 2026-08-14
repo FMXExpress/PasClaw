@@ -113,6 +113,7 @@ uses
   PasClaw.Apps.Runner,
   PasClaw.Desktop.Events,
   PasClaw.Config,           { cron entries + provider names for the read surface }
+  PasClaw.Suite,            { SeedSuite -- POST /v1/suite }
   PasClaw.Suite.Mail,       { the mail-sync action }
   PasClaw.Suite.Notes,      { the notes surface + note-save/note-delete }
   PasClaw.Memory.Facts,     { the memory surface -- what Brain shows }
@@ -514,6 +515,7 @@ begin
   Result := (Doc = '/v1/desktop/config')
          or (Doc = '/v1/desktop/state')
          or (Doc = '/v1/desktop/desktops')
+         or (Doc = '/v1/suite')
          or HasPrefix(Doc, '/v1/workspaces')
          or HasPrefix(Doc, '/v1/projects')
          or HasPrefix(Doc, '/v1/apps')
@@ -2596,8 +2598,8 @@ end;
 function DesktopRoute(const Method, Doc, Query, Body: string;
   out Resp: TDesktopResponse): Boolean;
 var
-  M, StateBody, StateErr: string;
-  CurDesk, CntDesk, NewDesk: Integer;
+  M, StateBody, StateErr, SeedErr: string;
+  CurDesk, CntDesk, NewDesk, N: Integer;
   Root: TJsonObject;
 begin
   Reply(Resp, 404, 'application/json; charset=utf-8', '{"error":"not found"}');
@@ -2705,6 +2707,31 @@ begin
       Root.PutStr ('apps_origin',   GAppsOrigin);
       Root.PutBool('apps_isolated', GAppsOrigin <> '');
       Root.PutStr ('host',          LocalHostName);
+      ReplyJSON(Resp, 200, Root.ToJSON);
+    finally
+      Root.Free;
+    end;
+    Exit(True);
+  end;
+
+  (* POST /v1/suite -- install the system suite (Notes, Calendar, Mail and
+     the rest) into the active workspace. The suite always existed, but
+     only behind `pasclaw project seed` -- a CLI command a desktop user
+     has no reason to know about, which made the whole suite invisible
+     from both desktop clients. Idempotent and additive, like the seeder
+     it fronts: existing projects are never touched. *)
+  if Doc = '/v1/suite' then
+  begin
+    if M <> 'POST' then
+    begin
+      ReplyErr(Resp, 405, 'method not allowed');
+      Exit(True);
+    end;
+    N := SeedSuite(SeedErr);
+    Root := TJsonObject.Create;
+    try
+      Root.PutInt('created', N);
+      if SeedErr <> '' then Root.PutStr('note', SeedErr);
       ReplyJSON(Resp, 200, Root.ToJSON);
     finally
       Root.Free;

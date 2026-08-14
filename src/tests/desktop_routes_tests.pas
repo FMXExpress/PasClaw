@@ -944,6 +944,20 @@ begin
   ExpectStatus('GET', '/apps/spam-filter/index.html', '', 404,
                'nor serve their app files');
 
+  { The desktop's own way into the suite. This runs in workspace2, which
+    was never seeded -- so the first POST installs, and the SECOND is the
+    assertion that matters: installing from the desktop can never
+    duplicate, however many times the chip is clicked. }
+  if Req('POST', '/v1/suite', '', R) then
+    ExpectTrue(R.Status = 200, 'POST /v1/suite answers')
+  else
+    Fail_('POST /v1/suite did not route');
+  if Req('POST', '/v1/suite', '', R) then
+    ExpectTrue(Pos('"created":0', StringReplace(R.Body, ' ', '',
+               [rfReplaceAll])) > 0,
+               'seeding an already-seeded workspace creates nothing');
+  ExpectStatus('GET', '/v1/suite', '', 405, 'the suite route is POST-only');
+
   (* The off-origin scan behind the "app may render unstyled" warning.
 
      The app CSP blocks every off-origin load SILENTLY -- an app styled
