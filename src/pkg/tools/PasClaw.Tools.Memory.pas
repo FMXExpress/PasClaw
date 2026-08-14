@@ -297,7 +297,17 @@ begin
     '},"required":["query"]}';
   T.Handler     := Tool_MemorySearch;
   T.IsCore      := True;
-  T.Category    := tcReadOnly;  { SQLite SELECT only }
+  { tcReadOnly from the CALLER's point of view -- it answers a question and
+    changes nothing the user owns -- which is what the plan-mode gate and
+    the read-only MCP server care about. }
+  T.Category    := tcReadOnly;
+  { ...but not from the DISK's. Tool_MemorySearch calls IMemoryIndex.SyncDir
+    before searching, and SyncDir reindexes changed files and drops rows for
+    deleted ones -- writes and commits against .index.db. Two searches in
+    one parallel batch (two different queries is an ordinary thing to ask)
+    would be two writers on that file, and the loser gets a locking error
+    instead of results. }
+  T.SerialOnly  := True;
   R.Register(T);
 end;
 

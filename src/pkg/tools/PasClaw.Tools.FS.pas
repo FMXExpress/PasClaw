@@ -1899,8 +1899,12 @@ begin
     registration path every surface -- CLI, TUI, serve, gateway, heartbeat,
     component -- already calls, and subagent child registries inherit it via
     the '*' expansion. tcReadOnly on purpose: updating the checklist is
-    bookkeeping, so it can run in a parallel batch and never counts as
-    "progress" for the ledger's nothing-written-yet nudge. }
+    bookkeeping, so it never counts as "progress" for the ledger's
+    nothing-written-yet nudge. It does REWRITE the checklist file though,
+    so it is SerialOnly -- the original comment claimed the parallel batch
+    as a benefit, but two concurrent whole-file replacements of one path
+    is the same hazard plan_write and memory_search have. The ledger
+    accounting it actually wanted rides on Category, which is unchanged. }
   T := Default(TTool);
   T.Name        := 'todo_write';
   T.Description := 'Maintain your working checklist for the current task. Pass ' +
@@ -1914,6 +1918,7 @@ begin
   T.Handler     := Tool_TodoWrite;
   T.IsCore      := True;
   T.Category    := tcReadOnly;
+  T.SerialOnly  := True;
   R.Register(T);
 
   { apply_patch (new) -- multi-file, context-anchored patches in one call. }

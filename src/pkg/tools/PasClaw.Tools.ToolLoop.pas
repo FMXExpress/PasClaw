@@ -280,6 +280,20 @@ type
 var
   GBackgroundDrainHook: TBackgroundDrainFn = nil;
 
+type
+  { A batch is indices into the round's ToolCalls; the array is the
+    round's execution plan. In the interface because the partitioner
+    below is exported for tests. }
+  TToolBatch      = array of Integer;
+  TToolBatchArray = array of TToolBatch;
+
+{ Partition a round's calls into batches that may run together. Public for
+  tests: which tools share a batch is a correctness property (a writer in a
+  shared batch is a data race), and asserting the flags that feed the
+  decision is weaker than asserting the decision. }
+function PartitionToolBatches(const Calls: array of TToolCall;
+                              Reg: TToolRegistry): TToolBatchArray;
+
 implementation
 
 uses
@@ -326,8 +340,6 @@ type
     constructor Create(const ACfg: TToolLoopConfig; ASlot: PToolCallDispatch);
   end;
 
-  TToolBatch      = array of Integer;        { indices into Resp.ToolCalls }
-  TToolBatchArray = array of TToolBatch;
 
 { Provider error classes worth retrying on a fallback: network/TLS
   errors (StatusCode <= 0 -- provider couldn't talk to the upstream),
@@ -771,8 +783,14 @@ begin
   SetLength(Cur, 0);
   for i := 0 to High(Calls) do
   begin
+    { Category alone is not the concurrency answer: several tools are
+      labelled tcReadOnly so they pass the plan-mode gate while still
+      writing shared state (plan_write's PLAN.md, memory_search's
+      SyncDir reindex). SerialOnly is what those declare, and a tool
+      needs BOTH properties to earn a shared batch. }
     IsRO := False;
-    if (Reg <> nil) and Reg.Find(Calls[i].Func.Name, T) and (T.Category = tcReadOnly) then
+    if (Reg <> nil) and Reg.Find(Calls[i].Func.Name, T)
+       and (T.Category = tcReadOnly) and (not T.SerialOnly) then
       IsRO := True;
     if IsRO then
     begin

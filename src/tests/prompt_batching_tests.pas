@@ -37,6 +37,8 @@ uses
   PasClaw.Config,
   PasClaw.Tools.Types,
   PasClaw.Tools.Registry,
+  PasClaw.Providers.Types,   { TToolCall }
+  PasClaw.Tools.ToolLoop,    { PartitionToolBatches -- the decision under test }
   PasClaw.Tools.FS,
   PasClaw.Agent.Prompt;
 
@@ -147,6 +149,73 @@ begin
       Check(SERIAL_TOOLS[i] + ' is NOT tcReadOnly (so it stays serial)',
         T.Category <> tcReadOnly);
     end;
+
+    { The tools the rule advertises must ALSO not be SerialOnly, or they
+      would be named parallel-safe while opting out of batching. }
+    WriteLn('advertised tools are not opted out of batching');
+    for i := 0 to High(PARALLEL_TOOLS) do
+      if Reg.Find(PARALLEL_TOOLS[i], T) then
+        Check(PARALLEL_TOOLS[i] + ' is not SerialOnly', not T.SerialOnly);
+
+    { todo_write writes the checklist file. It stays tcReadOnly so the
+      progress ledger keeps discounting it, and is SerialOnly so two
+      whole-file replacements cannot land at once -- the two meanings
+      Category used to conflate. }
+    WriteLn('writers that pass the plan gate still refuse to share a batch');
+    if Reg.Find('todo_write', T) then
+    begin
+      Check('todo_write is still tcReadOnly (ledger + plan gate)',
+        T.Category = tcReadOnly);
+      Check('todo_write is SerialOnly (it rewrites a file)', T.SerialOnly);
+    end
+    else
+      Check('todo_write is registered', False);
+  finally
+    Reg.Free;
+  end;
+end;
+
+{ The decision itself, not the flags that feed it. A writer sharing a batch
+  with anything else is the actual defect; everything above is indirection
+  toward this. }
+procedure TestWritersDoNotShareABatch;
+var
+  Reg: TToolRegistry;
+  Calls: array of TToolCall;
+  Batches: TToolBatchArray;
+
+  procedure Call_(Idx: Integer; const Name: string);
+  begin
+    Calls[Idx].Id        := 'c' + IntToStr(Idx);
+    Calls[Idx].Kind      := 'function';
+    Calls[Idx].Func.Name := Name;
+    Calls[Idx].Func.Arguments := '{}';
+  end;
+
+begin
+  WriteLn('the batcher keeps writers out of shared batches');
+  Reg := TToolRegistry.Create;
+  try
+    RegisterFSTools(Reg, True);
+
+    { three reads in a row are exactly what rule 7 asks for }
+    SetLength(Calls, 3);
+    Call_(0, 'read_file'); Call_(1, 'list_dir'); Call_(2, 'grep_files');
+    Batches := PartitionToolBatches(Calls, Reg);
+    Check('three independent reads coalesce into ONE batch',
+      (Length(Batches) = 1) and (Length(Batches[0]) = 3));
+
+    { todo_write writes a file: it must interrupt the run, not join it.
+      Before SerialOnly this produced a single batch of three, running the
+      writer concurrently with the reads. }
+    SetLength(Calls, 3);
+    Call_(0, 'read_file'); Call_(1, 'todo_write'); Call_(2, 'read_file');
+    Batches := PartitionToolBatches(Calls, Reg);
+    Check('a tcReadOnly WRITER splits the batch (3 batches, not 1)',
+      Length(Batches) = 3);
+    if Length(Batches) = 3 then
+      Check('the writer is alone in its batch', Length(Batches[1]) = 1);
+
   finally
     Reg.Free;
   end;
@@ -156,6 +225,7 @@ begin
   WriteLn('prompt batching rule');
   TestRuleIsInThePrompt;
   TestPromiseMatchesRegistry;
+  TestWritersDoNotShareABatch;
   WriteLn;
   if Failures = 0 then
     WriteLn('all prompt batching tests passed')

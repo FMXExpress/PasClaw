@@ -69,6 +69,33 @@ type
       tool_search / DeferredNames -- it is permanently invisible to the
       model. Default False. }
     Hidden:      Boolean;
+    (* SerialOnly -- "never share a parallel batch", independent of Category.
+
+       Category was carrying two unrelated meanings at once. ToolLoop reads
+       it as "safe to run concurrently" when it coalesces a round's calls
+       into one parallel batch; the plan-mode gate and the read-only MCP
+       server read it as "does not really mutate, so allow it". Those
+       disagree for any tool that writes but is deliberately labelled
+       tcReadOnly to pass the gate -- PasClaw.Tools.PlanWrite documents
+       exactly that trade, and memory_search inherits it by accident
+       because Tool_MemorySearch calls IMemoryIndex.SyncDir, which
+       reindexes files and deletes rows in .index.db. Two of those in one
+       batch are two writers on one SQLite file (Codex, PR #537).
+
+       Splitting the meanings rather than re-categorising is what keeps
+       both users correct: Category still answers "may it run in plan
+       mode / be exposed read-only", SerialOnly answers "may it run beside
+       something else".
+
+       Polarity is deliberate. TTool records are built on the stack and
+       this codebase does NOT FillChar them (managed strings), so a site
+       that assigns fields one by one leaves a new Boolean holding
+       whatever was on the stack. With SerialOnly, garbage-True costs a
+       batch slot -- a tool runs alone that could have run beside others.
+       The inverse field (ParallelSafe) would have garbage-True mean
+       "batch this writer concurrently", turning uninitialised memory into
+       a data race. The safe failure had to be the default one. *)
+    SerialOnly:  Boolean;
   end;
 
   TToolList = array of TTool;
