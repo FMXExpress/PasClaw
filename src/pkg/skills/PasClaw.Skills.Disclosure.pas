@@ -170,6 +170,15 @@ var
   T: TTool;
 begin
   if Reg = nil then Exit;
+  { Latch built-in long-tail deferral here as well as in the MCP disclosure
+    registration. This runs in EVERY registry-build path and BEFORE the
+    spawn tools install, whereas the MCP path is conditional (if FUseMCP)
+    and lands after them -- which is why the spawn family stayed visible
+    when only the MCP path set it. Idempotent; the registry applies the
+    rule per-registration, so whichever path sets it first wins and the
+    other is a no-op. }
+  if Cfg.BuiltinProgressiveDisclosure then
+    Reg.DeferLongTail := True;
   if not Cfg.SelfImprovingSkills.ProgressiveDisclosure then Exit;
 
   GHomeDir := GetHome;

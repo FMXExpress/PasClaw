@@ -579,6 +579,16 @@ type
        returns "No deferred tools" and the system-prompt section
        emits empty. *)
     MCPProgressiveDisclosure: Boolean;
+    (* BuiltinProgressiveDisclosure -- the same lazy reveal, pointed at the
+       BUILT-IN long tail (the db_, workflow_, spawn and session_ prefixes) rather than
+       MCP tools. Measured on a gateway turn that wrote and compiled a
+       250-line program: tool schemas were 74% of a 33 KB request and the
+       conversation was 4%; deferring these 18 tools removes 13 KB from
+       every request. Costs one extra turn the first time such a tool is
+       used. Default True for the same reason MCP disclosure is -- the
+       gateway/serve profile registers 34 tools and most turns touch a
+       handful. Off leaves every schema in every request. *)
+    BuiltinProgressiveDisclosure: Boolean;
     (* MCPCompactResults -- re-encode rectangular MCP tool results as a
        table before they enter the conversation.
 
@@ -1137,6 +1147,7 @@ begin
   RelayWaitTimeoutMs   := 0;     { 0 = use the Pascal-side RelayDefaultWaitTimeoutMs (5 min). Operators set higher for flaky workers, lower for fast fallback. }
   MCPCompactResults := True;  { on by default: the conversion is refused unless the result is rectangular, all-scalar and genuinely shorter, so the failure mode is "no change" rather than a mangled result. Flip off if a server's rows must reach the model as literal JSON. }
   MCPProgressiveDisclosure := True;  { on by default -- fat catalogs (Replicate MCP ~50 tools, GitHub MCP ~50+) make lazy reveal the right floor. The prompt cost of every MCP schema every turn dominates the bill on turns that touch zero MCP tools; tool_search loads schemas on demand at a one-turn cost per first-use. Operators with tiny catalogs flip off via onboarding (default N) or hand-edit if the +1 turn isn't worth the savings. Mirrors Claude Code's ToolSearch pattern. No-op when no MCP servers are configured. }
+  BuiltinProgressiveDisclosure := True;  { see the field comment -- 13 KB/request on the gateway profile }
   RenderMarkdown       := True;  { on by default for terminal surfaces; cmd/serve flips off }
   SubagentsEnabled     := True;  { on by default -- a built-in general-purpose subagent makes `spawn` available with no config. }
   ToolOutputCap        := DefaultToolOutputCap; { on by default -- an uncapped tool result rides in history for the whole turn and was the top context-growth driver (bench/agentloop: 100 KB read -> >100 KB request bodies). tool_output_get recovers the full text; operators opt out with tool_output_cap: 0. }
@@ -1721,6 +1732,11 @@ begin
       "mcp_progressive_disclosure": true in their config.json. }
     if not MCPProgressiveDisclosure then
       Root.PutBool('mcp_progressive_disclosure', False);
+    { Same emit-only-when-off shape (and the same trap the flag round-trip
+      test exists for): loading an opt-out without writing it back means the
+      next SaveConfig silently re-enables it. }
+    if not BuiltinProgressiveDisclosure then
+      Root.PutBool('builtin_progressive_disclosure', False);
 
     { mcp_compact_results: same shape, same reason. Loading it without
       writing it back meant any command that calls SaveConfig regenerated
@@ -1957,6 +1973,8 @@ begin
                                                 RelayWaitTimeoutMs));
     MCPProgressiveDisclosure := Root.GetBool('mcp_progressive_disclosure',
                                               MCPProgressiveDisclosure);
+    BuiltinProgressiveDisclosure := Root.GetBool('builtin_progressive_disclosure',
+                                                  BuiltinProgressiveDisclosure);
     MCPCompactResults := Root.GetBool('mcp_compact_results',
                                       MCPCompactResults);
     RenderMarkdown      := Root.GetBool('render_markdown',       RenderMarkdown);

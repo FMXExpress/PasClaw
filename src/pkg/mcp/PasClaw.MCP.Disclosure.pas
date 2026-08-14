@@ -131,6 +131,27 @@ function RegisterMCPDisclosureTools(Reg: TToolRegistry; const Cfg: TConfig;
 { "## Deferred Tools" section for the system-prompt assembler. The no-arg form
   reads the primary registry (the main agent); the Reg form is for a subagent's
   own filtered registry. Returns '' when there are no deferred tools. }
+(* Defer the BUILT-IN long tail behind tool_search, the same way MCP tools
+   are deferred.
+
+   Measured on a real gateway turn (writing + compiling a 250-line program):
+   34 tool schemas were 24,751 bytes of a 33,206-byte request -- 74% -- while
+   the actual conversation was 1,351 bytes. The tools deferred here are
+   13,085 of those bytes and are dormant on the overwhelming majority of
+   turns: a turn that edits Pascal does not touch db_query, and one that
+   answers a question does not spawn a subagent.
+
+   What stays visible is deliberately everything a turn is LIKELY to reach
+   for -- file ops, shell, execute_code, memory/kb search, web_fetch,
+   todo_write -- plus tool_output_get, which must stay callable because the
+   truncation notice hands the model a handle, and making it search for the
+   retrieval tool first would be a worse trade than the bytes saved.
+
+   Cost: first use of a deferred tool costs one extra turn (tool_search,
+   then call). Benefit: every other turn is ~39% smaller. Same bet MCP
+   disclosure already makes, for the same shape of fat. *)
+function DeferBuiltinTools(Reg: TToolRegistry): Integer;
+
 function BuildDeferredToolsSection: string; overload;
 function BuildDeferredToolsSection(Reg: TToolRegistry): string; overload;
 
@@ -472,6 +493,39 @@ const
     'callable on the next tool-loop iteration -- you do NOT need to call ' +
     'tool_search again to invoke them.';
 
+function DeferBuiltinTools(Reg: TToolRegistry): Integer;
+const
+  { Prefix-matched so a NEW db_/workflow_/spawn tool inherits the decision
+    instead of silently re-fattening every request. }
+  DEFER_PREFIXES: array[0..3] of string =
+    ('db_', 'workflow_', 'spawn', 'session_');
+var
+  Names: TStringArray;
+  T: TTool;
+  i, k: Integer;
+begin
+  Result := 0;
+  if Reg = nil then Exit;
+  Names := Reg.Names;
+  for i := 0 to High(Names) do
+    for k := 0 to High(DEFER_PREFIXES) do
+      if StartsWith(Names[i], DEFER_PREFIXES[k]) then
+      begin
+        if Reg.Find(Names[i], T) then
+        begin
+          { RegisterDeferred is authoritative over T.IsDeferred and leaves
+            dispatch alone, so a model that calls a deferred tool without
+            searching first still gets through -- fail open, as with MCP. }
+          Reg.RegisterDeferred(T, True);
+          Inc(Result);
+        end;
+        Break;
+      end;
+  if Result > 0 then
+    LogInfo('disclosure: deferred %d built-in tool(s) behind tool_search',
+            [Result]);
+end;
+
 function BuildDeferredToolsSection(Reg: TToolRegistry): string;
 var
   Names: TStringArray;
@@ -545,7 +599,11 @@ var
 begin
   Result := nil;
   if Reg = nil then Exit;
-  if not Cfg.MCPProgressiveDisclosure then Exit;
+  { EITHER flag needs tool_search: it is the only way to load a deferred
+    schema, so gating it on the MCP flag alone would strand deferred
+    BUILT-INS behind a tool that was never registered. }
+  if (not Cfg.MCPProgressiveDisclosure)
+     and (not Cfg.BuiltinProgressiveDisclosure) then Exit;
 
   Result := TMCPDisclosure.Create(Reg, Cfg);
   if Primary then
@@ -567,6 +625,19 @@ begin
   { Plain Register defensively zeroes IsDeferred -- the discovery tool
     itself is always visible. }
   Reg.Register(T);
+
+  { Defer the built-in long tail once tool_search exists to reveal it.
+    PRIMARY only: a subagent's registry is already narrowed by its own
+    tool filter, and its runs are short enough that a reveal turn is a
+    worse trade there than the bytes. }
+  if Primary and Cfg.BuiltinProgressiveDisclosure then
+  begin
+    { Latch it on the registry so tools registered LATER (spawn*, which
+      comes after MCP setup) are deferred too, then sweep what is already
+      in place. }
+    Reg.DeferLongTail := True;
+    DeferBuiltinTools(Reg);
+  end;
 
   if Primary then
     LogInfo('mcp: progressive-disclosure tool registered (tool_search)');
