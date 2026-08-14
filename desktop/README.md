@@ -216,7 +216,11 @@ desktop in the browser and this app opens with it.
   its browser into a `TImage` and swaps the live control back on focus.
 - **Windows report their own death** through `FreeNotification`, so closing
   one clears its dictionary entries rather than leaving a dangling pointer
-  for the next Restore to walk.
+  for the next Restore to walk. The `TWebBrowser`es do the same, and have
+  to: `FBrowsers` holds them without owning them, so a closed window used
+  to leave a freed pointer in the list. The activation handler only walked
+  that list when a window was activated, which made it look like stability;
+  the tick that asserts the live control walks it every 700 ms.
 - **Logic lives in the client library, not here.** Everything with a rule in
   it — what a run record means, how a directory listing is shaped, which
   page kinds exist — is in `PasClaw.Client.Api`, which FPC compiles and CI

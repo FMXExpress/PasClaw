@@ -612,6 +612,9 @@ type
 
     procedure Say(const Msg: string);
     function TrackWindow(AWindow: TRetroWindow): TRetroWindow;
+    { Register a browser and its snapshot, and arrange to be told when the
+      browser dies -- FBrowsers holds it without owning it. }
+    procedure TrackBrowser(ABrowser: TWebBrowser; ASnap: TImage);
     function ProjectByName(const Name: string; out Row: TProjectRow): Boolean;
   protected
     procedure Notification(AComponent: TComponent;
@@ -1055,6 +1058,26 @@ begin
     AWindow.FreeNotification(Self);
 end;
 
+(* The same contract for the browsers, and for the same reason.
+
+   FBrowsers is created with OwnsObjects False -- every TWebBrowser belongs
+   to the window it sits in, and closing that window frees it. Nothing was
+   telling this form about that, so the list kept the pointer and the next
+   walk over it read freed memory. Rare enough to look like stability while
+   the only walk was BrowserActiveChanged, which needs a window to be
+   activated first; EnsureLiveBrowsers walks the same list every 700 ms,
+   which turns "eventually" into "on the next tick after any close".
+
+   FreeNotification is what the windows already use. The browser reports its
+   own death and Notification below drops both entries. *)
+procedure TFormMain.TrackBrowser(ABrowser: TWebBrowser; ASnap: TImage);
+begin
+  if ABrowser = nil then Exit;
+  ABrowser.FreeNotification(Self);
+  FBrowsers.Add(ABrowser);
+  FSnapshots.AddOrSetValue(ABrowser, ASnap);
+end;
+
 procedure TFormMain.Notification(AComponent: TComponent;
   Operation: TOperation);
 var
@@ -1077,6 +1100,18 @@ begin
 
   { A window closing is a layout change like any other. }
   if AComponent is TRetroWindow then MarkLayoutDirty;
+
+  (* A browser dies with the window that owns it, and it dies FIRST -- a
+     window frees its children on the way out, so this arrives before the
+     branch that clears the window's own fields. Drop both entries here and
+     that ordering stops mattering: whichever comes first, nothing is left
+     in FBrowsers for the timer to walk into. *)
+  if AComponent is TWebBrowser then
+  begin
+    if FBrowsers <> nil then FBrowsers.Remove(TWebBrowser(AComponent));
+    if FSnapshots <> nil then FSnapshots.Remove(TWebBrowser(AComponent));
+    Exit;
+  end;
 
   if AComponent = FStylePicker then
   begin
@@ -1138,7 +1173,9 @@ begin
     FBrowserSearch := nil;
     FBrowserDeep := nil;
     FBrowserPromote := nil;
-    { The view is also in FBrowsers/FSnapshots; the loop below clears those. }
+    { The view is also in FBrowsers/FSnapshots. Its own notification clears
+      those -- it does not depend on this branch, and this branch must not
+      pretend to do it. }
     FBrowserView := nil;
     FBrowserNew := nil;
     FBrowserTabs := nil;
@@ -3297,7 +3334,9 @@ var
   Snap: TImage;
   W: TRetroWindow;
 begin
-  if FClosing or (FBrowsers = nil) then Exit;
+  if FClosing or (FSnapshots = nil) or (FBrowsers = nil) then Exit;
+  { Every entry here is live: TrackBrowser took a free notification, so a
+    browser leaves the list as it dies rather than being read after it. }
   for I := 0 to FBrowsers.Count - 1 do
   begin
     B := FBrowsers[I];
@@ -4602,8 +4641,7 @@ begin
   Browser.Parent := Host;
   Browser.Align := TAlignLayout.Client;
   Browser.URL := FClient.AppURL(Project);
-  FBrowsers.Add(Browser);
-  FSnapshots.AddOrSetValue(Browser, Snap);
+  TrackBrowser(Browser, Snap);
   MarkLayoutDirty;
 end;
 
@@ -5663,8 +5701,7 @@ begin
 {$ENDIF}
   FBrowserView.Parent := Host;
   FBrowserView.Align := TAlignLayout.Client;
-  FBrowsers.Add(FBrowserView);
-  FSnapshots.AddOrSetValue(FBrowserView, Snap);
+  TrackBrowser(FBrowserView, Snap);
   MarkLayoutDirty;
 
   NewBrowserTab('New tab');

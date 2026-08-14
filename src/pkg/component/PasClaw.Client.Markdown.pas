@@ -304,15 +304,63 @@ end;
 
 (* Inline markers, flattened.
 
-   Order matters: links first, so the brackets are gone before emphasis
-   runs and cannot be mistaken for anything; then code spans, whose
-   contents must not have emphasis applied inside them; then the emphasis
-   markers themselves.
+   Order matters, and it is the reverse of the obvious one: code spans
+   first, then links, then emphasis.
+
+   Stripping a code span's backticks and moving on is not enough, because
+   the emphasis passes then run over what was inside it: `__init__` loses
+   its backticks, and the `__` pass eats the rest, leaving "init". Same for
+   a link destination -- https://x.test/a_b_c comes out as .../abc. Both
+   are literal text that happens to contain a marker character, which is
+   exactly what a code span and a URL are for.
+
+   So the protected pieces are PARKED first -- lifted out and replaced with
+   a placeholder no marker can match -- and put back after the last
+   emphasis pass has run. The HTML renderer protects the same two spans;
+   this is that rule, in the form this function can express it.
 
    A marker with no partner is left alone rather than eaten -- an answer
    must never come out emptier than it went in, which is the same rule the
    HTML side keeps. *)
 function FlattenInline(const S: string): string;
+const
+  { Control characters: a placeholder has to be something no model writes
+    and no emphasis pass can see a marker in. }
+  ParkOpen  = #1;
+  ParkClose = #2;
+var
+  Parked: array of string;
+
+  function Park(const Value: string): string;
+  begin
+    SetLength(Parked, Length(Parked) + 1);
+    Parked[High(Parked)] := Value;
+    Result := ParkOpen + IntToStr(High(Parked)) + ParkClose;
+  end;
+
+  function Unpark(const Src: string): string;
+  var
+    P, Q, Idx: Integer;
+  begin
+    Result := Src;
+    P := 1;
+    while True do
+    begin
+      P := PosEx(ParkOpen, Result, P);
+      if P = 0 then Break;
+      Q := PosEx(ParkClose, Result, P + 1);
+      if Q = 0 then Break;
+      Idx := StrToIntDef(Copy(Result, P + 1, Q - P - 1), -1);
+      if (Idx < 0) or (Idx > High(Parked)) then
+      begin
+        Inc(P);
+        Continue;
+      end;
+      Delete(Result, P, Q - P + 1);
+      Insert(Parked[Idx], Result, P);
+      P := P + Length(Parked[Idx]);
+    end;
+  end;
 
   (* `code` -> code, and ** / __ / * / _ around a run -> the run.
 
@@ -326,8 +374,12 @@ function FlattenInline(const S: string): string;
      Without the first two, "2 * 3 * 4" is a pair of markers around " 3 "
      and comes out as "2  3  4" -- arithmetic silently rewritten. Without
      the third, one stray asterisk in a paragraph pairs with another three
-     lines later and eats everything between them. *)
-  function Unwrap(const Src, Marker: string): string;
+     lines later and eats everything between them.
+
+     Protect parks the run instead of merely unwrapping it, so the code
+     span shares the pairing rules exactly rather than reimplementing
+     them. *)
+  function Unwrap(const Src, Marker: string; Protect: Boolean): string;
   var
     P, Q, ML: Integer;
     Inner: string;
@@ -359,9 +411,20 @@ function FlattenInline(const S: string): string;
         P := P + ML;
         Continue;
       end;
-      Delete(Result, Q, ML);
-      Delete(Result, P, ML);
-      P := Q - ML;
+      if Protect then
+      begin
+        { marker, run, marker -- all three out, the run back as a token }
+        Delete(Result, P, Q + ML - P);
+        Inner := Park(Inner);
+        Insert(Inner, Result, P);
+        P := P + Length(Inner);
+      end
+      else
+      begin
+        Delete(Result, Q, ML);
+        Delete(Result, P, ML);
+        P := Q - ML;
+      end;
     end;
   end;
 
@@ -369,11 +432,18 @@ var
   P, Close_, Open_, End_: Integer;
   Text_, Url: string;
 begin
+  SetLength(Parked, 0);
   Result := S;
+
+  { Code spans go first and go whole: what is inside one is literal, and
+    every pass after this must see a token rather than its characters. }
+  Result := Unwrap(Result, '`', True);
 
   { [text](url) -> text (url). The destination is kept: a label cannot be
     clickable, and silently dropping where something points is worse than
-    showing it. }
+    showing it. The destination is parked, the link text is not -- an
+    underscore in a URL is part of the address, an asterisk around the
+    words is still emphasis. }
   P := 1;
   while True do
   begin
@@ -405,19 +475,20 @@ begin
     if Trim(Url) = '' then
       Text_ := Text_
     else if Trim(Text_) = '' then
-      Text_ := Url
+      Text_ := Park(Url)
     else
-      Text_ := Text_ + ' (' + Url + ')';
+      Text_ := Text_ + ' (' + Park(Url) + ')';
     Delete(Result, P, End_ - P + 1);
     Insert(Text_, Result, P);
     P := P + Length(Text_);
   end;
 
-  Result := Unwrap(Result, '`');
-  Result := Unwrap(Result, '**');
-  Result := Unwrap(Result, '__');
-  Result := Unwrap(Result, '*');
-  Result := Unwrap(Result, '_');
+  Result := Unwrap(Result, '**', False);
+  Result := Unwrap(Result, '__', False);
+  Result := Unwrap(Result, '*', False);
+  Result := Unwrap(Result, '_', False);
+
+  Result := Unpark(Result);
 end;
 
 function MarkdownToBlocks(const S: string): TMdBlocks;
@@ -425,7 +496,7 @@ var
   Lines: TStringList;
   I, N, HL, Dot: Integer;
   Line, T, Para, Code: string;
-  InCode: Boolean;
+  InCode, CodeAny: Boolean;
 
   procedure Emit(K: TMdBlockKind; const Text_: string; Lvl: Integer);
   begin
@@ -456,6 +527,7 @@ begin
   try
     Lines.Text := S;
     InCode := False;
+    CodeAny := False;
     Para := '';
     Code := '';
     for I := 0 to Lines.Count - 1 do
@@ -470,19 +542,27 @@ begin
         begin
           Emit(mbCode, Code, 0);
           Code := '';
+          CodeAny := False;
           InCode := False;
         end
         else
         begin
           FlushPara;
+          Code := '';
+          CodeAny := False;
           InCode := True;
         end;
         Continue;
       end;
       if InCode then
       begin
-        if Code <> '' then Code := Code + sLineBreak;
+        { CodeAny, not Code <> '': the two mean different things the moment
+          the first line inside the fence is blank. Testing the accumulated
+          text would treat that line as "nothing here yet" and swallow it,
+          and a fence is the one place leading whitespace is content. }
+        if CodeAny then Code := Code + sLineBreak;
         Code := Code + Line;
+        CodeAny := True;
         Continue;
       end;
 

@@ -251,6 +251,31 @@ begin
   ExpectStr(FlattenInline('a * b'#10'c * d'), 'a * b'#10'c * d',
             'and a pair spanning a newline is not either');
 
+  (* What is inside a code span and inside a URL is LITERAL, and both are
+     full of characters that look like emphasis markers. Stripping the
+     backticks and moving on left the later passes free to eat what they
+     had been protecting: `__init__` came out as "init". *)
+  ExpectStr(FlattenInline('call `__init__` first'), 'call __init__ first',
+            'a code span survives the emphasis passes intact');
+  ExpectStr(FlattenInline('`a * b * c`'), 'a * b * c',
+            'asterisks inside code are characters, not markers');
+  ExpectStr(FlattenInline('see [docs](https://x.test/a_b_c)'),
+            'see docs (https://x.test/a_b_c)',
+            'and underscores in a URL are part of the address');
+  ExpectStr(FlattenInline('[**docs**](https://x.test/a)'),
+            'docs (https://x.test/a)',
+            'the link TEXT is still flattened -- only the URL is protected');
+  ExpectStr(FlattenInline('`code` and **bold**'), 'code and bold',
+            'the ordinary case is unchanged by the parking');
+
+  { A fence hands over its lines verbatim, and a blank first line is one of
+    them. Using "nothing accumulated yet" to mean "no line seen yet" ate
+    exactly the leading whitespace the block promised to keep. }
+  Blocks := MarkdownToBlocks('```'#10#10'  indented'#10'```');
+  ExpectTrue(Length(Blocks) = 1, 'the fence is one block');
+  ExpectStr(Blocks[0].Text, #10'  indented',
+            'and its leading blank line survives');
+
   { The fail-safe rule the HTML side keeps, kept here too. }
   Blocks := MarkdownToBlocks('before'#10'```'#10'never closed');
   ExpectTrue(Length(Blocks) = 2, 'an unterminated fence still yields blocks');
