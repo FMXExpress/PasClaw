@@ -258,6 +258,24 @@ type
        of its interface deliberately, and a cancel only needs Disconnect. *)
     FLive: TList;
     FLiveLock: TCriticalSection;
+    (* And the same for /v1/desktop/events, which needs it MORE, not less.
+
+       The reasoning that left this one out was that the event stream sends
+       a keepalive every ~15s, so a reader is never parked indefinitely. That
+       is true of the socket and false of the caller: a keepalive is a
+       comment line, and Consume drops comment lines BEFORE calling
+       FOnEvent -- so the Stop flag the callback sets is never consulted on
+       one. Stop is only read when a real `data:` event arrives, and an idle
+       board produces none.
+
+       So a client watching a healthy, quiet gateway blocks in Get until
+       something happens on the board. Measured: a join after Terminate was
+       still waiting 45 seconds later, against a gateway that was up and
+       sending keepalives the whole time. Not "fifteen seconds sometimes" --
+       indefinite, in the state the desktop spends most of its life in. *)
+    FEventHttp: TObject;
+    FEventLock: TCriticalSection;
+    FEventCancelled: Boolean;
     procedure TrackHttp(H: TObject);
     procedure UntrackHttp(H: TObject);
     procedure Trace(const Method, Path: string; Status, Millis: Integer;
@@ -484,6 +502,9 @@ type
     (* Cut the log subscription now, from any thread. Safe to call when
        none is running. Call this BEFORE joining the watcher thread. *)
     procedure CancelLogs;
+    { Arm the log stream for a new watch, clearing a previous cancel. Call it
+      on the thread that STARTS the watcher, before starting it. }
+    procedure BeginLogs;
     (* Cut every request currently in flight.
 
        For shutdown. A caller closing while a minutes-long call is out has
@@ -495,6 +516,15 @@ type
        request and runs normally, which is what lets a shutdown cancel its
        stragglers and still write one last thing. *)
     procedure CancelAll;
+    (* The same for the desktop event stream, and separately -- because this
+       one has to LATCH.
+
+       Terminate the thread first, then this, then join it. The flag alone
+       will not wake a reader parked in a zero-timeout Get. *)
+    procedure CancelEvents;
+    { Arm the event stream for a new watch, clearing a previous cancel. Call
+      it on the thread that STARTS the watcher, before starting it. }
+    procedure BeginEvents;
 
     { ---- raw bytes ---- }
     (* A bounded window of a file's bytes, for the hex viewer: a binary file
@@ -1030,6 +1060,7 @@ begin
   FLogLock := TCriticalSection.Create;
   FLiveLock := TCriticalSection.Create;
   FLive := TList.Create;
+  FEventLock := TCriticalSection.Create;
   FTimeoutMs := 30000;
   FModelTimeoutMs := 20 * 60 * 1000;   { deep research runs for minutes }
 end;
@@ -1058,10 +1089,12 @@ end;
 destructor TPasClawClient.Destroy;
 begin
   CancelLogs;
+  CancelEvents;
   CancelAll;
   FreeAndNil(FLogLock);
   FreeAndNil(FLive);
   FreeAndNil(FLiveLock);
+  FreeAndNil(FEventLock);
   inherited;
 end;
 
@@ -1099,32 +1132,32 @@ end;
 
 procedure TPasClawClient.CancelAll;
 var
-  Copy_: TList;
   I: Integer;
 begin
   if (FLiveLock = nil) or (FLive = nil) then Exit;
-  { Copied under the lock and disconnected outside it: Disconnect can block
-    briefly, and holding the lock across it would stall every request trying
-    to unregister itself -- the very threads this is trying to release. }
-  Copy_ := TList.Create;
+  (* Disconnected UNDER the lock, not from a copy taken out of it.
+
+     Copying the handles and releasing first looks kinder to the threads
+     trying to unregister -- and hands every one of them the chance to
+     finish, unregister and FREE its TIdHTTP before the loop below reaches
+     it. Disconnect would then be a method call on freed memory, which no
+     amount of try/except makes safe.
+
+     UntrackHttp takes this lock before its owner frees anything, so holding
+     it here is exactly what keeps these objects alive for the length of the
+     call. The threads it blocks are the ones that must wait. *)
+  FLiveLock.Acquire;
   try
-    FLiveLock.Acquire;
-    try
-      for I := 0 to FLive.Count - 1 do
-        Copy_.Add(FLive[I]);
-    finally
-      FLiveLock.Release;
-    end;
-    for I := 0 to Copy_.Count - 1 do
+    for I := 0 to FLive.Count - 1 do
       { Disconnecting from another thread is how Indy cancels a blocked
         read: the reader surfaces a socket error and unwinds. Swallowed
         because a race with normal completion is a no-op, not a problem. }
       try
-        TIdHTTP(Copy_[I]).Disconnect(False);
+        TIdHTTP(FLive[I]).Disconnect(False);
       except
       end;
   finally
-    Copy_.Free;
+    FLiveLock.Release;
   end;
 end;
 
@@ -1236,16 +1269,16 @@ var
 begin
   FLastError := '';
   Sink := TLogStream.Create(OnLine);
-  { A previous cancel must not silence errors on this one. }
-  FLogCancelled := False;
   Http := NewHttp(FToken, 0);
   try
     { Same deal as WatchEvents: an open, mostly-idle connection. }
     Http.ReadTimeout := 0;
     Http.Request.Accept := 'text/event-stream';
-    { Publish the handle so CancelLogs can reach it while we block below. }
+    { Test the latch and publish the handle in one critical section -- see
+      WatchEvents. BeginLogs clears the latch, before this thread exists. }
     FLogLock.Acquire;
     try
+      if FLogCancelled then Exit;
       FLogHttp := Http;
     finally
       FLogLock.Release;
@@ -1272,24 +1305,77 @@ begin
 end;
 
 procedure TPasClawClient.CancelLogs;
-var
-  H: TObject;
 begin
   if FLogLock = nil then Exit;
-  FLogCancelled := True;
+  { Latched, and disconnected under the lock -- for both reasons spelled out
+    on CancelEvents. This one had the same two holes; the Log window is
+    opened and closed often enough to hit them. }
   FLogLock.Acquire;
   try
-    H := FLogHttp;
+    FLogCancelled := True;
+    if FLogHttp = nil then Exit;
+    try
+      TIdHTTP(FLogHttp).Disconnect(False);
+    except
+    end;
   finally
     FLogLock.Release;
   end;
-  if H = nil then Exit;
-  { Disconnecting from another thread is how Indy cancels a blocked read:
-    the reader surfaces a socket error and unwinds. Swallowed because a
-    race with normal completion is a no-op, not a problem. }
+end;
+
+procedure TPasClawClient.BeginLogs;
+begin
+  if FLogLock = nil then Exit;
+  FLogLock.Acquire;
   try
-    TIdHTTP(H).Disconnect(False);
-  except
+    FLogCancelled := False;
+  finally
+    FLogLock.Release;
+  end;
+end;
+
+procedure TPasClawClient.CancelEvents;
+begin
+  if FEventLock = nil then Exit;
+  (* The whole thing under one lock, deliberately.
+
+     The handle cannot be copied out and used afterwards: if the stream ends
+     naturally in that gap, WatchEvents clears the field and frees the
+     TIdHTTP, and this would then call Disconnect on freed memory. An except
+     block does not make that safe -- it is not an exception, it is a method
+     call on an object that is gone.
+
+     WatchEvents' cleanup takes the same lock before it frees, so holding it
+     across the Disconnect is what keeps the object alive for the length of
+     the call. Disconnect can block briefly and the only thread it can block
+     is that cleanup, which is precisely the thread that must wait. *)
+  FEventLock.Acquire;
+  try
+    FEventCancelled := True;
+    if FEventHttp = nil then Exit;
+    { Disconnecting from another thread is how Indy cancels a blocked read:
+      the reader surfaces a socket error and unwinds. Swallowed because a
+      race with normal completion is a no-op, not a problem. }
+    try
+      TIdHTTP(FEventHttp).Disconnect(False);
+    except
+    end;
+  finally
+    FEventLock.Release;
+  end;
+end;
+
+procedure TPasClawClient.BeginEvents;
+begin
+  if FEventLock = nil then Exit;
+  { Cleared HERE rather than at the top of WatchEvents, which is the whole
+    point: the starter runs before the thread exists, so a cancel arriving
+    afterwards cannot be lost. }
+  FEventLock.Acquire;
+  try
+    FEventCancelled := False;
+  finally
+    FEventLock.Release;
   end;
 end;
 
@@ -1436,21 +1522,52 @@ begin
   FLastError := '';
   Sink := TEventStream.Create(OnEvent);
   Http := NewHttp(FToken, 0);
-  TrackHttp(Http);
   try
     { No read timeout: this connection is SUPPOSED to stay open and quiet.
-      The gateway sends a keepalive comment every ~15s, so a genuinely dead
-      socket still surfaces as a read error rather than hanging forever. }
+      Which means nothing here will ever end this call on its own -- see the
+      note on FEventHttp for why the keepalive does not, either. The handle
+      is published below so a caller can. }
     Http.ReadTimeout := 0;
     Http.Request.Accept := 'text/event-stream';
+    (* Test the latch and publish the handle in ONE critical section.
+
+       Two separate steps leave a window at exactly the wrong moment: a
+       Terminate + CancelEvents landing after the thread's loop check but
+       before the handle is published finds nothing to cut, and the worker
+       then blocks in a Get nobody can reach while the joiner is already
+       waiting. Closing hangs anyway, which is the bug.
+
+       So the cancel LATCHES rather than firing once, and this refuses to
+       start when the latch is set. BeginEvents clears it, on the thread
+       that starts the watcher, before the watcher exists. *)
+    FEventLock.Acquire;
+    try
+      if FEventCancelled then Exit;
+      FEventHttp := Http;
+    finally
+      FEventLock.Release;
+    end;
     try
       Http.Get(FBaseURL + '/v1/desktop/events', Sink);
     except
       on E: EAbort do ;      { caller asked to stop }
-      on E: Exception do FLastError := E.Message;
+      on E: Exception do
+        { A cancelled read is not a failure to report -- it is what was
+          asked for. }
+        if not FEventCancelled then FLastError := E.Message;
     end;
   finally
-    UntrackHttp(Http);
+    (* One owner per handle. This one is NOT in the general registry: two
+       mechanisms able to Disconnect the same socket, each under its own
+       lock, is how the "hold the lock across the disconnect" guarantee stops
+       composing -- CancelAll could be inside Disconnect while this is
+       freeing. CancelEvents owns the event stream; CancelAll owns the rest. *)
+    FEventLock.Acquire;
+    try
+      FEventHttp := nil;
+    finally
+      FEventLock.Release;
+    end;
     Http.Free;
     Sink.Free;
   end;
