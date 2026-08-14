@@ -32,6 +32,31 @@ Both vendored pieces come from
 [Cross-Platform-Retro-OS-Styles](https://github.com/FMXExpress/Cross-Platform-Retro-OS-Styles);
 [`retro/README.md`](retro/README.md) says how to refresh either.
 
+### WebView2 on Windows
+
+App windows, the Browser and the chat transcript are all `TWebBrowser`, and
+they ask for `TWindowsEngine.EdgeIfAvailable` — because the legacy engine is
+IE-era and renders a modern document (flexbox, grid, ES6, fetch) badly enough
+to misrepresent the app the agent just wrote.
+
+*If available* is the operative half, and it is not automatic:
+
+- **`WebView2Loader.dll` must sit beside the exe.** Without it FMX falls back
+  to the legacy engine **silently** — the app looks broken and nothing
+  reports why. Where you get the DLL depends on your RAD Studio version:
+  some ship it under `$(BDS)\Redist\win32` / `win64`, others do not ship it
+  at all, in which case take it from the
+  [WebView2 SDK](https://developer.microsoft.com/microsoft-edge/webview2/)
+  (the `runtimes\win-x86` / `win-x64` folder of the NuGet package). Match the
+  architecture — a 32-bit loader beside a 64-bit exe does not load.
+- **The WebView2 Evergreen Runtime must be installed on the machine.** The
+  loader *finds* the runtime; it is not the runtime. Recent Windows 11 has it
+  already; older machines may not.
+
+Neither is wired into the project: there is no post-build copy, because the
+source path is not the same on every RAD Studio install and a build event
+that guesses wrong is worse than one that does not exist.
+
 ### Using a different styles checkout
 
 If you are working on the styles themselves, point the app at your copy and
