@@ -298,7 +298,8 @@ function PartitionToolBatches(const Calls: array of TToolCall;
   message; the input is never mutated. Public for tests -- WHERE the clock
   lands is the part with a cost attached (the system block carries the
   cache_control breakpoint), so it is worth asserting rather than assuming. }
-function HistWithTurnClock(const Hist: TMessageArray): TMessageArray;
+function HistWithTurnClock(const Hist: TMessageArray;
+                           const Stamp: string): TMessageArray;
 
 implementation
 
@@ -767,10 +768,28 @@ begin
     end;
 end;
 
-function HistWithTurnClock(const Hist: TMessageArray): TMessageArray;
-(* Return a copy of the history with the current date/time appended to the
-   trailing user message. Nothing is written back: the caller's Hist is what
-   gets persisted, and a transcript should not accumulate a stamp per turn.
+function HistWithTurnClock(const Hist: TMessageArray;
+                           const Stamp: string): TMessageArray;
+(* Return a copy of the history with Stamp appended to the LAST non-empty
+   user message. Nothing is written back: the caller's Hist is what gets
+   persisted, and a transcript should not accumulate a stamp per turn.
+
+   The search runs BACKWARD rather than looking only at the final message.
+   Once the first response dispatches a tool the history ends in mrTool
+   results, so a last-message-only test stamps nothing from iteration 2
+   onward -- and since the stamp is never persisted, every subsequent
+   stateless request would carry no clock at all. That loses the time on
+   exactly the requests that produce the final answer, which is most turns
+   (Codex P1, PR #543). The trailing tool-result run is left untouched, so
+   tool_use/tool_result pairing is unaffected.
+
+   Stamp is passed IN, computed once per turn by the caller, rather than
+   read from the clock here. Re-reading it per iteration would change an
+   early message's bytes on every call; there is no message-level
+   cache_control in the Anthropic provider, but several providers cache
+   message prefixes implicitly, and a value that ticks mid-turn would
+   defeat that for no benefit -- the model does not need second-accurate
+   time while it is working.
 
    WHY IT GOES HERE AND NOT IN THE SYSTEM PROMPT
    ---------------------------------------------
@@ -782,8 +801,8 @@ function HistWithTurnClock(const Hist: TMessageArray): TMessageArray;
    the system and last-tool breakpoints, so a value that changes every turn
    costs nothing there.
 
-   WHY THE TRAILING USER MESSAGE AND NOT A NEW ONE
-   -----------------------------------------------
+   WHY AN EXISTING USER MESSAGE AND NOT A NEW ONE
+   ----------------------------------------------
    A trailing mrSystem message would be hoisted into the system prompt by
    the Anthropic provider (it scans Messages for the first mrSystem when
    Options.SystemPrompt is empty) -- straight back into the cached prefix.
@@ -791,20 +810,20 @@ function HistWithTurnClock(const Hist: TMessageArray): TMessageArray;
    a tool_use and its tool_result. Extending the message that is already
    there avoids both.
 
-   Result: fresh once per TURN rather than per iteration. Within one turn
-   the clock moves by seconds to minutes while the model is working, which
-   is below the resolution any of this is used at, and it keeps the tool
-   iterations byte-stable for providers that cache further in. *)
+   Result: every request in the turn carries the clock, and all of them
+   carry the SAME reading, so the bytes stay stable across iterations. *)
 var
-  Last: Integer;
+  i: Integer;
 begin
   Result := Copy(Hist, 0, Length(Hist));   { true copy: element-wise }
-  Last := High(Result);
-  if Last < 0 then Exit;
-  if Result[Last].Role <> mrUser then Exit;
-  if Trim(Result[Last].Content) = '' then Exit;
-  Result[Last].Content := Result[Last].Content + sLineBreak + sLineBreak +
-    '[current date/time: ' + NowStampWithZone + ']';
+  if Trim(Stamp) = '' then Exit;
+  for i := High(Result) downto 0 do
+    if (Result[i].Role = mrUser) and (Trim(Result[i].Content) <> '') then
+    begin
+      Result[i].Content := Result[i].Content + sLineBreak + sLineBreak +
+        '[current date/time: ' + Stamp + ']';
+      Exit;
+    end;
 end;
 
 function PartitionToolBatches(const Calls: array of TToolCall;
@@ -1404,6 +1423,8 @@ var
   FallbackModel: string;
   Resp: TLLMResponse;
   Hist: TMessageArray;
+  CallHist: TMessageArray;   { Hist + the turn clock; never persisted }
+  TurnClock: string;         { stamped once per turn -- see HistWithTurnClock }
   LiveOptions: TChatOptions;
   Dispatches: array of TToolCallDispatch;
   Batches: TToolBatchArray;
@@ -1502,6 +1523,12 @@ begin
   for i := 0 to High(Cfg.Hooks) do
     if Cfg.Hooks[i] <> nil then
       Cfg.Hooks[i].Identity := Cfg.Identity;
+  { One reading per turn, like Identity above: every iteration of this
+    turn shows the model the same time, so the stamped message stays
+    byte-identical across iterations and implicit prefix caches keep
+    hitting. Sub-minute drift while the model works is below the
+    resolution this is used at. }
+  TurnClock := NowStampWithZone;
   while Iter < Cfg.MaxIterations do
   begin
     Inc(Iter);
@@ -1668,6 +1695,13 @@ begin
     if Cfg.Registry <> nil then
       Tools := Cfg.Registry.ToProviderDefs;
 
+    { The clock rides in the messages array, after the cache breakpoints --
+      see HistWithTurnClock. Built ONCE per iteration, here, so the primary
+      call and every fallback below send the same history: a fallback
+      answers the turn just as the primary would. Hist itself is untouched,
+      so the persisted transcript stays clean. }
+    CallHist := HistWithTurnClock(Hist, TurnClock);
+
     { gen_ai chat span (tier-2 instrumentation). Wraps the actual
       provider request -- naming follows openclaw / Langfuse so
       backend dashboards recognise the span shape. Token counts
@@ -1683,10 +1717,7 @@ begin
         { Empty-turn auto-retry. When StreamReliability.EmptyRetryAttempts
           is 0 (default record zero, the legacy shape) ChatWithEmptyRetry
           is a one-shot call -- identical to the pre-PR behaviour. }
-        { The clock rides in the messages array, after the cache
-          breakpoints -- see HistWithTurnClock. Hist itself is untouched,
-          so the persisted transcript stays clean. }
-        Resp := ChatWithEmptyRetry(Cfg.Provider, HistWithTurnClock(Hist),
+        Resp := ChatWithEmptyRetry(Cfg.Provider, CallHist,
                                     Tools, Cfg.Model,
                                     LiveOptions, Cfg.StreamReliability);
       except
@@ -1744,7 +1775,12 @@ begin
         LogDebug('fallback %d: trying %s with model=%s',
                  [fbi, Cfg.Fallbacks[fbi].GetName, FallbackModel]);
         try
-          Resp := Cfg.Fallbacks[fbi].Chat(Hist, Tools, FallbackModel, LiveOptions);
+          { CallHist, not Hist: a fallback answers the turn just as the
+            primary would, and dropping the clock here would lose it during
+            exactly the outages and rate limits that engage fallbacks
+            (Codex P2, PR #543). }
+          Resp := Cfg.Fallbacks[fbi].Chat(CallHist, Tools, FallbackModel,
+                                          LiveOptions);
           { Successful call clears the diagnostic -- only the LAST failed
             attempt's text should surface to hooks. }
           LastProviderErrText := '';
