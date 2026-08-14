@@ -32,6 +32,35 @@ Both vendored pieces come from
 [Cross-Platform-Retro-OS-Styles](https://github.com/FMXExpress/Cross-Platform-Retro-OS-Styles);
 [`retro/README.md`](retro/README.md) says how to refresh either.
 
+### WebView2 on Windows
+
+App windows, the Browser and the chat transcript are all `TWebBrowser`, and
+they ask for `TWindowsEngine.EdgeIfAvailable` — because the legacy engine is
+IE-era and renders a modern document (flexbox, grid, ES6, fetch) badly enough
+to misrepresent the app the agent just wrote.
+
+*If available* is the operative half. WebView2 is only available when
+`WebView2Loader.dll` sits beside the exe; without it FMX falls back to the
+legacy engine **silently**, and the app looks broken for reasons nothing
+reports. A post-build event in the `.dproj` copies it for both Windows
+platforms:
+
+```
+if exist "$(BDS)\Redist\win32\WebView2Loader.dll" (copy /Y "$(BDS)\Redist\win32\WebView2Loader.dll" "$(OUTPUTDIR)") else (echo WARNING: ...)
+```
+
+`$(BDS)` rather than a literal `C:\Program Files (x86)\Embarcadero\Studio\23.0`
+so it follows whichever RAD Studio is building, and `win32` / `win64` from the
+matching Redist directory — a 32-bit loader beside a 64-bit exe does not load.
+
+Guarded with `if exist` so a Delphi install without that redistributable
+cannot fail the build, and the `else` prints a warning rather than passing in
+silence, since silence is the failure mode this exists to prevent.
+
+Shipping the app to a machine that has never run an Edge-based application
+also needs the **WebView2 Evergreen Runtime** installed there; the loader DLL
+finds the runtime, it is not the runtime.
+
 ### Using a different styles checkout
 
 If you are working on the styles themselves, point the app at your copy and
