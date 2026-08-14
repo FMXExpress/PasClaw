@@ -5318,8 +5318,12 @@ begin
   LoopCfg.OnText        := nil;
   LoopCfg.OnToolCall    := nil;
   LoopCfg.OnToolResult  := nil;
-  LoopCfg.CompactEnabled := True;
+  LoopCfg.CompactEnabled := FCfg.Compaction.Enabled;
   LoopCfg.CompactOpts    := DefaultCompactOptions;
+  LoopCfg.CompactOpts.ThresholdTokens    := FCfg.Compaction.ThresholdTokens;
+  LoopCfg.CompactOpts.RetainBudgetTokens := FCfg.Compaction.RetainBudgetTokens;
+  LoopCfg.CompactOpts.KeepRecentTurns    := FCfg.Compaction.KeepRecentTurns;
+  LoopCfg.CompactOpts.SummaryBudget      := FCfg.Compaction.SummaryBudget;
   LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
   LoopCfg.StreamReliability := FCfg.StreamReliability;
 
@@ -5480,8 +5484,12 @@ begin
     wrapped in HTML rather than a document. }
   LoopCfg.Options.SystemPrompt := SystemPrompt;
   LoopCfg.Identity       := MakeIdentity('gateway', 'desktop');
-  LoopCfg.CompactEnabled := True;
+  LoopCfg.CompactEnabled := FCfg.Compaction.Enabled;
   LoopCfg.CompactOpts    := DefaultCompactOptions;
+  LoopCfg.CompactOpts.ThresholdTokens    := FCfg.Compaction.ThresholdTokens;
+  LoopCfg.CompactOpts.RetainBudgetTokens := FCfg.Compaction.RetainBudgetTokens;
+  LoopCfg.CompactOpts.KeepRecentTurns    := FCfg.Compaction.KeepRecentTurns;
+  LoopCfg.CompactOpts.SummaryBudget      := FCfg.Compaction.SummaryBudget;
   LoopCfg.ToolOutputCap  := FCfg.ToolOutputCap;
   LoopCfg.StreamReliability := FCfg.StreamReliability;
   { Only deep research narrates. An ordinary page comes back fast enough
@@ -6456,8 +6464,12 @@ begin
     LoopCfg.OnText        := nil;
     LoopCfg.OnToolCall    := nil;
     LoopCfg.OnToolResult  := nil;
-    LoopCfg.CompactEnabled := True;
+    LoopCfg.CompactEnabled := FCfg.Compaction.Enabled;
     LoopCfg.CompactOpts    := DefaultCompactOptions;
+    LoopCfg.CompactOpts.ThresholdTokens    := FCfg.Compaction.ThresholdTokens;
+    LoopCfg.CompactOpts.RetainBudgetTokens := FCfg.Compaction.RetainBudgetTokens;
+    LoopCfg.CompactOpts.KeepRecentTurns    := FCfg.Compaction.KeepRecentTurns;
+    LoopCfg.CompactOpts.SummaryBudget      := FCfg.Compaction.SummaryBudget;
     LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
     LoopCfg.StreamReliability := FCfg.StreamReliability;
 

@@ -85,22 +85,29 @@ Survives `/quit`-and-resume, compaction, and `pasclaw agent --session <id>` so t
 
 ## Compaction
 
-When the running history exceeds `compaction.threshold_tokens` (default `50000`), `RunToolLoop` slices off the older portion, summarises it via the same provider, and replaces it with a single system message before the next round. Falls back to verbatim on summariser failure — no silent context loss.
+When the running history — system prompt included — estimates above `compaction.threshold_tokens` (default `80000`), `RunToolLoop` summarises the older portion via the same provider and folds the result into the system prompt as a `[Conversation summary so far]` block, keeping the newest messages verbatim. Falls back to verbatim on summariser failure — no silent context loss.
+
+The summary is a **rolling record**: a later compaction replaces the block rather than appending a second one, and the old record is fed to the summariser as the head of its input, so one block always covers the whole dropped history. The summariser writes a sectioned handoff note — Goal, Progress, Key decisions, Errors encountered, Open questions.
+
+Retention is a **token budget**, not a message count: `retain_budget_tokens` (default `20000`) decides how much recent history survives verbatim, walking back from the newest message. `recent_turns` (default `8`) is a floor — however large the recent messages are, at least that many are kept. The cut never splits a tool_call from its tool_results.
+
+There is also a **reactive** pass: when a provider rejects a call because the context window overflowed (the token estimate ran low — dense content does that), the loop compacts with the threshold forced and retries the call once. If the retry still overflows, the error surfaces.
 
 `/compact` forces the pass manually. The resulting summary lands in `meta.system_prompt_override` so a `/quit`-and-resume picks up the compacted shape.
 
-Configuration:
+Configuration (all optional; these are the defaults):
 
 ```json
 "compaction": {
-  "enabled":          true,
-  "threshold_tokens": 50000,
-  "recent_turns":     8,
-  "summary_budget":   2000
+  "enabled":              true,
+  "threshold_tokens":     80000,
+  "retain_budget_tokens": 20000,
+  "recent_turns":         8,
+  "summary_budget":       800
 }
 ```
 
-`recent_turns` is the count of trailing turns kept verbatim alongside the summary.
+Before the older history is dropped, the session's [working-state snapshot](#working-state-snapshot) is refreshed from it, so edited paths and shell commands in the dropped half survive in the cross-turn snapshot even though the transcript no longer carries them.
 
 ## Mid-loop steering
 

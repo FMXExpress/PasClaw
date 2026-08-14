@@ -39,13 +39,16 @@ type
     OnText:        procedure(const S: string) of object;   { streaming-ish stdout }
     OnToolCall:    procedure(const Name, ArgsJSON: string) of object;
     OnToolResult:  procedure(const Name, ResultText, Err: string) of object;
-    (* Compaction: when the running history exceeds Compact.ThresholdTokens,
-       slice off the older portion, summarise it via Provider.Chat, and
-       replace it with a single system message before the next round.
-       CompactEnabled gates the whole thing -- default off; the
-       command-layer enables it from Cfg.Compaction. CompactOpts is the
-       full options struct (threshold, recent-turn count, summary budget,
-       and the OnBefore memory-flush hook). *)
+    (* Compaction: when the running history (system prompt included)
+       estimates above CompactOpts.ThresholdTokens, summarise the older
+       portion via Provider.Chat and fold it into LiveOptions.SystemPrompt
+       before the next round; a provider context-overflow error triggers
+       the same pass reactively, with one retry. CompactEnabled gates the
+       whole thing -- the record default is off; every call site sets it
+       from the config's "compaction" block, whose default is on.
+       CompactOpts carries the knobs (threshold, retention budget,
+       recent-message floor, summary budget, OnBefore flush hook) --
+       semantics live with PasClaw.Agent.Compact. *)
     CompactEnabled: Boolean;
     CompactOpts:    TCompactOptions;
     (* Parallel tool dispatch. When True, RunToolLoop partitions each
@@ -1370,6 +1373,9 @@ var
   Steers: TSteeringMessageArray;
   TruncRetries: Integer;      { truncation-recovery: retries spent so far }
   TruncNudgePending: Boolean; { fold the corrective nudge next iteration }
+  OverflowRetries: Integer;   { reactive-compaction retries spent so far }
+  ForcedCompactOpts: TCompactOptions;
+  PreCompactLen: Integer;
   InContext: string;       { tool output cap (#PR new): in-context
                              body that lands in Hist after the
                              optional StashAndMaybeTruncate pass }
@@ -1436,6 +1442,7 @@ begin
   SetLength(ReadHashes, 0);
   TruncRetries := 0;
   TruncNudgePending := False;
+  OverflowRetries := 0;
 
   Iter := 0;
   { When progressive disclosure is on (PasClaw.MCP.Disclosure), the
@@ -1476,7 +1483,8 @@ begin
       Loop.FinalSystemPrompt (which Cmd.Agent persists across
       turns). Codex P2 on PR #211. }
     if Cfg.CompactEnabled and
-       NeedsCompact(Hist, Cfg.CompactOpts.ThresholdTokens) then
+       NeedsCompact(Hist, LiveOptions.SystemPrompt,
+                    Cfg.CompactOpts.ThresholdTokens) then
       Hist := CompactMessages(Cfg.Provider, Cfg.Model, Hist,
                                LiveOptions, Cfg.CompactOpts);
 
@@ -1726,6 +1734,50 @@ begin
       on turns N+1, N+2, etc., causing unbounded prompt growth and
       stale result repetition. }
     LiveOptions.SystemPrompt := PersistentSP;
+
+    (* Reactive compaction: the provider says the request itself was
+       too big. The proactive check above runs on a 4-chars-per-token
+       estimate that runs LOW on token-dense content (CJK, base64,
+       minified code), and when it is wrong the call comes back as a
+       context-overflow 400 that no fallback can fix -- every
+       provider gets the same oversized request. Until now that was a
+       dead end; the turn failed with the estimator's error.
+
+       So when the final status after the fallback walk classifies as
+       an overflow, compact with the threshold forced and run the
+       iteration again. Once per loop: if the retry still overflows,
+       something is genuinely too big for the window -- likely a
+       single message the cut cannot drop -- and the error should
+       surface rather than spin. The retry is only taken when
+       compaction actually shrank the history, for the same reason.
+
+       Ordered after the PersistentSP restore, deliberately: the
+       forced compaction folds its summary into the persistent
+       baseline (where it belongs, and where the next iteration's
+       ephemeral drains stack on top of it), not into this
+       iteration's already-decorated prompt. This firing at all means
+       the estimator was wrong -- LogWarn, so it shows up. *)
+    if Cfg.CompactEnabled and (OverflowRetries < 1) and
+       ((Resp.StatusCode < 200) or (Resp.StatusCode >= 300)) and
+       (IsContextOverflowError(Resp.StatusCode, Resp.Content) or
+        IsContextOverflowError(Resp.StatusCode, LastProviderErrText)) then
+    begin
+      Inc(OverflowRetries);
+      ForcedCompactOpts := Cfg.CompactOpts;
+      ForcedCompactOpts.ThresholdTokens := 1;
+      PreCompactLen := Length(Hist);
+      Hist := CompactMessages(Cfg.Provider, Cfg.Model, Hist,
+                               LiveOptions, ForcedCompactOpts);
+      if Length(Hist) < PreCompactLen then
+      begin
+        LogWarn('compact: reactive pass after context overflow (status=%d), ' +
+                '%d -> %d msgs -- retrying the call',
+                [Resp.StatusCode, PreCompactLen, Length(Hist)]);
+        Continue;
+      end;
+      LogWarn('compact: context overflow (status=%d) but nothing left to ' +
+              'compact -- surfacing the error', [Resp.StatusCode]);
+    end;
 
     Loop.LastResp := Resp;
     { Roll up usage across every provider call in this loop (incl.
