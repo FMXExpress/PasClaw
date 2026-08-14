@@ -42,20 +42,17 @@ to misrepresent the app the agent just wrote.
 *If available* is the operative half. WebView2 is only available when
 `WebView2Loader.dll` sits beside the exe; without it FMX falls back to the
 legacy engine **silently**, and the app looks broken for reasons nothing
-reports. A post-build event in the `.dproj` copies it for both Windows
-platforms:
+reports. So if the chat renders but an app window looks like 1998, that DLL
+is the first thing to check.
 
-```
-if exist "$(BDS)\Redist\win32\WebView2Loader.dll" (copy /Y "$(BDS)\Redist\win32\WebView2Loader.dll" "$(OUTPUTDIR)") else (echo WARNING: ...)
-```
-
-`$(BDS)` rather than a literal `C:\Program Files (x86)\Embarcadero\Studio\23.0`
-so it follows whichever RAD Studio is building, and `win32` / `win64` from the
-matching Redist directory — a 32-bit loader beside a 64-bit exe does not load.
-
-Guarded with `if exist` so a Delphi install without that redistributable
-cannot fail the build, and the `else` prints a warning rather than passing in
-silence, since silence is the failure mode this exists to prevent.
+The project does **not** copy it for you. A post-build event pulling it from
+`$(BDS)\Redist\win32|win64` was tried and removed: that directory does not
+carry `WebView2Loader.dll` on the RAD Studio installs we have looked at, so
+the step was a guaranteed no-op that read like a solved problem. Put a copy
+beside the exe yourself, from wherever your install actually keeps one —
+usually under the `WebView2` NuGet package pulled in by a project that uses
+it, and matching the platform: a 32-bit loader beside a 64-bit exe does not
+load.
 
 Shipping the app to a machine that has never run an Edge-based application
 also needs the **WebView2 Evergreen Runtime** installed there; the loader DLL
