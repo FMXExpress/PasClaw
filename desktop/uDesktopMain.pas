@@ -28,10 +28,16 @@ uses
   System.SysUtils, System.Types, System.UITypes, System.Classes,
   System.IOUtils, System.StrUtils, System.Generics.Collections,
   System.SyncObjs, System.IniFiles,
+  { TNotificationCenter is in System.Notification, not FMX.Notification.
+    It was FMX-only long ago and moved when VCL apps got it too; the old
+    name is gone, so naming it is a hard "unit not found" rather than
+    anything that degrades. The FMX platform layer still provides the
+    implementation underneath -- only the unit that declares it moved. }
+  System.Notification,
   FMX.Types, FMX.Controls, FMX.Forms, FMX.Graphics, FMX.Dialogs,
   FMX.StdCtrls, FMX.Layouts, FMX.ListBox, FMX.Edit, FMX.Memo, FMX.Styles,
   FMX.Objects, FMX.TreeView, FMX.WebBrowser, FMX.ScrollBox,
-  FMX.Controls.Presentation, FMX.TabControl, FMX.Notification,
+  FMX.Controls.Presentation, FMX.TabControl,
   FMX.RetroWindows, FMX.RetroSkins,
   PasClaw.Client.Api,
   PasClaw.Client.Markdown;
