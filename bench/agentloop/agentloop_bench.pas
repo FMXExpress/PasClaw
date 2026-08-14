@@ -329,6 +329,23 @@ begin
   finally O.Free; end;
 end;
 
+function ArgsGrep(const Path, Pattern: string): string;
+{ grep_files over a directory. max_file_bytes is raised past the 10 MiB
+  default so the bench's deliberately-fat corpus is actually scanned rather
+  than skipped by the size tier -- the scan IS the measured work here. }
+var O: TJsonObject;
+begin
+  O := TJsonObject.Create;
+  try
+    O.PutStr('path', Path);
+    O.PutStr('pattern', Pattern);
+    O.PutInt('max_file_bytes', 64 * 1024 * 1024);
+    Result := O.ToJSON;
+  finally
+    O.Free;
+  end;
+end;
+
 function OneCall(const Name, Args: string): string;
 var O, F: TJsonObject;
 begin
@@ -912,6 +929,169 @@ begin
   end;
 end;
 
+{ ===== parallel-batch: does read-only fan-out actually run concurrently? ==
+
+  PartitionToolBatches is unit-tested, and #538 pinned that a SerialOnly
+  writer lands in a batch of its own -- but both assert the PLAN, not the
+  execution. This scenario measures the consequence: wall time.
+
+  Self-calibrating, because absolute timings say nothing portable. Three
+  turns run against the same fat corpus:
+
+    A  one grep                      -> tSingle  (this machine's unit of work)
+    B  three greps in ONE response   -> tThree   (should be ~= tSingle)
+    C  grep, todo_write, grep        -> tSplit   (should be ~= 2 * tSingle)
+
+  B is the parallel-dispatch claim. C is the SerialOnly claim: todo_write
+  writes the checklist file, so it must split the round into three batches,
+  which forces the two greps into SEPARATE batches -- if it were wrongly
+  treated as parallel-safe, C would collapse to ~= tSingle like B.
+
+  Thresholds are ratios with generous margin, so a slow or loaded machine
+  moves all three numbers together and the assertions still hold. }
+
+const
+  PAR_DIR   = 'bench-par';
+  PAR_FILES = 8;
+  PAR_MB    = 3;
+
+procedure BuildParallelCorpus;
+var
+  i, j: Integer;
+  Chunk, Body: string;
+  SL: TStringList;
+begin
+  ForceDirectories(GHomeDir + '/workspace/' + PAR_DIR);
+  { ~1 KiB of filler that contains none of the needles. }
+  Chunk := '';
+  for j := 1 to 16 do
+    Chunk := Chunk + 'filler line with plenty of bytes to scan through 0123456789' + sLineBreak;
+  Body := '';
+  for j := 1 to PAR_MB * 1024 do
+    Body := Body + Chunk;   { ~PAR_MB MiB }
+  SL := TStringList.Create;
+  try
+    for i := 1 to PAR_FILES do
+    begin
+      SL.Clear;
+      SL.Text := Body + 'PARNEEDLE' + IntToStr(i) + ' unique marker' + sLineBreak;
+      SL.SaveToFile(GHomeDir + '/workspace/' + PAR_DIR + '/f' + IntToStr(i) + '.txt');
+    end;
+  finally
+    SL.Free;
+  end;
+end;
+
+function H_ParTrivial(N: Integer; const EnvJSON: string): string;
+{ Same SHAPE as the measured turns -- one tool round, then stop, so two
+  provider calls -- but the tool does almost no work. Subtracting this
+  cancels all harness cost including the second relay round trip. A
+  no-tool turn made only ONE call, so the difference smuggled a round
+  trip into the "grep cost" and a serial implementation could have slipped
+  past the ratio (Codex P1, PR #545). }
+begin
+  if N = 1 then
+    Result := RoundOf([OneCall('list_dir', ArgsObj1('path', PAR_DIR))])
+  else
+    Result := StopOf('listed.');
+end;
+
+function H_ParOne(N: Integer; const EnvJSON: string): string;
+begin
+  if N = 1 then
+    Result := RoundOf([OneCall('grep_files', ArgsGrep(PAR_DIR, 'PARNEEDLE1'))])
+  else
+    Result := StopOf('one grep done.');
+end;
+
+function H_ParThree(N: Integer; const EnvJSON: string): string;
+begin
+  if N = 1 then
+    Result := RoundOf([OneCall('grep_files', ArgsGrep(PAR_DIR, 'PARNEEDLE1')),
+                       OneCall('grep_files', ArgsGrep(PAR_DIR, 'PARNEEDLE2')),
+                       OneCall('grep_files', ArgsGrep(PAR_DIR, 'PARNEEDLE3'))])
+  else
+    Result := StopOf('three greps done.');
+end;
+
+function H_ParSplit(N: Integer; const EnvJSON: string): string;
+begin
+  if N = 1 then
+    Result := RoundOf([OneCall('grep_files', ArgsGrep(PAR_DIR, 'PARNEEDLE4')),
+                       OneCall('todo_write',
+                               ArgsObj1('checklist', '- [ ] split the batch')),
+                       OneCall('grep_files', ArgsGrep(PAR_DIR, 'PARNEEDLE5'))])
+  else
+    Result := StopOf('split round done.');
+end;
+
+procedure ScenarioParallelBatch;
+var
+  T0: QWord;
+  tBase, tSingle, tThree, tSplit, Work: Int64;
+begin
+  WriteLn;
+  WriteLn('== scenario: parallel-batch (read-only fan-out + SerialOnly split) ==');
+  BuildParallelCorpus;
+
+  { Warm-up: pulls the corpus into page cache so the measured turns compare
+    CPU-and-dispatch, not first-touch disk. Unmeasured on purpose. }
+  ResetScenario(H_ParOne);
+  Chat('[' + MsgObjJSON('user', 'warm the corpus') + ']', 'bench-par-warm');
+
+  { Baseline: identical turn shape, negligible tool work. Every timing
+    below subtracts it, so gateway + relay + BOTH provider round trips
+    cancel and what remains is grep work. }
+  ResetScenario(H_ParTrivial);
+  T0 := GetTickCount64;
+  Chat('[' + MsgObjJSON('user', 'list the dir') + ']', 'bench-par-base');
+  tBase := Int64(GetTickCount64 - T0);
+
+  ResetScenario(H_ParOne);
+  T0 := GetTickCount64;
+  Chat('[' + MsgObjJSON('user', 'grep once') + ']', 'bench-par-1');
+  tSingle := Int64(GetTickCount64 - T0);
+
+  ResetScenario(H_ParThree);
+  T0 := GetTickCount64;
+  Chat('[' + MsgObjJSON('user', 'grep three times') + ']', 'bench-par-3');
+  tThree := Int64(GetTickCount64 - T0);
+
+  ResetScenario(H_ParSplit);
+  T0 := GetTickCount64;
+  Chat('[' + MsgObjJSON('user', 'grep, write, grep') + ']', 'bench-par-split');
+  tSplit := Int64(GetTickCount64 - T0);
+
+  Work := tSingle - tBase;          { one grep's work, harness removed }
+  Metric('parallel.turn_baseline_ms', tBase);
+  Metric('parallel.single_ms', tSingle);
+  Metric('parallel.three_ms',  tThree);
+  Metric('parallel.split_ms',  tSplit);
+  Metric('parallel.grep_work_ms', Work);
+
+  { A single grep must be slow enough for the ratios below to mean anything.
+    If the corpus ever stops being fat (or the machine gets very fast), say
+    so instead of silently asserting on noise. }
+  Check(Work >= 40,
+    Format('one grep is measurable above harness overhead (%d ms >= 40; ' +
+           'raise PAR_MB/PAR_FILES if not)', [Work]));
+
+  { Three read-only calls in one response run CONCURRENTLY: the round costs
+    about one grep, not three. Serial execution would land near 3x. }
+  Check((tThree - tBase) < Work * 2,
+    Format('three read-only greps batch in parallel (%d ms of work < 2x %d ms; ' +
+           'serial would be ~3x)', [tThree - tBase, Work]));
+
+  { ...and a SerialOnly writer between two greps forces them apart, so that
+    round costs about TWO greps. If todo_write were treated as parallel-safe
+    this would collapse toward tSingle like the case above. }
+  Check((tSplit - tBase) > (Work * 3) div 2,
+    Format('a SerialOnly writer splits the round (%d ms of work > 1.5x %d ms)',
+           [tSplit - tBase, Work]));
+  Check(FileExists(GHomeDir + '/workspace/' + PAR_DIR + '/f1.txt'),
+    'corpus survived the run');
+end;
+
 procedure ScenarioHistoryElision;
 { A model's own large write_file content must NOT be re-shipped verbatim on
   every later turn: the assistant tool-call args are elided to a stub in the
@@ -1092,6 +1272,7 @@ begin
     ScenarioErrorGuidance;
     ScenarioTruncationRecovery;
     ScenarioHistoryElision;
+    ScenarioParallelBatch;
 
     WriteLn;
     WriteLn('== metrics ==');

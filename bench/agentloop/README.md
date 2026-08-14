@@ -31,7 +31,18 @@ loop paths. FPC-only (`TProcess`).
 |---|---|---|
 | `build-site` | progress ledger folds into iteration 2's system prompt (goal + written file + todo checklist), iteration 1 stays pristine (prefix-cache), deliverable lands on disk | `iterations_to_deliverable` |
 | `malformed-recovery` | a Gemini-shaped `MALFORMED_FUNCTION_CALL` empty turn is auto-retried with the corrective nudge naming a *registered* tool, and the turn still delivers | `retries_to_recover` |
+| `parallel-batch` | three read-only greps in ONE response cost ≈ one grep (parallel dispatch actually runs), and a `SerialOnly` writer between two greps forces them into separate batches (≈ two greps) | `parallel.grep_work_ms`, `parallel.turn_overhead_ms` |
 | `resume-after-cap` | the 25-iteration stop carries the resume ledger ("do NOT redo", written files, read counts) in the notice; a follow-up "continue" turn anchors its ledger goal to the original task, not to the word "continue" | `max_request_body_bytes` (context-growth baseline across 25 iterations) |
+
+### Note on timing scenarios
+
+`parallel-batch` is the only scenario that asserts on wall time. It is
+self-calibrating in two directions, because absolute milliseconds are not
+portable: it first measures a turn that calls **no tools** (pure gateway +
+relay overhead, ~250 ms here) and subtracts it, then expresses every budget
+as a ratio of one grep's measured work. Comparing raw turn times instead
+was the first draft's mistake -- ~half of each number was harness, which
+made a correct 2x split read as 1.3x.
 
 ## Adding a scenario
 

@@ -297,6 +297,13 @@ type
 function PartitionToolBatches(const Calls: array of TToolCall;
                               Reg: TToolRegistry): TToolBatchArray;
 
+{ Copy of Hist with the current date/time appended to the trailing user
+  message; the input is never mutated. Public for tests -- WHERE the clock
+  lands is the part with a cost attached (the system block carries the
+  cache_control breakpoint), so it is worth asserting rather than assuming. }
+function HistWithTurnClock(const Hist: TMessageArray;
+                           const Stamp: string): TMessageArray;
+
 implementation
 
 uses
@@ -307,6 +314,7 @@ uses
   PasClaw.Tools.OutputCache,
   PasClaw.Condense.JSON,
   PasClaw.Promptware,       { injection scan on tool results -- chokepoint 1 }
+  PasClaw.Utils,            { NowStampWithZone -- the per-turn clock }
   PasClaw.Otel;             (* agent.turn / chat / execute_tool spans.
                                All helpers are no-ops when OTel is
                                disabled, so the wiring costs ~5 ns per
@@ -760,6 +768,64 @@ begin
     begin
       if Result <> '' then Result := Result + sLineBreak + sLineBreak;
       Result := Result + Hist[i].Content;
+    end;
+end;
+
+function HistWithTurnClock(const Hist: TMessageArray;
+                           const Stamp: string): TMessageArray;
+(* Return a copy of the history with Stamp appended to the LAST non-empty
+   user message. Nothing is written back: the caller's Hist is what gets
+   persisted, and a transcript should not accumulate a stamp per turn.
+
+   The search runs BACKWARD rather than looking only at the final message.
+   Once the first response dispatches a tool the history ends in mrTool
+   results, so a last-message-only test stamps nothing from iteration 2
+   onward -- and since the stamp is never persisted, every subsequent
+   stateless request would carry no clock at all. That loses the time on
+   exactly the requests that produce the final answer, which is most turns
+   (Codex P1, PR #543). The trailing tool-result run is left untouched, so
+   tool_use/tool_result pairing is unaffected.
+
+   Stamp is passed IN, computed once per turn by the caller, rather than
+   read from the clock here. Re-reading it per iteration would change an
+   early message's bytes on every call; there is no message-level
+   cache_control in the Anthropic provider, but several providers cache
+   message prefixes implicitly, and a value that ticks mid-turn would
+   defeat that for no benefit -- the model does not need second-accurate
+   time while it is working.
+
+   WHY IT GOES HERE AND NOT IN THE SYSTEM PROMPT
+   ---------------------------------------------
+   The system block carries the cache_control breakpoint (see
+   PasClaw.Providers.Anthropic.BuildRequest), so a clock in the system
+   prompt would invalidate the provider's prefix cache on EVERY call --
+   which is exactly why the progress ledger's header states "NO counters,
+   no timestamps" as a hard constraint. The messages array sits after both
+   the system and last-tool breakpoints, so a value that changes every turn
+   costs nothing there.
+
+   WHY AN EXISTING USER MESSAGE AND NOT A NEW ONE
+   ----------------------------------------------
+   A trailing mrSystem message would be hoisted into the system prompt by
+   the Anthropic provider (it scans Messages for the first mrSystem when
+   Options.SystemPrompt is empty) -- straight back into the cached prefix.
+   A brand-new mrUser message appended after tool results would sit between
+   a tool_use and its tool_result. Extending the message that is already
+   there avoids both.
+
+   Result: every request in the turn carries the clock, and all of them
+   carry the SAME reading, so the bytes stay stable across iterations. *)
+var
+  i: Integer;
+begin
+  Result := Copy(Hist, 0, Length(Hist));   { true copy: element-wise }
+  if Trim(Stamp) = '' then Exit;
+  for i := High(Result) downto 0 do
+    if (Result[i].Role = mrUser) and (Trim(Result[i].Content) <> '') then
+    begin
+      Result[i].Content := Result[i].Content + sLineBreak + sLineBreak +
+        '[current date/time: ' + Stamp + ']';
+      Exit;
     end;
 end;
 
@@ -1360,6 +1426,8 @@ var
   FallbackModel: string;
   Resp: TLLMResponse;
   Hist: TMessageArray;
+  CallHist: TMessageArray;   { Hist + the turn clock; never persisted }
+  TurnClock: string;         { stamped once per turn -- see HistWithTurnClock }
   LiveOptions: TChatOptions;
   Dispatches: array of TToolCallDispatch;
   Batches: TToolBatchArray;
@@ -1462,6 +1530,12 @@ begin
   for i := 0 to High(Cfg.Hooks) do
     if Cfg.Hooks[i] <> nil then
       Cfg.Hooks[i].Identity := Cfg.Identity;
+  { One reading per turn, like Identity above: every iteration of this
+    turn shows the model the same time, so the stamped message stays
+    byte-identical across iterations and implicit prefix caches keep
+    hitting. Sub-minute drift while the model works is below the
+    resolution this is used at. }
+  TurnClock := NowStampWithZone;
   while Iter < Cfg.MaxIterations do
   begin
     Inc(Iter);
@@ -1629,6 +1703,13 @@ begin
     if Cfg.Registry <> nil then
       Tools := Cfg.Registry.ToProviderDefs;
 
+    { The clock rides in the messages array, after the cache breakpoints --
+      see HistWithTurnClock. Built ONCE per iteration, here, so the primary
+      call and every fallback below send the same history: a fallback
+      answers the turn just as the primary would. Hist itself is untouched,
+      so the persisted transcript stays clean. }
+    CallHist := HistWithTurnClock(Hist, TurnClock);
+
     { gen_ai chat span (tier-2 instrumentation). Wraps the actual
       provider request -- naming follows openclaw / Langfuse so
       backend dashboards recognise the span shape. Token counts
@@ -1644,7 +1725,8 @@ begin
         { Empty-turn auto-retry. When StreamReliability.EmptyRetryAttempts
           is 0 (default record zero, the legacy shape) ChatWithEmptyRetry
           is a one-shot call -- identical to the pre-PR behaviour. }
-        Resp := ChatWithEmptyRetry(Cfg.Provider, Hist, Tools, Cfg.Model,
+        Resp := ChatWithEmptyRetry(Cfg.Provider, CallHist,
+                                    Tools, Cfg.Model,
                                     LiveOptions, Cfg.StreamReliability);
       except
         on E: Exception do
@@ -1701,7 +1783,12 @@ begin
         LogDebug('fallback %d: trying %s with model=%s',
                  [fbi, Cfg.Fallbacks[fbi].GetName, FallbackModel]);
         try
-          Resp := Cfg.Fallbacks[fbi].Chat(Hist, Tools, FallbackModel, LiveOptions);
+          { CallHist, not Hist: a fallback answers the turn just as the
+            primary would, and dropping the clock here would lose it during
+            exactly the outages and rate limits that engage fallbacks
+            (Codex P2, PR #543). }
+          Resp := Cfg.Fallbacks[fbi].Chat(CallHist, Tools, FallbackModel,
+                                          LiveOptions);
           { Successful call clears the diagnostic -- only the LAST failed
             attempt's text should surface to hooks. }
           LastProviderErrText := '';

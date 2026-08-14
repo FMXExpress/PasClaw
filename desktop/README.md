@@ -34,28 +34,25 @@ Both vendored pieces come from
 
 ### WebView2 on Windows
 
-App windows, the Browser and the chat transcript are all `TWebBrowser`, and
-they ask for `TWindowsEngine.EdgeIfAvailable` — because the legacy engine is
+App windows and the Browser are `TWebBrowser`, and they ask for
+`TWindowsEngine.EdgeIfAvailable` — because the legacy engine is
 IE-era and renders a modern document (flexbox, grid, ES6, fetch) badly enough
 to misrepresent the app the agent just wrote.
 
 *If available* is the operative half. WebView2 is only available when
 `WebView2Loader.dll` sits beside the exe; without it FMX falls back to the
 legacy engine **silently**, and the app looks broken for reasons nothing
-reports. A post-build event in the `.dproj` copies it for both Windows
-platforms:
+reports. So if the chat renders but an app window looks like 1998, that DLL
+is the first thing to check.
 
-```
-if exist "$(BDS)\Redist\win32\WebView2Loader.dll" (copy /Y "$(BDS)\Redist\win32\WebView2Loader.dll" "$(OUTPUTDIR)") else (echo WARNING: ...)
-```
-
-`$(BDS)` rather than a literal `C:\Program Files (x86)\Embarcadero\Studio\23.0`
-so it follows whichever RAD Studio is building, and `win32` / `win64` from the
-matching Redist directory — a 32-bit loader beside a 64-bit exe does not load.
-
-Guarded with `if exist` so a Delphi install without that redistributable
-cannot fail the build, and the `else` prints a warning rather than passing in
-silence, since silence is the failure mode this exists to prevent.
+The project does **not** copy it for you. A post-build event pulling it from
+`$(BDS)\Redist\win32|win64` was tried and removed: that directory does not
+carry `WebView2Loader.dll` on the RAD Studio installs we have looked at, so
+the step was a guaranteed no-op that read like a solved problem. Put a copy
+beside the exe yourself, from wherever your install actually keeps one —
+usually under the `WebView2` NuGet package pulled in by a project that uses
+it, and matching the platform: a 32-bit loader beside a 64-bit exe does not
+load.
 
 Shipping the app to a machine that has never run an Edge-based application
 also needs the **WebView2 Evergreen Runtime** installed there; the loader DLL
@@ -130,10 +127,12 @@ Environment:
   workspace, not to the client — the arrangement is saved against the
   desktop you are leaving and comes back when you return, geometry
   included.
-- **Chat window** — per project, streaming, **rendering markdown** (headings,
-  lists, code blocks, links) and with the model's tool use shown
-  inline as it works: asking for an app should not look like a long silence
-  followed by a sentence. It sends the builder-mode system prompt, so the
+- **Chat window** — per project, streaming, with structure preserved
+  (headings, bullets, numbered lists, quotes and code blocks each get their
+  own control) and the model's tool use shown inline as it works: asking for
+  an app should not look like a long silence followed by a sentence. It is
+  built from ordinary FMX controls, **not** a `TWebBrowser` — see the design
+  note below. It sends the builder-mode system prompt, so the
   agent's deliverable is an app rather than an essay. **Chat** on the Menu
   opens the project-less one instead — no builder prompt, just a
   conversation. When a
@@ -196,12 +195,29 @@ desktop in the browser and this app opens with it.
   the current style like everything else, and they are the same furniture the
   agent's own questions will use when the period-native output work lands
   (§7 of the plan).
+- **The chat transcript is not a browser.** It was, and that is what made
+  the window a white square. A `TWebBrowser` is a native control that has to
+  be swapped for a bitmap to coexist with overlapping windows, and its Edge
+  engine initialises *asynchronously* — hand it a document in the same turn
+  you create it and the document is dropped. Under the legacy IE engine that
+  worked by accident, so the failure only appeared once WebView2 actually
+  engaged. It is a `TVertScrollBox` of labels now: no native control, no
+  snapshot, no engine, nothing to be blank. The markdown is parsed in
+  `PasClaw.Client.Markdown` (`MarkdownToBlocks`), where FPC compiles it and
+  `client_markdown_tests` asserts it, leaving this file with nothing but
+  "make a label, make a memo". PasClaw Studio's chat has no browser either.
+  The cost: an FMX `TLabel` has no rich text, so bold and links are
+  flattened to plain text rather than styled.
 - **The browser snapshot trick** is the demo's: `TWebBrowser` is a native
   control that paints above all FMX content, so an inactive window freezes
   its browser into a `TImage` and swaps the live control back on focus.
 - **Windows report their own death** through `FreeNotification`, so closing
   one clears its dictionary entries rather than leaving a dangling pointer
-  for the next Restore to walk.
+  for the next Restore to walk. The `TWebBrowser`es do the same, and have
+  to: `FBrowsers` holds them without owning them, so a closed window used
+  to leave a freed pointer in the list. The activation handler only walked
+  that list when a window was activated, which made it look like stability;
+  the tick that asserts the live control walks it every 700 ms.
 - **Logic lives in the client library, not here.** Everything with a rule in
   it — what a run record means, how a directory listing is shaped, which
   page kinds exist — is in `PasClaw.Client.Api`, which FPC compiles and CI

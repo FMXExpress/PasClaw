@@ -809,6 +809,46 @@ idempotence lives — is testable without a mail server.
 
 The FireMonkey client needs Delphi and is not part of `make`.
 
+## The chat transcript is not a browser (FireMonkey client)
+
+It was, and that is what made the window a white square. A `TWebBrowser` is
+a native control: it paints above all FMX content, so it needs a
+snapshot-swap to coexist with overlapping windows, and its Edge engine
+initialises **asynchronously** — hand it a document in the same turn you
+create it and the document is dropped. Under the legacy IE engine that
+worked by accident, which is why the failure only appeared once the
+`WindowsEngine` ordering was fixed and WebView2 actually engaged.
+
+The transcript is a `TVertScrollBox` of ordinary controls now — one per
+markdown block, not one per turn:
+
+| Block | Control |
+|---|---|
+| heading | a bold label, sized by level |
+| paragraph | a wrapped label (consecutive prose lines join, so a hard-wrapped reply is not a column of one-liners) |
+| bullet / numbered | an indented label carrying its own marker |
+| quote | an indented, dimmed label |
+| code fence | a read-only monospace `TMemo`, sized to its content — a fence is the one place the exact characters and line breaks *are* the content |
+| rule | a `TLine` |
+
+No native control, no snapshot, no engine, nothing that can be blank. The
+parsing lives in `PasClaw.Client.Markdown` (`MarkdownToBlocks`,
+`FlattenInline`) where FPC compiles it and `client_markdown_tests` asserts
+it; the FMX side is left with "make a label, make a memo", which matters in
+a file that has no compiler in CI.
+
+The cost, stated plainly: an FMX `TLabel` has no rich text, so **bold and
+links are flattened** — `**bold**` loses its asterisks and `[text](url)`
+becomes `text (url)`, because dropping where something points is worse than
+showing it. Structure survives; typography does not. PasClaw Studio's chat
+reached the same trade.
+
+Streaming still uses a memo, but it now sits *below* the transcript instead
+of replacing it: with both as ordinary controls they can coexist, so the
+settled conversation stays readable while the next reply arrives.
+
+---
+
 ## Off the UI thread (FireMonkey client)
 
 Every call into `TPasClawClient` is a blocking HTTP round trip, and most of
