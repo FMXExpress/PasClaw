@@ -3803,7 +3803,14 @@ begin
     'An html app persists data through the desktop SDK -- include ' +
     '<script src="pasclaw.js"> and call pasclaw.getJSON / pasclaw.setJSON. ' +
     'Do not fetch the API directly; the app is sandboxed and it will be ' +
-    'blocked.' + sLineBreak + sLineBreak +
+    'blocked.' + sLineBreak +
+    'The sandbox blocks EVERY off-origin URL, looks included: CDN ' +
+    'scripts, stylesheets, fonts and images all silently fail to load, ' +
+    'so an app styled from cdn.tailwindcss.com or Google Fonts renders ' +
+    'as bare unstyled HTML. Make the page SELF-CONTAINED: write your own ' +
+    'CSS in a <style> block, use system font stacks, and draw icons as ' +
+    'inline SVG or unicode. No <script src> or <link href> pointing off ' +
+    'the page except pasclaw.js.' + sLineBreak + sLineBreak +
     'Keep the board current with the project and task tools as you work, ' +
     'and be brief in chat -- the app is the answer.';
 end;

@@ -944,6 +944,37 @@ begin
   ExpectStatus('GET', '/apps/spam-filter/index.html', '', 404,
                'nor serve their app files');
 
+  (* The off-origin scan behind the "app may render unstyled" warning.
+
+     The app CSP blocks every off-origin load SILENTLY -- an app styled
+     from a CDN renders bare in every PasClaw viewer while the same file
+     opened straight into a browser looks perfect. The scan is what turns
+     that silence into a log line, so what it counts (and what it must
+     not) is worth pinning. *)
+  ExpectTrue(OffOriginHosts(
+    '<script src="https://cdn.tailwindcss.com"></script>') =
+    'cdn.tailwindcss.com',
+    'a CDN script is an off-origin load');
+  ExpectTrue(OffOriginHosts(
+    '<link rel="stylesheet" href="https://cdnjs.cloudflare.com/x.css">') =
+    'cdnjs.cloudflare.com',
+    'a CDN stylesheet is too');
+  ExpectTrue(OffOriginHosts(
+    '<script src="https://a.test/x.js"></script>' +
+    '<link href="https://fonts.googleapis.com/css2?family=Inter" rel="stylesheet">' +
+    '<script src="https://a.test/y.js"></script>') =
+    'a.test fonts.googleapis.com',
+    'hosts are collected once each');
+  ExpectTrue(OffOriginHosts(
+    '<a href="https://example.com/docs">read the docs</a>') = '',
+    'a plain link is navigation, not a load -- no warning');
+  ExpectTrue(OffOriginHosts(
+    '<script src="pasclaw.js"></script>' +
+    '<link rel="stylesheet" href="style.css">') = '',
+    'same-origin references are fine');
+  ExpectTrue(OffOriginHosts('<p>see https://example.com in prose</p>') = '',
+    'a URL in text content is not a load either');
+
   if Failures = 0 then
     WriteLn('desktop_routes_tests: OK')
   else

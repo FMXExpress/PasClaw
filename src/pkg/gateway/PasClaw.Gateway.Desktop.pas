@@ -63,6 +63,14 @@ type
   TTextGenerator = function(const SystemPrompt, Prompt: string;
     out Reply, Err: string): Boolean;
 
+
+(* The off-origin hosts an HTML document tries to LOAD from -- <script src>
+   and <link href> pointing at http(s), space-separated, deduped. A plain
+   <a href> is navigation, not a resource, and is not counted. Public
+   because the rule is worth pinning in tests: the app CSP blocks these
+   silently, and this scan is what turns that silence into a log line. *)
+function OffOriginHosts(const Html: string): string;
+
 procedure SetJobRunner(Runner: TJobRunner);
 procedure SetPageGenerator(Gen: TPageGenerator);
 procedure SetTextGenerator(Gen: TTextGenerator);
@@ -95,8 +103,10 @@ function DesktopRoute(const Method, Doc, Query, Body: string;
 implementation
 
 uses
+  StrUtils, SyncObjs,
   PasClaw.Utils,
   PasClaw.JSON,
+  PasClaw.Logger,           { the off-origin warning when serving an app }
   PasClaw.Workspaces,
   PasClaw.Projects.Store,
   PasClaw.Apps,
@@ -2148,6 +2158,102 @@ begin
   end;
 end;
 
+(* Warn -- once per file version -- when a served HTML document references
+   off-origin scripts or stylesheets.
+
+   Those references are dead on arrival: the CSP this unit serves apps
+   under has no off-origin allowance, so a CDN script or stylesheet is
+   dropped by the engine with nothing visible but the unstyled result.
+   The same file opened directly in a browser (no CSP header) looks
+   perfect, which makes the sandbox read as a rendering bug in PasClaw.
+
+   Only <script src> and <link href> are scanned: those two LOAD. A plain
+   <a href> to another site is navigation, not a resource, and must not
+   warn. Keyed on path + mtime so a rebuilt app warns afresh and a
+   reloaded one does not spam the log. *)
+var
+  GOffOriginWarned: TStringList = nil;
+  GOffOriginLock: TCriticalSection = nil;
+
+function OffOriginHosts(const Html: string): string;
+var
+  Lower, Tag: string;
+  P, TagEnd, U, HEnd: Integer;
+
+  procedure AddHost(const InTag: string);
+  var
+    Q: Integer;
+    Host: string;
+  begin
+    Q := Pos('http://', InTag);
+    if Q = 0 then Q := Pos('https://', InTag);
+    if Q = 0 then Exit;
+    Q := PosEx('://', InTag, Q) + 3;
+    HEnd := Q;
+    while (HEnd <= Length(InTag)) and
+          not CharInSet(InTag[HEnd], ['/', '"', '''', '?', ' ', '>']) do
+      Inc(HEnd);
+    Host := Copy(InTag, Q, HEnd - Q);
+    if Host = '' then Exit;
+    if Pos(' ' + Host + ' ', ' ' + Result + ' ') = 0 then
+    begin
+      if Result <> '' then Result := Result + ' ';
+      Result := Result + Host;
+    end;
+  end;
+
+begin
+  Result := '';
+  Lower := LowerCase(Html);
+  P := 1;
+  while True do
+  begin
+    P := PosEx('<', Lower, P);
+    if P = 0 then Break;
+    if (Copy(Lower, P, 7) = '<script') or (Copy(Lower, P, 5) = '<link') then
+    begin
+      TagEnd := PosEx('>', Lower, P);
+      if TagEnd = 0 then Break;
+      Tag := Copy(Lower, P, TagEnd - P + 1);
+      U := Pos('src=', Tag);
+      if U = 0 then U := Pos('href=', Tag);
+      if (U > 0) and ((Pos('http://', Tag) > 0) or (Pos('https://', Tag) > 0)) then
+        AddHost(Tag);
+      P := TagEnd + 1;
+    end
+    else
+      Inc(P);
+  end;
+end;
+
+procedure WarnOffOriginRefs(const Project, Path: string);
+var
+  Key, Hosts: string;
+begin
+  { Indy serves on worker threads; the warned-set is shared state. }
+  Key := Path + '|' + IntToStr(FileAge(Path));
+  GOffOriginLock.Enter;
+  try
+    if GOffOriginWarned = nil then
+    begin
+      GOffOriginWarned := TStringList.Create;
+      GOffOriginWarned.Sorted := True;
+      GOffOriginWarned.Duplicates := dupIgnore;
+    end;
+    if GOffOriginWarned.IndexOf(Key) >= 0 then Exit;
+    GOffOriginWarned.Add(Key);
+  finally
+    GOffOriginLock.Leave;
+  end;
+
+  Hosts := OffOriginHosts(ReadFileText(Path));
+  if Hosts <> '' then
+    LogWarn('apps: "%s" references off-origin scripts/styles (%s) -- the ' +
+            'sandbox CSP blocks these, so they will not load and the app ' +
+            'may render unstyled. Apps must be self-contained.',
+            [Project, Hosts]);
+end;
+
 { GET /apps/<project>/<path...> -- serve the app's own files. }
 function RouteAppAsset(const Method, Doc: string;
   out Resp: TDesktopResponse): Boolean;
@@ -2225,6 +2331,14 @@ begin
                         AppContentSecurityPolicy(Info.Kind) + #13#10 +
                         'X-Content-Type-Options: nosniff' + #13#10 +
                         'Referrer-Policy: no-referrer';
+
+    { The CSP above makes an off-origin reference FAIL SILENTLY: an app
+      styled from a CDN just renders bare, in every PasClaw viewer, while
+      the same file opened straight into a browser looks fine -- which
+      reads as "PasClaw is broken" when it is the sandbox doing its job.
+      Say so where the operator can see it (the Log window). }
+    if Pos('text/html', Resp.ContentType) > 0 then
+      WarnOffOriginRefs(Project, Full);
   finally
     Segs.Free;
   end;
@@ -2621,5 +2735,12 @@ begin
 
   Result := False;
 end;
+
+initialization
+  GOffOriginLock := TCriticalSection.Create;
+
+finalization
+  FreeAndNil(GOffOriginWarned);
+  FreeAndNil(GOffOriginLock);
 
 end.
