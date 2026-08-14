@@ -1553,6 +1553,7 @@ const RESTORERS = {
   browser: a  => openBrowser(a || undefined),
   library: () => openLibrary(),
   files:   a  => openFiles(a || undefined),
+  console: () => openConsole(),
 };
 
 let saveTimer = null;
@@ -1636,8 +1637,27 @@ const MENU = [
   { label: "New Workspace",     icon: "disk",   fn: newWorkspace },
   { label: "Display Properties", icon: "gear",  fn: openDisplay },
   { sep: true },
-  { label: "Classic UI",        icon: "page",   fn: () => location.href = "/" },
+  { label: "Agent Console",     icon: "gear",   fn: () => openConsole() },
 ];
+
+/* The console: the operator's own surface -- the full agent chat and every
+   configuration page -- which used to be reachable only by NAVIGATING AWAY
+   from the desktop ("Classic UI" -> location.href = "/"). It is a window
+   now, like everything else: same origin, so the bearer token in
+   localStorage is shared and no second login is asked; no sandbox, because
+   this is our own UI, not model output. */
+function openConsole() {
+  const w = createWindow({
+    key: "console", title: "Agent Console",
+    width: 920, height: 640, icon: "gear", pad: false,
+    restore: { fn: "console" },
+  });
+  const f = el("iframe");
+  f.src = "/";
+  f.style.cssText = "width:100%;height:100%;border:0;display:block;background:#fff";
+  w.body.appendChild(f);
+  return w;
+}
 
 function buildMenu() {
   const m = $("#menu");

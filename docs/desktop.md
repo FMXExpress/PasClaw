@@ -23,7 +23,9 @@ pasclaw project seed            # install the system suite
 pasclaw mail sync               # optional: fill Mail from IMAP
 ```
 
-Open <http://127.0.0.1:8088/desktop>. The classic chat UI is still at `/`.
+Open <http://127.0.0.1:8088/desktop>. The full agent chat + configuration
+surface is still at `/`, and opens inside the desktop as a window: Menu →
+**Agent Console**.
 
 For the native client, see [`desktop/README.md`](../desktop/README.md).
 
