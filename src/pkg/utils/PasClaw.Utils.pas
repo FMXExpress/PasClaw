@@ -70,6 +70,16 @@ function NormalizePathSep(const P: string): string;
 function SplitToList(const S: string; Sep: Char): TStringList;
 function NowIsoUtc: string;
 
+{ Local wall-clock time with its UTC offset and the UTC equivalent, e.g.
+  "Thu 2026-08-14 12:25:33 UTC+02:00 (2026-08-14T10:25:33Z)".
+
+  Exists because a model with no stated time falls back to its training
+  cutoff, which silently corrupts date arithmetic, "is this still the
+  latest version" judgements, relative-time reasoning, and anything
+  schedule-shaped. Day-of-week is included because "next Monday" is a
+  question models actually get asked. }
+function NowStampWithZone: string;
+
 (* Tag S as carrying CP_UTF8 bytes without rewriting them. No-op on
    Delphi (string = UnicodeString, codepages don't apply) and on any
    platform where the string is empty.
@@ -455,6 +465,43 @@ begin
   DT := TTimeZone.Local.ToUniversalTime(Now);
   {$ENDIF}
   Result := FormatDateTime('yyyy"-"mm"-"dd"T"hh":"nn":"ss"Z"', DT);
+end;
+
+function NowStampWithZone: string;
+const
+  { Fixed English names -- FormatDateTime's 'ddd' is locale-dependent, and
+    a model reading "Do" or "jeu." learns less than it should. }
+  DOW: array[1..7] of string =
+    ('Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat');
+var
+  LocalDT, UtcDT: TDateTime;
+  OffsetMin, H, M: Integer;
+  Sign: string;
+begin
+  LocalDT := Now;
+  {$IFDEF FPC}
+  UtcDT := LocalTimeToUniversal(LocalDT);
+  {$ELSE}
+  UtcDT := TTimeZone.Local.ToUniversalTime(LocalDT);
+  {$ENDIF}
+  { The offset IS the timezone information the model can act on -- a bare
+    local time is ambiguous and a bare UTC time makes it do arithmetic to
+    answer "what time is it here". Give both. }
+  OffsetMin := Round((LocalDT - UtcDT) * 24 * 60);
+  if OffsetMin < 0 then
+  begin
+    Sign := '-';
+    OffsetMin := -OffsetMin;
+  end
+  else
+    Sign := '+';
+  H := OffsetMin div 60;
+  M := OffsetMin mod 60;
+  Result := Format('%s %s UTC%s%.2d:%.2d (%s)',
+    [DOW[DayOfWeek(LocalDT)],
+     FormatDateTime('yyyy"-"mm"-"dd hh":"nn":"ss', LocalDT),
+     Sign, H, M,
+     FormatDateTime('yyyy"-"mm"-"dd"T"hh":"nn":"ss"Z"', UtcDT)]);
 end;
 
 end.
