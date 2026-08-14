@@ -144,11 +144,16 @@ type
        shown while a turn is in flight and hidden once the finished turn
        joins the transcript. *)
     FChatTurns: TObjectDictionary<string, TStringList>;
-    FChatViews: TDictionary<string, TWebBrowser>;
+    { The transcript, as controls. No browser: see the note in OpenChat. }
+    FChatFlows: TDictionary<string, TVertScrollBox>;
     FChatInputs: TDictionary<string, TMemo>;
     FChatHistory: TDictionary<string, string>;
     FBrowsers: TObjectList<TWebBrowser>;
     FSnapshots: TDictionary<TWebBrowser, TImage>;
+    { Temp files backing the generated documents -- one live file per key,
+      replaced as the document is re-rendered. See ShowHtml. }
+    FHtmlFiles: TDictionary<string, string>;
+    FHtmlSeq: Integer;
 
     { ---- File Manager ---- }
     { Bumped per navigation, so a listing that arrives after a later one
@@ -535,6 +540,15 @@ type
     function StyleColor(const Role, Fallback: string): string;
     procedure AppendTurn(const Project, Role, Text_: string);
     procedure RenderTranscript(const Project: string);
+    { One turn as controls, and the two blocks that are not labels. }
+    procedure AddTurnControls(Flow: TVertScrollBox; const Role, Text_: string);
+    procedure AddCodeBlock(Flow: TVertScrollBox; const Code: string);
+    procedure AddRule(Flow: TVertScrollBox);
+    { Generated HTML into a browser, through a temp file and .URL. See the
+      implementation for why not LoadFromStrings. }
+    function ShowHtml(B: TWebBrowser; const Key, Html: string): Boolean;
+    function SafeFileKey(const Key: string): string;
+    procedure DiscardHtmlFiles;
     procedure ShowStreaming(const Project: string; Streaming: Boolean);
 
     { Live board updates. The client subscribes to /v1/desktop/events on its
@@ -544,6 +558,9 @@ type
     procedure OnDesktopEvent(const Ev: TDesktopEvent; var Stop: Boolean);
     procedure ApplyPendingEvents;
     procedure EventTimerTick(Sender: TObject);
+    { Assert that the active window's browser is live, rather than trusting
+      the activation events to have left it that way. }
+    procedure EnsureLiveBrowsers;
 
     { ---- notifications ---- }
     (* Where the switch lives.
@@ -632,7 +649,6 @@ const
     whole launcher fits without scrolling on an ordinary board. }
   MenuRowHeight = 22;
   { Marks a chat transcript that is hidden because its turn is streaming. }
-  StreamingTag = 'streaming';
 
 { Conditional string. StrUtils has one; a local helper keeps this unit's
   uses clause to what it actually needs. Declared here, above every caller,
@@ -822,10 +838,11 @@ begin
   FAppWins    := TDictionary<string, TRetroWindow>.Create;
   FChatLogs   := TDictionary<string, TMemo>.Create;
   FChatTurns  := TObjectDictionary<string, TStringList>.Create([doOwnsValues]);
-  FChatViews  := TDictionary<string, TWebBrowser>.Create;
+  FChatFlows  := TDictionary<string, TVertScrollBox>.Create;
   FChatInputs := TDictionary<string, TMemo>.Create;
   FChatHistory := TDictionary<string, string>.Create;
   FBrowsers   := TObjectList<TWebBrowser>.Create(False);
+  FHtmlFiles  := TDictionary<string, string>.Create;
   FSnapshots  := TDictionary<TWebBrowser, TImage>.Create;
   FRunWins    := TDictionary<string, TRetroWindow>.Create;
   FRunLogs    := TDictionary<string, TMemo>.Create;
@@ -997,9 +1014,10 @@ begin
   FreeAndNil(FRunWins);
   FreeAndNil(FSnapshots);
   FreeAndNil(FBrowsers);
+  DiscardHtmlFiles;
   FreeAndNil(FChatHistory);
   FreeAndNil(FChatInputs);
-  FreeAndNil(FChatViews);
+  FreeAndNil(FChatFlows);
   FreeAndNil(FChatTurns);
   FreeAndNil(FChatLogs);
   FreeAndNil(FAppWins);
@@ -1172,7 +1190,7 @@ begin
     begin
       FChatWins.Remove(Key);
       FChatLogs.Remove(Key);      { memos were owned by the window }
-      FChatViews.Remove(Key);
+      FChatFlows.Remove(Key);
       FChatTurns.Remove(Key);
       FChatInputs.Remove(Key);
     end;
@@ -2165,7 +2183,7 @@ begin
     FRestoring := WasRestoring;
   end;
   FChatWins.Clear; FChatLogs.Clear; FChatInputs.Clear; FChatHistory.Clear;
-  FChatViews.Clear; FChatTurns.Clear;
+  FChatFlows.Clear; FChatTurns.Clear;
   FAppWins.Clear;
   FRunWins.Clear; FRunLogs.Clear; FRunHeads.Clear;
   FStylePicker := nil; FStyleList := nil; FSkinList := nil;
@@ -3256,9 +3274,48 @@ begin
   RefreshProjects;
 end;
 
+(* Repair the snapshot swap if it ever gets stuck.
+
+   The other thing a white square can be. BrowserActiveChanged freezes a
+   TWebBrowser into a TImage while its window is inactive, because a native
+   control paints above all FMX content -- and MakeScreenshot on a
+   composited WebView2 tends to come back blank, so a stuck snapshot IS a
+   white square over live content.
+
+   Being event-driven, it only ever fires when a window's Active flag
+   changes. A missed or mis-ordered event -- a snapshot taken as the window
+   was becoming active -- leaves the picture up with nothing to take it
+   down again, because the state it is waiting for has already happened.
+
+   So the invariant is asserted rather than merely maintained: the ACTIVE
+   window's browser is live, every tick. Cheap -- a handful of controls --
+   and it turns a permanent wedge into at most one frame of staleness. *)
+procedure TFormMain.EnsureLiveBrowsers;
+var
+  I: Integer;
+  B: TWebBrowser;
+  Snap: TImage;
+  W: TRetroWindow;
+begin
+  if FClosing or (FBrowsers = nil) then Exit;
+  for I := 0 to FBrowsers.Count - 1 do
+  begin
+    B := FBrowsers[I];
+    if (B = nil) or (B.Parent = nil) then Continue;
+    { Created as TWebBrowser.Create(W), so the owner IS its window. }
+    if not (B.Owner is TRetroWindow) then Continue;
+    W := TRetroWindow(B.Owner);
+    if not W.Active then Continue;
+    if FSnapshots.TryGetValue(B, Snap) and (Snap <> nil) and Snap.Visible then
+      Snap.Visible := False;
+    if not B.Visible then B.Visible := True;
+  end;
+end;
+
 procedure TFormMain.EventTimerTick(Sender: TObject);
 begin
   ApplyPendingEvents;
+  EnsureLiveBrowsers;
   { Log lines arrive on their own thread and are painted here, on the main
     one, for the same reason board events are. }
   DrainLogLines;
@@ -3537,9 +3594,7 @@ var
   Send, Vers: TButton;
   Row: TProjectRow;
   Title: string;
-  View: TWebBrowser;
-  ChatHost: TLayout;
-  ChatSnap: TImage;
+  Flow: TVertScrollBox;
 begin
   if FChatWins.TryGetValue(Project, W) and (W <> nil) then
   begin
@@ -3595,44 +3650,40 @@ begin
   Input.TextSettings.WordWrap := True;
   FChatInputs.AddOrSetValue(Project, Input);
 
-  (* Host + snapshot, the same arrangement the app and Browser windows use.
+  (* The transcript, in ORDINARY FMX CONTROLS.
 
-     TWebBrowser is a NATIVE control: it paints above all FMX content, so an
-     inactive window would keep showing its transcript on top of whatever
-     covers it. BrowserActiveChanged freezes it into a TImage when the
-     window loses focus -- but only for browsers it can find, which means
-     living inside a host layout under W.Client, being registered in
-     FSnapshots, and the window actually raising the event. Adding it to
-     FBrowsers alone did none of those. *)
-  W.OnActiveChanged := BrowserActiveChanged;
+     It was a TWebBrowser, and that is what made this window a white square.
+     A browser is a native control: it paints above all FMX content, so it
+     needs a snapshot-swap dance to coexist with overlapping windows, and
+     its engine initialises asynchronously -- hand it a document in the same
+     turn you create it and the document is simply dropped. Under the legacy
+     IE engine that worked by accident, because that one initialised
+     synchronously; the moment WebView2 actually engaged, the chat went
+     blank.
 
-  ChatHost := TLayout.Create(W);
-  ChatHost.Parent := W.Client;
-  ChatHost.Align := TAlignLayout.Client;
+     None of that machinery was buying anything. A conversation is a stack
+     of paragraphs, and a scroll box of labels renders it with no native
+     control, no snapshot, no engine, and no way to be blank. PasClaw Studio
+     reached the same conclusion -- its chat has no browser in it either.
 
-  ChatSnap := TImage.Create(W);
-  ChatSnap.Parent := ChatHost;
-  ChatSnap.Align := TAlignLayout.Client;
-  ChatSnap.WrapMode := TImageWrapMode.Stretch;
-  ChatSnap.Visible := False;
+     The cost is real and worth naming: an FMX TLabel has no rich text, so
+     bold and links are flattened (see FlattenInline) rather than styled.
+     Structure survives -- headings, bullets, quotes and code blocks are
+     each their own control -- and a readable transcript beats a beautifully
+     specified white rectangle. *)
+  Flow := TVertScrollBox.Create(W);
+  Flow.Parent := W.Client;
+  Flow.Align := TAlignLayout.Client;
+  FChatFlows.AddOrSetValue(Project, Flow);
 
-  { The settled transcript, formatted. }
-  View := TWebBrowser.Create(W);
-{$IFDEF MSWINDOWS}
-  { The transcript is a modern document too -- and the one place unicode in
-    the model's own words has to survive. Before Parent: see OpenApp. }
-  View.WindowsEngine := TWindowsEngine.EdgeIfAvailable;
-{$ENDIF}
-  View.Parent := ChatHost;
-  View.Align := TAlignLayout.Client;
-  FChatViews.AddOrSetValue(Project, View);
-  FBrowsers.Add(View);
-  FSnapshots.AddOrSetValue(View, ChatSnap);
-
-  { The live one. Same slot, shown only while a turn is in flight. }
+  { The live view for a turn in flight. Chunks arrive many times a second
+    and rebuilding the stack per chunk would be unusable, so streaming text
+    goes to one label at the bottom and joins the transcript when it
+    settles. }
   Log := TMemo.Create(W);
-  Log.Parent := ChatHost;
-  Log.Align := TAlignLayout.Client;
+  Log.Parent := W.Client;
+  Log.Align := TAlignLayout.Bottom;
+  Log.Height := 120;
   Log.ReadOnly := True;
   Log.TextSettings.WordWrap := True;
   Log.Visible := False;
@@ -3832,57 +3883,295 @@ end;
    Whole-document rather than incremental: a conversation is tens of turns,
    the markdown pass is string work, and the alternative is maintaining a
    DOM through a browser control's scripting bridge for no visible gain. *)
-procedure TFormMain.RenderTranscript(const Project: string);
+(* Put GENERATED html into a browser control.
+
+   Through a temporary file and .URL, not LoadFromStrings, and that swap is
+   the whole of this. The evidence is the split in this very file: every
+   place that assigns .URL renders -- app windows, answer pages -- and every
+   place that called LoadFromStrings came up a white square. Same windows,
+   same host layout, same snapshot machinery, same engine.
+
+   The difference is what the engine can defer. WebView2 initialises
+   ASYNCHRONOUSLY, and FMX's delegate holds a pending URL until the core is
+   ready; a string handed over before then has nothing to be held in and is
+   simply dropped. Under the legacy IE engine, which initialised
+   synchronously, the same call worked -- which is why this only started when
+   the WindowsEngine assignment was moved above Parent and Edge actually
+   engaged for the first time.
+
+   The file name carries a counter because navigating to the URL already
+   showing is not a navigation: without it the second render of a chat would
+   do nothing. The previous file is deleted as the next is written, so a
+   conversation leaves one file behind, not one per turn. *)
+function TFormMain.ShowHtml(B: TWebBrowser; const Key, Html: string): Boolean;
 var
-  View: TWebBrowser;
-  L: TStringList;
-  I, T: Integer;
-  Body, Role, Text_, Entry: string;
+  Dir, Path, Old, Enc: string;
 begin
-  if not FChatViews.TryGetValue(Project, View) then Exit;
-  if View = nil then Exit;
-  Body := '';
-  if FChatTurns.TryGetValue(Project, L) then
-    for I := 0 to L.Count - 1 do
-    begin
-      Entry := L[I];
-      T := Pos(#9, Entry);
-      if T = 0 then Continue;
-      Role  := Copy(Entry, 1, T - 1);
-      Text_ := Copy(Entry, T + 1, MaxInt);
-      if Role = 'user' then
-        Body := Body + '<div class="turn"><span class="who">You</span><br>' +
-                MarkdownToHTML(Text_) + '</div>'
-      else if Role = 'tool' then
-        Body := Body + '<div class="tool">' + HtmlEscape(Text_) + '</div>'
-      else if Role = 'toolerr' then
-        Body := Body + '<div class="tool err">' + HtmlEscape(Text_) + '</div>'
-      else
-        Body := Body + '<div class="turn">' + MarkdownToHTML(Text_) + '</div>';
+  Result := False;
+  if B = nil then Exit;
+  if FHtmlFiles = nil then FHtmlFiles := TDictionary<string, string>.Create;
+
+  Inc(FHtmlSeq);
+  Dir := TIOPath.GetTempPath;
+  Path := TIOPath.Combine(Dir,
+    'pasclaw-' + SafeFileKey(Key) + '-' + IntToStr(FHtmlSeq) + '.html');
+  try
+    TFile.WriteAllText(Path, Html, TEncoding.UTF8);
+  except
+    { A temp directory we cannot write is not a reason to fault; the window
+      stays blank and the Log window will have the trace. }
+    Exit;
+  end;
+
+  if FHtmlFiles.TryGetValue(Key, Old) and (Old <> '') and (Old <> Path) then
+    try
+      TFile.Delete(Old);
+    except
+      { a leftover temp file is not worth an exception }
     end;
-  View.LoadFromStrings(
-    ChatDocumentHTML(Body,
-      StyleColor('face',   '#c0c0c0'),
-      StyleColor('text',   '#000000'),
-      StyleColor('titleA', '#000080'),
-      StyleColor('light',  '#e8e8e8')), '');
+  FHtmlFiles.AddOrSetValue(Key, Path);
+
+  { file:/// plus forward slashes, with the characters a path may legally
+    contain and a URL may not. Windows temp paths live under a profile
+    directory, which routinely has a space in it. }
+  Enc := StringReplace(Path, '\', '/', [rfReplaceAll]);
+  Enc := StringReplace(Enc, '%', '%25', [rfReplaceAll]);
+  Enc := StringReplace(Enc, ' ', '%20', [rfReplaceAll]);
+  Enc := StringReplace(Enc, '#', '%23', [rfReplaceAll]);
+  Enc := StringReplace(Enc, '?', '%3F', [rfReplaceAll]);
+  if (Length(Enc) > 0) and (Enc[1] <> '/') then Enc := '/' + Enc;
+  B.URL := 'file://' + Enc;
+  Result := True;
 end;
 
-{ Streaming shows the live memo; a settled transcript shows the document. }
+{ Take the generated documents with us. They are in the system temp
+  directory, so leaving them is not a leak so much as litter -- but litter
+  with a conversation in it. }
+procedure TFormMain.DiscardHtmlFiles;
+var
+  Path: string;
+begin
+  if FHtmlFiles = nil then Exit;
+  for Path in FHtmlFiles.Values do
+    if Path <> '' then
+      try
+        TFile.Delete(Path);
+      except
+      end;
+  FreeAndNil(FHtmlFiles);
+end;
+
+{ A key that is safe as part of a file name. Project slugs already are, but
+  the synthetic chat keys start with a colon. }
+function TFormMain.SafeFileKey(const Key: string): string;
+var
+  I: Integer;
+  C: Char;
+begin
+  Result := '';
+  for I := 1 to Length(Key) do
+  begin
+    C := Key[I];
+    if CharInSet(C, ['a'..'z', 'A'..'Z', '0'..'9', '-', '_']) then
+      Result := Result + C
+    else
+      Result := Result + '-';
+  end;
+  if Result = '' then Result := 'chat';
+end;
+
+(* Build the transcript out of controls.
+
+   One control per BLOCK, not per turn: the parsing lives in
+   PasClaw.Client.Markdown where FPC compiles it and client_markdown_tests
+   asserts it, and everything left here is "make a label, make a memo".
+   That division is deliberate -- this file has no compiler in CI, so the
+   less judgement it carries the better.
+
+   Rebuilt wholesale on each settled turn. A conversation is tens of blocks,
+   not thousands, and a diffing renderer would be more code than it saves
+   and another thing to be subtly wrong. *)
+procedure TFormMain.RenderTranscript(const Project: string);
+var
+  Flow: TVertScrollBox;
+  L: TStringList;
+  I, T: Integer;
+  Role, Text_, Entry: string;
+begin
+  if not FChatFlows.TryGetValue(Project, Flow) then Exit;
+  if Flow = nil then Exit;
+
+  Flow.BeginUpdate;
+  try
+    while Flow.Content.ChildrenCount > 0 do
+      Flow.Content.Children[Flow.Content.ChildrenCount - 1].Free;
+
+    if FChatTurns.TryGetValue(Project, L) then
+      for I := 0 to L.Count - 1 do
+      begin
+        Entry := L[I];
+        T := Pos(#9, Entry);
+        if T = 0 then Continue;
+        Role  := Copy(Entry, 1, T - 1);
+        Text_ := Copy(Entry, T + 1, MaxInt);
+        AddTurnControls(Flow, Role, Text_);
+      end;
+  finally
+    Flow.EndUpdate;
+  end;
+  { The newest turn is the one you want to be looking at. }
+  Flow.ViewportPosition := PointF(0, Flow.Content.Height);
+end;
+
+(* '#RRGGBB' -> an OPAQUE TAlphaColor.
+
+   Explicit rather than StringToAlphaColor, which reads a six-digit value as
+   AARRGGBB -- alpha byte absent, therefore zero, therefore text that is
+   perfectly laid out and completely invisible. Which is the same bug as the
+   white square this window has just come out of, and would have been a
+   miserable one to find twice. *)
+function HexColor(const S: string; Fallback: TAlphaColor): TAlphaColor;
+var
+  V: Integer;
+  T: string;
+begin
+  T := Trim(S);
+  if (T <> '') and (T[1] = '#') then Delete(T, 1, 1);
+  if Length(T) <> 6 then Exit(Fallback);
+  if not TryStrToInt('$' + T, V) then Exit(Fallback);
+  Result := TAlphaColor($FF000000 or Cardinal(V));
+end;
+
+{ One turn: a speaker line, then a control per markdown block. }
+procedure TFormMain.AddTurnControls(Flow: TVertScrollBox;
+  const Role, Text_: string);
+var
+  Blocks: TMdBlocks;
+  I: Integer;
+  Who: string;
+
+  { Every control here is Align=Top inside the scroll box's content, so the
+    box stacks them and sizes itself. }
+  function NewLabel(const S: string; Size: Single; Bold: Boolean;
+    Indent: Single; const ColorRole, Fallback: string): TLabel;
+  begin
+    Result := TLabel.Create(Flow);
+    Result.Parent := Flow.Content;
+    Result.Align := TAlignLayout.Top;
+    Result.Margins.Rect := TRectF.Create(8 + Indent, 2, 8, 2);
+    Result.StyledSettings := [];
+    Result.AutoSize := True;
+    Result.TextSettings.WordWrap := True;
+    Result.TextSettings.Font.Size := Size;
+    if Bold then
+      Result.TextSettings.Font.Style := [TFontStyle.fsBold]
+    else
+      Result.TextSettings.Font.Style := [];
+    Result.TextSettings.FontColor :=
+      HexColor(StyleColor(ColorRole, Fallback), TAlphaColors.Black);
+    Result.Text := S;
+  end;
+
+begin
+  if Role = 'user' then Who := 'You'
+  else if Role = 'tool' then Who := ''
+  else if Role = 'toolerr' then Who := ''
+  else Who := 'PasClaw';
+
+  { Tool lines are machinery, not conversation: small, indented, no
+    speaker. An error among them is the same shape in the accent colour, so
+    it reads as part of the same stream rather than a separate event. }
+  if Role = 'tool' then
+  begin
+    NewLabel(Text_, 11, False, 14, 'text', '#000000').Opacity := 0.65;
+    Exit;
+  end;
+  if Role = 'toolerr' then
+  begin
+    NewLabel(Text_, 11, False, 14, 'titleA', '#000080');
+    Exit;
+  end;
+
+  NewLabel(Who, 11, True, 0, 'titleA', '#000080');
+
+  Blocks := MarkdownToBlocks(Text_);
+  { Prose with no markdown in it still has to appear. }
+  if Length(Blocks) = 0 then
+  begin
+    if Trim(Text_) <> '' then
+      NewLabel(Trim(Text_), 12, False, 0, 'text', '#000000');
+    Exit;
+  end;
+
+  for I := 0 to High(Blocks) do
+    case Blocks[I].Kind of
+      mbHeading:
+        NewLabel(Blocks[I].Text, 16 - (Blocks[I].Level * 1.5), True, 0,
+                 'text', '#000000');
+      mbBullet:
+        NewLabel('  ' + #$2022 + '  ' + Blocks[I].Text, 12, False, 8,
+                 'text', '#000000');
+      mbNumber:
+        NewLabel('  ' + IntToStr(Blocks[I].Level) + '.  ' + Blocks[I].Text,
+                 12, False, 8, 'text', '#000000');
+      mbQuote:
+        NewLabel('|  ' + Blocks[I].Text, 12, False, 8,
+                 'text', '#000000').Opacity := 0.8;
+      mbRule:
+        AddRule(Flow);
+      mbCode:
+        AddCodeBlock(Flow, Blocks[I].Text);
+      else
+        NewLabel(Blocks[I].Text, 12, False, 0, 'text', '#000000');
+    end;
+end;
+
+{ A code block: monospace, in a panel, and NOT a label -- a fenced block is
+  the one place the exact characters and their line breaks are the content,
+  so it gets a control that will not reflow them. }
+procedure TFormMain.AddCodeBlock(Flow: TVertScrollBox; const Code: string);
+var
+  M: TMemo;
+  Lines: Integer;
+  I: Integer;
+begin
+  Lines := 1;
+  for I := 1 to Length(Code) do
+    if Code[I] = #10 then Inc(Lines);
+  if Lines > 24 then Lines := 24;
+
+  M := TMemo.Create(Flow);
+  M.Parent := Flow.Content;
+  M.Align := TAlignLayout.Top;
+  M.Margins.Rect := TRectF.Create(16, 4, 8, 4);
+  M.ReadOnly := True;
+  M.TextSettings.WordWrap := False;
+  M.TextSettings.Font.Family := 'Courier New';
+  M.TextSettings.Font.Size := 11;
+  { Sized to its content rather than scrolled: a code block inside a
+    scrolling transcript that scrolls on its own is a trap for the wheel. }
+  M.Height := 8 + (Lines * 15);
+  M.Text := Code;
+end;
+
+procedure TFormMain.AddRule(Flow: TVertScrollBox);
+var
+  Ln: TLine;
+begin
+  Ln := TLine.Create(Flow);
+  Ln.Parent := Flow.Content;
+  Ln.Align := TAlignLayout.Top;
+  Ln.LineType := TLineType.Top;
+  Ln.Height := 6;
+  Ln.Margins.Rect := TRectF.Create(8, 4, 8, 4);
+end;
+
 procedure TFormMain.ShowStreaming(const Project: string; Streaming: Boolean);
 var
   M: TMemo;
-  View: TWebBrowser;
 begin
   if FChatLogs.TryGetValue(Project, M) and (M <> nil) then
     M.Visible := Streaming;
-  if FChatViews.TryGetValue(Project, View) and (View <> nil) then
-  begin
-    View.Visible := not Streaming;
-    { Marked so the focus handler does not un-hide the transcript over the
-      live memo when the window is clicked mid-turn. }
-    if Streaming then View.TagString := StreamingTag else View.TagString := '';
-  end;
 end;
 
 procedure TFormMain.ChatChunk(const Chunk: string; var Abort: Boolean);
@@ -4064,22 +4353,33 @@ begin
     { Pin what this turn produced to the turn that produced it, so scrolling
       back through the conversation is scrolling back through versions. }
     AddArtifactCard(Project);
+    { Into the TRANSCRIPT, not the streaming memo. That memo is hidden the
+      moment the turn settles, so these notices -- the ones that say what
+      just happened to your app -- were written where nobody could read
+      them. }
     if App.Servable then
     begin
-      Log.Lines.Add('>> "' + App.Name + '" is ready. Opening it.');
+      AppendTurn(Project, 'tool', '"' + App.Name + '" is ready. Opening it.');
+      RenderTranscript(Project);
       OpenApp(Project);
     end
     else
     begin
       { python/fpc/delphi: a program, not a document. It gets the Run window
         rather than a browser view, and nothing starts without consent. }
-      Log.Lines.Add(Format('>> "%s" is a %s app -- opening its Run window.',
-                           [App.Name, App.Kind]));
+      AppendTurn(Project, 'tool',
+        Format('"%s" is a %s app -- opening its Run window.',
+               [App.Name, App.Kind]));
+      RenderTranscript(Project);
       OpenRun(Project);
     end;
   end
   else if ProjectByName(Project, Row) and Row.HasApp then
-    Log.Lines.Add('>> The app was written but has no runnable entry yet.');
+  begin
+    AppendTurn(Project, 'tool',
+      'The app was written but has no runnable entry yet.');
+    RenderTranscript(Project);
+  end;
 end;
 
 { ------------------------------------------------------------------- app -- }
@@ -4107,9 +4407,7 @@ begin
     if W.Active then
     begin
       Snap.Visible := False;
-      { A chat window streaming a reply is showing its memo; restoring the
-        transcript here would paint it over the live text. }
-      B.Visible := B.TagString <> StreamingTag;
+      B.Visible := True;
     end
     else
     begin
@@ -5407,10 +5705,10 @@ procedure TFormMain.ShowBlankTab;
 begin
   FCurrentPage := '';
   if FBrowserView <> nil then
-    FBrowserView.LoadFromStrings(
+    ShowHtml(FBrowserView, 'browser',
       ChatDocumentHTML('<p>Ask a question. The answer comes back as a page.</p>',
         StyleColor('face', '#c0c0c0'), StyleColor('text', '#000000'),
-        StyleColor('titleA', '#000080'), StyleColor('light', '#e8e8e8')), '');
+        StyleColor('titleA', '#000080'), StyleColor('light', '#e8e8e8')));
   if FBrowserPromote <> nil then FBrowserPromote.Enabled := False;
   if FBrowserStatus <> nil then FBrowserStatus.Text := '';
   if FBrowserWin <> nil then FBrowserWin.Caption := 'Browser';
@@ -5545,18 +5843,21 @@ begin
         { Say what happened IN the tab, rather than leaving the last document
           standing as if it were this one. The tab keeps its path, so
           reselecting it -- or fixing the file -- tries again. }
-        FBrowserView.LoadFromStrings(
+        ShowHtml(FBrowserView, 'browser',
           ChatDocumentHTML('<p><b>' + HtmlEscape(Name) +
             '</b> could not be read.</p><p>' + HtmlEscape(Err) + '</p><p>' +
             HtmlEscape(Path) + '</p>',
             StyleColor('face', '#c0c0c0'), StyleColor('text', '#000000'),
-            StyleColor('titleA', '#000080'), StyleColor('light', '#e8e8e8')), '');
+            StyleColor('titleA', '#000080'), StyleColor('light', '#e8e8e8')));
         if FBrowserStatus <> nil then
           FBrowserStatus.Text := Path + '  [unreadable]';
         Exit;
       end;
 
-      FBrowserView.LoadFromStrings(Body, Path);
+      { The base URL LoadFromStrings took is gone, and was already inert:
+        WebView2 loads a string into an opaque origin, so a document's
+        relative images and stylesheets never resolved under Edge anyway. }
+      ShowHtml(FBrowserView, 'browser', Body);
       if FBrowserStatus <> nil then
       begin
         if Truncated then FBrowserStatus.Text := Path + '  [truncated]'

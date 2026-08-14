@@ -32,6 +32,12 @@ begin
   if not Cond then Fail_(Msg);
 end;
 
+procedure ExpectStr(const Got, Want, Msg: string);
+begin
+  if Got <> Want then
+    Fail_(Msg + ' -- got "' + Got + '", want "' + Want + '"');
+end;
+
 procedure ExpectHas(const Hay, Needle, Msg: string);
 begin
   if Pos(Needle, Hay) = 0 then
@@ -47,6 +53,7 @@ end;
 
 var
   H: string;
+  Blocks: TMdBlocks;
 begin
   { ---------------------------------------------------- the safety rule -- }
   (* Model output is untrusted text. Every one of these must come back as
@@ -164,6 +171,94 @@ begin
   ExpectHas(H, '#c0c0c0', 'the background colour is applied');
   ExpectHas(H, '#000080', 'and the accent');
   ExpectHas(H, 'scrollTo', 'and it scrolls to the newest turn');
+
+  (* A COMPLETE, STANDALONE document, and the reason that matters changed.
+
+     It used to reach the browser through LoadFromStrings, where an
+     unterminated or headless fragment would still mostly render. It is
+     written to a file and navigated to now -- see ShowHtml in the FMX
+     client, and the white chat window that made it necessary -- and a file
+     is parsed as a file: no doctype at the front and the charset is a guess,
+     no </html> and a truncated write looks like a whole page.
+
+     So this pins the frame, not just the body. If a chat window ever comes
+     up blank again, these assertions passing is what says the content was
+     fine and the delivery was not. *)
+  ExpectTrue(Pos('<!doctype html>', LowerCase(H)) = 1,
+             'the document opens with a doctype, at the very start');
+  ExpectHas(LowerCase(H), 'charset="utf-8"',
+            'and declares utf-8 rather than leaving it to be sniffed');
+  ExpectHas(LowerCase(H), '</html>', 'and is terminated');
+
+  { Unicode in the model's own words has to survive the whole way out. }
+  H := ChatDocumentHTML(MarkdownToHTML('an em dash -- really a ' + #$2014 +
+                                       ' and a ' + #$00E9),
+                        '#c0c0c0', '#000', '#000080', '#fff');
+  ExpectHas(H, #$2014, 'an em dash survives into the document');
+  ExpectHas(H, #$00E9, 'and an accented letter');
+
+  (* ---- the same markdown, as BLOCKS ----
+
+     The chat window renders with ordinary FMX controls rather than a
+     TWebBrowser -- a browser is a native control that has to be swapped for
+     a snapshot to coexist with overlapping windows, and its engine
+     initialises asynchronously, which is how the chat became a white
+     square. A stack of labels has neither problem.
+
+     Which puts the parsing here, where FPC compiles it and this runs. The
+     client is left with "make a label, make a memo", and everything with a
+     rule in it is asserted below. *)
+  Blocks := MarkdownToBlocks('# Title'#10#10'Some **bold** prose.'#10 +
+    'Wrapped onto two lines.'#10#10'- one'#10'- two'#10#10'1. first'#10 +
+    '2. second'#10#10'> quoted'#10#10'---'#10#10'```'#10'x := 1;'#10'```');
+
+  ExpectTrue(Length(Blocks) = 9,
+             'nine blocks out of that document');
+  ExpectTrue(Blocks[0].Kind = mbHeading, 'the heading is a heading');
+  ExpectTrue(Blocks[0].Level = 1, 'at level one');
+  ExpectStr(Blocks[0].Text, 'Title', 'with its hashes gone');
+
+  { Consecutive prose lines are ONE paragraph -- a model that hard-wraps
+    must not become a column of one-line labels. }
+  ExpectTrue(Blocks[1].Kind = mbParagraph, 'the prose is a paragraph');
+  ExpectStr(Blocks[1].Text, 'Some bold prose. Wrapped onto two lines.',
+            'joined, with the emphasis markers flattened');
+
+  ExpectTrue(Blocks[2].Kind = mbBullet, 'a bullet');
+  ExpectStr(Blocks[2].Text, 'one', 'with its dash gone');
+  ExpectTrue(Blocks[4].Kind = mbNumber, 'a numbered item');
+  ExpectTrue(Blocks[4].Level = 1, 'carrying its own number');
+  ExpectStr(Blocks[5].Text, 'second', 'and the second');
+  ExpectTrue(Blocks[6].Kind = mbQuote, 'a quote');
+  ExpectTrue(Blocks[7].Kind = mbRule, 'a rule');
+  ExpectTrue(Blocks[8].Kind = mbCode, 'and a code block');
+  ExpectStr(Blocks[8].Text, 'x := 1;',
+            'handed over VERBATIM -- a fence is the one place the source ' +
+            'characters are the content');
+
+  { Inline flattening, on its own. A label has no rich text, so the markers
+    come off -- but a link's destination is kept, because dropping where
+    something points is worse than showing it. }
+  ExpectStr(FlattenInline('a **bold** and `code` word'),
+            'a bold and code word', 'emphasis and code markers come off');
+  ExpectStr(FlattenInline('see [the docs](https://x.test/a)'),
+            'see the docs (https://x.test/a)',
+            'a link keeps its destination');
+  ExpectStr(FlattenInline('an ![image](p.png) inline'),
+            'an image (p.png) inline', 'an image loses only its bang');
+  ExpectStr(FlattenInline('2 * 3 * 4'), '2 * 3 * 4',
+            'a lone asterisk in prose is not emphasis');
+  ExpectStr(FlattenInline('a * b'#10'c * d'), 'a * b'#10'c * d',
+            'and a pair spanning a newline is not either');
+
+  { The fail-safe rule the HTML side keeps, kept here too. }
+  Blocks := MarkdownToBlocks('before'#10'```'#10'never closed');
+  ExpectTrue(Length(Blocks) = 2, 'an unterminated fence still yields blocks');
+  ExpectTrue(Blocks[1].Kind = mbCode, 'the run becomes code');
+  ExpectStr(Blocks[1].Text, 'never closed',
+            'and the text inside it survives rather than vanishing');
+
+  ExpectTrue(Length(MarkdownToBlocks('   ')) = 0, 'blank in, nothing out');
 
   if Failures = 0 then
     WriteLn('client_markdown_tests: OK')

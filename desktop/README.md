@@ -34,8 +34,8 @@ Both vendored pieces come from
 
 ### WebView2 on Windows
 
-App windows, the Browser and the chat transcript are all `TWebBrowser`, and
-they ask for `TWindowsEngine.EdgeIfAvailable` — because the legacy engine is
+App windows and the Browser are `TWebBrowser`, and they ask for
+`TWindowsEngine.EdgeIfAvailable` — because the legacy engine is
 IE-era and renders a modern document (flexbox, grid, ES6, fetch) badly enough
 to misrepresent the app the agent just wrote.
 
@@ -130,10 +130,12 @@ Environment:
   workspace, not to the client — the arrangement is saved against the
   desktop you are leaving and comes back when you return, geometry
   included.
-- **Chat window** — per project, streaming, **rendering markdown** (headings,
-  lists, code blocks, links) and with the model's tool use shown
-  inline as it works: asking for an app should not look like a long silence
-  followed by a sentence. It sends the builder-mode system prompt, so the
+- **Chat window** — per project, streaming, with structure preserved
+  (headings, bullets, numbered lists, quotes and code blocks each get their
+  own control) and the model's tool use shown inline as it works: asking for
+  an app should not look like a long silence followed by a sentence. It is
+  built from ordinary FMX controls, **not** a `TWebBrowser` — see the design
+  note below. It sends the builder-mode system prompt, so the
   agent's deliverable is an app rather than an essay. **Chat** on the Menu
   opens the project-less one instead — no builder prompt, just a
   conversation. When a
@@ -196,6 +198,19 @@ desktop in the browser and this app opens with it.
   the current style like everything else, and they are the same furniture the
   agent's own questions will use when the period-native output work lands
   (§7 of the plan).
+- **The chat transcript is not a browser.** It was, and that is what made
+  the window a white square. A `TWebBrowser` is a native control that has to
+  be swapped for a bitmap to coexist with overlapping windows, and its Edge
+  engine initialises *asynchronously* — hand it a document in the same turn
+  you create it and the document is dropped. Under the legacy IE engine that
+  worked by accident, so the failure only appeared once WebView2 actually
+  engaged. It is a `TVertScrollBox` of labels now: no native control, no
+  snapshot, no engine, nothing to be blank. The markdown is parsed in
+  `PasClaw.Client.Markdown` (`MarkdownToBlocks`), where FPC compiles it and
+  `client_markdown_tests` asserts it, leaving this file with nothing but
+  "make a label, make a memo". PasClaw Studio's chat has no browser either.
+  The cost: an FMX `TLabel` has no rich text, so bold and links are
+  flattened to plain text rather than styled.
 - **The browser snapshot trick** is the demo's: `TWebBrowser` is a native
   control that paints above all FMX content, so an inactive window freezes
   its browser into a `TImage` and swaps the live control back on focus.

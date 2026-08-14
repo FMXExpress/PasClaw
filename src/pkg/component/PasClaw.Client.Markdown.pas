@@ -57,6 +57,43 @@ function ChatDocumentHTML(const BodyHTML, BgColor, FgColor, AccentColor,
   rule, and two escapers would eventually disagree. }
 function HtmlEscape(const S: string): string;
 
+(* ---- the same markdown, for a caller with no browser ----
+
+   A FireMonkey client can render a transcript with ordinary controls
+   instead of a TWebBrowser, and for a chat window it should: a browser is a
+   native control that paints above all FMX content, so it needs a
+   snapshot-swap dance to coexist with overlapping windows, and its engine
+   initialises asynchronously -- hand it a document too early and you get a
+   white square. A stack of labels has neither problem. It is also what
+   PasClaw Studio does.
+
+   So: the same parser, emitting BLOCKS rather than markup, and the caller
+   builds one control per block. The line between the two is drawn here on
+   purpose -- everything with a rule in it stays on this side, where FPC
+   compiles it and the tests run; the client is left with nothing but
+   "make a label, make a memo".
+
+   Inline markers are flattened rather than dropped: **bold** loses its
+   asterisks, `code` its backticks, and [text](url) becomes "text (url)"
+   because an FMX TLabel has no rich text and a bare strip would throw the
+   destination away. Code blocks are handed over verbatim -- a fenced block
+   is the one place the source characters ARE the content. *)
+type
+  TMdBlockKind = (mbParagraph, mbHeading, mbBullet, mbNumber, mbCode,
+                  mbQuote, mbRule);
+  TMdBlock = record
+    Kind:  TMdBlockKind;
+    Level: Integer;   { 1..3 for a heading; the ordinal for a numbered item }
+    Text:  string;    { inline markers already flattened, except in code }
+  end;
+  TMdBlocks = array of TMdBlock;
+
+function MarkdownToBlocks(const S: string): TMdBlocks;
+
+{ Flatten inline markdown to plain text. Public for the same reason
+  HtmlEscape is: a caller labelling its own rows needs the identical rule. }
+function FlattenInline(const S: string): string;
+
 implementation
 
 uses
@@ -251,6 +288,263 @@ begin
   if (I > Length(L)) or (L[I] <> ' ') then Exit;
   Result := I - 1;
   Body := Copy(L, I + 1, MaxInt);
+end;
+
+
+{ ------------------------------------------------ blocks, for FMX clients -- }
+
+function IsAllDigits(const S: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := S <> '';
+  for I := 1 to Length(S) do
+    if (S[I] < '0') or (S[I] > '9') then Exit(False);
+end;
+
+(* Inline markers, flattened.
+
+   Order matters: links first, so the brackets are gone before emphasis
+   runs and cannot be mistaken for anything; then code spans, whose
+   contents must not have emphasis applied inside them; then the emphasis
+   markers themselves.
+
+   A marker with no partner is left alone rather than eaten -- an answer
+   must never come out emptier than it went in, which is the same rule the
+   HTML side keeps. *)
+function FlattenInline(const S: string): string;
+
+  (* `code` -> code, and ** / __ / * / _ around a run -> the run.
+
+     Three conditions, and each one is a case that actually turns up in
+     model output rather than a nicety:
+
+       the opening marker is followed by content, not a space
+       the closing marker is preceded by content, not a space
+       neither is on the other side of a newline
+
+     Without the first two, "2 * 3 * 4" is a pair of markers around " 3 "
+     and comes out as "2  3  4" -- arithmetic silently rewritten. Without
+     the third, one stray asterisk in a paragraph pairs with another three
+     lines later and eats everything between them. *)
+  function Unwrap(const Src, Marker: string): string;
+  var
+    P, Q, ML: Integer;
+    Inner: string;
+  begin
+    Result := Src;
+    ML := Length(Marker);
+    P := 1;
+    while True do
+    begin
+      P := PosEx(Marker, Result, P);
+      if P = 0 then Break;
+      if (P + ML > Length(Result)) or (Result[P + ML] = ' ') then
+      begin
+        P := P + ML;
+        Continue;
+      end;
+      { Scan on for a closing marker that is not preceded by a space. }
+      Q := P + ML;
+      repeat
+        Q := PosEx(Marker, Result, Q);
+        if Q = 0 then Break;
+        if Result[Q - 1] <> ' ' then Break;
+        Q := Q + ML;
+      until False;
+      if Q = 0 then Break;
+      Inner := Copy(Result, P + ML, Q - P - ML);
+      if (Pos(#10, Inner) > 0) or (Pos(#13, Inner) > 0) then
+      begin
+        P := P + ML;
+        Continue;
+      end;
+      Delete(Result, Q, ML);
+      Delete(Result, P, ML);
+      P := Q - ML;
+    end;
+  end;
+
+var
+  P, Close_, Open_, End_: Integer;
+  Text_, Url: string;
+begin
+  Result := S;
+
+  { [text](url) -> text (url). The destination is kept: a label cannot be
+    clickable, and silently dropping where something points is worse than
+    showing it. }
+  P := 1;
+  while True do
+  begin
+    P := PosEx('[', Result, P);
+    if P = 0 then Break;
+    Close_ := PosEx(']', Result, P + 1);
+    if (Close_ = 0) or (Close_ + 1 > Length(Result)) or
+       (Result[Close_ + 1] <> '(') then
+    begin
+      Inc(P);
+      Continue;
+    end;
+    Open_ := Close_ + 1;
+    End_ := PosEx(')', Result, Open_ + 1);
+    if End_ = 0 then
+    begin
+      Inc(P);
+      Continue;
+    end;
+    Text_ := Copy(Result, P + 1, Close_ - P - 1);
+    Url   := Copy(Result, Open_ + 1, End_ - Open_ - 1);
+    { An image is the same shape with a bang in front; drop only the bang. }
+    if (P > 1) and (Result[P - 1] = '!') then
+    begin
+      Delete(Result, P - 1, 1);
+      Dec(P);
+      Dec(Close_); Dec(Open_); Dec(End_);
+    end;
+    if Trim(Url) = '' then
+      Text_ := Text_
+    else if Trim(Text_) = '' then
+      Text_ := Url
+    else
+      Text_ := Text_ + ' (' + Url + ')';
+    Delete(Result, P, End_ - P + 1);
+    Insert(Text_, Result, P);
+    P := P + Length(Text_);
+  end;
+
+  Result := Unwrap(Result, '`');
+  Result := Unwrap(Result, '**');
+  Result := Unwrap(Result, '__');
+  Result := Unwrap(Result, '*');
+  Result := Unwrap(Result, '_');
+end;
+
+function MarkdownToBlocks(const S: string): TMdBlocks;
+var
+  Lines: TStringList;
+  I, N, HL, Dot: Integer;
+  Line, T, Para, Code: string;
+  InCode: Boolean;
+
+  procedure Emit(K: TMdBlockKind; const Text_: string; Lvl: Integer);
+  begin
+    N := Length(Result);
+    SetLength(Result, N + 1);
+    Result[N].Kind := K;
+    Result[N].Level := Lvl;
+    Result[N].Text := Text_;
+  end;
+
+  { Consecutive prose lines are one paragraph, so a model that hard-wraps
+    does not become a column of one-line labels. }
+  procedure FlushPara;
+  begin
+    if Trim(Para) = '' then
+    begin
+      Para := '';
+      Exit;
+    end;
+    Emit(mbParagraph, FlattenInline(Trim(Para)), 0);
+    Para := '';
+  end;
+
+begin
+  SetLength(Result, 0);
+  if Trim(S) = '' then Exit;
+  Lines := TStringList.Create;
+  try
+    Lines.Text := S;
+    InCode := False;
+    Para := '';
+    Code := '';
+    for I := 0 to Lines.Count - 1 do
+    begin
+      Line := Lines[I];
+      T := Trim(Line);
+
+      { Fenced code: verbatim, and no inline flattening inside it. }
+      if Copy(T, 1, 3) = '```' then
+      begin
+        if InCode then
+        begin
+          Emit(mbCode, Code, 0);
+          Code := '';
+          InCode := False;
+        end
+        else
+        begin
+          FlushPara;
+          InCode := True;
+        end;
+        Continue;
+      end;
+      if InCode then
+      begin
+        if Code <> '' then Code := Code + sLineBreak;
+        Code := Code + Line;
+        Continue;
+      end;
+
+      if T = '' then
+      begin
+        FlushPara;
+        Continue;
+      end;
+
+      if (T = '---') or (T = '***') or (T = '___') then
+      begin
+        FlushPara;
+        Emit(mbRule, '', 0);
+        Continue;
+      end;
+
+      if Copy(T, 1, 1) = '#' then
+      begin
+        HL := 0;
+        while (HL < Length(T)) and (T[HL + 1] = '#') do Inc(HL);
+        if (HL >= 1) and (HL <= 6) and (Copy(T, HL + 1, 1) = ' ') then
+        begin
+          FlushPara;
+          if HL > 3 then HL := 3;
+          Emit(mbHeading, FlattenInline(Trim(Copy(T, HL + 2, MaxInt))), HL);
+          Continue;
+        end;
+      end;
+
+      if Copy(T, 1, 2) = '> ' then
+      begin
+        FlushPara;
+        Emit(mbQuote, FlattenInline(Trim(Copy(T, 3, MaxInt))), 0);
+        Continue;
+      end;
+
+      if (Copy(T, 1, 2) = '- ') or (Copy(T, 1, 2) = '* ') then
+      begin
+        FlushPara;
+        Emit(mbBullet, FlattenInline(Trim(Copy(T, 3, MaxInt))), 0);
+        Continue;
+      end;
+
+      { "1. text" -- a digit run, a dot, a space. }
+      Dot := Pos('. ', T);
+      if (Dot > 1) and (Dot <= 4) and IsAllDigits(Copy(T, 1, Dot - 1)) then
+      begin
+        FlushPara;
+        Emit(mbNumber, FlattenInline(Trim(Copy(T, Dot + 2, MaxInt))),
+             StrToIntDef(Copy(T, 1, Dot - 1), 0));
+        Continue;
+      end;
+
+      if Para <> '' then Para := Para + ' ';
+      Para := Para + T;
+    end;
+    { An unterminated fence must not swallow the answer. }
+    if InCode and (Trim(Code) <> '') then Emit(mbCode, Code, 0);
+    FlushPara;
+  finally
+    Lines.Free;
+  end;
 end;
 
 function MarkdownToHTML(const S: string): string;
