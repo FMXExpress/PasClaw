@@ -989,7 +989,7 @@ function RouteProjectItem(const Method, Doc, Body: string;
   out Resp: TDesktopResponse): Boolean;
 var
   Segs: TStringList;
-  Project, Err, Blueprint: string;
+  Project, Err, StopErr, Blueprint: string;
   Info: TProjectInfo;
   Item, Obj, Root: TJsonObject;
 begin
@@ -1083,6 +1083,25 @@ begin
 
     if Method = 'DELETE' then
     begin
+      (* Stop the app FIRST.
+
+         DeleteProject removes a directory. It knows nothing about the
+         runner -- it cannot, since the runner is built on top of it -- so
+         deleting a project whose process app was running left the child
+         alive: a program the agent wrote, still executing, with its project
+         gone and no entry left in any UI to stop it. The only way to end it
+         was to find it in a process list.
+
+         Here rather than in the client that noticed it: the desktop's
+         Delete button is one of three ways to reach this route, and a rule
+         about not leaking processes belongs on the route, not on whichever
+         button remembered.
+
+         The result is deliberately ignored: "nothing was running" is the
+         usual answer and is not a failure, and a project the user asked to
+         delete should go either way. *)
+      StopApp(Project, StopErr);
+
       if not DeleteProject(Project, Err) then
       begin
         ReplyErr(Resp, 404, Err);

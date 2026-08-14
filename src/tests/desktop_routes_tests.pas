@@ -247,11 +247,42 @@ begin
   ExpectStatus('GET', '/v1/projects/%2e%2e%2f%2e%2e', '', 404,
                'url-encoded traversal is a 404');
 
+  (* DELETING A PROJECT MUST NOT LEAVE ITS APP RUNNING.
+
+     DeleteProject removes a directory and knows nothing about the runner --
+     it cannot, since the runner is built on top of it. So a project whose
+     process app was running used to lose the project and keep the child: a
+     program the agent wrote, still executing, with no entry left in any UI
+     to stop it. The route stops it first now, and this is that. *)
+  Slug := CreateProject('Doomed', '', '', Err);
+  EnsureDir(ProjectAppDir(Slug));
+  WriteFileText(JoinPath(ProjectAppDir(Slug), 'app.json'),
+    '{"name":"Sleeper","kind":"python","entry":"main.py","run":"/bin/sleep 30"}');
+  ExpectStatus('POST', '/v1/apps/' + Slug + '/run', '{"confirm":true}', 200,
+               'a probe app starts');
+  ExpectTrue(AppRunInfo(Slug).State = rsRunning, 'and is running');
+  ExpectStatus('DELETE', '/v1/projects/' + Slug, '', 200, 'delete it');
+  ExpectTrue(AppRunInfo(Slug).State <> rsRunning,
+             'and its app is not still running afterwards');
+
   ExpectStatus('PATCH', '/v1/projects/spam-filter', '{"icon":"Mail"}', 200, 'patch project');
   ExpectBodyContains('GET', '/v1/projects/spam-filter', '', '"icon":"Mail"',
                      'patch persisted');
   ExpectBodyContains('GET', '/v1/projects/spam-filter', '', '"title":"Spam Filter"',
                      'patch did not clobber the title');
+
+  (* Omitting a key means LEAVE IT ALONE, and clients lean on that: a rename
+     dialog knows the new title and nothing else, so it sends only "title".
+     If an absent key read as "make it empty", renaming a project would wipe
+     its description as a side effect. *)
+  ExpectStatus('PATCH', '/v1/projects/spam-filter',
+               '{"description":"Filters mail"}', 200, 'set a description');
+  ExpectStatus('PATCH', '/v1/projects/spam-filter', '{"title":"Junk Filter"}',
+               200, 'rename with title alone');
+  ExpectBodyContains('GET', '/v1/projects/spam-filter', '', '"title":"Junk Filter"',
+                     'the rename took');
+  ExpectBodyContains('GET', '/v1/projects/spam-filter', '', 'Filters mail',
+                     'and the description it never mentioned survived');
 
   { ---------------------------------------------------------------- tasks -- }
   ExpectStatus('GET', '/v1/projects/spam-filter/tasks', '', 200, 'list tasks');
@@ -267,6 +298,16 @@ begin
                '{"status":"active"}', 200, 'patch task status');
   ExpectStatus('PATCH', '/v1/projects/spam-filter/tasks/T0001',
                '{"status":"sideways"}', 400, 'bogus status is a 400');
+  { Same rule one level down: the desktop's Status button sends a status and
+    nothing else, and must not erase the notes that say what the task is. }
+  ExpectStatus('PATCH', '/v1/projects/spam-filter/tasks/T0001',
+               '{"notes":"needs an app password"}', 200, 'set task notes');
+  ExpectStatus('PATCH', '/v1/projects/spam-filter/tasks/T0001',
+               '{"status":"done"}', 200, 'status alone');
+  ExpectBodyContains('GET', '/v1/projects/spam-filter/tasks/T0001', '',
+                     'app password', 'the notes survived a status-only patch');
+  ExpectBodyContains('GET', '/v1/projects/spam-filter/tasks/T0001', '',
+                     'Connect IMAP', 'and so did the title');
   ExpectStatus('GET', '/v1/projects/spam-filter/tasks/nope', '', 404,
                'bad task id is a 404');
 
@@ -297,6 +338,13 @@ begin
   ExpectStatus('POST', '/v1/projects/spam-filter/tasks/T0001/run',
                '{"prompt":"go"}', 200, 'run with an agent attached');
   ExpectStr(RunnerCalledWith, 'spam-filter/T0001/go', 'runner got the right arguments');
+  { No prompt is the ordinary case: the task's own title and notes are what
+    it is about, so the desktop leaves the key out entirely rather than
+    inventing a sentence. That must still start a job. }
+  ExpectStatus('POST', '/v1/projects/spam-filter/tasks/T0001/run', '{}', 200,
+               'run with no prompt at all');
+  ExpectStr(RunnerCalledWith, 'spam-filter/T0001/',
+            'and the runner is told there was none');
   SetJobRunner(nil);
 
   { ------------------------------------------------------------------ apps -- }
