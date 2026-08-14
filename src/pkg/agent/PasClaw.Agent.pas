@@ -363,6 +363,7 @@ uses
   PasClaw.Tools.SendMessage,
   PasClaw.Skills.Manage,
   PasClaw.Skills.Disclosure,
+  PasClaw.MCP.Disclosure,   { tool_search must exist even with MCP off }
   PasClaw.Agent.SkillDistiller,
   PasClaw.Tools.Sandbox,
   PasClaw.Skills.Loader,
@@ -596,7 +597,13 @@ begin
   RegisterSkillManageTool(FRegistry, FConfig);
   RegisterSkillDisclosureTools(FRegistry, FConfig);
   if FUseMCP then
-    FMCPClients := ConnectMCPServers(FConfig, FRegistry);
+    FMCPClients := ConnectMCPServers(FConfig, FRegistry)
+  else
+    { MCP off still needs tool_search: built-in long-tail deferral is on by
+      default and ConnectMCPServers is otherwise the only thing that
+      registers the discovery tool, so skipping it would defer spawn*/db_*
+      with nothing able to reveal them (Codex P1, PR #547). }
+    RegisterMCPDisclosureTools(FRegistry, FConfig);
   { Subagent spawn tool -- installs only when the operator declared
     subagents in config.json. Needs FProvider already resolved so
     the spawn tool's context captures the live ILLMProvider; in

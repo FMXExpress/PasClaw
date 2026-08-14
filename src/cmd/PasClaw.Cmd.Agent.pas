@@ -54,6 +54,7 @@ uses
   PasClaw.Tools.ToolLoop,
   PasClaw.Agent.Compact,
   PasClaw.MCP.Bridge,
+  PasClaw.MCP.Disclosure,   { tool_search must exist even with --no-mcp }
   PasClaw.Skills.Loader,
   PasClaw.Skills.Manage,
   PasClaw.Skills.Disclosure,
@@ -461,8 +462,18 @@ end;
 function ConnectMCP(Cfg: TConfig; Reg: TToolRegistry; NoMCP: Boolean): TMCPClientList;
 begin
   SetLength(Result, 0);
-  if NoMCP then Exit;
   if Reg = nil then Exit;
+  if NoMCP then
+  begin
+    { --no-mcp still needs the disclosure surface. tool_search is the only
+      way to load a deferred schema, and built-in long-tail deferral is on
+      by default, so skipping this would hide spawn*/db_*/workflow_* AND
+      remove the tool that reveals them -- undiscoverable, not just
+      invisible (Codex P1, PR #547). Registering it also latches the
+      deferral, so the two can never come apart. }
+    RegisterMCPDisclosureTools(Reg, Cfg);
+    Exit;
+  end;
   Result := ConnectMCPServers(Cfg, Reg);
 end;
 

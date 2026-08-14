@@ -119,7 +119,26 @@ type
   read-only MCP server, neither of which cares about concurrency. }
 function ToolIsSerialOnly(const Name: string): Boolean;
 
+{ True for the built-in "long tail" -- tools a typical turn never touches,
+  deferred behind tool_search when Cfg.BuiltinProgressiveDisclosure is on.
+  Prefix-matched so a NEW db_/workflow_/spawn/session_ tool inherits the
+  decision instead of silently re-fattening every request. }
+function ToolIsLongTail(const Name: string): Boolean;
+
 implementation
+
+function ToolIsLongTail(const Name: string): Boolean;
+const
+  P: array[0..3] of string = ('db_', 'workflow_', 'spawn', 'session_');
+var
+  i: Integer;
+begin
+  Result := False;
+  for i := 0 to High(P) do
+    if (Length(Name) >= Length(P[i]))
+       and SameText(Copy(Name, 1, Length(P[i])), P[i]) then
+      Exit(True);
+end;
 
 function ToolIsSerialOnly(const Name: string): Boolean;
 begin

@@ -401,10 +401,23 @@ begin
   Reg := TToolRegistry.Create;
   Cfg := TConfig.Create;
   try
-    Cfg.MCPProgressiveDisclosure := False;  { explicit off }
+    { Contract widened: tool_search is the ONLY way to load a deferred
+      schema, and built-in long-tail deferral now defers tools too, so the
+      tool must register when EITHER disclosure flag is on. Turning off
+      only the MCP flag must therefore still leave it registered -- what
+      must remove it is both flags being off. }
+    Cfg.MCPProgressiveDisclosure     := False;  { explicit off }
+    Cfg.BuiltinProgressiveDisclosure := True;   { ...but built-ins defer }
+    RegisterMCPDisclosureTools(Reg, Cfg);
+    AssertTrue(Reg.Find('tool_search', T),
+               'tool_search STAYS registered when built-in disclosure is on');
+
+    Reg.Free;
+    Reg := TToolRegistry.Create;
+    Cfg.BuiltinProgressiveDisclosure := False;  { both off }
     RegisterMCPDisclosureTools(Reg, Cfg);
     AssertTrue(not Reg.Find('tool_search', T),
-               'tool_search not registered when MCPProgressiveDisclosure=False');
+               'tool_search not registered when BOTH disclosure flags are off');
   finally
     Cfg.Free;
     Reg.Free;

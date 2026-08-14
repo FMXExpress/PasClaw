@@ -29,6 +29,7 @@ type
   TToolRegistry = class
   private
     FTools: TToolList;
+    FDeferLongTail: Boolean;
     { Set of tool names whose IsDeferred=True has been overridden by a
       tool_search reveal. Names are looked up case-sensitively (matches
       Find) and only consulted when filtering ToProviderDefs. Stored
@@ -67,6 +68,12 @@ type
       until tool_search reveals them. Callers must NOT also set
       T.IsDeferred -- the Deferred parameter is authoritative. }
     procedure RegisterDeferred(const T: TTool; Deferred: Boolean);
+    { When True, any tool matching ToolIsLongTail registers DEFERRED no
+      matter which entry point it came through. Set once, by the disclosure
+      registration, instead of asking ~10 call sites to remember: the spawn
+      tools register AFTER disclosure runs, so a one-shot sweep missed them
+      and the saving looked half-applied. Order-independence is the point. }
+    property DeferLongTail: Boolean read FDeferLongTail write FDeferLongTail;
     function  Find(const Name: string; out T: TTool): Boolean;
     function  Names: TStringArray;
     function  Count: Integer;
@@ -131,6 +138,10 @@ begin
     TMethod(Stored.HandlerObj).Code := nil;
     TMethod(Stored.HandlerObj).Data := nil;
   end;
+  { Long-tail deferral applied HERE so it cannot depend on registration
+    order or on a call site remembering RegisterDeferred. }
+  if FDeferLongTail and ToolIsLongTail(Stored.Name) then
+    Stored.IsDeferred := True;
   { Same risk, same medicine, one field later: SerialOnly is read by the
     parallel batcher, and the same legacy callers that never touched
     HandlerObj do not touch it either -- it would be whatever the stack
