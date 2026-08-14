@@ -1140,6 +1140,9 @@ const S = {
   workspaces: [], active: "workspace",
   projects: [], tree: {},          /* project -> { open, tasks: [...] } */
   selected: null,
+  /* When set, the dock shows that project (chat + actions) instead of the
+     board; the board is one "◂ Projects" away. See paintProjectPane. */
+  dockProject: null,
   styles: [], style: "Win95",
   /* Where generated apps are served from. Empty means the same origin as
      this page -- workable, but then an app shares localStorage with the
@@ -1787,10 +1790,90 @@ function initDock() {
   });
 }
 
+/* Chat panes the dock has built, kept per project so leaving a project and
+   coming back finds the conversation where it was -- the transcript lives
+   in the detached DOM, and the closure keeps its history array. */
+const DOCK_CHATS = new Map();
+
+/* The dock in PROJECT mode: opening a project turns the left bar into that
+   project, chat foremost -- because "modify the app to do X" IS the way
+   work happens here, and it was two clicks and a floating window away.
+   A header row leads back to the board; the app and a new task are one
+   button each. */
+function paintProjectPane(name) {
+  const host = document.getElementById("treebody");
+  if (!host) return;
+  /* Detach, never clear: textContent = "" would destroy the cached chat
+     pane's DOM (the transcript) while the closure kept streaming into it. */
+  while (host.firstChild) host.removeChild(host.firstChild);
+  host.style.display = "flex";
+  host.style.flexDirection = "column";
+  const p = S.projects.find(x => x.name === name);
+
+  const head = el("div");
+  head.style.cssText = "flex:0 0 auto;display:flex;gap:4px;align-items:center;padding:2px";
+  const back = el("button", "btn", "◂ Projects");
+  back.title = "Back to the project board";
+  back.addEventListener("click", () => { S.dockProject = null; paintTree(); });
+  head.appendChild(back);
+  const title = el("span", null, p ? (p.title || p.name) : name);
+  title.style.cssText = "font-weight:bold;flex:1 1 auto;overflow:hidden;" +
+                        "text-overflow:ellipsis;white-space:nowrap";
+  head.appendChild(title);
+  host.appendChild(head);
+
+  const acts = el("div");
+  acts.style.cssText = "flex:0 0 auto;display:flex;gap:4px;padding:0 2px 4px";
+  const open = el("button", "btn", "▶ Open App");
+  if (p && p.has_app) open.addEventListener("click", () => openApp(name));
+  else { open.disabled = true; open.title = "No app yet -- ask for one below."; }
+  acts.appendChild(open);
+  const addTask = el("button", "btn", "+ Task");
+  addTask.title = "Add a task to this project's board";
+  addTask.addEventListener("click", async () => {
+    await newTask(name);
+    paintTree();
+  });
+  acts.appendChild(addTask);
+  host.appendChild(acts);
+
+  /* The open tasks, compactly -- the board's summary, not its replacement.
+     The full tree (jobs included) is one click back. */
+  const st = S.tree[name] || (S.tree[name] = { open: true, tasks: null });
+  if (!st.tasks) loadTasks(name).then(() => {
+    if (S.dockProject === name) paintTree();
+  });
+  const open_ = (st.tasks || []).filter(t => t.status !== "done");
+  if (open_.length) {
+    const tl = el("div");
+    tl.style.cssText = "flex:0 0 auto;max-height:30%;overflow:auto;" +
+                       "padding:0 2px 4px";
+    open_.forEach(t => {
+      const tr = el("div", "node");
+      tr.appendChild(el("span", "st-" + t.status, t.id + "  " + t.title));
+      tr.title = t.notes || "";
+      tl.appendChild(tr);
+    });
+    host.appendChild(tl);
+  }
+
+  /* The chat, filling the rest. Built once per project and re-attached. */
+  let chat = DOCK_CHATS.get(name);
+  const pane = el("div");
+  pane.style.cssText = "flex:1 1 auto;min-height:0;padding:2px";
+  if (chat) pane.appendChild(chat.root);
+  else { chat = buildChatUI(name, pane); DOCK_CHATS.set(name, chat); }
+  host.appendChild(pane);
+  chat.focus();
+}
+
 function paintTree() {
   const host = document.getElementById("treebody");
   if (!host) return;
-  host.textContent = "";
+  if (S.dockProject) return paintProjectPane(S.dockProject);
+  host.style.display = "";
+  host.style.flexDirection = "";
+  while (host.firstChild) host.removeChild(host.firstChild);
   const tree = el("div", "tree");
 
   if (!S.projects.length) {
@@ -1811,13 +1894,23 @@ function paintTree() {
     row.appendChild(g);
     row.appendChild(el("span", null, p.title || p.name));
     if (p.open_tasks) row.appendChild(el("span", "badge", String(p.open_tasks)));
-    row.addEventListener("click", async () => {
+    /* The twist expands in place (tasks, jobs -- the board view); the row
+       itself OPENS the project, turning the dock into its chat + actions.
+       That split is the whole gesture: a task is "modify the app to do X",
+       so opening a project should land you where you can say so. */
+    tw.addEventListener("click", async e => {
+      e.stopPropagation();
       S.selected = p.name;
       st.open = !st.open;
       if (st.open && !st.tasks) await loadTasks(p.name);
       paintTree();
     });
-    row.addEventListener("dblclick", () => openChat(p.name));
+    row.addEventListener("click", async () => {
+      S.selected = p.name;
+      S.dockProject = p.name;
+      if (!st.tasks) await loadTasks(p.name);
+      paintTree();
+    });
     tree.appendChild(row);
 
     if (!st.open) return;
@@ -1875,7 +1968,11 @@ async function newProject() {
   try {
     const j = await api("/v1/projects", { method: "POST", body: { title } });
     await loadProjects();
-    openChat(j.name);
+    /* Land in the project pane, cursor in the chat: the next thing anyone
+       does with a new project is describe the app they want. }*/
+    S.selected = j.name;
+    S.dockProject = j.name;
+    paintTree();
   } catch (e) { alert(e.message); }
 }
 
@@ -1898,7 +1995,19 @@ function openChat(project) {
     width: 520, height: 420, icon: "chat", pad: false,
     restore: { fn: "chat", arg: project },
   });
+  w.body.style.padding = "5px";
+  const chat = buildChatUI(project, w.body);
+  /* Let a dialog's answer continue this conversation (see renderUIBlock). */
+  w.__submitText = chat.submitText;
+  setTimeout(() => chat.focus(), 0);
+  return w;
+}
 
+/* The chat itself, built into any host: a floating window (openChat above)
+   or the dock's project pane (paintProjectPane). One builder, so the two
+   places cannot drift -- the transcript, streaming, artifact cards and
+   pasclaw-ui furniture are identical wherever the conversation lives. */
+function buildChatUI(project, host) {
   const wrap = el("div", "chat");
   const log = el("div", "log in");
   const composer = el("div", "composer");
@@ -1907,8 +2016,7 @@ function openChat(project) {
   const send = el("button", "btn", "Send");
   composer.appendChild(ta); composer.appendChild(send);
   wrap.appendChild(log); wrap.appendChild(composer);
-  w.body.appendChild(wrap);
-  w.body.style.padding = "5px";
+  host.appendChild(wrap);
 
   const history = [];
 
@@ -2110,10 +2218,11 @@ function openChat(project) {
   ta.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
   });
-  /* Let a dialog's answer continue this conversation (see renderUIBlock). */
-  w.__submitText = text => { ta.value = text; submit(); };
-  setTimeout(() => ta.focus(), 0);
-  return w;
+  return {
+    root: wrap,
+    submitText: text => { ta.value = text; submit(); },
+    focus: () => ta.focus(),
+  };
 }
 
 /* The builder-mode overlay. Kept client-side for now so it is visible and
@@ -2398,10 +2507,13 @@ function renderUIBlock(block, project) {
       buttons: block.buttons || [{ label: "OK", value: true }],
       onPick: v => {
         /* An answered question goes back as the next chat turn, so the
-           conversation continues where the dialog left off. */
+           conversation continues where the dialog left off -- in the chat
+           window if one is open, else in the dock's project pane. */
         if (block.reply === false || !project) return;
         const w = WINS.get("chat:" + project);
-        if (w && w.__submitText) w.__submitText(String(v));
+        if (w && w.__submitText) { w.__submitText(String(v)); return; }
+        const dc = DOCK_CHATS.get(project);
+        if (dc) dc.submitText(String(v));
       },
     });
   }
