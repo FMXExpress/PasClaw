@@ -67,6 +67,7 @@ procedure TestRuleIsInThePrompt;
 var
   Cfg: TConfig;
   P: string;
+  Rule: string;
 begin
   WriteLn('the rule reaches the model');
   Cfg := TConfig.Create;
@@ -84,6 +85,33 @@ begin
   { gather -> edit -> verify, not gather -> edit -> gather -> edit }
   Check('rule keeps the dependent half sequential',
     (Pos('sequential', P) > 0) and (Pos('one focused check', P) > 0));
+
+  { The rule must name tools that EXIST. The first draft said
+    `run_command`, which is registered nowhere -- RegisterShellTool
+    exposes the command tool as `shell_exec` (Codex P2 on PR #537). A
+    model told to watch for a phantom tool cannot recognise the thing
+    that actually splits its batch. }
+  Check('names the real shell tool', Pos('`shell_exec`', P) > 0);
+  Check('does not name a phantom run_command', Pos('run_command', P) = 0);
+
+  { memory_search is registered tcReadOnly, so ToolLoop WILL batch it --
+    but Tool_MemorySearch calls IMemoryIndex.SyncDir, which reindexes and
+    deletes rows in .index.db. Two of them in one batch are two writers
+    on one SQLite file. The category cannot simply be corrected either:
+    tcReadOnly doubles as the plan-mode dispatch gate (see
+    PasClaw.Tools.PlanWrite), so flipping it would break memory_search in
+    plan mode. Until that overload is untangled, THIS RULE must not invite
+    the model to batch it.
+
+    Scoped to rule 7 on purpose: rule 5 tells the model to call
+    memory_search before answering from prior conversations, which is a
+    perfectly good instruction. Only the batching claim is the problem. }
+  Rule := Copy(P, Pos('Batch independent investigation', P), MaxInt);
+  Check('rule 7 was located', Rule <> '');
+  Check('rule 7 does not advertise memory_search as parallel-safe',
+    Pos('memory_search', Rule) = 0);
+  Check('rule 7 does not advertise kb_search as parallel-safe',
+    Pos('kb_search', Rule) = 0);
 end;
 
 procedure TestPromiseMatchesRegistry;
