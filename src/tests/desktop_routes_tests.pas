@@ -247,6 +247,24 @@ begin
   ExpectStatus('GET', '/v1/projects/%2e%2e%2f%2e%2e', '', 404,
                'url-encoded traversal is a 404');
 
+  (* DELETING A PROJECT MUST NOT LEAVE ITS APP RUNNING.
+
+     DeleteProject removes a directory and knows nothing about the runner --
+     it cannot, since the runner is built on top of it. So a project whose
+     process app was running used to lose the project and keep the child: a
+     program the agent wrote, still executing, with no entry left in any UI
+     to stop it. The route stops it first now, and this is that. *)
+  Slug := CreateProject('Doomed', '', '', Err);
+  EnsureDir(ProjectAppDir(Slug));
+  WriteFileText(JoinPath(ProjectAppDir(Slug), 'app.json'),
+    '{"name":"Sleeper","kind":"python","entry":"main.py","run":"/bin/sleep 30"}');
+  ExpectStatus('POST', '/v1/apps/' + Slug + '/run', '{"confirm":true}', 200,
+               'a probe app starts');
+  ExpectTrue(AppRunInfo(Slug).State = rsRunning, 'and is running');
+  ExpectStatus('DELETE', '/v1/projects/' + Slug, '', 200, 'delete it');
+  ExpectTrue(AppRunInfo(Slug).State <> rsRunning,
+             'and its app is not still running afterwards');
+
   ExpectStatus('PATCH', '/v1/projects/spam-filter', '{"icon":"Mail"}', 200, 'patch project');
   ExpectBodyContains('GET', '/v1/projects/spam-filter', '', '"icon":"Mail"',
                      'patch persisted');

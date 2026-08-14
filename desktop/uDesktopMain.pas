@@ -240,6 +240,11 @@ type
     FAppSrcWin: TRetroWindow;
     FAppSrcMemo: TMemo;
     FAppSrcProject: string;
+    { The body as it was loaded, so "has this been edited" is a comparison
+      rather than a guess -- FMX's TMemo has no dependable Modified flag. }
+    FAppSrcLoaded: string;
+    { Which project the unsaved-changes dialog is about to open. }
+    FPendingSrcProject: string;
 
     { The live wizard: its steps, where we are, and the project whose board
       Finish will add tasks to. }
@@ -368,6 +373,8 @@ type
     procedure TreeDeleteConfirmed(Sender: TObject);
     procedure TreeOpenAppSourceClick(Sender: TObject);
     procedure OpenAppSource(const Project: string);
+    function AppSourceDirty: Boolean;
+    procedure AppSourceDiscarded(Sender: TObject);
     procedure AppSourceSaveClick(Sender: TObject);
     procedure OpenPlainChat;
     procedure PickWorkspaceClick(Sender: TObject);
@@ -415,6 +422,9 @@ type
     procedure ShowPage(const PageId: string);
     procedure ShowPageInTab(const PageId: string; TabIndex: Integer);
     procedure ShowFileInBrowser(const Path, Name: string);
+    { Record which file the active tab holds -- including when reading it
+      failed, so the tab can be tried again. }
+    procedure SetFileTab(const Path, Name: string);
     function TabIsEmpty(Index: Integer): Boolean;
     procedure ShowProgress(const Caption, Text_: string);
     procedure CloseProgress;
@@ -877,6 +887,7 @@ begin
     FAppSrcWin := nil;
     FAppSrcMemo := nil;    { owned by the window, dying with it }
     FAppSrcProject := '';
+    FAppSrcLoaded := '';
     Exit;
   end;
 
@@ -2063,6 +2074,37 @@ var
   Old: TRetroWindow;
 begin
   SetClientContext('App source: ' + Project);
+
+  (* An editor already open is not something to throw away.
+
+     This closed the previous one outright and reloaded the gateway's copy,
+     so pressing Edit App twice -- or once more on the project you were
+     already editing -- silently discarded whatever you had typed. Nothing
+     warned, and there was nothing to undo it with.
+
+     Same project: focus what is already there. The body on screen is the
+     one being worked on, and replacing it with the saved copy is the
+     destructive reading of "open this". *)
+  if (FAppSrcWin <> nil) and (FAppSrcProject = Project) then
+  begin
+    FAppSrcWin.Restore;
+    Exit;
+  end;
+
+  { A different project, with unsaved work in the window: ask, rather than
+    deciding on the user's behalf. The answer arrives asynchronously, so the
+    open resumes in AppSourceDiscarded. }
+  if AppSourceDirty then
+  begin
+    FPendingSrcProject := Project;
+    Confirm('Unsaved changes',
+      Format('"%s" has edits that have not been saved.' + sLineBreak +
+             sLineBreak + 'Open %s and lose them?',
+             [FAppSrcProject, Project]),
+      AppSourceDiscarded);
+    Exit;
+  end;
+
   if not FClient.App(Project, App) or not App.Exists then
   begin
     Say(Project + ' has no app yet -- ask PasClaw to build one.');
@@ -2075,6 +2117,7 @@ begin
   Old := FAppSrcWin;
   FAppSrcWin := nil;
   FAppSrcMemo := nil;
+  FAppSrcLoaded := '';
   if Old <> nil then Old.Close;
 
   FAppSrcProject := Project;
@@ -2109,6 +2152,30 @@ begin
   FAppSrcMemo.Parent := FAppSrcWin.Client;
   FAppSrcMemo.Align := TAlignLayout.Client;
   FAppSrcMemo.Text := FClient.AppEntry(Project);
+  { What was loaded, so "has this been edited" is a comparison rather than a
+    guess. FMX's TMemo has no dependable Modified flag to lean on, and the
+    body is small enough that holding a second copy costs nothing. }
+  FAppSrcLoaded := FAppSrcMemo.Text;
+end;
+
+{ True when the open editor holds something that is not on disk. }
+function TFormMain.AppSourceDirty: Boolean;
+begin
+  Result := (FAppSrcWin <> nil) and (FAppSrcMemo <> nil) and
+            (FAppSrcMemo.Text <> FAppSrcLoaded);
+end;
+
+{ Yes on the unsaved-changes dialog: the edits are forfeit, so drop the
+  comparison point and open the other project as if nothing had been typed. }
+procedure TFormMain.AppSourceDiscarded(Sender: TObject);
+var
+  Project: string;
+begin
+  Project := FPendingSrcProject;
+  FPendingSrcProject := '';
+  if Project = '' then Exit;
+  if FAppSrcMemo <> nil then FAppSrcLoaded := FAppSrcMemo.Text;
+  OpenAppSource(Project);
 end;
 
 procedure TFormMain.AppSourceSaveClick(Sender: TObject);
@@ -2122,6 +2189,9 @@ begin
     Say('Could not save it: ' + FClient.LastError);
     Exit;
   end;
+  { Saved is the new baseline, or the window would go on claiming edits it
+    has already written. }
+  FAppSrcLoaded := FAppSrcMemo.Text;
   Say('Saved ' + FAppSrcProject);
 end;
 
@@ -4581,27 +4651,58 @@ end;
    file must not inherit whichever one was last shown. *)
 procedure TFormMain.ShowFileInBrowser(const Path, Name: string);
 var
-  Body: string;
+  Body, Err: string;
   Binary, Truncated: Boolean;
-  I: Integer;
 begin
   if FBrowserView = nil then Exit;
+
+  (* Clear the page state FIRST, and unconditionally.
+
+     A file that has been deleted, renamed or made unreadable since its tab
+     was opened used to return here before any of that happened -- so
+     selecting the tab left the PREVIOUS tab's document on screen, with
+     FCurrentPage still naming it. Asking a follow-up then revised a page
+     the user was not looking at, from a tab that was showing a file. That
+     is precisely the ambiguity tabs exist to remove. *)
+  FCurrentPage := '';
+  if FBrowserPromote <> nil then FBrowserPromote.Enabled := False;
+  if FBrowserWin <> nil then FBrowserWin.Caption := Name;
+
   if not FClient.ReadFile_(Path, Body, Binary, Truncated) then
   begin
-    Say('Could not read ' + Name + ': ' + FClient.LastError);
+    Err := FClient.LastError;
+    Say('Could not read ' + Name + ': ' + Err);
+    { Say what happened IN the tab, rather than leaving the last document
+      standing as if it were this one. The tab keeps its path, so Refresh --
+      or fixing the file -- brings it back. }
+    FBrowserView.LoadFromStrings(
+      ChatDocumentHTML('<p><b>' + HtmlEscape(Name) + '</b> could not be read.' +
+        '</p><p>' + HtmlEscape(Err) + '</p><p>' + HtmlEscape(Path) + '</p>',
+        StyleColor('face', '#c0c0c0'), StyleColor('text', '#000000'),
+        StyleColor('titleA', '#000080'), StyleColor('light', '#e8e8e8')), '');
+    if FBrowserStatus <> nil then
+      FBrowserStatus.Text := Path + '  [unreadable]';
+    SetFileTab(Path, Name);
     Exit;
   end;
 
-  FCurrentPage := '';
   FBrowserView.LoadFromStrings(Body, Path);
-  if FBrowserPromote <> nil then FBrowserPromote.Enabled := False;
-  if FBrowserWin <> nil then FBrowserWin.Caption := Name;
   if FBrowserStatus <> nil then
   begin
     if Truncated then FBrowserStatus.Text := Path + '  [truncated]'
     else FBrowserStatus.Text := Path;
   end;
+  SetFileTab(Path, Name);
+end;
 
+{ Mark the active tab as holding this file. Shared by the two exits above,
+  because a tab that failed to read still has to remember WHICH file it
+  failed to read -- otherwise selecting it again shows the blank-tab
+  placeholder and the path is gone for good. }
+procedure TFormMain.SetFileTab(const Path, Name: string);
+var
+  I: Integer;
+begin
   if (FBrowserTabs = nil) or (FBrowserTabPages = nil) then Exit;
   I := FBrowserTabs.TabIndex;
   if (I < 0) or (I >= FBrowserTabPages.Count) then Exit;
