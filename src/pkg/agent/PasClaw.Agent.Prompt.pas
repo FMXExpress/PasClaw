@@ -690,7 +690,20 @@ begin
     'context. Example: "how many `procedure` definitions are in src/?" ' +
     'is one `grep -c ''^procedure'' src/**/*.pas` + a sum, not a tour ' +
     'of every .pas file. The script''s stdout becomes your evidence; ' +
-    'the raw file bodies do not need to enter the conversation.';
+    'the raw file bodies do not need to enter the conversation.' + sLineBreak +
+    sLineBreak +
+    '7. **Batch independent investigation** -- the tool loop runs ' +
+    '`read_file`, `list_dir`, `grep_files`, `find_files`, `memory_search` ' +
+    'and `kb_search` calls IN PARALLEL when they arrive together in one ' +
+    'response, so emit every read or search whose input does not depend on ' +
+    'another''s output as a single batch rather than one per turn. Three ' +
+    'files you already know you need is ONE response with three ' +
+    '`read_file` calls, not three round trips. Anything that changes state ' +
+    '-- edits, `run_command`, `web_fetch` -- runs serially and SPLITS the ' +
+    'batch, so do not interleave one between independent reads. Then keep ' +
+    'the dependent part sequential: gather in parallel, make the edit, run ' +
+    'one focused check. Each round trip you avoid is a whole model call of ' +
+    'latency saved.';
 end;
 
 function AppendSection(const Acc, Section: string): string;
