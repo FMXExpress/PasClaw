@@ -673,6 +673,66 @@ var
     practice (operators tend to use one endpoint at a time). }
   GGatewayStatsLock: TCriticalSection = nil;
 
+type
+  (* Working-state flush for gateway compactions.
+
+     The gateway never injects a working-state prefix and never calls
+     UpdateWorkingStateAfterTurn at end of turn -- unlike the CLI and
+     TUI, its transcript IS its memory: every chat request carries the
+     full message history, so there is nothing a snapshot would add
+     while the transcript still exists. Compaction is the one moment
+     that stops being true. The older half is about to leave the
+     transcript for good, and a CLI `pasclaw resume <id>` of this
+     same session -- the store is shared across surfaces -- would
+     find neither the messages nor the snapshot the CLI expects to
+     inject.
+
+     So: flush exactly once, at drop time, with the full pre-drop
+     history. CompactOpts.OnBefore is `of object` and carries no
+     session id, hence this one-field object; RunCheckpointedLoop
+     creates it per run (it has both the id and a local config copy)
+     and frees it after. Load-update-save keeps no session object
+     alive across the call, and the stats lock serializes it against
+     the accumulator's own load-save of the same file. *)
+  TCompactFlush = class
+  private
+    FSessionId: string;
+  public
+    constructor Create(const ASessionId: string);
+    procedure OnBefore(const Messages: array of TMessage);
+  end;
+
+constructor TCompactFlush.Create(const ASessionId: string);
+begin
+  inherited Create;
+  FSessionId := ASessionId;
+end;
+
+procedure TCompactFlush.OnBefore(const Messages: array of TMessage);
+var
+  S: TSession;
+  Arr: TMessageArray;
+  i: Integer;
+begin
+  { Guarded again here, not just at wiring: the id is the caller's
+    X-PasClaw-Session header, and an unsafe one must not mint a file. }
+  if not IsSafeSessionId(FSessionId) then Exit;
+  SetLength(Arr, Length(Messages));
+  for i := 0 to High(Messages) do Arr[i] := Messages[i];
+  GGatewayStatsLock.Enter;
+  try
+    S := TSession.Create(FSessionId);
+    try
+      UpdateWorkingStateAfterTurn(S.Meta, Arr);
+      S.Save;
+    finally
+      S.Free;
+    end;
+  finally
+    GGatewayStatsLock.Leave;
+  end;
+end;
+
 const
   { Bucket session ids. These are real session JSON files written
     under $PASCLAW_HOME/workspace/sessions/ -- HandleStats walks
@@ -4419,6 +4479,7 @@ function TGatewayServer.RunCheckpointedLoop(const ReqSession: string;
 var
   LocalCfg: TToolLoopConfig;
   RoutedNm: string;
+  Flush: TCompactFlush;
 begin
   { Task-difficulty auto-router (opt-in via FCfg.AutoRouter). Applied here so
     EVERY gateway/serve chat path -- the four RunCheckpointedLoop call sites
@@ -4428,19 +4489,33 @@ begin
   LocalCfg := Cfg;
   ApplyAutoRoute(LocalCfg, FCfg, Messages, RoutedNm);
 
-  if FCfg.CheckpointsEnabled then
+  { Working-state flush at compaction time -- see TCompactFlush for
+    why the gateway flushes here and nowhere else. Wired centrally so
+    all four chat paths behave alike; only when a session id is
+    present and safe, since the flush writes that session's file. }
+  Flush := nil;
+  if LocalCfg.CompactEnabled and IsSafeSessionId(ReqSession) then
   begin
-    ApplyCheckpointSession(ReqSession);
-    AcquireCheckpointTurn;
-    try
-      BeginTurn;
+    Flush := TCompactFlush.Create(ReqSession);
+    LocalCfg.CompactOpts.OnBefore := Flush.OnBefore;
+  end;
+  try
+    if FCfg.CheckpointsEnabled then
+    begin
+      ApplyCheckpointSession(ReqSession);
+      AcquireCheckpointTurn;
+      try
+        BeginTurn;
+        Result := RunToolLoop(LocalCfg, Messages, Loop);
+      finally
+        ReleaseCheckpointTurn;
+      end;
+    end
+    else
       Result := RunToolLoop(LocalCfg, Messages, Loop);
-    finally
-      ReleaseCheckpointTurn;
-    end;
-  end
-  else
-    Result := RunToolLoop(LocalCfg, Messages, Loop);
+  finally
+    Flush.Free;
+  end;
 
   { Opt-in distilled memory: on a successful turn, fire a background pass
     that extracts durable facts from the latest exchange and stores them.
