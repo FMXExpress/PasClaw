@@ -221,11 +221,88 @@ begin
   end;
 end;
 
+function StubHandler(const ArgsJSON: string; out ErrMsg: string): string;
+begin
+  ErrMsg := ''; Result := '';
+end;
+
+{ Most registration sites build TTool as a BARE stack record and assign
+  fields one at a time -- they never touch SerialOnly, so it holds whatever
+  the stack held. The batcher reads that field, so an unassigned byte could
+  decide whether a tool runs concurrently: a parallel-safe tool that
+  happened to read True would silently stop batching (Codex P2, PR #538).
+
+  The registry therefore derives the field from ToolIsSerialOnly and
+  IGNORES the incoming value. These cases set it to the WRONG value on
+  purpose -- standing in for stack garbage in both directions -- and assert
+  registration corrects it. }
+procedure TestRegistryNormalizesSerialOnly;
+var
+  Reg: TToolRegistry;
+  T: TTool;          { deliberately NOT Default(TTool) -- that is the point }
+  Calls: array of TToolCall;
+  Batches: TToolBatchArray;
+begin
+  WriteLn('registration fixes the field the callers never set');
+  Reg := TToolRegistry.Create;
+  try
+    { a plain read-only tool arriving with a garbage-True SerialOnly }
+    T.Name        := 'fake_reader';
+    T.Description := 'stub';
+    T.Schema      := '{"type":"object","properties":{}}';
+    T.Handler     := StubHandler;
+    T.HandlerObj  := nil;
+    T.IsCore      := False;
+    T.Category    := tcReadOnly;
+    T.IsDeferred  := False;
+    T.Hidden      := False;
+    T.SerialOnly  := True;          { <- the stack garbage stand-in }
+    Reg.Register(T);
+    Check('a garbage True is cleared for a tool not on the list',
+      Reg.Find('fake_reader', T) and (not T.SerialOnly));
+
+    { and the reverse: a listed writer arriving with False must come back
+      True, so forgetting the field cannot un-protect a writer }
+    T.Name        := 'memory_search';
+    T.Description := 'stub';
+    T.Schema      := '{"type":"object","properties":{}}';
+    T.Handler     := StubHandler;
+    T.HandlerObj  := nil;
+    T.IsCore      := False;
+    T.Category    := tcReadOnly;
+    T.IsDeferred  := False;
+    T.Hidden      := False;
+    T.SerialOnly  := False;         { <- caller never set it }
+    Reg.Register(T);
+    Check('a listed writer is marked SerialOnly regardless of the caller',
+      Reg.Find('memory_search', T) and T.SerialOnly);
+
+    { the decision that matters: the stack-built reader still batches }
+    SetLength(Calls, 2);
+    Calls[0].Func.Name := 'fake_reader'; Calls[0].Func.Arguments := '{}';
+    Calls[1].Func.Name := 'fake_reader'; Calls[1].Func.Arguments := '{}';
+    Batches := PartitionToolBatches(Calls, Reg);
+    Check('a stack-registered read-only tool still coalesces',
+      (Length(Batches) = 1) and (Length(Batches[0]) = 2));
+
+    { ...and two memory_searches do not }
+    SetLength(Calls, 2);
+    Calls[0].Func.Name := 'memory_search'; Calls[0].Func.Arguments := '{}';
+    Calls[1].Func.Name := 'memory_search'; Calls[1].Func.Arguments := '{}';
+    Batches := PartitionToolBatches(Calls, Reg);
+    Check('two memory_search calls never share a batch',
+      Length(Batches) = 2);
+  finally
+    Reg.Free;
+  end;
+end;
+
 begin
   WriteLn('prompt batching rule');
   TestRuleIsInThePrompt;
   TestPromiseMatchesRegistry;
   TestWritersDoNotShareABatch;
+  TestRegistryNormalizesSerialOnly;
   WriteLn;
   if Failures = 0 then
     WriteLn('all prompt batching tests passed')

@@ -87,19 +87,54 @@ type
        mode / be exposed read-only", SerialOnly answers "may it run beside
        something else".
 
-       Polarity is deliberate. TTool records are built on the stack and
-       this codebase does NOT FillChar them (managed strings), so a site
-       that assigns fields one by one leaves a new Boolean holding
-       whatever was on the stack. With SerialOnly, garbage-True costs a
-       batch slot -- a tool runs alone that could have run beside others.
-       The inverse field (ParallelSafe) would have garbage-True mean
-       "batch this writer concurrently", turning uninitialised memory into
-       a data race. The safe failure had to be the default one. *)
+       Do NOT set this field at a registration site: it is derived from
+       ToolIsSerialOnly by TToolRegistry.RegisterImpl, which ignores
+       whatever the incoming record held. The first version of this change
+       did let sites assign it, defended by polarity -- garbage-True only
+       costs a batch slot, where the inverse field would have made
+       uninitialised memory a data race. That reasoning was wrong in the
+       way that matters: ~34 sites build TTool as a bare stack record and
+       never touch this field, so "merely" losing batching would have been
+       random and silent, in the exact machinery the field exists to
+       enable. Safe is not the same as correct (Codex, PR #538). *)
     SerialOnly:  Boolean;
   end;
 
   TToolList = array of TTool;
 
+{ The authoritative set of tools that must never share a parallel batch.
+
+  This is a LIST rather than a per-registration flag because the flag it
+  feeds is read by the batcher, and ~34 registration sites build TTool as a
+  bare stack record and assign fields one at a time -- exactly the shape
+  that left HandlerObj holding stack garbage until RegisterImpl started
+  clearing it defensively. An uninitialised Boolean is a bug whichever way
+  it points: a parallel-safe tool that randomly reads True would silently
+  lose the batching this exists to enable. So TToolRegistry.RegisterImpl
+  derives SerialOnly from here and ignores whatever the caller's record
+  happened to contain, which cannot be corrupted by an unassigned field.
+
+  A tool belongs here when it writes shared state despite being tcReadOnly
+  -- a category it carries so it can pass the plan-mode gate and the
+  read-only MCP server, neither of which cares about concurrency. }
+function ToolIsSerialOnly(const Name: string): Boolean;
+
 implementation
+
+function ToolIsSerialOnly(const Name: string): Boolean;
+begin
+  { memory_search -- Tool_MemorySearch calls IMemoryIndex.SyncDir before
+      searching, which reindexes changed files and drops rows for deleted
+      ones: writes and commits against .index.db. Two searches in one batch
+      (two different queries is an ordinary ask) are two writers on that
+      file, and the loser gets a locking error instead of results.
+    plan_write   -- writes workspace/PLAN.md. PasClaw.Tools.PlanWrite
+      documents choosing tcReadOnly precisely to pass the pmPlan gate.
+    todo_write   -- rewrites the checklist file wholesale; two concurrent
+      whole-file replacements of one path is the same hazard. }
+  Result := SameText(Name, 'memory_search')
+         or SameText(Name, 'plan_write')
+         or SameText(Name, 'todo_write');
+end;
 
 end.

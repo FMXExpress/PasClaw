@@ -210,10 +210,9 @@ begin
     even though the handler writes a file. Justified by the fixed
     target path; the tool is not a general write primitive. }
   T.Category    := tcReadOnly;
-  { ...but "writes a file" is exactly what must not happen twice at once.
-    The gate and the parallel batcher were reading the same field for
-    different questions; this answers the batcher's separately. }
-  T.SerialOnly  := True;
+  { ...and because it writes a file, it must not share a parallel batch.
+    Declared once in ToolIsSerialOnly (PasClaw.Tools.Types), applied by
+    the registry. }
   R.Register(T);
   LogInfo('plan_write: registered (plan mode)');
 end;

@@ -301,13 +301,11 @@ begin
     changes nothing the user owns -- which is what the plan-mode gate and
     the read-only MCP server care about. }
   T.Category    := tcReadOnly;
-  { ...but not from the DISK's. Tool_MemorySearch calls IMemoryIndex.SyncDir
-    before searching, and SyncDir reindexes changed files and drops rows for
-    deleted ones -- writes and commits against .index.db. Two searches in
-    one parallel batch (two different queries is an ordinary thing to ask)
-    would be two writers on that file, and the loser gets a locking error
-    instead of results. }
-  T.SerialOnly  := True;
+  { ...but not from the DISK's: SyncDir reindexes and deletes rows in
+    .index.db, so this must never share a parallel batch. That is declared
+    once in ToolIsSerialOnly (PasClaw.Tools.Types) and applied by the
+    registry -- setting it here would be an uninitialised-field hazard in
+    reverse, since most registration sites never assign the field at all. }
   R.Register(T);
 end;
 

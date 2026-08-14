@@ -131,6 +131,13 @@ begin
     TMethod(Stored.HandlerObj).Code := nil;
     TMethod(Stored.HandlerObj).Data := nil;
   end;
+  { Same risk, same medicine, one field later: SerialOnly is read by the
+    parallel batcher, and the same legacy callers that never touched
+    HandlerObj do not touch it either -- it would be whatever the stack
+    held. Derive it from the authoritative list instead of trusting the
+    incoming record, so an unassigned field cannot decide whether a tool
+    runs concurrently. ToolIsSerialOnly is the one place that knows. }
+  Stored.SerialOnly := ToolIsSerialOnly(Stored.Name);
   FLock.Acquire;
   try
     for i := 0 to High(FTools) do

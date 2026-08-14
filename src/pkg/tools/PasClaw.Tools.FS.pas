@@ -1918,7 +1918,8 @@ begin
   T.Handler     := Tool_TodoWrite;
   T.IsCore      := True;
   T.Category    := tcReadOnly;
-  T.SerialOnly  := True;
+  { SerialOnly comes from ToolIsSerialOnly (PasClaw.Tools.Types) via the
+    registry -- see the note above about the rewrite. }
   R.Register(T);
 
   { apply_patch (new) -- multi-file, context-anchored patches in one call. }
