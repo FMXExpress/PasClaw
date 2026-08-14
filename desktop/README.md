@@ -211,6 +211,16 @@ desktop in the browser and this app opens with it.
   "make a label, make a memo". PasClaw Studio's chat has no browser either.
   The cost: an FMX `TLabel` has no rich text, so bold and links are
   flattened to plain text rather than styled.
+- **Generated documents reach the Browser through a temp file**, not
+  `LoadFromStrings` — same async-init reason as above. Two things about that
+  file are not obvious. Its URL comes from `UrlCreateFromPath`, the shell's
+  own conversion, because which characters a `file:` URL must escape is a
+  platform rule and a temp path runs through the user's profile directory.
+  And the file a render replaces is *retired*, not deleted: assigning `.URL`
+  starts a navigation that finishes later, so deleting the previous file
+  immediately pulled it out from under an in-flight load and Windows said
+  `The specified file was not found.` Retired files are dropped a few
+  navigations on, and the rest at shutdown.
 - **The browser snapshot trick** is the demo's: `TWebBrowser` is a native
   control that paints above all FMX content, so an inactive window freezes
   its browser into a `TImage` and swaps the live control back on focus.

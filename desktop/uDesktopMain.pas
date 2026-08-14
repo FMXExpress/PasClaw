@@ -153,6 +153,9 @@ type
     { Temp files backing the generated documents -- one live file per key,
       replaced as the document is re-rendered. See ShowHtml. }
     FHtmlFiles: TDictionary<string, string>;
+    { The ones it replaced, kept a while rather than deleted at once: a
+      navigation is asynchronous and the file has to outlive it. }
+    FHtmlOld: TStringList;
     FHtmlSeq: Integer;
 
     { ---- File Manager ---- }
@@ -3917,11 +3920,6 @@ begin
   L.Add(Role + #9 + StringReplace(Text_, #9, '  ', [rfReplaceAll]));
 end;
 
-(* Rebuild the whole transcript as an HTML document.
-
-   Whole-document rather than incremental: a conversation is tens of turns,
-   the markdown pass is string work, and the alternative is maintaining a
-   DOM through a browser control's scripting bridge for no visible gain. *)
 (* Put GENERATED html into a browser control.
 
    Through a temporary file and .URL, not LoadFromStrings, and that swap is
@@ -3942,13 +3940,59 @@ end;
    showing is not a navigation: without it the second render of a chat would
    do nothing. The previous file is deleted as the next is written, so a
    conversation leaves one file behind, not one per turn. *)
+{$IFDEF MSWINDOWS}
+{ The shell's own path -> URL conversion. Declared here rather than pulled
+  from Winapi.ShLwApi so the uses clause stays the cross-platform one it is. }
+function UrlCreateFromPathW(pszPath, pszUrl: PWideChar; var pcchUrl: Cardinal;
+  dwReserved: Cardinal): Integer; stdcall;
+  external 'shlwapi.dll' name 'UrlCreateFromPathW';
+{$ENDIF}
+
+(* A local path as a file: URL.
+
+   The hand-rolled percent-encoding this replaces was nearly right, and
+   "nearly" is not something a URL gets to be. Which characters must be
+   escaped in a file: URL -- and which the engine will then un-escape again
+   -- is a platform rule, not a general one, and a temp path runs straight
+   through the user's profile directory, whose name is whatever they called
+   themselves. Windows publishes that rule as UrlCreateFromPath, so ask it
+   rather than reimplement it.
+
+   The manual form stays underneath, as the fallback and as the path every
+   other platform takes. *)
+function FileUrl(const Path: string): string;
+var
+{$IFDEF MSWINDOWS}
+  Buf: array[0..2047] of WideChar;
+  Len: Cardinal;
+{$ENDIF}
+  Enc: string;
+begin
+{$IFDEF MSWINDOWS}
+  Len := Length(Buf);
+  if UrlCreateFromPathW(PWideChar(Path), @Buf[0], Len, 0) >= 0 then
+  begin
+    SetString(Enc, PWideChar(@Buf[0]), Len);
+    Exit(Enc);
+  end;
+{$ENDIF}
+  Enc := StringReplace(Path, '\', '/', [rfReplaceAll]);
+  Enc := StringReplace(Enc, '%', '%25', [rfReplaceAll]);
+  Enc := StringReplace(Enc, ' ', '%20', [rfReplaceAll]);
+  Enc := StringReplace(Enc, '#', '%23', [rfReplaceAll]);
+  Enc := StringReplace(Enc, '?', '%3F', [rfReplaceAll]);
+  if (Length(Enc) > 0) and (Enc[1] <> '/') then Enc := '/' + Enc;
+  Result := 'file://' + Enc;
+end;
+
 function TFormMain.ShowHtml(B: TWebBrowser; const Key, Html: string): Boolean;
 var
-  Dir, Path, Old, Enc: string;
+  Dir, Path, Old: string;
 begin
   Result := False;
   if B = nil then Exit;
   if FHtmlFiles = nil then FHtmlFiles := TDictionary<string, string>.Create;
+  if FHtmlOld = nil then FHtmlOld := TStringList.Create;
 
   Inc(FHtmlSeq);
   Dir := TIOPath.GetTempPath;
@@ -3958,28 +4002,39 @@ begin
     TFile.WriteAllText(Path, Html, TEncoding.UTF8);
   except
     { A temp directory we cannot write is not a reason to fault; the window
-      stays blank and the Log window will have the trace. }
+      stays blank, and Say puts the path somewhere it can be read. }
+    Say('Could not write the temporary document ' + Path);
     Exit;
   end;
 
+  (* The file this one replaces is RETIRED, not deleted.
+
+     Deleting it here was the "The specified file was not found." on New and
+     on opening an HTML file from the File Manager. Assigning .URL does not
+     read the file; it starts a navigation that finishes later -- queued
+     while WebView2 initialises, in flight afterwards. Both of those actions
+     render a second document moments after a first, so the delete landed
+     while the engine was still fetching the file it had been given, and the
+     engine reported exactly what it found: no such file.
+
+     So retired files are held in a queue and dropped a few navigations
+     later, by which time nothing can still be loading one. The bound keeps
+     it litter rather than a leak, and DiscardHtmlFiles takes the rest at
+     shutdown. *)
   if FHtmlFiles.TryGetValue(Key, Old) and (Old <> '') and (Old <> Path) then
+    FHtmlOld.Add(Old);
+  while FHtmlOld.Count > 8 do
+  begin
     try
-      TFile.Delete(Old);
+      TFile.Delete(FHtmlOld[0]);
     except
       { a leftover temp file is not worth an exception }
     end;
+    FHtmlOld.Delete(0);
+  end;
   FHtmlFiles.AddOrSetValue(Key, Path);
 
-  { file:/// plus forward slashes, with the characters a path may legally
-    contain and a URL may not. Windows temp paths live under a profile
-    directory, which routinely has a space in it. }
-  Enc := StringReplace(Path, '\', '/', [rfReplaceAll]);
-  Enc := StringReplace(Enc, '%', '%25', [rfReplaceAll]);
-  Enc := StringReplace(Enc, ' ', '%20', [rfReplaceAll]);
-  Enc := StringReplace(Enc, '#', '%23', [rfReplaceAll]);
-  Enc := StringReplace(Enc, '?', '%3F', [rfReplaceAll]);
-  if (Length(Enc) > 0) and (Enc[1] <> '/') then Enc := '/' + Enc;
-  B.URL := 'file://' + Enc;
+  B.URL := FileUrl(Path);
   Result := True;
 end;
 
@@ -3990,6 +4045,19 @@ procedure TFormMain.DiscardHtmlFiles;
 var
   Path: string;
 begin
+  { The retired ones first: nothing is navigating by now, and they are the
+    files ShowHtml deliberately did not delete at the time. }
+  if FHtmlOld <> nil then
+  begin
+    for Path in FHtmlOld do
+      if Path <> '' then
+        try
+          TFile.Delete(Path);
+        except
+        end;
+    FreeAndNil(FHtmlOld);
+  end;
+
   if FHtmlFiles = nil then Exit;
   for Path in FHtmlFiles.Values do
     if Path <> '' then
@@ -4482,7 +4550,16 @@ begin
   if FChatHistory.TryGetValue(Key, Hist) and (Trim(Hist) <> '[]') and
      (Trim(Hist) <> '') then Exit;
 
-  { The window is already open by here; the conversation arrives into it. }
+  (* Into the TRANSCRIPT, which is where the reader is looking.
+
+     This used to write to FChatLogs -- the streaming memo -- and that was
+     right while the memo WAS the transcript. It is the raw view now, hidden
+     except during a turn, so a replayed conversation arrived complete and
+     entirely invisible: the window opened, said nothing, and looked like a
+     brand new chat. Everything a user is meant to read goes through
+     AppendTurn/RenderTranscript. *)
+  AppendTurn(Key, 'tool', 'loading the conversation...');
+  RenderTranscript(Key);
   if FChatLogs.TryGetValue(Key, Log) and (Log <> nil) then
     Log.Lines.Add('(loading...)');
 
@@ -4497,14 +4574,13 @@ begin
       Msgs: TChatMessages;
       I: Integer;
       Into: TMemo;
+      Turns: TStringList;
     begin
       { The chat window keyed by this session may have been closed while the
         history was in flight; the dictionary is emptied as it goes. }
       if not FChatWins.ContainsKey(Key) then Exit;
       if Trim(Hist) = '' then Hist := '[]';
       FChatHistory.AddOrSetValue(Key, Hist);
-      if not FChatLogs.TryGetValue(Key, Into) then Exit;
-      if Into = nil then Exit;
 
       (* Decoded by the client library, through the real JSON parser.
 
@@ -4513,15 +4589,29 @@ begin
          conversation arrived as literal escape text -- and model prose is
          made of those. *)
       Msgs := ParseChatMessages(Hist);
-      Into.Lines.Clear;
+
+      { The replay REPLACES the "loading" notice rather than following it. }
+      if FChatTurns.TryGetValue(Key, Turns) and (Turns <> nil) then
+        Turns.Clear;
       if Length(Msgs) = 0 then
-      begin
-        Into.Lines.Add('(this session has no messages)');
-        Exit;
-      end;
+        AppendTurn(Key, 'tool', 'this session has no messages')
+      else
+        for I := 0 to High(Msgs) do
+        begin
+          { Tool and system turns are machinery, not conversation. }
+          if (Msgs[I].Role <> 'user') and (Msgs[I].Role <> 'assistant') then
+            Continue;
+          AppendTurn(Key, Msgs[I].Role, Msgs[I].Content);
+        end;
+      RenderTranscript(Key);
+
+      { And the raw view gets the same conversation unformatted, which is
+        what it is for. }
+      if not FChatLogs.TryGetValue(Key, Into) then Exit;
+      if Into = nil then Exit;
+      Into.Lines.Clear;
       for I := 0 to High(Msgs) do
       begin
-        { Tool and system turns are machinery, not conversation. }
         if (Msgs[I].Role <> 'user') and (Msgs[I].Role <> 'assistant') then
           Continue;
         if Msgs[I].Role = 'user' then
@@ -5190,7 +5280,6 @@ end;
 
 procedure TFormMain.AddArtifactCard(const Project: string);
 var
-  Log: TMemo;
   App: TAppRow;
   L: TStringList;
   N: Integer;
@@ -5198,18 +5287,22 @@ begin
   if not FClient.App(Project, App) then Exit;
   if not (App.Exists and App.Ready) then Exit;
   CaptureVersion(Project);
-  if not FChatLogs.TryGetValue(Project, Log) or (Log = nil) then Exit;
 
   N := 0;
   if FVersions.TryGetValue(Project, L) and (L <> nil) then N := L.Count;
 
-  (* The transcript is a TMemo, so a "card" is a line, not a widget. It says
-     which version it is, and the Versions button on the chat window opens
-     the one you pick. Poorer than the web client's card, honestly -- but a
-     line that tells the truth beats a widget that cannot exist in a memo. *)
-  Log.Lines.Add('');
-  Log.Lines.Add(Format('[%s] %s -- version %d. Use "Versions" to open it.',
-                       [App.Kind, App.Name, N]));
+  (* A "card" is a line: it says which version this is, and the Versions
+     button on the chat window opens the one you pick. Poorer than the web
+     client's card, honestly -- but a line that tells the truth beats a
+     widget that cannot exist here.
+
+     In the TRANSCRIPT, not the streaming memo. The memo is hidden except
+     while a turn is running, so a card written there announced the app to
+     nobody. *)
+  AppendTurn(Project, 'tool',
+    Format('[%s] %s -- version %d. Use "Versions" to open it.',
+           [App.Kind, App.Name, N]));
+  RenderTranscript(Project);
 end;
 
 procedure TFormMain.ViewVersionClick(Sender: TObject);
