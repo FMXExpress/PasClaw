@@ -428,6 +428,19 @@ type
     procedure QueueLogEntry(const Kind, Origin, Text_: string);
     procedure DrainLogLines;
     procedure StopLogWatch;
+    (* Stop the desktop event watcher.
+
+       Terminate alone does not do it, and this is why closing the app was
+       nearly impossible. The thread spends its life inside WatchEvents,
+       blocked on a read with no timeout; Terminated is only consulted
+       between reconnects, and the callback's Stop flag is only consulted
+       when a real event arrives. A keepalive does not count -- it is a
+       comment line and gets dropped before the callback sees it.
+
+       So on an idle board, which is most of the time, joining this thread
+       waits for something to happen on the gateway. Measured at 45 seconds
+       and still going, against a gateway that was perfectly healthy. *)
+    procedure StopEventWatch;
 
     { ---- hex viewer ---- }
     procedure OpenHex(const Path: string);
@@ -924,7 +937,9 @@ begin
         component as the form comes apart, which is after this runs.
      2. Stop the timers, or a tick lands mid-teardown and repaints windows
         that are going away.
-     3. Stop the watcher threads, which read through the client.
+     3. Stop the watcher threads, which read through the client -- and
+        stopping them means CUTTING them, not asking politely: both park
+        inside a blocking read that a flag cannot reach.
      4. Save, while the client still exists -- the layout lives on the
         gateway, so there is no writing it afterwards.
      5. Only then free anything. *)
@@ -937,12 +952,7 @@ begin
   if FRunTimer <> nil then FRunTimer.Enabled := False;
 
   { Stop the watchers before the client they read through goes away. }
-  if FEventThread <> nil then
-  begin
-    FEventThread.Terminate;
-    FEventThread.WaitFor;
-    FreeAndNil(FEventThread);
-  end;
+  StopEventWatch;
   StopLogWatch;
   (* And release the off-thread work, which is the other thing holding the
      client. Freeing it while a worker is mid-request is a use-after-free
@@ -960,9 +970,20 @@ begin
      because a desktop must close even when something has gone wrong. *)
   if FClient <> nil then FClient.CancelAll;
   WaitForAsync(5000);
-  { Save before the client goes: the layout is stored on the gateway, so
-    there is no writing it once the connection is gone -- which is why this
-    is the one save that waits. }
+  (* Save before the client goes: the layout is stored on the gateway, so
+     there is no writing it once the connection is gone -- which is why this
+     is the one save that waits.
+
+     On a SHORT clock, though. This is a blocking PUT, and the ordinary
+     thirty seconds is a sensible answer to "how long may a board call take"
+     and a terrible one to "how long may closing the window take" -- a
+     gateway that has stopped answering would hold the app open for half a
+     minute over a layout nobody is waiting for. Losing the arrangement is
+     the cheaper failure.
+
+     After CancelAll, deliberately: that cut only what was already on the
+     wire, so this opens a fresh connection and is not cancelled with them. *)
+  if FClient <> nil then FClient.TimeoutMs := 3000;
   try
     SaveDesktopStateNow;
   except
@@ -2717,6 +2738,8 @@ begin
 end;
 
 procedure TEventWatchThread.Execute;
+var
+  Naps: Integer;
 begin
   while not Terminated do
   begin
@@ -2728,7 +2751,14 @@ begin
       { a dead gateway is not an error worth a dialog -- retry quietly }
     end;
     if Terminated then Break;
-    Sleep(3000);
+    { Sliced, not one Sleep(3000): a Terminate arriving at the start of the
+      pause would otherwise still hold the joiner for three seconds, and
+      "closing takes a moment" is how a close button stops being trusted. }
+    for Naps := 1 to 30 do
+    begin
+      if Terminated then Break;
+      Sleep(100);
+    end;
   end;
 end;
 
@@ -2740,6 +2770,8 @@ begin
 end;
 
 procedure TLogWatchThread.Execute;
+var
+  Naps: Integer;
 begin
   while not Terminated do
   begin
@@ -2749,7 +2781,11 @@ begin
       { same deal as events: a dead gateway is a retry, not a dialog }
     end;
     if Terminated then Break;
-    Sleep(3000);
+    for Naps := 1 to 30 do
+    begin
+      if Terminated then Break;
+      Sleep(100);
+    end;
   end;
 end;
 
@@ -2797,6 +2833,10 @@ begin
   FLogStop := False;
   if FLogThread = nil then
   begin
+    { Same rule as the event stream: arm before the thread exists. The Log
+      window is opened and closed repeatedly, so this one really does get
+      cancelled and restarted. }
+    FClient.BeginLogs;
     FLogThread := TLogWatchThread.Create(Self);
     FLogThread.Start;
   end;
@@ -2917,6 +2957,18 @@ begin
   finally
     Batch.Free;
   end;
+end;
+
+procedure TFormMain.StopEventWatch;
+begin
+  if FEventThread = nil then Exit;
+  FEventThread.Terminate;
+  { Cut the socket BEFORE joining, exactly as StopLogWatch does. The flag
+    set by Terminate cannot reach a thread parked in a read; only closing
+    the socket under it can. }
+  if FClient <> nil then FClient.CancelEvents;
+  FEventThread.WaitFor;
+  FreeAndNil(FEventThread);
 end;
 
 procedure TFormMain.StopLogWatch;
@@ -3222,6 +3274,9 @@ begin
   FEventTimer.OnTimer := EventTimerTick;
   FEventTimer.Enabled := True;
 
+  { Armed before the thread exists. Clearing the cancel latch from inside
+    the watcher would race a cancel that arrived first -- see BeginEvents. }
+  FClient.BeginEvents;
   FEventThread := TEventWatchThread.Create(Self);
   FEventThread.Start;
 end;
