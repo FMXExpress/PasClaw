@@ -84,6 +84,13 @@ uses
   PasClaw.Agent.Goals,
   PasClaw.Markdown.Render;
 
+{ ', profile X' for the session banner, or '' when the session runs on
+  stock defaults -- no profile line for the case that needs no words. }
+function ProfileSuffix(const Name: string): string;
+begin
+  if Name = '' then Result := '' else Result := ', profile ' + Name;
+end;
+
 type
   (* --orient / --no-orient: per-invocation override of
      Cfg.OrientTaskAware (task-aware MEMORY slicing, PasClaw.Agent.Orient).
@@ -1438,17 +1445,24 @@ begin
       finally below. }
     StartShellSession(Session.Meta.Id);
     SetCurrentSessionId(Session.Meta.Id);
+    { Stamp the profile this run resolved to so the session resumes under
+      it later. Only when empty: a session records the profile it was
+      CREATED under and keeps it, so an explicit --profile for one
+      invocation doesn't silently rewrite the session's binding. }
+    if Session.Meta.Profile = '' then Session.Meta.Profile := Cfg.ProfileName;
     if Session.MetaExists then
     begin
       SetLength(Msgs, Length(Session.Messages));
       for i := 0 to High(Session.Messages) do Msgs[i] := Session.Messages[i];
       SystemPromptOverride := Session.Meta.SystemPromptOverride;
       PrintLn(Ansi.Dim + '(resumed session ' + Session.Meta.Id +
-              ' -- ' + IntToStr(Length(Msgs)) + ' messages)' + Ansi.Reset);
+              ' -- ' + IntToStr(Length(Msgs)) + ' messages' +
+              ProfileSuffix(Session.Meta.Profile) + ')' + Ansi.Reset);
     end
     else
       PrintLn(Ansi.Dim + '(new session ' + Session.Meta.Id +
-              ' -- pasclaw resume ' + Session.Meta.Id + ' to continue later)' + Ansi.Reset);
+              ' -- pasclaw resume ' + Session.Meta.Id + ' to continue later' +
+              ProfileSuffix(Session.Meta.Profile) + ')' + Ansi.Reset);
 
     while True do
     begin
@@ -1856,7 +1870,7 @@ var
   A: TAgentArgs;
   Cfg: TConfig;
   KindSelected: TShellBackendKind;
-  BackendDesc: string;
+  BackendDesc, SessionProfile: string;
 begin
   if not ParseArgs(Argv, A) then
   begin
@@ -1868,7 +1882,28 @@ begin
     Exit(1);
   end;
 
-  Cfg := LoadConfig(A.Profile);
+  (* Profile precedence for this run:
+
+       1. --profile             (typed for this invocation)
+       2. $PASCLAW_PROFILE      (ambient, set once per shell)
+       3. the resumed session's own recorded profile
+       4. the workspace binding / global "profile" field
+
+     Layers 1, 2 and 4 already live inside LoadConfig; layer 3 is added
+     here by passing the session's profile as the override when nothing
+     more explicit was given. Doing it this way keeps Config unaware of
+     sessions -- Config sits underneath the session store, so the
+     dependency can only point this direction -- and an empty result
+     falls straight through to LoadConfig's own chain.
+
+     The point: a session started under `security` resumes sandboxed,
+     even from a shell whose config.json names something else. *)
+  SessionProfile := A.Profile;
+  if (SessionProfile = '') and (GetEnvironmentVariable('PASCLAW_PROFILE') = '')
+     and (A.Session <> '') then
+    SessionProfile := PeekSessionProfile(A.Session);
+
+  Cfg := LoadConfig(SessionProfile);
   { --orient / --no-orient override task-aware MEMORY slicing for this
     run, on top of whatever config.json / the profile resolved to. The
     feature ships off on every profile, so --orient is the no-edit way
