@@ -84,6 +84,22 @@ uses
   PasClaw.Agent.Goals,
   PasClaw.Markdown.Render;
 
+{ Every path that creates a persisted session goes through here, so the
+  profile stamp cannot be forgotten on one of them. Codex on #551 caught
+  exactly that: the stamp started life inline in RunInteractive, which left
+  `agent --session <id> -m ...` and interactive /new writing sessions with no
+  profile -- and an unstamped session resumes under the ambient profile,
+  silently dropping the sandbox it was created under.
+
+  Only stamps when empty: a session records the profile it was CREATED under
+  and keeps it, so an explicit --profile for one invocation does not rewrite
+  the binding. }
+function NewStampedSession(const Id: string; const Cfg: TConfig): TSession;
+begin
+  Result := TSession.Create(Id);
+  if Result.Meta.Profile = '' then Result.Meta.Profile := Cfg.ProfileName;
+end;
+
 { ', profile X' for the session banner, or '' when the session runs on
   stock defaults -- no profile line for the case that needs no words. }
 function ProfileSuffix(const Name: string): string;
@@ -722,7 +738,7 @@ begin
   PersistedSession := nil;
   if A.Session <> '' then
   begin
-    PersistedSession := TSession.Create(A.Session);
+    PersistedSession := NewStampedSession(A.Session, Cfg);
     Handlers.MetaRef := @PersistedSession.Meta;
     OneShotSessionId := A.Session;
   end
@@ -1434,7 +1450,7 @@ begin
       id so the conversation survives Ctrl-C / crash regardless.
       Codex P1 on PR #117: making this opt-in defeated the whole
       "history survives restarts" point. }
-    Session := TSession.Create(A.Session);
+    Session := NewStampedSession(A.Session, Cfg);
     Handlers.MetaRef := @Session.Meta;
     RewireCheckpoints;
     { Tell the active shell backend a session is starting so docker
@@ -1445,11 +1461,6 @@ begin
       finally below. }
     StartShellSession(Session.Meta.Id);
     SetCurrentSessionId(Session.Meta.Id);
-    { Stamp the profile this run resolved to so the session resumes under
-      it later. Only when empty: a session records the profile it was
-      CREATED under and keeps it, so an explicit --profile for one
-      invocation doesn't silently rewrite the session's binding. }
-    if Session.Meta.Profile = '' then Session.Meta.Profile := Cfg.ProfileName;
     if Session.MetaExists then
     begin
       SetLength(Msgs, Length(Session.Messages));
@@ -1486,7 +1497,7 @@ begin
             doesn't pick up the previous conversation's interrupts. }
           ClearSteering(Session.Meta.Id);
           Session.Free;
-          Session := TSession.Create('');   { fresh id }
+          Session := NewStampedSession('', Cfg);   { fresh id }
           { MetaRef pointed into the freed session; re-aim it before
             any compaction can flush working state into dead memory. }
           Handlers.MetaRef := @Session.Meta;
