@@ -230,6 +230,144 @@ begin
   inherited Destroy;
 end;
 
+function PreDecodeUnicodeEscapes(const S: string): string;
+(* fpjson (FPC 3.2.2 jsonscanner.pp) collects a \uXXXX escape into a
+   `String[4]` buffer. A lone escape fits (<= 3 UTF-8 bytes), and a real
+   surrogate pair fits exactly (4 bytes) -- but the scanner runs the SAME
+   combining path for ANY two adjacent escapes, so a pair of adjacent BMP
+   escapes (up to 3+3 bytes) is silently truncated to 4:
+
+       U+26A0 U+FE0F (warning sign + variation selector, escaped)
+         ->  E2 9A A0 EF        (should be E2 9A A0 EF B8 8F)
+       U+4E2D U+6587 (CJK, escaped)
+         ->  E4 B8 AD E6        (the second char loses its tail)
+
+   Producers that emit ASCII-safe JSON -- Python's json.dump default
+   (ensure_ascii=True), and most defensive serializers -- escape every
+   non-ASCII char, so any run of adjacent non-ASCII characters corrupts.
+   The scanner's raw-byte path is lossless (verified with raw emoji bytes),
+   so the workaround is to decode the escapes ourselves before fpjson sees
+   them. Rules:
+     - only escapes INSIDE string literals are touched (same state walk as
+       SanitizeLenientJSON above);
+     - codepoints < $80 stay escaped -- un-escaping a quote would inject a
+       raw quote and break the parse;
+     - surrogate pairs combine to the astral codepoint (4-byte UTF-8);
+       unpaired surrogates are left for fpjson (a lone escape fits its
+       buffer, so nothing is lost);
+     - anything malformed passes through untouched for fpjson to reject.
+   Input without \u escapes round-trips byte-for-byte. *)
+var
+  i, n, U, U2: Integer;
+  InStr: Boolean;
+  SB: TStringBuilder;
+
+  function HexAt(Pos: Integer; out V: Integer): Boolean;
+  var
+    k, d: Integer;
+    C: Char;
+  begin
+    Result := False;
+    V := 0;
+    if Pos + 3 > n then Exit;
+    for k := 0 to 3 do
+    begin
+      C := S[Pos + k];
+      case C of
+        '0'..'9': d := Ord(C) - Ord('0');
+        'A'..'F': d := Ord(C) - Ord('A') + 10;
+        'a'..'f': d := Ord(C) - Ord('a') + 10;
+      else
+        Exit;
+      end;
+      V := V * 16 + d;
+    end;
+    Result := True;
+  end;
+
+  procedure AppendUtf8(CP: Integer);
+  begin
+    if CP < $800 then
+    begin
+      SB.Append(Chr($C0 or (CP shr 6)));
+      SB.Append(Chr($80 or (CP and $3F)));
+    end
+    else if CP < $10000 then
+    begin
+      SB.Append(Chr($E0 or (CP shr 12)));
+      SB.Append(Chr($80 or ((CP shr 6) and $3F)));
+      SB.Append(Chr($80 or (CP and $3F)));
+    end
+    else
+    begin
+      SB.Append(Chr($F0 or (CP shr 18)));
+      SB.Append(Chr($80 or ((CP shr 12) and $3F)));
+      SB.Append(Chr($80 or ((CP shr 6) and $3F)));
+      SB.Append(Chr($80 or (CP and $3F)));
+    end;
+  end;
+
+begin
+  if Pos('\u', S) = 0 then Exit(S);
+  n := Length(S);
+  InStr := False;
+  SB := TStringBuilder.Create(n + 16);
+  try
+    i := 1;
+    while i <= n do
+    begin
+      if not InStr then
+      begin
+        if S[i] = '"' then InStr := True;
+        SB.Append(S[i]);
+        Inc(i);
+        Continue;
+      end;
+      { inside a string literal }
+      if S[i] = '"' then
+      begin
+        InStr := False;
+        SB.Append(S[i]);
+        Inc(i);
+        Continue;
+      end;
+      if (S[i] = '\') and (i < n) then
+      begin
+        if (S[i + 1] = 'u') and HexAt(i + 2, U) and (U >= $80) then
+        begin
+          if (U >= $D800) and (U <= $DBFF) and (i + 11 <= n) and
+             (S[i + 6] = '\') and (S[i + 7] = 'u') and HexAt(i + 8, U2) and
+             (U2 >= $DC00) and (U2 <= $DFFF) then
+          begin
+            AppendUtf8($10000 + ((U - $D800) shl 10) + (U2 - $DC00));
+            Inc(i, 12);
+            Continue;
+          end;
+          if (U < $D800) or (U > $DFFF) then
+          begin
+            AppendUtf8(U);
+            Inc(i, 6);
+            Continue;
+          end;
+          { unpaired surrogate: fall through, fpjson copes with a lone escape }
+        end;
+        { any other escape (\n, \", \\, \u00XX, malformed \u): copy the
+          backslash AND its follower verbatim so a \\ never re-enters the
+          escape scan as a fresh backslash }
+        SB.Append(S[i]);
+        SB.Append(S[i + 1]);
+        Inc(i, 2);
+        Continue;
+      end;
+      SB.Append(S[i]);
+      Inc(i);
+    end;
+    Result := SB.ToString;
+  finally
+    SB.Free;
+  end;
+end;
+
 function FPCParseData(const S: string; out ErrMsg: string): TJSONData;
 { Strict parse of S to a TJSONData, or nil on any scanner/parser error (with
   the message in ErrMsg). Handles the DefaultSystemCodePage dance documented
@@ -242,7 +380,9 @@ var
 begin
   Result := nil;
   ErrMsg := '';
-  Stream := TStringStream.Create(S);
+  { decode adjacent \uXXXX escapes before fpjson's String[4] buffer can
+    truncate them -- see PreDecodeUnicodeEscapes above }
+  Stream := TStringStream.Create(PreDecodeUnicodeEscapes(S));
   try
     PrevCP := DefaultSystemCodePage;
     if PrevCP <> CP_UTF8 then DefaultSystemCodePage := CP_UTF8;

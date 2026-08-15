@@ -770,17 +770,70 @@ begin
   GSSLAvailable := LoadOpenSSLLibrary;
 end;
 
+(* Two different failures reach here and they need different advice.
+
+   NOT FOUND: no libcrypto/libssl where the loader looked.
+
+   WRONG VERSION: found, and rejected. The vendored Indy supports OpenSSL
+   1.0.2 and earlier -- IdSSLOpenSSLHeaders checks the version and bails on
+   1.1.0 or above, with its own comment saying 1.1.0 "made MAJOR changes
+   that we do not support yet". 1.0.2 went end-of-life in 2019, so every
+   current Linux distribution ships 3.x and every current Linux install
+   lands in this branch.
+
+   That is why the old message was worse than no message on Linux: it said
+   "install OpenSSL via your package manager", which installs 3.x, which is
+   rejected -- following the instruction exactly reproduced the failure. The
+   only thing that works is a 1.0.x build, and the Indy project publishes
+   those at github.com/IndySockets/OpenSSL-Binaries. Naming it is the whole
+   fix; without it the error is a dead end.
+
+   Detected by string rather than by a status code because Indy surfaces the
+   distinction only in WhichFailedToLoad's text. Crude, and a false negative
+   just prints both remedies, which is the safe direction. *)
 function OpenSSLHelpMessage: string;
+var
+  Detail: string;
+  VersionRejected: Boolean;
 begin
+  Detail := WhichFailedToLoad;
+  VersionRejected := Pos('Unsupported SSL Library version', Detail) > 0;
+
   Result :=
     'TLS support requires OpenSSL but the libraries could not be loaded.' + sLineBreak +
-    'Indy reports: ' + WhichFailedToLoad + sLineBreak +
-    {$IFDEF MSWINDOWS}
-    'On Windows, place libeay32.dll and ssleay32.dll next to pasclaw.exe,' + sLineBreak +
-    'or set PASCLAW_OPENSSL_DIR to a directory containing them.';
+    'Indy reports: ' + Detail + sLineBreak;
+
+  if VersionRejected then
+    Result := Result +
+      'That library was FOUND but is too new. This build of Indy supports' + sLineBreak +
+      'OpenSSL 1.0.2 and earlier; 1.1.0+ and 3.x are rejected. Your system' + sLineBreak +
+      'OpenSSL will not work and installing it again will not help.' + sLineBreak;
+
+  Result := Result +
+    {$IF DEFINED(MSWINDOWS)}
+    'Get 1.0.2 binaries from github.com/IndySockets/OpenSSL-Binaries and' + sLineBreak +
+    'place libeay32.dll and ssleay32.dll next to pasclaw.exe, or set' + sLineBreak +
+    'PASCLAW_OPENSSL_DIR to a directory containing them.';
+    {$ELSEIF DEFINED(DARWIN)}
+    { macOS names and loads these differently from Linux, so it needs its
+      own remedy. IdGlobal.HackLoadFileName builds name + version + ext on
+      Darwin (libssl.1.0.2.dylib) but name + ext + version elsewhere
+      (libssl.so.1.0.2), and `make openssl-1.0` is Debian-only -- it wants
+      dpkg-deb and copies Linux ELF objects, which cannot load here. }
+    'Homebrew''s openssl@1.0 formula is gone, so the usual sources are a' + sLineBreak +
+    'MacPorts openssl10 install or a local 1.0.2 build. Place' + sLineBreak +
+    'libssl.1.0.2.dylib and libcrypto.1.0.2.dylib next to the pasclaw' + sLineBreak +
+    'binary, or point PASCLAW_OPENSSL_DIR at a directory holding them.' + sLineBreak +
+    'LibreSSL also works: Indy accepts the .35/.43/.44 dylibs macOS ships,' + sLineBreak +
+    'so PASCLAW_OPENSSL_DIR=/usr/lib is worth trying first.' + sLineBreak +
+    'Do NOT run `make openssl-1.0` -- that target fetches Linux .so files.';
     {$ELSE}
-    'On Linux/macOS, install OpenSSL (libssl + libcrypto) via your package' + sLineBreak +
-    'manager, or set PASCLAW_OPENSSL_DIR to a directory containing them.';
+    'Run `make openssl-1.0` -- it fetches the 1.0.2u pair into the build' + sLineBreak +
+    'directory, where this binary already looks, so no further setup is' + sLineBreak +
+    'needed. (The Docker image has always bundled these; that target is' + sLineBreak +
+    'the same thing for a native build.) Otherwise place libssl.so.1.0.2' + sLineBreak +
+    'and libcrypto.so.1.0.2 next to the pasclaw binary, or point' + sLineBreak +
+    'PASCLAW_OPENSSL_DIR at a directory holding them.';
     {$ENDIF}
 end;
 

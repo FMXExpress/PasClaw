@@ -214,7 +214,7 @@ var
 const
   Want = #$F0#$9F#$98#$80;
 begin
-  J := TJsonObject.Parse('{"k":"😀"}');
+  J := TJsonObject.Parse('{"k":"' + #$F0#$9F#$98#$80 + '"}');
   try
     Got := J.GetStr('k', '');
   finally
@@ -222,6 +222,111 @@ begin
   end;
   AssertBytesEqual(Got, Want,
     'surrogate pair 😀 decodes to 4-byte UTF-8 (😀)');
+end;
+
+procedure TestAdjacentEscapePairCJK;
+(* Pass-16 improve-loop find. fpjson's scanner (FPC 3.2.2
+   jsonscanner.pp) accumulates \uXXXX escapes in a String[4] --
+   sized for one surrogate pair (exactly 4 UTF-8 bytes) but shared
+   by the combining path for ANY two adjacent escapes, so two
+   adjacent 3-byte BMP escapes (6 bytes) silently truncate to 4.
+   Python's json.dump default (ensure_ascii=True) emits exactly
+   this shape for all non-ASCII text, so any adjacent pair of CJK
+   chars or an emoji + variation selector corrupted every relay
+   write_file payload. PreDecodeUnicodeEscapes decodes the escapes
+   to raw UTF-8 before fpjson sees them. NOTE: Pascal string
+   literals do not process backslashes, so the concatenated
+   backslash-u sequences below really are escape text -- unlike the raw-byte
+   literals in the tests above, these exercise the escape path. *)
+var
+  J: TJsonObject;
+  Got: string;
+const
+  Want = #$E4#$B8#$AD + #$E6#$96#$87;   { U+4E2D U+6587 }
+begin
+  J := TJsonObject.Parse('{"k":"' + '\' + 'u4e2d' + '\' + 'u6587' + '"}');
+  try
+    Got := J.GetStr('k', '');
+  finally
+    J.Free;
+  end;
+  AssertBytesEqual(Got, Want,
+    'adjacent BMP \uXXXX escapes decode without String[4] truncation');
+end;
+
+procedure TestAdjacentEscapeTrioVariationSelector;
+{ The shape that surfaced the bug: warning sign U+26A0 + variation
+  selector U+FE0F + check mark U+2705, all escaped and adjacent.
+  Before the fix the middle escape lost its trailing two bytes. }
+var
+  J: TJsonObject;
+  Got: string;
+const
+  Want = #$E2#$9A#$A0 + #$EF#$B8#$8F + #$E2#$9C#$85;
+begin
+  J := TJsonObject.Parse('{"k":"' + '\' + 'u26a0' + '\' + 'ufe0f' + '\' + 'u2705' + '"}');
+  try
+    Got := J.GetStr('k', '');
+  finally
+    J.Free;
+  end;
+  AssertBytesEqual(Got, Want,
+    'escaped emoji + variation selector round-trips byte-exact');
+end;
+
+procedure TestSurrogatePairAsEscapes;
+{ Real surrogate pair spelled as escapes -- must combine to one
+  4-byte astral codepoint, not decode as two lone WideChars. }
+var
+  J: TJsonObject;
+  Got: string;
+const
+  Want = #$F0#$9F#$98#$80;   { U+1F600 }
+begin
+  J := TJsonObject.Parse('{"k":"' + '\' + 'ud83d' + '\' + 'ude00' + '"}');
+  try
+    Got := J.GetStr('k', '');
+  finally
+    J.Free;
+  end;
+  AssertBytesEqual(Got, Want,
+    'escaped surrogate pair combines to 4-byte UTF-8');
+end;
+
+procedure TestEscapedBackslashNotDecoded;
+{ '\\u1234' is a literal backslash followed by the text u1234 --
+  the pre-decoder must not treat the second backslash-u as an
+  escape. Guards the escape-state walk. }
+var
+  J: TJsonObject;
+  Got: string;
+begin
+  J := TJsonObject.Parse('{"k":"' + '\\' + 'u1234' + '"}');
+  try
+    Got := J.GetStr('k', '');
+  finally
+    J.Free;
+  end;
+  AssertBytesEqual(Got, '\' + 'u1234',
+    'escaped backslash before u is not decoded as a unicode escape');
+end;
+
+procedure TestLowCodepointEscapeUntouched;
+{ " is a double quote. Pre-decoding it to a raw quote would
+  terminate the JSON string early -- it must stay escaped for
+  fpjson, which decodes it correctly on its lone-escape path. }
+var
+  J: TJsonObject;
+  Got: string;
+begin
+  J := TJsonObject.Parse('{"k":"a' + '\' + 'u0022' + 'b"}');
+  try
+    Got := J.GetStr('k', '');
+  finally
+    J.Free;
+  end;
+  AssertBytesEqual(Got, 'a"b',
+    'sub-$80 \uXXXX escapes are left for fpjson and still decode');
 end;
 
 procedure TestArrayElementRoundTrip;
@@ -253,6 +358,11 @@ begin
   TestUnicodeEscapeBMP3Byte;
   TestUnicodeEscapeInKey;
   TestSurrogatePairEscape;
+  TestAdjacentEscapePairCJK;
+  TestAdjacentEscapeTrioVariationSelector;
+  TestSurrogatePairAsEscapes;
+  TestEscapedBackslashNotDecoded;
+  TestLowCodepointEscapeUntouched;
   TestArrayElementRoundTrip;
   WriteLn('json_utf8_roundtrip_tests: OK');
 end.
