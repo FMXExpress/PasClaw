@@ -1684,6 +1684,7 @@ end;
 procedure TTUI.SubmitInput;
 var
   Text: string;
+  ModeArg: TPasClawMode;
 begin
   Text := Trim(FInputBuf);
   if Text = '' then Exit;
@@ -1712,21 +1713,27 @@ begin
       Flash('keys: Tab swap | Ctrl-B mode toggle | N new | D del | Q quit | /theme /model /stats /undo [N] /redo [N] /mode [plan|build|improve]')
     else if Text = '/mode' then
       Flash('mode: ' + ModeName(FMode) + '  (Tab in chat to cycle; /mode plan|build|improve)')
-    else if Text = '/mode plan' then
+    (* Through ParseMode, not a list of literals.
+
+       Matching exact strings here meant this surface knew a different
+       set of names from every other one: /mode i, /mode optimise and
+       /mode IMPROVE are accepted by the CLI, the gateway body and the
+       help text this very file prints, and were "unknown command"
+       here. One parser, so a name works everywhere or nowhere. *)
+    else if Copy(Text, 1, 6) = '/mode ' then
     begin
-      FMode := pmPlan;
-      Flash('mode -> plan');
-    end
-    else if (Text = '/mode improve') or (Text = '/mode research')
-            or (Text = '/mode auto') then
-    begin
-      FMode := pmImprove;
-      Flash('mode -> improve (benchmark, profile, one change, re-measure)');
-    end
-    else if Text = '/mode build' then
-    begin
-      FMode := pmBuild;
-      Flash('mode -> build');
+      if ParseMode(Trim(Copy(Text, 7, MaxInt)), ModeArg) then
+      begin
+        FMode := ModeArg;
+        case FMode of
+          pmPlan:    Flash('mode -> plan (read-only; mutating tools refuse)');
+          pmImprove: Flash('mode -> improve (benchmark, profile, one ' +
+                           'change, re-measure)');
+        else         Flash('mode -> build (full tool access)');
+        end;
+      end
+      else
+        Flash('unknown mode -- use plan|build|improve');
     end
     else if (Text = '/tools') and (FRegistry <> nil) then
       Flash(Format('registered tools: %d', [FRegistry.Count]))

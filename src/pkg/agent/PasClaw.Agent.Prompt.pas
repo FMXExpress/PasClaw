@@ -103,6 +103,24 @@ function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
                            Mode: TPasClawMode;
                            NoPlan: Boolean = False): string; overload;
 
+(* The mode's own directive, on its own.
+
+   Normally this rides inside BuildSystemPrompt. It is public because
+   the gateway does NOT always call that: when a caller supplies its
+   own leading system message, Messages[0] is the authoritative policy
+   and BuildSystemPrompt is skipped entirely so PasClaw's identity
+   prompt cannot override the caller's.
+
+   That skip silently unmade improve mode. Plan mode survived it --
+   the dispatch gate refuses mutating tools whatever the prompt says,
+   so the missing block cost only the advisory. Improve mode has no
+   gate: the block IS the mode, so a request carrying its own system
+   message ran as an ordinary build while the API and the UI both
+   still said "improve".
+
+   Returns '' for pmBuild, so a caller can append unconditionally. *)
+function BuildModeSection(Mode: TPasClawMode): string;
+
 { Active-plan section -- reads <home>/workspace/PLAN.md (the output of
   a prior `pasclaw plan`) and returns it wrapped in a "## Active Plan"
   block for injection into the build's system prompt. Returns '' when
@@ -1008,16 +1026,22 @@ begin
     'number you did not produce in this session.';
 end;
 
+function BuildModeSection(Mode: TPasClawMode): string;
+begin
+  case Mode of
+    pmPlan:    Result := BuildPlanModeSection;
+    pmImprove: Result := BuildImproveModeSection;
+  else
+    Result := '';
+  end;
+end;
+
 function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
                            ToolsEnabled: Boolean; const TaskHint: string;
                            Mode: TPasClawMode;
                            NoPlan: Boolean = False): string;
 begin
-  Result := '';
-  if Mode = pmPlan then
-    Result := AppendSection(Result, BuildPlanModeSection);
-  if Mode = pmImprove then
-    Result := AppendSection(Result, BuildImproveModeSection);
+  Result := AppendSection('', BuildModeSection(Mode));
   Result := AppendSection(Result, BuildIdentitySection);
   Result := AppendSection(Result, BuildWorkspaceSection);
   Result := AppendSection(Result,

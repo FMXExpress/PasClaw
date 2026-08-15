@@ -24,6 +24,7 @@ program plan_build_mode_tests;
 uses
   SysUtils, Classes,
   PasClaw.Agent.Mode,
+  PasClaw.Agent.Prompt,
   PasClaw.Providers.Types,
   PasClaw.Providers.Intf,
   PasClaw.Tools.Types,
@@ -151,6 +152,31 @@ begin
   AssertTrue(ParseMode(ModeName(pmImprove), M) and (M = pmImprove), 'round-trip improve');
 end;
 
+(* The mode directive, on its own.
+
+   BuildModeSection exists because the gateway does not always call
+   BuildSystemPrompt: a request carrying its own system message keeps
+   that message as the authoritative policy and skips ours. Plan mode
+   survived that skip (its dispatch gate is the authority); improve
+   mode did not -- the block IS the mode, so those requests ran as
+   ordinary builds while still reporting "improve". *)
+procedure TestModeSection;
+begin
+  AssertEqS(BuildModeSection(pmBuild), '',
+            'build has no directive -- callers append unconditionally');
+  AssertTrue(Pos('Plan Mode', BuildModeSection(pmPlan)) > 0,
+             'plan has one');
+  AssertTrue(Pos('Improve Mode', BuildModeSection(pmImprove)) > 0,
+             'and so does improve');
+  { The loop is the mode, so its steps have to actually be in there. }
+  AssertTrue(Pos('benchmark', LowerCase(BuildModeSection(pmImprove))) > 0,
+             'improve says benchmark');
+  AssertTrue(Pos('profile', LowerCase(BuildModeSection(pmImprove))) > 0,
+             'and profile');
+  AssertTrue(Pos('revert', LowerCase(BuildModeSection(pmImprove))) > 0,
+             'and that a change which did not help gets reverted');
+end;
+
 procedure TestParseModeFromBody;
 begin
   AssertTrue(ParseModeFromBody('{"mode":"plan"}') = pmPlan, 'body plan');
@@ -264,6 +290,7 @@ end;
 begin
   TestParseMode;
   TestCycleAndName;
+  TestModeSection;
   TestParseModeFromBody;
   TestRefusalText;
   TestDispatchGate;
