@@ -75,7 +75,7 @@ row is weak evidence while presence is strong.
 | Skill bundles with routing | Microsoft Skills Framework, agent-skills [S] | ✅ skills [P] |
 | **Negative examples in skill routing** | [S] | ❌ |
 | Skill marketplace / hub | Cline, Continue [S] | ❌ |
-| Auto-distilling turns into skills | rare [K] | ✅ self-improving skills [P] |
+| Auto-distilling turns into skills | Socratic-SWE (trace-derived skills) [S] | ✅ self-improving skills [P] |
 | MCP Inspector-style debugging | [S] | ❌ |
 
 ## 5. Memory & state
@@ -478,6 +478,56 @@ byte-exactness tests against HuggingFace. The gap is not the parts — it is
 that the parts are not composed into the retrieve→fuse→rerank pipeline the
 field treats as the default.
 
+## 28. Code intelligence & terminal runtime
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| **LSP-backed symbol tools for agents**: find_symbol, find_referencing_symbols, insert_after_symbol | Serena (MCP, 40+ languages) [S] | ❌ text grep only — and this is the concrete form of the "symbol/AST index" gap the survey has ranked #1 since pass 2 |
+| Semantic edit at symbol granularity, not text match | Serena [S] | ❌ `edit_file` is exact-text |
+| Language-server support **including Pascal** | Serena's language list [S] | — meaning the #1 gap has an off-the-shelf MCP answer PasClaw could consume today [P] |
+| tmux as the agent runtime: process isolation, output capture, detach/reattach survival | tmux-agents pattern, "tmux became the runtime for AI agent teams" [S] | ⚠️ shell sessions exist per-session; no detachable live terminal [P] |
+| Driving interactive TUIs/REPLs by keystroke + pane read | tmux skills [S] | ❌ |
+| Supervisor over parallel agent panes with test gating | Herdr-style [S] | ⚠️ `spawn_status` is polling, not a live view [P] |
+
+The Serena row is the actionable one: the survey's standing #1 gap
+(symbol/AST navigation) does not need building — PasClaw is an MCP client,
+Serena is an MCP server, and its language-server list includes Pascal. The
+integration cost is configuration, not code.
+
+## 29. Agent testing via simulated users
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Simulated-user benchmark: agent + user LLM + database state + policy scoring | tau-bench / tau2-bench (dual-control) [S] | ❌ bench/swe fixtures are single-shot, no user turn |
+| Policy adherence as a scored dimension | tau-bench [S] | ❌ |
+| **Known limits**: LLM-simulated users are unreliable proxies for humans | "Lost in Simulation" [S] | — a caution, not a feature |
+| Holistic leaderboard infrastructure as the missing piece | HAL [S] | ❌ |
+
+## 30. Learning from trajectories
+
+Pass 5 could not source this; sharper terms found a rich vein. The other
+pass-5 lead — prompt management/versioning as a harness category — has now
+failed three differently-worded searches and is **demoted**: the products
+exist, but nothing in this corpus treats them as an agent-harness feature.
+Recording the demotion is the finding.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Online RL for multi-turn tool-use agents | SkyRL (SWE-Bench-scale) [S] | ❌ out of scope for a harness — but the *data* is not |
+| Successful trajectories → rejection-sampling SFT + RL | Skywork-SWE, long-context RL [S] | ❌ |
+| Trained 32B agent at 39.4% Pass@1 via RL alone | SA-SWE-32B [S] | — evidence trajectories are valuable training data |
+| Execution-free reward models scoring agent work | SWE-RM [S] | ❌ |
+| **Trace-derived agent skills** — self-evolving agents distilling skills from their own traces | Socratic-SWE [S] | ✅ self-improving skills — and this row forces a correction below [P] |
+
+### A correction the survey owes
+
+Since pass 2, "auto-distilling turns into skills" was marked rare-[K] and
+"Where PasClaw leads" implied no counterpart existed. Socratic-SWE is that
+counterpart, sourced: self-evolving coding agents via trace-derived skills.
+The leads section now claims only what survives: failure mining into the
+prompt (SCARS) still has no observed counterpart; skill distillation has
+one. A survey that cannot demote its own flagship claims is advertising.
+
 ---
 
 ## Where PasClaw leads
@@ -489,6 +539,9 @@ Three things I did not find anywhere in the surveyed material:
    none observed learn from their own mistakes automatically.
 2. **A discipline mode.** `--mode improve` changes *method*, not capability —
    measure, change one thing, re-measure.
+   (Demoted from this list, pass 7: skill distillation — Socratic-SWE does
+   trace-derived skills [S]. The SCARS failure-mining claim in item 1
+   still stands.)
 3. **Screen-reader accessibility in a native GUI.**
 
 ## Gaps worth closing, in evidence order
@@ -582,6 +635,11 @@ tool already knows its own scope.
 - [LiveKit: turn detection and interruption handling](https://livekit.com/blog/turn-detection-and-interruption-handling)
 - [Hybrid Search: BM25, Vector & Reranking Reference 2026](https://www.digitalapplied.com/blog/hybrid-search-bm25-vector-reranking-reference-2026)
 - [RAG in Production 2026: GraphRAG, Hybrid Retrieval, and Evals](https://ailearningguides.com/rag-production-patterns-2026/)
+- [Serena: LSP-backed coding agent toolkit](https://github.com/oraios/serena)
+- [tau2-bench: dual-control agent/user evaluation](https://github.com/sierra-research/tau2-bench)
+- [Lost in Simulation: LLM-simulated users are unreliable proxies](https://arxiv.org/pdf/2601.17087)
+- [SkyRL-v0: long-horizon agent RL](https://novasky-ai.github.io/posts/skyrl-v0/)
+- [Socratic-SWE: self-evolving agents via trace-derived skills](https://arxiv.org/pdf/2606.07412)
 - [Relace: A Year of Fast Apply](https://relace.ai/blog/relace-apply-3)
 - [AI Agent Sandboxing in 2026: Docker, E2B, Firecracker, gVisor, Modal & Daytona Compared](https://amux.io/guides/ai-agent-sandboxing/)
 - [Cursor vs Claude Code vs Windsurf (Now Devin Desktop) 2026](https://www.shareuhack.com/en/posts/cursor-vs-claude-code-vs-windsurf-2026)
