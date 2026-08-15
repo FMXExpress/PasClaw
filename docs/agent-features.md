@@ -528,6 +528,55 @@ The leads section now claims only what survives: failure mining into the
 prompt (SCARS) still has no observed counterpart; skill distillation has
 one. A survey that cannot demote its own flagship claims is advertising.
 
+## 31. Durable execution
+
+Late 2025 is when this "crossed the chasm": AWS Durable Functions, Cloudflare
+Workflows GA, Vercel Workflow DevKit [S]. The engines record every step and
+replay history to reconstruct state after a crash — the agent resumes from
+exactly where it stopped.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Replay-based crash recovery mid-workflow | Temporal (OpenAI + Block in production, 9.1 T lifetime actions), Inngest, Restate, DBOS [S] | ❌ a crash mid-turn loses the turn; sessions resume at turn granularity [P] |
+| Durable timers/sleeps across restarts | the category's core [S] | ⚠️ cron/heartbeat re-fire, but hold no in-flight state [P] |
+| OpenAI Agents SDK ↔ Temporal integration | public preview [S] | ❌ |
+| Serverless-native durable runtime | Inngest on Vercel/Workers/Lambda [S] | n/a self-hosted |
+
+PasClaw's checkpoints are the right instinct at the wrong granularity:
+turn-level resume exists, step-level replay does not. A multi-tool turn that
+dies at tool 7 of 9 re-runs from the user message.
+
+## 32. Gateway economics: caching tiers & processing tiers
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| **Semantic response caching** — same-meaning prompt returns the cached answer | Bifrost, LiteLLM, Kong, TrueFoundry, Cloudflare AI Gateway [S] | ❌ distinct from provider prompt caching, which PasClaw has [P] |
+| Provider prompt caching (prefix KV reuse) | providers [S] | ✅ breakpoints, 1 h TTL [P] |
+| **Batch tier: −50%, results within 24 h** | OpenAI Batch [S] | ❌ never routed to |
+| **Flex tier: −50% per-request, variable latency** | OpenAI Flex [S] | ❌ |
+| Tier-aware routing (background work → cheap tier) | FinOps guidance [S] | ❌ — and PasClaw *knows* which work is background: cron, heartbeat, subagents |
+
+The tier rows are the actionable ones. PasClaw already distinguishes
+interactive from background work structurally (cron jobs, heartbeat ticks,
+`spawn_background`) — exactly the workloads the 50%-off tiers exist for —
+and routes everything at the standard tier. This is the spend-gates finding
+from pass 4 with a twin: one gap refuses to stop runaway spend, the other
+declines a standing half-price offer.
+
+## 33. Generative UI
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| **MCP Apps**: tools return interactive UI rendered in the conversation (first official MCP extension, Jan 2026; ChatGPT supports it) | MCP spec, ChatGPT, Claude hosts [S] | ❌ — sharp because PasClaw is an MCP *server*: its gateway tools could render UI inside Claude/ChatGPT with no new surface of its own [P] |
+| Sandboxed-iframe rendering of tool UI | MCP Apps [S] | ❌ |
+| Model-authored UI streamed as it generates | [S] | ❌ |
+| Declarative agent-UI format | A2UI (Google), Open-JSON-UI [S] | ❌ |
+| Agent→frontend streaming protocol | AG-UI [S] | ⚠️ own SSE + tool cards — a proprietary miniature of the same idea [P] |
+
+One candidate found no sourcing: ChatGPT Tasks / scheduled proactive
+assistants as a field feature. PasClaw's cron + heartbeat + channels stack
+is real [P], but the field-side comparison stays unsourced and untabled.
+
 ---
 
 ## Where PasClaw leads
@@ -640,6 +689,12 @@ tool already knows its own scope.
 - [Lost in Simulation: LLM-simulated users are unreliable proxies](https://arxiv.org/pdf/2601.17087)
 - [SkyRL-v0: long-horizon agent RL](https://novasky-ai.github.io/posts/skyrl-v0/)
 - [Socratic-SWE: self-evolving agents via trace-derived skills](https://arxiv.org/pdf/2606.07412)
+- [Durable Execution: harnessing AI agents in production (Inngest)](https://www.inngest.com/blog/durable-execution-key-to-harnessing-ai-agents)
+- [Durable AI agents 2026: Temporal, Inngest, DBOS, Restate](https://www.reactify-solutions.com/articles/durable-ai-agents-2026)
+- [Top 5 AI Gateways with Semantic Caching](https://www.getmaxim.ai/articles/top-5-ai-gateways-with-semantic-caching-to-cut-llm-api-calls/)
+- [OpenAI Flex processing](https://developers.openai.com/api/docs/guides/flex-processing)
+- [MCP Apps: bringing UI capabilities to MCP clients](https://blog.modelcontextprotocol.io/posts/2026-01-26-mcp-apps/)
+- [The State of Generative UI in 2026 (OpenUI)](https://www.openui.com/blog/state-of-generative-ui-report)
 - [Relace: A Year of Fast Apply](https://relace.ai/blog/relace-apply-3)
 - [AI Agent Sandboxing in 2026: Docker, E2B, Firecracker, gVisor, Modal & Daytona Compared](https://amux.io/guides/ai-agent-sandboxing/)
 - [Cursor vs Claude Code vs Windsurf (Now Devin Desktop) 2026](https://www.shareuhack.com/en/posts/cursor-vs-claude-code-vs-windsurf-2026)
