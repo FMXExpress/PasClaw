@@ -1,0 +1,7 @@
+results/*.json
+results/run-*
+results/PASCLAW_HOME-*
+harness/__pycache__/
+harness/*.pyc
+provider-stub.log
+.fixture-cache/

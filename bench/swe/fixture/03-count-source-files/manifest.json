@@ -1,0 +1,10 @@
+{
+  "name": "03-count-source-files",
+  "category": "operator-workflow",
+  "shape_of": "operator: 'how many source files are under src/?' Tests shell_exec + structured output.",
+  "prompt": "Count the number of *.pas files under src/ (recursively). Write a JSON file report.json at the workspace root containing exactly: {\"count\": N} where N is the integer count. Use whatever tool is most appropriate. Do not produce any extra fields. Say done when finished.",
+  "scope_paths": ["src/", "report.json"],
+  "oracle": {
+    "cmd": "$FIXTURE_DIR/oracle/test.sh"
+  }
+}

@@ -1,0 +1,10 @@
+service: pasclaw
+version: 1.0.0
+provider:: openai
+model: gpt-4o-mini
+max_tokens: 4096
+timeout_seconds: 60
+features:
+  - skills
+  - cron
+  - kb

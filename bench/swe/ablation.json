@@ -1,0 +1,207 @@
+[
+  {
+    "id": "baseline",
+    "profile": "baseline"
+  },
+  {
+    "id": "stock",
+    "profile": "stock"
+  },
+  {
+    "id": "max-build",
+    "profile": "max-build"
+  },
+  {
+    "id": "low-token",
+    "profile": "low-token"
+  },
+  {
+    "id": "security",
+    "profile": "security"
+  },
+  {
+    "id": "all-on",
+    "profile": "all-on"
+  },
+  {
+    "id": "stock+condenser",
+    "profile": "stock",
+    "config_overrides": {
+      "condense_reversible": true
+    }
+  },
+  {
+    "id": "stock+output-cap-16k",
+    "profile": "stock",
+    "config_overrides": {
+      "tool_output_cap": 16384
+    }
+  },
+  {
+    "id": "stock+orient-task-aware",
+    "profile": "stock",
+    "config_overrides": {
+      "orient_task_aware": true
+    }
+  },
+  {
+    "id": "stock+checkpoints",
+    "profile": "stock",
+    "config_overrides": {
+      "checkpoints_enabled": true,
+      "checkpoints_keep_last": 32
+    }
+  },
+  {
+    "id": "stock+stats",
+    "profile": "stock",
+    "config_overrides": {
+      "stats_collection_enabled": true
+    }
+  },
+  {
+    "id": "stock+cache-1h",
+    "profile": "stock",
+    "config_overrides": {
+      "prompt_cache": {
+        "enabled": true,
+        "ttl": "1h"
+      }
+    }
+  },
+  {
+    "id": "stock+skill-self-manage",
+    "profile": "stock",
+    "config_overrides": {
+      "self_improving_skills": {
+        "self_manage": true
+      }
+    }
+  },
+  {
+    "id": "stock+skill-progressive",
+    "profile": "stock",
+    "config_overrides": {
+      "self_improving_skills": {
+        "progressive_disclosure": true
+      }
+    }
+  },
+  {
+    "id": "stock+skill-distiller",
+    "profile": "stock",
+    "config_overrides": {
+      "self_improving_skills": {
+        "distiller": {
+          "enabled": true,
+          "min_tool_calls": 5
+        }
+      }
+    }
+  },
+  {
+    "id": "stock+auto-router",
+    "profile": "stock",
+    "config_overrides": {
+      "auto_router": {
+        "enabled": true
+      }
+    }
+  },
+  {
+    "id": "stock-no-tools",
+    "profile": "stock",
+    "no_tools": true
+  },
+  {
+    "id": "stock-no-mcp",
+    "profile": "stock",
+    "no_mcp": true
+  },
+  {
+    "id": "lean-stock",
+    "_note": "Stock + every zero-prompt-cost behavioral toggle from max-build. Same prompt bytes as stock (12822) but with checkpoints, stats, 1h cache, distiller, orient-task-aware, auto-router.",
+    "profile": "stock",
+    "config_overrides": {
+      "orient_task_aware": true,
+      "checkpoints_enabled": true,
+      "checkpoints_keep_last": 32,
+      "stats_collection_enabled": true,
+      "prompt_cache": {
+        "enabled": true,
+        "ttl": "1h"
+      },
+      "auto_router": {
+        "enabled": true
+      },
+      "self_improving_skills": {
+        "distiller": {
+          "enabled": true,
+          "min_tool_calls": 5
+        }
+      }
+    }
+  },
+  {
+    "id": "lean-build",
+    "_note": "lean-stock + condenser + 16KB output cap (brings tool_output_get, +552B/+1 tool). ~13374 bytes/turn vs max-build's 15717 -- skips skills_* (+2343 bytes) which only help if you're authoring skills mid-session.",
+    "profile": "stock",
+    "config_overrides": {
+      "condense_reversible": true,
+      "tool_output_cap": 16384,
+      "orient_task_aware": true,
+      "checkpoints_enabled": true,
+      "checkpoints_keep_last": 32,
+      "stats_collection_enabled": true,
+      "prompt_cache": {
+        "enabled": true,
+        "ttl": "1h"
+      },
+      "auto_router": {
+        "enabled": true
+      },
+      "self_improving_skills": {
+        "distiller": {
+          "enabled": true,
+          "min_tool_calls": 5
+        }
+      }
+    }
+  },
+  {
+    "id": "lean-edit",
+    "_note": "lean-stock minus web_fetch and vault. 22.7% smaller than stock.",
+    "profile": "lean-stock",
+    "config_overrides": {
+      "web_fetch_enabled": false,
+      "vault_tools_enabled": false
+    }
+  },
+  {
+    "id": "lean-build-plus-skills-disclosure",
+    "_note": "lean-build + progressive_disclosure (skills_list/view). The cheapest skill-feature add-on (+852B/+2 tools).",
+    "profile": "stock",
+    "config_overrides": {
+      "condense_reversible": true,
+      "tool_output_cap": 16384,
+      "orient_task_aware": true,
+      "checkpoints_enabled": true,
+      "checkpoints_keep_last": 32,
+      "stats_collection_enabled": true,
+      "prompt_cache": {
+        "enabled": true,
+        "ttl": "1h"
+      },
+      "auto_router": {
+        "enabled": true
+      },
+      "self_improving_skills": {
+        "progressive_disclosure": true,
+        "distiller": {
+          "enabled": true,
+          "min_tool_calls": 5
+        }
+      }
+    }
+  }
+]

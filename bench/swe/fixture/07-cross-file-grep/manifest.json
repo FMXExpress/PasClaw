@@ -1,0 +1,10 @@
+{
+  "name": "07-cross-file-grep",
+  "category": "cross-file-localisation",
+  "shape_of": "A real coding task where the agent has to find every call site of a deprecated function across N files. Designed as a SHARP test of whether fs_grep's 926-byte registration earns its weight against the alternatives (shell_exec grep, fs_read every file). Both can solve it; the question is at what cost.",
+  "prompt": "Find every .pas file under src/ that calls the function `OldRoutine`. Write the file paths (relative to the workspace root, one per line) to result.txt. The order doesn't matter. Don't include files that only mention `OldRoutine` in a comment -- only files that actually call it. Say done when finished.",
+  "scope_paths": ["src/", "result.txt"],
+  "oracle": {
+    "cmd": "$FIXTURE_DIR/oracle/test.sh"
+  }
+}

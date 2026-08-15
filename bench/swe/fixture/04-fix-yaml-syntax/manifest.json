@@ -1,0 +1,10 @@
+{
+  "name": "04-fix-yaml-syntax",
+  "category": "operator-workflow",
+  "shape_of": "operator: 'config.yaml won't parse, can you fix it?' Tests file inspection + targeted editing without overwriting other fields.",
+  "prompt": "config.yaml has a syntax error -- one of the keys has a double colon that should be a single colon. Find it, fix it, save the file. Keep every other field exactly as-is. Say done when finished.",
+  "scope_paths": ["config.yaml"],
+  "oracle": {
+    "cmd": "$FIXTURE_DIR/oracle/test.sh"
+  }
+}
