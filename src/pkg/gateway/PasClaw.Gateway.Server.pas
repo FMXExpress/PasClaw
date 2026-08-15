@@ -615,6 +615,7 @@ uses
   PasClaw.Providers.Models,    { DiscoverModels / cache -- /v1/models roster }
   PasClaw.Stream.Reliability,
   PasClaw.Agent.Compact,
+  PasClaw.Agent.Prune,
   PasClaw.Agent.Prompt,
   PasClaw.Agent.Mode,
   PasClaw.Identity,
@@ -5399,6 +5400,15 @@ begin
   LoopCfg.CompactOpts.RetainBudgetTokens := FCfg.Compaction.RetainBudgetTokens;
   LoopCfg.CompactOpts.KeepRecentTurns    := FCfg.Compaction.KeepRecentTurns;
   LoopCfg.CompactOpts.SummaryBudget      := FCfg.Compaction.SummaryBudget;
+  LoopCfg.PruneEnabled       := FCfg.Prune.Enabled;
+  LoopCfg.PruneMinIterations := FCfg.Prune.MinIterations;
+  LoopCfg.PruneOpts          := DefaultPruneOptions;
+  LoopCfg.PruneOpts.Enabled            := FCfg.Prune.Enabled;
+  LoopCfg.PruneOpts.ThresholdTokens    := FCfg.Prune.ThresholdTokens;
+  LoopCfg.PruneOpts.ProtectTailTokens  := FCfg.Prune.ProtectTailTokens;
+  LoopCfg.PruneOpts.MinCandidateTokens := FCfg.Prune.MinCandidateTokens;
+  LoopCfg.PruneOpts.PreviewChars       := FCfg.Prune.PreviewChars;
+  LoopCfg.PruneOpts.Model              := FCfg.PlanModel;
   LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
   LoopCfg.StreamReliability := FCfg.StreamReliability;
 
@@ -5565,6 +5575,15 @@ begin
   LoopCfg.CompactOpts.RetainBudgetTokens := FCfg.Compaction.RetainBudgetTokens;
   LoopCfg.CompactOpts.KeepRecentTurns    := FCfg.Compaction.KeepRecentTurns;
   LoopCfg.CompactOpts.SummaryBudget      := FCfg.Compaction.SummaryBudget;
+  LoopCfg.PruneEnabled       := FCfg.Prune.Enabled;
+  LoopCfg.PruneMinIterations := FCfg.Prune.MinIterations;
+  LoopCfg.PruneOpts          := DefaultPruneOptions;
+  LoopCfg.PruneOpts.Enabled            := FCfg.Prune.Enabled;
+  LoopCfg.PruneOpts.ThresholdTokens    := FCfg.Prune.ThresholdTokens;
+  LoopCfg.PruneOpts.ProtectTailTokens  := FCfg.Prune.ProtectTailTokens;
+  LoopCfg.PruneOpts.MinCandidateTokens := FCfg.Prune.MinCandidateTokens;
+  LoopCfg.PruneOpts.PreviewChars       := FCfg.Prune.PreviewChars;
+  LoopCfg.PruneOpts.Model              := FCfg.PlanModel;
   LoopCfg.ToolOutputCap  := FCfg.ToolOutputCap;
   LoopCfg.StreamReliability := FCfg.StreamReliability;
   { Only deep research narrates. An ordinary page comes back fast enough
@@ -6545,6 +6564,15 @@ begin
     LoopCfg.CompactOpts.RetainBudgetTokens := FCfg.Compaction.RetainBudgetTokens;
     LoopCfg.CompactOpts.KeepRecentTurns    := FCfg.Compaction.KeepRecentTurns;
     LoopCfg.CompactOpts.SummaryBudget      := FCfg.Compaction.SummaryBudget;
+    LoopCfg.PruneEnabled       := FCfg.Prune.Enabled;
+    LoopCfg.PruneMinIterations := FCfg.Prune.MinIterations;
+    LoopCfg.PruneOpts          := DefaultPruneOptions;
+    LoopCfg.PruneOpts.Enabled            := FCfg.Prune.Enabled;
+    LoopCfg.PruneOpts.ThresholdTokens    := FCfg.Prune.ThresholdTokens;
+    LoopCfg.PruneOpts.ProtectTailTokens  := FCfg.Prune.ProtectTailTokens;
+    LoopCfg.PruneOpts.MinCandidateTokens := FCfg.Prune.MinCandidateTokens;
+    LoopCfg.PruneOpts.PreviewChars       := FCfg.Prune.PreviewChars;
+    LoopCfg.PruneOpts.Model              := FCfg.PlanModel;
     LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
     LoopCfg.StreamReliability := FCfg.StreamReliability;
 

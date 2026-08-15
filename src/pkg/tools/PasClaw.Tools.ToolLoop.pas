@@ -22,6 +22,7 @@ uses
   PasClaw.Providers.Intf,
   PasClaw.Tools.Registry,
   PasClaw.Agent.Compact,
+  PasClaw.Agent.Prune,
   PasClaw.Agent.Hooks,
   PasClaw.Agent.Mode,
   PasClaw.Agent.Steering,
@@ -51,6 +52,18 @@ type
        semantics live with PasClaw.Agent.Compact. *)
     CompactEnabled: Boolean;
     CompactOpts:    TCompactOptions;
+    (* LLM-guided pruning, ahead of compaction. A strong model names the
+       parts of the history that no longer matter and they are deleted;
+       what it does not name survives byte for byte, so pruning is
+       lossless for everything that stays -- which is why it runs FIRST
+       and compaction only picks up what it could not fix. Off unless
+       the config says otherwise, and gated on PruneMinIterations so it
+       cannot run on every iteration once the threshold is crossed.
+       PruneModel is the plan-shaped model (Cfg.PlanModel); empty falls
+       back to the loop's own. *)
+    PruneEnabled:       Boolean;
+    PruneMinIterations: Integer;
+    PruneOpts:          TPruneOptions;
     (* Parallel tool dispatch. When True, RunToolLoop partitions each
        round's tool calls into batches: consecutive tcReadOnly calls
        (see PasClaw.Tools.Types.TToolCategory) form one parallel batch
@@ -1476,6 +1489,9 @@ var
   TruncRetries: Integer;      { truncation-recovery: retries spent so far }
   TruncNudgePending: Boolean; { fold the corrective nudge next iteration }
   OverflowRetries: Integer;   { reactive-compaction retries spent so far }
+  LastPruneIter: Integer;     { 0 = never; the "not every turn" gate }
+  PruneInfo: TPruneResult;
+  PruneEvery: Integer;
   ForcedCompactOpts: TCompactOptions;
   PreCompactLen: Integer;
   InContext: string;       { tool output cap (#PR new): in-context
@@ -1545,6 +1561,9 @@ begin
   TruncRetries := 0;
   TruncNudgePending := False;
   OverflowRetries := 0;
+  LastPruneIter := 0;
+  PruneEvery := Cfg.PruneMinIterations;
+  if PruneEvery < 1 then PruneEvery := 1;
 
   Iter := 0;
   { When progressive disclosure is on (PasClaw.MCP.Disclosure), the
@@ -1590,6 +1609,30 @@ begin
       restored around the provider call so they don't pollute
       Loop.FinalSystemPrompt (which Cmd.Agent persists across
       turns). Codex P2 on PR #211. }
+    (* Prune BEFORE compaction, and not every turn.
+
+       Pruning is lossless for everything that survives it -- the
+       transcript keeps its own words -- so it is always the better
+       trade when it is enough on its own, and a session is usually
+       oversized because of a few enormous tool results rather than
+       because the conversation is long. Deleting those often puts the
+       history back under the compaction threshold, and the turn keeps
+       a real transcript instead of a summary of one.
+
+       Rate-limited on top of the threshold: once the history is big it
+       stays big, so an unguarded check would spend a strong-model call
+       every single iteration, and the second pass in a row has almost
+       nothing left to find. *)
+    if Cfg.PruneEnabled and
+       ((LastPruneIter = 0) or (Iter - LastPruneIter >= PruneEvery)) and
+       NeedsPrune(Hist, LiveOptions.SystemPrompt,
+                  Cfg.PruneOpts.ThresholdTokens) then
+    begin
+      LastPruneIter := Iter;
+      Hist := PruneMessages(Cfg.Provider, Cfg.Model, Hist,
+                            Cfg.PruneOpts, PruneInfo);
+    end;
+
     if Cfg.CompactEnabled and
        NeedsCompact(Hist, LiveOptions.SystemPrompt,
                     Cfg.CompactOpts.ThresholdTokens) then

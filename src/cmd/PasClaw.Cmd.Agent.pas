@@ -53,6 +53,7 @@ uses
   PasClaw.Tools.OutputCache,
   PasClaw.Tools.ToolLoop,
   PasClaw.Agent.Compact,
+  PasClaw.Agent.Prune,
   PasClaw.MCP.Bridge,
   PasClaw.MCP.Disclosure,   { tool_search must exist even with --no-mcp }
   PasClaw.Skills.Loader,
@@ -211,6 +212,7 @@ type
     procedure OnToolCall(const Name, ArgsJSON: string);
     procedure OnToolResult(const Name, ResultText, Err: string);
     procedure OnBeforeCompact(const Messages: array of TMessage);
+    procedure OnBeforePrune(const Messages: array of TMessage);
   end;
 
 const
@@ -243,6 +245,24 @@ begin
   SetLength(Arr, Length(Messages));
   for i := 0 to High(Messages) do Arr[i] := Messages[i];
   UpdateWorkingStateAfterTurn(MetaRef^, Arr);
+end;
+
+(* Fired by PruneMessages just before it deletes anything.
+
+   Pruning removes messages from the history the turn will persist, so
+   the deleted turns leave the session file and every export of it.
+   That is right for the LIVE file -- it is the resume state, and a
+   resume that replayed the pruned messages would undo the prune -- but
+   the record of what the agent actually saw should not be a casualty
+   of context management. So the transcript is copied once, on the
+   first prune, to <id>.orig.json; `session export --full` reads it
+   back. Once, because the point is the ORIGINAL: a copy taken on the
+   second prune is already missing what the first one removed. *)
+procedure TLoopHandlers.OnBeforePrune(const Messages: array of TMessage);
+begin
+  if MetaRef = nil then Exit;          { one-shot run: no session file }
+  if ArchiveSessionOnce(MetaRef^.Id) then
+    LogInfo('session: archived %s before its first prune', [MetaRef^.Id]);
 end;
 
 procedure TLoopHandlers.OnToolCall(const Name, ArgsJSON: string);
@@ -514,6 +534,15 @@ begin
   Result.Provider      := Provider;
   Result.Registry      := Reg;
   Result.Model         := Model;
+  (* Plan mode runs on the plan model, when one is configured.
+
+     plan_model existed nowhere until pruning needed a name for "the
+     model that thinks rather than does" -- and a setting called
+     plan_model that plan mode itself ignored would be a lie. An
+     explicit --model still wins: it is the more specific instruction,
+     and Model already carries it by the time we get here. *)
+  if (A.Mode = pmPlan) and (Cfg.PlanModel <> '') and (A.Model = '') then
+    Result.Model := Cfg.PlanModel;
   Result.MaxIterations := A.MaxIterations;
   Result.Parallel := True;
   Result.Fallbacks     := ResolveFallbacks(Cfg, Result.FallbackModels);
@@ -569,6 +598,20 @@ begin
     Only wired when a session is being persisted; MetaRef is nil on
     one-shot runs, and the handler does nothing then. }
   Result.CompactOpts.OnBefore := Handlers.OnBeforeCompact;
+  { LLM-guided pruning ahead of compaction. Off unless configured; the
+    pruner runs on the PLAN model, because deciding what a session still
+    needs is a judgement rather than a transformation -- the same reason
+    plan mode exists. Empty plan_model falls back to the loop's own. }
+  Result.PruneEnabled       := Cfg.Prune.Enabled;
+  Result.PruneMinIterations := Cfg.Prune.MinIterations;
+  Result.PruneOpts          := DefaultPruneOptions;
+  Result.PruneOpts.Enabled            := Cfg.Prune.Enabled;
+  Result.PruneOpts.ThresholdTokens    := Cfg.Prune.ThresholdTokens;
+  Result.PruneOpts.ProtectTailTokens  := Cfg.Prune.ProtectTailTokens;
+  Result.PruneOpts.MinCandidateTokens := Cfg.Prune.MinCandidateTokens;
+  Result.PruneOpts.PreviewChars       := Cfg.Prune.PreviewChars;
+  Result.PruneOpts.Model              := Cfg.PlanModel;
+  Result.PruneOpts.OnBefore           := Handlers.OnBeforePrune;
   { Forward the tool-output truncation cap (per-tool-result bytes)
     from config. 0 = off (legacy verbatim behaviour); when an
     operator sets it, RunToolLoop diverts oversize results to the

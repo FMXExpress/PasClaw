@@ -40,6 +40,7 @@ begin
   PrintLn('  show <id>           show one session: metadata + last N messages');
   PrintLn('  delete <id>         remove the session file from disk');
   PrintLn('  export <id> [--md]  print the session to stdout (raw JSON, or Markdown with --md)');
+  PrintLn('  export <id> --full  the pre-prune original when pruning removed turns');
   PrintLn('  import <path>       import chats: ChatGPT conversations.json, a Claude Code /');
   PrintLn('                      Pi / OpenClaw .jsonl transcript, a PasClaw session export');
   PrintLn('                      (auto-detected), or an OpenCode data DIRECTORY');
@@ -149,12 +150,27 @@ begin
   end;
 end;
 
-function DoExport(const Id: string): Integer;
+(* Export the session as JSON.
+
+   Full prefers the PRE-PRUNE archive when there is one. Pruning
+   deletes from the live file, which is correct for resuming and wrong
+   for asking later what the agent actually saw -- so a pruned session
+   keeps its original beside it and --full is how you read it. Without
+   an archive the two are the same file, and --full is a no-op rather
+   than an error: "give me everything" is satisfied by everything
+   there is. *)
+function DoExport(const Id: string; Full: Boolean = False): Integer;
 var
   Path: string;
   S: TStringList;
 begin
-  Path := SessionPath(Id);
+  Path := '';
+  if Full and HasSessionArchive(Id) then
+  begin
+    Path := SessionArchivePath(Id);
+    PrintErr('(pre-prune archive: ' + Path + ')' + sLineBreak);
+  end;
+  if Path = '' then Path := SessionPath(Id);
   if (Path = '') or (not FileExists(Path)) then
   begin
     PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'no session named ' + Id);
@@ -233,7 +249,8 @@ begin
     if (Length(Argv) >= 3) and ((Argv[2] = '--md') or (Argv[2] = '--markdown')) then
       Result := DoExportMarkdown(Argv[1])
     else
-      Result := DoExport(Argv[1]);
+      Result := DoExport(Argv[1],
+                         (Length(Argv) >= 3) and (Argv[2] = '--full'));
   end
   else if Sub = 'import' then begin if Length(Argv) < 2 then begin PrintHelp; Exit(1); end; Result := DoImport(Argv[1]); end
   else                        begin PrintHelp; Result := 1; end;

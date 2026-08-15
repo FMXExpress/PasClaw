@@ -200,6 +200,37 @@ function SessionsDir: string;
   case (treat as "no session named X"). }
 function SessionPath(const Id: string): string;
 
+(* ---- the pre-prune archive ----
+
+   Pruning DELETES from the session file: the loop's history is what
+   PersistSession writes, so a pruned turn is gone from disk and from
+   every export of it. That is correct for the live file -- it is the
+   resume state, and a resume that replayed the pruned messages would
+   undo the prune -- but it means a context-management decision silently
+   costs the record of what happened.
+
+   So the transcript is copied ONCE, the first time a session is
+   pruned, to <id>.orig.json beside it. Once: the point is the original,
+   and a copy taken on the second prune would already be missing what
+   the first one removed. Nothing reads it during a run; it exists for
+   `session export --full` and for anyone going back to ask what the
+   agent actually saw. *)
+function SessionArchivePath(const Id: string): string;
+
+{ True when Id names an archive rather than a session ("<id>.orig").
+  Such an id has no session path at all -- see SessionPath. }
+function IsSessionArchiveId(const Id: string): Boolean;
+
+{ True when Id has an archive on disk. }
+function HasSessionArchive(const Id: string): Boolean;
+
+(* Copy the live session file to its archive, unless one already
+   exists. Returns True when a copy was made -- False both when the
+   archive was already there (the usual case, from the second prune
+   on) and when there was nothing to copy. Never raises: failing to
+   archive must not fail the turn. *)
+function ArchiveSessionOnce(const Id: string): Boolean;
+
 (* The profile a stored session runs under, or '' when the session has
    none / does not exist / the id is unsafe.
 
@@ -401,9 +432,26 @@ begin
   Result := JoinPath(GetHome, ActiveWorkspaceName + '/sessions');
 end;
 
+function IsSessionArchiveId(const Id: string): Boolean;
+begin
+  Result := (Length(Id) > 5) and (Copy(Id, Length(Id) - 4, 5) = '.orig');
+end;
+
 function SessionPath(const Id: string): string;
 begin
   if not IsSafeSessionId(Id) then Exit('');
+  (* An archive is not a session, and this is the chokepoint that makes
+     that true rather than merely intended.
+
+     Hiding "<id>.orig" from ListSessions stops it being OFFERED, and
+     that is all it stops -- Load, Save and Delete all resolve through
+     here, so `pasclaw resume <id>.orig` opened the archive as an
+     ordinary session and wrote turns into a file nothing else reads,
+     quietly diverging from the session it was supposed to be the
+     record of. A dot is a legal id character, so the name is
+     reachable; refusing it here is what makes the archive read-only to
+     everything except the export that exists to read it. *)
+  if IsSessionArchiveId(Id) then Exit('');
   Result := JoinPath(SessionsDir, Id + '.json');
 end;
 
@@ -446,6 +494,45 @@ procedure EnsureSessionsDir;
 begin
   if not DirectoryExists(SessionsDir) then
     ForceDirectories(SessionsDir);
+end;
+
+function SessionArchivePath(const Id: string): string;
+begin
+  if not IsSafeSessionId(Id) then Exit('');
+  Result := JoinPath(SessionsDir, Id + '.orig.json');
+end;
+
+function HasSessionArchive(const Id: string): Boolean;
+var
+  P: string;
+begin
+  P := SessionArchivePath(Id);
+  Result := (P <> '') and FileExists(P);
+end;
+
+function ArchiveSessionOnce(const Id: string): Boolean;
+var
+  Live, Arch: string;
+begin
+  Result := False;
+  Live := SessionPath(Id);
+  Arch := SessionArchivePath(Id);
+  if (Live = '') or (Arch = '') then Exit;
+  if not FileExists(Live) then Exit;
+  if FileExists(Arch) then Exit;       { already have the original }
+  try
+    { Through the same read/write pair the store uses, so encoding is
+      whatever the store writes rather than whatever a byte copy
+      guesses. A session file is a few hundred KB at worst. }
+    WriteFileText(Arch, ReadFileText(Live));
+    Result := True;
+  except
+    on E: Exception do
+      { An archive that cannot be written is a lost record, not a lost
+        turn. Say so and carry on. }
+      LogWarn('session: could not archive %s before pruning: %s',
+              [Id, E.Message]);
+  end;
 end;
 
 function ToolCallToJSON(const TC: TToolCall): TJsonObject;
@@ -1182,6 +1269,12 @@ begin
         anything a human dropped in here) -- only ids that round-trip
         through IsSafeSessionId are real sessions. }
       if not IsSafeSessionId(Id) then Continue;
+      { Pre-prune archives are not sessions. "<id>.orig.json" leaves
+        "<id>.orig", which IsSafeSessionId happily accepts -- a dot is
+        a legal id character -- so without this every pruned session
+        would show up twice, once as itself and once as a ghost that
+        resume could open and quietly diverge from. }
+      if IsSessionArchiveId(Id) then Continue;
       { Hide gateway bucket sessions from the TUI session pane and
         the `pasclaw session list` / `pasclaw learn` paths -- they
         are stats-only synthetic sessions, never carry messages,

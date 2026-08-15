@@ -211,6 +211,13 @@ There is no escape sequence for a literal `${UPPER}` string in a config value. W
 | `stats_collection_enabled` | `false` | Persist per-turn counters into each session JSON's `meta.stats` block. |
 | `orient_task_aware` | `false` | Lexical task-vs-section scoring for `MEMORY.md` injection. Off on every profile; enable per-run with `pasclaw agent --orient` (`--no-orient` forces it back off) or persistently here. |
 | `shell_backend` | `"local"` | `"local"` or `"docker"`. See [Security](./security.md). |
+| `plan_model` | *(main model)* | Model for work that is thinking rather than doing: `pasclaw plan` / `--mode plan`, and the context pruner. The counterpart to `fast_model` at the other end of the range. |
+| `prune.enabled` | `false` | LLM-guided context pruning — delete what no longer matters, keeping survivors verbatim. See [Sessions](./sessions.md#pruning). Costs a strong-model call, hence opt-in. |
+| `prune.threshold_tokens` | `60000` | Prune only above this estimate. |
+| `prune.protect_tail_tokens` | `20000` | Newest history never offered to the pruner. |
+| `prune.min_candidate_tokens` | `400` | Smaller runs are not worth a decision. |
+| `prune.preview_chars` | `400` | Head and tail characters shown per candidate. |
+| `prune.min_iterations` | `8` | Loop iterations between passes — the "not every turn" gate. |
 | `compaction.enabled` | `true` | Conversation-history compaction. See [Sessions](./sessions.md#compaction). |
 | `compaction.threshold_tokens` | `80000` | Trigger compaction when history + system prompt estimate above this. |
 | `compaction.retain_budget_tokens` | `20000` | Recent history kept verbatim, by token budget. |
