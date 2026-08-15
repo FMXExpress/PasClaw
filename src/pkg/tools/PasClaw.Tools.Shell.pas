@@ -79,7 +79,7 @@ end;
 
 function Tool_Shell(const ArgsJSON: string; out ErrMsg: string): string;
 var
-  Cmd, Reason, WorkDir: string;
+  Cmd, Reason, WorkDir, ReqDir: string;
   ExitCode: Integer;
   Out_, RawOut: string;
 begin
@@ -106,6 +106,41 @@ begin
     Fall back to inheriting the parent cwd if the workspace dir does not
     exist yet (nothing to chdir into). }
   WorkDir := CurrentWorkspace;
+
+  (* Optional `cwd`. Without it, a task whose files live outside the
+     workspace -- "work in the repo at /home/user/thing" -- silently runs
+     every build and test in the workspace instead. The file tools take
+     absolute paths and land correctly, so the edits are real and only the
+     shell is lost, which is the worst shape: `make` in a directory with no
+     Makefile prints an error the model's own grep filters out and the
+     result still reads exit=0.
+
+     Two rules keep it honest:
+       - a cwd that does not exist is an ERROR, never a silent fallback.
+         Falling back to the workspace is precisely the behaviour that hid
+         this for a whole task.
+       - under RestrictionActive the target must sit inside the workspace,
+         since this cwd is what pins the sandbox boundary alongside the
+         cd/chdir denylist. *)
+  if not ParseStringArg(ArgsJSON, 'cwd', ReqDir) then ReqDir := '';
+  ReqDir := Trim(ReqDir);
+  if ReqDir <> '' then
+  begin
+    ReqDir := ResolveWorkspacePath(ReqDir);
+    if not DirectoryExists(ReqDir) then
+    begin
+      Result := Format('exit=1'#10'shell_exec: cwd does not exist: %s', [ReqDir]);
+      Exit;
+    end;
+    if RestrictionActive and (not PathInsideDirectory(ReqDir, CurrentWorkspace)) then
+    begin
+      Result := Format('exit=1'#10'shell_exec: cwd outside the workspace ' +
+                       'while restrict_to_workspace is on: %s', [ReqDir]);
+      Exit;
+    end;
+    WorkDir := ReqDir;
+  end;
+
   if (WorkDir <> '') and (not DirectoryExists(WorkDir)) then
     WorkDir := '';
   LogDebug('shell exec (cwd=%s): %s', [WorkDir, Cmd]);
@@ -164,7 +199,10 @@ begin
                    '(both /bin/sh and cmd.exe), so `fpc x | tail` reports tail''s 0 ' +
                    'even when fpc failed -- run a compiler/test WITHOUT a pipe to ' +
                    'see its real exit status.' + BackendNote;
-  T.Schema      := '{"type":"object","properties":{"command":{"type":"string","description":"Shell command to execute."}},"required":["command"]}';
+  T.Schema      := '{"type":"object","properties":' +
+                   '{"command":{"type":"string","description":"Shell command to execute."},' +
+                   '"cwd":{"type":"string","description":"Directory to run in. Defaults to the workspace -- set this when the files you are working on live somewhere else, or the command runs in the wrong place and reports success anyway."}},' +
+                   '"required":["command"]}';
   T.Handler     := Tool_Shell;
   T.IsCore      := True;
   T.Category    := tcMutating;  { spawns subprocesses; default-mutating is correct }
