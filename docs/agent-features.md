@@ -368,6 +368,64 @@ API. A2A at v1.0 with three clouds GA is past the wait-and-see line for
 any harness that wants its agents addressable from outside — an Agent Card
 over the existing gateway would be the minimal entry.
 
+## 22. Agent identity & authorization
+
+Zero coverage in four passes; meanwhile the field has a draft IETF standard.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| OAuth 2.1 + PKCE as the MCP authorization model | MCP spec, Stytch/Aembit guides [S] | ❌ gateway token is a single shared secret [P] |
+| **On-behalf-of delegation**: `requested_actor` / `actor_token` binding agent identity into the token exchange | IETF draft-oauth-ai-agents-on-behalf-of [S] | ❌ |
+| Two-identity model: user identity + agent identity, both in every call | [S] | ❌ no agent identity at all |
+| Short-lived scoped tokens + policy engine in front of tools | [S] | ⚠️ sandbox policy exists; tokens do not expire [P] |
+| Immutable audit log of delegated actions | [S] | ⚠️ sessions record actions, mutable files [P] |
+
+For a single-operator personal agent this is mostly future-proofing — but
+the moment PasClaw's gateway serves more than one human (it already has
+multi-workspace), "which agent did this as which user" has no answer.
+
+## 23. Prompt-injection defense, beyond scanning
+
+The draft credited PasClaw's promptware scanner; the field's frontier is
+architectural rather than detectional.
+
+| Approach | Who | PasClaw |
+|---|---|---|
+| Output scanning against known patterns | the baseline [S] | ✅ promptware scan — this IS the baseline [P] |
+| Spotlighting: mark/transform untrusted input so the model can tell it apart | [S] | ❌ tool results enter context undifferentiated |
+| Dual-LLM: privileged planner never sees untrusted data; quarantined reader has no tool access | [S] | ❌ |
+| **CaMeL**: compile the user's intent to a checked program; data flows validated per step (67% of benchmark injections blocked) | DeepMind [S] | ❌ |
+| Inference-time scaling as defense | SecInfer [S] | ❌ |
+
+Honest placement: PasClaw's scanner fired correctly twice during this
+survey, and it is still the weakest tier of a ladder the field has been
+climbing for two years. Spotlighting is the cheapest rung up — a wrapper on
+tool-result messages, no architecture change.
+
+## 24. The apply layer: fast-edit models
+
+A category the survey missed entirely because it sits *below* the agent: a
+second, small model whose only job is merging the big model's sloppy edit
+into the real file.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Dedicated 7B merge model, "existing code" markers in, merged file out | Morph Fast Apply — 10,500 tok/s, ~98% accuracy [S] | ❌ |
+| Trained on lazy-edit → merged-file pairs across languages | Relace Instant Apply, ~96% [S] | ❌ |
+| Speculative decoding tuned on the model's own output | Relace, Blazedit [S] | n/a (provider-side) |
+| Deterministic merge + scoped inputs beating fragile patching | Morph's stated thesis [S] | ⚠️ this is exactly the `edit_file`-vs-rewrite tension measured earlier in this repo |
+
+The relevance is direct: this session previously measured PasClaw's model
+choosing whole-file rewrites over `edit_file` because exact-match patching
+is fragile. The field's answer is not better prompts — it is a second model
+that makes sloppy edits safe to apply. For a self-hosted harness the
+portable idea is the *contract* (lazy edit in, merged file out, verify by
+re-parse), which a deterministic merger could implement without any model.
+
+Two candidates from this pass found no sourced coverage and stay recalled
+leads only: prompt versioning as a harness feature, and RL from agent
+trajectories. They are deliberately NOT tabled.
+
 ---
 
 ## Where PasClaw leads
@@ -463,6 +521,12 @@ tool already knows its own scope.
 - [Cloudflare Agents runtime docs](https://developers.cloudflare.com/agents/)
 - [A2A Protocol Surpasses 150 Organizations (Linux Foundation)](https://www.linuxfoundation.org/press/a2a-protocol-surpasses-150-organizations-lands-in-major-cloud-platforms-and-sees-enterprise-production-use-in-first-year)
 - [Bedrock AgentCore A2A support](https://aws.amazon.com/blogs/machine-learning/introducing-agent-to-agent-protocol-support-in-amazon-bedrock-agentcore-runtime/)
+- [Agent-to-agent OAuth guide (Stytch)](https://stytch.com/blog/agent-to-agent-oauth-guide/)
+- [IETF draft: OAuth for AI agents on behalf of users](https://www.ietf.org/archive/id/draft-oauth-ai-agents-on-behalf-of-user-02.txt)
+- [CaMeL: mitigating prompt injection (Simon Willison)](https://simonwillison.net/2025/Apr/11/camel/)
+- [Dual LLM & Capability Security (CaMeL)](https://agentic-design.ai/patterns/security-privacy/dual-llm-capability-security)
+- [Morph Fast Apply](https://www.morphllm.com/fast-apply-model)
+- [Relace: A Year of Fast Apply](https://relace.ai/blog/relace-apply-3)
 - [AI Agent Sandboxing in 2026: Docker, E2B, Firecracker, gVisor, Modal & Daytona Compared](https://amux.io/guides/ai-agent-sandboxing/)
 - [Cursor vs Claude Code vs Windsurf (Now Devin Desktop) 2026](https://www.shareuhack.com/en/posts/cursor-vs-claude-code-vs-windsurf-2026)
 - [Harness Engineering: Making AI Coding Agents Work in 2026](https://www.faros.ai/blog/harness-engineering)
