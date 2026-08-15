@@ -176,7 +176,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test test-doctor test-provider-retry smoke lint-pascal-shape test-workspaces test-projects test-apps test-mail test-desktop-routes test-desktop test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
+.PHONY: all clean run test openssl-1.0 test-doctor test-provider-retry smoke lint-pascal-shape test-workspaces test-projects test-apps test-mail test-desktop-routes test-desktop test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -339,6 +339,39 @@ test-read-file-encoding: | $(BUILDDIR)
 # linter is the ONLY automated gate studio/ has -- and it was pinned to one
 # filename, which meant a new unit was born unchecked and `make lint-studio`
 # reported green on a file it never opened.
+# Fetch the OpenSSL 1.0.2 pair a native Linux build needs for TLS.
+#
+# The vendored Indy targets OpenSSL 1.0.x and refuses 1.1.0+ outright; every
+# current distribution ships 3.x only, so a freshly built pasclaw cannot make
+# an HTTPS request -- no web_fetch, and no provider API call either. The
+# Dockerfile has solved this since it was written (see its openssl-1.0
+# stage), but that fix reached the image and nothing else: a developer
+# running `make all` got a TLS error whose advice was to install the very
+# version being rejected.
+#
+# Same source as the Dockerfile: the last 1.0.2u package from
+# snapshot.debian.org's frozen debian-archive, which is immutable and will
+# not rot when Debian retires the codename. Lands in $(BUILDDIR) because
+# ProbeOpenSSL defaults its search to the binary's own directory, so a build
+# that has run this needs no PASCLAW_OPENSSL_DIR and no other setup.
+OPENSSL_SNAPSHOT    ?= 20240331T102506Z
+OPENSSL_DEB_VERSION ?= 1.0.2u-1~deb9u7
+OPENSSL_ARCH        ?= $(shell dpkg --print-architecture 2>/dev/null || echo amd64)
+OPENSSL_DEB_URL      = https://snapshot.debian.org/archive/debian-archive/$(OPENSSL_SNAPSHOT)/debian-security/pool/updates/main/o/openssl1.0/libssl1.0.2_$(OPENSSL_DEB_VERSION)_$(OPENSSL_ARCH).deb
+
+openssl-1.0: | $(BUILDDIR)
+	@echo "fetching $(OPENSSL_DEB_URL)"
+	@rm -rf $(BUILDDIR)/.ossl && mkdir -p $(BUILDDIR)/.ossl
+	@curl -fsSL --retry 3 --max-time 90 "$(OPENSSL_DEB_URL)" -o $(BUILDDIR)/.ossl/libssl.deb
+	@dpkg-deb -x $(BUILDDIR)/.ossl/libssl.deb $(BUILDDIR)/.ossl/x
+	@cp $(BUILDDIR)/.ossl/x/usr/lib/*-linux-*/libssl.so.1.0.2    $(BUILDDIR)/
+	@cp $(BUILDDIR)/.ossl/x/usr/lib/*-linux-*/libcrypto.so.1.0.2 $(BUILDDIR)/
+	@# Indy dlopens the plain names; the versioned files are what the deb ships.
+	@ln -sf libssl.so.1.0.2    $(BUILDDIR)/libssl.so
+	@ln -sf libcrypto.so.1.0.2 $(BUILDDIR)/libcrypto.so
+	@rm -rf $(BUILDDIR)/.ossl
+	@echo "OpenSSL 1.0.2 ready in $(BUILDDIR) -- TLS will work from this build"
+
 lint-studio:
 	@for f in studio/*.pas; do python3 scripts/lint-studio.py "$$f" || exit 1; done
 	@python3 scripts/gen-studio-icons.py --check

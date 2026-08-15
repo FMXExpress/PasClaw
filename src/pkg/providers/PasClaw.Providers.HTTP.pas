@@ -815,10 +815,12 @@ begin
     'place libeay32.dll and ssleay32.dll next to pasclaw.exe, or set' + sLineBreak +
     'PASCLAW_OPENSSL_DIR to a directory containing them.';
     {$ELSE}
-    'Get 1.0.2 binaries from github.com/IndySockets/OpenSSL-Binaries and' + sLineBreak +
-    'place libcrypto.so.1.0.0 and libssl.so.1.0.0 next to the pasclaw' + sLineBreak +
-    'binary, or set PASCLAW_OPENSSL_DIR to a directory containing them.' + sLineBreak +
-    'Your distribution package is 3.x and will NOT work.';
+    'Run `make openssl-1.0` -- it fetches the 1.0.2u pair into the build' + sLineBreak +
+    'directory, where this binary already looks, so no further setup is' + sLineBreak +
+    'needed. (The Docker image has always bundled these; that target is' + sLineBreak +
+    'the same thing for a native build.) Otherwise place libssl.so.1.0.2' + sLineBreak +
+    'and libcrypto.so.1.0.2 next to the pasclaw binary, or point' + sLineBreak +
+    'PASCLAW_OPENSSL_DIR at a directory holding them.';
     {$ENDIF}
 end;
 
