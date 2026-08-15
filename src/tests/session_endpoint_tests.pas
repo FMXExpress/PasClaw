@@ -195,9 +195,16 @@ begin
 end;
 
 procedure TestRichTurnDetection;
-{ The PUT handler refuses (409) to overwrite a session with tool/system
-  turns or assistant tool_calls so the web UI can't strip an agent
-  transcript. Pin the predicate that gate keys off. }
+{ SessionHasRichTurns decides whether a /v1/sessions PUT overwrites or
+  merges. A session carrying tool/system turns or assistant tool_calls is
+  the agent's, not the web UI's: the PUT keeps the transcript on disk and
+  takes only the tool-detail blob out of the body.
+
+  It used to answer 409 instead, which prevented loss but forced the web UI
+  to fork -- and once the gateway persists its own transcripts, a browser
+  sharing that session would fork on every turn. The predicate is unchanged;
+  what changed is the branch it selects. Pin it either way, because both
+  behaviours key off exactly this. }
 var
   Msgs: TMessageArray;
 begin
@@ -228,6 +235,55 @@ begin
   { Empty transcript is not rich. }
   SetLength(Msgs, 0);
   AssertTrue(not SessionHasRichTurns(Msgs), 'empty transcript is not rich');
+end;
+
+procedure TestToolDetailReplaceKeepsTranscript;
+{ The merge branch rewrites ToolDetail and leaves Messages alone. That is
+  only safe if the store treats the two independently, so pin it: a rich
+  transcript survives a ToolDetail swap of the same length.
+
+  Same-length deliberately -- Save drops a blob with MORE entries than the
+  transcript (see TestToolDetailStalenessGuard), and the web UI's flattened
+  view is never longer than the agent's, so the realistic merge is
+  shorter-or-equal. }
+var
+  Id: string;
+  S1, S2: TSession;
+begin
+  Id := 'merge-keeps-transcript-' + IntToStr(Random(MaxInt));
+  S1 := TSession.Create(Id);
+  try
+    SetLength(S1.Messages, 3);
+    S1.Messages[0] := MakeMessage(mrUser, 'build it');
+    S1.Messages[1] := MakeMessage(mrAssistant, 'running a tool');
+    S1.Messages[2] := MakeMessage(mrTool, 'exit=0');
+    S1.ToolDetail := '[null,null,{"old":true}]';
+    S1.Save;
+  finally
+    S1.Free;
+  end;
+
+  S2 := TSession.Create(Id);
+  try
+    AssertTrue(SessionHasRichTurns(S2.Messages),
+               'the reloaded transcript is rich');
+    { What the merge branch does: blob in, transcript untouched. }
+    S2.ToolDetail := '[null,null,{"new":true}]';
+    S2.Save;
+  finally
+    S2.Free;
+  end;
+
+  S2 := TSession.Create(Id);
+  try
+    AssertTrue(Length(S2.Messages) = 3, 'all three turns survived the merge');
+    AssertTrue(S2.Messages[2].Role = mrTool, 'the tool turn is still a tool turn');
+    AssertTrue(Pos('"new"', S2.ToolDetail) > 0, 'the new blob landed');
+    AssertTrue(Pos('"old"', S2.ToolDetail) = 0, 'the old blob is gone');
+  finally
+    S2.Free;
+  end;
+  DeleteFile(SessionPath(Id));
 end;
 
 procedure TestToolDetailStalenessGuard;
@@ -309,6 +365,7 @@ begin
   TestRoundTrip;
   TestListSurfacesSession;
   TestRichTurnDetection;
+  TestToolDetailReplaceKeepsTranscript;
   TestToolDetailStalenessGuard;
   WriteLn('session_endpoint_tests: OK');
 end.
