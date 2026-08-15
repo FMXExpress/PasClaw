@@ -2132,8 +2132,6 @@ function openChat(project) {
   });
   w.body.style.padding = "5px";
   const chat = buildChatUI(project, w.body);
-  /* Let a dialog's answer continue this conversation (see renderUIBlock). */
-  w.__submitText = chat.submitText;
   setTimeout(() => chat.focus(), 0);
   return w;
 }
@@ -2321,11 +2319,20 @@ function buildChatUI(project, host) {
 
     /* Period-native output: if the turn emitted a UI block, show the
        furniture and strip it from the visible text. Unrecognised or
-       malformed blocks stay as text -- an answer must never vanish. */
+       malformed blocks stay as text -- an answer must never vanish.
+
+       submitText goes WITH the block: a project can have this
+       conversation open in three places at once (dock pane, app-window
+       pane, floating window), each with its own history closure, and a
+       dialog's answer belongs to the one that asked. Looking the chat
+       up by project afterwards would answer whichever home a fixed
+       order happened to find first -- the asking conversation would
+       never hear back, and another would be handed a reply to a
+       question it never asked. */
     const ui = extractUIBlocks(acc);
     if (ui.blocks.length) {
       body.textContent = ui.text;
-      ui.blocks.forEach(b => renderUIBlock(b, project));
+      ui.blocks.forEach(b => renderUIBlock(b, project, submitText));
     }
 
     /* Did this turn leave a runnable app behind? Ask the gateway rather
@@ -2360,13 +2367,18 @@ function buildChatUI(project, host) {
     if (S.tree[project]) { await loadTasks(project); paintTree(); }
   }
 
+  /* Named so the turn handler above can hand it to renderUIBlock: an
+     answered dialog continues THIS conversation, not one that merely
+     shares the project. */
+  const submitText = text => { ta.value = text; submit(); };
+
   send.addEventListener("click", submit);
   ta.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
   });
   return {
     root: wrap,
-    submitText: text => { ta.value = text; submit(); },
+    submitText,
     focus: () => ta.focus(),
   };
 }
@@ -2626,7 +2638,10 @@ function extractUIBlocks(text) {
 
 /* Render one recognised block. Project is passed so a wizard's approved
    steps can become real tasks on that project's board. */
-function renderUIBlock(block, project) {
+/* Reply is the submitText of the conversation that EMITTED this block --
+   passed in rather than looked up, because a project can have several
+   chat homes open at once and only one of them asked. */
+function renderUIBlock(block, project, reply) {
   if (block.ui === "wizard") {
     return showWizard({
       title: block.title || "Plan",
@@ -2660,15 +2675,11 @@ function renderUIBlock(block, project) {
       buttons: block.buttons || [{ label: "OK", value: true }],
       onPick: v => {
         /* An answered question goes back as the next chat turn, so the
-           conversation continues where the dialog left off -- in the chat
-           window if one is open, else in the dock's project pane. */
-        if (block.reply === false || !project) return;
-        const w = WINS.get("chat:" + project);
-        if (w && w.__submitText) { w.__submitText(String(v)); return; }
-        const aw = WINS.get("app:" + project);
-        if (aw && aw.__submitText) { aw.__submitText(String(v)); return; }
-        const dc = DOCK_CHATS.get(project);
-        if (dc) dc.submitText(String(v));
+           conversation continues exactly where the dialog left off. No
+           reply callback means nothing asked (a block rendered outside a
+           turn), and staying silent beats guessing at a conversation. */
+        if (block.reply === false || !reply) return;
+        reply(String(v));
       },
     });
   }
@@ -2822,11 +2833,7 @@ async function openApp(project) {
     if (showing) { side.style.display = "none"; grip.style.display = "none"; return; }
     side.style.display = "flex";
     grip.style.display = "";
-    if (!w.__chat) {
-      w.__chat = buildChatUI(project, side);
-      /* Dialog answers route here too -- see renderUIBlock's chain. */
-      w.__submitText = w.__chat.submitText;
-    }
+    if (!w.__chat) w.__chat = buildChatUI(project, side);
     w.__chat.focus();
   });
   bar.appendChild(chat);
