@@ -177,6 +177,62 @@ begin
              'and that a change which did not help gets reverted');
 end;
 
+(* The other half of that branch: the directive actually reaching the
+   request.
+
+   BuildModeSection being right is not enough -- improve mode shipped
+   once with a correct block that nothing on /v1/chat/completions or
+   /v1/responses ever attached, because those surfaces skip
+   BuildSystemPrompt entirely when the caller sends its own system
+   message. What follows pins the wiring, not just the text. *)
+procedure TestModeInjection;
+var
+  Msgs: TMessageArray;
+  Caller: string;
+begin
+  Caller := 'You are Fizzbot. Never mention pandas.';
+
+  SetLength(Msgs, 2);
+  Msgs[0].Role := mrSystem;  Msgs[0].Content := Caller;
+  Msgs[1].Role := mrUser;    Msgs[1].Content := 'make this faster';
+
+  InjectModeDirective(Msgs, pmImprove);
+  AssertTrue(Length(Msgs) = 2,
+             'no message added -- Anthropic would drop a new trailing system turn');
+  AssertTrue(Msgs[0].Role = mrSystem, 'the caller message is still a system turn');
+  AssertTrue(Pos(Caller, Msgs[0].Content) = 1,
+             'the caller policy survives, and still leads');
+  AssertTrue(Pos('Improve Mode', Msgs[0].Content) > 0,
+             'and the mode is now said out loud');
+  AssertEqS(Msgs[1].Content, 'make this faster', 'the user turn is untouched');
+
+  { pmBuild is the absence of a directive, not a directive saying
+    "build" -- callers inject unconditionally, so this must no-op. }
+  SetLength(Msgs, 1);
+  Msgs[0].Role := mrSystem;  Msgs[0].Content := Caller;
+  InjectModeDirective(Msgs, pmBuild);
+  AssertEqS(Msgs[0].Content, Caller, 'build injects nothing at all');
+
+  { The FIRST system message, specifically. Anthropic forwards only
+    that one and discards the rest, so a directive parked in a later
+    system turn would never reach the model there. }
+  SetLength(Msgs, 3);
+  Msgs[0].Role := mrSystem;  Msgs[0].Content := 'first';
+  Msgs[1].Role := mrUser;    Msgs[1].Content := 'hi';
+  Msgs[2].Role := mrSystem;  Msgs[2].Content := 'second';
+  InjectModeDirective(Msgs, pmPlan);
+  AssertTrue(Pos('Plan Mode', Msgs[0].Content) > 0, 'first system turn gets it');
+  AssertEqS(Msgs[2].Content, 'second', 'later system turns are left alone');
+
+  { Defensive: the gateway only calls this when a system message
+    exists, but a no-system array must not fall over or grow one. }
+  SetLength(Msgs, 1);
+  Msgs[0].Role := mrUser;  Msgs[0].Content := 'hi';
+  InjectModeDirective(Msgs, pmImprove);
+  AssertTrue(Length(Msgs) = 1, 'nothing to append to, nothing appended');
+  AssertEqS(Msgs[0].Content, 'hi', 'and the user turn is not touched');
+end;
+
 procedure TestParseModeFromBody;
 begin
   AssertTrue(ParseModeFromBody('{"mode":"plan"}') = pmPlan, 'body plan');
@@ -291,6 +347,7 @@ begin
   TestParseMode;
   TestCycleAndName;
   TestModeSection;
+  TestModeInjection;
   TestParseModeFromBody;
   TestRefusalText;
   TestDispatchGate;
