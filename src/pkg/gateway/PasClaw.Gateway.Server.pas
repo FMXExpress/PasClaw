@@ -5418,6 +5418,8 @@ begin
   LoopCfg.PruneOpts.PreviewChars       := FCfg.Prune.PreviewChars;
   LoopCfg.PruneOpts.Model              := FCfg.PlanModel;
   LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
+  LoopCfg.ProviderRetryAttempts  := FCfg.ProviderRetryAttempts;
+  LoopCfg.ProviderRetryBackoffMs := FCfg.ProviderRetryBackoffMs;
   LoopCfg.StreamReliability := FCfg.StreamReliability;
 
   if not RunCheckpointedLoop(ReqSessionId(ARequest), LoopCfg, Msgs, Loop) then
@@ -6584,6 +6586,10 @@ begin
     LoopCfg.PruneOpts.PreviewChars       := FCfg.Prune.PreviewChars;
     LoopCfg.PruneOpts.Model              := FCfg.PlanModel;
     LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
+    LoopCfg.ProviderRetryAttempts  := FCfg.ProviderRetryAttempts;
+    LoopCfg.ProviderRetryBackoffMs := FCfg.ProviderRetryBackoffMs;
+  LoopCfg.ProviderRetryAttempts  := FCfg.ProviderRetryAttempts;
+  LoopCfg.ProviderRetryBackoffMs := FCfg.ProviderRetryBackoffMs;
     LoopCfg.StreamReliability := FCfg.StreamReliability;
 
     { Tool-call repair: synthesize stub tool_result messages for any
@@ -8345,6 +8351,12 @@ begin
       LoopCfg.OnToolCall    := nil;
       LoopCfg.OnToolResult  := nil;
       LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
+      LoopCfg.ProviderRetryAttempts  := FCfg.ProviderRetryAttempts;
+      LoopCfg.ProviderRetryBackoffMs := FCfg.ProviderRetryBackoffMs;
+    LoopCfg.ProviderRetryAttempts  := FCfg.ProviderRetryAttempts;
+    LoopCfg.ProviderRetryBackoffMs := FCfg.ProviderRetryBackoffMs;
+  LoopCfg.ProviderRetryAttempts  := FCfg.ProviderRetryAttempts;
+  LoopCfg.ProviderRetryBackoffMs := FCfg.ProviderRetryBackoffMs;
       LoopCfg.StreamReliability := FCfg.StreamReliability;
 
       if FCfg.StreamReliability.ToolCallRepairEnabled then

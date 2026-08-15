@@ -1,4 +1,4 @@
-﻿{
+{
   PasClaw.Cmd.Root - root command dispatcher, equivalent to NewPicoclawCommand()
   in cmd/picoclaw/main.go. Each subcommand exposes a CmdSpec record and a
   Run() function; we route argv[1] to the matching command.
@@ -48,6 +48,7 @@ uses
   PasClaw.Cmd.Profile,    (* PR #291: pasclaw profile list/show/use *)
   PasClaw.Cmd.Vault,
   PasClaw.Cmd.Session,
+  PasClaw.Cmd.Doctor,
   PasClaw.Cmd.Learn,
   PasClaw.Cmd.Steer,
   PasClaw.Cmd.Model,
@@ -141,7 +142,7 @@ const
 var
   Sub, Fl: array of string;
 begin
-  SetLength(Sub, 34);
+  SetLength(Sub, 35);
   Sub[0]  := 'config       View/edit configuration';
   Sub[1]  := 'onboard      Initialize config & workspace';
   Sub[2]  := 'agent        Chat with the assistant (line-by-line)';
@@ -176,6 +177,7 @@ begin
   Sub[31] := 'project      List/create/inspect desktop projects and their apps';
   Sub[32] := 'mail         Sync the Mail app''s inbox from IMAP (for cron)';
   Sub[33] := 'version      Show version info';
+  Sub[34] := 'doctor       Diagnose this install (config/workspace/memory/...)';
 
   SetLength(Fl, 2);
   Fl[0] := '--no-color   Disable colored output (also: NO_COLOR env)';
@@ -205,6 +207,7 @@ begin
   else if Cmd = 'profile'  then Result := Cmd_Profile_Run(Argv)
   else if Cmd = 'vault'    then Result := Cmd_Vault_Run(Argv)
   else if Cmd = 'session'  then Result := Cmd_Session_Run(Argv)
+  else if Cmd = 'doctor'   then Result := Cmd_Doctor_Run(Argv)
   else if Cmd = 'learn'    then Result := Cmd_Learn_Run(Argv)
   else if Cmd = 'export'   then Result := Cmd_Export_Run(Argv)
   else if Cmd = 'init'     then Result := Cmd_Init_Run(Argv)

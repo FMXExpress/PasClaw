@@ -160,6 +160,11 @@ type
        set this to ~8192 and register the OutputCache tool on the
        same registry. *)
     ToolOutputCap:  Integer;
+    { Bounded same-provider retry on a transient HTTP status. 0 disables.
+      Populated from TConfig; see the field comments there for why this
+      excludes status <= 0. }
+    ProviderRetryAttempts:  Integer;
+    ProviderRetryBackoffMs: Integer;
     (* Stream-reliability knobs. When EmptyRetryAttempts > 0 the
        loop's primary Provider.Chat goes through ChatWithEmptyRetry,
        which retries empty-turn responses (Content='' + no tool
@@ -383,6 +388,18 @@ type
 function IsRetryableStatus(Status: Integer): Boolean;
 begin
   Result := (Status <= 0) or (Status = 408) or (Status = 429) or
+            ((Status >= 500) and (Status < 600));
+end;
+
+{ Statuses where the SERVER explicitly said "try again": request timeout,
+  rate limit, and 5xx. Narrower than IsRetryableStatus on purpose -- that one
+  also accepts status <= 0, which covers permanent local misconfiguration as
+  readily as a transient socket reset, and retrying a relay with no gateway
+  just delays the same answer. Fallbacks remain the answer for "this provider
+  is down". }
+function IsTransientHttpStatus(Status: Integer): Boolean;
+begin
+  Result := (Status = 408) or (Status = 429) or
             ((Status >= 500) and (Status < 600));
 end;
 
@@ -1469,6 +1486,7 @@ const
   ToolArgReplayThreshold = 2048;
 var
   Iter, i, bi, j, fbi, sti: Integer;
+  RetryAttempt, BackoffMs: Integer;
   Tools: TToolDefinitionArray;
   FallbackModel: string;
   Resp: TLLMResponse;
@@ -1843,6 +1861,37 @@ begin
       explicitly requested model when it prepends the original primary as
       Fallbacks[0]. Otherwise we only fall back to Cfg.Model when the
       fallback explicitly returns '' for its GetDefaultModel. }
+    (* Same-provider retry before the fallback walk. A 429 means "you are
+       going too fast", not "this provider is broken" -- switching providers
+       on it wastes a healthy primary and, with no fallbacks configured, used
+       to fall through to the no-tool-call nudge path and get retried by
+       accident. Bounded, with the backoff doubling per attempt. *)
+    RetryAttempt := 0;
+    while IsTransientHttpStatus(Resp.StatusCode)
+          and (RetryAttempt < Cfg.ProviderRetryAttempts) do
+    begin
+      Inc(RetryAttempt);
+      BackoffMs := Cfg.ProviderRetryBackoffMs;
+      for i := 2 to RetryAttempt do BackoffMs := BackoffMs * 2;
+      LogWarn('provider returned status=%d -- retry %d/%d after %d ms',
+              [Resp.StatusCode, RetryAttempt, Cfg.ProviderRetryAttempts,
+               BackoffMs]);
+      Sleep(BackoffMs);
+      try
+        Resp := Cfg.Provider.Chat(CallHist, Tools, Cfg.Model, LiveOptions);
+        LastProviderErrText := '';
+      except
+        on E: Exception do
+        begin
+          LogWarn('provider retry raised: %s: %s', [E.ClassName, E.Message]);
+          LastProviderErrText := E.Message;
+          Resp := Default(TLLMResponse);
+          Resp.StatusCode := -1;
+          Break;   { an exception is not the transient the server promised }
+        end;
+      end;
+    end;
+
     if IsRetryableStatus(Resp.StatusCode) and (Length(Cfg.Fallbacks) > 0) then
     begin
       LogWarn('provider primary returned status=%d, walking %d fallback(s)',
@@ -1987,6 +2036,50 @@ begin
       else
         HooksOnError(Cfg.Hooks, hsProviderCall,
                       Format('provider returned status=%d', [Resp.StatusCode]));
+    end;
+
+    (* A provider that could not answer is not a model turn. Stop here.
+
+       Until now a hard provider failure fell through into the normal
+       response handling: its error text became Resp.Content, the empty
+       ToolCalls array took the no-tool-call branch, and an empty
+       FinishReason made that branch's retry guard fire -- so the loop
+       nudged and retried against a provider that was never going to
+       answer, burned every iteration, and then reported "hit the
+       tool-call limit while still working -- this task is probably
+       unfinished". Every part of that is wrong: no work happened, the
+       task is not merely unfinished, and the suggested remedy
+       (--max-iterations N) buys N more identical failures.
+
+       Reproduced with the relay provider and no gateway: the CLI holds no
+       relay queue -- it lives in the gateway process -- so Chat() returns
+       StatusCode -1 with an explanatory string, and `pasclaw agent` spun
+       the full iteration budget before blaming the budget.
+
+       Placed after the fallback walk and the reactive-compaction retry, so
+       both still get their chance; this only fires once nothing else can
+       rescue the call. The status stays on Loop.LastResp for callers that
+       want to distinguish it. *)
+    if (Resp.StatusCode < 200) or (Resp.StatusCode >= 300) then
+    begin
+      if LastProviderErrText <> '' then
+        Loop.Content := LastProviderErrText
+      else if Trim(Resp.Content) <> '' then
+        Loop.Content := Resp.Content
+      else
+        Loop.Content := Format('provider returned status=%d and no content',
+                               [Resp.StatusCode]);
+      LogWarn('toolloop: provider call failed (status=%d) -- stopping the ' +
+              'turn rather than retrying a provider that cannot answer',
+              [Resp.StatusCode]);
+      Loop.LastResp          := Resp;
+      Loop.Iterations        := Iter;
+      Loop.FinalMessages     := Hist;
+      Loop.FinalSystemPrompt := LiveOptions.SystemPrompt;
+      { Explicitly NOT HitMaxIterations: nothing was in flight, so there is
+        no pending work to continue and no budget to raise. }
+      Loop.HitMaxIterations  := False;
+      Exit(True);
     end;
 
     { Stream the text part to the caller now so they can show progress. }
