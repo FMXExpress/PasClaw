@@ -349,6 +349,57 @@ begin
   ExpectTrue(LastModel = 'caller-model',
              'and falls back to the caller''s when unset');
 
+  (* -------- one oversized newest group cannot empty the window ------
+
+     The tail budget says how much recent history to protect, and a
+     single group bigger than the whole budget used to satisfy it by
+     protecting NOTHING -- so a pasted 25k-token request against a 20k
+     window made the current task itself a pruning candidate. The
+     newest group is protected whatever it weighs. *)
+  SetLength(Msgs, 3);
+  Msgs[0] := Fat(mrUser, 'OLD-TASK', 4000);
+  Msgs[1] := Fat(mrAssistant, 'OLD-REPLY', 4000);
+  Msgs[2] := Fat(mrUser, 'CURRENT-TASK-PASTED-HUGE', 40000);
+  Opts.ProtectTailTokens := 2000;    { far smaller than that last turn }
+  Stub.Reply := '{"decisions":[{"id":0,"action":"drop"},' +
+                '{"id":1,"action":"drop"},{"id":2,"action":"drop"}]}';
+  Out_ := PruneMessages(Provider, 'stub-1', Msgs, Opts, Info);
+  ExpectTrue(Pos('CURRENT-TASK-PASTED-HUGE', Out_[High(Out_)].Content) > 0,
+             'the newest turn survives even when it alone is bigger than ' +
+             'the whole protected-tail budget');
+  ExpectTrue(Pos('CURRENT-TASK-PASTED-HUGE', Stub.LastPrompt) = 0,
+             'and is never offered to the pruner in the first place');
+  Opts.ProtectTailTokens := 1;
+
+  (* ---------- tool-call ARGUMENTS reach the deciding model ---------
+
+     An assistant tool-call turn carries its information in the
+     arguments, not in Content: write_file({"path":...}) then a
+     one-word success. Judged on Content alone the group reads as
+     empty-then-ok, and deleting it destroys the only record of what
+     was changed. *)
+  SetLength(Msgs, 4);
+  Msgs[0] := Fat(mrUser, 'TASK', 800);
+  Msgs[1] := MakeMessage(mrAssistant, '');        { no text of its own }
+  SetLength(Msgs[1].ToolCalls, 1);
+  Msgs[1].ToolCalls[0].Id := 'w1';
+  Msgs[1].ToolCalls[0].Kind := 'function';
+  Msgs[1].ToolCalls[0].Func.Name := 'write_file';
+  Msgs[1].ToolCalls[0].Func.Arguments :=
+    '{"path":"src/important.pas","content":"' + StringOfChar('c', 2000) + '"}';
+  Msgs[2] := MakeMessage(mrTool, 'ok');
+  Msgs[2].ToolCallId := 'w1';
+  Msgs[3] := Fat(mrUser, 'RECENT', 800);
+  Stub.Reply := '{"decisions":[]}';
+  PruneMessages(Provider, 'stub-1', Msgs, Opts, Info);
+  ExpectTrue(Pos('src/important.pas', Stub.LastPrompt) > 0,
+             'the pruner is shown WHICH file the call wrote -- the group''s ' +
+             'only real content lives in its arguments');
+  ExpectTrue(Pos('write_file(', Stub.LastPrompt) > 0,
+             'attributed to the call that carried it');
+  ExpectTrue(Length(Stub.LastPrompt) < 4000,
+             'and the argument blob is still bounded, not pasted whole');
+
   { ------------------------ the archive hook fires only on a deletion - }
   Spy := TArchiveSpy.Create;
   try

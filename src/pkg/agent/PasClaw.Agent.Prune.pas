@@ -246,7 +246,7 @@ end;
 function BuildGroups(const Body: array of TMessage;
                      const Opts: TPruneOptions): TPruneGroups;
 var
-  i, k, N, Tail, G: Integer;
+  i, k, c, N, Tail, G: Integer;
   Names: string;
 begin
   SetLength(Result, 0);
@@ -278,7 +278,18 @@ begin
     i := Result[N].Last + 1;
   end;
 
-  { Sizes, previews, and the protected tail. }
+  (* Sizes and previews.
+
+     The ARGUMENTS count and are shown, not just Content. An assistant
+     tool-call turn usually has little or no text of its own -- the
+     information is in write_file({"path":"...","content":...}) or
+     shell_exec({"command":"..."}), and the result answering it is
+     often just "ok". Judging that group on Content alone, the pruner
+     sees a near-empty turn followed by a success and calls it
+     disposable, deleting the only record of which file was changed and
+     with what -- which the end-of-turn working-state scan cannot
+     recover either, because it reads the same messages. Bounded like
+     every other preview, so a 200 KB write does not arrive whole. *)
   for G := 0 to High(Result) do
   begin
     Result[G].Tokens := 0;
@@ -290,17 +301,34 @@ begin
         Result[G].Preview := Result[G].Preview + sLineBreak;
       Result[G].Preview := Result[G].Preview +
         Preview(Trim(Body[k].Content), Opts.PreviewChars);
+      for c := 0 to High(Body[k].ToolCalls) do
+      begin
+        Result[G].Tokens := Result[G].Tokens +
+          EstimateTokens(Body[k].ToolCalls[c].Func.Arguments);
+        Result[G].Preview := Result[G].Preview + sLineBreak +
+          Body[k].ToolCalls[c].Func.Name + '(' +
+          Preview(Trim(Body[k].ToolCalls[c].Func.Arguments),
+                  Opts.PreviewChars) + ')';
+      end;
     end;
     Result[G].Candidate := Result[G].Tokens >= Opts.MinCandidateTokens;
   end;
 
+  (* The protected window, walked newest-first.
+
+     Marked BEFORE the budget is tested, which is the whole subtlety:
+     testing first meant a single group larger than ProtectTailTokens
+     -- a pasted 25k-token request against a 20k window -- broke the
+     loop on its first pass and left the window EMPTY, so the current
+     task became a pruning candidate. The tail budget is a floor for
+     how much to protect, never a licence to protect nothing; the
+     newest group is always protected, however big it is. *)
   Tail := 0;
   for G := High(Result) downto 0 do
   begin
-    Tail := Tail + Result[G].Tokens;
-    if Tail > Opts.ProtectTailTokens then Break;
-    { Inside the protected window: the current task lives here. }
     Result[G].Candidate := False;
+    Tail := Tail + Result[G].Tokens;
+    if Tail >= Opts.ProtectTailTokens then Break;
   end;
 end;
 
@@ -562,6 +590,20 @@ begin
       Inc(OutIdx);
     end;
   SetLength(Result, OutIdx);
+
+  (* A prune that empties the history is not a prune, it is a wipe.
+
+     The protected tail already makes this unreachable -- the newest
+     group is never a candidate -- but "unreachable" is a property of
+     today's cut logic, and this is the one failure the caller could
+     not recover from: an empty Messages array is not a conversation
+     the next turn can continue. Cheap to assert, so assert it. *)
+  if Length(Result) = 0 then
+  begin
+    LogWarn('prune: plan would have emptied the history -- refused, ' +
+            'keeping everything', []);
+    Exit(ReturnVerbatim(Messages));
+  end;
 
   Info.TokensAfter := TotalTokens(Result);
   LogInfo('prune: %d candidate(s) -> %d msg(s) dropped, %d marked; ' +

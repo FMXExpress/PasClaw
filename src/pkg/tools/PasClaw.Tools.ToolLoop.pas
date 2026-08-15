@@ -317,6 +317,16 @@ function PartitionToolBatches(const Calls: array of TToolCall;
 function HistWithTurnClock(const Hist: TMessageArray;
                            const Stamp: string): TMessageArray;
 
+{ Remove a turn-clock suffix, returning S unchanged when there is none.
+
+  Anything that asserts on the exact text a provider received now has to cope
+  with the stamp: it is appended to the outbound copy, so a scripted or fake
+  provider legitimately sees `body + clock`. Stripping through this function
+  rather than hand-matching the format keeps the shape defined in exactly one
+  place -- a test that spells it out itself silently rots the day the format
+  moves. }
+function StripTurnClock(const S: string): string;
+
 implementation
 
 uses
@@ -784,6 +794,11 @@ begin
     end;
 end;
 
+const
+  { The one place the turn-clock shape is written down. HistWithTurnClock
+    appends it and StripTurnClock removes it; nothing else should spell it. }
+  TurnClockPrefix = sLineBreak + sLineBreak + '[current date/time: ';
+
 function HistWithTurnClock(const Hist: TMessageArray;
                            const Stamp: string): TMessageArray;
 (* Return a copy of the history with Stamp appended to the LAST non-empty
@@ -836,10 +851,29 @@ begin
   for i := High(Result) downto 0 do
     if (Result[i].Role = mrUser) and (Trim(Result[i].Content) <> '') then
     begin
-      Result[i].Content := Result[i].Content + sLineBreak + sLineBreak +
-        '[current date/time: ' + Stamp + ']';
+      Result[i].Content := Result[i].Content + TurnClockPrefix + Stamp + ']';
       Exit;
     end;
+end;
+
+function StripTurnClock(const S: string): string;
+var
+  P, Close_: Integer;
+begin
+  Result := S;
+  { A loop, and a search for the closing bracket rather than an assumption
+    that the stamp ends the string: the clock is appended to a MESSAGE, but
+    callers assert on text that quotes messages -- a spawn_wait status embeds
+    the stamped prompt with more text after it. The stamp carries no nested
+    brackets, so the first ] after the marker closes it. }
+  repeat
+    P := Pos(TurnClockPrefix, Result);
+    if P <= 0 then Exit;
+    Close_ := P + Length(TurnClockPrefix);
+    while (Close_ <= Length(Result)) and (Result[Close_] <> ']') do Inc(Close_);
+    if Close_ > Length(Result) then Exit;   { unterminated -- leave it alone }
+    Delete(Result, P, Close_ - P + 1);
+  until False;
 end;
 
 function PartitionToolBatches(const Calls: array of TToolCall;

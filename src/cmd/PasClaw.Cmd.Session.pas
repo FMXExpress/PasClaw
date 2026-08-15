@@ -103,6 +103,8 @@ begin
     PrintLn(Ansi.Bold + 'title:     ' + Ansi.Reset + Sess.Meta.Title);
     PrintLn(Ansi.Bold + 'model:     ' + Ansi.Reset + Sess.Meta.Model);
     PrintLn(Ansi.Bold + 'provider:  ' + Ansi.Reset + Sess.Meta.Provider);
+    if Sess.Meta.Profile <> '' then
+      PrintLn(Ansi.Bold + 'profile:   ' + Ansi.Reset + Sess.Meta.Profile);
     PrintLn(Ansi.Bold + 'messages:  ' + Ansi.Reset + IntToStr(Length(Sess.Messages)));
     if Sess.Meta.SystemPromptOverride <> '' then
       PrintLn(Ansi.Bold + 'compacted: ' + Ansi.Reset + Ansi.Dim + 'yes' + Ansi.Reset);
