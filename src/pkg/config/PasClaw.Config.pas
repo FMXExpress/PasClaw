@@ -183,6 +183,25 @@ type
     SummaryBudget:      Integer;   { the summariser is told to stay under }
   end;
 
+  (* LLM-guided context pruning -- deletion-based compaction. A strong
+     model says which parts of the history no longer matter and they are
+     deleted; everything it does not name survives byte for byte. See
+     PasClaw.Agent.Prune for the mechanism and its guarantees.
+
+     Off by default: it spends a call to a strong model, which is not a
+     cost to impose on anyone who did not ask for it. MinIterations is
+     the "not every turn" gate -- above the threshold it would otherwise
+     run on every loop iteration, and pruning twice in a row has almost
+     nothing left to find. *)
+  TPruneConfig = record
+    Enabled:            Boolean;
+    ThresholdTokens:    Integer;
+    ProtectTailTokens:  Integer;
+    MinCandidateTokens: Integer;
+    PreviewChars:       Integer;
+    MinIterations:      Integer;
+  end;
+
   TSandboxPolicy = record
     RestrictToWorkspace:       Boolean;
     AllowReadOutsideWorkspace: Boolean;
@@ -624,6 +643,13 @@ type
        triggers, what the retention budget keeps, where the summary
        lives -- are PasClaw.Agent.Compact's header. *)
     Compaction: TCompactionConfig;
+    Prune:      TPruneConfig;
+    (* PlanModel -- the model for work that is thinking rather than
+       doing: `pasclaw plan`, and the pruner's judgement call about what
+       a session still needs. The counterpart to FastModel at the other
+       end of the range, and empty means the same thing there as here --
+       use the main model, do not go looking for another one. *)
+    PlanModel:  string;
     Crons:      array of TCronEntry;
     Skills:     array of TSkillEntry;
     Subagents:  TSubagentSpecArray;  { see comment on the type alias }
@@ -1177,6 +1203,16 @@ begin
   Compaction.RetainBudgetTokens := 20000;
   Compaction.KeepRecentTurns    := 8;
   Compaction.SummaryBudget      := 800;
+  { Prune defaults MUST match DefaultPruneOptions in PasClaw.Agent.Prune,
+    for the same reason the compaction ones must -- asserted by
+    prune_tests. }
+  Prune.Enabled            := False;
+  Prune.ThresholdTokens    := 60000;
+  Prune.ProtectTailTokens  := 20000;
+  Prune.MinCandidateTokens := 400;
+  Prune.PreviewChars       := 400;
+  Prune.MinIterations      := 8;
+  PlanModel                := '';   { empty = the main model }
   MCPProgressiveDisclosure := True;  { on by default -- fat catalogs (Replicate MCP ~50 tools, GitHub MCP ~50+) make lazy reveal the right floor. The prompt cost of every MCP schema every turn dominates the bill on turns that touch zero MCP tools; tool_search loads schemas on demand at a one-turn cost per first-use. Operators with tiny catalogs flip off via onboarding (default N) or hand-edit if the +1 turn isn't worth the savings. Mirrors Claude Code's ToolSearch pattern. No-op when no MCP servers are configured. }
   BuiltinProgressiveDisclosure := True;  { see the field comment -- 13 KB/request on the gateway profile }
   RenderMarkdown       := True;  { on by default for terminal surfaces; cmd/serve flips off }
@@ -1782,6 +1818,27 @@ begin
       operator never made; writing it only when something differs
       keeps the file to what was actually chosen -- while still
       round-tripping every override through SaveConfig. }
+    if PlanModel <> '' then Root.PutStr('plan_model', PlanModel);
+
+    { prune: emitted only when touched, same reason as compaction -- a
+      block of defaults reads as decisions nobody made. }
+    if Prune.Enabled or
+       (Prune.ThresholdTokens    <> 60000) or
+       (Prune.ProtectTailTokens  <> 20000) or
+       (Prune.MinCandidateTokens <> 400) or
+       (Prune.PreviewChars       <> 400) or
+       (Prune.MinIterations      <> 8) then
+    begin
+      Tmp := TJsonObject.Create;
+      Tmp.PutBool('enabled',              Prune.Enabled);
+      Tmp.PutInt ('threshold_tokens',     Prune.ThresholdTokens);
+      Tmp.PutInt ('protect_tail_tokens',  Prune.ProtectTailTokens);
+      Tmp.PutInt ('min_candidate_tokens', Prune.MinCandidateTokens);
+      Tmp.PutInt ('preview_chars',        Prune.PreviewChars);
+      Tmp.PutInt ('min_iterations',       Prune.MinIterations);
+      Root.PutObject('prune', Tmp);
+    end;
+
     if (not Compaction.Enabled) or
        (Compaction.ThresholdTokens    <> 80000) or
        (Compaction.RetainBudgetTokens <> 20000) or
@@ -2028,6 +2085,19 @@ begin
                                                   BuiltinProgressiveDisclosure);
     MCPCompactResults := Root.GetBool('mcp_compact_results',
                                       MCPCompactResults);
+    PlanModel := Root.GetStr('plan_model', PlanModel);
+    Obj := Root.ChildObject('prune');
+    if Obj <> nil then
+    try
+      Prune.Enabled            := Obj.GetBool('enabled',              Prune.Enabled);
+      Prune.ThresholdTokens    := Integer(Obj.GetInt('threshold_tokens',      Prune.ThresholdTokens));
+      Prune.ProtectTailTokens  := Integer(Obj.GetInt('protect_tail_tokens',   Prune.ProtectTailTokens));
+      Prune.MinCandidateTokens := Integer(Obj.GetInt('min_candidate_tokens',  Prune.MinCandidateTokens));
+      Prune.PreviewChars       := Integer(Obj.GetInt('preview_chars',         Prune.PreviewChars));
+      Prune.MinIterations      := Integer(Obj.GetInt('min_iterations',        Prune.MinIterations));
+    finally
+      Obj.Free;
+    end;
     Obj := Root.ChildObject('compaction');
     if Obj <> nil then
     try

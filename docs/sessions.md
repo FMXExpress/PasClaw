@@ -109,6 +109,51 @@ Configuration (all optional; these are the defaults):
 
 Before the older history is dropped, the session's [working-state snapshot](#working-state-snapshot) is refreshed from it, so edited paths and shell commands in the dropped half survive in the cross-turn snapshot even though the transcript no longer carries them.
 
+## Pruning
+
+Compaction **rewrites**: it summarises the older half and discards the originals, so everything that survives is the summariser's prose. Pruning **deletes**: a strong model reads what the history contains, names the parts that no longer matter, and everything it does not name survives **byte for byte** — the file paths, the error text, the exact tool arguments are still the originals rather than a paraphrase.
+
+The two are complements, and pruning runs **first**: a session is usually oversized because of a handful of enormous tool results, not because the conversation is long, and deleting those often brings the history back under the compaction threshold — so the turn keeps a real transcript instead of a summary of one.
+
+**Off by default.** It spends a call to a strong model, so it is opt-in and gated three ways: `enabled`, a token threshold, and `min_iterations` between passes. Once a history is big it stays big, so without the last gate it would run on every loop iteration — and the second pass in a row has almost nothing left to find.
+
+```json
+"prune": {
+  "enabled":              false,
+  "threshold_tokens":     60000,
+  "protect_tail_tokens":  20000,
+  "min_candidate_tokens": 400,
+  "preview_chars":        400,
+  "min_iterations":       8
+}
+```
+
+The pruner runs on [`plan_model`](./configuration.md) — deciding what a session still needs is judgement rather than transformation, which is the same reason plan mode exists. Empty falls back to the main model.
+
+### What it returns, and what it cannot touch
+
+The model answers with a *plan*, never an edited transcript:
+
+```json
+{"decisions":[{"id":3,"action":"drop"},
+              {"id":7,"action":"marker","text":"[tests: 412 passed, 0 failed]"}]}
+```
+
+`drop` deletes; `marker` keeps the message and replaces its content with one line, for the case where the outcome matters and the volume does not. A model handed the transcript to rewrite would eventually "helpfully" correct a file path or drop a `tool_call_id`; deciding is a judgement, editing is a mechanism, and the mechanism stays in PasClaw.
+
+Four guarantees are enforced in code, not by asking:
+
+| | |
+|---|---|
+| **Omitted means kept** | A truncated, garbled or empty reply prunes *nothing*. Inaction is the default. |
+| **Tool groups are atomic** | An assistant turn's `tool_calls` and the results answering it are one decision. Half a group is an orphaned `tool_use` — a 400 from Anthropic and OpenAI both. |
+| **System and recent turns** | Leading system messages are never offered to the pruner at all; neither is the newest `protect_tail_tokens` of history, where the current task lives. |
+| **Markers keep pairings** | A marker replaces content only — the message, its `tool_call_id` and any `tool_calls` survive. |
+
+Candidates are shown as head+tail **previews**, not in full: sending the whole session to judge the whole session reproduces the problem being solved, and a preview is enough to tell a build log from a decision.
+
+The cheap, always-on half of this already exists: [`tool_output_cap`](./configuration.md) truncates oversize tool results at dispatch, before they ever enter the history. Pruning is the judgement pass for what survives that.
+
 ## Mid-loop steering
 
 Push a follow-up into a running agent without waiting for the current tool loop to finish. From another terminal:

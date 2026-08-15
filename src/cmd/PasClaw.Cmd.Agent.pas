@@ -53,6 +53,7 @@ uses
   PasClaw.Tools.OutputCache,
   PasClaw.Tools.ToolLoop,
   PasClaw.Agent.Compact,
+  PasClaw.Agent.Prune,
   PasClaw.MCP.Bridge,
   PasClaw.MCP.Disclosure,   { tool_search must exist even with --no-mcp }
   PasClaw.Skills.Loader,
@@ -491,6 +492,15 @@ begin
   Result.Provider      := Provider;
   Result.Registry      := Reg;
   Result.Model         := Model;
+  (* Plan mode runs on the plan model, when one is configured.
+
+     plan_model existed nowhere until pruning needed a name for "the
+     model that thinks rather than does" -- and a setting called
+     plan_model that plan mode itself ignored would be a lie. An
+     explicit --model still wins: it is the more specific instruction,
+     and Model already carries it by the time we get here. *)
+  if (A.Mode = pmPlan) and (Cfg.PlanModel <> '') and (A.Model = '') then
+    Result.Model := Cfg.PlanModel;
   Result.MaxIterations := A.MaxIterations;
   Result.Parallel := True;
   Result.Fallbacks     := ResolveFallbacks(Cfg, Result.FallbackModels);
@@ -546,6 +556,19 @@ begin
     Only wired when a session is being persisted; MetaRef is nil on
     one-shot runs, and the handler does nothing then. }
   Result.CompactOpts.OnBefore := Handlers.OnBeforeCompact;
+  { LLM-guided pruning ahead of compaction. Off unless configured; the
+    pruner runs on the PLAN model, because deciding what a session still
+    needs is a judgement rather than a transformation -- the same reason
+    plan mode exists. Empty plan_model falls back to the loop's own. }
+  Result.PruneEnabled       := Cfg.Prune.Enabled;
+  Result.PruneMinIterations := Cfg.Prune.MinIterations;
+  Result.PruneOpts          := DefaultPruneOptions;
+  Result.PruneOpts.Enabled            := Cfg.Prune.Enabled;
+  Result.PruneOpts.ThresholdTokens    := Cfg.Prune.ThresholdTokens;
+  Result.PruneOpts.ProtectTailTokens  := Cfg.Prune.ProtectTailTokens;
+  Result.PruneOpts.MinCandidateTokens := Cfg.Prune.MinCandidateTokens;
+  Result.PruneOpts.PreviewChars       := Cfg.Prune.PreviewChars;
+  Result.PruneOpts.Model              := Cfg.PlanModel;
   { Forward the tool-output truncation cap (per-tool-result bytes)
     from config. 0 = off (legacy verbatim behaviour); when an
     operator sets it, RunToolLoop diverts oversize results to the

@@ -1,0 +1,357 @@
+program prune_tests;
+(*
+  Pins PasClaw.Agent.Prune: LLM-guided deletion of context that no
+  longer matters.
+
+  Pruning deletes from the MIDDLE of a live history, which makes it far
+  less forgiving than compaction -- compaction's mistakes cost detail,
+  pruning's mistakes cost a 400 from the provider or the loss of the
+  thing the turn was about. So the properties worth breaking the build
+  over are the guarantees the model is NOT trusted to honour:
+
+    1. Omitted = kept. A truncated, empty, garbled or hallucinating
+       reply must prune nothing. The prompt asks for decisions; the
+       default has to be inaction.
+    2. Tool groups are atomic. Dropping an assistant turn's tool_calls
+       without its tool results (or the reverse) is an orphaned
+       tool_use -- Anthropic and OpenAI both 400 on it.
+    3. Leading system messages and the recent window are never
+       candidates, whatever the plan says about them.
+    4. A marker keeps the MESSAGE -- and its tool_call_id -- and
+       replaces only its content, so the pairing survives.
+    5. Survivors are verbatim. That is the whole reason to prune
+       instead of summarise, and a byte-for-byte assertion is the only
+       way to keep it true.
+*)
+{$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
+{$H+}
+
+uses
+  SysUtils,
+  PasClaw.Providers.Types,
+  PasClaw.Providers.Intf,
+  PasClaw.Agent.Prune,
+  PasClaw.Config;
+
+var Failures: Integer = 0;
+
+procedure Fail_(const Msg: string);
+begin
+  WriteLn('FAIL: ' + Msg);
+  Inc(Failures);
+end;
+
+procedure ExpectTrue(Cond: Boolean; const Msg: string);
+begin
+  if not Cond then Fail_(Msg);
+end;
+
+procedure ExpectEq(Got, Want: Integer; const Msg: string);
+begin
+  if Got <> Want then
+    Fail_(Msg + ' -- got ' + IntToStr(Got) + ', want ' + IntToStr(Want));
+end;
+
+type
+  { Answers every call with a canned plan, and remembers what it saw. }
+  TStubProvider = class(TInterfacedObject, ILLMProvider)
+  public
+    Reply:      string;
+    RaiseIt:    Boolean;
+    Calls:      Integer;
+    LastPrompt: string;
+    function Chat(const Messages: array of TMessage;
+                  const Tools:    array of TToolDefinition;
+                  const Model:    string;
+                  const Options:  TChatOptions): TLLMResponse;
+    function GetDefaultModel: string;
+    function GetName: string;
+    function SupportsThinking: Boolean;
+    function SupportsNativeSearch: Boolean;
+    function SupportsStreaming: Boolean;
+    function ChatStream(const Messages: array of TMessage;
+                        const Tools:    array of TToolDefinition;
+                        const Model:    string;
+                        const Options:  TChatOptions;
+                        OnChunk: TStreamCallback): TLLMResponse;
+  end;
+
+var
+  LastModel: string;
+
+function TStubProvider.Chat(const Messages: array of TMessage;
+                            const Tools: array of TToolDefinition;
+                            const Model: string;
+                            const Options: TChatOptions): TLLMResponse;
+begin
+  Inc(Calls);
+  LastModel := Model;
+  if Length(Messages) > 0 then LastPrompt := Messages[0].Content
+  else LastPrompt := '';
+  if RaiseIt then raise Exception.Create('stub says no');
+  Result := Default(TLLMResponse);
+  Result.Content := Reply;
+  Result.StatusCode := 200;
+end;
+
+function TStubProvider.GetDefaultModel: string; begin Result := 'stub-1'; end;
+function TStubProvider.GetName: string;         begin Result := 'stub';   end;
+function TStubProvider.SupportsThinking: Boolean;     begin Result := False; end;
+function TStubProvider.SupportsNativeSearch: Boolean; begin Result := False; end;
+function TStubProvider.SupportsStreaming: Boolean;    begin Result := False; end;
+
+function TStubProvider.ChatStream(const Messages: array of TMessage;
+                                  const Tools: array of TToolDefinition;
+                                  const Model: string;
+                                  const Options: TChatOptions;
+                                  OnChunk: TStreamCallback): TLLMResponse;
+begin
+  Result := Chat(Messages, Tools, Model, Options);
+end;
+
+{ Big enough to be a candidate: ~Chars/4 tokens. }
+function Fat(Role: TMsgRole; const Tag: string; Chars: Integer): TMessage;
+begin
+  Result := MakeMessage(Role, Tag + ' ' + StringOfChar('x', Chars));
+end;
+
+{ An assistant turn carrying one tool_call, plus its result. }
+function CallTurn(const Id, Name: string): TMessage;
+begin
+  Result := MakeMessage(mrAssistant, 'calling ' + Name);
+  SetLength(Result.ToolCalls, 1);
+  Result.ToolCalls[0].Id := Id;
+  Result.ToolCalls[0].Kind := 'function';
+  Result.ToolCalls[0].Func.Name := Name;
+  Result.ToolCalls[0].Func.Arguments := '{}';
+end;
+
+function ResultTurn(const Id: string; Chars: Integer): TMessage;
+begin
+  Result := Fat(mrTool, 'OUTPUT', Chars);
+  Result.ToolCallId := Id;
+end;
+
+function CountRole(const A: TMessageArray; R: TMsgRole): Integer;
+var i: Integer;
+begin
+  Result := 0;
+  for i := 0 to High(A) do if A[i].Role = R then Inc(Result);
+end;
+
+{ Every tool result has the assistant tool_call it answers, somewhere
+  earlier. The invariant a bad prune breaks, and a 400 when it does. }
+function NoOrphanedResults(const A: TMessageArray): Boolean;
+var
+  i, j, k: Integer;
+  Found: Boolean;
+begin
+  Result := True;
+  for i := 0 to High(A) do
+  begin
+    if A[i].Role <> mrTool then Continue;
+    if A[i].ToolCallId = '' then Continue;
+    Found := False;
+    for j := 0 to i - 1 do
+      for k := 0 to High(A[j].ToolCalls) do
+        if A[j].ToolCalls[k].Id = A[i].ToolCallId then Found := True;
+    if not Found then Exit(False);
+  end;
+end;
+
+var
+  Stub:     TStubProvider;
+  Provider: ILLMProvider;
+  Opts:     TPruneOptions;
+  Info:     TPruneResult;
+  Msgs, Out_: TMessageArray;
+  Cfg:      TConfig;
+  Def:      TPruneOptions;
+  i:        Integer;
+  Big:      string;
+
+(* A history with something worth pruning: the original task, two tool
+   groups with fat results, then the recent turn. Group ids as the
+   pruner sees them -- 0 the task, 1 the first tool group, 2 the second,
+   3 the recent turn. Rebuilt before each case so one case's deletions
+   cannot quietly become the next case's premise. *)
+procedure BuildHistory;
+begin
+  SetLength(Msgs, 6);
+  Msgs[0] := Fat(mrUser, 'ORIGINAL-TASK', 800);
+  Msgs[1] := CallTurn('call-1', 'shell_exec');
+  Msgs[2] := ResultTurn('call-1', 4000);
+  Msgs[3] := CallTurn('call-2', 'fs_read');
+  Msgs[4] := ResultTurn('call-2', 4000);
+  Msgs[5] := Fat(mrUser, 'RECENT', 800);
+end;
+
+begin
+  { ---------------------------------------------------- the trigger -- }
+  SetLength(Msgs, 2);
+  Msgs[0] := Fat(mrUser, 'A', 40);
+  Msgs[1] := Fat(mrAssistant, 'B', 40);
+  ExpectTrue(not NeedsPrune(Msgs, '', 100000), 'a small history is left alone');
+  ExpectTrue(NeedsPrune(Msgs, '', 10), 'a large one trips the threshold');
+  ExpectTrue(NeedsPrune(Msgs, StringOfChar('s', 8000), 1000),
+             'the system prompt counts, as it does for compaction');
+  ExpectTrue(not NeedsPrune(Msgs, StringOfChar('s', 8000), 0),
+             'threshold 0 disables pruning entirely');
+
+  Stub := TStubProvider.Create;
+  Provider := Stub;
+  Opts := DefaultPruneOptions;
+  Opts.ProtectTailTokens  := 1;      { protect almost nothing, so the }
+  Opts.MinCandidateTokens := 100;    { assertions are about the plan  }
+
+  { ------------------------------------------- omitted means KEPT -- }
+  BuildHistory;
+  Stub.Reply := '{"decisions":[]}';
+  Out_ := PruneMessages(Provider, 'stub-1', Msgs, Opts, Info);
+  ExpectEq(Length(Out_), 6, 'an empty plan prunes nothing');
+  ExpectEq(Info.Dropped, 0, 'and drops nothing');
+
+  BuildHistory;
+  Stub.Reply := 'I had a look and decided not to answer in JSON.';
+  Out_ := PruneMessages(Provider, 'stub-1', Msgs, Opts, Info);
+  ExpectEq(Length(Out_), 6, 'prose instead of a plan prunes nothing');
+
+  BuildHistory;
+  Stub.Reply := '{"decisions":[{"id":1,"action":"dr';   { truncated }
+  Out_ := PruneMessages(Provider, 'stub-1', Msgs, Opts, Info);
+  ExpectEq(Length(Out_), 6, 'a truncated plan prunes nothing');
+
+  BuildHistory;
+  Stub.Reply := '{"decisions":[{"id":99,"action":"drop"},' +
+                '{"id":-3,"action":"drop"}]}';
+  Out_ := PruneMessages(Provider, 'stub-1', Msgs, Opts, Info);
+  ExpectEq(Length(Out_), 6, 'ids that were never offered are ignored');
+
+  BuildHistory;
+  Stub.RaiseIt := True;
+  Out_ := PruneMessages(Provider, 'stub-1', Msgs, Opts, Info);
+  ExpectEq(Length(Out_), 6, 'a pruner that raises prunes nothing');
+  Stub.RaiseIt := False;
+
+  Out_ := PruneMessages(nil, 'stub-1', Msgs, Opts, Info);
+  ExpectEq(Length(Out_), 6, 'no provider prunes nothing');
+
+  { ------------------------------------------ tool groups are atomic }
+  BuildHistory;
+  Stub.Reply := '{"decisions":[{"id":1,"action":"drop"}]}';
+  Out_ := PruneMessages(Provider, 'stub-1', Msgs, Opts, Info);
+  ExpectEq(Length(Out_), 4,
+           'dropping a tool group takes the call AND its result');
+  ExpectTrue(NoOrphanedResults(Out_),
+             'no tool result is left without the call it answers');
+  ExpectEq(CountRole(Out_, mrTool), 1, 'the other group is untouched');
+
+  { ------------------------------------ the fenced-JSON reply, too -- }
+  BuildHistory;
+  Stub.Reply := 'Sure, here you go:' + sLineBreak + '```json' + sLineBreak +
+                '{"decisions":[{"id":1,"action":"drop"}]}' + sLineBreak +
+                '```';
+  Out_ := PruneMessages(Provider, 'stub-1', Msgs, Opts, Info);
+  ExpectEq(Length(Out_), 4, 'a plan wrapped in prose and a fence still applies');
+
+  { ------------------------------------------------ markers ---------- }
+  BuildHistory;
+  Stub.Reply := '{"decisions":[{"id":1,"action":"marker",' +
+                '"text":"[shell: ok]"}]}';
+  Out_ := PruneMessages(Provider, 'stub-1', Msgs, Opts, Info);
+  ExpectEq(Length(Out_), 6, 'a marker keeps every message');
+  ExpectTrue(NoOrphanedResults(Out_), 'and every pairing');
+  ExpectTrue(Out_[2].Content = '[shell: ok]',
+             'the fat result is replaced by the marker');
+  ExpectTrue(Out_[2].ToolCallId = 'call-1',
+             'and keeps its tool_call_id -- the pairing is the point');
+  ExpectTrue(Pos('calling shell_exec', Out_[1].Content) > 0,
+             'the assistant turn keeps its own text');
+  ExpectTrue(Length(Out_[1].ToolCalls) = 1,
+             'and its tool_calls, which a marker must never eat');
+
+  { ------------------------------------- survivors are VERBATIM ------ }
+  BuildHistory;
+  Big := Msgs[0].Content;
+  Stub.Reply := '{"decisions":[{"id":1,"action":"drop"}]}';
+  Out_ := PruneMessages(Provider, 'stub-1', Msgs, Opts, Info);
+  ExpectTrue(Out_[0].Content = Big,
+             'a surviving message is byte-for-byte what it was -- the ' +
+             'whole reason to prune rather than summarise');
+
+  { --------------------------- system messages are never candidates -- }
+  BuildHistory;
+  SetLength(Msgs, 7);
+  for i := 6 downto 1 do Msgs[i] := Msgs[i - 1];
+  Msgs[0] := Fat(mrSystem, 'POLICY-NEVER-DELETE', 2000);
+  Stub.Reply := '{"decisions":[{"id":0,"action":"drop"},' +
+                '{"id":1,"action":"drop"},{"id":2,"action":"drop"},' +
+                '{"id":3,"action":"drop"},{"id":4,"action":"drop"}]}';
+  Out_ := PruneMessages(Provider, 'stub-1', Msgs, Opts, Info);
+  ExpectTrue(Out_[0].Role = mrSystem, 'the system message survives...');
+  ExpectTrue(Pos('POLICY-NEVER-DELETE', Out_[0].Content) > 0,
+             '...intact, however enthusiastically the plan asked');
+  ExpectTrue(NoOrphanedResults(Out_),
+             'and a delete-everything plan still leaves no orphans');
+  ExpectTrue(Pos('POLICY-NEVER-DELETE', Stub.LastPrompt) = 0,
+             'the pruner is never even shown it');
+
+  { -------------------------------- the recent window is protected -- }
+  BuildHistory;
+  Opts.ProtectTailTokens := 100000;   { everything is recent }
+  Stub.Calls := 0;
+  Out_ := PruneMessages(Provider, 'stub-1', Msgs, Opts, Info);
+  ExpectEq(Length(Out_), 6, 'nothing outside the recent window, nothing pruned');
+  ExpectEq(Stub.Calls, 0,
+           'and no pruner call is spent finding that out');
+  Opts.ProtectTailTokens := 1;
+
+  { ------------------------- the pruner sees previews, not the log --- }
+  BuildHistory;
+  Opts.PreviewChars := 60;
+  Stub.Reply := '{"decisions":[]}';
+  PruneMessages(Provider, 'stub-1', Msgs, Opts, Info);
+  ExpectTrue(Length(Stub.LastPrompt) < 6000,
+             'the prompt is previews, not the transcript -- otherwise ' +
+             'the pruner call grows with the history it exists to shrink');
+  ExpectTrue(Pos('characters omitted', Stub.LastPrompt) > 0,
+             'and says where it elided');
+  Opts.PreviewChars := 400;
+
+  { ------------------------------ the model, and the config defaults - }
+  BuildHistory;
+  Opts.Model := 'the-plan-model';
+  Stub.Reply := '{"decisions":[]}';
+  PruneMessages(Provider, 'caller-model', Msgs, Opts, Info);
+  ExpectTrue(LastModel = 'the-plan-model',
+             'Opts.Model wins -- pruning runs on the plan model');
+  Opts.Model := '';
+  PruneMessages(Provider, 'caller-model', Msgs, Opts, Info);
+  ExpectTrue(LastModel = 'caller-model',
+             'and falls back to the caller''s when unset');
+
+  Cfg := TConfig.Create;
+  Def := DefaultPruneOptions;
+  ExpectTrue(not Cfg.Prune.Enabled,
+             'pruning is OFF by default -- it spends a strong-model call');
+  ExpectTrue(not Def.Enabled, 'and the code default agrees');
+  ExpectEq(Cfg.Prune.ThresholdTokens,    Def.ThresholdTokens,
+           'config threshold default = code default');
+  ExpectEq(Cfg.Prune.ProtectTailTokens,  Def.ProtectTailTokens,
+           'config protected-tail default = code default');
+  ExpectEq(Cfg.Prune.MinCandidateTokens, Def.MinCandidateTokens,
+           'config candidate-floor default = code default');
+  ExpectEq(Cfg.Prune.PreviewChars,       Def.PreviewChars,
+           'config preview default = code default');
+  ExpectTrue(Cfg.Prune.MinIterations >= 1,
+             'and the not-every-turn gate is at least one iteration');
+  Cfg.Free;
+
+  if Failures = 0 then
+    WriteLn('prune_tests: OK')
+  else
+  begin
+    WriteLn('prune_tests: ', Failures, ' failure(s)');
+    Halt(1);
+  end;
+end.
