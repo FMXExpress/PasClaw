@@ -810,10 +810,23 @@ begin
       'OpenSSL will not work and installing it again will not help.' + sLineBreak;
 
   Result := Result +
-    {$IFDEF MSWINDOWS}
+    {$IF DEFINED(MSWINDOWS)}
     'Get 1.0.2 binaries from github.com/IndySockets/OpenSSL-Binaries and' + sLineBreak +
     'place libeay32.dll and ssleay32.dll next to pasclaw.exe, or set' + sLineBreak +
     'PASCLAW_OPENSSL_DIR to a directory containing them.';
+    {$ELSEIF DEFINED(DARWIN)}
+    { macOS names and loads these differently from Linux, so it needs its
+      own remedy. IdGlobal.HackLoadFileName builds name + version + ext on
+      Darwin (libssl.1.0.2.dylib) but name + ext + version elsewhere
+      (libssl.so.1.0.2), and `make openssl-1.0` is Debian-only -- it wants
+      dpkg-deb and copies Linux ELF objects, which cannot load here. }
+    'Homebrew''s openssl@1.0 formula is gone, so the usual sources are a' + sLineBreak +
+    'MacPorts openssl10 install or a local 1.0.2 build. Place' + sLineBreak +
+    'libssl.1.0.2.dylib and libcrypto.1.0.2.dylib next to the pasclaw' + sLineBreak +
+    'binary, or point PASCLAW_OPENSSL_DIR at a directory holding them.' + sLineBreak +
+    'LibreSSL also works: Indy accepts the .35/.43/.44 dylibs macOS ships,' + sLineBreak +
+    'so PASCLAW_OPENSSL_DIR=/usr/lib is worth trying first.' + sLineBreak +
+    'Do NOT run `make openssl-1.0` -- that target fetches Linux .so files.';
     {$ELSE}
     'Run `make openssl-1.0` -- it fetches the 1.0.2u pair into the build' + sLineBreak +
     'directory, where this binary already looks, so no further setup is' + sLineBreak +

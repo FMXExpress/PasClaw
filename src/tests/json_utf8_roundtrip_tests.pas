@@ -319,7 +319,7 @@ var
   J: TJsonObject;
   Got: string;
 begin
-  J := TJsonObject.Parse('{"k":"a' + '\' + 'u0022' + '"}');
+  J := TJsonObject.Parse('{"k":"a' + '\' + 'u0022' + 'b"}');
   try
     Got := J.GetStr('k', '');
   finally
@@ -358,6 +358,11 @@ begin
   TestUnicodeEscapeBMP3Byte;
   TestUnicodeEscapeInKey;
   TestSurrogatePairEscape;
+  TestAdjacentEscapePairCJK;
+  TestAdjacentEscapeTrioVariationSelector;
+  TestSurrogatePairAsEscapes;
+  TestEscapedBackslashNotDecoded;
+  TestLowCodepointEscapeUntouched;
   TestArrayElementRoundTrip;
   WriteLn('json_utf8_roundtrip_tests: OK');
 end.
