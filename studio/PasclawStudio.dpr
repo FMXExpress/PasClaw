@@ -5,7 +5,8 @@ uses
   FMX.Forms,
   FMX.Skia,
   MasterDetail in 'MasterDetail.pas' {MasterDetailForm},
-  PasclawAccessibility in 'PasclawAccessibility.pas';
+  PasclawAccessibility in 'PasclawAccessibility.pas',
+  PasclawAccessibilityMac in 'PasclawAccessibilityMac.pas';
 
 {$R *.res}
 
@@ -16,5 +17,6 @@ begin
   { After CreateForm, not in the constructor: the MSAA hook subclasses the
     native window, and the handle does not exist until the form is built. }
   InstallAccessibility(MasterDetailForm);
+  InstallMacAccessibility(MasterDetailForm);
   Application.Run;
 end.
