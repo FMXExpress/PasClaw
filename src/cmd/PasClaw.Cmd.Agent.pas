@@ -619,6 +619,8 @@ begin
     `tool_output_get` tool is registered alongside the other core
     tools in RegisterFSTools' caller (Cmd.Agent / Cmd.TUI). }
   Result.ToolOutputCap := Cfg.ToolOutputCap;
+  Result.ProviderRetryAttempts  := Cfg.ProviderRetryAttempts;
+  Result.ProviderRetryBackoffMs := Cfg.ProviderRetryBackoffMs;
   { Stream-reliability: same default-shape pattern -- forwarded as
     a struct copy so the loop's primary Provider.Chat call goes
     through ChatWithEmptyRetry. Loop-side fallback walk is

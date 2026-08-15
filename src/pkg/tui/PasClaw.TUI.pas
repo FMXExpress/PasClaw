@@ -1409,6 +1409,8 @@ begin
     Cmd.TUI dutifully registered tool_output_get. RouteConfig is the
     session-lifetime config snapshot the router already uses. }
   Cfg.ToolOutputCap := RouteConfig.ToolOutputCap;
+  Cfg.ProviderRetryAttempts  := RouteConfig.ProviderRetryAttempts;
+  Cfg.ProviderRetryBackoffMs := RouteConfig.ProviderRetryBackoffMs;
   Cfg.Options.CacheEnabled := PromptCacheEnabled;
   Cfg.Options.CacheTTL     := PromptCacheTTL;
   if FSession <> nil then
@@ -2997,6 +2999,8 @@ begin
     Cmd.TUI dutifully registered tool_output_get. RouteConfig is the
     session-lifetime config snapshot the router already uses. }
   Cfg.ToolOutputCap := RouteConfig.ToolOutputCap;
+  Cfg.ProviderRetryAttempts  := RouteConfig.ProviderRetryAttempts;
+  Cfg.ProviderRetryBackoffMs := RouteConfig.ProviderRetryBackoffMs;
   Cfg.Options.CacheEnabled := PromptCacheEnabled;
   Cfg.Options.CacheTTL     := PromptCacheTTL;
   Cfg.OnText        := nil;

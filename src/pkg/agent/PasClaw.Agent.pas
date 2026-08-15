@@ -840,6 +840,8 @@ begin
     registers when this is > 0). Without this the loop saw the record
     default 0 and sent full tool output regardless of Config.ToolOutputCap. }
   Cfg.ToolOutputCap := FConfig.ToolOutputCap;
+  Cfg.ProviderRetryAttempts  := FConfig.ProviderRetryAttempts;
+  Cfg.ProviderRetryBackoffMs := FConfig.ProviderRetryBackoffMs;
   { Publish the live config into the loop so tools that would otherwise
     LoadConfig from disk (web_search/send_message/memory/kb) honour this
     agent's in-memory Config -- DispatchOneToolCall scopes it per dispatch
