@@ -188,6 +188,7 @@ var
   SessDir, SessId: string;
   Metas:    TSessionMetaArray;
   Ghost:    Boolean;
+  Sess:     TSession;
 
 (* A history with something worth pruning: the original task, two tool
    groups with fat results, then the recent turn. Group ids as the
@@ -484,6 +485,34 @@ begin
              'the archive is not listed as a session -- "<id>.orig" is a ' +
              'legal session id, so without the filter every pruned ' +
              'session would show up twice');
+
+  (* And hiding it from the LIST is not enough on its own.
+
+     Load / Save / Delete all resolve through SessionPath, and resume
+     takes an id the operator typed rather than one the list offered --
+     so `pasclaw resume <id>.orig` opened the archive as an ordinary
+     session and wrote turns into a file nothing else reads. Refusing
+     the id at SessionPath is what makes the archive read-only to
+     everything except the export that exists to read it. *)
+  ExpectTrue(IsSessionArchiveId(SessId + '.orig'),
+             'an .orig id is recognised as an archive');
+  ExpectTrue(not IsSessionArchiveId(SessId),
+             'and an ordinary id is not');
+  ExpectTrue(SessionPath(SessId + '.orig') = '',
+             'an archive id has NO session path -- resume, show and ' +
+             'delete all resolve through it and must all refuse');
+  ExpectTrue(SessionPath(SessId) <> '',
+             'while the session it belongs to still resolves');
+  ExpectTrue(SessionArchivePath(SessId) <> '',
+             'and archiving still works, since it does not go through ' +
+             'SessionPath');
+  Sess := TSession.Create(SessId + '.orig');
+  try
+    ExpectTrue(not Sess.MetaExists,
+               'opening an archive as a session finds nothing to open');
+  finally
+    Sess.Free;
+  end;
 
   Cfg := TConfig.Create;
   Def := DefaultPruneOptions;

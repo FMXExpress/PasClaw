@@ -217,6 +217,10 @@ function SessionPath(const Id: string): string;
    agent actually saw. *)
 function SessionArchivePath(const Id: string): string;
 
+{ True when Id names an archive rather than a session ("<id>.orig").
+  Such an id has no session path at all -- see SessionPath. }
+function IsSessionArchiveId(const Id: string): Boolean;
+
 { True when Id has an archive on disk. }
 function HasSessionArchive(const Id: string): Boolean;
 
@@ -428,9 +432,26 @@ begin
   Result := JoinPath(GetHome, ActiveWorkspaceName + '/sessions');
 end;
 
+function IsSessionArchiveId(const Id: string): Boolean;
+begin
+  Result := (Length(Id) > 5) and (Copy(Id, Length(Id) - 4, 5) = '.orig');
+end;
+
 function SessionPath(const Id: string): string;
 begin
   if not IsSafeSessionId(Id) then Exit('');
+  (* An archive is not a session, and this is the chokepoint that makes
+     that true rather than merely intended.
+
+     Hiding "<id>.orig" from ListSessions stops it being OFFERED, and
+     that is all it stops -- Load, Save and Delete all resolve through
+     here, so `pasclaw resume <id>.orig` opened the archive as an
+     ordinary session and wrote turns into a file nothing else reads,
+     quietly diverging from the session it was supposed to be the
+     record of. A dot is a legal id character, so the name is
+     reachable; refusing it here is what makes the archive read-only to
+     everything except the export that exists to read it. *)
+  if IsSessionArchiveId(Id) then Exit('');
   Result := JoinPath(SessionsDir, Id + '.json');
 end;
 
@@ -1253,8 +1274,7 @@ begin
         a legal id character -- so without this every pruned session
         would show up twice, once as itself and once as a ghost that
         resume could open and quietly diverge from. }
-      if (Length(Id) > 5) and (Copy(Id, Length(Id) - 4, 5) = '.orig') then
-        Continue;
+      if IsSessionArchiveId(Id) then Continue;
       { Hide gateway bucket sessions from the TUI session pane and
         the `pasclaw session list` / `pasclaw learn` paths -- they
         are stats-only synthetic sessions, never carry messages,
