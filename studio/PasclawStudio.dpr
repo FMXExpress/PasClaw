@@ -4,7 +4,8 @@ uses
   System.StartUpCopy,
   FMX.Forms,
   FMX.Skia,
-  MasterDetail in 'MasterDetail.pas' {MasterDetailForm};
+  MasterDetail in 'MasterDetail.pas' {MasterDetailForm},
+  PasclawAccessibility in 'PasclawAccessibility.pas';
 
 {$R *.res}
 
@@ -12,5 +13,8 @@ begin
   GlobalUseSkia := True;
   Application.Initialize;
   Application.CreateForm(TMasterDetailForm, MasterDetailForm);
+  { After CreateForm, not in the constructor: the MSAA hook subclasses the
+    native window, and the handle does not exist until the form is built. }
+  InstallAccessibility(MasterDetailForm);
   Application.Run;
 end.
