@@ -944,6 +944,60 @@ begin
   ExpectStatus('GET', '/apps/spam-filter/index.html', '', 404,
                'nor serve their app files');
 
+  { The desktop's own way into the suite. This runs in workspace2, which
+    was never seeded -- so the first POST installs, and the SECOND is the
+    assertion that matters: installing from the desktop can never
+    duplicate, however many times the chip is clicked. }
+  if Req('POST', '/v1/suite', '', R) then
+    ExpectTrue(R.Status = 200, 'POST /v1/suite answers')
+  else
+    Fail_('POST /v1/suite did not route');
+  if Req('POST', '/v1/suite', '', R) then
+    ExpectTrue(Pos('"created":0', StringReplace(R.Body, ' ', '',
+               [rfReplaceAll])) > 0,
+               'seeding an already-seeded workspace creates nothing');
+  ExpectStatus('GET', '/v1/suite', '', 405, 'the suite route is POST-only');
+
+  (* The off-origin scan behind the "app may render unstyled" warning.
+
+     The app CSP blocks every off-origin load SILENTLY -- an app styled
+     from a CDN renders bare in every PasClaw viewer while the same file
+     opened straight into a browser looks perfect. The scan is what turns
+     that silence into a log line, so what it counts (and what it must
+     not) is worth pinning. *)
+  ExpectTrue(OffOriginHosts(
+    '<script src="https://cdn.tailwindcss.com"></script>') =
+    'cdn.tailwindcss.com',
+    'a CDN script is an off-origin load');
+  ExpectTrue(OffOriginHosts(
+    '<link rel="stylesheet" href="https://cdnjs.cloudflare.com/x.css">') =
+    'cdnjs.cloudflare.com',
+    'a CDN stylesheet is too');
+  ExpectTrue(OffOriginHosts(
+    '<script src="https://a.test/x.js"></script>' +
+    '<link href="https://fonts.googleapis.com/css2?family=Inter" rel="stylesheet">' +
+    '<script src="https://a.test/y.js"></script>') =
+    'a.test fonts.googleapis.com',
+    'hosts are collected once each');
+  ExpectTrue(OffOriginHosts(
+    '<script src="//cdn.jsdelivr.net/x.js"></script>') =
+    'cdn.jsdelivr.net',
+    'a scheme-relative URL is an off-origin load too -- the browser ' +
+    'resolves // to the current scheme and the CSP blocks it the same');
+  ExpectTrue(OffOriginHosts(
+    '<link rel="stylesheet" href=''//fonts.gstatic.com/f.css''>') =
+    'fonts.gstatic.com',
+    'single-quoted and scheme-relative together');
+  ExpectTrue(OffOriginHosts(
+    '<a href="https://example.com/docs">read the docs</a>') = '',
+    'a plain link is navigation, not a load -- no warning');
+  ExpectTrue(OffOriginHosts(
+    '<script src="pasclaw.js"></script>' +
+    '<link rel="stylesheet" href="style.css">') = '',
+    'same-origin references are fine');
+  ExpectTrue(OffOriginHosts('<p>see https://example.com in prose</p>') = '',
+    'a URL in text content is not a load either');
+
   if Failures = 0 then
     WriteLn('desktop_routes_tests: OK')
   else

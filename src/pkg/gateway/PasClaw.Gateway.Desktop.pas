@@ -63,6 +63,14 @@ type
   TTextGenerator = function(const SystemPrompt, Prompt: string;
     out Reply, Err: string): Boolean;
 
+
+(* The off-origin hosts an HTML document tries to LOAD from -- <script src>
+   and <link href> pointing at http(s), space-separated, deduped. A plain
+   <a href> is navigation, not a resource, and is not counted. Public
+   because the rule is worth pinning in tests: the app CSP blocks these
+   silently, and this scan is what turns that silence into a log line. *)
+function OffOriginHosts(const Html: string): string;
+
 procedure SetJobRunner(Runner: TJobRunner);
 procedure SetPageGenerator(Gen: TPageGenerator);
 procedure SetTextGenerator(Gen: TTextGenerator);
@@ -95,14 +103,17 @@ function DesktopRoute(const Method, Doc, Query, Body: string;
 implementation
 
 uses
+  StrUtils, SyncObjs,
   PasClaw.Utils,
   PasClaw.JSON,
+  PasClaw.Logger,           { the off-origin warning when serving an app }
   PasClaw.Workspaces,
   PasClaw.Projects.Store,
   PasClaw.Apps,
   PasClaw.Apps.Runner,
   PasClaw.Desktop.Events,
   PasClaw.Config,           { cron entries + provider names for the read surface }
+  PasClaw.Suite,            { SeedSuite -- POST /v1/suite }
   PasClaw.Suite.Mail,       { the mail-sync action }
   PasClaw.Suite.Notes,      { the notes surface + note-save/note-delete }
   PasClaw.Memory.Facts,     { the memory surface -- what Brain shows }
@@ -504,6 +515,7 @@ begin
   Result := (Doc = '/v1/desktop/config')
          or (Doc = '/v1/desktop/state')
          or (Doc = '/v1/desktop/desktops')
+         or (Doc = '/v1/suite')
          or HasPrefix(Doc, '/v1/workspaces')
          or HasPrefix(Doc, '/v1/projects')
          or HasPrefix(Doc, '/v1/apps')
@@ -2148,6 +2160,121 @@ begin
   end;
 end;
 
+(* Warn -- once per file version -- when a served HTML document references
+   off-origin scripts or stylesheets.
+
+   Those references are dead on arrival: the CSP this unit serves apps
+   under has no off-origin allowance, so a CDN script or stylesheet is
+   dropped by the engine with nothing visible but the unstyled result.
+   The same file opened directly in a browser (no CSP header) looks
+   perfect, which makes the sandbox read as a rendering bug in PasClaw.
+
+   Only <script src> and <link href> are scanned: those two LOAD. A plain
+   <a href> to another site is navigation, not a resource, and must not
+   warn. Keyed on path + mtime so a rebuilt app warns afresh and a
+   reloaded one does not spam the log. *)
+var
+  GOffOriginWarned: TStringList = nil;
+  GOffOriginLock: TCriticalSection = nil;
+
+function OffOriginHosts(const Html: string): string;
+var
+  Lower, Tag: string;
+  P, TagEnd, U, HEnd: Integer;
+
+  { Record the host an attribute VALUE points at, when it points off the
+    page. Anchored to the value rather than searched for anywhere in the
+    tag, because the interesting shapes are exactly three and all sit at
+    its front: http://host, https://host, and the scheme-relative //host
+    -- which the browser resolves to the current scheme and the CSP
+    blocks like any other off-origin load, so the scan must see it too. }
+  procedure AddHostFromValue(const Value: string);
+  var
+    Q: Integer;
+    Host: string;
+  begin
+    if Copy(Value, 1, 7) = 'http://' then Q := 8
+    else if Copy(Value, 1, 8) = 'https://' then Q := 9
+    else if Copy(Value, 1, 2) = '//' then Q := 3
+    else Exit;
+    HEnd := Q;
+    while (HEnd <= Length(Value)) and
+          not CharInSet(Value[HEnd], ['/', '"', '''', '?', ' ', '>']) do
+      Inc(HEnd);
+    Host := Copy(Value, Q, HEnd - Q);
+    if Host = '' then Exit;
+    if Pos(' ' + Host + ' ', ' ' + Result + ' ') = 0 then
+    begin
+      if Result <> '' then Result := Result + ' ';
+      Result := Result + Host;
+    end;
+  end;
+
+  { The attribute's value, quotes skipped, from the position after its
+    equals sign. }
+  function ValueAt(const InTag: string; VStart: Integer): string;
+  begin
+    while (VStart <= Length(InTag)) and
+          CharInSet(InTag[VStart], [' ', '"', '''']) do
+      Inc(VStart);
+    Result := Copy(InTag, VStart, MaxInt);
+  end;
+
+begin
+  Result := '';
+  Lower := LowerCase(Html);
+  P := 1;
+  while True do
+  begin
+    P := PosEx('<', Lower, P);
+    if P = 0 then Break;
+    if (Copy(Lower, P, 7) = '<script') or (Copy(Lower, P, 5) = '<link') then
+    begin
+      TagEnd := PosEx('>', Lower, P);
+      if TagEnd = 0 then Break;
+      Tag := Copy(Lower, P, TagEnd - P + 1);
+      U := Pos('src=', Tag);
+      if U > 0 then AddHostFromValue(ValueAt(Tag, U + 4))
+      else
+      begin
+        U := Pos('href=', Tag);
+        if U > 0 then AddHostFromValue(ValueAt(Tag, U + 5));
+      end;
+      P := TagEnd + 1;
+    end
+    else
+      Inc(P);
+  end;
+end;
+
+procedure WarnOffOriginRefs(const Project, Path: string);
+var
+  Key, Hosts: string;
+begin
+  { Indy serves on worker threads; the warned-set is shared state. }
+  Key := Path + '|' + IntToStr(FileAge(Path));
+  GOffOriginLock.Enter;
+  try
+    if GOffOriginWarned = nil then
+    begin
+      GOffOriginWarned := TStringList.Create;
+      GOffOriginWarned.Sorted := True;
+      GOffOriginWarned.Duplicates := dupIgnore;
+    end;
+    if GOffOriginWarned.IndexOf(Key) >= 0 then Exit;
+    GOffOriginWarned.Add(Key);
+  finally
+    GOffOriginLock.Leave;
+  end;
+
+  Hosts := OffOriginHosts(ReadFileText(Path));
+  if Hosts <> '' then
+    LogWarn('apps: "%s" references off-origin scripts/styles (%s) -- the ' +
+            'sandbox CSP blocks these, so they will not load and the app ' +
+            'may render unstyled. Apps must be self-contained.',
+            [Project, Hosts]);
+end;
+
 { GET /apps/<project>/<path...> -- serve the app's own files. }
 function RouteAppAsset(const Method, Doc: string;
   out Resp: TDesktopResponse): Boolean;
@@ -2225,6 +2352,14 @@ begin
                         AppContentSecurityPolicy(Info.Kind) + #13#10 +
                         'X-Content-Type-Options: nosniff' + #13#10 +
                         'Referrer-Policy: no-referrer';
+
+    { The CSP above makes an off-origin reference FAIL SILENTLY: an app
+      styled from a CDN just renders bare, in every PasClaw viewer, while
+      the same file opened straight into a browser looks fine -- which
+      reads as "PasClaw is broken" when it is the sandbox doing its job.
+      Say so where the operator can see it (the Log window). }
+    if Pos('text/html', Resp.ContentType) > 0 then
+      WarnOffOriginRefs(Project, Full);
   finally
     Segs.Free;
   end;
@@ -2482,8 +2617,8 @@ end;
 function DesktopRoute(const Method, Doc, Query, Body: string;
   out Resp: TDesktopResponse): Boolean;
 var
-  M, StateBody, StateErr: string;
-  CurDesk, CntDesk, NewDesk: Integer;
+  M, StateBody, StateErr, SeedErr: string;
+  CurDesk, CntDesk, NewDesk, N: Integer;
   Root: TJsonObject;
 begin
   Reply(Resp, 404, 'application/json; charset=utf-8', '{"error":"not found"}');
@@ -2598,6 +2733,31 @@ begin
     Exit(True);
   end;
 
+  (* POST /v1/suite -- install the system suite (Notes, Calendar, Mail and
+     the rest) into the active workspace. The suite always existed, but
+     only behind `pasclaw project seed` -- a CLI command a desktop user
+     has no reason to know about, which made the whole suite invisible
+     from both desktop clients. Idempotent and additive, like the seeder
+     it fronts: existing projects are never touched. *)
+  if Doc = '/v1/suite' then
+  begin
+    if M <> 'POST' then
+    begin
+      ReplyErr(Resp, 405, 'method not allowed');
+      Exit(True);
+    end;
+    N := SeedSuite(SeedErr);
+    Root := TJsonObject.Create;
+    try
+      Root.PutInt('created', N);
+      if SeedErr <> '' then Root.PutStr('note', SeedErr);
+      ReplyJSON(Resp, 200, Root.ToJSON);
+    finally
+      Root.Free;
+    end;
+    Exit(True);
+  end;
+
   if HasPrefix(Doc, '/v1/workspaces') then
     Exit(RouteWorkspaces(M, Doc, Body, Resp));
 
@@ -2621,5 +2781,12 @@ begin
 
   Result := False;
 end;
+
+initialization
+  GOffOriginLock := TCriticalSection.Create;
+
+finalization
+  FreeAndNil(GOffOriginWarned);
+  FreeAndNil(GOffOriginLock);
 
 end.
