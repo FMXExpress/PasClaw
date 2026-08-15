@@ -710,6 +710,47 @@ leads. Provider-side tool search likewise — noted because PasClaw ships
 `tool_search` client-side, and if providers absorb that too, the pattern
 above repeats.
 
+## 41. The claw family: PasClaw's own lineage
+
+Twelve passes surveyed the field and never the family. The repo cites these
+projects 209 times — picoclaw 82, openclaw 70, hermes 32, nanobot 24,
+Odysseus 1 — making the source tree itself a primary source here.
+
+| Project | Identity [S] | What PasClaw demonstrably took [P] |
+|---|---|---|
+| **OpenClaw** | the category creator: local platform with messaging, voice, browser, system tools; 350K+ GitHub stars by Apr 2026 [S] | `/new` `/reset` `/think` semantics, `${VAR}` env-subst pattern, OTel `service.name` parity, config naming — cited at each site [P] |
+| **picoclaw** | the miniaturisation: Go, <10 MB RAM, sub-second boot, built for $10 hardware [S] | PasClaw *is* its Object Pascal port: tool surface, RRF `memory_search`, `ValidateSkillIdentifier`, SKILL.md loading, `max_tool_iterations: 20` subagent default [P] |
+| **nanobot** | the simplification: core agent in ~4 K lines, minimalism as auditability [S] | durable sessions design, SKILL.md convention, memory_search shape [P] |
+| **hermes-agent** | Nous Research, MIT, Feb 2026: a learning loop — evaluate each task, extract reusable patterns, store as Markdown skill files; 20+ messaging platforms; skills make similar tasks ~40% faster [S] | **both of PasClaw's flagship features**: lazy MCP reveal (progressive disclosure) and self-improving skills are labelled "Hermes-style" in the source [P] |
+| **Odysseus** | PewDiePie's self-hosted workspace, May 2026: chat, agents, Deep Research with cited reports, email, calendar, vector memory; MIT relicensed AGPL-3.0 [S] | the Suite/projects direction — "a self-hosted agent becomes useful to a normal person", cited in `Suite.pas` [P] |
+
+### What the family already has that the survey called gaps
+
+The sharpest finding of the pass: several of this survey's PasClaw gaps are
+not field-frontier features — the *family* has them.
+
+- **Living in messaging surfaces** (§34's gap): OpenClaw integrates
+  messaging apps natively; Hermes connects to 20+ platforms [S]. The
+  category PasClaw ported from treats this as table stakes.
+- **Deep research with cited reports** (the capability this very survey
+  struggled against): Odysseus ships it as a mode [S].
+- **Persistent background daemon** vs interactive process: Hermes runs as
+  one [S]; PasClaw's heartbeat is a step in that direction.
+
+### What the port dropped, kept, and added
+
+Dropped relative to OpenClaw: voice, browser automation, messaging
+residency. Kept from picoclaw/nanobot: the minimal tool surface, SKILL.md,
+RRF memory search, durable sessions. Added beyond the family: the
+FMX desktop Studio with accessibility, dual-compiler Delphi/FPC support,
+the relay provider, `--mode improve`, and SCARS failure mining — the last
+still unobserved anywhere, family included.
+
+The lineage also reframes the "where PasClaw leads" section: its two
+flagship inheritances (disclosure, self-improving skills) lead the *field*
+while being family traits — the claws are collectively ahead of the
+mainstream harnesses on exactly the features this survey found rare.
+
 ---
 
 ## Where PasClaw leads
@@ -844,6 +885,10 @@ tool already knows its own scope.
 - [OpenAI: conversation state](https://developers.openai.com/api/docs/guides/conversation-state)
 - [Anthropic: context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing)
 - [Claude memory tool guide](https://www.leoniemonigatti.com/blog/claude-memory-tool.html)
+- [PicoClaw: ultra-lightweight AI assistant on 10 MB RAM](https://www.cnx-software.com/2026/02/10/picoclaw-ultra-lightweight-personal-ai-assistant-run-on-just-10mb-of-ram/)
+- [OpenClaw vs Nanobot vs PicoClaw: technical comparison](https://medium.com/@somanathtv/openclaw-vs-nanobot-vs-picoclaw-a-brief-technical-comparison-for-ai-agent-builders-9d19089a414b)
+- [What Is Hermes Agent? Nous Research's learning-loop agent](https://kie.ai/blog/what-is-hermes-agent)
+- [Odysseus: PewDiePie's self-hosted AI workspace](https://www.mindstudio.ai/blog/what-is-odysseus-pewdiepie-open-source-ai-workspace)
 - [Relace: A Year of Fast Apply](https://relace.ai/blog/relace-apply-3)
 - [AI Agent Sandboxing in 2026: Docker, E2B, Firecracker, gVisor, Modal & Daytona Compared](https://amux.io/guides/ai-agent-sandboxing/)
 - [Cursor vs Claude Code vs Windsurf (Now Devin Desktop) 2026](https://www.shareuhack.com/en/posts/cursor-vs-claude-code-vs-windsurf-2026)
