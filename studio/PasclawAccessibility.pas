@@ -436,12 +436,47 @@ begin
   Result := S_FALSE;
 end;
 
+{ Depth-first search for the focused control anywhere below Root.
+
+  Immediate children are not enough. Studio nests every actionable control
+  under layouts, so the form root's direct children are containers that are
+  never themselves focused -- a child-index scan returns Null while an edit
+  or button genuinely has focus, and NVDA/Narrator lose the caret entirely.
+  (Codex P1 on #557.) }
+function FindFocusedDescendant(Root: TFmxObject): TControl;
+var
+  i: Integer;
+  Kid: TFmxObject;
+  Found: TControl;
+begin
+  Result := nil;
+  if Root = nil then Exit;
+  for i := 0 to Root.ChildrenCount - 1 do
+  begin
+    Kid := Root.Children[i];
+    if not (Kid is TControl) then Continue;
+    if not TControl(Kid).Visible then Continue;
+    if TControl(Kid).IsFocused then Exit(TControl(Kid));
+    Found := FindFocusedDescendant(Kid);
+    if Found <> nil then Exit(Found);
+  end;
+end;
+
 function TFmxAccessible.Get_accFocus(out pvarChild: OleVariant): HResult;
 var
   i: Integer;
-  C: TControl;
+  C, Focused: TControl;
+  Root: TFmxObject;
 begin
   pvarChild := Null;
+  if (FControl <> nil) and FControl.IsFocused then
+  begin
+    pvarChild := CHILDID_SELF;
+    Exit(S_OK);
+  end;
+
+  { A direct child answers as a child id, which is the cheapest form and the
+    one clients handle best. }
   for i := 1 to VisibleChildCount do
   begin
     C := ChildControl(i);
@@ -451,7 +486,17 @@ begin
       Exit(S_OK);
     end;
   end;
-  if (FControl <> nil) and FControl.IsFocused then pvarChild := CHILDID_SELF;
+
+  { Otherwise hand back a full object for the focused descendant. MSAA
+    allows pvarChild to carry an IDispatch precisely so a container can
+    point past its own child list. }
+  if FControl <> nil then Root := FControl else Root := FForm;
+  Focused := FindFocusedDescendant(Root);
+  if Focused <> nil then
+  begin
+    pvarChild := TFmxAccessible.Create(FForm, Focused) as IDispatch;
+    Exit(S_OK);
+  end;
   Result := S_OK;
 end;
 
@@ -487,12 +532,33 @@ var
   C: TControl;
 begin
   if not Resolve(varChild, C) then Exit(E_INVALIDARG);
-  if (C <> nil) and ((flagsSelect and SELFLAG_TAKEFOCUS) <> 0) and C.CanFocus then
+  if C = nil then Exit(S_FALSE);
+  Result := S_FALSE;
+  { TAKESELECTION is what a reader sends to move through a list; ignoring it
+    left arrow-key navigation dead for exactly the lists Studio navigates
+    with. Both flags can arrive together. }
+  if (flagsSelect and SELFLAG_TAKESELECTION) <> 0 then
+  begin
+    if C is TListBoxItem then
+    begin
+      if TListBoxItem(C).ListBox <> nil then
+        TListBoxItem(C).ListBox.ItemIndex := TListBoxItem(C).Index
+      else
+        TListBoxItem(C).IsSelected := True;
+      Result := S_OK;
+    end
+    else if C is TTabItem then
+    begin
+      if TTabItem(C).TabControl <> nil then
+        TTabItem(C).TabControl.ActiveTab := TTabItem(C);
+      Result := S_OK;
+    end;
+  end;
+  if ((flagsSelect and SELFLAG_TAKEFOCUS) <> 0) and C.CanFocus then
   begin
     C.SetFocus;
-    Exit(S_OK);
+    Result := S_OK;
   end;
-  Result := S_FALSE;
 end;
 
 function TFmxAccessible.accLocation(out pxLeft, pyTop, pcxWidth,
@@ -576,6 +642,21 @@ begin
   begin
     if TTabItem(C).TabControl <> nil then
       TTabItem(C).TabControl.ActiveTab := TTabItem(C);
+    Exit(S_OK);
+  end;
+  { List items were advertising a Press action that landed here and fell
+    through to S_FALSE. Studio drives session, file and config navigation
+    off list-item selection, so a reader could see the action, invoke it,
+    and get nothing. Select through the owning ListBox -- that is what a
+    mouse click does, and it is what fires the OnChange the UI listens to
+    -- then run the item's own OnClick if it has one. (Codex P1 on #557.) }
+  if C is TListBoxItem then
+  begin
+    if TListBoxItem(C).ListBox <> nil then
+      TListBoxItem(C).ListBox.ItemIndex := TListBoxItem(C).Index
+    else
+      TListBoxItem(C).IsSelected := True;
+    if Assigned(TListBoxItem(C).OnClick) then TListBoxItem(C).OnClick(C);
     Exit(S_OK);
   end;
   Result := S_FALSE;

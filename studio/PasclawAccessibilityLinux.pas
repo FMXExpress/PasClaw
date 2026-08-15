@@ -116,6 +116,7 @@ const
   ATSPI_APP_ROOT_PATH = '/org/a11y/atspi/accessible/root';
 
   DBUS_SO = 'libdbus-1.so.3';
+  DBUS_TYPE_STRING = Ord('s');   { the wire type code, as libdbus defines it }
 
 type
   PDBusConnection = Pointer;
@@ -133,8 +134,13 @@ type
                                   TimeoutMs: Integer; Err: PDBusError): PDBusMessage; cdecl;
   TDBusMessageUnref    = procedure(Msg: PDBusMessage); cdecl;
   TDBusConnectionUnref = procedure(Conn: PDBusConnection); cdecl;
-  TDBusMessageGetArgs  = function(Msg: PDBusMessage; Err: PDBusError;
-                                  FirstType: Integer): Integer; cdecl varargs;
+  { The message iterator, NOT dbus_message_get_args. get_args is varargs,
+    which is where a mistake becomes a silent marshalling failure; the
+    iterator is ordinary C and the compiler checks every argument. This is
+    the call the first version flinched from and left the unit inert over. }
+  TDBusMessageIterInit = function(Msg: PDBusMessage; Iter: Pointer): LongBool; cdecl;
+  TDBusIterGetArgType  = function(Iter: Pointer): Integer; cdecl;
+  TDBusIterGetBasic    = procedure(Iter: Pointer; Value: Pointer); cdecl;
 
 var
   GLib: Pointer = nil;
@@ -144,6 +150,9 @@ var
   dbus_connection_send_with_reply_and_block: TDBusConnSendBlock = nil;
   dbus_message_unref: TDBusMessageUnref = nil;
   dbus_connection_unref: TDBusConnectionUnref = nil;
+  dbus_message_iter_init: TDBusMessageIterInit = nil;
+  dbus_message_iter_get_arg_type: TDBusIterGetArgType = nil;
+  dbus_message_iter_get_basic: TDBusIterGetBasic = nil;
 
   GConn: PDBusConnection = nil;
   { Object path -> control. AT-SPI addresses every element by path, so this
@@ -276,9 +285,15 @@ begin
     dlsym(GLib, 'dbus_connection_send_with_reply_and_block');
   @dbus_message_unref    := dlsym(GLib, 'dbus_message_unref');
   @dbus_connection_unref := dlsym(GLib, 'dbus_connection_unref');
+  @dbus_message_iter_init := dlsym(GLib, 'dbus_message_iter_init');
+  @dbus_message_iter_get_arg_type := dlsym(GLib, 'dbus_message_iter_get_arg_type');
+  @dbus_message_iter_get_basic := dlsym(GLib, 'dbus_message_iter_get_basic');
   Result := Assigned(dbus_bus_get) and Assigned(dbus_connection_open)
         and Assigned(dbus_message_new_method_call)
-        and Assigned(dbus_connection_send_with_reply_and_block);
+        and Assigned(dbus_connection_send_with_reply_and_block)
+        and Assigned(dbus_message_iter_init)
+        and Assigned(dbus_message_iter_get_arg_type)
+        and Assigned(dbus_message_iter_get_basic);
   if not Result then
   begin
     dlclose(GLib);
@@ -297,6 +312,12 @@ const
 var
   Session: PDBusConnection;
   Msg, Reply: PDBusMessage;
+  { DBusMessageIter is an opaque struct the caller allocates. Its real size
+    is 9 pointers plus padding in every libdbus release; over-allocating is
+    harmless and under-allocating corrupts the stack, so this is generous
+    on purpose. }
+  Iter: array[0..31] of NativeUInt;
+  Addr: PAnsiChar;
 begin
   Result := nil;
   Session := dbus_bus_get(DBUS_BUS_SESSION, nil);
@@ -308,11 +329,15 @@ begin
     Reply := dbus_connection_send_with_reply_and_block(Session, Msg, 2000, nil);
     if Reply = nil then Exit;   { no a11y bus -- accessibility is off }
     try
-      { The reply carries a single string: the bus address to open. Reading
-        it needs dbus_message_get_args with DBUS_TYPE_STRING, which is the
-        one varargs call in this binding and the piece most likely to be
-        wrong without a compiler to check it. }
-      Result := nil;
+      { Single string argument: the address to open. Read through the
+        iterator rather than the varargs get_args -- same result, and every
+        argument is compiler-checked. }
+      if not dbus_message_iter_init(Reply, @Iter) then Exit;
+      if dbus_message_iter_get_arg_type(@Iter) <> DBUS_TYPE_STRING then Exit;
+      Addr := nil;
+      dbus_message_iter_get_basic(@Iter, @Addr);
+      if (Addr = nil) or (Addr^ = #0) then Exit;
+      Result := dbus_connection_open(Addr, nil);
     finally
       dbus_message_unref(Reply);
     end;

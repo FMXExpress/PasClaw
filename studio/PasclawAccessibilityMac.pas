@@ -416,17 +416,42 @@ end;
 
 { ---------------- install / uninstall ---------------- }
 
+(* Attach Root to the window's content view, then announce it.
+
+   The first version only retained Root in a dictionary and posted a
+   creation notification, which does nothing to make the object reachable:
+   VoiceOver walks window -> contentView -> accessibilityChildren, and
+   nothing in that chain returned our root, so it still found only the
+   opaque FMX view. A notification advertises an element that is already in
+   the hierarchy; it cannot put one there. (Codex P1 on #557.)
+
+   setAccessibilityChildren: on the content view is the attachment point --
+   it replaces what the view would otherwise report, which is exactly what
+   we want, because what it otherwise reports is nothing useful. *)
 procedure InstallMacAccessibility(Form: TCommonCustomForm);
 var
   Root: TPasclawAXElement;
+  Win: NSWindow;
+  View: NSView;
+  Kids: NSMutableArray;
 begin
   if Form = nil then Exit;
   if GRoots.ContainsKey(Form) then Exit;   { idempotent, as on Windows }
+
+  Win := WindowHandleToPlatform(Form.Handle).Wnd;
+  if Win = nil then Exit;
+  View := Win.contentView;
+  if View = nil then Exit;
+
   Root := TPasclawAXElement.Create(Form, nil);
   GRoots.Add(Form, Root);
-  { AppKit reaches the tree by asking the window's content view for its
-    accessibility children, and the FMX view answers for itself. Publishing
-    the root here is what puts our elements in front of that default. }
+
+  Kids := TNSMutableArray.Create;
+  Kids.addObject(Root.GetObjectID);
+  View.setAccessibilityChildren(Kids);
+
+  { Only now is the announcement meaningful -- the element it names is
+    reachable from the window. }
   NSAccessibilityPostNotification(Root.GetObjectID,
     StrToNSStr(NSAccessibilityCreatedNotification));
 end;
@@ -434,11 +459,21 @@ end;
 procedure UninstallMacAccessibility(Form: TCommonCustomForm);
 var
   Root: TPasclawAXElement;
+  Win: NSWindow;
+  View: NSView;
 begin
   if Form = nil then Exit;
   if not GRoots.TryGetValue(Form, Root) then Exit;
   NSAccessibilityPostNotification(Root.GetObjectID,
     StrToNSStr(NSAccessibilityUIElementDestroyedNotification));
+  { Detach before freeing, or the view keeps a reference to an element whose
+    Delphi side is gone. }
+  Win := WindowHandleToPlatform(Form.Handle).Wnd;
+  if Win <> nil then
+  begin
+    View := Win.contentView;
+    if View <> nil then View.setAccessibilityChildren(nil);
+  end;
   GRoots.Remove(Form);   { owns the value; the dictionary frees it }
 end;
 
