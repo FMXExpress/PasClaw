@@ -751,6 +751,38 @@ flagship inheritances (disclosure, self-improving skills) lead the *field*
 while being family traits — the claws are collectively ahead of the
 mainstream harnesses on exactly the features this survey found rare.
 
+## 42. The extended claw roster
+
+Pass 12 mapped the five members PasClaw's comments cite; the ecosystem is
+roughly twelve, descended from one viral project, and each divergence is a
+design bet the survey can read as a feature statement.
+
+| Claw | The bet [S] | Feature no other member leads on [S] | PasClaw relation [P] |
+|---|---|---|---|
+| **Clawdbot** | the viral origin (430K+ LOC); "Clawdbot/Moltbot" later drew a public security warning about exposing "your entire digital life" | first-mover breadth | the family's cautionary tale — §7's layers exist because of failures like this |
+| **ZeroClaw** | Rust rewrite, **3.4 MB binary**, 22+ providers incl. local | smallest full runtime | kin: PasClaw's single ~6 MB native binary is family-typical, unlike Node/Python mainstream harnesses |
+| **NanoClaw** | opinionated minimalism on Anthropic's Agent SDK: one LLM, one platform (WhatsApp/Telegram), SQLite — **container per agent** instead of permission checks | isolation-as-architecture | the family's answer to §8's worktree-isolation gap |
+| **IronClaw** | NEAR AI, zero-trust: **WASM sandbox per tool**, capability permissions, **TEE-backed credential vault** — the model never sees raw secrets | strongest security posture in the family | dominates PasClaw's secret gate; §17's "beyond Docker" exists in-family |
+| **Moltis** | local-first gateway platform; zero unsafe code, 2,300+ tests | code-quality-as-feature | closest in spirit to PasClaw's test discipline |
+| **TinyClaw** | the odd one out: **multi-agent teams** (coder/writer/reviewer chains, fan-out), file-based message queue, live terminal dashboard | agent-to-agent collaboration | the family's answer to §6's "agent-to-agent messaging ❌" |
+| MicroClaw, NullClaw | Rust runtime contenders in the showdown coverage | — | unexamined; roster completeness only |
+
+### What the roster changes
+
+Three survey gaps previously marked against the *field* turn out to be
+solved inside the family: per-agent isolation (NanoClaw's containers),
+agent-to-agent messaging (TinyClaw's queue), and post-Docker sandboxing
+(IronClaw's WASM + TEE). Combined with pass 12's finding (messaging
+residency and deep research are family table stakes), the pattern is
+consistent: **PasClaw's most reachable upgrades are family imports, not
+field imports** — designs already proven at claw scale, in claw-sized
+codebases, by projects whose constraints match PasClaw's own.
+
+The security arc also completes: the family began with Clawdbot's
+everything-connected exposure warning and answered it with NanoClaw's
+containers and IronClaw's TEE — the same journey §7/§17/§22 sketch for
+PasClaw, with the destination already built by relatives.
+
 ---
 
 ## Where PasClaw leads
@@ -889,6 +921,10 @@ tool already knows its own scope.
 - [OpenClaw vs Nanobot vs PicoClaw: technical comparison](https://medium.com/@somanathtv/openclaw-vs-nanobot-vs-picoclaw-a-brief-technical-comparison-for-ai-agent-builders-9d19089a414b)
 - [What Is Hermes Agent? Nous Research's learning-loop agent](https://kie.ai/blog/what-is-hermes-agent)
 - [Odysseus: PewDiePie's self-hosted AI workspace](https://www.mindstudio.ai/blog/what-is-odysseus-pewdiepie-open-source-ai-workspace)
+- [The Claw ecosystem: 12 personal agents, dissected](https://michaellivs.com/blog/personal-ai-agents-compared/)
+- [OpenClaw alternatives: NanoClaw, ZeroClaw, Moltis compared](https://www.aimagicx.com/blog/openclaw-alternatives-comparison-2026)
+- [Rust agent runtime showdown: MicroClaw vs ZeroClaw vs Moltis](https://medium.com/@everettjf/rust-agent-runtime-showdown-microclaw-vs-zeroclaw-vs-moltis-df1ecb85c676)
+- [Resecurity: Clawdbot/Moltbot exposure warning](https://www.resecurity.com/blog/article/clawdbot-moltbot-the-autonomous-ai-butler-that-could-expose-your-entire-digital-life)
 - [Relace: A Year of Fast Apply](https://relace.ai/blog/relace-apply-3)
 - [AI Agent Sandboxing in 2026: Docker, E2B, Firecracker, gVisor, Modal & Daytona Compared](https://amux.io/guides/ai-agent-sandboxing/)
 - [Cursor vs Claude Code vs Windsurf (Now Devin Desktop) 2026](https://www.shareuhack.com/en/posts/cursor-vs-claude-code-vs-windsurf-2026)
