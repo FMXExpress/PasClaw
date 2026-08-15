@@ -6,7 +6,8 @@ uses
   FMX.Skia,
   MasterDetail in 'MasterDetail.pas' {MasterDetailForm},
   PasclawAccessibility in 'PasclawAccessibility.pas',
-  PasclawAccessibilityMac in 'PasclawAccessibilityMac.pas';
+  PasclawAccessibilityMac in 'PasclawAccessibilityMac.pas',
+  PasclawAccessibilityLinux in 'PasclawAccessibilityLinux.pas';
 
 {$R *.res}
 
@@ -18,5 +19,6 @@ begin
     native window, and the handle does not exist until the form is built. }
   InstallAccessibility(MasterDetailForm);
   InstallMacAccessibility(MasterDetailForm);
+  InstallLinuxAccessibility(MasterDetailForm);
   Application.Run;
 end.
