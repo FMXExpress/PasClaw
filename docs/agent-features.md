@@ -757,15 +757,40 @@ Pass 12 mapped the five members PasClaw's comments cite; the ecosystem is
 roughly twelve, descended from one viral project, and each divergence is a
 design bet the survey can read as a feature statement.
 
+### A correction from pass 14
+
+Pass 13 tabled Clawdbot and OpenClaw as separate projects. They are one:
+**Clawdbot became Moltbot became OpenClaw — two renames in under five
+weeks** [S], with the security advisory attaching to the earlier names.
+The row below is merged accordingly; the survey keeps the error visible
+rather than silently rewriting it. Star counts disagree across sources
+(145K+ in one week, 217K, 350K+) [S] — recorded as a range, not a number.
+
 | Claw | The bet [S] | Feature no other member leads on [S] | PasClaw relation [P] |
 |---|---|---|---|
-| **Clawdbot** | the viral origin (430K+ LOC); "Clawdbot/Moltbot" later drew a public security warning about exposing "your entire digital life" | first-mover breadth | the family's cautionary tale — §7's layers exist because of failures like this |
+| **OpenClaw** (né Clawdbot, then Moltbot) | the viral origin, built on the minimal 4-tool **Pi agent framework**; 25 tools, 20+ channels, device nodes (camera/GPS/screen), canvas, voice wake; drew the "digital backdoor" security advisories under its old names | first-mover breadth | §41's inheritance rows; also the family's cautionary tale — §7's layers exist because of failures like this |
 | **ZeroClaw** | Rust rewrite, **3.4 MB binary**, 22+ providers incl. local | smallest full runtime | kin: PasClaw's single ~6 MB native binary is family-typical, unlike Node/Python mainstream harnesses |
 | **NanoClaw** | opinionated minimalism on Anthropic's Agent SDK: one LLM, one platform (WhatsApp/Telegram), SQLite — **container per agent** instead of permission checks | isolation-as-architecture | the family's answer to §8's worktree-isolation gap |
 | **IronClaw** | NEAR AI, zero-trust: **WASM sandbox per tool**, capability permissions, **TEE-backed credential vault** — the model never sees raw secrets | strongest security posture in the family | dominates PasClaw's secret gate; §17's "beyond Docker" exists in-family |
 | **Moltis** | local-first gateway platform; zero unsafe code, 2,300+ tests | code-quality-as-feature | closest in spirit to PasClaw's test discipline |
 | **TinyClaw** | the odd one out: **multi-agent teams** (coder/writer/reviewer chains, fan-out), file-based message queue, live terminal dashboard | agent-to-agent collaboration | the family's answer to §6's "agent-to-agent messaging ❌" |
-| MicroClaw, NullClaw | Rust runtime contenders in the showdown coverage | — | unexamined; roster completeness only |
+| **MimiClaw** | C on a $5 ESP32-S3, **no OS**: network I/O on core 0, agent loop on core 1, 0.5 W, Telegram over WiFi, LLM-scheduled cron | the smallest hardware floor in the family | kin to PasClaw's cron_tool; proof the claw pattern fits a microcontroller |
+| **Spacebot** | Rust for **teams**: five process types where the user-facing Channel **never executes tools**, typed graph memory (8 node/5 edge types), RRF hybrid search, 50+ concurrent users | privileged/quarantined separation, in-family | the family's fourth answered survey-gap: §23's dual-LLM shape, and a data point for the RBAC open question |
+| **NullClaw** | Zig, **678 KB static binary**, ~1 MB RAM on $5 ARM boards, GPIO/STM32 | smallest binary | beyond even picoclaw's floor |
+| **ZeptoClaw** | Rust, 4 MB, size-optimised | — | roster completeness |
+| MicroClaw | Rust runtime contender | — | thin sourcing; named only |
+
+Adjacent but not a claw: **Agent Zero** — 18K stars, plugin hub with 100+
+community extensions, multi-agent hierarchy in per-agent Docker sandboxes,
+and a Skills framework that replaced its Instruments [S]. Its plugin hub is
+the marketplace row (§4) the claws mostly lack.
+
+Roster enrichments from the deep read [S]: ZeroClaw auto-detects **four
+sandbox backends** (Docker, Firejail, Bubblewrap, Landlock) — a self-hosted
+ladder for §17 without microVMs; IronClaw adds prompt-injection detection
+and pgvector memory; NanoClaw runs on $20/month subscription auth rather
+than API tokens; TinyClaw has zero LLM-SDK dependencies (CLI call + stdout
+parsing).
 
 ### What the roster changes
 
@@ -925,6 +950,9 @@ tool already knows its own scope.
 - [OpenClaw alternatives: NanoClaw, ZeroClaw, Moltis compared](https://www.aimagicx.com/blog/openclaw-alternatives-comparison-2026)
 - [Rust agent runtime showdown: MicroClaw vs ZeroClaw vs Moltis](https://medium.com/@everettjf/rust-agent-runtime-showdown-microclaw-vs-zeroclaw-vs-moltis-df1ecb85c676)
 - [Resecurity: Clawdbot/Moltbot exposure warning](https://www.resecurity.com/blog/article/clawdbot-moltbot-the-autonomous-ai-butler-that-could-expose-your-entire-digital-life)
+- [Clawdbot → Moltbot → OpenClaw: why the name changed twice](https://lumadock.com/blog/clawdbot-moltbot-openclaw-rebrand)
+- [Agent Pi: the minimal coding agent powering OpenClaw](https://shivamagarwal7.medium.com/agentic-ai-pi-anatomy-of-a-minimal-coding-agent-powering-openclaw-5ecd4dd6b440)
+- [Agent Zero review: plugin hub, Docker multi-agent](https://apidog.com/blog/agent-zero-ai-framework-review/)
 - [Relace: A Year of Fast Apply](https://relace.ai/blog/relace-apply-3)
 - [AI Agent Sandboxing in 2026: Docker, E2B, Firecracker, gVisor, Modal & Daytona Compared](https://amux.io/guides/ai-agent-sandboxing/)
 - [Cursor vs Claude Code vs Windsurf (Now Devin Desktop) 2026](https://www.shareuhack.com/en/posts/cursor-vs-claude-code-vs-windsurf-2026)
