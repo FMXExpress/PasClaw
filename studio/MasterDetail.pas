@@ -10,7 +10,8 @@ uses
   FMX.Types, FMX.Controls, FMX.Forms,
   FMX.Platform, FMX.Graphics, FMX.Dialogs, FMX.StdCtrls, FMX.Layouts, FMX.ListBox,
   FMX.Memo, FMX.Edit, FMX.TabControl, FMX.Controls.Presentation,
-  FMX.ScrollBox, FMX.MultiView, FMX.Objects;
+  FMX.ScrollBox, FMX.MultiView, FMX.Objects,
+  PasclawAccessibility;
 
 type
   TChatTurn = record
@@ -1630,6 +1631,8 @@ end;
 
 destructor TMasterDetailForm.Destroy;
 begin
+  { Drop the window subclass before the handle goes away. }
+  UninstallAccessibility(Self);
   if FRelayWorkerTimer <> nil then
     FRelayWorkerTimer.Enabled := False;
   if FRelayWorkerProcessHandle <> 0 then

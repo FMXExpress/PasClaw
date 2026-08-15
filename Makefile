@@ -335,8 +335,12 @@ test-read-file-encoding: | $(BUILDDIR)
 # studio/ (it needs FMX), so nothing else in this repo checks that file --
 # this catches the declaration-shape and comment errors that have actually
 # broken the dcc64 build, without resolving identifiers.
+# Every studio unit, not just MasterDetail. FPC cannot compile FMX, so this
+# linter is the ONLY automated gate studio/ has -- and it was pinned to one
+# filename, which meant a new unit was born unchecked and `make lint-studio`
+# reported green on a file it never opened.
 lint-studio:
-	@python3 scripts/lint-studio.py studio/MasterDetail.pas
+	@for f in studio/*.pas; do python3 scripts/lint-studio.py "$$f" || exit 1; done
 	@python3 scripts/gen-studio-icons.py --check
 	@python3 scripts/retone-light.py --check
 
