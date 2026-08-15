@@ -617,6 +617,61 @@ Declarative agent packaging (custom GPTs, Copilot declarative manifests,
 agents.yaml) found only incidental sourcing this pass and stays a lead, not
 a section.
 
+## 37. Reasoning controls
+
+A harness feature category the survey missed although PasClaw ships one.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Thinking budget: max internal reasoning tokens per request | Anthropic budget_tokens, Google thinking_budget, xAI reasoning_mode [S] | ⚠️ `--thinking low\|medium\|high` maps to provider knobs [P] |
+| **Effort parameter replacing token counts** (low/medium/high/max + adaptive) | Opus 4.6+ adaptive thinking; OpenAI reasoning_effort [S] | ⚠️ same three-level flag — aligned shape, no adaptive/max [P] |
+| Provider divergence the harness must abstract | four different mechanisms across vendors [S] | ✅ one flag over all providers [P] |
+| **Parameter deprecation as a moving target** (budget_tokens *rejected* on 4.6+) | [S] | ⚠️ provider catalog + model discovery exist; no deprecation tracking [P] |
+| Thinking billed at output rate, trace not returned (500 visible tokens can bill 2–3 K) | [S] | ❌ stats do not separate thinking tokens |
+| Effort-tier routing (routine → low, hard → high) | budgeting guidance [S] | ⚠️ auto-router picks models, not effort [P] |
+
+The last row joins the tier-routing family from pass 8: PasClaw knows which
+work is routine (cron, background) and never lowers effort for it, just as
+it never routes it to the half-price tiers.
+
+## 38. Agentic commerce & payments
+
+Pass 4 recorded AP2 in one row; the space has since become a standards race
+with real governance.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| **x402**: HTTP 402 revived for machine-to-machine stablecoin micropayments | Coinbase-created; Linux Foundation governance; 40-member foundation incl. Visa, Mastercard, Amex, Stripe, AWS, Google, Shopify, Cloudflare [S] | ❌ |
+| **ACP**: standardised agent↔merchant checkout | OpenAI + Stripe; live in ChatGPT Instant Checkout; Shopify/PayPal integrating [S] | ❌ |
+| AP2: payment authorization with spend mandates | Google lineage, layered on A2A [S] | ❌ |
+| Machine Payments Protocol on payment-purpose chain | Stripe + Paradigm's Tempo (Mar 2026) [S] | ❌ |
+| Agent pays for API access per-call | x402's core use [S] | ❌ — though a self-hosted agent buying its own API access is the natural fit |
+
+No ⚠️ anywhere: PasClaw has nothing in this category, and for a personal
+agent that may be right — but x402 under neutral governance with every card
+network aboard is infrastructure, not hype, and "agent pays for its own
+tool calls" is the first commerce feature a self-hosted harness would want.
+
+## 39. Skills as an open standard — an upgrade for an old row
+
+Pass 2 recorded "skill bundles" via the Microsoft framework. The picture
+now: Anthropic released **Agent Skills as an open standard** (Dec 2025) —
+a folder with SKILL.md, YAML name/description metadata plus instructions —
+adopted by 40+ tools including Codex, Gemini CLI, Copilot, Cursor [S].
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| SKILL.md folder format, YAML frontmatter | the open standard [S] | ✅ PasClaw skills are already SKILL.md + YAML name/description — same shape, compatibility unverified against the spec [P] |
+| Cross-platform portability of one skill | 40+ tools [S] | ⚠️ if the format matches, PasClaw skills travel; untested |
+| Skill security research: registry supply-chain attacks, spec-violation fuzzing | SKILL.md supply-chain paper, SkillTester, semantic fuzzing [S] | ❌ skills load without provenance checks [P] |
+
+The compatibility row is the cheapest possible win found in ten passes: if
+PasClaw's existing SKILL.md dialect parses under the open spec, it inherits
+a 40-tool ecosystem for the cost of a conformance check.
+
+Tool-action reliability patterns (idempotency keys, compensation) found no
+direct sourcing beyond MCP's idempotentHint and stay a lead.
+
 ---
 
 ## Where PasClaw leads
@@ -740,6 +795,12 @@ tool already knows its own scope.
 - [llms.txt explained: spec, adoption, honest guide](https://codersera.com/blog/llms-txt-complete-guide-2026/)
 - [Jina Reader vs Firecrawl for web-LLM extraction](https://blog.apify.com/jina-ai-vs-firecrawl/)
 - [Glean connector framework](https://docs.glean.com/connectors/connectors-power-glean)
+- [Reasoning Effort: Cost vs Quality Benchmarks 2026](https://www.digitalapplied.com/blog/reasoning-effort-cost-vs-quality-benchmarks-2026)
+- [Reasoning-Effort Budgeting (thinking tokens as a line item)](https://tianpan.co/blog/2026-04-27-reasoning-effort-budgeting-thinking-token-line-item)
+- [Agentic payments protocols compared: MPP, ACP, AP2, x402](https://www.crossmint.com/learn/agentic-payments-protocols-compared)
+- [x402 standards body under Linux Foundation](https://www.coindesk.com/business/2026/07/16/ai-payments-have-a-new-open-standards-body-its-aim-is-to-reinvent-the-internet)
+- [Agent Skills specification](https://github.com/agentskills/agentskills)
+- [Under the Hood of SKILL.md: supply-chain attacks](https://arxiv.org/pdf/2605.11418)
 - [Relace: A Year of Fast Apply](https://relace.ai/blog/relace-apply-3)
 - [AI Agent Sandboxing in 2026: Docker, E2B, Firecracker, gVisor, Modal & Daytona Compared](https://amux.io/guides/ai-agent-sandboxing/)
 - [Cursor vs Claude Code vs Windsurf (Now Devin Desktop) 2026](https://www.shareuhack.com/en/posts/cursor-vs-claude-code-vs-windsurf-2026)
