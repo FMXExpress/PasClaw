@@ -9,9 +9,11 @@
   Six built-ins:
 
     stock       TConfig.Create's exact defaults. Adopted the bench-
-                grounded lean-edit shape (bench/swe/README.md): web_fetch,
-                vault, and memory_fetch OFF out-of-box (operators turn
-                them on via onboarding when they actually use them); the
+                grounded lean-edit shape (bench/swe/README.md): vault OFF
+                out-of-box (operators turn it on via onboarding when they
+                actually use it), web_fetch and the memory_fetch it gates
+                ON (TConfig.Create sets WebFetchEnabled := True, and
+                Profile_Stock carries "web_fetch_enabled":true); the
                 five zero-prompt-cost behavioral toggles (checkpoints,
                 stats, 1h prompt cache, distiller, auto-router) ON by
                 default. orient_task_aware is OFF by default (whole-file

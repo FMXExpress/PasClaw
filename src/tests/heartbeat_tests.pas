@@ -35,6 +35,7 @@ uses
   PasClaw.Providers.Types,
   PasClaw.Providers.Intf,
   PasClaw.Tools.Registry,
+  PasClaw.Tools.ToolLoop,
   PasClaw.Heartbeat;
 
 procedure Fail_(const Msg: string);
@@ -216,7 +217,11 @@ begin
     try
       AssertTrue(HB.TickOnce, 'non-empty body -> TickOnce returns True');
       AssertTrue(P.CallCount = 1, 'exactly one provider call');
-      AssertEqStr(P.LastUserMsg, 'check the build status briefly',
+      { The tool loop appends a turn clock to the outbound copy, so the
+        provider legitimately sees `body + clock`. Strip through
+        StripTurnClock rather than matching the stamp here -- the format
+        has one owner and a test that respells it rots when that moves. }
+      AssertEqStr(StripTurnClock(P.LastUserMsg), 'check the build status briefly',
                   'user message body equals the file body');
     finally
       HB.Free;

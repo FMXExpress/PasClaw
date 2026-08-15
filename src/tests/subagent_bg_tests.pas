@@ -118,7 +118,11 @@ begin
   for i := High(Messages) downto 0 do
     if Messages[i].Role = mrUser then
     begin
-      UserText := Messages[i].Content;
+      { Drop the turn clock the tool loop appends to the outbound copy.
+        These tests assert on the TASK the job ran, not on the transport
+        decoration around it, and stripping here fixes every ECHO[...]
+        assertion in one place instead of five. }
+      UserText := StripTurnClock(Messages[i].Content);
       Break;
     end;
   Result.Content      := 'ECHO[' + UserText + ']';

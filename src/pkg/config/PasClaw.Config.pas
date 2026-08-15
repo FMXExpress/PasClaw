@@ -656,6 +656,14 @@ type
        the default is now on. Onboarding asks (default Y); operators
        who don't want outbound HTTP from the agent flip it off. *)
     WebFetchEnabled:   Boolean;
+    (* The profile name LoadConfig actually resolved and applied, or ''
+       when no layer named one. Runtime-derived, never read from or
+       written to config.json -- FromJSON does not touch it. Exists so
+       callers that need to know what THIS process is running under
+       (the session store stamping a new session, the gateway, a UI
+       showing the active profile) read one answer instead of
+       re-walking the precedence chain and drifting from it. *)
+    ProfileName:       string;
     (* OFF by default: when True, the model gets a `cron` tool that can
        list/add/remove scheduled jobs by editing config.json's crons[].
        Bounded by design -- a cron entry only runs an EXISTING operator-
@@ -1161,6 +1169,7 @@ begin
   PromptCache.Enabled  := True;  { default-on; see TPromptCacheConfig comment }
   PromptCache.TTL      := '1h';  { 1h cache hits well across back-to-back runs (bench/swe/results/ablation.md). 5m was the historical default; 1h is one of the six zero-prompt-cost behavioral toggles the bench identified as a free upgrade. }
   VaultToolsEnabled    := False; { off by default per the bench-grounded "stock = lean-edit shape" verdict (bench/swe/README.md). Vault entries are never called across the bench's 45+ cells -- the model has them as training data. Onboarding asks (default Y for operators who DO use the vault). }
+  ProfileName          := '';    { filled in by LoadConfig once a profile's layers apply }
   WebFetchEnabled      := True;  { on by default: the tool clearly documents that it returns readable plain text (HTML tags stripped, entities decoded) capped at max_chars (default 50000, save_to bypasses), so the model knows what it gets -- and a "read this URL" task shouldn't have to fall back to hand-rolled shell curl + HTML scraping. Also enables memory_fetch (RegisterMemoryFetchTool is gated on EnableWebFetch in NewBuiltinRegistry). Onboarding asks; operators wanting no outbound HTTP from the agent set web_fetch_enabled: false. }
   FastModel            := '';    { empty = resolve one; see TConfig.FastModel }
   CronToolEnabled      := False; { off by default -- model-scheduled background jobs are an opt-in autonomy step (runs existing skills only). }
@@ -2450,6 +2459,10 @@ begin
     begin
       if ResolveProfileBodies(GetHome, ProfileName, Bodies, PErr) then
       begin
+        { Only claim the profile once its layers actually applied -- an
+          unknown name falls back to defaults + config.json, and reporting
+          it as active would make the session stamp a lie. }
+        Result.ProfileName := ProfileName;
         for i := 0 to High(Bodies) do
         begin
           B := ExpandEnvVarsInJSON(Bodies[i]);

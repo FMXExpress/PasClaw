@@ -25,6 +25,7 @@ program session_stats_tests;
 uses
   SysUtils,
   PasClaw.Config,
+  PasClaw.Providers.Types,
   PasClaw.Session.Store;
 
 procedure Fail_(const Msg: string);
@@ -297,8 +298,72 @@ begin
   end;
 end;
 
+procedure TestProfileRoundTrip;
+{ TSessionMeta.Profile persists and PeekSessionProfile reads it back
+  WITHOUT loading the transcript -- the resume path calls Peek before
+  LoadConfig, so a regression here silently drops a session back to the
+  ambient profile instead of the one it was created under. }
+var
+  Id: string;
+  S1, S2: TSession;
+  M: TMessage;
+begin
+  Id := 'profile-roundtrip-test-' + IntToStr(Random(MaxInt));
+  S1 := TSession.Create(Id);
+  try
+    S1.Meta.Profile := 'security';
+    { A message body proves Peek is not just reading a one-line file. }
+    FillChar(M, SizeOf(M), 0);
+    M.Role    := mrUser;
+    M.Content := 'hello';
+    SetLength(S1.Messages, 1);
+    S1.Messages[0] := M;
+    S1.Save;
+  finally
+    S1.Free;
+  end;
+
+  S2 := TSession.Create(Id);
+  try
+    AssertTrue(S2.MetaExists, 'session reloaded');
+    AssertTrue(S2.Meta.Profile = 'security', 'profile survives round trip');
+  finally
+    S2.Free;
+  end;
+
+  AssertTrue(PeekSessionProfile(Id) = 'security',
+             'PeekSessionProfile reads the stored profile');
+  AssertTrue(PeekSessionProfile('no-such-session-id-here') = '',
+             'PeekSessionProfile is empty for a missing session');
+  AssertTrue(PeekSessionProfile('../escape') = '',
+             'PeekSessionProfile refuses an unsafe id');
+
+  try DeleteFile(SessionPath(Id)); except end;
+end;
+
+procedure TestProfileAbsentByDefault;
+{ A session created without a profile reports '' rather than inventing
+  one -- that empty string is what makes LoadConfig fall through to its
+  own precedence chain. }
+var
+  Id: string;
+  S: TSession;
+begin
+  Id := 'profile-absent-test-' + IntToStr(Random(MaxInt));
+  S := TSession.Create(Id);
+  try
+    S.Save;
+  finally
+    S.Free;
+  end;
+  AssertTrue(PeekSessionProfile(Id) = '', 'no profile stamped => empty');
+  try DeleteFile(SessionPath(Id)); except end;
+end;
+
 begin
   Randomize;
+  TestProfileRoundTrip;
+  TestProfileAbsentByDefault;
   TestStatsRoundTrip;
   TestEmptyStatsOmitted;
   TestAccumulateTurnStatsAddsCorrectly;

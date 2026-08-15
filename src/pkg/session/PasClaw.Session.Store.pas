@@ -115,6 +115,7 @@ type
     Title:                string;     { auto-derived from first user turn if empty }
     Model:                string;     { last model used }
     Provider:             string;     { last provider name }
+    Profile:              string;     { config profile this session runs under }
     SystemPromptOverride: string;     { compacted system prompt across turns }
     WorkingState:         TWorkingState;
     Stats:                TSessionStats;
@@ -198,6 +199,17 @@ function SessionsDir: string;
   path of the session file. Callers MUST handle the empty-string
   case (treat as "no session named X"). }
 function SessionPath(const Id: string): string;
+
+(* The profile a stored session runs under, or '' when the session has
+   none / does not exist / the id is unsafe.
+
+   Read WITHOUT loading the transcript, because the caller needs the
+   answer before LoadConfig runs and a full TSession.Create would parse
+   every message to learn one string. `pasclaw agent --session <id>`
+   resumes under the profile the session was created with, so a session
+   started under `security` stays sandboxed on resume even from a shell
+   whose config names a different profile. *)
+function PeekSessionProfile(const Id: string): string;
 
 (* List on-disk sessions. By default skips synthetic "gateway
    bucket" sessions (ids prefixed with `_gateway_`) -- those exist
@@ -393,6 +405,41 @@ function SessionPath(const Id: string): string;
 begin
   if not IsSafeSessionId(Id) then Exit('');
   Result := JoinPath(SessionsDir, Id + '.json');
+end;
+
+function PeekSessionProfile(const Id: string): string;
+var
+  Path, Text: string;
+  Root, MetaObj: TJsonObject;
+  SL: TStringList;
+begin
+  Result := '';
+  Path := SessionPath(Id);
+  if (Path = '') or (not FileExists(Path)) then Exit;
+  SL := TStringList.Create;
+  try
+    try
+      SL.LoadFromFile(Path);
+      Text := SL.Text;
+    except
+      Exit;
+    end;
+  finally
+    SL.Free;
+  end;
+  Root := TJsonObject.Parse(Text);
+  if Root = nil then Exit;
+  try
+    MetaObj := Root.ChildObject('meta');
+    if MetaObj = nil then Exit;
+    try
+      Result := MetaObj.GetStr('profile', '');
+    finally
+      MetaObj.Free;
+    end;
+  finally
+    Root.Free;
+  end;
 end;
 
 procedure EnsureSessionsDir;
@@ -899,6 +946,7 @@ begin
     MetaObj.PutStr('title',                  Meta.Title);
     MetaObj.PutStr('model',                  Meta.Model);
     MetaObj.PutStr('provider',               Meta.Provider);
+    MetaObj.PutStr('profile',                Meta.Profile);
     MetaObj.PutStr('system_prompt_override', Meta.SystemPromptOverride);
     WriteWorkingStateJSON(MetaObj, Meta.WorkingState);
     WriteSessionStatsJSON(MetaObj, Meta.Stats);
@@ -1007,6 +1055,7 @@ begin
         Meta.Title                := MetaObj.GetStr('title',                  '');
         Meta.Model                := MetaObj.GetStr('model',                  '');
         Meta.Provider             := MetaObj.GetStr('provider',               '');
+        Meta.Profile              := MetaObj.GetStr('profile',                '');
         Meta.SystemPromptOverride := MetaObj.GetStr('system_prompt_override', '');
         ReadWorkingStateJSON(MetaObj, Meta.WorkingState);
         ReadSessionStatsJSON (MetaObj, Meta.Stats);

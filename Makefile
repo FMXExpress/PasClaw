@@ -193,7 +193,16 @@ $(WEBUI_RES): src/pkg/gateway/webui.rc src/pkg/gateway/webui.html src/pkg/gatewa
 	@# unit so it -- and the embedded resource -- always recompiles.
 	@touch src/pkg/gateway/PasClaw.Gateway.WebUI.pas
 
-$(BIN): $(WEBUI_RES) | $(BUILDDIR) $(INDY_DIR)
+# Every unit $(BIN) is compiled from. Without this the binary had NO source
+# prerequisite at all: edit a .pas, run `make all`, get "Nothing to be done"
+# and keep the previous binary. Verifying a change then silently tested the
+# old build -- which is exactly how a stale binary reached a benchmark run.
+# vendor/Indy is deliberately absent: it only changes when $(INDY_DIR) fetches
+# it, it is already an order-only prerequisite, and globbing it would add
+# thousands of stats to every make invocation.
+PASCLAW_SOURCES := $(shell find src -type f \( -name '*.pas' -o -name '*.dpr' -o -name '*.inc' \) 2>/dev/null)
+
+$(BIN): $(WEBUI_RES) $(PASCLAW_SOURCES) | $(BUILDDIR) $(INDY_DIR)
 	@mkdir -p $(BUILDDIR)/lib
 	PASCLAW_VERSION='$(VERSION)' $(FPC) $(FPCFLAGS) src/pasclaw/PasClaw.dpr -o$(BIN)
 

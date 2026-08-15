@@ -591,6 +591,53 @@ begin
   end;
 end;
 
+procedure TestResolvedProfileNameReported;
+{ TConfig.ProfileName tells a caller what THIS process resolved, so the
+  session store can stamp it and a UI can display it without re-walking
+  the precedence chain. Set only when the profile's layers actually
+  applied -- an unknown name falls back to defaults, and reporting it as
+  active would make the session stamp a lie. }
+var
+  CfgPath: string;
+  C: TConfig;
+begin
+  CfgPath := JoinPath(Home, 'config.json');
+  WriteFileText(CfgPath, '{}');
+
+  C := LoadConfig('low-token');
+  try
+    AssertTrue(C.ProfileName = 'low-token', 'applied profile is reported');
+  finally
+    C.Free;
+  end;
+
+  C := LoadConfig('');
+  try
+    AssertTrue(C.ProfileName = '', 'no profile => empty name');
+  finally
+    C.Free;
+  end;
+
+  C := LoadConfig('no-such-profile-anywhere');
+  try
+    AssertTrue(C.ProfileName = '',
+               'unresolvable profile is not reported as active');
+  finally
+    C.Free;
+  end;
+
+  { A profile named by config.json rather than the CLI reports the same. }
+  WriteFileText(CfgPath, '{"profile":"low-token"}');
+  C := LoadConfig('');
+  try
+    AssertTrue(C.ProfileName = 'low-token',
+               'profile from config.json is reported too');
+  finally
+    C.Free;
+  end;
+  WriteFileText(CfgPath, '{}');
+end;
+
 begin
   { PASCLAW_HOME is set by the Makefile target before launching --
     fpc doesn't ship fpSetenv on every supported version and setting
@@ -622,6 +669,7 @@ begin
     TestSelfShadowInherit;
     TestDiffMaterial;
     TestDatabaseSection;
+    TestResolvedProfileNameReported;
     WriteLn('ok - config profile tests passed');
   finally
     try RemoveDir(JoinPath(Home, 'profiles')); except end;
