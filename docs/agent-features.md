@@ -117,7 +117,7 @@ the outcome" [S], and 65% of enterprise AI failures trace to harness defects
 | Prompt-injection scanning of tool output | rare [K] | ✅ **fired twice during this survey** [P] |
 | Sandboxed execution | OpenHands, Codex [S] | ✅ docker backend [P] |
 | Command denylist | common [K] | ✅ [P] |
-| Secret redaction | [K] | ✅ FS secret gate [P] |
+| Secret redaction (scrubbing credentials **out of content** before it reaches model context) | [K] | ❌ no general scrubber. The "FS secret gate" this row used to claim is `IsRestrictedFsPath` — a **path denylist on the operator-facing `/v1/fs` browse route**, which refuses whole files rather than redacting text, and does not sit on the agent's tool-output path at all. Real redaction exists only for `db_info`'s connection password (`RedactConnString`); the hooks API lets an embedder add more, but nothing built in scrubs a credential out of an allowed file read or a shell result [P] **(corrected pass 17: a ✅ that could mislead an operator assessing credential exposure)** |
 | Defense-in-depth layered model | OpenDev 5-layer [S] | ⚠️ layers exist, not documented as a model |
 
 ## 8. Observability
@@ -273,7 +273,7 @@ Helicone (drop-in proxy), Datadog LLM Obs, Honeycomb.
 
 | Feature | Who | PasClaw |
 |---|---|---|
-| Every step captured as structured traces — LLM calls, tools, retrievals, control flow | all six [S] | ✅ OTel spans exist [P] |
+| Every step captured as structured traces — LLM calls, tools, retrievals, control flow | all six [S] | ⚠️ OTel `agent.turn` / `chat` / `execute_tool` spans exist, but `execute_tool` **emits only on the serial path** — parallel-dispatch workers don't inherit the parent's threadvar context, so the batched read-only calls this survey praises elsewhere are the exact ones that go untraced. The source comment and `docs/observability.md` both record it [P] **(corrected pass 17: was ✅ "every step")** |
 | Failure localisation in *intermediate* steps, not final answers | the category's stated purpose [S] | ❌ spans emitted, nothing inspects them |
 | Self-hostable open-source option | Langfuse [S] | ✅ OTel exports anywhere [P] |
 | Drop-in proxy instrumentation (no code change) | Helicone [S] | ⚠️ the gateway *is* a proxy; it aggregates stats, not traces [P] |
@@ -374,7 +374,7 @@ Zero coverage in four passes; meanwhile the field has a draft IETF standard.
 
 | Feature | Who | PasClaw |
 |---|---|---|
-| OAuth 2.1 + PKCE as the MCP authorization model | MCP spec, Stytch/Aembit guides [S] | ❌ gateway token is a single shared secret [P] |
+| OAuth 2.1 + PKCE as the MCP authorization model | MCP spec, Stytch/Aembit guides [S] | ✅ **as MCP client** — `pasclaw mcp auth` runs the full flow in `MCP.OAuth.pas`: AS discovery, PKCE `S256`, dynamic registration, token persistence + refresh. ⚠️ **as MCP server** — the inbound gateway is still one shared bearer token [P] **(corrected pass 17: the original row read ❌ because it checked only the inbound half)** |
 | **On-behalf-of delegation**: `requested_actor` / `actor_token` binding agent identity into the token exchange | IETF draft-oauth-ai-agents-on-behalf-of [S] | ❌ |
 | Two-identity model: user identity + agent identity, both in every call | [S] | ❌ no agent identity at all |
 | Short-lived scoped tokens + policy engine in front of tools | [S] | ⚠️ sandbox policy exists; tokens do not expire [P] |
@@ -465,7 +465,7 @@ harnesses do not.
 
 | Feature | Who | PasClaw |
 |---|---|---|
-| Hybrid sparse+dense with rank fusion (RRF) | the 2026 default stack [S] | ⚠️ FTS + vectors exist; fusion is ad hoc [P] |
+| Hybrid sparse+dense with rank fusion (RRF) | the 2026 default stack [S] | ✅ textbook RRF — `FuseRRF` sums `1/(k + rank + 1)` across the vector and FTS rankings at the canonical `k=60`, called by both the SQLite and FireDAC stores; memory, facts and KB search all run through it [P] **(corrected pass 17: "fusion is ad hoc" was wrong)** |
 | **Cross-encoder reranking of top-k** | Cohere/Voyage/BGE — +15–30% on RAGAS [S] | ✅ ships a bge-reranker (`Memory.Rerank.Serve`, XLM-R tokenizer, byte-exact-vs-HF tests) [P] |
 | Graph layer for entities/relations (GraphRAG) | Microsoft GraphRAG, MIT-licensed [S] | ❌ |
 | Agent chooses retrieval strategy per query | agentic RAG (GraphRAG vs VectorRAG selection) [S] | ❌ one path |
@@ -922,14 +922,31 @@ Three things I did not find anywhere in the surveyed material:
 8. **Memory tiering with a retrieval token budget.** The pieces exist
    (MEMORY.md, facts, vectors); the field ships them as a measured system
    [S] and PasClaw has never measured a retrieval.
-9. **Trajectory evaluation.** PasClaw already emits OTel spans covering every
-   model and tool call — the exact structure trajectory evaluators consume
-   [S] — and never scores them. The data is collected and thrown away; this
-   is the cheapest eval capability available to it.
+9. **Trajectory evaluation.** PasClaw already emits OTel spans over model
+   calls and serially-dispatched tool calls — close to the structure
+   trajectory evaluators consume [P] — and never scores them. The data is
+   collected and thrown away; this is the cheapest eval capability
+   available to it. Corrected pass 17: this gap previously claimed spans
+   cover *every* tool call, repeating §16's error — parallel-dispatch
+   tools emit none, so a trajectory evaluator would silently score
+   partial traces as whole ones. Threading the traceparent through the
+   workers is a prerequisite, not a follow-up.
 10. **Published benchmark numbers.** Competitors lead with them; the harness
    exists here but is unmerged — and per the exploitation finding above, it
    needs oracles that verify more than their own exit code before any number
    from it is worth publishing.
+11. **Secret scrubbing on the tool-output path** (new, pass 17). Nothing
+   removes a credential from an allowed file read or a shell result before
+   it enters model context — and from there it reaches the provider, the
+   session store, and the transcript. The existing pieces are a path
+   denylist on one browse route and one password redactor for `db_info`.
+   This gap was invisible for sixteen passes because §7 marked it ✅.
+12. **MCP server-side authorization** (new, pass 17). The client half is
+   done properly (OAuth 2.1 + PKCE, §22); the inbound gateway is still a
+   single shared bearer token, so PasClaw-as-MCP-server cannot express
+   per-caller identity or scope. Splitting the old conflated row made the
+   asymmetry visible: PasClaw is a better OAuth citizen when it is the
+   client than when it is the server.
 
 ## The gap nobody has
 
@@ -971,6 +988,23 @@ tool already knows its own scope.
   gap nobody has" than that.
 - **[K]** rows are unverified recall — leads, not findings.
 - **[S]** rows reflect what a source *claims*; no capability was tested.
+- **[P] is the weakest evidence class in this document, not the
+  strongest — pass 17.** An external reviewer checked four `[P]` rows
+  against the source tree and all four were wrong: MCP OAuth marked ❌
+  when `MCP.OAuth.pas` implements the full PKCE client (the row had
+  checked only the inbound gateway); RRF called "ad hoc" when `FuseRRF`
+  is textbook RRF at `k=60`; tracing marked ✅ "every step" when
+  `execute_tool` spans skip the parallel path; and secret redaction
+  marked ✅ on the strength of a *path denylist for a browse endpoint*
+  that redacts nothing. The pattern is one-directional in the way that
+  matters: each error came from checking a single call-site and
+  generalising. `[S]` rows at least cite something a reader can go
+  re-read; a `[P]` row rests entirely on how hard its author looked,
+  and nothing in the notation records that. **124 rows carry `[P]`.
+  Four have now been audited by someone other than their author. The
+  other 120 have not** — which is precisely the "tools report what they
+  covered, never what they did not" gap this survey names as the field's
+  blind spot, found here in the survey's own notation.
 - Reported token-reduction figures (77%, 98%, 60–95%) are vendor/author
   claims carried through from the source, not measurements.
 
