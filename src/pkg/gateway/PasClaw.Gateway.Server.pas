@@ -794,6 +794,59 @@ begin
   end;
 end;
 
+procedure PersistGatewaySession(const Cfg: TConfig;
+                                const SessionId, Title: string;
+                                const ProviderName, Model: string;
+                                const Loop: TToolLoopResult);
+(* Persist a gateway turn as a REAL session when the request named one.
+
+   The stats buckets (_gateway_v1_chat and friends) deliberately keep
+   counters and no transcript -- they aggregate stateless passthrough, where
+   the conversation belongs to the caller. But a request that carries
+   X-PasClaw-Session (or an OpenAI `user` field we map to one) is not
+   passthrough: the operator has named a durable conversation, and every
+   other surface treats that as a session on disk.
+
+   Without this the gateway was the only surface whose sessions never
+   existed, which quietly disabled the whole failure-learning chain for it:
+   `pasclaw learn` mines sessions, `--write-scars` turns recurring failures
+   into SCARS.md, and SCARS.md feeds the prompt. Someone driving PasClaw
+   through the web UI, the desktop app or the HTTP API got none of it, and
+   the agent kept relearning mistakes it had already made there.
+
+   Opt-in by construction -- no session id, no transcript, so stateless API
+   traffic is unchanged. Stats still go to the bucket either way; this is
+   additive. *)
+var
+  S: TSession;
+  i: Integer;
+begin
+  if Trim(SessionId) = '' then Exit;
+  if not IsSafeSessionId(SessionId) then Exit;
+  try
+    S := TSession.Create(SessionId);
+    try
+      if S.Meta.Title = '' then S.Meta.Title := Title;
+      if Model        <> '' then S.Meta.Model    := Model;
+      if ProviderName <> '' then S.Meta.Provider := ProviderName;
+      SetLength(S.Messages, Length(Loop.FinalMessages));
+      for i := 0 to High(Loop.FinalMessages) do
+        S.Messages[i] := Loop.FinalMessages[i];
+      S.Meta.SystemPromptOverride := Loop.FinalSystemPrompt;
+      S.AutoTitle;
+      S.Touch;
+      S.Save;
+    finally
+      S.Free;
+    end;
+  except
+    { A transcript we could not write must never fail the request the
+      caller actually asked for. }
+    on E: Exception do
+      LogWarn('gateway: could not persist session %s: %s', [SessionId, E.Message]);
+  end;
+end;
+
 procedure AccumulateGatewayStats(const Cfg: TConfig;
                                  const BucketId, Title: string;
                                  const ProviderName, Model: string;
@@ -5427,6 +5480,8 @@ begin
     WriteJSON(AResp, 502, '{"error":"loop failed"}');
     Exit;
   end;
+  PersistGatewaySession(FCfg, ReqSessionId(ARequest), '(gateway: /v1/chat)',
+                        LoopCfg.Provider.GetName, LoopCfg.Model, Loop);
   AccumulateGatewayStats(FCfg, GW_BUCKET_V1_CHAT,
                          '(gateway: /v1/chat)',
                          LoopCfg.Provider.GetName, LoopCfg.Model, Loop);
@@ -6652,7 +6707,11 @@ begin
         StreamClosed := Streamer.Closed;
         Exit;
       end;
-      AccumulateGatewayStats(FCfg, GW_BUCKET_V1_CHAT_COMPLETIONS,
+      PersistGatewaySession(FCfg, ReqSession, '(gateway: /v1/chat/completions)',
+                            LoopCfg.Provider.GetName, ReqModel, Loop);
+      PersistGatewaySession(FCfg, ReqSession, '(gateway: /v1/chat/completions)',
+                          LoopCfg.Provider.GetName, ReqModel, Loop);
+    AccumulateGatewayStats(FCfg, GW_BUCKET_V1_CHAT_COMPLETIONS,
                              '(gateway: /v1/chat/completions)',
                              LoopCfg.Provider.GetName, ReqModel, Loop);
       if Loop.LastResp.FinishReason <> '' then
