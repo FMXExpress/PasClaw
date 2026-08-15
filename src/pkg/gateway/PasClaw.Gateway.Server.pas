@@ -833,6 +833,25 @@ begin
       SetLength(S.Messages, Length(Loop.FinalMessages));
       for i := 0 to High(Loop.FinalMessages) do
         S.Messages[i] := Loop.FinalMessages[i];
+
+      (* Append the answer. RunToolLoop returns FinalMessages as the history
+         it fed the provider, and exits the moment a response arrives with no
+         tool calls -- so the assistant turn carrying that response is in
+         Loop.Content and NOT in the array. Copying the array verbatim
+         persisted a transcript that stops one turn short: a no-tool request
+         saved only the incoming history, and a tool-using one stopped at the
+         last tool result. The reply the caller actually received was the one
+         thing missing, from the session, from a web reload, and from
+         anything `pasclaw learn` reads. (Codex P1 on #556.)
+
+         Guarded on non-empty so a turn that genuinely produced no text -- an
+         aborted stream, a hard provider failure -- does not gain a blank
+         assistant turn that never existed. *)
+      if Trim(Loop.Content) <> '' then
+      begin
+        SetLength(S.Messages, Length(S.Messages) + 1);
+        S.Messages[High(S.Messages)] := MakeMessage(mrAssistant, Loop.Content);
+      end;
       S.Meta.SystemPromptOverride := Loop.FinalSystemPrompt;
       S.AutoTitle;
       S.Touch;
@@ -3625,13 +3644,55 @@ begin
   Result.PutStr('provider',   Meta.Provider);
 end;
 
+{ One entry of the web UI's tool_details array as raw JSON. Entries are
+  either a structure (the cards for that turn) or null, and there is no
+  generic raw accessor on TJsonArray, so try both shapes and fall back to
+  null rather than dropping the array on an unexpected element. }
+function ToolDetailEntryRaw(Arr: TJsonArray; Index: Integer): string;
+var
+  O: TJsonObject;
+  A: TJsonArray;
+begin
+  Result := 'null';
+  if Arr = nil then Exit;
+  A := Arr.ItemArray(Index);
+  if A <> nil then
+  try
+    Exit(A.ToJSON);
+  finally
+    A.Free;
+  end;
+  O := Arr.ItemObject(Index);
+  if O <> nil then
+  try
+    Exit(O.ToJSON);
+  finally
+    O.Free;
+  end;
+end;
+
 procedure TGatewayServer.MergeToolDetailFromBody(S: TSession; const Body: string);
-{ Take only what the web UI owns out of a PUT body: the opaque tool-detail
-  blob. The transcript already on disk wins -- see the merge rationale at the
-  PUT site. Silent when the body carries no tool_details. }
+(* Take only what the web UI owns out of a PUT body -- the opaque tool-detail
+   blob -- and REINDEX it onto the transcript we kept.
+
+   The blob is index-aligned to what the browser displays: a flat list of
+   user and assistant turns. S.Messages is deliberately the agent's
+   transcript, which interleaves system and tool turns and assistant turns
+   carrying tool_calls. Storing the array unchanged passes the store's
+   count guard and still lands every card on the wrong message -- entry 2
+   means "the third thing the user saw", not "S.Messages[2]". After a
+   tool-using turn the cards attach to the wrong assistant turn or vanish.
+   (Codex P2 on #556.)
+
+   So walk the retained transcript, and hand each user/assistant turn the
+   next blob entry in order; everything else gets null. The flattened view
+   is exactly the subsequence of user/assistant turns, so ordinal N in the
+   blob belongs to the Nth such turn -- that mapping is what makes this
+   recoverable rather than guesswork. *)
 var
   BodyObj: TJsonObject;
-  TDArr: TJsonArray;
+  TDArr, Out_: TJsonArray;
+  i, Flat: Integer;
 begin
   BodyObj := TJsonObject.Parse(Body);
   if BodyObj = nil then Exit;
@@ -3639,7 +3700,26 @@ begin
     TDArr := BodyObj.ChildArray('tool_details');
     if TDArr = nil then Exit;
     try
-      S.ToolDetail := TDArr.ToJSON;
+      Out_ := TJsonArray.Create;
+      try
+        Flat := 0;
+        for i := 0 to High(S.Messages) do
+        begin
+          if S.Messages[i].Role in [mrUser, mrAssistant] then
+          begin
+            if Flat < TDArr.Count then
+              Out_.AddRaw(ToolDetailEntryRaw(TDArr, Flat))
+            else
+              Out_.AddRaw('null');
+            Inc(Flat);
+          end
+          else
+            Out_.AddRaw('null');
+        end;
+        S.ToolDetail := Out_.ToJSON;
+      finally
+        Out_.Free;
+      end;
     finally
       TDArr.Free;
     end;
@@ -6765,9 +6845,7 @@ begin
       end;
       PersistGatewaySession(FCfg, ReqSession, '(gateway: /v1/chat/completions)',
                             LoopCfg.Provider.GetName, ReqModel, Loop);
-      PersistGatewaySession(FCfg, ReqSession, '(gateway: /v1/chat/completions)',
-                          LoopCfg.Provider.GetName, ReqModel, Loop);
-    AccumulateGatewayStats(FCfg, GW_BUCKET_V1_CHAT_COMPLETIONS,
+      AccumulateGatewayStats(FCfg, GW_BUCKET_V1_CHAT_COMPLETIONS,
                              '(gateway: /v1/chat/completions)',
                              LoopCfg.Provider.GetName, ReqModel, Loop);
       if Loop.LastResp.FinishReason <> '' then
@@ -6840,6 +6918,12 @@ begin
         '{"error":{"message":"tool loop failed","type":"server_error"}}');
       Exit;
     end;
+    { The non-streaming branch needs this too. It lived only inside the
+      WantsStream arm, so `stream:false` -- the main OpenAI-compatible flow
+      -- updated the bucket and never wrote its named session. (Codex P1
+      on #556.) }
+    PersistGatewaySession(FCfg, ReqSession, '(gateway: /v1/chat/completions)',
+                          LoopCfg.Provider.GetName, ReqModel, Loop);
     AccumulateGatewayStats(FCfg, GW_BUCKET_V1_CHAT_COMPLETIONS,
                            '(gateway: /v1/chat/completions)',
                            LoopCfg.Provider.GetName, ReqModel, Loop);

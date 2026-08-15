@@ -286,6 +286,86 @@ begin
   DeleteFile(SessionPath(Id));
 end;
 
+procedure TestFinalAnswerIsPersisted;
+{ RunToolLoop returns FinalMessages as the history it FED the provider and
+  exits as soon as a tool-less response arrives -- so the assistant turn
+  carrying that response lives in Loop.Content, not the array. A gateway
+  session that copies the array verbatim stops one turn short and loses the
+  only thing the caller actually received.
+
+  Pinned at the store level: an assistant turn appended after a tool turn
+  round-trips, and the transcript still reads user / assistant / tool /
+  assistant. }
+var
+  Id: string;
+  S1, S2: TSession;
+begin
+  Id := 'final-answer-test-' + IntToStr(Random(MaxInt));
+  S1 := TSession.Create(Id);
+  try
+    SetLength(S1.Messages, 4);
+    S1.Messages[0] := MakeMessage(mrUser,      'do the thing');
+    S1.Messages[1] := MakeMessage(mrAssistant, 'calling a tool');
+    S1.Messages[2] := MakeMessage(mrTool,      'exit=0');
+    S1.Messages[3] := MakeMessage(mrAssistant, 'done, here is the answer');
+    S1.Save;
+  finally
+    S1.Free;
+  end;
+  S2 := TSession.Create(Id);
+  try
+    AssertTrue(Length(S2.Messages) = 4, 'all four turns persisted');
+    AssertTrue(S2.Messages[3].Role = mrAssistant, 'the last turn is the answer');
+    AssertTrue(Pos('here is the answer', S2.Messages[3].Content) > 0,
+               'the answer text survived');
+  finally
+    S2.Free;
+  end;
+  DeleteFile(SessionPath(Id));
+end;
+
+procedure TestToolDetailIndicesFollowTheTranscript;
+{ The web UI's tool_details array is indexed against what it DISPLAYS -- a
+  flat list of user/assistant turns. The retained transcript interleaves
+  tool turns, so entry N is the Nth displayed turn, not S.Messages[N].
+  Storing it unchanged passes the count guard and still puts every card on
+  the wrong message.
+
+  This pins the mapping rule the merge implements: the flattened view is
+  the subsequence of user/assistant turns, so the Nth blob entry belongs to
+  the Nth such turn and every other slot is null. }
+var
+  Msgs: TMessageArray;
+  i, Flat: Integer;
+  Slot: array of Integer;
+begin
+  SetLength(Msgs, 5);
+  Msgs[0] := MakeMessage(mrUser,      'ask');
+  Msgs[1] := MakeMessage(mrAssistant, 'tool time');
+  Msgs[2] := MakeMessage(mrTool,      'exit=0');
+  Msgs[3] := MakeMessage(mrSystem,    'note');
+  Msgs[4] := MakeMessage(mrAssistant, 'answer');
+
+  { Slot[i] = which flattened index message i draws its cards from, or -1. }
+  SetLength(Slot, Length(Msgs));
+  Flat := 0;
+  for i := 0 to High(Msgs) do
+    if Msgs[i].Role in [mrUser, mrAssistant] then
+    begin
+      Slot[i] := Flat;
+      Inc(Flat);
+    end
+    else
+      Slot[i] := -1;
+
+  AssertTrue(Slot[0] = 0, 'user turn takes flattened entry 0');
+  AssertTrue(Slot[1] = 1, 'first assistant takes entry 1');
+  AssertTrue(Slot[2] = -1, 'a tool turn takes no card');
+  AssertTrue(Slot[3] = -1, 'a system turn takes no card');
+  AssertTrue(Slot[4] = 2, 'the second assistant takes entry 2, not entry 4');
+  AssertTrue(Flat = 3, 'three displayed turns out of five stored');
+end;
+
 procedure TestToolDetailStalenessGuard;
 { ToolDetail (the web UI's tool-card blob) is index-aligned to Messages.
   Paths outside the web UI's own PUT mutate Messages directly (TUI /clear,
@@ -366,6 +446,8 @@ begin
   TestListSurfacesSession;
   TestRichTurnDetection;
   TestToolDetailReplaceKeepsTranscript;
+  TestFinalAnswerIsPersisted;
+  TestToolDetailIndicesFollowTheTranscript;
   TestToolDetailStalenessGuard;
   WriteLn('session_endpoint_tests: OK');
 end.
