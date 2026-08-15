@@ -426,6 +426,58 @@ Two candidates from this pass found no sourced coverage and stay recalled
 leads only: prompt versioning as a harness feature, and RL from agent
 trajectories. They are deliberately NOT tabled.
 
+## 25. Session persistence, branching & time travel
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Thread-scoped checkpoints of full graph state | LangGraph checkpointers [S] | ✅ checkpoints + sessions [P] |
+| Pluggable checkpoint backends | LangGraph (e.g. Couchbase) [S] | ⚠️ file-based only [P] |
+| **Time travel: rewind to a node, alter context, fork the path** | LangGraph [S] | ⚠️ checkpoint restore/redo rewinds; no fork-into-branch [P] |
+| Fault tolerance via resume-from-checkpoint | LangGraph [S] | ✅ `--session` resume [P] |
+| Multi-user shared session state | thread ids over a shared store [S] | ⚠️ shared store exists; no per-user identity (see §22) |
+
+RBAC and org-level config found no direct sourcing this pass either — two
+passes running. Either it lives in closed enterprise tiers the public docs
+do not describe, or the field genuinely has not standardised it. Recorded
+as an open question, not a table row.
+
+## 26. Realtime & voice agents
+
+Out of coding scope, in "every agent feature everywhere" scope. A production
+category with its own engineering vocabulary.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Speech pipeline abstraction (STT → LLM → TTS, or speech-to-speech) | LiveKit Agents 1.x [S] | ❌ |
+| Voice activity detection vs semantic turn detection (model predicts turn end; +100–200 ms) | AssemblyAI, LiveKit, OpenAI [S] | ❌ |
+| Barge-in: stop talking, discard in-flight audio (`response.cancel` server-side) | OpenAI Realtime [S] | ❌ |
+| Measured interruption engineering (−87% mid-thought cuts for +20 ms) | [S] | ❌ |
+| Multi-agent handoffs inside a live call | LiveKit [S] | ❌ |
+| Native MCP tools in the voice loop | LiveKit 1.5 [S] | n/a — MCP yes, voice no |
+
+No PasClaw column argument here: this is a genuinely different substrate
+(WebRTC media servers). The transferable observation is that voice forced
+the field to solve *interruption* rigorously — the text-agent equivalent
+(steering mid-loop) is something PasClaw already has and most text
+harnesses do not.
+
+## 27. Retrieval as a harness feature
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Hybrid sparse+dense with rank fusion (RRF) | the 2026 default stack [S] | ⚠️ FTS + vectors exist; fusion is ad hoc [P] |
+| **Cross-encoder reranking of top-k** | Cohere/Voyage/BGE — +15–30% on RAGAS [S] | ✅ ships a bge-reranker (`Memory.Rerank.Serve`, XLM-R tokenizer, byte-exact-vs-HF tests) [P] |
+| Graph layer for entities/relations (GraphRAG) | Microsoft GraphRAG, MIT-licensed [S] | ❌ |
+| Agent chooses retrieval strategy per query | agentic RAG (GraphRAG vs VectorRAG selection) [S] | ❌ one path |
+| **Retrieval inside the loop** (re-query, rewrite, stop early) | Self-RAG, FLARE [S] | ✅ `memory_search`/`kb_search` are loop tools, not a front-end stage [P] |
+| Retrieve-50 → rerank-5 pipeline shape | production default [S] | ⚠️ components exist, pipeline not assembled [P] |
+
+The rerank row is a correction in PasClaw's favour: five passes of this
+survey nearly missed that it ships a real cross-encoder reranker with
+byte-exactness tests against HuggingFace. The gap is not the parts — it is
+that the parts are not composed into the retrieve→fuse→rerank pipeline the
+field treats as the default.
+
 ---
 
 ## Where PasClaw leads
@@ -526,6 +578,10 @@ tool already knows its own scope.
 - [CaMeL: mitigating prompt injection (Simon Willison)](https://simonwillison.net/2025/Apr/11/camel/)
 - [Dual LLM & Capability Security (CaMeL)](https://agentic-design.ai/patterns/security-privacy/dual-llm-capability-security)
 - [Morph Fast Apply](https://www.morphllm.com/fast-apply-model)
+- [LangGraph persistence & time travel](https://docs.langchain.com/oss/python/langgraph/persistence)
+- [LiveKit: turn detection and interruption handling](https://livekit.com/blog/turn-detection-and-interruption-handling)
+- [Hybrid Search: BM25, Vector & Reranking Reference 2026](https://www.digitalapplied.com/blog/hybrid-search-bm25-vector-reranking-reference-2026)
+- [RAG in Production 2026: GraphRAG, Hybrid Retrieval, and Evals](https://ailearningguides.com/rag-production-patterns-2026/)
 - [Relace: A Year of Fast Apply](https://relace.ai/blog/relace-apply-3)
 - [AI Agent Sandboxing in 2026: Docker, E2B, Firecracker, gVisor, Modal & Daytona Compared](https://amux.io/guides/ai-agent-sandboxing/)
 - [Cursor vs Claude Code vs Windsurf (Now Devin Desktop) 2026](https://www.shareuhack.com/en/posts/cursor-vs-claude-code-vs-windsurf-2026)
