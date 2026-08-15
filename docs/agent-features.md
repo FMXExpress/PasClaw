@@ -297,6 +297,77 @@ the insufficient baseline. For a self-hosted personal agent that mostly runs
 the operator's own code, that is defensible — but the survey should say it
 rather than let "sandboxed ✅" imply parity with microVM isolation.
 
+## 18. Guardrails & cost control
+
+The safety section covered PasClaw's own layers; the field has meanwhile
+standardised on dedicated guardrail frameworks and hot-path spend control.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Rail orchestration DSL (input/dialog/retrieval/execution/output rails) | NeMo Guardrails (Colang) [S] | ⚠️ promptware scan + hooks, no rail model [P] |
+| LLM-based content classifier against a harm taxonomy | Llama Guard [S] | ❌ |
+| Structured-output validation rails | Guardrails AI [S] | ⚠️ JSON repair on tool args only [P] |
+| **Per-team / per-agent spend budgets enforced before the call** | LiteLLM ("rate-limit errors before spend accumulates") [S] | ❌ stats are recorded after, never enforced |
+| Configurable budget windows + spend alerts | LiteLLM, gateways [S] | ❌ |
+| Six routing modes incl. lowest-cost and rate-limit-aware | LiteLLM [S] | ⚠️ auto-router is capability-based only [P] |
+| Market-informed model routing | OpenRouter Auto Router (community spend data) [S] | ❌ |
+| Guardrails themselves as an attack surface (DoS on rails) | arXiv 2606.14517 [S] | n/a — a reason not to over-build them |
+
+The budget row is the actionable one: PasClaw *counts* every token
+(per-session stats, gateway buckets) and *enforces* nothing. A runaway loop
+is discovered on the bill. LiteLLM's model — refuse before spend, scoped per
+team/agent — is the shape, and the counters already exist.
+
+## 19. Computer use & GUI agents
+
+A production category in 2026, absent from the draft entirely.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Full-desktop control (screen/mouse/keyboard) | Claude computer use — 82.3% OSWorld (Opus 4.7) [S] | ❌ |
+| Web-only operator agents | OpenAI Operator, Gemini/Mariner [S] | ❌ |
+| Open-source browser automation | browser-use (89.1% WebVoyager), Stagehand, Browser MCP [S] | ❌ |
+| Accessibility-tree snapshots as the agent's view (vs pixels) | playwright-mcp [S] | ⚠️ PasClaw *implements* the a11y tree side (Studio, #557) but consumes nothing |
+
+The last row is an odd near-miss worth naming: the field's preferred
+browser-automation representation is the accessibility tree, and PasClaw
+just built accessibility-tree *emission* for its own GUI — the same
+structure from the other side. A browser tool consuming a11y snapshots
+would reuse concepts already in the codebase.
+
+## 20. Managed agent runtimes
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Durable agent objects: state, sessions, scheduling, WebSockets | Cloudflare Agents SDK [S] | ⚠️ gateway + sessions + cron, self-hosted [P] |
+| Per-agent computer: durable FS + routed isolate/container backends | @cloudflare/computer (Aug 2026 preview) [S] | ❌ |
+| Managed cross-framework runtime with shared context | Bedrock AgentCore (Strands/LangGraph/ADK/Claude SDK interop) [S] | ❌ |
+| Platform-managed sandbox for autonomous code delivery | Claude Managed Agents on Cloudflare [S] | ❌ |
+
+PasClaw is deliberately the opposite of these — self-hosted, no platform —
+but the *durable agent object* pattern (state + schedule + inbox as one
+addressable thing) is portable and close to what gateway sessions + cron
+already approximate.
+
+## 21. Inter-agent protocols, revisited
+
+The 4-row section was thin because the first passes found names, not
+adoption. The picture now has numbers:
+
+| Fact | Source |
+|---|---|
+| A2A donated to the Linux Foundation, June 2025 | [S] |
+| 150+ organisations, production use, first year | [S] |
+| v1.0 stable with signed Agent Cards, April 2026 | [S] |
+| SDKs in 5 languages; 22K+ GitHub stars | [S] |
+| GA inside Copilot Studio, Azure AI Foundry, Bedrock AgentCore | [S] |
+| AP2 (payments) layered on top | [S] |
+
+PasClaw interop today is MCP (both directions) plus an OpenAI-compatible
+API. A2A at v1.0 with three clouds GA is past the wait-and-see line for
+any harness that wants its agents addressable from outside — an Agent Card
+over the existing gateway would be the minimal entry.
+
 ---
 
 ## Where PasClaw leads
@@ -325,17 +396,20 @@ Three things I did not find anywhere in the surveyed material:
    [S]; PasClaw has two categories. This is a small change with immediate
    value for per-call approvals.
 5. **Per-call approvals.** Depends on 4.
-6. **Per-agent worktree isolation.** Structural attribution/conflict/rollback
+6. **Spend budgets enforced before the call.** Every token is already
+   counted; nothing refuses. LiteLLM's refuse-before-spend model is the
+   shape, and the counters exist [S].
+7. **Per-agent worktree isolation.** Structural attribution/conflict/rollback
    for multi-agent work [S]; `spawn*` currently shares one workspace and has
    all three problems.
-7. **Memory tiering with a retrieval token budget.** The pieces exist
+8. **Memory tiering with a retrieval token budget.** The pieces exist
    (MEMORY.md, facts, vectors); the field ships them as a measured system
    [S] and PasClaw has never measured a retrieval.
-8. **Trajectory evaluation.** PasClaw already emits OTel spans covering every
+9. **Trajectory evaluation.** PasClaw already emits OTel spans covering every
    model and tool call — the exact structure trajectory evaluators consume
    [S] — and never scores them. The data is collected and thrown away; this
    is the cheapest eval capability available to it.
-9. **Published benchmark numbers.** Competitors lead with them; the harness
+10. **Published benchmark numbers.** Competitors lead with them; the harness
    exists here but is unmerged — and per the exploitation finding above, it
    needs oracles that verify more than their own exit code before any number
    from it is worth publishing.
@@ -382,6 +456,13 @@ tool already knows its own scope.
 - [Copilot Coding Agent vs Codex vs Cursor Background Agents: 2026 Workflow Map](https://ralphable.com/blog/copilot-coding-agent-vs-codex-vs-cursor-background-agents-2026)
 - [Agent Observability: LangSmith, Langfuse, Arize 2026](https://www.digitalapplied.com/blog/agent-observability-platforms-langsmith-langfuse-arize-2026)
 - [How to sandbox AI agents in 2026: MicroVMs, gVisor & isolation strategies](https://northflank.com/blog/how-to-sandbox-ai-agents)
+- [Guardrails AI vs NeMo Guardrails: Complete Comparison 2026](https://is4.ai/blog/our-blog-1/guardrails-ai-vs-nemo-guardrails-comparison-2026-352)
+- [LiteLLM Budget Routing](https://docs.litellm.ai/docs/proxy/provider_budget_routing)
+- [OpenRouter: How Model Routing Works](https://openrouter.ai/blog/insights/model-routing/)
+- [Computer Use Agents 2026: Claude vs OpenAI vs Gemini](https://www.digitalapplied.com/blog/computer-use-agents-2026-claude-openai-gemini-matrix)
+- [Cloudflare Agents runtime docs](https://developers.cloudflare.com/agents/)
+- [A2A Protocol Surpasses 150 Organizations (Linux Foundation)](https://www.linuxfoundation.org/press/a2a-protocol-surpasses-150-organizations-lands-in-major-cloud-platforms-and-sees-enterprise-production-use-in-first-year)
+- [Bedrock AgentCore A2A support](https://aws.amazon.com/blogs/machine-learning/introducing-agent-to-agent-protocol-support-in-amazon-bedrock-agentcore-runtime/)
 - [AI Agent Sandboxing in 2026: Docker, E2B, Firecracker, gVisor, Modal & Daytona Compared](https://amux.io/guides/ai-agent-sandboxing/)
 - [Cursor vs Claude Code vs Windsurf (Now Devin Desktop) 2026](https://www.shareuhack.com/en/posts/cursor-vs-claude-code-vs-windsurf-2026)
 - [Harness Engineering: Making AI Coding Agents Work in 2026](https://www.faros.ai/blog/harness-engineering)
