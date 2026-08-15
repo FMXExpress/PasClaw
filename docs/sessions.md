@@ -16,6 +16,7 @@ pasclaw resume 20260601T093015-1a2b3c4d                # shorthand for --session
 pasclaw session list                                   # id, age, title, msg count
 pasclaw session show <id>                              # metadata + last 8 messages (head trimmed)
 pasclaw session export <id>                            # raw JSON to stdout (pipe through jq)
+pasclaw session export <id> --full                     # the pre-prune original, if pruning removed turns
 pasclaw session delete <id>                            # remove the session file
 ```
 
@@ -151,6 +152,21 @@ Four guarantees are enforced in code, not by asking:
 | **Markers keep pairings** | A marker replaces content only — the message, its `tool_call_id` and any `tool_calls` survive. |
 
 Candidates are shown as head+tail **previews**, not in full: sending the whole session to judge the whole session reproduces the problem being solved, and a preview is enough to tell a build log from a decision.
+
+### The original is kept
+
+Pruning **deletes from the session file** — the loop's history is what gets persisted, so a pruned turn leaves `workspace/sessions/<id>.json` and every ordinary export of it. That is correct for the live file: it is the resume state, and a resume that replayed the pruned messages would undo the prune.
+
+But the record of what the agent actually saw should not be a casualty of context management, so the transcript is copied **once**, the first time a session is pruned, to `<id>.orig.json` beside it:
+
+```sh
+pasclaw session export <id>          # the live, pruned transcript
+pasclaw session export <id> --full   # the pre-prune original, when there is one
+```
+
+Once, because the point is the *original*: a copy taken on the second prune would already be missing what the first one removed. Nothing reads the archive during a run — resume and context keep using the live file, so behaviour is unchanged — and `--full` on a session that was never pruned is a no-op rather than an error. Archives are excluded from `session list` and the Library; a failed archive logs a warning and the turn continues, since a lost record is not a lost turn.
+
+Compaction does not archive: it leaves a summary standing where the detail was, so the session still says what happened. Pruning leaves nothing behind, which is why it gets the copy.
 
 The cheap, always-on half of this already exists: [`tool_output_cap`](./configuration.md) truncates oversize tool results at dispatch, before they ever enter the history. Pruning is the judgement pass for what survives that.
 

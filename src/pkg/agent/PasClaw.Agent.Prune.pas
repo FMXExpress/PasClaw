@@ -91,6 +91,14 @@ uses
   PasClaw.Providers.Intf;
 
 type
+  (* Fired with the FULL history, once a pass has candidates and is
+     about to delete some of them -- the caller's chance to keep a copy
+     of what is being removed. Same shape and same reason as
+     compaction's OnBefore: this unit knows about messages, not about
+     where a session lives, and the archive belongs to whoever owns the
+     file. Not fired when the pass turns out to prune nothing. *)
+  TPruneBeforeCallback = procedure(const Messages: array of TMessage) of object;
+
   TPruneOptions = record
     { Off unless an operator says otherwise: this spends a call to a
       strong model, which is not a cost to impose by default. }
@@ -105,6 +113,8 @@ type
     PreviewChars:       Integer;
     { The pruner's model. Empty means the caller's. }
     Model:              string;
+    { Archive hook -- see TPruneBeforeCallback. }
+    OnBefore:           TPruneBeforeCallback;
   end;
 
   { What a pass did, for the caller's log line. }
@@ -167,6 +177,7 @@ begin
   Result.MinCandidateTokens := 400;
   Result.PreviewChars       := 400;
   Result.Model              := '';
+  Result.OnBefore           := nil;
 end;
 
 function NeedsPrune(const Messages: array of TMessage;
@@ -522,6 +533,19 @@ begin
   begin
     LogDebug('prune: %d candidate(s) offered, none pruned', [Cands]);
     Exit(ReturnVerbatim(Messages));
+  end;
+
+  { Something IS about to be deleted -- last chance to keep a copy.
+    Fired here rather than before the pruner call so a pass that
+    decides to prune nothing costs no archive, and wrapped because a
+    failed archive must not fail the turn. }
+  if Assigned(Opts.OnBefore) then
+  try
+    Opts.OnBefore(Messages);
+  except
+    on E: Exception do
+      LogWarn('prune: OnBefore raised %s: %s -- continuing',
+              [E.ClassName, E.Message]);
   end;
 
   SetLength(Result, Length(Messages));

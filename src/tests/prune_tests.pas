@@ -31,6 +31,8 @@ uses
   PasClaw.Providers.Types,
   PasClaw.Providers.Intf,
   PasClaw.Agent.Prune,
+  PasClaw.Session.Store,
+  PasClaw.Utils,
   PasClaw.Config;
 
 var Failures: Integer = 0;
@@ -78,6 +80,19 @@ type
 
 var
   LastModel: string;
+  { Counts OnBefore firings, so "fired only when something is actually
+    deleted" is assertable rather than assumed. }
+  BeforeCalls: Integer = 0;
+
+type
+  TArchiveSpy = class
+    procedure OnBefore(const Messages: array of TMessage);
+  end;
+
+procedure TArchiveSpy.OnBefore(const Messages: array of TMessage);
+begin
+  Inc(BeforeCalls);
+end;
 
 function TStubProvider.Chat(const Messages: array of TMessage;
                             const Tools: array of TToolDefinition;
@@ -169,6 +184,10 @@ var
   Def:      TPruneOptions;
   i:        Integer;
   Big:      string;
+  Spy:      TArchiveSpy;
+  SessDir, SessId: string;
+  Metas:    TSessionMetaArray;
+  Ghost:    Boolean;
 
 (* A history with something worth pruning: the original task, two tool
    groups with fat results, then the recent turn. Group ids as the
@@ -329,6 +348,91 @@ begin
   PruneMessages(Provider, 'caller-model', Msgs, Opts, Info);
   ExpectTrue(LastModel = 'caller-model',
              'and falls back to the caller''s when unset');
+
+  { ------------------------ the archive hook fires only on a deletion - }
+  Spy := TArchiveSpy.Create;
+  try
+    Opts.OnBefore := Spy.OnBefore;
+
+    BuildHistory;
+    BeforeCalls := 0;
+    Stub.Reply := '{"decisions":[]}';
+    PruneMessages(Provider, 'stub-1', Msgs, Opts, Info);
+    ExpectEq(BeforeCalls, 0,
+             'a pass that prunes nothing archives nothing -- the copy is ' +
+             'the price of a deletion, not of a decision');
+
+    BuildHistory;
+    BeforeCalls := 0;
+    Stub.Reply := 'not json at all';
+    PruneMessages(Provider, 'stub-1', Msgs, Opts, Info);
+    ExpectEq(BeforeCalls, 0, 'nor does a failed pass');
+
+    BuildHistory;
+    BeforeCalls := 0;
+    Stub.Reply := '{"decisions":[{"id":1,"action":"drop"}]}';
+    PruneMessages(Provider, 'stub-1', Msgs, Opts, Info);
+    ExpectEq(BeforeCalls, 1,
+             'a pass that deletes fires it exactly once, before deleting');
+
+    BuildHistory;
+    BeforeCalls := 0;
+    Stub.Reply := '{"decisions":[{"id":1,"action":"marker","text":"[ok]"}]}';
+    PruneMessages(Provider, 'stub-1', Msgs, Opts, Info);
+    ExpectEq(BeforeCalls, 1,
+             'and a marker counts as a deletion -- the original text is ' +
+             'just as gone');
+  finally
+    Opts.OnBefore := nil;
+    Spy.Free;
+  end;
+
+  (* ---------------- the archive itself, on a real sessions dir ------
+
+     ArchiveSessionOnce is the CLI's OnBefore. What matters is that it
+     is ONCE: a copy taken on the second prune is already missing what
+     the first one removed, which would be a worse lie than no copy at
+     all. *)
+  { The Makefile hands this binary a fresh PASCLAW_HOME, so SessionsDir
+    resolves under a tempdir and the operator's own sessions are never
+    in reach. }
+  SessDir := SessionsDir;
+  ForceDirectories(SessDir);
+
+  SessId := 'prune-archive-test';
+  WriteFileText(JoinPath(SessDir, SessId + '.json'),
+                '{"meta":{"id":"' + SessId + '"},' +
+                '"messages":[{"role":"user","content":"ORIGINAL"}]}');
+
+  ExpectTrue(not HasSessionArchive(SessId), 'no archive before the first prune');
+  ExpectTrue(ArchiveSessionOnce(SessId), 'the first prune archives');
+  ExpectTrue(HasSessionArchive(SessId), 'and the archive is there');
+  ExpectTrue(Pos('ORIGINAL', ReadFileText(SessionArchivePath(SessId))) > 0,
+             'holding the transcript as it was');
+
+  { The live file moves on, as a pruning session does. }
+  WriteFileText(JoinPath(SessDir, SessId + '.json'),
+                '{"meta":{"id":"' + SessId + '"},"messages":[]}');
+  ExpectTrue(not ArchiveSessionOnce(SessId),
+             'the second prune does NOT archive again');
+  ExpectTrue(Pos('ORIGINAL', ReadFileText(SessionArchivePath(SessId))) > 0,
+             'so the archive still holds the ORIGINAL, not the ' +
+             'already-pruned version -- the whole point of once');
+
+  ExpectTrue(SessionArchivePath('../etc/passwd') = '',
+             'an unsafe id has no archive path, as it has no session path');
+  ExpectTrue(not ArchiveSessionOnce('../etc/passwd'),
+             'and cannot be archived');
+
+  { An archive must not read as a session of its own. }
+  Metas := ListSessions;
+  Ghost := False;
+  for i := 0 to High(Metas) do
+    if Pos('.orig', Metas[i].Id) > 0 then Ghost := True;
+  ExpectTrue(not Ghost,
+             'the archive is not listed as a session -- "<id>.orig" is a ' +
+             'legal session id, so without the filter every pruned ' +
+             'session would show up twice');
 
   Cfg := TConfig.Create;
   Def := DefaultPruneOptions;

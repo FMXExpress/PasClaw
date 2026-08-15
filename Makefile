@@ -500,7 +500,11 @@ test-compact: | $(BUILDDIR)
 test-prune: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/prune_tests.pas -o$(BUILDDIR)/prune_tests
-	@$(BUILDDIR)/prune_tests
+	@# A fresh home: the archive assertions write real session files, and
+	@# they have no business landing in the operator's own sessions dir.
+	@PASCLAW_HOME=$$(mktemp -d) ; \
+	  trap "rm -rf $$PASCLAW_HOME" EXIT ; \
+	  PASCLAW_HOME=$$PASCLAW_HOME $(BUILDDIR)/prune_tests
 
 # PasClaw.Utils — ANSI-aware width helpers (VisibleLength / PadVisibleRight /
 # TruncateVisible). The TUI chat pane relies on these to render markdown

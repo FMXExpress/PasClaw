@@ -189,6 +189,7 @@ type
     procedure OnToolCall(const Name, ArgsJSON: string);
     procedure OnToolResult(const Name, ResultText, Err: string);
     procedure OnBeforeCompact(const Messages: array of TMessage);
+    procedure OnBeforePrune(const Messages: array of TMessage);
   end;
 
 const
@@ -221,6 +222,24 @@ begin
   SetLength(Arr, Length(Messages));
   for i := 0 to High(Messages) do Arr[i] := Messages[i];
   UpdateWorkingStateAfterTurn(MetaRef^, Arr);
+end;
+
+(* Fired by PruneMessages just before it deletes anything.
+
+   Pruning removes messages from the history the turn will persist, so
+   the deleted turns leave the session file and every export of it.
+   That is right for the LIVE file -- it is the resume state, and a
+   resume that replayed the pruned messages would undo the prune -- but
+   the record of what the agent actually saw should not be a casualty
+   of context management. So the transcript is copied once, on the
+   first prune, to <id>.orig.json; `session export --full` reads it
+   back. Once, because the point is the ORIGINAL: a copy taken on the
+   second prune is already missing what the first one removed. *)
+procedure TLoopHandlers.OnBeforePrune(const Messages: array of TMessage);
+begin
+  if MetaRef = nil then Exit;          { one-shot run: no session file }
+  if ArchiveSessionOnce(MetaRef^.Id) then
+    LogInfo('session: archived %s before its first prune', [MetaRef^.Id]);
 end;
 
 procedure TLoopHandlers.OnToolCall(const Name, ArgsJSON: string);
@@ -569,6 +588,7 @@ begin
   Result.PruneOpts.MinCandidateTokens := Cfg.Prune.MinCandidateTokens;
   Result.PruneOpts.PreviewChars       := Cfg.Prune.PreviewChars;
   Result.PruneOpts.Model              := Cfg.PlanModel;
+  Result.PruneOpts.OnBefore           := Handlers.OnBeforePrune;
   { Forward the tool-output truncation cap (per-tool-result bytes)
     from config. 0 = off (legacy verbatim behaviour); when an
     operator sets it, RunToolLoop diverts oversize results to the
