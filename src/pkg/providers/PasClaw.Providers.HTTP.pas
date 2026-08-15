@@ -770,17 +770,55 @@ begin
   GSSLAvailable := LoadOpenSSLLibrary;
 end;
 
+(* Two different failures reach here and they need different advice.
+
+   NOT FOUND: no libcrypto/libssl where the loader looked.
+
+   WRONG VERSION: found, and rejected. The vendored Indy supports OpenSSL
+   1.0.2 and earlier -- IdSSLOpenSSLHeaders checks the version and bails on
+   1.1.0 or above, with its own comment saying 1.1.0 "made MAJOR changes
+   that we do not support yet". 1.0.2 went end-of-life in 2019, so every
+   current Linux distribution ships 3.x and every current Linux install
+   lands in this branch.
+
+   That is why the old message was worse than no message on Linux: it said
+   "install OpenSSL via your package manager", which installs 3.x, which is
+   rejected -- following the instruction exactly reproduced the failure. The
+   only thing that works is a 1.0.x build, and the Indy project publishes
+   those at github.com/IndySockets/OpenSSL-Binaries. Naming it is the whole
+   fix; without it the error is a dead end.
+
+   Detected by string rather than by a status code because Indy surfaces the
+   distinction only in WhichFailedToLoad's text. Crude, and a false negative
+   just prints both remedies, which is the safe direction. *)
 function OpenSSLHelpMessage: string;
+var
+  Detail: string;
+  VersionRejected: Boolean;
 begin
+  Detail := WhichFailedToLoad;
+  VersionRejected := Pos('Unsupported SSL Library version', Detail) > 0;
+
   Result :=
     'TLS support requires OpenSSL but the libraries could not be loaded.' + sLineBreak +
-    'Indy reports: ' + WhichFailedToLoad + sLineBreak +
+    'Indy reports: ' + Detail + sLineBreak;
+
+  if VersionRejected then
+    Result := Result +
+      'That library was FOUND but is too new. This build of Indy supports' + sLineBreak +
+      'OpenSSL 1.0.2 and earlier; 1.1.0+ and 3.x are rejected. Your system' + sLineBreak +
+      'OpenSSL will not work and installing it again will not help.' + sLineBreak;
+
+  Result := Result +
     {$IFDEF MSWINDOWS}
-    'On Windows, place libeay32.dll and ssleay32.dll next to pasclaw.exe,' + sLineBreak +
-    'or set PASCLAW_OPENSSL_DIR to a directory containing them.';
+    'Get 1.0.2 binaries from github.com/IndySockets/OpenSSL-Binaries and' + sLineBreak +
+    'place libeay32.dll and ssleay32.dll next to pasclaw.exe, or set' + sLineBreak +
+    'PASCLAW_OPENSSL_DIR to a directory containing them.';
     {$ELSE}
-    'On Linux/macOS, install OpenSSL (libssl + libcrypto) via your package' + sLineBreak +
-    'manager, or set PASCLAW_OPENSSL_DIR to a directory containing them.';
+    'Get 1.0.2 binaries from github.com/IndySockets/OpenSSL-Binaries and' + sLineBreak +
+    'place libcrypto.so.1.0.0 and libssl.so.1.0.0 next to the pasclaw' + sLineBreak +
+    'binary, or set PASCLAW_OPENSSL_DIR to a directory containing them.' + sLineBreak +
+    'Your distribution package is 3.x and will NOT work.';
     {$ENDIF}
 end;
 
