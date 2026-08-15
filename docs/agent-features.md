@@ -27,7 +27,7 @@ row is weak evidence while presence is strong.
 | Graph-structured execution with typed state | LangGraph, statewright [S] | ❌ linear loop |
 | Plan-then-execute separation | TaskWeaver, Plan-and-Execute [S] | ✅ `--mode plan` [P] |
 | Tree search over action sequences | LATS (Monte Carlo) [S] | ❌ |
-| State machine constraining tools per phase | statewright [S] | ⚠? mode gates, not per-phase [P] |
+| State machine constraining tools per phase | statewright [S] | ⚠️ mode gates, not per-phase [P] |
 | Parallel tool dispatch | common [S] | ✅ read-only batching [P] |
 | Subagent fan-out via orchestration scripts | AgentSPEX, JS orchestration [S] | ✅ `spawn*` [P] |
 | Loop-detection middleware | [S] | ❌ iteration cap only [P] |
@@ -44,13 +44,13 @@ row is weak evidence while presence is strong.
 | Agent-controlled compression tools | Focus Agent, LLMLingua [S] | ❌ |
 | Tool-output compression before context entry | headroom (60–95%) [S] | ✅ output cap + `tool_output_get` [P] |
 | Symbol/AST index instead of whole-file reads | Token Savior (77%), codebase-memory-mcp, zerolang [S] | ❌ **biggest gap** |
-| Natural-language code retrieval | semble (98% token cut) [S] | ⚠? `memory_search`/`kb` over docs, not code [P] |
+| Natural-language code retrieval | semble (98% token cut) [S] | ⚠️ `memory_search`/`kb` over docs, not code [P] |
 | Repo map | Aider [S] | ❌ |
 | Hash-anchored edits to cut re-sends | dirac (50–80%) [S] | ✅ `fs_edit_hashline` [P] |
 | Stale-read elision after a write | not found | ✅ `StubSupersededReads`, −2.5 KB measured [P] |
 | Progressive tool disclosure | rare [K] | ✅ 11.8→7.2 KB measured [P] |
 | Virtual filesystem over external sources | Mirage (S3/Slack/GitHub) [S] | ❌ |
-| Version-pinned library docs injection | Context7 [S] | ⚠? `kb` if indexed manually [P] |
+| Version-pinned library docs injection | Context7 [S] | ⚠️ `kb` if indexed manually [P] |
 | Structured spec/journal files | Trellis, harness-experimental [S] | ✅ AGENTS.md, MEMORY.md [P] |
 
 ## 3. Tool design
@@ -59,7 +59,7 @@ row is weak evidence while presence is strong.
 |---|---|---|
 | JSON Schema function definitions | universal [S] | ✅ [P] |
 | Constrained decoding to a grammar | outlines, instructor [S] | ❌ (provider-side only) |
-| **Risk annotations** (readOnly/destructive/idempotent/openWorld) | MCP spec [S] | ⚠? `tcReadOnly`/`tcMutating` — two levels, not four [P] |
+| **Risk annotations** (readOnly/destructive/idempotent/openWorld) | MCP spec [S] | ⚠️ `tcReadOnly`/`tcMutating` — two levels, not four [P] |
 | Auto-generated constraint harnesses from schemas | AutoHarness [S] | ❌ |
 | Agent-native CLIs for arbitrary software | CLI-Anything [S] | ❌ |
 | Programmable TUI interaction | tui-use [S] | ❌ |
@@ -74,7 +74,7 @@ row is weak evidence while presence is strong.
 | Stateless MCP core (2026-07-28 spec) | [S] | ✅ supported [P] |
 | Skill bundles with routing | Microsoft Skills Framework, agent-skills [S] | ✅ skills [P] |
 | **Negative examples in skill routing** | [S] | ❌ |
-| Skill marketplace / hub | Cline, Continue; **ClawHub** ("npm for AI agents", 3,286+ skills, vector search, one-command install) [S] | ✅ **corrected pass 15**: a 522-line ClawHub integration (search + install from clawhub.ai) was in the repo all along — this row said ❌ for fourteen passes [P] |
+| Skill marketplace / hub | Cline, Continue; **ClawHub** ("npm for AI agents", vector search, one-command install; 3,286 skills at first sourcing, **64K by May 2026** [S]) | ✅ **corrected pass 15**: a 522-line ClawHub integration (search + install from clawhub.ai) was in the repo all along — this row said ❌ for fourteen passes [P] |
 | Auto-distilling turns into skills | Socratic-SWE (trace-derived skills) [S] | ✅ self-improving skills [P] |
 | MCP Inspector-style debugging | [S] | ❌ |
 
@@ -86,7 +86,7 @@ row is weak evidence while presence is strong.
 | Semantic memory search | [S] | ✅ vector index [P] |
 | Cross-session recall | rare [K] | ✅ `session_search` / `session_read` [P] |
 | Hibernate-and-wake checkpointing | long-running-agent harnesses [S] | ✅ checkpoints [P] |
-| Structured handoff between agent phases | initializer→coder handoff [S] | ⚠? working-state snapshot [P] |
+| Structured handoff between agent phases | initializer→coder handoff [S] | ⚠️ working-state snapshot [P] |
 | Hierarchical LLM-curated memory | ByteRover [S] | ❌ flat files |
 | Programmatic memory searchable as code | PRO-LONG [S] | ❌ |
 | **Mining own failures into the prompt** | not found | ✅ `learn --write-scars` → SCARS.md [P] |
@@ -99,8 +99,8 @@ the outcome" [S], and 65% of enterprise AI failures trace to harness defects
 
 | Feature | Field | PasClaw |
 |---|---|---|
-| Eval harness with CI gates blocking regressions | LLM Readiness Harness [S] | ⚠? `bench/swe` written, unmerged |
-| Oracle-based pass/fail fixtures | SWE-agent, SWE-Bench-Pro [S] | ⚠? same |
+| Eval harness with CI gates blocking regressions | LLM Readiness Harness [S] | ⚠️ `bench/swe` written, unmerged |
+| Oracle-based pass/fail fixtures | SWE-agent, SWE-Bench-Pro [S] | ⚠️ same |
 | Adversarial / multi-agent convergence checks | [S] | ❌ |
 | Deterministic loop regression tests | rare [K] | ✅ `bench/agentloop` [P] |
 | Published benchmark numbers | Terminal Bench 2.0, SWE-Bench-Pro, WebArena [S] | ❌ none published |
@@ -111,14 +111,14 @@ the outcome" [S], and 65% of enterprise AI failures trace to harness defects
 
 | Feature | Field | PasClaw |
 |---|---|---|
-| Per-call approval prompts | Cline, Codex [S] | ⚠? profile-level [P] |
+| Per-call approval prompts | Cline, Codex [S] | ⚠️ profile-level [P] |
 | Hooks at tool boundaries (Pre/PostToolUse) | 27-event pipeline [S] | ✅ hook framework [P] |
-| "Lethal trifecta" risk modelling | [S] | ⚠? promptware scan + network block, not modelled as a triad [P] |
+| "Lethal trifecta" risk modelling | [S] | ⚠️ promptware scan + network block, not modelled as a triad [P] |
 | Prompt-injection scanning of tool output | rare [K] | ✅ **fired twice during this survey** [P] |
 | Sandboxed execution | OpenHands, Codex [S] | ✅ docker backend [P] |
 | Command denylist | common [K] | ✅ [P] |
 | Secret redaction | [K] | ✅ FS secret gate [P] |
-| Defense-in-depth layered model | OpenDev 5-layer [S] | ⚠? layers exist, not documented as a model |
+| Defense-in-depth layered model | OpenDev 5-layer [S] | ⚠️ layers exist, not documented as a model |
 
 ## 8. Observability
 
@@ -135,7 +135,7 @@ the outcome" [S], and 65% of enterprise AI failures trace to harness defects
 | Feature | Field | PasClaw |
 |---|---|---|
 | A2A (JSON-RPC + Agent Card discovery) | [S] | ❌ |
-| AG-UI (event streaming agent→UI) | [S] | ⚠? own SSE, not the standard [P] |
+| AG-UI (event streaming agent→UI) | [S] | ⚠️ own SSE, not the standard [P] |
 | AP2 / UCP (payments, commerce) | [S] | ❌ |
 | Agentic Resource Discovery | [S] | ❌ |
 
@@ -144,10 +144,10 @@ the outcome" [S], and 65% of enterprise AI failures trace to harness defects
 | Feature | Field | PasClaw |
 |---|---|---|
 | Interrupts at tool-use boundaries | LangGraph, Cline [S] | ✅ steering [P] |
-| Approval flows with structured diffs | [S] | ⚠? diffs shown, approval is profile-level |
+| Approval flows with structured diffs | [S] | ⚠️ diffs shown, approval is profile-level |
 | Deadline awareness in the loop | [S] — found orthogonal to reasoning ability | ❌ |
 | Time-budget warnings in context | [S] | ❌ |
-| Per-tool timeout contracts | [S] | ⚠? global shell timeout [P] |
+| Per-tool timeout contracts | [S] | ⚠️ global shell timeout [P] |
 | Mid-flight model swapping | deepclaude [S] | ✅ auto-router + fallback chain [P] |
 
 ## 11. Surfaces
@@ -173,12 +173,12 @@ expectations PasClaw is judged against, not because the claims are testable.
 |---|---|---|
 | Whole-repository read before planning | Devin's Cascade [S] | ❌ no repo-wide pass |
 | Multi-file edit as one planned unit | Cursor Composer, Cascade [S] | ✅ `apply_patch` [P] |
-| Agent runs terminal commands and **verifies against tests** | Cascade [S] | ⚠? only if the model elects to |
-| Cloud-delegated agents alongside local ones | Devin Desktop [S] | ⚠? relay workers, not managed [P] |
-| Multi-agent supervision surface | Devin's Agent Command Center [S] | ⚠? `spawn_status`, no dedicated UI [P] |
+| Agent runs terminal commands and **verifies against tests** | Cascade [S] | ⚠️ only if the model elects to |
+| Cloud-delegated agents alongside local ones | Devin Desktop [S] | ⚠️ relay workers, not managed [P] |
+| Multi-agent supervision surface | Devin's Agent Command Center [S] | ⚠️ `spawn_status`, no dedicated UI [P] |
 | PR drafting / PR summaries | Copilot [S] | ❌ |
 | Inline completion as you type | Copilot, Cursor [S] | ❌ not an editor |
-| Shared context across agents and PRs | Devin Desktop [S] | ⚠? shared workspace only [P] |
+| Shared context across agents and PRs | Devin Desktop [S] | ⚠️ shared workspace only [P] |
 
 The positioning split reported in the sources — Cursor as speed, Windsurf as
 deep context, Copilot as safety and scale [S] — has no PasClaw analogue.
@@ -192,12 +192,12 @@ also the one the field has moved on most.
 
 | Feature | Field | PasClaw |
 |---|---|---|
-| Issue-resolution benchmark | SWE-bench, SWE-Bench-Pro [S] | ⚠? `bench/swe` unmerged |
+| Issue-resolution benchmark | SWE-bench, SWE-Bench-Pro [S] | ⚠️ `bench/swe` unmerged |
 | Terminal / CLI benchmark | Terminal-Bench [S] | ❌ |
 | Web navigation benchmark | WebArena, WebVoyager [S] | ❌ (no browser) |
 | OS-level benchmark | OSWorld [S] | ❌ |
 | Tool-use benchmark | tau-bench, tau2-bench, AgentBench, GAIA [S] | ❌ |
-| **Trajectory evaluation** — score the nested span tree of model/tool calls, not just the outcome | [S] | ⚠? OTel spans captured, never scored [P] |
+| **Trajectory evaluation** — score the nested span tree of model/tool calls, not just the outcome | [S] | ⚠️ OTel spans captured, never scored [P] |
 | Span-level scoring of tool *selection* | [S] | ❌ |
 | LLM-as-judge, calibrated against human labels | [S] | ❌ |
 | Agent-as-judge with environment awareness | AJ-Bench [S] | ❌ |
@@ -663,7 +663,7 @@ adopted by 40+ tools including Codex, Gemini CLI, Copilot, Cursor [S].
 |---|---|---|
 | SKILL.md folder format, YAML frontmatter | the open standard [S] | ✅ PasClaw skills are already SKILL.md + YAML name/description — same shape, compatibility unverified against the spec [P] |
 | Cross-platform portability of one skill | 40+ tools [S] | ⚠️ if the format matches, PasClaw skills travel; untested |
-| Skill security research: registry supply-chain attacks, spec-violation fuzzing | SKILL.md supply-chain paper, SkillTester — and **realized in-family**: ClawHavoc, 341 malicious ClawHub skills (Feb 2026); registry now runs SHA-256 × VirusTotal + Gemini Code Insight on every publish [S] | ❌ skills install from that same registry with **no client-side provenance checks** — the sharpest security row in the survey [P] |
+| Skill security research: registry supply-chain attacks, spec-violation fuzzing | SKILL.md supply-chain paper, SkillTester — and **realized in-family**: ClawHavoc, **341–1,184** malicious ClawHub skills (Feb 2026; Antiy CERT and registry sources disagree — recorded as a range); registry now runs SHA-256 × VirusTotal + Gemini Code Insight on every publish. Scale of the problem, 2026 audits: Snyk ToxicSkills found 1,467 malicious payloads in 3,984 scanned skills; Unit 42 ran behavioral-integrity verification over all 49,943 skills on the OpenClaw registry — **80% deviate from their SKILL.md declaration**, 5% carry multi-stage attack chains [S] | ❌ skills install from that same registry with **no client-side provenance checks** — the sharpest security row in the survey; §43 tables what the fix looks like [P] |
 
 The compatibility row is the cheapest possible win found in ten passes: if
 PasClaw's existing SKILL.md dialect parses under the open spec, it inherits
@@ -778,18 +778,35 @@ rather than silently rewriting it. Star counts disagree across sources
 | **Spacebot** | Rust for **teams**: five process types where the user-facing Channel **never executes tools**, typed graph memory (8 node/5 edge types), RRF hybrid search, 50+ concurrent users | privileged/quarantined separation, in-family | the family's fourth answered survey-gap: §23's dual-LLM shape, and a data point for the RBAC open question |
 | **NullClaw** | Zig, **678 KB static binary**, ~1 MB RAM on $5 ARM boards, GPIO/STM32 | smallest binary | beyond even picoclaw's floor |
 | **ZeptoClaw** | Rust, 4 MB, size-optimised | — | roster completeness |
-| MicroClaw | Rust runtime contender | — | thin sourcing; named only |
+| **TrustClaw** (pass 16) | hardened OpenClaw deployment profile: owner-aware gating of privileged tools, **sandbox-required execution** for shell-like actions, dangerous-shell-pattern denial, bounded one-time approvals for trade-like actions; 24/7 assistant, 1000+ tools via scoped OAuth [S] | policy-layer guardrails as the product | a fifth answered survey gap: §18's guardrail/approval ladder, built as a deployment profile rather than a fork — one listicle calls it managed-cloud-only, the GitHub repo is self-hostable; the conflict is recorded |
 
 **Family infrastructure — ClawHub.** The registry the family standardised
-on: official OpenClaw skill store, "npm for AI agents", 3,286+ community
-skills (13,729 registered before a security purge), Convex-backed vector
-search, open publishing with stars and download counts [S]. picoclaw and
+on: official OpenClaw skill store, "npm for AI agents", 3,286 community
+skills at first sourcing (13,729 registered before a security purge) and
+**64K by May 2026** — and it is no longer alone: Skills.sh lists 91K,
+SkillsDirectory 36K, LobeHub 288K [S]. Convex-backed vector search, open
+publishing with stars and download counts [S]. picoclaw and
 nanobot standardised on its slug API, and PasClaw ships a full client
 (`Skills.ClawHub.pas`, 522 lines) [P]. Its history is the family's skills
-story in miniature: open publishing → ClawHavoc (341 malicious skills) →
+story in miniature: open publishing → ClawHavoc (341–1,184 malicious skills) →
 scanning on publish (VirusTotal + Code Insight). The registry hardened;
 the clients — PasClaw included — still install without their own
 provenance checks.
+
+**Family infrastructure — Moltworker.** Cloudflare's adaptation runs
+OpenClaw inside a Cloudflare Sandbox container on Workers: R2 for
+persistent storage, AI Gateway for model proxying (bring-your-own-key),
+Browser Rendering for web automation, control UI behind Cloudflare Access
+[S]. Explicitly a proof of concept ("may break without notice"), but it is
+the family's managed-runtime moment: §20's pattern (runtime absorbed into
+a platform) arriving in-family, with edge isolation as the selling point.
+
+Sweep, pass 16 (August 2026 sources): **Kimi Claw** appears in alternative
+lists as a hosted claw — named only, one source, not yet counted.
+"Poco-Claw" appears once and is likely a garbling of picoclaw; not tabled.
+Adjacent-not-claws from the same sweep: Grip AI (Python, lean), memU
+(local knowledge graph memory), OpenAGI (proactive daemon, SMS/Telegram
+outreach), LittleBird (screen-watching always-on assistant) [S].
 
 MicroClaw failed sourcing a second time and is demoted per the retry rule:
 named in one source title, contents unsourceable. No longer counted in the
@@ -822,6 +839,48 @@ The security arc also completes: the family began with Clawdbot's
 everything-connected exposure warning and answered it with NanoClaw's
 containers and IronClaw's TEE — the same journey §7/§17/§22 sketch for
 PasClaw, with the destination already built by relatives.
+
+---
+
+## 43. The provenance ladder — the fix literature for the sharpest row
+
+Pass 15 left the survey's sharpest security row: a demonstrated
+supply-chain attack (ClawHavoc) one hop from PasClaw's own skills
+directory, and a client that installs with no checks. This pass sources
+what the mature package ecosystems actually do — the ladder a skill
+client would climb.
+
+| Rung | Who ships it [S] | What it requires of a client [S] |
+|---|---|---|
+| Publish-time registry signing | VS Code Marketplace signs every extension at publish; npm registry signs packages | client verifies the signature at install — VS Code does this **in the client, by default** |
+| File-level integrity manifest | VSIX `.signature.manifest`: size + SHA-256 digest of **every file** in the archive | hash each installed file against the manifest — catches post-publish tampering |
+| Keyless provenance attestation | npm `--provenance` and PyPI Trusted Publishers + PEP 740, both built on **Sigstore**: short-lived certs bound to OIDC identities (Fulcio), public transparency log (Rekor) | client checks the attestation against the transparency log: `npm audit signatures` "validates registry signatures against current and historical npm public keys and provenance attestations against the sigstore certificate transparency log" |
+| Publish-time behavioral scanning | VS Code Marketplace: multi-engine AV scan, **sandboxed dynamic analysis** (clean-room VM), secret scanning that blocks publish; ClawHub post-ClawHavoc: SHA-256 × VirusTotal + Gemini Code Insight | nothing — this rung is registry-side; it is where ClawHub stopped |
+| Build-integrity grammar | **SLSA v1.0** Build track: L1 = provenance document exists (builder identity, source repo, artifact digest); L2 = build platform signs it, consumers can validate; L3 = hardened, isolated builds | a shared vocabulary for how far up the ladder anyone is |
+
+Default adoption is the news, not the mechanism: PyPI attestations became
+the default for Trusted-Publishing via the PyPA GitHub action — roughly
+20,000 packages attesting provenance **with no changes by their authors**
+[S]. The lesson for skill registries is that the ladder only matters when
+the default publish path climbs it.
+
+**Where the skills world is on this ladder: rung four only.** The 2026
+audit literature (Unit 42's 80%-deviation crawl, Snyk ToxicSkills,
+SkillSieve/SkillProbe/PhantomSkill) measures the problem, and the
+proposals — keyless OIDC signing, transparency logs for skill publication,
+reproducible-build attestations — are exactly rungs one to three ported
+from npm/PyPI. **Proposed, not shipped**: no skill registry surveyed
+issues signed attestations, and no claw client verifies anything at
+install [S].
+
+**Where PasClaw sits [P]:** `Skills.ClawHub.pas` (522 lines) downloads and
+installs with no signature check, no manifest hash, no attestation lookup
+— rung zero, like every other claw client. The claw-sized fix is the
+`npm audit signatures` shape plus the VSIX manifest shape: verify a
+registry signature and per-file SHA-256 digests at install. Both halves
+are registry-dependent (ClawHub would have to publish digests and sign),
+but hashing the downloaded archive and pinning it in a lockfile-style
+record is client-side only — a rung PasClaw could climb alone.
 
 ---
 
@@ -897,6 +956,19 @@ tool already knows its own scope.
 ## Method & limits
 
 - One live web search, one deep fetch of a curated catalogue, ten READMEs.
+- **Pass 16 integrity note.** Nineteen warning-sign glyphs in earlier
+  revisions of this document read `warning-sign + ?` — silent transport
+  corruption by the harness that wrote them: fpjson (FPC 3.2.2)
+  truncates adjacent `\uXXXX` escapes through a 4-byte buffer, so every
+  relay `write_file` whose payload was ASCII-safe JSON lost the second
+  character of each adjacent non-ASCII pair. The survey's own verify
+  step caught it (staged bytes vs written bytes), the root cause was
+  profiled to the scanner line, PasClaw now pre-decodes escapes before
+  fpjson parses, and this revision was re-written byte-exact through the
+  fixed binary. A document about agent verification gaps was itself
+  quietly corrupted by the tool under test for four passes — there is no
+  cleaner argument for §43's install-time verification rung or for "the
+  gap nobody has" than that.
 - **[K]** rows are unverified recall — leads, not findings.
 - **[S]** rows reflect what a source *claims*; no capability was tested.
 - Reported token-reduction figures (77%, 98%, 60–95%) are vendor/author
@@ -970,6 +1042,20 @@ tool already knows its own scope.
 - [Agent Zero review: plugin hub, Docker multi-agent](https://apidog.com/blog/agent-zero-ai-framework-review/)
 - [ClawHub: official skill registry for OpenClaw](https://github.com/openclaw/clawhub)
 - [ClawHub skills guide (3,286+ skills, ClawHavoc incident)](https://help.apiyi.com/en/clawhub-ai-openclaw-skills-registry-guide-en.html)
+- [npm: generating provenance statements (Sigstore, `npm audit signatures`)](https://docs.npmjs.com/generating-provenance-statements/)
+- [GitHub blog: introducing npm package provenance](https://github.blog/security/supply-chain-security/introducing-npm-package-provenance/)
+- [PEP 740 — index support for digital attestations](https://peps.python.org/pep-0740/)
+- [PyPI now supports digital attestations (PyPI blog)](https://blog.pypi.org/posts/2024-11-14-pypi-now-supports-digital-attestations/)
+- [Trail of Bits: attestations, a new generation of signatures on PyPI](https://blog.trailofbits.com/2024/11/14/attestations-a-new-generation-of-signatures-on-pypi/)
+- [VS Code extension runtime security (signing, malware scan, sandboxed analysis)](https://code.visualstudio.com/docs/configure/extensions/extension-runtime-security)
+- [SLSA v1.0 levels](https://slsa.dev/spec/v1.0/about)
+- [Unit 42: Trust No Skill — integrity verification for AI agent supply chains](https://unit42.paloaltonetworks.com/ai-agent-supply-chain-risks/)
+- [arXiv 2605.11418: Under the Hood of SKILL.md — semantic supply-chain attacks](https://arxiv.org/abs/2605.11418)
+- [CSA: SKILL.md agent context poisoning briefing](https://labs.cloudsecurityalliance.org/research/briefing-csa-research-note-skill-md-agent-context-poisoning/)
+- [TrustClaw (GitHub)](https://github.com/TrustClaw/TrustClaw)
+- [TrustedClaw: owner-governed guardrails for OpenClaw (Medium)](https://medium.com/@gwrx2005/trustedclaw-owner-governed-guardrails-for-secure-agentic-automation-in-openclaw-646ea1508db0)
+- [cloudflare/moltworker (GitHub)](https://github.com/cloudflare/moltworker)
+- [Composio: OpenClaw alternatives 2026](https://composio.dev/content/openclaw-alternatives)
 - [Relace: A Year of Fast Apply](https://relace.ai/blog/relace-apply-3)
 - [AI Agent Sandboxing in 2026: Docker, E2B, Firecracker, gVisor, Modal & Daytona Compared](https://amux.io/guides/ai-agent-sandboxing/)
 - [Cursor vs Claude Code vs Windsurf (Now Devin Desktop) 2026](https://www.shareuhack.com/en/posts/cursor-vs-claude-code-vs-windsurf-2026)
