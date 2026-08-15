@@ -2328,6 +2328,7 @@ function buildChatUI(project) {
   }
 
   async function submit() {
+    await ready;
     const text = ta.value.trim();
     if (!text) return;
     ta.value = "";
@@ -2457,10 +2458,22 @@ function buildChatUI(project) {
   ta.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
   });
-  /* Kicked off, not awaited: the surface exists immediately and fills in
-     when the gateway answers. A conversation that has never been filed
-     just stays empty. */
-  loadHistory();
+  /* The load has to WIN, not merely start.
+
+     Kicking it off unawaited raced the first Send: submit pushed the new
+     user turn, sent it with no prior context, and loadHistory then
+     appended the older turns AFTER it in the same array -- so the model
+     answered without the conversation, and the next saveHistory filed
+     the reply ahead of everything it was replying to, corrupting the
+     session's order permanently. The composer is disabled until the
+     replay lands, and submit awaits it as well: the disable is what the
+     user sees, the await is what makes it true for a programmatic
+     submitText that never touches the field. */
+  ta.disabled = true;
+  send.disabled = true;
+  const ready = loadHistory()
+    .catch(() => {})
+    .then(() => { ta.disabled = false; send.disabled = false; });
 
   return {
     root: wrap,
@@ -2954,11 +2967,20 @@ async function openApp(project, opts) {
   /* Closing this window must not close the conversation. The chat is
      re-parented out of the doomed pane and back to the dock, which is
      where it lives when no app window is open -- so reopening the app
-     finds the same transcript rather than a blank one. */
+     finds the same transcript rather than a blank one.
+
+     The repaint is DEFERRED because closeWindow fires onClose before it
+     removes the window from WINS. Repainting inline, the dock would
+     still find this window there, still ask __chatShown (true, the pane
+     was never hidden), and render the "conversation is in the app
+     window" placeholder -- pointing a Show it button at a window that no
+     longer exists, with the chat stranded in the detached pane until
+     something else happened to repaint. One turn of the event loop is
+     all it takes for the close to have finished. */
   const priorClose = w.onClose;
   w.onClose = () => {
     if (priorClose) { try { priorClose(); } catch {} }
-    if (S.dockProject === project) paintTree();
+    setTimeout(() => { if (S.dockProject === project) paintTree(); }, 0);
   };
 
   if (opts && opts.chat) showChat();
