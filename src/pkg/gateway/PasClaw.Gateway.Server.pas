@@ -4468,42 +4468,13 @@ begin
   InitCheckpoints(CC);
 end;
 
-(* Give a caller-supplied system message the mode's directive.
-
-   Both chat surfaces skip BuildSystemPrompt when the request carries
-   its own leading system message: Messages[0] is then the
-   authoritative policy, and PasClaw's identity preamble must not
-   override a third party's persona. Correct -- but it took the MODE
-   with it.
-
-   Plan mode survived that, because its dispatch gate refuses mutating
-   tools whatever the prompt says; only the advisory was lost. Improve
-   mode has no gate, so the block IS the mode: such a request ran as an
-   ordinary build while the API and the UI both still reported
-   "improve".
-
-   Appended to the caller's own system message rather than written to
-   Options.SystemPrompt, and that distinction is load-bearing: the
-   OpenAI and Anthropic builders DROP in-message system turns once
-   Options.SystemPrompt is set, so setting it here would silently
-   delete the very policy this branch exists to preserve. Appended
-   rather than prepended so the caller's text still leads and the
-   operating instruction reads as an addition to it. *)
-procedure InjectModeDirective(var Msgs: TMessageArray; Mode: TPasClawMode);
-var
-  Block: string;
-  i: Integer;
-begin
-  Block := BuildModeSection(Mode);
-  if Block = '' then Exit;              { pmBuild: nothing to say }
-  for i := 0 to High(Msgs) do
-    if Msgs[i].Role = mrSystem then
-    begin
-      Msgs[i].Content := TrimRight(Msgs[i].Content) + sLineBreak +
-                         sLineBreak + Block;
-      Exit;
-    end;
-end;
+(* InjectModeDirective -- gives a caller-supplied system message the
+   mode's directive -- used to live here. It moved to
+   PasClaw.Agent.Prompt (alongside BuildModeSection, which it wraps) so
+   the test binaries can link it: this unit is not linkable from them,
+   and the branch it guards -- both chat surfaces skipping
+   BuildSystemPrompt when the request carries its own system message --
+   is exactly the one that silently unmade improve mode once already. *)
 
 function TGatewayServer.RunCheckpointedLoop(const ReqSession: string;
   const Cfg: TToolLoopConfig; var Messages: array of TMessage;

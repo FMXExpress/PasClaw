@@ -121,6 +121,35 @@ function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
    Returns '' for pmBuild, so a caller can append unconditionally. *)
 function BuildModeSection(Mode: TPasClawMode): string;
 
+(* Give a caller-supplied system message the mode's directive.
+
+   The counterpart to BuildModeSection, for exactly the branch that
+   comment describes: the request already carries its own system
+   message, so BuildSystemPrompt is skipped and the mode would
+   otherwise go unsaid.
+
+   APPENDED TO THE CALLER'S MESSAGE, not written to
+   Options.SystemPrompt, and that distinction is load-bearing. Once
+   Options.SystemPrompt is non-empty, every default-path provider
+   builder drops the in-history system turns: OpenAI skips them
+   (Providers.OpenAI, "already added above"), Anthropic drops
+   system-role history unconditionally after preferring SystemPrompt,
+   Gemini folds them only while SystemPrompt is empty. Setting it here
+   would deliver the mode by deleting the caller policy this branch
+   exists to preserve -- silently, and only on the two surfaces real
+   clients use.
+
+   Appended to the FIRST system message for the same reason: Anthropic
+   forwards only the first one and discards the rest, so a directive
+   parked in a later message -- or in a new one pushed onto the end --
+   would never ship there. Appended rather than prepended so the
+   caller's text still leads and the mode reads as an addition to it.
+
+   Lives here, next to BuildModeSection, rather than in the gateway
+   that calls it: this is prompt assembly, and the gateway is not
+   linkable from the test binaries. *)
+procedure InjectModeDirective(var Msgs: TMessageArray; Mode: TPasClawMode);
+
 { Active-plan section -- reads <home>/workspace/PLAN.md (the output of
   a prior `pasclaw plan`) and returns it wrapped in a "## Active Plan"
   block for injection into the build's system prompt. Returns '' when
@@ -1034,6 +1063,22 @@ begin
   else
     Result := '';
   end;
+end;
+
+procedure InjectModeDirective(var Msgs: TMessageArray; Mode: TPasClawMode);
+var
+  Block: string;
+  i: Integer;
+begin
+  Block := BuildModeSection(Mode);
+  if Block = '' then Exit;              { pmBuild: nothing to say }
+  for i := 0 to High(Msgs) do
+    if Msgs[i].Role = mrSystem then
+    begin
+      Msgs[i].Content := TrimRight(Msgs[i].Content) + sLineBreak +
+                         sLineBreak + Block;
+      Exit;
+    end;
 end;
 
 function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
