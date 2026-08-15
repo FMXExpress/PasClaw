@@ -672,6 +672,44 @@ a 40-tool ecosystem for the cost of a conformance check.
 Tool-action reliability patterns (idempotency keys, compensation) found no
 direct sourcing beyond MCP's idempotentHint and stay a lead.
 
+## 40. The provider is becoming the harness
+
+The eleventh pass's cluster is a thesis, and the rows source: providers are
+absorbing, server-side, the features this survey has spent forty sections
+cataloguing client-side. Every row below has a PasClaw counterpart built in
+this repo — which is exactly what makes the absorption strategic rather
+than incidental.
+
+| Provider feature | Detail | PasClaw's client-side counterpart |
+|---|---|---|
+| **Server-side conversation state** | OpenAI Conversations API: durable conversation objects joined to the Responses API [S] | ✅ sessions on disk [P] |
+| **Background mode** | long tasks run async, poll the response object; no timeout management [S] — with a sourced wart: a March 2026 stretch where `background=true` returned server_error on every request [S] | ✅ `spawn_background` + drain [P] |
+| **Built-in provider tools** | web search, file search, computer use in the Responses API; trillions of tokens processed [S] | ✅ web_fetch / kb / (no computer use) [P] |
+| **Server-side context editing** | Anthropic `context-management` beta: clears old tool pairs *after prompt-cache lookup*, so pruning no longer breaks the cache; +29% performance alone, 84% token savings on a 100-turn task combined with memory [S] | ⚠️ compaction + `StubSupersededReads` are client-side and cache-*hostile* — the server-side version dominates them [P] |
+| **Provider memory tool** | `memory_20250818`, client-executed memory ops; +39% combined with context editing [S] | ✅ MEMORY.md + memory_search — same idea, self-hosted [P] |
+| Reasoning effort in the API surface | Responses API native [S] | ✅ `--thinking` (§37) [P] |
+
+Two readings, both honest:
+
+**The threatening one.** Anthropic's context editing runs after cache
+lookup; PasClaw's equivalent machinery (compaction, superseded-read
+elision) runs before the request and invalidates cache prefixes to save
+tokens. Where the provider version exists, it is simply better — the
+harness's most-engineered features become the first ones obsolete.
+
+**The durable one.** Every server-side feature above is provider-locked.
+PasClaw's counterparts are the same features with one property the
+providers cannot offer: they work identically over any backend, including
+local models and the relay. The survey's own Claude Code note confirms the
+pattern — its internal "microcompact" became a public API parameter. The
+harness features that survive absorption are the ones whose value is
+neutrality, not cleverness.
+
+Claude Code agent-teams and output-styles found no direct sourcing and stay
+leads. Provider-side tool search likewise — noted because PasClaw ships
+`tool_search` client-side, and if providers absorb that too, the pattern
+above repeats.
+
 ---
 
 ## Where PasClaw leads
@@ -801,6 +839,11 @@ tool already knows its own scope.
 - [x402 standards body under Linux Foundation](https://www.coindesk.com/business/2026/07/16/ai-payments-have-a-new-open-standards-body-its-aim-is-to-reinvent-the-internet)
 - [Agent Skills specification](https://github.com/agentskills/agentskills)
 - [Under the Hood of SKILL.md: supply-chain attacks](https://arxiv.org/pdf/2605.11418)
+- [OpenAI: new tools and features in the Responses API](https://openai.com/index/new-tools-and-features-in-the-responses-api/)
+- [OpenAI: background mode](https://developers.openai.com/api/docs/guides/background)
+- [OpenAI: conversation state](https://developers.openai.com/api/docs/guides/conversation-state)
+- [Anthropic: context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing)
+- [Claude memory tool guide](https://www.leoniemonigatti.com/blog/claude-memory-tool.html)
 - [Relace: A Year of Fast Apply](https://relace.ai/blog/relace-apply-3)
 - [AI Agent Sandboxing in 2026: Docker, E2B, Firecracker, gVisor, Modal & Daytona Compared](https://amux.io/guides/ai-agent-sandboxing/)
 - [Cursor vs Claude Code vs Windsurf (Now Devin Desktop) 2026](https://www.shareuhack.com/en/posts/cursor-vs-claude-code-vs-windsurf-2026)
