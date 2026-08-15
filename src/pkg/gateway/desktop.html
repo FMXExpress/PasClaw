@@ -1016,6 +1016,22 @@ h1,h2,h3 { margin: 0 0 6px; font-size: 12px; }
 
 iframe.app { width: 100%; height: 100%; border: 0; background: var(--window); display: block; }
 
+/* App window with the editing chat docked left: [chat][grip][app]. The
+   pane starts hidden; the statusbar's Chat button toggles it, the grip
+   resizes it. */
+.appsplit { display: flex; height: 100%; min-height: 0; }
+.appside  {
+  flex: 0 0 auto; width: 260px; min-width: 180px; max-width: 70%;
+  display: flex; min-height: 0; padding: 3px;
+}
+.appside .chat { flex: 1 1 auto; min-width: 0; }
+.appgrip  {
+  flex: 0 0 5px; cursor: col-resize;
+  background: var(--face); border-left: 1px solid var(--light);
+  border-right: 1px solid var(--shadow);
+}
+.appsplit iframe.app { flex: 1 1 auto; width: auto; min-width: 0; }
+
 /* ---- period-native agent output ----
    The agent speaks in the era's own furniture: a plan arrives as a wizard,
    a question as a message box, work in progress as a progress dialog. All of
@@ -2649,6 +2665,8 @@ function renderUIBlock(block, project) {
         if (block.reply === false || !project) return;
         const w = WINS.get("chat:" + project);
         if (w && w.__submitText) { w.__submitText(String(v)); return; }
+        const aw = WINS.get("app:" + project);
+        if (aw && aw.__submitText) { aw.__submitText(String(v)); return; }
         const dc = DOCK_CHATS.get(project);
         if (dc) dc.submitText(String(v));
       },
@@ -2750,7 +2768,34 @@ async function openApp(project) {
     if (frame.contentWindow) FRAME_PROJECT.set(frame.contentWindow, project);
   });
   frame.src = appURL(project) + "?t=" + Date.now();
-  w.body.appendChild(frame);
+
+  /* [chat][grip][app]: the editing conversation lives INSIDE the app
+     window, on the left, hidden until asked for. The app is the thing
+     being made; the chat is how it changes; putting a wall of window
+     management between them was friction with no compensating clarity. */
+  const split = el("div", "appsplit");
+  const side = el("div", "appside");
+  side.style.display = "none";
+  const grip = el("div", "appgrip");
+  grip.style.display = "none";
+  split.appendChild(side); split.appendChild(grip); split.appendChild(frame);
+  w.body.appendChild(split);
+
+  /* Drag the grip to resize the pane. The iframe eats mouse events, so it
+     goes pointer-inert for the duration of the drag. */
+  grip.addEventListener("mousedown", e => {
+    e.preventDefault();
+    const x0 = e.clientX, w0 = side.offsetWidth;
+    frame.style.pointerEvents = "none";
+    const move = ev => { side.style.width = Math.max(180, w0 + ev.clientX - x0) + "px"; };
+    const up = () => {
+      frame.style.pointerEvents = "";
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+    };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  });
   /* Register the frame NOW, not on load: the SDK inside the app posts its
      first state read while the document is still parsing, which is before
      the load event fires. Registering late loses that first request. */
@@ -2771,7 +2816,19 @@ async function openApp(project) {
   w.__reloadApp = doReload;
   bar.appendChild(reload);
   const chat = el("button", "btn", "Chat");
-  chat.addEventListener("click", () => openChat(project));
+  chat.title = "Edit this app by asking -- the conversation docks on the left";
+  chat.addEventListener("click", () => {
+    const showing = side.style.display !== "none";
+    if (showing) { side.style.display = "none"; grip.style.display = "none"; return; }
+    side.style.display = "flex";
+    grip.style.display = "";
+    if (!w.__chat) {
+      w.__chat = buildChatUI(project, side);
+      /* Dialog answers route here too -- see renderUIBlock's chain. */
+      w.__submitText = w.__chat.submitText;
+    }
+    w.__chat.focus();
+  });
   bar.appendChild(chat);
   bar.appendChild(el("span", "muted", app.kind + (app.network ? " -- net: " + app.network : "")));
   w.node.appendChild(bar);
