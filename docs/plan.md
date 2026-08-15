@@ -1,4 +1,4 @@
-# `pasclaw plan` and the plan/build pairing
+# `pasclaw plan` and the plan/build/improve modes
 
 `pasclaw plan` is a sibling command to `pasclaw build`. It produces a
 structured markdown plan as `workspace/PLAN.md` instead of executing
@@ -246,3 +246,38 @@ semantics. The Ralph loop pumps:
 - `pasclaw learn --write-scars` — emits/refreshes `workspace/memory/
   SCARS.md` with anchor IDs per recurring failure. Plans and scars
   compose: scars surface recurring traps; plans propose work.
+
+## Improve mode
+
+A third mode, alongside plan and build:
+
+```sh
+pasclaw agent --mode improve -m "make the tokenizer faster"
+```
+
+Plan and build differ in what the agent may **do** — the dispatch gate refuses mutating tools under plan. Improve differs in **how it goes about it**: every tool works exactly as in build, and what changes is the system prompt, which asks for the loop the mode is named after.
+
+| Step | |
+|---|---|
+| **Benchmark** | Get a number *before* changing anything, and record the command that produced it. If nothing measures it yet, building that is the first task. |
+| **Profile** | Find where the cost actually is. The slow thing is regularly not the thing that looks slow. |
+| **Change one thing** | Several changes and one measurement tells you the total and nothing about which change earned it. |
+| **Verify** | Re-run the *same* measurement, same conditions, and report before → after with both numbers. |
+| **Research** | When the profile suggests no fix — the algorithm, the API's documented cost, what upstream did. |
+
+Two rules matter more than the loop: a change that didn't move the number **gets reverted**, and is reported as not having worked; and regressions are **reported plainly with the numbers**. A wrong result reported honestly is useful, a wrong result reported as a win costs somebody a day.
+
+Because it refuses nothing, there is no dispatch gate to write — the prompt *is* the mode. That is also why it is a mode rather than a skill: the discipline has to survive the whole session, not one turn.
+
+`improve` is the canonical name; `research`, `auto`, `optimize`/`optimise` and `i` are accepted as aliases, since those are the words people reach for when describing the loop. The [auto-router](./configuration.md) never downgrades an improve turn to the cheap model — its turns are judgement, and a short "re-run the benchmark" scores as easy precisely when the answer matters most.
+
+### Where you can switch
+
+| Surface | How |
+|---|---|
+| CLI | `--mode improve` (or `plan` / `build`) |
+| TUI | `Tab` cycles build → plan → improve; `/mode improve` |
+| Agent Console (`/`) | the mode button cycles the three |
+| Gateway API | `"mode": "improve"` in the chat request body |
+
+The FireMonkey desktop client has no mode toggle and does not send `mode`, so its turns run in build mode as before.

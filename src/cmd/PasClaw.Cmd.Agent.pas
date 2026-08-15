@@ -181,7 +181,7 @@ type
        per call; --quiet (above) suppresses the per-tool lines entirely and
        wins over both. *)
     Verbose: Boolean;
-    (* --mode plan|build (PR #290). Default Build (full tool access).
+    (* --mode plan|build|improve (PR #290). Default Build (full tool access).
        Plan refuses tcMutating tools at dispatch time -- the model gets
        analysis-only access. The interactive loop also re-checks the
        current value before each turn so an in-session /mode switch
@@ -346,7 +346,7 @@ begin
       if i = High(Argv) then Exit(False);
       if not ParseMode(Argv[i + 1], A.Mode) then
       begin
-        PrintLnErr('invalid --mode "' + Argv[i + 1] + '" (expected plan|build)');
+        PrintLnErr('invalid --mode "' + Argv[i + 1] + '" (expected plan|build|improve)');
         Exit(False);
       end;
       Inc(i, 2); Continue;
@@ -1586,7 +1586,7 @@ begin
         PrintLn('  /compact     force a one-shot summariser pass on the history now');
         PrintLn('  /think       toggle extended thinking on the next turn (if the provider supports it)');
         PrintLn('  /tools       list registered tools');
-        PrintLn('  /mode [plan|build]   show or set the current mode (plan = read-only, build = full access)');
+        PrintLn('  /mode [plan|build|improve]  show or set the mode (plan = read-only, build = full access, improve = measure-first loop)');
         PrintLn('  /steer <msg> queue a mid-loop steering message for the NEXT iteration');
         PrintLn('  /undo [N]    rewind N turns by restoring file checkpoints (default 1)');
         PrintLn('  /goal [--max N] <objective>');
@@ -1598,11 +1598,11 @@ begin
       begin
         if Line = '/mode' then
           PrintLn('  mode: ' + ModeName(A.Mode) +
-                  '  (/mode plan -> read-only; /mode build -> full)')
+                  '  (/mode plan -> read-only; build -> full; improve -> measure first)')
         else
         begin
           if not ParseMode(Trim(Copy(Line, 7, MaxInt)), A.Mode) then
-            PrintLn('  invalid mode -- use plan|build')
+            PrintLn('  invalid mode -- use plan|build|improve')
           else
           begin
             { Re-build the system prompt so the next turn announces the new
@@ -1931,7 +1931,7 @@ begin
     PrintLnErr('usage: pasclaw agent [-m "msg"] [--model M] [--provider P] [--system S]');
     PrintLnErr('                     [--thinking low|medium|high] [--max-tokens N]');
     PrintLnErr('                     [--max-iterations N] [--no-tools] [-q|--quiet] [--verbose|--brief]');
-    PrintLnErr('                     [--orient|--no-orient] [--mode plan|build] [--plan|--build]');
+    PrintLnErr('                     [--orient|--no-orient] [--mode plan|build|improve] [--plan|--build]');
     PrintLnErr('                     [--profile baseline|low-token|security|max-build|all-on|<custom>]');
     Exit(1);
   end;

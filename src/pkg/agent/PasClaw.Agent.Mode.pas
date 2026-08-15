@@ -19,14 +19,29 @@
   The enum's first value is pmBuild on purpose: TToolLoopConfig is a
   zero-initialised record, so callers that don't bother setting Mode
   land on the historical full-access behaviour. Plan mode is strictly
-  opt-in.
+  opt-in, and so is Improve -- appended to the enum rather than
+  inserted, so no existing ordinal shifts.
+
+    pmImprove           -- full tool access, same as Build. What
+                           changes is the SYSTEM PROMPT: it asks for a
+                           measure / profile / change-one-thing /
+                           re-measure loop, and for the numbers to be
+                           reported at both ends. See
+                           PasClaw.Agent.Prompt.BuildImproveModeSection.
+
+                           Nothing is refused here, so there is no
+                           dispatch gate to write. The mode is a
+                           discipline the prompt imposes, which is
+                           exactly why it belongs beside plan and build
+                           rather than in a skill: it has to survive
+                           the whole session, not one turn.
 
   Mode plumbing per surface (PR #290):
 
-    pasclaw agent --mode plan|build       process-global
+    pasclaw agent --mode plan|build|improve|improve   process-global
     pasclaw tui                           Tab key cycles when chat
                                           focused; status bar shows
-                                          [mode: plan|build]
+                                          [mode: plan|build|improve]
     /v1/chat/completions, /v1/chat,       per-request: optional `mode`
     /v1/responses                         field in the JSON body, default
                                           "build"
@@ -56,7 +71,25 @@ uses
   SysUtils;
 
 type
-  TPasClawMode = (pmBuild, pmPlan);
+  (* pmImprove is BUILD with a method.
+
+     Plan and Build differ in what the agent may DO -- the dispatch
+     gate refuses mutating tools under pmPlan. Improve differs in how
+     it goes about it: every tool works exactly as in Build, and what
+     changes is the system prompt, which asks for the loop the mode is
+     named after.
+
+       benchmark   get a number before touching anything
+       profile     find where the cost actually is
+       improve     change ONE thing
+       verify      re-run the same measurement
+       research    when the profile does not suggest a fix
+
+     That is a discipline, not a capability, which is why it needed a
+     mode rather than a tool. The failure it exists to prevent is the
+     one agents are best at: changing code that looks slow, declaring
+     it faster, and never measuring either end. *)
+  TPasClawMode = (pmBuild, pmPlan, pmImprove);
 
 function ModeName(M: TPasClawMode): string;
 function ParseMode(const S: string; out M: TPasClawMode): Boolean;
@@ -83,8 +116,9 @@ uses
 function ModeName(M: TPasClawMode): string;
 begin
   case M of
-    pmBuild: Result := 'build';
-    pmPlan:  Result := 'plan';
+    pmBuild:   Result := 'build';
+    pmPlan:    Result := 'plan';
+    pmImprove: Result := 'improve';
   else
     Result := 'build';
   end;
@@ -103,6 +137,16 @@ begin
   begin
     M := pmPlan; Result := True;
   end
+  { "research" and "auto" are accepted because they are what people
+    reach for when describing this loop, and a mode you cannot name is
+    a mode you will not use. "improve" is the canonical spelling:
+    research is one step of the loop, and "auto" says nothing about
+    what it does. }
+  else if (L = 'improve') or (L = 'i') or (L = 'research')
+          or (L = 'auto') or (L = 'optimize') or (L = 'optimise') then
+  begin
+    M := pmImprove; Result := True;
+  end
   else
   begin
     M := pmBuild; Result := False;
@@ -111,9 +155,13 @@ end;
 
 function CycleMode(M: TPasClawMode): TPasClawMode;
 begin
+  { build -> plan -> improve -> build. Plan sits next to Build because
+    swapping those two is the common move; Improve comes after so a
+    stray Tab lands on the read-only mode rather than one that edits. }
   case M of
-    pmBuild: Result := pmPlan;
-    pmPlan:  Result := pmBuild;
+    pmBuild:   Result := pmPlan;
+    pmPlan:    Result := pmImprove;
+    pmImprove: Result := pmBuild;
   else
     Result := pmBuild;
   end;
