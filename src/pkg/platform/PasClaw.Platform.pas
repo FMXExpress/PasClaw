@@ -420,7 +420,14 @@ begin
   if not Result and not FExited then
   begin
     FExited := True;
-    try FExitCode := TInternalProcess(FProcess).ExitStatus; except FExitCode := -1; end;
+    (* ExitCode, NOT ExitStatus. FPC's TProcess only normalises ExitStatus
+       when it reaps the child itself via poWaitOnExit; reaped through the
+       Running poll -- which is what every caller here does, because they
+       have to drain the pipe -- ExitStatus keeps the RAW waitpid status and
+       ExitCode is the normalised one. So `exit 2` surfaced as 512, `exit 1`
+       as 256 and `command not found` as 32512, and every prompt rule or
+       retry heuristic keyed on a real exit code silently missed. *)
+    try FExitCode := TInternalProcess(FProcess).ExitCode; except FExitCode := -1; end;
   end;
 end;
 
@@ -488,7 +495,9 @@ begin
       end;
       Sleep(20);
     end;
-    Result := P.ExitStatus;
+    { ExitCode, not ExitStatus -- see TStdioProcess.Running for why the
+      polling path has to use the normalised one. }
+    Result := P.ExitCode;
     if M.Size > 0 then
     begin
       { Hand the captured bytes to the shared decoder rather than
@@ -602,7 +611,8 @@ begin
       end;
       Sleep(20);
     end;
-    Result := P.ExitStatus;
+    { ExitCode, not ExitStatus -- see TStdioProcess.Running. }
+    Result := P.ExitCode;
     if M.Size > 0 then
     begin
       { Same OEM-decode trick as RunOneShot above -- see the
