@@ -225,6 +225,78 @@ use `oracle/test.sh` exit codes — exactly the surface that was gamed. An
 oracle that only checks its own exit status cannot tell a real fix from a
 doctored config, and any pass-rate published from it inherits that weakness.
 
+## 14. Memory infrastructure
+
+The draft's memory section covered PasClaw-adjacent features; the field has
+meanwhile grown dedicated memory *products* with published benchmarks.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Tiered memory: in-context core / recall / archival, modelled on RAM–cache–disk | Letta (MemGPT) [S] | ⚠️ MEMORY.md is "core", `memory_search` is "archival"; no managed middle tier [P] |
+| **Self-editing memory** — the agent rewrites its own core block | Letta [S] | ❌ MEMORY.md edits are ad-hoc writes, not a managed operation |
+| Fact extraction into a vector store on every turn | Mem0 [S] | ⚠️ distiller extracts facts, but post-hoc, not per-turn [P] |
+| Temporal knowledge graph (entities + relations + time) | Zep [S] | ❌ |
+| Time-aware retrieval ("what did X believe before Y") | Zep — +15 pts over vector-only on LongMemEval [S] | ❌ |
+| Published memory benchmarks (LoCoMo, LongMemEval) | Mem0 92.5% LoCoMo [S] | ⚠️ a LOCOMO-shaped harness exists (PR #308), unmerged |
+| Retrieval token budget as a headline metric | Mem0: <7 K/call vs 25 K+ full-context [S] | ❌ never measured |
+
+The pattern worth copying is not any single product but the *shape*: memory
+as a tiered system with an explicit token budget per retrieval, benchmarked.
+PasClaw has the pieces (MEMORY.md, facts.db, vector index, session search)
+without the tiering or the numbers.
+
+## 15. Background / CI agents & git-native workflows
+
+Entirely absent from the first two passes, and it is where the commercial
+field converged in 2026: the lifecycle *ticket → cloud sandbox → autonomous
+edit → PR → human review* is now the same across every major tool [S].
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Repo-scoped cloud task: assign issue, get a PR | Copilot coding agent (runs in GitHub Actions), Google Jules, Codex cloud [S] | ❌ |
+| Queueable task batches ("five tickets Friday, five PRs Monday") | [S] | ⚠️ cron runs skills, not repo tasks [P] |
+| Agent explores repo, edits, runs tests, opens PR unattended | Copilot [S] | ⚠️ `pasclaw build` does the middle, no VCS integration [P] |
+| **Per-agent git worktree isolation** | Intent — attribution "a property of the workspace itself" [S] | ❌ agents share one workspace |
+| Attribution without span propagation (structural, from the worktree boundary) | [S] | ❌ |
+| Free-tier background quota as a product lever | Jules: 15 tasks/day [S] | n/a (self-hosted) |
+
+Worktree isolation is the standout: it solves attribution, conflict, and
+rollback in one move, structurally, with no instrumentation — and PasClaw's
+multi-agent story (`spawn*`, shared workspace) currently has all three
+problems.
+
+## 16. Observability platforms
+
+The draft had five rows; the field has six anchor platforms [S]: LangSmith
+(framework-native), Langfuse (open-source, self-hostable), Arize Phoenix,
+Helicone (drop-in proxy), Datadog LLM Obs, Honeycomb.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Every step captured as structured traces — LLM calls, tools, retrievals, control flow | all six [S] | ✅ OTel spans exist [P] |
+| Failure localisation in *intermediate* steps, not final answers | the category's stated purpose [S] | ❌ spans emitted, nothing inspects them |
+| Self-hostable open-source option | Langfuse [S] | ✅ OTel exports anywhere [P] |
+| Drop-in proxy instrumentation (no code change) | Helicone [S] | ⚠️ the gateway *is* a proxy; it aggregates stats, not traces [P] |
+| Eval loops attached to traces | LangSmith, Langfuse [S] | ❌ |
+
+## 17. Sandboxing below Docker
+
+The draft treated "sandboxed execution" as one row. The field's 2026
+consensus is blunter: shared-kernel container isolation "isn't cutting it
+anymore for executing untrusted AI agent code" [S].
+
+| Isolation level | Who | PasClaw |
+|---|---|---|
+| Shared-kernel containers (Docker/runc) | the baseline being retired [S] | ✅ docker backend — i.e. the retired baseline [P] |
+| User-space kernel syscall interception (~10–15% CPU cost, full syscall audit) | gVisor [S] | ❌ |
+| MicroVMs — hardware boundary per execution | Firecracker, Kata; E2B/Daytona/Modal productise it [S] | ❌ |
+| Sandbox-per-execution as a service API | E2B, Daytona [S] | ❌ |
+
+PasClaw's honest position: its docker backend is what the field now calls
+the insufficient baseline. For a self-hosted personal agent that mostly runs
+the operator's own code, that is defensible — but the survey should say it
+rather than let "sandboxed ✅" imply parity with microVM isolation.
+
 ---
 
 ## Where PasClaw leads
@@ -253,11 +325,17 @@ Three things I did not find anywhere in the surveyed material:
    [S]; PasClaw has two categories. This is a small change with immediate
    value for per-call approvals.
 5. **Per-call approvals.** Depends on 4.
-6. **Trajectory evaluation.** PasClaw already emits OTel spans covering every
+6. **Per-agent worktree isolation.** Structural attribution/conflict/rollback
+   for multi-agent work [S]; `spawn*` currently shares one workspace and has
+   all three problems.
+7. **Memory tiering with a retrieval token budget.** The pieces exist
+   (MEMORY.md, facts, vectors); the field ships them as a measured system
+   [S] and PasClaw has never measured a retrieval.
+8. **Trajectory evaluation.** PasClaw already emits OTel spans covering every
    model and tool call — the exact structure trajectory evaluators consume
    [S] — and never scores them. The data is collected and thrown away; this
    is the cheapest eval capability available to it.
-7. **Published benchmark numbers.** Competitors lead with them; the harness
+9. **Published benchmark numbers.** Competitors lead with them; the harness
    exists here but is unmerged — and per the exploitation finding above, it
    needs oracles that verify more than their own exit code before any number
    from it is worth publishing.
@@ -299,6 +377,12 @@ tool already knows its own scope.
 - [AI Agent Benchmarks 2026 — SWE-bench, WebArena, AgentBench, Terminal-Bench, OSWorld, Tau-Bench](https://benchmarkingagents.com/agent-benchmarks/)
 - [AJ-Bench: Benchmarking Agent-as-a-Judge](https://arxiv.org/pdf/2604.18240)
 - [Top AI Coding Agents and Development Platforms in 2026](https://www.marktechpost.com/2026/06/10/ai-coding-agents-development-platforms-2026/)
+- [Mem0 vs Letta (MemGPT): AI Agent Memory Compared (2026)](https://vectorize.io/articles/mem0-vs-letta)
+- [Mem0 vs Zep vs Letta: AI Agent Memory in 2026](https://datapace.ai/blog/ai-agent-memory-tools-2026)
+- [Copilot Coding Agent vs Codex vs Cursor Background Agents: 2026 Workflow Map](https://ralphable.com/blog/copilot-coding-agent-vs-codex-vs-cursor-background-agents-2026)
+- [Agent Observability: LangSmith, Langfuse, Arize 2026](https://www.digitalapplied.com/blog/agent-observability-platforms-langsmith-langfuse-arize-2026)
+- [How to sandbox AI agents in 2026: MicroVMs, gVisor & isolation strategies](https://northflank.com/blog/how-to-sandbox-ai-agents)
+- [AI Agent Sandboxing in 2026: Docker, E2B, Firecracker, gVisor, Modal & Daytona Compared](https://amux.io/guides/ai-agent-sandboxing/)
 - [Cursor vs Claude Code vs Windsurf (Now Devin Desktop) 2026](https://www.shareuhack.com/en/posts/cursor-vs-claude-code-vs-windsurf-2026)
 - [Harness Engineering: Making AI Coding Agents Work in 2026](https://www.faros.ai/blog/harness-engineering)
 - [Best AI Coding Agents in 2026](https://www.firecrawl.dev/blog/best-ai-coding-agents)
