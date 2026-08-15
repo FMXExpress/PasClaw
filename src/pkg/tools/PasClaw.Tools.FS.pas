@@ -1805,7 +1805,12 @@ begin
                    'locate files by NAME.';
   T.Schema      := '{"type":"object","properties":{' +
                    '"path":{"type":"string"},' +
-                   '"pattern":{"type":"string"},' +
+                   { The parameter is called "pattern", which reads as regex to
+                     any model, and it was the ONE required field with no
+                     description while every optional field had one. A literal
+                     alternation costs a whole round trip -- the handler's
+                     LooksLikeRegex note already recovers it, this prevents it. }
+                   '"pattern":{"type":"string","description":"Literal substring, NOT a regex: a|b matches those three characters. Search one plain term per call, or use shell_exec grep -E for real regex."},' +
                    '"ignore_case":{"type":"boolean"},' +
                    '"include":{"type":"string","description":"Comma-separated filename glob(s), e.g. *.pas,*.dpr"},' +
                    '"context_lines":{"type":"integer","minimum":0,"maximum":10,"description":"Also show N lines before/after each match (grep -C). Context lines use LINENO- prefixes; matches keep LINENO:."},' +
