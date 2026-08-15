@@ -195,9 +195,16 @@ begin
 end;
 
 procedure TestRichTurnDetection;
-{ The PUT handler refuses (409) to overwrite a session with tool/system
-  turns or assistant tool_calls so the web UI can't strip an agent
-  transcript. Pin the predicate that gate keys off. }
+{ SessionHasRichTurns decides whether a /v1/sessions PUT overwrites or
+  merges. A session carrying tool/system turns or assistant tool_calls is
+  the agent's, not the web UI's: the PUT keeps the transcript on disk and
+  takes only the tool-detail blob out of the body.
+
+  It used to answer 409 instead, which prevented loss but forced the web UI
+  to fork -- and once the gateway persists its own transcripts, a browser
+  sharing that session would fork on every turn. The predicate is unchanged;
+  what changed is the branch it selects. Pin it either way, because both
+  behaviours key off exactly this. }
 var
   Msgs: TMessageArray;
 begin
@@ -228,6 +235,135 @@ begin
   { Empty transcript is not rich. }
   SetLength(Msgs, 0);
   AssertTrue(not SessionHasRichTurns(Msgs), 'empty transcript is not rich');
+end;
+
+procedure TestToolDetailReplaceKeepsTranscript;
+{ The merge branch rewrites ToolDetail and leaves Messages alone. That is
+  only safe if the store treats the two independently, so pin it: a rich
+  transcript survives a ToolDetail swap of the same length.
+
+  Same-length deliberately -- Save drops a blob with MORE entries than the
+  transcript (see TestToolDetailStalenessGuard), and the web UI's flattened
+  view is never longer than the agent's, so the realistic merge is
+  shorter-or-equal. }
+var
+  Id: string;
+  S1, S2: TSession;
+begin
+  Id := 'merge-keeps-transcript-' + IntToStr(Random(MaxInt));
+  S1 := TSession.Create(Id);
+  try
+    SetLength(S1.Messages, 3);
+    S1.Messages[0] := MakeMessage(mrUser, 'build it');
+    S1.Messages[1] := MakeMessage(mrAssistant, 'running a tool');
+    S1.Messages[2] := MakeMessage(mrTool, 'exit=0');
+    S1.ToolDetail := '[null,null,{"old":true}]';
+    S1.Save;
+  finally
+    S1.Free;
+  end;
+
+  S2 := TSession.Create(Id);
+  try
+    AssertTrue(SessionHasRichTurns(S2.Messages),
+               'the reloaded transcript is rich');
+    { What the merge branch does: blob in, transcript untouched. }
+    S2.ToolDetail := '[null,null,{"new":true}]';
+    S2.Save;
+  finally
+    S2.Free;
+  end;
+
+  S2 := TSession.Create(Id);
+  try
+    AssertTrue(Length(S2.Messages) = 3, 'all three turns survived the merge');
+    AssertTrue(S2.Messages[2].Role = mrTool, 'the tool turn is still a tool turn');
+    AssertTrue(Pos('"new"', S2.ToolDetail) > 0, 'the new blob landed');
+    AssertTrue(Pos('"old"', S2.ToolDetail) = 0, 'the old blob is gone');
+  finally
+    S2.Free;
+  end;
+  DeleteFile(SessionPath(Id));
+end;
+
+procedure TestFinalAnswerIsPersisted;
+{ RunToolLoop returns FinalMessages as the history it FED the provider and
+  exits as soon as a tool-less response arrives -- so the assistant turn
+  carrying that response lives in Loop.Content, not the array. A gateway
+  session that copies the array verbatim stops one turn short and loses the
+  only thing the caller actually received.
+
+  Pinned at the store level: an assistant turn appended after a tool turn
+  round-trips, and the transcript still reads user / assistant / tool /
+  assistant. }
+var
+  Id: string;
+  S1, S2: TSession;
+begin
+  Id := 'final-answer-test-' + IntToStr(Random(MaxInt));
+  S1 := TSession.Create(Id);
+  try
+    SetLength(S1.Messages, 4);
+    S1.Messages[0] := MakeMessage(mrUser,      'do the thing');
+    S1.Messages[1] := MakeMessage(mrAssistant, 'calling a tool');
+    S1.Messages[2] := MakeMessage(mrTool,      'exit=0');
+    S1.Messages[3] := MakeMessage(mrAssistant, 'done, here is the answer');
+    S1.Save;
+  finally
+    S1.Free;
+  end;
+  S2 := TSession.Create(Id);
+  try
+    AssertTrue(Length(S2.Messages) = 4, 'all four turns persisted');
+    AssertTrue(S2.Messages[3].Role = mrAssistant, 'the last turn is the answer');
+    AssertTrue(Pos('here is the answer', S2.Messages[3].Content) > 0,
+               'the answer text survived');
+  finally
+    S2.Free;
+  end;
+  DeleteFile(SessionPath(Id));
+end;
+
+procedure TestToolDetailIndicesFollowTheTranscript;
+{ The web UI's tool_details array is indexed against what it DISPLAYS -- a
+  flat list of user/assistant turns. The retained transcript interleaves
+  tool turns, so entry N is the Nth displayed turn, not S.Messages[N].
+  Storing it unchanged passes the count guard and still puts every card on
+  the wrong message.
+
+  This pins the mapping rule the merge implements: the flattened view is
+  the subsequence of user/assistant turns, so the Nth blob entry belongs to
+  the Nth such turn and every other slot is null. }
+var
+  Msgs: TMessageArray;
+  i, Flat: Integer;
+  Slot: array of Integer;
+begin
+  SetLength(Msgs, 5);
+  Msgs[0] := MakeMessage(mrUser,      'ask');
+  Msgs[1] := MakeMessage(mrAssistant, 'tool time');
+  Msgs[2] := MakeMessage(mrTool,      'exit=0');
+  Msgs[3] := MakeMessage(mrSystem,    'note');
+  Msgs[4] := MakeMessage(mrAssistant, 'answer');
+
+  { Slot[i] = which flattened index message i draws its cards from, or -1. }
+  SetLength(Slot, Length(Msgs));
+  Flat := 0;
+  for i := 0 to High(Msgs) do
+    if Msgs[i].Role in [mrUser, mrAssistant] then
+    begin
+      Slot[i] := Flat;
+      Inc(Flat);
+    end
+    else
+      Slot[i] := -1;
+
+  AssertTrue(Slot[0] = 0, 'user turn takes flattened entry 0');
+  AssertTrue(Slot[1] = 1, 'first assistant takes entry 1');
+  AssertTrue(Slot[2] = -1, 'a tool turn takes no card');
+  AssertTrue(Slot[3] = -1, 'a system turn takes no card');
+  AssertTrue(Slot[4] = 2, 'the second assistant takes entry 2, not entry 4');
+  AssertTrue(Flat = 3, 'three displayed turns out of five stored');
 end;
 
 procedure TestToolDetailStalenessGuard;
@@ -309,6 +445,9 @@ begin
   TestRoundTrip;
   TestListSurfacesSession;
   TestRichTurnDetection;
+  TestToolDetailReplaceKeepsTranscript;
+  TestFinalAnswerIsPersisted;
+  TestToolDetailIndicesFollowTheTranscript;
   TestToolDetailStalenessGuard;
   WriteLn('session_endpoint_tests: OK');
 end.

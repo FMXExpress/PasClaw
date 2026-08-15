@@ -341,6 +341,7 @@ type
     { Fill S.Messages + title/model/provider from a messages/title/model
       JSON body and Save. Raises on invalid JSON; caller maps to 400. }
     procedure SaveSessionFromBody(S: TSession; const Body: string);
+    procedure MergeToolDetailFromBody(S: TSession; const Body: string);
     { pasclaw.dev Code Vault browse (read-only). Search on /v1/vault?q=,
       read one entry's detail on /v1/vault/<slug>. Proxies the server-side
       PasClaw.Vault.Client so the browser needn't reach pasclaw.dev directly. }
@@ -791,6 +792,78 @@ begin
     end;
   finally
     GGatewayStatsLock.Leave;
+  end;
+end;
+
+procedure PersistGatewaySession(const Cfg: TConfig;
+                                const SessionId, Title: string;
+                                const ProviderName, Model: string;
+                                const Loop: TToolLoopResult);
+(* Persist a gateway turn as a REAL session when the request named one.
+
+   The stats buckets (_gateway_v1_chat and friends) deliberately keep
+   counters and no transcript -- they aggregate stateless passthrough, where
+   the conversation belongs to the caller. But a request that carries
+   X-PasClaw-Session (or an OpenAI `user` field we map to one) is not
+   passthrough: the operator has named a durable conversation, and every
+   other surface treats that as a session on disk.
+
+   Without this the gateway was the only surface whose sessions never
+   existed, which quietly disabled the whole failure-learning chain for it:
+   `pasclaw learn` mines sessions, `--write-scars` turns recurring failures
+   into SCARS.md, and SCARS.md feeds the prompt. Someone driving PasClaw
+   through the web UI, the desktop app or the HTTP API got none of it, and
+   the agent kept relearning mistakes it had already made there.
+
+   Opt-in by construction -- no session id, no transcript, so stateless API
+   traffic is unchanged. Stats still go to the bucket either way; this is
+   additive. *)
+var
+  S: TSession;
+  i: Integer;
+begin
+  if Trim(SessionId) = '' then Exit;
+  if not IsSafeSessionId(SessionId) then Exit;
+  try
+    S := TSession.Create(SessionId);
+    try
+      if S.Meta.Title = '' then S.Meta.Title := Title;
+      if Model        <> '' then S.Meta.Model    := Model;
+      if ProviderName <> '' then S.Meta.Provider := ProviderName;
+      SetLength(S.Messages, Length(Loop.FinalMessages));
+      for i := 0 to High(Loop.FinalMessages) do
+        S.Messages[i] := Loop.FinalMessages[i];
+
+      (* Append the answer. RunToolLoop returns FinalMessages as the history
+         it fed the provider, and exits the moment a response arrives with no
+         tool calls -- so the assistant turn carrying that response is in
+         Loop.Content and NOT in the array. Copying the array verbatim
+         persisted a transcript that stops one turn short: a no-tool request
+         saved only the incoming history, and a tool-using one stopped at the
+         last tool result. The reply the caller actually received was the one
+         thing missing, from the session, from a web reload, and from
+         anything `pasclaw learn` reads. (Codex P1 on #556.)
+
+         Guarded on non-empty so a turn that genuinely produced no text -- an
+         aborted stream, a hard provider failure -- does not gain a blank
+         assistant turn that never existed. *)
+      if Trim(Loop.Content) <> '' then
+      begin
+        SetLength(S.Messages, Length(S.Messages) + 1);
+        S.Messages[High(S.Messages)] := MakeMessage(mrAssistant, Loop.Content);
+      end;
+      S.Meta.SystemPromptOverride := Loop.FinalSystemPrompt;
+      S.AutoTitle;
+      S.Touch;
+      S.Save;
+    finally
+      S.Free;
+    end;
+  except
+    { A transcript we could not write must never fail the request the
+      caller actually asked for. }
+    on E: Exception do
+      LogWarn('gateway: could not persist session %s: %s', [SessionId, E.Message]);
   end;
 end;
 
@@ -3571,6 +3644,90 @@ begin
   Result.PutStr('provider',   Meta.Provider);
 end;
 
+{ One entry of the web UI's tool_details array as raw JSON. Entries are
+  either a structure (the cards for that turn) or null, and there is no
+  generic raw accessor on TJsonArray, so try both shapes and fall back to
+  null rather than dropping the array on an unexpected element. }
+function ToolDetailEntryRaw(Arr: TJsonArray; Index: Integer): string;
+var
+  O: TJsonObject;
+  A: TJsonArray;
+begin
+  Result := 'null';
+  if Arr = nil then Exit;
+  A := Arr.ItemArray(Index);
+  if A <> nil then
+  try
+    Exit(A.ToJSON);
+  finally
+    A.Free;
+  end;
+  O := Arr.ItemObject(Index);
+  if O <> nil then
+  try
+    Exit(O.ToJSON);
+  finally
+    O.Free;
+  end;
+end;
+
+procedure TGatewayServer.MergeToolDetailFromBody(S: TSession; const Body: string);
+(* Take only what the web UI owns out of a PUT body -- the opaque tool-detail
+   blob -- and REINDEX it onto the transcript we kept.
+
+   The blob is index-aligned to what the browser displays: a flat list of
+   user and assistant turns. S.Messages is deliberately the agent's
+   transcript, which interleaves system and tool turns and assistant turns
+   carrying tool_calls. Storing the array unchanged passes the store's
+   count guard and still lands every card on the wrong message -- entry 2
+   means "the third thing the user saw", not "S.Messages[2]". After a
+   tool-using turn the cards attach to the wrong assistant turn or vanish.
+   (Codex P2 on #556.)
+
+   So walk the retained transcript, and hand each user/assistant turn the
+   next blob entry in order; everything else gets null. The flattened view
+   is exactly the subsequence of user/assistant turns, so ordinal N in the
+   blob belongs to the Nth such turn -- that mapping is what makes this
+   recoverable rather than guesswork. *)
+var
+  BodyObj: TJsonObject;
+  TDArr, Out_: TJsonArray;
+  i, Flat: Integer;
+begin
+  BodyObj := TJsonObject.Parse(Body);
+  if BodyObj = nil then Exit;
+  try
+    TDArr := BodyObj.ChildArray('tool_details');
+    if TDArr = nil then Exit;
+    try
+      Out_ := TJsonArray.Create;
+      try
+        Flat := 0;
+        for i := 0 to High(S.Messages) do
+        begin
+          if S.Messages[i].Role in [mrUser, mrAssistant] then
+          begin
+            if Flat < TDArr.Count then
+              Out_.AddRaw(ToolDetailEntryRaw(TDArr, Flat))
+            else
+              Out_.AddRaw('null');
+            Inc(Flat);
+          end
+          else
+            Out_.AddRaw('null');
+        end;
+        S.ToolDetail := Out_.ToJSON;
+      finally
+        Out_.Free;
+      end;
+    finally
+      TDArr.Free;
+    end;
+  finally
+    BodyObj.Free;
+  end;
+end;
+
 procedure TGatewayServer.SaveSessionFromBody(S: TSession; const Body: string);
 var
   Title, Model: string;
@@ -3747,10 +3904,42 @@ begin
         assistant tool_calls) from the web UI's flattened view -- doing so
         would strip the structure terminal resume needs. The web UI forks
         to a new session on 409. New/plain sessions fall through. }
+      (* Rich transcript present: MERGE rather than refuse.
+
+         The 409 existed to prevent LOSS -- a flattened user/assistant PUT
+         would strip the tool turns terminal resume needs. But refusing is a
+         blunt instrument: the web UI's only recourse is to fork into a new
+         session, so a browser talking to a session the agent also writes
+         would spawn a fresh session every single turn.
+
+         Nothing about the flattened body is worth losing the rich messages
+         for, and nothing about the rich messages makes the body worthless:
+         the two carry different things. Keep the stored transcript, take the
+         parts the web UI genuinely owns -- tool_details, the card bodies it
+         renders on reload -- and drop its message array on the floor. No
+         loss, no 409, no fork.
+
+         New and plain sessions fall through to the full overwrite, which is
+         the path that was always correct for them. *)
       if S.MetaExists and SessionHasRichTurns(S.Messages) then
       begin
-        WriteJSON(AResp, 409,
-          '{"error":"session has tool/system turns; not overwriting from web UI"}');
+        try
+          MergeToolDetailFromBody(S, ReadRequestBody(ARequest));
+        except
+          on E: EArgumentException do
+          begin
+            WriteJSON(AResp, 400, '{"error":"' + JsonEscape(E.Message) + '"}');
+            Exit;
+          end;
+        end;
+        S.Touch;
+        S.Save;
+        Root := SessionMetaJSON(S.Meta);
+        try
+          WriteJSON(AResp, 200, Root.ToJSON);
+        finally
+          Root.Free;
+        end;
         Exit;
       end;
       try
@@ -5427,6 +5616,8 @@ begin
     WriteJSON(AResp, 502, '{"error":"loop failed"}');
     Exit;
   end;
+  PersistGatewaySession(FCfg, ReqSessionId(ARequest), '(gateway: /v1/chat)',
+                        LoopCfg.Provider.GetName, LoopCfg.Model, Loop);
   AccumulateGatewayStats(FCfg, GW_BUCKET_V1_CHAT,
                          '(gateway: /v1/chat)',
                          LoopCfg.Provider.GetName, LoopCfg.Model, Loop);
@@ -6652,6 +6843,8 @@ begin
         StreamClosed := Streamer.Closed;
         Exit;
       end;
+      PersistGatewaySession(FCfg, ReqSession, '(gateway: /v1/chat/completions)',
+                            LoopCfg.Provider.GetName, ReqModel, Loop);
       AccumulateGatewayStats(FCfg, GW_BUCKET_V1_CHAT_COMPLETIONS,
                              '(gateway: /v1/chat/completions)',
                              LoopCfg.Provider.GetName, ReqModel, Loop);
@@ -6725,6 +6918,12 @@ begin
         '{"error":{"message":"tool loop failed","type":"server_error"}}');
       Exit;
     end;
+    { The non-streaming branch needs this too. It lived only inside the
+      WantsStream arm, so `stream:false` -- the main OpenAI-compatible flow
+      -- updated the bucket and never wrote its named session. (Codex P1
+      on #556.) }
+    PersistGatewaySession(FCfg, ReqSession, '(gateway: /v1/chat/completions)',
+                          LoopCfg.Provider.GetName, ReqModel, Loop);
     AccumulateGatewayStats(FCfg, GW_BUCKET_V1_CHAT_COMPLETIONS,
                            '(gateway: /v1/chat/completions)',
                            LoopCfg.Provider.GetName, ReqModel, Loop);
