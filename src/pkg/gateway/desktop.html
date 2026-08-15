@@ -1597,6 +1597,8 @@ onDesktopEvent("job",      () => loadProjects().catch(() => {}));
    ========================================================================== */
 
 const RESTORERS = {
+  /* Kept for layouts saved before the floating chat window went away:
+     openChat routes to wherever that project's conversation now lives. */
   chat:    a  => openChat(a),
   app:     a  => openApp(a),
   browser: a  => openBrowser(a || undefined),
@@ -1925,11 +1927,6 @@ function initDock() {
   });
 }
 
-/* Chat panes the dock has built, kept per project so leaving a project and
-   coming back finds the conversation where it was -- the transcript lives
-   in the detached DOM, and the closure keeps its history array. */
-const DOCK_CHATS = new Map();
-
 /* The dock in PROJECT mode: opening a project turns the left bar into that
    project, chat foremost -- because "modify the app to do X" IS the way
    work happens here, and it was two clicks and a floating window away.
@@ -1992,14 +1989,28 @@ function paintProjectPane(name) {
     host.appendChild(tl);
   }
 
-  /* The chat, filling the rest. Built once per project and re-attached. */
-  let chat = DOCK_CHATS.get(name);
+  /* The chat, filling the rest -- unless the app window has it.
+
+     One conversation, one place: when the app is open its window is the
+     home (the point of the left bar is having the app beside the words
+     that change it), and the dock says where it went rather than showing
+     a second, emptier copy of the same thing. */
   const pane = el("div");
   pane.style.cssText = "flex:1 1 auto;min-height:0;padding:2px";
-  if (chat) pane.appendChild(chat.root);
-  else { chat = buildChatUI(name, pane); DOCK_CHATS.set(name, chat); }
   host.appendChild(pane);
-  chat.focus();
+  const aw = WINS.get("app:" + name);
+  if (aw && aw.__chatShown && aw.__chatShown()) {
+    const note = el("div", "muted");
+    note.style.cssText = "padding:6px;font-size:11px";
+    note.appendChild(el("div", null, "The conversation is in the app window."));
+    const go = el("button", "btn", "Show it");
+    go.style.marginTop = "6px";
+    go.addEventListener("click", () => { restoreWindow(aw); focusWindow(aw); });
+    note.appendChild(go);
+    pane.appendChild(note);
+    return;
+  }
+  showChatIn(name, pane).focus();
 }
 
 function paintTree() {
@@ -2123,24 +2134,53 @@ async function newTask(project) {
    Chat -- per project, with artifact cards
    ========================================================================== */
 
-function openChat(project) {
-  const p = S.projects.find(x => x.name === project);
-  const w = createWindow({
-    key: "chat:" + project, title: (p ? p.title : project) + " -- Chat",
-    width: 520, height: 420, icon: "chat", pad: false,
-    restore: { fn: "chat", arg: project },
-  });
-  w.body.style.padding = "5px";
-  const chat = buildChatUI(project, w.body);
-  setTimeout(() => chat.focus(), 0);
-  return w;
+/* ONE conversation per project, for the life of the page.
+
+   Not one per window: a project used to be able to have its chat open in
+   a floating window, the dock pane and the app window at once, three
+   buildChatUI closures with three private history arrays, and whichever
+   one you typed into was the only one that knew what you had said. This
+   map is the single instance; showChatIn re-parents its root DOM node to
+   whichever surface is currently its home, and appendChild detaches it
+   from the previous one, so two live copies cannot exist. */
+const PROJECT_CHATS = new Map();
+
+function projectChat(project) {
+  let c = PROJECT_CHATS.get(project);
+  if (!c) { c = buildChatUI(project); PROJECT_CHATS.set(project, c); }
+  return c;
 }
 
-/* The chat itself, built into any host: a floating window (openChat above)
-   or the dock's project pane (paintProjectPane). One builder, so the two
-   places cannot drift -- the transcript, streaming, artifact cards and
-   pasclaw-ui furniture are identical wherever the conversation lives. */
-function buildChatUI(project, host) {
+function showChatIn(project, hostEl) {
+  const c = projectChat(project);
+  if (c.root.parentNode !== hostEl) hostEl.appendChild(c.root);
+  return c;
+}
+
+/* Where a project's conversation belongs, and how to get there.
+
+   An app's chat surface IS the left bar of its app window -- ask for the
+   chat and you get the app with the conversation beside it, because what
+   you are about to say is nearly always about what you are looking at. A
+   project with no app yet has no such window, so its conversation lives
+   in the dock's project pane until the first app exists. */
+function openChat(project) {
+  const p = S.projects.find(x => x.name === project);
+  if (p && p.has_app && p.app_ready) return openApp(project, { chat: true });
+  S.selected = project;
+  S.dockProject = project;
+  $("#dock").classList.remove("hidden");
+  $("#stage").classList.remove("wide");
+  paintTree();
+  return null;
+}
+
+/* The chat itself. Built once per project (see projectChat) and moved
+   between surfaces rather than rebuilt, so the transcript, the streaming
+   state and the history array follow the conversation wherever it is
+   shown -- and closing the window that happened to be hosting it does
+   not end it. */
+function buildChatUI(project) {
   const wrap = el("div", "chat");
   const log = el("div", "log in");
   const composer = el("div", "composer");
@@ -2149,7 +2189,6 @@ function buildChatUI(project, host) {
   const send = el("button", "btn", "Send");
   composer.appendChild(ta); composer.appendChild(send);
   wrap.appendChild(log); wrap.appendChild(composer);
-  host.appendChild(wrap);
 
   const history = [];
 
@@ -2161,6 +2200,45 @@ function buildChatUI(project, host) {
     log.appendChild(m);
     log.scrollTop = log.scrollHeight;
     return b;
+  }
+
+  /* ---- the conversation outlives the page ---- */
+
+  /* One session file per project, so a reload -- or a different browser
+     against the same gateway -- reopens the conversation rather than
+     starting a stranger's. The id is derived, not stored: a project slug
+     is already a safe session id, and deriving it means there is no
+     mapping to keep in step. */
+  const sessionId = "desktop-" + project;
+
+  async function saveHistory() {
+    /* Best effort. A conversation that cannot be filed is still a
+       conversation; losing the turn on screen because the save failed
+       would be the worse trade. */
+    try {
+      await api("/v1/sessions/" + sessionId, {
+        method: "PUT",
+        body: { title: "Desktop: " + project, messages: history },
+      });
+    } catch {}
+  }
+
+  /* Replay what was filed. Only user and assistant turns: the artifact
+     cards and tool lines belong to the turn that produced them and would
+     be a lie if re-rendered against a later app. */
+  async function loadHistory() {
+    let j;
+    try { j = await api("/v1/sessions/" + sessionId); }
+    catch { return; }              /* no session yet -- a fresh project */
+    const msgs = (j && j.messages) || [];
+    if (!msgs.length) return;
+    msgs.forEach(m => {
+      if (m.role !== "user" && m.role !== "assistant") return;
+      history.push({ role: m.role, content: m.content || "" });
+      addMsg(m.role === "user" ? "you" : "pasclaw", m.content || "",
+             m.role === "user" ? "u" : "");
+    });
+    addMsg("desktop", "— earlier conversation, reopened —", "");
   }
 
   /* Every card in this conversation, oldest first. A card is only "old"
@@ -2350,19 +2428,22 @@ function buildChatUI(project, host) {
         addArtifact(app.kind, app.name || project, () => openApp(project), body);
         /* The lovable loop: chat on the left, the app RUNNING on the right,
            updated after each turn. A turn that touched the app reloads the
-           open app window in place -- or opens it, if this is the dock's
-           project pane, where seeing the result is the whole arrangement.
-           A turn that didn't touch it (a question, a task) moves nothing. */
+           open app window in place; when there is no window yet -- the
+           first build, chatting from the dock -- it opens one WITH the
+           chat, which is the moment the conversation moves into its
+           permanent home. A turn that touched nothing moves nothing. */
         if (touchedApp && app.servable) {
           const aw = WINS.get("app:" + project);
           if (aw && aw.__reloadApp) aw.__reloadApp();
-          else if (DOCK_CHATS.get(project) &&
-                   S.dockProject === project) openApp(project);
+          else openApp(project, { chat: true });
         }
       } else if (touchedApp) {
         addMsg("desktop", "The app was written but has no runnable entry yet.");
       }
     } catch {}
+    /* File the turn. After the artifact check, so a reload reopens the
+       conversation exactly as it settled. */
+    saveHistory();
     await loadProjects();
     if (S.tree[project]) { await loadTasks(project); paintTree(); }
   }
@@ -2376,6 +2457,11 @@ function buildChatUI(project, host) {
   ta.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
   });
+  /* Kicked off, not awaited: the surface exists immediately and fills in
+     when the gateway answers. A conversation that has never been filed
+     just stays empty. */
+  loadHistory();
+
   return {
     root: wrap,
     submitText,
@@ -2745,7 +2831,7 @@ window.addEventListener("message", async ev => {
   }
 });
 
-async function openApp(project) {
+async function openApp(project, opts) {
   let app;
   try { app = await api("/v1/apps/" + project); }
   catch (e) { alert(e.message); return; }
@@ -2757,6 +2843,18 @@ async function openApp(project) {
     openProcessApp(project, app);
     return;
   }
+  /* Already open: createWindow hands back the live window rather than a
+     fresh one, and everything below BUILDS the window's contents -- running
+     it again would stack a second app frame and a second chat pane inside
+     the same body. Checked before the permission prompt too, so raising an
+     open app never re-asks a question already answered. */
+  const live = WINS.get("app:" + project);
+  if (live) {
+    restoreWindow(live); focusWindow(live);
+    if (opts && opts.chat && live.__showChat) live.__showChat();
+    return live;
+  }
+
   /* Declared permissions are shown before the app is opened, not buried in
      a manifest the user will never read. */
   if (app.network) {
@@ -2828,17 +2926,42 @@ async function openApp(project) {
   bar.appendChild(reload);
   const chat = el("button", "btn", "Chat");
   chat.title = "Edit this app by asking -- the conversation docks on the left";
-  chat.addEventListener("click", () => {
-    const showing = side.style.display !== "none";
-    if (showing) { side.style.display = "none"; grip.style.display = "none"; return; }
+  /* Reveal moves the project's ONE chat in here; hide leaves it parked in
+     the pane, still live, still streaming if a turn is running. */
+  const showChat = () => {
     side.style.display = "flex";
     grip.style.display = "";
-    if (!w.__chat) w.__chat = buildChatUI(project, side);
-    w.__chat.focus();
+    showChatIn(project, side).focus();
+  };
+  chat.addEventListener("click", () => {
+    if (side.style.display !== "none") {
+      side.style.display = "none"; grip.style.display = "none";
+      /* Handing it back to the dock rather than parking it here keeps the
+         "one place at a time" rule true while the pane is hidden. */
+      if (S.dockProject === project) paintTree();
+      return;
+    }
+    showChat();
   });
+  /* The dock asks this before deciding whether to host the chat itself;
+     openApp calls showChat when raising an already-open window. */
+  w.__chatShown = () => side.style.display !== "none";
+  w.__showChat = showChat;
   bar.appendChild(chat);
   bar.appendChild(el("span", "muted", app.kind + (app.network ? " -- net: " + app.network : "")));
   w.node.appendChild(bar);
+
+  /* Closing this window must not close the conversation. The chat is
+     re-parented out of the doomed pane and back to the dock, which is
+     where it lives when no app window is open -- so reopening the app
+     finds the same transcript rather than a blank one. */
+  const priorClose = w.onClose;
+  w.onClose = () => {
+    if (priorClose) { try { priorClose(); } catch {} }
+    if (S.dockProject === project) paintTree();
+  };
+
+  if (opts && opts.chat) showChat();
   return w;
 }
 
