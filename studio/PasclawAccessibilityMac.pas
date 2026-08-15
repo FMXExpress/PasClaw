@@ -65,7 +65,7 @@ uses
   System.Generics.Collections,
   FMX.Types, FMX.Controls, FMX.Platform.Mac,
   FMX.StdCtrls, FMX.Edit, FMX.Memo, FMX.ListBox, FMX.TabControl,
-  FMX.Objects;
+  FMX.Objects, FMX.Grid, FMX.TreeView, FMX.SpinBox, FMX.ComboEdit;
 
 type
   { The Objective-C face of one element. NSAccessibility is an informal
@@ -116,7 +116,17 @@ var
 function RoleOf(C: TControl): NSString;
 begin
   if C = nil then Exit(StrToNSStr(NSAccessibilityWindowRole));
-  if C is TButton      then Exit(StrToNSStr(NSAccessibilityButtonRole));
+  { Most-specific first, and TCustomButton rather than TButton so
+    TSpeedButton inherits it -- Embarcadero's FMX accessibility table maps
+    both to PUSHBUTTON, and the leaf check dropped TSpeedButton into
+    GROUPING. Cocoa has no spin-button role, so TSpinBox uses the
+    incrementor, which is what AppKit's own stepper reports. }
+  if C is TCustomGrid  then Exit(StrToNSStr(NSAccessibilityCellRole));
+  if C is TTreeView    then Exit(StrToNSStr(NSAccessibilityOutlineRole));
+  if C is TTreeViewItem then Exit(StrToNSStr(NSAccessibilityRowRole));
+  if C is TSpinBox     then Exit(StrToNSStr(NSAccessibilityIncrementorRole));
+  if C is TComboEdit   then Exit(StrToNSStr(NSAccessibilityComboBoxRole));
+  if C is TCustomButton then Exit(StrToNSStr(NSAccessibilityButtonRole));
   if C is TCheckBox    then Exit(StrToNSStr(NSAccessibilityCheckBoxRole));
   if C is TRadioButton then Exit(StrToNSStr(NSAccessibilityRadioButtonRole));
   if C is TEdit        then Exit(StrToNSStr(NSAccessibilityTextFieldRole));
@@ -131,7 +141,7 @@ begin
   if C is TTabItem     then Exit(StrToNSStr(NSAccessibilityRadioButtonRole));
   if C is TLabel       then Exit(StrToNSStr(NSAccessibilityStaticTextRole));
   if C is TText        then Exit(StrToNSStr(NSAccessibilityStaticTextRole));
-  if C is TTrackBar    then Exit(StrToNSStr(NSAccessibilitySliderRole));
+  if C is TCustomTrack then Exit(StrToNSStr(NSAccessibilitySliderRole));
   if C is TProgressBar then Exit(StrToNSStr(NSAccessibilityProgressIndicatorRole));
   if C is TScrollBar   then Exit(StrToNSStr(NSAccessibilityScrollBarRole));
   Result := StrToNSStr(NSAccessibilityGroupRole);

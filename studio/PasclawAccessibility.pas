@@ -58,7 +58,7 @@ uses
   System.Generics.Collections,
   FMX.Types, FMX.Controls, FMX.Platform.Win,
   FMX.StdCtrls, FMX.Edit, FMX.Memo, FMX.ListBox, FMX.TabControl,
-  FMX.Objects;
+  FMX.Objects, FMX.Grid, FMX.TreeView, FMX.SpinBox, FMX.ComboEdit;
 
 type
   { One accessible node. FControl nil means "the form itself" -- the root
@@ -131,7 +131,17 @@ var
 function RoleOf(C: TControl): Integer;
 begin
   if C = nil then Exit(ROLE_SYSTEM_CLIENT);
-  if C is TButton        then Exit(ROLE_SYSTEM_PUSHBUTTON);
+  { Ordered most-specific first, and keyed on TCustomButton rather than
+    TButton so TSpeedButton inherits it. Embarcadero's FMX accessibility
+    table maps both to PUSHBUTTON; a leaf-class check silently dropped
+    TSpeedButton into GROUPING. Same reasoning for TCustomTrack (TTrackBar
+    and friends -> SLIDER) and TCustomGrid (-> CELL). }
+  if C is TCustomGrid    then Exit(ROLE_SYSTEM_CELL);
+  if C is TTreeView      then Exit(ROLE_SYSTEM_OUTLINE);
+  if C is TTreeViewItem  then Exit(ROLE_SYSTEM_OUTLINEITEM);
+  if C is TSpinBox       then Exit(ROLE_SYSTEM_SPINBUTTON);
+  if C is TComboEdit     then Exit(ROLE_SYSTEM_COMBOBOX);
+  if C is TCustomButton  then Exit(ROLE_SYSTEM_PUSHBUTTON);
   if C is TCheckBox      then Exit(ROLE_SYSTEM_CHECKBUTTON);
   if C is TRadioButton   then Exit(ROLE_SYSTEM_RADIOBUTTON);
   if C is TEdit          then Exit(ROLE_SYSTEM_TEXT);
@@ -143,7 +153,7 @@ begin
   if C is TTabItem       then Exit(ROLE_SYSTEM_PAGETAB);
   if C is TLabel         then Exit(ROLE_SYSTEM_STATICTEXT);
   if C is TText          then Exit(ROLE_SYSTEM_STATICTEXT);
-  if C is TTrackBar      then Exit(ROLE_SYSTEM_SLIDER);
+  if C is TCustomTrack   then Exit(ROLE_SYSTEM_SLIDER);
   if C is TProgressBar   then Exit(ROLE_SYSTEM_PROGRESSBAR);
   if C is TScrollBar     then Exit(ROLE_SYSTEM_SCROLLBAR);
   Result := ROLE_SYSTEM_GROUPING;

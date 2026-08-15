@@ -73,29 +73,43 @@ uses
   Posix.Dlfcn,
   FMX.Types, FMX.Controls,
   FMX.StdCtrls, FMX.Edit, FMX.Memo, FMX.ListBox, FMX.TabControl,
-  FMX.Objects;
+  FMX.Objects, FMX.Grid, FMX.TreeView, FMX.SpinBox, FMX.ComboEdit;
 
 const
   { AT-SPI2 role numbers from the specification's enum. Only the ones this
     maps to are named; the numeric values are the wire format, so they are
     written as constants rather than an enum whose ordinals could drift. }
+  { Ordinals from atspi-constants.h's AtspiRole enum. These are the WIRE
+    FORMAT -- a wrong number is not a subtle bug, it makes Orca announce the
+    wrong kind of control. The first version of this file had nine of them
+    off by one or two (PUSH_BUTTON as 42, which is PROGRESS_BAR), because
+    they were written from memory instead of the header. Anyone touching
+    this list should check it against atspi-constants.h rather than trust
+    the comment. }
   ATSPI_ROLE_INVALID        = 0;
-  ATSPI_ROLE_CHECK_BOX      = 5;
+  ATSPI_ROLE_CHECK_BOX      = 7;
   ATSPI_ROLE_COMBO_BOX      = 11;
-  ATSPI_ROLE_ENTRY          = 74;
-  ATSPI_ROLE_FILLER         = 21;
-  ATSPI_ROLE_FRAME          = 22;
+  ATSPI_ROLE_FILLER         = 20;
+  ATSPI_ROLE_FRAME          = 23;
   ATSPI_ROLE_LABEL          = 29;
   ATSPI_ROLE_LIST           = 31;
   ATSPI_ROLE_LIST_ITEM      = 32;
-  ATSPI_ROLE_PAGE_TAB       = 36;
-  ATSPI_ROLE_PAGE_TAB_LIST  = 37;
-  ATSPI_ROLE_PROGRESS_BAR   = 40;
-  ATSPI_ROLE_PUSH_BUTTON    = 42;
+  ATSPI_ROLE_MENU           = 33;
+  ATSPI_ROLE_MENU_BAR       = 34;
+  ATSPI_ROLE_MENU_ITEM      = 35;
+  ATSPI_ROLE_PAGE_TAB       = 37;
+  ATSPI_ROLE_PAGE_TAB_LIST  = 38;
+  ATSPI_ROLE_PROGRESS_BAR   = 42;
+  ATSPI_ROLE_PUSH_BUTTON    = 43;
   ATSPI_ROLE_RADIO_BUTTON   = 44;
   ATSPI_ROLE_SCROLL_BAR     = 48;
-  ATSPI_ROLE_SLIDER         = 52;
-  ATSPI_ROLE_TEXT           = 60;
+  ATSPI_ROLE_SLIDER         = 51;
+  ATSPI_ROLE_SPIN_BUTTON    = 52;
+  ATSPI_ROLE_TABLE          = 55;
+  ATSPI_ROLE_TABLE_CELL     = 56;
+  ATSPI_ROLE_TEXT           = 61;
+  ATSPI_ROLE_TREE           = 65;
+  ATSPI_ROLE_ENTRY          = 74;
 
   { State bits, likewise from the spec's enum. AT-SPI sends state as a pair
     of 32-bit words; everything used here lives in the low word. }
@@ -171,7 +185,15 @@ var
 function RoleOf(C: TControl): Integer;
 begin
   if C = nil then Exit(ATSPI_ROLE_FRAME);
-  if C is TButton      then Exit(ATSPI_ROLE_PUSH_BUTTON);
+  { Ordered most-specific first, and matching TCustomButton rather than
+    TButton so TSpeedButton inherits the mapping -- Embarcadero's own FMX
+    accessibility table lists both as PUSHBUTTON, and a leaf-class check
+    would have silently dropped one of them into FILLER. }
+  if C is TCustomGrid  then Exit(ATSPI_ROLE_TABLE_CELL);
+  if C is TTreeView    then Exit(ATSPI_ROLE_TREE);
+  if C is TSpinBox     then Exit(ATSPI_ROLE_SPIN_BUTTON);
+  if C is TComboEdit   then Exit(ATSPI_ROLE_COMBO_BOX);
+  if C is TCustomButton then Exit(ATSPI_ROLE_PUSH_BUTTON);
   if C is TCheckBox    then Exit(ATSPI_ROLE_CHECK_BOX);
   if C is TRadioButton then Exit(ATSPI_ROLE_RADIO_BUTTON);
   if C is TEdit        then Exit(ATSPI_ROLE_ENTRY);
@@ -183,7 +205,7 @@ begin
   if C is TTabItem     then Exit(ATSPI_ROLE_PAGE_TAB);
   if C is TLabel       then Exit(ATSPI_ROLE_LABEL);
   if C is TText        then Exit(ATSPI_ROLE_LABEL);
-  if C is TTrackBar    then Exit(ATSPI_ROLE_SLIDER);
+  if C is TCustomTrack then Exit(ATSPI_ROLE_SLIDER);
   if C is TProgressBar then Exit(ATSPI_ROLE_PROGRESS_BAR);
   if C is TScrollBar   then Exit(ATSPI_ROLE_SCROLL_BAR);
   { FILLER rather than INVALID: a container we cannot classify is still a
