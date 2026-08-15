@@ -2182,26 +2182,42 @@ var
   Lower, Tag: string;
   P, TagEnd, U, HEnd: Integer;
 
-  procedure AddHost(const InTag: string);
+  { Record the host an attribute VALUE points at, when it points off the
+    page. Anchored to the value rather than searched for anywhere in the
+    tag, because the interesting shapes are exactly three and all sit at
+    its front: http://host, https://host, and the scheme-relative //host
+    -- which the browser resolves to the current scheme and the CSP
+    blocks like any other off-origin load, so the scan must see it too. }
+  procedure AddHostFromValue(const Value: string);
   var
     Q: Integer;
     Host: string;
   begin
-    Q := Pos('http://', InTag);
-    if Q = 0 then Q := Pos('https://', InTag);
-    if Q = 0 then Exit;
-    Q := PosEx('://', InTag, Q) + 3;
+    if Copy(Value, 1, 7) = 'http://' then Q := 8
+    else if Copy(Value, 1, 8) = 'https://' then Q := 9
+    else if Copy(Value, 1, 2) = '//' then Q := 3
+    else Exit;
     HEnd := Q;
-    while (HEnd <= Length(InTag)) and
-          not CharInSet(InTag[HEnd], ['/', '"', '''', '?', ' ', '>']) do
+    while (HEnd <= Length(Value)) and
+          not CharInSet(Value[HEnd], ['/', '"', '''', '?', ' ', '>']) do
       Inc(HEnd);
-    Host := Copy(InTag, Q, HEnd - Q);
+    Host := Copy(Value, Q, HEnd - Q);
     if Host = '' then Exit;
     if Pos(' ' + Host + ' ', ' ' + Result + ' ') = 0 then
     begin
       if Result <> '' then Result := Result + ' ';
       Result := Result + Host;
     end;
+  end;
+
+  { The attribute's value, quotes skipped, from the position after its
+    equals sign. }
+  function ValueAt(const InTag: string; VStart: Integer): string;
+  begin
+    while (VStart <= Length(InTag)) and
+          CharInSet(InTag[VStart], [' ', '"', '''']) do
+      Inc(VStart);
+    Result := Copy(InTag, VStart, MaxInt);
   end;
 
 begin
@@ -2218,9 +2234,12 @@ begin
       if TagEnd = 0 then Break;
       Tag := Copy(Lower, P, TagEnd - P + 1);
       U := Pos('src=', Tag);
-      if U = 0 then U := Pos('href=', Tag);
-      if (U > 0) and ((Pos('http://', Tag) > 0) or (Pos('https://', Tag) > 0)) then
-        AddHost(Tag);
+      if U > 0 then AddHostFromValue(ValueAt(Tag, U + 4))
+      else
+      begin
+        U := Pos('href=', Tag);
+        if U > 0 then AddHostFromValue(ValueAt(Tag, U + 5));
+      end;
       P := TagEnd + 1;
     end
     else

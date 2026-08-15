@@ -980,6 +980,15 @@ begin
     'a.test fonts.googleapis.com',
     'hosts are collected once each');
   ExpectTrue(OffOriginHosts(
+    '<script src="//cdn.jsdelivr.net/x.js"></script>') =
+    'cdn.jsdelivr.net',
+    'a scheme-relative URL is an off-origin load too -- the browser ' +
+    'resolves // to the current scheme and the CSP blocks it the same');
+  ExpectTrue(OffOriginHosts(
+    '<link rel="stylesheet" href=''//fonts.gstatic.com/f.css''>') =
+    'fonts.gstatic.com',
+    'single-quoted and scheme-relative together');
+  ExpectTrue(OffOriginHosts(
     '<a href="https://example.com/docs">read the docs</a>') = '',
     'a plain link is navigation, not a load -- no warning');
   ExpectTrue(OffOriginHosts(
