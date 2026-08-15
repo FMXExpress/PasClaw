@@ -341,6 +341,7 @@ type
     { Fill S.Messages + title/model/provider from a messages/title/model
       JSON body and Save. Raises on invalid JSON; caller maps to 400. }
     procedure SaveSessionFromBody(S: TSession; const Body: string);
+    procedure MergeToolDetailFromBody(S: TSession; const Body: string);
     { pasclaw.dev Code Vault browse (read-only). Search on /v1/vault?q=,
       read one entry's detail on /v1/vault/<slug>. Proxies the server-side
       PasClaw.Vault.Client so the browser needn't reach pasclaw.dev directly. }
@@ -3624,6 +3625,29 @@ begin
   Result.PutStr('provider',   Meta.Provider);
 end;
 
+procedure TGatewayServer.MergeToolDetailFromBody(S: TSession; const Body: string);
+{ Take only what the web UI owns out of a PUT body: the opaque tool-detail
+  blob. The transcript already on disk wins -- see the merge rationale at the
+  PUT site. Silent when the body carries no tool_details. }
+var
+  BodyObj: TJsonObject;
+  TDArr: TJsonArray;
+begin
+  BodyObj := TJsonObject.Parse(Body);
+  if BodyObj = nil then Exit;
+  try
+    TDArr := BodyObj.ChildArray('tool_details');
+    if TDArr = nil then Exit;
+    try
+      S.ToolDetail := TDArr.ToJSON;
+    finally
+      TDArr.Free;
+    end;
+  finally
+    BodyObj.Free;
+  end;
+end;
+
 procedure TGatewayServer.SaveSessionFromBody(S: TSession; const Body: string);
 var
   Title, Model: string;
@@ -3800,10 +3824,42 @@ begin
         assistant tool_calls) from the web UI's flattened view -- doing so
         would strip the structure terminal resume needs. The web UI forks
         to a new session on 409. New/plain sessions fall through. }
+      (* Rich transcript present: MERGE rather than refuse.
+
+         The 409 existed to prevent LOSS -- a flattened user/assistant PUT
+         would strip the tool turns terminal resume needs. But refusing is a
+         blunt instrument: the web UI's only recourse is to fork into a new
+         session, so a browser talking to a session the agent also writes
+         would spawn a fresh session every single turn.
+
+         Nothing about the flattened body is worth losing the rich messages
+         for, and nothing about the rich messages makes the body worthless:
+         the two carry different things. Keep the stored transcript, take the
+         parts the web UI genuinely owns -- tool_details, the card bodies it
+         renders on reload -- and drop its message array on the floor. No
+         loss, no 409, no fork.
+
+         New and plain sessions fall through to the full overwrite, which is
+         the path that was always correct for them. *)
       if S.MetaExists and SessionHasRichTurns(S.Messages) then
       begin
-        WriteJSON(AResp, 409,
-          '{"error":"session has tool/system turns; not overwriting from web UI"}');
+        try
+          MergeToolDetailFromBody(S, ReadRequestBody(ARequest));
+        except
+          on E: EArgumentException do
+          begin
+            WriteJSON(AResp, 400, '{"error":"' + JsonEscape(E.Message) + '"}');
+            Exit;
+          end;
+        end;
+        S.Touch;
+        S.Save;
+        Root := SessionMetaJSON(S.Meta);
+        try
+          WriteJSON(AResp, 200, Root.ToJSON);
+        finally
+          Root.Free;
+        end;
         Exit;
       end;
       try
