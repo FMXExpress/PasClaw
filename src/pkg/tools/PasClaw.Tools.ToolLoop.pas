@@ -1989,6 +1989,50 @@ begin
                       Format('provider returned status=%d', [Resp.StatusCode]));
     end;
 
+    (* A provider that could not answer is not a model turn. Stop here.
+
+       Until now a hard provider failure fell through into the normal
+       response handling: its error text became Resp.Content, the empty
+       ToolCalls array took the no-tool-call branch, and an empty
+       FinishReason made that branch's retry guard fire -- so the loop
+       nudged and retried against a provider that was never going to
+       answer, burned every iteration, and then reported "hit the
+       tool-call limit while still working -- this task is probably
+       unfinished". Every part of that is wrong: no work happened, the
+       task is not merely unfinished, and the suggested remedy
+       (--max-iterations N) buys N more identical failures.
+
+       Reproduced with the relay provider and no gateway: the CLI holds no
+       relay queue -- it lives in the gateway process -- so Chat() returns
+       StatusCode -1 with an explanatory string, and `pasclaw agent` spun
+       the full iteration budget before blaming the budget.
+
+       Placed after the fallback walk and the reactive-compaction retry, so
+       both still get their chance; this only fires once nothing else can
+       rescue the call. The status stays on Loop.LastResp for callers that
+       want to distinguish it. *)
+    if (Resp.StatusCode < 200) or (Resp.StatusCode >= 300) then
+    begin
+      if LastProviderErrText <> '' then
+        Loop.Content := LastProviderErrText
+      else if Trim(Resp.Content) <> '' then
+        Loop.Content := Resp.Content
+      else
+        Loop.Content := Format('provider returned status=%d and no content',
+                               [Resp.StatusCode]);
+      LogWarn('toolloop: provider call failed (status=%d) -- stopping the ' +
+              'turn rather than retrying a provider that cannot answer',
+              [Resp.StatusCode]);
+      Loop.LastResp          := Resp;
+      Loop.Iterations        := Iter;
+      Loop.FinalMessages     := Hist;
+      Loop.FinalSystemPrompt := LiveOptions.SystemPrompt;
+      { Explicitly NOT HitMaxIterations: nothing was in flight, so there is
+        no pending work to continue and no budget to raise. }
+      Loop.HitMaxIterations  := False;
+      Exit(True);
+    end;
+
     { Stream the text part to the caller now so they can show progress. }
     if Assigned(Cfg.OnText) and (Resp.Content <> '') then
       Cfg.OnText(Resp.Content);
