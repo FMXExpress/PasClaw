@@ -51,6 +51,8 @@
   #mode-btn.mode-build{border-color:rgba(143,92,255,.45);color:var(--mut)}
   #mode-btn.mode-plan{border-color:#ff37d5;color:#ff8ad5;
     box-shadow:0 0 12px rgba(255,55,213,.45) inset, 0 0 12px rgba(255,55,213,.35)}
+  #mode-btn.mode-improve{border-color:#37ffb0;color:#8affd0;
+    box-shadow:0 0 12px rgba(55,255,176,.4) inset, 0 0 12px rgba(55,255,176,.3)}
   main{position:relative;z-index:1;flex:1;display:flex;margin:.7rem .9rem .9rem;overflow:hidden;gap:.7rem}
   .tab{display:none;flex:1;min-width:0;border:1px solid rgba(143,92,255,.26);border-radius:16px;
     background:linear-gradient(120deg,var(--panel),rgba(32,12,45,.7));
@@ -2922,28 +2924,36 @@ let currentMode = "build";
 function loadMode() {
   try {
     const m = localStorage.getItem(MODE_KEY);
-    if (m === "plan" || m === "build") currentMode = m;
+    if (m === "plan" || m === "build" || m === "improve") currentMode = m;
   } catch {}
 }
+/* Three modes now, so the button sets exactly one class rather than
+   toggling a pair -- adding a third to the old add/remove dance would
+   have left whichever class nobody remembered to clear. */
+const MODES = {
+  build:   { label: "🛠 build",   cls: "mode-build",
+             hint: "full tool access" },
+  plan:    { label: "📋 plan",    cls: "mode-plan",
+             hint: "read-only: mutating tools refuse" },
+  improve: { label: "📈 improve", cls: "mode-improve",
+             hint: "benchmark, profile, one change, re-measure" },
+};
 function applyModeUI() {
   const b = $("#mode-btn");
   if (!b) return;
-  if (currentMode === "plan") {
-    b.textContent = "📋 plan";
-    b.classList.add("mode-plan");
-    b.classList.remove("mode-build");
-  } else {
-    b.textContent = "🛠 build";
-    b.classList.add("mode-build");
-    b.classList.remove("mode-plan");
-  }
+  const m = MODES[currentMode] || MODES.build;
+  b.textContent = m.label;
+  b.title = m.hint;
+  Object.values(MODES).forEach(x => b.classList.remove(x.cls));
+  b.classList.add(m.cls);
 }
 function initMode() {
   loadMode();
   applyModeUI();
   const b = $("#mode-btn");
   if (b) b.addEventListener("click", () => {
-    currentMode = (currentMode === "plan") ? "build" : "plan";
+    const order = ["build", "plan", "improve"];
+    currentMode = order[(order.indexOf(currentMode) + 1) % order.length];
     try { localStorage.setItem(MODE_KEY, currentMode); } catch {}
     applyModeUI();
   });

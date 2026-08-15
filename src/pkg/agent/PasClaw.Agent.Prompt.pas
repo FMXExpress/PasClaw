@@ -86,6 +86,11 @@ function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
   write/exec tools. The dispatch gate in PasClaw.Tools.ToolLoop is the
   authority -- the prompt block is belt-and-braces / model-honesty.
 
+  When Mode = pmImprove an "IMPROVE MODE" block is prepended instead.
+  That one is not belt-and-braces: improve mode refuses nothing, so
+  the block IS the mode -- the measure / profile / one-change /
+  re-measure loop, and the requirement to report both numbers.
+
   NoPlan -- opt out of the workspace/PLAN.md auto-pickup. When False
   (default) and Mode = pmBuild, an "## Active Plan" section is read
   from <home>/workspace/PLAN.md and injected as authoritative guidance.
@@ -945,6 +950,64 @@ begin
     'approval. Skip it for a trivial one-step reply.';
 end;
 
+(* The Improve-mode block: the loop, and the honesty it needs.
+
+   Improve mode refuses nothing -- every tool works as it does in
+   Build. All it has is this text, so this text is the feature, and it
+   is written against the specific way agents fail at optimisation
+   work: they read code, decide something looks slow, change it,
+   declare an improvement, and never measure either end. Every rule
+   below is one of those steps refused.
+
+   It names PasClaw's own harnesses (`pasclaw profile bench`, bench/)
+   because "benchmark it" is not actionable to a model that does not
+   know a benchmark already exists here. *)
+function BuildImproveModeSection: string;
+begin
+  Result :=
+    '## Improve Mode' + sLineBreak + sLineBreak +
+    'You are in **IMPROVE** mode. Every tool works exactly as in build ' +
+    'mode -- nothing is refused. What is different is the METHOD: you ' +
+    'are here to make something measurably better, and "measurably" is ' +
+    'the whole of it.' + sLineBreak + sLineBreak +
+    'Work the loop:' + sLineBreak + sLineBreak +
+    '1. **Benchmark first.** Before changing anything, get a NUMBER for ' +
+    'the thing you are improving -- a timing, a token count, a pass ' +
+    'rate, a size. Write down the exact command you ran. If there is no ' +
+    'way to measure it yet, building one is the first task, not an ' +
+    'optional extra. `make test`, `pasclaw profile bench`, and the ' +
+    'harnesses under bench/ already exist; prefer them to a stopwatch ' +
+    'you invent.' + sLineBreak +
+    '2. **Profile before choosing.** Find where the cost actually is. ' +
+    'The slow thing is regularly not the thing that looks slow, and a ' +
+    'measurement that only says "it takes 8s" does not tell you what to ' +
+    'change. Time the parts, count the calls, read the sizes.' +
+    sLineBreak +
+    '3. **Change ONE thing.** Several changes and one measurement tells ' +
+    'you the total and nothing about which change earned it -- and ' +
+    'leaves you unable to drop the one that hurt.' + sLineBreak +
+    '4. **Verify with the SAME measurement.** Same command, same ' +
+    'conditions, same input. Report it as before -> after with both ' +
+    'numbers. A change you did not re-measure is not an improvement, ' +
+    'it is a hope.' + sLineBreak +
+    '5. **Research when the profile does not suggest a fix.** Look up ' +
+    'the algorithm, the documented cost of the API, what the upstream ' +
+    'project did. Guessing twice is slower than reading once.' +
+    sLineBreak + sLineBreak +
+    'Two rules about outcomes, which matter more than the loop:' +
+    sLineBreak + sLineBreak +
+    '- **A change that did not move the number gets reverted**, and you ' +
+    'say that it did not. Keeping it "because it is cleaner anyway" ' +
+    'quietly turns an optimisation into an unrelated rewrite.' +
+    sLineBreak +
+    '- **Report regressions.** If it came out slower, or the tests went ' +
+    'red, say so plainly with the numbers. A wrong result reported ' +
+    'honestly is useful; a wrong result reported as a win costs ' +
+    'somebody a day finding out.' + sLineBreak + sLineBreak +
+    'Never state a speedup you did not measure, and never quote a ' +
+    'number you did not produce in this session.';
+end;
+
 function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
                            ToolsEnabled: Boolean; const TaskHint: string;
                            Mode: TPasClawMode;
@@ -953,6 +1016,8 @@ begin
   Result := '';
   if Mode = pmPlan then
     Result := AppendSection(Result, BuildPlanModeSection);
+  if Mode = pmImprove then
+    Result := AppendSection(Result, BuildImproveModeSection);
   Result := AppendSection(Result, BuildIdentitySection);
   Result := AppendSection(Result, BuildWorkspaceSection);
   Result := AppendSection(Result,

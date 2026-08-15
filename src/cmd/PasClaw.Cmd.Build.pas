@@ -243,7 +243,7 @@ begin
   PrintLn;
   PrintLn('Agent flags forwarded as-is:');
   PrintLn('  --provider, --model, --max-tokens, --thinking,');
-  PrintLn('  --session, --profile, --mode {plan|build}, --no-tools,');
+  PrintLn('  --session, --profile, --mode {plan|build|improve}, --no-tools,');
   PrintLn('  --no-mcp, --no-hashline, --system <prompt>, ...');
   PrintLn;
   PrintLn('Output:');

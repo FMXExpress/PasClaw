@@ -122,20 +122,41 @@ begin
   AssertTrue(ParseMode('', M)      and (M = pmBuild), 'parse empty -> build');
   AssertTrue(ParseMode('read-only', M) and (M = pmPlan), 'parse read-only alias');
   AssertTrue(not ParseMode('whatever', M), 'invalid mode rejected');
+
+  { Improve: build's tool access, a method instead of a gate. The
+    aliases are the words people actually reach for when describing
+    the loop -- a mode you cannot name is a mode you will not use. }
+  AssertTrue(ParseMode('improve', M)  and (M = pmImprove), 'parse improve');
+  AssertTrue(ParseMode('i', M)        and (M = pmImprove), 'parse short i');
+  AssertTrue(ParseMode('research', M) and (M = pmImprove), 'research alias');
+  AssertTrue(ParseMode('auto', M)     and (M = pmImprove), 'auto alias');
+  AssertTrue(ParseMode('optimise', M) and (M = pmImprove), 'optimise alias');
+  AssertTrue(ParseMode('IMPROVE', M)  and (M = pmImprove), 'case-insensitive');
 end;
 
 procedure TestCycleAndName;
+var
+  M: TPasClawMode;
 begin
-  AssertTrue(CycleMode(pmBuild) = pmPlan, 'cycle build->plan');
-  AssertTrue(CycleMode(pmPlan)  = pmBuild, 'cycle plan->build');
-  AssertEqS(ModeName(pmBuild), 'build', 'name build');
-  AssertEqS(ModeName(pmPlan),  'plan',  'name plan');
+  AssertTrue(CycleMode(pmBuild)   = pmPlan,    'cycle build->plan');
+  AssertTrue(CycleMode(pmPlan)    = pmImprove, 'cycle plan->improve');
+  AssertTrue(CycleMode(pmImprove) = pmBuild,   'cycle improve->build');
+  AssertEqS(ModeName(pmBuild),   'build',   'name build');
+  AssertEqS(ModeName(pmPlan),    'plan',    'name plan');
+  AssertEqS(ModeName(pmImprove), 'improve', 'name improve');
+  { Round-trip: every mode's name parses back to itself, so no surface
+    can print a mode it cannot then be given. }
+  AssertTrue(ParseMode(ModeName(pmBuild), M)   and (M = pmBuild),   'round-trip build');
+  AssertTrue(ParseMode(ModeName(pmPlan), M)    and (M = pmPlan),    'round-trip plan');
+  AssertTrue(ParseMode(ModeName(pmImprove), M) and (M = pmImprove), 'round-trip improve');
 end;
 
 procedure TestParseModeFromBody;
 begin
   AssertTrue(ParseModeFromBody('{"mode":"plan"}') = pmPlan, 'body plan');
   AssertTrue(ParseModeFromBody('{"mode":"build"}') = pmBuild, 'body build');
+  AssertTrue(ParseModeFromBody('{"mode":"improve"}') = pmImprove, 'body improve');
+  AssertTrue(ParseModeFromBody('{"mode":"research"}') = pmImprove, 'body research alias');
   AssertTrue(ParseModeFromBody('{}') = pmBuild, 'absent mode defaults to build');
   AssertTrue(ParseModeFromBody('') = pmBuild, 'empty body defaults to build');
   AssertTrue(ParseModeFromBody('not-json') = pmBuild, 'garbage defaults to build');

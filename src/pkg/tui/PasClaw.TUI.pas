@@ -1444,6 +1444,23 @@ begin
         'codebase and propose a plan; do not attempt mutating tools.' +
         sLineBreak + sLineBreak +
         Cfg.Options.SystemPrompt;
+    (* Improve mode refuses nothing, so unlike the block above this one
+       is not a warning -- it is the entire mode. Kept short here on
+       purpose: the TUI prepends to a prompt it did not build, and the
+       full text lives in PasClaw.Agent.Prompt where the CLI and
+       gateway get it. *)
+    if FMode = pmImprove then
+      Cfg.Options.SystemPrompt :=
+        '## Improve Mode' + sLineBreak + sLineBreak +
+        'You are in IMPROVE mode (TUI). Every tool works. Work the loop: ' +
+        'benchmark it FIRST and record the number and the command; ' +
+        'profile to find where the cost really is; change ONE thing; ' +
+        're-run the SAME measurement and report before -> after; ' +
+        'research when the profile suggests no fix. Revert a change ' +
+        'that did not move the number, and say so. Report regressions ' +
+        'plainly. Never claim a speedup you did not measure.' +
+        sLineBreak + sLineBreak +
+        Cfg.Options.SystemPrompt;
   end;
   Cfg.OnText        := nil;
   Cfg.OnToolCall    := LiveToolCall;
@@ -1692,13 +1709,19 @@ begin
       end;
     end
     else if Text = '/help' then
-      Flash('keys: Tab swap | Ctrl-B mode toggle | N new | D del | Q quit | /theme /model /stats /undo [N] /redo [N] /mode [plan|build]')
+      Flash('keys: Tab swap | Ctrl-B mode toggle | N new | D del | Q quit | /theme /model /stats /undo [N] /redo [N] /mode [plan|build|improve]')
     else if Text = '/mode' then
-      Flash('mode: ' + ModeName(FMode) + '  (Tab in chat to cycle; /mode plan or /mode build)')
+      Flash('mode: ' + ModeName(FMode) + '  (Tab in chat to cycle; /mode plan|build|improve)')
     else if Text = '/mode plan' then
     begin
       FMode := pmPlan;
       Flash('mode -> plan');
+    end
+    else if (Text = '/mode improve') or (Text = '/mode research')
+            or (Text = '/mode auto') then
+    begin
+      FMode := pmImprove;
+      Flash('mode -> improve (benchmark, profile, one change, re-measure)');
     end
     else if Text = '/mode build' then
     begin

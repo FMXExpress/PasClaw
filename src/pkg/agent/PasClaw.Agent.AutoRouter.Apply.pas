@@ -129,8 +129,14 @@ begin
   { Plan mode is "big thinking": never route a planning/architecture turn to
     the cheap model, however it scores. The strong (primary) model owns
     plan-mode turns; routing resumes automatically in Build mode. Surfaces
-    that don't set a mode default to pmBuild, so this is a no-op for them. }
-  if LoopCfg.Mode = pmPlan then Exit;
+    that don't set a mode default to pmBuild, so this is a no-op for them.
+
+    Improve mode is exempt for the same reason and a sharper one: its
+    turns are judgement -- read this profile, decide what to change,
+    decide whether the number moved -- and the router scores by surface
+    shape, so a short "re-run the benchmark" reads as easy and would be
+    handed to the cheap model precisely when the answer matters most. }
+  if (LoopCfg.Mode = pmPlan) or (LoopCfg.Mode = pmImprove) then Exit;
   UserMsg := LatestUserMessage(Messages);
   if UserMsg = '' then Exit;
 
