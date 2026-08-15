@@ -577,6 +577,46 @@ One candidate found no sourcing: ChatGPT Tasks / scheduled proactive
 assistants as a field feature. PasClaw's cron + heartbeat + channels stack
 is real [P], but the field-side comparison stays unsourced and untabled.
 
+## 34. Messaging-surface agents
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| **Channel-resident async agent**: @-mention, milestones, results posted in-thread | Claude Tag (June 2026, Slack) [S] | ❌ |
+| Shared agent per channel with shared memory (vs per-user assistant) | Claude Tag's headline differentiator [S] | ❌ |
+| **Ambient mode** — agent may post unprompted | Claude Tag [S] | ⚠️ heartbeat can act unprompted, but posts to channels one-way [P] |
+| Permission scoping by org / workspace / channel | Claude Tag [S] | ❌ (see §22 — no identity model) |
+| Draft-and-post messaging via interactive MCP Apps | Anthropic Interactive Apps [S] | ❌ |
+| Outbound message posting to channels | table stakes [S] | ✅ `pasclaw post` + channels [P] |
+| Email as an agent surface (inbox sync) | [K] | ✅ `pasclaw mail` IMAP sync for cron [P] |
+
+The shape of the gap: PasClaw can *send to* messaging surfaces and cannot
+*live in* them. Claude Tag's model — resident, addressable, shared-memory,
+permission-scoped — is what "agent as teammate" means in 2026.
+
+## 35. The agent-readable web & ingestion
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| URL → clean LLM-ready markdown as a service | Jina Reader (`r.jina.ai/` prefix), Firecrawl [S] | ⚠️ `web_fetch` strips HTML itself — a built-in miniature [P] |
+| Crawl-to-corpus pipelines for RAG | Firecrawl and the crawler field [S] | ⚠️ `kb` indexes what you hand it; no crawler [P] |
+| **llms.txt**: a site's curated map for agents | Anthropic, Vercel, Cloudflare ship one; hundreds tracked [S] | ❌ neither consumes one nor serves one |
+| — honest caveat: major LLM crawlers do not fetch llms.txt yet | [S] | — which caps the row's value today |
+| Machine-interaction auditing (WebMCP, a11y-tree integrity, llms.txt presence) in Lighthouse | May 2026 audit category [S] | — the a11y-tree item again lands near #557's work |
+| Document ingestion (PDF → indexed corpus) | common [K] | ✅ `kb` with PDF support [P] |
+
+## 36. Enterprise data substrate
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| **Permission-aware connector fleet** (content + ACLs ingested together) | Glean, 275+ connectors [S] | ❌ `kb` indexes files without permission context |
+| Graph layer over workplace data powering search, RAG, agents | Glean [S] | ❌ |
+| Connectors as MCP servers | Glean's newer connectors [S] | ⚠️ PasClaw could consume these as an MCP client today [P] |
+| Actions that update external systems, not just read | Glean actions [S] | ⚠️ generic via MCP tools [P] |
+
+Declarative agent packaging (custom GPTs, Copilot declarative manifests,
+agents.yaml) found only incidental sourcing this pass and stays a lead, not
+a section.
+
 ---
 
 ## Where PasClaw leads
@@ -695,6 +735,11 @@ tool already knows its own scope.
 - [OpenAI Flex processing](https://developers.openai.com/api/docs/guides/flex-processing)
 - [MCP Apps: bringing UI capabilities to MCP clients](https://blog.modelcontextprotocol.io/posts/2026-01-26-mcp-apps/)
 - [The State of Generative UI in 2026 (OpenUI)](https://www.openui.com/blog/state-of-generative-ui-report)
+- [Claude Tag: Anthropic's Slack async agent](https://kie.ai/blog/claude-tag-anthropic-slack-async-agent)
+- [Use Claude in Slack](https://slack.com/help/articles/53532192117267-Use-Claude-in-Slack)
+- [llms.txt explained: spec, adoption, honest guide](https://codersera.com/blog/llms-txt-complete-guide-2026/)
+- [Jina Reader vs Firecrawl for web-LLM extraction](https://blog.apify.com/jina-ai-vs-firecrawl/)
+- [Glean connector framework](https://docs.glean.com/connectors/connectors-power-glean)
 - [Relace: A Year of Fast Apply](https://relace.ai/blog/relace-apply-3)
 - [AI Agent Sandboxing in 2026: Docker, E2B, Firecracker, gVisor, Modal & Daytona Compared](https://amux.io/guides/ai-agent-sandboxing/)
 - [Cursor vs Claude Code vs Windsurf (Now Devin Desktop) 2026](https://www.shareuhack.com/en/posts/cursor-vs-claude-code-vs-windsurf-2026)
