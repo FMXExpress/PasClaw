@@ -74,7 +74,7 @@ row is weak evidence while presence is strong.
 | Stateless MCP core (2026-07-28 spec) | [S] | ✅ supported [P] |
 | Skill bundles with routing | Microsoft Skills Framework, agent-skills [S] | ✅ skills [P] |
 | **Negative examples in skill routing** | [S] | ❌ |
-| Skill marketplace / hub | Cline, Continue [S] | ❌ |
+| Skill marketplace / hub | Cline, Continue; **ClawHub** ("npm for AI agents", 3,286+ skills, vector search, one-command install) [S] | ✅ **corrected pass 15**: a 522-line ClawHub integration (search + install from clawhub.ai) was in the repo all along — this row said ❌ for fourteen passes [P] |
 | Auto-distilling turns into skills | Socratic-SWE (trace-derived skills) [S] | ✅ self-improving skills [P] |
 | MCP Inspector-style debugging | [S] | ❌ |
 
@@ -663,7 +663,7 @@ adopted by 40+ tools including Codex, Gemini CLI, Copilot, Cursor [S].
 |---|---|---|
 | SKILL.md folder format, YAML frontmatter | the open standard [S] | ✅ PasClaw skills are already SKILL.md + YAML name/description — same shape, compatibility unverified against the spec [P] |
 | Cross-platform portability of one skill | 40+ tools [S] | ⚠️ if the format matches, PasClaw skills travel; untested |
-| Skill security research: registry supply-chain attacks, spec-violation fuzzing | SKILL.md supply-chain paper, SkillTester, semantic fuzzing [S] | ❌ skills load without provenance checks [P] |
+| Skill security research: registry supply-chain attacks, spec-violation fuzzing | SKILL.md supply-chain paper, SkillTester — and **realized in-family**: ClawHavoc, 341 malicious ClawHub skills (Feb 2026); registry now runs SHA-256 × VirusTotal + Gemini Code Insight on every publish [S] | ❌ skills install from that same registry with **no client-side provenance checks** — the sharpest security row in the survey [P] |
 
 The compatibility row is the cheapest possible win found in ten passes: if
 PasClaw's existing SKILL.md dialect parses under the open spec, it inherits
@@ -779,6 +779,21 @@ rather than silently rewriting it. Star counts disagree across sources
 | **NullClaw** | Zig, **678 KB static binary**, ~1 MB RAM on $5 ARM boards, GPIO/STM32 | smallest binary | beyond even picoclaw's floor |
 | **ZeptoClaw** | Rust, 4 MB, size-optimised | — | roster completeness |
 | MicroClaw | Rust runtime contender | — | thin sourcing; named only |
+
+**Family infrastructure — ClawHub.** The registry the family standardised
+on: official OpenClaw skill store, "npm for AI agents", 3,286+ community
+skills (13,729 registered before a security purge), Convex-backed vector
+search, open publishing with stars and download counts [S]. picoclaw and
+nanobot standardised on its slug API, and PasClaw ships a full client
+(`Skills.ClawHub.pas`, 522 lines) [P]. Its history is the family's skills
+story in miniature: open publishing → ClawHavoc (341 malicious skills) →
+scanning on publish (VirusTotal + Code Insight). The registry hardened;
+the clients — PasClaw included — still install without their own
+provenance checks.
+
+MicroClaw failed sourcing a second time and is demoted per the retry rule:
+named in one source title, contents unsourceable. No longer counted in the
+roster.
 
 Adjacent but not a claw: **Agent Zero** — 18K stars, plugin hub with 100+
 community extensions, multi-agent hierarchy in per-agent Docker sandboxes,
@@ -953,6 +968,8 @@ tool already knows its own scope.
 - [Clawdbot → Moltbot → OpenClaw: why the name changed twice](https://lumadock.com/blog/clawdbot-moltbot-openclaw-rebrand)
 - [Agent Pi: the minimal coding agent powering OpenClaw](https://shivamagarwal7.medium.com/agentic-ai-pi-anatomy-of-a-minimal-coding-agent-powering-openclaw-5ecd4dd6b440)
 - [Agent Zero review: plugin hub, Docker multi-agent](https://apidog.com/blog/agent-zero-ai-framework-review/)
+- [ClawHub: official skill registry for OpenClaw](https://github.com/openclaw/clawhub)
+- [ClawHub skills guide (3,286+ skills, ClawHavoc incident)](https://help.apiyi.com/en/clawhub-ai-openclaw-skills-registry-guide-en.html)
 - [Relace: A Year of Fast Apply](https://relace.ai/blog/relace-apply-3)
 - [AI Agent Sandboxing in 2026: Docker, E2B, Firecracker, gVisor, Modal & Daytona Compared](https://amux.io/guides/ai-agent-sandboxing/)
 - [Cursor vs Claude Code vs Windsurf (Now Devin Desktop) 2026](https://www.shareuhack.com/en/posts/cursor-vs-claude-code-vs-windsurf-2026)
