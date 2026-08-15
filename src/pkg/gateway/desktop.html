@@ -1016,6 +1016,22 @@ h1,h2,h3 { margin: 0 0 6px; font-size: 12px; }
 
 iframe.app { width: 100%; height: 100%; border: 0; background: var(--window); display: block; }
 
+/* App window with the editing chat docked left: [chat][grip][app]. The
+   pane starts hidden; the statusbar's Chat button toggles it, the grip
+   resizes it. */
+.appsplit { display: flex; height: 100%; min-height: 0; }
+.appside  {
+  flex: 0 0 auto; width: 260px; min-width: 180px; max-width: 70%;
+  display: flex; min-height: 0; padding: 3px;
+}
+.appside .chat { flex: 1 1 auto; min-width: 0; }
+.appgrip  {
+  flex: 0 0 5px; cursor: col-resize;
+  background: var(--face); border-left: 1px solid var(--light);
+  border-right: 1px solid var(--shadow);
+}
+.appsplit iframe.app { flex: 1 1 auto; width: auto; min-width: 0; }
+
 /* ---- period-native agent output ----
    The agent speaks in the era's own furniture: a plan arrives as a wizard,
    a question as a message box, work in progress as a progress dialog. All of
@@ -2116,8 +2132,6 @@ function openChat(project) {
   });
   w.body.style.padding = "5px";
   const chat = buildChatUI(project, w.body);
-  /* Let a dialog's answer continue this conversation (see renderUIBlock). */
-  w.__submitText = chat.submitText;
   setTimeout(() => chat.focus(), 0);
   return w;
 }
@@ -2305,11 +2319,20 @@ function buildChatUI(project, host) {
 
     /* Period-native output: if the turn emitted a UI block, show the
        furniture and strip it from the visible text. Unrecognised or
-       malformed blocks stay as text -- an answer must never vanish. */
+       malformed blocks stay as text -- an answer must never vanish.
+
+       submitText goes WITH the block: a project can have this
+       conversation open in three places at once (dock pane, app-window
+       pane, floating window), each with its own history closure, and a
+       dialog's answer belongs to the one that asked. Looking the chat
+       up by project afterwards would answer whichever home a fixed
+       order happened to find first -- the asking conversation would
+       never hear back, and another would be handed a reply to a
+       question it never asked. */
     const ui = extractUIBlocks(acc);
     if (ui.blocks.length) {
       body.textContent = ui.text;
-      ui.blocks.forEach(b => renderUIBlock(b, project));
+      ui.blocks.forEach(b => renderUIBlock(b, project, submitText));
     }
 
     /* Did this turn leave a runnable app behind? Ask the gateway rather
@@ -2344,13 +2367,18 @@ function buildChatUI(project, host) {
     if (S.tree[project]) { await loadTasks(project); paintTree(); }
   }
 
+  /* Named so the turn handler above can hand it to renderUIBlock: an
+     answered dialog continues THIS conversation, not one that merely
+     shares the project. */
+  const submitText = text => { ta.value = text; submit(); };
+
   send.addEventListener("click", submit);
   ta.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
   });
   return {
     root: wrap,
-    submitText: text => { ta.value = text; submit(); },
+    submitText,
     focus: () => ta.focus(),
   };
 }
@@ -2610,7 +2638,10 @@ function extractUIBlocks(text) {
 
 /* Render one recognised block. Project is passed so a wizard's approved
    steps can become real tasks on that project's board. */
-function renderUIBlock(block, project) {
+/* Reply is the submitText of the conversation that EMITTED this block --
+   passed in rather than looked up, because a project can have several
+   chat homes open at once and only one of them asked. */
+function renderUIBlock(block, project, reply) {
   if (block.ui === "wizard") {
     return showWizard({
       title: block.title || "Plan",
@@ -2644,13 +2675,11 @@ function renderUIBlock(block, project) {
       buttons: block.buttons || [{ label: "OK", value: true }],
       onPick: v => {
         /* An answered question goes back as the next chat turn, so the
-           conversation continues where the dialog left off -- in the chat
-           window if one is open, else in the dock's project pane. */
-        if (block.reply === false || !project) return;
-        const w = WINS.get("chat:" + project);
-        if (w && w.__submitText) { w.__submitText(String(v)); return; }
-        const dc = DOCK_CHATS.get(project);
-        if (dc) dc.submitText(String(v));
+           conversation continues exactly where the dialog left off. No
+           reply callback means nothing asked (a block rendered outside a
+           turn), and staying silent beats guessing at a conversation. */
+        if (block.reply === false || !reply) return;
+        reply(String(v));
       },
     });
   }
@@ -2750,7 +2779,34 @@ async function openApp(project) {
     if (frame.contentWindow) FRAME_PROJECT.set(frame.contentWindow, project);
   });
   frame.src = appURL(project) + "?t=" + Date.now();
-  w.body.appendChild(frame);
+
+  /* [chat][grip][app]: the editing conversation lives INSIDE the app
+     window, on the left, hidden until asked for. The app is the thing
+     being made; the chat is how it changes; putting a wall of window
+     management between them was friction with no compensating clarity. */
+  const split = el("div", "appsplit");
+  const side = el("div", "appside");
+  side.style.display = "none";
+  const grip = el("div", "appgrip");
+  grip.style.display = "none";
+  split.appendChild(side); split.appendChild(grip); split.appendChild(frame);
+  w.body.appendChild(split);
+
+  /* Drag the grip to resize the pane. The iframe eats mouse events, so it
+     goes pointer-inert for the duration of the drag. */
+  grip.addEventListener("mousedown", e => {
+    e.preventDefault();
+    const x0 = e.clientX, w0 = side.offsetWidth;
+    frame.style.pointerEvents = "none";
+    const move = ev => { side.style.width = Math.max(180, w0 + ev.clientX - x0) + "px"; };
+    const up = () => {
+      frame.style.pointerEvents = "";
+      document.removeEventListener("mousemove", move);
+      document.removeEventListener("mouseup", up);
+    };
+    document.addEventListener("mousemove", move);
+    document.addEventListener("mouseup", up);
+  });
   /* Register the frame NOW, not on load: the SDK inside the app posts its
      first state read while the document is still parsing, which is before
      the load event fires. Registering late loses that first request. */
@@ -2771,7 +2827,15 @@ async function openApp(project) {
   w.__reloadApp = doReload;
   bar.appendChild(reload);
   const chat = el("button", "btn", "Chat");
-  chat.addEventListener("click", () => openChat(project));
+  chat.title = "Edit this app by asking -- the conversation docks on the left";
+  chat.addEventListener("click", () => {
+    const showing = side.style.display !== "none";
+    if (showing) { side.style.display = "none"; grip.style.display = "none"; return; }
+    side.style.display = "flex";
+    grip.style.display = "";
+    if (!w.__chat) w.__chat = buildChatUI(project, side);
+    w.__chat.focus();
+  });
   bar.appendChild(chat);
   bar.appendChild(el("span", "muted", app.kind + (app.network ? " -- net: " + app.network : "")));
   w.node.appendChild(bar);
