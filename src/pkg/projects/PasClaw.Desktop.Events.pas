@@ -70,6 +70,24 @@ procedure PublishRaw(const JSONObj: string);
   hand-building JSON, so the event vocabulary stays discoverable. }
 procedure PublishProjects;                                  { the board changed }
 procedure PublishProject(const Project: string);
+
+(* Ask the connected desktops to DO something -- tile the windows, open an
+   app, change the theme.
+
+   The other events report that something happened; this one asks. It
+   exists because a tool runs in the gateway and the windows live in a
+   browser: the agent cannot touch them directly, but the desktop is
+   already listening here, so a command on the same feed reaches it.
+
+   Any session can send one -- the shell chat, the Agent Console, a cron
+   job that tidies the screen at nine every morning -- rather than only
+   the one window that happens to own a conversation.
+
+   ActionsJSON is a JSON array of {"do":...} objects, forwarded verbatim
+   for the client to interpret: the vocabulary belongs to the desktop
+   that executes it, and duplicating it here would create two lists to
+   keep in step. *)
+procedure PublishDesktopCommand(const ActionsJSON: string);
 procedure PublishTask(const Project, TaskId, Status: string);
 procedure PublishJob(const Project, TaskId, JobId, Status: string);
 procedure PublishJobLog(const Project, TaskId, JobId, Line: string);
@@ -251,6 +269,17 @@ end;
 procedure PublishProject(const Project: string);
 begin
   PublishRaw('{"type":"project","project":"' + Esc(Project) + '"}');
+end;
+
+procedure PublishDesktopCommand(const ActionsJSON: string);
+var
+  Body: string;
+begin
+  Body := Trim(ActionsJSON);
+  { An empty or non-array payload would reach the client as a command it
+    cannot read; refuse it here rather than make every desktop defend. }
+  if (Body = '') or (Body[1] <> '[') then Exit;
+  PublishRaw('{"type":"desktop-command","actions":' + Body + '}');
 end;
 
 procedure PublishTask(const Project, TaskId, Status: string);

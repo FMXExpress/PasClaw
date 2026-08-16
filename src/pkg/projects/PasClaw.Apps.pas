@@ -639,7 +639,37 @@ begin
     '    action: function (name, arg) {' + #10 +
     '      return ask("action", name,' + #10 +
     '                 arg === undefined ? "" : JSON.stringify(arg));' + #10 +
-    '    }' + #10 +
+    '    },' + #10 +
+    (* Unsaved-work reporting.
+
+       The desktop reloads an app window after a chat turn changes the
+       app -- that is the whole live-preview loop. But a reload throws
+       the frame away, and anything the user had typed and not saved
+       goes with it. The host cannot see inside: apps are cross-origin
+       and sandboxed, which is deliberate, so it has to be TOLD.
+
+       The app does not have to do anything: the listener below marks
+       the app dirty on the first keystroke or change, and a successful
+       set/setJSON marks it clean again, since persisting through the
+       SDK is exactly what "saved" means here. markClean is exposed for
+       apps that persist some other way. *)
+    '    markDirty: function () { dirty(true); },' + #10 +
+    '    markClean: function () { dirty(false); }' + #10 +
+    '  };' + #10 +
+    '  var isDirty = false;' + #10 +
+    '  function dirty(v) {' + #10 +
+    '    v = !!v;' + #10 +
+    '    if (v === isDirty) return;' + #10 +
+    '    isDirty = v;' + #10 +
+    '    if (framed)' + #10 +
+    '      window.parent.postMessage(' + #10 +
+    '        { __pasclaw: "dirty", project: PROJECT, dirty: v }, "*");' + #10 +
+    '  }' + #10 +
+    '  document.addEventListener("input", function () { dirty(true); }, true);' + #10 +
+    '  document.addEventListener("change", function () { dirty(true); }, true);' + #10 +
+    '  var _set = window.pasclaw.set;' + #10 +
+    '  window.pasclaw.set = function (k, v) {' + #10 +
+    '    return _set(k, v).then(function (r) { dirty(false); return r; });' + #10 +
     '  };' + #10 +
     '})();' + #10;
 end;

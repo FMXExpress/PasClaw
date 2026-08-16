@@ -168,9 +168,19 @@ function ParseSources(const JSONArray: string): TPageSourceArray;
        app starts inert -- but the SDK is wired for the first "now make it
        sort by date".
 
+   ATitle names the project and the app. Pass '' to fall back to the
+   page's own title -- which, for a generated page, IS THE QUESTION that
+   produced it, because DesktopPageGenerator seeds Title from Query and
+   nothing replaces it. That is how "what is a pomodoro timer" became a
+   project name, an app name, a slug and an icon caption, permanently.
+   The desktop passes a cleaned title so the app is named after the
+   subject rather than after the sentence that asked about it.
+
    Returns the new project slug, or '' with Err set. *)
+function PromotePage(const PageId, PreferredName, ATitle: string;
+  out Err: string): string; overload;
 function PromotePage(const PageId, PreferredName: string;
-  out Err: string): string;
+  out Err: string): string; overload;
 
 implementation
 
@@ -930,6 +940,12 @@ end;
 
 function PromotePage(const PageId, PreferredName: string;
   out Err: string): string;
+begin
+  Result := PromotePage(PageId, PreferredName, '', Err);
+end;
+
+function PromotePage(const PageId, PreferredName, ATitle: string;
+  out Err: string): string;
 var
   Info: TPageInfo;
   Doc, Slug, Title: string;
@@ -954,7 +970,10 @@ begin
     Exit;
   end;
 
-  Title := Trim(Info.Title);
+  { The caller's title wins: for a generated page the page's own title is
+    the question it answered, which makes a poor name for software. }
+  Title := Trim(ATitle);
+  if Title = '' then Title := Trim(Info.Title);
   if Title = '' then Title := Trim(Info.Query);
   if Title = '' then Title := 'Page ' + PageId;
 

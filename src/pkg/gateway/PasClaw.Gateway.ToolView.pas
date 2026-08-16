@@ -89,6 +89,7 @@ implementation
 uses
   SysUtils,
   PasClaw.JSON,
+  PasClaw.Config,          { GetHome, for Relativize }
   PasClaw.Hashline;
 
 const
@@ -96,6 +97,33 @@ const
                             patch can't flood the chat transcript }
   MaxResultWidth  = 200;  { cap single-line result echoes and error text }
   MaxPreviewWidth = 120;  { cap the first-line preview on multi-line results }
+
+function Relativize(const S: string): string;
+{ Fold the PasClaw home out of any path in a line meant for a human.
+
+  Tool results carry absolute paths, and the desktop shows them in the
+  chat: "wrote 98 bytes to /home/you/.pasclaw/workspace/projects/x/app/
+  app.json" wraps over three lines to say something the reader already
+  knows, and publishes the server's directory layout to anyone looking
+  over their shoulder. Rendered relative it is "wrote 98 bytes to
+  workspace/projects/x/app/app.json".
+
+  DISPLAY ONLY. The tool result the model receives is untouched -- it
+  needs the real path to act on it, and rewriting what the agent sees to
+  make the UI tidier would be a bug factory. }
+var
+  Home: string;
+begin
+  Result := S;
+  Home := GetHome;
+  if Home = '' then Exit;
+  while (Home <> '') and (Home[Length(Home)] = PathDelim) do
+    SetLength(Home, Length(Home) - 1);
+  if Home = '' then Exit;
+  Result := StringReplace(Result, Home + PathDelim, '', [rfReplaceAll]);
+  { A bare mention of the home directory with nothing after it. }
+  Result := StringReplace(Result, Home, '~', [rfReplaceAll]);
+end;
 
 function CollapseWhitespace(const S: string): string;
 { Fold CR/LF/TAB and runs of spaces into a single space so a multi-line value
@@ -254,12 +282,13 @@ begin
   if Lines <= 1 then
     { Single-line result: echo it (truncated). Covers fs_write confirmations,
       short shell output, etc. }
-    Body := Ellipsize(CollapseWhitespace(ResultText), MaxResultWidth)
+    Body := Ellipsize(Relativize(CollapseWhitespace(ResultText)), MaxResultWidth)
   else
   begin
     { Multi-line: counts plus a peek at the first line (the hashline header on
       fs_read/fs_grep, "exit=N" on shell_exec, etc.). }
-    Preview := Ellipsize(CollapseWhitespace(FirstLineOf(ResultText)), MaxPreviewWidth);
+    Preview := Ellipsize(Relativize(CollapseWhitespace(FirstLineOf(ResultText))),
+                         MaxPreviewWidth);
     if Preview <> '' then
       Body := Format('%d lines, %d bytes -- %s', [Lines, Bytes, Preview])
     else
@@ -288,12 +317,15 @@ begin
   try
     Obj.PutStr('t', Kind);
     Obj.PutStr('name', Name);
+    { Relativized like the visible lines: this feeds the web UI's
+      expandable tool card, which is a display surface too. The model
+      never reads the side-channel, so nothing it acts on changes. }
     if Kind = 'call' then
-      Obj.PutStr('args', CapDetail(ArgsJSON, MaxDetailArgs))
+      Obj.PutStr('args', Relativize(CapDetail(ArgsJSON, MaxDetailArgs)))
     else if Err <> '' then
-      Obj.PutStr('err', CapDetail(Err, MaxDetailResult))
+      Obj.PutStr('err', Relativize(CapDetail(Err, MaxDetailResult)))
     else
-      Obj.PutStr('result', CapDetail(ResultText, MaxDetailResult));
+      Obj.PutStr('result', Relativize(CapDetail(ResultText, MaxDetailResult)));
     Result := Obj.ToJSON;
   finally
     Obj.Free;

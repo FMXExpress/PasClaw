@@ -2499,8 +2499,10 @@ begin
     begin
       Obj := BodyObj(Body);
       try
+        { "title" names the project and the app; without it the page's
+          own title is used, which for a generated page is the question. }
         Slug := PromotePage(Segs[2],
-                  IfEmpty(Obj, 'name'), Err);
+                  IfEmpty(Obj, 'name'), IfEmpty(Obj, 'title'), Err);
       finally
         Obj.Free;
       end;

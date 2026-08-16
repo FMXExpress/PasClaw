@@ -6991,6 +6991,18 @@ begin
     end;
 
     LoopCfg.Registry      := FRegistry;
+    (* "no_tools": answer from the prompt, do not go looking.
+
+       For callers that have already put the state in the prompt and want
+       ONE round trip. The desktop's shell is the case this exists for:
+       it inlines the open windows and the project list, so a request to
+       tidy the desktop is a single turn -- where offering tools invites
+       the model to go and rediscover, through fs_read and list_dir, the
+       facts it was just handed, at several seconds and several thousand
+       tokens apiece.
+
+       Tools stay on by default; this is opt-in per request. *)
+    if Req.GetBool('no_tools', False) then LoopCfg.Registry := nil;
     if FToolsHonorInMemoryConfig then LoopCfg.ActiveConfig := FCfg;
     LoopCfg.Model         := ReqModel;
     LoopCfg.MaxIterations := FMaxIter;
