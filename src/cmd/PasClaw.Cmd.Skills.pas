@@ -45,6 +45,7 @@ uses
   SysUtils, Classes, PasClaw.Config, PasClaw.CliUI, PasClaw.Utils, PasClaw.Logger,
   PasClaw.Skills.Loader,
   PasClaw.Skills.GitHub,
+  PasClaw.Skills.Provenance,
   PasClaw.Skills.ClawHub,
   PasClaw.Skills.PasClawHub,
   PasClaw.Skills.Pending;
@@ -59,6 +60,7 @@ begin
   PrintLn('  install clawhub:<slug>[@<version>]  Install from ClawHub (https://clawhub.ai).');
   PrintLn('  install <slug>                      Try pasclaw.dev first, then ClawHub.');
   PrintLn('  remove <name>                       Remove from config.json + workspace.');
+  PrintLn('  verify                              Re-hash installed skills against their install-time record.');
   PrintLn('  search <query>                      Search pasclaw.dev + ClawHub for skills.');
   PrintLn('  pending                             List agent-authored skills awaiting approval.');
   PrintLn('  diff <id>                           Show a pending skill''s proposed SKILL.md.');
@@ -191,6 +193,73 @@ begin
     Slug    := Target;
     Version := '';
   end;
+end;
+
+function DoVerify: Integer;
+(* Re-hash every installed skill against the record written at install
+   time. The exit code is the point: 0 when nothing changed, 1 when
+   something did, so this can gate a deploy or run from cron.
+
+   Skills with no record report "unknown" and do NOT fail the run --
+   anything installed before provenance existed, or by hand, is not
+   evidence of tampering. Per the verification-scope finding in
+   docs/agent-features.md, the summary states how many skills were NOT
+   checked rather than letting them pass silently as clean. *)
+var
+  Root, Dir: string;
+  SR: TSearchRec;
+  R: TSkillVerifyResult;
+  i, Bad, Unknown, Good: Integer;
+begin
+  Root := JoinPath(JoinPath(GetHome, ActiveWorkspaceName), 'skills');
+  if not DirectoryExists(Root) then
+  begin
+    PrintLn('(no skills directory at ' + Root + ')');
+    Exit(0);
+  end;
+  Bad := 0; Unknown := 0; Good := 0;
+  if FindFirst(JoinPath(Root, '*'), faDirectory, SR) = 0 then
+  try
+    repeat
+      if (SR.Name = '.') or (SR.Name = '..') then Continue;
+      if (SR.Attr and faDirectory) = 0 then Continue;
+      Dir := JoinPath(Root, SR.Name);
+      R := VerifySkill(Dir);
+      case R.Status of
+        svOK:
+          begin
+            Inc(Good);
+            PrintLn(Format('  %s%-24s%s ok        %d file(s) verified',
+                           [Ansi.Green, SR.Name, Ansi.Reset, R.Checked]));
+          end;
+        svNoRecord:
+          begin
+            Inc(Unknown);
+            PrintLn(Format('  %s%-24s%s unknown   no provenance record -- not checked',
+                           [Ansi.Dim, SR.Name, Ansi.Reset]));
+          end;
+      else
+        begin
+          Inc(Bad);
+          PrintLn(Format('  %s%-24s%s %s',
+                         [Ansi.Yellow, SR.Name, Ansi.Reset,
+                          VerifyStatusText(R.Status)]));
+          for i := 0 to High(R.Findings) do
+            PrintLn('      ' + R.Findings[i]);
+        end;
+      end;
+    until FindNext(SR) <> 0;
+  finally
+    FindClose(SR);
+  end;
+
+  PrintLn;
+  PrintLn(Format('  %d verified, %d unknown, %d changed', [Good, Unknown, Bad]));
+  if Unknown > 0 then
+    PrintLn(Ansi.Dim +
+      '  "unknown" means this command did not check that skill, not that it is clean.' +
+      Ansi.Reset);
+  if Bad > 0 then Result := 1 else Result := 0;
 end;
 
 function DoList: Integer;
@@ -704,6 +773,7 @@ begin
   else if Sub = 'diff'    then Result := DoDiff(Argv)
   else if Sub = 'approve' then Result := DoApprove(Argv)
   else if Sub = 'reject'  then Result := DoReject(Argv)
+  else if Sub = 'verify'  then Result := DoVerify
   else begin Help; Result := 1; end;
 end;
 

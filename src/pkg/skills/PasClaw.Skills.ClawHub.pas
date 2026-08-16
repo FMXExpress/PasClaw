@@ -79,6 +79,7 @@ uses
   PasClaw.Utils,
   PasClaw.Logger,
   PasClaw.JSON,
+  PasClaw.Skills.Provenance,
   PasClaw.Providers.HTTP,
   PasClaw.Skills.Zip,
   PasClaw.Skills.Loader;
@@ -433,6 +434,8 @@ var
   Blocked, Suspicious: Boolean;
   Spec: TSkillSpec;
   ParseErr: string;
+  ArchiveDigest, ProvErr, KnownDigest: string;
+  Prov: TSkillProvenance;
 begin
   Result := False;
   InstalledName := '';
@@ -509,9 +512,63 @@ begin
       Exit;
     end;
 
+    (* Provenance. ClawHub signs nothing and publishes no digest, so
+       this cannot prove the download was honest -- it records what we
+       actually received so any later change is detectable, and it
+       refuses the reinstall-substitution case where the registry
+       serves different bytes for a slug+version already seen on this
+       machine. See PasClaw.Skills.Provenance for the rungs this
+       deliberately does not claim. *)
+    ArchiveDigest := FileSha256(ZipPath);
+    if ArchiveDigest = '' then
+      LogWarn('clawhub: could not hash the downloaded archive for "%s" -- ' +
+              'installing without a provenance record', [Slug])
+    else
+    begin
+      { Drift check BEFORE anything is copied, so a refusal leaves the
+        skills tree untouched. A pinned version whose bytes changed is
+        not an upgrade -- it is the same name serving different code,
+        which is the shape ClawHavoc used. }
+      case CheckLock(DestRoot, Slug, EffectiveVersion, ArchiveDigest, KnownDigest) of
+        lkDrift:
+          begin
+            ErrMsg := Format(
+              'refusing install: "%s" version "%s" was previously installed ' +
+              'from an archive with sha256 %s, but the registry now serves ' +
+              '%s. Same name, different code. If the change is expected, ' +
+              'remove that entry from %s and reinstall.',
+              [Slug, EffectiveVersion, Copy(KnownDigest, 1, 16),
+               Copy(ArchiveDigest, 1, 16),
+               JoinPath(DestRoot, 'skills.lock.json')]);
+            LogWarn('%s', [ErrMsg]);
+            Exit;
+          end;
+        lkMatch:
+          LogDebug('clawhub: %s@%s archive digest matches the lock',
+                   [Slug, EffectiveVersion]);
+        lkFirstSight:
+          LogDebug('clawhub: %s@%s not seen before -- recording its digest',
+                   [Slug, EffectiveVersion]);
+      end;
+    end;
+
     CopyTree(SrcDir, DstDir);
-    LogInfo('clawhub: installed %s (v=%s) at %s',
-            [Slug, EffectiveVersion, DstDir]);
+
+    if ArchiveDigest <> '' then
+    begin
+      Prov := BuildProvenance(DstDir, 'clawhub', Slug, EffectiveVersion,
+                              ArchiveDigest);
+      if not WriteProvenance(DstDir, Prov, ProvErr) then
+        LogWarn('clawhub: installed %s but could not write its provenance ' +
+                'record: %s', [Slug, ProvErr]);
+      RecordInLock(DestRoot, Slug, EffectiveVersion, ArchiveDigest);
+      LogInfo('clawhub: installed %s (v=%s, %d file(s), archive sha256 %s) at %s',
+              [Slug, EffectiveVersion, Length(Prov.Files),
+               Copy(ArchiveDigest, 1, 12), DstDir]);
+    end
+    else
+      LogInfo('clawhub: installed %s (v=%s) at %s',
+              [Slug, EffectiveVersion, DstDir]);
     Result := True;
   finally
     RemoveTree(TempBase);
