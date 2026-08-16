@@ -1586,11 +1586,36 @@ function subscribeEvents() {
 }
 
 /* The board's own events: anything that changes the project set repaints
-   the icons and the tree. */
-onDesktopEvent("projects", () => loadProjects().catch(() => {}));
-onDesktopEvent("project",  () => loadProjects().catch(() => {}));
-onDesktopEvent("task",     () => loadProjects().catch(() => {}));
-onDesktopEvent("job",      () => loadProjects().catch(() => {}));
+   the icons and the tree.
+
+   Coalesced, because these arrive in BURSTS. One agent turn that writes a
+   ten-item checklist emits ten task events, and a reload per event meant
+   ten full project-list round trips to render one board -- measured at 11
+   GET /v1/projects for a single ten-item reconcile, which was half of all
+   the traffic that operation caused. The intermediate states were never
+   seen either: each reload painted a board that the next event
+   immediately invalidated.
+
+   A trailing window, not a leading one: the point is to land on the
+   FINAL state, so the last event in a burst is the one that must be
+   reflected. Direct callers keep using loadProjects and keep its exact
+   semantics -- createAppFromDesktop awaits it precisely because it needs
+   S.projects fresh before it opens the chat, and a coalesced refresh
+   would hand it a stale list. */
+const BOARD_REFRESH_MS = 120;
+let boardTimer = null;
+function refreshBoardSoon() {
+  if (boardTimer) return;
+  boardTimer = setTimeout(() => {
+    boardTimer = null;
+    loadProjects().catch(() => {});
+  }, BOARD_REFRESH_MS);
+}
+
+onDesktopEvent("projects", refreshBoardSoon);
+onDesktopEvent("project",  refreshBoardSoon);
+onDesktopEvent("task",     refreshBoardSoon);
+onDesktopEvent("job",      refreshBoardSoon);
 
 
 /* ==========================================================================
@@ -2207,7 +2232,24 @@ function mirrorChecklist(project, argsStr) {
       const j = await api(`/v1/projects/${project}/tasks`);
       const have = new Map();
       (j.tasks || []).forEach(t => { if (!have.has(t.title)) have.set(t.title, t); });
-      for (const it of items) {
+      /* Reconcile the items CONCURRENTLY.
+
+         Each item touches a different task, so the writes do not depend
+         on each other -- but awaiting them one at a time made a ten-item
+         checklist ten sequential round trips, which is what stretched
+         the resulting event burst well past any coalescing window and
+         cost a full project reload every couple of items.
+
+         Duplicate titles within ONE checklist are folded out first. The
+         sequential version deduped them by accident -- the first create
+         landed in `have`, so the second pass found it and skipped -- and
+         concurrent creates would lose that and file the task twice. The
+         server has no title uniqueness to fall back on. */
+      const seen = new Set();
+      const wanted = items.filter(
+        it => !seen.has(it.title) && seen.add(it.title));
+
+      await Promise.all(wanted.map(async it => {
         const t = have.get(it.title);
         if (!t) {
           const made = await api(`/v1/projects/${project}/tasks`,
@@ -2228,7 +2270,7 @@ function mirrorChecklist(project, argsStr) {
             { method: "PATCH", body: { status: "todo" } });
           t.status = "todo";
         }
-      }
+      }));
       await loadProjects();
       if (S.tree[project]) { await loadTasks(project); paintTree(); }
     } catch {} /* best effort: the chat must not stall on the board */
@@ -3052,14 +3094,37 @@ async function openApp(project, opts) {
   chat.title = "Edit this app by asking -- the conversation docks on the left";
   /* Reveal moves the project's ONE chat in here; hide leaves it parked in
      the pane, still live, still streaming if a turn is running. */
+  /* Revealing the dock GROWS the window; it does not shrink the app.
+
+     The dock is a fixed-width column inside the same window, so docking
+     it used to come straight out of the app's own viewport: a 380x260
+     app opened with the chat showing got 109px of width -- 71% of what
+     it asked for -- and rendered clipped. The app's declared width is
+     the one thing in that layout the desktop has no right to overrule,
+     so the window widens by what the dock and grip take and the frame
+     keeps its size. Hiding the dock gives the width back.
+
+     Clamped to the viewport, since a wide app plus a dock can exceed the
+     screen -- and a window wider than the desktop is a worse outcome
+     than a narrower app. */
+  const dockWidth = () =>
+    Math.round(side.getBoundingClientRect().width +
+               grip.getBoundingClientRect().width);
   const showChat = () => {
+    const was = side.style.display !== "none";
     side.style.display = "flex";
     grip.style.display = "";
     showChatIn(project, side).focus();
+    if (!was) {
+      const grew = w.node.offsetWidth + dockWidth();
+      w.node.style.width = Math.min(grew, window.innerWidth - 20) + "px";
+    }
   };
   chat.addEventListener("click", () => {
     if (side.style.display !== "none") {
+      const give = dockWidth();
       side.style.display = "none"; grip.style.display = "none";
+      w.node.style.width = Math.max(200, w.node.offsetWidth - give) + "px";
       /* Handing it back to the dock rather than parking it here keeps the
          "one place at a time" rule true while the pane is hidden. */
       if (S.dockProject === project) paintTree();
