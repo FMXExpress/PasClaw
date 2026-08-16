@@ -201,12 +201,16 @@ procedure LogSkipOnceImpl;
 begin
   if GLogged then Exit;
   GLogged := True;
-  LogInfo('web_search disabled: no real provider configured. ' +
-          'Set $PASCLAW_BRAVE_API_KEY / $PASCLAW_TAVILY_API_KEY / ' +
-          '$PASCLAW_PERPLEXITY_API_KEY / $PASCLAW_GEMINI_API_KEY, ' +
-          'or set web_search.provider = "searxng" + base_url in config.json. ' +
-          '(DDG scrape fallback is disabled -- its bot detection refuses non-browser ' +
-          'requests at the TLS-fingerprint level.)', []);
+  { Headline states the fact; the remedy detail is one level down. The
+    single-paragraph form ran to five lines of env-var names at startup,
+    which buried every line around it. }
+  LogInfo('web_search disabled: no provider configured ' +
+          '(set a key, or web_search.provider in config.json)', []);
+  LogDebug('web_search: accepted keys are $PASCLAW_BRAVE_API_KEY / ' +
+           '$PASCLAW_TAVILY_API_KEY / $PASCLAW_PERPLEXITY_API_KEY / ' +
+           '$PASCLAW_GEMINI_API_KEY; or set web_search.provider = "searxng" ' +
+           'plus base_url. The DDG scrape fallback stays off -- its bot ' +
+           'detection refuses non-browser requests at the TLS-fingerprint level.');
 end;
 
 function HasConfiguredWebSearchProvider(const Cfg: TConfig): Boolean;

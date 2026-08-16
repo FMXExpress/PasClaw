@@ -1183,7 +1183,7 @@ begin
   if FSession = nil then Exit;
   CC.Enabled   := CheckpointsEnabled;
   CC.SessionId := FSession.Meta.Id;
-  CC.Root      := JoinPath(GetHome, ActiveWorkspaceName + '/checkpoints');
+  CC.Root      := JoinPath(JoinPath(GetHome, ActiveWorkspaceName), 'checkpoints');
   CC.KeepLast  := CheckpointsKeepLast;
   InitCheckpoints(CC);
 end;
@@ -3081,7 +3081,7 @@ begin
     "checkpoints not enabled". Codex P2 on PR #226. }
   CC.Enabled   := CheckpointsEnabled;
   CC.SessionId := 'fpc-tui-session';
-  CC.Root      := JoinPath(GetHome, ActiveWorkspaceName + '/checkpoints');
+  CC.Root      := JoinPath(JoinPath(GetHome, ActiveWorkspaceName), 'checkpoints');
   CC.KeepLast  := CheckpointsKeepLast;
   InitCheckpoints(CC);
 

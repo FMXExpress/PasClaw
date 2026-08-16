@@ -1009,7 +1009,7 @@ begin
     concurrently. No-op when disabled. }
   CC.Enabled   := FCfg.CheckpointsEnabled;
   CC.SessionId := CheckpointSessionId('');
-  CC.Root      := JoinPath(GetHome, ActiveWorkspaceName + '/checkpoints');
+  CC.Root      := JoinPath(JoinPath(GetHome, ActiveWorkspaceName), 'checkpoints');
   CC.KeepLast  := FCfg.CheckpointsKeepLast;
   InitCheckpoints(CC);
   { Phase 4c: best-effort load the local embedder so distilled-fact dedup
@@ -1354,7 +1354,15 @@ begin
      Cfg.Gateway.Token, and the gateway will reject every client
      bearer until the env var is renamed. *)
   if not FMCPOnly then
-    LogInfo('%s', [DescribeGatewayAuthState(FCfg)]);
+  begin
+    { Level follows the state. An open or misconfigured gateway is the
+      most consequential line of the whole startup, and at [info] it sat
+      between two subsystem notices where it read as routine. }
+    if GatewayAuthState(FCfg) <> gasRequired then
+      LogWarn('%s', [DescribeGatewayAuthState(FCfg)])
+    else
+      LogInfo('%s', [DescribeGatewayAuthState(FCfg)]);
+  end;
 end;
 
 procedure TGatewayServer.Stop;
@@ -4652,7 +4660,7 @@ var
 begin
   CC.Enabled   := FCfg.CheckpointsEnabled;
   CC.SessionId := CheckpointSessionId(ReqSession);
-  CC.Root      := JoinPath(GetHome, ActiveWorkspaceName + '/checkpoints');
+  CC.Root      := JoinPath(JoinPath(GetHome, ActiveWorkspaceName), 'checkpoints');
   CC.KeepLast  := FCfg.CheckpointsKeepLast;
   InitCheckpoints(CC);
 end;
