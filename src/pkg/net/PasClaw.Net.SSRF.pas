@@ -288,9 +288,20 @@ var
   end;
 
   function NAT64: Boolean;
+  var
+    k: Integer;
   begin
-    { 64:ff9b::/96 -- the well-known prefix; the low 32 bits are v4 }
-    Result := (B[0] = $00) and (B[1] = $64) and (B[2] = $FF) and (B[3] = $9B);
+    { 64:ff9b::/96 -- the well-known prefix, and the low 32 bits are the
+      embedded v4. All 96 bits must match: comparing only the leading 32
+      swept in 64:ff9b:1::/48, the SEPARATE local-use translation range,
+      whose low bytes are not an IPv4 address at all -- a legitimate
+      translated destination there was judged by unrelated bytes (often
+      as 0.0.0.0) and refused. }
+    Result := False;
+    if (B[0] <> $00) or (B[1] <> $64) or (B[2] <> $FF) or (B[3] <> $9B) then Exit;
+    for k := 4 to 11 do
+      if B[k] <> 0 then Exit;
+    Result := True;
   end;
 
 begin
@@ -342,56 +353,66 @@ begin
 end;
 
 function NumericHostNotDottedQuad(const Host: string; out Reason: string): Boolean;
-(* Integer, hex and octal spellings of an IPv4 address -- 2852039166,
-   0xA9FEA9FE, 0251.0376.0251.0376, 127.1 -- are accepted by many
-   resolvers and by inet_addr, and are a standard way to smuggle a
-   blocked address past a guard that only understands dotted quads.
+(* Integer, octal and hex spellings of an IPv4 address -- 2852039166,
+   0xA9FEA9FE, 0251.0376.0251.0376, 127.1, and MIXED-radix forms such
+   as 127.0x0.0.1 -- are accepted by inet_addr and by most resolvers,
+   and are a standard way to smuggle a blocked address past a guard
+   that only understands dotted quads.
 
-   Rejecting them cannot break a real hostname: a DNS name's rightmost
-   label may not be all-numeric (RFC 1123), so any host whose labels
-   are ALL numeric is either a valid dotted quad -- handled before this
-   is reached -- or a smuggled form. Refuse rather than try to decode
-   the intent. *)
+   Every label is classified independently, because the radix can vary
+   from label to label: an earlier version tested only whether the
+   WHOLE host began with "0x" and whether every label was decimal, so
+   127.0x0.0.1 was judged non-numeric and allowed straight through.
+
+   Rejecting an all-numeric host cannot break a real hostname: a DNS
+   name's rightmost label may not be all-numeric (RFC 1123), so any
+   host whose labels are ALL numeric in some radix is either a valid
+   dotted quad -- handled before this is reached -- or a smuggled
+   spelling. Conversely a hex-looking label only counts when its whole
+   body is hex digits, so ordinary names that merely begin with those
+   characters (0xample.com, 0xdead.com) are left alone. *)
 var
-  i, Start, k: Integer;
+  i, Start: Integer;
   Piece: string;
-  AllNumericLabels: Boolean;
+
+  function IsNumericLabel(const L: string): Boolean;
+  var
+    k: Integer;
+    Body: string;
+  begin
+    Result := False;
+    if L = '' then Exit;
+    if (Length(L) > 2) and (L[1] = '0') and ((L[2] = 'x') or (L[2] = 'X')) then
+    begin
+      Body := Copy(L, 3, MaxInt);
+      for k := 1 to Length(Body) do
+        if not (((Body[k] >= '0') and (Body[k] <= '9')) or
+                ((Body[k] >= 'a') and (Body[k] <= 'f')) or
+                ((Body[k] >= 'A') and (Body[k] <= 'F'))) then Exit;
+      Exit(True);
+    end;
+    for k := 1 to Length(L) do
+      if (L[k] < '0') or (L[k] > '9') then Exit;
+    Result := True;
+  end;
+
 begin
   Result := False;
   Reason := '';
   if Host = '' then Exit;
 
-  { 0x... / 0X... hex form }
-  if (Length(Host) > 2) and (Host[1] = '0') and
-     ((Host[2] = 'x') or (Host[2] = 'X')) then
-  begin
-    Reason := 'hex-encoded host "' + Host + '" (non-dotted-quad IPv4 spelling)';
-    Exit(True);
-  end;
-
-  AllNumericLabels := True;
   Start := 1;
   for i := 1 to Length(Host) + 1 do
     if (i > Length(Host)) or (Host[i] = '.') then
     begin
       Piece := Copy(Host, Start, i - Start);
       Start := i + 1;
-      if Piece = '' then begin AllNumericLabels := False; Break; end;
-      for k := 1 to Length(Piece) do
-        if (Piece[k] < '0') or (Piece[k] > '9') then
-        begin
-          AllNumericLabels := False;
-          Break;
-        end;
-      if not AllNumericLabels then Break;
+      if not IsNumericLabel(Piece) then Exit;   { a real hostname }
     end;
 
-  if AllNumericLabels then
-  begin
-    Reason := 'numeric host "' + Host + '" is not a valid dotted-quad ' +
-              '(integer/octal IPv4 spelling)';
-    Exit(True);
-  end;
+  Reason := 'numeric host "' + Host + '" is not a valid dotted-quad ' +
+            '(integer / octal / hex IPv4 spelling)';
+  Result := True;
 end;
 
 function HostIsLocal(const Host: string; out Reason: string): Boolean;

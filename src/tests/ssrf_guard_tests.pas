@@ -79,6 +79,25 @@ begin
   Check('http://[::ffff:93.184.216.34]/', False,
         'IPv4-mapped PUBLIC address is still public');
 
+  { Mixed-radix labels (Codex P1 on #563). The radix can vary per label,
+    so classifying the host by its leading characters missed these
+    entirely -- 127.0x0.0.1 was allowed while 127.0.0.1 was blocked. }
+  Check('http://127.0x0.0.1/',    True,  'decimal + hex labels mixed');
+  Check('http://0177.0x0.0.1/',   True,  'octal + hex labels mixed');
+  Check('http://0x7f.0.0.1/',     True,  'hex first label');
+
+  { ...and the matching false positive: a hex-LOOKING label only counts
+    when its whole body is hex digits, or ordinary names beginning with
+    those two characters break. }
+  Check('http://0xample.com/',    False, 'hostname merely starting with 0x');
+  Check('http://0xdead.com/',     False, 'valid-hex label but a real TLD follows');
+
+  { NAT64 is a /96, not a /32 (Codex P2 on #563). Matching only the
+    leading 32 bits swept in 64:ff9b:1::/48 -- a separate local-use
+    range whose low bytes are not an embedded IPv4 address. }
+  Check('http://[64:ff9b::7f00:1]/', True,  'NAT64 well-known prefix, embedded loopback');
+  Check('http://[64:ff9b:1::1]/',    False, 'local-use 64:ff9b:1::/48 is not NAT64');
+
   { The userinfo trick from PR #85 must stay closed. }
   Check('http://169.254.169.254/latest/meta-data/@example.com', True,
         'userinfo-shaped path fragment does not retarget the host');
