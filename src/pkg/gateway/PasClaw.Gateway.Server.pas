@@ -579,6 +579,15 @@ uses
   PasClaw.Workspaces,
   DateUtils,
   {$IFDEF FPC}{$IFDEF UNIX}BaseUnix,{$ENDIF}{$ENDIF}
+  { Windows API for IsRestrictedFsPath's reparse-point resolution
+    (CreateFileW / GetFinalPathNameByHandleW / CloseHandle and the
+    DWORD, FILE_SHARE_* and OPEN_EXISTING declarations they need).
+    Spelled the way the rest of the tree spells it -- Cron.State and
+    Agent.Steering use exactly this pair. }
+  {$IFDEF MSWINDOWS}{$IFDEF FPC}Windows,{$ELSE}Winapi.Windows,{$ENDIF}{$ENDIF}
+  { realpath(3) for Delphi on macOS / Linux -- same binding
+    PasClaw.Platform already uses. }
+  {$IFNDEF FPC}{$IFDEF POSIX}Posix.Stdlib, Posix.Base,{$ENDIF}{$ENDIF}
   IdTCPConnection,
   PasClaw.Logger,
   PasClaw.Utils,
@@ -2371,14 +2380,14 @@ begin
     except
       on E: Exception do
       begin
-        DeleteFile(ZipPath);
+        SysUtils.DeleteFile(ZipPath);
         Strm.Free;
         WriteJSON(AResp, 500, '{"error":"' + JsonEscape(E.Message) + '"}');
         Exit;
       end;
     end;
   finally
-    DeleteFile(ZipPath);   { bytes are in memory now; drop the temp file }
+    SysUtils.DeleteFile(ZipPath);   { bytes are in memory now; drop the temp file }
   end;
   Strm.Position := 0;
   AResp.ResponseNo  := 200;
@@ -2408,7 +2417,7 @@ begin
       else SysUtils.DeleteFile(P);
     until FindNext(SR) <> 0;
   finally
-    FindClose(SR);
+    SysUtils.FindClose(SR);
   end;
   RemoveDir(Dir);
 end;
@@ -2450,7 +2459,7 @@ begin
       end;
     until FindNext(SR) <> 0;
   finally
-    FindClose(SR);
+    SysUtils.FindClose(SR);
   end;
   Result := True;
 end;
@@ -2823,7 +2832,7 @@ begin
           Arr.AddObject(Item);
         until FindNext(SR) <> 0;
       finally
-        FindClose(SR);
+        SysUtils.FindClose(SR);
       end;
     end;
     Root.PutArray('files', Arr);
@@ -4222,6 +4231,41 @@ begin
 end;
 {$ENDIF}{$ENDIF}
 
+{$IFNDEF FPC}{$IFDEF POSIX}
+(* Delphi targeting macOS or Linux.
+
+   Without this arm, Delphi-POSIX builds matched NEITHER the FPC+UNIX
+   block above nor the MSWINDOWS block below, so CanonicalPath simply
+   did not exist there. Every call site is guarded, so the unit still
+   compiled -- and the guard silently degraded to a lexical compare on
+   a platform this project ships (the Studio project targets OSX64).
+   That is the exact symlink bypass PR #280 closed for FPC-Unix, left
+   open on a supported target because the platform matrix was written
+   as "FPC-Unix or Windows" rather than "POSIX or Windows".
+
+   Same realpath(3) as the FPC arm; only the binding differs. Delphi
+   exposes it through Posix.Stdlib, which PasClaw.Platform already
+   uses, so this adds no new dependency. *)
+function CanonicalPath(const P: string): string;
+var
+  Buf: array[0..4095] of AnsiChar;   { PATH_MAX }
+  R:   MarshaledAString;
+begin
+  Result := '';
+  if P = '' then Exit;
+  R := realpath(MarshaledAString(AnsiString(P)), @Buf[0]);
+  if R <> nil then
+    Result := string(AnsiString(PAnsiChar(@Buf[0])));
+end;
+
+{ SameInode has no Delphi-POSIX counterpart here on purpose. It exists
+  to catch a HARDLINK, which realpath cannot resolve, and adding a
+  second untested platform binding for the rarer case would trade a
+  known gap for an unknown one. Recorded rather than implied: on
+  Delphi-POSIX a hardlink to a secret file is still caught only
+  lexically. }
+{$ENDIF}{$ENDIF}
+
 {$IFDEF MSWINDOWS}
 (* Windows equivalent of the realpath() branch above.
 
@@ -4242,8 +4286,11 @@ end;
    DIRECTORY handle at all -- without it the oauth-directory case fails
    and silently degrades to the lexical compare.
 
-   Declared here rather than taken from the RTL because
-   GetFinalPathNameByHandleW is absent from older FPC Windows headers.
+   The import is PasClaw-prefixed rather than named after the API:
+   recent Winapi.Windows declares GetFinalPathNameByHandleW itself, and
+   an identically-named local declaration would shadow it silently. A
+   distinct name means the two can never be confused for one another,
+   and older FPC Windows headers that lack it are still covered.
 
    NOT COMPILE-TESTED: this container has no Windows target or cross
    units, so this branch has been reviewed by inspection only. It fails
@@ -4253,8 +4300,8 @@ const
   FILE_FLAG_BACKUP_SEMANTICS_ = $02000000;
   FILE_NAME_NORMALIZED_       = $00000000;
 
-function GetFinalPathNameByHandleW(hFile: THandle; lpszFilePath: PWideChar;
-                                   cchFilePath, dwFlags: DWORD): DWORD; stdcall;
+function PC_GetFinalPathNameByHandleW(hFile: THandle; lpszFilePath: PWideChar;
+                                      cchFilePath, dwFlags: DWORD): DWORD; stdcall;
   external 'kernel32.dll' name 'GetFinalPathNameByHandleW';
 
 function CanonicalPath(const P: string): string;
@@ -4271,8 +4318,8 @@ begin
                    nil, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS_, 0);
   if H = INVALID_HANDLE_VALUE then Exit;
   try
-    N := GetFinalPathNameByHandleW(H, @Buf[0], Length(Buf) - 1,
-                                   FILE_NAME_NORMALIZED_);
+    N := PC_GetFinalPathNameByHandleW(H, @Buf[0], Length(Buf) - 1,
+                                      FILE_NAME_NORMALIZED_);
     if (N = 0) or (N >= DWORD(Length(Buf))) then Exit;
     Buf[N] := #0;
     S := string(WideString(PWideChar(@Buf[0])));
@@ -4294,7 +4341,7 @@ end;
 function IsRestrictedFsPath(const Path: string): Boolean;
 var
   Full, CfgFull, Base, OAuthDir: string;
-  {$IF DEFINED(MSWINDOWS) or (DEFINED(FPC) and DEFINED(UNIX))}CP: string;{$IFEND}
+  {$IF DEFINED(MSWINDOWS) or DEFINED(UNIX) or DEFINED(POSIX)}CP: string;{$IFEND}
 begin
   Result := False;
   if Path = '' then Exit;
@@ -4309,6 +4356,13 @@ begin
     cleartext config. Catch the link by inode, and run the checks below
     against the symlink-resolved target rather than the lexical name. }
   if SameInode(Path, GetConfigPath) then Exit(True);
+  CP := CanonicalPath(Path);
+  if CP <> '' then Full := CP;
+  CP := CanonicalPath(GetConfigPath);
+  if CP <> '' then CfgFull := CP;
+  {$ENDIF}{$ENDIF}
+  {$IFNDEF FPC}{$IFDEF POSIX}
+  { Same resolution for Delphi on macOS / Linux. }
   CP := CanonicalPath(Path);
   if CP <> '' then Full := CP;
   CP := CanonicalPath(GetConfigPath);
@@ -4346,7 +4400,7 @@ begin
      into these dirs are covered without anyone remembering to extend a
      list. *)
   OAuthDir := JoinPath(GetHome, 'oauth');
-  {$IF DEFINED(MSWINDOWS) or (DEFINED(FPC) and DEFINED(UNIX))}
+  {$IF DEFINED(MSWINDOWS) or DEFINED(UNIX) or DEFINED(POSIX)}
   { Resolve the guarded directory too, so an alias INSIDE the browsable
     tree and the real directory canonicalise to the same string. }
   CP := CanonicalPath(OAuthDir);
@@ -4471,7 +4525,7 @@ begin
         Arr.AddObject(Item);
       until FindNext(SR) <> 0;
     finally
-      FindClose(SR);
+      SysUtils.FindClose(SR);
     end;
     Root.PutArray('entries', Arr);
     WriteJSON(AResp, 200, Root.ToJSON);
