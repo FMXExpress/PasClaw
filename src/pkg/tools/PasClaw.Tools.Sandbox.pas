@@ -589,58 +589,102 @@ begin
   if Cur <> '' then Result.Add(StripQuotes(Cur));
 end;
 
-procedure DenyCompareForms(const Token: string; out F1, F2, F3: string);
-(* The spellings /bin/sh will collapse to the same command word, derived
-   HERE rather than in TokenizeCommand. That distinction matters: the
-   token list is consumed positionally by EffectiveSinkBasename (Toks[0]
-   is the command word, Toks[1..] are its options), so injecting derived
-   tokens into it silently broke the Class D `/usr/bin/env bash` guard --
-   the injected basename became Toks[1] and the env-option peeling read
-   it as the interpreter. Keep the tokenizer pure; widen only the
+type
+  TDenyForms = array[0..7] of string;
+
+procedure DenyCompareForms(const Token: string; out Forms: TDenyForms;
+                           out N: Integer);
+(* Every spelling /bin/sh will collapse to the same command word.
+
+   Derived HERE and not in TokenizeCommand: the token list is consumed
+   POSITIONALLY by EffectiveSinkBasename (Toks[0] is the command word),
+   so injecting derived tokens there silently broke the Class D
+   `/usr/bin/env bash` guard. Keep the tokenizer pure; widen only the
    comparison.
 
-   F1  backslashes removed  -- sh strips them during word expansion, so
-       `r\m` and `\rm` both execute `rm`.
-   F2  basename of the path -- `/bin/rm`, `../../bin/rm`.
-   F3  F2 without a Windows executable suffix -- `...\rm.exe`. *)
+   A previous version derived three fixed forms and missed two whole
+   classes, both verified allowed before this rewrite:
+
+     reg.exe add HKLM     suffix stripping ran only on a PATH basename,
+     cacls.exe c:\x        so the bare Windows spelling -- the normal
+     rm.exe -rf x         one -- kept its .exe and matched nothing.
+
+     /bin/r\m -rf x       the basename scan treated the ESCAPE
+                          backslash as a separator and produced "m",
+                          while the unescaped form kept its path; the
+                          two bypass classes combined cleanly.
+
+   So the forms are now built as a set, and each is also offered
+   without a Windows executable suffix:
+
+     the token itself                 reg.exe        -> reg
+     backslash-removed                r\m            -> rm
+     basename, / and \ as separators  C:\..\reg.exe -> reg.exe -> reg
+     basename of the unescaped form   /bin/r\m      -> /bin/rm -> rm *)
 var
-  k, p: Integer;
+  U: string;
+  k, M: Integer;
+
+  procedure Add(const S: string);
+  var
+    j: Integer;
+  begin
+    if S = '' then Exit;
+    for j := 0 to N - 1 do
+      if Forms[j] = S then Exit;
+    if N > High(Forms) then Exit;
+    Forms[N] := S;
+    Inc(N);
+  end;
+
+  function StripExeSuffix(const S: string): string;
+  var
+    p: Integer;
+    Ext: string;
+  begin
+    Result := '';
+    p := Length(S);
+    while (p >= 1) and (S[p] <> '.') do Dec(p);
+    if p < 2 then Exit;
+    Ext := LowerCase(Copy(S, p, MaxInt));
+    if (Ext = '.exe') or (Ext = '.com') or (Ext = '.bat') or (Ext = '.cmd') then
+      Result := Copy(S, 1, p - 1);
+  end;
+
+  function BaseNameOf(const S: string; WinSep: Boolean): string;
+  var
+    p: Integer;
+  begin
+    Result := '';
+    p := Length(S);
+    while (p >= 1) and (S[p] <> '/') and (not (WinSep and (S[p] = '\'))) do Dec(p);
+    if p >= 1 then Result := Copy(S, p + 1, MaxInt);
+  end;
+
 begin
-  F1 := '';
-  F2 := '';
-  F3 := '';
+  N := 0;
+  Add(Token);
+
+  U := '';
   for k := 1 to Length(Token) do
-    if Token[k] <> '\' then F1 := F1 + Token[k];
-  if F1 = Token then F1 := '';
+    if Token[k] <> '\' then U := U + Token[k];
+  Add(U);
 
-  if (Pos('/', Token) > 0) or (Pos('\', Token) > 0) then
-  begin
-    p := Length(Token);
-    while (p >= 1) and (Token[p] <> '/') and (Token[p] <> '\') do Dec(p);
-    F2 := Copy(Token, p + 1, MaxInt);
-    if F2 = Token then F2 := '';
-  end;
+  Add(BaseNameOf(Token, True));    { Windows path }
+  Add(BaseNameOf(U, False));       { POSIX path, escapes already removed }
 
-  if F2 <> '' then
-  begin
-    p := Length(F2);
-    while (p >= 1) and (F2[p] <> '.') do Dec(p);
-    if p >= 2 then
-    begin
-      F3 := LowerCase(Copy(F2, p, MaxInt));
-      if (F3 = '.exe') or (F3 = '.com') or (F3 = '.bat') or (F3 = '.cmd') then
-        F3 := Copy(F2, 1, p - 1)
-      else
-        F3 := '';
-    end;
-  end;
+  { ...and each of those without a Windows executable suffix. }
+  M := N;
+  for k := 0 to M - 1 do
+    Add(StripExeSuffix(Forms[k]));
 end;
 
 function MatchesAnyTokenForbid(const Cmd: string; out Hit: string): Boolean;
 var
   Tokens: TStringList;
-  i, j: Integer;
-  T, F1, F2, F3: string;
+  i, j, k, NForms: Integer;
+  T: string;
+  Forms: TDenyForms;
 begin
   Result := False;
   Hit := '';
@@ -649,16 +693,14 @@ begin
     for i := 0 to Tokens.Count - 1 do
     begin
       T := LowerCase(Tokens[i]);
-      DenyCompareForms(T, F1, F2, F3);
-      for j := 0 to High(ForbiddenTokens) do
-        if (T = ForbiddenTokens[j]) or
-           ((F1 <> '') and (F1 = ForbiddenTokens[j])) or
-           ((F2 <> '') and (F2 = ForbiddenTokens[j])) or
-           ((F3 <> '') and (F3 = ForbiddenTokens[j])) then
-        begin
-          Hit := ForbiddenTokens[j];
-          Exit(True);
-        end;
+      DenyCompareForms(T, Forms, NForms);
+      for k := 0 to NForms - 1 do
+        for j := 0 to High(ForbiddenTokens) do
+          if Forms[k] = ForbiddenTokens[j] then
+          begin
+            Hit := ForbiddenTokens[j];
+            Exit(True);
+          end;
     end;
   finally
     Tokens.Free;

@@ -69,6 +69,21 @@ begin
   Check('C:\Windows\System32\rm.exe x',        False, 'windows path + .exe');
   Check('C:\Windows\System32\reg.exe add HK',  False, 'reg.exe (was missing from the array)');
 
+  { Codex P1s on #566, both verified ALLOWED before the form-set rewrite.
+    The earlier version derived three fixed forms and stripped the .exe
+    suffix only from a PATH basename, so the NORMAL Windows spelling --
+    a bare command name -- kept its suffix and matched nothing. And the
+    basename scan treated an escape backslash as a separator, so a path
+    and an escape combined cleanly into a bypass. The original tests
+    covered only the path-qualified spellings, which is exactly why both
+    survived. }
+  Check('reg.exe add HKLM',      False, 'bare reg.exe (no path separator)');
+  Check('cacls.exe c:\x',        False, 'bare cacls.exe');
+  Check('rm.exe -rf x',          False, 'bare rm.exe');
+  Check('SUDO.EXE x',            False, 'bare sudo.exe, upper case');
+  Check('/bin/r\m -rf x',        False, 'path AND backslash escape combined');
+  Check('/usr/bin/s\udo whoami', False, 'path AND escape, sudo');
+
   { Must NOT block -- ordinary developer commands. }
   Check('make test',                   True, 'make');
   Check('git commit -m "fix"',         True, 'git');
