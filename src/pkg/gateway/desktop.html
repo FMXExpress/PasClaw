@@ -1076,24 +1076,17 @@ iframe.app { width: 100%; height: 100%; border: 0; background: var(--window); di
 .grounded  { color: var(--text); }
 .ungrounded{ color: #a00; font-weight: bold; }
 
-/* The desktop ask field: the background is the first place to type. Sits
-   under the windows (z below .win's counter) and out of the icons' way. */
-#ask {
-  position: absolute; left: 50%; top: 34%;
-  transform: translate(-50%, -50%);
-  width: min(480px, 70%);
-  z-index: 0;
+/* The shell window's composer: the ask field's home now that the
+   background has been retired as an input surface. */
+.shellcomposer { display: flex; flex-direction: column; gap: 4px; padding: 3px; }
+.shellcomposer textarea {
+  width: 100%; min-height: 3.4em; resize: vertical; font: inherit; padding: 3px 4px;
 }
-#askrow { display: flex; flex-direction: column; gap: 4px; }
-#askrow textarea {
-  width: 100%; min-height: 3.6em; resize: vertical;
-  font: inherit; padding: 3px 4px;
-}
-#askbtns { display: flex; gap: 4px; justify-content: flex-end; align-items: center; }
-#askwhere { flex: 1 1 auto; text-align: left; font-size: 11px; }
-#chips {
+.shellrow { display: flex; gap: 4px; align-items: center; }
+.shellrow .muted { flex: 1 1 auto; font-size: 11px; }
+.shellchips {
   display: flex; flex-wrap: wrap; gap: 4px;
-  justify-content: center; margin-top: 6px;
+  padding: 0 3px 3px; justify-content: flex-start;
 }
 .chip {
   display: inline-flex; align-items: center; gap: 4px;
@@ -1123,23 +1116,12 @@ iframe.app { width: 100%; height: 100%; border: 0; background: var(--window); di
   </div>
   <div id="stage">
     <div id="icons"></div>
-    <div id="ask">
-      <div id="askrow">
-        <textarea id="askfld" rows="3"
-               placeholder="Ask anything -- or describe an app to build"></textarea>
-        <div id="askbtns">
-          <span id="askwhere" class="muted"></span>
-          <select id="askkind" class="fld">
-            <option value="ask">Ask</option>
-            <option value="research">Research</option>
-            <option value="plan">Plan an app</option>
-            <option value="build">Build an app</option>
-          </select>
-          <button id="askgo" class="btn">Go</button>
-        </div>
-      </div>
-      <div id="chips"></div>
-    </div>
+    <!-- The ask surface is built into the shell window (openShell) rather
+         than sitting here on the background. It lived here until measuring
+         found the obvious: the background is UNDER every window, so the
+         desktop's primary input vanished the moment an app was open --
+         which is always, since building one opens its window over the
+         field. The taskbar button is a home that cannot be covered. -->
   </div>
 </div>
 
@@ -1152,6 +1134,12 @@ iframe.app { width: 100%; height: 100%; border: 0; background: var(--window); di
     </svg>
     PasClaw
   </button>
+  <div class="tb-sep"></div>
+  <!-- The two surfaces that must never be buried. Anchored here rather
+       than floated on the background, because anything on the background
+       is under every window the moment work is happening. -->
+  <button id="tb-shell" class="btn" title="Talk to the desktop (Ctrl+K)">Ask</button>
+  <button id="tb-log" class="btn" title="What the gateway is doing">Log</button>
   <div class="tb-sep"></div>
   <div id="tasks"></div>
   <div class="tb-sep"></div>
@@ -1394,6 +1382,55 @@ function toggleMax(w) {
     w.maximized = true; w.node.classList.add("max");
   }
 }
+function maximizeWindow(w) { if (!w.maximized) toggleMax(w); }
+
+/* Window arranging, which the shell exposes to the model.
+
+   Both skip minimized windows -- a window the user put away should not
+   come back because something else was tidied -- and both un-maximize
+   first, since a maximized window has stored geometry to restore and
+   moving it while maximized would strand that. */
+function arrangeable() {
+  return [...WINS.values()].filter(w => !w.node.classList.contains("min"));
+}
+
+function tileWindows() {
+  const ws = arrangeable();
+  if (!ws.length) return 0;
+  const r = desktopRect();
+  const cols = Math.ceil(Math.sqrt(ws.length));
+  const rows = Math.ceil(ws.length / cols);
+  const cw = Math.floor(r.width / cols), ch = Math.floor(r.height / rows);
+  ws.forEach((w, i) => {
+    if (w.maximized) toggleMax(w);
+    Object.assign(w.node.style, {
+      left: ((i % cols) * cw) + "px", top: (Math.floor(i / cols) * ch) + "px",
+      width: (cw - 4) + "px", height: (ch - 4) + "px",
+    });
+  });
+  saveDesktop();
+  return ws.length;
+}
+
+function cascadeWindows() {
+  const ws = arrangeable();
+  if (!ws.length) return 0;
+  const r = desktopRect();
+  const w0 = Math.min(720, Math.round(r.width * 0.62));
+  const h0 = Math.min(520, Math.round(r.height * 0.68));
+  ws.forEach((w, i) => {
+    if (w.maximized) toggleMax(w);
+    Object.assign(w.node.style, {
+      left: Math.min(24 + i * 26, Math.max(0, r.width - w0 - 8)) + "px",
+      top:  Math.min(18 + i * 24, Math.max(0, r.height - h0 - 8)) + "px",
+      width: w0 + "px", height: h0 + "px",
+    });
+    focusWindow(w);
+  });
+  saveDesktop();
+  return ws.length;
+}
+
 function closeWindow(w) {
   if (w.onClose) { try { w.onClose(); } catch {} }
   w.node.remove();
@@ -1605,7 +1642,7 @@ function subscribeEvents() {
    A trailing window, not a leading one: the point is to land on the
    FINAL state, so the last event in a burst is the one that must be
    reflected. Direct callers keep using loadProjects and keep its exact
-   semantics -- createAppFromDesktop awaits it precisely because it needs
+   semantics -- createAppFrom awaits it precisely because it needs
    S.projects fresh before it opens the chat, and a coalesced refresh
    would hand it a stale list. */
 const BOARD_REFRESH_MS = 120;
@@ -1643,6 +1680,8 @@ const RESTORERS = {
   library: () => openLibrary(),
   files:   a  => openFiles(a || undefined),
   console: () => openConsole(),
+  shell:   () => openShell(),
+  log:     () => openLog(),
 };
 
 let saveTimer = null;
@@ -1715,9 +1754,11 @@ async function restoreDesktop() {
    ========================================================================== */
 
 const MENU = [
+  { label: "Ask PasClaw",       icon: "brain",  fn: () => openShell() },
   { label: "New Project...",    icon: "folder", fn: newProject },
   { label: "Projects",          icon: "disk",   fn: openTree },
   { sep: true },
+  { label: "Log",               icon: "gear",   fn: () => openLog() },
   { label: "Browser",           icon: "globe",  fn: () => openBrowser() },
   { label: "Library",           icon: "brain",  fn: openLibrary },
   { label: "File Manager",      icon: "folder", fn: () => openFiles() },
@@ -1765,6 +1806,16 @@ function buildMenu() {
 $("#startbtn").addEventListener("click", e => {
   e.stopPropagation();
   $("#menu").classList.toggle("on");
+});
+$("#tb-shell").addEventListener("click", () => openShell());
+$("#tb-log").addEventListener("click", () => openLog());
+/* Ctrl+K raises the shell from anywhere, which is what makes it feel like
+   the desktop's command line rather than one more window to hunt for. */
+document.addEventListener("keydown", e => {
+  if ((e.ctrlKey || e.metaKey) && (e.key === "k" || e.key === "K")) {
+    e.preventDefault();
+    openShell();
+  }
 });
 document.addEventListener("click", () => $("#menu").classList.remove("on"));
 $("#menu").addEventListener("click", e => e.stopPropagation());
@@ -1870,17 +1921,16 @@ function paintIcons() {
    there; when it isn't installed, the one chip offers to install it.
    ========================================================================== */
 
-function askFromDesktop(kind) {
-  const fld = $("#askfld");
-  const query = fld.value.trim();
-  if (!query) return;
-  fld.value = "";
+/* Takes the text rather than reading a field: the shell owns the input
+   now, and the chips and the Browser both call this with a string. */
+function askFromDesktop(query, kind) {
+  if (!query || !query.trim()) return;
   const existing = WINS.get("browser");
   if (existing && existing.__ask) {
     restoreWindow(existing); focusWindow(existing);
-    existing.__ask(query, kind);
+    existing.__ask(query.trim(), kind);
   }
-  else openBrowser(undefined, query, kind);
+  else openBrowser(undefined, query.trim(), kind);
 }
 
 /* Create App: the same memo, but the deliverable is software. Starts a
@@ -1921,7 +1971,7 @@ const TITLE_CUT = new Set([
   "using", "and", "or", "but", "so", "plus",
 ]);
 /* Comfortably inside the server's 64-character slug cap, with room left
-   for the " 2".." 20" collision suffix createAppFromDesktop appends --
+   for the " 2".." 20" collision suffix createAppFrom appends --
    a title that fills the cap makes every retry sanitize to the same
    slug, and the create fails rather than picking a free name. */
 const TITLE_MAX = 48;
@@ -1974,7 +2024,7 @@ function deriveProjectTitle(text) {
      The loop above only trims while more than two words remain, so a
      memo opening with one enormous token sailed past it -- and that is
      not merely ugly. The server caps slugs at 64 characters, and
-     createAppFromDesktop resolves a name collision by appending " 2",
+     createAppFrom resolves a name collision by appending " 2",
      " 3" and so on: past the cap the suffix falls off the end of the
      slug, every retry sanitizes to the SAME existing project, and after
      twenty attempts Create App gives up with an error on a request that
@@ -1990,12 +2040,13 @@ function deriveProjectTitle(text) {
   return title.charAt(0).toUpperCase() + title.slice(1);
 }
 
-async function createAppFromDesktop(plan) {
-  const fld = $("#askfld");
-  const text = fld.value.trim();
-  if (!text) return;
+/* Start a project from a memo. Returns the slug it made, so the shell can
+   say which project the request became -- the text is passed in rather
+   than read from a field, since the shell window owns the input now. */
+async function createAppFrom(text, plan) {
+  if (!text || !text.trim()) return "";
+  text = text.trim();
   const title = deriveProjectTitle(text);
-  fld.value = "";
   try {
     /* The server's create is idempotent: a title that sanitizes to an
        existing slug hands back the OLD project, and two different
@@ -2021,12 +2072,20 @@ async function createAppFromDesktop(plan) {
              "do in what order, so I can approve it or change it."
            : text,
       plan ? "plan" : "build");
-  } catch (e) { alert(e.message); }
+    return j.name;
+  } catch (e) { alert(e.message); return ""; }
 }
 
-function paintChips() {
-  const host = $("#chips");
+/* The chips moved into the shell window with the ask field, so this
+   takes its host rather than looking one up: the same row is painted
+   wherever the shell currently is, and a repaint after loadProjects
+   finds it through SHELL_CHIPS. */
+let SHELL_CHIPS = null;
+function paintChips() { if (SHELL_CHIPS) paintChipsInto(SHELL_CHIPS); }
+
+function paintChipsInto(host) {
   if (!host) return;
+  SHELL_CHIPS = host;
   host.textContent = "";
 
   function chip(label, iconName, fn, title) {
@@ -2062,44 +2121,384 @@ function paintChips() {
    loud under the field -- the difference between "where did my text go"
    and not. */
 const ASK_KINDS = {
-  ask:      { where: "Answers as a page in the Browser." },
-  research: { where: "Digs until saturated, then a sourced report in the Browser." },
-  plan:     { where: "New project. Plans first -- nothing is built until you approve." },
-  build:    { where: "New project. Starts building straight away." },
+  ask:      { label: "Ask",
+              where: "Answers as a page in the Browser." },
+  research: { label: "Research",
+              where: "Digs until saturated, then a sourced report in the Browser." },
+  plan:     { label: "Plan an app",
+              where: "New project. Plans first -- nothing is built until you approve." },
+  build:    { label: "Build an app",
+              where: "New project. Starts building straight away." },
+  /* Shell only: the desktop itself is the thing being addressed. */
+  control:  { label: "Control the desktop",
+              where: "Arranges windows, opens apps, queues builds." },
 };
 
-function askKind() {
-  const s = $("#askkind");
-  return (s && s.value) || "ask";
+/* ==========================================================================
+   The shell: one window you talk to the desktop through
+
+   The ask field used to live on the background, where it was under every
+   window -- unusable exactly when the desktop was in use. This is its
+   home now: a full-stage window off a taskbar button, holding the same
+   four intents AND a conversation that can operate the desktop itself.
+
+   The two belong together. "Answer this", "build me an app" and "tidy
+   these windows up" are all things you say to the machine; splitting
+   them across two surfaces would only make the user decide which box a
+   sentence goes in before typing it.
+   ========================================================================== */
+
+const SHELL_SESSION = "desktop-shell";
+
+/* What the shell can do to the desktop, as told to the model and as
+   executed here. Kept as ONE table so the prompt cannot drift from the
+   implementation -- a model told about an action that does not exist
+   produces a turn that silently does nothing. */
+const SHELL_ACTIONS = {
+  tile: {
+    help: "tile -- lay every open window out side by side",
+    run: () => { tileWindows(); return "tiled"; },
+  },
+  cascade: {
+    help: "cascade -- stack the windows stepped from the top left",
+    run: () => { cascadeWindows(); return "cascaded"; },
+  },
+  minimize_all: {
+    help: "minimize_all -- clear the stage, leaving the taskbar",
+    run: () => {
+      let n = 0;
+      [...WINS.values()].forEach(w => { minimizeWindow(w); n++; });
+      return `minimized ${n}`;
+    },
+  },
+  close_all: {
+    help: "close_all -- close every open window",
+    run: () => {
+      const all = [...WINS.values()];
+      all.forEach(w => closeWindow(w));
+      return `closed ${all.length}`;
+    },
+  },
+  open_app: {
+    help: 'open_app {"project":"<slug>"} -- open a project\'s app',
+    run: a => { openApp(a.project, { chat: false }); return "opening " + a.project; },
+  },
+  open_chat: {
+    help: 'open_chat {"project":"<slug>"} -- open a project\'s conversation',
+    run: a => { openChat(a.project); return "opened chat for " + a.project; },
+  },
+  build_app: {
+    help: 'build_app {"title":"<name>","brief":"<what to build>"} -- ' +
+          "start a NEW project and set it building. Emit one per app when " +
+          "asked for several.",
+    run: async a => {
+      const j = await api("/v1/projects", { method: "POST",
+        body: { title: deriveProjectTitle(a.title || a.brief || "app") } });
+      await loadProjects();
+      projectChat(j.name).submitText(a.brief || a.title, "build");
+      return "building " + j.name;
+    },
+  },
+  theme: {
+    help: 'theme {"id":"<style id>"} -- change the desktop theme',
+    run: a => { applyStyle(a.id); return "theme " + a.id; },
+  },
+};
+
+/* The desktop's whole state, written into the prompt.
+
+   This is the difference between a shell that answers in one round trip
+   and one that spends six tool calls rediscovering what the page already
+   had in memory: without it the model reaches for list_dir and fs_read
+   to find desktop.json and the projects directory, which is slow, costs
+   tokens, and can still get it wrong. The page knows all of this
+   already, so it says so, and the turn goes out with no_tools. */
+function shellState() {
+  const wins = [...WINS.values()].map(w => {
+    const b = w.node.getBoundingClientRect();
+    return `${w.key || "?"} "${w.title}" ${Math.round(b.width)}x${Math.round(b.height)}` +
+           (w.node.classList.contains("min") ? " (minimized)" : "");
+  });
+  const projects = S.projects.map(p =>
+    `${p.name}${p.has_app ? " [app]" : ""}${p.suite ? " [suite]" : ""}` +
+    (p.tasks ? ` ${p.open_tasks || 0}/${p.tasks} tasks open` : ""));
+  return { wins, projects };
 }
 
-function paintAskWhere() {
-  const k = ASK_KINDS[askKind()];
-  $("#askwhere").textContent = k ? k.where : "";
+function shellPrompt() {
+  const st = shellState();
+  const wins = st.wins;
+  const projects = st.projects.join(", ");
+  return [
+    "You are the shell of PasClaw Desktop -- the window manager and the",
+    "assistant at once. The user talks to you to get things ANSWERED,",
+    "BUILT, or ARRANGED.",
+    "",
+    "To operate the desktop, emit a fenced block exactly like this, and",
+    "nothing else about it in prose:",
+    "",
+    "```pasclaw-ui",
+    '{"ui":"desktop","actions":[{"do":"tile"}]}',
+    "```",
+    "",
+    "Available actions:",
+    ...Object.values(SHELL_ACTIONS).map(a => "  - " + a.help),
+    "",
+    "Emit several actions in one block when the user asks for several",
+    "things -- \"build me these five apps\" is five build_app actions in",
+    "one block, not five turns.",
+    "",
+    "Only emit a block when the user actually wants the desktop changed.",
+    "An ordinary question gets an ordinary answer.",
+    "",
+    "EVERYTHING you need about the desktop is below. It is current as of",
+    "this message -- do not go looking for it on disk, and do not ask for",
+    "it; there is nothing to find that is not already here.",
+    "",
+    "Theme: " + (S.style || "?") + "   Workspace: " + (S.active || "?"),
+    "Open windows (" + wins.length + "):",
+    ...(wins.length ? wins.map(x => "  - " + x) : ["  (none)"]),
+    "Projects: " + (projects || "(none)"),
+  ].join("\n");
 }
 
-function goFromDesktop() {
-  switch (askKind()) {
-    case "research": return askFromDesktop("research");
-    case "plan":     return createAppFromDesktop(true);
-    case "build":    return createAppFromDesktop(false);
-    default:         return askFromDesktop("search");
+/* Run the actions a turn asked for, reporting each outcome back into the
+   transcript. Reported rather than silent: a window manager that
+   rearranges your screen without saying what it did is indistinguishable
+   from one that is broken. */
+async function runShellActions(block, say) {
+  const list = Array.isArray(block.actions) ? block.actions : [];
+  if (!list.length) return;
+  for (const a of list) {
+    const spec = SHELL_ACTIONS[a.do];
+    if (!spec) { say(`(unknown action: ${a.do})`); continue; }
+    try { say("-> " + await spec.run(a)); }
+    catch (e) { say(`(${a.do} failed: ${e.message})`); }
   }
 }
 
-function initAsk() {
-  $("#askgo").addEventListener("click", goFromDesktop);
-  $("#askkind").addEventListener("change", paintAskWhere);
-  paintAskWhere();
-  /* A memo, so Enter has to be shared: plain Enter runs the selected
-     intent, Shift+Enter makes a line break for the longer descriptions
-     the app intents want. */
-  $("#askfld").addEventListener("keydown", e => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      goFromDesktop();
-    }
+function openShell() {
+  const r = desktopRect();
+  const w = createWindow({
+    key: "shell", title: "Ask PasClaw", icon: "brain", pad: false,
+    width: Math.round(r.width * 0.9), height: Math.round(r.height * 0.85),
+    restore: { fn: "shell", arg: "" },
   });
+  /* Full stage on open: this is the surface you came to type into, and a
+     small window over a busy desktop would repeat the problem it exists
+     to solve. It is an ordinary window otherwise -- movable, resizable,
+     closable. */
+  if (!w.__shellBuilt) maximizeWindow(w);
+
+  if (w.__shellBuilt) { restoreWindow(w); focusWindow(w); w.__focusShell(); return w; }
+  w.__shellBuilt = true;
+
+  const wrap = el("div", "chat");
+  const log = el("div", "log in");
+  const composer = el("div", "composer shellcomposer");
+  const ta = el("textarea", "fld");
+  ta.placeholder = "Ask anything, describe an app, or tell the desktop what to do";
+  const row = el("div", "shellrow");
+  const kind = el("select", "fld");
+  Object.entries(ASK_KINDS).forEach(([k, v]) => {
+    const o = el("option", null, v.label); o.value = k; kind.appendChild(o);
+  });
+  const where = el("span", "muted");
+  const go = el("button", "btn", "Go");
+  row.appendChild(where); row.appendChild(kind); row.appendChild(go);
+  composer.appendChild(ta); composer.appendChild(row);
+  const chips = el("div", "shellchips");
+  wrap.appendChild(log); wrap.appendChild(chips); wrap.appendChild(composer);
+  w.body.appendChild(wrap);
+  paintChipsInto(chips);
+
+  const history = [];
+  const say = (who, text, cls) => {
+    const m = el("div", "msg " + (cls || ""));
+    m.appendChild(el("div", "who", who));
+    const b = el("div", "body", text);
+    m.appendChild(b);
+    log.appendChild(m); log.scrollTop = log.scrollHeight;
+    return b;
+  };
+  const note = t => say("desktop", t, "");
+
+  const paintWhere = () => {
+    const k = ASK_KINDS[kind.value];
+    where.textContent = k ? k.where : "";
+  };
+  kind.addEventListener("change", paintWhere);
+  paintWhere();
+
+  /* The four intents keep their meanings -- the shell is where they live
+     now, not a second copy of them. The field they read is this window's
+     textarea, so askFromDesktop and createAppFrom are given its text. */
+  async function run() {
+    const text = ta.value.trim();
+    if (!text) return;
+    const k = kind.value;
+    if (k !== "control") ta.value = "";
+    say("you", text, "u");
+    switch (k) {
+      case "research": return askWith(text, "research");
+      case "plan":     return buildWith(text, true);
+      case "build":    return buildWith(text, false);
+      case "control":  return control(text);
+      default:         return askWith(text, "search");
+    }
+  }
+
+  function askWith(text, kindArg) {
+    note(kindArg === "research"
+      ? "Researching -- the report opens in the Browser."
+      : "Asking -- the answer opens in the Browser.");
+    const b = WINS.get("browser");
+    if (b && b.__ask) { restoreWindow(b); focusWindow(b); b.__ask(text, kindArg); }
+    else openBrowser(undefined, text, kindArg);
+  }
+
+  async function buildWith(text, plan) {
+    note(plan ? "Planning a new project..." : "Starting a new project...");
+    const made = await createAppFrom(text, plan);
+    if (made) note("Project: " + made);
+  }
+
+  /* Talking TO the desktop. Its own turn, with the shell prompt and no
+     tools -- the model is arranging windows and queueing builds, not
+     touching the workspace, and the actions it emits are executed here
+     where they can be shown. */
+  async function control(text) {
+    ta.value = "";
+    history.push({ role: "user", content: text });
+    const body = say("pasclaw", "...");
+    go.disabled = true;
+    let acc = "";
+    try {
+      const t = token();
+      const r = await fetch("/v1/chat/completions", {
+        method: "POST",
+        headers: Object.assign({ "content-type": "application/json" },
+                               t ? { authorization: "Bearer " + t } : {}),
+        /* no_tools: the state is already in the prompt, so this is one
+           round trip rather than a tool-driven rediscovery of it. */
+        body: JSON.stringify({ messages: history, system: shellPrompt(),
+                               no_tools: true }),
+      });
+      const j = await r.json();
+      acc = (j.choices && j.choices[0] && j.choices[0].message &&
+             j.choices[0].message.content) || "(no answer)";
+    } catch (e) { acc = "(" + e.message + ")"; }
+    go.disabled = false;
+    history.push({ role: "assistant", content: acc });
+
+    const ui = extractUIBlocks(acc);
+    body.textContent = ui.blocks.length ? (ui.text.trim() || "On it.") : acc;
+    for (const blk of ui.blocks)
+      if (blk.ui === "desktop") await runShellActions(blk, t => note(t));
+    saveShell();
+  }
+
+  async function saveShell() {
+    try {
+      await api("/v1/sessions/" + SHELL_SESSION, { method: "PUT",
+        body: { title: "Desktop shell", messages: history } });
+    } catch {}
+  }
+  async function loadShell() {
+    let j;
+    try { j = await api("/v1/sessions/" + SHELL_SESSION); } catch { return; }
+    ((j && j.messages) || []).forEach(m => {
+      if (m.role !== "user" && m.role !== "assistant") return;
+      history.push({ role: m.role, content: m.content || "" });
+      say(m.role === "user" ? "you" : "pasclaw", m.content || "",
+          m.role === "user" ? "u" : "");
+    });
+    if (history.length) note("— earlier conversation, reopened —");
+  }
+
+  go.addEventListener("click", run);
+  ta.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); run(); }
+  });
+  w.__focusShell = () => ta.focus();
+  loadShell().catch(() => {});
+  setTimeout(() => ta.focus(), 0);
+  return w;
+}
+
+/* ==========================================================================
+   The Log window -- what the gateway is doing, live
+
+   The FMX client has had one since the beginning; the web desktop only
+   had the Agent Console's LOGS tab, which is a different surface you
+   have to know about. /v1/logs is an SSE feed of "[tag] message" lines,
+   so this is a subscriber with a pause button and a filter.
+   ========================================================================== */
+function openLog() {
+  const w = createWindow({ key: "log", title: "Log", icon: "gear",
+                           width: 720, height: 420, pad: false,
+                           restore: { fn: "log", arg: "" } });
+  if (w.__logBuilt) { restoreWindow(w); focusWindow(w); return w; }
+  w.__logBuilt = true;
+
+  const bar = el("div");
+  bar.style.cssText = "display:flex;gap:4px;padding:3px;align-items:center";
+  const filter = el("input", "fld");
+  filter.placeholder = "filter...";
+  filter.style.flex = "1 1 auto";
+  const pause = el("button", "btn", "Pause");
+  const clear = el("button", "btn", "Clear");
+  bar.appendChild(filter); bar.appendChild(pause); bar.appendChild(clear);
+  w.body.appendChild(bar);
+
+  const out = el("div", "in");
+  out.style.cssText = "height:calc(100% - 30px);margin:3px;overflow:auto;" +
+                      "font-family:ui-monospace,monospace;font-size:11px;" +
+                      "white-space:pre-wrap;padding:3px";
+  w.body.appendChild(out);
+
+  let paused = false;
+  /* Bounded: a gateway under load emits faster than anyone reads, and an
+     unbounded log window is a memory leak with a scrollbar. */
+  const CAP = 500;
+  const lines = [];
+  const repaint = () => {
+    const f = filter.value.trim().toLowerCase();
+    const shown = f ? lines.filter(l => l.toLowerCase().includes(f)) : lines;
+    out.textContent = shown.join("\n");
+    if (!paused) out.scrollTop = out.scrollHeight;
+  };
+  filter.addEventListener("input", repaint);
+  pause.addEventListener("click", () => {
+    paused = !paused;
+    pause.textContent = paused ? "Resume" : "Pause";
+    if (!paused) repaint();
+  });
+  clear.addEventListener("click", () => { lines.length = 0; repaint(); });
+
+  const t = token();
+  const url = "/v1/logs" + (t ? "?token=" + encodeURIComponent(t) : "");
+  let src = null;
+  try { src = new EventSource(url); } catch {}
+  if (src) {
+    src.addEventListener("message", e => {
+      let line = e.data;
+      try { const j = JSON.parse(e.data); if (typeof j === "string") line = j; } catch {}
+      lines.push(line);
+      while (lines.length > CAP) lines.shift();
+      if (!paused) repaint();
+    });
+    src.addEventListener("error", () => {
+      lines.push("(log feed dropped -- it reconnects on its own)");
+      repaint();
+    });
+  } else {
+    out.textContent = "This browser has no EventSource, so the log cannot stream.";
+  }
+  /* The stream is the window's; closing the window must end it, or a
+     desktop session accumulates a feed per window ever opened. */
+  w.onClose = () => { try { if (src) src.close(); } catch {} };
+  return w;
 }
 
 /* The dock is always there; "Projects" on the menu just un-hides it. */
@@ -2183,6 +2582,39 @@ function paintProjectPane(name) {
     paintTree();
   });
   acts.appendChild(addTask);
+
+  /* Delete. Every experiment used to be permanent: a desktop accumulated
+     every half-built idea with no way to clear one out, so the icon grid
+     and the tree filled with things nobody wanted to look at again. The
+     store has always been able to remove a project; only the UI was
+     missing.
+
+     Guarded by a typed confirmation rather than an OK button, because
+     this removes the app, its conversation and its whole task board, and
+     an accidental click on a crowded pane is exactly how that happens. */
+  const del = el("button", "btn", "Delete");
+  del.title = "Remove this project, its app and its tasks";
+  del.style.marginLeft = "auto";
+  del.addEventListener("click", async () => {
+    const label = (p && (p.title || p.name)) || name;
+    if (!confirm(`Delete "${label}"?\n\n` +
+                 `Its app, its conversation and its ${p && p.tasks || 0} task(s) ` +
+                 `go with it. This cannot be undone.`)) return;
+    del.disabled = true;
+    try {
+      await api("/v1/projects/" + name, { method: "DELETE" });
+      /* Close anything still showing it -- an app window pointed at a
+         deleted project is a frame that will 404 on its next reload. */
+      const aw = WINS.get("app:" + name);
+      if (aw) closeWindow(aw);
+      PROJECT_CHATS.delete(name);
+      S.dockProject = null;
+      S.selected = null;
+      await loadProjects();
+      paintTree();
+    } catch (e) { alert(e.message); del.disabled = false; }
+  });
+  acts.appendChild(del);
   host.appendChild(acts);
 
   /* The open tasks, compactly -- the board's summary, not its replacement.
@@ -2751,6 +3183,14 @@ function buildChatUI(project) {
       ui.blocks.forEach(b => renderUIBlock(b, project, submitText));
     }
 
+    /* The loop can stop because it ran out of iterations rather than
+       because it finished. The gateway already says so in the reply --
+       it appends the notice and sets finish_reason=length -- but the
+       notice ends by telling the reader to type "continue", which is a
+       worse thing to ask of someone than a button next to the sentence
+       that asked for it. */
+    if (/hit the tool-call limit of/.test(acc)) addContinueBar();
+
     /* A plan turn ends with a decision, so the decision gets a button
        rather than an instruction to type "yes". Approving sends the
        build turn with the plan already in history -- the model is not
@@ -2802,6 +3242,28 @@ function buildChatUI(project) {
      two turns stale would build something the conversation has already
      moved past. */
   let approveBar = null;
+  /* Resume a turn that stopped on the iteration cap. The conversation
+     already carries everything, so "continue" is genuinely all it needs
+     -- and the notice says the work already done must not be redone,
+     which is why this resumes rather than re-sending the request. */
+  function addContinueBar() {
+    const bar = el("div", "artifact");
+    const g = el("div", "ico"); g.innerHTML = icon("app");
+    bar.appendChild(g);
+    const meta = el("div", "meta");
+    meta.appendChild(el("div", "nm", "Stopped at the tool-call limit"));
+    meta.appendChild(el("div", "kd", "It was still working when it ran out"));
+    bar.appendChild(meta);
+    const go = el("button", "btn", "Continue");
+    go.addEventListener("click", () => {
+      bar.remove();
+      submitText("continue");
+    });
+    bar.appendChild(go);
+    log.appendChild(bar);
+    log.scrollTop = log.scrollHeight;
+  }
+
   function addApproveBar() {
     if (approveBar) approveBar.remove();
     const bar = el("div", "artifact");
@@ -3680,7 +4142,14 @@ function openBrowser(pageId, initialQuery, initialKind) {
     mk.disabled = true;
     status.textContent = "Making it into an app...";
     try {
-      const j = await api(`/v1/pages/${current.id}/promote`, { method: "POST" });
+      /* Name the app after its SUBJECT. A generated page's title is the
+         question that produced it, so promoting one used to mint a
+         project called "what is a pomodoro timer" -- a slug, an icon
+         caption and an app name, permanently. */
+      const j = await api(`/v1/pages/${current.id}/promote`, {
+        method: "POST",
+        body: { title: deriveProjectTitle(current.title || current.query || "") },
+      });
       /* The page stays where it was; the app is the new thing. Open it and
          refresh the desktop so its icon is there too. */
       await loadProjects();
@@ -3935,7 +4404,6 @@ async function boot() {
   try { applyStyle(localStorage.getItem(STYLE_KEY) || "Synthwave"); } catch { applyStyle("Synthwave"); }
   buildMenu();
   initDock();
-  initAsk();
   try {
     /* Ask the gateway how it is arranged before rendering anything that
        depends on it. A gateway too old to answer just leaves the defaults. */

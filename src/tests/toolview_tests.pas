@@ -4,6 +4,7 @@ program toolview_tests;
 
 uses
   SysUtils,
+  PasClaw.Config,          { GetHome, to build the path under test }
   PasClaw.Gateway.ToolView;
 
 procedure Fail(const Msg: string);
@@ -191,6 +192,36 @@ begin
     Fail('oversized result not capped (len=' + IntToStr(Length(J)) + ')');
 end;
 
+(* Paths shown to a human are relative to the PasClaw home.
+
+   A write confirmation used to read "wrote 98 bytes to /home/you/
+   .pasclaw/workspace/projects/x/app/app.json" in the desktop's chat --
+   three wrapped lines to say something the reader knew, with the
+   server's directory layout attached. What the MODEL receives is
+   untouched; only these display strings change. *)
+procedure TestRelativePaths;
+var
+  Abs, Line, J: string;
+begin
+  Abs := GetHome;
+  if Abs = '' then Exit;            { no home configured: nothing to fold }
+  if Abs[Length(Abs)] <> PathDelim then Abs := Abs + PathDelim;
+  Abs := Abs + 'workspace' + PathDelim + 'projects' + PathDelim + 'x' +
+         PathDelim + 'app.json';
+
+  Line := FormatToolResultLine('write_file',
+            'wrote 98 bytes to ' + Abs, '');
+  AssertContains(Line, 'workspace', 'the workspace-relative path survives');
+  if Pos(GetHome, Line) > 0 then
+    Fail('the home directory is still in the visible result line: ' + Line);
+
+  { The side-channel feeds the web UI's tool card -- display too. }
+  J := FormatToolDetailJSON('result', 'write_file', '',
+         'wrote 98 bytes to ' + Abs, '');
+  if Pos(GetHome, J) > 0 then
+    Fail('the home directory is still in the tool-card detail: ' + J);
+end;
+
 begin
   TestFsReadCall;
   TestShellCall;
@@ -205,5 +236,6 @@ begin
   TestResultTrailingNewline;
   TestMalformedArgsDoesNotRaise;
   TestDetailJSON;
+  TestRelativePaths;
   Writeln('PASS');
 end.
