@@ -35,6 +35,7 @@ procedure RegisterProjectTools(R: TToolRegistry);
 { Handlers, exposed for tests. }
 function Tool_Project(const ArgsJSON: string; out ErrMsg: string): string;
 function Tool_Task(const ArgsJSON: string; out ErrMsg: string): string;
+function Tool_Desktop(const ArgsJSON: string; out ErrMsg: string): string;
 
 implementation
 
@@ -43,7 +44,8 @@ uses
   PasClaw.Tools.Types,
   PasClaw.JSON,
   PasClaw.Utils,
-  PasClaw.Projects.Store;
+  PasClaw.Projects.Store,
+  PasClaw.Desktop.Events;
 
 function ArgObj(const ArgsJSON: string; out Obj: TJsonObject; out Err: string): Boolean;
 begin
@@ -333,6 +335,46 @@ end;
 
 { --------------------------------------------------------------- register -- }
 
+(* desktop -- arrange the screen the user is looking at.
+
+   The windows live in a browser and this runs in the gateway, so the
+   tool cannot move anything itself. It publishes a command on the
+   desktop event feed, which every connected desktop is already
+   subscribed to, and they act on it. That indirection is what makes the
+   capability general: the shell chat, the Agent Console and a scheduled
+   job all reach the same screen through the same door.
+
+   Fire and forget by design. The tool returns as soon as the command is
+   on the feed -- a desktop may be open, closed, or three of them may be
+   connected at once, and blocking an agent turn on a browser that might
+   not be there would be a worse contract than "asked". *)
+function Tool_Desktop(const ArgsJSON: string; out ErrMsg: string): string;
+var
+  Obj: TJsonObject;
+  Arr: TJsonArray;
+  Body: string;
+  N: Integer;
+begin
+  Result := '';
+  if not ArgObj(ArgsJSON, Obj, ErrMsg) then Exit;
+  try
+    Arr := Obj.ChildArray('actions');
+    if (Arr = nil) or (Arr.Count = 0) then
+    begin
+      ErrMsg := 'missing required argument: actions (a non-empty array of ' +
+                '{"do":...} objects)';
+      Exit;
+    end;
+    N := Arr.Count;
+    Body := Arr.ToJSON;
+  finally
+    Obj.Free;
+  end;
+  PublishDesktopCommand(Body);
+  Result := Format('sent %d desktop action(s) to %d connected desktop(s)',
+                   [N, DesktopSubscriberCount]);
+end;
+
 procedure RegisterProjectTools(R: TToolRegistry);
 var
   T: TTool;
@@ -389,6 +431,35 @@ begin
   T.IsDeferred  := False;
   T.Hidden      := False;
   R.Register(T);
-end;
 
+  T.Name        := 'desktop';
+  T.Description :=
+    'Arrange the desktop the user is looking at: window layout, opening ' +
+    'apps and projects, the theme. Pass "actions" as an array of ' +
+    '{"do":...} objects, several at once when the user asks for several ' +
+    'things. Actions: tile, cascade, minimize_all, close_all, refresh, ' +
+    'open_app {project}, open_chat {project}, build_app {title,brief}, ' +
+    'theme {id}. Use this when the user talks about the SCREEN -- tidying ' +
+    'windows, opening something, starting several apps at once.';
+  T.Schema      :=
+    '{"type":"object","properties":{' +
+    '"actions":{"type":"array","description":' +
+    '"Desktop actions in order, e.g. [{""do"":""tile""}].",' +
+    '"items":{"type":"object","properties":{' +
+    '"do":{"type":"string"},"project":{"type":"string"},' +
+    '"title":{"type":"string"},"brief":{"type":"string"},' +
+    '"id":{"type":"string"}},"required":["do"]}}' +
+    '},"required":["actions"]}';
+  T.Handler     := Tool_Desktop;
+  T.HandlerObj  := nil;
+  T.IsCore      := False;
+  { Read-only: it moves windows in a browser, it does not touch the
+    workspace -- so it stays available in plan mode, where "show me what
+    you would do, and tidy the screen while you explain" is reasonable. }
+  T.Category    := tcReadOnly;
+  T.IsDeferred  := False;
+  T.Hidden      := False;
+  R.Register(T);
+
+end;
 end.

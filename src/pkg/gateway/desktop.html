@@ -1655,6 +1655,15 @@ function refreshBoardSoon() {
   }, BOARD_REFRESH_MS);
 }
 
+/* Commands FROM an agent. Every other event reports that something
+   happened; this one asks the desktop to do something, and it can come
+   from any session -- the shell chat, the Agent Console, a scheduled job
+   -- because they all reach the screen through the same feed rather than
+   through whichever window owns a conversation. */
+onDesktopEvent("desktop-command", ev => {
+  runShellActions(ev, t => shellSay(t)).catch(() => {});
+});
+
 onDesktopEvent("projects", refreshBoardSoon);
 onDesktopEvent("project",  refreshBoardSoon);
 onDesktopEvent("task",     refreshBoardSoon);
@@ -2203,7 +2212,25 @@ const SHELL_ACTIONS = {
     help: 'theme {"id":"<style id>"} -- change the desktop theme',
     run: a => { applyStyle(a.id); return "theme " + a.id; },
   },
+  refresh: {
+    help: "refresh -- re-read the board and repaint (after changing things " +
+          "outside the desktop)",
+    run: async () => { await loadProjects(); paintTree(); return "refreshed"; },
+  },
 };
+
+/* Where an action's outcome is reported.
+
+   The shell window sets this while it is open, so a turn you started
+   narrates into the conversation you started it from. When the command
+   arrives from somewhere else -- the Agent Console, a cron job -- there
+   is no conversation to narrate into, and a status line is better than a
+   silent screen rearranging itself. */
+let SHELL_SAY = null;
+function shellSay(text) {
+  if (SHELL_SAY) { try { return SHELL_SAY(text); } catch {} }
+  showMessage({ title: "Desktop", kind: "info", text: text });
+}
 
 /* The desktop's whole state, written into the prompt.
 
@@ -2234,22 +2261,18 @@ function shellPrompt() {
     "assistant at once. The user talks to you to get things ANSWERED,",
     "BUILT, or ARRANGED.",
     "",
-    "To operate the desktop, emit a fenced block exactly like this, and",
-    "nothing else about it in prose:",
+    "To operate the desktop, CALL THE `desktop` TOOL with an actions",
+    'array, e.g. {"actions":[{"do":"tile"}]}. Several actions in one call',
+    'when the user asks for several things -- "build me these five apps"',
+    "is one call with five build_app actions, not five turns.",
     "",
-    "```pasclaw-ui",
-    '{"ui":"desktop","actions":[{"do":"tile"}]}',
-    "```",
-    "",
-    "Available actions:",
+    "Actions:",
     ...Object.values(SHELL_ACTIONS).map(a => "  - " + a.help),
     "",
-    "Emit several actions in one block when the user asks for several",
-    "things -- \"build me these five apps\" is five build_app actions in",
-    "one block, not five turns.",
-    "",
-    "Only emit a block when the user actually wants the desktop changed.",
-    "An ordinary question gets an ordinary answer.",
+    "Your other tools work here too, and compose with it in one turn:",
+    "read a file and then tile, search the workspace and then open what",
+    "you found. Only touch the desktop when the user wants the SCREEN",
+    "changed; an ordinary question gets an ordinary answer.",
     "",
     "EVERYTHING you need about the desktop is below. It is current as of",
     "this message -- do not go looking for it on disk, and do not ask for",
@@ -2268,13 +2291,29 @@ function shellPrompt() {
    from one that is broken. */
 async function runShellActions(block, say) {
   const list = Array.isArray(block.actions) ? block.actions : [];
-  if (!list.length) return;
+  if (!list.length) return [];
+  const done = [];
   for (const a of list) {
     const spec = SHELL_ACTIONS[a.do];
-    if (!spec) { say(`(unknown action: ${a.do})`); continue; }
-    try { say("-> " + await spec.run(a)); }
-    catch (e) { say(`(${a.do} failed: ${e.message})`); }
+    if (!spec) {
+      done.push(`unknown action: ${a.do}`);
+      say(`(unknown action: ${a.do})`);
+      continue;
+    }
+    try {
+      const out = await spec.run(a);
+      done.push(`${a.do}: ${out}`);
+      say("-> " + out);
+    } catch (e) {
+      done.push(`${a.do} failed: ${e.message}`);
+      say(`(${a.do} failed: ${e.message})`);
+    }
   }
+  /* The board may have moved under us -- build_app makes a project,
+     open_app can start one -- so the icons and the tree are repainted
+     once, after the batch rather than per action. */
+  try { await loadProjects(); paintTree(); } catch {}
+  return done;
 }
 
 function openShell() {
@@ -2379,10 +2418,14 @@ function openShell() {
         method: "POST",
         headers: Object.assign({ "content-type": "application/json" },
                                t ? { authorization: "Bearer " + t } : {}),
-        /* no_tools: the state is already in the prompt, so this is one
-           round trip rather than a tool-driven rediscovery of it. */
-        body: JSON.stringify({ messages: history, system: shellPrompt(),
-                               no_tools: true }),
+        /* Tools ON, state in the prompt. The two solve different halves:
+           the prompt means the model never has to go REDISCOVER the
+           windows and projects the page already knows, and the tools
+           mean it can still act -- including composing a read or a
+           search with a desktop change in the same turn. Arranging the
+           screen goes through the `desktop` tool, which publishes onto
+           the event feed this page is already listening to. */
+        body: JSON.stringify({ messages: history, system: shellPrompt() }),
       });
       const j = await r.json();
       acc = (j.choices && j.choices[0] && j.choices[0].message &&
@@ -2391,6 +2434,10 @@ function openShell() {
     go.disabled = false;
     history.push({ role: "assistant", content: acc });
 
+    /* Actions normally arrive by TOOL, which the gateway dispatches and
+       the event feed delivers -- runShellActions has already run by the
+       time this reply lands. A block in the text is still honoured, for
+       a model that describes the change instead of calling the tool. */
     const ui = extractUIBlocks(acc);
     body.textContent = ui.blocks.length ? (ui.text.trim() || "On it.") : acc;
     for (const blk of ui.blocks)
@@ -2420,6 +2467,11 @@ function openShell() {
   ta.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); run(); }
   });
+  /* While the shell is open, agent-driven desktop actions narrate into
+     THIS conversation rather than a popup -- including ones started from
+     another session, which is the honest place to see them. */
+  SHELL_SAY = t => { note(t); };
+  w.onClose = () => { if (SHELL_SAY) SHELL_SAY = null; };
   w.__focusShell = () => ta.focus();
   loadShell().catch(() => {});
   setTimeout(() => ta.focus(), 0);
