@@ -585,6 +585,9 @@ uses
     Spelled the way the rest of the tree spells it -- Cron.State and
     Agent.Steering use exactly this pair. }
   {$IFDEF MSWINDOWS}{$IFDEF FPC}Windows,{$ELSE}Winapi.Windows,{$ENDIF}{$ENDIF}
+  { realpath(3) for Delphi on macOS / Linux -- same binding
+    PasClaw.Platform already uses. }
+  {$IFNDEF FPC}{$IFDEF POSIX}Posix.Stdlib, Posix.Base,{$ENDIF}{$ENDIF}
   IdTCPConnection,
   PasClaw.Logger,
   PasClaw.Utils,
@@ -4228,6 +4231,41 @@ begin
 end;
 {$ENDIF}{$ENDIF}
 
+{$IFNDEF FPC}{$IFDEF POSIX}
+(* Delphi targeting macOS or Linux.
+
+   Without this arm, Delphi-POSIX builds matched NEITHER the FPC+UNIX
+   block above nor the MSWINDOWS block below, so CanonicalPath simply
+   did not exist there. Every call site is guarded, so the unit still
+   compiled -- and the guard silently degraded to a lexical compare on
+   a platform this project ships (the Studio project targets OSX64).
+   That is the exact symlink bypass PR #280 closed for FPC-Unix, left
+   open on a supported target because the platform matrix was written
+   as "FPC-Unix or Windows" rather than "POSIX or Windows".
+
+   Same realpath(3) as the FPC arm; only the binding differs. Delphi
+   exposes it through Posix.Stdlib, which PasClaw.Platform already
+   uses, so this adds no new dependency. *)
+function CanonicalPath(const P: string): string;
+var
+  Buf: array[0..4095] of AnsiChar;   { PATH_MAX }
+  R:   MarshaledAString;
+begin
+  Result := '';
+  if P = '' then Exit;
+  R := realpath(MarshaledAString(AnsiString(P)), @Buf[0]);
+  if R <> nil then
+    Result := string(AnsiString(PAnsiChar(@Buf[0])));
+end;
+
+{ SameInode has no Delphi-POSIX counterpart here on purpose. It exists
+  to catch a HARDLINK, which realpath cannot resolve, and adding a
+  second untested platform binding for the rarer case would trade a
+  known gap for an unknown one. Recorded rather than implied: on
+  Delphi-POSIX a hardlink to a secret file is still caught only
+  lexically. }
+{$ENDIF}{$ENDIF}
+
 {$IFDEF MSWINDOWS}
 (* Windows equivalent of the realpath() branch above.
 
@@ -4303,7 +4341,7 @@ end;
 function IsRestrictedFsPath(const Path: string): Boolean;
 var
   Full, CfgFull, Base, OAuthDir: string;
-  {$IF DEFINED(MSWINDOWS) or (DEFINED(FPC) and DEFINED(UNIX))}CP: string;{$IFEND}
+  {$IF DEFINED(MSWINDOWS) or DEFINED(UNIX) or DEFINED(POSIX)}CP: string;{$IFEND}
 begin
   Result := False;
   if Path = '' then Exit;
@@ -4318,6 +4356,13 @@ begin
     cleartext config. Catch the link by inode, and run the checks below
     against the symlink-resolved target rather than the lexical name. }
   if SameInode(Path, GetConfigPath) then Exit(True);
+  CP := CanonicalPath(Path);
+  if CP <> '' then Full := CP;
+  CP := CanonicalPath(GetConfigPath);
+  if CP <> '' then CfgFull := CP;
+  {$ENDIF}{$ENDIF}
+  {$IFNDEF FPC}{$IFDEF POSIX}
+  { Same resolution for Delphi on macOS / Linux. }
   CP := CanonicalPath(Path);
   if CP <> '' then Full := CP;
   CP := CanonicalPath(GetConfigPath);
@@ -4355,7 +4400,7 @@ begin
      into these dirs are covered without anyone remembering to extend a
      list. *)
   OAuthDir := JoinPath(GetHome, 'oauth');
-  {$IF DEFINED(MSWINDOWS) or (DEFINED(FPC) and DEFINED(UNIX))}
+  {$IF DEFINED(MSWINDOWS) or DEFINED(UNIX) or DEFINED(POSIX)}
   { Resolve the guarded directory too, so an alias INSIDE the browsable
     tree and the real directory canonicalise to the same string. }
   CP := CanonicalPath(OAuthDir);
