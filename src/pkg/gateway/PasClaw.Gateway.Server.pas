@@ -5750,6 +5750,11 @@ begin
     omits "mode", so OpenAI-compatible clients that don't know about
     plan keep working unchanged. }
   LoopCfg.Mode          := ParseModeFromBody(Body);
+  { Mid-turn steering, same as /v1/chat/completions. This endpoint never
+    set it, so a /v1/steer POST aimed at a running /v1/chat turn was
+    accepted, ignored by that turn, and then drained into whatever turn
+    ran next. Empty session => steering disabled (no-op). }
+  LoopCfg.SteeringKey   := ReqSessionId(ARequest);
   LoopCfg.Fallbacks     := FB;
   LoopCfg.FallbackModels := FBModels;
   LoopCfg.Options       := DefaultChatOptions;
@@ -7075,6 +7080,23 @@ begin
 
     CompId := GenChatCompletionId;
 
+    (* Mid-turn steering: key the loop's steering drain to THIS session
+       (raw X-PasClaw-Session) so a /v1/steer POST folds into the RUNNING
+       turn. Empty session => steering disabled (no-op).
+
+       Set ABOVE the stream/non-stream split, deliberately. This lived
+       inside the WantsStream arm, so `stream:false` requests ran with an
+       empty SteeringKey and never drained. The failure that shape
+       produces is worse than "steering does not work": PushSteering
+       still queues the message and answers {"ok":true,"pending":1}, so
+       the caller is told it landed. The running turn ignores it, the
+       entry survives on disk, and the NEXT turn -- a different question
+       -- drains it and injects "[user steering received mid-turn]" into
+       its system prompt. Verified end to end through the relay: a steer
+       sent during a stream:false turn was absent from that turn and
+       appeared in the first request of the following, unrelated one. *)
+    LoopCfg.SteeringKey := ReqSession;
+
     if WantsStream then
     begin
       { Dedicated guard for all streamed execution once headers are emitted.
@@ -7102,10 +7124,6 @@ begin
       Streamer := TSSEStreamer.Create(AContext, CompId, ReqModel, FDebugIO);
       LoopCfg.OnToolCall   := Streamer.NoteToolCall;
       LoopCfg.OnToolResult := Streamer.NoteToolResult;
-      { B -- mid-turn steering: key the loop's steering drain to THIS session
-        (raw X-PasClaw-Session) so a /v1/steer POST from the web UI folds into
-        the running turn. Empty session => steering disabled (no-op). }
-      LoopCfg.SteeringKey := ReqSession;
       { A -- cancel-on-disconnect: abort the loop + release the session turn
         lock when the SSE client goes away, instead of running to completion
         invisibly. BeforeTurn fires at each iteration top, so this aborts before
