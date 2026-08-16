@@ -1059,13 +1059,25 @@ function GetEffectiveGatewayToken(const C: TConfig): string;
     prefix of a 6-byte token leaks too much). *)
 function DescribeGatewayAuthState(const C: TConfig): string;
 
-(*  GatewayAuthIsInsecure -- True when DescribeGatewayAuthState is
-    reporting an exposure (no token at all, or an unresolved template
-    that will reject every client) rather than a healthy configured
-    token. Callers use it to pick the log LEVEL: an open gateway is
-    the single most consequential fact at startup and was previously
-    emitted at [info], indistinguishable from routine chatter. *)
-function GatewayAuthIsInsecure(const C: TConfig): Boolean;
+(*  GatewayAuthState -- which of the three auth postures the gateway is
+    actually in. Callers use it to pick the log LEVEL and the banner
+    wording; both unhealthy states deserve [warn], but they are OPPOSITE
+    failures and must not share a message:
+
+      gasRequired      a real token is set; clients must present it.
+      gasOpen          no token anywhere -- every route is reachable by
+                       any caller.
+      gasMisconfigured the token is still an unresolved ${VAR} template.
+                       GetEffectiveGatewayToken returns that literal, so
+                       the middleware compares bearers against it and
+                       NOTHING matches -- the gateway rejects everyone
+                       with 401. Saying "open to any caller" here is
+                       precisely backwards, and a wrong security
+                       statement is worse than none. *)
+type
+  TGatewayAuthState = (gasRequired, gasOpen, gasMisconfigured);
+
+function GatewayAuthState(const C: TConfig): TGatewayAuthState;
 
 (*  ExpandEnvVarsInJSON -- raw-text ${VAR_NAME} substitution applied
     to the JSON config body BEFORE TConfig.FromJSON parses it.
@@ -2724,10 +2736,9 @@ begin
     Result := '<short>';
 end;
 
-function GatewayAuthIsInsecure(const C: TConfig): Boolean;
-(* Mirrors DescribeGatewayAuthState's two failure branches: no token
-   anywhere, or a token still holding an unresolved env-var template.
-   Kept next to it so the two cannot drift apart. *)
+function GatewayAuthState(const C: TConfig): TGatewayAuthState;
+(* Mirrors DescribeGatewayAuthState's branches exactly, and lives next
+   to it so the two cannot drift apart. *)
 var
   Tok: string;
 begin
@@ -2735,7 +2746,12 @@ begin
     Tok := GEnvGatewayToken
   else
     Tok := C.Gateway.Token;
-  Result := (Tok = '') or LooksLikeUnresolvedTemplate(Tok);
+  if Tok = '' then
+    Result := gasOpen
+  else if LooksLikeUnresolvedTemplate(Tok) then
+    Result := gasMisconfigured
+  else
+    Result := gasRequired;
 end;
 
 function DescribeGatewayAuthState(const C: TConfig): string;

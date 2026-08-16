@@ -1358,7 +1358,7 @@ begin
     { Level follows the state. An open or misconfigured gateway is the
       most consequential line of the whole startup, and at [info] it sat
       between two subsystem notices where it read as routine. }
-    if GatewayAuthIsInsecure(FCfg) then
+    if GatewayAuthState(FCfg) <> gasRequired then
       LogWarn('%s', [DescribeGatewayAuthState(FCfg)])
     else
       LogInfo('%s', [DescribeGatewayAuthState(FCfg)]);
