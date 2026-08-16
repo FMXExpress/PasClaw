@@ -86,6 +86,33 @@ function BuildPagePrompt(const Query: string; Kind: TPageKind): string;
 function BuildRevisePrompt(const PriorQuery, Followup: string;
   Kind: TPageKind; const PriorHTML: string): string;
 
+(* The prompt for one DEEPENING round of a research page.
+
+   Deep research used to be one three-phase turn, however large the
+   question. This prompt turns it into a loop that runs until saturated,
+   and the loop is improve-shaped on purpose: it has a NUMBER, and the
+   number is independent sources actually read. Each round must either
+   grow that number -- find sources the report has not used, and fold what
+   they say into a complete revision -- or say the one word SATURATED,
+   which is the round reporting that the number cannot be moved. The
+   caller counts sources before and after and stops when they stop
+   growing, so a round claiming progress without new evidence ends the
+   loop just the same as one admitting saturation. *)
+function BuildDeepenPrompt(const Query, PriorHTML,
+  PriorSourcesJSON: string): string;
+
+{ True when a deepening round declared saturation instead of returning a
+  revised page. Case-insensitive; tolerates surrounding whitespace and a
+  trailing period, nothing more -- a reply that MENTIONS saturation while
+  carrying a page is a page. }
+function ReplyIsSaturated(const Reply: string): Boolean;
+
+{ How many usable entries a SOURCES: array carries -- ParseSources'
+  counting rules (blank title+url entries are dropped, garbage parses to
+  zero), exposed so the saturation loop and the tests measure with the
+  same ruler. }
+function CountSources(const JSONArray: string): Integer;
+
 { Wrap a model-authored body in the page shell: styling that inherits the
   desktop's palette, a title header, and the mandatory sources footer.
   BodyHTML is sanitised here -- callers pass raw model output. }
@@ -210,6 +237,62 @@ begin
     'return the COMPLETE revised body -- not a diff and not a fragment.' +
     sLineBreak + sLineBreak +
     'The page as it stands:' + sLineBreak + Prior;
+end;
+
+function BuildDeepenPrompt(const Query, PriorHTML,
+  PriorSourcesJSON: string): string;
+const
+  MaxPrior = 24 * 1024;
+var
+  Prior: string;
+begin
+  Prior := PriorHTML;
+  if Length(Prior) > MaxPrior then
+    Prior := Copy(Prior, 1, MaxPrior) + sLineBreak + '<!-- truncated -->';
+  Result :=
+    'DEEP RESEARCH -- CONTINUATION ROUND.'#10#10 +
+    'A report already exists for this request. Your job this round is to ' +
+    'make it MORE GROUNDED, measured one way: the number of independent ' +
+    'sources it actually rests on.'#10#10 +
+    'REQUEST: ' + Query + #10#10 +
+    'Sources the report already uses:'#10 + Trim(PriorSourcesJSON) + #10#10 +
+    'Do this:'#10 +
+    '1. Find what is MISSING. Name the sub-questions the report answers ' +
+      'thinly, from one source, or not at all. Those are this round''s ' +
+      'targets -- re-reading what you already cited is not progress.'#10 +
+    '2. Search for those specifically, and web_fetch what looks ' +
+      'promising. Prefer sources INDEPENDENT of the ones listed above: a ' +
+      'different outlet repeating the same wire story is not a second ' +
+      'source. Disagreement with the existing report is the most valuable ' +
+      'thing you can find.'#10 +
+    '3. Return the COMPLETE revised body -- not a diff, not an appendix -- ' +
+      'with the new evidence folded into the sections it belongs to, and ' +
+      'the SOURCES: line listing every source the report now rests on, ' +
+      'the old ones included.'#10#10 +
+    'STOPPING. If you searched and found nothing genuinely new -- no ' +
+    'source that is not already listed, nothing that changes or ' +
+    'strengthens a claim -- then this line, alone, is the whole reply:'#10 +
+    'SATURATED'#10 +
+    'Say it honestly and early. A round that pads the report with ' +
+    'rewording, or re-cites a listed source as if it were new, costs the ' +
+    'user time and buys nothing; saying SATURATED is the correct, ' +
+    'expected way for this loop to end.'#10#10 +
+    'The report as it stands:'#10 + Prior;
+end;
+
+function ReplyIsSaturated(const Reply: string): Boolean;
+var
+  S: string;
+begin
+  S := Trim(Reply);
+  while (S <> '') and (S[Length(S)] = '.') do
+    SetLength(S, Length(S) - 1);
+  Result := SameText(Trim(S), 'SATURATED');
+end;
+
+function CountSources(const JSONArray: string): Integer;
+begin
+  Result := Length(ParseSources(JSONArray));
 end;
 
 function BuildPagePrompt(const Query: string; Kind: TPageKind): string;

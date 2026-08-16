@@ -5989,8 +5989,16 @@ end;
 function DesktopPageGenerator(const Query: string; Kind: TPageKind;
   const RevisePageId: string;
   out Title, BodyHTML, SourcesJSON, Err: string): Boolean;
+const
+  { A backstop on the deepening loop, not its intended exit -- saturation
+    is. Five rounds is roughly where a well-scoped question stops yielding
+    genuinely independent sources; past that the honest answer is usually
+    that the question needed splitting. }
+  MaxDeepenRounds = 5;
 var
   Reply, Prompt, Prior: string;
+  Round_, RoundBody, RoundSources, RoundErr: string;
+  Depth, Have: Integer;
   PriorInfo: TPageInfo;
 begin
   Title := Query;
@@ -6050,6 +6058,71 @@ begin
     Err := 'the agent produced no page body';
     Exit;
   end;
+
+  (* Keep digging until saturated.
+
+     One three-phase pass is a good report; it is not research. A question
+     worth asking this way usually has a second layer that only shows up
+     once the first is written -- so the round above becomes the first of
+     several, each one told what the report already rests on and asked to
+     find what it is missing.
+
+     The stop condition is a MEASUREMENT, not the model's own sense of
+     having done enough: independent sources actually cited. A round ends
+     the loop when it says SATURATED, or when it comes back having not
+     grown that number -- a round that rewrites without finding anything
+     new is saturation whatever it calls itself. Either way the previous
+     body is kept, because a round that found nothing has nothing better
+     to offer than what it was given.
+
+     Bounded by MaxDeepenRounds as a backstop, not as the intended exit;
+     the intended exit is saturation, and a run that hits the cap says so
+     in its own progress line. A round that ERRORS is not fatal -- the
+     report that already exists is the deliverable, and losing it to a
+     transient provider failure on round three would be the worse trade. *)
+  if Kind = pkResearch then
+  begin
+    Depth := 0;
+    while Depth < MaxDeepenRounds do
+    begin
+      Inc(Depth);
+      Have := CountSources(SourcesJSON);
+      PublishPageProgress('Deepening',
+        Format('round %d -- %d source(s) so far', [Depth, Have]));
+      if not GDesktopGateway.RunDesktopTurn(
+           BuildDeepenPrompt(Query, BodyHTML, SourcesJSON),
+           'Deepen the report now.', True, False, Round_, RoundErr) then
+      begin
+        LogDebug('page: deepen round %d failed (%s) -- keeping the report ' +
+                 'as it stands', [Depth, RoundErr]);
+        Break;
+      end;
+      if ReplyIsSaturated(Round_) then
+      begin
+        PublishPageProgress('Saturated',
+          Format('%d source(s), no new ground after %d round(s)',
+                 [Have, Depth]));
+        Break;
+      end;
+      SplitPageReply(Round_, RoundBody, RoundSources);
+      { A round that returned nothing usable, or that grew no evidence, is
+        the same outcome as SATURATED -- and the body in hand is already
+        the better one, so it stays. }
+      if (Trim(RoundBody) = '') or (CountSources(RoundSources) <= Have) then
+      begin
+        PublishPageProgress('Saturated',
+          Format('%d source(s), round %d added none', [Have, Depth]));
+        Break;
+      end;
+      BodyHTML    := RoundBody;
+      SourcesJSON := RoundSources;
+    end;
+    if Depth >= MaxDeepenRounds then
+      PublishPageProgress('Deepening',
+        Format('stopped at the %d-round limit with %d source(s)',
+               [MaxDeepenRounds, CountSources(SourcesJSON)]));
+  end;
+
   Result := True;
 end;
 
