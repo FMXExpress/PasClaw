@@ -4222,10 +4222,79 @@ begin
 end;
 {$ENDIF}{$ENDIF}
 
+{$IFDEF MSWINDOWS}
+(* Windows equivalent of the realpath() branch above.
+
+   Windows resolves aliases through REPARSE POINTS -- directory
+   junctions, symlinks, mount points -- and ExpandFileName does not
+   follow any of them. Without this, a junction anywhere inside a
+   browsable path could point at $PASCLAW_HOME/oauth (or at
+   config.json), PathInsideDirectory would compare the harmless alias,
+   and TFileStream would then happily follow the reparse point and
+   serve the secret. That is the same bypass PR #280 closed on Unix;
+   the canonicalisation was simply never written for Windows, so BOTH
+   the config-file check and the OAuth directory check inherited the
+   hole.
+
+   GetFinalPathNameByHandleW resolves the whole chain. The handle is
+   opened with dwDesiredAccess = 0 (query only, no read rights needed)
+   and FILE_FLAG_BACKUP_SEMANTICS, which is what permits opening a
+   DIRECTORY handle at all -- without it the oauth-directory case fails
+   and silently degrades to the lexical compare.
+
+   Declared here rather than taken from the RTL because
+   GetFinalPathNameByHandleW is absent from older FPC Windows headers.
+
+   NOT COMPILE-TESTED: this container has no Windows target or cross
+   units, so this branch has been reviewed by inspection only. It fails
+   safe -- any failure returns '' and the caller keeps the lexical path,
+   which is exactly today's behaviour. *)
+const
+  FILE_FLAG_BACKUP_SEMANTICS_ = $02000000;
+  FILE_NAME_NORMALIZED_       = $00000000;
+
+function GetFinalPathNameByHandleW(hFile: THandle; lpszFilePath: PWideChar;
+                                   cchFilePath, dwFlags: DWORD): DWORD; stdcall;
+  external 'kernel32.dll' name 'GetFinalPathNameByHandleW';
+
+function CanonicalPath(const P: string): string;
+var
+  H: THandle;
+  Buf: array[0..1023] of WideChar;
+  N: DWORD;
+  S: string;
+begin
+  Result := '';
+  if P = '' then Exit;
+  H := CreateFileW(PWideChar(WideString(P)), 0,
+                   FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE,
+                   nil, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS_, 0);
+  if H = INVALID_HANDLE_VALUE then Exit;
+  try
+    N := GetFinalPathNameByHandleW(H, @Buf[0], Length(Buf) - 1,
+                                   FILE_NAME_NORMALIZED_);
+    if (N = 0) or (N >= DWORD(Length(Buf))) then Exit;
+    Buf[N] := #0;
+    S := string(WideString(PWideChar(@Buf[0])));
+  finally
+    CloseHandle(H);
+  end;
+  { The API returns the \\?\ extended-length form; normalise it back so
+    the result compares against ordinary paths. \\?\UNC\srv\share is the
+    network spelling and becomes \\srv\share. }
+  if Copy(S, 1, 4) = '\\?\' then
+  begin
+    Delete(S, 1, 4);
+    if Copy(S, 1, 4) = 'UNC\' then S := '\\' + Copy(S, 5, MaxInt);
+  end;
+  Result := S;
+end;
+{$ENDIF}
+
 function IsRestrictedFsPath(const Path: string): Boolean;
 var
-  Full, CfgFull, Base: string;
-  {$IFDEF FPC}{$IFDEF UNIX}CP: string;{$ENDIF}{$ENDIF}
+  Full, CfgFull, Base, OAuthDir: string;
+  {$IF DEFINED(MSWINDOWS) or (DEFINED(FPC) and DEFINED(UNIX))}CP: string;{$IFEND}
 begin
   Result := False;
   if Path = '' then Exit;
@@ -4245,7 +4314,46 @@ begin
   CP := CanonicalPath(GetConfigPath);
   if CP <> '' then CfgFull := CP;
   {$ENDIF}{$ENDIF}
+  {$IFDEF MSWINDOWS}
+  { Same resolution on Windows, via reparse points. SameInode has no
+    Windows counterpart here, so a HARDLINK to the config file is still
+    only caught lexically -- recorded rather than implied. }
+  CP := CanonicalPath(Path);
+  if CP <> '' then Full := CP;
+  CP := CanonicalPath(GetConfigPath);
+  if CP <> '' then CfgFull := CP;
+  {$ENDIF}
   if (CfgFull <> '') and SameFileName(Full, CfgFull) then Exit(True);
+
+  (* Secret DIRECTORIES, checked before the basename rules.
+
+     $PASCLAW_HOME/oauth/<server>.json holds MCP OAuth material written
+     by PasClaw.MCP.OAuth.SaveTokens -- access_token and refresh_token
+     in cleartext. Its basename is whatever the MCP server is called,
+     so no basename rule can ever cover it, and a directory test is the
+     only shape that works.
+
+     Demonstrated before this guard existed: with sandbox.allow_read_paths
+     widened to include the home tree (a supported configuration),
+     GET /v1/fs/read?path=$PASCLAW_HOME/oauth/github.json returned the
+     live tokens, while the same request for config.json was correctly
+     refused. Same endpoint, same threat, one file protected and the
+     other not. Because the gateway ships with bearer auth OFF unless a
+     token is configured, that made third-party refresh tokens readable
+     by any caller who could reach the port.
+
+     Directory-scoped rather than by filename, so future files dropped
+     into these dirs are covered without anyone remembering to extend a
+     list. *)
+  OAuthDir := JoinPath(GetHome, 'oauth');
+  {$IF DEFINED(MSWINDOWS) or (DEFINED(FPC) and DEFINED(UNIX))}
+  { Resolve the guarded directory too, so an alias INSIDE the browsable
+    tree and the real directory canonicalise to the same string. }
+  CP := CanonicalPath(OAuthDir);
+  if CP <> '' then OAuthDir := CP;
+  {$IFEND}
+  if (OAuthDir <> '') and PathInsideDirectory(Full, OAuthDir) then Exit(True);
+
   { Basename denylist for the conventional secret files. }
   Base := LowerCase(ExtractFileName(Full));
   if Base = 'config.json' then Exit(True);
@@ -5157,8 +5265,17 @@ begin
   if Presented = '' then Presented := QueryToken;
   if Presented = '' then Exit;
 
-  Result := NormaliseTokenForCompare(Presented) =
-            NormaliseTokenForCompare(FRelayToken);
+  { Constant-time. The relay token is a real credential -- it lets a
+    worker claim inference requests and hand back arbitrary model
+    output, i.e. inject into the agent loop -- and it is only 40 bits
+    (8 Crockford base32 chars). The main gateway token has always been
+    compared with ConstantTimeStringEqual; this path used '=' and so
+    leaked a per-character timing signal that makes those 40 bits
+    searchable rather than guessable. Normalisation (case-fold, strip
+    hyphens) happens first so the operator-friendly formats still
+    match, then the comparison itself is length-then-XOR. }
+  Result := ConstantTimeStringEqual(NormaliseTokenForCompare(Presented),
+                                    NormaliseTokenForCompare(FRelayToken));
 end;
 
 procedure TGatewayServer.HandleRelayWorkerToken(ARequest: TIdHTTPRequestInfo;
