@@ -92,6 +92,31 @@ begin
     Fail('empty version must normalise to latest');
   WriteLn('  ok: "" and "latest" normalise to one lock key');
 
+  { Corrupt records must be REPORTED, not fatal. TJsonObject.Parse
+    raises rather than returning nil, so an unguarded read propagated
+    the exception out of `skills verify` and killed the whole run --
+    svUnreadable was unreachable and every later skill went unchecked.
+    Reproduced before the guard: exit 217, unhandled EPasClawJSON. }
+  ForceDirectories(Root);
+  Put('SKILL.md', '# demo'#10);
+  WriteFileText(JoinPath(Root, ProvenanceFileName), '{"schema":1,"files":[{"path":"SK');
+  R := VerifySkill(Root);
+  if R.Status <> svUnreadable then
+    Fail('truncated record should report svUnreadable, got ' + VerifyStatusText(R.Status));
+  if Length(R.Findings) = 0 then Fail('svUnreadable must explain itself');
+  WriteLn('  ok: truncated record reports unreadable instead of crashing');
+
+  { Same for the lock: a half-written skills.lock.json must degrade to
+    "unknown", not abort an install. }
+  WriteFileText(JoinPath(Root, 'skills.lock.json'), '{"demo@1.0.0":{"archive_sha');
+  if CheckLock(Root, 'demo', '1.0.0', 'aaaa', Known) <> lkFirstSight then
+    Fail('corrupt lock should degrade to first-sight, not raise');
+  WriteLn('  ok: corrupt lock degrades to first-sight');
+  RecordInLock(Root, 'demo', '1.0.0', 'bbbb');
+  if CheckLock(Root, 'demo', '1.0.0', 'bbbb', Known) <> lkMatch then
+    Fail('lock should be rewritten and usable after corruption');
+  WriteLn('  ok: corrupt lock is rewritten and usable again');
+
   NukeTree(Root);
   WriteLn('skills_provenance_tests: OK');
 end.

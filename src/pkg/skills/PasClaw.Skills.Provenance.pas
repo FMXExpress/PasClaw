@@ -341,8 +341,25 @@ begin
     ErrMsg := 'no provenance record';
     Exit;
   end;
-  Body := ReadFileText(Path);
-  Obj := TJsonObject.Parse(Body);
+  (* TJsonObject.Parse RAISES EPasClawJSON on malformed input -- it does
+     not return nil. Without this guard a truncated .provenance.json
+     (interrupted write, half-copied skill dir) propagated the exception
+     out of `skills verify` and killed the whole run, so svUnreadable --
+     the status this unit defines for exactly that case -- was
+     unreachable, and every skill after the broken one went unchecked.
+     Reproduced before the fix: exit 217, unhandled EPasClawJSON. *)
+  Body := '';
+  Obj  := nil;
+  try
+    Body := ReadFileText(Path);
+    Obj  := TJsonObject.Parse(Body);
+  except
+    on E: Exception do
+    begin
+      ErrMsg := 'provenance record is not valid JSON: ' + E.Message;
+      Exit;
+    end;
+  end;
   if Obj = nil then
   begin
     ErrMsg := 'provenance record is not valid JSON';
@@ -494,7 +511,16 @@ begin
   KnownDigest := '';
   Path := JoinPath(SkillsRoot, LockFileName);
   if not FileExists(Path) then Exit;
-  Root := TJsonObject.Parse(ReadFileText(Path));
+  { Parse raises on malformed input. An interrupted WriteFileText leaves
+    a truncated lock, and unguarded that aborted every ClawHub install
+    with an unhandled exception instead of the documented
+    warn-and-treat-as-unknown recovery below. }
+  Root := nil;
+  try
+    Root := TJsonObject.Parse(ReadFileText(Path));
+  except
+    on E: Exception do Root := nil;
+  end;
   if Root = nil then
   begin
     { A corrupt lock must not silently behave like "no lock". Say so and
@@ -524,10 +550,21 @@ var
 begin
   if (Digest = '') or (SkillsRoot = '') then Exit;
   Path := JoinPath(SkillsRoot, LockFileName);
+  Root := nil;
   if FileExists(Path) then
-    Root := TJsonObject.Parse(ReadFileText(Path))
-  else
-    Root := nil;
+    try
+      Root := TJsonObject.Parse(ReadFileText(Path));
+    except
+      { A corrupt lock must not stop us recording this install. Start a
+        fresh object: the alternative is an unhandled exception on the
+        success path of an install that already completed. }
+      on E: Exception do
+      begin
+        LogWarn('provenance: %s was unreadable and is being rewritten: %s',
+                [Path, E.Message]);
+        Root := nil;
+      end;
+    end;
   if Root = nil then Root := TJsonObject.Create;
   try
     Ent := TJsonObject.Create;
