@@ -1,0 +1,1101 @@
+# AI agent & harness feature catalogue
+
+A survey of what agent harnesses do, and where PasClaw sits on each.
+
+## How to read this
+
+Every row is marked, because a survey where "I read this" and "I remember
+this" look identical is worth very little:
+
+- **[S]** sourced — found in material fetched during this survey
+- **[K]** recalled — believed from training, **not** verified here
+- **[P]** PasClaw — checked against this repository
+
+Sources: a live web search on harness engineering, the
+`awesome-harness-engineering` catalogue, and ten project READMEs (OpenHands,
+Aider, Cline, Goose, Continue, SWE-agent, Codex CLI, LangGraph, CrewAI, the
+MCP server registry). READMEs were capped at 5–6 KB, so absence from an **[S]**
+row is weak evidence while presence is strong.
+
+---
+
+## 1. Agent loop & orchestration
+
+| Feature | Field | PasClaw |
+|---|---|---|
+| ReAct-style thought/action/observation loop | universal [S] | ✅ [P] |
+| Graph-structured execution with typed state | LangGraph, statewright [S] | ❌ linear loop |
+| Plan-then-execute separation | TaskWeaver, Plan-and-Execute [S] | ✅ `--mode plan` [P] |
+| Tree search over action sequences | LATS (Monte Carlo) [S] | ❌ |
+| State machine constraining tools per phase | statewright [S] | ⚠️ mode gates, not per-phase [P] |
+| Parallel tool dispatch | common [S] | ✅ read-only batching [P] |
+| Subagent fan-out via orchestration scripts | AgentSPEX, JS orchestration [S] | ✅ `spawn*` [P] |
+| Loop-detection middleware | [S] | ❌ iteration cap only [P] |
+
+## 2. Context management & compaction
+
+*The most crowded category in the field by a wide margin.*
+
+| Feature | Field | PasClaw |
+|---|---|---|
+| Summarisation at the context limit | universal [S] | ✅ `Agent.Compact` [P] |
+| Reactive compaction on an overflow error | rare [K] | ✅ forced pass + retry, once per loop [P] |
+| Prompt caching of system prompt + tools | [S] | ✅ breakpoints, 1 h TTL [P] |
+| Agent-controlled compression tools | Focus Agent, LLMLingua [S] | ❌ |
+| Tool-output compression before context entry | headroom (60–95%) [S] | ✅ output cap + `tool_output_get` [P] |
+| Symbol/AST index instead of whole-file reads | Token Savior (77%), codebase-memory-mcp, zerolang [S] | ❌ **biggest gap** |
+| Natural-language code retrieval | semble (98% token cut) [S] | ⚠️ `memory_search`/`kb` over docs, not code [P] |
+| Repo map | Aider [S] | ❌ |
+| Hash-anchored edits to cut re-sends | dirac (50–80%) [S] | ✅ `fs_edit_hashline` [P] |
+| Stale-read elision after a write | not found | ✅ `StubSupersededReads`, −2.5 KB measured [P] |
+| Progressive tool disclosure | rare [K] | ✅ 11.8→7.2 KB measured [P] |
+| Virtual filesystem over external sources | Mirage (S3/Slack/GitHub) [S] | ❌ |
+| Version-pinned library docs injection | Context7 [S] | ⚠️ `kb` if indexed manually [P] |
+| Structured spec/journal files | Trellis, harness-experimental [S] | ✅ AGENTS.md, MEMORY.md [P] |
+
+## 3. Tool design
+
+| Feature | Field | PasClaw |
+|---|---|---|
+| JSON Schema function definitions | universal [S] | ✅ [P] |
+| Constrained decoding to a grammar | outlines, instructor [S] | ❌ (provider-side only) |
+| **Risk annotations** (readOnly/destructive/idempotent/openWorld) | MCP spec [S] | ⚠️ `tcReadOnly`/`tcMutating` — two levels, not four [P] |
+| Auto-generated constraint harnesses from schemas | AutoHarness [S] | ❌ |
+| Agent-native CLIs for arbitrary software | CLI-Anything [S] | ❌ |
+| Programmable TUI interaction | tui-use [S] | ❌ |
+| Code execution *instead of* discrete tool calls | reported 98.7% token cut [S] | ✅ `execute_code` [P] |
+
+## 4. MCP & skills
+
+| Feature | Field | PasClaw |
+|---|---|---|
+| MCP client | Cline, Goose, Continue, Codex [S] | ✅ [P] |
+| MCP server (expose own tools) | rare [K] | ✅ gateway + `mcp stdio` [P] |
+| Stateless MCP core (2026-07-28 spec) | [S] | ✅ supported [P] |
+| Skill bundles with routing | Microsoft Skills Framework, agent-skills [S] | ✅ skills [P] |
+| **Negative examples in skill routing** | [S] | ❌ |
+| Skill marketplace / hub | Cline, Continue; **ClawHub** ("npm for AI agents", vector search, one-command install; 3,286 skills at first sourcing, **64K by May 2026** [S]) | ✅ **corrected pass 15**: a 522-line ClawHub integration (search + install from clawhub.ai) was in the repo all along — this row said ❌ for fourteen passes [P] |
+| Auto-distilling turns into skills | Socratic-SWE (trace-derived skills) [S] | ✅ self-improving skills [P] |
+| MCP Inspector-style debugging | [S] | ❌ |
+
+## 5. Memory & state
+
+| Feature | Field | PasClaw |
+|---|---|---|
+| Project memory file (CLAUDE.md / AGENTS.md) | universal [S] | ✅ + export to both [P] |
+| Semantic memory search | [S] | ✅ vector index [P] |
+| Cross-session recall | rare [K] | ✅ `session_search` / `session_read` [P] |
+| Hibernate-and-wake checkpointing | long-running-agent harnesses [S] | ✅ checkpoints [P] |
+| Structured handoff between agent phases | initializer→coder handoff [S] | ⚠️ working-state snapshot [P] |
+| Hierarchical LLM-curated memory | ByteRover [S] | ❌ flat files |
+| Programmatic memory searchable as code | PRO-LONG [S] | ❌ |
+| **Mining own failures into the prompt** | not found | ✅ `learn --write-scars` → SCARS.md [P] |
+
+## 6. Verification & evaluation
+
+*The field's own diagnosis: agents "mark a task complete without verifying
+the outcome" [S], and 65% of enterprise AI failures trace to harness defects
+— context drift, schema misalignment, state degradation [S].*
+
+| Feature | Field | PasClaw |
+|---|---|---|
+| Eval harness with CI gates blocking regressions | LLM Readiness Harness [S] | ⚠️ `bench/swe` written, unmerged |
+| Oracle-based pass/fail fixtures | SWE-agent, SWE-Bench-Pro [S] | ⚠️ same |
+| Adversarial / multi-agent convergence checks | [S] | ❌ |
+| Deterministic loop regression tests | rare [K] | ✅ `bench/agentloop` [P] |
+| Published benchmark numbers | Terminal Bench 2.0, SWE-Bench-Pro, WebArena [S] | ❌ none published |
+| Edit verification echoed by the tool | rare [K] | ✅ `edit_file` returns the region [P] |
+| **Tools reporting what they did NOT cover** | **not found anywhere** | ❌ — see below |
+
+## 7. Permissions & safety
+
+| Feature | Field | PasClaw |
+|---|---|---|
+| Per-call approval prompts | Cline, Codex [S] | ⚠️ profile-level [P] |
+| Hooks at tool boundaries (Pre/PostToolUse) | 27-event pipeline [S] | ✅ hook framework [P] |
+| "Lethal trifecta" risk modelling | [S] | ⚠️ promptware scan + network block, not modelled as a triad [P] |
+| Prompt-injection scanning of tool output | rare [K] | ✅ **fired twice during this survey** [P] |
+| Sandboxed execution | OpenHands, Codex [S] | ✅ docker backend [P] |
+| Command denylist | common [K] | ✅ [P] |
+| Secret redaction (scrubbing credentials **out of content** before it reaches model context) | [K] | ❌ no general scrubber. The "FS secret gate" this row used to claim is `IsRestrictedFsPath` — a **path denylist on the operator-facing `/v1/fs` browse route**, which refuses whole files rather than redacting text, and does not sit on the agent's tool-output path at all. Real redaction exists only for `db_info`'s connection password (`RedactConnString`); the hooks API lets an embedder add more, but nothing built in scrubs a credential out of an allowed file read or a shell result [P] **(corrected pass 17: a ✅ that could mislead an operator assessing credential exposure)** |
+| Defense-in-depth layered model | OpenDev 5-layer [S] | ⚠️ layers exist, not documented as a model |
+
+## 8. Observability
+
+| Feature | Field | PasClaw |
+|---|---|---|
+| Trajectory logging and replay | agentSPEX, SWE-agent [S] | ✅ sessions + OTel [P] |
+| Token/cost tracking and budgeting | Aider, Cline [S] | ✅ per-session stats [P] |
+| Drift detection, readiness scoring | Loop Engineering [S] | ❌ |
+| Mid-turn state inspection | [S] | ✅ `pasclaw steer` [P] |
+| Worktree isolation per run | Loop Engineering [S] | ❌ |
+
+## 9. Inter-agent protocols
+
+| Feature | Field | PasClaw |
+|---|---|---|
+| A2A (JSON-RPC + Agent Card discovery) | [S] | ❌ |
+| AG-UI (event streaming agent→UI) | [S] | ⚠️ own SSE, not the standard [P] |
+| AP2 / UCP (payments, commerce) | [S] | ❌ |
+| Agentic Resource Discovery | [S] | ❌ |
+
+## 10. Human-in-the-loop & temporal
+
+| Feature | Field | PasClaw |
+|---|---|---|
+| Interrupts at tool-use boundaries | LangGraph, Cline [S] | ✅ steering [P] |
+| Approval flows with structured diffs | [S] | ⚠️ diffs shown, approval is profile-level |
+| Deadline awareness in the loop | [S] — found orthogonal to reasoning ability | ❌ |
+| Time-budget warnings in context | [S] | ❌ |
+| Per-tool timeout contracts | [S] | ⚠️ global shell timeout [P] |
+| Mid-flight model swapping | deepclaude [S] | ✅ auto-router + fallback chain [P] |
+
+## 11. Surfaces
+
+| Feature | Field | PasClaw |
+|---|---|---|
+| CLI | Aider, Codex, Goose [S] | ✅ [P] |
+| TUI | rare [K] | ✅ [P] |
+| IDE extension | Continue, Cline [S] | ❌ **biggest distribution gap** |
+| Web UI | OpenHands [S] | ✅ [P] |
+| Native desktop app | rare [K] | ✅ FMX Studio [P] |
+| Browser automation | playwright-mcp, Chrome DevTools MCP, Cline [S] | ❌ |
+| Mobile device control | agent-device [S] | ❌ |
+| Screen-reader accessibility | not found | ✅ MSAA / NSAccessibility / AT-SPI2 (unverified) [P] |
+| Scheduled / proactive runs | proactive loops [S] | ✅ cron + heartbeat [P] |
+
+## 12. Commercial / closed agents
+
+Absent from the first pass entirely. Included because their choices set the
+expectations PasClaw is judged against, not because the claims are testable.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Whole-repository read before planning | Devin's Cascade [S] | ❌ no repo-wide pass |
+| Multi-file edit as one planned unit | Cursor Composer, Cascade [S] | ✅ `apply_patch` [P] |
+| Agent runs terminal commands and **verifies against tests** | Cascade [S] | ⚠️ only if the model elects to |
+| Cloud-delegated agents alongside local ones | Devin Desktop [S] | ⚠️ relay workers, not managed [P] |
+| Multi-agent supervision surface | Devin's Agent Command Center [S] | ⚠️ `spawn_status`, no dedicated UI [P] |
+| PR drafting / PR summaries | Copilot [S] | ❌ |
+| Inline completion as you type | Copilot, Cursor [S] | ❌ not an editor |
+| Shared context across agents and PRs | Devin Desktop [S] | ⚠️ shared workspace only [P] |
+
+The positioning split reported in the sources — Cursor as speed, Windsurf as
+deep context, Copilot as safety and scale [S] — has no PasClaw analogue.
+PasClaw's distinguishing axis is that it is a *self-hosted, provider-neutral*
+harness, which none of these are.
+
+## 13. Evaluation, in more depth
+
+The first pass had four sourced rows here; it was the thinnest section and
+also the one the field has moved on most.
+
+| Feature | Field | PasClaw |
+|---|---|---|
+| Issue-resolution benchmark | SWE-bench, SWE-Bench-Pro [S] | ⚠️ `bench/swe` unmerged |
+| Terminal / CLI benchmark | Terminal-Bench [S] | ❌ |
+| Web navigation benchmark | WebArena, WebVoyager [S] | ❌ (no browser) |
+| OS-level benchmark | OSWorld [S] | ❌ |
+| Tool-use benchmark | tau-bench, tau2-bench, AgentBench, GAIA [S] | ❌ |
+| **Trajectory evaluation** — score the nested span tree of model/tool calls, not just the outcome | [S] | ⚠️ OTel spans captured, never scored [P] |
+| Span-level scoring of tool *selection* | [S] | ❌ |
+| LLM-as-judge, calibrated against human labels | [S] | ❌ |
+| Agent-as-judge with environment awareness | AJ-Bench [S] | ❌ |
+| Eval gates blocking deploy on regression | [S] | ❌ |
+
+### Benchmark exploitation is now a named failure mode
+
+The single most useful thing this pass found, and it is not a feature:
+
+> In April 2026 an automated agent scored 100% or near-100% on seven of
+> eight leading benchmarks **without solving a single task**. On SWE-bench
+> Verified, editing roughly ten lines in one test configuration file caused
+> all 500 tests to pass. [S]
+
+That is the thesis of this document arriving from the opposite direction.
+A benchmark that reports a score without reporting what it actually
+exercised is the same defect as a linter reporting green on a file it never
+opened — the harness confidently asserting a result whose scope it never
+checked. The field's answer has been to move from single-axis completion
+scores toward trajectory-aware evaluation [S]: score the path, not just the
+endpoint, because the endpoint is forgeable.
+
+For PasClaw specifically this raises the bar on `bench/swe`. Its fixtures
+use `oracle/test.sh` exit codes — exactly the surface that was gamed. An
+oracle that only checks its own exit status cannot tell a real fix from a
+doctored config, and any pass-rate published from it inherits that weakness.
+
+## 14. Memory infrastructure
+
+The draft's memory section covered PasClaw-adjacent features; the field has
+meanwhile grown dedicated memory *products* with published benchmarks.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Tiered memory: in-context core / recall / archival, modelled on RAM–cache–disk | Letta (MemGPT) [S] | ⚠️ MEMORY.md is "core", `memory_search` is "archival"; no managed middle tier [P] |
+| **Self-editing memory** — the agent rewrites its own core block | Letta [S] | ❌ MEMORY.md edits are ad-hoc writes, not a managed operation |
+| Fact extraction into a vector store on every turn | Mem0 [S] | ⚠️ distiller extracts facts, but post-hoc, not per-turn [P] |
+| Temporal knowledge graph (entities + relations + time) | Zep [S] | ❌ |
+| Time-aware retrieval ("what did X believe before Y") | Zep — +15 pts over vector-only on LongMemEval [S] | ❌ |
+| Published memory benchmarks (LoCoMo, LongMemEval) | Mem0 92.5% LoCoMo [S] | ⚠️ a LOCOMO-shaped harness exists (PR #308), unmerged |
+| Retrieval token budget as a headline metric | Mem0: <7 K/call vs 25 K+ full-context [S] | ❌ never measured |
+
+The pattern worth copying is not any single product but the *shape*: memory
+as a tiered system with an explicit token budget per retrieval, benchmarked.
+PasClaw has the pieces (MEMORY.md, facts.db, vector index, session search)
+without the tiering or the numbers.
+
+## 15. Background / CI agents & git-native workflows
+
+Entirely absent from the first two passes, and it is where the commercial
+field converged in 2026: the lifecycle *ticket → cloud sandbox → autonomous
+edit → PR → human review* is now the same across every major tool [S].
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Repo-scoped cloud task: assign issue, get a PR | Copilot coding agent (runs in GitHub Actions), Google Jules, Codex cloud [S] | ❌ |
+| Queueable task batches ("five tickets Friday, five PRs Monday") | [S] | ⚠️ cron runs skills, not repo tasks [P] |
+| Agent explores repo, edits, runs tests, opens PR unattended | Copilot [S] | ⚠️ `pasclaw build` does the middle, no VCS integration [P] |
+| **Per-agent git worktree isolation** | Intent — attribution "a property of the workspace itself" [S] | ❌ agents share one workspace |
+| Attribution without span propagation (structural, from the worktree boundary) | [S] | ❌ |
+| Free-tier background quota as a product lever | Jules: 15 tasks/day [S] | n/a (self-hosted) |
+
+Worktree isolation is the standout: it solves attribution, conflict, and
+rollback in one move, structurally, with no instrumentation — and PasClaw's
+multi-agent story (`spawn*`, shared workspace) currently has all three
+problems.
+
+## 16. Observability platforms
+
+The draft had five rows; the field has six anchor platforms [S]: LangSmith
+(framework-native), Langfuse (open-source, self-hostable), Arize Phoenix,
+Helicone (drop-in proxy), Datadog LLM Obs, Honeycomb.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Every step captured as structured traces — LLM calls, tools, retrievals, control flow | all six [S] | ⚠️ OTel `agent.turn` / `chat` / `execute_tool` spans exist, but `execute_tool` **emits only on the serial path** — parallel-dispatch workers don't inherit the parent's threadvar context, so the batched read-only calls this survey praises elsewhere are the exact ones that go untraced. The source comment and `docs/observability.md` both record it [P] **(corrected pass 17: was ✅ "every step")** |
+| Failure localisation in *intermediate* steps, not final answers | the category's stated purpose [S] | ❌ spans emitted, nothing inspects them |
+| Self-hostable open-source option | Langfuse [S] | ✅ OTel exports anywhere [P] |
+| Drop-in proxy instrumentation (no code change) | Helicone [S] | ⚠️ the gateway *is* a proxy; it aggregates stats, not traces [P] |
+| Eval loops attached to traces | LangSmith, Langfuse [S] | ❌ |
+
+## 17. Sandboxing below Docker
+
+The draft treated "sandboxed execution" as one row. The field's 2026
+consensus is blunter: shared-kernel container isolation "isn't cutting it
+anymore for executing untrusted AI agent code" [S].
+
+| Isolation level | Who | PasClaw |
+|---|---|---|
+| Shared-kernel containers (Docker/runc) | the baseline being retired [S] | ✅ docker backend — i.e. the retired baseline [P] |
+| User-space kernel syscall interception (~10–15% CPU cost, full syscall audit) | gVisor [S] | ❌ |
+| MicroVMs — hardware boundary per execution | Firecracker, Kata; E2B/Daytona/Modal productise it [S] | ❌ |
+| Sandbox-per-execution as a service API | E2B, Daytona [S] | ❌ |
+
+PasClaw's honest position: its docker backend is what the field now calls
+the insufficient baseline. For a self-hosted personal agent that mostly runs
+the operator's own code, that is defensible — but the survey should say it
+rather than let "sandboxed ✅" imply parity with microVM isolation.
+
+## 18. Guardrails & cost control
+
+The safety section covered PasClaw's own layers; the field has meanwhile
+standardised on dedicated guardrail frameworks and hot-path spend control.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Rail orchestration DSL (input/dialog/retrieval/execution/output rails) | NeMo Guardrails (Colang) [S] | ⚠️ promptware scan + hooks, no rail model [P] |
+| LLM-based content classifier against a harm taxonomy | Llama Guard [S] | ❌ |
+| Structured-output validation rails | Guardrails AI [S] | ⚠️ JSON repair on tool args only [P] |
+| **Per-team / per-agent spend budgets enforced before the call** | LiteLLM ("rate-limit errors before spend accumulates") [S] | ❌ stats are recorded after, never enforced |
+| Configurable budget windows + spend alerts | LiteLLM, gateways [S] | ❌ |
+| Six routing modes incl. lowest-cost and rate-limit-aware | LiteLLM [S] | ⚠️ auto-router is capability-based only [P] |
+| Market-informed model routing | OpenRouter Auto Router (community spend data) [S] | ❌ |
+| Guardrails themselves as an attack surface (DoS on rails) | arXiv 2606.14517 [S] | n/a — a reason not to over-build them |
+
+The budget row is the actionable one: PasClaw *counts* every token
+(per-session stats, gateway buckets) and *enforces* nothing. A runaway loop
+is discovered on the bill. LiteLLM's model — refuse before spend, scoped per
+team/agent — is the shape, and the counters already exist.
+
+## 19. Computer use & GUI agents
+
+A production category in 2026, absent from the draft entirely.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Full-desktop control (screen/mouse/keyboard) | Claude computer use — 82.3% OSWorld (Opus 4.7) [S] | ❌ |
+| Web-only operator agents | OpenAI Operator, Gemini/Mariner [S] | ❌ |
+| Open-source browser automation | browser-use (89.1% WebVoyager), Stagehand, Browser MCP [S] | ❌ |
+| Accessibility-tree snapshots as the agent's view (vs pixels) | playwright-mcp [S] | ⚠️ PasClaw *implements* the a11y tree side (Studio, #557) but consumes nothing |
+
+The last row is an odd near-miss worth naming: the field's preferred
+browser-automation representation is the accessibility tree, and PasClaw
+just built accessibility-tree *emission* for its own GUI — the same
+structure from the other side. A browser tool consuming a11y snapshots
+would reuse concepts already in the codebase.
+
+## 20. Managed agent runtimes
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Durable agent objects: state, sessions, scheduling, WebSockets | Cloudflare Agents SDK [S] | ⚠️ gateway + sessions + cron, self-hosted [P] |
+| Per-agent computer: durable FS + routed isolate/container backends | @cloudflare/computer (Aug 2026 preview) [S] | ❌ |
+| Managed cross-framework runtime with shared context | Bedrock AgentCore (Strands/LangGraph/ADK/Claude SDK interop) [S] | ❌ |
+| Platform-managed sandbox for autonomous code delivery | Claude Managed Agents on Cloudflare [S] | ❌ |
+
+PasClaw is deliberately the opposite of these — self-hosted, no platform —
+but the *durable agent object* pattern (state + schedule + inbox as one
+addressable thing) is portable and close to what gateway sessions + cron
+already approximate.
+
+## 21. Inter-agent protocols, revisited
+
+The 4-row section was thin because the first passes found names, not
+adoption. The picture now has numbers:
+
+| Fact | Source |
+|---|---|
+| A2A donated to the Linux Foundation, June 2025 | [S] |
+| 150+ organisations, production use, first year | [S] |
+| v1.0 stable with signed Agent Cards, April 2026 | [S] |
+| SDKs in 5 languages; 22K+ GitHub stars | [S] |
+| GA inside Copilot Studio, Azure AI Foundry, Bedrock AgentCore | [S] |
+| AP2 (payments) layered on top | [S] |
+
+PasClaw interop today is MCP (both directions) plus an OpenAI-compatible
+API. A2A at v1.0 with three clouds GA is past the wait-and-see line for
+any harness that wants its agents addressable from outside — an Agent Card
+over the existing gateway would be the minimal entry.
+
+## 22. Agent identity & authorization
+
+Zero coverage in four passes; meanwhile the field has a draft IETF standard.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| OAuth 2.1 + PKCE as the MCP authorization model | MCP spec, Stytch/Aembit guides [S] | ✅ **as MCP client** — `pasclaw mcp auth` runs the full flow in `MCP.OAuth.pas`: AS discovery, PKCE `S256`, dynamic registration, token persistence + refresh. ⚠️ **as MCP server** — the inbound gateway is still one shared bearer token [P] **(corrected pass 17: the original row read ❌ because it checked only the inbound half)** |
+| **On-behalf-of delegation**: `requested_actor` / `actor_token` binding agent identity into the token exchange | IETF draft-oauth-ai-agents-on-behalf-of [S] | ❌ |
+| Two-identity model: user identity + agent identity, both in every call | [S] | ❌ no agent identity at all |
+| Short-lived scoped tokens + policy engine in front of tools | [S] | ⚠️ sandbox policy exists; tokens do not expire [P] |
+| Immutable audit log of delegated actions | [S] | ⚠️ sessions record actions, mutable files [P] |
+
+For a single-operator personal agent this is mostly future-proofing — but
+the moment PasClaw's gateway serves more than one human (it already has
+multi-workspace), "which agent did this as which user" has no answer.
+
+## 23. Prompt-injection defense, beyond scanning
+
+The draft credited PasClaw's promptware scanner; the field's frontier is
+architectural rather than detectional.
+
+| Approach | Who | PasClaw |
+|---|---|---|
+| Output scanning against known patterns | the baseline [S] | ✅ promptware scan — this IS the baseline [P] |
+| Spotlighting: mark/transform untrusted input so the model can tell it apart | [S] | ❌ tool results enter context undifferentiated |
+| Dual-LLM: privileged planner never sees untrusted data; quarantined reader has no tool access | [S] | ❌ |
+| **CaMeL**: compile the user's intent to a checked program; data flows validated per step (67% of benchmark injections blocked) | DeepMind [S] | ❌ |
+| Inference-time scaling as defense | SecInfer [S] | ❌ |
+
+Honest placement: PasClaw's scanner fired correctly twice during this
+survey, and it is still the weakest tier of a ladder the field has been
+climbing for two years. Spotlighting is the cheapest rung up — a wrapper on
+tool-result messages, no architecture change.
+
+## 24. The apply layer: fast-edit models
+
+A category the survey missed entirely because it sits *below* the agent: a
+second, small model whose only job is merging the big model's sloppy edit
+into the real file.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Dedicated 7B merge model, "existing code" markers in, merged file out | Morph Fast Apply — 10,500 tok/s, ~98% accuracy [S] | ❌ |
+| Trained on lazy-edit → merged-file pairs across languages | Relace Instant Apply, ~96% [S] | ❌ |
+| Speculative decoding tuned on the model's own output | Relace, Blazedit [S] | n/a (provider-side) |
+| Deterministic merge + scoped inputs beating fragile patching | Morph's stated thesis [S] | ⚠️ this is exactly the `edit_file`-vs-rewrite tension measured earlier in this repo |
+
+The relevance is direct: this session previously measured PasClaw's model
+choosing whole-file rewrites over `edit_file` because exact-match patching
+is fragile. The field's answer is not better prompts — it is a second model
+that makes sloppy edits safe to apply. For a self-hosted harness the
+portable idea is the *contract* (lazy edit in, merged file out, verify by
+re-parse), which a deterministic merger could implement without any model.
+
+Two candidates from this pass found no sourced coverage and stay recalled
+leads only: prompt versioning as a harness feature, and RL from agent
+trajectories. They are deliberately NOT tabled.
+
+## 25. Session persistence, branching & time travel
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Thread-scoped checkpoints of full graph state | LangGraph checkpointers [S] | ✅ checkpoints + sessions [P] |
+| Pluggable checkpoint backends | LangGraph (e.g. Couchbase) [S] | ⚠️ file-based only [P] |
+| **Time travel: rewind to a node, alter context, fork the path** | LangGraph [S] | ⚠️ checkpoint restore/redo rewinds; no fork-into-branch [P] |
+| Fault tolerance via resume-from-checkpoint | LangGraph [S] | ✅ `--session` resume [P] |
+| Multi-user shared session state | thread ids over a shared store [S] | ⚠️ shared store exists; no per-user identity (see §22) |
+
+RBAC and org-level config found no direct sourcing this pass either — two
+passes running. Either it lives in closed enterprise tiers the public docs
+do not describe, or the field genuinely has not standardised it. Recorded
+as an open question, not a table row.
+
+## 26. Realtime & voice agents
+
+Out of coding scope, in "every agent feature everywhere" scope. A production
+category with its own engineering vocabulary.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Speech pipeline abstraction (STT → LLM → TTS, or speech-to-speech) | LiveKit Agents 1.x [S] | ❌ |
+| Voice activity detection vs semantic turn detection (model predicts turn end; +100–200 ms) | AssemblyAI, LiveKit, OpenAI [S] | ❌ |
+| Barge-in: stop talking, discard in-flight audio (`response.cancel` server-side) | OpenAI Realtime [S] | ❌ |
+| Measured interruption engineering (−87% mid-thought cuts for +20 ms) | [S] | ❌ |
+| Multi-agent handoffs inside a live call | LiveKit [S] | ❌ |
+| Native MCP tools in the voice loop | LiveKit 1.5 [S] | n/a — MCP yes, voice no |
+
+No PasClaw column argument here: this is a genuinely different substrate
+(WebRTC media servers). The transferable observation is that voice forced
+the field to solve *interruption* rigorously — the text-agent equivalent
+(steering mid-loop) is something PasClaw already has and most text
+harnesses do not.
+
+## 27. Retrieval as a harness feature
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Hybrid sparse+dense with rank fusion (RRF) | the 2026 default stack [S] | ✅ textbook RRF — `FuseRRF` sums `1/(k + rank + 1)` across the vector and FTS rankings at the canonical `k=60`, called by both the SQLite and FireDAC stores; memory, facts and KB search all run through it [P] **(corrected pass 17: "fusion is ad hoc" was wrong)** |
+| **Cross-encoder reranking of top-k** | Cohere/Voyage/BGE — +15–30% on RAGAS [S] | ✅ ships a bge-reranker (`Memory.Rerank.Serve`, XLM-R tokenizer, byte-exact-vs-HF tests) [P] |
+| Graph layer for entities/relations (GraphRAG) | Microsoft GraphRAG, MIT-licensed [S] | ❌ |
+| Agent chooses retrieval strategy per query | agentic RAG (GraphRAG vs VectorRAG selection) [S] | ❌ one path |
+| **Retrieval inside the loop** (re-query, rewrite, stop early) | Self-RAG, FLARE [S] | ✅ `memory_search`/`kb_search` are loop tools, not a front-end stage [P] |
+| Retrieve-50 → rerank-5 pipeline shape | production default [S] | ⚠️ components exist, pipeline not assembled [P] |
+
+The rerank row is a correction in PasClaw's favour: five passes of this
+survey nearly missed that it ships a real cross-encoder reranker with
+byte-exactness tests against HuggingFace. The gap is not the parts — it is
+that the parts are not composed into the retrieve→fuse→rerank pipeline the
+field treats as the default.
+
+## 28. Code intelligence & terminal runtime
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| **LSP-backed symbol tools for agents**: find_symbol, find_referencing_symbols, insert_after_symbol | Serena (MCP, 40+ languages) [S] | ❌ text grep only — and this is the concrete form of the "symbol/AST index" gap the survey has ranked #1 since pass 2 |
+| Semantic edit at symbol granularity, not text match | Serena [S] | ❌ `edit_file` is exact-text |
+| Language-server support **including Pascal** | Serena's language list [S] | — meaning the #1 gap has an off-the-shelf MCP answer PasClaw could consume today [P] |
+| tmux as the agent runtime: process isolation, output capture, detach/reattach survival | tmux-agents pattern, "tmux became the runtime for AI agent teams" [S] | ⚠️ shell sessions exist per-session; no detachable live terminal [P] |
+| Driving interactive TUIs/REPLs by keystroke + pane read | tmux skills [S] | ❌ |
+| Supervisor over parallel agent panes with test gating | Herdr-style [S] | ⚠️ `spawn_status` is polling, not a live view [P] |
+
+The Serena row is the actionable one: the survey's standing #1 gap
+(symbol/AST navigation) does not need building — PasClaw is an MCP client,
+Serena is an MCP server, and its language-server list includes Pascal. The
+integration cost is configuration, not code.
+
+## 29. Agent testing via simulated users
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Simulated-user benchmark: agent + user LLM + database state + policy scoring | tau-bench / tau2-bench (dual-control) [S] | ❌ bench/swe fixtures are single-shot, no user turn |
+| Policy adherence as a scored dimension | tau-bench [S] | ❌ |
+| **Known limits**: LLM-simulated users are unreliable proxies for humans | "Lost in Simulation" [S] | — a caution, not a feature |
+| Holistic leaderboard infrastructure as the missing piece | HAL [S] | ❌ |
+
+## 30. Learning from trajectories
+
+Pass 5 could not source this; sharper terms found a rich vein. The other
+pass-5 lead — prompt management/versioning as a harness category — has now
+failed three differently-worded searches and is **demoted**: the products
+exist, but nothing in this corpus treats them as an agent-harness feature.
+Recording the demotion is the finding.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Online RL for multi-turn tool-use agents | SkyRL (SWE-Bench-scale) [S] | ❌ out of scope for a harness — but the *data* is not |
+| Successful trajectories → rejection-sampling SFT + RL | Skywork-SWE, long-context RL [S] | ❌ |
+| Trained 32B agent at 39.4% Pass@1 via RL alone | SA-SWE-32B [S] | — evidence trajectories are valuable training data |
+| Execution-free reward models scoring agent work | SWE-RM [S] | ❌ |
+| **Trace-derived agent skills** — self-evolving agents distilling skills from their own traces | Socratic-SWE [S] | ✅ self-improving skills — and this row forces a correction below [P] |
+
+### A correction the survey owes
+
+Since pass 2, "auto-distilling turns into skills" was marked rare-[K] and
+"Where PasClaw leads" implied no counterpart existed. Socratic-SWE is that
+counterpart, sourced: self-evolving coding agents via trace-derived skills.
+The leads section now claims only what survives: failure mining into the
+prompt (SCARS) still has no observed counterpart; skill distillation has
+one. A survey that cannot demote its own flagship claims is advertising.
+
+## 31. Durable execution
+
+Late 2025 is when this "crossed the chasm": AWS Durable Functions, Cloudflare
+Workflows GA, Vercel Workflow DevKit [S]. The engines record every step and
+replay history to reconstruct state after a crash — the agent resumes from
+exactly where it stopped.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Replay-based crash recovery mid-workflow | Temporal (OpenAI + Block in production, 9.1 T lifetime actions), Inngest, Restate, DBOS [S] | ❌ a crash mid-turn loses the turn; sessions resume at turn granularity [P] |
+| Durable timers/sleeps across restarts | the category's core [S] | ⚠️ cron/heartbeat re-fire, but hold no in-flight state [P] |
+| OpenAI Agents SDK ↔ Temporal integration | public preview [S] | ❌ |
+| Serverless-native durable runtime | Inngest on Vercel/Workers/Lambda [S] | n/a self-hosted |
+
+PasClaw's checkpoints are the right instinct at the wrong granularity:
+turn-level resume exists, step-level replay does not. A multi-tool turn that
+dies at tool 7 of 9 re-runs from the user message.
+
+## 32. Gateway economics: caching tiers & processing tiers
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| **Semantic response caching** — same-meaning prompt returns the cached answer | Bifrost, LiteLLM, Kong, TrueFoundry, Cloudflare AI Gateway [S] | ❌ distinct from provider prompt caching, which PasClaw has [P] |
+| Provider prompt caching (prefix KV reuse) | providers [S] | ✅ breakpoints, 1 h TTL [P] |
+| **Batch tier: −50%, results within 24 h** | OpenAI Batch [S] | ❌ never routed to |
+| **Flex tier: −50% per-request, variable latency** | OpenAI Flex [S] | ❌ |
+| Tier-aware routing (background work → cheap tier) | FinOps guidance [S] | ❌ — and PasClaw *knows* which work is background: cron, heartbeat, subagents |
+
+The tier rows are the actionable ones. PasClaw already distinguishes
+interactive from background work structurally (cron jobs, heartbeat ticks,
+`spawn_background`) — exactly the workloads the 50%-off tiers exist for —
+and routes everything at the standard tier. This is the spend-gates finding
+from pass 4 with a twin: one gap refuses to stop runaway spend, the other
+declines a standing half-price offer.
+
+## 33. Generative UI
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| **MCP Apps**: tools return interactive UI rendered in the conversation (first official MCP extension, Jan 2026; ChatGPT supports it) | MCP spec, ChatGPT, Claude hosts [S] | ❌ — sharp because PasClaw is an MCP *server*: its gateway tools could render UI inside Claude/ChatGPT with no new surface of its own [P] |
+| Sandboxed-iframe rendering of tool UI | MCP Apps [S] | ❌ |
+| Model-authored UI streamed as it generates | [S] | ❌ |
+| Declarative agent-UI format | A2UI (Google), Open-JSON-UI [S] | ❌ |
+| Agent→frontend streaming protocol | AG-UI [S] | ⚠️ own SSE + tool cards — a proprietary miniature of the same idea [P] |
+
+One candidate found no sourcing: ChatGPT Tasks / scheduled proactive
+assistants as a field feature. PasClaw's cron + heartbeat + channels stack
+is real [P], but the field-side comparison stays unsourced and untabled.
+
+## 34. Messaging-surface agents
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| **Channel-resident async agent**: @-mention, milestones, results posted in-thread | Claude Tag (June 2026, Slack) [S] | ❌ |
+| Shared agent per channel with shared memory (vs per-user assistant) | Claude Tag's headline differentiator [S] | ❌ |
+| **Ambient mode** — agent may post unprompted | Claude Tag [S] | ⚠️ heartbeat can act unprompted, but posts to channels one-way [P] |
+| Permission scoping by org / workspace / channel | Claude Tag [S] | ❌ (see §22 — no identity model) |
+| Draft-and-post messaging via interactive MCP Apps | Anthropic Interactive Apps [S] | ❌ |
+| Outbound message posting to channels | table stakes [S] | ✅ `pasclaw post` + channels [P] |
+| Email as an agent surface (inbox sync) | [K] | ✅ `pasclaw mail` IMAP sync for cron [P] |
+
+The shape of the gap: PasClaw can *send to* messaging surfaces and cannot
+*live in* them. Claude Tag's model — resident, addressable, shared-memory,
+permission-scoped — is what "agent as teammate" means in 2026.
+
+## 35. The agent-readable web & ingestion
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| URL → clean LLM-ready markdown as a service | Jina Reader (`r.jina.ai/` prefix), Firecrawl [S] | ⚠️ `web_fetch` strips HTML itself — a built-in miniature [P] |
+| Crawl-to-corpus pipelines for RAG | Firecrawl and the crawler field [S] | ⚠️ `kb` indexes what you hand it; no crawler [P] |
+| **llms.txt**: a site's curated map for agents | Anthropic, Vercel, Cloudflare ship one; hundreds tracked [S] | ❌ neither consumes one nor serves one |
+| — honest caveat: major LLM crawlers do not fetch llms.txt yet | [S] | — which caps the row's value today |
+| Machine-interaction auditing (WebMCP, a11y-tree integrity, llms.txt presence) in Lighthouse | May 2026 audit category [S] | — the a11y-tree item again lands near #557's work |
+| Document ingestion (PDF → indexed corpus) | common [K] | ✅ `kb` with PDF support [P] |
+
+## 36. Enterprise data substrate
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| **Permission-aware connector fleet** (content + ACLs ingested together) | Glean, 275+ connectors [S] | ❌ `kb` indexes files without permission context |
+| Graph layer over workplace data powering search, RAG, agents | Glean [S] | ❌ |
+| Connectors as MCP servers | Glean's newer connectors [S] | ⚠️ PasClaw could consume these as an MCP client today [P] |
+| Actions that update external systems, not just read | Glean actions [S] | ⚠️ generic via MCP tools [P] |
+
+Declarative agent packaging (custom GPTs, Copilot declarative manifests,
+agents.yaml) found only incidental sourcing this pass and stays a lead, not
+a section.
+
+## 37. Reasoning controls
+
+A harness feature category the survey missed although PasClaw ships one.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| Thinking budget: max internal reasoning tokens per request | Anthropic budget_tokens, Google thinking_budget, xAI reasoning_mode [S] | ⚠️ `--thinking low\|medium\|high` maps to provider knobs [P] |
+| **Effort parameter replacing token counts** (low/medium/high/max + adaptive) | Opus 4.6+ adaptive thinking; OpenAI reasoning_effort [S] | ⚠️ same three-level flag — aligned shape, no adaptive/max [P] |
+| Provider divergence the harness must abstract | four different mechanisms across vendors [S] | ✅ one flag over all providers [P] |
+| **Parameter deprecation as a moving target** (budget_tokens *rejected* on 4.6+) | [S] | ⚠️ provider catalog + model discovery exist; no deprecation tracking [P] |
+| Thinking billed at output rate, trace not returned (500 visible tokens can bill 2–3 K) | [S] | ❌ stats do not separate thinking tokens |
+| Effort-tier routing (routine → low, hard → high) | budgeting guidance [S] | ⚠️ auto-router picks models, not effort [P] |
+
+The last row joins the tier-routing family from pass 8: PasClaw knows which
+work is routine (cron, background) and never lowers effort for it, just as
+it never routes it to the half-price tiers.
+
+## 38. Agentic commerce & payments
+
+Pass 4 recorded AP2 in one row; the space has since become a standards race
+with real governance.
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| **x402**: HTTP 402 revived for machine-to-machine stablecoin micropayments | Coinbase-created; Linux Foundation governance; 40-member foundation incl. Visa, Mastercard, Amex, Stripe, AWS, Google, Shopify, Cloudflare [S] | ❌ |
+| **ACP**: standardised agent↔merchant checkout | OpenAI + Stripe; live in ChatGPT Instant Checkout; Shopify/PayPal integrating [S] | ❌ |
+| AP2: payment authorization with spend mandates | Google lineage, layered on A2A [S] | ❌ |
+| Machine Payments Protocol on payment-purpose chain | Stripe + Paradigm's Tempo (Mar 2026) [S] | ❌ |
+| Agent pays for API access per-call | x402's core use [S] | ❌ — though a self-hosted agent buying its own API access is the natural fit |
+
+No ⚠️ anywhere: PasClaw has nothing in this category, and for a personal
+agent that may be right — but x402 under neutral governance with every card
+network aboard is infrastructure, not hype, and "agent pays for its own
+tool calls" is the first commerce feature a self-hosted harness would want.
+
+## 39. Skills as an open standard — an upgrade for an old row
+
+Pass 2 recorded "skill bundles" via the Microsoft framework. The picture
+now: Anthropic released **Agent Skills as an open standard** (Dec 2025) —
+a folder with SKILL.md, YAML name/description metadata plus instructions —
+adopted by 40+ tools including Codex, Gemini CLI, Copilot, Cursor [S].
+
+| Feature | Who | PasClaw |
+|---|---|---|
+| SKILL.md folder format, YAML frontmatter | the open standard [S] | ✅ PasClaw skills are already SKILL.md + YAML name/description — same shape, compatibility unverified against the spec [P] |
+| Cross-platform portability of one skill | 40+ tools [S] | ⚠️ if the format matches, PasClaw skills travel; untested |
+| Skill security research: registry supply-chain attacks, spec-violation fuzzing | SKILL.md supply-chain paper, SkillTester — and **realized in-family**: ClawHavoc, **341–1,184** malicious ClawHub skills (Feb 2026; Antiy CERT and registry sources disagree — recorded as a range); registry now runs SHA-256 × VirusTotal + Gemini Code Insight on every publish. Scale of the problem, 2026 audits: Snyk ToxicSkills found 1,467 malicious payloads in 3,984 scanned skills; Unit 42 ran behavioral-integrity verification over all 49,943 skills on the OpenClaw registry — **80% deviate from their SKILL.md declaration**, 5% carry multi-stage attack chains [S] | ❌ skills install from that same registry with **no client-side provenance checks** — the sharpest security row in the survey; §43 tables what the fix looks like [P] |
+
+The compatibility row is the cheapest possible win found in ten passes: if
+PasClaw's existing SKILL.md dialect parses under the open spec, it inherits
+a 40-tool ecosystem for the cost of a conformance check.
+
+Tool-action reliability patterns (idempotency keys, compensation) found no
+direct sourcing beyond MCP's idempotentHint and stay a lead.
+
+## 40. The provider is becoming the harness
+
+The eleventh pass's cluster is a thesis, and the rows source: providers are
+absorbing, server-side, the features this survey has spent forty sections
+cataloguing client-side. Every row below has a PasClaw counterpart built in
+this repo — which is exactly what makes the absorption strategic rather
+than incidental.
+
+| Provider feature | Detail | PasClaw's client-side counterpart |
+|---|---|---|
+| **Server-side conversation state** | OpenAI Conversations API: durable conversation objects joined to the Responses API [S] | ✅ sessions on disk [P] |
+| **Background mode** | long tasks run async, poll the response object; no timeout management [S] — with a sourced wart: a March 2026 stretch where `background=true` returned server_error on every request [S] | ✅ `spawn_background` + drain [P] |
+| **Built-in provider tools** | web search, file search, computer use in the Responses API; trillions of tokens processed [S] | ✅ web_fetch / kb / (no computer use) [P] |
+| **Server-side context editing** | Anthropic `context-management` beta: clears old tool pairs *after prompt-cache lookup*, so pruning no longer breaks the cache; +29% performance alone, 84% token savings on a 100-turn task combined with memory [S] | ⚠️ compaction + `StubSupersededReads` are client-side and cache-*hostile* — the server-side version dominates them [P] |
+| **Provider memory tool** | `memory_20250818`, client-executed memory ops; +39% combined with context editing [S] | ✅ MEMORY.md + memory_search — same idea, self-hosted [P] |
+| Reasoning effort in the API surface | Responses API native [S] | ✅ `--thinking` (§37) [P] |
+
+Two readings, both honest:
+
+**The threatening one.** Anthropic's context editing runs after cache
+lookup; PasClaw's equivalent machinery (compaction, superseded-read
+elision) runs before the request and invalidates cache prefixes to save
+tokens. Where the provider version exists, it is simply better — the
+harness's most-engineered features become the first ones obsolete.
+
+**The durable one.** Every server-side feature above is provider-locked.
+PasClaw's counterparts are the same features with one property the
+providers cannot offer: they work identically over any backend, including
+local models and the relay. The survey's own Claude Code note confirms the
+pattern — its internal "microcompact" became a public API parameter. The
+harness features that survive absorption are the ones whose value is
+neutrality, not cleverness.
+
+Claude Code agent-teams and output-styles found no direct sourcing and stay
+leads. Provider-side tool search likewise — noted because PasClaw ships
+`tool_search` client-side, and if providers absorb that too, the pattern
+above repeats.
+
+## 41. The claw family: PasClaw's own lineage
+
+Twelve passes surveyed the field and never the family. The repo cites these
+projects 209 times — picoclaw 82, openclaw 70, hermes 32, nanobot 24,
+Odysseus 1 — making the source tree itself a primary source here.
+
+| Project | Identity [S] | What PasClaw demonstrably took [P] |
+|---|---|---|
+| **OpenClaw** | the category creator: local platform with messaging, voice, browser, system tools; 350K+ GitHub stars by Apr 2026 [S] | `/new` `/reset` `/think` semantics, `${VAR}` env-subst pattern, OTel `service.name` parity, config naming — cited at each site [P] |
+| **picoclaw** | the miniaturisation: Go, <10 MB RAM, sub-second boot, built for $10 hardware [S] | PasClaw *is* its Object Pascal port: tool surface, RRF `memory_search`, `ValidateSkillIdentifier`, SKILL.md loading, `max_tool_iterations: 20` subagent default [P] |
+| **nanobot** | the simplification: core agent in ~4 K lines, minimalism as auditability [S] | durable sessions design, SKILL.md convention, memory_search shape [P] |
+| **hermes-agent** | Nous Research, MIT, Feb 2026: a learning loop — evaluate each task, extract reusable patterns, store as Markdown skill files; 20+ messaging platforms; skills make similar tasks ~40% faster [S] | **both of PasClaw's flagship features**: lazy MCP reveal (progressive disclosure) and self-improving skills are labelled "Hermes-style" in the source [P] |
+| **Odysseus** | PewDiePie's self-hosted workspace, May 2026: chat, agents, Deep Research with cited reports, email, calendar, vector memory; MIT relicensed AGPL-3.0 [S] | the Suite/projects direction — "a self-hosted agent becomes useful to a normal person", cited in `Suite.pas` [P] |
+
+### What the family already has that the survey called gaps
+
+The sharpest finding of the pass: several of this survey's PasClaw gaps are
+not field-frontier features — the *family* has them.
+
+- **Living in messaging surfaces** (§34's gap): OpenClaw integrates
+  messaging apps natively; Hermes connects to 20+ platforms [S]. The
+  category PasClaw ported from treats this as table stakes.
+- **Deep research with cited reports** (the capability this very survey
+  struggled against): Odysseus ships it as a mode [S].
+- **Persistent background daemon** vs interactive process: Hermes runs as
+  one [S]; PasClaw's heartbeat is a step in that direction.
+
+### What the port dropped, kept, and added
+
+Dropped relative to OpenClaw: voice, browser automation, messaging
+residency. Kept from picoclaw/nanobot: the minimal tool surface, SKILL.md,
+RRF memory search, durable sessions. Added beyond the family: the
+FMX desktop Studio with accessibility, dual-compiler Delphi/FPC support,
+the relay provider, `--mode improve`, and SCARS failure mining — the last
+still unobserved anywhere, family included.
+
+The lineage also reframes the "where PasClaw leads" section: its two
+flagship inheritances (disclosure, self-improving skills) lead the *field*
+while being family traits — the claws are collectively ahead of the
+mainstream harnesses on exactly the features this survey found rare.
+
+## 42. The extended claw roster
+
+Pass 12 mapped the five members PasClaw's comments cite; the ecosystem is
+roughly twelve, descended from one viral project, and each divergence is a
+design bet the survey can read as a feature statement.
+
+### A correction from pass 14
+
+Pass 13 tabled Clawdbot and OpenClaw as separate projects. They are one:
+**Clawdbot became Moltbot became OpenClaw — two renames in under five
+weeks** [S], with the security advisory attaching to the earlier names.
+The row below is merged accordingly; the survey keeps the error visible
+rather than silently rewriting it. Star counts disagree across sources
+(145K+ in one week, 217K, 350K+) [S] — recorded as a range, not a number.
+
+| Claw | The bet [S] | Feature no other member leads on [S] | PasClaw relation [P] |
+|---|---|---|---|
+| **OpenClaw** (né Clawdbot, then Moltbot) | the viral origin, built on the minimal 4-tool **Pi agent framework**; 25 tools, 20+ channels, device nodes (camera/GPS/screen), canvas, voice wake; drew the "digital backdoor" security advisories under its old names | first-mover breadth | §41's inheritance rows; also the family's cautionary tale — §7's layers exist because of failures like this |
+| **ZeroClaw** | Rust rewrite, **3.4 MB binary**, 22+ providers incl. local | smallest full runtime | kin: PasClaw's single ~6 MB native binary is family-typical, unlike Node/Python mainstream harnesses |
+| **NanoClaw** | opinionated minimalism on Anthropic's Agent SDK: one LLM, one platform (WhatsApp/Telegram), SQLite — **container per agent** instead of permission checks | isolation-as-architecture | the family's answer to §8's worktree-isolation gap |
+| **IronClaw** | NEAR AI, zero-trust: **WASM sandbox per tool**, capability permissions, **TEE-backed credential vault** — the model never sees raw secrets | strongest security posture in the family | dominates PasClaw's secret gate; §17's "beyond Docker" exists in-family |
+| **Moltis** | local-first gateway platform; zero unsafe code, 2,300+ tests | code-quality-as-feature | closest in spirit to PasClaw's test discipline |
+| **TinyClaw** | the odd one out: **multi-agent teams** (coder/writer/reviewer chains, fan-out), file-based message queue, live terminal dashboard | agent-to-agent collaboration | the family's answer to §6's "agent-to-agent messaging ❌" |
+| **MimiClaw** | C on a $5 ESP32-S3, **no OS**: network I/O on core 0, agent loop on core 1, 0.5 W, Telegram over WiFi, LLM-scheduled cron | the smallest hardware floor in the family | kin to PasClaw's cron_tool; proof the claw pattern fits a microcontroller |
+| **Spacebot** | Rust for **teams**: five process types where the user-facing Channel **never executes tools**, typed graph memory (8 node/5 edge types), RRF hybrid search, 50+ concurrent users | privileged/quarantined separation, in-family | the family's fourth answered survey-gap: §23's dual-LLM shape, and a data point for the RBAC open question |
+| **NullClaw** | Zig, **678 KB static binary**, ~1 MB RAM on $5 ARM boards, GPIO/STM32 | smallest binary | beyond even picoclaw's floor |
+| **ZeptoClaw** | Rust, 4 MB, size-optimised | — | roster completeness |
+| **TrustClaw** (pass 16) | hardened OpenClaw deployment profile: owner-aware gating of privileged tools, **sandbox-required execution** for shell-like actions, dangerous-shell-pattern denial, bounded one-time approvals for trade-like actions; 24/7 assistant, 1000+ tools via scoped OAuth [S] | policy-layer guardrails as the product | a fifth answered survey gap: §18's guardrail/approval ladder, built as a deployment profile rather than a fork — one listicle calls it managed-cloud-only, the GitHub repo is self-hostable; the conflict is recorded |
+
+**Family infrastructure — ClawHub.** The registry the family standardised
+on: official OpenClaw skill store, "npm for AI agents", 3,286 community
+skills at first sourcing (13,729 registered before a security purge) and
+**64K by May 2026** — and it is no longer alone: Skills.sh lists 91K,
+SkillsDirectory 36K, LobeHub 288K [S]. Convex-backed vector search, open
+publishing with stars and download counts [S]. picoclaw and
+nanobot standardised on its slug API, and PasClaw ships a full client
+(`Skills.ClawHub.pas`, 522 lines) [P]. Its history is the family's skills
+story in miniature: open publishing → ClawHavoc (341–1,184 malicious skills) →
+scanning on publish (VirusTotal + Code Insight). The registry hardened;
+the clients — PasClaw included — still install without their own
+provenance checks.
+
+**Family infrastructure — Moltworker.** Cloudflare's adaptation runs
+OpenClaw inside a Cloudflare Sandbox container on Workers: R2 for
+persistent storage, AI Gateway for model proxying (bring-your-own-key),
+Browser Rendering for web automation, control UI behind Cloudflare Access
+[S]. Explicitly a proof of concept ("may break without notice"), but it is
+the family's managed-runtime moment: §20's pattern (runtime absorbed into
+a platform) arriving in-family, with edge isolation as the selling point.
+
+Sweep, pass 16 (August 2026 sources): **Kimi Claw** appears in alternative
+lists as a hosted claw — named only, one source, not yet counted.
+"Poco-Claw" appears once and is likely a garbling of picoclaw; not tabled.
+Adjacent-not-claws from the same sweep: Grip AI (Python, lean), memU
+(local knowledge graph memory), OpenAGI (proactive daemon, SMS/Telegram
+outreach), LittleBird (screen-watching always-on assistant) [S].
+
+MicroClaw failed sourcing a second time and is demoted per the retry rule:
+named in one source title, contents unsourceable. No longer counted in the
+roster.
+
+Adjacent but not a claw: **Agent Zero** — 18K stars, plugin hub with 100+
+community extensions, multi-agent hierarchy in per-agent Docker sandboxes,
+and a Skills framework that replaced its Instruments [S]. Its plugin hub is
+the marketplace row (§4) the claws mostly lack.
+
+Roster enrichments from the deep read [S]: ZeroClaw auto-detects **four
+sandbox backends** (Docker, Firejail, Bubblewrap, Landlock) — a self-hosted
+ladder for §17 without microVMs; IronClaw adds prompt-injection detection
+and pgvector memory; NanoClaw runs on $20/month subscription auth rather
+than API tokens; TinyClaw has zero LLM-SDK dependencies (CLI call + stdout
+parsing).
+
+### What the roster changes
+
+Three survey gaps previously marked against the *field* turn out to be
+solved inside the family: per-agent isolation (NanoClaw's containers),
+agent-to-agent messaging (TinyClaw's queue), and post-Docker sandboxing
+(IronClaw's WASM + TEE). Combined with pass 12's finding (messaging
+residency and deep research are family table stakes), the pattern is
+consistent: **PasClaw's most reachable upgrades are family imports, not
+field imports** — designs already proven at claw scale, in claw-sized
+codebases, by projects whose constraints match PasClaw's own.
+
+The security arc also completes: the family began with Clawdbot's
+everything-connected exposure warning and answered it with NanoClaw's
+containers and IronClaw's TEE — the same journey §7/§17/§22 sketch for
+PasClaw, with the destination already built by relatives.
+
+---
+
+## 43. The provenance ladder — the fix literature for the sharpest row
+
+Pass 15 left the survey's sharpest security row: a demonstrated
+supply-chain attack (ClawHavoc) one hop from PasClaw's own skills
+directory, and a client that installs with no checks. This pass sources
+what the mature package ecosystems actually do — the ladder a skill
+client would climb.
+
+| Rung | Who ships it [S] | What it requires of a client [S] |
+|---|---|---|
+| Publish-time registry signing | VS Code Marketplace signs every extension at publish; npm registry signs packages | client verifies the signature at install — VS Code does this **in the client, by default** |
+| File-level integrity manifest | VSIX `.signature.manifest`: size + SHA-256 digest of **every file** in the archive | hash each installed file against the manifest — catches post-publish tampering |
+| Keyless provenance attestation | npm `--provenance` and PyPI Trusted Publishers + PEP 740, both built on **Sigstore**: short-lived certs bound to OIDC identities (Fulcio), public transparency log (Rekor) | client checks the attestation against the transparency log: `npm audit signatures` "validates registry signatures against current and historical npm public keys and provenance attestations against the sigstore certificate transparency log" |
+| Publish-time behavioral scanning | VS Code Marketplace: multi-engine AV scan, **sandboxed dynamic analysis** (clean-room VM), secret scanning that blocks publish; ClawHub post-ClawHavoc: SHA-256 × VirusTotal + Gemini Code Insight | nothing — this rung is registry-side; it is where ClawHub stopped |
+| Build-integrity grammar | **SLSA v1.0** Build track: L1 = provenance document exists (builder identity, source repo, artifact digest); L2 = build platform signs it, consumers can validate; L3 = hardened, isolated builds | a shared vocabulary for how far up the ladder anyone is |
+
+Default adoption is the news, not the mechanism: PyPI attestations became
+the default for Trusted-Publishing via the PyPA GitHub action — roughly
+20,000 packages attesting provenance **with no changes by their authors**
+[S]. The lesson for skill registries is that the ladder only matters when
+the default publish path climbs it.
+
+**Where the skills world is on this ladder: rung four only.** The 2026
+audit literature (Unit 42's 80%-deviation crawl, Snyk ToxicSkills,
+SkillSieve/SkillProbe/PhantomSkill) measures the problem, and the
+proposals — keyless OIDC signing, transparency logs for skill publication,
+reproducible-build attestations — are exactly rungs one to three ported
+from npm/PyPI. **Proposed, not shipped**: no skill registry surveyed
+issues signed attestations, and no claw client verifies anything at
+install [S].
+
+**Where PasClaw sits [P]:** `Skills.ClawHub.pas` (522 lines) downloads and
+installs with no signature check, no manifest hash, no attestation lookup
+— rung zero, like every other claw client. The claw-sized fix is the
+`npm audit signatures` shape plus the VSIX manifest shape: verify a
+registry signature and per-file SHA-256 digests at install. Both halves
+are registry-dependent (ClawHub would have to publish digests and sign),
+but hashing the downloaded archive and pinning it in a lockfile-style
+record is client-side only — a rung PasClaw could climb alone.
+
+---
+
+## Where PasClaw leads
+
+Three things I did not find anywhere in the surveyed material:
+
+1. **Failure mining into the prompt.** `learn --write-scars` extracts
+   recurring tool failures; SCARS.md feeds them back. Others persist memory;
+   none observed learn from their own mistakes automatically.
+2. **A discipline mode.** `--mode improve` changes *method*, not capability —
+   measure, change one thing, re-measure.
+   (Demoted from this list, pass 7: skill distillation — Socratic-SWE does
+   trace-derived skills [S]. The SCARS failure-mining claim in item 1
+   still stands.)
+3. **Screen-reader accessibility in a native GUI.**
+
+## Gaps worth closing, in evidence order
+
+1. **Symbol/AST code index.** The field's densest cluster of work — Token
+   Savior, codebase-memory-mcp, semble, zerolang, dirac — all attacking
+   whole-file reads, reporting 77–98% token reductions [S]. PasClaw reads
+   whole files. Navigating a 25 k-line unit cost real turns during this
+   survey.
+2. **Browser automation.** Two MCP servers and several agents have it [S];
+   any web-facing task is out of reach.
+3. **IDE extension.** Where most users actually are.
+4. **Four-level tool risk annotations.** MCP already defines
+   `readOnlyHint` / `destructiveHint` / `idempotentHint` / `openWorldHint`
+   [S]; PasClaw has two categories. This is a small change with immediate
+   value for per-call approvals.
+5. **Per-call approvals.** Depends on 4.
+6. **Spend budgets enforced before the call.** Every token is already
+   counted; nothing refuses. LiteLLM's refuse-before-spend model is the
+   shape, and the counters exist [S].
+7. **Per-agent worktree isolation.** Structural attribution/conflict/rollback
+   for multi-agent work [S]; `spawn*` currently shares one workspace and has
+   all three problems.
+8. **Memory tiering with a retrieval token budget.** The pieces exist
+   (MEMORY.md, facts, vectors); the field ships them as a measured system
+   [S] and PasClaw has never measured a retrieval.
+9. **Trajectory evaluation.** PasClaw already emits OTel spans over model
+   calls and serially-dispatched tool calls — close to the structure
+   trajectory evaluators consume [P] — and never scores them. The data is
+   collected and thrown away; this is the cheapest eval capability
+   available to it. Corrected pass 17: this gap previously claimed spans
+   cover *every* tool call, repeating §16's error — parallel-dispatch
+   tools emit none, so a trajectory evaluator would silently score
+   partial traces as whole ones. Threading the traceparent through the
+   workers is a prerequisite, not a follow-up.
+10. **Published benchmark numbers.** Competitors lead with them; the harness
+   exists here but is unmerged — and per the exploitation finding above, it
+   needs oracles that verify more than their own exit code before any number
+   from it is worth publishing.
+11. **Secret scrubbing on the tool-output path** (new, pass 17). Nothing
+   removes a credential from an allowed file read or a shell result before
+   it enters model context — and from there it reaches the provider, the
+   session store, and the transcript. The existing pieces are a path
+   denylist on one browse route and one password redactor for `db_info`.
+   This gap was invisible for sixteen passes because §7 marked it ✅.
+12. **MCP server-side authorization** (new, pass 17). The client half is
+   done properly (OAuth 2.1 + PKCE, §22); the inbound gateway is still a
+   single shared bearer token, so PasClaw-as-MCP-server cannot express
+   per-caller identity or scope. Splitting the old conflated row made the
+   asymmetry visible: PasClaw is a better OAuth citizen when it is the
+   client than when it is the server.
+
+## The gap nobody has
+
+**No surveyed system reports what its verification did not cover.**
+
+Every tool answers *did this succeed*. None answers *what did I not look at*.
+The field's own literature says agents "mark a task complete without
+verifying the outcome" [S] and blames 65% of enterprise failures on harness
+defects [S] — but the proposed remedies are all more verification, never
+honest reporting of verification's *scope*.
+
+Four bugs found while building toward this document had exactly that shape:
+a linter reporting green on a file it never opened; `make all` reporting
+success without rebuilding; a shell command succeeding in the wrong
+directory; and an error message confidently recommending a fix that could
+not work.
+
+It is also the cheapest item here, because it needs no model change:
+`0 findings in 1 file; 3 files not examined` is a one-line diff anywhere a
+tool already knows its own scope.
+
+---
+
+## Method & limits
+
+- One live web search, one deep fetch of a curated catalogue, ten READMEs.
+- **Pass 16 integrity note.** Nineteen warning-sign glyphs in earlier
+  revisions of this document read `warning-sign + ?` — silent transport
+  corruption by the harness that wrote them: fpjson (FPC 3.2.2)
+  truncates adjacent `\uXXXX` escapes through a 4-byte buffer, so every
+  relay `write_file` whose payload was ASCII-safe JSON lost the second
+  character of each adjacent non-ASCII pair. The survey's own verify
+  step caught it (staged bytes vs written bytes), the root cause was
+  profiled to the scanner line, PasClaw now pre-decodes escapes before
+  fpjson parses, and this revision was re-written byte-exact through the
+  fixed binary. A document about agent verification gaps was itself
+  quietly corrupted by the tool under test for four passes — there is no
+  cleaner argument for §43's install-time verification rung or for "the
+  gap nobody has" than that.
+- **[K]** rows are unverified recall — leads, not findings.
+- **[S]** rows reflect what a source *claims*; no capability was tested.
+- **[P] is the weakest evidence class in this document, not the
+  strongest — pass 17.** An external reviewer checked four `[P]` rows
+  against the source tree and all four were wrong: MCP OAuth marked ❌
+  when `MCP.OAuth.pas` implements the full PKCE client (the row had
+  checked only the inbound gateway); RRF called "ad hoc" when `FuseRRF`
+  is textbook RRF at `k=60`; tracing marked ✅ "every step" when
+  `execute_tool` spans skip the parallel path; and secret redaction
+  marked ✅ on the strength of a *path denylist for a browse endpoint*
+  that redacts nothing. The pattern is one-directional in the way that
+  matters: each error came from checking a single call-site and
+  generalising. `[S]` rows at least cite something a reader can go
+  re-read; a `[P]` row rests entirely on how hard its author looked,
+  and nothing in the notation records that. **124 rows carry `[P]`.
+  Four have now been audited by someone other than their author. The
+  other 120 have not** — which is precisely the "tools report what they
+  covered, never what they did not" gap this survey names as the field's
+  blind spot, found here in the survey's own notation.
+- Reported token-reduction figures (77%, 98%, 60–95%) are vendor/author
+  claims carried through from the source, not measurements.
+
+## Sources
+
+- [Awesome Harness Engineering](https://github.com/ai-boost/awesome-harness-engineering)
+- [AI Agent Evaluation (2026): Metrics, Frameworks, and Production Failures](https://www.morphllm.com/ai-agent-evaluation)
+- [AI Agent Benchmarks 2026 — SWE-bench, WebArena, AgentBench, Terminal-Bench, OSWorld, Tau-Bench](https://benchmarkingagents.com/agent-benchmarks/)
+- [AJ-Bench: Benchmarking Agent-as-a-Judge](https://arxiv.org/pdf/2604.18240)
+- [Top AI Coding Agents and Development Platforms in 2026](https://www.marktechpost.com/2026/06/10/ai-coding-agents-development-platforms-2026/)
+- [Mem0 vs Letta (MemGPT): AI Agent Memory Compared (2026)](https://vectorize.io/articles/mem0-vs-letta)
+- [Mem0 vs Zep vs Letta: AI Agent Memory in 2026](https://datapace.ai/blog/ai-agent-memory-tools-2026)
+- [Copilot Coding Agent vs Codex vs Cursor Background Agents: 2026 Workflow Map](https://ralphable.com/blog/copilot-coding-agent-vs-codex-vs-cursor-background-agents-2026)
+- [Agent Observability: LangSmith, Langfuse, Arize 2026](https://www.digitalapplied.com/blog/agent-observability-platforms-langsmith-langfuse-arize-2026)
+- [How to sandbox AI agents in 2026: MicroVMs, gVisor & isolation strategies](https://northflank.com/blog/how-to-sandbox-ai-agents)
+- [Guardrails AI vs NeMo Guardrails: Complete Comparison 2026](https://is4.ai/blog/our-blog-1/guardrails-ai-vs-nemo-guardrails-comparison-2026-352)
+- [LiteLLM Budget Routing](https://docs.litellm.ai/docs/proxy/provider_budget_routing)
+- [OpenRouter: How Model Routing Works](https://openrouter.ai/blog/insights/model-routing/)
+- [Computer Use Agents 2026: Claude vs OpenAI vs Gemini](https://www.digitalapplied.com/blog/computer-use-agents-2026-claude-openai-gemini-matrix)
+- [Cloudflare Agents runtime docs](https://developers.cloudflare.com/agents/)
+- [A2A Protocol Surpasses 150 Organizations (Linux Foundation)](https://www.linuxfoundation.org/press/a2a-protocol-surpasses-150-organizations-lands-in-major-cloud-platforms-and-sees-enterprise-production-use-in-first-year)
+- [Bedrock AgentCore A2A support](https://aws.amazon.com/blogs/machine-learning/introducing-agent-to-agent-protocol-support-in-amazon-bedrock-agentcore-runtime/)
+- [Agent-to-agent OAuth guide (Stytch)](https://stytch.com/blog/agent-to-agent-oauth-guide/)
+- [IETF draft: OAuth for AI agents on behalf of users](https://www.ietf.org/archive/id/draft-oauth-ai-agents-on-behalf-of-user-02.txt)
+- [CaMeL: mitigating prompt injection (Simon Willison)](https://simonwillison.net/2025/Apr/11/camel/)
+- [Dual LLM & Capability Security (CaMeL)](https://agentic-design.ai/patterns/security-privacy/dual-llm-capability-security)
+- [Morph Fast Apply](https://www.morphllm.com/fast-apply-model)
+- [LangGraph persistence & time travel](https://docs.langchain.com/oss/python/langgraph/persistence)
+- [LiveKit: turn detection and interruption handling](https://livekit.com/blog/turn-detection-and-interruption-handling)
+- [Hybrid Search: BM25, Vector & Reranking Reference 2026](https://www.digitalapplied.com/blog/hybrid-search-bm25-vector-reranking-reference-2026)
+- [RAG in Production 2026: GraphRAG, Hybrid Retrieval, and Evals](https://ailearningguides.com/rag-production-patterns-2026/)
+- [Serena: LSP-backed coding agent toolkit](https://github.com/oraios/serena)
+- [tau2-bench: dual-control agent/user evaluation](https://github.com/sierra-research/tau2-bench)
+- [Lost in Simulation: LLM-simulated users are unreliable proxies](https://arxiv.org/pdf/2601.17087)
+- [SkyRL-v0: long-horizon agent RL](https://novasky-ai.github.io/posts/skyrl-v0/)
+- [Socratic-SWE: self-evolving agents via trace-derived skills](https://arxiv.org/pdf/2606.07412)
+- [Durable Execution: harnessing AI agents in production (Inngest)](https://www.inngest.com/blog/durable-execution-key-to-harnessing-ai-agents)
+- [Durable AI agents 2026: Temporal, Inngest, DBOS, Restate](https://www.reactify-solutions.com/articles/durable-ai-agents-2026)
+- [Top 5 AI Gateways with Semantic Caching](https://www.getmaxim.ai/articles/top-5-ai-gateways-with-semantic-caching-to-cut-llm-api-calls/)
+- [OpenAI Flex processing](https://developers.openai.com/api/docs/guides/flex-processing)
+- [MCP Apps: bringing UI capabilities to MCP clients](https://blog.modelcontextprotocol.io/posts/2026-01-26-mcp-apps/)
+- [The State of Generative UI in 2026 (OpenUI)](https://www.openui.com/blog/state-of-generative-ui-report)
+- [Claude Tag: Anthropic's Slack async agent](https://kie.ai/blog/claude-tag-anthropic-slack-async-agent)
+- [Use Claude in Slack](https://slack.com/help/articles/53532192117267-Use-Claude-in-Slack)
+- [llms.txt explained: spec, adoption, honest guide](https://codersera.com/blog/llms-txt-complete-guide-2026/)
+- [Jina Reader vs Firecrawl for web-LLM extraction](https://blog.apify.com/jina-ai-vs-firecrawl/)
+- [Glean connector framework](https://docs.glean.com/connectors/connectors-power-glean)
+- [Reasoning Effort: Cost vs Quality Benchmarks 2026](https://www.digitalapplied.com/blog/reasoning-effort-cost-vs-quality-benchmarks-2026)
+- [Reasoning-Effort Budgeting (thinking tokens as a line item)](https://tianpan.co/blog/2026-04-27-reasoning-effort-budgeting-thinking-token-line-item)
+- [Agentic payments protocols compared: MPP, ACP, AP2, x402](https://www.crossmint.com/learn/agentic-payments-protocols-compared)
+- [x402 standards body under Linux Foundation](https://www.coindesk.com/business/2026/07/16/ai-payments-have-a-new-open-standards-body-its-aim-is-to-reinvent-the-internet)
+- [Agent Skills specification](https://github.com/agentskills/agentskills)
+- [Under the Hood of SKILL.md: supply-chain attacks](https://arxiv.org/pdf/2605.11418)
+- [OpenAI: new tools and features in the Responses API](https://openai.com/index/new-tools-and-features-in-the-responses-api/)
+- [OpenAI: background mode](https://developers.openai.com/api/docs/guides/background)
+- [OpenAI: conversation state](https://developers.openai.com/api/docs/guides/conversation-state)
+- [Anthropic: context editing](https://platform.claude.com/docs/en/build-with-claude/context-editing)
+- [Claude memory tool guide](https://www.leoniemonigatti.com/blog/claude-memory-tool.html)
+- [PicoClaw: ultra-lightweight AI assistant on 10 MB RAM](https://www.cnx-software.com/2026/02/10/picoclaw-ultra-lightweight-personal-ai-assistant-run-on-just-10mb-of-ram/)
+- [OpenClaw vs Nanobot vs PicoClaw: technical comparison](https://medium.com/@somanathtv/openclaw-vs-nanobot-vs-picoclaw-a-brief-technical-comparison-for-ai-agent-builders-9d19089a414b)
+- [What Is Hermes Agent? Nous Research's learning-loop agent](https://kie.ai/blog/what-is-hermes-agent)
+- [Odysseus: PewDiePie's self-hosted AI workspace](https://www.mindstudio.ai/blog/what-is-odysseus-pewdiepie-open-source-ai-workspace)
+- [The Claw ecosystem: 12 personal agents, dissected](https://michaellivs.com/blog/personal-ai-agents-compared/)
+- [OpenClaw alternatives: NanoClaw, ZeroClaw, Moltis compared](https://www.aimagicx.com/blog/openclaw-alternatives-comparison-2026)
+- [Rust agent runtime showdown: MicroClaw vs ZeroClaw vs Moltis](https://medium.com/@everettjf/rust-agent-runtime-showdown-microclaw-vs-zeroclaw-vs-moltis-df1ecb85c676)
+- [Resecurity: Clawdbot/Moltbot exposure warning](https://www.resecurity.com/blog/article/clawdbot-moltbot-the-autonomous-ai-butler-that-could-expose-your-entire-digital-life)
+- [Clawdbot → Moltbot → OpenClaw: why the name changed twice](https://lumadock.com/blog/clawdbot-moltbot-openclaw-rebrand)
+- [Agent Pi: the minimal coding agent powering OpenClaw](https://shivamagarwal7.medium.com/agentic-ai-pi-anatomy-of-a-minimal-coding-agent-powering-openclaw-5ecd4dd6b440)
+- [Agent Zero review: plugin hub, Docker multi-agent](https://apidog.com/blog/agent-zero-ai-framework-review/)
+- [ClawHub: official skill registry for OpenClaw](https://github.com/openclaw/clawhub)
+- [ClawHub skills guide (3,286+ skills, ClawHavoc incident)](https://help.apiyi.com/en/clawhub-ai-openclaw-skills-registry-guide-en.html)
+- [npm: generating provenance statements (Sigstore, `npm audit signatures`)](https://docs.npmjs.com/generating-provenance-statements/)
+- [GitHub blog: introducing npm package provenance](https://github.blog/security/supply-chain-security/introducing-npm-package-provenance/)
+- [PEP 740 — index support for digital attestations](https://peps.python.org/pep-0740/)
+- [PyPI now supports digital attestations (PyPI blog)](https://blog.pypi.org/posts/2024-11-14-pypi-now-supports-digital-attestations/)
+- [Trail of Bits: attestations, a new generation of signatures on PyPI](https://blog.trailofbits.com/2024/11/14/attestations-a-new-generation-of-signatures-on-pypi/)
+- [VS Code extension runtime security (signing, malware scan, sandboxed analysis)](https://code.visualstudio.com/docs/configure/extensions/extension-runtime-security)
+- [SLSA v1.0 levels](https://slsa.dev/spec/v1.0/about)
+- [Unit 42: Trust No Skill — integrity verification for AI agent supply chains](https://unit42.paloaltonetworks.com/ai-agent-supply-chain-risks/)
+- [arXiv 2605.11418: Under the Hood of SKILL.md — semantic supply-chain attacks](https://arxiv.org/abs/2605.11418)
+- [CSA: SKILL.md agent context poisoning briefing](https://labs.cloudsecurityalliance.org/research/briefing-csa-research-note-skill-md-agent-context-poisoning/)
+- [TrustClaw (GitHub)](https://github.com/TrustClaw/TrustClaw)
+- [TrustedClaw: owner-governed guardrails for OpenClaw (Medium)](https://medium.com/@gwrx2005/trustedclaw-owner-governed-guardrails-for-secure-agentic-automation-in-openclaw-646ea1508db0)
+- [cloudflare/moltworker (GitHub)](https://github.com/cloudflare/moltworker)
+- [Composio: OpenClaw alternatives 2026](https://composio.dev/content/openclaw-alternatives)
+- [Relace: A Year of Fast Apply](https://relace.ai/blog/relace-apply-3)
+- [AI Agent Sandboxing in 2026: Docker, E2B, Firecracker, gVisor, Modal & Daytona Compared](https://amux.io/guides/ai-agent-sandboxing/)
+- [Cursor vs Claude Code vs Windsurf (Now Devin Desktop) 2026](https://www.shareuhack.com/en/posts/cursor-vs-claude-code-vs-windsurf-2026)
+- [Harness Engineering: Making AI Coding Agents Work in 2026](https://www.faros.ai/blog/harness-engineering)
+- [Best AI Coding Agents in 2026](https://www.firecrawl.dev/blog/best-ai-coding-agents)
+- [All Agent Harnesses: The Live Comparison](https://htek.dev/articles/all-agent-harnesses-live-comparison)
+- [Top 10 AI Agent Harnesses — Open vs Closed](https://explainx.ai/blog/top-10-open-closed-source-agent-harnesses-2026)
+- Project READMEs: OpenHands, Aider, Cline, Goose, Continue, SWE-agent,
+  Codex CLI, LangGraph, CrewAI, modelcontextprotocol/servers
