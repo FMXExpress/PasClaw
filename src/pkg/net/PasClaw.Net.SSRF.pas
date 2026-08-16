@@ -173,10 +173,253 @@ begin
   Result := False;
 end;
 
+type
+  TIPv6Bytes = array[0..15] of Byte;
+
+function ParseIPv6(const S: string; out B: TIPv6Bytes): Boolean;
+(* Compact RFC 4291 literal parser: hex groups, one optional "::"
+   run-compression, and the trailing dotted-quad form used by
+   IPv4-mapped/compatible addresses (::ffff:169.254.169.254).
+
+   Written here rather than borrowed from Indy because the guard must
+   run BEFORE any socket call -- resolving through the stack to find
+   out whether an address is local is exactly the round trip an SSRF
+   guard exists to avoid. A zone id (fe80::1%eth0) is stripped: the
+   scope does not change which range the address is in. *)
+var
+  Src, Head, Tail, Grp: string;
+  DblPos, i, n, Code: Integer;
+  HeadB, TailB: array of Byte;
+  V4: UInt32;
+
+  function SplitGroups(const Text: string; var Outp: array of Byte;
+                       out Count: Integer): Boolean;
+  var
+    Start, k: Integer;
+    Piece: string;
+  begin
+    Result := True;
+    Count  := 0;
+    if Text = '' then Exit;
+    Start := 1;
+    for k := 1 to Length(Text) + 1 do
+      if (k > Length(Text)) or (Text[k] = ':') then
+      begin
+        Piece := Copy(Text, Start, k - Start);
+        Start := k + 1;
+        if Piece = '' then Exit(False);
+        { trailing dotted-quad tail, e.g. ::ffff:1.2.3.4 }
+        if Pos('.', Piece) > 0 then
+        begin
+          if not ParseIPv4(Piece, V4) then Exit(False);
+          if Count + 4 > Length(Outp) then Exit(False);
+          Outp[Count]     := Byte(V4 shr 24);
+          Outp[Count + 1] := Byte(V4 shr 16);
+          Outp[Count + 2] := Byte(V4 shr 8);
+          Outp[Count + 3] := Byte(V4);
+          Inc(Count, 4);
+          Continue;
+        end;
+        if Length(Piece) > 4 then Exit(False);
+        Val(  '$' + Piece, n, Code);
+        if Code <> 0 then Exit(False);
+        if (n < 0) or (n > $FFFF) then Exit(False);
+        if Count + 2 > Length(Outp) then Exit(False);
+        Outp[Count]     := Byte(n shr 8);
+        Outp[Count + 1] := Byte(n);
+        Inc(Count, 2);
+      end;
+  end;
+
+var
+  HeadN, TailN: Integer;
+begin
+  Result := False;
+  FillChar(B, SizeOf(B), 0);
+  Src := Trim(S);
+  i := Pos('%', Src);
+  if i > 0 then Src := Copy(Src, 1, i - 1);
+  if Src = '' then Exit;
+  if Pos(':', Src) = 0 then Exit;   { not an IPv6 literal at all }
+
+  SetLength(HeadB, 16);
+  SetLength(TailB, 16);
+  DblPos := Pos('::', Src);
+  if DblPos > 0 then
+  begin
+    Head := Copy(Src, 1, DblPos - 1);
+    Tail := Copy(Src, DblPos + 2, MaxInt);
+    if not SplitGroups(Head, HeadB, HeadN) then Exit;
+    if not SplitGroups(Tail, TailB, TailN) then Exit;
+    if HeadN + TailN > 16 then Exit;
+    for i := 0 to HeadN - 1 do B[i] := HeadB[i];
+    for i := 0 to TailN - 1 do B[16 - TailN + i] := TailB[i];
+  end
+  else
+  begin
+    if not SplitGroups(Src, HeadB, HeadN) then Exit;
+    if HeadN <> 16 then Exit;
+    for i := 0 to 15 do B[i] := HeadB[i];
+  end;
+  Result := True;
+end;
+
+function IPv6Blocked(const B: TIPv6Bytes; out Reason: string): Boolean;
+(* Ranges that matter for SSRF. The IPv4-mapped and NAT64 cases are the
+   important ones: they carry a v4 address inside a v6 literal, so the
+   v4 blocklist has to be re-applied to the embedded address or
+   ::ffff:169.254.169.254 walks straight past a guard that only ever
+   looked at dotted quads. *)
+var
+  i: Integer;
+  AllZero: Boolean;
+  V4: UInt32;
+  V4Reason: string;
+
+  function MappedV4: Boolean;
+  var
+    k: Integer;
+  begin
+    { ::ffff:a.b.c.d -- 80 zero bits, then 0xFFFF }
+    Result := False;
+    for k := 0 to 9 do if B[k] <> 0 then Exit;
+    if (B[10] <> $FF) or (B[11] <> $FF) then Exit;
+    Result := True;
+  end;
+
+  function NAT64: Boolean;
+  var
+    k: Integer;
+  begin
+    { 64:ff9b::/96 -- the well-known prefix, and the low 32 bits are the
+      embedded v4. All 96 bits must match: comparing only the leading 32
+      swept in 64:ff9b:1::/48, the SEPARATE local-use translation range,
+      whose low bytes are not an IPv4 address at all -- a legitimate
+      translated destination there was judged by unrelated bytes (often
+      as 0.0.0.0) and refused. }
+    Result := False;
+    if (B[0] <> $00) or (B[1] <> $64) or (B[2] <> $FF) or (B[3] <> $9B) then Exit;
+    for k := 4 to 11 do
+      if B[k] <> 0 then Exit;
+    Result := True;
+  end;
+
+begin
+  Reason := '';
+  Result := True;
+
+  AllZero := True;
+  for i := 0 to 15 do if B[i] <> 0 then begin AllZero := False; Break; end;
+  if AllZero then
+  begin
+    Reason := 'IPv6 unspecified (::)';
+    Exit;
+  end;
+
+  AllZero := True;
+  for i := 0 to 14 do if B[i] <> 0 then begin AllZero := False; Break; end;
+  if AllZero and (B[15] = 1) then
+  begin
+    Reason := 'IPv6 loopback (::1)';
+    Exit;
+  end;
+
+  if MappedV4 or NAT64 then
+  begin
+    V4 := (UInt32(B[12]) shl 24) or (UInt32(B[13]) shl 16) or
+          (UInt32(B[14]) shl 8) or UInt32(B[15]);
+    if IPv4Blocked(V4, V4Reason) then
+    begin
+      Reason := 'IPv4-in-IPv6 literal -> ' + V4Reason;
+      Exit;
+    end;
+    { A mapped PUBLIC v4 is still a v4 request wearing a v6 costume;
+      allow it, same as the bare dotted quad would be. }
+    Exit(False);
+  end;
+
+  if (B[0] = $FE) and ((B[1] and $C0) = $80) then
+  begin
+    Reason := 'IPv6 link-local (fe80::/10)';
+    Exit;
+  end;
+  if (B[0] and $FE) = $FC then
+  begin
+    Reason := 'IPv6 unique-local (fc00::/7)';
+    Exit;
+  end;
+
+  Result := False;
+end;
+
+function NumericHostNotDottedQuad(const Host: string; out Reason: string): Boolean;
+(* Integer, octal and hex spellings of an IPv4 address -- 2852039166,
+   0xA9FEA9FE, 0251.0376.0251.0376, 127.1, and MIXED-radix forms such
+   as 127.0x0.0.1 -- are accepted by inet_addr and by most resolvers,
+   and are a standard way to smuggle a blocked address past a guard
+   that only understands dotted quads.
+
+   Every label is classified independently, because the radix can vary
+   from label to label: an earlier version tested only whether the
+   WHOLE host began with "0x" and whether every label was decimal, so
+   127.0x0.0.1 was judged non-numeric and allowed straight through.
+
+   Rejecting an all-numeric host cannot break a real hostname: a DNS
+   name's rightmost label may not be all-numeric (RFC 1123), so any
+   host whose labels are ALL numeric in some radix is either a valid
+   dotted quad -- handled before this is reached -- or a smuggled
+   spelling. Conversely a hex-looking label only counts when its whole
+   body is hex digits, so ordinary names that merely begin with those
+   characters (0xample.com, 0xdead.com) are left alone. *)
+var
+  i, Start: Integer;
+  Piece: string;
+
+  function IsNumericLabel(const L: string): Boolean;
+  var
+    k: Integer;
+    Body: string;
+  begin
+    Result := False;
+    if L = '' then Exit;
+    if (Length(L) > 2) and (L[1] = '0') and ((L[2] = 'x') or (L[2] = 'X')) then
+    begin
+      Body := Copy(L, 3, MaxInt);
+      for k := 1 to Length(Body) do
+        if not (((Body[k] >= '0') and (Body[k] <= '9')) or
+                ((Body[k] >= 'a') and (Body[k] <= 'f')) or
+                ((Body[k] >= 'A') and (Body[k] <= 'F'))) then Exit;
+      Exit(True);
+    end;
+    for k := 1 to Length(L) do
+      if (L[k] < '0') or (L[k] > '9') then Exit;
+    Result := True;
+  end;
+
+begin
+  Result := False;
+  Reason := '';
+  if Host = '' then Exit;
+
+  Start := 1;
+  for i := 1 to Length(Host) + 1 do
+    if (i > Length(Host)) or (Host[i] = '.') then
+    begin
+      Piece := Copy(Host, Start, i - Start);
+      Start := i + 1;
+      if not IsNumericLabel(Piece) then Exit;   { a real hostname }
+    end;
+
+  Reason := 'numeric host "' + Host + '" is not a valid dotted-quad ' +
+            '(integer / octal / hex IPv4 spelling)';
+  Result := True;
+end;
+
 function HostIsLocal(const Host: string; out Reason: string): Boolean;
 var
   IP:  UInt32;
   Resolved: string;
+  V6:  TIPv6Bytes;
 begin
   Reason := '';
   if Trim(Host) = '' then
@@ -202,6 +445,20 @@ begin
   { Already-numeric IPv4? No DNS lookup needed. }
   if ParseIPv4(Host, IP) then
     Exit(IPv4Blocked(IP, Reason));
+
+  { IPv6 literal (ExtractHost has already unwrapped the brackets). }
+  if Pos(':', Host) > 0 then
+  begin
+    if ParseIPv6(Host, V6) then
+      Exit(IPv6Blocked(V6, Reason));
+    { Looks like v6 but does not parse -- refuse rather than hand a
+      malformed literal to the resolver and hope. }
+    Reason := 'unparseable IPv6 literal "' + Host + '"';
+    Exit(True);
+  end;
+
+  { Integer / hex / octal IPv4 spellings. }
+  if NumericHostNotDottedQuad(Host, Reason) then Exit(True);
 
   { Otherwise resolve via DNS. Failures (no DNS server, NXDOMAIN,
     timeout) return False -- the request itself will fail at
