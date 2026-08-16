@@ -20,6 +20,65 @@ three clouds GA is past the wait-and-see line for any harness that wants
 its agents addressable from outside — an Agent Card over the existing
 gateway would be the minimal entry."*
 
+## Before any of that: is this just an exploit vector?
+
+Largely yes, as first drafted. Three specific things were wrong with the
+phasing below, each verified in the source rather than assumed:
+
+**1. It adds remote invocation with no write gate.** `message/send` means
+a remote party causes this agent to run a tool loop with whatever tools
+are registered — `shell_exec`, `write_file`, `web_fetch`. That is remote
+code execution by design. The comparable surface already ships a gate:
+MCP-as-server defaults to `MCPAllowWrite := False` and needs an explicit
+`--mcp-allow-write` to expose mutating tools. The A2A plan specified no
+equivalent. It must mirror that gate, defaulting closed.
+
+**2. It turns prompt injection from fetched content into direct input.**
+`PasClaw.Promptware` annotates three chokepoints — tool output, recalled
+memory, stored skill descriptions. **Inbound user messages are not one of
+them**, because until now "the user" was the operator. An A2A message is
+a stranger's text arriving in the *user role*, which is the most trusted
+non-system position in the conversation, with no annotation at all.
+Untrusted-peer input has to become a fourth chokepoint before the
+endpoint exists, not after.
+
+**3. The `contextId` → session mapping I called "highest-leverage" is a
+hijack.** `ReqSessionId` is literally
+`Trim(RawHeaders['X-PasClaw-Session'])` — caller-chosen, unvalidated,
+with no ownership check. That is acceptable when the only caller is the
+local operator. Handing the same mechanism to arbitrary remote agents
+lets a caller name any session and inherit its history, checkpoints and
+persistence. The mapping must namespace per authenticated peer
+(`a2a:<peer-id>:<their-context>`), never accept a raw session id from the
+wire.
+
+And the backdrop: the gateway ships with **bearer auth off unless a token
+is configured** (`gasOpen` — "every route is reachable by any caller").
+An Agent Card on such an instance is a public advertisement of an
+unauthenticated agent, complete with a skills list. Discovery is not
+harmless when the thing being discovered is open.
+
+### What that changes
+
+- **The whole A2A surface is off by default**, behind explicit config —
+  not merely undocumented, but absent from routing until enabled.
+- **Identity moves from phase 4 to phase 0.** The original ordering
+  shipped remote invocation first and authentication last, which is
+  backwards. §22 records that PasClaw has no agent identity and one
+  shared inbound bearer; that is the gating work, and A2A v1.0's signed
+  Agent Cards need it anyway.
+- **Phase 1 becomes card-only and opt-in**, which is still useful: a card
+  cannot be invoked.
+- If the answer to "who is the counterparty?" stays *nobody concrete*,
+  the correct outcome is to ship phases 0–1 and stop. An addressable
+  agent with no caller is pure attack surface.
+
+The honest summary: A2A is worth planning for and cheap to transport,
+but it is the first feature in this codebase that would let a stranger
+start a tool loop. Every other remote surface either reads (`/v1/fs`,
+gated) or exposes read-only tools by default (MCP). This one executes,
+and the plan below is only safe with the reordering above applied.
+
 ## The argument for doing A2A first, and mostly only A2A
 
 Three reasons, in descending strength:
@@ -41,7 +100,7 @@ Three reasons, in descending strength:
 AP2 is explicitly layered on A2A, so A2A is also the prerequisite for the
 commerce row if that is ever wanted.
 
-## Phase 1 — Agent Card (discovery only, no execution)
+## Phase 1 — Agent Card (discovery only, no execution, opt-in)
 
 The smallest thing that makes PasClaw visible to an A2A client.
 
@@ -54,6 +113,9 @@ The smallest thing that makes PasClaw visible to an A2A client.
   hand-maintained list — PasClaw already loads SKILL.md manifests, and a
   card that drifts from what the agent actually does is worse than no card.
 - Auth advertised as the bearer the gateway already enforces.
+- **Served only when A2A is explicitly enabled.** On a `gasOpen` instance
+  the card would otherwise advertise an unauthenticated agent and its
+  skill list to anyone who can reach the port.
 
 Ship-alone value: A2A directories and clients can *find* a PasClaw
 instance and know what it claims to do. Zero execution risk, because
@@ -69,11 +131,19 @@ first:
 - `message/send` → run one agent turn and return the result. This maps
   almost exactly onto what `HandleChat` already does: parse a message,
   build a `TToolLoopConfig`, `RunCheckpointedLoop`, return content.
-- Map A2A's `contextId` onto PasClaw's **session id**, so an A2A caller
-  gets the same continuity, checkpointing, steering and persistence
-  everything else gets. This is the single highest-leverage mapping in
-  the whole plan — get it right and A2A inherits the entire session
-  feature set for free.
+- Map A2A's `contextId` onto a session id **namespaced by authenticated
+  peer** — `a2a:<peer-id>:<their-context>` — so an A2A caller gets the
+  continuity, checkpointing, steering and persistence everything else
+  gets WITHOUT being able to name an existing session. Never pass a
+  caller-supplied string through as a session id: `ReqSessionId` is an
+  unvalidated header today, which is safe only because the caller is
+  the local operator.
+- **Mutating tools gated, closed by default**, mirroring
+  `--mcp-allow-write`. A read-only A2A agent is a useful agent; a
+  stranger-invokable `shell_exec` is not a default anyone should get.
+- **Inbound peer messages annotated as untrusted** — the fourth
+  promptware chokepoint. Today the three chokepoints assume "user" means
+  the operator.
 - Errors returned as JSON-RPC error objects, reusing the shapes already
   emitted at `Gateway.Server.pas:1465`.
 
@@ -88,7 +158,7 @@ first:
 - Long-running turns map to A2A's task lifecycle
   (`submitted → working → completed/failed`).
 
-## Phase 4 — identity, and only then commerce
+## Phase 4 — signed cards, and only then commerce (identity itself is phase 0)
 
 A2A v1.0's headline is **signed** Agent Cards. Signing is not meaningful
 while §22 stands: PasClaw has *"no agent identity at all"* and the inbound
@@ -101,7 +171,8 @@ gateway is a single shared bearer token. So:
   further from a self-hosted personal agent's core value than anything in
   phases 1–3.
 
-Recommendation: stop after phase 3 unless there is a concrete counterparty.
+Recommendation: stop after phase 1 unless there is a concrete
+counterparty, and do not build phase 2 at all without phase 0.
 
 ## Explicitly not doing
 
@@ -119,10 +190,14 @@ Recommendation: stop after phase 3 unless there is a concrete counterparty.
 
 | Phase | Deliverable | Depends on |
 |---|---|---|
-| 1 | `/.well-known/agent-card.json` from the skills registry | — |
-| 2 | `message/send` over JSON-RPC, `contextId` → session | 1 |
+| **0** | **agent identity + per-peer auth (§22); A2A off by default** | — |
+| 1 | `/.well-known/agent-card.json` from the skills registry, opt-in | 0 |
+| 2 | `message/send`; `contextId` namespaced per peer, never raw; **write gate mirroring `--mcp-allow-write`, closed by default**; inbound messages annotated as untrusted (promptware chokepoint 4) | 0, 1 |
 | 3 | `message/stream`, `tasks/get`, `tasks/cancel` | 2 |
-| 4 | agent identity → signed cards → (maybe) AP2/x402 | §22 work |
+| 4 | signed cards → (maybe) AP2/x402 | 0 |
+
+Phase 0 is not preparation for the feature; it is the feature's
+precondition. Phases 2+ should not merge while it is outstanding.
 
 ## How we will know it worked
 
