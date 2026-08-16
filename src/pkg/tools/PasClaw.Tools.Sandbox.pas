@@ -369,7 +369,7 @@ const
       additional safety -- the workspace boundary is what they were
       ever meant to protect, so they only matter when that boundary
       exists. *)
-  ForbiddenTokens: array[0..26] of string = (
+  ForbiddenTokens: array[0..28] of string = (
     'sudo',
     'su',
     'rm',          { all rm -- too easy to escape -rf detection }
@@ -400,6 +400,11 @@ const
     'attrib',
     'takeown',
     'icacls',
+    { cacls and reg are named as covered in this unit's header comment
+      but were missing from the array -- a control claiming coverage it
+      did not have. Verified before adding: reg.exe was allowed. }
+    'cacls',
+    'reg',
     'runas'
   );
 
@@ -584,11 +589,102 @@ begin
   if Cur <> '' then Result.Add(StripQuotes(Cur));
 end;
 
+type
+  TDenyForms = array[0..7] of string;
+
+procedure DenyCompareForms(const Token: string; out Forms: TDenyForms;
+                           out N: Integer);
+(* Every spelling /bin/sh will collapse to the same command word.
+
+   Derived HERE and not in TokenizeCommand: the token list is consumed
+   POSITIONALLY by EffectiveSinkBasename (Toks[0] is the command word),
+   so injecting derived tokens there silently broke the Class D
+   `/usr/bin/env bash` guard. Keep the tokenizer pure; widen only the
+   comparison.
+
+   A previous version derived three fixed forms and missed two whole
+   classes, both verified allowed before this rewrite:
+
+     reg.exe add HKLM     suffix stripping ran only on a PATH basename,
+     cacls.exe c:\x        so the bare Windows spelling -- the normal
+     rm.exe -rf x         one -- kept its .exe and matched nothing.
+
+     /bin/r\m -rf x       the basename scan treated the ESCAPE
+                          backslash as a separator and produced "m",
+                          while the unescaped form kept its path; the
+                          two bypass classes combined cleanly.
+
+   So the forms are now built as a set, and each is also offered
+   without a Windows executable suffix:
+
+     the token itself                 reg.exe        -> reg
+     backslash-removed                r\m            -> rm
+     basename, / and \ as separators  C:\..\reg.exe -> reg.exe -> reg
+     basename of the unescaped form   /bin/r\m      -> /bin/rm -> rm *)
+var
+  U: string;
+  k, M: Integer;
+
+  procedure Add(const S: string);
+  var
+    j: Integer;
+  begin
+    if S = '' then Exit;
+    for j := 0 to N - 1 do
+      if Forms[j] = S then Exit;
+    if N > High(Forms) then Exit;
+    Forms[N] := S;
+    Inc(N);
+  end;
+
+  function StripExeSuffix(const S: string): string;
+  var
+    p: Integer;
+    Ext: string;
+  begin
+    Result := '';
+    p := Length(S);
+    while (p >= 1) and (S[p] <> '.') do Dec(p);
+    if p < 2 then Exit;
+    Ext := LowerCase(Copy(S, p, MaxInt));
+    if (Ext = '.exe') or (Ext = '.com') or (Ext = '.bat') or (Ext = '.cmd') then
+      Result := Copy(S, 1, p - 1);
+  end;
+
+  function BaseNameOf(const S: string; WinSep: Boolean): string;
+  var
+    p: Integer;
+  begin
+    Result := '';
+    p := Length(S);
+    while (p >= 1) and (S[p] <> '/') and (not (WinSep and (S[p] = '\'))) do Dec(p);
+    if p >= 1 then Result := Copy(S, p + 1, MaxInt);
+  end;
+
+begin
+  N := 0;
+  Add(Token);
+
+  U := '';
+  for k := 1 to Length(Token) do
+    if Token[k] <> '\' then U := U + Token[k];
+  Add(U);
+
+  Add(BaseNameOf(Token, True));    { Windows path }
+  Add(BaseNameOf(U, False));       { POSIX path, escapes already removed }
+
+  { ...and each of those without a Windows executable suffix. }
+  M := N;
+  for k := 0 to M - 1 do
+    Add(StripExeSuffix(Forms[k]));
+end;
+
 function MatchesAnyTokenForbid(const Cmd: string; out Hit: string): Boolean;
 var
   Tokens: TStringList;
-  i, j: Integer;
+  i, j, k, NForms: Integer;
   T: string;
+  Forms: TDenyForms;
 begin
   Result := False;
   Hit := '';
@@ -597,12 +693,14 @@ begin
     for i := 0 to Tokens.Count - 1 do
     begin
       T := LowerCase(Tokens[i]);
-      for j := 0 to High(ForbiddenTokens) do
-        if T = ForbiddenTokens[j] then
-        begin
-          Hit := ForbiddenTokens[j];
-          Exit(True);
-        end;
+      DenyCompareForms(T, Forms, NForms);
+      for k := 0 to NForms - 1 do
+        for j := 0 to High(ForbiddenTokens) do
+          if Forms[k] = ForbiddenTokens[j] then
+          begin
+            Hit := ForbiddenTokens[j];
+            Exit(True);
+          end;
     end;
   finally
     Tokens.Free;
