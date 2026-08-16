@@ -2049,6 +2049,49 @@ function deriveProjectTitle(text) {
   return title.charAt(0).toUpperCase() + title.slice(1);
 }
 
+/* SanitizeName, mirrored from PasClaw.Projects.Store: what a title will
+   become on disk. Mirrored rather than asked for because the answer is
+   needed BEFORE the create, to know whether that name is already
+   somebody else's project. */
+function slugFor(title) {
+  return String(title || "").toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-").replace(/^-+/, "")
+    .slice(0, 64).replace(/-+$/, "");
+}
+
+/* A project name nobody else is using.
+
+   CreateProject is idempotent BY DESIGN -- a title that sanitizes to an
+   existing slug hands back the project that is already there, so the
+   agent re-running its own create step does not fail the job. Every
+   caller that means "a NEW project" therefore has to pick a free name
+   first, or it silently starts writing into someone else's.
+
+   Two callers learned that the hard way and a third would have: the
+   shell's build_app ("build a calendar" would have taken over the
+   calendar suite app), and page promotion, where shortening titles made
+   it worse -- "Build me a timer" and "Create a timer" used to make two
+   projects and would now both derive "Timer", the second overwriting
+   the first one's index.html.
+
+   Returns { title, name } to pass to the create; name is the slug it
+   reserved. Falls back to a timestamped suffix rather than failing,
+   because refusing to build is worse than an ugly name. */
+async function freeProjectName(title) {
+  title = String(title || "").trim() || "App";
+  let taken = new Set();
+  try {
+    taken = new Set(((await api("/v1/projects")).projects || []).map(p => p.name));
+  } catch {}
+  for (let n = 1; n <= 20; n++) {
+    const t = n === 1 ? title : `${title} ${n}`;
+    const slug = slugFor(t);
+    if (slug && !taken.has(slug)) return { title: t, name: slug };
+  }
+  const t = `${title} ${Date.now().toString().slice(-5)}`;
+  return { title: t, name: slugFor(t) };
+}
+
 /* Start a project from a memo. Returns the slug it made, so the shell can
    say which project the request became -- the text is passed in rather
    than read from a field, since the shell window owns the input now. */
@@ -2057,22 +2100,11 @@ async function createAppFrom(text, plan) {
   text = text.trim();
   const title = deriveProjectTitle(text);
   try {
-    /* The server's create is idempotent: a title that sanitizes to an
-       existing slug hands back the OLD project, and two different
-       requests sharing their first words would silently share -- and
-       overwrite -- one app. So ask for the list first and retry with a
-       numbered title until the slug that comes back is genuinely new. */
-    const taken = new Set(
-      ((await api("/v1/projects")).projects || []).map(p => p.name));
-    let j = null;
-    for (let n = 1; n <= 20; n++) {
-      const t = n === 1 ? title : title + " " + n;
-      j = await api("/v1/projects", { method: "POST", body: { title: t } });
-      if (!taken.has(j.name)) break;
-      j = null;
-    }
-    if (!j) throw new Error(
-      "could not find a free project name for \"" + title + "\"");
+    /* A free name first -- the create is idempotent, so asking for one
+       that is taken quietly hands back somebody else's project. */
+    const want = await freeProjectName(title);
+    const j = await api("/v1/projects", { method: "POST",
+      body: { title: want.title, name: want.name } });
     await loadProjects();
     openChat(j.name);
     projectChat(j.name).submitText(
@@ -2200,12 +2232,16 @@ const SHELL_ACTIONS = {
     help: 'build_app {"title":"<name>","brief":"<what to build>"} -- ' +
           "start a NEW project and set it building. Emit one per app when " +
           "asked for several.",
+    /* Straight through createAppFrom rather than a second create of its
+       own: that is where the free-name reservation lives, and a copy
+       here would be the copy that drifts. Without it, "build me a
+       calendar" resolved to the calendar slug that already exists and
+       sent the brief into the suite app's conversation -- rewriting an
+       app the user relies on instead of making the new one promised. */
     run: async a => {
-      const j = await api("/v1/projects", { method: "POST",
-        body: { title: deriveProjectTitle(a.title || a.brief || "app") } });
-      await loadProjects();
-      projectChat(j.name).submitText(a.brief || a.title, "build");
-      return "building " + j.name;
+      const slug = await createAppFrom(a.brief || a.title, false);
+      if (!slug) throw new Error("nothing to build");
+      return "building " + slug;
     },
   },
   focus: {
@@ -2412,7 +2448,13 @@ function openShell() {
      small window over a busy desktop would repeat the problem it exists
      to solve. It is an ordinary window otherwise -- movable, resizable,
      closable. */
-  if (!w.__shellBuilt) maximizeWindow(w);
+  /* ...but NOT while the saved layout is being replayed. restoreDesktop
+     calls this, then applies the geometry it saved and toggles maximize
+     if that is what was saved -- so maximizing here first inverts both
+     cases: a normal shell comes back maximized, and a maximized one gets
+     toggled back to normal. The saved state is the authority when there
+     is one. */
+  if (!w.__shellBuilt && !restoring) maximizeWindow(w);
 
   if (w.__shellBuilt) { restoreWindow(w); focusWindow(w); w.__focusShell(); return w; }
   w.__shellBuilt = true;
@@ -2458,6 +2500,7 @@ function openShell() {
      now, not a second copy of them. The field they read is this window's
      textarea, so askFromDesktop and createAppFrom are given its text. */
   async function run() {
+    await ready;
     const text = ta.value.trim();
     if (!text) return;
     const k = kind.value;
@@ -2552,13 +2595,25 @@ function openShell() {
   ta.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); run(); }
   });
+  /* The replay has to WIN, not merely start -- the same race the project
+     chats already fixed. Typing before the saved messages land pushed the
+     new turn into an empty history, the GET then appended the older ones
+     AFTER it, and the PUT filed a transcript whose turns are out of
+     order -- permanently, and the model reads it that way ever after.
+     The composer is disabled until the replay lands, and run() awaits it
+     too: the disable is what the user sees, the await is what makes it
+     true for a programmatic caller. */
+  ta.disabled = true;
+  go.disabled = true;
+  const ready = loadShell()
+    .catch(() => {})
+    .then(() => { ta.disabled = false; go.disabled = false; });
   /* While the shell is open, agent-driven desktop actions narrate into
      THIS conversation rather than a popup -- including ones started from
      another session, which is the honest place to see them. */
   SHELL_SAY = t => { note(t); };
   w.onClose = () => { if (SHELL_SAY) SHELL_SAY = null; };
   w.__focusShell = () => ta.focus();
-  loadShell().catch(() => {});
   setTimeout(() => ta.focus(), 0);
   return w;
 }
@@ -4341,9 +4396,17 @@ function openBrowser(pageId, initialQuery, initialKind) {
          question that produced it, so promoting one used to mint a
          project called "what is a pomodoro timer" -- a slug, an icon
          caption and an app name, permanently. */
+      /* Reserve the name before copying. Promotion writes the page into
+         the project's app/index.html, and CreateProject is idempotent --
+         so a title that lands on an existing slug does not make a new
+         project, it OVERWRITES that one's app. Shortening titles made
+         that likelier, not less: "Build me a timer" and "Create a timer"
+         used to be two projects and both now derive "Timer". */
+      const want = await freeProjectName(
+        deriveProjectTitle(current.title || current.query || ""));
       const j = await api(`/v1/pages/${current.id}/promote`, {
         method: "POST",
-        body: { title: deriveProjectTitle(current.title || current.query || "") },
+        body: { title: want.title, name: want.name },
       });
       /* The page stays where it was; the app is the new thing. Open it and
          refresh the desktop so its icon is there too. */
