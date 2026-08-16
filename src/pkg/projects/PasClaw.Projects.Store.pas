@@ -150,10 +150,30 @@ function ReadJobLog(const Project, TaskId, JobId: string): string;
 implementation
 
 uses
+  SyncObjs,
   PasClaw.Utils,
   PasClaw.JSON,
   PasClaw.Workspaces,
   PasClaw.Desktop.Events;
+
+var
+  (* Guards id allocation. NextId picks max+1 by SCANNING the directory,
+     which is a read-then-write with a window in the middle: two gateway
+     worker threads creating tasks at the same moment both scanned, both
+     saw T0004 as the highest, and both took T0005 -- the second write
+     landing on the first one's manifest and erasing it.
+
+     Not theoretical. Eight simultaneous creates against a live gateway
+     produced seven tasks: two callers were handed the same id and one
+     item vanished, silently, with a 200 for both. It went unnoticed
+     while every writer was sequential; the desktop's checklist mirror
+     now reconciles concurrently, which is what made it reachable.
+
+     One process-wide lock is the right grain here: allocation is a
+     directory scan measured in microseconds, and the alternative --
+     a lock per project -- buys nothing until projects are being written
+     to in parallel at a rate this never approaches. *)
+  GIdLock: TCriticalSection = nil;
 
 { ------------------------------------------------------------------ names -- }
 
@@ -327,6 +347,24 @@ begin
     Names.Free;
   end;
   Result := Prefix + Format('%.4d', [Max_ + 1]);
+end;
+
+function ReserveId(const Dir, Prefix: string): string;
+{ Allocate the next id and STAKE it, under one lock.
+
+  Creating the directory is what makes the reservation visible: NextId
+  decides by scanning subdirectories, so a caller that has taken an id
+  but not yet made its directory is invisible to the next scanner. Doing
+  both inside the lock closes that window; the manifest write afterwards
+  does not need to be held, because the id is already spoken for. }
+begin
+  GIdLock.Enter;
+  try
+    Result := NextId(Dir, Prefix);
+    EnsureDir(JoinPath(Dir, Result));
+  finally
+    GIdLock.Leave;
+  end;
 end;
 
 { --------------------------------------------------------------- projects -- }
@@ -648,9 +686,8 @@ begin
   end;
 
   EnsureDir(JoinPath(PDir, 'tasks'));
-  Id  := NextId(JoinPath(PDir, 'tasks'), 'T');
+  Id  := ReserveId(JoinPath(PDir, 'tasks'), 'T');
   Dir := JoinPath(JoinPath(PDir, 'tasks'), Id);
-  EnsureDir(Dir);
   EnsureDir(JoinPath(Dir, 'jobs'));
 
   Now_ := NowIsoUtc;
@@ -824,9 +861,11 @@ begin
   end;
 
   EnsureDir(JoinPath(TDir, 'jobs'));
-  Id  := NextId(JoinPath(TDir, 'jobs'), 'J');
+  { Same reservation as tasks: two turns starting on one task at the same
+    moment would otherwise be handed the same job id, and the second
+    would overwrite the first one's transcript. }
+  Id  := ReserveId(JoinPath(TDir, 'jobs'), 'J');
   Dir := JoinPath(JoinPath(TDir, 'jobs'), Id);
-  EnsureDir(Dir);
   EnsureDir(JoinPath(Dir, 'artifacts'));
 
   Obj := TJsonObject.Create;
@@ -970,5 +1009,11 @@ begin
   if FileExists(Path) then
     Result := ReadFileText(Path);
 end;
+
+initialization
+  GIdLock := TCriticalSection.Create;
+
+finalization
+  FreeAndNil(GIdLock);
 
 end.
