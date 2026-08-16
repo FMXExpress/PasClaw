@@ -2380,14 +2380,14 @@ begin
     except
       on E: Exception do
       begin
-        DeleteFile(ZipPath);
+        SysUtils.DeleteFile(ZipPath);
         Strm.Free;
         WriteJSON(AResp, 500, '{"error":"' + JsonEscape(E.Message) + '"}');
         Exit;
       end;
     end;
   finally
-    DeleteFile(ZipPath);   { bytes are in memory now; drop the temp file }
+    SysUtils.DeleteFile(ZipPath);   { bytes are in memory now; drop the temp file }
   end;
   Strm.Position := 0;
   AResp.ResponseNo  := 200;
@@ -2417,7 +2417,7 @@ begin
       else SysUtils.DeleteFile(P);
     until FindNext(SR) <> 0;
   finally
-    FindClose(SR);
+    SysUtils.FindClose(SR);
   end;
   RemoveDir(Dir);
 end;
@@ -2459,7 +2459,7 @@ begin
       end;
     until FindNext(SR) <> 0;
   finally
-    FindClose(SR);
+    SysUtils.FindClose(SR);
   end;
   Result := True;
 end;
@@ -2832,7 +2832,7 @@ begin
           Arr.AddObject(Item);
         until FindNext(SR) <> 0;
       finally
-        FindClose(SR);
+        SysUtils.FindClose(SR);
       end;
     end;
     Root.PutArray('files', Arr);
@@ -4525,7 +4525,7 @@ begin
         Arr.AddObject(Item);
       until FindNext(SR) <> 0;
     finally
-      FindClose(SR);
+      SysUtils.FindClose(SR);
     end;
     Root.PutArray('entries', Arr);
     WriteJSON(AResp, 200, Root.ToJSON);
