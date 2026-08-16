@@ -369,7 +369,7 @@ const
       additional safety -- the workspace boundary is what they were
       ever meant to protect, so they only matter when that boundary
       exists. *)
-  ForbiddenTokens: array[0..26] of string = (
+  ForbiddenTokens: array[0..28] of string = (
     'sudo',
     'su',
     'rm',          { all rm -- too easy to escape -rf detection }
@@ -400,6 +400,11 @@ const
     'attrib',
     'takeown',
     'icacls',
+    { cacls and reg are named as covered in this unit's header comment
+      but were missing from the array -- a control claiming coverage it
+      did not have. Verified before adding: reg.exe was allowed. }
+    'cacls',
+    'reg',
     'runas'
   );
 
@@ -584,11 +589,58 @@ begin
   if Cur <> '' then Result.Add(StripQuotes(Cur));
 end;
 
+procedure DenyCompareForms(const Token: string; out F1, F2, F3: string);
+(* The spellings /bin/sh will collapse to the same command word, derived
+   HERE rather than in TokenizeCommand. That distinction matters: the
+   token list is consumed positionally by EffectiveSinkBasename (Toks[0]
+   is the command word, Toks[1..] are its options), so injecting derived
+   tokens into it silently broke the Class D `/usr/bin/env bash` guard --
+   the injected basename became Toks[1] and the env-option peeling read
+   it as the interpreter. Keep the tokenizer pure; widen only the
+   comparison.
+
+   F1  backslashes removed  -- sh strips them during word expansion, so
+       `r\m` and `\rm` both execute `rm`.
+   F2  basename of the path -- `/bin/rm`, `../../bin/rm`.
+   F3  F2 without a Windows executable suffix -- `...\rm.exe`. *)
+var
+  k, p: Integer;
+begin
+  F1 := '';
+  F2 := '';
+  F3 := '';
+  for k := 1 to Length(Token) do
+    if Token[k] <> '\' then F1 := F1 + Token[k];
+  if F1 = Token then F1 := '';
+
+  if (Pos('/', Token) > 0) or (Pos('\', Token) > 0) then
+  begin
+    p := Length(Token);
+    while (p >= 1) and (Token[p] <> '/') and (Token[p] <> '\') do Dec(p);
+    F2 := Copy(Token, p + 1, MaxInt);
+    if F2 = Token then F2 := '';
+  end;
+
+  if F2 <> '' then
+  begin
+    p := Length(F2);
+    while (p >= 1) and (F2[p] <> '.') do Dec(p);
+    if p >= 2 then
+    begin
+      F3 := LowerCase(Copy(F2, p, MaxInt));
+      if (F3 = '.exe') or (F3 = '.com') or (F3 = '.bat') or (F3 = '.cmd') then
+        F3 := Copy(F2, 1, p - 1)
+      else
+        F3 := '';
+    end;
+  end;
+end;
+
 function MatchesAnyTokenForbid(const Cmd: string; out Hit: string): Boolean;
 var
   Tokens: TStringList;
   i, j: Integer;
-  T: string;
+  T, F1, F2, F3: string;
 begin
   Result := False;
   Hit := '';
@@ -597,8 +649,12 @@ begin
     for i := 0 to Tokens.Count - 1 do
     begin
       T := LowerCase(Tokens[i]);
+      DenyCompareForms(T, F1, F2, F3);
       for j := 0 to High(ForbiddenTokens) do
-        if T = ForbiddenTokens[j] then
+        if (T = ForbiddenTokens[j]) or
+           ((F1 <> '') and (F1 = ForbiddenTokens[j])) or
+           ((F2 <> '') and (F2 = ForbiddenTokens[j])) or
+           ((F3 <> '') and (F3 = ForbiddenTokens[j])) then
         begin
           Hit := ForbiddenTokens[j];
           Exit(True);
