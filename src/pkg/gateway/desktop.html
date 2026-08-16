@@ -2531,8 +2531,21 @@ function buildChatUI(project) {
     return w;
   }
 
+  /* True between a plan turn landing and its approval.
+
+     The approve card invites "ask for changes", and a change typed into
+     the composer goes through plain submit() -- which would have sent it
+     as a BUILD turn, re-arming every mutating tool before anyone pressed
+     Approve, while the stale approval card sat there offering to do what
+     had already happened. A conversation with a plan awaiting approval
+     stays in plan mode until the approval handler says otherwise. */
+  let planPending = false;
+
   async function submit(mode) {
     await ready;
+    /* Explicit mode wins (the approve handler passes "build"); otherwise
+       a pending plan keeps the conversation read-only. */
+    if (!mode && planPending) mode = "plan";
     const text = ta.value.trim();
     if (!text) return;
     ta.value = "";
@@ -2552,19 +2565,20 @@ function buildChatUI(project) {
           t ? { authorization: "Bearer " + t } : {}),
         body: JSON.stringify({
           stream: true,
-          /* Builder mode as a system MESSAGE, not a top-level "system"
-             field: the gateway parses messages[] and never reads that
-             field, so the builder prompt -- the whole instruction that
-             makes the deliverable an app rather than an essay -- was
-             being dropped on every turn. Prepended at send time rather
-             than stored, so it is not replayed into the saved session
-             or duplicated on the next turn.
+          messages: history,
+          /* The builder prompt goes in the top-level "system" field,
+             which the gateway now composes as the LAST section of its
+             own prompt.
 
-             It also has to be a message for plan mode to work: the
-             gateway appends the mode directive to the caller's first
-             system message, which is exactly this one. */
-          messages: [{ role: "system", content: builderPrompt(project) }]
-                      .concat(history),
+             Not as a system message in messages[]: that is the shape
+             reserved for a third party's persona, and the gateway
+             honours it by skipping BuildSystemPrompt entirely -- so
+             sending it that way would have cost this conversation the
+             workspace context, memory, AGENTS rules, skill catalog and
+             tool-use rules it needs to build anything. "Deliverables
+             are apps, written here" is a house rule for PasClaw, not a
+             different assistant. */
+          system: builderPrompt(project),
           /* Plan mode is enforced server-side -- its dispatch gate
              refuses mutating tools -- so "plan before building" is not
              an instruction the model can decide to skip. */
@@ -2640,7 +2654,7 @@ function buildChatUI(project) {
        rather than an instruction to type "yes". Approving sends the
        build turn with the plan already in history -- the model is not
        told the plan again, it is told to carry out the one above. */
-    if (mode === "plan") addApproveBar();
+    if (mode === "plan") { planPending = true; addApproveBar(); }
 
     /* Did this turn leave a runnable app behind? Ask the gateway rather
        than trusting the transcript. */
@@ -2702,6 +2716,8 @@ function buildChatUI(project) {
     go.addEventListener("click", () => {
       if (approveBar === bar) approveBar = null;
       bar.remove();
+      /* The one place plan mode is left, and it takes a click to do it. */
+      planPending = false;
       submitText("Approved -- build it. Follow the plan above; if you hit " +
                  "something it did not anticipate, say so rather than " +
                  "quietly doing something else.", "build");

@@ -6087,6 +6087,17 @@ begin
     begin
       Inc(Depth);
       Have := CountSources(SourcesJSON);
+      { A round rewrites the whole body, so it has to be shown the whole
+        body. Once the report outgrows what we can hand over intact,
+        stop -- deepening from a truncated view would delete the part
+        the model never saw. }
+      if not DeepenFitsBudget(BodyHTML) then
+      begin
+        PublishPageProgress('Saturated',
+          Format('%d source(s); the report is too large to deepen further',
+                 [Have]));
+        Break;
+      end;
       PublishPageProgress('Deepening',
         Format('round %d -- %d source(s) so far', [Depth, Have]));
       if not GDesktopGateway.RunDesktopTurn(
@@ -6939,8 +6950,24 @@ begin
       /v1/chat/completions with its own persona/system message should win;
       bare-bones clients that send only a user message get our identity
       preamble for free. }
+    (* A top-level "system" is an ADDITION, not a replacement.
+
+       Two different things a caller can mean, and they need different
+       answers. A system MESSAGE in messages[] is a third party's
+       persona: it wins outright, and PasClaw's identity preamble stays
+       out of its way (the else branch). A top-level "system" field is
+       the caller extending this agent -- the desktop's builder prompt
+       is the case in point: "deliverables are apps, write them here" is
+       a house rule for PasClaw, not a different assistant.
+
+       So it rides in as UserSys, which BuildSystemPrompt appends as the
+       final section, and the workspace context, memory, AGENTS rules,
+       skill catalog and tool-use rules all still get composed in around
+       it. The field was silently ignored before this -- no code path
+       read it -- so nothing that worked stops working. *)
     if not HasSystemMessage(Msgs) then
-      LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '',
+      LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg,
+                                      Req.GetStr('system', ''),
                                       LoopCfg.Registry <> nil, '', LoopCfg.Mode)
     else
       InjectModeDirective(Msgs, LoopCfg.Mode);
@@ -8733,8 +8760,11 @@ begin
         LoopCfg.Identity := MakeIdentity('gateway', 'authed')
       else
         LoopCfg.Identity := MakeIdentity('gateway', 'anon');
+      { Same composition rule as /v1/chat/completions above: a top-level
+        "system" extends this agent's prompt rather than replacing it. }
       if not HasSystemMessage(Msgs) then
-        LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '',
+        LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg,
+                                        Req.GetStr('system', ''),
                                         LoopCfg.Registry <> nil, '', LoopCfg.Mode)
       else
         InjectModeDirective(Msgs, LoopCfg.Mode);

@@ -101,6 +101,18 @@ function BuildRevisePrompt(const PriorQuery, Followup: string;
 function BuildDeepenPrompt(const Query, PriorHTML,
   PriorSourcesJSON: string): string;
 
+{ The largest report a deepening round can be handed.
+
+  A round returns the COMPLETE revised body and the caller swaps the
+  report for it, so the model must see all of what it is replacing --
+  showing it a truncated report would turn "improve this" into "delete
+  the tail you were never shown". Past this size the loop stops instead
+  of truncating. }
+const
+  MaxDeepenPrior = 24 * 1024;
+
+function DeepenFitsBudget(const PriorHTML: string): Boolean;
+
 { True when a deepening round declared saturation instead of returning a
   revised page. Case-insensitive; tolerates surrounding whitespace and a
   trailing period, nothing more -- a reply that MENTIONS saturation while
@@ -239,16 +251,26 @@ begin
     'The page as it stands:' + sLineBreak + Prior;
 end;
 
+function DeepenFitsBudget(const PriorHTML: string): Boolean;
+begin
+  Result := Length(PriorHTML) <= MaxDeepenPrior;
+end;
+
 function BuildDeepenPrompt(const Query, PriorHTML,
   PriorSourcesJSON: string): string;
-const
-  MaxPrior = 24 * 1024;
 var
   Prior: string;
 begin
+  (* No truncation here, deliberately.
+
+     A deepening round returns the COMPLETE revised body and the caller
+     replaces the report with it. Show the model two thirds of the
+     report and it rewrites what it saw -- the rest is not edited, it is
+     DELETED, silently, by a round that was supposed to improve things.
+     Callers ask DeepenFitsBudget first and stop deepening when a report
+     has outgrown the budget; a report that large has usually earned its
+     saturation anyway. *)
   Prior := PriorHTML;
-  if Length(Prior) > MaxPrior then
-    Prior := Copy(Prior, 1, MaxPrior) + sLineBreak + '<!-- truncated -->';
   Result :=
     'DEEP RESEARCH -- CONTINUATION ROUND.'#10#10 +
     'A report already exists for this request. Your job this round is to ' +
@@ -291,8 +313,43 @@ begin
 end;
 
 function CountSources(const JSONArray: string): Integer;
+{ DISTINCT urls, not array entries.
+
+  The loop's whole stopping rule is "did this round find evidence the
+  report did not already rest on", and a round that re-lists a source it
+  was explicitly shown would otherwise raise the count and buy itself
+  another round -- the exact padding behaviour the measurement exists to
+  catch. Compared case-insensitively and without a trailing slash, since
+  the same page cited twice rarely comes back spelled identically.
+
+  An entry with no url falls back to its title, so a source that is a
+  book or a paper still counts once rather than not at all. }
+var
+  Src: TPageSourceArray;
+  Seen: TStringList;
+  I: Integer;
+  Key: string;
 begin
-  Result := Length(ParseSources(JSONArray));
+  Result := 0;
+  Src := ParseSources(JSONArray);
+  if Length(Src) = 0 then Exit;
+  Seen := TStringList.Create;
+  try
+    Seen.Sorted := True;
+    Seen.Duplicates := dupIgnore;
+    for I := 0 to High(Src) do
+    begin
+      Key := LowerCase(Trim(Src[I].URL));
+      while (Key <> '') and (Key[Length(Key)] = '/') do
+        SetLength(Key, Length(Key) - 1);
+      if Key = '' then Key := 'title:' + LowerCase(Trim(Src[I].Title));
+      if Key = 'title:' then Continue;
+      if Seen.IndexOf(Key) < 0 then Seen.Add(Key);
+    end;
+    Result := Seen.Count;
+  finally
+    Seen.Free;
+  end;
 end;
 
 function BuildPagePrompt(const Query: string; Kind: TPageKind): string;

@@ -940,6 +940,33 @@ begin
   ExpectTrue(CountSources('[]') = 0, 'an empty list is no progress');
   ExpectTrue(CountSources('not json') = 0,
              'and garbage counts as none rather than crashing the round');
+  { DISTINCT urls. A round that re-lists what it was shown would
+    otherwise raise the count and buy itself another round -- exactly
+    the padding this measurement exists to refuse. }
+  ExpectTrue(CountSources('[{"title":"A","url":"https://a.example"},' +
+                          '{"title":"A again","url":"https://a.example"}]') = 1,
+             'the same source twice is one source');
+  ExpectTrue(CountSources('[{"title":"A","url":"https://a.example/"},' +
+                          '{"title":"A","url":"https://A.example"}]') = 1,
+             'and case or a trailing slash does not make it a new one');
+  ExpectTrue(CountSources('[{"title":"A book","url":""},' +
+                          '{"title":"A book","url":""}]') = 1,
+             'an entry with no url counts once, by title');
+
+  { A deepening round is handed the report VERBATIM, because it returns
+    a complete replacement -- so the loop must refuse to deepen a report
+    it cannot show in full rather than truncate it and let the unseen
+    tail be deleted. }
+  ExpectTrue(DeepenFitsBudget('<p>a short report</p>'),
+             'an ordinary report deepens');
+  ExpectTrue(not DeepenFitsBudget(StringOfChar('x', 25 * 1024)),
+             'one too large to hand over intact does not');
+  ExpectTrue(Pos('truncated',
+                 BuildDeepenPrompt('q', StringOfChar('y', 30 * 1024), '[]')) = 0,
+             'and the prompt never truncates the body it asks to be replaced');
+  ExpectTrue(Length(BuildDeepenPrompt('q', StringOfChar('y', 30 * 1024), '[]'))
+               > 30 * 1024,
+             'the whole report reaches the model');
 
   { ----------------------------------------------------- page promotion -- }
   (* "Make this interactive" -- a page becomes an app you own. The copy is
