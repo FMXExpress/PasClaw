@@ -579,6 +579,12 @@ uses
   PasClaw.Workspaces,
   DateUtils,
   {$IFDEF FPC}{$IFDEF UNIX}BaseUnix,{$ENDIF}{$ENDIF}
+  { Windows API for IsRestrictedFsPath's reparse-point resolution
+    (CreateFileW / GetFinalPathNameByHandleW / CloseHandle and the
+    DWORD, FILE_SHARE_* and OPEN_EXISTING declarations they need).
+    Spelled the way the rest of the tree spells it -- Cron.State and
+    Agent.Steering use exactly this pair. }
+  {$IFDEF MSWINDOWS}{$IFDEF FPC}Windows,{$ELSE}Winapi.Windows,{$ENDIF}{$ENDIF}
   IdTCPConnection,
   PasClaw.Logger,
   PasClaw.Utils,
@@ -4242,8 +4248,11 @@ end;
    DIRECTORY handle at all -- without it the oauth-directory case fails
    and silently degrades to the lexical compare.
 
-   Declared here rather than taken from the RTL because
-   GetFinalPathNameByHandleW is absent from older FPC Windows headers.
+   The import is PasClaw-prefixed rather than named after the API:
+   recent Winapi.Windows declares GetFinalPathNameByHandleW itself, and
+   an identically-named local declaration would shadow it silently. A
+   distinct name means the two can never be confused for one another,
+   and older FPC Windows headers that lack it are still covered.
 
    NOT COMPILE-TESTED: this container has no Windows target or cross
    units, so this branch has been reviewed by inspection only. It fails
@@ -4253,8 +4262,8 @@ const
   FILE_FLAG_BACKUP_SEMANTICS_ = $02000000;
   FILE_NAME_NORMALIZED_       = $00000000;
 
-function GetFinalPathNameByHandleW(hFile: THandle; lpszFilePath: PWideChar;
-                                   cchFilePath, dwFlags: DWORD): DWORD; stdcall;
+function PC_GetFinalPathNameByHandleW(hFile: THandle; lpszFilePath: PWideChar;
+                                      cchFilePath, dwFlags: DWORD): DWORD; stdcall;
   external 'kernel32.dll' name 'GetFinalPathNameByHandleW';
 
 function CanonicalPath(const P: string): string;
@@ -4271,8 +4280,8 @@ begin
                    nil, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS_, 0);
   if H = INVALID_HANDLE_VALUE then Exit;
   try
-    N := GetFinalPathNameByHandleW(H, @Buf[0], Length(Buf) - 1,
-                                   FILE_NAME_NORMALIZED_);
+    N := PC_GetFinalPathNameByHandleW(H, @Buf[0], Length(Buf) - 1,
+                                      FILE_NAME_NORMALIZED_);
     if (N = 0) or (N >= DWORD(Length(Buf))) then Exit;
     Buf[N] := #0;
     S := string(WideString(PWideChar(@Buf[0])));
