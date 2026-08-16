@@ -1865,7 +1865,22 @@ async function createAppFromDesktop() {
   if (title.length > 48) title = title.slice(0, 48);
   fld.value = "";
   try {
-    const j = await api("/v1/projects", { method: "POST", body: { title } });
+    /* The server's create is idempotent: a title that sanitizes to an
+       existing slug hands back the OLD project, and two different
+       requests sharing their first words would silently share -- and
+       overwrite -- one app. So ask for the list first and retry with a
+       numbered title until the slug that comes back is genuinely new. */
+    const taken = new Set(
+      ((await api("/v1/projects")).projects || []).map(p => p.name));
+    let j = null;
+    for (let n = 1; n <= 20; n++) {
+      const t = n === 1 ? title : title + " " + n;
+      j = await api("/v1/projects", { method: "POST", body: { title: t } });
+      if (!taken.has(j.name)) break;
+      j = null;
+    }
+    if (!j) throw new Error(
+      "could not find a free project name for \"" + title + "\"");
     await loadProjects();
     openChat(j.name);
     projectChat(j.name).submitText(text);
@@ -2205,6 +2220,13 @@ function mirrorChecklist(project, argsStr) {
           await api(`/v1/projects/${project}/tasks/${t.id}`,
             { method: "PATCH", body: { status: "done" } });
           t.status = "done";
+        } else if (!it.done && t.status === "done") {
+          /* The model walked it back: a later checklist unchecked the
+             item because more work turned up. A board still claiming
+             done would be lying, which is worse than reopening. */
+          await api(`/v1/projects/${project}/tasks/${t.id}`,
+            { method: "PATCH", body: { status: "todo" } });
+          t.status = "todo";
         }
       }
       await loadProjects();
