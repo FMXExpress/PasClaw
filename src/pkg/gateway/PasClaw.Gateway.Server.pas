@@ -6043,8 +6043,16 @@ end;
 function DesktopPageGenerator(const Query: string; Kind: TPageKind;
   const RevisePageId: string;
   out Title, BodyHTML, SourcesJSON, Err: string): Boolean;
+const
+  { A backstop on the deepening loop, not its intended exit -- saturation
+    is. Five rounds is roughly where a well-scoped question stops yielding
+    genuinely independent sources; past that the honest answer is usually
+    that the question needed splitting. }
+  MaxDeepenRounds = 5;
 var
   Reply, Prompt, Prior: string;
+  Round_, RoundBody, RoundSources, RoundErr: string;
+  Depth, Have: Integer;
   PriorInfo: TPageInfo;
 begin
   Title := Query;
@@ -6104,6 +6112,82 @@ begin
     Err := 'the agent produced no page body';
     Exit;
   end;
+
+  (* Keep digging until saturated.
+
+     One three-phase pass is a good report; it is not research. A question
+     worth asking this way usually has a second layer that only shows up
+     once the first is written -- so the round above becomes the first of
+     several, each one told what the report already rests on and asked to
+     find what it is missing.
+
+     The stop condition is a MEASUREMENT, not the model's own sense of
+     having done enough: independent sources actually cited. A round ends
+     the loop when it says SATURATED, or when it comes back having not
+     grown that number -- a round that rewrites without finding anything
+     new is saturation whatever it calls itself. Either way the previous
+     body is kept, because a round that found nothing has nothing better
+     to offer than what it was given.
+
+     Bounded by MaxDeepenRounds as a backstop, not as the intended exit;
+     the intended exit is saturation, and a run that hits the cap says so
+     in its own progress line. A round that ERRORS is not fatal -- the
+     report that already exists is the deliverable, and losing it to a
+     transient provider failure on round three would be the worse trade. *)
+  if Kind = pkResearch then
+  begin
+    Depth := 0;
+    while Depth < MaxDeepenRounds do
+    begin
+      Inc(Depth);
+      Have := CountSources(SourcesJSON);
+      { A round rewrites the whole body, so it has to be shown the whole
+        body. Once the report outgrows what we can hand over intact,
+        stop -- deepening from a truncated view would delete the part
+        the model never saw. }
+      if not DeepenFitsBudget(BodyHTML) then
+      begin
+        PublishPageProgress('Saturated',
+          Format('%d source(s); the report is too large to deepen further',
+                 [Have]));
+        Break;
+      end;
+      PublishPageProgress('Deepening',
+        Format('round %d -- %d source(s) so far', [Depth, Have]));
+      if not GDesktopGateway.RunDesktopTurn(
+           BuildDeepenPrompt(Query, BodyHTML, SourcesJSON),
+           'Deepen the report now.', True, False, Round_, RoundErr) then
+      begin
+        LogDebug('page: deepen round %d failed (%s) -- keeping the report ' +
+                 'as it stands', [Depth, RoundErr]);
+        Break;
+      end;
+      if ReplyIsSaturated(Round_) then
+      begin
+        PublishPageProgress('Saturated',
+          Format('%d source(s), no new ground after %d round(s)',
+                 [Have, Depth]));
+        Break;
+      end;
+      SplitPageReply(Round_, RoundBody, RoundSources);
+      { A round that returned nothing usable, or that grew no evidence, is
+        the same outcome as SATURATED -- and the body in hand is already
+        the better one, so it stays. }
+      if (Trim(RoundBody) = '') or (CountSources(RoundSources) <= Have) then
+      begin
+        PublishPageProgress('Saturated',
+          Format('%d source(s), round %d added none', [Have, Depth]));
+        Break;
+      end;
+      BodyHTML    := RoundBody;
+      SourcesJSON := RoundSources;
+    end;
+    if Depth >= MaxDeepenRounds then
+      PublishPageProgress('Deepening',
+        Format('stopped at the %d-round limit with %d source(s)',
+               [MaxDeepenRounds, CountSources(SourcesJSON)]));
+  end;
+
   Result := True;
 end;
 
@@ -6920,8 +7004,24 @@ begin
       /v1/chat/completions with its own persona/system message should win;
       bare-bones clients that send only a user message get our identity
       preamble for free. }
+    (* A top-level "system" is an ADDITION, not a replacement.
+
+       Two different things a caller can mean, and they need different
+       answers. A system MESSAGE in messages[] is a third party's
+       persona: it wins outright, and PasClaw's identity preamble stays
+       out of its way (the else branch). A top-level "system" field is
+       the caller extending this agent -- the desktop's builder prompt
+       is the case in point: "deliverables are apps, write them here" is
+       a house rule for PasClaw, not a different assistant.
+
+       So it rides in as UserSys, which BuildSystemPrompt appends as the
+       final section, and the workspace context, memory, AGENTS rules,
+       skill catalog and tool-use rules all still get composed in around
+       it. The field was silently ignored before this -- no code path
+       read it -- so nothing that worked stops working. *)
     if not HasSystemMessage(Msgs) then
-      LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '',
+      LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg,
+                                      Req.GetStr('system', ''),
                                       LoopCfg.Registry <> nil, '', LoopCfg.Mode)
     else
       InjectModeDirective(Msgs, LoopCfg.Mode);
@@ -8714,8 +8814,11 @@ begin
         LoopCfg.Identity := MakeIdentity('gateway', 'authed')
       else
         LoopCfg.Identity := MakeIdentity('gateway', 'anon');
+      { Same composition rule as /v1/chat/completions above: a top-level
+        "system" extends this agent's prompt rather than replacing it. }
       if not HasSystemMessage(Msgs) then
-        LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg, '',
+        LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg,
+                                        Req.GetStr('system', ''),
                                         LoopCfg.Registry <> nil, '', LoopCfg.Mode)
       else
         InjectModeDirective(Msgs, LoopCfg.Mode);

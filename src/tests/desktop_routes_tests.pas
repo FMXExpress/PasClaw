@@ -899,6 +899,75 @@ begin
   ExpectTrue(Pos('DEEP RESEARCH', BuildPagePrompt('x', pkSearch)) = 0,
              'an ordinary search is not silently upgraded');
 
+  { ------------------------------------------- research keeps digging -- }
+  (* One three-phase pass is a report, not research. The deepening round
+     is what makes it a loop, and the loop's stop condition is a NUMBER --
+     independent sources actually cited -- rather than the model's own
+     sense of having done enough. These assertions pin the two halves the
+     loop depends on: a prompt that asks for new ground and offers an
+     honest way out, and the two predicates the caller counts with. *)
+  ExpectTrue(Pos('CONTINUATION', BuildDeepenPrompt('q', '<p>b</p>', '[]')) > 0,
+             'a deepening round knows it is not the first');
+  ExpectTrue(Pos('MISSING', BuildDeepenPrompt('q', '<p>b</p>', '[]')) > 0,
+             'and hunts what the report lacks, not what it already has');
+  ExpectTrue(Pos('SATURATED', BuildDeepenPrompt('q', '<p>b</p>', '[]')) > 0,
+             'with an honest way to say there is nothing left');
+  ExpectTrue(Pos('COMPLETE revised body',
+                 BuildDeepenPrompt('q', '<p>b</p>', '[]')) > 0,
+             'and it returns a whole page, never a diff');
+  { The prior report and its sources have to REACH the model -- a round
+    that cannot see what is already cited will re-find it and call that
+    progress. }
+  ExpectTrue(Pos('<p>prior body</p>',
+                 BuildDeepenPrompt('q', '<p>prior body</p>', '[]')) > 0,
+             'the round is shown the report it is deepening');
+  ExpectTrue(Pos('https://a.example',
+                 BuildDeepenPrompt('q', '<p>b</p>',
+                   '[{"title":"A","url":"https://a.example"}]')) > 0,
+             'and the sources it already rests on');
+
+  ExpectTrue(ReplyIsSaturated('SATURATED'), 'the stop word stops');
+  ExpectTrue(ReplyIsSaturated('  saturated. '),
+             'whatever the case and spacing');
+  ExpectTrue(not ReplyIsSaturated(
+               '<p>The field is SATURATED with papers.</p>'),
+             'but a page that merely says the word is still a page');
+  ExpectTrue(not ReplyIsSaturated(''), 'and an empty reply is not a stop');
+
+  ExpectTrue(CountSources('[{"title":"A","url":"https://a.example"},' +
+                          '{"title":"B","url":"https://b.example"}]') = 2,
+             'sources are counted the way the loop measures progress');
+  ExpectTrue(CountSources('[]') = 0, 'an empty list is no progress');
+  ExpectTrue(CountSources('not json') = 0,
+             'and garbage counts as none rather than crashing the round');
+  { DISTINCT urls. A round that re-lists what it was shown would
+    otherwise raise the count and buy itself another round -- exactly
+    the padding this measurement exists to refuse. }
+  ExpectTrue(CountSources('[{"title":"A","url":"https://a.example"},' +
+                          '{"title":"A again","url":"https://a.example"}]') = 1,
+             'the same source twice is one source');
+  ExpectTrue(CountSources('[{"title":"A","url":"https://a.example/"},' +
+                          '{"title":"A","url":"https://A.example"}]') = 1,
+             'and case or a trailing slash does not make it a new one');
+  ExpectTrue(CountSources('[{"title":"A book","url":""},' +
+                          '{"title":"A book","url":""}]') = 1,
+             'an entry with no url counts once, by title');
+
+  { A deepening round is handed the report VERBATIM, because it returns
+    a complete replacement -- so the loop must refuse to deepen a report
+    it cannot show in full rather than truncate it and let the unseen
+    tail be deleted. }
+  ExpectTrue(DeepenFitsBudget('<p>a short report</p>'),
+             'an ordinary report deepens');
+  ExpectTrue(not DeepenFitsBudget(StringOfChar('x', 25 * 1024)),
+             'one too large to hand over intact does not');
+  ExpectTrue(Pos('truncated',
+                 BuildDeepenPrompt('q', StringOfChar('y', 30 * 1024), '[]')) = 0,
+             'and the prompt never truncates the body it asks to be replaced');
+  ExpectTrue(Length(BuildDeepenPrompt('q', StringOfChar('y', 30 * 1024), '[]'))
+               > 30 * 1024,
+             'the whole report reaches the model');
+
   { ----------------------------------------------------- page promotion -- }
   (* "Make this interactive" -- a page becomes an app you own. The copy is
      the design: a page is the record of an answer at a time, so promotion

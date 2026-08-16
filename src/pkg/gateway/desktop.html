@@ -1089,7 +1089,8 @@ iframe.app { width: 100%; height: 100%; border: 0; background: var(--window); di
   width: 100%; min-height: 3.6em; resize: vertical;
   font: inherit; padding: 3px 4px;
 }
-#askbtns { display: flex; gap: 4px; justify-content: flex-end; }
+#askbtns { display: flex; gap: 4px; justify-content: flex-end; align-items: center; }
+#askwhere { flex: 1 1 auto; text-align: left; font-size: 11px; }
 #chips {
   display: flex; flex-wrap: wrap; gap: 4px;
   justify-content: center; margin-top: 6px;
@@ -1127,9 +1128,14 @@ iframe.app { width: 100%; height: 100%; border: 0; background: var(--window); di
         <textarea id="askfld" rows="3"
                placeholder="Ask anything -- or describe an app to build"></textarea>
         <div id="askbtns">
-          <button id="askapp" class="btn" title="Start a project and build this as an app">Create App</button>
-          <button id="askdeep" class="btn" title="Plan, read several sources, and write a longer sourced report">Research</button>
-          <button id="askgo" class="btn">Ask</button>
+          <span id="askwhere" class="muted"></span>
+          <select id="askkind" class="fld">
+            <option value="ask">Ask</option>
+            <option value="research">Research</option>
+            <option value="plan">Plan an app</option>
+            <option value="build">Build an app</option>
+          </select>
+          <button id="askgo" class="btn">Go</button>
         </div>
       </div>
       <div id="chips"></div>
@@ -1882,7 +1888,7 @@ function askFromDesktop(kind) {
    the first turn -- from there it is the ordinary lovable loop: chat on
    the left, the app running on the right. The project title is only a
    label derived from the first words; the full text goes to the chat. */
-async function createAppFromDesktop() {
+async function createAppFromDesktop(plan) {
   const fld = $("#askfld");
   const text = fld.value.trim();
   if (!text) return;
@@ -1908,7 +1914,12 @@ async function createAppFromDesktop() {
       "could not find a free project name for \"" + title + "\"");
     await loadProjects();
     openChat(j.name);
-    projectChat(j.name).submitText(text);
+    projectChat(j.name).submitText(
+      plan ? text + "\n\nPlan this first. Do not build anything yet: set " +
+             "out what the app is, what it is made of, and what you will " +
+             "do in what order, so I can approve it or change it."
+           : text,
+      plan ? "plan" : "build");
   } catch (e) { alert(e.message); }
 }
 
@@ -1945,17 +1956,47 @@ function paintChips() {
        "Pages and sessions this workspace has accumulated");
 }
 
+/* What the four intents do, and where the answer lands. Two of them open
+   the Browser and two of them create a project, which is worth saying out
+   loud under the field -- the difference between "where did my text go"
+   and not. */
+const ASK_KINDS = {
+  ask:      { where: "Answers as a page in the Browser." },
+  research: { where: "Digs until saturated, then a sourced report in the Browser." },
+  plan:     { where: "New project. Plans first -- nothing is built until you approve." },
+  build:    { where: "New project. Starts building straight away." },
+};
+
+function askKind() {
+  const s = $("#askkind");
+  return (s && s.value) || "ask";
+}
+
+function paintAskWhere() {
+  const k = ASK_KINDS[askKind()];
+  $("#askwhere").textContent = k ? k.where : "";
+}
+
+function goFromDesktop() {
+  switch (askKind()) {
+    case "research": return askFromDesktop("research");
+    case "plan":     return createAppFromDesktop(true);
+    case "build":    return createAppFromDesktop(false);
+    default:         return askFromDesktop("search");
+  }
+}
+
 function initAsk() {
-  $("#askgo").addEventListener("click", () => askFromDesktop("search"));
-  $("#askdeep").addEventListener("click", () => askFromDesktop("research"));
-  $("#askapp").addEventListener("click", createAppFromDesktop);
-  /* A memo now, so Enter has to be shared: plain Enter still asks (the
-     common case), Shift+Enter makes a line break for the longer app
-     descriptions the Create App button exists for. */
+  $("#askgo").addEventListener("click", goFromDesktop);
+  $("#askkind").addEventListener("change", paintAskWhere);
+  paintAskWhere();
+  /* A memo, so Enter has to be shared: plain Enter runs the selected
+     intent, Shift+Enter makes a line break for the longer descriptions
+     the app intents want. */
   $("#askfld").addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      askFromDesktop("search");
+      goFromDesktop();
     }
   });
 }
@@ -2490,8 +2531,21 @@ function buildChatUI(project) {
     return w;
   }
 
-  async function submit() {
+  /* True between a plan turn landing and its approval.
+
+     The approve card invites "ask for changes", and a change typed into
+     the composer goes through plain submit() -- which would have sent it
+     as a BUILD turn, re-arming every mutating tool before anyone pressed
+     Approve, while the stale approval card sat there offering to do what
+     had already happened. A conversation with a plan awaiting approval
+     stays in plan mode until the approval handler says otherwise. */
+  let planPending = false;
+
+  async function submit(mode) {
     await ready;
+    /* Explicit mode wins (the approve handler passes "build"); otherwise
+       a pending plan keeps the conversation read-only. */
+    if (!mode && planPending) mode = "plan";
     const text = ta.value.trim();
     if (!text) return;
     ta.value = "";
@@ -2512,9 +2566,23 @@ function buildChatUI(project) {
         body: JSON.stringify({
           stream: true,
           messages: history,
-          /* Builder mode: the system prompt that makes the deliverable an
-             app rather than an essay, scoped to this project. */
+          /* The builder prompt goes in the top-level "system" field,
+             which the gateway now composes as the LAST section of its
+             own prompt.
+
+             Not as a system message in messages[]: that is the shape
+             reserved for a third party's persona, and the gateway
+             honours it by skipping BuildSystemPrompt entirely -- so
+             sending it that way would have cost this conversation the
+             workspace context, memory, AGENTS rules, skill catalog and
+             tool-use rules it needs to build anything. "Deliverables
+             are apps, written here" is a house rule for PasClaw, not a
+             different assistant. */
           system: builderPrompt(project),
+          /* Plan mode is enforced server-side -- its dispatch gate
+             refuses mutating tools -- so "plan before building" is not
+             an instruction the model can decide to skip. */
+          mode: mode === "plan" ? "plan" : "build",
         }),
       });
       if (!r.ok) { body.textContent = `(http ${r.status})`; send.disabled = false; return; }
@@ -2582,6 +2650,12 @@ function buildChatUI(project) {
       ui.blocks.forEach(b => renderUIBlock(b, project, submitText));
     }
 
+    /* A plan turn ends with a decision, so the decision gets a button
+       rather than an instruction to type "yes". Approving sends the
+       build turn with the plan already in history -- the model is not
+       told the plan again, it is told to carry out the one above. */
+    if (mode === "plan") { planPending = true; addApproveBar(); }
+
     /* Did this turn leave a runnable app behind? Ask the gateway rather
        than trusting the transcript. */
     try {
@@ -2620,9 +2694,42 @@ function buildChatUI(project) {
   /* Named so the turn handler above can hand it to renderUIBlock: an
      answered dialog continues THIS conversation, not one that merely
      shares the project. */
-  const submitText = text => { ta.value = text; submit(); };
+  const submitText = (text, mode) => { ta.value = text; submit(mode); };
 
-  send.addEventListener("click", submit);
+  /* The approve gate for a planned app. Only one can be live at a time:
+     a second plan turn retires the first bar, because approving a plan
+     two turns stale would build something the conversation has already
+     moved past. */
+  let approveBar = null;
+  function addApproveBar() {
+    if (approveBar) approveBar.remove();
+    const bar = el("div", "artifact");
+    approveBar = bar;
+    const g = el("div", "ico"); g.innerHTML = icon("page");
+    bar.appendChild(g);
+    const meta = el("div", "meta");
+    meta.appendChild(el("div", "nm", "Plan -- nothing built yet"));
+    meta.appendChild(el("div", "kd",
+      "Ask for changes, or approve to start building"));
+    bar.appendChild(meta);
+    const go = el("button", "btn", "Approve & build");
+    go.addEventListener("click", () => {
+      if (approveBar === bar) approveBar = null;
+      bar.remove();
+      /* The one place plan mode is left, and it takes a click to do it. */
+      planPending = false;
+      submitText("Approved -- build it. Follow the plan above; if you hit " +
+                 "something it did not anticipate, say so rather than " +
+                 "quietly doing something else.", "build");
+    });
+    bar.appendChild(go);
+    log.appendChild(bar);
+    log.scrollTop = log.scrollHeight;
+  }
+
+  /* Bare calls: the click event would otherwise arrive as submit's mode
+     argument, and an Event is not "plan". */
+  send.addEventListener("click", () => submit());
   ta.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
   });
