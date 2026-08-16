@@ -4216,7 +4216,7 @@ end;
 
 function IsRestrictedFsPath(const Path: string): Boolean;
 var
-  Full, CfgFull, Base: string;
+  Full, CfgFull, Base, OAuthDir: string;
   {$IFDEF FPC}{$IFDEF UNIX}CP: string;{$ENDIF}{$ENDIF}
 begin
   Result := False;
@@ -4238,6 +4238,34 @@ begin
   if CP <> '' then CfgFull := CP;
   {$ENDIF}{$ENDIF}
   if (CfgFull <> '') and SameFileName(Full, CfgFull) then Exit(True);
+
+  (* Secret DIRECTORIES, checked before the basename rules.
+
+     $PASCLAW_HOME/oauth/<server>.json holds MCP OAuth material written
+     by PasClaw.MCP.OAuth.SaveTokens -- access_token and refresh_token
+     in cleartext. Its basename is whatever the MCP server is called,
+     so no basename rule can ever cover it, and a directory test is the
+     only shape that works.
+
+     Demonstrated before this guard existed: with sandbox.allow_read_paths
+     widened to include the home tree (a supported configuration),
+     GET /v1/fs/read?path=$PASCLAW_HOME/oauth/github.json returned the
+     live tokens, while the same request for config.json was correctly
+     refused. Same endpoint, same threat, one file protected and the
+     other not. Because the gateway ships with bearer auth OFF unless a
+     token is configured, that made third-party refresh tokens readable
+     by any caller who could reach the port.
+
+     Directory-scoped rather than by filename, so future files dropped
+     into these dirs are covered without anyone remembering to extend a
+     list. *)
+  OAuthDir := JoinPath(GetHome, 'oauth');
+  {$IFDEF FPC}{$IFDEF UNIX}
+  CP := CanonicalPath(OAuthDir);
+  if CP <> '' then OAuthDir := CP;
+  {$ENDIF}{$ENDIF}
+  if (OAuthDir <> '') and PathInsideDirectory(Full, OAuthDir) then Exit(True);
+
   { Basename denylist for the conventional secret files. }
   Base := LowerCase(ExtractFileName(Full));
   if Base = 'config.json' then Exit(True);
@@ -5149,8 +5177,17 @@ begin
   if Presented = '' then Presented := QueryToken;
   if Presented = '' then Exit;
 
-  Result := NormaliseTokenForCompare(Presented) =
-            NormaliseTokenForCompare(FRelayToken);
+  { Constant-time. The relay token is a real credential -- it lets a
+    worker claim inference requests and hand back arbitrary model
+    output, i.e. inject into the agent loop -- and it is only 40 bits
+    (8 Crockford base32 chars). The main gateway token has always been
+    compared with ConstantTimeStringEqual; this path used '=' and so
+    leaked a per-character timing signal that makes those 40 bits
+    searchable rather than guessable. Normalisation (case-fold, strip
+    hyphens) happens first so the operator-friendly formats still
+    match, then the comparison itself is length-then-XOR. }
+  Result := ConstantTimeStringEqual(NormaliseTokenForCompare(Presented),
+                                    NormaliseTokenForCompare(FRelayToken));
 end;
 
 procedure TGatewayServer.HandleRelayWorkerToken(ARequest: TIdHTTPRequestInfo;

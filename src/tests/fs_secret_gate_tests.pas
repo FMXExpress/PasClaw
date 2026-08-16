@@ -17,6 +17,7 @@ program fs_secret_gate_tests;
 uses
   SysUtils,
   {$IFDEF UNIX}BaseUnix,{$ENDIF}
+  PasClaw.Utils,           { JoinPath, GetHome }
   PasClaw.Config,          { GetConfigPath }
   PasClaw.Gateway.Server;  { IsRestrictedFsPath }
 
@@ -119,6 +120,28 @@ begin
   {$IFDEF UNIX}
   RunSymlinkChecks;
   {$ENDIF}
+
+  (* MCP OAuth token store. $PASCLAW_HOME/oauth/<server>.json holds
+     access_token and refresh_token in cleartext, and its basename is
+     whatever the MCP server happens to be called -- so no basename rule
+     can cover it and only a directory test works.
+
+     Demonstrated live before the guard existed: with
+     sandbox.allow_read_paths widened to the home tree,
+     GET /v1/fs/read?path=$PASCLAW_HOME/oauth/github.json returned the
+     tokens while config.json was correctly refused. Same endpoint, same
+     threat, one covered and one not. *)
+  AssertRestricted(JoinPath(JoinPath(GetHome, 'oauth'), 'github.json'),
+                   True,  'MCP OAuth token file hidden');
+  AssertRestricted(JoinPath(JoinPath(GetHome, 'oauth'), 'any-server-name.json'),
+                   True,  'OAuth store hidden whatever the server is called');
+  AssertRestricted(JoinPath(JoinPath(JoinPath(GetHome, 'oauth'), 'nested'), 'x.json'),
+                   True,  'nested file under oauth/ hidden');
+  { A sibling directory whose name merely starts with the same letters
+    must NOT be swept up -- the check is a path-boundary test, not a
+    string prefix. }
+  AssertRestricted(JoinPath(GetHome, 'oauth-notes.txt'),
+                   False, 'oauth-notes.txt is not inside oauth/ and stays visible');
 
   WriteLn('fs_secret_gate_tests: OK');
 end.
