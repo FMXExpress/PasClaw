@@ -11,7 +11,7 @@
   palette block below is machine-generated from the styles repo -- see
   scripts/export-retro-palettes.py. Do not hand-edit colors.
 -->
-<html lang="en" data-style="Win95">
+<html lang="en" data-style="Synthwave">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -759,7 +759,7 @@
   --font: "Tahoma", Tahoma, Geneva, Verdana, sans-serif;
 }
 
-/* STYLES = [{"id":"Amiga13","title":"AmigaOS 1.3","family":"os2"},{"id":"Amiga20","title":"AmigaOS 2.0","family":"win9x"},{"id":"AppleSystem","title":"Apple System","family":"sysos"},{"id":"BeOS","title":"BeOS R5","family":"sysos"},{"id":"Blockprint","title":"BLOCKPRINT","family":"os2"},{"id":"CDE","title":"CDE","family":"cde"},{"id":"CDESolaris","title":"CDE Solaris","family":"cde"},{"id":"Canopy","title":"CANOPY","family":"mac9"},{"id":"ClaudeCode","title":"Claude Code","family":"synth"},{"id":"ClaudeCodeDark","title":"Claude Code (dark)","family":"synth"},{"id":"DESQviewX","title":"DESQview/X","family":"cde"},{"id":"GEM","title":"GEM / Atari TOS","family":"sysos"},{"id":"Lagoon","title":"LAGOON 1.0","family":"xp"},{"id":"MacOS9","title":"Mac OS 9","family":"mac9"},{"id":"NeXTSTEP","title":"NeXTSTEP 3.3","family":"mac9"},{"id":"OS2Warp4","title":"OS/2 Warp 4","family":"os2"},{"id":"Phosphor","title":"PHOSPHOR","family":"synth"},{"id":"Photon","title":"QNX Photon","family":"cde"},{"id":"Synthwave","title":"NEON/OS 1984","family":"synth"},{"id":"Vellum","title":"VELLUM","family":"mac9"},{"id":"Win2000","title":"Windows 2000","family":"win9x"},{"id":"Win31","title":"Windows 3.1","family":"win31"},{"id":"Win95","title":"Windows 95","family":"win9x"},{"id":"Win98","title":"Windows 98","family":"win9x"},{"id":"WinXPLuna","title":"Windows XP Luna","family":"xp"},{"id":"WinXPOlive","title":"Windows XP Olive","family":"xp"},{"id":"WinXPSilver","title":"Windows XP Silver","family":"xp"}] */
+/* STYLES = [{"id":"Amiga13","title":"AmigaOS 1.3 Vibes","family":"os2"},{"id":"Amiga20","title":"AmigaOS 2.0 Vibes","family":"win9x"},{"id":"AppleSystem","title":"Apple System Vibes","family":"sysos"},{"id":"BeOS","title":"BeOS R5 Vibes","family":"sysos"},{"id":"Blockprint","title":"BLOCKPRINT Vibes","family":"os2"},{"id":"CDE","title":"CDE Vibes","family":"cde"},{"id":"CDESolaris","title":"CDE Solaris Vibes","family":"cde"},{"id":"Canopy","title":"CANOPY Vibes","family":"mac9"},{"id":"ClaudeCode","title":"Claude Code Vibes","family":"synth"},{"id":"ClaudeCodeDark","title":"Claude Code (dark) Vibes","family":"synth"},{"id":"DESQviewX","title":"DESQview/X Vibes","family":"cde"},{"id":"GEM","title":"GEM / Atari TOS Vibes","family":"sysos"},{"id":"Lagoon","title":"LAGOON 1.0 Vibes","family":"xp"},{"id":"MacOS9","title":"Mac OS 9 Vibes","family":"mac9"},{"id":"NeXTSTEP","title":"NeXTSTEP 3.3 Vibes","family":"mac9"},{"id":"OS2Warp4","title":"OS/2 Warp 4 Vibes","family":"os2"},{"id":"Phosphor","title":"PHOSPHOR Vibes","family":"synth"},{"id":"Photon","title":"QNX Photon Vibes","family":"cde"},{"id":"Synthwave","title":"NEON/OS 1984 Vibes","family":"synth"},{"id":"Vellum","title":"VELLUM Vibes","family":"mac9"},{"id":"Win2000","title":"Windows 2000 Vibes","family":"win9x"},{"id":"Win31","title":"Windows 3.1 Vibes","family":"win31"},{"id":"Win95","title":"Windows 95 Vibes","family":"win9x"},{"id":"Win98","title":"Windows 98 Vibes","family":"win9x"},{"id":"WinXPLuna","title":"Windows XP Luna Vibes","family":"xp"},{"id":"WinXPOlive","title":"Windows XP Olive Vibes","family":"xp"},{"id":"WinXPSilver","title":"Windows XP Silver Vibes","family":"xp"}] */
 /* END GENERATED PALETTES */
 
 /* ==========================================================================
@@ -1084,8 +1084,12 @@ iframe.app { width: 100%; height: 100%; border: 0; background: var(--window); di
   width: min(480px, 70%);
   z-index: 0;
 }
-#askrow { display: flex; gap: 4px; }
-#askrow input { flex: 1 1 auto; }
+#askrow { display: flex; flex-direction: column; gap: 4px; }
+#askrow textarea {
+  width: 100%; min-height: 3.6em; resize: vertical;
+  font: inherit; padding: 3px 4px;
+}
+#askbtns { display: flex; gap: 4px; justify-content: flex-end; }
 #chips {
   display: flex; flex-wrap: wrap; gap: 4px;
   justify-content: center; margin-top: 6px;
@@ -1120,10 +1124,13 @@ iframe.app { width: 100%; height: 100%; border: 0; background: var(--window); di
     <div id="icons"></div>
     <div id="ask">
       <div id="askrow">
-        <input id="askfld" type="text"
-               placeholder="Ask anything -- the answer opens as a page">
-        <button id="askgo" class="btn">Ask</button>
-        <button id="askdeep" class="btn" title="Plan, read several sources, and write a longer sourced report">Research</button>
+        <textarea id="askfld" rows="3"
+               placeholder="Ask anything -- or describe an app to build"></textarea>
+        <div id="askbtns">
+          <button id="askapp" class="btn" title="Start a project and build this as an app">Create App</button>
+          <button id="askdeep" class="btn" title="Plan, read several sources, and write a longer sourced report">Research</button>
+          <button id="askgo" class="btn">Ask</button>
+        </div>
       </div>
       <div id="chips"></div>
     </div>
@@ -1845,6 +1852,41 @@ function askFromDesktop(kind) {
   else openBrowser(undefined, query, kind);
 }
 
+/* Create App: the same memo, but the deliverable is software. Starts a
+   project named after the request, opens its chat, and sends the memo as
+   the first turn -- from there it is the ordinary lovable loop: chat on
+   the left, the app running on the right. The project title is only a
+   label derived from the first words; the full text goes to the chat. */
+async function createAppFromDesktop() {
+  const fld = $("#askfld");
+  const text = fld.value.trim();
+  if (!text) return;
+  let title = text.split(/\s+/).slice(0, 6).join(" ");
+  if (title.length > 48) title = title.slice(0, 48);
+  fld.value = "";
+  try {
+    /* The server's create is idempotent: a title that sanitizes to an
+       existing slug hands back the OLD project, and two different
+       requests sharing their first words would silently share -- and
+       overwrite -- one app. So ask for the list first and retry with a
+       numbered title until the slug that comes back is genuinely new. */
+    const taken = new Set(
+      ((await api("/v1/projects")).projects || []).map(p => p.name));
+    let j = null;
+    for (let n = 1; n <= 20; n++) {
+      const t = n === 1 ? title : title + " " + n;
+      j = await api("/v1/projects", { method: "POST", body: { title: t } });
+      if (!taken.has(j.name)) break;
+      j = null;
+    }
+    if (!j) throw new Error(
+      "could not find a free project name for \"" + title + "\"");
+    await loadProjects();
+    openChat(j.name);
+    projectChat(j.name).submitText(text);
+  } catch (e) { alert(e.message); }
+}
+
 function paintChips() {
   const host = $("#chips");
   if (!host) return;
@@ -1881,8 +1923,15 @@ function paintChips() {
 function initAsk() {
   $("#askgo").addEventListener("click", () => askFromDesktop("search"));
   $("#askdeep").addEventListener("click", () => askFromDesktop("research"));
+  $("#askapp").addEventListener("click", createAppFromDesktop);
+  /* A memo now, so Enter has to be shared: plain Enter still asks (the
+     common case), Shift+Enter makes a line break for the longer app
+     descriptions the Create App button exists for. */
   $("#askfld").addEventListener("keydown", e => {
-    if (e.key === "Enter") askFromDesktop("search");
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      askFromDesktop("search");
+    }
   });
 }
 
@@ -2130,6 +2179,63 @@ async function newTask(project) {
   await loadProjects();
 }
 
+/* The agent keeps a working checklist through its todo_write tool, and the
+   desktop watches those calls stream by in the chat -- so the checklist
+   shows up on the project's task board instead of living only inside the
+   model's head. Reconciled by title, never deleted: todo_write REPLACES
+   the model's list each call, but a task that fell off the model's radar
+   is still work someone asked for. Unchecked items are created as todo,
+   checked ones are marked done.
+
+   Serialized per project: one turn can rewrite the checklist several
+   times, and two overlapping reconciles would both see "missing" and both
+   create -- the very duplicates matching by title exists to prevent. */
+const CHECKLIST_SYNC = new Map();
+
+function mirrorChecklist(project, argsStr) {
+  const items = [];
+  try {
+    (JSON.parse(argsStr).checklist || "").split("\n").forEach(ln => {
+      const m = ln.match(/^\s*[-*]\s*\[([ xX])\]\s*(.+?)\s*$/);
+      if (m) items.push({ done: m[1] !== " ", title: m[2] });
+    });
+  } catch { return; }
+  if (!items.length) return;
+  const prev = CHECKLIST_SYNC.get(project) || Promise.resolve();
+  const next = prev.then(async () => {
+    try {
+      const j = await api(`/v1/projects/${project}/tasks`);
+      const have = new Map();
+      (j.tasks || []).forEach(t => { if (!have.has(t.title)) have.set(t.title, t); });
+      for (const it of items) {
+        const t = have.get(it.title);
+        if (!t) {
+          const made = await api(`/v1/projects/${project}/tasks`,
+            { method: "POST", body: { title: it.title } });
+          have.set(it.title, { id: made.id, status: "todo" });
+          if (it.done)
+            await api(`/v1/projects/${project}/tasks/${made.id}`,
+              { method: "PATCH", body: { status: "done" } });
+        } else if (it.done && t.status !== "done") {
+          await api(`/v1/projects/${project}/tasks/${t.id}`,
+            { method: "PATCH", body: { status: "done" } });
+          t.status = "done";
+        } else if (!it.done && t.status === "done") {
+          /* The model walked it back: a later checklist unchecked the
+             item because more work turned up. A board still claiming
+             done would be lying, which is worse than reopening. */
+          await api(`/v1/projects/${project}/tasks/${t.id}`,
+            { method: "PATCH", body: { status: "todo" } });
+          t.status = "todo";
+        }
+      }
+      await loadProjects();
+      if (S.tree[project]) { await loadTasks(project); paintTree(); }
+    } catch {} /* best effort: the chat must not stall on the board */
+  });
+  CHECKLIST_SYNC.set(project, next);
+}
+
 /* ==========================================================================
    Chat -- per project, with artifact cards
    ========================================================================== */
@@ -2375,6 +2481,11 @@ function buildChatUI(project) {
                 const tj = JSON.parse(c.slice("pasclaw-tool ".length));
                 const argstr = JSON.stringify(tj.args || tj.arguments || {});
                 if (/projects\/[^"]*\/app\//.test(argstr)) touchedApp = true;
+                /* The model's own checklist IS this project's task list.
+                   Mirror it as the calls stream by, not at turn end, so
+                   the board fills in while the agent is still working. */
+                if (tj.t === "call" && tj.name === "todo_write")
+                  mirrorChecklist(project, tj.args);
               } catch {}
             }
             continue;
@@ -3455,7 +3566,29 @@ function loadStyleList() {
       if (m) ids.add(m[1]);
     }
   }
-  S.styles = Array.from(ids).sort();
+  /* Display names come from the same generated block's STYLES manifest.
+     CSS comments don't survive into cssRules, so read the <style>
+     element's text. A style present in the sheet but missing from the
+     manifest still gets a name -- never an empty row. */
+  S.styleTitles = {};
+  try {
+    for (const st of document.querySelectorAll("style")) {
+      const m = st.textContent.match(/\/\* STYLES = (\[.*?\]) \*\//);
+      if (!m) continue;
+      JSON.parse(m[1]).forEach(s => { S.styleTitles[s.id] = s.title; });
+      break;
+    }
+  } catch {}
+  S.styles = Array.from(ids).sort(
+    (a, b) => styleTitle(a).localeCompare(styleTitle(b)));
+}
+
+/* Every theme is a vibe of the machine it remembers, and the names say
+   so. The manifest titles already end in "Vibes"; the suffix is enforced
+   here too so a stale or hand-edited manifest can't leak one without. */
+function styleTitle(id) {
+  const t = (S.styleTitles && S.styleTitles[id]) || id;
+  return /\bVibes$/.test(t) ? t : t + " Vibes";
 }
 
 function applyStyle(id) {
@@ -3471,7 +3604,7 @@ function openDisplay() {
   const list = el("div", "list in");
   list.style.cssText = "height:calc(100% - 26px);margin:3px";
   S.styles.forEach(id => {
-    const r = el("div", "row" + (id === S.style ? " sel" : ""), id);
+    const r = el("div", "row" + (id === S.style ? " sel" : ""), styleTitle(id));
     r.addEventListener("click", () => {
       list.querySelectorAll(".row.sel").forEach(x => x.classList.remove("sel"));
       r.classList.add("sel");
@@ -3492,7 +3625,7 @@ function openDisplay() {
 
 async function boot() {
   loadStyleList();
-  try { applyStyle(localStorage.getItem(STYLE_KEY) || "Win95"); } catch { applyStyle("Win95"); }
+  try { applyStyle(localStorage.getItem(STYLE_KEY) || "Synthwave"); } catch { applyStyle("Synthwave"); }
   buildMenu();
   initDock();
   initAsk();
