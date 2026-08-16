@@ -332,35 +332,69 @@ begin
         MCPServer.Start(Args.Addr, Args.MCPPort);
 
       BaseURL := Format('http://%s:%d/v1', [Args.Addr, Args.Port]);
-      PrintLn(Ansi.Bold + 'OpenAI-compatible server up.' + Ansi.Reset);
-      PrintLn('  base_url: ' + BaseURL);
-      PrintLn('  model:    ' + Cfg.DefaultModel);
-      PrintLn(Format('  max-iter: %d', [Args.MaxIter]));
+
+      (* Startup banner. Grouped by what an operator actually needs to
+         know, in descending order of consequence: identity, endpoints,
+         exposure, then how to call it. The old form was a flat list of
+         eight `key: value` lines in which "auth is off" appeared as
+         just another [info] between two subsystem notices; anything
+         security-relevant now gets its own block and its own colour. *)
+      PrintLn;
+      PrintLn(Ansi.Bold + '  PasClaw ' + FormatVersion + Ansi.Reset +
+              Ansi.Dim + '  ready' + Ansi.Reset);
+      PrintLn;
+      PrintLn('  ' + Ansi.Dim + 'API  ' + Ansi.Reset + BaseURL +
+              Ansi.Dim + '   OpenAI-compatible' + Ansi.Reset);
       if MCPServer <> nil then
-        PrintLn(Format('  mcp:      http://%s:%d/mcp (dedicated listener)',
-                       [Args.Addr, Args.MCPPort]))
+        PrintLn(Format('  %sMCP  %shttp://%s:%d/mcp%s   dedicated listener%s',
+                       [Ansi.Dim, Ansi.Reset, Args.Addr, Args.MCPPort,
+                        Ansi.Dim, Ansi.Reset]))
       else
-        PrintLn(Format('  mcp:      http://%s:%d/mcp (mounted on main port)',
-                       [Args.Addr, Args.Port]));
+        PrintLn(Format('  %sMCP  %shttp://%s:%d/mcp%s   on the main port%s',
+                       [Ansi.Dim, Ansi.Reset, Args.Addr, Args.Port,
+                        Ansi.Dim, Ansi.Reset]));
+      PrintLn('  ' + Ansi.Dim + 'Model' + Ansi.Reset + ' ' + Cfg.DefaultModel +
+              Ansi.Dim + Format('   max %d iteration(s) per turn', [Args.MaxIter]) +
+              Ansi.Reset);
+      PrintLn;
+
+      { Exposure block. Two independent switches an operator can get
+        wrong, stated as what is currently true rather than as a flag
+        reference. }
+      if GatewayAuthIsInsecure(Cfg) then
+      begin
+        PrintLn('  ' + Ansi.Yellow + 'Unauthenticated' + Ansi.Reset +
+                ' -- every /v1/* and /mcp route is open to any caller.');
+        PrintLn('  ' + Ansi.Dim +
+                'Set gateway.token in config.json or $PASCLAW_GATEWAY_TOKEN to require a bearer.' +
+                Ansi.Reset);
+      end
+      else
+        PrintLn('  ' + Ansi.Green + 'Bearer auth required' + Ansi.Reset +
+                Ansi.Dim + ' on /v1/* and /mcp.' + Ansi.Reset);
       if Args.MCPAllowWrite then
-        PrintLn('            mutating tools EXPOSED to MCP clients (--mcp-allow-write)')
+        PrintLn('  ' + Ansi.Yellow + 'Mutating tools exposed' + Ansi.Reset +
+                ' to MCP clients (--mcp-allow-write).')
       else
-        PrintLn('            read-only tools only -- pass --mcp-allow-write to flip');
+        PrintLn('  ' + Ansi.Dim +
+                'MCP exposes read-only tools; --mcp-allow-write enables the rest.' +
+                Ansi.Reset);
       PrintLn;
-      PrintLn(Ansi.Dim + '  Example (openai-python):' + Ansi.Reset);
-      PrintLn('    client = OpenAI(base_url="' + BaseURL + '", api_key="sk-pasclaw")');
-      PrintLn('    client.chat.completions.create(model="' + Cfg.DefaultModel +
-              '", messages=[{"role":"user","content":"hi"}])');
-      PrintLn;
-      PrintLn(Ansi.Dim + '  Example (curl):' + Ansi.Reset);
-      PrintLn('    curl ' + BaseURL + '/chat/completions -H "Content-Type: application/json" \');
-      PrintLn('         -d ''{"model":"' + Cfg.DefaultModel +
-              '","messages":[{"role":"user","content":"hi"}]}''');
-      PrintLn;
-      PrintLn(Ansi.Bold + 'Relay worker token: ' + Ansi.Reset +
+
+      PrintLn('  ' + Ansi.Dim + 'Relay worker token ' + Ansi.Reset +
               Ansi.Cyan + Server.RelayToken + Ansi.Reset +
-              Ansi.Dim + '   (regenerated each start; unlocks /v1/relay/* only)' + Ansi.Reset);
-      PrintLn(Ansi.Dim + 'Press Ctrl-C to stop.' + Ansi.Reset);
+              Ansi.Dim + '   new each start; unlocks /v1/relay/* only' + Ansi.Reset);
+      PrintLn;
+
+      PrintLn('  ' + Ansi.Dim + 'Try it' + Ansi.Reset);
+      PrintLn('    curl ' + BaseURL + '/chat/completions \');
+      PrintLn('      -H "Content-Type: application/json" \');
+      PrintLn('      -d ''{"model":"' + Cfg.DefaultModel +
+              '","messages":[{"role":"user","content":"hi"}]}''');
+      PrintLn('    ' + Ansi.Dim + 'python: OpenAI(base_url="' + BaseURL +
+              '", api_key="sk-pasclaw")' + Ansi.Reset);
+      PrintLn;
+      PrintLn(Ansi.Dim + '  Ctrl-C to stop.' + Ansi.Reset);
 
       Server.WaitForStop;
     finally

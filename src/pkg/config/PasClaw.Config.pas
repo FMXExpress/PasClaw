@@ -1059,6 +1059,14 @@ function GetEffectiveGatewayToken(const C: TConfig): string;
     prefix of a 6-byte token leaks too much). *)
 function DescribeGatewayAuthState(const C: TConfig): string;
 
+(*  GatewayAuthIsInsecure -- True when DescribeGatewayAuthState is
+    reporting an exposure (no token at all, or an unresolved template
+    that will reject every client) rather than a healthy configured
+    token. Callers use it to pick the log LEVEL: an open gateway is
+    the single most consequential fact at startup and was previously
+    emitted at [info], indistinguishable from routine chatter. *)
+function GatewayAuthIsInsecure(const C: TConfig): Boolean;
+
 (*  ExpandEnvVarsInJSON -- raw-text ${VAR_NAME} substitution applied
     to the JSON config body BEFORE TConfig.FromJSON parses it.
     Matches openclaw's `${...}` template-substitution feature so an
@@ -1141,6 +1149,13 @@ var
     neither env var is set -- the middleware then falls back to
     C.Gateway.Token. }
   GEnvGatewayToken: string = '';
+
+  { Last profile state announced on the log, so repeated LoadConfig
+    calls during one boot don't repeat the same line. See the guard in
+    LoadConfig. -1 layers means "nothing announced yet", which is
+    distinct from a real profile that resolved to zero layers. }
+  GLoggedProfile:       string  = '';
+  GLoggedProfileLayers: Integer = -1;
 
 procedure ApplyPromptCacheConfig(var Opts: TChatOptions; const PC: TPromptCacheConfig);
 begin
@@ -2559,8 +2574,22 @@ begin
                       [ProfileName, i, E.Message]);
           end;
         end;
-        LogInfo('config: profile "%s" applied (%d layer(s))',
-                [ProfileName, Length(Bodies)]);
+        { Say this once per process, not once per LoadConfig. A gateway
+          boot calls LoadConfig from several independent subsystems
+          (sandbox repoint, tool registry, KB index, ...), each of which
+          re-resolves the same profile -- so the unguarded line printed
+          the identical fact four times before the banner, which reads
+          as four events rather than one. Re-log only when the resolved
+          profile or its layer count actually changes, so a genuine
+          mid-run profile switch is still reported. }
+        if (GLoggedProfile <> ProfileName) or
+           (GLoggedProfileLayers <> Length(Bodies)) then
+        begin
+          GLoggedProfile       := ProfileName;
+          GLoggedProfileLayers := Length(Bodies);
+          LogInfo('config: profile "%s" applied (%d layer(s))',
+                  [ProfileName, Length(Bodies)]);
+        end;
       end
       else
         LogWarn('config: %s -- using defaults + config.json only', [PErr]);
@@ -2693,6 +2722,20 @@ begin
     Result := Copy(Tok, 1, 4) + '...'
   else
     Result := '<short>';
+end;
+
+function GatewayAuthIsInsecure(const C: TConfig): Boolean;
+(* Mirrors DescribeGatewayAuthState's two failure branches: no token
+   anywhere, or a token still holding an unresolved env-var template.
+   Kept next to it so the two cannot drift apart. *)
+var
+  Tok: string;
+begin
+  if GEnvGatewayToken <> '' then
+    Tok := GEnvGatewayToken
+  else
+    Tok := C.Gateway.Token;
+  Result := (Tok = '') or LooksLikeUnresolvedTemplate(Tok);
 end;
 
 function DescribeGatewayAuthState(const C: TConfig): string;
