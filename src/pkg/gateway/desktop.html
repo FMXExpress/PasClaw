@@ -1160,14 +1160,53 @@ iframe.app { width: 100%; height: 100%; border: 0; background: var(--window); di
 const TOKEN_KEY = "pasclaw.gw.token";
 function token() { try { return localStorage.getItem(TOKEN_KEY) || ""; } catch { return ""; } }
 
+/* ==========================================================================
+   The activity log
+
+   The Log window streamed /v1/logs and showed six lines: the gateway
+   logs its own lifecycle, not the traffic through it, so a window
+   opened to answer "what is it doing right now" answered "what it did
+   at startup" and then sat there. Measured: 469 characters after forty
+   API calls and a deliberate 404.
+
+   Three sources now feed one buffer -- the gateway's own log, the
+   desktop event feed, and the calls this page makes, which it can see
+   for nothing. That is what the FMX client's log window shows, and the
+   reason it looks useful. The buffer exists whether or not the window
+   is open, so opening it shows what already happened rather than
+   starting from blank.
+
+   Bounded: a busy desktop out-produces any reader, and an unbounded log
+   is a memory leak with a scrollbar. */
+const ACTIVITY = [];
+const ACTIVITY_CAP = 800;
+let activitySink = null;
+
+function activity(tag, text) {
+  const now = new Date();
+  const hh = String(now.getHours()).padStart(2, "0");
+  const mm = String(now.getMinutes()).padStart(2, "0");
+  const ss = String(now.getSeconds()).padStart(2, "0");
+  const line = `${hh}:${mm}:${ss} [${tag}] ${text}`;
+  ACTIVITY.push(line);
+  while (ACTIVITY.length > ACTIVITY_CAP) ACTIVITY.shift();
+  if (activitySink) { try { activitySink(line); } catch {} }
+  return line;
+}
+
 async function api(path, opts = {}) {
   const o = Object.assign({}, opts);
   o.headers = Object.assign({ "content-type": "application/json" }, o.headers || {});
   const t = token();
   if (t) o.headers["authorization"] = "Bearer " + t;
   if (o.body && typeof o.body !== "string") o.body = JSON.stringify(o.body);
+  const started = Date.now();
   const r = await fetch(path, o);
   const text = await r.text();
+  /* Every call this page makes, with what came back -- the traffic the
+     gateway's own log does not carry. */
+  activity(r.ok ? "http" : "http!",
+           `${o.method || "GET"} ${path} -> ${r.status} (${Date.now() - started}ms)`);
   let json = null;
   try { json = text ? JSON.parse(text) : null; } catch { /* not json */ }
   if (!r.ok) {
@@ -1620,6 +1659,10 @@ function subscribeEvents() {
   src.addEventListener("message", e => {
     let ev;
     try { ev = JSON.parse(e.data); } catch { return; }
+    /* The event feed is half of "what is happening"; the Log window
+       shows it beside the gateway's own lines and this page's calls. */
+    activity("event", ev.type + (ev.project ? " " + ev.project : "") +
+                      (ev.status ? " " + ev.status : ""));
     /* A gap means our queue overflowed and events were dropped. The only
        honest response is to re-read rather than to carry on from a state
        that may be wrong. */
@@ -2471,6 +2514,7 @@ function openShell() {
   });
   const where = el("span", "muted");
   const go = el("button", "btn", "Go");
+  const turn = makeTurnControl(go, "Go");
   row.appendChild(where); row.appendChild(kind); row.appendChild(go);
   composer.appendChild(ta); composer.appendChild(row);
   const chips = el("div", "shellchips");
@@ -2536,38 +2580,83 @@ function openShell() {
      where they can be shown. */
   async function control(text) {
     ta.value = "";
+    if (turn.running) return;
     history.push({ role: "user", content: text });
-    const body = say("pasclaw", "...");
-    go.disabled = true;
-    let acc = "";
+    const body = say("pasclaw", "");
+    const signal = turn.begin();
+    let acc = "", stopped = false;
     try {
       const t = token();
       const r = await fetch("/v1/chat/completions", {
         method: "POST",
-        headers: Object.assign({ "content-type": "application/json" },
-                               t ? { authorization: "Bearer " + t } : {}),
-        /* Tools ON, state in the prompt. The two solve different halves:
+        signal,
+        headers: Object.assign(
+          { "content-type": "application/json", "accept": "text/event-stream" },
+          t ? { authorization: "Bearer " + t } : {}),
+        /* STREAMED, like the project chats.
+
+           This was a plain fetch that showed "..." until the whole turn
+           came back -- on the surface most likely to run multi-step
+           work, which is backwards: a shell turn can read a file, search
+           the workspace and rearrange the screen, and the user saw none
+           of it until it was over. The same SSE path the project chat
+           uses puts each tool call on screen as it happens.
+
+           Tools ON, state in the prompt. The two solve different halves:
            the prompt means the model never has to go REDISCOVER the
            windows and projects the page already knows, and the tools
            mean it can still act -- including composing a read or a
            search with a desktop change in the same turn. Arranging the
            screen goes through the `desktop` tool, which publishes onto
            the event feed this page is already listening to. */
-        body: JSON.stringify({ messages: history, system: shellPrompt() }),
+        body: JSON.stringify({ stream: true, messages: history,
+                               system: shellPrompt() }),
       });
-      const j = await r.json();
-      acc = (j.choices && j.choices[0] && j.choices[0].message &&
-             j.choices[0].message.content) || "(no answer)";
-    } catch (e) { acc = "(" + e.message + ")"; }
-    go.disabled = false;
+      if (!r.ok) {
+        body.textContent = "(http " + r.status + ")";
+        turn.end();
+        return;
+      }
+      const reader = r.body.getReader(), dec = new TextDecoder();
+      let buf = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf("\n")) >= 0) {
+          const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
+          if (line.startsWith(":")) continue;      /* tool side-channel */
+          if (!line.startsWith("data:")) continue;
+          const data = line.slice(5).trim();
+          if (data === "[DONE]") break;
+          try {
+            const j = JSON.parse(data);
+            const d = (j.choices && j.choices[0] && j.choices[0].delta &&
+                       j.choices[0].delta.content) || "";
+            if (d) { acc += d; body.textContent = acc; log.scrollTop = log.scrollHeight; }
+          } catch {}
+        }
+      }
+    } catch (e) {
+      if (isAbort(e)) {
+        stopped = true;
+        body.textContent = (acc ? acc + "\n\n" : "") + "(stopped)";
+      } else {
+        acc = acc || "";
+        body.textContent = (acc ? acc + "\n" : "") + "(" + e.message + ")";
+      }
+    }
+    turn.end();
     history.push({ role: "assistant", content: acc });
+    if (stopped) { saveShell(); return; }
 
     /* Actions normally arrive by TOOL, which the gateway dispatches and
        the event feed delivers -- runShellActions has already run by the
        time this reply lands. A block in the text is still honoured, for
        a model that describes the change instead of calling the tool. */
     const ui = extractUIBlocks(acc);
-    body.textContent = ui.blocks.length ? (ui.text.trim() || "On it.") : acc;
+    if (ui.blocks.length) body.textContent = ui.text.trim() || "On it.";
     for (const blk of ui.blocks)
       if (blk.ui === "desktop") await runShellActions(blk, t => note(t));
     saveShell();
@@ -2581,7 +2670,8 @@ function openShell() {
   }
   async function loadShell() {
     let j;
-    try { j = await api("/v1/sessions/" + SHELL_SESSION); } catch { return; }
+    try { j = await api("/v1/sessions/" + SHELL_SESSION + "?if_absent=empty"); }
+    catch { return; }
     ((j && j.messages) || []).forEach(m => {
       if (m.role !== "user" && m.role !== "assistant") return;
       history.push({ role: m.role, content: m.content || "" });
@@ -2591,9 +2681,11 @@ function openShell() {
     if (history.length) note("— earlier conversation, reopened —");
   }
 
-  go.addEventListener("click", run);
+  /* Go becomes Stop while a turn runs, same as the project chats. */
+  const goOrStop = () => { if (!turn.stop()) run(); };
+  go.addEventListener("click", goOrStop);
   ta.addEventListener("keydown", e => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); run(); }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); goOrStop(); }
   });
   /* The replay has to WIN, not merely start -- the same race the project
      chats already fixed. Typing before the saved messages land pushed the
@@ -2628,7 +2720,7 @@ function openShell() {
    ========================================================================== */
 function openLog() {
   const w = createWindow({ key: "log", title: "Log", icon: "gear",
-                           width: 720, height: 420, pad: false,
+                           width: 760, height: 440, pad: false,
                            restore: { fn: "log", arg: "" } });
   if (w.__logBuilt) { restoreWindow(w); focusWindow(w); return w; }
   w.__logBuilt = true;
@@ -2650,13 +2742,9 @@ function openLog() {
   w.body.appendChild(out);
 
   let paused = false;
-  /* Bounded: a gateway under load emits faster than anyone reads, and an
-     unbounded log window is a memory leak with a scrollbar. */
-  const CAP = 500;
-  const lines = [];
   const repaint = () => {
     const f = filter.value.trim().toLowerCase();
-    const shown = f ? lines.filter(l => l.toLowerCase().includes(f)) : lines;
+    const shown = f ? ACTIVITY.filter(l => l.toLowerCase().includes(f)) : ACTIVITY;
     out.textContent = shown.join("\n");
     if (!paused) out.scrollTop = out.scrollHeight;
   };
@@ -2666,8 +2754,19 @@ function openLog() {
     pause.textContent = paused ? "Resume" : "Pause";
     if (!paused) repaint();
   });
-  clear.addEventListener("click", () => { lines.length = 0; repaint(); });
+  /* Clears the shared buffer, not just this view -- there is one log,
+     and a Clear that only blanked the window would refill on the next
+     line. */
+  clear.addEventListener("click", () => { ACTIVITY.length = 0; repaint(); });
 
+  /* Opening shows what already happened: the buffer has been filling
+     since boot whether or not anyone was watching. */
+  repaint();
+  activitySink = () => { if (!paused) repaint(); };
+
+  /* The gateway's own log is the third source. Its lines are lifecycle
+     events -- listening, provider switched, tool registered -- which is
+     worth having beside the traffic even though it is not the traffic. */
   const t = token();
   const url = "/v1/logs" + (t ? "?token=" + encodeURIComponent(t) : "");
   let src = null;
@@ -2676,20 +2775,21 @@ function openLog() {
     src.addEventListener("message", e => {
       let line = e.data;
       try { const j = JSON.parse(e.data); if (typeof j === "string") line = j; } catch {}
-      lines.push(line);
-      while (lines.length > CAP) lines.shift();
-      if (!paused) repaint();
+      activity("gateway", line);
     });
     src.addEventListener("error", () => {
-      lines.push("(log feed dropped -- it reconnects on its own)");
-      repaint();
+      activity("gateway", "(log feed dropped -- it reconnects on its own)");
     });
   } else {
-    out.textContent = "This browser has no EventSource, so the log cannot stream.";
+    activity("gateway", "this browser has no EventSource, so the gateway log cannot stream");
   }
-  /* The stream is the window's; closing the window must end it, or a
-     desktop session accumulates a feed per window ever opened. */
-  w.onClose = () => { try { if (src) src.close(); } catch {} };
+  /* The stream and the sink are the window's: closing it must end both,
+     or a session accumulates a feed and a repaint callback per window
+     ever opened. */
+  w.onClose = () => {
+    try { if (src) src.close(); } catch {}
+    activitySink = null;
+  };
   return w;
 }
 
@@ -3063,6 +3163,54 @@ function mirrorChecklist(project, argsStr) {
    Chat -- per project, with artifact cards
    ========================================================================== */
 
+/* ==========================================================================
+   Turns you can stop
+
+   A turn had no brake. Send disabled itself and the window sat on "..."
+   until the answer came back -- and with the provider unreachable that
+   is the relay's full wait, ten minutes of a dead window with nothing
+   to press. It matters more now than it did: research digs until it is
+   satisfied and a build runs to the iteration cap, so a turn started by
+   mistake used to cost the surface it was started from.
+
+   One controller per conversation. Starting a turn arms it, the button
+   becomes Stop, and stopping aborts the fetch -- which rejects the read
+   in progress, so whatever text had already arrived stays in the
+   transcript and the turn is marked stopped rather than vanishing. */
+function makeTurnControl(button, sendLabel) {
+  let ctl = null;
+  return {
+    get signal() { return ctl ? ctl.signal : undefined; },
+    get running() { return ctl !== null; },
+    begin() {
+      ctl = new AbortController();
+      button.textContent = "Stop";
+      button.title = "Stop this turn";
+      return ctl.signal;
+    },
+    end() {
+      ctl = null;
+      button.textContent = sendLabel;
+      button.title = "";
+    },
+    /* Returns true when it actually stopped something, so the caller can
+       tell "stopped a turn" from "pressed Send with an empty box". */
+    stop() {
+      if (!ctl) return false;
+      try { ctl.abort(); } catch {}
+      ctl = null;
+      button.textContent = sendLabel;
+      return true;
+    },
+  };
+}
+
+/* An aborted fetch is not a failure to report -- it is what the user
+   asked for. Everything else still is. */
+function isAbort(e) {
+  return e && (e.name === "AbortError" || /abort/i.test(String(e.message || "")));
+}
+
 /* ONE conversation per project, for the life of the page.
 
    Not one per window: a project used to be able to have its chat open in
@@ -3116,6 +3264,7 @@ function buildChatUI(project) {
   const ta = el("textarea", "fld");
   ta.placeholder = "Describe the app you want. PasClaw builds it here.";
   const send = el("button", "btn", "Send");
+  const turn = makeTurnControl(send, "Send");
   composer.appendChild(ta); composer.appendChild(send);
   wrap.appendChild(log); wrap.appendChild(composer);
 
@@ -3157,8 +3306,11 @@ function buildChatUI(project) {
      be a lie if re-rendered against a later app. */
   async function loadHistory() {
     let j;
-    try { j = await api("/v1/sessions/" + sessionId); }
-    catch { return; }              /* no session yet -- a fresh project */
+    /* if_absent=empty: a project that has never been chatted to has no
+       session, which is ordinary rather than exceptional -- asking for
+       it plainly 404s and paints the console red on a first run. */
+    try { j = await api("/v1/sessions/" + sessionId + "?if_absent=empty"); }
+    catch { return; }              /* a real failure -- start blank */
     const msgs = (j && j.messages) || [];
     if (!msgs.length) return;
     msgs.forEach(m => {
@@ -3268,6 +3420,7 @@ function buildChatUI(project) {
 
   async function submit(mode) {
     await ready;
+    if (turn.running) return;      /* one turn at a time */
     /* Explicit mode wins (the approve handler passes "build"); otherwise
        a pending plan keeps the conversation read-only. */
     if (!mode && planPending) mode = "plan";
@@ -3278,13 +3431,16 @@ function buildChatUI(project) {
     history.push({ role: "user", content: text });
 
     const body = addMsg("pasclaw", "");
-    send.disabled = true;
-    let acc = "", touchedApp = false;
+    /* Send becomes Stop for the duration -- not disabled, because a turn
+       you cannot interrupt is the thing being fixed here. */
+    const signal = turn.begin();
+    let acc = "", touchedApp = false, stopped = false;
 
     try {
       const t = token();
       const r = await fetch("/v1/chat/completions", {
         method: "POST",
+        signal,
         headers: Object.assign(
           { "content-type": "application/json", "accept": "text/event-stream" },
           t ? { authorization: "Bearer " + t } : {}),
@@ -3352,10 +3508,25 @@ function buildChatUI(project) {
         }
       }
     } catch (e) {
-      body.textContent = acc + "\n(" + e.message + ")";
+      /* Stopping is not an error -- it is the answer to a button press.
+         Whatever had already streamed in stays; only the label changes,
+         so the transcript reads as a turn cut short rather than one that
+         failed on its own. */
+      if (isAbort(e)) {
+        stopped = true;
+        body.textContent = (acc ? acc + "\n\n" : "") + "(stopped)";
+      } else {
+        body.textContent = acc + "\n(" + e.message + ")";
+      }
     }
-    send.disabled = false;
+    turn.end();
     history.push({ role: "assistant", content: acc });
+    /* A stopped turn still gets filed -- the model DID whatever it did
+       before the stop, and pretending otherwise would send the next turn
+       a history that disagrees with the workspace. It just stops here:
+       no artifact card, no app reload, no board sync, because none of
+       those questions were answered. */
+    if (stopped) { saveHistory(); return; }
 
     /* Period-native output: if the turn emitted a UI block, show the
        furniture and strip it from the visible text. Unrecognised or
@@ -3494,9 +3665,13 @@ function buildChatUI(project) {
 
   /* Bare calls: the click event would otherwise arrive as submit's mode
      argument, and an Event is not "plan". */
-  send.addEventListener("click", () => submit());
+  /* One button, two jobs: Send while idle, Stop while a turn runs. The
+     same key does the same thing, so Enter cannot start a second turn on
+     top of the one already going. */
+  const sendOrStop = () => { if (!turn.stop()) submit(); };
+  send.addEventListener("click", sendOrStop);
   ta.addEventListener("keydown", e => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendOrStop(); }
   });
   /* The load has to WIN, not merely start.
 
