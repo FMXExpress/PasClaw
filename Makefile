@@ -332,6 +332,10 @@ test-shell-denylist-bypass: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/shell_denylist_bypass_tests.pas -o$(BUILDDIR)/shell_denylist_bypass_tests
 	@$(BUILDDIR)/shell_denylist_bypass_tests
+test-shell-cwd-report: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/shell_cwd_report_tests.pas -o$(BUILDDIR)/shell_cwd_report_tests
+	@$(BUILDDIR)/shell_cwd_report_tests
 
 test-json-utf8-roundtrip: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
