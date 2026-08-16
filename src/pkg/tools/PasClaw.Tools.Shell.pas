@@ -209,6 +209,13 @@ begin
      working untouched. *)
   EffDir := WorkDir;
   if EffDir = '' then EffDir := GetCurrentDir;   { backend inherited ours }
+  { Report the path in the namespace the command actually ran in. With the
+    docker backend on Windows the host path (C:\...\workspace) is translated
+    to a container mount point before `docker exec -w` sees it, so echoing
+    the untranslated host value would name a directory that does not exist
+    where the command ran -- the opposite of the guarantee this line exists
+    to provide. Identity on POSIX and for the local backend. }
+  EffDir := HostToContainerPathViaBackend(EffDir);
 
   Tail := '';
   if (ExitCode <> 0) and (not ExplicitCwd) and LooksLikeWrongDirectory(Out_) then
