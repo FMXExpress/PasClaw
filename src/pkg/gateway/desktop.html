@@ -2478,7 +2478,6 @@ function openShell() {
   w.body.appendChild(wrap);
   paintChipsInto(chips);
 
-  const history = [];
   const say = (who, text, cls) => {
     const m = el("div", "msg " + (cls || ""));
     m.appendChild(el("div", "who", who));
@@ -2536,7 +2535,6 @@ function openShell() {
      where they can be shown. */
   async function control(text) {
     ta.value = "";
-    history.push({ role: "user", content: text });
     const body = say("pasclaw", "...");
     go.disabled = true;
     let acc = "";
@@ -2544,7 +2542,8 @@ function openShell() {
       const t = token();
       const r = await fetch("/v1/chat/completions", {
         method: "POST",
-        headers: Object.assign({ "content-type": "application/json" },
+        headers: Object.assign({ "content-type": "application/json",
+                                 "x-pasclaw-session": SHELL_SESSION },
                                t ? { authorization: "Bearer " + t } : {}),
         /* Tools ON, state in the prompt. The two solve different halves:
            the prompt means the model never has to go REDISCOVER the
@@ -2553,14 +2552,23 @@ function openShell() {
            search with a desktop change in the same turn. Arranging the
            screen goes through the `desktop` tool, which publishes onto
            the event feed this page is already listening to. */
-        body: JSON.stringify({ messages: history, system: shellPrompt() }),
+        body: JSON.stringify({
+          /* Just this turn. The gateway holds the conversation -- see
+             the note on the project chats. The shell prompt is rebuilt
+             every turn on purpose: it carries the CURRENT windows and
+             projects, and a stale copy of the screen is worse than
+             none. */
+          messages: [{ role: "user", content: text }],
+          session_context: true,
+          session_title: "Desktop shell",
+          system: shellPrompt(),
+        }),
       });
       const j = await r.json();
       acc = (j.choices && j.choices[0] && j.choices[0].message &&
              j.choices[0].message.content) || "(no answer)";
     } catch (e) { acc = "(" + e.message + ")"; }
     go.disabled = false;
-    history.push({ role: "assistant", content: acc });
 
     /* Actions normally arrive by TOOL, which the gateway dispatches and
        the event feed delivers -- runShellActions has already run by the
@@ -2570,37 +2578,33 @@ function openShell() {
     body.textContent = ui.blocks.length ? (ui.text.trim() || "On it.") : acc;
     for (const blk of ui.blocks)
       if (blk.ui === "desktop") await runShellActions(blk, t => note(t));
-    saveShell();
   }
 
-  async function saveShell() {
-    try {
-      await api("/v1/sessions/" + SHELL_SESSION, { method: "PUT",
-        body: { title: "Desktop shell", messages: history } });
-    } catch {}
-  }
   async function loadShell() {
     let j;
-    try { j = await api("/v1/sessions/" + SHELL_SESSION); } catch { return; }
+    try { j = await api("/v1/sessions/" + SHELL_SESSION); }
+    catch { return; }
+    let shown = 0;
     ((j && j.messages) || []).forEach(m => {
       if (m.role !== "user" && m.role !== "assistant") return;
-      history.push({ role: m.role, content: m.content || "" });
-      say(m.role === "user" ? "you" : "pasclaw", m.content || "",
+      const text = m.content || "";
+      if (!text.trim()) return;    /* a turn that only called tools */
+      say(m.role === "user" ? "you" : "pasclaw", text,
           m.role === "user" ? "u" : "");
+      shown++;
     });
-    if (history.length) note("— earlier conversation, reopened —");
+    if (shown) note("— earlier conversation, reopened —");
   }
 
   go.addEventListener("click", run);
   ta.addEventListener("keydown", e => {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); run(); }
   });
-  /* The replay has to WIN, not merely start -- the same race the project
-     chats already fixed. Typing before the saved messages land pushed the
-     new turn into an empty history, the GET then appended the older ones
-     AFTER it, and the PUT filed a transcript whose turns are out of
-     order -- permanently, and the model reads it that way ever after.
-     The composer is disabled until the replay lands, and run() awaits it
+  /* The replay has to WIN, not merely start. The transcript now comes
+     from the server, so typing early can no longer corrupt it -- but it
+     can still show a reply above the question it answered, because the
+     replay would land after the new turn was already on screen. The
+     composer is disabled until the replay lands, and run() awaits it
      too: the disable is what the user sees, the await is what makes it
      true for a programmatic caller. */
   ta.disabled = true;
@@ -3067,9 +3071,9 @@ function mirrorChecklist(project, argsStr) {
 
    Not one per window: a project used to be able to have its chat open in
    a floating window, the dock pane and the app window at once, three
-   buildChatUI closures with three private history arrays, and whichever
-   one you typed into was the only one that knew what you had said. This
-   map is the single instance; showChatIn re-parents its root DOM node to
+   buildChatUI closures with three private transcripts on screen, and
+   only the one you typed into showed what you had said. This map is the
+   single instance; showChatIn re-parents its root DOM node to
    whichever surface is currently its home, and appendChild detaches it
    from the previous one, so two live copies cannot exist. */
 const PROJECT_CHATS = new Map();
@@ -3105,10 +3109,10 @@ function openChat(project) {
 }
 
 /* The chat itself. Built once per project (see projectChat) and moved
-   between surfaces rather than rebuilt, so the transcript, the streaming
-   state and the history array follow the conversation wherever it is
-   shown -- and closing the window that happened to be hosting it does
-   not end it. */
+   between surfaces rather than rebuilt, so the visible transcript, the
+   streaming state and the composer's draft follow the conversation
+   wherever it is shown -- and closing the window that happened to be
+   hosting it does not end it. */
 function buildChatUI(project) {
   const wrap = el("div", "chat");
   const log = el("div", "log in");
@@ -3118,8 +3122,6 @@ function buildChatUI(project) {
   const send = el("button", "btn", "Send");
   composer.appendChild(ta); composer.appendChild(send);
   wrap.appendChild(log); wrap.appendChild(composer);
-
-  const history = [];
 
   function addMsg(who, text, cls) {
     const m = el("div", "msg " + (cls || ""));
@@ -3131,7 +3133,7 @@ function buildChatUI(project) {
     return b;
   }
 
-  /* ---- the conversation outlives the page ---- */
+  /* ---- the conversation lives on the server ---- */
 
   /* One session file per project, so a reload -- or a different browser
      against the same gateway -- reopens the conversation rather than
@@ -3140,34 +3142,46 @@ function buildChatUI(project) {
      mapping to keep in step. */
   const sessionId = "desktop-" + project;
 
-  async function saveHistory() {
-    /* Best effort. A conversation that cannot be filed is still a
-       conversation; losing the turn on screen because the save failed
-       would be the worse trade. */
-    try {
-      await api("/v1/sessions/" + sessionId, {
-        method: "PUT",
-        body: { title: "Desktop: " + project, messages: history },
-      });
-    } catch {}
-  }
+  /* There is no saveHistory, and no local transcript to save.
 
-  /* Replay what was filed. Only user and assistant turns: the artifact
-     cards and tool lines belong to the turn that produced them and would
-     be a lie if re-rendered against a later app. */
+     PasClaw files a session for everything it does -- the CLI and the
+     TUI run their loop against one and it is on disk when the turn
+     ends. The desktop used to be the exception: it kept the whole
+     conversation in a JS array, sent that array as the request context,
+     and PUT it back afterwards. So a long conversation cost its own
+     length on the way out AND on the way back, every single turn; two
+     windows onto the same project could each file a transcript the
+     other did not have, last write winning; and the compaction the tool
+     loop performed was undone the next turn, because the browser still
+     held the uncompacted copy and sent it again.
+
+     Now the browser sends what the person just typed, with
+     session_context, and the gateway loads the stored conversation,
+     answers with it, and files the result. The window is a VIEW of a
+     conversation the server owns -- which is what every other PasClaw
+     surface already was. */
+
+  /* Replay what was filed. Only user and assistant turns with something
+     to show: tool calls and their results are part of the stored
+     transcript (the model needs them) but the artifact cards and tool
+     lines that rendered them belong to the turn that produced them, and
+     would be a lie if re-rendered against a later app. */
   async function loadHistory() {
     let j;
     try { j = await api("/v1/sessions/" + sessionId); }
     catch { return; }              /* no session yet -- a fresh project */
     const msgs = (j && j.messages) || [];
     if (!msgs.length) return;
+    let shown = 0;
     msgs.forEach(m => {
       if (m.role !== "user" && m.role !== "assistant") return;
-      history.push({ role: m.role, content: m.content || "" });
-      addMsg(m.role === "user" ? "you" : "pasclaw", m.content || "",
+      const text = m.content || "";
+      if (!text.trim()) return;    /* an assistant turn that only called tools */
+      addMsg(m.role === "user" ? "you" : "pasclaw", text,
              m.role === "user" ? "u" : "");
+      shown++;
     });
-    addMsg("desktop", "— earlier conversation, reopened —", "");
+    if (shown) addMsg("desktop", "— earlier conversation, reopened —", "");
   }
 
   /* Every card in this conversation, oldest first. A card is only "old"
@@ -3275,7 +3289,6 @@ function buildChatUI(project) {
     if (!text) return;
     ta.value = "";
     addMsg("you", text, "u");
-    history.push({ role: "user", content: text });
 
     const body = addMsg("pasclaw", "");
     send.disabled = true;
@@ -3286,11 +3299,21 @@ function buildChatUI(project) {
       const r = await fetch("/v1/chat/completions", {
         method: "POST",
         headers: Object.assign(
-          { "content-type": "application/json", "accept": "text/event-stream" },
+          { "content-type": "application/json", "accept": "text/event-stream",
+            /* Which conversation this turn belongs to. The gateway reads
+               it, loads that session, and files the answer back into
+               it. */
+            "x-pasclaw-session": sessionId },
           t ? { authorization: "Bearer " + t } : {}),
         body: JSON.stringify({
           stream: true,
-          messages: history,
+          /* Just the new turn. The rest is already on the server. */
+          messages: [{ role: "user", content: text }],
+          session_context: true,
+          /* What to call this conversation the first time it is filed,
+             so the Library lists projects rather than a column of the
+             route that made them. */
+          session_title: "Desktop: " + project,
           /* The builder prompt goes in the top-level "system" field,
              which the gateway now composes as the LAST section of its
              own prompt.
@@ -3355,7 +3378,6 @@ function buildChatUI(project) {
       body.textContent = acc + "\n(" + e.message + ")";
     }
     send.disabled = false;
-    history.push({ role: "assistant", content: acc });
 
     /* Period-native output: if the turn emitted a UI block, show the
        furniture and strip it from the visible text. Unrecognised or
@@ -3363,8 +3385,8 @@ function buildChatUI(project) {
 
        submitText goes WITH the block: a project can have this
        conversation open in three places at once (dock pane, app-window
-       pane, floating window), each with its own history closure, and a
-       dialog's answer belongs to the one that asked. Looking the chat
+       pane, floating window), and a dialog's answer belongs to the one
+       that asked. Looking the chat
        up by project afterwards would answer whichever home a fixed
        order happened to find first -- the asking conversation would
        never hear back, and another would be handed a reply to a
@@ -3385,8 +3407,9 @@ function buildChatUI(project) {
 
     /* A plan turn ends with a decision, so the decision gets a button
        rather than an instruction to type "yes". Approving sends the
-       build turn with the plan already in history -- the model is not
-       told the plan again, it is told to carry out the one above. */
+       build turn into the same session, where the plan already is -- the
+       model is not told the plan again, it is told to carry out the one
+       above. */
     if (mode === "plan") { planPending = true; addApproveBar(); }
 
     /* Did this turn leave a runnable app behind? Ask the gateway rather
@@ -3427,9 +3450,8 @@ function buildChatUI(project) {
         addMsg("desktop", "The app was written but has no runnable entry yet.");
       }
     } catch {}
-    /* File the turn. After the artifact check, so a reload reopens the
-       conversation exactly as it settled. */
-    saveHistory();
+    /* Nothing to file: the gateway already did, before it closed the
+       stream. */
     await loadProjects();
     if (S.tree[project]) { await loadTasks(project); paintTree(); }
   }
@@ -3500,15 +3522,13 @@ function buildChatUI(project) {
   });
   /* The load has to WIN, not merely start.
 
-     Kicking it off unawaited raced the first Send: submit pushed the new
-     user turn, sent it with no prior context, and loadHistory then
-     appended the older turns AFTER it in the same array -- so the model
-     answered without the conversation, and the next saveHistory filed
-     the reply ahead of everything it was replying to, corrupting the
-     session's order permanently. The composer is disabled until the
-     replay lands, and submit awaits it as well: the disable is what the
-     user sees, the await is what makes it true for a programmatic
-     submitText that never touches the field. */
+     The stored order is now the server's to keep, so an early Send can
+     no longer corrupt it. What it can still do is misread: the replay
+     would paint the older turns UNDER a question already on screen, so
+     the window shows an answer above what it answered. The composer is
+     disabled until the replay lands, and submit awaits it as well: the
+     disable is what the user sees, the await is what makes it true for
+     a programmatic submitText that never touches the field. */
   ta.disabled = true;
   send.disabled = true;
   const ready = loadHistory()

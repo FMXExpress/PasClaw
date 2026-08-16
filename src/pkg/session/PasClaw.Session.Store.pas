@@ -285,6 +285,26 @@ procedure ToolCallFromJSON(const Obj: TJsonObject; out TC: TToolCall);
 procedure UpdateWorkingStateAfterTurn(var Meta: TSessionMeta;
                                       const Hist: TMessageArray);
 
+(* Build the message array a session-context turn runs against:
+   the stored conversation, then whatever the caller just sent.
+
+   Lives here rather than in the gateway handler that uses it because
+   this is the rule worth pinning, and the gateway unit cannot be linked
+   into a test binary.
+
+   Stored system turns are dropped. A system prompt is configuration,
+   not conversation -- it is composed fresh per request from the
+   workspace, the memory and the mode -- so a stored copy replayed in
+   the middle of the transcript would be both stale and a second voice
+   arguing with the live one. Every other role, tool calls and tool
+   results included, is the conversation and comes back verbatim: the
+   model needs its own tool results to make sense of what it did.
+
+   New messages are never filtered. Whatever the caller sent is this
+   turn, including a system message if they chose to send one -- that
+   is the caller speaking now, and the handler decides what it means. *)
+function MergeSessionContext(const Stored, Fresh: TMessageArray): TMessageArray;
+
 (* Format the working state as a system-prompt prefix block the
    next turn can prepend so the model picks up where it left off.
    Returns '' when no fields are populated -- callers concat
@@ -953,6 +973,23 @@ begin
   Inc(Meta.Stats.Turns,                1);
   Inc(Meta.Stats.ToolCalls,            ToolCallsDelta);
   Inc(Meta.Stats.TruncationBytesSaved, TruncationBytesDelta);
+end;
+
+function MergeSessionContext(const Stored, Fresh: TMessageArray): TMessageArray;
+var
+  i, Kept: Integer;
+begin
+  SetLength(Result, Length(Stored) + Length(Fresh));
+  Kept := 0;
+  for i := 0 to High(Stored) do
+  begin
+    if Stored[i].Role = mrSystem then Continue;
+    Result[Kept] := Stored[i];
+    Inc(Kept);
+  end;
+  for i := 0 to High(Fresh) do
+    Result[Kept + i] := Fresh[i];
+  SetLength(Result, Kept + Length(Fresh));
 end;
 
 function FormatWorkingStateBlock(const Meta: TSessionMeta): string;

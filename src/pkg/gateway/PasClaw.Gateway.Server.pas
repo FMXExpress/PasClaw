@@ -687,16 +687,22 @@ var
 type
   (* Working-state flush for gateway compactions.
 
-     The gateway never injects a working-state prefix and never calls
-     UpdateWorkingStateAfterTurn at end of turn -- unlike the CLI and
-     TUI, its transcript IS its memory: every chat request carries the
-     full message history, so there is nothing a snapshot would add
-     while the transcript still exists. Compaction is the one moment
-     that stops being true. The older half is about to leave the
-     transcript for good, and a CLI `pasclaw resume <id>` of this
-     same session -- the store is shared across surfaces -- would
-     find neither the messages nor the snapshot the CLI expects to
-     inject.
+     For a passthrough caller the gateway's transcript IS its memory:
+     the request carries the full message history, so a snapshot adds
+     nothing while the transcript still exists. Compaction is the one
+     moment that stops being true. The older half is about to leave the
+     transcript for good, and a CLI `pasclaw resume <id>` of this same
+     session -- the store is shared across surfaces -- would find
+     neither the messages nor the snapshot the CLI expects to inject.
+
+     (A session_context turn is the other case, and it needs the
+     snapshot even harder: there the server owns the transcript, so a
+     compaction drops context no client can send again.
+     PersistGatewaySession refreshes the snapshot every turn for those,
+     and HandleChatCompletions reads it back into the prompt. This hook
+     stays because it fires at the exact moment of the drop, with the
+     pre-drop history in hand -- which is the one view neither of those
+     has.)
 
      So: flush exactly once, at drop time, with the full pre-drop
      history. CompactOpts.OnBefore is `of object` and carries no
@@ -862,6 +868,14 @@ begin
         S.Messages[High(S.Messages)] := MakeMessage(mrAssistant, Loop.Content);
       end;
       S.Meta.SystemPromptOverride := Loop.FinalSystemPrompt;
+      (* Refresh the snapshot every turn, the way the TUI does.
+
+         TCompactFlush writes it at drop time, which covers the moment
+         context is lost -- but only for a session that ever compacts.
+         Doing it here as well means a session-context conversation
+         carries what it edited, ran and broke from its very first turn,
+         and a `pasclaw resume` of the same session finds it too. *)
+      UpdateWorkingStateAfterTurn(S.Meta, S.Messages);
       S.AutoTitle;
       S.Touch;
       S.Save;
@@ -6859,7 +6873,11 @@ var
   Bytes: TBytes;
   Req, MsgObj: TJsonObject;
   MsgArr: TJsonArray;
-  Msgs: TMessageArray;
+  Msgs, NewMsgs: TMessageArray;
+  Stored: TSession;
+  SessionCtx: Boolean;
+  SessionTitle, WorkState: string;
+  Kept: Integer;
   i: Integer;
   WantsStream: Boolean;
   Loop: TToolLoopResult;
@@ -6941,6 +6959,16 @@ begin
         LogDebug('chat/completions: session derived from user field -> %s',
                  [ReqSession]);
     end;
+    (* What to call the session if it does not have a name yet.
+
+       PersistGatewaySession only titles a session once, so this is the
+       first caller's chance to say what the conversation IS. Without it
+       every session a client opens is filed under the route that made
+       it, and a list of them -- the desktop's Library, `pasclaw
+       sessions` -- reads as the same line repeated. *)
+    SessionTitle := Trim(Req.GetStr('session_title', ''));
+    if SessionTitle = '' then SessionTitle := '(gateway: /v1/chat/completions)';
+
     if FDebugIO then
       LogDebug('chat/completions: model=%s stream=%s temperature=%g max_tokens=%d',
                [ReqModel, BoolToStr(WantsStream, True),
@@ -6974,6 +7002,46 @@ begin
       end;
     finally
       MsgArr.Free;
+    end;
+
+    (* Session-native turns: the server owns the conversation.
+
+       PasClaw stores a session for everything it does -- the CLI and the
+       TUI run their loop against a TSession and save it. Only the HTTP
+       clients were left to do that bookkeeping themselves, and the
+       desktop's answer was to re-upload the entire transcript on every
+       turn AND send it again as context, so a conversation cost O(n) up
+       and O(n) back for each message, and the compaction the loop did
+       was thrown away because the client kept resending the long copy.
+
+       With session_context the client sends only what is NEW. The stored
+       turns are loaded here and the request's messages are appended to
+       them, so the model sees the whole conversation without the browser
+       having to hold or ship it.
+
+       Opt-in, and only alongside a session id, because /v1/chat/
+       completions is the OpenAI-shaped door: a third-party caller that
+       sends its own full history must keep getting exactly what it
+       asked for. *)
+    WorkState  := '';
+    SessionCtx := (ReqSession <> '') and Req.GetBool('session_context', False);
+    if SessionCtx then
+    begin
+      NewMsgs := Copy(Msgs, 0, Length(Msgs));
+      Stored := TSession.Create(ReqSession);
+      try
+        Msgs := MergeSessionContext(Stored.Messages, NewMsgs);
+        Kept := Length(Msgs) - Length(NewMsgs);
+        { Read while the session is open. This is what a compaction
+          leaves behind -- see TCompactFlush -- and a session-context
+          turn is the one case where nobody else can supply it. }
+        WorkState := FormatWorkingStateBlock(Stored.Meta);
+        if FDebugIO then
+          LogDebug('chat/completions: session %s supplied %d stored turn(s)',
+                   [ReqSession, Kept]);
+      finally
+        Stored.Free;
+      end;
     end;
 
     { Provider + fallbacks snapshotted together (model is the request's
@@ -7037,9 +7105,19 @@ begin
        it. The field was silently ignored before this -- no code path
        read it -- so nothing that worked stops working. *)
     if not HasSystemMessage(Msgs) then
+    begin
       LoopCfg.Options.SystemPrompt := BuildSystemPrompt(FCfg,
                                       Req.GetStr('system', ''),
-                                      LoopCfg.Registry <> nil, '', LoopCfg.Mode)
+                                      LoopCfg.Registry <> nil, '', LoopCfg.Mode);
+      { What a compaction took out of the transcript (see above). Only
+        for session-context turns: everyone else still ships their own
+        history, where this would be a second telling of what the
+        messages already say. }
+      if WorkState <> '' then
+        LoopCfg.Options.SystemPrompt :=
+          TrimRight(LoopCfg.Options.SystemPrompt) + sLineBreak + sLineBreak +
+          WorkState;
+    end
     else
       InjectModeDirective(Msgs, LoopCfg.Mode);
     { Temperature: forward only when the client explicitly sent the field
@@ -7152,7 +7230,7 @@ begin
         StreamClosed := Streamer.Closed;
         Exit;
       end;
-      PersistGatewaySession(FCfg, ReqSession, '(gateway: /v1/chat/completions)',
+      PersistGatewaySession(FCfg, ReqSession, SessionTitle,
                             LoopCfg.Provider.GetName, ReqModel, Loop);
       AccumulateGatewayStats(FCfg, GW_BUCKET_V1_CHAT_COMPLETIONS,
                              '(gateway: /v1/chat/completions)',
@@ -7231,7 +7309,7 @@ begin
       WantsStream arm, so `stream:false` -- the main OpenAI-compatible flow
       -- updated the bucket and never wrote its named session. (Codex P1
       on #556.) }
-    PersistGatewaySession(FCfg, ReqSession, '(gateway: /v1/chat/completions)',
+    PersistGatewaySession(FCfg, ReqSession, SessionTitle,
                           LoopCfg.Provider.GetName, ReqModel, Loop);
     AccumulateGatewayStats(FCfg, GW_BUCKET_V1_CHAT_COMPLETIONS,
                            '(gateway: /v1/chat/completions)',
