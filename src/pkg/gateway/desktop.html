@@ -1888,12 +1888,84 @@ function askFromDesktop(kind) {
    the first turn -- from there it is the ordinary lovable loop: chat on
    the left, the app running on the right. The project title is only a
    label derived from the first words; the full text goes to the chat. */
+/* Turn a memo into a project name.
+
+   This is not cosmetic: the title becomes the project's slug, its
+   directory on disk, and the label under its icon forever after. The
+   first cut of this took six words and sliced at 48 characters, which
+   produced "a countdown timer app with a" -- a name ending on a dangling
+   preposition and article, from a request that was perfectly clear.
+
+   Three passes, in order:
+
+     1. Drop the framing. "make me a", "build an", "I want a" -- these
+        address the assistant, not the thing being built, and every
+        project starting with "Make Me A" is six wasted characters in a
+        column that is already narrow.
+     2. Take the first clause. A memo often opens with the app and then
+        keeps going; the sentence break is a better boundary than a word
+        count.
+     3. Trim what got left dangling. Trailing function words go, and a
+        preposition or conjunction whose object was cut off takes the
+        rest of its phrase with it -- "countdown timer app with a big"
+        becomes "countdown timer app". Guarded to leave at least two
+        words, so an aggressive rule cannot reduce a request to "App". */
+const TITLE_TAIL = new Set([
+  "a", "an", "the", "my", "our", "your", "its", "their", "this", "that",
+  "these", "those", "and", "or", "but", "with", "for", "to", "of", "in",
+  "on", "at", "from", "by", "into", "using", "is", "are", "be", "as",
+  "some", "any",
+]);
+const TITLE_CUT = new Set([
+  "with", "for", "to", "of", "in", "on", "at", "from", "by", "into",
+  "using", "and", "or", "but", "so", "plus",
+]);
+
+function deriveProjectTitle(text) {
+  let s = String(text || "").trim();
+  s = s.replace(
+    /^(?:please\s+)?(?:can\s+you\s+)?(?:make|build|create|write|design|generate|give)\s+(?:me\s+)?/i, "");
+  s = s.replace(/^i\s+(?:want|need|would\s+like)\s+/i, "");
+  /* The leading article goes too -- "A Stopwatch" is a worse folder name
+     than "Stopwatch", and every request starts with one. \b matters:
+     without it the alternation matches the "a" inside "an" and leaves a
+     stray "n expense tracker". */
+  s = s.replace(/^(?:a|an|the)\b\s*/i, "");
+  /* First clause only -- sentence end, or a line break in a longer memo. */
+  s = s.split(/[.!?\n]/)[0].trim();
+
+  let words = s.split(/\s+/).filter(Boolean);
+  let cut = words.length > 6;
+  words = words.slice(0, 6);
+  /* Character budget, on a word boundary rather than mid-word. */
+  while (words.length > 2 && words.join(" ").length > 48) {
+    words.pop();
+    cut = true;
+  }
+  while (words.length > 2 &&
+         TITLE_TAIL.has(words[words.length - 1].toLowerCase().replace(/\W/g, ""))) {
+    words.pop();
+    cut = true;
+  }
+  if (cut) {
+    for (let i = words.length - 1; i >= 2; i--) {
+      if (TITLE_CUT.has(words[i].toLowerCase().replace(/\W/g, ""))) {
+        words = words.slice(0, i);
+        break;
+      }
+    }
+  }
+  let title = words.join(" ").replace(/[,;:]+$/, "").trim();
+  if (!title) title = String(text || "").trim().slice(0, 48).trim();
+  if (!title) return "";
+  return title.charAt(0).toUpperCase() + title.slice(1);
+}
+
 async function createAppFromDesktop(plan) {
   const fld = $("#askfld");
   const text = fld.value.trim();
   if (!text) return;
-  let title = text.split(/\s+/).slice(0, 6).join(" ");
-  if (title.length > 48) title = title.slice(0, 48);
+  const title = deriveProjectTitle(text);
   fld.value = "";
   try {
     /* The server's create is idempotent: a title that sanitizes to an
