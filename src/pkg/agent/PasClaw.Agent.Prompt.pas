@@ -712,7 +712,13 @@ begin
     sLineBreak +
     '3. **Verify changes** -- after editing code, re-read what you wrote or ' +
     'run a targeted check (build, test, search). Do not assume the edit ' +
-    'landed correctly because the tool returned success.' + sLineBreak +
+    'landed correctly because the tool returned success. And when you ' +
+    'report the check, say what it did NOT cover -- the case the test ' +
+    'does not exercise, the platform the build did not target, the path ' +
+    'the search did not reach. "Tests pass" is a claim about the tests ' +
+    'that ran, not the ones that exist; a green result with unstated ' +
+    'scope is how a silent regression ships. Name the edge you left ' +
+    'unchecked so the next reader knows where to look.' + sLineBreak +
     sLineBreak +
     '4. **Truncated tool calls** -- if a `write_file` call comes back with a ' +
     '"missing required argument: content" error, your previous response was ' +
@@ -1050,7 +1056,13 @@ begin
     '- **Report regressions.** If it came out slower, or the tests went ' +
     'red, say so plainly with the numbers. A wrong result reported ' +
     'honestly is useful; a wrong result reported as a win costs ' +
-    'somebody a day finding out.' + sLineBreak + sLineBreak +
+    'somebody a day finding out.' + sLineBreak +
+    '- **State what the measurement did not measure.** A benchmark ' +
+    'covers the path it exercised and no other. Say which inputs, ' +
+    'sizes, or code paths the number does not speak for -- a 2x on the ' +
+    'cached path is not a 2x if most calls miss the cache. The honest ' +
+    'form is "X -> Y on THIS workload, not measured for THAT one."' +
+    sLineBreak + sLineBreak +
     'Never state a speedup you did not measure, and never quote a ' +
     'number you did not produce in this session.';
 end;

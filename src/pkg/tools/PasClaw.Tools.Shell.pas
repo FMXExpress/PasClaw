@@ -77,11 +77,26 @@ begin
   end;
 end;
 
+function LooksLikeWrongDirectory(const Out_: string): Boolean;
+{ Signatures a command emits when it ran somewhere the caller did not
+  mean. Deliberately narrow: these three are the ones observed in real
+  transcripts, and a hint that fires on every red result is noise. }
+var
+  L: string;
+begin
+  L := LowerCase(Out_);
+  Result := (Pos('no rule to make target', L) > 0) or
+            (Pos('no such file or directory', L) > 0) or
+            (Pos('not a git repository', L) > 0);
+end;
+
 function Tool_Shell(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Cmd, Reason, WorkDir, ReqDir: string;
   ExitCode: Integer;
   Out_, RawOut: string;
+  ExplicitCwd: Boolean;
+  EffDir, Tail: string;
 begin
   ErrMsg := '';
   if not ParseStringArg(ArgsJSON, 'command', Cmd) then
@@ -124,6 +139,7 @@ begin
          cd/chdir denylist. *)
   if not ParseStringArg(ArgsJSON, 'cwd', ReqDir) then ReqDir := '';
   ReqDir := Trim(ReqDir);
+  ExplicitCwd := ReqDir <> '';
   if ReqDir <> '' then
   begin
     ReqDir := ResolveWorkspacePath(ReqDir);
@@ -172,7 +188,42 @@ begin
       attach -- no wasted slots for raw error output. }
     Out_ := AttachReversibleStashFooter(RawOut, Out_);
   end;
-  Result := Format('exit=%d'#10'%s', [ExitCode, Out_]);
+  (* Report the directory the command ACTUALLY ran in.
+
+     A bare `exit=2 / No rule to make target 'x'` reads as "there is no
+     such target" when it means "you are not in that repo", and nothing
+     in the result contradicts the wrong reading. Three ante-hoc
+     disclosures already exist (the cwd argument, its description, and the
+     working-directory line in the system prompt) and none of them are
+     present at the moment of failure, which is why this kept recurring.
+
+     Always, not only on failure: the tool description already warns that a
+     command can run in the wrong place and report success anyway, and a
+     silent wrong-directory SUCCESS is the worse case because nothing
+     prompts a second look.
+
+     LINE 1 STAYS BYTE-IDENTICAL. PasClaw.Cmd.Learn matches 'exit=1' /
+     'exit=2' at POSITION 1 when mining failures into SCARS, and
+     PasClaw.Tools.ToolLoop takes everything before the first newline as
+     the progress-ledger entry. The cwd goes on line 2 so both keep
+     working untouched. *)
+  EffDir := WorkDir;
+  if EffDir = '' then EffDir := GetCurrentDir;   { backend inherited ours }
+  { Report the path in the namespace the command actually ran in. With the
+    docker backend on Windows the host path (C:\...\workspace) is translated
+    to a container mount point before `docker exec -w` sees it, so echoing
+    the untranslated host value would name a directory that does not exist
+    where the command ran -- the opposite of the guarantee this line exists
+    to provide. Identity on POSIX and for the local backend. }
+  EffDir := HostToContainerPathViaBackend(EffDir);
+
+  Tail := '';
+  if (ExitCode <> 0) and (not ExplicitCwd) and LooksLikeWrongDirectory(Out_) then
+    Tail := #10'hint: cwd was not specified, so this ran in the directory '
+          + 'above. If these paths are relative to a different root, pass '
+          + 'cwd, or use an absolute path.';
+
+  Result := Format('exit=%d'#10'cwd=%s'#10'%s%s', [ExitCode, EffDir, Out_, Tail]);
 end;
 
 procedure RegisterShellTool(R: TToolRegistry);
