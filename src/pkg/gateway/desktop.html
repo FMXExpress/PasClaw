@@ -2215,6 +2215,11 @@ const SHELL_ACTIONS = {
   refresh: {
     help: "refresh -- re-read the board and repaint (after changing things " +
           "outside the desktop)",
+    /* Repaints the BOARD -- icons, tree, project panes. It deliberately
+       does not reload any app frame: that would throw away whatever the
+       user was typing inside the app, and an agent tidying the desktop
+       has no business destroying work. Reloading an app is
+       __reloadApp's job, and even that defers to unsaved changes. */
     run: async () => { await loadProjects(); paintTree(); return "refreshed"; },
   },
 };
@@ -3270,7 +3275,17 @@ function buildChatUI(project) {
            permanent home. A turn that touched nothing moves nothing. */
         if (touchedApp && app.servable) {
           const aw = WINS.get("app:" + project);
-          if (aw && aw.__reloadApp) aw.__reloadApp();
+          if (aw && aw.__reloadApp) {
+            /* Held back when the user has unsaved work in the app: the
+               window shows an "Updated -- Reload" button instead, and
+               the conversation says so rather than leaving the reader
+               wondering why the app on the right did not change. */
+            if (!aw.__reloadApp())
+              addMsg("desktop",
+                "The app was rebuilt. Your unsaved changes are still in the " +
+                "window, so it has not reloaded -- press Reload when you are " +
+                "ready.");
+          }
           else openApp(project, { chat: true });
         }
       } else if (touchedApp) {
@@ -3689,8 +3704,26 @@ function renderUIBlock(block, project, reply) {
 
 const FRAME_PROJECT = new Map();   /* contentWindow -> project slug */
 
+/* Projects whose app has unsaved work in it.
+
+   An app window is reloaded when a chat turn changes the app -- that is
+   the live-preview half of the build loop -- and a reload throws the
+   frame away with whatever the user had typed into it. The host cannot
+   look: apps are cross-origin and sandboxed on purpose. So the SDK tells
+   it, marking dirty on the first keystroke and clean again when the app
+   persists through pasclaw.set. */
+const APP_DIRTY = new Set();
+
 window.addEventListener("message", async ev => {
   const m = ev.data;
+  if (m && m.__pasclaw === "dirty") {
+    const p = FRAME_PROJECT.get(ev.source);
+    if (!p) return;
+    if (m.dirty) APP_DIRTY.add(p); else APP_DIRTY.delete(p);
+    const w = WINS.get("app:" + p);
+    if (w && w.__dirtyChanged) w.__dirtyChanged(!!m.dirty);
+    return;
+  }
   if (!m || m.__pasclaw !== "state") return;
   const project = FRAME_PROJECT.get(ev.source);
   const reply = (payload) => {
@@ -3819,14 +3852,44 @@ async function openApp(project, opts) {
   const bar = el("div", "statusbar thin");
   const reload = el("button", "btn", "Reload");
   const doReload = () => {
+    APP_DIRTY.delete(project);
+    setUpdated(false);
     frame.src = appURL(project) + "?t=" + Date.now();
     if (frame.contentWindow) FRAME_PROJECT.set(frame.contentWindow, project);
   };
-  reload.addEventListener("click", doReload);
-  /* Let a finished chat turn refresh this window in place -- the live
-     preview half of the chat-left, app-right loop. */
-  w.__reloadApp = doReload;
+  /* Clicking Reload is a decision, so it just reloads -- but it says what
+     it costs when there is something to lose. */
+  reload.addEventListener("click", () => {
+    if (APP_DIRTY.has(project) &&
+        !confirm("Reload the app?\n\nYou have unsaved changes in it, and " +
+                 "reloading discards them.")) return;
+    doReload();
+  });
   bar.appendChild(reload);
+
+  /* "The app changed" -- shown instead of reloading over someone's work. */
+  const updated = el("button", "btn", "Updated — Reload");
+  updated.title = "This app was rebuilt. Reload to see the new version.";
+  updated.style.display = "none";
+  updated.addEventListener("click", doReload);
+  bar.appendChild(updated);
+  function setUpdated(on) { updated.style.display = on ? "" : "none"; }
+  w.__dirtyChanged = () => {};
+
+  /* The live-preview half of the build loop -- but NOT over unsaved work.
+
+     A finished chat turn that changed the app refreshes this window in
+     place, which is what makes "chat on the left, the app updating on the
+     right" feel live. The reload destroys the frame though, so when the
+     user has typed something the app has not persisted, the update is
+     OFFERED rather than applied: the button appears, the typing survives,
+     and the reload happens when they say so. Nothing is lost silently,
+     and nobody has to notice a subtlety to keep their work. */
+  w.__reloadApp = () => {
+    if (APP_DIRTY.has(project)) { setUpdated(true); return false; }
+    doReload();
+    return true;
+  };
   const chat = el("button", "btn", "Chat");
   chat.title = "Edit this app by asking -- the conversation docks on the left";
   /* Reveal moves the project's ONE chat in here; hide leaves it parked in
