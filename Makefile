@@ -328,6 +328,10 @@ test-ssrf-guard: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/ssrf_guard_tests.pas -o$(BUILDDIR)/ssrf_guard_tests
 	@$(BUILDDIR)/ssrf_guard_tests
+test-shell-cwd-report: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/shell_cwd_report_tests.pas -o$(BUILDDIR)/shell_cwd_report_tests
+	@$(BUILDDIR)/shell_cwd_report_tests
 
 test-json-utf8-roundtrip: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
