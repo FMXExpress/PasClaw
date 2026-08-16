@@ -2249,7 +2249,15 @@ function mirrorChecklist(project, argsStr) {
       const wanted = items.filter(
         it => !seen.has(it.title) && seen.add(it.title));
 
-      await Promise.all(wanted.map(async it => {
+      /* allSettled, not all: Promise.all rejects the moment ONE write
+         fails, which would release this project's queue while the other
+         writes were still in flight -- and the next reconcile would then
+         read a board that is still being written, re-create what it
+         could not see, or let a stale status land on top of a newer one.
+         Every launched request has to settle before the queue moves on;
+         individual failures are reported by the catch below, which is
+         where they were always handled. */
+      const settled = await Promise.allSettled(wanted.map(async it => {
         const t = have.get(it.title);
         if (!t) {
           const made = await api(`/v1/projects/${project}/tasks`,
@@ -2271,6 +2279,13 @@ function mirrorChecklist(project, argsStr) {
           t.status = "todo";
         }
       }));
+      /* allSettled means the catch below no longer sees these, so say so
+         here instead of losing them. Still best effort -- a board that
+         missed one item is not a reason to stop the conversation. */
+      const failed = settled.filter(r => r.status === "rejected");
+      if (failed.length)
+        console.warn(`checklist mirror: ${failed.length} of ${wanted.length} ` +
+                     `write(s) failed`, failed[0].reason);
       await loadProjects();
       if (S.tree[project]) { await loadTasks(project); paintTree(); }
     } catch {} /* best effort: the chat must not stall on the board */
@@ -3110,19 +3125,38 @@ async function openApp(project, opts) {
   const dockWidth = () =>
     Math.round(side.getBoundingClientRect().width +
                grip.getBoundingClientRect().width);
+  /* How much room the window actually has: the STAGE, not the viewport.
+     While the projects dock is showing, #stage starts to the right of it
+     and clips what overflows -- so measuring against window.innerWidth
+     would grow the window under the dock's own edge and clip exactly the
+     side this is meant to protect. Measured from the window's left edge,
+     since that is where its width is spent from. */
+  const roomForWindow = () => {
+    const stage = desktopRect();
+    return Math.max(200, Math.round(
+      stage.right - w.node.getBoundingClientRect().left - 8));
+  };
+  /* Remember what the dock actually cost, which is NOT always dockWidth:
+     a window already at the stage's edge grows by less, or not at all,
+     and giving back the full dock width would shrink the app a little
+     more on every show/hide cycle until it was unusable. */
+  let dockGrowth = 0;
   const showChat = () => {
     const was = side.style.display !== "none";
     side.style.display = "flex";
     grip.style.display = "";
     showChatIn(project, side).focus();
     if (!was) {
-      const grew = w.node.offsetWidth + dockWidth();
-      w.node.style.width = Math.min(grew, window.innerWidth - 20) + "px";
+      const before = w.node.offsetWidth;
+      w.node.style.width =
+        Math.min(before + dockWidth(), roomForWindow()) + "px";
+      dockGrowth = Math.max(0, w.node.offsetWidth - before);
     }
   };
   chat.addEventListener("click", () => {
     if (side.style.display !== "none") {
-      const give = dockWidth();
+      const give = dockGrowth;
+      dockGrowth = 0;
       side.style.display = "none"; grip.style.display = "none";
       w.node.style.width = Math.max(200, w.node.offsetWidth - give) + "px";
       /* Handing it back to the dock rather than parking it here keeps the
