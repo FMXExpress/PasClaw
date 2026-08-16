@@ -165,6 +165,11 @@ def main():
         if not decls:
             continue
         title = pal.get("title", name)
+        # Every theme is a homage, and the shipped names say so: the desktop
+        # shows "<original> Vibes". Applied here, not hand-edited in the
+        # HTML, so a regeneration from the styles repo keeps the suffix.
+        if not title.endswith(" Vibes"):
+            title += " Vibes"
         manifest.append({"id": name, "title": title,
                          "family": pal.get("family", "")})
         out.append(f'\n[data-style="{name}"] {{\n' + "\n".join(decls) + "\n}")

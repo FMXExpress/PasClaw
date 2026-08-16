@@ -832,7 +832,7 @@ end;
 
 procedure TFormMain.FormCreate(Sender: TObject);
 var
-  Gateway, Win95, Ver, State: string;
+  Gateway, StartStyle, Ver, State: string;
 begin
   Caption := 'PasClaw Desktop';
 
@@ -888,12 +888,16 @@ begin
 
   if FStyleDir <> '' then
   begin
-    Win95 := TIOPath.Combine(FStyleDir, 'Win95.style');
-    if TFile.Exists(Win95) then
+    { Synthwave is the machine's own look; Win95 stays as the fallback for
+      a styles checkout old enough not to carry it. }
+    StartStyle := TIOPath.Combine(FStyleDir, 'Synthwave.style');
+    if not TFile.Exists(StartStyle) then
+      StartStyle := TIOPath.Combine(FStyleDir, 'Win95.style');
+    if TFile.Exists(StartStyle) then
     begin
-      FStyleFile := Win95;
+      FStyleFile := StartStyle;
       FillSkinList;
-      TStyleManager.SetStyleFromFile(Win95);
+      TStyleManager.SetStyleFromFile(StartStyle);
     end;
   end;
 
@@ -6768,8 +6772,12 @@ var
 begin
   if FFillingLists or (FStyleList = nil) or (FStyleList.ItemIndex < 0) or
      (FStyleDir = '') then Exit;
-  StyleFile := TIOPath.Combine(FStyleDir,
-    FStyleList.Items[FStyleList.ItemIndex] + '.style');
+  { The list shows "<file> Vibes" (see BuildStylePicker); the file on disk
+    does not carry the suffix. }
+  StyleFile := FStyleList.Items[FStyleList.ItemIndex];
+  if StyleFile.EndsWith(' Vibes') then
+    SetLength(StyleFile, Length(StyleFile) - Length(' Vibes'));
+  StyleFile := TIOPath.Combine(FStyleDir, StyleFile + '.style');
   if not TFile.Exists(StyleFile) then Exit;
   FStyleFile := StyleFile;
   FSkinFile := '';
@@ -6825,8 +6833,10 @@ begin
   if FStyleDir <> '' then
     for FileName in TDirectory.GetFiles(FStyleDir, '*.style') do
     begin
+      { Every theme is a homage, and the names say so. StyleChange strips
+        the suffix again to find the file. }
       Item := TIOPath.GetFileNameWithoutExtension(FileName);
-      LB.Items.Add(Item);
+      LB.Items.Add(Item + ' Vibes');
     end
   else
     LB.Items.Add('(FMXStyles/Retro not found -- see desktop/README.md)');
@@ -6837,7 +6847,7 @@ begin
   try
     if FStyleFile <> '' then
       LB.ItemIndex := LB.Items.IndexOf(
-        TIOPath.GetFileNameWithoutExtension(FStyleFile));
+        TIOPath.GetFileNameWithoutExtension(FStyleFile) + ' Vibes');
   finally
     FFillingLists := False;
   end;
