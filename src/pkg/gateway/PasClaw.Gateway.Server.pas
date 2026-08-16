@@ -4214,10 +4214,79 @@ begin
 end;
 {$ENDIF}{$ENDIF}
 
+{$IFDEF MSWINDOWS}
+(* Windows equivalent of the realpath() branch above.
+
+   Windows resolves aliases through REPARSE POINTS -- directory
+   junctions, symlinks, mount points -- and ExpandFileName does not
+   follow any of them. Without this, a junction anywhere inside a
+   browsable path could point at $PASCLAW_HOME/oauth (or at
+   config.json), PathInsideDirectory would compare the harmless alias,
+   and TFileStream would then happily follow the reparse point and
+   serve the secret. That is the same bypass PR #280 closed on Unix;
+   the canonicalisation was simply never written for Windows, so BOTH
+   the config-file check and the OAuth directory check inherited the
+   hole.
+
+   GetFinalPathNameByHandleW resolves the whole chain. The handle is
+   opened with dwDesiredAccess = 0 (query only, no read rights needed)
+   and FILE_FLAG_BACKUP_SEMANTICS, which is what permits opening a
+   DIRECTORY handle at all -- without it the oauth-directory case fails
+   and silently degrades to the lexical compare.
+
+   Declared here rather than taken from the RTL because
+   GetFinalPathNameByHandleW is absent from older FPC Windows headers.
+
+   NOT COMPILE-TESTED: this container has no Windows target or cross
+   units, so this branch has been reviewed by inspection only. It fails
+   safe -- any failure returns '' and the caller keeps the lexical path,
+   which is exactly today's behaviour. *)
+const
+  FILE_FLAG_BACKUP_SEMANTICS_ = $02000000;
+  FILE_NAME_NORMALIZED_       = $00000000;
+
+function GetFinalPathNameByHandleW(hFile: THandle; lpszFilePath: PWideChar;
+                                   cchFilePath, dwFlags: DWORD): DWORD; stdcall;
+  external 'kernel32.dll' name 'GetFinalPathNameByHandleW';
+
+function CanonicalPath(const P: string): string;
+var
+  H: THandle;
+  Buf: array[0..1023] of WideChar;
+  N: DWORD;
+  S: string;
+begin
+  Result := '';
+  if P = '' then Exit;
+  H := CreateFileW(PWideChar(WideString(P)), 0,
+                   FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE,
+                   nil, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS_, 0);
+  if H = INVALID_HANDLE_VALUE then Exit;
+  try
+    N := GetFinalPathNameByHandleW(H, @Buf[0], Length(Buf) - 1,
+                                   FILE_NAME_NORMALIZED_);
+    if (N = 0) or (N >= DWORD(Length(Buf))) then Exit;
+    Buf[N] := #0;
+    S := string(WideString(PWideChar(@Buf[0])));
+  finally
+    CloseHandle(H);
+  end;
+  { The API returns the \\?\ extended-length form; normalise it back so
+    the result compares against ordinary paths. \\?\UNC\srv\share is the
+    network spelling and becomes \\srv\share. }
+  if Copy(S, 1, 4) = '\\?\' then
+  begin
+    Delete(S, 1, 4);
+    if Copy(S, 1, 4) = 'UNC\' then S := '\\' + Copy(S, 5, MaxInt);
+  end;
+  Result := S;
+end;
+{$ENDIF}
+
 function IsRestrictedFsPath(const Path: string): Boolean;
 var
   Full, CfgFull, Base, OAuthDir: string;
-  {$IFDEF FPC}{$IFDEF UNIX}CP: string;{$ENDIF}{$ENDIF}
+  {$IF DEFINED(MSWINDOWS) or (DEFINED(FPC) and DEFINED(UNIX))}CP: string;{$IFEND}
 begin
   Result := False;
   if Path = '' then Exit;
@@ -4237,6 +4306,15 @@ begin
   CP := CanonicalPath(GetConfigPath);
   if CP <> '' then CfgFull := CP;
   {$ENDIF}{$ENDIF}
+  {$IFDEF MSWINDOWS}
+  { Same resolution on Windows, via reparse points. SameInode has no
+    Windows counterpart here, so a HARDLINK to the config file is still
+    only caught lexically -- recorded rather than implied. }
+  CP := CanonicalPath(Path);
+  if CP <> '' then Full := CP;
+  CP := CanonicalPath(GetConfigPath);
+  if CP <> '' then CfgFull := CP;
+  {$ENDIF}
   if (CfgFull <> '') and SameFileName(Full, CfgFull) then Exit(True);
 
   (* Secret DIRECTORIES, checked before the basename rules.
@@ -4260,10 +4338,12 @@ begin
      into these dirs are covered without anyone remembering to extend a
      list. *)
   OAuthDir := JoinPath(GetHome, 'oauth');
-  {$IFDEF FPC}{$IFDEF UNIX}
+  {$IF DEFINED(MSWINDOWS) or (DEFINED(FPC) and DEFINED(UNIX))}
+  { Resolve the guarded directory too, so an alias INSIDE the browsable
+    tree and the real directory canonicalise to the same string. }
   CP := CanonicalPath(OAuthDir);
   if CP <> '' then OAuthDir := CP;
-  {$ENDIF}{$ENDIF}
+  {$IFEND}
   if (OAuthDir <> '') and PathInsideDirectory(Full, OAuthDir) then Exit(True);
 
   { Basename denylist for the conventional secret files. }
