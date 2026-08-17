@@ -514,6 +514,13 @@ begin
                                                Opts.SummaryBudget));
 
   CallOptions := DefaultChatOptions;
+  { PRIVACY: never let provider grounding fire for this call. Gemini's
+    google_search is ON by default, and grounding works by having the
+    model formulate search queries FROM ITS CONTEXT -- which here is the
+    user's own content. Sending that to a search engine is the harm; a
+    maintenance pass over text we already hold has no business searching
+    the web at all. }
+  CallOptions.DisableServerTools := True;
   { Inherit cache policy from the caller's Options -- caller already
     applied Cfg.PromptCache; the summariser call should follow the
     same policy. (Codex P2 on PR #118: don't unconditionally cache
