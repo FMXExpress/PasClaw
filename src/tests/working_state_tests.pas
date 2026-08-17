@@ -290,7 +290,154 @@ begin
     AssertTrue(Found[j], 'patch-written path captured: ' + Want[j]);
 end;
 
+(* ---- the transcript log: compaction stops costing the record ----
+
+   The bug these pin: a compaction rebuilds the live transcript around
+   a summary, every surface writes that back as the session, and the
+   turns it summarised are gone. The log is what keeps them. *)
+
+{ These tests drive LogSessionTurn without ever saving a session, so
+  DeleteSession has no session file to work from -- remove the record
+  directly. }
+procedure CleanLog(const Id: string);
+var
+  P: string;
 begin
+  P := SessionLogPath(Id);
+  if (P <> '') and FileExists(P) then SysUtils.DeleteFile(P);
+end;
+
+function LogMsg(R: TMsgRole; const C: string): TMessage;
+begin
+  Result := Default(TMessage);
+  Result.Role := R;
+  Result.Content := C;
+end;
+
+procedure TestLogRecordsEachTurnOnce;
+var
+  Meta: TSessionMeta;
+  Msgs, Back: TMessageArray;
+  Total: Integer;
+begin
+  Meta := Default(TSessionMeta);
+  Meta.Id := 'logtest-once';
+  CleanLog(Meta.Id);   { a stale record from a previous run is not this test }
+  SetLength(Msgs, 2);
+  Msgs[0] := LogMsg(mrUser, 'one');
+  Msgs[1] := LogMsg(mrAssistant, 'reply one');
+  LogSessionTurn(Meta, Msgs);
+  AssertTrue(Meta.LoggedCount = 2, 'the count follows the live length');
+
+  { Saving again with the SAME transcript must not duplicate it --
+    every surface calls this on every save, including saves that added
+    no messages. }
+  LogSessionTurn(Meta, Msgs);
+  Back := ReadSessionLog(Meta.Id, 0, 0, Total);
+  AssertTrue(Total = 2, 'an unchanged transcript logs nothing twice');
+
+  SetLength(Msgs, 4);
+  Msgs[2] := LogMsg(mrUser, 'two');
+  Msgs[3] := LogMsg(mrAssistant, 'reply two');
+  LogSessionTurn(Meta, Msgs);
+  Back := ReadSessionLog(Meta.Id, 0, 0, Total);
+  AssertTrue(Total = 4, 'the next turn appends only what is new');
+  AssertEqStr(Back[0].Content, 'one',       'oldest first');
+  AssertEqStr(Back[3].Content, 'reply two', 'newest last');
+  DeleteSession(Meta.Id);
+end;
+
+procedure TestCompactionDoesNotCostTheRecord;
+var
+  Meta: TSessionMeta;
+  Live, Back: TMessageArray;
+  Total, i: Integer;
+begin
+  Meta := Default(TSessionMeta);
+  Meta.Id := 'logtest-compact';
+  CleanLog(Meta.Id);   { a stale record from a previous run is not this test }
+  SetLength(Live, 20);
+  for i := 0 to 19 do
+    if i mod 2 = 0 then Live[i] := LogMsg(mrUser, 'q' + IntToStr(i))
+    else                Live[i] := LogMsg(mrAssistant, 'a' + IntToStr(i));
+  LogSessionTurn(Meta, Live);
+
+  { What the compaction hook does: flush the pre-drop history, then
+    mark the count stale because the live array is about to shrink. }
+  LogSessionTurn(Meta, Live);
+  Meta.LogPending := True;
+
+  { ...and the drop. The live transcript is now a summary plus the
+    tail -- shorter, and renumbered. }
+  SetLength(Live, 3);
+  Live[0] := LogMsg(mrUser, 'SUMMARY of the earlier conversation');
+  Live[1] := LogMsg(mrUser, 'q18');
+  Live[2] := LogMsg(mrAssistant, 'a19');
+  LogSessionTurn(Meta, Live);
+  AssertTrue(Meta.LoggedCount = 3, 'the count re-anchors to the new live length');
+  AssertTrue(not Meta.LogPending,  'and the flag clears');
+
+  Back := ReadSessionLog(Meta.Id, 0, 0, Total);
+  AssertTrue(Total = 20, 'the record still holds every pre-compaction turn');
+  AssertEqStr(Back[0].Content, 'q0',
+    'including the opening of the conversation the live file dropped');
+
+  { The turn AFTER a compaction still appends, and appends only itself. }
+  SetLength(Live, 5);
+  Live[3] := LogMsg(mrUser, 'q20');
+  Live[4] := LogMsg(mrAssistant, 'a21');
+  LogSessionTurn(Meta, Live);
+  Back := ReadSessionLog(Meta.Id, 0, 0, Total);
+  AssertTrue(Total = 22, 'post-compaction turns append once');
+  AssertEqStr(Back[21].Content, 'a21', 'and land at the end');
+  DeleteSession(Meta.Id);
+end;
+
+procedure TestLogWindows;
+var
+  Meta: TSessionMeta;
+  Live, Back: TMessageArray;
+  Total, i: Integer;
+begin
+  Meta := Default(TSessionMeta);
+  Meta.Id := 'logtest-window';
+  CleanLog(Meta.Id);   { a stale record from a previous run is not this test }
+  SetLength(Live, 50);
+  for i := 0 to 49 do Live[i] := LogMsg(mrUser, 'm' + IntToStr(i));
+  LogSessionTurn(Meta, Live);
+
+  Back := ReadSessionLog(Meta.Id, 10, 5, Total);
+  AssertTrue(Total = 50, 'total is the whole log, not the window');
+  AssertTrue(Length(Back) = 5, 'the window is the size asked for');
+  AssertEqStr(Back[0].Content, 'm10', 'offset counts from the start');
+  AssertEqStr(Back[4].Content, 'm14', 'and runs forward');
+
+  { Clamped rather than erroring: a client paging backwards will walk
+    off both ends eventually. }
+  Back := ReadSessionLog(Meta.Id, 47, 20, Total);
+  AssertTrue(Length(Back) = 3, 'a window past the end is clamped');
+  Back := ReadSessionLog(Meta.Id, 999, 10, Total);
+  AssertTrue(Length(Back) = 0, 'an offset past the end returns nothing');
+  AssertTrue(Total = 50, 'and still reports the total');
+  AssertTrue(SessionLogCount(Meta.Id) = 50, 'the count helper agrees');
+  DeleteSession(Meta.Id);
+end;
+
+procedure TestLogIsNotASession;
+begin
+  { SessionPath refuses it, so `pasclaw resume <id>.log` cannot open the
+    record and write turns into it. }
+  AssertTrue(IsSessionArchiveId('anything.log'), 'a .log id is not a session id');
+  AssertEqStr(SessionPath('anything.log'), '', 'and has no session path');
+  AssertTrue(SessionLogPath('anything.log') = '',
+    'nor a log path of its own');
+end;
+
+begin
+  TestLogRecordsEachTurnOnce;
+  TestCompactionDoesNotCostTheRecord;
+  TestLogWindows;
+  TestLogIsNotASession;
   TestExtractsFsWritePaths;
   TestExtractsFsEditPathsAndDedupes;
   TestCapturesShellAndError;

@@ -135,6 +135,27 @@ The tool loop executes server-side and each tool call is surfaced to the client 
 
 Known tools (`fs_read`, `fs_write`, `fs_list`, `fs_grep`, `fs_edit_hashline`, `shell_exec`, `memory_search`, `web_search`, `web_fetch`) surface their most meaningful argument; MCP and other tools fall back to a compact one-line dump of the raw arguments. The full argument and result text also go to SSE comment lines (`: tool_call ...` / `: tool_result ...`) for consumers that log structured activity, and to the server debug log when `--debug` is set. Formatter: `src/pkg/gateway/PasClaw.Gateway.ToolView.pas` (unit-tested via `make test-toolview`).
 
+## `/v1/sessions/<id>` — the live transcript and the record
+
+A session on disk is the model's **working context**. When the tool loop compacts — replacing the older half of a conversation with a summary so the next turn fits — every surface writes that result back as the session, so the compacted turns leave the file. That is correct for a resume (replaying them would undo the compaction) and wrong for a reader.
+
+So every message is also appended, once, to `<id>.log.jsonl` beside the session: the **record**. The live file is what the model sees; the record is what the conversation was.
+
+| Request | Answers with |
+|---|---|
+| `GET /v1/sessions/<id>` | the live transcript — post-compaction, the resume state |
+| `GET /v1/sessions/<id>?full=1` | the newest 200 messages of the record, with `total` |
+| `GET /v1/sessions/<id>?full=1&limit=N` | the newest `N` |
+| `GET /v1/sessions/<id>?full=1&offset=K&limit=N` | `N` messages from index `K` |
+
+```json
+{ "id": "desktop-notes", "total": 1603, "offset": 1483, "count": 120, "messages": [ … ] }
+```
+
+Windowed because the record grows without bound: the desktop measured 10.4 s and 2.1 MB to paint a 1500-turn conversation in one go, against 94 ms and 369 DOM nodes for a 120-message window. Page backwards by walking `offset` down from `total`; `limit` is capped at 2000.
+
+`?full=1` falls back to the live transcript for a session recorded before the log existed, so old sessions still answer. Deleting a session deletes its record with it.
+
 ## `/v1/responses` — OpenAI Responses API
 
 Accepts string or message-array `input`:

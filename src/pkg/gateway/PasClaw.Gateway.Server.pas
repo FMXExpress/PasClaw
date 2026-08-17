@@ -735,6 +735,16 @@ begin
     S := TSession.Create(FSessionId);
     try
       UpdateWorkingStateAfterTurn(S.Meta, Arr);
+      (* The record, before the drop takes it.
+
+         This hook fires with the FULL pre-drop history, which is the
+         one moment anybody holds it: a second later the loop replaces
+         the older half with a summary and every surface writes that
+         back as the session. Flush whatever is not logged yet, then
+         mark the count stale -- the live array is about to be rebuilt
+         around the summary, so the next save re-anchors it. *)
+      LogSessionTurn(S.Meta, Arr);
+      S.Meta.LogPending := True;
       S.Save;
     finally
       S.Free;
@@ -862,6 +872,10 @@ begin
         S.Messages[High(S.Messages)] := MakeMessage(mrAssistant, Loop.Content);
       end;
       S.Meta.SystemPromptOverride := Loop.FinalSystemPrompt;
+      { Append this turn to the record before the live file is written,
+        so what leaves the transcript at the next compaction has
+        already been kept. }
+      LogSessionTurn(S.Meta, S.Messages);
       S.AutoTitle;
       S.Touch;
       S.Save;
@@ -3854,6 +3868,8 @@ var
   Root, MsgObj: TJsonObject;
   Arr: TJsonArray;
   i: Integer;
+  LogTotal, Offset, Limit: Integer;
+  LogMsgs: TMessageArray;
 begin
   Id := Copy(Doc, Length('/v1/sessions/') + 1, MaxInt);
 
@@ -3978,6 +3994,73 @@ begin
       S.Free;
     end;
     Exit;
+  end;
+
+  (* GET ?full=1[&offset=&limit=] -- a window into the RECORD.
+
+     The plain GET below returns the live transcript, which is the
+     model's working context and therefore whatever survived the last
+     compaction. That is the right answer for a resume and the wrong
+     one for a reader: a conversation that has compacted once shows
+     the reader its summary and the last few dozen turns, and the rest
+     reads as though it never happened.
+
+     ?full=1 reads the append-only log instead, windowed, because the
+     whole point of the log is that it grows without bound and a
+     client that asks for all of it is back where it started -- the
+     desktop measured 10.4 s and 2.1 MB to open a 1500-turn chat.
+     Callers page backwards: ask with no offset for the newest `limit`
+     messages, then walk `offset` down using the `total` that comes
+     back.
+
+     Falls through to the live transcript when there is no log, so a
+     session recorded before this existed still answers. *)
+  if (ARequest.Command = 'GET') and
+     (Trim(ARequest.Params.Values['full']) <> '') and
+     (Trim(ARequest.Params.Values['full']) <> '0') then
+  begin
+    LogTotal := SessionLogCount(Id);
+    if LogTotal > 0 then
+    begin
+      Limit := StrToIntDef(Trim(ARequest.Params.Values['limit']), 200);
+      if Limit <= 0 then Limit := 200;
+      if Limit > 2000 then Limit := 2000;
+      { No offset means the NEWEST window -- what a reader opening a
+        conversation wants, and the one page that is always worth
+        fetching first. }
+      if Trim(ARequest.Params.Values['offset']) = '' then
+      begin
+        Offset := LogTotal - Limit;
+        if Offset < 0 then Offset := 0;
+      end
+      else
+        Offset := StrToIntDef(Trim(ARequest.Params.Values['offset']), 0);
+      if Offset < 0 then Offset := 0;
+
+      LogMsgs := ReadSessionLog(Id, Offset, Limit, LogTotal);
+      Root := TJsonObject.Create;
+      try
+        Root.PutStr('id', Id);
+        Root.PutInt('total',  LogTotal);
+        Root.PutInt('offset', Offset);
+        Root.PutInt('count',  Length(LogMsgs));
+        Arr := TJsonArray.Create;
+        for i := 0 to High(LogMsgs) do
+        begin
+          MsgObj := TJsonObject.Create;
+          MsgObj.PutStr('role',    MsgRoleToString(LogMsgs[i].Role));
+          MsgObj.PutStr('content', LogMsgs[i].Content);
+          Arr.AddObject(MsgObj);
+        end;
+        Root.PutArray('messages', Arr);
+        WriteJSON(AResp, 200, Root.ToJSON);
+      finally
+        Root.Free;
+      end;
+      Exit;
+    end;
+    { No log: fall through and answer from the live transcript, which
+      is all a pre-log session ever had. }
   end;
 
   { GET -- return metadata + the full message transcript. }

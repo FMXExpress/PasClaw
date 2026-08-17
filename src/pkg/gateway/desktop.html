@@ -3155,19 +3155,102 @@ function buildChatUI(project) {
   /* Replay what was filed. Only user and assistant turns: the artifact
      cards and tool lines belong to the turn that produced them and would
      be a lie if re-rendered against a later app. */
+  /* How much of the record to paint at once, and how much more each
+     time the reader asks. Measured before picking a number: painting a
+     1500-turn conversation in one go took 10.4 s and 9007 DOM nodes,
+     and 600 turns took 3.2 s. 120 messages lands under 400 nodes and
+     paints in the tens of milliseconds, which is the only budget that
+     makes opening a chat feel like opening a window. */
+  const PAGE = 120;
+  let oldestShown = 0, recordTotal = 0, loadingOlder = false;
+
+  /* Render one message from the record. Returns the node so the
+     backwards pager can insert before it. */
+  function renderRecord(m) {
+    const text = m.content || "";
+    if (m.role !== "user" && m.role !== "assistant") return null;
+    if (!text.trim()) return null;   /* a turn that only called tools */
+    return addMsg(m.role === "user" ? "you" : "pasclaw", text,
+                  m.role === "user" ? "u" : "").parentNode;
+  }
+
+  /* Older messages, prepended, with the reading position kept.
+
+     Prepending changes scrollHeight under the reader, so the pixel
+     they were looking at moves. Restoring by delta rather than by a
+     saved scrollTop is what stops the view from jumping to a
+     different part of the conversation on every page. */
+  async function loadOlder() {
+    if (loadingOlder || oldestShown <= 0) return;
+    loadingOlder = true;
+    const want = Math.max(0, oldestShown - PAGE);
+    try {
+      const j = await api(`/v1/sessions/${sessionId}?full=1&offset=${want}` +
+                          `&limit=${oldestShown - want}`);
+      const msgs = (j && j.messages) || [];
+      const before = log.scrollHeight, top = log.scrollTop;
+      const first = log.firstChild;
+      msgs.forEach(m => {
+        const node = renderRecord(m);
+        if (node) log.insertBefore(node, first);
+      });
+      oldestShown = j.offset || 0;
+      log.scrollTop = top + (log.scrollHeight - before);
+      paintEarlier();
+    } catch {}
+    loadingOlder = false;
+  }
+
+  /* The affordance, and the honest count next to it. */
+  let earlierBar = null;
+  function paintEarlier() {
+    if (earlierBar) { earlierBar.remove(); earlierBar = null; }
+    if (oldestShown <= 0) return;
+    earlierBar = el("div", "msg");
+    const b = el("button", "btn", `Load ${Math.min(PAGE, oldestShown)} earlier ` +
+                                  `(${oldestShown} before this)`);
+    b.addEventListener("click", () => loadOlder());
+    earlierBar.appendChild(b);
+    log.insertBefore(earlierBar, log.firstChild);
+  }
+
+  /* Reaching the top asks for more, so the common gesture needs no
+     button. The button stays for the reader who does not scroll. */
+  log.addEventListener("scroll", () => {
+    if (log.scrollTop < 40) loadOlder();
+  });
+
   async function loadHistory() {
-    let j;
-    try { j = await api("/v1/sessions/" + sessionId); }
+    /* Two different questions, two different answers.
+
+       `history` is what the MODEL is sent, so it has to be the live
+       transcript -- the working context, already bounded by whatever
+       the last compaction left. The record is what the READER sees,
+       and it is the whole conversation including the turns compaction
+       took out of the live file, which is why it is paged.
+
+       ?full=1 falls back to the live transcript when a session has no
+       record yet, so a conversation from before the log existed still
+       reopens. */
+    let live;
+    try { live = await api("/v1/sessions/" + sessionId); }
     catch { return; }              /* no session yet -- a fresh project */
-    const msgs = (j && j.messages) || [];
-    if (!msgs.length) return;
-    msgs.forEach(m => {
+    ((live && live.messages) || []).forEach(m => {
       if (m.role !== "user" && m.role !== "assistant") return;
       history.push({ role: m.role, content: m.content || "" });
-      addMsg(m.role === "user" ? "you" : "pasclaw", m.content || "",
-             m.role === "user" ? "u" : "");
     });
+
+    let rec = null;
+    try { rec = await api(`/v1/sessions/${sessionId}?full=1&limit=${PAGE}`); }
+    catch {}
+    const msgs = (rec && rec.messages) || (live && live.messages) || [];
+    if (!msgs.length) return;
+    recordTotal = (rec && rec.total) || msgs.length;
+    oldestShown = (rec && typeof rec.offset === "number") ? rec.offset : 0;
+    msgs.forEach(m => renderRecord(m));
+    paintEarlier();
     addMsg("desktop", "— earlier conversation, reopened —", "");
+    log.scrollTop = log.scrollHeight;
   }
 
   /* Every card in this conversation, oldest first. A card is only "old"
