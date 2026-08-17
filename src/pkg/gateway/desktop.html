@@ -1846,9 +1846,47 @@ async function switchWorkspace(name) {
      all change. Deliberate gesture, named consequence. */
   if (!confirm(`Switch to ${name}?\n\nThis changes what PasClaw remembers: ` +
                `memory, sessions, skills and files are all per-workspace.`)) return;
+
+  /* Save the room being left while it is still the current one -- the
+     same order switchDesktop uses. A layout change from the last 700ms
+     is still sitting in the debounce, and every route resolves against
+     whichever workspace is active when it lands. */
+  clearTimeout(saveTimer);
+  try { await api("/v1/desktop/state", { method: "PUT", body: captureDesktop() }); }
+  catch {}                          /* a layout that cannot save still works */
+
+  /* Move first, tear down second.
+
+     Everything below this line destroys something -- the open windows,
+     and with dropProjectChats the cached conversations and the unsent
+     drafts sitting in their composers. If the activation fails (the
+     gateway is down, the name was renamed out from under the menu) the
+     user is still in THIS workspace, and a failed switch that took
+     their half-typed message with it is a worse outcome than the switch
+     not happening. So the fallible call goes first and nothing is torn
+     down unless it succeeded. */
+  try {
+    await api("/v1/workspaces/activate", { method: "POST", body: { name } });
+  } catch (e) {
+    alert(`Could not switch to ${name}:\n\n${e.message}`);
+    return;
+  }
+
   for (const w of Array.from(WINS.values())) closeWindow(w);
-  await api("/v1/workspaces/activate", { method: "POST", body: { name } });
-  S.tree = {}; S.selected = null;
+  /* The conversations go with the windows.
+
+     Closing the windows was not enough: the chats live in PROJECT_CHATS
+     keyed by slug, which survives, and the suite puts the same slugs in
+     every workspace. Leaving them cached meant opening "notes" in the
+     new workspace showed the OLD workspace's transcript -- a hole in a
+     wall this dialog has just promised the user is solid. */
+  dropProjectChats();
+  /* Those closes each scheduled a layout save, and it would land 700ms
+     from now -- after the activation, with an empty window list, writing
+     "nothing was open" over the arrangement we are about to restore.
+     The room being left is already filed (above); drop the write. */
+  clearTimeout(saveTimer);
+  S.tree = {}; S.selected = null; S.dockProject = null;
   await loadWorkspaces();
   await loadProjects();
   await loadDesktops();
@@ -3071,8 +3109,32 @@ function mirrorChecklist(project, argsStr) {
    one you typed into was the only one that knew what you had said. This
    map is the single instance; showChatIn re-parents its root DOM node to
    whichever surface is currently its home, and appendChild detaches it
-   from the previous one, so two live copies cannot exist. */
+   from the previous one, so two live copies cannot exist.
+
+   "For the life of the page" is exactly one workspace long. The key is a
+   project SLUG, and slugs repeat across workspaces by construction --
+   the suite seeds notes, calendar and mail into every one -- so a cache
+   that outlived a switch handed workspace 2 the conversation from
+   workspace 1. dropProjectChats is what makes the life span true. */
 const PROJECT_CHATS = new Map();
+
+/* Forget every cached conversation.
+
+   The server was never confused: /v1/sessions/desktop-<slug> resolves
+   inside the ACTIVE workspace and would have returned the right
+   transcript. The client simply never asked again, because it had one
+   in hand under the same key. Dropping the instances makes the next
+   open rebuild and re-read, which is the behaviour the sessions are
+   already written for. */
+function dropProjectChats() {
+  for (const c of PROJECT_CHATS.values()) {
+    /* Detach whatever surface is currently hosting it, so a pane that
+       is repainted later cannot resurrect a dead conversation's node. */
+    try { if (c.root && c.root.parentNode) c.root.parentNode.removeChild(c.root); }
+    catch {}
+  }
+  PROJECT_CHATS.clear();
+}
 
 function projectChat(project) {
   let c = PROJECT_CHATS.get(project);
