@@ -264,6 +264,17 @@ begin
        on PR #333. *)
     if Options.ToolChoice <> '' then
       OptsObj.PutStr('tool_choice', Options.ToolChoice);
+    (* disable_server_tools -- a PRIVACY flag, so it has to survive the hop.
+       The maintenance callers (rerank, compact, distill, skill-distiller,
+       goals, prune) set it because their prompts carry the user's own memory
+       and transcripts, and provider grounding forms web-search queries from
+       whatever is in context. Dropping it here would mean the boundary holds
+       for a direct provider and silently fails for a relay worker whose own
+       backend has grounding on by default -- which is Gemini's default.
+       Emitted only when set, matching tool_choice, so the wire stays compact
+       and an absent field means "no constraint", the historical behaviour. *)
+    if Options.DisableServerTools then
+      OptsObj.PutBool('disable_server_tools', True);
     Root.PutObject('options', OptsObj);
 
     Result := Root.ToJSON;

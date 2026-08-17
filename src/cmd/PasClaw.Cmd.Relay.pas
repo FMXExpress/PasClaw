@@ -258,6 +258,10 @@ begin
       pin a specific tool name. BuildRelayRequestBody emits this
       when non-empty (Codex P2 review on PR #333). }
     Result.ToolChoice := OObj.GetStr('tool_choice', '');
+    { Restore the privacy flag so the worker's own provider honours it.
+      Absent => False, i.e. no constraint, which is what an older gateway
+      that never sent the field meant. }
+    Result.DisableServerTools := OObj.GetBool('disable_server_tools', False);
   end;
   { Thread the envelope's session_id back into Options.CacheKey so the
     locally-configured provider's own prompt caching aligns with the
