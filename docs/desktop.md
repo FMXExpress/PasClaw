@@ -917,6 +917,18 @@ per-project manifest reads.
 
 ---
 
+## Narrow screens
+
+The desktop metaphor assumes a screen with room to float windows on. Below **720px** of browser width it stops pretending:
+
+- The **dock becomes a drawer** instead of a permanent left edge. At 390px it was taking 232 of them — 60% of the screen for a sidebar. It slides in over the stage when you open it (Start → Projects, or the tree button) and dismisses when you tap outside.
+- **Windows open full.** There is no room to float in, and a saved arrangement from a laptop was designed for a screen this is not.
+- **Desktop icons are hidden.** They are a pointer-and-big-screen affordance; the dock is the way around on a small one.
+
+Independently of the breakpoint, **window geometry is clamped to the stage** whenever it arrives from outside `createWindow` — a layout restored on a different screen, the browser being resized, an agent placing a window. Before this a layout saved on a desktop and reopened on a phone put windows at 788px on a 390px viewport with no horizontal scroll, so most of every window was unreachable.
+
+The breakpoint is on browser width, not device: a narrow window on a large monitor gets the same treatment, which is right, because the problem is width rather than what is holding it.
+
 ## Known limits
 
 Stated plainly rather than left to be discovered:
