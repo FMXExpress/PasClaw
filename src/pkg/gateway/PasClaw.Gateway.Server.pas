@@ -5172,7 +5172,11 @@ begin
   try
     { Tell the client it is connected before anything happens, so a UI can
       show "live" without waiting for the first board change. }
-    Writer.WriteSSE('data: {"type":"hello"}'#10#10);
+    { The id the server knows this reader by. A desktop command names
+      ONE client as the executor of its side-effecting actions, and the
+      client needs its own name to recognise itself. }
+    Writer.WriteSSE('data: {"type":"hello","client":"' +
+                    JsonEscape(Sub.ClientId) + '"}'#10#10);
     while AContext.Connection.Connected do
     begin
       if FStopFlag.WaitFor(0) = wrSignaled then Break;

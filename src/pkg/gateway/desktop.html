@@ -1660,8 +1660,27 @@ function refreshBoardSoon() {
    from any session -- the shell chat, the Agent Console, a scheduled job
    -- because they all reach the screen through the same feed rather than
    through whichever window owns a conversation. */
+/* Who the server knows this page as. Learned from the hello frame the
+   event feed opens with, so a command that names one executor can be
+   recognised. */
+let MY_CLIENT = "";
+onDesktopEvent("hello", ev => { if (ev && ev.client) MY_CLIENT = ev.client; });
+
 onDesktopEvent("desktop-command", ev => {
-  runShellActions(ev, t => shellSay(t)).catch(() => {});
+  /* A command reaches EVERY connected desktop, and for most actions
+     that is the point -- "tile the windows" should tidy every screen
+     you have open.
+
+     It is exactly wrong for the actions with consequences beyond the
+     glass. Two tabs open meant a single "build me an app" ran twice:
+     two turns against the same project, racing on one app directory
+     and one session file, with one turn's history lost. Those actions
+     run only on the screen the server named.
+
+     No target at all (an older gateway) means run them, because one
+     desktop doing the work is the behaviour that was there before. */
+  const mine = !ev.target || ev.target === MY_CLIENT;
+  runShellActions(ev, t => shellSay(t), { effects: mine }).catch(() => {});
 });
 
 onDesktopEvent("projects", refreshBoardSoon);
@@ -2463,15 +2482,32 @@ function shellPrompt() {
    transcript. Reported rather than silent: a window manager that
    rearranges your screen without saying what it did is indistinguishable
    from one that is broken. */
-async function runShellActions(block, say) {
+/* Actions whose effect outlives this browser tab: they create a
+   project, start a turn, write a page. Every other action only moves
+   pixels on the screen it runs on, so running it on all of them is
+   right. These must run exactly once, whoever is watching. */
+const EFFECTFUL = new Set(["build_app", "edit_app", "open_page"]);
+
+async function runShellActions(block, say, opts) {
   const list = Array.isArray(block.actions) ? block.actions : [];
   if (!list.length) return [];
+  /* Default true: a turn typed into THIS window is this window's to
+     carry out. Only the broadcast path passes false, and only to the
+     screens the server did not name. */
+  const effects = !opts || opts.effects !== false;
   const done = [];
   for (const a of list) {
     const spec = SHELL_ACTIONS[a.do];
     if (!spec) {
       done.push(`unknown action: ${a.do}`);
       say(`(unknown action: ${a.do})`);
+      continue;
+    }
+    if (!effects && EFFECTFUL.has(a.do)) {
+      /* Silent on purpose. Saying "another window is building this" in
+         every tab is three notifications for one build; the screen that
+         IS doing it narrates. */
+      done.push(`${a.do}: skipped (another desktop is running it)`);
       continue;
     }
     try {

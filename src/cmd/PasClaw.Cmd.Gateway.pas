@@ -336,11 +336,15 @@ begin
       { send_message self-gates on Cfg.Channels. Codex P2 on PR #230. }
       RegisterSendMessageTool(Reg);
       if Cfg.CronToolEnabled then RegisterCronTool(Reg);
-      { project/task: the desktop board. Always on -- they only write
-        manifests under the active workspace, and the desktop clients are
-        useless without them. }
-      { project/task: opt-in, same reasoning as the cron tool above. The
-        desktop works without it -- it drives the board over HTTP. }
+      (* The SCREEN tool, always. It arranges windows in a browser --
+         it does nothing at all without a desktop connected, and it is
+         what the desktop shell's routing is built on. Gating it behind
+         the board flag meant a fresh install answered "tile the open
+         windows" with a model that had no way to do it. *)
+      RegisterDesktopTool(Reg);
+      { project/task -- the BOARD, which is a different question: this is
+        the flag for letting the model manage it. Opt-in, same reasoning
+        as the cron tool above. }
       if Cfg.DesktopToolsEnabled then RegisterProjectTools(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);

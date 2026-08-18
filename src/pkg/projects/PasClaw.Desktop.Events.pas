@@ -49,6 +49,17 @@ type
     FDropped: Boolean;
     FSignal: TEvent;
   public
+    (* Who this reader is, as the browser names itself on connect.
+
+       A desktop command reaches EVERY connected screen, which is what
+       you want for "tile the windows" -- every screen tidies. It is not
+       what you want for "build me an app": two tabs open meant two
+       build turns for the same project, racing on the same app
+       directory and the same session file (reproduced: one command,
+       two identical turns, and one turn's history lost). Side-effecting
+       actions need exactly one executor, so the server names one and
+       the clients compare. *)
+    ClientId: string;
     constructor Create;
     destructor Destroy; override;
     { Take up to Max queued events. Returns '' when there is nothing. Each
@@ -88,6 +99,14 @@ procedure PublishProject(const Project: string);
    that executes it, and duplicating it here would create two lists to
    keep in step. *)
 procedure PublishDesktopCommand(const ActionsJSON: string);
+
+(* Which connected desktop should carry out the side-effecting half of a
+   command. The oldest live subscriber -- arbitrary but STABLE, which is
+   the property that matters: every command in a session lands on the
+   same screen rather than scattering builds across tabs. '' when
+   nothing is connected. *)
+function DesktopPrimaryClient: string;
+
 procedure PublishTask(const Project, TaskId, Status: string);
 procedure PublishJob(const Project, TaskId, JobId, Status: string);
 procedure PublishJobLog(const Project, TaskId, JobId, Line: string);
@@ -116,6 +135,9 @@ var
   GLock: TCriticalSection = nil;
   GSubs: TList = nil;
   GSeq: Int64 = 0;
+  { Names for connected desktops. Server-assigned rather than
+    browser-chosen, so two tabs cannot claim the same one. }
+  GClientSeq: Int64 = 0;
 
 { ------------------------------------------------------------ subscriber -- }
 
@@ -172,6 +194,8 @@ begin
   Result := TEventSubscriber.Create;
   GLock.Acquire;
   try
+    Inc(GClientSeq);
+    Result.ClientId := 'd' + IntToStr(GClientSeq);
     GSubs.Add(Result);
   finally
     GLock.Release;
@@ -271,15 +295,44 @@ begin
   PublishRaw('{"type":"project","project":"' + Esc(Project) + '"}');
 end;
 
+function DesktopPrimaryClient: string;
+var
+  I: Integer;
+  Sub: TEventSubscriber;
+begin
+  Result := '';
+  GLock.Acquire;
+  try
+    for I := 0 to GSubs.Count - 1 do
+    begin
+      Sub := TEventSubscriber(GSubs[I]);
+      if (Sub <> nil) and (Sub.ClientId <> '') then
+      begin
+        Result := Sub.ClientId;
+        Exit;
+      end;
+    end;
+  finally
+    GLock.Release;
+  end;
+end;
+
 procedure PublishDesktopCommand(const ActionsJSON: string);
 var
-  Body: string;
+  Body, Target: string;
 begin
   Body := Trim(ActionsJSON);
   { An empty or non-array payload would reach the client as a command it
     cannot read; refuse it here rather than make every desktop defend. }
   if (Body = '') or (Body[1] <> '[') then Exit;
-  PublishRaw('{"type":"desktop-command","actions":' + Body + '}');
+  (* Every screen gets the command -- "tile the windows" should tidy all
+     of them. "target" names the ONE screen allowed to run the actions
+     that have consequences beyond the glass: starting a build, opening
+     a page. Without it, two tabs meant two builds of the same project,
+     racing on one app directory and one session file. *)
+  Target := DesktopPrimaryClient;
+  PublishRaw('{"type":"desktop-command","target":"' + Esc(Target) +
+             '","actions":' + Body + '}');
 end;
 
 procedure PublishTask(const Project, TaskId, Status: string);
