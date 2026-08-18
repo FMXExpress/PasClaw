@@ -393,6 +393,61 @@ begin
   DeleteSession(Meta.Id);
 end;
 
+procedure TestReplyAfterCompactionIsRecorded;
+var
+  Meta: TSessionMeta;
+  Live, Back, Reply: TMessageArray;
+  Total, i: Integer;
+begin
+  (* The sequence the gateway runs on a COMPACTING turn, in order:
+     the flush hook fires mid-loop with the pre-drop history (reply not
+     yet in existence), the loop drops the older half, and the persist
+     at end of turn re-anchors -- then appends the reply separately.
+     The one-step version swallowed the reply: the re-anchor treats
+     everything alive as already-logged, which was true at flush time
+     and false once the reply landed. Found live before fixing. *)
+  Meta := Default(TSessionMeta);
+  Meta.Id := 'logtest-reply';
+  CleanLog(Meta.Id);
+  SetLength(Live, 10);
+  for i := 0 to 9 do
+    if i mod 2 = 0 then Live[i] := LogMsg(mrUser, 'q' + IntToStr(i))
+    else                Live[i] := LogMsg(mrAssistant, 'a' + IntToStr(i));
+
+  { the flush, with the pre-drop history -- the reply does not exist }
+  LogSessionTurn(Meta, Live);
+  Meta.LogPending := True;
+
+  { the drop, then the persist's first step: re-anchor on the rebuilt
+    array, still without the reply }
+  SetLength(Live, 2);
+  Live[0] := LogMsg(mrUser, 'SUMMARY');
+  Live[1] := LogMsg(mrUser, 'q8');
+  LogSessionTurn(Meta, Live);
+
+  { the persist's second step: the reply, appended on its own }
+  SetLength(Reply, 1);
+  Reply[0] := LogMsg(mrAssistant, 'THE-REPLY');
+  if AppendSessionLog(Meta.Id, Reply) > 0 then
+    Meta.LoggedCount := Meta.LoggedCount + 1;
+
+  Back := ReadSessionLog(Meta.Id, 0, 0, Total);
+  AssertTrue(Total = 11, 'pre-drop history plus the reply');
+  AssertEqStr(Back[10].Content, 'THE-REPLY',
+    'the compacting turn''s ANSWER is in the record');
+
+  { and the next ordinary turn still diffs from the right place }
+  SetLength(Live, 4);
+  Live[2] := LogMsg(mrAssistant, 'THE-REPLY');
+  Live[3] := LogMsg(mrUser, 'next question');
+  { live is [SUMMARY, q8, THE-REPLY, next question]; LoggedCount = 3 }
+  LogSessionTurn(Meta, Live);
+  Back := ReadSessionLog(Meta.Id, 0, 0, Total);
+  AssertTrue(Total = 12, 'the next turn appends once, not twice');
+  AssertEqStr(Back[11].Content, 'next question', 'and lands at the end');
+  CleanLog(Meta.Id);
+end;
+
 procedure TestLogWindows;
 var
   Meta: TSessionMeta;
@@ -436,6 +491,7 @@ end;
 begin
   TestLogRecordsEachTurnOnce;
   TestCompactionDoesNotCostTheRecord;
+  TestReplyAfterCompactionIsRecorded;
   TestLogWindows;
   TestLogIsNotASession;
   TestExtractsFsWritePaths;
