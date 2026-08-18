@@ -133,7 +133,23 @@ The tool loop executes server-side and each tool call is surfaced to the client 
   ⎿ exit=0
 ```
 
-Known tools (`fs_read`, `fs_write`, `fs_list`, `fs_grep`, `fs_edit_hashline`, `shell_exec`, `memory_search`, `web_search`, `web_fetch`) surface their most meaningful argument; MCP and other tools fall back to a compact one-line dump of the raw arguments. The full argument and result text also go to SSE comment lines (`: tool_call ...` / `: tool_result ...`) for consumers that log structured activity, and to the server debug log when `--debug` is set. Formatter: `src/pkg/gateway/PasClaw.Gateway.ToolView.pas` (unit-tested via `make test-toolview`).
+Tools PasClaw ships surface their most meaningful argument rather than their arguments:
+
+| Tool | Shown as |
+|---|---|
+| `fs_read` / `fs_write` / `fs_list` / `append_file` | the path |
+| `fs_grep` / `find_files` | the pattern, and the path when given |
+| `fs_edit_hashline` / `apply_patch` | the path, read out of the patch header when needed |
+| `shell_exec` | the command |
+| `desktop` | the actions in order — `desktop(tile, open_app notes)` |
+| `todo_write` | the shape of the checklist — `3 step(s), 1 done` |
+| `project` / `task` | the action and what it names — `task(update expenses/T0003)` |
+| `memory_search` / `kb_search` / `web_search` / `session_search` / `tool_search` | the query |
+| `web_fetch` / `memory_fetch` | the URL |
+| `execute_code` | the language and the size — the code *is* the argument |
+| `tool_output_get` | the handle |
+
+MCP and other unknown tools fall back to a compact one-line dump of the raw arguments, which is the right answer for a tool this formatter has never seen. The full argument and result text also go to SSE comment lines (`: tool_call ...` / `: tool_result ...`) for consumers that log structured activity, and to the server debug log when `--debug` is set. Formatter: `src/pkg/gateway/PasClaw.Gateway.ToolView.pas` (unit-tested via `make test-toolview`).
 
 ## `/v1/chat/completions` with `session_context` — server-held conversations
 
