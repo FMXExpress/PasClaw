@@ -872,12 +872,30 @@ begin
          Guarded on non-empty so a turn that genuinely produced no text -- an
          aborted stream, a hard provider failure -- does not gain a blank
          assistant turn that never existed. *)
+      (* Record the loop history BEFORE the reply is appended, and the
+         reply separately AFTER -- because on a compacting turn they
+         need different handling. TCompactFlush fired mid-loop with the
+         pre-drop history and set LogPending; the re-anchor that flag
+         asks for treats everything alive as already-logged-or-summary.
+         That was true when the flag was set, and stops being true the
+         moment the reply lands: the reply postdates the flush, so an
+         appended-then-re-anchored reply was simply swallowed. Found
+         live: the record held the compacting turn's question and not
+         its answer. Logging in two steps means the re-anchor sees
+         exactly the array the flush saw, and the reply is appended on
+         its own, on every path. *)
+      LogSessionTurn(S.Meta, S.Messages);
       if Trim(Loop.Content) <> '' then
       begin
         SetLength(S.Messages, Length(S.Messages) + 1);
         S.Messages[High(S.Messages)] := MakeMessage(mrAssistant, Loop.Content);
+        { The reply enters the record and the count together, so the
+          next turn's diff still starts in the right place. }
+        if AppendSessionLog(S.Meta.Id, [S.Messages[High(S.Messages)]]) > 0 then
+          S.Meta.LoggedCount := S.Meta.LoggedCount + 1;
       end;
       S.Meta.SystemPromptOverride := Loop.FinalSystemPrompt;
+<<<<<<< HEAD
       { Append this turn to the record before the live file is written,
         so what leaves the transcript at the next compaction has
         already been kept. }
@@ -890,6 +908,8 @@ begin
          carries what it edited, ran and broke from its very first turn,
          and a `pasclaw resume` of the same session finds it too. *)
       UpdateWorkingStateAfterTurn(S.Meta, S.Messages);
+=======
+>>>>>>> origin/claude/session-archive
       S.AutoTitle;
       S.Touch;
       S.Save;
