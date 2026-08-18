@@ -3983,8 +3983,27 @@ begin
   { GET -- return metadata + the full message transcript. }
   S := TSession.Create(Id);
   try
+    (* ?if_absent=empty -- "give me this conversation, empty if it is new".
+
+       A client that keeps a conversation per THING rather than per
+       session -- the desktop keeps one per project and one for its
+       shell -- asks for a transcript that legitimately does not exist
+       yet on first use. A 404 is the right answer to "does this
+       exist"; it is the wrong answer to "open this", and it paints the
+       console red on an ordinary first run, which trains people to
+       ignore the colour that is supposed to mean something.
+
+       Opt-in, because 404 IS the useful answer for callers probing
+       existence, and changing it underneath them would be worse than
+       the noise. *)
     if not S.MetaExists then
     begin
+      if SameText(Trim(ARequest.Params.Values['if_absent']), 'empty') then
+      begin
+        WriteJSON(AResp, 200,
+          '{"id":"' + JsonEscape(Id) + '","messages":[],"new":true}');
+        Exit;
+      end;
       WriteJSON(AResp, 404, '{"error":"not found"}');
       Exit;
     end;
