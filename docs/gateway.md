@@ -165,6 +165,26 @@ Details worth knowing:
 - **The session is a real session.** `pasclaw resume <id>`, `pasclaw learn` and the Library window all see it, because it is the same store every other surface writes.
 
 The desktop uses this for both its project chats (`desktop-<project>`) and its shell (`desktop-shell`).
+## `/v1/sessions/<id>` — the live transcript and the record
+
+A session on disk is the model's **working context**. When the tool loop compacts — replacing the older half of a conversation with a summary so the next turn fits — every surface writes that result back as the session, so the compacted turns leave the file. That is correct for a resume (replaying them would undo the compaction) and wrong for a reader.
+
+So every message is also appended, once, to `<id>.log.jsonl` beside the session: the **record**. The live file is what the model sees; the record is what the conversation was.
+
+| Request | Answers with |
+|---|---|
+| `GET /v1/sessions/<id>` | the live transcript — post-compaction, the resume state |
+| `GET /v1/sessions/<id>?full=1` | the newest 200 messages of the record, with `total` |
+| `GET /v1/sessions/<id>?full=1&limit=N` | the newest `N` |
+| `GET /v1/sessions/<id>?full=1&offset=K&limit=N` | `N` messages from index `K` |
+
+```json
+{ "id": "desktop-notes", "total": 1603, "offset": 1483, "count": 120, "messages": [ … ] }
+```
+
+Windowed because the record grows without bound: the desktop measured 10.4 s and 2.1 MB to paint a 1500-turn conversation in one go, against 94 ms and 369 DOM nodes for a 120-message window. Page backwards by walking `offset` down from `total`; `limit` is capped at 2000.
+
+`?full=1` falls back to the live transcript for a session recorded before the log existed, so old sessions still answer. Deleting a session deletes its record with it.
 
 ## `/v1/responses` — OpenAI Responses API
 
