@@ -1703,8 +1703,27 @@ function refreshBoardSoon() {
    from any session -- the shell chat, the Agent Console, a scheduled job
    -- because they all reach the screen through the same feed rather than
    through whichever window owns a conversation. */
+/* Who the server knows this page as. Learned from the hello frame the
+   event feed opens with, so a command that names one executor can be
+   recognised. */
+let MY_CLIENT = "";
+onDesktopEvent("hello", ev => { if (ev && ev.client) MY_CLIENT = ev.client; });
+
 onDesktopEvent("desktop-command", ev => {
-  runShellActions(ev, t => shellSay(t)).catch(() => {});
+  /* A command reaches EVERY connected desktop, and for most actions
+     that is the point -- "tile the windows" should tidy every screen
+     you have open.
+
+     It is exactly wrong for the actions with consequences beyond the
+     glass. Two tabs open meant a single "build me an app" ran twice:
+     two turns against the same project, racing on one app directory
+     and one session file, with one turn's history lost. Those actions
+     run only on the screen the server named.
+
+     No target at all (an older gateway) means run them, because one
+     desktop doing the work is the behaviour that was there before. */
+  const mine = !ev.target || ev.target === MY_CLIENT;
+  runShellActions(ev, t => shellSay(t), { effects: mine }).catch(() => {});
 });
 
 onDesktopEvent("projects", refreshBoardSoon);
@@ -1889,9 +1908,47 @@ async function switchWorkspace(name) {
      all change. Deliberate gesture, named consequence. */
   if (!confirm(`Switch to ${name}?\n\nThis changes what PasClaw remembers: ` +
                `memory, sessions, skills and files are all per-workspace.`)) return;
+
+  /* Save the room being left while it is still the current one -- the
+     same order switchDesktop uses. A layout change from the last 700ms
+     is still sitting in the debounce, and every route resolves against
+     whichever workspace is active when it lands. */
+  clearTimeout(saveTimer);
+  try { await api("/v1/desktop/state", { method: "PUT", body: captureDesktop() }); }
+  catch {}                          /* a layout that cannot save still works */
+
+  /* Move first, tear down second.
+
+     Everything below this line destroys something -- the open windows,
+     and with dropProjectChats the cached conversations and the unsent
+     drafts sitting in their composers. If the activation fails (the
+     gateway is down, the name was renamed out from under the menu) the
+     user is still in THIS workspace, and a failed switch that took
+     their half-typed message with it is a worse outcome than the switch
+     not happening. So the fallible call goes first and nothing is torn
+     down unless it succeeded. */
+  try {
+    await api("/v1/workspaces/activate", { method: "POST", body: { name } });
+  } catch (e) {
+    alert(`Could not switch to ${name}:\n\n${e.message}`);
+    return;
+  }
+
   for (const w of Array.from(WINS.values())) closeWindow(w);
-  await api("/v1/workspaces/activate", { method: "POST", body: { name } });
-  S.tree = {}; S.selected = null;
+  /* The conversations go with the windows.
+
+     Closing the windows was not enough: the chats live in PROJECT_CHATS
+     keyed by slug, which survives, and the suite puts the same slugs in
+     every workspace. Leaving them cached meant opening "notes" in the
+     new workspace showed the OLD workspace's transcript -- a hole in a
+     wall this dialog has just promised the user is solid. */
+  dropProjectChats();
+  /* Those closes each scheduled a layout save, and it would land 700ms
+     from now -- after the activation, with an empty window list, writing
+     "nothing was open" over the arrangement we are about to restore.
+     The room being left is already filed (above); drop the write. */
+  clearTimeout(saveTimer);
+  S.tree = {}; S.selected = null; S.dockProject = null;
   await loadWorkspaces();
   await loadProjects();
   await loadDesktops();
@@ -2205,6 +2262,22 @@ function paintChipsInto(host) {
    loud under the field -- the difference between "where did my text go"
    and not. */
 const ASK_KINDS = {
+  /* The default, and the only one most people should ever need.
+
+     The first cut made the dropdown the router, which put the burden
+     back where the shell exists to take it from: "tile the open
+     windows" typed into a box still set to Ask went off and searched
+     the web for it. Deciding which of five boxes a sentence belongs in,
+     before typing the sentence, is the thing a chat is supposed to
+     spare you.
+
+     So PasClaw reads it. The turn goes out with the desktop's state and
+     every tool, and the model answers, arranges, or builds depending on
+     what was said. The named intents below stay as an override for when
+     you want to force one -- "research this" when it would otherwise
+     just answer. */
+  auto:     { label: "Auto",
+              where: "PasClaw reads what you meant." },
   ask:      { label: "Ask",
               where: "Answers as a page in the Browser." },
   research: { label: "Research",
@@ -2363,6 +2436,33 @@ const SHELL_ACTIONS = {
       return `placed ${a.key} at ${x},${y} ${width}x${height}`;
     },
   },
+  /* Change an app that ALREADY exists. Distinct from build_app, which
+     always makes a new project: "make the Brain app look better" is a
+     turn in brain's own conversation, not a second brain. */
+  edit_app: {
+    help: 'edit_app {"project":"<slug>","brief":"<the change>"} -- ' +
+          "change an app that already exists, in its own conversation",
+    run: a => {
+      if (!a.project) throw new Error("edit_app needs a project");
+      if (!S.projects.some(p => p.name === a.project))
+        throw new Error("no project " + a.project);
+      openChat(a.project);
+      projectChat(a.project).submitText(a.brief || a.title || "", "build");
+      return "editing " + a.project;
+    },
+  },
+  /* Answers land in the Browser as pages, so Auto can route a question
+     the same way the Ask intent does. */
+  open_page: {
+    help: 'open_page {"query":"<question>","kind":"search|research"} -- ' +
+          "answer a question as a page in the Browser (research digs deeper)",
+    run: a => {
+      const q = a.query || a.brief || a.title;
+      if (!q) throw new Error("open_page needs a query");
+      askFromDesktop(q, a.kind === "research" ? "research" : "search");
+      return (a.kind === "research" ? "researching " : "answering ") + q;
+    },
+  },
   theme: {
     help: 'theme {"id":"<style id>"} -- change the desktop theme',
     run: a => { applyStyle(a.id); return "theme " + a.id; },
@@ -2418,21 +2518,31 @@ function shellPrompt() {
   const projects = st.projects.join(", ");
   return [
     "You are the shell of PasClaw Desktop -- the window manager and the",
-    "assistant at once. The user talks to you to get things ANSWERED,",
-    "BUILT, or ARRANGED.",
+    "assistant at once. Whatever the user types arrives here, and YOU",
+    "decide what it was: a question, a change to an app, a new app, or",
+    "the screen needing rearranging. They should never have to say which.",
     "",
-    "To operate the desktop, CALL THE `desktop` TOOL with an actions",
-    'array, e.g. {"actions":[{"do":"tile"}]}. Several actions in one call',
-    'when the user asks for several things -- "build me these five apps"',
-    "is one call with five build_app actions, not five turns.",
+    "Route it by calling the `desktop` tool with an actions array, e.g.",
+    '{"actions":[{"do":"tile"}]}. Several actions in one call when the',
+    'user asks for several things -- "build me these five apps" is one',
+    "call with five build_app actions, not five turns.",
     "",
     "Actions:",
     ...Object.values(SHELL_ACTIONS).map(a => "  - " + a.help),
     "",
-    "Your other tools work here too, and compose with it in one turn:",
-    "read a file and then tile, search the workspace and then open what",
-    "you found. Only touch the desktop when the user wants the SCREEN",
-    "changed; an ordinary question gets an ordinary answer.",
+    "Reading the request:",
+    '  - about the SCREEN ("tile these", "close that", "open Notes")',
+    "    -> tile / cascade / place / focus / close / open_app",
+    '  - changing an app that EXISTS ("make the Brain app look better")',
+    "    -> edit_app with that project's slug. Do NOT build_app: that",
+    "       would make a second copy instead of changing theirs.",
+    '  - a NEW app ("build me a stopwatch") -> build_app',
+    '  - a question ("what is a pomodoro timer", "compare X and Y")',
+    "    -> open_page, kind research when it wants depth or sources",
+    "  - anything conversational -> just answer, no tool at all",
+    "",
+    "Your other tools work here too and compose in one turn: read a file",
+    "and then tile, search the workspace and then open what you found.",
     "",
     "EVERYTHING you need about the desktop is below. It is current as of",
     "this message -- do not go looking for it on disk, and do not ask for",
@@ -2453,15 +2563,32 @@ function shellPrompt() {
    transcript. Reported rather than silent: a window manager that
    rearranges your screen without saying what it did is indistinguishable
    from one that is broken. */
-async function runShellActions(block, say) {
+/* Actions whose effect outlives this browser tab: they create a
+   project, start a turn, write a page. Every other action only moves
+   pixels on the screen it runs on, so running it on all of them is
+   right. These must run exactly once, whoever is watching. */
+const EFFECTFUL = new Set(["build_app", "edit_app", "open_page"]);
+
+async function runShellActions(block, say, opts) {
   const list = Array.isArray(block.actions) ? block.actions : [];
   if (!list.length) return [];
+  /* Default true: a turn typed into THIS window is this window's to
+     carry out. Only the broadcast path passes false, and only to the
+     screens the server did not name. */
+  const effects = !opts || opts.effects !== false;
   const done = [];
   for (const a of list) {
     const spec = SHELL_ACTIONS[a.do];
     if (!spec) {
       done.push(`unknown action: ${a.do}`);
       say(`(unknown action: ${a.do})`);
+      continue;
+    }
+    if (!effects && EFFECTFUL.has(a.do)) {
+      /* Silent on purpose. Saying "another window is building this" in
+         every tab is three notifications for one build; the screen that
+         IS doing it narrates. */
+      done.push(`${a.do}: skipped (another desktop is running it)`);
       continue;
     }
     try {
@@ -2512,6 +2639,7 @@ function openShell() {
   Object.entries(ASK_KINDS).forEach(([k, v]) => {
     const o = el("option", null, v.label); o.value = k; kind.appendChild(o);
   });
+  kind.value = "auto";
   const where = el("span", "muted");
   const go = el("button", "btn", "Go");
   const turn = makeTurnControl(go, "Go");
@@ -2548,14 +2676,17 @@ function openShell() {
     const text = ta.value.trim();
     if (!text) return;
     const k = kind.value;
-    if (k !== "control") ta.value = "";
+    if (k !== "control" && k !== "auto") ta.value = "";
     say("you", text, "u");
     switch (k) {
       case "research": return askWith(text, "research");
       case "plan":     return buildWith(text, true);
       case "build":    return buildWith(text, false);
-      case "control":  return control(text);
-      default:         return askWith(text, "search");
+      case "ask":      return askWith(text, "search");
+      /* auto and control are the same journey -- a turn with the state
+         and the tools -- and differ only in what the prompt tells the
+         model it is for. */
+      default:         return control(text);
     }
   }
 
@@ -3227,8 +3358,32 @@ function isAbort(e) {
    one you typed into was the only one that knew what you had said. This
    map is the single instance; showChatIn re-parents its root DOM node to
    whichever surface is currently its home, and appendChild detaches it
-   from the previous one, so two live copies cannot exist. */
+   from the previous one, so two live copies cannot exist.
+
+   "For the life of the page" is exactly one workspace long. The key is a
+   project SLUG, and slugs repeat across workspaces by construction --
+   the suite seeds notes, calendar and mail into every one -- so a cache
+   that outlived a switch handed workspace 2 the conversation from
+   workspace 1. dropProjectChats is what makes the life span true. */
 const PROJECT_CHATS = new Map();
+
+/* Forget every cached conversation.
+
+   The server was never confused: /v1/sessions/desktop-<slug> resolves
+   inside the ACTIVE workspace and would have returned the right
+   transcript. The client simply never asked again, because it had one
+   in hand under the same key. Dropping the instances makes the next
+   open rebuild and re-read, which is the behaviour the sessions are
+   already written for. */
+function dropProjectChats() {
+  for (const c of PROJECT_CHATS.values()) {
+    /* Detach whatever surface is currently hosting it, so a pane that
+       is repainted later cannot resurrect a dead conversation's node. */
+    try { if (c.root && c.root.parentNode) c.root.parentNode.removeChild(c.root); }
+    catch {}
+  }
+  PROJECT_CHATS.clear();
+}
 
 function projectChat(project) {
   let c = PROJECT_CHATS.get(project);

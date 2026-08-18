@@ -30,6 +30,18 @@ interface
 uses
   PasClaw.Tools.Registry;
 
+(* The `desktop` tool alone: arrange the screen a person is looking at.
+
+   Split out from the board tools because it answers a different
+   question. `project` and `task` let the MODEL manage the board, which
+   is what desktop_tools_enabled gates and why that gate is off by
+   default. `desktop` moves windows in a browser -- it is meaningless
+   without a desktop connected, and it is what the shell's Auto routing
+   is built on. Gating it behind the board flag meant a fresh install
+   answered "tile the open windows" with a model that had no way to do
+   it. *)
+procedure RegisterDesktopTool(R: TToolRegistry);
+
 procedure RegisterProjectTools(R: TToolRegistry);
 
 { Handlers, exposed for tests. }
@@ -432,6 +444,18 @@ begin
   T.Hidden      := False;
   R.Register(T);
 
+  { The board tools imply the screen tool -- an operator who asked for
+    the model to manage the board gets the same set as before this
+    split. The gateway registers the screen tool on its own as well. }
+  RegisterDesktopTool(R);
+end;
+
+procedure RegisterDesktopTool(R: TToolRegistry);
+var
+  T: TTool;
+begin
+  if R = nil then Exit;
+
   T.Name        := 'desktop';
   T.Description :=
     'Arrange the desktop the user is looking at: window layout, opening ' +
@@ -460,6 +484,6 @@ begin
   T.IsDeferred  := False;
   T.Hidden      := False;
   R.Register(T);
-
 end;
+
 end.

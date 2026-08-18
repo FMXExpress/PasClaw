@@ -71,7 +71,6 @@ type
     function VisibleChildCount: Integer;
     function SelfRoleId: Integer;
     function SelfName: string;
-    function SelfValue: string;
     function SelfState: Integer;
     { varChild is 0 for "this object" and 1..n for a child handled without
       its own IAccessible. Resolve once, here, so every method agrees. }
@@ -123,6 +122,27 @@ type
 
 var
   GHooks: TDictionary<HWND, THookRec>;
+
+type
+  (* TListBoxItem.ListBox is PROTECTED in FMX, so the item cannot name its
+     owner through public API. This is the standard Delphi access idiom: a
+     local descendant declared purely as a cast target, which lifts the
+     member into scope without touching FMX or guessing at the visual tree.
+
+     The alternative -- walking Parent until a TCustomListBox turns up --
+     was rejected because it depends on FMX's internal nesting (content
+     wrappers, virtualised item hosts) staying as it is today, and the
+     protected property already IS that lookup, maintained upstream. *)
+  TListBoxItemAccess = class(TListBoxItem);
+
+{ Owning list box, or nil when the item is not parented yet. Both call
+  sites need the same thing, and one helper keeps the cast in exactly one
+  place rather than four. }
+function OwningListBox(Item: TListBoxItem): TCustomListBox;
+begin
+  if Item = nil then Exit(nil);
+  Result := TListBoxItemAccess(Item).ListBox;
+end;
 
 { ---------------- control -> accessible facts ---------------- }
 
@@ -300,7 +320,6 @@ begin
 end;
 
 function TFmxAccessible.SelfRoleId: Integer; begin Result := RoleOf(FControl); end;
-function TFmxAccessible.SelfValue: string;   begin Result := ValueOf(FControl); end;
 function TFmxAccessible.SelfState: Integer;  begin Result := StateOf(FControl); end;
 
 function TFmxAccessible.SelfName: string;
@@ -540,6 +559,7 @@ function TFmxAccessible.accSelect(flagsSelect: Integer;
   varChild: OleVariant): HResult;
 var
   C: TControl;
+  LB: TCustomListBox;
 begin
   if not Resolve(varChild, C) then Exit(E_INVALIDARG);
   if C = nil then Exit(S_FALSE);
@@ -551,8 +571,9 @@ begin
   begin
     if C is TListBoxItem then
     begin
-      if TListBoxItem(C).ListBox <> nil then
-        TListBoxItem(C).ListBox.ItemIndex := TListBoxItem(C).Index
+      LB := OwningListBox(TListBoxItem(C));
+      if LB <> nil then
+        LB.ItemIndex := TListBoxItem(C).Index
       else
         TListBoxItem(C).IsSelected := True;
       Result := S_OK;
@@ -636,6 +657,7 @@ end;
 function TFmxAccessible.accDoDefaultAction(varChild: OleVariant): HResult;
 var
   C: TControl;
+  LB: TCustomListBox;
 begin
   if not Resolve(varChild, C) then Exit(E_INVALIDARG);
   if C is TButton then
@@ -662,8 +684,9 @@ begin
     -- then run the item's own OnClick if it has one. (Codex P1 on #557.) }
   if C is TListBoxItem then
   begin
-    if TListBoxItem(C).ListBox <> nil then
-      TListBoxItem(C).ListBox.ItemIndex := TListBoxItem(C).Index
+    LB := OwningListBox(TListBoxItem(C));
+    if LB <> nil then
+      LB.ItemIndex := TListBoxItem(C).Index
     else
       TListBoxItem(C).IsSelected := True;
     if Assigned(TListBoxItem(C).OnClick) then TListBoxItem(C).OnClick(C);

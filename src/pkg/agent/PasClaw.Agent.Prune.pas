@@ -459,6 +459,13 @@ begin
   SetLength(OneCall, 1);
   OneCall[0] := MakeMessage(mrUser, BuildPrunePrompt(Groups));
   CallOptions := DefaultChatOptions;
+  { PRIVACY: never let provider grounding fire for this call. Gemini's
+    google_search is ON by default, and grounding works by having the
+    model formulate search queries FROM ITS CONTEXT -- which here is the
+    user's own content. Sending that to a search engine is the harm; a
+    maintenance pass over text we already hold has no business searching
+    the web at all. }
+  CallOptions.DisableServerTools := True;
   { A plan is short. The cap is generous enough for one decision per
     candidate and no more. }
   CallOptions.MaxTokens := 1024 + Cands * 64;

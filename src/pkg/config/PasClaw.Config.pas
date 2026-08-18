@@ -724,11 +724,16 @@ type
     (* The desktop board's `project` / `task` tools.
 
        Off by default, and deliberately so: PasClaw's behaviour should not
-       change for someone who never opens a desktop. Two extra tools in the
-       schema is two extra tools the model reads on every request, and the
-       CLI has no board to show. The desktop clients drive the same store
-       over HTTP without needing this -- turn it on only when you want the
-       MODEL to manage the board itself. *)
+       change for someone who never opens a desktop. The desktop clients
+       drive the same store over HTTP without needing this -- turn it on
+       only when you want the MODEL to manage the board itself.
+
+       This gates `project` and `task`, the BOARD tools. It does not gate
+       `desktop`, which arranges windows in a browser: that one is
+       registered by `gateway` and `serve` regardless, because it does
+       nothing without a desktop connected and the shell's routing is
+       built on it. Gating it here meant a fresh install answered "tile
+       the open windows" with a model that had no way to do it. *)
     DesktopToolsEnabled: Boolean;
     (* Per-Chat() wait timeout in milliseconds for the relay provider
        (PasClaw.Providers.Relay -- the pull-worker pattern). 0 = use

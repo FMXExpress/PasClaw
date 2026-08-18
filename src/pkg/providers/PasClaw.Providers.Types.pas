@@ -206,6 +206,12 @@ begin
   Result.CacheTTL      := '';
   Result.CacheKey      := '';
   Result.Extra         := '';
+  { Explicit, because a function Result is NOT zero-initialised in Pascal.
+    Left unset this read stack garbage, so provider grounding was enabled or
+    suppressed at random per call -- observed on the wire as a plain agent
+    turn emitting disable_server_tools=true with no caller having set it.
+    A privacy-relevant flag must never be luck. }
+  Result.DisableServerTools := False;
 end;
 
 function MakeMessage(Role: TMsgRole; const Content: string): TMessage;
