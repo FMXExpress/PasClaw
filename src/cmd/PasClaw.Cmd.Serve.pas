@@ -273,6 +273,15 @@ begin
         skills only; the running scheduler picks up its config edits live. }
       if Cfg.CronToolEnabled then RegisterCronTool(Reg);
       { project/task: opt-in, see Cmd.Gateway. }
+      (* The SCREEN tool, always. It arranges windows in a browser --
+         it does nothing at all without a desktop connected, and it is
+         what the desktop shell's routing is built on. Gating it behind
+         the board flag meant a fresh install answered "tile the open
+         windows" with a model that had no way to do it. *)
+      RegisterDesktopTool(Reg);
+      { project/task -- the BOARD, which is a different question: this is
+        the flag for letting the model manage it. Opt-in, same reasoning
+        as the cron tool above. }
       if Cfg.DesktopToolsEnabled then RegisterProjectTools(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);

@@ -917,6 +917,16 @@ per-project manifest reads.
 
 ---
 
+## One command, many screens
+
+`Tool_Desktop` publishes onto the event feed, and **every** connected desktop receives it. For window management that is the point — ask for the windows to be tiled and every screen you have open tidies.
+
+It is wrong for the actions whose effect outlives the tab. With two tabs open, one `build_app` ran twice: two turns against the same project, racing on one app directory and one session file, with one turn's history lost.
+
+So the server names one executor. Each SSE subscriber is assigned an id and told it in the feed's `hello` frame; `PublishDesktopCommand` stamps the oldest live subscriber's id as the command's `target`. Clients run **every** action they receive except `build_app`, `edit_app` and `open_page`, which they run only when they are the target. A command with no target at all (an older gateway) is executed in full, which is the single-desktop behaviour that was there before.
+
+Oldest-subscriber is arbitrary but *stable*, and stability is the property that matters: every command in a session lands on the same screen rather than scattering builds across tabs. The consequence worth knowing is that asking in a second tab can have the app open in the first one.
+
 ## Known limits
 
 Stated plainly rather than left to be discovered:
