@@ -895,11 +895,6 @@ begin
           S.Meta.LoggedCount := S.Meta.LoggedCount + 1;
       end;
       S.Meta.SystemPromptOverride := Loop.FinalSystemPrompt;
-<<<<<<< HEAD
-      { Append this turn to the record before the live file is written,
-        so what leaves the transcript at the next compaction has
-        already been kept. }
-      LogSessionTurn(S.Meta, S.Messages);
       (* And refresh the snapshot every turn, the way the TUI does.
 
          TCompactFlush writes it at drop time, which covers the moment
@@ -908,8 +903,6 @@ begin
          carries what it edited, ran and broke from its very first turn,
          and a `pasclaw resume` of the same session finds it too. *)
       UpdateWorkingStateAfterTurn(S.Meta, S.Messages);
-=======
->>>>>>> origin/claude/session-archive
       S.AutoTitle;
       S.Touch;
       S.Save;
