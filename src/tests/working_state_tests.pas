@@ -290,7 +290,102 @@ begin
     AssertTrue(Found[j], 'patch-written path captured: ' + Want[j]);
 end;
 
+(* ---- MergeSessionContext: what a session-context turn runs against ----
+
+   The desktop no longer holds its own transcript. It sends the message
+   the person just typed and the gateway supplies everything before it,
+   so this merge IS the conversation the model sees. Three things have
+   to hold, and the third is the one that bit: the merged array must
+   grow by exactly the new messages, because appending the stored ones
+   to a client that ALSO sent them doubled every turn. *)
+
+function Msg(R: TMsgRole; const C: string): TMessage;
 begin
+  Result := Default(TMessage);
+  Result.Role := R;
+  Result.Content := C;
+end;
+
+procedure TestMergePutsStoredFirst;
+var
+  Stored, Fresh, Merged: TMessageArray;
+begin
+  SetLength(Stored, 4);
+  Stored[0] := Msg(mrUser, 'one');
+  Stored[1] := Msg(mrAssistant, 'reply one');
+  Stored[2] := Msg(mrUser, 'two');
+  Stored[3] := Msg(mrAssistant, 'reply two');
+  SetLength(Fresh, 1);
+  Fresh[0] := Msg(mrUser, 'three');
+
+  Merged := MergeSessionContext(Stored, Fresh);
+  AssertTrue(Length(Merged) = 5, 'merged length is stored + fresh');
+  AssertEqStr(Merged[0].Content, 'one', 'oldest stored turn leads');
+  AssertEqStr(Merged[3].Content, 'reply two', 'stored order preserved');
+  AssertEqStr(Merged[4].Content, 'three', 'the new turn goes last');
+end;
+
+procedure TestMergeDropsStoredSystemTurns;
+var
+  Stored, Fresh, Merged: TMessageArray;
+  i: Integer;
+begin
+  SetLength(Stored, 3);
+  Stored[0] := Msg(mrSystem, 'a system prompt from an older turn');
+  Stored[1] := Msg(mrUser, 'one');
+  Stored[2] := Msg(mrAssistant, 'reply one');
+  SetLength(Fresh, 1);
+  Fresh[0] := Msg(mrUser, 'two');
+
+  Merged := MergeSessionContext(Stored, Fresh);
+  AssertTrue(Length(Merged) = 3, 'the stored system turn is dropped');
+  for i := 0 to High(Merged) do
+    AssertTrue(Merged[i].Role <> mrSystem,
+      'no stored system turn survives the merge');
+  AssertEqStr(Merged[0].Content, 'one', 'the conversation still starts at one');
+  AssertEqStr(Merged[2].Content, 'two', 'the new turn is still last');
+end;
+
+procedure TestMergeKeepsToolTurns;
+var
+  Stored, Fresh, Merged: TMessageArray;
+begin
+  { A model that called a tool has to see its own result, or the next
+    turn reads as an answer that came from nowhere. }
+  SetLength(Stored, 3);
+  Stored[0] := Msg(mrUser, 'write the file');
+  Stored[1] := MakeAssistantWithToolCall('fs_write', '{"path":"a.txt"}');
+  Stored[2] := Msg(mrTool, 'ok');
+  SetLength(Fresh, 1);
+  Fresh[0] := Msg(mrUser, 'now read it back');
+
+  Merged := MergeSessionContext(Stored, Fresh);
+  AssertTrue(Length(Merged) = 4, 'tool call and tool result both survive');
+  AssertTrue(Merged[1].Role = mrAssistant, 'the tool call survives');
+  AssertTrue(Length(Merged[1].ToolCalls) = 1, 'with its tool call intact');
+  AssertTrue(Merged[2].Role = mrTool, 'the tool result survives');
+end;
+
+procedure TestMergeOnAnEmptySession;
+var
+  Stored, Fresh, Merged: TMessageArray;
+begin
+  { The first turn of a conversation: nothing stored yet, and the
+    request must go through unchanged rather than being treated as a
+    special case somewhere upstream. }
+  SetLength(Stored, 0);
+  SetLength(Fresh, 1);
+  Fresh[0] := Msg(mrUser, 'hello');
+  Merged := MergeSessionContext(Stored, Fresh);
+  AssertTrue(Length(Merged) = 1, 'an empty session contributes nothing');
+  AssertEqStr(Merged[0].Content, 'hello', 'the new turn is the whole array');
+end;
+
+begin
+  TestMergePutsStoredFirst;
+  TestMergeDropsStoredSystemTurns;
+  TestMergeKeepsToolTurns;
+  TestMergeOnAnEmptySession;
   TestExtractsFsWritePaths;
   TestExtractsFsEditPathsAndDedupes;
   TestCapturesShellAndError;

@@ -135,6 +135,37 @@ The tool loop executes server-side and each tool call is surfaced to the client 
 
 Known tools (`fs_read`, `fs_write`, `fs_list`, `fs_grep`, `fs_edit_hashline`, `shell_exec`, `memory_search`, `web_search`, `web_fetch`) surface their most meaningful argument; MCP and other tools fall back to a compact one-line dump of the raw arguments. The full argument and result text also go to SSE comment lines (`: tool_call ...` / `: tool_result ...`) for consumers that log structured activity, and to the server debug log when `--debug` is set. Formatter: `src/pkg/gateway/PasClaw.Gateway.ToolView.pas` (unit-tested via `make test-toolview`).
 
+## `/v1/chat/completions` with `session_context` — server-held conversations
+
+By default `/v1/chat/completions` is stateless in the OpenAI sense: the caller ships the whole `messages[]` array every turn and the gateway answers it. That is the right contract for third-party tooling, and it is unchanged.
+
+A client that would rather let PasClaw hold the conversation — the way the CLI and the TUI already do — names a session and asks for it:
+
+```sh
+curl http://127.0.0.1:8088/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H 'X-PasClaw-Session: my-conversation' \
+  -d '{"model":"claude-opus-4-7",
+       "session_context": true,
+       "session_title": "Notes with Claude",
+       "messages":[{"role":"user","content":"and what about the second one?"}]}'
+```
+
+With `session_context: true` the gateway loads `my-conversation` from the session store, appends the request's `messages[]` to it, runs the turn against the whole thing, and files the result back. So each request carries only what is new.
+
+| Field | Meaning |
+|---|---|
+| `session_context` | Boolean, default `false`. Prepend the stored transcript to `messages[]`. Requires a session id (`X-PasClaw-Session`, or the `user` field). |
+| `session_title` | Names the session the first time it is written. Later turns do not rename it. Without it a session is titled after the route that created it. |
+
+Details worth knowing:
+
+- **Stored `system` turns are dropped on load.** The system prompt is composed fresh per request (workspace context, memory, AGENTS rules, mode); a stored copy replayed mid-transcript would be stale and would argue with the live one. Tool calls and tool results are kept — the model needs its own results to make sense of what it did.
+- **Compaction sticks.** The stored transcript is the compacted one, so the loop's compaction is no longer undone by a client re-sending the long copy. What compaction drops is carried forward as a working-state block (recently edited files, last shell command, last tool error) appended to the system prompt, the same block the TUI injects.
+- **The session is a real session.** `pasclaw resume <id>`, `pasclaw learn` and the Library window all see it, because it is the same store every other surface writes.
+
+The desktop uses this for both its project chats (`desktop-<project>`) and its shell (`desktop-shell`).
+
 ## `/v1/responses` — OpenAI Responses API
 
 Accepts string or message-array `input`:

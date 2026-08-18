@@ -724,6 +724,33 @@ feel like it changes the machine rather than the paint.
 
 ---
 
+## Conversations live on the server
+
+Every chat window in the desktop -- a project's chat, and the shell -- is a
+view of a PasClaw session, not a transcript the browser owns.
+
+The window holds what is on screen and nothing else. When you send a turn it
+posts the one message you typed, with `X-PasClaw-Session` naming the
+conversation and `session_context: true` asking the gateway to supply the
+rest. The gateway loads the stored transcript, runs the turn against it, and
+files the answer back before the stream closes. Reopening the window -- or
+opening it in a different browser against the same gateway -- replays what
+was filed.
+
+This is how every other PasClaw surface already worked; the desktop was the
+exception. It used to keep the conversation in a JS array, send that array as
+the request context, and `PUT` it back afterwards, which cost the
+conversation's full length in both directions on every single turn, let two
+windows onto the same project overwrite each other's transcripts, and undid
+the tool loop's compaction each turn because the browser still held the long
+copy and sent it again.
+
+Session ids are derived, not stored: `desktop-<project>` for a project chat,
+`desktop-shell` for the shell. They are real sessions -- `pasclaw resume`,
+`pasclaw learn` and the Library window all see them. See
+[Gateway § `session_context`](./gateway.md#v1chatcompletions-with-session_context--server-held-conversations)
+for the wire format.
+
 ## HTTP reference
 
 Every route below sits inside the gateway's existing bearer-auth gate.
