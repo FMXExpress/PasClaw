@@ -2613,8 +2613,16 @@ function openShell() {
                                system: shellPrompt() }),
       });
       if (!r.ok) {
-        body.textContent = "(http " + r.status + ")";
+        /* Same as the project chats: the user turn is already in
+           `history`, so returning without an answer leaves it to be
+           re-sent with the next one -- a retry the user never asked
+           for -- and then persisted that way. Record the failure and
+           file it. */
+        const err = "(http " + r.status + ")";
+        body.textContent = err;
+        history.push({ role: "assistant", content: err });
         turn.end();
+        saveShell();
         return;
       }
       const reader = r.body.getReader(), dec = new TextDecoder();
@@ -3466,7 +3474,28 @@ function buildChatUI(project) {
           mode: mode === "plan" ? "plan" : "build",
         }),
       });
-      if (!r.ok) { body.textContent = `(http ${r.status})`; send.disabled = false; return; }
+      if (!r.ok) {
+        /* A turn that never started still has to END.
+
+           `send.disabled = false` was left from before Stop existed --
+           the button is relabelled now, not disabled, so clearing a
+           flag nobody sets did nothing and the controller stayed armed:
+           the button kept reading "Stop", and the next Send spent
+           itself cancelling a turn that was never running.
+
+           The failure is also recorded, not just painted. The user turn
+           is already in `history`; returning here would leave it there
+           unanswered, so the next request re-sends it alongside the new
+           one -- asking twice for something that failed once -- and
+           then files that. An answer saying what went wrong keeps the
+           transcript agreeing with the screen. */
+        const err = `(http ${r.status})`;
+        body.textContent = err;
+        history.push({ role: "assistant", content: err });
+        turn.end();
+        saveHistory();
+        return;
+      }
 
       const reader = r.body.getReader(), dec = new TextDecoder();
       let buf = "";
