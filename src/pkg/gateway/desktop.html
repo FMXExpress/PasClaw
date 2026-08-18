@@ -823,6 +823,34 @@ button, input, select, textarea { font: inherit; color: inherit; }
 #stage { position: absolute; left: 232px; right: 0; top: 0; bottom: 0; overflow: hidden; }
 #stage.wide { left: 0; }
 
+/* ---- narrow screens ----
+
+   A 232px dock beside a stage is a sidebar on a laptop and 60% of the
+   screen on a phone (measured: 232 of 390). Below 720px the dock stops
+   taking room from the stage and becomes an overlay you summon --
+   still the same tree, still the same buttons, just not permanently in
+   the way. The stage gets the whole width, which is what the windows
+   need to be reachable at all.
+
+   The taskbar keeps its Start button, so the dock is one tap away. */
+@media (max-width: 720px) {
+  #stage { left: 0 !important; }
+  #dock {
+    width: min(78vw, 300px);
+    z-index: 9000;
+    box-shadow: 3px 0 12px rgba(0, 0, 0, 0.45);
+    background: var(--face, var(--desktop));
+  }
+  /* Off-canvas until asked for. `.hidden` still hides it outright, so
+     the existing hide/show path keeps working. */
+  #dock:not(.on) { transform: translateX(-102%); }
+  #dock.on { transform: none; }
+  /* Icons are for a pointer and a big screen; the dock is the way
+     around on a small one. */
+  #icons { display: none; }
+  .taskbtn { min-width: 84px; max-width: 120px; }
+}
+
 /* ---- desktop icons ---- */
 #icons { position: absolute; inset: 0; padding: 6px; }
 .dicon {
@@ -1303,6 +1331,46 @@ const WINS = new Map();
 
 function desktopRect() { return $("#stage").getBoundingClientRect(); }
 
+/* Is this a screen a desktop metaphor fits on?
+
+   Not a device test -- a narrow BROWSER gets the same treatment, which
+   is right: the problem is width, not what is holding it. 720px is
+   where a 232px dock stops being a sidebar and starts being most of
+   the screen. */
+function isNarrow() { return window.innerWidth <= 720; }
+
+/* Fit a window inside the stage.
+
+   createWindow already clamps what it opens, but geometry also arrives
+   from OUTSIDE that path -- a saved layout restored on a different
+   screen, the browser being resized, an agent placing a window. A
+   layout saved on a desktop and reopened on a phone put windows at
+   788px on a 390px viewport with no horizontal scroll, so most of
+   every window was simply unreachable. */
+function clampWindow(w) {
+  if (!w || !w.node || w.maximized) return;
+  const r = desktopRect();
+  if (r.width < 40 || r.height < 40) return;    /* mid-layout, not a real size */
+  const n = w.node;
+  let width  = Math.min(n.offsetWidth,  Math.max(160, r.width  - 8));
+  let height = Math.min(n.offsetHeight, Math.max(100, r.height - 8));
+  const left = Math.max(0, Math.min(n.offsetLeft, r.width  - width));
+  const top  = Math.max(0, Math.min(n.offsetTop,  r.height - height));
+  Object.assign(n.style, { left: left + "px", top: top + "px",
+                           width: width + "px", height: height + "px" });
+}
+
+function clampAllWindows() { for (const w of WINS.values()) clampWindow(w); }
+
+/* A window that no longer fits is a window you cannot use. Re-fit on
+   resize and on rotation, debounced so a drag of the browser edge does
+   not relayout on every pixel. */
+let clampTimer = null;
+window.addEventListener("resize", () => {
+  clearTimeout(clampTimer);
+  clampTimer = setTimeout(() => { clampAllWindows(); saveDesktop(); }, 200);
+});
+
 function createWindow(opts) {
   const o = Object.assign({
     title: "Window", width: 480, height: 340, x: null, y: null,
@@ -1329,6 +1397,9 @@ function createWindow(opts) {
   n.style.left = x + "px"; n.style.top = y + "px";
   n.style.width = width + "px"; n.style.height = height + "px";
   n.style.zIndex = ++zTop;
+  /* Marked here, applied once the window is in WINS -- see the end of
+     createWindow. A phone has no room for a window that floats. */
+  const openFull = isNarrow();
 
   const bar = el("div", "titlebar");
   const ttl = el("div", "t", o.title);
@@ -1377,6 +1448,9 @@ function createWindow(opts) {
 
   $("#stage").appendChild(n);
   focusWindow(w);
+  /* Narrow screens get full windows. Done after the node is in the
+     stage so toggleMax measures a real rect. */
+  if (openFull && o.max && !restoring) toggleMax(w);
   paintTaskbar();
   return w;
 }
@@ -1796,7 +1870,15 @@ async function restoreDesktop() {
   try { st = await api("/v1/desktop/state"); } catch { return; }
   if (!st) return;
   restoring = true;
-  try { if (st.dock === false) hideDock(); else if (st.dock === true) openTree(); } catch {}
+  try {
+    /* The saved "dock was showing" is a fact about the screen that
+       saved it. On a narrow one the dock is a drawer over the content,
+       so restoring it open means opening onto a covered screen -- the
+       tree is one tap away instead. */
+    if (st.dock === false) hideDock();
+    else if (st.dock === true && !isNarrow()) openTree();
+    else if (isNarrow()) $("#dock").classList.remove("on");
+  } catch {}
   if (!Array.isArray(st.windows) || !st.windows.length) { restoring = false; return; }
   try {
     for (const d of st.windows) {
@@ -1810,9 +1892,14 @@ async function restoreDesktop() {
           left: d.x + "px", top: d.y + "px",
           width: d.w + "px", height: d.h + "px",
         });
+        /* The saved size came from whatever screen saved it. */
+        clampWindow(w);
       }
-      if (d.max) toggleMax(w);
-      if (d.min) minimizeWindow(w);
+      /* On a narrow screen a floating window is a worse answer than a
+         full one -- there is no room to float in, and the saved
+         arrangement was designed for a screen this is not. */
+      if (d.max || isNarrow()) toggleMax(w);
+      else if (d.min) minimizeWindow(w);
     }
   } finally {
     restoring = false;
@@ -2940,12 +3027,29 @@ function openLog() {
 function openTree() {
   $("#dock").classList.remove("hidden");
   $("#stage").classList.remove("wide");
+  /* On a narrow screen the dock slides over the stage rather than
+     taking a third of it; ".on" is what brings it in. Harmless on a
+     wide one, where the media query never applies. */
+  $("#dock").classList.add("on");
   paintTree();
 }
 function hideDock() {
   $("#dock").classList.add("hidden");
+  $("#dock").classList.remove("on");
   $("#stage").classList.add("wide");
 }
+
+/* Tapping the stage puts the drawer away. Only when it IS a drawer --
+   on a wide screen the dock is furniture and dismissing it on every
+   click in a window would be maddening. */
+document.addEventListener("click", e => {
+  if (!isNarrow()) return;
+  const dock = $("#dock");
+  if (!dock.classList.contains("on")) return;
+  if (dock.contains(e.target)) return;
+  if (e.target.closest && e.target.closest("#taskbar")) return;
+  dock.classList.remove("on");
+});
 
 function initDock() {
   $("#dockhide").addEventListener("click", hideDock);
