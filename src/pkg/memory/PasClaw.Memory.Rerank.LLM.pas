@@ -164,9 +164,17 @@ begin
   Opts := DefaultChatOptions;
   Opts.Temperature := 0;      { deterministic ordering }
   Opts.Stream      := False;
-  { Never let provider grounding/web-search fire for a rerank: we are ordering
-    the passages we were handed, not searching. With Gemini google_search on,
-    the model returns empty text + groundingMetadata for this prompt. }
+  { PRIVACY, first and foremost: this prompt embeds the retrieved memory
+    passages VERBATIM. Gemini's google_search is on by default, and
+    grounding forms its search queries from the model's context -- so
+    leaving it on would let private memory become a web search. We are
+    ordering passages we were handed, not searching.
+
+    The previously-noted symptom (empty text + groundingMetadata for this
+    prompt) is NOT the reason for this flag, and is an untested
+    observation. Note what it implies, though: groundingMetadata being
+    present means grounding had already FIRED -- that symptom was the
+    leak announcing itself, not a formatting quirk. }
   Opts.DisableServerTools := True;
   { Thinking models (e.g. gemini-2.5-flash) spend output budget reasoning
     BEFORE emitting the answer; with a small cap the whole budget goes to
