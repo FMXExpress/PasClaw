@@ -8840,6 +8840,12 @@ begin
       LoopCfg.MaxIterations := FMaxIter;
       LoopCfg.Parallel := True;
       LoopCfg.Mode          := ParseModeFromBody(Body);  { PR #290 }
+      { Mid-turn steering, same as /v1/chat and /v1/chat/completions. This
+        endpoint runs a session-keyed loop (RunCheckpointedLoop with
+        ReqSessionId) but never set the key, so a /v1/steer aimed at a
+        running /v1/responses turn was accepted, ignored by that turn, and
+        left on disk for whichever turn drained next. }
+      LoopCfg.SteeringKey   := ReqSessionId(ARequest);
       LoopCfg.Fallbacks     := FB;
       LoopCfg.FallbackModels := FBModels;
       LoopCfg.Options       := DefaultChatOptions;
