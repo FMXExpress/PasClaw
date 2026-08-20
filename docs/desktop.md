@@ -724,6 +724,33 @@ feel like it changes the machine rather than the paint.
 
 ---
 
+## Conversations live on the server
+
+Every chat window in the desktop -- a project's chat, and the shell -- is a
+view of a PasClaw session, not a transcript the browser owns.
+
+The window holds what is on screen and nothing else. When you send a turn it
+posts the one message you typed, with `X-PasClaw-Session` naming the
+conversation and `session_context: true` asking the gateway to supply the
+rest. The gateway loads the stored transcript, runs the turn against it, and
+files the answer back before the stream closes. Reopening the window -- or
+opening it in a different browser against the same gateway -- replays what
+was filed.
+
+This is how every other PasClaw surface already worked; the desktop was the
+exception. It used to keep the conversation in a JS array, send that array as
+the request context, and `PUT` it back afterwards, which cost the
+conversation's full length in both directions on every single turn, let two
+windows onto the same project overwrite each other's transcripts, and undid
+the tool loop's compaction each turn because the browser still held the long
+copy and sent it again.
+
+Session ids are derived, not stored: `desktop-<project>` for a project chat,
+`desktop-shell` for the shell. They are real sessions -- `pasclaw resume`,
+`pasclaw learn` and the Library window all see them. See
+[Gateway § `session_context`](./gateway.md#v1chatcompletions-with-session_context--server-held-conversations)
+for the wire format.
+
 ## HTTP reference
 
 Every route below sits inside the gateway's existing bearer-auth gate.
@@ -926,6 +953,24 @@ It is wrong for the actions whose effect outlives the tab. With two tabs open, o
 So the server names one executor. Each SSE subscriber is assigned an id and told it in the feed's `hello` frame; `PublishDesktopCommand` stamps the oldest live subscriber's id as the command's `target`. Clients run **every** action they receive except `build_app`, `edit_app` and `open_page`, which they run only when they are the target. A command with no target at all (an older gateway) is executed in full, which is the single-desktop behaviour that was there before.
 
 Oldest-subscriber is arbitrary but *stable*, and stability is the property that matters: every command in a session lands on the same screen rather than scattering builds across tabs. The consequence worth knowing is that asking in a second tab can have the app open in the first one.
+
+## Steering a running turn
+
+While a turn runs, the composer's button reads **Stop** — and pressing it stops. The Enter key carries the third meaning: **Enter with text in the box steers the running turn** instead of killing it. "Also make the header blue", typed mid-build, used to stop the build it was amending. The note goes to `/v1/steer` with the conversation's session id, the running loop picks it up at its next iteration, and the transcript shows it arrow-marked (`↳ also make the header blue`). Enter on an empty box still stops, so the keyboard-only path to Stop survives.
+
+Both composers steer — the project chats and the shell.
+
+## Narrow screens
+
+The desktop metaphor assumes a screen with room to float windows on. Below **720px** of browser width it stops pretending:
+
+- The **dock becomes a drawer** instead of a permanent left edge. At 390px it was taking 232 of them — 60% of the screen for a sidebar. It slides in over the stage when you open it (Start → Projects, or the tree button) and dismisses when you tap outside.
+- **Windows open full.** There is no room to float in, and a saved arrangement from a laptop was designed for a screen this is not.
+- **Desktop icons are hidden.** They are a pointer-and-big-screen affordance; the dock is the way around on a small one.
+
+Independently of the breakpoint, **window geometry is clamped to the stage** whenever it arrives from outside `createWindow` — a layout restored on a different screen, the browser being resized, an agent placing a window. Before this a layout saved on a desktop and reopened on a phone put windows at 788px on a 390px viewport with no horizontal scroll, so most of every window was unreachable.
+
+The breakpoint is on browser width, not device: a narrow window on a large monitor gets the same treatment, which is right, because the problem is width rather than what is holding it.
 
 ## Known limits
 

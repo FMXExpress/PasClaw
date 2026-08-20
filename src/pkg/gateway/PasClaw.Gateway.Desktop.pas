@@ -2620,6 +2620,9 @@ function DesktopRoute(const Method, Doc, Query, Body: string;
   out Resp: TDesktopResponse): Boolean;
 var
   M, StateBody, StateErr, SeedErr: string;
+  SeedSkipped: TStringArray;
+  SkippedArr: TJsonArray;
+  SI: Integer;
   CurDesk, CntDesk, NewDesk, N: Integer;
   Root: TJsonObject;
 begin
@@ -2748,10 +2751,23 @@ begin
       ReplyErr(Resp, 405, 'method not allowed');
       Exit(True);
     end;
-    N := SeedSuite(SeedErr);
+    N := SeedSuiteReporting(SeedErr, SeedSkipped);
     Root := TJsonObject.Create;
     try
       Root.PutInt('created', N);
+      (* The half of the answer `created` alone was swallowing: which
+         suite apps were NOT installed because a project already owns
+         their name. The skip is correct -- a user who remade Notes
+         keeps theirs -- but silent, a workspace with a plain project
+         called "notes" answered {"created":1} and nothing said the
+         suite's Notes app was being shadowed. *)
+      if Length(SeedSkipped) > 0 then
+      begin
+        SkippedArr := TJsonArray.Create;
+        for SI := 0 to High(SeedSkipped) do
+          SkippedArr.AddStr(SeedSkipped[SI]);
+        Root.PutArray('skipped', SkippedArr);
+      end;
       if SeedErr <> '' then Root.PutStr('note', SeedErr);
       ReplyJSON(Resp, 200, Root.ToJSON);
     finally

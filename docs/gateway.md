@@ -133,7 +133,74 @@ The tool loop executes server-side and each tool call is surfaced to the client 
   ⎿ exit=0
 ```
 
-Known tools (`fs_read`, `fs_write`, `fs_list`, `fs_grep`, `fs_edit_hashline`, `shell_exec`, `memory_search`, `web_search`, `web_fetch`) surface their most meaningful argument; MCP and other tools fall back to a compact one-line dump of the raw arguments. The full argument and result text also go to SSE comment lines (`: tool_call ...` / `: tool_result ...`) for consumers that log structured activity, and to the server debug log when `--debug` is set. Formatter: `src/pkg/gateway/PasClaw.Gateway.ToolView.pas` (unit-tested via `make test-toolview`).
+Tools PasClaw ships surface their most meaningful argument rather than their arguments:
+
+| Tool | Shown as |
+|---|---|
+| `fs_read` / `fs_write` / `fs_list` / `append_file` | the path |
+| `fs_grep` / `find_files` | the pattern, and the path when given |
+| `fs_edit_hashline` / `apply_patch` | the path, read out of the patch header when needed |
+| `shell_exec` | the command |
+| `desktop` | the actions in order — `desktop(tile, open_app notes)` |
+| `todo_write` | the shape of the checklist — `3 step(s), 1 done` |
+| `project` / `task` | the action and what it names — `task(update expenses/T0003)` |
+| `memory_search` / `kb_search` / `web_search` / `session_search` / `tool_search` | the query |
+| `web_fetch` / `memory_fetch` | the URL |
+| `execute_code` | the language and the size — the code *is* the argument |
+| `tool_output_get` | the handle |
+
+MCP and other unknown tools fall back to a compact one-line dump of the raw arguments, which is the right answer for a tool this formatter has never seen. The full argument and result text also go to SSE comment lines (`: tool_call ...` / `: tool_result ...`) for consumers that log structured activity, and to the server debug log when `--debug` is set. Formatter: `src/pkg/gateway/PasClaw.Gateway.ToolView.pas` (unit-tested via `make test-toolview`).
+
+## `/v1/chat/completions` with `session_context` — server-held conversations
+
+By default `/v1/chat/completions` is stateless in the OpenAI sense: the caller ships the whole `messages[]` array every turn and the gateway answers it. That is the right contract for third-party tooling, and it is unchanged.
+
+A client that would rather let PasClaw hold the conversation — the way the CLI and the TUI already do — names a session and asks for it:
+
+```sh
+curl http://127.0.0.1:8088/v1/chat/completions \
+  -H 'Content-Type: application/json' \
+  -H 'X-PasClaw-Session: my-conversation' \
+  -d '{"model":"claude-opus-4-7",
+       "session_context": true,
+       "session_title": "Notes with Claude",
+       "messages":[{"role":"user","content":"and what about the second one?"}]}'
+```
+
+With `session_context: true` the gateway loads `my-conversation` from the session store, appends the request's `messages[]` to it, runs the turn against the whole thing, and files the result back. So each request carries only what is new.
+
+| Field | Meaning |
+|---|---|
+| `session_context` | Boolean, default `false`. Prepend the stored transcript to `messages[]`. Requires a session id (`X-PasClaw-Session`, or the `user` field). |
+| `session_title` | Names the session the first time it is written. Later turns do not rename it. Without it a session is titled after the route that created it. |
+
+Details worth knowing:
+
+- **Stored `system` turns are dropped on load.** The system prompt is composed fresh per request (workspace context, memory, AGENTS rules, mode); a stored copy replayed mid-transcript would be stale and would argue with the live one. Tool calls and tool results are kept — the model needs its own results to make sense of what it did.
+- **Compaction sticks.** The stored transcript is the compacted one, so the loop's compaction is no longer undone by a client re-sending the long copy. What compaction drops is carried forward as a working-state block (recently edited files, last shell command, last tool error) appended to the system prompt, the same block the TUI injects.
+- **The session is a real session.** `pasclaw resume <id>`, `pasclaw learn` and the Library window all see it, because it is the same store every other surface writes.
+
+The desktop uses this for both its project chats (`desktop-<project>`) and its shell (`desktop-shell`).
+## `/v1/sessions/<id>` — the live transcript and the record
+
+A session on disk is the model's **working context**. When the tool loop compacts — replacing the older half of a conversation with a summary so the next turn fits — every surface writes that result back as the session, so the compacted turns leave the file. That is correct for a resume (replaying them would undo the compaction) and wrong for a reader.
+
+So every message is also appended, once, to `<id>.log.jsonl` beside the session: the **record**. The live file is what the model sees; the record is what the conversation was.
+
+| Request | Answers with |
+|---|---|
+| `GET /v1/sessions/<id>` | the live transcript — post-compaction, the resume state |
+| `GET /v1/sessions/<id>?full=1` | the newest 200 messages of the record, with `total` |
+| `GET /v1/sessions/<id>?full=1&limit=N` | the newest `N` |
+| `GET /v1/sessions/<id>?full=1&offset=K&limit=N` | `N` messages from index `K` |
+
+```json
+{ "id": "desktop-notes", "total": 1603, "offset": 1483, "count": 120, "messages": [ … ] }
+```
+
+Windowed because the record grows without bound: the desktop measured 10.4 s and 2.1 MB to paint a 1500-turn conversation in one go, against 94 ms and 369 DOM nodes for a 120-message window. Page backwards by walking `offset` down from `total`; `limit` is capped at 2000.
+
+`?full=1` falls back to the live transcript for a session recorded before the log existed, so old sessions still answer. Deleting a session deletes its record with it.
 
 ## `/v1/responses` — OpenAI Responses API
 

@@ -22,12 +22,35 @@ uses
   SysUtils,
   PasClaw.Config,
   PasClaw.Utils,
+  PasClaw.Workspaces,     { SetThreadWorkspace -- see the pin below }
   PasClaw.Skills.Loader,
   PasClaw.Skills.Manage,
   PasClaw.Skills.Pending;
 
 var
   Home: string;
+
+{ Recursive delete for the throwaway home. Local on purpose: the tree
+  helpers in the skills units are implementation-private, and a test's
+  cleanup should not become a reason to export one. }
+procedure WipeTree(const Dir: string);
+var
+  SR: TSearchRec;
+begin
+  if FindFirst(JoinPath(Dir, '*'), faAnyFile, SR) = 0 then
+  try
+    repeat
+      if (SR.Name = '.') or (SR.Name = '..') then Continue;
+      if (SR.Attr and faDirectory) <> 0 then
+        WipeTree(JoinPath(Dir, SR.Name))
+      else
+        DeleteFile(JoinPath(Dir, SR.Name));
+    until FindNext(SR) <> 0;
+  finally
+    FindClose(SR);
+  end;
+  RemoveDir(Dir);
+end;
 
 procedure Fail_(const Msg: string);
 begin
@@ -278,7 +301,27 @@ begin
 end;
 
 begin
-  Home := JoinPath(GetTempDir, 'pasclaw-sis-' + IntToStr(Random(1 shl 30)));
+  (* Pin the workspace, because the throwaway Home is only HALF the
+     isolation. Every path in the skills tree is
+     <home>/<active workspace>/skills, and ActiveWorkspaceName reads
+     process-global state -- $PASCLAW_WORKSPACE, then the REAL
+     ~/.pasclaw/config.json, neither of which this test controls. On a
+     machine whose config says active_workspace=workspace2, the code
+     under test resolved into <home>/workspace2/ while the hand-planted
+     fixtures below sit in the literal <home>/workspace/ -- and the
+     unsafe-meta test failed with "no pending skill" instead of the
+     refusal it exists to pin. The thread pin outranks both sources, so
+     the hardcoded paths and the code agree on every machine. *)
+  SetThreadWorkspace('workspace');
+  { The suffix must be unique per RUN, and Random alone is not: none of
+    this binary's units calls Randomize, and Randomize itself seeds
+    from a clock coarse enough that back-to-back runs still collided --
+    the second run inherited the first's committed skills and failed on
+    "staged skill not yet loaded". Milliseconds-since-boot plus a
+    seeded random makes same-second runs distinct. }
+  Randomize;
+  Home := JoinPath(GetTempDir, 'pasclaw-sis-' +
+                   IntToStr(GetTickCount64) + '-' + IntToStr(Random(1 shl 30)));
   EnsureDir(JoinPath(Home, 'workspace/skills'));
   try
     TestGuards;
@@ -290,7 +333,11 @@ begin
     TestConfigRoundTrip;
     WriteLn('ok - self-improving-skills tests passed');
   finally
-    { best-effort cleanup }
-    try RemoveDir(Home); except end;
+    { Best-effort cleanup -- but a REAL one. RemoveDir refuses a
+      non-empty directory, so every run left its whole home behind;
+      99 of them had accumulated on one machine, and stale homes are
+      exactly what the unique-suffix fix above exists to avoid
+      colliding with. }
+    try WipeTree(Home); except end;
   end;
 end.

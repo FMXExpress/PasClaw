@@ -1549,6 +1549,11 @@ begin
     if Length(Loop.FinalMessages) > 0 then
       UpdateWorkingStateAfterTurn(Target.Meta, Loop.FinalMessages);
 
+    { The record. The TUI writes the loop's result back as the session,
+      so a compaction costs it the same history it costs every other
+      surface; this keeps what the live file is about to stop holding. }
+    LogSessionTurn(Target.Meta, Target.Messages);
+
     { Stats accumulation: bump Target.Meta.Stats here, before the
       Save below, so the on-disk JSON picks up the counters in the
       same write. Doing this in AccumulateLoopStats after Save (the

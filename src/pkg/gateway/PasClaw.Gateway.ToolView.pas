@@ -87,7 +87,7 @@ function FormatToolDetailJSON(const Kind, Name, ArgsJSON, ResultText, Err: strin
 implementation
 
 uses
-  SysUtils,
+  SysUtils, Classes,      { TStringList, for the checklist summary }
   PasClaw.JSON,
   PasClaw.Config,          { GetHome, for Relativize }
   PasClaw.Hashline;
@@ -199,6 +199,76 @@ begin
   else Result := Obj.GetStr(Key, '');
 end;
 
+(* "tile, then open notes" rather than the JSON that said so.
+
+   The desktop tool takes an ARRAY of {"do":...} objects, and the
+   interesting part of each is the verb plus whatever it names. Several
+   actions in one call is the normal case -- the tool exists so "tidy up
+   and open my three projects" is one turn -- so they are joined rather
+   than truncated to the first. *)
+function DesktopActions(Obj: TJsonObject): string;
+var
+  Arr: TJsonArray;
+  Item: TJsonObject;
+  i: Integer;
+  Verb, What, Sep: string;
+begin
+  Result := '';
+  if Obj = nil then Exit;
+  Arr := Obj.ChildArray('actions');
+  if Arr = nil then Exit;
+  try
+    for i := 0 to Arr.Count - 1 do
+    begin
+      Item := Arr.ItemObject(i);
+      if Item = nil then Continue;
+      try
+        Verb := Item.GetStr('do', '');
+        if Verb = '' then Continue;
+        What := Item.GetStr('project', '');
+        if What = '' then What := Item.GetStr('title', '');
+        if What = '' then What := Item.GetStr('id', '');
+        if What <> '' then Verb := Verb + ' ' + What;
+        if Result = '' then Sep := '' else Sep := ', ';
+        Result := Result + Sep + Verb;
+      finally
+        Item.Free;
+      end;
+    end;
+  finally
+    Arr.Free;
+  end;
+end;
+
+(* A checklist is markdown lines; showing its source with the newlines
+   escaped is showing the reader the wire format. Say the shape --
+   how many steps, how many are done -- and let the ledger carry the
+   detail, which is where the model reads it back anyway. *)
+function ChecklistSummary(const Checklist: string): string;
+var
+  L: TStringList;
+  i, Total, Done: Integer;
+  Line: string;
+begin
+  Total := 0; Done := 0;
+  L := TStringList.Create;
+  try
+    L.Text := StringReplace(Checklist, #13, '', [rfReplaceAll]);
+    for i := 0 to L.Count - 1 do
+    begin
+      Line := TrimLeft(L[i]);
+      if Copy(Line, 1, 2) <> '- ' then Continue;
+      Inc(Total);
+      Line := TrimLeft(Copy(Line, 3, MaxInt));
+      if (Copy(Line, 1, 3) = '[x]') or (Copy(Line, 1, 3) = '[X]') then Inc(Done);
+    end;
+  finally
+    L.Free;
+  end;
+  if Total = 0 then Exit('checklist');
+  Result := Format('%d step(s), %d done', [Total, Done]);
+end;
+
 function FormatToolCallLine(const Name, ArgsJSON: string): string;
 var
   Obj: TJsonObject;
@@ -247,6 +317,57 @@ begin
       Summary := FirstPatchPath(ArgStr(Obj, 'patch'))
     else if Name = 'shell_exec' then
       Summary := ArgStr(Obj, 'command')
+
+    (* ---- the desktop's own vocabulary ----
+
+       Everything below fell through to the raw-arguments branch, which
+       meant the tools that make the desktop a DESKTOP were the ones
+       shown as JSON: a person who asked for their windows tidied read
+       back `desktop({"actions": [{"do": "tile"}]})`, and a checklist
+       came back as its escaped markdown source. The unknown-tool dump
+       is the right answer for an MCP tool nobody here has seen; it is
+       the wrong one for the tools this product ships. *)
+    else if Name = 'desktop' then
+      Summary := DesktopActions(Obj)
+    else if Name = 'todo_write' then
+      Summary := ChecklistSummary(ArgStr(Obj, 'checklist'))
+    else if (Name = 'project') or (Name = 'task') then
+    begin
+      { "what it did, to what" -- the action plus whichever name the
+        action actually carries. }
+      Summary := ArgStr(Obj, 'action');
+      Path := ArgStr(Obj, 'name');
+      if Path = '' then Path := ArgStr(Obj, 'id');
+      if Path = '' then Path := ArgStr(Obj, 'title');
+      if (Name = 'task') and (ArgStr(Obj, 'project') <> '') then
+      begin
+        if Path = '' then Path := ArgStr(Obj, 'project')
+        else Path := ArgStr(Obj, 'project') + '/' + Path;
+      end;
+      if Path <> '' then Summary := Summary + ' ' + Path;
+    end
+    else if (Name = 'memory_search') or (Name = 'kb_search') or
+            (Name = 'web_search') or (Name = 'tool_search') or
+            (Name = 'session_search') then
+      Summary := '"' + ArgStr(Obj, 'query') + '"'
+    else if (Name = 'web_fetch') or (Name = 'memory_fetch') then
+      Summary := ArgStr(Obj, 'url')
+    else if Name = 'find_files' then
+    begin
+      Summary := '"' + ArgStr(Obj, 'pattern') + '"';
+      Path := ArgStr(Obj, 'path');
+      if Path <> '' then Summary := Summary + ' in ' + Path;
+    end
+    else if Name = 'execute_code' then
+    begin
+      { The code itself is the wrong summary -- it is the whole
+        argument. Say the language and how much of it there is. }
+      Path := ArgStr(Obj, 'lang');
+      if Path = '' then Path := 'code';
+      Summary := Format('%s, %d chars', [Path, Length(ArgStr(Obj, 'code'))]);
+    end
+    else if Name = 'tool_output_get' then
+      Summary := ArgStr(Obj, 'handle')
     else
       { Unknown / MCP tool: compact dump of the raw arguments so the client
         still sees what the model passed. }

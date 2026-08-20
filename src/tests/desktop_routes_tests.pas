@@ -205,6 +205,9 @@ var
   Sources: TPageSourceArray;
   PageId: string;
   AppInfo: TAppInfo;
+  N, i: Integer;
+  Skipped: TStringArray;
+  Found: Boolean;
 begin
   { --------------------------------------------------------- unowned paths -- }
   ExpectTrue(not Req('GET', '/v1/health', '', R), 'health is not ours');
@@ -543,6 +546,20 @@ begin
     there to be anything to act on. }
   SeedSuite(Err);
   ExpectTrue(ProjectExists('todo'), 'the to-do app is a project');
+
+  (* The seeder never overwrites -- a project that owns a suite name
+     keeps it -- and the report has to SAY so: {"created":1} with no
+     skipped list turned "your notes project is shadowing the suite's
+     Notes app" into a silent nothing. The notes project exists by this
+     point (the actions above used it), so a re-seed must both skip it
+     and name it. *)
+  N := SeedSuiteReporting(Err, Skipped);
+  ExpectTrue(N = 0, 're-seeding an installed suite creates nothing');
+  Found := False;
+  for i := 0 to High(Skipped) do
+    if Skipped[i] = 'notes' then Found := True;
+  ExpectTrue(Found, 'the skipped list names the project that shadows notes');
+  ExpectTrue(Length(Skipped) >= 5, 'every already-present app is reported, not just one');
   (* Calendar schedules through Tool_Cron, so the interesting assertions are
      that a bad schedule is REFUSED rather than silently accepted. A cron
      entry with a malformed spec, or one naming a skill nobody installed,

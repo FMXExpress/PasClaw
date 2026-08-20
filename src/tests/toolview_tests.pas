@@ -62,10 +62,14 @@ end;
 
 procedure TestUnknownToolFallback;
 begin
-  { MCP / unknown tools dump the raw args, whitespace collapsed to one line. }
-  AssertContains(FormatToolCallLine('web_search', '{"query":"pascal"}'),
-                 'web_search(', 'unknown tool keeps name');
-  AssertContains(FormatToolCallLine('web_search', '{"query":"pascal"}'),
+  { MCP / unknown tools dump the raw args, whitespace collapsed to one
+    line. This used to be pinned with web_search, which the docs had
+    always listed as formatted -- the test was recording the gap rather
+    than the intent. A genuinely unknown tool makes the same point
+    without asserting that a shipped tool stays unreadable. }
+  AssertContains(FormatToolCallLine('acme_mcp_query', '{"query":"pascal"}'),
+                 'acme_mcp_query(', 'unknown tool keeps name');
+  AssertContains(FormatToolCallLine('acme_mcp_query', '{"query":"pascal"}'),
                  'query', 'unknown tool dumps raw args');
 end;
 
@@ -222,6 +226,81 @@ begin
     Fail('the home directory is still in the tool-card detail: ' + J);
 end;
 
+(* ---- the desktop's own vocabulary ----
+
+   These all fell through to the raw-arguments dump before, so the
+   tools that make the desktop a desktop were the ones a person read
+   as JSON. *)
+
+procedure TestDesktopCall;
+begin
+  AssertEquals(FormatToolCallLine('desktop', '{"actions":[{"do":"tile"}]}'),
+               TV_CALL_GLYPH + ' desktop(tile)',
+               'one desktop action reads as the verb');
+  { Several at once is the normal case -- the tool exists so "tidy up
+    and open my projects" is a single turn. }
+  AssertEquals(FormatToolCallLine('desktop',
+    '{"actions":[{"do":"tile"},{"do":"open_app","project":"notes"}]}'),
+               TV_CALL_GLYPH + ' desktop(tile, open_app notes)',
+               'several actions are joined, not truncated');
+  { Malformed or empty still says the tool ran rather than raising. }
+  AssertEquals(FormatToolCallLine('desktop', '{"actions":[]}'),
+               TV_CALL_GLYPH + ' desktop()', 'an empty action list is harmless');
+end;
+
+procedure TestTodoWriteCall;
+begin
+  AssertEquals(FormatToolCallLine('todo_write',
+    '{"checklist":"- [x] Sketch the layout\n- [ ] Wire the form\n- [ ] Persist"}'),
+               TV_CALL_GLYPH + ' todo_write(3 step(s), 1 done)',
+               'a checklist reads as its shape, not its markdown source');
+  AssertEquals(FormatToolCallLine('todo_write', '{"checklist":""}'),
+               TV_CALL_GLYPH + ' todo_write(checklist)',
+               'an empty checklist does not read as "0 step(s)" noise');
+end;
+
+procedure TestProjectAndTaskCalls;
+begin
+  AssertEquals(FormatToolCallLine('project', '{"action":"create","title":"Expenses"}'),
+               TV_CALL_GLYPH + ' project(create Expenses)', 'project create');
+  AssertEquals(FormatToolCallLine('project', '{"action":"list"}'),
+               TV_CALL_GLYPH + ' project(list)', 'project list needs no name');
+  { A task belongs to a project, and saying which is most of the value. }
+  AssertEquals(FormatToolCallLine('task',
+    '{"action":"update","project":"expenses","id":"T0003","status":"done"}'),
+               TV_CALL_GLYPH + ' task(update expenses/T0003)', 'task update');
+end;
+
+procedure TestSearchAndFetchCalls;
+begin
+  AssertEquals(FormatToolCallLine('memory_search', '{"query":"the schema decision"}'),
+               TV_CALL_GLYPH + ' memory_search("the schema decision")',
+               'memory_search -- documented as formatted, was not');
+  AssertEquals(FormatToolCallLine('web_search', '{"query":"object pascal"}'),
+               TV_CALL_GLYPH + ' web_search("object pascal")', 'web_search');
+  AssertEquals(FormatToolCallLine('web_fetch', '{"url":"https://example.com/a"}'),
+               TV_CALL_GLYPH + ' web_fetch(https://example.com/a)', 'web_fetch');
+  AssertEquals(FormatToolCallLine('find_files', '{"pattern":"*.pas","path":"src"}'),
+               TV_CALL_GLYPH + ' find_files("*.pas" in src)', 'find_files');
+end;
+
+procedure TestExecuteCodeCall;
+begin
+  { The code IS the argument, so echoing it is echoing everything.
+    Say what it is and how big. }
+  AssertEquals(FormatToolCallLine('execute_code', '{"lang":"python","code":"print(1)"}'),
+               TV_CALL_GLYPH + ' execute_code(python, 8 chars)', 'execute_code');
+end;
+
+procedure TestUnknownToolStillDumps;
+begin
+  { The raw dump is still right for a tool nobody here has seen -- an
+    MCP server's, say. Only the tools PasClaw ships got names. }
+  AssertContains(FormatToolCallLine('some_mcp_thing', '{"a":1,"b":2}'),
+                 '{"a":1,"b":2}', 'an unknown tool still shows its arguments');
+end;
+
+
 begin
   TestFsReadCall;
   TestShellCall;
@@ -237,5 +316,11 @@ begin
   TestMalformedArgsDoesNotRaise;
   TestDetailJSON;
   TestRelativePaths;
+  TestDesktopCall;
+  TestTodoWriteCall;
+  TestProjectAndTaskCalls;
+  TestSearchAndFetchCalls;
+  TestExecuteCodeCall;
+  TestUnknownToolStillDumps;
   Writeln('PASS');
 end.

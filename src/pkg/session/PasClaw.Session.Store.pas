@@ -44,7 +44,7 @@ unit PasClaw.Session.Store;
 interface
 
 uses
-  SysUtils, Classes,
+  SysUtils, Classes, SyncObjs,
   PasClaw.Providers.Types,
   PasClaw.JSON;
 
@@ -117,6 +117,11 @@ type
     Provider:             string;     { last provider name }
     Profile:              string;     { config profile this session runs under }
     SystemPromptOverride: string;     { compacted system prompt across turns }
+    (* How much of the live transcript is already in the append-only
+       transcript log, and whether a compaction has just moved the
+       goalposts under that count. See SessionLogPath. *)
+    LoggedCount:          Integer;
+    LogPending:           Boolean;
     WorkingState:         TWorkingState;
     Stats:                TSessionStats;
   end;
@@ -229,6 +234,96 @@ function HasSessionArchive(const Id: string): Boolean;
    archive was already there (the usual case, from the second prune
    on) and when there was nothing to copy. Never raises: failing to
    archive must not fail the turn. *)
+(* ---- the append-only transcript log ----
+
+   Compaction is not pruning, but it costs the same thing. The tool
+   loop replaces the older half of a conversation with a summary so the
+   next turn fits; every surface writes the loop's result back as the
+   session; and the turns that were summarised are gone -- from disk,
+   from a browser reload, from `session export`. Measured on the
+   desktop: one ordinary turn on a long chat took a session from 1602
+   stored messages to 117, and the opening of the conversation went
+   with it.
+
+   That is right for the LIVE file. It is the resume state, and a
+   resume that replayed the summarised turns would undo the
+   compaction. It is wrong for the record.
+
+   So every message is written once, as it happens, to
+   <id>.log.jsonl beside the session: one JSON object per line,
+   appended, never rewritten. The live file stays the model's working
+   context; the log is what the conversation WAS. Reading is windowed
+   (see ReadSessionLog) because the whole point is that it grows
+   without bound.
+
+   JSON Lines rather than a JSON array so appending is a file append
+   and not a read-modify-write of the whole history -- this happens on
+   every turn, and at 2 MB of transcript the rewrite is the expensive
+   part. *)
+function SessionLogPath(const Id: string): string;
+
+{ True when Id has a transcript log on disk. }
+function HasSessionLog(const Id: string): Boolean;
+
+(* Append messages to the log. Best effort and never raises: a record
+   that cannot be written is a lost record, not a lost turn. Returns
+   how many lines were written. *)
+function AppendSessionLog(const Id: string; const Msgs: TMessageArray): Integer;
+
+{ How many messages the log holds, 0 when there is none. }
+function SessionLogCount(const Id: string): Integer;
+
+(* A window into the log, oldest-first, clamped to what exists. Offset
+   is a message index from the start; Limit <= 0 means "to the end".
+   Total always reports the full length, so a caller paging backwards
+   knows where it is. *)
+function ReadSessionLog(const Id: string; Offset, Limit: Integer;
+                        out Total: Integer): TMessageArray;
+
+(* One lock per session id, for callers that run a whole TURN against
+   a stored conversation: load, run the loop, persist. Two concurrent
+   turns on the same session both loaded the same prefix, ran
+   independently, and whichever persisted last silently replaced the
+   other's -- the classic lost update, reachable from the desktop by
+   submitting in two tabs at once. Different sessions get different
+   locks and never wait on each other.
+
+   Locks are created on first use and kept for the life of the process:
+   the population is "distinct session ids turned this run", which is
+   small, and freeing one safely would itself need a lock held across
+   every acquire. *)
+function SessionTurnLock(const Id: string): TCriticalSection;
+
+(* The messages an EXPORT should carry: the record when one exists,
+   the live transcript otherwise.
+
+   For a compacted session the record is the only complete transcript
+   left -- the live file holds a summary and the tail. Exports exist to
+   answer "what happened", so an export built from the live file
+   silently omits every turn compaction removed while the record sits
+   beside it holding them. Pre-log sessions have no record, and their
+   live file IS the whole story, so it still serves. *)
+function SessionExportMessages(const Id: string): TMessageArray;
+
+(* The raw-JSON export body: the session document with the export
+   messages in place of the live array. Meta and any tool-detail blob
+   come through verbatim from the live file, because they are current
+   state rather than history. False when the session does not exist. *)
+function ExportSessionJSON(const Id: string; out Body, Err: string): Boolean;
+
+(* Record this turn in the log and keep the bookkeeping that makes the
+   next call correct.
+
+   Meta.LoggedCount is how many messages at the HEAD of the live
+   transcript are already logged, so the un-logged tail is just
+   Messages[LoggedCount..]. A compaction reshapes the live array under
+   that count, which is what LogPending is for: the compaction hook
+   sets it after flushing the pre-drop history, and the next save
+   re-anchors the count to the new live length -- everything alive
+   after a compaction is either already logged or the summary, and a
+   summary is derived rather than said. *)
+procedure LogSessionTurn(var Meta: TSessionMeta; const Messages: TMessageArray);
+
 function ArchiveSessionOnce(const Id: string): Boolean;
 
 (* The profile a stored session runs under, or '' when the session has
@@ -284,6 +379,26 @@ procedure ToolCallFromJSON(const Obj: TJsonObject; out TC: TToolCall);
    sees structured context the transcript may have lost. *)
 procedure UpdateWorkingStateAfterTurn(var Meta: TSessionMeta;
                                       const Hist: TMessageArray);
+
+(* Build the message array a session-context turn runs against:
+   the stored conversation, then whatever the caller just sent.
+
+   Lives here rather than in the gateway handler that uses it because
+   this is the rule worth pinning, and the gateway unit cannot be linked
+   into a test binary.
+
+   Stored system turns are dropped. A system prompt is configuration,
+   not conversation -- it is composed fresh per request from the
+   workspace, the memory and the mode -- so a stored copy replayed in
+   the middle of the transcript would be both stale and a second voice
+   arguing with the live one. Every other role, tool calls and tool
+   results included, is the conversation and comes back verbatim: the
+   model needs its own tool results to make sense of what it did.
+
+   New messages are never filtered. Whatever the caller sent is this
+   turn, including a system message if they chose to send one -- that
+   is the caller speaking now, and the handler decides what it means. *)
+function MergeSessionContext(const Stored, Fresh: TMessageArray): TMessageArray;
 
 (* Format the working state as a system-prompt prefix block the
    next turn can prepend so the model picks up where it left off.
@@ -434,7 +549,11 @@ end;
 
 function IsSessionArchiveId(const Id: string): Boolean;
 begin
-  Result := (Length(Id) > 5) and (Copy(Id, Length(Id) - 4, 5) = '.orig');
+  { ".log" joins ".orig" here so SessionPath refuses it too: the
+    transcript log is a record, and `pasclaw resume <id>.log` writing
+    turns into it would make it a diverging second session. }
+  Result := ((Length(Id) > 5) and (Copy(Id, Length(Id) - 4, 5) = '.orig'))
+         or ((Length(Id) > 4) and (Copy(Id, Length(Id) - 3, 4) = '.log'));
 end;
 
 function SessionPath(const Id: string): string;
@@ -627,6 +746,300 @@ begin
     Arr.Free;
   end;
 end;
+
+function SessionLogPath(const Id: string): string;
+begin
+  if not IsSafeSessionId(Id) then Exit('');
+  { An archive has no record of its own -- ".orig.log.jsonl" and
+    ".log.log.jsonl" are both nonsense, and the same chokepoint
+    argument SessionPath makes applies here. }
+  if IsSessionArchiveId(Id) then Exit('');
+  Result := JoinPath(SessionsDir, Id + '.log.jsonl');
+end;
+
+function HasSessionLog(const Id: string): Boolean;
+var
+  P: string;
+begin
+  P := SessionLogPath(Id);
+  Result := (P <> '') and FileExists(P);
+end;
+
+function AppendSessionLog(const Id: string; const Msgs: TMessageArray): Integer;
+var
+  P, Line, Tagged: string;
+  i: Integer;
+  Obj: TJsonObject;
+  F: TFileStream;
+  Bytes: TBytes;
+begin
+  Result := 0;
+  P := SessionLogPath(Id);
+  if (P = '') or (Length(Msgs) = 0) then Exit;
+  try
+    EnsureSessionsDir;
+    if FileExists(P) then
+    begin
+      F := TFileStream.Create(P, fmOpenReadWrite or fmShareDenyWrite);
+      F.Seek(Int64(0), soEnd);
+    end
+    else
+      F := TFileStream.Create(P, fmCreate);
+    try
+      Line := '';
+      for i := 0 to High(Msgs) do
+      begin
+        Obj := MessageToJSON(Msgs[i]);
+        try
+          { One line per message -- the newline IS the record separator,
+            and ToJSON emits no raw newlines of its own. }
+          Line := Line + Obj.ToJSON + #10;
+        finally
+          Obj.Free;
+        end;
+        Inc(Result);
+      end;
+      if Line <> '' then
+      begin
+        { Retag before GetBytes, for the reason WriteFileText does: an
+          untagged string is read as the system codepage and non-ASCII
+          gets double-encoded on the way to disk. }
+        Tagged := Line;
+        TagUTF8(Tagged);
+        Bytes := TEncoding.UTF8.GetBytes(Tagged);
+        if Length(Bytes) > 0 then F.WriteBuffer(Bytes[0], Length(Bytes));
+      end;
+    finally
+      F.Free;
+    end;
+  except
+    on E: Exception do
+    begin
+      LogWarn('session: could not append the transcript log for %s: %s',
+              [Id, E.Message]);
+      Result := 0;
+    end;
+  end;
+end;
+
+function ReadSessionLog(const Id: string; Offset, Limit: Integer;
+                        out Total: Integer): TMessageArray;
+var
+  P, Line: string;
+  L: TStringList;
+  i, Idx, First, Last, N: Integer;
+  Obj: TJsonObject;
+  M: TMessage;
+begin
+  Total := 0;
+  SetLength(Result, 0);
+  P := SessionLogPath(Id);
+  if (P = '') or (not FileExists(P)) then Exit;
+  L := TStringList.Create;
+  try
+    try
+      L.LoadFromFile(P);
+    except
+      on E: Exception do
+      begin
+        LogWarn('session: could not read the transcript log for %s: %s',
+                [Id, E.Message]);
+        Exit;
+      end;
+    end;
+    { Blank trailing lines are an artefact of the separator, not
+      records. Count what is real before choosing the window. }
+    N := 0;
+    for i := 0 to L.Count - 1 do
+      if Trim(L[i]) <> '' then Inc(N);
+    Total := N;
+    if N = 0 then Exit;
+
+    if Offset < 0 then Offset := 0;
+    if Offset >= N then Exit;
+    First := Offset;
+    if Limit <= 0 then Last := N - 1
+    else Last := Offset + Limit - 1;
+    if Last > N - 1 then Last := N - 1;
+
+    SetLength(Result, Last - First + 1);
+    N := 0;                     { index across the real (non-blank) lines }
+    i := 0;                     { index into Result }
+    for Idx := 0 to L.Count - 1 do
+    begin
+      Line := Trim(L[Idx]);
+      if Line = '' then Continue;
+      if (N >= First) and (N <= Last) then
+      begin
+        M := Default(TMessage);
+        try
+          Obj := TJsonObject.Parse(Line);
+          try
+            MessageFromJSON(Obj, M);
+          finally
+            Obj.Free;
+          end;
+        except
+          { An unreadable line is one lost message, not a lost history:
+            keep the slot, say so, and carry on. }
+          on E: Exception do
+          begin
+            M := Default(TMessage);
+            M.Role := mrAssistant;
+            M.Content := '(unreadable log entry)';
+          end;
+        end;
+        Result[i] := M;
+        Inc(i);
+      end;
+      Inc(N);
+      if N > Last then Break;
+    end;
+    SetLength(Result, i);
+  finally
+    L.Free;
+  end;
+end;
+
+function SessionLogCount(const Id: string): Integer;
+var
+  Total: Integer;
+begin
+  ReadSessionLog(Id, MaxInt, 0, Total);   { window past the end: counts only }
+  Result := Total;
+end;
+
+var
+  GTurnLocks: TStringList = nil;          { Id -> TCriticalSection }
+  GTurnLocksLock: TCriticalSection = nil;
+
+function SessionTurnLock(const Id: string): TCriticalSection;
+var
+  Idx: Integer;
+begin
+  GTurnLocksLock.Enter;
+  try
+    Idx := GTurnLocks.IndexOf(Id);
+    if Idx >= 0 then
+      Result := TCriticalSection(GTurnLocks.Objects[Idx])
+    else
+    begin
+      Result := TCriticalSection.Create;
+      GTurnLocks.AddObject(Id, Result);
+    end;
+  finally
+    GTurnLocksLock.Leave;
+  end;
+end;
+
+function SessionExportMessages(const Id: string): TMessageArray;
+var
+  Total: Integer;
+  S: TSession;
+  i: Integer;
+begin
+  if HasSessionLog(Id) then
+  begin
+    Result := ReadSessionLog(Id, 0, 0, Total);
+    if Total > 0 then Exit;
+  end;
+  SetLength(Result, 0);
+  S := TSession.Create(Id);
+  try
+    SetLength(Result, Length(S.Messages));
+    for i := 0 to High(S.Messages) do
+      Result[i] := S.Messages[i];
+  finally
+    S.Free;
+  end;
+end;
+
+function ExportSessionJSON(const Id: string; out Body, Err: string): Boolean;
+var
+  Root, MsgObj: TJsonObject;
+  Arr: TJsonArray;
+  Msgs: TMessageArray;
+  i: Integer;
+  Path: string;
+begin
+  Result := False;
+  Body := '';
+  Err := '';
+  Path := SessionPath(Id);
+  if (Path = '') or (not FileExists(Path)) then
+  begin
+    Err := 'no such session: ' + Id;
+    Exit;
+  end;
+  try
+    { The live document, verbatim, so meta and the web UI's tool-detail
+      blob survive untouched -- then the messages swapped for the full
+      record. A session with no record round-trips byte-compatibly in
+      content (same messages back in). }
+    Root := TJsonObject.Parse(ReadFileText(Path));
+    try
+      Msgs := SessionExportMessages(Id);
+      Arr := TJsonArray.Create;
+      for i := 0 to High(Msgs) do
+      begin
+        MsgObj := MessageToJSON(Msgs[i]);
+        Arr.AddObject(MsgObj);   { takes ownership; sets MsgObj := nil }
+      end;
+      Root.PutArray('messages', Arr);
+      Body := Root.ToJSON;
+    finally
+      Root.Free;
+    end;
+    Result := True;
+  except
+    on E: Exception do
+      Err := 'could not read session ' + Id + ': ' + E.Message;
+  end;
+end;
+
+procedure LogSessionTurn(var Meta: TSessionMeta; const Messages: TMessageArray);
+var
+  Fresh: TMessageArray;
+  i, Start: Integer;
+begin
+  if not IsSafeSessionId(Meta.Id) then Exit;
+
+  (* A compaction happened since the last save: the live array was
+     rebuilt around a summary, so the old count indexes an array that
+     no longer exists. Everything alive now is either already logged or
+     the summary itself, so the count re-anchors to the new length and
+     nothing is written twice. *)
+  if Meta.LogPending then
+  begin
+    Meta.LoggedCount := Length(Messages);
+    Meta.LogPending  := False;
+    Exit;
+  end;
+
+  Start := Meta.LoggedCount;
+  if Start < 0 then Start := 0;
+  if Start > Length(Messages) then
+  begin
+    { The live transcript got SHORTER without the compaction hook
+      firing -- a /clear, a hand-edited file, a PUT that replaced it.
+      There is no honest diff to take, so re-anchor rather than guess,
+      and keep whatever the log already holds. }
+    Meta.LoggedCount := Length(Messages);
+    Exit;
+  end;
+  if Start = Length(Messages) then Exit;
+
+  SetLength(Fresh, Length(Messages) - Start);
+  for i := Start to High(Messages) do
+    Fresh[i - Start] := Messages[i];
+  { Advance the cursor by what was actually WRITTEN. The append is
+    best-effort (a share-locked file, a full disk); counting messages a
+    failed append never stored would leave a permanent gap in the record
+    -- the next turn's diff would start past them and nothing ever
+    retries. Counting only the appended tail leaves the rest eligible. }
+  Meta.LoggedCount := Start + AppendSessionLog(Meta.Id, Fresh);
+end;
+
 
 constructor TSession.Create(const AId: string);
 begin
@@ -955,6 +1368,23 @@ begin
   Inc(Meta.Stats.TruncationBytesSaved, TruncationBytesDelta);
 end;
 
+function MergeSessionContext(const Stored, Fresh: TMessageArray): TMessageArray;
+var
+  i, Kept: Integer;
+begin
+  SetLength(Result, Length(Stored) + Length(Fresh));
+  Kept := 0;
+  for i := 0 to High(Stored) do
+  begin
+    if Stored[i].Role = mrSystem then Continue;
+    Result[Kept] := Stored[i];
+    Inc(Kept);
+  end;
+  for i := 0 to High(Fresh) do
+    Result[Kept + i] := Fresh[i];
+  SetLength(Result, Kept + Length(Fresh));
+end;
+
 function FormatWorkingStateBlock(const Meta: TSessionMeta): string;
 var
   i: Integer;
@@ -1035,6 +1465,10 @@ begin
     MetaObj.PutStr('provider',               Meta.Provider);
     MetaObj.PutStr('profile',                Meta.Profile);
     MetaObj.PutStr('system_prompt_override', Meta.SystemPromptOverride);
+    { Omitted at their defaults so a session that never compacted keeps
+      a JSON byte-identical to the pre-feature schema. }
+    if Meta.LoggedCount > 0 then MetaObj.PutInt('logged_count', Meta.LoggedCount);
+    if Meta.LogPending then MetaObj.PutBool('log_pending', True);
     WriteWorkingStateJSON(MetaObj, Meta.WorkingState);
     WriteSessionStatsJSON(MetaObj, Meta.Stats);
     Root.PutObject('meta', MetaObj);
@@ -1144,6 +1578,8 @@ begin
         Meta.Provider             := MetaObj.GetStr('provider',               '');
         Meta.Profile              := MetaObj.GetStr('profile',                '');
         Meta.SystemPromptOverride := MetaObj.GetStr('system_prompt_override', '');
+        Meta.LoggedCount          := MetaObj.GetInt('logged_count',           0);
+        Meta.LogPending           := MetaObj.GetBool('log_pending',           False);
         ReadWorkingStateJSON(MetaObj, Meta.WorkingState);
         ReadSessionStatsJSON (MetaObj, Meta.Stats);
       finally
@@ -1318,7 +1754,7 @@ end;
 
 function DeleteSession(const Id: string): Boolean;
 var
-  Path: string;
+  Path, LogP: string;
 begin
   Result := False;
   Path := SessionPath(Id);
@@ -1328,10 +1764,23 @@ begin
     takes a PWideChar. Same shadowing as FindClose above. }
   Result := SysUtils.DeleteFile(Path);
   if Result then
+  begin
+    (* The record goes with it. Deleting a conversation and leaving its
+       full transcript beside the gap would be worse than not having
+       kept one -- the operator asked for it gone, and the log is the
+       part that remembers what the live file had already forgotten. *)
+    LogP := SessionLogPath(Id);
+    if (LogP <> '') and FileExists(LogP) then
+      SysUtils.DeleteFile(LogP);
     LogInfo('session %s deleted', [Id]);
+  end;
 end;
 
 initialization
   Randomize;
+  GTurnLocksLock := TCriticalSection.Create;
+  GTurnLocks := TStringList.Create;
+  GTurnLocks.Sorted := True;          { binary lookup; ids are few but hot }
+  GTurnLocks.Duplicates := dupError;
 
 end.

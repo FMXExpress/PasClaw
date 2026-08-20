@@ -27,7 +27,8 @@ unit PasClaw.Suite;
 interface
 
 uses
-  SysUtils, Classes;
+  SysUtils, Classes,
+  PasClaw.Utils;        { TStringArray, for the skipped-app report }
 
 type
   TSuiteApp = record
@@ -45,6 +46,17 @@ function SuiteApps: TSuiteApps;
   Returns how many were created. Existing projects are never touched. }
 function SeedSuite(out Err: string): Integer;
 
+(* SeedSuite, plus the half of the answer it was swallowing: which apps
+   were NOT installed because a project already owns their name. The
+   skip itself is right -- a user who remade Notes keeps their version,
+   and SeedOne never overwrites -- but reporting only `created` turned
+   "your project called notes is shadowing the suite's Notes app" into
+   a silent nothing. Measured: a workspace with plain projects named
+   notes/calendar/mail answered {"created":1} and no one could tell
+   why. *)
+function SeedSuiteReporting(out Err: string;
+                            out Skipped: TStringArray): Integer;
+
 { Seed one by name ('notes'). Returns False when the name isn't in the
   catalogue or the project already exists. }
 function SeedSuiteApp(const Name: string; out Err: string): Boolean;
@@ -52,7 +64,6 @@ function SeedSuiteApp(const Name: string; out Err: string): Boolean;
 implementation
 
 uses
-  PasClaw.Utils,
   PasClaw.JSON,
   PasClaw.Projects.Store,
   PasClaw.Apps;
@@ -675,7 +686,8 @@ begin
   Result := False;
 end;
 
-function SeedSuite(out Err: string): Integer;
+function SeedSuiteReporting(out Err: string;
+                            out Skipped: TStringArray): Integer;
 var
   Apps: TSuiteApps;
   I: Integer;
@@ -683,12 +695,27 @@ var
 begin
   Err := '';
   Result := 0;
+  SetLength(Skipped, 0);
   Apps := SuiteApps;
   for I := 0 to High(Apps) do
     if SeedOne(Apps[I], One) then
       Inc(Result)
     else if One <> '' then
-      Err := One;
+      Err := One
+    else
+    begin
+      { SeedOne declined with no error: a project already owns this
+        name, so the suite app was skipped rather than overwritten. }
+      SetLength(Skipped, Length(Skipped) + 1);
+      Skipped[High(Skipped)] := Apps[I].Name;
+    end;
+end;
+
+function SeedSuite(out Err: string): Integer;
+var
+  Skipped: TStringArray;
+begin
+  Result := SeedSuiteReporting(Err, Skipped);
 end;
 
 end.
