@@ -569,7 +569,11 @@ It runs for minutes, so it narrates: each tool call becomes a
 `page-progress` event on `/v1/desktop/events`, and the Browser shows a
 progress dialog with what the agent is doing right now. The bar creeps
 toward but never reaches done — nobody knows how many sources a question
-needs, and a fake 100% is worse than an honest "still going".
+needs, and a fake 100% is worse than an honest "still going". The phases
+tell the run's actual story in order: **Planning** the sub-questions,
+**Drafting** the first full report, **Deepening** it round by round (each
+round rewrites the draft with what it found), **Saturated** when a round
+stops finding new ground, and **Writing** the final report.
 
 ### Make this interactive
 
@@ -750,6 +754,15 @@ Session ids are derived, not stored: `desktop-<project>` for a project chat,
 `pasclaw learn` and the Library window all see them. See
 [Gateway § `session_context`](./gateway.md#v1chatcompletions-with-session_context--server-held-conversations)
 for the wire format.
+
+Turns on one conversation run one at a time: the gateway serializes
+same-session turns, so two screens submitting to the same project queue
+rather than corrupt each other. The parked screen is told -- the gateway
+publishes a `turn-queued` event addressed to the client id the request
+carried in `X-PasClaw-Client`, and that screen's reply bubble reads
+"waiting for another turn on this conversation to finish" instead of
+sitting silent. The first streamed token of the real answer paints over
+the notice; it never enters the transcript.
 
 ## HTTP reference
 

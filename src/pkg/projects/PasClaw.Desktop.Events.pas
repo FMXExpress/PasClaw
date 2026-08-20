@@ -122,6 +122,16 @@ procedure PublishWorkspace(const Name: string);
    what -- so the progress dialog shows work rather than patience. *)
 procedure PublishPageProgress(const Phase, Detail: string);
 
+(* A turn that is WAITING, not running.
+
+   Same-session turns serialize on the session turn lock, and the queued
+   tab's POST simply blocks -- which the browser paints exactly like a
+   running turn. Nine silent seconds of "Stop" with no output reads as a
+   hang. This names the one client whose turn is parked (as the browser
+   named itself on connect) so that screen -- and only that screen -- can
+   say "waiting for another turn on this conversation" instead. *)
+procedure PublishTurnQueued(const SessionId, ClientId: string);
+
 implementation
 
 uses
@@ -383,6 +393,12 @@ begin
     be a whole document, and this is a status line, not a log. }
   PublishRaw('{"type":"page-progress","phase":"' + Esc(Phase) +
              '","detail":"' + Esc(Copy(Detail, 1, 200)) + '"}');
+end;
+
+procedure PublishTurnQueued(const SessionId, ClientId: string);
+begin
+  PublishRaw('{"type":"turn-queued","session":"' + Esc(SessionId) +
+             '","client":"' + Esc(ClientId) + '"}');
 end;
 
 initialization

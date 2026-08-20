@@ -1783,6 +1783,22 @@ function refreshBoardSoon() {
 let MY_CLIENT = "";
 onDesktopEvent("hello", ev => { if (ev && ev.client) MY_CLIENT = ev.client; });
 
+/* A turn parked behind another screen's turn on the same conversation.
+
+   The gateway serializes same-session turns, and a queued POST is
+   indistinguishable from a running one from here -- the composer shows
+   Stop and nothing streams. So the server announces "yours is waiting"
+   on the event feed, addressed by client id, and the composer that owns
+   the pending POST paints it. Keyed by session id; each submit
+   overwrites its own entry, so a stale closure can never outlive the
+   turn that could have used it. */
+const TURN_WAITS = new Map();
+onDesktopEvent("turn-queued", ev => {
+  if (!ev || !ev.client || ev.client !== MY_CLIENT) return;
+  const show = TURN_WAITS.get(ev.session);
+  if (show) show();
+});
+
 onDesktopEvent("desktop-command", ev => {
   /* A command reaches EVERY connected desktop, and for most actions
      that is the point -- "tile the windows" should tidy every screen
@@ -2808,6 +2824,12 @@ function openShell() {
     const body = say("pasclaw", "");
     const signal = turn.begin();
     let acc = "", stopped = false;
+    /* Same queued-turn notice the project chats paint -- the shell
+       session can be open on several screens too. */
+    TURN_WAITS.set(SHELL_SESSION, () => {
+      if (!acc) body.textContent =
+        "(waiting for another turn on this conversation to finish...)";
+    });
     try {
       const t = token();
       const r = await fetch("/v1/chat/completions", {
@@ -2816,6 +2838,7 @@ function openShell() {
         headers: Object.assign(
           { "content-type": "application/json", "accept": "text/event-stream",
             "x-pasclaw-session": SHELL_SESSION },
+          MY_CLIENT ? { "x-pasclaw-client": MY_CLIENT } : {},
           t ? { authorization: "Bearer " + t } : {}),
         /* STREAMED, like the project chats.
 
@@ -3808,6 +3831,14 @@ function buildChatUI(project) {
        you cannot interrupt is the thing being fixed here. */
     const signal = turn.begin();
     let acc = "", touchedApp = false, stopped = false;
+    /* Should this turn queue behind another screen's turn, the gateway
+       says so (turn-queued, addressed to this client) and the reply
+       bubble explains the silence. The first streamed delta paints over
+       it. */
+    TURN_WAITS.set(sessionId, () => {
+      if (!acc) body.textContent =
+        "(waiting for another turn on this conversation to finish...)";
+    });
 
     try {
       const t = token();
@@ -3820,6 +3851,9 @@ function buildChatUI(project) {
                it, loads that session, and files the answer back into
                it. */
             "x-pasclaw-session": sessionId },
+          /* And which SCREEN sent it (the hello frame's name), so a
+             turn-queued notice can address exactly this tab. */
+          MY_CLIENT ? { "x-pasclaw-client": MY_CLIENT } : {},
           t ? { authorization: "Bearer " + t } : {}),
         body: JSON.stringify({
           stream: true,

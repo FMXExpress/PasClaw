@@ -6257,8 +6257,12 @@ begin
        'Produce the page now.', Kind = pkResearch, Kind <> pkResearch,
        Reply, Err) then
     Exit;
+  (* "Drafting", not "Writing": deepening rounds follow, each rewriting
+     this draft, and a dialog that said "Writing" and THEN "Deepening:
+     round 1" read like the phases were arriving out of order. The names
+     carry the sequence -- draft first, deepen it, write the final. *)
   if Kind = pkResearch then
-    PublishPageProgress('Writing', 'assembling the report');
+    PublishPageProgress('Drafting', 'first draft of the report');
   SplitPageReply(Reply, BodyHTML, SourcesJSON);
   if Trim(BodyHTML) = '' then
   begin
@@ -6339,6 +6343,11 @@ begin
       PublishPageProgress('Deepening',
         Format('stopped at the %d-round limit with %d source(s)',
                [MaxDeepenRounds, CountSources(SourcesJSON)]));
+    { The closing line. Every exit above says why the digging stopped;
+      this one says the report is done, so the story ends where the run
+      does rather than on a "Saturated". }
+    PublishPageProgress('Writing',
+      Format('final report -- %d source(s) cited', [CountSources(SourcesJSON)]));
   end;
 
   Result := True;
@@ -7180,7 +7189,20 @@ begin
          callers (no session_context) are untouched. Released in the
          handler's outer finally, so every exit path lets go. *)
       TurnLock := SessionTurnLock(ReqSession);
-      TurnLock.Enter;
+      (* When the lock is already held, this turn is about to WAIT -- and
+         the browser paints a waiting POST exactly like a running one, so
+         the user watches "Stop" do nothing for however long the other
+         turn takes. Say so on the event feed before blocking. Addressed
+         to the client that sent this request (X-PasClaw-Client, the name
+         the hello frame gave it) so only the parked screen shows the
+         notice, not every tab on the conversation -- the holder of the
+         lock is mid-turn and its display is already telling the truth. *)
+      if not TurnLock.TryEnter then
+      begin
+        PublishTurnQueued(ReqSession,
+          Trim(ARequest.RawHeaders.Values['X-PasClaw-Client']));
+        TurnLock.Enter;
+      end;
       NewMsgs := Copy(Msgs, 0, Length(Msgs));
       Stored := TSession.Create(ReqSession);
       try
