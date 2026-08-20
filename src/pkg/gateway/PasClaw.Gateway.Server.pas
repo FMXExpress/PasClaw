@@ -3927,16 +3927,20 @@ begin
     end
     else
     begin
-      if not FileExists(SessionPath(Id)) then
+      { The full RECORD when one exists, the live file otherwise -- a
+        compacted session's live file is a summary plus the tail, and a
+        download that omits everything compaction removed is not an
+        export. Meta and tool details come through verbatim. }
+      if not ExportSessionJSON(Id, ExportBody, ExportErr) then
       begin
-        WriteJSON(AResp, 404, '{"error":"not found"}');
+        WriteJSON(AResp, 404, '{"error":"' + JsonEscape(ExportErr) + '"}');
         Exit;
       end;
       AResp.ResponseNo := 200;
       AResp.ContentType := 'application/json; charset=utf-8';
       AResp.CharSet := 'utf-8';
       AResp.ContentDisposition := 'attachment; filename="' + Id + '.json"';
-      WriteBodyStream(AResp, ReadFileText(SessionPath(Id)));
+      WriteBodyStream(AResp, ExportBody);
     end;
     Exit;
   end;
@@ -6997,6 +7001,7 @@ var
   SessionCtx: Boolean;
   SessionTitle, WorkState: string;
   Kept: Integer;
+  TurnLock: TCriticalSection;
   i: Integer;
   WantsStream: Boolean;
   Loop: TToolLoopResult;
@@ -7019,6 +7024,7 @@ var
     if Result = '' then Result := 'unknown failure';
   end;
 begin
+  TurnLock := nil;
   Streamer := nil;
   AbortHook := nil;
   StreamStarted := False;
@@ -7146,6 +7152,24 @@ begin
     SessionCtx := (ReqSession <> '') and Req.GetBool('session_context', False);
     if SessionCtx then
     begin
+      (* One turn at a time per CONVERSATION, held from load to persist.
+
+         Two tabs submitting to the same session both read the same
+         stored prefix here, ran independently, and whichever persisted
+         last replaced the session with its own FinalMessages -- the
+         other turn silently gone from the live file. The checkpoint
+         turn lock cannot help: this load happens before it is taken,
+         the persist after it is released, and checkpoints-disabled
+         gateways have no turn lock at all. So the whole read-run-write
+         is a transaction under a per-session lock: the second tab's
+         turn WAITS, then runs against a context that includes the
+         first's result -- the same semantics the UI already promises
+         with its one-turn-at-a-time composer. Different sessions take
+         different locks and never wait on each other; passthrough
+         callers (no session_context) are untouched. Released in the
+         handler's outer finally, so every exit path lets go. *)
+      TurnLock := SessionTurnLock(ReqSession);
+      TurnLock.Enter;
       NewMsgs := Copy(Msgs, 0, Length(Msgs));
       Stored := TSession.Create(ReqSession);
       try
@@ -7488,6 +7512,7 @@ begin
       ReplyObj.Free;
     end;
   finally
+    if TurnLock <> nil then TurnLock.Leave;
     Req.Free;
     if Streamer <> nil then Streamer.Free;
     if AbortHook <> nil then AbortHook.Free;

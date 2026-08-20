@@ -958,6 +958,7 @@ var
   Lines: TStringList;
   i: Integer;
   RoleStr, Body: string;
+  Msgs: TMessageArray;
 begin
   Result := False;
   MD := '';
@@ -968,6 +969,13 @@ begin
   try
     if not S.MetaExists then
     begin Err := 'no such session: ' + Id; Exit; end;
+    { The RECORD, not the live transcript. For a compacted session the
+      live file is a summary plus the tail; an export exists to answer
+      "what happened", and building it from the live file silently
+      omitted every turn compaction removed while the record sat beside
+      it holding them. Falls back to the live messages for sessions
+      that predate the record. }
+    Msgs := SessionExportMessages(Id);
     Lines := TStringList.Create;
     try
       if S.Meta.Title <> '' then Lines.Add('# ' + S.Meta.Title)
@@ -975,13 +983,13 @@ begin
       Lines.Add('');
       Lines.Add(Format('_session %s · model %s_', [S.Meta.Id, S.Meta.Model]));
       Lines.Add('');
-      for i := 0 to High(S.Messages) do
+      for i := 0 to High(Msgs) do
       begin
-        if S.Messages[i].Role = mrSystem then Continue;
-        RoleStr := MsgRoleToString(S.Messages[i].Role);
-        Body := S.Messages[i].Content;
-        if (Body = '') and (Length(S.Messages[i].ToolCalls) > 0) then
-          Body := '_(tool call: ' + S.Messages[i].ToolCalls[0].Func.Name + ')_';
+        if Msgs[i].Role = mrSystem then Continue;
+        RoleStr := MsgRoleToString(Msgs[i].Role);
+        Body := Msgs[i].Content;
+        if (Body = '') and (Length(Msgs[i].ToolCalls) > 0) then
+          Body := '_(tool call: ' + Msgs[i].ToolCalls[0].Func.Name + ')_';
         if Trim(Body) = '' then Continue;
         Lines.Add('## ' + RoleStr);
         Lines.Add('');

@@ -20,6 +20,7 @@ program working_state_tests;
 
 uses
   SysUtils,
+  PasClaw.JSON,
   PasClaw.Providers.Types,
   PasClaw.Session.Store;
 
@@ -572,6 +573,67 @@ begin
   DeleteSession(Meta.Id);
 end;
 
+procedure TestExportsCarryTheRecord;
+var
+  S: TSession;
+  Meta: TSessionMeta;
+  Live: TMessageArray;
+  i: Integer;
+  Body, Err: string;
+  Obj: TJsonObject;
+  Arr: TJsonArray;
+begin
+  (* A compacted session's live file is a summary plus the tail; its
+     record is the whole conversation. An export exists to answer "what
+     happened", so it must be built from the record -- before this, every
+     export path silently omitted the turns compaction removed. *)
+  DeleteSession('logtest-export');
+  S := TSession.Create('logtest-export');
+  try
+    SetLength(S.Messages, 2);
+    S.Messages[0] := LogMsg(mrUser, 'SUMMARY of earlier work');
+    S.Messages[1] := LogMsg(mrAssistant, 'the tail answer');
+    S.Save;
+  finally
+    S.Free;
+  end;
+  { The record holds the FULL conversation the live file no longer does. }
+  Meta := Default(TSessionMeta);
+  Meta.Id := 'logtest-export';
+  CleanLog(Meta.Id);
+  SetLength(Live, 6);
+  for i := 0 to 5 do
+    if i mod 2 = 0 then Live[i] := LogMsg(mrUser, 'q' + IntToStr(i))
+    else                Live[i] := LogMsg(mrAssistant, 'a' + IntToStr(i));
+  LogSessionTurn(Meta, Live);
+
+  AssertTrue(Length(SessionExportMessages('logtest-export')) = 6,
+    'the export messages are the record, not the live pair');
+
+  AssertTrue(ExportSessionJSON('logtest-export', Body, Err),
+    'the JSON export succeeds: ' + Err);
+  Obj := TJsonObject.Parse(Body);
+  try
+    Arr := Obj.ChildArray('messages');
+    try
+      AssertTrue((Arr <> nil) and (Arr.Count = 6),
+        'the JSON export carries all six recorded messages');
+    finally
+      Arr.Free;
+    end;
+  finally
+    Obj.Free;
+  end;
+  AssertTrue(Pos('q0', Body) > 0,
+    'including the opening the live file dropped');
+
+  { No record: the live file is the whole story and still serves. }
+  CleanLog('logtest-export');
+  AssertTrue(Length(SessionExportMessages('logtest-export')) = 2,
+    'a session with no record exports its live messages');
+  DeleteSession('logtest-export');
+end;
+
 procedure TestLogIsNotASession;
 begin
   { SessionPath refuses it, so `pasclaw resume <id>.log` cannot open the
@@ -591,6 +653,7 @@ begin
   TestCompactionDoesNotCostTheRecord;
   TestReplyAfterCompactionIsRecorded;
   TestLogWindows;
+  TestExportsCarryTheRecord;
   TestLogIsNotASession;
   TestExtractsFsWritePaths;
   TestExtractsFsEditPathsAndDedupes;

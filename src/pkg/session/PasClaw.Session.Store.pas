@@ -44,7 +44,7 @@ unit PasClaw.Session.Store;
 interface
 
 uses
-  SysUtils, Classes,
+  SysUtils, Classes, SyncObjs,
   PasClaw.Providers.Types,
   PasClaw.JSON;
 
@@ -279,6 +279,37 @@ function SessionLogCount(const Id: string): Integer;
    knows where it is. *)
 function ReadSessionLog(const Id: string; Offset, Limit: Integer;
                         out Total: Integer): TMessageArray;
+
+(* One lock per session id, for callers that run a whole TURN against
+   a stored conversation: load, run the loop, persist. Two concurrent
+   turns on the same session both loaded the same prefix, ran
+   independently, and whichever persisted last silently replaced the
+   other's -- the classic lost update, reachable from the desktop by
+   submitting in two tabs at once. Different sessions get different
+   locks and never wait on each other.
+
+   Locks are created on first use and kept for the life of the process:
+   the population is "distinct session ids turned this run", which is
+   small, and freeing one safely would itself need a lock held across
+   every acquire. *)
+function SessionTurnLock(const Id: string): TCriticalSection;
+
+(* The messages an EXPORT should carry: the record when one exists,
+   the live transcript otherwise.
+
+   For a compacted session the record is the only complete transcript
+   left -- the live file holds a summary and the tail. Exports exist to
+   answer "what happened", so an export built from the live file
+   silently omits every turn compaction removed while the record sits
+   beside it holding them. Pre-log sessions have no record, and their
+   live file IS the whole story, so it still serves. *)
+function SessionExportMessages(const Id: string): TMessageArray;
+
+(* The raw-JSON export body: the session document with the export
+   messages in place of the live array. Meta and any tool-detail blob
+   come through verbatim from the live file, because they are current
+   state rather than history. False when the session does not exist. *)
+function ExportSessionJSON(const Id: string; out Body, Err: string): Boolean;
 
 (* Record this turn in the log and keep the bookkeeping that makes the
    next call correct.
@@ -878,6 +909,94 @@ begin
   Result := Total;
 end;
 
+var
+  GTurnLocks: TStringList = nil;          { Id -> TCriticalSection }
+  GTurnLocksLock: TCriticalSection = nil;
+
+function SessionTurnLock(const Id: string): TCriticalSection;
+var
+  Idx: Integer;
+begin
+  GTurnLocksLock.Enter;
+  try
+    Idx := GTurnLocks.IndexOf(Id);
+    if Idx >= 0 then
+      Result := TCriticalSection(GTurnLocks.Objects[Idx])
+    else
+    begin
+      Result := TCriticalSection.Create;
+      GTurnLocks.AddObject(Id, Result);
+    end;
+  finally
+    GTurnLocksLock.Leave;
+  end;
+end;
+
+function SessionExportMessages(const Id: string): TMessageArray;
+var
+  Total: Integer;
+  S: TSession;
+  i: Integer;
+begin
+  if HasSessionLog(Id) then
+  begin
+    Result := ReadSessionLog(Id, 0, 0, Total);
+    if Total > 0 then Exit;
+  end;
+  SetLength(Result, 0);
+  S := TSession.Create(Id);
+  try
+    SetLength(Result, Length(S.Messages));
+    for i := 0 to High(S.Messages) do
+      Result[i] := S.Messages[i];
+  finally
+    S.Free;
+  end;
+end;
+
+function ExportSessionJSON(const Id: string; out Body, Err: string): Boolean;
+var
+  Root, MsgObj: TJsonObject;
+  Arr: TJsonArray;
+  Msgs: TMessageArray;
+  i: Integer;
+  Path: string;
+begin
+  Result := False;
+  Body := '';
+  Err := '';
+  Path := SessionPath(Id);
+  if (Path = '') or (not FileExists(Path)) then
+  begin
+    Err := 'no such session: ' + Id;
+    Exit;
+  end;
+  try
+    { The live document, verbatim, so meta and the web UI's tool-detail
+      blob survive untouched -- then the messages swapped for the full
+      record. A session with no record round-trips byte-compatibly in
+      content (same messages back in). }
+    Root := TJsonObject.Parse(ReadFileText(Path));
+    try
+      Msgs := SessionExportMessages(Id);
+      Arr := TJsonArray.Create;
+      for i := 0 to High(Msgs) do
+      begin
+        MsgObj := MessageToJSON(Msgs[i]);
+        Arr.AddObject(MsgObj);   { takes ownership; sets MsgObj := nil }
+      end;
+      Root.PutArray('messages', Arr);
+      Body := Root.ToJSON;
+    finally
+      Root.Free;
+    end;
+    Result := True;
+  except
+    on E: Exception do
+      Err := 'could not read session ' + Id + ': ' + E.Message;
+  end;
+end;
+
 procedure LogSessionTurn(var Meta: TSessionMeta; const Messages: TMessageArray);
 var
   Fresh: TMessageArray;
@@ -913,8 +1032,12 @@ begin
   SetLength(Fresh, Length(Messages) - Start);
   for i := Start to High(Messages) do
     Fresh[i - Start] := Messages[i];
-  AppendSessionLog(Meta.Id, Fresh);
-  Meta.LoggedCount := Length(Messages);
+  { Advance the cursor by what was actually WRITTEN. The append is
+    best-effort (a share-locked file, a full disk); counting messages a
+    failed append never stored would leave a permanent gap in the record
+    -- the next turn's diff would start past them and nothing ever
+    retries. Counting only the appended tail leaves the rest eligible. }
+  Meta.LoggedCount := Start + AppendSessionLog(Meta.Id, Fresh);
 end;
 
 
@@ -1655,5 +1778,9 @@ end;
 
 initialization
   Randomize;
+  GTurnLocksLock := TCriticalSection.Create;
+  GTurnLocks := TStringList.Create;
+  GTurnLocks.Sorted := True;          { binary lookup; ids are few but hot }
+  GTurnLocks.Duplicates := dupError;
 
 end.

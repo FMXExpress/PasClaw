@@ -161,7 +161,7 @@ end;
    there is. *)
 function DoExport(const Id: string; Full: Boolean = False): Integer;
 var
-  Path: string;
+  Path, Body, Err: string;
   S: TStringList;
 begin
   Path := '';
@@ -170,20 +170,34 @@ begin
     Path := SessionArchivePath(Id);
     PrintErr('(pre-prune archive: ' + Path + ')' + sLineBreak);
   end;
-  if Path = '' then Path := SessionPath(Id);
-  if (Path = '') or (not FileExists(Path)) then
+  if Path <> '' then
   begin
-    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'no session named ' + Id);
+    { --full asked for the pre-prune archive specifically: verbatim. }
+    if not FileExists(Path) then
+    begin
+      PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + 'no session named ' + Id);
+      Exit(1);
+    end;
+    S := TStringList.Create;
+    try
+      S.LoadFromFile(Path);
+      Print(S.Text);
+      Exit(0);
+    finally
+      S.Free;
+    end;
+  end;
+  { The ordinary export: the session document with the full RECORD as
+    its messages when one exists -- a compacted session's live file is
+    a summary plus the tail, and exporting that silently dropped every
+    turn compaction removed. Same shape either way. }
+  if not ExportSessionJSON(Id, Body, Err) then
+  begin
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + Err);
     Exit(1);
   end;
-  S := TStringList.Create;
-  try
-    S.LoadFromFile(Path);
-    Print(S.Text);   { raw JSON to stdout; pipe through jq for pretty-print }
-    Result := 0;
-  finally
-    S.Free;
-  end;
+  Print(Body);   { raw JSON to stdout; pipe through jq for pretty-print }
+  Result := 0;
 end;
 
 function DoExportMarkdown(const Id: string): Integer;
