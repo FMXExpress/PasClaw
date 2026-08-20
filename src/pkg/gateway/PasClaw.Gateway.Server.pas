@@ -1071,6 +1071,17 @@ begin
   FWebhookPaths := TStringList.Create;
   FWebhookPaths.CaseSensitive := False;
   SetLength(FWebhookHandlers, 0);
+  (* A browser that reloads or closes mid-response leaves us writing into a
+     socket the peer has already reset -- routine for the desktop's SSE
+     streams, where every tab holds one open and every reload tears it down.
+     Indy's Linux send path does not pass MSG_NOSIGNAL, so that write raises
+     SIGPIPE, whose default action kills the whole gateway: one tab reload
+     took down every session, silently (nothing gets logged -- the process
+     just stops). Ignoring it process-wide turns the signal back into an
+     EPIPE write error, which Indy already treats as the disconnect it is. *)
+  {$IFDEF FPC}{$IFDEF UNIX}
+  FpSignal(SIGPIPE, TSignalHandler(SIG_IGN));
+  {$ENDIF}{$ENDIF}
   FHTTP := TIdHTTPServer.Create(nil);
   FHTTP.OnCommandGet := OnCommandGet;
   FHTTP.OnCommandOther := OnCommandOther;
