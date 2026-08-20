@@ -2335,9 +2335,16 @@ function paintChipsInto(host) {
       try {
         const j = await api("/v1/suite", { method: "POST" });
         await loadProjects();
-        showMessage({ title: "Suite installed", kind: "info",
-          text: `${j.created} app(s) added. They are ordinary projects -- ` +
-                `open one and ask PasClaw to change it.` });
+        /* Say what was SKIPPED, not only what was added. The seeder
+           never overwrites, so a project you named "notes" shadows the
+           suite's Notes app -- silently, before this. */
+        let text = `${j.created} app(s) added. They are ordinary projects -- ` +
+                   `open one and ask PasClaw to change it.`;
+        if (j.skipped && j.skipped.length)
+          text += `\n\nSkipped (a project already owns the name): ` +
+                  j.skipped.join(", ") + ". Rename or remove those projects " +
+                  "and install again if you want the suite's versions.";
+        showMessage({ title: "Suite installed", kind: "info", text });
       } catch (e) { alert(e.message); }
     }, "Notes, Calendar, Mail and the rest -- one click, once");
   chip("Library", "brain", openLibrary,
@@ -2912,11 +2919,32 @@ function openShell() {
     if (shown) note("— earlier conversation, reopened —");
   }
 
-  /* Go becomes Stop while a turn runs, same as the project chats. */
-  const goOrStop = () => { if (!turn.stop()) run(); };
-  go.addEventListener("click", goOrStop);
+  /* Go becomes Stop while a turn runs, same as the project chats.
+
+     But Enter with TEXT in the box, while a turn runs, is neither Go
+     nor Stop -- it is the user amending work in flight ("also close the
+     log when you are done"), and mapping it to Stop killed the very
+     turn it was trying to improve. The gateway has carried steering all
+     along (/v1/steer injects into the running loop, verified live);
+     the desktop just never offered a way to use it. Now: Enter with
+     text steers; Enter on an empty box, or the Stop button, stops. */
+  const steerOrStop = async () => {
+    const text = ta.value.trim();
+    if (turn.running && text) {
+      ta.value = "";
+      say("you", "\u21b3 " + text, "u");
+      try {
+        await api("/v1/steer", { method: "POST",
+          headers: { "x-pasclaw-session": SHELL_SESSION },
+          body: { text } });
+      } catch (e) { note("(steer failed: " + e.message + ")"); }
+      return;
+    }
+    if (!turn.stop()) run();
+  };
+  go.addEventListener("click", () => { if (!turn.stop()) run(); });
   ta.addEventListener("keydown", e => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); goOrStop(); }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); steerOrStop(); }
   });
   /* The replay has to WIN, not merely start. The transcript now comes
      from the server, so typing early can no longer corrupt it -- but it
@@ -4034,13 +4062,32 @@ function buildChatUI(project) {
 
   /* Bare calls: the click event would otherwise arrive as submit's mode
      argument, and an Event is not "plan". */
-  /* One button, two jobs: Send while idle, Stop while a turn runs. The
-     same key does the same thing, so Enter cannot start a second turn on
-     top of the one already going. */
-  const sendOrStop = () => { if (!turn.stop()) submit(); };
-  send.addEventListener("click", sendOrStop);
+  /* One button, two jobs: Send while idle, Stop while a turn runs.
+
+     The KEY has a third: Enter with text in the box while a turn runs
+     steers it. "Also make the header blue", typed mid-build, used to
+     stop the build it was amending -- the worst possible reading of an
+     addendum. /v1/steer injects the note into the running loop (the
+     next iteration sees it); the transcript shows it arrow-marked, and
+     the gateway files it with the turn. Enter on an empty box still
+     stops, so the keyboard-only path to Stop survives. */
+  const steerOrStop = async () => {
+    const text = ta.value.trim();
+    if (turn.running && text) {
+      ta.value = "";
+      addMsg("you", "\u21b3 " + text, "u");
+      try {
+        await api("/v1/steer", { method: "POST",
+          headers: { "x-pasclaw-session": sessionId },
+          body: { text } });
+      } catch (e) { addMsg("desktop", "(steer failed: " + e.message + ")"); }
+      return;
+    }
+    if (!turn.stop()) submit();
+  };
+  send.addEventListener("click", () => { if (!turn.stop()) submit(); });
   ta.addEventListener("keydown", e => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendOrStop(); }
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); steerOrStop(); }
   });
   /* The load has to WIN, not merely start.
 

@@ -954,6 +954,12 @@ So the server names one executor. Each SSE subscriber is assigned an id and told
 
 Oldest-subscriber is arbitrary but *stable*, and stability is the property that matters: every command in a session lands on the same screen rather than scattering builds across tabs. The consequence worth knowing is that asking in a second tab can have the app open in the first one.
 
+## Steering a running turn
+
+While a turn runs, the composer's button reads **Stop** — and pressing it stops. The Enter key carries the third meaning: **Enter with text in the box steers the running turn** instead of killing it. "Also make the header blue", typed mid-build, used to stop the build it was amending. The note goes to `/v1/steer` with the conversation's session id, the running loop picks it up at its next iteration, and the transcript shows it arrow-marked (`↳ also make the header blue`). Enter on an empty box still stops, so the keyboard-only path to Stop survives.
+
+Both composers steer — the project chats and the shell.
+
 ## Narrow screens
 
 The desktop metaphor assumes a screen with room to float windows on. Below **720px** of browser width it stops pretending:
