@@ -1724,15 +1724,19 @@ function subscribeEvents() {
   try { src = new EventSource(url); } catch { return; }
   EV.src = src;
 
-  src.addEventListener("open", () => { EV.live = true; });
+  src.addEventListener("open", () => { EV.live = true; EV.lastMsg = Date.now(); });
   src.addEventListener("error", () => {
     /* EventSource reconnects on its own; all we do is stop claiming to be
        live so the poll keeps covering us in the meantime. */
     EV.live = false;
   });
   src.addEventListener("message", e => {
+    EV.lastMsg = Date.now();
     let ev;
     try { ev = JSON.parse(e.data); } catch { return; }
+    /* The server's idle ping. It exists to feed the watchdog below;
+       relaying it to handlers or the activity log would be noise. */
+    if (ev.type === "ping") return;
     /* The event feed is half of "what is happening"; the Log window
        shows it beside the gateway's own lines and this page's calls. */
     activity("event", ev.type + (ev.project ? " " + ev.project : "") +
@@ -1744,6 +1748,22 @@ function subscribeEvents() {
     (EV.handlers[ev.type] || []).forEach(fn => { try { fn(ev); } catch {} });
   });
 }
+
+/* The dead-feed watchdog. The server pings every ~15s of quiet, so a
+   healthy connection never goes 45s without a message. One that does is
+   half-dead in a way EventSource cannot see (it only notices closed
+   sockets, and a wedged intermediary closes nothing) -- observed once as
+   a desktop that stayed "live" while receiving no events at all until a
+   reload. Reconnect and re-read the board instead of trusting it. */
+setInterval(() => {
+  if (!EV.src || !EV.lastMsg) return;
+  if (Date.now() - EV.lastMsg < 45000) return;
+  try { EV.src.close(); } catch {}
+  EV.live = false;
+  EV.lastMsg = 0;
+  subscribeEvents();
+  refreshBoardSoon();
+}, 15000);
 
 /* The board's own events: anything that changes the project set repaints
    the icons and the tree.
@@ -1766,9 +1786,20 @@ const BOARD_REFRESH_MS = 120;
 let boardTimer = null;
 function refreshBoardSoon() {
   if (boardTimer) return;
-  boardTimer = setTimeout(() => {
+  boardTimer = setTimeout(async () => {
     boardTimer = null;
-    loadProjects().catch(() => {});
+    try {
+      await loadProjects();
+      /* Expanded projects paint their task rows from a per-project cache,
+         and a task/job event is precisely when that cache went stale: a
+         run started by the agent used to sit "open" in the tree until the
+         user collapsed and re-expanded it. Reload the lists the user can
+         actually see, then repaint once. */
+      await Promise.all(Object.keys(S.tree)
+        .filter(p => S.tree[p].open && S.tree[p].tasks)
+        .map(p => loadTasks(p).catch(() => {})));
+      paintTree();
+    } catch {}
   }, BOARD_REFRESH_MS);
 }
 
@@ -4745,6 +4776,13 @@ async function openApp(project, opts) {
    the process runs, because the desktop metaphor otherwise implies "here",
    and with a remote gateway that is wrong. */
 async function openProcessApp(project, app) {
+  /* Reopen guard: the panel polls and holds run state; a rebuild would
+     stack a second control bar and log over the first. */
+  const alreadyProc = WINS.get("proc:" + project);
+  if (alreadyProc) {
+    restoreWindow(alreadyProc); focusWindow(alreadyProc);
+    return alreadyProc;
+  }
   const w = createWindow({
     key: "proc:" + project, title: (app.name || project) + " -- Run",
     width: 520, height: 340, icon: "app", pad: false,
@@ -4864,7 +4902,15 @@ async function openProcessApp(project, app) {
     if (!url) return;
     /* A process app that serves HTTP gets a browser window like any page.
        It is NOT sandboxed as an app frame -- it is a server the user chose
-       to run, on a port only they can reach. */
+       to run, on a port only they can reach. Reopening points the existing
+       frame at the (possibly new) url rather than stacking another. */
+    const live = WINS.get("procview:" + project);
+    if (live) {
+      restoreWindow(live); focusWindow(live);
+      const lf = live.body.querySelector("iframe");
+      if (lf && lf.src !== url) lf.src = url;
+      return;
+    }
     const v = createWindow({
       key: "procview:" + project, title: (app.name || project),
       width: app.width || 640, height: (app.height || 480) + 8,
@@ -4886,6 +4932,9 @@ async function openProcessApp(project, app) {
    ========================================================================== */
 
 async function openJobLog(project, task, job) {
+  /* Reopen guard: the existing window is already polling this job. */
+  const already = WINS.get(`job:${project}:${task}:${job}`);
+  if (already) { restoreWindow(already); focusWindow(already); return already; }
   const w = createWindow({
     key: `job:${project}:${task}:${job}`,
     title: `${project} ${task}/${job}`, width: 520, height: 300, icon: "page", pad: false,
@@ -4916,6 +4965,19 @@ async function openJobLog(project, task, job) {
    ========================================================================== */
 
 function openBrowser(pageId, initialQuery, initialKind) {
+  /* Already open: navigate the live window instead of rebuilding into it.
+     createWindow hands back the existing window for a repeated key, and
+     everything below APPENDS -- so a second call used to stack a second
+     toolbar and iframe into the same body, with the page loading into the
+     hidden lower frame while the visible one stayed blank. The same guard
+     openApp documents, applied here. */
+  const already = WINS.get("browser");
+  if (already) {
+    restoreWindow(already); focusWindow(already);
+    if (pageId && already.__showPageId) already.__showPageId(pageId);
+    else if (initialQuery && already.__ask) already.__ask(initialQuery, initialKind);
+    return already;
+  }
   const w = createWindow({ key: "browser", title: "Browser", width: 620, height: 460,
                            icon: "globe", pad: false,
                            restore: { fn: "browser", arg: pageId || "" } });
@@ -5045,7 +5107,10 @@ function openBrowser(pageId, initialQuery, initialKind) {
     mk.disabled = false;
   });
 
-  if (pageId) api("/v1/pages/" + pageId).then(show).catch(() => {});
+  /* Named on the window so the already-open path above can navigate it. */
+  w.__showPageId = id => api("/v1/pages/" + id).then(show).catch(() => {});
+
+  if (pageId) w.__showPageId(pageId);
   else if (initialQuery) {
     /* Asked from the desktop background: the Browser opens already working
        on the question rather than presenting an empty field to retype into. */
@@ -5068,6 +5133,15 @@ function openBrowser(pageId, initialQuery, initialKind) {
    ========================================================================== */
 
 function openFiles(startPath) {
+  /* Already open: focus it, and navigate only when the caller named a
+     place to go -- the window otherwise keeps the directory the user was
+     in. Rebuilding here used to stack a second toolbar and listing. */
+  const already = WINS.get("files");
+  if (already) {
+    restoreWindow(already); focusWindow(already);
+    if (startPath && already.__show) already.__show(startPath);
+    return already;
+  }
   const w = createWindow({ key: "files", title: "File Manager", width: 640,
                            height: 440, icon: "folder", pad: false,
                            restore: { fn: "files", arg: startPath || "" } });
@@ -5136,6 +5210,7 @@ function openFiles(startPath) {
   up.addEventListener("click", () => show(parentOf(cwd)));
   wsBtn.addEventListener("click", () => { if (wsRoot) show(wsRoot); });
   where.addEventListener("keydown", e => { if (e.key === "Enter") show(where.value.trim()); });
+  w.__show = show;
   show(startPath || "");
   return w;
 }
@@ -5172,9 +5247,15 @@ async function openFileView(pathStr, name) {
    ========================================================================== */
 
 async function openLibrary() {
-  const w = createWindow({ key: "library", title: "Library", width: 460, height: 380,
-                           icon: "brain", pad: false,
+  /* Reopening refreshes rather than stacks: a second Start > Library used
+     to append a second list under the first. Reuse the window and rebuild
+     its contents -- a fresh listing is what reopening should mean. */
+  const already = WINS.get("library");
+  const w = already || createWindow({ key: "library", title: "Library",
+                           width: 460, height: 380, icon: "brain", pad: false,
                            restore: { fn: "library" } });
+  if (already) { restoreWindow(already); focusWindow(already); }
+  w.body.textContent = "";
   const list = el("div", "list in");
   list.style.height = "100%";
   w.body.appendChild(list);
@@ -5256,6 +5337,10 @@ function applyStyle(id) {
 }
 
 function openDisplay() {
+  /* Same reopen guard as the Browser: a second open used to stack a
+     second style list under the first. */
+  const already = WINS.get("display");
+  if (already) { restoreWindow(already); focusWindow(already); return already; }
   const w = createWindow({ key: "display", title: "Display Properties",
                            width: 260, height: 380, icon: "gear", max: false, pad: false });
   const list = el("div", "list in");
@@ -5300,6 +5385,13 @@ async function boot() {
     /* Only after the first load succeeds -- subscribing before we know the
        token works would just produce a reconnect loop behind an auth wall. */
     subscribeEvents();
+    /* ...which leaves a window: everything the gateway published between
+       those reads and this subscription reached no one, and nothing would
+       have re-read afterwards. Open the desktop while an agent is mid-turn
+       and the board sat stale until the user happened to touch it
+       (reproduced: a task created ~1s after load never appeared). Re-read
+       once now that the feed is attached -- from here on events cover it. */
+    refreshBoardSoon();
     await restoreDesktop();
   } catch (e) {
     /* A bearer-gated gateway is the usual cause; say so plainly rather than

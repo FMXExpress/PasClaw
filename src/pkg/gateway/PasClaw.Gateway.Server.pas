@@ -5335,11 +5335,15 @@ begin
         else
         begin
           Inc(Idle);
-          { ~15s of quiet -> a comment frame. Comments are ignored by every
-            SSE client but keep the socket demonstrably alive. }
+          { ~15s of quiet -> a ping EVENT, not a comment. A comment frame
+            keeps proxies from closing the socket, but EventSource never
+            surfaces comments to the page -- so a feed that had silently
+            died upstream was indistinguishable from a quiet one, forever.
+            A data frame does both jobs: intermediaries see traffic, and
+            the client can run a watchdog on "no message in N seconds". }
           if Idle >= 15 then
           begin
-            Writer.WriteSSE(': keepalive'#10#10);
+            Writer.WriteSSE('data: {"type":"ping"}'#10#10);
             Idle := 0;
           end;
         end;

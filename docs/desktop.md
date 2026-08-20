@@ -444,7 +444,23 @@ poll. Events are small JSON objects with a monotonic `seq`:
 ```
 
 Types: `projects`, `project`, `task`, `job`, `joblog`, `app`, `page`,
-`workspace`, plus `hello` on connect and `gap` after an overflow.
+`workspace`, `turn-queued`, plus `hello` on connect, `ping` on an idle
+feed, and `gap` after an overflow.
+
+**The feed proves it is alive, and the client checks.** After ~15s of
+quiet the gateway sends `{"type":"ping"}` — a data frame, not an SSE
+comment, because `EventSource` never surfaces comments to the page: a
+connection that had died upstream was indistinguishable from a quiet one.
+The desktop runs a watchdog on that: 45s without any message means
+reconnect and re-read, rather than sit "live" showing a board that stopped
+updating.
+
+**Subscribe, then re-read.** The client subscribes only after its first
+load succeeds (subscribing behind an auth wall just loops), which leaves a
+window where events published during those reads reached nobody. Opening
+the desktop while an agent was mid-turn left the board stale until the user
+happened to touch it. The client now re-reads the board immediately after
+attaching the feed, so the gap is covered from both sides.
 
 **Every terminal state reaches the stream.** Three of them used to be
 missing, which meant the events a client would most want to act on were the
