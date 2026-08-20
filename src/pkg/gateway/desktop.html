@@ -2308,22 +2308,32 @@ function slugFor(title) {
    projects and would now both derive "Timer", the second overwriting
    the first one's index.html.
 
-   Returns { title, name } to pass to the create; name is the slug it
-   reserved. Falls back to a timestamped suffix rather than failing,
-   because refusing to build is worse than an ugly name. */
+   Returns { title, name, siblings } to pass to the create; name is the
+   slug it reserved, and siblings names the projects it had to step over
+   to find a free one. Falls back to a timestamped suffix rather than
+   failing, because refusing to build is worse than an ugly name.
+
+   siblings exists because stepping over them quietly is how a workspace
+   fills up with seventeen variations of one idea: each build asked for
+   "Tiny page that says hello", got -2, -3, -4 ... and nothing ever said
+   the other sixteen were there. The disambiguation is right; doing it
+   silently is not. */
 async function freeProjectName(title) {
   title = String(title || "").trim() || "App";
   let taken = new Set();
   try {
     taken = new Set(((await api("/v1/projects")).projects || []).map(p => p.name));
   } catch {}
+  const siblings = [];
+  const base = slugFor(title);
   for (let n = 1; n <= 20; n++) {
     const t = n === 1 ? title : `${title} ${n}`;
     const slug = slugFor(t);
-    if (slug && !taken.has(slug)) return { title: t, name: slug };
+    if (slug && !taken.has(slug)) return { title: t, name: slug, siblings };
+    if (slug) siblings.push(slug);
   }
   const t = `${title} ${Date.now().toString().slice(-5)}`;
-  return { title: t, name: slugFor(t) };
+  return { title: t, name: slugFor(t), siblings, base };
 }
 
 /* Start a project from a memo. Returns the slug it made, so the shell can
@@ -2337,6 +2347,34 @@ async function createAppFrom(text, plan) {
     /* A free name first -- the create is idempotent, so asking for one
        that is taken quietly hands back somebody else's project. */
     const want = await freeProjectName(title);
+
+    /* Near-duplicates get named out loud, once, before another one
+       exists. Asked here rather than reported afterwards because after
+       the create the damage is done and nobody deletes the extra. The
+       default is the useful one: carry on in the project you already
+       have. */
+    if (want.siblings && want.siblings.length) {
+      const list = want.siblings.slice(0, 8).join(", ") +
+                   (want.siblings.length > 8 ? ", ..." : "");
+      const another = confirm(
+        `You already have ${want.siblings.length} project` +
+        `${want.siblings.length === 1 ? "" : "s"} like this:\n\n  ${list}\n\n` +
+        `OK      -- make another one, "${want.title}"\n` +
+        `Cancel  -- open ${want.siblings[want.siblings.length - 1]} and ` +
+        `continue there`);
+      if (!another) {
+        const keep = want.siblings[want.siblings.length - 1];
+        openChat(keep);
+        /* The request goes in the composer, unsent: continuing in an
+           existing project is a different act from starting one, and it
+           is the user's to confirm. */
+        const c = projectChat(keep);
+        const ta = c.root.querySelector("textarea");
+        if (ta) { ta.value = text; ta.focus(); }
+        return keep;
+      }
+    }
+
     const j = await api("/v1/projects", { method: "POST",
       body: { title: want.title, name: want.name } });
     await loadProjects();
@@ -3335,8 +3373,41 @@ function paintTree() {
       const tt = el("span", "twist", t.jobs ? (t.__open ? "▼" : "▶") : "");
       tr.appendChild(tt);
       const lbl = el("span", "st-" + t.status, t.id + "  " + t.title);
+      lbl.style.flex = "1 1 auto";
       tr.appendChild(lbl);
       tr.title = t.notes || "";
+
+      /* Run the task. The route has always existed and the tree has
+         always shown the jobs it produces -- there was simply no gesture
+         to start one, so "run this task" meant leaving the desktop for
+         curl. A task the agent is already working on is not offered the
+         button; a finished one is, because re-running a done task is a
+         normal thing to want. */
+      if (t.status !== "active") {
+        const run = el("button", "btn", "Run");
+        run.title = "Hand this task to PasClaw and watch the job log";
+        run.style.cssText = "padding:0 6px;font-size:10px;line-height:14px";
+        run.addEventListener("click", async e => {
+          e.stopPropagation();          /* not a row toggle */
+          run.disabled = true;
+          try {
+            const j = await api(`/v1/projects/${p.name}/tasks/${t.id}/run`,
+                                { method: "POST", body: {} });
+            /* Open the log straight away: a job with nowhere to watch it
+               is the same silence the Run button was added to end. The
+               row's own state arrives on the event feed. */
+            if (j && j.job) openJobLog(p.name, t.id, j.job);
+          } catch (err) {
+            /* 503 with no agent attached is the common one, and it is a
+               setup state with a known cause -- say it rather than
+               leaving a button that did nothing. */
+            alert(err.message);
+            run.disabled = false;
+          }
+        });
+        tr.appendChild(run);
+      }
+
       tr.addEventListener("click", async () => {
         if (!t.jobs) return;
         t.__open = !t.__open;
@@ -3374,7 +3445,23 @@ function paintTree() {
 
 async function loadTasks(project) {
   const j = await api(`/v1/projects/${project}/tasks`);
-  (S.tree[project] || (S.tree[project] = {})).tasks = j.tasks || [];
+  const st = S.tree[project] || (S.tree[project] = {});
+  /* Carry the row's UI state across the reload. A task row remembers
+     whether the user expanded it and the job list they expanded it to
+     see, and those live on the task object -- so replacing the array
+     wholesale collapsed every open row. That is worst exactly when it
+     matters: running a task emits events, the board refreshes on them,
+     and the job list you opened to watch snapped shut. Jobs are dropped
+     rather than kept so the reopened row re-reads them; what is
+     preserved is the user's gesture, not stale data. */
+  const wasOpen = new Set((st.tasks || []).filter(t => t.__open).map(t => t.id));
+  st.tasks = j.tasks || [];
+  await Promise.all(st.tasks.filter(t => wasOpen.has(t.id)).map(async t => {
+    t.__open = true;
+    try {
+      t.__jobs = (await api(`/v1/projects/${project}/tasks/${t.id}/jobs`)).jobs || [];
+    } catch { t.__jobs = []; }
+  }));
 }
 
 async function newProject() {
@@ -5100,6 +5187,17 @@ function openBrowser(pageId, initialQuery, initialKind) {
       status.textContent = "";
       status.appendChild(el("span", "grounded",
         `Now a project: ${j.project} \u2014 ask PasClaw to change it`));
+      /* Promoting the same page twice is easy to do by accident, and the
+         second one lands beside the first under a numbered name. Not a
+         question here -- the copy already exists -- but the status bar
+         should say the neighbours are there rather than let them pile up
+         unnoticed. */
+      if (want.siblings && want.siblings.length)
+        status.appendChild(el("span", "muted",
+          `  (${want.siblings.length} similar project` +
+          `${want.siblings.length === 1 ? "" : "s"} already: ` +
+          want.siblings.slice(0, 3).join(", ") +
+          (want.siblings.length > 3 ? ", ..." : "") + ")"));
     } catch (e) {
       status.textContent = "";
       status.appendChild(el("span", "ungrounded", e.message));
@@ -5218,28 +5316,142 @@ function openFiles(startPath) {
 /* A file, in a document window. Binary files say so rather than rendering
    as mojibake, and a truncated read says it was truncated -- a viewer that
    quietly shows you the first 64KB of a log is worse than one that admits
-   to it. */
+   to it.
+
+   Three kinds of file, three windows, matching what the FMX client has
+   always done: a document renders, a program's bytes get a hex viewer,
+   and everything else is text. The web viewer used to answer all three
+   with source text or "(binary file, N bytes)" -- technically honest and
+   useless for the two cases where the format IS the content. */
 async function openFileView(pathStr, name) {
+  const ext = (String(name || "").match(/\.[a-z0-9]+$/i) || [""])[0].toLowerCase();
   const w = createWindow({ title: name || "File", width: 620, height: 440,
                            icon: "page", pad: false });
-  const pre = el("pre");
-  pre.style.cssText = "margin:0;padding:6px;overflow:auto;height:100%;" +
-                      "white-space:pre-wrap;word-break:break-word;font-size:11px";
-  w.body.appendChild(pre);
   const status = el("div", "statusbar thin", "");
   w.node.appendChild(status);
+
   try {
     const j = await api("/v1/fs/read?path=" + encodeURIComponent(pathStr));
+
+    /* Bytes. The peek route streams a bounded window and reports the full
+       size, so this pages through a gigabyte without downloading it --
+       which is the case that matters when the gateway is remote. */
     if (j.binary) {
-      pre.textContent = "(binary file, " + j.size + " bytes)";
-    } else {
-      pre.textContent = j.content || "";
-      if (j.truncated) status.textContent = "truncated";
+      await hexViewInto(w, status, pathStr, j.size || 0);
+      return w;
     }
+
+    /* A document. Rendered, not recited -- but in a frame with an EMPTY
+       sandbox: no scripts, no forms, no navigation, and no same-origin,
+       so a page found in the workspace cannot reach this desktop's
+       gateway or read its token. srcdoc rather than a src pointing at
+       the file, because /v1/fs serves workspace files as text on
+       purpose and should keep doing so. */
+    if (ext === ".html" || ext === ".htm") {
+      const bar = el("div");
+      bar.style.cssText = "display:flex;gap:4px;padding:3px;align-items:center";
+      const asPage = el("button", "btn", "Rendered");
+      const asText = el("button", "btn", "Source");
+      bar.appendChild(asPage); bar.appendChild(asText);
+      bar.appendChild(el("span", "muted", "scripts are disabled in this view"));
+      w.body.appendChild(bar);
+
+      const frame = el("iframe", "app");
+      frame.setAttribute("sandbox", "");
+      frame.style.cssText = "width:100%;height:calc(100% - 28px);border:0;background:#fff";
+      frame.srcdoc = j.content || "";
+      const src = el("pre");
+      src.style.cssText = "margin:0;padding:6px;overflow:auto;height:calc(100% - 28px);" +
+                          "white-space:pre-wrap;word-break:break-word;font-size:11px;display:none";
+      src.textContent = j.content || "";
+      w.body.appendChild(frame); w.body.appendChild(src);
+      const pick = rendered => {
+        frame.style.display = rendered ? "" : "none";
+        src.style.display   = rendered ? "none" : "";
+      };
+      asPage.addEventListener("click", () => pick(true));
+      asText.addEventListener("click", () => pick(false));
+      status.textContent = (j.truncated ? "truncated -- " : "") + "HTML document";
+      return w;
+    }
+
+    const pre = el("pre");
+    pre.style.cssText = "margin:0;padding:6px;overflow:auto;height:100%;" +
+                        "white-space:pre-wrap;word-break:break-word;font-size:11px";
+    pre.textContent = j.content || "";
+    w.body.appendChild(pre);
+    if (j.truncated) status.textContent = "truncated";
   } catch (e) {
+    const pre = el("pre");
+    pre.style.cssText = "margin:0;padding:6px";
     pre.textContent = e.message;
+    w.body.appendChild(pre);
   }
   return w;
+}
+
+/* The hex viewer: one 1 KiB page of raw bytes at a time, over /v1/fs/peek.
+   The route was built for exactly this and had no caller -- the web UI
+   answered every binary file with its size and nothing else. */
+async function hexViewInto(w, status, pathStr, total) {
+  const PAGE = 1024;
+  let offset = 0;
+
+  const bar = el("div");
+  bar.style.cssText = "display:flex;gap:4px;padding:3px;align-items:center";
+  const prev = el("button", "btn", "<");
+  const next = el("button", "btn", ">");
+  const at = el("span", "muted", "");
+  at.style.cssText = "font-family:monospace";
+  bar.appendChild(prev); bar.appendChild(next); bar.appendChild(at);
+  w.body.appendChild(bar);
+
+  const pre = el("pre");
+  pre.style.cssText = "margin:0;padding:6px;overflow:auto;height:calc(100% - 28px);" +
+                      "font-family:monospace;font-size:11px;white-space:pre";
+  w.body.appendChild(pre);
+
+  /* Classic three columns: offset, hex, and the printable rendering --
+     the part that makes a header or an embedded string readable at a
+     glance, which is the whole reason to open a binary at all. */
+  const render = bytes => {
+    const lines = [];
+    for (let i = 0; i < bytes.length; i += 16) {
+      const row = bytes.slice(i, i + 16);
+      const hex = [...row].map(b => b.toString(16).padStart(2, "0")).join(" ");
+      const txt = [...row].map(b => (b >= 32 && b < 127) ? String.fromCharCode(b) : ".").join("");
+      lines.push((offset + i).toString(16).padStart(8, "0") + "  " +
+                 hex.padEnd(47, " ") + "  " + txt);
+    }
+    return lines.join("\n");
+  };
+
+  async function load() {
+    prev.disabled = offset <= 0;
+    try {
+      /* Raw bytes, so this goes around api() -- which parses text -- and
+         carries the bearer the same way every other call does. */
+      const t = token();
+      const r = await fetch(`/v1/fs/peek?path=${encodeURIComponent(pathStr)}` +
+                            `&offset=${offset}&len=${PAGE}`,
+                            t ? { headers: { authorization: "Bearer " + t } } : {});
+      if (!r.ok) throw new Error("http " + r.status);
+      /* The server reports the true size; trust it over the listing's,
+         which may be stale by the time the window opens. */
+      const hdr = parseInt(r.headers.get("X-File-Total") || "", 10);
+      if (!isNaN(hdr)) total = hdr;
+      const bytes = new Uint8Array(await r.arrayBuffer());
+      pre.textContent = bytes.length ? render(bytes) : "(end of file)";
+      at.textContent = `${offset} - ${offset + bytes.length} of ${total} bytes`;
+      next.disabled = offset + bytes.length >= total;
+    } catch (e) {
+      pre.textContent = e.message;
+    }
+  }
+  prev.addEventListener("click", () => { offset = Math.max(0, offset - PAGE); load(); });
+  next.addEventListener("click", () => { offset += PAGE; load(); });
+  status.textContent = "binary -- hex view";
+  await load();
 }
 
 /* ==========================================================================

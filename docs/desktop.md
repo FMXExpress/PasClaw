@@ -152,6 +152,14 @@ else happened to create one. The gateway answers as soon as the job is
 *open* and runs the turn on its own thread, so the tree fills in through
 live events rather than the window blocking for the length of the turn.
 
+In the **web desktop** the same gesture is a **Run** button on the task row
+itself, in the projects tree. It starts the job and opens its log in one
+click — a job nobody can watch is the same silence as no job at all. A task
+the agent is already working (`active`) is not offered the button; a
+finished one is, since re-running a done task is an ordinary thing to want.
+The row's own state arrives on the event feed, so it follows the job
+without a reload.
+
 The menu lists each project's **Tasks (n open of m)** under it, which opens
 the Projects window with that project selected and expanded.
 
@@ -603,6 +611,16 @@ changes. Two things travel with it: the sources footer (provenance does not
 stop mattering because a document became editable) and a `pasclaw.js` tag,
 so the first "now make it sort by date" has an SDK to reach for.
 
+**Near-duplicates are named out loud.** `CreateProject` is idempotent, so
+every caller that means "a NEW project" first reserves a free slug —
+`timer`, then `timer-2`, `timer-3`. Reserving quietly is how a workspace
+fills up with seventeen variations of one idea, each build stepping over
+the last without a word. So the step-over is now reported: building from
+the shell names the projects that already match and offers to continue in
+the newest one instead (the default), and promotion says in its status bar
+how many neighbours the new app has. The disambiguation was always right;
+doing it silently was not.
+
 The same wiring backs `POST /v1/projects/<n>/tasks/<t>/run`, which opens a
 job, runs a turn on its own thread (the HTTP call returns the job id
 immediately), streams output into the job log, and closes the job. A task
@@ -822,6 +840,24 @@ over whatever you were reading, and the tab remembers the *path*, so coming
 back to it re-reads the file. It is fetched through `/v1/fs`, not as a
 `file://` URL: a remote gateway's files are not on this machine, and the
 browser control cannot send the bearer token.
+
+**A file opens as what it is.** Both clients now agree on three cases,
+where the web one used to answer all of them with source text or a byte
+count:
+
+- An `.html` file **renders**, with a Source button beside it. The frame
+  carries an *empty* `sandbox` attribute — no scripts, no forms, no
+  navigation, no same-origin — because a document found in the workspace
+  is not trusted code, and one that could reach this origin could read the
+  desktop's bearer token out of `localStorage`. It is passed as `srcdoc`
+  rather than pointed at a URL, so `/v1/fs` keeps serving workspace files
+  as text.
+- A **binary** file opens in a hex view: offset, hex, and the printable
+  column that makes a header or an embedded string readable. It pages
+  through `/v1/fs/peek`, 1 KiB at a time, which reports the true size in
+  `X-File-Total` — so a gigabyte file is inspectable without downloading
+  it, which is the case that matters against a remote gateway.
+- Anything else is text, and a truncated read still says so.
 
 ---
 
