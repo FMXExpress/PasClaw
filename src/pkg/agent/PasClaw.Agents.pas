@@ -203,6 +203,7 @@ uses
   DateUtils,
   PasClaw.Utils,
   PasClaw.JSON,
+  PasClaw.Desktop.Events,   { PublishAgent -- the roster does not poll }
   PasClaw.Logger,
   PasClaw.Workspaces,
   PasClaw.Agent.Steering,
@@ -583,6 +584,17 @@ begin
     Exit;
   end;
   LogInfo('agents: %s -> %s (%s)', [Msg.From, Info.Name, Delivered]);
+  (* Tell the screens. The roster and the agent-chat window subscribe to
+     this event and deliberately do not poll, so without it a message
+     from another agent, a supervisor, or an HTTP client changed the
+     record and the pending count while every open desktop kept showing
+     the old numbers until some unrelated run happened to fire an event.
+
+     Published HERE rather than at each call site because every sender
+     -- the tool, the HTTP route, NotifyParent -- funnels through this
+     one function, and a chokepoint cannot be forgotten by the next
+     caller someone adds. *)
+  PublishAgent(Info.Name);
   Result := True;
 end;
 

@@ -70,6 +70,18 @@ Every message carries its sender in the envelope — `Message from <who>:
 instruction arriving mid-turn is exactly the shape a prompt injection
 wants.
 
+A backlog bigger than one drain is **not** lost. `RunToolLoop` drains
+with a small fixed cap so a runaway pusher cannot grow the history
+without limit; anything beyond it is now put back for the next
+iteration rather than discarded. The cap bounds one batch, it does not
+throw messages away — which mattered the moment this queue stopped
+being a human typing course corrections and became a mailbox, where a
+dropped message was recorded as delivered and never seen.
+
+Every delivery publishes an `agent` event, so the roster (which
+subscribes rather than polls) reflects a message that arrived from
+another agent, a supervisor, or an HTTP client.
+
 ### The record outlives the queue
 
 `messages.jsonl` is the accountability half. The steering queue is
@@ -153,6 +165,12 @@ either.
 to check its messages and carry on — and the messages arrive through the
 steering queue like any other, so a woken agent is never shown the same
 instruction twice (once as the user turn and once as a note).
+
+The run is **reserved atomically** before the worker starts. `busy` is
+read from the session turn lock, which the worker only takes once the
+turn is under way — so two requests arriving together would both see a
+free lock and both start, the second silently queueing behind the first
+instead of getting its 409. The reservation closes that window.
 
 **A second run is refused, not queued.** The turn lock would serialise it
 safely, but "safely" there means the caller waits an unknown time for a

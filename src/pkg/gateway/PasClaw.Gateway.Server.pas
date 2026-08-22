@@ -6637,6 +6637,20 @@ const
 var
   GAgentRunLock: TCriticalSection = nil;
   GAgentRunsInFlight: Integer = 0;
+  (* Which agents have a run RESERVED -- started, or about to be.
+
+     AgentIsBusy reads the session turn lock, which the worker only
+     takes once RunAgentTurn is under way. Between the request being
+     accepted and that moment the lock is free, so two runs arriving
+     together (or a supervision sweep landing in that window) both saw
+     "not busy", both started, and the second silently queued behind the
+     first instead of getting its 409 -- repeating whatever the first
+     turn was already doing, provider calls included.
+
+     Reserved here, under the same lock as the in-flight counter, so
+     the check and the claim cannot be split. The turn lock still
+     guards correctness; this guards the promise we made the caller. *)
+  GAgentsRunning: TStringList = nil;
 
 type
   (* One agent turn on its own thread. Mirrors TJobRunThread, including
@@ -6665,6 +6679,7 @@ procedure TAgentRunThread.Execute;
 var
   Reply, Err: string;
   OK: Boolean;
+  I: Integer;
 begin
   SetThreadWorkspace(FWorkspace);
   { And who this thread IS, so a `send` this turn makes with no explicit
@@ -6688,6 +6703,10 @@ begin
     SetCallingAgent('');
     GAgentRunLock.Acquire;
     try
+      { Release the reservation with the slot -- an agent left in the
+        set could never be run again. }
+      I := GAgentsRunning.IndexOf(FAgent);
+      if I >= 0 then GAgentsRunning.Delete(I);
       if GAgentRunsInFlight > 0 then Dec(GAgentRunsInFlight);
     finally
       GAgentRunLock.Release;
@@ -6719,21 +6738,24 @@ begin
      see. An agent that is already working does not need to be told to
      work -- it needs to be TOLD something, which is what the mailbox is
      for, and which reaches it mid-turn anyway. *)
-  if AgentIsBusy(AgentName) then
-  begin
-    Err := 'agent ' + Info.Name + ' is already running -- send it a ' +
-           'message instead; it will see that mid-turn';
-    Exit;
-  end;
-
   GAgentRunLock.Acquire;
   try
+    { Reserved by another request that has not reached its turn lock
+      yet, or genuinely mid-turn -- both mean "already running" to the
+      caller, and both get the same answer. }
+    if (GAgentsRunning.IndexOf(Info.Name) >= 0) or AgentIsBusy(AgentName) then
+    begin
+      Err := 'agent ' + Info.Name + ' is already running -- send it a ' +
+             'message instead; it will see that mid-turn';
+      Exit;
+    end;
     if GAgentRunsInFlight >= MaxConcurrentAgentRuns then
     begin
       Err := Format('too many agent runs in flight (%d) -- try again shortly',
                     [GAgentRunsInFlight]);
       Exit;
     end;
+    GAgentsRunning.Add(Info.Name);
     Inc(GAgentRunsInFlight);
   finally
     GAgentRunLock.Release;
@@ -10234,6 +10256,8 @@ initialization
     lazily because the first caller may be a supervisor thread, and a
     lazy create racing itself is precisely what a lock is for. }
   GAgentRunLock               := TCriticalSection.Create;
+  GAgentsRunning              := TStringList.Create;
+  GAgentsRunning.Sorted       := True;
   { Unsorted on purpose: insertion order doubles as FIFO so the
     eviction in RememberProviderSignature (Delete(0)) actually drops
     the OLDEST entry. A sorted+dupIgnore TStringList would order by
@@ -10250,5 +10274,6 @@ finalization
   GGatewayStatsLock.Free;
   GStatsCacheLock.Free;
   GAgentRunLock.Free;
+  GAgentsRunning.Free;
 
 end.

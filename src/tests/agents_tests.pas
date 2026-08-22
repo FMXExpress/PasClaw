@@ -319,6 +319,83 @@ begin
   AssertTrue(FoundOk, 'an agent that just ran is not nudged for idleness');
 end;
 
+procedure TestBacklogIsNotDropped;
+var
+  Steers: TSteeringMessageArray;
+  Delivered, Err, Sid: string;
+  I: Integer;
+  Seen: array of string;
+  Found: Boolean;
+  J: Integer;
+begin
+  WriteLn('-- a backlog bigger than one drain is not lost');
+  (* The failure this pins: RunToolLoop drains with a small fixed cap
+     (4). When the queue was only ever a human typing course
+     corrections, dropping the rest was survivable. As an agent's
+     MAILBOX it is not -- message five onward was written to
+     messages.jsonl as delivered, never shown to the agent, and pending
+     fell to zero as if it had been read. *)
+  SaveAgent(MakeAgent('backlog', 'Backlog', 'Gets a lot of mail', ''), Err);
+  Sid := AgentSessionId('backlog');
+  ClearSteering(Sid);
+  for I := 1 to 6 do
+    AgentSend('backlog', 'operator', 'MSG-' + IntToStr(I), Delivered, Err);
+  AssertEqInt(AgentPending('backlog'), 6, 'six messages are waiting');
+
+  SetLength(Seen, 0);
+  { Two drains at the loop's real cap: everything must come through, in
+    order, and nothing twice. }
+  Steers := DrainSteering(Sid, 4);
+  AssertEqInt(Length(Steers), 4, 'the first drain takes the cap');
+  for I := 0 to High(Steers) do
+  begin
+    SetLength(Seen, Length(Seen) + 1);
+    Seen[High(Seen)] := Steers[I].Text;
+  end;
+  AssertEqInt(AgentPending('backlog'), 2,
+              'and the overflow is still queued rather than discarded');
+
+  Steers := DrainSteering(Sid, 4);
+  AssertEqInt(Length(Steers), 2, 'the next drain takes the rest');
+  for I := 0 to High(Steers) do
+  begin
+    SetLength(Seen, Length(Seen) + 1);
+    Seen[High(Seen)] := Steers[I].Text;
+  end;
+  AssertEqInt(Length(Seen), 6, 'all six were delivered across the two drains');
+  AssertEqInt(AgentPending('backlog'), 0, 'the queue is empty afterwards');
+
+  { Order, and no duplicates: each MSG-n exactly once, oldest first. }
+  for I := 1 to 6 do
+  begin
+    Found := False;
+    for J := 0 to High(Seen) do
+      if Pos('MSG-' + IntToStr(I), Seen[J]) > 0 then
+      begin
+        if Found then Fail('MSG-' + IntToStr(I) + ' was delivered twice');
+        Found := True;
+      end;
+    if not Found then Fail('MSG-' + IntToStr(I) + ' was lost');
+  end;
+  AssertTrue(Pos('MSG-1', Seen[0]) > 0, 'oldest first');
+  AssertTrue(Pos('MSG-6', Seen[High(Seen)]) > 0, 'newest last');
+
+  { A push that arrives while the backlog is being put back must land
+    AFTER it -- the leftovers are older. }
+  ClearSteering(Sid);
+  for I := 1 to 5 do
+    AgentSend('backlog', 'operator', 'OLD-' + IntToStr(I), Delivered, Err);
+  DrainSteering(Sid, 4);                       { leaves OLD-5 }
+  AgentSend('backlog', 'operator', 'NEW-1', Delivered, Err);
+  Steers := DrainSteering(Sid, 4);
+  AssertEqInt(Length(Steers), 2, 'the leftover and the new one both come back');
+  AssertTrue(Pos('OLD-5', Steers[0].Text) > 0,
+             'the preserved leftover stays ahead of what arrived after it');
+  AssertTrue(Pos('NEW-1', Steers[1].Text) > 0, 'and the newer one follows');
+
+  DeleteAgent('backlog', Err);
+end;
+
 procedure TestNotifyParent;
 var
   Msgs: TAgentMessageArray;
@@ -343,6 +420,7 @@ begin
   TestDeliveryLandsInTheRightQueue;
   TestLimitAndUnknown;
   TestNameSafety;
+  TestBacklogIsNotDropped;
   TestRunStateAndSupervision;
   TestNotifyParent;
   TestDelete;
