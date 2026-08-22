@@ -1034,6 +1034,23 @@ So the server names one executor. Each SSE subscriber is assigned an id and told
 
 Oldest-subscriber is arbitrary but *stable*, and stability is the property that matters: every command in a session lands on the same screen rather than scattering builds across tabs. The consequence worth knowing is that asking in a second tab can have the app open in the first one.
 
+### The near misses are accepted
+
+`desktop` is the only one of four sibling tools that takes a plural `actions` **array**; `project`, `task` and `agent` all take a singular `action` **string**. That is a strong prior toward the wrong key and the wrong arity, and it cost a real turn: *"build a book comparison app where I can enter 4 amazon book urls"* produced `desktop()` with no arguments at all and an error where the app should have been.
+
+So four shapes are read as what they plainly mean, rather than refused:
+
+| What arrived | Read as |
+|---|---|
+| `{"actions":[{"do":"tile"}]}` | itself — the documented shape |
+| `{"actions":{"do":"tile"}}` | a one-item list |
+| `{"actions":"[{\"do\":\"tile\"}]"}` | the parsed array |
+| `{"action":"build_app","title":…}` or `{"do":"tile"}` | one action, `action` renamed to `do` |
+
+Same trade the app manifest makes when it reads `type` as a synonym for `kind`: a request should not fail over a word when what was meant is unambiguous. The misspelt key is *renamed*, not duplicated, so nothing downstream sees both.
+
+A call that genuinely carries no action is still an error — coercion is for near misses, not for guessing. But the error now contains a **worked call** the model can copy, because that text is the whole of what it reads before its retry, and "missing required argument" is not something you can act on.
+
 ## Steering a running turn
 
 While a turn runs, the composer's button reads **Stop** — and pressing it stops. The Enter key carries the third meaning: **Enter with text in the box steers the running turn** instead of killing it. "Also make the header blue", typed mid-build, used to stop the build it was amending. The note goes to `/v1/steer` with the conversation's session id, the running loop picks it up at its next iteration, and the transcript shows it arrow-marked (`↳ also make the header blue`). Enter on an empty box still stops, so the keyboard-only path to Stop survives.

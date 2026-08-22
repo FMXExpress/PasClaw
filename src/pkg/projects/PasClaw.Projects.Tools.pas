@@ -49,6 +49,12 @@ function Tool_Project(const ArgsJSON: string; out ErrMsg: string): string;
 function Tool_Task(const ArgsJSON: string; out ErrMsg: string): string;
 function Tool_Desktop(const ArgsJSON: string; out ErrMsg: string): string;
 
+(* Exposed for tests: what a `desktop` call is READ as, before anything
+   is published. Returns the actions array as JSON, or '' when the call
+   carried nothing usable. Publishing is the side effect; this is the
+   decision, and the decision is what is worth pinning. *)
+function DesktopActionsJSON(const ArgsJSON: string): string;
+
 implementation
 
 uses
@@ -360,6 +366,104 @@ end;
    on the feed -- a desktop may be open, closed, or three of them may be
    connected at once, and blocking an agent turn on a browser that might
    not be there would be a worse contract than "asked". *)
+(* Turn what the model ACTUALLY sent into an actions array.
+
+   The documented shape is {"actions":[{"do":...}]} and the shell prompt
+   spells it out, but three sibling tools -- project, task, agent -- all
+   take a singular "action" STRING, so a model reaching for this one has
+   a strong prior toward the wrong key and the wrong arity. Observed in
+   real use: "build me a book comparison app" produced desktop() with no
+   arguments at all, the turn spent on an error instead of an app.
+
+   So the near misses are accepted rather than refused. Same trade the
+   app manifest makes when it reads "type" as a synonym for "kind": a
+   request should not fail over a word when what was meant is
+   unambiguous. Anything genuinely ambiguous still errors -- and the
+   error now shows a correct call, because the model's next move is a
+   retry and it should have the shape in front of it.
+
+   Returns nil when nothing usable is there; caller frees the result. *)
+function CoerceDesktopActions(Obj: TJsonObject): TJsonArray;
+var
+  One: TJsonObject;
+  Raw: string;
+begin
+  Result := nil;
+  if Obj = nil then Exit;
+
+  { 1. The documented shape. }
+  Result := Obj.ChildArray('actions');
+  if (Result <> nil) and (Result.Count > 0) then Exit;
+  if Result <> nil then FreeAndNil(Result);
+
+  { 2. A single action object under "actions" rather than a list. }
+  One := Obj.ChildObject('actions');
+  if One <> nil then
+  try
+    if One.Has('do') or One.Has('action') then
+    begin
+      Result := TJsonArray.Create;
+      Result.AddRaw(One.ToJSON);
+      Exit;
+    end;
+  finally
+    One.Free;
+  end;
+
+  { 3. The array as a STRING -- models stringify JSON arguments often
+       enough that refusing it is pedantry. }
+  Raw := Trim(Obj.GetStr('actions', ''));
+  if (Raw <> '') and (Raw[1] = '[') then
+  begin
+    try
+      Result := TJsonArray.Parse(Raw);
+    except
+      Result := nil;
+    end;
+    if (Result <> nil) and (Result.Count > 0) then Exit;
+    if Result <> nil then FreeAndNil(Result);
+  end;
+
+  (* 4. The action at the TOP level, unwrapped -- {"do":"tile"} or, from
+        the sibling tools' habit, {"action":"build_app","title":...}.
+        "action" is read as "do" only here, where there is no actions
+        array to disagree with it. *)
+  if Obj.Has('do') or (Trim(Obj.GetStr('action', '')) <> '') then
+  begin
+    One := TJsonObject.Parse(Obj.ToJSON);
+    try
+      if not One.Has('do') then
+        One.PutStr('do', Trim(Obj.GetStr('action', '')));
+      One.Remove('action');
+      Result := TJsonArray.Create;
+      Result.AddRaw(One.ToJSON);
+    finally
+      One.Free;
+    end;
+  end;
+end;
+
+function DesktopActionsJSON(const ArgsJSON: string): string;
+var
+  Obj: TJsonObject;
+  Arr: TJsonArray;
+  Err: string;
+begin
+  Result := '';
+  if not ArgObj(ArgsJSON, Obj, Err) then Exit;
+  try
+    Arr := CoerceDesktopActions(Obj);
+    if Arr = nil then Exit;
+    try
+      if Arr.Count > 0 then Result := Arr.ToJSON;
+    finally
+      Arr.Free;
+    end;
+  finally
+    Obj.Free;
+  end;
+end;
+
 function Tool_Desktop(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Obj: TJsonObject;
@@ -370,15 +474,25 @@ begin
   Result := '';
   if not ArgObj(ArgsJSON, Obj, ErrMsg) then Exit;
   try
-    Arr := Obj.ChildArray('actions');
+    Arr := CoerceDesktopActions(Obj);
     if (Arr = nil) or (Arr.Count = 0) then
     begin
-      ErrMsg := 'missing required argument: actions (a non-empty array of ' +
-                '{"do":...} objects)';
+      { A worked example, not just a complaint: this text is what the
+        model reads before its retry, and "here is the call" recovers a
+        turn that "missing required argument" spends. }
+      ErrMsg := 'missing required argument: actions. Send an array of ' +
+                '{"do":...} objects, e.g. ' +
+                '{"actions":[{"do":"build_app","title":"Book compare",' +
+                '"brief":"enter four Amazon book URLs and compare them"}]} ' +
+                'or {"actions":[{"do":"tile"}]}. Note the plural "actions" ' +
+                'and "do" -- this tool takes a LIST of actions, unlike the ' +
+                'project/task/agent tools which take a single "action".';
+      if Arr <> nil then Arr.Free;
       Exit;
     end;
     N := Arr.Count;
     Body := Arr.ToJSON;
+    Arr.Free;
   finally
     Obj.Free;
   end;
