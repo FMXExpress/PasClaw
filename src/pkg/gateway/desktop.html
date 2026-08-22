@@ -1761,8 +1761,11 @@ setInterval(() => {
   try { EV.src.close(); } catch {}
   EV.live = false;
   EV.lastMsg = 0;
+  /* The catch-up read rides on the new feed's hello frame, not on this
+     call: constructing an EventSource only starts a handshake, and a
+     re-read that runs before the server has subscribed us re-opens the
+     very window this watchdog exists to close. */
   subscribeEvents();
-  refreshBoardSoon();
 }, 15000);
 
 /* The board's own events: anything that changes the project set repaints
@@ -1812,7 +1815,23 @@ function refreshBoardSoon() {
    event feed opens with, so a command that names one executor can be
    recognised. */
 let MY_CLIENT = "";
-onDesktopEvent("hello", ev => { if (ev && ev.client) MY_CLIENT = ev.client; });
+onDesktopEvent("hello", ev => {
+  if (ev && ev.client) MY_CLIENT = ev.client;
+  /* Catch up on whatever happened while we were not listening.
+
+     The hello frame is the ONLY proof that this reader is registered:
+     the handler emits the response headers first (which is what fires
+     EventSource's `open`), calls DesktopSubscribe second, and writes
+     hello third -- so a re-read triggered on `open`, or worse right
+     after constructing the EventSource, can still run before the
+     server has anyone to publish to.
+
+     Hooked here rather than at the call sites so it covers every way a
+     feed begins: the first subscribe at boot, the watchdog's
+     reconnect, and EventSource's own automatic retry after a transient
+     drop -- which had no recovery read at all. */
+  refreshBoardSoon();
+});
 
 /* A turn parked behind another screen's turn on the same conversation.
 
@@ -5596,14 +5615,15 @@ async function boot() {
     await loadDesktops();
     /* Only after the first load succeeds -- subscribing before we know the
        token works would just produce a reconnect loop behind an auth wall. */
-    subscribeEvents();
     /* ...which leaves a window: everything the gateway published between
        those reads and this subscription reached no one, and nothing would
        have re-read afterwards. Open the desktop while an agent is mid-turn
        and the board sat stale until the user happened to touch it
-       (reproduced: a task created ~1s after load never appeared). Re-read
-       once now that the feed is attached -- from here on events cover it. */
-    refreshBoardSoon();
+       (reproduced: a task created ~1s after load never appeared). The
+       recovery re-read is triggered by the feed's own hello frame -- see
+       the handler -- because that is the first moment the server can
+       actually have us on its subscriber list. */
+    subscribeEvents();
     await restoreDesktop();
   } catch (e) {
     /* A bearer-gated gateway is the usual cause; say so plainly rather than

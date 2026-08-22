@@ -463,12 +463,21 @@ The desktop runs a watchdog on that: 45s without any message means
 reconnect and re-read, rather than sit "live" showing a board that stopped
 updating.
 
-**Subscribe, then re-read.** The client subscribes only after its first
-load succeeds (subscribing behind an auth wall just loops), which leaves a
-window where events published during those reads reached nobody. Opening
-the desktop while an agent was mid-turn left the board stale until the user
-happened to touch it. The client now re-reads the board immediately after
-attaching the feed, so the gap is covered from both sides.
+**Subscribe, then re-read — on the hello frame.** The client subscribes
+only after its first load succeeds (subscribing behind an auth wall just
+loops), which leaves a window where events published during those reads
+reached nobody. Opening the desktop while an agent was mid-turn left the
+board stale until the user happened to touch it.
+
+The catch-up read is triggered by `hello`, and the ordering is the whole
+point: the handler emits the response headers first (which is what fires
+`EventSource`'s `open`), calls `DesktopSubscribe` second, and writes
+`hello` third. So `hello` is the earliest frame that proves this reader is
+on the publisher's list — a re-read fired on `open`, or right after
+constructing the `EventSource`, can still race the handshake and land
+before the server has anyone to publish to. Hooking it to the frame also
+covers every way a feed begins: the first subscribe, the watchdog's
+reconnect, and `EventSource`'s own automatic retry after a transient drop.
 
 **Every terminal state reaches the stream.** Three of them used to be
 missing, which meant the events a client would most want to act on were the
