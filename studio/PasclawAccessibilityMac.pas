@@ -446,6 +446,7 @@ var
   Kids: NSMutableArray;
 begin
   if Form = nil then Exit;
+  if GRoots = nil then Exit;
   if GRoots.ContainsKey(Form) then Exit;   { idempotent, as on Windows }
 
   Win := WindowHandleToPlatform(Form.Handle).Wnd;
@@ -472,7 +473,11 @@ var
   Win: NSWindow;
   View: NSView;
 begin
-  if Form = nil then Exit;
+  { GRoots nil means this unit already finalized. The form's destructor
+    runs later than that -- FMX.Forms initializes before this unit, so it
+    finalizes after -- and it calls us unconditionally. Guard, or that call
+    dereferences a freed dictionary. Same reasoning as the Windows half. }
+  if (Form = nil) or (GRoots = nil) then Exit;
   if not GRoots.TryGetValue(Form, Root) then Exit;
   NSAccessibilityPostNotification(Root.GetObjectID,
     StrToNSStr(NSAccessibilityUIElementDestroyedNotification));
@@ -491,7 +496,12 @@ initialization
   GRoots := TObjectDictionary<TCommonCustomForm, TPasclawAXElement>.Create([doOwnsValues]);
 
 finalization
-  GRoots.Free;
+  { FreeAndNil, not Free: the form destructor calls UninstallMacAccessibility
+    after this point, and a freed-but-non-nil pointer would fault there.
+    doOwnsValues frees the elements; the contentView detach in Uninstall is
+    what keeps AppKit from holding a dangling child, so a form that skipped
+    Uninstall relies on the window being gone by now. }
+  FreeAndNil(GRoots);
 
 {$ELSE}
 

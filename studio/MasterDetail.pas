@@ -11,7 +11,7 @@ uses
   FMX.Platform, FMX.Graphics, FMX.Dialogs, FMX.StdCtrls, FMX.Layouts, FMX.ListBox,
   FMX.Memo, FMX.Edit, FMX.TabControl, FMX.Controls.Presentation,
   FMX.ScrollBox, FMX.MultiView, FMX.Objects,
-  PasclawAccessibility;
+  PasclawAccessibility, PasclawAccessibilityMac, PasclawAccessibilityLinux;
 
 type
   TChatTurn = record
@@ -1631,8 +1631,15 @@ end;
 
 destructor TMasterDetailForm.Destroy;
 begin
-  { Drop the window subclass before the handle goes away. }
+  { Drop the accessibility hooks before the handle goes away. All three
+    are called because PasclawStudio.dpr installs all three; each is a
+    no-op on the platforms it does not serve. The Mac and Linux halves
+    were previously installed and never uninstalled -- on macOS that left
+    the contentView holding accessibility children whose Delphi side was
+    about to be freed. }
   UninstallAccessibility(Self);
+  UninstallMacAccessibility(Self);
+  UninstallLinuxAccessibility(Self);
   if FRelayWorkerTimer <> nil then
     FRelayWorkerTimer.Enabled := False;
   if FRelayWorkerProcessHandle <> 0 then

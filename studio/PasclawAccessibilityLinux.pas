@@ -405,7 +405,10 @@ end;
 
 procedure UninstallLinuxAccessibility(Form: TCommonCustomForm);
 begin
-  if (Form = nil) or (GForm <> Form) then Exit;
+  { GObjects nil means this unit already finalized; the form destructor runs
+    after that and calls us unconditionally. Same guard as the other two
+    halves. }
+  if (Form = nil) or (GObjects = nil) or (GForm <> Form) then Exit;
   GObjects.Clear;
   if (GConn <> nil) and Assigned(dbus_connection_unref) then
   begin
@@ -419,7 +422,9 @@ initialization
   GObjects := TDictionary<string, TControl>.Create;
 
 finalization
-  GObjects.Free;
+  { FreeAndNil, not Free -- the form destructor calls
+    UninstallLinuxAccessibility after this point. }
+  FreeAndNil(GObjects);
   if GLib <> nil then dlclose(GLib);
 
 {$ELSE}
