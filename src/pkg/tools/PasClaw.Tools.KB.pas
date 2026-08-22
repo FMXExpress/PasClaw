@@ -115,7 +115,7 @@ begin
   if not Idx.Open(DefaultKBDbPath) then
   begin
     Idx := nil;
-    ErrMsg := 'knowledgebase unavailable (libsqlite3 missing or unreadable)';
+    ErrMsg := 'knowledgebase unavailable (' + SqliteBackendHint + ')';
     Exit;
   end;
   try
@@ -180,7 +180,7 @@ begin
   if not Idx.Open(DefaultKBDbPath) then
   begin
     Idx := nil;
-    ErrMsg := 'knowledgebase unavailable (libsqlite3 missing or unreadable)';
+    ErrMsg := 'knowledgebase unavailable (' + SqliteBackendHint + ')';
     Exit;
   end;
   try

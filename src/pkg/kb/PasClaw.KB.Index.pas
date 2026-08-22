@@ -93,6 +93,10 @@ type
       unknown. }
     function  GetChunks(const Path: string; ChunkNo, Window: Integer): string;
     function  Stats: TKBStats;
+    { Why the last Open returned False, verbatim from the driver.
+      '' when Open never failed. Callers render it through
+      PasClaw.Utils.SqliteOpenFailureReason. }
+    function  LastError: string;
   end;
 
 function NewKBIndex: IKBIndex;
@@ -388,6 +392,7 @@ type
     {$ENDIF}
     FOpen:   Boolean;
     FDbPath: string;
+    FLastError: string;
     { Vector sidecar (lazy). Mirrors PasClaw.Memory.Vector: every
       missing artifact degrades to FTS-only silently. }
     FVecTried: Boolean;
@@ -429,6 +434,7 @@ type
     function  Search(const Query: string; K: Integer): TKBHitArray;
     function  GetChunks(const Path: string; ChunkNo, Window: Integer): string;
     function  Stats: TKBStats;
+    function  LastError: string;
   end;
 
 function NewKBIndex: IKBIndex;
@@ -682,6 +688,7 @@ begin
     begin
       LogWarn('kb.index: failed to open %s (%s) — knowledgebase disabled',
               [DbPath, E.Message]);
+      FLastError := E.Message;
       {$IFDEF FPC}
       FreeAndNil(FTx);
       FreeAndNil(FConn);
@@ -691,6 +698,11 @@ begin
       FOpen := False;
     end;
   end;
+end;
+
+function TKBIndexImpl.LastError: string;
+begin
+  Result := FLastError;
 end;
 
 procedure TKBIndexImpl.Close;

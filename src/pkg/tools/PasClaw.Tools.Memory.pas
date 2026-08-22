@@ -13,9 +13,13 @@
         path | bm25 score | highlighted snippet
       one per line, smallest score first.
 
-  The DB lives at <home>/workspace/memory/.index.db. Missing / corrupt
-  / unloadable libsqlite3 degrades to "memory_search: index
-  unavailable" -- the rest of the agent continues to function.
+  The DB lives at <home>/workspace/memory/.index.db. A failed open
+  degrades to "memory_search: index unavailable" -- the rest of the
+  agent continues to function. The reported reason comes from the
+  driver exception (via IMemoryIndex.LastError), not from a guess:
+  the cause is a missing shared library only on the builds that link
+  SQLite dynamically, and an unwritable path or corrupt file on the
+  Delphi targets that link it statically.
 *)
 unit PasClaw.Tools.Memory;
 
@@ -113,7 +117,7 @@ var
   Dir:   string;
   Cfg:   TConfig;
   UseVector, DistillOn, IndexFailed: Boolean;
-  MdText, FactText: string;
+  MdText, FactText, OpenErr: string;
   FactHits: TStoredFactArray;
 begin
   ErrMsg := '';
@@ -169,6 +173,9 @@ begin
     Idx := NewMemoryIndex;
     if not Idx.Open(IndexDbPath) then
     begin
+      { Read the reason BEFORE dropping the reference -- releasing the
+        interface destroys the object that holds it. }
+      OpenErr := Idx.LastError;
       Idx := nil;
       { Index unavailable. If distilled facts are on, remember the failure
         and fall through so the fact store can still answer; otherwise this
@@ -177,7 +184,8 @@ begin
         flagged as a partial search if they do. }
       if not DistillOn then
       begin
-        ErrMsg := 'memory index unavailable (libsqlite3 missing or unreadable)';
+        ErrMsg := 'memory index unavailable (' +
+                  SqliteOpenFailureReason(OpenErr) + ')';
         Exit;
       end;
       IndexFailed := True;
@@ -243,7 +251,8 @@ begin
       real reason -- report it as unavailable rather than a misleading
       "no matches" (the notes were never searched). }
     if IndexFailed then
-      ErrMsg := 'memory index unavailable (libsqlite3 missing or unreadable); ' +
+      ErrMsg := 'memory index unavailable (' +
+                SqliteOpenFailureReason(OpenErr) + '); ' +
                 'no matching distilled facts either'
     else
       Result := Format('(no matches for %s in %s)', [Query, Dir]);

@@ -40,6 +40,7 @@ implementation
 uses
   SysUtils, Classes, DateUtils,
   PasClaw.CliUI,
+  PasClaw.Utils,
   PasClaw.KB.Index;
 
 procedure Help;
@@ -74,9 +75,9 @@ begin
   Result := Idx.Open(DefaultKBDbPath);
   if not Result then
   begin
-    Idx := nil;
     PrintErr('could not open ' + DefaultKBDbPath +
-             ' (libsqlite3 missing or path unwritable)');
+             ' (' + SqliteOpenFailureReason(Idx.LastError) + ')');
+    Idx := nil;
   end;
 end;
 

@@ -1710,9 +1710,10 @@ begin
   Idx := NewKBIndex;
   if not Idx.Open(DefaultKBDbPath) then
   begin
-    Idx := nil;
     PrintLn('  ' + Ansi.Red + '✗' + Ansi.Reset +
-      ' knowledgebase unavailable (libsqlite3 missing) -- skipped');
+      ' knowledgebase unavailable (' +
+      SqliteOpenFailureReason(Idx.LastError) + ') -- skipped');
+    Idx := nil;
     Exit;
   end;
   try
