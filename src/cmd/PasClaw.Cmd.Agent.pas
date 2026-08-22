@@ -45,6 +45,7 @@ uses
   PasClaw.Tools.DB,
   PasClaw.Tools.Cron,
   PasClaw.Projects.Tools,
+  PasClaw.Agents.Tools,           { agent -- standing agents and their mailbox }
   PasClaw.Tools.WebSearch,
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
@@ -438,6 +439,14 @@ begin
      tools in the schema is two extra tools the model reads every turn. *)
   if EnableDesktopTools then
     RegisterProjectTools(Result);
+  (* agent: standing agents and the mailbox between them. Gates itself on
+     the loaded config rather than taking a parameter -- the same shape
+     send_message uses below, and it keeps the CLI in step with `gateway`
+     and `serve` without threading a flag through every caller of this
+     function. Without it, an operator who set agent_tools_enabled got
+     the tool on the gateway and silently nothing on the CLI. *)
+  if LoadConfig.AgentToolsEnabled then
+    RegisterAgentTools(Result);
   { plan_write registers when running in pmPlan mode (Cmd.Plan and
     `pasclaw agent --mode plan` both arrive here with the flag set).
     The tool is tcReadOnly even though it writes the one plan-meta

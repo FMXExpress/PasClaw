@@ -132,6 +132,12 @@ procedure PublishPageProgress(const Phase, Detail: string);
    say "waiting for another turn on this conversation" instead. *)
 procedure PublishTurnQueued(const SessionId, ClientId: string);
 
+(* A standing agent's state changed -- it started a turn, finished one,
+   or was messaged. Carries only the NAME: run state and pending count
+   are read live, so an event that carried them would be stale the
+   moment it was queued. The roster re-reads the agent instead. *)
+procedure PublishAgent(const Name: string);
+
 implementation
 
 uses
@@ -399,6 +405,11 @@ procedure PublishTurnQueued(const SessionId, ClientId: string);
 begin
   PublishRaw('{"type":"turn-queued","session":"' + Esc(SessionId) +
              '","client":"' + Esc(ClientId) + '"}');
+end;
+
+procedure PublishAgent(const Name: string);
+begin
+  PublishRaw('{"type":"agent","name":"' + Esc(Name) + '"}');
 end;
 
 initialization

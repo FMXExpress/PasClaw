@@ -22,6 +22,7 @@ The main `README.md` at the repo root is the landing page. These docs go deeper.
 - [Checkpoints](./checkpoints.md) — `/undo` / `/redo` for file-edit rewind via the zpaq-backed snapshot journal.
 - [MCP servers](./mcp.md) — stdio + streamable-HTTP transports, `pasclaw mcp catalog`, the bundled built-in list.
 - [Cron](./cron.md) — scheduled tasks, at-least-once delivery, per-job channel sinks.
+- [Agents](./agents.md) — standing agents: a durable roster, and the mailbox they reach each other through (including mid-turn).
 
 ## Interfaces
 

@@ -40,6 +40,7 @@ uses
   PasClaw.Tools.SendMessage,
   PasClaw.Tools.Cron,             { cron tool -- gated on cron_tool_enabled }
   PasClaw.Projects.Tools,         { project / task -- the desktop board }
+  PasClaw.Agents.Tools,           { agent -- standing agents and their mailbox }
   PasClaw.Gateway.Desktop,        { SetAppsOrigin -- the apps listener's origin }
   PasClaw.Apps,                   { SetFrameParentOrigin -- who may frame apps }
   PasClaw.Tools.WebSearch,
@@ -346,6 +347,10 @@ begin
         the flag for letting the model manage it. Opt-in, same reasoning
         as the cron tool above. }
       if Cfg.DesktopToolsEnabled then RegisterProjectTools(Reg);
+      { agent -- standing colleagues and the mailbox between them.
+        Its own flag: managing the board and creating colleagues are
+        different powers to hand a model. }
+      if Cfg.AgentToolsEnabled then RegisterAgentTools(Reg);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
       SetDBConfigFromJSON(Cfg.DatabaseJSON);   { db_* connections (inert if no "database" section) }
