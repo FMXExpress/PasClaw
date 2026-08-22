@@ -176,7 +176,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test openssl-1.0 test-doctor test-provider-retry smoke lint-pascal-shape test-workspaces test-projects test-apps test-mail test-desktop-routes test-desktop test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-sqlite-hint test-memory-search-roundtrip test-shell-cwd-report lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
+.PHONY: all clean run test openssl-1.0 test-doctor test-provider-retry smoke lint-pascal-shape test-workspaces test-projects test-apps test-mail test-desktop-routes test-desktop test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-shell-cwd-report lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -341,6 +341,16 @@ test-relay-servertools: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/relay_servertools_tests.pas -o$(BUILDDIR)/relay_servertools_tests
 	@$(BUILDDIR)/relay_servertools_tests
+
+# /v1/stats by_model must credit the model that actually spent the tokens.
+# Buckets keyed by endpoint alone attributed a whole cumulative total to
+# whichever model ran last (150,015 tokens credited to one that used 15).
+test-stats-attribution: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/stats_attribution_repro.pas -o$(BUILDDIR)/stats_attribution_repro
+	@PASCLAW_HOME=$$(mktemp -d) ; export PASCLAW_HOME ; \
+	$(BUILDDIR)/stats_attribution_repro ; rc=$$? ; \
+	rm -rf "$$PASCLAW_HOME" ; exit $$rc
 
 test-json-utf8-roundtrip: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
@@ -1221,4 +1231,15 @@ test-fs-grep-tier5-6: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/fs_grep_tier5_6_tests.pas -o$(BUILDDIR)/fs_grep_tier5_6_tests
 	@$(BUILDDIR)/fs_grep_tier5_6_tests
 
-test: smoke test-doctor test-provider-retry test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-sqlite-hint test-memory-search-roundtrip test-relay-servertools test-shell-cwd-report test-shell-denylist-bypass test-skills-provenance test-ssrf-guard test-read-file-encoding test-db-tools test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-prompt-batching test-turn-clock test-max-iter-notice test-max-iter-notice test-plan-build-mode test-config-profile test-tool-rpc test-session-search test-session-port test-subagent-bg test-subagent-default test-subagent-model-arg test-zip-pack test-http-proxy test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-fs-tool-naming test-workspace-paths test-guardfall test-skills-prompt test-mcp-result test-mcp-compact test-config-mcp-flags test-workflow test-progress-ledger test-otel test-logger-level-quiet test-gateway-token test-fs-secret-gate test-config-env-subst test-delphi-build test-desktop
+test: smoke test-doctor test-provider-retry test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-relay-servertools test-shell-cwd-report test-shell-denylist-bypass test-skills-provenance test-ssrf-guard test-read-file-encoding test-db-tools test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-prompt-batching test-turn-clock test-max-iter-notice test-max-iter-notice test-plan-build-mode test-config-profile test-tool-rpc test-session-search test-session-port test-subagent-bg test-subagent-default test-subagent-model-arg test-zip-pack test-http-proxy test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-fs-tool-naming test-workspace-paths test-guardfall test-skills-prompt test-mcp-result test-mcp-compact test-config-mcp-flags test-workflow test-progress-ledger test-otel test-logger-level-quiet test-gateway-token test-fs-secret-gate test-config-env-subst test-delphi-build test-desktop
+
+# Benchmark harness for the /v1/stats aggregation path. Prints timings,
+# not pass/fail -- cited by docs/stats-collection-plan.md. Not in `test`.
+bench-stats: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/stats_bench.pas -o$(BUILDDIR)/stats_bench
+	@for n in 10 100 500 2000 ; do \
+	  PASCLAW_HOME=$$(mktemp -d) ; export PASCLAW_HOME ; \
+	  $(BUILDDIR)/stats_bench $$n 20 ; \
+	  rm -rf "$$PASCLAW_HOME" ; \
+	done
