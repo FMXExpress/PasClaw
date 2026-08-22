@@ -649,6 +649,7 @@ uses
                               tasks, jobs, apps, pages }
   PasClaw.Desktop.Events,   { the /v1/desktop/events fan-out }
   PasClaw.Agents,           { standing agents: roster, mailbox, run state }
+  PasClaw.Agents.Tools,     { SetCallingAgent -- who a `send` is from }
   PasClaw.Projects.Store,   { job/task records the desktop callbacks write }
   PasClaw.Apps.Runner,      { StopAllApps on shutdown }
   PasClaw.Pages,            { BuildPagePrompt / TPageKind }
@@ -6666,6 +6667,9 @@ var
   OK: Boolean;
 begin
   SetThreadWorkspace(FWorkspace);
+  { And who this thread IS, so a `send` this turn makes with no explicit
+    "from" is recorded as the agent rather than as the operator. }
+  SetCallingAgent(FAgent);
   try
     OK := False; Reply := ''; Err := 'no gateway available';
     if GDesktopGateway <> nil then
@@ -6681,6 +6685,7 @@ begin
       polling. }
     PublishAgent(FAgent);
   finally
+    SetCallingAgent('');
     GAgentRunLock.Acquire;
     try
       if GAgentRunsInFlight > 0 then Dec(GAgentRunsInFlight);

@@ -92,6 +92,16 @@ flag answers "may the model manage the project board", this one answers
 "may the model create colleagues and message them", and an operator can
 reasonably want either without the other.
 
+Registered wherever the agent loop runs — `gateway`, `serve` and the CLI —
+so the flag means the same thing on all three.
+
+A `send` with no explicit `from` is attributed to **whichever agent's turn
+is making the call**, tracked per-thread because up to 8 turns run at once
+and a shared global would credit one agent's message to whichever other
+agent started last. Outside an agent turn — an operator over HTTP, a
+script — it falls back to `operator`, which is the honest answer: an
+unattributed message should not claim to be from an agent.
+
 ```
 agent  action = list | create | get | delete | send | inbox
 ```

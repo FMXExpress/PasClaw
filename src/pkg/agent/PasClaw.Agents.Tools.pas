@@ -35,6 +35,19 @@ uses
 
 procedure RegisterAgentTools(R: TToolRegistry);
 
+(* Who is calling, for THIS thread.
+
+   A `send` with no explicit "from" is attributed to whoever the runner
+   says is running -- so an agent messaging a colleague is recorded as
+   itself rather than as the operator. Set by the agent runner around a
+   turn and cleared after.
+
+   A THREADVAR, not a global: up to MaxConcurrentAgentRuns turns run at
+   once, and a shared global would attribute one agent's message to
+   whichever other agent happened to start last. Same reason the
+   workspace pin is per-thread. *)
+procedure SetCallingAgent(const Name: string);
+
 { The handler, exposed for tests. }
 function Tool_Agent(const ArgsJSON: string; out ErrMsg: string): string;
 
@@ -64,8 +77,13 @@ const
   set one. Without it a `send` is attributed to 'operator', which is
   honest -- an unattributed message should not claim to be from an
   agent. }
-var
-  GCallerAgent: string = '';
+threadvar
+  GCallerAgent: string;
+
+procedure SetCallingAgent(const Name: string);
+begin
+  GCallerAgent := Name;
+end;
 
 function AgentJSON(const Info: TAgentInfo): TJsonObject;
 begin
