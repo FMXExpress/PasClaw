@@ -11,8 +11,13 @@
   Lifecycle:
     1. NewMemoryIndex returns an IMemoryIndex with no resources held.
     2. Open(DbPath) opens (or creates) the SQLite file and ensures the
-       schema. Returns False and logs a warning if libsqlite3 can't be
-       loaded; memory_search then degrades to "index unavailable".
+       schema. Returns False and logs a warning if that fails;
+       memory_search then degrades to "index unavailable". The cause
+       differs per target -- a missing shared library on the builds
+       that link SQLite dynamically, an unwritable path or corrupt db
+       on the ones that link it statically -- so the user-facing text
+       comes from PasClaw.Utils.SqliteBackendHint rather than being
+       hardcoded to libsqlite3.
     3. SyncDir walks the directory's *.md files, compares mtimes against
        the memory_files table, and reindexes whatever changed. Files
        that disappeared from disk are dropped from the index. Called at
@@ -63,6 +68,12 @@ type
     procedure Close;
     procedure SyncDir(const Dir: string);
     function  Search(const Query: string; K: Integer): TMemoryHitArray;
+    { Why the last Open returned False, verbatim from the driver.
+      '' when Open never failed, or when it bailed on a check that
+      raises nothing. Callers pass it through
+      PasClaw.Utils.SqliteOpenFailureReason, which substitutes the
+      per-build hint for the empty case. }
+    function  LastError: string;
   end;
 
 function NewMemoryIndex: IMemoryIndex;
@@ -183,6 +194,7 @@ type
     FConn:  TFDConnection;
     {$ENDIF}
     FOpen:  Boolean;
+    FLastError: string;
     procedure ExecSQL(const SQL: string);
     procedure EnsureSchema;
     function  FileMtime(const Path: string): Int64;
@@ -195,11 +207,17 @@ type
     procedure Close;
     procedure SyncDir(const Dir: string);
     function  Search(const Query: string; K: Integer): TMemoryHitArray;
+    function  LastError: string;
   end;
 
 function NewMemoryIndex: IMemoryIndex;
 begin
   Result := TMemoryIndexImpl.Create;
+end;
+
+function TMemoryIndexImpl.LastError: string;
+begin
+  Result := FLastError;
 end;
 
 destructor TMemoryIndexImpl.Destroy;
@@ -238,6 +256,7 @@ function TMemoryIndexImpl.Open(const DbPath: string): Boolean;
 begin
   Result := False;
   if FOpen then Exit(True);
+  FLastError := '';
 
   try
     {$IFDEF FPC}
@@ -264,6 +283,7 @@ begin
     begin
       LogWarn('memory.index: failed to open %s (%s) -- memory_search disabled',
               [DbPath, E.Message]);
+      FLastError := E.Message;
       {$IFDEF FPC}
       FreeAndNil(FTx);
       FreeAndNil(FConn);

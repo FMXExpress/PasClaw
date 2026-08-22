@@ -452,7 +452,7 @@ poll. Events are small JSON objects with a monotonic `seq`:
 ```
 
 Types: `projects`, `project`, `task`, `job`, `joblog`, `app`, `page`,
-`workspace`, `turn-queued`, plus `hello` on connect, `ping` on an idle
+`workspace`, `turn-queued`, `agent`, plus `hello` on connect, `ping` on an idle
 feed, and `gap` after an overflow.
 
 **The feed proves it is alive, and the client checks.** After ~15s of
@@ -833,6 +833,12 @@ Every route below sits inside the gateway's existing bearer-auth gate.
 | GET | `/v1/apps/<p>/read/<surface>` | allowlisted read window |
 | POST | `/v1/apps/<p>/action/<name>` | allowlisted side effect, scoped per app |
 | PUT | `/v1/apps/<p>/entry` | put an earlier version of the app back |
+| GET/POST | `/v1/agents` | the standing roster / create one |
+| GET/DELETE | `/v1/agents/<name>` | inspect / retire |
+| POST | `/v1/agents/<n>/send` | put a message in its mailbox |
+| POST | `/v1/agents/<n>/run` | give it a turn now |
+| GET | `/v1/agents/<n>/messages` | what it was told |
+| POST | `/v1/agents/supervise` | one supervision pass |
 | GET | `/v1/desktop/events` | SSE: board changes |
 | GET | `/v1/desktop/config` | how apps are served (origin, isolation) |
 | GET/PUT | `/v1/desktop/state` | the workspace's window layout |
@@ -1027,6 +1033,27 @@ It is wrong for the actions whose effect outlives the tab. With two tabs open, o
 So the server names one executor. Each SSE subscriber is assigned an id and told it in the feed's `hello` frame; `PublishDesktopCommand` stamps the oldest live subscriber's id as the command's `target`. Clients run **every** action they receive except `build_app`, `edit_app` and `open_page`, which they run only when they are the target. A command with no target at all (an older gateway) is executed in full, which is the single-desktop behaviour that was there before.
 
 Oldest-subscriber is arbitrary but *stable*, and stability is the property that matters: every command in a session lands on the same screen rather than scattering builds across tabs. The consequence worth knowing is that asking in a second tab can have the app open in the first one.
+
+### The near misses are accepted
+
+`desktop` is the only one of four sibling tools that takes a plural `actions` **array**; `project`, `task` and `agent` all take a singular `action` **string**. That is a strong prior toward the wrong key and the wrong arity, and it cost a real turn: *"build a book comparison app where I can enter 4 amazon book urls"* produced `desktop()` with no arguments at all and an error where the app should have been.
+
+So four shapes are read as what they plainly mean, rather than refused:
+
+| What arrived | Read as |
+|---|---|
+| `{"actions":[{"do":"tile"}]}` | itself — the documented shape |
+| `{"actions":{"do":"tile"}}` | a one-item list |
+| `{"actions":"[{\"do\":\"tile\"}]"}` | the parsed array |
+| `{"action":"build_app","title":…}` or `{"do":"tile"}` | one action, `action` renamed to `do` |
+
+Same trade the app manifest makes when it reads `type` as a synonym for `kind`: a request should not fail over a word when what was meant is unambiguous.
+
+The rename applies **wherever an action object can arrive** — inside the documented array, inside a singular object under `actions`, inside a stringified array, at the top level. `runShellActions` looks up `SHELL_ACTIONS[a.do]` and reads nothing else, so an action that reaches the feed still keyed `action` is published, reported to the model as *sent*, and then dropped by the screen as unknown. A success the caller never receives is worse than the refusal this coercion replaced, so the misspelt key is renamed — not merely tolerated, and not duplicated alongside `do`.
+
+One exception, deliberately: if an item in an array cannot be read at all — not an object, or carrying no action name — the array is passed through exactly as it arrived. That is a malformed request rather than a near miss, and the screen naming it beats quietly reshaping the array around it.
+
+A call that genuinely carries no action is still an error — coercion is for near misses, not for guessing. But the error now contains a **worked call** the model can copy, because that text is the whole of what it reads before its retry, and "missing required argument" is not something you can act on.
 
 ## Steering a running turn
 

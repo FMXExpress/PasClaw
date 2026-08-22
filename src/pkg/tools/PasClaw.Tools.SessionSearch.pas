@@ -21,9 +21,9 @@
   compares UpdatedAt against the last-indexed mtime, so only
   changed sessions get re-read).
 
-  Degrades the same way memory_search does: if libsqlite3 can't
-  load, Open() returns False and the tool reports the index is
-  unavailable rather than crashing.
+  Degrades the same way memory_search does: when Open() fails it
+  returns False and the tool reports the index as unavailable rather
+  than crashing, quoting the driver's own reason.
 *)
 unit PasClaw.Tools.SessionSearch;
 
@@ -135,8 +135,10 @@ begin
   Idx := NewSessionSearchIndex;
   if not Idx.Open(IndexDbPath) then
   begin
+    { LastError must be read before the interface is released. }
+    ErrMsg := 'session index unavailable (' +
+              SqliteOpenFailureReason(Idx.LastError) + ')';
     Idx := nil;
-    ErrMsg := 'session index unavailable (libsqlite3 missing or unreadable)';
     Exit;
   end;
 

@@ -29,9 +29,13 @@
   message returned twice, no torn writes.
 
   Cap: caller decides via MaxPerTurn (RunToolLoop passes a small
-  fixed cap so a runaway pusher can't grow Hist unbounded). Drained
-  messages beyond the cap are logged + dropped -- picoclaw's
-  MaxInjections behaves the same.
+  fixed cap so a runaway pusher can't grow Hist unbounded). Messages
+  beyond the cap are PUT BACK, not dropped: the cap bounds what one
+  iteration injects, and the next iteration's drain takes the next
+  batch. picoclaw's MaxInjections drops them; that was survivable when
+  the queue was a human typing course corrections and is not now that
+  it also carries an agent's mailbox (PasClaw.Agents), where a dropped
+  message is recorded as delivered and never seen.
 *)
 unit PasClaw.Agent.Steering;
 
@@ -56,9 +60,10 @@ type
   traversal, NULs, leading dot, length cap) or write fails. }
 function PushSteering(const SessionKey, Text: string): Boolean;
 
-{ Drain up to MaxMessages from the queue (rest are LOST -- caller
-  picked the cap). Empty array when no messages or unsafe key.
-  Atomic across concurrent drains via rename. }
+{ Drain up to MaxMessages from the queue. Anything beyond the cap
+  stays queued for the next drain -- the cap bounds one batch, it does
+  not discard. Empty array when no messages or unsafe key. Atomic
+  across concurrent drains via rename. }
 function DrainSteering(const SessionKey: string; MaxMessages: Integer): TSteeringMessageArray;
 
 { Erase the queue entirely. Called by /reset, /new, session delete. }
@@ -267,11 +272,43 @@ begin
   end;
 end;
 
+{ Replace the queue file with these lines, as raw bytes.
+
+  Not SaveToFile: the lines are UTF-8 on disk and a TStringList write
+  would put them through the RTL's encoding, which PushSteering
+  deliberately avoids by writing bytes itself. Same contract here --
+  what came off disk goes back byte-for-byte. }
+function RewriteQueue(const Path: string; Lines: TStringList): Boolean;
+var
+  Stream: TFileStream;
+  Raw: AnsiString;
+  i: Integer;
+begin
+  Result := False;
+  try
+    Stream := TFileStream.Create(Path, fmCreate);
+    try
+      for i := 0 to Lines.Count - 1 do
+      begin
+        Raw := AnsiString(Lines[i]) + #10;
+        if Length(Raw) > 0 then
+          Stream.WriteBuffer(Raw[1], Length(Raw));
+      end;
+    finally
+      Stream.Free;
+    end;
+    Result := True;
+  except
+    on E: Exception do
+      LogWarn('steering: could not rewrite %s: %s', [Path, E.Message]);
+  end;
+end;
+
 function DrainSteering(const SessionKey: string; MaxMessages: Integer): TSteeringMessageArray;
 var
   Path, DrainPath, Lock: string;
-  S: TStringList;
-  i, Kept: Integer;
+  S, Rest, Fresh: TStringList;
+  i, Kept, RestFrom: Integer;
   Msg: TSteeringMessage;
 begin
   SetLength(Result, 0);
@@ -312,12 +349,12 @@ begin
         end;
       end;
       Kept := 0;
+      RestFrom := -1;
       for i := 0 to S.Count - 1 do
       begin
         if Kept >= MaxMessages then
         begin
-          LogWarn('steering[%s]: %d pending exceeded cap of %d -- dropping rest',
-                  [SessionKey, S.Count - Kept, MaxMessages]);
+          RestFrom := i;
           Break;
         end;
         if DecodeLine(S[i], Msg) then
@@ -325,6 +362,60 @@ begin
           SetLength(Result, Length(Result) + 1);
           Result[High(Result)] := Msg;
           Inc(Kept);
+        end;
+      end;
+      (* The overflow is KEPT, not dropped.
+
+         The cap bounds how much one turn injects -- a runaway pusher
+         must not grow Hist without limit -- and putting the rest back
+         preserves that while ending the silent loss: the next
+         iteration's drain takes the next MaxMessages. Dropping was
+         survivable when the queue was a human typing course
+         corrections; it is not when the queue is an agent's MAILBOX
+         (PasClaw.Agents), where message five onward was recorded as
+         delivered in messages.jsonl, never shown to the agent, and the
+         pending count fell to zero as if it had been read.
+
+         Order matters and is why the leftovers go FIRST: anything a
+         push added after the rename landed in a fresh queue file and is
+         NEWER than what we are putting back. Both writes happen while
+         we still hold the mutex, so no third party is mid-write. *)
+      if RestFrom >= 0 then
+      begin
+        Rest := TStringList.Create;
+        try
+          for i := RestFrom to S.Count - 1 do
+            Rest.Add(S[i]);
+          if FileExists(Path) then
+          begin
+            Fresh := TStringList.Create;
+            try
+              try
+                Fresh.LoadFromFile(Path);
+                for i := 0 to Fresh.Count - 1 do
+                  Rest.Add(Fresh[i]);
+              except
+                { An unreadable fresh queue is not a reason to lose the
+                  leftovers we already hold. }
+                on E: Exception do
+                  LogWarn('steering[%s]: could not re-read the queue while ' +
+                          'preserving overflow: %s', [SessionKey, E.Message]);
+              end;
+            finally
+              Fresh.Free;
+            end;
+          end;
+          { Written as raw bytes, the way PushSteering writes them --
+            SaveToFile would re-encode, and these lines are already
+            UTF-8 on disk. }
+          if not RewriteQueue(Path, Rest) then
+            LogWarn('steering[%s]: could not put %d pending message(s) back',
+                    [SessionKey, Rest.Count])
+          else
+            LogDebug('steering[%s]: took %d, kept %d for the next iteration',
+                     [SessionKey, Kept, Rest.Count]);
+        finally
+          Rest.Free;
         end;
       end;
     finally

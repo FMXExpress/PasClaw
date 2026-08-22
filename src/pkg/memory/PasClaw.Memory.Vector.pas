@@ -82,6 +82,7 @@ type
     FTokenizer: TBertTokenizer;
     FModelSpec: TModelSpec;
     FOpen:      Boolean;
+    FLastError: string;
     function CacheDir: string;
     function VecExtPath: string;
     function ModelOnnxPath: string;
@@ -94,6 +95,7 @@ type
     procedure Close;
     procedure SyncDir(const Dir: string);
     function  Search(const Query: string; K: Integer): TMemoryHitArray;
+    function LastError: string;
   end;
 
 constructor TVectorMemoryIndex.Create;
@@ -173,20 +175,27 @@ function TVectorMemoryIndex.Open(const DbPath: string): Boolean;
 begin
   Result := False;
   if FOpen then Exit(True);
+  FLastError := '';
+  { These three are provisioning gaps, not SQLite problems. Recording
+    them keeps the caller from attributing a missing ONNX model to a
+    missing SQLite library. }
   if not FileExists(VecExtPath) then
   begin
+    FLastError := 'sqlite-vec extension not found at ' + VecExtPath;
     LogDebug('vector memory: sqlite-vec extension not found at %s -- ' +
              'falling back to FTS5-only', [VecExtPath]);
     Exit;
   end;
   if not FileExists(ModelOnnxPath) then
   begin
+    FLastError := 'embedding model not found at ' + ModelOnnxPath;
     LogDebug('vector memory: embedding model not found at %s -- ' +
              'falling back to FTS5-only', [ModelOnnxPath]);
     Exit;
   end;
   if not FileExists(VocabPath) then
   begin
+    FLastError := 'tokenizer vocab not found at ' + VocabPath;
     LogDebug('vector memory: tokenizer vocab not found at %s -- ' +
              'falling back to FTS5-only', [VocabPath]);
     Exit;
@@ -219,10 +228,16 @@ begin
     begin
       LogDebug('vector memory open failed: %s -- falling back to FTS5-only',
                [E.Message]);
+      FLastError := E.Message;
       Close;
       Result := False;
     end;
   end;
+end;
+
+function TVectorMemoryIndex.LastError: string;
+begin
+  Result := FLastError;
 end;
 
 procedure TVectorMemoryIndex.Close;

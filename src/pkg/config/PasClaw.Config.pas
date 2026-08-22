@@ -735,6 +735,16 @@ type
        built on it. Gating it here meant a fresh install answered "tile
        the open windows" with a model that had no way to do it. *)
     DesktopToolsEnabled: Boolean;
+    (* The `agent` tool: standing agents and the messages between them
+       (PasClaw.Agents). Off by default for the same two reasons the
+       board tools are -- it writes under the workspace, and a tool the
+       model never needs is prompt budget every turn.
+
+       Separate from desktop_tools_enabled rather than folded into it:
+       that flag answers "may the model manage the project board", this
+       one answers "may the model create colleagues and message them",
+       and an operator can reasonably want either without the other. *)
+    AgentToolsEnabled: Boolean;
     (* Per-Chat() wait timeout in milliseconds for the relay provider
        (PasClaw.Providers.Relay -- the pull-worker pattern). 0 = use
        the Pascal default RelayDefaultWaitTimeoutMs (5 minutes).
@@ -1245,6 +1255,7 @@ begin
   FastModel            := '';    { empty = resolve one; see TConfig.FastModel }
   CronToolEnabled      := False; { off by default -- model-scheduled background jobs are an opt-in autonomy step (runs existing skills only). }
   DesktopToolsEnabled  := False; { off by default -- see the field comment: the desktop works without it. }
+  AgentToolsEnabled    := False; { off by default -- standing agents are an opt-in autonomy step. }
   RelayWaitTimeoutMs   := 0;     { 0 = use the Pascal-side RelayDefaultWaitTimeoutMs (5 min). Operators set higher for flaky workers, lower for fast fallback. }
   MCPCompactResults := True;  { on by default: the conversion is refused unless the result is rectangular, all-scalar and genuinely shorter, so the failure mode is "no change" rather than a mangled result. Flip off if a server's rows must reach the model as literal JSON. }
   { Compaction defaults MUST match DefaultCompactOptions in
@@ -1570,6 +1581,8 @@ begin
       Root.PutBool('cron_tool_enabled', True);
     if DesktopToolsEnabled then
       Root.PutBool('desktop_tools_enabled', True);
+    if AgentToolsEnabled then
+      Root.PutBool('agent_tools_enabled', True);
     { relay_wait_timeout_ms: 0 (the default) means "use the Pascal-
       side RelayDefaultWaitTimeoutMs"; only emit when the operator
       set a non-default value so future bumps to the constant flow
@@ -2133,6 +2146,7 @@ begin
     CronToolEnabled     := Root.GetBool('cron_tool_enabled',     CronToolEnabled);
     FastModel           := Root.GetStr ('fast_model',            FastModel);
     DesktopToolsEnabled := Root.GetBool('desktop_tools_enabled', DesktopToolsEnabled);
+    AgentToolsEnabled   := Root.GetBool('agent_tools_enabled',   AgentToolsEnabled);
     RelayWaitTimeoutMs  := Integer(Root.GetInt('relay_wait_timeout_ms',
                                                 RelayWaitTimeoutMs));
     MCPProgressiveDisclosure := Root.GetBool('mcp_progressive_disclosure',

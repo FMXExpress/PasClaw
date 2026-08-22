@@ -1889,6 +1889,7 @@ const RESTORERS = {
   app:     a  => openApp(a),
   browser: a  => openBrowser(a || undefined),
   library: () => openLibrary(),
+  agents:  () => openAgents(),
   files:   a  => openFiles(a || undefined),
   console: () => openConsole(),
   shell:   () => openShell(),
@@ -1985,6 +1986,7 @@ const MENU = [
   { label: "Log",               icon: "gear",   fn: () => openLog() },
   { label: "Browser",           icon: "globe",  fn: () => openBrowser() },
   { label: "Library",           icon: "brain",  fn: openLibrary },
+  { label: "Agents",            icon: "brain",  fn: openAgents },
   { label: "File Manager",      icon: "folder", fn: () => openFiles() },
   { sep: true },
   { label: "Switch Workspace...", icon: "disk", fn: pickWorkspace },
@@ -5513,6 +5515,232 @@ async function openLibrary() {
   } catch (e) {
     list.appendChild(el("div", "row", e.message));
   }
+  return w;
+}
+
+/* ==========================================================================
+   Agents -- the standing roster
+
+   The 5% of the plan where something has gone off the rails, and the
+   only surface where you can see the whole organisation at once. Every
+   row is live: busy comes from the session's turn lock, pending from
+   the mailbox queue, and both are re-read on the `agent` event rather
+   than polled -- an agent that starts working repaints here without
+   anyone touching anything.
+   ========================================================================== */
+
+async function openAgents() {
+  /* Reopen refreshes rather than stacks -- the same guard the Library
+     grew after a second Start > Library appended a second list. */
+  const already = WINS.get("agents");
+  const w = already || createWindow({ key: "agents", title: "Agents",
+                          width: 560, height: 400, icon: "brain", pad: false,
+                          restore: { fn: "agents" } });
+  if (already) { restoreWindow(already); focusWindow(already); }
+  w.body.textContent = "";
+
+  const bar = el("div");
+  bar.style.cssText = "display:flex;gap:4px;padding:3px;align-items:center";
+  const add = el("button", "btn", "New agent...");
+  const sup = el("button", "btn", "Supervise");
+  sup.title = "Check every agent and restart the ones that stopped";
+  bar.appendChild(add); bar.appendChild(sup);
+  const status = el("span", "muted");
+  status.style.marginLeft = "6px";
+  bar.appendChild(status);
+  w.body.appendChild(bar);
+
+  const list = el("div", "list in");
+  list.style.cssText = "height:calc(100% - 30px);margin:0 3px 3px";
+  w.body.appendChild(list);
+
+  async function paint() {
+    let rows = [];
+    try { rows = (await api("/v1/agents")).agents || []; }
+    catch (e) { list.textContent = ""; list.appendChild(el("div", "row", e.message)); return; }
+    list.textContent = "";
+    if (!rows.length) {
+      list.appendChild(el("div", "row muted",
+        "No agents yet. A standing agent is a name, a role and a " +
+        "conversation that outlives this process."));
+      return;
+    }
+    /* Parents before their reports, so the tree reads as an org chart
+       rather than as alphabetical noise. */
+    rows.sort((a, b) => (a.parent || "").localeCompare(b.parent || "") ||
+                        a.name.localeCompare(b.name));
+    rows.forEach(a => {
+      const r = el("div", "row");
+      r.style.cssText = "display:flex;gap:6px;align-items:center;padding:2px 6px";
+      const ic = el("span");
+      ic.style.cssText = "width:14px;height:14px;flex:0 0 14px";
+      ic.innerHTML = icon("brain");
+      r.appendChild(ic);
+
+      const nm = el("span", null, (a.parent ? "  " : "") + (a.title || a.name));
+      nm.style.flex = "1 1 auto";
+      nm.title = a.role || "";
+      r.appendChild(nm);
+
+      /* State in the words the server used -- busy, or whatever the last
+         run left behind. A roster that rounded "failed" to "idle" would
+         hide the one row you opened it for. */
+      const state = a.busy ? "working"
+                  : (a.run_state === "failed" ? "FAILED"
+                  : (a.run_state || "idle"));
+      const st = el("span", a.busy ? "st-active"
+                        : (a.run_state === "failed" ? "st-blocked" : "muted"),
+                    state);
+      r.appendChild(st);
+      if (a.pending)
+        r.appendChild(el("span", "badge", String(a.pending)));
+
+      const say = el("button", "btn", "Message");
+      say.style.cssText = "padding:0 6px;font-size:10px;line-height:14px";
+      say.addEventListener("click", async e => {
+        e.stopPropagation();
+        const text = prompt(`Message to ${a.title || a.name}:`, "");
+        if (!text) return;
+        try {
+          const j = await api(`/v1/agents/${a.name}/send`,
+                              { method: "POST", body: { from: "operator", text } });
+          /* Say WHICH delivery happened: "queued" and "mid-turn" mean
+             different things about when the agent will act, and the
+             server already worked out which. */
+          status.textContent = j.delivered === "mid-turn"
+            ? `${a.name} is working and saw it mid-turn`
+            : `${a.name} is idle; it will see that next turn`;
+          paint();
+        } catch (err) { alert(err.message); }
+      });
+      r.appendChild(say);
+
+      const run = el("button", "btn", "Wake");
+      run.title = "Give this agent a turn now";
+      run.style.cssText = "padding:0 6px;font-size:10px;line-height:14px";
+      run.disabled = !!a.busy;
+      run.addEventListener("click", async e => {
+        e.stopPropagation();
+        try {
+          await api(`/v1/agents/${a.name}/run`, { method: "POST", body: {} });
+          status.textContent = `${a.name} is working`;
+        } catch (err) { status.textContent = err.message; }
+        paint();
+      });
+      r.appendChild(run);
+
+      /* Double-click opens the agent's CONVERSATION -- it is an ordinary
+         session, so the same window a project chat uses reads it. That
+         equivalence is the point of filing agents as sessions. */
+      r.addEventListener("dblclick", () => openAgentChat(a));
+      r.title = a.run_note || "";
+      list.appendChild(r);
+    });
+  }
+
+  add.addEventListener("click", async () => {
+    const name = prompt("What is this agent called? (e.g. Payments tech lead)", "");
+    if (!name) return;
+    const role = prompt("What is it for?", "") || "";
+    const parent = prompt("Who does it report to? (blank = top level)", "") || "";
+    try {
+      await api("/v1/agents", { method: "POST",
+                                body: { name, title: name, role, parent } });
+      paint();
+    } catch (e) { alert(e.message); }
+  });
+
+  sup.addEventListener("click", async () => {
+    status.textContent = "Checking...";
+    try {
+      const j = await api("/v1/agents/supervise", { method: "POST", body: {} });
+      const acted = (j.verdicts || []).filter(v => v.action !== "ok");
+      status.textContent = acted.length
+        ? `${j.restarted} restarted: ` + acted.map(v => v.name).join(", ")
+        : "all agents healthy";
+    } catch (e) { status.textContent = e.message; }
+    paint();
+  });
+
+  /* Live: an agent that starts or finishes a turn repaints this window
+     without anyone asking. */
+  if (!w.__agentsWired) {
+    w.__agentsWired = true;
+    onDesktopEvent("agent", () => { if (WINS.get("agents")) paint(); });
+  }
+  await paint();
+  return w;
+}
+
+/* An agent's conversation, in a window. It is an ordinary session, so
+   this is the session reader with the composer wired to the MAILBOX
+   rather than to a chat endpoint: talking to an agent is sending it a
+   message, and it answers on its own turn. */
+async function openAgentChat(a) {
+  const w = createWindow({ key: "agentchat:" + a.name,
+                           title: (a.title || a.name), width: 560, height: 420,
+                           icon: "brain", pad: false });
+  if (w.__wired) { restoreWindow(w); focusWindow(w); return w; }
+  w.__wired = true;
+
+  const log = el("div", "log in");
+  log.style.cssText = "height:calc(100% - 62px);overflow:auto;margin:3px";
+  w.body.appendChild(log);
+
+  const composer = el("div", "composer");
+  composer.style.cssText = "display:flex;gap:4px;padding:3px";
+  const ta = el("textarea");
+  ta.rows = 2;
+  ta.style.cssText = "flex:1 1 auto;resize:none";
+  ta.placeholder = "Send this agent a message";
+  const send = el("button", "btn", "Send");
+  composer.appendChild(ta); composer.appendChild(send);
+  w.body.appendChild(composer);
+
+  async function paint() {
+    log.textContent = "";
+    /* Two sources, and they are different things: the SESSION is what
+       the agent thought and did, the RECORD is what it was told. Shown
+       together because "why did it do that" is usually answered by a
+       message somebody sent it. */
+    let msgs = [], record = [];
+    try { msgs = (await api(`/v1/sessions/agent-${a.name}`)).messages || []; } catch {}
+    try { record = (await api(`/v1/agents/${a.name}/messages`)).messages || []; } catch {}
+    msgs.slice(-40).forEach(m => {
+      const row = el("div", "msg");
+      row.appendChild(el("div", "who", m.role));
+      row.appendChild(el("div", "body", (m.content || "").slice(0, 4000)));
+      log.appendChild(row);
+    });
+    if (record.length) {
+      log.appendChild(el("div", "msep"));
+      log.appendChild(el("div", "muted", "Messages it was sent:"));
+      record.slice(-10).forEach(m => {
+        log.appendChild(el("div", "muted",
+          `${m.at}  ${m.from}: ${m.text.slice(0, 200)}  (${m.delivered})`));
+      });
+    }
+    log.scrollTop = log.scrollHeight;
+  }
+
+  async function submit() {
+    const text = ta.value.trim();
+    if (!text) return;
+    ta.value = "";
+    try {
+      await api(`/v1/agents/${a.name}/send`,
+                { method: "POST", body: { from: "operator", text } });
+      await paint();
+    } catch (e) { alert(e.message); }
+  }
+  send.addEventListener("click", submit);
+  ta.addEventListener("keydown", e => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); submit(); }
+  });
+  onDesktopEvent("agent", ev => {
+    if (ev && ev.name === a.name && WINS.get("agentchat:" + a.name)) paint();
+  });
+  await paint();
   return w;
 }
 

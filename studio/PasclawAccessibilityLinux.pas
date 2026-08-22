@@ -405,7 +405,10 @@ end;
 
 procedure UninstallLinuxAccessibility(Form: TCommonCustomForm);
 begin
-  if (Form = nil) or (GForm <> Form) then Exit;
+  { GObjects nil means this unit already finalized; the form destructor runs
+    after that and calls us unconditionally. Same guard as the other two
+    halves. }
+  if (Form = nil) or (GObjects = nil) or (GForm <> Form) then Exit;
   GObjects.Clear;
   if (GConn <> nil) and Assigned(dbus_connection_unref) then
   begin
@@ -419,7 +422,26 @@ initialization
   GObjects := TDictionary<string, TControl>.Create;
 
 finalization
-  GObjects.Free;
+  (* Mirror Uninstall's teardown here, for the same reason the Windows and
+     macOS halves do: this unit finalizes while the form is still alive, so
+     the form destructor's later UninstallLinuxAccessibility hits the
+     GObjects = nil guard and returns without doing any of it.
+
+     Lower stakes than the other two -- nothing registers an incoming D-Bus
+     handler, so there is no callback left pointing at freed state, and this
+     is a leak-and-ordering fix rather than a demonstrated fault. But
+     dropping the connection reference BEFORE dlclose is the right order:
+     unreffing after the library is unloaded is not possible at all.
+
+     FreeAndNil rather than Free for the later Uninstall call: nil makes it
+     a no-op instead of a fault. *)
+  if (GConn <> nil) and Assigned(dbus_connection_unref) then
+  begin
+    dbus_connection_unref(GConn);
+    GConn := nil;
+  end;
+  GForm := nil;
+  FreeAndNil(GObjects);
   if GLib <> nil then dlclose(GLib);
 
 {$ELSE}

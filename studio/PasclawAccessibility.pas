@@ -715,6 +715,11 @@ function AccWndProc(Wnd: HWND; Msg: UINT; wParam: WPARAM; lParam: LPARAM): LRESU
 var
   Rec: THookRec;
 begin
+  { GHooks is nil once this unit has finalized. A message can still reach a
+    window we subclassed after that point, so check before dereferencing --
+    see the finalization block for why the teardown order allows it. }
+  if GHooks = nil then
+    Exit(DefWindowProc(Wnd, Msg, wParam, lParam));
   if not GHooks.TryGetValue(Wnd, Rec) then
     Exit(DefWindowProc(Wnd, Msg, wParam, lParam));
 
@@ -735,7 +740,7 @@ var
   Wnd: HWND;
   Rec: THookRec;
 begin
-  if Form = nil then Exit;
+  if (Form = nil) or (GHooks = nil) then Exit;
   Wnd := FormToHWND(Form);
   if Wnd = 0 then Exit;
   if GHooks.ContainsKey(Wnd) then Exit;   { idempotent }
@@ -753,7 +758,12 @@ var
   Wnd: HWND;
   Rec: THookRec;
 begin
-  if Form = nil then Exit;
+  { GHooks nil means this unit already finalized and the hook it held was
+    restored there. That is the normal path on shutdown, not an error: the
+    form's destructor calls us AFTER this unit is gone. Without this guard
+    the call dereferences a freed TDictionary -- an access violation on
+    every clean exit. }
+  if (Form = nil) or (GHooks = nil) then Exit;
   Wnd := FormToHWND(Form);
   if Wnd = 0 then Exit;
   if not GHooks.TryGetValue(Wnd, Rec) then Exit;
@@ -761,11 +771,45 @@ begin
   GHooks.Remove(Wnd);
 end;
 
+procedure ShutdownAccessibility;
+{ Body of the finalization below -- a procedure because initialization and
+  finalization sections cannot declare locals, and the restore loop needs
+  one. See the comment at the call site for the ordering this exists for. }
+var
+  Rec: THookRec;
+begin
+  if GHooks = nil then Exit;
+  for Rec in GHooks.Values do
+    if Rec.Wnd <> 0 then
+      SetWindowLongPtr(Rec.Wnd, GWL_WNDPROC, NativeInt(Rec.OldProc));
+  FreeAndNil(GHooks);
+end;
+
 initialization
   GHooks := TDictionary<HWND, THookRec>.Create;
 
 finalization
-  GHooks.Free;
+  (* Teardown order, and why this block has real work to do.
+
+     Units finalize in reverse initialization order. PasclawStudio.dpr
+     lists FMX.Forms before this unit, so FMX.Forms initializes first and
+     therefore finalizes LAST -- and it is FMX.Forms' finalization that
+     destroys Application, which frees MasterDetailForm, whose destructor
+     calls UninstallAccessibility. So the form is torn down strictly after
+     this point, and at this moment its window can still be subclassed and
+     its hook still in GHooks.
+
+     Two consequences, both handled here:
+
+       1. Any window still pointing at AccWndProc must be restored now.
+          Leaving our proc installed on a live window would fault on the
+          next message once this module's code is gone.
+
+       2. GHooks must be nil, not merely freed. The form destructor runs
+          later and calls UninstallAccessibility unconditionally; a freed
+          but non-nil pointer turns that into an access violation on every
+          clean exit. FreeAndNil plus the guards above make it a no-op. *)
+  ShutdownAccessibility;
 
 {$ELSE}
 
