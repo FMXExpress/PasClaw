@@ -176,7 +176,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test openssl-1.0 test-doctor test-provider-retry smoke lint-pascal-shape test-workspaces test-projects test-apps test-mail test-desktop-routes test-desktop test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-shell-cwd-report lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
+.PHONY: all clean run test openssl-1.0 test-doctor test-provider-retry smoke lint-pascal-shape test-workspaces test-projects test-tool-schema test-apps test-mail test-desktop-routes test-desktop test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-stats-attribution test-sqlite-hint test-memory-search-roundtrip test-shell-cwd-report lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-agents test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -514,6 +514,12 @@ test-projects: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/projects_tests.pas -o$(BUILDDIR)/projects_tests
 	@PASCLAW_HOME=$(BUILDDIR)/projects-test-home $(BUILDDIR)/projects_tests
 
+test-tool-schema: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	@rm -rf $(BUILDDIR)/tool-schema-test-home
+	$(FPC) $(FPCFLAGS) src/tests/tool_schema_tests.pas -o$(BUILDDIR)/tool_schema_tests
+	@PASCLAW_HOME=$(BUILDDIR)/tool-schema-test-home $(BUILDDIR)/tool_schema_tests
+
 test-apps: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	@rm -rf $(BUILDDIR)/apps-test-home
@@ -579,7 +585,7 @@ test-client-api: $(BIN) | $(BUILDDIR)
 		rm -f $(BUILDDIR)/client-api.pid; exit $$rc
 
 # Everything the desktop client depends on, in dependency order.
-test-desktop: lint-pascal-shape test-workspaces test-projects test-apps test-mail test-workspace-isolation test-desktop-routes test-client-markdown test-client-api
+test-desktop: lint-pascal-shape test-workspaces test-projects test-tool-schema test-apps test-mail test-workspace-isolation test-desktop-routes test-client-markdown test-client-api
 
 # Provider catalog rows + ChatPath override (Perplexity uses /chat/completions).
 test-provider-catalog: | $(BUILDDIR)

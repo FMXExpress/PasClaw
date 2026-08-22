@@ -1034,6 +1034,14 @@ So the server names one executor. Each SSE subscriber is assigned an id and told
 
 Oldest-subscriber is arbitrary but *stable*, and stability is the property that matters: every command in a session lands on the same screen rather than scattering builds across tabs. The consequence worth knowing is that asking in a second tab can have the app open in the first one.
 
+### The schema has to parse
+
+`desktop`'s schema shipped with `"e.g. [{""do"":""tile""}]"` — the Pascal doubling convention applied to double quotes, where JSON wanted `\"`. It did not parse.
+
+That would be a footnote if it failed loudly. It does not: providers inject a schema with `PutRaw`, and `PutRaw` answers an unparseable string by substituting `{}` **without a word**. So every real provider was told `desktop` takes no arguments, and the model did exactly as it was told — `desktop()`, empty, every time. No error text can argue a model out of the schema it was given; the coercion below was treating a symptom.
+
+`make test-tool-schema` now parses every registered tool's schema, and the `ToProviderDefs` output too. Registration is where the mistake is made, so registration is where it is caught.
+
 ### The near misses are accepted
 
 `desktop` is the only one of four sibling tools that takes a plural `actions` **array**; `project`, `task` and `agent` all take a singular `action` **string**. That is a strong prior toward the wrong key and the wrong arity, and it cost a real turn: *"build a book comparison app where I can enter 4 amazon book urls"* produced `desktop()` with no arguments at all and an error where the app should have been.
