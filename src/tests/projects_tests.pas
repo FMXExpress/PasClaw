@@ -220,6 +220,85 @@ begin
   Out_ := Tool_Task('{"action":"job","project":"invoice-desk","id":"T0002"}', Err);
   ExpectTrue(Err <> '', 'reporting against a missing task is an error');
 
+  (* ------------------------------------------ what a `desktop` call reads as -- *)
+  (* The documented shape, and then the four near misses seen in real
+     use. `desktop` is the only one of four sibling tools taking a
+     plural "actions" ARRAY -- project, task and agent all take a
+     singular "action" STRING -- so the wrong key and the wrong arity
+     are the mistakes to expect, and refusing them spends a turn. *)
+  ExpectContains(DesktopActionsJSON('{"actions":[{"do":"tile"}]}'),
+                 '"tile"', 'the documented shape passes through');
+
+  ExpectContains(DesktopActionsJSON('{"actions":{"do":"tile"}}'),
+                 '"tile"', 'a single action object under "actions" is wrapped');
+  ExpectTrue(Pos('[', DesktopActionsJSON('{"actions":{"do":"tile"}}')) = 1,
+             'and it comes back as an array');
+
+  ExpectContains(DesktopActionsJSON('{"actions":"[{\"do\":\"tile\"}]"}'),
+                 '"tile"', 'a stringified array is parsed');
+
+  { The sibling tools' habit, at the top level. }
+  ExpectContains(DesktopActionsJSON(
+                   '{"action":"build_app","title":"Book compare",' +
+                   '"brief":"four Amazon URLs"}'),
+                 '"build_app"', 'a top-level singular "action" is read as "do"');
+  ExpectContains(DesktopActionsJSON(
+                   '{"action":"build_app","title":"Book compare"}'),
+                 'Book compare', 'and its siblings ride along');
+  ExpectTrue(Pos('"action"', DesktopActionsJSON('{"action":"tile"}')) = 0,
+             'the misspelt key is not passed on as well as "do"');
+
+  ExpectContains(DesktopActionsJSON('{"do":"tile"}'),
+                 '"tile"', 'a bare top-level action is wrapped');
+
+  (* The two near misses COMBINED -- right arity, wrong key. The client
+     dispatches on SHELL_ACTIONS[a.do] and reads nothing else, so an
+     action that reaches the feed still keyed "action" is published,
+     reported to the model as sent, and then rejected by the screen. A
+     success the caller never receives is the worst of the three
+     outcomes, so the rename has to happen wherever an action object
+     can arrive -- not only at the top level. *)
+  ExpectContains(DesktopActionsJSON('{"actions":{"action":"build_app","title":"X"}}'),
+                 '"do"', 'a singular object under "actions" is renamed too');
+  ExpectTrue(Pos('"action"', DesktopActionsJSON(
+               '{"actions":{"action":"build_app","title":"X"}}')) = 0,
+             'and does not keep the key the client cannot read');
+  ExpectContains(DesktopActionsJSON('{"actions":[{"action":"tile"}]}'),
+                 '"do"', 'an item inside the documented array is renamed');
+  ExpectTrue(Pos('"action"', DesktopActionsJSON('{"actions":[{"action":"tile"}]}')) = 0,
+             'and that one loses the wrong key as well');
+  ExpectContains(DesktopActionsJSON('{"actions":"[{\"action\":\"tile\"}]"}'),
+                 '"do"', 'a stringified array is renamed on the way through');
+
+  { Every item keeps its own name; the rename is not a broadcast. }
+  Out_ := DesktopActionsJSON('{"actions":[{"do":"tile"},{"action":"refresh"}]}');
+  ExpectContains(Out_, 'tile', 'a mixed array keeps the item that was right');
+  ExpectContains(Out_, 'refresh', 'and renames only the one that was wrong');
+  ExpectTrue(Pos('"action"', Out_) = 0, 'with no stray key left behind');
+
+  (* An item we cannot read is a malformed request, not a near miss:
+     pass it through so the screen names it rather than reshaping the
+     array around it. *)
+  ExpectContains(DesktopActionsJSON('{"actions":[{"do":"tile"},{"note":"hi"}]}'),
+                 '"note"', 'an unreadable item is passed through untouched');
+
+  { Nothing usable stays an error -- coercion is for near misses, not guesses. }
+  ExpectStr(DesktopActionsJSON('{}'), '', 'an empty call reads as nothing');
+  ExpectStr(DesktopActionsJSON('{"actions":[]}'), '', 'an empty array too');
+  ExpectStr(DesktopActionsJSON('{"project":"notes"}'), '',
+            'arguments with no action at all read as nothing');
+
+  (* And the refusal has to carry a call the model can copy: this text is
+     the whole of what it reads before its retry. The turn that prompted
+     this was spent on "missing required argument" and produced no app. *)
+  Out_ := Tool_Desktop('{}', Err);
+  ExpectTrue(Err <> '', 'an empty desktop call is still an error');
+  ExpectContains(Err, '{"actions":[{"do":"build_app"',
+                 'the error shows a correct call');
+  Out_ := Tool_Desktop('{"actions":[{"do":"tile"}]}', Err);
+  ExpectStr(Err, '', 'a good call is clean');
+  ExpectContains(Out_, '1 desktop action', 'and reports what it sent');
+
   { --------------------------------------------------- workspace isolation -- }
   { Projects belong to a workspace: switching desktops must switch boards. }
   CreateWorkspace('Home');
