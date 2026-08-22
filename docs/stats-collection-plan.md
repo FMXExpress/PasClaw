@@ -65,11 +65,32 @@ makes switching models the normal case rather than an edge case. A
 table that silently drops the model you spent everything on is worse
 than no table.
 
-**Fix:** one bucket per (endpoint, model) pair, which the source already
-names as option (a). That makes the scalar `Meta.Model` correct by
-construction and needs no schema change. It supersedes the cost work below in
-priority: a cost column computed from misattributed tokens would be
-confidently wrong rather than merely absent.
+**Fixed** in this branch. `GatewayBucketId` keys buckets by
+(endpoint, model) — option (a), which the source already named — so the
+scalar `Meta.Model` is true by construction. No schema change.
+
+Same workload against a running gateway after the change:
+
+| | actually happened | `/v1/stats` now reports |
+|---|---:|---:|
+| `model-EXPENSIVE` | 150,000 | **150,000** |
+| `model-CHEAP` | 15 | **15** |
+| provider `anthropic` | 150,000 | **150,000** |
+| provider `openai` | 15 | **15** |
+
+Totals unchanged (100,010 / 50,005 / 101). `make test-stats-attribution`
+pins both the id shape and the attribution.
+
+*Migration:* buckets written before the change keep their old ids and
+their old misattributed history. `HandleStats` just walks the directory,
+so those rows persist under the last model they saw while new traffic
+accumulates correctly beside them. Operators wanting a clean table
+delete the `_gateway_*` sessions. This is called out in the code.
+
+*Cost of the fix:* one bucket per (endpoint, model) instead of per
+endpoint, so the synthetic-session count grows with the number of models
+an operator uses. That makes finding (h) below — `/v1/stats` counting
+buckets that every other surface hides — more visible, not less.
 
 ---
 
@@ -233,11 +254,11 @@ What comparable harnesses do, and what transfers:
 
 Ranked by evidence strength and payoff.
 
-### P1 — One stats bucket per (endpoint, model)
+### P1 — One stats bucket per (endpoint, model) — **DONE**
 
-The accuracy defect in §0. Everything else on this list is a
-refinement of numbers that are currently attributed to the wrong
-model, so this goes first.
+The accuracy defect in §0, implemented and verified against a running
+gateway. Everything else on this list was a refinement of numbers that
+were being attributed to the wrong model, which is why this went first.
 
 ### P2 — Headers-only session load
 

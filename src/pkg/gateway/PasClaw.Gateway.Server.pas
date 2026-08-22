@@ -774,6 +774,68 @@ const
   GW_BUCKET_V1_CHAT_COMPLETIONS = '_gateway_v1_chat_completions';
   GW_BUCKET_V1_RESPONSES        = '_gateway_v1_responses';
 
+(* One bucket per (endpoint, model), not per endpoint.
+
+   Meta.Model and Meta.Provider are scalar and get overwritten on every
+   request, so a single per-endpoint bucket attributed its ENTIRE
+   cumulative token total to whichever model happened to run last. With
+   100 requests on one model followed by one request on another, the
+   /v1/stats by_model table credited all 150,015 tokens to the model
+   that used 15 of them, and the model that did the work vanished from
+   the table completely. Totals were always right; only the breakdown
+   was wrong -- which is the half the web UI renders as a per-model
+   table with no caveat, and its model picker makes switching models
+   the normal case. src/tests/stats_attribution_repro.pas reproduces
+   the old behaviour and asserts the new one.
+
+   Scoping the id by model makes the scalar field correct by
+   construction: every request that lands in a bucket shares that
+   bucket's model, so overwriting it is a no-op rather than a lie. No
+   schema change -- this is option (a) named in AccumulateGatewayStats
+   below.
+
+   Sanitising: IsSafeSessionId allows [A-Za-z0-9._-], and model names
+   carry '/' and ':' (openrouter's "anthropic/claude-x", "openai:gpt-x").
+   Dot is deliberately NOT preserved even though it is legal -- an id
+   ending ".orig" is treated as a pre-prune archive by
+   IsSessionArchiveId and would be skipped by every listing, so a model
+   name is far too close to that trap to leave dots in.
+
+   Empty model falls back to the bare endpoint id: it keeps today's
+   behaviour for the passthrough paths that never learn a model name,
+   and gives those tokens a stable home rather than a bucket called
+   "_gateway_v1_chat_". *)
+function GatewayBucketId(const Endpoint, Model: string): string;
+const
+  { 128 is IsSafeSessionId's ceiling. The longest endpoint prefix is
+    _gateway_v1_chat_completions (28), so 80 leaves generous room and
+    still admits every real model name. }
+  MaxModelPart = 80;
+var
+  i: Integer;
+  C: Char;
+  Clean: string;
+begin
+  Clean := '';
+  for i := 1 to Length(Model) do
+  begin
+    C := Model[i];
+    if ((C >= 'a') and (C <= 'z')) or ((C >= 'A') and (C <= 'Z')) or
+       ((C >= '0') and (C <= '9')) or (C = '-') or (C = '_') then
+      Clean := Clean + C
+    else
+      Clean := Clean + '-';
+    if Length(Clean) >= MaxModelPart then Break;
+  end;
+  { An all-separator model name collapses to dashes and carries no
+    information; treat it as unknown rather than minting a bucket
+    named "_gateway_v1_chat_------". }
+  for i := Length(Clean) downto 1 do
+    if Clean[i] <> '-' then Break else SetLength(Clean, i - 1);
+  if Clean = '' then Exit(Endpoint);
+  Result := Endpoint + '_' + Clean;
+end;
+
 procedure AccumulateGatewayStatsRaw(const Cfg: TConfig;
                                     const BucketId, Title: string;
                                     const ProviderName, Model: string;
@@ -929,12 +991,21 @@ procedure AccumulateGatewayStats(const Cfg: TConfig;
   request through that endpoint into one synthetic session whose
   Turns / tokens / tool-calls counters accumulate across calls.
 
-  Trade-off: by_model and by_provider rollups for these bucket
-  sessions reflect the MOST RECENT request, not every request --
-  Meta.Model and Meta.Provider are scalar. A precise per-model
-  breakdown would need either (a) one bucket per (endpoint,
-  model) pair, or (b) a richer schema. The user explicitly asked
-  for the simpler aggregate-per-endpoint shape; this is that.
+  Bucket granularity is (endpoint, model), via GatewayBucketId --
+  option (a) of the two this comment used to weigh. It was
+  aggregate-per-endpoint, and because Meta.Model / Meta.Provider are
+  scalar and overwritten per request, that attributed a bucket's whole
+  cumulative total to whichever model ran last: measured at 150,015
+  tokens credited to a model that used 15, with the model that used
+  150,000 absent from the table entirely. Totals were unaffected
+  throughout; only the by_model / by_provider breakdown was wrong.
+  Scoping the id by model makes the scalar field true by construction.
+
+  Migration: buckets written before this change keep their old ids and
+  their old (misattributed) history. Nothing reads them differently --
+  HandleStats just walks the directory -- so old rows persist under the
+  last model they saw, and new traffic accumulates correctly alongside.
+  Operators who want a clean table delete the _gateway_* sessions.
 
   Thread safety: a global TCriticalSection (inside the Raw
   primitive below) serialises the open-accumulate-save sequence.
@@ -5954,8 +6025,9 @@ begin
   end;
   PersistGatewaySession(FCfg, ReqSessionId(ARequest), '(gateway: /v1/chat)',
                         LoopCfg.Provider.GetName, LoopCfg.Model, Loop);
-  AccumulateGatewayStats(FCfg, GW_BUCKET_V1_CHAT,
-                         '(gateway: /v1/chat)',
+  AccumulateGatewayStats(FCfg,
+                         GatewayBucketId(GW_BUCKET_V1_CHAT, LoopCfg.Model),
+                         '(gateway: /v1/chat ' + LoopCfg.Model + ')',
                          LoopCfg.Provider.GetName, LoopCfg.Model, Loop);
 
   RespJ := TJsonObject.Create;
@@ -7412,8 +7484,9 @@ begin
       end;
       PersistGatewaySession(FCfg, ReqSession, SessionTitle,
                             LoopCfg.Provider.GetName, ReqModel, Loop);
-      AccumulateGatewayStats(FCfg, GW_BUCKET_V1_CHAT_COMPLETIONS,
-                             '(gateway: /v1/chat/completions)',
+      AccumulateGatewayStats(FCfg,
+                             GatewayBucketId(GW_BUCKET_V1_CHAT_COMPLETIONS, ReqModel),
+                             '(gateway: /v1/chat/completions ' + ReqModel + ')',
                              LoopCfg.Provider.GetName, ReqModel, Loop);
       if Loop.LastResp.FinishReason <> '' then
         FinishReason := Loop.LastResp.FinishReason
@@ -7491,8 +7564,9 @@ begin
       on #556.) }
     PersistGatewaySession(FCfg, ReqSession, SessionTitle,
                           LoopCfg.Provider.GetName, ReqModel, Loop);
-    AccumulateGatewayStats(FCfg, GW_BUCKET_V1_CHAT_COMPLETIONS,
-                           '(gateway: /v1/chat/completions)',
+    AccumulateGatewayStats(FCfg,
+                           GatewayBucketId(GW_BUCKET_V1_CHAT_COMPLETIONS, ReqModel),
+                           '(gateway: /v1/chat/completions ' + ReqModel + ')',
                            LoopCfg.Provider.GetName, ReqModel, Loop);
 
     if Loop.LastResp.FinishReason <> '' then
@@ -9015,8 +9089,9 @@ begin
           from the provider's reported usage and the model's
           emitted tool calls (executed client-side, not by us).
           Codex P2 on PR #204. }
-        AccumulateGatewayStatsRaw(FCfg, GW_BUCKET_V1_RESPONSES,
-                                  '(gateway: /v1/responses)',
+        AccumulateGatewayStatsRaw(FCfg,
+                                  GatewayBucketId(GW_BUCKET_V1_RESPONSES, ReqModel),
+                                  '(gateway: /v1/responses ' + ReqModel + ')',
                                   Prim.GetName, ReqModel,
                                   OutUsage,
                                   StreamToolCallCount,
@@ -9068,8 +9143,9 @@ begin
         PassthroughResp directly, and report the model's emitted
         tool-call count even though we didn't dispatch them
         server-side (the client did). }
-      AccumulateGatewayStatsRaw(FCfg, GW_BUCKET_V1_RESPONSES,
-                                '(gateway: /v1/responses)',
+      AccumulateGatewayStatsRaw(FCfg,
+                                GatewayBucketId(GW_BUCKET_V1_RESPONSES, ReqModel),
+                                '(gateway: /v1/responses ' + ReqModel + ')',
                                 Prim.GetName, ReqModel,
                                 OutUsage,
                                 Length(OutToolCalls),
@@ -9154,8 +9230,9 @@ begin
         end;
         Exit;
       end;
-      AccumulateGatewayStats(FCfg, GW_BUCKET_V1_RESPONSES,
-                             '(gateway: /v1/responses)',
+      AccumulateGatewayStats(FCfg,
+                             GatewayBucketId(GW_BUCKET_V1_RESPONSES, ReqModel),
+                             '(gateway: /v1/responses ' + ReqModel + ')',
                              Prim.GetName, ReqModel, Loop);
 
       if Loop.LastResp.FinishReason <> '' then
