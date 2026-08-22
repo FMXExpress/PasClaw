@@ -80,6 +80,15 @@ type
     Created: string;
     Updated: string;
     Exists:  Boolean;
+    (* Run state. Written by the runner, read by everyone else --
+       including the supervisor, which is the only reason it is on disk
+       rather than in memory: a process that died mid-run must leave
+       behind the fact that it was running, or nothing can tell the
+       difference between "working" and "gone". *)
+    RunState: string;  { 'idle' | 'running' | 'done' | 'failed' }
+    RunStart: string;  { ISO-8601 UTC, when the current/last run began }
+    RunEnd:   string;  { '' while running }
+    RunNote:  string;  { the last reply's opening, or the error }
   end;
   TAgentInfoArray = array of TAgentInfo;
 
@@ -141,9 +150,57 @@ function AgentMessages(const Name: string; Limit: Integer): TAgentMessageArray;
 { How many messages are queued but not yet seen by the agent. }
 function AgentPending(const Name: string): Integer;
 
+{ ---- run state (Phase 3) ---- }
+
+(* Record that a run began / ended. Written to the manifest so it
+   survives the process: a supervisor starting up after a crash must be
+   able to see that an agent was left mid-run, which is exactly the
+   state nothing in memory can tell it about. *)
+procedure MarkAgentRunStarted(const Name: string);
+procedure MarkAgentRunFinished(const Name, State, Note: string);
+
+(* Minutes since the agent's last run ENDED, or since it started when it
+   is still running. -1 when it has never run.
+
+   The supervisor's whole question in one number. Uses the manifest's
+   timestamps rather than a file mtime because a manifest rewrite for an
+   unrelated field would otherwise read as activity. *)
+function AgentIdleMinutes(const Name: string): Integer;
+
+{ ---- supervision (Phase 4) ---- }
+
+type
+  TAgentVerdict = record
+    Name:   string;
+    State:  string;   { what the manifest says }
+    Minutes: Integer; { how long it has been in that state }
+    Action: string;   { 'ok' | 'stalled' | 'restart' }
+    Why:    string;   { human-readable, and what the parent is told }
+  end;
+  TAgentVerdictArray = array of TAgentVerdict;
+
+(* Look at every agent and say what should happen to it. PURE: reads
+   state, decides, and reports -- it starts nothing.
+
+   Separated from acting so the decision is testable without a provider,
+   a thread, or a gateway, and so the same verdicts can drive an
+   operator's "what would you do" view as drive the actual sweep.
+
+   StallMinutes: a run still marked `running` after this long is
+   presumed dead -- the process that owned it is gone, because a live
+   run updates nothing but also never ends. IdleMinutes: an agent that
+   has not run in this long is nudged. Either 0 disables that half. *)
+function SuperviseAgents(StallMinutes, IdleMinutes: Integer): TAgentVerdictArray;
+
+{ Tell an agent's parent what happened to it. No-op (False) when the
+  agent has no parent -- a top-level agent answers to the operator, and
+  inventing a recipient would be worse than silence. }
+function NotifyParent(const Name, Text: string): Boolean;
+
 implementation
 
 uses
+  DateUtils,
   PasClaw.Utils,
   PasClaw.JSON,
   PasClaw.Logger,
@@ -254,6 +311,10 @@ begin
     Info.Parent  := Obj.GetStr('parent', '');
     Info.Created := Obj.GetStr('created', '');
     Info.Updated := Obj.GetStr('updated', '');
+    Info.RunState := Obj.GetStr('run_state', 'idle');
+    Info.RunStart := Obj.GetStr('run_start', '');
+    Info.RunEnd   := Obj.GetStr('run_end', '');
+    Info.RunNote  := Obj.GetStr('run_note', '');
     Info.Exists  := True;
   finally
     Obj.Free;
@@ -331,6 +392,25 @@ begin
     Obj.PutStr('created', Created);
     Obj.PutStr('updated', NowIsoUtc);
     Obj.PutStr('session', 'agent-' + Slug);
+    (* Run state is the RUNNER's to write, so an ordinary edit -- a role
+       reworded, a parent reassigned -- must carry it through rather
+       than resetting an agent that is working to 'idle'. Taken from the
+       caller when they supplied one (the runner does), otherwise from
+       what is already on disk. *)
+    if Info.RunState <> '' then
+    begin
+      Obj.PutStr('run_state', Info.RunState);
+      Obj.PutStr('run_start', Info.RunStart);
+      Obj.PutStr('run_end',   Info.RunEnd);
+      Obj.PutStr('run_note',  Info.RunNote);
+    end
+    else if Prior.Exists and (Prior.RunState <> '') then
+    begin
+      Obj.PutStr('run_state', Prior.RunState);
+      Obj.PutStr('run_start', Prior.RunStart);
+      Obj.PutStr('run_end',   Prior.RunEnd);
+      Obj.PutStr('run_note',  Prior.RunNote);
+    end;
     try
       WriteFileText(Path, Obj.ToJSON);
     except
@@ -560,6 +640,155 @@ begin
   Sid := AgentSessionId(Name);
   if Sid = '' then Exit;
   Result := PendingSteeringCount(Sid);
+end;
+
+{ ------------------------------------------------------------ run state -- }
+
+procedure MarkAgentRunStarted(const Name: string);
+var
+  Info: TAgentInfo;
+  Err: string;
+begin
+  if not GetAgent(Name, Info) then Exit;
+  Info.RunState := 'running';
+  Info.RunStart := NowIsoUtc;
+  Info.RunEnd   := '';
+  Info.RunNote  := '';
+  SaveAgent(Info, Err);
+end;
+
+procedure MarkAgentRunFinished(const Name, State, Note: string);
+var
+  Info: TAgentInfo;
+  Err, Line: string;
+begin
+  if not GetAgent(Name, Info) then Exit;
+  Info.RunState := State;
+  Info.RunEnd   := NowIsoUtc;
+  { A note is a status line, not a transcript -- the transcript is the
+    agent's session, which is where anyone wanting the detail should
+    look. }
+  Line := Trim(Note);
+  if Length(Line) > 240 then Line := Copy(Line, 1, 240) + '...';
+  Info.RunNote := Line;
+  SaveAgent(Info, Err);
+end;
+
+{ ISO-8601 'YYYY-MM-DDTHH:NN:SSZ' -> TDateTime. Returns 0 when the
+  string is not one, which callers read as "no timestamp". }
+function ParseIsoUtc(const S: string): TDateTime;
+var
+  Y, M, D, H, N, Sec: Word;
+begin
+  Result := 0;
+  if Length(S) < 19 then Exit;
+  try
+    Y   := StrToInt(Copy(S,  1, 4));
+    M   := StrToInt(Copy(S,  6, 2));
+    D   := StrToInt(Copy(S,  9, 2));
+    H   := StrToInt(Copy(S, 12, 2));
+    N   := StrToInt(Copy(S, 15, 2));
+    Sec := StrToInt(Copy(S, 18, 2));
+    Result := EncodeDate(Y, M, D) + EncodeTime(H, N, Sec, 0);
+  except
+    Result := 0;
+  end;
+end;
+
+function AgentIdleMinutes(const Name: string): Integer;
+var
+  Info: TAgentInfo;
+  Stamp: TDateTime;
+  Mins: Double;
+begin
+  Result := -1;
+  if not GetAgent(Name, Info) then Exit;
+  if SameText(Info.RunState, 'running') then
+    Stamp := ParseIsoUtc(Info.RunStart)
+  else
+    Stamp := ParseIsoUtc(Info.RunEnd);
+  if Stamp = 0 then Exit;
+  { Both sides in UTC: the stamps are written as UTC by NowIsoUtc, so
+    comparing them against local Now would report the timezone offset as
+    idleness -- an agent that ran a minute ago reading as hours stale in
+    anywhere but London. Same conversion NowIsoUtc itself uses. }
+  {$IFDEF FPC}
+  Mins := (LocalTimeToUniversal(Now) - Stamp) * 24 * 60;
+  {$ELSE}
+  Mins := (TTimeZone.Local.ToUniversalTime(Now) - Stamp) * 24 * 60;
+  {$ENDIF}
+  if Mins < 0 then Mins := 0;   { clock skew reads as "just now" }
+  Result := Trunc(Mins);
+end;
+
+{ ---------------------------------------------------------- supervision -- }
+
+function SuperviseAgents(StallMinutes, IdleMinutes: Integer): TAgentVerdictArray;
+var
+  Rows: TAgentInfoArray;
+  I, Mins: Integer;
+  V: TAgentVerdict;
+begin
+  SetLength(Result, 0);
+  Rows := ListAgents;
+  for I := 0 to High(Rows) do
+  begin
+    Mins := AgentIdleMinutes(Rows[I].Name);
+    V.Name    := Rows[I].Name;
+    V.State   := Rows[I].RunState;
+    V.Minutes := Mins;
+    V.Action  := 'ok';
+    V.Why     := '';
+
+    (* A run marked `running` that is also NOT running.
+
+       This is the only failure a supervisor can actually detect: a live
+       turn holds the session's turn lock, so an agent whose manifest
+       says `running` while the lock is free is one whose process died
+       mid-turn -- nothing else can produce that pair. Checking the lock
+       rather than the clock alone is what stops a legitimately long run
+       from being declared dead at StallMinutes. *)
+    if SameText(Rows[I].RunState, 'running') and (not AgentIsBusy(Rows[I].Name)) then
+    begin
+      V.Action := 'restart';
+      V.Why := 'was left mid-run with no turn in flight -- the process ' +
+               'that owned it is gone';
+    end
+    else if SameText(Rows[I].RunState, 'running') and (StallMinutes > 0) and
+            (Mins >= StallMinutes) then
+    begin
+      { Running, lock held, but for a very long time. Reported, not
+        restarted: something IS working, and killing it would lose
+        whatever it has done. }
+      V.Action := 'stalled';
+      V.Why := Format('has been running for %d minute(s)', [Mins]);
+    end
+    else if SameText(Rows[I].RunState, 'failed') then
+    begin
+      V.Action := 'restart';
+      V.Why := 'last run failed: ' + Rows[I].RunNote;
+    end
+    else if (IdleMinutes > 0) and (Mins >= IdleMinutes) and
+            (not SameText(Rows[I].RunState, 'running')) then
+    begin
+      V.Action := 'restart';
+      V.Why := Format('has not run for %d minute(s)', [Mins]);
+    end;
+
+    SetLength(Result, Length(Result) + 1);
+    Result[High(Result)] := V;
+  end;
+end;
+
+function NotifyParent(const Name, Text: string): Boolean;
+var
+  Info: TAgentInfo;
+  Delivered, Err: string;
+begin
+  Result := False;
+  if not GetAgent(Name, Info) then Exit;
+  if Info.Parent = '' then Exit;
+  Result := AgentSend(Info.Parent, Name, Text, Delivered, Err);
 end;
 
 end.

@@ -82,6 +82,13 @@ begin
     much is waiting for it. A roster without these is a list of names. }
   Result.PutBool('busy',    AgentIsBusy(Info.Name));
   Result.PutInt ('pending', AgentPending(Info.Name));
+  { Run state: what the runner last wrote, plus how long ago -- the two
+    numbers a roster (and a supervisor) actually reads. }
+  Result.PutStr('run_state', Info.RunState);
+  if Info.RunStart <> '' then Result.PutStr('run_start', Info.RunStart);
+  if Info.RunEnd   <> '' then Result.PutStr('run_end',   Info.RunEnd);
+  if Info.RunNote  <> '' then Result.PutStr('run_note',  Info.RunNote);
+  Result.PutInt ('idle_minutes', AgentIdleMinutes(Info.Name));
 end;
 
 function Tool_Agent(const ArgsJSON: string; out ErrMsg: string): string;

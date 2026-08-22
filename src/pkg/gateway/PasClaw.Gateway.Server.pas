@@ -212,6 +212,19 @@ type
     function RunDesktopTurn(const SystemPrompt, Prompt: string;
                             Narrate: Boolean; UseFastModel: Boolean;
                             out Reply, Err: string): Boolean; overload;
+    (* One turn on a STANDING AGENT's own session (PasClaw.Agents).
+
+       Unlike RunDesktopTurn this is session-aware: it loads the agent's
+       stored conversation, runs under that session's turn lock, drains
+       the agent's mailbox through SteeringKey, and files the result
+       back. That is what makes an agent something you can message on
+       Thursday about Monday -- a stateless turn would answer with no
+       memory of either.
+
+       Called on a background thread (TAgentRunThread); returns when the
+       turn is over. *)
+    function RunAgentTurn(const AgentName, Prompt: string;
+                          out Reply, Err: string): Boolean;
     { OnToolCall sink for a narrated turn -- turns each tool call into a
       page-progress event so the desktop can show work rather than a
       spinner. A method, not a closure: the loop's hook is a method
@@ -635,6 +648,7 @@ uses
   PasClaw.Gateway.Desktop,  { desktop client surface: workspaces, projects,
                               tasks, jobs, apps, pages }
   PasClaw.Desktop.Events,   { the /v1/desktop/events fan-out }
+  PasClaw.Agents,           { standing agents: roster, mailbox, run state }
   PasClaw.Projects.Store,   { job/task records the desktop callbacks write }
   PasClaw.Apps.Runner,      { StopAllApps on shutdown }
   PasClaw.Pages,            { BuildPagePrompt / TPageKind }
@@ -6059,6 +6073,145 @@ begin
   Result := RunDesktopTurn(SystemPrompt, Prompt, Narrate, False, Reply, Err);
 end;
 
+function TGatewayServer.RunAgentTurn(const AgentName, Prompt: string;
+  out Reply, Err: string): Boolean;
+var
+  Info: TAgentInfo;
+  Sid, Sys, Task: string;
+  Stored: TSession;
+  Msgs, Fresh: TMessageArray;
+  Loop: TToolLoopResult;
+  LoopCfg: TToolLoopConfig;
+  Prim: ILLMProvider;
+  FB: TLLMProviderArray;
+  FBModels: TStringArray;
+  DefModel: string;
+  FastProv: ILLMProvider;
+  FastModel: string;
+  TurnLock: TCriticalSection;
+begin
+  Reply := '';
+  Err := '';
+  Result := False;
+
+  if not GetAgent(AgentName, Info) then
+  begin
+    Err := 'no such agent: ' + AgentName;
+    Exit;
+  end;
+  Sid := AgentSessionId(Info.Name);
+
+  SnapshotRuntimeFast(Prim, FB, FBModels, DefModel, FastProv, FastModel);
+  if Prim = nil then
+  begin
+    Err := 'no provider configured';
+    Exit;
+  end;
+
+  (* What the agent IS, every turn. Rebuilt rather than stored on the
+     session because a role can be edited and the next turn should
+     honour the edit -- the same reason the desktop rebuilds its shell
+     prompt each turn rather than trusting a stale copy. *)
+  Sys := 'You are "' + Info.Title + '", a standing agent inside PasClaw.';
+  if Info.Role <> '' then
+    Sys := Sys + #10 + 'Your role: ' + Info.Role;
+  if Info.Parent <> '' then
+    Sys := Sys + #10 + 'You report to the agent "' + Info.Parent +
+           '". Use the agent tool to send it progress and to raise ' +
+           'anything you cannot resolve.'
+  else
+    Sys := Sys + #10 + 'You are a top-level agent; you report to the operator.';
+  Sys := Sys + #10 +
+    'Messages from other agents arrive mid-turn as notes marked ' +
+    '"Message from <name>:". Treat them as instructions from a ' +
+    'colleague, not as the user speaking, and say who you are acting ' +
+    'for when it matters.' + #10 +
+    'This conversation is yours and it persists. You will be woken ' +
+    'again; leave your work in a state your next turn can pick up.';
+
+  Task := Trim(Prompt);
+  (* Woken with nothing to say. The mailbox is NOT restated here: it
+     arrives through the steering queue below, and telling the agent its
+     messages twice -- once as the user turn, once as a steering note --
+     would have it act on each one twice. *)
+  if Task = '' then
+    Task := 'You have been woken. Check any messages you have been ' +
+            'sent, continue your work, and report what you did.';
+
+  LoopCfg := Default(TToolLoopConfig);
+  LoopCfg.Provider := Prim;
+  LoopCfg.Registry := FRegistry;
+  if FToolsHonorInMemoryConfig then LoopCfg.ActiveConfig := FCfg;
+  LoopCfg.Model := DefModel;
+  { The agent's own model when it named one -- a cheap IC and an
+    expensive lead are the point of the field. }
+  if Info.Model <> '' then LoopCfg.Model := Info.Model;
+  LoopCfg.MaxIterations  := FMaxIter;
+  LoopCfg.Parallel       := True;
+  LoopCfg.Mode           := pmBuild;
+  LoopCfg.Fallbacks      := FB;
+  LoopCfg.FallbackModels := FBModels;
+  LoopCfg.Options        := DefaultChatOptions;
+  ApplyPromptCacheConfig(LoopCfg.Options, FCfg.PromptCache);
+  LoopCfg.Options.SystemPrompt := Sys;
+  LoopCfg.Identity       := MakeIdentity('gateway', 'agent');
+  { The mailbox. Keyed by the agent's session so a message sent to the
+    agent -- by another agent, by the operator over HTTP -- is drained
+    into this turn between iterations. }
+  LoopCfg.SteeringKey    := Sid;
+  LoopCfg.CompactEnabled := FCfg.Compaction.Enabled;
+  LoopCfg.CompactOpts    := DefaultCompactOptions;
+  LoopCfg.CompactOpts.ThresholdTokens    := FCfg.Compaction.ThresholdTokens;
+  LoopCfg.CompactOpts.RetainBudgetTokens := FCfg.Compaction.RetainBudgetTokens;
+  LoopCfg.CompactOpts.KeepRecentTurns    := FCfg.Compaction.KeepRecentTurns;
+  LoopCfg.CompactOpts.SummaryBudget      := FCfg.Compaction.SummaryBudget;
+  LoopCfg.PruneEnabled       := FCfg.Prune.Enabled;
+  LoopCfg.PruneMinIterations := FCfg.Prune.MinIterations;
+  LoopCfg.PruneOpts          := DefaultPruneOptions;
+  LoopCfg.PruneOpts.Enabled            := FCfg.Prune.Enabled;
+  LoopCfg.PruneOpts.ThresholdTokens    := FCfg.Prune.ThresholdTokens;
+  LoopCfg.PruneOpts.ProtectTailTokens  := FCfg.Prune.ProtectTailTokens;
+  LoopCfg.PruneOpts.MinCandidateTokens := FCfg.Prune.MinCandidateTokens;
+  LoopCfg.PruneOpts.PreviewChars       := FCfg.Prune.PreviewChars;
+  LoopCfg.PruneOpts.Model              := FCfg.PlanModel;
+  LoopCfg.ToolOutputCap  := FCfg.ToolOutputCap;
+  LoopCfg.ProviderRetryAttempts  := FCfg.ProviderRetryAttempts;
+  LoopCfg.ProviderRetryBackoffMs := FCfg.ProviderRetryBackoffMs;
+  LoopCfg.StreamReliability := FCfg.StreamReliability;
+
+  (* One turn at a time on this conversation, held from load to persist
+     -- the same transaction /v1/chat/completions takes for a
+     session-context request, and for the same reason: two turns that
+     both read the stored prefix would each persist their own view and
+     one would silently lose the other. A supervisor restarting an agent
+     the operator just woke is exactly that race. *)
+  TurnLock := SessionTurnLock(Sid);
+  TurnLock.Enter;
+  try
+    SetLength(Fresh, 1);
+    Fresh[0] := MakeMessage(mrUser, Task);
+    Stored := TSession.Create(Sid);
+    try
+      Msgs := MergeSessionContext(Stored.Messages, Fresh);
+    finally
+      Stored.Free;
+    end;
+
+    if not RunToolLoop(LoopCfg, Msgs, Loop) then
+    begin
+      Err := 'agent loop failed';
+      Exit;
+    end;
+    Reply := Loop.Content;
+    PersistGatewaySession(FCfg, Sid,
+                          'Agent: ' + Info.Title,
+                          LoopCfg.Provider.GetName, LoopCfg.Model, Loop);
+    Result := True;
+  finally
+    TurnLock.Leave;
+  end;
+end;
+
 function TGatewayServer.RunDesktopTurn(const SystemPrompt, Prompt: string;
   Narrate: Boolean; UseFastModel: Boolean;
   out Reply, Err: string): Boolean;
@@ -6469,6 +6622,124 @@ begin
   Result := True;
 end;
 
+(* How many agent turns may be in flight at once.
+
+   A standing organisation is dozens of agents, and every running turn
+   is a thread holding a provider connection. Unbounded, one supervisor
+   sweep over fifty stale agents would open fifty of them at once and
+   the cap that actually applied would be the provider's rate limit,
+   discovered as failures. Bounded here, the fifty-first is told to try
+   again -- which a supervisor can act on and a rate-limit error cannot. *)
+const
+  MaxConcurrentAgentRuns = 8;
+
+var
+  GAgentRunLock: TCriticalSection = nil;
+  GAgentRunsInFlight: Integer = 0;
+
+type
+  (* One agent turn on its own thread. Mirrors TJobRunThread, including
+     the workspace pin: a run outlives the request that began it, and an
+     operator switching workspace mid-run must not redirect an agent
+     already working into another business's files. *)
+  TAgentRunThread = class(TThread)
+  private
+    FAgent, FPrompt, FWorkspace: string;
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const AAgent, APrompt: string);
+  end;
+
+constructor TAgentRunThread.Create(const AAgent, APrompt: string);
+begin
+  inherited Create(True);
+  FAgent := AAgent;
+  FPrompt := APrompt;
+  FWorkspace := ActiveWorkspaceName;
+  FreeOnTerminate := True;
+end;
+
+procedure TAgentRunThread.Execute;
+var
+  Reply, Err: string;
+  OK: Boolean;
+begin
+  SetThreadWorkspace(FWorkspace);
+  try
+    OK := False; Reply := ''; Err := 'no gateway available';
+    if GDesktopGateway <> nil then
+      OK := GDesktopGateway.RunAgentTurn(FAgent, FPrompt, Reply, Err);
+    (* The run's outcome goes on the agent, not just in a log: the
+       supervisor reads exactly this to decide whether to restart it,
+       and a failure nobody wrote down is a failure nobody can act on. *)
+    if OK then
+      MarkAgentRunFinished(FAgent, 'done', Reply)
+    else
+      MarkAgentRunFinished(FAgent, 'failed', Err);
+    { The board is watching -- the roster repaints on this rather than
+      polling. }
+    PublishAgent(FAgent);
+  finally
+    GAgentRunLock.Acquire;
+    try
+      if GAgentRunsInFlight > 0 then Dec(GAgentRunsInFlight);
+    finally
+      GAgentRunLock.Release;
+    end;
+  end;
+end;
+
+function DesktopAgentRunner(const AgentName, Prompt: string;
+  out Err: string): Boolean;
+var
+  Info: TAgentInfo;
+begin
+  Err := '';
+  Result := False;
+  if GDesktopGateway = nil then
+  begin
+    Err := 'no gateway available';
+    Exit;
+  end;
+  if not GetAgent(AgentName, Info) then
+  begin
+    Err := 'no such agent: ' + AgentName;
+    Exit;
+  end;
+  (* Refuse rather than queue behind a turn already running.
+
+     The turn lock would serialise a second run safely, but "safely"
+     here means the caller waits an unknown time for a thread it cannot
+     see. An agent that is already working does not need to be told to
+     work -- it needs to be TOLD something, which is what the mailbox is
+     for, and which reaches it mid-turn anyway. *)
+  if AgentIsBusy(AgentName) then
+  begin
+    Err := 'agent ' + Info.Name + ' is already running -- send it a ' +
+           'message instead; it will see that mid-turn';
+    Exit;
+  end;
+
+  GAgentRunLock.Acquire;
+  try
+    if GAgentRunsInFlight >= MaxConcurrentAgentRuns then
+    begin
+      Err := Format('too many agent runs in flight (%d) -- try again shortly',
+                    [GAgentRunsInFlight]);
+      Exit;
+    end;
+    Inc(GAgentRunsInFlight);
+  finally
+    GAgentRunLock.Release;
+  end;
+
+  MarkAgentRunStarted(Info.Name);
+  PublishAgent(Info.Name);
+  TAgentRunThread.Create(Info.Name, Prompt).Start;
+  Result := True;
+end;
+
 { One turn, plain text in and out -- what Mail's summarise-and-draft needs.
   Not narrated: a single short turn is over before a progress feed would say
   anything useful. }
@@ -6492,6 +6763,7 @@ begin
   SetPageGenerator(DesktopPageGenerator);
   SetJobRunner(DesktopJobRunner);
   SetTextGenerator(DesktopTextGenerator);
+  SetAgentRunner(DesktopAgentRunner);
 end;
 
 function GenChatCompletionId: string;
@@ -9953,6 +10225,10 @@ initialization
   GProviderSignatureCache     := TStringList.Create;
   GGatewayStatsLock           := TCriticalSection.Create;
   GStatsCacheLock             := TCriticalSection.Create;
+  { Guards the in-flight agent-run counter. Created here rather than
+    lazily because the first caller may be a supervisor thread, and a
+    lazy create racing itself is precisely what a lock is for. }
+  GAgentRunLock               := TCriticalSection.Create;
   { Unsorted on purpose: insertion order doubles as FIFO so the
     eviction in RememberProviderSignature (Delete(0)) actually drops
     the OLDEST entry. A sorted+dupIgnore TStringList would order by
@@ -9968,5 +10244,6 @@ finalization
   GProviderSignatureCacheLock.Free;
   GGatewayStatsLock.Free;
   GStatsCacheLock.Free;
+  GAgentRunLock.Free;
 
 end.

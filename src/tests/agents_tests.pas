@@ -238,6 +238,102 @@ begin
   AssertTrue(not DeleteAgent('ic-one', Err), 'deleting twice reports honestly');
 end;
 
+procedure TestRunStateAndSupervision;
+var
+  Err: string;
+  Info: TAgentInfo;
+  V: TAgentVerdictArray;
+  I: Integer;
+  FoundDead, FoundOk: Boolean;
+begin
+  WriteLn('-- run state, and what a supervisor can actually know');
+  SaveAgent(MakeAgent('worker', 'Worker', 'Does the work',
+                      'payments-tech-lead'), Err);
+  GetAgent('worker', Info);
+  AssertEqStr(Info.RunState, 'idle', 'a fresh agent is idle');
+  AssertEqInt(AgentIdleMinutes('worker'), -1,
+              'and has no idle age until it has run');
+
+  MarkAgentRunStarted('worker');
+  GetAgent('worker', Info);
+  AssertEqStr(Info.RunState, 'running', 'starting a run is recorded');
+  AssertTrue(Info.RunStart <> '', 'with when it started');
+  AssertEqStr(Info.RunEnd, '', 'and no end yet');
+
+  { An ordinary edit must not reset a run in progress -- the runner owns
+    run state, and a role reworded mid-run is not a reason to forget the
+    agent is working. }
+  SaveAgent(MakeAgent('worker', 'Worker', 'Does the work, carefully',
+                      'payments-tech-lead'), Err);
+  GetAgent('worker', Info);
+  AssertEqStr(Info.RunState, 'running',
+              'an unrelated edit carries run state through');
+  AssertEqStr(Info.Role, 'Does the work, carefully', 'while taking the edit');
+
+  (* The verdict that matters: the manifest says `running`, but nothing
+     holds the session's turn lock. In a test process nothing ever does,
+     which is exactly the state a crashed run leaves behind. *)
+  V := SuperviseAgents(0, 0);
+  FoundDead := False; FoundOk := False;
+  for I := 0 to High(V) do
+  begin
+    if (V[I].Name = 'worker') and (V[I].Action = 'restart') then
+    begin
+      FoundDead := True;
+      AssertTrue(Pos('no turn in flight', V[I].Why) > 0,
+                 'and says why: the process that owned it is gone');
+    end;
+    if (V[I].Name = 'payments-tech-lead') and (V[I].Action = 'ok') then
+      FoundOk := True;
+  end;
+  AssertTrue(FoundDead, 'a run left behind by a dead process is spotted');
+  AssertTrue(FoundOk, 'an agent that never ran is left alone');
+
+  MarkAgentRunFinished('worker', 'failed', 'provider refused');
+  GetAgent('worker', Info);
+  AssertEqStr(Info.RunState, 'failed', 'a failure is recorded');
+  AssertEqStr(Info.RunNote, 'provider refused', 'with the reason');
+  AssertTrue(AgentIdleMinutes('worker') >= 0,
+             'and the clock starts from when it ended');
+
+  V := SuperviseAgents(0, 0);
+  FoundDead := False;
+  for I := 0 to High(V) do
+    if (V[I].Name = 'worker') and (V[I].Action = 'restart') then FoundDead := True;
+  AssertTrue(FoundDead, 'a failed run is a restart too');
+
+  MarkAgentRunFinished('worker', 'done', 'all good');
+  V := SuperviseAgents(0, 0);
+  FoundOk := False;
+  for I := 0 to High(V) do
+    if (V[I].Name = 'worker') and (V[I].Action = 'ok') then FoundOk := True;
+  AssertTrue(FoundOk, 'a healthy agent is left alone');
+
+  { IdleMinutes=1 with a just-finished run must NOT fire: the run ended
+    seconds ago. This is the guard against a supervisor that churns a
+    working organisation every sweep. }
+  V := SuperviseAgents(0, 1);
+  FoundOk := False;
+  for I := 0 to High(V) do
+    if (V[I].Name = 'worker') and (V[I].Action = 'ok') then FoundOk := True;
+  AssertTrue(FoundOk, 'an agent that just ran is not nudged for idleness');
+end;
+
+procedure TestNotifyParent;
+var
+  Msgs: TAgentMessageArray;
+begin
+  WriteLn('-- telling the parent');
+  AssertTrue(NotifyParent('worker', 'I fell over'),
+             'a report with a parent notifies it');
+  Msgs := AgentMessages('payments-tech-lead', 0);
+  AssertTrue((Length(Msgs) > 0) and (Msgs[High(Msgs)].From = 'worker'),
+             'the parent hears from the agent by name');
+  AssertTrue(not NotifyParent('payments-tech-lead', 'anything'),
+             'a top-level agent has nobody to tell, and says so rather ' +
+             'than inventing a recipient');
+end;
+
 begin
   WriteLn('agents_tests');
   SetThreadWorkspace('workspace');
@@ -247,6 +343,8 @@ begin
   TestDeliveryLandsInTheRightQueue;
   TestLimitAndUnknown;
   TestNameSafety;
+  TestRunStateAndSupervision;
+  TestNotifyParent;
   TestDelete;
   if Failures > 0 then
   begin

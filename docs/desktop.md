@@ -452,7 +452,7 @@ poll. Events are small JSON objects with a monotonic `seq`:
 ```
 
 Types: `projects`, `project`, `task`, `job`, `joblog`, `app`, `page`,
-`workspace`, `turn-queued`, plus `hello` on connect, `ping` on an idle
+`workspace`, `turn-queued`, `agent`, plus `hello` on connect, `ping` on an idle
 feed, and `gap` after an overflow.
 
 **The feed proves it is alive, and the client checks.** After ~15s of
@@ -833,6 +833,12 @@ Every route below sits inside the gateway's existing bearer-auth gate.
 | GET | `/v1/apps/<p>/read/<surface>` | allowlisted read window |
 | POST | `/v1/apps/<p>/action/<name>` | allowlisted side effect, scoped per app |
 | PUT | `/v1/apps/<p>/entry` | put an earlier version of the app back |
+| GET/POST | `/v1/agents` | the standing roster / create one |
+| GET/DELETE | `/v1/agents/<name>` | inspect / retire |
+| POST | `/v1/agents/<n>/send` | put a message in its mailbox |
+| POST | `/v1/agents/<n>/run` | give it a turn now |
+| GET | `/v1/agents/<n>/messages` | what it was told |
+| POST | `/v1/agents/supervise` | one supervision pass |
 | GET | `/v1/desktop/events` | SSE: board changes |
 | GET | `/v1/desktop/config` | how apps are served (origin, isolation) |
 | GET/PUT | `/v1/desktop/state` | the workspace's window layout |

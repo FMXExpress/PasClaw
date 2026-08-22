@@ -63,6 +63,17 @@ type
   TTextGenerator = function(const SystemPrompt, Prompt: string;
     out Reply, Err: string): Boolean;
 
+  (* Starts one turn on a standing agent's own session, in the
+     background, and returns immediately. Wired to the gateway's agent;
+     nil in tests and in a gateway started without a model.
+
+     Returns False when the run could not be STARTED -- no agent, no
+     provider, already running, too many in flight. A run that started
+     and then failed reports through the agent's run state, not here:
+     by then the caller has long since had its answer. *)
+  TAgentRunner = function(const AgentName, Prompt: string;
+    out Err: string): Boolean;
+
 
 (* The off-origin hosts an HTML document tries to LOAD from -- <script src>
    and <link href> pointing at http(s), space-separated, deduped. A plain
@@ -74,6 +85,7 @@ function OffOriginHosts(const Html: string): string;
 procedure SetJobRunner(Runner: TJobRunner);
 procedure SetPageGenerator(Gen: TPageGenerator);
 procedure SetTextGenerator(Gen: TTextGenerator);
+procedure SetAgentRunner(Runner: TAgentRunner);
 
 (* The origin generated apps are served from. Empty (the default) means "the
    same origin as everything else", which is the simple arrangement and the
@@ -128,9 +140,15 @@ uses
 
 var
   GJobRunner: TJobRunner = nil;
+  GAgentRunner: TAgentRunner = nil;
   GPageGen: TPageGenerator = nil;
   GTextGen: TTextGenerator = nil;
   GAppsOrigin: string = '';
+
+procedure SetAgentRunner(Runner: TAgentRunner);
+begin
+  GAgentRunner := Runner;
+end;
 
 procedure SetJobRunner(Runner: TJobRunner);
 begin
@@ -553,6 +571,13 @@ begin
   Result.PutStr('updated', Info.Updated);
   Result.PutBool('busy',    AgentIsBusy(Info.Name));
   Result.PutInt ('pending', AgentPending(Info.Name));
+  { Run state: what the runner last wrote, plus how long ago -- the two
+    numbers a roster (and a supervisor) actually reads. }
+  Result.PutStr('run_state', Info.RunState);
+  if Info.RunStart <> '' then Result.PutStr('run_start', Info.RunStart);
+  if Info.RunEnd   <> '' then Result.PutStr('run_end',   Info.RunEnd);
+  if Info.RunNote  <> '' then Result.PutStr('run_note',  Info.RunNote);
+  Result.PutInt ('idle_minutes', AgentIdleMinutes(Info.Name));
 end;
 
 function RouteAgents(const Method, Doc, Body: string;
@@ -563,9 +588,11 @@ var
   List: TAgentInfoArray;
   Msgs: TAgentMessageArray;
   Info: TAgentInfo;
+  Verdicts: TAgentVerdictArray;
   Segs: TStringList;
   Name_, Err, Delivered, Tail: string;
-  I, Limit: Integer;
+  I, Limit, Stall, Idle, Acted: Integer;
+  Dry: Boolean;
 begin
   Result := True;
 
@@ -625,6 +652,76 @@ begin
     Exit;
   end;
 
+  (* POST /v1/agents/supervise -- one supervision pass, on demand.
+
+     Phase 4 as a ROUTE rather than only a timer, for two reasons: it is
+     how the sweep is tested without waiting out an interval, and it is
+     how one agent supervises another (a lead's turn can call it) rather
+     than supervision being a privilege only the process has.
+
+     `dry` reports the verdicts and starts nothing -- the same list the
+     acting pass works from, which is what makes "what would you do"
+     answerable without doing it. *)
+  if (Method = 'POST') and (Doc = '/v1/agents/supervise') then
+  begin
+    Obj := BodyObj(Body);
+    try
+      Stall := 0; Idle := 0; Dry := False;
+      if Obj <> nil then
+      begin
+        Stall := Integer(Obj.GetInt('stall_minutes', 0));
+        Idle  := Integer(Obj.GetInt('idle_minutes', 0));
+        Dry   := Obj.GetBool('dry', False);
+      end;
+    finally
+      Obj.Free;
+    end;
+    Verdicts := SuperviseAgents(Stall, Idle);
+    Root := TJsonObject.Create;
+    try
+      Arr := TJsonArray.Create;
+      Acted := 0;
+      for I := 0 to High(Verdicts) do
+      begin
+        Item := TJsonObject.Create;
+        Item.PutStr('name',    Verdicts[I].Name);
+        Item.PutStr('state',   Verdicts[I].State);
+        Item.PutInt('minutes', Verdicts[I].Minutes);
+        Item.PutStr('action',  Verdicts[I].Action);
+        Item.PutStr('why',     Verdicts[I].Why);
+        if (not Dry) and (Verdicts[I].Action = 'restart') then
+        begin
+          (* Tell the parent BEFORE restarting. A restart that works is
+             still news -- the whole point of two leads watching each
+             other is that the other one knows -- and a restart that
+             fails to start would otherwise be silent. *)
+          NotifyParent(Verdicts[I].Name,
+            'Supervisor restarted you: ' + Verdicts[I].Why);
+          if Assigned(GAgentRunner) and
+             GAgentRunner(Verdicts[I].Name, '', Err) then
+          begin
+            Item.PutBool('restarted', True);
+            Inc(Acted);
+          end
+          else
+          begin
+            Item.PutBool('restarted', False);
+            if Err <> '' then Item.PutStr('error', Err)
+            else Item.PutStr('error', 'no agent runner attached');
+          end;
+        end;
+        Arr.AddObject(Item);
+      end;
+      Root.PutArray('verdicts', Arr);
+      Root.PutInt('restarted', Acted);
+      Root.PutBool('dry', Dry);
+      ReplyJSON(Resp, 200, Root.ToJSON);
+    finally
+      Root.Free;
+    end;
+    Exit;
+  end;
+
   { /v1/agents/<name>[/send|/messages]. PathSegments, not a raw split:
     it drops the empty leading segment and URL-decodes, which is what
     every other route here expects of its indices. }
@@ -673,6 +770,49 @@ begin
       end;
     finally
       Obj.Free;
+    end;
+    Exit;
+  end;
+
+  (* POST /v1/agents/<name>/run -- give the agent the floor.
+
+     Phase 2 delivered messages; this is what makes one ACT on them. The
+     body's "prompt" is optional and usually absent: an agent woken with
+     nothing to say is told to check its messages and carry on, and the
+     messages themselves arrive through the steering queue like any
+     other -- one delivery path, so a woken agent cannot be shown the
+     same instruction twice. *)
+  if (Method = 'POST') and (Tail = 'run') then
+  begin
+    if not Assigned(GAgentRunner) then
+    begin
+      ReplyErr(Resp, 503,
+        'this gateway has no agent attached, so it cannot run agents');
+      Exit;
+    end;
+    Obj := BodyObj(Body);
+    try
+      Name_ := '';
+      if Obj <> nil then Name_ := Obj.GetStr('prompt', '');
+    finally
+      Obj.Free;
+    end;
+    if not GAgentRunner(Info.Name, Name_, Err) then
+    begin
+      { 409, not 400: "already running" and "too many in flight" are
+        states that pass on their own, and a caller that can distinguish
+        them from a bad request can retry rather than give up. }
+      ReplyErr(Resp, 409, Err);
+      Exit;
+    end;
+    Root := TJsonObject.Create;
+    try
+      Root.PutStr('agent', Info.Name);
+      Root.PutStr('started', 'true');
+      Root.PutStr('session', AgentSessionId(Info.Name));
+      ReplyJSON(Resp, 200, Root.ToJSON);
+    finally
+      Root.Free;
     end;
     Exit;
   end;

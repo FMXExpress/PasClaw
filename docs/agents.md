@@ -126,13 +126,100 @@ whatever future conversation reuses the name. The **session is left
 alone**: a conversation is not garbage because the role that held it was
 retired.
 
-## What this does not do yet
+## Running an agent
 
-- **Nothing runs an agent.** A message reaches an agent the next time
-  *something* runs a turn on its session. Scheduling, long-running
-  autonomous work, and delegation depth are Phase 3.
-- **No supervision.** Nothing restarts a wedged agent or notices one has
-  stopped answering. Phase 4.
+```
+POST /v1/agents/<name>/run    {"prompt": "..."}   # prompt optional
+```
+
+The turn runs on a background thread, against the agent's **own
+session** — it loads the stored conversation, runs under that session's
+turn lock, drains the mailbox through the steering key, and files the
+result back. That is what makes an agent something you can message on
+Thursday about Monday; a stateless turn would answer with no memory of
+either.
+
+`prompt` is usually absent. An agent woken with nothing to say is told
+to check its messages and carry on — and the messages arrive through the
+steering queue like any other, so a woken agent is never shown the same
+instruction twice (once as the user turn and once as a note).
+
+**A second run is refused, not queued.** The turn lock would serialise it
+safely, but "safely" there means the caller waits an unknown time for a
+thread it cannot see. An agent that is already working does not need to
+be told to work — it needs to be *told something*, which is what the
+mailbox is for and which reaches it mid-turn anyway. The refusal is a
+409 and says exactly that.
+
+Runs are capped at **8 in flight**. Unbounded, one supervision sweep over
+fifty stale agents would open fifty provider connections at once and the
+real limit would be the provider's rate limiter, discovered as failures.
+The ninth is told to try again shortly, which a caller can act on.
+
+Run state lives in the manifest — `run_state` (`idle`/`running`/`done`/
+`failed`), `run_start`, `run_end`, `run_note` — because a process that
+died mid-run must leave behind the fact that it *was* running. Nothing in
+memory can tell a supervisor that.
+
+## Supervision
+
+```
+POST /v1/agents/supervise   {"stall_minutes": 0, "idle_minutes": 0, "dry": false}
+```
+
+A route rather than only a timer, for two reasons: it is how the sweep is
+tested without waiting out an interval, and it is how one agent
+supervises another — a lead's turn can call it — rather than supervision
+being a privilege only the process has. Two leads that are each other's
+`parent` supervise each other, which is the shape the plan was written
+for.
+
+The verdicts are computed by a **pure** function (`SuperviseAgents`) that
+reads state, decides, and reports without starting anything. `dry: true`
+returns exactly what the acting pass would do.
+
+| Verdict | When |
+|---|---|
+| `restart` | the manifest says `running` but **no turn holds the session lock** — the process that owned it is gone |
+| `restart` | the last run `failed` |
+| `restart` | `idle_minutes` set and the agent has not run in that long |
+| `stalled` | running, lock held, but longer than `stall_minutes` — **reported, not killed**: something *is* working, and killing it loses whatever it has done |
+| `ok` | everything else, including an agent that has never run |
+
+The dead-run check is the only failure a supervisor can *actually*
+detect, and it is exact: a live turn holds the lock, so `running` + free
+lock is producible by nothing else. Checking the lock rather than the
+clock is what stops a legitimately long run being declared dead.
+
+The parent is told **before** the restart. A restart that works is still
+news — the point of two leads watching each other is that the other one
+knows — and a restart that fails to start would otherwise be silent.
+
+## The roster (desktop)
+
+**Start → Agents** opens the roster: every agent, its live state, how
+many messages are waiting, and what its last run left behind. Rows carry
+**Message** (into the mailbox, and it tells you *which* delivery
+happened) and **Wake** (a turn now, disabled while it works).
+Double-click opens the agent's conversation — an ordinary session
+window — showing both what the agent said and what it was **told**,
+because "why did it do that" is usually answered by a message somebody
+sent it.
+
+It repaints on the `agent` event rather than polling, so an agent that
+starts working updates the roster with nobody touching anything. The
+event carries only the name: run state and pending count are read live,
+and an event that carried them would be stale the moment it was queued.
+
+## What this still does not do
+
+- **No scheduler.** Something must call `run` — an operator, a
+  supervisor sweep, a cron entry. There is no "wake every 20 minutes"
+  built in yet.
+- **No delegation depth limit.** An agent with the `agent` tool can
+  message any other agent, and nothing bounds how deep a chain of
+  instructions goes. Message storms are possible; the run cap bounds the
+  damage but does not prevent the traffic.
 - **A cycle in `parent` is not detected** beyond an agent reporting to
   itself. Delivery never walks the parent chain, so a cycle costs a
   confusing org chart rather than a hang.
