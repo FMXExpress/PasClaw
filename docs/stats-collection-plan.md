@@ -11,6 +11,68 @@ measuring tool, not a pass/fail suite.
 
 ---
 
+## 0. Accuracy: are the numbers in the web UI right?
+
+Asked directly, so answered directly. **The totals are right. The
+per-model and per-provider breakdowns are wrong for all gateway
+traffic** — which is to say, for everything the web UI itself does.
+
+The web UI renders each `/v1/stats` field 1:1 (`webui.html:3851-3896`),
+so UI accuracy is endpoint accuracy.
+
+### What is accurate
+
+Token totals are summed correctly across every provider call in a turn.
+A turn that makes six provider calls (five tool round-trips plus the
+answer) records all six: `RunToolLoop` accumulates into
+`Loop.TotalUsage` (`ToolLoop.pas:2001-2004`) and all four stats writers
+feed it in — the TUI, both `Cmd.Agent` sites, and
+`AccumulateGatewayStats`, which passes `Loop.TotalUsage` explicitly.
+An earlier review had already caught the `LastResp`-only version of
+this bug.
+
+There is also no double counting. `PersistGatewaySession` writes the
+transcript but never touches `Meta.Stats`, so a named session and its
+endpoint bucket do not both record the same tokens.
+
+### What is not accurate
+
+`by_model` and `by_provider` attribute **the bucket's entire cumulative
+total to whichever model ran most recently.** Gateway endpoints fold all
+their traffic into one synthetic session per endpoint, and
+`Meta.Model` / `Meta.Provider` are scalar fields overwritten per
+request.
+
+Reproduced with `src/tests/stats_attribution_repro.pas`, which drives
+the same primitives in the same order as `AccumulateGatewayStatsRaw`:
+100 requests on one model, then a single request on another.
+
+| | actually happened | `/v1/stats` reports |
+|---|---:|---:|
+| `model-EXPENSIVE` | 150,000 tok / 100 reqs | *absent* |
+| `model-CHEAP` | 15 tok / 1 req | **150,015** |
+| provider `anthropic` | 150,000 | *absent* |
+| provider `openai` | 15 | **150,015** |
+
+Totals correct (100,010 in / 50,005 out / 101 turns); attribution
+inverted. A 10,001× over-attribution, and the model that did all the
+work does not appear at all.
+
+This is documented in `AccumulateGatewayStats` as a deliberate
+trade-off — "reflect the MOST RECENT request, not every request" — but
+the web UI presents the tables with no caveat, and the model picker
+makes switching models the normal case rather than an edge case. A
+table that silently drops the model you spent everything on is worse
+than no table.
+
+**Fix:** one bucket per (endpoint, model) pair, which the source already
+names as option (a). That makes the scalar `Meta.Model` correct by
+construction and needs no schema change. It supersedes the cost work below in
+priority: a cost column computed from misattributed tokens would be
+confidently wrong rather than merely absent.
+
+---
+
 ## 1. Benchmark
 
 `GET /v1/stats` aggregates across every session under
@@ -70,7 +132,8 @@ warm  HTTP 200  total=0.00098s   ← 5 s cache working as designed
 - Counters are collected and persisted correctly. 300 seeded sessions
   summed to exactly the expected 4,515,000 input / 2,257,500 output.
 - The 5-second cache works: 253 ms → 0.98 ms.
-- `by_provider` / `by_model` rollups sum correctly.
+- `by_provider` / `by_model` rollups sum correctly *per session*.
+  Their attribution across gateway traffic does not — see §0.
 - `StatsCollectionEnabled` gates all four write sites consistently
   (gateway, TUI, and two in `Cmd.Agent`).
 - Gateway bucket sessions are transcript-free, so opting them in with
@@ -170,7 +233,13 @@ What comparable harnesses do, and what transfers:
 
 Ranked by evidence strength and payoff.
 
-### P1 — Headers-only session load
+### P1 — One stats bucket per (endpoint, model)
+
+The accuracy defect in §0. Everything else on this list is a
+refinement of numbers that are currently attributed to the wrong
+model, so this goes first.
+
+### P2 — Headers-only session load
 
 Add a meta-only read path and use it from `ListSessions`. Parsing stops
 after the metadata object instead of materialising every message.
@@ -185,13 +254,13 @@ the result array and use a real sort.
 too. Both use only `Meta`, but that must be confirmed per caller rather
 than assumed.
 
-### P2 — Split the token classes in the rollups
+### P3 — Split the token classes in the rollups
 
 Emit `input`, `output`, `cache_read`, `cache_created` per provider and
 per model instead of one summed `tokens`. Pure addition to the JSON;
 nothing needs removing. This is the prerequisite for cost.
 
-### P3 — Local cost estimation
+### P4 — Local cost estimation
 
 A price table keyed by provider+model, four rates per entry, and a
 `cost_usd` beside each rollup. Must be labelled an estimate at list
@@ -202,19 +271,19 @@ today, stale later) or require operator-supplied rates in config
 (always right, nobody fills it in)? A built-in table with a config
 override is the obvious default, but it is a maintenance commitment.
 
-### P4 — Fix the collection-off path
+### P5 — Fix the collection-off path
 
 Two small corrections: make `HandleStats` return zeros (or omit the
 rollups) when collection is off, so the response matches its own
 caption; and skip the walk entirely in that case, which also makes
 "off" genuinely cheap. Then correct the comment.
 
-### P5 — Honest session count
+### P6 — Honest session count
 
 Report `sessions` and `bucket_sessions` separately, so `/v1/stats` and
 `pasclaw session list` stop disagreeing.
 
-### P6 — Wire the OTel metrics flag, or delete it
+### P7 — Wire the OTel metrics flag, or delete it
 
 Either implement `gen_ai.client.token.usage` behind
 `diagnostics.otel.metrics` following the GenAI conventions, or remove
@@ -222,7 +291,7 @@ the flag and its round-trip test. Shipping a config switch that does
 nothing, with a test that makes it look covered, is worse than not
 having it.
 
-### P7 — A time dimension
+### P8 — A time dimension
 
 The structural one, and the one I'd think hardest about before
 building. Per-day rollup rows written on each turn would answer "today"
@@ -230,8 +299,8 @@ and "this week" and make P1 nearly moot for the common query, since the
 scan becomes O(days) not O(corpus). It is also the largest change — a
 new on-disk structure with its own migration and pruning story.
 
-*Recommendation:* do P1–P5 first. They are small, measurable, and make
-the existing feature honest. Revisit P7 once there is a reason beyond
+*Recommendation:* do P1 first, then P2–P6. They are small, measurable, and make
+the existing feature honest. Revisit P8 once there is a reason beyond
 symmetry with other tools.
 
 ---
@@ -240,9 +309,14 @@ symmetry with other tools.
 
 - **Only the FPC/Linux build was exercised.** The Delphi build was not
   run; no Delphi toolchain in this container.
-- **The web UI and TUI stats surfaces were read, not driven.** Claim (a)
-  about a misleading caption is inferred from the code comment's own
-  description of the UI, not from watching the UI render.
+- **The web UI was read, not rendered.** Its field mapping and its
+  off-state banner text were read from `webui.html`; no browser was
+  opened. The attribution defect above was reproduced against the
+  endpoint the UI reads, not against the rendered page.
+- **No live provider turn.** The relay provider would not start in this
+  container ("no provider configured"), so the chain from a real
+  provider usage block through to a recorded counter was verified by
+  reading the four writers, not by running one turn end to end.
 - **Synthetic corpus.** Sessions were generated with uniform 800-byte
   turns. Real transcripts have tool results, images and wide size
   variance, so absolute milliseconds will differ; the *shape*
