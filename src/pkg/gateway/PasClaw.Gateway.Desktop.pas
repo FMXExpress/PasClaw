@@ -107,6 +107,7 @@ uses
   PasClaw.Utils,
   PasClaw.JSON,
   PasClaw.Logger,           { the off-origin warning when serving an app }
+  PasClaw.Agents,        { standing agents + the mailbox between them }
   PasClaw.Workspaces,
   PasClaw.Projects.Store,
   PasClaw.Apps,
@@ -516,12 +517,213 @@ begin
          or (Doc = '/v1/desktop/state')
          or (Doc = '/v1/desktop/desktops')
          or (Doc = '/v1/suite')
+         or HasPrefix(Doc, '/v1/agents')
          or HasPrefix(Doc, '/v1/workspaces')
          or HasPrefix(Doc, '/v1/projects')
          or HasPrefix(Doc, '/v1/apps')
          or HasPrefix(Doc, '/v1/pages')
          or HasPrefix(Doc, '/apps/')
          or HasPrefix(Doc, '/pages/');
+end;
+
+{ ---- /v1/agents ---- }
+
+(* The HTTP face of PasClaw.Agents. Same shape as the `agent` tool and
+   deliberately so: an operator at a desktop, a script, and the model
+   itself are all addressing the same roster, and a message that
+   arrived over HTTP should be indistinguishable from one an agent
+   sent -- both land in the same queue and the same record.
+
+   Note this surface is NOT behind agent_tools_enabled. That flag
+   answers "may the MODEL create colleagues and message them"; a person
+   driving their own gateway is a different actor asking a different
+   question, and gating the operator behind a switch meant for the
+   agent would be the same category error the calendar's cron button
+   documents. *)
+function AgentJSONFor(const Info: TAgentInfo): TJsonObject;
+begin
+  Result := TJsonObject.Create;
+  Result.PutStr('name',    Info.Name);
+  Result.PutStr('title',   Info.Title);
+  Result.PutStr('role',    Info.Role);
+  if Info.Model  <> '' then Result.PutStr('model',  Info.Model);
+  if Info.Parent <> '' then Result.PutStr('parent', Info.Parent);
+  Result.PutStr('session', AgentSessionId(Info.Name));
+  Result.PutStr('created', Info.Created);
+  Result.PutStr('updated', Info.Updated);
+  Result.PutBool('busy',    AgentIsBusy(Info.Name));
+  Result.PutInt ('pending', AgentPending(Info.Name));
+end;
+
+function RouteAgents(const Method, Doc, Body: string;
+  out Resp: TDesktopResponse): Boolean;
+var
+  Root, Obj, Item: TJsonObject;
+  Arr: TJsonArray;
+  List: TAgentInfoArray;
+  Msgs: TAgentMessageArray;
+  Info: TAgentInfo;
+  Segs: TStringList;
+  Name_, Err, Delivered, Tail: string;
+  I, Limit: Integer;
+begin
+  Result := True;
+
+  if (Method = 'GET') and (Doc = '/v1/agents') then
+  begin
+    Root := TJsonObject.Create;
+    try
+      Arr := TJsonArray.Create;
+      List := ListAgents;
+      for I := 0 to High(List) do
+      begin
+        Item := AgentJSONFor(List[I]);
+        Arr.AddObject(Item);
+      end;
+      Root.PutArray('agents', Arr);
+      ReplyJSON(Resp, 200, Root.ToJSON);
+    finally
+      Root.Free;
+    end;
+    Exit;
+  end;
+
+  if (Method = 'POST') and (Doc = '/v1/agents') then
+  begin
+    Obj := BodyObj(Body);
+    try
+      if Obj = nil then
+      begin
+        ReplyErr(Resp, 400, 'expected a JSON body with "name"');
+        Exit;
+      end;
+      Info.Name   := Obj.GetStr('name', '');
+      Info.Title  := Obj.GetStr('title', Info.Name);
+      Info.Role   := Obj.GetStr('role', '');
+      Info.Model  := Obj.GetStr('model', '');
+      Info.Parent := Obj.GetStr('parent', '');
+      Name_ := SaveAgent(Info, Err);
+      if Name_ = '' then
+      begin
+        ReplyErr(Resp, 400, Err);
+        Exit;
+      end;
+      if not GetAgent(Name_, Info) then
+      begin
+        ReplyErr(Resp, 500, 'wrote ' + Name_ + ' but cannot read it back');
+        Exit;
+      end;
+      Root := AgentJSONFor(Info);
+      try
+        ReplyJSON(Resp, 200, Root.ToJSON);
+      finally
+        Root.Free;
+      end;
+    finally
+      Obj.Free;
+    end;
+    Exit;
+  end;
+
+  { /v1/agents/<name>[/send|/messages]. PathSegments, not a raw split:
+    it drops the empty leading segment and URL-decodes, which is what
+    every other route here expects of its indices. }
+  Segs := PathSegments(Doc);
+  try
+    if Segs.Count < 3 then
+    begin
+      ReplyErr(Resp, 404, 'no such route');
+      Exit;
+    end;
+    Name_ := Segs[2];
+    Tail := '';
+    if Segs.Count >= 4 then Tail := LowerCase(Segs[3]);
+  finally
+    Segs.Free;
+  end;
+
+  if not GetAgent(Name_, Info) then
+  begin
+    ReplyErr(Resp, 404, 'no such agent: ' + Name_);
+    Exit;
+  end;
+
+  if (Method = 'POST') and (Tail = 'send') then
+  begin
+    Obj := BodyObj(Body);
+    try
+      if Obj = nil then
+      begin
+        ReplyErr(Resp, 400, 'expected a JSON body with "text"');
+        Exit;
+      end;
+      if not AgentSend(Info.Name, Obj.GetStr('from', 'operator'),
+                       Obj.GetStr('text', ''), Delivered, Err) then
+      begin
+        ReplyErr(Resp, 400, Err);
+        Exit;
+      end;
+      Root := TJsonObject.Create;
+      try
+        Root.PutStr('to', Info.Name);
+        Root.PutStr('delivered', Delivered);
+        ReplyJSON(Resp, 200, Root.ToJSON);
+      finally
+        Root.Free;
+      end;
+    finally
+      Obj.Free;
+    end;
+    Exit;
+  end;
+
+  if (Method = 'GET') and (Tail = 'messages') then
+  begin
+    Limit := 50;
+    Msgs := AgentMessages(Info.Name, Limit);
+    Root := TJsonObject.Create;
+    try
+      Arr := TJsonArray.Create;
+      for I := 0 to High(Msgs) do
+      begin
+        Item := TJsonObject.Create;
+        Item.PutStr('at',        Msgs[I].At);
+        Item.PutStr('from',      Msgs[I].From);
+        Item.PutStr('text',      Msgs[I].Text);
+        Item.PutStr('delivered', Msgs[I].Delivered);
+        Arr.AddObject(Item);
+      end;
+      Root.PutArray('messages', Arr);
+      ReplyJSON(Resp, 200, Root.ToJSON);
+    finally
+      Root.Free;
+    end;
+    Exit;
+  end;
+
+  if (Method = 'GET') and (Tail = '') then
+  begin
+    Root := AgentJSONFor(Info);
+    try
+      ReplyJSON(Resp, 200, Root.ToJSON);
+    finally
+      Root.Free;
+    end;
+    Exit;
+  end;
+
+  if (Method = 'DELETE') and (Tail = '') then
+  begin
+    if not DeleteAgent(Info.Name, Err) then
+    begin
+      ReplyErr(Resp, 400, Err);
+      Exit;
+    end;
+    ReplyOK(Resp);
+    Exit;
+  end;
+
+  ReplyErr(Resp, 405, 'method not allowed');
 end;
 
 { ---- /v1/workspaces ---- }
@@ -2775,6 +2977,9 @@ begin
     end;
     Exit(True);
   end;
+
+  if HasPrefix(Doc, '/v1/agents') then
+    Exit(RouteAgents(M, Doc, Body, Resp));
 
   if HasPrefix(Doc, '/v1/workspaces') then
     Exit(RouteWorkspaces(M, Doc, Body, Resp));
