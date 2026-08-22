@@ -774,66 +774,103 @@ const
   GW_BUCKET_V1_CHAT_COMPLETIONS = '_gateway_v1_chat_completions';
   GW_BUCKET_V1_RESPONSES        = '_gateway_v1_responses';
 
-(* One bucket per (endpoint, model), not per endpoint.
+(* One bucket per (endpoint, provider, model), not per endpoint.
 
    Meta.Model and Meta.Provider are scalar and get overwritten on every
    request, so a single per-endpoint bucket attributed its ENTIRE
-   cumulative token total to whichever model happened to run last. With
-   100 requests on one model followed by one request on another, the
+   cumulative token total to whichever request landed last. With 100
+   requests on one model followed by one request on another, the
    /v1/stats by_model table credited all 150,015 tokens to the model
-   that used 15 of them, and the model that did the work vanished from
-   the table completely. Totals were always right; only the breakdown
-   was wrong -- which is the half the web UI renders as a per-model
-   table with no caveat, and its model picker makes switching models
-   the normal case. src/tests/stats_attribution_repro.pas reproduces
-   the old behaviour and asserts the new one.
+   that used 15, and the model that did the work vanished from the
+   table completely. Totals were always right; only the breakdown was
+   wrong -- which is the half the web UI renders as a per-model table
+   with no caveat, and its model picker makes switching models the
+   normal case.
 
-   Scoping the id by model makes the scalar field correct by
-   construction: every request that lands in a bucket shares that
-   bucket's model, so overwriting it is a no-op rather than a lie. No
-   schema change -- this is option (a) named in AccumulateGatewayStats
-   below.
+   Scoping the id by the fields being reported makes those scalars true
+   by construction: every request in a bucket shares its provider and
+   model, so overwriting them is a no-op rather than a lie. No schema
+   change -- this is option (a) named in AccumulateGatewayStats below.
 
-   Sanitising: IsSafeSessionId allows [A-Za-z0-9._-], and model names
-   carry '/' and ':' (openrouter's "anthropic/claude-x", "openai:gpt-x").
-   Dot is deliberately NOT preserved even though it is legal -- an id
-   ending ".orig" is treated as a pre-prune archive by
-   IsSessionArchiveId and would be skipped by every listing, so a model
-   name is far too close to that trap to leave dots in.
+   PROVIDER, not just model. Keying on model alone left by_provider
+   with the identical defect: /v1/config can switch the primary
+   provider while clients keep sending the same model string, and two
+   providers commonly serve one name (a direct vendor key and an
+   aggregator both answering "claude-opus-4-7"). Those shared a bucket,
+   and by_provider credited the first provider's tokens to the second.
+   Codex P2 on PR #586 -- the same failure this function exists to fix,
+   surviving in the other column.
 
-   Empty model falls back to the bare endpoint id: it keeps today's
-   behaviour for the passthrough paths that never learn a model name,
-   and gives those tokens a stable home rather than a bucket called
-   "_gateway_v1_chat_". *)
-function GatewayBucketId(const Endpoint, Model: string): string;
+   HASH SUFFIX, because the readable part is lossy. Sanitising maps
+   every character outside [A-Za-z0-9_-] to '-', so "openai/gpt-5" and
+   "openai:gpt-5" flatten to one string; trailing separators are
+   stripped; and anything past MaxReadable is truncated, which collides
+   any two long ids sharing a prefix -- entirely plausible for dated or
+   versioned model names. A collision merges counters and reinstates
+   the very misattribution being fixed, so the id carries a 32-bit
+   FNV-1a of the RAW provider and model, separated by a byte that
+   cannot occur in either. The readable prefix stays for humans reading
+   the session list; the suffix is what makes the identity sound.
+   Codex P2 on PR #586.
+
+   Empty provider AND model falls back to the bare endpoint id: it
+   keeps today's behaviour for passthrough paths that never learn a
+   model name, and gives those tokens a stable home rather than a
+   bucket named "_gateway_v1_chat_-0000000". *)
+function GatewayBucketId(const Endpoint, ProviderName, Model: string): string;
 const
-  { 128 is IsSafeSessionId's ceiling. The longest endpoint prefix is
-    _gateway_v1_chat_completions (28), so 80 leaves generous room and
-    still admits every real model name. }
-  MaxModelPart = 80;
+  { 128 is IsSafeSessionId's ceiling. Longest endpoint prefix is
+    _gateway_v1_chat_completions (28); plus '_' plus 64 readable plus
+    '-' plus 8 hex leaves headroom. }
+  MaxReadable = 64;
+
+  { Deterministic across processes and runs -- the id must be stable or
+    yesterday's bucket is orphaned on every restart. FNV-1a over bytes,
+    not a codepage-sensitive string hash. }
+  function Fnv1a32(const S: string): LongWord;
+  var
+    i: Integer;
+  begin
+    Result := LongWord($811C9DC5);
+    for i := 1 to Length(S) do
+    begin
+      Result := Result xor LongWord(Byte(S[i]));
+      Result := Result * LongWord($01000193);
+    end;
+  end;
+
 var
   i: Integer;
   C: Char;
-  Clean: string;
+  Clean, Raw: string;
 begin
+  { #1 cannot appear in a provider name or a model id, so the two
+    fields cannot be confused with each other by the hash: provider
+    "a" + model "bc" must not collide with provider "ab" + model "c". }
+  Raw := ProviderName + #1 + Model;
+  if (ProviderName = '') and (Model = '') then Exit(Endpoint);
+
   Clean := '';
-  for i := 1 to Length(Model) do
+  for i := 1 to Length(Raw) do
   begin
-    C := Model[i];
+    C := Raw[i];
     if ((C >= 'a') and (C <= 'z')) or ((C >= 'A') and (C <= 'Z')) or
        ((C >= '0') and (C <= '9')) or (C = '-') or (C = '_') then
       Clean := Clean + C
     else
       Clean := Clean + '-';
-    if Length(Clean) >= MaxModelPart then Break;
+    if Length(Clean) >= MaxReadable then Break;
   end;
-  { An all-separator model name collapses to dashes and carries no
-    information; treat it as unknown rather than minting a bucket
-    named "_gateway_v1_chat_------". }
-  for i := Length(Clean) downto 1 do
-    if Clean[i] <> '-' then Break else SetLength(Clean, i - 1);
-  if Clean = '' then Exit(Endpoint);
-  Result := Endpoint + '_' + Clean;
+  { Trim separator runs at both ends so the readable part does not end
+    in a dash butting against the hash delimiter. }
+  while (Clean <> '') and (Clean[Length(Clean)] = '-') do
+    SetLength(Clean, Length(Clean) - 1);
+  while (Clean <> '') and (Clean[1] = '-') do
+    Delete(Clean, 1, 1);
+
+  Result := Endpoint + '_';
+  if Clean <> '' then Result := Result + Clean + '-';
+  Result := Result + LowerCase(IntToHex(Fnv1a32(Raw), 8));
 end;
 
 procedure AccumulateGatewayStatsRaw(const Cfg: TConfig;
@@ -6026,7 +6063,7 @@ begin
   PersistGatewaySession(FCfg, ReqSessionId(ARequest), '(gateway: /v1/chat)',
                         LoopCfg.Provider.GetName, LoopCfg.Model, Loop);
   AccumulateGatewayStats(FCfg,
-                         GatewayBucketId(GW_BUCKET_V1_CHAT, LoopCfg.Model),
+                         GatewayBucketId(GW_BUCKET_V1_CHAT, LoopCfg.Provider.GetName, LoopCfg.Model),
                          '(gateway: /v1/chat ' + LoopCfg.Model + ')',
                          LoopCfg.Provider.GetName, LoopCfg.Model, Loop);
 
@@ -7485,7 +7522,7 @@ begin
       PersistGatewaySession(FCfg, ReqSession, SessionTitle,
                             LoopCfg.Provider.GetName, ReqModel, Loop);
       AccumulateGatewayStats(FCfg,
-                             GatewayBucketId(GW_BUCKET_V1_CHAT_COMPLETIONS, ReqModel),
+                             GatewayBucketId(GW_BUCKET_V1_CHAT_COMPLETIONS, LoopCfg.Provider.GetName, ReqModel),
                              '(gateway: /v1/chat/completions ' + ReqModel + ')',
                              LoopCfg.Provider.GetName, ReqModel, Loop);
       if Loop.LastResp.FinishReason <> '' then
@@ -7565,7 +7602,7 @@ begin
     PersistGatewaySession(FCfg, ReqSession, SessionTitle,
                           LoopCfg.Provider.GetName, ReqModel, Loop);
     AccumulateGatewayStats(FCfg,
-                           GatewayBucketId(GW_BUCKET_V1_CHAT_COMPLETIONS, ReqModel),
+                           GatewayBucketId(GW_BUCKET_V1_CHAT_COMPLETIONS, LoopCfg.Provider.GetName, ReqModel),
                            '(gateway: /v1/chat/completions ' + ReqModel + ')',
                            LoopCfg.Provider.GetName, ReqModel, Loop);
 
@@ -9090,7 +9127,7 @@ begin
           emitted tool calls (executed client-side, not by us).
           Codex P2 on PR #204. }
         AccumulateGatewayStatsRaw(FCfg,
-                                  GatewayBucketId(GW_BUCKET_V1_RESPONSES, ReqModel),
+                                  GatewayBucketId(GW_BUCKET_V1_RESPONSES, Prim.GetName, ReqModel),
                                   '(gateway: /v1/responses ' + ReqModel + ')',
                                   Prim.GetName, ReqModel,
                                   OutUsage,
@@ -9144,7 +9181,7 @@ begin
         tool-call count even though we didn't dispatch them
         server-side (the client did). }
       AccumulateGatewayStatsRaw(FCfg,
-                                GatewayBucketId(GW_BUCKET_V1_RESPONSES, ReqModel),
+                                GatewayBucketId(GW_BUCKET_V1_RESPONSES, Prim.GetName, ReqModel),
                                 '(gateway: /v1/responses ' + ReqModel + ')',
                                 Prim.GetName, ReqModel,
                                 OutUsage,
@@ -9231,7 +9268,7 @@ begin
         Exit;
       end;
       AccumulateGatewayStats(FCfg,
-                             GatewayBucketId(GW_BUCKET_V1_RESPONSES, ReqModel),
+                             GatewayBucketId(GW_BUCKET_V1_RESPONSES, Prim.GetName, ReqModel),
                              '(gateway: /v1/responses ' + ReqModel + ')',
                              Prim.GetName, ReqModel, Loop);
 

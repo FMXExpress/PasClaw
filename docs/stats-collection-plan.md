@@ -66,8 +66,27 @@ table that silently drops the model you spent everything on is worse
 than no table.
 
 **Fixed** in this branch. `GatewayBucketId` keys buckets by
-(endpoint, model) — option (a), which the source already named — so the
-scalar `Meta.Model` is true by construction. No schema change.
+(endpoint, provider, model) plus a hash of the raw pair, so both scalar
+fields are true by construction. No schema change.
+
+The first attempt keyed on model alone and was still wrong in two ways,
+both caught in review:
+
+- **`by_provider` kept the identical defect.** Two providers serving one
+  model string — `/v1/config` switching the primary, or a direct vendor
+  key and an aggregator both answering `claude-opus-4-7` — shared a
+  bucket. Reproduced: 50 requests on one provider then one on another
+  credited **15,003 tokens to the provider that used 3**. The original
+  test could not have caught this: it varied model and provider
+  *together*, so its provider assertions passed for the wrong reason.
+- **The readable id is lossy.** Sanitising maps everything outside
+  `[A-Za-z0-9_-]` to `-`, so `openai/gpt-5` and `openai:gpt-5` flattened
+  to one bucket; trailing separators were stripped (`gpt-5/` = `gpt-5:`);
+  and truncation collided any two long names sharing a prefix. Each
+  collision merges counters and reinstates the misattribution. The id now
+  carries a 32-bit FNV-1a of the raw provider and model joined by a byte
+  that cannot occur in either, so the readable part is for humans and the
+  suffix carries identity.
 
 Same workload against a running gateway after the change:
 
