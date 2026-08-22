@@ -1071,6 +1071,17 @@ begin
   FWebhookPaths := TStringList.Create;
   FWebhookPaths.CaseSensitive := False;
   SetLength(FWebhookHandlers, 0);
+  (* A browser that reloads or closes mid-response leaves us writing into a
+     socket the peer has already reset -- routine for the desktop's SSE
+     streams, where every tab holds one open and every reload tears it down.
+     Indy's Linux send path does not pass MSG_NOSIGNAL, so that write raises
+     SIGPIPE, whose default action kills the whole gateway: one tab reload
+     took down every session, silently (nothing gets logged -- the process
+     just stops). Ignoring it process-wide turns the signal back into an
+     EPIPE write error, which Indy already treats as the disconnect it is. *)
+  {$IFDEF FPC}{$IFDEF UNIX}
+  FpSignal(SIGPIPE, TSignalHandler(SIG_IGN));
+  {$ENDIF}{$ENDIF}
   FHTTP := TIdHTTPServer.Create(nil);
   FHTTP.OnCommandGet := OnCommandGet;
   FHTTP.OnCommandOther := OnCommandOther;
@@ -5324,11 +5335,15 @@ begin
         else
         begin
           Inc(Idle);
-          { ~15s of quiet -> a comment frame. Comments are ignored by every
-            SSE client but keep the socket demonstrably alive. }
+          { ~15s of quiet -> a ping EVENT, not a comment. A comment frame
+            keeps proxies from closing the socket, but EventSource never
+            surfaces comments to the page -- so a feed that had silently
+            died upstream was indistinguishable from a quiet one, forever.
+            A data frame does both jobs: intermediaries see traffic, and
+            the client can run a watchdog on "no message in N seconds". }
           if Idle >= 15 then
           begin
-            Writer.WriteSSE(': keepalive'#10#10);
+            Writer.WriteSSE('data: {"type":"ping"}'#10#10);
             Idle := 0;
           end;
         end;
@@ -6246,8 +6261,12 @@ begin
        'Produce the page now.', Kind = pkResearch, Kind <> pkResearch,
        Reply, Err) then
     Exit;
+  (* "Drafting", not "Writing": deepening rounds follow, each rewriting
+     this draft, and a dialog that said "Writing" and THEN "Deepening:
+     round 1" read like the phases were arriving out of order. The names
+     carry the sequence -- draft first, deepen it, write the final. *)
   if Kind = pkResearch then
-    PublishPageProgress('Writing', 'assembling the report');
+    PublishPageProgress('Drafting', 'first draft of the report');
   SplitPageReply(Reply, BodyHTML, SourcesJSON);
   if Trim(BodyHTML) = '' then
   begin
@@ -6328,6 +6347,11 @@ begin
       PublishPageProgress('Deepening',
         Format('stopped at the %d-round limit with %d source(s)',
                [MaxDeepenRounds, CountSources(SourcesJSON)]));
+    { The closing line. Every exit above says why the digging stopped;
+      this one says the report is done, so the story ends where the run
+      does rather than on a "Saturated". }
+    PublishPageProgress('Writing',
+      Format('final report -- %d source(s) cited', [CountSources(SourcesJSON)]));
   end;
 
   Result := True;
@@ -7169,7 +7193,20 @@ begin
          callers (no session_context) are untouched. Released in the
          handler's outer finally, so every exit path lets go. *)
       TurnLock := SessionTurnLock(ReqSession);
-      TurnLock.Enter;
+      (* When the lock is already held, this turn is about to WAIT -- and
+         the browser paints a waiting POST exactly like a running one, so
+         the user watches "Stop" do nothing for however long the other
+         turn takes. Say so on the event feed before blocking. Addressed
+         to the client that sent this request (X-PasClaw-Client, the name
+         the hello frame gave it) so only the parked screen shows the
+         notice, not every tab on the conversation -- the holder of the
+         lock is mid-turn and its display is already telling the truth. *)
+      if not TurnLock.TryEnter then
+      begin
+        PublishTurnQueued(ReqSession,
+          Trim(ARequest.RawHeaders.Values['X-PasClaw-Client']));
+        TurnLock.Enter;
+      end;
       NewMsgs := Copy(Msgs, 0, Length(Msgs));
       Stored := TSession.Create(ReqSession);
       try

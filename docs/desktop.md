@@ -152,6 +152,14 @@ else happened to create one. The gateway answers as soon as the job is
 *open* and runs the turn on its own thread, so the tree fills in through
 live events rather than the window blocking for the length of the turn.
 
+In the **web desktop** the same gesture is a **Run** button on the task row
+itself, in the projects tree. It starts the job and opens its log in one
+click — a job nobody can watch is the same silence as no job at all. A task
+the agent is already working (`active`) is not offered the button; a
+finished one is, since re-running a done task is an ordinary thing to want.
+The row's own state arrives on the event feed, so it follows the job
+without a reload.
+
 The menu lists each project's **Tasks (n open of m)** under it, which opens
 the Projects window with that project selected and expanded.
 
@@ -444,7 +452,32 @@ poll. Events are small JSON objects with a monotonic `seq`:
 ```
 
 Types: `projects`, `project`, `task`, `job`, `joblog`, `app`, `page`,
-`workspace`, plus `hello` on connect and `gap` after an overflow.
+`workspace`, `turn-queued`, plus `hello` on connect, `ping` on an idle
+feed, and `gap` after an overflow.
+
+**The feed proves it is alive, and the client checks.** After ~15s of
+quiet the gateway sends `{"type":"ping"}` — a data frame, not an SSE
+comment, because `EventSource` never surfaces comments to the page: a
+connection that had died upstream was indistinguishable from a quiet one.
+The desktop runs a watchdog on that: 45s without any message means
+reconnect and re-read, rather than sit "live" showing a board that stopped
+updating.
+
+**Subscribe, then re-read — on the hello frame.** The client subscribes
+only after its first load succeeds (subscribing behind an auth wall just
+loops), which leaves a window where events published during those reads
+reached nobody. Opening the desktop while an agent was mid-turn left the
+board stale until the user happened to touch it.
+
+The catch-up read is triggered by `hello`, and the ordering is the whole
+point: the handler emits the response headers first (which is what fires
+`EventSource`'s `open`), calls `DesktopSubscribe` second, and writes
+`hello` third. So `hello` is the earliest frame that proves this reader is
+on the publisher's list — a re-read fired on `open`, or right after
+constructing the `EventSource`, can still race the handshake and land
+before the server has anyone to publish to. Hooking it to the frame also
+covers every way a feed begins: the first subscribe, the watchdog's
+reconnect, and `EventSource`'s own automatic retry after a transient drop.
 
 **Every terminal state reaches the stream.** Three of them used to be
 missing, which meant the events a client would most want to act on were the
@@ -569,7 +602,11 @@ It runs for minutes, so it narrates: each tool call becomes a
 `page-progress` event on `/v1/desktop/events`, and the Browser shows a
 progress dialog with what the agent is doing right now. The bar creeps
 toward but never reaches done — nobody knows how many sources a question
-needs, and a fake 100% is worse than an honest "still going".
+needs, and a fake 100% is worse than an honest "still going". The phases
+tell the run's actual story in order: **Planning** the sub-questions,
+**Drafting** the first full report, **Deepening** it round by round (each
+round rewrites the draft with what it found), **Saturated** when a round
+stops finding new ground, and **Writing** the final report.
 
 ### Make this interactive
 
@@ -582,6 +619,16 @@ editing it in place would falsify the history; the app is the part that
 changes. Two things travel with it: the sources footer (provenance does not
 stop mattering because a document became editable) and a `pasclaw.js` tag,
 so the first "now make it sort by date" has an SDK to reach for.
+
+**Near-duplicates are named out loud.** `CreateProject` is idempotent, so
+every caller that means "a NEW project" first reserves a free slug —
+`timer`, then `timer-2`, `timer-3`. Reserving quietly is how a workspace
+fills up with seventeen variations of one idea, each build stepping over
+the last without a word. So the step-over is now reported: building from
+the shell names the projects that already match and offers to continue in
+the newest one instead (the default), and promotion says in its status bar
+how many neighbours the new app has. The disambiguation was always right;
+doing it silently was not.
 
 The same wiring backs `POST /v1/projects/<n>/tasks/<t>/run`, which opens a
 job, runs a turn on its own thread (the HTTP call returns the job id
@@ -751,6 +798,15 @@ Session ids are derived, not stored: `desktop-<project>` for a project chat,
 [Gateway § `session_context`](./gateway.md#v1chatcompletions-with-session_context--server-held-conversations)
 for the wire format.
 
+Turns on one conversation run one at a time: the gateway serializes
+same-session turns, so two screens submitting to the same project queue
+rather than corrupt each other. The parked screen is told -- the gateway
+publishes a `turn-queued` event addressed to the client id the request
+carried in `X-PasClaw-Client`, and that screen's reply bubble reads
+"waiting for another turn on this conversation to finish" instead of
+sitting silent. The first streamed token of the real answer paints over
+the notice; it never enters the transcript.
+
 ## HTTP reference
 
 Every route below sits inside the gateway's existing bearer-auth gate.
@@ -793,6 +849,24 @@ over whatever you were reading, and the tab remembers the *path*, so coming
 back to it re-reads the file. It is fetched through `/v1/fs`, not as a
 `file://` URL: a remote gateway's files are not on this machine, and the
 browser control cannot send the bearer token.
+
+**A file opens as what it is.** Both clients now agree on three cases,
+where the web one used to answer all of them with source text or a byte
+count:
+
+- An `.html` file **renders**, with a Source button beside it. The frame
+  carries an *empty* `sandbox` attribute — no scripts, no forms, no
+  navigation, no same-origin — because a document found in the workspace
+  is not trusted code, and one that could reach this origin could read the
+  desktop's bearer token out of `localStorage`. It is passed as `srcdoc`
+  rather than pointed at a URL, so `/v1/fs` keeps serving workspace files
+  as text.
+- A **binary** file opens in a hex view: offset, hex, and the printable
+  column that makes a header or an embedded string readable. It pages
+  through `/v1/fs/peek`, 1 KiB at a time, which reports the true size in
+  `X-File-Total` — so a gigabyte file is inspectable without downloading
+  it, which is the case that matters against a remote gateway.
+- Anything else is text, and a truncated read still says so.
 
 ---
 
