@@ -354,6 +354,22 @@ test-sqlite-hint: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/sqlite_hint_tests.pas -o$(BUILDDIR)/sqlite_hint_tests
 	@$(BUILDDIR)/sqlite_hint_tests
+	@# Structural guard. SqliteBackendHint is the FALLBACK; call sites must
+	@# go through SqliteOpenFailureReason(Idx.LastError) so the driver's own
+	@# reason wins. Two kb tool sites shipped on the bare hint because a
+	@# bulk edit converted the string but not the call (Codex P2 on PR #582)
+	@# -- this makes that failure loud instead of silent.
+	@echo "sqlite hint: checking no call site uses the bare hint"
+	@bad=$$(grep -rln 'SqliteBackendHint' --include=*.pas src/ \
+	         | grep -v 'src/pkg/utils/PasClaw.Utils.pas' \
+	         | grep -v '^src/tests/' \
+	         | xargs -r grep -l "SqliteBackendHint" \
+	         | xargs -r grep -Ln "SqliteBackendHint rather than" || true) ; \
+	if [ -n "$$bad" ]; then \
+	  echo "  FAIL these call SqliteBackendHint directly; use SqliteOpenFailureReason(Idx.LastError):" ; \
+	  echo "$$bad" | sed 's/^/    /' ; exit 1 ; \
+	fi ; \
+	echo "  ok   only PasClaw.Utils defines/uses it directly"
 
 # End-to-end happy path for memory_search through the real tool registry:
 # notes on disk -> FTS5 index -> ranked hits. Guards the success path that

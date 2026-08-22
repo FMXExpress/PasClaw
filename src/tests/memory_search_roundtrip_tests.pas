@@ -16,6 +16,14 @@
   miss for a term that is absent. Also that LastError stays empty on
   a successful open, so no spurious reason leaks into a good result.
 
+  Also covers the kb_search FAILURE branch. Two sites in
+  PasClaw.Tools.KB shipped reporting the generic backend hint
+  because they released the index before reading LastError (Codex P2
+  on PR #582). The Makefile lint catches the bare-hint spelling; this
+  asserts the behaviour end to end, through the registry, so a future
+  rewrite that keeps the right function name but restores the wrong
+  ORDER still fails here.
+
   What it does NOT cover: the vector backend (needs provisioned ONNX
   runtime + model, absent in CI -- Open() declines and we fall
   through to FTS, which is what this exercises), the gateway's
@@ -33,7 +41,9 @@ uses
   PasClaw.Workspaces,
   PasClaw.Memory.Index,
   PasClaw.Tools.Types,
+  PasClaw.KB.Index,
   PasClaw.Tools.Registry,
+  PasClaw.Tools.KB,
   PasClaw.Tools.Memory;
 
 var
@@ -159,6 +169,66 @@ begin
   Idx := nil;
 end;
 
+procedure TestKbSearchReportsTheDriverReason;
+(* Regression test for the two PasClaw.Tools.KB sites that read
+   LastError AFTER releasing Idx, and so reported the generic backend
+   hint instead of the driver's reason (Codex P2 on PR #582).
+
+   Reaching that branch takes a specific, real sequence: kb_search
+   only registers when a valid kb.db with at least one source exists
+   at boot, so the tool must be registered while the KB is healthy and
+   the DB must break afterwards -- deleted, chmod'd, or corrupted
+   mid-session. Anything less never reaches the branch, which is why
+   the first draft of this test passed on "unknown tool: kb_search"
+   instead of on the behaviour. Build the KB, register, then corrupt. *)
+var
+  Err, Out_, KbDb, SrcDir: string;
+  Idx: IKBIndex;
+  Files, Chunks: Integer;
+  F: TFileStream;
+  Junk: AnsiString;
+  R2: TToolRegistry;
+begin
+  KbDb   := JoinPath(JoinPath(Home, ActiveWorkspaceName), 'kb.db');
+  SrcDir := JoinPath(Home, 'kbsource');
+  WriteFile_(JoinPath(SrcDir, 'manual.md'),
+    '# Manual'#10#10'The widget calibration tolerance is 0.5mm.'#10);
+
+  Idx := NewKBIndex;
+  Check('kb index opens for setup', Idx.Open(KbDb));
+  Check('kb source added', Idx.AddSource(SrcDir, Err));
+  Idx.Sync(Files, Chunks);
+  Check('kb indexed at least one file', Files >= 1);
+  Idx := nil;
+
+  { Register against the HEALTHY kb, the way a real boot would. }
+  R2 := TToolRegistry.Create;
+  try
+    RegisterKBTools(R2);
+    Check('kb_search registered while healthy', R2.Find('kb_search', T));
+
+    { Now break it underneath the registered tool. }
+    F := TFileStream.Create(KbDb, fmCreate);
+    try
+      Junk := 'not a database at all, just bytes';
+      F.WriteBuffer(Junk[1], Length(Junk));
+    finally
+      F.Free;
+    end;
+
+    Out_ := R2.RunTool('kb_search', '{"query":"calibration"}', Err);
+    WriteLn('  kb_search err = ', Err);
+    Check('kb_search reports a failure', Err <> '');
+    Check('kb_search quotes the driver reason',
+          Pos('not a database', LowerCase(Err)) > 0);
+    Check('kb_search does not blame a missing library',
+          (Pos('libsqlite3', Err) = 0) and (Pos('sqlite3.dll', Err) = 0));
+    Check('kb_search returned no body', Out_ = '');
+  finally
+    R2.Free;
+  end;
+end;
+
 begin
   WriteLn('memory_search_roundtrip_tests');
   SetUp;
@@ -170,6 +240,7 @@ begin
     TestFindsATermInOneFileOnly;
     TestCleanMissOnAbsentTerm;
     TestLastErrorEmptyOnSuccess;
+    TestKbSearchReportsTheDriverReason;
   finally
     R.Free;
     TearDown;

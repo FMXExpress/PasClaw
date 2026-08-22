@@ -114,8 +114,11 @@ begin
   Idx := NewKBIndex;
   if not Idx.Open(DefaultKBDbPath) then
   begin
+    { LastError must be read before the interface is released -- the
+      release destroys the object holding it. }
+    ErrMsg := 'knowledgebase unavailable (' +
+              SqliteOpenFailureReason(Idx.LastError) + ')';
     Idx := nil;
-    ErrMsg := 'knowledgebase unavailable (' + SqliteBackendHint + ')';
     Exit;
   end;
   try
@@ -179,8 +182,11 @@ begin
   Idx := NewKBIndex;
   if not Idx.Open(DefaultKBDbPath) then
   begin
+    { LastError must be read before the interface is released -- the
+      release destroys the object holding it. }
+    ErrMsg := 'knowledgebase unavailable (' +
+              SqliteOpenFailureReason(Idx.LastError) + ')';
     Idx := nil;
-    ErrMsg := 'knowledgebase unavailable (' + SqliteBackendHint + ')';
     Exit;
   end;
   try
