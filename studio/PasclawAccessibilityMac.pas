@@ -446,6 +446,7 @@ var
   Kids: NSMutableArray;
 begin
   if Form = nil then Exit;
+  if GRoots = nil then Exit;
   if GRoots.ContainsKey(Form) then Exit;   { idempotent, as on Windows }
 
   Win := WindowHandleToPlatform(Form.Handle).Wnd;
@@ -466,32 +467,78 @@ begin
     StrToNSStr(NSAccessibilityCreatedNotification));
 end;
 
-procedure UninstallMacAccessibility(Form: TCommonCustomForm);
+(* Announce the element's removal and unhook it from the content view.
+
+   Both teardown paths must do this, which is why it is a procedure rather
+   than inline in Uninstall. AppKit RETAINS whatever setAccessibilityChildren
+   is given, so freeing the TPasclawAXElement without clearing the view
+   first leaves the view holding a child whose Delphi side is gone -- the
+   next accessibility query faults. Codex P2 on PR #583 caught the
+   finalization path doing exactly that. *)
+procedure DetachMacRoot(Form: TCommonCustomForm; Root: TPasclawAXElement);
 var
-  Root: TPasclawAXElement;
   Win: NSWindow;
   View: NSView;
 begin
-  if Form = nil then Exit;
-  if not GRoots.TryGetValue(Form, Root) then Exit;
-  NSAccessibilityPostNotification(Root.GetObjectID,
-    StrToNSStr(NSAccessibilityUIElementDestroyedNotification));
-  { Detach before freeing, or the view keeps a reference to an element whose
-    Delphi side is gone. }
+  if Root <> nil then
+    NSAccessibilityPostNotification(Root.GetObjectID,
+      StrToNSStr(NSAccessibilityUIElementDestroyedNotification));
+  { Handle can be nil if the window was never realised, and
+    WindowHandleToPlatform(nil).Wnd would fault on the way to finding that
+    out. }
+  if (Form = nil) or (Form.Handle = nil) then Exit;
   Win := WindowHandleToPlatform(Form.Handle).Wnd;
-  if Win <> nil then
-  begin
-    View := Win.contentView;
-    if View <> nil then View.setAccessibilityChildren(nil);
-  end;
+  if Win = nil then Exit;
+  View := Win.contentView;
+  if View <> nil then View.setAccessibilityChildren(nil);
+end;
+
+procedure UninstallMacAccessibility(Form: TCommonCustomForm);
+var
+  Root: TPasclawAXElement;
+begin
+  { GRoots nil means this unit already finalized, which detached and freed
+    every root on the way out. The form's destructor runs later than that --
+    FMX.Forms initializes before this unit, so it finalizes after -- and it
+    calls us unconditionally. Guard, or that call dereferences a freed
+    dictionary. Same reasoning as the Windows half. }
+  if (Form = nil) or (GRoots = nil) then Exit;
+  if not GRoots.TryGetValue(Form, Root) then Exit;
+  DetachMacRoot(Form, Root);
   GRoots.Remove(Form);   { owns the value; the dictionary frees it }
+end;
+
+procedure ShutdownMacAccessibility;
+{ Body of the finalization below -- a procedure because finalization
+  sections cannot declare locals. }
+var
+  Pair: TPair<TCommonCustomForm, TPasclawAXElement>;
+begin
+  if GRoots = nil then Exit;
+  for Pair in GRoots do
+    DetachMacRoot(Pair.Key, Pair.Value);
+  FreeAndNil(GRoots);
 end;
 
 initialization
   GRoots := TObjectDictionary<TCommonCustomForm, TPasclawAXElement>.Create([doOwnsValues]);
 
 finalization
-  GRoots.Free;
+  (* Detach every root from its view BEFORE freeing, exactly as the Windows
+     half restores every window proc before freeing GHooks.
+
+     This unit finalizes while MasterDetailForm and its native contentView
+     are still alive -- FMX.Forms is a dependency of this one, so it
+     initializes earlier and finalizes later, and it is FMX.Forms'
+     finalization that destroys Application and with it the form. So
+     doOwnsValues freeing the TPasclawAXElement objects here would leave
+     AppKit holding retained accessibility children pointing at freed
+     memory, and the form destructor's later UninstallMacAccessibility
+     cannot clean up after us -- its GRoots = nil guard returns first.
+
+     FreeAndNil rather than Free for that same later call: nil makes it a
+     no-op instead of a fault. *)
+  ShutdownMacAccessibility;
 
 {$ELSE}
 
