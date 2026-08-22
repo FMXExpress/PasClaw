@@ -2678,7 +2678,8 @@ begin
   if not Idx.Open(DefaultKBDbPath) then
   begin
     WriteJSON(AResp, 503,
-      '{"error":"knowledge base unavailable (nothing indexed yet, or libsqlite3 missing)"}');
+      '{"error":"knowledge base unavailable (nothing indexed yet, or ' +
+      SqliteOpenFailureReason(Idx.LastError) + ')"}');
     Exit;
   end;
   Root := TJsonObject.Create;
@@ -2803,7 +2804,8 @@ begin
   if not Idx.Open(DefaultKBDbPath) then
   begin
     WriteJSON(AResp, 503,
-      '{"error":"knowledge base unavailable (libsqlite3 missing or path unwritable)"}');
+      '{"error":"knowledge base unavailable (' +
+      SqliteOpenFailureReason(Idx.LastError) + ')"}');
     Exit;
   end;
   Files := 0; Chunks := 0;
@@ -2939,9 +2941,11 @@ begin
     Idx := NewMemoryIndex;
     if not Idx.Open(DbBase) then
     begin
-      Idx := nil;
+      { LastError must be read before the interface is released. }
       WriteJSON(AResp, 503,
-        '{"error":"memory index unavailable (libsqlite3 missing or unreadable)"}');
+        '{"error":"memory index unavailable (' +
+        SqliteOpenFailureReason(Idx.LastError) + ')"}');
+      Idx := nil;
       Exit;
     end;
   end;

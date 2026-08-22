@@ -176,7 +176,7 @@ FPCFLAGS = -MDelphi -Sh -O2 -Xs -XX \
 
 VERSION ?= $(shell git describe --tags --always 2>/dev/null || echo dev)
 
-.PHONY: all clean run test openssl-1.0 test-doctor test-provider-retry smoke lint-pascal-shape test-workspaces test-projects test-apps test-mail test-desktop-routes test-desktop test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-shell-cwd-report lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
+.PHONY: all clean run test openssl-1.0 test-doctor test-provider-retry smoke lint-pascal-shape test-workspaces test-projects test-apps test-mail test-desktop-routes test-desktop test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-json-utf8-roundtrip test-sqlite-hint test-memory-search-roundtrip test-shell-cwd-report lint-studio test-read-file-encoding test-db-tools test-session-port test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-stream-reliability test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-delphi-build print-version get-indy webui-res browser
 
 all: $(WEBUI_RES) $(BIN)
 
@@ -346,6 +346,40 @@ test-json-utf8-roundtrip: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/json_utf8_roundtrip_tests.pas -o$(BUILDDIR)/json_utf8_roundtrip_tests
 	@$(BUILDDIR)/json_utf8_roundtrip_tests
+
+# The "index unavailable" text must name the SQLite binding this build
+# actually uses, and must stay safe to concatenate into the gateway's
+# hand-built JSON error bodies.
+test-sqlite-hint: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/sqlite_hint_tests.pas -o$(BUILDDIR)/sqlite_hint_tests
+	@$(BUILDDIR)/sqlite_hint_tests
+	@# Structural guard. SqliteBackendHint is the FALLBACK; call sites must
+	@# go through SqliteOpenFailureReason(Idx.LastError) so the driver's own
+	@# reason wins. Two kb tool sites shipped on the bare hint because a
+	@# bulk edit converted the string but not the call (Codex P2 on PR #582)
+	@# -- this makes that failure loud instead of silent.
+	@echo "sqlite hint: checking no call site uses the bare hint"
+	@bad=$$(grep -rln 'SqliteBackendHint' --include=*.pas src/ \
+	         | grep -v 'src/pkg/utils/PasClaw.Utils.pas' \
+	         | grep -v '^src/tests/' \
+	         | xargs -r grep -l "SqliteBackendHint" \
+	         | xargs -r grep -Ln "SqliteBackendHint rather than" || true) ; \
+	if [ -n "$$bad" ]; then \
+	  echo "  FAIL these call SqliteBackendHint directly; use SqliteOpenFailureReason(Idx.LastError):" ; \
+	  echo "$$bad" | sed 's/^/    /' ; exit 1 ; \
+	fi ; \
+	echo "  ok   only PasClaw.Utils defines/uses it directly"
+
+# End-to-end happy path for memory_search through the real tool registry:
+# notes on disk -> FTS5 index -> ranked hits. Guards the success path that
+# the LastError interface change could have broken invisibly.
+test-memory-search-roundtrip: | $(BUILDDIR)
+	@mkdir -p $(BUILDDIR)/lib
+	$(FPC) $(FPCFLAGS) src/tests/memory_search_roundtrip_tests.pas -o$(BUILDDIR)/memory_search_roundtrip_tests
+	@PASCLAW_HOME=$$(mktemp -d) ; export PASCLAW_HOME ; \
+	$(BUILDDIR)/memory_search_roundtrip_tests ; rc=$$? ; \
+	rm -rf "$$PASCLAW_HOME" ; exit $$rc
 
 # read_file must not raise on a non-UTF-8 file: valid UTF-8 passes through,
 # a legacy 8-bit source is reinterpreted as Latin-1 (never EEncodingError).
@@ -1181,4 +1215,4 @@ test-fs-grep-tier5-6: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/fs_grep_tier5_6_tests.pas -o$(BUILDDIR)/fs_grep_tier5_6_tests
 	@$(BUILDDIR)/fs_grep_tier5_6_tests
 
-test: smoke test-doctor test-provider-retry test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-relay-servertools test-shell-cwd-report test-shell-denylist-bypass test-skills-provenance test-ssrf-guard test-read-file-encoding test-db-tools test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-prompt-batching test-turn-clock test-max-iter-notice test-max-iter-notice test-plan-build-mode test-config-profile test-tool-rpc test-session-search test-session-port test-subagent-bg test-subagent-default test-subagent-model-arg test-zip-pack test-http-proxy test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-fs-tool-naming test-workspace-paths test-guardfall test-skills-prompt test-mcp-result test-mcp-compact test-config-mcp-flags test-workflow test-progress-ledger test-otel test-logger-level-quiet test-gateway-token test-fs-secret-gate test-config-env-subst test-delphi-build test-desktop
+test: smoke test-doctor test-provider-retry test-hashline test-toolview test-anthropic-server-tools test-openai-server-tools test-tool-choice test-responses-tool-choice test-println-helper test-utf8-codepage-tag test-gemini-schema-strip test-markdown-render test-json-utf8-roundtrip test-sqlite-hint test-memory-search-roundtrip test-relay-servertools test-shell-cwd-report test-shell-denylist-bypass test-skills-provenance test-ssrf-guard test-read-file-encoding test-db-tools test-json-lenient test-rerank test-sentencepiece test-rerank-eval test-model-discovery test-cron-tool test-provider-catalog test-output-cache test-working-state test-compact test-prune test-ansi-width test-shell-filters test-learn test-export test-execute-code test-session-stats test-auto-router test-gateway-stats-buckets test-session-list-filter test-session-endpoints test-config-secret-merge test-skills-install test-self-improving-skills test-loop-shaping-defaults test-prompt-batching test-turn-clock test-max-iter-notice test-max-iter-notice test-plan-build-mode test-config-profile test-tool-rpc test-session-search test-session-port test-subagent-bg test-subagent-default test-subagent-model-arg test-zip-pack test-http-proxy test-stream-reliability test-mcp-server test-mcp-hub-projection test-checkpoints test-condense-json test-goals-runner test-kb-index test-kb-pdf test-agents-md test-checkpoints-zpaq test-orient-preamble test-component-config test-autoroute-apply test-fallback-models test-memory-distill test-memory-facts test-memory-autodistill test-checkpoints-redo test-build-roundtrip test-promptware test-orient test-condense-reversible test-heartbeat test-shell-backend test-env-inject test-run-timeout test-shell-output-decode test-fs-grep-tier1-4 test-fs-grep-tier5-6 test-fs-tool-naming test-workspace-paths test-guardfall test-skills-prompt test-mcp-result test-mcp-compact test-config-mcp-flags test-workflow test-progress-ledger test-otel test-logger-level-quiet test-gateway-token test-fs-secret-gate test-config-env-subst test-delphi-build test-desktop

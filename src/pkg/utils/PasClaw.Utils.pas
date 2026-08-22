@@ -103,7 +103,78 @@ function NowStampWithZone: string;
    `StringCodePage(s)` metadata flips from 0 → 65001. *)
 procedure TagUTF8(var S: string); inline;
 
+(* Names the SQLite binding THIS build actually uses, for the
+   "index unavailable" diagnostics in memory_search / kb_search /
+   session_search and their gateway equivalents.
+
+   Those messages used to say "libsqlite3 missing or unreadable" on
+   every target. That is true of the FPC build (sqldb + sqlite3conn
+   resolve the shared library at runtime) and of Delphi's Linux64
+   target, but it is flatly wrong for the Delphi Windows / macOS /
+   mobile build: PasClaw.dpr links FireDAC.Phys.SQLiteWrapper.Stat,
+   which statically links SQLite into the exe, so there is no
+   sqlite3.dll for the user to go find. Sending them off to install
+   one wastes their time and hides the real cause, which on that
+   target is always an unwritable path or a corrupt db file.
+
+   The result is embedded inside a parenthetical and inside the
+   gateway's hand-built JSON error bodies, so it must stay free of
+   double quotes and backslashes. sqlite_hint_tests enforces that. *)
+function SqliteBackendHint: string;
+
+(* Renders the reason an index failed to open, for the user-facing
+   "unavailable" message.
+
+   Detail is whatever the index captured from the exception that
+   actually killed the Open -- "unable to open database file",
+   "file is not a database", "cannot load SQLite client library".
+   That beats any guess we could make, so it wins when present.
+   SqliteBackendHint is the fallback for the paths that can return
+   False without raising. *)
+function SqliteOpenFailureReason(const Detail: string): string;
+
 implementation
+
+function SqliteBackendHint: string;
+begin
+  {$IFDEF FPC}
+    {$IFDEF MSWINDOWS}
+    Result := 'sqlite3.dll not on PATH, or not loadable';
+    {$ELSE}
+    Result := 'libsqlite3 not installed, or not loadable';
+    {$ENDIF}
+  {$ELSE}
+    {$IFDEF LINUX}
+    { Delphi Linux64: RAD Studio ships no static SQLite wrapper for this
+      target, so PasClaw.dpr excludes it and FireDAC falls back to the
+      dynamic libsqlite3.so link. }
+    Result := 'libsqlite3.so not installed, or not loadable';
+    {$ELSE}
+    Result := 'db path unwritable or file corrupt -- SQLite is linked ' +
+              'statically here, so no sqlite3.dll is involved';
+    {$ENDIF}
+  {$ENDIF}
+end;
+
+function SqliteOpenFailureReason(const Detail: string): string;
+var
+  i: Integer;
+begin
+  Result := Trim(Detail);
+  if Result = '' then
+  begin
+    Result := SqliteBackendHint;
+    Exit;
+  end;
+  { Three gateway call sites concatenate this into a hand-built JSON
+    body, and driver messages are not under our control -- neutralise
+    the two bytes that would break out of the string literal. Newlines
+    go too: these land in one-line tool errors. }
+  for i := 1 to Length(Result) do
+    if (Result[i] = '"') or (Result[i] = '\') or
+       (Result[i] = #10) or (Result[i] = #13) then
+      Result[i] := ' ';
+end;
 
 procedure TagUTF8(var S: string);
 begin

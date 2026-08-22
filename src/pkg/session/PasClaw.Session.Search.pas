@@ -61,6 +61,10 @@ type
     procedure Close;
     procedure Sync;     { walk the sessions dir, reindex changed transcripts }
     function  Search(const Query: string; K: Integer): TSessionHitArray;
+    { Why the last Open returned False, verbatim from the driver.
+      '' when Open never failed. Callers render it through
+      PasClaw.Utils.SqliteOpenFailureReason. }
+    function  LastError: string;
   end;
 
 function NewSessionSearchIndex: ISessionSearchIndex;
@@ -91,6 +95,7 @@ type
     FConn:  TFDConnection;
     {$ENDIF}
     FOpen:  Boolean;
+    FLastError: string;
     procedure ExecSQL(const SQL: string);
     procedure EnsureSchema;
     function  IndexedSignature(const Id: string;
@@ -103,6 +108,7 @@ type
     procedure Close;
     procedure Sync;
     function  Search(const Query: string; K: Integer): TSessionHitArray;
+    function  LastError: string;
   end;
 
 function NewSessionSearchIndex: ISessionSearchIndex;
@@ -163,6 +169,7 @@ function TSessionSearchImpl.Open(const DbPath: string): Boolean;
 begin
   Result := False;
   if FOpen then Exit(True);
+  FLastError := '';
   try
     {$IFDEF FPC}
     FConn := TSQLite3Connection.Create(nil);
@@ -188,6 +195,7 @@ begin
     begin
       LogWarn('session.search: failed to open %s (%s) -- session_search disabled',
               [DbPath, E.Message]);
+      FLastError := E.Message;
       {$IFDEF FPC}
       FreeAndNil(FTx);
       FreeAndNil(FConn);
@@ -197,6 +205,11 @@ begin
       FOpen := False;
     end;
   end;
+end;
+
+function TSessionSearchImpl.LastError: string;
+begin
+  Result := FLastError;
 end;
 
 procedure TSessionSearchImpl.Close;
