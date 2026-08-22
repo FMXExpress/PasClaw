@@ -383,27 +383,122 @@ end;
    retry and it should have the shape in front of it.
 
    Returns nil when nothing usable is there; caller frees the result. *)
+
+(* One action object as the desktop will actually dispatch it: the
+   sibling tools' "action" renamed to the "do" the client reads.
+
+   Renamed, not merely tolerated. runShellActions looks up
+   SHELL_ACTIONS[a.do] and nothing else, so an object still keyed
+   "action" would be published, reported to the model as sent, and then
+   rejected by the screen as an unknown action. A success the caller
+   never receives is worse than the refusal this coercion replaced.
+
+   '' when there is no action name to dispatch on. *)
+function NormalizedAction(Src: TJsonObject): string;
+var
+  One: TJsonObject;
+  Verb: string;
+begin
+  Result := '';
+  if Src = nil then Exit;
+  Verb := Trim(Src.GetStr('do', ''));
+  if Verb = '' then Verb := Trim(Src.GetStr('action', ''));
+  if Verb = '' then Exit;
+  One := TJsonObject.Parse(Src.ToJSON);
+  try
+    One.PutStr('do', Verb);
+    One.Remove('action');
+    Result := One.ToJSON;
+  finally
+    One.Free;
+  end;
+end;
+
+(* The same rename across a whole array, because a model that got the
+   arity right and the key wrong -- {"actions":[{"action":"tile"}]} --
+   fails in exactly the way above.
+
+   nil means "nothing to rename, use what arrived". The rebuild happens
+   only when every item is an object with a name to dispatch on: one
+   item we cannot read is a malformed request rather than a near miss,
+   and passing the original through so the screen names it is better
+   than quietly reshaping around it. Caller frees. *)
+function RenamedItems(Src: TJsonArray): TJsonArray;
+var
+  I: Integer;
+  Item: TJsonObject;
+  Need: Boolean;
+begin
+  Result := nil;
+  if (Src = nil) or (Src.Count = 0) then Exit;
+
+  Need := False;
+  for I := 0 to Src.Count - 1 do
+  begin
+    Item := Src.ItemObject(I);
+    try
+      if Item = nil then Exit;
+      if Trim(Item.GetStr('do', '')) = '' then
+      begin
+        if Trim(Item.GetStr('action', '')) = '' then Exit;
+        Need := True;
+      end;
+    finally
+      Item.Free;
+    end;
+  end;
+  if not Need then Exit;
+
+  Result := TJsonArray.Create;
+  for I := 0 to Src.Count - 1 do
+  begin
+    Item := Src.ItemObject(I);
+    try
+      Result.AddRaw(NormalizedAction(Item));
+    finally
+      Item.Free;
+    end;
+  end;
+end;
+
+(* Whatever we settled on, with the rename applied. Every path lands
+   here so no shape can reach the feed keyed the way the client cannot
+   read. *)
+function Dispatchable(var Arr: TJsonArray): TJsonArray;
+var
+  Fixed: TJsonArray;
+begin
+  Result := Arr;
+  Fixed := RenamedItems(Arr);
+  if Fixed <> nil then
+  begin
+    FreeAndNil(Arr);
+    Result := Fixed;
+  end;
+end;
+
 function CoerceDesktopActions(Obj: TJsonObject): TJsonArray;
 var
   One: TJsonObject;
-  Raw: string;
+  Raw, Norm: string;
 begin
   Result := nil;
   if Obj = nil then Exit;
 
   { 1. The documented shape. }
   Result := Obj.ChildArray('actions');
-  if (Result <> nil) and (Result.Count > 0) then Exit;
+  if (Result <> nil) and (Result.Count > 0) then Exit(Dispatchable(Result));
   if Result <> nil then FreeAndNil(Result);
 
   { 2. A single action object under "actions" rather than a list. }
   One := Obj.ChildObject('actions');
   if One <> nil then
   try
-    if One.Has('do') or One.Has('action') then
+    Norm := NormalizedAction(One);
+    if Norm <> '' then
     begin
       Result := TJsonArray.Create;
-      Result.AddRaw(One.ToJSON);
+      Result.AddRaw(Norm);
       Exit;
     end;
   finally
@@ -420,26 +515,19 @@ begin
     except
       Result := nil;
     end;
-    if (Result <> nil) and (Result.Count > 0) then Exit;
+    if (Result <> nil) and (Result.Count > 0) then Exit(Dispatchable(Result));
     if Result <> nil then FreeAndNil(Result);
   end;
 
   (* 4. The action at the TOP level, unwrapped -- {"do":"tile"} or, from
         the sibling tools' habit, {"action":"build_app","title":...}.
-        "action" is read as "do" only here, where there is no actions
-        array to disagree with it. *)
-  if Obj.Has('do') or (Trim(Obj.GetStr('action', '')) <> '') then
+        "action" is read as an action name only here and in 2, where
+        there is no actions array to disagree with it. *)
+  Norm := NormalizedAction(Obj);
+  if Norm <> '' then
   begin
-    One := TJsonObject.Parse(Obj.ToJSON);
-    try
-      if not One.Has('do') then
-        One.PutStr('do', Trim(Obj.GetStr('action', '')));
-      One.Remove('action');
-      Result := TJsonArray.Create;
-      Result.AddRaw(One.ToJSON);
-    finally
-      One.Free;
-    end;
+    Result := TJsonArray.Create;
+    Result.AddRaw(Norm);
   end;
 end;
 

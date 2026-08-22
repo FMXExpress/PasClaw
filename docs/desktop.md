@@ -1047,7 +1047,11 @@ So four shapes are read as what they plainly mean, rather than refused:
 | `{"actions":"[{\"do\":\"tile\"}]"}` | the parsed array |
 | `{"action":"build_app","title":…}` or `{"do":"tile"}` | one action, `action` renamed to `do` |
 
-Same trade the app manifest makes when it reads `type` as a synonym for `kind`: a request should not fail over a word when what was meant is unambiguous. The misspelt key is *renamed*, not duplicated, so nothing downstream sees both.
+Same trade the app manifest makes when it reads `type` as a synonym for `kind`: a request should not fail over a word when what was meant is unambiguous.
+
+The rename applies **wherever an action object can arrive** — inside the documented array, inside a singular object under `actions`, inside a stringified array, at the top level. `runShellActions` looks up `SHELL_ACTIONS[a.do]` and reads nothing else, so an action that reaches the feed still keyed `action` is published, reported to the model as *sent*, and then dropped by the screen as unknown. A success the caller never receives is worse than the refusal this coercion replaced, so the misspelt key is renamed — not merely tolerated, and not duplicated alongside `do`.
+
+One exception, deliberately: if an item in an array cannot be read at all — not an object, or carrying no action name — the array is passed through exactly as it arrived. That is a malformed request rather than a near miss, and the screen naming it beats quietly reshaping the array around it.
 
 A call that genuinely carries no action is still an error — coercion is for near misses, not for guessing. But the error now contains a **worked call** the model can copy, because that text is the whole of what it reads before its retry, and "missing required argument" is not something you can act on.
 

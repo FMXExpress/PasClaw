@@ -251,6 +251,37 @@ begin
   ExpectContains(DesktopActionsJSON('{"do":"tile"}'),
                  '"tile"', 'a bare top-level action is wrapped');
 
+  (* The two near misses COMBINED -- right arity, wrong key. The client
+     dispatches on SHELL_ACTIONS[a.do] and reads nothing else, so an
+     action that reaches the feed still keyed "action" is published,
+     reported to the model as sent, and then rejected by the screen. A
+     success the caller never receives is the worst of the three
+     outcomes, so the rename has to happen wherever an action object
+     can arrive -- not only at the top level. *)
+  ExpectContains(DesktopActionsJSON('{"actions":{"action":"build_app","title":"X"}}'),
+                 '"do"', 'a singular object under "actions" is renamed too');
+  ExpectTrue(Pos('"action"', DesktopActionsJSON(
+               '{"actions":{"action":"build_app","title":"X"}}')) = 0,
+             'and does not keep the key the client cannot read');
+  ExpectContains(DesktopActionsJSON('{"actions":[{"action":"tile"}]}'),
+                 '"do"', 'an item inside the documented array is renamed');
+  ExpectTrue(Pos('"action"', DesktopActionsJSON('{"actions":[{"action":"tile"}]}')) = 0,
+             'and that one loses the wrong key as well');
+  ExpectContains(DesktopActionsJSON('{"actions":"[{\"action\":\"tile\"}]"}'),
+                 '"do"', 'a stringified array is renamed on the way through');
+
+  { Every item keeps its own name; the rename is not a broadcast. }
+  Out_ := DesktopActionsJSON('{"actions":[{"do":"tile"},{"action":"refresh"}]}');
+  ExpectContains(Out_, 'tile', 'a mixed array keeps the item that was right');
+  ExpectContains(Out_, 'refresh', 'and renames only the one that was wrong');
+  ExpectTrue(Pos('"action"', Out_) = 0, 'with no stray key left behind');
+
+  (* An item we cannot read is a malformed request, not a near miss:
+     pass it through so the screen names it rather than reshaping the
+     array around it. *)
+  ExpectContains(DesktopActionsJSON('{"actions":[{"do":"tile"},{"note":"hi"}]}'),
+                 '"note"', 'an unreadable item is passed through untouched');
+
   { Nothing usable stays an error -- coercion is for near misses, not guesses. }
   ExpectStr(DesktopActionsJSON('{}'), '', 'an empty call reads as nothing');
   ExpectStr(DesktopActionsJSON('{"actions":[]}'), '', 'an empty array too');
