@@ -1051,6 +1051,18 @@ A page turn is summarise-and-cite. Nothing it can usefully do involves `write_fi
 
 The refusal is matched on the provider's **words**, not on a model list. Which models can ground is Google's matrix, it moves, and a blocklist compiled into a release is wrong the moment it does.
 
+**Which flash-lite you pin matters.** The degrade path exists so a model that cannot ground still produces a page; it is not a substitute for picking one that can.
+
+| fast model | grounds? | what a page gets |
+|---|---|---|
+| `gemini-3.5-flash-lite` | yes | one call, grounded, sources |
+| `gemini-2.5-flash-lite` | yes | one call, grounded, sources |
+| `gemini-3.1-flash-lite` | **no** | refused, retried, page written ungrounded |
+
+`FastModelFor('gemini')` already defaults to `gemini-3.5-flash-lite`, so a fresh install grounds. An older config pinning `fast_model` to something else keeps whatever it was pinned to — worth checking if Search comes back UNGROUNDED. Being 3-series, it can also combine grounding with function calling, which is the restriction that caused the suppression in the first place.
+
+`tools/fake-gemini.py` mirrors this matrix rather than refusing every flash-lite. A fake that refused them all would "prove" this fix while only demonstrating that the fake was wrong.
+
 ### A provider error is not a page
 
 `RunToolLoop` reports **success** and hands back the provider's error text as the turn's content when the call itself failed. So

@@ -20,9 +20,14 @@ os.makedirs(REQ, exist_ok=True)
 LOCK = threading.Lock()
 N = [0]
 
-# Models that reject Grounding with Google Search. Google's matrix moves;
-# what matters here is that SOME model does, and that we behave like it.
-NO_SEARCH = re.compile(r"flash-lite", re.I)
+# Models that reject Grounding with Google Search, per Google's current
+# matrix (ai.google.dev/gemini-api/docs/google-search). 3.5 Flash-Lite
+# and 2.5 Flash-Lite are both listed as SUPPORTED; 3.1 Flash-Lite is
+# not. That distinction is the whole point -- a fake that refused every
+# flash-lite would "prove" a fix that only worked because the fake was
+# wrong. Google's matrix moves, which is why the product matches on the
+# provider's words rather than on a list like this one.
+NO_SEARCH = re.compile(r"gemini-3\.1-flash-lite", re.I)
 
 BODY = ("<h2>Answer</h2><p>A short grounded answer to the question, "
         "written as a page.</p>")
@@ -56,6 +61,8 @@ class H(BaseHTTPRequestHandler):
         # model listing, used by discovery
         if "/models" in self.path:
             return self._send(200, {"models": [
+                {"name": "models/gemini-3.5-flash-lite"},
+                {"name": "models/gemini-3.1-flash-lite"},
                 {"name": "models/gemini-2.5-flash-lite"},
                 {"name": "models/gemini-2.5-pro"}]})
         self._send(404, {"error": {"message": "not found"}})
