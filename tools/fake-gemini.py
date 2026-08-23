@@ -28,9 +28,16 @@ BODY = ("<h2>Answer</h2><p>A short grounded answer to the question, "
         "written as a page.</p>")
 
 
-def page_reply(query):
-    return ("<!--PASCLAW-PAGE-->\n" + BODY +
-            '\n<!--SOURCES:[{"title":"Example","url":"https://example.com"}]-->')
+def page_reply(query, grounded):
+    """A grounded answer cites; an ungrounded one has nothing to cite.
+
+    That is the whole point of the distinction the Browser badges, so
+    the fake has to honour it or the probe proves nothing."""
+    out = BODY
+    if grounded:
+        out += ('\nSOURCES: [{"title":"Example","url":"https://example.com"},'
+                '{"title":"Second","url":"https://example.org"}]')
+    return out
 
 
 class H(BaseHTTPRequestHandler):
@@ -122,7 +129,7 @@ class H(BaseHTTPRequestHandler):
         return self._send(200, {
             "candidates": [{
                 "content": {"role": "model",
-                            "parts": [{"text": page_reply(q)}]},
+                            "parts": [{"text": page_reply(q, has_search)}]},
                 "finishReason": "STOP"}],
             "usageMetadata": {"promptTokenCount": 10,
                               "candidatesTokenCount": 20,

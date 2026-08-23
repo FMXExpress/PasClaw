@@ -209,8 +209,13 @@ type
        string on purpose: resolving it here, inside the same lock as the
        provider snapshot, is what keeps the model and the provider it
        belongs to from being chosen a moment apart. *)
+    (* PageTurn drops the local tool registry for this turn -- see the
+       body: shipping tools is what suppresses Gemini's grounding, and a
+       page has no use for write_file. It also enables the one retry
+       without grounding when the model turns out not to support it. *)
     function RunDesktopTurn(const SystemPrompt, Prompt: string;
                             Narrate: Boolean; UseFastModel: Boolean;
+                            PageTurn: Boolean;
                             out Reply, Err: string): Boolean; overload;
     (* One turn on a STANDING AGENT's own session (PasClaw.Agents).
 
@@ -6180,7 +6185,7 @@ end;
 function TGatewayServer.RunDesktopTurn(const SystemPrompt, Prompt: string;
   Narrate: Boolean; out Reply, Err: string): Boolean;
 begin
-  Result := RunDesktopTurn(SystemPrompt, Prompt, Narrate, False, Reply, Err);
+  Result := RunDesktopTurn(SystemPrompt, Prompt, Narrate, False, False, Reply, Err);
 end;
 
 function TGatewayServer.RunAgentTurn(const AgentName, Prompt: string;
@@ -6322,8 +6327,45 @@ begin
   end;
 end;
 
+(* Did the provider itself refuse, as opposed to the model answering?
+
+   StatusCode is the signal rather than sniffing the text: providers set
+   200 on success, -1 on socket/TLS/DNS failure, and the real code on an
+   HTTP error. 0 means a provider that never sets it, so it is not
+   treated as a failure. On refusal the loop's Content carries the
+   provider's own message, which is the only useful thing to say. *)
+function ProviderRefused(const Loop: TToolLoopResult; out Msg: string): Boolean;
+begin
+  Msg := '';
+  Result := (Loop.LastResp.StatusCode <> 0) and
+            ((Loop.LastResp.StatusCode < 200) or (Loop.LastResp.StatusCode > 299));
+  if not Result then Exit;
+  Msg := Trim(Loop.Content);
+  if Msg = '' then
+    Msg := Format('the provider call failed (status %d)',
+                  [Loop.LastResp.StatusCode]);
+end;
+
+(* "This model cannot ground", said in whichever words the provider
+   chose. Gemini answers a grounding request on a model without it with
+   400 "Search Grounding is not supported for model ...".
+
+   Matched on the words rather than on a model list on purpose: which
+   models can ground is Google's matrix, it moves, and a blocklist
+   compiled into a release is wrong the moment it does. The provider
+   already knows the answer; this only has to recognise it being said. *)
+function GroundingRefused(const Msg: string): Boolean;
+var
+  M: string;
+begin
+  M := LowerCase(Msg);
+  Result := ((Pos('grounding', M) > 0) or (Pos('google_search', M) > 0)) and
+            ((Pos('not supported', M) > 0) or (Pos('unsupported', M) > 0) or
+             (Pos('not available', M) > 0));
+end;
+
 function TGatewayServer.RunDesktopTurn(const SystemPrompt, Prompt: string;
-  Narrate: Boolean; UseFastModel: Boolean;
+  Narrate: Boolean; UseFastModel: Boolean; PageTurn: Boolean;
   out Reply, Err: string): Boolean;
 var
   Msgs: TMessageArray;
@@ -6333,6 +6375,8 @@ var
   FB: TLLMProviderArray;
   FBModels: TStringArray;
   DefModel, FastModel: string;
+  Attempt: Integer;
+  Failed: string;
 begin
   Reply := '';
   Err := '';
@@ -6353,9 +6397,6 @@ begin
     Err := 'no provider configured';
     Exit;
   end;
-
-  SetLength(Msgs, 1);
-  Msgs[0] := MakeMessage(mrUser, Prompt);
 
   LoopCfg.Registry := FRegistry;
   if FToolsHonorInMemoryConfig then LoopCfg.ActiveConfig := FCfg;
@@ -6394,35 +6435,65 @@ begin
     that a progress feed would be noise on the event bus. }
   if Narrate then LoopCfg.OnToolCall := NarrateToolCall;
 
-  if not RunToolLoop(LoopCfg, Msgs, Loop) then
-  begin
-    Err := 'agent loop failed';
+  (* A page turn ships NO local tools.
+
+     It is summarise-and-cite, not a build turn: nothing it can usefully
+     do involves write_file. Sending the registry anyway had a cost that
+     was invisible until someone asked why search never found anything
+     -- Gemini rejects google_search alongside functionDeclarations
+     below 3.x, so the provider suppressed grounding on every single
+     page. Search and Research ran with no way to search at all, and
+     every page came back UNGROUNDED while the Browser showed a badge
+     implying grounding had been on the table. Dropping the tools is
+     what lets grounding through. *)
+  if PageTurn then LoopCfg.Registry := nil;
+
+  Attempt := 0;
+  repeat
+    Inc(Attempt);
+    { Rebuilt each attempt: RunToolLoop appends the turn's history. }
+    SetLength(Msgs, 1);
+    Msgs[0] := MakeMessage(mrUser, Prompt);
+
+    if not RunToolLoop(LoopCfg, Msgs, Loop) then
+    begin
+      Err := 'agent loop failed';
+      Exit;
+    end;
+
+    (* A provider error is not a page. RunToolLoop reports success and
+       hands back the provider's error text as CONTENT when the call
+       itself failed -- so "gemini error: status=-1 msg=Socket Error
+       # 111 Connection refused." was wrapped in the report chrome,
+       saved to disk, and served as a finished research report with
+       HTTP 200. *)
+    if not ProviderRefused(Loop, Failed) then Break;
+
+    (* Grounding refused: ask again without it rather than failing.
+
+       The alternative is an error where a page should be, on the
+       reasonable request "search this for me" -- and the page can
+       still be written, it just cannot be grounded. It says so: the
+       Browser's badge reads UNGROUNDED and the page carries the same
+       warning it always has for an ungrounded answer. Honest and
+       useful beats correct and empty.
+
+       Once only, and only for a page: a second refusal is a real
+       failure and should be reported as one. *)
+    if PageTurn and (Attempt = 1) and
+       (not LoopCfg.Options.DisableServerTools) and
+       GroundingRefused(Failed) then
+    begin
+      LogInfo('page: %s cannot ground -- retrying without search ' +
+              'grounding; the page will be marked ungrounded',
+              [LoopCfg.Model]);
+      LoopCfg.Options.DisableServerTools := True;
+      Continue;
+    end;
+
+    Err := Failed;
     Exit;
-  end;
-
-  (* A provider error is not a page.
-
-     RunToolLoop reports success and hands back the provider's error
-     text as CONTENT when the call itself failed -- so "gemini error:
-     status=-1 msg=Socket Error # 111 Connection refused." was
-     wrapped in the report chrome, saved to disk, and served as a
-     finished research report with HTTP 200. The Browser closed its
-     progress dialog and opened a document whose entire body was that
-     one line.
-
-     StatusCode is the signal rather than sniffing the text: providers
-     set 200 on success, -1 on socket/TLS/DNS failure, and the real
-     code on an HTTP error. 0 means a provider that never sets it, so
-     it is not treated as a failure. *)
-  if (Loop.LastResp.StatusCode <> 0) and
-     ((Loop.LastResp.StatusCode < 200) or (Loop.LastResp.StatusCode > 299)) then
-  begin
-    Err := Trim(Loop.Content);
-    if Err = '' then
-      Err := Format('the provider call failed (status %d)',
-                    [Loop.LastResp.StatusCode]);
-    Exit;
-  end;
+  until False;
 
   Reply := Loop.Content;
   Result := True;
@@ -6551,7 +6622,7 @@ begin
      snapshot so the two cannot be chosen a moment apart. *)
   if not GDesktopGateway.RunDesktopTurn(Prompt,
        'Produce the page now.', Kind = pkResearch, Kind <> pkResearch,
-       Reply, Err) then
+       True, Reply, Err) then
     Exit;
   (* "Drafting", not "Writing": deepening rounds follow, each rewriting
      this draft, and a dialog that said "Writing" and THEN "Deepening:
@@ -6609,7 +6680,7 @@ begin
         Format('round %d -- %d source(s) so far', [Depth, Have]));
       if not GDesktopGateway.RunDesktopTurn(
            BuildDeepenPrompt(Query, BodyHTML, SourcesJSON),
-           'Deepen the report now.', True, False, Round_, RoundErr) then
+           'Deepen the report now.', True, False, True, Round_, RoundErr) then
       begin
         LogDebug('page: deepen round %d failed (%s) -- keeping the report ' +
                  'as it stands', [Depth, RoundErr]);
