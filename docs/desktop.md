@@ -1034,6 +1034,20 @@ So the server names one executor. Each SSE subscriber is assigned an id and told
 
 Oldest-subscriber is arbitrary but *stable*, and stability is the property that matters: every command in a session lands on the same screen rather than scattering builds across tabs. The consequence worth knowing is that asking in a second tab can have the app open in the first one.
 
+### A provider error is not a page
+
+`RunToolLoop` reports **success** and hands back the provider's error text as the turn's content when the call itself failed. So
+
+```
+gemini error: status=-1 msg=Socket Error # 111 Connection refused.
+```
+
+was wrapped in the report chrome, saved to `workspace/pages/`, and served from `POST /v1/pages` with HTTP 200. The Browser closed its progress dialog and opened a document whose entire body was that one line — which is what "Research does a call and then nothing happens" looks like from the outside.
+
+The page turn now checks `LastResp.StatusCode` and fails with the provider's own message. `StatusCode` rather than sniffing the text: providers set 200 on success, `-1` on socket/TLS/DNS failure, and the real code on an HTTP error; `0` means a provider that never sets it and is not treated as failure.
+
+`tools/fake-gemini.py` is the harness this was found with — it speaks Gemini's wire format and is as picky as Google is (400 on grounding for a model without it, 400 on the `google_search` + `functionDeclarations` combo below Gemini 3, 400 on a malformed function schema), and records every request. The relay provider cannot stand in for this: it *replaces* the provider, so anything provider-shaped — a schema Google rejects, a 400 only one model returns — is invisible to it. Both this bug and the unparseable schema above got past a relay-only test pass.
+
 ### The schema has to parse
 
 `desktop`'s schema shipped with `"e.g. [{""do"":""tile""}]"` — the Pascal doubling convention applied to double quotes, where JSON wanted `\"`. It did not parse.

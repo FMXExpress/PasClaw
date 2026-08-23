@@ -6399,6 +6399,31 @@ begin
     Err := 'agent loop failed';
     Exit;
   end;
+
+  (* A provider error is not a page.
+
+     RunToolLoop reports success and hands back the provider's error
+     text as CONTENT when the call itself failed -- so "gemini error:
+     status=-1 msg=Socket Error # 111 Connection refused." was
+     wrapped in the report chrome, saved to disk, and served as a
+     finished research report with HTTP 200. The Browser closed its
+     progress dialog and opened a document whose entire body was that
+     one line.
+
+     StatusCode is the signal rather than sniffing the text: providers
+     set 200 on success, -1 on socket/TLS/DNS failure, and the real
+     code on an HTTP error. 0 means a provider that never sets it, so
+     it is not treated as a failure. *)
+  if (Loop.LastResp.StatusCode <> 0) and
+     ((Loop.LastResp.StatusCode < 200) or (Loop.LastResp.StatusCode > 299)) then
+  begin
+    Err := Trim(Loop.Content);
+    if Err = '' then
+      Err := Format('the provider call failed (status %d)',
+                    [Loop.LastResp.StatusCode]);
+    Exit;
+  end;
+
   Reply := Loop.Content;
   Result := True;
 end;
