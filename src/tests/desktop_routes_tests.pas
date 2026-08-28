@@ -103,6 +103,22 @@ begin
     Fail_(Msg + ' -- "' + Needle + '" not in: ' + Copy(R.Body, 1, 300));
 end;
 
+{ The opposite assertion. Worth having explicitly: "this is absent" is
+  most of what a filter is FOR, and a test that only ever checks for
+  presence cannot tell a working filter from no filter at all. }
+procedure ExpectBodyMissing(const Method, Doc, Body, Needle, Msg: string);
+var
+  R: TDesktopResponse;
+begin
+  if not Req(Method, Doc, Body, R) then
+  begin
+    Fail_(Msg + ' -- route not handled');
+    Exit;
+  end;
+  if Pos(Squeeze(Needle), Squeeze(R.Body)) > 0 then
+    Fail_(Msg + ' -- "' + Needle + '" should NOT be in: ' + Copy(R.Body, 1, 300));
+end;
+
 { String field of a JSON response, compared after decoding -- the right way
   to assert a value that itself contains quotes. }
 procedure ExpectField(const Method, Doc, Body, Key, Want, Msg: string);
@@ -243,6 +259,44 @@ begin
                      'reading-log', 'create returns the slug');
   ExpectStatus('POST', '/v1/projects', '{"title":"!!!"}', 400, 'unusable title is a 400');
   ExpectStatus('POST', '/v1/projects', '', 400, 'missing body is a 400');
+
+  (* ------------------------------------------------------- archiving -- *)
+  (* Filed away, not deleted. The dock listed every project forever and
+     the only way off the list destroyed the work, so a finished board
+     sat there looking like live work. *)
+  ExpectBodyContains('POST', '/v1/projects/reading-log/archive',
+                     '{"archived":true}', '"archived":true',
+                     'archiving answers with the project''s new state');
+  ExpectBodyContains('GET', '/v1/projects', '', '"archived":1',
+                     'the list counts what it left out');
+  { The project OBJECT is gone from the list -- matched on the "name"
+    field specifically, because the bare slug still appears further
+    down in the roll call and a loose substring check would pass
+    against a filter that did nothing. }
+  ExpectBodyMissing('GET', '/v1/projects', '', '"name":"reading-log"',
+                    'an archived project is NOT in the default list');
+  { That roll call is unfiltered on purpose: a client answering "does
+    this project exist?" from the displayed list would start saying no
+    about a project that is merely filed away. }
+  ExpectBodyContains('GET', '/v1/projects', '', 'reading-log',
+                     'but its NAME is still in the roll call');
+
+  if not Req2('GET', '/v1/projects', 'archived=1', '', R) then
+    Fail_('archived=1 not handled')
+  else if Pos('reading-log', R.Body) = 0 then
+    Fail_('archived=1 must include it');
+
+  ExpectBodyContains('POST', '/v1/projects/reading-log/archive',
+                     '{"archived":false}', '"archived":false',
+                     'un-archiving says so');
+  ExpectStatus('POST', '/v1/projects/nope/archive', '{}', 404,
+               'archiving a project that does not exist is a 404');
+  { No body means archive -- the common call. Un-archiving is the one
+    that has to be explicit. }
+  ExpectBodyContains('POST', '/v1/projects/reading-log/archive', '',
+                     '"archived":true', 'an empty body archives');
+  ExpectBodyContains('POST', '/v1/projects/reading-log/archive',
+                     '{"archived":false}', '"archived":false', 'put it back');
 
   ExpectStatus('GET', '/v1/projects/spam-filter', '', 200, 'get project');
   ExpectStatus('GET', '/v1/projects/nope', '', 404, 'missing project is a 404');

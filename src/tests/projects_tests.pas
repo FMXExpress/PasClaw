@@ -53,7 +53,7 @@ begin
 end;
 
 var
-  Slug, TaskId, JobId, Err, Out_: string;
+  Slug, TaskId, JobId, Err, Out_, Stamp: string;
   Projects: TProjectInfoArray;
   Tasks: TTaskInfoArray;
   Jobs: TJobInfoArray;
@@ -102,6 +102,40 @@ begin
   CreateProject('Reading Log', '', '', Err);
   Projects := ListProjects;
   ExpectInt(Length(Projects), 2, 'two projects listed');
+
+  (* ------------------------------------------------------- archiving -- *)
+  (* Filing a finished project away. Projects only ever accumulated:
+     a board whose tasks were all done looked exactly like one being
+     worked on, and the only way off the list was DELETE -- which takes
+     the tasks, the job history and the app with it. Archiving is a
+     flag, so nothing moves and nothing is lost. *)
+  ExpectTrue(GetProject('reading-log', P), 'the project loads');
+  ExpectTrue(not P.Archived, 'and starts un-archived');
+  Stamp := P.Updated;
+
+  ExpectTrue(SetProjectArchived('reading-log', True, Err), 'archiving succeeds');
+  ExpectStr(Err, '', 'cleanly');
+  ExpectTrue(GetProject('reading-log', P), 'it still loads -- nothing moved');
+  ExpectTrue(P.Archived, 'and it is archived');
+  ExpectStr(P.Title, 'Reading Log', 'with everything else intact');
+
+  { The store still returns it. Filtering for display is the caller's
+    job, and an agent looking for prior work must not be lied to. }
+  Projects := ListProjects;
+  ExpectInt(Length(Projects), 2, 'ListProjects still returns it');
+
+  (* `updated` must NOT move. Filing something away is not work on it,
+     and bumping the stamp would push a finished project to the top of
+     anything sorted by recency -- the exact opposite of the point. *)
+  ExpectStr(P.Updated, Stamp, 'archiving does not count as an edit');
+
+  ExpectTrue(SetProjectArchived('reading-log', False, Err), 'un-archiving succeeds');
+  ExpectTrue(GetProject('reading-log', P), 'it loads');
+  ExpectTrue(not P.Archived, 'and it is back');
+
+  ExpectTrue(not SetProjectArchived('nope', True, Err),
+             'archiving a project that does not exist is refused');
+  ExpectTrue(Err <> '', 'and it says why');
 
   { ---------------------------------------------------------------- tasks -- }
   TaskId := CreateTask('spam-filter', 'Connect to IMAP', 'use app password', Err);

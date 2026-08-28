@@ -131,6 +131,45 @@ Jobs are opened by the runtime when a turn starts working a task, so the
 model only has to close them. Opening a job marks its task **active**;
 reporting a job **done** closes the task. The desktop tree shows this live.
 
+**Finished work gets out of the way.** A board never forgets, which is
+right for the record and wrong for a dock — after a team has worked a
+project for a day the list is mostly history, and the two things you
+still have to do are somewhere in the middle of it. So:
+
+- **Done tasks fold** behind a single `3 done` row in the tree. Click it
+  to put them back. Nothing is hidden that isn't one click away, and
+  nothing is deleted.
+- **A finished project says so.** A board with tasks and none of them
+  open gets a ✓ instead of an open-work count. A board with *no* tasks
+  is not finished, it is empty, and is not marked either way — the
+  server sends `finished` so every client draws that line in the same
+  place.
+- **Archive** files a project away: it leaves the projects list and the
+  desktop, and everything — tasks, jobs, the app, the conversation —
+  stays exactly where it was. `show archived (2)` at the foot of the
+  tree brings them back, and **Unarchive** in the project's own pane
+  undoes it. This is the answer to a project that got *done*; **Delete**
+  is still there for a half-built idea nobody wants, and still takes the
+  work with it.
+
+```
+POST /v1/projects/<name>/archive   {"archived": true}   # or false
+GET  /v1/projects                                       # archived excluded
+GET  /v1/projects?archived=1                            # all of them
+```
+
+The list response carries `archived` (how many were left out) and
+`names` (every project name, archived included) so a client can offer
+"show archived (2)" without a second request, and can still answer
+"does this project exist?" correctly about one that is merely filed
+away.
+
+Archiving is deliberately **not** automatic when the last task closes. A
+board that empties is very often about to get its next task, and a list
+that hid work the moment it went green would have people chasing
+projects that vanished under them. Finishing is the machine's
+observation; filing away is your decision.
+
 **Seeing it, and acting on it.** The **Projects** window is the whole chain
 in one place — project → app / tasks → jobs — and every level is
 double-clickable: a project opens its app or its chat, an app opens (or, for
