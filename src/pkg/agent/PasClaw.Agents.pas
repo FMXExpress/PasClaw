@@ -194,25 +194,25 @@ type
 
 (* Is this workspace's agent system paused?
 
-   Paused means NO NEW TURNS START: the team tick starts nothing, the
-   run route refuses, and `team up` seeds without kicking off. It does
-   NOT kill work already in flight -- the tool loop has no cancellation
-   hook, and a turn killed between a write and the board update leaves
-   exactly the half-finished state an operator hitting stop is trying
-   to avoid. What PauseAgents does for running agents instead is TELL
-   them: a note into each busy agent's steering queue, which it reads
-   between tool calls, asking it to finish the step it is on, record
-   where it got to, and stop.
+   Paused means NO NEW TURNS START -- the team tick starts nothing, the
+   run route refuses, `team up` seeds without kicking off, and
+   supervision restarts nothing -- and TURNS ALREADY RUNNING END, at
+   their next safe boundary. The gateway hands the tool loop a cancel
+   hook that reads this flag, and the loop asks it before a provider
+   call and after a tool batch has fully joined: the two points where
+   the turn is in one piece. A turn is never cut between a file write
+   and the board update that belongs with it, which is the
+   half-finished state an operator hitting stop is trying to avoid.
 
    On disk, so a gateway restart does not quietly resume a system the
    operator stopped -- the failure that would matter most. *)
 function AgentsPaused: Boolean;
 function AgentsPausedNote: string;
 
-(* Pause or resume. When pausing, every agent currently working is sent
-   the wind-down note and its name is returned, so the caller can say
-   who was actually asked to stop rather than claiming everything
-   halted instantly. *)
+(* Pause or resume. When pausing, Told comes back naming every agent
+   that was mid-turn, so the caller can say who is being stopped rather
+   than claiming everything halted the instant the flag was set --
+   those turns end at their next boundary, which is soon but not now. *)
 function SetAgentsPaused(Paused: Boolean; const Note: string;
                          out Told: TStringArray; out Err: string): Boolean;
 
@@ -812,7 +812,6 @@ var
   Obj: TJsonObject;
   Rows: TAgentInfoArray;
   I, N: Integer;
-  Text: string;
 begin
   Result := False;
   Err := '';
@@ -835,31 +834,40 @@ begin
 
   if not Paused then Exit(True);
 
-  (* Tell whoever is mid-turn. The flag above is what actually stops
-     them -- the gateway hands the tool loop a cancel hook that reads
-     it, and every running turn ends at its next safe boundary whether
-     it cooperates or not. This note is the courtesy on top: an agent
-     that reads it between tool calls gets to write down where it had
-     got to before the loop lets it go, which is a much better place to
-     resume from than a bare stop. *)
-  Text := 'The operator has PAUSED this agent system.';
-  if Trim(Note) <> '' then Text := Text + ' Reason: ' + Trim(Note);
-  Text := Text + ' Finish only the step you are on, write down where ' +
-          'you got to (task notes, or a short message to your manager), ' +
-          'and then stop -- do not start anything new, do not pick up ' +
-          'another task, and do not wake anyone.';
+  (* Who is mid-turn, for the operator to see. The flag above is what
+     stops them: the gateway hands the tool loop a cancel hook that
+     reads it, and every running turn ends at its next safe boundary.
 
+     This used to also push a "wind down" note into each busy agent's
+     steering queue, and that has to go, because the cancel hook made
+     it a message that can only ever arrive at the wrong time. A turn
+     drains its steering queue at the TOP of an iteration, after the
+     boundary check -- so once the flag is set, the next boundary
+     cancels the turn before the next drain, every time. The note is
+     never read by the agent it was written for.
+
+     It is not merely useless, though. It sits in the queue until the
+     agent runs again -- which is after the operator resumes -- and the
+     resumed turn is then handed "stop, do not start anything new, do
+     not pick up another task" as if it were fresh instruction, and
+     dutifully stands back down. Reproduced against a live gateway
+     before removing it. (Codex P1 on #591.)
+
+     What the note was for is now done better anyway: a cancelled turn
+     ends with a notice in its own transcript saying it was stopped,
+     where, and what it had already finished, carrying the progress
+     ledger. That is what the next turn reads, and it is in the
+     conversation rather than in a queue that outlives the pause. *)
   N := 0;
   Rows := ListAgents;
   for I := 0 to High(Rows) do
     if AgentIsBusy(Rows[I].Name) then
-      if PushSteering(AgentSessionId(Rows[I].Name), Text) then
-      begin
-        SetLength(Told, N + 1);
-        Told[N] := Rows[I].Name;
-        Inc(N);
-        PublishAgent(Rows[I].Name);
-      end;
+    begin
+      SetLength(Told, N + 1);
+      Told[N] := Rows[I].Name;
+      Inc(N);
+      PublishAgent(Rows[I].Name);
+    end;
   Result := True;
 end;
 

@@ -796,7 +796,13 @@ begin
     Name_ := Copy(Doc, Length('/v1/teams/') + 1, MaxInt);
     if not RemoveTeam(Name_, Created, Err) then
     begin
-      ReplyErr(Resp, 404, Err);
+      { Two different refusals, and a client that retries should be able
+        to tell them apart: no such team is 404 and will never work,
+        while a member mid-turn is 409 and works the moment the turn
+        stops. Sending 404 for both told the caller to give up on a
+        request that was only early. }
+      if Pos('still working', Err) > 0 then ReplyErr(Resp, 409, Err)
+                                       else ReplyErr(Resp, 404, Err);
       Exit;
     end;
     Root := TJsonObject.Create;
@@ -1120,6 +1126,26 @@ begin
       end;
     finally
       Obj.Free;
+    end;
+    (* Paused means paused here too. This route restarts agents, and
+       restarting is starting a turn -- the run route and the team tick
+       both refuse while the brake is on, and a sweep that started
+       twelve turns anyway would make a liar of every one of them. The
+       cancel hook would stop those turns at their first boundary, but
+       only after each had been created, published a run state and
+       persisted a cancelled transcript: noise that reads like the
+       system ignoring the operator. (Codex P2 on #591.)
+
+       Reporting is not acting, so a dry pass still answers -- "what
+       would you do when I resume" is a fair question to ask of a
+       stopped system. *)
+    if AgentsPaused and (not Dry) then
+    begin
+      ReplyJSON(Resp, 409,
+        '{"error":"the agent system is paused -- nothing will be ' +
+        'restarted. POST /v1/agents/pause {\"paused\":false} to resume, ' +
+        'or pass {\"dry\":true} to see the verdicts without acting"}');
+      Exit;
     end;
     Verdicts := SuperviseAgents(Stall, Idle);
     Root := TJsonObject.Create;

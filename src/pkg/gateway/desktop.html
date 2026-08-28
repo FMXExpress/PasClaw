@@ -5745,11 +5745,20 @@ async function openAgents() {
   sup.addEventListener("click", async () => {
     status.textContent = "Checking...";
     try {
-      const j = await api("/v1/agents/supervise", { method: "POST", body: {} });
+      /* Paused means nothing gets restarted -- the route refuses, and
+         it is right to. Still worth answering the question, so ask it
+         as a dry pass and report what it WOULD do; a stopped system
+         that also refuses to tell you what is wrong is just silence. */
+      let paused = false;
+      try { paused = (await api("/v1/agents/pause")).paused; } catch {}
+      const j = await api("/v1/agents/supervise",
+                          { method: "POST", body: { dry: paused } });
       const acted = (j.verdicts || []).filter(v => v.action !== "ok");
-      status.textContent = acted.length
-        ? `${j.restarted} restarted: ` + acted.map(v => v.name).join(", ")
-        : "all agents healthy";
+      status.textContent = !acted.length
+        ? "all agents healthy"
+        : paused
+          ? "paused -- would restart: " + acted.map(v => v.name).join(", ")
+          : `${j.restarted} restarted: ` + acted.map(v => v.name).join(", ");
     } catch (e) { status.textContent = e.message; }
     paint();
   });

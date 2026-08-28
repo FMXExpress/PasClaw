@@ -51,7 +51,7 @@ begin
   PrintLn('  status                    every team that is up, and its board');
   PrintLn('  down <template>           park a team: agents and board stay, the clock stops');
   PrintLn('  rm <template>             retire a team: delete its agents (conversations stay)');
-  PrintLn('  pause ["reason"]          stop starting new turns; tell whoever is working to wind down');
+  PrintLn('  pause ["reason"]          stop everything: no new turns, and running ones end');
   PrintLn('  resume                    let turns start again');
   PrintLn('  export <file> [name]      write the live roster as a template file');
 end;
@@ -289,14 +289,13 @@ begin
     else
     begin
       for I := 0 to High(Told) do
-        PrintLn('  winding down: ' + Told[I]);
-      PrintLn('Those are mid-turn. Each one stops at its next safe point ' +
-              '-- between tool calls, never in the middle of one -- so a ' +
-              'file write and the board update that goes with it are not ' +
-              'left half-finished. They also get a note asking them to ' +
-              'write down where they got to first, which is the tidier ' +
-              'ending when the agent is still answering; either way the ' +
-              'turn ends.');
+        PrintLn('  stopping: ' + Told[I]);
+      PrintLn('Those are mid-turn. Each stops at its next safe point -- ' +
+              'between tool calls, never in the middle of one -- so a ' +
+              'file write and the board update that goes with it are ' +
+              'not left half-finished. What each did before stopping is ' +
+              'kept, and its conversation ends with a note saying it was ' +
+              'stopped and how far it got.');
     end;
     Exit;
   end;

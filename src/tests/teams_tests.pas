@@ -30,11 +30,14 @@ program teams_tests;
 {$H+}
 
 uses
-  SysUtils,
+  {$IFDEF FPC}{$IFDEF UNIX}cthreads,{$ENDIF}{$ENDIF}
+  SysUtils, Classes, SyncObjs,
   PasClaw.Utils,
   PasClaw.Workspaces,
+  PasClaw.Session.Store,
   PasClaw.Projects.Store,
   PasClaw.Projects.Tools,
+  PasClaw.Agent.Steering,
   PasClaw.Agents,
   PasClaw.Teams;
 
@@ -70,6 +73,71 @@ begin
   else Fail(Msg + ' -- "' + Needle + '" not in: ' + Copy(Haystack, 1, 160));
 end;
 
+(* Make an agent genuinely BUSY for the duration of a check.
+
+   AgentIsBusy asks whether the agent's session turn lock is held, and
+   a critical section is re-entrant on its owning thread -- so a test
+   that grabbed the lock itself would still read "idle". The only
+   honest way to be busy is for another thread to hold it, which is
+   also exactly what a real running turn does. Enter, signal, wait to
+   be released. *)
+type
+  TBusyHolder = class(TThread)
+  private
+    FLock:  TCriticalSection;
+    FHeld:  TEvent;   { set once the lock is actually held }
+    FRelease: TEvent; { the test sets this to let go }
+  protected
+    procedure Execute; override;
+  public
+    constructor Create(const Sid: string);
+    destructor Destroy; override;
+    procedure WaitUntilHeld;
+    procedure ReleaseAndJoin;
+  end;
+
+constructor TBusyHolder.Create(const Sid: string);
+begin
+  FLock    := SessionTurnLock(Sid);
+  FHeld    := TEvent.Create(nil, True, False, '');
+  FRelease := TEvent.Create(nil, True, False, '');
+  inherited Create(False);
+end;
+
+destructor TBusyHolder.Destroy;
+begin
+  FHeld.Free;
+  FRelease.Free;
+  inherited Destroy;
+end;
+
+procedure TBusyHolder.Execute;
+begin
+  if FLock = nil then
+  begin
+    FHeld.SetEvent;
+    Exit;
+  end;
+  FLock.Enter;
+  try
+    FHeld.SetEvent;
+    FRelease.WaitFor(30000);
+  finally
+    FLock.Leave;
+  end;
+end;
+
+procedure TBusyHolder.WaitUntilHeld;
+begin
+  FHeld.WaitFor(10000);
+end;
+
+procedure TBusyHolder.ReleaseAndJoin;
+begin
+  FRelease.SetEvent;
+  WaitFor;
+end;
+
 function MiniTemplate: TTeamTemplate;
 begin
   Result := Default(TTeamTemplate);
@@ -99,6 +167,7 @@ var
   I: Integer;
   Err, Out_, Delivered, TaskId, Proj: string;
   Found: Boolean;
+  Holder: TBusyHolder;
 begin
   { ------------------------------------------------- built-in catalogue -- }
   All := TeamTemplates;
@@ -371,12 +440,40 @@ begin
              'a message still queues while paused');
   AssertTrue(not TeamHasWaitingMail(S),
              'but waiting mail does not restart a paused system');
-  { Nothing was running, so nobody needed telling. }
-  AssertEqInt(Length(Told), 0, 'no busy agent to wind down');
+  { Nothing was running, so there was nobody to report. }
+  AssertEqInt(Length(Told), 0, 'no busy agent to name');
 
   AssertTrue(SetAgentsPaused(False, '', Told, Err), 'resuming succeeds');
   AssertTrue(not AgentsPaused, 'and it sticks');
   AssertTrue(TeamHasWaitingMail(S), 'the queued message is live again');
+
+  (* Pausing a BUSY agent names it -- and queues it nothing.
+
+     It used to push a "wind down, do not start anything new" note into
+     the agent's steering queue. With the cancel hook that note can
+     never reach the turn it was written for: a turn drains its queue
+     at the top of an iteration, AFTER the boundary check, so the next
+     boundary cancels the turn before the next drain, every time. The
+     note then sat in the queue until the operator resumed and the
+     agent ran again -- and that turn was handed "stop, do not pick up
+     another task" as fresh instruction and stood back down.
+     Reproduced against a live gateway. (Codex P1 on #591.) *)
+  ClearSteering(AgentSessionId('boss'));
+  Holder := TBusyHolder.Create(AgentSessionId('boss'));
+  Holder.WaitUntilHeld;
+  AssertTrue(AgentIsBusy('boss'), 'boss is mid-turn');
+  AssertTrue(SetAgentsPaused(True, 'lunch', Told, Err), 'pausing succeeds');
+  AssertEqInt(Length(Told), 1, 'the busy agent is named to the operator');
+  if Length(Told) > 0 then AssertEqStr(Told[0], 'boss', 'by name');
+  AssertEqInt(PendingSteeringCount(AgentSessionId('boss')), 0,
+              'and NOTHING was queued for it -- a message that can only ' +
+              'arrive after the resume is worse than no message');
+  AssertTrue(SetAgentsPaused(False, '', Told, Err), 'resuming succeeds');
+  AssertEqInt(PendingSteeringCount(AgentSessionId('boss')), 0,
+              'and the resumed agent still has an empty queue');
+  Holder.ReleaseAndJoin;
+  Holder.Free;
+  AssertTrue(not AgentIsBusy('boss'), 'and boss is idle again');
 
   (* ------------------------------------------------- retiring a team -- *)
   (* The roster could create agents and never remove one, so a
@@ -385,6 +482,24 @@ begin
   S.WakeWho[0] := 'boss'; S.WakeWho[1] := 'mid'; S.WakeWho[2] := 'worker';
   AssertTrue(SaveTeamState(S, Err), 'the team is up');
   AssertTrue(GetAgent('boss', Info), 'its lead exists');
+
+  (* Refused while anyone on it is mid-turn, and refused BEFORE
+     deleting anything -- a half-retired team is worse than one still
+     standing. Retiring a single agent already refused this way;
+     retiring a whole team skipped the check and deleted a working
+     agent's manifest and mailbox out from under its own running turn.
+     (Codex P1 on #591.) *)
+  Holder := TBusyHolder.Create(AgentSessionId('worker'));
+  Holder.WaitUntilHeld;
+  AssertTrue(not RemoveTeam('mini', Removed, Err),
+             'a team with someone mid-turn is not retired');
+  AssertTrue(Pos('worker', Err) > 0, 'and the refusal names who: ' + Err);
+  AssertTrue(Pos('pause', Err) > 0, 'and what to do about it');
+  AssertTrue(GetAgent('boss', Info),
+             'nothing was deleted -- the refusal came first');
+  AssertTrue(GetAgent('worker', Info), 'the busy agent least of all');
+  Holder.ReleaseAndJoin;
+  Holder.Free;
 
   AssertTrue(RemoveTeam('mini', Removed, Err), 'the team is retired: ' + Err);
   AssertEqInt(Length(Removed), 3, 'all three agents removed');
@@ -395,6 +510,35 @@ begin
   AssertTrue(ProjectExists(Proj), 'and the PROJECT is left alone');
   AssertTrue(not RemoveTeam('nosuchteam', Removed, Err),
              'retiring a team that never existed is a clean refusal');
+
+  (* The roster is the template's AGENT list, not its wake list.
+
+     Those differ the moment a template names a subset in wake.who on
+     purpose -- a reviewer meant to run only when work is handed to it,
+     say. Retiring off the wake list deleted the wakeable members, left
+     the others in the roster, and still reported the team retired.
+     (Codex P2 on #591.) *)
+  WriteFileText(JoinPath(WorkspaceSubdir('teams'), 'subset.json'),
+    '{"name":"subset","title":"Subset","agents":[' +
+    '{"name":"lead","title":"Lead","role":"Lead."},' +
+    '{"name":"quiet","title":"Quiet","role":"Only when asked.","parent":"lead"}],' +
+    '"wake":{"minutes":10,"who":["lead"]}}');
+  AssertTrue(FindTeamTemplate('subset', T2), 'the subset template resolves');
+  AssertEqInt(Length(TeamWakeList(T2)), 1, 'and wakes only its lead');
+  AssertTrue(SeedTeam(T2, Created, Skipped, Err), 'it seeds: ' + Err);
+  AssertTrue(GetAgent('lead', Info)  and GetAgent('quiet', Info),
+             'both members exist');
+  S := Default(TTeamState);
+  S.Name := 'subset'; S.Project := Proj; S.Enabled := True;
+  S.WakeMinutes := 10;
+  SetLength(S.WakeWho, 1); S.WakeWho[0] := 'lead';
+  AssertTrue(SaveTeamState(S, Err), 'and it is up, waking one of two');
+
+  AssertTrue(RemoveTeam('subset', Removed, Err), 'retired: ' + Err);
+  AssertEqInt(Length(Removed), 2, 'BOTH members went, not just the wakeable one');
+  AssertTrue(not GetAgent('lead', Info),  'the lead is gone');
+  AssertTrue(not GetAgent('quiet', Info),
+             'and so is the member the wake list never mentioned');
 
   { --------------------------------------------------------------- export -- }
   Out_ := ExportRosterJSON('my-team', 'My Team');

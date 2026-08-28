@@ -1118,27 +1118,79 @@ end;
 
 { ------------------------------------------------------------- export -- }
 
+{ Add Nm to Names unless it is already there. Retiring a team draws its
+  roster from two places that overlap, and deleting the same agent twice
+  would report it removed twice. }
+procedure AddOnce(var Names: TStringArray; const Nm: string);
+var
+  I: Integer;
+begin
+  if Trim(Nm) = '' then Exit;
+  for I := 0 to High(Names) do
+    if Names[I] = Nm then Exit;
+  SetLength(Names, Length(Names) + 1);
+  Names[High(Names)] := Nm;
+end;
+
 function RemoveTeam(const Name: string; out Removed: TStringArray;
                     out Err: string): Boolean;
 var
   S: TTeamState;
   T: TTeamTemplate;
-  Names: TStringArray;
+  Names, Busy: TStringArray;
   I, N: Integer;
+  HaveState, HaveTemplate: Boolean;
   Path, DelErr: string;
 begin
   Result := False;
   Err := '';
   SetLength(Removed, 0);
+  SetLength(Names, 0);
+  SetLength(Busy, 0);
   N := 0;
 
-  { The state's own wake list is the roster of record; the template is
-    the fallback for a team whose state file has already gone. }
-  if LoadTeamState(Name, S) then Names := S.WakeWho
-  else if FindTeamTemplate(Name, T) then Names := TeamWakeList(T)
-  else
+  (* The roster is the TEMPLATE's agent list, not the wake list.
+
+     Those are different things and only look the same on the built-in
+     templates, where everyone is wakeable. A custom template can list
+     a subset in wake.who on purpose -- a reviewer who should only run
+     when something is handed to it, say -- and retiring the team off
+     that list deleted the wakeable members, left the rest sitting in
+     the roster, and reported the team retired. (Codex P2 on #591.)
+
+     Both sources are read and merged rather than one chosen: the
+     template can have been edited since the team was seeded, so an
+     agent named only in the saved wake list is still this team's, and
+     the state file is all there is for a team whose template is gone. *)
+  HaveState    := LoadTeamState(Name, S);
+  HaveTemplate := FindTeamTemplate(Name, T);
+  if not (HaveState or HaveTemplate) then
   begin
     Err := 'no team called "' + AgentSlug(Name) + '"';
+    Exit;
+  end;
+  if HaveTemplate then
+    for I := 0 to High(T.Agents) do AddOnce(Names, AgentSlug(T.Agents[I].Name));
+  if HaveState then
+    for I := 0 to High(S.WakeWho) do AddOnce(Names, AgentSlug(S.WakeWho[I]));
+
+  (* Refuse while anyone is mid-turn, and refuse before deleting
+     ANYTHING -- a half-retired team is worse than one still standing.
+
+     Retiring a single agent already refuses this way; doing it a team
+     at a time skipped the check, so `team rm` during a run deleted a
+     working agent's manifest and mailbox out from under its own turn.
+     The turn keeps going, dispatching tools and then persisting a
+     session for an agent that no longer exists. (Codex P1 on #591.) *)
+  for I := 0 to High(Names) do
+    if AgentIsBusy(Names[I]) then AddOnce(Busy, Names[I]);
+  if Length(Busy) > 0 then
+  begin
+    Err := 'still working:';
+    for I := 0 to High(Busy) do
+      Err := Err + ' ' + Busy[I];
+    Err := Err + ' -- pause first (`pasclaw team pause`, or Pause all ' +
+           'on the desktop) and retire once the turn has stopped';
     Exit;
   end;
 
