@@ -468,8 +468,28 @@ begin
   Result.PutStr ('icon',        P.Icon);
   Result.PutBool('suite',       P.Suite);
   Result.PutBool('has_app',     P.HasApp);
-  Result.PutInt ('tasks',       P.TaskCount);
-  Result.PutInt ('open_tasks',  P.OpenTasks);
+  Result.PutBool('archived',    P.Archived);
+  Result.PutInt ('tasks',        P.TaskCount);
+  Result.PutInt ('open_tasks',   P.OpenTasks);
+  Result.PutInt ('done_tasks',   P.DoneTasks);
+  Result.PutInt ('blocked_tasks', P.BlockedTasks);
+  (* "Everything on this board is finished."
+
+     Computed here rather than left to each client to derive, because
+     both qualifiers are easy to get wrong and expensive to get wrong
+     in the same way -- by telling someone work is done when it is not.
+
+     A board with NO tasks is not finished, it is empty; a UI that
+     marks both the same way tells you a brand-new project is done.
+
+     And it is DONE tasks that decide it, not the absence of open ones.
+     OpenTasks counts todo + active, so a board of nothing but BLOCKED
+     tasks has zero open and is the furthest thing from finished --
+     every one of them is waiting on somebody. Asking "are none open?"
+     put a tick on exactly the projects most in need of attention.
+     (Codex P2 on #593.) *)
+  Result.PutBool('finished',
+                 (P.TaskCount > 0) and (P.DoneTasks = P.TaskCount));
   { The desktop needs the app's kind and window size to open a window without
     a second round trip. }
   if P.HasApp and GetApp(P.Name, App) and App.Exists then
@@ -1435,14 +1455,15 @@ end;
 
 { ---- /v1/projects... ---- }
 
-function RouteProjectCollection(const Method, Doc, Body: string;
+function RouteProjectCollection(const Method, Doc, Query, Body: string;
   out Resp: TDesktopResponse): Boolean;
 var
   Root: TJsonObject;
-  Arr: TJsonArray;
+  Arr, Names: TJsonArray;
   Item: TJsonObject;
   List: TProjectInfoArray;
-  I: Integer;
+  I, NArchived: Integer;
+  IncArchived: Boolean;
   Obj: TJsonObject;
   Slug, Err: string;
 begin
@@ -1450,16 +1471,41 @@ begin
 
   if (Method = 'GET') and (Doc = '/v1/projects') then
   begin
+    (* Archived projects are OUT by default.
+
+       Default-exclude rather than default-include with a filter,
+       because the list is what the dock paints and a dock that shows
+       everything forever is the problem being fixed. Anything that
+       genuinely wants the lot -- the archive view, an export, an agent
+       looking for prior work -- asks for it. `archived` counts them
+       either way, so a UI can offer "Show archived (3)" without a
+       second request. *)
+    IncArchived := QueryValue(Query, 'archived') = '1';
     Root := TJsonObject.Create;
     try
       Arr := TJsonArray.Create;
       List := ListProjects;
+      NArchived := 0;
       for I := 0 to High(List) do
       begin
+        if List[I].Archived then Inc(NArchived);
+        if List[I].Archived and not IncArchived then Continue;
         Item := ProjectJSON(List[I]);
         Arr.AddObject(Item);
       end;
       Root.PutArray('projects', Arr);
+      Root.PutInt('archived', NArchived);
+      (* Every project's NAME, archived ones included.
+
+         Filtering the list gave clients a new way to be wrong: code
+         that answers "does this project exist?" by looking in the list
+         it was handed would start saying no about a project that is
+         merely filed away. The desktop's edit_app guard is exactly
+         that shape. Names are cheap; a client that needs existence can
+         have it without a second request or a wrong answer. *)
+      Names := TJsonArray.Create;
+      for I := 0 to High(List) do Names.AddStr(List[I].Name);
+      Root.PutArray('names', Names);
       Root.PutStr('workspace', ActiveWorkspaceName);
       ReplyJSON(Resp, 200, Root.ToJSON);
     finally
@@ -1843,6 +1889,70 @@ begin
     if not IsSafeName(Project) then
     begin
       ReplyErr(Resp, 404, 'no such project');
+      Exit;
+    end;
+
+    (* POST /v1/projects/<name>/archive {"archived":true|false}
+
+       Its own route rather than a field on the PATCH, because it is
+       its own gesture: the PATCH is "edit this project" and this is
+       "put it away". A client that files something by accident should
+       be able to see one call to undo, and an agent reading the route
+       list should not have to infer that a metadata edit can make a
+       project disappear from the dock. *)
+    if (Segs.Count = 4) and (LowerCase(Segs[3]) = 'archive')
+       and (Method = 'POST') then
+    begin
+      if not ProjectExists(Project) then
+      begin
+        ReplyErr(Resp, 404, 'no such project');
+        Exit;
+      end;
+      (* An empty body means "archive this" -- the common call. A body
+         that was SENT and could not be parsed means nothing at all,
+         and must not be read as the default.
+
+         BodyObj answers nil for both, so the two have to be told apart
+         before it is called. Without that, `{` archived the project
+         and returned 200: a truncated request quietly mutating state
+         while every other project route would have answered 400.
+         (Codex P2 on #593.) *)
+      if Trim(Body) <> '' then
+      begin
+        Obj := BodyObj(Body);
+        if Obj = nil then
+        begin
+          ReplyErr(Resp, 400, 'body is not valid JSON -- send ' +
+                   '{"archived":true} or {"archived":false}, or no body ' +
+                   'at all to archive');
+          Exit;
+        end;
+      end
+      else
+        Obj := nil;
+      try
+        { Default true: the common call is "archive this". Un-archiving
+          says so explicitly. }
+        if not SetProjectArchived(Project,
+                 (Obj = nil) or Obj.GetBool('archived', True), Err) then
+        begin
+          ReplyErr(Resp, 400, Err);
+          Exit;
+        end;
+      finally
+        Obj.Free;
+      end;
+      if not GetProject(Project, Info) then
+      begin
+        ReplyErr(Resp, 404, 'no such project');
+        Exit;
+      end;
+      Item := ProjectJSON(Info);
+      try
+        ReplyJSON(Resp, 200, Item.ToJSON);
+      finally
+        Item.Free;
+      end;
       Exit;
     end;
 
@@ -3609,7 +3719,7 @@ begin
 
   if HasPrefix(Doc, '/v1/projects') then
   begin
-    if RouteProjectCollection(M, Doc, Body, Resp) then Exit(True);
+    if RouteProjectCollection(M, Doc, Query, Body, Resp) then Exit(True);
     Exit(RouteProjectItem(M, Doc, Body, Resp));
   end;
 

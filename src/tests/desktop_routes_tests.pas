@@ -103,6 +103,22 @@ begin
     Fail_(Msg + ' -- "' + Needle + '" not in: ' + Copy(R.Body, 1, 300));
 end;
 
+{ The opposite assertion. Worth having explicitly: "this is absent" is
+  most of what a filter is FOR, and a test that only ever checks for
+  presence cannot tell a working filter from no filter at all. }
+procedure ExpectBodyMissing(const Method, Doc, Body, Needle, Msg: string);
+var
+  R: TDesktopResponse;
+begin
+  if not Req(Method, Doc, Body, R) then
+  begin
+    Fail_(Msg + ' -- route not handled');
+    Exit;
+  end;
+  if Pos(Squeeze(Needle), Squeeze(R.Body)) > 0 then
+    Fail_(Msg + ' -- "' + Needle + '" should NOT be in: ' + Copy(R.Body, 1, 300));
+end;
+
 { String field of a JSON response, compared after decoding -- the right way
   to assert a value that itself contains quotes. }
 procedure ExpectField(const Method, Doc, Body, Key, Want, Msg: string);
@@ -243,6 +259,92 @@ begin
                      'reading-log', 'create returns the slug');
   ExpectStatus('POST', '/v1/projects', '{"title":"!!!"}', 400, 'unusable title is a 400');
   ExpectStatus('POST', '/v1/projects', '', 400, 'missing body is a 400');
+
+  (* ------------------------------------------------------- archiving -- *)
+  (* Filed away, not deleted. The dock listed every project forever and
+     the only way off the list destroyed the work, so a finished board
+     sat there looking like live work. *)
+  ExpectBodyContains('POST', '/v1/projects/reading-log/archive',
+                     '{"archived":true}', '"archived":true',
+                     'archiving answers with the project''s new state');
+  ExpectBodyContains('GET', '/v1/projects', '', '"archived":1',
+                     'the list counts what it left out');
+  { The project OBJECT is gone from the list -- matched on the "name"
+    field specifically, because the bare slug still appears further
+    down in the roll call and a loose substring check would pass
+    against a filter that did nothing. }
+  ExpectBodyMissing('GET', '/v1/projects', '', '"name":"reading-log"',
+                    'an archived project is NOT in the default list');
+  { That roll call is unfiltered on purpose: a client answering "does
+    this project exist?" from the displayed list would start saying no
+    about a project that is merely filed away. }
+  ExpectBodyContains('GET', '/v1/projects', '', 'reading-log',
+                     'but its NAME is still in the roll call');
+
+  if not Req2('GET', '/v1/projects', 'archived=1', '', R) then
+    Fail_('archived=1 not handled')
+  else if Pos('reading-log', R.Body) = 0 then
+    Fail_('archived=1 must include it');
+
+  ExpectBodyContains('POST', '/v1/projects/reading-log/archive',
+                     '{"archived":false}', '"archived":false',
+                     'un-archiving says so');
+  ExpectStatus('POST', '/v1/projects/nope/archive', '{}', 404,
+               'archiving a project that does not exist is a 404');
+
+  { No body means archive -- the common call. Un-archiving is the one
+    that has to be explicit. }
+  ExpectBodyContains('POST', '/v1/projects/reading-log/archive', '',
+                     '"archived":true', 'an empty body archives');
+
+  (* A body that was SENT and could not be parsed means nothing, and
+     must not be read as the empty-body default. BodyObj answers nil to
+     both, so `{` used to archive the project and return 200 -- a
+     truncated request quietly mutating state, where every other
+     project route would have said 400. (Codex P2 on #593.)
+
+     Asserted here, with the project ALREADY archived, so the second
+     half can be checked too: the refusal has to leave the state alone.
+     A 400 that still mutated would pass a status-only test. *)
+  ExpectStatus('POST', '/v1/projects/reading-log/archive', '{', 400,
+               'a truncated body is a 400, not a silent archive');
+  ExpectStatus('POST', '/v1/projects/reading-log/archive', 'nonsense', 400,
+               'and so is anything else that will not parse');
+  ExpectBodyContains('GET', '/v1/projects', '', '"archived":1',
+                     'and neither refusal touched the state');
+
+  ExpectBodyContains('POST', '/v1/projects/reading-log/archive',
+                     '{"archived":false}', '"archived":false', 'put it back');
+  ExpectBodyContains('GET', '/v1/projects', '', '"name":"reading-log"',
+                     'and it is back in the list');
+
+  (* ------------------------------------------------ finished vs blocked -- *)
+  (* "Finished" asks whether every task is DONE, not whether none are
+     open. OpenTasks counts todo + active, so a board of nothing but
+     BLOCKED tasks has zero open -- and used to get the all-done tick
+     while every one of its tasks sat waiting on somebody. That put the
+     finished mark on exactly the projects most in need of attention.
+     (Codex P2 on #593.) *)
+  ExpectStatus('POST', '/v1/projects', '{"title":"Stuck Board"}', 200,
+               'a board to get stuck');
+  ExpectStatus('POST', '/v1/projects/stuck-board/tasks',
+               '{"title":"Waiting on a key"}', 200, 'give it a task');
+  ExpectBodyContains('GET', '/v1/projects/stuck-board', '', '"finished":false',
+                     'one open task -- not finished');
+
+  ExpectStatus('PATCH', '/v1/projects/stuck-board/tasks/T0001',
+               '{"status":"blocked"}', 200, 'block it');
+  ExpectBodyContains('GET', '/v1/projects/stuck-board', '', '"open_tasks":0',
+                     'blocked is not open...');
+  ExpectBodyContains('GET', '/v1/projects/stuck-board', '', '"blocked_tasks":1',
+                     '...it is blocked...');
+  ExpectBodyContains('GET', '/v1/projects/stuck-board', '', '"finished":false',
+                     '...and a board of blocked work is NOT finished');
+
+  ExpectStatus('PATCH', '/v1/projects/stuck-board/tasks/T0001',
+               '{"status":"done"}', 200, 'unblock and finish it');
+  ExpectBodyContains('GET', '/v1/projects/stuck-board', '', '"finished":true',
+                     'NOW it is finished');
 
   ExpectStatus('GET', '/v1/projects/spam-filter', '', 200, 'get project');
   ExpectStatus('GET', '/v1/projects/nope', '', 404, 'missing project is a 404');

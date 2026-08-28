@@ -1257,6 +1257,10 @@ const S = {
   workspaces: [], active: "workspace",
   projects: [], tree: {},          /* project -> { open, tasks: [...] } */
   selected: null,
+  /* Archived projects are excluded from `projects` unless this is on;
+     archivedCount is how many were left out, so the dock can offer to
+     show them without asking the server again. */
+  showArchived: false, archivedCount: 0, projectNames: [],
   /* When set, the dock shows that project (chat + actions) instead of the
      board; the board is one "◂ Projects" away. See paintProjectPane. */
   dockProject: null,
@@ -2140,9 +2144,18 @@ document.addEventListener("keydown", e => {
    Projects, icons, tree
    ========================================================================== */
 
+/* Archived projects are filed away, not deleted: off the dock, off the
+   desktop, one toggle from coming back. S.showArchived is per-session
+   on purpose -- it is a "let me look at the old ones" gesture, not a
+   preference, and a desktop that reopened three months of finished work
+   because you once ticked a box would be back where it started. */
 async function loadProjects() {
-  const j = await api("/v1/projects");
+  const j = await api("/v1/projects" + (S.showArchived ? "?archived=1" : ""));
   S.projects = j.projects || [];
+  S.archivedCount = j.archived || 0;
+  /* Every name, archived included -- so "does this project exist?" is
+     never answered by a list that has been filtered for display. */
+  S.projectNames = j.names || S.projects.map(p => p.name);
   paintIcons();
   paintChips();
   paintTree();
@@ -2152,7 +2165,11 @@ function paintIcons() {
   const host = $("#icons");
   host.textContent = "";
   const perCol = Math.max(1, Math.floor((desktopRect().height - 20) / 86));
-  S.projects.forEach((p, i) => {
+  /* Archived work never gets a desktop icon, even while the dock is
+     showing the archive. "Show archived" is a question you asked the
+     LIST; answering it by repopulating the whole desktop would undo
+     the tidying that archiving was for. */
+  S.projects.filter(p => !p.archived).forEach((p, i) => {
     const n = el("div", "dicon");
     n.style.left = (8 + Math.floor(i / perCol) * 90) + "px";
     n.style.top  = (8 + (i % perCol) * 86) + "px";
@@ -2671,7 +2688,10 @@ const SHELL_ACTIONS = {
           "change an app that already exists, in its own conversation",
     run: a => {
       if (!a.project) throw new Error("edit_app needs a project");
-      if (!S.projects.some(p => p.name === a.project))
+      /* Against every name, not the displayed list: an archived
+         project is filed away, not gone, and editing its app is a
+         perfectly reasonable thing to ask for. */
+      if (!(S.projectNames || []).includes(a.project))
         throw new Error("no project " + a.project);
       openChat(a.project);
       projectChat(a.project).submitText(a.brief || a.title || "", "build");
@@ -3293,6 +3313,37 @@ function paintProjectPane(name) {
   });
   acts.appendChild(addTask);
 
+  /* Archive: the answer to a finished project, and the reason Delete
+     stopped being the only one.
+
+     Deleting is right for a half-built idea nobody wants. It is wrong
+     for work that got DONE -- which is the case that actually fills the
+     dock, and where the only options were "keep it in the list forever"
+     or "destroy the app, the board and the conversation". Archiving is
+     a flag: everything stays exactly where it is, the project leaves
+     the default list, and "show archived" brings it back. No
+     confirmation, because nothing is lost and the undo is the same
+     button. */
+  const arch = el("button", "btn", p && p.archived ? "Unarchive" : "Archive");
+  arch.title = p && p.archived
+    ? "Put this project back in the list"
+    : "File this away: it stays on disk, and leaves the projects list";
+  arch.addEventListener("click", async () => {
+    arch.disabled = true;
+    try {
+      await api("/v1/projects/" + name + "/archive",
+                { method: "POST", body: { archived: !(p && p.archived) } });
+      /* Archiving from inside the project's own pane: step back out to
+         the board, since the pane is now showing something the list no
+         longer offers a way back to. Unarchiving stays put -- you are
+         looking at it because you want it back. */
+      if (!(p && p.archived)) { S.dockProject = null; S.selected = null; }
+      await loadProjects();
+      paintTree();
+    } catch (e) { alert(e.message); arch.disabled = false; }
+  });
+  acts.appendChild(arch);
+
   /* Delete. Every experiment used to be permanent: a desktop accumulated
      every half-built idea with no way to clear one out, so the icon grid
      and the tree filled with things nobody wanted to look at again. The
@@ -3380,9 +3431,43 @@ function paintTree() {
   while (host.firstChild) host.removeChild(host.firstChild);
   const tree = el("div", "tree");
 
+  /* The way back to filed-away work. Only shown when there IS some --
+     an "archive" that is always empty is just a word taking up a row.
+
+     A function, and called from BOTH exits, because the empty-list
+     branch below returns early: archive every project and the dock
+     said "No projects yet" with no way back, so the only route to
+     un-archive anything was the HTTP API. A door you can lock yourself
+     out of is not a door. (Codex P1 on #593.) */
+  function appendArchiveToggle() {
+    if (!S.archivedCount && !S.showArchived) return;
+    const foot = el("div", "node muted");
+    foot.style.marginTop = "4px";
+    foot.appendChild(el("span", "twist", S.showArchived ? "▼" : "▶"));
+    foot.appendChild(el("span", null, S.showArchived
+      ? "hide archived"
+      : "show archived (" + S.archivedCount + ")"));
+    foot.addEventListener("click", async () => {
+      S.showArchived = !S.showArchived;
+      await loadProjects();
+    });
+    tree.appendChild(foot);
+  }
+
   if (!S.projects.length) {
-    tree.appendChild(el("div", "node muted", "No projects yet."));
-    tree.appendChild(el("div", "node muted", "Ask PasClaw to build one."));
+    /* "No projects yet" is a lie when there are several, filed away.
+       Say which empty this is, since the two want opposite next
+       moves: one wants you to make something, the other wants you to
+       look in the archive. */
+    if (S.archivedCount) {
+      tree.appendChild(el("div", "node muted", "Nothing active."));
+      tree.appendChild(el("div", "node muted",
+        "Everything here is archived."));
+    } else {
+      tree.appendChild(el("div", "node muted", "No projects yet."));
+      tree.appendChild(el("div", "node muted", "Ask PasClaw to build one."));
+    }
+    appendArchiveToggle();
     host.appendChild(tree);
     return;
   }
@@ -3396,8 +3481,39 @@ function paintTree() {
     const g = el("span"); g.style.cssText = "width:14px;height:14px;flex:0 0 14px";
     g.innerHTML = icon(p.has_app ? "app" : "folder");
     row.appendChild(g);
-    row.appendChild(el("span", null, p.title || p.name));
-    if (p.open_tasks) row.appendChild(el("span", "badge", String(p.open_tasks)));
+    const nameCell = el("span", null, p.title || p.name);
+    row.appendChild(nameCell);
+    /* Say what state the board is in, in the row itself.
+
+       The open-task badge only ever appeared when there WAS open work,
+       so a finished board and an empty one and a busy one all looked
+       identical the moment the count hit zero -- which is what made a
+       done project sit in the list looking like live work. A finished
+       board gets a tick; an archived one says so and greys out. */
+    if (p.open_tasks) {
+      row.appendChild(el("span", "badge", String(p.open_tasks)));
+    } else if (p.blocked_tasks) {
+      /* Nothing open and not finished means everything left is BLOCKED
+         -- work waiting on somebody. Marking it needs saying, because
+         the alternative is a row with no badge at all, and a project
+         whose every task is stuck would look quieter than one that is
+         merely idle. That is the same disappearing act this whole
+         change is against. */
+      const b = el("span", "badge", "⊘ " + p.blocked_tasks);
+      b.title = p.blocked_tasks + " blocked task(s) -- waiting on something";
+      row.appendChild(b);
+    } else if (p.finished) {
+      const done = el("span", "badge", "✓");
+      done.title = p.tasks + " task(s), all done";
+      done.style.opacity = ".65";
+      row.appendChild(done);
+    }
+    if (p.archived) {
+      row.style.opacity = ".55";
+      const a = el("span", "muted", "archived");
+      a.style.fontSize = "10px";
+      row.appendChild(a);
+    }
     /* The twist expands in place (tasks, jobs -- the board view); the row
        itself OPENS the project, turning the dock into its chat + actions.
        That split is the whole gesture: a task is "modify the app to do X",
@@ -3418,7 +3534,36 @@ function paintTree() {
     tree.appendChild(row);
 
     if (!st.open) return;
-    (st.tasks || []).forEach(t => {
+
+    /* Finished tasks fold away.
+
+       A board never forgets, which is right for the record and wrong
+       for a dock: after a team has worked a project for a day the list
+       is mostly history, and the two things you still have to do are
+       somewhere in the middle of it. Done tasks collapse behind one
+       row that says how many there are; clicking it puts them back.
+       Nothing is hidden that you cannot see in one click, and nothing
+       is deleted. */
+    const all  = st.tasks || [];
+    const done = all.filter(t => t.status === "done");
+    const live = all.filter(t => t.status !== "done");
+    const shown = st.showDone ? all : live;
+
+    if (done.length && !st.showDone) {
+      const fold = el("div", "node muted");
+      fold.style.paddingLeft = "18px";
+      fold.appendChild(el("span", "twist", "▶"));
+      fold.appendChild(el("span", null, done.length + " done"));
+      fold.title = "Show the finished tasks";
+      fold.addEventListener("click", e => {
+        e.stopPropagation();
+        st.showDone = true;
+        paintTree();
+      });
+      tree.appendChild(fold);
+    }
+
+    shown.forEach(t => {
       const tr = el("div", "node");
       tr.style.paddingLeft = "18px";
       const tt = el("span", "twist", t.jobs ? (t.__open ? "▼" : "▶") : "");
@@ -3484,6 +3629,19 @@ function paintTree() {
       });
     });
 
+    if (done.length && st.showDone) {
+      const fold = el("div", "node muted");
+      fold.style.paddingLeft = "18px";
+      fold.appendChild(el("span", "twist", "▼"));
+      fold.appendChild(el("span", null, "hide " + done.length + " done"));
+      fold.addEventListener("click", e => {
+        e.stopPropagation();
+        st.showDone = false;
+        paintTree();
+      });
+      tree.appendChild(fold);
+    }
+
     const add = el("div", "node muted");
     add.style.paddingLeft = "18px";
     add.appendChild(el("span", "twist", "+"));
@@ -3491,6 +3649,8 @@ function paintTree() {
     add.addEventListener("click", () => newTask(p.name));
     tree.appendChild(add);
   });
+
+  appendArchiveToggle();
 
   host.appendChild(tree);
 }

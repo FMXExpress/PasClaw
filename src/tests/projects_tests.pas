@@ -53,7 +53,8 @@ begin
 end;
 
 var
-  Slug, TaskId, JobId, Err, Out_: string;
+  Slug, TaskId, JobId, Err, Out_, Stamp: string;
+  Before: Integer;
   Projects: TProjectInfoArray;
   Tasks: TTaskInfoArray;
   Jobs: TJobInfoArray;
@@ -102,6 +103,72 @@ begin
   CreateProject('Reading Log', '', '', Err);
   Projects := ListProjects;
   ExpectInt(Length(Projects), 2, 'two projects listed');
+
+  (* ------------------------------------------------------- archiving -- *)
+  (* Filing a finished project away. Projects only ever accumulated:
+     a board whose tasks were all done looked exactly like one being
+     worked on, and the only way off the list was DELETE -- which takes
+     the tasks, the job history and the app with it. Archiving is a
+     flag, so nothing moves and nothing is lost. *)
+  ExpectTrue(GetProject('reading-log', P), 'the project loads');
+  ExpectTrue(not P.Archived, 'and starts un-archived');
+  Stamp := P.Updated;
+
+  ExpectTrue(SetProjectArchived('reading-log', True, Err), 'archiving succeeds');
+  ExpectStr(Err, '', 'cleanly');
+  ExpectTrue(GetProject('reading-log', P), 'it still loads -- nothing moved');
+  ExpectTrue(P.Archived, 'and it is archived');
+  ExpectStr(P.Title, 'Reading Log', 'with everything else intact');
+
+  { The store still returns it. Filtering for display is the caller's
+    job, and an agent looking for prior work must not be lied to. }
+  Projects := ListProjects;
+  ExpectInt(Length(Projects), 2, 'ListProjects still returns it');
+
+  (* `updated` must NOT move. Filing something away is not work on it,
+     and bumping the stamp would push a finished project to the top of
+     anything sorted by recency -- the exact opposite of the point. *)
+  ExpectStr(P.Updated, Stamp, 'archiving does not count as an edit');
+
+  ExpectTrue(SetProjectArchived('reading-log', False, Err), 'un-archiving succeeds');
+  ExpectTrue(GetProject('reading-log', P), 'it loads');
+  ExpectTrue(not P.Archived, 'and it is back');
+
+  ExpectTrue(not SetProjectArchived('nope', True, Err),
+             'archiving a project that does not exist is refused');
+  ExpectTrue(Err <> '', 'and it says why');
+
+  (* ------------------------------------------- counting a board's state -- *)
+  (* Three counts, not one, because "no open tasks" and "everything is
+     done" are different states and conflating them puts an all-done
+     tick on the projects most in need of attention. Blocked work is
+     neither open (nobody can act on it) nor done. (Codex P2 on #593.) *)
+  CreateProject('Stuck', '', '', Err);
+  CreateTask('stuck', 'Waiting on the API key', '', Err);
+  CreateTask('stuck', 'Waiting on review', '', Err);
+  ExpectTrue(GetProject('stuck', P), 'the board loads');
+  ExpectInt(P.OpenTasks, 2, 'two tasks open to start');
+  ExpectInt(P.DoneTasks, 0, 'none done');
+  ExpectInt(P.BlockedTasks, 0, 'none blocked');
+
+  UpdateTask('stuck', 'T0001', '', '-', 'blocked', Err);
+  UpdateTask('stuck', 'T0002', '', '-', 'blocked', Err);
+  ExpectTrue(GetProject('stuck', P), 'the board reloads');
+  ExpectInt(P.TaskCount, 2, 'still two tasks');
+  ExpectInt(P.OpenTasks, 0, 'and none of them OPEN -- blocked is not open');
+  ExpectInt(P.BlockedTasks, 2, 'they are blocked');
+  ExpectInt(P.DoneTasks, 0,
+            'and NONE are done -- which is what "finished" must ask about, ' +
+            'since a fully blocked board has an open count of zero');
+
+  UpdateTask('stuck', 'T0001', '', '-', 'done', Err);
+  ExpectTrue(GetProject('stuck', P), 'the board reloads');
+  ExpectInt(P.DoneTasks, 1, 'one done');
+  ExpectInt(P.BlockedTasks, 1, 'one still blocked');
+  UpdateTask('stuck', 'T0002', '', '-', 'done', Err);
+  ExpectTrue(GetProject('stuck', P), 'the board reloads');
+  ExpectInt(P.DoneTasks, 2, 'now every task is done');
+  ExpectInt(P.BlockedTasks, 0, 'and nothing is blocked');
 
   { ---------------------------------------------------------------- tasks -- }
   TaskId := CreateTask('spam-filter', 'Connect to IMAP', 'use app password', Err);
@@ -332,6 +399,10 @@ begin
 
   { --------------------------------------------------- workspace isolation -- }
   { Projects belong to a workspace: switching desktops must switch boards. }
+  { The property, not a hard-coded total: the count here is whatever
+    the tests above happened to create, so a literal breaks the day one
+    of them adds a project -- as one did. }
+  Before := Length(ListProjects);
   CreateWorkspace('Home');
   ExpectTrue(SetActiveWorkspace('workspace2', Err), 'switched workspace');
   Projects := ListProjects;
@@ -341,7 +412,7 @@ begin
   ExpectInt(Length(ListProjects), 1, 'new project lands in the new workspace');
 
   ExpectTrue(SetActiveWorkspace('workspace', Err), 'switched back');
-  ExpectInt(Length(ListProjects), 3, 'original workspace board intact');
+  ExpectInt(Length(ListProjects), Before, 'original workspace board intact');
   ExpectTrue(ProjectExists('spam-filter'), 'original projects back');
 
   if Failures = 0 then

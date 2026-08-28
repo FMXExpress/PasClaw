@@ -50,8 +50,31 @@ type
     Icon:        string;   { desktop icon hint, e.g. 'Mail' }
     Suite:       Boolean;  { part of the seeded system suite (§2c) }
     HasApp:      Boolean;  { app/app.json present }
+    (* Filed away: still on disk, still openable, out of the dock's
+       default list.
+
+       Projects only ever accumulated. A board whose tasks are all done
+       looked exactly like one being worked on, and the only way to get
+       it off the list was DELETE -- which destroys the tasks, the job
+       history and the app the team built. "Finished" and "unwanted"
+       are different things, and a stop button that only offers
+       destruction is not a stop button. *)
+    Archived:    Boolean;
     TaskCount:   Integer;
+    (* Tasks that still need someone: todo + active. NOT blocked --
+       blocked work is waiting on something, and counting it as open
+       would put it in the "get on with it" badge where nobody can act
+       on it. *)
     OpenTasks:   Integer;
+    (* ...which is exactly why the other two are counted separately.
+       "No open tasks" is not the same as "everything is done": a board
+       of nothing but blocked tasks has an open count of zero and is
+       the furthest thing from finished. Anything asking whether a
+       project is DONE has to ask about DoneTasks, and anything drawing
+       a board's state needs BlockedTasks or it will show a project
+       with stuck work as having nothing going on at all. *)
+    DoneTasks:    Integer;
+    BlockedTasks: Integer;
   end;
   TProjectInfoArray = array of TProjectInfo;
 
@@ -138,6 +161,19 @@ function CreateProject(const ATitle, AName, ADescription: string;
   out Err: string): string;
 
 function UpdateProject(const Project, ATitle, ADescription, AIcon: string;
+  out Err: string): Boolean;
+
+(* File a project away, or bring it back. Nothing is moved and nothing
+   is deleted -- one flag in project.json -- so an archived project's
+   tasks, jobs, app and chat are all exactly where they were and
+   un-archiving is instant.
+
+   Deliberately NOT automatic on "all tasks done". A board that empties
+   is a board that is very often about to get its next task, and a list
+   that hides work the moment it goes green would have people chasing
+   projects that vanished under them. Finishing is the machine's
+   observation; filing away is the operator's decision. *)
+function SetProjectArchived(const Project: string; Archived: Boolean;
   out Err: string): Boolean;
 
 { Remove a project and everything under it. Refuses unsafe names. }
@@ -586,17 +622,23 @@ begin
       Info.Updated     := Obj.GetStr('updated', '');
       Info.Icon        := Obj.GetStr('icon', '');
       Info.Suite       := Obj.GetBool('suite', False);
+      Info.Archived    := Obj.GetBool('archived', False);
     finally
       Obj.Free;
     end;
   Info.HasApp := FileExists(JoinPath(JoinPath(Dir, 'app'), 'app.json'));
 
   Tasks := ListTasks(Project);
-  Info.TaskCount := Length(Tasks);
-  Info.OpenTasks := 0;
+  Info.TaskCount    := Length(Tasks);
+  Info.OpenTasks    := 0;
+  Info.DoneTasks    := 0;
+  Info.BlockedTasks := 0;
   for I := 0 to High(Tasks) do
-    if Tasks[I].Status in [tsTodo, tsActive] then
-      Inc(Info.OpenTasks);
+    case Tasks[I].Status of
+      tsTodo, tsActive: Inc(Info.OpenTasks);
+      tsDone:           Inc(Info.DoneTasks);
+      tsBlocked:        Inc(Info.BlockedTasks);
+    end;
   Result := True;
 end;
 
@@ -709,6 +751,43 @@ begin
   finally
     Obj.Free;
   end;
+  PublishProjects;
+  Result := True;
+end;
+
+function SetProjectArchived(const Project: string; Archived: Boolean;
+  out Err: string): Boolean;
+var
+  Dir, Path: string;
+  Obj: TJsonObject;
+begin
+  Err := '';
+  Result := False;
+  Dir := ProjectDir(Project);
+  if (Dir = '') or not DirectoryExists(Dir) then
+  begin
+    Err := 'no such project: ' + Project;
+    Exit;
+  end;
+  Path := JoinPath(Dir, 'project.json');
+  Obj := ReadManifest(Path);
+  if Obj = nil then
+  begin
+    Obj := TJsonObject.Create;
+    Obj.PutStr('name', Project);
+    Obj.PutStr('created', NowIsoUtc);
+  end;
+  try
+    Obj.PutBool('archived', Archived);
+    { `updated` deliberately NOT touched. Filing something away is not
+      work on it, and bumping the timestamp would push a finished
+      project to the top of anything sorted by recency -- the exact
+      opposite of what was asked for. }
+    WriteManifest(Path, Obj);
+  finally
+    Obj.Free;
+  end;
+  PublishProjects;
   Result := True;
 end;
 
