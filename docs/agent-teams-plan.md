@@ -242,11 +242,28 @@ transcript, not just activity lines. Narration first — it is the cheap
 
 ## Desktop
 
-The Agents window grows the two things this needs and fixes what the
-first audit found lacking:
+Launching from the CLI is fine for an operator at a terminal; the
+desktop needs its own two ways in, because the desktop is where the
+team will be watched:
 
-- **New team…** replaces nothing — it sits next to **New agent…** and is
-  a picker (template list + goal box), not a chain of prompt() dialogs.
+**Clicking:** a **New team…** button in the Agents window — a picker
+(template list, goal box, or existing-project dropdown), not a chain of
+prompt() dialogs — plus a **New Team…** entry in the Start menu so it
+does not hide behind the roster. Both drive the same `/v1/teams/up`
+route the CLI uses.
+
+**Asking:** typing *"spin up a software team to build an invoice
+tracker"* into Ask PasClaw must work. That means one new action in the
+`desktop` tool's vocabulary — `team_up {template, brief}` (template
+optional, defaulting to `software-team`) — alongside `build_app` and
+friends, and one line in the shell prompt's routing table so the model
+knows a request for a *team* is not a request for an *app*. The desktop
+client executes it by calling the same route, then opens the roster so
+the launch is immediately visible. `team_up` is target-gated like
+`build_app`: with two browser tabs open, one team, not two.
+
+The Agents window also grows what the first audit found lacking:
+
 - **Role text becomes visible and editable** — double-click a roster row
   already opens the conversation; the row gains an Edit that opens the
   role. Editing an agent's role mid-life is supported by the runtime
