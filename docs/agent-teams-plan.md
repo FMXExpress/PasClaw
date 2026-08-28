@@ -233,6 +233,37 @@ Waking a stuck worker repeats the stall; telling its manager is what
 unsticks it. Their whole 656-line nudge engine reduces, at our scale, to
 that one rule plus the caps above.
 
+## The team builds apps and files tasks against them
+
+Nothing new has to be invented for the team to build desktop apps —
+the pieces exist, they have just never been claimed by an agent's role
+text:
+
+- An app **is** files: `projects/<name>/app/` with an `app.json`
+  manifest (kind `html` / `python` / `fpc`, an entry file, a window
+  size). Agents have the workspace file tools, so the 10x Developer
+  can create a project, write `index.html` and `app.json`, and the app
+  exists — openable from the desktop, no browser needed during the
+  build. The Developer's role text carries this recipe explicitly,
+  including `pasclaw.js` for apps that need saved state.
+- Tasks against an app are just tasks: the PM and Foreman create them
+  with the `task` tool; the UI Psychologist and Test Engineer already
+  file their findings as tasks against the project. "Add tasks to an
+  app" and "add tasks to a project" are the same sentence.
+- The `desktop` tool's `build_app` is the wrong tool for a worker: it
+  asks a **connected browser** to run the build, so it does nothing on
+  a headless gateway. The role texts draw the line: workers build by
+  writing files (works always); the Foreman uses the `desktop` tool
+  only for the *showing* — opening the finished app on the operator's
+  screen.
+
+One wiring consequence: the board tools (`project`/`task`) sit behind
+`desktop_tools_enabled` and the messaging tool behind
+`agent_tools_enabled`, both off by default. A team with either flag off
+half-works in confusing ways, so `team up` checks both and says
+exactly what is missing and how to turn it on, instead of seeding a
+team that cannot reach its own board.
+
 ## Watching the team work — the supervisor runs the desktop
 
 Three facts make this nearly free, and one gap makes it currently
