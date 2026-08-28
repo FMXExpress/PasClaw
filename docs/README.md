@@ -29,6 +29,7 @@ The main `README.md` at the repo root is the landing page. These docs go deeper.
 - [Gateway and OpenAI-compatible API](./gateway.md) — `/v1/chat/completions`, `/v1/responses`, `/v1/mcp`, embedded web UI, route table.
 - [Desktop](./desktop.md) — the desktop client: workspaces, projects/tasks/jobs, the app factory, answer pages, and the system suite.
 - [Workspaces plan](./workspaces-plan.md) — making a workspace a real isolation boundary, and putting virtual desktops inside it.
+- [Auto-router upgrade plan](./autoroute-upgrade-plan.md) — typed reasons, circuits, one cheap tier, and an offline tuning loop, borrowed at scale from experiential.
 - [Chat channels](./channels.md) — Telegram, Discord, Slack, Teams, LINE, WhatsApp, Matrix, IRC, Email.
 - [Embedding in your own app](./embedding.md) — `TPasClawAgent` / `TPasClawServer` `TComponent`s for VCL/FMX/CLI binaries.
 
