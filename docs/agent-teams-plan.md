@@ -197,6 +197,49 @@ Bounds, stated in the template and enforced by the tick: the existing
 team whose board has been done for two ticks stops being woken (the
 Foreman's "say so and stop" from the role prompt, mechanically backed).
 
+## Watching the team work — the supervisor runs the desktop
+
+Three facts make this nearly free, and one gap makes it currently
+disappointing:
+
+- An agent's chat window already repaints on `agent` events.
+- Research pages already narrate every tool call onto the live desktop
+  event feed (`page-progress` — the progress dialog is built on it).
+- **Agents already hold the `desktop` tool**: an agent turn runs with
+  the full registry, so the Foreman can tile windows, open apps and
+  open project chats today. Nothing told it to.
+
+The gap: an agent run publishes only *started* and *finished*, and the
+agent's conversation is persisted **only when the turn ends** — so a
+chat window that dutifully repaints mid-run re-reads a session that has
+not changed yet. From the operator's chair: you tell an agent to do
+something and its window sits frozen until the whole run is over. That
+is the reported experience, and it is mechanical, not configuration.
+
+Four pieces close it:
+
+1. **Narrate agent runs.** Wire the same `OnToolCall` hook research
+   uses into `RunAgentTurn`, publishing `agent-activity` events (agent
+   name, tool, one-line detail) on the existing bus. No new transport.
+2. **Show the narration.** The agent chat window appends live activity
+   lines (`⏺ write_file projects/invoice-desk/app/index.html`) as those
+   events arrive, then swaps to the real transcript when the
+   run-finished event lands. The roster ticks the same events, so
+   "working" rows visibly *do* things.
+3. **One new desktop action: `open_agent {name}`** — opens that agent's
+   chat window, same family as `open_chat {project}`. This is the piece
+   that lets the supervisor put the team on screen.
+4. **Tell the Foreman it owns the screen.** One paragraph in its role
+   prompt: *when you assign work, `open_agent` the worker and `tile`;
+   when the board is done, `minimize_all` and report.* The operator
+   then literally watches windows open as work is handed out — the
+   template encodes the theatre, the mechanism already exists.
+
+Later, if narration is not enough: persist the agent session
+incrementally (per loop iteration) so mid-run repaints show real
+transcript, not just activity lines. Narration first — it is the cheap
+90% and needs no storage change.
+
 ## Desktop
 
 The Agents window grows the two things this needs and fixes what the
@@ -225,6 +268,10 @@ first audit found lacking:
    `team-tick` skill and its cron entries, `team down` / `team status`.
    After this phase the demo is real: one command pointed at a task
    list, then watch the board move.
+2b. **Live visibility.** `agent-activity` narration from agent runs,
+   live lines in the agent chat window, the `open_agent` desktop
+   action, and the Foreman's screen-owning paragraph. Small enough to
+   ride with phase 2, and it is what makes phase 2 watchable.
 3. **Desktop.** Template picker, role editing, team grouping and wake
    state on the roster.
 4. **Authoring.** `workspace/teams/` user templates, name-override of
