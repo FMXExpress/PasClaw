@@ -86,7 +86,9 @@ function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
   write/exec tools. The dispatch gate in PasClaw.Tools.ToolLoop is the
   authority -- the prompt block is belt-and-braces / model-honesty.
 
-  When Mode = pmImprove an "IMPROVE MODE" block is prepended instead.
+  When Mode = pmImprove an "IMPROVE MODE" block is prepended instead,
+  and pmSpace a "SPACE MODE" block (Search, Plan, Assert, Code,
+  Evaluate -- docs/space-mode-plan.md).
   That one is not belt-and-braces: improve mode refuses nothing, so
   the block IS the mode -- the measure / profile / one-change /
   re-measure loop, and the requirement to report both numbers.
@@ -1067,11 +1069,50 @@ begin
     'number you did not produce in this session.';
 end;
 
+function BuildSpaceModeSection: string;
+begin
+  Result :=
+    '## Space Mode' + sLineBreak + sLineBreak +
+    'You are in **SPACE** mode: Search, Plan, Assert, Code, Evaluate. ' +
+    'You are here to build something NEW and prove it correct as you ' +
+    'go. The ground truth is an assertion written before the code ' +
+    'exists -- red first, then green.' + sLineBreak + sLineBreak +
+    'Work the phases in order:' + sLineBreak + sLineBreak +
+    '1. **Search first.** Before designing anything, look for what ' +
+    'already exists: the codebase (grep_files, find_files), memory ' +
+    '(memory_search), the knowledgebase (kb_search), past sessions ' +
+    '(session_search), the web (web_search). Name what you looked for ' +
+    'and what you found -- "nothing found" is a finding to state, not ' +
+    'a step to skip. Do not design what can be found.' + sLineBreak +
+    '2. **Plan in checkable steps** and record it with plan_write. ' +
+    'Each step small enough to carry its own check. Until the plan is ' +
+    'written, mutating tools are REFUSED at dispatch -- that is the ' +
+    'mode, not a suggestion. plan_write is the unlock.' + sLineBreak +
+    '3. **Assert before code.** For each step, write the check first ' +
+    'and SHOW it failing: quote the command you ran and its red ' +
+    'output. A check that was never seen red proves only that it ' +
+    'passes, not that it tests anything. If nothing can check the ' +
+    'step yet, building the check IS the step.' + sLineBreak +
+    '4. **Code to the assertion.** The minimum that turns it green. ' +
+    'Work you discover along the way goes back through the plan ' +
+    '(update it with plan_write), not around it.' + sLineBreak +
+    '5. **Evaluate with the SAME command.** Re-run the check, quote ' +
+    'it green, and account for the plan: which steps are done, which ' +
+    'remain. Then the two honesty rules: report regressions plainly ' +
+    'with their output, and state what the checks did NOT cover -- ' +
+    'the case a test does not reach is the first thing the next ' +
+    'person needs to know.' + sLineBreak + sLineBreak +
+    'Never claim red or green output you did not produce in this ' +
+    'session, and never write production code whose assertion does ' +
+    'not exist yet.';
+end;
+
 function BuildModeSection(Mode: TPasClawMode): string;
 begin
   case Mode of
     pmPlan:    Result := BuildPlanModeSection;
     pmImprove: Result := BuildImproveModeSection;
+    pmSpace:   Result := BuildSpaceModeSection;
   else
     Result := '';
   end;

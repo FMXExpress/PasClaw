@@ -75,6 +75,13 @@ procedure RegisterPlanWriteTool(R: TToolRegistry);
   Cmd.Plan's post-run sanity check. }
 function ResolvePlanPath: string;
 
+(* True iff PLAN.md exists AND holds something beyond whitespace.
+   The SPACE-mode gate seeds from this rather than bare FileExists:
+   "a plan exists" must mean a plan with content, or an empty file --
+   left by a crash, a clear, or an operator's touch(1) -- silently
+   waves every mutating tool through. Codex P2 on PR #595. *)
+function PlanFileHasContent: Boolean;
+
 const
   PLAN_FILENAME = 'PLAN.md';
 
@@ -91,6 +98,22 @@ uses
 function ResolvePlanPath: string;
 begin
   Result := JoinPath(JoinPath(GetHome, ActiveWorkspaceName), PLAN_FILENAME);
+end;
+
+function PlanFileHasContent: Boolean;
+var
+  Path: string;
+begin
+  Result := False;
+  Path := ResolvePlanPath;
+  if not FileExists(Path) then Exit;
+  try
+    Result := Trim(ReadFileText(Path)) <> '';
+  except
+    { Unreadable counts as no plan: the gate stays closed and the
+      model is told to write one, which also rewrites the file. }
+    Result := False;
+  end;
 end;
 
 function ParseContentArg(const ArgsJSON: string;
@@ -127,6 +150,19 @@ begin
         Exit;
       end;
       Content := Obj.GetStr('content', '');
+      if Trim(Content) = '' then
+      begin
+        (* A blank plan is not a plan. This matters doubly under SPACE
+           mode, where a successful plan_write is the unlock for every
+           mutating tool -- a content argument holding only whitespace
+           would otherwise open the gate with nothing recorded. Codex
+           P2 on PR #595. Paren-star delimiters: a JSON example with a
+           close-brace inside a curly comment ends the comment early. *)
+        ErrMsg := 'plan_write: empty plan refused -- send the actual ' +
+                  'plan body (checkable steps). To abandon a plan, say ' +
+                  'so to the operator instead of blanking the file.';
+        Exit;
+      end;
     finally
       Obj.Free;
     end;
@@ -214,7 +250,7 @@ begin
     Declared once in ToolIsSerialOnly (PasClaw.Tools.Types), applied by
     the registry. }
   R.Register(T);
-  LogInfo('plan_write: registered (plan mode)');
+  LogInfo('plan_write: registered (all modes; SPACE gate unlock)');
 end;
 
 end.

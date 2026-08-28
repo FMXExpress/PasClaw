@@ -1463,6 +1463,22 @@ begin
         'plainly. Never claim a speedup you did not measure.' +
         sLineBreak + sLineBreak +
         Cfg.Options.SystemPrompt;
+    { Space keeps the same short-form register as Improve above; the
+      full section lives in PasClaw.Agent.Prompt for CLI + gateway.
+      The dispatch gate (mutating tools refused until plan_write) is
+      enforced in the tool loop regardless of what this prompt says. }
+    if FMode = pmSpace then
+      Cfg.Options.SystemPrompt :=
+        '## Space Mode' + sLineBreak + sLineBreak +
+        'You are in SPACE mode (TUI): Search, Plan, Assert, Code, ' +
+        'Evaluate. Search for what exists before designing; record ' +
+        'the plan with plan_write (mutating tools are refused until ' +
+        'you do); write each check FIRST and show it failing; code ' +
+        'the minimum that turns it green; re-run the same check, ' +
+        'quote it, and state what it did NOT cover. Never claim red ' +
+        'or green output you did not produce this session.' +
+        sLineBreak + sLineBreak +
+        Cfg.Options.SystemPrompt;
   end;
   Cfg.OnText        := nil;
   Cfg.OnToolCall    := LiveToolCall;
@@ -1736,6 +1752,8 @@ begin
           pmPlan:    Flash('mode -> plan (read-only; mutating tools refuse)');
           pmImprove: Flash('mode -> improve (benchmark, profile, one ' +
                            'change, re-measure)');
+          pmSpace:   Flash('mode -> space (search, plan, assert, code, ' +
+                           'evaluate; mutating tools unlock after plan_write)');
         else         Flash('mode -> build (full tool access)');
         end;
       end

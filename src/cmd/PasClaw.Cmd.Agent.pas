@@ -379,7 +379,6 @@ function NewBuiltinRegistry(UseHashline: Boolean = True;
                             EnableWebFetch: Boolean = False;
                             EnableOutputCache: Boolean = False;
                             EnableCron: Boolean = False;
-                            EnablePlanWrite: Boolean = False;
                             const DBConfigJSON: string = '';
                             EnableDesktopTools: Boolean = False): TToolRegistry;
 var
@@ -451,7 +450,17 @@ begin
     `pasclaw agent --mode plan` both arrive here with the flag set).
     The tool is tcReadOnly even though it writes the one plan-meta
     file -- see PasClaw.Tools.PlanWrite for the rationale. }
-  if EnablePlanWrite then RegisterPlanWriteTool(Result);
+  { Unconditional (Codex P1 on PR #595). This used to be gated on
+    --mode plan, which left every other surface without the tool --
+    fatal for SPACE mode, whose dispatch gate refuses mutating tools
+    until plan_write succeeds: the refusal named a tool the registry
+    did not carry, and the session was permanently read-only. The
+    gateway makes the conditional unfixable in principle: its registry
+    is built once at boot while the mode arrives per-request. And the
+    tool is harmless everywhere -- tcReadOnly, one fixed path, and the
+    PLAN.md it writes is picked up by the Active Plan section in every
+    mode except pmPlan itself. }
+  RegisterPlanWriteTool(Result);
   (* send_message gates itself: it registers only when config.json
      declares named channels (a "channels" array of name/kind/target
      entries), so there's no flag to thread through here. The model
@@ -747,11 +756,6 @@ begin
                               (Cfg.ToolOutputCap > 0)
                                 or Cfg.CondenseReversible,
                               Cfg.CronToolEnabled,
-                              { EnablePlanWrite -- only when --mode plan
-                                was selected; auto-includes the dedicated
-                                plan_write tool the `pasclaw plan`
-                                command relies on. }
-                              A.Mode = pmPlan,
                               Cfg.DatabaseJSON,
                               Cfg.DesktopToolsEnabled);
     RegisterSkillManageTool(Reg, Cfg);
@@ -1034,7 +1038,6 @@ begin
                               (Cfg.ToolOutputCap > 0)
                                 or Cfg.CondenseReversible,
                               Cfg.CronToolEnabled,
-                              A.Mode = pmPlan,
                               Cfg.DatabaseJSON,
                               Cfg.DesktopToolsEnabled);
     RegisterSkillManageTool(Reg, Cfg);
@@ -1480,11 +1483,6 @@ begin
                               (Cfg.ToolOutputCap > 0)
                                 or Cfg.CondenseReversible,
                               Cfg.CronToolEnabled,
-                              { EnablePlanWrite -- only when --mode plan
-                                was selected; auto-includes the dedicated
-                                plan_write tool the `pasclaw plan`
-                                command relies on. }
-                              A.Mode = pmPlan,
                               Cfg.DatabaseJSON,
                               Cfg.DesktopToolsEnabled);
     RegisterSkillManageTool(Reg, Cfg);

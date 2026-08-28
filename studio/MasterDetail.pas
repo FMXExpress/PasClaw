@@ -14517,10 +14517,18 @@ end;
 
 procedure TMasterDetailForm.ModeClick(Sender: TObject);
 begin
-  if SameText(FMode, 'plan') then
-    FMode := 'build'
+  { Same cycle as the TUI and web UI: build -> plan -> improve ->
+    space -> build. The gateway enforces plan's read-only gate and
+    space's plan_write gate server-side; the button only names the
+    request's mode field. }
+  if SameText(FMode, 'build') then
+    FMode := 'plan'
+  else if SameText(FMode, 'plan') then
+    FMode := 'improve'
+  else if SameText(FMode, 'improve') then
+    FMode := 'space'
   else
-    FMode := 'plan';
+    FMode := 'build';
   RenderModeButton;
   SaveLocalSettings;
 end;
@@ -14753,15 +14761,25 @@ begin
   if FModeButton = nil then
     Exit;
   { the caption is the STATE, not a label for it -- 'mode:' spent a third of
-    the button's width explaining the other two thirds }
+    the button's width explaining the other two thirds.
+
+    Only an UNKNOWN mode is coerced to build. This branch used to
+    coerce everything non-plan, which silently normalised improve and
+    space away -- the gateway grew modes and this button un-grew them. }
   if SameText(FMode, 'plan') then
     FModeButton.Text := 'Plan'
+  else if SameText(FMode, 'improve') then
+    FModeButton.Text := 'Improve'
+  else if SameText(FMode, 'space') then
+    FModeButton.Text := 'Space'
   else
   begin
     FMode := 'build';
     FModeButton.Text := 'Build';
   end;
-  FModeButton.Hint := 'Build runs tools; Plan only proposes. Click to switch.';
+  FModeButton.Hint := 'Build runs tools; Plan only proposes; Improve ' +
+    'benchmarks before and after; Space refuses edits until the plan ' +
+    'is written. Click to cycle.';
   FModeButton.ShowHint := True;
 end;
 
@@ -24755,6 +24773,7 @@ begin
   AddCommand('edit', 'edit a previous user turn');
   AddCommand('files', 'open workspace files');
   AddCommand('help', 'show slash command help');
+  AddCommand('improve', 'switch to improve mode (benchmark, change one thing, re-measure)');
   AddCommand('kb', 'search or browse knowledge base');
   AddCommand('logs', 'tail gateway logs');
   AddCommand('mcp', 'open MCP servers');
@@ -24770,6 +24789,7 @@ begin
   AddCommand('regen', 'regenerate from a previous turn');
   AddCommand('relay', 'open relay status');
   AddCommand('sessions', 'open the session drawer');
+  AddCommand('space', 'switch to space mode (plan first; edits unlock after plan_write)');
   AddCommand('settings', 'open settings');
   AddCommand('skills', 'open skills');
   AddCommand('stats', 'open usage stats');
@@ -24938,7 +24958,7 @@ begin
     Exit;
   end;
 
-  if (Cmd = 'plan') or (Cmd = 'build') then
+  if (Cmd = 'plan') or (Cmd = 'build') or (Cmd = 'improve') or (Cmd = 'space') then
   begin
     FMode := Cmd;
     RenderModeButton;
