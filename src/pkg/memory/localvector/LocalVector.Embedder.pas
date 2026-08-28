@@ -40,6 +40,7 @@ type
   TEmbedder = class
   private
     FSession: TORTSession;
+    FOptions: TORTSessionOptions;
     FModelPath: string;
     FLoaded: Boolean;
   public
@@ -75,6 +76,11 @@ procedure TEmbedder.Load(AVerbose: Boolean);
 var
   Info: TOrtRuntimeInfo;
   DllStr, VerStr: string;
+  {$IFDEF MSWINDOWS}
+  Path: widestring;
+  {$ELSE}
+  Path: ansistring;
+  {$ENDIF}
 begin
   if FLoaded then
     Exit;
@@ -89,15 +95,32 @@ begin
 
   // ONNX Runtime 1.22+ no longer auto-selects the CPU execution provider; a
   // session created with no EP fails ("No execution providers were provided or
-  // selected"). Make sure the default session options object exists (under FPC
-  // the wrapper's managed initializer may leave it nil) and register the CPU EP
-  // explicitly. This is harmless on older runtimes that added CPU implicitly.
-  if not Assigned(DefaultSessionOptions.p_) then
-    ThrowOnError(GetApi().CreateSessionOptions(PPOrtSessionOptions(@DefaultSessionOptions.p_)));
-  ThrowOnError(OrtSessionOptionsAppendExecutionProvider_CPU(DefaultSessionOptions.p_, 1));
+  // selected"), so the CPU EP has to be registered explicitly.
+  //
+  // On the embedder's OWN options object, not the process-wide
+  // DefaultSessionOptions. Appending the CPU EP to the same options object
+  // twice makes ORT 1.22+ fail with "Provider CPUExecutionProvider has
+  // already been registered" -- so the SECOND embedder to load in one
+  // process (a memory index reopened for a new agent session, the gateway
+  // and a tool both touching memory) failed to load, and vector memory
+  // silently degraded to FTS5-only keyword search for the rest of the run.
+  // The reranker hit the identical failure and got its own options object
+  // (PasClaw.Memory.Rerank EnsureLoaded); this is the same fix on the
+  // other half of the pair.
+  EnsureOrtDefaults;   { DefaultEnv must exist before a session is created }
+  if not Assigned(FOptions.p_) then
+    ThrowOnError(GetApi().CreateSessionOptions(PPOrtSessionOptions(@FOptions.p_)));
+  ThrowOnError(OrtSessionOptionsAppendExecutionProvider_CPU(FOptions.p_, 1));
 
   try
-    FSession := TORTSession.Create(FModelPath);
+    {$IFDEF MSWINDOWS}
+    Path := FModelPath;                { ORTCHAR_T is wchar_t on Windows }
+    FSession := TORTSession.Create(DefaultEnv, PORTCHAR_T(Path), FOptions);
+    {$ELSE}
+    Path := ansistring(FModelPath);    { ORTCHAR_T is char (UTF-8) on POSIX }
+    FSession := TORTSession.Create(DefaultEnv, PORTCHAR_T(PAnsiChar(Path)),
+                                   FOptions);
+    {$ENDIF}
   except
     on E: Exception do
     begin
