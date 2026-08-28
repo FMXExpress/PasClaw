@@ -209,13 +209,16 @@ type
        string on purpose: resolving it here, inside the same lock as the
        provider snapshot, is what keeps the model and the provider it
        belongs to from being chosen a moment apart. *)
-    (* PageTurn drops the local tool registry for this turn -- see the
-       body: shipping tools is what suppresses Gemini's grounding, and a
-       page has no use for write_file. It also enables the one retry
-       without grounding when the model turns out not to support it. *)
+    (* WantsWeb says this turn's job is to search the WEB (a search or
+       research page), as opposed to reading the workspace or composing
+       from what it already has. It is a request, not a decision: the
+       body drops the tool registry only when doing so is what buys
+       grounding -- no local web_search tool, and a provider that
+       grounds natively. It also gates the one retry without grounding
+       when the model turns out not to support it. *)
     function RunDesktopTurn(const SystemPrompt, Prompt: string;
                             Narrate: Boolean; UseFastModel: Boolean;
-                            PageTurn: Boolean;
+                            WantsWeb: Boolean;
                             out Reply, Err: string): Boolean; overload;
     (* One turn on a STANDING AGENT's own session (PasClaw.Agents).
 
@@ -6365,7 +6368,7 @@ begin
 end;
 
 function TGatewayServer.RunDesktopTurn(const SystemPrompt, Prompt: string;
-  Narrate: Boolean; UseFastModel: Boolean; PageTurn: Boolean;
+  Narrate: Boolean; UseFastModel: Boolean; WantsWeb: Boolean;
   out Reply, Err: string): Boolean;
 var
   Msgs: TMessageArray;
@@ -6377,6 +6380,8 @@ var
   DefModel, FastModel: string;
   Attempt: Integer;
   Failed: string;
+  GroundNatively: Boolean;
+  WebTool: TTool;
 begin
   Reply := '';
   Err := '';
@@ -6435,18 +6440,45 @@ begin
     that a progress feed would be noise on the event bus. }
   if Narrate then LoopCfg.OnToolCall := NarrateToolCall;
 
-  (* A page turn ships NO local tools.
+  (* Drop the local tools ONLY when doing so is what buys the page a way
+     to search -- never merely because it is a page.
 
-     It is summarise-and-cite, not a build turn: nothing it can usefully
-     do involves write_file. Sending the registry anyway had a cost that
-     was invisible until someone asked why search never found anything
-     -- Gemini rejects google_search alongside functionDeclarations
-     below 3.x, so the provider suppressed grounding on every single
-     page. Search and Research ran with no way to search at all, and
-     every page came back UNGROUNDED while the Browser showed a badge
-     implying grounding had been on the table. Dropping the tools is
-     what lets grounding through. *)
-  if PageTurn then LoopCfg.Registry := nil;
+     The problem: Gemini rejects google_search alongside
+     functionDeclarations below 3.x, so shipping the registry made the
+     provider suppress grounding on every page. With no web_search tool
+     either -- it registers only when an operator has configured a
+     search provider -- Search and Research had no way to search at all,
+     and every page came back UNGROUNDED while the Browser showed a
+     badge implying otherwise.
+
+     But the tools are the answer for other pages, so all three
+     conditions have to hold:
+
+       WantsWeb    -- pkSearch/pkResearch. A pkData page is told to read
+                      "files, memory notes, project manifests and
+                      session data with the tools you have"; taking the
+                      registry away leaves it prompted to do something
+                      it cannot do. pkReport composes from what the turn
+                      already gathered.
+       no web_search -- an operator who configured Brave or Tavily gets
+                      those tools, and they work on every provider
+                      rather than only where native grounding exists.
+                      Their explicit configuration outranks ours.
+       native search -- there is no point paying for the trade against a
+                      provider that has no grounding to gain.
+
+     Codex P1 on PR #588: the first cut dropped the registry for every
+     page and broke both of the first two cases. *)
+  GroundNatively := WantsWeb and (LoopCfg.Provider <> nil) and
+                    LoopCfg.Provider.SupportsNativeSearch and
+                    not ((FRegistry <> nil) and FRegistry.Find('web_search', WebTool));
+  if GroundNatively then
+  begin
+    LoopCfg.Registry := nil;
+    LogDebug('page: no local search tool and %s grounds natively -- ' +
+             'sending no tools so grounding is not suppressed',
+             [LoopCfg.Model]);
+  end;
 
   Attempt := 0;
   repeat
@@ -6480,7 +6512,7 @@ begin
 
        Once only, and only for a page: a second refusal is a real
        failure and should be reported as one. *)
-    if PageTurn and (Attempt = 1) and
+    if GroundNatively and (Attempt = 1) and
        (not LoopCfg.Options.DisableServerTools) and
        GroundingRefused(Failed) then
     begin
@@ -6622,7 +6654,7 @@ begin
      snapshot so the two cannot be chosen a moment apart. *)
   if not GDesktopGateway.RunDesktopTurn(Prompt,
        'Produce the page now.', Kind = pkResearch, Kind <> pkResearch,
-       True, Reply, Err) then
+       Kind in [pkSearch, pkResearch], Reply, Err) then
     Exit;
   (* "Drafting", not "Writing": deepening rounds follow, each rewriting
      this draft, and a dialog that said "Writing" and THEN "Deepening:
