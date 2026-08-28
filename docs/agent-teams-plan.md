@@ -60,21 +60,45 @@ another file.
 
 ### Role prompts: one skeleton, six characters
 
-Every role prompt has the same five sections, because the sections are
+Every role prompt has the same six sections, because the sections are
 what make a team a system instead of six chatbots:
 
 1. **Who you are** — one sentence of identity.
 2. **What you own** — the artifact this role is accountable for.
-3. **How you work** — a concrete loop, always the same shape: *check your
+3. **What you do NOT own — and who does.** "Requirements are the PM's;
+   the environment is the Foreman's; closing your own bug is the Test
+   Engineer's." Naming the owning peer in the role text is what stops
+   two agents doing the same work or both assuming the other has it.
+   (OpenExecutive encodes this as `out_of_scope` lines that name the
+   owning department — the single best idea in their charters.)
+4. **How you work** — a concrete loop, always the same shape: *check your
    messages → check the board → do one increment → update the board →
    report if something changed that your parent needs to know.*
-4. **Who you talk to** — route **work through the task board** (create
+5. **Who you talk to** — route **work through the task board** (create
    and update tasks) and use **messages for exceptions** (blocked, done,
    need a decision). Never idle-chat another agent. The board is shared
    state everyone can see in the desktop; a decision made only in a
    message is invisible.
-5. **What done means** — tested/checked, recorded on the board, reported
+6. **What done means** — tested/checked, recorded on the board, reported
    up. Claiming done without evidence is the one prohibited move.
+
+Two style rules borrowed from OpenExecutive's role prompts, which are
+unusually good: give each role **concrete thresholds and checklists**
+rather than adjectives (their CFO carries "runway ≥ 12 months; raise at
+6–9, not on fumes" — our Test Engineer carries "empty input, wrong
+input, out of order, twice"), and end each prompt with **one
+anti-pattern line** ("You are not a corporate finance theorist" — ours:
+"The 10x is never claiming done untested, not volume").
+
+The Foreman additionally carries their three-tier autonomy rule, close
+to verbatim because it is exactly right: *small things within your
+authority — do them and report after; decisions that commit money,
+delete things, or touch the world outside the workspace — propose to
+the operator, do not wait to be asked; things you are unsure about —
+say so plainly. Silence after noticing something is the failure mode,
+not action.* And one line that prevents a failure mode they hit in
+production: **never message someone to say you will message them** —
+if the operator is the audience, just say it.
 
 The characters (full text ships in the template; these are the cores):
 
@@ -150,7 +174,11 @@ which does five things, in order:
 
 1. **Seed the agents** — idempotent on slug, skip-and-report like
    `SeedSuiteReporting`; an existing agent keeps its conversation and its
-   edited role.
+   edited role. Templates are validated before anything is created:
+   every `parent` must name an agent in the same template, and parents
+   are seeded before their reports — the same referential-integrity
+   rules OpenExecutive enforces on its generated orgs, checked in code
+   rather than trusted.
 2. **Bind the board.** Goal mode creates the project (free-name
    reservation, like every other build). Project mode uses the one you
    named. Either way the team's board exists before anyone runs.
@@ -196,6 +224,14 @@ Bounds, stated in the template and enforced by the tick: the existing
 8-concurrent-runs cap, at most one run started per agent per tick, and a
 team whose board has been done for two ticks stops being woken (the
 Foreman's "say so and stop" from the role prompt, mechanically backed).
+
+One more scan, borrowed from OpenExecutive's nudge engine: **stall
+detection**. A task that has been `active` with no job progress for two
+ticks is not a reason to wake its owner again — it is a reason to put a
+message in the **Foreman's** mailbox naming the task and the silence.
+Waking a stuck worker repeats the stall; telling its manager is what
+unsticks it. Their whole 656-line nudge engine reduces, at our scale, to
+that one rule plus the caps above.
 
 ## Watching the team work — the supervisor runs the desktop
 
@@ -274,24 +310,56 @@ The Agents window also grows what the first audit found lacking:
 
 ## Phases
 
-1. **Template format + catalogue + seeding, and task assignees.**
-   `TTeamTemplate`, the two built-ins, `POST /v1/teams` (list) and
-   `/v1/teams/up` (seed only — no kickoff yet), `pasclaw team list/up`,
-   the `assignee` field on tasks (store, `task` tool, desktop rows),
-   tests pinning idempotency and skip-reporting. No autonomy yet: after
-   this phase `team up` builds the org chart in one command.
-2. **Kickoff + first run + wake loop.** Both entry modes (goal /
-   existing project), the kickoff message, the immediate lead run, the
-   `team-tick` skill and its cron entries, `team down` / `team status`.
-   After this phase the demo is real: one command pointed at a task
-   list, then watch the board move.
-2b. **Live visibility.** `agent-activity` narration from agent runs,
-   live lines in the agent chat window, the `open_agent` desktop
-   action, and the Foreman's screen-owning paragraph. Small enough to
-   ride with phase 2, and it is what makes phase 2 watchable.
-3. **Desktop.** Template picker, role editing, team grouping and wake
-   state on the roster.
-4. **Authoring.** `workspace/teams/` user templates, name-override of
-   built-ins, `pasclaw team export <file>` from the live roster.
+**Phase 1 — The templates exist.** One PR.
+- `TTeamTemplate` + the built-in catalogue (`duo`, `software-team`)
+  with the six role prompts written in full.
+- Seeding: `POST /v1/teams` (list) and `POST /v1/teams/up` (create the
+  agents; no kickoff yet), `pasclaw team list` / `team up`. Idempotent,
+  skip-and-report, parent references validated, parents seeded first.
+- Tasks gain the `assignee` field: store, `task` tool, desktop rows.
+- Tests pin idempotency, skip-reporting, and template validation.
+- *After this phase:* one command builds the whole org chart, visible
+  in the Agents roster. Nothing runs on its own yet.
 
-Phase 1 and 2 are each a PR; 3 and 4 are each small.
+**Phase 2 — The team starts working.** One PR.
+- Both entry modes: `--goal "…"` (creates the project) and
+  `--project <name>` (works the board you already have).
+- The kickoff message to the lead, and the lead's first run starting
+  immediately.
+- The `team-tick` cron skill: supervision sweep, wake only agents with
+  pending messages or open assigned tasks, stall messages to the
+  Foreman, all the caps.
+- `pasclaw team status` and `team down` (park the crons, keep
+  everything else).
+- *After this phase:* point a team at a task list, walk away, and the
+  board moves.
+
+**Phase 3 — You can watch it.** One PR, small.
+- Agent runs narrate onto the live event feed (`agent-activity`).
+- The agent chat window shows tool calls live instead of freezing
+  until the run ends; the roster ticks.
+- The `open_agent` desktop action, and the Foreman's screen-owning
+  paragraph: assigning work opens the worker's window and tiles.
+- *After this phase:* the desktop is mission control — windows open
+  and update as the team works.
+
+**Phase 4 — Launch it from inside the desktop.** One PR, small.
+- **New team…** picker in the Agents window and the Start menu.
+- The `team_up` action in the desktop tool, so typing "spin up a
+  software team to build X" into Ask PasClaw launches one.
+- *After this phase:* all three doors — click, ask, CLI — drive the
+  same route.
+
+**Phase 5 — Make your own templates.** One PR, small.
+- `workspace/teams/` user template files; a user template overrides a
+  built-in of the same name.
+- `pasclaw team export <file>`: turn the roster you hand-built (or
+  hand-tuned) into a shareable template.
+- If a template was authored by the model rather than a person, it
+  seeds **parked** — agents and roles but no wake cron — until the
+  operator enables it. (OpenExecutive's rule for generated orgs:
+  "rich but inert, nothing that reaches outward." The right default
+  for anything a model wrote.)
+
+Order matters for 1 → 2; phases 3–5 are independent of each other
+after 2 and can land in any order.
