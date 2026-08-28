@@ -135,8 +135,14 @@ begin
     turns are judgement -- read this profile, decide what to change,
     decide whether the number moved -- and the router scores by surface
     shape, so a short "re-run the benchmark" reads as easy and would be
-    handed to the cheap model precisely when the answer matters most. }
-  if (LoopCfg.Mode = pmPlan) or (LoopCfg.Mode = pmImprove) then Exit;
+    handed to the cheap model precisely when the answer matters most.
+
+    Space mode is exempt for both reasons at once: its opening turns
+    ARE plan turns (the strong model owns those, per the plan-mode
+    rule), and its later ones are the same judgement calls as improve
+    -- deciding whether red output means what the plan said it would. }
+  if (LoopCfg.Mode = pmPlan) or (LoopCfg.Mode = pmImprove)
+     or (LoopCfg.Mode = pmSpace) then Exit;
   UserMsg := LatestUserMessage(Messages);
   if UserMsg = '' then Exit;
 

@@ -386,6 +386,7 @@ uses
   PasClaw.Tools.OutputCache,
   PasClaw.Condense.JSON,
   PasClaw.Promptware,       { injection scan on tool results -- chokepoint 1 }
+  PasClaw.Tools.PlanWrite,  { ResolvePlanPath -- the SPACE-mode gate key }
   PasClaw.Utils,            { NowStampWithZone -- the per-turn clock }
   PasClaw.Otel;             (* agent.turn / chat / execute_tool spans.
                                All helpers are no-ops when OTel is
@@ -686,6 +687,33 @@ end;
   OnToolCall / OnToolResult on the main thread before / after; we
   deliberately don't invoke them in here to keep the worker stateless
   with respect to the embedder's event-handler thread affinity. }
+(* SPACE-mode gate state (docs/space-mode-plan.md).
+
+   True = the plan exists, mutating tools may dispatch. A threadvar
+   rather than a field because DispatchOneToolCall receives Cfg by
+   const from two kinds of caller, and loop-scoped mutable state has
+   no home in that signature. The threading works out exactly:
+
+     - mutating tools dispatch SERIALLY on the loop thread (the
+       parallel batch path is read-only tools on worker threads), so
+       every gate READ happens on the thread that owns the flag;
+     - plan_write is NoParallel (Tools.Types), so the gate WRITE
+       happens on the loop thread too;
+     - read-only tools never consult the gate, so the worker threads'
+       own (default-False) instances are never read.
+
+   RunToolLoop initialises it UNCONDITIONALLY at entry -- gateway
+   handler threads are reused across requests, so a stale True from
+   the previous request must never leak into a new session -- and
+   restores the caller's value in its finally, so a nested loop (a
+   subagent running in-thread, possibly under a different thread
+   workspace) cannot clobber its parent's gate. Seeding is
+   FileExists(ResolvePlanPath): a resumed session whose PLAN.md
+   already exists starts unlocked rather than being asked to repeat
+   the ritual. Same precedent as SetThreadWorkspace. *)
+threadvar
+  GSpacePlanDone: Boolean;
+
 procedure DispatchOneToolCall(const Cfg: TToolLoopConfig;
                                var D: TToolCallDispatch);
 var
@@ -724,12 +752,34 @@ begin
     D.ResultText := PlanModeRefusal(D.Call.Func.Name);
     Exit;
   end;
+  (* SPACE-mode gate: mutating tools are refused until the plan is
+     written. plan_write itself is tcReadOnly (deliberately -- see its
+     unit comment) so the unlock passes this gate, as do all the
+     Search-phase tools. Like the plan-mode refusal above, the message
+     lands in ResultText with Err empty so the unlock recipe reaches
+     the model verbatim. *)
+  if (Cfg.Mode = pmSpace) and (not GSpacePlanDone)
+     and (Cfg.Registry <> nil)
+     and Cfg.Registry.Find(D.Call.Func.Name, PlanTool)
+     and (PlanTool.Category = tcMutating) then
+  begin
+    D.ResultText := SpaceModeRefusal(D.Call.Func.Name);
+    Exit;
+  end;
   if not PreflightToolCall(D.Call.Func.Name, RetryArgs, D.Err) then
     D.ResultText := ''
   else if Cfg.Registry <> nil then
     D.ResultText := Cfg.Registry.RunTool(D.Call.Func.Name, RetryArgs, D.Err)
   else
     D.Err := 'no tool registry';
+
+  { SPACE-mode unlock: a successful plan_write opens the gate for the
+    rest of this loop. Serial dispatch (plan_write is NoParallel), so
+    this write races nothing. Checked on every mode, cost of one
+    compare -- gating it on pmSpace would just risk the flag being
+    stale if a caller flips mode mid-config. }
+  if (D.Err = '') and SameText(D.Call.Func.Name, 'plan_write') then
+    GSpacePlanDone := True;
 
   if ((D.Call.Func.Name = 'edit_file') or (D.Call.Func.Name = 'fs_edit_hashline'))
      and IsPatchFormatError(D.Err) then
@@ -1588,6 +1638,7 @@ var
                              can be stashed for tool_output_get }
   OrigLen:   Integer;
   Truncated: Boolean;
+  SavedSpaceGate: Boolean;   { SPACE gate: caller's value, restored in finally }
   TurnSpan, ChatSpan, ToolSpan: TOtelSpan;
 begin
   (* Clear the WHOLE result, not the handful of fields this used to
@@ -1607,6 +1658,14 @@ begin
   Loop := Default(TToolLoopResult);
 
   if Cfg.Provider = nil then Exit(False);
+
+  { SPACE-mode gate: initialise unconditionally (handler threads are
+    reused across gateway requests; last request's True must not leak)
+    and remember the caller's value for the nested-loop case. Seeded
+    from PLAN.md existence so a resumed SPACE session with a plan on
+    disk starts unlocked -- see the threadvar's comment. }
+  SavedSpaceGate := GSpacePlanDone;
+  GSpacePlanDone := FileExists(ResolvePlanPath);
 
   { openclaw.agent.turn span (tier-1 instrumentation point). Wraps
     the whole tool loop -- everything below up to the final
@@ -2595,6 +2654,7 @@ begin
     SetAttrInt(TurnSpan, 'gen_ai.usage.output_tokens', Loop.TotalUsage.OutputTokens);
     if not Result then SetStatus(TurnSpan, oscError, 'agent turn returned false');
     FinishSpan(TurnSpan);
+    GSpacePlanDone := SavedSpaceGate;
   end;
 end;
 

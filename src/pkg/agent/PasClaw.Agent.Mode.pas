@@ -88,8 +88,22 @@ type
      That is a discipline, not a capability, which is why it needed a
      mode rather than a tool. The failure it exists to prevent is the
      one agents are best at: changing code that looks slow, declaring
-     it faster, and never measuring either end. *)
-  TPasClawMode = (pmBuild, pmPlan, pmImprove);
+     it faster, and never measuring either end.
+
+     pmSpace is Search -> Plan -> Assert -> Code -> Evaluate
+     (docs/space-mode-plan.md): the shared skeleton of the TDD-style
+     skillsets, as a mode. Where Improve optimises existing behaviour
+     against a measurement taken first, Space builds NEW behaviour
+     against an assertion written before the code exists -- red ->
+     green of a check that was not there before. Its one mechanical
+     rule lives in the dispatch path: mutating tools are refused until
+     plan_write has been called (or workspace/PLAN.md already exists,
+     the resume case). Assert stays prompt-level because "test ran red
+     first" is not robustly detectable across languages from inside
+     the tool loop; the prompt demands quoted red output instead.
+     Appended to the enum, never inserted -- same ordinal rule as
+     Improve. *)
+  TPasClawMode = (pmBuild, pmPlan, pmImprove, pmSpace);
 
 function ModeName(M: TPasClawMode): string;
 function ParseMode(const S: string; out M: TPasClawMode): Boolean;
@@ -108,6 +122,12 @@ function ParseModeFromBody(const Body: string): TPasClawMode;
    switch. *)
 function PlanModeRefusal(const ToolName: string): string;
 
+(* Refusal for a mutating tool fired under pmSpace before the plan is
+   written. Unlike the plan-mode refusal this one is an unlock recipe,
+   not a mode switch: the same session may run the tool the moment
+   plan_write has been called. *)
+function SpaceModeRefusal(const ToolName: string): string;
+
 implementation
 
 uses
@@ -119,6 +139,7 @@ begin
     pmBuild:   Result := 'build';
     pmPlan:    Result := 'plan';
     pmImprove: Result := 'improve';
+    pmSpace:   Result := 'space';
   else
     Result := 'build';
   end;
@@ -147,6 +168,13 @@ begin
   begin
     M := pmImprove; Result := True;
   end
+  { "tdd" and "spec" are what people reach for when describing this
+    loop -- same reasoning as improve's aliases. "space" is canonical:
+    the acronym is the loop (Search, Plan, Assert, Code, Evaluate). }
+  else if (L = 'space') or (L = 's') or (L = 'tdd') or (L = 'spec') then
+  begin
+    M := pmSpace; Result := True;
+  end
   else
   begin
     M := pmBuild; Result := False;
@@ -155,13 +183,15 @@ end;
 
 function CycleMode(M: TPasClawMode): TPasClawMode;
 begin
-  { build -> plan -> improve -> build. Plan sits next to Build because
-    swapping those two is the common move; Improve comes after so a
-    stray Tab lands on the read-only mode rather than one that edits. }
+  { build -> plan -> improve -> space -> build. Plan sits next to
+    Build because swapping those two is the common move; a stray Tab
+    from Build lands on the read-only mode rather than one that
+    edits. }
   case M of
     pmBuild:   Result := pmPlan;
     pmPlan:    Result := pmImprove;
-    pmImprove: Result := pmBuild;
+    pmImprove: Result := pmSpace;
+    pmSpace:   Result := pmBuild;
   else
     Result := pmBuild;
   end;
@@ -196,6 +226,15 @@ begin
   Result := 'refused: tool "' + ToolName + '" needs build mode (this tool ' +
             'writes files or executes commands). Switch to build mode and ' +
             'retry: TUI Tab key | CLI --mode build | web UI mode toggle.';
+end;
+
+function SpaceModeRefusal(const ToolName: string): string;
+begin
+  Result := 'refused: space mode -- write the plan first. Tool "' + ToolName +
+            '" mutates state, and in SPACE mode mutating tools unlock only ' +
+            'after the plan exists: finish Searching, then call plan_write ' +
+            'with the plan (checkable steps, each with its assertion). ' +
+            'After plan_write succeeds, retry this tool.';
 end;
 
 end.
