@@ -1034,6 +1034,75 @@ So the server names one executor. Each SSE subscriber is assigned an id and told
 
 Oldest-subscriber is arbitrary but *stable*, and stability is the property that matters: every command in a session lands on the same screen rather than scattering builds across tabs. The consequence worth knowing is that asking in a second tab can have the app open in the first one.
 
+### A search page drops its tools, when that is what buys it grounding
+
+Search and Research could not search. Not "searched badly" — could not search at all, on every install without a Brave/Tavily key, which is the default.
+
+Two things stacked up. `web_search` registers only when a search provider is configured, so usually it is absent. And Gemini's grounding was suppressed on every page: `RunDesktopTurn` shipped the **whole tool registry**, and `google_search` alongside `functionDeclarations` is a 400 below Gemini 3.x, so the provider dropped grounding to avoid it. Every page came back `source_count: 0` while the Browser showed a GROUNDED/UNGROUNDED badge implying grounding had been on the table.
+
+So a search page now ships **no local tools**, and grounding goes through:
+
+| | on the wire | sources |
+|---|---|---|
+| before | `functionDeclarations` | 0, always |
+| after | `google_search` | 2 |
+
+**Only when dropping them is what buys the grounding.** All three have to hold, or the registry stays:
+
+| Condition | Why |
+|---|---|
+| the page wants the **web** (`search` / `research`) | a `data` page is told to read "files, memory notes, project manifests and session data *with the tools you have*" — take the registry away and it is prompted to do something it cannot do. `report` composes from what the turn already gathered. |
+| **no `web_search` tool** | an operator who configured Brave or Tavily gets those tools, and they work on every provider rather than only where native grounding exists. Their explicit configuration outranks ours. |
+| the provider **grounds natively** | no point paying the trade against a provider with no grounding to gain. |
+
+Measured on the wire, one row per case:
+
+| config | kind | sent to the provider |
+|---|---|---|
+| no search key | `search` / `research` | `google_search` only |
+| no search key | `data` / `report` | 19 `functionDeclarations` (+ `google_search` on 3.x) |
+| Tavily configured | `search` / `research` | 20 `functionDeclarations` incl. `web_search`, `web_fetch` |
+
+On a pre-3.x model the provider still suppresses `google_search` whenever tools ship, which is correct for the kinds that need the tools — `data` sends `functionDeclarations` alone and never 400s.
+
+**When the model cannot ground**, the turn is retried once with `DisableServerTools` and the page is written ungrounded rather than failing. Google answers a grounding request on a model without it with `400 Search Grounding is not supported for model …`; an error where a page should be is the wrong answer to "search this for me" when the page can still be written — it just cannot be grounded, and the badge already says so. Once only: a second refusal is a real failure.
+
+The refusal is matched on the provider's **words**, not on a model list. Which models can ground is Google's matrix, it moves, and a blocklist compiled into a release is wrong the moment it does.
+
+**Which flash-lite you pin matters.** The degrade path exists so a model that cannot ground still produces a page; it is not a substitute for picking one that can.
+
+| fast model | grounds? | what a page gets |
+|---|---|---|
+| `gemini-3.5-flash-lite` | yes | one call, grounded, sources |
+| `gemini-2.5-flash-lite` | yes | one call, grounded, sources |
+| `gemini-3.1-flash-lite` | **no** | refused, retried, page written ungrounded |
+
+`FastModelFor('gemini')` already defaults to `gemini-3.5-flash-lite`, so a fresh install grounds. An older config pinning `fast_model` to something else keeps whatever it was pinned to — worth checking if Search comes back UNGROUNDED. Being 3-series, it can also combine grounding with function calling, which is the restriction that caused the suppression in the first place.
+
+`tools/fake-gemini.py` mirrors this matrix rather than refusing every flash-lite. A fake that refused them all would "prove" this fix while only demonstrating that the fake was wrong.
+
+### A provider error is not a page
+
+`RunToolLoop` reports **success** and hands back the provider's error text as the turn's content when the call itself failed. So
+
+```
+gemini error: status=-1 msg=Socket Error # 111 Connection refused.
+```
+
+was wrapped in the report chrome, saved to `workspace/pages/`, and served from `POST /v1/pages` with HTTP 200. The Browser closed its progress dialog and opened a document whose entire body was that one line — which is what "Research does a call and then nothing happens" looks like from the outside.
+
+The page turn now checks `LastResp.StatusCode` and fails with the provider's own message. `StatusCode` rather than sniffing the text: providers set 200 on success, `-1` on socket/TLS/DNS failure, and the real code on an HTTP error; `0` means a provider that never sets it and is not treated as failure.
+
+`tools/fake-gemini.py` is the harness this was found with — it speaks Gemini's wire format and is as picky as Google is (400 on grounding for a model without it, 400 on the `google_search` + `functionDeclarations` combo below Gemini 3, 400 on a malformed function schema), and records every request. The relay provider cannot stand in for this: it *replaces* the provider, so anything provider-shaped — a schema Google rejects, a 400 only one model returns — is invisible to it. Both this bug and the unparseable schema above got past a relay-only test pass.
+
+### The schema has to parse
+
+`desktop`'s schema shipped with `"e.g. [{""do"":""tile""}]"` — the Pascal doubling convention applied to double quotes, where JSON wanted `\"`. It did not parse.
+
+That would be a footnote if it failed loudly. It does not: providers inject a schema with `PutRaw`, and `PutRaw` answers an unparseable string by substituting `{}` **without a word**. So every real provider was told `desktop` takes no arguments, and the model did exactly as it was told — `desktop()`, empty, every time. No error text can argue a model out of the schema it was given; the coercion below was treating a symptom.
+
+`make test-tool-schema` now parses every registered tool's schema, and the `ToProviderDefs` output too. Registration is where the mistake is made, so registration is where it is caught.
+
 ### The near misses are accepted
 
 `desktop` is the only one of four sibling tools that takes a plural `actions` **array**; `project`, `task` and `agent` all take a singular `action` **string**. That is a strong prior toward the wrong key and the wrong arity, and it cost a real turn: *"build a book comparison app where I can enter 4 amazon book urls"* produced `desktop()` with no arguments at all and an error where the app should have been.

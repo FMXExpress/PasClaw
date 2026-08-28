@@ -670,7 +670,13 @@ begin
   T.Schema      :=
     '{"type":"object","properties":{' +
     '"actions":{"type":"array","description":' +
-    '"Desktop actions in order, e.g. [{""do"":""tile""}].",' +
+    (* Escaped \" -- NOT the Pascal doubling convention. Written as
+       ""do"" this schema did not parse, and PutRaw answers an
+       unparseable schema by substituting {} without a word, so every
+       provider was told `desktop` takes no arguments. The model obeyed:
+       desktop() with nothing in it, every time, and no error text can
+       argue a model out of the schema it was given. *)
+    '"Desktop actions in order, e.g. [{\"do\": \"tile\"}].",' +
     '"items":{"type":"object","properties":{' +
     '"do":{"type":"string"},"project":{"type":"string"},' +
     '"title":{"type":"string"},"brief":{"type":"string"},' +

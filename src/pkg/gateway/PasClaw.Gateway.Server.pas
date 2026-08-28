@@ -209,8 +209,16 @@ type
        string on purpose: resolving it here, inside the same lock as the
        provider snapshot, is what keeps the model and the provider it
        belongs to from being chosen a moment apart. *)
+    (* WantsWeb says this turn's job is to search the WEB (a search or
+       research page), as opposed to reading the workspace or composing
+       from what it already has. It is a request, not a decision: the
+       body drops the tool registry only when doing so is what buys
+       grounding -- no local web_search tool, and a provider that
+       grounds natively. It also gates the one retry without grounding
+       when the model turns out not to support it. *)
     function RunDesktopTurn(const SystemPrompt, Prompt: string;
                             Narrate: Boolean; UseFastModel: Boolean;
+                            WantsWeb: Boolean;
                             out Reply, Err: string): Boolean; overload;
     (* One turn on a STANDING AGENT's own session (PasClaw.Agents).
 
@@ -6180,7 +6188,7 @@ end;
 function TGatewayServer.RunDesktopTurn(const SystemPrompt, Prompt: string;
   Narrate: Boolean; out Reply, Err: string): Boolean;
 begin
-  Result := RunDesktopTurn(SystemPrompt, Prompt, Narrate, False, Reply, Err);
+  Result := RunDesktopTurn(SystemPrompt, Prompt, Narrate, False, False, Reply, Err);
 end;
 
 function TGatewayServer.RunAgentTurn(const AgentName, Prompt: string;
@@ -6322,8 +6330,45 @@ begin
   end;
 end;
 
+(* Did the provider itself refuse, as opposed to the model answering?
+
+   StatusCode is the signal rather than sniffing the text: providers set
+   200 on success, -1 on socket/TLS/DNS failure, and the real code on an
+   HTTP error. 0 means a provider that never sets it, so it is not
+   treated as a failure. On refusal the loop's Content carries the
+   provider's own message, which is the only useful thing to say. *)
+function ProviderRefused(const Loop: TToolLoopResult; out Msg: string): Boolean;
+begin
+  Msg := '';
+  Result := (Loop.LastResp.StatusCode <> 0) and
+            ((Loop.LastResp.StatusCode < 200) or (Loop.LastResp.StatusCode > 299));
+  if not Result then Exit;
+  Msg := Trim(Loop.Content);
+  if Msg = '' then
+    Msg := Format('the provider call failed (status %d)',
+                  [Loop.LastResp.StatusCode]);
+end;
+
+(* "This model cannot ground", said in whichever words the provider
+   chose. Gemini answers a grounding request on a model without it with
+   400 "Search Grounding is not supported for model ...".
+
+   Matched on the words rather than on a model list on purpose: which
+   models can ground is Google's matrix, it moves, and a blocklist
+   compiled into a release is wrong the moment it does. The provider
+   already knows the answer; this only has to recognise it being said. *)
+function GroundingRefused(const Msg: string): Boolean;
+var
+  M: string;
+begin
+  M := LowerCase(Msg);
+  Result := ((Pos('grounding', M) > 0) or (Pos('google_search', M) > 0)) and
+            ((Pos('not supported', M) > 0) or (Pos('unsupported', M) > 0) or
+             (Pos('not available', M) > 0));
+end;
+
 function TGatewayServer.RunDesktopTurn(const SystemPrompt, Prompt: string;
-  Narrate: Boolean; UseFastModel: Boolean;
+  Narrate: Boolean; UseFastModel: Boolean; WantsWeb: Boolean;
   out Reply, Err: string): Boolean;
 var
   Msgs: TMessageArray;
@@ -6333,6 +6378,10 @@ var
   FB: TLLMProviderArray;
   FBModels: TStringArray;
   DefModel, FastModel: string;
+  Attempt: Integer;
+  Failed: string;
+  GroundNatively: Boolean;
+  WebTool: TTool;
 begin
   Reply := '';
   Err := '';
@@ -6353,9 +6402,6 @@ begin
     Err := 'no provider configured';
     Exit;
   end;
-
-  SetLength(Msgs, 1);
-  Msgs[0] := MakeMessage(mrUser, Prompt);
 
   LoopCfg.Registry := FRegistry;
   if FToolsHonorInMemoryConfig then LoopCfg.ActiveConfig := FCfg;
@@ -6394,11 +6440,93 @@ begin
     that a progress feed would be noise on the event bus. }
   if Narrate then LoopCfg.OnToolCall := NarrateToolCall;
 
-  if not RunToolLoop(LoopCfg, Msgs, Loop) then
+  (* Drop the local tools ONLY when doing so is what buys the page a way
+     to search -- never merely because it is a page.
+
+     The problem: Gemini rejects google_search alongside
+     functionDeclarations below 3.x, so shipping the registry made the
+     provider suppress grounding on every page. With no web_search tool
+     either -- it registers only when an operator has configured a
+     search provider -- Search and Research had no way to search at all,
+     and every page came back UNGROUNDED while the Browser showed a
+     badge implying otherwise.
+
+     But the tools are the answer for other pages, so all three
+     conditions have to hold:
+
+       WantsWeb    -- pkSearch/pkResearch. A pkData page is told to read
+                      "files, memory notes, project manifests and
+                      session data with the tools you have"; taking the
+                      registry away leaves it prompted to do something
+                      it cannot do. pkReport composes from what the turn
+                      already gathered.
+       no web_search -- an operator who configured Brave or Tavily gets
+                      those tools, and they work on every provider
+                      rather than only where native grounding exists.
+                      Their explicit configuration outranks ours.
+       native search -- there is no point paying for the trade against a
+                      provider that has no grounding to gain.
+
+     Codex P1 on PR #588: the first cut dropped the registry for every
+     page and broke both of the first two cases. *)
+  GroundNatively := WantsWeb and (LoopCfg.Provider <> nil) and
+                    LoopCfg.Provider.SupportsNativeSearch and
+                    not ((FRegistry <> nil) and FRegistry.Find('web_search', WebTool));
+  if GroundNatively then
   begin
-    Err := 'agent loop failed';
-    Exit;
+    LoopCfg.Registry := nil;
+    LogDebug('page: no local search tool and %s grounds natively -- ' +
+             'sending no tools so grounding is not suppressed',
+             [LoopCfg.Model]);
   end;
+
+  Attempt := 0;
+  repeat
+    Inc(Attempt);
+    { Rebuilt each attempt: RunToolLoop appends the turn's history. }
+    SetLength(Msgs, 1);
+    Msgs[0] := MakeMessage(mrUser, Prompt);
+
+    if not RunToolLoop(LoopCfg, Msgs, Loop) then
+    begin
+      Err := 'agent loop failed';
+      Exit;
+    end;
+
+    (* A provider error is not a page. RunToolLoop reports success and
+       hands back the provider's error text as CONTENT when the call
+       itself failed -- so "gemini error: status=-1 msg=Socket Error
+       # 111 Connection refused." was wrapped in the report chrome,
+       saved to disk, and served as a finished research report with
+       HTTP 200. *)
+    if not ProviderRefused(Loop, Failed) then Break;
+
+    (* Grounding refused: ask again without it rather than failing.
+
+       The alternative is an error where a page should be, on the
+       reasonable request "search this for me" -- and the page can
+       still be written, it just cannot be grounded. It says so: the
+       Browser's badge reads UNGROUNDED and the page carries the same
+       warning it always has for an ungrounded answer. Honest and
+       useful beats correct and empty.
+
+       Once only, and only for a page: a second refusal is a real
+       failure and should be reported as one. *)
+    if GroundNatively and (Attempt = 1) and
+       (not LoopCfg.Options.DisableServerTools) and
+       GroundingRefused(Failed) then
+    begin
+      LogInfo('page: %s cannot ground -- retrying without search ' +
+              'grounding; the page will be marked ungrounded',
+              [LoopCfg.Model]);
+      LoopCfg.Options.DisableServerTools := True;
+      Continue;
+    end;
+
+    Err := Failed;
+    Exit;
+  until False;
+
   Reply := Loop.Content;
   Result := True;
 end;
@@ -6526,7 +6654,7 @@ begin
      snapshot so the two cannot be chosen a moment apart. *)
   if not GDesktopGateway.RunDesktopTurn(Prompt,
        'Produce the page now.', Kind = pkResearch, Kind <> pkResearch,
-       Reply, Err) then
+       Kind in [pkSearch, pkResearch], Reply, Err) then
     Exit;
   (* "Drafting", not "Writing": deepening rounds follow, each rewriting
      this draft, and a dialog that said "Writing" and THEN "Deepening:
@@ -6584,7 +6712,7 @@ begin
         Format('round %d -- %d source(s) so far', [Depth, Have]));
       if not GDesktopGateway.RunDesktopTurn(
            BuildDeepenPrompt(Query, BodyHTML, SourcesJSON),
-           'Deepen the report now.', True, False, Round_, RoundErr) then
+           'Deepen the report now.', True, False, True, Round_, RoundErr) then
       begin
         LogDebug('page: deepen round %d failed (%s) -- keeping the report ' +
                  'as it stands', [Depth, RoundErr]);
