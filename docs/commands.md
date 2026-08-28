@@ -82,21 +82,23 @@ pasclaw agent --mode build -m "..."                         # full-access (defau
 
 Persists conversation history to `$PASCLAW_HOME/workspace/sessions/<id>.json` after every turn by default. Interactive slash commands: `/help`, `/status`, `/new`, `/reset`, `/compact`, `/think`, `/tools`, `/mode [plan|build]`, `/steer <msg>`, `/quit`. See [Sessions](./sessions.md).
 
-### Plan / Build mode
+### Agent modes (build / plan / improve / space)
 
-Two operator-facing modes that gate the tool surface:
+Operator-facing modes over the same tool surface:
 
 - **`build`** (default) — full tool access; every registered tool dispatches normally. Historical behaviour.
 - **`plan`** — read-only. Tools categorised as mutating (`fs_write`, `fs_edit_hashline`, `shell_exec`, `execute_code`, `delphi_build`, `send_message`, `web_fetch`, `memory_fetch`, `skills_manage`, `kb_upload`, …) are refused at the dispatch layer with a `refused: tool "X" needs build mode` message; read-only tools (`fs_read`, `fs_list`, `fs_grep`, `memory_search`, `kb_search`, `web_search`, `vault_search`, `vault_get`, `session_search`, `skills_list`, `skills_view`, …) work normally. Note: `web_fetch` and `memory_fetch` are mutating because their `save_to` path writes to the workspace; for a pure URL read, use the search tools or switch to Build. The model is also told it is in plan mode in the system prompt so it produces analysis rather than attempting refused tools.
+- **`improve`** — build's tool access with a method imposed by the system prompt: benchmark first, profile, change one thing, re-run the same measurement, report before → after. Aliases: `research`, `auto`, `optimise`.
+- **`space`** — Search, Plan, Assert, Code, Evaluate ([design](./space-mode-plan.md)). Build's tool access plus one dispatch rule: mutating tools are **refused until `plan_write` has been called** (or `workspace/PLAN.md` already exists — the resume case). The prompt then demands each check be written first and shown failing before the code that turns it green, and an evaluate pass that re-runs the same check and states what it did *not* cover. Aliases: `tdd`, `spec`. Where **improve** optimises existing behaviour against a measurement taken first, **space** builds new behaviour against an assertion written before the code exists.
 
 Mode plumbing per surface:
 
 | Surface | How to switch |
 |---|---|
-| CLI | `--mode plan\|build`, or the short forms `--plan` / `--build`. In the interactive REPL: `/mode plan`, `/mode build`, or bare `/mode` to show the current value. |
+| CLI | `--mode plan\|build\|improve\|space`, or the short forms `--plan` / `--build`. In the interactive REPL: `/mode <name>`, or bare `/mode` to show the current value. |
 | TUI | **Ctrl-B** cycles Plan ↔ Build (works in either pane). Tab still swaps focus between the session list and chat. A `[plan]` / `[build]` badge in the header bar shows the current value. Slash commands also work: `/mode`, `/mode plan`, `/mode build`. |
 | Web UI | The **🛠 build / 📋 plan** toggle in the top nav; per-tab, persisted in `localStorage`. |
-| `/v1/chat`, `/v1/chat/completions`, `/v1/responses` | Optional `"mode": "plan"` (or `"build"`) field in the JSON request body. Absent / unknown values default to `build` so existing OpenAI-compatible clients keep working unchanged. |
+| `/v1/chat`, `/v1/chat/completions`, `/v1/responses` | Optional `"mode"` field in the JSON request body (`"plan"`, `"build"`, `"improve"`, `"space"`). Absent / unknown values default to `build` so existing OpenAI-compatible clients keep working unchanged. |
 
 ## tui
 

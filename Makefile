@@ -786,7 +786,9 @@ test-tool-cancel: | $(BUILDDIR)
 test-plan-build-mode: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/plan_build_mode_tests.pas -o$(BUILDDIR)/plan_build_mode_tests
-	@$(BUILDDIR)/plan_build_mode_tests
+	@PASCLAW_HOME=$$(mktemp -d) ; export PASCLAW_HOME ; \
+	$(BUILDDIR)/plan_build_mode_tests ; rc=$$? ; \
+	rm -rf "$$PASCLAW_HOME" ; exit $$rc
 
 # Configuration profiles -- builtins, _inherits, user shadow, LoadConfig merge (PR #291).
 # Uses PASCLAW_HOME pointing at a temp dir so it never touches the user's real config.

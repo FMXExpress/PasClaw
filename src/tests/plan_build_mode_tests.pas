@@ -12,6 +12,12 @@ program plan_build_mode_tests;
         * pmBuild dispatches both
         * pmPlan dispatches the read tool but refuses the write tool
           with the standard refusal string + Err = 'plan mode'
+    - SPACE-mode gate (docs/space-mode-plan.md): under pmSpace a
+      mutating tool is refused UNTIL plan_write succeeds, unlocked
+      after, left closed by a FAILED plan_write, and pre-opened when
+      workspace/PLAN.md already exists (the resume seeding). Requires
+      $PASCLAW_HOME pointing at a scratch dir -- the Makefile target
+      supplies one -- because the seeding reads ResolvePlanPath.
 
   No network / no provider keys -- the synthetic provider is a small
   ILLMProvider implementor in this file.
@@ -29,6 +35,7 @@ uses
   PasClaw.Providers.Intf,
   PasClaw.Tools.Types,
   PasClaw.Tools.Registry,
+  PasClaw.Tools.PlanWrite,   { ResolvePlanPath -- the SPACE gate's seed key }
   PasClaw.Tools.ToolLoop;
 
 procedure Fail_(const Msg: string);
@@ -112,6 +119,98 @@ begin E := ''; Result := 'READ OK'; end;
 function HandleFakeWrite(const A: string; out E: string): string;
 begin E := ''; Result := 'WRITE OK'; end;
 
+var
+  GPlanWriteFails: Boolean = False;
+
+{ Stand-in registered under the REAL tool's name: the gate keys on the
+  name 'plan_write' plus Err = '', not on the handler, so a fake keeps
+  the scenario hermetic (no file written; the seeded scenario writes
+  PLAN.md itself). tcReadOnly to match the real registration. }
+function HandleFakePlanWrite(const A: string; out E: string): string;
+begin
+  if GPlanWriteFails then begin E := 'disk full'; Result := ''; end
+  else begin E := ''; Result := 'PLAN OK'; end;
+end;
+
+(* Scripted provider for the SPACE scenarios: each round issues the
+   tool names given for that round (call ids r<round>c<idx>), then a
+   final stop round. *)
+type
+  TScriptProvider = class(TInterfacedObject, ILLMProvider)
+  private
+    FRound: Integer;
+    FScript: array of TArray<string>;
+  public
+    constructor Create(const Script: array of TArray<string>);
+    function Chat(const Messages: array of TMessage;
+                  const Tools: array of TToolDefinition;
+                  const Model: string;
+                  const Options: TChatOptions): TLLMResponse;
+    function GetDefaultModel: string;
+    function GetName: string;
+    function SupportsThinking: Boolean;
+    function SupportsNativeSearch: Boolean;
+    function SupportsStreaming: Boolean;
+    function ChatStream(const Messages: array of TMessage;
+                        const Tools: array of TToolDefinition;
+                        const Model: string;
+                        const Options: TChatOptions;
+                        OnChunk: TStreamCallback): TLLMResponse;
+  end;
+
+constructor TScriptProvider.Create(const Script: array of TArray<string>);
+var
+  i: Integer;
+begin
+  inherited Create;
+  SetLength(FScript, Length(Script));
+  for i := 0 to High(Script) do FScript[i] := Script[i];
+end;
+
+function TScriptProvider.GetDefaultModel: string; begin Result := 'fake'; end;
+function TScriptProvider.GetName: string;         begin Result := 'fake'; end;
+function TScriptProvider.SupportsThinking: Boolean;     begin Result := False; end;
+function TScriptProvider.SupportsNativeSearch: Boolean; begin Result := False; end;
+function TScriptProvider.SupportsStreaming: Boolean;    begin Result := False; end;
+
+function TScriptProvider.Chat(const Messages: array of TMessage;
+                              const Tools: array of TToolDefinition;
+                              const Model: string;
+                              const Options: TChatOptions): TLLMResponse;
+var
+  i: Integer;
+begin
+  Inc(FRound);
+  Result := Default(TLLMResponse);
+  Result.StatusCode := 200;
+  if FRound <= Length(FScript) then
+  begin
+    SetLength(Result.ToolCalls, Length(FScript[FRound - 1]));
+    for i := 0 to High(FScript[FRound - 1]) do
+    begin
+      Result.ToolCalls[i].Id             := Format('r%dc%d', [FRound, i]);
+      Result.ToolCalls[i].Kind           := 'function';
+      Result.ToolCalls[i].Func.Name      := FScript[FRound - 1][i];
+      Result.ToolCalls[i].Func.Arguments := '{}';
+    end;
+    Result.FinishReason := 'tool_calls';
+  end
+  else
+  begin
+    Result.Content := 'done';
+    Result.FinishReason := 'stop';
+  end;
+end;
+
+function TScriptProvider.ChatStream(const Messages: array of TMessage;
+                                    const Tools: array of TToolDefinition;
+                                    const Model: string;
+                                    const Options: TChatOptions;
+                                    OnChunk: TStreamCallback): TLLMResponse;
+begin
+  Result := Chat(Messages, Tools, Model, Options);
+end;
+
 procedure TestParseMode;
 var
   M: TPasClawMode;
@@ -133,6 +232,13 @@ begin
   AssertTrue(ParseMode('auto', M)     and (M = pmImprove), 'auto alias');
   AssertTrue(ParseMode('optimise', M) and (M = pmImprove), 'optimise alias');
   AssertTrue(ParseMode('IMPROVE', M)  and (M = pmImprove), 'case-insensitive');
+
+  { Space: Search, Plan, Assert, Code, Evaluate. }
+  AssertTrue(ParseMode('space', M) and (M = pmSpace), 'parse space');
+  AssertTrue(ParseMode('s', M)     and (M = pmSpace), 'parse short s');
+  AssertTrue(ParseMode('tdd', M)   and (M = pmSpace), 'tdd alias');
+  AssertTrue(ParseMode('spec', M)  and (M = pmSpace), 'spec alias');
+  AssertTrue(ParseMode('SPACE', M) and (M = pmSpace), 'case-insensitive space');
 end;
 
 procedure TestCycleAndName;
@@ -141,15 +247,18 @@ var
 begin
   AssertTrue(CycleMode(pmBuild)   = pmPlan,    'cycle build->plan');
   AssertTrue(CycleMode(pmPlan)    = pmImprove, 'cycle plan->improve');
-  AssertTrue(CycleMode(pmImprove) = pmBuild,   'cycle improve->build');
+  AssertTrue(CycleMode(pmImprove) = pmSpace,   'cycle improve->space');
+  AssertTrue(CycleMode(pmSpace)   = pmBuild,   'cycle space->build');
   AssertEqS(ModeName(pmBuild),   'build',   'name build');
   AssertEqS(ModeName(pmPlan),    'plan',    'name plan');
   AssertEqS(ModeName(pmImprove), 'improve', 'name improve');
+  AssertEqS(ModeName(pmSpace),   'space',   'name space');
   { Round-trip: every mode's name parses back to itself, so no surface
     can print a mode it cannot then be given. }
   AssertTrue(ParseMode(ModeName(pmBuild), M)   and (M = pmBuild),   'round-trip build');
   AssertTrue(ParseMode(ModeName(pmPlan), M)    and (M = pmPlan),    'round-trip plan');
   AssertTrue(ParseMode(ModeName(pmImprove), M) and (M = pmImprove), 'round-trip improve');
+  AssertTrue(ParseMode(ModeName(pmSpace), M)   and (M = pmSpace),   'round-trip space');
 end;
 
 (* The mode directive, on its own.
@@ -175,6 +284,14 @@ begin
              'and profile');
   AssertTrue(Pos('revert', LowerCase(BuildModeSection(pmImprove))) > 0,
              'and that a change which did not help gets reverted');
+  { Space: the five phases, the unlock, and the honesty rules. }
+  AssertTrue(Pos('Space Mode', BuildModeSection(pmSpace)) > 0, 'space has one');
+  AssertTrue(Pos('plan_write', BuildModeSection(pmSpace)) > 0,
+             'space names the unlock tool');
+  AssertTrue(Pos('failing', LowerCase(BuildModeSection(pmSpace))) > 0,
+             'space demands the check be seen failing');
+  AssertTrue(Pos('not cover', LowerCase(BuildModeSection(pmSpace))) > 0,
+             'space demands the not-covered statement');
 end;
 
 (* The other half of that branch: the directive actually reaching the
@@ -239,6 +356,7 @@ begin
   AssertTrue(ParseModeFromBody('{"mode":"build"}') = pmBuild, 'body build');
   AssertTrue(ParseModeFromBody('{"mode":"improve"}') = pmImprove, 'body improve');
   AssertTrue(ParseModeFromBody('{"mode":"research"}') = pmImprove, 'body research alias');
+  AssertTrue(ParseModeFromBody('{"mode":"space"}') = pmSpace, 'body space');
   AssertTrue(ParseModeFromBody('{}') = pmBuild, 'absent mode defaults to build');
   AssertTrue(ParseModeFromBody('') = pmBuild, 'empty body defaults to build');
   AssertTrue(ParseModeFromBody('not-json') = pmBuild, 'garbage defaults to build');
@@ -254,6 +372,12 @@ begin
   AssertTrue(Pos('build mode', S) > 0,      'refusal mentions build mode');
   AssertTrue(Pos('Tab', S) > 0,             'refusal mentions TUI Tab');
   AssertTrue(Pos('--mode build', S) > 0,    'refusal mentions CLI flag');
+
+  { The space refusal is an unlock recipe, not a mode switch. }
+  S := SpaceModeRefusal('fs_write');
+  AssertTrue(Pos('fs_write', S) > 0,    'space refusal names the tool');
+  AssertTrue(Pos('plan_write', S) > 0,  'space refusal names the unlock');
+  AssertTrue(Pos('space mode', S) > 0,  'space refusal names the mode');
 end;
 
 (* Run RunToolLoop with a synthetic provider + a registry that has one
@@ -343,6 +467,123 @@ begin
   end;
 end;
 
+(* SPACE-mode gate, end to end through RunToolLoop.
+
+   Four scenarios, each a fresh loop over the scripted provider:
+     1. locked:    fake_write before any plan_write -> space refusal
+                   (and fake_read flows freely in the same round)
+     2. unlock:    plan_write succeeds, then fake_write dispatches
+     3. no-unlock: plan_write FAILS, fake_write stays refused
+     4. seeded:    workspace/PLAN.md already on disk -> fake_write
+                   dispatches from round one (the resume case)
+
+   The gate seeds from ResolvePlanPath at loop entry, so scenarios
+   1-3 must run with NO PLAN.md on disk and 4 creates one; both
+   manipulations go through ResolvePlanPath so the test and the gate
+   cannot disagree about the path. Refuses to run without a scratch
+   $PASCLAW_HOME -- scenario 4 writes into it. *)
+procedure TestSpaceGate;
+var
+  Reg: TToolRegistry;
+  Provider: ILLMProvider;
+  Cfg: TToolLoopConfig;
+  Loop: TToolLoopResult;
+  Msgs: array of TMessage;
+  T: TTool;
+  L: TStringList;
+
+  procedure RegisterTools;
+  begin
+    T := Default(TTool);
+    T.Name := 'fake_read';   T.Description := 'r'; T.Schema := '{"type":"object"}';
+    T.Handler := HandleFakeRead;  T.Category := tcReadOnly; Reg.Register(T);
+    T.Name := 'fake_write';  T.Description := 'w'; T.Schema := '{"type":"object"}';
+    T.Handler := HandleFakeWrite; T.Category := tcMutating; Reg.Register(T);
+    T.Name := 'plan_write';  T.Description := 'p'; T.Schema := '{"type":"object"}';
+    T.Handler := HandleFakePlanWrite; T.Category := tcReadOnly; Reg.Register(T);
+  end;
+
+  function ToolMsg(const CallId: string): string;
+  var
+    j: Integer;
+  begin
+    Result := '';
+    for j := 0 to High(Loop.FinalMessages) do
+      if (Loop.FinalMessages[j].Role = mrTool) and
+         (Loop.FinalMessages[j].ToolCallId = CallId) then
+        Exit(Loop.FinalMessages[j].Content);
+  end;
+
+  procedure FreshCfg;
+  begin
+    Cfg := Default(TToolLoopConfig);
+    Cfg.Provider      := Provider;
+    Cfg.Registry      := Reg;
+    Cfg.Model         := 'fake';
+    Cfg.MaxIterations := 6;
+    Cfg.Mode          := pmSpace;
+    SetLength(Msgs, 1);
+    Msgs[0] := MakeMessage(mrUser, 'go');
+  end;
+
+begin
+  if GetEnvironmentVariable('PASCLAW_HOME') = '' then
+    Fail_('TestSpaceGate needs a scratch $PASCLAW_HOME (use: make test-plan-build-mode)');
+  if FileExists(ResolvePlanPath) then DeleteFile(ResolvePlanPath);
+
+  Reg := TToolRegistry.Create;
+  try
+    RegisterTools;
+
+    { 1: locked. Round 1 issues both read and write. }
+    Provider := TScriptProvider.Create([TArray<string>.Create('fake_read', 'fake_write')]);
+    FreshCfg;
+    AssertTrue(RunToolLoop(Cfg, Msgs, Loop), 'space locked: loop succeeds');
+    AssertEqS(ToolMsg('r1c0'), 'READ OK', 'space locked: read flows freely');
+    AssertTrue(Pos('space mode', ToolMsg('r1c1')) > 0,
+               'space locked: write refused with the space refusal');
+    AssertTrue(Pos('plan_write', ToolMsg('r1c1')) > 0,
+               'space locked: refusal carries the unlock recipe');
+
+    { 2: unlock. plan_write, then the write. }
+    GPlanWriteFails := False;
+    Provider := TScriptProvider.Create([TArray<string>.Create('plan_write'),
+                                        TArray<string>.Create('fake_write')]);
+    FreshCfg;
+    AssertTrue(RunToolLoop(Cfg, Msgs, Loop), 'space unlock: loop succeeds');
+    AssertEqS(ToolMsg('r1c0'), 'PLAN OK',  'space unlock: plan_write dispatched');
+    AssertEqS(ToolMsg('r2c0'), 'WRITE OK', 'space unlock: write dispatches after the plan');
+
+    { 3: a FAILED plan_write must not unlock. }
+    GPlanWriteFails := True;
+    Provider := TScriptProvider.Create([TArray<string>.Create('plan_write'),
+                                        TArray<string>.Create('fake_write')]);
+    FreshCfg;
+    AssertTrue(RunToolLoop(Cfg, Msgs, Loop), 'space no-unlock: loop succeeds');
+    AssertTrue(Pos('space mode', ToolMsg('r2c0')) > 0,
+               'space no-unlock: write still refused after a failed plan_write');
+    GPlanWriteFails := False;
+
+    { 4: seeded. PLAN.md on disk before the loop -- the resume case. }
+    L := TStringList.Create;
+    try
+      L.Text := '# Plan';
+      ForceDirectories(ExtractFileDir(ResolvePlanPath));
+      L.SaveToFile(ResolvePlanPath);
+    finally
+      L.Free;
+    end;
+    Provider := TScriptProvider.Create([TArray<string>.Create('fake_write')]);
+    FreshCfg;
+    AssertTrue(RunToolLoop(Cfg, Msgs, Loop), 'space seeded: loop succeeds');
+    AssertEqS(ToolMsg('r1c0'), 'WRITE OK',
+              'space seeded: PLAN.md on disk opens the gate from round one');
+    DeleteFile(ResolvePlanPath);
+  finally
+    Reg.Free;
+  end;
+end;
+
 begin
   TestParseMode;
   TestCycleAndName;
@@ -351,5 +592,6 @@ begin
   TestParseModeFromBody;
   TestRefusalText;
   TestDispatchGate;
+  TestSpaceGate;
   WriteLn('ok - plan/build mode tests passed');
 end.
