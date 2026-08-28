@@ -87,6 +87,24 @@ procedure SetPageGenerator(Gen: TPageGenerator);
 procedure SetTextGenerator(Gen: TTextGenerator);
 procedure SetAgentRunner(Runner: TAgentRunner);
 
+type
+  (* Answers "which agent-facing config flags are off", as a warning
+     string ('' = all on). Teams half-work confusingly without the
+     board tools and the agent tool, so `team up` names what is
+     missing instead of seeding a team that cannot reach its own
+     board. Lives behind a probe because this unit has no TConfig --
+     the gateway, which does, installs it at start. *)
+  TTeamFlagsProbe = function: string;
+
+procedure SetTeamFlagsProbe(Probe: TTeamFlagsProbe);
+
+(* One pass of the team wake loop, called by the gateway's tick thread
+   (and by tests directly): for every enabled team that is due, sweep
+   supervision, message the lead about stalls, wake agents that have
+   work, and park teams whose board has stayed done. Safe to call with
+   no runner installed -- it then only records and messages. *)
+procedure TeamTickPass;
+
 (* The origin generated apps are served from. Empty (the default) means "the
    same origin as everything else", which is the simple arrangement and the
    one where an app shares storage with the desktop page. Set by the gateway
@@ -120,6 +138,7 @@ uses
   PasClaw.JSON,
   PasClaw.Logger,           { the off-origin warning when serving an app }
   PasClaw.Agents,        { standing agents + the mailbox between them }
+  PasClaw.Teams,         { ready-made teams: templates, seeding, the tick }
   PasClaw.Workspaces,
   PasClaw.Projects.Store,
   PasClaw.Apps,
@@ -141,6 +160,7 @@ uses
 var
   GJobRunner: TJobRunner = nil;
   GAgentRunner: TAgentRunner = nil;
+  GTeamFlagsProbe: TTeamFlagsProbe = nil;
   GPageGen: TPageGenerator = nil;
   GTextGen: TTextGenerator = nil;
   GAppsOrigin: string = '';
@@ -148,6 +168,11 @@ var
 procedure SetAgentRunner(Runner: TAgentRunner);
 begin
   GAgentRunner := Runner;
+end;
+
+procedure SetTeamFlagsProbe(Probe: TTeamFlagsProbe);
+begin
+  GTeamFlagsProbe := Probe;
 end;
 
 procedure SetJobRunner(Runner: TJobRunner);
@@ -464,6 +489,7 @@ begin
   Result.PutStr('title',   T.Title);
   Result.PutStr('status',  TaskStatusToStr(T.Status));
   Result.PutStr('notes',   T.Notes);
+  Result.PutStr('assignee', T.Assignee);
   Result.PutStr('created', T.Created);
   Result.PutStr('updated', T.Updated);
   Result.PutInt('jobs',    T.JobCount);
@@ -536,12 +562,340 @@ begin
          or (Doc = '/v1/desktop/desktops')
          or (Doc = '/v1/suite')
          or HasPrefix(Doc, '/v1/agents')
+         or HasPrefix(Doc, '/v1/teams')
          or HasPrefix(Doc, '/v1/workspaces')
          or HasPrefix(Doc, '/v1/projects')
          or HasPrefix(Doc, '/v1/apps')
          or HasPrefix(Doc, '/v1/pages')
          or HasPrefix(Doc, '/apps/')
          or HasPrefix(Doc, '/pages/');
+end;
+
+
+{ ---- /v1/teams ---- }
+
+(* Ready-made teams. Same actor story as /v1/agents: this surface is
+   the OPERATOR's (and both desktop clients'), so it sits outside
+   agent_tools_enabled -- but `team up` warns when the flags the TEAM
+   itself needs are off, because a seeded team whose members cannot
+   reach the board is a support ticket, not a feature. *)
+
+function TeamJSONFor(const T: TTeamTemplate): TJsonObject;
+var
+  Arr: TJsonArray;
+  Item: TJsonObject;
+  S: TTeamState;
+  I: Integer;
+begin
+  Result := TJsonObject.Create;
+  Result.PutStr('name', T.Name);
+  Result.PutStr('title', T.Title);
+  Result.PutStr('description', T.Description);
+  Result.PutInt('wake_minutes', T.WakeMinutes);
+  Arr := TJsonArray.Create;
+  for I := 0 to High(T.Agents) do
+  begin
+    Item := TJsonObject.Create;
+    Item.PutStr('name', T.Agents[I].Name);
+    Item.PutStr('title', T.Agents[I].Title);
+    Item.PutStr('parent', T.Agents[I].Parent);
+    Item.PutStr('model', T.Agents[I].Model);
+    Arr.AddObject(Item);
+  end;
+  Result.PutArray('agents', Arr);
+  if LoadTeamState(T.Name, S) then
+  begin
+    Result.PutBool('up', True);
+    Result.PutBool('enabled', S.Enabled);
+    Result.PutStr('project', S.Project);
+  end
+  else
+    Result.PutBool('up', False);
+end;
+
+function RouteTeams(const Method, Doc, Body: string;
+  out Resp: TDesktopResponse): Boolean;
+var
+  Root, Obj, Item: TJsonObject;
+  Arr: TJsonArray;
+  T: TTeamTemplate;
+  S: TTeamState;
+  States: TTeamStateArray;
+  Created, Skipped, Leads: TStringArray;
+  Tasks: TTaskInfoArray;
+  Name_, Goal, Project, Err, Delivered, Warn, Kick: string;
+  I, J, OpenN: Integer;
+  Parked: Boolean;
+begin
+  Result := True;
+
+  if (Method = 'GET') and (Doc = '/v1/teams') then
+  begin
+    Root := TJsonObject.Create;
+    try
+      Arr := TJsonArray.Create;
+      for T in TeamTemplates do
+      begin
+        Item := TeamJSONFor(T);
+        Arr.AddObject(Item);
+      end;
+      Root.PutArray('teams', Arr);
+      ReplyJSON(Resp, 200, Root.ToJSON);
+    finally
+      Root.Free;
+    end;
+    Exit;
+  end;
+
+  if (Method = 'GET') and (Doc = '/v1/teams/status') then
+  begin
+    Root := TJsonObject.Create;
+    try
+      Arr := TJsonArray.Create;
+      States := ListTeamStates;
+      for I := 0 to High(States) do
+      begin
+        Item := TJsonObject.Create;
+        Item.PutStr('name', States[I].Name);
+        Item.PutStr('project', States[I].Project);
+        Item.PutBool('enabled', States[I].Enabled);
+        Item.PutInt('wake_minutes', States[I].WakeMinutes);
+        Item.PutStr('last_tick', States[I].LastTick);
+        if States[I].Project <> '' then
+        begin
+          Tasks := ListTasks(States[I].Project);
+          OpenN := 0;
+          for J := 0 to High(Tasks) do
+            if Tasks[J].Status <> tsDone then Inc(OpenN);
+          Item.PutInt('tasks', Length(Tasks));
+          Item.PutInt('open_tasks', OpenN);
+        end;
+        Arr.AddObject(Item);
+      end;
+      Root.PutArray('teams', Arr);
+      ReplyJSON(Resp, 200, Root.ToJSON);
+    finally
+      Root.Free;
+    end;
+    Exit;
+  end;
+
+  if (Method = 'POST') and (Doc = '/v1/teams/up') then
+  begin
+    Obj := BodyObj(Body);
+    try
+      if Obj = nil then
+      begin
+        ReplyErr(Resp, 400, 'expected a JSON body with "template"');
+        Exit;
+      end;
+      Name_   := Obj.GetStr('template', 'software-team');
+      Goal    := Trim(Obj.GetStr('goal', ''));
+      Project := Trim(Obj.GetStr('project', ''));
+      Parked  := Obj.GetBool('parked', False);
+    finally
+      Obj.Free;
+    end;
+
+    if not FindTeamTemplate(Name_, T) then
+    begin
+      ReplyErr(Resp, 404, 'no team template called "' + Name_ +
+               '" -- GET /v1/teams lists them');
+      Exit;
+    end;
+    if (Project <> '') and not ProjectExists(Project) then
+    begin
+      ReplyErr(Resp, 404, 'no project called "' + Project + '"');
+      Exit;
+    end;
+    if (Goal = '') and (Project = '') then
+    begin
+      ReplyErr(Resp, 400, 'point the team at work: pass "goal" (the team ' +
+               'plans it) or "project" (the team works that board)');
+      Exit;
+    end;
+
+    if not SeedTeam(T, Created, Skipped, Err) then
+    begin
+      ReplyErr(Resp, 400, Err);
+      Exit;
+    end;
+
+    { Goal mode: the goal's project is created NOW, so the board exists
+      before anyone runs and the kickoff can name it. }
+    if Project = '' then
+    begin
+      { The goal SENTENCE is the description; a short title off the
+        front of it is the name -- the same derivation the desktop's
+        Ask path uses, so a team and a hand-built app name things
+        alike instead of leaving a 60-character slug in every path. }
+      Project := CreateProject(GoalToTitle(Goal), '',
+                               'Team ' + T.Name + ': ' + Goal, Err);
+      if Project = '' then
+      begin
+        ReplyErr(Resp, 500, 'seeded the agents but could not create the ' +
+                 'goal project: ' + Err);
+        Exit;
+      end;
+    end;
+
+    { The state file is what the tick loop reads; parked = everything
+      except the wake. }
+    S := Default(TTeamState);
+    S.Name        := T.Name;
+    S.Project     := Project;
+    S.Goal        := Goal;
+    S.Enabled     := not Parked;
+    S.WakeMinutes := T.WakeMinutes;
+    S.WakeWho     := T.WakeWho;
+    if Length(S.WakeWho) = 0 then S.WakeWho := TeamWakeList(T);
+    if not SaveTeamState(S, Err) then
+    begin
+      ReplyErr(Resp, 500, Err);
+      Exit;
+    end;
+
+    { Kickoff to every lead, then the first run -- something visibly
+      happens within seconds of the command. }
+    Kick := TeamKickoffText(T, Goal, Project);
+    Leads := TeamLeads(T);
+    for I := 0 to High(Leads) do
+      AgentSend(Leads[I], 'operator', Kick, Delivered, Err);
+    if (not Parked) and Assigned(GAgentRunner) then
+      for I := 0 to High(Leads) do
+        if not GAgentRunner(Leads[I], '', Err) then
+          LogInfo('team %s: lead %s not started (%s) -- the tick will ' +
+                  'retry', [T.Name, Leads[I], Err]);
+
+    Warn := '';
+    if Assigned(GTeamFlagsProbe) then Warn := GTeamFlagsProbe();
+
+    Root := TJsonObject.Create;
+    try
+      Root.PutStr('team', T.Name);
+      Root.PutStr('project', Project);
+      Root.PutBool('enabled', S.Enabled);
+      Arr := TJsonArray.Create;
+      for I := 0 to High(Created) do Arr.AddStr(Created[I]);
+      Root.PutArray('created', Arr);
+      Arr := TJsonArray.Create;
+      for I := 0 to High(Skipped) do Arr.AddStr(Skipped[I]);
+      Root.PutArray('skipped', Arr);
+      if Warn <> '' then Root.PutStr('warning', Warn);
+      ReplyJSON(Resp, 200, Root.ToJSON);
+    finally
+      Root.Free;
+    end;
+    Exit;
+  end;
+
+  if (Method = 'POST') and (Doc = '/v1/teams/down') then
+  begin
+    Obj := BodyObj(Body);
+    try
+      Name_ := '';
+      if Obj <> nil then Name_ := Obj.GetStr('team', '');
+    finally
+      Obj.Free;
+    end;
+    if not LoadTeamState(Name_, S) then
+    begin
+      ReplyErr(Resp, 404, 'no team called "' + Name_ + '" is up');
+      Exit;
+    end;
+    { Parking, not deleting: agents, conversations and the board all
+      stay; only the clock stops. }
+    S.Enabled := False;
+    if not SaveTeamState(S, Err) then
+    begin
+      ReplyErr(Resp, 500, Err);
+      Exit;
+    end;
+    ReplyJSON(Resp, 200, '{ "team": "' + JsonEscape(S.Name) +
+              '", "enabled": false }');
+    Exit;
+  end;
+
+  ReplyErr(Resp, 404, 'no such teams route: ' + Method + ' ' + Doc);
+end;
+
+(* ---- the wake loop ---- *)
+
+procedure TeamTickPass;
+var
+  States: TTeamStateArray;
+  S: TTeamState;
+  T: TTeamTemplate;
+  Verdicts: TAgentVerdictArray;
+  Wakes: TWakeReasonArray;
+  Stalls: TStringArray;
+  I, J: Integer;
+  Err: string;
+begin
+  States := ListTeamStates;
+  for I := 0 to High(States) do
+  begin
+    S := States[I];
+    (* Two clocks, deliberately. The cadence throttles "still working
+       on the same task"; waiting MAIL skips it, because a colleague
+       is blocked on the answer and nothing about the delay makes the
+       answer better. *)
+    if not (TeamTickDue(S) or TeamHasWaitingMail(S)) then Continue;
+    if not FindTeamTemplate(S.Name, T) then
+    begin
+      LogInfo('team %s: template gone -- parking', [S.Name]);
+      S.Enabled := False;
+      SaveTeamState(S, Err);
+      Continue;
+    end;
+
+    { 1. Supervision, scoped to THIS TEAM's members. The operator's
+        supervise button sweeps the whole roster; a team's tick must
+        not, or a team existing at all restarts an unrelated personal
+        agent -- and goes on restarting it every cadence. }
+    Verdicts := TeamSupervise(S);
+    for J := 0 to High(Verdicts) do
+      if Verdicts[J].Action = 'restart' then
+      begin
+        NotifyParent(Verdicts[J].Name,
+          'Supervisor restarted you: ' + Verdicts[J].Why);
+        if Assigned(GAgentRunner) then
+          GAgentRunner(Verdicts[J].Name, '', Err);
+      end;
+
+    { 2. Stalls go to the lead, not back to the stuck worker. }
+    Stalls := TeamStallMessages(T, S);
+    for J := 0 to High(Stalls) do
+      LogDebug('team %s: stall %s', [S.Name, Stalls[J]]);
+
+    { 3. Wake agents that have a reason to run -- at most one run each
+        per tick; the runner's own cap bounds the total. }
+    Wakes := TeamWakeDecisions(S);
+    for J := 0 to High(Wakes) do
+      if Wakes[J].Wake and Assigned(GAgentRunner) then
+      begin
+        if GAgentRunner(Wakes[J].Agent, '', Err) then
+          LogDebug('team %s: woke %s (%s)', [S.Name, Wakes[J].Agent, Wakes[J].Why])
+        else
+          LogDebug('team %s: could not wake %s: %s', [S.Name, Wakes[J].Agent, Err]);
+      end;
+
+    { 4. A board that stays done parks the team. }
+    if TeamBoardDone(S.Project) then
+    begin
+      Inc(S.DoneTicks);
+      if S.DoneTicks >= 2 then
+      begin
+        LogInfo('team %s: board done for %d ticks -- parking', [S.Name, S.DoneTicks]);
+        S.Enabled := False;
+      end;
+    end
+    else
+      S.DoneTicks := 0;
+
+    S.LastTick := NowIsoUtc;
+    SaveTeamState(S, Err);
+  end;
 end;
 
 { ---- /v1/agents ---- }
@@ -1194,7 +1548,7 @@ var
   List: TTaskInfoArray;
   I: Integer;
   Obj: TJsonObject;
-  TaskId, Err, Title, Notes, Status, JobId, Prompt: string;
+  TaskId, Err, Title, Notes, Status, Assignee, JobId, Prompt: string;
   Info: TTaskInfo;
 begin
   Result := True;
@@ -1314,14 +1668,17 @@ begin
     begin
       Obj := BodyObj(Body);
       try
-        Title := ''; Notes := '-'; Status := '';
+        Title := ''; Notes := '-'; Status := ''; Assignee := '-';
         if Obj <> nil then
         begin
           Title  := Obj.GetStr('title', '');
           Status := Obj.GetStr('status', '');
           if Obj.Has('notes') then Notes := Obj.GetStr('notes', '');
+          { Same two-sentinel contract as notes: absent = leave alone,
+            "" = explicitly unassign. }
+          if Obj.Has('assignee') then Assignee := Obj.GetStr('assignee', '');
         end;
-        if not UpdateTask(Project, TaskId, Title, Notes, Status, Err) then
+        if not UpdateTask(Project, TaskId, Title, Notes, Status, Err, Assignee) then
         begin
           ReplyErr(Resp, 400, Err);
           Exit;
@@ -3117,6 +3474,9 @@ begin
     end;
     Exit(True);
   end;
+
+  if HasPrefix(Doc, '/v1/teams') then
+    Exit(RouteTeams(M, Doc, Body, Resp));
 
   if HasPrefix(Doc, '/v1/agents') then
     Exit(RouteAgents(M, Doc, Body, Resp));

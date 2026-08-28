@@ -61,6 +61,12 @@ type
     Title:   string;
     Status:  TTaskStatus;
     Notes:   string;
+    (* Which agent owns this task; '' = unassigned. An agent slug, set
+       by a lead through the task tool. Recorded on the board rather
+       than only said in a message, because a message is invisible to
+       the wake loop and to the other workers -- two agents grabbing
+       the same task is exactly what an unrecorded assignment allows. *)
+    Assignee: string;
     Created: string;
     Updated: string;
     JobCount: Integer;
@@ -85,6 +91,26 @@ type
   runs collapsed, trimmed. Returns '' when nothing usable survives, which
   every caller must treat as a rejection. This is the ONLY way to turn
   caller-supplied text into a path segment. }
+(* A goal sentence turned into a short project TITLE.
+
+   "A book comparison app: enter up to 4 book titles and compare them
+   side by side" is a fine goal and a terrible folder name -- it became
+   a 63-character slug that then appeared in every path, every task
+   listing and every message the team sent. The desktop's Ask path has
+   derived a short title from a brief for a long time
+   (deriveProjectTitle in desktop.html); this is the same rule where
+   the server can reach it, so `team up --goal` and the CLI name things
+   the way the desktop does.
+
+   Drops the request framing ("build me a", "I want a"), keeps the
+   first clause, and trims to a few words on a word boundary -- never
+   mid-word, and never leaving a dangling preposition. Falls back to
+   the original text when trimming would leave nothing.
+
+   Deliberately NOT a slug: it returns a human title, and
+   CreateProject slugifies it as it does any other title. *)
+function GoalToTitle(const Goal: string): string;
+
 function SanitizeName(const S: string): string;
 
 { True when S is already a safe slug (what SanitizeName would return). }
@@ -125,8 +151,11 @@ function StrToTaskStatus(const S: string; Default: TTaskStatus = tsTodo): TTaskS
 function ListTasks(const Project: string): TTaskInfoArray;
 function GetTask(const Project, TaskId: string; out Info: TTaskInfo): Boolean;
 function CreateTask(const Project, ATitle, ANotes: string; out Err: string): string;
+{ AAssignee follows the same two-sentinel contract as notes: '-' means
+  leave it alone; '' explicitly clears the assignment. }
 function UpdateTask(const Project, TaskId, ATitle, ANotes: string;
-  const AStatus: string; out Err: string): Boolean;
+  const AStatus: string; out Err: string;
+  const AAssignee: string = '-'): Boolean;
 
 { ---- jobs ---- }
 
@@ -176,6 +205,161 @@ var
   GIdLock: TCriticalSection = nil;
 
 { ------------------------------------------------------------------ names -- }
+
+
+const
+  { Words a title should never END on -- a trailing preposition or
+    article reads as a sentence that was cut off, because it was. }
+  TitleTailWords =
+    ' a an the my our your its their this that these those and or but ' +
+    'with for to of in on at from by into using is are be as some any ';
+  { Where a title may be cut when it is too long: at a joining word,
+    which is usually where the qualification starts. }
+  TitleCutWords =
+    ' with for to of in on at from by into using and or but so plus ';
+  { Comfortably inside the 64-character slug cap, leaving room for the
+    collision suffix a free-name search appends. }
+  TitleMaxChars = 48;
+
+function GoalToTitle(const Goal: string): string;
+var
+  S, Low, W: string;
+  Words: TStringList;
+  I, P: Integer;
+  Cut: Boolean;
+
+  function StripLead(const Text, Prefix: string): string;
+  begin
+    Result := Text;
+    if (Length(Text) > Length(Prefix)) and
+       SameText(Copy(Text, 1, Length(Prefix)), Prefix) then
+      Result := TrimLeft(Copy(Text, Length(Prefix) + 1, MaxInt));
+  end;
+
+  function IsIn(const List, Word_: string): Boolean;
+  var
+    Bare: string;
+    K: Integer;
+  begin
+    Bare := '';
+    for K := 1 to Length(Word_) do
+      if ((Word_[K] >= 'a') and (Word_[K] <= 'z')) or
+         ((Word_[K] >= 'A') and (Word_[K] <= 'Z')) then
+        Bare := Bare + LowerCase(Word_[K]);
+    Result := (Bare <> '') and (Pos(' ' + Bare + ' ', List) > 0);
+  end;
+
+begin
+  S := Trim(Goal);
+  if S = '' then Exit('');
+
+  { The request framing, in the order people write it. Spelled out
+    rather than looped over a literal array: the lengths differ, and
+    one wrong prefix silently eats the first letters of the thing
+    being named -- "create an invoice tracker" became "e an invoice
+    tracker" the first time round. }
+  S := StripLead(S, 'please ');
+  S := StripLead(S, 'can you ');
+  Low := S;
+  S := StripLead(S, 'make ');
+  if S = Low then S := StripLead(S, 'build ');
+  if S = Low then S := StripLead(S, 'create ');
+  if S = Low then S := StripLead(S, 'write ');
+  if S = Low then S := StripLead(S, 'design ');
+  if S = Low then S := StripLead(S, 'generate ');
+  if S = Low then S := StripLead(S, 'give ');
+  S := StripLead(S, 'me ');
+  Low := S;
+  S := StripLead(S, 'i want ');
+  if S = Low then S := StripLead(S, 'i need ');
+  if S = Low then S := StripLead(S, 'i would like ');
+  S := StripLead(S, 'a ');
+  { The leading article: "Stopwatch" beats "A Stopwatch" as a name.
+    Longest first, so "an" is not read as "a" plus a stray "n". }
+  Low := S;
+  S := StripLead(S, 'the ');
+  if S = Low then S := StripLead(S, 'an ');
+  if S = Low then S := StripLead(S, 'a ');
+
+  (* First clause only. A sentence end is punctuation followed by a
+     space or the end -- not every '.' in the text, or "a Node.js
+     dashboard" loses the word that said what it was. A colon ends the
+     preamble the same way: "Book compare: enter four URLs" is titled
+     by its first half. *)
+  for I := 1 to Length(S) do
+    if (S[I] = #10) or (S[I] = #13) or (S[I] = ':') or
+       (((S[I] = '.') or (S[I] = '!') or (S[I] = '?')) and
+        ((I = Length(S)) or (S[I + 1] = ' '))) then
+    begin
+      S := Trim(Copy(S, 1, I - 1));
+      Break;
+    end;
+
+  Words := TStringList.Create;
+  try
+    Words.Delimiter := ' ';
+    Words.StrictDelimiter := False;
+    Words.DelimitedText := S;
+    for I := Words.Count - 1 downto 0 do
+      if Trim(Words[I]) = '' then Words.Delete(I);
+    if Words.Count = 0 then Exit(Trim(Goal));
+
+    Cut := Words.Count > 6;
+    while Words.Count > 6 do Words.Delete(Words.Count - 1);
+
+    { Character budget, on a word boundary. }
+    while (Words.Count > 2) and
+          (Length(StringReplace(Words.DelimitedText, ',', ' ', [rfReplaceAll]))
+             > TitleMaxChars) do
+    begin
+      Words.Delete(Words.Count - 1);
+      Cut := True;
+    end;
+
+    { Never end on a preposition or article. }
+    while (Words.Count > 2) and IsIn(TitleTailWords, Words[Words.Count - 1]) do
+    begin
+      Words.Delete(Words.Count - 1);
+      Cut := True;
+    end;
+
+    { When something was dropped, prefer cutting at a joining word --
+      that is usually where the qualification began. }
+    if Cut then
+      for I := Words.Count - 1 downto 2 do
+        if IsIn(TitleCutWords, Words[I]) then
+        begin
+          while Words.Count > I do Words.Delete(Words.Count - 1);
+          Break;
+        end;
+
+    Result := '';
+    for I := 0 to Words.Count - 1 do
+      if Result = '' then Result := Words[I]
+                     else Result := Result + ' ' + Words[I];
+  finally
+    Words.Free;
+  end;
+
+  { Trailing punctuation from the clause split. }
+  while (Result <> '') and
+        ((Result[Length(Result)] = ',') or (Result[Length(Result)] = ';') or
+         (Result[Length(Result)] = ':')) do
+    Delete(Result, Length(Result), 1);
+  Result := Trim(Result);
+
+  { Hard bound whatever the word count -- one enormous token sails past
+    the loop above, and past the slug cap a collision suffix falls off
+    the end so every retry sanitizes to the same existing name. }
+  if Length(Result) > TitleMaxChars then
+  begin
+    Result := Copy(Result, 1, TitleMaxChars);
+    P := LastDelimiter(' ', Result);
+    if P > TitleMaxChars div 2 then Result := Trim(Copy(Result, 1, P - 1));
+  end;
+
+  if Result = '' then Result := Trim(Goal);
+end;
 
 function SanitizeName(const S: string): string;
 var
@@ -621,6 +805,7 @@ begin
       Info.Title   := Obj.GetStr('title', Info.Id);
       Info.Status  := StrToTaskStatus(Obj.GetStr('status', 'todo'));
       Info.Notes   := Obj.GetStr('notes', '');
+      Info.Assignee := Trim(Obj.GetStr('assignee', ''));
       Info.Created := Obj.GetStr('created', '');
       Info.Updated := Obj.GetStr('updated', '');
     finally
@@ -708,7 +893,8 @@ begin
 end;
 
 function UpdateTask(const Project, TaskId, ATitle, ANotes: string;
-  const AStatus: string; out Err: string): Boolean;
+  const AStatus: string; out Err: string;
+  const AAssignee: string): Boolean;
 var
   Dir, Path: string;
   Obj: TJsonObject;
@@ -750,6 +936,12 @@ begin
       Obj.PutStr('title', Trim(ATitle));
     if Trim(AStatus) <> '' then Obj.PutStr('status', LowerCase(Trim(AStatus)));
     if ANotes <> '-' then Obj.PutStr('notes', ANotes);
+    (* Canonicalised with the project slug rule, which is the same rule
+       agent names use. Storing "Dev Name" or "@dev" as typed left a task
+       that LOOKED assigned on the board while the wake loop -- which
+       compares against agent slugs -- never matched it, so the owner was
+       never woken and the task simply sat there. *)
+    if AAssignee <> '-' then Obj.PutStr('assignee', SanitizeName(AAssignee));
     Obj.PutStr('updated', NowIsoUtc);
     WriteManifest(Path, Obj);
   finally

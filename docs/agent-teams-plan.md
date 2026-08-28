@@ -1,0 +1,396 @@
+# Agent team templates
+
+The standing-agent system (roster, mailbox, runs, supervision — see
+[agents.md](./agents.md)) works, but starting a team means hand-typing
+every agent: name, role, who it reports to, then messaging each one into
+motion. That is building the org from scratch every time. This plan makes
+teams **ready-made**: pick a template, state a goal, and the team exists
+and starts working.
+
+The shape already has a precedent in this codebase: the system suite.
+`SeedSuite` installs a catalogue of apps into a workspace, idempotently,
+skipping (and reporting) anything the user already owns. A team template
+is the same contract applied to agents instead of apps.
+
+## What a template is
+
+One JSON file describing a team:
+
+```json
+{
+  "name": "software-team",
+  "title": "Software Team",
+  "description": "A six-role team that takes a goal and ships an app.",
+  "agents": [
+    { "name": "foreman",  "title": "Foreman",          "parent": "",
+      "model": "primary", "role": "…full role prompt…" },
+    { "name": "pm",       "title": "Product Manager",  "parent": "foreman",
+      "model": "fast",    "role": "…" },
+    { "name": "dev",      "title": "10x Developer",    "parent": "foreman",
+      "model": "primary", "role": "…" },
+    { "name": "ui",       "title": "UI Psychologist",  "parent": "foreman",
+      "model": "fast",    "role": "…" },
+    { "name": "qa",       "title": "Test Engineer",    "parent": "foreman",
+      "model": "fast",    "role": "…" }
+  ],
+  "kickoff": "The operator's goal: {{goal}}\nBreak it into a project with tasks on the board, assign owners by messaging them, and report back what the plan is.",
+  "wake": { "spec": "*/15 * * * *", "who": ["foreman"] }
+}
+```
+
+- `model` is a **tier**, not a model id — `primary`, `fast`, or empty to
+  inherit. Tiers resolve through the same chain the rest of the gateway
+  uses, so a template never hard-codes a model name that goes stale.
+- `kickoff` is the one message that starts the machine, sent to the
+  top-level agent(s) with `{{goal}}` filled in from what the user typed.
+- `wake` is what makes the team autonomous (below).
+
+Built-in templates compile into the binary as a catalogue (`TeamTemplates`,
+same shape as `SuiteApps`); user templates are plain files in
+`workspace/teams/` and override built-ins by name. A team you built by
+hand can become a template: export the current roster to a file, share it.
+
+## The built-in catalogue
+
+Two templates to start. `duo` — a Foreman and a 10x Developer, the
+cheapest thing that demonstrates the loop. `software-team` — the six
+roles below. Both are software templates because that is what PasClaw
+builds; the mechanism is generic and a research or writing team is just
+another file.
+
+### Role prompts: one skeleton, six characters
+
+Every role prompt has the same six sections, because the sections are
+what make a team a system instead of six chatbots:
+
+1. **Who you are** — one sentence of identity.
+2. **What you own** — the artifact this role is accountable for.
+3. **What you do NOT own — and who does.** "Requirements are the PM's;
+   the environment is the Foreman's; closing your own bug is the Test
+   Engineer's." Naming the owning peer in the role text is what stops
+   two agents doing the same work or both assuming the other has it.
+   (OpenExecutive encodes this as `out_of_scope` lines that name the
+   owning department — the single best idea in their charters.)
+4. **How you work** — a concrete loop, always the same shape: *check your
+   messages → check the board → do one increment → update the board →
+   report if something changed that your parent needs to know.*
+5. **Who you talk to** — route **work through the task board** (create
+   and update tasks) and use **messages for exceptions** (blocked, done,
+   need a decision). Never idle-chat another agent. The board is shared
+   state everyone can see in the desktop; a decision made only in a
+   message is invisible.
+6. **What done means** — tested/checked, recorded on the board, reported
+   up. Claiming done without evidence is the one prohibited move.
+
+Two style rules borrowed from OpenExecutive's role prompts, which are
+unusually good: give each role **concrete thresholds and checklists**
+rather than adjectives (their CFO carries "runway ≥ 12 months; raise at
+6–9, not on fumes" — our Test Engineer carries "empty input, wrong
+input, out of order, twice"), and end each prompt with **one
+anti-pattern line** ("You are not a corporate finance theorist" — ours:
+"The 10x is never claiming done untested, not volume").
+
+The Foreman additionally carries their three-tier autonomy rule, close
+to verbatim because it is exactly right: *small things within your
+authority — do them and report after; decisions that commit money,
+delete things, or touch the world outside the workspace — propose to
+the operator, do not wait to be asked; things you are unsure about —
+say so plainly. Silence after noticing something is the failure mode,
+not action.* And one line that prevents a failure mode they hit in
+production: **never message someone to say you will message them** —
+if the operator is the audience, just say it.
+
+The characters (full text ships in the template; these are the cores):
+
+**Foreman** *(lead, reports to the operator)* — Owns the plan. Turns the
+goal into a project and tasks, assigns each task by messaging its owner,
+reviews what comes back, and is the only agent who reports to the
+operator unprompted. On each wake: read messages, walk the board, unblock
+or reassign anything stalled, run the supervision sweep, and if the board
+is done, say so and stop waking the team.
+
+**Product Manager** — Owns what "it" is. Rewrites the goal as user
+stories with acceptance criteria *before* the developer starts; answers
+the developer's "what should happen when…" questions; cuts scope rather
+than letting tasks balloon. Every acceptance criterion is a task note the
+Test Engineer can execute.
+
+**10x Developer** — Owns the code. Ships the smallest increment that
+works, runs it before claiming anything, and reports failure as plainly
+as success. Asks the PM when requirements are ambiguous instead of
+guessing; asks the Foreman when blocked on environment. The "10x" is not
+volume — it is never having to be asked twice, never claiming done
+untested, and leaving the project so the next turn can pick it up cold.
+
+**UI Psychologist** — Owns the user's first five minutes. Opens what the
+developer built and reviews it as a first-time human: what is the very
+first thing a user sees, what do the labels assume, where does an error
+leave you stranded, what takes three clicks that should take one. Files
+each finding as a **task with a concrete rewrite** ("rename 'Execute
+query' to 'Search'"), never an essay. Cognitive load, defaults, and error
+wording are the beat; pixel taste is not.
+
+**Test Engineer** — Owns "does it actually work". Takes the PM's
+acceptance criteria and tries to break the build: empty inputs, wrong
+inputs, doing steps out of order, doing it twice. Every break becomes a
+task with exact reproduction steps. Re-tests fixed tasks before they
+close — the developer does not close their own bug.
+
+**Code Reviewer** *(optional; off in the default template to save turns)*
+— Owns maintainability. Reads the app source for the bug categories a
+runtime test misses: state that can't survive a reload, error paths that
+swallow, duplication that will drift. Files tasks, tagged so the Foreman
+can defer them below feature work.
+
+## Firing it up — two ways in
+
+The whole point is: enable the team, **point it at work, and set it
+free**. There are two kinds of "work" to point at, and both are one
+command:
+
+**A goal** — the team invents the plan:
+
+```
+pasclaw team up software-team --goal "an invoice tracker for my shop"
+```
+
+**An existing project and its task list** — the team works the board
+you already have:
+
+```
+pasclaw team up software-team --project invoice-desk
+```
+
+On the desktop: **Start → Agents → New team…** — pick a template, then
+either type a goal or pick an existing project from a dropdown. Both
+drive the same route:
+
+```
+POST /v1/teams/up   { "template": "software-team",
+                      "goal": "…"  OR  "project": "invoice-desk" }
+```
+
+which does five things, in order:
+
+1. **Seed the agents** — idempotent on slug, skip-and-report like
+   `SeedSuiteReporting`; an existing agent keeps its conversation and its
+   edited role. Templates are validated before anything is created:
+   every `parent` must name an agent in the same template, and parents
+   are seeded before their reports — the same referential-integrity
+   rules OpenExecutive enforces on its generated orgs, checked in code
+   rather than trusted.
+2. **Bind the board.** Goal mode creates the project (free-name
+   reservation, like every other build). Project mode uses the one you
+   named. Either way the team's board exists before anyone runs.
+3. **Send the kickoff** to the lead(s). Goal mode: "here is the goal,
+   plan it onto the board". Project mode: "here is the board as it
+   stands — read it, assign the open tasks, and get them moving". The
+   difference is only the message; the machinery is identical.
+4. **Start the lead's first run** so something visibly happens within
+   seconds of the command.
+5. **Install the wake cron** (below), stamped with the workspace like
+   every cron entry.
+
+### Tasks get an owner
+
+Pointing a team at a task list exposes a real gap: a task today has no
+**assignee**. The Foreman can message the developer "take T0003", but
+nothing on the board records it, the wake loop cannot see it, and two
+workers can grab the same task. So tasks grow an `assignee` field —
+empty for unassigned, an agent slug otherwise — set by the Foreman
+through the existing `task` tool, shown on the task row in the desktop
+tree and the Projects window. "Open tasks it owns" then means exactly
+what it says, for the wake loop and for each worker's own turn ("check
+the board" = list tasks where assignee is me and status is not done).
+
+`pasclaw team status` shows the roster with board progress;
+`pasclaw team down` disables the wake entries (the off switch) and leaves
+agents, conversations and board intact — parking, not deleting.
+
+## The wake loop — closing the "no scheduler" gap
+
+[agents.md](./agents.md) is explicit that nothing wakes an agent on its
+own. Templates close it with the cron scheduler that already runs in the
+gateway, via one new built-in skill:
+
+**`team-tick`** (cron-fired, per team): run the supervision sweep
+(restart dead runs — the existing `/v1/agents/supervise` logic), then for
+each agent in the wake list that is idle **and has a reason to run**
+(pending messages, or open tasks it owns), start a run. An agent with
+nothing to do is left alone — a wake loop that burns a provider call per
+agent per tick on "no news" is a bill, not a team.
+
+Bounds, stated in the template and enforced by the tick: the existing
+8-concurrent-runs cap, at most one run started per agent per tick, and a
+team whose board has been done for two ticks stops being woken (the
+Foreman's "say so and stop" from the role prompt, mechanically backed).
+
+One more scan, borrowed from OpenExecutive's nudge engine: **stall
+detection**. A task that has been `active` with no job progress for two
+ticks is not a reason to wake its owner again — it is a reason to put a
+message in the **Foreman's** mailbox naming the task and the silence.
+Waking a stuck worker repeats the stall; telling its manager is what
+unsticks it. Their whole 656-line nudge engine reduces, at our scale, to
+that one rule plus the caps above.
+
+## The team builds apps and files tasks against them
+
+Nothing new has to be invented for the team to build desktop apps —
+the pieces exist, they have just never been claimed by an agent's role
+text:
+
+- An app **is** files: `projects/<name>/app/` with an `app.json`
+  manifest (kind `html` / `python` / `fpc`, an entry file, a window
+  size). Agents have the workspace file tools, so the 10x Developer
+  can create a project, write `index.html` and `app.json`, and the app
+  exists — openable from the desktop, no browser needed during the
+  build. The Developer's role text carries this recipe explicitly,
+  including `pasclaw.js` for apps that need saved state.
+- Tasks against an app are just tasks: the PM and Foreman create them
+  with the `task` tool; the UI Psychologist and Test Engineer already
+  file their findings as tasks against the project. "Add tasks to an
+  app" and "add tasks to a project" are the same sentence.
+- The `desktop` tool's `build_app` is the wrong tool for a worker: it
+  asks a **connected browser** to run the build, so it does nothing on
+  a headless gateway. The role texts draw the line: workers build by
+  writing files (works always); the Foreman uses the `desktop` tool
+  only for the *showing* — opening the finished app on the operator's
+  screen.
+
+One wiring consequence: the board tools (`project`/`task`) sit behind
+`desktop_tools_enabled` and the messaging tool behind
+`agent_tools_enabled`, both off by default. A team with either flag off
+half-works in confusing ways, so `team up` checks both and says
+exactly what is missing and how to turn it on, instead of seeding a
+team that cannot reach its own board.
+
+## Watching the team work — the supervisor runs the desktop
+
+Three facts make this nearly free, and one gap makes it currently
+disappointing:
+
+- An agent's chat window already repaints on `agent` events.
+- Research pages already narrate every tool call onto the live desktop
+  event feed (`page-progress` — the progress dialog is built on it).
+- **Agents already hold the `desktop` tool**: an agent turn runs with
+  the full registry, so the Foreman can tile windows, open apps and
+  open project chats today. Nothing told it to.
+
+The gap: an agent run publishes only *started* and *finished*, and the
+agent's conversation is persisted **only when the turn ends** — so a
+chat window that dutifully repaints mid-run re-reads a session that has
+not changed yet. From the operator's chair: you tell an agent to do
+something and its window sits frozen until the whole run is over. That
+is the reported experience, and it is mechanical, not configuration.
+
+Four pieces close it:
+
+1. **Narrate agent runs.** Wire the same `OnToolCall` hook research
+   uses into `RunAgentTurn`, publishing `agent-activity` events (agent
+   name, tool, one-line detail) on the existing bus. No new transport.
+2. **Show the narration.** The agent chat window appends live activity
+   lines (`⏺ write_file projects/invoice-desk/app/index.html`) as those
+   events arrive, then swaps to the real transcript when the
+   run-finished event lands. The roster ticks the same events, so
+   "working" rows visibly *do* things.
+3. **One new desktop action: `open_agent {name}`** — opens that agent's
+   chat window, same family as `open_chat {project}`. This is the piece
+   that lets the supervisor put the team on screen.
+4. **Tell the Foreman it owns the screen.** One paragraph in its role
+   prompt: *when you assign work, `open_agent` the worker and `tile`;
+   when the board is done, `minimize_all` and report.* The operator
+   then literally watches windows open as work is handed out — the
+   template encodes the theatre, the mechanism already exists.
+
+Later, if narration is not enough: persist the agent session
+incrementally (per loop iteration) so mid-run repaints show real
+transcript, not just activity lines. Narration first — it is the cheap
+90% and needs no storage change.
+
+## Desktop
+
+Launching from the CLI is fine for an operator at a terminal; the
+desktop needs its own two ways in, because the desktop is where the
+team will be watched:
+
+**Clicking:** a **New team…** button in the Agents window — a picker
+(template list, goal box, or existing-project dropdown), not a chain of
+prompt() dialogs — plus a **New Team…** entry in the Start menu so it
+does not hide behind the roster. Both drive the same `/v1/teams/up`
+route the CLI uses.
+
+**Asking:** typing *"spin up a software team to build an invoice
+tracker"* into Ask PasClaw must work. That means one new action in the
+`desktop` tool's vocabulary — `team_up {template, brief}` (template
+optional, defaulting to `software-team`) — alongside `build_app` and
+friends, and one line in the shell prompt's routing table so the model
+knows a request for a *team* is not a request for an *app*. The desktop
+client executes it by calling the same route, then opens the roster so
+the launch is immediately visible. `team_up` is target-gated like
+`build_app`: with two browser tabs open, one team, not two.
+
+The Agents window also grows what the first audit found lacking:
+
+- **Role text becomes visible and editable** — double-click a roster row
+  already opens the conversation; the row gains an Edit that opens the
+  role. Editing an agent's role mid-life is supported by the runtime
+  (roles are re-read every turn); the UI just never offered it.
+- A team badge on the roster groups members under their template name,
+  with the wake state (`waking every 15m` / `parked`) shown where the
+  operator can see why agents keep starting.
+
+## Phases
+
+**Phase 1 — The templates exist.** One PR.
+- `TTeamTemplate` + the built-in catalogue (`duo`, `software-team`)
+  with the six role prompts written in full.
+- Seeding: `POST /v1/teams` (list) and `POST /v1/teams/up` (create the
+  agents; no kickoff yet), `pasclaw team list` / `team up`. Idempotent,
+  skip-and-report, parent references validated, parents seeded first.
+- Tasks gain the `assignee` field: store, `task` tool, desktop rows.
+- Tests pin idempotency, skip-reporting, and template validation.
+- *After this phase:* one command builds the whole org chart, visible
+  in the Agents roster. Nothing runs on its own yet.
+
+**Phase 2 — The team starts working.** One PR.
+- Both entry modes: `--goal "…"` (creates the project) and
+  `--project <name>` (works the board you already have).
+- The kickoff message to the lead, and the lead's first run starting
+  immediately.
+- The `team-tick` cron skill: supervision sweep, wake only agents with
+  pending messages or open assigned tasks, stall messages to the
+  Foreman, all the caps.
+- `pasclaw team status` and `team down` (park the crons, keep
+  everything else).
+- *After this phase:* point a team at a task list, walk away, and the
+  board moves.
+
+**Phase 3 — You can watch it.** One PR, small.
+- Agent runs narrate onto the live event feed (`agent-activity`).
+- The agent chat window shows tool calls live instead of freezing
+  until the run ends; the roster ticks.
+- The `open_agent` desktop action, and the Foreman's screen-owning
+  paragraph: assigning work opens the worker's window and tiles.
+- *After this phase:* the desktop is mission control — windows open
+  and update as the team works.
+
+**Phase 4 — Launch it from inside the desktop.** One PR, small.
+- **New team…** picker in the Agents window and the Start menu.
+- The `team_up` action in the desktop tool, so typing "spin up a
+  software team to build X" into Ask PasClaw launches one.
+- *After this phase:* all three doors — click, ask, CLI — drive the
+  same route.
+
+**Phase 5 — Make your own templates.** One PR, small.
+- `workspace/teams/` user template files; a user template overrides a
+  built-in of the same name.
+- `pasclaw team export <file>`: turn the roster you hand-built (or
+  hand-tuned) into a shareable template.
+- If a template was authored by the model rather than a person, it
+  seeds **parked** — agents and roles but no wake cron — until the
+  operator enables it. (OpenExecutive's rule for generated orgs:
+  "rich but inert, nothing that reaches outward." The right default
+  for anything a model wrote.)
+
+Order matters for 1 → 2; phases 3–5 are independent of each other
+after 2 and can land in any order.

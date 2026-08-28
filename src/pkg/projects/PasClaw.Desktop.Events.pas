@@ -138,6 +138,14 @@ procedure PublishTurnQueued(const SessionId, ClientId: string);
    moment it was queued. The roster re-reads the agent instead. *)
 procedure PublishAgent(const Name: string);
 
+(* One line of live narration from inside an agent's run -- the tool it
+   is calling and a short detail. This is what keeps an agent's chat
+   window alive WHILE it works: the session is only persisted when the
+   turn ends, so without these frames a watching window re-reads an
+   unchanged file until the run is over and appears frozen. Same
+   pattern as page-progress, same bus. *)
+procedure PublishAgentActivity(const Name, Tool, Detail: string);
+
 implementation
 
 uses
@@ -410,6 +418,13 @@ end;
 procedure PublishAgent(const Name: string);
 begin
   PublishRaw('{"type":"agent","name":"' + Esc(Name) + '"}');
+end;
+
+procedure PublishAgentActivity(const Name, Tool, Detail: string);
+begin
+  PublishRaw('{"type":"agent-activity","name":"' + Esc(Name) +
+             '","tool":"' + Esc(Tool) +
+             '","detail":"' + Esc(Copy(Detail, 1, 160)) + '"}');
 end;
 
 initialization

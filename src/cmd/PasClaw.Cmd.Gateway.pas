@@ -351,6 +351,9 @@ begin
         Its own flag: managing the board and creating colleagues are
         different powers to hand a model. }
       if Cfg.AgentToolsEnabled then RegisterAgentTools(Reg);
+      { Same flag gates the desktop tool's team_up: seeding standing
+        agents is agent-tool territory, not window management. }
+      SetTeamActionsAllowed(Cfg.AgentToolsEnabled);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
       SetDBConfigFromJSON(Cfg.DatabaseJSON);   { db_* connections (inert if no "database" section) }

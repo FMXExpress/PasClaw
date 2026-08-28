@@ -1987,6 +1987,7 @@ const MENU = [
   { label: "Browser",           icon: "globe",  fn: () => openBrowser() },
   { label: "Library",           icon: "brain",  fn: openLibrary },
   { label: "Agents",            icon: "brain",  fn: openAgents },
+  { label: "New Team...",       icon: "brain",  fn: () => newTeam() },
   { label: "File Manager",      icon: "folder", fn: () => openFiles() },
   { sep: true },
   { label: "Switch Workspace...", icon: "disk", fn: pickWorkspace },
@@ -2544,6 +2545,32 @@ const SHELL_ACTIONS = {
     help: 'open_chat {"project":"<slug>"} -- open a project\'s conversation',
     run: a => { openChat(a.project); return "opened chat for " + a.project; },
   },
+  open_agent: {
+    help: 'open_agent {"agent":"<slug>"} -- open a standing agent\'s chat ' +
+          "window (the supervisor uses this to put the team on screen)",
+    run: async a => {
+      const j = await api("/v1/agents/" + encodeURIComponent(a.agent || ""));
+      await openAgentChat(j);
+      return "opened " + j.name;
+    },
+  },
+  team_up: {
+    help: 'team_up {"template":"<name>","brief":"<goal>"} or ' +
+          '{"template":"<name>","project":"<slug>"} -- fire up a ready-made ' +
+          'agent team on a goal or an existing task board. template defaults ' +
+          'to software-team.',
+    /* Effectful like build_app: with two tabs open, one team, not two --
+       the server names the executor and only the target runs this. */
+    run: async a => {
+      const body = { template: a.template || "software-team" };
+      if (a.project) body.project = a.project; else body.goal = a.brief || a.title || "";
+      const j = await api("/v1/teams/up", { method: "POST", body });
+      openAgents();
+      let msg = "team " + j.team + " is up on " + j.project;
+      if (j.warning) msg += " -- WARNING: " + j.warning;
+      return msg;
+    },
+  },
   build_app: {
     help: 'build_app {"title":"<name>","brief":"<what to build>"} -- ' +
           "start a NEW project and set it building. Emit one per app when " +
@@ -2737,6 +2764,9 @@ function shellPrompt() {
     "    -> edit_app with that project's slug. Do NOT build_app: that",
     "       would make a second copy instead of changing theirs.",
     '  - a NEW app ("build me a stopwatch") -> build_app',
+    '  - a TEAM ("spin up a software team to build X", "put a team on',
+    '    this project") -> team_up. A team is standing agents that keep',
+    "    working on their own; an app is a thing. Do not confuse them.",
     '  - a question ("what is a pomodoro timer", "compare X and Y")',
     "    -> open_page, kind research when it wants depth or sources",
     "  - anything conversational -> just answer, no tool at all",
@@ -2767,7 +2797,7 @@ function shellPrompt() {
    project, start a turn, write a page. Every other action only moves
    pixels on the screen it runs on, so running it on all of them is
    right. These must run exactly once, whoever is watching. */
-const EFFECTFUL = new Set(["build_app", "edit_app", "open_page"]);
+const EFFECTFUL = new Set(["build_app", "edit_app", "open_page", "team_up"]);
 
 async function runShellActions(block, say, opts) {
   const list = Array.isArray(block.actions) ? block.actions : [];
@@ -3393,7 +3423,8 @@ function paintTree() {
       tr.style.paddingLeft = "18px";
       const tt = el("span", "twist", t.jobs ? (t.__open ? "▼" : "▶") : "");
       tr.appendChild(tt);
-      const lbl = el("span", "st-" + t.status, t.id + "  " + t.title);
+      const lbl = el("span", "st-" + t.status,
+        t.id + "  " + t.title + (t.assignee ? "  @" + t.assignee : ""));
       lbl.style.flex = "1 1 auto";
       tr.appendChild(lbl);
       tr.title = t.notes || "";
@@ -5541,10 +5572,12 @@ async function openAgents() {
 
   const bar = el("div");
   bar.style.cssText = "display:flex;gap:4px;padding:3px;align-items:center";
+  const team = el("button", "btn", "New team...");
+  team.addEventListener("click", () => newTeam());
   const add = el("button", "btn", "New agent...");
   const sup = el("button", "btn", "Supervise");
   sup.title = "Check every agent and restart the ones that stopped";
-  bar.appendChild(add); bar.appendChild(sup);
+  bar.appendChild(team); bar.appendChild(add); bar.appendChild(sup);
   const status = el("span", "muted");
   status.style.marginLeft = "6px";
   bar.appendChild(status);
@@ -5667,6 +5700,13 @@ async function openAgents() {
   if (!w.__agentsWired) {
     w.__agentsWired = true;
     onDesktopEvent("agent", () => { if (WINS.get("agents")) paint(); });
+    /* The narration ticker: a working agent's current tool call shows
+       in the status line, so "working" visibly DOES something. */
+    onDesktopEvent("agent-activity", ev => {
+      if (!ev || !WINS.get("agents")) return;
+      status.textContent = ev.name + ": " + ev.tool +
+        (ev.detail ? " " + ev.detail.slice(0, 48) : "");
+    });
   }
   await paint();
   return w;
@@ -5740,8 +5780,97 @@ async function openAgentChat(a) {
   onDesktopEvent("agent", ev => {
     if (ev && ev.name === a.name && WINS.get("agentchat:" + a.name)) paint();
   });
+  /* Live narration while the agent works. The session file is only
+     written when the turn ENDS, so without these frames this window
+     re-reads an unchanged file and appears frozen until the run is
+     over -- the exact complaint that led here. The lines are ephemeral
+     by design: the run-finished `agent` event repaints from the real
+     transcript and they are replaced by it. */
+  onDesktopEvent("agent-activity", ev => {
+    if (!ev || ev.name !== a.name) return;
+    if (!WINS.get("agentchat:" + a.name)) return;
+    const row = el("div", "muted",
+      "\u23FA " + ev.tool + (ev.detail ? "(" + ev.detail + ")" : "()"));
+    row.style.cssText = "padding:1px 6px;font-size:11px";
+    log.appendChild(row);
+    log.scrollTop = log.scrollHeight;
+  });
   await paint();
   return w;
+}
+
+/* ---- New team...: the picker that replaces nothing and asks twice ---- */
+
+async function newTeam() {
+  let teams = [];
+  try { teams = (await api("/v1/teams")).teams || []; } catch (e) {
+    alert(e.message); return;
+  }
+  if (!teams.length) { alert("No team templates available."); return; }
+
+  const w = createWindow({ key: "newteam", title: "New Team", icon: "brain",
+                           width: 420, height: 300 });
+  if (w.__wired) { restoreWindow(w); focusWindow(w); return; }
+  w.__wired = true;
+
+  const wrap = el("div");
+  wrap.style.cssText = "display:flex;flex-direction:column;gap:6px;padding:8px";
+
+  const sel = el("select", "fld");
+  teams.forEach(t => {
+    const o = el("option", null,
+      t.title + " -- " + (t.agents || []).length + " agent(s)");
+    o.value = t.name;
+    sel.appendChild(o);
+  });
+  wrap.appendChild(el("div", "muted", "Template"));
+  wrap.appendChild(sel);
+
+  const goal = el("textarea", "fld");
+  goal.rows = 3;
+  goal.placeholder = "What should the team work on?";
+  wrap.appendChild(el("div", "muted",
+    "Goal (the team plans it) -- or pick an existing project below"));
+  wrap.appendChild(goal);
+
+  const proj = el("select", "fld");
+  proj.appendChild(el("option", null, "(new project from the goal)"));
+  try {
+    ((await api("/v1/projects")).projects || []).forEach(pr => {
+      const o = el("option", null, pr.name);
+      o.value = pr.name;
+      proj.appendChild(o);
+    });
+  } catch {}
+  wrap.appendChild(proj);
+
+  const row = el("div");
+  row.style.cssText = "display:flex;gap:6px;justify-content:flex-end";
+  const go = el("button", "btn", "Fire it up");
+  const status = el("span", "muted");
+  row.appendChild(status); row.appendChild(go);
+  wrap.appendChild(row);
+  w.body.appendChild(wrap);
+
+  go.addEventListener("click", async () => {
+    const body = { template: sel.value };
+    if (proj.selectedIndex > 0) body.project = proj.value;
+    else {
+      if (!goal.value.trim()) { status.textContent = "give it a goal"; return; }
+      body.goal = goal.value.trim();
+    }
+    go.disabled = true;
+    status.textContent = "seeding...";
+    try {
+      const j = await api("/v1/teams/up", { method: "POST", body });
+      closeWindow(w);
+      openAgents();
+      if (j.warning) alert("The team is up, but: " + j.warning);
+    } catch (e) {
+      status.textContent = e.message;
+      go.disabled = false;
+    }
+  });
 }
 
 /* ==========================================================================

@@ -30,6 +30,8 @@ The main `README.md` at the repo root is the landing page. These docs go deeper.
 - [Desktop](./desktop.md) — the desktop client: workspaces, projects/tasks/jobs, the app factory, answer pages, and the system suite.
 - [Workspaces plan](./workspaces-plan.md) — making a workspace a real isolation boundary, and putting virtual desktops inside it.
 - [Auto-router upgrade plan](./autoroute-upgrade-plan.md) — typed reasons, circuits, one cheap tier, and an offline tuning loop, borrowed at scale from experiential.
+- [Agent teams](./teams.md) — ready-made team templates: pick one, point it at a goal or an existing project's task list, and it starts working.
+- [Agent teams plan](./agent-teams-plan.md) — the design story behind them.
 - [Chat channels](./channels.md) — Telegram, Discord, Slack, Teams, LINE, WhatsApp, Matrix, IRC, Email.
 - [Embedding in your own app](./embedding.md) — `TPasClawAgent` / `TPasClawServer` `TComponent`s for VCL/FMX/CLI binaries.
 
