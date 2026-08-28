@@ -289,11 +289,14 @@ begin
     else
     begin
       for I := 0 to High(Told) do
-        PrintLn('  asked to wind down: ' + Told[I]);
-      PrintLn('Those are mid-turn and were TOLD to stop, not killed: a turn ' +
-              'cut between a file write and the board update leaves exactly ' +
-              'the mess a stop is meant to avoid. They read the note between ' +
-              'tool calls.');
+        PrintLn('  winding down: ' + Told[I]);
+      PrintLn('Those are mid-turn. Each one stops at its next safe point ' +
+              '-- between tool calls, never in the middle of one -- so a ' +
+              'file write and the board update that goes with it are not ' +
+              'left half-finished. They also get a note asking them to ' +
+              'write down where they got to first, which is the tidier ' +
+              'ending when the agent is still answering; either way the ' +
+              'turn ends.');
     end;
     Exit;
   end;

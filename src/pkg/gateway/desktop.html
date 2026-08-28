@@ -5577,13 +5577,13 @@ async function openAgents() {
   const add = el("button", "btn", "New agent...");
   const sup = el("button", "btn", "Supervise");
   sup.title = "Check every agent and restart the ones that stopped";
-  /* The brake. Labelled by what it DOES: it stops new turns starting.
-     Work already in flight is asked to wind down, not killed -- a turn
-     cut between a file write and the board update leaves exactly the
-     half-finished state a stop is meant to avoid. */
+  /* The brake. It stops new turns starting AND ends the ones already
+     running -- each at its next safe point, between tool calls rather
+     than in the middle of one, so a file write and the board update
+     that belongs with it are never left half-finished. */
   const brake = el("button", "btn", "Pause all");
-  brake.title = "Stop starting new turns, and ask whoever is working to " +
-                "finish their step and stop";
+  brake.title = "Stop everything: no new turns start, and whoever is " +
+                "working stops at their next safe point";
   brake.addEventListener("click", async () => {
     let now = false;
     try { now = (await api("/v1/agents/pause")).paused; } catch {}
@@ -5592,7 +5592,7 @@ async function openAgents() {
                           { method: "POST", body: { paused: !now } });
       status.textContent = j.paused
         ? (j.told_to_wind_down || []).length
-          ? "paused -- asked to wind down: " + j.told_to_wind_down.join(", ")
+          ? "paused -- stopping: " + j.told_to_wind_down.join(", ")
           : "paused -- nothing was working"
         : "resumed";
       paint();
@@ -5619,8 +5619,8 @@ async function openAgents() {
       brake.title = p.paused
         ? "Paused" + (p.note ? ": " + p.note : "") +
           " -- no new turns are starting. Click to resume."
-        : "Stop starting new turns, and ask whoever is working to " +
-          "finish their step and stop";
+        : "Stop everything: no new turns start, and whoever is " +
+          "working stops at their next safe point";
     } catch {}
     let rows = [];
     try { rows = (await api("/v1/agents")).agents || []; }

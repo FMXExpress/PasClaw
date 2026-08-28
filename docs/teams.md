@@ -120,25 +120,36 @@ wakes the reviewer to look at a project with nothing in it yet.
 pasclaw team status        # who is up, their board, last tick
 pasclaw team down duo      # park it: agents, conversations and board stay
 pasclaw team rm duo        # retire it: the agents go, conversations stay
-pasclaw team pause "lunch" # stop starting turns; tell whoever is working to wind down
+pasclaw team pause "lunch" # stop everything, running turns included
 pasclaw team resume
 ```
 
 ## Stopping and removing
 
-**Pause is the brake**, and it is honest about what it can do:
+**Pause is the brake**, and it stops the system rather than asking it to:
 
 - **No new turns start** — the tick, the run route and `team up` all
   check it. `POST /v1/agents/pause {"paused":true}`, the **Pause all**
   button in the roster, or `pasclaw team pause`.
-- **Work already in flight is TOLD, not killed.** The tool loop has no
-  cancellation hook, and a turn cut between a file write and the board
-  update leaves exactly the half-finished state someone hitting stop is
-  trying to avoid. Every busy agent instead gets a note in its steering
-  queue — which it reads *between tool calls*, not at the end of the
-  turn — asking it to finish the step it is on, record where it got to,
-  and stop. The reply names who was told, so the answer is "these three
-  were asked to stop", never a claim that everything halted at once.
+- **Turns already running end too**, at their next *safe boundary*. The
+  tool loop asks whether it has been stopped at exactly two points:
+  before it calls the model, and after a round's tool calls have all
+  come back and landed in the history. Both are moments where the turn's
+  state is consistent, which is the whole design — a turn cut between a
+  file write and the board update that belongs with it leaves exactly
+  the half-finished mess someone hitting stop is trying to avoid. What
+  this cannot interrupt is a single provider call already on the wire;
+  that is what the stream idle timeout is for. What it *can* stop is the
+  thing that actually runs away: a turn grinding through its whole
+  iteration budget.
+- **Whatever the turn did is kept.** A stopped turn still persists its
+  transcript and still ends with a note in the conversation saying it
+  was stopped, where it stopped, and what it had already done — so the
+  agent's next turn picks up instead of starting the same work again.
+- **Busy agents also get a note**, pushed into their steering queue and
+  read between tool calls. That is the courtesy on top, not the
+  mechanism: an agent that reads it gets to write down where it had got
+  to before the loop lets it go. It stops either way.
 - **The pause is on disk.** A gateway restart cannot quietly resume a
   system the operator stopped — of the ways this could fail, that is
   the one that would matter most.

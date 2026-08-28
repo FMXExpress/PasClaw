@@ -40,6 +40,25 @@ type
     OnText:        procedure(const S: string) of object;   { streaming-ish stdout }
     OnToolCall:    procedure(const Name, ArgsJSON: string) of object;
     OnToolResult:  procedure(const Name, ResultText, Err: string) of object;
+    (* Cooperative cancellation. Asked at every SAFE BOUNDARY -- before
+       a provider call, and after a tool batch has fully joined -- and
+       never anywhere else.
+
+       Deliberately cooperative rather than an abort. The points where
+       this is consulted are the points where the turn's state is
+       consistent: the history is coherent, no tool is half-written, no
+       batch is half-joined. Killing between a file write and the board
+       update would leave exactly the mess an operator hitting stop is
+       trying to avoid, so the loop stops at the next boundary instead
+       and hands back everything it has -- FinalMessages included, so
+       the caller persists a real transcript rather than losing the
+       work done so far.
+
+       What it therefore CANNOT interrupt is a single provider call
+       already on the wire; that is what the stream idle timeout is
+       for. What it CAN stop is the thing that actually runs away: a
+       loop grinding through its iteration budget. *)
+    ShouldCancel:  function: Boolean of object;
     (* Compaction: when the running history (system prompt included)
        estimates above CompactOpts.ThresholdTokens, summarise the older
        portion via Provider.Chat and fold it into LiveOptions.SystemPrompt
@@ -236,6 +255,15 @@ type
        the limit -- reply to continue" notice (FormatMaxIterNotice) instead
        of presenting the partial output as a completed answer. *)
     HitMaxIterations: Boolean;
+    (* Set True when ShouldCancel asked the loop to stop. Distinct from
+       HitMaxIterations: that one means "unfinished, probably needs
+       another turn", this one means "an operator stopped it", and a
+       caller should say so rather than presenting partial output as a
+       finished answer OR as a limit it can retry past. *)
+    Cancelled: Boolean;
+    (* Where it stopped, for the notice: 'before the model call' or
+       'after N tool call(s)'. *)
+    CancelledAt: string;
     (* Distinct tool names from the final (never-fed-back) model response
        when HitMaxIterations -- the "what it was doing when it stopped"
        detail for the notice. Empty otherwise. *)
@@ -276,6 +304,22 @@ function LoopResultText(const Loop: TToolLoopResult): string;
           re-run instead of promising a continue that would start fresh. }
 function FormatMaxIterNotice(const Loop: TToolLoopResult; MaxIter: Integer;
                             const HowToRaise: string; Resumable: Boolean): string;
+
+{ The same idea for a loop an operator stopped: the notice to append when
+  Cfg.ShouldCancel said yes, and '' when it did not (so callers can append
+  it unconditionally, like the one above).
+
+  Kept apart from the max-iteration notice on purpose. Both stops leave the
+  work unfinished, but they mean opposite things to whoever reads them: the
+  cap says "it needed more room, give it more", and this says "you stopped
+  it, nothing is wrong". Telling an operator who just hit pause to raise a
+  limit would be nonsense, and dressing a deliberate stop up as a failure
+  sends people looking for a bug that is not there.
+
+  HowToResume is the surface's own wording for starting again (e.g.
+  '`pasclaw team resume`'), or '' to leave the clause off. }
+function FormatCancelledNotice(const Loop: TToolLoopResult;
+                               const Why, HowToResume: string): string;
 
 { Shrink a tool-call's JSON arguments for REPLAY in history: any top-level
   string value longer than Threshold bytes is replaced with a short "<elided
@@ -1046,6 +1090,30 @@ begin
   end;
 end;
 
+function FormatCancelledNotice(const Loop: TToolLoopResult;
+                               const Why, HowToResume: string): string;
+begin
+  Result := '';
+  if not Loop.Cancelled then Exit;
+  Result := '[stopped by the operator';
+  if Trim(Why) <> '' then Result := Result + ': ' + Trim(Why);
+  Result := Result + ']';
+  if Loop.CancelledAt <> '' then
+    Result := Result + sLineBreak + 'It stopped ' + Loop.CancelledAt +
+              ', so nothing was left half-done.';
+  { Same ledger, same reason as above: whatever DID happen before the stop
+    is real work, and a resumed turn that redoes it is worse than one that
+    never started. The difference is only in the framing -- this one is
+    reporting to a person, not instructing a model mid-task. }
+  if Loop.LedgerSummary <> '' then
+    Result := Result + sLineBreak +
+      'Done before the stop -- do NOT redo any of it when continuing:' +
+      sLineBreak + Loop.LedgerSummary;
+  if Trim(HowToResume) <> '' then
+    Result := Result + sLineBreak + 'Pick it up again with ' +
+              Trim(HowToResume) + '.';
+end;
+
 { ===== Progress ledger (goal anchor + resume summary) ====================
 
   Tallies what the model has ACTUALLY done during one RunToolLoop call.
@@ -1522,12 +1590,21 @@ var
   Truncated: Boolean;
   TurnSpan, ChatSpan, ToolSpan: TOtelSpan;
 begin
-  Loop.Content    := '';
-  Loop.Iterations := 0;
-  Loop.TotalUsage := Default(TUsageInfo);
-  Loop.Truncations         := 0;
-  Loop.TruncatedBytesSaved := 0;
-  Loop.ToolCallsDispatched := 0;
+  (* Clear the WHOLE result, not the handful of fields this used to
+     name. `out` finalises the managed fields and leaves the rest
+     holding whatever the caller's variable held -- and callers reuse
+     one variable across turns, so the flags were not garbage, they
+     were the LAST turn's answer.
+
+     That was a live bug, found by the cancellation tests below. The
+     interactive agent declares Loop once and runs every prompt through
+     it. HitMaxIterations is set when a turn runs out of iterations and
+     cleared on no path a normal turn takes -- so one capped turn made
+     the CLI print "stopped at the tool-call limit -- reply continue" on
+     every later turn in that session, including turns that answered
+     perfectly. Cancelled would have inherited the same fault the day it
+     shipped. One assignment, and every field starts each turn honest. *)
+  Loop := Default(TToolLoopResult);
 
   if Cfg.Provider = nil then Exit(False);
 
@@ -1607,10 +1684,36 @@ begin
     hitting. Sub-minute drift while the model works is below the
     resolution this is used at. }
   TurnClock := NowStampWithZone;
+  { Explicit, because a cancel on the very first boundary reads Resp
+    before any provider call has filled it. FPC zeroes the managed
+    fields of a local record and leaves the rest alone, so this was
+    only accidentally safe; say it instead of relying on it. }
+  Resp := Default(TLLMResponse);
   while Iter < Cfg.MaxIterations do
   begin
     Inc(Iter);
     LogDebug('toolloop iteration %d / %d', [Iter, Cfg.MaxIterations]);
+
+    (* Boundary 1: before the provider call. The history is coherent
+       here and nothing is in flight, so stopping costs only the turn
+       that has not started. This is the check that catches a loop
+       grinding through its iteration budget. *)
+    if Assigned(Cfg.ShouldCancel) and Cfg.ShouldCancel() then
+    begin
+      LogInfo('toolloop: cancelled before iteration %d', [Iter]);
+      Loop.Content     := Resp.Content;
+      Loop.Iterations  := Iter - 1;
+      Loop.Cancelled   := True;
+      Loop.CancelledAt := 'before the model call';
+      Loop.FinalMessages     := Hist;
+      Loop.FinalSystemPrompt := LiveOptions.SystemPrompt;
+      { Same tally the max-iteration stop hands back, and needed here for
+        the same reason: a stopped turn that is later resumed must not
+        redo the files it already wrote. }
+      if not Cfg.DisableProgressLedger then
+        Loop.LedgerSummary := FormatLedgerSummary(Ledger);
+      Exit(True);
+    end;
 
     { Pre-call compaction. NeedsCompact is a cheap token estimate;
       only when it trips do we pay for a summariser round.
@@ -2445,6 +2548,27 @@ begin
       a max-iter summary) see them. }
     if not Cfg.DisableProgressLedger then
       LedgerHarvest(Ledger, Dispatches, Cfg.Registry, Cfg.Mode = pmPlan);
+
+    (* Boundary 2: the tool results are IN the history. Every worker
+       has joined, every result is appended, the ledger has them. This
+       is the other moment the turn is consistent -- and the one that
+       matters for "stop it now", because the expensive thing a runaway
+       turn does is start another round after its tools came back. *)
+    if Assigned(Cfg.ShouldCancel) and Cfg.ShouldCancel() then
+    begin
+      LogInfo('toolloop: cancelled after iteration %d (%d tool call(s))',
+              [Iter, Integer(Loop.ToolCallsDispatched)]);
+      Loop.Content     := Resp.Content;
+      Loop.Iterations  := Iter;
+      Loop.Cancelled   := True;
+      Loop.CancelledAt := Format('after %d tool call(s)',
+                                 [Integer(Loop.ToolCallsDispatched)]);
+      Loop.FinalMessages     := Hist;
+      Loop.FinalSystemPrompt := LiveOptions.SystemPrompt;
+      if not Cfg.DisableProgressLedger then
+        Loop.LedgerSummary := FormatLedgerSummary(Ledger);
+      Exit(True);
+    end;
   end;
 
   { Max iterations exhausted; return whatever we last got. The loop only

@@ -1084,9 +1084,10 @@ begin
       for I := 0 to High(Told) do Arr.AddStr(Told[I]);
       Root.PutArray('told_to_wind_down', Arr);
       if Paused then
-        Root.PutStr('note', 'no new turns will start. Agents already ' +
-                    'working were asked to finish the step they are on ' +
-                    'and stop; they are not killed mid-write.')
+        Root.PutStr('note', 'no new turns will start, and turns already ' +
+                    'running stop at their next safe point -- between ' +
+                    'tool calls, never mid-write. Whoever was working is ' +
+                    'listed in told_to_wind_down.')
       else
         Root.PutStr('note', 'resumed');
       ReplyJSON(Resp, 200, Root.ToJSON);

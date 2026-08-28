@@ -233,6 +233,29 @@ type
        turn is over. *)
     function RunAgentTurn(const AgentName, Prompt: string;
                           out Reply, Err: string): Boolean;
+    (* The operator's brake, asked by the tool loop at every safe
+       boundary of an agent turn. A method rather than a plain function
+       because the loop's hook is a method pointer, and on the server
+       rather than on a per-run object because the answer -- "has the
+       operator paused the agent system?" -- is the same for every run.
+
+       This is what makes `pasclaw team pause` (and the desktop's Pause
+       all) an actual stop rather than a request. The wind-down note in
+       SetAgentsPaused still goes out and is still the nicer outcome --
+       an agent that reads it writes down where it got to before it
+       stops -- but a turn that never calls another tool would never
+       read it, and that is exactly the runaway an operator hits pause
+       for. Every turn now ends at its next boundary whether the model
+       cooperates or not.
+
+       Reads paused.json each time it is asked, which sounds wasteful
+       and is not: boundaries are one per loop iteration and an
+       iteration costs a provider round trip. Reading it fresh is also
+       the point -- a flag cached at turn start would be the same flag
+       that was False when the turn began. A torn read while the file
+       is being rewritten parses as nothing and answers False, so the
+       stop lands one iteration later instead of the pause being lost. *)
+    function OperatorPaused: Boolean;
     { OnToolCall sink for a narrated turn -- turns each tool call into a
       page-progress event so the desktop can show work rather than a
       spinner. A method, not a closure: the loop's hook is a method
@@ -6252,11 +6275,16 @@ begin
   Result := RunDesktopTurn(SystemPrompt, Prompt, Narrate, False, False, Reply, Err);
 end;
 
+function TGatewayServer.OperatorPaused: Boolean;
+begin
+  Result := AgentsPaused;
+end;
+
 function TGatewayServer.RunAgentTurn(const AgentName, Prompt: string;
   out Reply, Err: string): Boolean;
 var
   Info: TAgentInfo;
-  Sid, Sys, Task: string;
+  Sid, Sys, Task, Notice: string;
   Stored: TSession;
   Msgs, Fresh: TMessageArray;
   Loop: TToolLoopResult;
@@ -6377,7 +6405,8 @@ begin
      one would silently lose the other. A supervisor restarting an agent
      the operator just woke is exactly that race. *)
   Narrator := TAgentNarrator.Create(Info.Name);
-  LoopCfg.OnToolCall := Narrator.OnToolCall;
+  LoopCfg.OnToolCall   := Narrator.OnToolCall;
+  LoopCfg.ShouldCancel := OperatorPaused;
 
   TurnLock := SessionTurnLock(Sid);
   TurnLock.Enter;
@@ -6395,6 +6424,26 @@ begin
     begin
       Err := 'agent loop failed';
       Exit;
+    end;
+    (* Stopped by the operator. Say so IN the transcript, not just to
+       whoever called: this conversation persists and the agent's next
+       turn reads it back, so a stop that left no trace would look to
+       the agent like a turn it simply never answered -- and the work
+       it did before the stop would be re-done. The notice carries the
+       progress ledger for exactly that reason.
+
+       Written into Loop.Content so it takes the one path that already
+       gets this right: PersistGatewaySession appends Content as the
+       assistant turn and logs it. *)
+    if Loop.Cancelled then
+    begin
+      Notice := FormatCancelledNotice(Loop, AgentsPausedNote,
+                                      '`pasclaw team resume`, or Resume all ' +
+                                      'on the desktop');
+      if Trim(Loop.Content) <> '' then
+        Loop.Content := Trim(Loop.Content) + sLineBreak + sLineBreak + Notice
+      else
+        Loop.Content := Notice;
     end;
     Reply := Loop.Content;
     PersistGatewaySession(FCfg, Sid,

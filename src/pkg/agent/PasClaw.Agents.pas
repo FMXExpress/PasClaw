@@ -835,10 +835,13 @@ begin
 
   if not Paused then Exit(True);
 
-  (* Tell whoever is mid-turn. This is the honest half of "stop": the
-     loop cannot be cancelled, but it DOES read its steering queue
-     between tool calls, so an agent gets the instruction within one
-     tool call rather than at the end of the turn. *)
+  (* Tell whoever is mid-turn. The flag above is what actually stops
+     them -- the gateway hands the tool loop a cancel hook that reads
+     it, and every running turn ends at its next safe boundary whether
+     it cooperates or not. This note is the courtesy on top: an agent
+     that reads it between tool calls gets to write down where it had
+     got to before the loop lets it go, which is a much better place to
+     resume from than a bare stop. *)
   Text := 'The operator has PAUSED this agent system.';
   if Trim(Note) <> '' then Text := Text + ' Reason: ' + Trim(Note);
   Text := Text + ' Finish only the step you are on, write down where ' +
