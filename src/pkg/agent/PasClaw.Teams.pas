@@ -173,6 +173,19 @@ function TeamStallMessages(const T: TTeamTemplate; const S: TTeamState): TString
    least one task -- an empty board is "not started", not "finished"). *)
 function TeamBoardDone(const Project: string): Boolean;
 
+(* Is this agent one of the team's? *)
+function AgentInTeam(const S: TTeamState; const Name: string): Boolean;
+
+(* Supervision verdicts for THIS TEAM only.
+
+   SuperviseAgents sweeps the whole workspace roster, which is right for
+   the operator's supervise button and wrong for a team's tick: a team
+   existing at all would otherwise restart an unrelated personal agent
+   that had failed, and go on restarting it on every cadence. A team
+   supervises its own members; everyone else's agents are not its
+   business. *)
+function TeamSupervise(const S: TTeamState): TAgentVerdictArray;
+
 { ----------------------------------------------------------- export -- }
 
 (* The live roster as a template JSON -- how a hand-built (or hand-
@@ -1021,6 +1034,32 @@ begin
   for I := 0 to High(Tasks) do
     if Tasks[I].Status <> tsDone then Exit;
   Result := True;
+end;
+
+function AgentInTeam(const S: TTeamState; const Name: string): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  for I := 0 to High(S.WakeWho) do
+    if S.WakeWho[I] = Name then Exit(True);
+end;
+
+function TeamSupervise(const S: TTeamState): TAgentVerdictArray;
+var
+  All: TAgentVerdictArray;
+  I, N: Integer;
+begin
+  SetLength(Result, 0);
+  N := 0;
+  All := SuperviseAgents(0, 0);
+  for I := 0 to High(All) do
+    if AgentInTeam(S, All[I].Name) then
+    begin
+      SetLength(Result, N + 1);
+      Result[N] := All[I];
+      Inc(N);
+    end;
 end;
 
 function TeamStallMessages(const T: TTeamTemplate; const S: TTeamState): TStringArray;

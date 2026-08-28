@@ -288,6 +288,7 @@ begin
         Its own flag: managing the board and creating colleagues are
         different powers to hand a model. }
       if Cfg.AgentToolsEnabled then RegisterAgentTools(Reg);
+      SetTeamActionsAllowed(Cfg.AgentToolsEnabled);
       Skills := LoadSkillManifests(GetHome);
       RegisterSkills(Reg, Skills);
       SetDBConfigFromJSON(Cfg.DatabaseJSON);   { db_* connections (inert if no "database" section) }

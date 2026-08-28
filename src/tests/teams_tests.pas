@@ -94,6 +94,7 @@ var
   Info: TAgentInfo;
   Created, Skipped: TStringArray;
   Wakes: TWakeReasonArray;
+  Verdicts: TAgentVerdictArray;
   Task: TTaskInfo;
   I: Integer;
   Err, Out_, Delivered, TaskId, Proj: string;
@@ -237,6 +238,19 @@ begin
   GetTask(Proj, TaskId, Task);
   AssertEqStr(Task.Assignee, '', 'an explicit "" unassigns');
 
+  (* Canonicalised, not merely lowercased. Stored as typed, "Dev Name"
+     and "@dev" made a task that LOOKED assigned while the wake loop --
+     which compares against agent slugs -- never matched it, so the
+     owner was never woken. *)
+  UpdateTask(Proj, TaskId, '', '-', '', Err, 'Dev Name');
+  GetTask(Proj, TaskId, Task);
+  AssertEqStr(Task.Assignee, 'dev-name', 'a human-form assignee is slugged');
+  AssertEqStr(Task.Assignee, AgentSlug('Dev Name'),
+              'and matches exactly what an agent of that name is called');
+  UpdateTask(Proj, TaskId, '', '-', '', Err, '@dev');
+  GetTask(Proj, TaskId, Task);
+  AssertEqStr(Task.Assignee, 'dev', 'punctuation is stripped, not stored');
+
   { -------------------------------------------------------- wake decisions -- }
   S := Default(TTeamState);
   S.Name := 'mini'; S.Project := Proj; S.Enabled := True;
@@ -258,6 +272,39 @@ begin
   AssertContains(Wakes[1].Why, 'nothing to do', 'and says why');
   AssertTrue(Wakes[2].Wake, 'worker wakes (open assigned task)');
   AssertContains(Wakes[2].Why, 'assigned', 'and says why');
+
+  (* ------------------------------------------------- scoped supervision -- *)
+  (* A team's tick must supervise its OWN members. Sweeping the whole
+     roster meant a team existing at all restarted an unrelated personal
+     agent that had failed -- and went on restarting it every cadence. *)
+  S := Default(TTeamState);
+  S.Name := 'mini'; S.Project := Proj; S.Enabled := True; S.WakeMinutes := 15;
+  SetLength(S.WakeWho, 3);
+  S.WakeWho[0] := 'boss'; S.WakeWho[1] := 'mid'; S.WakeWho[2] := 'worker';
+
+  { An agent that belongs to nobody's team, in the state a supervisor
+    acts on: the manifest says running, no turn holds the lock. }
+  Info := Default(TAgentInfo);
+  Info.Name := 'loner'; Info.Title := 'Loner'; Info.Role := 'Alone.';
+  AssertTrue(SaveAgent(Info, Err) <> '', 'an unrelated agent exists');
+  MarkAgentRunStarted('loner');
+  AssertTrue(AgentInTeam(S, 'worker'), 'a member is in the team');
+  AssertTrue(not AgentInTeam(S, 'loner'), 'the loner is not');
+
+  Verdicts := SuperviseAgents(0, 0);
+  Found := False;
+  for I := 0 to High(Verdicts) do
+    if (Verdicts[I].Name = 'loner') and (Verdicts[I].Action = 'restart') then
+      Found := True;
+  AssertTrue(Found, 'a whole-roster sweep DOES want to restart the loner');
+
+  Verdicts := TeamSupervise(S);
+  Found := False;
+  for I := 0 to High(Verdicts) do
+    if Verdicts[I].Name = 'loner' then Found := True;
+  AssertTrue(not Found,
+             'but the team sweep leaves agents outside the team alone');
+  MarkAgentRunFinished('loner', 'idle', '');
 
   { ----------------------------------------------------------- board done -- }
   AssertTrue(not TeamBoardDone(Proj), 'an open board is not done');
@@ -309,7 +356,11 @@ begin
   Out_ := ExportRosterJSON('my-team', 'My Team');
   AssertTrue(ParseTemplateJSON(Out_, T2), 'an export parses back as a template');
   AssertEqStr(T2.Name, 'my-team', 'with its name');
-  AssertEqInt(Length(T2.Agents), 3, 'and the live roster');
+  { The property, not a count: an export carries whatever is on the
+    roster at the time, so a test that hard-codes three breaks the day
+    a test above it adds a fourth agent -- as one did. }
+  AssertEqInt(Length(T2.Agents), Length(ListAgents),
+              'and every agent on the live roster');
 
   if Failures = 0 then
     WriteLn('teams_tests: OK')

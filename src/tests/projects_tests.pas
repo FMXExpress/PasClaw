@@ -299,6 +299,37 @@ begin
   ExpectStr(Err, '', 'a good call is clean');
   ExpectContains(Out_, '1 desktop action', 'and reports what it sent');
 
+  (* ------------------------------------------------ the team_up gate -- *)
+  (* The `desktop` tool is registered ALWAYS -- window management should
+     not need a flag. But team_up seeds standing agents and starts
+     turns, which is exactly what agent_tools_enabled lets an operator
+     decline. Refused BEFORE publishing: the connected desktop acts on a
+     published command immediately, so a check afterwards would be a
+     warning about a team that already exists. *)
+  Out_ := Tool_Desktop('{"actions":[{"do":"team_up","template":"duo",' +
+                       '"brief":"a thing"}]}', Err);
+  ExpectTrue(Err <> '', 'team_up is refused when agent tools are off');
+  ExpectContains(Err, 'agent_tools_enabled', 'and the refusal names the flag');
+  ExpectTrue(Pos('team_up', Out_) = 0, 'and nothing was sent');
+
+  { A gated action does not poison the rest of the call... }
+  Out_ := Tool_Desktop('{"actions":[{"do":"tile"}]}', Err);
+  ExpectStr(Err, '', 'ordinary window actions still work with the flag off');
+
+  { ...and cannot be smuggled in through a near-miss shape, because the
+    check reads the COERCED array. }
+  Out_ := Tool_Desktop('{"action":"team_up","template":"duo"}', Err);
+  ExpectContains(Err, 'agent_tools_enabled',
+                 'the singular-action shape is gated too');
+  Out_ := Tool_Desktop('{"actions":[{"do":"tile"},{"do":"TEAM_UP"}]}', Err);
+  ExpectTrue(Err <> '', 'case does not evade the gate, and one bad action ' +
+             'refuses the whole call');
+
+  SetTeamActionsAllowed(True);
+  Out_ := Tool_Desktop('{"actions":[{"do":"team_up","template":"duo"}]}', Err);
+  ExpectStr(Err, '', 'with the flag on it goes through');
+  SetTeamActionsAllowed(False);
+
   { --------------------------------------------------- workspace isolation -- }
   { Projects belong to a workspace: switching desktops must switch boards. }
   CreateWorkspace('Home');

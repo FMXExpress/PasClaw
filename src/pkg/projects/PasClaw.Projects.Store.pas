@@ -936,7 +936,12 @@ begin
       Obj.PutStr('title', Trim(ATitle));
     if Trim(AStatus) <> '' then Obj.PutStr('status', LowerCase(Trim(AStatus)));
     if ANotes <> '-' then Obj.PutStr('notes', ANotes);
-    if AAssignee <> '-' then Obj.PutStr('assignee', LowerCase(Trim(AAssignee)));
+    (* Canonicalised with the project slug rule, which is the same rule
+       agent names use. Storing "Dev Name" or "@dev" as typed left a task
+       that LOOKED assigned on the board while the wake loop -- which
+       compares against agent slugs -- never matched it, so the owner was
+       never woken and the task simply sat there. *)
+    if AAssignee <> '-' then Obj.PutStr('assignee', SanitizeName(AAssignee));
     Obj.PutStr('updated', NowIsoUtc);
     WriteManifest(Path, Obj);
   finally

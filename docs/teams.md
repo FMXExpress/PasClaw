@@ -169,3 +169,15 @@ The first lets the team manage its task board, the second lets members
 message each other. `team up` **warns** when either is off and names it,
 rather than seeding a team that cannot reach its own board — which
 looks like model stupidity and is not.
+
+`agent_tools_enabled` also **gates the model's `team_up` action**. The
+`desktop` tool is registered always, because gating window management
+behind a flag meant a fresh install could not answer "tile these" — but
+`team_up` is not window management: it seeds standing agents, creates a
+project and starts a turn, which is precisely what this flag exists to
+let an operator decline. With the flag off the action is refused before
+anything is published, and is not advertised to the model at all.
+
+The **HTTP route stays open**. A person clicking **New team…** is the
+operator, and gating them behind a switch meant for the model is the
+same category error `/v1/agents` already documents.

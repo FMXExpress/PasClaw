@@ -849,9 +849,11 @@ begin
       Continue;
     end;
 
-    { 1. Supervision: restart runs that died with the process. The
-        verdicts are the same ones POST /v1/agents/supervise acts on. }
-    Verdicts := SuperviseAgents(0, 0);
+    { 1. Supervision, scoped to THIS TEAM's members. The operator's
+        supervise button sweeps the whole roster; a team's tick must
+        not, or a team existing at all restarts an unrelated personal
+        agent -- and goes on restarting it every cadence. }
+    Verdicts := TeamSupervise(S);
     for J := 0 to High(Verdicts) do
       if Verdicts[J].Action = 'restart' then
       begin

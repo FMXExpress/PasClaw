@@ -42,6 +42,25 @@ uses
    it. *)
 procedure RegisterDesktopTool(R: TToolRegistry);
 
+(* May the MODEL fire up an agent team through the desktop tool?
+
+   The `desktop` tool is registered ALWAYS -- it moves windows, and
+   gating window management behind a board flag meant a fresh install
+   could not answer "tile these". team_up is not window management: it
+   seeds standing agents, creates a project and starts a turn, which is
+   exactly what agent_tools_enabled exists to let an operator decline.
+   Without this gate a default gateway with a desktop open let the
+   model create autonomous colleagues the operator had switched off --
+   the flag was consulted only afterwards, to warn about a team that
+   already existed.
+
+   Off unless the caller says otherwise, so a host that forgets to call
+   this refuses rather than permits. The HTTP route stays open: a
+   person clicking New team... is the operator, and gating them behind
+   a switch meant for the model is the category error /v1/agents
+   already documents. *)
+procedure SetTeamActionsAllowed(Allowed: Boolean);
+
 procedure RegisterProjectTools(R: TToolRegistry);
 
 { Handlers, exposed for tests. }
@@ -64,6 +83,19 @@ uses
   PasClaw.Utils,
   PasClaw.Projects.Store,
   PasClaw.Desktop.Events;
+
+var
+  GTeamActionsAllowed: Boolean = False;
+
+procedure SetTeamActionsAllowed(Allowed: Boolean);
+begin
+  GTeamActionsAllowed := Allowed;
+end;
+
+function IfThenStr(Cond: Boolean; const Yes, No: string): string;
+begin
+  if Cond then Result := Yes else Result := No;
+end;
 
 function ArgObj(const ArgsJSON: string; out Obj: TJsonObject; out Err: string): Boolean;
 begin
@@ -536,6 +568,28 @@ begin
   end;
 end;
 
+(* Does this actions array carry the named verb? Reads the coerced
+   array, so a near-miss shape cannot smuggle a gated action past the
+   check by arriving keyed "action". *)
+function ArrayHasAction(Arr: TJsonArray; const Verb: string): Boolean;
+var
+  I: Integer;
+  Item: TJsonObject;
+begin
+  Result := False;
+  if Arr = nil then Exit;
+  for I := 0 to Arr.Count - 1 do
+  begin
+    Item := Arr.ItemObject(I);
+    if Item = nil then Continue;
+    try
+      if SameText(Trim(Item.GetStr('do', '')), Verb) then Exit(True);
+    finally
+      Item.Free;
+    end;
+  end;
+end;
+
 function DesktopActionsJSON(const ArgsJSON: string): string;
 var
   Obj: TJsonObject;
@@ -581,6 +635,19 @@ begin
                 'and "do" -- this tool takes a LIST of actions, unlike the ' +
                 'project/task/agent tools which take a single "action".';
       if Arr <> nil then Arr.Free;
+      Exit;
+    end;
+    (* Refuse BEFORE the command is published, not after the team is
+       running: publishing is the point of no return -- the connected
+       desktop acts on it immediately. *)
+    if (not GTeamActionsAllowed) and ArrayHasAction(Arr, 'team_up') then
+    begin
+      ErrMsg := 'team_up is off: firing up standing agents is what ' +
+                'agent_tools_enabled governs, and it is not enabled on ' +
+                'this gateway. Set {"agent_tools_enabled": true} in ' +
+                'config.json, or the operator can start a team from the ' +
+                'desktop (Start -> New Team...) or with `pasclaw team up`.';
+      Arr.Free;
       Exit;
     end;
     N := Arr.Count;
@@ -671,10 +738,12 @@ begin
     '{"do":...} objects, several at once when the user asks for several ' +
     'things. Actions: tile, cascade, minimize_all, close_all, refresh, ' +
     'open_app {project}, open_chat {project}, open_agent {agent}, ' +
-    'build_app {title,brief}, team_up {template,brief|project}, ' +
+    'build_app {title,brief}, ' +
+    IfThenStr(GTeamActionsAllowed, 'team_up {template,brief|project}, ', '') +
     'theme {id}. Use this when the user talks about the SCREEN -- tidying ' +
-    'windows, opening something, starting several apps at once -- or ' +
-    'asks to spin up an agent TEAM (team_up).';
+    'windows, opening something, starting several apps at once' +
+    IfThenStr(GTeamActionsAllowed,
+              ' -- or asks to spin up an agent TEAM (team_up).', '.');
   T.Schema      :=
     '{"type":"object","properties":{' +
     '"actions":{"type":"array","description":' +
