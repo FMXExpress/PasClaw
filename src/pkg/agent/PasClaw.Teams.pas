@@ -186,6 +186,16 @@ function AgentInTeam(const S: TTeamState; const Name: string): Boolean;
    business. *)
 function TeamSupervise(const S: TTeamState): TAgentVerdictArray;
 
+(* Retire a whole team: delete its agents and its state file.
+
+   Sessions and the PROJECT are left alone, the same contract
+   DeleteAgent already keeps -- a conversation is not garbage because
+   the role that held it was retired, and the work the team did is the
+   operator's, not the team's. Returns the agents actually removed;
+   one that was already gone is not an error. *)
+function RemoveTeam(const Name: string; out Removed: TStringArray;
+                    out Err: string): Boolean;
+
 { ----------------------------------------------------------- export -- }
 
 (* The live roster as a template JSON -- how a hand-built (or hand-
@@ -956,6 +966,8 @@ var
   Last: TDateTime;
 begin
   Result := False;
+  { The operator's brake outranks every schedule. }
+  if AgentsPaused then Exit;
   if (not S.Enabled) or (S.WakeMinutes <= 0) then Exit;
   if S.LastTick = '' then Exit(True);
   Last := IsoToLocal(S.LastTick);
@@ -968,6 +980,7 @@ var
   I: Integer;
 begin
   Result := False;
+  if AgentsPaused then Exit;
   if not S.Enabled then Exit;
   for I := 0 to High(S.WakeWho) do
     if (AgentPending(S.WakeWho[I]) > 0) and (not AgentIsBusy(S.WakeWho[I])) then
@@ -1104,6 +1117,43 @@ begin
 end;
 
 { ------------------------------------------------------------- export -- }
+
+function RemoveTeam(const Name: string; out Removed: TStringArray;
+                    out Err: string): Boolean;
+var
+  S: TTeamState;
+  T: TTeamTemplate;
+  Names: TStringArray;
+  I, N: Integer;
+  Path, DelErr: string;
+begin
+  Result := False;
+  Err := '';
+  SetLength(Removed, 0);
+  N := 0;
+
+  { The state's own wake list is the roster of record; the template is
+    the fallback for a team whose state file has already gone. }
+  if LoadTeamState(Name, S) then Names := S.WakeWho
+  else if FindTeamTemplate(Name, T) then Names := TeamWakeList(T)
+  else
+  begin
+    Err := 'no team called "' + AgentSlug(Name) + '"';
+    Exit;
+  end;
+
+  for I := 0 to High(Names) do
+    if DeleteAgent(Names[I], DelErr) then
+    begin
+      SetLength(Removed, N + 1);
+      Removed[N] := Names[I];
+      Inc(N);
+    end;
+
+  Path := StatePath(Name);
+  if (Path <> '') and FileExists(Path) then DeleteFile(Path);
+  Result := True;
+end;
 
 function ExportRosterJSON(const Name, Title: string): string;
 var

@@ -50,6 +50,9 @@ begin
   PrintLn('     [--parked]             seed without the wake loop (enable later with up)');
   PrintLn('  status                    every team that is up, and its board');
   PrintLn('  down <template>           park a team: agents and board stay, the clock stops');
+  PrintLn('  rm <template>             retire a team: delete its agents (conversations stay)');
+  PrintLn('  pause ["reason"]          stop starting new turns; tell whoever is working to wind down');
+  PrintLn('  resume                    let turns start again');
   PrintLn('  export <file> [name]      write the live roster as a template file');
 end;
 
@@ -168,6 +171,7 @@ end;
 function Cmd_Team_Run(const Argv: array of string): Integer;
 var
   Sub, Err, Path, Name_: string;
+  Removed, Told: TStringArray;
   All: TTeamTemplateArray;
   States: TTeamStateArray;
   S: TTeamState;
@@ -197,6 +201,14 @@ begin
 
   if Sub = 'status' then
   begin
+    if AgentsPaused then
+    begin
+      PrintLn('PAUSED -- no new turns will start' +
+              IfThen_(AgentsPausedNote <> '',
+                      ' (' + AgentsPausedNote + ')', '') +
+              '. `pasclaw team resume` to let them run.');
+      PrintLn('');
+    end;
     States := ListTeamStates;
     if Length(States) = 0 then
     begin
@@ -239,6 +251,61 @@ begin
     end;
     PrintLn('Team ' + S.Name + ' parked: agents, conversations and the ' +
             'board stay; nothing wakes until you up it again.');
+    Exit;
+  end;
+
+  if (Sub = 'rm') or (Sub = 'remove') then
+  begin
+    if Length(Argv) < 2 then
+    begin
+      PrintLn('Usage: pasclaw team rm <template>');
+      Exit(1);
+    end;
+    if not RemoveTeam(Argv[1], Removed, Err) then
+    begin
+      PrintLn('error: ' + Err);
+      Exit(1);
+    end;
+    for I := 0 to High(Removed) do
+      PrintLn('  removed  ' + Removed[I]);
+    PrintLn('Team retired. Conversations and the project were left alone -- ' +
+            'a conversation is not garbage because the role that held it ' +
+            'was retired.');
+    Exit;
+  end;
+
+  if Sub = 'pause' then
+  begin
+    Name_ := '';
+    if Length(Argv) > 1 then Name_ := Argv[1];
+    if not SetAgentsPaused(True, Name_, Told, Err) then
+    begin
+      PrintLn('error: ' + Err);
+      Exit(1);
+    end;
+    PrintLn('Paused: no new turns will start.');
+    if Length(Told) = 0 then
+      PrintLn('Nothing was working.')
+    else
+    begin
+      for I := 0 to High(Told) do
+        PrintLn('  asked to wind down: ' + Told[I]);
+      PrintLn('Those are mid-turn and were TOLD to stop, not killed: a turn ' +
+              'cut between a file write and the board update leaves exactly ' +
+              'the mess a stop is meant to avoid. They read the note between ' +
+              'tool calls.');
+    end;
+    Exit;
+  end;
+
+  if Sub = 'resume' then
+  begin
+    if not SetAgentsPaused(False, '', Told, Err) then
+    begin
+      PrintLn('error: ' + Err);
+      Exit(1);
+    end;
+    PrintLn('Resumed. The wake loop picks up from the next tick.');
     Exit;
   end;
 

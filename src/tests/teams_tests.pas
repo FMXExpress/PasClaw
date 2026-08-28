@@ -92,7 +92,7 @@ var
   T, T2: TTeamTemplate;
   S, S2: TTeamState;
   Info: TAgentInfo;
-  Created, Skipped: TStringArray;
+  Created, Skipped, Removed, Told: TStringArray;
   Wakes: TWakeReasonArray;
   Verdicts: TAgentVerdictArray;
   Task: TTaskInfo;
@@ -351,6 +351,50 @@ begin
   AssertEqInt(T2.WakeMinutes, 30, 'and the user cadence');
   AssertTrue(FindTeamTemplate('software-team', T2),
              'unshadowed built-ins are untouched');
+
+  (* ------------------------------------------------------- the brake -- *)
+  (* Paused means NO NEW TURNS START. It is a workspace fact on disk,
+     so a gateway restart cannot quietly resume a system the operator
+     stopped -- the failure that would matter most. *)
+  AssertTrue(not AgentsPaused, 'a fresh workspace is not paused');
+  S := Default(TTeamState);
+  S.Name := 'mini'; S.Project := Proj; S.Enabled := True; S.WakeMinutes := 15;
+  SetLength(S.WakeWho, 1); S.WakeWho[0] := 'boss';
+  AssertTrue(TeamTickDue(S), 'an unpaused team is due');
+
+  AssertTrue(SetAgentsPaused(True, 'operator went to lunch', Told, Err),
+             'pausing succeeds');
+  AssertTrue(AgentsPaused, 'and it sticks');
+  AssertEqStr(AgentsPausedNote, 'operator went to lunch', 'with its reason');
+  AssertTrue(not TeamTickDue(S), 'a paused team is never due');
+  AssertTrue(AgentSend('boss', 'operator', 'urgent', Delivered, Err),
+             'a message still queues while paused');
+  AssertTrue(not TeamHasWaitingMail(S),
+             'but waiting mail does not restart a paused system');
+  { Nothing was running, so nobody needed telling. }
+  AssertEqInt(Length(Told), 0, 'no busy agent to wind down');
+
+  AssertTrue(SetAgentsPaused(False, '', Told, Err), 'resuming succeeds');
+  AssertTrue(not AgentsPaused, 'and it sticks');
+  AssertTrue(TeamHasWaitingMail(S), 'the queued message is live again');
+
+  (* ------------------------------------------------- retiring a team -- *)
+  (* The roster could create agents and never remove one, so a
+     workspace only ever accumulated them. *)
+  S.Name := 'mini'; SetLength(S.WakeWho, 3);
+  S.WakeWho[0] := 'boss'; S.WakeWho[1] := 'mid'; S.WakeWho[2] := 'worker';
+  AssertTrue(SaveTeamState(S, Err), 'the team is up');
+  AssertTrue(GetAgent('boss', Info), 'its lead exists');
+
+  AssertTrue(RemoveTeam('mini', Removed, Err), 'the team is retired: ' + Err);
+  AssertEqInt(Length(Removed), 3, 'all three agents removed');
+  AssertTrue(not GetAgent('boss', Info), 'the lead is gone');
+  AssertTrue(not GetAgent('worker', Info), 'and the worker');
+  AssertTrue(not LoadTeamState('mini', S2), 'and the team state with them');
+  AssertTrue(GetAgent('loner', Info), 'an agent outside the team survives');
+  AssertTrue(ProjectExists(Proj), 'and the PROJECT is left alone');
+  AssertTrue(not RemoveTeam('nosuchteam', Removed, Err),
+             'retiring a team that never existed is a clean refusal');
 
   { --------------------------------------------------------------- export -- }
   Out_ := ExportRosterJSON('my-team', 'My Team');

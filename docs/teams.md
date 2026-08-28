@@ -119,7 +119,37 @@ wakes the reviewer to look at a project with nothing in it yet.
 ```sh
 pasclaw team status        # who is up, their board, last tick
 pasclaw team down duo      # park it: agents, conversations and board stay
+pasclaw team rm duo        # retire it: the agents go, conversations stay
+pasclaw team pause "lunch" # stop starting turns; tell whoever is working to wind down
+pasclaw team resume
 ```
+
+## Stopping and removing
+
+**Pause is the brake**, and it is honest about what it can do:
+
+- **No new turns start** — the tick, the run route and `team up` all
+  check it. `POST /v1/agents/pause {"paused":true}`, the **Pause all**
+  button in the roster, or `pasclaw team pause`.
+- **Work already in flight is TOLD, not killed.** The tool loop has no
+  cancellation hook, and a turn cut between a file write and the board
+  update leaves exactly the half-finished state someone hitting stop is
+  trying to avoid. Every busy agent instead gets a note in its steering
+  queue — which it reads *between tool calls*, not at the end of the
+  turn — asking it to finish the step it is on, record where it got to,
+  and stop. The reply names who was told, so the answer is "these three
+  were asked to stop", never a claim that everything halted at once.
+- **The pause is on disk.** A gateway restart cannot quietly resume a
+  system the operator stopped — of the ways this could fail, that is
+  the one that would matter most.
+
+**Removing** has two grains. A single agent: the **Retire** button on
+its roster row, or `DELETE /v1/agents/<name>`. A whole team:
+`DELETE /v1/teams/<name>` or `pasclaw team rm`. Both keep the
+**conversation** and the **project** — a conversation is not garbage
+because the role that held it was retired, and the work the team did is
+the operator's, not the team's. Retire is refused on an agent that is
+mid-turn; pause it first.
 
 ## Watching it work
 

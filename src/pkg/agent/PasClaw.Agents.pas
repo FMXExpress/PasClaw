@@ -190,6 +190,32 @@ type
    presumed dead -- the process that owned it is gone, because a live
    run updates nothing but also never ends. IdleMinutes: an agent that
    has not run in this long is nudged. Either 0 disables that half. *)
+(* ------------------------------------------------------- the brake -- *)
+
+(* Is this workspace's agent system paused?
+
+   Paused means NO NEW TURNS START: the team tick starts nothing, the
+   run route refuses, and `team up` seeds without kicking off. It does
+   NOT kill work already in flight -- the tool loop has no cancellation
+   hook, and a turn killed between a write and the board update leaves
+   exactly the half-finished state an operator hitting stop is trying
+   to avoid. What PauseAgents does for running agents instead is TELL
+   them: a note into each busy agent's steering queue, which it reads
+   between tool calls, asking it to finish the step it is on, record
+   where it got to, and stop.
+
+   On disk, so a gateway restart does not quietly resume a system the
+   operator stopped -- the failure that would matter most. *)
+function AgentsPaused: Boolean;
+function AgentsPausedNote: string;
+
+(* Pause or resume. When pausing, every agent currently working is sent
+   the wind-down note and its name is returned, so the caller can say
+   who was actually asked to stop rather than claiming everything
+   halted instantly. *)
+function SetAgentsPaused(Paused: Boolean; const Note: string;
+                         out Told: TStringArray; out Err: string): Boolean;
+
 function SuperviseAgents(StallMinutes, IdleMinutes: Integer): TAgentVerdictArray;
 
 { Tell an agent's parent what happened to it. No-op (False) when the
@@ -734,6 +760,105 @@ begin
 end;
 
 { ---------------------------------------------------------- supervision -- }
+
+function PausePath: string;
+begin
+  Result := JoinPath(AgentsDir, 'paused.json');
+end;
+
+function AgentsPaused: Boolean;
+var
+  Obj: TJsonObject;
+begin
+  Result := False;
+  if not FileExists(PausePath) then Exit;
+  Obj := nil;
+  try
+    Obj := TJsonObject.Parse(ReadFileText(PausePath));
+  except
+    Obj := nil;
+  end;
+  if Obj = nil then Exit;
+  try
+    Result := Obj.GetBool('paused', False);
+  finally
+    Obj.Free;
+  end;
+end;
+
+function AgentsPausedNote: string;
+var
+  Obj: TJsonObject;
+begin
+  Result := '';
+  if not FileExists(PausePath) then Exit;
+  Obj := nil;
+  try
+    Obj := TJsonObject.Parse(ReadFileText(PausePath));
+  except
+    Obj := nil;
+  end;
+  if Obj = nil then Exit;
+  try
+    if Obj.GetBool('paused', False) then Result := Obj.GetStr('note', '');
+  finally
+    Obj.Free;
+  end;
+end;
+
+function SetAgentsPaused(Paused: Boolean; const Note: string;
+                         out Told: TStringArray; out Err: string): Boolean;
+var
+  Obj: TJsonObject;
+  Rows: TAgentInfoArray;
+  I, N: Integer;
+  Text: string;
+begin
+  Result := False;
+  Err := '';
+  SetLength(Told, 0);
+  if not EnsureDir(AgentsDir) then
+  begin
+    Err := 'could not create ' + AgentsDir;
+    Exit;
+  end;
+
+  Obj := TJsonObject.Create;
+  try
+    Obj.PutBool('paused', Paused);
+    Obj.PutStr('note', Note);
+    Obj.PutStr('at', NowIsoUtc);
+    WriteFileText(PausePath, Obj.ToJSON);
+  finally
+    Obj.Free;
+  end;
+
+  if not Paused then Exit(True);
+
+  (* Tell whoever is mid-turn. This is the honest half of "stop": the
+     loop cannot be cancelled, but it DOES read its steering queue
+     between tool calls, so an agent gets the instruction within one
+     tool call rather than at the end of the turn. *)
+  Text := 'The operator has PAUSED this agent system.';
+  if Trim(Note) <> '' then Text := Text + ' Reason: ' + Trim(Note);
+  Text := Text + ' Finish only the step you are on, write down where ' +
+          'you got to (task notes, or a short message to your manager), ' +
+          'and then stop -- do not start anything new, do not pick up ' +
+          'another task, and do not wake anyone.';
+
+  N := 0;
+  Rows := ListAgents;
+  for I := 0 to High(Rows) do
+    if AgentIsBusy(Rows[I].Name) then
+      if PushSteering(AgentSessionId(Rows[I].Name), Text) then
+      begin
+        SetLength(Told, N + 1);
+        Told[N] := Rows[I].Name;
+        Inc(N);
+        PublishAgent(Rows[I].Name);
+      end;
+  Result := True;
+end;
 
 function SuperviseAgents(StallMinutes, IdleMinutes: Integer): TAgentVerdictArray;
 var
