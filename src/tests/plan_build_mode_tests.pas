@@ -119,22 +119,14 @@ begin E := ''; Result := 'READ OK'; end;
 function HandleFakeWrite(const A: string; out E: string): string;
 begin E := ''; Result := 'WRITE OK'; end;
 
-var
-  GPlanWriteFails: Boolean = False;
-
-{ Stand-in registered under the REAL tool's name: the gate keys on the
-  name 'plan_write' plus Err = '', not on the handler, so a fake keeps
-  the scenario hermetic (no file written; the seeded scenario writes
-  PLAN.md itself). tcReadOnly to match the real registration. }
-function HandleFakePlanWrite(const A: string; out E: string): string;
-begin
-  if GPlanWriteFails then begin E := 'disk full'; Result := ''; end
-  else begin E := ''; Result := 'PLAN OK'; end;
-end;
-
 (* Scripted provider for the SPACE scenarios: each round issues the
-   tool names given for that round (call ids r<round>c<idx>), then a
-   final stop round. *)
+   entries given for that round as tool calls (call ids r<round>c<idx>),
+   then a final stop round. An entry is 'name' or 'name|argsjson' --
+   the split lets the REAL plan_write be driven with real content,
+   which matters because the first version of this suite registered a
+   FAKE under that name and thereby hid a real integration failure:
+   plan_write was not registered outside --mode plan at all, so every
+   real SPACE session was permanently read-only (Codex P1 on PR #595). *)
 type
   TScriptProvider = class(TInterfacedObject, ILLMProvider)
   private
@@ -178,7 +170,8 @@ function TScriptProvider.Chat(const Messages: array of TMessage;
                               const Model: string;
                               const Options: TChatOptions): TLLMResponse;
 var
-  i: Integer;
+  i, Bar: Integer;
+  Entry: string;
 begin
   Inc(FRound);
   Result := Default(TLLMResponse);
@@ -188,10 +181,20 @@ begin
     SetLength(Result.ToolCalls, Length(FScript[FRound - 1]));
     for i := 0 to High(FScript[FRound - 1]) do
     begin
-      Result.ToolCalls[i].Id             := Format('r%dc%d', [FRound, i]);
-      Result.ToolCalls[i].Kind           := 'function';
-      Result.ToolCalls[i].Func.Name      := FScript[FRound - 1][i];
-      Result.ToolCalls[i].Func.Arguments := '{}';
+      Result.ToolCalls[i].Id        := Format('r%dc%d', [FRound, i]);
+      Result.ToolCalls[i].Kind      := 'function';
+      Entry := FScript[FRound - 1][i];
+      Bar := Pos('|', Entry);
+      if Bar > 0 then
+      begin
+        Result.ToolCalls[i].Func.Name      := Copy(Entry, 1, Bar - 1);
+        Result.ToolCalls[i].Func.Arguments := Copy(Entry, Bar + 1, MaxInt);
+      end
+      else
+      begin
+        Result.ToolCalls[i].Func.Name      := Entry;
+        Result.ToolCalls[i].Func.Arguments := '{}';
+      end;
     end;
     Result.FinishReason := 'tool_calls';
   end
@@ -483,6 +486,25 @@ end;
    cannot disagree about the path. Refuses to run without a scratch
    $PASCLAW_HOME -- scenario 4 writes into it. *)
 procedure TestSpaceGate;
+(* SPACE-mode gate, end to end through RunToolLoop with the REAL
+   plan_write (RegisterPlanWriteTool) -- not a stand-in. The first
+   version faked it and thereby hid that the real tool was never
+   registered outside --mode plan (Codex P1 on PR #595); the fake is
+   gone and the blank-content rule (Codex P2) is pinned against the
+   real handler.
+
+   Scenarios, each a fresh loop over the scripted provider:
+     1. locked:       a mutating call before any plan gets the space
+                      refusal (read-only flows freely alongside)
+     2. blank plan:   plan_write with whitespace content ERRORS and
+                      the gate stays closed
+     3. unlock:       plan_write with a real plan writes PLAN.md and
+                      the next mutating call dispatches
+     4. seeded:       a non-blank PLAN.md on disk unlocks round one
+     5. blank seed:   a WHITESPACE-ONLY PLAN.md does NOT unlock
+
+   Refuses to run without a scratch $PASCLAW_HOME -- scenarios write
+   real files under it. *)
 var
   Reg: TToolRegistry;
   Provider: ILLMProvider;
@@ -499,8 +521,10 @@ var
     T.Handler := HandleFakeRead;  T.Category := tcReadOnly; Reg.Register(T);
     T.Name := 'fake_write';  T.Description := 'w'; T.Schema := '{"type":"object"}';
     T.Handler := HandleFakeWrite; T.Category := tcMutating; Reg.Register(T);
-    T.Name := 'plan_write';  T.Description := 'p'; T.Schema := '{"type":"object"}';
-    T.Handler := HandleFakePlanWrite; T.Category := tcReadOnly; Reg.Register(T);
+    { The real thing. Its registration in every surface's registry is
+      what makes SPACE mode possible at all; a lint in the Makefile
+      target guards the unconditional call in NewBuiltinRegistry. }
+    RegisterPlanWriteTool(Reg);
   end;
 
   function ToolMsg(const CallId: string): string;
@@ -526,6 +550,18 @@ var
     Msgs[0] := MakeMessage(mrUser, 'go');
   end;
 
+  procedure WritePlanFile(const Body: string);
+  begin
+    L := TStringList.Create;
+    try
+      L.Text := Body;
+      ForceDirectories(ExtractFileDir(ResolvePlanPath));
+      L.SaveToFile(ResolvePlanPath);
+    finally
+      L.Free;
+    end;
+  end;
+
 begin
   if GetEnvironmentVariable('PASCLAW_HOME') = '' then
     Fail_('TestSpaceGate needs a scratch $PASCLAW_HOME (use: make test-plan-build-mode)');
@@ -534,8 +570,10 @@ begin
   Reg := TToolRegistry.Create;
   try
     RegisterTools;
+    AssertTrue(Reg.Find('plan_write', T),
+               'the real plan_write registers');
 
-    { 1: locked. Round 1 issues both read and write. }
+    { 1: locked. }
     Provider := TScriptProvider.Create([TArray<string>.Create('fake_read', 'fake_write')]);
     FreshCfg;
     AssertTrue(RunToolLoop(Cfg, Msgs, Loop), 'space locked: loop succeeds');
@@ -545,39 +583,49 @@ begin
     AssertTrue(Pos('plan_write', ToolMsg('r1c1')) > 0,
                'space locked: refusal carries the unlock recipe');
 
-    { 2: unlock. plan_write, then the write. }
-    GPlanWriteFails := False;
-    Provider := TScriptProvider.Create([TArray<string>.Create('plan_write'),
-                                        TArray<string>.Create('fake_write')]);
+    { 2: a BLANK plan must not unlock -- Codex P2 on PR #595. }
+    Provider := TScriptProvider.Create(
+      [TArray<string>.Create('plan_write|{"content":"   "}'),
+       TArray<string>.Create('fake_write')]);
+    FreshCfg;
+    AssertTrue(RunToolLoop(Cfg, Msgs, Loop), 'space blank: loop succeeds');
+    AssertTrue(Pos('empty plan refused', ToolMsg('r1c0')) > 0,
+               'space blank: whitespace content is an error');
+    AssertTrue(Pos('space mode', ToolMsg('r2c0')) > 0,
+               'space blank: gate stays closed after a blank plan_write');
+    AssertTrue(not FileExists(ResolvePlanPath),
+               'space blank: no PLAN.md written');
+
+    { 3: unlock with a real plan, through the real handler. }
+    Provider := TScriptProvider.Create(
+      [TArray<string>.Create('plan_write|{"content":"# Plan\n- step 1: assert X\n- step 2: code X"}'),
+       TArray<string>.Create('fake_write')]);
     FreshCfg;
     AssertTrue(RunToolLoop(Cfg, Msgs, Loop), 'space unlock: loop succeeds');
-    AssertEqS(ToolMsg('r1c0'), 'PLAN OK',  'space unlock: plan_write dispatched');
-    AssertEqS(ToolMsg('r2c0'), 'WRITE OK', 'space unlock: write dispatches after the plan');
+    AssertTrue(Pos('space mode', ToolMsg('r1c0')) = 0,
+               'space unlock: plan_write itself passes the gate');
+    AssertEqS(ToolMsg('r2c0'), 'WRITE OK',
+              'space unlock: write dispatches after the plan');
+    AssertTrue(FileExists(ResolvePlanPath),
+               'space unlock: PLAN.md really written');
+    DeleteFile(ResolvePlanPath);
 
-    { 3: a FAILED plan_write must not unlock. }
-    GPlanWriteFails := True;
-    Provider := TScriptProvider.Create([TArray<string>.Create('plan_write'),
-                                        TArray<string>.Create('fake_write')]);
-    FreshCfg;
-    AssertTrue(RunToolLoop(Cfg, Msgs, Loop), 'space no-unlock: loop succeeds');
-    AssertTrue(Pos('space mode', ToolMsg('r2c0')) > 0,
-               'space no-unlock: write still refused after a failed plan_write');
-    GPlanWriteFails := False;
-
-    { 4: seeded. PLAN.md on disk before the loop -- the resume case. }
-    L := TStringList.Create;
-    try
-      L.Text := '# Plan';
-      ForceDirectories(ExtractFileDir(ResolvePlanPath));
-      L.SaveToFile(ResolvePlanPath);
-    finally
-      L.Free;
-    end;
+    { 4: seeded by a real plan on disk -- the resume case. }
+    WritePlanFile('# Plan' + sLineBreak + '- carry on');
     Provider := TScriptProvider.Create([TArray<string>.Create('fake_write')]);
     FreshCfg;
     AssertTrue(RunToolLoop(Cfg, Msgs, Loop), 'space seeded: loop succeeds');
     AssertEqS(ToolMsg('r1c0'), 'WRITE OK',
-              'space seeded: PLAN.md on disk opens the gate from round one');
+              'space seeded: non-blank PLAN.md opens the gate from round one');
+    DeleteFile(ResolvePlanPath);
+
+    { 5: a whitespace-only PLAN.md must NOT seed the gate open. }
+    WritePlanFile('   ');
+    Provider := TScriptProvider.Create([TArray<string>.Create('fake_write')]);
+    FreshCfg;
+    AssertTrue(RunToolLoop(Cfg, Msgs, Loop), 'space blank-seed: loop succeeds');
+    AssertTrue(Pos('space mode', ToolMsg('r1c0')) > 0,
+               'space blank-seed: an empty file does not open the gate');
     DeleteFile(ResolvePlanPath);
   finally
     Reg.Free;

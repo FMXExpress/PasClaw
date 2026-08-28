@@ -708,9 +708,11 @@ end;
    restores the caller's value in its finally, so a nested loop (a
    subagent running in-thread, possibly under a different thread
    workspace) cannot clobber its parent's gate. Seeding is
-   FileExists(ResolvePlanPath): a resumed session whose PLAN.md
-   already exists starts unlocked rather than being asked to repeat
-   the ritual. Same precedent as SetThreadWorkspace. *)
+   PlanFileHasContent -- PLAN.md present AND non-blank -- so a
+   resumed session with a real plan starts unlocked, while an empty
+   file left by a crash or a touch(1) does not wave everything
+   through (Codex P2 on PR #595). Same precedent as
+   SetThreadWorkspace. *)
 threadvar
   GSpacePlanDone: Boolean;
 
@@ -1665,7 +1667,7 @@ begin
     from PLAN.md existence so a resumed SPACE session with a plan on
     disk starts unlocked -- see the threadvar's comment. }
   SavedSpaceGate := GSpacePlanDone;
-  GSpacePlanDone := FileExists(ResolvePlanPath);
+  GSpacePlanDone := PlanFileHasContent;
 
   { openclaw.agent.turn span (tier-1 instrumentation point). Wraps
     the whole tool loop -- everything below up to the final

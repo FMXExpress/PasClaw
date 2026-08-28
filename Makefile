@@ -789,6 +789,18 @@ test-plan-build-mode: | $(BUILDDIR)
 	@PASCLAW_HOME=$$(mktemp -d) ; export PASCLAW_HOME ; \
 	$(BUILDDIR)/plan_build_mode_tests ; rc=$$? ; \
 	rm -rf "$$PASCLAW_HOME" ; exit $$rc
+	@# Structural guard (Codex P1 on PR #595): plan_write must register
+	@# UNCONDITIONALLY -- the SPACE gate names it as the unlock, and the
+	@# gateway's registry is built at boot while modes arrive per-request,
+	@# so any conditional here bricks SPACE sessions into read-only.
+	@# NewBuiltinRegistry is implementation-only, so the test binary
+	@# cannot pin this; the lint pins the source instead.
+	@if grep -nE "if .*RegisterPlanWriteTool" src/cmd/PasClaw.Cmd.Agent.pas ; then \
+	  echo "  FAIL plan_write registration is conditional again"; exit 1 ; \
+	fi
+	@grep -q "^  RegisterPlanWriteTool(Result);" src/cmd/PasClaw.Cmd.Agent.pas \
+	  || { echo "  FAIL unconditional RegisterPlanWriteTool call missing"; exit 1 ; }
+	@echo "  ok   plan_write registers unconditionally" 
 
 # Configuration profiles -- builtins, _inherits, user shadow, LoadConfig merge (PR #291).
 # Uses PASCLAW_HOME pointing at a temp dir so it never touches the user's real config.
