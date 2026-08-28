@@ -725,7 +725,12 @@ begin
       before anyone runs and the kickoff can name it. }
     if Project = '' then
     begin
-      Project := CreateProject(Goal, '', 'Team ' + T.Name + ': ' + Goal, Err);
+      { The goal SENTENCE is the description; a short title off the
+        front of it is the name -- the same derivation the desktop's
+        Ask path uses, so a team and a hand-built app name things
+        alike instead of leaving a 60-character slug in every path. }
+      Project := CreateProject(GoalToTitle(Goal), '',
+                               'Team ' + T.Name + ': ' + Goal, Err);
       if Project = '' then
       begin
         ReplyErr(Resp, 500, 'seeded the agents but could not create the ' +

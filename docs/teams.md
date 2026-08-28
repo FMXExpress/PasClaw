@@ -56,7 +56,14 @@ tool only to *show* the result.
    the same contract `SeedSuiteReporting` has. Parents are created
    before their reports.
 2. **Binds a board** — creates the project in goal mode, uses yours in
-   project mode.
+   project mode. In goal mode the project is named from a **short title
+   derived off the front of the goal**, not the whole sentence: *"A book
+   comparison app: enter up to 4 book titles and compare them side by
+   side"* becomes `book-comparison-app`, not a 63-character slug that
+   then appears in every path, task listing and message the team sends.
+   Same rule the desktop's Ask path has always used, now server-side so
+   a team and a hand-built app name things alike. The full goal is kept
+   as the project's description.
 3. **Sends the kickoff** to the lead, goal or board named.
 4. **Starts the lead's first run**, so something happens in seconds.
 5. **Writes the team's state file**, which is what the wake loop reads.

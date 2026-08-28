@@ -180,6 +180,39 @@ begin
   AssertEqStr(Info.Role, 'Edited by the operator.',
               'the edited role was NOT overwritten');
 
+  (* ------------------------------------------------- goal -> project name -- *)
+  (* From the live run: this goal became the project slug
+     "a-book-comparison-app-enter-up-to-4-book-titles-and-compare-them",
+     which then appeared in every path, task listing and message the
+     team sent. The desktop's Ask path has always derived a short title
+     from a brief; this is the same rule server-side. *)
+  AssertEqStr(GoalToTitle('A book comparison app: enter up to 4 book ' +
+                          'titles and compare them side by side'),
+              'book comparison app', 'the goal that started this is trimmed');
+  AssertEqStr(GoalToTitle('build me a stopwatch'), 'stopwatch',
+              'the request framing and the article go');
+  (* Parity with the desktop's deriveProjectTitle is the point, so
+     these keep the trailing qualifier exactly as the client does: the
+     title is already short, and trimming further would be this
+     function inventing an opinion the desktop does not share. *)
+  AssertEqStr(GoalToTitle('Please can you create an invoice tracker for ' +
+                          'my shop'), 'invoice tracker for my shop',
+              'the polite framing and the article go, the thing stays');
+  AssertEqStr(GoalToTitle('I want a dashboard with charts and filters'),
+              'dashboard with charts and filters',
+              'a short-enough title is not trimmed further');
+  AssertEqStr(GoalToTitle('an expense tracker'), 'expense tracker',
+              '"an" is not read as "a" plus a stray "n"');
+  AssertEqStr(GoalToTitle('Write a tool to rename photos. It should ' +
+                          'handle EXIF.'), 'tool to rename photos',
+              'the first sentence only');
+  AssertEqStr(GoalToTitle('build a Node.js dashboard'), 'Node.js dashboard',
+              'a dotted name is not a sentence end');
+  AssertTrue(Length(GoalToTitle(StringOfChar('x', 200))) <= 48,
+             'one enormous token is still bounded');
+  AssertEqStr(GoalToTitle(''), '', 'nothing in, nothing out');
+  AssertTrue(GoalToTitle('...') <> '', 'unusable input falls back to itself');
+
   { ------------------------------------------------------------- assignee -- }
   Proj := CreateProject('Team Board', '', '', Err);
   AssertEqStr(Proj, 'team-board', 'board project exists');

@@ -122,7 +122,8 @@ begin
 
   if Project = '' then
   begin
-    Project := CreateProject(Goal, '', 'Team ' + T.Name + ': ' + Goal, Err);
+    Project := CreateProject(GoalToTitle(Goal), '',
+                             'Team ' + T.Name + ': ' + Goal, Err);
     if Project = '' then
     begin
       PrintLn('error: seeded the agents but could not create the goal ' +
