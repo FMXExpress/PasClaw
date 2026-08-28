@@ -68,7 +68,16 @@ unit PasClaw.Agents;
 interface
 
 uses
-  SysUtils, Classes, SyncObjs;
+  { PasClaw.Utils for TStringArray, which SetAgentsPaused returns.
+    In the INTERFACE, and it has to be: FPC's own SysUtils declares a
+    TStringArray, so an interface that named the type without saying
+    where it came from compiled here and failed under dcc64, which has
+    no such type. PasClaw.Utils is the one place the tree defines it --
+    aliasing the RTL type on FPC, declaring it on Delphi -- so naming
+    it is what makes the two compilers agree. Utils is bottom-level;
+    there is no cycle to worry about. }
+  SysUtils, Classes, SyncObjs,
+  PasClaw.Utils;
 
 type
   TAgentInfo = record
@@ -227,7 +236,6 @@ implementation
 
 uses
   DateUtils,
-  PasClaw.Utils,
   PasClaw.JSON,
   PasClaw.Desktop.Events,   { PublishAgent -- the roster does not poll }
   PasClaw.Logger,
