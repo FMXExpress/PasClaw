@@ -19,6 +19,34 @@ drive `POST /v1/teams/up`.
 |---|---|
 | `duo` | Foreman, 10x Developer — the smallest team that plans, builds and reports |
 | `software-team` | Foreman, Product Manager, 10x Developer, UI Psychologist, Test Engineer |
+| `executive-team` | Chief of Staff routing eight C-suite officers — Strategy, Finance, People, Legal (General Counsel), Operations, Marketing, Product, Board Comms |
+
+`executive-team` is a port of
+[OpenExecutive](https://github.com/SenteLabsAI/OpenExecutive)'s virtual
+C-suite into PasClaw's team machinery. Its orchestrator becomes the
+Chief of Staff, its "route each question to the relevant few
+specialists" becomes task assignment, and its economy is the wake
+policy we already have: an officer with no mail and no open assigned
+task is never woken, so nine agents cost like the two or three actually
+working on the current question. The chief is told so directly — its
+role says *two officers is a normal number; eight means you did not
+think*.
+
+Two things deliberately differ from OpenExecutive. Its specialists are
+invisible — one synthesized voice, the architecture never shown;
+PasClaw's whole desktop exists to *watch* agents work, so the officers'
+tasks and documents are in the open while the chief still answers in
+one voice (the synthesis lands as `docs/brief.md`). And officer
+deliverables are **documents in the project** —
+`projects/<project>/docs/*.md`, one file per deliverable, the path in
+the task notes — because a recommendation that lives only in a chat
+message is not a deliverable. The General Counsel role states in every
+deliverable that it is an AI, not licensed counsel, and names which
+points need a real lawyer.
+
+```sh
+pasclaw team up executive-team --goal "prepare our seed fundraise"
+```
 
 Every role prompt is built from the same six sections, because the
 sections are what make a team a system instead of five chatbots:

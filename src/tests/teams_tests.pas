@@ -165,7 +165,8 @@ var
   Verdicts: TAgentVerdictArray;
   Task: TTaskInfo;
   I: Integer;
-  Err, Out_, Delivered, TaskId, Proj: string;
+  Err, Out_, Delivered, TaskId, Proj, Proj2: string;
+  N2: Integer;
   Found: Boolean;
   Holder: TBusyHolder;
 begin
@@ -539,6 +540,81 @@ begin
   AssertTrue(not GetAgent('lead', Info),  'the lead is gone');
   AssertTrue(not GetAgent('quiet', Info),
              'and so is the member the wake list never mentioned');
+
+  (* ------------------------------------------- the executive team -- *)
+  (* The OpenExecutive port: a Chief of Staff routing eight C-suite
+     officers. The catalogue loop above already proved it validates;
+     what is pinned here is the shape and the ECONOMY -- nine agents
+     that price like the two actually working, because the wake policy
+     only wakes an officer who was handed something. *)
+  AssertTrue(FindTeamTemplate('executive-team', T), 'executive-team loads');
+  AssertEqInt(Length(T.Agents), 9, 'a chief of staff and eight officers');
+  AssertEqInt(Length(TeamLeads(T)), 1, 'exactly one lead');
+  AssertEqStr(TeamLeads(T)[0], 'chief', 'and it is the chief of staff');
+  for I := 1 to High(T.Agents) do
+    AssertEqStr(T.Agents[I].Parent, 'chief',
+                'officer "' + T.Agents[I].Name + '" reports to the chief');
+  AssertEqInt(Length(TeamWakeList(T)), 9,
+              'every officer is wake-ELIGIBLE -- the policy, not the ' +
+              'list, is what keeps idle officers asleep');
+  { The disciplines that make the roles safe and useful, spot-checked
+    where wording IS the behavior. }
+  AssertContains(T.Agents[0].Role, 'two is a normal number',
+                 'the chief routes narrowly by instruction');
+  AssertContains(T.Agents[0].Role, 'open_agent',
+                 'and owns the screen like the foreman does');
+  Found := False;
+  for I := 0 to High(T.Agents) do
+    if T.Agents[I].Name = 'counsel' then
+    begin
+      Found := True;
+      AssertContains(T.Agents[I].Role, 'not licensed counsel',
+                     'the AI counsel says so in every deliverable');
+    end;
+  AssertTrue(Found, 'there is a general counsel');
+  AssertContains(T.Agents[1].Role, 'docs/',
+                 'officer deliverables are DOCUMENTS in the project');
+
+  { Seed it and prove the routing economy against the real wake policy. }
+  AssertTrue(SeedTeam(T, Created, Skipped, Err), 'the c-suite seeds: ' + Err);
+  AssertEqInt(Length(Created) + Length(Skipped), 9, 'all nine exist');
+  Proj2 := CreateProject('Fund Raise', '', '', Err);
+  S := Default(TTeamState);
+  S.Name := 'executive-team'; S.Project := Proj2; S.Enabled := True;
+  S.WakeMinutes := 15; S.WakeWho := TeamWakeList(T);
+  AssertTrue(SaveTeamState(S, Err), 'and is up');
+
+  { Nothing routed yet: NOBODY wakes. Nine idle agents cost nothing. }
+  Wakes := TeamWakeDecisions(S);
+  for I := 0 to High(Wakes) do
+    if Wakes[I].Wake then
+      Fail('"' + Wakes[I].Agent + '" woken with nothing to do: ' + Wakes[I].Why);
+  WriteLn('  ok: an unrouted c-suite sleeps -- all nine left alone');
+
+  { The chief routes to two officers: a task for finance, a message
+    for strategy. Exactly those two wake; the other seven sleep on. }
+  TaskId := CreateTask(Proj2, 'Model the runway', '', Err);
+  AssertTrue(UpdateTask(Proj2, TaskId, '', '-', '', Err, 'finance'),
+             'a task is assigned to finance: ' + Err);
+  AssertTrue(AgentSend('strategy', 'chief', 'Positioning summary please',
+                       Delivered, Err), 'and strategy gets a message');
+  Wakes := TeamWakeDecisions(S);
+  N2 := 0;
+  for I := 0 to High(Wakes) do
+    if Wakes[I].Wake then
+    begin
+      Inc(N2);
+      AssertTrue((Wakes[I].Agent = 'finance') or (Wakes[I].Agent = 'strategy'),
+                 'only the routed officers wake (got "' + Wakes[I].Agent +
+                 '": ' + Wakes[I].Why + ')');
+    end;
+  AssertEqInt(N2, 2, 'exactly the two routed officers wake');
+
+  { Clean up: the c-suite retires so the sections below see the same
+    roster they always did. }
+  AssertTrue(RemoveTeam('executive-team', Removed, Err),
+             'the c-suite retires: ' + Err);
+  AssertEqInt(Length(Removed), 9, 'all nine went');
 
   { --------------------------------------------------------------- export -- }
   Out_ := ExportRosterJSON('my-team', 'My Team');
