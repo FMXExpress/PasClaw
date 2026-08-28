@@ -820,6 +820,39 @@ feel like it changes the machine rather than the paint.
 
 ---
 
+## How chats render
+
+The desktop's chats — project chats, the **Ask** window, and agent chat
+windows — render the way the web UI's chat does, restyled for whichever
+retro skin is on.
+
+**Replies are markdown.** Headings, bold and italics, inline code,
+bullet and numbered lists, blockquotes, links, and code fences with a
+language label and a **copy** button. What you typed stays plain text.
+The renderer is safe by construction: everything is HTML-escaped first
+and formatting added back after, links are http(s)-only and images
+http(s)/data:image-only, so a reply cannot smuggle script into the page.
+While a reply streams it repaints at most once per frame; the finished
+turn gets one final paint (done synchronously, because a background tab
+never gets an animation frame).
+
+**Tool calls are collapsible cards.** The `⏺ tool(...)` summary the
+gateway weaves into the stream becomes the card's clickable header, and
+the body opens to the **full arguments** and the **full result** — or
+the error, marked red — from the `pasclaw-tool` side-channel the stream
+already carries. Cards are collapsed by default, so a ten-tool turn
+reads as an answer with ten small receipts, not a wall of JSON. Parallel
+batches pair call to result by index, the same rule the web UI uses,
+because the loop announces every call before any result.
+
+**Reopened chats look the same.** The stored transcript carries each
+turn's calls (name + arguments, on the assistant turn) and results (tool
+turns, joined by `tool_call_id`), and the session routes now serialise
+them — so a conversation reopened tomorrow rebuilds the same cards from
+the record, with no separate blob to keep in step. Agent chat windows
+get this too: live narration while the agent works, and full cards of
+everything it did once the turn is filed.
+
 ## Conversations live on the server
 
 Every chat window in the desktop -- a project's chat, and the shell -- is a

@@ -1025,6 +1025,87 @@ h1,h2,h3 { margin: 0 0 6px; font-size: 12px; }
   font-size: 11px; color: var(--disabledtext); margin: 2px 0 2px 8px;
   white-space: pre-wrap; word-break: break-word;
 }
+
+/* ---- rendered markdown in chat bodies ----
+   .body is pre-wrap for plain text; a rendered body switches to normal
+   flow and lets the block elements do the spacing. Everything is
+   colored from the theme variables, because these bubbles appear in
+   every skin from Win95 grey to synthwave neon and a hard-coded palette
+   would be wrong in most of them. */
+.msg .body.md { white-space: normal; }
+.msg .body.md p { margin: 0 0 6px; }
+.msg .body.md p:last-child, .msg .body.md ul:last-child,
+.msg .body.md ol:last-child { margin-bottom: 0; }
+.msg .body.md h1, .msg .body.md h2, .msg .body.md h3,
+.msg .body.md h4, .msg .body.md h5, .msg .body.md h6 {
+  margin: 8px 0 4px; font-size: 13px;
+}
+.msg .body.md h1 { font-size: 15px; }
+.msg .body.md h2 { font-size: 14px; }
+.msg .body.md ul, .msg .body.md ol { margin: 0 0 6px; padding-left: 20px; }
+.msg .body.md li { margin: 1px 0; }
+.msg .body.md code.ic {
+  font-family: "Courier New", monospace; font-size: 11px;
+  border: 1px solid var(--shadow); padding: 0 3px;
+}
+.msg .body.md blockquote {
+  margin: 4px 0 6px; padding: 2px 8px;
+  border-left: 3px solid var(--shadow); color: var(--disabledtext);
+}
+.msg .body.md hr { border: none; border-top: 1px solid var(--shadow); margin: 6px 0; }
+.msg .body.md img.md-img { max-width: 100%; }
+.msg .body.md a { color: var(--accent); }
+.code-wrap {
+  margin: 4px 0 6px;
+  box-shadow: inset 1px 1px 0 0 var(--shadow), inset -1px -1px 0 0 var(--highlight);
+}
+.code-wrap .code-head {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 2px 6px; background: var(--face); color: var(--text);
+  font-size: 10px;
+}
+.code-wrap .copy-btn { font-size: 10px; padding: 0 6px; }
+.code-wrap pre {
+  margin: 0; padding: 4px 6px; overflow-x: auto;
+  font-family: "Courier New", monospace; font-size: 11px;
+  background: var(--window); color: var(--text);
+}
+
+/* ---- tool cards: the turn's work, one click from its receipt ----
+   The streamed summary line is the clickable header; the body opens to
+   the full arguments and the full result (or the error). A sunken
+   panel rather than the web UI's neon border, because these live on a
+   retro desktop and should look like part of the furniture. */
+details.tcard {
+  margin: 4px 0 4px 8px; background: var(--face);
+  box-shadow: inset 1px 1px 0 0 var(--shadow), inset -1px -1px 0 0 var(--highlight);
+}
+details.tcard > summary {
+  cursor: pointer; list-style: none;
+  display: flex; align-items: center; gap: 5px; padding: 2px 6px;
+  font-size: 11px; color: var(--text);
+  white-space: nowrap; overflow: hidden;
+}
+details.tcard > summary::-webkit-details-marker { display: none; }
+details.tcard > summary::before { content: "▸"; flex: 0 0 auto; }
+details.tcard[open] > summary::before { content: "▾"; }
+details.tcard > summary .tc-call {
+  overflow: hidden; text-overflow: ellipsis;
+  font-family: "Courier New", monospace;
+}
+details.tcard.err > summary { color: #a00; font-weight: bold; }
+details.tcard .tc-body {
+  border-top: 1px solid var(--shadow); background: var(--window);
+  padding: 3px 6px; max-height: 240px; overflow: auto;
+}
+details.tcard .tc-body pre {
+  margin: 1px 0 6px; white-space: pre-wrap; word-break: break-word;
+  font-family: "Courier New", monospace; font-size: 11px; color: var(--text);
+}
+details.tcard .tc-h {
+  font-size: 9px; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--disabledtext);
+}
 .composer { flex: 0 0 auto; display: flex; gap: 4px; padding: 4px 0 0; }
 .composer textarea { flex: 1 1 auto; resize: none; height: 46px; }
 
@@ -2964,6 +3045,18 @@ function openShell() {
     const body = say("pasclaw", "");
     const signal = turn.begin();
     let acc = "", stopped = false;
+    /* Markdown + tool cards while the turn streams, throttled to one
+       paint per frame -- the same treatment the project chats get. */
+    const toolEvents = [];
+    let raf = 0;
+    const schedulePaint = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        paintAssistant(body, acc, toolEvents);
+        log.scrollTop = log.scrollHeight;
+      });
+    };
     /* Same queued-turn notice the project chats paint -- the shell
        session can be open on several screens too. */
     TURN_WAITS.set(SHELL_SESSION, () => {
@@ -3029,7 +3122,18 @@ function openShell() {
         let nl;
         while ((nl = buf.indexOf("\n")) >= 0) {
           const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
-          if (line.startsWith(":")) continue;      /* tool side-channel */
+          if (line.startsWith(":")) {
+            /* The tool side-channel: full args and results for this
+               turn's cards. */
+            const c = line.slice(1).trim();
+            if (c.startsWith("pasclaw-tool ")) {
+              try {
+                toolEvents.push(JSON.parse(c.slice("pasclaw-tool ".length)));
+                schedulePaint();
+              } catch {}
+            }
+            continue;
+          }
           if (!line.startsWith("data:")) continue;
           const data = line.slice(5).trim();
           if (data === "[DONE]") break;
@@ -3037,20 +3141,22 @@ function openShell() {
             const j = JSON.parse(data);
             const d = (j.choices && j.choices[0] && j.choices[0].delta &&
                        j.choices[0].delta.content) || "";
-            if (d) { acc += d; body.textContent = acc; log.scrollTop = log.scrollHeight; }
+            if (d) { acc += d; schedulePaint(); }
           } catch {}
         }
       }
     } catch (e) {
       if (isAbort(e)) {
         stopped = true;
-        body.textContent = (acc ? acc + "\n\n" : "") + "(stopped)";
+        paintAssistant(body, (acc ? acc + "\n\n" : "") + "(stopped)", toolEvents);
       } else {
-        acc = acc || "";
-        body.textContent = (acc ? acc + "\n" : "") + "(" + e.message + ")";
+        paintAssistant(body, (acc ? acc + "\n\n" : "") + "(" + e.message + ")",
+                       toolEvents);
       }
     }
     turn.end();
+    /* Final paint, synchronously -- rAF does not fire in a hidden tab. */
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
     /* A stopped turn is still filed, by the gateway, before it closed
        the stream -- the model DID whatever it did before the stop.
        The client just stops here: no action replay. */
@@ -3061,7 +3167,9 @@ function openShell() {
        time this reply lands. A block in the text is still honoured, for
        a model that describes the change instead of calling the tool. */
     const ui = extractUIBlocks(acc);
-    if (ui.blocks.length) body.textContent = ui.text.trim() || "On it.";
+    paintAssistant(body, ui.blocks.length ? (ui.text.trim() || "On it.") : acc,
+                   toolEvents);
+    log.scrollTop = log.scrollHeight;
     for (const blk of ui.blocks)
       if (blk.ui === "desktop") await runShellActions(blk, t => note(t));
   }
@@ -3070,15 +3178,35 @@ function openShell() {
     let j;
     try { j = await api("/v1/sessions/" + SHELL_SESSION + "?if_absent=empty"); }
     catch { return; }
-    let shown = 0;
-    ((j && j.messages) || []).forEach(m => {
-      if (m.role !== "user" && m.role !== "assistant") return;
-      const text = m.content || "";
-      if (!text.trim()) return;    /* a turn that only called tools */
-      say(m.role === "user" ? "you" : "pasclaw", text,
-          m.role === "user" ? "u" : "");
-      shown++;
+    const msgs = (j && j.messages) || [];
+    /* Pair each stored tool result to its call, so a reopened shell
+       shows the same cards it showed live -- the transcript carries
+       the calls on the assistant turns and the results as tool turns,
+       joined by tool_call_id. */
+    const results = new Map();
+    msgs.forEach(m => {
+      if (m.role === "tool" && m.tool_call_id)
+        results.set(m.tool_call_id, { content: m.content || "", name: m.name || "" });
     });
+    let shown = 0;
+    msgs.forEach(m => {
+      if (m.role === "user") {
+        if (!(m.content || "").trim()) return;
+        say("you", m.content, "u");
+        shown++;
+        return;
+      }
+      if (m.role !== "assistant") return;
+      if (m.tool_calls && m.tool_calls.length) {
+        const cards = recordToolCards(m, results);
+        if (cards) { log.appendChild(cards); shown++; }
+      }
+      if ((m.content || "").trim()) {
+        paintAssistant(say("pasclaw", ""), m.content, null);
+        shown++;
+      }
+    });
+    log.scrollTop = log.scrollHeight;
     if (shown) note("— earlier conversation, reopened —");
   }
 
@@ -3874,6 +4002,254 @@ function dropProjectChats() {
   PROJECT_CHATS.clear();
 }
 
+/* ===== chat rendering: markdown + tool cards =========================
+
+   Ported from the web UI (webui.html), restyled for the desktop. Two
+   ideas travel together:
+
+   1. Assistant text renders as markdown. The renderer is safe by
+      construction: everything is HTML-escaped FIRST and formatting is
+      added back afterwards, links are http(s)-only and images
+      http(s)/data:image-only, so a reply cannot smuggle script or a
+      javascript: URL into the page.
+
+   2. The tool summary lines the gateway weaves into the stream
+      (⏺ call / ⎿ result) become collapsible cards, filled with the
+      FULL arguments and result from the `pasclaw-tool` side-channel
+      the stream also carries. The reply reads clean; the work is one
+      click away. */
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
+}
+
+function prettyJSON(s) {
+  try { return JSON.stringify(JSON.parse(s), null, 2); } catch { return s; }
+}
+
+function mdCodeBlock(code, lang) {
+  return '<div class="code-wrap"><div class="code-head">'
+       + '<span>' + escapeHtml(lang || "code") + "</span>"
+       + '<button class="btn copy-btn" type="button">copy</button></div>'
+       + "<pre><code>" + escapeHtml(code) + "</code></pre></div>";
+}
+
+/* One listener for every copy button ever rendered, because chat bodies
+   repaint while streaming and per-render wiring would leak or lapse. */
+document.addEventListener("click", e => {
+  const btn = e.target.closest && e.target.closest(".copy-btn");
+  if (!btn) return;
+  const wrap = btn.closest(".code-wrap");
+  const code = wrap && wrap.querySelector("code");
+  if (!code) return;
+  const flash = () => {
+    const prev = btn.textContent;
+    btn.textContent = "copied";
+    setTimeout(() => { btn.textContent = prev; }, 1200);
+  };
+  const text = code.textContent;
+  if (navigator.clipboard && navigator.clipboard.writeText)
+    navigator.clipboard.writeText(text).then(flash).catch(() => {});
+  else {
+    const ta = document.createElement("textarea");
+    ta.value = text; ta.style.cssText = "position:fixed;opacity:0";
+    document.body.appendChild(ta); ta.select();
+    try { document.execCommand("copy"); flash(); } catch {}
+    document.body.removeChild(ta);
+  }
+});
+
+function renderMarkdown(src) {
+  const esc = escapeHtml;
+  const inline = s => {
+    s = esc(s);
+    s = s.replace(/`([^`]+)`/g, (_, c) => '<code class="ic">' + c + "</code>");
+    s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+    s = s.replace(/\*([^*\n]+)\*/g, "<em>$1</em>");
+    /* Images BEFORE links (![alt](url) contains [alt](url)). Only http(s)
+       and data:image URLs, so no javascript:/other-scheme smuggling. */
+    s = s.replace(/!\[([^\]]*)\]\((https?:\/\/[^)\s]+|data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=]+)\)/gi,
+                  (_, alt, u) => '<img class="md-img" src="' + esc(u) + '" alt="' + esc(alt) + '" loading="lazy">');
+    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+                  (_, t, u) => '<a href="' + esc(u) + '" target="_blank" rel="noopener">' + t + "</a>");
+    return s;
+  };
+  const lines = String(src).split("\n");
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const ln = lines[i];
+    const fence = ln.match(/^```(.*)$/);
+    if (fence) {
+      const lang = fence[1].trim();
+      const code = [];
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i])) { code.push(lines[i]); i++; }
+      i++; /* closing fence, or run off the end of an unterminated block */
+      out.push(mdCodeBlock(code.join("\n"), lang));
+      continue;
+    }
+    const h = ln.match(/^(#{1,6})\s+(.*)$/);
+    if (h) { out.push("<h" + h[1].length + ">" + inline(h[2]) + "</h" + h[1].length + ">"); i++; continue; }
+    if (/^\s{0,3}([-*_])(\s*\1){2,}\s*$/.test(ln)) { out.push("<hr>"); i++; continue; }
+    if (/^>\s?/.test(ln)) {
+      const q = [];
+      while (i < lines.length && /^>\s?/.test(lines[i])) { q.push(lines[i].replace(/^>\s?/, "")); i++; }
+      out.push("<blockquote>" + inline(q.join(" ")) + "</blockquote>");
+      continue;
+    }
+    if (/^\s*[-*+]\s+/.test(ln)) {
+      const items = [];
+      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
+        items.push("<li>" + inline(lines[i].replace(/^\s*[-*+]\s+/, "")) + "</li>"); i++;
+      }
+      out.push("<ul>" + items.join("") + "</ul>");
+      continue;
+    }
+    if (/^\s*\d+\.\s+/.test(ln)) {
+      const items = [];
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+        items.push("<li>" + inline(lines[i].replace(/^\s*\d+\.\s+/, "")) + "</li>"); i++;
+      }
+      out.push("<ol>" + items.join("") + "</ol>");
+      continue;
+    }
+    if (/^\s*$/.test(ln)) { i++; continue; }
+    const para = [];
+    while (i < lines.length && !/^\s*$/.test(lines[i]) && !/^```/.test(lines[i]) &&
+           !/^#{1,6}\s/.test(lines[i]) && !/^\s*[-*+]\s+/.test(lines[i]) &&
+           !/^\s*\d+\.\s+/.test(lines[i]) && !/^>\s?/.test(lines[i])) {
+      para.push(lines[i]); i++;
+    }
+    out.push("<p>" + inline(para.join("\n")).replace(/\n/g, "<br>") + "</p>");
+  }
+  return out.join("\n");
+}
+
+const TV_CALL = "⏺", TV_RESULT = "⎿", TV_ERR = "✗";
+
+function toolCard(call, results, detail) {
+  let bodyHtml, isErr;
+  if (detail && (detail.args !== undefined || detail.result !== undefined || detail.err !== undefined)) {
+    /* Rich body from the side-channel or the record: full args + full
+       result/error. */
+    isErr = detail.err !== undefined && detail.err !== "";
+    let h = "";
+    if (detail.args) h += '<div class="tc-h">args</div><pre>' + escapeHtml(prettyJSON(detail.args)) + "</pre>";
+    if (isErr) h += '<div class="tc-h">error</div><pre>' + escapeHtml(detail.err) + "</pre>";
+    else if (detail.result !== undefined) h += '<div class="tc-h">result</div><pre>' + escapeHtml(detail.result || "(no output)") + "</pre>";
+    bodyHtml = h || "<pre>(no detail)</pre>";
+  } else {
+    /* Fallback: the streamed ⎿ summary is all we have. */
+    const body = (results || []).join("\n").trim();
+    isErr = body.indexOf(TV_ERR) >= 0;
+    bodyHtml = "<pre>" + (body ? escapeHtml(body) : "(no result)") + "</pre>";
+  }
+  return '<details class="tcard' + (isErr ? " err" : "") + '">'
+       + '<summary><span class="tc-call">' + escapeHtml(call) + "</span></summary>"
+       + '<div class="tc-body">' + bodyHtml + "</div>"
+       + "</details>";
+}
+
+/* Assistant text -> HTML: markdown for the prose, cards for the ⏺/⎿
+   runs. A parallel batch announces EVERY call before ANY result and the
+   gateway blank-lines between them, so collect the run of calls, then
+   the run of results, and pair BY INDEX -- "result follows its call"
+   mis-assigns parallel batches. `tools` (from pairToolDetails or the
+   record) enriches the Nth card with full args/result. */
+function renderAssistantHTML(src, tools) {
+  const lines = String(src).split("\n");
+  const out = [];
+  let buf = [], cardIdx = 0;
+  const strip = ln => ln.replace(/^\s+/, "");
+  const isCall = ln => strip(ln).startsWith(TV_CALL);
+  const isResult = ln => strip(ln).startsWith(TV_RESULT);
+  const flush = () => { if (buf.length) { out.push(renderMarkdown(buf.join("\n"))); buf = []; } };
+  let i = 0;
+  while (i < lines.length) {
+    if (isCall(lines[i])) {
+      flush();
+      const calls = [], results = [];
+      while (i < lines.length && (isCall(lines[i]) || strip(lines[i]) === "")) {
+        if (isCall(lines[i])) calls.push(strip(lines[i]).slice(TV_CALL.length).trim());
+        i++;
+      }
+      while (i < lines.length && isResult(lines[i])) {
+        results.push(strip(lines[i]).slice(TV_RESULT.length).trim());
+        i++;
+      }
+      for (let k = 0; k < calls.length; k++) {
+        out.push(toolCard(calls[k], results[k] !== undefined ? [results[k]] : [],
+                          tools && tools[cardIdx]));
+        cardIdx++;
+      }
+    } else { buf.push(lines[i]); i++; }
+  }
+  flush();
+  return out.join("\n");
+}
+
+/* Walk the side-channel call/result events into per-card
+   {name,args,result,err} records aligned to call order. Results attach
+   to the EARLIEST still-open call (FIFO), preferring a name match, so
+   two parallel fs_reads keep their own results. */
+function pairToolDetails(events) {
+  const pairs = [];
+  for (const e of events || []) {
+    if (!e || !e.t) continue;
+    if (e.t === "call") { pairs.push({ name: e.name || "", args: e.args || "" }); continue; }
+    const open = p => p.result === undefined && p.err === undefined;
+    let tgt = null;
+    for (let i = 0; i < pairs.length; i++)
+      if (open(pairs[i]) && pairs[i].name === e.name) { tgt = pairs[i]; break; }
+    if (!tgt) for (let i = 0; i < pairs.length; i++)
+      if (open(pairs[i])) { tgt = pairs[i]; break; }
+    if (tgt) { if (e.err) tgt.err = e.err; else tgt.result = e.result || ""; }
+  }
+  return pairs;
+}
+
+/* Paint an assistant body as markdown + cards, keeping whichever cards
+   the reader had open. Streaming repaints the same body many times;
+   without the save/restore every repaint would slam their card shut. */
+function paintAssistant(bodyEl, text, toolEvents) {
+  const open = new Set();
+  bodyEl.querySelectorAll("details.tcard").forEach((d, i) => { if (d.open) open.add(i); });
+  bodyEl.classList.add("md");
+  bodyEl.innerHTML = renderAssistantHTML(text, pairToolDetails(toolEvents));
+  bodyEl.querySelectorAll("details.tcard").forEach((d, i) => { if (open.has(i)) d.open = true; });
+}
+
+/* The same cards, rebuilt from the RECORD for a reopened conversation.
+
+   The stored transcript has the whole story -- assistant turns carry
+   their tool_calls (name + args), tool turns carry the results, paired
+   by tool_call_id -- so a chat reopened tomorrow shows the same
+   receipts it showed while it ran, with no separate blob to keep in
+   step. Returns one node per assistant-with-tools turn, cards
+   collapsed. `results` maps tool_call_id -> {content, name}. */
+function recordToolCards(m, results) {
+  const host = el("div");
+  (m.tool_calls || []).forEach(tc => {
+    const r = results.get(tc.id);
+    const args = tc.args || "";
+    let key = "";
+    try {
+      const a = JSON.parse(args);
+      key = a.path || a.command || a.query || a.action || a.title || "";
+    } catch {}
+    const call = tc.name + "(" + (key ? JSON.stringify(key) : "") + ")";
+    const detail = { name: tc.name, args };
+    if (r) {
+      if (/^ERROR:/i.test(r.content || "")) detail.err = r.content;
+      else detail.result = r.content || "";
+    }
+    host.insertAdjacentHTML("beforeend", toolCard(call, [], detail));
+  });
+  return host.childElementCount ? host : null;
+}
+
 function projectChat(project) {
   let c = PROJECT_CHATS.get(project);
   if (!c) { c = buildChatUI(project); PROJECT_CHATS.set(project, c); }
@@ -3967,18 +4343,42 @@ function buildChatUI(project) {
   const PAGE = 120;
   let oldestShown = 0, recordTotal = 0, loadingOlder = false;
 
-  /* Render one message from the record. Returns the node so the
-     backwards pager can insert before it. Only user and assistant turns
-     with something to show: tool calls and their results are part of
-     the stored transcript (the model needs them) but the cards and tool
-     lines that rendered them belong to the turn that produced them, and
-     would be a lie if re-rendered against a later app. */
-  function renderRecord(m) {
-    const text = m.content || "";
-    if (m.role !== "user" && m.role !== "assistant") return null;
-    if (!text.trim()) return null;   /* a turn that only called tools */
-    return addMsg(m.role === "user" ? "you" : "pasclaw", text,
-                  m.role === "user" ? "u" : "").parentNode;
+  /* Render a page of the record. Returns the nodes in order so the
+     backwards pager can insert them before what it already shows.
+
+     A batch rather than one message at a time, because tool work in
+     the record spans messages: the assistant turn carries the CALLS
+     (name + args), and the results arrive as separate tool turns
+     paired by tool_call_id. Rendered per-message there is nothing to
+     pair against; rendered as a batch, a reopened conversation shows
+     the same collapsible cards it showed while it ran. A call whose
+     result landed on the other side of a page boundary shows the call
+     with no result -- rare, and honest about what this page holds. */
+  function renderRecordBatch(msgs) {
+    const nodes = [];
+    const results = new Map();
+    msgs.forEach(m => {
+      if (m.role === "tool" && m.tool_call_id)
+        results.set(m.tool_call_id, { content: m.content || "", name: m.name || "" });
+    });
+    msgs.forEach(m => {
+      if (m.role === "user") {
+        if ((m.content || "").trim())
+          nodes.push(addMsg("you", m.content, "u").parentNode);
+        return;
+      }
+      if (m.role !== "assistant") return;   /* tool turns fed the cards */
+      if (m.tool_calls && m.tool_calls.length) {
+        const cards = recordToolCards(m, results);
+        if (cards) { log.appendChild(cards); nodes.push(cards); }
+      }
+      if ((m.content || "").trim()) {
+        const b = addMsg("pasclaw", "");
+        paintAssistant(b, m.content, null);
+        nodes.push(b.parentNode);
+      }
+    });
+    return nodes;
   }
 
   /* Older messages, prepended, with the reading position kept.
@@ -3997,10 +4397,7 @@ function buildChatUI(project) {
       const msgs = (j && j.messages) || [];
       const before = log.scrollHeight, top = log.scrollTop;
       const first = log.firstChild;
-      msgs.forEach(m => {
-        const node = renderRecord(m);
-        if (node) log.insertBefore(node, first);
-      });
+      renderRecordBatch(msgs).forEach(node => log.insertBefore(node, first));
       oldestShown = j.offset || 0;
       log.scrollTop = top + (log.scrollHeight - before);
       paintEarlier();
@@ -4042,7 +4439,7 @@ function buildChatUI(project) {
     if (!msgs.length) return;
     recordTotal = (rec && rec.total) || msgs.length;
     oldestShown = (rec && typeof rec.offset === "number") ? rec.offset : 0;
-    msgs.forEach(m => renderRecord(m));
+    renderRecordBatch(msgs);
     paintEarlier();
     addMsg("desktop", "— earlier conversation, reopened —", "");
     log.scrollTop = log.scrollHeight;
@@ -4161,6 +4558,21 @@ function buildChatUI(project) {
        you cannot interrupt is the thing being fixed here. */
     const signal = turn.begin();
     let acc = "", touchedApp = false, stopped = false;
+    /* The side-channel events of THIS turn, and the throttle that turns
+       them plus the accumulated text into markdown + cards while the
+       stream is still running. One paint per frame at most: a fast
+       tool loop can deliver dozens of deltas between refreshes, and
+       re-rendering the bubble for each is work nobody can see. */
+    const toolEvents = [];
+    let raf = 0;
+    const schedulePaint = () => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        paintAssistant(body, acc, toolEvents);
+        log.scrollTop = log.scrollHeight;
+      });
+    };
     /* Should this turn queue behind another screen's turn, the gateway
        says so (turn-queued, addressed to this client) and the reply
        bubble explains the silence. The first streamed delta paints over
@@ -4246,6 +4658,12 @@ function buildChatUI(project) {
             if (c.startsWith("pasclaw-tool ")) {
               try {
                 const tj = JSON.parse(c.slice("pasclaw-tool ".length));
+                /* Keep the full detail: it becomes the body of this
+                   call's card. A result arriving without any new text
+                   still repaints, so the card fills in the moment the
+                   tool comes back rather than at the next delta. */
+                toolEvents.push(tj);
+                schedulePaint();
                 const argstr = JSON.stringify(tj.args || tj.arguments || {});
                 if (/projects\/[^"]*\/app\//.test(argstr)) touchedApp = true;
                 /* The model's own checklist IS this project's task list.
@@ -4264,7 +4682,7 @@ function buildChatUI(project) {
             const j = JSON.parse(data);
             const d = (j.choices && j.choices[0] && j.choices[0].delta &&
                        j.choices[0].delta.content) || "";
-            if (d) { acc += d; body.textContent = acc; log.scrollTop = log.scrollHeight; }
+            if (d) { acc += d; schedulePaint(); }
           } catch {}
         }
       }
@@ -4275,12 +4693,18 @@ function buildChatUI(project) {
          failed on its own. */
       if (isAbort(e)) {
         stopped = true;
-        body.textContent = (acc ? acc + "\n\n" : "") + "(stopped)";
+        paintAssistant(body, (acc ? acc + "\n\n" : "") + "(stopped)", toolEvents);
       } else {
-        body.textContent = acc + "\n(" + e.message + ")";
+        paintAssistant(body, (acc ? acc + "\n\n" : "") + "(" + e.message + ")",
+                       toolEvents);
       }
     }
     turn.end();
+    /* Final paint, synchronously. The streaming paints ride
+       requestAnimationFrame, which does not fire in a hidden tab -- a
+       turn that finished while the reader was on another window would
+       otherwise sit stale until something else repainted it. */
+    if (raf) { cancelAnimationFrame(raf); raf = 0; }
     /* A stopped turn is still filed, by the gateway, before it closed
        the stream -- the model DID whatever it did before the stop, and
        a transcript that disagrees with the workspace is worse than a
@@ -4303,9 +4727,12 @@ function buildChatUI(project) {
        question it never asked. */
     const ui = extractUIBlocks(acc);
     if (ui.blocks.length) {
-      body.textContent = ui.text;
+      paintAssistant(body, ui.text, toolEvents);
       ui.blocks.forEach(b => renderUIBlock(b, project, submitText));
+    } else {
+      paintAssistant(body, acc, toolEvents);
     }
+    log.scrollTop = log.scrollHeight;
 
     /* The loop can stop because it ran out of iterations rather than
        because it finished. The gateway already says so in the reply --
@@ -5974,10 +6401,31 @@ async function openAgentChat(a) {
     let msgs = [], record = [];
     try { msgs = (await api(`/v1/sessions/agent-${a.name}`)).messages || []; } catch {}
     try { record = (await api(`/v1/agents/${a.name}/messages`)).messages || []; } catch {}
+    /* The agent's work renders the way the other chats render it:
+       markdown for what it said, collapsible cards for what it did --
+       calls from the assistant turns, results from the tool turns,
+       paired by tool_call_id. This window used to print every role as
+       raw text, which for a busy agent meant pages of tool output
+       burying the three sentences that mattered. */
+    const results = new Map();
+    msgs.forEach(m => {
+      if (m.role === "tool" && m.tool_call_id)
+        results.set(m.tool_call_id, { content: m.content || "", name: m.name || "" });
+    });
     msgs.slice(-40).forEach(m => {
-      const row = el("div", "msg");
+      if (m.role === "tool") return;   /* shown inside its call's card */
+      if (m.role === "assistant" && m.tool_calls && m.tool_calls.length) {
+        const cards = recordToolCards(m, results);
+        if (cards) log.appendChild(cards);
+        if (!(m.content || "").trim()) return;
+      }
+      if (!(m.content || "").trim()) return;
+      const row = el("div", "msg" + (m.role === "user" ? " u" : ""));
       row.appendChild(el("div", "who", m.role));
-      row.appendChild(el("div", "body", (m.content || "").slice(0, 4000)));
+      const b = el("div", "body");
+      if (m.role === "assistant") paintAssistant(b, m.content, null);
+      else b.textContent = (m.content || "").slice(0, 4000);
+      row.appendChild(b);
       log.appendChild(row);
     });
     if (record.length) {

@@ -617,6 +617,13 @@ function SessionFromUserField(const UserVal: string): string;
    Chat-Completions nested function.name. Exposed for tests. *)
 function ResolveResponsesToolChoice(Req: TJsonObject): string;
 
+{ One transcript message as the session routes serialise it -- role,
+  content, and the tool work (flattened calls + tool_call_id) a client
+  needs to rebuild tool cards on reload. Public because the SHAPE is the
+  contract the desktop's reopened chats depend on, and a shape only a
+  live socket can observe is a shape no test can pin. }
+function TranscriptMessageJSON(const M: TMessage): TJsonObject;
+
 implementation
 
 uses
@@ -4069,6 +4076,48 @@ begin
   end;
 end;
 
+(* One transcript message for a session-reading client, tool work
+   included.
+
+   Both session readers used to serialise role + content and nothing
+   else, which quietly made the stored record unreconstructable from
+   outside: an assistant turn's tool CALLS (name and arguments) and the
+   ids pairing results to them are on disk -- MessageToJSON writes them,
+   the model needs them -- but a client reading the route got a
+   transcript with the work cut out. The web UI papered over it with its
+   own tool_details blob; the desktop, which lets the gateway own the
+   conversation, had nothing to rebuild its tool cards from on reload.
+
+   The calls are flattened to {id, name, args}: the nested OpenAI
+   function shape exists for providers, and a reader rendering a card
+   should not need to know it. provider_signature stays private -- it is
+   plumbing between us and Gemini, not part of the conversation. *)
+function TranscriptMessageJSON(const M: TMessage): TJsonObject;
+var
+  Calls: TJsonArray;
+  C: TJsonObject;
+  i: Integer;
+begin
+  Result := TJsonObject.Create;
+  Result.PutStr('role',    MsgRoleToString(M.Role));
+  Result.PutStr('content', M.Content);
+  if M.Name <> ''       then Result.PutStr('name',         M.Name);
+  if M.ToolCallId <> '' then Result.PutStr('tool_call_id', M.ToolCallId);
+  if Length(M.ToolCalls) > 0 then
+  begin
+    Calls := TJsonArray.Create;
+    for i := 0 to High(M.ToolCalls) do
+    begin
+      C := TJsonObject.Create;
+      C.PutStr('id',   M.ToolCalls[i].Id);
+      C.PutStr('name', M.ToolCalls[i].Func.Name);
+      C.PutStr('args', M.ToolCalls[i].Func.Arguments);
+      Calls.AddObject(C);
+    end;
+    Result.PutArray('tool_calls', Calls);
+  end;
+end;
+
 procedure TGatewayServer.HandleSessionItem(const Doc: string;
                                            ARequest: TIdHTTPRequestInfo;
                                            AResp: TIdHTTPResponseInfo);
@@ -4261,9 +4310,7 @@ begin
         Arr := TJsonArray.Create;
         for i := 0 to High(LogMsgs) do
         begin
-          MsgObj := TJsonObject.Create;
-          MsgObj.PutStr('role',    MsgRoleToString(LogMsgs[i].Role));
-          MsgObj.PutStr('content', LogMsgs[i].Content);
+          MsgObj := TranscriptMessageJSON(LogMsgs[i]);
           Arr.AddObject(MsgObj);
         end;
         Root.PutArray('messages', Arr);
@@ -4309,9 +4356,7 @@ begin
       Arr := TJsonArray.Create;
       for i := 0 to High(S.Messages) do
       begin
-        MsgObj := TJsonObject.Create;
-        MsgObj.PutStr('role',    MsgRoleToString(S.Messages[i].Role));
-        MsgObj.PutStr('content', S.Messages[i].Content);
+        MsgObj := TranscriptMessageJSON(S.Messages[i]);
         Arr.AddObject(MsgObj);
       end;
       Root.PutArray('messages', Arr);
