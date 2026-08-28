@@ -51,6 +51,8 @@
   #mode-btn.mode-build{border-color:rgba(143,92,255,.45);color:var(--mut)}
   #mode-btn.mode-plan{border-color:#ff37d5;color:#ff8ad5;
     box-shadow:0 0 12px rgba(255,55,213,.45) inset, 0 0 12px rgba(255,55,213,.35)}
+  #mode-btn.mode-space{border-color:#379bff;color:#8ac8ff;
+    box-shadow:0 0 12px rgba(55,155,255,.45) inset, 0 0 12px rgba(55,155,255,.35)}
   #mode-btn.mode-improve{border-color:#37ffb0;color:#8affd0;
     box-shadow:0 0 12px rgba(55,255,176,.4) inset, 0 0 12px rgba(55,255,176,.3)}
   main{position:relative;z-index:1;flex:1;display:flex;margin:.7rem .9rem .9rem;overflow:hidden;gap:.7rem}
@@ -676,7 +678,7 @@
              lives next to the send box. -->
         <div class="composer-bar">
           <button id="mode-btn" class="icon-btn" type="button"
-            title="Toggle Plan / Build mode. PLAN refuses write/exec tools; BUILD is full access.">🛠 build</button>
+            title="Cycle mode: build / plan / improve / space.">🛠 build</button>
           <button class="icon-btn composer-add" id="attach-btn" type="button"
             title="Attach text file(s) — contents are folded into your message">+</button>
           <span class="composer-spacer"></span>
@@ -2924,11 +2926,11 @@ let currentMode = "build";
 function loadMode() {
   try {
     const m = localStorage.getItem(MODE_KEY);
-    if (m === "plan" || m === "build" || m === "improve") currentMode = m;
+    if (m === "plan" || m === "build" || m === "improve" || m === "space") currentMode = m;
   } catch {}
 }
-/* Three modes now, so the button sets exactly one class rather than
-   toggling a pair -- adding a third to the old add/remove dance would
+/* Four modes now, so the button sets exactly one class rather than
+   toggling a pair -- adding more to the old add/remove dance would
    have left whichever class nobody remembered to clear. */
 const MODES = {
   build:   { label: "🛠 build",   cls: "mode-build",
@@ -2937,6 +2939,8 @@ const MODES = {
              hint: "read-only: mutating tools refuse" },
   improve: { label: "📈 improve", cls: "mode-improve",
              hint: "benchmark, profile, one change, re-measure" },
+  space:   { label: "🚀 space",   cls: "mode-space",
+             hint: "search, plan, assert, code, evaluate; mutating tools unlock after plan_write" },
 };
 function applyModeUI() {
   const b = $("#mode-btn");
@@ -2952,7 +2956,7 @@ function initMode() {
   applyModeUI();
   const b = $("#mode-btn");
   if (b) b.addEventListener("click", () => {
-    const order = ["build", "plan", "improve"];
+    const order = ["build", "plan", "improve", "space"];
     currentMode = order[(order.indexOf(currentMode) + 1) % order.length];
     try { localStorage.setItem(MODE_KEY, currentMode); } catch {}
     applyModeUI();
