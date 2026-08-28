@@ -61,6 +61,12 @@ type
     Title:   string;
     Status:  TTaskStatus;
     Notes:   string;
+    (* Which agent owns this task; '' = unassigned. An agent slug, set
+       by a lead through the task tool. Recorded on the board rather
+       than only said in a message, because a message is invisible to
+       the wake loop and to the other workers -- two agents grabbing
+       the same task is exactly what an unrecorded assignment allows. *)
+    Assignee: string;
     Created: string;
     Updated: string;
     JobCount: Integer;
@@ -125,8 +131,11 @@ function StrToTaskStatus(const S: string; Default: TTaskStatus = tsTodo): TTaskS
 function ListTasks(const Project: string): TTaskInfoArray;
 function GetTask(const Project, TaskId: string; out Info: TTaskInfo): Boolean;
 function CreateTask(const Project, ATitle, ANotes: string; out Err: string): string;
+{ AAssignee follows the same two-sentinel contract as notes: '-' means
+  leave it alone; '' explicitly clears the assignment. }
 function UpdateTask(const Project, TaskId, ATitle, ANotes: string;
-  const AStatus: string; out Err: string): Boolean;
+  const AStatus: string; out Err: string;
+  const AAssignee: string = '-'): Boolean;
 
 { ---- jobs ---- }
 
@@ -621,6 +630,7 @@ begin
       Info.Title   := Obj.GetStr('title', Info.Id);
       Info.Status  := StrToTaskStatus(Obj.GetStr('status', 'todo'));
       Info.Notes   := Obj.GetStr('notes', '');
+      Info.Assignee := Trim(Obj.GetStr('assignee', ''));
       Info.Created := Obj.GetStr('created', '');
       Info.Updated := Obj.GetStr('updated', '');
     finally
@@ -708,7 +718,8 @@ begin
 end;
 
 function UpdateTask(const Project, TaskId, ATitle, ANotes: string;
-  const AStatus: string; out Err: string): Boolean;
+  const AStatus: string; out Err: string;
+  const AAssignee: string): Boolean;
 var
   Dir, Path: string;
   Obj: TJsonObject;
@@ -750,6 +761,7 @@ begin
       Obj.PutStr('title', Trim(ATitle));
     if Trim(AStatus) <> '' then Obj.PutStr('status', LowerCase(Trim(AStatus)));
     if ANotes <> '-' then Obj.PutStr('notes', ANotes);
+    if AAssignee <> '-' then Obj.PutStr('assignee', LowerCase(Trim(AAssignee)));
     Obj.PutStr('updated', NowIsoUtc);
     WriteManifest(Path, Obj);
   finally

@@ -238,6 +238,8 @@ begin
   begin
     S := S + '  ' + Rows[I].Id + '  [' + TaskStatusToStr(Rows[I].Status) + ']  ' +
          Rows[I].Title;
+    if Rows[I].Assignee <> '' then
+      S := S + '  @' + Rows[I].Assignee;
     if Rows[I].JobCount > 0 then
       S := S + '  (jobs: ' + IntToStr(Rows[I].JobCount) + ')';
     S := S + #10;
@@ -250,7 +252,7 @@ end;
 function Tool_Task(const ArgsJSON: string; out ErrMsg: string): string;
 var
   Obj: TJsonObject;
-  Action, Project, Id, Title, Notes, Status, Summary, JobId, Err: string;
+  Action, Project, Id, Title, Notes, Status, Summary, JobId, Assignee, Err: string;
   Jobs: TJobInfoArray;
 begin
   ErrMsg := '';
@@ -296,7 +298,10 @@ begin
         Exit;
       end;
       if Obj.Has('notes') then Notes := Obj.GetStr('notes', '') else Notes := '-';
-      if not UpdateTask(Project, Id, Title, Notes, Status, Err) then
+      { Absent key = leave alone; "assignee":"" = explicitly unassign. }
+      if Obj.Has('assignee') then Assignee := Obj.GetStr('assignee', '')
+                              else Assignee := '-';
+      if not UpdateTask(Project, Id, Title, Notes, Status, Err, Assignee) then
       begin
         ErrMsg := Err;
         Exit;
@@ -632,6 +637,7 @@ begin
     '"action":{"type":"string","enum":["list","create","update","job"]},' +
     '"project":{"type":"string","description":"Project slug (always required)."},' +
     '"id":{"type":"string","description":"Task id, e.g. T0001 (update/job)."},' +
+    '"assignee":{"type":"string","description":"Agent slug that owns the task (update)."},' +
     '"title":{"type":"string","description":"Task title (create/update)."},' +
     '"notes":{"type":"string","description":"Free-text notes on the task."},' +
     '"status":{"type":"string","description":"todo|active|done|blocked for a task; done|failed for a job."},' +
@@ -664,9 +670,11 @@ begin
     'apps and projects, the theme. Pass "actions" as an array of ' +
     '{"do":...} objects, several at once when the user asks for several ' +
     'things. Actions: tile, cascade, minimize_all, close_all, refresh, ' +
-    'open_app {project}, open_chat {project}, build_app {title,brief}, ' +
+    'open_app {project}, open_chat {project}, open_agent {agent}, ' +
+    'build_app {title,brief}, team_up {template,brief|project}, ' +
     'theme {id}. Use this when the user talks about the SCREEN -- tidying ' +
-    'windows, opening something, starting several apps at once.';
+    'windows, opening something, starting several apps at once -- or ' +
+    'asks to spin up an agent TEAM (team_up).';
   T.Schema      :=
     '{"type":"object","properties":{' +
     '"actions":{"type":"array","description":' +
@@ -680,6 +688,7 @@ begin
     '"items":{"type":"object","properties":{' +
     '"do":{"type":"string"},"project":{"type":"string"},' +
     '"title":{"type":"string"},"brief":{"type":"string"},' +
+    '"agent":{"type":"string"},"template":{"type":"string"},' +
     '"id":{"type":"string"}},"required":["do"]}}' +
     '},"required":["actions"]}';
   T.Handler     := Tool_Desktop;

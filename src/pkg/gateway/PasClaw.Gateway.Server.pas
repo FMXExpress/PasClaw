@@ -1518,6 +1518,19 @@ end;
 var
   GDesktopGateway: TGatewayServer = nil;
 
+type
+  (* The team wake loop's clock; body sits with the other desktop
+     callbacks further down. TeamTickPass decides which teams are due
+     (per-team wake_minutes); this thread only supplies a coarse
+     heartbeat, and Stop terminates it with the server. *)
+  TTeamTickThread = class(TThread)
+  protected
+    procedure Execute; override;
+  end;
+
+var
+  GTeamTick: TTeamTickThread = nil;
+
 { Registered from Start. Forward-declared because the implementation lives
   further down, next to the agent machinery it drives. }
 procedure InstallDesktopCallbacks(AGateway: TGatewayServer); forward;
@@ -1562,6 +1575,7 @@ begin
   { Drop the desktop's handle first: a callback firing against a
     stopping server would run a turn nobody can read. }
   if GDesktopGateway = Self then GDesktopGateway := nil;
+  if GTeamTick <> nil then GTeamTick.Terminate;
   StopAllApps;
   if not FStarted then Exit;
   try
@@ -6126,6 +6140,53 @@ begin
   PublishPageProgress(Phase, Detail);
 end;
 
+type
+  (* Live narration for ONE agent run. The tool-loop hook has no
+     argument for "whose turn is this", so the name rides on an object
+     created for the run and freed with it -- up to 8 runs narrate
+     concurrently without sharing state. What it publishes is what the
+     agent chat window shows while the session file is still unwritten. *)
+  TAgentNarrator = class
+  private
+    FAgent: string;
+  public
+    constructor Create(const AAgent: string);
+    procedure OnToolCall(const Name, ArgsJSON: string);
+  end;
+
+constructor TAgentNarrator.Create(const AAgent: string);
+begin
+  inherited Create;
+  FAgent := AAgent;
+end;
+
+procedure TAgentNarrator.OnToolCall(const Name, ArgsJSON: string);
+var
+  Obj: TJsonObject;
+  Detail: string;
+begin
+  { The most human argument, not the JSON: a path, a command, a query,
+    an action -- whichever the tool carries. }
+  Detail := '';
+  Obj := nil;
+  try
+    Obj := TJsonObject.Parse(ArgsJSON);
+  except
+    Obj := nil;
+  end;
+  if Obj <> nil then
+  try
+    Detail := Obj.GetStr('path', '');
+    if Detail = '' then Detail := Obj.GetStr('command', '');
+    if Detail = '' then Detail := Obj.GetStr('query', '');
+    if Detail = '' then Detail := Obj.GetStr('action', '');
+    if Detail = '' then Detail := Obj.GetStr('title', '');
+  finally
+    Obj.Free;
+  end;
+  PublishAgentActivity(FAgent, Name, Detail);
+end;
+
 procedure TGatewayServer.ResolveFastModel(out ProviderName, Model: string);
 begin
   FApplyLock.Acquire;
@@ -6207,6 +6268,7 @@ var
   FastProv: ILLMProvider;
   FastModel: string;
   TurnLock: TCriticalSection;
+  Narrator: TAgentNarrator;
 begin
   Reply := '';
   Err := '';
@@ -6261,9 +6323,20 @@ begin
   LoopCfg.Registry := FRegistry;
   if FToolsHonorInMemoryConfig then LoopCfg.ActiveConfig := FCfg;
   LoopCfg.Model := DefModel;
-  { The agent's own model when it named one -- a cheap IC and an
-    expensive lead are the point of the field. }
-  if Info.Model <> '' then LoopCfg.Model := Info.Model;
+  (* The agent's own model when it named one -- a cheap IC and an
+     expensive lead are the point of the field. Two TIER words resolve
+     here rather than going to the provider as literal model names:
+     'fast' is the cheap pair (provider and model move together, the
+     same rule the page path follows) and 'primary' is the default
+     spelled out. Team templates only ever use tiers -- a template
+     that pinned a model id would go stale the day the id did. *)
+  if Info.Model = 'fast' then
+  begin
+    if FastProv <> nil then LoopCfg.Provider := FastProv;
+    if FastModel <> '' then LoopCfg.Model := FastModel;
+  end
+  else if (Info.Model <> '') and (Info.Model <> 'primary') then
+    LoopCfg.Model := Info.Model;
   LoopCfg.MaxIterations  := FMaxIter;
   LoopCfg.Parallel       := True;
   LoopCfg.Mode           := pmBuild;
@@ -6303,6 +6376,9 @@ begin
      both read the stored prefix would each persist their own view and
      one would silently lose the other. A supervisor restarting an agent
      the operator just woke is exactly that race. *)
+  Narrator := TAgentNarrator.Create(Info.Name);
+  LoopCfg.OnToolCall := Narrator.OnToolCall;
+
   TurnLock := SessionTurnLock(Sid);
   TurnLock.Enter;
   try
@@ -6327,6 +6403,7 @@ begin
     Result := True;
   finally
     TurnLock.Leave;
+    Narrator.Free;
   end;
 end;
 
@@ -7021,6 +7098,49 @@ begin
   Result := GDesktopGateway.RunDesktopTurn(SystemPrompt, Prompt, False, Reply, Err);
 end;
 
+(* What `team up` warns about: the flags a working team needs. The
+   board tools (project/task) sit behind desktop_tools_enabled and the
+   agent-to-agent messaging tool behind agent_tools_enabled, both off
+   by default -- a team seeded with either off half-works in ways that
+   look like model stupidity. Named here, where the config is. *)
+function DesktopTeamFlagsProbe: string;
+begin
+  Result := '';
+  if GDesktopGateway = nil then Exit;
+  if not GDesktopGateway.FCfg.DesktopToolsEnabled then
+    Result := 'desktop_tools_enabled is off: the team cannot manage its ' +
+              'task board. Set {"desktop_tools_enabled": true} in config.json.';
+  if not GDesktopGateway.FCfg.AgentToolsEnabled then
+  begin
+    if Result <> '' then Result := Result + ' ';
+    Result := Result + 'agent_tools_enabled is off: team members cannot ' +
+              'message each other. Set {"agent_tools_enabled": true} in ' +
+              'config.json.';
+  end;
+end;
+
+procedure TTeamTickThread.Execute;
+var
+  I: Integer;
+begin
+  while not Terminated do
+  begin
+    { Sleep in small slices so Stop is honoured promptly. }
+    for I := 1 to 30 do
+    begin
+      if Terminated then Exit;
+      Sleep(1000);
+    end;
+    if GDesktopGateway = nil then Continue;
+    try
+      TeamTickPass;
+    except
+      on E: Exception do
+        LogWarn('team tick: %s: %s', [E.ClassName, E.Message]);
+    end;
+  end;
+end;
+
 procedure InstallDesktopCallbacks(AGateway: TGatewayServer);
 begin
   GDesktopGateway := AGateway;
@@ -7028,6 +7148,12 @@ begin
   SetJobRunner(DesktopJobRunner);
   SetTextGenerator(DesktopTextGenerator);
   SetAgentRunner(DesktopAgentRunner);
+  SetTeamFlagsProbe(DesktopTeamFlagsProbe);
+  if GTeamTick = nil then
+  begin
+    GTeamTick := TTeamTickThread.Create(False);
+    GTeamTick.FreeOnTerminate := False;
+  end;
 end;
 
 function GenChatCompletionId: string;
