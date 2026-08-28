@@ -126,6 +126,13 @@ begin
                  'the developer role carries the app recipe');
   AssertContains(T.Agents[0].Role, 'open_agent',
                  'the foreman role owns the screen');
+  (* From driving the team by hand: with every task left todo, the UI
+     reviewer and the tester were both woken to look at a project that
+     had nothing in it yet. The mechanism was already right -- only
+     todo/active wake an owner -- the lead was simply never told to use
+     blocked. *)
+  AssertContains(T.Agents[0].Role, 'BLOCKED',
+                 'the foreman is told to block work that waits on other work');
 
   { ----------------------------------------------------------- validation -- }
   T2 := MiniTemplate;
@@ -241,6 +248,16 @@ begin
   AssertTrue(not TeamTickDue(S2), 'a parked team is never due');
   S2.Enabled := True; S2.LastTick := NowIsoUtc;
   AssertTrue(not TeamTickDue(S2), 'a just-ticked team is not due');
+  (* ...but waiting mail skips the cadence. Without this a lead
+     delegated and the whole team sat still until the next tick --
+     measured at fifteen minutes, with the handoff the slowest thing
+     in the system. *)
+  AssertTrue(TeamHasWaitingMail(S2),
+             'a just-ticked team with mail waiting is still due');
+  AssertTrue(AgentSend('mid', 'boss', 'take T0001', Delivered, Err),
+             'a second message queues');
+  S2.Enabled := False;
+  AssertTrue(not TeamHasWaitingMail(S2), 'a parked team ignores its mail');
 
   { ------------------------------------------------- user template override -- }
   AssertTrue(EnsureDir(WorkspaceSubdir('teams')), 'teams dir exists');

@@ -136,8 +136,24 @@ function ListTeamStates: TTeamStateArray;
 { --------------------------------------------------------- the tick -- }
 
 (* Is this team due a tick? Compares LastTick + WakeMinutes against now;
-   a team with WakeMinutes = 0 or Enabled = False is never due. *)
+   a team with WakeMinutes = 0 or Enabled = False is never due.
+
+   NOT the whole story: see TeamHasWaitingMail. A team where someone
+   has just been sent a message is due immediately regardless of the
+   clock. *)
 function TeamTickDue(const S: TTeamState): Boolean;
+
+(* Does anyone on this team have an undelivered message?
+
+   The cadence exists to stop an idle agent being re-woken every tick
+   about the same unfinished task -- nothing new has happened, so
+   waking it again just buys another provider call. A MESSAGE is the
+   opposite: it is new information, sent by a colleague who is now
+   waiting on the answer. Making it wait out the cadence meant a lead
+   delegated and the whole team sat still for fifteen minutes; the
+   handoff, which is the point of having a team, was the slowest thing
+   in the system. *)
+function TeamHasWaitingMail(const S: TTeamState): Boolean;
 
 (* Who to wake, and why -- the whole wake policy in one testable place.
    An agent is woken only when it is idle AND has a reason to run:
@@ -226,6 +242,12 @@ const
     'engineer verify before you close it; when the whole board is ' +
     'done, tell the operator plainly and stop -- do not invent work ' +
     'to stay busy.'#10 +
+    'Mark a task BLOCKED when it waits on another task, and say in its ' +
+    'notes what it waits on. This is not bookkeeping: only todo and ' +
+    'active tasks wake their owner, so a review task left as todo ' +
+    'before there is anything to review wakes the reviewer to look at ' +
+    'an empty project. Unblock it the moment the thing it waited for ' +
+    'closes, and tell its owner.'#10 +
     'Autonomy: small things within the team -- assignments, task ' +
     'edits, follow-ups -- do them and report after. Anything that ' +
     'commits money, deletes things outside the project, or touches ' +
@@ -926,6 +948,17 @@ begin
   Last := IsoToLocal(S.LastTick);
   if Last = 0 then Exit(True);
   Result := MinutesBetween(Now, Last) >= S.WakeMinutes;
+end;
+
+function TeamHasWaitingMail(const S: TTeamState): Boolean;
+var
+  I: Integer;
+begin
+  Result := False;
+  if not S.Enabled then Exit;
+  for I := 0 to High(S.WakeWho) do
+    if (AgentPending(S.WakeWho[I]) > 0) and (not AgentIsBusy(S.WakeWho[I])) then
+      Exit(True);
 end;
 
 function AgentHasOpenAssignedTask(const Project, Agent: string): Boolean;

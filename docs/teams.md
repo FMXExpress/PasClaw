@@ -96,6 +96,19 @@ lead. That was a real bug before it was a default: with only the lead
 eligible, a worker holding an assigned task never ran, because an agent
 cannot start another agent's turn and nothing else was looking.
 
+**Mail skips the cadence.** The 15-minute wake is there to stop an idle
+agent being re-woken every tick about the same unfinished task — nothing
+new has happened. A *message* is the opposite: new information, from a
+colleague now waiting on the answer. Making it wait out the cadence
+meant a lead delegated and the whole team sat still for fifteen minutes,
+with the handoff — the entire point of having a team — the slowest thing
+in the system. So a team with mail waiting is due immediately.
+
+**Block work that waits on other work.** Only `todo` and `active` tasks
+wake their owner, so the Foreman marks a downstream task `blocked` and
+says what it waits on. Without that, a review task created up front
+wakes the reviewer to look at a project with nothing in it yet.
+
 ```sh
 pasclaw team status        # who is up, their board, last tick
 pasclaw team down duo      # park it: agents, conversations and board stay

@@ -831,7 +831,11 @@ begin
   for I := 0 to High(States) do
   begin
     S := States[I];
-    if not TeamTickDue(S) then Continue;
+    (* Two clocks, deliberately. The cadence throttles "still working
+       on the same task"; waiting MAIL skips it, because a colleague
+       is blocked on the answer and nothing about the delay makes the
+       answer better. *)
+    if not (TeamTickDue(S) or TeamHasWaitingMail(S)) then Continue;
     if not FindTeamTemplate(S.Name, T) then
     begin
       LogInfo('team %s: template gone -- parking', [S.Name]);
