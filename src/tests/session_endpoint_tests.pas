@@ -29,7 +29,9 @@ program session_endpoint_tests;
 
 uses
   SysUtils,
+  PasClaw.JSON,
   PasClaw.Providers.Types,
+  PasClaw.Gateway.Server,   { TranscriptMessageJSON -- the reload contract }
   PasClaw.Session.Store;
 
 procedure Fail_(const Msg: string);
@@ -432,6 +434,83 @@ begin
   Result := (Home <> '') and (Pos('.pasclaw', LowerCase(Home)) = 0);
 end;
 
+(* The reload contract behind the desktop's tool cards.
+
+   Both session readers used to serialise role + content and nothing
+   else, so a reopened chat had no way to rebuild what a turn DID: the
+   calls (name + args) live on the assistant turn and the results on
+   tool turns joined by tool_call_id, all on disk and all dropped at
+   the route. TranscriptMessageJSON is that route's per-message shape;
+   this pins the fields the desktop pairs cards from -- and that the
+   Gemini plumbing field stays private. *)
+procedure TestTranscriptMessageCarriesToolWork;
+var
+  M: TMessage;
+  Obj, C: TJsonObject;
+  Calls: TJsonArray;
+begin
+  { An assistant turn that called one tool. }
+  M := Default(TMessage);
+  M.Role := mrAssistant;
+  M.Content := 'checking';
+  SetLength(M.ToolCalls, 1);
+  M.ToolCalls[0].Id := 'c1';
+  M.ToolCalls[0].Kind := 'function';
+  M.ToolCalls[0].Func.Name := 'list_dir';
+  M.ToolCalls[0].Func.Arguments := '{"path":"."}';
+  M.ToolCalls[0].ProviderSignature := 'SECRET-SIG';
+  Obj := TranscriptMessageJSON(M);
+  try
+    AssertEqS(Obj.GetStr('role', ''), 'assistant', 'role survives');
+    AssertEqS(Obj.GetStr('content', ''), 'checking', 'content survives');
+    Calls := Obj.ChildArray('tool_calls');
+    AssertTrue(Calls <> nil, 'the calls are THERE -- this is the point');
+    AssertEqI(Calls.Count, 1, 'one call');
+    C := Calls.ItemObject(0);
+    try
+      AssertEqS(C.GetStr('id', ''),   'c1',           'paired by id');
+      AssertEqS(C.GetStr('name', ''), 'list_dir',     'named');
+      AssertEqS(C.GetStr('args', ''), '{"path":"."}', 'with its arguments');
+      AssertTrue(Pos('SECRET-SIG', Obj.ToJSON) = 0,
+        'provider_signature stays private -- it is plumbing between us ' +
+        'and Gemini, not part of the conversation');
+    finally
+      C.Free;   { non-owning wrapper }
+    end;
+  finally
+    Obj.Free;
+  end;
+
+  { The tool result turn that answers it. }
+  M := Default(TMessage);
+  M.Role := mrTool;
+  M.Content := 'd desktop';
+  M.Name := 'list_dir';
+  M.ToolCallId := 'c1';
+  Obj := TranscriptMessageJSON(M);
+  try
+    AssertEqS(Obj.GetStr('role', ''),         'tool',      'a tool turn');
+    AssertEqS(Obj.GetStr('tool_call_id', ''), 'c1',        'joined to its call');
+    AssertEqS(Obj.GetStr('name', ''),         'list_dir',  'and named');
+    AssertEqS(Obj.GetStr('content', ''),      'd desktop', 'carrying the result');
+  finally
+    Obj.Free;
+  end;
+
+  { A plain turn stays plain -- no empty tool_calls array bloating
+    every message of every session ever listed. }
+  M := Default(TMessage);
+  M.Role := mrUser;
+  M.Content := 'hi';
+  Obj := TranscriptMessageJSON(M);
+  try
+    AssertTrue(Pos('tool_calls', Obj.ToJSON) = 0, 'no tool work, no field');
+    AssertTrue(Pos('tool_call_id', Obj.ToJSON) = 0, 'and no dangling ids');
+  finally
+    Obj.Free;
+  end;
+end;
+
 begin
   if not HomeLooksIsolated then
   begin
@@ -449,5 +528,6 @@ begin
   TestFinalAnswerIsPersisted;
   TestToolDetailIndicesFollowTheTranscript;
   TestToolDetailStalenessGuard;
+  TestTranscriptMessageCarriesToolWork;
   WriteLn('session_endpoint_tests: OK');
 end.
