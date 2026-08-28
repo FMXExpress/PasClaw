@@ -61,7 +61,20 @@ type
        destruction is not a stop button. *)
     Archived:    Boolean;
     TaskCount:   Integer;
+    (* Tasks that still need someone: todo + active. NOT blocked --
+       blocked work is waiting on something, and counting it as open
+       would put it in the "get on with it" badge where nobody can act
+       on it. *)
     OpenTasks:   Integer;
+    (* ...which is exactly why the other two are counted separately.
+       "No open tasks" is not the same as "everything is done": a board
+       of nothing but blocked tasks has an open count of zero and is
+       the furthest thing from finished. Anything asking whether a
+       project is DONE has to ask about DoneTasks, and anything drawing
+       a board's state needs BlockedTasks or it will show a project
+       with stuck work as having nothing going on at all. *)
+    DoneTasks:    Integer;
+    BlockedTasks: Integer;
   end;
   TProjectInfoArray = array of TProjectInfo;
 
@@ -616,11 +629,16 @@ begin
   Info.HasApp := FileExists(JoinPath(JoinPath(Dir, 'app'), 'app.json'));
 
   Tasks := ListTasks(Project);
-  Info.TaskCount := Length(Tasks);
-  Info.OpenTasks := 0;
+  Info.TaskCount    := Length(Tasks);
+  Info.OpenTasks    := 0;
+  Info.DoneTasks    := 0;
+  Info.BlockedTasks := 0;
   for I := 0 to High(Tasks) do
-    if Tasks[I].Status in [tsTodo, tsActive] then
-      Inc(Info.OpenTasks);
+    case Tasks[I].Status of
+      tsTodo, tsActive: Inc(Info.OpenTasks);
+      tsDone:           Inc(Info.DoneTasks);
+      tsBlocked:        Inc(Info.BlockedTasks);
+    end;
   Result := True;
 end;
 

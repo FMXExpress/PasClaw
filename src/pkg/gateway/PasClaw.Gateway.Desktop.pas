@@ -469,15 +469,27 @@ begin
   Result.PutBool('suite',       P.Suite);
   Result.PutBool('has_app',     P.HasApp);
   Result.PutBool('archived',    P.Archived);
-  Result.PutInt ('tasks',       P.TaskCount);
-  Result.PutInt ('open_tasks',  P.OpenTasks);
+  Result.PutInt ('tasks',        P.TaskCount);
+  Result.PutInt ('open_tasks',   P.OpenTasks);
+  Result.PutInt ('done_tasks',   P.DoneTasks);
+  Result.PutInt ('blocked_tasks', P.BlockedTasks);
   (* "Everything on this board is finished."
 
      Computed here rather than left to each client to derive, because
-     the interesting part is the qualifier: a board with NO tasks is
-     not finished, it is empty, and a UI that dims both the same way
-     tells you a brand-new project is done. *)
-  Result.PutBool('finished',    (P.TaskCount > 0) and (P.OpenTasks = 0));
+     both qualifiers are easy to get wrong and expensive to get wrong
+     in the same way -- by telling someone work is done when it is not.
+
+     A board with NO tasks is not finished, it is empty; a UI that
+     marks both the same way tells you a brand-new project is done.
+
+     And it is DONE tasks that decide it, not the absence of open ones.
+     OpenTasks counts todo + active, so a board of nothing but BLOCKED
+     tasks has zero open and is the furthest thing from finished --
+     every one of them is waiting on somebody. Asking "are none open?"
+     put a tick on exactly the projects most in need of attention.
+     (Codex P2 on #593.) *)
+  Result.PutBool('finished',
+                 (P.TaskCount > 0) and (P.DoneTasks = P.TaskCount));
   { The desktop needs the app's kind and window size to open a window without
     a second round trip. }
   if P.HasApp and GetApp(P.Name, App) and App.Exists then
@@ -1896,7 +1908,28 @@ begin
         ReplyErr(Resp, 404, 'no such project');
         Exit;
       end;
-      Obj := BodyObj(Body);
+      (* An empty body means "archive this" -- the common call. A body
+         that was SENT and could not be parsed means nothing at all,
+         and must not be read as the default.
+
+         BodyObj answers nil for both, so the two have to be told apart
+         before it is called. Without that, `{` archived the project
+         and returned 200: a truncated request quietly mutating state
+         while every other project route would have answered 400.
+         (Codex P2 on #593.) *)
+      if Trim(Body) <> '' then
+      begin
+        Obj := BodyObj(Body);
+        if Obj = nil then
+        begin
+          ReplyErr(Resp, 400, 'body is not valid JSON -- send ' +
+                   '{"archived":true} or {"archived":false}, or no body ' +
+                   'at all to archive');
+          Exit;
+        end;
+      end
+      else
+        Obj := nil;
       try
         { Default true: the common call is "archive this". Un-archiving
           says so explicitly. }

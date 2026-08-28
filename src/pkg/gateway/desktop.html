@@ -3431,9 +3431,43 @@ function paintTree() {
   while (host.firstChild) host.removeChild(host.firstChild);
   const tree = el("div", "tree");
 
+  /* The way back to filed-away work. Only shown when there IS some --
+     an "archive" that is always empty is just a word taking up a row.
+
+     A function, and called from BOTH exits, because the empty-list
+     branch below returns early: archive every project and the dock
+     said "No projects yet" with no way back, so the only route to
+     un-archive anything was the HTTP API. A door you can lock yourself
+     out of is not a door. (Codex P1 on #593.) */
+  function appendArchiveToggle() {
+    if (!S.archivedCount && !S.showArchived) return;
+    const foot = el("div", "node muted");
+    foot.style.marginTop = "4px";
+    foot.appendChild(el("span", "twist", S.showArchived ? "▼" : "▶"));
+    foot.appendChild(el("span", null, S.showArchived
+      ? "hide archived"
+      : "show archived (" + S.archivedCount + ")"));
+    foot.addEventListener("click", async () => {
+      S.showArchived = !S.showArchived;
+      await loadProjects();
+    });
+    tree.appendChild(foot);
+  }
+
   if (!S.projects.length) {
-    tree.appendChild(el("div", "node muted", "No projects yet."));
-    tree.appendChild(el("div", "node muted", "Ask PasClaw to build one."));
+    /* "No projects yet" is a lie when there are several, filed away.
+       Say which empty this is, since the two want opposite next
+       moves: one wants you to make something, the other wants you to
+       look in the archive. */
+    if (S.archivedCount) {
+      tree.appendChild(el("div", "node muted", "Nothing active."));
+      tree.appendChild(el("div", "node muted",
+        "Everything here is archived."));
+    } else {
+      tree.appendChild(el("div", "node muted", "No projects yet."));
+      tree.appendChild(el("div", "node muted", "Ask PasClaw to build one."));
+    }
+    appendArchiveToggle();
     host.appendChild(tree);
     return;
   }
@@ -3458,6 +3492,16 @@ function paintTree() {
        board gets a tick; an archived one says so and greys out. */
     if (p.open_tasks) {
       row.appendChild(el("span", "badge", String(p.open_tasks)));
+    } else if (p.blocked_tasks) {
+      /* Nothing open and not finished means everything left is BLOCKED
+         -- work waiting on somebody. Marking it needs saying, because
+         the alternative is a row with no badge at all, and a project
+         whose every task is stuck would look quieter than one that is
+         merely idle. That is the same disappearing act this whole
+         change is against. */
+      const b = el("span", "badge", "⊘ " + p.blocked_tasks);
+      b.title = p.blocked_tasks + " blocked task(s) -- waiting on something";
+      row.appendChild(b);
     } else if (p.finished) {
       const done = el("span", "badge", "✓");
       done.title = p.tasks + " task(s), all done";
@@ -3606,21 +3650,7 @@ function paintTree() {
     tree.appendChild(add);
   });
 
-  /* The way back to filed-away work. Only shown when there IS some --
-     an "archive" that is always empty is just a word taking up a row. */
-  if (S.archivedCount || S.showArchived) {
-    const foot = el("div", "node muted");
-    foot.style.marginTop = "4px";
-    foot.appendChild(el("span", "twist", S.showArchived ? "▼" : "▶"));
-    foot.appendChild(el("span", null, S.showArchived
-      ? "hide archived"
-      : "show archived (" + S.archivedCount + ")"));
-    foot.addEventListener("click", async () => {
-      S.showArchived = !S.showArchived;
-      await loadProjects();
-    });
-    tree.appendChild(foot);
-  }
+  appendArchiveToggle();
 
   host.appendChild(tree);
 }

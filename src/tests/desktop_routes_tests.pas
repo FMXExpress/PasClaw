@@ -291,12 +291,60 @@ begin
                      'un-archiving says so');
   ExpectStatus('POST', '/v1/projects/nope/archive', '{}', 404,
                'archiving a project that does not exist is a 404');
+
   { No body means archive -- the common call. Un-archiving is the one
     that has to be explicit. }
   ExpectBodyContains('POST', '/v1/projects/reading-log/archive', '',
                      '"archived":true', 'an empty body archives');
+
+  (* A body that was SENT and could not be parsed means nothing, and
+     must not be read as the empty-body default. BodyObj answers nil to
+     both, so `{` used to archive the project and return 200 -- a
+     truncated request quietly mutating state, where every other
+     project route would have said 400. (Codex P2 on #593.)
+
+     Asserted here, with the project ALREADY archived, so the second
+     half can be checked too: the refusal has to leave the state alone.
+     A 400 that still mutated would pass a status-only test. *)
+  ExpectStatus('POST', '/v1/projects/reading-log/archive', '{', 400,
+               'a truncated body is a 400, not a silent archive');
+  ExpectStatus('POST', '/v1/projects/reading-log/archive', 'nonsense', 400,
+               'and so is anything else that will not parse');
+  ExpectBodyContains('GET', '/v1/projects', '', '"archived":1',
+                     'and neither refusal touched the state');
+
   ExpectBodyContains('POST', '/v1/projects/reading-log/archive',
                      '{"archived":false}', '"archived":false', 'put it back');
+  ExpectBodyContains('GET', '/v1/projects', '', '"name":"reading-log"',
+                     'and it is back in the list');
+
+  (* ------------------------------------------------ finished vs blocked -- *)
+  (* "Finished" asks whether every task is DONE, not whether none are
+     open. OpenTasks counts todo + active, so a board of nothing but
+     BLOCKED tasks has zero open -- and used to get the all-done tick
+     while every one of its tasks sat waiting on somebody. That put the
+     finished mark on exactly the projects most in need of attention.
+     (Codex P2 on #593.) *)
+  ExpectStatus('POST', '/v1/projects', '{"title":"Stuck Board"}', 200,
+               'a board to get stuck');
+  ExpectStatus('POST', '/v1/projects/stuck-board/tasks',
+               '{"title":"Waiting on a key"}', 200, 'give it a task');
+  ExpectBodyContains('GET', '/v1/projects/stuck-board', '', '"finished":false',
+                     'one open task -- not finished');
+
+  ExpectStatus('PATCH', '/v1/projects/stuck-board/tasks/T0001',
+               '{"status":"blocked"}', 200, 'block it');
+  ExpectBodyContains('GET', '/v1/projects/stuck-board', '', '"open_tasks":0',
+                     'blocked is not open...');
+  ExpectBodyContains('GET', '/v1/projects/stuck-board', '', '"blocked_tasks":1',
+                     '...it is blocked...');
+  ExpectBodyContains('GET', '/v1/projects/stuck-board', '', '"finished":false',
+                     '...and a board of blocked work is NOT finished');
+
+  ExpectStatus('PATCH', '/v1/projects/stuck-board/tasks/T0001',
+               '{"status":"done"}', 200, 'unblock and finish it');
+  ExpectBodyContains('GET', '/v1/projects/stuck-board', '', '"finished":true',
+                     'NOW it is finished');
 
   ExpectStatus('GET', '/v1/projects/spam-filter', '', 200, 'get project');
   ExpectStatus('GET', '/v1/projects/nope', '', 404, 'missing project is a 404');

@@ -139,11 +139,15 @@ still have to do are somewhere in the middle of it. So:
 - **Done tasks fold** behind a single `3 done` row in the tree. Click it
   to put them back. Nothing is hidden that isn't one click away, and
   nothing is deleted.
-- **A finished project says so.** A board with tasks and none of them
-  open gets a ✓ instead of an open-work count. A board with *no* tasks
-  is not finished, it is empty, and is not marked either way — the
-  server sends `finished` so every client draws that line in the same
-  place.
+- **A finished project says so.** A board whose tasks are *all done*
+  gets a ✓ instead of an open-work count. Two qualifiers matter and the
+  server sends `finished` so every client draws the line in the same
+  place: a board with *no* tasks is not finished, it is empty; and it
+  is **done** tasks that decide it, not the absence of open ones —
+  `open_tasks` counts todo + active, so a board of nothing but
+  **blocked** tasks has zero open and is the furthest thing from
+  finished. A board like that shows `⊘ 2` instead, because work that is
+  stuck is the last thing that should look quiet.
 - **Archive** files a project away: it leaves the projects list and the
   desktop, and everything — tasks, jobs, the app, the conversation —
   stays exactly where it was. `show archived (2)` at the foot of the
@@ -158,11 +162,17 @@ GET  /v1/projects                                       # archived excluded
 GET  /v1/projects?archived=1                            # all of them
 ```
 
-The list response carries `archived` (how many were left out) and
-`names` (every project name, archived included) so a client can offer
-"show archived (2)" without a second request, and can still answer
-"does this project exist?" correctly about one that is merely filed
-away.
+A project carries `tasks`, `open_tasks`, `done_tasks`, `blocked_tasks`
+and `finished`. The list response carries `archived` (how many were
+left out) and `names` (every project name, archived included) so a
+client can offer "show archived (2)" without a second request, and can
+still answer "does this project exist?" correctly about one that is
+merely filed away.
+
+An empty body on `/archive` means *archive it* — the common call.
+Un-archiving says so explicitly. A body that was sent and could not be
+parsed is a **400**, not the default: a truncated request must not
+quietly change anything.
 
 Archiving is deliberately **not** automatic when the last task closes. A
 board that empties is very often about to get its next task, and a list
