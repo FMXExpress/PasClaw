@@ -5577,7 +5577,29 @@ async function openAgents() {
   const add = el("button", "btn", "New agent...");
   const sup = el("button", "btn", "Supervise");
   sup.title = "Check every agent and restart the ones that stopped";
-  bar.appendChild(team); bar.appendChild(add); bar.appendChild(sup);
+  /* The brake. It stops new turns starting AND ends the ones already
+     running -- each at its next safe point, between tool calls rather
+     than in the middle of one, so a file write and the board update
+     that belongs with it are never left half-finished. */
+  const brake = el("button", "btn", "Pause all");
+  brake.title = "Stop everything: no new turns start, and whoever is " +
+                "working stops at their next safe point";
+  brake.addEventListener("click", async () => {
+    let now = false;
+    try { now = (await api("/v1/agents/pause")).paused; } catch {}
+    try {
+      const j = await api("/v1/agents/pause",
+                          { method: "POST", body: { paused: !now } });
+      status.textContent = j.paused
+        ? (j.told_to_wind_down || []).length
+          ? "paused -- stopping: " + j.told_to_wind_down.join(", ")
+          : "paused -- nothing was working"
+        : "resumed";
+      paint();
+    } catch (e) { status.textContent = e.message; }
+  });
+  bar.appendChild(team); bar.appendChild(add);
+  bar.appendChild(brake); bar.appendChild(sup);
   const status = el("span", "muted");
   status.style.marginLeft = "6px";
   bar.appendChild(status);
@@ -5588,6 +5610,18 @@ async function openAgents() {
   w.body.appendChild(list);
 
   async function paint() {
+    /* The brake's own label is the truthful place to show the state:
+       a roster that says "idle" while the system is stopped is the
+       same silence as no indicator at all. */
+    try {
+      const p = await api("/v1/agents/pause");
+      brake.textContent = p.paused ? "Resume all" : "Pause all";
+      brake.title = p.paused
+        ? "Paused" + (p.note ? ": " + p.note : "") +
+          " -- no new turns are starting. Click to resume."
+        : "Stop everything: no new turns start, and whoever is " +
+          "working stops at their next safe point";
+    } catch {}
     let rows = [];
     try { rows = (await api("/v1/agents")).agents || []; }
     catch (e) { list.textContent = ""; list.appendChild(el("div", "row", e.message)); return; }
@@ -5662,6 +5696,31 @@ async function openAgents() {
       });
       r.appendChild(run);
 
+      /* Retire. The roster could create agents and never remove one,
+         so a workspace only ever accumulated them. The confirm names
+         what is KEPT, because "delete" reads as though the
+         conversation goes too and it does not. */
+      const bin = el("button", "btn", "Retire");
+      bin.title = "Remove this agent. Its conversation is kept.";
+      bin.style.cssText = "padding:0 6px;font-size:10px;line-height:14px";
+      bin.addEventListener("click", async e => {
+        e.stopPropagation();
+        if (a.busy) {
+          status.textContent = a.name + " is working -- pause first, or " +
+            "wait for it to finish";
+          return;
+        }
+        if (!confirm(`Retire ${a.title || a.name}?\n\n` +
+                     `Its manifest and message record go. Its CONVERSATION ` +
+                     `is kept and stays readable in the Library.`)) return;
+        try {
+          await api("/v1/agents/" + a.name, { method: "DELETE" });
+          status.textContent = "retired " + a.name;
+          paint();
+        } catch (err) { status.textContent = err.message; }
+      });
+      r.appendChild(bin);
+
       /* Double-click opens the agent's CONVERSATION -- it is an ordinary
          session, so the same window a project chat uses reads it. That
          equivalence is the point of filing agents as sessions. */
@@ -5686,11 +5745,20 @@ async function openAgents() {
   sup.addEventListener("click", async () => {
     status.textContent = "Checking...";
     try {
-      const j = await api("/v1/agents/supervise", { method: "POST", body: {} });
+      /* Paused means nothing gets restarted -- the route refuses, and
+         it is right to. Still worth answering the question, so ask it
+         as a dry pass and report what it WOULD do; a stopped system
+         that also refuses to tell you what is wrong is just silence. */
+      let paused = false;
+      try { paused = (await api("/v1/agents/pause")).paused; } catch {}
+      const j = await api("/v1/agents/supervise",
+                          { method: "POST", body: { dry: paused } });
       const acted = (j.verdicts || []).filter(v => v.action !== "ok");
-      status.textContent = acted.length
-        ? `${j.restarted} restarted: ` + acted.map(v => v.name).join(", ")
-        : "all agents healthy";
+      status.textContent = !acted.length
+        ? "all agents healthy"
+        : paused
+          ? "paused -- would restart: " + acted.map(v => v.name).join(", ")
+          : `${j.restarted} restarted: ` + acted.map(v => v.name).join(", ");
     } catch (e) { status.textContent = e.message; }
     paint();
   });

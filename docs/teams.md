@@ -119,7 +119,68 @@ wakes the reviewer to look at a project with nothing in it yet.
 ```sh
 pasclaw team status        # who is up, their board, last tick
 pasclaw team down duo      # park it: agents, conversations and board stay
+pasclaw team rm duo        # retire it: the agents go, conversations stay
+pasclaw team pause "lunch" # stop everything, running turns included
+pasclaw team resume
 ```
+
+## Stopping and removing
+
+**Pause is the brake**, and it stops the system rather than asking it to:
+
+- **No new turns start** — the tick, the run route and `team up` all
+  check it. `POST /v1/agents/pause {"paused":true}`, the **Pause all**
+  button in the roster, or `pasclaw team pause`.
+- **Turns already running end too**, at their next *safe boundary*. The
+  tool loop asks whether it has been stopped at exactly two points:
+  before it calls the model, and after a round's tool calls have all
+  come back and landed in the history. Both are moments where the turn's
+  state is consistent, which is the whole design — a turn cut between a
+  file write and the board update that belongs with it leaves exactly
+  the half-finished mess someone hitting stop is trying to avoid. What
+  this cannot interrupt is a single provider call already on the wire;
+  that is what the stream idle timeout is for. What it *can* stop is the
+  thing that actually runs away: a turn grinding through its whole
+  iteration budget.
+- **Whatever the turn did is kept.** A stopped turn still persists its
+  transcript and still ends with a note in the conversation saying it
+  was stopped, where it stopped, and what it had already done — so the
+  agent's next turn picks up instead of starting the same work again.
+  That notice is the only thing the pause writes anywhere; nothing is
+  queued for the agent to read later. An earlier version did push a
+  "wind down" note into each busy agent's steering queue, and it had to
+  go: a turn drains its queue at the top of an iteration, *after* the
+  boundary check, so once the flag is set the next boundary cancels the
+  turn before the next drain. The note could never reach the turn it
+  was written for — it sat there until the operator resumed, and the
+  resumed turn read "stop, do not pick up another task" as fresh
+  instruction and stood back down.
+- **Supervision respects it too.** `POST /v1/agents/supervise` restarts
+  agents, and restarting is starting a turn, so it refuses with 409
+  while paused. Pass `{"dry": true}` to see the verdicts without acting
+  — the desktop's **Supervise** button does that automatically when the
+  system is paused, and reports "would restart: …".
+- **The pause is on disk.** A gateway restart cannot quietly resume a
+  system the operator stopped — of the ways this could fail, that is
+  the one that would matter most.
+
+**Removing** has two grains. A single agent: the **Retire** button on
+its roster row, or `DELETE /v1/agents/<name>`. A whole team:
+`DELETE /v1/teams/<name>` or `pasclaw team rm`. Both keep the
+**conversation** and the **project** — a conversation is not garbage
+because the role that held it was retired, and the work the team did is
+the operator's, not the team's.
+
+Retire is refused while anyone involved is **mid-turn** — pause first,
+then retire once the turn has stopped. For a team the check runs over
+every member *before* anything is deleted, and the refusal names who is
+still working: a half-retired team is worse than one still standing.
+
+A team's roster for this purpose is its template's **agent list**, not
+its wake list. Those differ the moment a custom template names a subset
+in `wake.who` on purpose — a reviewer meant to run only when work is
+handed to it, say — and retiring off the wake list would leave the rest
+of the team sitting in the roster while reporting the team retired.
 
 ## Watching it work
 

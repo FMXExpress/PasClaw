@@ -761,7 +761,7 @@ begin
     Leads := TeamLeads(T);
     for I := 0 to High(Leads) do
       AgentSend(Leads[I], 'operator', Kick, Delivered, Err);
-    if (not Parked) and Assigned(GAgentRunner) then
+    if (not Parked) and (not AgentsPaused) and Assigned(GAgentRunner) then
       for I := 0 to High(Leads) do
         if not GAgentRunner(Leads[I], '', Err) then
           LogInfo('team %s: lead %s not started (%s) -- the tick will ' +
@@ -782,6 +782,36 @@ begin
       for I := 0 to High(Skipped) do Arr.AddStr(Skipped[I]);
       Root.PutArray('skipped', Arr);
       if Warn <> '' then Root.PutStr('warning', Warn);
+      ReplyJSON(Resp, 200, Root.ToJSON);
+    finally
+      Root.Free;
+    end;
+    Exit;
+  end;
+
+  (* DELETE /v1/teams/<name> -- retire the team: its agents and its
+     state go, the sessions and the project stay. *)
+  if (Method = 'DELETE') and HasPrefix(Doc, '/v1/teams/') then
+  begin
+    Name_ := Copy(Doc, Length('/v1/teams/') + 1, MaxInt);
+    if not RemoveTeam(Name_, Created, Err) then
+    begin
+      { Two different refusals, and a client that retries should be able
+        to tell them apart: no such team is 404 and will never work,
+        while a member mid-turn is 409 and works the moment the turn
+        stops. Sending 404 for both told the caller to give up on a
+        request that was only early. }
+      if Pos('still working', Err) > 0 then ReplyErr(Resp, 409, Err)
+                                       else ReplyErr(Resp, 404, Err);
+      Exit;
+    end;
+    Root := TJsonObject.Create;
+    try
+      Root.PutStr('team', Name_);
+      Arr := TJsonArray.Create;
+      for I := 0 to High(Created) do Arr.AddStr(Created[I]);
+      Root.PutArray('removed', Arr);
+      Root.PutStr('note', 'conversations and the project were left alone');
       ReplyJSON(Resp, 200, Root.ToJSON);
     finally
       Root.Free;
@@ -832,6 +862,9 @@ var
   I, J: Integer;
   Err: string;
 begin
+  { The brake, checked once at the top: a paused system starts nothing,
+    including the supervisor's restarts. }
+  if AgentsPaused then Exit;
   States := ListTeamStates;
   for I := 0 to High(States) do
   begin
@@ -945,8 +978,9 @@ var
   Verdicts: TAgentVerdictArray;
   Segs: TStringList;
   Name_, Err, Delivered, Tail: string;
+  Told: TStringArray;
   I, Limit, Stall, Idle, Acted: Integer;
-  Dry: Boolean;
+  Dry, Paused: Boolean;
 begin
   Result := True;
 
@@ -1006,6 +1040,69 @@ begin
     Exit;
   end;
 
+  (* GET/POST /v1/agents/pause -- the operator's brake.
+
+     Pausing starts no new turns anywhere: the team tick, the run
+     route and `team up` all check it. Work already in flight is NOT
+     killed -- the tool loop has no cancellation hook, and a turn
+     killed between a file write and the board update leaves exactly
+     the half-finished state someone hitting stop wants to avoid.
+     Every busy agent is instead SENT the wind-down instruction, which
+     it reads between tool calls. The reply says who was told, so the
+     answer is "these three were asked to stop", not a claim that
+     everything halted at once. *)
+  if (Method = 'GET') and (Doc = '/v1/agents/pause') then
+  begin
+    Root := TJsonObject.Create;
+    try
+      Root.PutBool('paused', AgentsPaused);
+      Root.PutStr('note', AgentsPausedNote);
+      ReplyJSON(Resp, 200, Root.ToJSON);
+    finally
+      Root.Free;
+    end;
+    Exit;
+  end;
+
+  if (Method = 'POST') and (Doc = '/v1/agents/pause') then
+  begin
+    Obj := BodyObj(Body);
+    try
+      Paused := True;
+      Tail := '';
+      if Obj <> nil then
+      begin
+        Paused := Obj.GetBool('paused', True);
+        Tail   := Obj.GetStr('note', '');
+      end;
+    finally
+      Obj.Free;
+    end;
+    if not SetAgentsPaused(Paused, Tail, Told, Err) then
+    begin
+      ReplyErr(Resp, 500, Err);
+      Exit;
+    end;
+    Root := TJsonObject.Create;
+    try
+      Root.PutBool('paused', Paused);
+      Arr := TJsonArray.Create;
+      for I := 0 to High(Told) do Arr.AddStr(Told[I]);
+      Root.PutArray('told_to_wind_down', Arr);
+      if Paused then
+        Root.PutStr('note', 'no new turns will start, and turns already ' +
+                    'running stop at their next safe point -- between ' +
+                    'tool calls, never mid-write. Whoever was working is ' +
+                    'listed in told_to_wind_down.')
+      else
+        Root.PutStr('note', 'resumed');
+      ReplyJSON(Resp, 200, Root.ToJSON);
+    finally
+      Root.Free;
+    end;
+    Exit;
+  end;
+
   (* POST /v1/agents/supervise -- one supervision pass, on demand.
 
      Phase 4 as a ROUTE rather than only a timer, for two reasons: it is
@@ -1029,6 +1126,26 @@ begin
       end;
     finally
       Obj.Free;
+    end;
+    (* Paused means paused here too. This route restarts agents, and
+       restarting is starting a turn -- the run route and the team tick
+       both refuse while the brake is on, and a sweep that started
+       twelve turns anyway would make a liar of every one of them. The
+       cancel hook would stop those turns at their first boundary, but
+       only after each had been created, published a run state and
+       persisted a cancelled transcript: noise that reads like the
+       system ignoring the operator. (Codex P2 on #591.)
+
+       Reporting is not acting, so a dry pass still answers -- "what
+       would you do when I resume" is a fair question to ask of a
+       stopped system. *)
+    if AgentsPaused and (not Dry) then
+    begin
+      ReplyJSON(Resp, 409,
+        '{"error":"the agent system is paused -- nothing will be ' +
+        'restarted. POST /v1/agents/pause {\"paused\":false} to resume, ' +
+        'or pass {\"dry\":true} to see the verdicts without acting"}');
+      Exit;
     end;
     Verdicts := SuperviseAgents(Stall, Idle);
     Root := TJsonObject.Create;
@@ -1138,6 +1255,12 @@ begin
      same instruction twice. *)
   if (Method = 'POST') and (Tail = 'run') then
   begin
+    if AgentsPaused then
+    begin
+      ReplyErr(Resp, 409, 'the agent system is paused -- POST ' +
+               '/v1/agents/pause {"paused":false} to resume');
+      Exit;
+    end;
     if not Assigned(GAgentRunner) then
     begin
       ReplyErr(Resp, 503,

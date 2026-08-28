@@ -190,6 +190,32 @@ type
    presumed dead -- the process that owned it is gone, because a live
    run updates nothing but also never ends. IdleMinutes: an agent that
    has not run in this long is nudged. Either 0 disables that half. *)
+(* ------------------------------------------------------- the brake -- *)
+
+(* Is this workspace's agent system paused?
+
+   Paused means NO NEW TURNS START -- the team tick starts nothing, the
+   run route refuses, `team up` seeds without kicking off, and
+   supervision restarts nothing -- and TURNS ALREADY RUNNING END, at
+   their next safe boundary. The gateway hands the tool loop a cancel
+   hook that reads this flag, and the loop asks it before a provider
+   call and after a tool batch has fully joined: the two points where
+   the turn is in one piece. A turn is never cut between a file write
+   and the board update that belongs with it, which is the
+   half-finished state an operator hitting stop is trying to avoid.
+
+   On disk, so a gateway restart does not quietly resume a system the
+   operator stopped -- the failure that would matter most. *)
+function AgentsPaused: Boolean;
+function AgentsPausedNote: string;
+
+(* Pause or resume. When pausing, Told comes back naming every agent
+   that was mid-turn, so the caller can say who is being stopped rather
+   than claiming everything halted the instant the flag was set --
+   those turns end at their next boundary, which is soon but not now. *)
+function SetAgentsPaused(Paused: Boolean; const Note: string;
+                         out Told: TStringArray; out Err: string): Boolean;
+
 function SuperviseAgents(StallMinutes, IdleMinutes: Integer): TAgentVerdictArray;
 
 { Tell an agent's parent what happened to it. No-op (False) when the
@@ -734,6 +760,116 @@ begin
 end;
 
 { ---------------------------------------------------------- supervision -- }
+
+function PausePath: string;
+begin
+  Result := JoinPath(AgentsDir, 'paused.json');
+end;
+
+function AgentsPaused: Boolean;
+var
+  Obj: TJsonObject;
+begin
+  Result := False;
+  if not FileExists(PausePath) then Exit;
+  Obj := nil;
+  try
+    Obj := TJsonObject.Parse(ReadFileText(PausePath));
+  except
+    Obj := nil;
+  end;
+  if Obj = nil then Exit;
+  try
+    Result := Obj.GetBool('paused', False);
+  finally
+    Obj.Free;
+  end;
+end;
+
+function AgentsPausedNote: string;
+var
+  Obj: TJsonObject;
+begin
+  Result := '';
+  if not FileExists(PausePath) then Exit;
+  Obj := nil;
+  try
+    Obj := TJsonObject.Parse(ReadFileText(PausePath));
+  except
+    Obj := nil;
+  end;
+  if Obj = nil then Exit;
+  try
+    if Obj.GetBool('paused', False) then Result := Obj.GetStr('note', '');
+  finally
+    Obj.Free;
+  end;
+end;
+
+function SetAgentsPaused(Paused: Boolean; const Note: string;
+                         out Told: TStringArray; out Err: string): Boolean;
+var
+  Obj: TJsonObject;
+  Rows: TAgentInfoArray;
+  I, N: Integer;
+begin
+  Result := False;
+  Err := '';
+  SetLength(Told, 0);
+  if not EnsureDir(AgentsDir) then
+  begin
+    Err := 'could not create ' + AgentsDir;
+    Exit;
+  end;
+
+  Obj := TJsonObject.Create;
+  try
+    Obj.PutBool('paused', Paused);
+    Obj.PutStr('note', Note);
+    Obj.PutStr('at', NowIsoUtc);
+    WriteFileText(PausePath, Obj.ToJSON);
+  finally
+    Obj.Free;
+  end;
+
+  if not Paused then Exit(True);
+
+  (* Who is mid-turn, for the operator to see. The flag above is what
+     stops them: the gateway hands the tool loop a cancel hook that
+     reads it, and every running turn ends at its next safe boundary.
+
+     This used to also push a "wind down" note into each busy agent's
+     steering queue, and that has to go, because the cancel hook made
+     it a message that can only ever arrive at the wrong time. A turn
+     drains its steering queue at the TOP of an iteration, after the
+     boundary check -- so once the flag is set, the next boundary
+     cancels the turn before the next drain, every time. The note is
+     never read by the agent it was written for.
+
+     It is not merely useless, though. It sits in the queue until the
+     agent runs again -- which is after the operator resumes -- and the
+     resumed turn is then handed "stop, do not start anything new, do
+     not pick up another task" as if it were fresh instruction, and
+     dutifully stands back down. Reproduced against a live gateway
+     before removing it. (Codex P1 on #591.)
+
+     What the note was for is now done better anyway: a cancelled turn
+     ends with a notice in its own transcript saying it was stopped,
+     where, and what it had already finished, carrying the progress
+     ledger. That is what the next turn reads, and it is in the
+     conversation rather than in a queue that outlives the pause. *)
+  N := 0;
+  Rows := ListAgents;
+  for I := 0 to High(Rows) do
+    if AgentIsBusy(Rows[I].Name) then
+    begin
+      SetLength(Told, N + 1);
+      Told[N] := Rows[I].Name;
+      Inc(N);
+      PublishAgent(Rows[I].Name);
+    end;
+  Result := True;
+end;
 
 function SuperviseAgents(StallMinutes, IdleMinutes: Integer): TAgentVerdictArray;
 var
