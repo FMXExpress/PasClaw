@@ -578,21 +578,14 @@ function PeekSessionProfile(const Id: string): string;
 var
   Path, Text: string;
   Root, MetaObj: TJsonObject;
-  SL: TStringList;
 begin
   Result := '';
   Path := SessionPath(Id);
   if (Path = '') or (not FileExists(Path)) then Exit;
-  SL := TStringList.Create;
   try
-    try
-      SL.LoadFromFile(Path);
-      Text := SL.Text;
-    except
-      Exit;
-    end;
-  finally
-    SL.Free;
+    Text := ReadFileText(Path);   { UTF-8 on both arms; see TSession.Save }
+  except
+    Exit;
   end;
   Root := TJsonObject.Parse(Text);
   if Root = nil then Exit;
@@ -838,7 +831,10 @@ begin
   L := TStringList.Create;
   try
     try
-      L.LoadFromFile(P);
+      { The log is written as explicit UTF-8 a few dozen lines up; read it
+        back the same way. LoadFromFile without an encoding would decode it
+        as ANSI on Delphi and hand back mojibake for every CJK turn. }
+      L.Text := ReadFileText(P);
     except
       on E: Exception do
       begin
@@ -1505,13 +1501,16 @@ begin
       MoveFile requires the destination not exist -- delete first.
       Codex P2 on PR #117. }
     TmpPath := Path + '.tmp';
-    S := TStringList.Create;
-    try
-      S.Text := Root.ToJSON;
-      S.SaveToFile(TmpPath);
-    finally
-      S.Free;
-    end;
+    (* WriteFileText, not TStringList.SaveToFile. Without an encoding
+       argument, Delphi's TStrings.SaveToFile writes TEncoding.Default --
+       the system ANSI codepage on Windows -- so every non-ASCII
+       character in a transcript became '?' (or GBK bytes the UTF-8
+       loader then mangled) on disk. FPC wrote the UTF-8 bytes through
+       untouched, which is why the bug only showed on the Delphi build.
+       The append-only transcript log below already encoded UTF-8
+       explicitly; this is the same fix for the main record. Bug report:
+       CJK typed in the TUI not showing in the session log. *)
+    WriteFileText(TmpPath, Root.ToJSON);
     {$IFDEF MSWINDOWS}
     if FileExists(Path) then SysUtils.DeleteFile(Path);
     {$ENDIF}
@@ -1529,7 +1528,6 @@ end;
 procedure TSession.Load(const AId: string);
 var
   Path: string;
-  S: TStringList;
 begin
   FExists := False;
   SetLength(Messages, 0);
@@ -1540,13 +1538,10 @@ begin
   if Path = '' then Exit;          { unsafe id -- treat as not found }
   if not FileExists(Path) then Exit;
 
-  S := TStringList.Create;
-  try
-    S.LoadFromFile(Path);
-    if LoadFromText(S.Text) then FExists := True;
-  finally
-    S.Free;
-  end;
+  { ReadFileText decodes UTF-8 on both arms. TStringList.LoadFromFile
+    without an encoding decodes BOM-less UTF-8 as ANSI on Delphi, so a
+    correctly written transcript came back as mojibake. }
+  if LoadFromText(ReadFileText(Path)) then FExists := True;
 end;
 
 function TSession.LoadFromText(const Text: string): Boolean;
