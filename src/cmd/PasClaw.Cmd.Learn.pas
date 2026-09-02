@@ -578,7 +578,7 @@ begin
 
   Sl := TStringList.Create;
   try
-    if FileExists(Path) then Sl.LoadFromFile(Path);
+    if FileExists(Path) then Sl.Text := ReadFileText(Path);
     if (Sl.Count > 0) and (Trim(Sl[Sl.Count - 1]) <> '') then
       Sl.Add('');
     Sl.Add(Format('### Patterns observed (%s)',
@@ -598,7 +598,7 @@ begin
         Sl.Add(Format('  (tool: `%s`)', [Patterns[i].Context]));
     end;
     Sl.Add('');
-    Sl.SaveToFile(Path);
+    WriteFileText(Path, Sl.Text);   { samples are transcript text -- UTF-8 }
     PrintLn(Ansi.Green + '✓ ' + Ansi.Reset +
             'appended ' + IntToStr(Shown) + ' pattern(s) to ' + Path);
   finally
@@ -727,7 +727,7 @@ begin
   Sl := TStringList.Create;
   try
     try
-      Sl.LoadFromFile(Path);
+      Sl.Text := ReadFileText(Path);
     except
       Exit;
     end;
@@ -787,7 +787,7 @@ begin
   Sl := TStringList.Create;
   try
     if FileExists(Path) then
-      Sl.LoadFromFile(Path)
+      Sl.Text := ReadFileText(Path)
     else
     begin
       { Fresh file -- write the header preamble. }
@@ -873,7 +873,7 @@ begin
               Ansi.Reset);
       Exit;
     end;
-    Sl.SaveToFile(Path);
+    WriteFileText(Path, Sl.Text);
     PrintLn(Ansi.Green + '✓ ' + Ansi.Reset +
             Format('wrote %d new SCARS anchor(s) to %s (%d existing skipped)',
                    [FreshCount, Path, SkippedCount]));

@@ -180,7 +180,7 @@ begin
     end;
     S := TStringList.Create;
     try
-      S.LoadFromFile(Path);
+      S.Text := ReadFileText(Path);
       Print(S.Text);
       Exit(0);
     finally
