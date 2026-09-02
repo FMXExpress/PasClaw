@@ -47,6 +47,33 @@ function PadVisibleRight(const S: string; W: Integer): string;
    leftover styling from a mid-line wrap. *)
 function TruncateVisible(const S: string; MaxVis: Integer;
                          out Remainder: string): string;
+(* Keep the TAIL of S within MaxVis visible columns by dropping whole
+   leading code points. For an input line, where the cursor end is what
+   the operator is looking at. Never splits a multi-byte / multi-unit
+   character or a wide one. *)
+function TruncateVisibleTail(const S: string; MaxVis: Integer): string;
+
+(* Terminal cell width of one code point: 2 for East Asian Wide /
+   Fullwidth (CJK, Hangul, fullwidth forms, most emoji), 0 for combining
+   marks and zero-width joiners / spaces, 1 otherwise. The width helpers
+   above sum this, so a line of Chinese pads and wraps in cells rather
+   than in characters -- the positioned TUI overflowed its rows and
+   under-padded them before, because a 3-byte 你 counted as one column
+   and rendered as two. Control characters count 1, matching what the
+   byte-counting version did, so nothing that passed before changes. *)
+function CodePointCellWidth(CP: Integer): Integer;
+
+(* UTF-8 by the byte, for callers that receive a byte stream -- the
+   Delphi TUI on POSIX gets one byte per GetKey and has to reassemble
+   the character itself. Utf8SeqLen: bytes in the sequence this lead
+   byte starts (1 for ASCII, 2..4, 0 for a continuation byte or an
+   invalid lead such as $C0/$C1/$F5+). Utf8DecodeCodePoint: decode a
+   complete sequence, rejecting a wrong length, bad continuation bytes,
+   overlong forms and surrogates. Seq holds one byte per Char so the
+   same code serves an AnsiString on FPC and a UnicodeString of byte
+   values on Delphi. *)
+function Utf8SeqLen(Lead: Byte): Integer;
+function Utf8DecodeCodePoint(const Seq: string; out CP: Integer): Boolean;
 function HasPrefix(const S, Prefix: string): Boolean;
 function HasSuffix(const S, Suffix: string): Boolean;
 function TrimQuotes(const S: string): string;
@@ -199,38 +226,146 @@ begin
   for i := 1 to Count do Result := Result + S;
 end;
 
-function VisibleLength(const S: string): Integer;
-{ Strip ANSI escapes and count display columns; treats UTF-8 multi-byte runs
-  as one column each. This is approximate but adequate for box drawing. }
+function Utf8SeqLen(Lead: Byte): Integer;
+begin
+  if Lead < $80 then Result := 1
+  else if (Lead >= $C2) and (Lead <= $DF) then Result := 2
+  else if (Lead >= $E0) and (Lead <= $EF) then Result := 3
+  else if (Lead >= $F0) and (Lead <= $F4) then Result := 4
+  else Result := 0;
+end;
+
+function Utf8DecodeCodePoint(const Seq: string; out CP: Integer): Boolean;
 var
-  i, n: Integer;
-  c: Byte;
+  L, i, B: Integer;
+begin
+  Result := False;
+  CP := 0;
+  if Seq = '' then Exit;
+  L := Utf8SeqLen(Ord(Seq[1]) and $FF);
+  if (L = 0) or (Length(Seq) <> L) then Exit;
+  B := Ord(Seq[1]) and $FF;
+  case L of
+    1: CP := B;
+    2: CP := B and $1F;
+    3: CP := B and $0F;
+    4: CP := B and $07;
+  end;
+  for i := 2 to L do
+  begin
+    B := Ord(Seq[i]) and $FF;
+    if (B and $C0) <> $80 then Exit;
+    CP := (CP shl 6) or (B and $3F);
+  end;
+  { Overlong forms and UTF-16 surrogates are not valid scalar values. }
+  case L of
+    2: if CP < $80 then Exit;
+    3: if (CP < $800) or ((CP >= $D800) and (CP <= $DFFF)) then Exit;
+    4: if (CP < $10000) or (CP > $10FFFF) then Exit;
+  end;
+  Result := True;
+end;
+
+function CodePointCellWidth(CP: Integer): Integer;
+begin
+  { Zero-width: combining marks, ZW space/joiners, variation selectors. }
+  if ((CP >= $0300) and (CP <= $036F)) or
+     ((CP >= $200B) and (CP <= $200F)) or
+     (CP = $2060) or (CP = $FEFF) or
+     ((CP >= $FE00) and (CP <= $FE0F)) or
+     ((CP >= $FE20) and (CP <= $FE2F)) then
+    Exit(0);
+  { Wide / fullwidth (East Asian Width W and F) plus the emoji blocks
+    terminals draw two cells wide. }
+  if ((CP >= $1100)  and (CP <= $115F))  or
+     ((CP >= $2E80)  and (CP <= $A4CF) and (CP <> $303F)) or
+     ((CP >= $AC00)  and (CP <= $D7A3))  or
+     ((CP >= $F900)  and (CP <= $FAFF))  or
+     ((CP >= $FE30)  and (CP <= $FE4F))  or
+     ((CP >= $FF00)  and (CP <= $FF60))  or
+     ((CP >= $FFE0)  and (CP <= $FFE6))  or
+     ((CP >= $1F300) and (CP <= $1F64F)) or
+     ((CP >= $1F680) and (CP <= $1F6FF)) or
+     ((CP >= $1F900) and (CP <= $1FAFF)) or
+     ((CP >= $20000) and (CP <= $3FFFD)) then
+    Exit(2);
+  Result := 1;
+end;
+
+(* Step one code point through S starting at index i (1-based), leaving
+   i just past it. FPC: S is UTF-8 bytes; a stray continuation byte or a
+   truncated / malformed sequence yields U+FFFD and advances one byte,
+   so bad input costs one column rather than an exception. Delphi: S is
+   UTF-16; a surrogate pair is combined, a lone surrogate passes through
+   as itself. *)
+function NextCodePoint(const S: string; var i: Integer; out CP: Integer): Boolean;
+{$IFDEF FPC}
+var
+  L: Integer;
+begin
+  Result := False;
+  CP := 0;
+  if i > Length(S) then Exit;
+  L := Utf8SeqLen(Byte(S[i]));
+  if (L = 0) or (i + L - 1 > Length(S)) or
+     (not Utf8DecodeCodePoint(Copy(S, i, L), CP)) then
+  begin
+    CP := $FFFD;
+    Inc(i);
+    Exit(True);
+  end;
+  Inc(i, L);
+  Result := True;
+end;
+{$ELSE}
+var
+  W1, W2: Integer;
+begin
+  Result := False;
+  CP := 0;
+  if i > Length(S) then Exit;
+  W1 := Ord(S[i]);
+  Inc(i);
+  if (W1 >= $D800) and (W1 <= $DBFF) and (i <= Length(S)) then
+  begin
+    W2 := Ord(S[i]);
+    if (W2 >= $DC00) and (W2 <= $DFFF) then
+    begin
+      CP := $10000 + ((W1 - $D800) shl 10) + (W2 - $DC00);
+      Inc(i);
+      Exit(True);
+    end;
+  end;
+  CP := W1;
+  Result := True;
+end;
+{$ENDIF}
+
+function VisibleLength(const S: string): Integer;
+{ Strip ANSI escapes and count terminal cells. Iterates code points so a
+  wide character counts two cells and a combining mark none -- see
+  CodePointCellWidth for why the byte-per-column version was wrong. }
+var
+  i, CP: Integer;
   inEsc: Boolean;
 begin
-  n := 0;
+  Result := 0;
   inEsc := False;
   i := 1;
-  while i <= Length(S) do
+  while NextCodePoint(S, i, CP) do
   begin
-    c := Byte(S[i]);
     if inEsc then
     begin
-      if c = Ord('m') then inEsc := False;
-      Inc(i);
+      if CP = Ord('m') then inEsc := False;
       Continue;
     end;
-    if c = 27 then { ESC }
+    if CP = 27 then { ESC }
     begin
       inEsc := True;
-      Inc(i);
       Continue;
     end;
-    { Skip continuation bytes 10xxxxxx, count lead bytes only. }
-    if (c and $C0) <> $80 then
-      Inc(n);
-    Inc(i);
+    Inc(Result, CodePointCellWidth(CP));
   end;
-  Result := n;
 end;
 
 function PadVisibleRight(const S: string; W: Integer): string;
@@ -245,8 +380,7 @@ end;
 function TruncateVisible(const S: string; MaxVis: Integer;
                          out Remainder: string): string;
 var
-  i, n: Integer;
-  c: Byte;
+  i, Start, CP, n, w: Integer;
   inEsc, anyEsc: Boolean;
 begin
   Result    := '';
@@ -257,31 +391,31 @@ begin
   i         := 1;
   while i <= Length(S) do
   begin
-    c := Byte(S[i]);
+    Start := i;
+    if not NextCodePoint(S, i, CP) then Break;
     if inEsc then
     begin
-      Result := Result + S[i];
-      if c = Ord('m') then inEsc := False;
-      Inc(i);
+      Result := Result + Copy(S, Start, i - Start);
+      if CP = Ord('m') then inEsc := False;
       Continue;
     end;
-    if c = 27 then
+    if CP = 27 then
     begin
-      Result := Result + S[i];
+      Result := Result + Copy(S, Start, i - Start);
       inEsc  := True;
       anyEsc := True;
-      Inc(i);
       Continue;
     end;
-    { Count lead bytes (visible chars); continuation bytes
-      (10xxxxxx) ride along with their lead. }
-    if (c and $C0) <> $80 then
+    { A wide character that would straddle the boundary stays whole
+      and moves to the remainder -- never half a 你 on each row. }
+    w := CodePointCellWidth(CP);
+    if n + w > MaxVis then
     begin
-      if n >= MaxVis then Break;
-      Inc(n);
+      i := Start;
+      Break;
     end;
-    Result := Result + S[i];
-    Inc(i);
+    Inc(n, w);
+    Result := Result + Copy(S, Start, i - Start);
   end;
   { Emit a final ANSI reset on the prefix when we opened any
     escapes -- otherwise a wrap mid-styled-run would carry the
@@ -289,6 +423,19 @@ begin
   if anyEsc then Result := Result + #27 + '[0m';
   if i <= Length(S) then
     Remainder := Copy(S, i, MaxInt);
+end;
+
+function TruncateVisibleTail(const S: string; MaxVis: Integer): string;
+var
+  i, CP: Integer;
+begin
+  Result := S;
+  while (Result <> '') and (VisibleLength(Result) > MaxVis) do
+  begin
+    i := 1;
+    if not NextCodePoint(Result, i, CP) then Break;
+    Result := Copy(Result, i, MaxInt);
+  end;
 end;
 
 function HasPrefix(const S, Prefix: string): Boolean;

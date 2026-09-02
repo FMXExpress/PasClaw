@@ -50,6 +50,19 @@ unit MVCFramework.Console;
   {$DEFINE PASCLAW_CONSOLE_DARWIN}
 {$IFEND}
 
+// PasClaw patch (Unicode input): GetKey used to return the KEY_EVENT's
+// AsciiChar on Windows, which for an IME-entered character is the low
+// byte of its UTF-16 unit (你 U+4F60 -> '`') or #0 (一 U+4E00 -> "special
+// key" VK_PACKET) -- Chinese either turned into ASCII punctuation or
+// vanished from the TUI input line. It now reads the record through
+// ReadConsoleInputW and returns UnicodeChar, so printable results are
+// UTF-16 code units (a supplementary character arrives as two events,
+// high then low surrogate). That means printable codes exceed 255, so the
+// special-key encoding moved from 256+VK to KEY_SPECIAL_BASE+VK, above
+// U+10FFFF, and IsSpecialKey tests that base; nothing outside this unit
+// and the KEY_* constants encoded the old base. POSIX GetKey is unchanged
+// and still returns raw bytes; the TUI reassembles UTF-8 from them.
+
 interface
 
 uses
@@ -73,10 +86,13 @@ uses
     ;
 
 const
-  KEY_UP    = 256 + 38;  // VK_UP
-  KEY_DOWN  = 256 + 40;  // VK_DOWN
-  KEY_LEFT  = 256 + 37;  // VK_LEFT
-  KEY_RIGHT = 256 + 39;  // VK_RIGHT
+  // Special keys are encoded above the Unicode range so a printable code
+  // point can never collide with one (256+VK_UP was U+0126, 'Ħ').
+  KEY_SPECIAL_BASE = $110000;
+  KEY_UP    = KEY_SPECIAL_BASE + 38;  // VK_UP
+  KEY_DOWN  = KEY_SPECIAL_BASE + 40;  // VK_DOWN
+  KEY_LEFT  = KEY_SPECIAL_BASE + 37;  // VK_LEFT
+  KEY_RIGHT = KEY_SPECIAL_BASE + 39;  // VK_RIGHT
   KEY_ESCAPE = 27;
   KEY_ENTER = 13;
   ESC = #27;
@@ -1018,12 +1034,12 @@ var
 begin
   Result := False;
   Init;
-  if PeekConsoleInput(GInputHandle, InputRecord, 1, NumRead) and (NumRead > 0) then
+  if PeekConsoleInputW(GInputHandle, InputRecord, 1, NumRead) and (NumRead > 0) then
   begin
     if (InputRecord.EventType = KEY_EVENT) and InputRecord.Event.KeyEvent.bKeyDown then
       Result := True
     else
-      ReadConsoleInput(GInputHandle, InputRecord, 1, NumRead);
+      ReadConsoleInputW(GInputHandle, InputRecord, 1, NumRead);
   end;
 end;
 
@@ -1107,21 +1123,25 @@ var
 begin
   Init;
   repeat
-    if ReadConsoleInput(GInputHandle, InputRecord, 1, NumRead) then
+    if ReadConsoleInputW(GInputHandle, InputRecord, 1, NumRead) then
     begin
       if (InputRecord.EventType = KEY_EVENT) then
       begin
         KeyEvent := InputRecord.Event.KeyEvent;
         if KeyEvent.bKeyDown then
         begin
-          if KeyEvent.AsciiChar <> #0 then
+          // UnicodeChar, not AsciiChar: the W record carries the UTF-16
+          // unit, and IME input (CJK, emoji) only exists there. Control
+          // keys still arrive here as their control code (#8, #13, #27,
+          // Ctrl+B = #2), so callers' small-number checks are unchanged.
+          if KeyEvent.UnicodeChar <> #0 then
           begin
-            Result := Ord(KeyEvent.AsciiChar);
+            Result := Ord(KeyEvent.UnicodeChar);
             Exit;
           end
           else
           begin
-            Result := 256 + KeyEvent.wVirtualKeyCode;
+            Result := KEY_SPECIAL_BASE + KeyEvent.wVirtualKeyCode;
             Exit;
           end;
         end;
@@ -1262,7 +1282,7 @@ end;
 
 function IsSpecialKey(KeyCode: Integer): Boolean;
 begin
-  Result := KeyCode > 255;
+  Result := KeyCode >= KEY_SPECIAL_BASE;
 end;
 
 // ============================================================================
