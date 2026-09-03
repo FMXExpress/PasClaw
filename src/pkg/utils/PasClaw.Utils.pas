@@ -53,9 +53,11 @@ function TruncateVisible(const S: string; MaxVis: Integer;
    character or a wide one. *)
 function TruncateVisibleTail(const S: string; MaxVis: Integer): string;
 
-(* Terminal cell width of one code point: 2 for East Asian Wide /
-   Fullwidth (CJK, Hangul, fullwidth forms, most emoji), 0 for combining
-   marks and zero-width joiners / spaces, 1 otherwise. The width helpers
+(* Terminal cell width of one code point IN ISOLATION: 2 for East Asian
+   Wide / Fullwidth (CJK, Hangul, fullwidth forms, most emoji), 0 for
+   combining marks, zero-width joiners / spaces and variation selectors,
+   1 otherwise. A following variation selector changes the answer -- see
+   the width helpers, which handle the pair. The width helpers
    above sum this, so a line of Chinese pads and wraps in cells rather
    than in characters -- the positioned TUI overflowed its rows and
    under-padded them before, because a 3-byte 你 counted as one column
@@ -341,6 +343,37 @@ begin
 end;
 {$ENDIF}
 
+(* Cell width of the code point just read, consuming a variation selector
+   that follows it.
+
+   VS16 (U+FE0F) promotes a text-presentation glyph to its two-cell emoji
+   form: U+2764 is a one-cell heart, U+2764 U+FE0F is the two-cell emoji
+   one. VS15 (U+FE0E) forces the one-cell text form. Counting the base as
+   1 and the selector as 0 reported one cell where terminals draw two,
+   which under-pads the row and truncates a column too late. Codex P2 on
+   PR #597.
+
+   i advances past the selector, so a caller copying S[Start..i-1] keeps
+   the base and its selector together -- splitting them would change how
+   the run renders.
+
+   Not handled: ZWJ sequences (a family emoji is several code points
+   joined by U+200D). Terminals disagree on those, so guessing a width
+   would trade one wrong answer for another. *)
+function WidthWithSelector(const S: string; var i: Integer; CP: Integer): Integer;
+var
+  j, Sel: Integer;
+begin
+  Result := CodePointCellWidth(CP);
+  if Result = 0 then Exit;   { the selector itself, or a combining mark }
+  j := i;
+  if NextCodePoint(S, j, Sel) then
+  begin
+    if Sel = $FE0F then begin Result := 2; i := j; end
+    else if Sel = $FE0E then begin Result := 1; i := j; end;
+  end;
+end;
+
 function VisibleLength(const S: string): Integer;
 { Strip ANSI escapes and count terminal cells. Iterates code points so a
   wide character counts two cells and a combining mark none -- see
@@ -364,7 +397,7 @@ begin
       inEsc := True;
       Continue;
     end;
-    Inc(Result, CodePointCellWidth(CP));
+    Inc(Result, WidthWithSelector(S, i, CP));
   end;
 end;
 
@@ -407,8 +440,9 @@ begin
       Continue;
     end;
     { A wide character that would straddle the boundary stays whole
-      and moves to the remainder -- never half a 你 on each row. }
-    w := CodePointCellWidth(CP);
+      and moves to the remainder -- never half a 你 on each row, and
+      never a base separated from its variation selector. }
+    w := WidthWithSelector(S, i, CP);
     if n + w > MaxVis then
     begin
       i := Start;
@@ -509,6 +543,8 @@ end;
 { True when B holds a well-formed UTF-8 byte sequence (rejects overlong forms,
   stray continuation bytes, and > U+10FFFF leads). Used to decide whether a file
   needs the Latin-1 fallback below. }
+function UTF8BytesToStr(const B: TBytes): string; forward;
+
 function BytesAreValidUTF8(const B: TBytes): Boolean;
 var
   i, n, Extra, j: Integer;
@@ -577,6 +613,47 @@ begin
   SetLength(Result, o);
 end;
 
+(* Decode B with the system ANSI code page, for files the pre-UTF-8
+   TStrings path wrote.
+
+   Windows only, and deliberately so. TStrings.SaveToFile with no encoding
+   wrote TEncoding.Default -- the machine's ANSI code page. On a CP932 /
+   CP936 / CP949 box that is MULTIBYTE, and those bytes are not valid
+   UTF-8, so ReadFileText's Latin-1 fallback would mojibake them; the next
+   Save then rewrites the mojibake as UTF-8 and the damage is permanent.
+   Trying the system code page first reads those legacy files correctly.
+   Codex P1 on PR #597.
+
+   Elsewhere the system code page is UTF-8 (already tried) or has no
+   distinct ANSI meaning, so this returns False and the caller falls
+   through to Latin-1, exactly as before.
+
+   Goes through UTF-8 bytes rather than assigning the UnicodeString to
+   `string` directly: that implicit re-encode through the ANSI code page is
+   the EEncodingError the ReadFileText comment below warns about. *)
+function AnsiBytesToStr(const B: TBytes; out S: string): Boolean;
+{$IFDEF MSWINDOWS}
+var
+  U: UnicodeString;
+{$ENDIF}
+begin
+  S := '';
+  Result := False;
+{$IFDEF MSWINDOWS}
+  if Length(B) = 0 then Exit;
+  try
+    U := TEncoding.ANSI.GetString(B);
+    if U = '' then Exit;
+    S := UTF8BytesToStr(TEncoding.UTF8.GetBytes(U));
+    Result := S <> '';
+  except
+    { A code page that cannot map these bytes is not an error here --
+      Latin-1 still has to produce something readable. }
+    Result := False;
+  end;
+{$ENDIF}
+end;
+
 { Wrap already-UTF-8 bytes as pasclaw's `string` WITHOUT any system-codepage
   round-trip: on FPC keep the bytes verbatim and tag them CP_UTF8; on Delphi
   decode to the native UnicodeString. Never raises. }
@@ -621,11 +698,14 @@ begin
     codepage -- raised EEncodingError ("No mapping for the Unicode character
     exists in the target multi-byte code page") on Windows for any file
     character with no mapping in the active codepage (common with legacy 8-bit
-    sources). Instead: pass valid UTF-8 through untouched, and reinterpret a
-    non-UTF-8 file as Latin-1 so it still reads as text and never raises. }
+    sources). Instead: pass valid UTF-8 through untouched; on Windows try
+    the system ANSI code page next, which is what the pre-UTF-8 TStrings
+    path wrote and the only correct reading of a legacy CP932/936/949
+    file; and reinterpret whatever is left as Latin-1 so it still reads as
+    text and never raises. }
   if BytesAreValidUTF8(Bytes) then
     Result := UTF8BytesToStr(Bytes)
-  else
+  else if not AnsiBytesToStr(Bytes, Result) then
     Result := UTF8BytesToStr(Latin1BytesToUTF8(Bytes));
 end;
 

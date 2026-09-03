@@ -152,6 +152,9 @@ const
   ACUTE = #$CC#$81;               { U+0301 combining acute, 0 cells }
   ZWSP  = #$E2#$80#$8B;           { U+200B zero-width space }
   EACUTE_NFC = #$C3#$A9;          { é U+00E9 precomposed, 1 cell }
+  HEART = #$E2#$9D#$A4;           { ❤  U+2764, text presentation, 1 cell }
+  VS16  = #$EF#$B8#$8F;           { U+FE0F emoji presentation selector }
+  VS15  = #$EF#$B8#$8E;           { U+FE0E text presentation selector }
 
 procedure TestCodePointCellWidth;
 begin
@@ -222,6 +225,36 @@ begin
   AssertEqStr(TruncateVisibleTail('', 3), '', 'empty stays empty');
 end;
 
+procedure TestVariationSelectors;
+(* Codex P2 on PR #597. VS16 promotes the preceding glyph to its two-cell
+   emoji form; VS15 forces the one-cell text form. Counting the selector as
+   an independent zero-width character reported one cell for ❤️ where
+   terminals draw two. *)
+var
+  Prefix, Rem: string;
+begin
+  AssertEqInt(VisibleLength(HEART), 1, 'bare heart is one cell');
+  AssertEqInt(VisibleLength(HEART + VS16), 2,
+              'heart + VS16 is the two-cell emoji form');
+  AssertEqInt(VisibleLength(HEART + VS15), 1,
+              'heart + VS15 stays the one-cell text form');
+  AssertEqInt(VisibleLength('a' + HEART + VS16 + 'b'), 4,
+              'selector width counts inside a run');
+  { An emoji already wide by block stays 2 with a selector, not 3. }
+  AssertEqInt(VisibleLength(GRIN + VS16), 2,
+              'an already-wide emoji plus VS16 is still two cells');
+  { The pair must never be split: base and selector move together. }
+  Prefix := TruncateVisible('a' + HEART + VS16 + 'b', 2, Rem);
+  AssertEqStr(Prefix, 'a', 'two cells left: the emoji pair does not fit');
+  AssertEqStr(Rem, HEART + VS16 + 'b',
+              'and the base keeps its selector in the remainder');
+  Prefix := TruncateVisible('a' + HEART + VS16 + 'b', 3, Rem);
+  AssertEqStr(Prefix, 'a' + HEART + VS16, 'three cells: pair fits whole');
+  AssertEqStr(Rem, 'b', 'remainder is what follows the pair');
+  AssertEqStr(TruncateVisibleTail('ab' + HEART + VS16, 2), HEART + VS16,
+              'tail keeps the pair together too');
+end;
+
 procedure TestUtf8SeqLen;
 begin
   AssertEqInt(Utf8SeqLen($41), 1, 'ascii lead');
@@ -265,6 +298,7 @@ begin
   TestTruncateVisibleNeverSplitsWide;
   TestPadVisibleRightCjk;
   TestTruncateVisibleTail;
+  TestVariationSelectors;
   TestUtf8SeqLen;
   TestUtf8DecodeCodePoint;
   TestTruncateVisibleIterates;
