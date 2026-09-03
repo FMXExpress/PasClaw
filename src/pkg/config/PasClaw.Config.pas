@@ -33,7 +33,7 @@ const
   {$ELSE}
   VersionRaw = '';
   {$ENDIF}
-  VersionFallback = '0.1.0-dev';
+  VersionFallback = '0.1.3';
 
   EnvHome   = 'PASCLAW_HOME';
   EnvConfig = 'PASCLAW_CONFIG';
