@@ -48,7 +48,7 @@ newer**.)
 | Define | Default | Purpose |
 |--------|---------|---------|
 | `Arch` | `x64` | Target architecture: `x64` or `x86`. Sets the default source path and the output filename suffix. |
-| `MyAppVersion` | `0.1.0` | Version shown in the installer / Add-Remove Programs. Pass your release/tag: `iscc /DArch=x64 /DMyAppVersion=0.2.0 installer\pasclaw.iss`. |
+| `MyAppVersion` | `0.1.3` | Version shown in the installer / Add-Remove Programs. Pass your release/tag: `iscc /DArch=x64 /DMyAppVersion=0.2.0 installer\pasclaw.iss`. |
 | `SourceExe` | per-arch path above | Override the built-binary path, e.g. `iscc /DArch=x64 /DSourceExe=C:\out\PasClaw.exe installer\pasclaw.iss`. |
 
 Both installers share one `AppId`, so they're the same application — installing the x86 build over an x64 install (or vice versa) upgrades in place rather than creating a duplicate.
