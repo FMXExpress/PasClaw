@@ -274,7 +274,7 @@ begin
   Sl := TStringList.Create;
   try
     try
-      Sl.LoadFromFile(Path);
+      Sl.Text := ReadFileText(Path);
     except
       Exit;
     end;
@@ -508,7 +508,9 @@ begin
   try
     Sl.Text := FinalBody;
     try
-      Sl.SaveToFile(FullPath);
+      { A fetched page is arbitrary UTF-8; TStrings.SaveToFile without an
+        encoding writes the ANSI codepage on Delphi and mangles it. }
+      WriteFileText(FullPath, Sl.Text);
     except
       on E: Exception do
       begin

@@ -99,6 +99,9 @@ type
     FSessScroll:        Integer;
     FChatScroll:        Integer;       { lines back from the bottom; 0 = pinned to latest }
     FInputBuf:          string;
+    FUtf8Pending:       string;        { POSIX only: bytes of a UTF-8 sequence still being assembled,
+                                         one byte per Char -- GetKey there yields one raw byte per call }
+    FUtf8Need:          Integer;       { POSIX only: continuation bytes still expected }
     FLoopThread:        TObject;       { TRunToolLoopThread -- opaque here to avoid forward-decl gymnastics }
     FLoopStartedAt:     TDateTime;
     FSpinnerFrame:      Integer;
@@ -1845,8 +1848,40 @@ begin
 end;
 
 procedure TTUI.HandleChatKey(Key: Integer);
+{$IFNDEF MSWINDOWS}
 var
-  Ch: Char;
+  CP, L: Integer;
+{$ENDIF}
+
+  { Append one Unicode scalar to the UTF-16 buffer. Supplementary
+    characters (emoji) become a surrogate pair -- the buffer is a
+    UnicodeString, so that IS the correct in-memory form. }
+  procedure AppendCodePoint(ACP: Integer);
+  begin
+    if ACP < 32 then Exit;
+    if ACP > $FFFF then
+      FInputBuf := FInputBuf + Char($D800 + ((ACP - $10000) shr 10)) +
+                               Char($DC00 + ((ACP - $10000) and $3FF))
+    else
+      FInputBuf := FInputBuf + Char(ACP);
+  end;
+
+  { Backspace removes one CHARACTER: a surrogate pair goes together, or a
+    lone high surrogate would be left behind and corrupt the JSON the
+    session writes. }
+  procedure DeleteLastCodePoint;
+  var
+    N: Integer;
+  begin
+    N := Length(FInputBuf);
+    if N = 0 then Exit;
+    if (N >= 2) and (Ord(FInputBuf[N]) >= $DC00) and (Ord(FInputBuf[N]) <= $DFFF)
+       and (Ord(FInputBuf[N - 1]) >= $D800) and (Ord(FInputBuf[N - 1]) <= $DBFF) then
+      SetLength(FInputBuf, N - 2)
+    else
+      SetLength(FInputBuf, N - 1);
+  end;
+
 begin
   { Q with an empty input buffer quits -- discoverability path so
     users coming from the session pane don't have to learn that
@@ -1875,20 +1910,60 @@ begin
         if FChatScroll < 0 then FChatScroll := 0;
       end;
     8, 127:   { Backspace -- code differs by terminal; accept both }
-      if Length(FInputBuf) > 0 then
-        SetLength(FInputBuf, Length(FInputBuf) - 1);
+      DeleteLastCodePoint;
   else
-    { Printable ASCII / latin-1: append. We don't try to handle
-      escape sequences or multi-byte UTF-8 here -- DMVCFramework's
-      GetKey on Linux returns the raw byte for printable chars, on
-      Windows the VK_ codes for special keys; the printable range
-      32..126 is safe everywhere. Higher bytes pass through and
-      will render as their byte value on most terminals. }
-    if (Key >= 32) and (Key < 256) then
+    (* Printable input. This branch used to accept only 32..255 and
+       append Chr(Key), which lost every non-Latin character two
+       different ways: on Windows an IME character came through as
+       its AsciiChar -- the low byte of the UTF-16 unit, or #0 and
+       therefore a "special key" -- so Chinese either turned into
+       ASCII punctuation or vanished; on POSIX GetKey yields one raw
+       byte per call, so each byte of a 3-byte 你 became its own
+       Latin-1 WideChar and the buffer held mojibake, which then went
+       into the session file as-is. Bug report: CJK disappearing from
+       the input line and not showing in the session log. *)
+    if IsSpecialKey(Key) then Exit;   { arrows etc. this pane does not use }
+    {$IFDEF MSWINDOWS}
+    { GetKey now returns the KEY_EVENT's UnicodeChar (see the vendored
+      console's PasClaw patch note): one UTF-16 unit per event, and a
+      supplementary character as two events -- high then low surrogate
+      -- which appending in order reconstitutes. }
+    if (Key >= 32) and (Key <= $FFFF) then
+      FInputBuf := FInputBuf + Char(Key);
+    {$ELSE}
+    { POSIX: one raw byte per GetKey. Reassemble UTF-8 across calls; the
+      terminal delivers a character's bytes back to back, so the
+      partial state only ever spans a few iterations of the key loop. }
+    if FUtf8Need > 0 then
     begin
-      Ch := Chr(Key);
-      FInputBuf := FInputBuf + Ch;
+      if (Key and $C0) = $80 then
+      begin
+        FUtf8Pending := FUtf8Pending + Char(Key and $FF);
+        Dec(FUtf8Need);
+        if FUtf8Need = 0 then
+        begin
+          if Utf8DecodeCodePoint(FUtf8Pending, CP) then AppendCodePoint(CP);
+          FUtf8Pending := '';
+        end;
+        Exit;
+      end;
+      { The sequence was cut short by a non-continuation byte: drop the
+        partial character and let this byte start afresh below. }
+      FUtf8Pending := '';
+      FUtf8Need := 0;
     end;
+    L := Utf8SeqLen(Key and $FF);
+    if L = 1 then
+    begin
+      if Key >= 32 then FInputBuf := FInputBuf + Char(Key);
+    end
+    else if L > 1 then
+    begin
+      FUtf8Pending := Char(Key and $FF);
+      FUtf8Need := L - 1;
+    end;
+    { L = 0: a stray continuation byte or an invalid lead -- dropped. }
+    {$ENDIF}
   end;
 end;
 
@@ -2347,9 +2422,14 @@ begin
     InputLine := ' > ' + FInputBuf + '_'
   else
     InputLine := ' > ' + FInputBuf;
-  if Length(InputLine) > W then
-    InputLine := Copy(InputLine, Length(InputLine) - W + 1, W);
-  while Length(InputLine) < W do InputLine := InputLine + ' ';
+  { Measure in terminal cells, not Length(): a CJK character is one
+    Char and two cells, so the Length-based version both overflowed
+    the row (wrapping onto the next line and corrupting the frame)
+    and under-padded it. Keep the TAIL -- the cursor end is what the
+    operator is looking at -- and never cut a character in half. }
+  if VisibleLength(InputLine) > W then
+    InputLine := TruncateVisibleTail(InputLine, W);
+  InputLine := PadVisibleRight(InputLine, W);
   GotoXY(X, ChatBottom + 2);
   WriteAnsiText(ConsoleTheme.Text, InputLine);
 end;

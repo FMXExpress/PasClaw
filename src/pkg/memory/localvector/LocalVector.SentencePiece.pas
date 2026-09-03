@@ -152,7 +152,14 @@ begin
     raise ESentencePieceError.CreateFmt('tokenizer.json not found: %s', [ATokenizerJsonPath]);
   SL := TStringList.Create;
   try
-    SL.LoadFromFile(ATokenizerJsonPath);
+    { PasClaw modification: read as UTF-8 explicitly. Without an encoding,
+      Delphi's LoadFromFile decodes a BOM-less tokenizer.json as the ANSI
+      codepage, which corrupts every non-ASCII vocab entry -- the CJK
+      pieces in particular, for the users most likely to need them. FPC
+      passed the bytes through untouched, so this only ever bit the
+      Delphi build. RTL overload rather than PasClaw.Utils so the vendored
+      unit stays free of app dependencies. }
+    SL.LoadFromFile(ATokenizerJsonPath, TEncoding.UTF8);
     Txt := SL.Text;
   finally
     SL.Free;

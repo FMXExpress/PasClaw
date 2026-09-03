@@ -210,7 +210,7 @@ begin
   end;
   L := TStringList.Create;
   try
-    L.LoadFromFile(Path);
+    L.Text := ReadFileText(Path);
     Obj := TJsonObject.Parse(L.Text);
     if Obj = nil then
     begin
@@ -264,7 +264,7 @@ begin
     L := TStringList.Create;
     try
       L.Text := Obj.ToJSON;
-      L.SaveToFile(Path);
+      WriteFileText(Path, L.Text);
     finally
       L.Free;
     end;

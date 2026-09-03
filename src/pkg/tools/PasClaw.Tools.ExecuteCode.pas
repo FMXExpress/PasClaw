@@ -393,7 +393,9 @@ begin
     Sl.LineBreak := #10;
     Sl.Text := Code;
     try
-      Sl.SaveToFile(Path);
+      { Model-authored source can hold non-ASCII in strings and comments;
+        interpreters read UTF-8. Sl.Text honours the LF LineBreak above. }
+      WriteFileText(Path, Sl.Text);
     except
       on E: Exception do
       begin

@@ -102,7 +102,7 @@ begin
   L := TStringList.Create;
   try
     try
-      L.LoadFromFile(Path);
+      L.Text := ReadFileText(Path);
     except
       Exit;
     end;
@@ -139,7 +139,7 @@ begin
   L := TStringList.Create;
   try
     try
-      L.LoadFromFile(Path);
+      L.Text := ReadFileText(Path);
     except
       on E: Exception do
       begin
@@ -268,7 +268,7 @@ begin
     try
       L.Text := Root.ToJSON;
       try
-        L.SaveToFile(Path);
+        WriteFileText(Path, L.Text);   { tool descriptions are not ASCII-only }
       except
         on E: Exception do
           LogWarn('mcp-cache[%s] write failed: %s', [ServerName, E.Message]);
