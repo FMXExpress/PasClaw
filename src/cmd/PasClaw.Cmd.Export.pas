@@ -107,8 +107,7 @@ begin
   Sl := TStringList.Create;
   try
     try
-      Sl.LoadFromFile(Path);
-      Result := Sl.Text;
+      Result := ReadFileText(Path);
     except
       Result := '';
     end;
@@ -455,7 +454,7 @@ begin
   try
     Sl.Text := Body;
     try
-      Sl.SaveToFile(Path);
+      WriteFileText(Path, Sl.Text);   { exported transcripts are UTF-8 }
       Result := True;
       PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + Format('wrote %s', [Path]));
     except

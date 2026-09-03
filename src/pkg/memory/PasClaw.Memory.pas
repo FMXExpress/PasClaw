@@ -159,7 +159,7 @@ begin
       end;
     end
     else
-      Reader.LoadFromFile(FPath);
+      Reader.Text := ReadFileText(FPath);   { UTF-8 on both arms }
     for i := 0 to Reader.Count - 1 do
     begin
       if Trim(Reader[i]) = '' then Continue;

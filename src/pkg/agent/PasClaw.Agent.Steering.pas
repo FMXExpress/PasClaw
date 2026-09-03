@@ -339,7 +339,9 @@ begin
     S := TStringList.Create;
     try
       try
-        S.LoadFromFile(DrainPath);
+        { The writer below encodes UTF-8 by hand precisely because a TStrings
+          write would not; the readers have to match it. }
+        S.Text := ReadFileText(DrainPath);
       except
         on E: Exception do
         begin
@@ -391,7 +393,7 @@ begin
             Fresh := TStringList.Create;
             try
               try
-                Fresh.LoadFromFile(Path);
+                Fresh.Text := ReadFileText(Path);
                 for i := 0 to Fresh.Count - 1 do
                   Rest.Add(Fresh[i]);
               except
@@ -453,7 +455,7 @@ begin
   S := TStringList.Create;
   try
     try
-      S.LoadFromFile(Path);
+      S.Text := ReadFileText(Path);
     except
       Exit;
     end;

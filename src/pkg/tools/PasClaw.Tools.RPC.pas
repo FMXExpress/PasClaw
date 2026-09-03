@@ -207,7 +207,7 @@ begin
   try
     Sl.Add(Format('{"port":%d,"token":"%s","pid":%d}',
                   [FPort, FToken, CurrentProcessID]));
-    Sl.SaveToFile(FInfoPath);
+    WriteFileText(FInfoPath, Sl.Text);   { UTF-8 on both arms -- see docs/utf8-file-io }
   finally
     Sl.Free;
   end;
@@ -380,7 +380,7 @@ begin
   Sl := TStringList.Create;
   try
     try
-      Sl.LoadFromFile(Path);
+      Sl.Text := ReadFileText(Path);
     except
       on E: Exception do
       begin

@@ -532,6 +532,12 @@ begin
   try
     L.Text := Bat;
     try
+      { Deliberately NOT UTF-8 (utf8-lint: allow). cmd.exe reads a batch
+        file in the console codepage and has no UTF-8 mode short of a
+        chcp line; an ASCII-only script written in the default encoding
+        is the one form every Windows shell agrees on. The paths it
+        quotes are the only non-ASCII risk, and that is a separate
+        problem from this file's encoding. }
       L.SaveToFile(BatPath);
     except
       on E: Exception do

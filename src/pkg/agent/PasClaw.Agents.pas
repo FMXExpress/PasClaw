@@ -646,7 +646,7 @@ begin
   Lines := TStringList.Create;
   try
     try
-      Lines.LoadFromFile(Path);
+      Lines.Text := ReadFileText(Path);
     except
       Exit;
     end;
