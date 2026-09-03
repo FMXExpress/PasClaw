@@ -14,6 +14,24 @@ program ansi_width_tests;
   doesn't break wrap math (Codex P2 on PR #182). A regression
   here would silently under-pad styled chat rows or split lines
   in the middle of a CSI sequence.
+
+  Also covers the Unicode half added for the CJK bug report (Chinese
+  disappearing from the TUI input line):
+
+    CodePointCellWidth  -- 2 cells for CJK / Hangul / fullwidth /
+                           emoji, 0 for combining marks and ZW chars.
+    VisibleLength etc.  -- now sum cells per code point, so 你好 is
+                           4 columns, and TruncateVisible never leaves
+                           half a wide character on a row.
+    TruncateVisibleTail -- keep the cursor end of an input line.
+    Utf8SeqLen / Utf8DecodeCodePoint -- the byte-stream decoder the
+                           Delphi TUI uses on POSIX, where GetKey
+                           hands over one byte at a time.
+
+  Under FPC `string` is UTF-8 bytes, so the literals below are byte
+  escapes rather than relying on the source codepage. The Delphi
+  (UTF-16) arm of NextCodePoint is not exercised here -- no Delphi
+  toolchain in CI -- and is stated as such.
 *)
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
@@ -124,10 +142,165 @@ begin
               'iterated truncation covers all 6 visible columns');
 end;
 
+const
+  { UTF-8 byte forms, so the test does not depend on the source codepage. }
+  NI    = #$E4#$BD#$A0;           { 你  U+4F60 }
+  HAO   = #$E5#$A5#$BD;           { 好  U+597D }
+  SHI   = #$E4#$B8#$96;           { 世  U+4E16 }
+  JIE   = #$E7#$95#$8C;           { 界  U+754C }
+  GRIN  = #$F0#$9F#$98#$80;       { 😀 U+1F600, 4 bytes, 2 cells }
+  ACUTE = #$CC#$81;               { U+0301 combining acute, 0 cells }
+  ZWSP  = #$E2#$80#$8B;           { U+200B zero-width space }
+  EACUTE_NFC = #$C3#$A9;          { é U+00E9 precomposed, 1 cell }
+  HEART = #$E2#$9D#$A4;           { ❤  U+2764, text presentation, 1 cell }
+  VS16  = #$EF#$B8#$8F;           { U+FE0F emoji presentation selector }
+  VS15  = #$EF#$B8#$8E;           { U+FE0E text presentation selector }
+
+procedure TestCodePointCellWidth;
+begin
+  AssertEqInt(CodePointCellWidth(Ord('a')),  1, 'ascii is 1 cell');
+  AssertEqInt(CodePointCellWidth($4F60),     2, 'CJK ideograph is 2 cells');
+  AssertEqInt(CodePointCellWidth($AC00),     2, 'Hangul syllable is 2 cells');
+  AssertEqInt(CodePointCellWidth($FF21),     2, 'fullwidth A is 2 cells');
+  AssertEqInt(CodePointCellWidth($1F600),    2, 'emoji is 2 cells');
+  AssertEqInt(CodePointCellWidth($0301),     0, 'combining acute is 0 cells');
+  AssertEqInt(CodePointCellWidth($200B),     0, 'zero-width space is 0 cells');
+  AssertEqInt(CodePointCellWidth($00E9),     1, 'latin e-acute is 1 cell');
+  AssertEqInt(CodePointCellWidth($303F),     1, 'the one narrow hole in the CJK block');
+end;
+
+procedure TestVisibleLengthCountsCells;
+begin
+  AssertEqInt(VisibleLength(NI + HAO), 4,
+              'two CJK characters are four columns, not two and not six bytes');
+  AssertEqInt(VisibleLength('a' + NI + 'b'), 4, 'mixed ascii and CJK');
+  AssertEqInt(VisibleLength(ESC + '[1m' + NI + ESC + '[0m'), 2,
+              'ANSI around a wide char still counts only the char');
+  AssertEqInt(VisibleLength(GRIN), 2, 'four-byte emoji is two cells');
+  AssertEqInt(VisibleLength('e' + ACUTE), 1, 'combining mark adds no width');
+  AssertEqInt(VisibleLength(ZWSP), 0, 'zero-width space is zero');
+  AssertEqInt(VisibleLength(EACUTE_NFC), 1, 'precomposed accent is one cell');
+  { Malformed input costs one column per bad byte, never an exception. }
+  AssertEqInt(VisibleLength(#$E4#$B8), 2, 'truncated sequence: one column per byte');
+  AssertEqInt(VisibleLength(#$80), 1, 'stray continuation byte: one column');
+end;
+
+procedure TestTruncateVisibleNeverSplitsWide;
+var
+  Prefix, Rem: string;
+begin
+  { 你好世界 is 8 cells. Room for 5: 你好 fit (4), 世 would make 6. }
+  Prefix := TruncateVisible(NI + HAO + SHI + JIE, 5, Rem);
+  AssertEqStr(Prefix, NI + HAO, 'wide char that would straddle stays whole');
+  AssertEqStr(Rem, SHI + JIE, 'and moves to the remainder intact');
+  AssertEqInt(VisibleLength(Prefix), 4, 'prefix width is under the cap, not over');
+
+  Prefix := TruncateVisible('a' + NI, 2, Rem);
+  AssertEqStr(Prefix, 'a', 'one cell left: a two-cell char does not squeeze in');
+  AssertEqStr(Rem, NI, 'it is the remainder');
+
+  Prefix := TruncateVisible(NI + HAO, 4, Rem);
+  AssertEqStr(Prefix, NI + HAO, 'exact fit');
+  AssertEqStr(Rem, '', 'nothing left');
+end;
+
+procedure TestPadVisibleRightCjk;
+var
+  Padded: string;
+begin
+  Padded := PadVisibleRight(NI + HAO, 6);
+  AssertEqInt(VisibleLength(Padded), 6, 'pads to six cells');
+  AssertEqStr(Copy(Padded, Length(Padded) - 1, 2), '  ',
+              'exactly two spaces appended, not four');
+end;
+
+procedure TestTruncateVisibleTail;
+begin
+  AssertEqStr(TruncateVisibleTail('abcdef', 3), 'def', 'keeps the tail');
+  AssertEqStr(TruncateVisibleTail('a' + NI + HAO, 4), NI + HAO,
+              'drops the leading ascii to fit two wide chars');
+  AssertEqStr(TruncateVisibleTail(NI + HAO + SHI, 3), SHI,
+              'drops whole wide chars until it fits -- never half of one');
+  AssertEqStr(TruncateVisibleTail('abc', 3), 'abc', 'already fits');
+  AssertEqStr(TruncateVisibleTail('', 3), '', 'empty stays empty');
+end;
+
+procedure TestVariationSelectors;
+(* Codex P2 on PR #597. VS16 promotes the preceding glyph to its two-cell
+   emoji form; VS15 forces the one-cell text form. Counting the selector as
+   an independent zero-width character reported one cell for ❤️ where
+   terminals draw two. *)
+var
+  Prefix, Rem: string;
+begin
+  AssertEqInt(VisibleLength(HEART), 1, 'bare heart is one cell');
+  AssertEqInt(VisibleLength(HEART + VS16), 2,
+              'heart + VS16 is the two-cell emoji form');
+  AssertEqInt(VisibleLength(HEART + VS15), 1,
+              'heart + VS15 stays the one-cell text form');
+  AssertEqInt(VisibleLength('a' + HEART + VS16 + 'b'), 4,
+              'selector width counts inside a run');
+  { An emoji already wide by block stays 2 with a selector, not 3. }
+  AssertEqInt(VisibleLength(GRIN + VS16), 2,
+              'an already-wide emoji plus VS16 is still two cells');
+  { The pair must never be split: base and selector move together. }
+  Prefix := TruncateVisible('a' + HEART + VS16 + 'b', 2, Rem);
+  AssertEqStr(Prefix, 'a', 'two cells left: the emoji pair does not fit');
+  AssertEqStr(Rem, HEART + VS16 + 'b',
+              'and the base keeps its selector in the remainder');
+  Prefix := TruncateVisible('a' + HEART + VS16 + 'b', 3, Rem);
+  AssertEqStr(Prefix, 'a' + HEART + VS16, 'three cells: pair fits whole');
+  AssertEqStr(Rem, 'b', 'remainder is what follows the pair');
+  AssertEqStr(TruncateVisibleTail('ab' + HEART + VS16, 2), HEART + VS16,
+              'tail keeps the pair together too');
+end;
+
+procedure TestUtf8SeqLen;
+begin
+  AssertEqInt(Utf8SeqLen($41), 1, 'ascii lead');
+  AssertEqInt(Utf8SeqLen($C3), 2, 'two-byte lead');
+  AssertEqInt(Utf8SeqLen($E4), 3, 'three-byte lead');
+  AssertEqInt(Utf8SeqLen($F0), 4, 'four-byte lead');
+  AssertEqInt(Utf8SeqLen($80), 0, 'continuation byte is not a lead');
+  AssertEqInt(Utf8SeqLen($C0), 0, 'overlong lead C0 rejected');
+  AssertEqInt(Utf8SeqLen($C1), 0, 'overlong lead C1 rejected');
+  AssertEqInt(Utf8SeqLen($F5), 0, 'lead beyond U+10FFFF rejected');
+  AssertEqInt(Utf8SeqLen($FF), 0, 'FF is never valid');
+end;
+
+procedure TestUtf8DecodeCodePoint;
+var
+  CP: Integer;
+begin
+  if not Utf8DecodeCodePoint('A', CP) then Fail('ascii decodes');
+  AssertEqInt(CP, $41, 'ascii value');
+  if not Utf8DecodeCodePoint(EACUTE_NFC, CP) then Fail('two-byte decodes');
+  AssertEqInt(CP, $E9, 'e-acute value');
+  if not Utf8DecodeCodePoint(NI, CP) then Fail('three-byte decodes');
+  AssertEqInt(CP, $4F60, 'ni value');
+  if not Utf8DecodeCodePoint(GRIN, CP) then Fail('four-byte decodes');
+  AssertEqInt(CP, $1F600, 'grin value');
+  { Rejections -- each is a way the byte stream can arrive damaged. }
+  if Utf8DecodeCodePoint(#$E4#$B8, CP) then Fail('short sequence must fail');
+  if Utf8DecodeCodePoint(#$E4#$41#$AD, CP) then Fail('bad continuation must fail');
+  if Utf8DecodeCodePoint(#$C0#$80, CP) then Fail('overlong NUL must fail');
+  if Utf8DecodeCodePoint(#$ED#$A0#$80, CP) then Fail('encoded surrogate must fail');
+  if Utf8DecodeCodePoint('', CP) then Fail('empty must fail');
+  if Utf8DecodeCodePoint(#$80, CP) then Fail('lone continuation must fail');
+end;
+
 begin
   TestVisibleLengthSkipsAnsi;
   TestPadVisibleRightCountsAnsiAsZero;
   TestTruncateVisibleKeepsAnsiIntact;
+  TestCodePointCellWidth;
+  TestVisibleLengthCountsCells;
+  TestTruncateVisibleNeverSplitsWide;
+  TestPadVisibleRightCjk;
+  TestTruncateVisibleTail;
+  TestVariationSelectors;
+  TestUtf8SeqLen;
+  TestUtf8DecodeCodePoint;
   TestTruncateVisibleIterates;
   WriteLn('ansi_width_tests: OK');
 end.

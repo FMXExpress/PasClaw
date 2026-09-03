@@ -50,6 +50,23 @@ begin
   Dir := GetTempDir(False);
   if Dir = '' then Dir := '.';
 
+  { --- legacy multibyte bytes must still read as text, never raise ---
+    CP932 for the Japanese "日本" is 93 FA 96 7B: not valid UTF-8. On
+    Windows the ANSI step decodes it correctly; here it lands on Latin-1.
+    Either way ReadFileText must return well-formed UTF-8 and not throw. --- }
+  Path := Dir + PathDelim + 'pasclaw-cp932-legacy.txt';
+  WriteRaw(Path, [$93, $FA, $96, $7B]);
+  Body := '';
+  try
+    Body := ReadFileText(Path);
+  except
+    on E: Exception do
+      Check(False, 'legacy multibyte file raised ' + E.ClassName);
+  end;
+  Check(Body <> '', 'legacy multibyte file reads as some text');
+  Check(StrIsValidUTF8(Body), 'legacy multibyte file yields valid UTF-8');
+  DeleteFile(Path);
+
   { --- validator sanity --- }
   Check(BytesAreValidUTF8(TBytes.Create($E2, $98, $83)), 'validator: accepts UTF-8 snowman');
   Check(not BytesAreValidUTF8(TBytes.Create($93, $94)), 'validator: rejects cp1252 quotes');
