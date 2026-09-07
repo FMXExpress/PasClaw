@@ -128,8 +128,14 @@ character 4-grams, signed accumulation, sublinear damping, L2 normalise.
 
 Be clear about what that buys, because it is easy to oversell:
 
-- it **is** robust to typos and inflection — `deploymnet` still matches
-  `deployment`, which BM25 with a Porter stemmer does not;
+- it **is** robust to *partial* misspelling and to inflection. A query with
+  one word wrong out of several still reaches its fact (cosine ~0.42 against
+  the 0.30 retrieval gate). A query where *every* word is misspelled does
+  not: `relaese chekclist` scores ~0.18 against the fact it names, which is
+  well clear of unrelated text (~0.10) but below the `MinCosine = 0.30` gate
+  in `RankFactsBySemantic` — a threshold tuned for MiniLM, not for a bag of
+  hashed n-grams. Measured, not estimated; the numbers are pinned in
+  `memory_static_embed_tests`;
 - it gives the hybrid RRF path a second rank to fuse from the first turn,
   and stops a database accumulating rows with no vector at all;
 - it is **not semantic**. `car` and `automobile` score near zero. Nothing
@@ -138,6 +144,13 @@ Be clear about what that buys, because it is easy to oversell:
 Because a lexical score is a poor basis for an irreversible merge, the
 static tier registers with semantic dedup **disabled**. It ranks; it never
 merges. Exact-text dedup is unaffected.
+
+That gate is the obvious next thing to look at. The signal-to-noise
+separation is real (0.18 vs 0.10) but the margin is thin, and picking a
+lower per-tier threshold off one example pair would be tuning on a sample of
+one. The principled fix is a scorer suited to short-query/long-document
+matching — cosine between L2-normalised bags systematically under-scores a
+short query — rather than a new constant.
 
 A static *semantic* tier is possible later — the model2vec / potion family
 is a distilled token-vector table, ~8–30 MB of data with no native runtime,

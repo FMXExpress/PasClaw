@@ -108,11 +108,38 @@ begin
              Format('related text outscores unrelated (%.3f vs %.3f)',
                     [Related, Unrelated]));
 
-  { The point of character n-grams: a single transposed letter destroys a
-    keyword match but leaves most n-grams intact. }
-  Typo := Sim('deployment configuration', 'deploymnet configuration');
-  AssertTrue(Typo > 0.7,
-             Format('a one-letter typo stays close (%.3f)', [Typo]));
+  (* Character n-grams survive a typo -- but only in proportion to how much
+     of the text is still spelled correctly, and that limit is the honest
+     shape of this tier. Measured against the fact-store gate
+     (RankFactsBySemantic drops anything below 0.30):
+
+       one word of two misspelled, vs a full sentence : 0.42  -> retrieved
+       BOTH words misspelled,      vs a full sentence : 0.18  -> DROPPED
+       unrelated topic,            vs a full sentence : 0.10
+
+     So a fully misspelled short query does NOT reach the fact it names,
+     even though it scores well clear of noise. The earlier version of this
+     test compared 'deployment configuration' with 'deploymnet
+     configuration' and asserted > 0.7 -- true, but only because the second
+     word matched exactly, so it measured the shared word rather than the
+     typo tolerance it claimed to. Pin the real numbers instead. *)
+  Typo := Sim('release chekclist',
+              'The release checklist lives at docs/release.md, step 3 first.');
+  AssertTrue(Typo > 0.30,
+             Format('one misspelled word still clears the retrieval gate (%.3f)',
+                    [Typo]));
+
+  Typo := Sim('relaese chekclist',
+              'The release checklist lives at docs/release.md, step 3 first.');
+  AssertTrue((Typo > 0.12) and (Typo < 0.30),
+             Format('a fully misspelled short query beats noise but does NOT ' +
+                    'clear the 0.30 gate (%.3f) -- a documented limitation, ' +
+                    'not an accident', [Typo]));
+
+  Typo := Sim('relaese chekclist',
+              'The database migration runs nightly at 0200 UTC on the replica.');
+  AssertTrue(Typo < 0.12,
+             Format('...and unrelated text stays below it (%.3f)', [Typo]));
 
   Inflected := Sim('deploy the release', 'deploying the releases');
   AssertTrue(Inflected > 0.5,
