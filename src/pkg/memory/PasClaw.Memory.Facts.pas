@@ -77,6 +77,12 @@ type
   IFactStore = interface
     ['{4C2F9A11-7E3D-4B8A-9F21-2A6D0C5E1B77}']
     function  Open(const DbPath: string): Boolean;
+    { The driver's own message from the last failed Open, or '' -- the same
+      contract IMemoryIndex.LastError has, and for the same reason: a caller
+      reporting "unavailable" must be able to say WHY without guessing.
+      Feed it to SqliteOpenFailureReason, which falls back to the platform
+      hint when the driver said nothing useful. }
+    function  LastError: string;
     procedure Close;
     { Insert F; returns the new row id (0 on failure). CreatedAt is set
       to now; Superseded starts false. }
@@ -748,6 +754,7 @@ type
 
   TFactStoreImpl = class(TInterfacedObject, IFactStore)
   private
+    FLastError: string;
     {$IFDEF FPC}
     FConn: TSQLite3Connection;
     FTx:   TSQLTransaction;
@@ -767,6 +774,7 @@ type
   public
     destructor Destroy; override;
     function  Open(const DbPath: string): Boolean;
+    function  LastError: string;
     procedure Close;
     function  Add(const F: TFact; CreatedAt: Int64): Int64;
     function  ActiveFacts(const Today: string): TStoredFactArray;
@@ -890,9 +898,15 @@ begin
   end;
 end;
 
+function TFactStoreImpl.LastError: string;
+begin
+  Result := FLastError;
+end;
+
 function TFactStoreImpl.Open(const DbPath: string): Boolean;
 begin
   Result := False;
+  FLastError := '';
   if FOpen then Exit(True);
   try
     EnsureDir(ExtractFilePath(DbPath));
@@ -918,6 +932,7 @@ begin
   except
     on E: Exception do
     begin
+      FLastError := E.Message;
       LogWarn('memory.facts: failed to open %s (%s) -- fact store disabled',
               [DbPath, E.Message]);
       {$IFDEF FPC}

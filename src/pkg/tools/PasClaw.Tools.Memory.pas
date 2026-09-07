@@ -403,13 +403,13 @@ begin
   Store := NewFactStore;
   if not Store.Open(DefaultFactsDbPath(GetHome)) then
   begin
-    { Name the path and the usual cause, and stop there. IFactStore has no
-      LastError accessor, so there is no driver detail to report --
-      SqliteOpenFailureReason exists to clean up a REAL one, and feeding it
-      a path would print the path as though it were a diagnosis. Same
-      shape as `pasclaw memory add`, which already gets this right. }
+    { The driver's own reason, via SqliteOpenFailureReason -- which falls
+      back to the platform hint itself when the driver said nothing useful.
+      Reaching straight for that fallback is the mistake the test-sqlite-hint
+      structural guard exists to catch, and it caught this call site;
+      IFactStore.LastError was added so the honest answer is available. }
     ErrMsg := 'cannot open the fact store at ' + DefaultFactsDbPath(GetHome) +
-              ' (' + SqliteBackendHint + ', or the path is not writable)';
+              ' (' + SqliteOpenFailureReason(Store.LastError) + ')';
     Exit;
   end;
   try
