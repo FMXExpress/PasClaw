@@ -19,7 +19,8 @@ The index is rebuilt lazily on every `memory_search` call (small N, fast rebuild
 
 | Tool | Purpose |
 |---|---|
-| `memory_search(query, k?)` | FTS5 BM25 (+ optional hybrid vector) over `workspace/memory/*.md` and `MEMORY.md`. |
+| `memory_search(query, k?)` | FTS5 BM25 (+ optional hybrid vector) over `workspace/memory/*.md` and `MEMORY.md`, plus the distilled fact store. |
+| `memory_write(text, kind?, scope?, expires?, event_date?, source?)` | Record one durable fact in the fact store. Mutating — plan mode refuses it, and MCP exposes it only under `--mcp-allow-write`. |
 | `memory_fetch(url, name?)` | Fetch a URL and write it to `workspace/memory/fetched-<sanitised>.md`. Registered when `web_fetch_enabled: true`. |
 | `session_search(query, k?)` | FTS5 over the full text of every saved session under `workspace/sessions/`. Indexed separately at `workspace/sessions/.search.db`. |
 
@@ -116,6 +117,47 @@ Provisioning artifacts land under `$PASCLAW_HOME/cache/localvector/`:
 The embedder runs **locally**. Embeddings never leave the host — no provider API key required for vector search.
 
 Toggle: `vector_search_enabled: true` (default). When provisioning hasn't happened yet, `memory_search` and `kb_search` fall back to FTS5-only silently.
+
+### The static tier — vectors without provisioning
+
+The fact store does not wait for that download. When the ONNX embedder is
+unavailable it registers a **static** embedder instead: `hash-ngram-v1@256`,
+implemented in `PasClaw.Memory.Embed.Static` with no model file, no
+vocabulary and no native runtime. Feature hashing over word unigrams and
+character 4-grams, signed accumulation, sublinear damping, L2 normalise.
+
+Be clear about what that buys, because it is easy to oversell:
+
+- it **is** robust to typos and inflection — `deploymnet` still matches
+  `deployment`, which BM25 with a Porter stemmer does not;
+- it gives the hybrid RRF path a second rank to fuse from the first turn,
+  and stops a database accumulating rows with no vector at all;
+- it is **not semantic**. `car` and `automobile` score near zero. Nothing
+  here has read a corpus.
+
+Because a lexical score is a poor basis for an irreversible merge, the
+static tier registers with semantic dedup **disabled**. It ranks; it never
+merges. Exact-text dedup is unaffected.
+
+A static *semantic* tier is possible later — the model2vec / potion family
+is a distilled token-vector table, ~8–30 MB of data with no native runtime,
+mean-pooled over the tokenizer `LocalVector.Tokenizer` already implements.
+That is still a download, so it belongs beside the ONNX tier rather than in
+the always-available one.
+
+### Embedder identity
+
+Every stored vector records which embedder produced it, as `<name>@<dim>`
+in the `facts.embed_model` column. Vectors from different embedders are
+never compared: two models can share a dimension and still place unrelated
+text in the same region, and cosine similarity cannot tell the difference —
+so a length check alone is not a guard.
+
+On a model switch, rows from the old space are ignored by semantic reads
+(retrieval degrades to keyword ranking) until `BackfillEmbeddings` rewrites
+them, which happens automatically at the next startup that registers an
+embedder. Rows written before this column existed carry `''` and are
+treated the same way.
 
 ## `pasclaw learn` — failure mining
 

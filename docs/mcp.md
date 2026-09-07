@@ -89,7 +89,9 @@ curl http://127.0.0.1:8088/mcp \
 
 ### Allowlist + read-only mode
 
-The gateway can be locked down for exposed MCP. By default the inbound MCP server refuses mutating tools (`fs_write`, `fs_edit_hashline`, `shell_exec`, `execute_code`); `--mcp-allow-write` opts in to them. There is no per-tool allowlist flag — the allowlist is the read-only / read-write split.
+The gateway can be locked down for exposed MCP. By default the inbound MCP server refuses mutating tools (`fs_write`, `fs_edit_hashline`, `shell_exec`, `execute_code`, `memory_write`); `--mcp-allow-write` opts in to them. There is no per-tool allowlist flag — the allowlist is the read-only / read-write split.
+
+`memory_write` is the one worth thinking about separately. `memory_search` has always let another agent **read** PasClaw's memory; `memory_write` lets it **contribute**, so a decision recorded in Cursor is in context the next time PasClaw runs. Each written fact stores its declared origin (`written:<source>`) for audit. That origin is a label, not an authentication — a client can claim any value — so treat an exposed writable MCP surface as trusted-caller-only.
 
 ```sh
 pasclaw gateway --mcp-port 9090                       # spawn a second MCP-only listener on port 9090

@@ -2,10 +2,19 @@
   PasClaw.Tools.Memory - registers the memory_search tool.
 
   Workflow (openclaw-style):
-    - The model writes durable notes by editing MEMORY.md or a daily
+    - The model writes durable NOTES by editing MEMORY.md or a daily
       file workspace/memory/YYYY-MM-DD.md with the existing fs_write
-      tool. There is intentionally NO memory_add tool -- files are the
-      source of truth, the index follows.
+      tool. There is intentionally no memory_add tool for those -- files
+      are the source of truth, the index follows.
+    - memory_write is the exception, and it targets the other corpus: the
+      fact store, which has no file behind it. Until now the ONLY way in
+      was auto-distillation of PasClaw's own transcripts, so a fact could
+      not be recorded deliberately, and an external MCP client could read
+      the store (memory_search is tcReadOnly and the MCP server exposes
+      it) but never contribute to it. memory_write is tcMutating, so plan
+      mode refuses it and the MCP server exposes it only under
+      --mcp-allow-write -- a foreign host writing the operator's memory is
+      an explicit decision, not a default.
     - memory_search opens the lazy FTS5 index over workspace/memory/,
       syncs it against the current files (rebuilding rows for any file
       whose mtime moved), and runs an FTS5 MATCH against the user's
@@ -51,7 +60,9 @@ uses
   PasClaw.Logger,
   PasClaw.Memory.Index,
   PasClaw.Memory.Vector,
-  PasClaw.Memory.Facts,   { distilled-fact search (Phase 4b) }
+  PasClaw.Memory.Facts,   { distilled-fact search (Phase 4b) + memory_write }
+  PasClaw.Memory.Distill, { TFact -- the record memory_write builds }
+  DateUtils,              { DateTimeToUnix for the fact's created_at }
   PasClaw.Promptware;     { injection scan on recalled snippets -- chokepoint 2 }
 
 function ParseStringArg(const ArgsJSON, Field: string; out V: string): Boolean;
@@ -284,6 +295,161 @@ begin
   LogDebug('memory_search query=%s k=%d hits=%d', [Query, K, Length(Hits)]);
 end;
 
+(* Accept 'YYYY-MM-DD' or ''. Rejecting a malformed date at the tool
+   boundary matters more than usual here: expires drives whether a fact is
+   ever shown again, so a date the store cannot compare would either hide
+   the fact forever or never expire it, with no error either way. *)
+function ValidDateArg(const S: string): Boolean;
+var
+  i: Integer;
+begin
+  Result := False;
+  if S = '' then Exit(True);
+  if Length(S) <> 10 then Exit;
+  if (S[5] <> '-') or (S[8] <> '-') then Exit;
+  for i := 1 to 10 do
+    if (i <> 5) and (i <> 8) and ((S[i] < '0') or (S[i] > '9')) then Exit;
+  Result := True;
+end;
+
+function Tool_MemoryWrite(const ArgsJSON: string; out ErrMsg: string): string;
+const
+  MaxTextLen = 2000;   { a fact is a sentence; a document belongs in a note }
+var
+  F: TFact;
+  Cfg: TConfig;
+  Store: IFactStore;
+  Origin: string;
+  Id: Int64;
+  DistillOn: Boolean;
+begin
+  ErrMsg := '';
+  Result := '';
+
+  if not ParseStringArg(ArgsJSON, 'text', F.Text) then
+  begin
+    ErrMsg := 'missing required argument: text';
+    Exit;
+  end;
+  F.Text := Trim(F.Text);
+  if F.Text = '' then
+  begin
+    ErrMsg := 'text must not be empty';
+    Exit;
+  end;
+  if Length(F.Text) > MaxTextLen then
+  begin
+    ErrMsg := Format('text is %d chars; the fact store holds sentences, ' +
+                     'not documents (max %d). Write long-form content to ' +
+                     'a note under workspace/memory/ instead.',
+                     [Length(F.Text), MaxTextLen]);
+    Exit;
+  end;
+
+  (* The fields below are validated strictly rather than passed through
+     PasClaw.Memory.Distill.NormaliseFact. That helper silently coerces --
+     an unparseable expires becomes "never expires", a bad kind becomes
+     "dynamic" -- which is right for a distiller salvaging a model's JSON,
+     where one bad field must not lose the whole pass. It is wrong for a
+     tool: a caller that asks for expires="tomorrow" and is told the write
+     succeeded has no way to learn its fact will never expire. *)
+  if not ParseStringArg(ArgsJSON, 'kind', F.Kind) then F.Kind := '';
+  if F.Kind = '' then F.Kind := 'static';
+  if (F.Kind <> 'static') and (F.Kind <> 'dynamic') then
+  begin
+    ErrMsg := 'kind must be "static" or "dynamic"';
+    Exit;
+  end;
+
+  if not ParseStringArg(ArgsJSON, 'scope', F.Scope) then F.Scope := '';
+  if F.Scope = '' then F.Scope := 'project';
+  if (F.Scope <> 'user') and (F.Scope <> 'project') and (F.Scope <> 'session') then
+  begin
+    ErrMsg := 'scope must be "user", "project" or "session"';
+    Exit;
+  end;
+
+  if not ParseStringArg(ArgsJSON, 'expires', F.Expires) then F.Expires := '';
+  if not ParseStringArg(ArgsJSON, 'event_date', F.EventDate) then F.EventDate := '';
+  if not ValidDateArg(F.Expires) then
+  begin
+    ErrMsg := 'expires must be YYYY-MM-DD (or omitted)';
+    Exit;
+  end;
+  if not ValidDateArg(F.EventDate) then
+  begin
+    ErrMsg := 'event_date must be YYYY-MM-DD (or omitted)';
+    Exit;
+  end;
+
+  (* Confidence is fixed rather than caller-supplied. It ranks facts
+     against each other, and a caller that can set its own rank can float
+     to the top of every recall by asserting 1.0 -- which matters because
+     the writer may be a different agent entirely. An explicitly written
+     fact outranks a distilled guess, and that is the whole ordering this
+     tool needs. *)
+  F.Confidence := 0.95;
+
+  (* Provenance. source_session already records WHERE a distilled fact came
+     from; an explicit write records WHO asked for it, which is the
+     question that matters once more than one agent can write here. The
+     prefix is not a security boundary -- a caller can claim any origin --
+     it is an audit trail for a human reading `pasclaw memory export`. *)
+  if not ParseStringArg(ArgsJSON, 'source', Origin) then Origin := '';
+  Origin := Trim(Origin);
+  if Origin = '' then Origin := 'agent';
+  F.SourceSession := 'written:' + Origin;
+
+  Store := NewFactStore;
+  if not Store.Open(DefaultFactsDbPath(GetHome)) then
+  begin
+    { Name the path and the usual cause, and stop there. IFactStore has no
+      LastError accessor, so there is no driver detail to report --
+      SqliteOpenFailureReason exists to clean up a REAL one, and feeding it
+      a path would print the path as though it were a diagnosis. Same
+      shape as `pasclaw memory add`, which already gets this right. }
+    ErrMsg := 'cannot open the fact store at ' + DefaultFactsDbPath(GetHome) +
+              ' (' + SqliteBackendHint + ', or the path is not writable)';
+    Exit;
+  end;
+  try
+    { (Now, False) -- False means "this DateTime is local", which is what
+      Now returns. Every other fact writer passes it; the default treats
+      local time as UTC and skews created_at by the host's offset. }
+    Id := Store.Add(F, DateTimeToUnix(Now, False));
+  finally
+    Store.Close;
+  end;
+  if Id = 0 then
+  begin
+    ErrMsg := 'fact store rejected the write';
+    Exit;
+  end;
+
+  Result := Format('stored fact #%d (kind=%s scope=%s)', [Id, F.Kind, F.Scope]);
+  if F.Expires <> '' then Result := Result + ' expires=' + F.Expires;
+  if F.EventDate <> '' then Result := Result + ' event=' + F.EventDate;
+
+  (* Both the prompt block and memory_search's fact half are gated on
+     MemoryDistillEnabled. With it off the row is written and durable but
+     nothing will ever surface it, so say so -- reporting a bare success
+     would be a lie of omission the caller cannot detect. *)
+  Cfg := LoadEffectiveConfig;   { profile-layered, and owned by us }
+  try
+    DistillOn := Cfg.MemoryDistillEnabled;
+  finally
+    Cfg.Free;
+  end;
+  if not DistillOn then
+    Result := Result + sLineBreak +
+      '(note: memory_distill_enabled is false in config.json, so stored ' +
+      'facts are not injected into the prompt and memory_search will not ' +
+      'return them. The row is saved and will surface once it is enabled.)';
+
+  LogDebug('memory_write id=%d kind=%s scope=%s origin=%s',
+           [Id, F.Kind, F.Scope, Origin]);
+end;
+
 procedure RegisterMemoryTools(R: TToolRegistry);
 var
   T: TTool;
@@ -315,6 +481,38 @@ begin
     once in ToolIsSerialOnly (PasClaw.Tools.Types) and applied by the
     registry -- setting it here would be an uninitialised-field hazard in
     reverse, since most registration sites never assign the field at all. }
+  R.Register(T);
+
+  T := Default(TTool);
+  T.Name        := 'memory_write';
+  T.Description :=
+    'Record one durable fact in the distilled-memory store: a decision, a ' +
+    'preference, a project constraint -- something that should still be ' +
+    'true next session. One sentence per call; state it so it reads ' +
+    'correctly with no surrounding context. Near-identical facts are ' +
+    'folded into the existing row rather than duplicated. For long-form ' +
+    'content write a note under workspace/memory/ with write_file ' +
+    'instead -- files are the source of truth for notes, this store is ' +
+    'for single facts. Set expires for anything that stops being true on ' +
+    'a known date.';
+  T.Schema      :=
+    '{"type":"object",' +
+    '"properties":{' +
+    '"text":{"type":"string","description":"The fact, as one self-contained sentence."},' +
+    '"kind":{"type":"string","enum":["static","dynamic"],' +
+      '"description":"static = unlikely to change; dynamic = expected to change. Default static."},' +
+    '"scope":{"type":"string","enum":["user","project","session"],' +
+      '"description":"Who the fact is about. Default project."},' +
+    '"expires":{"type":"string","description":"YYYY-MM-DD after which the fact stops being shown."},' +
+    '"event_date":{"type":"string","description":"YYYY-MM-DD the fact is ABOUT, for proactive surfacing."},' +
+    '"source":{"type":"string","description":"Who is recording this (e.g. the client name). Recorded for audit."}' +
+    '},"required":["text"]}';
+  T.Handler     := Tool_MemoryWrite;
+  T.IsCore      := True;
+  { Mutating: it changes durable state the user owns. That is what makes
+    plan mode refuse it and keeps it off the MCP surface unless the
+    operator passed --mcp-allow-write. }
+  T.Category    := tcMutating;
   R.Register(T);
 end;
 

@@ -27,6 +27,7 @@ uses
   PasClaw.Logger,
   PasClaw.Tools.Registry,
   PasClaw.Tools.Memory,
+  PasClaw.Memory.Facts.Embed,   { EnableBestFactEmbedder -- ONNX, else the static tier }
   PasClaw.Tools.KB,
   PasClaw.Tools.DB,
   PasClaw.Tools.SessionSearch;
@@ -585,6 +586,12 @@ begin
   Reg := TToolRegistry.Create;
   try
     RegisterMemoryTools(Reg);
+    { The fact store's semantic layer, same as the agent / TUI / gateway
+      entrypoints. Without this an MCP-only host reads and writes facts
+      with no vector column at all -- the rows are saved, but every recall
+      is keyword-ranked and nothing an external client writes is reachable
+      semantically until some other entrypoint backfills it. }
+    EnableBestFactEmbedder(GetHome);
     RegisterKBTools(Reg);
     RegisterSessionSearchTool(Reg);
     { Database tools -- only when the operator configured a "database" section,

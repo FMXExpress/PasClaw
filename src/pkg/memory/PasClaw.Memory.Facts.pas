@@ -57,6 +57,14 @@ type
     CreatedAt:     Int64;     { unix seconds }
     Superseded:    Boolean;
     EmbeddingHex:  string;    { hex-packed Single[] (Phase 4c); '' if none }
+    (* Which embedder produced EmbeddingHex -- '<id>@<dim>', or '' for a
+       row written before this column existed. Vectors from different
+       embedders are NOT comparable: two models can share a dimension and
+       still put unrelated text in the same region of space, and CosineSim
+       cannot tell the difference. Every read that compares vectors filters
+       on this first, so a model switch degrades to keyword ranking (and a
+       backfill) instead of silently returning wrong neighbours. *)
+    EmbedModel:    string;
   end;
   TStoredFactArray = array of TStoredFact;
 
@@ -156,8 +164,25 @@ function SearchActiveFacts(const HomeDir, Today, Query: string;
   default) disables the semantic layer entirely -- everything falls back
   to the exact + keyword behaviour, so a build without ONNX is unaffected.
   The heavy ONNX embedder lives in PasClaw.Memory.Facts.Embed. }
-procedure SetFactEmbedder(Fn: TFactEmbedFn);
+(* ModelId identifies the embedding SPACE, not just the code path, and is
+   stored on every vector this embedder writes. Use '<name>@<dim>' so a
+   dimension change is a different id too. Passing '' is treated as an
+   unidentified embedder and disables the semantic layer, because an
+   unlabelled vector is exactly the thing that cannot be compared safely
+   later. *)
+(* AllowSemanticDedup gates the destructive half. Merging two facts is
+   irreversible, so an embedder is only trusted to do it when its scores
+   mean what the threshold assumes. A lexical tier ranks fine but must not
+   merge: two genuinely different facts sharing vocabulary can easily clear
+   0.85 on word overlap alone. Such a tier registers with False and takes
+   part in search only. *)
+procedure SetFactEmbedder(Fn: TFactEmbedFn; const ModelId: string;
+                          AllowSemanticDedup: Boolean = True);
 function FactEmbedderActive: Boolean;
+{ True when the active embedder is trusted to merge near-identical facts. }
+function FactEmbedderDedups: Boolean;
+{ Id of the registered embedder, or '' when none is active. }
+function FactEmbedderId: string;
 
 { Open the default store and backfill embeddings for active rows missing
   them (see IFactStore.BackfillEmbeddings). Returns rows filled; 0 when no
@@ -202,16 +227,40 @@ const
   RrfK = 60;   { Reciprocal Rank Fusion constant (same as the .md index). }
 
 var
-  GFactEmbed: TFactEmbedFn = nil;
+  GFactEmbed:      TFactEmbedFn = nil;
+  GFactEmbedId:    string = '';
+  GFactEmbedDedup: Boolean = True;
 
-procedure SetFactEmbedder(Fn: TFactEmbedFn);
+procedure SetFactEmbedder(Fn: TFactEmbedFn; const ModelId: string;
+                          AllowSemanticDedup: Boolean = True);
 begin
-  GFactEmbed := Fn;
+  GFactEmbedDedup := AllowSemanticDedup;
+  if Trim(ModelId) = '' then
+  begin
+    { An embedder we cannot name is one whose vectors we could never
+      safely compare against a later one. Refuse it rather than write
+      unattributable rows. }
+    GFactEmbed   := nil;
+    GFactEmbedId := '';
+    Exit;
+  end;
+  GFactEmbed   := Fn;
+  GFactEmbedId := Trim(ModelId);
 end;
 
 function FactEmbedderActive: Boolean;
 begin
   Result := Assigned(GFactEmbed);
+end;
+
+function FactEmbedderId: string;
+begin
+  if Assigned(GFactEmbed) then Result := GFactEmbedId else Result := '';
+end;
+
+function FactEmbedderDedups: Boolean;
+begin
+  Result := Assigned(GFactEmbed) and GFactEmbedDedup;
 end;
 
 function CosineSim(const A, B: TArray<Single>): Double;
@@ -552,8 +601,13 @@ begin
   for i := 0 to n - 1 do Result[i] := Scored[i];
 end;
 
+(* Ranks only rows embedded by EmbedModel -- the caller passes the id of
+   the embedder that produced QueryEmb. Rows from another embedder (or from
+   before the column existed) are skipped rather than scored, because a
+   cosine across two spaces is a number with no meaning. *)
 function RankFactsBySemantic(const Facts: TStoredFactArray;
-  const QueryEmb: TArray<Single>; K: Integer): TStoredFactArray;
+  const QueryEmb: TArray<Single>; const EmbedModel: string;
+  K: Integer): TStoredFactArray;
 const
   MinCosine = 0.30;   { drop clearly-unrelated facts before fusion }
 var
@@ -571,6 +625,7 @@ begin
   for i := 0 to High(Facts) do
   begin
     if Facts[i].EmbeddingHex = '' then Continue;
+    if Facts[i].EmbedModel <> EmbedModel then Continue;
     c := CosineSim(QueryEmb, HexToEmb(Facts[i].EmbeddingHex));
     if c < MinCosine then Continue;
     SetLength(Scored, n + 1); SetLength(ScoreOf, n + 1);
@@ -662,7 +717,7 @@ begin
   QEmb := GFactEmbed(Query);
   if Length(QEmb) = 0 then Exit(KwHits);
 
-  SemHits := RankFactsBySemantic(Active, QEmb, K);
+  SemHits := RankFactsBySemantic(Active, QEmb, GFactEmbedId, K);
   if Length(SemHits) = 0 then Exit(KwHits);
 
   { Hybrid: fuse the keyword and semantic ranks (the LoCoMo lever). }
@@ -805,7 +860,8 @@ begin
     '  source_session TEXT NOT NULL DEFAULT '''',' +
     '  created_at INTEGER NOT NULL,' +
     '  superseded INTEGER NOT NULL DEFAULT 0,' +
-    '  embedding TEXT NOT NULL DEFAULT '''')');
+    '  embedding TEXT NOT NULL DEFAULT '''',' +
+    '  embed_model TEXT NOT NULL DEFAULT '''')');
   { Indexes that match the two hot read paths (active listing + expiry sweep). }
   ExecSQL('CREATE INDEX IF NOT EXISTS idx_facts_active ON facts(superseded, expires)');
   { SQLite has no ADD COLUMN IF NOT EXISTS, so add columns that landed after
@@ -814,6 +870,15 @@ begin
   { Phase 4c: embedding. }
   try
     ExecSQL('ALTER TABLE facts ADD COLUMN embedding TEXT NOT NULL DEFAULT ''''');
+  except
+    on E: Exception do ; { column already present -- fine }
+  end;
+  { Which embedder wrote each vector. Rows migrated from before this column
+    get '', which matches no active embedder, so they are ignored by
+    semantic reads until BackfillEmbeddings re-embeds them. That is the
+    intended behaviour: an unattributable vector is not trustworthy. }
+  try
+    ExecSQL('ALTER TABLE facts ADD COLUMN embed_model TEXT NOT NULL DEFAULT ''''');
   except
     on E: Exception do ; { column already present -- fine }
   end;
@@ -938,11 +1003,16 @@ begin
     Emb := GFactEmbed(F.Text);
     if Length(Emb) > 0 then
     begin
+      { Store the vector either way -- search wants it. Only the MERGE
+        below is gated on the embedder being trusted to dedup. }
       EmbHex := EmbToHex(Emb);
-      Active := ActiveFacts(TodayStr);
+      Active := nil;
+      if GFactEmbedDedup then Active := ActiveFacts(TodayStr);
       for i := 0 to High(Active) do
       begin
         if Active[i].EmbeddingHex = '' then Continue;
+        { Same embedding space only -- see TStoredFact.EmbedModel. }
+        if Active[i].EmbedModel <> GFactEmbedId then Continue;
         Best := CosineSim(Emb, HexToEmb(Active[i].EmbeddingHex));
         if Best >= SemanticDedupThreshold then
         begin
@@ -958,8 +1028,9 @@ begin
   try
     Q.SQL.Text :=
       'INSERT INTO facts (text, kind, scope, confidence, event_date, expires, ' +
-      'source_session, created_at, superseded, embedding) ' +
-      'VALUES (:t, :k, :sc, :cf, :ev, :ex, :ss, :ca, 0, :emb)';
+      'source_session, created_at, superseded, embedding, embed_model) ' +
+      'VALUES (:t, :k, :sc, :cf, :ev, :ex, :ss, :ca, 0, :emb, :em)';
+    PStr  (Q, 'em', GFactEmbedId);
     PStr  (Q, 't',  F.Text);
     PStr  (Q, 'k',  F.Kind);
     PStr  (Q, 'sc', F.Scope);
@@ -1031,6 +1102,7 @@ begin
     F.CreatedAt     := Q.FieldByName('created_at').AsLargeInt;
     F.Superseded    := Q.FieldByName('superseded').AsLargeInt <> 0;
     F.EmbeddingHex  := Q.FieldByName('embedding').AsString;
+    F.EmbedModel    := Q.FieldByName('embed_model').AsString;
     SetLength(Result, Length(Result) + 1);
     Result[High(Result)] := F;
     Q.Next;
@@ -1161,14 +1233,19 @@ begin
   Active := ActiveFacts(Today);
   for i := 0 to High(Active) do
   begin
-    if Active[i].EmbeddingHex <> '' then Continue;
+    { Fill missing vectors AND re-embed rows written by a different
+      embedder -- after a model switch those rows are dead weight to
+      every semantic read until they are rewritten in the new space. }
+    if (Active[i].EmbeddingHex <> '') and
+       (Active[i].EmbedModel = GFactEmbedId) then Continue;
     Emb := GFactEmbed(Active[i].Text);
     if Length(Emb) = 0 then Continue;
     EmbHex := EmbToHex(Emb);
     Q := NewQuery;
     try
-      Q.SQL.Text := 'UPDATE facts SET embedding = :e WHERE id = :id';
+      Q.SQL.Text := 'UPDATE facts SET embedding = :e, embed_model = :em WHERE id = :id';
       PStr(Q, 'e', EmbHex);
+      PStr(Q, 'em', GFactEmbedId);
       PInt(Q, 'id', Active[i].Id);
       Q.ExecSQL;
     finally

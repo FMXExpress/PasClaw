@@ -256,7 +256,7 @@ var
   Id1, Id2, Id3: Int64;
   R: TStoredFactArray;
 begin
-  SetFactEmbedder(@FakeEmbed);
+  SetFactEmbedder(@FakeEmbed, 'fake@8');
   try
     AssertTrue(FactEmbedderActive, 'embedder registered');
 
@@ -286,7 +286,7 @@ begin
     AssertEqStr(R[0].Text, 'User prefers Delphi over Lazarus',
                 'semantic match despite zero keyword overlap');
   finally
-    SetFactEmbedder(nil);
+    SetFactEmbedder(nil, '');
   end;
   AssertTrue(not FactEmbedderActive, 'embedder cleared');
 end;
@@ -311,7 +311,7 @@ begin
   { No embedder yet -> backfill is a no-op. }
   AssertEqInt(Store.BackfillEmbeddings(TODAY), 0, 'no embedder -> no backfill');
 
-  SetFactEmbedder(@FakeEmbed);
+  SetFactEmbedder(@FakeEmbed, 'fake@8');
   try
     Filled := Store.BackfillEmbeddings(TODAY);
     AssertEqInt(Filled, 2, 'backfill fills both empty rows');
@@ -328,7 +328,7 @@ begin
     R := SearchActiveFacts(GTmpDir, TODAY, 'pascal ide', 5);
     AssertTrue(Length(R) >= 1, 'backfilled/embedded fact is semantically searchable');
   finally
-    SetFactEmbedder(nil);
+    SetFactEmbedder(nil, '');
   end;
 end;
 

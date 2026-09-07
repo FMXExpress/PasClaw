@@ -1227,7 +1227,7 @@ begin
     and memory_search run semantically. No-op when distill is off or the
     ONNX artifacts aren't provisioned (keeps the keyword/exact tiers). }
   if FCfg.MemoryDistillEnabled then
-    EnableFactEmbeddings(GetHome);
+    EnableBestFactEmbedder(GetHome);
   FStopFlag := TEvent.Create(nil, True, False, '');
   FWebhookPaths := TStringList.Create;
   FWebhookPaths.CaseSensitive := False;
