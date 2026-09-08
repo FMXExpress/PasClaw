@@ -4,6 +4,10 @@ Notable feature additions, newest first. Bug fixes and review follow-ups are in 
 
 This file mirrors the changelog section at the top of the root `README.md`. When a PR ships a feature worth surfacing here, append a one-line entry with the date and a PR link.
 
+## 2026-09
+
+- **2026-09-08** — Memory gains a dependency-free embedding tier and a `memory_write` tool. `PasClaw.Memory.Embed.Static` (`hash-ngram-v2@256`) is feature hashing over word unigrams and character 4-grams — no model file, no vocabulary, no native runtime — so a host that has never run `pasclaw memory provision` still gets a vector column instead of keyword-only retrieval. It is **lexical, not semantic** (`car` and `automobile` score near zero) and registers with semantic dedup disabled: it ranks, it never merges. `memory_write` records one durable fact deliberately — `tcMutating`, so plan mode refuses it and MCP exposes it only under `--mcp-allow-write` — which lets an external MCP client contribute to the store it could already read. Underneath both, every stored vector now carries the id of the embedder that produced it, so two embedding spaces are never compared and a model switch triggers a backfill instead of silently wrong neighbours. ([#600])
+
 ## 2026-06
 
 - **2026-06-24** — `orient_task_aware` (task-aware `MEMORY.md` slicing) reverts to **off on every profile** and gains a per-run CLI flag: `pasclaw agent --orient` enables it for one invocation, `--no-orient` forces whole-file injection (overriding `config.json`). #314 had flipped it on-by-default in `TConfig.Create` + the `stock`/`low-token`/`all-on` profiles while docs, onboarding, and the loop-shaping test still described it as off; this restores whole-file MEMORY injection as the default contract and makes slicing an explicit opt-in. ([#343])
@@ -235,3 +239,4 @@ This file mirrors the changelog section at the top of the root `README.md`. When
 [#316]: https://github.com/FMXExpress/PasClaw/pull/316
 [#317]: https://github.com/FMXExpress/PasClaw/pull/317
 [#318]: https://github.com/FMXExpress/PasClaw/pull/318
+[#600]: https://github.com/FMXExpress/PasClaw/pull/600
