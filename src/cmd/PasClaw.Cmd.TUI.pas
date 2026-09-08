@@ -238,7 +238,7 @@ begin
     { Phase 4c: best-effort load the semantic fact embedder (no-op when
       distill off or ONNX unprovisioned). }
     if Cfg.MemoryDistillEnabled then
-      EnableFactEmbeddings(GetHome);
+      EnableBestFactEmbedder(GetHome);
     TUIInst.BgCoordinator      := BgCoord;
     try
       TUIInst.Run;

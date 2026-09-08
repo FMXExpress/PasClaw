@@ -57,6 +57,14 @@ type
     CreatedAt:     Int64;     { unix seconds }
     Superseded:    Boolean;
     EmbeddingHex:  string;    { hex-packed Single[] (Phase 4c); '' if none }
+    (* Which embedder produced EmbeddingHex -- '<id>@<dim>', or '' for a
+       row written before this column existed. Vectors from different
+       embedders are NOT comparable: two models can share a dimension and
+       still put unrelated text in the same region of space, and CosineSim
+       cannot tell the difference. Every read that compares vectors filters
+       on this first, so a model switch degrades to keyword ranking (and a
+       backfill) instead of silently returning wrong neighbours. *)
+    EmbedModel:    string;
   end;
   TStoredFactArray = array of TStoredFact;
 
@@ -69,6 +77,12 @@ type
   IFactStore = interface
     ['{4C2F9A11-7E3D-4B8A-9F21-2A6D0C5E1B77}']
     function  Open(const DbPath: string): Boolean;
+    { The driver's own message from the last failed Open, or '' -- the same
+      contract IMemoryIndex.LastError has, and for the same reason: a caller
+      reporting "unavailable" must be able to say WHY without guessing.
+      Feed it to SqliteOpenFailureReason, which falls back to the platform
+      hint when the driver said nothing useful. }
+    function  LastError: string;
     procedure Close;
     { Insert F; returns the new row id (0 on failure). CreatedAt is set
       to now; Superseded starts false. }
@@ -136,6 +150,14 @@ function UpcomingFactsBlock(const HomeDir, Today: string;
   Memory tab's download). Pure. }
 function FactsToMarkdown(const Facts: TStoredFactArray; const Today: string): string;
 
+(* True for '' or a YYYY-MM-DD that names a date that actually EXISTS.
+   Shape alone is not enough: '2026-99-99' and '2026-02-31' are well-formed
+   and meaningless, and the store compares expiry lexicographically, so an
+   impossible expiry sorts above every real date and the fact never expires.
+   Exposed so tool-level validation rejects such a value instead of storing
+   it. *)
+function IsValidISODateOrEmpty(const S: string): Boolean;
+
 { Keyword-rank Facts against Query: score each by how many distinct query
   terms appear (case-insensitive substring) in its text, drop zero-score,
   sort by score then confidence then recency, return the top K. Pure (the
@@ -156,8 +178,57 @@ function SearchActiveFacts(const HomeDir, Today, Query: string;
   default) disables the semantic layer entirely -- everything falls back
   to the exact + keyword behaviour, so a build without ONNX is unaffected.
   The heavy ONNX embedder lives in PasClaw.Memory.Facts.Embed. }
-procedure SetFactEmbedder(Fn: TFactEmbedFn);
+(* ModelId identifies the embedding SPACE, not just the code path, and is
+   stored on every vector this embedder writes. Use '<name>@<dim>' so a
+   dimension change is a different id too. Passing '' is treated as an
+   unidentified embedder and disables the semantic layer, because an
+   unlabelled vector is exactly the thing that cannot be compared safely
+   later. *)
+(* AllowSemanticDedup gates the destructive half. Merging two facts is
+   irreversible, so an embedder is only trusted to do it when its scores
+   mean what the threshold assumes. A lexical tier ranks fine but must not
+   merge: two genuinely different facts sharing vocabulary can easily clear
+   0.85 on word overlap alone. Such a tier registers with False and takes
+   part in search only. *)
+(* Lazy activation hook.
+
+   Registering the memory tools does not, by itself, register an embedder.
+   The CLI agent, TUI, gateway (so `serve` too) and MCP stdio entrypoints
+   all call EnableBestFactEmbedder explicitly -- but PasClaw.Agent (the
+   embedded agent), Cmd.Heartbeat and the PasClaw.Tools bundle register the
+   same tools without it, and in those hosts every fact written would be
+   stored with no vector at all. Requiring each new entrypoint to remember
+   is how that class of bug keeps recurring.
+
+   So the fact store asks, once, at the point it actually needs one.
+   PasClaw.Memory.Facts.Embed installs the hook from its initialization;
+   a build that does not link that unit simply has none and behaves exactly
+   as before. This inverts the dependency -- Facts must not reach up into
+   the ONNX stack -- and is the same injectable-seam idiom SetFactEmbedder
+   itself uses. *)
+type
+  TEnsureEmbedderProc = procedure;
+
+procedure SetEnsureEmbedderHook(Fn: TEnsureEmbedderProc);
+
+procedure SetFactEmbedder(Fn: TFactEmbedFn; const ModelId: string;
+                          AllowSemanticDedup: Boolean = True);
+
+(* Read the registered embedder as ONE consistent triple.
+   Reading the function, its id and its dedup right as three separate
+   globals is a race: provisioning can flip the tier between the call that
+   produces a vector and the read that labels it, and the row then claims
+   an id belonging to a different space. Worse, such a row looks correct to
+   every later reader -- its id matches the active one, so backfill skips
+   it -- so it stays poisoned. Every operation that embeds takes a snapshot
+   first and uses only that. *)
+procedure FactEmbedderSnapshot(out Fn: TFactEmbedFn; out ModelId: string;
+                               out AllowDedup: Boolean);
 function FactEmbedderActive: Boolean;
+{ True when the active embedder is trusted to merge near-identical facts. }
+function FactEmbedderDedups: Boolean;
+{ Id of the registered embedder, or '' when none is active. }
+function FactEmbedderId: string;
 
 { Open the default store and backfill embeddings for active rows missing
   them (see IFactStore.BackfillEmbeddings). Returns rows filled; 0 when no
@@ -177,6 +248,7 @@ function HexToEmb(const S: string): TArray<Single>;
 implementation
 
 uses
+  SyncObjs,          { TCriticalSection -- guards the embedder triple }
   PasClaw.Workspaces,
   {$IFDEF FPC}
   sqldb, sqlite3conn,
@@ -202,16 +274,113 @@ const
   RrfK = 60;   { Reciprocal Rank Fusion constant (same as the .md index). }
 
 var
-  GFactEmbed: TFactEmbedFn = nil;
+  { Guards the three embedder globals as one unit. They are read from
+    gateway worker threads and the background auto-distill thread while
+    provisioning may be swapping the tier underneath. }
+  GEmbedLock:      TCriticalSection;
+  GFactEmbed:      TFactEmbedFn = nil;
+  GFactEmbedId:    string = '';
+  GFactEmbedDedup: Boolean = True;
+  GEnsureEmbedder: TEnsureEmbedderProc = nil;
+  GEnsureTried:    Boolean = False;
 
-procedure SetFactEmbedder(Fn: TFactEmbedFn);
+procedure SetEnsureEmbedderHook(Fn: TEnsureEmbedderProc);
 begin
-  GFactEmbed := Fn;
+  GEmbedLock.Acquire;
+  try
+    GEnsureEmbedder := Fn;
+    GEnsureTried    := False;   { a newly installed hook gets one attempt }
+  finally
+    GEmbedLock.Release;
+  end;
+end;
+
+(* Run the hook at most once per process. "Once" and not "until it
+   succeeds": EnableBestFactEmbedder does its own filesystem probing and
+   latching, and retrying here on every Add would re-probe the disk on a
+   host that will never provision. Already having an embedder short-
+   circuits it entirely. *)
+procedure EnsureEmbedder;
+var
+  Fn: TEnsureEmbedderProc;
+begin
+  GEmbedLock.Acquire;
+  try
+    if Assigned(GFactEmbed) or GEnsureTried or (not Assigned(GEnsureEmbedder)) then
+      Exit;
+    GEnsureTried := True;
+    Fn := GEnsureEmbedder;
+  finally
+    GEmbedLock.Release;
+  end;
+  { Outside the lock: the hook calls SetFactEmbedder, which takes it. }
+  try
+    Fn();
+  except
+    on E: Exception do
+      LogDebug('memory.facts: embedder hook failed (%s)', [E.Message]);
+  end;
+end;
+
+procedure FactEmbedderSnapshot(out Fn: TFactEmbedFn; out ModelId: string;
+                               out AllowDedup: Boolean);
+begin
+  GEmbedLock.Acquire;
+  try
+    Fn         := GFactEmbed;
+    ModelId    := GFactEmbedId;
+    AllowDedup := GFactEmbedDedup;
+  finally
+    GEmbedLock.Release;
+  end;
+end;
+
+procedure SetFactEmbedder(Fn: TFactEmbedFn; const ModelId: string;
+                          AllowSemanticDedup: Boolean = True);
+begin
+  GEmbedLock.Acquire;
+  try
+    GFactEmbedDedup := AllowSemanticDedup;
+    if Trim(ModelId) = '' then
+    begin
+      { An embedder we cannot name is one whose vectors we could never
+        safely compare against a later one. Refuse it rather than write
+        unattributable rows. }
+      GFactEmbed   := nil;
+      GFactEmbedId := '';
+    end
+    else
+    begin
+      GFactEmbed   := Fn;
+      GFactEmbedId := Trim(ModelId);
+    end;
+  finally
+    GEmbedLock.Release;
+  end;
 end;
 
 function FactEmbedderActive: Boolean;
+var
+  Fn: TFactEmbedFn; Id: string; Dedup: Boolean;
 begin
-  Result := Assigned(GFactEmbed);
+  FactEmbedderSnapshot(Fn, Id, Dedup);
+  Result := Assigned(Fn);
+end;
+
+function FactEmbedderId: string;
+var
+  Fn: TFactEmbedFn; Id: string; Dedup: Boolean;
+begin
+  FactEmbedderSnapshot(Fn, Id, Dedup);
+  if Assigned(Fn) then Result := Id else Result := '';
+end;
+
+function FactEmbedderDedups: Boolean;
+var
+  Fn: TFactEmbedFn; Id: string; Dedup: Boolean;
+begin
+  FactEmbedderSnapshot(Fn, Id, Dedup);
+  Result := Assigned(Fn) and Dedup;
 end;
 
 function CosineSim(const A, B: TArray<Single>): Double;
@@ -291,6 +460,13 @@ begin
   if not TryStrToInt(Copy(S, 6, 2), M) then Exit;
   if not TryStrToInt(Copy(S, 9, 2), D) then Exit;
   Result := TryEncodeDate(Y, M, D, DT);
+end;
+
+function IsValidISODateOrEmpty(const S: string): Boolean;
+var
+  DT: TDateTime;
+begin
+  Result := (S = '') or TryParseISODate(S, DT);
 end;
 
 function ISODaysBetween(const FromISO, ToISO: string; out Days: Integer): Boolean;
@@ -552,8 +728,13 @@ begin
   for i := 0 to n - 1 do Result[i] := Scored[i];
 end;
 
+(* Ranks only rows embedded by EmbedModel -- the caller passes the id of
+   the embedder that produced QueryEmb. Rows from another embedder (or from
+   before the column existed) are skipped rather than scored, because a
+   cosine across two spaces is a number with no meaning. *)
 function RankFactsBySemantic(const Facts: TStoredFactArray;
-  const QueryEmb: TArray<Single>; K: Integer): TStoredFactArray;
+  const QueryEmb: TArray<Single>; const EmbedModel: string;
+  K: Integer): TStoredFactArray;
 const
   MinCosine = 0.30;   { drop clearly-unrelated facts before fusion }
 var
@@ -571,6 +752,7 @@ begin
   for i := 0 to High(Facts) do
   begin
     if Facts[i].EmbeddingHex = '' then Continue;
+    if Facts[i].EmbedModel <> EmbedModel then Continue;
     c := CosineSim(QueryEmb, HexToEmb(Facts[i].EmbeddingHex));
     if c < MinCosine then Continue;
     SetLength(Scored, n + 1); SetLength(ScoreOf, n + 1);
@@ -644,6 +826,9 @@ var
   Store: IFactStore;
   Active, KwHits, SemHits: TStoredFactArray;
   QEmb: TArray<Single>;
+  EmbFn: TFactEmbedFn;
+  EmbId: string;
+  EmbDedup: Boolean;
 begin
   Result := nil;
   Store := NewFactStore;
@@ -657,12 +842,16 @@ begin
 
   KwHits := RankFactsByQuery(Active, Query, K);
 
-  { Keyword-only unless an embedder is wired and can embed the query. }
-  if not Assigned(GFactEmbed) then Exit(KwHits);
-  QEmb := GFactEmbed(Query);
+  { Keyword-only unless an embedder is wired and can embed the query. The
+    snapshot keeps the query vector and the id it is matched against from
+    coming from two different embedders. }
+  EnsureEmbedder;
+  FactEmbedderSnapshot(EmbFn, EmbId, EmbDedup);
+  if not Assigned(EmbFn) then Exit(KwHits);
+  QEmb := EmbFn(Query);
   if Length(QEmb) = 0 then Exit(KwHits);
 
-  SemHits := RankFactsBySemantic(Active, QEmb, K);
+  SemHits := RankFactsBySemantic(Active, QEmb, EmbId, K);
   if Length(SemHits) = 0 then Exit(KwHits);
 
   { Hybrid: fuse the keyword and semantic ranks (the LoCoMo lever). }
@@ -693,6 +882,7 @@ type
 
   TFactStoreImpl = class(TInterfacedObject, IFactStore)
   private
+    FLastError: string;
     {$IFDEF FPC}
     FConn: TSQLite3Connection;
     FTx:   TSQLTransaction;
@@ -712,6 +902,7 @@ type
   public
     destructor Destroy; override;
     function  Open(const DbPath: string): Boolean;
+    function  LastError: string;
     procedure Close;
     function  Add(const F: TFact; CreatedAt: Int64): Int64;
     function  ActiveFacts(const Today: string): TStoredFactArray;
@@ -805,7 +996,8 @@ begin
     '  source_session TEXT NOT NULL DEFAULT '''',' +
     '  created_at INTEGER NOT NULL,' +
     '  superseded INTEGER NOT NULL DEFAULT 0,' +
-    '  embedding TEXT NOT NULL DEFAULT '''')');
+    '  embedding TEXT NOT NULL DEFAULT '''',' +
+    '  embed_model TEXT NOT NULL DEFAULT '''')');
   { Indexes that match the two hot read paths (active listing + expiry sweep). }
   ExecSQL('CREATE INDEX IF NOT EXISTS idx_facts_active ON facts(superseded, expires)');
   { SQLite has no ADD COLUMN IF NOT EXISTS, so add columns that landed after
@@ -817,6 +1009,15 @@ begin
   except
     on E: Exception do ; { column already present -- fine }
   end;
+  { Which embedder wrote each vector. Rows migrated from before this column
+    get '', which matches no active embedder, so they are ignored by
+    semantic reads until BackfillEmbeddings re-embeds them. That is the
+    intended behaviour: an unattributable vector is not trustworthy. }
+  try
+    ExecSQL('ALTER TABLE facts ADD COLUMN embed_model TEXT NOT NULL DEFAULT ''''');
+  except
+    on E: Exception do ; { column already present -- fine }
+  end;
   { Event-date: distinct from expires, for proactive surfacing. }
   try
     ExecSQL('ALTER TABLE facts ADD COLUMN event_date TEXT NOT NULL DEFAULT ''''');
@@ -825,9 +1026,15 @@ begin
   end;
 end;
 
+function TFactStoreImpl.LastError: string;
+begin
+  Result := FLastError;
+end;
+
 function TFactStoreImpl.Open(const DbPath: string): Boolean;
 begin
   Result := False;
+  FLastError := '';
   if FOpen then Exit(True);
   try
     EnsureDir(ExtractFilePath(DbPath));
@@ -853,6 +1060,7 @@ begin
   except
     on E: Exception do
     begin
+      FLastError := E.Message;
       LogWarn('memory.facts: failed to open %s (%s) -- fact store disabled',
               [DbPath, E.Message]);
       {$IFDEF FPC}
@@ -891,6 +1099,9 @@ var
   Active: TStoredFactArray;
   i: Integer;
   Best: Double;
+  EmbFn: TFactEmbedFn;
+  EmbId: string;
+  EmbDedup: Boolean;
 begin
   Result := 0;
   if not FOpen then Exit;
@@ -933,16 +1144,26 @@ begin
     treat it as the same and return that id -- this catches paraphrases
     the exact-text check misses. No-op when no embedder is wired. }
   EmbHex := '';
-  if Assigned(GFactEmbed) then
+  EnsureEmbedder;
+  { One snapshot for the whole operation: the vector below and the label
+    written with it must come from the same embedder even if provisioning
+    swaps the tier mid-call. }
+  FactEmbedderSnapshot(EmbFn, EmbId, EmbDedup);
+  if Assigned(EmbFn) then
   begin
-    Emb := GFactEmbed(F.Text);
+    Emb := EmbFn(F.Text);
     if Length(Emb) > 0 then
     begin
+      { Store the vector either way -- search wants it. Only the MERGE
+        below is gated on the embedder being trusted to dedup. }
       EmbHex := EmbToHex(Emb);
-      Active := ActiveFacts(TodayStr);
+      Active := nil;
+      if EmbDedup then Active := ActiveFacts(TodayStr);
       for i := 0 to High(Active) do
       begin
         if Active[i].EmbeddingHex = '' then Continue;
+        { Same embedding space only -- see TStoredFact.EmbedModel. }
+        if Active[i].EmbedModel <> EmbId then Continue;
         Best := CosineSim(Emb, HexToEmb(Active[i].EmbeddingHex));
         if Best >= SemanticDedupThreshold then
         begin
@@ -958,8 +1179,9 @@ begin
   try
     Q.SQL.Text :=
       'INSERT INTO facts (text, kind, scope, confidence, event_date, expires, ' +
-      'source_session, created_at, superseded, embedding) ' +
-      'VALUES (:t, :k, :sc, :cf, :ev, :ex, :ss, :ca, 0, :emb)';
+      'source_session, created_at, superseded, embedding, embed_model) ' +
+      'VALUES (:t, :k, :sc, :cf, :ev, :ex, :ss, :ca, 0, :emb, :em)';
+    PStr  (Q, 'em', EmbId);   { the snapshot's id, not a fresh global read }
     PStr  (Q, 't',  F.Text);
     PStr  (Q, 'k',  F.Kind);
     PStr  (Q, 'sc', F.Scope);
@@ -1031,6 +1253,7 @@ begin
     F.CreatedAt     := Q.FieldByName('created_at').AsLargeInt;
     F.Superseded    := Q.FieldByName('superseded').AsLargeInt <> 0;
     F.EmbeddingHex  := Q.FieldByName('embedding').AsString;
+    F.EmbedModel    := Q.FieldByName('embed_model').AsString;
     SetLength(Result, Length(Result) + 1);
     Result[High(Result)] := F;
     Q.Next;
@@ -1155,20 +1378,29 @@ var
   EmbHex: string;
   i: Integer;
   Q: TQuery;
+  EmbFn: TFactEmbedFn;
+  EmbId: string;
+  EmbDedup: Boolean;
 begin
   Result := 0;
-  if (not FOpen) or (not Assigned(GFactEmbed)) then Exit;
+  FactEmbedderSnapshot(EmbFn, EmbId, EmbDedup);
+  if (not FOpen) or (not Assigned(EmbFn)) then Exit;
   Active := ActiveFacts(Today);
   for i := 0 to High(Active) do
   begin
-    if Active[i].EmbeddingHex <> '' then Continue;
-    Emb := GFactEmbed(Active[i].Text);
+    { Fill missing vectors AND re-embed rows written by a different
+      embedder -- after a model switch those rows are dead weight to
+      every semantic read until they are rewritten in the new space. }
+    if (Active[i].EmbeddingHex <> '') and
+       (Active[i].EmbedModel = EmbId) then Continue;
+    Emb := EmbFn(Active[i].Text);
     if Length(Emb) = 0 then Continue;
     EmbHex := EmbToHex(Emb);
     Q := NewQuery;
     try
-      Q.SQL.Text := 'UPDATE facts SET embedding = :e WHERE id = :id';
+      Q.SQL.Text := 'UPDATE facts SET embedding = :e, embed_model = :em WHERE id = :id';
       PStr(Q, 'e', EmbHex);
+      PStr(Q, 'em', EmbId);
       PInt(Q, 'id', Active[i].Id);
       Q.ExecSQL;
     finally
@@ -1178,5 +1410,11 @@ begin
   end;
   if Result > 0 then Commit;
 end;
+
+initialization
+  GEmbedLock := TCriticalSection.Create;
+
+finalization
+  GEmbedLock.Free;
 
 end.

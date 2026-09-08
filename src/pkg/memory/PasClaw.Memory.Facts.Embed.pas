@@ -26,6 +26,19 @@ unit PasClaw.Memory.Facts.Embed;
 
 interface
 
+(* Register the best embedder available for HomeDir and report which tier
+   won: 'onnx' when the provisioned model loaded, 'static' when it did not
+   and the dependency-free lexical tier took over. Unlike
+   EnableFactEmbeddings this never leaves the semantic layer switched off,
+   which is the point -- a machine that has not run `memory provision`
+   still gets a vector column and a second rank to fuse, instead of
+   keyword-only retrieval and a database of unembedded rows.
+
+   The static tier registers with dedup disabled; see
+   PasClaw.Memory.Embed.Static for why a lexical score must not be trusted
+   to merge two facts. *)
+function EnableBestFactEmbedder(const HomeDir: string): string;
+
 { Load + register the ONNX fact embedder for HomeDir's cache. Idempotent
   and safe to call from multiple entrypoints; returns True once semantic
   embeddings are active, False (graceful) when artifacts are missing. }
@@ -56,7 +69,9 @@ uses
   LocalVector.OrtProvision,
   PasClaw.Utils,
   PasClaw.Logger,
-  PasClaw.Memory.Facts;
+  PasClaw.Memory.Facts,
+  PasClaw.Config,                { GetHome -- the lazy-activation hook }
+  PasClaw.Memory.Embed.Static;   { the dependency-free fallback tier }
 
 const
   MAX_SEQ_LEN = 256;
@@ -201,7 +216,7 @@ begin
       GEmb := TEmbedder.Create(ModelP);
       GEmb.Load({AVerbose=} False);
       GReady := True;
-      SetFactEmbedder(@DoFactEmbed);
+      SetFactEmbedder(@DoFactEmbed, Format('%s@%d', [GSpec.Key, GSpec.Dim]));
       LogDebug('fact-embed: enabled (model=%s dim=%d)', [GSpec.Key, GSpec.Dim]);
       Result := True;
     except
@@ -232,11 +247,40 @@ begin
     end;
 end;
 
+function EnableBestFactEmbedder(const HomeDir: string): string;
+begin
+  if EnableFactEmbeddings(HomeDir) then Exit('onnx');
+
+  SetFactEmbedder(@StaticEmbed, StaticEmbedderId, {AllowSemanticDedup=} False);
+  LogDebug('fact-embed: ONNX unavailable -- using the static lexical tier (%s)',
+           [StaticEmbedderId]);
+  Result := 'static';
+
+  { Same reasoning as the ONNX path: backfill so rows written before any
+    embedder existed join the vector column. Rows carrying another
+    embedder's id are re-embedded into this space by the same pass. }
+  try
+    BackfillFactEmbeddings(HomeDir, FormatDateTime('yyyy"-"mm"-"dd', Now));
+  except
+    on E: Exception do
+      LogDebug('fact-embed: static backfill skipped (%s)', [E.Message]);
+  end;
+end;
+
+{ Installed as PasClaw.Memory.Facts' lazy-activation hook, so a host that
+  registers the memory tools without calling EnableBestFactEmbedder still
+  gets an embedder the first time a fact is written or searched. }
+procedure EnsureBestFactEmbedderHook;
+begin
+  EnableBestFactEmbedder(GetHome);
+end;
+
 initialization
   GLock := TCriticalSection.Create;
+  SetEnsureEmbedderHook(@EnsureBestFactEmbedderHook);
 
 finalization
-  SetFactEmbedder(nil);
+  SetFactEmbedder(nil, '');
   FreeAndNil(GEmb);
   FreeAndNil(GTok);
   GLock.Free;

@@ -15,7 +15,8 @@ PasClaw exposes a fixed set of tools to the model on every turn (plus MCP-bridge
 | `execute_code` | Run a multi-line bash or PowerShell script. Same sandbox as `shell_exec`. |
 | `web_search` | DuckDuckGo / Brave / Tavily / SearXNG / Perplexity / Gemini-grounding (6 providers). |
 | `web_fetch` | HTTP GET → readable plain text. SSRF-guarded. Off by default. |
-| `memory_search` | SQLite FTS5 BM25 (+ optional hybrid vector) over `workspace/memory/*.md` and `MEMORY.md`. |
+| `memory_search` | SQLite FTS5 BM25 (+ optional hybrid vector) over `workspace/memory/*.md` and `MEMORY.md`, plus the distilled fact store. |
+| `memory_write` | Record one durable fact in the distilled-memory store. Mutating: refused in plan mode, and off the MCP surface unless `--mcp-allow-write`. |
 | `memory_fetch` | Fetch a URL and write it to `workspace/memory/fetched-*.md` (URL auto-dedup within 24h). |
 | `session_search` | FTS5 over the full text of every saved session under `workspace/sessions/`. |
 | `kb_search` | FTS5 + optional vector over the operator-curated knowledgebase. |

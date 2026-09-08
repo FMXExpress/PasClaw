@@ -1976,7 +1976,7 @@ begin
   { Phase 4c: best-effort load the semantic fact embedder once per run
     (no-op when distill off or ONNX unprovisioned). }
   if Cfg.MemoryDistillEnabled then
-    EnableFactEmbeddings(GetHome);
+    EnableBestFactEmbedder(GetHome);
   ConfigureSandbox(Cfg.Sandbox, '');
   { Install the active shell backend BEFORE any session can spawn a
     container or build its tool registry (shell_exec's description
