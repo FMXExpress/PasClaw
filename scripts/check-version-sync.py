@@ -22,7 +22,10 @@ of a stale version.
 Also checks the other places a release has to touch, so a partial bump
 cannot pass: the .dproj FileVersion / ProductVersion strings, the FOUR
 structured MajorVer / MinorVer / Release / Build entries beside them,
-and the installer default.
+the installer default, and the value installer/README.md documents that
+default as. A doc that disagrees with the script it documents sends the
+reader to a wrong `iscc` invocation, and it drifted on the very first
+bump after this lint was written (Codex P2 on PR #601).
 
 The structured four are easy to miss and they are not decoration: Delphi
 writes them into the binary's VS_FIXEDFILEINFO block, which is the
@@ -39,6 +42,7 @@ import sys
 CONFIG = 'src/pkg/config/PasClaw.Config.pas'
 DPROJ = 'src/pasclaw/PasClaw.dproj'
 ISS = 'installer/pasclaw.iss'
+ISS_DOC = 'installer/README.md'
 
 
 def parts(v):
@@ -70,6 +74,7 @@ def main():
         (DPROJ, r'"FileVersion">([\d.]+)<', 'FileVersion'),
         (DPROJ, r'"ProductVersion">([\d.]+)<', 'ProductVersion'),
         (ISS, r'#define MyAppVersion "([^"]+)"', 'MyAppVersion'),
+        (ISS_DOC, r'\| `MyAppVersion` \| `([\d.]+)` \|', 'documented MyAppVersion default'),
     ]:
         got = read(path, pat)
         if got is None:
