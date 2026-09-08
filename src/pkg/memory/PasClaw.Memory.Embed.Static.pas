@@ -87,62 +87,74 @@ function StaticEmbed(const Text: string): TArray<Single>;
 implementation
 
 uses
+  { Classes for TBytes on FPC; TEncoding lives in SysUtils there. The UTF-8
+    conversion is the reason this unit is byte-based at all. }
+  {$IFDEF FPC}Classes,{$ENDIF}
   SysUtils, Math;
 
-{ FNV-1a, 32-bit. Chosen for being short, dependency-free and identical on
-  every platform -- the vectors are persisted, so a hash that varied by
-  compiler or word size would silently invalidate stored rows. }
-function Fnv1a(const S: string): LongWord;
+(* FNV-1a over BYTES, 32-bit.
+
+   Bytes, not characters, and the distinction is the whole point. FPC's
+   `string` here holds UTF-8 (see {$CODEPAGE UTF8} above); Delphi's is
+   UTF-16. Hashing `Byte(S[i])` would therefore hash different data on the
+   two compilers for any non-ASCII text, and truncate each UTF-16 code unit
+   into the bargain. Two fact databases carrying the same embedder id would
+   then hold incompatible vectors -- defeating the very model-space guard
+   this tier ships alongside. Everything below runs on the UTF-8 encoding,
+   which is identical on both targets.
+
+   The feature kind (word vs gram) is folded in as the hash SEED rather
+   than a string prefix, so no character-typed concatenation happens on the
+   hot path at all. *)
 const
-  Offset = LongWord(2166136261);
-  Prime  = LongWord(16777619);
+  FnvPrime = LongWord(16777619);
+  { Distinct starting states keep the two feature families in separate hash
+    streams, so a word and a gram spelling the same bytes cannot collide. }
+  WordSeed = LongWord(2166136261);
+  GramSeed = LongWord(2166136453);
+
+function Fnv1aBytes(const B: TBytes; Start, Len: Integer; Seed: LongWord): LongWord;
 var
   i: Integer;
 begin
-  Result := Offset;
-  for i := 1 to Length(S) do
+  Result := Seed;
+  for i := Start to Start + Len - 1 do
   begin
-    Result := Result xor LongWord(Byte(S[i]));
-    Result := Result * Prime;
+    Result := Result xor LongWord(B[i]);
+    Result := Result * FnvPrime;
   end;
 end;
 
-{ ASCII lowercase + everything non-alphanumeric collapsed to a space.
-  Bytes >= 128 are kept as-is: for UTF-8 input that keeps a multi-byte
-  character's bytes adjacent, so its n-grams still work as a unit, without
-  this unit needing a Unicode table. }
-function Normalise(const Text: string): string;
+{ ASCII lowercase, every non-alphanumeric byte collapsed to a space, bytes
+  >= 128 passed through. Because this runs on UTF-8, a multi-byte
+  character's bytes stay adjacent and behave as one opaque run, so n-grams
+  keep working across scripts without this unit needing a Unicode table. }
+function NormaliseBytes(const Text: string): TBytes;
 var
   i: Integer;
-  C: Char;
+  B: Byte;
 begin
-  SetLength(Result, Length(Text));
-  for i := 1 to Length(Text) do
+  Result := TEncoding.UTF8.GetBytes(Text);
+  for i := 0 to High(Result) do
   begin
-    C := Text[i];
-    if (C >= 'A') and (C <= 'Z') then
-      Result[i] := Chr(Ord(C) + 32)
-    else if ((C >= 'a') and (C <= 'z')) or ((C >= '0') and (C <= '9'))
-            or (Byte(C) >= 128) then
-      Result[i] := C
-    else
-      Result[i] := ' ';
+    B := Result[i];
+    if (B >= Ord('A')) and (B <= Ord('Z')) then
+      Result[i] := B + 32
+    else if not (((B >= Ord('a')) and (B <= Ord('z')))
+              or ((B >= Ord('0')) and (B <= Ord('9')))
+              or (B >= 128)) then
+      Result[i] := Ord(' ');
   end;
 end;
 
-{ Add one feature to the accumulator: hash it, take the low bits for the
-  bucket and one high bit for the sign. The signed accumulation is what
-  makes hash collisions cancel rather than compound -- two unrelated
-  features landing in the same bucket are as likely to subtract as to add,
-  so the expected distortion is zero instead of a systematic inflation. }
-procedure AddFeature(var Acc: array of Double; const Feature: string;
-                     Weight: Double);
+{ Add one hashed feature: low bits pick the bucket, one high bit picks the
+  sign. Signed accumulation makes collisions cancel rather than compound --
+  two unrelated features in the same bucket are as likely to subtract as to
+  add, so expected distortion is zero instead of systematic inflation. }
+procedure AddHashed(var Acc: array of Double; H: LongWord; Weight: Double);
 var
-  H: LongWord;
   Bucket: Integer;
 begin
-  if Feature = '' then Exit;
-  H := Fnv1a(Feature);
   Bucket := Integer(H mod LongWord(StaticEmbedDim));
   if (H and $80000000) <> 0 then
     Acc[Bucket] := Acc[Bucket] - Weight
@@ -152,54 +164,64 @@ end;
 
 function StaticEmbedderId: string;
 begin
-  Result := Format('hash-ngram-v1@%d', [StaticEmbedDim]);
+  { v2: the feature extraction moved from character-typed strings to UTF-8
+    bytes, which changes the space. Vectors written by v1 must not be
+    compared against these, and the id is what enforces that. }
+  Result := Format('hash-ngram-v2@%d', [StaticEmbedDim]);
 end;
 
 function StaticEmbed(const Text: string): TArray<Single>;
 const
   { A whole word is a stronger signal than any one slice of it, and a long
-    word contributes many n-grams, so the grams are damped to stop long
-    words drowning out short ones. }
+    word contributes many n-grams, so grams are damped to stop long words
+    drowning out short ones. }
   WordWeight = 1.0;
   GramWeight = 0.5;
+  { Word-boundary markers, so the start and end of a word are distinct
+    features from the same letters mid-word. Safe as sentinels because
+    NormaliseBytes has already turned every non-alphanumeric byte into a
+    space. }
+  MarkStart = Byte(Ord('^'));
+  MarkEnd   = Byte(Ord('$'));
 var
-  Norm, Word, Padded: string;
+  Norm, Padded: TBytes;
   Acc: array[0 .. StaticEmbedDim - 1] of Double;
-  i, j, Start, Features: Integer;
+  i, j, WStart, WLen, Features: Integer;
   Norm2, V: Double;
 begin
   Result := nil;
   for i := 0 to StaticEmbedDim - 1 do Acc[i] := 0;
 
-  Norm := Normalise(Text);
+  Norm := NormaliseBytes(Text);
   Features := 0;
-  i := 1;
-  while i <= Length(Norm) do
+  i := 0;
+  while i <= High(Norm) do
   begin
-    if Norm[i] = ' ' then begin Inc(i); Continue; end;
-    Start := i;
-    while (i <= Length(Norm)) and (Norm[i] <> ' ') do Inc(i);
-    Word := Copy(Norm, Start, i - Start);
+    if Norm[i] = Ord(' ') then begin Inc(i); Continue; end;
+    WStart := i;
+    while (i <= High(Norm)) and (Norm[i] <> Ord(' ')) do Inc(i);
+    WLen := i - WStart;
 
-    AddFeature(Acc, 'w:' + Word, WordWeight);
+    AddHashed(Acc, Fnv1aBytes(Norm, WStart, WLen, WordSeed), WordWeight);
     Inc(Features);
 
-    { Boundary padding so a short word still yields grams, and so the
-      start and end of a word are distinguishable features from the same
-      letters appearing mid-word. }
-    Padded := '^' + Word + '$';
-    for j := 1 to Length(Padded) - StaticEmbedGram + 1 do
+    SetLength(Padded, WLen + 2);
+    Padded[0] := MarkStart;
+    Move(Norm[WStart], Padded[1], WLen);
+    Padded[WLen + 1] := MarkEnd;
+
+    for j := 0 to Length(Padded) - StaticEmbedGram do
     begin
-      AddFeature(Acc, 'g:' + Copy(Padded, j, StaticEmbedGram), GramWeight);
+      AddHashed(Acc, Fnv1aBytes(Padded, j, StaticEmbedGram, GramSeed), GramWeight);
       Inc(Features);
     end;
   end;
 
   if Features = 0 then Exit;
 
-  { Sublinear damping, the tf half of tf-idf: a word repeated ten times
-    is more relevant than one used once, but not ten times more. Applied
-    to the signed accumulator, so the sign is preserved. }
+  { Sublinear damping, the tf half of tf-idf: a word used ten times is more
+    relevant than one used once, but not ten times more. Applied to the
+    signed accumulator, so the sign survives. }
   Norm2 := 0;
   for i := 0 to StaticEmbedDim - 1 do
   begin

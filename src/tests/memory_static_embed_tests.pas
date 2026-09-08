@@ -96,6 +96,45 @@ begin
   WriteLn('  ok: shape, determinism, empty input, id format');
 end;
 
+procedure TestCrossTargetEncoding;
+(* The vectors are persisted and shared between builds, so the SAME text
+   must hash the same on FPC and on Delphi. It does not for free: FPC's
+   `string` holds UTF-8 here, Delphi's holds UTF-16, so hashing character
+   units would hash different data on the two targets -- and truncate each
+   UTF-16 unit -- while both rows still claimed the same embedder id. That
+   is precisely the corruption the id is supposed to prevent.
+
+   StaticEmbed converts to UTF-8 bytes before hashing, so this fingerprint
+   is a fixed function of the text. Pinning it turns a silent cross-target
+   divergence into a failing test on whichever target regressed. Recompute
+   it deliberately (and bump the embedder id) if the feature extraction
+   ever changes -- never just paste in whatever the build prints. *)
+const
+  ExpectedFingerprint = LongWord($75A30107);
+  (* A literal, not #$xx escapes: with the UTF-8 codepage directive in
+     force, FPC reads #$C3 as the CODEPOINT U+00C3 and re-encodes it as two
+     UTF-8 bytes, so escapes would spell different text than they appear
+     to. A literal says "this text" correctly on both targets, which is
+     exactly the claim under test. *)
+  Sample = 'café déjà-vu 日本語のテキスト naïve';
+var
+  V: TArray<Single>;
+  i: Integer;
+  H: LongWord;
+begin
+  V := StaticEmbed(Sample);
+  AssertEqInt(Length(V), StaticEmbedDim, 'non-ASCII text still embeds');
+  H := 2166136261;
+  for i := 0 to High(V) do
+    H := (H xor LongWord(Round(V[i] * 100000))) * 16777619;
+  AssertTrue(H = ExpectedFingerprint,
+             Format('non-ASCII fingerprint is $%.8x, expected $%.8x -- the ' +
+                    'UTF-8 encoding path changed, so vectors written by ' +
+                    'another build are no longer comparable',
+                    [H, ExpectedFingerprint]));
+  WriteLn('  ok: non-ASCII hashes to a fixed, target-independent vector');
+end;
+
 procedure TestLexicalBehaviour;
 var
   Related, Typo, Inflected, Unrelated: Double;
@@ -290,12 +329,81 @@ begin
   WriteLn('  ok: lexical tier ranks without being trusted to merge');
 end;
 
+{ ------------------------------------------------------------------ }
+
+var
+  GHookCalls: Integer = 0;
+
+procedure FakeEnsureHook;
+begin
+  Inc(GHookCalls);
+  SetFactEmbedder(@StaticEmbed, StaticEmbedderId, {AllowSemanticDedup=} False);
+end;
+
+procedure TestLazyEmbedderHook;
+(* Registering the memory tools does not register an embedder. Several
+   hosts -- PasClaw.Agent, Cmd.Heartbeat, the PasClaw.Tools bundle -- do
+   exactly that, and every fact they wrote would carry no vector. The store
+   therefore asks for one, once, at the point it needs it. *)
+var
+  Store: IFactStore;
+  Db: string;
+  Facts: TStoredFactArray;
+begin
+  Db := JoinPath(GTmpDir, 'lazy.db');
+  SetFactEmbedder(nil, '');
+  GHookCalls := 0;
+  SetEnsureEmbedderHook(@FakeEnsureHook);
+  AssertTrue(not FactEmbedderActive, 'no embedder before the first write');
+
+  Store := NewFactStore;
+  AssertTrue(Store.Open(Db), 'store opens');
+  try
+    Store.Add(MkFact('a host that never called EnableBestFactEmbedder'), 1700000000);
+    AssertEqInt(GHookCalls, 1, 'the write asked for an embedder');
+    AssertTrue(FactEmbedderActive, 'and one is now active');
+    Facts := Store.ActiveFacts('2026-01-01');
+    AssertTrue(Facts[0].EmbeddingHex <> '',
+               'so the row was written WITH a vector, not without one');
+
+    { Once per process, not once per write: a host with no embedder
+      available must not re-probe the filesystem on every fact. }
+    Store.Add(MkFact('a second fact from the same host'), 1700000001);
+    AssertEqInt(GHookCalls, 1, 'the hook is not re-run once one is active');
+  finally
+    Store.Close;
+  end;
+
+  SetEnsureEmbedderHook(nil);
+  SetFactEmbedder(nil, '');
+  WriteLn('  ok: a host with no explicit enable call still gets vectors');
+end;
+
+procedure TestDateValidation;
+(* Shape is not validity. Both of these are well-formed and name no date,
+   and because expiry is compared as text an impossible one sorts above
+   every real date -- so the fact would never expire, silently. *)
+begin
+  AssertTrue(IsValidISODateOrEmpty(''), 'empty means "no date"');
+  AssertTrue(IsValidISODateOrEmpty('2026-06-27'), 'a real date passes');
+  AssertTrue(IsValidISODateOrEmpty('2028-02-29'), 'a real leap day passes');
+  AssertTrue(not IsValidISODateOrEmpty('2027-02-29'), 'a non-leap Feb 29 fails');
+  AssertTrue(not IsValidISODateOrEmpty('2026-99-99'), 'month 99 fails');
+  AssertTrue(not IsValidISODateOrEmpty('2026-02-31'), 'February 31 fails');
+  AssertTrue(not IsValidISODateOrEmpty('2026-6-27'),  'unpadded fails');
+  AssertTrue(not IsValidISODateOrEmpty('tomorrow'),   'prose fails');
+  WriteLn('  ok: only dates that exist are accepted');
+end;
+
 begin
   GTmpDir := JoinPath(GetTempDir, 'pasclaw-static-embed-' + IntToStr(Random(1 shl 30)));
   EnsureDir(GTmpDir);
   TestShape;
+  TestCrossTargetEncoding;
   TestLexicalBehaviour;
   TestEmbedderIdentity;
   TestDedupGate;
+  TestLazyEmbedderHook;
+  TestDateValidation;
   WriteLn('PASS');
 end.

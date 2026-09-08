@@ -295,23 +295,6 @@ begin
   LogDebug('memory_search query=%s k=%d hits=%d', [Query, K, Length(Hits)]);
 end;
 
-(* Accept 'YYYY-MM-DD' or ''. Rejecting a malformed date at the tool
-   boundary matters more than usual here: expires drives whether a fact is
-   ever shown again, so a date the store cannot compare would either hide
-   the fact forever or never expire it, with no error either way. *)
-function ValidDateArg(const S: string): Boolean;
-var
-  i: Integer;
-begin
-  Result := False;
-  if S = '' then Exit(True);
-  if Length(S) <> 10 then Exit;
-  if (S[5] <> '-') or (S[8] <> '-') then Exit;
-  for i := 1 to 10 do
-    if (i <> 5) and (i <> 8) and ((S[i] < '0') or (S[i] > '9')) then Exit;
-  Result := True;
-end;
-
 function Tool_MemoryWrite(const ArgsJSON: string; out ErrMsg: string): string;
 const
   MaxTextLen = 2000;   { a fact is a sentence; a document belongs in a note }
@@ -371,14 +354,19 @@ begin
 
   if not ParseStringArg(ArgsJSON, 'expires', F.Expires) then F.Expires := '';
   if not ParseStringArg(ArgsJSON, 'event_date', F.EventDate) then F.EventDate := '';
-  if not ValidDateArg(F.Expires) then
+  (* IsValidISODateOrEmpty, not a shape check. '2026-99-99' and
+     '2026-02-31' are well-formed and name no date; the store compares
+     expiry as text, so an impossible expiry sorts above every real one and
+     the fact would never expire -- while the caller was told the write
+     succeeded. Reject at the boundary instead. *)
+  if not IsValidISODateOrEmpty(F.Expires) then
   begin
-    ErrMsg := 'expires must be YYYY-MM-DD (or omitted)';
+    ErrMsg := 'expires must be a real calendar date as YYYY-MM-DD (or omitted)';
     Exit;
   end;
-  if not ValidDateArg(F.EventDate) then
+  if not IsValidISODateOrEmpty(F.EventDate) then
   begin
-    ErrMsg := 'event_date must be YYYY-MM-DD (or omitted)';
+    ErrMsg := 'event_date must be a real calendar date as YYYY-MM-DD (or omitted)';
     Exit;
   end;
 

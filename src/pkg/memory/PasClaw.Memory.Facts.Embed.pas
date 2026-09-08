@@ -70,6 +70,7 @@ uses
   PasClaw.Utils,
   PasClaw.Logger,
   PasClaw.Memory.Facts,
+  PasClaw.Config,                { GetHome -- the lazy-activation hook }
   PasClaw.Memory.Embed.Static;   { the dependency-free fallback tier }
 
 const
@@ -266,8 +267,17 @@ begin
   end;
 end;
 
+{ Installed as PasClaw.Memory.Facts' lazy-activation hook, so a host that
+  registers the memory tools without calling EnableBestFactEmbedder still
+  gets an embedder the first time a fact is written or searched. }
+procedure EnsureBestFactEmbedderHook;
+begin
+  EnableBestFactEmbedder(GetHome);
+end;
+
 initialization
   GLock := TCriticalSection.Create;
+  SetEnsureEmbedderHook(@EnsureBestFactEmbedderHook);
 
 finalization
   SetFactEmbedder(nil, '');
