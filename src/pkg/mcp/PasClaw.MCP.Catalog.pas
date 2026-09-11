@@ -142,7 +142,7 @@ function KnownMCPServers: TMCPCatalogEntryArray;
 var
   i: Integer;
 begin
-  SetLength(Result, 5);
+  SetLength(Result, 6);
 
   { Replicate's MCP server is OAuth-only -- it advertises RFC 9728
     protected-resource metadata and rejects raw REPLICATE_API_TOKEN
@@ -179,12 +179,22 @@ begin
   Result[3].Desc    := 'Search RunPod documentation. No auth required.';
   Result[3].Docs    := 'https://docs.runpod.io/get-started/mcp-servers';
 
-  Result[4].Name    := 'huggingface';
-  Result[4].URL     := 'https://huggingface.co/mcp';
-  Result[4].EnvVar  := 'HF_TOKEN';
-  Result[4].AuthFmt := 'Bearer %s';
-  Result[4].Desc    := 'Search Hugging Face models, datasets, papers, Spaces.';
-  Result[4].Docs    := 'https://huggingface.co/docs/hub/en/agents-mcp';
+  Result[4].Name          := 'parallel-search';
+  Result[4].Transport     := 'http';
+  Result[4].URL           := 'https://search.parallel.ai/mcp';
+  Result[4].EnvVar        := '';
+  Result[4].AuthFmt       := '';
+  Result[4].RequiresOAuth := False;
+  Result[4].Desc          := 'Search the web and fetch URLs. User-provided search objectives, search queries, ' +
+                             'and requested URLs are sent to Parallel. No auth required.';
+  Result[4].Docs          := 'https://docs.parallel.ai/integrations/mcp/search-mcp';
+
+  Result[5].Name    := 'huggingface';
+  Result[5].URL     := 'https://huggingface.co/mcp';
+  Result[5].EnvVar  := 'HF_TOKEN';
+  Result[5].AuthFmt := 'Bearer %s';
+  Result[5].Desc    := 'Search Hugging Face models, datasets, papers, Spaces.';
+  Result[5].Docs    := 'https://huggingface.co/docs/hub/en/agents-mcp';
 
   { Every bundled row carries fully-known auth metadata -- they're
     hand-curated above with EnvVar / AuthFmt / RequiresOAuth set
