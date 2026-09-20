@@ -13,6 +13,7 @@
   Endpoint: POST https://api.perplexity.ai/chat/completions
   Headers:  Authorization: Bearer <key>
             Content-Type:  application/json
+            X-Pplx-Integration: pasclaw
   Body:     { "model": "sonar",
               "messages": [ { "role": "user", "content": "<query>" } ],
               "max_tokens": 1024 }
@@ -226,8 +227,9 @@ begin
     Req.Free;
   end;
 
-  SetLength(Headers, 1);
+  SetLength(Headers, 2);
   Headers[0] := MakeHeader('Authorization', 'Bearer ' + FAPIKey);
+  Headers[1] := MakeHeader('X-Pplx-Integration', 'pasclaw');
 
   Resp := PostJSON('https://api.perplexity.ai/chat/completions', Body, Headers, 30);
   if (Resp.StatusCode < 200) or (Resp.StatusCode >= 300) then
