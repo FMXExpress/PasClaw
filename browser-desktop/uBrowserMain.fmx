@@ -1,0 +1,34 @@
+object FormMain: TFormMain
+  Left = 0
+  Top = 0
+  Caption = 'PasClaw Browser'
+  ClientHeight = 800
+  ClientWidth = 1280
+  FormFactor.Width = 320
+  FormFactor.Height = 480
+  FormFactor.Devices = [Desktop]
+  OnCreate = FormCreate
+  OnDestroy = FormDestroy
+  OnCloseQuery = FormCloseQuery
+  DesignerMasterStyle = 0
+  object TopBar: TLayout
+    Align = Top
+    Size.Width = 1280.000000000000000000
+    Size.Height = 36.000000000000000000
+    Size.PlatformDefault = False
+    Padding.Left = 4.000000000000000000
+    Padding.Top = 4.000000000000000000
+    Padding.Right = 4.000000000000000000
+    Padding.Bottom = 4.000000000000000000
+    TabOrder = 0
+  end
+  object Tabs: TTabControl
+    Align = Client
+    Size.Width = 1280.000000000000000000
+    Size.Height = 764.000000000000000000
+    Size.PlatformDefault = False
+    TabIndex = -1
+    TabOrder = 1
+    TabPosition = Top
+  end
+end
