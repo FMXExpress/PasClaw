@@ -578,10 +578,96 @@ begin
   WriteLn('  ok: session append / copy / JSON round-trip / UTF-8 / missing file');
 end;
 
+(* The one agent per process holds the tools for good; the switching
+   bridge is how a turn gets pointed at the tab that owns it. This is
+   the fix for "second tab raises EPasClawInstance", so it is tested
+   where it can be: no current tab fails with a named error and no call
+   reaches any real bridge; switching routes to the new tab and only
+   that tab; Shutdown fails every call immediately, refuses to be
+   re-pointed, and blanks the URL and title the hooks read. *)
+procedure TestSwitchingBridge;
+var
+  Sw:    TSwitchingBridge;
+  SwI:   IBrowserBridge;
+  A, B:  TFakeBridge;
+  AI, BI: IBrowserBridge;
+  V, E:  string;
+  Tool:  TBrowserPageTool;
+  Hook:  TPageContextHook;
+  Cont:  Boolean;
+  Msgs:  TMessageArray;
+begin
+  A := TFakeBridge.Create; AI := A; A.URL := 'https://a.example/'; A.Title := 'Tab A';
+  B := TFakeBridge.Create; BI := B; B.URL := 'https://b.example/'; B.Title := 'Tab B';
+  Sw := TSwitchingBridge.Create;
+  SwI := Sw;
+
+  { No turn running: fail, name the reason, touch nobody. }
+  AssertTrue(not SwI.Eval('1+1', 100, V, E), 'eval with no current tab fails');
+  AssertEqStr(E, NoActiveTabError, 'no-tab error is the named one');
+  AssertTrue(not SwI.Navigate('https://x.example/', 100, E), 'navigate with no current tab fails');
+  AssertEqStr(SwI.CurrentURL, '', 'no-tab URL is blank');
+  AssertEqInt(A.EvalCalls + B.EvalCalls, 0, 'no fake was reached without a current tab');
+
+  { A tool built once against the switching bridge follows Current. }
+  Tool := TBrowserPageTool.Create(SwI);
+  try
+    Sw.SetCurrent(AI);
+    AssertTrue(SwI.Eval('x', 100, V, E), 'eval routes once a tab is current');
+    AssertEqInt(A.EvalCalls, 1, 'tab A received the eval');
+    AssertEqInt(B.EvalCalls, 0, 'tab B did not');
+    AssertEqStr(SwI.CurrentTitle, 'Tab A', 'title comes from the current tab');
+
+    Sw.SetCurrent(BI);
+    V := Tool.Run('{}', E);
+    AssertEqStr(E, '', 'page tool ran without error on tab B');
+    AssertContains(V, 'https://b.example/', 'the page tool now reads tab B');
+    AssertEqInt(A.EvalCalls, 1, 'tab A was not touched by tab B''s turn');
+    AssertTrue(B.EvalCalls >= 1, 'tab B received the page read');
+  finally
+    Tool.Free;
+  end;
+
+  { The context hook, likewise built once, stamps the current tab's page. }
+  Hook := TPageContextHook.Create(SwI, False);
+  try
+    Sw.SetCurrent(AI);
+    SetLength(Msgs, 1);
+    Msgs[0] := MakeMessage(mrUser, 'what is this?');
+    Cont := True;
+    Hook.BeforeTurn(Cont, Msgs);
+    AssertContains(Msgs[0].Content, 'Tab A', 'hook stamped tab A while A is current');
+    AssertTrue(Pos('Tab B', Msgs[0].Content) = 0, 'hook did not stamp tab B');
+  finally
+    Hook.Free;
+  end;
+
+  { Closing: every call fails at once, Current cannot be re-pointed, and
+    the hooks' cheap reads go blank rather than reaching a dying control. }
+  Sw.SetCurrent(AI);
+  Sw.Shutdown;
+  AssertTrue(Sw.IsClosing, 'IsClosing after Shutdown');
+  AssertTrue(not SwI.Eval('x', 100, V, E), 'eval fails after shutdown');
+  AssertEqStr(E, AppClosingError, 'shutdown error is the named one');
+  AssertTrue(not SwI.Navigate('reload:', 100, E), 'navigate fails after shutdown');
+  AssertEqStr(SwI.CurrentURL, '', 'URL blank after shutdown');
+  AssertEqStr(SwI.CurrentTitle, '', 'title blank after shutdown');
+  Sw.SetCurrent(BI);
+  AssertTrue(not SwI.Eval('x', 100, V, E), 'calls still fail after a SetCurrent that follows Shutdown');
+  AssertEqStr(E, AppClosingError, 'and still name closing, not "no tab"');
+  AssertEqInt(A.EvalCalls, 1, 'no eval reached tab A after shutdown');
+  AssertEqInt(B.EvalCalls, 1, 'no eval reached tab B after shutdown');
+
+  SwI := nil;
+  AI := nil; BI := nil;
+  WriteLn('  ok: switching bridge: no-tab error / routes to current / shutdown fails fast');
+end;
+
 begin
   GTmpDir := JoinPath(GetTempDir, 'pasclaw-browser-test-' + IntToStr(Random(1 shl 30)));
   EnsureDir(GTmpDir);
   TestUnwrap;
+  TestSwitchingBridge;
   TestHelpers;
   TestPageTool;
   TestFindTool;

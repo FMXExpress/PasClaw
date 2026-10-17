@@ -38,6 +38,9 @@ unit PasClaw.Browser.Bridge;
 
 interface
 
+uses
+  SyncObjs;
+
 const
   { Per-script wait. Long enough for a heavy page's synchronous script,
     short enough that a wedged tab fails the tool call rather than the
@@ -68,6 +71,49 @@ type
     function CurrentTitle: string;
   end;
 
+  (* One bridge the tools and hooks hold for the life of the process,
+     pointed at whichever tab's bridge owns the turn that is running.
+
+     Why this exists: TPasClawAgent is one-per-process (PasClaw.MCP.Bridge
+     and PasClaw.Skills.Loader keep module-level state, and the constructor
+     raises EPasClawInstance on a second live instance). So the browser
+     has ONE agent, registers the six tools and two hooks ONCE, and runs
+     tabs' turns one at a time. The tools cannot be rebound per turn --
+     the agent owns them -- so instead they hold this object, and the
+     turn runner sets Current to the tab's real bridge before ChatHistory
+     and clears it after.
+
+     Thread-safety: Current is read on the agent's worker thread and
+     written by the turn runner on that same thread, but Shutdown is
+     called from the UI thread while a turn may be in flight, so every
+     access goes through the lock and each method works on a snapshot.
+
+     Shutdown is the "application is closing" switch: from then on every
+     call fails immediately with a clear error instead of touching a
+     control that is about to be freed, which lets an in-flight turn wind
+     down in a few tool calls rather than ten seconds of timeouts each. *)
+  TSwitchingBridge = class(TInterfacedObject, IBrowserBridge)
+  private
+    FLock:     TCriticalSection;
+    FCurrent:  IBrowserBridge;
+    FClosing:  Boolean;
+    function Snapshot(out Err: string): IBrowserBridge;
+  public
+    constructor Create;
+    destructor Destroy; override;
+    procedure SetCurrent(const ABridge: IBrowserBridge);
+    procedure Shutdown;
+    function IsClosing: Boolean;
+    function Eval(const JS: string; TimeoutMs: Integer; out Value, Err: string): Boolean;
+    function Navigate(const URL: string; TimeoutMs: Integer; out Err: string): Boolean;
+    function CurrentURL: string;
+    function CurrentTitle: string;
+  end;
+
+const
+  NoActiveTabError  = 'no tab is running a turn';
+  AppClosingError   = 'the application is closing; the page can no longer be reached';
+
 { Remove exactly one layer of JSON string quoting if S is a quoted JSON
   string; otherwise return S unchanged. Pure; exposed for tests and for
   every bridge implementation to share. }
@@ -77,6 +123,109 @@ implementation
 
 uses
   SysUtils;
+
+{ ---------------------------------------------------------- switching }
+
+constructor TSwitchingBridge.Create;
+begin
+  inherited Create;
+  FLock := TCriticalSection.Create;
+end;
+
+destructor TSwitchingBridge.Destroy;
+begin
+  FCurrent := nil;
+  FLock.Free;
+  inherited;
+end;
+
+procedure TSwitchingBridge.SetCurrent(const ABridge: IBrowserBridge);
+begin
+  FLock.Enter;
+  try
+    if not FClosing then FCurrent := ABridge;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+procedure TSwitchingBridge.Shutdown;
+begin
+  FLock.Enter;
+  try
+    FClosing := True;
+    FCurrent := nil;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TSwitchingBridge.IsClosing: Boolean;
+begin
+  FLock.Enter;
+  try
+    Result := FClosing;
+  finally
+    FLock.Leave;
+  end;
+end;
+
+function TSwitchingBridge.Snapshot(out Err: string): IBrowserBridge;
+begin
+  Err := '';
+  FLock.Enter;
+  try
+    Result := FCurrent;
+    if FClosing then Err := AppClosingError
+    else if Result = nil then Err := NoActiveTabError;
+  finally
+    FLock.Leave;
+  end;
+  if Err <> '' then Result := nil;
+end;
+
+function TSwitchingBridge.Eval(const JS: string; TimeoutMs: Integer;
+                               out Value, Err: string): Boolean;
+var
+  B: IBrowserBridge;
+begin
+  Value := '';
+  B := Snapshot(Err);
+  if B = nil then Exit(False);
+  Result := B.Eval(JS, TimeoutMs, Value, Err);
+end;
+
+function TSwitchingBridge.Navigate(const URL: string; TimeoutMs: Integer;
+                                   out Err: string): Boolean;
+var
+  B: IBrowserBridge;
+begin
+  B := Snapshot(Err);
+  if B = nil then Exit(False);
+  Result := B.Navigate(URL, TimeoutMs, Err);
+end;
+
+function TSwitchingBridge.CurrentURL: string;
+var
+  B: IBrowserBridge;
+  Err: string;
+begin
+  B := Snapshot(Err);
+  if B = nil then Exit('');
+  Result := B.CurrentURL;
+end;
+
+function TSwitchingBridge.CurrentTitle: string;
+var
+  B: IBrowserBridge;
+  Err: string;
+begin
+  B := Snapshot(Err);
+  if B = nil then Exit('');
+  Result := B.CurrentTitle;
+end;
+
+{ ------------------------------------------------------------- unwrap }
 
 function UnwrapJsString(const S: string): string;
 var

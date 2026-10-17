@@ -2,8 +2,8 @@
 
 Tabs of WebView2, each with a PasClaw chat beside it that can **read the
 page you are looking at and change it**. The agent is embedded in the exe —
-`TPasClawAgent`, one per tab — against your own `PASCLAW_HOME`. No gateway
-to start, no port to open.
+one `TPasClawAgent` for the app, pointed at whichever tab is talking —
+against your own `PASCLAW_HOME`. No gateway to start, no port to open.
 
 Not to be confused with `browser/`, which is the opposite thing: PasClaw's
 CLI running *inside* a browser tab on a WebAssembly Linux emulator.
@@ -38,11 +38,22 @@ current selection, so "what is this about?" costs no tool call.
 
 ## Each tab is its own session
 
-A tab owns its conversation. The agent for a tab only ever sees that tab's
-history, and the page context on each message is that tab's page. Sessions
-persist as JSON under `PASCLAW_HOME/workspace/browser/<tab-id>.json`, so a
-tab's conversation survives closing it — though v1 does not reopen old tabs
-automatically; that is the next thing to add.
+A tab owns its conversation. The history handed to the agent for a turn is
+that tab's history and nothing else, and the page context on each message
+is that tab's page. Sessions persist as JSON under
+`PASCLAW_HOME/workspace/browser/<tab-id>.json`, so a tab's conversation
+survives closing it — though v1 does not reopen old tabs automatically;
+that is the next thing to add.
+
+What is shared is the engine. `TPasClawAgent` is one-per-process (its
+constructor raises on a second live instance, because MCP and skills keep
+module-level state), so the app has one agent with the six tools and two
+hooks registered once against a *switching bridge*. Turns run one at a
+time on a single worker thread; before each turn the worker points the
+switching bridge at the tab that sent it, and after the turn clears it. A
+tab that sends while another tab's turn is running is queued and its
+status line says so. The "always allow on this site" answers are shared
+across tabs for the same host, which is what you would expect.
 
 Memory, distilled facts and `AGENTS.md` are shared with the CLI and web UI,
 because the agent is built on the same config: what it learns in the browser
@@ -95,7 +106,10 @@ internals. Covered: argument validation, the 24 KB cap and `offset`,
 handle validation (a selector-breaking handle never reaches JavaScript),
 the React-aware fill, the context stamp being applied once and only once,
 the confirm gate denying / allowing once / remembering a host / refusing
-when no asker is wired, and a UTF-8 round-trip through a real temp file.
+when no asker is wired, a UTF-8 round-trip through a real temp file, and
+the switching bridge: no current tab fails with a named error and reaches
+no tab, a tool built once follows whichever tab is current, and after
+`Shutdown` every call fails at once and the bridge cannot be re-pointed.
 
 Each guard was negative-tested — the cap removed, the handle check removed,
 the gate opened — and each failed on the assertion that owns it. Those
@@ -111,6 +125,11 @@ on it.
 
 ## Limits, stated
 
+- **One turn at a time across tabs.** The agent is a process singleton, so
+  a second tab's message waits for the first tab's turn to finish. Closing
+  the window mid-turn stops new page calls immediately and closes once the
+  turn returns; a second close offers to quit at once, saving sessions
+  first.
 - **Top frame only.** Cross-origin iframes are invisible and untouchable;
   a page that is mostly an embedded editor will look empty, and
   `browser_page` says so.

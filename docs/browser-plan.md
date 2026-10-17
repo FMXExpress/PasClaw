@@ -10,6 +10,16 @@
 > (shared memory, per-tab history), and confirm-before-mutate on by
 > default with a per-tab switch. See `browser-desktop/README.md` for what is
 > tested and what is not.
+>
+> **Review correction.** The first cut created a `TPasClawAgent` per tab.
+> That cannot work: the component is one-per-process and raises
+> `EPasClawInstance` on a second live instance. The shipped design has one
+> agent, tools and hooks registered once against a `TSwitchingBridge`
+> (tested under FPC), and a single worker thread that runs tabs' turns one
+> at a time, pointing the switching bridge at the sending tab per turn.
+> The same review fixed the eval waiter's lifetime (refcounted, so a late
+> WebView2 callback never touches a freed event) and shutdown (wind down
+> the in-flight turn and close when it returns, never free under it).
 
 An FMX desktop browser — `TWebBrowser` on WebView2 — with a PasClaw chat
 panel beside it, where the agent can **read the page you are looking at and
@@ -52,10 +62,13 @@ So the design is: the browser app exposes a small set of **tools** backed by
 
 ## The agent lives in the exe
 
-One process. `TPasClawAgent` is created on the form; the six browser tools
-are `TPasClawTool` subclasses registered with `Agent.RegisterTool`; the chat
-panel calls `Agent.ChatHistory`. No gateway, no MCP server, no port, no
-registration step, nothing to start before the app.
+One process, one agent. `TPasClawAgent` is created on the form once (it is
+a per-process singleton); the six browser tools are `TPasClawTool`
+subclasses registered with `Agent.RegisterTool` against a switching bridge
+that a worker thread points at the tab whose turn is running; each tab's
+chat panel hands its own history to `Agent.ChatHistory`, one turn at a time.
+No gateway, no MCP server, no port, no registration step, nothing to start
+before the app.
 
 ```
 ┌──────────────────── PasclawBrowser.exe (FMX, Delphi) ─────────────────────┐
