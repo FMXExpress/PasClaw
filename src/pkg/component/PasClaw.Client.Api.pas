@@ -454,6 +454,13 @@ type
     function Desktops(out Current, Count: Integer): Boolean;
     function SwitchDesktop(N: Integer; out Current, Count: Integer): Boolean;
 
+    (* Create / delete beside Sessions (declared with the Library calls
+       below). An attached terminal (`pasclaw agent --attach`) goes through
+       these so the gateway stays the one owner of the session files. *)
+    { POST /v1/sessions. Returns the new id, '' on failure. }
+    function CreateSession(const Title: string = ''): string;
+    function DeleteSession(const Id: string): Boolean;
+
     { ---- chat ---- }
     (* Stream one turn through /v1/chat/completions. History is a JSON array
        of {"role","content"} objects; System, when non-empty, is sent as the
@@ -2459,6 +2466,36 @@ begin
     Req.Free;
   end;
   Result := Id <> '';
+end;
+
+{ ---- sessions: create / delete ---- }
+
+function TPasClawClient.CreateSession(const Title: string): string;
+var
+  Req: TJsonObject;
+begin
+  Result := '';
+  Req := TJsonObject.Create;
+  try
+    if Title <> '' then Req.PutStr('title', Title);
+    try
+      Result := JsonReadStr(Request('POST', '/v1/sessions', Req.ToJSON), 'id', '');
+    except
+      Result := '';
+    end;
+  finally
+    Req.Free;
+  end;
+end;
+
+function TPasClawClient.DeleteSession(const Id: string): Boolean;
+begin
+  Result := True;
+  try
+    Request('DELETE', '/v1/sessions/' + Id, '');
+  except
+    Result := False;
+  end;
 end;
 
 { ---- chat ---- }

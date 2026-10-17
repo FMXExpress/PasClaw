@@ -27,6 +27,7 @@ uses
   PasClaw.Workspaces,
   SysUtils,
   PasClaw.Config, PasClaw.CliUI, PasClaw.Logger,
+  PasClaw.Gateway.RunFile,  { run/gateway.json -- how --attach finds us }
   PasClaw.Providers.Intf,
   PasClaw.Providers.Factory,
   PasClaw.Tools.Registry,
@@ -481,6 +482,12 @@ begin
       end;
 
       Server.Start(Args.Addr, Args.Port);
+      { Announce ourselves to clients on this machine: `pasclaw status`,
+        `pasclaw agent --attach`, `pasclaw tui --attach` read this file.
+        Removed in the finally below; a crash leaves it, and readers
+        treat a dead pid as absent. }
+      WriteGatewayRunFile(GetHome, Args.Addr, Args.Port, Cfg.Gateway.Token, FormatVersion);
+      InstallStopSignalHandler;   { Ctrl-C / SIGTERM -> WaitForStop returns -> the finally runs }
       if MCPServer <> nil then
         MCPServer.Start(Args.Addr, Args.MCPPort);
       if AppsServer <> nil then
@@ -550,6 +557,7 @@ begin
       if Matrix   <> nil then begin Matrix.RequestStop; Matrix.WaitForStop; Matrix.Free; end;
       if IRC      <> nil then IRC.Free;
       if Email    <> nil then begin Email.Stop; Email.Free; end;
+      RemoveGatewayRunFile(GetHome);
       Server.Stop;
       if MCPServer <> nil then MCPServer.Stop;
       Server.Free;

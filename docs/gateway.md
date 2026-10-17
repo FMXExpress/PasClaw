@@ -370,6 +370,18 @@ curl http://127.0.0.1:8088/v1/health         # 200 OK + JSON
 
 Press Ctrl-C to stop. The server tears down all active SSE streams cleanly before exiting.
 
+## Run file and attached terminals
+
+On start the gateway writes `$PASCLAW_HOME/run/gateway.json`:
+
+```json
+{"port": 8088, "bind": "127.0.0.1", "pid": 4242,
+ "token_hash": "<sha256 hex of gateway.token, or empty>",
+ "started_at": "2026-10-17T12:00:00Z", "version": "0.1.6"}
+```
+
+and removes it on stop. Readers ignore a file whose pid is no longer alive, so a crash cannot strand them. `pasclaw status` reports it, and `pasclaw agent --attach` / `pasclaw tui --attach` (or `cli.attach: auto|on`) use it to become clients of this gateway instead of running their own loop: one turn per line through `/v1/chat/completions` with `X-PasClaw-Session` and `session_context`, session management through `/v1/sessions`. The token itself is never written; a client uses its own config's `gateway.token` and is warned when the hash differs. See [Commands → `--attach`](./commands.md#--attach-the-terminal-as-a-gateway-client).
+
 ## Embedded use
 
 `TPasClawServer` lets you host the same gateway inside your own Delphi/FPC process. See [Embedding in your own app](./embedding.md).

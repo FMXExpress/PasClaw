@@ -699,6 +699,7 @@ uses
   PasClaw.Gateway.Desktop,  { desktop client surface: workspaces, projects,
                               tasks, jobs, apps, pages }
   PasClaw.Desktop.Events,   { the /v1/desktop/events fan-out }
+  PasClaw.Gateway.RunFile,  { StopRequested -- WaitForStop returns on SIGINT/SIGTERM }
   PasClaw.Agents,           { standing agents: roster, mailbox, run state }
   PasClaw.Agents.Tools,     { SetCallingAgent -- who a `send` is from }
   PasClaw.Projects.Store,   { job/task records the desktop callbacks write }
@@ -1637,7 +1638,12 @@ end;
 
 procedure TGatewayServer.WaitForStop;
 begin
-  FStopFlag.WaitFor(INFINITE);
+  { Half-second slices so a SIGINT / SIGTERM / Ctrl-C caught by
+    PasClaw.Gateway.RunFile.InstallStopSignalHandler returns here and the
+    caller's finally (run file, channels, registry) actually runs. }
+  repeat
+    if FStopFlag.WaitFor(500) = wrSignaled then Break;
+  until StopRequested;
 end;
 
 procedure WriteBodyStream(AResp: TIdHTTPResponseInfo; const Body: string);

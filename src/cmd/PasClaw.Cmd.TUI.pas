@@ -36,6 +36,7 @@ uses
   PasClaw.Tools.WebFetch,
   PasClaw.Tools.MemoryFetch,
   PasClaw.Tools.Worktree,
+  PasClaw.Cmd.Attach,        { --attach: the terminal as a gateway client }
   PasClaw.Tools.OutputCache,
   PasClaw.Tools.Sandbox,
   PasClaw.Shell.Backend,           { StartShellSession / SetCurrentSessionId
@@ -63,6 +64,7 @@ type
     NoHashline:      Boolean;
     BackendOverride: string;
     Profile:         string;   { --profile <name>; PR #291 }
+    Attach:          Boolean;  { --attach: client of the running gateway (line mode) }
   end;
 
 function ParseArgs(const Argv: array of string; var A: TTUIArgs): Boolean;
@@ -85,6 +87,7 @@ begin
     if Argv[i] = '--no-mcp'       then begin A.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-tools'     then begin A.NoTools    := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline'  then begin A.NoHashline := True; Inc(i); Continue; end;
+    if Argv[i] = '--attach'       then begin A.Attach     := True; Inc(i); Continue; end;
     if Argv[i] = '--profile'      then begin if i = High(Argv) then Exit(False); A.Profile  := Argv[i + 1]; Inc(i, 2); Continue; end;
     Inc(i);
   end;
@@ -108,9 +111,31 @@ var
   KindSelected: TShellBackendKind;
   BackendDesc: string;
   ShellSessionId: string;
+  AttachURL, AttachReason, AttachWarn: string;
+  AttachFail: Boolean;
 begin
   if not ParseArgs(Argv, A) then Exit(1);
   Cfg := LoadConfig(A.Profile);
+  { Attach mode: the running gateway owns the session and this terminal
+    is its client. v1 is the line client (PasClaw.Cmd.Attach) on both
+    builds -- the full-screen panes against a remote session list are a
+    later step -- so nothing below (backend, registry, provider) runs. }
+  if ResolveAttach(Cfg, A.Attach, AttachURL, AttachReason, AttachWarn, AttachFail) then
+  begin
+    if AttachWarn <> '' then PrintLn(Ansi.Yellow + '! ' + Ansi.Reset + AttachWarn);
+    try
+      Result := RunAttached(Cfg, AttachURL, A.Session, '', False);
+    finally
+      Cfg.Free;
+    end;
+    Exit;
+  end
+  else if AttachFail then
+  begin
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + AttachReason);
+    Cfg.Free;
+    Exit(1);
+  end;
   ConfigureSandbox(Cfg.Sandbox, '');
   { Docker backend: the TUI runs ONE container for its whole process,
     not one per chat session. The container is a workspace sandbox --

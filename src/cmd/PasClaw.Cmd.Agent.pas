@@ -43,6 +43,7 @@ uses
   PasClaw.Tools.SessionSearch,
   PasClaw.Tools.PlanWrite,
   PasClaw.Tools.Worktree,
+  PasClaw.Cmd.Attach,         { --attach: the terminal as a gateway client }
   PasClaw.Tools.SendMessage,
   PasClaw.Tools.DB,
   PasClaw.Tools.Cron,
@@ -131,6 +132,11 @@ type
     NoTools:       Boolean;
     NoMCP:         Boolean;
     NoHashline:    Boolean;
+    { --attach -- be a client of the running gateway instead of running a
+      loop here (PasClaw.Cmd.Attach). cli.attach in config can make this
+      the default; the flag forces it for one run and fails when no
+      gateway is up. }
+    Attach:        Boolean;
     { --no-plan -- opt out of the workspace/PLAN.md auto-pickup
       added in PR-cycle "pasclaw plan / pasclaw build" Phase 2.
       Default False; when True, BuildActivePlanSection emits empty
@@ -360,6 +366,7 @@ begin
     if Argv[i] = '--no-tools'    then begin A.NoTools    := True; Inc(i); Continue; end;
     if Argv[i] = '--no-mcp'      then begin A.NoMCP      := True; Inc(i); Continue; end;
     if Argv[i] = '--no-hashline' then begin A.NoHashline := True; Inc(i); Continue; end;
+    if Argv[i] = '--attach'      then begin A.Attach     := True; Inc(i); Continue; end;
     if Argv[i] = '--orient'      then begin A.OrientOverride := ooOn;  Inc(i); Continue; end;
     if Argv[i] = '--no-orient'   then begin A.OrientOverride := ooOff; Inc(i); Continue; end;
     if Argv[i] = '--no-plan'     then begin A.NoPlan     := True; Inc(i); Continue; end;
@@ -1995,6 +2002,8 @@ var
   Cfg: TConfig;
   KindSelected: TShellBackendKind;
   BackendDesc, SessionProfile: string;
+  AttachURL, AttachReason, AttachWarn: string;
+  AttachFail: Boolean;
 begin
   if not ParseArgs(Argv, A) then
   begin
@@ -2034,6 +2043,25 @@ begin
     to try it. }
   if A.OrientOverride = ooOn  then Cfg.OrientTaskAware := True
   else if A.OrientOverride = ooOff then Cfg.OrientTaskAware := False;
+  { Attach mode: a live gateway owns the session, this process is its
+    terminal. Decided before any local machinery (embedder, sandbox,
+    shell backend, registry) is set up, because none of it runs here. }
+  if ResolveAttach(Cfg, A.Attach, AttachURL, AttachReason, AttachWarn, AttachFail) then
+  begin
+    if AttachWarn <> '' then PrintLn(Ansi.Yellow + '! ' + Ansi.Reset + AttachWarn);
+    try
+      Result := RunAttached(Cfg, AttachURL, A.Session, A.Message, A.Quiet);
+    finally
+      Cfg.Free;
+    end;
+    Exit;
+  end
+  else if AttachFail then
+  begin
+    PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + AttachReason);
+    Cfg.Free;
+    Exit(1);
+  end;
   { Phase 4c: best-effort load the semantic fact embedder once per run
     (no-op when distill off or ONNX unprovisioned). }
   if Cfg.MemoryDistillEnabled then
