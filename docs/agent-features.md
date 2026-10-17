@@ -128,7 +128,7 @@ the outcome" [S], and 65% of enterprise AI failures trace to harness defects
 | Token/cost tracking and budgeting | Aider, Cline [S] | ✅ per-session stats [P] |
 | Drift detection, readiness scoring | Loop Engineering [S] | ❌ |
 | Mid-turn state inspection | [S] | ✅ `pasclaw steer` [P] |
-| Worktree isolation per run | Loop Engineering [S] | ❌ |
+| Worktree isolation per run | Loop Engineering [S] | ✅ `worktree_create` / `list` / `remove`; `spawn` / `spawn_background` take `worktree: "<branch>"` and the child's workspace, write boundary and shell cwd move to that checkout [P] |
 
 ## 9. Inter-agent protocols
 
@@ -256,8 +256,8 @@ edit → PR → human review* is now the same across every major tool [S].
 | Repo-scoped cloud task: assign issue, get a PR | Copilot coding agent (runs in GitHub Actions), Google Jules, Codex cloud [S] | ❌ |
 | Queueable task batches ("five tickets Friday, five PRs Monday") | [S] | ⚠️ cron runs skills, not repo tasks [P] |
 | Agent explores repo, edits, runs tests, opens PR unattended | Copilot [S] | ⚠️ `pasclaw build` does the middle, no VCS integration [P] |
-| **Per-agent git worktree isolation** | Intent — attribution "a property of the workspace itself" [S] | ❌ agents share one workspace |
-| Attribution without span propagation (structural, from the worktree boundary) | [S] | ❌ |
+| **Per-agent git worktree isolation** | Intent — attribution "a property of the workspace itself" [S] | ✅ a subagent spawned with `worktree: "<branch>"` runs in its own checkout (per-thread sandbox workspace, `TToolLoopConfig.Workspace`); sessions record their `location` [P] |
+| Attribution without span propagation (structural, from the worktree boundary) | [S] | ⚠️ the boundary exists (one branch per subagent, commits land there); nothing yet reads it back as attribution [P] |
 | Free-tier background quota as a product lever | Jules: 15 tasks/day [S] | n/a (self-hosted) |
 
 Worktree isolation is the standout: it solves attribution, conflict, and

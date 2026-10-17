@@ -27,6 +27,7 @@ PasClaw exposes a fixed set of tools to the model on every turn (plus MCP-bridge
 | `spawn` | Run a focused subagent (filtered tool registry + specialist system prompt). Returns when the subagent's loop returns. |
 | `spawn_background` | Same, asynchronous. Returns a handle; parent loop keeps working. |
 | `spawn_status` / `spawn_wait` / `spawn_cancel` | Manage background-subagent handles. |
+| `worktree_create` / `worktree_list` / `worktree_remove` | Git worktrees: a separate checkout per parallel task. `spawn*` take `worktree: "<branch>"` to run a subagent inside one. |
 | `skill_<name>` | Pascal-side tools registered from `kind: shell` / `kind: prompt` skills. |
 | MCP-bridged | Every tool a configured MCP server exports — see [MCP servers](./mcp.md). |
 
@@ -150,9 +151,25 @@ Runs a focused subagent loop and returns the result as the parent's `tool_result
 
 The subagent inherits the parent's provider + fallback chain; the tool registry is filtered to the named tools; the system prompt is the specialist one. Implementation: `src/pkg/agent/PasClaw.Agent.Subagent.pas`.
 
+Optional `worktree: "<branch>"` runs the child inside a git worktree for that branch (created beside the repository if needed, see [Git worktrees](#git-worktrees)). The child's relative paths, write boundary and shell cwd all point at the worktree, so two subagents on two branches never edit the same file; the result is prefixed with the worktree path so the parent knows where the work is.
+
 ### `spawn_background(agent, prompt)` (asynchronous)
 
-Returns a handle and the parent loop keeps working. When the job finishes its result is pushed into the next loop iteration as a `[background subagent results]` block in the system prompt (same channel `pasclaw steer` uses). Companion tools: `spawn_status(handle)`, `spawn_wait(handle, timeout_sec)`, `spawn_cancel(handle)`. Up to 4 concurrent jobs per session. Jobs die with the session — coordinator teardown abandons still-running workers and they self-free.
+Returns a handle and the parent loop keeps working. When the job finishes its result is pushed into the next loop iteration as a `[background subagent results]` block in the system prompt (same channel `pasclaw steer` uses). Companion tools: `spawn_status(handle)`, `spawn_wait(handle, timeout_sec)`, `spawn_cancel(handle)`. Up to `background_jobs_max` (6) concurrent jobs per session. Jobs die with the session — coordinator teardown abandons still-running workers and they self-free. Takes the same `worktree` argument as `spawn`.
+
+## Git worktrees
+
+Parallel work wants parallel checkouts. Three tools wrap `git worktree` (source: `src/pkg/tools/PasClaw.Tools.Worktree.pas`); every git call goes through the active shell backend, so Docker and the denylist apply as they do to `shell_exec`.
+
+| Tool | Category | What |
+|---|---|---|
+| `worktree_create(branch, base?)` | mutating | Create or find the worktree for `branch` under `worktree.directory` (default: beside the repo in `<repo>-worktrees/<branch>`). A new branch starts from `base` (default HEAD). Idempotent: an existing worktree for the branch is returned. Returns the directory. |
+| `worktree_list` | read-only | One line per worktree: path, branch, head. |
+| `worktree_remove(path, force?)` | mutating | Remove a worktree directory. Refuses one with uncommitted changes unless `force` is true. The branch is kept; the main checkout is never removed. |
+
+Typical flow: `worktree_create("feature/x")`, then either pass the path as `cwd` to `shell_exec`, or `spawn` / `spawn_background` a subagent with `worktree: "feature/x"` and let it commit on that branch. A `permissions` rule can gate the destructive half, e.g. `{"tool":"worktree_remove","effect":"ask"}`.
+
+Registered when `worktree.enabled` is true (the default). Sessions remember the directory they worked in (`session list` shows it, `pasclaw resume` returns to it).
 
 ## Parallel dispatch
 

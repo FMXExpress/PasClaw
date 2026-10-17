@@ -254,6 +254,8 @@ begin
   else if (Copy(N, 1, 3) = 'fs_') or (N = 'read_file') or (N = 'write_file') or
           (N = 'append_file') or (N = 'edit_file') or (N = 'list_dir') then
     Result := ArgStr(ArgsJSON, 'path')
+  else if N = 'worktree_remove' then Result := ArgStr(ArgsJSON, 'path')
+  else if N = 'worktree_create' then Result := ArgStr(ArgsJSON, 'branch')
   else
     Result := '';
 end;

@@ -155,6 +155,7 @@ uses
   PasClaw.Logger,
   PasClaw.MCP.Disclosure,   { TMCPDisclosure / per-registry tool_search for subagents }
   PasClaw.Tools.ExecuteCode,{ RegisterExecuteCodeTool -- rebind per child registry }
+  PasClaw.Tools.Worktree,   { EnsureWorktree -- spawn(worktree:"<branch>") }
   PasClaw.Tools.ToolLoop;
 
 function RegisterSpawnTool(Reg: TToolRegistry;
@@ -398,6 +399,17 @@ begin
       finally
         Props.PutObject('model', ModelP);
       end;
+
+      ModelP := TJsonObject.Create;
+      try
+        ModelP.PutStr('type', 'string');
+        ModelP.PutStr('description',
+          'Optional: a git branch name. The subagent runs inside a worktree ' +
+          'for that branch (created if needed, beside the repository), so its ' +
+          'edits never touch your checkout. Use one per parallel task.');
+      finally
+        Props.PutObject('worktree', ModelP);
+      end;
     finally
       Obj.PutObject('properties', Props);
     end;
@@ -438,6 +450,7 @@ var
   ChildHist: TMessageArray;
   Loop: TToolLoopResult;
   Model, ReqModel: string;
+  Worktree, WorkDir, WtErr: string;
   MaxIter: Integer;
 begin
   Result := '';
@@ -452,9 +465,19 @@ begin
     AgentName := Args.GetStr('agent', '');
     Prompt    := Args.GetStr('prompt', '');
     ReqModel  := Trim(Args.GetStr('model', ''));
+    Worktree  := Trim(Args.GetStr('worktree', ''));
   finally
     Args.Free;
   end;
+  { A worktree: the child's own checkout. Created (or found) before the
+    loop starts so a failure is this call's error, not the child's. }
+  WorkDir := '';
+  if Worktree <> '' then
+    if not EnsureWorktree(Worktree, WorkDir, WtErr) then
+    begin
+      ErrMsg := 'spawn: ' + WtErr;
+      Exit;
+    end;
   if AgentName = '' then
   begin
     ErrMsg := 'spawn: agent name required';
@@ -515,14 +538,23 @@ begin
     ChildCfg.OnText        := nil;
     ChildCfg.OnToolCall    := nil;
     ChildCfg.OnToolResult  := nil;
+    ChildCfg.Workspace     := WorkDir;   { '' = the parent's workspace }
+    if WorkDir <> '' then
+      ChildCfg.Options.SystemPrompt := ChildCfg.Options.SystemPrompt + sLineBreak + sLineBreak +
+        'You are working in the git worktree ' + WorkDir + ' (branch ' + Worktree + '). ' +
+        'Relative paths and shell commands resolve there. Commit your work on that branch.';
 
     SetLength(ChildHist, 1);
     ChildHist[0] := MakeMessage(mrUser, Prompt);
 
-    LogInfo('subagent spawn: name=%s model=%s tools=%d',
-            [AgentName, Model, ChildReg.Count]);
+    LogInfo('subagent spawn: name=%s model=%s tools=%d workspace=%s',
+            [AgentName, Model, ChildReg.Count, WorkDir]);
     if RunToolLoop(ChildCfg, ChildHist, Loop) then
-      Result := LoopResultText(Loop)   { never a bare '' for a successful run }
+    begin
+      Result := LoopResultText(Loop);   { never a bare '' for a successful run }
+      if WorkDir <> '' then
+        Result := '(worked in worktree ' + WorkDir + ', branch ' + Worktree + ')' + sLineBreak + Result;
+    end
     else
       ErrMsg := Format('spawn: subagent "%s" failed', [AgentName]);
   finally

@@ -217,6 +217,7 @@ uses
   PasClaw.Tools.Sandbox,       { ShellAllowed + cwd rules for shell jobs }
   PasClaw.Shell.Backend,       { non-local backends run shell jobs through Exec }
   PasClaw.Desktop.Events,      { PublishRaw: background_done for the web UI }
+  PasClaw.Tools.Worktree,      { EnsureWorktree -- spawn_background(worktree:"<branch>") }
   PasClaw.Providers.Factory,   { ResolveFallbacks for RegisterSubagentTools }
   PasClaw.MCP.Disclosure,      { per-registry tool_search for bg subagents }
   PasClaw.Crypto.Random,
@@ -698,6 +699,7 @@ function TBackgroundSpawnCoordinator.HandleSpawnBackground(
   const ArgsJSON: string; out ErrMsg: string): string;
 var
   AgentName, Prompt, Model: string;
+  Worktree, WorkDir, WtErr: string;
   Spec: TSubagentSpec;
   Job: TBgJob;
   Box: TLoopCfgBox;
@@ -708,6 +710,7 @@ begin
   ErrMsg := '';
   AgentName := ParseArgStr(ArgsJSON, 'agent');
   Prompt    := ParseArgStr(ArgsJSON, 'prompt');
+  Worktree  := Trim(ParseArgStr(ArgsJSON, 'worktree'));
   if AgentName = '' then begin ErrMsg := 'spawn_background: agent name required'; Exit; end;
   if Prompt    = '' then begin ErrMsg := 'spawn_background: prompt required'; Exit; end;
   if not FindSpec(AgentName, Spec) then
@@ -715,6 +718,16 @@ begin
     ErrMsg := 'spawn_background: no subagent named "' + AgentName + '"';
     Exit;
   end;
+  { The worktree is created on the parent's thread, before the job
+    exists: a git failure is this call's error, and the path is known
+    when the handle is returned. }
+  WorkDir := '';
+  if Worktree <> '' then
+    if not EnsureWorktree(Worktree, WorkDir, WtErr) then
+    begin
+      ErrMsg := 'spawn_background: ' + WtErr;
+      Exit;
+    end;
 
   FLock.Enter;
   try
@@ -771,10 +784,15 @@ begin
     Box.Cfg.OnText        := nil;
     Box.Cfg.OnToolCall    := nil;
     Box.Cfg.OnToolResult  := nil;
+    Box.Cfg.Workspace     := WorkDir;   { '' = the parent's workspace }
+    if WorkDir <> '' then
+      Box.Cfg.Options.SystemPrompt := Box.Cfg.Options.SystemPrompt + sLineBreak + sLineBreak +
+        'You are working in the git worktree ' + WorkDir + ' (branch ' + Worktree + '). ' +
+        'Relative paths and shell commands resolve there. Commit your work on that branch.';
     Job.FCfg := Box;
     FJobs.Add(Job);
-    LogInfo('subagent bg-spawn: handle=%s name=%s model=%s tools=%d',
-            [Job.FHandle, AgentName, Model, Job.FChildReg.Count]);
+    LogInfo('subagent bg-spawn: handle=%s name=%s model=%s tools=%d workspace=%s',
+            [Job.FHandle, AgentName, Model, Job.FChildReg.Count, WorkDir]);
     Job.Start;
 
     Result := Format('started background subagent "%s" -- handle=%s. ' +
@@ -782,6 +800,8 @@ begin
                      'it completes; you can keep working meanwhile, or call ' +
                      'spawn_status("%s") / spawn_wait("%s") explicitly.',
                      [AgentName, Job.FHandle, Job.FHandle, Job.FHandle]);
+    if WorkDir <> '' then
+      Result := Result + ' It works in worktree ' + WorkDir + ' (branch ' + Worktree + ').';
   finally
     FLock.Leave;
   end;
@@ -1186,7 +1206,8 @@ begin
   T.Schema      :=
     '{"type":"object","properties":{' +
     '"agent":{"type":"string","description":"Name of the subagent to spawn."},' +
-    '"prompt":{"type":"string","description":"The prompt to hand the subagent."}},' +
+    '"prompt":{"type":"string","description":"The prompt to hand the subagent."},' +
+    '"worktree":{"type":"string","description":"Optional git branch: run the subagent in a worktree for it (created if needed), so parallel jobs edit separate checkouts."}},' +
     '"required":["agent","prompt"]}';
   T.Handler     := nil;
   T.HandlerObj  := Result.HandleSpawnBackground;

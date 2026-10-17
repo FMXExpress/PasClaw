@@ -203,6 +203,15 @@ type
     MinIterations:      Integer;
   end;
 
+  (* Git worktrees (PasClaw.Tools.Worktree). Enabled registers the
+     worktree_* tools and lets spawn / spawn_background take a
+     `worktree` argument. Directory is where new worktrees go; '' means
+     beside the repository in <repo>-worktrees/. *)
+  TWorktreeConfig = record
+    Enabled:   Boolean;
+    Directory: string;
+  end;
+
   TSandboxPolicy = record
     RestrictToWorkspace:       Boolean;
     AllowReadOutsideWorkspace: Boolean;
@@ -961,6 +970,7 @@ type
        seconds. The TUI and CLI askers wait for a key; the gateway asker
        waits for POST /v1/permissions/<id>. *)
     PermissionsAskTimeoutSec: Integer;
+    Worktree:              TWorktreeConfig;
     (* On-by-default: scan tool output / recalled memory / stored
        skill descriptions for prompt-injection patterns and annotate
        hits with a warning banner (PasClaw.Promptware). A lowercase
@@ -1433,6 +1443,8 @@ begin
   BackgroundJobsMax      := 6;     { subagents + background shells, per coordinator }
   SetLength(Permissions, 0);       { no rules: the older gates alone, as before }
   PermissionsAskTimeoutSec := 300; { five minutes to answer an ask; then deny }
+  Worktree.Enabled   := True;      { worktree_* tools + spawn worktree:"<branch>" }
+  Worktree.Directory := '';        { beside the repo: <repo>-worktrees/ }
   CheckpointsKeepLast    := 32;    { keep last 32 atomic edit checkpoints. }
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
   OrientTaskAware        := False; { off by default -- whole-file MEMORY injection is the contract; opt in per-run with `pasclaw agent --orient` or "orient_task_aware":true. }
@@ -1806,6 +1818,17 @@ begin
     end;
     if PermissionsAskTimeoutSec <> 300 then
       Root.PutInt('permissions_ask_timeout_sec', PermissionsAskTimeoutSec);
+    if (not Worktree.Enabled) or (Worktree.Directory <> '') then
+    begin
+      Tmp := TJsonObject.Create;
+      try
+        Tmp.PutBool('enabled', Worktree.Enabled);
+        if Worktree.Directory <> '' then Tmp.PutStr('directory', Worktree.Directory);
+        Root.PutObject('worktree', Tmp);
+      finally
+        Tmp.Free;   { nil after PutObject took ownership }
+      end;
+    end;
     if (Maintenance.KeepSupersededDays <> 30) or (Maintenance.UnusedSkillDays <> 30)
        or Maintenance.Review or Maintenance.Backup then
     begin
@@ -2404,6 +2427,14 @@ begin
     end;
     PermissionsAskTimeoutSec := Integer(Root.GetInt('permissions_ask_timeout_sec', PermissionsAskTimeoutSec));
     if PermissionsAskTimeoutSec < 1 then PermissionsAskTimeoutSec := 1;
+    Obj := Root.ChildObject('worktree');
+    if Obj <> nil then
+    try
+      Worktree.Enabled   := Obj.GetBool('enabled', Worktree.Enabled);
+      Worktree.Directory := Trim(Obj.GetStr('directory', Worktree.Directory));
+    finally
+      Obj.Free;
+    end;
     Obj := Root.ChildObject('maintenance');
     if Obj <> nil then
     try

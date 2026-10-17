@@ -101,6 +101,10 @@ Three paths used to reach a shell or a tool around the gates above, and no longe
 
 When `restrict_to_workspace=true`, `Tool_Shell` invokes `RunOneShot` with `WorkingDir = workspace` so the child shell starts inside the boundary. Combined with the `cd` token ban and `..` traversal check, a sandboxed model has no relative-path escape — even if a future denylist gap let a command through, the shell still starts in the workspace, not wherever `pasclaw` was launched from.
 
+## Worktrees move the boundary
+
+A subagent spawned with `worktree: "<branch>"` runs with its sandbox workspace set to that worktree directory (per thread, bracketed around each tool dispatch; the parent's threads are untouched). Under `restrict_to_workspace` the child's boundary is therefore the worktree, not the parent checkout: it can edit its own branch and nothing else. Worktrees are created under `worktree.directory`, which the operator sets; by default they sit beside the repository, outside the parent's workspace, which is why the child needs its own boundary at all. `worktree_remove` with `force` discards uncommitted work, so it is a natural target for an `ask` rule in `permissions`.
+
 ## Known limitation: symlinks
 
 Path canonicalisation uses `ExpandFileName`, which resolves `..` but not symlinks. Picoclaw's equivalent (`os.OpenRoot` in Go 1.24+) enforces the boundary at the syscall layer; PasClaw runs on FPC and Delphi RTLs that have no equivalent.

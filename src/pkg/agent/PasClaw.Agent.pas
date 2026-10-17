@@ -373,6 +373,7 @@ uses
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
   PasClaw.Tools.MemoryFetch,
+  PasClaw.Tools.Worktree,
   PasClaw.Tools.OutputCache,
   PasClaw.Tools.SendMessage,
   PasClaw.Skills.Manage,
@@ -595,6 +596,7 @@ begin
     LogWebSearchSkipOnce;
   if FConfig.WebFetchEnabled then RegisterWebFetchTool(FRegistry);
   if FConfig.WebFetchEnabled then RegisterMemoryFetchTool(FRegistry);
+  if FConfig.Worktree.Enabled then RegisterWorktreeTools(FRegistry);
   { tool_output_get is only useful when truncation is on -- the
     Gateway/TPasClawAgent paths set Cfg.ToolOutputCap from
     FConfig.ToolOutputCap, so if we skip this branch the model
@@ -1094,6 +1096,7 @@ begin
       LogWebSearchSkipOnce;
     if FConfig.WebFetchEnabled then RegisterWebFetchTool(FRegistry);
     if FConfig.WebFetchEnabled then RegisterMemoryFetchTool(FRegistry);
+    if FConfig.Worktree.Enabled then RegisterWorktreeTools(FRegistry);
     { Same OR gate as EnsureRegistry above -- byte cap OR reversible
       condensation both produce handles the model needs to dereference.
       Codex P2 on PR #176 was specifically about ToolOutputCap; the
