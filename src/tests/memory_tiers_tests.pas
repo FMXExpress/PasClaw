@@ -79,6 +79,21 @@ begin
   AssertEqStr(R, 'abcd', 'single over-long line is cut at the budget');
   AssertEqInt(E, 6, 'elided counts the tail');
 
+  { One long line with no newline: the budget lands inside a 2-byte
+    character; the cut steps back so the kept part ends on a whole one. }
+  S := 'ab' + #$C3#$A9 + 'cd';          { a b é c d = 6 bytes; é is bytes 3-4 }
+  R := ClampToBudget(S, 3, E);
+  AssertEqStr(R, 'ab', 'cut inside a multibyte char steps back to the char boundary');
+  AssertEqInt(E, 4, 'elided counts the whole char and the tail');
+  R := ClampToBudget(S, 4, E);
+  AssertEqStr(R, 'ab' + #$C3#$A9, 'cut exactly after a multibyte char keeps it');
+  { A 4-byte character (U+1F600) straddling the budget. }
+  S := 'x' + #$F0#$9F#$98#$80 + 'y';
+  R := ClampToBudget(S, 3, E);
+  AssertEqStr(R, 'x', 'cut inside a 4-byte char steps back');
+  R := ClampToBudget(S, 5, E);
+  AssertEqStr(R, 'x' + #$F0#$9F#$98#$80, 'cut after a 4-byte char keeps it');
+
   { Multi-byte content before the cut survives intact when the cut is a newline. }
   S := 'caf' + #$C3#$A9 + ' au lait' + #10 + 'second line here';
   R := ClampToBudget(S, Length(S) - 3, E);
@@ -150,6 +165,18 @@ begin
     AssertEqStr(BackgroundModelFor(Cfg), 'small-1', 'fast_model is the fallback');
     Cfg.BackgroundModel := 'bg-1';
     AssertEqStr(BackgroundModelFor(Cfg), 'bg-1', 'background_model wins');
+
+    { Provider guard: the name belongs to the default provider. }
+    SetLength(Cfg.Providers, 2);
+    Cfg.Providers[0].Name := 'work';   Cfg.Providers[0].Kind := 'anthropic';
+    Cfg.Providers[1].Name := 'openai'; Cfg.Providers[1].Kind := 'openai';
+    Cfg.DefaultProvider := 'work';
+    AssertEqStr(BackgroundModelOn(Cfg, ''), 'bg-1', 'no active name = default provider');
+    AssertEqStr(BackgroundModelOn(Cfg, 'work'), 'bg-1', 'default entry name matches');
+    AssertEqStr(BackgroundModelOn(Cfg, 'WORK'), 'bg-1', 'case-insensitive');
+    AssertEqStr(BackgroundModelOn(Cfg, 'anthropic'), 'bg-1', 'the default entry''s kind (GetName) matches');
+    AssertEqStr(BackgroundModelOn(Cfg, 'openai'), '', 'another provider keeps its own model');
+    AssertEqStr(BackgroundModelOn(nil, 'work'), '', 'nil config -> empty');
   finally
     Cfg.Free;
   end;
@@ -167,6 +194,7 @@ begin
     AssertEqInt(A.MemoryCoreBudgetBytes, 16384, 'default core budget');
     AssertEqInt(A.Maintenance.KeepSupersededDays, 30, 'default keep_superseded_days');
     AssertEqInt(A.Backup.KeepDaily, 7, 'default keep_daily');
+    AssertTrue(A.Backup.IncludeSecrets, 'backups include secrets by default');
     { Defaults do not emit the keys. }
     J := A.ToJSON;
     AssertNotContains(J, 'memory_core_budget_bytes', 'default budget not emitted');
@@ -179,8 +207,10 @@ begin
     A.Maintenance.KeepSupersededDays := 7;
     A.Backup.Dir := '/mnt/backups';
     A.Backup.KeepMonthly := 12;
+    A.Backup.IncludeSecrets := False;
     J := A.ToJSON;
     B.FromJSON(J);
+    AssertTrue(not B.Backup.IncludeSecrets, 'include_secrets: false round-trips');
     AssertEqInt(B.MemoryCoreBudgetBytes, 0, 'explicit 0 budget round-trips');
     AssertEqStr(B.BackgroundModel, 'claude-haiku-4-5-20251001', 'background_model round-trips');
     AssertTrue(B.Maintenance.Review, 'maintenance.review round-trips');

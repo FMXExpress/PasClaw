@@ -390,7 +390,17 @@ begin
       Cut := i;
       Break;
     end;
-  if Cut <= 1 then Cut := Budget;
+  if Cut <= 1 then
+  begin
+    { No newline to cut at: cut at the budget, but never inside a UTF-8
+      sequence. A continuation byte is 10xxxxxx; step back until the byte
+      AFTER the cut is a lead byte or ASCII, so the kept part ends on a
+      whole character. }
+    Cut := Budget;
+    while (Cut > 0) and (Cut < Length(Body)) and
+          ((Ord(Body[Cut + 1]) and $C0) = $80) do
+      Dec(Cut);
+  end;
   Result := TrimRight(Copy(Body, 1, Cut));
   ElidedBytes := Length(Body) - Length(Result);
 end;

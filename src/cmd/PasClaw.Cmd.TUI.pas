@@ -227,6 +227,7 @@ begin
     end;
 
     TUIInst := TTUI.Create(Provider, Reg, Model);
+    TUIInst.ProviderName       := A.Provider;   { '' = default provider }
     TUIInst.PromptCacheEnabled := Cfg.PromptCache.Enabled;
     TUIInst.PromptCacheTTL     := Cfg.PromptCache.TTL;
     TUIInst.SessionId          := A.Session;

@@ -1,12 +1,16 @@
 (*
   PasClaw.Cmd.Backup -- `pasclaw backup` and `pasclaw restore`.
 
-    pasclaw backup [--to DIR] [--keep-daily N] [--keep-weekly N] [--keep-monthly N]
-        Zip the active workspace plus a redacted config.json and a
-        RESTORE.md into DIR (default <home>/backups, or backup.dir in
-        config.json), then rotate: keep the newest of each of the last
-        7 days / 4 weeks / 6 months that have one, delete the rest of
-        what this command wrote. Secrets never leave config.json.
+    pasclaw backup [--to DIR] [--redact] [--keep-daily N] [--keep-weekly N] [--keep-monthly N]
+        Zip the active workspace plus config.json and a RESTORE.md into
+        DIR (default <home>/backups, or backup.dir in config.json), then
+        rotate: keep the newest of each of the last 7 days / 4 weeks /
+        6 months that have one, delete the rest of what this command
+        wrote. config.json goes in as is by default -- a restore brings
+        every connected API back -- so the archive is a credential;
+        --redact (or backup.include_secrets: false) writes
+        config.redacted.json instead for an archive that will sit
+        somewhere shared.
 
     pasclaw backup list [--to DIR]
         What is there and when it was taken.
@@ -14,9 +18,10 @@
     pasclaw restore <zip> [--into HOME] [--force]
         Put a backup's workspace back under HOME (default PASCLAW_HOME).
         Refuses when that workspace already exists unless --force, which
-        overlays it. Never writes config.json: it drops the redacted copy
-        and the notes beside the workspace and prints the secrets you
-        have to re-enter.
+        overlays it. An archive carrying config.json puts it in place
+        when HOME has none (with --force the old one is kept as
+        config.json.bak); a redacted archive never writes config.json
+        and prints the secrets you have to re-enter.
 
   The mechanics are PasClaw.Backup (tested); this unit is argument
   parsing and printing.
@@ -57,15 +62,21 @@ end;
 
 procedure BackupHelp;
 begin
-  PrintLn('Usage: pasclaw backup [list] [--to DIR] [--keep-daily N] [--keep-weekly N] [--keep-monthly N]');
+  PrintLn('Usage: pasclaw backup [list] [--to DIR] [--redact] [--keep-daily N] [--keep-weekly N] [--keep-monthly N]');
   PrintLn;
-  PrintLn('  Zips the active workspace, a redacted config.json and a RESTORE.md into');
-  PrintLn('  DIR (default: backup.dir in config.json, else $PASCLAW_HOME/backups), then');
-  PrintLn('  rotates: the newest backup of each of the last N days / weeks / months that');
-  PrintLn('  have one is kept, the rest of what this command wrote is deleted.');
-  PrintLn('  Defaults 7 / 4 / 6. Secrets are never written to the archive.');
+  PrintLn('  Zips the active workspace, config.json and a RESTORE.md into DIR (default:');
+  PrintLn('  backup.dir in config.json, else $PASCLAW_HOME/backups), then rotates: the');
+  PrintLn('  newest backup of each of the last N days / weeks / months that have one is');
+  PrintLn('  kept, the rest of what this command wrote is deleted. Defaults 7 / 4 / 6.');
   PrintLn;
-  PrintLn('  list        show the archives in DIR, newest first');
+  PrintLn('  config.json goes in as is, so a restore brings every connected API back.');
+  PrintLn('  That makes the archive a credential: store it like one.');
+  PrintLn;
+  PrintLn('  --redact       write config.redacted.json (secrets masked) instead, for an');
+  PrintLn('                 archive that will sit somewhere shared; also');
+  PrintLn('                 backup.include_secrets: false in config.json');
+  PrintLn('  --with-secrets the default, spelled out (overrides include_secrets: false)');
+  PrintLn('  list           show the archives in DIR, newest first');
   PrintLn;
   PrintLn('Restore with: pasclaw restore <zip> [--into HOME] [--force]');
 end;
@@ -76,9 +87,11 @@ begin
   PrintLn;
   PrintLn('  Unpacks the backup''s workspace under HOME (default $PASCLAW_HOME).');
   PrintLn('  Refuses when that workspace already exists; --force overlays it (files');
-  PrintLn('  not in the archive are kept). config.json is never written: the redacted');
-  PrintLn('  copy and RESTORE.md are placed beside the workspace, and the secrets');
-  PrintLn('  you have to re-enter are listed.');
+  PrintLn('  not in the archive are kept). An archive that carries config.json puts it');
+  PrintLn('  in place when HOME has none; with --force the existing one is kept as');
+  PrintLn('  config.json.bak and replaced. A redacted archive never writes config.json:');
+  PrintLn('  the redacted copy lands beside the workspace and the secrets to re-enter');
+  PrintLn('  are listed.');
 end;
 
 function IntArg(const Argv: array of string; var i: Integer; Default: Integer): Integer;
@@ -131,7 +144,7 @@ var
   Cfg: TConfig;
   i, KD, KW, KM: Integer;
   Dir, Err: string;
-  ListOnly: Boolean;
+  ListOnly, WithSecrets: Boolean;
   Res: TBackupResult;
 begin
   for i := 0 to High(Argv) do
@@ -147,11 +160,14 @@ begin
     KW := Cfg.Backup.KeepWeekly;
     KM := Cfg.Backup.KeepMonthly;
     Dir := ResolveBackupDir(GetHome, Cfg.Backup.Dir);
+    WithSecrets := Cfg.Backup.IncludeSecrets;
     ListOnly := False;
     i := 0;
     while i <= High(Argv) do
     begin
       if Argv[i] = 'list' then ListOnly := True
+      else if Argv[i] = '--redact' then WithSecrets := False
+      else if Argv[i] = '--with-secrets' then WithSecrets := True
       else if (Argv[i] = '--to') and (i < High(Argv)) then begin Inc(i); Dir := Argv[i]; end
       else if Argv[i] = '--keep-daily' then KD := IntArg(Argv, i, KD)
       else if Argv[i] = '--keep-weekly' then KW := IntArg(Argv, i, KW)
@@ -166,13 +182,16 @@ begin
 
     if ListOnly then Exit(DoList(Dir));
 
-    if not RunBackup(GetHome, ActiveWorkspaceName, Dir, FormatBuildInfo, KD, KW, KM, Res, Err) then
+    if not RunBackup(GetHome, ActiveWorkspaceName, Dir, FormatBuildInfo, KD, KW, KM,
+                     WithSecrets, Res, Err) then
     begin
       PrintErr(Ansi.Red + '✗ ' + Ansi.Reset + 'backup failed: ' + Err);
       Exit(1);
     end;
     PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + Format('backed up %d files -> %s', [Res.Files, Res.ZipPath]));
-    if Length(Res.Redacted) > 0 then
+    if Res.WithSecrets then
+      PrintLn('  config.json is inside with its API keys and tokens: store this archive like a credential (--redact to mask them)')
+    else if Length(Res.Redacted) > 0 then
     begin
       PrintLn('  secrets left out (re-enter after a restore):');
       for i := 0 to High(Res.Redacted) do PrintLn('    - ' + Res.Redacted[i]);
@@ -223,13 +242,25 @@ begin
   end;
   PrintLn(Ansi.Green + '✓ ' + Ansi.Reset +
           Format('restored %d files into %s', [Res.Files, JoinPath(Home, Res.Workspace)]));
-  PrintLn('  config.json was not written. ' + RedactedConfigName + ' and RESTORE-' +
-          Res.Workspace + '.md are beside the workspace.');
-  if Length(Res.Redacted) > 0 then
+  if Res.ConfigWritten then
   begin
-    PrintLn('  re-enter these secrets (pasclaw onboard, or edit config.json):');
-    for i := 0 to High(Res.Redacted) do PrintLn('    - ' + Res.Redacted[i]);
-  end;
+    if Res.ConfigBackedUpTo <> '' then
+      PrintLn('  config.json restored from the archive; the previous one is ' + Res.ConfigBackedUpTo)
+    else
+      PrintLn('  config.json restored from the archive.');
+  end
+  else if FileExists(JoinPath(Home, RedactedConfigName)) then
+  begin
+    PrintLn('  config.json was not written. ' + RedactedConfigName + ' and RESTORE-' +
+            Res.Workspace + '.md are beside the workspace.');
+    if Length(Res.Redacted) > 0 then
+    begin
+      PrintLn('  re-enter these secrets (pasclaw onboard, or edit config.json):');
+      for i := 0 to High(Res.Redacted) do PrintLn('    - ' + Res.Redacted[i]);
+    end;
+  end
+  else
+    PrintLn('  config.json was left as it was (the archive carried one; pass --force to replace it, keeping a .bak).');
   PrintLn('  then: pasclaw doctor');
   Result := 0;
 end;

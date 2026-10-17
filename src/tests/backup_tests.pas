@@ -9,7 +9,14 @@ program backup_tests;
       newest per day / ISO week / month; same-day older copies go; a
       zero tier keeps nothing for that tier; foreign names are ignored.
     - MaskConfigSecretsJSON masks api_key / env / gateway.token /
-      web_search.api_key and nothing else; ListRedactedSecrets names them.
+      web_search.api_key / channels[].target / crons[].channel_target and
+      nothing else; ListRedactedSecrets names them.
+    - Default (with secrets): the archive carries the real config.json and
+      no redacted copy, RESTORE.md calls it a credential, restore writes
+      config.json into an empty home, leaves an existing one alone without
+      --force, and with --force replaces it keeping config.json.bak.
+    - A destination inside the workspace is excluded: the second backup
+      does not contain the first.
     - RunBackup against a temp home: the zip exists and is named right,
       RESTORE.md and config.redacted.json are inside, the WebView2 profile
       and a -journal file are NOT, the real API key is nowhere in the
@@ -130,6 +137,9 @@ const
     '"mcp_servers":[{"name":"gh","env":"GITHUB_TOKEN=ghp_REAL"}],' +
     '"gateway":{"token":"gw-REAL","port":18790},' +
     '"web_search":{"provider":"brave","api_key":"brave-REAL"},' +
+    '"channels":[{"name":"ops","kind":"slack","target":"https://hooks.slack.com/services/T/B/REALHOOK"}],' +
+    '"crons":[{"id":"nightly","spec":"0 3 * * *","skill":"@maintain","channel_kind":"discord",' +
+    '"channel_target":"https://discord.com/api/webhooks/1/REALDISCORD","enabled":true}],' +
     '"memory_facts_budget":1234}';
 
 procedure TestMask;
@@ -147,9 +157,15 @@ begin
   AssertContains(C, '"memory_facts_budget":1234', 'unrelated field intact');
   AssertContains(C, '"default_model":"m"', 'model intact');
   AssertContains(C, '"provider":"brave"', 'web_search provider intact');
+  AssertContains(C, '"kind":"slack"', 'channel kind intact');
+  AssertContains(C, '"skill":"@maintain"', 'cron skill intact');
+  AssertNotContains(M, 'hooks.slack.com', 'channel webhook target masked');
+  AssertNotContains(M, 'discord.com/api/webhooks', 'cron channel target masked');
   AssertEqStr(MaskConfigSecretsJSON('not json'), '', 'unparseable -> empty');
   R := ListRedactedSecrets(M);
-  AssertEqInt(Length(R), 4, 'four secrets were masked');
+  AssertEqInt(Length(R), 6, 'six secrets were masked');
+  AssertTrue(InList(R, 'channels[ops].target'), 'channel target listed');
+  AssertTrue(InList(R, 'crons[nightly].channel_target'), 'cron channel target listed');
   AssertTrue(InList(R, 'providers[anthropic].api_key'), 'anthropic key listed');
   AssertTrue(not InList(R, 'providers[ollama].api_key'), 'empty ollama key not listed');
   AssertTrue(InList(R, 'mcp_servers[gh].env'), 'mcp env listed');
@@ -190,12 +206,13 @@ begin
     WriteF(JoinPath(Dest, BackupFileName('workspace', IncDay(D, -i))), 'stale');
   WriteF(JoinPath(Dest, 'holiday-photos.zip'), 'mine');
 
-  AssertTrue(RunBackup(Home, 'workspace', Dest, 'pasclaw-test 0.0.0', 7, 4, 6, Res, Err),
-             'backup succeeds: ' + Err);
+  AssertTrue(RunBackup(Home, 'workspace', Dest, 'pasclaw-test 0.0.0', 7, 4, 6, False, Res, Err),
+             'redacted backup succeeds: ' + Err);
+  AssertTrue(not Res.WithSecrets, 'redacted archive reports no secrets');
   AssertTrue(FileExists(Res.ZipPath), 'zip written');
   AssertTrue(Pos('pasclaw-workspace-', ExtractFileName(Res.ZipPath)) = 1, 'zip named by this unit');
   AssertEqInt(Res.Files, 4, 'four workspace files packed (journal and webview2 excluded)');
-  AssertEqInt(Length(Res.Redacted), 4, 'four secrets reported redacted');
+  AssertEqInt(Length(Res.Redacted), 6, 'six secrets reported redacted');
   AssertTrue(FileExists(JoinPath(Dest, 'holiday-photos.zip')), 'foreign zip survived rotation');
   { Rotation is borg-shaped: "keep daily 7" keeps the newest archive of
     each of the last 7 days THAT HAVE ONE, so with 10 consecutive stale
@@ -217,6 +234,7 @@ begin
   AssertTrue(ExtractZipToDir(Res.ZipPath, Unz, Err), 'archive extracts: ' + Err);
   AssertTrue(FileExists(JoinPath(Unz, 'RESTORE.md')), 'RESTORE.md inside');
   AssertTrue(FileExists(JoinPath(Unz, 'config.redacted.json')), 'redacted config inside');
+  AssertTrue(not FileExists(JoinPath(Unz, 'config.json')), 'no real config in a redacted archive');
   AssertTrue(FileExists(JoinPath(Unz, 'workspace/memory/MEMORY.md')), 'workspace file inside under its dir name');
   AssertTrue(not FileExists(JoinPath(Unz, 'workspace/memory/facts.db-journal')), 'journal excluded');
   AssertTrue(not DirectoryExists(JoinPath(Unz, 'workspace/browser/webview2')), 'webview2 profile excluded');
@@ -239,7 +257,8 @@ begin
   AssertTrue(FileExists(JoinPath(Home2, 'RESTORE-workspace.md')), 'notes left beside the workspace');
   AssertTrue(FileExists(JoinPath(Home2, 'config.redacted.json')), 'redacted config left beside the workspace');
   AssertTrue(not FileExists(JoinPath(Home2, 'config.json')), 'config.json is never written by restore');
-  AssertEqInt(Length(RR.Redacted), 4, 'restore reports the secrets to re-enter');
+  AssertEqInt(Length(RR.Redacted), 6, 'restore reports the secrets to re-enter');
+  AssertTrue(not RR.ConfigWritten, 'redacted archive writes no config');
   AssertTrue(not DirectoryExists(JoinPath(Home2, '.restore-' + IntToStr(GetProcessID))), 'temp dir cleaned');
 
   { Second restore refuses, then overlays with Force. }
@@ -250,14 +269,79 @@ begin
   AssertTrue(FileExists(JoinPath(Home2, 'workspace/memory/extra.md')), 'overlay keeps files not in the archive');
 
   { A missing workspace is an error, not an empty archive. }
-  AssertTrue(not RunBackup(Home, 'nope', Dest, 'v', 7, 4, 6, Res, Err), 'missing workspace fails');
+  AssertTrue(not RunBackup(Home, 'nope', Dest, 'v', 7, 4, 6, False, Res, Err), 'missing workspace fails');
   { Archive names carry a one-second stamp; step past the first backup's. }
   Sleep(1100);
   { A corrupt config.json refuses rather than shipping it unredacted. }
   AssignFile(F, JoinPath(Home, 'config.json')); Rewrite(F); Write(F, '{not json'); CloseFile(F);
-  AssertTrue(not RunBackup(Home, 'workspace', Dest, 'v', 7, 4, 6, Res, Err), 'unparseable config refuses');
+  AssertTrue(not RunBackup(Home, 'workspace', Dest, 'v', 7, 4, 6, False, Res, Err), 'unparseable config refuses');
   AssertContains(Err, 'redact', 'refusal explains why');
-  WriteLn('  ok: backup packs / excludes / redacts / rotates; restore round-trips, refuses, overlays');
+  WriteLn('  ok: redacted backup packs / excludes / redacts / rotates; restore round-trips, refuses, overlays');
+end;
+
+procedure TestWithSecretsAndNestedDest;
+var
+  Home, Home3, Ws, Dest, Unz, Err, S: string;
+  Res: TBackupResult;
+  RR: TRestoreResult;
+  SR: TSearchRec;
+  Zips: Integer;
+begin
+  Home := JoinPath(GTmp, 'home-s');
+  Ws := JoinPath(Home, 'workspace');
+  WriteF(JoinPath(Home, 'config.json'), CfgJSON);
+  WriteF(JoinPath(Ws, 'memory/MEMORY.md'), 'secret-mode body');
+  Dest := JoinPath(GTmp, 'backups-s');
+
+  { Default mode: the real config.json rides along. }
+  AssertTrue(RunBackup(Home, 'workspace', Dest, 'v', 7, 4, 6, True, Res, Err), 'with-secrets backup: ' + Err);
+  AssertTrue(Res.WithSecrets, 'reports with secrets');
+  AssertEqInt(Length(Res.Redacted), 0, 'nothing redacted');
+  Unz := JoinPath(GTmp, 'inspect-s');
+  AssertTrue(ExtractZipToDir(Res.ZipPath, Unz, Err), 'extract: ' + Err);
+  AssertTrue(FileExists(JoinPath(Unz, 'config.json')), 'real config inside');
+  AssertTrue(not FileExists(JoinPath(Unz, 'config.redacted.json')), 'no redacted copy alongside');
+  AssertContains(ReadFileText(JoinPath(Unz, 'config.json')), 'sk-ant-REALKEY-123', 'real key present by choice');
+  S := ReadFileText(JoinPath(Unz, 'RESTORE.md'));
+  AssertContains(S, 'credential', 'notes call the archive a credential');
+  AssertContains(S, 'Nothing to re-enter', 'notes say nothing to re-enter');
+
+  { Restore into an empty home writes config.json. }
+  Home3 := JoinPath(GTmp, 'home3');
+  AssertTrue(RunRestore(Res.ZipPath, Home3, False, RR, Err), 'restore: ' + Err);
+  AssertTrue(RR.ConfigWritten, 'config written into an empty home');
+  AssertEqStr(RR.ConfigBackedUpTo, '', 'nothing to back up on first restore');
+  AssertContains(ReadFileText(JoinPath(Home3, 'config.json')), 'sk-ant-REALKEY-123', 'restored config has the key');
+  { An existing config.json is left alone without --force ... }
+  WriteF(JoinPath(Home3, 'config.json'), '{"default_provider":"local-edit"}');
+  WriteF(JoinPath(Home3, 'workspace/memory/extra.md'), 'kept');
+  AssertTrue(not RunRestore(Res.ZipPath, Home3, False, RR, Err), 'workspace exists: refuses without --force');
+  AssertContains(ReadFileText(JoinPath(Home3, 'config.json')), 'local-edit', 'existing config untouched by a refused restore');
+  { ... and with --force it is replaced, the old one kept as .bak. }
+  AssertTrue(RunRestore(Res.ZipPath, Home3, True, RR, Err), 'forced restore: ' + Err);
+  AssertTrue(RR.ConfigWritten, 'forced restore writes config');
+  AssertTrue(FileExists(JoinPath(Home3, 'config.json.bak')), 'previous config kept as .bak');
+  AssertContains(ReadFileText(JoinPath(Home3, 'config.json.bak')), 'local-edit', '.bak is the previous config');
+  AssertContains(ReadFileText(JoinPath(Home3, 'config.json')), 'sk-ant-REALKEY-123', 'config replaced from the archive');
+
+  { Destination inside the workspace: the second backup must not swallow
+    the first. }
+  Sleep(1100);
+  Dest := JoinPath(Ws, 'backups');
+  AssertTrue(RunBackup(Home, 'workspace', Dest, 'v', 7, 4, 6, True, Res, Err), 'nested-dest backup 1: ' + Err);
+  Sleep(1100);
+  AssertTrue(RunBackup(Home, 'workspace', Dest, 'v', 7, 4, 6, True, Res, Err), 'nested-dest backup 2: ' + Err);
+  AssertEqInt(Res.Files, 1, 'second backup packed only the workspace file, not the earlier zip');
+  Unz := JoinPath(GTmp, 'inspect-n');
+  AssertTrue(ExtractZipToDir(Res.ZipPath, Unz, Err), 'extract nested: ' + Err);
+  Zips := 0;
+  if FindFirst(JoinPath(Unz, 'workspace/backups/*.zip'), faAnyFile, SR) = 0 then
+  begin
+    repeat Inc(Zips); until FindNext(SR) <> 0;
+    FindClose(SR);
+  end;
+  AssertEqInt(Zips, 0, 'no earlier archive inside the archive');
+  WriteLn('  ok: with-secrets archive round-trips config.json; nested destination excluded');
 end;
 
 begin
@@ -267,5 +351,6 @@ begin
   TestRotation;
   TestMask;
   TestBackupAndRestore;
+  TestWithSecretsAndNestedDest;
   WriteLn('PASS');
 end.

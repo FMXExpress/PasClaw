@@ -52,13 +52,15 @@ const
   BackupExt          = '.zip';
   RestoreNotesName   = 'RESTORE.md';
   RedactedConfigName = 'config.redacted.json';
+  FullConfigName     = 'config.json';
 
 type
   TBackupResult = record
     ZipPath:  string;
     Files:    Integer;          { workspace files packed }
     Pruned:   TArray<string>;   { archives deleted by rotation }
-    Redacted: TArray<string>;   { human labels of secrets that were masked }
+    Redacted: TArray<string>;   { human labels of secrets that were masked; [] when WithSecrets }
+    WithSecrets: Boolean;       { the archive holds the real config.json }
   end;
 
   TRestoreResult = record
@@ -66,6 +68,8 @@ type
     Files:     Integer;         { files written }
     Notes:     string;          { RESTORE.md from the archive, '' if none }
     Redacted:  TArray<string>;  { secrets the operator must re-enter }
+    ConfigWritten: Boolean;     { the archive carried a full config.json and it was put in place }
+    ConfigBackedUpTo: string;   { the previous config.json, when --force replaced one }
   end;
 
 { pasclaw-<workspace>-YYYYMMDD-HHMMSS.zip. Pure. }
@@ -83,22 +87,31 @@ function SelectBackupsToPrune(const Names: array of string;
 
 { The notes written into every archive. Pure. }
 function BuildRestoreNotes(const Version, Workspace, Home: string; When: TDateTime;
-                           FileCount: Integer; const Redacted: array of string): string;
+                           FileCount: Integer; const Redacted: array of string;
+                           WithSecrets: Boolean): string;
 
 { Which secrets a masked config JSON is missing, as human labels
   ("providers[anthropic].api_key", "gateway.token"). Pure. }
 function ListRedactedSecrets(const MaskedJSON: string): TArray<string>;
 
 { Write one archive of <Home>/<Workspace> into DestDir and apply rotation.
-  Version is stamped into RESTORE.md. False with Err on any failure; a
+  Version is stamped into RESTORE.md. WithSecrets puts the real config.json
+  in the archive instead of config.redacted.json -- a restore then brings
+  every connected API back, and the archive must be stored like a
+  credential. A DestDir inside the workspace is excluded from the walk, so
+  backups never contain earlier backups. False with Err on any failure; a
   failed write never prunes. }
 function RunBackup(const Home, Workspace, DestDir, Version: string;
                    KeepDaily, KeepWeekly, KeepMonthly: Integer;
+                   WithSecrets: Boolean;
                    out Res: TBackupResult; out Err: string): Boolean;
 
 { Put an archive back under Home. Refuses when the workspace directory
   already exists unless Force, in which case the archive's files overlay
-  it (files not in the archive are left alone). Never writes config.json.
+  it (files not in the archive are left alone). An archive made with
+  WithSecrets carries config.json; it is written to Home when none exists,
+  and with Force replaces the existing one after copying it to
+  config.json.bak. A redacted-only archive never writes config.json.
   False with Err on failure. }
 function RunRestore(const ZipPath, Home: string; Force: Boolean;
                     out Res: TRestoreResult; out Err: string): Boolean;
@@ -265,7 +278,8 @@ end;
 { ------------------------------------------------------------- notes }
 
 function BuildRestoreNotes(const Version, Workspace, Home: string; When: TDateTime;
-                           FileCount: Integer; const Redacted: array of string): string;
+                           FileCount: Integer; const Redacted: array of string;
+                           WithSecrets: Boolean): string;
 var
   i: Integer;
   L: TStringList;
@@ -284,9 +298,17 @@ begin
     L.Add('- `' + Workspace + '/` -- the workspace: memory (MEMORY.md, USER.md, SOUL.md,');
     L.Add('  daily notes, facts.db), sessions, skills, knowledge base, checkpoints,');
     L.Add('  AGENTS.md, PLAN.md. Everything the agent knows.');
-    L.Add('- `' + RedactedConfigName + '` -- config.json with secrets replaced by `' +
-          MaskedSecretPlaceholder + '`.');
-    L.Add('  Providers, models, channels, sandbox, memory settings are all intact.');
+    if WithSecrets then
+    begin
+      L.Add('- `' + FullConfigName + '` -- the real config.json, **API keys and tokens included**.');
+      L.Add('  This archive is a credential. Store it like one.');
+    end
+    else
+    begin
+      L.Add('- `' + RedactedConfigName + '` -- config.json with secrets replaced by `' +
+            MaskedSecretPlaceholder + '`.');
+      L.Add('  Providers, models, channels, sandbox, memory settings are all intact.');
+    end;
     L.Add('- `' + RestoreNotesName + '` -- this file.');
     L.Add('');
     L.Add('Not included: the WebView2 browser profile, SQLite journals, `.git`.');
@@ -301,15 +323,25 @@ begin
     L.Add('');
     L.Add('That unpacks `' + Workspace + '/` under the current `PASCLAW_HOME`');
     L.Add('(`~/.pasclaw` by default) and refuses if that workspace already exists;');
-    L.Add('add `--force` to overlay an existing one. It never writes `config.json`:');
-    L.Add('copy `' + RedactedConfigName + '` over it by hand, or run `pasclaw onboard`,');
-    L.Add('then re-enter these secrets, which were deliberately not backed up:');
+    L.Add('add `--force` to overlay an existing one.');
     L.Add('');
-    if Length(Redacted) = 0 then
-      L.Add('- (none were set)')
+    if WithSecrets then
+    begin
+      L.Add('`config.json` is written too when none exists there; with `--force` the');
+      L.Add('existing one is kept as `config.json.bak` and replaced. Nothing to re-enter.');
+    end
     else
-      for i := 0 to High(Redacted) do
-        L.Add('- ' + Redacted[i]);
+    begin
+      L.Add('It never writes `config.json`: copy `' + RedactedConfigName + '` over it by');
+      L.Add('hand, or run `pasclaw onboard`, then re-enter these secrets, which were');
+      L.Add('deliberately not backed up (`pasclaw backup --with-secrets` includes them):');
+      L.Add('');
+      if Length(Redacted) = 0 then
+        L.Add('- (none were set)')
+      else
+        for i := 0 to High(Redacted) do
+          L.Add('- ' + Redacted[i]);
+    end;
     L.Add('');
     L.Add('Then `pasclaw doctor` to confirm the workspace is seen, and');
     L.Add('`pasclaw memory status` if the hybrid search runtime needs provisioning');
@@ -399,6 +431,40 @@ begin
     finally
       Item.Free;
     end;
+    Arr := Root.ChildArray('channels');
+    if Arr <> nil then
+    try
+      for i := 0 to Arr.Count - 1 do
+      begin
+        Item := Arr.ItemObject(i);
+        if Item = nil then Continue;
+        try
+          if IsMask(Item.GetStr('target', '')) then
+            Add('channels[' + Item.GetStr('name', IntToStr(i)) + '].target');
+        finally
+          Item.Free;
+        end;
+      end;
+    finally
+      Arr.Free;
+    end;
+    Arr := Root.ChildArray('crons');
+    if Arr <> nil then
+    try
+      for i := 0 to Arr.Count - 1 do
+      begin
+        Item := Arr.ItemObject(i);
+        if Item = nil then Continue;
+        try
+          if IsMask(Item.GetStr('channel_target', '')) then
+            Add('crons[' + Item.GetStr('id', IntToStr(i)) + '].channel_target');
+        finally
+          Item.Free;
+        end;
+      end;
+    finally
+      Arr.Free;
+    end;
   finally
     Root.Free;
   end;
@@ -421,11 +487,24 @@ begin
   Result := False;
 end;
 
-procedure Walk(const Root, Rel: string; Files: TStringList);
-{ Forward-slash relative paths, the shape both zip libraries store. }
+function SamePath(const A, B: string): Boolean;
+begin
+  {$IFDEF MSWINDOWS}
+  Result := SameText(ExcludeTrailingPathDelimiter(A), ExcludeTrailingPathDelimiter(B));
+  {$ELSE}
+  Result := ExcludeTrailingPathDelimiter(A) = ExcludeTrailingPathDelimiter(B);
+  {$ENDIF}
+end;
+
+procedure Walk(const Root, Rel: string; Files: TStringList;
+               const ExcludeAbsDir: string = '');
+{ Forward-slash relative paths, the shape both zip libraries store.
+  ExcludeAbsDir (absolute, or '') names one directory to skip wherever it
+  sits in the tree -- the backup destination, so a backup directory inside
+  the workspace never ends up inside the next backup. }
 var
   SR: TSearchRec;
-  Dir, Entry: string;
+  Dir, Entry, Child: string;
 begin
   Dir := Root;
   if Rel <> '' then Dir := Dir + PathDelim + StringReplace(Rel, '/', PathDelim, [rfReplaceAll]);
@@ -436,7 +515,12 @@ begin
       if Excluded(SR.Name) then Continue;
       if Rel = '' then Entry := SR.Name else Entry := Rel + '/' + SR.Name;
       if (SR.Attr and faDirectory) <> 0 then
-        Walk(Root, Entry, Files)
+      begin
+        Child := Dir + PathDelim + SR.Name;
+        if (ExcludeAbsDir <> '') and SamePath(ExpandFileName(Child), ExcludeAbsDir) then
+          Continue;
+        Walk(Root, Entry, Files, ExcludeAbsDir);
+      end
       else
         Files.Add(Entry);
     until FindNext(SR) <> 0;
@@ -499,7 +583,7 @@ end;
 
 function PackArchive(const WsDir, Workspace, ZipPath: string;
                      const Files: TStringList;
-                     const NotesPath, RedactedPath: string;
+                     const NotesPath, ConfigPath, ConfigEntryName: string;
                      out Err: string): Boolean;
 {$IFDEF FPC}
 var
@@ -516,8 +600,8 @@ begin
           WsDir + PathDelim + StringReplace(Files[i], '/', PathDelim, [rfReplaceAll]),
           Workspace + '/' + Files[i]);
       Z.Entries.AddFileEntry(NotesPath, RestoreNotesName);
-      if RedactedPath <> '' then
-        Z.Entries.AddFileEntry(RedactedPath, RedactedConfigName);
+      if ConfigPath <> '' then
+        Z.Entries.AddFileEntry(ConfigPath, ConfigEntryName);
       Z.FileName := ZipPath;
       Z.ZipAllFiles;
       Result := True;
@@ -543,8 +627,8 @@ begin
         Z.Add(WsDir + PathDelim + StringReplace(Files[i], '/', PathDelim, [rfReplaceAll]),
               Workspace + '/' + Files[i]);
       Z.Add(NotesPath, RestoreNotesName);
-      if RedactedPath <> '' then
-        Z.Add(RedactedPath, RedactedConfigName);
+      if ConfigPath <> '' then
+        Z.Add(ConfigPath, ConfigEntryName);
       Z.Close;
       Result := True;
     except
@@ -558,9 +642,10 @@ end;
 
 function RunBackup(const Home, Workspace, DestDir, Version: string;
                    KeepDaily, KeepWeekly, KeepMonthly: Integer;
+                   WithSecrets: Boolean;
                    out Res: TBackupResult; out Err: string): Boolean;
 var
-  WsDir, Stage, NotesPath, RedactedPath, ConfigPath, Masked, ZipPath: string;
+  WsDir, Stage, NotesPath, RedactedPath, ConfigPath, Masked, ZipPath, DestAbs: string;
   Files, Existing: TStringList;
   SR: TSearchRec;
   When: TDateTime;
@@ -591,11 +676,13 @@ begin
     Exit;
   end;
 
-  { The redacted config, when there is one. A home with no config.json
-    (a fresh install backed up before onboarding) is still backed up. }
-  ConfigPath := IncludeTrailingPathDelimiter(Home) + 'config.json';
+  { The config, when there is one. A home with no config.json (a fresh
+    install backed up before onboarding) is still backed up. Redacted by
+    default; the real file when WithSecrets. }
+  Res.WithSecrets := WithSecrets;
+  ConfigPath := IncludeTrailingPathDelimiter(Home) + FullConfigName;
   Masked := '';
-  if FileExists(ConfigPath) then
+  if FileExists(ConfigPath) and not WithSecrets then
   begin
     Masked := MaskConfigSecretsJSON(ReadTextFile(ConfigPath));
     if Masked = '' then
@@ -603,8 +690,9 @@ begin
       Err := 'config.json does not parse; refusing to back up a config that cannot be redacted';
       Exit;
     end;
+    Res.Redacted := ListRedactedSecrets(Masked);
   end;
-  Res.Redacted := ListRedactedSecrets(Masked);
+  DestAbs := ExpandFileName(ExcludeTrailingPathDelimiter(DestDir));
 
   Stage := IncludeTrailingPathDelimiter(DestDir) + '.stage-' + IntToStr(GetProcessID);
   Files := TStringList.Create;
@@ -616,18 +704,24 @@ begin
       Exit;
     end;
     try
-      Walk(WsDir, '', Files);
+      Walk(WsDir, '', Files, DestAbs);
       Res.Files := Files.Count;
       NotesPath := Stage + PathDelim + RestoreNotesName;
       WriteTextFile(NotesPath,
-        BuildRestoreNotes(Version, Workspace, Home, When, Files.Count, Res.Redacted));
+        BuildRestoreNotes(Version, Workspace, Home, When, Files.Count, Res.Redacted, WithSecrets));
       RedactedPath := '';
-      if Masked <> '' then
+      if WithSecrets and FileExists(ConfigPath) then
+        Result := PackArchive(WsDir, Workspace, ZipPath, Files, NotesPath, ConfigPath, FullConfigName, Err)
+      else
       begin
-        RedactedPath := Stage + PathDelim + RedactedConfigName;
-        WriteTextFile(RedactedPath, Masked);
+        if Masked <> '' then
+        begin
+          RedactedPath := Stage + PathDelim + RedactedConfigName;
+          WriteTextFile(RedactedPath, Masked);
+        end;
+        Result := PackArchive(WsDir, Workspace, ZipPath, Files, NotesPath, RedactedPath, RedactedConfigName, Err);
       end;
-      if not PackArchive(WsDir, Workspace, ZipPath, Files, NotesPath, RedactedPath, Err) then
+      if not Result then
       begin
         SysUtils.DeleteFile(ZipPath);
         Exit;
@@ -749,6 +843,30 @@ begin
     if FileExists(Tmp + PathDelim + RedactedConfigName) then
       CopyFileRaw(Tmp + PathDelim + RedactedConfigName,
                   IncludeTrailingPathDelimiter(Home) + RedactedConfigName);
+    { A --with-secrets archive carries the real config.json: put it in
+      place when there is none; with Force, keep the old one as .bak and
+      replace it. Never silently overwrite. }
+    if FileExists(Tmp + PathDelim + FullConfigName) then
+    begin
+      Dst := IncludeTrailingPathDelimiter(Home) + FullConfigName;
+      if FileExists(Dst) then
+      begin
+        if Force then
+        begin
+          Res.ConfigBackedUpTo := Dst + '.bak';
+          CopyFileRaw(Dst, Res.ConfigBackedUpTo);
+          CopyFileRaw(Tmp + PathDelim + FullConfigName, Dst);
+          Res.ConfigWritten := True;
+        end;
+        { Not Force: the existing config wins; the archive's copy is
+          reachable from the zip itself. }
+      end
+      else
+      begin
+        CopyFileRaw(Tmp + PathDelim + FullConfigName, Dst);
+        Res.ConfigWritten := True;
+      end;
+    end;
     Result := True;
   finally
     RemoveTreeQuiet(Tmp);

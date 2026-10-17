@@ -212,7 +212,7 @@ There is no escape sequence for a literal `${UPPER}` string in a config value. W
 | `orient_task_aware` | `false` | Lexical task-vs-section scoring for `MEMORY.md` injection. Off on every profile; enable per-run with `pasclaw agent --orient` (`--no-orient` forces it back off) or persistently here. |
 | `shell_backend` | `"local"` | `"local"` or `"docker"`. See [Security](./security.md). |
 | `plan_model` | *(main model)* | Model for work that is thinking rather than doing: `pasclaw plan` / `--mode plan`, and the context pruner. The counterpart to `fast_model` at the other end of the range. |
-| `background_model` | *(fast_model, else main model)* | Model for work that is not the user's turn: fact distillation, history compaction, the heartbeat, the goals judge, and `pasclaw maintain --review`. Summarise-and-extract work a small model does as well as the flagship; the setups that run cheaply for months put most calls on a tier like this. A model name on the default provider. See [`pasclaw route report`](./commands.md#route). |
+| `background_model` | *(fast_model, else main model)* | Model for work that is not the user's turn: fact distillation, history compaction, the heartbeat, the goals judge, and `pasclaw maintain --review`. Summarise-and-extract work a small model does as well as the flagship; the setups that run cheaply for months put most calls on a tier like this. A model name on the default provider, and applied only when the work runs there: a `--provider` override, or a request that picked another provider, keeps its own model. See [`pasclaw route report`](./commands.md#route). |
 | `memory_core_budget_bytes` | `16384` | Per-file byte cap on the always-loaded memory tier (`SOUL.md`, `USER.md`, `MEMORY.md`, today's and yesterday's note). A file over the cap is cut at a line boundary with an "elided" note. `0` = no cap. See [Memory](./memory.md#tiers). |
 | `maintenance.keep_superseded_days` | `30` | `pasclaw maintain` deletes superseded facts older than this. `0` keeps them forever. Expired facts are always deleted. |
 | `maintenance.unused_skill_days` | `30` | A callable skill no session invoked in this window is listed as unused (never removed). |
@@ -220,6 +220,7 @@ There is no escape sequence for a literal `${UPPER}` string in a config value. W
 | `maintenance.backup` | `false` | Run `pasclaw backup` at the end of each maintenance pass. |
 | `backup.dir` | `$PASCLAW_HOME/backups` | Where `pasclaw backup` writes. Point it at a mount to get off-machine copies. |
 | `backup.keep_daily` / `keep_weekly` / `keep_monthly` | `7` / `4` / `6` | Rotation: the newest archive of each of the last N days / ISO weeks / months that have one is kept. See [Backup](./backup.md). |
+| `backup.include_secrets` | `true` | Put the real `config.json` in the archive so a restore brings every connected API back. The archive is then a credential. `false` (or `pasclaw backup --redact`) writes `config.redacted.json` with every secret masked instead. |
 | `prune.enabled` | `false` | LLM-guided context pruning — delete what no longer matters, keeping survivors verbatim. See [Sessions](./sessions.md#pruning). Costs a strong-model call, hence opt-in. |
 | `prune.threshold_tokens` | `60000` | Prune only above this estimate. |
 | `prune.protect_tail_tokens` | `20000` | Newest history never offered to the pruner. |

@@ -82,6 +82,7 @@ type
     Provider:   ILLMProvider;  { required when Review }
     Model:      string;
     DoBackup:   Boolean;
+    BackupWithSecrets: Boolean;   { Cfg.Backup.IncludeSecrets }
     BackupDir:  string;
     Version:    string;
     KeepDaily, KeepWeekly, KeepMonthly: Integer;
@@ -381,6 +382,7 @@ begin
     Result.KeepDaily          := Cfg.Backup.KeepDaily;
     Result.KeepWeekly         := Cfg.Backup.KeepWeekly;
     Result.KeepMonthly        := Cfg.Backup.KeepMonthly;
+    Result.BackupWithSecrets  := Cfg.Backup.IncludeSecrets;
     Result.Model              := BackgroundModelFor(Cfg);
     if Result.Model = '' then Result.Model := Cfg.DefaultModel;
   end
@@ -390,6 +392,7 @@ begin
     Result.UnusedSkillDays    := 30;
     Result.CoreBudget         := 16384;
     Result.KeepDaily := 7; Result.KeepWeekly := 4; Result.KeepMonthly := 6;
+    Result.BackupWithSecrets := True;
   end;
   if Result.BackupDir = '' then Result.BackupDir := JoinPath(Result.Home, 'backups');
 end;
@@ -589,7 +592,7 @@ begin
   if O.DoBackup and not O.DryRun then
   begin
     if RunBackup(O.Home, O.Workspace, O.BackupDir, O.Version,
-                 O.KeepDaily, O.KeepWeekly, O.KeepMonthly, BR, Err) then
+                 O.KeepDaily, O.KeepWeekly, O.KeepMonthly, O.BackupWithSecrets, BR, Err) then
     begin
       R.BackupPath := BR.ZipPath;
       R.BackupPruned := Length(BR.Pruned);

@@ -5193,7 +5193,7 @@ begin
     concurrent /v1/config hot-swap may have already repointed FProvider at
     a different backend. }
   if Result and FCfg.MemoryDistillEnabled then
-    ScheduleDistill(Cfg.Provider, ModelOr(BackgroundModelFor(FCfg), Cfg.Model), GetHome, ReqSession,
+    ScheduleDistill(Cfg.Provider, ModelOr(BackgroundModelOn(FCfg, Cfg.Provider.GetName), Cfg.Model), GetHome, ReqSession,
       BuildRecentTranscript(Loop.FinalMessages, Loop.Content, DefaultRecentMsgs));
 end;
 
@@ -6095,7 +6095,7 @@ begin
   LoopCfg.PruneOpts.MinCandidateTokens := FCfg.Prune.MinCandidateTokens;
   LoopCfg.PruneOpts.PreviewChars       := FCfg.Prune.PreviewChars;
   LoopCfg.PruneOpts.Model              := FCfg.PlanModel;
-  LoopCfg.CompactModel                 := BackgroundModelFor(FCfg);
+  LoopCfg.CompactModel                 := BackgroundModelOn(FCfg, LoopCfg.Provider.GetName);
   LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
   LoopCfg.ProviderRetryAttempts  := FCfg.ProviderRetryAttempts;
   LoopCfg.ProviderRetryBackoffMs := FCfg.ProviderRetryBackoffMs;
@@ -6375,7 +6375,7 @@ begin
   LoopCfg.PruneOpts.MinCandidateTokens := FCfg.Prune.MinCandidateTokens;
   LoopCfg.PruneOpts.PreviewChars       := FCfg.Prune.PreviewChars;
   LoopCfg.PruneOpts.Model              := FCfg.PlanModel;
-  LoopCfg.CompactModel                 := BackgroundModelFor(FCfg);
+  LoopCfg.CompactModel                 := BackgroundModelOn(FCfg, LoopCfg.Provider.GetName);
   LoopCfg.ToolOutputCap  := FCfg.ToolOutputCap;
   LoopCfg.ProviderRetryAttempts  := FCfg.ProviderRetryAttempts;
   LoopCfg.ProviderRetryBackoffMs := FCfg.ProviderRetryBackoffMs;
@@ -6543,7 +6543,7 @@ begin
   LoopCfg.PruneOpts.MinCandidateTokens := FCfg.Prune.MinCandidateTokens;
   LoopCfg.PruneOpts.PreviewChars       := FCfg.Prune.PreviewChars;
   LoopCfg.PruneOpts.Model              := FCfg.PlanModel;
-  LoopCfg.CompactModel                 := BackgroundModelFor(FCfg);
+  LoopCfg.CompactModel                 := BackgroundModelOn(FCfg, LoopCfg.Provider.GetName);
   LoopCfg.ToolOutputCap  := FCfg.ToolOutputCap;
   LoopCfg.StreamReliability := FCfg.StreamReliability;
   { Only deep research narrates. An ordinary page comes back fast enough
@@ -8029,7 +8029,7 @@ begin
     LoopCfg.PruneOpts.MinCandidateTokens := FCfg.Prune.MinCandidateTokens;
     LoopCfg.PruneOpts.PreviewChars       := FCfg.Prune.PreviewChars;
     LoopCfg.PruneOpts.Model              := FCfg.PlanModel;
-  LoopCfg.CompactModel                 := BackgroundModelFor(FCfg);
+  LoopCfg.CompactModel                 := BackgroundModelOn(FCfg, LoopCfg.Provider.GetName);
     LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
     LoopCfg.ProviderRetryAttempts  := FCfg.ProviderRetryAttempts;
     LoopCfg.ProviderRetryBackoffMs := FCfg.ProviderRetryBackoffMs;

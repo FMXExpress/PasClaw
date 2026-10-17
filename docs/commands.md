@@ -467,7 +467,7 @@ pasclaw backup --to /mnt/nas/pasclaw      # anywhere; put it on a mount for off-
 pasclaw backup list
 ```
 
-The archive holds the active workspace (minus the WebView2 profile, SQLite journals and `.git`), `config.redacted.json` (every secret replaced by `•••`) and `RESTORE.md`, which names the PasClaw version, the restore command and the secrets to re-enter. After a successful write the directory is rotated: the newest archive of each of the last 7 days / 4 ISO weeks / 6 months that have one is kept (`backup.keep_*`), the rest of what this command wrote is deleted, files it did not name are never touched. See [Backup](./backup.md).
+The archive holds the active workspace (minus the WebView2 profile, SQLite journals, `.git`, and the backup directory itself if it sits inside the workspace), your real `config.json` so a restore brings every connected API back (which makes the archive a credential; `--redact` or `backup.include_secrets: false` writes `config.redacted.json` with every secret masked instead), and `RESTORE.md`, which names the PasClaw version and the restore command. After a successful write the directory is rotated: the newest archive of each of the last 7 days / 4 ISO weeks / 6 months that have one is kept (`backup.keep_*`), the rest of what this command wrote is deleted, files it did not name are never touched. See [Backup](./backup.md).
 
 ## restore
 
@@ -477,7 +477,7 @@ pasclaw restore backup.zip --into /tmp/pc-home     # somewhere else
 pasclaw restore backup.zip --force                 # overlay an existing workspace
 ```
 
-Unpacks the workspace under `$PASCLAW_HOME` (or `--into`), refusing when that workspace already exists unless `--force`, which overlays it and keeps files not in the archive. `config.json` is never written: the redacted copy and `RESTORE-<workspace>.md` are placed beside the workspace and the secrets to re-enter are printed. Then `pasclaw doctor`.
+Unpacks the workspace under `$PASCLAW_HOME` (or `--into`), refusing when that workspace already exists unless `--force`, which overlays it and keeps files not in the archive. An archive carrying `config.json` puts it in place when the home has none; with `--force` the existing one is kept as `config.json.bak` and replaced. A redacted archive never writes `config.json`: the redacted copy lands beside the workspace and the secrets to re-enter are printed. Then `pasclaw doctor`.
 
 ## route
 

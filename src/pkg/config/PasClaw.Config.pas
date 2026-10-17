@@ -300,6 +300,15 @@ type
     KeepDaily:   Integer;   { default 7 }
     KeepWeekly:  Integer;   { default 4 }
     KeepMonthly: Integer;   { default 6 }
+    (* Put the real config.json in the archive, so a restore brings
+       every connected API back without re-entering a key. On by
+       default: a backup that breaks all your integrations when you
+       restore it is not much of a backup. The archive then holds live
+       credentials and must be stored like them -- RESTORE.md inside
+       says so. False (or `pasclaw backup --redact`) writes
+       config.redacted.json instead, for an archive that will sit on a
+       shared disk. *)
+    IncludeSecrets: Boolean;
   end;
 
   (* Named outbound channel for the send_message model tool (and,
@@ -1015,6 +1024,16 @@ function LoadConfig: TConfig; overload;
      M := BackgroundModelFor(Cfg); if M = '' then M := TheirModel;
    so a config with neither key behaves exactly as before. *)
 function BackgroundModelFor(Cfg: TConfig): string;
+(* BackgroundModelFor, but only when the work runs on the default provider.
+   background_model / fast_model are names on THAT provider; handing one to
+   a --provider override, or to a provider a request picked, would send
+   provider A a model name from provider B and the call would fail.
+   ActiveProviderName is whatever the caller knows: '' (nothing chosen, so
+   the default), a config entry name (the CLI's --provider), or an
+   ILLMProvider.GetName (a kind such as 'anthropic'). It matches when it
+   equals the default provider's entry name or its kind, case-insensitive;
+   otherwise '' comes back and the caller keeps its own model. *)
+function BackgroundModelOn(Cfg: TConfig; const ActiveProviderName: string): string;
 { Preferred when non-blank, else Fallback. The one-liner every caller of
   BackgroundModelFor writes. }
 function ModelOr(const Preferred, Fallback: string): string;
@@ -1370,6 +1389,7 @@ begin
   Backup.KeepDaily   := 7;
   Backup.KeepWeekly  := 4;
   Backup.KeepMonthly := 6;
+  Backup.IncludeSecrets := True;   { see the field comment: a backup should restore the integrations too }
   CheckpointsKeepLast    := 32;    { keep last 32 atomic edit checkpoints. }
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
   OrientTaskAware        := False; { off by default -- whole-file MEMORY injection is the contract; opt in per-run with `pasclaw agent --orient` or "orient_task_aware":true. }
@@ -1744,7 +1764,7 @@ begin
       end;
     end;
     if (Backup.Dir <> '') or (Backup.KeepDaily <> 7) or (Backup.KeepWeekly <> 4)
-       or (Backup.KeepMonthly <> 6) then
+       or (Backup.KeepMonthly <> 6) or (not Backup.IncludeSecrets) then
     begin
       Tmp := TJsonObject.Create;
       try
@@ -1752,6 +1772,8 @@ begin
         Tmp.PutInt('keep_daily',   Backup.KeepDaily);
         Tmp.PutInt('keep_weekly',  Backup.KeepWeekly);
         Tmp.PutInt('keep_monthly', Backup.KeepMonthly);
+        { Default on; emit only the explicit opt-out so it round-trips. }
+        if not Backup.IncludeSecrets then Tmp.PutBool('include_secrets', False);
         Root.PutObject('backup', Tmp);
       except
         Tmp.Free; raise;
@@ -2329,6 +2351,7 @@ begin
       Backup.KeepDaily   := Integer(Obj.GetInt('keep_daily',   Backup.KeepDaily));
       Backup.KeepWeekly  := Integer(Obj.GetInt('keep_weekly',  Backup.KeepWeekly));
       Backup.KeepMonthly := Integer(Obj.GetInt('keep_monthly', Backup.KeepMonthly));
+      Backup.IncludeSecrets := Obj.GetBool('include_secrets', Backup.IncludeSecrets);
     finally
       Obj.Free;
     end;
@@ -2652,6 +2675,31 @@ begin
   if Cfg = nil then Exit;
   Result := Trim(Cfg.BackgroundModel);
   if Result = '' then Result := Trim(Cfg.FastModel);
+end;
+
+function BackgroundModelOn(Cfg: TConfig; const ActiveProviderName: string): string;
+var
+  Active, DefName, DefKind: string;
+  i: Integer;
+begin
+  Result := '';
+  if Cfg = nil then Exit;
+  Active := LowerCase(Trim(ActiveProviderName));
+  DefName := LowerCase(Trim(Cfg.DefaultProvider));
+  if (Active <> '') and (Active <> DefName) then
+  begin
+    { Not the entry name; maybe the kind (what GetName returns). }
+    DefKind := '';
+    for i := 0 to High(Cfg.Providers) do
+      if SameText(Cfg.Providers[i].Name, Cfg.DefaultProvider) then
+      begin
+        DefKind := LowerCase(Trim(Cfg.Providers[i].Kind));
+        if DefKind = '' then DefKind := LowerCase(Trim(Cfg.Providers[i].Name));
+        Break;
+      end;
+    if Active <> DefKind then Exit;
+  end;
+  Result := BackgroundModelFor(Cfg);
 end;
 
 function ModelOr(const Preferred, Fallback: string): string;
@@ -3138,6 +3186,44 @@ begin
         Item.PutStr('api_key', MaskedSecretPlaceholder);
     finally
       Item.Free;
+    end;
+
+    { Outbound channel targets and cron channel targets are webhook URLs
+      more often than not -- Slack, Discord, Teams and generic webhooks
+      carry the credential in the URL. Treat the whole target as a secret. }
+    Arr := Root.ChildArray('channels');
+    if Arr <> nil then
+    try
+      for i := 0 to Arr.Count - 1 do
+      begin
+        Item := Arr.ItemObject(i);
+        if Item = nil then Continue;
+        try
+          if Item.GetStr('target', '') <> '' then
+            Item.PutStr('target', MaskedSecretPlaceholder);
+        finally
+          Item.Free;
+        end;
+      end;
+    finally
+      Arr.Free;
+    end;
+    Arr := Root.ChildArray('crons');
+    if Arr <> nil then
+    try
+      for i := 0 to Arr.Count - 1 do
+      begin
+        Item := Arr.ItemObject(i);
+        if Item = nil then Continue;
+        try
+          if Item.GetStr('channel_target', '') <> '' then
+            Item.PutStr('channel_target', MaskedSecretPlaceholder);
+        finally
+          Item.Free;
+        end;
+      end;
+    finally
+      Arr.Free;
     end;
 
     Result := Root.ToJSON;
