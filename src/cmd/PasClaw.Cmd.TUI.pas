@@ -254,6 +254,7 @@ begin
     end;
 
     TUIInst := TTUI.Create(Provider, Reg, Model);
+    TUIInst.Skills := Skills;   { prompt skills as /name in the chat input }
     TUIInst.ProviderName       := A.Provider;   { '' = default provider }
     TUIInst.PromptCacheEnabled := Cfg.PromptCache.Enabled;
     TUIInst.PromptCacheTTL     := Cfg.PromptCache.TTL;

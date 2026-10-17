@@ -71,6 +71,34 @@ Still loaded for backwards compat. Per-directory `SKILL.md` entries shadow same-
 
 `kind: shell` skills participate in the `ShellAllowed` denylist — `rm -rf` inside a skill body is refused identically to inline `shell_exec`.
 
+## Arguments and slash commands
+
+A prompt skill's template can take command-style arguments as well as JSON keys:
+
+| Placeholder | Filled with |
+|---|---|
+| `{{key}}` | the JSON argument `key` (the model's tool call) |
+| `$ARGUMENTS` (or `$0`) | the whole free-text argument string |
+| `$1` … `$9` | the Nth token, split like a shell (`"double"` and `'single'` quotes group, `\` escapes); the highest `$N` the template uses absorbs the rest, so `Deploy $1 with $2` given `staging --fast --quiet` sees `$2 = --fast --quiet` |
+
+The free text arrives as the JSON key `arguments`. A template that uses `$ARGUMENTS` / `$N` and declares no schema gets a one-string `arguments` schema automatically, so the model can call `skill_deploy` with the same text an operator would type.
+
+**Slash commands.** In `pasclaw agent` and the TUI, `/name rest of line` runs the installed prompt skill `name` (case-insensitive; `-` and `_` match) with `rest of line` as its arguments. Built-in commands (`/help`, `/mode`, …) win on a name clash. `/help` lists the prompt skills it knows. Three optional frontmatter fields say where the result runs:
+
+```yaml
+---
+name: deploy
+description: Deploy an environment
+kind: prompt
+prompt: Deploy $1 with flags $2. Report what changed.
+agent: ops          # run through the `spawn` tool on this subagent spec
+model: claude-haiku # model for that run (or for this turn, when it runs inline)
+subagent: true      # no agent named: run in a fresh child loop on the current tools
+---
+```
+
+In the line REPL `agent:` goes through `spawn`, `subagent:` runs a child loop, and both record the typed command plus the child's reply in the transcript (not the child's tool traffic). The TUI honours `model:` and turns `agent:` / `subagent:` into an instruction at the top of the message. Source: `src/pkg/skills/PasClaw.Skills.Slash.pas`, `RenderSkillArguments` in `PasClaw.Skills.Loader`.
+
 ## Install from GitHub
 
 `pasclaw skills install owner/repo[/path][@ref]`:

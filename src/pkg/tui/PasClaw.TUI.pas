@@ -47,6 +47,8 @@ uses
                                      just the implementation's. FPC was
                                      permissive about this; dcc64 is not. }
   PasClaw.Permissions,             { TAskAnswer -- the footer permissions asker }
+  PasClaw.Skills.Loader,           { TSkillSpecArray -- prompt skills as slash commands }
+  PasClaw.Skills.Slash,
   PasClaw.Tools.ToolLoop,          { TToolLoopResult -- referenced by the
                                      AccumulateLoopStats method declaration
                                      in the TTUI class; same dcc64
@@ -103,6 +105,8 @@ type
     FAskLine:        string;
     FAskAnswer:      TAskAnswer;
     FAskEvent:       TEvent;
+    { A slash skill's model: for the turn it starts; cleared when used. }
+    FTurnModel:      string;
     { NB: RouteConfig is declared further down, after every field -- dcc64
       (E2169) forbids a field definition after a method/property in the same
       visibility section, and the build branches below add more fields. }
@@ -313,6 +317,9 @@ type
        session switches -- they belong to the process, not the
        session pane selection). *)
     BgCoordinator:      TBackgroundSpawnCoordinator;
+    { Installed skills; prompt skills answer to /name in the chat input
+      (PasClaw.Skills.Slash). Set by Cmd.TUI after loading manifests. }
+    Skills:             TSkillSpecArray;
     constructor Create(Provider: ILLMProvider; Registry: TToolRegistry; const Model: string);
     {$IFNDEF FPC}destructor Destroy; override;{$ENDIF}
     procedure Run;
@@ -1564,6 +1571,11 @@ begin
   Cfg.Provider      := FProvider;
   Cfg.Registry      := FRegistry;
   Cfg.Model         := FModel;
+  if FTurnModel <> '' then
+  begin
+    Cfg.Model := FTurnModel;   { a slash skill's model:, this turn only }
+    FTurnModel := '';
+  end;
   Cfg.CompactModel  := BackgroundModelOn(RouteConfig, ProviderName);
   Cfg.MaxIterations := 6;
   Cfg.Parallel      := True;
@@ -1836,9 +1848,13 @@ procedure TTUI.SubmitInput;
 var
   Text: string;
   ModeArg: TPasClawMode;
+  SkSpec: TSkillSpec;
+  SkArgs: string;
+  SkExpanded: Boolean;
 begin
   Text := Trim(FInputBuf);
   if Text = '' then Exit;
+  SkExpanded := False;
 
   { Slash-command shortcuts -- without these the model gets "/quit"
     as a literal user message because StartTurn doesn't filter. The
@@ -1902,10 +1918,29 @@ begin
       HandleInitCommand(Copy(Text, 7, MaxInt))
     else if (Text = '/redo') or (Copy(Text, 1, 6) = '/redo ') then
       HandleRedoCommand(Copy(Text, 7, MaxInt))
+    { Not a built-in: an installed prompt skill? Expand it into this
+      turn's message and fall through to the normal send path below.
+      model: is honoured for the turn; agent: / subagent: become a hint
+      in the message on this surface. }
+    else if ResolveSlashSkill(Text, Skills, SkSpec, SkArgs) then
+    begin
+      FTurnModel := SkSpec.Model;
+      Text := ExpandSlashSkill(SkSpec, SkArgs);
+      if SkSpec.Agent <> '' then
+        Text := 'Use the spawn tool with agent "' + SkSpec.Agent + '" for this task:' + sLineBreak + sLineBreak + Text
+      else if SkSpec.Subagent then
+        Text := 'Delegate this task to a background subagent if one is available, else do it yourself:' +
+                sLineBreak + sLineBreak + Text;
+      Flash('skill /' + SkSpec.Name);
+      SkExpanded := True;
+    end
     else
       Flash('unknown: ' + Text);
-    FInputBuf := '';
-    Exit;
+    if not SkExpanded then
+    begin
+      FInputBuf := '';
+      Exit;
+    end;
   end;
 
   { When a loop is already running, queue the input as steering so
@@ -3060,6 +3095,8 @@ end;
 procedure TTUI.HandleSlashCommand(const Cmd: string);
 var
   Arg: string;
+  SkSpec: TSkillSpec;
+  SkArgs, Expanded: string;
 begin
   if (Cmd = '/quit') or (Cmd = '/exit') or (Cmd = '/q') then begin FQuit := True; Exit; end;
   if Cmd = '/clear' then begin Print(#27'[2J' + #27'[H'); DrawHeader; Exit; end;
@@ -3085,6 +3122,22 @@ begin
   if (Cmd = '/redo') or (Copy(Cmd, 1, 6) = '/redo ') then
   begin
     HandleRedoCommand(Copy(Cmd, 7, MaxInt));
+    Exit;
+  end;
+  { Not a built-in: an installed prompt skill? Expand and run it as this
+    turn's message (model: honoured for the turn; agent: / subagent: as
+    a hint in the message on this surface). }
+  if ResolveSlashSkill(Cmd, Skills, SkSpec, SkArgs) then
+  begin
+    FTurnModel := SkSpec.Model;
+    Expanded := ExpandSlashSkill(SkSpec, SkArgs);
+    if SkSpec.Agent <> '' then
+      Expanded := 'Use the spawn tool with agent "' + SkSpec.Agent + '" for this task:' + sLineBreak + sLineBreak + Expanded
+    else if SkSpec.Subagent then
+      Expanded := 'Delegate this task to a background subagent if one is available, else do it yourself:' +
+                  sLineBreak + sLineBreak + Expanded;
+    PrintLn(Ansi.Dim + '(skill /' + SkSpec.Name + ')' + Ansi.Reset);
+    HandleUserInput(Expanded);
     Exit;
   end;
   PrintLn(Ansi.Yellow + 'unknown command: ' + Cmd + Ansi.Reset);
@@ -3237,6 +3290,11 @@ begin
   Cfg.Provider      := FProvider;
   Cfg.Registry      := FRegistry;
   Cfg.Model         := FModel;
+  if FTurnModel <> '' then
+  begin
+    Cfg.Model := FTurnModel;   { a slash skill's model:, this turn only }
+    FTurnModel := '';
+  end;
   Cfg.CompactModel  := BackgroundModelOn(RouteConfig, ProviderName);
   Cfg.MaxIterations := 6;
   Cfg.Parallel := True;

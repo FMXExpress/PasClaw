@@ -242,6 +242,7 @@ Returns a 5-second-cached aggregate of per-session counters when `stats_collecti
   "turns":                  1234,
   "tool_calls":             5678,
   "truncation_bytes_saved": 12345678,
+  "prompt_cache_warm_pings": 0,
   "by_provider": [
     { "provider": "anthropic", "input_tokens": 800000, "output_tokens": 150000 },
     { "provider": "openai",    "input_tokens": 434567, "output_tokens":  84567 }

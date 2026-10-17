@@ -45,6 +45,14 @@ uses
 
 procedure RegisterWebFetchTool(R: TToolRegistry);
 
+{ A text GET through the same gates web_fetch uses -- scheme check, the
+  SSRF pre-check and the redirect guard -- for callers that are not the
+  model: the `instructions` URLs the system prompt loads. Body is the
+  UTF-8 decoded response, cut at MaxBytes. False with Err on refusal,
+  network failure or a non-2xx status. }
+function FetchTextGuarded(const URL: string; MaxBytes: Integer;
+                          out Body, Err: string): Boolean;
+
 implementation
 
 uses
@@ -226,6 +234,64 @@ begin
             (Pos('application/xml',        ContentType) > 0) or
             (Pos('application/javascript', ContentType) > 0) or
             (Pos('application/xhtml',      ContentType) > 0);
+end;
+
+function FetchTextGuarded(const URL: string; MaxBytes: Integer;
+                          out Body, Err: string): Boolean;
+var
+  Guard: TWebFetchRedirectGuard;
+  Resp: THTTPResult;
+  Headers: array of THeaderPair;
+  MS: TMemoryStream;
+  Bytes: TBytes;
+  N: Integer;
+begin
+  Result := False;
+  Body := '';
+  Err := '';
+  SetLength(Headers, 0);
+  if not (LowerStartsWith(URL, 'http://') or LowerStartsWith(URL, 'https://')) then
+  begin
+    Err := 'only http:// and https:// URLs';
+    Exit;
+  end;
+  if NetworkBlockingActive and URLIsLocal(URL, Err) then
+  begin
+    Err := 'SSRF: ' + URL + ' refused (' + Err + ')';
+    Exit;
+  end;
+  Err := '';
+  Guard := TWebFetchRedirectGuard.Create;
+  MS := TMemoryStream.Create;
+  try
+    try
+      Resp := GetURLToStreamGuarded(URL, MS, Headers, 20,
+                                    'Mozilla/5.0 (PasClaw instructions)', 'text/*, */*',
+                                    Guard.OnRedirect);
+    except
+      on E: Exception do
+      begin
+        Err := E.Message;
+        Exit;
+      end;
+    end;
+    if (Resp.StatusCode < 200) or (Resp.StatusCode >= 300) then
+    begin
+      Err := 'HTTP ' + IntToStr(Resp.StatusCode);
+      if Resp.ErrorMsg <> '' then Err := Err + ': ' + Resp.ErrorMsg;
+      Exit;
+    end;
+    N := MS.Size;
+    if (MaxBytes > 0) and (N > MaxBytes) then N := MaxBytes;
+    SetLength(Bytes, N);
+    MS.Position := 0;
+    if N > 0 then MS.ReadBuffer(Bytes[0], N);
+    Body := TEncoding.UTF8.GetString(Bytes);
+    Result := True;
+  finally
+    MS.Free;
+    Guard.Free;
+  end;
 end;
 
 function Tool_WebFetch(const ArgsJSON: string; out ErrMsg: string): string;
