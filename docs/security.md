@@ -30,6 +30,33 @@ PasClaw's filesystem and shell tools are guarded by an opt-in workspace boundary
 
 `PasClaw.Tools.Regex` wraps FPC's `RegExpr` and Delphi's `System.RegularExpressions` behind one call so `allow_*_paths` patterns are full PCRE on either toolchain. Invalid patterns return `False` (the sandbox falls through to the workspace boundary) rather than crashing.
 
+## Permissions (ordered rules)
+
+The sandbox above says what is *possible*. The permissions list says what the agent may do *without asking*. It is one ordered list of rules, in `config.json`:
+
+```json
+"permissions": [
+  {"tool": "shell_exec",  "effect": "ask"},
+  {"tool": "shell_exec",  "resource": "git status*", "effect": "allow"},
+  {"tool": "shell_exec",  "resource": "git diff*",   "effect": "allow"},
+  {"tool": "shell_exec",  "resource": "git push*",   "effect": "deny"},
+  {"tool": "fs_write",    "resource": "*/secrets/*", "effect": "deny"},
+  {"tool": "github__*",   "effect": "ask"}
+]
+```
+
+- `tool` is a case-insensitive glob over the tool name (`*` any run, `?` one character). `resource` is an optional glob over the call's primary resource: the **command** for `shell_exec` / `shell_background`, the **script** for `execute_code`, the **path** for the `fs_*` and legacy file tools, the **url** for `web_fetch` / `memory_fetch`. Other tools have no resource and match on `tool` alone.
+- **Last match wins.** Put the broad rule first and the exceptions after it. No matching rule means no opinion: the call goes through the gates that already existed (plan mode, the denylist, the family switches), so an empty list changes nothing.
+- `deny` refuses the call. The model sees a result that names the rule and tells it not to retry.
+- `ask` pauses the turn until a human answers: **allow once**, **allow for this session** (remembered per session for that tool + resource), or **deny**. The TUI asks in its footer (`Y` once, `S` session, anything else deny); the line REPL asks on stdin; the gateway publishes a `permission_request` desktop event and waits for `POST /v1/permissions/<id>`; the `TPasClawAgent` component fires `OnAsk`. With nobody to ask (a cron run, a piped `pasclaw agent`, a gateway with no web UI connected) an `ask` rule **denies**. It never silently becomes allow. `permissions_ask_timeout_sec` (default 300) bounds the wait.
+- `allow` is only an opinion. The shell denylist and the workspace boundary still run inside the tool.
+
+**Policies.** `<home>/policies.json` holds a second list of the same shape (`{"permissions": [...]}` or a bare array). It is evaluated **first**: a policy `deny` is final, a policy `ask` outranks a config `allow`, and a policy `allow` can still be tightened by the config list. The gateway's `PUT /v1/config` writes `config.json` only, so a web UI session can edit its own `permissions` but cannot touch the policies. The file is re-read whenever its modification time changes.
+
+`pasclaw permissions list` prints both lists in evaluation order; `pasclaw permissions test shell_exec "git push origin main"` prints the decision and the rule that made it.
+
+The permissions gate runs after the plan / SPACE mode gates and before the tool's own checks. Source: `src/pkg/config/PasClaw.Permissions.pas`, `PermissionGate` in `src/pkg/tools/PasClaw.Tools.ToolLoop.pas`.
+
 ## Built-in shell denylist
 
 Always on unless `shell_deny_enabled: false`.

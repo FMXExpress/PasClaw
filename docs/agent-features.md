@@ -111,7 +111,7 @@ the outcome" [S], and 65% of enterprise AI failures trace to harness defects
 
 | Feature | Field | PasClaw |
 |---|---|---|
-| Per-call approval prompts | Cline, Codex [S] | ⚠️ profile-level [P] |
+| Per-call approval prompts | Cline, Codex [S] | ✅ ordered `permissions` rules (`allow` / `deny` / `ask`, tool + resource globs, last match wins) evaluated at dispatch; `ask` prompts in the TUI footer, on the CLI, as a gateway `permission_request` event answered by `POST /v1/permissions/<id>`, or through the component's `OnAsk`; a separate `policies.json` the config endpoint cannot write is evaluated first [P] |
 | Hooks at tool boundaries (Pre/PostToolUse) | 27-event pipeline [S] | ✅ hook framework [P] |
 | "Lethal trifecta" risk modelling | [S] | ⚠️ promptware scan + network block, not modelled as a triad [P] |
 | Prompt-injection scanning of tool output | rare [K] | ✅ **fired twice during this survey** [P] |

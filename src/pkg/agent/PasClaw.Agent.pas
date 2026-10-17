@@ -60,6 +60,7 @@ interface
 uses
   SysUtils, Classes, Contnrs, SyncObjs,
   PasClaw.Config,
+  PasClaw.Permissions,      { TAskAnswer for the OnAsk event }
   PasClaw.Providers.Intf,
   PasClaw.Providers.Types,
   PasClaw.Tools.Registry,
@@ -82,6 +83,14 @@ type
   TPasClawToolEvent       = procedure(Sender: TObject; const Name, ArgsJSON: string) of object;
   TPasClawToolResultEvent = procedure(Sender: TObject; const Name, ResultText, Err: string) of object;
   TPasClawErrorEvent      = procedure(Sender: TObject; const Msg: string) of object;
+  (* A permission rule said "ask" (PasClaw.Permissions). Fired on the
+     thread that dispatches the tool -- the thread that called Chat /
+     Run, or a parallel worker -- so a GUI must Synchronize its own
+     dialog. Answer starts as aaDeny; leave it to refuse, set
+     aaAllowOnce or aaAllowSession to proceed. With no handler assigned
+     an ask rule refuses, which is the safe reading of "nobody there". *)
+  TPasClawAskEvent        = procedure(Sender: TObject; const ToolName, ArgsJSON, Resource, Reason: string;
+                                      var Answer: TAskAnswer) of object;
 
   TPasClawAgent = class(TComponent)
   private
@@ -139,6 +148,9 @@ type
     FOnToolCall:     TPasClawToolEvent;
     FOnToolResult:   TPasClawToolResultEvent;
     FOnError:        TPasClawErrorEvent;
+    FOnAsk:          TPasClawAskEvent;
+    { TPermAskFn-shaped adapter: the loop calls this, this fires OnAsk. }
+    function AskBridge(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
     procedure EnsureConfig;
     function  GetConfig: TConfig;
     procedure ApplyConfigOnce;
@@ -245,6 +257,8 @@ type
     property OnToolCall:    TPasClawToolEvent       read FOnToolCall   write FOnToolCall;
     property OnToolResult:  TPasClawToolResultEvent read FOnToolResult write FOnToolResult;
     property OnError:       TPasClawErrorEvent      read FOnError      write FOnError;
+    { A permissions "ask" rule matched; see TPasClawAskEvent. }
+    property OnAsk:         TPasClawAskEvent        read FOnAsk        write FOnAsk;
   end;
 
   TPasClawServer = class(TComponent)
@@ -487,6 +501,13 @@ begin
   FreeAndNil(FHooks);       { frees every TPasClawHook we accepted }
   if GAgentInstance = Self then GAgentInstance := nil;
   inherited Destroy;
+end;
+
+function TPasClawAgent.AskBridge(const ToolName, ArgsJSON, Resource, Reason: string): TAskAnswer;
+begin
+  Result := aaDeny;
+  if Assigned(FOnAsk) then
+    FOnAsk(Self, ToolName, ArgsJSON, Resource, Reason, Result);
 end;
 
 procedure TPasClawAgent.EnsureConfig;
@@ -848,6 +869,9 @@ begin
     thread. This is what makes LoadConfigFromDisk=False reach the tools.
     Thread-scoped, so a concurrently-running TPasClawServer is unaffected. }
   Cfg.ActiveConfig := FConfig;
+  { Permissions "ask" rules reach the embedder through OnAsk. Unassigned
+    => Cfg.OnAsk stays nil => an ask rule refuses (nobody to ask). }
+  if Assigned(FOnAsk) then Cfg.OnAsk := AskBridge;
 
   { Task-difficulty auto-router (opt-in via Config.AutoRouter). Centralised in
     ApplyAutoRoute so the component routes exactly like the CLI/TUI/gateway --
