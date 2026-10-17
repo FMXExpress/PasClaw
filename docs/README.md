@@ -15,7 +15,9 @@ The main `README.md` at the repo root is the landing page. These docs go deeper.
 - [Providers](./providers.md) — the 19-entry catalog (Anthropic / OpenAI / Gemini / Groq / DeepSeek / OpenRouter / Ollama / vLLM / ...), fallback chain, prompt caching.
 - [Tools](./tools.md) — built-in tools the model sees on every turn (`fs_read`, `fs_write`, `fs_grep`, `shell_exec`, `web_search`, `web_fetch`, `memory_search`, `session_search`, `kb_*`, `vault_*`, `send_message`, `execute_code`, `spawn`, `tool_output_get`).
 - [Web search](./web-search.md) — `web_search` / `web_fetch` providers and configuration.
-- [Memory](./memory.md) — `workspace/memory/`, FTS5 + hybrid vector backend, `memory_fetch`.
+- [Memory](./memory.md) — the three tiers, the always-loaded budget, `workspace/memory/`, FTS5 + hybrid vector backend, `memory_fetch`.
+- [Maintenance](./maintenance.md) — `pasclaw maintain`: the nightly pass that sweeps facts, sizes the core memory, audits skills and reviews the day.
+- [Backup](./backup.md) — `pasclaw backup` / `restore`: archives with a redacted config and restore notes inside, rotated 7 / 4 / 6.
 - [Knowledgebase](./knowledgebase.md) — `pasclaw kb` for indexing reference documents (markdown / source code / HTML).
 - [Skills](./skills.md) — `$PASCLAW_HOME/workspace/skills/`, GitHub + ClawHub install, SKILL.md format.
 - [Sessions](./sessions.md) — persistence, resume, `/new` / `/reset` / `/compact`, mid-loop `pasclaw steer`.

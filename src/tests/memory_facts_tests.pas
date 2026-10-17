@@ -59,6 +59,7 @@ var
   Store: IFactStore;
   IdNoExp, IdFuture, IdPast, IdSup: Int64;
   Active, All: TStoredFactArray;
+  Removed: Integer;
 begin
   DbPath := JoinPath(GTmpDir, 'facts.db');
 
@@ -100,16 +101,40 @@ begin
               'CountActive agrees with ActiveFacts');
   AssertEqInt(Store.CountAll, 4, 'CountAll includes superseded + expired');
 
+  { Sweep: the expired row goes; the superseded row goes only once it is
+    older than the keep window; active rows are never touched. }
+  { Keep window 30 days, "now" one day after the superseded row's
+    created_at (1003): the superseded row is too young to go, the expired
+    row (expires 2026-06-01 < TODAY) goes. }
+  Removed := Store.Sweep(TODAY, 1003 + 86400, 30);
+  AssertEqInt(Removed, 1, 'sweep removes the expired fact only');
+  AssertEqInt(Store.CountAll, 3, 'three rows remain after the expiry sweep');
+  AssertEqInt(Store.CountActive(TODAY), 2, 'active count unchanged by the sweep');
+  { KeepSupersededDays 0 never deletes superseded rows, however old. }
+  Removed := Store.Sweep(TODAY, 1003 + 3650 * 86400, 0);
+  AssertEqInt(Removed, 0, 'keep window 0 preserves superseded rows');
+  AssertEqInt(Store.CountAll, 3, 'nothing removed with keep window 0');
+  { "now" 31 days past the superseded row: old enough. }
+  Removed := Store.Sweep(TODAY, 1003 + 31 * 86400, 30);
+  AssertEqInt(Removed, 1, 'sweep removes the aged superseded fact');
+  AssertEqInt(Store.CountAll, 2, 'two rows remain');
+  AssertEqInt(Store.CountActive(TODAY), 2, 'both survivors are active');
+  { Re-add the expired fact so the delete + durability checks below still
+    have one to remove. }
+  IdPast := Store.Add(MkFact('Exam yesterday', 'dynamic', 'session', '2026-06-01', 0.6), 1002);
+  AssertTrue(IdPast > 0, 're-add expired fact after sweep');
+  AssertEqInt(Store.CountAll, 3, 'three rows after re-add');
+
   { Delete the expired one entirely. }
   AssertTrue(Store.Delete(IdPast), 'delete returns true');
-  AssertEqInt(Store.CountAll, 3, 'count drops after delete');
+  AssertEqInt(Store.CountAll, 2, 'count drops after delete');
 
   Store.Close;
 
   { Reopen: durability. }
   Store := NewFactStore;
   AssertTrue(Store.Open(DbPath), 'reopen store');
-  AssertEqInt(Store.CountAll, 3, 'facts persisted across reopen');
+  AssertEqInt(Store.CountAll, 2, 'facts persisted across reopen');
   Active := Store.ActiveFacts(TODAY);
   AssertEqInt(Length(Active), 2, 'active count stable after reopen');
   Store.Close;

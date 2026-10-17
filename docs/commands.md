@@ -41,6 +41,10 @@ Top-level commands are dispatched by `src/cmd/PasClaw.Cmd.Root.pas`. Run `pascla
 | [`resume`](#resume) | Alias: `agent --session <id>`. |
 | [`steer`](#steer) | Push a mid-loop follow-up into a running agent. |
 | [`heartbeat`](#heartbeat) | Run the periodic wake-up daemon. |
+| [`maintain`](#maintain) | The nightly pass: sweep facts, size the always-loaded memory, audit skills, review the day, back up. |
+| [`backup`](#backup) | Zip the workspace, a redacted config and restore notes; rotate old archives. |
+| [`restore`](#restore) | Put a backup's workspace back under `$PASCLAW_HOME`. |
+| [`route`](#route) | Report which models the last N days of sessions ran on. |
 | [`update`](#update) | Check or self-update from GitHub releases. |
 | [`version`](#version) | Show version and build info. |
 
@@ -442,7 +446,47 @@ pasclaw heartbeat
 pasclaw heartbeat --force        # bypass `heartbeat.enabled: false`
 ```
 
-Polls `workspace/heartbeat.md` every `heartbeat.interval_mins` minutes, runs the agent loop on the body, posts to `heartbeat.channel` if set. Empty / missing file = skip the tick.
+Polls `workspace/heartbeat.md` every `heartbeat.interval_mins` minutes, runs the agent loop on the body, posts to `heartbeat.channel` if set. Empty / missing file = skip the tick. Runs on `background_model` when one is configured.
+
+## maintain
+
+```sh
+pasclaw maintain                          # today's pass, settings from config.json
+pasclaw maintain --since 7 --review       # a week's sessions, plus the model's critique
+pasclaw maintain --dry-run                # report only: delete nothing, call nothing
+pasclaw cron add nightly "0 3 * * *" @maintain   # schedule it (runs inside `pasclaw gateway`)
+```
+
+One pass: sweep expired facts and superseded facts older than `maintenance.keep_superseded_days`; size `SOUL.md` / `USER.md` / `MEMORY.md` / the two daily notes against `memory_core_budget_bytes`; walk the last N days of sessions (turns, tool calls, failures with samples, tokens); list callable skills nothing invoked in `maintenance.unused_skill_days` and pairs that look like the same skill twice; optionally ask `background_model` for a short critique; optionally back up. The report lands in `workspace/memory/maintenance/<date>.md`, in the searchable tier, never the always-loaded one. Exit code 2 when the report carries warnings. See [Maintenance](./maintenance.md).
+
+## backup
+
+```sh
+pasclaw backup                            # -> $PASCLAW_HOME/backups/pasclaw-<workspace>-YYYYMMDD-HHMMSS.zip
+pasclaw backup --to /mnt/nas/pasclaw      # anywhere; put it on a mount for off-machine copies
+pasclaw backup list
+```
+
+The archive holds the active workspace (minus the WebView2 profile, SQLite journals, `.git`, and the backup directory itself if it sits inside the workspace), your real `config.json` so a restore brings every connected API back (which makes the archive a credential; `--redact` or `backup.include_secrets: false` writes `config.redacted.json` with every secret masked instead), and `RESTORE.md`, which names the PasClaw version and the restore command. After a successful write the directory is rotated: the newest archive of each of the last 7 days / 4 ISO weeks / 6 months that have one is kept (`backup.keep_*`), the rest of what this command wrote is deleted, files it did not name are never touched. See [Backup](./backup.md).
+
+## restore
+
+```sh
+pasclaw restore pasclaw-workspace-20261017-030000.zip
+pasclaw restore backup.zip --into /tmp/pc-home     # somewhere else
+pasclaw restore backup.zip --force                 # overlay an existing workspace
+```
+
+Unpacks the workspace under `$PASCLAW_HOME` (or `--into`), refusing when that workspace already exists unless `--force`, which overlays it and keeps files not in the archive. An archive carrying `config.json` puts it in place when the home has none; with `--force` the existing one is kept as `config.json.bak` and replaced. A redacted archive never writes `config.json`: the redacted copy lands beside the workspace and the secrets to re-enter are printed. Then `pasclaw doctor`.
+
+## route
+
+```sh
+pasclaw route report               # last 7 days
+pasclaw route report --since 30
+```
+
+Token volume per provider/model over the saved sessions in the window, beside the cheap-tier settings (`background_model`, `fast_model`, the auto-router's easy tier), so the split between the flagship and the small model is visible. A session counts under the last model it used; turns the auto-router sent to the easy tier mid-session are attributed to the session's model, so the cheap share is a floor.
 
 ## update
 

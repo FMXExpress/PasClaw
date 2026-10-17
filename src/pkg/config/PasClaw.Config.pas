@@ -274,6 +274,43 @@ type
     Enabled: Boolean;
   end;
 
+  (* The nightly maintenance pass -- `pasclaw maintain`, or the reserved
+     cron skill name "@maintain" which runs the same thing inside the
+     gateway's scheduler. Everything here is a knob on what that pass
+     does; none of it runs on its own until a cron entry names it. *)
+  TMaintenanceConfig = record
+    (* Superseded facts are kept for history; after this many days they
+       are deleted. Expired facts are deleted on every pass regardless.
+       0 keeps superseded rows forever. *)
+    KeepSupersededDays: Integer;
+    (* A skill that no session has invoked in this many days is listed
+       as unused in the report. It is never removed automatically. *)
+    UnusedSkillDays:    Integer;
+    (* Ask the background model for a short critique of the day's
+       sessions and write it to memory/reviews/<date>.md. One provider
+       call per pass; off by default because it costs money. *)
+    Review:             Boolean;
+    (* Run `pasclaw backup` at the end of the pass. *)
+    Backup:             Boolean;
+  end;
+
+  (* `pasclaw backup` -- where the zips go and how many to keep. *)
+  TBackupConfig = record
+    Dir:         string;    { '' = <home>/backups }
+    KeepDaily:   Integer;   { default 7 }
+    KeepWeekly:  Integer;   { default 4 }
+    KeepMonthly: Integer;   { default 6 }
+    (* Put the real config.json in the archive, so a restore brings
+       every connected API back without re-entering a key. On by
+       default: a backup that breaks all your integrations when you
+       restore it is not much of a backup. The archive then holds live
+       credentials and must be stored like them -- RESTORE.md inside
+       says so. False (or `pasclaw backup --redact`) writes
+       config.redacted.json instead, for an archive that will sit on a
+       shared disk. *)
+    IncludeSecrets: Boolean;
+  end;
+
   (* Named outbound channel for the send_message model tool (and,
      prospectively, anything else that wants operator-blessed posting
      targets). The model addresses channels strictly BY NAME -- the
@@ -866,6 +903,27 @@ type
        query. 0 disables auto-injection (facts become search-only).
        Default 2000 (~30 facts). *)
     MemoryFactsBudget:     Integer;
+    (* Byte budget for EACH always-injected memory file -- SOUL.md,
+       USER.md, MEMORY.md, today's and yesterday's note. These are the
+       tier the model reads every single turn without searching, so they
+       should hold only what still matters in six months; a file that
+       outgrows the budget is cut at a line boundary with a note saying
+       how much was left out and that memory_search reaches it. 16 KB is
+       roughly 200 lines of prose -- generous for a curated file, tight
+       enough that a daily note used as a scratchpad cannot quietly eat
+       the prompt. 0 = no cap (the pre-budget whole-file behaviour). *)
+    MemoryCoreBudgetBytes: Integer;
+    (* The model for work that happens in the background and is not the
+       user's turn: fact distillation, history compaction, the heartbeat,
+       the goals judge, and the maintenance pass's review. Most of that is
+       summarise-and-extract, which a small model does as well as the
+       flagship at a fraction of the cost -- the setups that run cheaply
+       for months put 70-80% of calls on a small or local model this way.
+       Empty = fall back to fast_model, then to the main model; set it to
+       a model name on the default provider. *)
+    BackgroundModel:       string;
+    Maintenance:           TMaintenanceConfig;
+    Backup:                TBackupConfig;
     (* On-by-default: scan tool output / recalled memory / stored
        skill descriptions for prompt-injection patterns and annotate
        hits with a warning banner (PasClaw.Promptware). A lowercase
@@ -958,6 +1016,28 @@ function GetHome: string;
 function GetConfigPath: string;
 function LoadConfig: TConfig; overload;
 
+(* The model for background work -- distillation, compaction, heartbeat,
+   the goals judge, the maintenance review. background_model if set, else
+   fast_model if set, else '' meaning "whatever the caller would have used"
+   (the main model). Both are names on the default provider; this never
+   switches provider. Callers do
+     M := BackgroundModelFor(Cfg); if M = '' then M := TheirModel;
+   so a config with neither key behaves exactly as before. *)
+function BackgroundModelFor(Cfg: TConfig): string;
+(* BackgroundModelFor, but only when the work runs on the default provider.
+   background_model / fast_model are names on THAT provider; handing one to
+   a --provider override, or to a provider a request picked, would send
+   provider A a model name from provider B and the call would fail.
+   ActiveProviderName is whatever the caller knows: '' (nothing chosen, so
+   the default), a config entry name (the CLI's --provider), or an
+   ILLMProvider.GetName (a kind such as 'anthropic'). It matches when it
+   equals the default provider's entry name or its kind, case-insensitive;
+   otherwise '' comes back and the caller keeps its own model. *)
+function BackgroundModelOn(Cfg: TConfig; const ActiveProviderName: string): string;
+{ Preferred when non-blank, else Fallback. The one-liner every caller of
+  BackgroundModelFor writes. }
+function ModelOr(const Preferred, Fallback: string): string;
+
 (* Profile-aware overload (PR #291). When ProfileOverride is non-empty,
    apply the named profile (and its _inherits ancestors) BEFORE the
    operator's config.json. Empty string -> selection precedence:
@@ -1024,6 +1104,15 @@ const
    gateway.token. Returns the merged JSON; raises on unparseable input.
    Exposed for tests. *)
 function RestoreMaskedConfigSecrets(const EditedJSON, CurrentJSON: string): string;
+
+(* The read side of the same contract: a config JSON with every populated
+   secret -- providers[].api_key, mcp_servers[].env, gateway.token,
+   web_search.api_key -- replaced by MaskedSecretPlaceholder, and nothing
+   else changed. What the gateway's GET /v1/config serves, and what
+   `pasclaw backup` puts in the archive as config.redacted.json: enough to
+   rebuild a machine from, never enough to leak from. Returns '' when the
+   input does not parse. *)
+function MaskConfigSecretsJSON(const JSON: string): string;
 
 (*  Effective gateway bearer token. Returns the env-var override
     when $PASCLAW_GATEWAY_TOKEN or $OPENCLAW_GATEWAY_TOKEN is set
@@ -1290,6 +1379,17 @@ begin
   DatabaseJSON           := '';    { no db_* connections until a "database" section is added. }
   DatabaseRawJSON        := '';    { pre-expansion "database" section, for save. }
   MemoryFactsBudget      := 2000;  { ~30 facts injected wholesale when distill on. }
+  MemoryCoreBudgetBytes  := 16384; { per always-injected memory file; 0 = uncapped. }
+  BackgroundModel        := '';    { empty = fast_model, then the main model. }
+  Maintenance.KeepSupersededDays := 30;
+  Maintenance.UnusedSkillDays    := 30;
+  Maintenance.Review             := False;
+  Maintenance.Backup             := False;
+  Backup.Dir         := '';        { empty = <home>/backups }
+  Backup.KeepDaily   := 7;
+  Backup.KeepWeekly  := 4;
+  Backup.KeepMonthly := 6;
+  Backup.IncludeSecrets := True;   { see the field comment: a backup should restore the integrations too }
   CheckpointsKeepLast    := 32;    { keep last 32 atomic edit checkpoints. }
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
   OrientTaskAware        := False; { off by default -- whole-file MEMORY injection is the contract; opt in per-run with `pasclaw agent --orient` or "orient_task_aware":true. }
@@ -1643,6 +1743,42 @@ begin
       round-trip). }
     if MemoryFactsBudget <> 2000 then
       Root.PutInt('memory_facts_budget', MemoryFactsBudget);
+    { Same rule: emit when changed from the default, 0 included, so an
+      operator who removed the cap keeps it removed. }
+    if MemoryCoreBudgetBytes <> 16384 then
+      Root.PutInt('memory_core_budget_bytes', MemoryCoreBudgetBytes);
+    if BackgroundModel <> '' then
+      Root.PutStr('background_model', BackgroundModel);
+    if (Maintenance.KeepSupersededDays <> 30) or (Maintenance.UnusedSkillDays <> 30)
+       or Maintenance.Review or Maintenance.Backup then
+    begin
+      Tmp := TJsonObject.Create;
+      try
+        Tmp.PutInt ('keep_superseded_days', Maintenance.KeepSupersededDays);
+        Tmp.PutInt ('unused_skill_days',    Maintenance.UnusedSkillDays);
+        Tmp.PutBool('review',               Maintenance.Review);
+        Tmp.PutBool('backup',               Maintenance.Backup);
+        Root.PutObject('maintenance', Tmp);
+      except
+        Tmp.Free; raise;
+      end;
+    end;
+    if (Backup.Dir <> '') or (Backup.KeepDaily <> 7) or (Backup.KeepWeekly <> 4)
+       or (Backup.KeepMonthly <> 6) or (not Backup.IncludeSecrets) then
+    begin
+      Tmp := TJsonObject.Create;
+      try
+        if Backup.Dir <> '' then Tmp.PutStr('dir', Backup.Dir);
+        Tmp.PutInt('keep_daily',   Backup.KeepDaily);
+        Tmp.PutInt('keep_weekly',  Backup.KeepWeekly);
+        Tmp.PutInt('keep_monthly', Backup.KeepMonthly);
+        { Default on; emit only the explicit opt-out so it round-trips. }
+        if not Backup.IncludeSecrets then Tmp.PutBool('include_secrets', False);
+        Root.PutObject('backup', Tmp);
+      except
+        Tmp.Free; raise;
+      end;
+    end;
     { CheckpointsKeepLast default flipped from 0 (=> use library
       default 32) to an explicit 32 in PR #314. Emit when it differs --
       0 and other values both round-trip. }
@@ -2195,6 +2331,30 @@ begin
     Arr := Root.ChildArray('database');
     if Arr <> nil then DatabaseJSON := Arr.ToJSON;
     MemoryFactsBudget    := Root.GetInt('memory_facts_budget', MemoryFactsBudget);
+    MemoryCoreBudgetBytes := Integer(Root.GetInt('memory_core_budget_bytes', MemoryCoreBudgetBytes));
+    if MemoryCoreBudgetBytes < 0 then MemoryCoreBudgetBytes := 0;
+    BackgroundModel      := Trim(Root.GetStr('background_model', BackgroundModel));
+    Obj := Root.ChildObject('maintenance');
+    if Obj <> nil then
+    try
+      Maintenance.KeepSupersededDays := Integer(Obj.GetInt('keep_superseded_days', Maintenance.KeepSupersededDays));
+      Maintenance.UnusedSkillDays    := Integer(Obj.GetInt('unused_skill_days',    Maintenance.UnusedSkillDays));
+      Maintenance.Review             := Obj.GetBool('review', Maintenance.Review);
+      Maintenance.Backup             := Obj.GetBool('backup', Maintenance.Backup);
+    finally
+      Obj.Free;
+    end;
+    Obj := Root.ChildObject('backup');
+    if Obj <> nil then
+    try
+      Backup.Dir         := Obj.GetStr('dir', Backup.Dir);
+      Backup.KeepDaily   := Integer(Obj.GetInt('keep_daily',   Backup.KeepDaily));
+      Backup.KeepWeekly  := Integer(Obj.GetInt('keep_weekly',  Backup.KeepWeekly));
+      Backup.KeepMonthly := Integer(Obj.GetInt('keep_monthly', Backup.KeepMonthly));
+      Backup.IncludeSecrets := Obj.GetBool('include_secrets', Backup.IncludeSecrets);
+    finally
+      Obj.Free;
+    end;
     CheckpointsKeepLast := Integer(Root.GetInt('checkpoints_keep_last',
                                                 CheckpointsKeepLast));
     PromptwareEnabled   := Root.GetBool('promptware_enabled', PromptwareEnabled);
@@ -2507,6 +2667,44 @@ begin
   H := GetEnvironmentVariable(EnvHome);
   if H <> '' then Exit(H);
   Result := JoinPath(HomeDir, '.pasclaw');
+end;
+
+function BackgroundModelFor(Cfg: TConfig): string;
+begin
+  Result := '';
+  if Cfg = nil then Exit;
+  Result := Trim(Cfg.BackgroundModel);
+  if Result = '' then Result := Trim(Cfg.FastModel);
+end;
+
+function BackgroundModelOn(Cfg: TConfig; const ActiveProviderName: string): string;
+var
+  Active, DefName, DefKind: string;
+  i: Integer;
+begin
+  Result := '';
+  if Cfg = nil then Exit;
+  Active := LowerCase(Trim(ActiveProviderName));
+  DefName := LowerCase(Trim(Cfg.DefaultProvider));
+  if (Active <> '') and (Active <> DefName) then
+  begin
+    { Not the entry name; maybe the kind (what GetName returns). }
+    DefKind := '';
+    for i := 0 to High(Cfg.Providers) do
+      if SameText(Cfg.Providers[i].Name, Cfg.DefaultProvider) then
+      begin
+        DefKind := LowerCase(Trim(Cfg.Providers[i].Kind));
+        if DefKind = '' then DefKind := LowerCase(Trim(Cfg.Providers[i].Name));
+        Break;
+      end;
+    if Active <> DefKind then Exit;
+  end;
+  Result := BackgroundModelFor(Cfg);
+end;
+
+function ModelOr(const Preferred, Fallback: string): string;
+begin
+  if Trim(Preferred) <> '' then Result := Trim(Preferred) else Result := Fallback;
 end;
 
 function GetConfigPath: string;
@@ -2916,6 +3114,122 @@ end;
 procedure SaveConfig(C: TConfig);
 begin
   WriteFileText(GetConfigPath, C.ToJSON);
+end;
+
+function MaskConfigSecretsJSON(const JSON: string): string;
+var
+  Root, Item: TJsonObject;
+  Arr: TJsonArray;
+  i: Integer;
+begin
+  Result := '';
+  { Parse raises on malformed input; "could not be redacted" is the
+    caller's branch, not an exception. }
+  try
+    Root := TJsonObject.Parse(JSON);
+  except
+    Root := nil;
+  end;
+  if Root = nil then Exit;
+  try
+    Arr := Root.ChildArray('providers');
+    if Arr <> nil then
+    try
+      for i := 0 to Arr.Count - 1 do
+      begin
+        Item := Arr.ItemObject(i);
+        if Item = nil then Continue;
+        try
+          if Item.GetStr('api_key', '') <> '' then
+            Item.PutStr('api_key', MaskedSecretPlaceholder);
+        finally
+          Item.Free;
+        end;
+      end;
+    finally
+      Arr.Free;
+    end;
+
+    Arr := Root.ChildArray('mcp_servers');
+    if Arr <> nil then
+    try
+      for i := 0 to Arr.Count - 1 do
+      begin
+        Item := Arr.ItemObject(i);
+        if Item = nil then Continue;
+        try
+          { env strings are KEY=value pairs -- anything from an API key to a
+            bearer token. Mask the whole string when non-empty. }
+          if Item.GetStr('env', '') <> '' then
+            Item.PutStr('env', MaskedSecretPlaceholder);
+        finally
+          Item.Free;
+        end;
+      end;
+    finally
+      Arr.Free;
+    end;
+
+    Item := Root.ChildObject('gateway');
+    if Item <> nil then
+    try
+      if Item.GetStr('token', '') <> '' then
+        Item.PutStr('token', MaskedSecretPlaceholder);
+    finally
+      Item.Free;
+    end;
+
+    Item := Root.ChildObject('web_search');
+    if Item <> nil then
+    try
+      if Item.GetStr('api_key', '') <> '' then
+        Item.PutStr('api_key', MaskedSecretPlaceholder);
+    finally
+      Item.Free;
+    end;
+
+    { Outbound channel targets and cron channel targets are webhook URLs
+      more often than not -- Slack, Discord, Teams and generic webhooks
+      carry the credential in the URL. Treat the whole target as a secret. }
+    Arr := Root.ChildArray('channels');
+    if Arr <> nil then
+    try
+      for i := 0 to Arr.Count - 1 do
+      begin
+        Item := Arr.ItemObject(i);
+        if Item = nil then Continue;
+        try
+          if Item.GetStr('target', '') <> '' then
+            Item.PutStr('target', MaskedSecretPlaceholder);
+        finally
+          Item.Free;
+        end;
+      end;
+    finally
+      Arr.Free;
+    end;
+    Arr := Root.ChildArray('crons');
+    if Arr <> nil then
+    try
+      for i := 0 to Arr.Count - 1 do
+      begin
+        Item := Arr.ItemObject(i);
+        if Item = nil then Continue;
+        try
+          if Item.GetStr('channel_target', '') <> '' then
+            Item.PutStr('channel_target', MaskedSecretPlaceholder);
+        finally
+          Item.Free;
+        end;
+      end;
+    finally
+      Arr.Free;
+    end;
+
+    Result := Root.ToJSON;
+  finally
+    Root.Free;
+  end;
 end;
 
 function RestoreMaskedConfigSecrets(const EditedJSON, CurrentJSON: string): string;

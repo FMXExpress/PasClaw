@@ -249,6 +249,11 @@ type
        turns caching off here too -- see PasClaw.Config.ApplyPromptCacheConfig
        and Codex P2 on PR #118. *)
     PromptCacheEnabled: Boolean;
+    (* The config name of the provider the TUI was started on ('' = the
+       default). Cmd_TUI_Run sets it from --provider. BackgroundModelOn
+       uses it so background_model -- a name on the DEFAULT provider -- is
+       never handed to a different provider's endpoint. *)
+    ProviderName: string;
     PromptCacheTTL:     string;
     { Per-edit checkpoints. Cmd_TUI_Run forwards Cfg.CheckpointsEnabled
       and Cfg.CheckpointsKeepLast here so onboarding's opt-in survives
@@ -1403,6 +1408,7 @@ begin
   Cfg.Provider      := FProvider;
   Cfg.Registry      := FRegistry;
   Cfg.Model         := FModel;
+  Cfg.CompactModel  := BackgroundModelOn(RouteConfig, ProviderName);
   Cfg.MaxIterations := 6;
   Cfg.Parallel      := True;
   Cfg.Mode          := FMode;  { PR #290: thread current Plan/Build into the dispatch gate }
@@ -1678,7 +1684,7 @@ begin
       the fact store. Best-effort, non-blocking; scoped to the session the
       turn ran under. }
     if MemoryDistillEnabled then
-      ScheduleDistill(FProvider, FModel, GetHome, FLoopSessionId,
+      ScheduleDistill(FProvider, ModelOr(BackgroundModelOn(RouteConfig, ProviderName), FModel), GetHome, FLoopSessionId,
         BuildRecentTranscript(Loop.FinalMessages, Loop.Content, DefaultRecentMsgs));
     if FLoopSessionId <> FSession.Meta.Id then
       Flash('result -> ' + FLoopSessionId);
@@ -3094,6 +3100,7 @@ begin
   Cfg.Provider      := FProvider;
   Cfg.Registry      := FRegistry;
   Cfg.Model         := FModel;
+  Cfg.CompactModel  := BackgroundModelOn(RouteConfig, ProviderName);
   Cfg.MaxIterations := 6;
   Cfg.Parallel := True;
   Cfg.Options       := DefaultChatOptions;

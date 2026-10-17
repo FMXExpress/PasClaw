@@ -71,6 +71,11 @@ type
        semantics live with PasClaw.Agent.Compact. *)
     CompactEnabled: Boolean;
     CompactOpts:    TCompactOptions;
+    (* The model the compaction summary is written with. Summarising a
+       transcript is background work a small model does as well as the
+       flagship; callers set this from BackgroundModelFor(Cfg). Empty =
+       Model, the pre-background_model behaviour. *)
+    CompactModel:   string;
     (* LLM-guided pruning, ahead of compaction. A strong model names the
        parts of the history that no longer matter and they are deleted;
        what it does not name survives byte for byte, so pruning is
@@ -1577,6 +1582,12 @@ begin
       if SameText(Tools[i].Name, Writers[j]) then Exit(True);
 end;
 
+function CompactModelOf(const Cfg: TToolLoopConfig): string;
+begin
+  if Trim(Cfg.CompactModel) <> '' then Result := Trim(Cfg.CompactModel)
+  else Result := Cfg.Model;
+end;
+
 function RunToolLoop(const Cfg: TToolLoopConfig;
                      var Messages: array of TMessage;
                      out Loop: TToolLoopResult): Boolean;
@@ -1818,7 +1829,7 @@ begin
     if Cfg.CompactEnabled and
        NeedsCompact(Hist, LiveOptions.SystemPrompt,
                     Cfg.CompactOpts.ThresholdTokens) then
-      Hist := CompactMessages(Cfg.Provider, Cfg.Model, Hist,
+      Hist := CompactMessages(Cfg.Provider, CompactModelOf(Cfg), Hist,
                                LiveOptions, Cfg.CompactOpts);
 
     { Snapshot the persistent SystemPrompt so we can restore it
@@ -2142,8 +2153,9 @@ begin
       Inc(OverflowRetries);
       ForcedCompactOpts := Cfg.CompactOpts;
       ForcedCompactOpts.ThresholdTokens := 1;
+      { Same model choice as the proactive pass above. }
       PreCompactLen := Length(Hist);
-      Hist := CompactMessages(Cfg.Provider, Cfg.Model, Hist,
+      Hist := CompactMessages(Cfg.Provider, CompactModelOf(Cfg), Hist,
                                LiveOptions, ForcedCompactOpts);
       if Length(Hist) < PreCompactLen then
       begin

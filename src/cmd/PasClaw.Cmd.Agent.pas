@@ -629,6 +629,10 @@ begin
   Result.PruneOpts.MinCandidateTokens := Cfg.Prune.MinCandidateTokens;
   Result.PruneOpts.PreviewChars       := Cfg.Prune.PreviewChars;
   Result.PruneOpts.Model              := Cfg.PlanModel;
+  { Only when the turn runs on the default provider: background_model is a
+    name on THAT provider, and handing it to a --provider override would
+    send one provider another's model name. }
+  Result.CompactModel                 := BackgroundModelOn(Cfg, A.Provider);
   Result.PruneOpts.OnBefore           := Handlers.OnBeforePrune;
   { Forward the tool-output truncation cap (per-tool-result bytes)
     from config. 0 = off (legacy verbatim behaviour); when an
@@ -1089,7 +1093,10 @@ begin
     Callbacks.Model    := Model;
     Callbacks.Handlers := Handlers;
     try
-      Runner := TGoalRunner.Create(Provider, Model, MaxIter, Callbacks.TurnFn);
+      { The judge reads a transcript and returns MET / CONTINUE / FAILED:
+        background work, so the background model when one is configured. }
+      Runner := TGoalRunner.Create(Provider, ModelOr(BackgroundModelOn(Cfg, A.Provider), Model),
+                                   MaxIter, Callbacks.TurnFn);
       try
         Runner.OnProgress := Callbacks.Progress;
         R := Runner.Run(A.GoalObjective, Msgs);
@@ -1850,9 +1857,11 @@ begin
 
         { Opt-in distilled memory: background-distil the latest exchange
           into the fact store. Best-effort, non-blocking; needs a session
-          for provenance. Uses the chat provider, no ONNX. }
+          for provenance. Uses the chat provider, no ONNX -- on the
+          background model when the operator configured one, else the
+          turn's model. }
         if Cfg.MemoryDistillEnabled and (Session <> nil) then
-          ScheduleDistill(Provider, Model, GetHome, Session.Meta.Id,
+          ScheduleDistill(Provider, ModelOr(BackgroundModelOn(Cfg, A.Provider), Model), GetHome, Session.Meta.Id,
             BuildRecentTranscript(Loop.FinalMessages, Loop.Content, DefaultRecentMsgs));
 
         { Pick up the compacted history from RunToolLoop so the next

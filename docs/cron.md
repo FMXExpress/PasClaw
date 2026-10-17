@@ -30,7 +30,7 @@ Each cron entry is a row in `config.json`'s `crons[]`:
 
 - `id` — unique entry name (used by `enable` / `disable` / `remove`).
 - `spec` — standard cron 5-field syntax (`min hour dom mon dow`).
-- `skill` — name of the skill to invoke (must be installed; see [Skills](./skills.md)).
+- `skill` — name of the skill to invoke (must be installed; see [Skills](./skills.md)). One name is reserved: `@maintain` runs the nightly [maintenance pass](./maintenance.md) in-process instead of a skill — `pasclaw cron add nightly "0 3 * * *" @maintain`.
 - `args` — argument string passed verbatim to the skill template.
 - `channel_kind` / `channel_target` — optional; posts skill output to the named channel sink (see below).
 - `enabled` — `true`/`false`; toggle with `pasclaw cron enable/disable`.

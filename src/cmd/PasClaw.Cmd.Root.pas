@@ -71,6 +71,9 @@ uses
   PasClaw.Cmd.Relay,        (* `pasclaw relay` -- worker client polling
                                a remote gateway's /v1/relay/poll *)
   PasClaw.Cmd.Heartbeat,
+  PasClaw.Cmd.Backup,       (* `pasclaw backup` / `pasclaw restore` *)
+  PasClaw.Cmd.Maintain,     (* `pasclaw maintain` -- the nightly pass *)
+  PasClaw.Cmd.Route,        (* `pasclaw route report` -- model usage split *)
   PasClaw.Cmd.TUI;
 
 type
@@ -143,7 +146,11 @@ const
 var
   Sub, Fl: array of string;
 begin
-  SetLength(Sub, 36);
+  SetLength(Sub, 40);
+  Sub[36] := 'backup       Zip the workspace + redacted config + restore notes; rotate old backups';
+  Sub[37] := 'restore      Put a backup''s workspace back under PASCLAW_HOME';
+  Sub[38] := 'maintain     Nightly pass: sweep facts, audit skills, size the core memory, review the day';
+  Sub[39] := 'route        Report which models the last N days of sessions ran on';
   Sub[0]  := 'config       View/edit configuration';
   Sub[1]  := 'onboard      Initialize config & workspace';
   Sub[2]  := 'agent        Chat with the assistant (line-by-line)';
@@ -247,6 +254,10 @@ begin
   else if Cmd = '__tool'   then Result := Cmd_ToolRPC_Run(Argv)
   else if Cmd = 'tui'      then Result := Cmd_TUI_Run(Argv)
   else if Cmd = 'heartbeat' then Result := Cmd_Heartbeat_Run(Argv)
+  else if Cmd = 'backup'   then Result := Cmd_Backup_Run(Argv)
+  else if Cmd = 'restore'  then Result := Cmd_Restore_Run(Argv)
+  else if Cmd = 'maintain' then Result := Cmd_Maintain_Run(Argv)
+  else if Cmd = 'route'    then Result := Cmd_Route_Run(Argv)
   else if Cmd = 'update'   then Result := Cmd_Update_Run(Argv)
   else if Cmd = 'version'  then Result := Cmd_Version_Run(Argv)
   else

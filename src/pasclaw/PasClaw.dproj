@@ -171,6 +171,9 @@
         <DCCReference Include="..\cmd\PasClaw.Cmd.Runbook.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.TUI.pas"/>
         <DCCReference Include="..\cmd\PasClaw.Cmd.Heartbeat.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Backup.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Maintain.pas"/>
+        <DCCReference Include="..\cmd\PasClaw.Cmd.Route.pas"/>
 
         <!-- pkg/cliui -->
         <DCCReference Include="..\pkg\cliui\PasClaw.CliUI.pas"/>
@@ -204,6 +207,8 @@
 
         <!-- pkg/checkpoints -->
         <DCCReference Include="..\pkg\checkpoints\PasClaw.Checkpoints.pas"/>
+        <DCCReference Include="..\pkg\checkpoints\PasClaw.Backup.pas"/>
+        <DCCReference Include="..\pkg\memory\PasClaw.Maintain.pas"/>
         <DCCReference Include="..\pkg\checkpoints\PasClaw.Checkpoints.Zpaq.pas"/>
 
         <!-- pkg/tokenizer -->
