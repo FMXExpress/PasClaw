@@ -945,6 +945,10 @@ type
        Replicate) out of the prompt entirely rather than one tool_search
        away. Off: every server is classic unless it says codemode: true. *)
     MCPCodeModeDefault:    Boolean;
+    (* How many background jobs -- spawn_background subagents and
+       shell_background commands together -- may run at once per
+       coordinator. Beyond it the tool refuses until one finishes. *)
+    BackgroundJobsMax:     Integer;
     (* On-by-default: scan tool output / recalled memory / stored
        skill descriptions for prompt-injection patterns and annotate
        hits with a warning banner (PasClaw.Promptware). A lowercase
@@ -1414,6 +1418,7 @@ begin
   Backup.IncludeSecrets := True;   { see the field comment: a backup should restore the integrations too }
   ShellTimeoutSec        := 600;   { ten minutes; long enough for a build, short enough to notice }
   MCPCodeModeDefault     := True;  { MCP tools are script-callable by default; see TMCPServer.CodeMode }
+  BackgroundJobsMax      := 6;     { subagents + background shells, per coordinator }
   CheckpointsKeepLast    := 32;    { keep last 32 atomic edit checkpoints. }
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
   OrientTaskAware        := False; { off by default -- whole-file MEMORY injection is the contract; opt in per-run with `pasclaw agent --orient` or "orient_task_aware":true. }
@@ -1778,6 +1783,8 @@ begin
       Root.PutInt('shell_timeout_sec', ShellTimeoutSec);
     if not MCPCodeModeDefault then
       Root.PutBool('mcp_codemode_default', False);
+    if BackgroundJobsMax <> 6 then
+      Root.PutInt('background_jobs_max', BackgroundJobsMax);
     if (Maintenance.KeepSupersededDays <> 30) or (Maintenance.UnusedSkillDays <> 30)
        or Maintenance.Review or Maintenance.Backup then
     begin
@@ -2365,6 +2372,8 @@ begin
     BackgroundModel      := Trim(Root.GetStr('background_model', BackgroundModel));
     ShellTimeoutSec      := Integer(Root.GetInt('shell_timeout_sec', ShellTimeoutSec));
     if ShellTimeoutSec < 0 then ShellTimeoutSec := 0;
+    BackgroundJobsMax    := Integer(Root.GetInt('background_jobs_max', BackgroundJobsMax));
+    if BackgroundJobsMax < 1 then BackgroundJobsMax := 1;
     Obj := Root.ChildObject('maintenance');
     if Obj <> nil then
     try

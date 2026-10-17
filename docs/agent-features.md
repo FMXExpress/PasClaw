@@ -554,6 +554,7 @@ dies at tool 7 of 9 re-runs from the user message.
 | Provider prompt caching (prefix KV reuse) | providers [S] | ✅ breakpoints, 1 h TTL [P] |
 | **Batch tier: −50%, results within 24 h** | OpenAI Batch [S] | ❌ never routed to |
 | **Flex tier: −50% per-request, variable latency** | OpenAI Flex [S] | ❌ |
+| Async shell: long commands run in the background and notify on completion | OpenCode 2.0 [S] | ✅ `shell_background` returns a handle; output lands in the next turn's `[background shell results]` block; `spawn_cancel` kills it; TUI footer flash + `background_done` desktop event. No "move the running foreground turn to the background" key yet [P] |
 | Tier-aware routing (background work → cheap tier) | FinOps guidance [S] | ✅ `background_model` (falls back to `fast_model`) carries fact distillation, history compaction, the heartbeat, the goals judge and the maintenance review; `pasclaw route report` shows the resulting split. Subagents and cron skills are not yet routed [P] |
 
 The tier rows are the actionable ones. PasClaw already distinguishes

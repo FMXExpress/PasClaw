@@ -241,9 +241,14 @@ begin
     if Cfg.MemoryDistillEnabled then
       EnableBestFactEmbedder(GetHome);
     TUIInst.BgCoordinator      := BgCoord;
+    { Completions of spawn_background / shell_background jobs flash in the
+      footer. Cleared before the TUI is freed so a late job cannot call
+      into a dead object. }
+    GBackgroundDoneHook := TUIInst.BackgroundDone;
     try
       TUIInst.Run;
     finally
+      GBackgroundDoneHook := nil;
       TUIInst.Free;
       FreeMCPClients(MCPClients);
       { Spawn owned here (same shape as Cmd.Agent); BgCoord is NOT

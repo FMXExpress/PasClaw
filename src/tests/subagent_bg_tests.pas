@@ -36,7 +36,7 @@ program subagent_bg_tests;
 
 uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
-  SysUtils, Classes,
+  SysUtils, Classes, DateUtils,
   PasClaw.Config,
   PasClaw.Providers.Intf,
   PasClaw.Providers.Types,
@@ -154,6 +154,9 @@ var
 begin
   Provider  := TFakeEchoProvider.Create;
   ParentReg := TToolRegistry.Create;
+  { A stack record: zero it, or Ctx.Cfg is whatever the stack held and
+    the coordinator's config-aware paths dereference garbage. }
+  Ctx := Default(TSubagentContext);
   SetLength(Specs, 1);
   Specs[0].Name         := 'researcher';
   Specs[0].Description  := 'pretend research';
@@ -602,6 +605,110 @@ begin
   end;
 end;
 
+type
+  TDoneCatcher = class
+  public
+    Count: Integer;
+    LastKey, LastHandle, LastSummary: string;
+    procedure OnDone(const Key, Handle, Summary: string);
+  end;
+
+procedure TDoneCatcher.OnDone(const Key, Handle, Summary: string);
+begin
+  Inc(Count);
+  LastKey := Key; LastHandle := Handle; LastSummary := Summary;
+end;
+
+procedure TestShellBackground;
+(* shell_background: a shell command as a job. Same handle space, status,
+   wait, cancel and drain as a subagent, plus the things a shell needs: the
+   denylist, a timeout that kills, and a cancel that kills. *)
+var
+  Coord: TBackgroundSpawnCoordinator;
+  Provider: ILLMProvider;
+  ParentReg: TToolRegistry;
+  Out_, Err, H, R, Blk: string;
+  Catcher: TDoneCatcher;
+  T0: TDateTime;
+begin
+  Coord := MakeCoord(Provider, ParentReg);
+  Catcher := TDoneCatcher.Create;
+  try
+    Coord.SetKey('shell-test-session');
+    GBackgroundDoneHook := Catcher.OnDone;
+
+    { Runs, delivers exit + output, status names the command. }
+    Out_ := Coord.HandleShellBackground('{"command":"echo hello-bg"}', Err);
+    AssertTrue(Err = '', 'shell_background starts: ' + Err);
+    H := ExtractHandle(Out_);
+    AssertTrue(Copy(H, 1, 3) = 'sh-', 'shell handle prefix: ' + H);
+    WaitForState(Coord, H, 'state=done', 5);
+    R := Coord.HandleWait('{"handle":"' + H + '"}', Err);
+    AssertTrue(Err = '', 'wait ok: ' + Err);
+    AssertTrue(Pos('exit=0', R) = 1, 'result starts with exit=0: ' + Copy(R, 1, 40));
+    AssertContains(R, 'hello-bg', 'output delivered');
+    R := Coord.HandleStatus('{"handle":"' + H + '"}', Err);
+    AssertContains(R, 'command=echo hello-bg', 'status shows the command');
+    AssertTrue(Catcher.Count >= 1, 'done hook fired');
+    AssertEqStr(Catcher.LastHandle, H, 'hook carries the handle');
+    AssertEqStr(Catcher.LastKey, 'shell-test-session', 'hook carries the drain key');
+    AssertContains(Catcher.LastSummary, 'exit=0', 'hook summary has the exit code');
+
+    { Denylist applies. }
+    Out_ := Coord.HandleShellBackground('{"command":"rm -rf /"}', Err);
+    AssertTrue(Err <> '', 'denylisted command refused');
+    AssertTrue(Out_ = '', 'no handle for a refused command');
+
+    {$IFDEF UNIX}
+    { Timeout kills with exit 124. }
+    Out_ := Coord.HandleShellBackground('{"command":"sleep 30; echo late","timeout_sec":1}', Err);
+    AssertTrue(Err = '', 'timeout job starts: ' + Err);
+    H := ExtractHandle(Out_);
+    T0 := Now;
+    WaitForState(Coord, H, 'state=done', 6);
+    AssertTrue(SecondsBetween(Now, T0) < 5, 'timed-out job finished promptly');
+    R := Coord.HandleWait('{"handle":"' + H + '"}', Err);
+    AssertTrue(Pos('exit=124', R) = 1, 'timeout reports exit=124: ' + Copy(R, 1, 40));
+    AssertContains(R, 'timed out', 'timeout note present');
+    AssertNotContains(R, 'late', 'the command did not finish');
+
+    { Cancel kills. }
+    Out_ := Coord.HandleShellBackground('{"command":"sleep 30"}', Err);
+    AssertTrue(Err = '', 'long job starts: ' + Err);
+    H := ExtractHandle(Out_);
+    Sleep(300);
+    R := Coord.HandleCancel('{"handle":"' + H + '"}', Err);
+    AssertContains(R, 'killed', 'cancel kills a local shell job');
+    T0 := Now;
+    WaitForState(Coord, H, 'state=cancelled', 4);
+    R := Coord.HandleStatus('{"handle":"' + H + '"}', Err);
+    AssertContains(R, 'state=cancelled', 'job is cancelled');
+    AssertTrue(SecondsBetween(Now, T0) < 4, 'cancelled job stopped promptly, not after 30 s');
+    {$ENDIF}
+
+    { Drain: shell results under their own header, once. The jobs above
+      were collected by spawn_wait (wait marks them delivered), so run one
+      more and let it finish on its own. }
+    Out_ := Coord.HandleShellBackground('{"command":"echo drain-me"}', Err);
+    H := ExtractHandle(Out_);
+    WaitForState(Coord, H, 'state=done', 5);
+    Blk := Coord.DrainFinishedBlock(8192);
+    AssertContains(Blk, '[background shell results]', 'shell block header');
+    AssertContains(Blk, 'drain-me', 'the uncollected job is in the drain');
+    AssertContains(Blk, 'shell "echo drain-me"', 'entry names the command');
+    AssertNotContains(Blk, 'hello-bg', 'a job collected by spawn_wait is not re-delivered');
+    AssertNotContains(Blk, '[background subagent results]', 'no subagent header when only shells finished');
+    Blk := Coord.DrainFinishedBlock(8192);
+    AssertNotContains(Blk, 'drain-me', 'delivered once');
+  finally
+    GBackgroundDoneHook := nil;
+    Catcher.Free;
+    Coord.Free;
+    ParentReg.Free;
+  end;
+  WriteLn('  ok: shell_background runs, denies, times out, cancels (kills), drains, notifies');
+end;
+
 begin
   TestSpawnReturnsHandleAndJobStarts;
   TestWaitReturnsResultWhenDone;
@@ -612,5 +719,6 @@ begin
   TestSpawnWaitDeliversFullEvenAfterPreviewTruncated;
   TestDrainedBlockReachesModelButNotFinalSystemPrompt;
   TestGatewayShapedDrainByStampedKey;
+  TestShellBackground;
   WriteLn('subagent_bg_tests: OK');
 end.

@@ -37,7 +37,7 @@ unit PasClaw.TUI;
 interface
 
 uses
-  SysUtils,
+  SysUtils, SyncObjs,              { TCriticalSection for the background-done flash }
   PasClaw.Providers.Intf,
   PasClaw.Providers.Types,
   PasClaw.Providers.Models,        { TModelInfoArray is referenced from the
@@ -88,6 +88,10 @@ type
       so a session-lifetime snapshot is correct and matches the CLI's
       session-scoped easy-provider cache. }
     FRouteCfg: TConfig;
+    { Background-job completions arrive on the job's thread; they are
+      parked here and flashed from the UI loop. }
+    FBgFlashLock:    TCriticalSection;
+    FBgFlashPending: string;
     { NB: RouteConfig is declared further down, after every field -- dcc64
       (E2169) forbids a field definition after a method/property in the same
       visibility section, and the build branches below add more fields. }
@@ -243,6 +247,7 @@ type
       field-before-method rule isn't broken by the conditional field blocks
       above. Lazily loads + caches FRouteCfg for the per-turn auto-router. }
     function RouteConfig: TConfig;
+    procedure DrainBackgroundFlash;   { both builds: parks -> footer flash }
   public
     (* Operator's prompt-cache settings. Defaults to default-on (matches
        DefaultChatOptions). Cmd_TUI_Run copies Cfg.PromptCache into this
@@ -300,6 +305,10 @@ type
     constructor Create(Provider: ILLMProvider; Registry: TToolRegistry; const Model: string);
     {$IFNDEF FPC}destructor Destroy; override;{$ENDIF}
     procedure Run;
+    { GBackgroundDoneHook target: a spawn_background / shell_background job
+      finished. Thread-safe; the next frame flashes it. The model gets the
+      result itself at the top of its next turn through the drain. }
+    procedure BackgroundDone(const Key, Handle, Summary: string);
   end;
 
 implementation
@@ -307,7 +316,6 @@ implementation
 uses
   PasClaw.Workspaces,
   Classes,
-  SyncObjs,
   DateUtils,
   PasClaw.CliUI,
   PasClaw.Utils,                   { VisibleLength + PadVisibleRight +
@@ -497,9 +505,42 @@ begin
   PromptCacheTTL     := '';
   RenderMarkdownEnabled := True;
   FRouteCfg := nil;
+  FBgFlashLock := TCriticalSection.Create;
+  FBgFlashPending := '';
   {$IFNDEF FPC}
   FToolActivityLock := TCriticalSection.Create;
   SetLength(FToolActivity, 0);
+  {$ENDIF}
+end;
+
+procedure TTUI.BackgroundDone(const Key, Handle, Summary: string);
+begin
+  FBgFlashLock.Enter;
+  try
+    FBgFlashPending := 'background ' + Handle + ' finished -- ' + Summary +
+                       ' (delivered on your next turn)';
+  finally
+    FBgFlashLock.Leave;
+  end;
+end;
+
+procedure TTUI.DrainBackgroundFlash;
+var
+  S: string;
+begin
+  FBgFlashLock.Enter;
+  try
+    S := FBgFlashPending;
+    FBgFlashPending := '';
+  finally
+    FBgFlashLock.Leave;
+  end;
+  if S = '' then Exit;
+  {$IFNDEF FPC}
+  Flash(S);
+  {$ELSE}
+  { The FPC build is a line REPL with no footer; a line will do. }
+  WriteLn('[' + S + ']');
   {$ENDIF}
 end;
 
@@ -533,6 +574,7 @@ var
   Worker: TRunToolLoopThread;
   RefreshWorker: TModelRefreshThread;
 begin
+  FBgFlashLock.Free;
   if FLoopThread <> nil then
   begin
     Worker := TRunToolLoopThread(FLoopThread);
@@ -581,6 +623,9 @@ procedure TTUI.Flash(const Msg: string);
 begin
   FStatusFlash := Msg;
   FStatusFlashUntil := IncSecond(Now, 3);
+end;
+
+  if S <> '' then Flash(S);
 end;
 
 { The seven themes vendored DMVCFramework ships in
@@ -2693,6 +2738,7 @@ begin
     begin
       PollLoopWorker;
       PollModelRefresh;
+      DrainBackgroundFlash;
 
       { Periodic ListSessions refresh so cron-side / parallel-CLI
         session changes show up without keystrokes. 3s cadence. }
