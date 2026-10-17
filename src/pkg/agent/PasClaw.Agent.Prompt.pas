@@ -80,6 +80,12 @@ function BuildSystemPrompt(Cfg: TConfig; const UserSys: string;
                            ToolsEnabled: Boolean = True;
                            const TaskHint: string = ''): string; overload;
 
+{ Cut Body to at most Budget bytes at a line boundary; ElidedBytes says how
+  much went. Budget <= 0 = no cap. Pure -- the per-file cap on the always-
+  loaded memory tier (Cfg.MemoryCoreBudgetBytes), exposed for tests. }
+function ClampToBudget(const Body: string; Budget: Integer;
+                       out ElidedBytes: Integer): string;
+
 { Mode-aware overload (PR #290). When Mode = pmPlan, a "PLAN MODE"
   block is prepended so the model knows mutating tools will refuse and
   it should produce analysis / a proposed plan rather than calling
@@ -362,14 +368,53 @@ begin
     Result := Facts;
 end;
 
-function BuildMemorySection(TaskAware: Boolean; const TaskHint: string): string;
-{ Inject up to three markdown files into the system prompt:
+function ClampToBudget(const Body: string; Budget: Integer;
+                       out ElidedBytes: Integer): string;
+{ Cut Body to at most Budget bytes at a line boundary. ElidedBytes is how
+  much was dropped (0 when nothing was). Budget <= 0 means no cap. Pure.
+
+  Line boundary, not byte boundary: a cut in the middle of a line leaves
+  the model a half-sentence it may complete from imagination, and a cut
+  inside a UTF-8 sequence leaves a broken byte. The last newline at or
+  before the budget is the cut; a single line longer than the budget is
+  cut at the budget as the lesser evil. }
+var
+  Cut, i: Integer;
+begin
+  ElidedBytes := 0;
+  if (Budget <= 0) or (Length(Body) <= Budget) then Exit(Body);
+  Cut := 0;
+  for i := Budget downto 1 do
+    if Body[i] = #10 then
+    begin
+      Cut := i;
+      Break;
+    end;
+  if Cut <= 1 then Cut := Budget;
+  Result := TrimRight(Copy(Body, 1, Cut));
+  ElidedBytes := Length(Body) - Length(Result);
+end;
+
+function BuildMemorySection(TaskAware: Boolean; const TaskHint: string;
+                            CoreBudget: Integer): string;
+{ Inject the always-on memory tier into the system prompt -- the files the
+  model reads every turn without searching:
+    workspace/memory/SOUL.md           -- who the agent is, if the user wrote one
+    workspace/memory/USER.md           -- who the user is: stable facts only
     workspace/memory/MEMORY.md         -- durable user-owned notes
     workspace/memory/<today>.md        -- today's daily note, if it exists
     workspace/memory/<yesterday>.md    -- yesterday's daily note, for fresh context
   Mirrors openclaw's bootstrap loading. Older notes stay on disk and reach
   the model only when memory_search returns them. Each file is wrapped in
-  a subsection so the model can tell durable from dated material apart.
+  a subsection so the model can tell persona, user, durable and dated
+  material apart.
+
+  CoreBudget (Cfg.MemoryCoreBudgetBytes) caps EACH file. A file over the
+  cap is cut at a line boundary with a note saying how much was left out
+  and that memory_search reaches it -- the model is told, not surprised.
+  This is the tier-1 discipline from the setups that stay good for months:
+  if it would not matter in six months it does not belong in these files,
+  and a file that keeps growing is the symptom. 0 = no cap.
 
   Task-aware mode (Cfg.OrientTaskAware + a non-empty TaskHint from the
   caller): each file is sliced through PasClaw.Agent.Orient so only the
@@ -383,7 +428,7 @@ var
   procedure AppendFile(const SubHeader, FilePath: string);
   var
     SubBody: string;
-    Elided: Integer;
+    Elided, ElidedBytes: Integer;
   begin
     if not FileExists(FilePath) then Exit;
     try
@@ -403,6 +448,16 @@ var
         SubBody := SubBody + sLineBreak + sLineBreak +
                    Format('(%d unrelated/over-budget section(s) elided -- ' +
                           '`memory_search` reaches them)', [Elided]);
+    end
+    else
+    begin
+      SubBody := ClampToBudget(SubBody, CoreBudget, ElidedBytes);
+      if ElidedBytes > 0 then
+        SubBody := SubBody + sLineBreak + sLineBreak +
+                   Format('(%d bytes over the %d-byte always-loaded budget ' +
+                          'elided -- `memory_search` reaches them; move ' +
+                          'dated or one-off material out of this file)',
+                          [ElidedBytes, CoreBudget]);
     end;
     if Result = '' then
       Result := '## Memory'
@@ -417,7 +472,9 @@ begin
   Slicing := TaskAware and (Trim(TaskHint) <> '');
   MemoryDir := JoinPath(GetHome, ActiveWorkspaceName + '/memory');
 
-  AppendFile('MEMORY.md (durable)', JoinPath(MemoryDir, 'MEMORY.md'));
+  AppendFile('SOUL.md (who you are)',    JoinPath(MemoryDir, 'SOUL.md'));
+  AppendFile('USER.md (who the user is)', JoinPath(MemoryDir, 'USER.md'));
+  AppendFile('MEMORY.md (durable)',       JoinPath(MemoryDir, 'MEMORY.md'));
 
   TodayStr     := FormatDateTime('yyyy-mm-dd', Now);
   YesterdayStr := FormatDateTime('yyyy-mm-dd', Now - 1);
@@ -729,11 +786,17 @@ begin
     'per turn) or `edit_file` for large files.' + sLineBreak +
     sLineBreak +
     '5. **Memory** -- when the user mentions something worth keeping across ' +
-    'sessions (preferences, project facts, conventions), update ' +
-    MemPath + ' for durable notes the user owns, or append a dated ' +
-    'entry to ' + JoinPath(GetHome, ActiveWorkspaceName + '/memory') +
+    'sessions (preferences, project facts, conventions), decide the tier ' +
+    'with one test: *would you still want to act on this in six months with ' +
+    'no refresher?* Yes: it is always-loaded memory -- stable facts about the ' +
+    'user go in USER.md next to MEMORY.md, everything else durable goes in ' +
+    MemPath + '. No: it is dated or one-off -- append a dated entry to ' +
+    JoinPath(GetHome, ActiveWorkspaceName + '/memory') +
     '/{today}.md (e.g. ' + FormatDateTime('yyyy-mm-dd', Now) +
-    '.md) for episodic context. Use `memory_search` before answering ' +
+    '.md), or `memory_write` a fact with an expiry, and let `memory_search` ' +
+    'find it later. The always-loaded files are capped per file; when you ' +
+    'see an "elided" note under one, move dated material out rather than ' +
+    'adding to it. Use `memory_search` before answering ' +
     'questions about prior conversations or project facts you might ' +
     'have written down on an earlier turn. **`memory_search` / ' +
     '`kb_search` return bounded snippets (a token window centred on the ' +
@@ -1142,8 +1205,11 @@ begin
   Result := AppendSection('', BuildModeSection(Mode));
   Result := AppendSection(Result, BuildIdentitySection);
   Result := AppendSection(Result, BuildWorkspaceSection);
-  Result := AppendSection(Result,
-              BuildMemorySection((Cfg <> nil) and Cfg.OrientTaskAware, TaskHint));
+  if Cfg <> nil then
+    Result := AppendSection(Result,
+                BuildMemorySection(Cfg.OrientTaskAware, TaskHint, Cfg.MemoryCoreBudgetBytes))
+  else
+    Result := AppendSection(Result, BuildMemorySection(False, TaskHint, 0));
   { Distilled facts (Cfg.MemoryDistillEnabled). Wholesale, after the .md
     memory so curated MEMORY.md leads and auto-facts follow. }
   Result := AppendSection(Result, BuildFactsSection(Cfg));

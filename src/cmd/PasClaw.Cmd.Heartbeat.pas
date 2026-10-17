@@ -196,7 +196,10 @@ begin
       PrintLn(Ansi.Red + '✗ ' + Ansi.Reset + Err);
       Exit(1);
     end;
-    Model := Cfg.DefaultModel;
+    { A heartbeat tick is background work: the background model when the
+      operator configured one, else the default. }
+    Model := BackgroundModelFor(Cfg);
+    if Model = '' then Model := Cfg.DefaultModel;
 
     Reg := BuildRegistry;
     HB  := THeartbeat.Create(Cfg, Provider, Reg, Model);

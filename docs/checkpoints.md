@@ -1,6 +1,6 @@
 # Checkpoints (undo / redo)
 
-PasClaw snapshots files before the agent writes them, so you can rewind the last N turns' edits when the model breaks something. Opt-in; off by default. Enable via `pasclaw onboard`, or set `checkpoints.enabled = true` in `config.json`.
+PasClaw snapshots files before the agent writes them, so you can rewind the last N turns' edits when the model breaks something. On by default (zero prompt cost); turn it off with `"checkpoints_enabled": false` in `config.json` or by answering N at `pasclaw onboard`.
 
 ## TUI
 

@@ -58,6 +58,7 @@ uses
   PasClaw.Cron.Expr,
   PasClaw.Cron.State,
   PasClaw.Cron.Sinks,
+  PasClaw.Maintain,
   PasClaw.Skills.Loader;
 
 type
@@ -244,7 +245,15 @@ begin
     if Entry.Workspace <> '' then
       SetThreadWorkspace(Entry.Workspace);
     try
-      Output := RunSkill(FRegistry, Entry.Skill, Entry.Args, Err);
+      (* The one reserved skill name. "@maintain" is not a skill on disk
+         but the nightly maintenance pass (PasClaw.Maintain), run here in
+         the scheduler so operators get "my agent gets better over time"
+         from one cron line instead of a shell skill that shells out to
+         the binary that is already running. *)
+      if SameText(Entry.Skill, MaintenanceCronSkill) then
+        Output := RunMaintenanceForCron(FCfg, Err)
+      else
+        Output := RunSkill(FRegistry, Entry.Skill, Entry.Args, Err);
     finally
       if Entry.Workspace <> '' then
         SetThreadWorkspace('');

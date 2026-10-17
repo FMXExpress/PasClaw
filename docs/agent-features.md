@@ -232,9 +232,9 @@ meanwhile grown dedicated memory *products* with published benchmarks.
 
 | Feature | Who | PasClaw |
 |---|---|---|
-| Tiered memory: in-context core / recall / archival, modelled on RAM–cache–disk | Letta (MemGPT) [S] | ⚠️ MEMORY.md is "core", `memory_search` is "archival"; no managed middle tier [P] |
+| Tiered memory: in-context core / recall / archival, modelled on RAM–cache–disk | Letta (MemGPT) [S] | ✅ core = `SOUL.md` / `USER.md` / `MEMORY.md` / two daily notes, each capped by `memory_core_budget_bytes` with an elided note; recall = `facts.db` via `memory_search` / `memory_write` with expiry and a nightly sweep; archival = the knowledge base. The six-months rule in the prompt decides the tier. See [memory.md](./memory.md#tiers) [P] |
 | **Self-editing memory** — the agent rewrites its own core block | Letta [S] | ❌ MEMORY.md edits are ad-hoc writes, not a managed operation |
-| Fact extraction into a vector store on every turn | Mem0 [S] | ⚠️ distiller extracts facts, but post-hoc, not per-turn [P] |
+| Fact extraction into a vector store on every turn | Mem0 [S] | ✅ with `memory_distill_enabled`, the distiller runs in the background after every turn over the recent tail (`PasClaw.Memory.AutoDistill`); off by default [P] |
 | Temporal knowledge graph (entities + relations + time) | Zep [S] | ❌ |
 | Time-aware retrieval ("what did X believe before Y") | Zep — +15 pts over vector-only on LongMemEval [S] | ❌ |
 | Published memory benchmarks (LoCoMo, LongMemEval) | Mem0 92.5% LoCoMo [S] | ⚠️ a LOCOMO-shaped harness exists (PR #308), unmerged |
@@ -554,7 +554,7 @@ dies at tool 7 of 9 re-runs from the user message.
 | Provider prompt caching (prefix KV reuse) | providers [S] | ✅ breakpoints, 1 h TTL [P] |
 | **Batch tier: −50%, results within 24 h** | OpenAI Batch [S] | ❌ never routed to |
 | **Flex tier: −50% per-request, variable latency** | OpenAI Flex [S] | ❌ |
-| Tier-aware routing (background work → cheap tier) | FinOps guidance [S] | ❌ — and PasClaw *knows* which work is background: cron, heartbeat, subagents |
+| Tier-aware routing (background work → cheap tier) | FinOps guidance [S] | ✅ `background_model` (falls back to `fast_model`) carries fact distillation, history compaction, the heartbeat, the goals judge and the maintenance review; `pasclaw route report` shows the resulting split. Subagents and cron skills are not yet routed [P] |
 
 The tier rows are the actionable ones. PasClaw already distinguishes
 interactive from background work structurally (cron jobs, heartbeat ticks,

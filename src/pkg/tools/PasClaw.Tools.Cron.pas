@@ -46,6 +46,7 @@ uses
   PasClaw.Config,
   PasClaw.Cron.Expr,
   PasClaw.Workspaces,
+  PasClaw.Maintain,
   PasClaw.Skills.Loader;
 
 type
@@ -155,6 +156,9 @@ var
   T: TTool;
 begin
   Result := False;
+  { The reserved maintenance "skill" is not on disk or in the registry;
+    the scheduler runs it in-process (PasClaw.Maintain). }
+  if SameText(Name, MaintenanceCronSkill) then Exit(True);
   { Validate against the registry the scheduler actually runs jobs through
     (skills register as skill_<name> at startup, fired via Reg.RunTool).
     This rejects a skill that's on disk but not in THIS running process --

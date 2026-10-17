@@ -6,14 +6,32 @@ PasClaw's memory subsystem is an operator-curated SQLite FTS5 + (optional) hybri
 
 ```
 workspace/memory/
-├── MEMORY.md                 ← the primary note file; injected wholesale into the system prompt
-├── SCARS.md                  ← Atlas-style stable §ANCHOR-NAME ids per recurring failure (pasclaw learn --write-scars)
-├── 2026-06-12.md             ← per-day daily notes (cron output appended here; agent writes too)
+├── SOUL.md                   ← optional: who the agent is; always loaded
+├── USER.md                   ← optional: stable facts about the user; always loaded
+├── MEMORY.md                 ← the primary note file; always loaded
+├── SCARS.md                  ← Atlas-style stable §ANCHOR-NAME ids per recurring failure (pasclaw learn --write-scars); reached by memory_search
+├── 2026-06-12.md             ← per-day daily notes (cron output appended here; agent writes too); today's and yesterday's always loaded
 ├── 2026-06-13.md
+├── facts.db                  ← distilled facts with kind / scope / confidence / expiry; searchable, swept by pasclaw maintain
+├── maintenance/2026-06-13.md ← the nightly pass's report
 └── fetched-<sanitised>.md    ← URL bodies written by memory_fetch
 ```
 
 The index is rebuilt lazily on every `memory_search` call (small N, fast rebuild). For large corpora use the [knowledgebase](./knowledgebase.md) instead — its index is explicit-sync, not lazy.
+
+## Tiers
+
+Memory that stays useful for months is split by how it reaches the model, not by topic:
+
+| tier | what | reaches the model | holds |
+|---|---|---|---|
+| **1 — always loaded** | `SOUL.md`, `USER.md`, `MEMORY.md`, today's and yesterday's daily note, plus the distilled-facts block | every turn, no search | only what still applies in six months: who the user is, how their systems are laid out, standing preferences |
+| **2 — searchable** | the rest of `workspace/memory/*.md`, `SCARS.md`, `facts.db` | `memory_search`, `memory_write` | dated and one-off material: task progress, what happened Tuesday, a fix that worked once, anything with an expiry |
+| **3 — reference** | the [knowledgebase](./knowledgebase.md) | `kb_search` / `kb_get`, on demand | durable documents and procedures: network topology, deployment steps, manuals |
+
+**The six-months test.** *Would you still want the agent acting on this in six months with no refresher?* Yes means tier 1. No means a dated note or a fact with an expiry. The model is told this rule in its system prompt, and `pasclaw maintain` reports which tier-1 files are growing.
+
+**Every tier-1 file is capped** at `memory_core_budget_bytes` (default 16 KB, roughly 200 lines; `0` removes the cap). A file over the cap is cut at a line boundary and the model sees a note saying how many bytes were left out and that `memory_search` reaches them — so a daily note used as a scratchpad cannot quietly eat the prompt, and the fix is visible rather than silent. `USER.md` and `SOUL.md` are optional: create them when the facts about the user, or the persona, deserve their own short file instead of a section of `MEMORY.md`. There is no separate budget for them; the same cap applies.
 
 ## Tools
 
@@ -71,12 +89,16 @@ Reuses `memory_search`'s FTS query normaliser so both tools treat a query identi
 
 ## System-prompt injection
 
-The system prompt always carries:
+The system prompt always carries, each capped at `memory_core_budget_bytes` (see [Tiers](#tiers)):
 
-1. `MEMORY.md` verbatim (or task-aware slices when `orient_task_aware: true`).
-2. Today's daily note (`<today>.md`).
-3. Yesterday's daily note (`<yesterday>.md`).
-4. `SCARS.md` if present.
+1. `SOUL.md` if present.
+2. `USER.md` if present.
+3. `MEMORY.md` verbatim (or task-aware slices when `orient_task_aware: true`).
+4. Today's daily note (`<today>.md`).
+5. Yesterday's daily note (`<yesterday>.md`).
+6. The distilled-facts block, when `memory_distill_enabled` is on (`memory_facts_budget` bytes).
+
+`SCARS.md` is **not** injected; it is reached through `memory_search` like any other note. (Earlier versions of this page said otherwise.)
 
 Operators wanting **only** task-relevant slices instead of the verbatim files can try it for a single run without editing config:
 

@@ -106,6 +106,15 @@ type
       in semantic dedup + search. No-op without a wired embedder. Returns
       the number of rows filled. }
     function  BackfillEmbeddings(const Today: string): Integer;
+    (* The expiry sweep the schema was built for and never had. Deletes
+       facts whose expires is before Today (they have been invisible to
+       every read since then and are only taking up rows and vectors),
+       and superseded facts created more than KeepSupersededDays days
+       before NowUnix (kept that long as history, then gone).
+       KeepSupersededDays <= 0 keeps superseded rows forever. Returns how
+       many rows were removed. Run by `pasclaw maintain`. *)
+    function  Sweep(const Today: string; NowUnix: Int64;
+                    KeepSupersededDays: Integer): Integer;
   end;
 
 function NewFactStore: IFactStore;
@@ -912,6 +921,8 @@ type
     function  CountAll: Integer;
     function  CountActive(const Today: string): Integer;
     function  BackfillEmbeddings(const Today: string): Integer;
+    function  Sweep(const Today: string; NowUnix: Int64;
+                    KeepSupersededDays: Integer): Integer;
   end;
 
 function NewFactStore: IFactStore;
@@ -1325,6 +1336,36 @@ begin
     PInt(Q, 'id', Id);
     Q.ExecSQL;
     Result := Q.RowsAffected > 0;
+    Commit;
+  finally
+    Q.Free;
+  end;
+end;
+
+function TFactStoreImpl.Sweep(const Today: string; NowUnix: Int64;
+                              KeepSupersededDays: Integer): Integer;
+var
+  Q: TQuery;
+  Cutoff: Int64;
+begin
+  Result := 0;
+  if not FOpen then Exit;
+  Q := NewQuery;
+  try
+    { Expired: the same predicate every read uses to hide them, inverted.
+      A row with an empty expires never matches. }
+    Q.SQL.Text := 'DELETE FROM facts WHERE expires <> '''' AND expires < :today';
+    PStr(Q, 'today', Today);
+    Q.ExecSQL;
+    Result := Q.RowsAffected;
+    if KeepSupersededDays > 0 then
+    begin
+      Cutoff := NowUnix - Int64(KeepSupersededDays) * 86400;
+      Q.SQL.Text := 'DELETE FROM facts WHERE superseded = 1 AND created_at < :cutoff';
+      PInt(Q, 'cutoff', Cutoff);
+      Q.ExecSQL;
+      Result := Result + Q.RowsAffected;
+    end;
     Commit;
   finally
     Q.Free;

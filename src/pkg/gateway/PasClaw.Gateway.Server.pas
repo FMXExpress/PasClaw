@@ -3350,10 +3350,7 @@ end;
 
 procedure TGatewayServer.HandleConfig(AResp: TIdHTTPResponseInfo);
 var
-  Body: string;
-  Root, Item: TJsonObject;
-  Arr: TJsonArray;
-  i: Integer;
+  Body, Masked: string;
 begin
   { Mask secret-bearing fields. PR #88 Codex P1 caught that the
     original implementation only masked providers[].api_key and
@@ -3372,81 +3369,18 @@ begin
   finally
     FApplyLock.Release;
   end;
-  Root := TJsonObject.Parse(Body);
-  if Root = nil then
+  { The masking itself lives in PasClaw.Config.MaskConfigSecretsJSON so
+    `pasclaw backup`'s config.redacted.json and this endpoint can never
+    disagree about what counts as a secret (providers[].api_key,
+    mcp_servers[].env, gateway.token -- Codex P2 on PR #246 --, and
+    web_search.api_key). }
+  Masked := MaskConfigSecretsJSON(Body);
+  if Masked = '' then
   begin
     WriteJSON(AResp, 500, '{"error":"could not reparse config"}');
     Exit;
   end;
-  try
-    Arr := Root.ChildArray('providers');
-    if Arr <> nil then
-    try
-      for i := 0 to Arr.Count - 1 do
-      begin
-        Item := Arr.ItemObject(i);
-        if Item = nil then Continue;
-        try
-          if Item.GetStr('api_key', '') <> '' then
-            Item.PutStr('api_key', MaskedSecretPlaceholder);
-        finally
-          Item.Free;
-        end;
-      end;
-    finally
-      Arr.Free;
-    end;
-
-    Arr := Root.ChildArray('mcp_servers');
-    if Arr <> nil then
-    try
-      for i := 0 to Arr.Count - 1 do
-      begin
-        Item := Arr.ItemObject(i);
-        if Item = nil then Continue;
-        try
-          { env strings are typically KEY=value pairs separated by
-            newlines or semicolons -- anything from "OPENAI_API_KEY=sk-…"
-            to bearer tokens. Mask the whole string when non-empty;
-            the UI just needs "is configured" signal, not the literal. }
-          if Item.GetStr('env', '') <> '' then
-            Item.PutStr('env', MaskedSecretPlaceholder);
-        finally
-          Item.Free;
-        end;
-      end;
-    finally
-      Arr.Free;
-    end;
-
-    { gateway.token is the inbound bearer for /v1/* routes. An
-      authenticated /v1/config caller would otherwise see the
-      shared secret in cleartext -- defeating the read-only-status
-      contract this endpoint advertises. Codex P2 on PR #246. }
-    Item := Root.ChildObject('gateway');
-    if Item <> nil then
-    try
-      if Item.GetStr('token', '') <> '' then
-        Item.PutStr('token', MaskedSecretPlaceholder);
-    finally
-      Item.Free;
-    end;
-
-    { web_search.api_key is a secret too (Brave/Tavily/Perplexity keys);
-      it was previously emitted in cleartext. Mask it like the others. }
-    Item := Root.ChildObject('web_search');
-    if Item <> nil then
-    try
-      if Item.GetStr('api_key', '') <> '' then
-        Item.PutStr('api_key', MaskedSecretPlaceholder);
-    finally
-      Item.Free;
-    end;
-
-    WriteJSON(AResp, 200, Root.ToJSON);
-  finally
-    Root.Free;
-  end;
+  WriteJSON(AResp, 200, Masked);
 end;
 
 procedure TGatewayServer.HandleConfigWrite(ARequest: TIdHTTPRequestInfo;
@@ -5249,15 +5183,17 @@ begin
   { Opt-in distilled memory: on a successful turn, fire a background pass
     that extracts durable facts from the latest exchange and stores them.
     Best-effort and non-blocking -- never affects the response.
-    Use Cfg.Provider/Cfg.Model -- the PRIMARY snapshot, NOT LocalCfg, which
-    auto-routing may have swapped to the cheap easy provider for this turn.
-    Fact extraction wants the operator's strong model regardless of which
-    model answered the (easy) turn; routing the chat reply cheaply should not
-    silently downgrade the durable memory the gateway writes. Cfg (not
-    FProvider) because a concurrent /v1/config hot-swap may have already
-    repointed FProvider at a different backend. }
+    Use Cfg.Provider -- the PRIMARY snapshot, NOT LocalCfg, which
+    auto-routing may have swapped to the cheap easy provider for this turn:
+    whatever the auto-router did to the chat reply must not decide where
+    durable memory is written. The MODEL is the operator's explicit choice
+    for background work when they made one (background_model, else
+    fast_model -- BackgroundModelFor), else the primary; an auto-routed
+    easy model is never picked up here. Cfg (not FProvider) because a
+    concurrent /v1/config hot-swap may have already repointed FProvider at
+    a different backend. }
   if Result and FCfg.MemoryDistillEnabled then
-    ScheduleDistill(Cfg.Provider, Cfg.Model, GetHome, ReqSession,
+    ScheduleDistill(Cfg.Provider, ModelOr(BackgroundModelFor(FCfg), Cfg.Model), GetHome, ReqSession,
       BuildRecentTranscript(Loop.FinalMessages, Loop.Content, DefaultRecentMsgs));
 end;
 
@@ -6159,6 +6095,7 @@ begin
   LoopCfg.PruneOpts.MinCandidateTokens := FCfg.Prune.MinCandidateTokens;
   LoopCfg.PruneOpts.PreviewChars       := FCfg.Prune.PreviewChars;
   LoopCfg.PruneOpts.Model              := FCfg.PlanModel;
+  LoopCfg.CompactModel                 := BackgroundModelFor(FCfg);
   LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
   LoopCfg.ProviderRetryAttempts  := FCfg.ProviderRetryAttempts;
   LoopCfg.ProviderRetryBackoffMs := FCfg.ProviderRetryBackoffMs;
@@ -6438,6 +6375,7 @@ begin
   LoopCfg.PruneOpts.MinCandidateTokens := FCfg.Prune.MinCandidateTokens;
   LoopCfg.PruneOpts.PreviewChars       := FCfg.Prune.PreviewChars;
   LoopCfg.PruneOpts.Model              := FCfg.PlanModel;
+  LoopCfg.CompactModel                 := BackgroundModelFor(FCfg);
   LoopCfg.ToolOutputCap  := FCfg.ToolOutputCap;
   LoopCfg.ProviderRetryAttempts  := FCfg.ProviderRetryAttempts;
   LoopCfg.ProviderRetryBackoffMs := FCfg.ProviderRetryBackoffMs;
@@ -6605,6 +6543,7 @@ begin
   LoopCfg.PruneOpts.MinCandidateTokens := FCfg.Prune.MinCandidateTokens;
   LoopCfg.PruneOpts.PreviewChars       := FCfg.Prune.PreviewChars;
   LoopCfg.PruneOpts.Model              := FCfg.PlanModel;
+  LoopCfg.CompactModel                 := BackgroundModelFor(FCfg);
   LoopCfg.ToolOutputCap  := FCfg.ToolOutputCap;
   LoopCfg.StreamReliability := FCfg.StreamReliability;
   { Only deep research narrates. An ordinary page comes back fast enough
@@ -8090,6 +8029,7 @@ begin
     LoopCfg.PruneOpts.MinCandidateTokens := FCfg.Prune.MinCandidateTokens;
     LoopCfg.PruneOpts.PreviewChars       := FCfg.Prune.PreviewChars;
     LoopCfg.PruneOpts.Model              := FCfg.PlanModel;
+  LoopCfg.CompactModel                 := BackgroundModelFor(FCfg);
     LoopCfg.ToolOutputCap := FCfg.ToolOutputCap;
     LoopCfg.ProviderRetryAttempts  := FCfg.ProviderRetryAttempts;
     LoopCfg.ProviderRetryBackoffMs := FCfg.ProviderRetryBackoffMs;

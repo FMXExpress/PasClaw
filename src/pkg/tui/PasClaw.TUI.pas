@@ -1403,6 +1403,7 @@ begin
   Cfg.Provider      := FProvider;
   Cfg.Registry      := FRegistry;
   Cfg.Model         := FModel;
+  Cfg.CompactModel  := BackgroundModelFor(RouteConfig);
   Cfg.MaxIterations := 6;
   Cfg.Parallel      := True;
   Cfg.Mode          := FMode;  { PR #290: thread current Plan/Build into the dispatch gate }
@@ -1678,7 +1679,7 @@ begin
       the fact store. Best-effort, non-blocking; scoped to the session the
       turn ran under. }
     if MemoryDistillEnabled then
-      ScheduleDistill(FProvider, FModel, GetHome, FLoopSessionId,
+      ScheduleDistill(FProvider, ModelOr(BackgroundModelFor(RouteConfig), FModel), GetHome, FLoopSessionId,
         BuildRecentTranscript(Loop.FinalMessages, Loop.Content, DefaultRecentMsgs));
     if FLoopSessionId <> FSession.Meta.Id then
       Flash('result -> ' + FLoopSessionId);
@@ -3094,6 +3095,7 @@ begin
   Cfg.Provider      := FProvider;
   Cfg.Registry      := FRegistry;
   Cfg.Model         := FModel;
+  Cfg.CompactModel  := BackgroundModelFor(RouteConfig);
   Cfg.MaxIterations := 6;
   Cfg.Parallel := True;
   Cfg.Options       := DefaultChatOptions;
