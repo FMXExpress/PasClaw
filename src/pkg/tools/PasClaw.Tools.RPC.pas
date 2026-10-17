@@ -46,6 +46,7 @@
 
   Wire shape (unchanged from v1):
     Request:  {"token":"...", "name":"...", "args":{...}}\n
+              {"token":"...", "catalog":"<server or empty>"}\n
     Response: {"result":"...", "err":"..."}\n
     One request per connection. With a dispatcher bound (the
     production path) a request goes through the loop's dispatch
@@ -285,10 +286,13 @@ end;
 procedure TToolRPCServer.OnExecute(Ctx: TIdContext);
 { One request / one response. Connection closes after. }
 var
-  Line, Name, ArgsJSON, ResultText, ErrMsg, ReqToken: string;
+  Line, Name, ArgsJSON, ResultText, ErrMsg, ReqToken, CatalogServer: string;
   ReqObj, ArgsObj, RespObj: TJsonObject;
   Reg: TToolRegistry;
+  CatalogReq: Boolean;
 begin
+  CatalogReq := False;
+  CatalogServer := '';
   try
     Line := Ctx.Connection.IOHandler.ReadLn;
   except
@@ -316,6 +320,8 @@ begin
   try
     ReqToken := ReqObj.GetStr('token', '');
     Name     := ReqObj.GetStr('name',  '');
+    CatalogReq := ReqObj.Has('catalog');
+    CatalogServer := ReqObj.GetStr('catalog', '');
     ArgsObj  := ReqObj.ChildObject('args');
     if ArgsObj <> nil then
     try
@@ -330,6 +336,31 @@ begin
   if ReqToken <> FToken then
   begin
     Ctx.Connection.IOHandler.WriteLn('{"err":"invalid token"}');
+    Exit;
+  end;
+  (* Catalog verb -- a request carrying "catalog" (a server name, or
+     empty for all) instead of "name": the code-mode tools as JSON, read
+     straight from the bound registry. Nothing runs. *)
+  if CatalogReq then
+  begin
+    FLock.Enter;
+    try
+      Reg := FRegistry;
+    finally
+      FLock.Leave;
+    end;
+    RespObj := TJsonObject.Create;
+    try
+      if Reg = nil then RespObj.PutStr('err', 'no registry bound')
+      else
+      begin
+        RespObj.PutStr('result', Reg.CodeModeCatalog(CatalogServer));
+        RespObj.PutStr('err', '');
+      end;
+      Ctx.Connection.IOHandler.WriteLn(RespObj.ToJSON);
+    finally
+      RespObj.Free;
+    end;
     Exit;
   end;
   if Name = '' then

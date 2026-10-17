@@ -227,6 +227,14 @@ type
     Args:    string;
     Env:     string;
     Enabled: Boolean;
+    (* Code mode: this server's tools are not sent to the model as tool
+       schemas at all. The model calls them from an execute_code script
+       -- `tool <server>__<name> '<json>'` -- chaining calls and
+       filtering results inside the script, so only what matters comes
+       back into context. Default from mcp_codemode_default (true). Set
+       false to expose the tools the classic way (deferred behind
+       tool_search when progressive disclosure is on). *)
+    CodeMode: Boolean;
   end;
 
   THeartbeatConfig = record
@@ -931,6 +939,12 @@ type
        the model can act on. shell_exec's `timeout_sec` argument overrides
        it per call. 0 = no bound. *)
     ShellTimeoutSec:       Integer;
+    (* The default for mcp_servers[].codemode. On: an MCP server's tools
+       live behind execute_code scripts (see TMCPServer.CodeMode) -- the
+       OpenCode 2.0 shape, and the one that keeps fat catalogs (GitHub,
+       Replicate) out of the prompt entirely rather than one tool_search
+       away. Off: every server is classic unless it says codemode: true. *)
+    MCPCodeModeDefault:    Boolean;
     (* On-by-default: scan tool output / recalled memory / stored
        skill descriptions for prompt-injection patterns and annotate
        hits with a warning banner (PasClaw.Promptware). A lowercase
@@ -1399,6 +1413,7 @@ begin
   Backup.KeepMonthly := 6;
   Backup.IncludeSecrets := True;   { see the field comment: a backup should restore the integrations too }
   ShellTimeoutSec        := 600;   { ten minutes; long enough for a build, short enough to notice }
+  MCPCodeModeDefault     := True;  { MCP tools are script-callable by default; see TMCPServer.CodeMode }
   CheckpointsKeepLast    := 32;    { keep last 32 atomic edit checkpoints. }
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
   OrientTaskAware        := False; { off by default -- whole-file MEMORY injection is the contract; opt in per-run with `pasclaw agent --orient` or "orient_task_aware":true. }
@@ -1493,6 +1508,7 @@ begin
   Result.PutStr ('args',    M.Args);
   Result.PutStr ('env',     M.Env);
   Result.PutBool('enabled', M.Enabled);
+  Result.PutBool('codemode', M.CodeMode);
 end;
 
 function CronToJSON(const C: TCronEntry): TJsonObject;
@@ -1760,6 +1776,8 @@ begin
       Root.PutStr('background_model', BackgroundModel);
     if ShellTimeoutSec <> 600 then
       Root.PutInt('shell_timeout_sec', ShellTimeoutSec);
+    if not MCPCodeModeDefault then
+      Root.PutBool('mcp_codemode_default', False);
     if (Maintenance.KeepSupersededDays <> 30) or (Maintenance.UnusedSkillDays <> 30)
        or Maintenance.Review or Maintenance.Backup then
     begin
@@ -2543,6 +2561,9 @@ begin
       Arr.Free;
     end;
 
+    { Read the default before the servers so each entry's absent
+      `codemode` resolves against the value THIS config sets. }
+    MCPCodeModeDefault := Root.GetBool('mcp_codemode_default', MCPCodeModeDefault);
     Arr := Root.ChildArray('mcp_servers');
     if Arr <> nil then
     try
@@ -2557,6 +2578,7 @@ begin
           MCPServers[i].Args    := Item.GetStr ('args',    '');
           MCPServers[i].Env     := Item.GetStr ('env',     '');
           MCPServers[i].Enabled := Item.GetBool('enabled', True);
+          MCPServers[i].CodeMode := Item.GetBool('codemode', MCPCodeModeDefault);
         finally
           Item.Free;
         end;

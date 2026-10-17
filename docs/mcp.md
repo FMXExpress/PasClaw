@@ -47,6 +47,23 @@ pasclaw mcp install <slug>           # install from hub OR bundled catalog
 
 Every tool a configured (and enabled) MCP server exports becomes available to the model on every turn, prefixed by the server name so collisions don't shadow each other. For an MCP server named `filesystem` that exports a `read_file` tool, the model sees `filesystem.read_file`.
 
+## Code Mode
+
+By default an MCP server's tools are **not sent to the model as tool schemas at all** (`mcp_servers[].codemode`, default from `mcp_codemode_default: true`). The model calls them from an `execute_code` script, where a one-line `tool` function wraps the tool RPC:
+
+```sh
+tool --catalog github                                     # names, descriptions, argument schemas
+tool github__list_issues '{"repo":"FMXExpress/PasClaw","state":"open"}' \
+  | jq -r '.[] | select(.title | test("crash")) | .number' \
+  | while read n; do tool github__get_issue "{\"number\":$n}" | jq .body; done
+```
+
+Why: a chain of MCP calls becomes one tool round, and the intermediate results never enter the conversation. That is the cost win OpenCode 2.0 ships under the same name, without a second runtime: the script is still bash or PowerShell. The system prompt lists each code-mode server with its tool count and the recipe above; `code_catalog(server?)` returns the same catalog without a script; `tool_search` tells the model when it asks for a code-mode tool the classic way.
+
+A script's calls go through the same dispatch gates as direct tool calls (plan mode refuses mutating MCP tools from a script too, hooks see them, output is capped). With the Docker shell backend the `pasclaw` binary is bind-mounted read-only into the container so `tool` works there.
+
+`"codemode": false` on a server exposes its tools the classic way: deferred behind `tool_search` when progressive disclosure is on, in the provider's tool list otherwise. `"mcp_codemode_default": false` makes classic the default for every server that does not say otherwise.
+
 ## `pasclaw mcp catalog` (built-in + hub)
 
 `pasclaw mcp catalog` queries the pasclaw.dev MCP registry (`GET /api/public/v1/mcp`) with a 5-second timeout and falls back to the bundled 5-entry list when the hub is unreachable. Source attribution (`hub` / `built-in`) is shown in the output.

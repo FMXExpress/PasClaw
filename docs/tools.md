@@ -78,13 +78,13 @@ Model writes a multi-line bash or PowerShell script body via `execute_code({lang
 
 The big win: fan-out patterns (list every `*.pas`, grep each for a symbol, summarise hits) that would take `1 + N + 1` inference rounds under `shell_exec` collapse to one tool call.
 
-### Tool-RPC callback (`pasclaw __tool`)
+### Tool-RPC callback (`tool` / `pasclaw __tool`)
 
-When `execute_code` spawns a script, PasClaw starts a loopback TCP server on a kernel-allocated port and writes the port + a fresh 32-hex token to a per-call file under `$PASCLAW_HOME/run/` (the path reaches the script as `$PASCLAW_TOOL_RPC_INFO`). Inside the script the model can call back into the same tool registry:
+When `execute_code` spawns a script, PasClaw starts a loopback TCP server on a kernel-allocated port and writes the port + a fresh 32-hex token to a per-call file under `$PASCLAW_HOME/run/` (the path reaches the script as `$PASCLAW_TOOL_RPC_INFO`). Every script starts with a one-line `tool` function wrapping `pasclaw __tool` (the binary path arrives as `$PASCLAW_BIN`). Inside the script the model can call back into the same tool registry, including [code-mode MCP tools](./mcp.md#code-mode) that are not callable any other way; `tool --catalog [server]` prints their schemas:
 
 ```bash
-for f in $(pasclaw __tool fs_list '{"path":"src/"}' | jq -r .files[]); do
-  pasclaw __tool memory_search "{\"q\":\"$f\"}"
+for f in $(tool fs_list '{"path":"src/"}' | jq -r .files[]); do
+  tool memory_search "{\"q\":\"$f\"}"
 done
 ```
 

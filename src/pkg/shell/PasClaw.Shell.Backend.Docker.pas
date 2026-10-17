@@ -387,6 +387,15 @@ begin
     Args.Add(ContainerName(SessionId));
     AddBindIfExists(Args, WorkspacePath);
     AddBindIfExists(Args, JoinPath(GetHome, 'tmp'));
+    {$IFNDEF MSWINDOWS}
+    { The running executable, read-only at the same path, so a script's
+      `tool` function (and `pasclaw __tool`) exists inside the container
+      without installing anything there. POSIX only: a Windows host binary
+      cannot run in a Linux container. The image must be glibc-compatible
+      with the host build; the Debian image this backend defaults to is. }
+    Args.Add('-v');
+    Args.Add(ExpandFileName(ParamStr(0)) + ':' + ExpandFileName(ParamStr(0)) + ':ro');
+    {$ENDIF}
     AddBindIfExists(Args, JoinPath(GetHome, 'run'));
     Args.Add('-w');
     Args.Add(ContainerPath(WorkspacePath));

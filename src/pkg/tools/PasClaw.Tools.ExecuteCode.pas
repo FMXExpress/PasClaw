@@ -76,6 +76,11 @@ function ResolveExecuteCodeLang(const Requested: string): string;
    `-ExecutionPolicy Bypass -File <script>` so a stock Windows box
    doesn't refuse to run an unsigned script. Exposed so tests can
    pin the invocation contract without needing to spawn anything. *)
+{ The one-line `tool` function every script starts with, and the body it
+  is prepended to. Pure; exposed for tests. }
+function ScriptPrologue(const Lang: string): string;
+function PrepareScriptBody(const Lang, Code: string): string;
+
 function BuildExecuteCodeArgv(const Lang, ScriptPath: string;
                               out Argv: TStringArray): Boolean;
 
@@ -352,11 +357,39 @@ begin
   Result := False;
 end;
 
+function ScriptPrologue(const Lang: string): string;
+(* What every script starts with: a `tool` function over `pasclaw
+   __tool`, so a model writes `tool github__list_issues '<json>' | jq ...`
+   instead of spelling the binary and the subcommand. $PASCLAW_BIN is the
+   running executable (set in the script's env by Tool_ExecuteCodeImpl);
+   the fallback is a `pasclaw` on PATH. One line, so line numbers in the
+   model's own script shift by exactly one. *)
+begin
+  if (Lang = 'powershell') or (Lang = 'pwsh') then
+    Result := 'function tool { $b = $env:PASCLAW_BIN; if (-not $b) { $b = ''pasclaw'' }; & $b __tool @args }'
+  else
+    (* No parameter-expansion braces here: the denylist rejects them in
+       the model's own code, and the prologue should not be the one
+       exception a reader has to know about. *)
+    Result := 'tool() { local b="$PASCLAW_BIN"; [ -n "$b" ] || b=pasclaw; "$b" __tool "$@"; }';
+end;
+
+function PrepareScriptBody(const Lang, Code: string): string;
+begin
+  Result := ScriptPrologue(Lang) + #10 + Code;
+end;
+
+function OwnExecutablePath: string;
+begin
+  Result := ExpandFileName(ParamStr(0));
+end;
+
 function MakeTempScript(const Lang, Code: string; out Path: string;
                        out ErrMsg: string): Boolean;
 { Materialise the model's script body to disk under
-  $PASCLAW_HOME/tmp/exec-<unique>.<ext>. Caller is responsible for
-  deleting it; we do that in the finally block of Tool_ExecuteCode. }
+  $PASCLAW_HOME/tmp/exec-<unique>.<ext>, with the `tool` prologue in
+  front. Caller is responsible for deleting it; we do that in the finally
+  block of Tool_ExecuteCode. }
 var
   Dir: string;
   Sl: TStringList;
@@ -391,7 +424,7 @@ begin
       2\r" -> "not a positive integer"). LF is correct for bash and
       accepted by PowerShell, so force it unconditionally. }
     Sl.LineBreak := #10;
-    Sl.Text := Code;
+    Sl.Text := PrepareScriptBody(Lang, Code);
     try
       { Model-authored source can hold non-ASCII in strings and comments;
         interpreters read UTF-8. Sl.Text honours the LF LineBreak above. }
@@ -477,6 +510,10 @@ begin
         and on POSIX docker; mapped on Windows docker. }
       ExtraEnv.Add('PASCLAW_TOOL_RPC_INFO=' +
                    HostToContainerPathViaBackend(InfoPath));
+      { The binary the `tool` prologue calls. Same namespace rule; the
+        Docker backend binds the executable read-only at the same path
+        on POSIX so this resolves inside the container too. }
+      ExtraEnv.Add('PASCLAW_BIN=' + HostToContainerPathViaBackend(OwnExecutablePath));
     except
       on E: Exception do
       begin
@@ -593,8 +630,11 @@ begin
                    'or a heredoc `python3 - <<''EOF''` ... `EOF`. Good for loops, ' +
                    'heredocs, and fan-out a single shell_exec can''t express. Returns ' +
                    'combined stdout+stderr and exit code; same sandbox/denylist as ' +
-                   'shell_exec. Inside the script, `pasclaw __tool <name> ' +
-                   '''<json-args>''` calls back into your own tools.';
+                   'shell_exec. Inside the script, `tool <name> ''<json-args>''` ' +
+                   '(a shell function defined on line 1) calls any of your tools, ' +
+                   'including code-mode MCP tools; `tool --catalog [server]` prints ' +
+                   'their schemas. Chain calls and filter in the script so only the ' +
+                   'result comes back.';
   T.Schema      :=
     '{"type":"object",' +
      '"properties":{' +
