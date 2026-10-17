@@ -141,6 +141,21 @@ function RunOneShotWithEnv(const Cmd, WorkingDir: string;
                             ExtraEnv: TStringList;
                             out Output: string): Integer;
 
+(* Wall-clock bound on RunOneShot / RunOneShotWithEnv. Before this there
+   was none: a command that never exited hung the turn, and the only limit
+   was the 1 MiB output cap. On expiry the child is terminated, the exit
+   code is 124 (the coreutils `timeout` convention) and Output ends with
+   "(timed out after N s)".
+
+   SetShellTimeoutMs is the process default (config shell_timeout_sec,
+   applied by ApplyConfigGlobals; 0 = no bound). SetShellTimeoutOverrideMs
+   is a per-thread override for one call -- shell_exec's `timeout_sec`
+   argument -- and -1 clears it. EffectiveShellTimeoutMs is what a run
+   actually uses: the override when set, else the default. *)
+procedure SetShellTimeoutMs(Ms: Integer);
+procedure SetShellTimeoutOverrideMs(Ms: Integer);
+function  EffectiveShellTimeoutMs: Integer;
+
 (* Run a program directly from its argv vector -- NO shell. Captures
    combined stdout+stderr (UTF-8) up to OneShotMaxBytes; returns the
    exit code, -1 on spawn failure, 124 if output was truncated and the
@@ -196,6 +211,34 @@ uses
     Posix.SysTime                  { timeval / Ptimeval for select() --
                                      NOT re-exported by Posix.SysSelect }
   {$ENDIF}{$ENDIF};
+
+var
+  GShellTimeoutMs: Integer = 0;
+threadvar
+  GShellTimeoutOverrideMs: Integer;   { 0 = not set (threadvars start zeroed); -1 clears }
+
+procedure SetShellTimeoutMs(Ms: Integer);
+begin
+  if Ms < 0 then Ms := 0;
+  GShellTimeoutMs := Ms;
+end;
+
+procedure SetShellTimeoutOverrideMs(Ms: Integer);
+begin
+  if Ms < 0 then GShellTimeoutOverrideMs := 0
+  else GShellTimeoutOverrideMs := Ms;
+end;
+
+function EffectiveShellTimeoutMs: Integer;
+begin
+  if GShellTimeoutOverrideMs > 0 then Result := GShellTimeoutOverrideMs
+  else Result := GShellTimeoutMs;
+end;
+
+function ShellTimeoutNote(Ms: Integer): string;
+begin
+  Result := Format(' (timed out after %d s)', [(Ms + 999) div 1000]);
+end;
 
 function DecodeShellOutputBytes(const Bytes: TBytes;
                                 ByteCount: Integer;
@@ -443,7 +486,9 @@ var
   M: TMemoryStream;
   Buf: array[0..ReadBufferSize - 1] of Byte;
   Bytes: TBytes;
-  N, Total: Integer;
+  N, Total, TimeoutMs: Integer;
+  StartT: TDateTime;
+  TimedOut: Boolean;
 begin
   Result := -1;
   Output := '';
@@ -485,6 +530,9 @@ begin
     P.Options := [poUsePipes, poStderrToOutPut];
     try P.Execute; except Exit; end;
     Total := 0;
+    TimeoutMs := EffectiveShellTimeoutMs;
+    StartT := Now;
+    TimedOut := False;
     while P.Running or (P.Output.NumBytesAvailable > 0) do
     begin
       while P.Output.NumBytesAvailable > 0 do
@@ -493,11 +541,19 @@ begin
         if N > 0 then begin M.WriteBuffer(Buf, N); Inc(Total, N); end;
         if Total > OneShotMaxBytes then begin P.Terminate(124); Break; end;
       end;
+      if (TimeoutMs > 0) and P.Running and
+         (Trunc((Now - StartT) * 86400000.0) >= TimeoutMs) then
+      begin
+        TimedOut := True;
+        P.Terminate(124);
+        Break;
+      end;
       Sleep(20);
     end;
     { ExitCode, not ExitStatus -- see TStdioProcess.Running for why the
       polling path has to use the normalised one. }
     Result := P.ExitCode;
+    if TimedOut then Result := 124;
     if M.Size > 0 then
     begin
       { Hand the captured bytes to the shared decoder rather than
@@ -511,6 +567,7 @@ begin
       M.ReadBuffer(Bytes[0], M.Size);
       Output := DecodeShellOutputBytes(Bytes, Length(Bytes));
     end;
+    if TimedOut then Output := Output + ShellTimeoutNote(TimeoutMs);
   finally
     M.Free;
     P.Free;
@@ -531,9 +588,11 @@ var
   M: TMemoryStream;
   Buf: array[0..ReadBufferSize - 1] of Byte;
   Bytes: TBytes;
-  N, Total, i, EqPos: Integer;
+  N, Total, i, EqPos, TimeoutMs: Integer;
   EnvList: TStringList;
   Name, Existing: string;
+  StartT: TDateTime;
+  TimedOut: Boolean;
 begin
   Result := -1;
   Output := '';
@@ -601,6 +660,9 @@ begin
     P.Options := [poUsePipes, poStderrToOutPut];
     try P.Execute; except Exit; end;
     Total := 0;
+    TimeoutMs := EffectiveShellTimeoutMs;
+    StartT := Now;
+    TimedOut := False;
     while P.Running or (P.Output.NumBytesAvailable > 0) do
     begin
       while P.Output.NumBytesAvailable > 0 do
@@ -609,10 +671,18 @@ begin
         if N > 0 then begin M.WriteBuffer(Buf, N); Inc(Total, N); end;
         if Total > OneShotMaxBytes then begin P.Terminate(124); Break; end;
       end;
+      if (TimeoutMs > 0) and P.Running and
+         (Trunc((Now - StartT) * 86400000.0) >= TimeoutMs) then
+      begin
+        TimedOut := True;
+        P.Terminate(124);
+        Break;
+      end;
       Sleep(20);
     end;
     { ExitCode, not ExitStatus -- see TStdioProcess.Running. }
     Result := P.ExitCode;
+    if TimedOut then Result := 124;
     if M.Size > 0 then
     begin
       { Same OEM-decode trick as RunOneShot above -- see the
@@ -622,6 +692,7 @@ begin
       M.ReadBuffer(Bytes[0], M.Size);
       Output := DecodeShellOutputBytes(Bytes, Length(Bytes));
     end;
+    if TimedOut then Output := Output + ShellTimeoutNote(TimeoutMs);
   finally
     EnvList.Free;
     M.Free;
@@ -890,9 +961,11 @@ var
   P: TStdioProcess;
   Args: TStringList;
   Buf: array[0..ReadBufferSize - 1] of Byte;
-  Total, N: Integer;
+  Total, N, TimeoutMs: Integer;
   Acc: TMemoryStream;
   Bytes: TBytes;
+  StartT: TDateTime;
+  TimedOut: Boolean;
 begin
   Result := -1;
   Output := '';
@@ -906,6 +979,9 @@ begin
       the gateway can't trample each other's cwd. }
     if not P.Spawn('cmd.exe', Args, {MergeStderr=}True, WorkingDir, ExtraEnv) then Exit;
     Total := 0;
+    TimeoutMs := EffectiveShellTimeoutMs;
+    StartT := Now;
+    TimedOut := False;
     while True do
     begin
       N := P.ReadAvailable(Buf, SizeOf(Buf));
@@ -916,10 +992,17 @@ begin
         if Total > OneShotMaxBytes then begin P.Terminate; Break; end;
       end
       else if not P.Running then Break;
+      if (TimeoutMs > 0) and (Trunc((Now - StartT) * 86400000.0) >= TimeoutMs) then
+      begin
+        TimedOut := True;
+        P.Terminate;
+        Break;
+      end;
     end;
     WaitForSingleObject(P.FProcHandle, INFINITE);
     P.Running;   { latches ExitCode via the side effect }
     Result := P.ExitCode;
+    if TimedOut then Result := 124;
     if Acc.Size > 0 then
     begin
       SetLength(Bytes, Acc.Size);
@@ -931,6 +1014,7 @@ begin
         in one comment block (see DecodeShellOutputBytes). }
       Output := DecodeShellOutputBytes(Bytes, Length(Bytes));
     end;
+    if TimedOut then Output := Output + ShellTimeoutNote(TimeoutMs);
   finally
     Acc.Free;
     Args.Free;
@@ -1158,9 +1242,11 @@ var
   P: TStdioProcess;
   Args: TStringList;
   Buf: array[0..ReadBufferSize - 1] of Byte;
-  Total, N, Status: Integer;
+  Total, N, Status, TimeoutMs: Integer;
   Acc: TMemoryStream;
   Bytes: TBytes;
+  StartT: TDateTime;
+  TimedOut: Boolean;
 begin
   Result := -1;
   Output := '';
@@ -1174,6 +1260,9 @@ begin
       gateway can't trample each other's cwd. }
     if not P.Spawn('/bin/sh', Args, {MergeStderr=}True, WorkingDir, ExtraEnv) then Exit;
     Total := 0;
+    TimeoutMs := EffectiveShellTimeoutMs;
+    StartT := Now;
+    TimedOut := False;
     while True do
     begin
       N := P.ReadAvailable(Buf, SizeOf(Buf));
@@ -1184,9 +1273,16 @@ begin
         if Total > OneShotMaxBytes then begin P.Terminate; Break; end;
       end
       else if not P.Running then Break;
+      if (TimeoutMs > 0) and (Trunc((Now - StartT) * 86400000.0) >= TimeoutMs) then
+      begin
+        TimedOut := True;
+        P.Terminate;
+        Break;
+      end;
     end;
     waitpid(P.FPid, @Status, 0);   { PInteger stat_loc -- see Running }
     if WIFEXITED(Status) then Result := WEXITSTATUS(Status) else Result := -1;
+    if TimedOut then Result := 124;
     if Acc.Size > 0 then
     begin
       SetLength(Bytes, Acc.Size);
@@ -1198,6 +1294,7 @@ begin
         in one comment block (see DecodeShellOutputBytes). }
       Output := DecodeShellOutputBytes(Bytes, Length(Bytes));
     end;
+    if TimedOut then Output := Output + ShellTimeoutNote(TimeoutMs);
   finally
     Acc.Free;
     Args.Free;

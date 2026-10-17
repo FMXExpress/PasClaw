@@ -47,9 +47,9 @@
   Wire shape (unchanged from v1):
     Request:  {"token":"...", "name":"...", "args":{...}}\n
     Response: {"result":"...", "err":"..."}\n
-    One request per connection. Tools that return huge outputs
-    route through the existing OutputCache same as the model-
-    facing path.
+    One request per connection. With a dispatcher bound (the
+    production path) a request goes through the loop's dispatch
+    gates and the OutputCache cap, same as the model-facing path.
 
   Auth: every request must carry the per-server random token.
   Bad token -> {"err":"invalid token"} and close.
@@ -76,6 +76,7 @@ type
   private
     FServer:   TIdTCPServer;
     FRegistry: TToolRegistry;
+    FDispatcher: IToolDispatcher;   { when set, every request goes through it }
     FToken:    string;
     FPort:     Integer;
     FInfoPath: string;
@@ -95,7 +96,8 @@ type
        command can find this server. Callers building a per-call
        server should pick a unique path so two concurrent
        Tool_ExecuteCode invocations don't trample each other. *)
-    constructor Create(Registry: TToolRegistry; const InfoPath: string);
+    constructor Create(Registry: TToolRegistry; const InfoPath: string;
+                       Dispatcher: IToolDispatcher = nil);
     destructor Destroy; override;
     procedure Start;
     procedure Stop;
@@ -179,11 +181,17 @@ begin
                             [CurrentProcessID, RandomHexToken(4)]));
 end;
 
-constructor TToolRPCServer.Create(Registry: TToolRegistry; const InfoPath: string);
+constructor TToolRPCServer.Create(Registry: TToolRegistry; const InfoPath: string;
+                                  Dispatcher: IToolDispatcher);
 begin
   inherited Create;
   FLock     := TCriticalSection.Create;
   FRegistry := Registry;
+  { The gated path. Tool_ExecuteCode captures it from the loop on the
+    dispatching thread and hands it here, so a script's call is refused in
+    plan mode, seen by hooks, scanned and capped exactly like a direct
+    call. nil keeps the registry-only path for harnesses without a loop. }
+  FDispatcher := Dispatcher;
   FInfoPath := InfoPath;
   FServer   := TIdTCPServer.Create(nil);
   FServer.OnExecute := OnExecute;
@@ -342,7 +350,10 @@ begin
     Exit;
   end;
 
-  ResultText := Reg.RunTool(Name, ArgsJSON, ErrMsg);
+  if FDispatcher <> nil then
+    ResultText := FDispatcher.Dispatch(Name, ArgsJSON, ErrMsg)
+  else
+    ResultText := Reg.RunTool(Name, ArgsJSON, ErrMsg);
   RespObj := TJsonObject.Create;
   try
     RespObj.PutStr('result', ResultText);

@@ -116,6 +116,8 @@ uses
   PasClaw.JSON,
   PasClaw.Logger,
   PasClaw.Platform,
+  PasClaw.Tools.Sandbox,  { ShellAllowed -- a skill's shell is still a shell }
+  PasClaw.Shell.Backend,  { run through the active backend (docker, local) }
   PasClaw.Promptware;   { injection scan on skill descriptions -- chokepoint 3 }
 
 const
@@ -234,25 +236,25 @@ begin
      the CONFIG default and write into the wrong world. $PASCLAW_WORKSPACE
      is the variable the resolver already honours, and passing it as
      child-only env means it applies to exactly this spawn -- nothing
-     process-global changes, so concurrent requests cannot be polluted. *)
-  if ThreadWorkspace <> '' then
-  begin
-    Env := TStringList.Create;
-    try
+     process-global changes, so concurrent requests cannot be polluted.
+
+     Through the active shell backend, not the host shell directly: with
+     the docker backend configured, a skill's command must run inside the
+     container like shell_exec's does, or the sandbox has a side door. *)
+  Env := TStringList.Create;
+  try
+    if ThreadWorkspace <> '' then
       Env.Add('PASCLAW_WORKSPACE=' + ThreadWorkspace);
-      ExitCode := RunOneShotWithEnv(Cmd, '', Env, Result);
-    finally
-      Env.Free;
-    end;
-  end
-  else
-    ExitCode := RunOneShot(Cmd, Result);
+    ExitCode := RunOneShotWithEnvViaBackend(GetCurrentSessionId, Cmd, '', Env, Result);
+  finally
+    Env.Free;
+  end;
 end;
 
 function RunShellSkill(Slot: Integer; const ArgsJSON: string; out ErrMsg: string): string;
 var
   Spec: TSkillSpec;
-  Cmd: string;
+  Cmd, Reason: string;
   ExitCode: Integer;
 begin
   ErrMsg := '';
@@ -271,6 +273,16 @@ begin
   if Cmd = '' then
   begin
     ErrMsg := 'empty shell template after rendering';
+    Exit('');
+  end;
+  (* The rendered command is subject to the same denylist and workspace
+     rules as shell_exec. The template is operator-authored, but its
+     placeholders are filled from the model's arguments, and a remove
+     command with a model-chosen path is the case the denylist exists
+     for. *)
+  if not ShellAllowed(Cmd, Reason) then
+  begin
+    ErrMsg := 'skill ' + Spec.Name + ': ' + Reason;
     Exit('');
   end;
   LogDebug('skill[%s]: %s', [Spec.Name, Copy(Cmd, 1, 200)]);
@@ -611,6 +623,10 @@ begin
     Tool.Schema      := Skills[i].Schema;
     Tool.Handler     := SkillHandlers[Slot];
     Tool.IsCore      := False;
+    { A shell skill changes the world; a prompt skill only renders text.
+      Left unset, plan mode let shell skills through. }
+    if K = 'shell' then Tool.Category := tcMutating
+    else Tool.Category := tcReadOnly;
     Reg.Register(Tool);
     LogDebug('skills: registered %s (slot=%d, kind=%s)', [Skills[i].Name, Slot, K]);
   end;

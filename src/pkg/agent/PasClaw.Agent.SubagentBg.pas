@@ -101,6 +101,13 @@ type
       this job's file writes snapshot into the parent's session turn.
       Opaque handle -- nil when checkpoints are off. }
     FCheckpointHandle: TObject;
+    (* The drain key of the loop that spawned this job -- the session it
+       must report back to. Stamped from CurrentDispatchDrainKey on the
+       spawning thread, falling back to the coordinator's own key. Matters
+       in the gateway, where many sessions share one registry and so one
+       coordinator: before this, a gateway turn could start a job and no
+       turn ever heard it finish, because nothing set the key at all. *)
+    FDrainKey:   string;
     FState:      TBgJobState;
     FCollected:  Boolean;            { delivered via drain already }
     FAbandoned:  Boolean;            { coordinator gone; self-free }
@@ -144,8 +151,10 @@ type
     { Collect finished-and-not-yet-delivered jobs into a formatted
       block for the loop-top system-prompt fold. Marks them
       delivered (drain-once). Returns '' when nothing is pending.
-      MaxChars bounds the total block size. }
-    function DrainFinishedBlock(MaxChars: Integer): string;
+      MaxChars bounds the total block size. Key filters to jobs whose
+      drain key matches; '' means every job (the TUI/CLI shape, one
+      session per coordinator). }
+    function DrainFinishedBlock(MaxChars: Integer; const Key: string = ''): string;
   end;
 
 (* Register spawn_background / spawn_status / spawn_wait /
@@ -502,6 +511,8 @@ begin
     { Capture on THIS (parent) thread -- the worker thread can't see the
       parent's threadvar-scoped context. }
     Job.FCheckpointHandle := CurrentCheckpointHandle;
+    Job.FDrainKey := CurrentDispatchDrainKey;
+    if Job.FDrainKey = '' then Job.FDrainKey := FKey;
     Job.FChildReg  := BuildFilteredRegistry(FCtx.ParentRegistry, Spec.Tools);
     Box := TLoopCfgBox.Create;
     { Give a child that inherited deferred MCP tools its own registry-bound
@@ -700,7 +711,8 @@ begin
   end;
 end;
 
-function TBackgroundSpawnCoordinator.DrainFinishedBlock(MaxChars: Integer): string;
+function TBackgroundSpawnCoordinator.DrainFinishedBlock(MaxChars: Integer;
+                                                        const Key: string): string;
 var
   i: Integer;
   Job: TBgJob;
@@ -719,6 +731,8 @@ begin
         if Job.FCollected or (Job.FState = bjRunning) or
            (Job.FState = bjCancelled) then
           Continue;
+        if (Key <> '') and (Job.FDrainKey <> Key) then
+          Continue;   { another session's job; its own turn will collect it }
         if Job.FState = bjDone then
         begin
           Preview := Job.FResultText;
@@ -750,28 +764,53 @@ end;
 { ------------------- drain hook + registration -------------------- }
 
 function DrainByKey(const Key: string; MaxChars: Integer): string;
+(* Called at the top of each loop iteration with the loop's
+   BackgroundDrainKey. Two shapes of caller:
+     - TUI / CLI: one coordinator per process, SetKey(session) called, so
+       the map lookup finds it and every job it holds belongs to that
+       session.
+     - gateway / serve: one coordinator shared by every session, no key
+       set. Jobs are stamped with the spawning dispatch's drain key, so
+       walk every coordinator and take only the jobs stamped with ours.
+   The map path is kept first because it is the cheap one; the walk picks
+   up what the map cannot know about. Each job is delivered once either
+   way (FCollected). *)
 var
   i: Integer;
   Coord: TBackgroundSpawnCoordinator;
+  Part: string;
+  Coords: TList;
 begin
   Result := '';
   if (Key = '') or (GMapLock = nil) then Exit;
-  GMapLock.Enter;
+  if MaxChars <= 0 then MaxChars := 8192;
+  Coords := TList.Create;
   try
-    i := GMap.IndexOf(Key);
-    if i < 0 then Exit;
-    Coord := TBackgroundSpawnCoordinator(GMap.Objects[i]);
+    GMapLock.Enter;
+    try
+      i := GMap.IndexOf(Key);
+      if i >= 0 then Coords.Add(GMap.Objects[i]);
+      if GCoordinators <> nil then
+        for i := 0 to GCoordinators.Count - 1 do
+          if Coords.IndexOf(GCoordinators[i]) < 0 then Coords.Add(GCoordinators[i]);
+    finally
+      GMapLock.Leave;
+    end;
+    { Drain outside the map lock -- DrainFinishedBlock takes the
+      coordinator + job locks and there's no need to serialise map
+      lookups behind a potentially slow drain. }
+    for i := 0 to Coords.Count - 1 do
+    begin
+      Coord := TBackgroundSpawnCoordinator(Coords[i]);
+      Part := Coord.DrainFinishedBlock(MaxChars - Length(Result), Key);
+      if Part = '' then Continue;
+      if Result = '' then Result := Part
+      else Result := Result + sLineBreak + Part;
+      if Length(Result) >= MaxChars then Break;
+    end;
   finally
-    GMapLock.Leave;
+    Coords.Free;
   end;
-  { Drain outside the map lock -- DrainFinishedBlock takes the
-    coordinator + job locks and there's no need to serialise map
-    lookups behind a potentially slow drain. The coordinator can't
-    be destroyed between lookup and drain in practice (destruction
-    happens at session/process teardown, not mid-loop), but a
-    multi-tenant embedder pulling registries down mid-flight should
-    revisit this. }
-  Result := Coord.DrainFinishedBlock(MaxChars);
 end;
 
 function RegisterBackgroundSpawnTools(Reg: TToolRegistry;

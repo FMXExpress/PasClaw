@@ -70,6 +70,8 @@ Six tiers of optimisation layered on the recursive scan:
 
 Runs `/bin/sh -c <cmd>` on POSIX or `cmd.exe /C <cmd>` on Windows. Output capped at 1 MiB. Denylist-gated via `PasClaw.Tools.Sandbox.ShellAllowed`. Per-command condensers run on successful output (tee-on-failure: full output passes through on non-zero exit). Filter coverage: `git status/diff/log`, `pytest`/`cargo test`/`npm test`/`go test`, `grep`/`Select-String`/`findstr`, recursive `ls`/`find`/`Get-ChildItem`, tabular CLIs (`docker ps`, `kubectl get`, `gh`), `docker build`, log tails, compiler walls, linters, package managers, build systems, IaC, `aws` JSON. PowerShell-alias normalisation included. See [`src/pkg/tools/PasClaw.Tools.Shell.Filters.pas`](../src/pkg/tools/PasClaw.Tools.Shell.Filters.pas).
 
+`timeout_sec` bounds one call in wall-clock seconds (default: `shell_timeout_sec` in config, 600). On expiry the process is killed and line 1 reads `exit=124` with a "timed out after N s" note. Before 0.1.6 there was no bound at all.
+
 ### `execute_code`
 
 Model writes a multi-line bash or PowerShell script body via `execute_code({lang, code})`. PasClaw materialises it to `$PASCLAW_HOME/tmp/exec-*.{sh,ps1}`, spawns the right shell (`bash <file>` on unix, `pwsh -NoProfile -ExecutionPolicy Bypass -File <file>` on Windows), captures combined stdout+stderr, cleans up. Same `ShellAllowed` denylist runs against the script body — a buried `rm -rf /` in a heredoc gets refused identically to the inline form. Cwd pinned to the workspace when `sandbox.restrict_to_workspace`.
@@ -78,7 +80,7 @@ The big win: fan-out patterns (list every `*.pas`, grep each for a symbol, summa
 
 ### Tool-RPC callback (`pasclaw __tool`)
 
-When `execute_code` spawns a script, PasClaw starts a loopback TCP server on a kernel-allocated port and writes the port + a fresh 32-hex token to `$PASCLAW_HOME/run/tool-rpc.json`. Inside the script the model can call back into the same tool registry:
+When `execute_code` spawns a script, PasClaw starts a loopback TCP server on a kernel-allocated port and writes the port + a fresh 32-hex token to a per-call file under `$PASCLAW_HOME/run/` (the path reaches the script as `$PASCLAW_TOOL_RPC_INFO`). Inside the script the model can call back into the same tool registry:
 
 ```bash
 for f in $(pasclaw __tool fs_list '{"path":"src/"}' | jq -r .files[]); do
@@ -86,7 +88,7 @@ for f in $(pasclaw __tool fs_list '{"path":"src/"}' | jq -r .files[]); do
 done
 ```
 
-Bad tokens get rejected at the wire level. Same registry the model is using; same sandbox + denylist + output-cap path. `pasclaw __tool` is the internal subcommand — not in `--help`.
+Bad tokens get rejected at the wire level. A call from a script goes through the **same dispatch gates as a direct tool call**: plan-mode and space-mode refusal of mutating tools, `BeforeToolCall` / `AfterToolResult` hooks, the promptware scan and the output cap. (Before 0.1.6 the RPC reached the registry directly, so a plan-mode turn could mutate through a script and no hook saw it.) A subagent's script dispatches into the subagent's own filtered registry, never the parent's. `pasclaw __tool` is the internal subcommand — not in `--help`.
 
 ## Search tools
 

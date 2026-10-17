@@ -432,9 +432,16 @@ var
   Server: TToolRPCServer;
   ExtraEnv: TStringList;
   InfoPath: string;
+  Disp: IToolDispatcher;
 begin
   ErrMsg := '';
   Result := '';
+  { Capture the loop's gated dispatcher NOW, on the thread the loop is
+    dispatching this call on -- the RPC server's threads cannot see the
+    loop's threadvar context. nil outside a loop (tests), in which case
+    the server falls back to Registry.RunTool as before. }
+  Disp := nil;
+  if Assigned(GCaptureDispatcher) then Disp := GCaptureDispatcher();
 
   if not ParseStringArg(ArgsJSON, 'code', Code) then
   begin
@@ -462,7 +469,7 @@ begin
   if Registry <> nil then
     try
       InfoPath := MakePerCallInfoPath;
-      Server   := TToolRPCServer.Create(Registry, InfoPath);
+      Server   := TToolRPCServer.Create(Registry, InfoPath, Disp);
       Server.Start;
       ExtraEnv := TStringList.Create;
       { The script runs in the active backend's namespace, so the env

@@ -571,8 +571,9 @@ begin
     { Spawn on the HOST -- this is a docker CLI call, not the contained
       command. RunArgvCapture blocks until `docker exec` exits, which it
       does when the command inside the container exits, and propagates
-      that exit code. }
-    Result := RunArgvCapture('docker', Args, '', Output);
+      that exit code. The same wall-clock bound as the local backend: a
+      contained command that never exits must not hang the turn either. }
+    Result := RunArgvCapture('docker', Args, '', Output, EffectiveShellTimeoutMs);
   finally
     Args.Free;
   end;
