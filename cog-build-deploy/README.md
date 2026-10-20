@@ -21,11 +21,14 @@ Every input from `/cog-build/` is inherited unchanged. New on top:
 | Name | Type | Default | Description |
 |---|---|---|---|
 | `deploy_to_cloudflare` | `bool` | `True` | Run `wrangler deploy --temporary` after the build. Set `False` to skip the deploy step entirely. |
-| `wrangler_project_path` | `str` | `""` | Path inside the workspace to the directory containing a wrangler config. Default empty = auto-detect the shallowest `wrangler.toml` / `wrangler.json` / `wrangler.jsonc` under `$PASCLAW_HOME/workspace/`. Both `src/my-worker` (a dir) and `src/my-worker/wrangler.jsonc` (the file) work. Absolute paths are stripped so the operator can't escape the workspace. |
+| `wrangler_project_path` | `str` | `""` | **Not required.** Path inside the workspace to the directory containing a wrangler config. Default empty = auto-detect the shallowest `wrangler.toml` / `wrangler.json` / `wrangler.jsonc` under `$PASCLAW_HOME/workspace/`. Both `src/my-worker` (a dir) and `src/my-worker/wrangler.jsonc` (the file) work. Absolute paths are stripped so the operator can't escape the workspace. |
+| `install_deps_before_deploy` | `bool` | `True` | Run `npm install` (and `npm run build` when the project's `package.json` declares a `build` script) in the wrangler project dir before deploying. **Required for any project with dependencies or a bundler step** — `wrangler deploy` bundles the entry point but does *not* install `node_modules` or run build scripts, so without this a dep-using Worker fails to bundle (`Could not resolve <pkg>`) or deploys broken and crashes at runtime. Set `False` only for a hand-written, zero-dependency single-file Worker. |
 
 The auto-detect path means **no agent-side instructions are needed** — if the build produced any wrangler config (TOML / JSON / JSONC — Cloudflare recommends `.jsonc` for new projects), it'll get found and deployed. If multiple exist (rare), set `wrangler_project_path` explicitly to disambiguate.
 
 **Plan-only predictions never deploy.** When `mode="plan"` is used the build step is skipped, so the deploy block is also skipped even with `deploy_to_cloudflare=True` — a planning-only run can't accidentally publish stale code from a `workspace_in` that happened to contain a wrangler config. Slots `[2]` / `[3]` carry `(no deployment attempted -- plan-only mode)` in that case.
+
+**Dependencies + build step.** `wrangler deploy` bundles the entry point with esbuild but doesn't install `node_modules` or run a project's build script — so a project that imports an npm package, or serves a built `dist/` (Vite, Workers Sites), would otherwise fail to bundle or deploy a broken Worker that crashes at runtime. With `install_deps_before_deploy=True` (the default) the cog runs `npm install` (and `npm run build` if a `build` script is declared) in the project dir first. This was validated against a real Hono + TypeScript Worker: raw deploy fails `Could not resolve "hono"`; install → build → deploy serves both `/` and `/api/hello` live. `node_modules` / `dist` are created in the live workspace *after* `pasclaw build` already wrote `workspace_out.zip`, so they don't bloat the returned archive.
 
 ## Outputs
 
@@ -49,6 +52,8 @@ Slots `[2]` and `[3]` always exist — empty fields would silently disappear on 
 | `(no deployment attempted)` | `deploy_to_cloudflare=False`. |
 | `(no deployment attempted -- plan-only mode)` | `mode="plan"` -- the build step ran no agent loop, so the deploy step is skipped too even with the toggle on. |
 | `(no wrangler.toml in workspace -- nothing to deploy)` | Agent didn't produce a wrangler config (TOML / JSON / JSONC); deploy was skipped automatically. |
+| `(deploy failed: npm install exit N)\n<tail>` | `npm install` failed in the project dir (bad/unreachable dependency, etc.). Deploy not attempted. |
+| `(deploy failed: npm run build exit N)\n<tail>` | The project's `build` script failed. Deploy not attempted. |
 | `(deploy failed: wrangler exit N)\n<stderr tail>` | wrangler returned non-zero. Workspace + reply still come back, the prediction itself doesn't fail. |
 | `(deploy failed: wrangler timed out after 5 min)` | Deploy hit the 5-minute timeout. |
 | `(deploy failed: wrangler CLI not found -- rebuild the cog image)` | The image was built without wrangler. Check `cog.yaml`. |
