@@ -1,0 +1,7 @@
+# Built helper -- compiled per-host, not tracked.  Build via the
+# fpc invocation in the README.
+memory_recall
+
+# Per-persona retrieval dumps.  These are run artifacts, not code;
+# keep them out of git.  Real-LOCOMO runs produce ~50 of these.
+results/
