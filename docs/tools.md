@@ -154,6 +154,8 @@ Returns a handle and the parent loop keeps working. When the job finishes its re
 
 When the model returns multiple `tool_use` blocks in one turn, read-only tools (`web_search`, `web_fetch`, `fs_read` / `fs_grep` / `fs_list`, `memory_search`) fan out on worker threads; mutating tools (`fs_write`, `fs_edit_hashline`, `shell_exec`, `execute_code`) stay serial. ~50% wall-clock win on multi-network-tool turns.
 
+Every call in one response runs before the model is asked again, in the order listed: a run of read-only calls is one parallel batch, each mutating call is a batch of one. So a response can carry several writes and then the check that depends on them (`shell_exec` running the tests), and the model sees all the results together. The system prompt's rule 7 says exactly this, because a model that was only told "reads batch, writes split the batch" sends one write per turn: on the six-turn RAG-pipeline bench (`bench/ragbench/TURNS.md`) that wording plus a one-line directory listing in the Workspace section took the task from six model calls to two.
+
 Set `"parallel": false` in your `TToolLoopConfig` (embedders) or use `--no-parallel` (TUI) to force serial dispatch.
 
 ## Output condensation

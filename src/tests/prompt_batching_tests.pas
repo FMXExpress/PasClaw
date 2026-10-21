@@ -79,14 +79,20 @@ begin
     Cfg.Free;
   end;
   Check('prompt carries the batching rule',
-    Pos('Batch independent investigation', P) > 0);
+    Pos('Batch tool calls; every round trip', P) > 0);
   { The whole value is the model knowing these arrive together. }
   Check('rule names parallel dispatch', Pos('IN PARALLEL', P) > 0);
-  Check('rule warns that mutations split the batch',
-    Pos('SPLITS the batch', P) > 0);
-  { gather -> edit -> verify, not gather -> edit -> gather -> edit }
-  Check('rule keeps the dependent half sequential',
-    (Pos('sequential', P) > 0) and (Pos('one focused check', P) > 0));
+  { Mutating calls do not share a parallel batch; they run one at a time,
+    in listed order, within the same response (bench/ragbench/TURNS.md:
+    the old "SPLITS the batch, do not interleave" wording made a model
+    send one write per turn). }
+  Check('rule says mutations run one at a time, in order',
+    Pos('runs one at a time, in order', P) > 0);
+  { gather -> edit -> verify in ONE response when the inputs are known;
+    a new turn only for a call that needs a result not yet seen. }
+  Check('rule puts the dependent check last in the same response',
+    (Pos('LAST in the same response', P) > 0) and
+    (Pos('needs a result you have not seen yet', P) > 0));
 
   { The rule must name tools that EXIST. The first draft said
     `run_command`, which is registered nowhere -- RegisterShellTool
@@ -108,7 +114,7 @@ begin
     Scoped to rule 7 on purpose: rule 5 tells the model to call
     memory_search before answering from prior conversations, which is a
     perfectly good instruction. Only the batching claim is the problem. }
-  Rule := Copy(P, Pos('Batch independent investigation', P), MaxInt);
+  Rule := Copy(P, Pos('Batch tool calls; every round trip', P), MaxInt);
   Check('rule 7 was located', Rule <> '');
   Check('rule 7 does not advertise memory_search as parallel-safe',
     Pos('memory_search', Rule) = 0);
