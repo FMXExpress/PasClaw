@@ -49,6 +49,7 @@ uses
   PasClaw.Workspaces,
   SysUtils,
   PasClaw.Config, PasClaw.CliUI, PasClaw.Logger,
+  PasClaw.MCP.Disclosure,   { RegisterMCPDisclosureTools on the --no-mcp path }
   PasClaw.Providers.Intf,
   PasClaw.Providers.Factory,
   PasClaw.Tools.Registry,
@@ -300,7 +301,9 @@ begin
 
     SetLength(MCPClients, 0);
     if (not Args.NoMCP) and (Reg <> nil) then
-      MCPClients := ConnectMCPServers(Cfg, Reg);
+      MCPClients := ConnectMCPServers(Cfg, Reg)
+    else if Reg <> nil then
+      RegisterMCPDisclosureTools(Reg, Cfg);   { --no-mcp must keep tool_search + built-in deferral }
 
     { Subagents (on by default): register spawn + background spawn tools so the
       served chat loop can fan out to the built-in general-purpose agent (and

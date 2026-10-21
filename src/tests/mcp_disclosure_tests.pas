@@ -392,6 +392,51 @@ begin
   WriteLn('  ok: tool_search explains an enabled-but-unloaded MCP server');
 end;
 
+{ The built-in long tail: one predicate (ToolIsLongTail) drives both the
+  one-shot sweep and the registry latch, so a tool registered AFTER
+  disclosure (shell_background, from the background coordinator) is
+  deferred exactly like one registered before. }
+procedure TestBuiltinLongTailOneSet;
+var
+  Reg: TToolRegistry;
+  Names: TStringArray;
+  i: Integer;
+  function Deferred(const N: string): Boolean;
+  var j: Integer;
+  begin
+    Result := False;
+    for j := 0 to High(Names) do if Names[j] = N then Exit(True);
+  end;
+begin
+  Reg := TToolRegistry.Create;
+  try
+    { Registered before the sweep... }
+    RegisterVisible(Reg, 'read_file');
+    RegisterVisible(Reg, 'desktop');
+    RegisterVisible(Reg, 'memory_write');
+    RegisterVisible(Reg, 'db_query');
+    AssertEqI(DeferBuiltinTools(Reg), 3, 'sweep defers desktop, memory_write, db_query');
+    { ...and after it, through the latch. }
+    Reg.DeferLongTail := True;
+    RegisterVisible(Reg, 'shell_background');
+    RegisterVisible(Reg, 'memory_fetch');
+    RegisterVisible(Reg, 'shell_exec');
+    Names := Reg.DeferredNames;
+    for i := 0 to High(Names) do ;
+    AssertTrue(Deferred('desktop'), 'desktop deferred');
+    AssertTrue(Deferred('memory_write'), 'memory_write deferred');
+    AssertTrue(Deferred('memory_fetch'), 'memory_fetch deferred (latch)');
+    AssertTrue(Deferred('shell_background'), 'shell_background deferred (latch)');
+    AssertTrue(Deferred('db_query'), 'db_query deferred (prefix)');
+    AssertTrue(not Deferred('read_file'), 'read_file visible');
+    AssertTrue(not Deferred('shell_exec'), 'shell_exec visible');
+    AssertEqI(CountResults(Reg), 2, 'provider sees exactly the two visible tools');
+  finally
+    Reg.Free;
+  end;
+  WriteLn('  ok: built-in long tail is one set across sweep and latch');
+end;
+
 procedure TestToolSearchSkipsRegistrationWhenDisabled;
 var
   Reg: TToolRegistry;
@@ -475,6 +520,7 @@ begin
   TestToolSearchEmptyDeferredEnabledButUnloaded;
   TestToolSearchEmptyAfterAllRevealed;
   TestToolSearchSkipsRegistrationWhenDisabled;
+  TestBuiltinLongTailOneSet;
   TestConfigRoundTrip;
   WriteLn('ok - mcp disclosure tests passed');
 end.

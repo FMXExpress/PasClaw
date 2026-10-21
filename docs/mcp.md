@@ -47,6 +47,12 @@ pasclaw mcp install <slug>           # install from hub OR bundled catalog
 
 Every tool a configured (and enabled) MCP server exports becomes available to the model on every turn, prefixed by the server name so collisions don't shadow each other. For an MCP server named `filesystem` that exports a `read_file` tool, the model sees `filesystem.read_file`.
 
+### Built-in long tail
+
+The same lazy reveal applies to PasClaw's own tools (`builtin_progressive_disclosure`, default on). Tool schemas are re-sent on every request and dominate its size, so the families a turn rarely reaches for are withheld behind `tool_search` and listed by name in a "Deferred Tools" prompt section: `db_*`, `workflow_*`, `spawn*`, `session_*`, plus `desktop`, `memory_write`, `memory_fetch` and `shell_background`. The set is one predicate (`ToolIsLongTail` in `PasClaw.Tools.Types`) read both by the registration sweep and by the registry latch, so a tool registered later is deferred the same way. Measured on a six-turn build task with identical model decisions: 19 visible schemas were 15.7 KB of a 24.2 KB request; deferring the four single tools took the task from 156,064 to 132,562 request bytes. A deferred tool costs one extra `tool_search` turn the first time it is needed; calling one directly without searching still works.
+
+`--no-mcp` keeps this: the gateway, serve and TUI register `tool_search` and the deferral even when MCP is off (they used to skip both, so every request carried all 36 schemas).
+
 ## `pasclaw mcp catalog` (built-in + hub)
 
 `pasclaw mcp catalog` queries the pasclaw.dev MCP registry (`GET /api/public/v1/mcp`) with a 5-second timeout and falls back to the bundled 5-entry list when the hub is unreachable. Source attribution (`hub` / `built-in`) is shown in the output.

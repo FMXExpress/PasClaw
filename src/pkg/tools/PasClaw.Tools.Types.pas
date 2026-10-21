@@ -129,11 +129,23 @@ implementation
 
 function ToolIsLongTail(const Name: string): Boolean;
 const
+  { Families a turn rarely reaches for (prefix-matched so a new db_ /
+    workflow_ / spawn / session_ tool inherits the decision). }
   P: array[0..3] of string = ('db_', 'workflow_', 'spawn', 'session_');
+  { Single tools that act on the agent's own state or UI rather than on
+    the task. Measured on the RAG-pipeline bench (6 turns, identical
+    model decisions): these four were 3,972 of the 15,703 tool-schema
+    bytes on every request and were called zero times; deferring them
+    cut the task from 156,064 to 132,562 request bytes. The one set is
+    read by the registry's DeferLongTail latch and by
+    DeferBuiltinTools, so the two can never disagree. }
+  N: array[0..3] of string = ('desktop', 'memory_write', 'memory_fetch', 'shell_background');
 var
   i: Integer;
 begin
   Result := False;
+  for i := 0 to High(N) do
+    if SameText(Name, N[i]) then Exit(True);
   for i := 0 to High(P) do
     if (Length(Name) >= Length(P[i]))
        and SameText(Copy(Name, 1, Length(P[i])), P[i]) then

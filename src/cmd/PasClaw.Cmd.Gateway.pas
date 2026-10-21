@@ -27,6 +27,7 @@ uses
   PasClaw.Workspaces,
   SysUtils,
   PasClaw.Config, PasClaw.CliUI, PasClaw.Logger,
+  PasClaw.MCP.Disclosure,   { RegisterMCPDisclosureTools on the --no-mcp path }
   PasClaw.Providers.Intf,
   PasClaw.Providers.Factory,
   PasClaw.Tools.Registry,
@@ -365,7 +366,13 @@ begin
 
     SetLength(MCPClients, 0);
     if (not Args.NoMCP) and (Reg <> nil) then
-      MCPClients := ConnectMCPServers(Cfg, Reg);
+      MCPClients := ConnectMCPServers(Cfg, Reg)
+    else if Reg <> nil then
+      { --no-mcp skipped the only call that registers tool_search and
+        defers the built-in long tail, so every request carried all 36
+        tool schemas (28.5 KB) instead of 19 (15.7 KB). Same fix the
+        CLI's ConnectMCP already had. }
+      RegisterMCPDisclosureTools(Reg, Cfg);
 
     { Subagents (on by default): register spawn + background spawn tools so the
       gateway chat loop (web UI / /v1/chat / OpenAI-compat) can fan out to the

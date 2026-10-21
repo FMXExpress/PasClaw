@@ -142,10 +142,20 @@ function RegisterMCPDisclosureTools(Reg: TToolRegistry; const Cfg: TConfig;
    answers a question does not spawn a subagent.
 
    What stays visible is deliberately everything a turn is LIKELY to reach
-   for -- file ops, shell, execute_code, memory/kb search, web_fetch,
+   for -- file ops, shell, execute_code, memory search, web_fetch,
    todo_write -- plus tool_output_get, which must stay callable because the
    truncation notice hands the model a handle, and making it search for the
    retrieval tool first would be a worse trade than the bytes saved.
+
+   Second measurement (RAG-pipeline bench, 6 turns, identical model
+   decisions, bench/ragbench): 19 visible schemas were 15,703 of a
+   24,214-byte request; desktop, memory_write, memory_fetch and
+   shell_background were 3,972 of those and never called, so they joined
+   the set (PasClaw.Tools.Types.ToolIsLongTail). Task cost 156,064 ->
+   132,562 bytes. The same run with --no-mcp had been 228,556 bytes: the
+   gateway, serve and TUI only reached this registration through
+   ConnectMCPServers, which --no-mcp skipped, so those surfaces carried
+   all 36 schemas. Fixed at the three call sites.
 
    Cost: first use of a deferred tool costs one extra turn (tool_search,
    then call). Benefit: every other turn is ~39% smaller. Same bet MCP
@@ -494,22 +504,22 @@ const
     'tool_search again to invoke them.';
 
 function DeferBuiltinTools(Reg: TToolRegistry): Integer;
-const
-  { Prefix-matched so a NEW db_/workflow_/spawn tool inherits the decision
-    instead of silently re-fattening every request. }
-  DEFER_PREFIXES: array[0..3] of string =
-    ('db_', 'workflow_', 'spawn', 'session_');
 var
   Names: TStringArray;
   T: TTool;
-  i, k: Integer;
+  i: Integer;
 begin
   Result := 0;
   if Reg = nil then Exit;
   Names := Reg.Names;
+  { The set lives in PasClaw.Tools.Types.ToolIsLongTail: the registry's
+    DeferLongTail latch reads the same predicate for tools registered
+    after this sweep, so the two paths cannot drift apart (the first cut
+    kept a second list here, and shell_background -- registered by the
+    background coordinator after disclosure -- stayed visible). }
   for i := 0 to High(Names) do
-    for k := 0 to High(DEFER_PREFIXES) do
-      if StartsWith(Names[i], DEFER_PREFIXES[k]) then
+  begin
+    if ToolIsLongTail(Names[i]) then
       begin
         if Reg.Find(Names[i], T) then
         begin
@@ -519,8 +529,8 @@ begin
           Reg.RegisterDeferred(T, True);
           Inc(Result);
         end;
-        Break;
       end;
+  end;
   if Result > 0 then
     LogInfo('disclosure: deferred %d built-in tool(s) behind tool_search',
             [Result]);

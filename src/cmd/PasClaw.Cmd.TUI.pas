@@ -35,6 +35,7 @@ uses
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
   PasClaw.Tools.MemoryFetch,
+  PasClaw.MCP.Disclosure,    { RegisterMCPDisclosureTools on the --no-mcp path }
   PasClaw.Tools.OutputCache,
   PasClaw.Tools.Sandbox,
   PasClaw.Shell.Backend,           { StartShellSession / SetCurrentSessionId
@@ -201,7 +202,9 @@ begin
 
     SetLength(MCPClients, 0);
     if (Reg <> nil) and (not A.NoMCP) then
-      MCPClients := ConnectMCPServers(Cfg, Reg);
+      MCPClients := ConnectMCPServers(Cfg, Reg)
+    else if Reg <> nil then
+      RegisterMCPDisclosureTools(Reg, Cfg);   { --no-mcp must keep tool_search + built-in deferral }
 
     if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
 
