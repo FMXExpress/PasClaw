@@ -210,6 +210,13 @@ function FindProjectAgentsMd(const StartDir: string): string;
   guidance. }
 function BuildProjectRulesSection: string;
 
+{ The Workspace section's one-line directory listing: sorted top-level
+  names, directories with a trailing slash, hidden entries skipped, at
+  most Max then "... and N more"; "(empty)" for an empty or missing dir.
+  Exposed for tests. }
+function WorkspaceTopLevel(const Dir: string; Max: Integer): string;
+function SafeEntryName(const N: string): string;
+
 { Orient launch-preamble section. When Cfg.OrientTaskAware is on, returns an
   instruction telling the model to open a task with a brief plan BEFORE it
   starts calling tools, so the operator sees what it's about to do instead
@@ -304,6 +311,68 @@ begin
     'or configuring a toolchain).';
 end;
 
+const
+  WorkspaceListingMax = 40;
+
+{ Names at the top level of Dir, sorted, directories with a trailing
+  slash, hidden entries skipped, at most Max (then "... and N more").
+  "(empty)" for an empty or unreadable directory. Exposed for tests. }
+{ A directory entry as prompt-safe text: control characters (anything
+  below space, and DEL) become '?', backticks become apostrophes so the
+  quoting around the name cannot be closed early, and very long names
+  are cut. Exposed for tests. }
+function SafeEntryName(const N: string): string;
+var
+  i: Integer;
+begin
+  Result := '';
+  for i := 1 to Length(N) do
+    if (Ord(N[i]) < 32) or (Ord(N[i]) = 127) then Result := Result + '?'
+    else if N[i] = '`' then Result := Result + ''''
+    else Result := Result + N[i];
+  if Length(Result) > 60 then Result := Copy(Result, 1, 57) + '...';
+end;
+
+function WorkspaceTopLevel(const Dir: string; Max: Integer): string;
+var
+  Sr: TSearchRec;
+  L: TStringList;
+  i, Shown: Integer;
+begin
+  L := TStringList.Create;
+  try
+    if FindFirst(JoinPath(Dir, '*'), faAnyFile, Sr) = 0 then
+    try
+      repeat
+        if (Sr.Name = '.') or (Sr.Name = '..') then Continue;
+        if (Sr.Name <> '') and (Sr.Name[1] = '.') then Continue;
+        { Names are untrusted data from the checkout: a control character
+          (a filename with a newline in it) must not be able to open a new
+          heading in the system prompt. Scrub, cap, and quote. }
+        if (Sr.Attr and faDirectory) <> 0 then L.Add(SafeEntryName(Sr.Name) + '/')
+        else L.Add(SafeEntryName(Sr.Name));
+      until FindNext(Sr) <> 0;
+    finally
+      FindClose(Sr);
+    end;
+    if L.Count = 0 then Exit('(empty)');
+    L.Sort;
+    Result := '';
+    Shown := 0;
+    for i := 0 to L.Count - 1 do
+    begin
+      if Shown >= Max then Break;
+      if Result <> '' then Result := Result + ', ';
+      Result := Result + '`' + L[i] + '`';
+      Inc(Shown);
+    end;
+    if L.Count > Shown then
+      Result := Result + Format(', ... and %d more', [L.Count - Shown]);
+  finally
+    L.Free;
+  end;
+end;
+
 function BuildWorkspaceSection: string;
 var
   Home, WorkDir: string;
@@ -322,6 +391,12 @@ begin
     'Your working directory is: ' + WorkDir + sLineBreak +
     'Relative file paths (e.g. write_file "index.html") resolve here; pass an '
     + 'absolute path to write elsewhere.' + sLineBreak +
+    { The top level of the working directory, so the first turn of a build
+      task does not have to be a list_dir just to learn whether the tree is
+      empty. Measured on bench/ragbench: that look-around was one of six
+      turns. Capped, names only, directories marked -- a hint, not a
+      listing tool. }
+    'Top-level entries: ' + WorkspaceTopLevel(WorkDir, WorkspaceListingMax) + sLineBreak +
     '- Memory: ' + JoinPath(Home, ActiveWorkspaceName + '/memory/MEMORY.md') + sLineBreak +
     '- Skills: ' + JoinPath(Home, ActiveWorkspaceName + '/skills') + '/{skill-name}/SKILL.md' + sLineBreak +
     '- Logs:   ' + JoinPath(Home, 'logs');
@@ -825,18 +900,21 @@ begin
     'of every .pas file. The script''s stdout becomes your evidence; ' +
     'the raw file bodies do not need to enter the conversation.' + sLineBreak +
     sLineBreak +
-    '7. **Batch independent investigation** -- the tool loop runs ' +
-    '`read_file`, `list_dir`, `grep_files` and `find_files` calls IN ' +
-    'PARALLEL when they arrive together in one response, so emit every ' +
-    'read or search whose input does not depend on another''s output as a ' +
-    'single batch rather than one per turn. Three files you already know ' +
-    'you need is ONE response with three `read_file` calls, not three ' +
-    'round trips. Anything that changes state -- edits, `shell_exec`, ' +
-    '`web_fetch` -- runs serially and SPLITS the batch, so do not ' +
-    'interleave one between independent reads. Then keep the dependent ' +
-    'part sequential: gather in parallel, make the edit, run one focused ' +
-    'check. Each round trip you avoid is a whole model call of latency ' +
-    'saved.';
+    '7. **Batch tool calls; every round trip is a whole model call** -- ' +
+    'all the tool calls in one response run before you are asked again, ' +
+    'and they execute in the order you list them: `read_file`, ' +
+    '`list_dir`, `grep_files` and `find_files` run IN PARALLEL with each ' +
+    'other, and anything that changes state -- `write_file`, edits, ' +
+    '`shell_exec`, `web_fetch` -- runs one at a time, in order, each ' +
+    'finishing before the next starts. So emit every read or search whose ' +
+    'input does not depend on another''s output as one batch (three files ' +
+    'you already know you need is ONE response with three `read_file` ' +
+    'calls). Writes and other state-changing calls can go in one response ' +
+    'too: when you already know the contents of several files, write them ' +
+    'all in one response, and put the check that depends on them (the ' +
+    'build, the test) LAST in the same response, since it runs after ' +
+    'them. You see every result together. Split into a new turn only when ' +
+    'a later call genuinely needs a result you have not seen yet.';
 end;
 
 function AppendSection(const Acc, Section: string): string;
