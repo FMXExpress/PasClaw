@@ -318,6 +318,7 @@ begin
   SetLength(Result, 0);
   Path := SteeringPath(SessionKey);
   if Path = '' then Exit;
+  Lock := LockPath(SessionKey);
   (* Fast path, and the one that matters: the tool loop drains at EVERY
      iteration top, and almost every iteration has nothing queued. Taking
      the lock first cost 2,000 ms per iteration whenever the steering
@@ -325,12 +326,27 @@ begin
      steered): CreateDir on the lock path failed with ENOENT, the stale
      check could not run, and AcquireLock spun out its full wait. Measured
      on bench/ragbench: 2,012 ms of a 2,040 ms gap between a model's
-     answer and its next request, on every turn. A queue file that
-     appears between this check and the next iteration is picked up then,
-     exactly as a contended lock already behaves. *)
-  if not FileExists(Path) then Exit;
+     answer and its next request, on every turn.
 
-  Lock := LockPath(SessionKey);
+     The LOCK is half the question, and leaving it out was a bug.
+     PushSteering takes the lock BEFORE it creates the queue file, so
+     "no file" does not mean "nothing queued" -- it equally means "a
+     writer is between its lock and its write". Exiting then let the
+     turn carry on without a steer the user had already sent, and if
+     that iteration's response carried no tool calls the loop ended and
+     the message waited for the NEXT turn: the one thing steering
+     exists to prevent. Before the fast path, AcquireLock blocked on
+     that push and the same iteration drained it.
+
+     So the fast path asks for both: no file AND nobody holding the
+     lock. That keeps the whole win -- the hot case is a key nobody has
+     ever steered, which has neither -- and falls back to contending
+     for the lock exactly when someone is mid-push. A queue file that
+     appears after BOTH checks belongs to a push that started after we
+     looked, and is picked up next iteration, exactly as a contended
+     lock already behaves. (Codex P2 on #617.) *)
+  if (not FileExists(Path)) and (not DirectoryExists(Lock)) then Exit;
+
   if not AcquireLock(Lock) then
   begin
     { Benign and self-healing: we never renamed the queue file, so the
