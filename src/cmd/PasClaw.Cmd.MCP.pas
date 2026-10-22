@@ -102,6 +102,12 @@ begin
     Cfg.MCPServers[n].Cmd     := Argv[2];
     Cfg.MCPServers[n].Args    := Args;
     Cfg.MCPServers[n].Enabled := True;
+    { Code mode follows the config default unless the operator says
+      otherwise. Leaving the record zero-initialised wrote
+      "codemode": false into the file and pinned the server to
+      classic exposure forever, whatever mcp_codemode_default said.
+      (Codex P1 on #609.) }
+    Cfg.MCPServers[n].CodeMode := Cfg.MCPCodeModeDefault;
     SaveConfig(Cfg);
     PrintLn(Ansi.Green + '✓ ' + Ansi.Reset + 'added MCP server ' + Argv[1]);
     Result := 0;
@@ -446,6 +452,12 @@ begin
     n := Length(Cfg.MCPServers);
     SetLength(Cfg.MCPServers, n + 1);
     Cfg.MCPServers[n].Name := Entry.Name;
+    { Code mode follows the config default unless the operator says
+      otherwise. Leaving the record zero-initialised wrote
+      "codemode": false into the file and pinned the server to
+      classic exposure forever, whatever mcp_codemode_default said.
+      (Codex P1 on #609.) }
+    Cfg.MCPServers[n].CodeMode := Cfg.MCPCodeModeDefault;
     if CatalogEntryIsStdio(Entry) then
     begin
       Cfg.MCPServers[n].Cmd  := Entry.Cmd;

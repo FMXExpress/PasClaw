@@ -98,6 +98,13 @@ PasClaw spawns a per-session container at session start, `docker exec`s into it 
 
 Hardening win: even a model that escapes the `ShellAllowed` denylist can only touch the container, not the host filesystem. `~/.pasclaw/config.json` (provider keys) is deliberately **not** mounted in.
 
+**The tool callback crosses the boundary on purpose.** An `execute_code` script calls back into the agent's tool registry (`tool <name> '<json>'`, and the only route to a [code-mode](./mcp.md#code-mode) MCP server). The container's loopback is its own, so on a bridge network the callback listener binds the host's docker-bridge gateway instead and the container gets `host.docker.internal` mapped to the host. What that widens, and what it does not:
+
+- The listener is on a docker-bridge address, not `0.0.0.0` — reachable from containers on this host's docker networks and from the host, not from the LAN.
+- Every request carries a per-call random token. The discovery file holding it is written under `~/.pasclaw/run/`, which is mounted only into PasClaw's own container.
+- The listener exists only for the duration of one `execute_code` call, on a fresh port and token.
+- `"network": "none"` keeps the container off the network entirely. The callback then cannot work — `tool` fails to connect and code-mode MCP servers are unreachable from a script — which is the right trade if that is the posture you picked.
+
 Onboarding asks once. CLI override `--backend docker|local` doesn't persist. Phase 1 wires this for `pasclaw agent` (interactive + one-shot) and `pasclaw heartbeat`; `pasclaw tui` / `pasclaw serve` / `pasclaw gateway` refuse `docker` cleanly until per-session container handoff inside those long-running surfaces lands. SSH backend is Phase 2.
 
 ## SSRF guard

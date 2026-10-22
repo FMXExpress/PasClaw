@@ -1500,7 +1500,17 @@ begin
   Result.PutStr('model',    P.Model);
 end;
 
-function MCPToJSON(const M: TMCPServer): TJsonObject;
+(* Default is the value of mcp_codemode_default at save time, so a
+   server that simply follows the default writes no `codemode` key at
+   all and keeps following it. Emitting it unconditionally FROZE the
+   value: a record created by `mcp add` / `mcp install` / onboarding is
+   zero-initialised, so every supported setup flow persisted
+   "codemode": false and pinned that server to classic exposure no
+   matter what mcp_codemode_default said afterwards. (Codex P1 on #609.)
+
+   This also matches how the rest of this file serialises -- a setting
+   left at its default is omitted rather than written out. *)
+function MCPToJSON(const M: TMCPServer; CodeModeDefault: Boolean): TJsonObject;
 begin
   Result := TJsonObject.Create;
   Result.PutStr ('name',    M.Name);
@@ -1508,7 +1518,8 @@ begin
   Result.PutStr ('args',    M.Args);
   Result.PutStr ('env',     M.Env);
   Result.PutBool('enabled', M.Enabled);
-  Result.PutBool('codemode', M.CodeMode);
+  if M.CodeMode <> CodeModeDefault then
+    Result.PutBool('codemode', M.CodeMode);
 end;
 
 function CronToJSON(const C: TCronEntry): TJsonObject;
@@ -2019,7 +2030,7 @@ begin
     Arr := TJsonArray.Create;
     for i := 0 to High(MCPServers) do
     begin
-      Tmp := MCPToJSON(MCPServers[i]);
+      Tmp := MCPToJSON(MCPServers[i], MCPCodeModeDefault);
       Arr.AddObject(Tmp);
     end;
     Root.PutArray('mcp_servers', Arr);
