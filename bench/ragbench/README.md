@@ -33,7 +33,8 @@ session's stats.
 | gateway `--no-mcp`, before | 228,556 | 36 | `--no-mcp` skipped the only call that registers `tool_search` and defers the long tail |
 | gateway default, before | 156,064 | 19 | tools 15.7 KB of a 24.2 KB request (65%), system prompt 7.8 KB (32%) |
 | after: four more tools deferred, `--no-mcp` fixed | **132,562** | 15 | same files written, same test output; `--no-mcp` now identical |
-| after, on `main` (this change alone, without the opencode2 stack) | 128,710 | 15 | `--no-mcp`: 128,935 |
+| after, on `main`, first cut (memory_write deferred too) | 128,710 | 15 | `--no-mcp`: 128,935 |
+| **after, on `main`, final** (memory_write kept visible: rule 5 recommends it) | **136,942** | 16 | |
 
 The before/after rows were measured on the opencode2 stack build (36 tools registered); the last row is the same change rebased onto `main`, which registers fewer tools, so its absolute number is lower.
 

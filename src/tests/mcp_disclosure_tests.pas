@@ -415,7 +415,7 @@ begin
     RegisterVisible(Reg, 'desktop');
     RegisterVisible(Reg, 'memory_write');
     RegisterVisible(Reg, 'db_query');
-    AssertEqI(DeferBuiltinTools(Reg), 3, 'sweep defers desktop, memory_write, db_query');
+    AssertEqI(DeferBuiltinTools(Reg), 2, 'sweep defers desktop and db_query, not memory_write');
     { ...and after it, through the latch. }
     Reg.DeferLongTail := True;
     RegisterVisible(Reg, 'shell_background');
@@ -424,13 +424,13 @@ begin
     Names := Reg.DeferredNames;
     for i := 0 to High(Names) do ;
     AssertTrue(Deferred('desktop'), 'desktop deferred');
-    AssertTrue(Deferred('memory_write'), 'memory_write deferred');
+    AssertTrue(not Deferred('memory_write'), 'memory_write stays visible: the prompt recommends it');
     AssertTrue(Deferred('memory_fetch'), 'memory_fetch deferred (latch)');
     AssertTrue(Deferred('shell_background'), 'shell_background deferred (latch)');
     AssertTrue(Deferred('db_query'), 'db_query deferred (prefix)');
     AssertTrue(not Deferred('read_file'), 'read_file visible');
     AssertTrue(not Deferred('shell_exec'), 'shell_exec visible');
-    AssertEqI(CountResults(Reg), 2, 'provider sees exactly the two visible tools');
+    AssertEqI(CountResults(Reg), 3, 'provider sees exactly the three visible tools');
   finally
     Reg.Free;
   end;

@@ -133,13 +133,15 @@ const
     workflow_ / spawn / session_ tool inherits the decision). }
   P: array[0..3] of string = ('db_', 'workflow_', 'spawn', 'session_');
   { Single tools that act on the agent's own state or UI rather than on
-    the task. Measured on the RAG-pipeline bench (6 turns, identical
-    model decisions): these four were 3,972 of the 15,703 tool-schema
-    bytes on every request and were called zero times; deferring them
-    cut the task from 156,064 to 132,562 request bytes. The one set is
-    read by the registry's DeferLongTail latch and by
+    the task: the desktop board, URL-to-memory fetch, background shells.
+    NOT memory_write: rule 5 of the system prompt tells the model to use
+    it for dated facts, and a tool the prompt recommends must be callable
+    without a search turn. Measured on the RAG-pipeline bench (6 turns,
+    identical model decisions): deferring these cut the request bytes
+    by about 2.6 KB each (bench/ragbench/README.md has the runs). The one
+    set is read by the registry's DeferLongTail latch and by
     DeferBuiltinTools, so the two can never disagree. }
-  N: array[0..3] of string = ('desktop', 'memory_write', 'memory_fetch', 'shell_background');
+  N: array[0..2] of string = ('desktop', 'memory_fetch', 'shell_background');
 var
   i: Integer;
 begin
