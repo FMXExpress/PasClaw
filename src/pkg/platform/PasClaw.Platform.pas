@@ -63,6 +63,8 @@ type
     {$ENDIF}
     {$IFNDEF FPC}{$IFDEF MSWINDOWS}
     FProcHandle: THandle;
+    FWinPid:     Integer;   { PI.dwProcessId -- TerminateProcessTree wants
+                              the pid, not the handle }
     FThreadHandle: THandle;
     FStdinWrite:  THandle;
     FStdoutRead:  THandle;
@@ -116,6 +118,13 @@ type
     function Running: Boolean;
 
     procedure Terminate;
+
+    { The OS process id, or 0 before a successful Spawn. Exposed so a
+      caller enforcing a wall clock can reach TerminateProcessTree --
+      signalling this pid alone leaves whatever the shell started
+      running. }
+    function ProcessId: Integer;
+
     property ExitCode: Integer read FExitCode;
   end;
 
@@ -152,9 +161,31 @@ function RunOneShotWithEnv(const Cmd, WorkingDir: string;
    is a per-thread override for one call -- shell_exec's `timeout_sec`
    argument -- and -1 clears it. EffectiveShellTimeoutMs is what a run
    actually uses: the override when set, else the default. *)
-procedure SetShellTimeoutMs(Ms: Integer);
+procedure SetShellToolTimeoutMs(Ms: Integer);
+function  ShellToolTimeoutMs: Integer;
 procedure SetShellTimeoutOverrideMs(Ms: Integer);
+function  ShellTimeoutOverrideMs: Integer;
 function  EffectiveShellTimeoutMs: Integer;
+
+(* Kill a process AND everything it started.
+
+   Terminating the child alone does not bound anything: every shell
+   command here runs as `/bin/sh -c <cmd>`, so the signal lands on the
+   shell and the compiler, test runner or `sleep 100` underneath it
+   keeps going -- with PasClaw already reporting exit=124. The wall
+   clock has to stop the work, not just the wrapper.
+
+   POSIX walks /proc for the descendants of Pid, signals deepest-first
+   (so a parent cannot reap-and-respawn past us), SIGTERM, then SIGKILL
+   whatever is still there after a short grace. Windows hands the job to
+   `taskkill /T /F`, which is the documented tree kill and needs no
+   snapshot API that differs between the two compilers.
+
+   Best effort by construction: a process that exits between the walk
+   and the signal is an ESRCH we ignore, and one that forks after the
+   walk is missed -- the direct child is always signalled too, so the
+   pipe closes and the caller is never left hanging. *)
+procedure TerminateProcessTree(Pid: Integer);
 
 (* Run a program directly from its argv vector -- NO shell. Captures
    combined stdout+stderr (UTF-8) up to OneShotMaxBytes; returns the
@@ -201,8 +232,12 @@ implementation
 uses
   {$IFDEF FPC}
     Process
-    {$IFDEF MSWINDOWS}, Windows {$ENDIF}   { GetOEMCP + MultiByteToWideChar
-                                             for cmd.exe output decode }
+    {$IFDEF MSWINDOWS}, Windows {$ELSE}, BaseUnix {$ENDIF}
+                                           { Windows: GetOEMCP +
+                                             MultiByteToWideChar for the
+                                             cmd.exe output decode.
+                                             Unix: fpKill + SIGTERM/SIGKILL
+                                             for TerminateProcessTree. }
   {$ELSE}{$IFDEF MSWINDOWS}
     Winapi.Windows
   {$ELSE}
@@ -213,14 +248,19 @@ uses
   {$ENDIF}{$ENDIF};
 
 var
-  GShellTimeoutMs: Integer = 0;
+  GShellToolTimeoutMs: Integer = 0;
 threadvar
   GShellTimeoutOverrideMs: Integer;   { 0 = not set (threadvars start zeroed); -1 clears }
 
-procedure SetShellTimeoutMs(Ms: Integer);
+procedure SetShellToolTimeoutMs(Ms: Integer);
 begin
   if Ms < 0 then Ms := 0;
-  GShellTimeoutMs := Ms;
+  GShellToolTimeoutMs := Ms;
+end;
+
+function ShellToolTimeoutMs: Integer;
+begin
+  Result := GShellToolTimeoutMs;
 end;
 
 procedure SetShellTimeoutOverrideMs(Ms: Integer);
@@ -229,15 +269,232 @@ begin
   else GShellTimeoutOverrideMs := Ms;
 end;
 
+function ShellTimeoutOverrideMs: Integer;
+begin
+  Result := GShellTimeoutOverrideMs;
+end;
+
+(* What a run actually uses: the per-thread override, and NOTHING else.
+
+   The configured default deliberately does not reach here. It used to:
+   SetShellTimeoutMs set a process-wide value and every RunOneShot
+   inherited it -- including the callers that are not tool commands at
+   all. PasClaw.Apps.Runner shells out to build an app and
+   PasClaw.Cmd.Profile runs a whole benchmark agent through the same
+   primitive, so a 600 s shell default silently killed a long build or a
+   long experiment and reported it as that job failing. (Codex P2 on
+   #608.)
+
+   The default belongs to the three documented tool paths -- shell_exec,
+   execute_code and shell skills -- and is applied there, by the
+   *ViaBackend wrappers in PasClaw.Shell.Backend that all three go
+   through. Everything else calling RunOneShot gets no bound unless it
+   asks for one. *)
 function EffectiveShellTimeoutMs: Integer;
 begin
-  if GShellTimeoutOverrideMs > 0 then Result := GShellTimeoutOverrideMs
-  else Result := GShellTimeoutMs;
+  Result := GShellTimeoutOverrideMs;
+  if Result < 0 then Result := 0;
 end;
 
 function ShellTimeoutNote(Ms: Integer): string;
 begin
   Result := Format(' (timed out after %d s)', [(Ms + 999) div 1000]);
+end;
+
+{ ----------------------------------------------------- tree termination -- }
+
+{$IFNDEF FPC}{$IFDEF MSWINDOWS}
+{ Delphi/Windows: spawn `taskkill` detached, no pipes, no wait. The
+  capture loop that called us notices the child's pipe close on its own,
+  so there is nothing to read back and nothing to block on. }
+procedure DetachedTaskkill(Pid: Integer);
+var
+  SI: TStartupInfoW;
+  PI: TProcessInformation;
+  Cmd: WideString;
+begin
+  FillChar(SI, SizeOf(SI), 0);
+  SI.cb := SizeOf(SI);
+  SI.dwFlags := STARTF_USESHOWWINDOW;
+  SI.wShowWindow := SW_HIDE;
+  FillChar(PI, SizeOf(PI), 0);
+  Cmd := WideString(Format('taskkill /PID %d /T /F', [Pid]));
+  if CreateProcessW(nil, PWideChar(Cmd), nil, nil, False,
+                    CREATE_NO_WINDOW, nil, nil, SI, PI) then
+  begin
+    CloseHandle(PI.hThread);
+    CloseHandle(PI.hProcess);
+  end;
+end;
+{$ENDIF}{$ENDIF}
+
+{$IFNDEF MSWINDOWS}
+{ /proc entries report size 0, so anything that stats first and reads
+  that many bytes comes back empty. Read until EOF instead. }
+function ReadProcFile(const Path: string): string;
+var
+  F: TFileStream;
+  Buf: array[0..1023] of Byte;
+  N: Integer;
+  Bytes: TBytes;
+  Total: Integer;
+begin
+  Result := '';
+  SetLength(Bytes, 0);
+  Total := 0;
+  try
+    F := TFileStream.Create(Path, fmOpenRead or fmShareDenyNone);
+  except
+    Exit;
+  end;
+  try
+    repeat
+      N := F.Read(Buf, SizeOf(Buf));
+      if N > 0 then
+      begin
+        SetLength(Bytes, Total + N);
+        Move(Buf, Bytes[Total], N);
+        Inc(Total, N);
+      end;
+    until (N <= 0) or (Total > 64 * 1024);
+  except
+    { a process that exited mid-read: whatever we got is enough }
+  end;
+  F.Free;
+  if Total > 0 then
+    SetString(Result, PAnsiChar(@Bytes[0]), Total);
+end;
+
+(* The parent pid from /proc/<pid>/stat.
+
+   Parsed from the LAST ')' rather than by splitting on spaces: field 2
+   is the executable name in parentheses and it is attacker-controlled
+   -- a process really can be called ") 1 (" and shift every field that
+   a naive split would read. After the final ')' the layout is fixed:
+   state, then ppid. *)
+function ProcParentPid(Pid: Integer; out PPid: Integer): Boolean;
+var
+  S, Rest: string;
+  i, Close_, Start_: Integer;
+begin
+  Result := False;
+  PPid := 0;
+  S := ReadProcFile('/proc/' + IntToStr(Pid) + '/stat');
+  if S = '' then Exit;
+  Close_ := 0;
+  for i := Length(S) downto 1 do
+    if S[i] = ')' then begin Close_ := i; Break; end;
+  if Close_ = 0 then Exit;
+  Rest := Trim(Copy(S, Close_ + 1, Length(S)));
+  { "R 1234 ..." -- skip the state letter, take the next token. }
+  i := Pos(' ', Rest);
+  if i = 0 then Exit;
+  Rest := Trim(Copy(Rest, i + 1, Length(Rest)));
+  Start_ := 1;
+  i := Start_;
+  while (i <= Length(Rest)) and (Rest[i] in ['0'..'9']) do Inc(i);
+  if i = Start_ then Exit;
+  PPid := StrToIntDef(Copy(Rest, Start_, i - Start_), 0);
+  Result := PPid > 0;
+end;
+
+{ Signal one pid, ignoring "it already exited". }
+procedure SignalPid(Pid, Sig: Integer);
+begin
+  if Pid <= 1 then Exit;   { never 0 (our whole group) and never init }
+  {$IFDEF FPC}
+  fpKill(Pid, Sig);
+  {$ELSE}
+  kill(Pid, Sig);
+  {$ENDIF}
+end;
+
+{ Pid and every descendant, deepest last (so the caller signals the list
+  in reverse and a parent cannot outlive a child it would re-spawn). }
+procedure CollectTree(Root: Integer; Acc: TList);
+var
+  SR: TSearchRec;
+  Kids: TList;
+  i, Scan, Pid, PPid: Integer;
+begin
+  Acc.Add(Pointer(NativeInt(Root)));
+  Kids := TList.Create;
+  try
+    if FindFirst('/proc/*', faDirectory, SR) = 0 then
+    try
+      repeat
+        Pid := StrToIntDef(SR.Name, 0);
+        if Pid > 1 then Kids.Add(Pointer(NativeInt(Pid)));
+      until FindNext(SR) <> 0;
+    finally
+      SysUtils.FindClose(SR);
+    end;
+    { Breadth-first over the snapshot: for each pid already in Acc,
+      add anything whose parent is it. Bounded by the snapshot, so a
+      /proc that changes under us cannot loop forever. }
+    Scan := 0;
+    while Scan < Acc.Count do
+    begin
+      Root := Integer(NativeInt(Acc[Scan]));
+      for i := 0 to Kids.Count - 1 do
+      begin
+        Pid := Integer(NativeInt(Kids[i]));
+        if (Pid <> 0) and ProcParentPid(Pid, PPid) and (PPid = Root) then
+        begin
+          Acc.Add(Pointer(NativeInt(Pid)));
+          Kids[i] := nil;   { claimed -- a pid has one parent }
+        end;
+      end;
+      Inc(Scan);
+    end;
+  finally
+    Kids.Free;
+  end;
+end;
+{$ENDIF}
+
+procedure TerminateProcessTree(Pid: Integer);
+{$IFNDEF MSWINDOWS}
+var
+  Tree: TList;
+  i: Integer;
+{$ENDIF}
+begin
+  if Pid <= 1 then Exit;
+  {$IFDEF MSWINDOWS}
+  (* taskkill rather than a Toolhelp32 walk: /T is the documented tree
+     kill, and the snapshot API's declarations differ enough between
+     FPC's Windows unit and Delphi's Winapi.Windows to be worth not
+     betting on. Detached and not waited on -- the capture loop below
+     notices the pipe close on its own. *)
+  {$IFDEF FPC}
+  with TInternalProcess.Create(nil) do
+  try
+    Executable := 'taskkill';
+    Parameters.Add('/PID'); Parameters.Add(IntToStr(Pid));
+    Parameters.Add('/T');   Parameters.Add('/F');
+    Options := [poNoConsole];
+    try Execute; except end;
+  finally
+    Free;
+  end;
+  {$ELSE}
+  DetachedTaskkill(Pid);
+  {$ENDIF}
+  {$ELSE}
+  Tree := TList.Create;
+  try
+    CollectTree(Pid, Tree);
+    { Deepest first. }
+    for i := Tree.Count - 1 downto 0 do
+      SignalPid(Integer(NativeInt(Tree[i])), SIGTERM);
+    Sleep(120);
+    for i := Tree.Count - 1 downto 0 do
+      SignalPid(Integer(NativeInt(Tree[i])), SIGKILL);
+  finally
+    Tree.Free;
+  end;
+  {$ENDIF}
 end;
 
 function DecodeShellOutputBytes(const Bytes: TBytes;
@@ -480,6 +737,12 @@ begin
     try TInternalProcess(FProcess).Terminate(0); except end;
 end;
 
+function TStdioProcess.ProcessId: Integer;
+begin
+  if FProcess = nil then Result := 0
+  else Result := TInternalProcess(FProcess).ProcessID;
+end;
+
 function RunOneShot(const Cmd, WorkingDir: string; out Output: string): Integer;
 var
   P: TInternalProcess;
@@ -545,7 +808,9 @@ begin
          (Trunc((Now - StartT) * 86400000.0) >= TimeoutMs) then
       begin
         TimedOut := True;
-        P.Terminate(124);
+        { The tree, not just the shell: see TerminateProcessTree. }
+        TerminateProcessTree(P.ProcessID);
+        if P.Running then try P.Terminate(124); except end;
         Break;
       end;
       Sleep(20);
@@ -675,7 +940,9 @@ begin
          (Trunc((Now - StartT) * 86400000.0) >= TimeoutMs) then
       begin
         TimedOut := True;
-        P.Terminate(124);
+        { The tree, not just the shell: see TerminateProcessTree. }
+        TerminateProcessTree(P.ProcessID);
+        if P.Running then try P.Terminate(124); except end;
         Break;
       end;
       Sleep(20);
@@ -882,6 +1149,7 @@ begin
   CloseHandle(ChildStdoutWrite);
 
   FProcHandle   := PI.hProcess;
+  FWinPid       := Integer(PI.dwProcessId);
   FThreadHandle := PI.hThread;
   FStarted := True;
   Result := True;
@@ -950,6 +1218,11 @@ begin
     TerminateProcess(FProcHandle, 0);
 end;
 
+function TStdioProcess.ProcessId: Integer;
+begin
+  Result := FWinPid;
+end;
+
 function RunOneShotWithEnv(const Cmd, WorkingDir: string;
                             ExtraEnv: TStringList;
                             out Output: string): Integer;
@@ -995,7 +1268,9 @@ begin
       if (TimeoutMs > 0) and (Trunc((Now - StartT) * 86400000.0) >= TimeoutMs) then
       begin
         TimedOut := True;
-        P.Terminate;
+        { The tree, not just the shell: see TerminateProcessTree. }
+        TerminateProcessTree(P.ProcessId);
+        if P.Running then P.Terminate;
         Break;
       end;
     end;
@@ -1231,6 +1506,11 @@ begin
     kill(FPid, SIGTERM);
 end;
 
+function TStdioProcess.ProcessId: Integer;
+begin
+  Result := FPid;
+end;
+
 function RunOneShotWithEnv(const Cmd, WorkingDir: string;
                             ExtraEnv: TStringList;
                             out Output: string): Integer;
@@ -1276,7 +1556,9 @@ begin
       if (TimeoutMs > 0) and (Trunc((Now - StartT) * 86400000.0) >= TimeoutMs) then
       begin
         TimedOut := True;
-        P.Terminate;
+        { The tree, not just the shell: see TerminateProcessTree. }
+        TerminateProcessTree(P.ProcessId);
+        if P.Running then P.Terminate;
         Break;
       end;
     end;
@@ -1375,7 +1657,9 @@ begin
          (Trunc((Now - StartT) * 86400000.0) >= TimeoutMs) then
       begin
         TimedOut := True;
-        P.Terminate;
+        { The tree, not just the shell: see TerminateProcessTree. }
+        TerminateProcessTree(P.ProcessId);
+        if P.Running then P.Terminate;
         Break;
       end;
     end;

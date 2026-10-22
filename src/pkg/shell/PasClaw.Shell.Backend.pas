@@ -154,23 +154,71 @@ begin
   Result := GActive;
 end;
 
+(* The configured shell timeout is applied HERE, not in RunOneShot.
+
+   These two wrappers are what the tool shells run through -- shell_exec
+   (PasClaw.Tools.Shell), execute_code (PasClaw.Tools.ExecuteCode) and
+   shell skills (PasClaw.Skills.Loader), each passing
+   GetCurrentSessionId -- and nothing else does. Putting the bound in
+   RunOneShot instead made it a process-wide default that every caller
+   of that primitive inherited, including the ones that are not tool
+   commands: PasClaw.Apps.Runner builds an app through it and
+   PasClaw.Cmd.Profile runs a whole benchmark agent through it, so a
+   600 s shell default killed a long build or a long experiment and
+   reported it as that job failing. (Codex P2 on #608.)
+
+   An explicit per-call override wins: shell_exec's own timeout_sec has
+   already set one by the time we are called, and a caller who asked for
+   30 s does not want the config's 600. The previous value is restored
+   on the way out so one tool call cannot leak its bound into the next
+   thing this thread runs. *)
+function ApplyToolTimeout(out Prev: Integer): Boolean;
+begin
+  Prev := ShellTimeoutOverrideMs;
+  Result := (Prev <= 0) and (ShellToolTimeoutMs > 0);
+  if Result then SetShellTimeoutOverrideMs(ShellToolTimeoutMs);
+end;
+
+procedure RestoreToolTimeout(Applied: Boolean; Prev: Integer);
+begin
+  if not Applied then Exit;
+  if Prev > 0 then SetShellTimeoutOverrideMs(Prev)
+  else SetShellTimeoutOverrideMs(-1);   { -1 clears }
+end;
+
 function RunOneShotViaBackend(const SessionId, Cmd, WorkDir: string;
                               out Output: string): Integer;
+var
+  Prev: Integer;
+  Applied: Boolean;
 begin
-  if GActive <> nil then
-    Result := GActive.Exec(SessionId, Cmd, WorkDir, nil, Output)
-  else
-    Result := RunOneShot(Cmd, WorkDir, Output);
+  Applied := ApplyToolTimeout(Prev);
+  try
+    if GActive <> nil then
+      Result := GActive.Exec(SessionId, Cmd, WorkDir, nil, Output)
+    else
+      Result := RunOneShot(Cmd, WorkDir, Output);
+  finally
+    RestoreToolTimeout(Applied, Prev);
+  end;
 end;
 
 function RunOneShotWithEnvViaBackend(const SessionId, Cmd, WorkDir: string;
                                      ExtraEnv: TStringList;
                                      out Output: string): Integer;
+var
+  Prev: Integer;
+  Applied: Boolean;
 begin
-  if GActive <> nil then
-    Result := GActive.Exec(SessionId, Cmd, WorkDir, ExtraEnv, Output)
-  else
-    Result := RunOneShotWithEnv(Cmd, WorkDir, ExtraEnv, Output);
+  Applied := ApplyToolTimeout(Prev);
+  try
+    if GActive <> nil then
+      Result := GActive.Exec(SessionId, Cmd, WorkDir, ExtraEnv, Output)
+    else
+      Result := RunOneShotWithEnv(Cmd, WorkDir, ExtraEnv, Output);
+  finally
+    RestoreToolTimeout(Applied, Prev);
+  end;
 end;
 
 function HostToContainerPathViaBackend(const HostPath: string): string;
