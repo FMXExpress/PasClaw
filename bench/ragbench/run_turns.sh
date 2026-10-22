@@ -50,6 +50,7 @@ EOF
 echo "--- project tree:"; (cd "$PROJ" && find . -type f | sort)
 echo "--- chat reply:"; python3 -c "import json;print(json.load(open('$OUT/chat.json')).get('reply') or json.load(open('$OUT/chat.json')))" | cut -c1-300
 GPID=$(python3 -c "import json;print(json.load(open('$H/run/gateway.json'))['pid'])" 2>/dev/null)
+[ -z "$GPID" ] && GPID=$(pgrep -f "pasclaw gatewa[y] --port $PORT" | head -1)   # builds without run/gateway.json
 if [ -n "$GPID" ]; then
   # Stop politely, then insist: builds without the stop-signal handler ignore SIGINT.
   kill -INT "$GPID" 2>/dev/null

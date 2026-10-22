@@ -160,6 +160,8 @@ def measure(env):
     return {"total": total, "system": sysb, "tools": tools_b, "n_tools": len(tools),
             "history": hist_b, "tool_results": toolres_b, "n_tool_results": len(toolres)}
 
+LAST_RESP = [0.0]
+
 def http(method, path, body=None, headers=None):
     req = urllib.request.Request(BASE + path, data=body, method=method)
     req.add_header("Authorization", "Bearer " + TOKEN)
@@ -178,6 +180,8 @@ def policies(env):
     }
 
 
+LAST_RESP = [0.0]
+
 def main():
     steps = [p for p in PLAYBOOK if p[0] is not None]   # 5 tool steps
     log = []
@@ -192,12 +196,15 @@ def main():
         if not line.startswith("data:"):
             continue
         env = json.loads(line[5:].strip())
+        t_recv = time.time()
         with open(os.path.join(OUT, f"req-{turn}.json"), "w") as f:
             json.dump(env, f, indent=1)
         m = measure(env)
         m["step"] = turn
         pol = policies(env)
         m["policies"] = pol
+        m["t_recv"] = t_recv
+        m["gap_ms"] = int((t_recv - LAST_RESP[0]) * 1000) if LAST_RESP[0] else 0
         log.append(m)
 
         ran = [tc["function"]["name"] for msg in env["messages"] for tc in (msg.get("tool_calls") or [])]
@@ -232,6 +239,8 @@ def main():
             final = False
         http("POST", "/v1/relay/respond/" + env["id"], body=json.dumps(body).encode(),
              headers={"Content-Type": "application/json"}).read()
+        LAST_RESP[0] = time.time()
+        m["t_resp"] = LAST_RESP[0]
         turn += 1
         if final:
             break
@@ -241,7 +250,7 @@ def main():
     print(f"turns={len(log)} total_bytes={tot} approx_tokens={tot // 4} policies={log[0]['policies']}")
     for x in log:
         print(f"  turn {x['step']}: total={x['total']} tools={x['tools']}({x['n_tools']}) "
-              f"history={x['history']} tool_results={x['tool_results']}")
+              f"history={x['history']} tool_results={x['tool_results']} gap_ms={x.get('gap_ms',0)}")
 
 
 if __name__ == "__main__":
