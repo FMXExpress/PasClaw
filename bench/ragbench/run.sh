@@ -12,6 +12,9 @@ H=$(mktemp -d)
 PROJ=$(mktemp -d)
 OUT=$SCRATCH/out-$LABEL
 rm -rf "$OUT"; mkdir -p "$OUT" "$H/workspace"
+if curl -s -m 2 "http://127.0.0.1:$PORT/v1/health" >/dev/null 2>&1; then
+  echo "port $PORT already answers -- a previous gateway is still running; stop it first" >&2; exit 2
+fi
 cat > "$H/config.json" <<EOF
 {"providers":[{"name":"relay","kind":"relay","api_base":"","api_key":"","model":"claude-router"}],
  "default_provider":"relay","default_model":"claude-router",
@@ -47,6 +50,13 @@ EOF
 echo "--- project tree:"; (cd "$PROJ" && find . -type f | sort)
 echo "--- chat reply:"; python3 -c "import json;print(json.load(open('$OUT/chat.json')).get('reply') or json.load(open('$OUT/chat.json')))" | cut -c1-300
 GPID=$(python3 -c "import json;print(json.load(open('$H/run/gateway.json'))['pid'])" 2>/dev/null)
-[ -n "$GPID" ] && kill -INT "$GPID"; sleep 2
+[ -z "$GPID" ] && GPID=$(pgrep -f "pasclaw gatewa[y] --port $PORT" | head -1)   # builds without run/gateway.json
+if [ -n "$GPID" ]; then
+  # Stop politely, then insist: builds without the stop-signal handler ignore SIGINT.
+  kill -INT "$GPID" 2>/dev/null
+  for i in 1 2 3 4 5; do sleep 1; kill -0 "$GPID" 2>/dev/null || break; done
+  kill -0 "$GPID" 2>/dev/null && { kill -TERM "$GPID"; sleep 2; }
+  kill -0 "$GPID" 2>/dev/null && kill -KILL "$GPID"
+fi
 cp -r "$PROJ" "$OUT/project"
 rm -rf "$H" "$PROJ"

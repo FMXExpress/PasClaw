@@ -152,6 +152,8 @@ def measure(env):
     return {"total": total, "system": sysb, "tools": tools_b, "n_tools": len(tools),
             "history": hist_b, "tool_results": toolres_b, "n_tool_results": len(toolres)}
 
+LAST_RESP = [0.0]
+
 def main():
     step = 0
     log = []
@@ -165,10 +167,13 @@ def main():
         if not line.startswith("data:"):
             continue
         env = json.loads(line[5:].strip())
+        t_recv = time.time()
         rid = env["id"]
         with open(os.path.join(OUT, f"req-{step}.json"), "w") as f:
             json.dump(env, f, indent=1)
         m = measure(env); m["step"] = step
+        m["t_recv"] = t_recv
+        m["gap_ms"] = int((t_recv - LAST_RESP[0]) * 1000) if LAST_RESP[0] else 0
         log.append(m)
         # Decide from the playbook by how many tool results the history carries.
         n_results = m["n_tool_results"]
@@ -186,6 +191,8 @@ def main():
                                     "function": {"name": name, "arguments": json.dumps(args)}}]}
         http("POST", "/v1/relay/respond/" + rid, body=json.dumps(body).encode(),
              headers={"Content-Type": "application/json"}).read()
+        LAST_RESP[0] = time.time()
+        m["t_resp"] = LAST_RESP[0]
         step += 1
         if name is None:
             break
@@ -194,7 +201,7 @@ def main():
     tot = sum(x["total"] for x in log)
     print(f"requests={len(log)} total_bytes={tot} approx_tokens={tot//4}")
     for x in log:
-        print(f"  step {x['step']}: total={x['total']} system={x['system']} tools={x['tools']}({x['n_tools']}) history={x['history']} tool_results={x['tool_results']}")
+        print(f"  step {x['step']}: total={x['total']} system={x['system']} tools={x['tools']}({x['n_tools']}) history={x['history']} tool_results={x['tool_results']} gap_ms={x.get('gap_ms',0)}")
 
 if __name__ == "__main__":
     main()
