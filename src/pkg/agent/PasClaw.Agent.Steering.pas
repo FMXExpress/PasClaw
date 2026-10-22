@@ -137,6 +137,10 @@ var
   Info: TSearchRec;
 begin
   Waited := 0;
+  { The lock is a directory INSIDE the steering dir; without the parent,
+    CreateDir fails for a reason no amount of waiting fixes, and the
+    stale check below never runs. Make the parent, then contend. }
+  EnsureSteeringDir;
   while Waited < LOCK_MAX_WAIT_MS do
   begin
     if CreateDir(LockDir) then Exit(True);
@@ -314,6 +318,17 @@ begin
   SetLength(Result, 0);
   Path := SteeringPath(SessionKey);
   if Path = '' then Exit;
+  (* Fast path, and the one that matters: the tool loop drains at EVERY
+     iteration top, and almost every iteration has nothing queued. Taking
+     the lock first cost 2,000 ms per iteration whenever the steering
+     directory did not exist yet (a fresh home, a gateway nobody has
+     steered): CreateDir on the lock path failed with ENOENT, the stale
+     check could not run, and AcquireLock spun out its full wait. Measured
+     on bench/ragbench: 2,012 ms of a 2,040 ms gap between a model's
+     answer and its next request, on every turn. A queue file that
+     appears between this check and the next iteration is picked up then,
+     exactly as a contended lock already behaves. *)
+  if not FileExists(Path) then Exit;
 
   Lock := LockPath(SessionKey);
   if not AcquireLock(Lock) then
