@@ -924,6 +924,13 @@ type
     BackgroundModel:       string;
     Maintenance:           TMaintenanceConfig;
     Backup:                TBackupConfig;
+    (* Wall-clock bound, in seconds, on every shell_exec / execute_code /
+       shell-skill command. Before this there was none: a command that
+       never returned hung the turn for good. On expiry the child is
+       killed and the tool reports exit=124 with a "timed out" note, which
+       the model can act on. shell_exec's `timeout_sec` argument overrides
+       it per call. 0 = no bound. *)
+    ShellTimeoutSec:       Integer;
     (* On-by-default: scan tool output / recalled memory / stored
        skill descriptions for prompt-injection patterns and annotate
        hits with a warning banner (PasClaw.Promptware). A lowercase
@@ -1239,6 +1246,7 @@ uses
   PasClaw.JSON,
   PasClaw.Config.Profile,     { ResolveProfileBodies / ExtractProfileField -- PR #291 }
   PasClaw.Logger,             { LogWarn / LogInfo on the profile-apply path }
+  PasClaw.Platform,           { SetShellToolTimeoutMs -- the tool shells' default }
   PasClaw.Promptware,         { LoadConfig propagates promptware_enabled --
                                 see the comment inside LoadConfig }
   PasClaw.Tools.OutputCache,  { LoadConfig propagates condense_reversible
@@ -1390,6 +1398,7 @@ begin
   Backup.KeepWeekly  := 4;
   Backup.KeepMonthly := 6;
   Backup.IncludeSecrets := True;   { see the field comment: a backup should restore the integrations too }
+  ShellTimeoutSec        := 600;   { ten minutes; long enough for a build, short enough to notice }
   CheckpointsKeepLast    := 32;    { keep last 32 atomic edit checkpoints. }
   PromptwareEnabled      := True;  { on by default -- substring scan, effectively free. }
   OrientTaskAware        := False; { off by default -- whole-file MEMORY injection is the contract; opt in per-run with `pasclaw agent --orient` or "orient_task_aware":true. }
@@ -1749,6 +1758,8 @@ begin
       Root.PutInt('memory_core_budget_bytes', MemoryCoreBudgetBytes);
     if BackgroundModel <> '' then
       Root.PutStr('background_model', BackgroundModel);
+    if ShellTimeoutSec <> 600 then
+      Root.PutInt('shell_timeout_sec', ShellTimeoutSec);
     if (Maintenance.KeepSupersededDays <> 30) or (Maintenance.UnusedSkillDays <> 30)
        or Maintenance.Review or Maintenance.Backup then
     begin
@@ -2334,6 +2345,8 @@ begin
     MemoryCoreBudgetBytes := Integer(Root.GetInt('memory_core_budget_bytes', MemoryCoreBudgetBytes));
     if MemoryCoreBudgetBytes < 0 then MemoryCoreBudgetBytes := 0;
     BackgroundModel      := Trim(Root.GetStr('background_model', BackgroundModel));
+    ShellTimeoutSec      := Integer(Root.GetInt('shell_timeout_sec', ShellTimeoutSec));
+    if ShellTimeoutSec < 0 then ShellTimeoutSec := 0;
     Obj := Root.ChildObject('maintenance');
     if Obj <> nil then
     try
@@ -2854,6 +2867,13 @@ begin
   { Symmetric propagation of the reversible-condensation flag -- OutputCache
     holds the same process-global mirror. }
   SetCondenseReversible(C.CondenseReversible);
+  (* The TOOL shells' wall-clock bound: shell_exec, execute_code and
+     shell skills. Stored here, applied by the *ViaBackend wrappers in
+     PasClaw.Shell.Backend that those three run through -- deliberately
+     not by RunOneShot itself, which is also how an app build and a
+     benchmark agent are spawned and which must not inherit a shell
+     command's bound. *)
+  SetShellToolTimeoutMs(C.ShellTimeoutSec * 1000);
   { Reranker: which cross-encoder to load + whether retrieval reranks. The
     /v1/rerank endpoint and the memory_search rerank stage both read these
     process-globals, so this chokepoint keeps them in sync with config.json. }

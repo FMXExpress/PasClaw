@@ -22,6 +22,7 @@ uses
   PasClaw.Providers.Intf,
   PasClaw.Providers.Types,
   PasClaw.MCP.Disclosure,
+  PasClaw.Tools.ExecuteCode,
   PasClaw.Agent.Subagent,
   PasClaw.Agent.SubagentBg;
 
@@ -216,6 +217,40 @@ begin
   WriteLn('  ok: subagent tool_search reveals into the child registry, not the parent');
 end;
 
+procedure TestExecuteCodeReboundPerChild;
+{ The copied execute_code record carried the PARENT's runner, so a
+  subagent script's `pasclaw __tool` dispatched into the parent's full
+  registry -- the allowlist bypass the per-registry runner exists to close.
+  BuildFilteredRegistry must re-register execute_code bound to the child. }
+var
+  Parent, Child: TToolRegistry;
+  Names: array of string;
+  PT, CT: TTool;
+begin
+  Parent := TToolRegistry.Create;
+  try
+    AddPlain(Parent, 'fs_read');
+    RegisterExecuteCodeTool(Parent);
+    AssertTrue(Parent.Find('execute_code', PT), 'parent has execute_code');
+    SetLength(Names, 1); Names[0] := '*';
+    Child := BuildFilteredRegistry(Parent, Names);
+    try
+      AssertTrue(Child.Find('execute_code', CT), 'child inherits execute_code');
+      AssertTrue(TMethod(CT.HandlerObj).Data <> TMethod(PT.HandlerObj).Data,
+                 'child execute_code is bound to its own runner, not the parent''s');
+      AssertTrue(TMethod(CT.HandlerObj).Data <> nil, 'child runner is a real object');
+    finally Child.Free; end;
+    SetLength(Names, 2); Names[0] := 'fs_read'; Names[1] := 'execute_code';
+    Child := BuildFilteredRegistry(Parent, Names);
+    try
+      AssertTrue(Child.Find('execute_code', CT), 'explicit list keeps execute_code');
+      AssertTrue(TMethod(CT.HandlerObj).Data <> TMethod(PT.HandlerObj).Data,
+                 'explicit-list child is rebound too');
+    finally Child.Free; end;
+  finally Parent.Free; end;
+  WriteLn('  ok: execute_code is rebound to each child registry');
+end;
+
 procedure TestExplicitListStillExcludesSpawn;
 var Src, Filtered: TToolRegistry; Names: array of string;
 begin
@@ -301,6 +336,7 @@ begin
   TestOperatorOverridesGeneralPurpose;
   TestWildcardInheritsActiveTools;
   TestExplicitListStillExcludesSpawn;
+  TestExecuteCodeReboundPerChild;
   TestWildcardCarriesRevealedToolActive;
   TestChildToolSearchRevealsInChildOnly;
   TestRegisterSubagentToolsWiresSpawn;

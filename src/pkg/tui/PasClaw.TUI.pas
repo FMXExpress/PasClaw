@@ -60,7 +60,8 @@ uses
                                      snapshot field + RouteConfig method
                                      declared on TTUI; same interface-
                                      visibility rule as the types above. }
-  PasClaw.Session.Store;
+  PasClaw.Session.Store,
+  PasClaw.Agent.Prompt;      { BuildSystemPrompt -- the TUI turn sees what the CLI turn sees }
 
 type
   {$IFNDEF FPC}
@@ -1380,6 +1381,7 @@ end;
 
 procedure TTUI.StartTurn(const UserText: string);
 var
+  WorkingState: string;
   Cfg: TToolLoopConfig;
   Worker: TRunToolLoopThread;
   RoutedNm: string;
@@ -1437,57 +1439,19 @@ begin
       BgCoordinator.SetKey(FSession.Meta.Id);
       Cfg.BackgroundDrainKey := FSession.Meta.Id;
     end;
-    { Inject the working-state snapshot built up over previous
-      turns. Empty string when the snapshot is empty so the system
-      prompt stays clean for fresh sessions. Helper lives in
-      PasClaw.Session.Store. }
-    Cfg.Options.SystemPrompt := FormatWorkingStateBlock(FSession.Meta);
-    (* PR #290: prepend a Plan Mode block so the model knows mutating
-       tools will refuse. The dispatch gate in Tools.ToolLoop is the
-       authority, but telling the model up-front means it produces a
-       useful analysis instead of a turn full of refused tool calls. *)
-    if FMode = pmPlan then
-      Cfg.Options.SystemPrompt :=
-        '## Plan Mode' + sLineBreak + sLineBreak +
-        'You are in PLAN mode (TUI Tab pressed). Read-only tools work; ' +
-        'write_file / append_file / edit_file / shell_exec / execute_code / ' +
-        'send_message / skills_manage / ... will REFUSE. Analyse the ' +
-        'codebase and propose a plan; do not attempt mutating tools.' +
-        sLineBreak + sLineBreak +
-        Cfg.Options.SystemPrompt;
-    (* Improve mode refuses nothing, so unlike the block above this one
-       is not a warning -- it is the entire mode. Kept short here on
-       purpose: the TUI prepends to a prompt it did not build, and the
-       full text lives in PasClaw.Agent.Prompt where the CLI and
-       gateway get it. *)
-    if FMode = pmImprove then
-      Cfg.Options.SystemPrompt :=
-        '## Improve Mode' + sLineBreak + sLineBreak +
-        'You are in IMPROVE mode (TUI). Every tool works. Work the loop: ' +
-        'benchmark it FIRST and record the number and the command; ' +
-        'profile to find where the cost really is; change ONE thing; ' +
-        're-run the SAME measurement and report before -> after; ' +
-        'research when the profile suggests no fix. Revert a change ' +
-        'that did not move the number, and say so. Report regressions ' +
-        'plainly. Never claim a speedup you did not measure.' +
-        sLineBreak + sLineBreak +
-        Cfg.Options.SystemPrompt;
-    { Space keeps the same short-form register as Improve above; the
-      full section lives in PasClaw.Agent.Prompt for CLI + gateway.
-      The dispatch gate (mutating tools refused until plan_write) is
-      enforced in the tool loop regardless of what this prompt says. }
-    if FMode = pmSpace then
-      Cfg.Options.SystemPrompt :=
-        '## Space Mode' + sLineBreak + sLineBreak +
-        'You are in SPACE mode (TUI): Search, Plan, Assert, Code, ' +
-        'Evaluate. Search for what exists before designing; record ' +
-        'the plan with plan_write (mutating tools are refused until ' +
-        'you do); write each check FIRST and show it failing; code ' +
-        'the minimum that turns it green; re-run the same check, ' +
-        'quote it, and state what it did NOT cover. Never claim red ' +
-        'or green output you did not produce this session.' +
-        sLineBreak + sLineBreak +
-        Cfg.Options.SystemPrompt;
+    (* The same system prompt the CLI and the gateway build: identity,
+       workspace, the memory tier (MEMORY.md / USER.md / SOUL.md / daily
+       notes), distilled facts, AGENTS.md, the active plan, the skills
+       catalog, deferred tools, the mode block and the rules. The TUI used
+       to send only the working-state snapshot plus a short mode blurb, so
+       a TUI turn saw none of the operator's memory or project rules while
+       `pasclaw agent` on the same workspace saw all of it. The working
+       state still rides along, after the built prompt. *)
+    Cfg.Options.SystemPrompt :=
+      BuildSystemPrompt(RouteConfig, '', FRegistry <> nil, UserText, FMode);
+    WorkingState := FormatWorkingStateBlock(FSession.Meta);
+    if WorkingState <> '' then
+      Cfg.Options.SystemPrompt := Cfg.Options.SystemPrompt + sLineBreak + sLineBreak + WorkingState;
   end;
   Cfg.OnText        := nil;
   Cfg.OnToolCall    := LiveToolCall;

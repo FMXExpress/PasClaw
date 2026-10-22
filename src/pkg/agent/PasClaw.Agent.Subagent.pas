@@ -154,6 +154,7 @@ uses
   PasClaw.JSON,
   PasClaw.Logger,
   PasClaw.MCP.Disclosure,   { TMCPDisclosure / per-registry tool_search for subagents }
+  PasClaw.Tools.ExecuteCode,{ RegisterExecuteCodeTool -- rebind per child registry }
   PasClaw.Tools.ToolLoop;
 
 function RegisterSpawnTool(Reg: TToolRegistry;
@@ -180,6 +181,18 @@ begin
   for i := 0 to High(Arr) do
     if Arr[i] = N then Exit(True);
   Result := False;
+end;
+
+procedure RebindExecuteCode(Child: TToolRegistry);
+{ The copied execute_code record carries the PARENT's runner, whose RPC
+  server dispatches into the parent's full registry -- which is exactly the
+  allowlist bypass the per-registry runner was built to close. Re-register
+  so the child's execute_code binds the child's registry. }
+var
+  T: TTool;
+begin
+  if (Child <> nil) and Child.Find('execute_code', T) then
+    RegisterExecuteCodeTool(Child);
 end;
 
 function BuildFilteredRegistry(Source: TToolRegistry;
@@ -219,6 +232,7 @@ begin
       else
         Result.Register(T);                { non-deferred OR already revealed -> active }
     end;
+    RebindExecuteCode(Result);
     Exit;
   end;
 
@@ -232,6 +246,7 @@ begin
     end;
     Result.Register(T);
   end;
+  RebindExecuteCode(Result);
 end;
 
 function DefaultSubagentSpec: TSubagentSpec;

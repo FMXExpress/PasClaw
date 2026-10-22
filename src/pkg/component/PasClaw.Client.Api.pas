@@ -231,6 +231,8 @@ type
   private
     FBaseURL: string;
     FToken: string;
+    FSessionId: string;
+    FSessionContext: Boolean;
     FTimeoutMs: Integer;
     FModelTimeoutMs: Integer;
     FLastError: string;
@@ -290,6 +292,15 @@ type
     { Base URL without a trailing slash; setting it normalises. }
     property BaseURL: string read FBaseURL write FBaseURL;
     property Token: string read FToken write FToken;
+    (* The gateway session a Chat belongs to. Sent as X-PasClaw-Session so
+       the server files the turn, its stats and its checkpoints under that
+       session instead of a bucket. With SessionContext the server also
+       merges its stored transcript under the session's turn lock, so the
+       client can send just the new message and still get a conversation
+       -- which is what makes attaching a second surface to a running
+       session possible. Both empty/false keep the old stateless shape. *)
+    property SessionId: string read FSessionId write FSessionId;
+    property SessionContext: Boolean read FSessionContext write FSessionContext;
     (* Two clocks, because there are two kinds of call.
 
        A board read is a database hit: if it has not answered in seconds,
@@ -2522,8 +2533,12 @@ begin
     end;
     Root.PutArray('messages', Msgs);
     Root.PutBool('stream', True);
+    if FSessionContext and (FSessionId <> '') then
+      Root.PutBool('session_context', True);
 
     Http.Request.Accept := 'text/event-stream';
+    if FSessionId <> '' then
+      Http.Request.CustomHeaders.Values['X-PasClaw-Session'] := FSessionId;
     Req := TStringStream.Create(Root.ToJSON);
     try
       Http.Post(FBaseURL + '/v1/chat/completions', Req, Sink);

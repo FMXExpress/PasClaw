@@ -26,6 +26,25 @@ type
   TStringArray = PasClaw.Utils.TStringArray;
   {$ENDIF}
 
+  (* A tool call routed through the SAME gates the agent loop applies --
+     plan/space-mode refusal, hooks, preflight, promptware, the output cap
+     -- rather than straight into Registry.RunTool.
+
+     Exists for the execute_code tool RPC. A script's `pasclaw __tool`
+     used to reach RunTool directly, so a plan-mode turn could mutate
+     through a script and no hook ever saw the call. PasClaw.Tools.ToolLoop
+     implements this over its own DispatchOneToolCall and installs
+     GCaptureDispatcher; a tool handler that wants to dispatch on the
+     loop's behalf calls it ON THE DISPATCHING THREAD (where the loop has
+     published its config) and hands the result to whatever runs later on
+     other threads. nil when no loop is dispatching -- a registry-only
+     caller, such as a test harness, keeps the old RunTool path. *)
+  IToolDispatcher = interface
+    ['{2E7B4C1A-9D3F-4E6B-8A5C-1F0D7B3E9A21}']
+    function Dispatch(const Name, ArgsJSON: string; out ErrMsg: string): string;
+  end;
+  TCaptureDispatcherFn = function: IToolDispatcher;
+
   TToolRegistry = class
   private
     FTools: TToolList;
@@ -104,6 +123,10 @@ type
       are revealed + active" from "empty because none ever loaded". }
     function  AnyRevealed: Boolean;
   end;
+
+var
+  { Installed by PasClaw.Tools.ToolLoop at initialization. See IToolDispatcher. }
+  GCaptureDispatcher: TCaptureDispatcherFn = nil;
 
 implementation
 

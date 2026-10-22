@@ -6060,6 +6060,7 @@ begin
     accepted, ignored by that turn, and then drained into whatever turn
     ran next. Empty session => steering disabled (no-op). }
   LoopCfg.SteeringKey   := ReqSessionId(ARequest);
+  LoopCfg.BackgroundDrainKey := LoopCfg.SteeringKey;   { finished background jobs fold into THIS session's next turn }
   LoopCfg.Fallbacks     := FB;
   LoopCfg.FallbackModels := FBModels;
   LoopCfg.Options       := DefaultChatOptions;
@@ -6360,6 +6361,7 @@ begin
     agent -- by another agent, by the operator over HTTP -- is drained
     into this turn between iterations. }
   LoopCfg.SteeringKey    := Sid;
+  LoopCfg.BackgroundDrainKey := LoopCfg.SteeringKey;   { finished background jobs fold into THIS session's next turn }
   LoopCfg.CompactEnabled := FCfg.Compaction.Enabled;
   LoopCfg.CompactOpts    := DefaultCompactOptions;
   LoopCfg.CompactOpts.ThresholdTokens    := FCfg.Compaction.ThresholdTokens;
@@ -8066,6 +8068,7 @@ begin
        sent during a stream:false turn was absent from that turn and
        appeared in the first request of the following, unrelated one. *)
     LoopCfg.SteeringKey := ReqSession;
+    LoopCfg.BackgroundDrainKey := LoopCfg.SteeringKey;   { finished background jobs fold into THIS session's next turn }
 
     if WantsStream then
     begin
@@ -9805,6 +9808,7 @@ begin
         running /v1/responses turn was accepted, ignored by that turn, and
         left on disk for whichever turn drained next. }
       LoopCfg.SteeringKey   := ReqSessionId(ARequest);
+      LoopCfg.BackgroundDrainKey := LoopCfg.SteeringKey;   { finished background jobs fold into THIS session's next turn }
       LoopCfg.Fallbacks     := FB;
       LoopCfg.FallbackModels := FBModels;
       LoopCfg.Options       := DefaultChatOptions;

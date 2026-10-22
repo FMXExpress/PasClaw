@@ -525,6 +525,83 @@ begin
   end;
 end;
 
+procedure TestGatewayShapedDrainByStampedKey;
+(* The gateway runs every session through ONE registry and so one
+   coordinator, and never called SetKey -- so before this, a gateway turn
+   could start a background job and no turn ever heard it finish. Now a
+   job is stamped with the drain key of the dispatch that spawned it
+   (CurrentDispatchDrainKey), and DrainByKey walks every coordinator for
+   jobs stamped with the asking loop's key.
+
+   Shape: coordinator registered via RegisterBackgroundSpawnTools (no key),
+   spawn through a loop dispatcher whose BackgroundDrainKey is 'gw-A',
+   then run a loop as 'gw-A' (sees the result) and one as 'gw-B' (does
+   not). *)
+var
+  Provider: ILLMProvider;
+  ParentReg: TToolRegistry;
+  Specs: TSubagentSpecArray;
+  Ctx: TSubagentContext;
+  Coord: TBackgroundSpawnCoordinator;
+  Cfg: TToolLoopConfig;
+  Disp: IToolDispatcher;
+  Out_, Err, Handle: string;
+  Loop: TToolLoopResult;
+  Hist: TMessageArray;
+begin
+  Provider  := TFakeEchoProvider.Create;
+  ParentReg := TToolRegistry.Create;
+  try
+    SetLength(Specs, 1);
+    Specs[0].Name := 'researcher'; Specs[0].Description := 'r';
+    Specs[0].SystemPrompt := 'you are research'; SetLength(Specs[0].Tools, 0);
+    Specs[0].Model := ''; Specs[0].MaxIter := 2;
+    Ctx.Provider := Provider; SetLength(Ctx.Fallbacks, 0);
+    Ctx.ParentRegistry := ParentReg; Ctx.DefaultModel := 'fake';
+    Ctx.PromptCache := Default(TPromptCacheConfig); Ctx.Cfg := nil;
+    Coord := RegisterBackgroundSpawnTools(ParentReg, Ctx, Specs);
+    AssertTrue(Coord <> nil, 'coordinator registered (module owns it)');
+
+    { Spawn as the gateway would: through a dispatch whose loop carries
+      the session's drain key. }
+    Cfg := Default(TToolLoopConfig);
+    Cfg.Provider := Provider; Cfg.Registry := ParentReg; Cfg.Model := 'fake';
+    Cfg.MaxIterations := 2; Cfg.Options := DefaultChatOptions;
+    Cfg.BackgroundDrainKey := 'gw-A';
+    Disp := MakeLoopDispatcher(Cfg);
+    Out_ := Disp.Dispatch('spawn_background',
+      '{"agent":"researcher","prompt":"gateway job payload"}', Err);
+    AssertTrue(Err = '', 'spawn via dispatcher: ' + Err);
+    Handle := ExtractHandle(Out_);
+    AssertTrue(Handle <> '', 'got a handle');
+    WaitForState(Coord, Handle, 'state=done', 5);
+
+    { A loop for another session sees nothing of it. }
+    GLastSeenSystemPrompt := '';
+    Cfg.BackgroundDrainKey := 'gw-B';
+    Cfg.Options.SystemPrompt := 'BASE';
+    SetLength(Hist, 1); Hist[0] := MakeMessage(mrUser, 'hi');
+    AssertTrue(RunToolLoop(Cfg, Hist, Loop), 'loop B runs');
+    AssertNotContains(GLastSeenSystemPrompt, 'gateway job payload', 'session B does not receive A''s job');
+
+    { The spawning session's loop does, once. }
+    GLastSeenSystemPrompt := '';
+    Cfg.BackgroundDrainKey := 'gw-A';
+    SetLength(Hist, 1); Hist[0] := MakeMessage(mrUser, 'hi again');
+    AssertTrue(RunToolLoop(Cfg, Hist, Loop), 'loop A runs');
+    AssertContains(GLastSeenSystemPrompt, '[background subagent results]', 'session A gets the block');
+    AssertContains(GLastSeenSystemPrompt, 'gateway job payload', 'with the job result');
+    GLastSeenSystemPrompt := '';
+    SetLength(Hist, 1); Hist[0] := MakeMessage(mrUser, 'and again');
+    AssertTrue(RunToolLoop(Cfg, Hist, Loop), 'loop A runs again');
+    AssertNotContains(GLastSeenSystemPrompt, 'gateway job payload', 'delivered once only');
+  finally
+    { Coord is owned by the module (GCoordinators); ParentReg must outlive
+      its tools' use, and nothing runs after this. }
+    ParentReg.Free;
+  end;
+end;
+
 begin
   TestSpawnReturnsHandleAndJobStarts;
   TestWaitReturnsResultWhenDone;
@@ -534,5 +611,6 @@ begin
   TestDrainEmitsBlockOnceAndOnlyOnce;
   TestSpawnWaitDeliversFullEvenAfterPreviewTruncated;
   TestDrainedBlockReachesModelButNotFinalSystemPrompt;
+  TestGatewayShapedDrainByStampedKey;
   WriteLn('subagent_bg_tests: OK');
 end.

@@ -62,6 +62,14 @@ Always on unless `shell_deny_enabled: false`.
 
 `/dev/null`, `/dev/zero`, `/dev/{,u}random`, `/dev/std{in,out,err}` — picoclaw's `safePaths`.
 
+## Scripts and skills go through the same gates
+
+Three paths used to reach a shell or a tool around the gates above, and no longer do:
+
+- **`execute_code` scripts calling tools.** `pasclaw __tool <name>` inside a script now dispatches through the loop's own gate chain: plan-mode and space-mode refusal of mutating tools, hooks, preflight, the promptware scan, the output cap. A subagent's script dispatches into the subagent's filtered registry, not the parent's.
+- **Shell skills.** A `kind: shell` skill's rendered command passes `ShellAllowed` (the denylist and, under `restrict_to_workspace`, the path rules) and runs through the active shell backend, so with the Docker backend it runs in the container like `shell_exec`. Shell skills are `tcMutating`, so plan mode refuses them; prompt skills are read-only.
+- **Hung commands.** Every shell *tool* path (`shell_exec`, `execute_code`, shell skills) is bounded by `shell_timeout_sec` (default 600). On expiry the whole process tree is killed — SIGTERM then SIGKILL, deepest first — and the tool reports `exit=124`. Signalling only the shell would leave the compiler or test runner under it running after PasClaw had already reported the timeout.
+
 ## Workspace pin
 
 When `restrict_to_workspace=true`, `Tool_Shell` invokes `RunOneShot` with `WorkingDir = workspace` so the child shell starts inside the boundary. Combined with the `cd` token ban and `..` traversal check, a sandboxed model has no relative-path escape — even if a future denylist gap let a command through, the shell still starts in the workspace, not wherever `pasclaw` was launched from.
