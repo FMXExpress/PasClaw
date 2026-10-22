@@ -1246,7 +1246,7 @@ uses
   PasClaw.JSON,
   PasClaw.Config.Profile,     { ResolveProfileBodies / ExtractProfileField -- PR #291 }
   PasClaw.Logger,             { LogWarn / LogInfo on the profile-apply path }
-  PasClaw.Platform,           { SetShellTimeoutMs -- shell_timeout_sec's process mirror }
+  PasClaw.Platform,           { SetShellToolTimeoutMs -- the tool shells' default }
   PasClaw.Promptware,         { LoadConfig propagates promptware_enabled --
                                 see the comment inside LoadConfig }
   PasClaw.Tools.OutputCache,  { LoadConfig propagates condense_reversible
@@ -2867,9 +2867,13 @@ begin
   { Symmetric propagation of the reversible-condensation flag -- OutputCache
     holds the same process-global mirror. }
   SetCondenseReversible(C.CondenseReversible);
-  { The shell wall-clock bound lives in PasClaw.Platform, which every shell
-    path (local, docker exec, skills) runs through. }
-  SetShellTimeoutMs(C.ShellTimeoutSec * 1000);
+  (* The TOOL shells' wall-clock bound: shell_exec, execute_code and
+     shell skills. Stored here, applied by the *ViaBackend wrappers in
+     PasClaw.Shell.Backend that those three run through -- deliberately
+     not by RunOneShot itself, which is also how an app build and a
+     benchmark agent are spawned and which must not inherit a shell
+     command's bound. *)
+  SetShellToolTimeoutMs(C.ShellTimeoutSec * 1000);
   { Reranker: which cross-encoder to load + whether retrieval reranks. The
     /v1/rerank endpoint and the memory_search rerank stage both read these
     process-globals, so this chokepoint keeps them in sync with config.json. }

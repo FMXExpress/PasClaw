@@ -70,7 +70,7 @@ Six tiers of optimisation layered on the recursive scan:
 
 Runs `/bin/sh -c <cmd>` on POSIX or `cmd.exe /C <cmd>` on Windows. Output capped at 1 MiB. Denylist-gated via `PasClaw.Tools.Sandbox.ShellAllowed`. Per-command condensers run on successful output (tee-on-failure: full output passes through on non-zero exit). Filter coverage: `git status/diff/log`, `pytest`/`cargo test`/`npm test`/`go test`, `grep`/`Select-String`/`findstr`, recursive `ls`/`find`/`Get-ChildItem`, tabular CLIs (`docker ps`, `kubectl get`, `gh`), `docker build`, log tails, compiler walls, linters, package managers, build systems, IaC, `aws` JSON. PowerShell-alias normalisation included. See [`src/pkg/tools/PasClaw.Tools.Shell.Filters.pas`](../src/pkg/tools/PasClaw.Tools.Shell.Filters.pas).
 
-`timeout_sec` bounds one call in wall-clock seconds (default: `shell_timeout_sec` in config, 600). On expiry the process is killed and line 1 reads `exit=124` with a "timed out after N s" note. Before 0.1.6 there was no bound at all.
+`timeout_sec` bounds one call in wall-clock seconds (default: `shell_timeout_sec` in config, 600). On expiry the process **and its descendants** are killed and line 1 reads `exit=124` with a "timed out after N s" note. Before 0.1.6 there was no bound at all.
 
 ### `execute_code`
 
