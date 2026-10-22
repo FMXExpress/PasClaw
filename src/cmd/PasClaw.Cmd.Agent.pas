@@ -161,6 +161,9 @@ type
       read back per-turn stats. Callers that don't pass --session keep
       the original "single turns aren't persisted" behaviour. }
     Session:       string;
+    { --scenarios <dir> -- held-out checks run after the final answer
+      (PasClaw.Agent.Verify); overrides config verification.scenarios. }
+    Scenarios:     string;
     { --backend local|docker. Empty = use Cfg.ShellBackend. Override
       is per-invocation; we don't persist it to config. }
     BackendOverride: string;
@@ -341,6 +344,7 @@ begin
     if Argv[i] = '--verbose'     then begin A.Verbose := True;  Inc(i); Continue; end;
     if Argv[i] = '--brief'       then begin A.Verbose := False; Inc(i); Continue; end;
     if Argv[i] = '--session'     then begin if i = High(Argv) then Exit(False); A.Session := Argv[i + 1]; Inc(i, 2); Continue; end;
+    if Argv[i] = '--scenarios'   then begin if i = High(Argv) then Exit(False); A.Scenarios := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--backend'     then begin if i = High(Argv) then Exit(False); A.BackendOverride := Argv[i + 1]; Inc(i, 2); Continue; end;
     if Argv[i] = '--mode'        then
     begin
@@ -563,6 +567,12 @@ begin
     Result.Model := Cfg.PlanModel;
   Result.MaxIterations := A.MaxIterations;
   Result.Parallel := True;
+  { Held-out verification: --scenarios wins over config.verification. }
+  if A.Scenarios <> '' then
+    Result.ScenariosDir := ExcludeTrailingPathDelimiter(ExpandFileName(A.Scenarios))
+  else
+    Result.ScenariosDir := ResolveScenariosDir(Cfg);
+  Result.VerifyMaxRounds := Cfg.Verification.MaxRounds;
   Result.Fallbacks     := ResolveFallbacks(Cfg, Result.FallbackModels);
   Result.Options       := DefaultChatOptions;
   { ToolsEnabled tracks the registry we are about to hand RunToolLoop
@@ -835,6 +845,13 @@ begin
         quiet mode route it to stderr so stdout stays machine-readable.
         One-shot history only carries over when --session is set, so the
         "reply continue" hint is gated on that. }
+      if Loop.VerifyRounds > 0 then
+        if A.Quiet then
+          PrintErr(Loop.VerifyReport + sLineBreak)
+        else if Loop.Verified then
+          PrintLn(Ansi.Green + Loop.VerifyReport + Ansi.Reset)
+        else
+          PrintLn(Ansi.Red + Loop.VerifyReport + ' -- the answer above is NOT verified' + Ansi.Reset);
       if Loop.HitMaxIterations then
         if A.Quiet then
           PrintErr(FormatMaxIterNotice(Loop, A.MaxIterations, '--max-iterations N', A.Session <> '') + sLineBreak)
@@ -1833,6 +1850,11 @@ begin
         { Stopped at the iteration cap mid-task -- surface it so the
           operator knows the answer is partial and can just type "continue"
           (the interactive history carries over to the next turn). }
+        if Loop.VerifyRounds > 0 then
+          if Loop.Verified then
+            PrintLn(Ansi.Green + Loop.VerifyReport + Ansi.Reset)
+          else
+            PrintLn(Ansi.Red + Loop.VerifyReport + ' -- the answer above is NOT verified' + Ansi.Reset);
         if Loop.HitMaxIterations then
           PrintLn(Ansi.Yellow + FormatMaxIterNotice(Loop, A.MaxIterations,
                   '--max-iterations N', {Resumable=} True) + Ansi.Reset);

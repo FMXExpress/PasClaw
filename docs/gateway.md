@@ -49,7 +49,7 @@ Default bind: `127.0.0.1:8088`. Override via `gateway.bind_addr` / `gateway.port
 | `/v1/logs` | GET | SSE tail of the gateway log buffer (1000-entry ring); recent buffer dumps first, then live. |
 | `/v1/models` | GET | OpenAI-compatible model list containing the configured default model. |
 | `/v1/stats` | GET | 5-second-cached aggregate of per-session counters (opt-in via `stats_collection_enabled`). |
-| `/v1/chat` | POST | PasClaw JSON chat endpoint accepting `{"message":"..."}`. |
+| `/v1/chat` | POST | PasClaw JSON chat endpoint accepting `{"message":"..."}`. With `verification.scenarios` configured the response carries `verification: {ok, rounds, passed, failed, summary}`, the result of the held-out checks PasClaw ran after the model's final answer. |
 | `/v1/chat/completions` | POST | OpenAI Chat Completions-compatible. Streams with `stream: true`. |
 | `/v1/responses` | POST | OpenAI Responses-compatible. String or message-array `input`. Non-streaming only. |
 | `/mcp`, `/v1/mcp/rpc` | POST | MCP JSON-RPC endpoint when PasClaw is acting as an MCP server. |
