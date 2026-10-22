@@ -531,8 +531,11 @@ begin
       by default, so skipping this would hide spawn*/db_*/workflow_* AND
       remove the tool that reveals them -- undiscoverable, not just
       invisible (Codex P1, PR #547). Registering it also latches the
-      deferral, so the two can never come apart. }
-    RegisterMCPDisclosureTools(Reg, Cfg);
+      deferral, so the two can never come apart. With no MCP clients,
+      built-in deferral is the only reason for the tool, so it is gated
+      on that flag alone (Codex P2 on #615). }
+    if Cfg.BuiltinProgressiveDisclosure then
+      RegisterMCPDisclosureTools(Reg, Cfg);
     Exit;
   end;
   Result := ConnectMCPServers(Cfg, Reg);

@@ -367,11 +367,13 @@ begin
     SetLength(MCPClients, 0);
     if (not Args.NoMCP) and (Reg <> nil) then
       MCPClients := ConnectMCPServers(Cfg, Reg)
-    else if Reg <> nil then
+    else if (Reg <> nil) and Cfg.BuiltinProgressiveDisclosure then
       { --no-mcp skipped the only call that registers tool_search and
         defers the built-in long tail, so every request carried all 36
         tool schemas (28.5 KB) instead of 19 (15.7 KB). Same fix the
-        CLI's ConnectMCP already had. }
+        CLI's ConnectMCP already had. With no MCP clients the only
+        reason for tool_search is built-in deferral, so it is gated on
+        that flag alone (Codex P2 on #615). }
       RegisterMCPDisclosureTools(Reg, Cfg);
 
     { Subagents (on by default): register spawn + background spawn tools so the

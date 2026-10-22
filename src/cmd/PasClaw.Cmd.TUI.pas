@@ -203,8 +203,8 @@ begin
     SetLength(MCPClients, 0);
     if (Reg <> nil) and (not A.NoMCP) then
       MCPClients := ConnectMCPServers(Cfg, Reg)
-    else if Reg <> nil then
-      RegisterMCPDisclosureTools(Reg, Cfg);   { --no-mcp must keep tool_search + built-in deferral }
+    else if (Reg <> nil) and Cfg.BuiltinProgressiveDisclosure then
+      RegisterMCPDisclosureTools(Reg, Cfg);   { --no-mcp: tool_search only for built-in deferral }
 
     if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
 
