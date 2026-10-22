@@ -215,6 +215,7 @@ function BuildProjectRulesSection: string;
   most Max then "... and N more"; "(empty)" for an empty or missing dir.
   Exposed for tests. }
 function WorkspaceTopLevel(const Dir: string; Max: Integer): string;
+function SafeEntryName(const N: string): string;
 
 { Orient launch-preamble section. When Cfg.OrientTaskAware is on, returns an
   instruction telling the model to open a task with a brief plan BEFORE it
@@ -316,6 +317,22 @@ const
 { Names at the top level of Dir, sorted, directories with a trailing
   slash, hidden entries skipped, at most Max (then "... and N more").
   "(empty)" for an empty or unreadable directory. Exposed for tests. }
+{ A directory entry as prompt-safe text: control characters (anything
+  below space, and DEL) become '?', backticks become apostrophes so the
+  quoting around the name cannot be closed early, and very long names
+  are cut. Exposed for tests. }
+function SafeEntryName(const N: string): string;
+var
+  i: Integer;
+begin
+  Result := '';
+  for i := 1 to Length(N) do
+    if (Ord(N[i]) < 32) or (Ord(N[i]) = 127) then Result := Result + '?'
+    else if N[i] = '`' then Result := Result + ''''
+    else Result := Result + N[i];
+  if Length(Result) > 60 then Result := Copy(Result, 1, 57) + '...';
+end;
+
 function WorkspaceTopLevel(const Dir: string; Max: Integer): string;
 var
   Sr: TSearchRec;
@@ -329,8 +346,11 @@ begin
       repeat
         if (Sr.Name = '.') or (Sr.Name = '..') then Continue;
         if (Sr.Name <> '') and (Sr.Name[1] = '.') then Continue;
-        if (Sr.Attr and faDirectory) <> 0 then L.Add(Sr.Name + '/')
-        else L.Add(Sr.Name);
+        { Names are untrusted data from the checkout: a control character
+          (a filename with a newline in it) must not be able to open a new
+          heading in the system prompt. Scrub, cap, and quote. }
+        if (Sr.Attr and faDirectory) <> 0 then L.Add(SafeEntryName(Sr.Name) + '/')
+        else L.Add(SafeEntryName(Sr.Name));
       until FindNext(Sr) <> 0;
     finally
       FindClose(Sr);
@@ -343,7 +363,7 @@ begin
     begin
       if Shown >= Max then Break;
       if Result <> '' then Result := Result + ', ';
-      Result := Result + L[i];
+      Result := Result + '`' + L[i] + '`';
       Inc(Shown);
     end;
     if L.Count > Shown then

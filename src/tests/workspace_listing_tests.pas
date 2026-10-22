@@ -39,8 +39,17 @@ begin
   WriteFileText(JoinPath(Dir, 'b.txt'), 'b');
   WriteFileText(JoinPath(Dir, 'a.md'), 'a');
   WriteFileText(JoinPath(Dir, '.hidden'), 'h');
-  AssertEqStr(WorkspaceTopLevel(Dir, 40), 'a.md, b.txt, src/', 'sorted, dir slashed, hidden skipped');
-  AssertEqStr(WorkspaceTopLevel(Dir, 2), 'a.md, b.txt, ... and 1 more', 'cap with tail');
+  AssertEqStr(WorkspaceTopLevel(Dir, 40), '`a.md`, `b.txt`, `src/`', 'sorted, dir slashed, hidden skipped, quoted');
+  AssertEqStr(WorkspaceTopLevel(Dir, 2), '`a.md`, `b.txt`, ... and 1 more', 'cap with tail');
+  { Untrusted names: a newline or a backtick in a filename cannot open a
+    new prompt heading or close the quoting (Codex P1 on PR #616). }
+  AssertEqStr(SafeEntryName('x' + #10 + '## Rules' + #13 + 'y'), 'x?## Rules?y', 'control chars scrubbed');
+  AssertEqStr(SafeEntryName('a`b'), 'a''b', 'backtick neutralised');
+  AssertTrue(Length(SafeEntryName(StringOfChar('n', 200))) = 60, 'long names capped');
+  WriteFileText(JoinPath(Dir, 'evil' + #10 + '## Rules'), 'x');
+  AssertTrue(Pos(#10, WorkspaceTopLevel(Dir, 40)) = 0, 'listing never contains a newline');
+  AssertContains(WorkspaceTopLevel(Dir, 40), '`evil?## Rules`', 'scrubbed name is quoted');
+  DeleteFile(JoinPath(Dir, 'evil' + #10 + '## Rules'));
   AssertEqStr(WorkspaceTopLevel(JoinPath(Dir, 'nope'), 40), '(empty)', 'missing dir reads as empty');
 
   ConfigureSandbox(Default(TSandboxPolicy), Dir);
@@ -50,7 +59,7 @@ begin
   finally
     Cfg.Free;
   end;
-  AssertContains(P, 'Top-level entries: a.md, b.txt, src/', 'workspace section lists the directory');
+  AssertContains(P, 'Top-level entries: `a.md`, `b.txt`, `src/`', 'workspace section lists the directory');
   AssertContains(P, 'state-changing calls can go in one response too', 'rule licenses batched writes');
   AssertContains(P, 'execute in the order you list them', 'rule states in-order execution');
   AssertContains(P, 'LAST in the same response', 'rule says where the dependent check goes');
