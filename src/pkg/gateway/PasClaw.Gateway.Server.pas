@@ -5151,6 +5151,12 @@ begin
     prepended to fallbacks) is local to this turn. No-op unless enabled. }
   LocalCfg := Cfg;
   ApplyAutoRoute(LocalCfg, FCfg, Messages, RoutedNm);
+  { Held-out verification from config, for every gateway chat path. }
+  if LocalCfg.ScenariosDir = '' then
+  begin
+    LocalCfg.ScenariosDir    := ResolveScenariosDir(FCfg);
+    LocalCfg.VerifyMaxRounds := FCfg.Verification.MaxRounds;
+  end;
 
   { Working-state flush at compaction time -- see TCompactFlush for
     why the gateway flushes here and nowhere else. Wired centrally so
@@ -5984,7 +5990,7 @@ procedure TGatewayServer.HandleChat(ARequest: TIdHTTPRequestInfo;
 var
   Body, Prompt: string;
   Bytes: TBytes;
-  Req, RespJ: TJsonObject;
+  Req, RespJ, VerJ: TJsonObject;
   Msgs: TMessageArray;
   Loop: TToolLoopResult;
   LoopCfg: TToolLoopConfig;
@@ -6119,6 +6125,16 @@ begin
     RespJ.PutInt('iterations',    Loop.Iterations);
     RespJ.PutInt('input_tokens',  Loop.LastResp.Usage.InputTokens);
     RespJ.PutInt('output_tokens', Loop.LastResp.Usage.OutputTokens);
+    if Loop.VerifyRounds > 0 then
+    begin
+      VerJ := TJsonObject.Create;
+      VerJ.PutBool('ok',      Loop.Verified);
+      VerJ.PutInt ('rounds',  Loop.VerifyRounds);
+      VerJ.PutInt ('passed',  Loop.VerifyPassed);
+      VerJ.PutInt ('failed',  Loop.VerifyFailed);
+      VerJ.PutStr ('summary', Loop.VerifyReport);
+      RespJ.PutObject('verification', VerJ);
+    end;
     WriteJSON(AResp, 200, RespJ.ToJSON);
   finally
     RespJ.Free;
