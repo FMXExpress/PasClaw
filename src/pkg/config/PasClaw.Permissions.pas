@@ -98,9 +98,12 @@ function EffectName(E: TPermEffect): string;
 function AskAnswerName(A: TAskAnswer): string;   { deny | allow | session }
 
 { The call's primary resource: what a resource glob is matched against.
-  shell_exec / shell_background: command; execute_code: code; fs_* and the
-  legacy read_file/write_file/edit_file family: path; web_fetch /
-  memory_fetch: url; everything else: ''. Pure. }
+  shell_exec / shell_background: command; execute_code: code; web_fetch /
+  memory_fetch: url. Every other tool -- the whole file family and its
+  fs_* aliases, grep_files, find_files, kb_get, an MCP tool nobody here
+  has heard of -- yields its "path", else "url", else "command"
+  argument, so a resource rule reaches a tool without this unit being
+  taught its name. '' when it has none of them. Pure. }
 function ResourceOf(const ToolName, ArgsJSON: string): string;
 
 { Last matching rule wins. Index is into Rules. }
@@ -132,9 +135,34 @@ function  PolicyFilePath(const Home: string): string;
 procedure LoadPolicyFile(const Home: string);
 procedure RefreshPolicies;
 function  PolicyRules: TPermRuleArray;
+{ How many reads of the policy file were unusable and left the previous
+  rules standing. Non-zero means what is in force is not what is on
+  disk; `permissions list` says so. }
+function  PolicyLoadFailures: Integer;
 
 { Policies first; a policy deny is final. Then the config rules. }
 function Decide(const Tool, Resource: string): TPermDecision;
+
+(* Turn-taking for an asker that has ONE place to ask.
+
+   The TUI footer and the CLI prompt are a single line of screen and a
+   single stdin; the loop dispatches tool calls in parallel, so two
+   ask-gated calls in one batch reach the asker on two threads at once.
+   Unserialised, the TUI overwrote the pending request with the second
+   one and woke both waiters on one keypress -- one keystroke approving
+   a call the operator never saw -- and the CLI had two threads reading
+   the same stdin, so an answer meant for the prompt on screen could be
+   consumed by the other thread's ReadLn. (Codex P1 on #611, twice.)
+
+   A surface whose prompt is a shared console wraps its asker body in
+   these. The gateway deliberately does NOT: its requests carry ids,
+   each has its own event, and the web UI can show several at once.
+
+   The cost is honest -- the second call waits for the first to be
+   answered, up to permissions_ask_timeout_sec -- and the batch could
+   not have finished before all its answers were in anyway. *)
+procedure BeginInteractiveAsk;
+procedure EndInteractiveAsk;
 
 { "Allow for this session" memory, keyed by the loop's session key. }
 procedure RememberSessionAllow(const SessionKey, Tool, Resource: string);
@@ -145,6 +173,7 @@ implementation
 
 uses
   PasClaw.Utils,   { ReadFileText }
+  PasClaw.Logger,  { LogWarn -- a policy file we could not use must say so }
   PasClaw.JSON;
 
 { ------------------------------------------------------------- glob }
@@ -244,18 +273,38 @@ begin
 end;
 
 function ResourceOf(const ToolName, ArgsJSON: string): string;
+(* The two shell tools and the two fetch tools are named because the
+   field their resource lives in is particular to them. Everything else
+   falls through to the three fields an operator actually writes a
+   resource glob against, in the order a tool that has more than one
+   would mean them.
+
+   That fall-through replaced a list of file-tool names, which had gone
+   stale the moment the Glob/Grep pair landed: grep_files and find_files
+   both take a path, neither was named, so a policy denying `/etc*` for
+   every tool did not match grep_files({"path":"/etc"}) and the search
+   went ahead. A list of names has to be revisited by whoever adds a
+   tool -- including an MCP server, whose tools nobody here will ever
+   name -- and nothing makes them. Reading the argument does not.
+   (Codex P1 on #611.)
+
+   apply_patch is the one real gap left, and no field would close it: its
+   paths are inside the patch body, several of them, and a glob over
+   that text would match by accident as often as on purpose. Scope it by
+   tool (`{"tool":"apply_patch","effect":"ask"}`); the sandbox's path
+   rules still bound where it can write. *)
 var
   N: string;
 begin
   N := LowerCase(ToolName);
-  if (N = 'shell_exec') or (N = 'shell_background') then Result := ArgStr(ArgsJSON, 'command')
-  else if N = 'execute_code' then Result := ArgStr(ArgsJSON, 'code')
-  else if (N = 'web_fetch') or (N = 'memory_fetch') then Result := ArgStr(ArgsJSON, 'url')
-  else if (Copy(N, 1, 3) = 'fs_') or (N = 'read_file') or (N = 'write_file') or
-          (N = 'append_file') or (N = 'edit_file') or (N = 'list_dir') then
-    Result := ArgStr(ArgsJSON, 'path')
-  else
-    Result := '';
+  if (N = 'shell_exec') or (N = 'shell_background') then Exit(ArgStr(ArgsJSON, 'command'));
+  if N = 'execute_code' then Exit(ArgStr(ArgsJSON, 'code'));
+  if (N = 'web_fetch') or (N = 'memory_fetch') then Exit(ArgStr(ArgsJSON, 'url'));
+  Result := ArgStr(ArgsJSON, 'path');
+  if Result <> '' then Exit;
+  Result := ArgStr(ArgsJSON, 'url');
+  if Result <> '' then Exit;
+  Result := ArgStr(ArgsJSON, 'command');
 end;
 
 { --------------------------------------------------------- evaluate }
@@ -395,7 +444,12 @@ var
   GPolicies:    TPermRuleArray;
   GPolicyPath:  string;
   GPolicyMtime: TDateTime;
+  GPolicySize:  Int64;
+  GPolicyFails: Integer;   { reads kept the previous rules; `permissions list` shows it }
   GAllows:      TStringList;   { "<session>|<tool>|<resource>" }
+  { Held for the whole of one interactive ask -- see BeginInteractiveAsk.
+    Separate from GLock, which is only ever held for a field read. }
+  GAskTurn:     TCriticalSection;
 
 procedure SetPermissionRules(const Rules: TPermRuleArray);
 var
@@ -437,18 +491,62 @@ begin
   end;
 end;
 
-procedure ReadPoliciesLocked(const Path: string);
+procedure PolicyLoadFailedLocked(const What: string);
+{ Caller holds GLock. Says it out loud once per failed stamp -- silence
+  here would read as "no policies", which is the thing being avoided. }
+begin
+  Inc(GPolicyFails);
+  LogWarn('permissions: could not %s %s -- keeping the %d policy rule(s) ' +
+          'already in force', [What, GPolicyPath, Length(GPolicies)]);
+end;
+
+function JSONArrayParses(const S: string): Boolean;
+var
+  A: TJsonArray;
+begin
+  try
+    A := TJsonArray.Parse(S);
+  except
+    A := nil;
+  end;
+  Result := A <> nil;
+  if A <> nil then A.Free;
+end;
+
+(* Read the policy file into GPolicies.
+
+   The active rules are replaced only on a SUCCESSFUL read, and only a
+   file that is gone clears them. The first cut cleared GPolicies up
+   front and then returned early on every failure -- unreadable,
+   truncated, not JSON, no "permissions" array -- so a policies.json
+   being rewritten non-atomically left the process with NO policy denies
+   for the length of that window, and RefreshPolicies had already
+   consumed the mtime, so if the final write landed in the same
+   filesystem timestamp the empty state was permanent. A file a team
+   gateway owns is exactly the file that gets rewritten under a running
+   agent. (Codex P1 on #611.)
+
+   Returns False when the content could not be used, so the caller can
+   leave the change stamp alone and try again. *)
+function ReadPoliciesLocked(const Path: string): Boolean;
 var
   Text, Inner: string;
   Obj: TJsonObject;
   Arr: TJsonArray;
 begin
-  SetLength(GPolicies, 0);
-  if not FileExists(Path) then Exit;
+  { A missing file is a decision, not a failure: it clears the rules. }
+  if not FileExists(Path) then
+  begin
+    SetLength(GPolicies, 0);
+    Exit(True);
+  end;
   Text := Trim(ReadWholeFile(Path));
-  if Text = '' then Exit;
+  { Empty is indistinguishable from the moment between truncate and
+    write, so it is a failure, not "no rules". Delete the file to clear. }
+  if Text = '' then Exit(False);
+  Inner := '';
   if Text[1] = '[' then
-    GPolicies := ParsePermissionRules(Text, 'policy')
+    Inner := Text
   else
   begin
     try
@@ -456,10 +554,10 @@ begin
     except
       Obj := nil;
     end;
-    if Obj = nil then Exit;
+    if Obj = nil then Exit(False);
     try
       Arr := Obj.ChildArray('permissions');
-      if Arr <> nil then
+      if Arr = nil then Exit(False);
       try
         Inner := Arr.ToJSON;
       finally
@@ -468,20 +566,50 @@ begin
     finally
       Obj.Free;
     end;
-    GPolicies := ParsePermissionRules(Inner, 'policy');
+  end;
+  { ParsePermissionRules returns an empty array both for `[]` -- a valid
+    file that says "no rules" -- and for a truncated one it could not
+    parse at all. Those must not be treated alike, so check the array
+    parses before trusting the (possibly empty) result. }
+  if not JSONArrayParses(Inner) then Exit(False);
+  GPolicies := ParsePermissionRules(Inner, 'policy');
+  Result := True;
+end;
+
+(* The change stamp: modification time AND size.
+
+   Size is in it because mtime alone cannot see the recovery. A
+   non-atomic rewrite can leave a truncated file and then a good one
+   inside the same filesystem timestamp (one-second granularity is still
+   common, and some filesystems coarser); with mtime alone the good
+   write looks identical to the bad one we already read, and the process
+   keeps the stale rules for good. Sizes differ in practice. *)
+procedure PolicyStamp(const Path: string; out Mt: TDateTime; out Size: Int64);
+var
+  SR: SysUtils.TSearchRec;
+begin
+  Mt := 0;
+  Size := -1;
+  if SysUtils.FindFirst(Path, faAnyFile, SR) = 0 then
+  begin
+    Size := SR.Size;
+    {$IFDEF FPC}
+    Mt := FileDateToDateTime(SR.Time);
+    {$ELSE}
+    Mt := SR.TimeStamp;
+    {$ENDIF}
+    SysUtils.FindClose(SR);
   end;
 end;
 
 procedure LoadPolicyFile(const Home: string);
-var
-  Mt: TDateTime;
 begin
   GLock.Enter;
   try
     GPolicyPath := PolicyFilePath(Home);
-    GPolicyMtime := 0;
-    if FileAge(GPolicyPath, Mt) then GPolicyMtime := Mt;
-    ReadPoliciesLocked(GPolicyPath);
+    PolicyStamp(GPolicyPath, GPolicyMtime, GPolicySize);
+    if not ReadPoliciesLocked(GPolicyPath) then
+      PolicyLoadFailedLocked('load');
   finally
     GLock.Leave;
   end;
@@ -490,15 +618,30 @@ end;
 procedure RefreshPolicies;
 var
   Mt: TDateTime;
+  Size: Int64;
 begin
   GLock.Enter;
   try
     if GPolicyPath = '' then Exit;
-    Mt := 0;
-    if not FileAge(GPolicyPath, Mt) then Mt := 0;
-    if Mt = GPolicyMtime then Exit;
+    PolicyStamp(GPolicyPath, Mt, Size);
+    if (Mt = GPolicyMtime) and (Size = GPolicySize) then Exit;
+    { Adopt the stamp either way: a file we could not use is re-read when
+      it changes again, not on every tool call. What we do NOT do is drop
+      the rules we already have. }
     GPolicyMtime := Mt;
-    ReadPoliciesLocked(GPolicyPath);
+    GPolicySize  := Size;
+    if not ReadPoliciesLocked(GPolicyPath) then
+      PolicyLoadFailedLocked('reload');
+  finally
+    GLock.Leave;
+  end;
+end;
+
+function PolicyLoadFailures: Integer;
+begin
+  GLock.Enter;
+  try
+    Result := GPolicyFails;
   finally
     GLock.Leave;
   end;
@@ -553,6 +696,16 @@ begin
   Result := SK + '|' + LowerCase(Tool) + '|' + Resource;
 end;
 
+procedure BeginInteractiveAsk;
+begin
+  if GAskTurn <> nil then GAskTurn.Enter;
+end;
+
+procedure EndInteractiveAsk;
+begin
+  if GAskTurn <> nil then GAskTurn.Leave;
+end;
+
 procedure RememberSessionAllow(const SessionKey, Tool, Resource: string);
 begin
   GLock.Enter;
@@ -592,6 +745,7 @@ end;
 
 initialization
   GLock := TCriticalSection.Create;
+  GAskTurn := TCriticalSection.Create;
   GAllows := TStringList.Create;
   GAllows.Sorted := True;
   GAllows.Duplicates := dupIgnore;
@@ -599,9 +753,16 @@ initialization
   SetLength(GPolicies, 0);
   GPolicyPath := '';
   GPolicyMtime := 0;
+  GPolicySize := -1;
+  GPolicyFails := 0;
 
 finalization
   GAllows.Free;
   GLock.Free;
+  { Nilled, not freed. A loop thread the TUI handed to FreeOnTerminate
+    can still be on its way into BeginInteractiveAsk; Begin/End check for
+    nil and do nothing, which is the right answer once the process is
+    tearing down. }
+  GAskTurn := nil;
 
 end.

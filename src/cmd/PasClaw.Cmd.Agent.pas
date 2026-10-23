@@ -282,15 +282,26 @@ begin
   Res := Resource;
   if Length(Res) > 160 then Res := Copy(Res, 1, 157) + '...';
   if Res <> '' then Res := '  ' + Ansi.Dim + Res + Ansi.Reset;
-  PrintLn('');
-  PrintLn(Ansi.Bold + 'permission: ' + Ansi.Reset + ToolName + Res);
-  PrintLn(Ansi.Dim + '  (' + Reason + ')' + Ansi.Reset);
-  Print('  allow [y]once / [s]ession / [n]o > ');
-  if EOF then Exit;
-  ReadLn(Line);
-  Line := LowerCase(Trim(Line));
-  if (Line = 'y') or (Line = 'yes') or (Line = 'once') then Result := aaAllowOnce
-  else if (Line = 's') or (Line = 'session') or (Line = 'always') then Result := aaAllowSession;
+  (* One prompt at a time. The loop dispatches tool calls in parallel, so
+     two ask-gated calls in one batch arrive here on two threads, both
+     printing to the same terminal and both calling ReadLn on the same
+     stdin: the prompts interleave and whichever thread the OS hands the
+     line to consumes it, which need not be the one whose prompt the
+     operator was answering. (Codex P1 on #611.) *)
+  BeginInteractiveAsk;
+  try
+    PrintLn('');
+    PrintLn(Ansi.Bold + 'permission: ' + Ansi.Reset + ToolName + Res);
+    PrintLn(Ansi.Dim + '  (' + Reason + ')' + Ansi.Reset);
+    Print('  allow [y]once / [s]ession / [n]o > ');
+    if EOF then Exit;
+    ReadLn(Line);
+    Line := LowerCase(Trim(Line));
+    if (Line = 'y') or (Line = 'yes') or (Line = 'once') then Result := aaAllowOnce
+    else if (Line = 's') or (Line = 'session') or (Line = 'always') then Result := aaAllowSession;
+  finally
+    EndInteractiveAsk;
+  end;
 end;
 
 procedure TLoopHandlers.OnToolCall(const Name, ArgsJSON: string);

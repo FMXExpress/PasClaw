@@ -583,6 +583,15 @@ begin
   Result := aaDeny;
   Res := Resource;
   if Length(Res) > 100 then Res := Copy(Res, 1, 97) + '...';
+  (* One ask at a time. There is one footer and one keyboard, and the
+     loop dispatches in parallel: two ask-gated calls in a batch used to
+     overwrite each other's pending request and both take the single
+     keypress as their answer, so a call the operator never saw was
+     approved by the keystroke meant for the one they did. The FPC
+     branch below has the same problem in sharper form -- two threads
+     reading one stdin. (Codex P1 on #611.) *)
+  BeginInteractiveAsk;
+  try
   {$IFDEF FPC}
   { Line build: the UI thread is parked in DoneEvent.WaitFor, so the
     prompt is read here, on the loop thread, like the CLI's. }
@@ -630,6 +639,9 @@ begin
     FAskLock.Leave;
   end;
   {$ENDIF}
+  finally
+    EndInteractiveAsk;
+  end;
 end;
 
 procedure TTUI.DrainBackgroundFlash;
