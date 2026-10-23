@@ -21,6 +21,13 @@ program worktree_tests;
     - a spawn that is refused -- at the background-job cap, an unknown
       agent, no prompt -- creates no branch and no worktree first (Codex
       P2 on #612)
+    - a worktree the shell backend built where this process cannot see
+      it (a container that does not mount the worktree directory) is
+      refused and rolled back: no registration, no branch it created, no
+      checkout -- while a branch that already existed is kept (Codex P1
+      on #612)
+    - FindRepoRootOnDisk and WorktreeMountFor, which the Docker backend
+      uses to mount that directory without running git
 *)
 
 {$IFDEF FPC}{$MODE DELPHI}{$ENDIF}
@@ -41,6 +48,8 @@ uses
   PasClaw.Tools.ToolLoop,
   PasClaw.Agent.Subagent,
   PasClaw.Agent.SubagentBg,
+  PasClaw.Platform,          { RunOneShot -- the shadow-filesystem backend }
+  PasClaw.Shell.Backend,
   PasClaw.Tools.Worktree;
 
 procedure Fail_(const Msg: string); begin WriteLn('FAIL: ' + Msg); Halt(1); end;
@@ -361,6 +370,106 @@ begin
   Result[0].MaxIter := 3;
 end;
 
+
+type
+  (* A backend whose view of the worktree directory is not the host's.
+
+     Runs every command on the host, but with the worktree base rewritten
+     to a different directory first -- which is exactly the situation a
+     container that does not mount <repo>-worktrees is in: git sees a
+     path the host cannot. *)
+  TShadowFSBackend = class(TInterfacedObject, IShellBackend)
+  public
+    Real, Shadow: string;
+    function Name: string;
+    function Describe: string;
+    procedure StartSession(const SessionId: string);
+    procedure CloseSession(const SessionId: string);
+    function Exec(const SessionId, Cmd, WorkDir: string;
+                  ExtraEnv: TStringList; out Output: string): Integer;
+  end;
+
+function TShadowFSBackend.Name: string; begin Result := 'shadowfs'; end;
+function TShadowFSBackend.Describe: string; begin Result := 'test'; end;
+procedure TShadowFSBackend.StartSession(const SessionId: string); begin end;
+procedure TShadowFSBackend.CloseSession(const SessionId: string); begin end;
+
+function TShadowFSBackend.Exec(const SessionId, Cmd, WorkDir: string;
+                               ExtraEnv: TStringList; out Output: string): Integer;
+begin
+  Result := RunOneShot(StringReplace(Cmd, Real, Shadow, [rfReplaceAll]),
+                       WorkDir, Output);
+end;
+
+procedure TestWorktreeTheHostCannotSee;
+(* A worktree the shell backend built where this process cannot see it
+   must be refused and undone, not returned.
+
+   Under the Docker backend git runs in the container, and the default
+   worktree directory is beside the repository, outside the workspace
+   mount: the checkout landed in the container's filesystem, the
+   registration in the host's .git, and the caller got a host path with
+   nothing in it. (Codex P1 on #612.) The container now mounts that
+   directory; this is the check that makes every case it does not cover
+   -- Windows, an unusual mount layout -- fail safely instead. *)
+var
+  Fake: TShadowFSBackend;
+  Prev: IShellBackend;
+  Shadow, Path, Err, Listing: string;
+  Ok: Boolean;
+begin
+  Shadow := JoinPath(Root, 'container-only');
+  ForceDirectories(Shadow);
+  Prev := GetActiveShellBackend;
+  Fake := TShadowFSBackend.Create;
+  Fake.Real := WtBase;
+  Fake.Shadow := Shadow;
+  SetActiveShellBackend(Fake);
+  try
+    { A new branch: everything the call made is undone, branch included. }
+    Ok := WorktreeCreate(Repo, '', 'unseen-new', '', Path, Err);
+    AssertTrue(not Ok, 'a worktree the host cannot see is not reported as created');
+    AssertContains(Err, 'cannot see it', 'and the error says why');
+    AssertEqStr(Path, '', 'no path is handed back');
+    Listing := Sh(Repo, 'git worktree list --porcelain');
+    AssertTrue(Pos('unseen-new', Listing) = 0,
+               'the host repository is not left registered to a checkout ' +
+               'only the backend can see: ' + Listing);
+    AssertTrue(Trim(Sh(Repo, 'git branch --list unseen-new')) = '',
+               'and the branch this call created is gone');
+    AssertTrue(not DirectoryExists(JoinPath(Shadow, 'unseen-new')),
+               'and the backend-side checkout is removed too');
+
+    { A branch that already existed is NOT deleted on the way out. }
+    Sh(Repo, 'git branch unseen-kept');
+    Ok := WorktreeCreate(Repo, '', 'unseen-kept', '', Path, Err);
+    AssertTrue(not Ok, 'refused again');
+    AssertTrue(Trim(Sh(Repo, 'git branch --list unseen-kept')) <> '',
+               'but a branch that was there before the call is left alone');
+    AssertTrue(Pos('unseen-kept', Sh(Repo, 'git worktree list --porcelain')) = 0,
+               'and its registration is still undone');
+    Sh(Repo, 'git branch -D unseen-kept');
+  finally
+    SetActiveShellBackend(Prev);
+  end;
+  WriteLn('  ok: a worktree the host cannot see is refused and rolled back');
+end;
+
+procedure TestRepoRootOnDisk;
+var
+  Sub: string;
+begin
+  AssertEqStr(FindRepoRootOnDisk(Repo), Repo, 'the repo root is found from itself');
+  Sub := JoinPath(Repo, 'a/b');
+  ForceDirectories(Sub);
+  AssertEqStr(FindRepoRootOnDisk(Sub), Repo, 'and from a directory inside it');
+  AssertEqStr(FindRepoRootOnDisk(JoinPath(Root, 'not-a-repo')), '',
+              'and is empty outside any repository');
+  AssertEqStr(WorktreeMountFor(Repo), WtBase,
+              'the directory a container has to mount is <repo>-worktrees');
+  WriteLn('  ok: FindRepoRootOnDisk / WorktreeMountFor (no git process)');
+end;
+
 procedure TestWorktreeFlagIsHonouredBySpawn;
 (* worktree.enabled:false has to take away every way to make a worktree.
 
@@ -509,6 +618,8 @@ begin
     TestSpawnWorktree;
     TestWorktreeFlagIsHonouredBySpawn;
     TestRejectedSpawnTouchesNoRepo;
+    TestWorktreeTheHostCannotSee;
+    TestRepoRootOnDisk;
     WriteLn('PASS');
   finally
     Sh(GetTempDir, 'rm -rf ' + Root);

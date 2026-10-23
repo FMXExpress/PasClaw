@@ -151,6 +151,7 @@ uses
   PasClaw.Workspaces,
   PasClaw.Logger,
   PasClaw.Platform,
+  PasClaw.Tools.Worktree,   { WorktreeMountFor -- the worktree directory to mount }
   PasClaw.Utils,
   PasClaw.Config;     { GetHome -- workspace bind-mount path. The
                         TShellBackendKind enum is exported from
@@ -437,7 +438,7 @@ procedure TDockerShellBackend.BuildRunArgv(const SessionId: string;
   there). The command is built as an argv vector and spawned without a
   host shell -- no quoting, no cmd.exe percent-expansion. }
 var
-  WorkspacePath: string;
+  WorkspacePath{$IFNDEF MSWINDOWS}, WtMount{$ENDIF}: string;
   i: Integer;
 begin
   WorkspacePath := JoinPath(GetHome, ActiveWorkspaceName);
@@ -458,6 +459,29 @@ begin
   Args.Add(ExpandFileName(ParamStr(0)) + ':' + ExpandFileName(ParamStr(0)) + ':ro');
   {$ENDIF}
   AddBindIfExists(Args, JoinPath(GetHome, 'run'));
+  {$IFNDEF MSWINDOWS}
+  (* Where worktrees of the workspace's repository go, at the same path.
+
+     The worktree tools run git through this backend, so `git worktree
+     add` runs in here -- and the default worktree directory is BESIDE
+     the repository (<repo>-worktrees), outside the workspace mount. The
+     checkout was built in the container's own filesystem and registered
+     in the host's .git, and the host got back a path with nothing in it.
+     (Codex P1 on #612.) Not mounted when it is already under the
+     workspace (worktree.directory set inside it), when the feature is
+     off, or when the workspace is not a repository.
+
+     POSIX only: a same-path mount cannot hold a C:\ path, and on Windows
+     the worktree tools' own host-side check refuses a worktree the host
+     cannot see and rolls it back, which is the safe failure. *)
+  WtMount := WorktreeMountFor(WorkspacePath);
+  { Compared expanded: WtMount comes from the repository root on disk,
+    which is absolute, while WorkspacePath is whatever PASCLAW_HOME was. }
+  if (WtMount <> '') and
+     (Pos(IncludeTrailingPathDelimiter(ExpandFileName(WorkspacePath)),
+          IncludeTrailingPathDelimiter(WtMount)) <> 1) then
+    AddBindIfExists(Args, WtMount);
+  {$ENDIF}
   Args.Add('-w');
   Args.Add(ContainerPath(WorkspacePath));
   if (FOpts.ExtraMounts <> nil) then

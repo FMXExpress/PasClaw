@@ -159,7 +159,7 @@ Returns a handle and the parent loop keeps working. When the job finishes its re
 
 ## Git worktrees
 
-Parallel work wants parallel checkouts. Three tools wrap `git worktree` (source: `src/pkg/tools/PasClaw.Tools.Worktree.pas`); every git call goes through the active shell backend, so Docker and the denylist apply as they do to `shell_exec`.
+Parallel work wants parallel checkouts. Three tools wrap `git worktree` (source: `src/pkg/tools/PasClaw.Tools.Worktree.pas`); every git call goes through the active shell backend, so Docker and the denylist apply as they do to `shell_exec`. Under Docker the container mounts the worktree directory at the same path so its checkout and the host's are one; see [Security → Worktrees move the boundary](./security.md#worktrees-move-the-boundary). The image needs `git` — the default `debian:bookworm-slim` does not ship it, and the tools say so rather than reporting "not a repository".
 
 | Tool | Category | What |
 |---|---|---|

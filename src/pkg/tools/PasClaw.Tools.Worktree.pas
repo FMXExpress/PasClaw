@@ -77,6 +77,25 @@ function WorktreeRemove(const RepoRoot, Path: string; Force: Boolean;
   find the worktree for Branch. }
 function EnsureWorktree(const Branch: string; out Path, Err: string): Boolean;
 
+{ The git repository that contains Dir, found by walking up for a `.git`
+  entry (a directory, or the file a worktree has) -- on disk, with NO git
+  process. '' when there is none. For callers that must not run git: the
+  Docker backend, which needs the answer while it is building the
+  container git would run in. }
+function FindRepoRootOnDisk(const Dir: string): string;
+
+(* The directory a container must bind-mount, at the same path, for
+   worktrees made from Workspace's repository to be visible on both
+   sides. '' when the feature is off or Workspace is not in a repository.
+
+   Under the Docker backend the git calls here run in the container,
+   which mounts the workspace and nothing beside it -- while the default
+   worktree directory IS beside it, <repo>-worktrees. So `git worktree
+   add` built the checkout in the container's own filesystem, registered
+   it in the host's .git (which is mounted), and this unit returned the
+   host path, where there was nothing. (Codex P1 on #612.) *)
+function WorktreeMountFor(const Workspace: string): string;
+
 procedure RegisterWorktreeTools(R: TToolRegistry);
 
 implementation
@@ -246,6 +265,32 @@ begin
     Path := '';
     Exit;
   end;
+  (* Git said yes; check the host can SEE it before saying so.
+
+     git runs in the shell backend, which need not share our filesystem:
+     under Docker a worktree directory the container does not mount is
+     created in the container's own filesystem, while the registration
+     lands in the host's .git (that one is mounted). Returning Path then
+     handed the caller a directory with nothing in it and left the
+     repository pointing at a checkout only the container had. Everything
+     this call made is undone -- the registration through the same
+     backend that made it, and the branch if this call created it -- so a
+     failed create leaves the repository as it found it. (Codex P1 on
+     #612.) *)
+  if not FileExists(IncludeTrailingPathDelimiter(Path) + '.git') then
+  begin
+    Git(RepoRoot, 'worktree remove --force ' + Q(Path), Out_);
+    Git(RepoRoot, 'worktree prune', Out_);
+    if not BranchExists then
+      Git(RepoRoot, 'branch -D ' + Q(Branch), Out_);
+    Err := 'worktree_create: the shell backend made the worktree where this ' +
+           'process cannot see it (' + Path + ') -- with a container backend ' +
+           'the worktree directory has to be mounted at the same path. ' +
+           'Nothing was kept; set worktree.directory to a path inside the ' +
+           'workspace, or use the local backend.';
+    Path := '';
+    Exit;
+  end;
   LogInfo('worktree: created %s for branch %s', [Path, Branch]);
   Result := True;
 end;
@@ -358,6 +403,73 @@ begin
   end;
 end;
 
+function FindRepoRootOnDisk(const Dir: string): string;
+var
+  D, Parent: string;
+begin
+  Result := '';
+  D := Trim(Dir);
+  if D = '' then Exit;
+  D := ExcludeTrailingPathDelimiter(ExpandFileName(D));
+  while D <> '' do
+  begin
+    if DirectoryExists(IncludeTrailingPathDelimiter(D) + '.git') or
+       FileExists(IncludeTrailingPathDelimiter(D) + '.git') then
+      Exit(D);
+    Parent := ExcludeTrailingPathDelimiter(ExtractFileDir(D));
+    if (Parent = D) or (Parent = '') then Break;   { the filesystem root }
+    D := Parent;
+  end;
+end;
+
+function WorktreeMountFor(const Workspace: string): string;
+var
+  Cfg: TConfig;
+  Root, Configured: string;
+  Enabled: Boolean;
+begin
+  Result := '';
+  Root := FindRepoRootOnDisk(Workspace);
+  if Root = '' then Exit;
+  Enabled := True;
+  Configured := '';
+  Cfg := LoadEffectiveConfig;
+  if Cfg <> nil then
+  try
+    Enabled := Cfg.Worktree.Enabled;
+    Configured := Cfg.Worktree.Directory;
+  finally
+    Cfg.Free;
+  end;
+  if not Enabled then Exit;
+  Result := WorktreeBaseDir(Root, Configured);
+end;
+
+{ Why GitRepoRoot said no. "Not a repository" is the usual answer, but the
+  same False comes back when git itself is missing where commands run --
+  the default Docker image (debian:bookworm-slim) does not ship it -- and
+  calling that "not inside a git repository" sent people looking in the
+  wrong place. }
+function ActiveShellBackendName: string;
+var
+  B: IShellBackend;
+begin
+  B := GetActiveShellBackend;
+  if B = nil then Result := 'local' else Result := B.Name;
+end;
+
+function NotARepoReason(const Dir: string): string;
+var
+  Out_: string;
+begin
+  if Git(Dir, '--version', Out_) <> 0 then
+    Result := 'worktree: git is not available where shell commands run ' +
+              '(the ' + ActiveShellBackendName + ' backend) -- install git ' +
+              'in its image, or use the local backend'
+  else
+    Result := 'worktree: the workspace ' + Dir + ' is not inside a git repository';
+end;
+
 function EnsureWorktree(const Branch: string; out Path, Err: string): Boolean;
 var
   Root: string;
@@ -365,7 +477,7 @@ begin
   Path := '';
   if not GitRepoRoot(CurrentWorkspace, Root) then
   begin
-    Err := 'worktree: the workspace ' + CurrentWorkspace + ' is not inside a git repository';
+    Err := NotARepoReason(CurrentWorkspace);
     Exit(False);
   end;
   Result := WorktreeCreate(Root, ConfiguredWorktreeDir, Branch, '', Path, Err);

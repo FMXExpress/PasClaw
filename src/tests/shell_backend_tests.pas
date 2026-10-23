@@ -35,7 +35,10 @@ uses
   PasClaw.Platform,
   PasClaw.Shell.Backend,
   PasClaw.Shell.Backend.Local,
-  PasClaw.Shell.Backend.Docker;
+  PasClaw.Shell.Backend.Docker,
+  PasClaw.Utils,         { JoinPath, WriteFileText }
+  PasClaw.Config,        { GetHome }
+  PasClaw.Workspaces;    { ActiveWorkspaceName }
 
 procedure Fail_(const Msg: string);
 begin
@@ -388,6 +391,78 @@ begin
              'none has no networking to reach us with at all');
 end;
 
+procedure TestDockerMountsTheWorktreeDirectory;
+(* The container has to see the worktree directory, at the same path.
+
+   The worktree tools run git through the backend, and the default
+   worktree directory is beside the repository (<repo>-worktrees), outside
+   the workspace mount -- so under Docker the checkout was built in the
+   container's own filesystem while the host got a path with nothing in
+   it. (Codex P1 on #612.) Read off the `docker run` argv, so no daemon is
+   needed. *)
+{$IFDEF UNIX}
+var
+  Backend: TDockerShellBackend;
+  Ifc: IShellBackend;
+  Args: TStringList;
+  Ws, Wt, CfgPath: string;
+
+  function Mounted(const Path: string): Boolean;
+  begin
+    Args.Clear;
+    Backend.BuildRunArgv('wt-mount', Args);
+    Result := ArgvHas(Args, '-v', Path + ':' + Path);
+  end;
+
+begin
+  Ws := JoinPath(GetHome, ActiveWorkspaceName);
+  { Absolute: the mount is computed from the repository root on disk, and
+    this harness runs with a relative PASCLAW_HOME. }
+  Wt := ExpandFileName(Ws) + '-worktrees';
+  CfgPath := JoinPath(GetHome, 'config.json');
+  { Start clean. Fail_ is a Halt, which skips the finally below, so a
+    previous failed run can leave its config.json behind -- and that
+    file changes what this test sees. }
+  if FileExists(CfgPath) then DeleteFile(CfgPath);
+  ForceDirectories(Ws);
+  Backend := TDockerShellBackend.Create(DefaultDockerBackendOptions);
+  Ifc := Backend;
+  Args := TStringList.Create;
+  try
+    { Not a repository: nothing to mount. }
+    if DirectoryExists(JoinPath(Ws, '.git')) then RemoveDir(JoinPath(Ws, '.git'));
+    AssertTrue(not Mounted(Wt), 'no worktree mount when the workspace is not a repo');
+
+    { A repository: <repo>-worktrees is mounted at the same path. }
+    ForceDirectories(JoinPath(Ws, '.git'));
+    AssertTrue(Mounted(Wt),
+               'the worktree directory beside the repo is bind-mounted at ' +
+               'the same path -- without it git builds the checkout inside ' +
+               'the container');
+
+    { worktree.directory inside the workspace: already covered, not twice. }
+    WriteFileText(CfgPath, '{"worktree":{"directory":"' + JoinPath(Ws, 'wts') + '"}}');
+    Args.Clear;
+    Backend.BuildRunArgv('wt-mount', Args);
+    AssertTrue(not ArgvHas(Args, '-v', ExpandFileName(JoinPath(Ws, 'wts')) + ':' +
+                                       ExpandFileName(JoinPath(Ws, 'wts'))),
+               'a worktree directory inside the workspace is not mounted again');
+
+    { The feature off: no mount. }
+    WriteFileText(CfgPath, '{"worktree":{"enabled":false}}');
+    AssertTrue(not Mounted(Wt), 'worktree.enabled:false mounts nothing');
+  finally
+    Args.Free;
+    if FileExists(CfgPath) then DeleteFile(CfgPath);
+    RemoveDir(JoinPath(Ws, '.git'));
+    Ifc := nil;
+  end;
+end;
+{$ELSE}
+begin
+end;
+{$ENDIF}
+
 procedure TestRunArgvCaptureNoShell;
 { RunArgvCapture must hand argv straight to the program with NO shell in
   between -- this is what makes the docker backend correct on Windows,
@@ -456,5 +531,7 @@ begin
   WriteLn('  ok: docker backend refuses empty SessionId (no host fallback)');
   TestDockerHostCallbackWiring;
   WriteLn('  ok: docker backend wires the tool-RPC callback to the host');
+  TestDockerMountsTheWorktreeDirectory;
+  WriteLn('  ok: docker backend mounts the worktree directory at the same path');
   WriteLn('PASS');
 end.
