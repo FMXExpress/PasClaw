@@ -95,7 +95,7 @@ Three paths used to reach a shell or a tool around the gates above, and no longe
 
 - **`execute_code` scripts calling tools.** `pasclaw __tool <name>` inside a script now dispatches through the loop's own gate chain: plan-mode and space-mode refusal of mutating tools, hooks, preflight, the promptware scan, the output cap. A subagent's script dispatches into the subagent's filtered registry, not the parent's.
 - **Shell skills.** A `kind: shell` skill's rendered command passes `ShellAllowed` (the denylist and, under `restrict_to_workspace`, the path rules) and runs through the active shell backend, so with the Docker backend it runs in the container like `shell_exec`. Shell skills are `tcMutating`, so plan mode refuses them; prompt skills are read-only.
-- **Hung commands.** Every shell path is bounded by `shell_timeout_sec` (default 600) and killed with `exit=124` on expiry.
+- **Hung commands.** Every shell *tool* path (`shell_exec`, `execute_code`, shell skills) is bounded by `shell_timeout_sec` (default 600). On expiry the whole process tree is killed — SIGTERM then SIGKILL, deepest first — and the tool reports `exit=124`. Signalling only the shell would leave the compiler or test runner under it running after PasClaw had already reported the timeout.
 
 ## Workspace pin
 
@@ -124,6 +124,13 @@ For a stronger boundary, set `shell_backend: docker`:
 PasClaw spawns a per-session container at session start, `docker exec`s into it for every `shell_exec` / `execute_code` call, and stops it at session end. The workspace is bind-mounted at the **same path** inside the container, so `fs_read`/`fs_write` from the host process and `cat`/`tee` from inside the container reference the same files — operators inspect from outside with `ls ~/.pasclaw/workspace/`, no path translation.
 
 Hardening win: even a model that escapes the `ShellAllowed` denylist can only touch the container, not the host filesystem. `~/.pasclaw/config.json` (provider keys) is deliberately **not** mounted in.
+
+**The tool callback crosses the boundary on purpose.** An `execute_code` script calls back into the agent's tool registry (`tool <name> '<json>'`, and the only route to a [code-mode](./mcp.md#code-mode) MCP server). The container's loopback is its own, so on a bridge network the callback listener binds the host's docker-bridge gateway instead and the container gets `host.docker.internal` mapped to the host. What that widens, and what it does not:
+
+- The listener is on a docker-bridge address, not `0.0.0.0` — reachable from containers on this host's docker networks and from the host, not from the LAN.
+- Every request carries a per-call random token. The discovery file holding it is written under `~/.pasclaw/run/`, which is mounted only into PasClaw's own container.
+- The listener exists only for the duration of one `execute_code` call, on a fresh port and token.
+- `"network": "none"` keeps the container off the network entirely. The callback then cannot work — `tool` fails to connect and code-mode MCP servers are unreachable from a script — which is the right trade if that is the posture you picked.
 
 Onboarding asks once. CLI override `--backend docker|local` doesn't persist. Phase 1 wires this for `pasclaw agent` (interactive + one-shot) and `pasclaw heartbeat`; `pasclaw tui` / `pasclaw serve` / `pasclaw gateway` refuse `docker` cleanly until per-session container handoff inside those long-running surfaces lands. SSH backend is Phase 2.
 

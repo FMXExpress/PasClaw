@@ -22,6 +22,12 @@ program tool_rpc_tests;
     - DiscoverRunningRPC fails with an actionable error when the
       PASCLAW_TOOL_RPC_INFO env var is missing -- matches what a
       `pasclaw __tool` call from outside a script would see
+    - BindIP moves the listener off loopback and AdvertiseHost puts
+      that address in the discovery file, which is what lets the
+      callback cross a container's network namespace; an address this
+      host does not own degrades to loopback instead of failing; and
+      the real `pasclaw __tool` binary dials what was advertised
+      (Codex P1 on #609)
 
   Two concurrent server instances (simulating parent + subagent
   execute_codes running in parallel) get distinct ports + tokens
@@ -37,6 +43,7 @@ uses
   {$IFDEF UNIX}cthreads,{$ENDIF}
   SysUtils, Classes,
   IdTCPClient, IdGlobal,
+  PasClaw.Platform,
   PasClaw.Config,
   PasClaw.Utils,
   PasClaw.JSON,
@@ -433,6 +440,226 @@ begin
   end;
 end;
 
+function CallRPCAt(const Host: string; Port: Integer;
+                   const RequestJSON: string): string;
+{ CallRPC, but you choose the address -- the whole point of these two
+  tests is which address the server is on. }
+var
+  Client: TIdTCPClient;
+begin
+  Result := '';
+  Client := TIdTCPClient.Create(nil);
+  try
+    Client.Host := Host;
+    Client.Port := Port;
+    Client.ConnectTimeout := 3000;
+    Client.Connect;
+    try
+      Client.IOHandler.WriteLn(RequestJSON);
+      Result := Client.IOHandler.ReadLn(LF, 5000);
+    finally
+      try Client.Disconnect; except end;
+    end;
+  finally
+    Client.Free;
+  end;
+end;
+
+function InfoField(const Path, Key: string): string;
+var
+  Obj: TJsonObject;
+begin
+  Result := '';
+  try
+    Obj := TJsonObject.Parse(ReadFileText(Path));
+  except
+    Obj := nil;
+  end;
+  if Obj = nil then Exit;
+  try
+    Result := Obj.GetStr(Key, '');
+  finally
+    Obj.Free;
+  end;
+end;
+
+{$IFDEF UNIX}
+function FirstNonLoopbackIPv4: string;
+{ `hostname -I` prints this host's addresses. '' when there is nothing but
+  loopback, in which case the bind test below can't say anything and skips. }
+var
+  Out_, Tok: string;
+  i, Code: Integer;
+begin
+  Result := '';
+  Code := RunOneShot('hostname -I 2>/dev/null || true', '', Out_);
+  if Code < 0 then Exit;
+  Tok := '';
+  for i := 1 to Length(Out_) + 1 do
+    if (i <= Length(Out_)) and (Out_[i] > ' ') then
+      Tok := Tok + Out_[i]
+    else
+    begin
+      { IPv4 only: Indy wants the binding family to match, and a
+        link-local v6 would need a scope id. }
+      if (Pos('.', Tok) > 0) and (Pos(':', Tok) = 0) and
+         (Copy(Tok, 1, 4) <> '127.') then
+        Exit(Tok);
+      Tok := '';
+    end;
+end;
+{$ENDIF}
+
+procedure TestAdvertisedHostReachesTheServer;
+(* The Docker callback fix (Codex P1 on #609), in miniature.
+
+   A container's 127.0.0.1 is the container, so a server on the host's
+   loopback is unreachable from it and the parent has to listen somewhere
+   the container can get to and say so in the discovery file. Proven here
+   with this host's own non-loopback address standing in for the bridge
+   gateway: the server moves there, loopback goes dead, and the info file
+   carries the address a caller has to dial instead. *)
+var
+  Reg: TToolRegistry;
+  Srv: TToolRPCServer;
+  IP, Resp: string;
+  LoopbackRefused: Boolean;
+begin
+  {$IFDEF UNIX}
+  IP := FirstNonLoopbackIPv4;
+  {$ELSE}
+  IP := '';
+  {$ENDIF}
+  if IP = '' then
+  begin
+    WriteLn('  skipping advertised-host test: no non-loopback address here');
+    Exit;
+  end;
+  Reg := MakeRegistryWith(@EchoA, 'echo');
+  try
+    Srv := TToolRPCServer.Create(Reg, TestInfoPath('advertise'));
+    try
+      Srv.BindIP        := IP;
+      Srv.AdvertiseHost := IP;
+      Srv.Start;
+      AssertEqStr(InfoField(Srv.InfoPath, 'host'), IP,
+                  'the info file names the host to dial');
+      LoopbackRefused := False;
+      try
+        CallRPCAt('127.0.0.1', Srv.Port, '{"token":"x"}');
+      except
+        LoopbackRefused := True;
+      end;
+      AssertTrue(LoopbackRefused,
+                 'the server really moved off loopback -- otherwise this ' +
+                 'test would pass with the old hardcoded 127.0.0.1 client');
+      Resp := CallRPCAt(IP, Srv.Port,
+                        '{"token":"' + Srv.Token + '","name":"echo","args":{}}');
+      AssertEqStr(ResponseErr(Resp), '', 'no error from the advertised address');
+      AssertContains(ResponseResult(Resp), 'from-A:',
+                     'and it dispatches through the bound registry');
+    finally
+      Srv.Free;
+    end;
+  finally
+    Reg.Free;
+  end;
+  WriteLn('  ok: BindIP moves the listener and AdvertiseHost records it');
+end;
+
+procedure TestUnbindableBindIPFallsBackToLoopback;
+(* Docker Desktop: the backend names the daemon's bridge gateway, which
+   lives in Desktop's VM and is not an address this host owns. Binding it
+   fails, and the server must carry on on loopback -- which is what
+   host.docker.internal forwards to there -- instead of failing the whole
+   execute_code call. 203.0.113.1 is TEST-NET-3: reserved for documentation,
+   so nothing here can own it. (Deliberately NOT 192.0.2.x -- this sandbox
+   hands the container an address out of TEST-NET-1, and an address that
+   happened to be local would stop testing the fallback silently.) *)
+var
+  Reg: TToolRegistry;
+  Srv: TToolRPCServer;
+  Resp: string;
+begin
+  Reg := MakeRegistryWith(@EchoA, 'echo');
+  try
+    Srv := TToolRPCServer.Create(Reg, TestInfoPath('fallback'));
+    try
+      Srv.BindIP := '203.0.113.1';
+      Srv.Start;   { must not raise }
+      AssertTrue(Srv.Port > 0, 'the server is listening somewhere');
+      Resp := CallRPCAt('127.0.0.1', Srv.Port,
+                        '{"token":"' + Srv.Token + '","name":"echo","args":{}}');
+      AssertContains(ResponseResult(Resp), 'from-A:',
+                     'and it is loopback, serving as usual');
+      AssertEqStr(InfoField(Srv.InfoPath, 'host'), '',
+                  'no advertised host when none was asked for');
+    finally
+      Srv.Free;
+    end;
+  finally
+    Reg.Free;
+  end;
+  WriteLn('  ok: an unbindable BindIP degrades to loopback');
+end;
+
+procedure TestToolClientDialsTheAdvertisedHost;
+(* The other half: `pasclaw __tool` has to read that host out of the
+   discovery file. It used to dial a hardcoded 127.0.0.1, so under the
+   Docker backend every `tool ...` call in an execute_code script failed
+   to connect -- and with code mode on, that is the only way the MCP
+   tools are reachable at all.
+
+   Runs the real binary as a child process on purpose: FPC's RTL
+   snapshots envp at startup, so PASCLAW_TOOL_RPC_INFO has to be in the
+   environment the client STARTS with, exactly as a spawned script gets
+   it. *)
+var
+  Reg: TToolRegistry;
+  Srv: TToolRPCServer;
+  IP, Out_, Bin: string;
+  Env: TStringList;
+  Code: Integer;
+begin
+  {$IFDEF UNIX}
+  Bin := ExpandFileName('build/pasclaw');
+  IP  := FirstNonLoopbackIPv4;
+  if (IP = '') or (not FileExists(Bin)) then
+  begin
+    WriteLn('  skipping __tool dial test: needs build/pasclaw and a ' +
+            'non-loopback address');
+    Exit;
+  end;
+  Reg := MakeRegistryWith(@EchoA, 'echo');
+  try
+    Srv := TToolRPCServer.Create(Reg, TestInfoPath('dial'));
+    try
+      Srv.BindIP        := IP;
+      Srv.AdvertiseHost := IP;
+      Srv.Start;
+      Env := TStringList.Create;
+      try
+        Env.Add('PASCLAW_TOOL_RPC_INFO=' + Srv.InfoPath);
+        Code := RunOneShotWithEnv('"' + Bin + '" __tool echo ''{"q":1}''',
+                                  '', Env, Out_);
+      finally
+        Env.Free;
+      end;
+      AssertEqInt(Code, 0, '__tool exited cleanly: ' + Copy(Out_, 1, 300));
+      AssertContains(Out_, 'from-A:',
+                     '__tool reached a server that is NOT on its loopback');
+    finally
+      Srv.Free;
+    end;
+  finally
+    Reg.Free;
+  end;
+  WriteLn('  ok: `pasclaw __tool` dials the advertised host');
+  {$ELSE}
+  WriteLn('  skipping __tool dial test: POSIX-only harness');
+  {$ENDIF}
+end;
+
 procedure TestDiscoverFailsWithoutEnvVar;
 { DiscoverRunningRPC reads PASCLAW_TOOL_RPC_INFO. The Makefile
   target doesn't set it, so a fresh test run sees an empty env var
@@ -441,14 +668,14 @@ procedure TestDiscoverFailsWithoutEnvVar;
   only happen during interactive debugging). }
 var
   P: Integer;
-  Tok, Err: string;
+  Tok, Host, Err: string;
 begin
   if GetEnvironmentVariable('PASCLAW_TOOL_RPC_INFO') <> '' then
   begin
     WriteLn('  skipping discover-no-env test: PASCLAW_TOOL_RPC_INFO is set');
     Exit;
   end;
-  AssertTrue(not DiscoverRunningRPC(P, Tok, Err),
+  AssertTrue(not DiscoverRunningRPC(P, Tok, Host, Err),
              'discovery returns False with no env var set');
   AssertContains(Err, 'PASCLAW_TOOL_RPC_INFO',
                  'ErrMsg names the missing env var');
@@ -462,5 +689,8 @@ begin
   TestFailingToolErrorPropagates;
   TestTwoServersDispatchToTheirOwnRegistries;
   TestDiscoverFailsWithoutEnvVar;
+  TestAdvertisedHostReachesTheServer;
+  TestUnbindableBindIPFallsBackToLoopback;
+  TestToolClientDialsTheAdvertisedHost;
   WriteLn('tool_rpc_tests: OK');
 end.
