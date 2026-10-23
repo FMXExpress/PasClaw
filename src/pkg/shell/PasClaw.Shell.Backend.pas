@@ -94,6 +94,36 @@ type
     function HostToContainerPath(const HostPath: string): string;
   end;
 
+  (* Optional capability, the NETWORK counterpart of IShellPathMapper. A
+     backend whose commands run in a different network namespace than the
+     host (docker on a bridge network) implements this so execute_code's
+     tool-RPC server can still be reached from inside it.
+
+     Without it the callback was simply broken under the Docker backend:
+     the server binds 127.0.0.1 and `pasclaw __tool` dialled 127.0.0.1,
+     which inside a container is the CONTAINER -- nothing listening. Every
+     `tool ...` and `tool --catalog` call failed with a connection error,
+     which with code mode on means the MCP tools are unreachable, since
+     code mode is the only way they are exposed. (Codex P1 on #609.)
+
+     Queried with Supports(), so host-namespace backends (local) don't
+     implement it and the server keeps its loopback-only binding. *)
+  IShellHostRPC = interface
+    ['{5E1C7A42-9B38-4C6D-A7F1-3D08B2E95C47}']
+    { Host address the RPC server should listen on INSTEAD of 127.0.0.1 so
+      a command in the backend's namespace can reach it. '' = loopback is
+      reachable already, bind nothing extra. A non-empty address that
+      cannot be bound is not fatal -- the server logs it and keeps
+      loopback (that is the Docker Desktop case, where the bridge gateway
+      lives in the daemon's VM and host.docker.internal already forwards
+      to the host's loopback). }
+    function RpcBindIP: string;
+
+    { Host the contained command should dial. '' = 127.0.0.1. Written into
+      the discovery file so `pasclaw __tool` connects there. }
+    function RpcConnectHost: string;
+  end;
+
 { Process-wide active backend. nil until set; helpers below treat
   nil as "use the local fallback" so a caller who never called
   SetActiveShellBackend (test harnesses, scripts that didn't go
@@ -116,6 +146,13 @@ function RunOneShotWithEnvViaBackend(const SessionId, Cmd, WorkDir: string;
   (docker). execute_code uses this for the script path it embeds in the
   command it runs, so `bash <script>` resolves inside the container. }
 function HostToContainerPathViaBackend(const HostPath: string): string;
+
+{ Where execute_code's tool-RPC server should listen, and what a command
+  running under the active backend should dial to reach it. Both '' unless
+  the active backend implements IShellHostRPC (docker). Tool_ExecuteCode
+  hands them to TToolRPCServer before Start. }
+function ShellBackendRpcBindIP: string;
+function ShellBackendRpcConnectHost: string;
 
 { Convenience: lifecycle for the CURRENT (active) backend. Safe
   to call when no backend is set -- both are no-ops. }
@@ -154,23 +191,71 @@ begin
   Result := GActive;
 end;
 
+(* The configured shell timeout is applied HERE, not in RunOneShot.
+
+   These two wrappers are what the tool shells run through -- shell_exec
+   (PasClaw.Tools.Shell), execute_code (PasClaw.Tools.ExecuteCode) and
+   shell skills (PasClaw.Skills.Loader), each passing
+   GetCurrentSessionId -- and nothing else does. Putting the bound in
+   RunOneShot instead made it a process-wide default that every caller
+   of that primitive inherited, including the ones that are not tool
+   commands: PasClaw.Apps.Runner builds an app through it and
+   PasClaw.Cmd.Profile runs a whole benchmark agent through it, so a
+   600 s shell default killed a long build or a long experiment and
+   reported it as that job failing. (Codex P2 on #608.)
+
+   An explicit per-call override wins: shell_exec's own timeout_sec has
+   already set one by the time we are called, and a caller who asked for
+   30 s does not want the config's 600. The previous value is restored
+   on the way out so one tool call cannot leak its bound into the next
+   thing this thread runs. *)
+function ApplyToolTimeout(out Prev: Integer): Boolean;
+begin
+  Prev := ShellTimeoutOverrideMs;
+  Result := (Prev <= 0) and (ShellToolTimeoutMs > 0);
+  if Result then SetShellTimeoutOverrideMs(ShellToolTimeoutMs);
+end;
+
+procedure RestoreToolTimeout(Applied: Boolean; Prev: Integer);
+begin
+  if not Applied then Exit;
+  if Prev > 0 then SetShellTimeoutOverrideMs(Prev)
+  else SetShellTimeoutOverrideMs(-1);   { -1 clears }
+end;
+
 function RunOneShotViaBackend(const SessionId, Cmd, WorkDir: string;
                               out Output: string): Integer;
+var
+  Prev: Integer;
+  Applied: Boolean;
 begin
-  if GActive <> nil then
-    Result := GActive.Exec(SessionId, Cmd, WorkDir, nil, Output)
-  else
-    Result := RunOneShot(Cmd, WorkDir, Output);
+  Applied := ApplyToolTimeout(Prev);
+  try
+    if GActive <> nil then
+      Result := GActive.Exec(SessionId, Cmd, WorkDir, nil, Output)
+    else
+      Result := RunOneShot(Cmd, WorkDir, Output);
+  finally
+    RestoreToolTimeout(Applied, Prev);
+  end;
 end;
 
 function RunOneShotWithEnvViaBackend(const SessionId, Cmd, WorkDir: string;
                                      ExtraEnv: TStringList;
                                      out Output: string): Integer;
+var
+  Prev: Integer;
+  Applied: Boolean;
 begin
-  if GActive <> nil then
-    Result := GActive.Exec(SessionId, Cmd, WorkDir, ExtraEnv, Output)
-  else
-    Result := RunOneShotWithEnv(Cmd, WorkDir, ExtraEnv, Output);
+  Applied := ApplyToolTimeout(Prev);
+  try
+    if GActive <> nil then
+      Result := GActive.Exec(SessionId, Cmd, WorkDir, ExtraEnv, Output)
+    else
+      Result := RunOneShotWithEnv(Cmd, WorkDir, ExtraEnv, Output);
+  finally
+    RestoreToolTimeout(Applied, Prev);
+  end;
 end;
 
 function HostToContainerPathViaBackend(const HostPath: string): string;
@@ -181,6 +266,26 @@ begin
     Result := Mapper.HostToContainerPath(HostPath)
   else
     Result := HostPath;
+end;
+
+function ShellBackendRpcBindIP: string;
+var
+  Host: IShellHostRPC;
+begin
+  if (GActive <> nil) and Supports(GActive, IShellHostRPC, Host) then
+    Result := Host.RpcBindIP
+  else
+    Result := '';
+end;
+
+function ShellBackendRpcConnectHost: string;
+var
+  Host: IShellHostRPC;
+begin
+  if (GActive <> nil) and Supports(GActive, IShellHostRPC, Host) then
+    Result := Host.RpcConnectHost
+  else
+    Result := '';
 end;
 
 procedure StartShellSession(const SessionId: string);

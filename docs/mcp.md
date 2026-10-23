@@ -60,7 +60,11 @@ tool github__list_issues '{"repo":"FMXExpress/PasClaw","state":"open"}' \
 
 Why: a chain of MCP calls becomes one tool round, and the intermediate results never enter the conversation. That is the cost win OpenCode 2.0 ships under the same name, without a second runtime: the script is still bash or PowerShell. The system prompt lists each code-mode server with its tool count and the recipe above; `code_catalog(server?)` returns the same catalog without a script; `tool_search` tells the model when it asks for a code-mode tool the classic way.
 
-A script's calls go through the same dispatch gates as direct tool calls (plan mode refuses mutating MCP tools from a script too, hooks see them, output is capped). With the Docker shell backend the `pasclaw` binary is bind-mounted read-only into the container so `tool` works there.
+A script's calls go through the same dispatch gates as direct tool calls (plan mode refuses mutating MCP tools from a script too, hooks see them, output is capped).
+
+With the Docker shell backend, `tool` needs two things to reach back out of the container: the `pasclaw` binary (bind-mounted read-only at the same path) and a route to the parent's RPC listener. A container on a bridge network has its own loopback, so the listener moves to the host's docker-bridge gateway and the container gets `host.docker.internal` mapped to the host (`--add-host`, which needs Docker >= 20.10); the discovery file in the mounted `run/` directory names the address to dial, and the per-call random token still authorises every request. With `"network": "host"` nothing moves — the namespace is shared. With `"network": "none"` there is no route at all, so `tool` cannot work and a code-mode server is unreachable from a script; PasClaw logs that at container start.
+
+A subagent inherits a code-mode tool **as code mode**: its registry can dispatch the tool from a script, and the schema stays out of the child's prompt exactly as it is out of the parent's.
 
 `"codemode": false` on a server exposes its tools the classic way: deferred behind `tool_search` when progressive disclosure is on, in the provider's tool list otherwise. `"mcp_codemode_default": false` makes classic the default for every server that does not say otherwise.
 

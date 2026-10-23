@@ -45,13 +45,16 @@ The sandbox above says what is *possible*. The permissions list says what the ag
 ]
 ```
 
-- `tool` is a case-insensitive glob over the tool name (`*` any run, `?` one character). `resource` is an optional glob over the call's primary resource: the **command** for `shell_exec` / `shell_background`, the **script** for `execute_code`, the **path** for the `fs_*` and legacy file tools, the **url** for `web_fetch` / `memory_fetch`. Other tools have no resource and match on `tool` alone.
+- `tool` is a case-insensitive glob over the tool name (`*` any run, `?` one character). `resource` is an optional glob over the call's primary resource: the **command** for `shell_exec` / `shell_background`, the **script** for `execute_code`, the **url** for `web_fetch` / `memory_fetch`. Every other tool yields its `path` argument, or failing that its `url`, or failing that its `command` — so a resource rule reaches the whole file family (`read_file`, `write_file`, `append_file`, `edit_file`, `list_dir`, `grep_files`, `find_files`, their `fs_*` aliases), `kb_get`, and an MCP server's tools, without PasClaw being taught their names. A tool with none of those three has no resource and matches on `tool` alone. `apply_patch` is the one deliberate gap: its paths are inside the patch body, several of them, so scope it by tool.
 - **Last match wins.** Put the broad rule first and the exceptions after it. No matching rule means no opinion: the call goes through the gates that already existed (plan mode, the denylist, the family switches), so an empty list changes nothing.
 - `deny` refuses the call. The model sees a result that names the rule and tells it not to retry.
 - `ask` pauses the turn until a human answers: **allow once**, **allow for this session** (remembered per session for that tool + resource), or **deny**. The TUI asks in its footer (`Y` once, `S` session, anything else deny); the line REPL asks on stdin; the gateway publishes a `permission_request` desktop event and waits for `POST /v1/permissions/<id>`; the `TPasClawAgent` component fires `OnAsk`. With nobody to ask (a cron run, a piped `pasclaw agent`, a gateway with no web UI connected) an `ask` rule **denies**. It never silently becomes allow. `permissions_ask_timeout_sec` (default 300) bounds the wait.
+- **One prompt at a time** on the TUI and the CLI. Tool calls dispatch in parallel, so a single batch can contain two ask-gated calls; on a surface with one footer and one stdin they are presented in turn, and the second waits for the first to be answered. Only the web UI shows several at once — its requests carry ids and are answered individually. The answer you give always belongs to the request you were shown.
 - `allow` is only an opinion. The shell denylist and the workspace boundary still run inside the tool.
 
-**Policies.** `<home>/policies.json` holds a second list of the same shape (`{"permissions": [...]}` or a bare array). It is evaluated **first**: a policy `deny` is final, a policy `ask` outranks a config `allow`, and a policy `allow` can still be tightened by the config list. The gateway's `PUT /v1/config` writes `config.json` only, so a web UI session can edit its own `permissions` but cannot touch the policies. The file is re-read whenever its modification time changes.
+**Policies.** `<home>/policies.json` holds a second list of the same shape (`{"permissions": [...]}` or a bare array). It is evaluated **first**: a policy `deny` is final, a policy `ask` outranks a config `allow`, and a policy `allow` can still be tightened by the config list. The gateway's `PUT /v1/config` writes `config.json` only, so a web UI session can edit its own `permissions` but cannot touch the policies.
+
+The file is re-read whenever its modification time **or size** changes, and a read that cannot be used — unreadable, truncated, not JSON, no `permissions` array — **keeps the rules already in force** rather than clearing them. That matters because the file a team gateway owns is the file that gets rewritten under a running agent: a non-atomic write must not open a window with no denies in it. `pasclaw permissions list` warns when what is in force is not what is on disk. The two ways to clear the rules are both explicit: an empty array, or deleting the file.
 
 `pasclaw permissions list` prints both lists in evaluation order; `pasclaw permissions test shell_exec "git push origin main"` prints the decision and the rule that made it.
 
@@ -95,7 +98,7 @@ Three paths used to reach a shell or a tool around the gates above, and no longe
 
 - **`execute_code` scripts calling tools.** `pasclaw __tool <name>` inside a script now dispatches through the loop's own gate chain: plan-mode and space-mode refusal of mutating tools, hooks, preflight, the promptware scan, the output cap. A subagent's script dispatches into the subagent's filtered registry, not the parent's.
 - **Shell skills.** A `kind: shell` skill's rendered command passes `ShellAllowed` (the denylist and, under `restrict_to_workspace`, the path rules) and runs through the active shell backend, so with the Docker backend it runs in the container like `shell_exec`. Shell skills are `tcMutating`, so plan mode refuses them; prompt skills are read-only.
-- **Hung commands.** Every shell path is bounded by `shell_timeout_sec` (default 600) and killed with `exit=124` on expiry.
+- **Hung commands.** Every shell *tool* path (`shell_exec`, `execute_code`, shell skills) is bounded by `shell_timeout_sec` (default 600). On expiry the whole process tree is killed — SIGTERM then SIGKILL, deepest first — and the tool reports `exit=124`. The same applies when a command is cancelled or floods past the 1 MiB output cap. Signalling only the shell would leave the compiler or test runner under it running after PasClaw had already reported the timeout. Descendants are found from `/proc` where it exists and from `ps -axo pid=,ppid=` where it does not (macOS, the BSDs); on Windows the kill is `taskkill /T /F`.
 
 ## Workspace pin
 
@@ -104,6 +107,8 @@ When `restrict_to_workspace=true`, `Tool_Shell` invokes `RunOneShot` with `Worki
 ## Worktrees move the boundary
 
 A subagent spawned with `worktree: "<branch>"` runs with its sandbox workspace set to that worktree directory (per thread, bracketed around each tool dispatch; the parent's threads are untouched). Under `restrict_to_workspace` the child's boundary is therefore the worktree, not the parent checkout: it can edit its own branch and nothing else. Worktrees are created under `worktree.directory`, which the operator sets; by default they sit beside the repository, outside the parent's workspace, which is why the child needs its own boundary at all. `worktree_remove` with `force` discards uncommitted work, so it is a natural target for an `ask` rule in `permissions`.
+
+**Under the Docker backend, git stays in the container.** The worktree tools run every git command through the active shell backend, including `git worktree add`, and that is deliberate: `fs_write` runs on the host, so a model could plant a `.git/hooks/post-checkout` or a smudge filter in `.git/config`, and a host-side checkout would run it outside the container. For the container's checkout to be the host's checkout too, the container bind-mounts the worktree directory at the same path. With the default location, beside the repository, that means a Docker session in a git workspace **creates an empty `<repo>-worktrees/` next to the repository** when the container starts. Set `worktree.directory` to a path inside the workspace to keep everything under the existing mount, or `worktree.enabled: false` to have neither. If a worktree still ends up somewhere the host cannot see it (Windows, or an unusual mount layout), `worktree_create` refuses it and undoes the registration and any branch it created, rather than returning an empty path.
 
 ## Known limitation: symlinks
 
@@ -128,6 +133,13 @@ For a stronger boundary, set `shell_backend: docker`:
 PasClaw spawns a per-session container at session start, `docker exec`s into it for every `shell_exec` / `execute_code` call, and stops it at session end. The workspace is bind-mounted at the **same path** inside the container, so `fs_read`/`fs_write` from the host process and `cat`/`tee` from inside the container reference the same files — operators inspect from outside with `ls ~/.pasclaw/workspace/`, no path translation.
 
 Hardening win: even a model that escapes the `ShellAllowed` denylist can only touch the container, not the host filesystem. `~/.pasclaw/config.json` (provider keys) is deliberately **not** mounted in.
+
+**The tool callback crosses the boundary on purpose.** An `execute_code` script calls back into the agent's tool registry (`tool <name> '<json>'`, and the only route to a [code-mode](./mcp.md#code-mode) MCP server). The container's loopback is its own, so on a bridge network the callback listener binds the host's docker-bridge gateway instead and the container gets `host.docker.internal` mapped to the host. What that widens, and what it does not:
+
+- The listener is on a docker-bridge address, not `0.0.0.0` — reachable from containers on this host's docker networks and from the host, not from the LAN.
+- Every request carries a per-call random token. The discovery file holding it is written under `~/.pasclaw/run/`, which is mounted only into PasClaw's own container.
+- The listener exists only for the duration of one `execute_code` call, on a fresh port and token.
+- `"network": "none"` keeps the container off the network entirely. The callback then cannot work — `tool` fails to connect and code-mode MCP servers are unreachable from a script — which is the right trade if that is the posture you picked.
 
 Onboarding asks once. CLI override `--backend docker|local` doesn't persist. Phase 1 wires this for `pasclaw agent` (interactive + one-shot) and `pasclaw heartbeat`; `pasclaw tui` / `pasclaw serve` / `pasclaw gateway` refuse `docker` cleanly until per-session container handoff inside those long-running surfaces lands. SSH backend is Phase 2.
 

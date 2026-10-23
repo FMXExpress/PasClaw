@@ -147,9 +147,14 @@ type
     FCtx:   TSubagentContext;
     FSpecs: TSubagentSpecArray;
     FKey:   string;
+    { Slots promised to a spawn_background that is still creating its
+      worktree outside the lock. Counted against MaxJobs like a running
+      job, so nothing else can take the slot meanwhile. Under FLock. }
+    FReserved: Integer;
     function FindSpec(const N: string; out S: TSubagentSpec): Boolean;
     function FindJob(const Handle: string): TBgJob;
     function RunningCount: Integer;
+    function SlotsInUse: Integer;   { RunningCount + FReserved; caller holds FLock }
     function MaxJobs: Integer;
     function NewHandle: string;
   public
@@ -194,14 +199,36 @@ function RegisterBackgroundSpawnTools(Reg: TToolRegistry;
                                       const Specs: TSubagentSpecArray)
                                       : TBackgroundSpawnCoordinator;
 
-var
-  GBackgroundDoneHook: TBackgroundDoneProc;
+(* A surface that wants to be told when a background job finishes --
+   the TUI flashes it in the footer -- installs a handler here.
+
+   Set and cleared ONLY through these two calls, never by assigning the
+   variable. SetBackgroundDoneHook takes the same lock the dispatch
+   takes, so clearing it waits for a callback that is already running
+   and no new one can start afterwards. That matters because the only
+   caller clears the hook on its way to freeing the object the handler
+   is a method of: `if Assigned(hook) then hook(...)` had a window
+   between the test and the call where the main thread could clear the
+   pointer AND free the object, and the job's thread would then run a
+   method of freed memory during an ordinary TUI shutdown. (Codex P2 on
+   #610.)
+
+   Pass nil to remove. The lock lives for the life of the unit, so a
+   handler is safe to clear from any thread at any time. *)
+procedure SetBackgroundDoneHook(Hook: TBackgroundDoneProc);
+
+{ Call the installed handler, if any, under the same lock. Exposed so
+  other producers of background completions can reuse the dispatch
+  rather than reading the hook themselves. }
+procedure FireBackgroundDone(const Key, Handle, Summary: string);
 
 { One-call wiring of the synchronous `spawn` + the background spawn tools onto
   Reg, for surfaces that don't track the returned tool/coordinator (serve,
   gateway). Builds the TSubagentContext from Cfg/Provider/Reg, resolves the
   effective specs (built-in general-purpose + any configured; empty when
-  subagents are disabled), and registers both. No-op when subagents are off or
+  subagents are disabled), and registers both. With subagents off only
+  `spawn` and `spawn_background` are skipped -- shell_background and the
+  handle verbs still register, since they are shell tools. No-op when
   there's no provider/registry. The created tools live for the process (Reg
   dispatches through their method pointers), which is the server lifetime. }
 procedure RegisterSubagentTools(Cfg: TConfig; Provider: ILLMProvider;
@@ -242,6 +269,51 @@ var
   { Coordinators created via RegisterBackgroundSpawnTools, reaped at
     finalization (same ownership shape as ExecuteCode's GRunners). }
   GCoordinators: TList = nil;
+  { The completion handler and the lock that makes installing, clearing
+    and calling it mutually exclusive. See SetBackgroundDoneHook. }
+  GDoneHook:     TBackgroundDoneProc = nil;
+  GDoneHookLock: TCriticalSection = nil;
+
+{ Both of these read the lock into a local first. Finalization NILS the
+  global without freeing it, so a copy taken a moment earlier stays
+  valid -- testing the global and then dereferencing it would be its own
+  little race. }
+procedure SetBackgroundDoneHook(Hook: TBackgroundDoneProc);
+var
+  Lk: TCriticalSection;
+begin
+  Lk := GDoneHookLock;
+  if Lk = nil then Exit;   { unit finalised; nothing to install }
+  Lk.Enter;
+  try
+    GDoneHook := Hook;
+  finally
+    Lk.Leave;
+  end;
+end;
+
+procedure FireBackgroundDone(const Key, Handle, Summary: string);
+var
+  Lk: TCriticalSection;
+begin
+  Lk := GDoneHookLock;
+  if Lk = nil then Exit;
+  (* Held across the CALL, not just the read. Copying the handler out and
+     releasing first would put the window straight back: the copy can be
+     invoked after the owner has cleared the hook and freed itself. The
+     handler parks a string under its own lock and returns -- holding this
+     one across it costs nothing and cannot deadlock back into Set/Fire. *)
+  Lk.Enter;
+  try
+    if Assigned(GDoneHook) then
+      try
+        GDoneHook(Key, Handle, Summary);
+      except
+      end;
+  finally
+    Lk.Leave;
+  end;
+end;
 
 function RandHex(NBytes: Integer): string;
 var
@@ -316,12 +388,9 @@ begin
                '","summary":' + JsonStr(Summary) + '}');
   except
   end;
-  { TUI / CLI: whatever they wired. }
-  if Assigned(GBackgroundDoneHook) then
-    try
-      GBackgroundDoneHook(FDrainKey, FHandle, Summary);
-    except
-    end;
+  { TUI / CLI: whatever they wired. Through the dispatcher, which
+    serialises against teardown -- see SetBackgroundDoneHook. }
+  FireBackgroundDone(FDrainKey, FHandle, Summary);
 end;
 
 procedure TBgJob.RunShellJob;
@@ -336,6 +405,30 @@ var
   StartT: TDateTime;
   TimedOut, Cancelled, Ok, Spawned: Boolean;
   Bytes: TBytes;
+
+  procedure KillTree;
+  (* Kill the job's whole process tree, not just the /bin/sh (or cmd.exe)
+     wrapper this job owns.
+
+     Terminating the wrapper alone left everything it had started --
+     compiler workers, a `make -j`, anything launched with `&` -- running
+     after spawn_cancel had already reported the job killed, still writing
+     files and burning CPU with nothing holding a handle to them. Same for
+     the timeout and the output cap. (Codex P1 on #610.)
+
+     Codex asked for an isolated process group. There is no portable way
+     to get one from here: FPC's TProcess has no POSIX process-group
+     option (poNewProcessGroup is Windows-only) and `setsid` is not a
+     binary to count on (util-linux ships one, macOS does not).
+     TerminateProcessTree walks the real parent links instead -- every
+     descendant that has not deliberately re-parented itself -- and on
+     Windows is `taskkill /T /F`, which is a true tree kill. Same idiom
+     as the timeout in PasClaw.Platform's own one-shot loops. *)
+  begin
+    TerminateProcessTree(P.ProcessId);
+    if P.Running then try P.Terminate; except end;
+  end;
+
 begin
   Ok := False;
   TimedOut := False;
@@ -387,18 +480,18 @@ begin
           begin
             Acc.WriteBuffer(Buf, N);
             Inc(Total, N);
-            if Total > OneShotMaxBytes then begin P.Terminate; Break; end;
+            if Total > OneShotMaxBytes then begin KillTree; Break; end;
           end
           else if not P.Running then Break;
           if (FTimeoutMs > 0) and (Trunc((Now - StartT) * 86400000.0) >= FTimeoutMs) then
           begin
             TimedOut := True;
-            P.Terminate;
+            KillTree;
             Break;
           end;
           FStateLock.Enter;
           try Cancelled := FState = bjCancelled; finally FStateLock.Leave; end;
-          if Cancelled then begin P.Terminate; Break; end;
+          if Cancelled then begin KillTree; Break; end;
         end;
         while P.Running do Sleep(10);
         Code := P.ExitCode;
@@ -652,6 +745,11 @@ begin
   Result := 'bg-' + RandHex(3);   { 6 hex chars; per-session scope }
 end;
 
+function TBackgroundSpawnCoordinator.SlotsInUse: Integer;
+begin
+  Result := RunningCount + FReserved;
+end;
+
 function TBackgroundSpawnCoordinator.MaxJobs: Integer;
 begin
   Result := MaxConcurrentBackground;
@@ -718,6 +816,35 @@ begin
     ErrMsg := 'spawn_background: no subagent named "' + AgentName + '"';
     Exit;
   end;
+  if (Worktree <> '') and (not WorktreeArgEnabled(FCtx.Cfg)) then
+  begin
+    ErrMsg := WorktreeDisabledRefusal('spawn_background');
+    Exit;
+  end;
+
+  (* Claim the slot BEFORE touching the repository.
+
+     The worktree used to be created first and the cap checked after, so
+     a spawn the cap was always going to refuse still made a branch and a
+     checkout on disk, then returned the capacity error. Checking first
+     is not enough on its own -- two spawns in one parallel batch would
+     both pass and both create -- so the slot is reserved under the lock,
+     the (slow, git) worktree is made outside it, and the reservation
+     becomes the job or is handed back. (Codex P2 on #612.) *)
+  FLock.Enter;
+  try
+    if SlotsInUse >= MaxJobs then
+    begin
+      ErrMsg := Format('spawn_background: %d job(s) already running (cap %d) -- ' +
+                       'spawn_wait or spawn_cancel one first',
+                       [SlotsInUse, MaxJobs]);
+      Exit;
+    end;
+    Inc(FReserved);
+  finally
+    FLock.Leave;
+  end;
+
   { The worktree is created on the parent's thread, before the job
     exists: a git failure is this call's error, and the path is known
     when the handle is returned. }
@@ -725,19 +852,19 @@ begin
   if Worktree <> '' then
     if not EnsureWorktree(Worktree, WorkDir, WtErr) then
     begin
+      FLock.Enter;
+      try
+        Dec(FReserved);
+      finally
+        FLock.Leave;
+      end;
       ErrMsg := 'spawn_background: ' + WtErr;
       Exit;
     end;
 
   FLock.Enter;
   try
-    if RunningCount >= MaxJobs then
-    begin
-      ErrMsg := Format('spawn_background: %d job(s) already running (cap %d) -- ' +
-                       'spawn_wait or spawn_cancel one first',
-                       [RunningCount, MaxJobs]);
-      Exit;
-    end;
+    Dec(FReserved);   { the reservation becomes this job, below }
 
     Model := Spec.Model;
     if Model = '' then Model := FCtx.DefaultModel;
@@ -844,10 +971,10 @@ begin
 
   FLock.Enter;
   try
-    if RunningCount >= MaxJobs then
+    if SlotsInUse >= MaxJobs then
     begin
       ErrMsg := Format('shell_background: %d job(s) already running (cap %d) -- ' +
-                       'spawn_wait or spawn_cancel one first', [RunningCount, MaxJobs]);
+                       'spawn_wait or spawn_cancel one first', [SlotsInUse, MaxJobs]);
       Exit;
     end;
     Job := TBgJob.Create(True);
@@ -1181,7 +1308,7 @@ var
   i: Integer;
 begin
   Result := nil;
-  if (Reg = nil) or (Length(Specs) = 0) then Exit;
+  if Reg = nil then Exit;
 
   Result := TBackgroundSpawnCoordinator.Create(Ctx, Specs);
   if GCoordinators = nil then GCoordinators := TList.Create;
@@ -1194,26 +1321,45 @@ begin
     Names := Names + '"' + Specs[i].Name + '"';
   end;
 
-  T.Name        := 'spawn_background';
-  T.Description := 'Start a subagent in the BACKGROUND and keep working -- ' +
-                   'returns a handle immediately instead of blocking like ' +
-                   '`spawn` does. The result is delivered to you ' +
-                   'automatically when the job finishes (you''ll see a ' +
-                   '[background subagent results] block). Use for slow ' +
-                   'research / analysis you don''t need before your next ' +
-                   'step. Available subagents: ' + Names + '. ' +
-                   'Cap: ' + IntToStr(MaxConcurrentBackground) + ' concurrent.';
-  T.Schema      :=
-    '{"type":"object","properties":{' +
-    '"agent":{"type":"string","description":"Name of the subagent to spawn."},' +
-    '"prompt":{"type":"string","description":"The prompt to hand the subagent."},' +
-    '"worktree":{"type":"string","description":"Optional git branch: run the subagent in a worktree for it (created if needed), so parallel jobs edit separate checkouts."}},' +
-    '"required":["agent","prompt"]}';
-  T.Handler     := nil;
-  T.HandlerObj  := Result.HandleSpawnBackground;
-  T.IsCore      := True;
-  T.Category    := tcMutating;
-  Reg.Register(T);
+  (* spawn_background is the only tool here that needs a subagent to
+     spawn, so it is the only one Specs gates. shell_background and the
+     three handle verbs are shell features that happen to share this
+     coordinator's handle space, and gating the whole routine on Specs
+     meant subagents_enabled:false silently took the background shell
+     away with them -- which the docs describe as a shell tool with no
+     such dependency. (Codex P2 on #619.) *)
+  if Length(Specs) > 0 then
+  begin
+    T.Name        := 'spawn_background';
+    T.Description := 'Start a subagent in the BACKGROUND and keep working -- ' +
+                     'returns a handle immediately instead of blocking like ' +
+                     '`spawn` does. The result is delivered to you ' +
+                     'automatically when the job finishes (you''ll see a ' +
+                     '[background subagent results] block). Use for slow ' +
+                     'research / analysis you don''t need before your next ' +
+                     'step. Available subagents: ' + Names + '. ' +
+                     'Cap: ' + IntToStr(MaxConcurrentBackground) + ' concurrent.';
+    { worktree is advertised only when the feature is on -- a property
+      the handler would refuse is worse than none. }
+    if WorktreeArgEnabled(Ctx.Cfg) then
+      T.Schema :=
+        '{"type":"object","properties":{' +
+        '"agent":{"type":"string","description":"Name of the subagent to spawn."},' +
+        '"prompt":{"type":"string","description":"The prompt to hand the subagent."},' +
+        '"worktree":{"type":"string","description":"Optional git branch: run the subagent in a worktree for it (created if needed), so parallel jobs edit separate checkouts."}},' +
+        '"required":["agent","prompt"]}'
+    else
+      T.Schema :=
+        '{"type":"object","properties":{' +
+        '"agent":{"type":"string","description":"Name of the subagent to spawn."},' +
+        '"prompt":{"type":"string","description":"The prompt to hand the subagent."}},' +
+        '"required":["agent","prompt"]}';
+    T.Handler     := nil;
+    T.HandlerObj  := Result.HandleSpawnBackground;
+    T.IsCore      := True;
+    T.Category    := tcMutating;
+    Reg.Register(T);
+  end;
 
   T.Name        := 'shell_background';
   T.Description := 'Run a shell command in the BACKGROUND and keep working -- ' +
@@ -1292,15 +1438,16 @@ var
   Specs: TSubagentSpecArray;
 begin
   if (Reg = nil) or (Provider = nil) then Exit;
-  Specs := ResolveSubagentSpecs(Cfg);
-  if Length(Specs) = 0 then Exit;   { subagents disabled }
+  Specs := ResolveSubagentSpecs(Cfg);   { empty when subagents are disabled }
   Ctx.Provider       := Provider;
   Ctx.Fallbacks      := ResolveFallbacks(Cfg, Ctx.FallbackModels);
   Ctx.ParentRegistry := Reg;
   Ctx.DefaultModel   := DefaultModel;
   Ctx.PromptCache    := Cfg.PromptCache;
   Ctx.Cfg            := Cfg;
-  RegisterSpawnTool(Reg, Ctx, Specs);
+  { `spawn` needs a subagent; the background tools include the shell
+    ones, which do not -- see the note in RegisterBackgroundSpawnTools. }
+  if Length(Specs) > 0 then RegisterSpawnTool(Reg, Ctx, Specs);
   RegisterBackgroundSpawnTools(Reg, Ctx, Specs);
 end;
 
@@ -1318,13 +1465,23 @@ end;
 initialization
   GMap     := TStringList.Create;
   GMapLock := TCriticalSection.Create;
+  GDoneHookLock := TCriticalSection.Create;
   GBackgroundDrainHook := DrainByKey;
 
 finalization
   GBackgroundDrainHook := nil;
+  SetBackgroundDoneHook(nil);
   FreeCoordinators;
   GMap.Free;
   GMapLock.Free;
   GMapLock := nil;
+  { Nil but deliberately NOT freed. A job thread can outlive this unit --
+    the TUI hands a slow worker to the OS via FreeOnTerminate -- and
+    freeing the lock it may be about to take is the very use-after-free
+    this dispatcher exists to prevent. Nil makes Set/Fire bail out
+    ("no hook"); leaking one critical section at process exit is
+    harmless, and the TUI leaks FToolActivityLock for the same reason. }
+  GDoneHook     := nil;
+  GDoneHookLock := nil;
 
 end.

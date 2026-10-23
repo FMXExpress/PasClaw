@@ -428,7 +428,7 @@
                     <VersionInfo Name="AutoIncBuild">False</VersionInfo>
                     <VersionInfo Name="MajorVer">0</VersionInfo>
                     <VersionInfo Name="MinorVer">1</VersionInfo>
-                    <VersionInfo Name="Release">4</VersionInfo>
+                    <VersionInfo Name="Release">5</VersionInfo>
                     <VersionInfo Name="Build">0</VersionInfo>
                     <VersionInfo Name="Debug">False</VersionInfo>
                     <VersionInfo Name="PreRelease">False</VersionInfo>
@@ -441,12 +441,12 @@
                 <VersionInfoKeys>
                     <VersionInfoKeys Name="CompanyName">PasClaw contributors</VersionInfoKeys>
                     <VersionInfoKeys Name="FileDescription">PasClaw - personal AI assistant</VersionInfoKeys>
-                    <VersionInfoKeys Name="FileVersion">0.1.4.0</VersionInfoKeys>
+                    <VersionInfoKeys Name="FileVersion">0.1.5.0</VersionInfoKeys>
                     <VersionInfoKeys Name="InternalName">PasClaw</VersionInfoKeys>
                     <VersionInfoKeys Name="LegalCopyright">MIT</VersionInfoKeys>
                     <VersionInfoKeys Name="OriginalFilename">pasclaw.exe</VersionInfoKeys>
                     <VersionInfoKeys Name="ProductName">PasClaw</VersionInfoKeys>
-                    <VersionInfoKeys Name="ProductVersion">0.1.4.0</VersionInfoKeys>
+                    <VersionInfoKeys Name="ProductVersion">0.1.5.0</VersionInfoKeys>
                     <VersionInfoKeys Name="Comments">Delphi port of picoclaw</VersionInfoKeys>
                 </VersionInfoKeys>
             </Delphi.Personality>
