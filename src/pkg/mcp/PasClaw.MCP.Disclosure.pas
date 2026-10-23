@@ -112,9 +112,14 @@ type
     FConfigured:   Integer;
     FDisabledList: string;
     FEnabledList:  string;
+    FMCPOff:       Boolean;   { --no-mcp: no client starts in this process }
     function EmptyDeferredMessage: string;
   public
-    constructor Create(AReg: TToolRegistry; const Cfg: TConfig);
+    { MCPStarted False (the --no-mcp path): the configured servers are not
+      snapshotted -- none of them will start in this process, so naming
+      them as "still connecting" would send the model into a retry loop. }
+    constructor Create(AReg: TToolRegistry; const Cfg: TConfig;
+                       MCPStarted: Boolean = True);
     { tool_search handler (matches TToolHandlerObj). }
     function Search(const ArgsJSON: string; out ErrMsg: string): string;
   end;
@@ -136,6 +141,19 @@ function BuildCodeModeSection(Reg: TToolRegistry): string;
   object is the CALLER's to free once the child loop is done. }
 function RegisterMCPDisclosureTools(Reg: TToolRegistry; const Cfg: TConfig;
                                     Primary: Boolean = True): TMCPDisclosure;
+
+(* The --no-mcp entry: tool_search for the BUILT-IN long tail alone, on the
+   primary registry (gateway, serve, TUI, `pasclaw agent`).
+
+   With no MCP client in the process, built-in deferral is the only reason
+   for the tool, so it is registered only when
+   Cfg.BuiltinProgressiveDisclosure is on -- MCPProgressiveDisclosure
+   (default on) would otherwise add a schema that defers nothing to every
+   request. And the disclosure carries no MCP state: an empty deferred set
+   says MCP is off here, never that a configured server is "still
+   connecting, retry". (Codex P2 on #615.) nil when not registered. *)
+function RegisterBuiltinDisclosureTools(Reg: TToolRegistry;
+                                        const Cfg: TConfig): TMCPDisclosure;
 
 { "## Deferred Tools" section for the system-prompt assembler. The no-arg form
   reads the primary registry (the main agent); the Reg form is for a subagent's
@@ -297,6 +315,19 @@ function TMCPDisclosure.EmptyDeferredMessage: string;
 var
   Revealed: Boolean;
 begin
+  { --no-mcp: whatever config lists, no server starts in this process, so
+    neither "configured" nor "still connecting" describes it. }
+  if FMCPOff then
+  begin
+    if (FReg <> nil) and FReg.AnyRevealed then
+      Result := 'No remaining deferred tools to load -- the ones there were '
+              + 'have been revealed and are active; call the one you need '
+              + 'directly by name.'
+    else
+      Result := 'No deferred tools to load.';
+    Exit(Result + ' MCP is off in this process (--no-mcp), so no MCP tools '
+                + 'will appear.');
+  end;
   if FConfigured = 0 then
     Exit('No MCP tools are configured, so there is nothing to search. '
        + 'Add an MCP server (e.g. `pasclaw mcp add`) to gain external tools.');
@@ -750,17 +781,21 @@ begin
   Result := BuildDeferredToolsSection(GPrimaryReg);
 end;
 
-constructor TMCPDisclosure.Create(AReg: TToolRegistry; const Cfg: TConfig);
+constructor TMCPDisclosure.Create(AReg: TToolRegistry; const Cfg: TConfig;
+                                  MCPStarted: Boolean);
 var
   i: Integer;
 begin
   inherited Create;
   FReg := AReg;
+  FMCPOff := not MCPStarted;
+  FConfigured   := 0;
+  FDisabledList := '';
+  FEnabledList  := '';
+  if FMCPOff then Exit;
   { Snapshot the configured MCP servers so an empty deferred set can name the
     disabled / not-yet-loaded ones instead of a dead-end message. }
   FConfigured   := Length(Cfg.MCPServers);
-  FDisabledList := '';
-  FEnabledList  := '';
   for i := 0 to High(Cfg.MCPServers) do
     if Cfg.MCPServers[i].Enabled then
     begin
@@ -774,10 +809,11 @@ begin
     end;
 end;
 
+function DoRegisterDisclosure(Reg: TToolRegistry; const Cfg: TConfig;
+                              Primary, MCPStarted: Boolean): TMCPDisclosure; forward;
+
 function RegisterMCPDisclosureTools(Reg: TToolRegistry; const Cfg: TConfig;
                                     Primary: Boolean = True): TMCPDisclosure;
-var
-  T: TTool;
 begin
   Result := nil;
   if Reg = nil then Exit;
@@ -786,8 +822,23 @@ begin
     BUILT-INS behind a tool that was never registered. }
   if (not Cfg.MCPProgressiveDisclosure)
      and (not Cfg.BuiltinProgressiveDisclosure) then Exit;
+  Result := DoRegisterDisclosure(Reg, Cfg, Primary, True);
+end;
 
-  Result := TMCPDisclosure.Create(Reg, Cfg);
+function RegisterBuiltinDisclosureTools(Reg: TToolRegistry;
+                                        const Cfg: TConfig): TMCPDisclosure;
+begin
+  Result := nil;
+  if (Reg = nil) or (not Cfg.BuiltinProgressiveDisclosure) then Exit;
+  Result := DoRegisterDisclosure(Reg, Cfg, True, False);
+end;
+
+function DoRegisterDisclosure(Reg: TToolRegistry; const Cfg: TConfig;
+                              Primary, MCPStarted: Boolean): TMCPDisclosure;
+var
+  T: TTool;
+begin
+  Result := TMCPDisclosure.Create(Reg, Cfg, MCPStarted);
   if Primary then
   begin
     GPrimaryReg := Reg;

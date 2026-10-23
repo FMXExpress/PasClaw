@@ -35,7 +35,7 @@ uses
   PasClaw.Search.Factory,
   PasClaw.Tools.WebFetch,
   PasClaw.Tools.MemoryFetch,
-  PasClaw.MCP.Disclosure,    { RegisterMCPDisclosureTools on the --no-mcp path }
+  PasClaw.MCP.Disclosure,    { RegisterBuiltinDisclosureTools on the --no-mcp path }
   PasClaw.Tools.Worktree,
   PasClaw.Cmd.Attach,        { --attach: the terminal as a gateway client }
   PasClaw.Client.Api,        { TChatTurnOptions -- what an attached turn asks for }
@@ -258,8 +258,8 @@ begin
     SetLength(MCPClients, 0);
     if (Reg <> nil) and (not A.NoMCP) then
       MCPClients := ConnectMCPServers(Cfg, Reg)
-    else if (Reg <> nil) and Cfg.BuiltinProgressiveDisclosure then
-      RegisterMCPDisclosureTools(Reg, Cfg);   { --no-mcp: tool_search only for built-in deferral }
+    else if Reg <> nil then
+      RegisterBuiltinDisclosureTools(Reg, Cfg);   { --no-mcp: tool_search only for built-in deferral }
 
     if A.Model <> '' then Model := A.Model else Model := Cfg.DefaultModel;
 
