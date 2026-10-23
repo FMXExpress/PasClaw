@@ -886,7 +886,9 @@ test-mcp-disclosure: | $(BUILDDIR)
 # Tool-RPC server: the in-process callback the execute_code script uses
 # to reach back into the parent's tool registry. PASCLAW_HOME isolated so
 # the info file lands in a scratch dir.
-test-codemode: | $(BUILDDIR)
+# $(BIN) because one case runs `pasclaw mcp add` for real -- the bug it
+# guards was in what that command wrote to config.json.
+test-codemode: $(BIN) | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/codemode_tests.pas -o$(BUILDDIR)/codemode_tests
 	@PASCLAW_HOME=$(BUILDDIR)/tool-rpc-test-home $(BUILDDIR)/codemode_tests
@@ -906,7 +908,10 @@ test-shell-timeout: | $(BUILDDIR)
 	$(FPC) $(FPCFLAGS) src/tests/shell_timeout_tests.pas -o$(BUILDDIR)/shell_timeout_tests
 	@$(BUILDDIR)/shell_timeout_tests
 
-test-tool-rpc: | $(BUILDDIR)
+# $(BIN) because one case runs the real `pasclaw __tool` as a child
+# process -- the only way to exercise the client's env-var discovery,
+# since FPC snapshots envp at process start.
+test-tool-rpc: $(BIN) | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/tool_rpc_tests.pas -o$(BUILDDIR)/tool_rpc_tests
 	@PASCLAW_HOME=$(BUILDDIR)/tool-rpc-test-home $(BUILDDIR)/tool_rpc_tests
@@ -1121,7 +1126,7 @@ test-heartbeat: | $(BUILDDIR)
 test-shell-backend: | $(BUILDDIR)
 	@mkdir -p $(BUILDDIR)/lib
 	$(FPC) $(FPCFLAGS) src/tests/shell_backend_tests.pas -o$(BUILDDIR)/shell_backend_tests
-	@$(BUILDDIR)/shell_backend_tests
+	@PASCLAW_HOME=$(BUILDDIR)/shell-backend-test-home $(BUILDDIR)/shell_backend_tests
 
 # Env-var injection into spawned children (RunOneShotWithEnv / Spawn ExtraEnv).
 test-env-inject: | $(BUILDDIR)

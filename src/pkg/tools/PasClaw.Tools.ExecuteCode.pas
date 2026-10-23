@@ -503,6 +503,14 @@ begin
     try
       InfoPath := MakePerCallInfoPath;
       Server   := TToolRPCServer.Create(Registry, InfoPath, Disp);
+      { Where to listen, and what the script should dial. Both empty on a
+        host-namespace backend, which leaves the server exactly as it was:
+        loopback, no "host" field in the info file. The Docker backend
+        answers with the bridge gateway and host.docker.internal, without
+        which the callback cannot cross the container's network namespace
+        at all. }
+      Server.BindIP        := ShellBackendRpcBindIP;
+      Server.AdvertiseHost := ShellBackendRpcConnectHost;
       Server.Start;
       ExtraEnv := TStringList.Create;
       { The script runs in the active backend's namespace, so the env

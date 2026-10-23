@@ -507,6 +507,8 @@ begin
     Args    := HeaderVal;
     Env     := '';
     Enabled := True;
+    { Follows mcp_codemode_default; see the note in Cmd.MCP. }
+    CodeMode := Cfg.MCPCodeModeDefault;
   end;
 end;
 
